@@ -597,10 +597,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
         if (!Result) Thread->SpareUlong0 = 0;
 
-        /* Set least some minimum access */
+        /* Set at least some minimum access */
         Thread->SpareUlong0 |= (THREAD_TERMINATE |
                                 THREAD_SET_INFORMATION |
-                                THREAD_QUERY_INFORMATION);
+                                THREAD_QUERY_INFORMATION |
+                                THREAD_QUERY_LIMITED_INFORMATION);
     }
     else
     {
@@ -610,10 +611,11 @@ PspCreateThread(OUT PHANDLE ThreadHandle,
 #else
         if (!Result) Thread->GrantedAccess = 0;
 
-        /* Set least some minimum access */
+        /* Set at least some minimum access */
         Thread->GrantedAccess |= (THREAD_TERMINATE |
                                   THREAD_SET_INFORMATION |
-                                  THREAD_QUERY_INFORMATION);
+                                  THREAD_QUERY_INFORMATION |
+                                  THREAD_QUERY_LIMITED_INFORMATION);
     }
     else
     {
