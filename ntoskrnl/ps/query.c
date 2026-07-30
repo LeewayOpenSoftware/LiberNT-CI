@@ -5612,15 +5612,8 @@ NtQueryInformationThread(
                 break;
             }
 
-            /* Reference the thread */
-            Status = ObReferenceObjectByHandle(ThreadHandle,
-                                               THREAD_QUERY_LIMITED_INFORMATION,
-                                               PsThreadType,
-                                               PreviousMode,
-                                               (PVOID*)&Thread,
-                                               NULL);
-            if (!NT_SUCCESS(Status))
-                break;
+            /* This info class always refers to the current thread */
+            Thread = PsGetCurrentThread();
 
             /* Protect write with SEH */
             _SEH2_TRY
@@ -5637,8 +5630,6 @@ NtQueryInformationThread(
             }
             _SEH2_END;
 
-            /* Dereference the thread */
-            ObDereferenceObject(Thread);
             break;
         }
 
