@@ -125,20 +125,16 @@ ClassDeviceControl(
 	IN PDEVICE_OBJECT DeviceObject,
 	IN PIRP Irp)
 {
-	//PCLASS_DEVICE_EXTENSION DeviceExtension;
 	NTSTATUS Status = STATUS_NOT_SUPPORTED;
 
 	TRACE_(CLASS_NAME, "IRP_MJ_DEVICE_CONTROL\n");
-
-	if (!((PCOMMON_DEVICE_EXTENSION)DeviceObject->DeviceExtension)->IsClassDO)
-		return ForwardIrpAndForget(DeviceObject, Irp);
-
-	//DeviceExtension = (PCLASS_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
 
 	switch (IoGetCurrentIrpStackLocation(Irp)->Parameters.DeviceIoControl.IoControlCode)
 	{
 		case IOCTL_MOUSE_QUERY_ATTRIBUTES:
 		{
+            if (((PCOMMON_DEVICE_EXTENSION)DeviceObject->DeviceExtension)->IsClassDO)
+            {
 			/* FIXME: We hope that all devices will return the same result.
 			 * Ask only the first one */
 			PLIST_ENTRY Head = &((PCLASS_DEVICE_EXTENSION)DeviceObject->DeviceExtension)->ListHead;
@@ -146,9 +142,16 @@ ClassDeviceControl(
 			{
 				/* We have at least one device */
 				PPORT_DEVICE_EXTENSION DevExt = CONTAINING_RECORD(Head->Flink, PORT_DEVICE_EXTENSION, ListEntry);
-				IoGetCurrentIrpStackLocation(Irp)->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
-				IoSkipCurrentIrpStackLocation(Irp);
-				return IoCallDriver(DevExt->DeviceObject, Irp);
+                    DeviceObject = DevExt->DeviceObject;
+                }
+                else
+                    DeviceObject = NULL;
+            }
+            if (DeviceObject)
+            {
+                IoCopyCurrentIrpStackLocationToNext(Irp);
+                IoGetNextIrpStackLocation(Irp)->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+                return IoCallDriver(DeviceObject, Irp);
 			}
 			break;
 		}
