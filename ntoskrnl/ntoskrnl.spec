@@ -3397,7 +3397,7 @@
 @ stdcall ZwEnumerateTransactionObject(ptr long ptr long ptr)
 @ stdcall -arch=win64 ZwFlushBuffersFileEx(ptr long ptr long ptr)
 @ stub -arch=win64 ZwGetCachedSigningLevel
-@ stub -arch=win64 ZwGetNextProcess
+@ stdcall -version=0x600+ ZwGetNextProcess(ptr long long long ptr)
 @ stdcall -version=0x600+ ZwGetNextThread(ptr ptr long long long ptr)
 @ stdcall ZwGetNotificationResourceManager(ptr ptr long ptr ptr long ptr)
 @ stdcall ZwManagePartition(ptr ptr long ptr long)
