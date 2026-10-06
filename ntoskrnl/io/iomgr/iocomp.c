@@ -580,6 +580,8 @@ NtRemoveIoCompletion(IN HANDLE IoCompletionHandle,
     IO_STATUS_BLOCK IoStatus;
     PAGED_CODE();
 
+    RtlZeroMemory(&IoStatus, sizeof(IoStatus));
+
     /* Check if the call was from user mode */
     if (PreviousMode != KernelMode)
     {
