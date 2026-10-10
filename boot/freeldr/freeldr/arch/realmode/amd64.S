@@ -76,6 +76,7 @@ Startup:
     call writestr
 
     /* Wait for a keypress */
+    xor ah, ah
     int HEX(16)
     jmp Reboot
 
@@ -390,6 +391,8 @@ InLongMode:
 LongModeEntryPoint:
     .long 0, 0
 
+    /* Wait for a keypress */
+    xor ah, ah
     int HEX(16)
     jmp Reboot
 
