@@ -47,6 +47,7 @@ extern void func_PIDL(void);
 extern void func_RealShellExecuteEx(void);
 extern void func_RegItemDisplayName(void);
 extern void func_RegItemParse(void);
+extern void func_RegenerateUserEnvironment(void);
 extern void func_SHAppBarMessage(void);
 extern void func_SHChangeNotify(void);
 extern void func_SHCreateDataObject(void);
@@ -144,6 +145,7 @@ const struct test winetest_testlist[] =
     { "RealShellExecuteEx", func_RealShellExecuteEx },
     { "RegItemDisplayName", func_RegItemDisplayName },
     { "RegItemParse", func_RegItemParse },
+    { "RegenerateUserEnvironment", func_RegenerateUserEnvironment },
     { "SHAppBarMessage", func_SHAppBarMessage },
     { "SHChangeNotify", func_SHChangeNotify },
     { "SHCreateDataObject", func_SHCreateDataObject },

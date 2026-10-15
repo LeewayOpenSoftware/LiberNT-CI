@@ -46,6 +46,7 @@ list(APPEND SOURCE
     RecentDocs.cpp
     RegItemDisplayName.cpp
     RegItemParse.cpp
+    RegenerateUserEnvironment.cpp
     SearchFolder.cpp
     SHAppBarMessage.cpp
     SHChangeNotify.cpp
