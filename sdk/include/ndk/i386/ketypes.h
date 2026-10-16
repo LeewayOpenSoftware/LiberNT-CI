@@ -85,6 +85,18 @@ C_ASSERT(FIELD_OFFSET(PROCESSOR_POWER_STATE, Parked) == 0x164);
 #define KF_FPU_LEAKAGE_BIT              36 // From ks386.inc (0x24 -> 0x1000000000)
 
 //
+// Caching values for the PAT MSR
+//
+#define PAT_UC                  0ULL
+#define PAT_WC                  1ULL
+#define PAT_WT                  4ULL
+#define PAT_WP                  5ULL
+#define PAT_WB                  6ULL
+#define PAT_UCM                 7ULL
+
+#define MSR_PAT                 0x0277
+
+//
 // KPCR Access for non-IA64 builds
 //
 #define K0IPCR                  ((ULONG_PTR)(KIP0PCRADDRESS))
