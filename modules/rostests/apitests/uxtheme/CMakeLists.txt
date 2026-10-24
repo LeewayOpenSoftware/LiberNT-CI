@@ -13,6 +13,7 @@ list(APPEND SOURCE
     TextScaling.c
     ThemeDpi.c
     SetThemeAppProperties.c
+    ThemeRegion.c
     ThemeRendering.c
     ThemeShellTransition.c
     ThemeSysSize.c
