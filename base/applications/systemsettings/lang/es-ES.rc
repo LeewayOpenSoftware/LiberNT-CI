@@ -764,7 +764,7 @@ BEGIN
     IDS_DRIVER_AUTO_SEARCH "Buscar controlador automáticamente"
     IDS_DRIVER_STATUS_QUEUED "En cola"
     IDS_DRIVER_STATUS_INSTALLING "Instalando..."
-    IDS_DRIVER_STATUS_SUCCEEDED "Al día"
+    IDS_DRIVER_STATUS_SUCCEEDED "Controlador instalado"
     IDS_DRIVER_STATUS_FAILED "Falló (error %lu)"
     IDS_DRIVER_STATUS_TIMED_OUT "Tiempo agotado"
     IDS_DRIVER_STATUS_CANCELED "Cancelado"
@@ -773,4 +773,6 @@ BEGIN
     IDS_DRIVERS_HISTORY "Historial de instalación de controladores"
     IDS_DRIVER_SERVICE_UNAVAILABLE "El servicio de instalación de controladores no está disponible."
     IDS_DRIVER_STATUS_ROLLBACK_PROBLEM "Revertido, pero el dispositivo aún reporta un problema (código %lu)"
+    IDS_DRIVER_HISTORY_EMPTY "No hay instalaciones recientes de controladores."
+    IDS_DRIVER_STATUS_PENDING_START "Instalado, pendiente de inicio"
 END

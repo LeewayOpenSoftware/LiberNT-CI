@@ -764,7 +764,7 @@ BEGIN
     IDS_DRIVER_AUTO_SEARCH "Search for a driver automatically"
     IDS_DRIVER_STATUS_QUEUED "Queued"
     IDS_DRIVER_STATUS_INSTALLING "Installing..."
-    IDS_DRIVER_STATUS_SUCCEEDED "Up to date"
+    IDS_DRIVER_STATUS_SUCCEEDED "Driver installed"
     IDS_DRIVER_STATUS_FAILED "Failed (error %lu)"
     IDS_DRIVER_STATUS_TIMED_OUT "Timed out"
     IDS_DRIVER_STATUS_CANCELED "Canceled"
@@ -773,4 +773,6 @@ BEGIN
     IDS_DRIVERS_HISTORY "Driver install history"
     IDS_DRIVER_SERVICE_UNAVAILABLE "The driver install service is unavailable."
     IDS_DRIVER_STATUS_ROLLBACK_PROBLEM "Rolled back, but the device still reports a problem (code %lu)"
+    IDS_DRIVER_HISTORY_EMPTY "No recent driver installations."
+    IDS_DRIVER_STATUS_PENDING_START "Installed, waiting to start"
 END

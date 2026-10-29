@@ -502,6 +502,7 @@ typedef struct _DRVINST_JOB_INFO
 } DRVINST_JOB_INFO;
 
 #define DRVINST_F_SILENT          0x00000001
+#define DRVINST_RF_STARTED        0x00000001
 #define DRVINST_RF_NEEDREBOOT     0x00000002
 #define DRVINST_RF_ROLLEDBACK     0x00000004
 #define DRVINST_JOB_STATE_ROLLED_BACK 6
@@ -517,8 +518,19 @@ struct DrvJobEntry
     ULONG Win32 = 0;
     ULONG Problem = 0;
     ULONG Flags = 0;
+    ULONG Failures = 0;
     bool Finished = false;
 };
+
+static std::wstring
+NormalizeInstanceId(const std::wstring &id)
+{
+    std::wstring key(id.size(), L'\0');
+
+    for (size_t i = 0; i < id.size(); i++)
+        key[i] = (WCHAR)towlower(id[i]);
+    return key;
+}
 
 /* newdev.dll is cached for the process lifetime; it is never freed while a
  * submitted job can still be running in the service. */
@@ -577,9 +589,17 @@ PollDriverJobs(void)
         }
         else
         {
-            entry.State = 3;
-            entry.Win32 = err;
-            entry.Finished = true;
+            entry.Failures++;
+            if (entry.Failures >= 3)
+            {
+                entry.State = 3;
+                entry.Win32 = err;
+                entry.Finished = true;
+            }
+            else
+            {
+                active = true;
+            }
         }
     }
     return active;
@@ -588,7 +608,8 @@ PollDriverJobs(void)
 static void
 AutoSearchDriver(const std::wstring &id)
 {
-    auto existing = g_driverJobs.find(id);
+    const std::wstring key = NormalizeInstanceId(id);
+    auto existing = g_driverJobs.find(key);
     DRVINST_JOB_ID job = 0;
     DrvJobEntry entry;
     DWORD err;
@@ -602,6 +623,7 @@ AutoSearchDriver(const std::wstring &id)
     entry.Win32 = 0;
     entry.Problem = 0;
     entry.Flags = 0;
+    entry.Failures = 0;
     entry.Finished = false;
     err = g_drvInstSubmit(id.c_str(), DRVINST_F_SILENT, &job);
     if (err != ERROR_SUCCESS)
@@ -614,7 +636,7 @@ AutoSearchDriver(const std::wstring &id)
     {
         entry.Id = job;
     }
-    g_driverJobs[id] = entry;
+    g_driverJobs[key] = entry;
 }
 
 static std::wstring
@@ -626,7 +648,12 @@ JobStatusText(const DrvJobEntry &entry)
     {
         case 0: text = Str(IDS_DRIVER_STATUS_QUEUED); break;
         case 1: text = Str(IDS_DRIVER_STATUS_INSTALLING); break;
-        case 2: text = Str(IDS_DRIVER_STATUS_SUCCEEDED); break;
+        case 2:
+            if (!(entry.Flags & DRVINST_RF_STARTED))
+                text = Str(IDS_DRIVER_STATUS_PENDING_START);
+            else
+                text = Str(IDS_DRIVER_STATUS_SUCCEEDED);
+            break;
         case 3:
             if (entry.Flags & DRVINST_RF_ROLLEDBACK)
                 text = Printf(Str(IDS_DRIVER_STATUS_ROLLBACK_PROBLEM).c_str(), entry.Problem);
@@ -648,6 +675,8 @@ JobStatusText(const DrvJobEntry &entry)
 static void
 BuildDriverJobHistory(PageBuilder &page)
 {
+    DWORD err;
+
     page.Group(Str(IDS_DRIVERS_HISTORY));
     if (!DrvInstAvailable())
     {
@@ -659,12 +688,14 @@ BuildDriverJobHistory(PageBuilder &page)
         DRVINST_JOB_ID ids[64];
         DWORD count = _countof(ids);
 
-        if (g_drvInstEnumJobs(ids, &count) == ERROR_SUCCESS && count > 0)
+        err = g_drvInstEnumJobs(ids, &count);
+        if ((err == ERROR_SUCCESS || err == ERROR_MORE_DATA) && count > 0)
         {
             for (DWORD i = 0; i < count; i++)
             {
                 DRVINST_JOB_INFO info;
                 DrvJobEntry entry;
+                std::wstring title;
 
                 ZeroMemory(&info, sizeof(info));
                 info.Size = sizeof(info);
@@ -676,13 +707,20 @@ BuildDriverJobHistory(PageBuilder &page)
                 entry.Problem = info.Result.Problem;
                 entry.Flags = info.Result.Flags;
                 entry.Finished = info.State >= 2 || info.EndTick != 0;
-                page.Info(Printf(L"%I64u  %s", info.JobId, info.DeviceInstanceId),
-                          JobStatusText(entry), NULL);
+                title = Printf(L"%I64u  %s", info.JobId, info.DeviceInstanceId);
+                if (info.EndTick != 0 && info.EndTick >= info.SubmitTick)
+                    title += Printf(L"  (%lus)", (info.EndTick - info.SubmitTick) / 1000);
+                page.Info(title, JobStatusText(entry), NULL);
             }
             return;
         }
+        if (err == ERROR_SUCCESS)
+        {
+            page.Text(Str(IDS_DRIVER_HISTORY_EMPTY));
+            return;
+        }
     }
-    page.Text(Str(IDS_DRIVERS_NONE));
+    page.Text(Str(IDS_DRIVER_SERVICE_UNAVAILABLE));
 }
 
 static std::wstring
@@ -736,16 +774,21 @@ BuildDrivers(PageBuilder &page)
         SetupDiLoadClassIcon(&data.ClassGuid, &icon, NULL);
         {
             std::wstring id = instance;
-            auto job = g_driverJobs.find(id);
+            auto job = g_driverJobs.find(NormalizeInstanceId(id));
             SettingRow &row = page.Button(name,
                                           job != g_driverJobs.end() ? JobStatusText(job->second)
                                                                     : DriverStatusText(&data),
                                           NULL, Str(IDS_UPDATE_DRIVER),
                                           [host, id](int action) {
                                               if (action == 0)
+                                              {
+                                                  g_driverJobs.erase(NormalizeInstanceId(id));
                                                   UpdateDeviceDriver(host->Window(), id);
+                                              }
                                               else
+                                              {
                                                   AutoSearchDriver(id);
+                                              }
                                           });
             if (DrvInstAvailable())
                 row.Actions.push_back(Str(IDS_DRIVER_AUTO_SEARCH));
