@@ -24,7 +24,12 @@ DosPathToSessionPathW(IN DWORD SessionID,
                       IN LPWSTR InPath,
                       OUT LPWSTR *OutPath)
 {
+    /* The call has no public contract to implement: fail explicitly and hand
+       back no path instead of reporting an unexplained zero */
     UNIMPLEMENTED;
+    if (OutPath)
+        *OutPath = NULL;
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return 0;
 }
 
@@ -38,6 +43,9 @@ DosPathToSessionPathA(IN DWORD SessionId,
                       OUT LPSTR *OutPath)
 {
     UNIMPLEMENTED;
+    if (OutPath)
+        *OutPath = NULL;
+    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return 0;
 }
 
