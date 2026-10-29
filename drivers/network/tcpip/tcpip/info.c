@@ -279,6 +279,11 @@ TDI_STATUS InfoTdiQueryInformationEx(
         case INFO_CLASS_PROTOCOL:
            if (ID->toi_type == INFO_TYPE_ADDRESS_OBJECT)
            {
+               if (ID->toi_entity.tei_entity == IF_ENTITY ||
+                   ID->toi_entity.tei_entity == AT_ENTITY ||
+                   ID->toi_entity.tei_entity == CL_NL_ENTITY)
+                   return TDI_INVALID_PARAMETER;
+
                if ((EntityListContext = GetContext(ID->toi_entity))) {
                     Status = GetAddressFileInfo(ID, EntityListContext, Buffer, BufferSize);
                     PutContext(ID->toi_entity, EntityListContext);
@@ -454,6 +459,11 @@ TDI_STATUS InfoTdiSetInformationEx
             {
                 case INFO_TYPE_ADDRESS_OBJECT:
                 {
+                    if (ID->toi_entity.tei_entity == IF_ENTITY ||
+                        ID->toi_entity.tei_entity == AT_ENTITY ||
+                        ID->toi_entity.tei_entity == CL_NL_ENTITY)
+                        return TDI_INVALID_PARAMETER;
+
                     if ((EntityListContext = GetContext(ID->toi_entity))) {
                         Status = SetAddressFileInfo(ID, EntityListContext, Buffer, BufferSize);
                         PutContext(ID->toi_entity, EntityListContext);
@@ -467,7 +477,9 @@ TDI_STATUS InfoTdiSetInformationEx
                     PADDRESS_FILE AddressFile = GetContext(ID->toi_entity);
                     if (AddressFile == NULL)
                         return TDI_INVALID_PARAMETER;
-                    return SetConnectionInfo(ID, AddressFile, Buffer, BufferSize);
+                    Status = SetConnectionInfo(ID, AddressFile, Buffer, BufferSize);
+                    PutContext(ID->toi_entity, AddressFile);
+                    return Status;
                 }
                 case INFO_TYPE_PROVIDER:
                 {
