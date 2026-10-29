@@ -1745,13 +1745,13 @@ LnDriverStoreEnumDriverPackageW(
         if (Seen++ < *Index)
             continue;
 
-        if (lstrlenW(Root) + 1 + lstrlenW(FindData.cFileName) + 1 + lstrlenW(InfBaseName) + 4 >= ARRAY_SIZE(PackagePath))
+        if (lstrlenW(Root) + 1 + lstrlenW(FindData.cFileName) + 1 + lstrlenW(InfBaseName) + 1 >= ARRAY_SIZE(PackagePath))
         {
             hr = HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
             goto Done;
         }
 
-        swprintf(PackagePath, ARRAY_SIZE(PackagePath), L"%s\\%s\\%s.inf", Root, FindData.cFileName, InfBaseName);
+        swprintf(PackagePath, ARRAY_SIZE(PackagePath), L"%s\\%s\\%s", Root, FindData.cFileName, InfBaseName);
         if (GetFileAttributesW(PackagePath) == INVALID_FILE_ATTRIBUTES)
         {
             /* An incomplete package has no INF to report; skip it */
