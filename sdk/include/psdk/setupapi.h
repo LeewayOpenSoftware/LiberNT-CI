@@ -2520,6 +2520,147 @@ SetupGetInfDriverStoreLocationW(
   _In_ DWORD ReturnBufferSize,
   _Out_opt_ PDWORD RequiredSize);
 
+
+typedef BOOL (CALLBACK *INFENUMPROCA)(PCSTR PublishedInfName, PVOID Context);
+typedef BOOL (CALLBACK *INFENUMPROCW)(PCWSTR PublishedInfName, PVOID Context);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreAddDriverPackageA(
+  _In_ PCSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _Out_writes_(ReturnBufferSize) PSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreAddDriverPackageW(
+  _In_ PCWSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _Out_writes_(ReturnBufferSize) PWSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreDeleteDriverPackageA(
+  _In_ PCSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreDeleteDriverPackageW(
+  _In_ PCWSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreFindDriverPackageA(
+  _In_ PCSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _In_opt_ PVOID Reserved3,
+  _Out_writes_(ReturnBufferSize) PSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreFindDriverPackageW(
+  _In_ PCWSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _In_opt_ PVOID Reserved3,
+  _Out_writes_(ReturnBufferSize) PWSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupEnumPublishedInfA(
+  _In_ INFENUMPROCA Callback,
+  _In_opt_ PVOID Context,
+  _In_ DWORD Flags);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupEnumPublishedInfW(
+  _In_ INFENUMPROCW Callback,
+  _In_opt_ PVOID Context,
+  _In_ DWORD Flags);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupGetInfPublishedNameA(
+  _In_ PCSTR DriverStoreLocation,
+  _Out_writes_(ReturnBufferSize) PSTR ReturnBuffer,
+  _In_ DWORD ReturnBufferSize,
+  _Out_opt_ PDWORD RequiredSize);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupGetInfPublishedNameW(
+  _In_ PCWSTR DriverStoreLocation,
+  _Out_writes_(ReturnBufferSize) PWSTR ReturnBuffer,
+  _In_ DWORD ReturnBufferSize,
+  _Out_opt_ PDWORD RequiredSize);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreEnumDriverPackageA(
+  _In_opt_ PCSTR EnumFilter,
+  _In_opt_ PVOID Reserved1,
+  _In_ WORD Architecture,
+  _Out_writes_(ReturnBufferSize) PSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength,
+  _Inout_ PDWORD Index);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreEnumDriverPackageW(
+  _In_opt_ PCWSTR EnumFilter,
+  _In_opt_ PVOID Reserved1,
+  _In_ WORD Architecture,
+  _Out_writes_(ReturnBufferSize) PWSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength,
+  _Inout_ PDWORD Index);
+
+#ifdef UNICODE
+#define INFENUMPROC INFENUMPROCW
+#define DriverStoreAddDriverPackage DriverStoreAddDriverPackageW
+#define DriverStoreDeleteDriverPackage DriverStoreDeleteDriverPackageW
+#define DriverStoreEnumDriverPackage DriverStoreEnumDriverPackageW
+#define DriverStoreFindDriverPackage DriverStoreFindDriverPackageW
+#define SetupEnumPublishedInf SetupEnumPublishedInfW
+#define SetupGetInfPublishedName SetupGetInfPublishedNameW
+#else
+#define INFENUMPROC INFENUMPROSA
+#define DriverStoreAddDriverPackage DriverStoreAddDriverPackageA
+#define DriverStoreDeleteDriverPackage DriverStoreDeleteDriverPackageA
+#define DriverStoreEnumDriverPackage DriverStoreEnumDriverPackageA
+#define DriverStoreFindDriverPackage DriverStoreFindDriverPackageA
+#define SetupEnumPublishedInf SetupEnumPublishedInfA
+#define SetupGetInfPublishedName SetupGetInfPublishedNameA
+#endif
+
+
 WINSETUPAPI DWORD WINAPI StampFileSecurity(PCWSTR, PSECURITY_DESCRIPTOR);
 
 
