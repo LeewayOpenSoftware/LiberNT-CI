@@ -10,6 +10,7 @@ list(APPEND SOURCE
     cfgmgr.c
     cfgmgr32.c
     devobject.c
+    drvstore.c
     notification.c
     rpc.c
     ${CMAKE_CURRENT_BINARY_DIR}/pnp_c.c

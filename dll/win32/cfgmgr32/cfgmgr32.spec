@@ -6,8 +6,8 @@
 @ stdcall CMP_Report_LogOn(long long)
 @ stdcall CMP_WaitNoPendingInstallEvents(long)
 @ stdcall CMP_WaitServicesAvailable(ptr)
-@ stub CM_Add_Driver_PackageW
-@ stub CM_Add_Driver_Package_ExW
+@ stdcall CM_Add_Driver_PackageW(wstr long ptr)
+@ stdcall CM_Add_Driver_Package_ExW(wstr long ptr ptr)
 @ stdcall CM_Add_Empty_Log_Conf(ptr ptr long long)
 @ stdcall CM_Add_Empty_Log_Conf_Ex(ptr ptr long long ptr)
 @ stdcall CM_Add_IDA(ptr str long)
@@ -33,8 +33,8 @@
 @ stub CM_Delete_Device_Interface_KeyW
 @ stub CM_Delete_Device_Interface_Key_ExA
 @ stub CM_Delete_Device_Interface_Key_ExW
-@ stub CM_Delete_Driver_PackageW
-@ stub CM_Delete_Driver_Package_ExW
+@ stdcall CM_Delete_Driver_PackageW(wstr long ptr)
+@ stdcall CM_Delete_Driver_Package_ExW(wstr long ptr ptr)
 @ stub CM_Delete_PowerScheme
 @ stdcall CM_Delete_Range(int64 int64 ptr long)
 @ stdcall CM_Detect_Resource_Conflict(long long ptr long ptr long)
