@@ -511,7 +511,8 @@ DevInstallInfW(
         if (InfDirectoryLength == 0 || InfDirectoryLength + 5 >= RTL_NUMBER_OF(InfDirectory) ||
             _wcsnicmp(FullInfPath, InfDirectory, InfDirectoryLength) != 0 ||
             FullInfPath[InfDirectoryLength] != L'\\' ||
-            _wcsicmp(FullInfPath + InfDirectoryLength + 1, L"inf") != 0)
+            _wcsnicmp(FullInfPath + InfDirectoryLength + 1, L"inf\\", 4) != 0 ||
+            wcschr(FullInfPath + InfDirectoryLength + 5, L'\\') != NULL)
         {
             /* A foreign INF is staged and published first, so a later
              * reinstall does not depend on the original medium */
