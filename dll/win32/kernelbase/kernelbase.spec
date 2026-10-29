@@ -284,7 +284,7 @@
 @ stdcall FindFirstFileA(str ptr) kernel32.FindFirstFileA
 @ stdcall FindFirstFileExA(str long ptr long ptr long) kernel32.FindFirstFileExA
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long) kernel32.FindFirstFileExW
-@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr) kernel32.FindFirstFileNameW
+@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr)
 @ stdcall FindFirstFileW(wstr ptr) kernel32.FindFirstFileW
 @ stdcall FindFirstFreeAce(ptr ptr)
 @ stdcall FindFirstStreamW(wstr ptr ptr long) kernel32.FindFirstStreamW
@@ -485,8 +485,8 @@
 @ stdcall GetNLSVersion(long long ptr)
 @ stdcall GetNLSVersionEx(long wstr ptr)
 @ stub GetNamedLocaleHashNode
-@ stub -version=0x600+ GetNamedPipeAttribute() kernel32.GetNamedPipeAttribute
-@ stub -version=0x600+ GetNamedPipeClientComputerNameW() kernel32.GetNamedPipeClientComputerNameW
+@ stub -version=0x600+ GetNamedPipeAttribute
+@ stdcall -version=0x600+ GetNamedPipeClientComputerNameW(ptr ptr long)
 @ stdcall GetNamedPipeHandleStateW(long ptr ptr ptr ptr wstr long) kernel32.GetNamedPipeHandleStateW
 @ stdcall GetNamedPipeInfo(long ptr ptr ptr ptr) kernel32.GetNamedPipeInfo
 @ stdcall GetNativeSystemInfo(ptr) kernel32.GetNativeSystemInfo
@@ -629,7 +629,7 @@
 @ stdcall GetWindowsDirectoryW(ptr long) kernel32.GetWindowsDirectoryW
 @ stdcall GetWriteWatch(long ptr long ptr ptr ptr) kernel32.GetWriteWatch
 @ stdcall -version=0x601+ GetWsChanges(long ptr long) kernel32.K32GetWsChanges
-@ stdcall -version=0x601+ GetWsChangesEx(long ptr ptr) kernel32.K32GetWsChangesEx
+@ stdcall -version=0x601+ GetWsChangesEx(long ptr ptr)
 @ stdcall -arch=x86_64,arm64ec GetXStateFeaturesMask(ptr ptr)
 @ stdcall GlobalAlloc(long long) kernel32.GlobalAlloc
 @ stdcall GlobalFree(long) kernel32.GlobalFree
@@ -755,7 +755,7 @@
 @ stdcall -version=0x601+ K32GetProcessImageFileNameW(long ptr long) kernel32.K32GetProcessImageFileNameW
 @ stdcall -version=0x601+ K32GetProcessMemoryInfo(long ptr long) kernel32.K32GetProcessMemoryInfo
 @ stdcall -version=0x601+ K32GetWsChanges(long ptr long) kernel32.K32GetWsChanges
-@ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) kernel32.K32GetWsChangesEx
+@ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) GetWsChangesEx
 @ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) kernel32.K32InitializeProcessForWsWatch
 @ stdcall -version=0x601+ K32QueryWorkingSet(long ptr long) kernel32.K32QueryWorkingSet
 @ stdcall -version=0x601+ K32QueryWorkingSetEx(long ptr long) kernel32.K32QueryWorkingSetEx
@@ -774,7 +774,7 @@
 @ stdcall LoadPackagedLibrary(wstr long)
 @ stdcall LoadResource(long long) kernel32.LoadResource
 @ stdcall LoadStringA(long long ptr long)
-@ stub -version=0x600+ LoadStringBaseExW() kernel32.LoadStringBaseExW
+@ stub -version=0x600+ LoadStringBaseExW
 @ stub LoadStringByReference
 @ stdcall LoadStringW(long long ptr long)
 @ stdcall LocalAlloc(long long) kernel32.LocalAlloc
@@ -796,7 +796,7 @@
 @ stdcall MapViewOfFile(long long long long long) kernel32.MapViewOfFile
 @ stdcall -arch=win64 MapViewOfFile3(long long ptr int64 long long long ptr long)
 @ stdcall MapViewOfFileEx(long long long long long ptr) kernel32.MapViewOfFileEx
-@ stdcall -version=0x600+ MapViewOfFileExNuma(long long long long long ptr long) kernel32.MapViewOfFileExNuma
+@ stdcall -version=0x600+ MapViewOfFileExNuma(long long long long long ptr long)
 @ stdcall MapViewOfFileFromApp(long long int64 long)
 @ stdcall MoveFileExW(wstr wstr long) kernel32.MoveFileExW
 @ stdcall MoveFileWithProgressW(wstr wstr ptr ptr long) kernel32.MoveFileWithProgressW
@@ -804,13 +804,13 @@
 @ stdcall MultiByteToWideChar(long long str long ptr long)
 @ stdcall NeedCurrentDirectoryForExePathA(str) kernel32.NeedCurrentDirectoryForExePathA
 @ stdcall NeedCurrentDirectoryForExePathW(wstr) kernel32.NeedCurrentDirectoryForExePathW
-@ stub -version=0x600+ NlsCheckPolicy() kernel32.NlsCheckPolicy
+@ stub -version=0x600+ NlsCheckPolicy
 @ stub NlsDispatchAnsiEnumProc
 @ stub NlsGetACPFromLocale
 @ stdcall NlsGetCacheUpdateCount() kernel32.NlsGetCacheUpdateCount
 @ stub NlsIsUserDefaultLocale
-@ stub -version=0x600+ NlsUpdateLocale() kernel32.NlsUpdateLocale
-@ stub -version=0x600+ NlsUpdateSystemLocale() kernel32.NlsUpdateSystemLocale
+@ stub -version=0x600+ NlsUpdateLocale
+@ stub -version=0x600+ NlsUpdateSystemLocale
 @ stdcall NlsValidateLocale(ptr long)
 @ stdcall NormalizeString(long wstr long ptr long)
 @ stub NotifyMountMgr
@@ -980,7 +980,7 @@
 @ stdcall QueryMemoryResourceNotification(ptr ptr) kernel32.QueryMemoryResourceNotification
 @ stdcall QueryPerformanceCounter(ptr) kernel32.QueryPerformanceCounter
 @ stdcall QueryPerformanceFrequency(ptr) kernel32.QueryPerformanceFrequency
-@ stdcall QueryProcessAffinityUpdateMode(ptr ptr) kernel32.QueryProcessAffinityUpdateMode
+@ stdcall QueryProcessAffinityUpdateMode(ptr ptr)
 @ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr) kernel32.QueryProcessCycleTime
 @ stub QuerySecurityAccessMask
 @ stdcall -version=0x600+ QueryThreadCycleTime(ptr ptr) kernel32.QueryThreadCycleTime
@@ -1174,7 +1174,7 @@
 @ stdcall SetPriorityClass(long long) kernel32.SetPriorityClass
 @ stdcall SetPrivateObjectSecurity(long ptr ptr ptr long)
 @ stdcall SetPrivateObjectSecurityEx(long ptr ptr long ptr long)
-@ stdcall SetProcessAffinityUpdateMode(ptr long) kernel32.SetProcessAffinityUpdateMode
+@ stdcall SetProcessAffinityUpdateMode(ptr long)
 @ stub SetProcessDefaultCpuSets
 @ stub SetProcessGroupAffinity
 @ stdcall SetProcessInformation(long long ptr long) kernel32.SetProcessInformation
@@ -1192,7 +1192,7 @@
 @ stdcall SetSecurityDescriptorRMControl(ptr ptr) advapi32.SetSecurityDescriptorRMControl
 @ stdcall SetSecurityDescriptorSacl(ptr long ptr long)
 @ stdcall SetStdHandle(long long)
-@ stdcall -version=0x600+ SetStdHandleEx(long long ptr) kernel32.SetStdHandleEx
+@ stdcall -version=0x600+ SetStdHandleEx(long long ptr)
 @ stdcall SetSystemFileCacheSize(long long long) kernel32.SetSystemFileCacheSize
 @ stdcall SetSystemTime(ptr) kernel32.SetSystemTime
 @ stdcall SetSystemTimeAdjustment(long long) kernel32.SetSystemTimeAdjustment
@@ -1363,7 +1363,7 @@
 @ stdcall VirtualAlloc2(long ptr long long long ptr long)
 @ stdcall VirtualAlloc2FromApp(long ptr long long long ptr long)
 @ stdcall VirtualAllocEx(long ptr long long long) kernel32.VirtualAllocEx
-@ stdcall -version=0x600+ VirtualAllocExNuma(long ptr long long long long) kernel32.VirtualAllocExNuma
+@ stdcall -version=0x600+ VirtualAllocExNuma(long ptr long long long long)
 @ stdcall VirtualAllocFromApp(ptr long long long)
 @ stdcall VirtualFree(ptr long long) kernel32.VirtualFree
 @ stdcall VirtualFreeEx(long ptr long long) kernel32.VirtualFreeEx

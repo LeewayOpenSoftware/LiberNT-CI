@@ -16,6 +16,7 @@ add_library(kernelbase MODULE
     ApiSetQuery.c
     AppContainer.c
     CancelSynchronousIo.c
+    CompatLinks.c
     ConsoleLegacy.c
     CpuSets.c
     DllMain.c

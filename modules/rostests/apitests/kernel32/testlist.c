@@ -26,6 +26,7 @@ extern void func_GetCurrentDirectory(void);
 extern void func_GetCurrentThreadStackLimits(void);
 extern void func_GetDriveType(void);
 extern void func_FindNLSString(void);
+extern void func_CompatLinks(void);
 extern void func_GetEnvironmentVariable(void);
 extern void func_GetFinalPathNameByHandle(void);
 extern void func_GetLocaleInfo(void);
@@ -116,6 +117,7 @@ const struct test winetest_testlist[] =
     { "GetCurrentThreadStackLimits", func_GetCurrentThreadStackLimits },
     { "GetDriveType",                func_GetDriveType },
     { "FindNLSString", func_FindNLSString },
+    { "CompatLinks", func_CompatLinks },
     { "GetEnvironmentVariable",      func_GetEnvironmentVariable },
     { "GetFinalPathNameByHandle",    func_GetFinalPathNameByHandle },
     { "GetLocaleInfo",               func_GetLocaleInfo },
