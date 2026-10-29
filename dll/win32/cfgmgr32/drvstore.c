@@ -41,6 +41,8 @@ MapStoreRpcError(
  * FileRepository and publishes it as an oemNN.inf. Requires an
  * administrator. Only the local machine is supported.
  */
+/* LiberNT-private assumed contract: no public prototype exists; the shape
+ * follows the cfgmgr32 conventions and only public documentation was used. */
 CONFIGRET
 WINAPI
 CM_Add_Driver_PackageW(
@@ -102,6 +104,8 @@ CM_Add_Driver_Package_ExW(
  * name or by a path to the INF. Requires an administrator. Only the local
  * machine is supported.
  */
+/* LiberNT-private assumed contract: no public prototype exists; the shape
+ * follows the cfgmgr32 conventions and only public documentation was used. */
 CONFIGRET
 WINAPI
 CM_Delete_Driver_PackageW(

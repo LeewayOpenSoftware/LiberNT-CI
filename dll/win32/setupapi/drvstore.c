@@ -1409,6 +1409,9 @@ ComparePublishedNames(
     return _wcsicmp(*(PCWSTR const *)First, *(PCWSTR const *)Second);
 }
 
+/* LiberNT-private assumed contract: no public prototype exists; the shape
+ * follows the setupapi enumeration family and only public documentation
+ * was used. */
 BOOL
 WINAPI
 SetupEnumPublishedInfW(
@@ -1575,6 +1578,9 @@ IsPackageDirectoryName(
     return TRUE;
 }
 
+/* LiberNT-private assumed contract: no public prototype exists; the shape
+ * mirrors the in-tree DriverStore*Package family and only public
+ * documentation was used. */
 HRESULT
 WINAPI
 DriverStoreEnumDriverPackageW(
