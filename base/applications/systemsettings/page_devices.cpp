@@ -582,6 +582,7 @@ PollDriverJobs(void)
             entry.Win32 = info.Result.Win32;
             entry.Problem = info.Result.Problem;
             entry.Flags = info.Result.Flags;
+            entry.Failures = 0;
             if (info.State >= 2 || info.EndTick != 0)
                 entry.Finished = true;
             else
