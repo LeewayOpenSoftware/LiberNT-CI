@@ -28,19 +28,20 @@ DevInstallW(
     IN LPCWSTR InstanceId,
     IN INT Show);
 
-BOOL
-WINAPI
-UpdateDriverForPlugAndPlayDevicesW(
-    IN HWND hwndParent,
-    IN LPCWSTR HardwareId,
-    IN LPCWSTR FullInfPath,
-    IN DWORD InstallFlags,
-    OUT PBOOL bRebootRequired OPTIONAL);
-
 /* From <newdev.h>: install flags of UpdateDriverForPlugAndPlayDevices. */
 #define INSTALLFLAG_FORCE           0x00000001
 #define INSTALLFLAG_READONLY        0x00000002
 #define INSTALLFLAG_NONINTERACTIVE  0x00000004
+
+/* LiberNT private: install one specific INF on one device instance. The
+ * hardware and compatible ids of the device all take part in the match. */
+BOOL
+WINAPI
+DevInstallInfW(
+    IN LPCWSTR InstanceId,
+    IN LPCWSTR FullInfPath,
+    IN DWORD InstallFlags,
+    OUT PBOOL bRebootRequired OPTIONAL);
 
 /* FUNCTIONS ****************************************************************/
 
@@ -275,31 +276,15 @@ wmain(
         if (InfPath)
         {
             BOOL NeedReboot = FALSE;
-            WCHAR HardwareId[256];
-            ULONG HwIdSize = sizeof(HardwareId);
-            DEVINST DevInst;
-            CONFIGRET Cr;
 
-            Cr = CM_Locate_DevNodeW(&DevInst, (DEVINSTID_W)DeviceInstanceId,
-                                    CM_LOCATE_DEVNODE_NORMAL);
-            if (Cr == CR_SUCCESS)
-                Cr = CM_Get_DevNode_Registry_PropertyW(DevInst, CM_DRP_HARDWAREID, NULL,
-                                                       HardwareId, &HwIdSize, 0);
-            if (Cr != CR_SUCCESS)
+            SetLastError(ERROR_SUCCESS);
+            if (!DevInstallInfW(DeviceInstanceId, InfPath,
+                                INSTALLFLAG_FORCE | INSTALLFLAG_NONINTERACTIVE,
+                                &NeedReboot))
             {
-                Result.Win32 = ERROR_INVALID_DATA;
-            }
-            else
-            {
-                SetLastError(ERROR_SUCCESS);
-                if (!UpdateDriverForPlugAndPlayDevicesW(NULL, HardwareId, InfPath,
-                                                        INSTALLFLAG_FORCE | INSTALLFLAG_NONINTERACTIVE,
-                                                        &NeedReboot))
-                {
-                    Result.Win32 = GetLastError();
-                    if (Result.Win32 == ERROR_SUCCESS)
-                        Result.Win32 = ERROR_GEN_FAILURE;
-                }
+                Result.Win32 = GetLastError();
+                if (Result.Win32 == ERROR_SUCCESS)
+                    Result.Win32 = ERROR_GEN_FAILURE;
             }
             if (NeedReboot)
                 Result.Flags |= DRVINST_RF_NEEDREBOOT;
