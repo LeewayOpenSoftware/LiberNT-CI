@@ -1,5 +1,6 @@
 @ stdcall ClientSideInstallW(ptr ptr wstr long)
 @ stdcall DevInstallW(ptr ptr wstr long)
+@ stdcall DevInstallInfW(wstr wstr long ptr)
 @ stdcall DrvInstEnumJobs(ptr ptr)
 @ stdcall DrvInstGetJob(int64 ptr)
 @ stdcall DrvInstRollback(wstr)
