@@ -317,7 +317,10 @@ wmain(
 
         /* The state of the devnode tells whether the driver also started */
         QueryDevnode(DeviceInstanceId, &Result);
-        if (Result.Win32 == ERROR_SUCCESS && Result.Problem != 0)
+        if (InfPath && Result.Win32 == ERROR_SUCCESS && Result.Problem != 0 &&
+            Result.Problem != CM_PROB_NEED_RESTART &&
+            Result.Problem != CM_PROB_DISABLED &&
+            Result.Problem != CM_PROB_HARDWARE_DISABLED)
             Result.Win32 = ERROR_GEN_FAILURE;
     }
 

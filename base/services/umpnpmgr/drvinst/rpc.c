@@ -197,7 +197,8 @@ DrvInst_SubmitInf(
 
     if (!pszDeviceInstanceId || !pszDeviceInstanceId[0] ||
         lstrlenW(pszDeviceInstanceId) >= DRVINST_DEVICE_ID_CCH ||
-        !pszInfPath || !pszInfPath[0] || lstrlenW(pszInfPath) >= MAX_PATH)
+        !pszInfPath || !pszInfPath[0] || lstrlenW(pszInfPath) >= MAX_PATH ||
+        !IsValidInfPath(pszInfPath))
         return ERROR_INVALID_PARAMETER;
 
     Error = DrvInstSubmitInfJob(pszDeviceInstanceId, pszInfPath,

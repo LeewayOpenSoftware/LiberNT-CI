@@ -431,7 +431,7 @@ SubmitInfThroughJobs(
     SP_DEVINFO_DATA DeviceInfoData;
     SP_DRVINFO_DATA_W DriverInfo;
     DWORD MemberIndex;
-    DWORD Installed = 0, Current = 0;
+    DWORD Installed = 0, Current = 0, Failed = 0;
     WCHAR DeviceId[MAX_DEVICE_ID_LEN];
     PCWSTR Component;
 
@@ -450,7 +450,9 @@ SubmitInfThroughJobs(
     for (MemberIndex = 0; SetupDiEnumDeviceInfo(DeviceInfoSet, MemberIndex, &DeviceInfoData); MemberIndex++)
     {
         BOOL Serves = FALSE;
+        WCHAR MatchedInf[MAX_PATH];
 
+        MatchedInf[0] = UNICODE_NULL;
         if (!SetupDiBuildDriverInfoList(DeviceInfoSet, &DeviceInfoData, SPDIT_COMPATDRIVER))
             continue;
         DriverInfo.cbSize = sizeof(DriverInfo);
@@ -470,6 +472,7 @@ SubmitInfThroughJobs(
                 if (!lstrcmpiW(Name, Component))
                 {
                     Serves = TRUE;
+                    lstrcpynW(MatchedInf, Detail.InfFileName, RTL_NUMBER_OF(MatchedInf));
                     break;
                 }
             }
@@ -484,7 +487,8 @@ SubmitInfThroughJobs(
         {
             DRVINST_JOB_ID JobId = 0;
             DRVINST_JOB_INFO Info;
-            DWORD Error = DrvInstSubmitInf(DeviceId, PublishedName, 0, &JobId);
+            PCWSTR FullInfPath = MatchedInf[0] ? MatchedInf : PublishedName;
+            DWORD Error = DrvInstSubmitInf(DeviceId, FullInfPath, 0, &JobId);
             if (Error == ERROR_SUCCESS)
                 Error = DrvInstWait(JobId, 600000, &Info);
             if (Error == ERROR_SUCCESS && Info.State == DrvInstJobSucceeded && Info.Result.Win32 == ERROR_SUCCESS)
@@ -492,16 +496,32 @@ SubmitInfThroughJobs(
                 ConPrintf(StdOut, L"Driver package installed on device: %ls\n", DeviceId);
                 Installed++;
             }
-            else
+            else if (Error == ERROR_SUCCESS && Info.State == DrvInstJobSucceeded)
             {
                 ConPrintf(StdOut, L"Driver package is up-to-date on device: %ls\n", DeviceId);
                 Current++;
+            }
+            else
+            {
+                DWORD FailCode = Error;
+
+                if (FailCode == ERROR_SUCCESS)
+                    FailCode = Info.Result.Win32;
+                if (FailCode == ERROR_SUCCESS && Info.State == DrvInstJobTimedOut)
+                    FailCode = ERROR_TIMEOUT;
+                if (FailCode == ERROR_SUCCESS)
+                    FailCode = ERROR_GEN_FAILURE;
+                ConPrintf(StdOut, L"Failed to install driver package on device: %ls (error %lu)\n",
+                          DeviceId, FailCode);
+                if (Context->Error == ERROR_SUCCESS)
+                    Context->Error = FailCode;
+                Failed++;
             }
         }
     }
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
 
-    if (Installed == 0 && Current != 0)
+    if (Installed == 0 && Current != 0 && Failed == 0)
     {
         Context->Error = ERROR_NO_MORE_ITEMS;
         return FALSE;

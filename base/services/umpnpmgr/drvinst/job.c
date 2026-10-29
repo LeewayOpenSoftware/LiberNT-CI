@@ -109,6 +109,22 @@ IsValidDeviceInstanceId(
     return TRUE;
 }
 
+BOOL
+IsValidInfPath(
+    _In_ PCWSTR InfPath)
+{
+    if (InfPath[0] == L'\\' || InfPath[0] == L'"')
+        return FALSE;
+    if (!((InfPath[0] >= L'A' && InfPath[0] <= L'Z') ||
+          (InfPath[0] >= L'a' && InfPath[0] <= L'z')))
+        return FALSE;
+    if (InfPath[1] != L':' || InfPath[2] != L'\\')
+        return FALSE;
+    if (wcschr(InfPath, L'"'))
+        return FALSE;
+    return TRUE;
+}
+
 static DRVINST_JOB_ID
 CreateJob(
     _In_ PCWSTR DeviceInstanceId,
@@ -531,7 +547,7 @@ SubmitDeviceJobEx(
     if (!DeviceInstanceId[0] || lstrlenW(DeviceInstanceId) >= DRVINST_DEVICE_ID_CCH ||
         !IsValidDeviceInstanceId(DeviceInstanceId))
         return ERROR_INVALID_PARAMETER;
-    if (InfPath && (!InfPath[0] || lstrlenW(InfPath) >= MAX_PATH))
+    if (InfPath && (!InfPath[0] || lstrlenW(InfPath) >= MAX_PATH || !IsValidInfPath(InfPath)))
         return ERROR_INVALID_PARAMETER;
 
     Async = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Async));

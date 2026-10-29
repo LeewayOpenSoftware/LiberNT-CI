@@ -126,6 +126,10 @@ IsValidDeviceInstanceId(
     _In_ PCWSTR DeviceInstanceId);
 
 BOOL
+IsValidInfPath(
+    _In_ PCWSTR InfPath);
+
+BOOL
 DrvInstUseWorker(VOID);
 
 BOOL
