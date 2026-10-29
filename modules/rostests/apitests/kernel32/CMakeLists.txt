@@ -19,6 +19,7 @@ list(APPEND SOURCE
     EnumSystemCodePages.c
     FindActCtxSectionStringW.c
     FindFiles.c
+    IsValidRelativeSecurityDescriptor.c
     DosPathToSessionPath.c
     IsValidLocaleName.c
     CompatLinks.c

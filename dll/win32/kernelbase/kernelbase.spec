@@ -726,7 +726,7 @@
 @ stdcall IsValidLocale(long long) kernel32.IsValidLocale
 @ stdcall IsValidLocaleName(wstr)
 @ stdcall IsValidNLSVersion(long wstr ptr)
-@ stub IsValidRelativeSecurityDescriptor
+@ stdcall IsValidRelativeSecurityDescriptor(ptr long long)
 @ stdcall IsValidSecurityDescriptor(ptr)
 @ stdcall IsValidSid(ptr)
 @ stdcall IsWellKnownSid(ptr long)

@@ -509,3 +509,20 @@ AddResourceAttributeAce(
         Acl->AclRevision = (BYTE)AceRevision;
     return TRUE;
 }
+
+/* Validation of a self-relative descriptor is the NT runtime's job; this adds
+   the argument check and the documented BOOL result */
+BOOL
+WINAPI
+IsValidRelativeSecurityDescriptor(
+    _In_reads_bytes_(SecurityDescriptorLength) PSECURITY_DESCRIPTOR SecurityDescriptorInput,
+    _In_ ULONG SecurityDescriptorLength,
+    _In_ SECURITY_INFORMATION RequiredInformation)
+{
+    if (!SecurityDescriptorInput)
+        return FALSE;
+
+    return RtlValidRelativeSecurityDescriptor(SecurityDescriptorInput,
+                                              SecurityDescriptorLength,
+                                              RequiredInformation) != FALSE;
+}
