@@ -12,6 +12,40 @@
 
 #define CM_DRVSTORE_PUBLISHED_NAME_CCH  64
 
+/* LiberNT-private driver store package management. These entry points have
+ * no public Windows prototype; they are exported under Ln-prefixed names so
+ * no colliding Windows name is given a body with an assumed signature. The
+ * caller must be an administrator; only the local machine is supported. */
+CONFIGRET
+WINAPI
+LnCM_Add_Driver_PackageW(
+    _In_ PCWSTR DriverPackageInfPath,
+    _In_ ULONG Flags,
+    _In_ PVOID Reserved);
+
+CONFIGRET
+WINAPI
+LnCM_Add_Driver_Package_ExW(
+    _In_ PCWSTR DriverPackageInfPath,
+    _In_ ULONG Flags,
+    _In_ PVOID Reserved,
+    _In_ HMACHINE hMachine);
+
+CONFIGRET
+WINAPI
+LnCM_Delete_Driver_PackageW(
+    _In_ PCWSTR DriverPackageInfPathOrPublishedName,
+    _In_ ULONG Flags,
+    _In_ PVOID Reserved);
+
+CONFIGRET
+WINAPI
+LnCM_Delete_Driver_Package_ExW(
+    _In_ PCWSTR DriverPackageInfPathOrPublishedName,
+    _In_ ULONG Flags,
+    _In_ PVOID Reserved,
+    _In_ HMACHINE hMachine);
+
 /* Maps the Win32-style errors of the server call to CONFIGRET codes. */
 static CONFIGRET
 MapStoreRpcError(
@@ -35,23 +69,23 @@ MapStoreRpcError(
 }
 
 /***********************************************************************
- * CM_Add_Driver_PackageW
+ * LnCM_Add_Driver_PackageW
  *
  * Add a driver package to the driver store. Stages the package into the
  * FileRepository and publishes it as an oemNN.inf. Requires an
  * administrator. Only the local machine is supported.
  */
-/* LiberNT-private assumed contract: no public prototype exists; the shape
- * follows the cfgmgr32 conventions and only public documentation was used. */
 CONFIGRET
 WINAPI
-CM_Add_Driver_PackageW(
+LnCM_Add_Driver_PackageW(
     _In_ PCWSTR DriverPackageInfPath,
     _In_ ULONG Flags,
     _In_ PVOID Reserved)
 {
     RPC_BINDING_HANDLE BindingHandle;
     WCHAR PublishedName[CM_DRVSTORE_PUBLISHED_NAME_CCH];
+    WCHAR FullPath[MAX_PATH];
+    UINT Length;
     DWORD Error;
 
     if (Flags != 0)
@@ -60,6 +94,12 @@ CM_Add_Driver_PackageW(
         return CR_INVALID_POINTER;
     if (!DriverPackageInfPath || !DriverPackageInfPath[0])
         return CR_INVALID_DATA;
+
+    /* The service validates and runs against an absolute local path */
+    Length = GetFullPathNameW(DriverPackageInfPath, RTL_NUMBER_OF(FullPath), FullPath, NULL);
+    if (Length == 0 || Length >= RTL_NUMBER_OF(FullPath))
+        return CR_INVALID_DATA;
+    DriverPackageInfPath = FullPath;
 
     if (!PnpGetLocalHandles(&BindingHandle))
         return CR_FAILURE;
@@ -81,11 +121,11 @@ CM_Add_Driver_PackageW(
 }
 
 /***********************************************************************
- * CM_Add_Driver_Package_ExW
+ * LnCM_Add_Driver_Package_ExW
  */
 CONFIGRET
 WINAPI
-CM_Add_Driver_Package_ExW(
+LnCM_Add_Driver_Package_ExW(
     _In_ PCWSTR DriverPackageInfPath,
     _In_ ULONG Flags,
     _In_ PVOID Reserved,
@@ -94,21 +134,19 @@ CM_Add_Driver_Package_ExW(
     if (hMachine != NULL)
         return CR_INVALID_MACHINENAME;
 
-    return CM_Add_Driver_PackageW(DriverPackageInfPath, Flags, Reserved);
+    return LnCM_Add_Driver_PackageW(DriverPackageInfPath, Flags, Reserved);
 }
 
 /***********************************************************************
- * CM_Delete_Driver_PackageW
+ * LnCM_Delete_Driver_PackageW
  *
  * Delete a driver package from the driver store by its published oemNN.inf
  * name or by a path to the INF. Requires an administrator. Only the local
  * machine is supported.
  */
-/* LiberNT-private assumed contract: no public prototype exists; the shape
- * follows the cfgmgr32 conventions and only public documentation was used. */
 CONFIGRET
 WINAPI
-CM_Delete_Driver_PackageW(
+LnCM_Delete_Driver_PackageW(
     _In_ PCWSTR DriverPackageInfPathOrPublishedName,
     _In_ ULONG Flags,
     _In_ PVOID Reserved)
@@ -156,11 +194,11 @@ CM_Delete_Driver_PackageW(
 }
 
 /***********************************************************************
- * CM_Delete_Driver_Package_ExW
+ * LnCM_Delete_Driver_Package_ExW
  */
 CONFIGRET
 WINAPI
-CM_Delete_Driver_Package_ExW(
+LnCM_Delete_Driver_Package_ExW(
     _In_ PCWSTR DriverPackageInfPathOrPublishedName,
     _In_ ULONG Flags,
     _In_ PVOID Reserved,
@@ -169,5 +207,5 @@ CM_Delete_Driver_Package_ExW(
     if (hMachine != NULL)
         return CR_INVALID_MACHINENAME;
 
-    return CM_Delete_Driver_PackageW(DriverPackageInfPathOrPublishedName, Flags, Reserved);
+    return LnCM_Delete_Driver_PackageW(DriverPackageInfPathOrPublishedName, Flags, Reserved);
 }

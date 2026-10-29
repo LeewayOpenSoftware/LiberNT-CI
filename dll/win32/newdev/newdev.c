@@ -474,6 +474,9 @@ DevInstallInfW(
 {
     DEVINSTDATA DevInstData;
     WCHAR DeviceInstanceId[MAX_DEVICE_ID_LEN];
+    WCHAR PublishedInf[MAX_PATH];
+    WCHAR InfDirectory[MAX_PATH];
+    UINT InfDirectoryLength;
     DWORD LastError, i;
     BOOL Found = FALSE;
     BOOL ret = FALSE;
@@ -500,6 +503,22 @@ DevInstallInfW(
     {
         SetLastError(ERROR_FILE_NOT_FOUND);
         return FALSE;
+    }
+
+    if (!SetupGetInfPublishedNameW(FullInfPath, PublishedInf, RTL_NUMBER_OF(PublishedInf), NULL))
+    {
+        InfDirectoryLength = GetSystemWindowsDirectoryW(InfDirectory, RTL_NUMBER_OF(InfDirectory));
+        if (InfDirectoryLength == 0 || InfDirectoryLength + 5 >= RTL_NUMBER_OF(InfDirectory) ||
+            _wcsnicmp(FullInfPath, InfDirectory, InfDirectoryLength) != 0 ||
+            FullInfPath[InfDirectoryLength] != L'\\' ||
+            _wcsicmp(FullInfPath + InfDirectoryLength + 1, L"inf") != 0)
+        {
+            /* A foreign INF is staged and published first, so a later
+             * reinstall does not depend on the original medium */
+            if (!SetupCopyOEMInfW(FullInfPath, NULL, SPOST_NONE, 0, NULL, 0, NULL, NULL))
+                TRACE("Staging %s into the driver store failed with error 0x%lx\n",
+                      debugstr_w(FullInfPath), GetLastError());
+        }
     }
 
     DevInstData.hDevInfo = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
@@ -1439,8 +1458,8 @@ CollectDriverCandidates(
     }
 }
 
-/* Lower rank wins; same rank prefers the higher-priority source, then the
- * newer date, then the higher version */
+/* Lower rank wins; the same rank prefers the newer date, then the higher
+ * version, and only then the higher-priority source */
 static BOOL
 CandidateBeats(
     IN const NEWDEV_DRIVER_CANDIDATE *Candidate,
@@ -1448,14 +1467,14 @@ CandidateBeats(
 {
     if (Candidate->Rank != Best->Rank)
         return Candidate->Rank < Best->Rank;
-    if (Candidate->Source != Best->Source)
-        return Candidate->Source < Best->Source;
     if (Candidate->DriverDate.dwHighDateTime != Best->DriverDate.dwHighDateTime ||
         Candidate->DriverDate.dwLowDateTime != Best->DriverDate.dwLowDateTime)
     {
         return CompareFileTime(&Candidate->DriverDate, &Best->DriverDate) > 0;
     }
-    return Candidate->DriverVersion > Best->DriverVersion;
+    if (Candidate->DriverVersion != Best->DriverVersion)
+        return Candidate->DriverVersion > Best->DriverVersion;
+    return Candidate->Source < Best->Source;
 }
 
 /* Collects one folder tree, visiting every directory that holds an INF */
@@ -2104,29 +2123,9 @@ DevInstallInternal(
         }
     }
 
-    /* Search driver in default location and removable devices */
-    if (!PrepareFoldersToScan(DevInstData, FALSE, FALSE, NULL))
-    {
-        LastError = GetLastError();
-        TRACE("PrepareFoldersToScan() failed with error 0x%lx\n", LastError);
-        SetLastError(LastError);
-        goto cleanup;
-    }
-    SearchResult = ScanFoldersForDriverResult(DevInstData);
-    if (SearchResult != DriverSearchFound && !DevInstData->bUpdate)
-    {
-        /* Nothing found yet: rank the driver store, the configured driver
-         * folders and the default folder against each other */
-        DWORD SearchError = GetLastError();
-        DRIVER_SEARCH_RESULT AutoResult = SearchRankedDriverStoreResult(DevInstData);
-
-        if (AutoResult == DriverSearchFound)
-            SearchResult = DriverSearchFound;
-        else if (AutoResult == DriverSearchError)
-            SearchError = GetLastError();
-        if (SearchResult != DriverSearchFound)
-            SetLastError(SearchError);
-    }
+    /* Rank the INF directory, the configured driver folders and the default
+       driver folder as one candidate list */
+    SearchResult = SearchRankedDriverStoreResult(DevInstData);
 handle_search_result:
     if (SearchResult == DriverSearchFound)
     {

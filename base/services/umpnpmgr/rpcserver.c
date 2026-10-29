@@ -6664,8 +6664,11 @@ PNP_DriverStoreAddDriverPackage(
     SYSTEM_INFO SystemInfo;
     HRESULT hr;
 
-    if (ulPublishedNameCch)
-        pszPublishedName[0] = UNICODE_NULL;
+    /* The whole [out] buffer travels back to the caller: never marshal
+     * uninitialized service heap across the wire */
+    if (ulPublishedNameCch == 0 || !pszPublishedName)
+        return ERROR_INVALID_PARAMETER;
+    ZeroMemory(pszPublishedName, ulPublishedNameCch * sizeof(WCHAR));
 
     if (!IsCallerAdministrator(hBinding))
         return ERROR_ACCESS_DENIED;

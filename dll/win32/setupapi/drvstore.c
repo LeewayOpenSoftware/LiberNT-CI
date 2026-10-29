@@ -7,6 +7,48 @@
 
 #include "setupapi_private.h"
 
+/* LiberNT-private driver store enumeration contracts. These entry points
+ * have no public Windows prototype (the SDK does not declare them); they are
+ * exported under Ln-prefixed names so no colliding Windows name is given a
+ * body with an assumed signature. */
+typedef BOOL (CALLBACK *INFENUMPROCA)(PCSTR PublishedInfName, PVOID Context);
+typedef BOOL (CALLBACK *INFENUMPROCW)(PCWSTR PublishedInfName, PVOID Context);
+
+BOOL
+WINAPI
+LnSetupEnumPublishedInfW(
+    IN INFENUMPROCW Callback,
+    IN PVOID Context OPTIONAL,
+    IN DWORD Flags);
+
+BOOL
+WINAPI
+LnSetupEnumPublishedInfA(
+    IN INFENUMPROCA Callback,
+    IN PVOID Context OPTIONAL,
+    IN DWORD Flags);
+
+HRESULT
+WINAPI
+LnDriverStoreEnumDriverPackageW(
+    IN PCWSTR EnumFilter OPTIONAL,
+    IN PVOID Reserved1,
+    IN WORD Architecture,
+    OUT PWSTR ReturnPath,
+    IN OUT PDWORD ReturnLength,
+    IN OUT PDWORD Index);
+
+static BOOL
+IsPackageDirectoryName(
+    IN PCWSTR PackageName,
+    OUT PWSTR InfBaseName OPTIONAL,
+    IN DWORD InfBaseNameSize);
+
+static VOID
+RemovePublishedInfEntries(
+    IN PCWSTR StoreInfFileName,
+    IN BOOL DeleteFiles);
+
 static const WCHAR RepositoryPath[] = L"\\System32\\DriverStore\\FileRepository";
 static const WCHAR VersionSection[] = L"Version";
 static const WCHAR CatalogFile[] = L"CatalogFile";
@@ -696,6 +738,24 @@ FindStoreInf(
 
     if (_wcsnicmp(Published, Root, lstrlenW(Root)) == 0)
     {
+        WCHAR Package[MAX_PATH];
+        PCWSTR Relative = Published + lstrlenW(Root);
+        PCWSTR Rest;
+        SIZE_T PackageLength;
+
+        /* Accept only the store layout Root\<package>\<inf>: a sibling such
+         * as Root'X\a.inf' or a file directly in Root must not resolve */
+        if (Relative[0] != L'\\')
+            return FALSE;
+        Rest = wcschr(Relative + 1, L'\\');
+        if (!Rest || wcschr(Rest + 1, L'\\') != NULL)
+            return FALSE;
+        PackageLength = Rest - (Relative + 1);
+        if (PackageLength == 0 || PackageLength >= ARRAY_SIZE(Package))
+            return FALSE;
+        lstrcpynW(Package, Relative + 1, (INT)PackageLength + 1);
+        if (!IsPackageDirectoryName(Package, NULL, 0))
+            return FALSE;
         if (GetFileAttributesW(Published) == INVALID_FILE_ATTRIBUTES)
             return FALSE;
         lstrcpyW(StoreInfFileName, Published);
@@ -883,7 +943,13 @@ DeleteDirectoryTree(
             if (!CombinePath(Path, Directory, FindData.cFileName))
                 continue;
 
-            if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            if (FindData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            {
+                /* Delete the link itself; never follow it into a target */
+                SetFileAttributesW(Path, FILE_ATTRIBUTE_NORMAL);
+                DeleteFileW(Path);
+            }
+            else if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
             {
                 DeleteDirectoryTree(Path);
             }
@@ -908,6 +974,8 @@ SETUPAPI_DeleteDriverStorePackage(
 
     if (!SETUPAPI_FindDriverStoreInf(PublishedInfFileName, StoreInf))
         return TRUE;
+
+    RemovePublishedInfEntries(StoreInf, FALSE);
 
     Last = wcsrchr(StoreInf, L'\\');
     if (!Last)
@@ -962,16 +1030,29 @@ FindSourceStoreInf(
     PWSTR BaseName;
     DWORD Length;
 
+    if (wcschr(InfPath, L'"'))
+        return FALSE;
+
     Length = GetFullPathNameW(InfPath, MAX_PATH, Source, &BaseName);
     if (Length == 0 || Length >= MAX_PATH || !BaseName)
         return FALSE;
 
+    if (BaseName != Source && BaseName[-1] == L'\\' &&
+        BaseName[0] == L'.' && BaseName[1] == L'.' &&
+        (BaseName[2] == UNICODE_NULL || BaseName[2] == L'\\'))
+    {
+        return FALSE;
+    }
+
     return FindStoreInf(Source, BaseName, StoreInfFileName);
 }
 
+/* Drops the DriverDatabase index entries of every published INF whose
+ * content matches the store package, and optionally the published files */
 static VOID
-DeletePublishedInfs(
-    IN PCWSTR StoreInfFileName)
+RemovePublishedInfEntries(
+    IN PCWSTR StoreInfFileName,
+    IN BOOL DeleteFiles)
 {
     WCHAR InfDirectory[MAX_PATH], Pattern[MAX_PATH], Published[MAX_PATH];
     WIN32_FIND_DATAW FindData;
@@ -1000,12 +1081,17 @@ DeletePublishedInfs(
             continue;
         }
 
-        DeleteFileW(Published);
-        Extension = wcsrchr(Published, L'.');
-        if (Extension)
+        SETUPAPI_DeleteDriverDatabasePackage(FindData.cFileName);
+
+        if (DeleteFiles)
         {
-            lstrcpyW(Extension, L".pnf");
             DeleteFileW(Published);
+            Extension = wcsrchr(Published, L'.');
+            if (Extension)
+            {
+                lstrcpyW(Extension, L".pnf");
+                DeleteFileW(Published);
+            }
         }
     } while (FindNextFileW(hFind, &FindData));
 
@@ -1084,7 +1170,7 @@ DriverStoreDeleteDriverPackageW(
     if (!FindSourceStoreInf(InfPath, Source, StoreInf))
         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 
-    DeletePublishedInfs(StoreInf);
+    RemovePublishedInfEntries(StoreInf, TRUE);
 
     Last = wcsrchr(StoreInf, L'\\');
     if (!Last)
@@ -1277,8 +1363,10 @@ SetupGetInfPublishedNameW(
 
     BaseName = wcsrchr(StorePath, L'\\');
 
-    /* An INF that already lives in the published directory is its own published name */
-    if (BaseName && IsSystemInfDirectory(StorePath))
+    /* An oem*.inf that already lives in the published directory is its own
+     * published name; inbox INFs are not published */
+    if (BaseName && IsSystemInfDirectory(StorePath) &&
+        _wcsnicmp(BaseName + 1, L"oem", 3) == 0)
     {
         if (GetFileAttributesW(StorePath) == INVALID_FILE_ATTRIBUTES)
         {
@@ -1414,7 +1502,7 @@ ComparePublishedNames(
  * was used. */
 BOOL
 WINAPI
-SetupEnumPublishedInfW(
+LnSetupEnumPublishedInfW(
     IN INFENUMPROCW Callback,
     IN PVOID Context OPTIONAL,
     IN DWORD Flags)
@@ -1513,13 +1601,37 @@ SetupEnumPublishedInfW(
     return Ret;
 }
 
+typedef struct _LN_ENUM_PUBLISHED_INF_ANSI_CONTEXT
+{
+    INFENUMPROCA Callback;
+    PVOID Context;
+} LN_ENUM_PUBLISHED_INF_ANSI_CONTEXT, *PLN_ENUM_PUBLISHED_INF_ANSI_CONTEXT;
+
+static BOOL CALLBACK
+EnumPublishedInfAnsiTrampoline(
+    IN PCWSTR Name,
+    IN PVOID Context)
+{
+    PLN_ENUM_PUBLISHED_INF_ANSI_CONTEXT AnsiContext = Context;
+    CHAR AnsiName[MAX_PATH];
+    INT Length;
+
+    Length = WideCharToMultiByte(CP_ACP, 0, Name, -1, AnsiName, ARRAY_SIZE(AnsiName), NULL, NULL);
+    if (Length == 0)
+        return FALSE;
+
+    return AnsiContext->Callback(AnsiName, AnsiContext->Context);
+}
+
 BOOL
 WINAPI
-SetupEnumPublishedInfA(
+LnSetupEnumPublishedInfA(
     IN INFENUMPROCA Callback,
     IN PVOID Context OPTIONAL,
     IN DWORD Flags)
 {
+    LN_ENUM_PUBLISHED_INF_ANSI_CONTEXT AnsiContext;
+
     if (!Callback)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -1531,8 +1643,9 @@ SetupEnumPublishedInfA(
         return FALSE;
     }
 
-    /* The published names are OEM file names: pure ASCII by construction */
-    return SetupEnumPublishedInfW((INFENUMPROCW)Callback, Context, Flags);
+    AnsiContext.Callback = Callback;
+    AnsiContext.Context = Context;
+    return LnSetupEnumPublishedInfW(EnumPublishedInfAnsiTrampoline, &AnsiContext, Flags);
 }
 
 /* PACKAGE ENUMERATION *********************************************************/
@@ -1583,7 +1696,7 @@ IsPackageDirectoryName(
  * documentation was used. */
 HRESULT
 WINAPI
-DriverStoreEnumDriverPackageW(
+LnDriverStoreEnumDriverPackageW(
     IN PCWSTR EnumFilter OPTIONAL,
     IN PVOID Reserved1,
     IN WORD Architecture,
@@ -1661,7 +1774,7 @@ Done:
 
 HRESULT
 WINAPI
-DriverStoreEnumDriverPackageA(
+LnDriverStoreEnumDriverPackageA(
     IN PCSTR EnumFilter OPTIONAL,
     IN PVOID Reserved1,
     IN WORD Architecture,
@@ -1684,7 +1797,7 @@ DriverStoreEnumDriverPackageA(
             return E_OUTOFMEMORY;
     }
 
-    hr = DriverStoreEnumDriverPackageW(FilterW, Reserved1, Architecture, PathW, &LengthW, Index);
+    hr = LnDriverStoreEnumDriverPackageW(FilterW, Reserved1, Architecture, PathW, &LengthW, Index);
     MyFree(FilterW);
     return ReturnStorePathA(hr, PathW, ReturnPath, ReturnLength);
 }

@@ -3350,44 +3350,6 @@ CMP_WaitNoPendingInstallEvents(
 #endif /* (WINVER >= _WIN32_WINNT_WIN2K) */
 
 
-/* Driver store package management. The caller must be an administrator; the
- * _Ex variants take a machine handle, only the local machine (NULL) is
- * supported. No public prototype is available for these; the shapes follow
- * the cfgmgr32 conventions. */
-CMAPI
-CONFIGRET
-WINAPI
-CM_Add_Driver_PackageW(
-  _In_ PCWSTR DriverPackageInfPath,
-  _In_ ULONG Flags,
-  _In_ PVOID Reserved);
-
-CMAPI
-CONFIGRET
-WINAPI
-CM_Add_Driver_Package_ExW(
-  _In_ PCWSTR DriverPackageInfPath,
-  _In_ ULONG Flags,
-  _In_ PVOID Reserved,
-  _In_ HMACHINE hMachine);
-
-CMAPI
-CONFIGRET
-WINAPI
-CM_Delete_Driver_PackageW(
-  _In_ PCWSTR DriverPackageInfPathOrPublishedName,
-  _In_ ULONG Flags,
-  _In_ PVOID Reserved);
-
-CMAPI
-CONFIGRET
-WINAPI
-CM_Delete_Driver_Package_ExW(
-  _In_ PCWSTR DriverPackageInfPathOrPublishedName,
-  _In_ ULONG Flags,
-  _In_ PVOID Reserved,
-  _In_ HMACHINE hMachine);
-
 #ifdef __cplusplus
 }
 #endif

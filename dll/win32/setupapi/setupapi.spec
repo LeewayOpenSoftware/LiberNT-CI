@@ -230,8 +230,10 @@
 @ stdcall -version=0x600+ DriverStoreAddDriverPackageW(wstr ptr ptr long ptr ptr)
 @ stdcall -version=0x600+ DriverStoreDeleteDriverPackageA(str ptr ptr)
 @ stdcall -version=0x600+ DriverStoreDeleteDriverPackageW(wstr ptr ptr)
-@ stdcall -version=0x600+ DriverStoreEnumDriverPackageA(str ptr long ptr ptr ptr)
-@ stdcall -version=0x600+ DriverStoreEnumDriverPackageW(wstr ptr long ptr ptr ptr)
+@ stub -version=0x600+ DriverStoreEnumDriverPackageA
+@ stub -version=0x600+ DriverStoreEnumDriverPackageW
+@ stdcall -version=0x600+ LnDriverStoreEnumDriverPackageA(str ptr long ptr ptr ptr)
+@ stdcall -version=0x600+ LnDriverStoreEnumDriverPackageW(wstr ptr long ptr ptr ptr)
 @ stdcall -version=0x600+ DriverStoreFindDriverPackageA(str ptr ptr long ptr ptr ptr)
 @ stdcall -version=0x600+ DriverStoreFindDriverPackageW(wstr ptr ptr long ptr ptr ptr)
 @ stub ExtensionPropSheetPageProc
@@ -442,8 +444,10 @@
 @ stdcall SetupDuplicateDiskSpaceListW(ptr ptr long long)
 @ stdcall SetupEnumInfSectionsA(long long ptr long ptr)
 @ stdcall SetupEnumInfSectionsW(long long ptr long ptr)
-@ stdcall -version=0x600+ SetupEnumPublishedInfA(ptr ptr long)
-@ stdcall -version=0x600+ SetupEnumPublishedInfW(ptr ptr long)
+@ stub -version=0x600+ SetupEnumPublishedInfA
+@ stub -version=0x600+ SetupEnumPublishedInfW
+@ stdcall -version=0x600+ LnSetupEnumPublishedInfA(ptr ptr long)
+@ stdcall -version=0x600+ LnSetupEnumPublishedInfW(ptr ptr long)
 @ stdcall SetupFindFirstLineA(long str str ptr)
 @ stdcall SetupFindFirstLineW(long wstr wstr ptr)
 @ stdcall SetupFindNextLine(ptr ptr)
