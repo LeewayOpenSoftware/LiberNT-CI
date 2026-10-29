@@ -35,7 +35,6 @@ TDI_STATUS InfoTdiQueryGetIFInfo(PVOID Context,
     InterfaceInfo = ExAllocatePoolWithTag(NonPagedPool, Size, OUT_DATA_TAG);
     if (!InterfaceInfo)
     {
-        IPDereferenceInterface(Interface);
         return TDI_NO_RESOURCES;
     }
 
@@ -44,8 +43,6 @@ TDI_STATUS InfoTdiQueryGetIFInfo(PVOID Context,
     InterfaceInfo->iii_speed = Interface->Speed;
     InterfaceInfo->iii_addrlength = Interface->AddressLength;
     RtlCopyMemory(InterfaceInfo->iii_addr, Interface->Address, Interface->AddressLength);
-
-    IPDereferenceInterface(Interface);
 
     Status = InfoCopyOut((PCHAR)InterfaceInfo, Size, Buffer, BufferSize);
 
