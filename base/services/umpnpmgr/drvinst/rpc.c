@@ -173,3 +173,37 @@ DrvInst_Rollback(
 
     return Error;
 }
+
+
+DWORD
+__stdcall
+DrvInst_SubmitInf(
+    _In_ handle_t hBinding,
+    _In_ LPCWSTR pszDeviceInstanceId,
+    _In_ LPCWSTR pszInfPath,
+    _In_ DWORD ulFlags,
+    _Out_ unsigned __int64 *pullJobId)
+{
+    DRVINST_JOB_ID JobId = 0;
+    DWORD Error;
+
+    *pullJobId = 0;
+
+    if (!IsCallerAdministrator(hBinding))
+        return ERROR_ACCESS_DENIED;
+
+    if (ulFlags & ~DRVINST_F_SILENT)
+        return ERROR_INVALID_FLAGS;
+
+    if (!pszDeviceInstanceId || !pszDeviceInstanceId[0] ||
+        lstrlenW(pszDeviceInstanceId) >= DRVINST_DEVICE_ID_CCH ||
+        !pszInfPath || !pszInfPath[0] || lstrlenW(pszInfPath) >= MAX_PATH)
+        return ERROR_INVALID_PARAMETER;
+
+    Error = DrvInstSubmitInfJob(pszDeviceInstanceId, pszInfPath,
+                                DRVINST_SOURCE_USER, ulFlags, &JobId);
+    if (Error == ERROR_SUCCESS)
+        *pullJobId = JobId;
+
+    return Error;
+}

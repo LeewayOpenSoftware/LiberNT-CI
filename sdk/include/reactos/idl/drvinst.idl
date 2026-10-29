@@ -62,4 +62,15 @@ interface drvinst
     DrvInst_Rollback(
         [in] handle_t hBinding,
         [in, string, ref] LPCWSTR pszDeviceInstanceId);
+
+    /* Ask for one specific INF to be installed on the device. Needs an
+     * administrator; the job follows the same path as DrvInst_SubmitDevice. */
+    DWORD
+    __stdcall
+    DrvInst_SubmitInf(
+        [in] handle_t hBinding,
+        [in, string, ref] LPCWSTR pszDeviceInstanceId,
+        [in, string, ref] LPCWSTR pszInfPath,
+        [in] DWORD ulFlags,
+        [out] unsigned hyper *pullJobId);
 }

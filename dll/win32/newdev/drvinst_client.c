@@ -228,3 +228,37 @@ DrvInstRollback(
     RpcBindingFree(&Binding);
     return Error;
 }
+
+DWORD
+WINAPI
+DrvInstSubmitInf(
+    _In_ PCWSTR DeviceInstanceId,
+    _In_ PCWSTR InfPath,
+    _In_ DWORD Flags,
+    _Out_ DRVINST_JOB_ID *JobId)
+{
+    RPC_BINDING_HANDLE Binding;
+    DWORD Error;
+
+    if (!DeviceInstanceId || !InfPath || !JobId)
+        return ERROR_INVALID_PARAMETER;
+
+    *JobId = 0;
+
+    Error = BindToService(&Binding);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+
+    RpcTryExcept
+    {
+        Error = DrvInst_SubmitInf(Binding, DeviceInstanceId, InfPath, Flags, JobId);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Error = RpcExceptionCode();
+    }
+    RpcEndExcept;
+
+    RpcBindingFree(&Binding);
+    return Error;
+}
