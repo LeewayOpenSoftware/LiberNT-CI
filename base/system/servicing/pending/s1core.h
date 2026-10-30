@@ -113,15 +113,11 @@ S1Bool S1PlanParse(const char *Text, size_t Length, S1_PLAN *Plan);
 /* Canonical transaction id per S1-CONTRACTS.md section 3. */
 void S1TransactionId(const S1_PLAN *Plan, char Out[65]);
 
-/* Verifies the PKCS#1 v1.5 signature over the canonical plan bytes
- * (the plan JSON without the trailing "signature" member, canonicalized as
- * the exact bytes the signer signed; the signer signs the raw plan file with
- * the signature member removed — see S1SignPlan helpers). */
-S1Bool S1PlanVerifySignature(const S1_PLAN *Plan,
-                             const uint8_t Modulus[S1_RSA2048_SIZE],
-                             uint32_t Exponent,
-                             const uint8_t *SignedData, size_t SignedDataLength,
-                             const uint8_t Signature[S1_RSA2048_SIZE]);
+/* The plan is not signed (S1-CONTRACTS.md section 1b): the applier verifies
+ * the package manifest signature with S1Rsa2048Sha256Verify and checks the
+ * plan against the signed manifest. This helper only validates that the
+ * plan's transactionId derives from its own fields. */
+S1Bool S1PlanCheckTransactionId(const S1_PLAN *Plan);
 
 /* ---------------------------------------------------------------- journal */
 

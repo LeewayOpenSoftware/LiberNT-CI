@@ -92,8 +92,9 @@ TestPlanAndSignature(const char *FixtureDir)
     if (!PlanText || !Sig) { printf("fixtures missing in %s\n", FixtureDir); return 1; }
 
     CHECK(S1PlanParse((const char *)PlanText, PlanSize, &Plan), "valid plan parses");
-    CHECK(S1PlanVerifySignature(&Plan, g_DevPub, 65537, PlanText, PlanSize, Sig),
-          "valid plan verifies with the development key");
+    CHECK(S1PlanCheckTransactionId(&Plan), "plan transactionId derives from its fields");
+    CHECK(S1Rsa2048Sha256Verify(g_DevPub, 65537, PlanText, PlanSize, Sig),
+          "manifest-style signature verifies with the development key");
 
     {
         char TxId[65];
@@ -106,16 +107,16 @@ TestPlanAndSignature(const char *FixtureDir)
     PlanText = ReadFile(Path, &PlanSize);
     snprintf(Path, sizeof(Path), "%s/attacker.sig.bin", FixtureDir);
     Sig = ReadFile(Path, &SigSize);
-    CHECK(S1PlanParse((const char *)PlanText, PlanSize, &Plan), "attacker plan parses");
-    CHECK(!S1PlanVerifySignature(&Plan, g_DevPub, 65537, PlanText, PlanSize, Sig),
-          "plan signed by a foreign key is rejected");
+    CHECK(S1PlanParse((const char *)PlanText, PlanSize, &Plan), "attacker-signed manifest parses");
+    CHECK(!S1Rsa2048Sha256Verify(g_DevPub, 65537, PlanText, PlanSize, Sig),
+          "manifest signature by a foreign key is rejected");
 
     snprintf(Path, sizeof(Path), "%s/wrongtx.plan.json", FixtureDir);
     free(PlanText);
     PlanText = ReadFile(Path, &PlanSize);
     CHECK(S1PlanParse((const char *)PlanText, PlanSize, &Plan), "tampered-transactionId plan parses");
-    CHECK(!S1PlanVerifySignature(&Plan, g_DevPub, 65537, PlanText, PlanSize, Sig),
-          "tampered transactionId breaks verification");
+    CHECK(!S1PlanCheckTransactionId(&Plan),
+          "tampered transactionId is rejected before any signature check");
 
     /* structural rejections */
     {

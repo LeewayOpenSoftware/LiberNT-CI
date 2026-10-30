@@ -900,19 +900,12 @@ S1TransactionId(const S1_PLAN *Plan, char Out[65])
 }
 
 S1Bool
-S1PlanVerifySignature(const S1_PLAN *Plan,
-                      const uint8_t Modulus[S1_RSA2048_SIZE],
-                      uint32_t Exponent,
-                      const uint8_t *SignedData, size_t SignedDataLength,
-                      const uint8_t Signature[S1_RSA2048_SIZE])
+S1PlanCheckTransactionId(const S1_PLAN *Plan)
 {
     char TxId[65];
 
-    /* The signed transactionId must match the plan content. */
     S1TransactionId(Plan, TxId);
-    if (strcmp(TxId, Plan->TransactionId) != 0)
-        return S1_FALSE;
-    return S1Rsa2048Sha256Verify(Modulus, Exponent, SignedData, SignedDataLength, Signature);
+    return strcmp(TxId, Plan->TransactionId) == 0 ? S1_TRUE : S1_FALSE;
 }
 
 /* ---------------------------------------------------------------- journal */
