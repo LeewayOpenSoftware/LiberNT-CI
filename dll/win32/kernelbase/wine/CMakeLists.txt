@@ -77,3 +77,22 @@ else()
     target_compile_options(kernelbase_static PRIVATE -Wno-unused-variable)
     target_compile_options(kernelbase_static PRIVATE -Wno-unused-function)
 endif()
+
+# Tramo D, Frente 4 (G1-G2; volume.c stays out until the mount manager question is settled): Wine bodies not yet exported. Built as separate
+# static libraries so they are compiled and checked but NOT linked into
+# kernelbase.dll; a function moves to the export table only with a proof.
+add_library(kernelbase_wine_g1 sync.c)
+target_compile_definitions(kernelbase_wine_g1 PRIVATE WINSHLWAPI= WINPATHCCHAPI= PATHCCH_NO_DEPRECATE=)
+target_link_libraries(kernelbase_wine_g1 psapi_static ${PSEH_LIB})
+add_dependencies(kernelbase_wine_g1 psdk)
+
+add_library(kernelbase_wine_g2 memory.c)
+target_compile_definitions(kernelbase_wine_g2 PRIVATE WINSHLWAPI= WINPATHCCHAPI= PATHCCH_NO_DEPRECATE=)
+target_link_libraries(kernelbase_wine_g2 psapi_static ${PSEH_LIB})
+add_dependencies(kernelbase_wine_g2 psdk)
+
+if(NOT MSVC)
+    foreach(_t kernelbase_wine_g1 kernelbase_wine_g2)
+        target_compile_options(${_t} PRIVATE -Wno-unused-variable -Wno-unused-function)
+    endforeach()
+endif()
