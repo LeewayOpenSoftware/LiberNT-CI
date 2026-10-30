@@ -110,6 +110,10 @@ TestPlanAndSignature(const char *FixtureDir)
     CHECK(S1PlanParse((const char *)PlanText, PlanSize, &Plan), "attacker-signed manifest parses");
     CHECK(!S1Rsa2048Sha256Verify(g_DevPub, 65537, PlanText, PlanSize, Sig),
           "manifest signature by a foreign key is rejected");
+    CHECK(!S1Rsa2048Sha256Verify(g_DevPub, 1, PlanText, PlanSize, Sig),
+          "exponent 1 cannot be injected into the trust root");
+    CHECK(!S1Rsa2048Sha256Verify(g_DevPub, 3, PlanText, PlanSize, Sig),
+          "exponent 3 cannot be injected into the trust root");
 
     snprintf(Path, sizeof(Path), "%s/wrongtx.plan.json", FixtureDir);
     free(PlanText);
