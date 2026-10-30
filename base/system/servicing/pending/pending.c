@@ -30,13 +30,31 @@
 #include <string.h>
 #include <stdarg.h>
 
+#include <ntndk.h>
 
-#include <windef.h>
-#include <winnt.h>
-#include <winternl.h>
-#include <ntstatus.h>
+#ifndef _In_
+#define _In_
+#define _Out_
+#define _Inout_
+#define _In_opt_
+#define _Out_opt_
+#endif
 
 #include "s1core.h"
+
+/* Plan paths are ASCII by contract (S1-CONTRACTS.md), so the widening copy
+ * of every target this binary applies is exact. */
+static void
+S1Widen(
+    _Out_ PWSTR Dst,
+    _In_ const char *Src,
+    _In_ size_t DstCch)
+{
+    size_t i;
+    for (i = 0; i + 1 < DstCch && Src[i]; i++)
+        Dst[i] = (WCHAR)(unsigned char)Src[i];
+    Dst[i] = 0;
+}
 
 /* Development public key (the matching private key stays outside the
  * repository and the test systems; S1-CONTRACTS.md section 1b pins this in
@@ -62,11 +80,17 @@ static const uint8_t S1DevPublicKey[S1_RSA2048_SIZE] = {
 0x7e
 };
 
-#define S1_ROOT        L"\\SystemRoot\\LiberNT\\Servicing"
-#define S1_PLAN        L"\\SystemRoot\\LiberNT\\Servicing\\pending\\plan.json"
-#define S1_ATTEMPT     L"\\SystemRoot\\LiberNT\\Servicing\\pending\\attempt.json"
-#define S1_JOURNAL     L"\\SystemRoot\\LiberNT\\Servicing\\journal\\transactions.jsonl"
-#define S1_BACKUP_DIR  L"\\SystemRoot\\LiberNT\\Servicing\\backup"
+#define S1_ROOT            L"\\SystemRoot\\LiberNT\\Servicing"
+#define S1_PLAN_PATH       L"\\SystemRoot\\LiberNT\\Servicing\\pending\\plan.json"
+#define S1_ATTEMPT_PATH    L"\\SystemRoot\\LiberNT\\Servicing\\pending\\attempt.json"
+#define S1_JOURNAL_PATH    L"\\SystemRoot\\LiberNT\\Servicing\\journal\\transactions.jsonl"
+#define S1_BACKUP_PATH     L"\\SystemRoot\\LiberNT\\Servicing\\backup"
+
+/* No ntstatus value names a content-hash mismatch; this is a private,
+ * customer-bit code the journal can record precisely. */
+#ifndef STATUS_S1_HASH_MISMATCH
+#define STATUS_S1_HASH_MISMATCH ((NTSTATUS)0xE0000001L)
+#endif
 
 /* ------------------------------------------------------------------ native IO */
 
@@ -256,11 +280,11 @@ typedef struct _S1_JOURNAL_WRITER
 static NTSTATUS
 S1JournalWriterAppend(
     _Inout_ S1_JOURNAL_WRITER *Writer,
-    _In_ PCWSTR TransactionId,
-    _In_ PCWSTR Phase,
+    _In_ const char *TransactionId,
+    _In_ const char *Phase,
     _In_ int Operation,
-    _In_ PCWSTR Result,
-    _In_ PCWSTR Error)
+    _In_ const char *Result,
+    _In_ const char *Error)
 {
     /* Append through a growable in-memory view is not possible natively;
      * each entry is formatted with s1core and written at the file end. */
@@ -291,7 +315,7 @@ S1JournalWriterAppend(
     if (Len <= 0 || (size_t)Len >= sizeof(Entry))
         return STATUS_BUFFER_OVERFLOW;
 
-    Status = S1NtOpen(S1_JOURNAL, FILE_WRITE_DATA, FILE_OPEN_IF, &Handle);
+    Status = S1NtOpen(S1_JOURNAL_PATH, FILE_WRITE_DATA, FILE_OPEN_IF, &Handle);
     if (!NT_SUCCESS(Status))
         return Status;
     Status = NtQueryInformationFile(Handle, &IoStatus, &StdInfo, sizeof(StdInfo),
@@ -333,7 +357,7 @@ S1JournalLoad(
 
     memset(Writer, 0, sizeof(*Writer));
     *ChainIntact = S1_TRUE;
-    Status = S1ReadWholeFile(S1_JOURNAL, &Data, &Size);
+    Status = S1ReadWholeFile(S1_JOURNAL_PATH, &Data, &Size);
     if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
         return STATUS_SUCCESS;
     if (!NT_SUCCESS(Status))
@@ -373,11 +397,6 @@ S1ManifestPathForPlan(
     _Out_ PWSTR SignaturePath,
     _In_ size_t SignaturePathCch)
 {
-    int Len;
-
-    Len = snprintf((char *)ManifestPath, ManifestPathCch * sizeof(WCHAR), "%ls",
-                   L""); /* placeholder to keep format checks quiet */
-    (void)Len;
     if (swprintf(ManifestPath, (ULONG)ManifestPathCch,
                  L"%ls\\store\\manifests\\%S\\%S\\manifest.json",
                  S1_ROOT, Plan->PackageId, Plan->Version) < 0)
@@ -498,7 +517,7 @@ S1VerifyPlanAgainstManifest(
 
 static NTSTATUS
 S1AttemptLoad(
-    _In_ PCWSTR TransactionId,
+    _In_ const char *TransactionId,
     _Out_ S1_ATTEMPT *Attempt)
 {
     PVOID Data;
@@ -513,7 +532,7 @@ S1AttemptLoad(
     Attempt->FailureRecorded = S1_FALSE;
     snprintf(Attempt->LastResult, sizeof(Attempt->LastResult), "%s", "none");
 
-    Status = S1ReadWholeFile(S1_ATTEMPT, &Data, &Size);
+    Status = S1ReadWholeFile(S1_ATTEMPT_PATH, &Data, &Size);
     if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
         return STATUS_SUCCESS;
     if (!NT_SUCCESS(Status))
@@ -540,9 +559,9 @@ S1AttemptSave(
     Len = S1AttemptSerialize(Attempt, Buffer, sizeof(Buffer));
     if (Len == 0)
         return STATUS_BUFFER_OVERFLOW;
-    if (swprintf(TempPath, MAX_PATH * 2, L"%ls.new", S1_ATTEMPT) < 0)
+    if (swprintf(TempPath, MAX_PATH * 2, L"%ls.new", S1_ATTEMPT_PATH) < 0)
         return STATUS_INVALID_PARAMETER;
-    Status = S1WriteFileAtomic(S1_ATTEMPT, TempPath, Buffer, (ULONG)Len);
+    Status = S1WriteFileAtomic(S1_ATTEMPT_PATH, TempPath, Buffer, (ULONG)Len);
     return Status;
 }
 
@@ -571,7 +590,7 @@ S1BuildBackupPath(
     _In_ size_t BackupPathCch)
 {
     if (swprintf(BackupPath, (ULONG)BackupPathCch,
-                 L"%ls\\%S\\%04lu", S1_BACKUP_DIR, Plan->TransactionId,
+                 L"%ls\\%S\\%04lu", S1_BACKUP_PATH, Plan->TransactionId,
                  (unsigned long)Op->Seq) < 0)
         return STATUS_INVALID_PARAMETER;
     return STATUS_SUCCESS;
@@ -582,11 +601,12 @@ S1ApplyOperation(
     _In_ const S1_PLAN *Plan,
     _In_ const S1_PLAN_OP *Op)
 {
-    WCHAR ObjectPath[MAX_PATH * 2], BackupPath[MAX_PATH * 2];
+    WCHAR ObjectPath[MAX_PATH * 2], BackupPath[MAX_PATH * 2], TargetW[MAX_PATH * 2];
     NTSTATUS Status;
     uint8_t Actual[S1_SHA256_SIZE];
     HANDLE Probe;
 
+    S1Widen(TargetW, Op->Target, MAX_PATH * 2);
     Status = S1BuildObjectPath(Op, ObjectPath, MAX_PATH * 2);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -598,27 +618,27 @@ S1ApplyOperation(
      * backup and a revert deletes the target. */
     if (Op->Type == S1_OP_REPLACE_FILE)
     {
-        Status = S1NtOpen(Op->Target, FILE_READ_DATA, FILE_OPEN, &Probe);
+        Status = S1NtOpen(TargetW, FILE_READ_DATA, FILE_OPEN, &Probe);
         if (NT_SUCCESS(Status))
         {
             NtClose(Probe);
-            Status = S1MoveFileEx(Op->Target, BackupPath, FALSE);
+            Status = S1MoveFileEx(TargetW, BackupPath, FALSE);
             if (!NT_SUCCESS(Status))
                 return Status;
         }
     }
 
     /* Atomic replace/add from the store object. */
-    Status = S1MoveFileEx(ObjectPath, Op->Target, TRUE);
+    Status = S1MoveFileEx(ObjectPath, TargetW, TRUE);
     if (!NT_SUCCESS(Status))
     {
         if (Op->Type == S1_OP_REPLACE_FILE)
-            S1MoveFileEx(BackupPath, Op->Target, TRUE);
+            S1MoveFileEx(BackupPath, TargetW, TRUE);
         return Status;
     }
 
     /* The component is not installed until its final hash matches. */
-    Status = S1HashFile(Op->Target, Actual);
+    Status = S1HashFile(TargetW, Actual);
     if (!NT_SUCCESS(Status) || memcmp(Actual, Op->ExpectedSha256, S1_SHA256_SIZE) != 0)
     {
         /* revert this operation */
@@ -626,7 +646,7 @@ S1ApplyOperation(
             HANDLE Handle;
             FILE_DISPOSITION_INFORMATION DeleteInfo;
             IO_STATUS_BLOCK IoStatus;
-            if (NT_SUCCESS(S1NtOpen(Op->Target, DELETE, FILE_OPEN, &Handle)))
+            if (NT_SUCCESS(S1NtOpen(TargetW, DELETE, FILE_OPEN, &Handle)))
             {
                 DeleteInfo.DeleteFile = TRUE;
                 NtSetInformationFile(Handle, &IoStatus, &DeleteInfo,
@@ -635,8 +655,8 @@ S1ApplyOperation(
             }
         }
         if (Op->Type == S1_OP_REPLACE_FILE)
-            S1MoveFileEx(BackupPath, Op->Target, TRUE);
-        return STATUS_HASH_MISMATCH;
+            S1MoveFileEx(BackupPath, TargetW, TRUE);
+        return STATUS_S1_HASH_MISMATCH;
     }
     return STATUS_SUCCESS;
 }
@@ -646,10 +666,11 @@ S1RevertOperation(
     _In_ const S1_PLAN *Plan,
     _In_ const S1_PLAN_OP *Op)
 {
-    WCHAR BackupPath[MAX_PATH * 2];
+    WCHAR BackupPath[MAX_PATH * 2], TargetW[MAX_PATH * 2];
     NTSTATUS Status;
     HANDLE Probe;
 
+    S1Widen(TargetW, Op->Target, MAX_PATH * 2);
     Status = S1BuildBackupPath(Plan, Op, BackupPath, MAX_PATH * 2);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -660,13 +681,13 @@ S1RevertOperation(
         if (NT_SUCCESS(Status))
         {
             NtClose(Probe);
-            return S1MoveFileEx(BackupPath, Op->Target, TRUE);
+            return S1MoveFileEx(BackupPath, TargetW, TRUE);
         }
         return STATUS_SUCCESS; /* nothing was backed up */
     }
 
     /* add-file: a revert removes the projected file. */
-    Status = S1NtOpen(Op->Target, DELETE, FILE_OPEN, &Probe);
+    Status = S1NtOpen(TargetW, DELETE, FILE_OPEN, &Probe);
     if (NT_SUCCESS(Status))
     {
         FILE_DISPOSITION_INFORMATION DeleteInfo;
@@ -697,7 +718,7 @@ NtProcessStartup(
     (void)ProcessParameters;
 
     /* 1. No plan is a successful no-op. */
-    Status = S1ReadWholeFile(S1_PLAN, &PlanData, &PlanSize);
+    Status = S1ReadWholeFile(S1_PLAN_PATH, &PlanData, &PlanSize);
     if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
         NtTerminateProcess(NtCurrentProcess(), 0);
     if (!NT_SUCCESS(Status))
@@ -751,9 +772,9 @@ NtProcessStartup(
     /* 5. Two attempts without a health confirmation revert. */
     if (S1ShouldRollback(Attempt.Attempt, Attempt.HealthConfirmed))
     {
-        PCWSTR Reason = (Attempt.FailureRecorded || strcmp(Attempt.LastResult, "started") == 0)
-                            ? (Attempt.FailureRecorded ? L"verifiable-failure" : L"unexpected-reboot")
-                            : L"unexpected-reboot";
+        const char *Reason = (Attempt.FailureRecorded || strcmp(Attempt.LastResult, "started") == 0)
+                            ? (Attempt.FailureRecorded ? "verifiable-failure" : "unexpected-reboot")
+                            : "unexpected-reboot";
         S1JournalWriterAppend(&Journal, Plan.TransactionId, "rollback-prepared", -1,
                               "started", Reason);
         for (i = Plan.OperationCount; i > 0; i--)
