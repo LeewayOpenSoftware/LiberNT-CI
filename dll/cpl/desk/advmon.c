@@ -83,7 +83,7 @@ DisplayAdvancedSettings(HWND hWndParent, PDISPLAY_DEVICE_ENTRY DisplayDevice)
     BOOL Ret;
     IDataObject *pdo;
 
-    /* FIXME: Build the "%s and %s" caption string for the monitor and adapter name */
+    /* The caption is built below by BuildAdvPropTitle once the device data object exists */
     szCaption[0] = _T('\0');
 
     ZeroMemory(&psh, sizeof(PROPSHEETHEADER));
@@ -117,7 +117,8 @@ DisplayAdvancedSettings(HWND hWndParent, PDISPLAY_DEVICE_ENTRY DisplayDevice)
     if (hpsxaDev != NULL)
         SHDestroyPropSheetExtArray(hpsxaDev);
 
-    IDataObject_Release(pdo);
+    if (pdo != NULL)
+        IDataObject_Release(pdo);
 
     return Ret;
 }
