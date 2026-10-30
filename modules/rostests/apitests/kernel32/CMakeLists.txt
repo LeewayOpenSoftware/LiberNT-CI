@@ -55,6 +55,7 @@ list(APPEND SOURCE
     InitOnce.c
     WineGroups12.c
     InversionL1.c
+    InversionL2.c
     interlck.c
     IoCompletion.c
     IsDBCSLeadByteEx.c
