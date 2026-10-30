@@ -7351,6 +7351,18 @@ static HRESULT _SHExpandEnvironmentStrings(HANDLE hToken, LPCWSTR szSrc, LPWSTR 
 #endif
             PathAppendW(szDest, szTemp + ARRAY_SIZE(L"%ALLUSERSPROFILE%")-1);
         }
+#ifdef __REACTOS__
+        else if (!strncmpiW(szTemp, L"%ProgramData%", ARRAY_SIZE(L"%ProgramData%")-1))
+        {
+            /* The machine-wide data folder does not depend on the user token.
+             * Going through the user environment would reject the default
+             * user token (HANDLE)-1 with ERROR_INVALID_HANDLE */
+            DWORD cchSize = cchDest;
+            if (!GetAllUsersProfileDirectoryW(szDest, &cchSize))
+                goto fallback_expand;
+            PathAppendW(szDest, szTemp + ARRAY_SIZE(L"%ProgramData%")-1);
+        }
+#endif
 #ifndef __REACTOS__
         else if (!strncmpiW(szTemp, L"%PUBLIC%", ARRAY_SIZE(L"%PUBLIC%")-1))
         {
