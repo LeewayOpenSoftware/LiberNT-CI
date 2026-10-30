@@ -3600,7 +3600,8 @@ UpdateDeviceConfigFlags(
 
 
 /* Retry the installation of a devnode whose previous install failed.
- * Clears CONFIGFLAG_FAILEDINSTALL and re-runs the device setup. */
+ * Clears CONFIGFLAG_FAILEDINSTALL and re-runs the device setup; a missing
+ * registry key is not an error, the caller falls back to a plain reenumerate. */
 static CONFIGRET
 RetryFailedDeviceInstallation(
     _In_ LPWSTR pszDeviceInstance,
@@ -3610,13 +3611,14 @@ RetryFailedDeviceInstallation(
     DWORD dwConfigFlags = 0;
     DWORD dwSize = sizeof(dwConfigFlags);
     DWORD dwType;
+    CONFIGRET ret;
     LONG Error;
 
     *Attempted = FALSE;
 
     Error = RegOpenKeyExW(hEnumKey, pszDeviceInstance, 0, KEY_QUERY_VALUE, &hDeviceKey);
     if (Error != ERROR_SUCCESS)
-        return CR_INVALID_DEVNODE;
+        return CR_SUCCESS;
 
     if (RegQueryValueExW(hDeviceKey, L"ConfigFlags", NULL, &dwType,
                          (LPBYTE)&dwConfigFlags, &dwSize) != ERROR_SUCCESS ||
@@ -3629,7 +3631,12 @@ RetryFailedDeviceInstallation(
 
     *Attempted = TRUE;
     UpdateDeviceConfigFlags(pszDeviceInstance, 0, CONFIGFLAG_FAILEDINSTALL);
-    return SetupDeviceInstance(pszDeviceInstance, CM_SETUP_DEVNODE_READY);
+
+    ret = SetupDeviceInstance(pszDeviceInstance, CM_SETUP_DEVNODE_READY);
+    if (ret != CR_SUCCESS)
+        UpdateDeviceConfigFlags(pszDeviceInstance, CONFIGFLAG_FAILEDINSTALL, 0);
+
+    return ret;
 }
 
 

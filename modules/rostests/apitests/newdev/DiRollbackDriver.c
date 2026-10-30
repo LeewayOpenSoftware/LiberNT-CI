@@ -14,18 +14,18 @@
 #include <newdev.h>
 #include <setupapi.h>
 
-#define CHECK_INVALID_PARAMETER(Call) \
+#define CHECK_INVALID_PARAMETER(Call, NeedReboot) \
     do \
     { \
         BOOL Result_; \
         DWORD Error_; \
-        BOOL Reboot_ = TRUE; \
+        *(NeedReboot) = TRUE; \
         SetLastError(0xdeadbeef); \
         Result_ = (Call); \
         Error_ = GetLastError(); \
         ok(!Result_, "%s succeeded\n", #Call); \
         ok(Error_ == ERROR_INVALID_PARAMETER, "%s set error %lu\n", #Call, Error_); \
-        ok(Reboot_ == FALSE, "%s touched NeedReboot on failure\n", #Call); \
+        ok(*(NeedReboot) == FALSE, "%s touched NeedReboot on failure\n", #Call); \
     } while (0)
 
 START_TEST(DiRollbackDriver)
@@ -44,9 +44,9 @@ START_TEST(DiRollbackDriver)
                                 NULL, 0, DICD_GENERATE_ID, &DeviceInfoData),
        "SetupDiCreateDeviceInfoW failed with error %lu\n", GetLastError());
 
-    CHECK_INVALID_PARAMETER(DiRollbackDriver(NULL, &DeviceInfoData, NULL, 0, &Reboot));
-    CHECK_INVALID_PARAMETER(DiRollbackDriver(Set, NULL, NULL, 0, &Reboot));
-    CHECK_INVALID_PARAMETER(DiRollbackDriver(INVALID_HANDLE_VALUE, &DeviceInfoData, NULL, 0, &Reboot));
+    CHECK_INVALID_PARAMETER(DiRollbackDriver(NULL, &DeviceInfoData, NULL, 0, &Reboot), &Reboot);
+    CHECK_INVALID_PARAMETER(DiRollbackDriver(Set, NULL, NULL, 0, &Reboot), &Reboot);
+    CHECK_INVALID_PARAMETER(DiRollbackDriver(INVALID_HANDLE_VALUE, &DeviceInfoData, NULL, 0, &Reboot), &Reboot);
 
     Reboot = TRUE;
     SetLastError(0xdeadbeef);
