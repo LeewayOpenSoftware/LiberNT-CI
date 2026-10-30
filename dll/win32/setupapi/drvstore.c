@@ -894,11 +894,10 @@ LnSetupVerifyDriverPackage(
 {
     WCHAR Source[MAX_PATH], SourceRoot[MAX_PATH], CatalogPath[MAX_PATH];
     STAGE_PACKAGE_CONTEXT Package;
-    PWSTR BaseName, CatalogName;
+    PWSTR BaseName;
     HINF hInf;
-    INFCONTEXT Context;
     HCATINFO Catalog;
-    DWORD Length;
+    DWORD Length, Error;
 
     if (!InfPath || !SigState)
         return ERROR_INVALID_PARAMETER;
@@ -916,43 +915,18 @@ LnSetupVerifyDriverPackage(
     if (hInf == INVALID_HANDLE_VALUE)
         return GetLastError();
 
-    CatalogName = NULL;
-    if (SetupFindFirstLineW(hInf, L"Version", NULL, &Context))
+    Catalog = OpenInfCatalog(hInf, SourceRoot, CatalogPath, ARRAY_SIZE(CatalogPath), &Error);
+    if (!Catalog)
     {
-        do
+        if (Error != ERROR_SUCCESS)
         {
-            WCHAR Key[LINE_LEN];
-            WCHAR Value[MAX_PATH];
-
-            if (!SetupGetStringFieldW(&Context, 0, Key, ARRAY_SIZE(Key), NULL) ||
-                _wcsnicmp(Key, L"CatalogFile", 11) != 0)
-                continue;
-            if (SetupGetStringFieldW(&Context, 1, Value, ARRAY_SIZE(Value), NULL) && Value[0])
-            {
-                CatalogName = MyMalloc(sizeof(Value));
-                if (CatalogName)
-                    lstrcpyW(CatalogName, Value);
-                break;
-            }
-        } while (SetupFindNextLine(&Context, &Context));
-    }
-
-    if (!CatalogName)
-    {
+            SetupCloseInfFile(hInf);
+            return Error;
+        }
         /* Paquete sin catálogo: estado Unsigned, no es un error. */
         SetupCloseInfFile(hInf);
         return ERROR_SUCCESS;
     }
-
-    if (!CombinePath(CatalogPath, SourceRoot, CatalogName))
-    {
-        MyFree(CatalogName);
-        SetupCloseInfFile(hInf);
-        return ERROR_FILENAME_EXCED_RANGE;
-    }
-    MyFree(CatalogName);
-
-    Catalog = CryptCATOpen(CatalogPath, CRYPTCAT_OPEN_EXISTING, 0, 0, 0);
     if (Catalog == INVALID_HANDLE_VALUE)
     {
         *SigState = PACKAGE_SIG_CATALOG_INVALID;
@@ -978,6 +952,251 @@ LnSetupVerifyDriverPackage(
     CryptCATClose(Catalog);
     SetupCloseInfFile(hInf);
     return ERROR_SUCCESS;
+}
+
+/* Localiza y abre el catálogo que el INF declara en [Version] CatalogFile.
+ * Devuelve NULL sin error cuando el INF no declara catálogo (Unsigned);
+ * INVALID_HANDLE_VALUE cuando el catálogo existe pero no se pudo abrir. */
+static HCATINFO
+OpenInfCatalog(
+    IN HINF hInf,
+    IN PCWSTR SourceRoot,
+    OUT PWSTR CatalogPath,
+    IN DWORD CatalogPathCch,
+    OUT PDWORD Error)
+{
+    INFCONTEXT Context;
+
+    if (!SetupFindFirstLineW(hInf, L"Version", NULL, &Context))
+    {
+        *Error = ERROR_SUCCESS;
+        return NULL;
+    }
+
+    do
+    {
+        WCHAR Key[LINE_LEN];
+        WCHAR Value[MAX_PATH];
+
+        if (!SetupGetStringFieldW(&Context, 0, Key, ARRAY_SIZE(Key), NULL) ||
+            _wcsnicmp(Key, L"CatalogFile", 11) != 0)
+            continue;
+        if (!SetupGetStringFieldW(&Context, 1, Value, ARRAY_SIZE(Value), NULL) || !Value[0])
+            continue;
+        if (!CombinePath(CatalogPath, SourceRoot, Value))
+        {
+            *Error = ERROR_FILENAME_EXCED_RANGE;
+            return NULL;
+        }
+        *Error = ERROR_SUCCESS;
+        return CryptCATOpen(CatalogPath, CRYPTCAT_OPEN_EXISTING, 0, 0, 0);
+    } while (SetupFindNextLine(&Context, &Context));
+
+    *Error = ERROR_SUCCESS;
+    return NULL;
+}
+
+/* Extrae el nombre para mostrar del firmante del catálogo (best effort; no
+ * evalúa ninguna cadena de confianza). Devuelve FALSE si no pudo leerlo. */
+static BOOL
+GetCatalogSigner(
+    IN PCWSTR CatalogPath,
+    OUT PWSTR Signer,
+    IN DWORD SignerCch,
+    OUT PWSTR SignerVersion,
+    IN DWORD SignerVersionCch)
+{
+    HCERTSTORE Store = NULL;
+    HCRYPTMSG Msg = NULL;
+    PCCERT_CONTEXT Cert = NULL;
+    CMSG_SIGNER_INFO *SignerInfo = NULL;
+    CERT_INFO CertInfo;
+    DWORD ContentType, FormatType, Size;
+    BOOL Result = FALSE;
+
+    Signer[0] = UNICODE_NULL;
+    SignerVersion[0] = UNICODE_NULL;
+
+    if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE, (void *)CatalogPath,
+                          CERT_QUERY_CONTENT_FLAG_ALL,
+                          CERT_QUERY_FORMAT_FLAG_ALL, 0,
+                          &ContentType, &FormatType, &Store, &Msg, NULL))
+        return FALSE;
+
+    Size = 0;
+    if (!CryptMsgGetParam(Msg, CMSG_SIGNER_INFO_PARAM, 0, NULL, &Size))
+        goto done;
+    SignerInfo = MyMalloc(Size);
+    if (!SignerInfo || !CryptMsgGetParam(Msg, CMSG_SIGNER_INFO_PARAM, 0, SignerInfo, &Size))
+        goto done;
+
+    CertInfo.Issuer = SignerInfo->Issuer;
+    CertInfo.SerialNumber = SignerInfo->SerialNumber;
+    Cert = CertFindCertificateInStore(Store,
+                                      X509_ASN_ENCODING | PKCS_7_ASN_ENCODING,
+                                      0, CERT_FIND_SUBJECT_CERT, &CertInfo, NULL);
+    if (!Cert)
+        goto done;
+
+    Result = (CertGetNameStringW(Cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL,
+                                 Signer, SignerCch) != 0);
+
+done:
+    if (Cert)
+        CertFreeCertificateContext(Cert);
+    if (SignerInfo)
+        MyFree(SignerInfo);
+    if (Msg)
+        CryptMsgClose(Msg);
+    if (Store)
+        CertCloseStore(Store, 0);
+    return Result;
+}
+
+BOOL WINAPI
+SetupVerifyInfFileW(
+    IN PCWSTR InfName,
+    IN PSP_ALTPLATFORM_INFO AltPlatformInfo,
+    INOUT PSP_INF_SIGNER_INFO_INF_W InfSignerInfo)
+{
+    WCHAR Source[MAX_PATH], SourceRoot[MAX_PATH], CatalogPath[MAX_PATH];
+    CRYPTCATMEMBER *Member;
+    SYSTEM_INFO SystemInfo;
+    HCATINFO Catalog;
+    HANDLE hFile;
+    PWSTR BaseName, CatBase;
+    DWORD Length, Error;
+    BOOL Found = FALSE;
+
+    if (!InfName || !InfName[0] || !InfSignerInfo ||
+        InfSignerInfo->cbSize != sizeof(*InfSignerInfo))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (AltPlatformInfo)
+    {
+        if (AltPlatformInfo->cbSize != sizeof(*AltPlatformInfo))
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        /* Solo la plataforma nativa está soportada hoy. */
+        GetNativeSystemInfo(&SystemInfo);
+        if (AltPlatformInfo->ProcessorArchitecture != SystemInfo.wProcessorArchitecture)
+        {
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+    }
+
+    InfSignerInfo->CatalogFile[0] = UNICODE_NULL;
+    InfSignerInfo->DigitalSigner[0] = UNICODE_NULL;
+    InfSignerInfo->DigitalSignerVersion[0] = UNICODE_NULL;
+
+    Length = GetFullPathNameW(InfName, ARRAY_SIZE(Source), Source, &BaseName);
+    if (Length == 0 || Length >= ARRAY_SIZE(Source) || !BaseName || BaseName == Source)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    lstrcpynW(SourceRoot, Source, (INT)(BaseName - Source) + 1);
+
+    {
+        HINF hInf = SetupOpenInfFileW(Source, NULL, INF_STYLE_WIN4, NULL);
+        if (hInf == INVALID_HANDLE_VALUE)
+            return FALSE;
+        Catalog = OpenInfCatalog(hInf, SourceRoot, CatalogPath, ARRAY_SIZE(CatalogPath), &Error);
+        SetupCloseInfFile(hInf);
+    }
+    if (!Catalog)
+    {
+        if (Error != ERROR_SUCCESS)
+        {
+            SetLastError(Error);
+            return FALSE;
+        }
+        /* Paquete sin catálogo: no firmado. */
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
+    if (Catalog == INVALID_HANDLE_VALUE)
+    {
+        /* Catálogo ilegible. */
+        SetLastError(ERROR_INVALID_IMAGE_HASH);
+        return FALSE;
+    }
+
+    hFile = CreateFileW(Source, GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        CryptCATClose(Catalog);
+        return FALSE;
+    }
+
+    Member = NULL;
+    while ((Member = CryptCATEnumerateMember(Catalog, Member)))
+    {
+        if (VerifyFileHashWithAlgorithm(hFile, Member))
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+    CloseHandle(hFile);
+    CryptCATClose(Catalog);
+
+    if (!Found)
+    {
+        SetLastError(ERROR_INVALID_IMAGE_HASH);
+        return FALSE;
+    }
+
+    GetCatalogSigner(CatalogPath, InfSignerInfo->DigitalSigner, MAX_PATH,
+                     InfSignerInfo->DigitalSignerVersion, MAX_PATH);
+
+    CatBase = wcsrchr(CatalogPath, L'\\');
+    lstrcpynW(InfSignerInfo->CatalogFile,
+              CatBase ? CatBase + 1 : CatalogPath, MAX_PATH);
+    return TRUE;
+}
+
+BOOL WINAPI
+SetupVerifyInfFileA(
+    IN PCSTR InfName,
+    IN PSP_ALTPLATFORM_INFO AltPlatformInfo,
+    INOUT PSP_INF_SIGNER_INFO_INF_A InfSignerInfo)
+{
+    SP_INF_SIGNER_INFO_INF_W InfoW;
+    WCHAR InfNameW[MAX_PATH];
+    BOOL Ret;
+
+    if (!InfName || !InfName[0] || !InfSignerInfo ||
+        InfSignerInfo->cbSize != sizeof(*InfSignerInfo))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!MultiByteToWideChar(CP_ACP, 0, InfName, -1, InfNameW, ARRAY_SIZE(InfNameW)))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    InfoW.cbSize = sizeof(InfoW);
+    Ret = SetupVerifyInfFileW(InfNameW, AltPlatformInfo, &InfoW);
+    if (Ret)
+    {
+        WideCharToMultiByte(CP_ACP, 0, InfoW.CatalogFile, -1,
+                            InfSignerInfo->CatalogFile, MAX_PATH, NULL, NULL);
+        WideCharToMultiByte(CP_ACP, 0, InfoW.DigitalSigner, -1,
+                            InfSignerInfo->DigitalSigner, MAX_PATH, NULL, NULL);
+        WideCharToMultiByte(CP_ACP, 0, InfoW.DigitalSignerVersion, -1,
+                            InfSignerInfo->DigitalSignerVersion, MAX_PATH, NULL, NULL);
+    }
+    return Ret;
 }
 
 static BOOL

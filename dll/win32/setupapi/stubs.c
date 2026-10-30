@@ -106,32 +106,12 @@ WINSETUPAPI BOOL WINAPI SetupDiGetDeviceInterfaceAlias(IN HDEVINFO  DeviceInfoSe
 }
 
 /***********************************************************************
- *      SetupVerifyInfFileA(SETUPAPI.@)
+ *      SetupVerifyInfFileA/W (SETUPAPI.@)
+ *
+ * Implemented in drvstore.c over the M6 package verification
+ * (LnSetupVerifyDriverPackage): the INF must be a member of the catalog its
+ * [Version] CatalogFile declares, with a matching hash.
  */
-BOOL WINAPI
-SetupVerifyInfFileA(
-    IN PCSTR InfName,
-    IN PSP_ALTPLATFORM_INFO AltPlatformInfo,
-    OUT PSP_INF_SIGNER_INFO_A InfFileName)
-{
-    FIXME ("Stub %s %p %p\n", debugstr_a(InfName), AltPlatformInfo, InfFileName);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
-
-/***********************************************************************
- *      SetupVerifyInfFileW(SETUPAPI.@)
- */
-BOOL WINAPI
-SetupVerifyInfFileW(
-    IN PCWSTR InfName,
-    IN PSP_ALTPLATFORM_INFO AltPlatformInfo,
-    OUT PSP_INF_SIGNER_INFO_W InfFileName)
-{
-    FIXME ("Stub %s %p %p\n", debugstr_w(InfName), AltPlatformInfo, InfFileName);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return FALSE;
-}
 
 BOOL WINAPI
 SetupDiSetDriverInstallParamsA(
