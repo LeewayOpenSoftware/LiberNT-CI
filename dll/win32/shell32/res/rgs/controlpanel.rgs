@@ -53,6 +53,7 @@ HKLM
 								'{40419485-C444-4567-851A-2DD7BFA1684D}' = s 'Phone and Modem'
 								'{74246bfc-4c96-11d0-abef-0020af6b0b7a}' = s 'Device Manager'
 								'{7A979262-40CE-46ff-AEEE-7884AC3B6136}' = s 'Add Hardware'
+								'{17cd9488-1228-4b2f-88ce-4298e93e0966}' = s 'Default Programs'
 								'{A8A91A66-3A7D-4424-8D24-04E180695C7A}' = s 'Devices and Printers'
 								'{8E908FC9-BECC-40f6-915B-F4CA0E70D03D}' = s 'Network and Sharing Center'
 							}
@@ -117,6 +118,34 @@ HKCR
 				Open
 				{
 					Command = e '%%SystemRoot%%\ImmersiveControlPanel\SystemSettings.exe "ms-settings:devices"'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {17cd9488-1228-4b2f-88ce-4298e93e0966} = s 'Default Programs'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.DefaultPrograms'
+			val 'System.ControlPanel.Category' = s '8'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '8'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'Choose the programs that open each type of file.'
+			val LocalizedString = s 'Default Programs'
+			DefaultIcon = e '%%SystemRoot%%\system32\appwiz.cpl,-1500'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\ImmersiveControlPanel\SystemSettings.exe "ms-settings:defaultapps"'
 				}
 			}
 			ShellFolder
