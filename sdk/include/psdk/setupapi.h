@@ -2520,6 +2520,100 @@ SetupGetInfDriverStoreLocationW(
   _In_ DWORD ReturnBufferSize,
   _Out_opt_ PDWORD RequiredSize);
 
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreAddDriverPackageA(
+  _In_ PCSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _Out_writes_(ReturnBufferSize) PSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreAddDriverPackageW(
+  _In_ PCWSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _Out_writes_(ReturnBufferSize) PWSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreDeleteDriverPackageA(
+  _In_ PCSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreDeleteDriverPackageW(
+  _In_ PCWSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreFindDriverPackageA(
+  _In_ PCSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _In_opt_ PVOID Reserved3,
+  _Out_writes_(ReturnBufferSize) PSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+HRESULT
+WINAPI
+DriverStoreFindDriverPackageW(
+  _In_ PCWSTR InfPath,
+  _In_opt_ PVOID Reserved1,
+  _In_opt_ PVOID Reserved2,
+  _In_ WORD Architecture,
+  _In_opt_ PVOID Reserved3,
+  _Out_writes_(ReturnBufferSize) PWSTR ReturnPath,
+  _Inout_ PDWORD ReturnLength);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupGetInfPublishedNameA(
+  _In_ PCSTR DriverStoreLocation,
+  _Out_writes_(ReturnBufferSize) PSTR ReturnBuffer,
+  _In_ DWORD ReturnBufferSize,
+  _Out_opt_ PDWORD RequiredSize);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupGetInfPublishedNameW(
+  _In_ PCWSTR DriverStoreLocation,
+  _Out_writes_(ReturnBufferSize) PWSTR ReturnBuffer,
+  _In_ DWORD ReturnBufferSize,
+  _Out_opt_ PDWORD RequiredSize);
+
+#ifdef UNICODE
+#define DriverStoreAddDriverPackage DriverStoreAddDriverPackageW
+#define DriverStoreDeleteDriverPackage DriverStoreDeleteDriverPackageW
+#define DriverStoreFindDriverPackage DriverStoreFindDriverPackageW
+#define SetupGetInfPublishedName SetupGetInfPublishedNameW
+#else
+#define DriverStoreAddDriverPackage DriverStoreAddDriverPackageA
+#define DriverStoreDeleteDriverPackage DriverStoreDeleteDriverPackageA
+#define DriverStoreFindDriverPackage DriverStoreFindDriverPackageA
+#define SetupGetInfPublishedName SetupGetInfPublishedNameA
+#endif
+
+
 WINSETUPAPI DWORD WINAPI StampFileSecurity(PCWSTR, PSECURITY_DESCRIPTOR);
 
 

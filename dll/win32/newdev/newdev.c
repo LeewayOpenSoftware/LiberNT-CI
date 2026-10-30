@@ -458,6 +458,142 @@ UpdateDriverForPlugAndPlayDevicesA(
     return Result;
 }
 
+/*
+ * LiberNT private entry point for the driver install worker: like
+ * UpdateDriverForPlugAndPlayDevicesW, but scoped to one device instance id
+ * instead of every devnode that matches a hardware id. The driver list is
+ * built from the single INF and matched against all the hardware and
+ * compatible ids of that device.
+ */
+BOOL WINAPI
+DevInstallInfW(
+    IN LPCWSTR InstanceId,
+    IN LPCWSTR FullInfPath,
+    IN DWORD InstallFlags,
+    OUT PBOOL bRebootRequired OPTIONAL)
+{
+    DEVINSTDATA DevInstData;
+    WCHAR DeviceInstanceId[MAX_DEVICE_ID_LEN];
+    WCHAR PublishedInf[MAX_PATH];
+    WCHAR InfDirectory[MAX_PATH];
+    UINT InfDirectoryLength;
+    DWORD LastError, i;
+    BOOL Found = FALSE;
+    BOOL ret = FALSE;
+
+    ZeroMemory(&DevInstData, sizeof(DevInstData));
+    DevInstData.hDevInfo = INVALID_HANDLE_VALUE;
+
+    if (bRebootRequired)
+        *bRebootRequired = FALSE;
+
+    if (!InstanceId || !FullInfPath)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (InstallFlags & ~(INSTALLFLAG_FORCE | INSTALLFLAG_READONLY | INSTALLFLAG_NONINTERACTIVE))
+    {
+        SetLastError(ERROR_INVALID_FLAGS);
+        return FALSE;
+    }
+
+    if (GetFileAttributesW(FullInfPath) == INVALID_FILE_ATTRIBUTES)
+    {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return FALSE;
+    }
+
+    if (!SetupGetInfPublishedNameW(FullInfPath, PublishedInf, RTL_NUMBER_OF(PublishedInf), NULL))
+    {
+        InfDirectoryLength = GetSystemWindowsDirectoryW(InfDirectory, RTL_NUMBER_OF(InfDirectory));
+        if (InfDirectoryLength == 0 || InfDirectoryLength + 5 >= RTL_NUMBER_OF(InfDirectory) ||
+            _wcsnicmp(FullInfPath, InfDirectory, InfDirectoryLength) != 0 ||
+            FullInfPath[InfDirectoryLength] != L'\\' ||
+            _wcsnicmp(FullInfPath + InfDirectoryLength + 1, L"inf\\", 4) != 0 ||
+            wcschr(FullInfPath + InfDirectoryLength + 5, L'\\') != NULL)
+        {
+            /* A foreign INF is staged and published first, so a later
+             * reinstall does not depend on the original medium */
+            if (!SetupCopyOEMInfW(FullInfPath, NULL, SPOST_NONE, 0, NULL, 0, NULL, NULL))
+                TRACE("Staging %s into the driver store failed with error 0x%lx\n",
+                      debugstr_w(FullInfPath), GetLastError());
+        }
+    }
+
+    DevInstData.hDevInfo = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    if (DevInstData.hDevInfo == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    DevInstData.devInfoData.cbSize = sizeof(SP_DEVINFO_DATA);
+    for (i = 0; SetupDiEnumDeviceInfo(DevInstData.hDevInfo, i, &DevInstData.devInfoData); i++)
+    {
+        if (!SetupDiGetDeviceInstanceIdW(DevInstData.hDevInfo,
+                                         &DevInstData.devInfoData,
+                                         DeviceInstanceId,
+                                         RTL_NUMBER_OF(DeviceInstanceId),
+                                         NULL))
+        {
+            continue;
+        }
+        if (_wcsicmp(DeviceInstanceId, InstanceId) == 0)
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+
+    if (!Found)
+    {
+        SetLastError(ERROR_NO_SUCH_DEVINST);
+        goto cleanup;
+    }
+
+    if (!SearchDriver(&DevInstData, NULL, FullInfPath))
+        goto cleanup;
+
+    if (!(InstallFlags & INSTALLFLAG_FORCE) && !IsSelectedDriverBetter(&DevInstData))
+    {
+        SetLastError(ERROR_NO_MORE_ITEMS);
+        goto cleanup;
+    }
+
+    if (InstallFlags & INSTALLFLAG_READONLY)
+    {
+        SP_DEVINSTALL_PARAMS_W InstallParams;
+
+        InstallParams.cbSize = sizeof(InstallParams);
+        if (SetupDiGetDeviceInstallParamsW(DevInstData.hDevInfo, &DevInstData.devInfoData, &InstallParams))
+        {
+            InstallParams.Flags |= DI_NOFILECOPY;
+            SetupDiSetDeviceInstallParamsW(DevInstData.hDevInfo, &DevInstData.devInfoData, &InstallParams);
+        }
+    }
+
+    if (!InstallCurrentDriver(&DevInstData))
+    {
+        LastError = GetLastError();
+        if (LastError == ERROR_SUCCESS)
+            LastError = ERROR_GEN_FAILURE;
+        SetLastError(LastError);
+        goto cleanup;
+    }
+
+    if (bRebootRequired && InstallNeedsReboot(&DevInstData))
+        *bRebootRequired = TRUE;
+
+    ret = TRUE;
+
+cleanup:
+    /* The cleanup calls below must not clobber the error reported to the caller */
+    LastError = GetLastError();
+    if (DevInstData.hDevInfo != INVALID_HANDLE_VALUE)
+        SetupDiDestroyDeviceInfoList(DevInstData.hDevInfo);
+    SetLastError(LastError);
+    return ret;
+}
+
 static DWORD
 GetDeviceIdRank(
     IN PCWSTR Ids OPTIONAL,
@@ -1219,26 +1355,227 @@ CheckBestDriver(
  * configured root that holds an INF is a candidate package. The roots come from
  * HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Setup\DriverStorePaths (REG_MULTI_SZ, may use
  * %VARS%) and default to \Drivers on the system drive.
- *
- * Unlike the interactive wizard (which keeps looking for a better driver) the
- * first directory that yields a driver for this device wins: every directory
- * rebuilds the device's driver list, so only the last directory searched would
- * keep a usable selection.
  */
 #define NEWDEV_AUTO_SETUP_KEY   L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Setup"
 #define NEWDEV_AUTO_STORE_VALUE L"DriverStorePaths"
 
+/* RANKED GLOBAL SEARCH (driver store)
+ *
+ * The automatic folders are a second-class source today: the first directory
+ * that yields a driver wins, because every search rebuilds the device's
+ * driver list. The driver store ranks instead: collect the candidate drivers
+ * of every source into one list, pick the best by the setupapi rank (hardware
+ * id before compatible id, signed before unsigned), then driver date and
+ * driver version, and install exactly that one. A candidate from a folder is
+ * published into the driver store before the install so that reinstalls do
+ * not depend on the original medium.
+ */
+#define NEWDEV_SOURCE_INFDIRECTORY 1
+#define NEWDEV_SOURCE_DRIVERPATH   2
+#define NEWDEV_SOURCE_DEFAULTDIR   3
+
+typedef struct _NEWDEV_DRIVER_CANDIDATE
+{
+    WCHAR InfFileName[MAX_PATH];
+    DWORD Rank;
+    FILETIME DriverDate;
+    DWORDLONG DriverVersion;
+    DWORD Source;
+    WCHAR Description[LINE_LEN];
+} NEWDEV_DRIVER_CANDIDATE, *PNEWDEV_DRIVER_CANDIDATE;
+
+typedef struct _NEWDEV_CANDIDATE_LIST
+{
+    PNEWDEV_DRIVER_CANDIDATE Entries;
+    DWORD Count;
+    DWORD Capacity;
+} NEWDEV_CANDIDATE_LIST, *PNEWDEV_CANDIDATE_LIST;
+
+/* Same FNV-1a content hash the driver store uses for its package id */
+/* Copies the currently selected source's drivers out of the device list */
+static VOID
+CollectDriverCandidates(
+    IN PDEVINSTDATA DevInstData,
+    IN DWORD Source,
+    IN OUT PNEWDEV_CANDIDATE_LIST List)
+{
+    SP_DRVINFO_DATA_W DrvInfo;
+    SP_DRVINSTALL_PARAMS InstallParams;
+    DWORD Index = 0;
+
+    DrvInfo.cbSize = sizeof(DrvInfo);
+    while (SetupDiEnumDriverInfoW(DevInstData->hDevInfo,
+                                  &DevInstData->devInfoData,
+                                  SPDIT_COMPATDRIVER,
+                                  Index++,
+                                  &DrvInfo))
+    {
+        PNEWDEV_DRIVER_CANDIDATE Entry;
+        DWORD Rank = MAXDWORD;
+        DWORD DetailSize = 0;
+        PSP_DRVINFO_DETAIL_DATA_W Detail;
+
+        SetupDiGetDriverInfoDetailW(DevInstData->hDevInfo,
+                                    &DevInstData->devInfoData,
+                                    &DrvInfo,
+                                    NULL, 0, &DetailSize);
+        if (DetailSize < sizeof(SP_DRVINFO_DETAIL_DATA_W))
+            continue;
+        Detail = HeapAlloc(GetProcessHeap(), 0, DetailSize);
+        if (!Detail)
+            return;
+        Detail->cbSize = sizeof(*Detail);
+        if (!SetupDiGetDriverInfoDetailW(DevInstData->hDevInfo,
+                                         &DevInstData->devInfoData,
+                                         &DrvInfo,
+                                         Detail,
+                                         DetailSize,
+                                         NULL))
+        {
+            HeapFree(GetProcessHeap(), 0, Detail);
+            continue;
+        }
+
+        InstallParams.cbSize = sizeof(InstallParams);
+        if (SetupDiGetDriverInstallParamsW(DevInstData->hDevInfo,
+                                           &DevInstData->devInfoData,
+                                           &DrvInfo,
+                                           &InstallParams))
+        {
+            Rank = InstallParams.Rank;
+        }
+
+        if (List->Count == List->Capacity)
+        {
+            DWORD Capacity = List->Capacity ? List->Capacity * 2 : 16;
+            PNEWDEV_DRIVER_CANDIDATE Entries = List->Entries
+                ? HeapReAlloc(GetProcessHeap(), 0, List->Entries, Capacity * sizeof(*Entries))
+                : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Entries));
+
+            if (!Entries)
+            {
+                HeapFree(GetProcessHeap(), 0, Detail);
+                return;
+            }
+            List->Entries = Entries;
+            List->Capacity = Capacity;
+        }
+
+        Entry = &List->Entries[List->Count++];
+        ZeroMemory(Entry, sizeof(*Entry));
+        lstrcpynW(Entry->InfFileName, Detail->InfFileName, RTL_NUMBER_OF(Entry->InfFileName));
+        Entry->Rank = Rank;
+        Entry->DriverDate = DrvInfo.DriverDate;
+        Entry->DriverVersion = DrvInfo.DriverVersion;
+        Entry->Source = Source;
+        lstrcpynW(Entry->Description, DrvInfo.Description, RTL_NUMBER_OF(Entry->Description));
+        HeapFree(GetProcessHeap(), 0, Detail);
+        TRACE("Candidate %s rank 0x%lx source %lu\n", debugstr_w(Entry->InfFileName), Rank, Source);
+    }
+}
+
+/* Lower rank wins; the same rank prefers the newer date, then the higher
+ * version, and only then the higher-priority source */
+static BOOL
+CandidateBeats(
+    IN const NEWDEV_DRIVER_CANDIDATE *Candidate,
+    IN const NEWDEV_DRIVER_CANDIDATE *Best)
+{
+    if (Candidate->Rank != Best->Rank)
+        return Candidate->Rank < Best->Rank;
+    if (Candidate->DriverDate.dwHighDateTime != Best->DriverDate.dwHighDateTime ||
+        Candidate->DriverDate.dwLowDateTime != Best->DriverDate.dwLowDateTime)
+    {
+        return CompareFileTime(&Candidate->DriverDate, &Best->DriverDate) > 0;
+    }
+    if (Candidate->DriverVersion != Best->DriverVersion)
+        return Candidate->DriverVersion > Best->DriverVersion;
+    return Candidate->Source < Best->Source;
+}
+
+/* Collects one folder tree, visiting every directory that holds an INF */
+static VOID
+CollectDriverFolderTree(
+    IN PDEVINSTDATA DevInstData,
+    IN PCWSTR Path,
+    IN DWORD Source,
+    IN OUT PNEWDEV_CANDIDATE_LIST List)
+{
+    WIN32_FIND_DATAW FindData;
+    WCHAR DirPath[MAX_PATH];
+    WCHAR FileName[MAX_PATH];
+    WCHAR FullPath[MAX_PATH];
+    WCHAR LastDirPath[MAX_PATH];
+    WCHAR PathWithPattern[MAX_PATH];
+    BOOL ok = TRUE;
+    HANDLE hFindFile = INVALID_HANDLE_VALUE;
+
+    if (!Path || !*Path || wcslen(Path) >= MAX_PATH - 2)
+        return;
+
+    wcscpy(DirPath, Path);
+    if (DirPath[wcslen(DirPath) - 1] != L'\\')
+        wcscat(DirPath, L"\\");
+
+    wcscpy(PathWithPattern, DirPath);
+    wcscat(PathWithPattern, L"*");
+
+    LastDirPath[0] = UNICODE_NULL;
+    for (hFindFile = FindFirstFileW(PathWithPattern, &FindData);
+         ok && hFindFile != INVALID_HANDLE_VALUE;
+         ok = FindNextFileW(hFindFile, &FindData))
+    {
+        wcscpy(FileName, FindData.cFileName);
+        if (IsDots(FileName))
+            continue;
+
+        if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            if (wcslen(DirPath) + wcslen(FileName) >= MAX_PATH)
+                continue;
+            wcscpy(FullPath, DirPath);
+            wcscat(FullPath, FileName);
+            CollectDriverFolderTree(DevInstData, FullPath, Source, List);
+        }
+        else if (_wcsicmp(GetFileExt(FileName), L".inf") == 0 &&
+                 wcscmp(LastDirPath, DirPath) != 0)
+        {
+            wcscpy(LastDirPath, DirPath);
+            if (SearchDriverResult(DevInstData, DirPath, NULL) == DriverSearchFound)
+                CollectDriverCandidates(DevInstData, Source, List);
+        }
+    }
+
+    if (hFindFile != INVALID_HANDLE_VALUE)
+        FindClose(hFindFile);
+}
+
+/* Ranks the INF directory against the configured and default driver folders,
+ * then re-selects the single winning INF for the install. On success the
+ * device's driver list holds the winner selected. */
 static DRIVER_SEARCH_RESULT
-ScanAutoDriverFoldersResult(
+SearchRankedDriverStoreResult(
     IN PDEVINSTDATA DevInstData)
 {
+    NEWDEV_CANDIDATE_LIST List = {0};
+    DRIVER_SEARCH_RESULT Result = DriverSearchNotFound;
+    DRIVER_SEARCH_RESULT SourceResult;
+    NEWDEV_DRIVER_CANDIDATE Best;
     HKEY hKey;
     DWORD Type = 0, Size = 0;
     PWSTR Paths = NULL;
     PWSTR Path;
     WCHAR Expanded[MAX_PATH];
     WCHAR WinDir[MAX_PATH];
-    DRIVER_SEARCH_RESULT Result = DriverSearchNotFound;
+    DWORD SearchError = ERROR_SUCCESS, i;
+    BOOL HaveBest = FALSE;
+
+    /* The INF directory is the store view: published oemNN.inf and inbox */
+    SourceResult = SearchDriverResult(DevInstData, NULL, NULL);
+    if (SourceResult == DriverSearchFound)
+        CollectDriverCandidates(DevInstData, NEWDEV_SOURCE_INFDIRECTORY, &List);
+    else if (SourceResult == DriverSearchError)
+        SearchError = GetLastError();
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, NEWDEV_AUTO_SETUP_KEY, 0, KEY_QUERY_VALUE, &hKey) == ERROR_SUCCESS)
     {
@@ -1262,27 +1599,58 @@ ScanAutoDriverFoldersResult(
         {
             continue;
         }
-        TRACE("Auto-searching %s\n", debugstr_w(Expanded));
-        if (SearchDriverRecursiveEx(DevInstData, Expanded, TRUE))
-        {
-            Result = DriverSearchFound;
-            break;
-        }
+        TRACE("Rank-searching %s\n", debugstr_w(Expanded));
+        CollectDriverFolderTree(DevInstData, Expanded, NEWDEV_SOURCE_DRIVERPATH, &List);
         if (Type != REG_MULTI_SZ)
             break;
     }
 
     HeapFree(GetProcessHeap(), 0, Paths);
 
-    if (Result != DriverSearchFound &&
-        GetSystemWindowsDirectoryW(WinDir, ARRAYSIZE(WinDir)) && WinDir[1] == L':')
+    if (GetSystemWindowsDirectoryW(WinDir, ARRAYSIZE(WinDir)) && WinDir[1] == L':')
     {
         /* The default folder is always searched last: \Drivers on the system drive */
         WinDir[2] = UNICODE_NULL;
         wcscat(WinDir, L"\\Drivers");
-        TRACE("Auto-searching %s\n", debugstr_w(WinDir));
-        if (SearchDriverRecursiveEx(DevInstData, WinDir, TRUE))
-            Result = DriverSearchFound;
+        TRACE("Rank-searching %s\n", debugstr_w(WinDir));
+        CollectDriverFolderTree(DevInstData, WinDir, NEWDEV_SOURCE_DEFAULTDIR, &List);
+    }
+
+    for (i = 0; i < List.Count; i++)
+    {
+        /* Identical content ranks, dates and versions the same, so the
+         * highest-priority source collects the winner first among equals */
+        if (!HaveBest || CandidateBeats(&List.Entries[i], &Best))
+        {
+            Best = List.Entries[i];
+            HaveBest = TRUE;
+        }
+    }
+
+    if (HaveBest)
+    {
+        if (Best.Source != NEWDEV_SOURCE_INFDIRECTORY)
+        {
+            /* Publish the folder package into the store so the reinstall
+             * does not depend on the original medium */
+            if (!SetupCopyOEMInfW(Best.InfFileName, NULL, SPOST_NONE, 0, NULL, 0, NULL, NULL))
+                TRACE("Staging %s into the driver store failed with error 0x%lx\n",
+                      debugstr_w(Best.InfFileName), GetLastError());
+        }
+
+        TRACE("Best driver: %s (rank 0x%lx, source %lu)\n",
+              debugstr_w(Best.InfFileName), Best.Rank, Best.Source);
+        Result = SearchDriverResult(DevInstData, NULL, Best.InfFileName);
+        if (Result == DriverSearchError)
+            SearchError = GetLastError();
+    }
+
+    HeapFree(GetProcessHeap(), 0, List.Entries);
+
+    if (Result != DriverSearchFound && SearchError != ERROR_SUCCESS)
+    {
+        SetLastError(SearchError);
+        return DriverSearchError;
     }
 
     return Result;
@@ -1771,26 +2139,9 @@ DevInstallInternal(
         }
     }
 
-    /* Search driver in default location and removable devices */
-    if (!PrepareFoldersToScan(DevInstData, FALSE, FALSE, NULL))
-    {
-        LastError = GetLastError();
-        TRACE("PrepareFoldersToScan() failed with error 0x%lx\n", LastError);
-        SetLastError(LastError);
-        goto cleanup;
-    }
-    SearchResult = ScanFoldersForDriverResult(DevInstData);
-    if (SearchResult != DriverSearchFound && !DevInstData->bUpdate)
-    {
-        /* Nothing in the INF directory: look in the driver folder(s), like a driver store */
-        DWORD SearchError = GetLastError();
-        DRIVER_SEARCH_RESULT AutoResult = ScanAutoDriverFoldersResult(DevInstData);
-
-        if (AutoResult == DriverSearchFound)
-            SearchResult = DriverSearchFound;
-        else
-            SetLastError(SearchError);
-    }
+    /* Rank the INF directory, the configured driver folders and the default
+       driver folder as one candidate list */
+    SearchResult = SearchRankedDriverStoreResult(DevInstData);
 handle_search_result:
     if (SearchResult == DriverSearchFound)
     {

@@ -109,6 +109,22 @@ IsValidDeviceInstanceId(
     return TRUE;
 }
 
+BOOL
+IsValidInfPath(
+    _In_ PCWSTR InfPath)
+{
+    if (InfPath[0] == L'\\' || InfPath[0] == L'"')
+        return FALSE;
+    if (!((InfPath[0] >= L'A' && InfPath[0] <= L'Z') ||
+          (InfPath[0] >= L'a' && InfPath[0] <= L'z')))
+        return FALSE;
+    if (InfPath[1] != L':' || InfPath[2] != L'\\')
+        return FALSE;
+    if (wcschr(InfPath, L'"'))
+        return FALSE;
+    return TRUE;
+}
+
 static DRVINST_JOB_ID
 CreateJob(
     _In_ PCWSTR DeviceInstanceId,
@@ -263,10 +279,13 @@ GetWorkerTimeout(VOID)
 /*
  * Start drvinst.exe for one device and wait for it, at most the time limit.
  * Fills Result; the return value is the state the job ends in.
+ * InfPath, when given, makes the worker install that package instead of
+ * searching for the best one.
  */
 static ULONG
 RunWorker(
     _In_ PCWSTR DeviceInstanceId,
+    _In_opt_ PCWSTR InfPath,
     _In_ BOOL ShowWizard,
     _Out_ PDRVINST_RESULT Result)
 {
@@ -276,7 +295,7 @@ RunWorker(
     HANDLE hRead = NULL, hWrite = NULL;
     LPVOID Environment = NULL;
     WCHAR SystemDir[MAX_PATH];
-    WCHAR CommandLine[MAX_PATH + DRVINST_DEVICE_ID_CCH + 64];
+    WCHAR CommandLine[MAX_PATH + DRVINST_DEVICE_ID_CCH + MAX_PATH + 64];
     DWORD WaitResult, Read, ExitCode = 0;
     ULONG State = DrvInstJobFailed;
     BOOL Created = FALSE;
@@ -302,9 +321,19 @@ RunWorker(
         goto Cleanup;
     }
 
-    _snwprintf(CommandLine, RTL_NUMBER_OF(CommandLine), L"\"%ls\\system32\\%ls\" /i \"%ls\" /h %lx%ls",
-               SystemDir, DRVINST_WORKER_NAME, DeviceInstanceId, (ULONG)(ULONG_PTR)hWrite,
-               ShowWizard ? L" /w" : L"");
+    if (InfPath)
+    {
+        _snwprintf(CommandLine, RTL_NUMBER_OF(CommandLine), L"\"%ls\\system32\\%ls\" /i \"%ls\" /f \"%ls\" /h %lx%ls",
+                   SystemDir, DRVINST_WORKER_NAME, DeviceInstanceId, InfPath, (ULONG)(ULONG_PTR)hWrite,
+                   ShowWizard ? L" /w" : L"");
+    }
+    else
+    {
+        _snwprintf(CommandLine, RTL_NUMBER_OF(CommandLine), L"\"%ls\\system32\\%ls\" /i \"%ls\" /h %lx%ls",
+                   SystemDir, DRVINST_WORKER_NAME, DeviceInstanceId, (ULONG)(ULONG_PTR)hWrite,
+                   ShowWizard ? L" /w" : L"");
+    }
+
     CommandLine[RTL_NUMBER_OF(CommandLine) - 1] = UNICODE_NULL;
 
     ZeroMemory(&StartupInfo, sizeof(StartupInfo));
@@ -385,9 +414,10 @@ Cleanup:
 /* Run a created job to its end in the calling thread. Installs take turns:
  * setupapi and the class installers are not meant to run twice at once. */
 static BOOL
-ExecuteJob(
+ExecuteJobEx(
     _In_ DRVINST_JOB_ID JobId,
     _In_ PCWSTR DeviceInstanceId,
+    _In_opt_ PCWSTR InfPath,
     _In_ ULONG Flags)
 {
     DRVINST_RESULT Result;
@@ -400,7 +430,7 @@ ExecuteJob(
     SetJobState(JobId, DrvInstJobRunning, NULL);
     if (DrvInstSnapshotDevice(DeviceInstanceId, &SnapshotSeq) != ERROR_SUCCESS)
         SnapshotSeq = 0;
-    State = RunWorker(DeviceInstanceId, !(Flags & DRVINST_F_SILENT), &Result);
+    State = RunWorker(DeviceInstanceId, InfPath, !(Flags & DRVINST_F_SILENT), &Result);
     if ((State == DrvInstJobFailed || State == DrvInstJobTimedOut) &&
         Result.Problem != 0 &&
         SnapshotSeq != 0 &&
@@ -430,9 +460,10 @@ ExecuteJob(
 }
 
 /* Run an install job for a device and wait for it. Returns TRUE when the driver was installed. */
-BOOL
-DrvInstRunDeviceJob(
+static BOOL
+RunDeviceJobEx(
     _In_ PCWSTR DeviceInstanceId,
+    _In_opt_ PCWSTR InfPath,
     _In_ ULONG Source,
     _In_ ULONG Flags,
     _Out_opt_ PDRVINST_JOB_ID OutJobId)
@@ -451,7 +482,28 @@ DrvInstRunDeviceJob(
     if (!JobId)
         return FALSE;
 
-    return ExecuteJob(JobId, DeviceInstanceId, Flags);
+    return ExecuteJobEx(JobId, DeviceInstanceId, InfPath, Flags);
+}
+
+BOOL
+DrvInstRunDeviceJob(
+    _In_ PCWSTR DeviceInstanceId,
+    _In_ ULONG Source,
+    _In_ ULONG Flags,
+    _Out_opt_ PDRVINST_JOB_ID OutJobId)
+{
+    return RunDeviceJobEx(DeviceInstanceId, NULL, Source, Flags, OutJobId);
+}
+
+BOOL
+DrvInstRunInfJob(
+    _In_ PCWSTR DeviceInstanceId,
+    _In_ PCWSTR InfPath,
+    _In_ ULONG Source,
+    _In_ ULONG Flags,
+    _Out_opt_ PDRVINST_JOB_ID OutJobId)
+{
+    return RunDeviceJobEx(DeviceInstanceId, InfPath, Source, Flags, OutJobId);
 }
 
 typedef struct _ASYNC_JOB
@@ -459,6 +511,7 @@ typedef struct _ASYNC_JOB
     DRVINST_JOB_ID JobId;
     ULONG Flags;
     WCHAR DeviceInstanceId[DRVINST_DEVICE_ID_CCH];
+    WCHAR InfPath[MAX_PATH];
 } ASYNC_JOB, *PASYNC_JOB;
 
 static DWORD WINAPI
@@ -466,16 +519,18 @@ AsyncJobThread(LPVOID Parameter)
 {
     PASYNC_JOB Async = Parameter;
 
-    ExecuteJob(Async->JobId, Async->DeviceInstanceId, Async->Flags);
+    ExecuteJobEx(Async->JobId, Async->DeviceInstanceId,
+                 Async->InfPath[0] ? Async->InfPath : NULL, Async->Flags);
     HeapFree(GetProcessHeap(), 0, Async);
 
     return 0;
 }
 
 /* Queue an install job and return at once; the caller follows it with its id. */
-DWORD
-DrvInstSubmitDeviceJob(
+static DWORD
+SubmitDeviceJobEx(
     _In_ PCWSTR DeviceInstanceId,
+    _In_opt_ PCWSTR InfPath,
     _In_ ULONG Source,
     _In_ ULONG Flags,
     _Out_ PDRVINST_JOB_ID OutJobId)
@@ -492,6 +547,8 @@ DrvInstSubmitDeviceJob(
     if (!DeviceInstanceId[0] || lstrlenW(DeviceInstanceId) >= DRVINST_DEVICE_ID_CCH ||
         !IsValidDeviceInstanceId(DeviceInstanceId))
         return ERROR_INVALID_PARAMETER;
+    if (InfPath && (!InfPath[0] || lstrlenW(InfPath) >= MAX_PATH || !IsValidInfPath(InfPath)))
+        return ERROR_INVALID_PARAMETER;
 
     Async = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Async));
     if (!Async)
@@ -505,6 +562,8 @@ DrvInstSubmitDeviceJob(
     }
     Async->Flags = Flags;
     lstrcpynW(Async->DeviceInstanceId, DeviceInstanceId, DRVINST_DEVICE_ID_CCH);
+    if (InfPath)
+        lstrcpynW(Async->InfPath, InfPath, MAX_PATH);
 
     hThread = CreateThread(NULL, 0, AsyncJobThread, Async, 0, NULL);
     if (!hThread)
@@ -524,4 +583,25 @@ DrvInstSubmitDeviceJob(
     CloseHandle(hThread);
 
     return ERROR_SUCCESS;
+}
+
+DWORD
+DrvInstSubmitDeviceJob(
+    _In_ PCWSTR DeviceInstanceId,
+    _In_ ULONG Source,
+    _In_ ULONG Flags,
+    _Out_ PDRVINST_JOB_ID OutJobId)
+{
+    return SubmitDeviceJobEx(DeviceInstanceId, NULL, Source, Flags, OutJobId);
+}
+
+DWORD
+DrvInstSubmitInfJob(
+    _In_ PCWSTR DeviceInstanceId,
+    _In_ PCWSTR InfPath,
+    _In_ ULONG Source,
+    _In_ ULONG Flags,
+    _Out_ PDRVINST_JOB_ID OutJobId)
+{
+    return SubmitDeviceJobEx(DeviceInstanceId, InfPath, Source, Flags, OutJobId);
 }

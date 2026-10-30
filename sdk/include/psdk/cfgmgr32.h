@@ -3349,6 +3349,7 @@ CMP_WaitNoPendingInstallEvents(
 
 #endif /* (WINVER >= _WIN32_WINNT_WIN2K) */
 
+
 #ifdef __cplusplus
 }
 #endif

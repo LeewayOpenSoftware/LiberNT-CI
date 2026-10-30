@@ -28,6 +28,7 @@
 #include <umpnpmgr/sysguid.h>
 #include <wdmguid.h>
 #include <cfgmgr32.h>
+#include <setupapi.h>
 #include <regstr.h>
 #include <userenv.h>
 #include <shlwapi.h>
@@ -126,6 +127,10 @@ IsValidDeviceInstanceId(
     _In_ PCWSTR DeviceInstanceId);
 
 BOOL
+IsValidInfPath(
+    _In_ PCWSTR InfPath);
+
+BOOL
 DrvInstUseWorker(VOID);
 
 BOOL
@@ -135,9 +140,25 @@ DrvInstRunDeviceJob(
     _In_ ULONG Flags,
     _Out_opt_ PDRVINST_JOB_ID OutJobId);
 
+BOOL
+DrvInstRunInfJob(
+    _In_ PCWSTR DeviceInstanceId,
+    _In_ PCWSTR InfPath,
+    _In_ ULONG Source,
+    _In_ ULONG Flags,
+    _Out_opt_ PDRVINST_JOB_ID OutJobId);
+
 DWORD
 DrvInstSubmitDeviceJob(
     _In_ PCWSTR DeviceInstanceId,
+    _In_ ULONG Source,
+    _In_ ULONG Flags,
+    _Out_ PDRVINST_JOB_ID OutJobId);
+
+DWORD
+DrvInstSubmitInfJob(
+    _In_ PCWSTR DeviceInstanceId,
+    _In_ PCWSTR InfPath,
     _In_ ULONG Source,
     _In_ ULONG Flags,
     _Out_ PDRVINST_JOB_ID OutJobId);

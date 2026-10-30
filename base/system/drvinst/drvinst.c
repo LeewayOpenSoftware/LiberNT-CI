@@ -28,6 +28,21 @@ DevInstallW(
     IN LPCWSTR InstanceId,
     IN INT Show);
 
+/* From <newdev.h>: install flags of UpdateDriverForPlugAndPlayDevices. */
+#define INSTALLFLAG_FORCE           0x00000001
+#define INSTALLFLAG_READONLY        0x00000002
+#define INSTALLFLAG_NONINTERACTIVE  0x00000004
+
+/* LiberNT private: install one specific INF on one device instance. The
+ * hardware and compatible ids of the device all take part in the match. */
+BOOL
+WINAPI
+DevInstallInfW(
+    IN LPCWSTR InstanceId,
+    IN LPCWSTR FullInfPath,
+    IN DWORD InstallFlags,
+    OUT PBOOL bRebootRequired OPTIONAL);
+
 /* FUNCTIONS ****************************************************************/
 
 static BOOL
@@ -171,6 +186,24 @@ ClientMain(
         return (int)(Error ? Error : Job.Result.Win32);
     }
 
+    if (!lstrcmpiW(argv[1], L"/submitinf") && argc > 3)
+    {
+        DRVINST_JOB_ID JobId;
+
+        Error = DrvInstSubmitInf(argv[2], argv[3], DRVINST_F_SILENT, &JobId);
+        if (Error != ERROR_SUCCESS)
+        {
+            wprintf(L"Cannot submit the INF job (error %lu)\n", Error);
+            return (int)Error;
+        }
+
+        wprintf(L"submitted job %I64u\n", JobId);
+        Error = DrvInstWait(JobId, 600000, &Job);
+        if (Error == ERROR_SUCCESS || Error == ERROR_TIMEOUT)
+            PrintJob(&Job);
+        return (int)(Error ? Error : Job.Result.Win32);
+    }
+
     if (!lstrcmpiW(argv[1], L"/rollback") && argc > 2)
     {
         Error = DrvInstRollback(argv[2]);
@@ -194,6 +227,7 @@ wmain(
 {
     DRVINST_RESULT Result;
     PCWSTR DeviceInstanceId = NULL;
+    PCWSTR InfPath = NULL;
     HANDLE ResultHandle = NULL;
     BOOL ShowWizard = FALSE;
     DWORD Written;
@@ -201,8 +235,8 @@ wmain(
 
     /* Started by a person: talk to the service instead of installing */
     if (argc > 1 && (!lstrcmpiW(argv[1], L"/list") || !lstrcmpiW(argv[1], L"/job") ||
-                     !lstrcmpiW(argv[1], L"/submit") || !lstrcmpiW(argv[1], L"/rollback") ||
-                     !lstrcmpiW(argv[1], L"/?")))
+                     !lstrcmpiW(argv[1], L"/submit") || !lstrcmpiW(argv[1], L"/submitinf") ||
+                     !lstrcmpiW(argv[1], L"/rollback") || !lstrcmpiW(argv[1], L"/?")))
     {
         return ClientMain(argc, argv);
     }
@@ -215,6 +249,10 @@ wmain(
         if (!lstrcmpiW(argv[i], L"/i") && i + 1 < argc)
         {
             DeviceInstanceId = argv[++i];
+        }
+        else if (!lstrcmpiW(argv[i], L"/f") && i + 1 < argc)
+        {
+            InfPath = argv[++i];
         }
         else if (!lstrcmpiW(argv[i], L"/h") && i + 1 < argc)
         {
@@ -235,16 +273,40 @@ wmain(
     }
     else
     {
-        SetLastError(ERROR_SUCCESS);
-        if (!DevInstallW(NULL, NULL, DeviceInstanceId, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE))
+        if (InfPath)
         {
-            Result.Win32 = GetLastError();
-            if (Result.Win32 == ERROR_SUCCESS)
-                Result.Win32 = ERROR_GEN_FAILURE;
+            BOOL NeedReboot = FALSE;
+
+            SetLastError(ERROR_SUCCESS);
+            if (!DevInstallInfW(DeviceInstanceId, InfPath,
+                                INSTALLFLAG_FORCE | INSTALLFLAG_NONINTERACTIVE,
+                                &NeedReboot))
+            {
+                Result.Win32 = GetLastError();
+                if (Result.Win32 == ERROR_SUCCESS)
+                    Result.Win32 = ERROR_GEN_FAILURE;
+            }
+            if (NeedReboot)
+                Result.Flags |= DRVINST_RF_NEEDREBOOT;
+        }
+        else
+        {
+            SetLastError(ERROR_SUCCESS);
+            if (!DevInstallW(NULL, NULL, DeviceInstanceId, ShowWizard ? SW_SHOWNOACTIVATE : SW_HIDE))
+            {
+                Result.Win32 = GetLastError();
+                if (Result.Win32 == ERROR_SUCCESS)
+                    Result.Win32 = ERROR_GEN_FAILURE;
+            }
         }
 
         /* The state of the devnode tells whether the driver also started */
         QueryDevnode(DeviceInstanceId, &Result);
+        if (InfPath && Result.Win32 == ERROR_SUCCESS && Result.Problem != 0 &&
+            Result.Problem != CM_PROB_NEED_RESTART &&
+            Result.Problem != CM_PROB_DISABLED &&
+            Result.Problem != CM_PROB_HARDWARE_DISABLED)
+            Result.Win32 = ERROR_GEN_FAILURE;
     }
 
     if (ResultHandle && ResultHandle != INVALID_HANDLE_VALUE)

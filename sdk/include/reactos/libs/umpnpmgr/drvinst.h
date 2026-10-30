@@ -68,9 +68,10 @@ typedef struct _DRVINST_JOB_INFO
 } DRVINST_JOB_INFO, *PDRVINST_JOB_INFO;
 
 /* Worker (drvinst.exe) command line:
- *   drvinst.exe /i "<device instance id>" /h <result pipe handle in hex> [/w]
- * /w lets the install show its wizard. The worker writes one DRVINST_RESULT
- * to the inherited handle and exits with the same Win32 value. */
+ *   drvinst.exe /i "<device instance id>" [/f "<inf path>"] /h <result pipe handle in hex> [/w]
+ * /f installs that package on the device instead of searching for the best
+ * match. /w lets the install show its wizard. The worker writes one
+ * DRVINST_RESULT to the inherited handle and exits with the same Win32 value. */
 #define DRVINST_WORKER_NAME         L"drvinst.exe"
 
 /* Registry: HKLM\SYSTEM\CurrentControlSet\Control\DrvInst
@@ -88,6 +89,8 @@ typedef struct _DRVINST_JOB_INFO
 
 /* Client API, exported by newdev.dll. All return a Win32 error (0 = success). */
 DWORD WINAPI DrvInstSubmitDevice(_In_ PCWSTR DeviceInstanceId, _In_ DWORD Flags, _Out_ DRVINST_JOB_ID *JobId);
+/* Install a specific INF on the device through a job. */
+DWORD WINAPI DrvInstSubmitInf(_In_ PCWSTR DeviceInstanceId, _In_ PCWSTR InfPath, _In_ DWORD Flags, _Out_ DRVINST_JOB_ID *JobId);
 DWORD WINAPI DrvInstGetJob(_In_ DRVINST_JOB_ID JobId, _Out_ PDRVINST_JOB_INFO Info);
 DWORD WINAPI DrvInstEnumJobs(_Out_writes_to_(*Count, *Count) DRVINST_JOB_ID *JobIds, _Inout_ PDWORD Count);
 /* Waits until the job has ended or TimeoutMs has passed (ERROR_TIMEOUT). Info may be NULL. */

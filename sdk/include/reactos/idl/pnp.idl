@@ -936,7 +936,95 @@ cpp_quote("#if _WIN32_WINNT >= 0x0501")
         [out] DWORD *pulSSDIFlags,
         [in] DWORD ulFlags);
 
-    /* Functions 65 to 74 are Vista+, see r63565 */
+    /* Function 65 */
+    DWORD
+    __stdcall
+    PNP_GetObjectPropKeys(
+        [in] handle_t hBinding,
+        [in, string, ref] LPWSTR ObjectName,
+        [in] DWORD ObjectType,
+        [in, string, ref] LPWSTR PropertyCultureName,
+        [in, out] PNP_PROP_COUNT *PropertyCount,
+        [out] PNP_PROP_COUNT *TransferLen,
+        [out, size_is(*PropertyCount)] DEVPROPKEY *PropertyKeys,
+        [in] DWORD Flags);
+
+    /* Function 66 */
+    DWORD
+    __stdcall
+    PNP_GetObjectProp(
+        [in] handle_t hBinding,
+        [in, string, ref] LPWSTR ObjectName,
+        [in] DWORD ObjectType,
+        [in, string, ref] LPWSTR PropertyCultureName,
+        [in] const DEVPROPKEY *PropertyKey,
+        [out] DEVPROPTYPE *PropertyType,
+        [in, out] PNP_PROP_SIZE *PropertySize,
+        [out] PNP_PROP_SIZE *TransferLen,
+        [out, size_is(*PropertySize)] BYTE *PropertyBuffer,
+        [in] DWORD Flags);
+
+    /* Function 67 */
+    DWORD
+    __stdcall
+    PNP_SetObjectProp(
+        [in] handle_t hBinding,
+        [in, string, ref] LPWSTR ObjectName,
+        [in] DWORD ObjectType,
+        [in, string, ref] LPWSTR PropertyCultureName,
+        [in] const DEVPROPKEY *PropertyKey,
+        [in] DEVPROPTYPE PropertyType,
+        [in] PNP_PROP_SIZE PropertySize,
+        [in, size_is(PropertySize)] BYTE *PropertyBuffer,
+        [in] DWORD Flags);
+
+    /* Function 68 */
+    DWORD
+    __stdcall
+    PNP_InstallDevInst(
+        [in] handle_t hBinding);
+
+    /* Function 69 */
+    DWORD
+    __stdcall
+    PNP_ApplyPowerSettings(
+        [in] handle_t hBinding);
+
+    /* Function 70 */
+    DWORD
+    __stdcall
+    PNP_DriverStoreAddDriverPackage(
+        [in] handle_t hBinding,
+        [in, string, ref] LPCWSTR pszInfPath,
+        [out, size_is(ulPublishedNameCch)] WCHAR *pszPublishedName,
+        [in, range(0,64)] DWORD ulPublishedNameCch);
+
+    /* Function 71 */
+    DWORD
+    __stdcall
+    PNP_DriverStoreDeleteDriverPackage(
+        [in] handle_t hBinding,
+        [in, string, ref] LPCWSTR pszInfPath);
+
+    /* Function 72 */
+    DWORD
+    __stdcall
+    PNP_RegisterServiceNotification(
+        [in] handle_t hBinding);
+
+    /* Function 73 */
+    DWORD
+    __stdcall
+    PNP_SetActiveService(
+        [in] handle_t hBinding,
+        [in, string, ref] LPWSTR pszFilter,
+        [in] DWORD ulFlags);
+
+    /* Function 74 */
+    DWORD
+    __stdcall
+    PNP_DeleteServiceDevices(
+        [in] handle_t hBinding);
 
 cpp_quote("#endif /* _WIN32_WINNT >= 0x0501 */")
 

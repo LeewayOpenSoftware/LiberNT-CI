@@ -698,6 +698,50 @@ done:
 }
 
 
+static
+BOOL
+IsCallerAdministrator(
+    _In_ handle_t hBinding)
+{
+    SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+    HANDLE hToken;
+    PSID pAdminSid = NULL;
+    BOOL bAdmin = FALSE;
+    RPC_STATUS RpcStatus;
+
+    if (!AllocateAndInitializeSid(&NtAuthority,
+                                  2,
+                                  SECURITY_BUILTIN_DOMAIN_RID,
+                                  DOMAIN_ALIAS_RID_ADMINS,
+                                  0, 0, 0, 0, 0, 0,
+                                  &pAdminSid))
+    {
+        return FALSE;
+    }
+
+    RpcStatus = RpcImpersonateClient(hBinding);
+    if (RpcStatus != RPC_S_OK)
+    {
+        DPRINT1("RpcImpersonateClient failed (Status 0x%08lx)\n", RpcStatus);
+        goto done;
+    }
+
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, FALSE, &hToken))
+    {
+        CheckTokenMembership(hToken, pAdminSid, &bAdmin);
+        CloseHandle(hToken);
+    }
+
+    RpcRevertToSelf();
+
+done:
+    if (pAdminSid)
+        FreeSid(pAdminSid);
+
+    return bAdmin;
+}
+
+
 VOID
 __RPC_USER
 PNP_NOTIFY_HANDLE_rundown(
@@ -6610,10 +6654,42 @@ PNP_ApplyPowerSettings(
 DWORD
 WINAPI
 PNP_DriverStoreAddDriverPackage(
-    handle_t hBinding)
+    handle_t hBinding,
+    LPCWSTR pszInfPath,
+    WCHAR *pszPublishedName,
+    DWORD ulPublishedNameCch)
 {
-    UNIMPLEMENTED;
-    return CR_CALL_NOT_IMPLEMENTED;
+    WCHAR StoreInf[MAX_PATH];
+    DWORD Length = RTL_NUMBER_OF(StoreInf);
+    SYSTEM_INFO SystemInfo;
+    HRESULT hr;
+
+    /* The whole [out] buffer travels back to the caller: never marshal
+     * uninitialized service heap across the wire */
+    if (ulPublishedNameCch == 0 || !pszPublishedName)
+        return ERROR_INVALID_PARAMETER;
+    ZeroMemory(pszPublishedName, ulPublishedNameCch * sizeof(WCHAR));
+
+    if (!IsCallerAdministrator(hBinding))
+        return ERROR_ACCESS_DENIED;
+
+    if (!pszInfPath || !pszInfPath[0] || lstrlenW(pszInfPath) >= MAX_PATH ||
+        !IsValidInfPath(pszInfPath))
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    GetNativeSystemInfo(&SystemInfo);
+    hr = DriverStoreAddDriverPackageW(pszInfPath, NULL, NULL,
+                                      SystemInfo.wProcessorArchitecture,
+                                      StoreInf, &Length);
+    if (FAILED(hr))
+        return HRESULT_CODE(hr) ? HRESULT_CODE(hr) : ERROR_GEN_FAILURE;
+
+    if (!SetupGetInfPublishedNameW(StoreInf, pszPublishedName, ulPublishedNameCch, NULL))
+        return GetLastError();
+
+    return CR_SUCCESS;
 }
 
 
@@ -6621,10 +6697,22 @@ PNP_DriverStoreAddDriverPackage(
 DWORD
 WINAPI
 PNP_DriverStoreDeleteDriverPackage(
-    handle_t hBinding)
+    handle_t hBinding,
+    LPCWSTR pszInfPath)
 {
-    UNIMPLEMENTED;
-    return CR_CALL_NOT_IMPLEMENTED;
+    HRESULT hr;
+
+    if (!IsCallerAdministrator(hBinding))
+        return ERROR_ACCESS_DENIED;
+
+    if (!pszInfPath || !pszInfPath[0] || lstrlenW(pszInfPath) >= MAX_PATH)
+        return ERROR_INVALID_PARAMETER;
+
+    hr = DriverStoreDeleteDriverPackageW(pszInfPath, NULL, NULL);
+    if (FAILED(hr))
+        return HRESULT_CODE(hr) ? HRESULT_CODE(hr) : ERROR_GEN_FAILURE;
+
+    return CR_SUCCESS;
 }
 
 
