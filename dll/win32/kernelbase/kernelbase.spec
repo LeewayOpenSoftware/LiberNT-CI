@@ -286,7 +286,8 @@
 @ stdcall FindFirstFileA(str ptr) kernel32.FindFirstFileA
 @ stdcall FindFirstFileExA(str long ptr long ptr long) kernel32.FindFirstFileExA
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long) kernel32.FindFirstFileExW
-@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr)
+@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr) kernel32.FindFirstFileNameW
+@ stdcall -version=0x600+ FindNextFileNameW(long ptr wstr) kernel32.FindNextFileNameW
 @ stdcall FindFirstFileW(wstr ptr) kernel32.FindFirstFileW
 @ stdcall FindFirstFreeAce(ptr ptr)
 @ stdcall FindFirstStreamW(wstr ptr ptr long) kernel32.FindFirstStreamW
@@ -491,6 +492,7 @@
 @ stub GetNamedLocaleHashNode
 @ stub -version=0x600+ GetNamedPipeAttribute
 @ stdcall -version=0x600+ GetNamedPipeClientComputerNameW(ptr ptr long)
+@ stdcall -version=0x600+ GetNamedPipeClientComputerNameA(ptr ptr long)
 @ stdcall GetNamedPipeHandleStateW(long ptr ptr ptr ptr wstr long) kernel32.GetNamedPipeHandleStateW
 @ stdcall GetNamedPipeInfo(long ptr ptr ptr ptr) kernel32.GetNamedPipeInfo
 @ stdcall GetNativeSystemInfo(ptr) kernel32.GetNativeSystemInfo
@@ -980,7 +982,7 @@
 @ stdcall -version=0x600+ QueryFullProcessImageNameW(ptr long ptr ptr) kernel32.QueryFullProcessImageNameW
 @ stdcall -version=0x600+ QueryIdleProcessorCycleTime(ptr ptr) kernel32.QueryIdleProcessorCycleTime
 @ stdcall -version=0x601+ QueryIdleProcessorCycleTimeEx(long ptr ptr) kernel32.QueryIdleProcessorCycleTimeEx
-@ stub QueryIoRingCapabilities
+@ stdcall QueryIoRingCapabilities(ptr)
 @ stdcall QueryMemoryResourceNotification(ptr ptr) kernel32.QueryMemoryResourceNotification
 @ stdcall QueryPerformanceCounter(ptr) kernel32.QueryPerformanceCounter
 @ stdcall QueryPerformanceFrequency(ptr) kernel32.QueryPerformanceFrequency

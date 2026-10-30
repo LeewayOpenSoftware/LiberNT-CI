@@ -33,6 +33,7 @@ extern void func_DllDirectories(void);
 extern void func_ManifestSettings(void);
 extern void func_Utf8ActiveCodePage(void);
 extern void func_TramoE(void);
+extern void func_TramoE2(void);
 extern void func_VerifyScripts(void);
 extern void func_GetDurationFormat(void);
 extern void func_TimeZoneEx(void);
@@ -138,6 +139,7 @@ const struct test winetest_testlist[] =
     { "ManifestSettings", func_ManifestSettings },
     { "Utf8ActiveCodePage", func_Utf8ActiveCodePage },
     { "TramoE", func_TramoE },
+    { "TramoE2", func_TramoE2 },
     { "VerifyScripts", func_VerifyScripts },
     { "GetDurationFormat", func_GetDurationFormat },
     { "TimeZoneEx", func_TimeZoneEx },
