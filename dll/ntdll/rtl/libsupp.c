@@ -1255,6 +1255,10 @@ LdrpApisetVersion(VOID)
         if (OsVersion >= _WIN32_WINNT_WIN10)
         {
             CachedApisetVersion = APISET_WIN10;
+            /* Windows 11 keeps the 10.0 major.minor; the build number tells it apart.
+             * Keep WIN10 set so a contract without a WIN11 bit still resolves. */
+            if (Peb->OSBuildNumber >= 22000)
+                CachedApisetVersion |= APISET_WIN11;
         }
         else if (OsVersion >= _WIN32_WINNT_WINBLUE)
         {
