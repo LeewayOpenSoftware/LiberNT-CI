@@ -352,8 +352,6 @@ S1Rsa2048Sha256Verify(const uint8_t Modulus[S1_RSA2048_SIZE],
         uint8_t Actual[S1_RSA2048_SIZE];
         for (i = 0; i < S1_RSA2048_SIZE; i++)
             Actual[i] = (uint8_t)(M.W[(S1_RSA2048_SIZE - 1 - i) / 4] >> (((S1_RSA2048_SIZE - 1 - i) % 4) * 8));
-        fprintf(stderr, "\nrsa actual[200:206]:");
-        fprintf(stderr, "\n");
         return memcmp(Actual, Expected, sizeof(Expected)) == 0 ? S1_TRUE : S1_FALSE;
     }
 }
