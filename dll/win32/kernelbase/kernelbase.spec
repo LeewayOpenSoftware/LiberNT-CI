@@ -424,7 +424,7 @@
 @ stub GetEraNameCountedString
 @ stdcall -version=0x600+ GetErrorMode() kernel32.GetErrorMode
 @ stdcall GetExitCodeProcess(long ptr) kernel32.GetExitCodeProcess
-@ stdcall GetExitCodeThread(long ptr) kernel32.GetExitCodeThread
+@ stdcall GetExitCodeThread(long ptr)
 @ stub GetFallbackDisplayName
 @ stdcall GetFileAttributesA(str) kernel32.GetFileAttributesA
 @ stdcall GetFileAttributesExA(str long ptr) kernel32.GetFileAttributesExA
@@ -518,7 +518,7 @@
 @ stdcall GetProcessHeap() kernel32.GetProcessHeap
 @ stdcall GetProcessHeaps(long ptr) kernel32.GetProcessHeaps
 @ stdcall GetProcessId(long) kernel32.GetProcessId
-@ stdcall GetProcessIdOfThread(ptr) kernel32.GetProcessIdOfThread
+@ stdcall GetProcessIdOfThread(ptr)
 @ stdcall -version=0x601+ GetProcessImageFileNameA(long ptr long) kernel32.K32GetProcessImageFileNameA
 @ stdcall -version=0x601+ GetProcessImageFileNameW(long ptr long) kernel32.K32GetProcessImageFileNameW
 @ stdcall GetProcessInformation(long long ptr long) kernel32.GetProcessInformation
@@ -585,16 +585,16 @@
 @ stdcall GetThreadContext(long ptr) kernel32.GetThreadContext
 @ stdcall GetThreadDescription(ptr ptr)
 @ stdcall GetThreadErrorMode()
-@ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr) kernel32.GetThreadGroupAffinity
-@ stdcall GetThreadIOPendingFlag(long ptr) kernel32.GetThreadIOPendingFlag
-@ stdcall GetThreadId(ptr) kernel32.GetThreadId
-@ stdcall GetThreadIdealProcessorEx(long ptr) kernel32.GetThreadIdealProcessorEx
+@ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr)
+@ stdcall GetThreadIOPendingFlag(long ptr)
+@ stdcall GetThreadId(ptr)
+@ stdcall GetThreadIdealProcessorEx(long ptr)
 @ stdcall GetThreadInformation(long long ptr long)
 @ stdcall GetThreadLocale() kernel32.GetThreadLocale
 @ stdcall GetThreadPreferredUILanguages(long ptr ptr ptr)
 @ stdcall GetThreadPriority(long) kernel32.GetThreadPriority
-@ stdcall GetThreadPriorityBoost(long ptr) kernel32.GetThreadPriorityBoost
-@ stdcall GetThreadTimes(long ptr ptr ptr ptr) kernel32.GetThreadTimes
+@ stdcall GetThreadPriorityBoost(long ptr)
+@ stdcall GetThreadTimes(long ptr ptr ptr ptr)
 @ stdcall -version=0x600+ GetThreadUILanguage() kernel32.GetThreadUILanguage
 @ stdcall GetTickCount() kernel32.GetTickCount
 @ stdcall -version=0x600+ GetTickCount64() kernel32.GetTickCount64
@@ -832,7 +832,7 @@
 @ stdcall OpenProcessToken(long long ptr)
 @ stub OpenRegKey
 @ stdcall OpenSemaphoreW(long long wstr) kernel32.OpenSemaphoreW
-@ stdcall OpenThread(long long long) kernel32.OpenThread
+@ stdcall OpenThread(long long long)
 @ stdcall OpenThreadToken(long long long ptr)
 @ stdcall OpenWaitableTimerW(long long wstr) kernel32.OpenWaitableTimerW
 @ stdcall OutputDebugStringA(str) kernel32.OutputDebugStringA
@@ -1079,7 +1079,7 @@
 @ stdcall -version=0x602+ ResolveDelayLoadedAPI(ptr ptr ptr ptr ptr long) ntdll.LdrResolveDelayLoadedAPI
 @ stdcall ResolveLocaleName(wstr ptr long)
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
-@ stdcall ResumeThread(long) kernel32.ResumeThread
+@ stdcall ResumeThread(long)
 @ stdcall RevertToSelf()
 @ stdcall SHExpandEnvironmentStringsA(str ptr long) kernel32.ExpandEnvironmentStringsA
 @ stdcall SHExpandEnvironmentStringsW(wstr ptr long) kernel32.ExpandEnvironmentStringsW
@@ -1202,13 +1202,13 @@
 @ stdcall SetThreadDescription(ptr wstr)
 @ stdcall SetThreadErrorMode(long ptr)
 @ stdcall -version=0x601+ SetThreadGroupAffinity(long ptr ptr) kernel32.SetThreadGroupAffinity
-@ stdcall SetThreadIdealProcessor(long long) kernel32.SetThreadIdealProcessor
+@ stdcall SetThreadIdealProcessor(long long)
 @ stdcall SetThreadIdealProcessorEx(long ptr ptr) kernel32.SetThreadIdealProcessorEx
 @ stdcall SetThreadInformation(long long ptr long)
 @ stdcall SetThreadLocale(long) kernel32.SetThreadLocale
 @ stdcall SetThreadPreferredUILanguages(long ptr ptr)
 @ stdcall SetThreadPriority(long long) kernel32.SetThreadPriority
-@ stdcall SetThreadPriorityBoost(long long) kernel32.SetThreadPriorityBoost
+@ stdcall SetThreadPriorityBoost(long long)
 @ stub SetThreadSelectedCpuSets
 @ stdcall SetThreadStackGuarantee(ptr) kernel32.SetThreadStackGuarantee
 @ stdcall SetThreadToken(ptr ptr)
@@ -1294,9 +1294,9 @@
 @ stdcall StrTrimA(str str)
 @ stdcall StrTrimW(wstr wstr)
 @ stdcall SubmitThreadpoolWork(ptr) ntdll.TpPostWork
-@ stdcall SuspendThread(long) kernel32.SuspendThread
+@ stdcall SuspendThread(long)
 @ stdcall SwitchToFiber(ptr) kernel32.SwitchToFiber
-@ stdcall SwitchToThread() kernel32.SwitchToThread
+@ stdcall SwitchToThread()
 @ stdcall SystemTimeToFileTime(ptr ptr) kernel32.SystemTimeToFileTime
 @ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr) kernel32.SystemTimeToTzSpecificLocalTime
 @ stdcall SystemTimeToTzSpecificLocalTimeEx(ptr ptr ptr)
