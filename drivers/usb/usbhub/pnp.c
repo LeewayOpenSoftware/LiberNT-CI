@@ -1405,8 +1405,6 @@ EnumStart:
                     PdoExtension->PortPdoFlags |= USBHUB_PDO_FLAG_DELETE_PENDING;
                     PdoExtension->EnumFlags &= ~USBHUB_ENUM_FLAG_DEVICE_PRESENT;
 
-                    USBH_ReleaseSerialNumber(PdoExtension);
-
                     USBH_FreeCachedStrings(PdoExtension);
 
                     DeviceHandle = InterlockedExchangePointer(&PdoExtension->DeviceHandle,
@@ -1497,6 +1495,7 @@ EnumStart:
 
                     if (PortData->DeviceObject)
                     {
+                        USBH_ReleaseSerialNumber(PdoExt(PortData->DeviceObject));
                         IoDeleteDevice(PortData->DeviceObject);
                         PortData->DeviceObject = NULL;
                         PortData->ConnectionStatus = NoDeviceConnected;
@@ -1980,6 +1979,7 @@ RelationsWorker:
                                          USBHUB_PORT_PDO_EXTENSION,
                                          PortLink);
 
+        USBH_ReleaseSerialNumber(PdoExtension);
         IoDeleteDevice(PdoExtension->Common.SelfDevice);
     }
 
