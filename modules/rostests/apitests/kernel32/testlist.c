@@ -53,6 +53,7 @@ extern void func_GetVolumeInformation(void);
 extern void func_InitOnce(void);
 extern void func_WineGroups12(void);
 extern void func_InversionL1(void);
+extern void func_InversionL2(void);
 extern void func_interlck(void);
 extern void func_IoCompletion(void);
 extern void func_IsDBCSLeadByteEx(void);
@@ -155,6 +156,7 @@ const struct test winetest_testlist[] =
     { "InitOnce",                    func_InitOnce },
     { "WineGroups12",                func_WineGroups12 },
     { "InversionL1", func_InversionL1 },
+    { "InversionL2", func_InversionL2 },
     { "interlck",                    func_interlck },
     { "IoCompletion",                func_IoCompletion },
     { "IsDBCSLeadByteEx",            func_IsDBCSLeadByteEx },

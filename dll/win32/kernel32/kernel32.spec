@@ -62,7 +62,7 @@
 @ stdcall BuildCommDCBW(wstr ptr)
 @ stdcall CallNamedPipeA(str ptr long ptr long ptr long)
 @ stdcall CallNamedPipeW(wstr ptr long ptr long ptr long)
-@ stdcall -stub -version=0x600+ CallbackMayRunLong(ptr)
+@ stdcall -version=0x600+ CallbackMayRunLong(ptr) kernelbase.CallbackMayRunLong
 @ stdcall CancelDeviceWakeupRequest(long)
 @ stdcall CancelIo(long)
 @ stdcall -version=0x600+ CancelIoEx(ptr ptr)
@@ -612,8 +612,8 @@
 @ stdcall -version=0x602+ GetPackageFamilyNameFromToken(ptr ptr ptr) kernelbase.GetPackageFamilyNameFromToken
 @ stdcall -version=0x602+ GetPackageFullNameFromToken(ptr ptr ptr) kernelbase.GetPackageFullNameFromToken
 @ stdcall -version=0x602+ GetApplicationUserModelIdFromToken(ptr ptr ptr) kernelbase.GetApplicationUserModelIdFromToken
-@ stdcall -version=0x602+ GetPackagePathByFullName(wstr ptr wstr)
-@ stdcall -version=0x602+ GetPackagesByPackageFamily(wstr ptr ptr ptr ptr)
+@ stdcall -version=0x602+ GetPackagePathByFullName(wstr ptr wstr) kernelbase.GetPackagePathByFullName
+@ stdcall -version=0x602+ GetPackagesByPackageFamily(wstr ptr ptr ptr ptr) kernelbase.GetPackagesByPackageFamily
 @ stdcall -version=0x600+ GetPhysicallyInstalledSystemMemory(ptr)
 @ stdcall GetPriorityClass(long)
 @ stdcall GetPrivateProfileIntA(str str long str)
@@ -697,7 +697,7 @@
 @ stdcall GetTempPathW(long ptr)
 @ stdcall -version=0xA00+ GetTempPath2A(long ptr)
 @ stdcall -version=0xA00+ GetTempPath2W(long ptr)
-@ stdcall GetThreadContext(long ptr)
+@ stdcall GetThreadContext(long ptr) kernelbase.GetThreadContext
 @ stdcall -version=0x602+ GetThreadInformation(long long ptr long) kernelbase.GetThreadInformation
 @ stdcall -version=0x600+ GetThreadErrorMode() kernelbase.GetThreadErrorMode
 @ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr) kernelbase.GetThreadGroupAffinity
@@ -1015,7 +1015,7 @@
 @ stdcall -version=0x600+ QueryUnbiasedInterruptTime(ptr)
 @ stdcall -version=0x602+ QueryUnbiasedInterruptTimePrecise(ptr)
 @ stdcall QueueUserAPC(ptr long long)
-@ stdcall QueueUserWorkItem(ptr ptr long)
+@ stdcall QueueUserWorkItem(ptr ptr long) kernelbase.QueueUserWorkItem
 @ stdcall -norelay RaiseException(long long long ptr)
 @ stdcall -version=0x602+ RaiseFailFastException(ptr ptr long) kernelbase.RaiseFailFastException
 @ stdcall ReOpenFile(ptr long long long)
@@ -1261,8 +1261,8 @@
 @ stdcall SetTapePosition(ptr long long long long long)
 @ stdcall SetTermsrvAppInstallMode(long)
 @ stdcall SetThreadAffinityMask(long long)
-@ stdcall -version=0x601+ SetThreadGroupAffinity(long ptr ptr)
-@ stdcall SetThreadContext(long ptr)
+@ stdcall -version=0x601+ SetThreadGroupAffinity(long ptr ptr) kernelbase.SetThreadGroupAffinity
+@ stdcall SetThreadContext(long ptr) kernelbase.SetThreadContext
 @ stdcall -version=0x600+ SetThreadErrorMode(long ptr) kernelbase.SetThreadErrorMode
 @ stdcall SetThreadExecutionState(long)
 @ stdcall SetThreadIdealProcessor(long long) kernelbase.SetThreadIdealProcessor
@@ -1301,8 +1301,8 @@
 @ stdcall SignalObjectAndWait(long long long long)
 @ stdcall SizeofResource(long long)
 @ stdcall Sleep(long)
-@ stdcall -version=0x600+ SleepConditionVariableCS(ptr ptr long)
-@ stdcall -version=0x600+ SleepConditionVariableSRW(ptr ptr long long)
+@ stdcall -version=0x600+ SleepConditionVariableCS(ptr ptr long) kernelbase.SleepConditionVariableCS
+@ stdcall -version=0x600+ SleepConditionVariableSRW(ptr ptr long long) kernelbase.SleepConditionVariableSRW
 @ stdcall SleepEx(long long)
 @ stdcall -version=0x600+ StartThreadpoolIo(ptr) ntdll.TpStartAsyncIoOperation
 @ stdcall -version=0x600+ SubmitThreadpoolWork(ptr) ntdll.TpPostWork
@@ -1328,7 +1328,7 @@
 @ stdcall -version=0x601+ TryAcquireSRWLockExclusive(ptr) ntdll.RtlTryAcquireSRWLockExclusive
 @ stdcall -version=0x601+ TryAcquireSRWLockShared(ptr) ntdll.RtlTryAcquireSRWLockShared
 @ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
-@ stdcall -version=0x600+ TrySubmitThreadpoolCallback(ptr ptr ptr)
+@ stdcall -version=0x600+ TrySubmitThreadpoolCallback(ptr ptr ptr) kernelbase.TrySubmitThreadpoolCallback
 @ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
 @ stdcall -version=0x601+ TzSpecificLocalTimeToSystemTimeEx(ptr ptr ptr) kernelbase.TzSpecificLocalTimeToSystemTimeEx
 @ stdcall -arch=win64 UmsThreadYield(ptr)
@@ -1481,4 +1481,4 @@
 @ stdcall QueryInterruptTime(ptr)
 @ stdcall QueryInterruptTimePrecise(ptr)
 @ stdcall GetThreadDescription(ptr ptr)
-@ stdcall SetThreadDescription(ptr wstr)
+@ stdcall SetThreadDescription(ptr wstr) kernelbase.SetThreadDescription
