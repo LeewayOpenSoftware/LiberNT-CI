@@ -28,7 +28,12 @@
 PSID LnTestExtraSid = NULL;
 #endif
 
-/* ---- the white list ------------------------------------------------------------------------ */
+/* ---- the white list ------------------------------------------------------------------------
+ * Stage 1 policy, stated plainly: this is a list of what MAY be replaced, not a list of what is dangerous.
+ * It admits user-mode DLL/EXE under the four roots and auto/demand drivers, and refuses the kernel, the HAL,
+ * the boot path and the critical processes by name. It does NOT by itself exclude other security-critical
+ * user components (lsasrv, samsrv, msv1_0, sechost, svchost, kernel32, kernelbase...): whoever signs a
+ * package with the development key is trusted to ship them, and the owner decides when that list grows. */
 
 static BOOL StartsWithNoCase(const WCHAR *s, const WCHAR *prefix)
 {
@@ -401,6 +406,15 @@ DWORD LnTargetOpen(LN_TARGET *t, LN_TARGET_MODE mode, const WCHAR *imageRoot, BO
     err = CheckSecure(libernt);
     if (!err)
         err = CheckSecure(t->servicing);
+    if (!err)
+    {
+        /* a link in place of either folder would redirect the whole tree */
+        DWORD a1 = GetFileAttributesW(libernt), a2 = GetFileAttributesW(t->servicing);
+
+        if (a1 == INVALID_FILE_ATTRIBUTES || a2 == INVALID_FILE_ATTRIBUTES ||
+            (a1 & FILE_ATTRIBUTE_REPARSE_POINT) || (a2 & FILE_ATTRIBUTE_REPARSE_POINT))
+            err = LN_E_INSECURE_TARGET;
+    }
     if (err)
         return err;
 

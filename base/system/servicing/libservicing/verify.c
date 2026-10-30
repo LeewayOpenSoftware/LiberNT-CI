@@ -141,40 +141,42 @@ static BOOL CertRsa2048Key(const BYTE *der, size_t len, BYTE modulus[256], uint3
     *exponent = 0;
     for (i = 0; i < eLen; i++)
         *exponent = (*exponent << 8) | e[i];
-    return TRUE;
+    /* the same pinning as the core: a real 2048-bit odd modulus and the public exponent 65537 */
+    return *exponent == 65537 && (modulus[0] & 0x80) && (modulus[255] & 1);
 }
+
+#ifdef LN_TESTING
+BOOL LnTestCertRsa2048Key(const BYTE *der, size_t len, BYTE modulus[256], uint32_t *exponent)
+{
+    return CertRsa2048Key(der, len, modulus, exponent);
+}
+#endif
 
 /* ---- manifest.sig ---------------------------------------------------------------------------- */
 
-static DWORD VerifyManifestSignature(const WCHAR *dir, const WCHAR *cerPath)
+/* man/cer are the bytes already read ONCE by the caller: the bytes that were hashed and parsed are the
+ * bytes whose signature is checked (no second read of a file that could change in between). */
+static DWORD VerifyManifestSignature(const WCHAR *dir, const BYTE *man, size_t mlen, const BYTE *cer, size_t clen)
 {
-    WCHAR *mp = LnJoin(dir, L"manifest.json"), *sp = LnJoin(dir, L"manifest.sig");
-    BYTE *man = NULL, *sig = NULL, *cer = NULL, modulus[256];
-    size_t mlen = 0, slen = 0, clen = 0;
+    WCHAR *sp = LnJoin(dir, L"manifest.sig");
+    BYTE *sig = NULL, modulus[256];
+    size_t slen = 0;
     uint32_t exponent = 0;
     DWORD err = LN_E_BAD_SIGNATURE;
 
-    if (!mp || !sp)
-    {
-        err = ERROR_NOT_ENOUGH_MEMORY;
-        goto out;
-    }
+    if (!sp)
+        return ERROR_NOT_ENOUGH_MEMORY;
     if (!LnPathExists(sp))
     {
         err = LN_E_UNSIGNED;                            /* a package without manifest.sig is unsigned */
         goto out;
     }
-    if (LnReadFileAll(mp, &man, &mlen) || LnReadFileAll(sp, &sig, &slen) || LnReadFileAll(cerPath, &cer, &clen))
-        goto out;
-    if (slen != 256 || !CertRsa2048Key(cer, clen, modulus, &exponent))
+    if (LnReadFileAll(sp, &sig, &slen) || slen != 256 || !CertRsa2048Key(cer, clen, modulus, &exponent))
         goto out;
     if (S1Rsa2048Sha256Verify(modulus, exponent, man, mlen, sig))
         err = ERROR_SUCCESS;
 out:
-    free(man);
     free(sig);
-    free(cer);
-    free(mp);
     free(sp);
     return err;
 }
@@ -318,16 +320,24 @@ static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const WCHAR *
 {
     LN_MANIFEST m;
     WCHAR *manifestPath, *catPath, *payloadDir;
+    BYTE *cerBytes = NULL, *manBytes = NULL;
+    size_t cerLen = 0, manLen = 0;
     char pinned[65];
     size_t i;
     BOOL hasDriver = FALSE;
     DWORD err;
 
-    err = LnCertFileSha256(cerPath, pinned);
+    err = LnReadFileAll(cerPath, &cerBytes, &cerLen);                   /* the certificate is read once */
     if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
         return LN_E_NO_TRUST_ANCHOR;
     if (err)
         return err;
+    if (cerLen < 16 || cerBytes[0] != 0x30)
+    {
+        free(cerBytes);
+        return LN_E_CERT_MISMATCH;
+    }
+    LnSha256Hex(cerBytes, cerLen, pinned);
 
     manifestPath = LnJoin(pkgDir, L"manifest.json");
     catPath = LnJoin(pkgDir, L"catalog.cat");
@@ -338,8 +348,10 @@ static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const WCHAR *
         goto done_nomanifest;
     }
 
-    /* 1. manifest */
-    err = LnManifestLoad(manifestPath, &m);
+    /* 1. manifest: read once, parsed and (below) signature-checked from the same bytes */
+    err = LnReadFileAll(manifestPath, &manBytes, &manLen);
+    if (!err)
+        err = LnManifestParse((const char *)manBytes, manLen, &m);
     if (err)
         goto done_nomanifest;
 
@@ -390,7 +402,7 @@ static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const WCHAR *
     }
 
     /* 4. the signature of the manifest: the root of trust */
-    err = VerifyManifestSignature(pkgDir, cerPath);
+    err = VerifyManifestSignature(pkgDir, manBytes, manLen, cerBytes, cerLen);
     if (err)
         goto done;
 
@@ -406,6 +418,8 @@ done:
     else
         LnManifestFree(&m);
 done_nomanifest:
+    free(cerBytes);
+    free(manBytes);
     free(manifestPath);
     free(catPath);
     free(payloadDir);

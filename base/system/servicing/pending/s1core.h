@@ -169,7 +169,10 @@ S1Bool S1ShouldRollback(uint32_t Attempt, S1Bool HealthConfirmed);
 S1Bool S1IsVerifiableFailure(S1Bool FailureRecorded);
 
 #endif /* S1CORE_H */
-/* TEMPORAL */
+#ifdef S1_HOST_TEST
+/* Host-only unit hooks for the logic tests; never compiled into the
+ * native applier. */
 void S1TestBnMulMod(uint32_t A, uint32_t B, uint32_t M, uint32_t *Out);
 void S1TestBnMulModW(const uint32_t *Aw, const uint32_t *Bw, const uint32_t *Mw, uint32_t *Out);
 void S1TestBnPowMod(uint32_t Base, uint32_t Exp, uint32_t M, uint32_t *Out);
+#endif

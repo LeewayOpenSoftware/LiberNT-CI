@@ -331,7 +331,15 @@ S1Rsa2048Sha256Verify(const uint8_t Modulus[S1_RSA2048_SIZE],
         Expected[i] = 0xFF;
     Expected[2 + PadLen] = 0x00; /* the 0x00 separator before the DigestInfo */
 
+    /* The verifier is a trust root: pin the development-key shape. An
+     * attacker-chosen exponent of 1 would accept a self-made block without
+     * any private key, and a degenerate modulus breaks the math. */
+    if (Exponent != 65537)
+        return S1_FALSE;
+
     S1BnFromBytes(&N, Modulus);
+    if (!(N.W[S1_BN_WORDS - 1] & 0x80000000) || !(N.W[0] & 1))
+        return S1_FALSE; /* modulus must be exactly 2048-bit and odd */
     S1BnFromBytes(&S, Signature);
     if (S1BnCmp(&S, &N) >= 0)
         return S1_FALSE;
@@ -843,7 +851,7 @@ S1PlanParse(const char *Text, size_t Length, S1_PLAN *Plan)
 
         Op->Seq = (uint32_t)i + 1;
 
-        snprintf(Path, sizeof(Path), "operations.%zu.type", i);
+        snprintf(Path, sizeof(Path), "operations.%lu.type", (unsigned long)i);
         if (!S1JsonGetString(Root, Path, &S, &SL))
             return S1_FALSE;
         for (t = 0; t < sizeof(Types) / sizeof(Types[0]); t++)
@@ -858,16 +866,16 @@ S1PlanParse(const char *Text, size_t Length, S1_PLAN *Plan)
         if (!TypeOk)
             return S1_FALSE; /* unknown operation type: never applied */
 
-        snprintf(Path, sizeof(Path), "operations.%zu.component", i);
+        snprintf(Path, sizeof(Path), "operations.%lu.component", (unsigned long)i);
         if (!S1JsonGetString(Root, Path, &S, &SL) || !S1CopyString(Op->Component, sizeof(Op->Component), S, SL))
             return S1_FALSE;
-        snprintf(Path, sizeof(Path), "operations.%zu.source", i);
+        snprintf(Path, sizeof(Path), "operations.%lu.source", (unsigned long)i);
         if (!S1JsonGetString(Root, Path, &S, &SL) || !S1CopyString(Op->Source, sizeof(Op->Source), S, SL))
             return S1_FALSE;
-        snprintf(Path, sizeof(Path), "operations.%zu.target", i);
+        snprintf(Path, sizeof(Path), "operations.%lu.target", (unsigned long)i);
         if (!S1JsonGetString(Root, Path, &S, &SL) || !S1CopyString(Op->Target, sizeof(Op->Target), S, SL))
             return S1_FALSE;
-        snprintf(Path, sizeof(Path), "operations.%zu.sha256", i);
+        snprintf(Path, sizeof(Path), "operations.%lu.sha256", (unsigned long)i);
         if (!S1JsonGetString(Root, Path, &S, &SL) || SL != S1_SHA256_SIZE * 2 ||
             !S1HexDecode(S, Op->ExpectedSha256, S1_SHA256_SIZE))
             return S1_FALSE;
@@ -1065,7 +1073,9 @@ S1IsVerifiableFailure(S1Bool FailureRecorded)
     return FailureRecorded;
 }
 
-/* TEMPORAL: prueba de unidad del bignum expuesta para el test */
+#ifdef S1_HOST_TEST
+/* Host-only unit hooks for the logic tests; never compiled into the
+ * native applier. */
 void S1TestBnMulMod(uint32_t A, uint32_t B, uint32_t M, uint32_t *Out)
 {
     S1_BN Ba, Bb, Bm, Br;
@@ -1094,3 +1104,5 @@ void S1TestBnPowMod(uint32_t Base, uint32_t Exp, uint32_t M, uint32_t *Out)
     S1BnPowMod(&Br, &Bb, &Be, &Bm);
     *Out = Br.W[0];
 }
+#endif /* S1_HOST_TEST */
+

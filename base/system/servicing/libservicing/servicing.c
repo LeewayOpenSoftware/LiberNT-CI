@@ -580,6 +580,9 @@ static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
     *pending = FALSE;
     if (!tp)
         return ERROR_NOT_ENOUGH_MEMORY;
+    err = LnTargetValidateReal(c->t, it->target);        /* again, immediately before this write */
+    if (err)
+        goto out;
     err = CurrentHash(tp, cur);
     if (err)
         goto out;
@@ -1026,7 +1029,18 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
         goto fail;
     /* ENFORCE at the moment of use, not only at add-package: the store copy (manifest, catalog,
      * signature, objects) must still verify against the pinned certificate */
-    err = LnServicingVerifyStored(t, packageId, version, NULL);
+    {
+        LN_MANIFEST verified;
+
+        err = LnServicingVerifyStored(t, packageId, version, &verified);
+        if (!err)
+        {
+            /* the manifest that was verified is the very one this transaction was derived from */
+            if (strcmp(verified.manifestSha256, c.m.manifestSha256))
+                err = LN_E_BAD_SIGNATURE;
+            LnManifestFree(&verified);
+        }
+    }
     if (err)
         goto fail;
     /* every target must be a real, unaliased path: no 8.3 names, no junctions or links in the way */

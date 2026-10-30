@@ -328,7 +328,8 @@ BOOL LnIsReservedName(const WCHAR *p, size_t n)
         if (wcslen(plain[i]) == base && !_wcsnicmp(p, plain[i], base))
             return TRUE;
     }
-    if (base == 4 && (!_wcsnicmp(p, L"COM", 3) || !_wcsnicmp(p, L"LPT", 3)) && p[3] >= L'0' && p[3] <= L'9')
+    if (base == 4 && (!_wcsnicmp(p, L"COM", 3) || !_wcsnicmp(p, L"LPT", 3)) &&
+        ((p[3] >= L'0' && p[3] <= L'9') || p[3] == 0x00B9 || p[3] == 0x00B2 || p[3] == 0x00B3))   /* COM1 and COM-superscript-1..3 */
         return TRUE;
     return FALSE;
 }

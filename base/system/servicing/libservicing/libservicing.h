@@ -19,6 +19,7 @@
 #endif
 #include <windows.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -234,6 +235,7 @@ DWORD LnServicingExportLog(const LN_TARGET *t, const WCHAR *destDir);
 extern BOOL LnTestLockedAsPending;      /* treat a locked target of an Image as in use, as Online would */
 extern PSID LnTestExtraSid;             /* an extra principal accepted in the servicing DACL and as owner */
 extern void (*LnTestAfterStageHook)(const WCHAR *sourcePackageDir);   /* runs after add-package copied the package */
+BOOL LnTestCertRsa2048Key(const BYTE *der, size_t len, BYTE modulus[256], uint32_t *exponent);
 #endif
 
 /* ---- pending.c --------------------------------------------------------- */

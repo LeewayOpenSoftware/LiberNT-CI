@@ -417,6 +417,76 @@ static void TestVerify(void)
     p = Fx(L"missing-payload");
     CHECK_ERR(LN_E_HASH_MISMATCH, LnServicingVerifyPackage(p, g_cer, NULL));
     free(p);
+    /* negative cases of the signature itself: a copy of a good package whose manifest.sig is altered */
+    {
+        WCHAR *src = Fx(L"good1"), *dst = LnJoin(g_work, L"sigcopy"), *sigp = LnJoin(dst, L"manifest.sig");
+        BYTE *sig = NULL, *cer = NULL, bad[300], mod[256];
+        size_t slen = 0, clen = 0, k;
+        uint32_t ex = 0;
+        int flips[] = { 0, 1, 100, 255 };
+
+        LnRemoveTree(dst);
+        CHECK_ERR(0, LnCopyTreeFlush(src, dst));
+        CHECK_ERR(0, LnReadFileAll(sigp, &sig, &slen));
+        CHECK(slen == 256);
+        for (k = 0; k < sizeof(flips) / sizeof(flips[0]); k++)
+        {
+            memcpy(bad, sig, 256);
+            bad[flips[k]] ^= 0x01;                                                        /* one bit of the signature */
+            CHECK_ERR(0, LnWriteFileAtomic(sigp, bad, 256));
+            CHECK_ERR(LN_E_BAD_SIGNATURE, LnServicingVerifyPackage(dst, g_cer, NULL));
+        }
+        memcpy(bad, sig, 256);
+        memset(bad + 256, 0, 2);
+        CHECK_ERR(0, LnWriteFileAtomic(sigp, bad, 255));                                  /* too short */
+        CHECK_ERR(LN_E_BAD_SIGNATURE, LnServicingVerifyPackage(dst, g_cer, NULL));
+        CHECK_ERR(0, LnWriteFileAtomic(sigp, bad, 257));                                  /* too long */
+        CHECK_ERR(LN_E_BAD_SIGNATURE, LnServicingVerifyPackage(dst, g_cer, NULL));
+        CHECK_ERR(0, LnWriteFileAtomic(sigp, bad, 1));                                    /* nearly empty */
+        CHECK_ERR(LN_E_BAD_SIGNATURE, LnServicingVerifyPackage(dst, g_cer, NULL));
+        CHECK_ERR(0, LnWriteFileAtomic(sigp, sig, 256));                                  /* restored: valid again */
+        CHECK_ERR(0, LnServicingVerifyPackage(dst, g_cer, NULL));
+
+        /* the certificate's key: the real one is accepted, e != 65537 and a short modulus are not */
+        CHECK_ERR(0, LnReadFileAll(g_cer, &cer, &clen));
+        CHECK(LnTestCertRsa2048Key(cer, clen, mod, &ex) && ex == 65537 && (mod[0] & 0x80));
+        for (k = 0; k + 5 < clen; k++)
+            if (cer[k] == 0x02 && cer[k + 1] == 0x03 && cer[k + 2] == 0x01 && cer[k + 3] == 0x00 && cer[k + 4] == 0x01)
+                break;
+        CHECK(k + 5 < clen);
+        if (k + 5 < clen)
+        {
+            cer[k + 2] = 0x00;                                                            /* e = 3 */
+            cer[k + 3] = 0x00;
+            cer[k + 4] = 0x03;
+            CHECK(!LnTestCertRsa2048Key(cer, clen, mod, &ex));
+            cer[k + 2] = 0x01;                                                            /* e = 65539 */
+            cer[k + 3] = 0x00;
+            cer[k + 4] = 0x03;
+            CHECK(!LnTestCertRsa2048Key(cer, clen, mod, &ex));
+            cer[k + 4] = 0x01;                                                            /* back to 65537 */
+            CHECK(LnTestCertRsa2048Key(cer, clen, mod, &ex));
+        }
+        for (k = 0; k + 6 < clen; k++)
+            if (cer[k] == 0x02 && cer[k + 1] == 0x82 && cer[k + 2] == 0x01 && cer[k + 3] == 0x01 && cer[k + 4] == 0x00)
+                break;
+        CHECK(k + 6 < clen);
+        if (k + 6 < clen)
+        {
+            cer[k + 5] &= 0x7F;                                                           /* modulus is no longer 2048 bits */
+            CHECK(!LnTestCertRsa2048Key(cer, clen, mod, &ex));
+            cer[k + 5] |= 0x80;
+            cer[k + 5 + 255] &= 0xFE;                                                     /* even modulus */
+            CHECK(!LnTestCertRsa2048Key(cer, clen, mod, &ex));
+        }
+        CHECK(!LnTestCertRsa2048Key(cer, 10, mod, &ex));                                  /* truncated DER */
+        free(sig);
+        free(cer);
+        LnRemoveTree(dst);
+        free(sigp);
+        free(dst);
+        free(src);
+    }
     /* drivers carry a signed catalog on top of manifest.sig (M6) */
     p = Fx(L"driver-cat");
     CHECK_ERR(0, LnServicingVerifyPackage(p, g_cer, &m));
