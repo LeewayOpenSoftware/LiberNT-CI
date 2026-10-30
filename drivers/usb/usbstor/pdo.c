@@ -582,7 +582,6 @@ USBSTOR_PdoHandlePnp(
 {
     PIO_STACK_LOCATION IoStack;
     PPDO_DEVICE_EXTENSION DeviceExtension;
-    PFDO_DEVICE_EXTENSION FDODeviceExtension;
     NTSTATUS Status;
     PDEVICE_CAPABILITIES Caps;
     ULONG bDelete;
@@ -677,9 +676,10 @@ USBSTOR_PdoHandlePnp(
                 {
                     // check if no unique id
                     Caps = (PDEVICE_CAPABILITIES)IoStack->Parameters.DeviceCapabilities.Capabilities;
-                    FDODeviceExtension = DeviceExtension->LowerDeviceObject->DeviceExtension;
-                    Caps->UniqueID = Caps->UniqueID && FDODeviceExtension->SerialNumber &&
-                                     FDODeviceExtension->SerialNumber->bLength >= sizeof(USB_COMMON_DESCRIPTOR) + sizeof(WCHAR);
+                    /* The disk PDO's instance ID (serial&LUN, or counter&LUN
+                     * without a serial) is not unique across the system; the
+                     * parent chain disambiguates it. */
+                    Caps->UniqueID = FALSE;
                     Caps->Removable = TRUE; //FIXME
                 }
             }
