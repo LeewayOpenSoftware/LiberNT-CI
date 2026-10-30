@@ -24,6 +24,7 @@ list(APPEND SOURCE
     DosPathToSessionPath.c
     IsValidLocaleName.c
     CompatLinks.c
+    ForwardCycles.c
     VerifyScripts.c
     GetDurationFormat.c
     TimeZoneEx.c
