@@ -702,16 +702,18 @@ typedef struct _SP_INF_INFORMATION {
 } SP_INF_INFORMATION, *PSP_INF_INFORMATION;
 typedef struct _SP_INF_SIGNER_INFO_A {
   DWORD cbSize;
-  CHAR CatalogFile;
-  CHAR DigitalSigner;
-  CHAR DigitalSignerVersion;
+  CHAR CatalogFile[MAX_PATH];
+  CHAR DigitalSigner[MAX_PATH];
+  CHAR DigitalSignerVersion[MAX_PATH];
 } SP_INF_SIGNER_INFO_A, *PSP_INF_SIGNER_INFO_A;
 typedef struct _SP_INF_SIGNER_INFO_W {
   DWORD cbSize;
-  WCHAR CatalogFile;
-  WCHAR DigitalSigner;
-  WCHAR DigitalSignerVersion;
+  WCHAR CatalogFile[MAX_PATH];
+  WCHAR DigitalSigner[MAX_PATH];
+  WCHAR DigitalSignerVersion[MAX_PATH];
 } SP_INF_SIGNER_INFO_W, *PSP_INF_SIGNER_INFO_W;
+typedef SP_INF_SIGNER_INFO_A SP_INF_SIGNER_INFO_INF_A, *PSP_INF_SIGNER_INFO_INF_A;
+typedef SP_INF_SIGNER_INFO_W SP_INF_SIGNER_INFO_INF_W, *PSP_INF_SIGNER_INFO_INF_W;
 
 #define SIGNERSCORE_UNKNOWN         0xFF000000
 #define SIGNERSCORE_W9X_SUSPECT     0xC0000000
@@ -2500,6 +2502,22 @@ SetupUninstallOEMInfA(
   _In_ PCSTR InfFileName,
   _In_ DWORD Flags,
   _In_ PVOID Reserved);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupVerifyInfFileA(
+  _In_ PCSTR InfName,
+  _In_opt_ PSP_ALTPLATFORM_INFO AltPlatformInfo,
+  _Inout_ PSP_INF_SIGNER_INFO_INF_A InfSignerInfo);
+
+WINSETUPAPI
+BOOL
+WINAPI
+SetupVerifyInfFileW(
+  _In_ PCWSTR InfName,
+  _In_opt_ PSP_ALTPLATFORM_INFO AltPlatformInfo,
+  _Inout_ PSP_INF_SIGNER_INFO_INF_W InfSignerInfo);
 
 WINSETUPAPI
 BOOL
