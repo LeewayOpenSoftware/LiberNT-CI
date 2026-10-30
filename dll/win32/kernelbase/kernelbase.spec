@@ -1357,6 +1357,7 @@
 @ stdcall VerFindFileW(long wstr wstr wstr ptr ptr ptr ptr)
 @ stdcall VerLanguageNameA(long str long) kernel32.VerLanguageNameA
 @ stdcall VerLanguageNameW(long wstr long) kernel32.VerLanguageNameW
+@ stdcall VerifyScripts(long wstr long wstr long)
 @ stdcall VerQueryValueA(ptr str ptr ptr)
 @ stdcall VerQueryValueW(ptr wstr ptr ptr)
 @ stdcall PrefetchVirtualMemory(ptr ptr ptr long) kernel32.PrefetchVirtualMemory

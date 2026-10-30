@@ -28,6 +28,7 @@ extern void func_GetCurrentThreadStackLimits(void);
 extern void func_GetDriveType(void);
 extern void func_FindNLSString(void);
 extern void func_CompatLinks(void);
+extern void func_VerifyScripts(void);
 extern void func_GetDurationFormat(void);
 extern void func_TimeZoneEx(void);
 extern void func_IsValidLocaleName(void);
@@ -126,6 +127,7 @@ const struct test winetest_testlist[] =
     { "GetDriveType",                func_GetDriveType },
     { "FindNLSString", func_FindNLSString },
     { "CompatLinks", func_CompatLinks },
+    { "VerifyScripts", func_VerifyScripts },
     { "GetDurationFormat", func_GetDurationFormat },
     { "TimeZoneEx", func_TimeZoneEx },
     { "IsValidLocaleName", func_IsValidLocaleName },
