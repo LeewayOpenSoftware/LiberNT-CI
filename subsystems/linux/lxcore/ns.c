@@ -301,6 +301,7 @@ LxNsDereference(
             LxMqNamespaceCleanup(Ns);
             break;
         case LxNsUser:
+            LxKeyUserNsRelease(Ns);
             LxFree(Ns->User.Maps[0]);
             LxFree(Ns->User.Maps[1]);
             break;

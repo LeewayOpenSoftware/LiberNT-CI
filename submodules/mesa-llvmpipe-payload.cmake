@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # SPDX-FileCopyrightText: 2026 Ahmed ARIF <arif.ing@outlook.com>
 # Prebuilt LLVMpipe OpenGL and Lavapipe Vulkan ICDs from the LiberNT release payload.
+# The second stage installs them from the release MSI; the build only catalogs them.
 
 if(NOT ARCH MATCHES "^(amd64|arm64)$")
     message(FATAL_ERROR "The LLVMpipe payload exists for amd64 and arm64 only.")
@@ -66,19 +67,7 @@ foreach(_payload_file mesa_llvmpipe.dll vulkan_lvp.dll lvp_icd.json)
     if(NOT EXISTS "${_payload_extract}/system32/${_payload_file}")
         message(FATAL_ERROR "The LLVMpipe payload lacks system32/${_payload_file}")
     endif()
-    add_cd_file(FILE "${_payload_extract}/system32/${_payload_file}" DESTINATION reactos/system32 FOR all)
 endforeach()
 set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_FILES
     "${_payload_extract}/system32/mesa_llvmpipe.dll" "${_payload_extract}/system32/vulkan_lvp.dll")
-file(GLOB_RECURSE _payload_licenses RELATIVE "${_payload_extract}/licenses" "${_payload_extract}/licenses/*")
-foreach(_payload_license IN LISTS _payload_licenses)
-    get_filename_component(_payload_license_dir "${_payload_license}" DIRECTORY)
-    set(_payload_license_dest reactos/3rdParty/mesa-llvmpipe)
-    if(_payload_license_dir)
-        string(APPEND _payload_license_dest "/${_payload_license_dir}")
-    endif()
-    add_cd_file(FILE "${_payload_extract}/licenses/${_payload_license}"
-        DESTINATION ${_payload_license_dest} FOR all)
-endforeach()
-add_registry_inf(${CMAKE_CURRENT_LIST_DIR}/mesa-llvmpipe-payload.inf)
 message(STATUS "LLVMpipe/Lavapipe payload ${MESA_LLVMPIPE_PAYLOAD_RELEASE} for ${ARCH} from ${_payload_zip}")

@@ -64,6 +64,7 @@
 
 #include <ndk/inbvfuncs.h>
 #include <ntpoapi.h>
+#include <wdmguid.h>
 #include <drivers/acpi/acpi.h>
 #include <drivers/acpi/acpisystem.h>
 #include <reactos/arc/arc.h>
@@ -11789,6 +11790,40 @@ DxgkpValidatePostDisplayInformation(
     return TRUE;
 }
 
+static BOOLEAN
+DxgkpIsPostDisplayDevice(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    LOADER_PARAMETER_FRAMEBUFFER Fb;
+    ULONG BytesPerPixel;
+    ULONG ResultLength;
+    GUID BusType;
+    BOOLEAN AcpiEnumerated;
+
+    PAGED_CODE();
+
+    if (Adapter->IsBasicDisplayFallback ||
+        !InbvHasValidGopFrameBuffer() ||
+        !InbvGetGopFrameBufferInfo(&Fb))
+    {
+        return TRUE;
+    }
+
+    BytesPerPixel = (Fb.PixelFormat < 8) ? 4 : (Fb.PixelFormat + 7) / 8;
+    AcpiEnumerated = Adapter->PhysicalDeviceObject != NULL &&
+                     NT_SUCCESS(IoGetDeviceProperty(Adapter->PhysicalDeviceObject,
+                                                    DevicePropertyBusTypeGuid,
+                                                    sizeof(BusType),
+                                                    &BusType,
+                                                    &ResultLength)) &&
+                     IsEqualGUID(&BusType, &GUID_BUS_TYPE_ACPI);
+    /* TODO: honour GraphicsDrivers\DisableAutoAcpiPostDeivce for ACPI-enumerated adapters */
+    return DxgkAdapterIsPostDevice(Adapter->TranslatedResources,
+                                   Fb.FrameBufferBase,
+                                   (ULONGLONG)Fb.PixelsPerScanLine * BytesPerPixel * Fb.VerticalResolution,
+                                   AcpiEnumerated);
+}
+
 /*
  * DxgkpAcquirePostDisplayOwnership
  *
@@ -11840,6 +11875,17 @@ DxgkpAcquirePostDisplayOwnership(
     RtlZeroMemory(DisplayInformation, sizeof(*DisplayInformation));
     RtlZeroMemory(&ReleasedDisplayInformation,
                   sizeof(ReleasedDisplayInformation));
+
+    if (!DxgkpIsPostDisplayDevice(Claimant))
+    {
+        DXGKRNL_INFO("DxgkCbAcquirePostDisplayOwnership: adapter %p is not the "
+                     "POST device; it gets an empty descriptor\n",
+                     Claimant);
+        DisplayInformation->TargetId = D3DDDI_ID_UNINITIALIZED;
+        ExReleaseRundownProtection(&Claimant->ReverseCallbackRundownRef);
+        return STATUS_SUCCESS;
+    }
+
     (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex, Executive, KernelMode, FALSE, NULL);
 
     /*

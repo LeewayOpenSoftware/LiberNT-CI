@@ -72,6 +72,7 @@ list(APPEND KMTEST_DRV_SOURCE
 
     directx/DxgkDeviceWork.c
     directx/DxgkHotPlugWork.c
+    directx/DxgkChildDescriptor.c
     directx/DxgkPostDisplayHandoff.c
     directx/DxgkGpuVaAddress.c
     directx/DxgkGpuVaPageTable.c
@@ -294,6 +295,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/gpuva_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/adapter_map_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/adapter_start_core.c
+    ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/child_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/fence_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/node_stats_core.c
     ${REACTOS_SOURCE_DIR}/drivers/directx/dxgkrnl/dma_core.c

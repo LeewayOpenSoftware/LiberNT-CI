@@ -9,17 +9,26 @@
 #include <wdf.h>
 #include <netadaptercx.h>
 #include <net/virtualaddress.h>
+#ifdef NETCXLOOP_WIFI
+#include <wificx.h>
+#endif
 
 #define LOOP_MTU 1500
 #define LOOP_MAX_FRAME (LOOP_MTU + 14)
 #define LOOP_PEER_FRAMES 64
 #define LOOP_LINK_SPEED 1000000000ULL
 
+#ifdef NETCXLOOP_WIFI
+static const UCHAR LoopAdapterAddress[6] = { 0x02, 0x00, 0x4C, 0x4F, 0x4F, 0x57 };
+#else
 static const UCHAR LoopAdapterAddress[6] = { 0x02, 0x00, 0x4C, 0x4F, 0x4F, 0x50 };
+#endif
 static const UCHAR LoopPeerAddress[6] = { 0x02, 0x00, 0x4C, 0x4F, 0x4F, 0x51 };
+#ifndef NETCXLOOP_WIFI
 static const UCHAR LoopLightweightAddress[6] = { 0x02, 0x00, 0x4C, 0x4F, 0x4F, 0x52 };
 static const GUID LoopLightweightInterface = { 0x4c4f4f50, 0x4c57, 0x4d00, { 0x80, 0x00, 0x4c, 0x4f, 0x4f, 0x50, 0x4c, 0x57 } };
 static NETADAPTER LoopLightweightAdapter;
+#endif
 
 typedef struct _LOOP_FRAME
 {
@@ -528,21 +537,32 @@ LoopStartAdapter(
 
 static
 NTSTATUS
-LoopCreateAdapter(
+LoopCreateNetAdapter(
     _In_ NETADAPTER_INIT *AdapterInit,
-    _In_reads_(6) UCHAR const *LinkLayerAddress,
-    _Out_opt_ NETADAPTER *Created)
+    _Out_ NETADAPTER *NetAdapter)
 {
     NET_ADAPTER_DATAPATH_CALLBACKS Datapath;
     WDF_OBJECT_ATTRIBUTES Attributes;
-    NETADAPTER NetAdapter;
-    NTSTATUS Status;
 
     NET_ADAPTER_DATAPATH_CALLBACKS_INIT(&Datapath, LoopCreateTxQueue, LoopCreateRxQueue);
     NetAdapterInitSetDatapathCallbacks(AdapterInit, &Datapath);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, LOOP_ADAPTER);
-    Status = NetAdapterCreate(AdapterInit, &Attributes, &NetAdapter);
+    return NetAdapterCreate(AdapterInit, &Attributes, NetAdapter);
+}
+
+#ifndef NETCXLOOP_WIFI
+static
+NTSTATUS
+LoopCreateAdapter(
+    _In_ NETADAPTER_INIT *AdapterInit,
+    _In_reads_(6) UCHAR const *LinkLayerAddress,
+    _Out_opt_ NETADAPTER *Created)
+{
+    NETADAPTER NetAdapter;
+    NTSTATUS Status;
+
+    Status = LoopCreateNetAdapter(AdapterInit, &NetAdapter);
     NetAdapterInitFree(AdapterInit);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -552,6 +572,103 @@ LoopCreateAdapter(
         *Created = NetAdapter;
     return Status;
 }
+#endif
+
+#ifdef NETCXLOOP_WIFI
+static
+NTSTATUS
+LoopWifiPrepareHardware(
+    _In_ WDFDEVICE Device,
+    _In_ WDFCMRESLIST ResourcesRaw,
+    _In_ WDFCMRESLIST ResourcesTranslated)
+{
+    WIFI_DEVICE_CAPABILITIES Capabilities;
+
+    UNREFERENCED_PARAMETER(ResourcesRaw);
+    UNREFERENCED_PARAMETER(ResourcesTranslated);
+
+    WIFI_DEVICE_CAPABILITIES_INIT(&Capabilities);
+    Capabilities.HardwareRadioState = TRUE;
+    Capabilities.SoftwareRadioState = TRUE;
+    Capabilities.NumRxStreams = 1;
+    Capabilities.NumTxStreams = 1;
+    Capabilities.NumRadios = 1;
+    return WifiDeviceSetDeviceCapabilities(Device, &Capabilities);
+}
+
+static
+NTSTATUS
+LoopWifiCreateAdapter(
+    _In_ WDFDEVICE Device,
+    _Inout_ NETADAPTER_INIT *AdapterInit)
+{
+    NETADAPTER NetAdapter;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Device);
+
+    Status = LoopCreateNetAdapter(AdapterInit, &NetAdapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = WifiAdapterInitialize(NetAdapter);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return LoopStartAdapter(NetAdapter, LoopAdapterAddress);
+}
+
+static
+NTSTATUS
+LoopWifiCreateWifiDirectDevice(
+    _In_ WDFDEVICE Device,
+    _Inout_ WIFIDIRECT_DEVICE_INIT *WifiDirectDeviceInit)
+{
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(WifiDirectDeviceInit);
+    return STATUS_NOT_SUPPORTED;
+}
+
+static
+VOID
+LoopWifiSendCommand(
+    _In_ WDFDEVICE Device,
+    _In_ WIFIREQUEST Request)
+{
+    WDI_MESSAGE_HEADER *Header;
+    WDI_MESSAGE_HEADER *Completion;
+    WDFMEMORY Memory;
+    UINT InputLength = 0;
+    UINT OutputLength = 0;
+    UINT16 MessageId;
+    UINT32 TransactionId;
+    WDI_PORT_ID PortId;
+
+    Header = (WDI_MESSAGE_HEADER *)WifiRequestGetInOutBuffer(Request, &InputLength, &OutputLength);
+    MessageId = WifiRequestGetMessageId(Request);
+    TransactionId = Header->TransactionId;
+    PortId = Header->PortId;
+    DbgPrint("WIFILOOP: command %u port %u transaction %u length %u\n", MessageId, PortId, TransactionId, InputLength);
+
+    Header->Status = NDIS_STATUS_SUCCESS;
+    WifiRequestComplete(Request, STATUS_SUCCESS, sizeof(WDI_MESSAGE_HEADER));
+
+    if (MessageId != WDI_TASK_SET_RADIO_STATE)
+        return;
+
+    if (!NT_SUCCESS(WdfMemoryCreate(WDF_NO_OBJECT_ATTRIBUTES, NonPagedPoolNx, 'LfiW',
+                                    sizeof(WDI_MESSAGE_HEADER), &Memory, (PVOID *)&Completion)))
+    {
+        return;
+    }
+    RtlZeroMemory(Completion, sizeof(*Completion));
+    Completion->PortId = PortId;
+    Completion->TransactionId = TransactionId;
+    Completion->Status = NDIS_STATUS_SUCCESS;
+    WifiDeviceReceiveIndication(Device, MessageId, Memory);
+    WdfObjectDelete(Memory);
+}
+#endif
 
 static
 NTSTATUS
@@ -560,7 +677,12 @@ LoopDeviceAdd(
     _Inout_ PWDFDEVICE_INIT DeviceInit)
 {
     WDFDEVICE Device;
+#ifdef NETCXLOOP_WIFI
+    WDF_PNPPOWER_EVENT_CALLBACKS PnpPower;
+    WIFI_DEVICE_CONFIG WifiConfig;
+#else
     NETADAPTER_INIT *AdapterInit;
+#endif
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Driver);
@@ -569,15 +691,31 @@ LoopDeviceAdd(
     if (!NT_SUCCESS(Status))
         return Status;
 
+#ifdef NETCXLOOP_WIFI
+    Status = WifiDeviceInitConfig(DeviceInit);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    WDF_PNPPOWER_EVENT_CALLBACKS_INIT(&PnpPower);
+    PnpPower.EvtDevicePrepareHardware = LoopWifiPrepareHardware;
+    WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &PnpPower);
+#endif
+
     Status = WdfDeviceCreate(&DeviceInit, WDF_NO_OBJECT_ATTRIBUTES, &Device);
     if (!NT_SUCCESS(Status))
         return Status;
 
+#ifdef NETCXLOOP_WIFI
+    WIFI_DEVICE_CONFIG_INIT(&WifiConfig, WDI_VERSION_LATEST, LoopWifiSendCommand,
+                            LoopWifiCreateAdapter, LoopWifiCreateWifiDirectDevice);
+    return WifiDeviceInitialize(Device, &WifiConfig);
+#else
     AdapterInit = NetAdapterInitAllocate(Device);
     if (!AdapterInit)
         return STATUS_INSUFFICIENT_RESOURCES;
 
     return LoopCreateAdapter(AdapterInit, LoopAdapterAddress, NULL);
+#endif
 }
 
 static
@@ -587,11 +725,13 @@ LoopDriverUnload(
 {
     UNREFERENCED_PARAMETER(Driver);
 
+#ifndef NETCXLOOP_WIFI
     if (LoopLightweightAdapter)
     {
         NetAdapterStop(LoopLightweightAdapter);
         LoopLightweightAdapter = NULL;
     }
+#endif
 }
 
 extern "C"
@@ -602,8 +742,9 @@ DriverEntry(
     _In_ PUNICODE_STRING RegistryPath)
 {
     WDF_DRIVER_CONFIG Config;
-
+#ifndef NETCXLOOP_WIFI
     NETADAPTER_INIT *AdapterInit;
+#endif
     NTSTATUS Status;
 
     WDF_DRIVER_CONFIG_INIT(&Config, LoopDeviceAdd);
@@ -612,8 +753,10 @@ DriverEntry(
     if (!NT_SUCCESS(Status))
         return Status;
 
+#ifndef NETCXLOOP_WIFI
     AdapterInit = NetAdapterLightweightInitAllocate(&LoopLightweightInterface);
     if (AdapterInit)
         (VOID)LoopCreateAdapter(AdapterInit, LoopLightweightAddress, &LoopLightweightAdapter);
+#endif
     return STATUS_SUCCESS;
 }

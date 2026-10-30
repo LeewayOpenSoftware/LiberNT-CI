@@ -2301,7 +2301,15 @@ NtfsFlushFileMetadata(_In_ PVolumeContextBlock VolCB,
     }
 
     if (Length)
+    {
+        Status = NtfsCommitFileRange(VolCB,
+                                     FileCB,
+                                     0,
+                                     (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart);
+        if (!NT_SUCCESS(Status))
+            return Status;
         return NtfsDiskFlushRangeKm(VolCB->StorageDevice, Offset, Length);
+    }
 
     Status = NtfsDiskFlushVolumeKm(VolCB->StorageDevice);
     if (NT_SUCCESS(Status) && Allocation)

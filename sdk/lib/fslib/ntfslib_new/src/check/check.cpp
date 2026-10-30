@@ -785,7 +785,7 @@ VolumeCheck::RelinkOrphans()
             NameBuffer[Name->NameLength] = 0;
             if (NT_SUCCESS(V->MFT->GetFileRecordInDirectory(ParentFile, NameBuffer, &Found)))
             {
-                BOOLEAN Same = Found->Header->MFTRecordNumber == (UINT32)Number;
+                BOOLEAN Same = Found->RecordNumber == (UINT32)Number;
 
                 delete Found;
                 if (Same)
@@ -1098,7 +1098,7 @@ VolumeCheck::RecoverLostFiles()
         return;
     }
     delete Root;
-    Event(NtfsCheckLostAndFound, Found->Header->MFTRecordNumber, FoundIndex);
+    Event(NtfsCheckLostAndFound, Found->RecordNumber, FoundIndex);
 
     for (ULONG Index = 0; Index < LostCount; Index++)
     {
@@ -1121,7 +1121,7 @@ VolumeCheck::RecoverLostFiles()
             PFileRecord Refreshed;
 
             FormatDecimal(GroupName + 3, Groups++, 4);
-            if (!NT_SUCCESS(V->MFT->GetFileRecord(Found->Header->MFTRecordNumber, &Refreshed)))
+            if (!NT_SUCCESS(V->MFT->GetFileRecord(Found->RecordNumber, &Refreshed)))
                 continue;
             if (!NT_SUCCESS(CreateLostDirectory(V, Refreshed, GroupName, 0, 0x80, &Target)))
             {
@@ -1153,8 +1153,8 @@ VolumeCheck::RecoverLostFiles()
 
             if (!NT_SUCCESS(V->MFT->GetFileRecord((ULONG)Lost[Other].Number, &File)))
                 continue;
-            if (!NT_SUCCESS(V->MFT->GetFileRecord(Target ? Target->Header->MFTRecordNumber
-                                                         : Found->Header->MFTRecordNumber,
+            if (!NT_SUCCESS(V->MFT->GetFileRecord(Target ? Target->RecordNumber
+                                                         : Found->RecordNumber,
                                                   &Parent)))
             {
                 delete File;
@@ -1168,7 +1168,7 @@ VolumeCheck::RecoverLostFiles()
                 Out->Errors--;
                 Out->RecoveredFiles++;
                 Event(NtfsCheckFileRecovered, Lost[Other].Number,
-                      Target ? Target->Header->MFTRecordNumber : Found->Header->MFTRecordNumber);
+                      Target ? Target->RecordNumber : Found->RecordNumber);
             }
         }
         delete Target;

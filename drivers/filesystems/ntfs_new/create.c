@@ -427,8 +427,7 @@ NtfsCheckTraverseAccess(
             Mft, Name->Buffer, ParentLength, TRUE, &RemainingNameLength, &Directory);
         if (NT_SUCCESS(Status) &&
             (!Directory || RemainingNameLength != 0 ||
-             (((ULONGLONG)NtfsFileRecordGetHeader(Directory)->SequenceNumber << 48) |
-              NtfsFileRecordGetHeader(Directory)->MFTRecordNumber) != RelatedReference))
+             NtfsFileRecordGetReference(Directory) != RelatedReference))
         {
             Status = STATUS_OBJECT_NAME_NOT_FOUND;
         }
@@ -1140,9 +1139,7 @@ NtfsReferenceStreamContext(
     if (!Header || Header->SequenceNumber == 0)
         return NULL;
 
-    FileReference =
-        ((ULONGLONG)Header->SequenceNumber << 48) |
-        Header->MFTRecordNumber;
+    FileReference = NtfsFileRecordGetReference(File);
     RtlInitUnicodeString(&StreamName, RequestedStream);
     BaseType = Header->Flags & FR_IS_DIRECTORY ? TypeIndexAllocation : TypeData;
     RtlInitUnicodeString(&BaseStreamName, Header->Flags & FR_IS_DIRECTORY ? L"$I30" : NULL);
@@ -2002,10 +1999,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
             if (!RelatedFileCB->IsVolumeOpen && RelatedFileCB->FileRec)
             {
-                PFileRecordHeader RelatedHeader = NtfsFileRecordGetHeader(RelatedFileCB->FileRec);
-
-                TraverseRelatedReference = ((ULONGLONG)RelatedHeader->SequenceNumber << 48) |
-                                             RelatedHeader->MFTRecordNumber;
+                TraverseRelatedReference = NtfsFileRecordGetReference(RelatedFileCB->FileRec);
                 TraverseNameOffset = (FileObject->FileName.Length - RelativeNameLength) / sizeof(WCHAR);
             }
         }
@@ -2274,7 +2268,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     if (NT_SUCCESS(Status) &&
         NtfsFileRecordGetHeader(CurrentFile)->BaseFileRecord == 0)
     {
-        switch (NtfsFileRecordGetHeader(CurrentFile)->MFTRecordNumber)
+        switch (NtfsFileRecordGetNumber(CurrentFile))
         {
             case _LogFile:
             case _Bitmap:
@@ -2576,8 +2570,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                 LeafLength * sizeof(WCHAR);
                             NtfsFindTunnelName(
                                 VolCB,
-                                ((ULONGLONG)NtfsFileRecordGetHeader(VolCB->CachedLookupParent)->SequenceNumber << 48) |
-                                    NtfsFileRecordGetHeader(VolCB->CachedLookupParent)->MFTRecordNumber,
+                                NtfsFileRecordGetReference(VolCB->CachedLookupParent),
                                 &LeafString,
                                 &Tunnel);
                             Status =
@@ -2832,8 +2825,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 TRUE, &UnresolvedLength, &ResolvedFile);
         if (NT_SUCCESS(Status) &&
             (!ResolvedFile || UnresolvedLength != 0 ||
-             NtfsFileRecordGetHeader(ResolvedFile)->MFTRecordNumber !=
-                 NtfsFileRecordGetHeader(CurrentFile)->MFTRecordNumber ||
+             NtfsFileRecordGetNumber(ResolvedFile) !=
+                 NtfsFileRecordGetNumber(CurrentFile) ||
              NtfsFileRecordGetHeader(ResolvedFile)->SequenceNumber !=
                  NtfsFileRecordGetHeader(CurrentFile)->SequenceNumber))
         {
@@ -2856,9 +2849,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             !(NtfsFileRecordGetHeader(FileCB->FileRec)->Flags & FR_IS_DIRECTORY))
         {
             PNtfsFileRecord IdentityRecord = NULL;
-            PFileRecordHeader Header = NtfsFileRecordGetHeader(FileCB->FileRec);
-            ULONGLONG FileReference = ((ULONGLONG)Header->SequenceNumber << 48) |
-                                       Header->MFTRecordNumber;
+            ULONGLONG FileReference = NtfsFileRecordGetReference(FileCB->FileRec);
 
             Status = NtfsMasterFileTableGetFileRecordByReference(Mft, FileReference,
                                                                  &IdentityRecord);

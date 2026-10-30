@@ -1639,6 +1639,12 @@ SeCopyClientToken(
                                Level,
                                PreviousMode,
                                (PTOKEN*)NewToken);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = ObInsertObject(*NewToken, NULL, 0, 0, NULL, NULL);
+    if (!NT_SUCCESS(Status))
+        *NewToken = NULL;
 
     return Status;
 }
@@ -2367,8 +2373,8 @@ SeTokenCanImpersonate(
          * a less restricted client thus potentially triggering an elevation,
          * which is not what we want.
          */
-        if (SeTokenIsRestricted(ProcessToken) !=
-            SeTokenIsRestricted(TokenToImpersonate))
+        if (SeTokenIsRestricted(ProcessToken) &&
+            !SeTokenIsRestricted(TokenToImpersonate))
         {
             DPRINT1("Attempting to impersonate a less restricted client token, bail out!\n");
             CanImpersonate = FALSE;

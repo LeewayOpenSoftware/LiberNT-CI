@@ -283,6 +283,12 @@ NTSTATUS
 NtfsPersistPendingSize(_In_ struct _VolumeContextBlock* VolCB,
                        _In_ struct _FCB* FileCB);
 
+NTSTATUS
+NtfsCommitFileRange(_In_ struct _VolumeContextBlock* VolCB,
+                    _In_ struct _FCB* FileCB,
+                    _In_ ULONGLONG FileOffset,
+                    _In_ ULONGLONG Length);
+
 _Function_class_(IRP_MJ_QUERY_INFORMATION)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS

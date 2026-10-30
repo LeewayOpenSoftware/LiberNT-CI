@@ -143,7 +143,7 @@ Directory::FindNextFile(_In_  PFileRecord File,
     if (!File || !(File->Header->Flags & FR_IS_DIRECTORY))
         return STATUS_NOT_FOUND;
     CaseSensitive = File->IsCaseSensitiveDirectory();
-    DirectoryReference = MakeFileReference(File->Header);
+    DirectoryReference = MakeFileReference(File);
 
     ElementLength = PathElementLength(FileName);
     if (ElementLength == 0)

@@ -202,11 +202,16 @@ jobs:
     - name: Install host build tools
       shell: pwsh
       run: |
-        choco install -y --no-progress ninja winflexbison3
+        # The Chocolatey community feed intermittently answers 504; retry before giving up.
+        $tools = "C:\ProgramData\chocolatey\lib\winflexbison3\tools"
+        foreach ($attempt in 1..3) {
+            choco install -y --no-progress ninja winflexbison3
+            if (Test-Path "$tools\win_flex.exe") { break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (30 * $attempt) }
+        }
         python -m pip install --upgrade mako pyyaml packaging
         # LiberNT's CMake looks for flex/bison; winflexbison3 ships them as
         # win_flex/win_bison, so expose both names on PATH.
-        $tools = "C:\ProgramData\chocolatey\lib\winflexbison3\tools"
         if (-not (Test-Path "$tools\win_flex.exe")) { $tools = Split-Path (Get-Command win_flex).Source }
         Copy-Item "$tools\win_flex.exe" "$tools\flex.exe" -Force
         Copy-Item "$tools\win_bison.exe" "$tools\bison.exe" -Force

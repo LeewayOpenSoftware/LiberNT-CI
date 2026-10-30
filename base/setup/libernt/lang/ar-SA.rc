@@ -264,6 +264,7 @@ BEGIN
     IDS_APPSSUBTITLE "ينزّلها LiberNT من ناشريها ويثبّتها لكل الحسابات."
     IDS_APPS_COL_NAME "المكوّن"
     IDS_APPS_COL_SOURCE "مصدر التنزيل"
+    IDS_APPS_INSTALLED "%s (مثبت)"
     IDS_OOBE_FINISHTITLE "جارٍ تجهيز LiberNT"
     IDS_OOBE_FINISHSUBTITLE "قد يستغرق ذلك بضع دقائق. أبقِ الكمبيوتر قيد التشغيل."
     IDS_OOBE_APPLY_REGION "جارٍ تطبيق اللغة ولوحة المفاتيح..."

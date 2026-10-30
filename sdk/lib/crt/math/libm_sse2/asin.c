@@ -37,7 +37,7 @@ THE SOFTWARE.
 
 #include "libm_errno.h"
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) && (!defined(__REACTOS__) || !defined(asin))
 #pragma function(asin)
 #endif
 

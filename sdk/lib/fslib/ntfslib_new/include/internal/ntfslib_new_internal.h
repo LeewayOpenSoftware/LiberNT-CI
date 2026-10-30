@@ -432,10 +432,10 @@ typedef struct _DIRECTORY_KEY_BLOCK
 #define GetFRNFromFileRef(x) ((x) & 0xFFFFFFFFFFFF)
 #define GetSequenceFromFileRef(x) ((USHORT)((x) >> 48))
 
-// Compose a file reference from a record header (inverse of the two above)
-#define MakeFileReference(Header) \
-    (((ULONGLONG)(Header)->SequenceNumber << 48) | \
-     ((ULONGLONG)(Header)->MFTRecordNumber & 0xFFFFFFFFFFFFULL))
+// Compose a file reference from a parsed record (inverse of the two above)
+#define MakeFileReference(Record) \
+    (((ULONGLONG)(Record)->Header->SequenceNumber << 48) | \
+     ((ULONGLONG)(Record)->RecordNumber & 0xFFFFFFFFFFFFULL))
 
 #define GetNamePointer(x) (((char*)x) + (x->NameOffset))
 
@@ -831,11 +831,19 @@ private:
 struct FileRecordExtentCacheEntry;
 typedef struct FileRecordExtentCacheEntry *PFileRecordExtentCacheEntry;
 
+/* Only the NTFS 3.1 header carries the segment number; 3.0 records place the update sequence array there. */
+static inline BOOLEAN
+FileRecordHeaderHasNumber(_In_ const FileRecordHeader* Header)
+{
+    return Header->Header.UpdateSequenceOffset >= FIELD_OFFSET(FileRecordHeader, MFTRecordNumber) + sizeof(ULONG);
+}
+
 typedef class FileRecord
 {
 public:
     PFileRecordHeader Header;
     PUCHAR Data = NULL;
+    ULONG RecordNumber = MAXULONG;
 
     // ./filerecord.cpp
     FileRecord(_In_ PVolume DiskVolume,

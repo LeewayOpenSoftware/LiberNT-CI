@@ -332,6 +332,15 @@ LxArchSpecStoreBypassMode(VOID)
     return LX_SPEC_MODE_UNSUPPORTED;
 }
 
+/* FIXME: ghostwrite reads Not affected without checking for a T-Head core with xtheadvector. */
+PCSTR
+LxArchCpuVulnerability(
+    _In_ PCSTR Name)
+{
+    UNREFERENCED_PARAMETER(Name);
+    return "Not affected";
+}
+
 VOID
 LxArchApplySpeculation(
     _In_ PLX_THREAD Thread,
@@ -385,13 +394,15 @@ LxArchPtraceSetRegset(
     _Inout_ PULONG64 Tls,
     _Inout_ PLONG SyscallNr,
     _In_ ULONG Type,
-    _In_reads_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer)
+    _In_reads_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer,
+    _In_ ULONG Length)
 {
     PULONG64 Registers = (PULONG64)Buffer;
     ULONG Index;
 
     UNREFERENCED_PARAMETER(Tls);
     UNREFERENCED_PARAMETER(SyscallNr);
+    UNREFERENCED_PARAMETER(Length);
     switch (Type)
     {
         case LX_NT_PRSTATUS:
@@ -434,6 +445,21 @@ LxArchExecPersonality(
     return ((Personality & 0xFF) != LX_PER_LINUX32) ? (Personality & ~0xFFUL) : Personality;
 }
 
+VOID
+LxArchMmapRndBits(
+    _Out_ PULONG Minimum,
+    _Out_ PULONG Maximum)
+{
+    *Minimum = 18;
+    *Maximum = 24;
+}
+
+ULONG64
+LxArchStackRndMask(VOID)
+{
+    return 0x3FFFF;
+}
+
 LONG
 LxArchPtraceSyscallNumber(
     _In_ PKTRAP_FRAME TrapFrame,
@@ -461,6 +487,18 @@ LxArchClassifyFault(
     UNREFERENCED_PARAMETER(TrapFrame);
     UNREFERENCED_PARAMETER(Signal);
     UNREFERENCED_PARAMETER(Code);
+}
+
+BOOLEAN
+LxArchHardwareBreakpointHit(
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _Out_ PULONG64 Address)
+{
+    UNREFERENCED_PARAMETER(ExceptionRecord);
+    UNREFERENCED_PARAMETER(TrapFrame);
+    UNREFERENCED_PARAMETER(Address);
+    return FALSE;
 }
 
 BOOLEAN

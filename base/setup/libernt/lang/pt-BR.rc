@@ -264,6 +264,7 @@ BEGIN
     IDS_APPSSUBTITLE "O LiberNT os baixa dos fornecedores e os instala para todas as contas."
     IDS_APPS_COL_NAME "Componente"
     IDS_APPS_COL_SOURCE "Baixado de"
+    IDS_APPS_INSTALLED "%s (instalado)"
     IDS_OOBE_FINISHTITLE "Preparando o LiberNT"
     IDS_OOBE_FINISHSUBTITLE "Isso pode levar alguns minutos. Mantenha o computador ligado."
     IDS_OOBE_APPLY_REGION "Aplicando seu idioma e teclado..."

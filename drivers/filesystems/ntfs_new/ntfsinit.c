@@ -388,9 +388,8 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
             &RemainingNameLength, &NamedRecord);
         SameFile = NT_SUCCESS(DeleteStatus) &&
                    RemainingNameLength == 0 && NamedRecord &&
-                   ((((ULONGLONG)NtfsFileRecordGetHeader(NamedRecord)->SequenceNumber << 48) |
-                      NtfsFileRecordGetHeader(NamedRecord)->MFTRecordNumber) ==
-                     FileCB->StreamCB->FileReference);
+                   NtfsFileRecordGetReference(NamedRecord) ==
+                       FileCB->StreamCB->FileReference;
         if (SameFile)
             LastLink = NtfsFileRecordGetLinkCount(NamedRecord) <= 1;
         if (NamedRecord)
@@ -470,8 +469,8 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
                        &NamedRecord)) &&
                    RemainingNameLength == 0 &&
                    NamedRecord &&
-                   NtfsFileRecordGetHeader(NamedRecord)->MFTRecordNumber ==
-                       NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber &&
+                   NtfsFileRecordGetNumber(NamedRecord) ==
+                       NtfsFileRecordGetNumber(FileCB->FileRec) &&
                    NtfsFileRecordGetHeader(NamedRecord)->SequenceNumber ==
                        NtfsFileRecordGetHeader(FileCB->FileRec)->SequenceNumber;
         if (NamedRecord)

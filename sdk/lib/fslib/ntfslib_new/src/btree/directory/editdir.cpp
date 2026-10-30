@@ -2426,7 +2426,7 @@ Directory::AddFileToDirectory(
         !(DirectoryFile->Header->Flags &
           FR_IS_DIRECTORY) ||
         FileToAdd->ParentFileReference !=
-            MakeFileReference(DirectoryFile->Header))
+            MakeFileReference(DirectoryFile))
     {
         return STATUS_INVALID_PARAMETER;
     }

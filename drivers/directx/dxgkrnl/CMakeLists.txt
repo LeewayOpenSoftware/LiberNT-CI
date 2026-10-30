@@ -28,6 +28,7 @@ list(APPEND SOURCE
     acpievent.c
     adapter_map_core.c
     adapter_start_core.c
+    child_core.c
     legacy.c
     pnp.c
     vidmm.c

@@ -12,6 +12,7 @@ list(APPEND SOURCE
     hugetlb.c
     ipc.c
     kconfig.c
+    keys.c
     lxwin.c
     inet.c
     klog.c

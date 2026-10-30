@@ -65,9 +65,11 @@ set(COMPAT_RUNTIME_MODULES
     d3dxof
     dciman32
     devenum
+    devobj
     dinput
     dispex
     dpnhpast
+    drvstore
     dsrole
     dssenh
     dxdiagn
@@ -114,6 +116,7 @@ set(COMPAT_RUNTIME_MODULES
     imm32
     inetcomm
     inetmib1
+    input
     inseng
     iologmsg
     iphlpapi
@@ -167,6 +170,7 @@ set(COMPAT_RUNTIME_MODULES
     msacm32.drv
     msadp32.acm
     msafd
+    msasn1
     msauddecmft
     mscat32
     mscms
@@ -333,6 +337,7 @@ set(COMPAT_RUNTIME_MODULES
     wkscli
     wlanapi
     wldap32
+    wldp
     wmi
     wmiutils
     wmvcore

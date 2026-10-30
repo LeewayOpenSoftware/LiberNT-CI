@@ -810,6 +810,8 @@ KiArm64InitializeTrapFrame(
     TrapFrame->ExceptionActive = KEXCEPTION_ACTIVE_EXCEPTION_FRAME;
     TrapFrame->PreviousMode = (CHAR)KiArm64PreviousModeFromVector(Context->State.VectorId);
     TrapFrame->SavedIrql = (UCHAR)CurrentIrql;
+    if (TrapFrame->PreviousMode == UserMode)
+        KiArm64SaveUserDebugState(TrapFrame);
     Context->VfpState.Link = NULL;
     TrapFrame->VfpState = &Context->VfpState;
     TrapFrame->FaultAddress = Context->State.FaultAddress;

@@ -52,6 +52,9 @@ static const PCSTR LxKernelConfig[] =
     "CONFIG_NETLINK_DIAG=y",
     "CONFIG_INET=y",
     "CONFIG_IPV6=y",
+    "CONFIG_KEYS=y",
+    "CONFIG_PERSISTENT_KEYRINGS=y",
+    "CONFIG_BIG_KEYS=y",
 };
 
 static

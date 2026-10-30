@@ -264,6 +264,7 @@ BEGIN
     IDS_APPSSUBTITLE "LiberNT los descarga de sus editores y los instala para todas las cuentas."
     IDS_APPS_COL_NAME "Componente"
     IDS_APPS_COL_SOURCE "Descargado de"
+    IDS_APPS_INSTALLED "%s (instalado)"
     IDS_OOBE_FINISHTITLE "Preparando LiberNT"
     IDS_OOBE_FINISHSUBTITLE "Puede tardar unos minutos. Mantenga el equipo encendido."
     IDS_OOBE_APPLY_REGION "Aplicando su idioma y su teclado..."

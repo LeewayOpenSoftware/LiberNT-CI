@@ -638,7 +638,7 @@ FileRecord::ReplaceListedExtendedAttributes(
         OldOwnerReference =
             ((ULONGLONG)OldOwner->
                 Header->SequenceNumber << 48) |
-            OldOwner->Header->MFTRecordNumber;
+            OldOwner->RecordNumber;
     }
     else if (FinalLength == 0)
     {
@@ -853,7 +853,7 @@ FileRecord::ReplaceListedExtendedAttributes(
 
     BaseFileReference =
         ((ULONGLONG)Header->SequenceNumber << 48) |
-        Header->MFTRecordNumber;
+        RecordNumber;
     if (FinalLength != 0)
     {
         Status = DiskVolume->MFT->
@@ -956,7 +956,7 @@ FileRecord::ReplaceListedExtendedAttributes(
         NewOwnerReference =
             ((ULONGLONG)NewOwner->
                 Header->SequenceNumber << 48) |
-            NewOwner->Header->MFTRecordNumber;
+            NewOwner->RecordNumber;
 
         NewList =
             new(PagedPool, TAG_NTFS)

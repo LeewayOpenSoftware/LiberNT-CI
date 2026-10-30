@@ -348,6 +348,14 @@ PFileRecordHeader
 NtfsFileRecordGetHeader(
     _In_ NtfsFileRecord *FileRecord);
 
+ULONG
+NtfsFileRecordGetNumber(
+    _In_ NtfsFileRecord *FileRecord);
+
+ULONGLONG
+NtfsFileRecordGetReference(
+    _In_ NtfsFileRecord *FileRecord);
+
 PAttribute
 NtfsFileRecordGetAttribute(
     _In_ NtfsFileRecord *FileRecord,

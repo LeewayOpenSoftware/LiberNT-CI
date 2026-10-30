@@ -117,9 +117,105 @@ LxVmAllocate(
     return Status;
 }
 
+static volatile LONG LxRandomizeVaSpaceValue = 2;
+static volatile LONG LxMmapRndBitsValue;
+
+#define LX_STACK_GUARD_GAP (256 * LX_PAGE_SIZE)
+
+static
+ULONG64
+LxMmUserTop(VOID)
+{
+    return LX_ALIGN_DOWN((ULONG64)(ULONG_PTR)MM_HIGHEST_USER_ADDRESS + 1, LX_ALLOC_GRANULARITY);
+}
+
+static
+ULONG64
+LxMmDefaultTop(VOID)
+{
+    return LxMmUserTop() - LX_MMAP_GAP;
+}
+
+LONG
+LxMmRandomizeVaSpace(VOID)
+{
+    return ReadNoFence(&LxRandomizeVaSpaceValue);
+}
+
+VOID
+LxMmSetRandomizeVaSpace(
+    _In_ LONG Value)
+{
+    InterlockedExchange(&LxRandomizeVaSpaceValue, Value);
+}
+
+ULONG
+LxMmRndBits(VOID)
+{
+    ULONG Minimum, Maximum;
+    LONG Bits = ReadNoFence(&LxMmapRndBitsValue);
+
+    LxArchMmapRndBits(&Minimum, &Maximum);
+    return (Bits != 0) ? (ULONG)Bits : Minimum;
+}
+
+LONG
+LxMmSetRndBits(
+    _In_ ULONG Bits)
+{
+    ULONG Minimum, Maximum;
+
+    LxArchMmapRndBits(&Minimum, &Maximum);
+    if ((Bits < Minimum) || (Bits > Maximum))
+        return -LX_EINVAL;
+    InterlockedExchange(&LxMmapRndBitsValue, (LONG)Bits);
+    return 0;
+}
+
+/* FIXME: NT places views on 64 KB boundaries, so every random offset loses its four low page bits. */
+ULONG64
+LxMmRandomOffset(VOID)
+{
+    ULONG64 Value = 0;
+
+    LxFillRandom((PUCHAR)&Value, sizeof(Value));
+    return LX_ALIGN_DOWN((Value & ((1ULL << LxMmRndBits()) - 1)) * LX_PAGE_SIZE, LX_ALLOC_GRANULARITY);
+}
+
+ULONG64
+LxMmRandomizeBrk(
+    _In_ ULONG64 Base)
+{
+    ULONG64 Value = 0;
+
+    LxFillRandom((PUCHAR)&Value, sizeof(Value));
+    return Base + LX_ALIGN_DOWN((Value % (1024ULL * 1024 * 1024 / LX_PAGE_SIZE)) * LX_PAGE_SIZE, LX_ALLOC_GRANULARITY);
+}
+
+BOOLEAN
+LxMmPickLayout(
+    _Inout_ PLX_PROCESS Process)
+{
+    BOOLEAN Randomize = (LxMmRandomizeVaSpace() != 0) && !(Process->Personality & LX_PER_ADDR_NO_RANDOMIZE);
+    ULONG64 Top = LxMmUserTop(), Gap = LX_STACK_SIZE + LX_STACK_GUARD_GAP, StackRandom = 0, Value = 0;
+
+    if (Randomize)
+    {
+        LxFillRandom((PUCHAR)&Value, sizeof(Value));
+        StackRandom = LX_ALIGN_DOWN((Value & LxArchStackRndMask()) * LX_PAGE_SIZE, LX_ALLOC_GRANULARITY);
+        Gap += LxArchStackRndMask() * LX_PAGE_SIZE;
+    }
+    if (Gap < LX_MMAP_GAP)
+        Gap = LX_MMAP_GAP;
+    Process->StackTop = Top - StackRandom;
+    Process->MmapTop = LX_ALIGN_DOWN(Top - Gap - (Randomize ? LxMmRandomOffset() : 0), LX_ALLOC_GRANULARITY);
+    return Randomize;
+}
+
 static
 NTSTATUS
-LxVmReserveUnmapped(
+LxVmReserveBelow(
+    _In_ ULONG64 Top,
     _Out_ PULONG64 Base,
     _In_ ULONG64 Size)
 {
@@ -131,9 +227,7 @@ LxVmReserveUnmapped(
 
     RtlZeroMemory(&Requirements, sizeof(Requirements));
     Requirements.LowestStartingAddress = (PVOID)(ULONG_PTR)LX_MMAP_MIN_ADDR;
-    Requirements.HighestEndingAddress =
-        (PVOID)(ULONG_PTR)(LX_ALIGN_DOWN((ULONG64)(ULONG_PTR)MM_HIGHEST_USER_ADDRESS + 1 - LX_MMAP_GAP,
-                                         LX_ALLOC_GRANULARITY) - 1);
+    Requirements.HighestEndingAddress = (PVOID)(ULONG_PTR)(Top - 1);
     RtlZeroMemory(&Parameter, sizeof(Parameter));
     Parameter.Type = MemExtendedParameterAddressRequirements;
     Parameter.Pointer = &Requirements;
@@ -142,6 +236,30 @@ LxVmReserveUnmapped(
     if (NT_SUCCESS(Status))
         *Base = (ULONG64)(ULONG_PTR)Address;
     return Status;
+}
+
+static
+NTSTATUS
+LxVmReserveUnmapped(
+    _In_ PLX_PROCESS Process,
+    _Out_ PULONG64 Base,
+    _In_ ULONG64 Size)
+{
+    ULONG64 Top = Process->Mm->MmapTop;
+
+    return LxVmReserveBelow((Top != 0) ? Top : LxMmDefaultTop(), Base, Size);
+}
+
+static
+NTSTATUS
+LxVmReserveStack(
+    _In_ PLX_PROCESS Process,
+    _Out_ PULONG64 Base,
+    _In_ ULONG64 Size)
+{
+    ULONG64 Top = Process->Mm->StackTop;
+
+    return LxVmReserveBelow((Top != 0) ? Top : LxMmUserTop(), Base, Size);
 }
 
 static
@@ -2429,6 +2547,7 @@ LxVmIsFree(
 static
 LONG
 LxMmMapView(
+    _In_ PLX_PROCESS Process,
     _In_ ULONG64 Address,
     _In_ ULONG64 Length,
     _In_ ULONG Prot,
@@ -2494,7 +2613,7 @@ LxMmMapView(
         {
             ULONG64 Probe = 0;
 
-            if (!NT_SUCCESS(LxVmReserveUnmapped(&Probe, Region)))
+            if (!NT_SUCCESS(LxVmReserveUnmapped(Process, &Probe, Region)))
                 return -LX_ENOMEM;
             LxVmFree(Probe, 0, MEM_RELEASE);
             Base = (PVOID)(ULONG_PTR)Probe;
@@ -2602,7 +2721,7 @@ LxMmMapSection(
     {
         ULONG64 Probe = 0;
 
-        if (NT_SUCCESS(LxVmReserveUnmapped(&Probe, LX_ALIGN_UP(Length, LX_ALLOC_GRANULARITY))))
+        if (NT_SUCCESS(LxVmReserveUnmapped(Process, &Probe, LX_ALIGN_UP(Length, LX_ALLOC_GRANULARITY))))
         {
             LxVmFree(Probe, 0, MEM_RELEASE);
             Base = (PVOID)(ULONG_PTR)Probe;
@@ -2704,7 +2823,7 @@ LxMmMapCow(
         else
         {
             Probe = 0;
-            if (!NT_SUCCESS(LxVmReserveUnmapped(&Probe, LX_ALIGN_UP(Delta + Length, LX_ALLOC_GRANULARITY))))
+            if (!NT_SUCCESS(LxVmReserveUnmapped(Process, &Probe, LX_ALIGN_UP(Delta + Length, LX_ALLOC_GRANULARITY))))
                 return -LX_ENOMEM;
             LxVmFree(Probe, 0, MEM_RELEASE);
             Base = Probe;
@@ -2775,7 +2894,7 @@ LxMmFindHugeRange(
         *Base = Hint;
         return 0;
     }
-    if ((Length + PageSize < Length) || !NT_SUCCESS(LxVmReserveUnmapped(&Probe, Length + PageSize)))
+    if ((Length + PageSize < Length) || !NT_SUCCESS(LxVmReserveUnmapped(Process, &Probe, Length + PageSize)))
         return -LX_ENOMEM;
     LxVmFree(Probe, 0, MEM_RELEASE);
     Aligned = LX_ALIGN_UP(Probe, PageSize);
@@ -2990,7 +3109,7 @@ LxMmMap(
         if ((Error == 0) && Fixed && !LxVmIsFree(Address, Address + Length))
             Error = LxMmClearForView(Process, Address, Address + Length);
         if (Error == 0)
-            Error = LxMmMapView(Address, Length, Prot, Fixed, File, Offset, &Base, &Section, &GrowBase);
+            Error = LxMmMapView(Process, Address, Length, Prot, Fixed, File, Offset, &Base, &Section, &GrowBase);
         if (Error == 0)
         {
             Error = LxVmaInsertView(Process, Base, Base + Length, Prot, VmaFlags | LX_VMA_VIEW, File, Offset, Section,
@@ -3060,9 +3179,8 @@ LxMmMap(
         if (Base == 0)
         {
             if ((Flags & LX_VMA_STACK) ?
-                NT_SUCCESS(LxVmAllocate(&Base, LX_ALIGN_UP(Length, LX_ALLOC_GRANULARITY), MEM_RESERVE | MEM_TOP_DOWN,
-                                        PAGE_NOACCESS)) :
-                NT_SUCCESS(LxVmReserveUnmapped(&Base, LX_ALIGN_UP(Length, LX_ALLOC_GRANULARITY))))
+                NT_SUCCESS(LxVmReserveStack(Process, &Base, LX_ALIGN_UP(Length, LX_ALLOC_GRANULARITY))) :
+                NT_SUCCESS(LxVmReserveUnmapped(Process, &Base, LX_ALIGN_UP(Length, LX_ALLOC_GRANULARITY))))
             {
                 Fresh = TRUE;
             }
@@ -3127,6 +3245,14 @@ LxMmUnmap(
     return Error;
 }
 
+static
+BOOLEAN
+LxVmaNoExec(
+    _In_ PLX_VMA Vma)
+{
+    return (Vma->File != NULL) && (Vma->File->Mount != NULL) && ((Vma->File->Mount->Flags & LX_MS_NOEXEC) != 0);
+}
+
 LONG64
 LxMmProtect(
     _In_ PLX_PROCESS Process,
@@ -3152,14 +3278,14 @@ LxMmProtect(
 
     LxMmLock(Process);
     Error = LxVmaCovers(Process, Address, End) ? 0 : -LX_ENOMEM;
-    for (Entry = LxVmaEntryAbove(Process, Address); (Error == 0) && (Prot & LX_PROT_WRITE) && (Entry != &Process->Vmas);
-         Entry = Entry->Flink)
+    for (Entry = LxVmaEntryAbove(Process, Address);
+         (Error == 0) && (Prot & (LX_PROT_WRITE | LX_PROT_EXEC)) && (Entry != &Process->Vmas); Entry = Entry->Flink)
     {
         PLX_VMA Vma = CONTAINING_RECORD(Entry, LX_VMA, Link);
 
         if (Vma->Start >= End)
             break;
-        if (Vma->Flags & LX_VMA_NOMAYWRITE)
+        if (((Prot & LX_PROT_WRITE) && (Vma->Flags & LX_VMA_NOMAYWRITE)) || ((Prot & LX_PROT_EXEC) && LxVmaNoExec(Vma)))
             Error = -LX_EACCES;
     }
     if (Error == 0)
@@ -3472,6 +3598,10 @@ LX_SYSCALL(LxSysMmap)
     {
         Result = -LX_EACCES;
     }
+    else if ((File != NULL) && (Prot & LX_PROT_EXEC) && (File->Mount != NULL) && (File->Mount->Flags & LX_MS_NOEXEC))
+    {
+        Result = -LX_EPERM;
+    }
     else if ((File != NULL) && (File->Memfd != NULL) && (Type != LX_MAP_PRIVATE) && (Prot & LX_PROT_WRITE) &&
              (File->Memfd->Seals & (LX_F_SEAL_WRITE | LX_F_SEAL_FUTURE_WRITE)))
     {
@@ -3513,21 +3643,42 @@ LX_SYSCALL(LxSysMunmap)
     return LxMmUnmap(Call->Process, Call->Args[0], Call->Args[1]);
 }
 
-/* FIXME: VMAs have no VM_MAYEXEC, so READ_IMPLIES_EXEC also makes noexec file mappings executable. */
+/* FIXME: READ_IMPLIES_EXEC adds PROT_EXEC to the whole range unless a noexec mapping is in it; Linux decides per mapping. */
 static
 ULONG
 LxReadImpliesExec(
     _In_ PLX_PROCESS Process,
+    _In_ ULONG64 Address,
+    _In_ ULONG64 Length,
     _In_ ULONG Prot)
 {
-    if ((Prot & LX_PROT_READ) && (Process->Personality & LX_PER_READ_IMPLIES_EXEC))
-        Prot |= LX_PROT_EXEC;
-    return Prot;
+    PLX_PROCESS Mm = Process->Mm;
+    ULONG64 End = Address + LX_ALIGN_UP(Length, LX_PAGE_SIZE);
+    PLIST_ENTRY Entry;
+
+    if (!(Prot & LX_PROT_READ) || !(Process->Personality & LX_PER_READ_IMPLIES_EXEC))
+        return Prot;
+    LxMmLock(Mm);
+    for (Entry = LxVmaEntryAbove(Mm, Address); Entry != &Mm->Vmas; Entry = Entry->Flink)
+    {
+        PLX_VMA Vma = CONTAINING_RECORD(Entry, LX_VMA, Link);
+
+        if (Vma->Start >= End)
+            break;
+        if (LxVmaNoExec(Vma))
+        {
+            LxMmUnlock(Mm);
+            return Prot;
+        }
+    }
+    LxMmUnlock(Mm);
+    return Prot | LX_PROT_EXEC;
 }
 
 LX_SYSCALL(LxSysMprotect)
 {
-    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1], LxReadImpliesExec(Call->Process, (ULONG)Call->Args[2]));
+    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1],
+                       LxReadImpliesExec(Call->Process, Call->Args[0], Call->Args[1], (ULONG)Call->Args[2]));
 }
 
 LX_SYSCALL(LxSysPkeyAlloc)
@@ -3555,7 +3706,8 @@ LX_SYSCALL(LxSysPkeyMprotect)
             return -LX_ENOMEM;
         return -LX_EINVAL;
     }
-    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1], LxReadImpliesExec(Call->Process, (ULONG)Call->Args[2]));
+    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1],
+                       LxReadImpliesExec(Call->Process, Call->Args[0], Call->Args[1], (ULONG)Call->Args[2]));
 }
 
 LONG
@@ -4687,7 +4839,7 @@ LX_SYSCALL(LxSysMremap)
         Result = -LX_ENOMEM;
     }
     else if (Fixed ? (LxVmPlace(Process, Fixed, Fixed + NewLength, LX_PLACE_FRESH | LX_PLACE_SPLIT) != 0) :
-                     !NT_SUCCESS(LxVmReserveUnmapped(&New, LX_ALIGN_UP(NewLength, LX_ALLOC_GRANULARITY))))
+                     !NT_SUCCESS(LxVmReserveUnmapped(Process, &New, LX_ALIGN_UP(NewLength, LX_ALLOC_GRANULARITY))))
     {
         Result = -LX_ENOMEM;
     }

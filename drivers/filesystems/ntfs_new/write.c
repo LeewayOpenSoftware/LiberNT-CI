@@ -147,6 +147,75 @@ NtfsPersistPendingSize(_In_ PVolumeContextBlock VolCB,
     return Status;
 }
 
+NTSTATUS
+NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
+                    _In_ PFileContextBlock FileCB,
+                    _In_ ULONGLONG FileOffset,
+                    _In_ ULONGLONG Length)
+{
+    NtfsRetrievalExtent Extent;
+    ULONGLONG ReturnedStartingVcn;
+    ULONGLONG ClusterSize;
+    ULONGLONG Vcn;
+    ULONGLONG EndVcn;
+    ULONGLONG RunEndVcn;
+    ULONGLONG DiskOffset;
+    ULONGLONG RunLength;
+    ULONG ExtentCount;
+    ULONG Chunk;
+    NTSTATUS Status;
+
+    ClusterSize = (ULONGLONG)VolCB->BytesPerSector *
+                  NtfsVolumeGetSectorsPerCluster(VolCB->DiskVolume);
+    if (!VolCB->StorageDevice || !ClusterSize || !FileCB->FileRec ||
+        !Length || FileOffset > ~(ULONGLONG)0 - Length)
+    {
+        return STATUS_SUCCESS;
+    }
+
+    Vcn = FileOffset / ClusterSize;
+    EndVcn = (FileOffset + Length - 1) / ClusterSize + 1;
+    while (Vcn < EndVcn)
+    {
+        ExtentCount = 1;
+        NtfsAcquireMetadata(VolCB);
+        Status = NtfsFileRecordQueryRetrievalPointers(FileCB->FileRec,
+                                                      FileCB->RequestedType,
+                                                      FileCB->RequestedStream,
+                                                      Vcn,
+                                                      &ReturnedStartingVcn,
+                                                      &Extent,
+                                                      &ExtentCount);
+        NtfsReleaseMetadata(VolCB);
+        if ((!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW) ||
+            ExtentCount != 1 ||
+            ReturnedStartingVcn > Vcn ||
+            Extent.NextVcn <= Vcn)
+        {
+            return STATUS_SUCCESS;
+        }
+
+        RunEndVcn = min(Extent.NextVcn, EndVcn);
+        if (Extent.Lcn >= 0)
+        {
+            DiskOffset = ((ULONGLONG)Extent.Lcn + Vcn - ReturnedStartingVcn) * ClusterSize;
+            RunLength = (RunEndVcn - Vcn) * ClusterSize;
+            while (RunLength != 0)
+            {
+                Chunk = (ULONG)min(RunLength, 0x40000000ULL);
+                Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Chunk);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                DiskOffset += Chunk;
+                RunLength -= Chunk;
+            }
+        }
+        Vcn = RunEndVcn;
+    }
+
+    return STATUS_SUCCESS;
+}
+
 static
 BOOLEAN
 NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
@@ -523,6 +592,13 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
 
         Irp->IoStatus.Information = Length;
+
+        /* FIXME: other uncached writes smaller than a block stay in the library block cache until a flush or its lazy writer */
+        if (!PagingIo && Length != 0 &&
+            (BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) || BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
+        {
+            Status = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
+        }
     }
     else
     {

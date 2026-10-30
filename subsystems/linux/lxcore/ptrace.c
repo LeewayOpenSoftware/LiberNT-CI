@@ -1194,7 +1194,7 @@ LxPtraceRegset(
         if ((Result == 0) && (Ptrace->Context == NULL))
             Result = -LX_ESRCH;
         if (Result == 0)
-            Result = LxArchPtraceSetRegset(Ptrace->Context, &Ptrace->Tls, &Ptrace->SyscallNr, Type, Buffer);
+            Result = LxArchPtraceSetRegset(Ptrace->Context, &Ptrace->Tls, &Ptrace->SyscallNr, Type, Buffer, Length);
         if (Result == 0)
             Ptrace->ContextDirty = TRUE;
         ExReleaseFastMutex(&LxPtraceLock);

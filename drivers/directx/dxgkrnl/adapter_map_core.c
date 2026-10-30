@@ -86,6 +86,60 @@ DxgkAdapterMapRangeAssigned(
 }
 
 BOOLEAN
+DxgkAdapterHasMemoryResources(
+    _In_opt_ PCM_RESOURCE_LIST TranslatedResources)
+{
+    PCM_FULL_RESOURCE_DESCRIPTOR FullDescriptor;
+    ULONG FullIndex;
+
+    if (TranslatedResources == NULL)
+        return FALSE;
+
+    FullDescriptor = &TranslatedResources->List[0];
+    for (FullIndex = 0; FullIndex < TranslatedResources->Count; ++FullIndex)
+    {
+        PCM_PARTIAL_RESOURCE_DESCRIPTOR PartialDescriptor;
+        ULONG PartialIndex;
+
+        PartialDescriptor = &FullDescriptor->PartialResourceList.PartialDescriptors[0];
+        for (PartialIndex = 0; PartialIndex < FullDescriptor->PartialResourceList.Count; ++PartialIndex)
+        {
+            if (PartialDescriptor->Type == CmResourceTypeMemory ||
+                PartialDescriptor->Type == CmResourceTypeMemoryLarge)
+            {
+                return TRUE;
+            }
+            PartialDescriptor = CmiGetNextPartialDescriptor(PartialDescriptor);
+        }
+
+        FullDescriptor = CmiGetNextResourceDescriptor(FullDescriptor);
+    }
+
+    return FALSE;
+}
+
+BOOLEAN
+DxgkAdapterIsPostDevice(
+    _In_opt_ PCM_RESOURCE_LIST TranslatedResources,
+    _In_ PHYSICAL_ADDRESS FrameBufferBase,
+    _In_ ULONGLONG FrameBufferLength,
+    _In_ BOOLEAN AcpiEnumerated)
+{
+    /* Root-enumerated adapters have no BAR to match and keep inheriting the boot framebuffer. */
+    if (!DxgkAdapterHasMemoryResources(TranslatedResources) ||
+        FrameBufferLength == 0 ||
+        FrameBufferLength > MAXULONG)
+    {
+        return TRUE;
+    }
+
+    if (DxgkAdapterMapRangeAssigned(TranslatedResources, FrameBufferBase, (ULONG)FrameBufferLength, FALSE))
+        return TRUE;
+
+    return AcpiEnumerated;
+}
+
+BOOLEAN
 DxgkAdapterMapOwnerMatches(
     _In_ PVOID OwnerAdapter,
     _In_opt_ PVOID OwnerProcess,

@@ -148,6 +148,8 @@ LxPicoDispatchFault(
     Info.Address = (ExceptionRecord->NumberParameters >= 2) ?
                    (ULONG64)ExceptionRecord->ExceptionInformation[1] :
                    (ULONG64)(ULONG_PTR)ExceptionRecord->ExceptionAddress;
+    if (LxArchHardwareBreakpointHit(ExceptionRecord, TrapFrame, &Info.Address))
+        Info.Code = LX_TRAP_HWBKPT;
 
     if (Thread->Ptrace != NULL)
     {
@@ -831,6 +833,147 @@ Cleanup:
 }
 
 static
+PSTR
+LxPackStrings(
+    _In_reads_(Count) PCSTR *Strings,
+    _In_ ULONG Count,
+    _Out_ PULONG Length)
+{
+    SIZE_T Total = 0, Offset = 0;
+    ULONG Index;
+    PSTR Packed;
+
+    *Length = 0;
+    for (Index = 0; Index < Count; Index++)
+        Total += strlen(Strings[Index]) + 1;
+    Packed = LxAlloc(Total);
+    if (Packed == NULL)
+        return NULL;
+    for (Index = 0; Index < Count; Index++)
+    {
+        SIZE_T Size = strlen(Strings[Index]) + 1;
+
+        RtlCopyMemory(Packed + Offset, Strings[Index], Size);
+        Offset += Size;
+    }
+    *Length = (ULONG)Total;
+    return Packed;
+}
+
+LONG
+LxUserModeHelper(
+    _In_ PLX_INSTANCE Instance,
+    _In_ PCSTR Path,
+    _In_reads_(ArgCount) PCSTR *Argv,
+    _In_ ULONG ArgCount,
+    _In_reads_(EnvCount) PCSTR *Envp,
+    _In_ ULONG EnvCount,
+    _In_opt_ PLX_UMH_INIT Init,
+    _In_opt_ PVOID InitContext,
+    _Out_ PLONG WaitStatus)
+{
+    PLX_EXEC_REQUEST Request;
+    PLX_PROCESS Process;
+    PLX_THREAD Thread = NULL;
+    HANDLE ProcessHandle = NULL, ThreadHandle = NULL;
+    PEPROCESS EProcess = NULL;
+    CONTEXT Context;
+    NTSTATUS Status;
+    LONG Error = 0;
+
+    *WaitStatus = 0;
+    Request = LxAlloc(sizeof(*Request));
+    if (Request == NULL)
+        return -LX_ENOMEM;
+    KeInitializeEvent(&Request->Done, NotificationEvent, FALSE);
+    Request->FileName = LxStrDup(Path);
+    Request->Args = LxPackStrings(Argv, ArgCount, &Request->ArgLength);
+    Request->ArgCount = ArgCount;
+    Request->Env = LxPackStrings(Envp, EnvCount, &Request->EnvLength);
+    Request->EnvCount = EnvCount;
+    Process = LxProcessCreate(Instance);
+    if (Process != NULL)
+        Process->Cwd = LxStrDup("/");
+    if ((Request->FileName == NULL) || (Request->Args == NULL) || (Request->Env == NULL) || (Process == NULL) ||
+        (Process->Cwd == NULL))
+    {
+        if (Process != NULL)
+            LxProcessDereference(Process);
+        LxFreeRequest(Request);
+        return -LX_ENOMEM;
+    }
+    Process->Pid = LxInstanceAllocatePid(Instance);
+    Process->NsPid[0] = Process->Pid;
+    Process->Pgid = Process->Pid;
+    Process->Sid = Process->Pid;
+    LxCgroupAttach(Process, Instance->RootCgroup);
+
+    Thread = LxThreadCreate(Process);
+    Status = (Thread != NULL) ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
+    if (NT_SUCCESS(Status))
+    {
+        Thread->Exec = Request;
+        if (Init != NULL)
+            Init(Thread, InitContext);
+        Status = PsPicoCreateProcess(FALSE, Process, &ProcessHandle);
+    }
+    if (NT_SUCCESS(Status))
+        Status = ObReferenceObjectByHandle(ProcessHandle, 0, *PsProcessType, KernelMode, (PVOID*)&EProcess, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        if (ProcessHandle != NULL)
+        {
+            ZwTerminateProcess(ProcessHandle, Status);
+            ZwClose(ProcessHandle);
+        }
+        if (Thread != NULL)
+            LxThreadFree(Thread);
+        LxProcessDereference(Process);
+        LxFreeRequest(Request);
+        return -LxStatusToErrno(Status);
+    }
+
+    Process->NtPid = HandleToUlong(PsGetProcessId(EProcess));
+    LxProcessPublishName(Process, EProcess);
+    Process->ParentPid = 0;
+    Thread->Tid = Process->Pid;
+    Thread->NsTid[0] = Process->Pid;
+    LxProcessReference(Process);
+    LxProcessRegister(Process);
+    InterlockedIncrement((PLONG)&Process->Instance->ProcessCount);
+
+    RtlZeroMemory(&Context, sizeof(Context));
+    Context.ContextFlags = CONTEXT_FULL;
+    Status = PsPicoCreateThread(ProcessHandle, &Context, Thread, &ThreadHandle, NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        LxProcessUnregister(Process);
+        InterlockedDecrement((PLONG)&Process->Instance->ProcessCount);
+        ZwTerminateProcess(ProcessHandle, Status);
+        ZwClose(ProcessHandle);
+        ObDereferenceObject(EProcess);
+        LxThreadFree(Thread);
+        LxProcessDereference(Process);
+        LxProcessDereference(Process);
+        LxFreeRequest(Request);
+        return -LxStatusToErrno(Status);
+    }
+
+    KeWaitForSingleObject(&Request->Done, Executive, KernelMode, FALSE, NULL);
+    if (!NT_SUCCESS(Request->Status))
+        Error = (Request->Errno != 0) ? -Request->Errno : -LX_ENOEXEC;
+    KeWaitForSingleObject(EProcess, Executive, KernelMode, FALSE, NULL);
+    if ((Error == 0) && Process->WaitStatusValid)
+        *WaitStatus = Process->WaitStatus;
+    ZwClose(ThreadHandle);
+    ZwClose(ProcessHandle);
+    ObDereferenceObject(EProcess);
+    LxProcessDereference(Process);
+    LxFreeRequest(Request);
+    return Error;
+}
+
+static
 NTSTATUS
 LxCompleteIrp(
     _Inout_ PIRP Irp,
@@ -1080,6 +1223,7 @@ DriverEntry(
     LxSysDevInitialize();
     LxFdObjectsInitialize();
     LxSocketInitialize();
+    LxKeyInitialize();
 
     Status = IoCreateDevice(DriverObject,
                             0,

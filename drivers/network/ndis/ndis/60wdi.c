@@ -729,6 +729,43 @@ Ndis6WdiTask(
     return NDIS_STATUS_SUCCESS;
 }
 
+BOOLEAN
+Ndis6WdiAbortTask(
+    _In_ PNDIS6_WDI_ADAPTER Wdi,
+    _In_ ULONG MessageId)
+{
+    NDIS6_WDI_TLV_BUILDER Tlvs;
+    UINT32 TransactionId = 0;
+    WDI_PORT_ID PortId = WDI_PORT_ID_ADAPTER;
+    BOOLEAN Pending = FALSE;
+    ULONG Offset;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Wdi->CommandLock, &OldIrql);
+    if (Wdi->ActiveTask != NULL &&
+        Wdi->ActiveTask->MessageId == MessageId &&
+        !(Wdi->ActiveTask->Flags & (NDIS6_WDI_CMD_M4_DONE | NDIS6_WDI_CMD_ABANDONED)))
+    {
+        TransactionId = Wdi->ActiveTask->TransactionId;
+        PortId = ((PWDI_MESSAGE_HEADER)Wdi->ActiveTask->Buffer)->PortId;
+        Pending = TRUE;
+    }
+    KeReleaseSpinLock(&Wdi->CommandLock, OldIrql);
+
+    if (!Pending)
+        return FALSE;
+
+    Ndis6WdiTlvInit(&Tlvs);
+    Offset = Ndis6WdiTlvOpen(&Tlvs, WDI_TLV_CANCEL_PARAMETERS);
+    Ndis6WdiTlvAppend32(&Tlvs, WDI_DEFINE_OID(MessageId));
+    Ndis6WdiTlvAppend32(&Tlvs, TransactionId);
+    Ndis6WdiTlvAppend16(&Tlvs, PortId);
+    Ndis6WdiTlvClose(&Tlvs, Offset);
+    (VOID)Ndis6WdiProperty(Wdi, WDI_ABORT_TASK, PortId, &Tlvs, NULL, NULL);
+    Ndis6WdiTlvFree(&Tlvs);
+    return TRUE;
+}
+
 static
 VOID
 Ndis6WdiCheckTaskDeadline(
@@ -826,20 +863,17 @@ Ndis6WdiCompleteTaskIndication(
     return Command != NULL;
 }
 
+static
 BOOLEAN
-Ndis6WdiOidRequestComplete(
-    _In_ PLOGICAL_ADAPTER Adapter,
+Ndis6WdiCompleteCommand(
+    _In_ PNDIS6_WDI_ADAPTER Wdi,
     _In_ PNDIS_OID_REQUEST OidRequest,
     _In_ NDIS_STATUS Status)
 {
-    PNDIS6_WDI_ADAPTER Wdi = Ndis6WdiFromHandle(Adapter);
     PNDIS6_WDI_COMMAND Command = NULL;
     PNDIS6_WDI_COMMAND Free = NULL;
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
-
-    if (Wdi == NULL)
-        return FALSE;
 
     KeAcquireSpinLock(&Wdi->CommandLock, &OldIrql);
     for (Entry = Wdi->CommandList.Flink; Entry != &Wdi->CommandList; Entry = Entry->Flink)
@@ -877,26 +911,33 @@ Ndis6WdiOidRequestComplete(
 }
 
 BOOLEAN
-Ndis6WdiIndicateStatus(
+Ndis6WdiOidRequestComplete(
     _In_ PLOGICAL_ADAPTER Adapter,
-    _In_ PNDIS_STATUS_INDICATION StatusIndication)
+    _In_ PNDIS_OID_REQUEST OidRequest,
+    _In_ NDIS_STATUS Status)
 {
-    PNDIS6_WDI_ADAPTER Wdi;
-    PNDIS6_WDI_INDICATION Item;
-    KIRQL OldIrql;
+    PNDIS6_WDI_ADAPTER Wdi = Ndis6WdiFromHandle(Adapter);
 
-    if (((ULONG)StatusIndication->StatusCode & 0xFFFF0000U) != WDI_INDICATION_PREFIX)
-        return FALSE;
-
-    Wdi = Ndis6WdiFromHandle(Adapter);
     if (Wdi == NULL)
         return FALSE;
+
+    return Ndis6WdiCompleteCommand(Wdi, OidRequest, Status);
+}
+
+static
+VOID
+Ndis6WdiQueueIndication(
+    _In_ PNDIS6_WDI_ADAPTER Wdi,
+    _In_ PNDIS_STATUS_INDICATION StatusIndication)
+{
+    PNDIS6_WDI_INDICATION Item;
+    KIRQL OldIrql;
 
     if (StatusIndication->StatusBuffer == NULL ||
         StatusIndication->StatusBufferSize < sizeof(WDI_MESSAGE_HEADER) ||
         Wdi->IndicationStop)
     {
-        return TRUE;
+        return;
     }
 
     Item = ExAllocatePoolWithTag(NonPagedPool,
@@ -905,7 +946,7 @@ Ndis6WdiIndicateStatus(
     if (Item == NULL)
     {
         DbgPrint("WDI: dropped indication 0x%08lx\n", StatusIndication->StatusCode);
-        return TRUE;
+        return;
     }
 
     Item->Code = StatusIndication->StatusCode;
@@ -916,6 +957,23 @@ Ndis6WdiIndicateStatus(
     InsertTailList(&Wdi->IndicationList, &Item->Link);
     KeReleaseSpinLock(&Wdi->IndicationLock, OldIrql);
     KeSetEvent(&Wdi->IndicationEvent, IO_NO_INCREMENT, FALSE);
+}
+
+BOOLEAN
+Ndis6WdiIndicateStatus(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ PNDIS_STATUS_INDICATION StatusIndication)
+{
+    PNDIS6_WDI_ADAPTER Wdi;
+
+    if (((ULONG)StatusIndication->StatusCode & 0xFFFF0000U) != WDI_INDICATION_PREFIX)
+        return FALSE;
+
+    Wdi = Ndis6WdiFromHandle(Adapter);
+    if (Wdi == NULL)
+        return FALSE;
+
+    Ndis6WdiQueueIndication(Wdi, StatusIndication);
     return TRUE;
 }
 
@@ -1450,32 +1508,11 @@ Ndis6WdiTeardown(
 
 static
 NDIS_STATUS
-NTAPI
-Ndis6WdiMiniportInitializeEx(
-    _In_ NDIS_HANDLE NdisMiniportHandle,
-    _In_ NDIS_HANDLE MiniportDriverContext,
-    _In_ PNDIS_MINIPORT_INIT_PARAMETERS MiniportInitParameters)
+Ndis6WdiStartCore(
+    _In_ PNDIS6_WDI_ADAPTER Wdi)
 {
-    PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
-    PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Adapter);
-    NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES Registration;
-    PNDIS6_WDI_ADAPTER Wdi;
-    LARGE_INTEGER Timeout;
-    PUCHAR Capabilities = NULL;
-    ULONG CapabilitiesLength = 0;
     NDIS_STATUS Status;
 
-    Wdi = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Wdi), NDIS6_WDI_TAG);
-    if (Wdi == NULL)
-        return NDIS_STATUS_RESOURCES;
-    RtlZeroMemory(Wdi, sizeof(*Wdi));
-
-    Wdi->Signature = NDIS6_WDI_SIGNATURE;
-    Wdi->Adapter = Adapter;
-    Wdi->DriverBlock = Ext->DriverBlock;
-    Wdi->Wdi = &Ext->DriverBlock->WdiCharacteristics;
-    Wdi->Ihv = &Ext->DriverBlock->WdiMiniportCharacteristics;
-    Wdi->PortId = WDI_PORT_ID_ADAPTER;
     KeInitializeEvent(&Wdi->OpenEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Wdi->CloseEvent, NotificationEvent, FALSE);
     KeInitializeMutex(&Wdi->CommandMutex, 0);
@@ -1504,8 +1541,39 @@ Ndis6WdiMiniportInitializeEx(
 
     Status = Ndis6WdiStartThread(Wdi, Ndis6WdiIndicationThread, &Wdi->IndicationThread);
     if (Status != NDIS_STATUS_SUCCESS)
-        goto Fail;
-    Status = Ndis6WdiStartThread(Wdi, Ndis6WdiWorkerThread, &Wdi->WorkerThread);
+        return Status;
+    return Ndis6WdiStartThread(Wdi, Ndis6WdiWorkerThread, &Wdi->WorkerThread);
+}
+
+static
+NDIS_STATUS
+NTAPI
+Ndis6WdiMiniportInitializeEx(
+    _In_ NDIS_HANDLE NdisMiniportHandle,
+    _In_ NDIS_HANDLE MiniportDriverContext,
+    _In_ PNDIS_MINIPORT_INIT_PARAMETERS MiniportInitParameters)
+{
+    PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)NdisMiniportHandle;
+    PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Adapter);
+    NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES Registration;
+    PNDIS6_WDI_ADAPTER Wdi;
+    LARGE_INTEGER Timeout;
+    PUCHAR Capabilities = NULL;
+    ULONG CapabilitiesLength = 0;
+    NDIS_STATUS Status;
+
+    Wdi = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Wdi), NDIS6_WDI_TAG);
+    if (Wdi == NULL)
+        return NDIS_STATUS_RESOURCES;
+    RtlZeroMemory(Wdi, sizeof(*Wdi));
+
+    Wdi->Signature = NDIS6_WDI_SIGNATURE;
+    Wdi->Adapter = Adapter;
+    Wdi->DriverBlock = Ext->DriverBlock;
+    Wdi->Wdi = &Ext->DriverBlock->WdiCharacteristics;
+    Wdi->Ihv = &Ext->DriverBlock->WdiMiniportCharacteristics;
+    Wdi->PortId = WDI_PORT_ID_ADAPTER;
+    Status = Ndis6WdiStartCore(Wdi);
     if (Status != NDIS_STATUS_SUCCESS)
         goto Fail;
 
@@ -1679,22 +1747,38 @@ Ndis6WdiIsNonWdiOid(
 
 static
 NDIS_STATUS
+Ndis6WdiQueueRequest(
+    _In_ PNDIS6_WDI_ADAPTER Wdi,
+    _In_ PNDIS_OID_REQUEST OidRequest);
+
+static
+NDIS_STATUS
 NTAPI
 Ndis6WdiMiniportOidRequest(
     _In_ NDIS_HANDLE MiniportAdapterContext,
     _In_ PNDIS_OID_REQUEST OidRequest)
 {
     PNDIS6_WDI_ADAPTER Wdi = (PNDIS6_WDI_ADAPTER)MiniportAdapterContext;
-    PNDIS6_WDI_JOB Job;
-    BOOLEAN Queue = FALSE;
-    NDIS_STATUS Status;
-    KIRQL OldIrql;
 
     if (Wdi->Halting)
         return NDIS_STATUS_ADAPTER_NOT_READY;
 
     if (Ndis6WdiIsNonWdiOid(Wdi, OidRequest->DATA.QUERY_INFORMATION.Oid))
         return Wdi->Ihv->OidRequestHandler(Wdi->IhvContext, OidRequest);
+
+    return Ndis6WdiQueueRequest(Wdi, OidRequest);
+}
+
+static
+NDIS_STATUS
+Ndis6WdiQueueRequest(
+    _In_ PNDIS6_WDI_ADAPTER Wdi,
+    _In_ PNDIS_OID_REQUEST OidRequest)
+{
+    PNDIS6_WDI_JOB Job;
+    BOOLEAN Queue = FALSE;
+    NDIS_STATUS Status;
+    KIRQL OldIrql;
 
     Status = Ndis6WdiDot11OidRequest(Wdi, OidRequest, &Queue);
     if (!Queue)
@@ -1881,4 +1965,144 @@ NdisMDeregisterWdiMiniportDriver(
     NDIS_HANDLE DriverHandle)
 {
     NdisMDeregisterMiniportDriver(DriverHandle);
+}
+
+static
+VOID
+Ndis6WdiDestroyEngine(
+    _In_ PNDIS6_WDI_ADAPTER Wdi)
+{
+    InterlockedExchange(&Wdi->Halting, 1);
+    Ndis6WdiStopWorker(Wdi);
+    Ndis6WdiStopIndications(Wdi);
+    Ndis6WdiFreeCommands(Wdi);
+    Ndis6WdiDot11Cleanup(Wdi);
+    Wdi->Signature = 0;
+    ExFreePoolWithTag(Wdi, NDIS6_WDI_TAG);
+}
+
+NDIS_STATUS
+NTAPI
+NdisWdiEngineCreate(
+    _In_ NDIS_HANDLE MiniportAdapterHandle,
+    _In_ const NDIS_WDI_ENGINE_TRANSPORT *Transport,
+    _In_ UINT16 PortId,
+    _In_reads_bytes_(CapabilitiesLength) PUCHAR Capabilities,
+    _In_ ULONG CapabilitiesLength,
+    _Out_ PVOID *Engine)
+{
+    static const UCHAR Zero[6] = { 0 };
+    PLOGICAL_ADAPTER Adapter = (PLOGICAL_ADAPTER)MiniportAdapterHandle;
+    PNDIS6_ADAPTER_EXT Ext;
+    PNDIS6_WDI_ADAPTER Wdi;
+    NDIS_STATUS Status;
+
+    *Engine = NULL;
+    if (Adapter == NULL || !Adapter->IsNdis6 || Transport == NULL ||
+        Transport->Size < sizeof(*Transport) || Transport->SendCommand == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+    Ext = NDIS6_EXT(Adapter);
+
+    Wdi = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Wdi), NDIS6_WDI_TAG);
+    if (Wdi == NULL)
+        return NDIS_STATUS_RESOURCES;
+    RtlZeroMemory(Wdi, sizeof(*Wdi));
+
+    Wdi->Signature = NDIS6_WDI_SIGNATURE;
+    Wdi->Adapter = Adapter;
+    Wdi->EngineWdi.WdiVersion = Transport->WdiVersion;
+    Wdi->EngineIhv.OidRequestHandler = Transport->SendCommand;
+    Wdi->Wdi = &Wdi->EngineWdi;
+    Wdi->Ihv = &Wdi->EngineIhv;
+    Wdi->IhvContext = Transport->Context;
+    Wdi->PortId = PortId;
+
+    Status = Ndis6WdiStartCore(Wdi);
+    if (Status == NDIS_STATUS_SUCCESS)
+        Status = Ndis6WdiDot11ParseCapabilities(Wdi, Capabilities, CapabilitiesLength);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        Ndis6WdiDestroyEngine(Wdi);
+        return Status;
+    }
+
+    if (RtlEqualMemory(Wdi->PermanentAddress, Zero, sizeof(Zero)) && Ext != NULL &&
+        Ext->GeneralAttrs.MacAddressLength == sizeof(DOT11_MAC_ADDRESS))
+    {
+        RtlCopyMemory(Wdi->PermanentAddress, Ext->GeneralAttrs.PermanentMacAddress, sizeof(DOT11_MAC_ADDRESS));
+        RtlCopyMemory(Wdi->CurrentAddress, Ext->GeneralAttrs.CurrentMacAddress, sizeof(DOT11_MAC_ADDRESS));
+    }
+    Wdi->PortCreated = TRUE;
+    Wdi->Started = TRUE;
+    *Engine = Wdi;
+    return NDIS_STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+NdisWdiEngineDestroy(
+    _In_ PVOID Engine)
+{
+    Ndis6WdiDestroyEngine((PNDIS6_WDI_ADAPTER)Engine);
+}
+
+NDIS_STATUS
+NTAPI
+NdisWdiEngineOidRequest(
+    _In_ PVOID Engine,
+    _In_ PNDIS_OID_REQUEST OidRequest)
+{
+    PNDIS6_WDI_ADAPTER Wdi = (PNDIS6_WDI_ADAPTER)Engine;
+
+    if (Wdi->Halting)
+        return NDIS_STATUS_ADAPTER_NOT_READY;
+    return Ndis6WdiQueueRequest(Wdi, OidRequest);
+}
+
+VOID
+NTAPI
+NdisWdiEngineCommandComplete(
+    _In_ PVOID Engine,
+    _In_ PNDIS_OID_REQUEST Command,
+    _In_ NDIS_STATUS Status,
+    _In_reads_bytes_opt_(ResponseLength) const VOID *Response,
+    _In_ ULONG ResponseLength,
+    _In_ ULONG BytesNeeded)
+{
+    PNDIS6_WDI_ADAPTER Wdi = (PNDIS6_WDI_ADAPTER)Engine;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Wdi->CommandLock, &OldIrql);
+    for (Entry = Wdi->CommandList.Flink; Entry != &Wdi->CommandList; Entry = Entry->Flink)
+    {
+        PNDIS6_WDI_COMMAND Candidate = CONTAINING_RECORD(Entry, NDIS6_WDI_COMMAND, Link);
+
+        if (&Candidate->Request != Command)
+            continue;
+        if (!(Candidate->Flags & NDIS6_WDI_CMD_ABANDONED))
+        {
+            if (ResponseLength > Candidate->BufferLength)
+                ResponseLength = Candidate->BufferLength;
+            if (Response != NULL && ResponseLength != 0)
+                RtlCopyMemory(Candidate->Buffer, Response, ResponseLength);
+            Command->DATA.METHOD_INFORMATION.BytesWritten = Response != NULL ? ResponseLength : 0;
+            Command->DATA.METHOD_INFORMATION.BytesNeeded = BytesNeeded;
+        }
+        break;
+    }
+    KeReleaseSpinLock(&Wdi->CommandLock, OldIrql);
+
+    (VOID)Ndis6WdiCompleteCommand(Wdi, Command, Status);
+}
+
+VOID
+NTAPI
+NdisWdiEngineIndicateStatus(
+    _In_ PVOID Engine,
+    _In_ PNDIS_STATUS_INDICATION StatusIndication)
+{
+    Ndis6WdiQueueIndication((PNDIS6_WDI_ADAPTER)Engine, StatusIndication);
 }

@@ -264,6 +264,7 @@ BEGIN
     IDS_APPSSUBTITLE "LiberNT загружает их у издателей и устанавливает для всех учетных записей."
     IDS_APPS_COL_NAME "Компонент"
     IDS_APPS_COL_SOURCE "Источник"
+    IDS_APPS_INSTALLED "%s (установлено)"
     IDS_OOBE_FINISHTITLE "Подготовка LiberNT"
     IDS_OOBE_FINISHSUBTITLE "Это может занять несколько минут. Не выключайте компьютер."
     IDS_OOBE_APPLY_REGION "Применение языка и клавиатуры..."

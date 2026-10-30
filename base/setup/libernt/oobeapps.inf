@@ -2,6 +2,7 @@
 Signature = "$Windows NT$"
 
 [Apps.amd64]
+LLVMpipe.amd64
 VCRedist.x64
 VCRedist.x86
 WineMono.x86
@@ -13,6 +14,8 @@ Steam.x64
 
 [Apps.arm64]
 FFmpeg.arm64
+ICU.arm64
+LLVMpipe.arm64
 VCRedist.arm64
 VCRedist.x64
 VCRedist.x86
@@ -54,6 +57,35 @@ Type = "msi"
 Space = 4
 Sha256 = "bd5e871ca61186a13684e4e0970720b7fd928f6e5236cbc11d6a9f2fca0bf7aa"
 Detect = "%11%\avcodec-62.dll"
+
+[ICU.arm64]
+Name = "ICU Unicode support for .NET and Qt programs (ARM64)"
+Url = "https://github.com/LiberNT/LiberNT/releases/download/icu-72.1-1/libernt-icu-72.1-1-arm64.msi"
+File = "libernt-icu-72.1-1-arm64.msi"
+Type = "msi"
+Space = 36
+Sha256 = "4d4a8f40b28a75d89f04c15ab3dc1cc7f773f25881bf50e0d3871917e8f1d71e"
+Detect = "%10%\3rdParty\ICU-LICENSE"
+
+[LLVMpipe.amd64]
+Name = "LLVMpipe and Lavapipe software OpenGL and Vulkan (x64)"
+Url = "https://github.com/LiberNT/LiberNT/releases/download/mesa-llvmpipe-26.2.2-1/libernt-mesa-llvmpipe-26.2.2-1-amd64.msi"
+File = "libernt-mesa-llvmpipe-26.2.2-1-amd64.msi"
+Type = "msi"
+Space = 150
+Sha256 = "33c698cf25a0ad59756d26b4248793828da5e23c77b0e7aecdd5f45234d0dd37"
+Detect = "%11%\mesa_llvmpipe.dll"
+Unattended = yes
+
+[LLVMpipe.arm64]
+Name = "LLVMpipe and Lavapipe software OpenGL and Vulkan (ARM64)"
+Url = "https://github.com/LiberNT/LiberNT/releases/download/mesa-llvmpipe-26.2.2-1/libernt-mesa-llvmpipe-26.2.2-1-arm64.msi"
+File = "libernt-mesa-llvmpipe-26.2.2-1-arm64.msi"
+Type = "msi"
+Space = 200
+Sha256 = "a29ec7b37d9ed534251285951c56f2ccbfcfea11a61629840a6a364b931e5229"
+Detect = "%11%\mesa_llvmpipe.dll"
+Unattended = yes
 
 [VCRedist.arm64]
 Name = "Microsoft Visual C++ Redistributable (ARM64)"

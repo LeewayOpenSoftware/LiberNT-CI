@@ -379,6 +379,51 @@ NTAPI
 NdisLWMUninitializeNetworkInterface(
     _In_ NDIS_HANDLE NdisMiniportAdapterHandle);
 
+typedef struct _NDIS_WDI_ENGINE_TRANSPORT
+{
+    ULONG Size;
+    ULONG WdiVersion;
+    NDIS_HANDLE Context;
+    MINIPORT_OID_REQUEST_HANDLER SendCommand;
+} NDIS_WDI_ENGINE_TRANSPORT, *PNDIS_WDI_ENGINE_TRANSPORT;
+
+NDIS_STATUS
+NTAPI
+NdisWdiEngineCreate(
+    _In_ NDIS_HANDLE MiniportAdapterHandle,
+    _In_ const NDIS_WDI_ENGINE_TRANSPORT * Transport,
+    _In_ UINT16 PortId,
+    _In_reads_bytes_(CapabilitiesLength) PUCHAR Capabilities,
+    _In_ ULONG CapabilitiesLength,
+    _Out_ PVOID * Engine);
+
+VOID
+NTAPI
+NdisWdiEngineDestroy(
+    _In_ PVOID Engine);
+
+NDIS_STATUS
+NTAPI
+NdisWdiEngineOidRequest(
+    _In_ PVOID Engine,
+    _In_ PNDIS_OID_REQUEST OidRequest);
+
+VOID
+NTAPI
+NdisWdiEngineCommandComplete(
+    _In_ PVOID Engine,
+    _In_ PNDIS_OID_REQUEST Command,
+    _In_ NDIS_STATUS Status,
+    _In_reads_bytes_opt_(ResponseLength) const VOID * Response,
+    _In_ ULONG ResponseLength,
+    _In_ ULONG BytesNeeded);
+
+VOID
+NTAPI
+NdisWdiEngineIndicateStatus(
+    _In_ PVOID Engine,
+    _In_ PNDIS_STATUS_INDICATION StatusIndication);
+
 #ifdef __cplusplus
 }
 #endif

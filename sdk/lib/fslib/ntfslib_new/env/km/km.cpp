@@ -502,6 +502,29 @@ NtfsCacheFlushRange(_In_ PDEVICE_OBJECT Owner,
     Block = Offset >> NTFS_CACHE_BLOCK_SHIFT;
     LastBlock = (Offset + Length - 1) >> NTFS_CACHE_BLOCK_SHIFT;
 
+    if (LastBlock - Block >= NTFS_CACHE_SLOTS)
+    {
+        ULONG Index;
+
+        for (Index = 0; Index < NTFS_CACHE_SLOTS; Index++)
+        {
+            ULONGLONG Tag;
+            BOOLEAN Dirty;
+
+            ExAcquireFastMutex(&NtfsCacheMutex);
+            Tag = NtfsCacheSlots[Index].Tag;
+            Dirty = NtfsCacheSlots[Index].Dirty && NtfsCacheSlots[Index].Owner == Owner;
+            ExReleaseFastMutex(&NtfsCacheMutex);
+            if (!Dirty || Tag == NTFS_CACHE_EMPTY || Tag < Block || Tag > LastBlock)
+                continue;
+
+            NTSTATUS One = NtfsCacheWriteBackOne(Owner, Tag);
+            if (!NT_SUCCESS(One))
+                Status = One;
+        }
+        return Status;
+    }
+
     for (; Block <= LastBlock; Block++)
     {
         NTSTATUS One;

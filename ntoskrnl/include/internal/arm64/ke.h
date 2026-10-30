@@ -730,6 +730,17 @@ extern BOOLEAN KiArm64IrqFiqConfigured;
 extern ULONG KiArm64NumBreakpoints;
 extern ULONG KiArm64NumWatchpoints;
 extern UCHAR KiArm64UserStepArmed[MAXIMUM_PROCESSORS];
+extern UCHAR KiArm64UserDebugArmed[MAXIMUM_PROCESSORS];
+VOID NTAPI KiArm64LoadUserDebugState(_In_ PKTRAP_FRAME TrapFrame);
+VOID NTAPI KiArm64SaveUserDebugState(_Inout_ PKTRAP_FRAME TrapFrame);
+VOID NTAPI KiArm64SaveUserDebugRegisters(_Out_ PBOOLEAN Valid, _Out_writes_(ARM64_MAX_BREAKPOINTS) PULONG Bcr,
+                                         _Out_writes_(ARM64_MAX_BREAKPOINTS) PULONG64 Bvr,
+                                         _Out_writes_(ARM64_MAX_WATCHPOINTS) PULONG Wcr,
+                                         _Out_writes_(ARM64_MAX_WATCHPOINTS) PULONG64 Wvr);
+VOID NTAPI KiArm64LoadUserDebugRegisters(_In_ BOOLEAN Valid, _In_reads_(ARM64_MAX_BREAKPOINTS) const ULONG *Bcr,
+                                         _In_reads_(ARM64_MAX_BREAKPOINTS) const ULONG64 *Bvr,
+                                         _In_reads_(ARM64_MAX_WATCHPOINTS) const ULONG *Wcr,
+                                         _In_reads_(ARM64_MAX_WATCHPOINTS) const ULONG64 *Wvr);
 
 /*
  * CPU feature flags populated from ID_AA64* register reads during

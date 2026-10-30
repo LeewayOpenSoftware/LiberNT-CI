@@ -1491,13 +1491,6 @@ HKCR,"CrSource\CLSID",,0x00000010
 HKCR,"CrSource\CLSID","",0x00000000,"{65014010-9F62-11D1-A651-00600811D5CE}"
 HKCR,"giffile\CLSID",,0x00000010
 HKCR,"giffile\CLSID","",0x00000000,"{25336920-03F9-11CF-8FD0-00AA00686F13}"
-HKCR,"giffile\shell\open\command","",0x00000000,"""%ProgramFiles%\Internet Explorer\iexplore.exe"" -nohome"
-HKCR,"giffile\shell\open\ddeexec",,0x00000010
-HKCR,"giffile\shell\open\ddeexec","",0x00000000,"""file:%%1"",,-1,,,,,"
-HKCR,"giffile\shell\open\ddeexec\Application",,0x00000010
-HKCR,"giffile\shell\open\ddeexec\Application","",0x00000000,"IExplore"
-HKCR,"giffile\shell\open\ddeexec\Topic",,0x00000010
-HKCR,"giffile\shell\open\ddeexec\Topic","",0x00000000,"WWW_OpenURL"
 HKCR,"GIFFilter.CoGIFFilter",,0x00000010
 HKCR,"GIFFilter.CoGIFFilter","",0x00000000,"CoGIFFilter Class"
 HKCR,"GIFFilter.CoGIFFilter\CLSID",,0x00000010
@@ -1545,13 +1538,6 @@ HKCR,"InternetShortcut\shell\printto\command",,0x00000010
 HKCR,"InternetShortcut\shell\printto\command","",0x00000000,"rundll32.exe mshtml.dll,PrintHTML ""%%1"" ""%%2"" ""%%3"" ""%%4"""
 HKCR,"jpegfile\CLSID",,0x00000010
 HKCR,"jpegfile\CLSID","",0x00000000,"{25336920-03F9-11CF-8FD0-00AA00686F13}"
-HKCR,"jpegfile\shell\open\command","",0x00000000,"""%ProgramFiles%\Internet Explorer\iexplore.exe"" -nohome"
-HKCR,"jpegfile\shell\open\ddeexec",,0x00000010
-HKCR,"jpegfile\shell\open\ddeexec","",0x00000000,"""file:%%1"",,-1,,,,,"
-HKCR,"jpegfile\shell\open\ddeexec\Application",,0x00000010
-HKCR,"jpegfile\shell\open\ddeexec\Application","",0x00000000,"IExplore"
-HKCR,"jpegfile\shell\open\ddeexec\Topic",,0x00000010
-HKCR,"jpegfile\shell\open\ddeexec\Topic","",0x00000000,"WWW_OpenURL"
 HKCR,"JPEGFilter.CoJPEGFilter",,0x00000010
 HKCR,"JPEGFilter.CoJPEGFilter","",0x00000000,"CoJPEGFilter Class"
 HKCR,"JPEGFilter.CoJPEGFilter\CLSID",,0x00000010
@@ -1673,25 +1659,8 @@ HKCR,"pjpegfile",,0x00000010
 HKCR,"pjpegfile","",0x00000000,"JPEG Image"
 HKCR,"pjpegfile\CLSID",,0x00000010
 HKCR,"pjpegfile\CLSID","",0x00000000,"{25336920-03F9-11CF-8FD0-00AA00686F13}"
-HKCR,"pjpegfile\shell",,0x00000010
-HKCR,"pjpegfile\shell\open",,0x00000010
-HKCR,"pjpegfile\shell\open\command",,0x00000010
-HKCR,"pjpegfile\shell\open\command","",0x00000000,"""%ProgramFiles%\Internet Explorer\iexplore.exe"" -nohome"
-HKCR,"pjpegfile\shell\open\ddeexec",,0x00000010
-HKCR,"pjpegfile\shell\open\ddeexec","",0x00000000,"""file:%%1"",,-1,,,,,"
-HKCR,"pjpegfile\shell\open\ddeexec\Application",,0x00000010
-HKCR,"pjpegfile\shell\open\ddeexec\Application","",0x00000000,"IExplore"
-HKCR,"pjpegfile\shell\open\ddeexec\Topic",,0x00000010
-HKCR,"pjpegfile\shell\open\ddeexec\Topic","",0x00000000,"WWW_OpenURL"
 HKCR,"pngfile\CLSID",,0x00000010
 HKCR,"pngfile\CLSID","",0x00000000,"{25336920-03F9-11CF-8FD0-00AA00686F13}"
-HKCR,"pngfile\shell\open\command","",0x00000000,"""%ProgramFiles%\Internet Explorer\iexplore.exe"" -nohome"
-HKCR,"pngfile\shell\open\ddeexec",,0x00000010
-HKCR,"pngfile\shell\open\ddeexec","",0x00000000,"""file:%%1"",,-1,,,,,"
-HKCR,"pngfile\shell\open\ddeexec\Application",,0x00000010
-HKCR,"pngfile\shell\open\ddeexec\Application","",0x00000000,"IExplore"
-HKCR,"pngfile\shell\open\ddeexec\Topic",,0x00000010
-HKCR,"pngfile\shell\open\ddeexec\Topic","",0x00000000,"WWW_OpenURL"
 HKCR,"PROTOCOLS\Handler\about",,0x00000010
 HKCR,"PROTOCOLS\Handler\about","CLSID",0x00000000,"{3050F406-98B5-11CF-BB82-00AA00BDCE0B}"
 HKCR,"PROTOCOLS\Handler\javascript",,0x00000010
@@ -1734,16 +1703,6 @@ HKCR,"xbmfile",,0x00000010
 HKCR,"xbmfile","",0x00000000,"XBM Image"
 HKCR,"xbmfile\CLSID",,0x00000010
 HKCR,"xbmfile\CLSID","",0x00000000,"{25336920-03F9-11CF-8FD0-00AA00686F13}"
-HKCR,"xbmfile\shell",,0x00000010
-HKCR,"xbmfile\shell\open",,0x00000010
-HKCR,"xbmfile\shell\open\command",,0x00000010
-HKCR,"xbmfile\shell\open\command","",0x00000000,"""%ProgramFiles%\Internet Explorer\iexplore.exe"" -nohome"
-HKCR,"xbmfile\shell\open\ddeexec",,0x00000010
-HKCR,"xbmfile\shell\open\ddeexec","",0x00000000,"""file:%%1"",,-1,,,,,"
-HKCR,"xbmfile\shell\open\ddeexec\Application",,0x00000010
-HKCR,"xbmfile\shell\open\ddeexec\Application","",0x00000000,"IExplore"
-HKCR,"xbmfile\shell\open\ddeexec\Topic",,0x00000010
-HKCR,"xbmfile\shell\open\ddeexec\Topic","",0x00000000,"WWW_OpenURL"
 HKCR,"xhtmlfile",,0x00000010
 HKCR,"xhtmlfile","",0x00000000,"XHTML Document"
 HKCR,"xhtmlfile\CLSID",,0x00000010

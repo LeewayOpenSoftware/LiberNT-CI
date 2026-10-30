@@ -155,6 +155,7 @@ KiArm64EnsureDcacheSweepGeometry(VOID)
 ULONG KiArm64NumBreakpoints = 6;
 ULONG KiArm64NumWatchpoints = 2;
 UCHAR KiArm64UserStepArmed[MAXIMUM_PROCESSORS];
+UCHAR KiArm64UserDebugArmed[MAXIMUM_PROCESSORS];
 
 /*
  * Enable self-hosted debug on the current processor.
@@ -353,6 +354,203 @@ KiArm64DebugRegistersEnabled(
     }
 
     return FALSE;
+}
+
+#define ARM64_DEBUG_CONTROL_PMC    (3UL << 1)
+#define ARM64_DEBUG_CONTROL_EL0    (2UL << 1)
+#define ARM64_DEBUG_CONTROL_HMC    (1UL << 13)
+#define ARM64_DEBUG_CONTROL_SSC    (3UL << 14)
+
+#define WRITE_DBG_VALUE(_value, _slot, _name) ARM64_WRITE_SYSREG(_name##_slot##_EL1, (ULONGLONG)(_value))
+
+static
+VOID
+KiArm64WriteBreakpoint(
+    _In_ ULONG Slot,
+    _In_ ULONG64 Value,
+    _In_ ULONG Control)
+{
+    switch (Slot)
+    {
+        case 0: WRITE_DBG_VALUE(Value, 0, DBGBVR); WRITE_DBG_VALUE(Control, 0, DBGBCR); break;
+        case 1: WRITE_DBG_VALUE(Value, 1, DBGBVR); WRITE_DBG_VALUE(Control, 1, DBGBCR); break;
+        case 2: WRITE_DBG_VALUE(Value, 2, DBGBVR); WRITE_DBG_VALUE(Control, 2, DBGBCR); break;
+        case 3: WRITE_DBG_VALUE(Value, 3, DBGBVR); WRITE_DBG_VALUE(Control, 3, DBGBCR); break;
+        case 4: WRITE_DBG_VALUE(Value, 4, DBGBVR); WRITE_DBG_VALUE(Control, 4, DBGBCR); break;
+        case 5: WRITE_DBG_VALUE(Value, 5, DBGBVR); WRITE_DBG_VALUE(Control, 5, DBGBCR); break;
+        case 6: WRITE_DBG_VALUE(Value, 6, DBGBVR); WRITE_DBG_VALUE(Control, 6, DBGBCR); break;
+        case 7: WRITE_DBG_VALUE(Value, 7, DBGBVR); WRITE_DBG_VALUE(Control, 7, DBGBCR); break;
+        default: break;
+    }
+}
+
+static
+VOID
+KiArm64WriteWatchpoint(
+    _In_ ULONG Slot,
+    _In_ ULONG64 Value,
+    _In_ ULONG Control)
+{
+    switch (Slot)
+    {
+        case 0: WRITE_DBG_VALUE(Value, 0, DBGWVR); WRITE_DBG_VALUE(Control, 0, DBGWCR); break;
+        case 1: WRITE_DBG_VALUE(Value, 1, DBGWVR); WRITE_DBG_VALUE(Control, 1, DBGWCR); break;
+        default: break;
+    }
+}
+
+static
+ULONG
+KiArm64UserDebugControl(
+    _In_ ULONG Control)
+{
+    if (!(Control & ARM64_DEBUG_CONTROL_ENABLE))
+        return 0;
+    return (Control & ~(ARM64_DEBUG_CONTROL_PMC | ARM64_DEBUG_CONTROL_HMC | ARM64_DEBUG_CONTROL_SSC)) |
+           ARM64_DEBUG_CONTROL_EL0;
+}
+
+#define READ_DBG_VALUE(_slot, _name) ((ULONG64)ARM64_READ_SYSREG(_name##_slot##_EL1))
+
+static
+VOID
+KiArm64ReadBreakpoint(
+    _In_ ULONG Slot,
+    _Out_ PULONG64 Value,
+    _Out_ PULONG Control)
+{
+    switch (Slot)
+    {
+        case 0: *Value = READ_DBG_VALUE(0, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(0, DBGBCR); break;
+        case 1: *Value = READ_DBG_VALUE(1, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(1, DBGBCR); break;
+        case 2: *Value = READ_DBG_VALUE(2, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(2, DBGBCR); break;
+        case 3: *Value = READ_DBG_VALUE(3, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(3, DBGBCR); break;
+        case 4: *Value = READ_DBG_VALUE(4, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(4, DBGBCR); break;
+        case 5: *Value = READ_DBG_VALUE(5, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(5, DBGBCR); break;
+        case 6: *Value = READ_DBG_VALUE(6, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(6, DBGBCR); break;
+        case 7: *Value = READ_DBG_VALUE(7, DBGBVR); *Control = (ULONG)READ_DBG_VALUE(7, DBGBCR); break;
+        default: *Value = 0; *Control = 0; break;
+    }
+}
+
+static
+VOID
+KiArm64ReadWatchpoint(
+    _In_ ULONG Slot,
+    _Out_ PULONG64 Value,
+    _Out_ PULONG Control)
+{
+    switch (Slot)
+    {
+        case 0: *Value = READ_DBG_VALUE(0, DBGWVR); *Control = (ULONG)READ_DBG_VALUE(0, DBGWCR); break;
+        case 1: *Value = READ_DBG_VALUE(1, DBGWVR); *Control = (ULONG)READ_DBG_VALUE(1, DBGWCR); break;
+        default: *Value = 0; *Control = 0; break;
+    }
+}
+
+VOID
+NTAPI
+KiArm64SaveUserDebugRegisters(
+    _Out_ PBOOLEAN Valid,
+    _Out_writes_(ARM64_MAX_BREAKPOINTS) PULONG Bcr,
+    _Out_writes_(ARM64_MAX_BREAKPOINTS) PULONG64 Bvr,
+    _Out_writes_(ARM64_MAX_WATCHPOINTS) PULONG Wcr,
+    _Out_writes_(ARM64_MAX_WATCHPOINTS) PULONG64 Wvr)
+{
+    ULONG BreakpointCount = min(KiArm64NumBreakpoints, ARM64_MAX_BREAKPOINTS);
+    ULONG WatchpointCount = min(KiArm64NumWatchpoints, ARM64_MAX_WATCHPOINTS);
+    ULONG Slot;
+
+    *Valid = FALSE;
+    if (!KiArm64UserDebugArmed[KeGetCurrentPrcb()->Number])
+        return;
+    for (Slot = 0; Slot < ARM64_MAX_BREAKPOINTS; Slot++)
+    {
+        Bcr[Slot] = 0;
+        Bvr[Slot] = 0;
+        if (Slot < BreakpointCount)
+            KiArm64ReadBreakpoint(Slot, &Bvr[Slot], &Bcr[Slot]);
+    }
+    for (Slot = 0; Slot < ARM64_MAX_WATCHPOINTS; Slot++)
+    {
+        Wcr[Slot] = 0;
+        Wvr[Slot] = 0;
+        if (Slot < WatchpointCount)
+            KiArm64ReadWatchpoint(Slot, &Wvr[Slot], &Wcr[Slot]);
+    }
+    *Valid = TRUE;
+}
+
+/* FIXME: while a thread's own debug registers are loaded, the kernel debugger's hardware breakpoints are out of the slots. */
+VOID
+NTAPI
+KiArm64LoadUserDebugRegisters(
+    _In_ BOOLEAN Valid,
+    _In_reads_(ARM64_MAX_BREAKPOINTS) const ULONG *Bcr,
+    _In_reads_(ARM64_MAX_BREAKPOINTS) const ULONG64 *Bvr,
+    _In_reads_(ARM64_MAX_WATCHPOINTS) const ULONG *Wcr,
+    _In_reads_(ARM64_MAX_WATCHPOINTS) const ULONG64 *Wvr)
+{
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    const KSPECIAL_REGISTERS *Kernel = &Prcb->ProcessorState.SpecialRegisters;
+    ULONG BreakpointCount = min(KiArm64NumBreakpoints, ARM64_MAX_BREAKPOINTS);
+    ULONG WatchpointCount = min(KiArm64NumWatchpoints, ARM64_MAX_WATCHPOINTS);
+    ULONGLONG Mdscr;
+    BOOLEAN Active = FALSE;
+    ULONG Slot;
+
+    if (Valid)
+    {
+        for (Slot = 0; Slot < BreakpointCount; Slot++)
+            Active |= (Bcr[Slot] & ARM64_DEBUG_CONTROL_ENABLE) != 0;
+        for (Slot = 0; Slot < WatchpointCount; Slot++)
+            Active |= (Wcr[Slot] & ARM64_DEBUG_CONTROL_ENABLE) != 0;
+    }
+    if (!Active && !KiArm64UserDebugArmed[Prcb->Number])
+        return;
+
+    READ_SYSREG64(Mdscr, MDSCR_EL1);
+    Mdscr &= ~ARM64_MDSCR_MDE;
+    if (Active)
+    {
+        for (Slot = 0; Slot < BreakpointCount; Slot++)
+            KiArm64WriteBreakpoint(Slot, Bvr[Slot], KiArm64UserDebugControl(Bcr[Slot]));
+        for (Slot = 0; Slot < WatchpointCount; Slot++)
+            KiArm64WriteWatchpoint(Slot, Wvr[Slot], KiArm64UserDebugControl(Wcr[Slot]));
+        Mdscr |= ARM64_MDSCR_MDE;
+    }
+    else
+    {
+        for (Slot = 0; Slot < BreakpointCount; Slot++)
+            KiArm64WriteBreakpoint(Slot, Kernel->KernelBvr[Slot], Kernel->KernelBcr[Slot]);
+        for (Slot = 0; Slot < WatchpointCount; Slot++)
+            KiArm64WriteWatchpoint(Slot, Kernel->KernelWvr[Slot], Kernel->KernelWcr[Slot]);
+        if (KiArm64DebugRegistersEnabled(Kernel, BreakpointCount, WatchpointCount))
+            Mdscr |= ARM64_MDSCR_MDE;
+    }
+    WRITE_SYSREG64(MDSCR_EL1, Mdscr);
+    ARM64_ISB();
+    KiArm64UserDebugArmed[Prcb->Number] = Active;
+}
+
+VOID
+NTAPI
+KiArm64SaveUserDebugState(
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    BOOLEAN Valid;
+
+    KiArm64SaveUserDebugRegisters(&Valid, TrapFrame->Bcr, TrapFrame->Bvr, TrapFrame->Wcr, TrapFrame->Wvr);
+    TrapFrame->DebugRegistersValid = Valid;
+}
+
+VOID
+NTAPI
+KiArm64LoadUserDebugState(
+    _In_ PKTRAP_FRAME TrapFrame)
+{
+    KiArm64LoadUserDebugRegisters(TrapFrame->DebugRegistersValid != FALSE, TrapFrame->Bcr, TrapFrame->Bvr, TrapFrame->Wcr,
+                                  TrapFrame->Wvr);
 }
 
 VOID

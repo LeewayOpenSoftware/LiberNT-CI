@@ -33,7 +33,7 @@
 .equ ARM64_IRQ_NEON,                  0xE0
 .equ ARM64_IRQ_FPCR,                  0x2E0
 .equ ARM64_IRQ_FPSR,                  0x2E8
-.equ ARM64_IRQ_FRAME_SIZE,            0x350
+.equ ARM64_IRQ_FRAME_SIZE,            0x3D0
 
 .equ ARM64_PARTIAL_VFP_LINK,          1
 .equ ARM64_SERVICE_VFP_LINK,          2
@@ -219,7 +219,7 @@ KiArm64InterruptDispatchOnIsrStack:
 
 /* Preserve the nonvolatile GPRs that are otherwise invisible to the C IRQ
  * dispatcher. X20-X21 and FP/LR already have slots in the original frame.
- * Keep 0x340..0x34f untouched: it is the interrupted SP's 16-byte red zone. */
+ * Keep 0x3C0..0x3CF untouched: it is the interrupted SP's 16-byte red zone. */
 .macro ARM64_SAVE_IRQ_EXTRA Base
     add x9, \Base, #0x2F0
     stp x22, x23, [x9, #0x00]
@@ -577,6 +577,12 @@ KiArm64SvcVectorCommon:
     stp x11, x12, [x10, #ExFpcr]
 
     mrs x18, tpidr_el1
+    cmp x15, #8
+    b.ne .Lsvc_debug_saved
+    ldr x0, [sp, #ARM64_EARLY_STATE_TRAP_PTR]
+    bl KiArm64SaveUserDebugState
+    ldr x13, [sp, #ARM64_EARLY_STATE_SPSR]
+.Lsvc_debug_saved:
     tbnz x13, #7, .Lsvc_keep_irq_masked
     msr daifclr, #0x2
 .Lsvc_keep_irq_masked:
@@ -645,6 +651,9 @@ KiArm64UserServiceEntry:
     msr fpcr, xzr
     mrs x18, tpidr_el1
     mov x29, xzr
+    mov x0, sp
+    bl KiArm64SaveUserDebugState
+    ldr w9, [sp, #TfSpsr]
     tbnz x9, #7, .Luser_service_irq_masked
     msr daifclr, #0x2
 .Luser_service_irq_masked:
@@ -693,6 +702,17 @@ KiArm64UserServiceEntry:
     movi v29.16b, #0
     movi v30.16b, #0
     movi v31.16b, #0
+    mrs x9, tpidr_el1
+    ldr x9, [x9, #PcCurrentPrcb]
+    ldr w9, [x9, #PbNumber]
+    ldr x10, =KiArm64UserDebugArmed
+    ldrb w9, [x10, x9]
+    ldrb w10, [sp, #TfDebugRegistersValid]
+    orr w9, w9, w10
+    cbz w9, .Luser_service_debug_done
+    mov x0, sp
+    bl KiArm64LoadUserDebugState
+.Luser_service_debug_done:
     ldr x9, [sp, #TfSp]
     msr sp_el0, x9
     ldr x10, [sp, #TfPc]
@@ -1334,11 +1354,15 @@ KiArm64PermVectorIrqLowerA64_Handler:
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     ARM64_SAVE_IRQ_EXTRA sp
 
+    mov x0, sp
+    bl KiArm64SaveIrqUserDebugState
     mov w0, #9
     mov x1, sp
     bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
+    mov x0, sp
+    bl KiArm64LoadIrqUserDebugState
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     /* Temporary audit: elapsed vector envelope, including dispatcher exit work. */
@@ -1406,11 +1430,15 @@ KiArm64PermVectorFiqLowerA64_Handler:
     ARM64_SAVE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     ARM64_SAVE_IRQ_EXTRA sp
 
+    mov x0, sp
+    bl KiArm64SaveIrqUserDebugState
     mov w0, #10
     mov x1, sp
     bl KiArm64InterruptDispatchOnIsrStack
     msr daifset, #0xF
     isb
+    mov x0, sp
+    bl KiArm64LoadIrqUserDebugState
     ARM64_RESTORE_FP_CONTROL ARM64_IRQ_FPCR, ARM64_IRQ_FPSR
     ARM64_RESTORE_NEON sp, ARM64_IRQ_NEON
     /* Temporary audit: elapsed vector envelope, including dispatcher exit work. */

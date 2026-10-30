@@ -639,6 +639,10 @@ ACPIDispatchDeviceControl(
                 status = AcpiEvalMethodForPciChildIoctl(fdoData, Irp);
                 break;
 
+            case IOCTL_ACPI_ENUM_CHILDREN_FOR_PCI:
+                status = AcpiEnumChildrenForPciDeviceIoctl(fdoData, Irp);
+                break;
+
             case IOCTL_ACPI_SET_POWER_FOR_PCI:
                 status = AcpiSetPowerForPciDeviceIoctl(fdoData, Irp);
                 break;

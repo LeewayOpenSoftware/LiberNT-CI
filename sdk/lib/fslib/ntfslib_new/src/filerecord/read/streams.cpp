@@ -263,7 +263,7 @@ FileRecord::QueryDataStreams(
                         Entry->BaseFileRef);
 
                 if (FileRecordNumber ==
-                    Header->MFTRecordNumber)
+                    RecordNumber)
                 {
                     if (SequenceNumber != 0 &&
                         SequenceNumber !=

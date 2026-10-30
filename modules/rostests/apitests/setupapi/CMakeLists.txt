@@ -3,6 +3,7 @@ list(APPEND SOURCE
     devclass.c
     InterruptAffinityPolicy.c
     InvalidDeviceInfoSet.c
+    SetupCommitFileQueue.c
     SetupDiInstallClassExA.c
     SetupDiGetActualModelsSection.c
     SetupInstallFile.c

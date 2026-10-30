@@ -275,7 +275,7 @@ FileRecord::FindAttributeFromList(_In_ AttributeType Type,
                   NameLength * sizeof(WCHAR))))
         {
             FileRecordNumber = GetFRNFromFileRef(Entry->BaseFileRef);
-            TargetRecord = FileRecordNumber == Header->MFTRecordNumber
+            TargetRecord = FileRecordNumber == RecordNumber
                 ? this
                 : GetExtentRecord(Entry->BaseFileRef);
             if (!TargetRecord)
@@ -321,7 +321,7 @@ FileRecord::FindNextAttributeFromList(_In_ AttributeType Type,
         if (Entry->Type != (ULONG)Type || Entry->FirstVCN != 0)
             continue;
 
-        TargetRecord = GetFRNFromFileRef(Entry->BaseFileRef) == Header->MFTRecordNumber
+        TargetRecord = GetFRNFromFileRef(Entry->BaseFileRef) == RecordNumber
             ? this
             : GetExtentRecord(Entry->BaseFileRef);
         if (!TargetRecord)
@@ -382,7 +382,7 @@ FileRecord::GetExtentRecord(_In_ ULONGLONG FileReference)
     if ((SequenceNumber != 0 &&
          Record->Header->SequenceNumber != SequenceNumber) ||
         GetFRNFromFileRef(Record->Header->BaseFileRecord) !=
-            Header->MFTRecordNumber)
+            RecordNumber)
     {
         delete Record;
         return NULL;
@@ -757,7 +757,7 @@ FileRecord::BuildCompositeDataRuns(_In_ PAttribute Attribute)
                 goto Corrupt;
 
             FileRecordNumber = GetFRNFromFileRef(ListEntry->BaseFileRef);
-            TargetRecord = FileRecordNumber == Header->MFTRecordNumber
+            TargetRecord = FileRecordNumber == RecordNumber
                 ? this
                 : GetExtentRecord(ListEntry->BaseFileRef);
             if (!TargetRecord)
@@ -943,5 +943,5 @@ FileRecord::GetRecordDiskRange(_Out_ PULONGLONG Offset,
     }
 
     *Length = DiskVolume->MFT->FileRecordSize;
-    return DiskVolume->MFT->GetFileRecordDiskOffset(Header->MFTRecordNumber, Offset);
+    return DiskVolume->MFT->GetFileRecordDiskOffset(RecordNumber, Offset);
 }

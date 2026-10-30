@@ -7,6 +7,7 @@ extern void func_InterruptAffinityPolicy(void);
 extern void func_SetupDiGetActualModelsSection(void);
 extern void func_InvalidDeviceInfoSet(void);
 extern void func_SetupInstallServicesFromInfSectionEx(void);
+extern void func_SetupCommitFileQueue(void);
 extern void func_SetupDiInstallClassExA(void);
 extern void func_SetupInstallFile(void);
 
@@ -17,6 +18,7 @@ const struct test winetest_testlist[] =
     { "SetupDiGetActualModelsSection", func_SetupDiGetActualModelsSection },
     { "InvalidDeviceInfoSet", func_InvalidDeviceInfoSet },
     { "SetupInstallServicesFromInfSectionEx", func_SetupInstallServicesFromInfSectionEx},
+    { "SetupCommitFileQueue", func_SetupCommitFileQueue },
     { "SetupDiInstallClassExA", func_SetupDiInstallClassExA},
     { "SetupInstallFile", func_SetupInstallFile },
     { 0, 0 }

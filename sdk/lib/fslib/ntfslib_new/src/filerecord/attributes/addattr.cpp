@@ -1027,7 +1027,7 @@ FileRecord::InsertAttributeListEntry(
         (GetFRNFromFileRef(
              AttributeOwner->
                  Header->BaseFileRecord) !=
-             Header->MFTRecordNumber ||
+             RecordNumber ||
          AttributeOwner->Header->SequenceNumber == 0))
     {
         return STATUS_FILE_CORRUPT_ERROR;
@@ -1189,7 +1189,7 @@ FileRecord::InsertAttributeListEntry(
         }
         if (Comparison == 0 &&
             GetFRNFromFileRef(Entry->BaseFileRef) >
-                AttributeOwner->Header->MFTRecordNumber)
+                AttributeOwner->RecordNumber)
         {
             Comparison = -1;
         }
@@ -1258,7 +1258,7 @@ FileRecord::InsertAttributeListEntry(
             ((ULONGLONG)AttributeOwner->
                 Header->SequenceNumber << 48) |
             AttributeOwner->
-                Header->MFTRecordNumber;
+                RecordNumber;
         NewEntry->BaseFileRef =
             OwnerFileReference;
         NewEntry->AttributeId =
@@ -1275,7 +1275,7 @@ FileRecord::InsertAttributeListEntry(
 
     BaseFileReference =
         ((ULONGLONG)Header->SequenceNumber << 48) |
-        Header->MFTRecordNumber;
+        RecordNumber;
     if (AttributeOwner != this &&
         AttributeOwner->
             Header->BaseFileRecord !=
@@ -1465,7 +1465,7 @@ FileRecord::FilterAttributeList(
         BOOLEAN OwnerReferenced = FALSE;
 
         Status = DiskVolume->MFT->AllocateExtensionFileRecord(
-            ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber,
+            ((ULONGLONG)Header->SequenceNumber << 48) | RecordNumber,
             &Extension);
         if (!NT_SUCCESS(Status))
             return Status;
@@ -1571,7 +1571,7 @@ FileRecord::RemoveListedAttribute(
         }
         if (Entry->Type == AttributeType &&
             Entry->AttributeId == AttributeId &&
-            GetFRNFromFileRef(Entry->BaseFileRef) == Owner->Header->MFTRecordNumber)
+            GetFRNFromFileRef(Entry->BaseFileRef) == Owner->RecordNumber)
         {
             Matches++;
         }
@@ -1852,7 +1852,7 @@ FileRecord::CreateInitialAttributeList()
         BaseFileReference =
             ((ULONGLONG)
                 Header->SequenceNumber << 48) |
-            Header->MFTRecordNumber;
+            RecordNumber;
         Status = DiskVolume->MFT->
             AllocateExtensionFileRecord(
                 BaseFileReference,
@@ -2152,7 +2152,7 @@ FileRecord::CreateInitialAttributeList()
             ((ULONGLONG)Source->Owner->
                 Header->SequenceNumber << 48) |
             Source->Owner->
-                Header->MFTRecordNumber;
+                RecordNumber;
 
         Target->Type =
             Source->Attribute->AttributeType;
@@ -2710,7 +2710,7 @@ FileRecord::ReplaceNonResidentMappingPairs(
          StagedOwner->Header->SequenceNumber == 0 ||
          StagedOwner->Header->BaseFileRecord !=
              (((ULONGLONG)Header->SequenceNumber << 48) |
-              Header->MFTRecordNumber)))
+              RecordNumber)))
     {
         return STATUS_FILE_CORRUPT_ERROR;
     }
@@ -2901,7 +2901,7 @@ FileRecord::ReplaceNonResidentMappingPairs(
              BaseFileRecord !=
              (((ULONGLONG)
                    Header->SequenceNumber << 48) |
-              Header->MFTRecordNumber)) ||
+              RecordNumber)) ||
         !ListAttribute->IsNonResident ||
         ListAttribute->Flags != 0 ||
         ListAttribute->NonResident.FirstVCN != 0)
@@ -2976,13 +2976,13 @@ FileRecord::ReplaceNonResidentMappingPairs(
 
     BaseFileReference =
         ((ULONGLONG)Header->SequenceNumber << 48) |
-        Header->MFTRecordNumber;
+        RecordNumber;
     {
         ULONGLONG OwnerFileReference =
             ((ULONGLONG)AttributeOwner->
                 Header->SequenceNumber << 48) |
-            AttributeOwner->Header->
-                MFTRecordNumber;
+            AttributeOwner->
+                RecordNumber;
 
     Offset = 0;
     while (Offset < AttributeListLength)
@@ -3391,7 +3391,7 @@ FileRecord::ReplaceNonResidentMappingPairs(
             NewEntry->FirstVCN = 0;
             NewEntry->BaseFileRef =
                 ((ULONGLONG)AttributeOwner->Header->SequenceNumber << 48) |
-                AttributeOwner->Header->MFTRecordNumber;
+                AttributeOwner->RecordNumber;
             NewEntry->AttributeId = Attribute->AttributeID;
             OutputOffset += NewEntryLength;
         }
@@ -3407,7 +3407,7 @@ FileRecord::ReplaceNonResidentMappingPairs(
             NewEntry->FirstVCN = Current->FirstVcn;
             NewEntry->BaseFileRef =
                 ((ULONGLONG)Current->Record->Header->SequenceNumber << 48) |
-                Current->Record->Header->MFTRecordNumber;
+                Current->Record->RecordNumber;
             NewEntry->AttributeId = Current->Attribute->AttributeID;
             OutputOffset += NewEntryLength;
         }
@@ -3451,8 +3451,8 @@ FileRecord::ReplaceNonResidentMappingPairs(
                     ((ULONGLONG)
                          AttributeOwner->Header->
                              SequenceNumber << 48) |
-                    AttributeOwner->Header->
-                        MFTRecordNumber;
+                    AttributeOwner->
+                        RecordNumber;
                 OutputEntry->AttributeId =
                     Attribute->AttributeID;
             }
@@ -3481,8 +3481,8 @@ FileRecord::ReplaceNonResidentMappingPairs(
                     ((ULONGLONG)Current->
                         Record->Header->
                             SequenceNumber << 48) |
-                    Current->Record->Header->
-                        MFTRecordNumber;
+                    Current->Record->
+                        RecordNumber;
 
                 NewEntry->Type =
                     Attribute->AttributeType;

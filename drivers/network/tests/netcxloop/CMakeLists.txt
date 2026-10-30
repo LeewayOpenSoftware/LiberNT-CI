@@ -13,4 +13,9 @@ endfunction()
 add_netcxloop(netcxloop 5)
 add_netcxloop(netcxloop23 3)
 
+add_netcxloop(wifiloop 5)
+target_include_directories(wifiloop PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/wificx/1.2)
+target_compile_definitions(wifiloop PRIVATE NETCXLOOP_WIFI WIFI_VERSION_MAJOR=1 WIFI_VERSION_MINOR=2)
+target_link_libraries(wifiloop wificxstub)
+
 add_subdirectory(test)

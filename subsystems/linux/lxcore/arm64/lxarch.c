@@ -350,20 +350,58 @@ LxArchEmulateInstruction(
     return TRUE;
 }
 
+typedef struct _LX_ARM64_CORE
+{
+    UCHAR Implementer;
+    USHORT Part;
+} LX_ARM64_CORE;
+
+static const LX_ARM64_CORE LxArm64SsbSafe[] =
+{
+    { 0x41, 0xD03 }, { 0x41, 0xD04 }, { 0x41, 0xD05 }, { 0x42, 0x100 }, { 0x51, 0x803 }, { 0x51, 0x805 },
+};
+
+static const LX_ARM64_CORE LxArm64MeltdownSafe[] =
+{
+    { 0x41, 0xD03 }, { 0x41, 0xD04 }, { 0x41, 0xD05 }, { 0x41, 0xD07 }, { 0x41, 0xD08 }, { 0x41, 0xD09 },
+    { 0x42, 0x100 }, { 0x42, 0x516 }, { 0x43, 0x0AF }, { 0x48, 0xD01 }, { 0x4E, 0x004 }, { 0x51, 0x800 },
+    { 0x51, 0x801 }, { 0x51, 0x803 }, { 0x51, 0x805 },
+};
+
+static const LX_ARM64_CORE LxArm64SpectreV2Safe[] =
+{
+    { 0x41, 0xD03 }, { 0x41, 0xD04 }, { 0x41, 0xD05 }, { 0x42, 0x100 }, { 0x48, 0xD01 }, { 0x51, 0x801 },
+    { 0x51, 0x803 }, { 0x51, 0x805 },
+};
+
+static const LX_ARM64_CORE LxArm64BhbSafe[] =
+{
+    { 0x41, 0xD03 }, { 0x41, 0xD04 }, { 0x41, 0xD05 }, { 0x41, 0xD46 }, { 0x41, 0xD80 }, { 0x42, 0x100 },
+    { 0x51, 0x801 }, { 0x51, 0x803 }, { 0x51, 0x805 },
+};
+
+static
+BOOLEAN
+LxArm64CoreListed(
+    _In_ ULONG64 Midr,
+    _In_reads_(Count) const LX_ARM64_CORE *List,
+    _In_ ULONG Count)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < Count; Index++)
+    {
+        if ((((Midr >> 24) & 0xFF) == List[Index].Implementer) && (((Midr >> 4) & 0xFFF) == List[Index].Part))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 LONG
 LxArchSpecStoreBypassMode(VOID)
 {
-    static const struct
-    {
-        UCHAR Implementer;
-        USHORT Part;
-    } Unaffected[] =
-    {
-        { 0x41, 0xD03 }, { 0x41, 0xD04 }, { 0x41, 0xD05 }, { 0x42, 0x100 }, { 0x51, 0x803 }, { 0x51, 0x805 },
-    };
     static volatile LONG Cached = MINLONG;
     ULONG64 Midr;
-    ULONG Index;
     LONG Mode;
 
     Mode = ReadNoFence(&Cached);
@@ -371,16 +409,118 @@ LxArchSpecStoreBypassMode(VOID)
         return Mode;
     Midr = ARM64_READ_SYSREG(MIDR_EL1);
     Mode = (LX_ID_FIELD(LxArm64ReadIdRegister(4, 1), 4) != 0) ? LX_SPEC_MODE_DYNAMIC : LX_SPEC_MODE_VULNERABLE;
-    for (Index = 0; Index < RTL_NUMBER_OF(Unaffected); Index++)
-    {
-        if ((((Midr >> 24) & 0xFF) == Unaffected[Index].Implementer) &&
-            (((Midr >> 4) & 0xFFF) == Unaffected[Index].Part))
-        {
-            Mode = LX_SPEC_MODE_UNAFFECTED;
-        }
-    }
+    if (LxArm64CoreListed(Midr, LxArm64SsbSafe, RTL_NUMBER_OF(LxArm64SsbSafe)))
+        Mode = LX_SPEC_MODE_UNAFFECTED;
     InterlockedExchange(&Cached, Mode);
     return Mode;
+}
+
+#define LX_A64_SCTLR_DSSBS      (1ULL << 44)
+#define LX_VULN_UNAFFECTED      0
+#define LX_VULN_MITIGATED       1
+#define LX_VULN_VULNERABLE      2
+
+typedef struct _LX_ARM64_EXPOSURE
+{
+    LONG Meltdown;
+    LONG SpectreV2;
+    LONG Bhb;
+    LONG Ssb;
+} LX_ARM64_EXPOSURE, *PLX_ARM64_EXPOSURE;
+
+static
+VOID
+LxArm64ExposureThisCpu(
+    _Inout_ PLX_ARM64_EXPOSURE Exposure)
+{
+    ULONG64 Midr = ARM64_READ_SYSREG(MIDR_EL1);
+    ULONG64 Pfr0 = LxArm64ReadIdRegister(4, 0), Pfr1 = LxArm64ReadIdRegister(4, 1), Mmfr1 = LxArm64ReadIdRegister(7, 1);
+    ULONG Csv2 = LX_ID_FIELD(Pfr0, 56);
+    LONG State;
+
+    State = ((LX_ID_FIELD(Pfr0, 60) != 0) || LxArm64CoreListed(Midr, LxArm64MeltdownSafe, RTL_NUMBER_OF(LxArm64MeltdownSafe))) ?
+            LX_VULN_UNAFFECTED : LX_VULN_VULNERABLE;
+    Exposure->Meltdown = max(Exposure->Meltdown, State);
+    State = ((Csv2 != 0) || LxArm64CoreListed(Midr, LxArm64SpectreV2Safe, RTL_NUMBER_OF(LxArm64SpectreV2Safe))) ?
+            LX_VULN_UNAFFECTED : LX_VULN_VULNERABLE;
+    Exposure->SpectreV2 = max(Exposure->SpectreV2, State);
+    if ((Csv2 >= 3) || LxArm64CoreListed(Midr, LxArm64BhbSafe, RTL_NUMBER_OF(LxArm64BhbSafe)))
+        State = LX_VULN_UNAFFECTED;
+    else if (LX_ID_FIELD(Mmfr1, 60) != 0)
+        State = LX_VULN_MITIGATED;
+    else
+        State = LX_VULN_VULNERABLE;
+    Exposure->Bhb = max(Exposure->Bhb, State);
+    if (LxArm64CoreListed(Midr, LxArm64SsbSafe, RTL_NUMBER_OF(LxArm64SsbSafe)))
+        State = LX_VULN_UNAFFECTED;
+    else if ((LX_ID_FIELD(Pfr1, 4) != 0) && !(ARM64_READ_SYSREG(SCTLR_EL1) & LX_A64_SCTLR_DSSBS))
+        State = LX_VULN_MITIGATED;
+    else
+        State = LX_VULN_VULNERABLE;
+    Exposure->Ssb = max(Exposure->Ssb, State);
+}
+
+static
+const LX_ARM64_EXPOSURE *
+LxArm64QueryExposure(VOID)
+{
+    static LX_ARM64_EXPOSURE Cached;
+    static volatile LONG Ready;
+    LX_ARM64_EXPOSURE Exposure;
+    GROUP_AFFINITY Affinity, Previous;
+    PROCESSOR_NUMBER Number;
+    ULONG Count, Index;
+
+    if (ReadAcquire(&Ready))
+        return &Cached;
+    RtlZeroMemory(&Exposure, sizeof(Exposure));
+    Count = KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
+    for (Index = 0; Index < Count; Index++)
+    {
+        if (!NT_SUCCESS(KeGetProcessorNumberFromIndex(Index, &Number)))
+            continue;
+        RtlZeroMemory(&Affinity, sizeof(Affinity));
+        Affinity.Group = Number.Group;
+        Affinity.Mask = (KAFFINITY)1 << Number.Number;
+        KeSetSystemGroupAffinityThread(&Affinity, &Previous);
+        LxArm64ExposureThisCpu(&Exposure);
+        KeRevertToUserGroupAffinityThread(&Previous);
+    }
+    Cached = Exposure;
+    InterlockedExchange(&Ready, 1);
+    return &Cached;
+}
+
+/* TODO: the NT kernel has no kernel unmapping at EL0, no branch predictor hardening, no Spectre-BHB clearing and no user pointer sanitization, so affected cores read Vulnerable for Meltdown, Spectre v2 and BHB and every core reads Vulnerable for Spectre v1. */
+/* FIXME: cores without CSV2 or SSBS read Vulnerable without asking firmware (SMCCC_ARCH_WORKAROUND_1/2) whether they need the workaround. */
+PCSTR
+LxArchCpuVulnerability(
+    _In_ PCSTR Name)
+{
+    const LX_ARM64_EXPOSURE *Exposure;
+
+    if (strcmp(Name, "spectre_v1") == 0)
+        return "Vulnerable";
+    if ((strcmp(Name, "meltdown") != 0) && (strcmp(Name, "spectre_v2") != 0) && (strcmp(Name, "spec_store_bypass") != 0))
+        return "Not affected";
+    Exposure = LxArm64QueryExposure();
+    if (strcmp(Name, "meltdown") == 0)
+        return (Exposure->Meltdown == LX_VULN_UNAFFECTED) ? "Not affected" : "Vulnerable";
+    if (strcmp(Name, "spec_store_bypass") == 0)
+    {
+        if (Exposure->Ssb == LX_VULN_UNAFFECTED)
+            return "Not affected";
+        if (Exposure->Ssb == LX_VULN_MITIGATED)
+            return "Mitigation: Speculative Store Bypass disabled via prctl";
+        return "Vulnerable";
+    }
+    if (Exposure->SpectreV2 != LX_VULN_UNAFFECTED)
+        return "Vulnerable";
+    if (Exposure->Bhb == LX_VULN_UNAFFECTED)
+        return "Not affected";
+    if (Exposure->Bhb == LX_VULN_MITIGATED)
+        return "Mitigation: CSV2, BHB";
+    return "Mitigation: CSV2, but not BHB";
 }
 
 VOID
@@ -399,6 +539,163 @@ LxArchApplySpeculation(
 #define LX_A64_PSTATE_RES0 (0xFFFFFFFF00000000ULL | 0x0C000000ULL | 0x00C00000ULL | 0x001FE000ULL | 0x20ULL)
 #define LX_A64_PSTATE_MODE  0x1FULL
 #define LX_A64_PSTATE_DAIF  0x3C0ULL
+
+#define LX_A64_HW_TYPE_EXECUTE  0
+#define LX_A64_HW_TYPE_RW       3
+#define LX_A64_HW_LEN_4         0x0F
+#define LX_A64_HW_PRIVILEGE_EL0 (2UL << 1)
+
+/* FIXME: the NT CONTEXT holds 8 breakpoints and 2 watchpoints, so slots the hardware has beyond those are not offered. */
+static
+ULONG
+LxArchHwSlots(
+    _In_ BOOLEAN Watch)
+{
+    ULONG64 Dfr0 = ARM64_READ_SYSREG(S3_0_C0_C5_0);
+    ULONG Slots = (ULONG)((Dfr0 >> (Watch ? 20 : 12)) & 0xF) + 1;
+
+    return min(Slots, Watch ? ARM64_MAX_WATCHPOINTS : ARM64_MAX_BREAKPOINTS);
+}
+
+static
+ULONG
+LxArchHwLength(
+    _In_ ULONG Mask)
+{
+    ULONG Length = 0;
+
+    while (Mask & 1)
+    {
+        Length++;
+        Mask >>= 1;
+    }
+    return (Mask == 0) ? Length : 0;
+}
+
+static
+LONG
+LxArchHwEncode(
+    _In_ BOOLEAN Watch,
+    _In_ ULONG Current,
+    _In_ BOOLEAN HaveControl,
+    _In_ ULONG Control,
+    _Inout_ PULONG64 Address,
+    _Out_ PULONG Result)
+{
+    ULONG Type, Length, Mask, Offset, Enabled;
+    ULONG64 Aligned;
+
+    if (Current != 0)
+    {
+        Type = (Current >> 3) & 3;
+        Mask = (Current >> 5) & 0xFF;
+        while ((Mask != 0) && !(Mask & 1))
+            Mask >>= 1;
+        Length = LxArchHwLength(Mask);
+        Enabled = Current & 1;
+    }
+    else
+    {
+        Type = Watch ? LX_A64_HW_TYPE_RW : LX_A64_HW_TYPE_EXECUTE;
+        Length = 4;
+        Enabled = 0;
+    }
+    if (HaveControl)
+    {
+        Enabled = Control & 1;
+        if (Enabled)
+        {
+            Type = (Control >> 3) & 3;
+            Mask = (Control >> 5) & 0xFF;
+            if (Mask == 0)
+                return -LX_EINVAL;
+            for (Offset = 0; !(Mask & 1); Offset++)
+                Mask >>= 1;
+            Length = LxArchHwLength(Mask);
+            if ((Length == 0) || (Watch ? (Type == LX_A64_HW_TYPE_EXECUTE) : (Type != LX_A64_HW_TYPE_EXECUTE)))
+                return -LX_EINVAL;
+            *Address += Offset;
+        }
+    }
+    if (*Address > (ULONG64)(ULONG_PTR)MM_HIGHEST_USER_ADDRESS)
+        return -LX_EINVAL;
+    if (Type == LX_A64_HW_TYPE_EXECUTE)
+        Length = 4;
+    Offset = (ULONG)(*Address & ((Type == LX_A64_HW_TYPE_EXECUTE) ? 3 : 7));
+    Aligned = *Address - Offset;
+    *Address = Aligned;
+    *Result = (((((1UL << Length) - 1) << Offset) & 0xFF) << 5) | (Type << 3) | LX_A64_HW_PRIVILEGE_EL0 | Enabled;
+    return 0;
+}
+
+static
+LONG
+LxArchSetHwDebug(
+    _Inout_ PCONTEXT Context,
+    _In_ BOOLEAN Watch,
+    _In_reads_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG Length)
+{
+    ULONG Count = LxArchHwSlots(Watch), Slot, Offset, Control, Encoded;
+    ULONG64 Address;
+    LONG Error;
+
+    for (Slot = 0, Offset = 8; Offset < Length; Slot++, Offset += 16)
+    {
+        if (Length - Offset < sizeof(ULONG64))
+            return -LX_EINVAL;
+        if (Slot >= Count)
+            return -LX_ENOSPC;
+        RtlCopyMemory(&Address, Buffer + Offset, sizeof(Address));
+        Control = 0;
+        if (Length - Offset >= sizeof(ULONG64) + sizeof(ULONG))
+            RtlCopyMemory(&Control, Buffer + Offset + sizeof(ULONG64), sizeof(Control));
+        Error = LxArchHwEncode(Watch, Watch ? Context->Wcr[Slot] : Context->Bcr[Slot],
+                               Length - Offset >= sizeof(ULONG64) + sizeof(ULONG), Control, &Address, &Encoded);
+        if (Error != 0)
+            return Error;
+        if (Watch)
+        {
+            Context->Wvr[Slot] = Address;
+            Context->Wcr[Slot] = Encoded;
+        }
+        else
+        {
+            Context->Bvr[Slot] = Address;
+            Context->Bcr[Slot] = Encoded;
+        }
+    }
+    return 0;
+}
+
+/* FIXME: a single step that ends on an armed breakpoint address is reported as the breakpoint hit. */
+BOOLEAN
+LxArchHardwareBreakpointHit(
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _Out_ PULONG64 Address)
+{
+    ULONG Slot;
+
+    if (ExceptionRecord->ExceptionCode != STATUS_SINGLE_STEP)
+        return FALSE;
+    if (ExceptionRecord->NumberParameters >= 2)
+    {
+        *Address = (ULONG64)ExceptionRecord->ExceptionInformation[0];
+        return TRUE;
+    }
+    if (!TrapFrame->DebugRegistersValid)
+        return FALSE;
+    for (Slot = 0; Slot < ARM64_MAX_BREAKPOINTS; Slot++)
+    {
+        if ((TrapFrame->Bcr[Slot] & 1) && (TrapFrame->Bvr[Slot] == (TrapFrame->Pc & ~3ULL)))
+        {
+            *Address = TrapFrame->Pc;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
 
 LONG
 LxArchPtraceGetRegset(
@@ -443,13 +740,23 @@ LxArchPtraceGetRegset(
             *Unit = sizeof(ULONG64);
             return 0;
 
-        /* TODO: report and program the hardware breakpoint and watchpoint slots once the kernel arms them for EL0. */
         case LX_NT_ARM_HW_BREAK:
         case LX_NT_ARM_HW_WATCH:
-            Words[0] = (ULONG)(ARM64_READ_SYSREG(S3_0_C0_C5_0) & 0xF) << 8;
+        {
+            BOOLEAN Watch = (Type == LX_NT_ARM_HW_WATCH);
+            ULONG Count = LxArchHwSlots(Watch);
+
+            RtlZeroMemory(Buffer, 66 * sizeof(ULONG));
+            Words[0] = ((ULONG)(ARM64_READ_SYSREG(S3_0_C0_C5_0) & 0xF) << 8) | Count;
+            for (Index = 0; Index < Count; Index++)
+            {
+                Registers[1 + 2 * Index] = Watch ? Context->Wvr[Index] : Context->Bvr[Index];
+                Words[4 + 4 * Index] = Watch ? Context->Wcr[Index] : Context->Bcr[Index];
+            }
             *Size = 66 * sizeof(ULONG);
             *Unit = sizeof(ULONG);
             return 0;
+        }
 
         case LX_NT_ARM_SYSTEM_CALL:
             Words[0] = (ULONG)SyscallNr;
@@ -468,7 +775,8 @@ LxArchPtraceSetRegset(
     _Inout_ PULONG64 Tls,
     _Inout_ PLONG SyscallNr,
     _In_ ULONG Type,
-    _In_reads_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer)
+    _In_reads_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer,
+    _In_ ULONG Length)
 {
     PULONG64 Registers = (PULONG64)Buffer;
     PULONG Words = (PULONG)Buffer;
@@ -503,7 +811,7 @@ LxArchPtraceSetRegset(
 
         case LX_NT_ARM_HW_BREAK:
         case LX_NT_ARM_HW_WATCH:
-            return -LX_ENOSPC;
+            return LxArchSetHwDebug(Context, Type == LX_NT_ARM_HW_WATCH, Buffer, Length);
 
         case LX_NT_ARM_SYSTEM_CALL:
             *SyscallNr = (LONG)Words[0];
@@ -538,6 +846,21 @@ LxArchExecPersonality(
     _In_ ULONG Personality)
 {
     return Personality & ~LX_PER_READ_IMPLIES_EXEC;
+}
+
+VOID
+LxArchMmapRndBits(
+    _Out_ PULONG Minimum,
+    _Out_ PULONG Maximum)
+{
+    *Minimum = 18;
+    *Maximum = 30;
+}
+
+ULONG64
+LxArchStackRndMask(VOID)
+{
+    return 0x3FFFF;
 }
 
 LONG
@@ -623,6 +946,11 @@ LxArchSetExecContext(
         TrapFrame->VfpState->Fpcr = 0;
         TrapFrame->VfpState->Fpsr = 0;
     }
+    TrapFrame->DebugRegistersValid = FALSE;
+    RtlZeroMemory(TrapFrame->Bcr, sizeof(TrapFrame->Bcr));
+    RtlZeroMemory(TrapFrame->Bvr, sizeof(TrapFrame->Bvr));
+    RtlZeroMemory(TrapFrame->Wcr, sizeof(TrapFrame->Wcr));
+    RtlZeroMemory(TrapFrame->Wvr, sizeof(TrapFrame->Wvr));
 }
 
 VOID
@@ -669,6 +997,21 @@ LxArchCaptureContext(
         Context->Fpsr = TrapFrame->VfpState->Fpsr;
         RtlCopyMemory(Context->V, TrapFrame->VfpState->V, sizeof(Context->V));
     }
+
+    if (TrapFrame->DebugRegistersValid)
+    {
+        for (Index = 0; Index < ARM64_MAX_BREAKPOINTS; Index++)
+        {
+            Context->Bcr[Index] = TrapFrame->Bcr[Index];
+            Context->Bvr[Index] = TrapFrame->Bvr[Index];
+        }
+        for (Index = 0; Index < ARM64_MAX_WATCHPOINTS; Index++)
+        {
+            Context->Wcr[Index] = TrapFrame->Wcr[Index];
+            Context->Wvr[Index] = TrapFrame->Wvr[Index];
+        }
+    }
+    Context->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
 }
 
 ULONG
@@ -795,6 +1138,24 @@ LxArchRestoreContext(
         TrapFrame->VfpState->Fpcr = Context->Fpcr;
         TrapFrame->VfpState->Fpsr = Context->Fpsr;
         RtlCopyMemory(TrapFrame->VfpState->V, Context->V, sizeof(Context->V));
+    }
+    if ((Context->ContextFlags & CONTEXT_DEBUG_REGISTERS) == CONTEXT_DEBUG_REGISTERS)
+    {
+        BOOLEAN Active = FALSE;
+
+        for (Index = 0; Index < ARM64_MAX_BREAKPOINTS; Index++)
+        {
+            TrapFrame->Bcr[Index] = Context->Bcr[Index];
+            TrapFrame->Bvr[Index] = Context->Bvr[Index];
+            Active |= (Context->Bcr[Index] & 1) != 0;
+        }
+        for (Index = 0; Index < ARM64_MAX_WATCHPOINTS; Index++)
+        {
+            TrapFrame->Wcr[Index] = Context->Wcr[Index];
+            TrapFrame->Wvr[Index] = Context->Wvr[Index];
+            Active |= (Context->Wcr[Index] & 1) != 0;
+        }
+        TrapFrame->DebugRegistersValid = Active;
     }
 }
 

@@ -2243,6 +2243,12 @@ LxCreateThread(
     }
     LxNsThreadInherit(Thread, Call->Thread);
     LxSeccompInherit(Thread, Call->Thread);
+    Error = LxKeyThreadInherit(Thread, Call->Thread, LX_KEY_INHERIT_THREAD);
+    if (Error != 0)
+    {
+        LxThreadFree(Thread);
+        return Error;
+    }
     Tid = LxTidNr(Call->Process, Thread);
     Thread->Tls = (Request->Flags & LX_CLONE_SETTLS) ? Request->Tls : LxArchGetThreadPointer(Call->TrapFrame);
     Thread->SigMask = Call->Thread->SigMask;
@@ -2358,6 +2364,8 @@ LxForkProcess(
     }
     if (Request->Flags & LX_CLONE_FS)
         Error = LxNsShareFs(Thread, Call->Thread);
+    if (Error == 0)
+        Error = LxKeyThreadInherit(Thread, Call->Thread, LX_KEY_INHERIT_PROCESS);
     if (Error == 0)
         Error = LxPidAssign(Child, Thread, Request->SetTid, Request->SetTidCount);
     if (Error != 0)
@@ -2606,6 +2614,7 @@ LxVforkExec(
     Thread->UserAffinity = Borrowed->UserAffinity;
     LxNsThreadInherit(Thread, Borrowed);
     LxSeccompInherit(Thread, Borrowed);
+    LxKeyThreadInherit(Thread, Borrowed, LX_KEY_INHERIT_TASK);
     LxPtraceTransfer(Borrowed, Thread);
     KeInitializeEvent(&Request->Done, NotificationEvent, FALSE);
     Request->Vfork = TRUE;
@@ -2699,6 +2708,7 @@ LxSharedVmExec(
     Thread->UserAffinity = Current->UserAffinity;
     LxNsThreadInherit(Thread, Current);
     LxSeccompInherit(Thread, Current);
+    LxKeyThreadInherit(Thread, Current, LX_KEY_INHERIT_TASK);
     LxPtraceTransfer(Current, Thread);
     KeInitializeEvent(&Request->Done, NotificationEvent, FALSE);
     Request->Vfork = TRUE;
@@ -2917,7 +2927,7 @@ LxCaptureVector(
     ULONG64 Pointer;
     PSTR String;
     LONG64 Result;
-    ULONG StringLength;
+    ULONG StringLength, Capacity = 0;
     PSTR NewList;
 
     *List = NULL;
@@ -2945,18 +2955,23 @@ LxCaptureVector(
             return -LX_E2BIG;
         }
 
-        NewList = LxAlloc(*Length + StringLength);
-        if (NewList == NULL)
+        if (*Length + StringLength > Capacity)
         {
-            LxFree(String);
-            return -LX_ENOMEM;
+            Capacity = max(max(Capacity * 2, *Length + StringLength), 256UL);
+            Capacity = min(Capacity, (ULONG)LX_MAX_ARG_TOTAL);
+            NewList = LxAlloc(Capacity);
+            if (NewList == NULL)
+            {
+                LxFree(String);
+                return -LX_ENOMEM;
+            }
+            if (*List != NULL)
+                RtlCopyMemory(NewList, *List, *Length);
+            LxFree(*List);
+            *List = NewList;
         }
-        if (*List != NULL)
-            RtlCopyMemory(NewList, *List, *Length);
-        RtlCopyMemory(NewList + *Length, String, StringLength);
+        RtlCopyMemory(*List + *Length, String, StringLength);
         LxFree(String);
-        LxFree(*List);
-        *List = NewList;
         *Length += StringLength;
         (*Count)++;
     }
@@ -4172,12 +4187,6 @@ LX_SYSCALL(LxSysIoprioGet)
     return (2 << 13) | 4;
 }
 
-LX_SYSCALL(LxSysKeyctl)
-{
-    UNREFERENCED_PARAMETER(Call);
-    return -LX_ENOSYS;
-}
-
 LX_SYSCALL(LxSysPersonality)
 {
     ULONG Persona = (ULONG)Call->Args[0];
@@ -4187,7 +4196,6 @@ LX_SYSCALL(LxSysPersonality)
         return Old;
     if (!LxArchPersonalityAllowed(Persona))
         return -LX_EINVAL;
-    /* TODO: apply ADDR_NO_RANDOMIZE once exec randomizes the layout. */
     Call->Process->Personality = Persona;
     return Old;
 }

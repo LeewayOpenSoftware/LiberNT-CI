@@ -1479,6 +1479,7 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     ULONG64 TotalPages;
     NTSTATUS LogStatus = STATUS_SUCCESS;
     NTSTATUS RefreshStatus;
+    NTSTATUS BootLogStatus = STATUS_NOT_FOUND;
     NTSTATUS Status;
     ULONG ValidDump;
     BOOLEAN LogSaved = FALSE;
@@ -1490,6 +1491,11 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
             Status = STATUS_DEVICE_NOT_READY;
         KdpDisplayCrashDumpInitializationFailure(Status);
         KdpCaptureEarlyCrashDiagnostics();
+        BootLogStatus = KdpWriteBootLogAtCrash(NULL, NULL);
+        if (NT_SUCCESS(BootLogStatus))
+            InbvDisplayString("\r\nCrash log saved to lastboot.log on the boot volume.\r\n");
+        else if (BootLogStatus != STATUS_NOT_FOUND)
+            DbgPrint("KD: Boot log tail write failed with status 0x%08lx.\n", BootLogStatus);
         return Status;
     }
 
@@ -1567,6 +1573,10 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     Status = KdpCrashDumpState.Storage.Prepare(KdpCrashDumpState.Storage.Context);
     if (!NT_SUCCESS(Status))
         goto Exit;
+
+    BootLogStatus = KdpWriteBootLogAtCrash(&KdpCrashDumpState.Storage, KdpCrashDumpState.FileObject);
+    if (!NT_SUCCESS(BootLogStatus) && (BootLogStatus != STATUS_NOT_FOUND))
+        DbgPrint("KD: Boot log tail write failed with status 0x%08lx.\n", BootLogStatus);
 
     /* Commit diagnostics first so a later memory-page failure cannot erase the useful crash report. */
     if (KdpCrashDumpState.Dedicated)
@@ -1662,6 +1672,8 @@ NTSTATUS NTAPI KdpWriteCrashDump(VOID)
     /* Reserve the final 5% for the crash log and valid-header commit. */
     if (Step <= KDP_DUMP_DATA_PROGRESS_STEPS)
         KdpDisplayCrashDumpProgress(95);
+    if (NT_SUCCESS(BootLogStatus))
+        KdpWriteBootLogAtCrash(&KdpCrashDumpState.Storage, KdpCrashDumpState.FileObject);
     if (KdpCrashDumpState.Dedicated)
     {
         DbgPrint("\nKD: Physical memory data written; refreshing crash boot log.\n");
@@ -1766,6 +1778,8 @@ VOID NTAPI KdpPublishCrashDumpArtifacts(VOID)
 
 NTSTATUS NTAPI KdpWriteCrashDump(VOID)
 {
+    if (NT_SUCCESS(KdpWriteBootLogAtCrash(NULL, NULL)))
+        InbvDisplayString("\r\nCrash log saved to lastboot.log on the boot volume.\r\n");
     return STATUS_NOT_SUPPORTED;
 }
 

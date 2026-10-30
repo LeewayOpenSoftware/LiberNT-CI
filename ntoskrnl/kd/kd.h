@@ -70,12 +70,6 @@ KdpSerialInit(
 
 NTSTATUS
 NTAPI
-KdpDebugLogInit(
-    _In_ struct _KD_DISPATCH_TABLE *DispatchTable,
-    _In_ ULONG BootPhase);
-
-NTSTATUS
-NTAPI
 KdpNetInit(
     _In_ struct _KD_DISPATCH_TABLE *DispatchTable,
     _In_ ULONG BootPhase);
@@ -126,12 +120,11 @@ KdpInfoState(VOID);
 /* KD Native Modes */
 // #define KdScreen    0
 // #define KdSerial    1
-// #define KdFile      2
 #ifdef KDBG
-// #define KdKdbg      3
-#define KdMax       5
-#else
+// #define KdKdbg      2
 #define KdMax       4
+#else
+#define KdMax       3
 #endif
 
 /* KD Private Debug Modes */
@@ -168,9 +161,6 @@ extern KDP_DEBUG_MODE KdpDebugMode;
 /* Port Information for the Serial Native Mode */
 extern ULONG  SerialPortNumber;
 extern CPPORT SerialPortInfo;
-
-/* Logging file path */
-extern ANSI_STRING KdpLogFileName;
 
 /* Init Functions for Native Providers */
 extern PKDP_INIT_ROUTINE InitRoutines[KdMax];

@@ -17,6 +17,17 @@ DxgkAdapterMapRangeAssigned(
     _In_ BOOLEAN InIoSpace);
 
 BOOLEAN
+DxgkAdapterHasMemoryResources(
+    _In_opt_ PCM_RESOURCE_LIST TranslatedResources);
+
+BOOLEAN
+DxgkAdapterIsPostDevice(
+    _In_opt_ PCM_RESOURCE_LIST TranslatedResources,
+    _In_ PHYSICAL_ADDRESS FrameBufferBase,
+    _In_ ULONGLONG FrameBufferLength,
+    _In_ BOOLEAN AcpiEnumerated);
+
+BOOLEAN
 DxgkAdapterMapOwnerMatches(
     _In_ PVOID OwnerAdapter,
     _In_opt_ PVOID OwnerProcess,

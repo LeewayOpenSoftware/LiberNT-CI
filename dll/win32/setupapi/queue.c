@@ -1788,11 +1788,18 @@ BOOL WINAPI SetupCommitFileQueueW( HWND owner, HSPFILEQ handle, PSP_FILE_CALLBAC
                 src_path[0] = 0;
                 if (op->src_path)
                 {
-                    lstrcpyW(src_path, op->src_path);
-                    path_len = lstrlenW(src_path);
-
-                    lstrcatW(op->media->root, L"\\");
-                    lstrcatW(op->media->root, op->src_path);
+                    path_len = lstrlenW(op->src_path);
+                    if (path_len < ARRAYSIZE(src_path) &&
+                        lstrlenW(op->media->root) + 1 + path_len < ARRAYSIZE(op->media->root))
+                    {
+                        lstrcpyW(src_path, op->src_path);
+                        lstrcatW(op->media->root, L"\\");
+                        lstrcatW(op->media->root, op->src_path);
+                    }
+                    else
+                    {
+                        path_len = 0;
+                    }
 
                     HeapFree(GetProcessHeap(), 0, op->src_path);
                     op->src_path = NULL;
@@ -1860,6 +1867,13 @@ BOOL WINAPI SetupCommitFileQueueW( HWND owner, HSPFILEQ handle, PSP_FILE_CALLBAC
                     }
                     else if (op_result != FILEOP_DOIT)
                         FIXME("Unhandled return value %#x.\n", op_result);
+                }
+
+                if (!op->media->resolved && path_len > 0)
+                {
+                    size_t root_len = lstrlenW(op->media->root);
+                    if (path_len < root_len && !wcsnicmp(op->media->root + root_len - path_len, src_path, path_len))
+                        op->media->root[root_len - path_len - 1] = 0;
                 }
             }
             else

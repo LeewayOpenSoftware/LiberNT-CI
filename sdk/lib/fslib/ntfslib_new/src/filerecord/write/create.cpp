@@ -105,7 +105,7 @@ FileRecord::InitializeNewFileRecord(
     if (!NT_SUCCESS(Status))
         goto Done;
     ParentReference =
-        MakeFileReference(Parent->Header);
+        MakeFileReference(Parent);
 
     ParentSecurity = Parent->GetAttribute(
         TypeSecurityDescriptor,

@@ -520,8 +520,11 @@ NwifiDispatchNotification(const NWIFI_NOTIFICATION *pNotif)
             WlanSvcRefreshInterfaces();
             iface = WlanSvcFindInterfaceByIndex(pNotif->InterfaceIndex);
             if (iface != NULL)
+            {
                 WlanSvcIndicateAcm(iface,
                                    wlan_notification_acm_interface_arrival);
+                WlanSvcRequestScan();
+            }
             break;
 
         case NwifiNotifyInterfaceRemoval:

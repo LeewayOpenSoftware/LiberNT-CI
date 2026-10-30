@@ -472,7 +472,7 @@ MasterFileTable::CreateFileInDirectory(
         FileName->NameType = NAME_TYPE_WIN32;
         Status = InsertFileNameLink(NewFile,
                                     FileName,
-                                    MakeFileReference(Parent->Header),
+                                    MakeFileReference(Parent),
                                     ShortName,
                                     ShortNameLength,
                                     NAME_TYPE_DOS,
@@ -514,7 +514,7 @@ MasterFileTable::CreateFileInDirectory(
         goto Rollback;
 
     FileReference =
-        MakeFileReference(NewFile->Header);
+        MakeFileReference(NewFile);
     Status = ParentIndex.AddFileToDirectory(
         Parent,
         FileReference,
@@ -567,7 +567,7 @@ Rollback:
                 "Unable to roll back MFT record %lu "
                 "after create failure 0x%lx "
                 "(rollback 0x%lx).\n",
-                NewFile->Header->MFTRecordNumber,
+                NewFile->RecordNumber,
                 Status,
                 RollbackStatus);
         }

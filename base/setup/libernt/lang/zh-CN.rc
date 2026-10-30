@@ -264,6 +264,7 @@ BEGIN
     IDS_APPSSUBTITLE "LiberNT 从发布者处下载这些组件，并为所有帐户安装。"
     IDS_APPS_COL_NAME "组件"
     IDS_APPS_COL_SOURCE "下载来源"
+    IDS_APPS_INSTALLED "%s (已安装)"
     IDS_OOBE_FINISHTITLE "正在准备 LiberNT"
     IDS_OOBE_FINISHSUBTITLE "这可能需要几分钟。请保持计算机开机。"
     IDS_OOBE_APPLY_REGION "正在应用你的语言和键盘..."

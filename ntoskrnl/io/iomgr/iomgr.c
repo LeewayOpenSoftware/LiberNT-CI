@@ -716,6 +716,8 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
      * We can finally load other drivers from the boot volume. */
     PnPBootDriversInitialized = TRUE;
 
+    KdInitializeBootLog(LoaderBlock);
+
     /* Load system start drivers */
     IopInitializeSystemDrivers();
     PnpSystemInit = TRUE;

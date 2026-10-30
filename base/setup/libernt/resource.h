@@ -309,6 +309,7 @@
 #define IDS_OOBE_APPS_NOSPACE       5625
 #define IDS_OOBE_APPS_NOSPACE_TEXT  5626
 #define IDS_OOBE_INSTALL_DRIVERS    5627
+#define IDS_APPS_INSTALLED          5628
 
 #define IDS_TYPETITLE               5700
 #define IDS_TYPESUBTITLE            5701

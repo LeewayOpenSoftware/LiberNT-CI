@@ -1828,10 +1828,9 @@ KeBugCheckWithTf(IN ULONG BugCheckCode,
             }
 
             /* Break in the debugger */
-#ifndef _WINKD_
-            KdEnableBugCheckDebugger();
-#endif
+#ifdef _WINKD_
             KiBugCheckDebugBreak(DBG_STATUS_BUGCHECK_FIRST);
+#endif
         }
     }
 

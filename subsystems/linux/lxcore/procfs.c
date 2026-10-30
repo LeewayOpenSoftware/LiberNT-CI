@@ -3189,6 +3189,68 @@ LxWriteYamaScope(
 
 static
 VOID
+LxGenRandomizeVaSpace(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxTextPrintf(Text, "%ld\n", LxMmRandomizeVaSpace());
+}
+
+static
+LONG
+LxWriteRandomizeVaSpace(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    ULONG Value;
+    LONG Error;
+
+    UNREFERENCED_PARAMETER(File);
+    if (Length == 0)
+        return 0;
+    Error = LxParseWrittenNumber(Data, Length, &Value);
+    if ((Error == 0) && (Value > MAXLONG))
+        Error = -LX_EINVAL;
+    if (Error == 0)
+        LxMmSetRandomizeVaSpace((LONG)Value);
+    return Error;
+}
+
+static
+VOID
+LxGenMmapRndBits(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxTextPrintf(Text, "%lu\n", LxMmRndBits());
+}
+
+static
+LONG
+LxWriteMmapRndBits(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    ULONG Value;
+    LONG Error;
+
+    UNREFERENCED_PARAMETER(File);
+    if (Length == 0)
+        return 0;
+    Error = LxParseWrittenNumber(Data, Length, &Value);
+    return (Error != 0) ? Error : LxMmSetRndBits(Value);
+}
+
+static
+VOID
 LxGenSeccompActions(
     _In_ PLX_PROCESS Self,
     _In_ PLX_SYNTH Synth,
@@ -3392,6 +3454,20 @@ LxWriteNetSysctl(
     _In_reads_bytes_(Length) PCSTR Data,
     _In_ ULONG Length);
 
+static
+VOID
+LxGenKeySysctl(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text);
+
+static
+LONG
+LxWriteKeySysctl(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length);
+
 static const LX_TABLE_ENTRY LxProcSysTable[] =
 {
     { "fs/file-max", 0644, "9223372036854775807\n", NULL, LxWriteAccept },
@@ -3416,6 +3492,12 @@ static const LX_TABLE_ENTRY LxProcSysTable[] =
     { "kernel/dmesg_restrict", 0644, NULL, LxGenDmesgRestrict, LxWriteDmesgRestrict },
     { "kernel/domainname", 0644, NULL, LxGenDomainname, LxWriteDomainname },
     { "kernel/hostname", 0644, NULL, LxGenHostname, LxWriteHostname },
+    { "kernel/keys/gc_delay", 0644, NULL, LxGenKeySysctl, LxWriteKeySysctl },
+    { "kernel/keys/maxbytes", 0644, NULL, LxGenKeySysctl, LxWriteKeySysctl },
+    { "kernel/keys/maxkeys", 0644, NULL, LxGenKeySysctl, LxWriteKeySysctl },
+    { "kernel/keys/persistent_keyring_expiry", 0644, NULL, LxGenKeySysctl, LxWriteKeySysctl },
+    { "kernel/keys/root_maxbytes", 0644, NULL, LxGenKeySysctl, LxWriteKeySysctl },
+    { "kernel/keys/root_maxkeys", 0644, NULL, LxGenKeySysctl, LxWriteKeySysctl },
     { "kernel/kptr_restrict", 0644, "1\n", NULL, LxWriteAccept },
     { "kernel/ngroups_max", 0444, "65536\n", NULL, NULL },
     { "kernel/ns_last_pid", 0666, NULL, LxGenNsLastPid, LxWriteNsLastPid },
@@ -3433,6 +3515,7 @@ static const LX_TABLE_ENTRY LxProcSysTable[] =
     { "kernel/random/entropy_avail", 0444, "256\n", NULL, NULL },
     { "kernel/random/poolsize", 0444, "256\n", NULL, NULL },
     { "kernel/random/uuid", 0444, NULL, LxGenUuid, NULL },
+    { "kernel/randomize_va_space", 0644, NULL, LxGenRandomizeVaSpace, LxWriteRandomizeVaSpace },
     { "kernel/seccomp/actions_avail", 0444, NULL, LxGenSeccompActionsAvail, NULL },
     { "kernel/seccomp/actions_logged", 0644, NULL, LxGenSeccompActionsLogged, LxWriteSeccompActionsLogged },
     { "kernel/sysrq", 0644, "176\n", NULL, LxWriteAccept },
@@ -3451,6 +3534,7 @@ static const LX_TABLE_ENTRY LxProcSysTable[] =
     { "vm/compact_memory", 0200, "", NULL, LxWriteAccept },
     { "vm/drop_caches", 0200, "", NULL, LxWriteAccept },
     { "vm/max_map_count", 0644, NULL, LxGenMaxMapCount, LxWriteMaxMapCount },
+    { "vm/mmap_rnd_bits", 0600, NULL, LxGenMmapRndBits, LxWriteMmapRndBits },
     { "vm/nr_hugepages", 0644, NULL, LxGenHugePages, LxWriteHugePages },
     { "vm/nr_overcommit_hugepages", 0644, NULL, LxGenHugePages, LxWriteAccept },
     { "vm/overcommit_memory", 0644, "0\n", NULL, LxWriteAccept },
@@ -3499,6 +3583,41 @@ LxWriteNetSysctl(
         return -LX_EINVAL;
     LxProcessNs(Current->Process, LxNsNet)->Net.Sysctl[Index] = (LONG)Value;
     return 0;
+}
+
+static
+VOID
+LxGenKeySysctl(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    LONG Value;
+
+    UNREFERENCED_PARAMETER(Self);
+    if (LxKeySysctlGet(LxProcSysTable[Synth->Index].Path, &Value))
+        LxTextPrintf(Text, "%ld\n", Value);
+}
+
+static
+LONG
+LxWriteKeySysctl(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    ULONG Table = (ULONG)(ULONG_PTR)File->HandlerContext;
+    ULONG Value;
+    LONG Error;
+
+    if (Table >= RTL_NUMBER_OF(LxProcSysTable))
+        return -LX_EINVAL;
+    if (Length == 0)
+        return 0;
+    Error = LxParseWrittenNumber(Data, Length, &Value);
+    if (Error == 0)
+        Error = LxKeySysctlSet(LxProcSysTable[Table].Path, Value);
+    return Error;
 }
 
 static
@@ -3706,6 +3825,13 @@ LxGenDmi(
     { Root "/product_version", 0444, NULL, LxGenDmi, NULL }, \
     { Root "/sys_vendor", 0444, NULL, LxGenDmi, NULL }
 
+static
+VOID
+LxGenCpuVulnerability(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text);
+
 static const LX_TABLE_ENTRY LxSysTable[] =
 {
     { "block", 0755 | LX_S_IFDIR, NULL, NULL, NULL },
@@ -3724,6 +3850,25 @@ static const LX_TABLE_ENTRY LxSysTable[] =
     { "devices/system/cpu/online", 0444, NULL, LxGenCpuOnline, NULL },
     { "devices/system/cpu/possible", 0444, NULL, LxGenCpuOnline, NULL },
     { "devices/system/cpu/present", 0444, NULL, LxGenCpuOnline, NULL },
+    { "devices/system/cpu/vulnerabilities/gather_data_sampling", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/ghostwrite", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/indirect_target_selection", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/itlb_multihit", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/l1tf", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/mds", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/meltdown", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/mmio_stale_data", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/old_microcode", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/reg_file_data_sampling", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/retbleed", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/spec_rstack_overflow", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/spec_store_bypass", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/spectre_v1", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/spectre_v2", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/srbds", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/tsa", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/tsx_async_abort", 0444, NULL, LxGenCpuVulnerability, NULL },
+    { "devices/system/cpu/vulnerabilities/vmscape", 0444, NULL, LxGenCpuVulnerability, NULL },
     { "devices/virtual", 0755 | LX_S_IFDIR, NULL, NULL, NULL },
     LX_DMI_ENTRIES("devices/virtual/dmi/id"),
     { "firmware", 0755 | LX_S_IFDIR, NULL, NULL, NULL },
@@ -3745,6 +3890,19 @@ static const LX_TABLE_ENTRY LxSysTable[] =
     { "module", 0755 | LX_S_IFDIR, NULL, NULL, NULL },
     { "power", 0755 | LX_S_IFDIR, NULL, NULL, NULL },
 };
+
+static
+VOID
+LxGenCpuVulnerability(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    PCSTR Name = strrchr(LxSysTable[Synth->Index].Path, '/') + 1;
+
+    UNREFERENCED_PARAMETER(Self);
+    LxTextPrintf(Text, "%s\n", LxArchCpuVulnerability(Name));
+}
 
 static
 VOID
@@ -3964,6 +4122,51 @@ LxGenUptime(
 
 static
 VOID
+LxGenKeys(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    PLX_THREAD Reader = LxCurrentThread();
+    ULONG Length;
+    PSTR Lines;
+
+    UNREFERENCED_PARAMETER(Synth);
+    if ((Reader == NULL) || (Reader->Process != Self))
+        return;
+    Lines = LxKeyFormatProcKeys(Reader, &Length);
+    if (Lines == NULL)
+    {
+        Text->Failed = TRUE;
+        return;
+    }
+    LxTextAppend(Text, Lines, Length);
+    LxFree(Lines);
+}
+
+static
+VOID
+LxGenKeyUsers(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    ULONG Length;
+    PSTR Lines;
+
+    UNREFERENCED_PARAMETER(Synth);
+    Lines = LxKeyFormatProcKeyUsers(Self, &Length);
+    if (Lines == NULL)
+    {
+        Text->Failed = TRUE;
+        return;
+    }
+    LxTextAppend(Text, Lines, Length);
+    LxFree(Lines);
+}
+
+static
+VOID
 LxGenLoadavg(
     _In_ PLX_PROCESS Self,
     _In_ PLX_SYNTH Synth,
@@ -3988,6 +4191,8 @@ static const LX_TABLE_ENTRY LxProcStaticTable[] =
     { "cpuinfo", 0444, NULL, LxGenCpuinfo, NULL },
     { "devices", 0444, "Character devices:\n  1 mem\n  4 /dev/vc/0\n  4 tty\n  5 /dev/tty\n  5 /dev/console\n  5 /dev/ptmx\n136 pts\n\nBlock devices:\n", NULL, NULL },
     { "filesystems", 0444, "nodev\tsysfs\nnodev\ttmpfs\nnodev\tbdev\nnodev\tproc\nnodev\tcgroup2\nnodev\tdevtmpfs\nnodev\tdevpts\nnodev\tmqueue\nnodev\tpipefs\nnodev\tsockfs\n\tlxfs\n", NULL, NULL },
+    { "key-users", 0444, NULL, LxGenKeyUsers, NULL },
+    { "keys", 0444, NULL, LxGenKeys, NULL },
     { "loadavg", 0444, NULL, LxGenLoadavg, NULL },
     { "meminfo", 0444, NULL, LxGenMeminfo, NULL },
     { "partitions", 0444, "major minor  #blocks  name\n\n", NULL, NULL },

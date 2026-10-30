@@ -522,7 +522,7 @@ FileRecord::UpdateReparsePoint(
         Status = NtfsUpdateReparseIndex(
             DiskVolume,
             Delete ? ExistingHeader.ReparseType : RequestedHeader.ReparseType,
-            ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber,
+            ((ULONGLONG)Header->SequenceNumber << 48) | RecordNumber,
             Delete);
     }
     goto Done;

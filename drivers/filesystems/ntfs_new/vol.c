@@ -34,7 +34,7 @@ NtfsRefreshDirectoryRecord(_In_ PVolumeContextBlock VolCB,
 
     FileReference = FileCB->StreamCB
         ? FileCB->StreamCB->FileReference
-        : ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber;
+        : NtfsFileRecordGetReference(FileCB->FileRec);
     Status = NtfsMasterFileTableGetFileRecordByReference(
         NtfsVolumeGetMft(VolCB->DiskVolume), FileReference, &FreshRecord);
     if (NT_SUCCESS(Status) &&
@@ -902,7 +902,6 @@ NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
     ULONG Hash;
     PNtfsCachedRecord New;
     PNtfsCachedRecord Found;
-    PFileRecordHeader Header;
     ULONGLONG FileReference;
     PLIST_ENTRY Bucket;
     PLIST_ENTRY Entry;
@@ -919,9 +918,8 @@ NtfsCacheRecord(_In_ PVolumeContextBlock VolCB,
     if (NtfsFileRecordGetHeader(Record)->Flags & FR_IS_DIRECTORY)
         return NULL;
 
-    Header = NtfsFileRecordGetHeader(Record);
-    FileReference = ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber;
-    Bucket = &VolCB->RecordIdentityHash[Header->MFTRecordNumber & (NTFS_RECORD_CACHE_BUCKETS - 1)];
+    FileReference = NtfsFileRecordGetReference(Record);
+    Bucket = &VolCB->RecordIdentityHash[NtfsFileRecordGetNumber(Record) & (NTFS_RECORD_CACHE_BUCKETS - 1)];
     ExAcquireFastMutex(&VolCB->RecordCacheMutex);
     for (Entry = Bucket->Flink; Entry != Bucket; Entry = Entry->Flink)
     {

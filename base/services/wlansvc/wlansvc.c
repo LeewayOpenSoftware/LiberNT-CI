@@ -21,6 +21,7 @@ SERVICE_STATUS_HANDLE ServiceStatusHandle;
 SERVICE_STATUS SvcStatus;
 static WCHAR ServiceName[] = L"WlanSvc";
 static HANDLE ScanStopEvent;
+static HANDLE ScanRequestEvent;
 static HANDLE ScanThread;
 
 DWORD WINAPI RpcThreadRoutine(LPVOID lpParameter);
@@ -62,6 +63,11 @@ ServiceControlHandler(DWORD dwControl,
                 CloseHandle(ScanStopEvent);
                 ScanStopEvent = NULL;
             }
+            if (ScanRequestEvent)
+            {
+                CloseHandle(ScanRequestEvent);
+                ScanRequestEvent = NULL;
+            }
             RpcMgmtStopServerListening(NULL);
             WlanSvcCleanup();
             UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOPPED, 0);
@@ -74,11 +80,20 @@ ServiceControlHandler(DWORD dwControl,
     return NO_ERROR;
 }
 
+VOID
+WlanSvcRequestScan(VOID)
+{
+    if (ScanRequestEvent)
+        SetEvent(ScanRequestEvent);
+}
+
 static DWORD WINAPI
 ScanThreadRoutine(LPVOID lpParameter)
 {
+    HANDLE waitEvents[2] = { ScanStopEvent, ScanRequestEvent };
     PLIST_ENTRY entry;
     PWLANSVC_INTERFACE iface;
+    DWORD wait;
 
     UNREFERENCED_PARAMETER(lpParameter);
 
@@ -98,7 +113,8 @@ ScanThreadRoutine(LPVOID lpParameter)
                 WlanSvcDoScan(iface, NULL);
         }
         LeaveCriticalSection(&WlanSvcLock);
-    } while (WaitForSingleObject(ScanStopEvent, 60000) == WAIT_TIMEOUT);
+        wait = WaitForMultipleObjects(2, waitEvents, FALSE, 60000);
+    } while (wait == WAIT_TIMEOUT || wait == WAIT_OBJECT_0 + 1);
 
     return 0;
 }
@@ -147,7 +163,8 @@ ServiceMain(DWORD argc, LPWSTR *argv)
     }
 
     ScanStopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
-    if (ScanStopEvent)
+    ScanRequestEvent = CreateEventW(NULL, FALSE, FALSE, NULL);
+    if (ScanStopEvent && ScanRequestEvent)
     {
         ScanThread = CreateThread(NULL, 0, ScanThreadRoutine, NULL, 0, NULL);
         if (!ScanThread)

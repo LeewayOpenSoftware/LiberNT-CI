@@ -39,6 +39,20 @@ KiTrapReturn:
     bl      KiRestoreTrapFrameIrql
 .Lirql_restored:
 
+    ldr     w16, [x20, #TfSpsr]
+    tst     w16, #0xF
+    b.ne    .Luser_debug_done
+    ldr     x16, [x18, #PcCurrentPrcb]
+    ldr     w16, [x16, #PbNumber]
+    ldr     x17, =KiArm64UserDebugArmed
+    ldrb    w16, [x17, x16]
+    ldrb    w17, [x20, #TfDebugRegistersValid]
+    orr     w16, w16, w17
+    cbz     w16, .Luser_debug_done
+    mov     x0, x20
+    bl      KiArm64LoadUserDebugState
+.Luser_debug_done:
+
     /* Preserve fallback frame pointer/link register */
     ldr     x24, [x20, #TfFp]
     ldr     x25, [x20, #TfLr]

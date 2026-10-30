@@ -56,6 +56,7 @@ HRESULT TrayWindowCtxMenuCreator(ITrayWindow * TrayWnd, IN HWND hWndOwner, ICont
 #define IDHK_QUICK_SETTINGS 0x20a
 #define IDHK_SETTINGS 0x20b
 #define IDHK_ACCESSIBILITY 0x20c
+#define IDHK_SCREENSHOT 0x20d
 
 enum { NONE, TILED, CASCADED } g_Arrangement = NONE;
 
@@ -1337,6 +1338,9 @@ public:
             ToggleDesktop();
             break;
         case IDHK_PAGER:
+            break;
+        case IDHK_SCREENSHOT:
+            TrayScreenshot_Capture();
             break;
         }
 
@@ -3078,6 +3082,7 @@ ChangePos:
             MAKELONG(IDHK_QUICK_SETTINGS, MAKEWORD('A', MOD_WIN)),
             MAKELONG(IDHK_SETTINGS,       MAKEWORD('I', MOD_WIN)),
             MAKELONG(IDHK_ACCESSIBILITY,  MAKEWORD('U', MOD_WIN)),
+            MAKELONG(IDHK_SCREENSHOT,     MAKEWORD(VK_SNAPSHOT, MOD_WIN)),
         };
         static const UINT taskmods[] =
         {

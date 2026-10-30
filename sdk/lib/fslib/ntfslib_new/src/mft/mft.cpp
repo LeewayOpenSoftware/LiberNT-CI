@@ -96,6 +96,7 @@ InitializeFileRecordBuffer(
     File->Header->NextAttributeID = 0;
     File->Header->MFTRecordNumber =
         FileRecordNumber;
+    File->RecordNumber = FileRecordNumber;
 
     *reinterpret_cast<PULONG>(
         File->Data + AttributeOffset) =
@@ -321,9 +322,10 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
     }
 
     ULONG FRSize = FileRecordSize;
+    ASSERT(File->RecordNumber != MAXULONG);
     FileRecordOffset.QuadPart =
         (LONGLONG)((ULONGLONG)
-            File->Header->MFTRecordNumber *
+            File->RecordNumber *
             FileRecordSize);
 
     // Write file record to $MFT.
@@ -336,12 +338,12 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
     if (!NT_SUCCESS(WriteStatus))
     {
         DPRINT1("Unable to write file record %lu! (Status: 0x%X)\n",
-                File->Header->MFTRecordNumber,
+                File->RecordNumber,
                 WriteStatus);
     }
 
     if (NT_SUCCESS(WriteStatus) &&
-        IsFileRecordInMFTMirr(File->Header->MFTRecordNumber))
+        IsFileRecordInMFTMirr(File->RecordNumber))
     {
         FRSize = FileRecordSize;
 
@@ -842,8 +844,9 @@ ScanAgain:
             PFileRecordHeader OldHeader =
                 reinterpret_cast<PFileRecordHeader>(
                     RawRecord);
-            if (OldHeader->MFTRecordNumber ==
-                    Candidate &&
+            if ((!FileRecordHeaderHasNumber(OldHeader) ||
+                 OldHeader->MFTRecordNumber ==
+                    Candidate) &&
                 OldHeader->SequenceNumber != 0)
             {
                 SequenceNumber =
@@ -990,7 +993,7 @@ Done:
         (void)InitializeFileRecordBuffer(
             DiskVolume,
             FileRecordSize,
-            NewFile->Header->MFTRecordNumber,
+            NewFile->RecordNumber,
             NewFile->Header->SequenceNumber,
             0,
             FALSE,
@@ -1043,18 +1046,18 @@ MasterFileTable::DeallocateFileRecord(
     if (!DiskVolume || DiskVolume->IsReadOnly ||
         !MFTFile || !File || !File->Header ||
         !(File->Header->Flags & FR_IN_USE) ||
-        File->Header->MFTRecordNumber <
+        File->RecordNumber <
             MFT_FIRST_ORDINARY_FILE_RECORD)
     {
         return STATUS_INVALID_PARAMETER;
     }
 
     FileRecordNumber =
-        File->Header->MFTRecordNumber;
+        File->RecordNumber;
 
     /* The slot is free again, so let the next allocation see it. */
-    if (File->Header->MFTRecordNumber < FreeRecordHint)
-        FreeRecordHint = File->Header->MFTRecordNumber;
+    if (File->RecordNumber < FreeRecordHint)
+        FreeRecordHint = File->RecordNumber;
     BitmapAttribute =
         MFTFile->GetAttribute(TypeBitmap, NULL);
     if (!BitmapAttribute)

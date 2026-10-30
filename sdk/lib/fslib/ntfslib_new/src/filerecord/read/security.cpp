@@ -360,7 +360,7 @@ FileRecord::ApplyListedSecurityId(
             Entry->NameLength == 0 &&
             Entry->FirstVCN == 0 &&
             GetFRNFromFileRef(Entry->BaseFileRef) ==
-                Owner->Header->MFTRecordNumber &&
+                Owner->RecordNumber &&
             Entry->AttributeId == SecurityAttribute->AttributeID)
         {
             Found = TRUE;
@@ -491,7 +491,7 @@ FileRecord::ApplyListedSecurityId(
         {
             DPRINT1("Extension record %lu was not updated after its "
                     "security descriptor moved to $Secure: 0x%lx.\n",
-                    Owner->Header->MFTRecordNumber,
+                    Owner->RecordNumber,
                     CleanupStatus);
         }
         ClearExtentCacheExcept(NULL);

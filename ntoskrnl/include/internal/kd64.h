@@ -11,11 +11,7 @@
 //
 // Default size of the DbgPrint log buffer
 //
-#if DBG
 #define KD_DEFAULT_LOG_BUFFER_SIZE  0x20000
-#else
-#define KD_DEFAULT_LOG_BUFFER_SIZE  0x1000
-#endif
 
 //
 // Default size of the Message and Path buffers
@@ -114,6 +110,18 @@ KdSystemRootAvailable(
     VOID
 );
 
+VOID
+NTAPI
+KdInitializeBootLog(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock
+);
+
+VOID
+NTAPI
+KdShutdownBootLog(
+    VOID
+);
+
 BOOLEAN
 NTAPI
 KdShowShutdownLog(
@@ -137,6 +145,10 @@ BOOLEAN NTAPI KdpInitializeBootPageFileCrashDump(_In_ PCUNICODE_STRING BootDevic
 BOOLEAN NTAPI KdpReleaseCrashDumpFile(VOID);
 
 VOID NTAPI KdpPublishCrashDumpArtifacts(VOID);
+
+struct _ROS_STORAGE_DUMP_INTERFACE;
+
+NTSTATUS NTAPI KdpWriteBootLogAtCrash(_In_opt_ struct _ROS_STORAGE_DUMP_INTERFACE *Storage, _In_opt_ PFILE_OBJECT DumpFileObject);
 
 NTSTATUS NTAPI KdpWriteCrashDump(VOID);
 
@@ -301,6 +313,12 @@ KdpPrompt(
     _In_ KPROCESSOR_MODE PreviousMode,
     _In_ PKTRAP_FRAME TrapFrame,
     _In_ PKEXCEPTION_FRAME ExceptionFrame
+);
+
+NTSTATUS
+NTAPI
+KdPullRemoteFile(
+    _In_ PUNICODE_STRING FileName
 );
 
 VOID
@@ -590,6 +608,14 @@ KdpCopyPrintBuffer(
     _Out_writes_bytes_(BufferSize) PCHAR Buffer,
     _In_ ULONG BufferSize,
     _Out_ PULONG RolloverCount);
+
+ULONG
+NTAPI
+KdpCopyPrintBufferFrom(
+    _Inout_ PULONG64 Position,
+    _Out_writes_bytes_(BufferSize) PCHAR Buffer,
+    _In_ ULONG BufferSize,
+    _Out_ PULONG64 Lost);
 
 //
 // Global KD Data

@@ -42,7 +42,7 @@ FileRecord::RefreshFrom(_In_ const FileRecord& Record)
 {
     if (!Data || !Record.Data || DiskVolume != Record.DiskVolume ||
         RecordBufferSize != Record.RecordBufferSize ||
-        Header->MFTRecordNumber != Record.Header->MFTRecordNumber ||
+        RecordNumber != Record.RecordNumber ||
         Header->SequenceNumber != Record.Header->SequenceNumber ||
         BaseRecordOwner || Record.BaseRecordOwner)
     {

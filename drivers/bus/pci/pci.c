@@ -293,9 +293,10 @@ PciAcpiEvalMethodInternal(
     _In_ ULONG Function,
     _In_ BOOLEAN ChildRequest,
     _In_ ULONG ChildAcpiUid,
-    _In_ PACPI_EVAL_INPUT_BUFFER InputBuffer,
+    _In_ ULONG AdapterIoControlCode,
+    _In_ PVOID InputBuffer,
     _In_ ULONG InputBufferSize,
-    _Out_writes_bytes_opt_(OutputBufferSize) PACPI_EVAL_OUTPUT_BUFFER OutputBuffer,
+    _Out_writes_bytes_opt_(OutputBufferSize) PVOID OutputBuffer,
     _In_ ULONG OutputBufferSize,
     _Out_opt_ PULONG BytesReturned)
 {
@@ -328,7 +329,7 @@ PciAcpiEvalMethodInternal(
                      : sizeof(ACPI_PCI_EVAL_INPUT_BUFFER);
     IoControlCode = ChildRequest
                         ? IOCTL_ACPI_EVAL_METHOD_FOR_PCI_CHILD
-                        : IOCTL_ACPI_EVAL_METHOD_FOR_PCI;
+                        : AdapterIoControlCode;
     Status = RtlULongAdd(HeaderSize, InputBufferSize, &PciBufferSize);
     if (!NT_SUCCESS(Status))
     {
@@ -445,7 +446,7 @@ PciAcpiEvalMethod(
     _In_ ULONG OutputBufferSize,
     _Out_opt_ PULONG BytesReturned)
 {
-    return PciAcpiEvalMethodInternal(Segment, Bus, Device, Function, FALSE, 0, InputBuffer, InputBufferSize, OutputBuffer, OutputBufferSize, BytesReturned);
+    return PciAcpiEvalMethodInternal(Segment, Bus, Device, Function, FALSE, 0, IOCTL_ACPI_EVAL_METHOD_FOR_PCI, InputBuffer, InputBufferSize, OutputBuffer, OutputBufferSize, BytesReturned);
 }
 
 NTSTATUS
@@ -461,7 +462,7 @@ PciAcpiEvalMethodForChild(
     _In_ ULONG OutputBufferSize,
     _Out_opt_ PULONG BytesReturned)
 {
-    return PciAcpiEvalMethodInternal(Segment, Bus, Device, Function, TRUE, ChildAcpiUid, InputBuffer, InputBufferSize, OutputBuffer, OutputBufferSize, BytesReturned);
+    return PciAcpiEvalMethodInternal(Segment, Bus, Device, Function, TRUE, ChildAcpiUid, 0, InputBuffer, InputBufferSize, OutputBuffer, OutputBufferSize, BytesReturned);
 }
 
 /*
@@ -791,6 +792,30 @@ PciDispatchDeviceControl(
                 /* ACPI returns a valid fixed header on STATUS_BUFFER_OVERFLOW;
                  * preserve its byte count so METHOD_BUFFERED completion copies
                  * OutputBuffer->Length back to the display miniport. */
+                Irp->IoStatus.Information = BytesReturned;
+                break;
+            }
+
+            case IOCTL_ACPI_ENUM_CHILDREN:
+            {
+                PPDO_DEVICE_EXTENSION PdoExtension = (PPDO_DEVICE_EXTENSION)DeviceObject->DeviceExtension;
+                ULONG Segment = 0;
+                ULONG BytesReturned;
+
+                if (PdoExtension->Fdo)
+                    Segment = ((PFDO_DEVICE_EXTENSION)PdoExtension->Fdo->DeviceExtension)->BusSegment;
+                Status = PciAcpiEvalMethodInternal(Segment,
+                                                   PdoExtension->PciDevice->BusNumber,
+                                                   PdoExtension->PciDevice->SlotNumber.u.bits.DeviceNumber,
+                                                   PdoExtension->PciDevice->SlotNumber.u.bits.FunctionNumber,
+                                                   FALSE,
+                                                   0,
+                                                   IOCTL_ACPI_ENUM_CHILDREN_FOR_PCI,
+                                                   Irp->AssociatedIrp.SystemBuffer,
+                                                   IrpSp->Parameters.DeviceIoControl.InputBufferLength,
+                                                   Irp->AssociatedIrp.SystemBuffer,
+                                                   IrpSp->Parameters.DeviceIoControl.OutputBufferLength,
+                                                   &BytesReturned);
                 Irp->IoStatus.Information = BytesReturned;
                 break;
             }

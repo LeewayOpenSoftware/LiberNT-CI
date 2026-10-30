@@ -1,0 +1,13 @@
+; PROJECT:     LiberNT WiFiCx
+; LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+; PURPOSE:     WiFiCx service and KMDF class extension routing
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193.001@gmail.com>
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\WifiCx","DependOnService",0x00010000,"NetAdapterCx"
+HKLM,"SYSTEM\CurrentControlSet\Services\WifiCx","DisplayName",0x00000000,"Wifi Network Adapter Class Extension"
+HKLM,"SYSTEM\CurrentControlSet\Services\WifiCx","ErrorControl",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\WifiCx","ImagePath",0x00020000,"system32\drivers\wificx.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\WifiCx","Start",0x00010001,3
+HKLM,"SYSTEM\CurrentControlSet\Services\WifiCx","Type",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\WifiCx\Versions\1\1","Service",0x00000000,"WifiCx"

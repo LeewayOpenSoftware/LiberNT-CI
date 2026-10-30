@@ -24,6 +24,7 @@
 #include "vidmm.h"
 #include "vidsch.h"
 #include "hotplug_work_core.h"
+#include "child_core.h"
 #include <ntstrsafe.h>
 #include <reactos/rddm/rxgkmonitor.h>
 #include <acpiioct.h>
@@ -1282,6 +1283,8 @@ static NTSTATUS DxgkpCallQueryChildRelationsLevel3(_In_ PDXGKRNL_ADAPTER Adapter
 
     Status = Adapter->MiniportContext->InitData.s.DxgkDdiQueryChildRelations(Adapter->MiniportDeviceContext, ChildRelations, ChildRelationsSize);
     DxgkReleaseMiniportCallback(Adapter);
+    if (NT_SUCCESS(Status))
+        DxgkChildNormalizeDescriptors(ChildRelations, ChildRelationsSize / sizeof(*ChildRelations));
 
 Cleanup:
     if (!KeepAdmissionBlocked && !DxgkpCanRunQueryChildRelations(Adapter, DuringStart))
@@ -1409,6 +1412,7 @@ DxgkPnpCacheInitialChildRelations(
                  Adapter->MiniportDeviceContext, Children, ChildrenSize);
     if (NT_SUCCESS(Status))
     {
+        DxgkChildNormalizeDescriptors(Children, Adapter->NumberOfChildren + 1);
         KeAcquireSpinLock(&Adapter->ChildListLock, &OldIrql);
         ASSERT(Adapter->ChildEnumerationEpoch != 0);
         ASSERT(Adapter->ChildDescriptors == NULL);

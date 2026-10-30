@@ -126,7 +126,7 @@ FileRecord::HasAutomaticTimestampUpdate(
 {
     return Header &&
            Header->BaseFileRecord == 0 &&
-           Header->MFTRecordNumber >
+           RecordNumber >
                NTFS_LAST_RESERVED_FILE_RECORD &&
            (Fields &
             AutomaticTimestampMask &

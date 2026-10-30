@@ -280,6 +280,8 @@ PopGracefulShutdown(IN PVOID Context)
 
     EtwpShutdownLoggers();
 
+    KdShutdownBootLog();
+
     /* In this step, the I/O manager does first-chance shutdown notification */
     DPRINT1("I/O manager shutting down in phase 0\n");
     IoShutdownSystem(0);

@@ -13,6 +13,7 @@ InitializeRecord(FileRecord& Record, const char* Value)
     Record.Header->ActualSize = 0x60;
     Record.Header->AllocatedSize = 1024;
     Record.Header->MFTRecordNumber = 42;
+    Record.RecordNumber = 42;
     Record.Header->SequenceNumber = 7;
 
     PAttribute Attribute = reinterpret_cast<PAttribute>(Record.Data + 0x38);
@@ -71,7 +72,7 @@ main()
     }
 
     Fresh.Header->SequenceNumber--;
-    Fresh.Header->MFTRecordNumber++;
+    Fresh.RecordNumber++;
     if (!Check(Shared.RefreshFrom(Fresh) == STATUS_INVALID_PARAMETER,
                "refresh accepted a different file") ||
         !Check(std::memcmp(Snapshot, Shared.Data, sizeof(Snapshot)) == 0,

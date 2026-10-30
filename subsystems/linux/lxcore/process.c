@@ -228,10 +228,6 @@ LxCopyStringFromUser(
     LONG64 Result = -LX_ENAMETOOLONG;
 
     *String = NULL;
-    Buffer = LxAlloc(MaxLength + 1);
-    if (Buffer == NULL)
-        return -LX_ENOMEM;
-
     for (;;)
     {
         _SEH2_TRY
@@ -239,8 +235,7 @@ LxCopyStringFromUser(
             for (; Index < MaxLength; Index++)
             {
                 ProbeForRead((PVOID)(ULONG_PTR)(Source + Index), 1, 1);
-                Buffer[Index] = *(volatile CHAR *)(ULONG_PTR)(Source + Index);
-                if (Buffer[Index] == '\0')
+                if (*(volatile CHAR *)(ULONG_PTR)(Source + Index) == '\0')
                 {
                     Result = 0;
                     break;
@@ -258,6 +253,13 @@ LxCopyStringFromUser(
         Result = -LX_ENAMETOOLONG;
     }
 
+    if (Result != 0)
+        return Result;
+
+    Buffer = LxAlloc(Index + 1);
+    if (Buffer == NULL)
+        return -LX_ENOMEM;
+    Result = LxCopyFromUser(Buffer, Source, Index);
     if (Result != 0)
     {
         LxFree(Buffer);
@@ -405,6 +407,8 @@ LxProcessFork(
     Process->LoginUid = Parent->LoginUid;
     Process->SessionId = Parent->SessionId;
     Process->ThpDisable = Parent->ThpDisable;
+    Process->MmapTop = Parent->Mm->MmapTop;
+    Process->StackTop = Parent->Mm->StackTop;
     Process->Trace = Parent->Trace;
     for (Fd = 0; Fd < LX_MAX_FDS; Fd++)
     {
@@ -590,6 +594,7 @@ LxThreadFree(
         ExDeleteTimer(Thread->SignalRetry, TRUE, TRUE, NULL);
     LxNsThreadRelease(Thread);
     LxSeccompRelease(Thread);
+    LxKeyThreadRelease(Thread);
     LxCgroupTaskRemove(Process);
     LxProcessDereference(Process);
     LxFree(Thread);

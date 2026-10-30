@@ -99,6 +99,7 @@ typedef struct _LX_INSTANCE LX_INSTANCE, *PLX_INSTANCE;
 typedef struct _LX_MOUNT LX_MOUNT, *PLX_MOUNT;
 typedef struct _LX_CGROUP LX_CGROUP, *PLX_CGROUP;
 typedef struct _LX_NS LX_NS, *PLX_NS;
+typedef struct _LX_KEY LX_KEY, *PLX_KEY;
 typedef struct _LX_TMPFS LX_TMPFS, *PLX_TMPFS;
 typedef struct _LX_TMPFS_INODE LX_TMPFS_INODE, *PLX_TMPFS_INODE;
 
@@ -405,6 +406,8 @@ struct _LX_NS
             BOOLEAN SetgroupsDenied;
             BOOLEAN ParentCouldSetfcap;
             BOOLEAN Charged;
+            PLX_KEY KeyRegister;
+            PLX_KEY PersistentRegister;
         } User;
         struct
         {
@@ -669,6 +672,8 @@ struct _LX_PROCESS
     ULONG LoginUid;
     ULONG SessionId;
     ULONG ThpDisable;
+    ULONG64 MmapTop;
+    ULONG64 StackTop;
 };
 
 typedef struct _LX_CRED_SAVE
@@ -754,6 +759,11 @@ struct _LX_THREAD
     volatile LONG PtraceWork;
     LONG ExitCode;
     ULONG PtraceVforkPid;
+    PLX_KEY ThreadKeyring;
+    PLX_KEY ProcessKeyring;
+    PLX_KEY SessionKeyring;
+    PLX_KEY RequestKeyAuth;
+    LONG JitKeyring;
 };
 
 #define LX_PTRACE_REGSET_MAX 528
@@ -943,6 +953,25 @@ typedef struct _LX_MEMORY_STATE
 } LX_MEMORY_STATE, *PLX_MEMORY_STATE;
 
 VOID LxQueryMemoryState(_Out_ PLX_MEMORY_STATE State);
+
+#define LX_KEY_INHERIT_THREAD   0
+#define LX_KEY_INHERIT_PROCESS  1
+#define LX_KEY_INHERIT_TASK     2
+
+VOID LxKeyInitialize(VOID);
+LONG LxKeyThreadInherit(_Inout_ PLX_THREAD Thread, _In_ PLX_THREAD Parent, _In_ ULONG Mode);
+VOID LxKeyThreadRelease(_Inout_ PLX_THREAD Thread);
+VOID LxKeyExec(_Inout_ PLX_THREAD Thread);
+VOID LxKeyUserNsRelease(_Inout_ PLX_NS UserNs);
+PSTR LxKeyFormatProcKeys(_In_ PLX_THREAD Reader, _Out_ PULONG Length);
+PSTR LxKeyFormatProcKeyUsers(_In_ PLX_PROCESS Reader, _Out_ PULONG Length);
+BOOLEAN LxKeySysctlGet(_In_ PCSTR Name, _Out_ PLONG Value);
+LONG LxKeySysctlSet(_In_ PCSTR Name, _In_ LONG64 Value);
+
+typedef VOID (*PLX_UMH_INIT)(_Inout_ PLX_THREAD Thread, _In_opt_ PVOID Context);
+LONG LxUserModeHelper(_In_ PLX_INSTANCE Instance, _In_ PCSTR Path, _In_reads_(ArgCount) PCSTR *Argv, _In_ ULONG ArgCount,
+                      _In_reads_(EnvCount) PCSTR *Envp, _In_ ULONG EnvCount, _In_opt_ PLX_UMH_INIT Init,
+                      _In_opt_ PVOID Context, _Out_ PLONG WaitStatus);
 PLX_THREAD LxCurrentThread(VOID);
 PLX_THREAD LxThreadOf(_In_ PETHREAD Thread);
 BOOLEAN LxVforkFinish(_Inout_ PKTRAP_FRAME TrapFrame, _Inout_opt_ PKEXCEPTION_FRAME ExceptionFrame);
@@ -1384,6 +1413,13 @@ PLX_THREAD LxThreadLookupReferenced(_In_ PLX_INSTANCE Instance, _In_ ULONG Tid, 
 BOOLEAN LxProcessExitStatus(_In_ PLX_PROCESS Process, _In_ LONG WaitStatus);
 VOID LxProcessExitGroup(_In_ PLX_PROCESS Process, _In_ LONG WaitStatus);
 VOID LxProcessZapThreads(_In_ PLX_PROCESS Process, _In_opt_ PLX_THREAD Except);
+LONG LxMmRandomizeVaSpace(VOID);
+VOID LxMmSetRandomizeVaSpace(_In_ LONG Value);
+ULONG LxMmRndBits(VOID);
+LONG LxMmSetRndBits(_In_ ULONG Bits);
+BOOLEAN LxMmPickLayout(_Inout_ PLX_PROCESS Process);
+ULONG64 LxMmRandomOffset(VOID);
+ULONG64 LxMmRandomizeBrk(_In_ ULONG64 Base);
 VOID LxProcessExited(_In_ PLX_PROCESS Process, _In_ NTSTATUS ExitStatus);
 VOID LxItimerRelease(_In_ PLX_PROCESS Process);
 VOID LxPosixTimersRelease(_In_ PLX_PROCESS Process, _In_ BOOLEAN Free);
@@ -1522,11 +1558,13 @@ LONG LxArchSpecStoreBypassMode(VOID);
 LONG LxArchPtraceGetRegset(_In_ PCONTEXT Context, _In_ ULONG64 Tls, _In_ LONG SyscallNr, _In_ ULONG Type,
                            _Out_writes_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer, _Out_ PULONG Size, _Out_ PULONG Unit);
 LONG LxArchPtraceSetRegset(_Inout_ PCONTEXT Context, _Inout_ PULONG64 Tls, _Inout_ PLONG SyscallNr, _In_ ULONG Type,
-                           _In_reads_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer);
+                           _In_reads_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer, _In_ ULONG Length);
 LONG LxArchPtraceSyscallNumber(_In_ PKTRAP_FRAME TrapFrame, _In_ LONG Recorded);
 LONG64 LxArchPtraceSyscallReturn(_In_ PCONTEXT Context);
 BOOLEAN LxArchPersonalityAllowed(_In_ ULONG Personality);
 ULONG LxArchExecPersonality(_In_ ULONG Personality);
+VOID LxArchMmapRndBits(_Out_ PULONG Minimum, _Out_ PULONG Maximum);
+ULONG64 LxArchStackRndMask(VOID);
 BOOLEAN LxArchPtraceSingleStep(_Inout_ PCONTEXT Context, _In_ BOOLEAN Enable);
 VOID LxArchApplySpeculation(_In_ PLX_THREAD Thread, _Inout_ PKTRAP_FRAME TrapFrame);
 LONG64 LxSpecCtrlGet(_In_ PLX_THREAD Thread, _In_ ULONG64 Which);
@@ -1538,6 +1576,7 @@ VOID LxArchSetSyscallResult(_Inout_ PKTRAP_FRAME TrapFrame, _In_ LONG64 Result);
 VOID LxArchRestartSyscall(_Inout_ PKTRAP_FRAME TrapFrame, _In_ ULONG64 Argument);
 BOOLEAN LxArchEmulateInstruction(_In_ PEXCEPTION_RECORD ExceptionRecord, _Inout_opt_ PKEXCEPTION_FRAME ExceptionFrame, _Inout_ PKTRAP_FRAME TrapFrame);
 VOID LxArchClassifyFault(_In_ PEXCEPTION_RECORD ExceptionRecord, _In_ PKTRAP_FRAME TrapFrame, _Inout_ PLONG Signal, _Inout_ PLONG Code);
+BOOLEAN LxArchHardwareBreakpointHit(_In_ PEXCEPTION_RECORD ExceptionRecord, _In_ PKTRAP_FRAME TrapFrame, _Out_ PULONG64 Address);
 VOID LxArchSetExecContext(_Inout_ PKTRAP_FRAME TrapFrame, _Inout_opt_ PKEXCEPTION_FRAME ExceptionFrame, _In_ ULONG64 Pc, _In_ ULONG64 Sp);
 VOID LxArchCaptureContext(_In_ PKTRAP_FRAME TrapFrame, _In_opt_ PKEXCEPTION_FRAME ExceptionFrame, _Out_ PCONTEXT Context);
 VOID LxArchSetForkContext(_Inout_ PCONTEXT Context, _In_ ULONG64 StackPointer);
@@ -1557,6 +1596,7 @@ BOOLEAN LxArchSetupSignalFrame(_Inout_ PKTRAP_FRAME TrapFrame, _Inout_opt_ PKEXC
 LONG64 LxArchSignalReturn(_Inout_ PKTRAP_FRAME TrapFrame, _Inout_opt_ PKEXCEPTION_FRAME ExceptionFrame, _Out_ PULONG64 Mask);
 ULONG LxArchSigTrampoline(_Out_writes_bytes_(16) PUCHAR Code);
 PCSTR LxArchCpuinfo(VOID);
+PCSTR LxArchCpuVulnerability(_In_ PCSTR Name);
 PCSTR LxArchConfigName(VOID);
 PCSTR LxArchKernelConfig(VOID);
 PUCHAR LxKernelConfigGzip(_Out_ PULONG Length);

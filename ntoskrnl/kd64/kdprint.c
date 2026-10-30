@@ -19,6 +19,7 @@
 #define KD_100NS_PER_MICROSECOND 10ULL
 
 static PVOID volatile KdpPrintOpenLine;
+static ULONG64 KdpPrintTotalBytes;
 
 typedef struct _KDP_PRINT_CALLBACK
 {
@@ -305,6 +306,7 @@ KdLogDbgPrint(
 
     Length = min(String->Length, KdPrintBufferSize);
     Remaining = KdPrintCircularBuffer + KdPrintBufferSize - KdPrintWritePointer;
+    KdpPrintTotalBytes += Length;
 
     if (Length < Remaining)
     {
@@ -383,6 +385,46 @@ KdpCopyPrintBuffer(
 
     KdpReleaseLock(&KdpPrintSpinLock, OldIrql);
     return Available;
+}
+
+ULONG
+NTAPI
+KdpCopyPrintBufferFrom(
+    _Inout_ PULONG64 Position,
+    _Out_writes_bytes_(BufferSize) PCHAR Buffer,
+    _In_ ULONG BufferSize,
+    _Out_ PULONG64 Lost)
+{
+    ULONG64 Pending;
+    ULONG Offset;
+    ULONG Length;
+    ULONG FirstLength;
+    KIRQL OldIrql;
+
+    *Lost = 0;
+    if ((Buffer == NULL) || (BufferSize == 0) || (KdPrintCircularBuffer == NULL) || (KdPrintBufferSize == 0))
+        return 0;
+
+    OldIrql = KdpAcquireLock(&KdpPrintSpinLock);
+    Pending = KdpPrintTotalBytes - *Position;
+    if (Pending > KdPrintBufferSize)
+    {
+        *Lost = Pending - KdPrintBufferSize;
+        *Position += *Lost;
+        Pending = KdPrintBufferSize;
+    }
+
+    Length = (ULONG)min(Pending, BufferSize);
+    Offset = (ULONG)(((ULONG64)(KdPrintWritePointer - KdPrintCircularBuffer) + KdPrintBufferSize - Pending) % KdPrintBufferSize);
+    FirstLength = min(Length, KdPrintBufferSize - Offset);
+    if (FirstLength != 0)
+        KdpMoveMemory(Buffer, KdPrintCircularBuffer + Offset, FirstLength);
+    if (Length > FirstLength)
+        KdpMoveMemory(Buffer + FirstLength, KdPrintCircularBuffer, Length - FirstLength);
+    *Position += Length;
+
+    KdpReleaseLock(&KdpPrintSpinLock, OldIrql);
+    return Length;
 }
 
 BOOLEAN

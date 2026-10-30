@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT network tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Installs the NetAdapterCx test adapter and pings its simulated link peer
+ * PURPOSE:     Installs the NetAdapterCx and WiFiCx test adapters and pings their simulated link peer
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193.001@gmail.com>
  */
 
@@ -19,10 +19,12 @@
 
 static const UCHAR AdapterAddress[6] = { 0x02, 0x00, 0x4C, 0x4F, 0x4F, 0x50 };
 static const UCHAR LightweightAddress[6] = { 0x02, 0x00, 0x4C, 0x4F, 0x4F, 0x52 };
+static const UCHAR WifiAddress[6] = { 0x02, 0x00, 0x4C, 0x4F, 0x4F, 0x57 };
 static const WCHAR LightweightInterface[] = L"{4C4F4F50-4C57-4D00-8000-4C4F4F504C57}";
 
 static int Failures;
 static WCHAR DeviceInstanceId[MAX_DEVICE_ID_LEN];
+static WCHAR WifiDeviceInstanceId[MAX_DEVICE_ID_LEN];
 
 static
 void
@@ -105,9 +107,8 @@ ProvisionLightweightInterface(void)
 
 static
 BOOL
-InstallDevice(const WCHAR *InfPath)
+InstallDevice(const WCHAR *InfPath, const WCHAR *HardwareId, WCHAR *InstanceId)
 {
-    static const WCHAR HardwareId[] = L"ROOT\\NETCXLOOP\0";
     WCHAR ClassName[MAX_CLASS_NAME_LEN];
     SP_DEVINFO_DATA Info;
     HDEVINFO Set;
@@ -130,9 +131,10 @@ InstallDevice(const WCHAR *InfPath)
 
     Info.cbSize = sizeof(Info);
     Result = SetupDiCreateDeviceInfoW(Set, ClassName, &ClassGuid, NULL, NULL, DICD_GENERATE_ID, &Info) &&
-             SetupDiSetDeviceRegistryPropertyW(Set, &Info, SPDRP_HARDWAREID, (const BYTE *)HardwareId, sizeof(HardwareId)) &&
+             SetupDiSetDeviceRegistryPropertyW(Set, &Info, SPDRP_HARDWAREID, (const BYTE *)HardwareId,
+                                               (lstrlenW(HardwareId) + 2) * sizeof(WCHAR)) &&
              SetupDiCallClassInstaller(DIF_REGISTERDEVICE, Set, &Info) &&
-             SetupDiGetDeviceInstanceIdW(Set, &Info, DeviceInstanceId, ARRAYSIZE(DeviceInstanceId), NULL);
+             SetupDiGetDeviceInstanceIdW(Set, &Info, InstanceId, MAX_DEVICE_ID_LEN, NULL);
     if (!Result)
     {
         Report("NETCXTEST: device registration error %lu", GetLastError());
@@ -140,7 +142,7 @@ InstallDevice(const WCHAR *InfPath)
         return FALSE;
     }
 
-    Result = UpdateDriverForPlugAndPlayDevicesW(NULL, L"ROOT\\NETCXLOOP", InfPath, INSTALLFLAG_FORCE, &Reboot);
+    Result = UpdateDriverForPlugAndPlayDevicesW(NULL, HardwareId, InfPath, INSTALLFLAG_FORCE, &Reboot);
     if (!Result)
         Report("NETCXTEST: UpdateDriverForPlugAndPlayDevices error %lu", GetLastError());
     else
@@ -307,10 +309,32 @@ WaitForInterface(const UCHAR *Mac, BOOL Present, MIB_IF_ROW2 *Row)
     return FALSE;
 }
 
+static
+void
+TestWifi(const WCHAR *WifiInfPath)
+{
+    MIB_IF_ROW2 Row;
+
+    Check(InstallDevice(WifiInfPath, L"ROOT\\WIFILOOP\0", WifiDeviceInstanceId), "wifi install");
+    if (WaitForInterface(WifiAddress, TRUE, &Row))
+    {
+        Check(TRUE, "wifi interface up");
+        ReportInterface("wifi", &Row);
+        Check(AddAddress(Row.InterfaceLuid, "10.233.0.1"), "wifi address preferred");
+        Check(PingPeer("10.233.0.2", 2) >= 1, "wifi peer answers echo");
+    }
+    else
+    {
+        Check(FALSE, "wifi interface up");
+        ReportInterfaceTable();
+    }
+}
+
 int
 wmain(int argc, WCHAR **argv)
 {
     WCHAR InfPath[MAX_PATH];
+    WCHAR WifiInfPath[MAX_PATH];
     MIB_IF_ROW2 Row;
     WCHAR *Slash;
     int i;
@@ -328,8 +352,21 @@ wmain(int argc, WCHAR **argv)
         lstrcatW(InfPath, L"netcxloop.inf");
     }
 
+    lstrcpynW(WifiInfPath, InfPath, ARRAYSIZE(WifiInfPath));
+    Slash = wcsrchr(WifiInfPath, L'\\');
+    if (Slash)
+        Slash[1] = 0;
+    lstrcatW(WifiInfPath, L"wifiloop.inf");
+
+    if (argc > 2 && !_wcsicmp(argv[2], L"wifi"))
+    {
+        TestWifi(WifiInfPath);
+        Report("NETCXTEST: DONE %d failures", Failures);
+        return Failures ? 1 : 0;
+    }
+
     Check(ProvisionLightweightInterface(), "lightweight interface provisioned");
-    Check(InstallDevice(InfPath), "install");
+    Check(InstallDevice(InfPath, L"ROOT\\NETCXLOOP\0", DeviceInstanceId), "install");
 
     for (i = 0; i < 100 && !FindInterface(AdapterAddress, &Row); i++)
     {

@@ -14,7 +14,7 @@
 
 void __remainder_piby2(double x, double *r, double *rr, int *region);
 
-#if defined(_MSC_VER)
+#if defined(_MSC_VER) && !defined(sin)
 #pragma function(sin)
 #pragma function(cos)
 #pragma function(tan)

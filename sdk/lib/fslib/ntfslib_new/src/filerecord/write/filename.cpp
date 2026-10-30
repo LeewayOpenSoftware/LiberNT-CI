@@ -518,7 +518,7 @@ FileRecord::SynchronizeFileNameInformation(
 
     FileReference =
         ((ULONGLONG)Header->SequenceNumber << 48) |
-        Header->MFTRecordNumber;
+        RecordNumber;
     Offset = Header->AttributeOffset;
 
     while (Offset < Header->ActualSize)

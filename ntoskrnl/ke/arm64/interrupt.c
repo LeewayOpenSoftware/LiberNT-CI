@@ -92,6 +92,12 @@ typedef struct _KI_ARM64_IRQ_FRAME
     ULONG64 Reserved2;
     ULONGLONG AuditEntry;
     ULONGLONG AuditPad;
+    ULONG Bcr[ARM64_MAX_BREAKPOINTS];
+    ULONG64 Bvr[ARM64_MAX_BREAKPOINTS];
+    ULONG Wcr[ARM64_MAX_WATCHPOINTS];
+    ULONG DebugRegistersValid;
+    ULONG DebugReserved;
+    ULONG64 Wvr[ARM64_MAX_WATCHPOINTS];
     UCHAR RedZone[0x10];
 } KI_ARM64_IRQ_FRAME, *PKI_ARM64_IRQ_FRAME;
 
@@ -102,8 +108,28 @@ C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, V) == 0xE0);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpcr) == 0x2E0);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Fpsr) == 0x2E8);
 C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, X22) == 0x2F0);
-C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, RedZone) == 0x340);
-C_ASSERT(sizeof(KI_ARM64_IRQ_FRAME) == 0x350);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, Bcr) == 0x340);
+C_ASSERT(FIELD_OFFSET(KI_ARM64_IRQ_FRAME, RedZone) == 0x3C0);
+C_ASSERT(sizeof(KI_ARM64_IRQ_FRAME) == 0x3D0);
+
+VOID
+NTAPI
+KiArm64SaveIrqUserDebugState(
+    _Inout_ PKI_ARM64_IRQ_FRAME Frame)
+{
+    BOOLEAN Valid;
+
+    KiArm64SaveUserDebugRegisters(&Valid, Frame->Bcr, Frame->Bvr, Frame->Wcr, Frame->Wvr);
+    Frame->DebugRegistersValid = Valid;
+}
+
+VOID
+NTAPI
+KiArm64LoadIrqUserDebugState(
+    _In_ PKI_ARM64_IRQ_FRAME Frame)
+{
+    KiArm64LoadUserDebugRegisters(Frame->DebugRegistersValid != 0, Frame->Bcr, Frame->Bvr, Frame->Wcr, Frame->Wvr);
+}
 
 /*
  * A freeze IPI can interrupt a thread near the end of its kernel stack.  Keep

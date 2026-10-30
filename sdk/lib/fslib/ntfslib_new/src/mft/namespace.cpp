@@ -388,7 +388,7 @@ MasterFileTable::EnsureFileNameSpace(
         PFileRecord Refreshed = NULL;
         if (Index && NewParent == OldParent)
             continue;
-        Status = GetFileRecord(Parents[Index]->Header->MFTRecordNumber, &Refreshed);
+        Status = GetFileRecord(Parents[Index]->RecordNumber, &Refreshed);
         if (!NT_SUCCESS(Status))
             return Status;
         Status = Parents[Index]->RefreshFrom(*Refreshed);
@@ -577,7 +577,7 @@ MasterFileTable::InsertFileNameAttribute(
     }
     if (Status == STATUS_BUFFER_TOO_SMALL)
     {
-        Status = AllocateExtensionFileRecord(MakeFileReference(File->Header), &Allocated);
+        Status = AllocateExtensionFileRecord(MakeFileReference(File), &Allocated);
         if (!NT_SUCCESS(Status))
             return Status;
         Owner = Allocated;
@@ -591,7 +591,7 @@ MasterFileTable::InsertFileNameAttribute(
     if (NT_SUCCESS(Status))
     {
         AttributeId = Inserted->AttributeID;
-        OwnerReference = MakeFileReference(Owner->Header);
+        OwnerReference = MakeFileReference(Owner);
         Status = File->InsertAttributeListEntry(Inserted, Owner, 0, FALSE, &OwnerReferenced);
     }
     if (!NT_SUCCESS(Status))
@@ -671,7 +671,7 @@ MasterFileTable::LookupParentAndChild(
         Status = STATUS_FILE_CORRUPT_ERROR;
         goto Fail;
     }
-    if ((*Child)->Header->MFTRecordNumber <=
+    if ((*Child)->RecordNumber <=
         NTFS_LAST_RESERVED_FILE_RECORD)
     {
         Status = STATUS_ACCESS_DENIED;
@@ -774,7 +774,7 @@ MasterFileTable::CollectReleasableRuns(
             Owner =
                 GetFRNFromFileRef(
                     Entry->BaseFileRef) ==
-                File->Header->MFTRecordNumber
+                File->RecordNumber
                 ? File
                 : File->GetExtentRecord(
                       Entry->BaseFileRef);
@@ -913,7 +913,7 @@ MasterFileTable::CollectDistinctExtentReferences(
         Offset += Entry->RecordLength;
 
         if (GetFRNFromFileRef(Entry->BaseFileRef) ==
-            File->Header->MFTRecordNumber)
+            File->RecordNumber)
         {
             continue;
         }
@@ -987,13 +987,13 @@ MasterFileTable::DeleteFile(
     if (!NT_SUCCESS(Status))
         return Status;
     ParentReference =
-        MakeFileReference(Parent->Header);
+        MakeFileReference(Parent);
 
     if (CanonicalRecord &&
         (!CanonicalRecord->Data ||
          CanonicalRecord->DiskVolume != Child->DiskVolume ||
          CanonicalRecord->RecordBufferSize != Child->RecordBufferSize ||
-         CanonicalRecord->Header->MFTRecordNumber != Child->Header->MFTRecordNumber ||
+         CanonicalRecord->RecordNumber != Child->RecordNumber ||
          CanonicalRecord->Header->SequenceNumber != Child->Header->SequenceNumber ||
          CanonicalRecord->BaseRecordOwner || Child->BaseRecordOwner))
     {
@@ -1248,8 +1248,8 @@ MasterFileTable::CreateHardLink(
         &NewNameLength);
     if (!NT_SUCCESS(Status))
         goto Done;
-    if (NewParent->Header->MFTRecordNumber ==
-        OldParent->Header->MFTRecordNumber)
+    if (NewParent->RecordNumber ==
+        OldParent->RecordNumber)
     {
         /*
          * One directory, one record object: two loaded copies would
@@ -1259,7 +1259,7 @@ MasterFileTable::CreateHardLink(
         NewParent = OldParent;
     }
     NewParentReference =
-        MakeFileReference(NewParent->Header);
+        MakeFileReference(NewParent);
 
     Status = NewParentIndex.FindNextFile(
         NewParent,
@@ -1374,8 +1374,8 @@ MasterFileTable::ReconnectFile(
     if (!(NewParent->Header->Flags & FR_IS_DIRECTORY))
         return STATUS_NOT_A_DIRECTORY;
 
-    NewParentReference = MakeFileReference(NewParent->Header);
-    FileReference = MakeFileReference(File->Header);
+    NewParentReference = MakeFileReference(NewParent);
+    FileReference = MakeFileReference(File);
 
     if (NewName)
     {
@@ -1666,7 +1666,7 @@ MasterFileTable::RenameFile(
     if (!NT_SUCCESS(Status))
         return Status;
     OldParentReference =
-        MakeFileReference(OldParent->Header);
+        MakeFileReference(OldParent);
 
     Status = SplitAndResolveParent(
         NewQuery,
@@ -1676,8 +1676,8 @@ MasterFileTable::RenameFile(
         &NewNameLength);
     if (!NT_SUCCESS(Status))
         goto Done;
-    if (NewParent->Header->MFTRecordNumber ==
-        OldParent->Header->MFTRecordNumber)
+    if (NewParent->RecordNumber ==
+        OldParent->RecordNumber)
     {
         /*
          * One directory, one record object: two loaded copies would
@@ -1687,7 +1687,7 @@ MasterFileTable::RenameFile(
         NewParent = OldParent;
     }
     NewParentReference =
-        MakeFileReference(NewParent->Header);
+        MakeFileReference(NewParent);
 
     OldNameString =
         NtfsMakeCountedUnicodeString(

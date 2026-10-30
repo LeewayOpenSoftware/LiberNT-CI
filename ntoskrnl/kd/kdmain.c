@@ -99,10 +99,8 @@ KdpGetDebugMode(
         KdpDebugMode.File = TRUE;
         if (*p2 == ':')
         {
-            PCSTR p1 = ++p2;
+            /* TODO: DEBUGPORT=FILE:<path> is ignored; the boot log always goes to lastboot.log at the boot volume root */
             while (*p2 && *p2 != ' ') ++p2;
-            KdpLogFileName.MaximumLength = KdpLogFileName.Length = p2 - p1;
-            KdpLogFileName.Buffer = (PSTR)p1;
         }
     }
     else if (!_strnicmp(p2, "NET", CONST_STR_LEN("NET")))

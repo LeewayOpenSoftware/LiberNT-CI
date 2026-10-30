@@ -290,8 +290,7 @@ GetFileInternalInformation(_In_ PFileContextBlock FileCB,
          return STATUS_BUFFER_TOO_SMALL;
 
      Buffer->IndexNumber.QuadPart =
-         ((ULONGLONG)NtfsFileRecordGetHeader(FileCB->FileRec)->SequenceNumber << 48) |
-         NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber;
+         NtfsFileRecordGetReference(FileCB->FileRec);
 
      *Length -= sizeof(FILE_INTERNAL_INFORMATION);
 
@@ -316,8 +315,7 @@ GetFileIdInformation(_In_ PVolumeContextBlock VolCB,
     if (!NT_SUCCESS(Status))
         return Status;
 
-    Reference = ((ULONGLONG)NtfsFileRecordGetHeader(FileCB->FileRec)->SequenceNumber << 48) |
-                NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber;
+    Reference = NtfsFileRecordGetReference(FileCB->FileRec);
     RtlZeroMemory(Buffer, sizeof(*Buffer));
     Buffer->VolumeSerialNumber = Information.VolumeSerialNumber;
     RtlCopyMemory(Buffer->FileId.Identifier, &Reference, sizeof(Reference));
@@ -698,8 +696,7 @@ NtfsAppendDotDirectoryEntry(_In_ PFileContextBlock FileCB,
     Info.AllocationSize = Header->AllocationSize;
     Info.FileAttributes = Information.FileAttributes | FILE_ATTRIBUTE_DIRECTORY;
     if (NameLength == 1)
-        Info.FileId.QuadPart = ((ULONGLONG)NtfsFileRecordGetHeader(FileCB->FileRec)->SequenceNumber << 48) |
-                               NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber;
+        Info.FileId.QuadPart = NtfsFileRecordGetReference(FileCB->FileRec);
     return NtfsDirectoryStoreInfo(InformationClass, &Info, Name, NameLength * sizeof(WCHAR), Buffer, Length, EntrySize);
 }
 
@@ -742,7 +739,7 @@ GetFileBothDirectoryInformation(_In_    PFileContextBlock FileCB,
 
     if (RestartScan)
     {
-        FileCB->DirDotIndex = NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber == _Root ? 2 : 0;
+        FileCB->DirDotIndex = NtfsFileRecordGetNumber(FileCB->FileRec) == _Root ? 2 : 0;
         FileCB->DirRealScanStarted = FALSE;
     }
 
@@ -1350,10 +1347,10 @@ NtfsSetLinkInformation(_In_ PVolumeContextBlock VolCB,
                                                          &RemainingNameLength, &ExistingRecord);
     if (NT_SUCCESS(Status) && RemainingNameLength == 0 && ExistingRecord)
     {
-        ExistingRecordNumber = NtfsFileRecordGetHeader(ExistingRecord)->MFTRecordNumber;
+        ExistingRecordNumber = NtfsFileRecordGetNumber(ExistingRecord);
         ExistingIsDirectory = !!(NtfsFileRecordGetHeader(ExistingRecord)->Flags & FR_IS_DIRECTORY);
         if (ReplaceIfExists &&
-            ExistingRecordNumber != NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber &&
+            ExistingRecordNumber != NtfsFileRecordGetNumber(FileCB->FileRec) &&
             !ExistingIsDirectory)
         {
             Status = NtfsCheckNamespaceAccess(VolCB, &ParentName, NULL,
@@ -1373,7 +1370,7 @@ NtfsSetLinkInformation(_In_ PVolumeContextBlock VolCB,
             ExFreePoolWithTag(NewName.Buffer, TAG_NTFS);
             return STATUS_OBJECT_NAME_COLLISION;
         }
-        if (ExistingRecordNumber == NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber)
+        if (ExistingRecordNumber == NtfsFileRecordGetNumber(FileCB->FileRec))
         {
             Status = NtfsMasterFileTableRenameFile(Mft, NewName.Buffer, NewName.Length / sizeof(WCHAR),
                                                    NewName.Buffer, NewName.Length / sizeof(WCHAR));
@@ -1897,10 +1894,10 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
     Status = NtfsMasterFileTableGetFileRecordFromQueryEx(NtfsVolumeGetMft(VolCB->DiskVolume), NewName.Buffer, NewName.Length / sizeof(WCHAR), TRUE, &RemainingNameLength, &ExistingRecord);
     if (NT_SUCCESS(Status) && RemainingNameLength == 0 && ExistingRecord)
     {
-        ExistingRecordNumber = NtfsFileRecordGetHeader(ExistingRecord)->MFTRecordNumber;
+        ExistingRecordNumber = NtfsFileRecordGetNumber(ExistingRecord);
         ExistingIsDirectory = !!(NtfsFileRecordGetHeader(ExistingRecord)->Flags & FR_IS_DIRECTORY);
         if (ReplaceIfExists &&
-            ExistingRecordNumber != NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber &&
+            ExistingRecordNumber != NtfsFileRecordGetNumber(FileCB->FileRec) &&
             !ExistingIsDirectory)
         {
             Status = NtfsCheckNamespaceAccess(VolCB, &ParentName, NULL,
@@ -1915,7 +1912,7 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
         NtfsFileRecordDestroy(ExistingRecord);
         ExistingRecord = NULL;
 
-        if (ExistingRecordNumber == NtfsFileRecordGetHeader(FileCB->FileRec)->MFTRecordNumber)
+        if (ExistingRecordNumber == NtfsFileRecordGetNumber(FileCB->FileRec))
         {
             if (NewName.Length == FileCB->FileName.Length &&
                 RtlCompareMemory(NewName.Buffer, FileCB->FileName.Buffer, NewName.Length) == NewName.Length)

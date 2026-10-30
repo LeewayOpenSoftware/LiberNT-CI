@@ -159,6 +159,14 @@ WlanSvcConnect(PWLANSVC_INTERFACE Iface, const PWLAN_CONNECTION_PARAMETERS pPara
     if (ssid.uSSIDLength == 0 || ssid.uSSIDLength > DOT11_SSID_MAX_LENGTH)
         return ERROR_INVALID_PARAMETER;
 
+    if ((Iface->State == wlan_interface_state_associating ||
+         Iface->State == wlan_interface_state_authenticating) &&
+        Iface->ConnectedSsid.uSSIDLength == ssid.uSSIDLength &&
+        memcmp(Iface->ConnectedSsid.ucSSID, ssid.ucSSID, ssid.uSSIDLength) == 0)
+    {
+        return ERROR_SUCCESS;
+    }
+
     /* Choose a BSS from the cache. Scanning is asynchronous and must not be
      * overlapped with the firmware join; profile connects can still let the
      * lower miniport select a BSSID when the cache is empty. */

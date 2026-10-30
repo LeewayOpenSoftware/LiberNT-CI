@@ -34,5 +34,7 @@ VOID TrayOverflow_Refresh(VOID);
 VOID TrayQuickSettings_Toggle(IN HWND hwndOwner, IN const RECT *prcAnchor);
 BOOL TrayQuickSettings_IsOpen(VOID);
 
+VOID TrayScreenshot_Capture(VOID);
+
 VOID TrayFlyouts_Destroy(VOID);
 VOID TrayFlyoutsAux_Destroy(VOID);

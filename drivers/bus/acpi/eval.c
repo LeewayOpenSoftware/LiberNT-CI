@@ -1331,14 +1331,14 @@ EvalEnumChildrenCallback(
  * the request completes with STATUS_BUFFER_OVERFLOW, as the ACPI IOCTL
  * contract requires.
  */
+static
 NTSTATUS
-NTAPI
-Bus_PDO_EnumChildren(
-    _In_ PPDO_DEVICE_DATA DeviceData,
+EvalEnumChildrenOnHandle(
+    _In_ ACPI_HANDLE Handle,
+    _In_ PACPI_ENUM_CHILDREN_INPUT_BUFFER Input,
+    _In_ PIO_STACK_LOCATION IoStack,
     _Inout_ PIRP Irp)
 {
-    PIO_STACK_LOCATION IoStack;
-    PACPI_ENUM_CHILDREN_INPUT_BUFFER Input;
     ACPI_ENUM_CHILDREN_CONTEXT Context;
     ACPI_HANDLE Root;
     ACPI_STATUS AcpiStatus;
@@ -1347,8 +1347,6 @@ Bus_PDO_EnumChildren(
     ULONG MaxDepth;
     ULONG Depth;
 
-    IoStack = IoGetCurrentIrpStackLocation(Irp);
-    Input = Irp->AssociatedIrp.SystemBuffer;
     InputLength = IoStack->Parameters.DeviceIoControl.InputBufferLength;
 
     if (!AcpiVerifyInBuffer(IoStack, sizeof(ACPI_ENUM_CHILDREN_INPUT_BUFFER)))
@@ -1363,7 +1361,7 @@ Bus_PDO_EnumChildren(
         return STATUS_ACPI_INVALID_DATA;
 
     RtlZeroMemory(&Context, sizeof(Context));
-    Root = DeviceData->AcpiHandle;
+    Root = Handle;
     if (Input->NameLength != 0)
     {
         if (Input->NameLength > InputLength - FIELD_OFFSET(ACPI_ENUM_CHILDREN_INPUT_BUFFER, Name) ||
@@ -1384,7 +1382,7 @@ Bus_PDO_EnumChildren(
         else
         {
             if (strchr(Name, '\\') != NULL || strchr(Name, '^') != NULL || strchr(Name, '.') != NULL ||
-                ACPI_FAILURE(AcpiGetHandle(DeviceData->AcpiHandle, Name, &Root)))
+                ACPI_FAILURE(AcpiGetHandle(Handle, Name, &Root)))
             {
                 return STATUS_OBJECT_NAME_NOT_FOUND;
             }
@@ -1422,6 +1420,61 @@ Bus_PDO_EnumChildren(
     Context.Output->NumberOfChildren = Context.Count;
     Irp->IoStatus.Information = Context.RequiredLength;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+Bus_PDO_EnumChildren(
+    _In_ PPDO_DEVICE_DATA DeviceData,
+    _Inout_ PIRP Irp)
+{
+    return EvalEnumChildrenOnHandle(DeviceData->AcpiHandle,
+                                    Irp->AssociatedIrp.SystemBuffer,
+                                    IoGetCurrentIrpStackLocation(Irp),
+                                    Irp);
+}
+
+NTSTATUS
+NTAPI
+AcpiEnumChildrenForPciDeviceIoctl(
+    _In_ PFDO_DEVICE_DATA FdoData,
+    _Inout_ PIRP Irp)
+{
+    PIO_STACK_LOCATION IoStack = IoGetCurrentIrpStackLocation(Irp);
+    PACPI_PCI_EVAL_INPUT_BUFFER PciInputBuffer = Irp->AssociatedIrp.SystemBuffer;
+    ULONG InputBufferSize = IoStack->Parameters.DeviceIoControl.InputBufferLength;
+    IO_STACK_LOCATION SyntheticIoStack;
+    ACPI_HANDLE AcpiHandle;
+
+    UNREFERENCED_PARAMETER(FdoData);
+
+    if (InputBufferSize < sizeof(ACPI_PCI_EVAL_INPUT_BUFFER) + sizeof(ACPI_ENUM_CHILDREN_INPUT_BUFFER))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    if (PciInputBuffer->Signature != ACPI_PCI_EVAL_INPUT_BUFFER_SIGNATURE ||
+        PciInputBuffer->TotalSize != InputBufferSize ||
+        PciInputBuffer->InputBufferOffset < sizeof(ACPI_PCI_EVAL_INPUT_BUFFER) ||
+        PciInputBuffer->InputBufferOffset > InputBufferSize ||
+        PciInputBuffer->InputBufferSize > InputBufferSize - PciInputBuffer->InputBufferOffset)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (!AcpiFindPciDeviceInNamespace(PciInputBuffer->Segment,
+                                      PciInputBuffer->Bus,
+                                      PciInputBuffer->Device,
+                                      PciInputBuffer->Function,
+                                      &AcpiHandle))
+    {
+        return STATUS_NOT_FOUND;
+    }
+
+    RtlZeroMemory(&SyntheticIoStack, sizeof(SyntheticIoStack));
+    SyntheticIoStack.Parameters.DeviceIoControl.InputBufferLength = PciInputBuffer->InputBufferSize;
+    SyntheticIoStack.Parameters.DeviceIoControl.OutputBufferLength =
+        IoStack->Parameters.DeviceIoControl.OutputBufferLength;
+    return EvalEnumChildrenOnHandle(AcpiHandle,
+                                    (PACPI_ENUM_CHILDREN_INPUT_BUFFER)ACPI_PCI_EVAL_GET_INPUT_BUFFER(PciInputBuffer),
+                                    &SyntheticIoStack,
+                                    Irp);
 }
 
 /**

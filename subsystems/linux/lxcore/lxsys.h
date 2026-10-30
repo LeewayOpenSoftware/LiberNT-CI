@@ -261,4 +261,6 @@ LX_SYSCALL(LxSysSchedGetattr);
 LX_SYSCALL(LxSysSetpriority);
 LX_SYSCALL(LxSysSchedGetPriorityMax);
 LX_SYSCALL(LxSysIoprioGet);
+LX_SYSCALL(LxSysAddKey);
+LX_SYSCALL(LxSysRequestKey);
 LX_SYSCALL(LxSysKeyctl);

@@ -1174,7 +1174,7 @@ FileRecord::ReplaceSecurityDescriptorData(
         if (!Attribute && FindAttributeInRecord(TypeAttributeList, NULL, NULL))
         {
             Status = DiskVolume->MFT->AllocateExtensionFileRecord(
-                ((ULONGLONG)Header->SequenceNumber << 48) | Header->MFTRecordNumber,
+                ((ULONGLONG)Header->SequenceNumber << 48) | RecordNumber,
                 &StagedOwner);
             if (!NT_SUCCESS(Status))
                 goto Restore;
@@ -1616,7 +1616,7 @@ FileRecord::CreateNamedDataStreamInExtension(
         RequestedLength;
     BaseFileReference =
         ((ULONGLONG)Header->SequenceNumber << 48) |
-        Header->MFTRecordNumber;
+        RecordNumber;
 
     Status = DiskVolume->MFT->
         AllocateExtensionFileRecord(
@@ -2365,7 +2365,7 @@ FileRecord::EnsureAttributeListForMappingGrowth(
     *Created = FALSE;
     if (*AttributeOwner != this ||
         Header->BaseFileRecord != 0 ||
-        Header->MFTRecordNumber == _MFT ||
+        RecordNumber == _MFT ||
         GetAttribute(TypeAttributeList, NULL))
     {
         return STATUS_SUCCESS;
@@ -2429,7 +2429,7 @@ FileRecord::ReleaseBaseRecordSpace(
     if (!Header || !Data || !DiskVolume ||
         Required == 0 ||
         Header->BaseFileRecord != 0 ||
-        Header->MFTRecordNumber == _MFT ||
+        RecordNumber == _MFT ||
         Header->ActualSize > Header->AllocatedSize ||
         !FindAttributeInRecord(TypeAttributeList,
                                NULL,
@@ -3479,7 +3479,7 @@ FileRecord::SetSparse(_In_ AttributeType AttrType,
         return STATUS_ACCESS_DENIED;
     if (!Header ||
         (Header->Flags & FR_IS_DIRECTORY) ||
-        Header->MFTRecordNumber <=
+        RecordNumber <=
             NTFS_LAST_RESERVED_FILE_RECORD)
     {
         return STATUS_INVALID_PARAMETER;
@@ -3889,7 +3889,7 @@ FileRecord::SetZeroData(
         return STATUS_ACCESS_DENIED;
     if (!Header ||
         (Header->Flags & FR_IS_DIRECTORY) ||
-        Header->MFTRecordNumber <=
+        RecordNumber <=
             NTFS_LAST_RESERVED_FILE_RECORD)
     {
         return STATUS_INVALID_PARAMETER;
@@ -5562,7 +5562,7 @@ FileRecord::ExtendNonResidentData(
     MinimumRequiredClusters = RequiredClusters;
     if (TargetAttribute->AttributeType == TypeData &&
         TargetAttribute->NameLength == 0 &&
-        Header->MFTRecordNumber > NTFS_LAST_RESERVED_FILE_RECORD &&
+        RecordNumber > NTFS_LAST_RESERVED_FILE_RECORD &&
         Offset == TargetAttribute->NonResident.DataSize)
     {
         GrowthClusters =

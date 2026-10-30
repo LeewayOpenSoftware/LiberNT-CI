@@ -266,6 +266,7 @@ BEGIN
     IDS_APPSSUBTITLE "LiberNT downloads them from their publishers and installs them for every account."
     IDS_APPS_COL_NAME "Component"
     IDS_APPS_COL_SOURCE "Downloaded from"
+    IDS_APPS_INSTALLED "%s (telepítve)"
     IDS_OOBE_FINISHTITLE "Getting LiberNT ready"
     IDS_OOBE_FINISHSUBTITLE "This can take a few minutes. Keep your computer on."
     IDS_OOBE_APPLY_REGION "Applying your language and keyboard..."

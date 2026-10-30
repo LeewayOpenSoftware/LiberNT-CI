@@ -158,7 +158,7 @@ FileRecord::MoveClusters(_In_ AttributeType AttrType,
 
     if (Header->BaseFileRecord == 0)
     {
-        switch (Header->MFTRecordNumber)
+        switch (RecordNumber)
         {
             case _MFTMirr:
             case _LogFile:

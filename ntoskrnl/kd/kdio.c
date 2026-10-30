@@ -26,17 +26,6 @@
 
 /* GLOBALS *******************************************************************/
 
-#define KdpBufferSize  (1024 * 512)
-static volatile BOOLEAN KdpLoggingEnabled = FALSE;
-static CHAR KdpDebugBuffer[KdpBufferSize];
-static volatile ULONG KdpCurrentPosition = 0;
-static volatile ULONG KdpFreeBytes = 0;
-static KSPIN_LOCK KdpDebugLogSpinLock;
-static KEVENT KdpLoggerThreadEvent;
-static KDPC KdpLoggerWakeDpc;
-static HANDLE KdpLogFileHandle;
-ANSI_STRING KdpLogFileName = RTL_CONSTANT_STRING("\\SystemRoot\\debug.log");
-
 static KSPIN_LOCK KdpSerialSpinLock;
 ULONG  SerialPortNumber = DEFAULT_DEBUG_PORT;
 CPPORT SerialPortInfo   = {0, DEFAULT_DEBUG_BAUD_RATE, 0};
@@ -61,7 +50,6 @@ PKDP_INIT_ROUTINE InitRoutines[KdMax] =
 {
     KdpScreenInit,
     KdpSerialInit,
-    KdpDebugLogInit,
 #ifdef KDBG // See kdb_cli.c
     KdpKdbgInit,
 #endif
@@ -120,264 +108,6 @@ KdbpReleaseLock(
 
     /* Restore the old IRQL */
     KeLowerIrql(OldIrql);
-}
-
-/* FILE DEBUG LOG FUNCTIONS **************************************************/
-
-static VOID
-NTAPI
-KdpLoggerWakeDpcRoutine(
-    _In_ PKDPC Dpc,
-    _In_opt_ PVOID DeferredContext,
-    _In_opt_ PVOID SystemArgument1,
-    _In_opt_ PVOID SystemArgument2)
-{
-    UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(DeferredContext);
-    UNREFERENCED_PARAMETER(SystemArgument1);
-    UNREFERENCED_PARAMETER(SystemArgument2);
-
-    KeSetEvent(&KdpLoggerThreadEvent, IO_NO_INCREMENT, FALSE);
-}
-
-static VOID
-NTAPI
-KdpLoggerThread(PVOID Context)
-{
-    ULONG beg, end, num;
-    IO_STATUS_BLOCK Iosb;
-    LARGE_INTEGER FlushDelay;
-    ULONGLONG LastFlush = 0;
-    BOOLEAN Dirty = FALSE;
-    NTSTATUS WaitStatus;
-
-    ASSERT(ExGetPreviousMode() == KernelMode);
-
-    KdpLoggingEnabled = TRUE;
-    FlushDelay.QuadPart = -10000000LL;
-
-    while (TRUE)
-    {
-        WaitStatus = KeWaitForSingleObject(&KdpLoggerThreadEvent, Executive, KernelMode, FALSE,
-                                           Dirty ? &FlushDelay : NULL);
-        if (Dirty &&
-            (WaitStatus == STATUS_TIMEOUT || KeQueryInterruptTime() - LastFlush >= 10000000ULL))
-        {
-            NtFlushBuffersFile(KdpLogFileHandle, &Iosb);
-            LastFlush = KeQueryInterruptTime();
-            Dirty = FALSE;
-        }
-        if (WaitStatus == STATUS_TIMEOUT)
-            continue;
-
-        /* Bug */
-        /* Keep KdpCurrentPosition and KdpFreeBytes values in local
-         * variables to avoid their possible change from Producer part,
-         * KdpPrintToLogFile function
-         */
-        end = KdpCurrentPosition;
-        num = KdpFreeBytes;
-
-        /* Now securely calculate values, based on local variables */
-        beg = (end + num) % KdpBufferSize;
-        num = KdpBufferSize - num;
-
-        /* Nothing to do? */
-        if (num == 0)
-            continue;
-
-        if (end > beg)
-        {
-            NtWriteFile(KdpLogFileHandle, NULL, NULL, NULL, &Iosb,
-                        KdpDebugBuffer + beg, num, NULL, NULL);
-        }
-        else
-        {
-            NtWriteFile(KdpLogFileHandle, NULL, NULL, NULL, &Iosb,
-                        KdpDebugBuffer + beg, KdpBufferSize - beg, NULL, NULL);
-
-            NtWriteFile(KdpLogFileHandle, NULL, NULL, NULL, &Iosb,
-                        KdpDebugBuffer, end, NULL, NULL);
-        }
-
-        (VOID)InterlockedExchangeAddUL(&KdpFreeBytes, num);
-        Dirty = TRUE;
-    }
-}
-
-static VOID
-NTAPI
-KdpPrintToLogFile(
-    _In_ PCCH String,
-    _In_ ULONG Length)
-{
-    BOOLEAN LockAcquired;
-    KIRQL OldIrql;
-    ULONG beg, end, num;
-
-    /* Acquire the printing spinlock without waiting at raised IRQL */
-    LockAcquired = KdbpAcquireLock(&KdpDebugLogSpinLock, &OldIrql);
-    if (!LockAcquired)
-    {
-        KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql, LockAcquired);
-        return;
-    }
-
-    beg = KdpCurrentPosition;
-    num = min(Length, KdpFreeBytes);
-    if (num != 0)
-    {
-        end = (beg + num) % KdpBufferSize;
-        KdpCurrentPosition = end;
-        KdpFreeBytes -= num;
-
-        if (end > beg)
-        {
-            RtlCopyMemory(KdpDebugBuffer + beg, String, num);
-        }
-        else
-        {
-            RtlCopyMemory(KdpDebugBuffer + beg, String, KdpBufferSize - beg);
-            RtlCopyMemory(KdpDebugBuffer, String + KdpBufferSize - beg, end);
-        }
-    }
-
-    /* Release the spinlock */
-    KdbpReleaseLock(&KdpDebugLogSpinLock, OldIrql, LockAcquired);
-
-    /* Signal the logger thread, deferring the wake-up when KD runs at HIGH_LEVEL. */
-    if (KdpLoggingEnabled)
-    {
-        if (OldIrql <= DISPATCH_LEVEL)
-            KeSetEvent(&KdpLoggerThreadEvent, IO_NO_INCREMENT, FALSE);
-        else
-            KeInsertQueueDpc(&KdpLoggerWakeDpc, NULL, NULL);
-    }
-}
-
-NTSTATUS
-NTAPI
-KdpDebugLogInit(
-    _In_ PKD_DISPATCH_TABLE DispatchTable,
-    _In_ ULONG BootPhase)
-{
-    NTSTATUS Status = STATUS_SUCCESS;
-
-    if (!KdpDebugMode.File)
-        return STATUS_PORT_DISCONNECTED;
-
-    if (BootPhase == 0)
-    {
-        /* The kernel cannot allocate pool this early, but file logging must
-         * retain the banner and hardware inventory printed before Phase 1. */
-        KeInitializeSpinLock(&KdpDebugLogSpinLock);
-        KdpFreeBytes = KdpBufferSize;
-
-        /* Write out the functions that we support for now */
-        DispatchTable->KdpPrintRoutine = KdpPrintToLogFile;
-
-        /* Register for BootPhase 1 initialization and as a Provider */
-        DispatchTable->KdpInitRoutine = KdpDebugLogInit;
-        InsertTailList(&KdProviders, &DispatchTable->KdProvidersList);
-    }
-    else if (BootPhase == 1)
-    {
-        /* Register for later BootPhase 2 reinitialization */
-        DispatchTable->KdpInitRoutine = KdpDebugLogInit;
-
-        /* Announce ourselves */
-        HalDisplayString("   File log debugging enabled\r\n");
-    }
-    else if (BootPhase >= 2)
-    {
-        UNICODE_STRING FileName;
-        OBJECT_ATTRIBUTES ObjectAttributes;
-        IO_STATUS_BLOCK Iosb;
-        HANDLE ThreadHandle;
-        KPRIORITY Priority;
-
-        /* If we have already successfully opened the log file, bail out */
-        if (KdpLogFileHandle != NULL)
-            return STATUS_SUCCESS;
-
-        /* Setup the log name */
-        Status = RtlAnsiStringToUnicodeString(&FileName, &KdpLogFileName, TRUE);
-        if (!NT_SUCCESS(Status))
-            goto Failure;
-
-        InitializeObjectAttributes(&ObjectAttributes,
-                                   &FileName,
-                                   OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-                                   NULL,
-                                   NULL);
-
-        /* Start a fresh log so this boot's phase-0 output begins at byte zero. */
-        Status = ZwCreateFile(&KdpLogFileHandle,
-                              FILE_WRITE_DATA | SYNCHRONIZE,
-                              &ObjectAttributes,
-                              &Iosb,
-                              NULL,
-                              FILE_ATTRIBUTE_NORMAL,
-                              FILE_SHARE_READ,
-                              FILE_OVERWRITE_IF,
-                              FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT |
-                                FILE_SEQUENTIAL_ONLY | FILE_WRITE_THROUGH,
-                              NULL,
-                              0);
-
-        RtlFreeUnicodeString(&FileName);
-
-        if (!NT_SUCCESS(Status))
-        {
-            /* The final retry is issued after the I/O manager replaces the ARC-form \SystemRoot link. */
-            if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
-                Status == STATUS_OBJECT_PATH_NOT_FOUND)
-            {
-                if (BootPhase < KDP_BOOT_PHASE_SYSTEM_ROOT)
-                {
-                    DispatchTable->KdpInitRoutine = KdpDebugLogInit;
-                    return Status;
-                }
-            }
-            DPRINT1("Failed to open log file: 0x%08lx\n", Status);
-            goto Failure;
-        }
-
-        KeInitializeEvent(&KdpLoggerThreadEvent, SynchronizationEvent, TRUE);
-        KeInitializeDpc(&KdpLoggerWakeDpc, KdpLoggerWakeDpcRoutine, NULL);
-
-        /* Create the logger thread */
-        Status = PsCreateSystemThread(&ThreadHandle,
-                                      THREAD_ALL_ACCESS,
-                                      NULL,
-                                      NULL,
-                                      NULL,
-                                      KdpLoggerThread,
-                                      NULL);
-        if (!NT_SUCCESS(Status))
-        {
-            DPRINT1("Failed to create log file thread: 0x%08lx\n", Status);
-            ZwClose(KdpLogFileHandle);
-            KdpLogFileHandle = NULL;
-            goto Failure;
-        }
-
-        Priority = HIGH_PRIORITY;
-        ZwSetInformationThread(ThreadHandle,
-                               ThreadPriority,
-                               &Priority,
-                               sizeof(Priority));
-
-        ZwClose(ThreadHandle);
-        return Status;
-
-Failure:
-        KdpFreeBytes = 0;
-        KdpDebugMode.File = FALSE;
-        RemoveEntryList(&DispatchTable->KdProvidersList);
-    }
-
-    return Status;
 }
 
 /* SERIAL FUNCTIONS **********************************************************/
@@ -834,6 +564,144 @@ KdIoPrintf(
 extern const CSTRING KdbPromptStr;
 #endif
 
+#define KDP_FILE_IO_TIMEOUT_POLLS 100000
+
+static BOOLEAN KdpFileIoHostAbsent = FALSE;
+static ULONG KdpFileIoPacketId = INITIAL_PACKET_ID;
+static ULONG KdpFileIoApiNumber;
+
+static
+ULONG
+KdpFileIoChecksum(
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length)
+{
+    PUCHAR Byte = Buffer;
+    ULONG Checksum = 0;
+
+    while (Length-- > 0)
+        Checksum += *Byte++;
+
+    return Checksum;
+}
+
+static
+BOOLEAN
+KdpFileIoReceive(
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length)
+{
+    PUCHAR Byte = Buffer;
+    ULONG Polls;
+
+    while (Length-- > 0)
+    {
+        for (Polls = 0; !KdPortGetByteEx(&SerialPortInfo, Byte); Polls++)
+        {
+            if (Polls == KDP_FILE_IO_TIMEOUT_POLLS)
+                return FALSE;
+            KeStallExecutionProcessor(10);
+        }
+        Byte++;
+    }
+
+    return TRUE;
+}
+
+static
+VOID
+KdpSendFileIoPacket(
+    _In_ PSTRING MessageHeader,
+    _In_opt_ PSTRING MessageData)
+{
+    KD_PACKET Packet;
+    UCHAR Trailer = PACKET_TRAILING_BYTE;
+
+    if (!KdpDebugMode.Serial || KdpFileIoHostAbsent)
+        return;
+
+    KdpFileIoApiNumber = ((PDBGKD_FILE_IO)MessageHeader->Buffer)->ApiNumber;
+
+    Packet.PacketLeader = PACKET_LEADER;
+    Packet.PacketType = PACKET_TYPE_KD_FILE_IO;
+    Packet.ByteCount = MessageHeader->Length;
+    Packet.PacketId = ++KdpFileIoPacketId;
+    Packet.Checksum = KdpFileIoChecksum(MessageHeader->Buffer, MessageHeader->Length);
+    if (MessageData)
+    {
+        Packet.ByteCount += MessageData->Length;
+        Packet.Checksum += KdpFileIoChecksum(MessageData->Buffer, MessageData->Length);
+    }
+
+    KdPortPutBufferEx(&SerialPortInfo, (PCCH)&Packet, sizeof(Packet));
+    KdPortPutBufferEx(&SerialPortInfo, MessageHeader->Buffer, MessageHeader->Length);
+    if (MessageData)
+        KdPortPutBufferEx(&SerialPortInfo, MessageData->Buffer, MessageData->Length);
+    KdPortPutBufferEx(&SerialPortInfo, (PCCH)&Trailer, sizeof(Trailer));
+}
+
+static
+KDSTATUS
+KdpReceiveFileIoPacket(
+    _Out_ PSTRING MessageHeader,
+    _Out_ PSTRING MessageData,
+    _Out_ PULONG DataLength)
+{
+    KD_PACKET Packet;
+    ULONG Matched = 0, Checksum;
+    UCHAR Byte;
+
+    if (!KdpDebugMode.Serial || KdpFileIoHostAbsent)
+        return KdPacketTimedOut;
+
+    do
+    {
+        Matched = 0;
+        while (Matched < sizeof(Packet.PacketLeader))
+        {
+            if (!KdpFileIoReceive(&Byte, sizeof(Byte)))
+            {
+                if (KdpFileIoApiNumber != DbgKdCreateFileApi)
+                    return KdPacketNeedsResend;
+
+                KdpFileIoHostAbsent = TRUE;
+                return KdPacketTimedOut;
+            }
+            Matched = (Byte == PACKET_LEADER_BYTE) ? Matched + 1 : 0;
+        }
+
+        if (!KdpFileIoReceive(&Packet.PacketType,
+                              sizeof(Packet) - FIELD_OFFSET(KD_PACKET, PacketType)))
+        {
+            return KdPacketNeedsResend;
+        }
+    } while (Packet.PacketId != KdpFileIoPacketId);
+
+    if ((Packet.PacketType != PACKET_TYPE_KD_FILE_IO) ||
+        (Packet.ByteCount < MessageHeader->MaximumLength) ||
+        (Packet.ByteCount - MessageHeader->MaximumLength > MessageData->MaximumLength))
+    {
+        return KdPacketNeedsResend;
+    }
+
+    MessageHeader->Length = MessageHeader->MaximumLength;
+    MessageData->Length = Packet.ByteCount - MessageHeader->MaximumLength;
+    if (!KdpFileIoReceive(MessageHeader->Buffer, MessageHeader->Length) ||
+        !KdpFileIoReceive(MessageData->Buffer, MessageData->Length) ||
+        !KdpFileIoReceive(&Byte, sizeof(Byte)))
+    {
+        return KdPacketNeedsResend;
+    }
+
+    Checksum = KdpFileIoChecksum(MessageHeader->Buffer, MessageHeader->Length) +
+               KdpFileIoChecksum(MessageData->Buffer, MessageData->Length);
+    if ((Byte != PACKET_TRAILING_BYTE) || (Checksum != Packet.Checksum))
+        return KdPacketNeedsResend;
+
+    *DataLength = MessageData->Length;
+    return KdPacketReceived;
+}
+
 VOID
 NTAPI
 KdSendPacket(
@@ -909,6 +777,12 @@ KdSendPacket(
         PDBGKD_MANIPULATE_STATE64 ManipulateState = (PDBGKD_MANIPULATE_STATE64)MessageHeader->Buffer;
         KdIoPrintf("%s: PACKET_TYPE_KD_STATE_MANIPULATE for ApiNumber %lu\n",
                    __FUNCTION__, ManipulateState->ApiNumber);
+        return;
+    }
+
+    if (PacketType == PACKET_TYPE_KD_FILE_IO)
+    {
+        KdpSendFileIoPacket(MessageHeader, MessageData);
         return;
     }
 
@@ -992,6 +866,9 @@ KdReceivePacket(
         ManipulateState->u.Continue.ContinueStatus = DBG_EXCEPTION_NOT_HANDLED;
         return KdPacketReceived;
     }
+
+    if (PacketType == PACKET_TYPE_KD_FILE_IO)
+        return KdpReceiveFileIoPacket(MessageHeader, MessageData, DataLength);
 
     if (PacketType != PACKET_TYPE_KD_DEBUG_IO)
     {

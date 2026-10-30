@@ -3961,7 +3961,11 @@ TfyRequestMaster(IMMDevice *pDevice, int nPercent, int nMute)
 }
 
 #define TFY_TIMER_OSDHIDE  0x53
+#define TFY_TIMER_OSDSLIDE 0x58
 #define TFY_OSD_VISIBLE_MS 2000
+#define TFY_OSD_GAP        14
+#define TFY_OSD_SHOW_MS    500
+#define TFY_OSD_HIDE_MS    170
 
 struct TFYMEDIA
 {
@@ -4069,11 +4073,13 @@ public:
     BOOL m_bFrameStarted;
     int m_nPercent;
     BOOL m_bHover;
+    BOOL m_bAnimate;
     SIZE m_size;
     RECT m_rcIcon, m_rcBar, m_rcValue;
+    int m_yHidden, m_yNow, m_ySlideFrom;
 
     CTrayOsdWnd() : m_hFont(NULL), m_uIcon(0), m_pszGlyph(NULL), m_bFrameStarted(FALSE),
-                    m_nPercent(0), m_bHover(FALSE)
+                    m_nPercent(0), m_bHover(FALSE), m_bAnimate(TRUE), m_yHidden(0), m_yNow(0), m_ySlideFrom(0)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
         ZeroMemory(&m_size, sizeof(m_size));
@@ -4090,12 +4096,43 @@ public:
         SetRect(&m_rcValue, Sc(152), 0, Sc(180), m_size.cy);
     }
 
+    VOID StepSlide()
+    {
+        UINT Ms = (m_AnimPhase == TFY_CLOSE) ? TFY_OSD_HIDE_MS : TFY_OSD_SHOW_MS;
+        double x = m_bAnimate ? min(1.0, (double)(GetTickCount64() - m_AnimT0) / Ms) : 1.0;
+        double s = (m_AnimPhase == TFY_CLOSE) ? x * x * x : 1.0 - (1.0 - x) * (1.0 - x) * (1.0 - x);
+        int yTo = (m_AnimPhase == TFY_CLOSE) ? m_yHidden : m_ptFinal.y;
+
+        m_yNow = m_ySlideFrom + (int)floor((yTo - m_ySlideFrom) * s + 0.5);
+        SetWindowPos(NULL, m_ptFinal.x, m_yNow, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+        if (x < 1.0)
+            return;
+        KillTimer(TFY_TIMER_OSDSLIDE);
+        if (m_AnimPhase == TFY_CLOSE)
+            DestroyWindow();
+        else
+            m_AnimPhase = TFY_NONE;
+    }
+
+    VOID BeginSlide(int Phase)
+    {
+        ANIMATIONINFO ai = { sizeof(ai) };
+
+        m_AnimPhase = Phase;
+        m_AnimT0 = GetTickCount64();
+        m_ySlideFrom = m_yNow;
+        m_bAnimate = SystemParametersInfoW(SPI_GETANIMATION, sizeof(ai), &ai, 0) && ai.iMinAnimate;
+        SetTimer(TFY_TIMER_OSDSLIDE, TFY_ANIM_INTERVAL, NULL);
+        StepSlide();
+    }
+
     VOID Show(UINT uIcon, LPCWSTR pszGlyph, int nPercent)
     {
         HWND hwndTray = FindWindowW(L"Shell_TrayWnd", NULL);
+        HWND hwndAfter = HWND_TOPMOST;
         MONITORINFO mi = { sizeof(mi) };
         RECT rcBar;
-        POINT pt;
+        int yEdge;
 
         m_uIcon = uIcon;
         m_pszGlyph = pszGlyph;
@@ -4104,10 +4141,12 @@ public:
         m_nPercent = max(0, min(nPercent, 100));
         SetTimer(TFY_TIMER_OSDHIDE, TFY_OSD_VISIBLE_MS, NULL);
 
-        if (IsWindowVisible() && m_AnimPhase != TFY_CLOSE)
+        if (IsWindowVisible())
         {
             InvalidateRect(NULL, FALSE);
             UpdateWindow();
+            if (m_AnimPhase == TFY_CLOSE)
+                BeginSlide(TFY_OPEN);
             return;
         }
 
@@ -4118,12 +4157,27 @@ public:
         if (!hwndTray || !::GetWindowRect(hwndTray, &rcBar))
             SetRectEmpty(&rcBar);
         GetMonitorInfoW(MonitorFromRect(&rcBar, MONITOR_DEFAULTTOPRIMARY), &mi);
-        pt.x = (mi.rcMonitor.left + mi.rcMonitor.right - m_size.cx) / 2;
         if (hwndTray && rcBar.top > (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2)
-            pt.y = rcBar.top - Sc(15) - m_size.cy;
+        {
+            yEdge = rcBar.top;
+            if (::GetWindowLongPtrW(hwndTray, GWL_EXSTYLE) & WS_EX_TOPMOST)
+                hwndAfter = hwndTray;
+        }
         else
-            pt.y = mi.rcWork.bottom - Sc(15) - m_size.cy;
-        BeginFlyoutOpen(m_hWnd, pt.x, pt.y, m_size.cx, m_size.cy, m_Pal.PanelBg, FALSE);
+        {
+            yEdge = mi.rcWork.bottom;
+        }
+        m_ptFinal.x = (mi.rcMonitor.left + mi.rcMonitor.right - m_size.cx) / 2;
+        m_ptFinal.y = yEdge - Sc(TFY_OSD_GAP) - m_size.cy;
+        m_yHidden = yEdge;
+        m_yNow = yEdge;
+        RefreshFlyoutMaterial(m_hWnd, m_Pal.PanelBg);
+        SetLayeredWindowAttributes(m_hWnd, 0, 255, LWA_ALPHA);
+        SetPropW(m_hWnd, DWM_PROP_CORNER_RADIUS, (HANDLE)(ULONG_PTR)TfyFlyoutRadius());
+        SetWindowPos(hwndAfter, m_ptFinal.x, m_yNow, m_size.cx, m_size.cy, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        InvalidateRect(NULL, FALSE);
+        UpdateWindow();
+        BeginSlide(TFY_OPEN);
     }
 
     LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
@@ -4198,12 +4252,15 @@ public:
 
     LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        if (HandleFlyoutAnimation(m_hWnd, wParam))
+        if (wParam == TFY_TIMER_OSDSLIDE)
+        {
+            StepSlide();
             return 0;
+        }
         if (wParam == TFY_TIMER_OSDHIDE && !m_bHover)
         {
             KillTimer(TFY_TIMER_OSDHIDE);
-            BeginFlyoutClose(m_hWnd);
+            BeginSlide(TFY_CLOSE);
         }
         return 0;
     }
@@ -4232,7 +4289,7 @@ public:
 
     LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
-        KillTimer(TFY_TIMER_ANIM);
+        KillTimer(TFY_TIMER_OSDSLIDE);
         KillTimer(TFY_TIMER_OSDHIDE);
         if (m_hFont) { DeleteObject(m_hFont); m_hFont = NULL; }
         if (m_bFrameStarted)
@@ -4268,12 +4325,6 @@ void CTrayOsdWnd::OnFinalMessage(HWND hWnd)
 static VOID
 TrayOsd_Show(UINT uIcon, LPCWSTR pszGlyph, int nPercent)
 {
-    if (g_pTrayOsd && g_pTrayOsd->IsWindow() && g_pTrayOsd->m_AnimPhase == TFY_CLOSE)
-    {
-        ::DestroyWindow(g_pTrayOsd->m_hWnd);
-        g_pTrayOsd = NULL;
-    }
-
     if (!g_pTrayOsd)
     {
         CTrayOsdWnd *pOsd = new CTrayOsdWnd();
@@ -4288,6 +4339,764 @@ TrayOsd_Show(UINT uIcon, LPCWSTR pszGlyph, int nPercent)
     }
 
     g_pTrayOsd->Show(uIcon, pszGlyph, nPercent);
+}
+
+#define TFY_TIMER_SHOTHIDE  0x57
+#define TFY_SHOT_VISIBLE_MS 6000
+
+enum TFYSHOTHIT { TFY_SHOT_HIT_NONE, TFY_SHOT_HIT_IMAGE, TFY_SHOT_HIT_STATUS, TFY_SHOT_HIT_CLOSE };
+enum TFYSHOTSAVE { TFY_SHOT_SAVING, TFY_SHOT_SAVED, TFY_SHOT_NOT_SAVED };
+
+class CTrayShotDropSource :
+    public CComObjectRootEx<CComMultiThreadModelNoCS>,
+    public IDropSource
+{
+public:
+    STDMETHOD(QueryContinueDrag)(BOOL fEscapePressed, DWORD grfKeyState) override
+    {
+        if (fEscapePressed)
+            return DRAGDROP_S_CANCEL;
+        if (!(grfKeyState & MK_LBUTTON))
+            return DRAGDROP_S_DROP;
+        return S_OK;
+    }
+
+    STDMETHOD(GiveFeedback)(DWORD dwEffect) override
+    {
+        return DRAGDROP_S_USEDEFAULTCURSORS;
+    }
+
+    DECLARE_NOT_AGGREGATABLE(CTrayShotDropSource)
+    DECLARE_PROTECT_FINAL_CONSTRUCT()
+
+    BEGIN_COM_MAP(CTrayShotDropSource)
+        COM_INTERFACE_ENTRY_IID(IID_IDropSource, IDropSource)
+    END_COM_MAP()
+};
+
+static HBITMAP
+TfyShotCreateDibSection(int cx, int cy, PVOID *ppvBits)
+{
+    BITMAPINFO bmi;
+
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = cx;
+    bmi.bmiHeader.biHeight = -cy;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
+    return CreateDIBSection(NULL, &bmi, DIB_RGB_COLORS, ppvBits, NULL, 0);
+}
+
+static HBITMAP
+TfyShotCaptureScreen(int *pcx, int *pcy, PVOID *ppvBits)
+{
+    int x = GetSystemMetrics(SM_XVIRTUALSCREEN);
+    int y = GetSystemMetrics(SM_YVIRTUALSCREEN);
+    int cx = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+    int cy = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+    HBITMAP hbm;
+    HDC hdcScreen, hdcMem;
+    HGDIOBJ hbmOld;
+    BOOL bCaptured;
+
+    if (cx <= 0 || cy <= 0)
+        return NULL;
+    hbm = TfyShotCreateDibSection(cx, cy, ppvBits);
+    if (!hbm)
+        return NULL;
+
+    hdcScreen = GetDC(NULL);
+    hdcMem = hdcScreen ? CreateCompatibleDC(hdcScreen) : NULL;
+    bCaptured = FALSE;
+    if (hdcMem)
+    {
+        hbmOld = SelectObject(hdcMem, hbm);
+        bCaptured = BitBlt(hdcMem, 0, 0, cx, cy, hdcScreen, x, y, SRCCOPY | CAPTUREBLT);
+        SelectObject(hdcMem, hbmOld);
+        DeleteDC(hdcMem);
+    }
+    if (hdcScreen)
+        ReleaseDC(NULL, hdcScreen);
+    if (!bCaptured)
+    {
+        DeleteObject(hbm);
+        return NULL;
+    }
+
+    GdiFlush();
+    *pcx = cx;
+    *pcy = cy;
+    return hbm;
+}
+
+static VOID
+TfyShotDownscale(const ULONG *pSrc, int cxSrc, int cySrc, PULONG pDst, int cxDst, int cyDst)
+{
+    for (int y = 0; y < cyDst; y++)
+    {
+        int y0 = y * cySrc / cyDst;
+        int y1 = max(y0 + 1, (y + 1) * cySrc / cyDst);
+
+        for (int x = 0; x < cxDst; x++)
+        {
+            int x0 = x * cxSrc / cxDst;
+            int x1 = max(x0 + 1, (x + 1) * cxSrc / cxDst);
+            ULONG red = 0, green = 0, blue = 0;
+            ULONG count = (y1 - y0) * (x1 - x0);
+
+            for (int yy = y0; yy < y1; yy++)
+            {
+                const ULONG *pRow = pSrc + (SIZE_T)yy * cxSrc;
+
+                for (int xx = x0; xx < x1; xx++)
+                {
+                    blue += pRow[xx] & 0xFF;
+                    green += (pRow[xx] >> 8) & 0xFF;
+                    red += (pRow[xx] >> 16) & 0xFF;
+                }
+            }
+
+            pDst[(SIZE_T)y * cxDst + x] = 0xFF000000 |
+                                          ((red + count / 2) / count) << 16 |
+                                          ((green + count / 2) / count) << 8 |
+                                          (blue + count / 2) / count;
+        }
+    }
+}
+
+static HGLOBAL
+TfyShotCreateDib(HBITMAP hbm, int cx, int cy)
+{
+    BITMAPINFOHEADER bih;
+    HGLOBAL hGlobal;
+    LPBYTE pb;
+    HDC hdc;
+    int nLines;
+
+    ZeroMemory(&bih, sizeof(bih));
+    bih.biSize = sizeof(bih);
+    bih.biWidth = cx;
+    bih.biHeight = cy;
+    bih.biPlanes = 1;
+    bih.biBitCount = 24;
+    bih.biCompression = BI_RGB;
+    bih.biSizeImage = ((cx * 24 + 31) / 32) * 4 * cy;
+
+    hGlobal = GlobalAlloc(GMEM_MOVEABLE, sizeof(bih) + bih.biSizeImage);
+    if (!hGlobal)
+        return NULL;
+    pb = (LPBYTE)GlobalLock(hGlobal);
+    if (!pb)
+    {
+        GlobalFree(hGlobal);
+        return NULL;
+    }
+    CopyMemory(pb, &bih, sizeof(bih));
+    hdc = GetDC(NULL);
+    nLines = hdc ? GetDIBits(hdc, hbm, 0, cy, pb + sizeof(bih), (BITMAPINFO *)pb, DIB_RGB_COLORS) : 0;
+    if (hdc)
+        ReleaseDC(NULL, hdc);
+    GlobalUnlock(hGlobal);
+    if (nLines != cy)
+    {
+        GlobalFree(hGlobal);
+        return NULL;
+    }
+    return hGlobal;
+}
+
+static BOOL
+TfyShotGetPngEncoder(CLSID *pclsid)
+{
+    UINT cEncoders = 0, cbEncoders = 0;
+    Gdiplus::ImageCodecInfo *pEncoders;
+    BOOL bFound = FALSE;
+
+    if (Gdiplus::DllExports::GdipGetImageEncodersSize(&cEncoders, &cbEncoders) != Gdiplus::Ok || !cbEncoders)
+        return FALSE;
+    pEncoders = (Gdiplus::ImageCodecInfo *)HeapAlloc(GetProcessHeap(), 0, cbEncoders);
+    if (!pEncoders)
+        return FALSE;
+    if (Gdiplus::DllExports::GdipGetImageEncoders(cEncoders, cbEncoders, pEncoders) == Gdiplus::Ok)
+    {
+        for (UINT i = 0; i < cEncoders && !bFound; i++)
+        {
+            if (pEncoders[i].MimeType && !lstrcmpiW(pEncoders[i].MimeType, L"image/png"))
+            {
+                *pclsid = pEncoders[i].Clsid;
+                bFound = TRUE;
+            }
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, pEncoders);
+    return bFound;
+}
+
+static BOOL
+TfyShotMakePath(LPWSTR pszPath)
+{
+    WCHAR szDir[MAX_PATH], szName[64];
+    SYSTEMTIME st;
+
+    if (FAILED(SHGetFolderPathW(NULL, CSIDL_DESKTOPDIRECTORY | CSIDL_FLAG_CREATE, NULL, SHGFP_TYPE_CURRENT, szDir)))
+        return FALSE;
+    GetLocalTime(&st);
+    for (UINT n = 1; n < 100; n++)
+    {
+        if (n == 1)
+        {
+            StringCchPrintfW(szName, _countof(szName), L"Screenshot %04u-%02u-%02u %02u%02u%02u.png",
+                             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+        }
+        else
+        {
+            StringCchPrintfW(szName, _countof(szName), L"Screenshot %04u-%02u-%02u %02u%02u%02u (%u).png",
+                             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond, n);
+        }
+        if (!PathCombineW(pszPath, szDir, szName))
+            return FALSE;
+        if (GetFileAttributesW(pszPath) == INVALID_FILE_ATTRIBUTES)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+typedef CWinTraits<WS_POPUP,
+                   WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_LAYERED> CTrayShotTraits;
+
+class CTrayShotWnd :
+    public CWindowImpl<CTrayShotWnd, CWindow, CTrayShotTraits>,
+    public CTrayFlyoutAnimation
+{
+public:
+    DECLARE_WND_CLASS_EX(L"TrayScreenshotFlyout", CS_DROPSHADOW, COLOR_WINDOW)
+
+    SM2_FLYOUT_PALETTE m_Pal;
+    HFONT m_hFont;
+    HFONT m_hFontSmall;
+    BOOL m_bFrameStarted;
+    BOOL m_bListening;
+    HBITMAP m_hbmShot;
+    PVOID m_pvShot;
+    int m_cxShot;
+    int m_cyShot;
+    HBITMAP m_hbmThumb;
+    TFYSHOTSAVE m_SaveState;
+    DWORD m_dwClipSeq;
+    BOOL m_bHover;
+    BOOL m_bDragging;
+    TFYSHOTHIT m_HitHot;
+    TFYSHOTHIT m_HitPressed;
+    POINT m_ptDown;
+    SIZE m_size;
+    RECT m_rcImage, m_rcStatus, m_rcClose;
+    WCHAR m_szPath[MAX_PATH];
+
+    CTrayShotWnd() : m_hFont(NULL), m_hFontSmall(NULL), m_bFrameStarted(FALSE), m_bListening(FALSE),
+                     m_hbmShot(NULL), m_pvShot(NULL), m_cxShot(0), m_cyShot(0), m_hbmThumb(NULL),
+                     m_SaveState(TFY_SHOT_SAVING), m_dwClipSeq(0), m_bHover(FALSE), m_bDragging(FALSE),
+                     m_HitHot(TFY_SHOT_HIT_NONE), m_HitPressed(TFY_SHOT_HIT_NONE)
+    {
+        ZeroMemory(&m_Pal, sizeof(m_Pal));
+        ZeroMemory(&m_ptDown, sizeof(m_ptDown));
+        ZeroMemory(&m_size, sizeof(m_size));
+        m_szPath[0] = UNICODE_NULL;
+    }
+
+    int Sc(int v) const { return ShellScaleForDpi(v); }
+
+    VOID Layout()
+    {
+        int nPad = Sc(12), cxBox = Sc(296), cyBox = Sc(200), cyRow = Sc(44);
+        int cxThumb = cxBox, cyThumb = max(1, MulDiv(cxBox, m_cyShot, m_cxShot));
+
+        if (cyThumb > cyBox)
+        {
+            cyThumb = cyBox;
+            cxThumb = max(1, MulDiv(cyBox, m_cxShot, m_cyShot));
+        }
+        m_size.cx = cxBox + 2 * nPad;
+        SetRect(&m_rcImage, nPad + (cxBox - cxThumb) / 2, nPad,
+                nPad + (cxBox - cxThumb) / 2 + cxThumb, nPad + cyThumb);
+        int yRow = nPad + cyThumb + Sc(8);
+        SetRect(&m_rcClose, m_size.cx - nPad - Sc(32), yRow + (cyRow - Sc(32)) / 2,
+                m_size.cx - nPad, yRow + (cyRow + Sc(32)) / 2);
+        SetRect(&m_rcStatus, nPad, yRow, m_rcClose.left - Sc(4), yRow + cyRow);
+        m_size.cy = yRow + cyRow + Sc(8);
+    }
+
+    VOID CreateThumbnail()
+    {
+        int cx = m_rcImage.right - m_rcImage.left;
+        int cy = m_rcImage.bottom - m_rcImage.top;
+        PVOID pvThumb = NULL;
+
+        m_hbmThumb = TfyShotCreateDibSection(cx, cy, &pvThumb);
+        if (m_hbmThumb)
+            TfyShotDownscale((const ULONG *)m_pvShot, m_cxShot, m_cyShot, (PULONG)pvThumb, cx, cy);
+    }
+
+    BOOL IsCopied() const
+    {
+        return m_dwClipSeq && GetClipboardSequenceNumber() == m_dwClipSeq;
+    }
+
+    VOID Copy()
+    {
+        HGLOBAL hDib = TfyShotCreateDib(m_hbmShot, m_cxShot, m_cyShot);
+
+        if (!hDib)
+            return;
+        if (!OpenClipboard())
+        {
+            GlobalFree(hDib);
+            return;
+        }
+        EmptyClipboard();
+        if (!SetClipboardData(CF_DIB, hDib))
+            GlobalFree(hDib);
+        CloseClipboard();
+        m_dwClipSeq = GetClipboardSequenceNumber();
+        InvalidateRect(NULL, FALSE);
+    }
+
+    BOOL Save()
+    {
+        CLSID clsidPng;
+
+        if (!m_bFrameStarted || !TfyShotGetPngEncoder(&clsidPng) || !TfyShotMakePath(m_szPath))
+        {
+            m_szPath[0] = UNICODE_NULL;
+            return FALSE;
+        }
+
+        Gdiplus::Bitmap Image(m_cxShot, m_cyShot, m_cxShot * 4, PixelFormat32bppRGB, (BYTE *)m_pvShot);
+        if (Image.GetLastStatus() != Gdiplus::Ok || Image.Save(m_szPath, &clsidPng, NULL) != Gdiplus::Ok)
+        {
+            DeleteFileW(m_szPath);
+            m_szPath[0] = UNICODE_NULL;
+            return FALSE;
+        }
+        SHChangeNotify(SHCNE_CREATE, SHCNF_PATHW, m_szPath, NULL);
+        return TRUE;
+    }
+
+    VOID Show(HBITMAP hbmShot, PVOID pvShot, int cxShot, int cyShot)
+    {
+        HWND hwndTray = FindWindowW(L"Shell_TrayWnd", NULL);
+        MONITORINFO mi = { sizeof(mi) };
+        RECT rcBar;
+        POINT pt;
+
+        m_hbmShot = hbmShot;
+        m_pvShot = pvShot;
+        m_cxShot = cxShot;
+        m_cyShot = cyShot;
+        m_bFrameStarted = ShellFrame::Startup();
+        StartMenu2_GetFlyoutPalette(&m_Pal);
+        m_hFont = TfyCreateFont(14, FW_SEMIBOLD);
+        m_hFontSmall = TfyCreateFont(12, FW_NORMAL);
+        Layout();
+        CreateThumbnail();
+        m_bListening = AddClipboardFormatListener(m_hWnd);
+        Copy();
+
+        if (!hwndTray || !::GetWindowRect(hwndTray, &rcBar))
+            SetRectEmpty(&rcBar);
+        GetMonitorInfoW(MonitorFromRect(&rcBar, MONITOR_DEFAULTTOPRIMARY), &mi);
+        pt.x = mi.rcWork.right - Sc(12) - m_size.cx;
+        if (hwndTray && rcBar.top > (mi.rcMonitor.top + mi.rcMonitor.bottom) / 2)
+            pt.y = rcBar.top - Sc(12) - m_size.cy;
+        else
+            pt.y = mi.rcWork.bottom - Sc(12) - m_size.cy;
+        m_bSlideFromRight = TRUE;
+        BeginFlyoutOpen(m_hWnd, pt.x, pt.y, m_size.cx, m_size.cy, m_Pal.PanelBg, FALSE);
+
+        m_SaveState = Save() ? TFY_SHOT_SAVED : TFY_SHOT_NOT_SAVED;
+        InvalidateRect(NULL, FALSE);
+        SetTimer(TFY_TIMER_SHOTHIDE, TFY_SHOT_VISIBLE_MS, NULL);
+    }
+
+    VOID Close()
+    {
+        KillTimer(TFY_TIMER_SHOTHIDE);
+        BeginFlyoutClose(m_hWnd);
+    }
+
+    VOID Open()
+    {
+        if (m_SaveState != TFY_SHOT_SAVED)
+            return;
+        ShellExecuteW(NULL, NULL, m_szPath, NULL, NULL, SW_SHOWNORMAL);
+        Close();
+    }
+
+    VOID BeginDrag()
+    {
+        CComPtr<IShellFolder> pFolder;
+        CComPtr<IDataObject> pDataObject;
+        CComPtr<IDragSourceHelper> pHelper;
+        CComPtr<IDropSource> pDropSource;
+        PCUITEMID_CHILD pidlChild;
+        PIDLIST_ABSOLUTE pidl;
+        DWORD dwEffect = DROPEFFECT_NONE;
+        HRESULT hr;
+
+        if (m_SaveState != TFY_SHOT_SAVED)
+            return;
+        pidl = ILCreateFromPathW(m_szPath);
+        if (!pidl)
+            return;
+        hr = SHBindToParent(pidl, IID_PPV_ARG(IShellFolder, &pFolder), &pidlChild);
+        if (SUCCEEDED(hr))
+            hr = pFolder->GetUIObjectOf(m_hWnd, 1, &pidlChild, IID_IDataObject, NULL, (PVOID *)&pDataObject);
+        ILFree(pidl);
+        if (FAILED(hr))
+            return;
+
+        FORMATETC Format = { CF_DIB, NULL, DVASPECT_CONTENT, -1, TYMED_HGLOBAL };
+        STGMEDIUM Medium = {};
+        Medium.tymed = TYMED_HGLOBAL;
+        Medium.hGlobal = TfyShotCreateDib(m_hbmShot, m_cxShot, m_cyShot);
+        if (Medium.hGlobal && FAILED(pDataObject->SetData(&Format, &Medium, TRUE)))
+            GlobalFree(Medium.hGlobal);
+
+        if (m_hbmThumb &&
+            SUCCEEDED(CoCreateInstance(CLSID_DragDropHelper, NULL, CLSCTX_INPROC_SERVER,
+                                       IID_PPV_ARG(IDragSourceHelper, &pHelper))))
+        {
+            SHDRAGIMAGE Image;
+
+            Image.sizeDragImage.cx = m_rcImage.right - m_rcImage.left;
+            Image.sizeDragImage.cy = m_rcImage.bottom - m_rcImage.top;
+            Image.ptOffset.x = m_ptDown.x - m_rcImage.left;
+            Image.ptOffset.y = m_ptDown.y - m_rcImage.top;
+            Image.hbmpDragImage = (HBITMAP)CopyImage(m_hbmThumb, IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
+            Image.crColorKey = CLR_NONE;
+            if (Image.hbmpDragImage && FAILED(pHelper->InitializeFromBitmap(&Image, pDataObject)))
+                DeleteObject(Image.hbmpDragImage);
+        }
+
+        if (FAILED(ShellObjectCreator<CTrayShotDropSource>(IID_PPV_ARG(IDropSource, &pDropSource))))
+            return;
+        m_bDragging = TRUE;
+        hr = DoDragDrop(pDataObject, pDropSource, DROPEFFECT_COPY | DROPEFFECT_MOVE | DROPEFFECT_LINK, &dwEffect);
+        m_bDragging = FALSE;
+        if (hr == DRAGDROP_S_DROP && dwEffect != DROPEFFECT_NONE)
+            Close();
+        else
+            SetTimer(TFY_TIMER_SHOTHIDE, TFY_SHOT_VISIBLE_MS, NULL);
+    }
+
+    TFYSHOTHIT HitTest(POINT pt) const
+    {
+        if (PtInRect(&m_rcClose, pt))
+            return TFY_SHOT_HIT_CLOSE;
+        if (PtInRect(&m_rcImage, pt))
+            return TFY_SHOT_HIT_IMAGE;
+        if (PtInRect(&m_rcStatus, pt))
+            return TFY_SHOT_HIT_STATUS;
+        return TFY_SHOT_HIT_NONE;
+    }
+
+    VOID DrawGlyph(HDC hdc, LPCWSTR pszGlyph, int x, int y, int cx, COLORREF cr)
+    {
+        HICON hGlyph = m_bFrameStarted ? ShellFrame::CreateGlyphIcon(pszGlyph, cx, cr) : NULL;
+
+        if (hGlyph)
+        {
+            DrawIconEx(hdc, x, y, hGlyph, cx, cx, 0, NULL, DI_NORMAL);
+            DestroyIcon(hGlyph);
+        }
+    }
+
+    LRESULT OnPaint(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(&ps);
+        BOOL bCopied = IsCopied();
+        RECT rc, rcText;
+        LPCWSTR pszSaved;
+
+        GetClientRect(&rc);
+        HDC hdcMem = CreateCompatibleDC(hdc);
+        HBITMAP hbm = CreateCompatibleBitmap(hdc, rc.right, rc.bottom);
+        HGDIOBJ hbmOld = SelectObject(hdcMem, hbm);
+
+        HBRUSH hbr = CreateSolidBrush(m_Pal.PanelBg);
+        FillRect(hdcMem, &rc, hbr);
+        DeleteObject(hbr);
+
+        if (m_hbmThumb)
+        {
+            HDC hdcThumb = CreateCompatibleDC(hdcMem);
+            HGDIOBJ hThumbOld = SelectObject(hdcThumb, m_hbmThumb);
+            RECT rcFrame = m_rcImage;
+
+            BitBlt(hdcMem, m_rcImage.left, m_rcImage.top, m_rcImage.right - m_rcImage.left,
+                   m_rcImage.bottom - m_rcImage.top, hdcThumb, 0, 0, SRCCOPY);
+            SelectObject(hdcThumb, hThumbOld);
+            DeleteDC(hdcThumb);
+            InflateRect(&rcFrame, 1, 1);
+            TfyDrawFlyoutFrame(hdcMem, &rcFrame, &m_Pal);
+        }
+
+        if (m_HitHot == TFY_SHOT_HIT_STATUS || m_HitHot == TFY_SHOT_HIT_CLOSE)
+        {
+            const RECT &rcHot = (m_HitHot == TFY_SHOT_HIT_STATUS) ? m_rcStatus : m_rcClose;
+
+            if (m_bFrameStarted)
+            {
+                ShellFrame::FillRoundSmooth(hdcMem, rcHot, (float)Sc(4), m_Pal.HotFill);
+            }
+            else
+            {
+                hbr = CreateSolidBrush(m_Pal.HotFill);
+                FillRect(hdcMem, &rcHot, hbr);
+                DeleteObject(hbr);
+            }
+        }
+
+        int cyGlyph = Sc(20);
+        DrawGlyph(hdcMem, bCopied ? L"checkmark_20_regular" : L"copy_20_regular",
+                  m_rcStatus.left + Sc(8), (m_rcStatus.top + m_rcStatus.bottom - cyGlyph) / 2, cyGlyph,
+                  bCopied ? m_Pal.AccentBg : m_Pal.PanelText);
+        DrawGlyph(hdcMem, L"dismiss_16_regular", (m_rcClose.left + m_rcClose.right - Sc(16)) / 2,
+                  (m_rcClose.top + m_rcClose.bottom - Sc(16)) / 2, Sc(16), m_Pal.PanelText);
+
+        SetBkMode(hdcMem, TRANSPARENT);
+        HGDIOBJ hFontOld = SelectObject(hdcMem, m_hFont);
+        SetTextColor(hdcMem, m_Pal.PanelText);
+        SetRect(&rcText, m_rcStatus.left + Sc(8) + cyGlyph + Sc(10), m_rcStatus.top + Sc(4),
+                m_rcStatus.right - Sc(4), (m_rcStatus.top + m_rcStatus.bottom) / 2);
+        DrawTextW(hdcMem, bCopied ? L"Copied to clipboard" : L"Copy to clipboard (Ctrl+C)", -1, &rcText,
+                  DT_SINGLELINE | DT_BOTTOM | DT_END_ELLIPSIS | DT_NOPREFIX);
+
+        if (m_SaveState == TFY_SHOT_SAVED)
+            pszSaved = L"Saved to Desktop";
+        else if (m_SaveState == TFY_SHOT_SAVING)
+            pszSaved = L"Saving to Desktop...";
+        else
+            pszSaved = L"Could not save to Desktop";
+        SelectObject(hdcMem, m_hFontSmall);
+        SetTextColor(hdcMem, m_Pal.DimText);
+        rcText.top = rcText.bottom;
+        rcText.bottom = m_rcStatus.bottom - Sc(4);
+        DrawTextW(hdcMem, pszSaved, -1, &rcText, DT_SINGLELINE | DT_TOP | DT_END_ELLIPSIS | DT_NOPREFIX);
+        SelectObject(hdcMem, hFontOld);
+
+        BitBlt(hdc, 0, 0, rc.right, rc.bottom, hdcMem, 0, 0, SRCCOPY);
+        SelectObject(hdcMem, hbmOld);
+        DeleteObject(hbm);
+        DeleteDC(hdcMem);
+        EndPaint(&ps);
+        return 0;
+    }
+
+    LRESULT OnEraseBkgnd(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        return 1;
+    }
+
+    LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        if (HandleFlyoutAnimation(m_hWnd, wParam))
+            return 0;
+        if (wParam == TFY_TIMER_SHOTHIDE && !m_bHover && !m_bDragging &&
+            m_HitPressed == TFY_SHOT_HIT_NONE && ::GetForegroundWindow() != m_hWnd)
+        {
+            Close();
+        }
+        return 0;
+    }
+
+    LRESULT OnMouseMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        TFYSHOTHIT Hit;
+
+        if (!m_bHover)
+        {
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, m_hWnd, 0 };
+            m_bHover = TrackMouseEvent(&tme);
+        }
+        if (m_HitPressed == TFY_SHOT_HIT_IMAGE &&
+            (abs(static_cast<int>(pt.x - m_ptDown.x)) > GetSystemMetrics(SM_CXDRAG) ||
+             abs(static_cast<int>(pt.y - m_ptDown.y)) > GetSystemMetrics(SM_CYDRAG)))
+        {
+            m_HitPressed = TFY_SHOT_HIT_NONE;
+            ReleaseCapture();
+            BeginDrag();
+            return 0;
+        }
+        Hit = HitTest(pt);
+        if (Hit != m_HitHot)
+        {
+            m_HitHot = Hit;
+            InvalidateRect(NULL, FALSE);
+        }
+        return 0;
+    }
+
+    LRESULT OnMouseLeave(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        m_bHover = FALSE;
+        if (m_HitHot != TFY_SHOT_HIT_NONE)
+        {
+            m_HitHot = TFY_SHOT_HIT_NONE;
+            InvalidateRect(NULL, FALSE);
+        }
+        SetTimer(TFY_TIMER_SHOTHIDE, TFY_SHOT_VISIBLE_MS, NULL);
+        return 0;
+    }
+
+    LRESULT OnLButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+
+        m_HitPressed = HitTest(pt);
+        m_ptDown = pt;
+        if (m_HitPressed != TFY_SHOT_HIT_NONE)
+            SetCapture();
+        return 0;
+    }
+
+    LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        TFYSHOTHIT Pressed = m_HitPressed;
+
+        m_HitPressed = TFY_SHOT_HIT_NONE;
+        if (GetCapture() == m_hWnd)
+            ReleaseCapture();
+        if (Pressed == TFY_SHOT_HIT_NONE || HitTest(pt) != Pressed)
+            return 0;
+        if (Pressed == TFY_SHOT_HIT_IMAGE)
+            Open();
+        else if (Pressed == TFY_SHOT_HIT_STATUS)
+            Copy();
+        else if (Pressed == TFY_SHOT_HIT_CLOSE)
+            Close();
+        return 0;
+    }
+
+    LRESULT OnCaptureChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        if ((HWND)lParam != m_hWnd)
+            m_HitPressed = TFY_SHOT_HIT_NONE;
+        return 0;
+    }
+
+    LRESULT OnMouseActivate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        DWORD dwPos = GetMessagePos();
+        POINT pt = { GET_X_LPARAM(dwPos), GET_Y_LPARAM(dwPos) };
+
+        ScreenToClient(&pt);
+        return (HitTest(pt) == TFY_SHOT_HIT_CLOSE) ? MA_NOACTIVATE : MA_ACTIVATE;
+    }
+
+    LRESULT OnActivate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        if (LOWORD(wParam) == WA_INACTIVE)
+            SetTimer(TFY_TIMER_SHOTHIDE, TFY_SHOT_VISIBLE_MS, NULL);
+        bHandled = FALSE;
+        return 0;
+    }
+
+    LRESULT OnKeyDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        if ((wParam == 'C' || wParam == VK_INSERT) && GetKeyState(VK_CONTROL) < 0)
+            Copy();
+        else if (wParam == VK_RETURN)
+            Open();
+        else if (wParam == VK_ESCAPE)
+            Close();
+        return 0;
+    }
+
+    LRESULT OnClipboardUpdate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        InvalidateRect(NULL, FALSE);
+        return 0;
+    }
+
+    LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        KillTimer(TFY_TIMER_ANIM);
+        KillTimer(TFY_TIMER_SHOTHIDE);
+        if (m_bListening)
+            RemoveClipboardFormatListener(m_hWnd);
+        if (m_hFont) { DeleteObject(m_hFont); m_hFont = NULL; }
+        if (m_hFontSmall) { DeleteObject(m_hFontSmall); m_hFontSmall = NULL; }
+        if (m_hbmThumb) { DeleteObject(m_hbmThumb); m_hbmThumb = NULL; }
+        if (m_hbmShot) { DeleteObject(m_hbmShot); m_hbmShot = NULL; }
+        if (m_bFrameStarted)
+        {
+            ShellFrame::Shutdown();
+            m_bFrameStarted = FALSE;
+        }
+        return 0;
+    }
+
+    virtual void OnFinalMessage(HWND hWnd) override;
+
+    BEGIN_MSG_MAP(CTrayShotWnd)
+        MESSAGE_HANDLER(WM_PAINT, OnPaint)
+        MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBkgnd)
+        MESSAGE_HANDLER(WM_TIMER, OnTimer)
+        MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
+        MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
+        MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
+        MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
+        MESSAGE_HANDLER(WM_ACTIVATE, OnActivate)
+        MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
+        MESSAGE_HANDLER(WM_CLIPBOARDUPDATE, OnClipboardUpdate)
+        MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+    END_MSG_MAP()
+};
+
+static CTrayShotWnd *g_pTrayShot = NULL;
+
+void CTrayShotWnd::OnFinalMessage(HWND hWnd)
+{
+    if (g_pTrayShot == this)
+        g_pTrayShot = NULL;
+    delete this;
+}
+
+VOID TrayScreenshot_Capture(VOID)
+{
+    CTrayShotWnd *pShot;
+    PVOID pvBits = NULL;
+    HBITMAP hbm;
+    int cx = 0, cy = 0;
+
+    if (g_pTrayShot && g_pTrayShot->IsWindow())
+        ::DestroyWindow(g_pTrayShot->m_hWnd);
+    g_pTrayShot = NULL;
+
+    hbm = TfyShotCaptureScreen(&cx, &cy, &pvBits);
+    if (!hbm)
+        return;
+    pShot = new CTrayShotWnd();
+    if (!pShot)
+    {
+        DeleteObject(hbm);
+        return;
+    }
+    if (!pShot->Create(NULL, CWindow::rcDefault, NULL))
+    {
+        delete pShot;
+        DeleteObject(hbm);
+        return;
+    }
+    g_pTrayShot = pShot;
+    pShot->Show(hbm, pvBits, cx, cy);
 }
 
 #define TFY_WM_BRIGHTNESSCHANGED (WM_APP + 44)
@@ -6301,6 +7110,7 @@ struct TFYNETROW
     RECT rcButton2;
     RECT rcCheck;
     RECT rcEdit;
+    RECT rcReveal;
     RECT rcInfo;
 };
 
@@ -6735,6 +7545,9 @@ public:
     BOOL m_bWifiPage;
     int m_yFooter;
     HFONT m_hFontRow;
+    BOOL m_bFrameStarted;
+    BOOL m_bReveal;
+    WCHAR m_chPassword;
 
     CTrayNetworkWnd() : m_hFont(NULL), m_hFontSmall(NULL), m_hFontHeader(NULL),
                         m_hWlanApi(NULL), m_hWlan(NULL),
@@ -6750,7 +7563,8 @@ public:
                         m_bConnecting(FALSE), m_bTracking(FALSE), m_nIfaces(0),
                         m_bWifiOn(TRUE), m_bAirplane(FALSE), m_bPane(FALSE), m_bBack(FALSE),
                         m_nVisRows(TFY_NET_VISROWS), m_hFontPaneTitle(NULL),
-                        m_bWifiPage(FALSE), m_yFooter(0), m_hFontRow(NULL)
+                        m_bWifiPage(FALSE), m_yFooter(0), m_hFontRow(NULL),
+                        m_bFrameStarted(FALSE), m_bReveal(FALSE), m_chPassword(0)
     {
         SetRectEmpty(&m_rcBack);
         ZeroMemory(&m_Pal, sizeof(m_Pal));
@@ -7079,6 +7893,7 @@ public:
             SetRectEmpty(&row.rcButton2);
             SetRectEmpty(&row.rcCheck);
             SetRectEmpty(&row.rcEdit);
+            SetRectEmpty(&row.rcReveal);
             SetRectEmpty(&row.rcInfo);
             if (row.nType != 2)
                 continue;
@@ -7102,6 +7917,7 @@ public:
                 {
                     yb += Sc(22);
                     SetRect(&row.rcEdit, Sc(52), yb, cx - Sc(24), yb + Sc(28));
+                    SetRect(&row.rcReveal, row.rcEdit.right - Sc(32), row.rcEdit.top, row.rcEdit.right, row.rcEdit.bottom);
                     yb += Sc(28) + Sc(10);
                     SetRect(&row.rcButton, cx - Sc(24) - Sc(216), yb, cx - Sc(24) - Sc(112), yb + Sc(32));
                     SetRect(&row.rcButton2, cx - Sc(24) - Sc(104), yb, cx - Sc(24), yb + Sc(32));
@@ -7135,7 +7951,7 @@ public:
         {
             TFYNETROW &row = m_Rows[m_iSel];
             ::SetWindowPos(m_hwndEdit, NULL, row.rcEdit.left + Sc(6), row.rcEdit.top + Sc(5),
-                           row.rcEdit.right - row.rcEdit.left - Sc(12), row.rcEdit.bottom - row.rcEdit.top - Sc(10),
+                           row.rcReveal.left - row.rcEdit.left - Sc(6), row.rcEdit.bottom - row.rcEdit.top - Sc(10),
                            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
     }
@@ -7202,6 +8018,7 @@ public:
                     SetRect(&row.rcButton2, 0, 0, 0, 0);
                     SetRect(&row.rcCheck, 0, 0, 0, 0);
                     SetRect(&row.rcEdit, 0, 0, 0, 0);
+                    SetRect(&row.rcReveal, 0, 0, 0, 0);
                     continue;
                 }
             }
@@ -7209,6 +8026,7 @@ public:
             SetRect(&row.rcButton2, 0, 0, 0, 0);
             SetRect(&row.rcCheck, 0, 0, 0, 0);
             SetRect(&row.rcEdit, 0, 0, 0, 0);
+            SetRect(&row.rcReveal, 0, 0, 0, 0);
             if (bExpanded)
             {
                 int yb = y + nRowH;
@@ -7216,6 +8034,7 @@ public:
                 {
                     yb += Sc(22);
                     SetRect(&row.rcEdit, Sc(46), yb, m_size.cx - Sc(20), yb + Sc(24));
+                    SetRect(&row.rcReveal, row.rcEdit.right - Sc(28), row.rcEdit.top, row.rcEdit.right, row.rcEdit.bottom);
                     yb += Sc(24) + Sc(8);
                     SetRect(&row.rcButton, m_size.cx - Sc(20) - Sc(160), yb, m_size.cx - Sc(20) - Sc(84), yb + Sc(26));
                     SetRect(&row.rcButton2, m_size.cx - Sc(20) - Sc(76), yb, m_size.cx - Sc(20), yb + Sc(26));
@@ -7250,7 +8069,7 @@ public:
         {
             TFYNETROW &row = m_Rows[m_iSel];
             ::SetWindowPos(m_hwndEdit, NULL, row.rcEdit.left, row.rcEdit.top,
-                           row.rcEdit.right - row.rcEdit.left, row.rcEdit.bottom - row.rcEdit.top,
+                           row.rcReveal.left - row.rcEdit.left, row.rcEdit.bottom - row.rcEdit.top,
                            SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         }
     }
@@ -7332,8 +8151,75 @@ public:
 
     VOID HideEdit()
     {
+        EndReveal();
         if (m_hwndEdit)
             ::ShowWindow(m_hwndEdit, SW_HIDE);
+    }
+
+    BOOL CanReveal() const
+    {
+        return m_hwndEdit && m_bPassMode && ::GetWindowTextLengthW(m_hwndEdit) > 0;
+    }
+
+    VOID BeginReveal()
+    {
+        if (m_bReveal || !CanReveal())
+            return;
+        m_chPassword = (WCHAR)::SendMessageW(m_hwndEdit, EM_GETPASSWORDCHAR, 0, 0);
+        ::SendMessageW(m_hwndEdit, EM_SETPASSWORDCHAR, 0, 0);
+        ::InvalidateRect(m_hwndEdit, NULL, TRUE);
+        m_bReveal = TRUE;
+        SetCapture();
+        InvalidateRect(NULL, FALSE);
+    }
+
+    VOID EndReveal()
+    {
+        if (!m_bReveal)
+            return;
+        m_bReveal = FALSE;
+        if (m_hwndEdit)
+        {
+            ::SendMessageW(m_hwndEdit, EM_SETPASSWORDCHAR, m_chPassword, 0);
+            ::InvalidateRect(m_hwndEdit, NULL, TRUE);
+        }
+        if (::GetCapture() == m_hWnd)
+            ReleaseCapture();
+        InvalidateRect(NULL, FALSE);
+    }
+
+    VOID DrawRevealButton(HDC hdc, const RECT *prc, COLORREF crBack)
+    {
+        HICON hGlyph;
+        int cx = Sc(16);
+
+        if (!CanReveal())
+            return;
+        if (m_bReveal || m_iHotBtn == 6)
+        {
+            RECT rcHot = *prc;
+            InflateRect(&rcHot, -Sc(3), -Sc(3));
+            TfyFillRound(hdc, &rcHot, Sc(3), TfyMix(crBack, m_Pal.PanelText, m_bReveal ? 50 : 30), crBack);
+        }
+        if (!m_bFrameStarted)
+            m_bFrameStarted = ShellFrame::Startup();
+        hGlyph = m_bFrameStarted ? ShellFrame::CreateGlyphIcon(L"eye_20_regular", cx, m_Pal.PanelText) : NULL;
+        if (!hGlyph)
+            return;
+        DrawIconEx(hdc, (prc->left + prc->right - cx) / 2, (prc->top + prc->bottom - cx) / 2, hGlyph, cx, cx, 0, NULL, DI_NORMAL);
+        DestroyIcon(hGlyph);
+    }
+
+    BOOL IsConnectingRow(const TFYNETROW &row) const
+    {
+        return m_bConnecting && !row.bConnected && m_szSelName[0] && !wcscmp(row.szName, m_szSelName);
+    }
+
+    LPCWSTR RowButtonText(const TFYNETROW &row) const
+    {
+        if (row.bConnected)
+            return L"Disconnect";
+        return IsConnectingRow(row) ? L"Cancel" : L"Connect";
     }
 
     VOID ShowEdit()
@@ -7509,6 +8395,34 @@ public:
             SetRowFailed(row, L"Can't connect to this network");
         }
         Relayout();
+    }
+
+    VOID CancelConnect(int i)
+    {
+        if (i < 0 || i >= (int)m_Rows.GetCount())
+            return;
+        TFYNETROW &row = m_Rows[i];
+        if (row.nType != 2 || !LoadWlan() || !m_pfnDisconnect)
+            return;
+        m_bConnecting = FALSE;
+        KillTimer(TFY_TIMER_POLL);
+        row.szStatus[0] = 0;
+        m_pfnDisconnect(m_hWlan, &row.ifGuid, NULL);
+        Relayout();
+    }
+
+    VOID ActivateRowButton(int i)
+    {
+        TFYNETROW &row = m_Rows[i];
+
+        if (m_bPassMode)
+            SubmitPassword();
+        else if (row.bConnected)
+            DisconnectRow(i);
+        else if (IsConnectingRow(row))
+            CancelConnect(i);
+        else
+            ConnectRow(i, NULL);
     }
 
     VOID DisconnectRow(int i)
@@ -7764,6 +8678,7 @@ public:
                 InflateRect(&rcEditFrame, -1, -1);
                 TfyFillRound(hdc, &rcEditFrame, Sc(3), TfyMix(m_Pal.PanelBg, m_Pal.PanelText, 20),
                              TfyMix(m_Pal.PanelBg, m_Pal.PanelText, 70));
+                DrawRevealButton(hdc, &row.rcReveal, TfyMix(m_Pal.PanelBg, m_Pal.PanelText, 20));
                 DrawButton(hdc, &row.rcButton, L"Next", m_iHotBtn == 1, TRUE);
                 DrawButton(hdc, &row.rcButton2, L"Cancel", m_iHotBtn == 2, FALSE);
             }
@@ -7771,8 +8686,8 @@ public:
             {
                 if (!row.bConnected)
                     DrawCheck(hdc, &row.rcCheck, m_bAutoConnect, L"Connect automatically", m_iHotBtn == 3);
-                DrawButton(hdc, &row.rcButton, row.bConnected ? L"Disconnect" : L"Connect",
-                           m_iHotBtn == 1, !row.bConnected);
+                DrawButton(hdc, &row.rcButton, RowButtonText(row),
+                           m_iHotBtn == 1, !row.bConnected && !IsConnectingRow(row));
             }
         }
 
@@ -8039,6 +8954,7 @@ public:
                         InflateRect(&rcEditFrame, 1, 1);
                         FrameRect(hdcMem, &rcEditFrame, hbrEditEdge);
                         DeleteObject(hbrEditEdge);
+                        DrawRevealButton(hdcMem, &row.rcReveal, m_Pal.PanelBg);
                         DrawButton(hdcMem, &row.rcButton, L"Next", m_iHotBtn == 1, TRUE);
                         DrawButton(hdcMem, &row.rcButton2, L"Cancel", m_iHotBtn == 2, FALSE);
                     }
@@ -8046,8 +8962,8 @@ public:
                     {
                         if (!row.bConnected)
                             DrawCheck(hdcMem, &row.rcCheck, m_bAutoConnect, L"Connect automatically", m_iHotBtn == 3);
-                        DrawButton(hdcMem, &row.rcButton, row.bConnected ? L"Disconnect" : L"Connect",
-                                   m_iHotBtn == 1, !row.bConnected);
+                        DrawButton(hdcMem, &row.rcButton, RowButtonText(row),
+                                   m_iHotBtn == 1, !row.bConnected && !IsConnectingRow(row));
                     }
                 }
             }
@@ -8148,6 +9064,8 @@ public:
                 TfyQueueNetworkRefresh(m_hWnd, FALSE);
                 break;
             case wlan_notification_acm_connection_attempt_fail:
+                if (!m_bConnecting)
+                    break;
                 m_bConnecting = FALSE;
                 KillTimer(TFY_TIMER_POLL);
                 for (SIZE_T i = 0; i < m_Rows.GetCount(); i++)
@@ -8265,6 +9183,7 @@ public:
                 if (PtInRect(&row.rcButton, pt)) *pnBtn = 1;
                 else if (PtInRect(&row.rcButton2, pt)) *pnBtn = 2;
                 else if (PtInRect(&row.rcCheck, pt)) *pnBtn = 3;
+                else if (PtInRect(&row.rcReveal, pt)) *pnBtn = 6;
                 else if (PtInRect(&row.rcEdit, pt)) *pnBtn = 4;
             }
             return (int)i;
@@ -8317,11 +9236,54 @@ public:
         return 0;
     }
 
-    LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    LRESULT OnLButtonDown(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
     {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
         int nBtn = 0;
         int i = HitTest(pt, &nBtn);
+
+        if (i >= 0 && i == m_iSel && nBtn == 6 && CanReveal())
+            BeginReveal();
+        else
+            bHandled = FALSE;
+        return 0;
+    }
+
+    LRESULT OnCaptureChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        EndReveal();
+        bHandled = FALSE;
+        return 0;
+    }
+
+    LRESULT OnCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        if (LOWORD(wParam) == TFY_NET_EDIT_ID && HIWORD(wParam) == EN_CHANGE &&
+            m_iSel >= 0 && m_iSel < (int)m_Rows.GetCount())
+        {
+            if (!CanReveal())
+                EndReveal();
+            InvalidateRect(&m_Rows[m_iSel].rcReveal, FALSE);
+            return 0;
+        }
+        bHandled = FALSE;
+        return 0;
+    }
+
+    LRESULT OnLButtonUp(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandled)
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        int nBtn = 0;
+        int i;
+
+        if (m_bReveal)
+        {
+            EndReveal();
+            if (m_hwndEdit)
+                ::SetFocus(m_hwndEdit);
+            return 0;
+        }
+        i = HitTest(pt, &nBtn);
         if (i == TFY_NETHIT_BACK)
         {
             HWND hwndOwner = ::GetWindow(m_hWnd, GW_OWNER);
@@ -8384,12 +9346,7 @@ public:
         {
             if (nBtn == 1)
             {
-                if (m_bPassMode)
-                    SubmitPassword();
-                else if (row.bConnected)
-                    DisconnectRow(i);
-                else
-                    ConnectRow(i, NULL);
+                ActivateRowButton(i);
                 return 0;
             }
             if (nBtn == 2)
@@ -8403,7 +9360,7 @@ public:
                 InvalidateRect(NULL, FALSE);
                 return 0;
             }
-            if (nBtn == 4)
+            if (nBtn == 4 || nBtn == 6)
             {
                 if (m_hwndEdit)
                     ::SetFocus(m_hwndEdit);
@@ -8436,12 +9393,7 @@ public:
             if (m_bPassMode)
                 SubmitPassword();
             else if (m_iSel >= 0 && m_Rows[m_iSel].nType == 2)
-            {
-                if (m_Rows[m_iSel].bConnected)
-                    DisconnectRow(m_iSel);
-                else
-                    ConnectRow(m_iSel, NULL);
-            }
+                ActivateRowButton(m_iSel);
             return 0;
         }
         if (wParam == VK_DOWN || wParam == VK_UP)
@@ -8492,6 +9444,11 @@ public:
         if (m_hFontHeader) { DeleteObject(m_hFontHeader); m_hFontHeader = NULL; }
         if (m_hFontPaneTitle) { DeleteObject(m_hFontPaneTitle); m_hFontPaneTitle = NULL; }
         if (m_hFontRow) { DeleteObject(m_hFontRow); m_hFontRow = NULL; }
+        if (m_bFrameStarted)
+        {
+            ShellFrame::Shutdown();
+            m_bFrameStarted = FALSE;
+        }
         return 0;
     }
 
@@ -8504,7 +9461,10 @@ public:
         MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
         MESSAGE_HANDLER(WM_MOUSELEAVE, OnMouseLeave)
+        MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
         MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+        MESSAGE_HANDLER(WM_CAPTURECHANGED, OnCaptureChanged)
+        MESSAGE_HANDLER(WM_COMMAND, OnCommand)
         MESSAGE_HANDLER(WM_ACTIVATE, OnActivate)
         MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
         MESSAGE_HANDLER(WM_CTLCOLOREDIT, OnCtlColorEdit)
@@ -12512,6 +13472,9 @@ VOID TrayFlyoutsAux_Destroy(VOID)
     if (g_pTrayOsd && g_pTrayOsd->IsWindow())
         ::DestroyWindow(g_pTrayOsd->m_hWnd);
     g_pTrayOsd = NULL;
+    if (g_pTrayShot && g_pTrayShot->IsWindow())
+        ::DestroyWindow(g_pTrayShot->m_hWnd);
+    g_pTrayShot = NULL;
     if (g_pTrayNetwork && g_pTrayNetwork->IsWindow())
         ::DestroyWindow(g_pTrayNetwork->m_hWnd);
     g_pTrayNetwork = NULL;

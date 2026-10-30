@@ -201,6 +201,7 @@ FileCheck:
         goto Failed;
     }
 
+    (*File)->RecordNumber = FileRecordNumber;
     return Status;
 
 Failed:
@@ -438,6 +439,8 @@ MasterFileTable::GetFileRecordFromMFTMirr(_In_   ULONG FileRecordNumber,
         Status = STATUS_FILE_CORRUPT_ERROR;
         goto Failed;
     }
+
+    (*File)->RecordNumber = FileRecordNumber;
 
     return Status;
 

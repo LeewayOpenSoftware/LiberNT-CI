@@ -1568,6 +1568,7 @@ Ndis6WdiConnectComplete(
 {
     BOOLEAN Associated;
     BOOLEAN Attempted;
+    BOOLEAN Cancelled;
     KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(Tlvs);
@@ -1578,6 +1579,7 @@ Ndis6WdiConnectComplete(
     Wdi->Dot11.Connecting = FALSE;
     Associated = Wdi->Dot11.Associated;
     Attempted = Wdi->Dot11.AssociationIndicated;
+    Cancelled = Wdi->Dot11.Disconnecting;
     KeReleaseSpinLock(&Wdi->StateLock, OldIrql);
 
     if (Status == NDIS_STATUS_SUCCESS && Associated)
@@ -1588,8 +1590,11 @@ Ndis6WdiConnectComplete(
         return;
     }
 
-    Ndis6WdiIndicateConnectionCompletion(Wdi, Attempted ? DOT11_CONNECTION_STATUS_FAILURE
-                                                        : DOT11_CONNECTION_STATUS_CANDIDATE_LIST_EXHAUSTED);
+    if (Cancelled)
+        Ndis6WdiIndicateConnectionCompletion(Wdi, DOT11_CONNECTION_STATUS_CANCELLED);
+    else
+        Ndis6WdiIndicateConnectionCompletion(Wdi, Attempted ? DOT11_CONNECTION_STATUS_FAILURE
+                                                            : DOT11_CONNECTION_STATUS_CANDIDATE_LIST_EXHAUSTED);
 }
 
 static
@@ -1967,7 +1972,9 @@ Ndis6WdiJobDisconnect(
     _In_ PNDIS_OID_REQUEST Request)
 {
     NDIS6_WDI_TLV_BUILDER Tlvs;
+    DOT11_MAC_ADDRESS Bssid;
     ULONG Length;
+    ULONG Offset;
     NDIS_STATUS Status;
 
     (VOID)Ndis6WdiInput(Request, &Length);
@@ -1977,6 +1984,24 @@ Ndis6WdiJobDisconnect(
         return NDIS_STATUS_SUCCESS;
 
     Ndis6WdiSetDisconnecting(Wdi, TRUE);
+    if (Ndis6WdiAbortTask(Wdi, WDI_TASK_CONNECT))
+    {
+        Ndis6WdiTlvInit(&Tlvs);
+        Offset = Ndis6WdiTlvOpen(&Tlvs, WDI_TLV_DOT11_RESET_PARAMETERS);
+        Ndis6WdiTlvAppend8(&Tlvs, FALSE);
+        Ndis6WdiTlvClose(&Tlvs, Offset);
+        Status = Ndis6WdiTask(Wdi, WDI_TASK_DOT11_RESET, Wdi->PortId, &Tlvs, TRUE, NULL, NULL);
+        Ndis6WdiTlvFree(&Tlvs);
+        if (Ndis6WdiTakeAssociation(Wdi, Bssid))
+        {
+            Ndis6WdiIndicateDisassociation(Wdi, Bssid, DOT11_ASSOC_STATUS_DISASSOCIATED_BY_OS);
+            Ndis6WdiIndicateLinkState(Wdi, FALSE);
+        }
+        Ndis6WdiSetDisconnecting(Wdi, FALSE);
+        Ndis6WdiDataFlushQueue(Wdi, NDIS_STATUS_MEDIA_DISCONNECTED);
+        return Status;
+    }
+
     Ndis6WdiTlvInit(&Tlvs);
     Ndis6WdiBuildDisconnectTlvs(Wdi, &Tlvs);
     Status = Ndis6WdiTask(Wdi, WDI_TASK_DISCONNECT, Wdi->PortId, &Tlvs, FALSE, Ndis6WdiDisconnectComplete, NULL);

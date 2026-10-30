@@ -174,6 +174,76 @@ Evaluate(
     return Send(IOCTL_ACPI_EVAL_METHOD, &Input, sizeof(Input), Output, OutputLength, Information);
 }
 
+static
+PDEVICE_OBJECT
+FindPciDevice(
+    _Out_ PULONG Address)
+{
+    UNICODE_STRING PciName = RTL_CONSTANT_STRING(L"\\Driver\\PCI");
+    UNICODE_STRING AcpiName = RTL_CONSTANT_STRING(L"\\Driver\\ACPI");
+    UCHAR Buffer[sizeof(ACPI_EVAL_OUTPUT_BUFFER) + 32];
+    PACPI_EVAL_OUTPUT_BUFFER Result = (PVOID)Buffer;
+    PDEVICE_OBJECT *List, Device, Found = NULL;
+    PDRIVER_OBJECT PciDriver, AcpiDriver;
+    ULONG_PTR Information;
+    ULONG Count = 0, Index, Length;
+    NTSTATUS Status;
+
+    *Address = 0;
+    Status = ObReferenceObjectByName(&PciName, OBJ_CASE_INSENSITIVE, NULL, 0, IoDriverObjectType, KernelMode, NULL,
+                                     (PVOID *)&PciDriver);
+    if (!NT_SUCCESS(Status))
+        return NULL;
+
+    Status = ObReferenceObjectByName(&AcpiName, OBJ_CASE_INSENSITIVE, NULL, 0, IoDriverObjectType, KernelMode, NULL,
+                                     (PVOID *)&AcpiDriver);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(PciDriver);
+        return NULL;
+    }
+
+    IoEnumerateDeviceObjectList(PciDriver, NULL, 0, &Count);
+    List = ExAllocatePoolWithTag(NonPagedPool, (Count + 16) * sizeof(PDEVICE_OBJECT), 'tpcA');
+    if (List != NULL)
+    {
+        Status = IoEnumerateDeviceObjectList(PciDriver, List, (Count + 16) * sizeof(PDEVICE_OBJECT), &Count);
+        if (NT_SUCCESS(Status))
+        {
+            for (Index = 0; Index < Count; Index++)
+            {
+                if (Found == NULL && (List[Index]->Flags & DO_BUS_ENUMERATED_DEVICE) != 0 &&
+                    NT_SUCCESS(IoGetDeviceProperty(List[Index], DevicePropertyAddress, sizeof(*Address), Address, &Length)))
+                {
+                    /* Windows attaches an ACPI filter above a PCI PDO that has a namespace node. */
+                    Device = List[Index];
+                    while (Device->AttachedDevice != NULL && Device->AttachedDevice->DriverObject == AcpiDriver)
+                        Device = Device->AttachedDevice;
+
+                    Target = Device;
+                    RtlZeroMemory(Buffer, sizeof(Buffer));
+                    Status = Evaluate('RDA_', Buffer, sizeof(Buffer), &Information);
+                    if (NT_SUCCESS(Status) && Result->Count == 1 &&
+                        Result->Argument[0].Type == ACPI_METHOD_ARGUMENT_INTEGER && Result->Argument[0].Argument == *Address)
+                    {
+                        ObReferenceObject(Device);
+                        Found = Device;
+                    }
+                }
+
+                ObDereferenceObject(List[Index]);
+            }
+        }
+
+        ExFreePoolWithTag(List, 'tpcA');
+    }
+
+    Target = NULL;
+    ObDereferenceObject(AcpiDriver);
+    ObDereferenceObject(PciDriver);
+    return Found;
+}
+
 START_TEST(IoAcpiIoctl)
 {
     UCHAR Buffer[1024], Second[1024];
@@ -184,7 +254,7 @@ START_TEST(IoAcpiIoctl)
     ULONG_PTR Information, Full;
     CHAR Self[128], Path[256];
     PWSTR List = NULL;
-    ULONG Index, Count, Round;
+    ULONG Index, Count, Round, Address;
     NTSTATUS Status;
     size_t Length;
     UNICODE_STRING AcpiName = RTL_CONSTANT_STRING(L"\\Driver\\ACPI");
@@ -200,6 +270,41 @@ START_TEST(IoAcpiIoctl)
     ok(NT_SUCCESS(Status) && List != NULL && List[0] != UNICODE_NULL, "no processor device interface: status=%lx\n", Status);
     if (NT_SUCCESS(Status) && List != NULL)
         ExFreePool(List);
+
+    Target = FindPciDevice(&Address);
+    if (!skip(Target != NULL, "no PCI function with an ACPI namespace node\n"))
+    {
+        RtlFillMemory(Buffer, sizeof(Buffer), 0xEE);
+        Status = Enumerate(ACPI_ENUM_CHILDREN_INPUT_BUFFER_SIGNATURE, ENUM_CHILDREN_IMMEDIATE_ONLY, NULL,
+                           sizeof(ACPI_ENUM_CHILDREN_INPUT_BUFFER), Buffer, sizeof(Buffer), &Information);
+        ok(Status == STATUS_SUCCESS, "PCI enumerate: status=%lx address=%lx\n", Status, Address);
+        if (NT_SUCCESS(Status))
+        {
+            Child = Children->Children;
+            ok(Children->Signature == ACPI_ENUM_CHILDREN_OUTPUT_BUFFER_SIGNATURE, "PCI enumerate: signature=%lx\n",
+               Children->Signature);
+            ok(Children->NumberOfChildren >= 1, "PCI enumerate: count=%lu\n", Children->NumberOfChildren);
+            ok(Child->NameLength >= 2 && Child->NameLength < 128 && Child->Name[0] == '\\',
+               "PCI entry 0: length=%lu\n", Child->NameLength);
+            if (Child->NameLength >= 2 && Child->NameLength < 128 && Child->Name[Child->NameLength - 1] == ANSI_NULL)
+            {
+                RtlZeroMemory(&InputEx, sizeof(InputEx));
+                InputEx.Signature = ACPI_EVAL_INPUT_BUFFER_SIGNATURE_EX;
+                RtlStringCbPrintfA(InputEx.MethodName, sizeof(InputEx.MethodName), "%s._ADR", Child->Name);
+                RtlZeroMemory(Second, sizeof(Second));
+                Status = Send(IOCTL_ACPI_EVAL_METHOD_EX, &InputEx, sizeof(InputEx), Second, sizeof(Second), &Information);
+                ok(Status == STATUS_SUCCESS, "PCI entry 0 address: status=%lx name=%s\n", Status, Child->Name);
+                if (NT_SUCCESS(Status))
+                {
+                    ok(((PACPI_EVAL_OUTPUT_BUFFER)Second)->Argument[0].Argument == Address,
+                       "PCI entry 0 address: %lx, device %lx, name=%s\n",
+                       ((PACPI_EVAL_OUTPUT_BUFFER)Second)->Argument[0].Argument, Address, Child->Name);
+                }
+            }
+        }
+
+        ObDereferenceObject(Target);
+    }
 
     Target = FindDevice(TRUE);
     if (skip(Target != NULL, "no processor device\n"))

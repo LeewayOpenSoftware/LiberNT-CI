@@ -264,6 +264,7 @@ BEGIN
     IDS_APPSSUBTITLE "LiberNT lädt sie von ihren Herausgebern herunter und installiert sie für alle Konten."
     IDS_APPS_COL_NAME "Komponente"
     IDS_APPS_COL_SOURCE "Heruntergeladen von"
+    IDS_APPS_INSTALLED "%s (installiert)"
     IDS_OOBE_FINISHTITLE "LiberNT wird vorbereitet"
     IDS_OOBE_FINISHSUBTITLE "Das kann einige Minuten dauern. Lassen Sie den Computer eingeschaltet."
     IDS_OOBE_APPLY_REGION "Sprache und Tastatur werden übernommen..."

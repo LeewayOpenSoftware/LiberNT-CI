@@ -44,6 +44,24 @@ NtfsFileRecordGetHeader(
     return reinterpret_cast<PFileRecord>(Fr)->Header;
 }
 
+ULONG
+NtfsFileRecordGetNumber(
+    _In_ PNtfsFileRecord Fr)
+{
+    ASSERT(reinterpret_cast<PFileRecord>(Fr)->RecordNumber != MAXULONG);
+    return reinterpret_cast<PFileRecord>(Fr)->RecordNumber;
+}
+
+ULONGLONG
+NtfsFileRecordGetReference(
+    _In_ PNtfsFileRecord Fr)
+{
+    PFileRecord Record = reinterpret_cast<PFileRecord>(Fr);
+
+    ASSERT(Record->RecordNumber != MAXULONG);
+    return ((ULONGLONG)Record->Header->SequenceNumber << 48) | Record->RecordNumber;
+}
+
 USHORT
 NtfsFileRecordGetLinkCount(
     _In_ PNtfsFileRecord Fr)
