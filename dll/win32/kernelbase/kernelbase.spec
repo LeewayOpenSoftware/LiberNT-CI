@@ -140,7 +140,9 @@
 @ stdcall -version=0x602+ CreateFile2(wstr long long long ptr) kernel32.CreateFile2
 @ stdcall CreateFileA(str long long ptr long long long) kernel32.CreateFileA
 @ stdcall CreateFileMappingFromApp(long ptr long int64 wstr)
-@ stdcall -version=0x600+ CreateFileMappingNumaW(long ptr long long long wstr long) kernel32.CreateFileMappingNumaW
+@ stdcall -version=0x600+ CreateFileMappingNumaW(long ptr long long long wstr long)
+@ stdcall -version=0x600+ CreateFileMappingNumaA(long ptr long long long str long)
+
 @ stdcall CreateFileMappingW(long ptr long long long wstr) kernel32.CreateFileMappingW
 @ stdcall CreateFileW(wstr long long ptr long long long) kernel32.CreateFileW
 @ stdcall CreateHardLinkA(str str ptr) kernel32.CreateHardLinkA

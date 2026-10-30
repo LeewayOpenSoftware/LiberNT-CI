@@ -29,6 +29,7 @@ list(APPEND SOURCE
     DllDirectories.c
     ManifestSettings.c
     Utf8ActiveCodePage.c
+    TramoE.c
     VerifyScripts.c
     GetDurationFormat.c
     TimeZoneEx.c
