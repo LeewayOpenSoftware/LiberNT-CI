@@ -215,3 +215,8 @@ BEGIN
     IDS_ERROR_INPUT_DLL "Unable to start input.dll"
     IDS_ERROR_UNICODE "Unable to install a new language for programs that don't support Unicode!"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_ERROR_EMPTY_VALUE "A required value is empty. Enter a value and try again."
+END

@@ -221,3 +221,8 @@ BEGIN
     IDS_ERROR_INPUT_DLL "Nu s-a putut încărca input.dll!"
     IDS_ERROR_UNICODE "Nu s-a putut instala o nouă limbă pentru programele ce nu suportă Unicode!"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_ERROR_EMPTY_VALUE "A required value is empty. Enter a value and try again."
+END
