@@ -27,6 +27,9 @@
 /* Minimum pagefile size: 2 MB, instead of 256 pages (1 MB) */
 #define MINIMUM_PAGEFILE_SIZE           2
 
+/* Free space that must remain on the drive after storing a pagefile, in megabytes */
+#define MINIMUM_FREE_AFTER_PAGEFILE     5
+
 /* Maximum pagefile sizes for different architectures */
 #define MAXIMUM_PAGEFILE_SIZE32         (4UL * 1024 - 1)
 #define MAXIMUM_PAGEFILE_SIZE64         (16UL * 1024 * 1024 - 1)
@@ -83,14 +86,18 @@ UINT
 GetMaxPageFileSize(
     _In_ PPAGEFILE PageFile)
 {
+    /* The drive keeps at least MINIMUM_FREE_AFTER_PAGEFILE MB free */
+    UINT FreeSize = (PageFile->FreeSize > MINIMUM_FREE_AFTER_PAGEFILE)
+                    ? (PageFile->FreeSize - MINIMUM_FREE_AFTER_PAGEFILE) : 0;
+
 #ifdef _M_IX86
     /* For x86 PAE-enabled systems, where the maximum pagefile size is
      * greater than 4 GB, verify also that the drive's filesystem on which
      * the pagefile is stored can support it. */
     if (SharedUserData->ProcessorFeatures[PF_PAE_ENABLED] && PageFile->bIsNotFAT)
-        return min(PageFile->FreeSize, MAXIMUM_PAGEFILE_SIZE_PAE);
+        return min(FreeSize, MAXIMUM_PAGEFILE_SIZE_PAE);
 #endif
-    return min(PageFile->FreeSize, MAXIMUM_PAGEFILE_SIZE);
+    return min(FreeSize, MAXIMUM_PAGEFILE_SIZE);
 }
 
 static LPCTSTR lpKey = _T("SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management");
@@ -569,10 +576,7 @@ OnSet(PVIRTMEM pVirtMem)
                 return;
             }
 
-            // TODO: Check how much disk space would remain after
-            // storing a pagefile of a certain size. Warn/error out
-            // if less than 5 MB would remain.
-
+            /* The free space left after the pagefile is checked by GetMaxPageFileSize() above */
             PageFile->NewMinSize = MinSize;
             PageFile->NewMaxSize = MaxSize;
             PageFile->bUsed = TRUE;
@@ -722,7 +726,7 @@ OnSelChange(PVIRTMEM pVirtMem)
             hFind = FindFirstFile(szText, &fdata);
             if (hFind == INVALID_HANDLE_VALUE)
             {
-                // FIXME: MsgBox error?
+                /* The pagefile may simply not exist yet: nothing to show */
                 DPRINT1("Unable to read PageFile size: %ls due to error %d\n",
                         szText, GetLastError());
             }
