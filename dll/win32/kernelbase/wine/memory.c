@@ -37,6 +37,10 @@
 #include "wine/exception.h"
 #include "wine/debug.h"
 
+#if defined(__REACTOS__) && !defined(PAGE_ENCLAVE_NO_CHANGE)
+#define PAGE_ENCLAVE_NO_CHANGE 0x20000000
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(heap);
 WINE_DECLARE_DEBUG_CHANNEL(virtual);
 WINE_DECLARE_DEBUG_CHANNEL(globalmem);

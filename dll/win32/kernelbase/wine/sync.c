@@ -38,6 +38,12 @@
 #include "wine/exception.h"
 #include "wine/debug.h"
 
+#ifdef __REACTOS__
+NTSYSAPI NTSTATUS NTAPI RtlRunOnceBeginInitialize(PRTL_RUN_ONCE, ULONG, PVOID *);
+NTSYSAPI NTSTATUS NTAPI RtlRunOnceComplete(PRTL_RUN_ONCE, ULONG, PVOID);
+NTSYSAPI NTSTATUS NTAPI RtlRunOnceExecuteOnce(PRTL_RUN_ONCE, PRTL_RUN_ONCE_INIT_FN, PVOID, PVOID *);
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(sync);
 
 static const struct _KUSER_SHARED_DATA *user_shared_data = (struct _KUSER_SHARED_DATA *)0x7ffe0000;
