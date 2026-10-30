@@ -241,6 +241,67 @@ TestBn(void)
     return 0;
 }
 
+static int
+TestPamCases(const char *FixtureDir)
+{
+    /* Portable negative-case fixture from Pam's review harness (run.py):
+     * each record is name, RSA-2048 modulus, exponent, message, signature
+     * and the expected result; all forged blocks are signed with the real
+     * private key so only the parser can reject them. */
+    char Path[512];
+    size_t Size;
+    uint8_t *Data = NULL;
+    const uint8_t *Cursor;
+    uint32_t Count, i;
+    int Rejected = 0;
+
+    snprintf(Path, sizeof(Path), "%s/rsacases.bin", FixtureDir);
+    Data = ReadFile(Path, &Size);
+    if (!Data)
+    {
+        printf("rsacases.bin fixture missing in %s (skipped)\n", FixtureDir);
+        return 0;
+    }
+    Cursor = Data;
+    memcpy(&Count, Cursor, 4); Cursor += 4;
+    for (i = 0; i < Count; i++)
+    {
+        uint32_t NameLen, MsgLen, Exp;
+        char Name[96];
+        uint8_t N[S1_RSA2048_SIZE];
+        uint8_t Sig[S1_RSA2048_SIZE];
+        uint8_t Expected;
+        S1Bool Got;
+
+        memcpy(&NameLen, Cursor, 4); Cursor += 4;
+        memcpy(&MsgLen, Cursor, 4); Cursor += 4;
+        memcpy(Name, Cursor, NameLen < sizeof(Name) - 1 ? NameLen : sizeof(Name) - 1);
+        Name[NameLen < sizeof(Name) - 1 ? NameLen : sizeof(Name) - 1] = 0;
+        Cursor += NameLen;
+        memcpy(N, Cursor, S1_RSA2048_SIZE); Cursor += S1_RSA2048_SIZE;
+        memcpy(&Exp, Cursor, 4); Cursor += 4;
+        {
+            const uint8_t *Msg = Cursor;
+            Cursor += MsgLen;
+            memcpy(Sig, Cursor, S1_RSA2048_SIZE);
+            Cursor += S1_RSA2048_SIZE;
+            memcpy(&Expected, Cursor, 1);
+            Cursor += 1;
+            Got = S1Rsa2048Sha256Verify(N, Exp, Msg, MsgLen, Sig);
+        }
+        if ((Got == S1_TRUE) != (Expected == 1))
+        {
+            printf("FAIL: pam case %u (%s): expected %u got %d\n", i, Name, Expected, (int)Got);
+            g_Failures++;
+        }
+        else if (Expected == 0)
+            Rejected++;
+    }
+    free(Data);
+    printf("pam cases: %u checked, %d negative cases rejected\n", Count, Rejected);
+    return 0;
+}
+
 int
 main(int argc, char **argv)
 {
@@ -250,6 +311,7 @@ main(int argc, char **argv)
     TestRollbackRule();
     TestAttemptRoundTrip();
     TestBn();
+    TestPamCases(FixtureDir);
     if (g_Failures)
     {
         printf("%d FAILURES\n", g_Failures);
