@@ -19,4 +19,5 @@
 @ stdcall DiInstallDevice(ptr ptr ptr ptr long ptr)
 @ stdcall DiInstallDriverA(ptr str long ptr)
 @ stdcall DiInstallDriverW(ptr wstr long ptr)
+@ stdcall DiRollbackDriver(ptr ptr ptr long ptr)
 @ stdcall DiShowUpdateDevice(ptr ptr ptr long ptr)

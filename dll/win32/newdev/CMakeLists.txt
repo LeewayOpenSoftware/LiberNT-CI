@@ -6,6 +6,7 @@ spec2def(newdev.dll newdev.spec ADD_IMPORTLIB)
 list(APPEND SOURCE
     driver_cache.c
     newdev.c
+    rollback.c
     stubs.c
     wizard.c
     driver_cache.h

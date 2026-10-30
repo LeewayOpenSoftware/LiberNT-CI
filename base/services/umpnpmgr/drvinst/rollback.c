@@ -655,7 +655,8 @@ Cleanup:
 DWORD
 DrvInstRollbackDeviceToSeq(
     _In_ PCWSTR DeviceInstanceId,
-    _In_ ULONG Seq)
+    _In_ ULONG Seq,
+    _Out_opt_ PBOOL NeedReboot)
 {
     WCHAR Encoded[DRVINST_DEVICE_ID_CCH];
     WCHAR Path[512];
@@ -671,6 +672,9 @@ DrvInstRollbackDeviceToSeq(
     CONFIGRET Cr = CR_FAILURE;
     DEVINST DevInst;
     LONG Error;
+
+    if (NeedReboot)
+        *NeedReboot = FALSE;
 
     EncodeDeviceId(DeviceInstanceId, Encoded);
     CurrentDriver[0] = UNICODE_NULL;
@@ -828,6 +832,21 @@ DrvInstRollbackDeviceToSeq(
     if (Error != ERROR_SUCCESS)
         goto Cleanup;
 
+    /* A rollback that points the devnode at a different service than the one
+     * the failed install loaded cannot unload the old driver in place. */
+    if (NeedReboot)
+    {
+        WCHAR RestoredService[256];
+
+        Size = sizeof(RestoredService);
+        if (RegGetValueW(HKEY_LOCAL_MACHINE, Path, L"Service", RRF_RT_REG_SZ, NULL,
+                         RestoredService, &Size) != ERROR_SUCCESS)
+            RestoredService[0] = UNICODE_NULL;
+        if (CurrentService[0] != UNICODE_NULL &&
+            lstrcmpW(CurrentService, RestoredService) != 0)
+            *NeedReboot = TRUE;
+    }
+
     /* 4. Re-run the start so the restored driver binds again, and check. */
     Cr = CM_Locate_DevNodeW(&DevInst, (DEVINSTID_W)DeviceInstanceId, CM_LOCATE_DEVNODE_NORMAL);
     if (Cr == CR_SUCCESS)
@@ -867,12 +886,16 @@ Cleanup:
 /* Restores the newest snapshot of the device. Caller holds the install lock. */
 DWORD
 DrvInstRollbackDevice(
-    _In_ PCWSTR DeviceInstanceId)
+    _In_ PCWSTR DeviceInstanceId,
+    _Out_opt_ PBOOL NeedReboot)
 {
     WCHAR Encoded[DRVINST_DEVICE_ID_CCH];
     HKEY hSnapshots = NULL, hDeviceKey = NULL;
     ULONG Newest;
     DWORD Error;
+
+    if (NeedReboot)
+        *NeedReboot = FALSE;
 
     EncodeDeviceId(DeviceInstanceId, Encoded);
 
@@ -889,5 +912,5 @@ DrvInstRollbackDevice(
     if (!Newest)
         return ERROR_NOT_FOUND;
 
-    return DrvInstRollbackDeviceToSeq(DeviceInstanceId, Newest);
+    return DrvInstRollbackDeviceToSeq(DeviceInstanceId, Newest, NeedReboot);
 }
