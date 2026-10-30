@@ -25,6 +25,11 @@ extern void func_GetCPInfo(void);
 extern void func_GetCurrentDirectory(void);
 extern void func_GetCurrentThreadStackLimits(void);
 extern void func_GetDriveType(void);
+extern void func_FindNLSString(void);
+extern void func_CompatLinks(void);
+extern void func_IsValidLocaleName(void);
+extern void func_DosPathToSessionPath(void);
+extern void func_IsValidRelativeSecurityDescriptor(void);
 extern void func_GetEnvironmentVariable(void);
 extern void func_GetFinalPathNameByHandle(void);
 extern void func_GetLocaleInfo(void);
@@ -114,6 +119,11 @@ const struct test winetest_testlist[] =
     { "GetCurrentDirectory",         func_GetCurrentDirectory },
     { "GetCurrentThreadStackLimits", func_GetCurrentThreadStackLimits },
     { "GetDriveType",                func_GetDriveType },
+    { "FindNLSString", func_FindNLSString },
+    { "CompatLinks", func_CompatLinks },
+    { "IsValidLocaleName", func_IsValidLocaleName },
+    { "DosPathToSessionPath", func_DosPathToSessionPath },
+    { "IsValidRelativeSecurityDescriptor", func_IsValidRelativeSecurityDescriptor },
     { "GetEnvironmentVariable",      func_GetEnvironmentVariable },
     { "GetFinalPathNameByHandle",    func_GetFinalPathNameByHandle },
     { "GetLocaleInfo",               func_GetLocaleInfo },

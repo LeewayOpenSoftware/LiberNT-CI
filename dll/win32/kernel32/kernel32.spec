@@ -331,7 +331,7 @@
 @ stdcall FindFirstFileExA(str long ptr long ptr long)
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long)
 @ stub -version=0x600+ FindFirstFileNameTransactedW
-@ stub -version=0x600+ FindFirstFileNameW
+@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr) kernelbase.FindFirstFileNameW
 @ stub -version=0x600+ FindFirstFileTransactedA
 @ stub -version=0x600+ FindFirstFileTransactedW
 @ stdcall FindFirstFileW(wstr ptr)
@@ -341,7 +341,7 @@
 @ stdcall FindFirstVolumeMountPointA(str ptr long)
 @ stdcall FindFirstVolumeMountPointW(wstr ptr long)
 @ stdcall FindFirstVolumeW(ptr long)
-@ stub -version=0x600+ FindNLSString
+@ stdcall -version=0x600+ FindNLSString(long long wstr long wstr long ptr) kernelbase.FindNLSString
 @ stdcall -version=0x600+ FindNLSStringEx(wstr long wstr long wstr long ptr ptr ptr long) kernelbase.FindNLSStringEx
 @ stdcall FindNextChangeNotification(long)
 @ stdcall FindNextFileA(long ptr)
@@ -581,7 +581,7 @@
 @ stdcall GetNLSVersionEx(long wstr ptr) kernelbase.GetNLSVersionEx
 @ stub -version=0x600+ GetNamedPipeAttribute
 @ stub -version=0x600+ GetNamedPipeClientComputerNameA
-@ stub -version=0x600+ GetNamedPipeClientComputerNameW
+@ stdcall -version=0x600+ GetNamedPipeClientComputerNameW(ptr ptr long) kernelbase.GetNamedPipeClientComputerNameW
 @ stdcall -version=0x600+ GetNamedPipeClientProcessId(ptr ptr)
 @ stdcall -version=0x600+ GetNamedPipeClientSessionId(ptr ptr)
 @ stdcall GetNamedPipeHandleStateA(long ptr ptr ptr ptr str long)
@@ -868,7 +868,7 @@
 @ stdcall -version=0x601+ K32GetProcessImageFileNameW(long ptr long) GetProcessImageFileNameW
 @ stdcall -version=0x601+ K32GetProcessMemoryInfo(long ptr long) GetProcessMemoryInfo
 @ stdcall -version=0x601+ K32GetWsChanges(long ptr long) GetWsChanges
-@ stdcall -stub -version=0x601+ K32GetWsChangesEx(long ptr ptr); GetWsChangesEx
+@ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) kernelbase.K32GetWsChangesEx
 @ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) InitializeProcessForWsWatch
 @ stdcall -version=0x601+ K32QueryWorkingSet(long ptr long) QueryWorkingSet
 @ stdcall -version=0x601+ K32QueryWorkingSetEx(long ptr long) QueryWorkingSetEx
@@ -918,7 +918,7 @@
 @ stdcall MapUserPhysicalPagesScatter(ptr long ptr)
 @ stdcall MapViewOfFile(long long long long long)
 @ stdcall MapViewOfFileEx(long long long long long ptr)
-@ stub -version=0x600+ MapViewOfFileExNuma
+@ stdcall -version=0x600+ MapViewOfFileExNuma(long long long long long ptr long) kernelbase.MapViewOfFileExNuma
 @ stdcall Module32First(long ptr)
 @ stdcall Module32FirstW(long ptr)
 @ stdcall Module32Next(long ptr)
@@ -1007,7 +1007,7 @@
 @ stdcall QueryMemoryResourceNotification(ptr ptr)
 @ stdcall QueryPerformanceCounter(ptr)
 @ stdcall QueryPerformanceFrequency(ptr)
-@ stub -version=0x600+ QueryProcessAffinityUpdateMode
+@ stdcall -version=0x600+ QueryProcessAffinityUpdateMode(ptr ptr) kernelbase.QueryProcessAffinityUpdateMode
 @ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr)
 @ stdcall -version=0x600+ QueryThreadCycleTime(ptr ptr)
 @ stdcall -version=0x600+ QueryThreadpoolStackInformation(ptr ptr) kernelbase.QueryThreadpoolStackInformation
@@ -1241,7 +1241,7 @@
 @ stdcall SetNamedPipeHandleState(long ptr ptr ptr)
 @ stdcall SetPriorityClass(long long)
 @ stdcall SetProcessAffinityMask(long long)
-@ stub -version=0x600+ SetProcessAffinityUpdateMode
+@ stdcall -version=0x600+ SetProcessAffinityUpdateMode(ptr long) kernelbase.SetProcessAffinityUpdateMode
 @ stdcall -version=0x600+ SetProcessDEPPolicy(long)
 @ stdcall -version=0x602+ SetProcessInformation(long long ptr long)
 @ stdcall -version=0x602+ SetProcessMitigationPolicy(long ptr long)
@@ -1252,7 +1252,7 @@
 @ stdcall SetProcessWorkingSetSize(long long long)
 @ stdcall SetProcessWorkingSetSizeEx(long long long long)
 @ stdcall SetStdHandle(long long) kernelbase.SetStdHandle
-@ stub -version=0x600+ SetStdHandleEx
+@ stdcall -version=0x600+ SetStdHandleEx(long long ptr) kernelbase.SetStdHandleEx
 @ stdcall SetSystemFileCacheSize(long long long)
 @ stdcall SetSystemPowerState(long long)
 @ stdcall SetSystemTime(ptr)
@@ -1359,7 +1359,7 @@
 @ stdcall VerifyVersionInfoW(long long double)
 @ stdcall VirtualAlloc(ptr long long long)
 @ stdcall VirtualAllocEx(long ptr long long long)
-@ stub -version=0x600+ VirtualAllocExNuma
+@ stdcall -version=0x600+ VirtualAllocExNuma(long ptr long long long long) kernelbase.VirtualAllocExNuma
 @ stdcall VirtualFree(ptr long long)
 @ stdcall VirtualFreeEx(long ptr long long)
 @ stdcall VirtualLock(ptr long)
