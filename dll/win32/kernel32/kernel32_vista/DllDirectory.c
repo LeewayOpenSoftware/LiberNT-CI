@@ -15,6 +15,7 @@ AddDllDirectory(
     PBASE_DLL_DIRECTORY_ENTRY Entry;
     FILE_BASIC_INFORMATION Information;
     OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING Directory;
     UNICODE_STRING NtPath;
     RTL_PATH_TYPE PathType;
     NTSTATUS Status;
@@ -62,6 +63,11 @@ AddDllDirectory(
         return NULL;
     }
 
+    /* The loader keeps the same list for loads that give it no search path */
+    RtlInitUnicodeString(&Directory, NewDirectory);
+    if (!NT_SUCCESS(LdrAddDllDirectory(&Directory, &Entry->LdrCookie)))
+        Entry->LdrCookie = NULL;
+
     RtlEnterCriticalSection(&BaseDllDirectoryLock);
     InsertHeadList(&BaseDllDirectoryList, &Entry->ListEntry);
     RtlLeaveCriticalSection(&BaseDllDirectoryLock);
@@ -76,6 +82,8 @@ RemoveDllDirectory(
     PBASE_DLL_DIRECTORY_ENTRY Entry = Cookie;
 
     RtlEnterCriticalSection(&BaseDllDirectoryLock);
+    if (Entry->LdrCookie)
+        LdrRemoveDllDirectory(Entry->LdrCookie);
     RemoveEntryList(&Entry->ListEntry);
     RtlFreeHeap(RtlGetProcessHeap(), 0, Entry);
     RtlLeaveCriticalSection(&BaseDllDirectoryLock);

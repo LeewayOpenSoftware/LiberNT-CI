@@ -194,6 +194,9 @@ LdrpAllocateDataTableEntry(IN PVOID BaseAddress);
 VOID NTAPI
 LdrpInsertMemoryTableEntry(IN PLDR_DATA_TABLE_ENTRY LdrEntry);
 
+PWSTR NTAPI
+LdrpGetDefaultDllPath(VOID);
+
 NTSTATUS NTAPI
 LdrpLoadDll(IN BOOLEAN Redirected,
             IN PWSTR DllPath OPTIONAL,

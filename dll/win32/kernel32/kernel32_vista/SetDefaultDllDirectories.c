@@ -35,6 +35,9 @@ SetDefaultDllDirectories(
         return FALSE;
     }
 
+    /* The loader needs the choice too, for loads that give it no search path */
+    LdrSetDefaultDllDirectories(DirectoryFlags);
+
     RtlEnterCriticalSection(&BaseDllDirectoryLock);
     BaseDefaultDllDirectoriesFlags = DirectoryFlags;
     RtlLeaveCriticalSection(&BaseDllDirectoryLock);

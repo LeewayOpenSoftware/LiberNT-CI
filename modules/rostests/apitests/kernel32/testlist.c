@@ -29,6 +29,7 @@ extern void func_GetDriveType(void);
 extern void func_FindNLSString(void);
 extern void func_CompatLinks(void);
 extern void func_ForwardCycles(void);
+extern void func_DllDirectories(void);
 extern void func_VerifyScripts(void);
 extern void func_GetDurationFormat(void);
 extern void func_TimeZoneEx(void);
@@ -197,5 +198,6 @@ const struct test winetest_testlist[] =
     { "WriteFileSeekBack",           func_WriteFileSeekBack },
     { "XState",                      func_XState },
     { "ForwardCycles",               func_ForwardCycles },
+    { "DllDirectories",              func_DllDirectories },
     { 0, 0 }
 };

@@ -18,6 +18,7 @@
 #include <ndk/obfuncs.h>
 #include <ndk/psfuncs.h>
 #include <ndk/rtlfuncs.h>
+#include <ndk/umfuncs.h>
 #include <ndk/setypes.h>
 
 /* CSRSS Headers */

@@ -40,6 +40,7 @@ list(APPEND SOURCE
     dbg/dbgui.c
     ldr/ldrapi.c
     ldr/ldrcfg.c
+    ldr/ldrdlldir.c
     ldr/ldremul.c
     ldr/ldrguard.c
     ldr/ldrinit.c
