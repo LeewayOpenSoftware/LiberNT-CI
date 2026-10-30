@@ -499,8 +499,8 @@
 @ stdcall GetDriveTypeA(str)
 @ stdcall GetDriveTypeW(wstr)
 @ stdcall -version=0x601+ -ret64 GetEnabledXStateFeatures()
-@ stub -version=0x600+ GetDurationFormat
-@ stub -version=0x600+ GetDurationFormatEx
+@ stdcall -version=0x600+ GetDurationFormat(long long ptr int64 wstr ptr long) kernelbase.GetDurationFormat
+@ stdcall -version=0x600+ GetDurationFormatEx(wstr long ptr int64 wstr ptr long) kernelbase.GetDurationFormatEx
 @ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr)
 @ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr)
 @ stdcall GetEnvironmentStrings()
@@ -1311,6 +1311,7 @@
 @ stdcall SwitchToThread()
 @ stdcall SystemTimeToFileTime(ptr ptr)
 @ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr)
+@ stdcall -version=0x601+ SystemTimeToTzSpecificLocalTimeEx(ptr ptr ptr) kernelbase.SystemTimeToTzSpecificLocalTimeEx
 @ stdcall TerminateJobObject(ptr long)
 @ stdcall TerminateProcess(ptr long)
 @ stdcall TerminateThread(ptr long)
@@ -1329,6 +1330,7 @@
 @ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
 @ stdcall -version=0x600+ TrySubmitThreadpoolCallback(ptr ptr ptr)
 @ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
+@ stdcall -version=0x601+ TzSpecificLocalTimeToSystemTimeEx(ptr ptr ptr) kernelbase.TzSpecificLocalTimeToSystemTimeEx
 @ stdcall -arch=win64 UmsThreadYield(ptr)
 @ stdcall UTRegister(long str str str ptr ptr ptr)
 @ stdcall UTUnRegister(long)
@@ -1354,7 +1356,7 @@
 @ stdcall VerLanguageNameW(long wstr long)
 @ stdcall -ret64 VerSetConditionMask(long long long long) ntdll.VerSetConditionMask
 @ stdcall VerifyConsoleIoHandle(long) kernelbase.VerifyConsoleIoHandle
-@ stub -version=0x600+ VerifyScripts
+@ stdcall -version=0x600+ VerifyScripts(long wstr long wstr long) kernelbase.VerifyScripts
 @ stdcall VerifyVersionInfoA(long long double)
 @ stdcall VerifyVersionInfoW(long long double)
 @ stdcall VirtualAlloc(ptr long long long)

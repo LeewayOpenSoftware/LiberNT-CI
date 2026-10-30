@@ -411,6 +411,8 @@
 @ stdcall GetDiskFreeSpaceW(wstr ptr ptr ptr ptr) kernel32.GetDiskFreeSpaceW
 @ stdcall GetDriveTypeA(str) kernel32.GetDriveTypeA
 @ stdcall GetDriveTypeW(wstr) kernel32.GetDriveTypeW
+@ stdcall GetDurationFormat(long long ptr int64 wstr ptr long)
+@ stdcall GetDurationFormatEx(wstr long ptr int64 wstr ptr long)
 @ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr) kernel32.GetDynamicTimeZoneInformation
 @ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr) kernel32.GetDynamicTimeZoneInformationEffectiveYears
 @ stdcall -version=0x601+ GetEnabledXStateFeatures() kernel32.GetEnabledXStateFeatures
@@ -1297,7 +1299,7 @@
 @ stdcall SwitchToThread() kernel32.SwitchToThread
 @ stdcall SystemTimeToFileTime(ptr ptr) kernel32.SystemTimeToFileTime
 @ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr) kernel32.SystemTimeToTzSpecificLocalTime
-@ stub SystemTimeToTzSpecificLocalTimeEx
+@ stdcall SystemTimeToTzSpecificLocalTimeEx(ptr ptr ptr)
 @ stdcall TerminateProcess(ptr long) kernel32.TerminateProcess
 @ stdcall TerminateThread(ptr long) kernel32.TerminateThread
 @ stdcall TlsAlloc() kernel32.TlsAlloc
@@ -1314,7 +1316,7 @@
 @ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
 @ stdcall TrySubmitThreadpoolCallback(ptr ptr ptr)
 @ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr) kernel32.TzSpecificLocalTimeToSystemTime
-@ stub TzSpecificLocalTimeToSystemTimeEx
+@ stdcall TzSpecificLocalTimeToSystemTimeEx(ptr ptr ptr)
 @ stdcall UnhandledExceptionFilter(ptr) kernel32.UnhandledExceptionFilter
 @ stdcall UnlockFile(long long long long long) kernel32.UnlockFile
 @ stdcall UnlockFileEx(long long long long ptr) kernel32.UnlockFileEx
@@ -1355,6 +1357,7 @@
 @ stdcall VerFindFileW(long wstr wstr wstr ptr ptr ptr ptr)
 @ stdcall VerLanguageNameA(long str long) kernel32.VerLanguageNameA
 @ stdcall VerLanguageNameW(long wstr long) kernel32.VerLanguageNameW
+@ stdcall VerifyScripts(long wstr long wstr long)
 @ stdcall VerQueryValueA(ptr str ptr ptr)
 @ stdcall VerQueryValueW(ptr wstr ptr ptr)
 @ stdcall PrefetchVirtualMemory(ptr ptr ptr long) kernel32.PrefetchVirtualMemory

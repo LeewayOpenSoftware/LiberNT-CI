@@ -20,12 +20,15 @@ add_library(kernelbase MODULE
     ConsoleLegacy.c
     CpuSets.c
     DllMain.c
+    DurationFormat.c
     AppModelToken.c
     MemoryApi.c
     PackageFamily.c
     PssSnapshot.c
     Security.c
     SyncObjects.c
+    VerifyScripts.c
+    TimeZoneEx.c
     VirtualAlloc2.c
     VolumeInformation.c
     WerRuntime.c
