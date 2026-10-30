@@ -848,6 +848,23 @@ InbvGopDisplayStatus(
 
 VOID
 NTAPI
+InbvGopEraseStatus(VOID)
+{
+    if (!g_Status.Ready)
+        return;
+
+    InbvAcquireLock();
+    if (g_Status.Ready &&
+        InbvIsBootDriverInstalled() &&
+        InbvGetDisplayState() == INBV_DISPLAY_STATE_OWNED)
+    {
+        InbvGopFillStatusBand();
+    }
+    InbvReleaseLock();
+}
+
+VOID
+NTAPI
 InbvGopClearStatus(VOID)
 {
     PUCHAR Coverage;

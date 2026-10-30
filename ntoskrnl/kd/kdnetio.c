@@ -9,13 +9,22 @@
 #include "kd.h"
 #include "kdterminal.h"
 #include <kdterm.h>
+#include "inbv/inbvgop.h"
+
+static
+VOID
+NTAPI
+KdpNetShowPrompt(
+    _In_opt_z_ PCSTR Prompt);
 
 static KD_TERMINAL_INTERFACE KdpNetInterface;
-static const KD_TERMINAL_HOST KdpNetHost = {KdpInfoQuery, KdpInfoState};
+static const KD_TERMINAL_HOST KdpNetHost = {KdpInfoQuery, KdpInfoState, KdpNetShowPrompt};
 static KSPIN_LOCK KdpNetSpinLock;
 static volatile BOOLEAN KdpNetReady;
 static BOOLEAN KdpNetConfigured;
 static BOOLEAN KdpNetPrinted;
+static CHAR KdpNetPrompt[128];
+static KDPC KdpNetPromptDpc;
 
 static
 VOID
@@ -150,6 +159,54 @@ KdDisplayTransportKey(
 
 static
 VOID
+KdpNetDrawPrompt(VOID)
+{
+    CHAR Text[sizeof(KdpNetPrompt)];
+
+    RtlCopyMemory(Text, KdpNetPrompt, sizeof(Text));
+    Text[sizeof(Text) - 1] = ANSI_NULL;
+    if (Text[0])
+        InbvGopDisplayStatus(Text);
+    else
+        InbvGopEraseStatus();
+}
+
+static
+VOID
+NTAPI
+KdpNetPromptDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(DeferredContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    KdpNetDrawPrompt();
+}
+
+static
+VOID
+NTAPI
+KdpNetShowPrompt(
+    _In_opt_z_ PCSTR Prompt)
+{
+    if (Prompt)
+        RtlStringCbCopyA(KdpNetPrompt, sizeof(KdpNetPrompt), Prompt);
+    else
+        KdpNetPrompt[0] = ANSI_NULL;
+
+    if (KeGetCurrentIrql() <= DISPATCH_LEVEL)
+        KdpNetDrawPrompt();
+    else
+        KeInsertQueueDpc(&KdpNetPromptDpc, NULL, NULL);
+}
+
+static
+VOID
 KdpNetPublishKey(VOID)
 {
     static UNICODE_STRING KeyName = RTL_CONSTANT_STRING(
@@ -213,6 +270,7 @@ KdpNetInit(
         }
 
         KdpNetInterface.Configure(KeLoaderBlock ? KeLoaderBlock->LoadOptions : NULL);
+        KeInitializeDpc(&KdpNetPromptDpc, KdpNetPromptDpcRoutine, NULL);
         KdpNetInterface.SetHost(&KdpNetHost);
         KdpNetConfigured = TRUE;
         KeInitializeSpinLock(&KdpNetSpinLock);

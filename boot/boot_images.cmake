@@ -87,10 +87,16 @@ if(FREELDR_HTTP_BOOT)
 endif()
 
 set(BOOTLOADER_HTTP_BOOT_URL "" CACHE STRING
-    "URL of the live image the boot manager's HTTP boot entry downloads; empty leaves the entry out")
+    "URL of the live image the boot manager's HTTP boot downloads")
 set(BOOTLOADER_HTTP_BOOT_IP "" CACHE STRING
-    "Static IPv4 address/prefix[,gateway] of the boot manager's HTTP boot entry; empty uses DHCP")
-option(BOOTLOADER_HTTP_BOOT_DEFAULT "Start the boot manager's HTTP boot entry by default" OFF)
+    "Static IPv4 address/prefix[,gateway] of the boot manager's HTTP boot; empty uses DHCP")
+if(BOOTLOADER_HTTP_BOOT_URL)
+    set(_bootloader_http_boot ON)
+else()
+    set(_bootloader_http_boot OFF)
+endif()
+option(BOOTLOADER_HTTP_BOOT "Add HTTP boot to the boot manager's startup options" ${_bootloader_http_boot})
+option(BOOTLOADER_HTTP_BOOT_DEFAULT "Start the boot manager's HTTP boot directly" OFF)
 
 set(FREELDR_PREINSTALL_OPTIONS "" CACHE STRING
     "Boot options appended to the boot entry of the preinstalled disk image")
@@ -876,7 +882,7 @@ if(DEFINED EFI_PLATFORM_ID)
             -add $<TARGET_FILE:bootmgfw> EFI/LiberNT/Boot/bootmgfw.efi
             -add ${REACTOS_BINARY_DIR}/bootloader/image/standard/BCD EFI/LiberNT/Boot/BCD)
         list(APPEND _preinstall_partition_deps bootloaderstandardbcd)
-        if(BOOTLOADER_HTTP_BOOT_URL)
+        if(BOOTLOADER_HTTP_BOOT AND BOOTLOADER_HTTP_BOOT_URL)
             list(APPEND _preinstall_boot_partition_files
                 -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi)
             list(APPEND _preinstall_partition_deps winload)

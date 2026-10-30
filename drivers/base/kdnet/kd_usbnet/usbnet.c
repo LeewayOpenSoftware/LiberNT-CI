@@ -124,6 +124,7 @@ UsbNetInitializeController(
     PDEBUG_DEVICE_DESCRIPTOR Device = KdNet->Device;
     PUSBNET_ADAPTER Adapter = KdNet->Hardware;
     NTSTATUS Status;
+    BOOLEAN Phone;
     ULONG i;
 
     if (!Device->BaseAddress[0].Valid || Device->BaseAddress[0].Type != CmResourceTypeMemory ||
@@ -143,8 +144,12 @@ UsbNetInitializeController(
     if (NT_SUCCESS(Status))
         Status = UsbFindFunction(Adapter);
 
+    Phone = NT_SUCCESS(Status) && !Adapter->Tier && Adapter->PhonePort == Adapter->Devices[0].Port;
     if (!NT_SUCCESS(Status) && (Adapter->PhonePort || Status == STATUS_DEVICE_NOT_CONNECTED))
+    {
         Status = UsbWaitForTethering(Adapter);
+        Phone = TRUE;
+    }
 
     if (!NT_SUCCESS(Status))
     {
@@ -152,6 +157,7 @@ UsbNetInitializeController(
         return Status;
     }
 
+    UsbNetSetMessage(STATUS_SUCCESS, Phone ? L"Connected to the phone" : NULL);
     XhciShareController(Adapter);
     UsbNetSetLink(Adapter, TRUE);
     return STATUS_SUCCESS;

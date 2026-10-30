@@ -362,6 +362,19 @@ XhciTransferStatus(
 #define UsbNetTrace(...) KdNetExtensibilityImports->KdNetDbgPrintf(__VA_ARGS__)
 
 FORCEINLINE
+VOID
+UsbNetSetMessage(
+    _In_ NTSTATUS Status,
+    _In_opt_z_ PCWSTR Message)
+{
+    if (KdNetExtensibilityImports->KdNetErrorStatus)
+        *KdNetExtensibilityImports->KdNetErrorStatus = Status;
+
+    if (KdNetExtensibilityImports->KdNetErrorString)
+        *KdNetExtensibilityImports->KdNetErrorString = (PWCHAR)Message;
+}
+
+FORCEINLINE
 USHORT
 UsbNetGet16(
     _In_reads_(2) const UCHAR *Data)

@@ -248,32 +248,43 @@ config BOOTLOADER_KERNEL_DEBUG
       can be read from the serial console, the display or the log.
       Debug builds keep the serial port debug output even when this is off.
 
+config BOOTLOADER_HTTP_BOOT
+    prompt "Boot manager HTTP boot"
+    type bool
+    default n
+    depends ARCH!=ppc
+    help
+      Adds "HTTP boot" to the startup options of the boot manager of the
+      disk image. Its loader takes an address from DHCP on the firmware's
+      network adapter, downloads the live image from the HTTP boot URL
+      and starts it as a RAM disk.
+
 config BOOTLOADER_HTTP_BOOT_URL
     prompt "Boot manager HTTP boot URL"
     type string
     default ""
-    depends ARCH!=ppc
+    depends BOOTLOADER_HTTP_BOOT=y
     help
-      Adds a "LiberNT (HTTP boot)" entry to the boot manager of the disk
-      image. Its loader takes an address from DHCP on the firmware's
-      network adapter, downloads the live image from this http:// URL,
-      whose host is an IPv4 address, and starts it as a RAM disk. Empty
-      leaves the entry out.
+      http:// URL of the live image HTTP boot downloads. Its host is an
+      IPv4 address.
 
 config BOOTLOADER_HTTP_BOOT_IP
     prompt "Boot manager HTTP boot static IPv4 address"
     type string
     default ""
-    depends ARCH!=ppc
+    depends BOOTLOADER_HTTP_BOOT=y
     help
-      address/prefix[,gateway] the HTTP boot entry uses instead of DHCP.
-      Empty uses DHCP.
+      address/prefix[,gateway] HTTP boot uses instead of DHCP. Empty uses
+      DHCP.
 
 config BOOTLOADER_HTTP_BOOT_DEFAULT
-    prompt "Start the boot manager HTTP boot entry by default"
+    prompt "Start HTTP boot directly"
     type bool
     default n
-    depends ARCH!=ppc
+    depends BOOTLOADER_HTTP_BOOT=y
+    help
+      The boot manager starts HTTP boot without showing its menu. The menu
+      appears when HTTP boot returns.
 
 endmenu
 

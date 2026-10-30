@@ -140,6 +140,7 @@ UiMessageBox(
 #define BM_DESCRIPTION_CHARS  64
 #define BM_PATH_CHARS         260
 #define BM_LOAD_OPTIONS_CHARS 512
+#define BM_MAX_TOOLS          4
 
 typedef struct _BM_ENTRY
 {
@@ -176,6 +177,12 @@ BmEnumerateEntries(
     _In_ ULONG MaxEntries,
     _Out_ PULONG DefaultEntry);
 
+ULONG
+BmEnumerateToolEntries(
+    _Out_writes_(MaxEntries) PBM_ENTRY Entries,
+    _In_ ULONG MaxEntries,
+    _Out_ PULONG DefaultEntry);
+
 BOOLEAN
 BmStartApplication(
     _In_ PBM_ENTRY Entry,
@@ -190,7 +197,10 @@ BmGetDescription(
 BOOLEAN
 BmChooseStartupSettings(
     _In_ BOOLEAN Graphical,
-    _Out_ PBM_STARTUP Startup);
+    _In_reads_(ToolCount) PCSTR* ToolNames,
+    _In_ ULONG ToolCount,
+    _Out_ PBM_STARTUP Startup,
+    _Out_ PULONG Tool);
 
 struct _UI_IMAGE;
 

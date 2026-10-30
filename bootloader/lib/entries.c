@@ -7,8 +7,10 @@
 
 #include <bl.h>
 
+static
 ULONG
-BmEnumerateEntries(
+BmEnumerateList(
+    _In_ ULONG List,
     _Out_writes_(MaxEntries) PBM_ENTRY Entries,
     _In_ ULONG MaxEntries,
     _Out_ PULONG DefaultEntry)
@@ -20,7 +22,7 @@ BmEnumerateEntries(
     ULONG Count = 0;
     ULONG Index;
 
-    *DefaultEntry = 0;
+    *DefaultEntry = MAXULONG;
 
     if (!BcdOpenObject(BCD_ID_BOOTMGR, &BootMgr) || BootMgr.Type != BCD_OBJECT_BOOTMGR)
         return 0;
@@ -30,7 +32,7 @@ BmEnumerateEntries(
 
     for (Index = 0;
          Count < MaxEntries &&
-         BcdGetObjectId(&BootMgr, BcdBootMgrObjectList_DisplayOrder, Index, Id);
+         BcdGetObjectId(&BootMgr, List, Index, Id);
          Index++)
     {
         Entry = &Entries[Count];
@@ -55,6 +57,30 @@ BmEnumerateEntries(
     }
 
     return Count;
+}
+
+ULONG
+BmEnumerateEntries(
+    _Out_writes_(MaxEntries) PBM_ENTRY Entries,
+    _In_ ULONG MaxEntries,
+    _Out_ PULONG DefaultEntry)
+{
+    ULONG Count;
+
+    Count = BmEnumerateList(BcdBootMgrObjectList_DisplayOrder, Entries, MaxEntries, DefaultEntry);
+    if (*DefaultEntry >= Count)
+        *DefaultEntry = 0;
+
+    return Count;
+}
+
+ULONG
+BmEnumerateToolEntries(
+    _Out_writes_(MaxEntries) PBM_ENTRY Entries,
+    _In_ ULONG MaxEntries,
+    _Out_ PULONG DefaultEntry)
+{
+    return BmEnumerateList(BcdBootMgrObjectList_ToolsDisplayOrder, Entries, MaxEntries, DefaultEntry);
 }
 
 BOOLEAN

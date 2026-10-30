@@ -141,7 +141,7 @@ BOOL CChangeNotifyServer::IsCrossSourceDuplicate(LPDELITICKET pTicket)
 
     for (INT i = 0; i < m_recent.GetSize(); ++i)
     {
-        if ((m_recent[i].wEventId ^ pTicket->wEventId) == SHCNE_INTERRUPT &&
+        if ((ULONG)(m_recent[i].wEventId ^ pTicket->wEventId) == SHCNE_INTERRUPT &&
             IsSamePidl(m_recent[i].pidl1, pidl1) && IsSamePidl(m_recent[i].pidl2, pidl2))
         {
             RemoveRecentEvent(i);

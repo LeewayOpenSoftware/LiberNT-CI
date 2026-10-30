@@ -695,6 +695,8 @@ UsbWaitForTethering(
         if (!Phone && Adapter->PhonePort == Port)
         {
             Phone = TRUE;
+            UsbNetSetMessage(STATUS_DEVICE_NOT_CONNECTED,
+                             L"Connect the computer to your phone and enable USB tethering");
             UsbNetTrace("USB debugger: turn on USB tethering on the phone on root port %lu, the boot waits for it "
                         "(unplug the phone to boot without the debugger)\n", Port);
         }
@@ -733,6 +735,7 @@ UsbWaitForTethering(
             break;
     }
 
+    UsbNetSetMessage(STATUS_NO_SUCH_DEVICE, NULL);
     UsbNetTrace("USB debugger: stopped waiting for root port %lu, booting without the debugger\n", Port);
     Adapter->PhonePort = 0;
     return STATUS_NO_SUCH_DEVICE;

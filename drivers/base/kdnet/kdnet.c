@@ -21,6 +21,7 @@ static LONGLONG KdpLastCounter;
 static ULONG64 KdpClockOffset;
 static ULONG KdpClockStalled;
 static BOOLEAN KdpInService;
+static BOOLEAN KdpHostShown;
 
 ULONG64
 KdNetTime(VOID)
@@ -51,6 +52,35 @@ KdNetTime(VOID)
            KdpClockOffset;
 }
 
+static
+VOID
+KdpShowHost(VOID)
+{
+    CHAR Text[KDNET_PROMPT_SIZE];
+    ULONG Host = KdNetOptions.HostIp;
+    int Length;
+
+    if (KdpHostShown || !KdIpAddress || !Host || !KdNetHost.ShowPrompt)
+        return;
+
+    KdpHostShown = TRUE;
+    if (KdNetOptions.HostName[0])
+    {
+        Length = _snprintf(Text, sizeof(Text), "Connected to %s", KdNetOptions.HostName);
+    }
+    else
+    {
+        Length = _snprintf(Text, sizeof(Text), "Connected to %lu.%lu.%lu.%lu",
+                           Host >> 24, (Host >> 16) & 255, (Host >> 8) & 255, Host & 255);
+    }
+
+    if (Length < 0 || (ULONG)Length >= sizeof(Text))
+        Length = sizeof(Text) - 1;
+
+    Text[Length] = ANSI_NULL;
+    KdNetHost.ShowPrompt(Text);
+}
+
 VOID
 KdNetService(VOID)
 {
@@ -74,6 +104,7 @@ KdNetService(VOID)
     Now = KdNetTime();
     KdIpTimer(Now);
     KdSessionTimer(Now);
+    KdpShowHost();
     KdpInService = FALSE;
 }
 

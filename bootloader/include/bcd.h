@@ -46,6 +46,7 @@ typedef enum _BCD_ELEMENT
     BcdBootMgrObjectList_DisplayOrder        = 0x24000001,
     BcdBootMgrObject_DefaultObject           = 0x23000003,
     BcdBootMgrInteger_Timeout                = 0x25000004,
+    BcdBootMgrObjectList_ToolsDisplayOrder   = 0x24000010,
     BcdBootMgrBoolean_DisplayBootMenu        = 0x26000020
 } BCD_ELEMENT;
 

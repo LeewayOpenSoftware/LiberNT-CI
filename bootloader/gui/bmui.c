@@ -429,7 +429,7 @@ BmUiChooseEntry(
         *Selected = 0;
 
     BmUiDrawFrame(Title, L"Choose an operating system to start:", L"ESC=Exit");
-    BmUiPutRow(BMUI_ROW_ADVANCED, L"To choose a startup option for this choice, press F8.", BMUI_ATTR_NORMAL);
+    BmUiPutRow(BMUI_ROW_ADVANCED, L"To choose a startup option for LiberNT, press F8.", BMUI_ATTR_NORMAL);
 
     for (;;)
     {

@@ -277,7 +277,11 @@ if(_standard_signature)
     string(STRIP "${BCD_LOAD_OPTIONS}" BCD_LOAD_OPTIONS)
     set(BCD_WINPE_ELEMENT "")
 
-    if(BOOTLOADER_HTTP_BOOT_URL)
+    if(BOOTLOADER_HTTP_BOOT AND NOT BOOTLOADER_HTTP_BOOT_URL)
+        message(WARNING "BOOTLOADER_HTTP_BOOT is on but BOOTLOADER_HTTP_BOOT_URL is empty; HTTP boot is left out")
+    endif()
+
+    if(BOOTLOADER_HTTP_BOOT AND BOOTLOADER_HTTP_BOOT_URL)
         string(UUID _http_entry NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "LiberNT HTTP boot" TYPE SHA1)
         set(_http_entry "{${_http_entry}}")
         bootloader_ramdisk_device(_http_device "")
@@ -291,7 +295,7 @@ if(_standard_signature)
 ${_object}\\Description\",\"Type\",0x00010001,0x10200003
 ${_object}\\Elements\\11000001\",\"Element\",0x1,${BCD_BOOT_DEVICE}
 ${_object}\\Elements\\12000002\",\"Element\",,\"\\EFI\\LiberNT\\Boot\\${BOOTLOADER_OS_LOADER}\"
-${_object}\\Elements\\12000004\",\"Element\",,\"LiberNT (HTTP boot)\"
+${_object}\\Elements\\12000004\",\"Element\",,\"HTTP boot\"
 ${_object}\\Elements\\12000005\",\"Element\",,\"en-US\"
 ${_object}\\Elements\\14000006\",\"Element\",0x10000,\"{6efb52bf-1766-41db-a6b3-0ee5eff72bd7}\"
 ${_object}\\Elements\\16000009\",\"Element\",0x1,00
@@ -305,8 +309,8 @@ ${_object}\\Elements\\250000c2\",\"Element\",0x1,00,00,00,00,00,00,00,00
 ${_object}\\Elements\\26000022\",\"Element\",0x1,01
 ${_object}\\Elements\\26000091\",\"Element\",0x1,${BCD_SOS}
 ${_object}\\Elements\\260000a0\",\"Element\",0x1,${BCD_DEBUG}
-${_object}\\Elements\\12000030\",\"Element\",,\"${_http_options}\"")
-        set(BCD_DISPLAY_ORDER "\"${BCD_OS_ENTRY}\",\"${_http_entry}\"")
+${_object}\\Elements\\12000030\",\"Element\",,\"${_http_options}\"
+BCD,\"BCD00000000\\Objects\\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\\Elements\\24000010\",\"Element\",0x10000,\"${_http_entry}\"")
         if(BOOTLOADER_HTTP_BOOT_DEFAULT)
             set(BCD_DEFAULT_ENTRY "${_http_entry}")
         endif()

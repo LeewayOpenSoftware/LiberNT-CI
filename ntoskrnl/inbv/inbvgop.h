@@ -44,6 +44,10 @@ InbvGopDisplayStatus(
 
 VOID
 NTAPI
+InbvGopEraseStatus(VOID);
+
+VOID
+NTAPI
 InbvGopClearStatus(VOID);
 
 #ifdef __cplusplus

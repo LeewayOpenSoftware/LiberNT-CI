@@ -34,6 +34,7 @@ static UCHAR KdpSavedAddress[MAC_ADDRESS_SIZE];
 static BOOLEAN KdpSavedValid;
 static NTSTATUS KdpErrorStatus;
 static PWCHAR KdpErrorString;
+static PWCHAR KdpShownErrorString;
 static ULONG KdpHardwareId;
 static BOOLEAN KdpNicStarted;
 
@@ -189,6 +190,31 @@ KdpReadCycleCounter(
 
 static
 VOID
+KdpShowExtensionPrompt(
+    _In_opt_z_ PWCHAR String)
+{
+    CHAR Text[KDNET_PROMPT_SIZE];
+    ULONG Index;
+
+    if (String == KdpShownErrorString || !KdNetHost.ShowPrompt)
+        return;
+
+    KdpShownErrorString = String;
+    if (!String)
+    {
+        KdNetHost.ShowPrompt(NULL);
+        return;
+    }
+
+    for (Index = 0; Index < sizeof(Text) - 1 && String[Index]; Index++)
+        Text[Index] = String[Index] < 0x80 ? (CHAR)String[Index] : '?';
+
+    Text[Index] = ANSI_NULL;
+    KdNetHost.ShowPrompt(Text);
+}
+
+static
+VOID
 __cdecl
 KdpExtensionPrint(
     _In_ PCHAR Format,
@@ -202,6 +228,7 @@ KdpExtensionPrint(
     va_start(Arguments, Format);
     vDbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL, Format, Arguments);
     va_end(Arguments);
+    KdpShowExtensionPrompt(KdpErrorString);
 }
 
 static
@@ -463,6 +490,7 @@ KdpStartController(VOID)
     KdpShared.LinkState = &KdNicLinkState;
 
     Status = KdpExports.KdInitializeController(&KdpShared);
+    KdpShowExtensionPrompt(NT_SUCCESS(Status) ? KdpErrorString : NULL);
     if (!NT_SUCCESS(Status))
     {
         KdpReleaseDevice(&KdNicDevice);

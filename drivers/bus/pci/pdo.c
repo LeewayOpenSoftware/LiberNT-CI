@@ -4485,6 +4485,7 @@ PdoStartDevice(
      */
     if (DeviceExtension->PciDevice->EnableBusMaster ||
         (DeviceExtension->PciDevice->PciConfig.Command & PCI_ENABLE_BUS_MASTER) ||
+        PCI_CONFIGURATION_TYPE(&DeviceExtension->PciDevice->PciConfig) != PCI_DEVICE_TYPE ||
         UsingMsi || UsingMsix)
     {
         Command |= PCI_ENABLE_BUS_MASTER;
