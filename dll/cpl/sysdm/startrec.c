@@ -691,6 +691,47 @@ LoadRecoveryOptions(HWND hwndDlg, PSTARTINFO pStartInfo)
 
 
 /* Property page dialog callback */
+/* Opens the boot file in Notepad, waits for it to be closed (the property sheet stays alive but
+ * unavailable) and reloads the list so the edits show up */
+static VOID
+EditBootFile(HWND hwndDlg, PSTARTINFO pStartInfo)
+{
+    SHELLEXECUTEINFOW sei;
+    HWND hwndSheet = GetParent(hwndDlg);
+
+    ZeroMemory(&sei, sizeof(sei));
+    sei.cbSize = sizeof(sei);
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.hwnd = hwndDlg;
+    sei.lpVerb = L"open";
+    sei.lpFile = L"notepad";
+    sei.lpParameters = pStartInfo->szFreeldrIni;
+    sei.nShow = SW_SHOWNORMAL;
+    if (!ShellExecuteExW(&sei) || !sei.hProcess)
+        return;
+
+    EnableWindow(hwndSheet, FALSE);
+    for (;;)
+    {
+        MSG msg;
+        DWORD dwWait = MsgWaitForMultipleObjects(1, &sei.hProcess, FALSE, INFINITE, QS_ALLINPUT);
+
+        if (dwWait != WAIT_OBJECT_0 + 1)
+            break;                                      /* the editor was closed (or the wait failed) */
+        while (PeekMessageW(&msg, NULL, 0, 0, PM_REMOVE))
+        {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
+    }
+    CloseHandle(sei.hProcess);
+    EnableWindow(hwndSheet, TRUE);
+
+    DeleteBootRecords(hwndDlg);
+    LoadOSList(hwndDlg, pStartInfo);
+}
+
+
 INT_PTR CALLBACK
 StartRecDlgProc(HWND hwndDlg,
                 UINT uMsg,
@@ -726,10 +767,7 @@ StartRecDlgProc(HWND hwndDlg,
             switch(LOWORD(wParam))
             {
                 case IDC_STRRECEDIT:
-                    ShellExecuteW(0, L"open", L"notepad", pStartInfo->szFreeldrIni, NULL, SW_SHOWNORMAL);
-                    // FIXME: Use CreateProcess and wait untill finished
-                    //  DeleteBootRecords(hwndDlg);
-                    //  LoadOSList(hwndDlg);
+                    EditBootFile(hwndDlg, pStartInfo);
                     break;
 
                 case IDOK:
