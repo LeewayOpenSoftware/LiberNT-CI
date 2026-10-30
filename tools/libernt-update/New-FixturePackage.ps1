@@ -17,6 +17,11 @@
         -SigningPfx/-SigningPasswordFile   sign with another certificate (the manifest then names that one)
         -TamperPayloadAfterSigning        change a payload byte after signing (payload hash no longer matches)
         -TamperManifestAfterSigning       rewrite manifest.json after signing (catalog no longer covers it)
+        -NoManifestSig                    leave out manifest.sig
+        -TamperManifestSigAfterSigning    flip a byte of manifest.sig after the catalog was signed
+
+    manifest.sig is the RSA-SHA256 (PKCS#1 v1.5) signature of manifest.json made with the same key; the
+    boot applier verifies it without WinVerifyTrust (S1-CONTRACTS.md plan.signature).
 #>
 [CmdletBinding()]
 param(
@@ -31,7 +36,9 @@ param(
     [switch]$Unsigned,
     [switch]$UnsignedCatalog,
     [switch]$TamperPayloadAfterSigning,
-    [switch]$TamperManifestAfterSigning
+    [switch]$TamperManifestAfterSigning,
+    [switch]$NoManifestSig,
+    [switch]$TamperManifestSigAfterSigning
 )
 
 $ErrorActionPreference = 'Stop'
@@ -72,6 +79,12 @@ $manifest = [ordered]@{
 $manifestPath = Join-Path $OutDir 'manifest.json'
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 6), $utf8)
 
+if (-not $NoManifestSig) {
+    $rsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+    $sigBytes = $rsa.SignData([IO.File]::ReadAllBytes($manifestPath), [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1)
+    [IO.File]::WriteAllBytes((Join-Path $OutDir 'manifest.sig'), $sigBytes)
+}
+
 if (-not $Unsigned) {
     $tmpCat = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString('N') + '.cat')
     New-FileCatalog -Path $OutDir -CatalogFilePath $tmpCat -CatalogVersion 2 | Out-Null
@@ -84,6 +97,12 @@ if (-not $Unsigned) {
 if ($TamperPayloadAfterSigning) {
     $first = Get-ChildItem (Join-Path $OutDir 'payload') | Select-Object -First 1
     [IO.File]::AppendAllText($first.FullName, 'X', $utf8)
+}
+if ($TamperManifestSigAfterSigning) {
+    $sp = Join-Path $OutDir 'manifest.sig'
+    $b = [IO.File]::ReadAllBytes($sp)
+    $b[10] = $b[10] -bxor 0xff
+    [IO.File]::WriteAllBytes($sp, $b)
 }
 if ($TamperManifestAfterSigning) {
     $text = [IO.File]::ReadAllText($manifestPath)

@@ -78,24 +78,16 @@ static void LogLine(const LN_TARGET *t, const char *txid, const char *text)
     free(path);
 }
 
-static DWORD Journal(const CTX *c, const char *phase, const char *result, BOOL reboot, BOOL health,
-                     long long attempt, const char *error)
+static DWORD JournalOp(const CTX *c, const char *phase, const char *result, long long op, const char *error)
 {
     LN_JENTRY e;
     DWORD err;
 
     memset(&e, 0, sizeof(e));
     strcpy(e.transactionId, c->txid);
-    strcpy(e.targetIdentity, c->t->identity);
-    strcpy(e.packageId, c->m.packageId);
-    strcpy(e.packageVersion, c->m.releaseVersion);
-    strcpy(e.manifestSha256, c->m.manifestSha256);
-    strncpy(e.operation, c->op, sizeof(e.operation) - 1);
     strncpy(e.phase, phase, sizeof(e.phase) - 1);
     strncpy(e.result, result, sizeof(e.result) - 1);
-    e.rebootRequired = reboot;
-    e.healthConfirmed = health;
-    e.attempt = attempt;
+    e.op = op;
     if (error)
         strncpy(e.error, error, sizeof(e.error) - 1);
     err = LnJournalAppend(c->t, &e);
@@ -104,9 +96,7 @@ static DWORD Journal(const CTX *c, const char *phase, const char *result, BOOL r
     {
         char line[260];
 
-        strcpy(line, c->op);
-        strcat(line, " ");
-        strcat(line, phase);
+        strcpy(line, phase);
         strcat(line, " ");
         strcat(line, result);
         strcat(line, " ");
@@ -116,28 +106,38 @@ static DWORD Journal(const CTX *c, const char *phase, const char *result, BOOL r
     return err;
 }
 
+/* transaction-level event (op = null) */
+static DWORD Journal(const CTX *c, const char *phase, const char *result, const char *error)
+{
+    return JournalOp(c, phase, result, -1, error);
+}
+
+/* journal.error: the hex code of the failure */
 static const char *ErrText(DWORD err, char *buf)
 {
-    static const char hex[] = "0123456789abcdef";
+    static const char hex[] = "0123456789ABCDEF";
     int i;
 
-    strcpy(buf, "error 0x");
+    strcpy(buf, "0x");
     for (i = 0; i < 8; i++)
-        buf[8 + i] = hex[(err >> (28 - 4 * i)) & 15];
-    buf[16] = 0;
+        buf[2 + i] = hex[(err >> (28 - 4 * i)) & 15];
+    buf[10] = 0;
     return buf;
 }
 
+/* One transaction per (machine, package, version, manifest digest, "install"): add-package,
+ * apply, rollback and confirm are phases of it (S1-CONTRACTS.md sections 3 and 4). */
 static DWORD CtxInit(CTX *c, const LN_TARGET *t, const char *id, const char *ver, const char *op)
 {
     DWORD err;
 
+    (void)op;
     memset(c, 0, sizeof(*c));
     c->t = t;
-    c->op = op;
+    c->op = "install";
     err = LnStoreLoadManifest(t, id, ver, &c->m);
     if (!err)
-        LnTransactionId(t->identity, c->m.packageId, c->m.releaseVersion, c->m.manifestSha256, op, c->txid);
+        LnTransactionId(t->identity, c->m.packageId, c->m.releaseVersion, c->m.manifestSha256, c->op, c->txid);
     return err;
 }
 
@@ -180,11 +180,11 @@ DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[6
         return ERROR_NOT_ENOUGH_MEMORY;
     memset(&c, 0, sizeof(c));
     c.t = t;
-    c.op = "add-package";
+    c.op = "install";
     err = LnManifestLoad(mp, &c.m);
     free(mp);
     if (err)
-        return err;                                     /* no identity to journal against */
+        return err;                                     /* no digest to journal against */
     LnTransactionId(t->identity, c.m.packageId, c.m.releaseVersion, c.m.manifestSha256, c.op, c.txid);
     if (txId)
         strcpy(txId, c.txid);
@@ -194,7 +194,7 @@ DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[6
         err = LnServicingVerifyPackage(pkgDir, pinned, NULL);
     if (err)
     {
-        Journal(&c, "failed", "error", FALSE, FALSE, 0, ErrText(err, buf));  /* rejected before staging */
+        Journal(&c, "failed", "error", ErrText(err, buf));              /* rejected before staging */
         LnManifestFree(&c.m);
         return err;
     }
@@ -206,11 +206,11 @@ DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[6
         return err;
     }
     last = LastOf(&j, c.txid);
-    if (last && !strcmp(last->phase, "staged") && !strcmp(last->result, "ok"))
+    if (last && strcmp(last->phase, "failed"))
     {
         LN_MANIFEST stored;
 
-        /* already staged: make sure the store still has it, otherwise re-import */
+        /* already verified/staged (or further): make sure the store still has it, else re-import */
         if (!LnStoreLoadManifest(t, c.m.packageId, c.m.releaseVersion, &stored) &&
             !strcmp(stored.manifestSha256, c.m.manifestSha256))
         {
@@ -222,11 +222,13 @@ DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[6
     }
     LnJournalFree(&j);
 
-    err = LnStoreImport(t, pkgDir, &c.m);
+    err = Journal(&c, "verified", "ok", NULL);
+    if (!err)
+        err = LnStoreImport(t, pkgDir, &c.m);
     if (err)
-        Journal(&c, "failed", "error", FALSE, FALSE, 0, ErrText(err, buf));
+        Journal(&c, "failed", "error", ErrText(err, buf));
     else
-        err = Journal(&c, "staged", "ok", FALSE, FALSE, 0, NULL);
+        err = Journal(&c, "staged", "ok", NULL);
     LnManifestFree(&c.m);
     return err;
 }
@@ -253,21 +255,17 @@ static WCHAR *BackupDir(const CTX *c)
 
 static WCHAR *BackupFile(const CTX *c, size_t i)
 {
-    WCHAR *dir = BackupDir(c), name[40], *p;
+    WCHAR *dir = BackupDir(c), name[16], *p;
     char num[24];
-    int k;
+    size_t k, n;
 
     if (!dir)
         return NULL;
-    LnI64ToStr((long long)i, num);
-    wcscpy(name, L"files\\");
-    for (k = 0; num[k]; k++)
-    {
-        WCHAR one[2] = { (WCHAR)num[k], 0 };
-
-        wcscat(name, one);
-    }
-    wcscat(name, L".bak");
+    LnI64ToStr((long long)(i + 1), num);                /* seq is 1-based, 4 digits */
+    n = strlen(num);
+    for (k = 0; k < 4; k++)
+        name[k] = (n + k >= 4) ? (WCHAR)num[n + k - 4] : L'0';
+    name[4] = 0;
     p = LnJoin(dir, name);
     free(dir);
     return p;
@@ -441,11 +439,8 @@ static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
         if (!DeleteFileW(tp))
         {
             err = GetLastError();
-            if ((c->t->mode == LnTargetOnline || LnTestLockedAsPending) && IsLockedError(err))
-            {
-                *pending = TRUE;
-                err = ERROR_SUCCESS;
-            }
+            if (IsLockedError(err))
+                err = LN_E_PRECONDITION;                /* a delete of a file in use is not deferred (stage 1) */
             goto out;
         }
         goto verify;
@@ -648,7 +643,7 @@ static DWORD DoRollback(CTX *c, const char *why)
         free(u);
         return err;
     }
-    Journal(c, "rollback-prepared", "pending", FALSE, FALSE, 0, why);
+    Journal(c, "rollback-prepared", "pending", why);
     for (i = c->m.itemCount; i > 0; i--)
     {
         err = RestoreItem(c, i - 1, u);
@@ -658,24 +653,84 @@ static DWORD DoRollback(CTX *c, const char *why)
     free(u);
     if (first)
     {
-        Journal(c, "failed", "error", FALSE, FALSE, 0, ErrText(first, buf));
+        Journal(c, "failed", "error", ErrText(first, buf));
         return first;
     }
     RemovePlanOf(c);
-    Journal(c, "rolled-back", "ok", FALSE, FALSE, 0, why);
+    Journal(c, "rolled-back", "ok", NULL);
     return ERROR_SUCCESS;
 }
 
 /* ---- plan.json ---------------------------------------------------------- */
 
-static DWORD WritePlan(const CTX *c, const BOOL *pending, const char *certSha)
+static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static void Base64(const BYTE *in, size_t n, LN_BUF *out)
+{
+    size_t i;
+
+    for (i = 0; i < n; i += 3)
+    {
+        unsigned v = (unsigned)in[i] << 16;
+        char q[4];
+
+        if (i + 1 < n) v |= (unsigned)in[i + 1] << 8;
+        if (i + 2 < n) v |= in[i + 2];
+        q[0] = b64[(v >> 18) & 63];
+        q[1] = b64[(v >> 12) & 63];
+        q[2] = (i + 1 < n) ? b64[(v >> 6) & 63] : '=';
+        q[3] = (i + 2 < n) ? b64[v & 63] : '=';
+        LnBufAppend(out, q, 4);
+    }
+}
+
+/* base64 of the packaging signature of manifest.json (stored beside the manifest) */
+static DWORD ManifestSignatureB64(const CTX *c, LN_BUF *out)
+{
+    WCHAR *wid = LnUtf8ToWide(c->m.packageId), *wver = LnUtf8ToWide(c->m.releaseVersion), *rel, *path;
+    BYTE *sig;
+    size_t len;
+    DWORD err;
+
+    if (!wid || !wver)
+    {
+        free(wid);
+        free(wver);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    rel = malloc((wcslen(wid) + wcslen(wver) + 48) * sizeof(WCHAR));
+    if (!rel)
+    {
+        free(wid);
+        free(wver);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    wcscpy(rel, L"store\\manifests\\");
+    wcscat(rel, wid);
+    wcscat(rel, L"\\");
+    wcscat(rel, wver);
+    wcscat(rel, L"\\manifest.sig");
+    free(wid);
+    free(wver);
+    path = LnTargetPath(c->t, rel);
+    free(rel);
+    if (!path)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    err = LnReadFileAll(path, &sig, &len);
+    free(path);
+    if (err)
+        return err;
+    Base64(sig, len, out);
+    free(sig);
+    return ERROR_SUCCESS;
+}
+
+static DWORD WritePlan(const CTX *c, const BOOL *pending)
 {
     LN_BUF b;
-    char token[65], seed[160], ts[32], num[24];
     WCHAR *path = LnTargetPath(c->t, L"pending\\plan.json");
-    size_t i, k = 0;
+    size_t i, seq = 0;
     DWORD err = 0;
-    LARGE_INTEGER pc;
 
     if (!path)
         return ERROR_NOT_ENOUGH_MEMORY;
@@ -701,82 +756,103 @@ static DWORD WritePlan(const CTX *c, const BOOL *pending, const char *certSha)
             free(old);
         }
     }
-    QueryPerformanceCounter(&pc);
-    LnI64ToStr(pc.QuadPart, num);
-    strcpy(seed, c->txid);
-    strcat(seed, num);
-    LnSha256Hex(seed, strlen(seed), token);
-    LnNowUtc(ts);
 
     LnBufInit(&b);
-    err |= LnBufAppendStr(&b, "{\"schemaVersion\":1,\"transactionId\":");
+    err |= LnBufAppendStr(&b, "{\"schema\":1,\"transactionId\":");
     err |= LnBufAppendJsonString(&b, c->txid);
-    err |= LnBufAppendStr(&b, ",\"targetIdentity\":");
+    err |= LnBufAppendStr(&b, ",\"target\":{\"machineId\":");
     err |= LnBufAppendJsonString(&b, c->t->identity);
-    err |= LnBufAppendStr(&b, ",\"packageId\":");
+    err |= LnBufAppendStr(&b, ",\"arch\":");
+    err |= LnBufAppendJsonString(&b, c->m.architecture);
+    err |= LnBufAppendStr(&b, ",\"line\":\"main-nt10\",\"base\":");
+    err |= LnBufAppendJsonString(&b, c->m.baseVersion);
+    err |= LnBufAppendStr(&b, "},\"package\":{\"id\":");
     err |= LnBufAppendJsonString(&b, c->m.packageId);
-    err |= LnBufAppendStr(&b, ",\"packageVersion\":");
+    err |= LnBufAppendStr(&b, ",\"version\":");
     err |= LnBufAppendJsonString(&b, c->m.releaseVersion);
-    err |= LnBufAppendStr(&b, ",\"manifestSha256\":");
+    err |= LnBufAppendStr(&b, ",\"digest\":");
     err |= LnBufAppendJsonString(&b, c->m.manifestSha256);
-    err |= LnBufAppendStr(&b, ",\"createdUtc\":");
-    err |= LnBufAppendJsonString(&b, ts);
-    err |= LnBufAppendStr(&b, ",\"attemptLimit\":2,\"attempt\":0,\"healthToken\":");
-    err |= LnBufAppendJsonString(&b, token);
-    err |= LnBufAppendStr(&b, ",\"certificateSha256\":");
-    err |= LnBufAppendJsonString(&b, certSha);
-    err |= LnBufAppendStr(&b, ",\"mode\":\"apply\",\"actions\":[");
+    err |= LnBufAppendStr(&b, "},\"operation\":\"install\",\"requiresReboot\":true,\"operations\":[");
     for (i = 0; i < c->m.itemCount; i++)
     {
         const LN_ITEM *it = &c->m.items[i];
-        char *tg;
-        WCHAR *obj;
+        WCHAR *wt;
+        char *tg, num[24], seqs[8], idx[24];
+        WCHAR *tp;
+        char oldSha[65];
+        size_t k, n;
+        LN_BUF tgt;
 
         if (!pending[i])
             continue;
-        if (k++)
+        if (seq++)
             err |= LnBufAppendStr(&b, ",");
-        tg = LnWideToUtf8(it->target);
-        err |= LnBufAppendStr(&b, it->isDelete ? "{\"kind\":\"delete\",\"source\":\"\",\"target\":" : "{\"kind\":\"replace\",\"source\":");
-        if (!it->isDelete)
+        /* seq of the plan operation = position of the item in the manifest (stable, 1-based) */
+        LnI64ToStr((long long)(i + 1), num);
+        n = strlen(num);
+        for (k = 0; k < 4; k++)
+            seqs[k] = (n + k >= 4) ? num[n + k - 4] : '0';
+        seqs[4] = 0;
+        LnI64ToStr((long long)(i + 1), idx);
+        oldSha[0] = 0;
+        tp = LnTargetFile(c->t, it->target);
+        if (tp)
+            CurrentHash(tp, oldSha);
+        free(tp);
+
+        err |= LnBufAppendStr(&b, "{\"seq\":");
+        err |= LnBufAppendStr(&b, idx);
+        err |= LnBufAppendStr(&b, oldSha[0] ? ",\"type\":\"replace-file\"" : ",\"type\":\"add-file\"");
+        err |= LnBufAppendStr(&b, ",\"component\":");
+        err |= LnBufAppendJsonString(&b, c->m.packageId);
+        err |= LnBufAppendStr(&b, ",\"version\":");
+        err |= LnBufAppendJsonString(&b, c->m.releaseVersion);
+        err |= LnBufAppendStr(&b, ",\"source\":\"store/objects/");
+        err |= LnBufAppendStr(&b, it->sha256);
+        err |= LnBufAppendStr(&b, "\",\"target\":");
+        wt = malloc((wcslen(it->target) + 2) * sizeof(WCHAR));
+        if (wt)
         {
-            char *src = NULL;
-
-            if (!LnStoreObjectPath(c->t, it->sha256, &obj))
-            {
-                /* the plan names the object relative to the servicing root */
-                WCHAR rel[160], *w = LnUtf8ToWide(it->sha256);
-
-                wcscpy(rel, L"store\\objects\\");
-                if (w)
-                    wcscat(rel, w);
-                wcscat(rel, L"\\payload.bin");
-                free(w);
-                src = LnWideToUtf8(rel);
-                free(obj);
-            }
-            err |= LnBufAppendJsonString(&b, src ? src : "");
-            free(src);
-            err |= LnBufAppendStr(&b, ",\"target\":");
+            wcscpy(wt, L"\\");
+            wcscat(wt, it->target);
+            tg = LnWideToUtf8(wt);
+            free(wt);
         }
+        else
+            tg = NULL;
+        LnBufInit(&tgt);
         err |= LnBufAppendJsonString(&b, tg ? tg : "");
         free(tg);
-        err |= LnBufAppendStr(&b, ",\"oldObjectSha256\":");
+        LnBufFree(&tgt);
+        err |= LnBufAppendStr(&b, ",\"sha256\":");
+        err |= LnBufAppendJsonString(&b, it->sha256);
+        err |= LnBufAppendStr(&b, ",\"backup\":");
+        if (oldSha[0])
         {
-            UNDO uu;
-            WCHAR *tp = LnTargetFile(c->t, it->target);
+            char bk[200];
 
-            uu.oldSha[0] = 0;
-            if (tp)
-                CurrentHash(tp, uu.oldSha);
-            free(tp);
-            err |= LnBufAppendJsonString(&b, uu.oldSha);
+            strcpy(bk, "backup/");
+            strcat(bk, c->txid);
+            strcat(bk, "/");
+            strcat(bk, seqs);
+            err |= LnBufAppendJsonString(&b, bk);
         }
-        err |= LnBufAppendStr(&b, ",\"newObjectSha256\":");
-        err |= LnBufAppendJsonString(&b, it->isDelete ? "" : it->sha256);
+        else
+            err |= LnBufAppendStr(&b, "null");
         err |= LnBufAppendStr(&b, "}");
     }
-    err |= LnBufAppendStr(&b, "]}\n");
+    err |= LnBufAppendStr(&b, "],\"signature\":");
+    {
+        LN_BUF sig;
+
+        LnBufInit(&sig);
+        if (!ManifestSignatureB64(c, &sig) && sig.data)
+            err |= LnBufAppendJsonString(&b, sig.data);
+        else
+            err |= LnBufAppendJsonString(&b, "");
+        LnBufFree(&sig);
+    }
+    err |= LnBufAppendStr(&b, "}\n");
     if (err)
         err = ERROR_NOT_ENOUGH_MEMORY;
     else
@@ -890,16 +966,16 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
             err = TakeBackups(&c, u);
             if (err)
             {
-                Journal(&c, "failed", "error", FALSE, FALSE, 0, ErrText(err, buf));
+                Journal(&c, "failed", "error", ErrText(err, buf));
                 goto fail_logged;
             }
-            err = Journal(&c, "prepared", "ok", FALSE, FALSE, 0, NULL);
+            err = Journal(&c, "prepared", "ok", NULL);
             if (err)
                 goto fail_logged;
         }
     }
 
-    err = Journal(&c, "applying", "pending", FALSE, FALSE, 0, NULL);
+    err = Journal(&c, "applying", "pending", NULL);
     if (err)
         goto fail_logged;
     for (i = 0; i < c.m.itemCount; i++)
@@ -907,36 +983,38 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
         err = ApplyItem(&c, &c.m.items[i], &pending[i]);
         if (err)
         {
-            Journal(&c, "failed", "error", FALSE, FALSE, 0, ErrText(err, buf));
-            DoRollback(&c, "immediate rollback after a failed operation");
+            Journal(&c, "failed", "error", ErrText(err, buf));
+            DoRollback(&c, "verifiable-failure");
             goto fail_logged;
         }
         if (pending[i])
             any = TRUE;
+        else
+            JournalOp(&c, "applying", "ok", (long long)(i + 1), NULL);       /* per-operation evidence */
     }
 
     if (any)
     {
-        err = WritePlan(&c, pending, pinned);
+        err = WritePlan(&c, pending);
         if (err)
         {
-            Journal(&c, "failed", "error", FALSE, FALSE, 0, ErrText(err, buf));
-            DoRollback(&c, "plan could not be written");
+            Journal(&c, "failed", "error", ErrText(err, buf));
+            DoRollback(&c, "verifiable-failure");
             goto fail_logged;
         }
-        err = Journal(&c, "pending-first-boot", "pending", TRUE, FALSE, 0, NULL);
+        err = Journal(&c, "pending-first-boot", "pending", NULL);
         if (rebootRequired)
             *rebootRequired = TRUE;
     }
     else
-        err = Journal(&c, "applied", "ok", FALSE, FALSE, 0, NULL);
+        err = Journal(&c, "applied", "ok", NULL);
     goto cleanup;
 
 fail:
     if (err && err != LN_E_BAD_STATE)
     {
         /* failed before anything changed: record it, there is nothing to roll back */
-        Journal(&c, "failed", "error", FALSE, FALSE, 0, ErrText(err, buf));
+        Journal(&c, "failed", "error", ErrText(err, buf));
     }
 fail_logged:
 cleanup:
@@ -993,7 +1071,7 @@ DWORD LnServicingRollback(const LN_TARGET *t, const char *packageId, const char 
         }
     }
     if (!err || err == ERROR_SUCCESS)
-        err = DoRollback(&c, "requested rollback");
+        err = DoRollback(&c, NULL);
     LnManifestFree(&c.m);
     return err;
 }
@@ -1054,11 +1132,11 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
     }
     if (err)
     {
-        Journal(&c, "failed", "error", FALSE, FALSE, 0, ErrText(err, buf));
+        Journal(&c, "failed", "error", ErrText(err, buf));
         LnManifestFree(&c.m);
         return err;
     }
-    err = Journal(&c, "confirmed", "ok", FALSE, TRUE, 0, NULL);
+    err = Journal(&c, "confirmed", "ok", NULL);
     if (!err)
     {
         LnAttemptSetHealth(t, c.txid);
@@ -1072,7 +1150,7 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
 
 DWORD LnServicingRemovePackage(const LN_TARGET *t, const char *packageId, const char *version)
 {
-    CTX c, rm;
+    CTX c;
     LN_JOURNAL j;
     const LN_JENTRY *last;
     DWORD err = CtxInit(&c, t, packageId, version, "apply");
@@ -1100,12 +1178,8 @@ DWORD LnServicingRemovePackage(const LN_TARGET *t, const char *packageId, const 
     else
         LnJournalFree(&j);
 
-    rm = c;
-    rm.op = "remove-package";
-    LnTransactionId(t->identity, c.m.packageId, c.m.releaseVersion, c.m.manifestSha256, rm.op, rm.txid);
     err = LnStoreRemovePackage(t, packageId, version);
-    if (!err)
-        err = Journal(&rm, "applied", "ok", FALSE, FALSE, 0, NULL);
+    LogLine(t, c.txid, "remove-package: store entry removed (objects are immutable and stay)");
     LnManifestFree(&c.m);
     return err;
 }

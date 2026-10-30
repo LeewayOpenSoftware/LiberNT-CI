@@ -12,7 +12,10 @@
  *   3. catalog.cat exists and WinVerifyTrust accepts its signature;
  *   4. the catalog members cover manifest.json and every payload (by SHA-256);
  *   5. the signer certificate hash equals manifest.certificateSha256 AND the certificate
- *      installed in the target's trust\ directory.
+ *      installed in the target's trust\ directory;
+ *   6. manifest.sig (RSA-SHA256, PKCS#1 v1.5, made at packaging time with the development key)
+ *      verifies over manifest.json with the signer's public key. The boot applier checks the same
+ *      signature without WinVerifyTrust (S1-CONTRACTS.md plan.signature).
  *
  * The development certificate is self-signed, so WinVerifyTrust reports an untrusted root
  * (CERT_E_UNTRUSTEDROOT / CERT_E_CHAINING) after it has checked the signature itself. That
@@ -27,6 +30,7 @@
 #include <wintrust.h>
 #include <softpub.h>
 #include <mscat.h>
+#include <wincrypt.h>
 
 #ifndef CERT_E_UNTRUSTEDROOT
 #define CERT_E_UNTRUSTEDROOT ((LONG)0x800B0109L)
@@ -55,7 +59,7 @@ DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65])
 }
 
 /* Returns the WinVerifyTrust status and, if a signer exists, the SHA-256 of its certificate. */
-static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65])
+static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65], BYTE **certDer, DWORD *certLen)
 {
     GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
     WINTRUST_FILE_INFO fi;
@@ -63,6 +67,8 @@ static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65])
     LONG status;
 
     signerHash[0] = 0;
+    *certDer = NULL;
+    *certLen = 0;
     memset(&fi, 0, sizeof(fi));
     fi.cbStruct = sizeof(fi);
     fi.pcwszFilePath = catPath;
@@ -86,7 +92,15 @@ static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65])
             CRYPT_PROVIDER_CERT *pc = sg ? WTHelperGetProvCertFromChain(sg, 0) : NULL;
 
             if (pc && pc->pCert && pc->pCert->pbCertEncoded)
+            {
                 LnSha256Hex(pc->pCert->pbCertEncoded, pc->pCert->cbCertEncoded, signerHash);
+                *certDer = malloc(pc->pCert->cbCertEncoded);
+                if (*certDer)
+                {
+                    memcpy(*certDer, pc->pCert->pbCertEncoded, pc->pCert->cbCertEncoded);
+                    *certLen = pc->pCert->cbCertEncoded;
+                }
+            }
         }
     }
     wd.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -153,6 +167,61 @@ static BOOL Covered(unsigned char (*digests)[32], size_t count, const char *hex)
     return FALSE;
 }
 
+/* RSA-SHA256 (PKCS#1 v1.5) signature of the manifest bytes by the signer's key.
+ * CryptoAPI wants the signature in little-endian order; the packaging tool writes big-endian. */
+static DWORD VerifyManifestSignature(const BYTE *certDer, DWORD certLen, const WCHAR *pkgDir)
+{
+    WCHAR *mp = LnJoin(pkgDir, L"manifest.json"), *sp = LnJoin(pkgDir, L"manifest.sig");
+    BYTE *man = NULL, *sig = NULL;
+    size_t mlen = 0, slen = 0, i;
+    PCCERT_CONTEXT ctx = NULL;
+    HCRYPTPROV prov = 0;
+    HCRYPTKEY key = 0;
+    HCRYPTHASH hash = 0;
+    DWORD err = LN_E_CATALOG_INVALID;
+
+    if (!mp || !sp)
+    {
+        err = ERROR_NOT_ENOUGH_MEMORY;
+        goto out;
+    }
+    if (!LnPathExists(sp))
+    {
+        err = LN_E_UNSIGNED;
+        goto out;
+    }
+    if (LnReadFileAll(mp, &man, &mlen) || LnReadFileAll(sp, &sig, &slen) || slen < 64 || slen > 1024)
+        goto out;
+    ctx = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, certDer, certLen);
+    if (!ctx)
+        goto out;
+    if (!CryptAcquireContextW(&prov, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
+        goto out;
+    if (!CryptImportPublicKeyInfo(prov, X509_ASN_ENCODING, &ctx->pCertInfo->SubjectPublicKeyInfo, &key))
+        goto out;
+    if (!CryptCreateHash(prov, CALG_SHA_256, 0, 0, &hash) || !CryptHashData(hash, man, (DWORD)mlen, 0))
+        goto out;
+    for (i = 0; i < slen / 2; i++)
+    {
+        BYTE tmp = sig[i];
+
+        sig[i] = sig[slen - 1 - i];
+        sig[slen - 1 - i] = tmp;
+    }
+    if (CryptVerifySignatureW(hash, sig, (DWORD)slen, key, NULL, 0))
+        err = ERROR_SUCCESS;
+out:
+    if (hash) CryptDestroyHash(hash);
+    if (key) CryptDestroyKey(key);
+    if (prov) CryptReleaseContext(prov, 0);
+    if (ctx) CertFreeCertificateContext(ctx);
+    free(man);
+    free(sig);
+    free(mp);
+    free(sp);
+    return err;
+}
+
 DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out)
 {
     LN_MANIFEST m;
@@ -160,6 +229,8 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256
     unsigned char (*digests)[32] = NULL;
     size_t ndigests = 0, i;
     char signer[65];
+    BYTE *certDer = NULL;
+    DWORD certLen = 0;
     LONG trust;
     DWORD err;
 
@@ -216,7 +287,7 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256
         err = LN_E_UNSIGNED;
         goto done;
     }
-    trust = TrustCatalogFile(catPath, signer);
+    trust = TrustCatalogFile(catPath, signer, &certDer, &certLen);
     if (trust == TRUST_E_NOSIGNATURE)
     {
         err = LN_E_UNSIGNED;
@@ -252,7 +323,9 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256
         err = LN_E_CERT_MISMATCH;
         goto done;
     }
-    err = ERROR_SUCCESS;
+
+    /* 6. the packaging signature of the manifest */
+    err = VerifyManifestSignature(certDer, certLen, pkgDir);
 
 done:
     if (!err && out)
@@ -260,6 +333,7 @@ done:
     else
         LnManifestFree(&m);
 done_nomanifest:
+    free(certDer);
     free(digests);
     free(manifestPath);
     free(catPath);

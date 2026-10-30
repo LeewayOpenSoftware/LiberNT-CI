@@ -330,10 +330,8 @@ void LnNowUtc(char out[32])
     PutNum(out + 8, st.wDay, 2);       out[10] = 'T';
     PutNum(out + 11, st.wHour, 2);     out[13] = ':';
     PutNum(out + 14, st.wMinute, 2);   out[16] = ':';
-    PutNum(out + 17, st.wSecond, 2);   out[19] = '.';
-    PutNum(out + 20, st.wMilliseconds, 3);
-    out[23] = 'Z';
-    out[24] = 0;
+    PutNum(out + 17, st.wSecond, 2);   out[19] = 'Z';
+    out[20] = 0;
 }
 
 WCHAR *LnJoin(const WCHAR *a, const WCHAR *b)

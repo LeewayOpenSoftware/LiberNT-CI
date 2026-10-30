@@ -119,7 +119,7 @@ typedef struct _LN_TARGET
     LN_TARGET_MODE mode;
     WCHAR root[MAX_PATH];         /* ends with a backslash */
     WCHAR servicing[MAX_PATH];    /* <root>LiberNT\Servicing */
-    char identity[65];            /* stable per target (see LnTargetOpen) */
+    char identity[65];            /* machineId: a GUID kept in target-id, stable per target */
 } LN_TARGET;
 
 /* Online: root = the drive of the running system. Image: an unmounted or offline root. */
@@ -144,6 +144,7 @@ typedef struct _LN_MANIFEST
     char releaseVersion[65];
     char type[24];                /* system-component | driver | tool */
     char architecture[16];
+    char baseVersion[32];         /* optional, copied into plan.target.base (default "0") */
     char certificateSha256[65];
     LN_ITEM *items;
     size_t itemCount;
@@ -162,21 +163,16 @@ DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65]);
 /* ---- journal.c --------------------------------------------------------- */
 typedef struct _LN_JENTRY
 {
-    long long sequence;
-    char transactionId[65];
-    char targetIdentity[65];
-    char packageId[65];
-    char packageVersion[65];
-    char manifestSha256[65];
-    char operation[24];           /* add-package | apply | rollback | remove-package */
+    long long sequence;           /* "seq" */
+    char transactionId[65];       /* "tx" */
     char phase[24];
+    long long op;                 /* sequence number of the operation, -1 = null */
     char result[12];              /* ok | error | pending */
-    BOOL rebootRequired;
-    BOOL healthConfirmed;
-    long long attempt;
-    char previousEntrySha256[65];
-    char timestampUtc[32];
-    char error[160];
+    char error[96];               /* "" = null; hex code, or unexpected-reboot | verifiable-failure */
+    char previousEntrySha256[65]; /* "prev" */
+    char timestampUtc[32];        /* "ts" */
+    BOOL rebootRequired;          /* derived: phase == pending-first-boot */
+    BOOL healthConfirmed;         /* derived: phase == confirmed */
 } LN_JENTRY;
 
 typedef struct _LN_JOURNAL
@@ -186,8 +182,9 @@ typedef struct _LN_JOURNAL
     BOOL tailTruncated;           /* last line was partial and was ignored */
 } LN_JOURNAL;
 
-void LnTransactionId(const char *targetIdentity, const char *packageId, const char *version,
-                     const char *manifestSha256, const char *operation, char out[65]);
+/* S1-CONTRACTS.md section 3: SHA-256 of machineId \n packageId \n version \n manifestDigest \n operation */
+void LnTransactionId(const char *machineId, const char *packageId, const char *version,
+                     const char *manifestDigest, const char *operation, char out[65]);
 DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e);                    /* fills sequence/prev/time */
 DWORD LnJournalRead(const LN_TARGET *t, LN_JOURNAL *j);
 void LnJournalFree(LN_JOURNAL *j);
@@ -195,6 +192,7 @@ const LN_JENTRY *LnJournalLast(const LN_JOURNAL *j, const char *transactionId);
 DWORD LnJournalWriteState(const LN_TARGET *t);                              /* derived view */
 
 /* ---- store.c ----------------------------------------------------------- */
+/* the object IS the file store\objects\<sha256> (S1-CONTRACTS.md plan.source) */
 DWORD LnStoreObjectPath(const LN_TARGET *t, const char *sha256, WCHAR **path);
 DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *m);   /* idempotent */
 DWORD LnStoreLoadManifest(const LN_TARGET *t, const char *packageId, const char *version, LN_MANIFEST *m);
@@ -216,24 +214,26 @@ DWORD LnServicingExportLog(const LN_TARGET *t, const WCHAR *destDir);
 extern BOOL LnTestLockedAsPending;
 
 /* ---- pending.c --------------------------------------------------------- */
+/* pending\attempt.json, S1-CONTRACTS.md section 5 */
 typedef struct _LN_ATTEMPT
 {
-    char transactionId[65];
-    long long bootAttemptCount;
-    long long unexpectedRestartCount;
-    long long verifiedFailureCount;
-    char lastStartUtc[32];
-    char lastOutcome[24];         /* started | completed | failed | unexpected-restart */
+    char transactionId[65];       /* "tx" */
+    long long attempt;
     BOOL healthConfirmed;
+    BOOL failureRecorded;
+    char lastResult[16];          /* started | applied | failed */
+    char previousResult[16];      /* lastResult found before this boot marked it (not stored) */
 } LN_ATTEMPT;
 
 DWORD LnServicingReadPendingPlan(const LN_TARGET *t, char **planJson);      /* free() */
 DWORD LnServicingReadAttempt(const LN_TARGET *t, LN_ATTEMPT *a);
+/* attempt+1 and lastResult=started, flushed BEFORE the applier operates (a power cut still counts) */
 DWORD LnServicingMarkBootStarted(const LN_TARGET *t, LN_ATTEMPT *a);
 DWORD LnServicingMarkBootOutcome(const LN_TARGET *t, BOOL verifiedFailure, BOOL completed);
 /* internal: written only after the final hashes were re-checked */
 DWORD LnAttemptSetHealth(const LN_TARGET *t, const char *transactionId);
-/* The rule of the stage: 2 attempts without health -> roll back; says why. */
+/* Evaluate BEFORE MarkBootStarted. healthConfirmed false and attempt >= 2 -> roll back;
+ * reason: verifiable-failure (failureRecorded) or unexpected-reboot. */
 BOOL LnServicingShouldRollback(const LN_ATTEMPT *a, const char **reason);
 
 #ifdef __cplusplus

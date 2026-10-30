@@ -1,13 +1,17 @@
 /*
  * PROJECT:     LiberNT Update - libservicing
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     pending\plan.json and pending\attempt.json (contract with LiberNTUpdatePending.exe)
+ * PURPOSE:     pending\plan.json and pending\attempt.json (S1-CONTRACTS.md sections 1 and 5)
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * This library writes the plan and the attempt marks; the boot applier (Kevin) consumes
- * them. Rule of the stage: two boot attempts without a health confirmation -> roll back.
- * A boot marked "started" that never reached an outcome is an unexpected restart (power cut,
- * reset): it is recorded and it consumes an attempt, but it is not a verifiable failure.
+ * attempt.json: {"schema":1,"tx":"<id>","attempt":N,"healthConfirmed":false,
+ *                "failureRecorded":false,"lastResult":"started|applied|failed"}
+ *
+ * The boot applier calls LnServicingShouldRollback BEFORE LnServicingMarkBootStarted. The mark
+ * writes attempt+1 and lastResult=started with a flush before anything is changed, so a power
+ * cut still consumes an attempt (a counter written only at the end of a run would never advance
+ * after a crash). healthConfirmed is written only by the service (LnServicingConfirmHealth)
+ * and resets attempt to 0.
  */
 
 #include "libservicing.h"
@@ -68,17 +72,16 @@ static DWORD WriteAttempt(const LN_TARGET *t, const LN_ATTEMPT *a)
     DWORD err = 0;
 
     LnBufInit(&b);
-    err |= LnBufAppendStr(&b, "{\"schemaVersion\":1,\"transactionId\":");
+    err |= LnBufAppendStr(&b, "{\"schema\":1,\"tx\":");
     err |= LnBufAppendJsonString(&b, a->transactionId);
-    LnI64ToStr(a->bootAttemptCount, num);
-    err |= LnBufAppendStr(&b, ",\"bootAttemptCount\":"); err |= LnBufAppendStr(&b, num);
-    LnI64ToStr(a->unexpectedRestartCount, num);
-    err |= LnBufAppendStr(&b, ",\"unexpectedRestartCount\":"); err |= LnBufAppendStr(&b, num);
-    LnI64ToStr(a->verifiedFailureCount, num);
-    err |= LnBufAppendStr(&b, ",\"verifiedFailureCount\":"); err |= LnBufAppendStr(&b, num);
-    err |= LnBufAppendStr(&b, ",\"lastStartUtc\":"); err |= LnBufAppendJsonString(&b, a->lastStartUtc);
-    err |= LnBufAppendStr(&b, ",\"lastOutcome\":"); err |= LnBufAppendJsonString(&b, a->lastOutcome);
-    err |= LnBufAppendStr(&b, a->healthConfirmed ? ",\"healthConfirmed\":true}\n" : ",\"healthConfirmed\":false}\n");
+    LnI64ToStr(a->attempt, num);
+    err |= LnBufAppendStr(&b, ",\"attempt\":");
+    err |= LnBufAppendStr(&b, num);
+    err |= LnBufAppendStr(&b, a->healthConfirmed ? ",\"healthConfirmed\":true" : ",\"healthConfirmed\":false");
+    err |= LnBufAppendStr(&b, a->failureRecorded ? ",\"failureRecorded\":true" : ",\"failureRecorded\":false");
+    err |= LnBufAppendStr(&b, ",\"lastResult\":");
+    err |= LnBufAppendJsonString(&b, a->lastResult);
+    err |= LnBufAppendStr(&b, "}\n");
     if (err)
     {
         LnBufFree(&b);
@@ -108,26 +111,23 @@ DWORD LnServicingReadAttempt(const LN_TARGET *t, LN_ATTEMPT *a)
     err = LnReadFileAll(path, &data, &len);
     free(path);
     if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
-        return LN_E_NOT_FOUND;
+        return LN_E_NOT_FOUND;                          /* absent = new plan, attempt 0 */
     if (err)
         return err;
     err = LnJsonParse((const char *)data, len, &root);
     free(data);
-    if (err || !root || root->type != LnJsonObject)
+    if (err || !root || root->type != LnJsonObject || !LnJsonGetInt(root, "schema", &v) || v != 1)
     {
         LnJsonFree(root);
         return LN_E_MANIFEST_INVALID;
     }
-    s = LnJsonGetString(root, "transactionId");
+    s = LnJsonGetString(root, "tx");
     if (s && LnIsSha256Hex(s)) strcpy(a->transactionId, s);
-    if (LnJsonGetInt(root, "bootAttemptCount", &v)) a->bootAttemptCount = v;
-    if (LnJsonGetInt(root, "unexpectedRestartCount", &v)) a->unexpectedRestartCount = v;
-    if (LnJsonGetInt(root, "verifiedFailureCount", &v)) a->verifiedFailureCount = v;
-    s = LnJsonGetString(root, "lastStartUtc");
-    if (s) { strncpy(a->lastStartUtc, s, sizeof(a->lastStartUtc) - 1); }
-    s = LnJsonGetString(root, "lastOutcome");
-    if (s) { strncpy(a->lastOutcome, s, sizeof(a->lastOutcome) - 1); }
+    if (LnJsonGetInt(root, "attempt", &v)) a->attempt = v;
     if (LnJsonGetBool(root, "healthConfirmed", &bv)) a->healthConfirmed = bv;
+    if (LnJsonGetBool(root, "failureRecorded", &bv)) a->failureRecorded = bv;
+    s = LnJsonGetString(root, "lastResult");
+    if (s) { strncpy(a->lastResult, s, sizeof(a->lastResult) - 1); }
     LnJsonFree(root);
     return ERROR_SUCCESS;
 }
@@ -149,15 +149,9 @@ DWORD LnServicingMarkBootStarted(const LN_TARGET *t, LN_ATTEMPT *a)
     else if (err)
         return err;
 
-    if (!strcmp(cur.lastOutcome, "started"))
-    {
-        /* the previous boot began and never finished: power cut or reset */
-        cur.unexpectedRestartCount++;
-        strcpy(cur.lastOutcome, "unexpected-restart");
-    }
-    cur.bootAttemptCount++;
-    LnNowUtc(cur.lastStartUtc);
-    strcpy(cur.lastOutcome, "started");
+    strcpy(cur.previousResult, cur.lastResult);         /* "started" here = the last boot never finished */
+    cur.attempt++;
+    strcpy(cur.lastResult, "started");
     err = WriteAttempt(t, &cur);                        /* flushed before the applier operates */
     if (!err && a)
         *a = cur;
@@ -173,11 +167,11 @@ DWORD LnServicingMarkBootOutcome(const LN_TARGET *t, BOOL verifiedFailure, BOOL 
         return err;
     if (verifiedFailure)
     {
-        cur.verifiedFailureCount++;
-        strcpy(cur.lastOutcome, "failed");
+        cur.failureRecorded = TRUE;
+        strcpy(cur.lastResult, "failed");
     }
     else if (completed)
-        strcpy(cur.lastOutcome, "completed");
+        strcpy(cur.lastResult, "applied");
     else
         return ERROR_INVALID_PARAMETER;
     return WriteAttempt(t, &cur);
@@ -190,22 +184,17 @@ BOOL LnServicingShouldRollback(const LN_ATTEMPT *a, const char **reason)
         *reason = "health-confirmed";
         return FALSE;
     }
-    if (a->verifiedFailureCount > 0)
+    if (a->attempt >= ATTEMPT_LIMIT)
     {
-        *reason = "verified-failure";
+        *reason = a->failureRecorded ? "verifiable-failure" : "unexpected-reboot";
         return TRUE;
     }
-    if (a->bootAttemptCount >= ATTEMPT_LIMIT)
-    {
-        *reason = a->unexpectedRestartCount > 0 ? "two-attempts-without-health-with-unexpected-restart"
-                                                : "two-attempts-without-health";
-        return TRUE;
-    }
-    *reason = a->unexpectedRestartCount > 0 ? "retry-after-unexpected-restart" : "within-limit";
+    *reason = "within-limit";
     return FALSE;
 }
 
-/* Called by LnServicingConfirmHealth after the final hashes were re-checked. */
+/* Called by LnServicingConfirmHealth after the final hashes were re-checked: the only writer of
+ * healthConfirmed. It resets the attempt counter. */
 DWORD LnAttemptSetHealth(const LN_TARGET *t, const char *transactionId)
 {
     LN_ATTEMPT cur;
@@ -215,12 +204,14 @@ DWORD LnAttemptSetHealth(const LN_TARGET *t, const char *transactionId)
     {
         memset(&cur, 0, sizeof(cur));
         strcpy(cur.transactionId, transactionId);
-        strcpy(cur.lastOutcome, "completed");
     }
     else if (err)
         return err;
     if (strcmp(cur.transactionId, transactionId))
         return ERROR_SUCCESS;                           /* attempt belongs to another transaction */
     cur.healthConfirmed = TRUE;
+    cur.failureRecorded = FALSE;
+    cur.attempt = 0;
+    strcpy(cur.lastResult, "applied");
     return WriteAttempt(t, &cur);
 }

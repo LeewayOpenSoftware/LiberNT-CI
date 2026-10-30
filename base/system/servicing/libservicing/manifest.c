@@ -84,6 +84,13 @@ DWORD LnManifestParse(const char *text, size_t len, LN_MANIFEST *m)
     s = LnJsonGetString(root, "architecture");
     if (!s || (strcmp(s, "amd64") && strcmp(s, "x86"))) goto bad;
     strcpy(m->architecture, s);
+    s = LnJsonGetString(root, "baseVersion");
+    if (s && IsId(s, 31))
+        strcpy(m->baseVersion, s);
+    else if (s)
+        goto bad;
+    else
+        strcpy(m->baseVersion, "0");
     s = LnJsonGetString(root, "certificateSha256");
     if (!s || !LnIsSha256Hex(s)) goto bad;
     strcpy(m->certificateSha256, s);

@@ -34,7 +34,7 @@ if (-not (Test-Path (Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx')) -or -no
 Write-Host '=== COMPILATION ==='
 $srcs = 'sha256','util','json','target','manifest','verify','journal','store','pending','servicing' | ForEach-Object { Join-Path $lib "$_.c" }
 $common = @('--target=x86_64-w64-mingw32', '-O1', '-Wall', '-Wextra', '-Wno-unused-parameter', '-Wno-sign-compare', '-municode')
-$libs = @('-lwintrust', '-lcrypt32')
+$libs = @('-lwintrust', '-lcrypt32', '-ladvapi32')
 $compileOk = $true
 
 function Invoke-Cc([string[]]$cargs, [string]$what) {
@@ -65,6 +65,8 @@ if (-not $SkipFixtures) {
     & $mk -OutDir "$fx\good1" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir | Out-Null
     & $mk -OutDir "$fx\tampered-payload" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -TamperPayloadAfterSigning | Out-Null
     & $mk -OutDir "$fx\tampered-manifest" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -TamperManifestAfterSigning | Out-Null
+    & $mk -OutDir "$fx\tampered-sig" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -TamperManifestSigAfterSigning | Out-Null
+    & $mk -OutDir "$fx\no-manifest-sig" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -NoManifestSig | Out-Null
     & $mk -OutDir "$fx\unsigned" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -Unsigned | Out-Null
     & $mk -OutDir "$fx\unsigned-catalog" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -UnsignedCatalog | Out-Null
     & $mk -OutDir "$fx\kernel" -PackageId ln.kernel -Version 1.0 -Items @(@{ Target = 'Windows\System32\ntoskrnl.exe'; Content = 'no' }) -KeyDir $KeyDir | Out-Null

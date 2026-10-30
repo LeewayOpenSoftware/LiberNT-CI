@@ -191,15 +191,15 @@ static void TestTransactionId(void)
 {
     char a[65], b[65], c[65], d[65];
 
-    Section("transaction id");
-    LnTransactionId("t", "p", "1", "m", "apply", a);
-    LnTransactionId("t", "p", "1", "m", "apply", b);
+    Section("transaction id (S1-CONTRACTS.md section 3)");
+    LnTransactionId("t", "p", "1", "m", "install", a);
+    LnTransactionId("t", "p", "1", "m", "install", b);
     LnTransactionId("t", "p", "1", "m", "rollback", c);
-    LnTransactionId("tp", "", "1", "m", "apply", d);        /* the NUL separator keeps fields apart */
+    LnTransactionId("tp", "", "1", "m", "install", d);      /* the separator keeps fields apart */
     CHECK(!strcmp(a, b) && strcmp(a, c) && strcmp(a, d));
     {
         char expect[65];
-        static const char raw[] = "t\0p\0" "1\0m\0apply";
+        static const char raw[] = "t\np\n1\nm\ninstall";   /* machineId \n packageId \n version \n digest \n operation */
 
         LnSha256Hex(raw, sizeof(raw) - 1, expect);
         CHECK(!strcmp(a, expect));
@@ -222,7 +222,6 @@ static void TestJournal(void)
     {
         memset(&e, 0, sizeof(e));
         strcpy(e.transactionId, "aa");
-        strcpy(e.operation, "apply");
         strcpy(e.phase, i == 0 ? "prepared" : i == 1 ? "applying" : "applied");
         strcpy(e.result, "ok");
         strcpy(e.error, "quote\" backslash\\ tab\t");
@@ -252,7 +251,7 @@ static void TestJournal(void)
     CHECK(j.count == 3 && j.tailTruncated);
     LnJournalFree(&j);
     memset(&e, 0, sizeof(e));
-    strcpy(e.transactionId, "aa"); strcpy(e.operation, "apply"); strcpy(e.phase, "confirmed"); strcpy(e.result, "ok");
+    strcpy(e.transactionId, "aa"); strcpy(e.phase, "confirmed"); strcpy(e.result, "ok");
     CHECK_ERR(0, LnJournalAppend(&t, &e));
     CHECK_ERR(0, LnJournalRead(&t, &j));
     CHECK(j.count == 4 && j.entries[3].sequence == 4);
@@ -277,7 +276,7 @@ static void TestJournal(void)
     for (i = 0; i < 3; i++)
     {
         memset(&e, 0, sizeof(e));
-        strcpy(e.transactionId, "bb"); strcpy(e.operation, "apply"); strcpy(e.phase, "applying"); strcpy(e.result, "ok");
+        strcpy(e.transactionId, "bb"); strcpy(e.phase, "applying"); strcpy(e.result, "ok");
         LnJournalAppend(&t, &e);
     }
     jp = LnTargetPath(&t, L"journal\\transactions.jsonl");
@@ -305,7 +304,7 @@ static void TestTarget(void)
     CHECK_ERR(ERROR_PATH_NOT_FOUND, LnTargetOpen(&a, LnTargetImage, root, FALSE));   /* no servicing tree yet */
     CHECK_ERR(0, LnTargetOpen(&a, LnTargetImage, root, TRUE));
     CHECK_ERR(0, LnTargetOpen(&b, LnTargetImage, root, FALSE));
-    CHECK(LnIsSha256Hex(a.identity) && !strcmp(a.identity, b.identity));
+    CHECK(strlen(a.identity) == 36 && a.identity[8] == '-' && !strcmp(a.identity, b.identity));   /* machineId GUID */
     CHECK_ERR(ERROR_PATH_NOT_FOUND, LnTargetOpen(&a, LnTargetImage, L"C:\\does\\not\\exist\\xyz", TRUE));
 }
 
@@ -337,6 +336,12 @@ static void TestVerify(void)
     free(p);
     p = Fx(L"tampered-manifest");
     CHECK_ERR(LN_E_CATALOG_INVALID, LnServicingVerifyPackage(p, pin, NULL));          /* not covered by the catalog */
+    free(p);
+    p = Fx(L"tampered-sig");
+    CHECK_ERR(LN_E_CATALOG_INVALID, LnServicingVerifyPackage(p, pin, NULL));          /* manifest.sig does not verify */
+    free(p);
+    p = Fx(L"no-manifest-sig");
+    CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, pin, NULL));                 /* manifest.sig missing */
     free(p);
     p = Fx(L"unsigned");
     CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, pin, NULL));                 /* no catalog at all */
@@ -433,7 +438,7 @@ static void TestLifecycle(void)
 
         wcscpy(bak, L"backup\\");
         wcscat(bak, w);
-        wcscat(bak, L"\\files\\0.bak");
+        wcscat(bak, L"\\0001");
         bp = LnTargetPath(&t, bak);
         CHECK(FileIs(bp, "original"));
         free(bp);
@@ -556,7 +561,7 @@ static void TestPendingPlan(void)
     const char *why;
     LN_JSON *root;
 
-    Section("locked target: pending-first-boot plan and attempt rules");
+    Section("locked target: pending-first-boot plan and attempt rules (S1-CONTRACTS.md 1, 5)");
     CHECK(OpenImage(&t, L"pending"));
     InstallTrust(&t);
     target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
@@ -582,18 +587,49 @@ static void TestPendingPlan(void)
     }
     CHECK_ERR(0, LnServicingReadPendingPlan(&t, &plan));
     CHECK_ERR(0, LnJsonParse(plan, strlen(plan), &root));
-    CHECK(!strcmp(LnJsonGetString(root, "transactionId"), tx));
-    CHECK(!strcmp(LnJsonGetString(root, "mode"), "apply"));
-    CHECK(!strcmp(LnJsonGetString(root, "certificateSha256"), "829459d8db6adc0a4fe7500e0572149e1d469b6a3707cf48e374b7660d754a34"));
     {
-        long long limit;
-        const LN_JSON *act = LnJsonGet(root, "actions");
+        long long schema;
+        BOOL rr;
+        const LN_JSON *ops = LnJsonGet(root, "operations"), *op0 = ops ? ops->child : NULL;
+        const LN_JSON *tg = LnJsonGet(root, "target"), *pk = LnJsonGet(root, "package");
+        char want[65], man[65];
 
-        CHECK(LnJsonGetInt(root, "attemptLimit", &limit) && limit == 2);
-        CHECK(act && act->child && !strcmp(LnJsonGetString(act->child, "kind"), "replace"));
-        CHECK(!strcmp(LnJsonGetString(act->child, "target"), "Windows\\System32\\lnfixture.dll"));
-        { char want[65]; LnSha256Hex("locked original", 15, want); CHECK(!strcmp(LnJsonGetString(act->child, "oldObjectSha256"), want)); }
-        CHECK(strlen(LnJsonGetString(act->child, "newObjectSha256")) == 64);
+        CHECK(LnJsonGetInt(root, "schema", &schema) && schema == 1);
+        CHECK(!strcmp(LnJsonGetString(root, "transactionId"), tx));
+        CHECK(!strcmp(LnJsonGetString(root, "operation"), "install"));
+        CHECK(LnJsonGetBool(root, "requiresReboot", &rr) && rr);
+        CHECK(!strcmp(LnJsonGetString(tg, "machineId"), t.identity) && !strcmp(LnJsonGetString(tg, "arch"), "amd64"));
+        CHECK(!strcmp(LnJsonGetString(tg, "line"), "main-nt10") && LnJsonGetString(tg, "base") != NULL);
+        CHECK(!strcmp(LnJsonGetString(pk, "id"), "ln.fixture") && !strcmp(LnJsonGetString(pk, "version"), "1.0"));
+        {
+            WCHAR *fx = Fx(L"good1\\manifest.json");
+            BYTE *d;
+            size_t n;
+
+            CHECK_ERR(0, LnReadFileAll(fx, &d, &n));
+            LnSha256Hex(d, n, man);
+            free(d);
+            free(fx);
+        }
+        CHECK(!strcmp(LnJsonGetString(pk, "digest"), man));
+        CHECK(op0 && !op0->next);                                                       /* only the locked item is deferred */
+        CHECK(!strcmp(LnJsonGetString(op0, "type"), "replace-file"));                  /* the file existed */
+        CHECK(!strcmp(LnJsonGetString(op0, "component"), "ln.fixture"));
+        CHECK(!strcmp(LnJsonGetString(op0, "target"), "\\Windows\\System32\\lnfixture.dll"));
+        LnSha256Hex("version one", 11, want);
+        CHECK(!strcmp(LnJsonGetString(op0, "sha256"), want));
+        {
+            char src[128], bk[128];
+
+            strcpy(src, "store/objects/");
+            strcat(src, want);
+            CHECK(!strcmp(LnJsonGetString(op0, "source"), src));
+            strcpy(bk, "backup/");
+            strcat(bk, tx);
+            strcat(bk, "/0001");
+            CHECK(!strcmp(LnJsonGetString(op0, "backup"), bk));
+        }
+        CHECK(strlen(LnJsonGetString(root, "signature")) > 300);                       /* base64 of an RSA-3072 signature */
     }
     LnJsonFree(root);
     free(plan);
@@ -603,32 +639,36 @@ static void TestPendingPlan(void)
     /* confirming before the boot applier did its work is refused: the hash is not final */
     CHECK_ERR(LN_E_VERIFY_FINAL, LnServicingConfirmHealth(&t, "ln.fixture", "1.0"));
 
-    /* boot attempt rules */
+    /* boot attempt rules: ShouldRollback is evaluated BEFORE MarkBootStarted */
+    CHECK_ERR(LN_E_NOT_FOUND, LnServicingReadAttempt(&t, &a));                         /* absent = new plan */
+    memset(&a, 0, sizeof(a));
+    CHECK(!LnServicingShouldRollback(&a, &why));
     CHECK_ERR(0, LnServicingMarkBootStarted(&t, &a));
-    CHECK(a.bootAttemptCount == 1 && !strcmp(a.lastOutcome, "started"));
-    CHECK(!LnServicingShouldRollback(&a, &why));                                       /* first attempt is within the limit */
-    /* the machine lost power: no outcome was written; the next boot finds "started" */
+    CHECK(a.attempt == 1 && !strcmp(a.lastResult, "started") && !a.failureRecorded);
+    /* the machine lost power: no result was written; the next boot reads attempt=1 */
+    CHECK_ERR(0, LnServicingReadAttempt(&t, &a));
+    CHECK(!LnServicingShouldRollback(&a, &why));                                       /* within the limit: try again */
     CHECK_ERR(0, LnServicingMarkBootStarted(&t, &a));
-    CHECK(a.bootAttemptCount == 2 && a.unexpectedRestartCount == 1 && a.verifiedFailureCount == 0);
-    CHECK(LnServicingShouldRollback(&a, &why));                                        /* 2 attempts, no health */
-    CHECK(strstr(why, "unexpected-restart") != NULL);
+    CHECK(a.attempt == 2 && !strcmp(a.previousResult, "started"));                     /* the last boot never finished */
+    /* a third boot without health confirmation: roll back, as an unexpected reboot */
+    CHECK_ERR(0, LnServicingReadAttempt(&t, &a));
+    CHECK(LnServicingShouldRollback(&a, &why) && !strcmp(why, "unexpected-reboot"));
 
-    /* an unexpected restart alone does not roll back immediately */
     {
         LN_ATTEMPT one;
 
         memset(&one, 0, sizeof(one));
-        one.bootAttemptCount = 1;
-        one.unexpectedRestartCount = 1;
+        one.attempt = 1;
         CHECK(!LnServicingShouldRollback(&one, &why));
-        one.verifiedFailureCount = 1;                                                  /* a verifiable failure does */
-        CHECK(LnServicingShouldRollback(&one, &why) && !strcmp(why, "verified-failure"));
+        one.attempt = 2;
+        one.failureRecorded = TRUE;                                                    /* a verifiable failure names itself */
+        CHECK(LnServicingShouldRollback(&one, &why) && !strcmp(why, "verifiable-failure"));
         one.healthConfirmed = TRUE;
         CHECK(!LnServicingShouldRollback(&one, &why));                                 /* health wins */
     }
     CHECK_ERR(0, LnServicingMarkBootOutcome(&t, TRUE, FALSE));
     CHECK_ERR(0, LnServicingReadAttempt(&t, &a));
-    CHECK(a.verifiedFailureCount == 1 && !strcmp(a.lastOutcome, "failed"));
+    CHECK(a.failureRecorded && !strcmp(a.lastResult, "failed"));
 
     /* rolling back a transaction that never reached the target removes the plan */
     CHECK_ERR(0, LnServicingRollback(&t, "ln.fixture", "1.0", tx));

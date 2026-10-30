@@ -128,7 +128,7 @@ static int CmdQuery(const LN_TARGET *t)
         strcpy(ver, bs + 1);
         if (!LnStoreLoadManifest(t, id, ver, &m))
         {
-            LnTransactionId(t->identity, id, ver, m.manifestSha256, "apply", txid);
+            LnTransactionId(t->identity, id, ver, m.manifestSha256, "install", txid);
             last = LnJournalLast(&j, txid);
             LnManifestFree(&m);
         }
@@ -164,10 +164,9 @@ static int CmdPending(const LN_TARGET *t)
         const char *why;
         BOOL rb = LnServicingShouldRollback(&a, &why);
 
-        printf("attempt: boots %lld, unexpected restarts %lld, verified failures %lld, last outcome %s, health %s\n",
-               a.bootAttemptCount, a.unexpectedRestartCount, a.verifiedFailureCount, a.lastOutcome,
-               a.healthConfirmed ? "confirmed" : "not confirmed");
-        printf("rollback decision: %s (%s)\n", rb ? "ROLL BACK" : "keep", why);
+        printf("attempt: %lld, last result %s, failure recorded %s, health %s\n", a.attempt, a.lastResult,
+               a.failureRecorded ? "yes" : "no", a.healthConfirmed ? "confirmed" : "not confirmed");
+        printf("rollback decision at the next boot: %s (%s)\n", rb ? "ROLL BACK" : "keep", why);
     }
     return 0;
 }

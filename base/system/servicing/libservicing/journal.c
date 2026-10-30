@@ -4,13 +4,16 @@
  * PURPOSE:     Append-only JSONL journal with a hash chain, and the derived state.json
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * One entry per line. Each append opens with FILE_APPEND_DATA, writes the whole line,
- * calls FlushFileBuffers and closes (S1-CORE.md). previousEntrySha256 is the SHA-256 of
- * the previous valid line, so a removed or altered entry breaks the chain.
+ * Format of S1-CONTRACTS.md section 2, one line per event:
+ *   {"seq":12,"prev":"<sha256 of line seq-1; genesis 64 zeros>","ts":"...Z","tx":"<id>",
+ *    "phase":"applying","op":3,"result":"ok","error":null}
+ * Each append opens with FILE_APPEND_DATA, writes the whole line, calls FlushFileBuffers and
+ * closes. prev is the SHA-256 of the previous valid line, so a removed or altered entry breaks
+ * the chain.
  *
- * A write torn by a power cut leaves a partial last line. The reader ignores an
- * unparseable line (tailTruncated is set), and the next append first terminates it with a
- * newline. A line that parses but does not continue the chain is corruption.
+ * A write torn by a power cut leaves a partial last line. The reader ignores an unparseable
+ * line (tailTruncated is set) and the next append first terminates it with a newline. A line
+ * that parses but does not continue the chain is corruption.
  */
 
 #include "libservicing.h"
@@ -20,51 +23,57 @@
 
 #define ZERO_HASH "0000000000000000000000000000000000000000000000000000000000000000"
 
-void LnTransactionId(const char *targetIdentity, const char *packageId, const char *version,
-                     const char *manifestSha256, const char *operation, char out[65])
+void LnTransactionId(const char *machineId, const char *packageId, const char *version,
+                     const char *manifestDigest, const char *operation, char out[65])
 {
     LN_BUF b;
 
     LnBufInit(&b);
-    LnBufAppend(&b, targetIdentity, strlen(targetIdentity) + 1);       /* include the NUL separator */
-    LnBufAppend(&b, packageId, strlen(packageId) + 1);
-    LnBufAppend(&b, version, strlen(version) + 1);
-    LnBufAppend(&b, manifestSha256, strlen(manifestSha256) + 1);
-    LnBufAppend(&b, operation, strlen(operation));                      /* last field: no trailing NUL */
+    LnBufAppendStr(&b, machineId);
+    LnBufAppendStr(&b, "\n");
+    LnBufAppendStr(&b, packageId);
+    LnBufAppendStr(&b, "\n");
+    LnBufAppendStr(&b, version);
+    LnBufAppendStr(&b, "\n");
+    LnBufAppendStr(&b, manifestDigest);
+    LnBufAppendStr(&b, "\n");
+    LnBufAppendStr(&b, operation);                      /* no trailing newline */
     LnSha256Hex(b.data, b.len, out);
     LnBufFree(&b);
 }
 
 static DWORD Serialize(const LN_JENTRY *e, LN_BUF *b)
 {
-    char num[32];
+    char num[24];
     DWORD err = 0;
 
-#define STR(name, val) do { err |= LnBufAppendStr(b, "\"" name "\":"); err |= LnBufAppendJsonString(b, val); err |= LnBufAppendStr(b, ","); } while (0)
-#define INT(name, val) do { LnI64ToStr((long long)(val), num); err |= LnBufAppendStr(b, "\"" name "\":"); err |= LnBufAppendStr(b, num); err |= LnBufAppendStr(b, ","); } while (0)
-#define BOOLV(name, val) do { err |= LnBufAppendStr(b, "\"" name "\":"); err |= LnBufAppendStr(b, (val) ? "true," : "false,"); } while (0)
-
-    err |= LnBufAppendStr(b, "{\"schemaVersion\":1,");
-    INT("sequence", e->sequence);
-    STR("transactionId", e->transactionId);
-    STR("targetIdentity", e->targetIdentity);
-    STR("packageId", e->packageId);
-    STR("packageVersion", e->packageVersion);
-    STR("manifestSha256", e->manifestSha256);
-    STR("operation", e->operation);
-    STR("phase", e->phase);
-    STR("result", e->result);
-    BOOLV("rebootRequired", e->rebootRequired);
-    BOOLV("healthConfirmed", e->healthConfirmed);
-    INT("attempt", e->attempt);
-    STR("previousEntrySha256", e->previousEntrySha256);
-    STR("timestampUtc", e->timestampUtc);
-    err |= LnBufAppendStr(b, "\"error\":");
-    err |= LnBufAppendJsonString(b, e->error);
+    err |= LnBufAppendStr(b, "{\"seq\":");
+    LnI64ToStr(e->sequence, num);
+    err |= LnBufAppendStr(b, num);
+    err |= LnBufAppendStr(b, ",\"prev\":");
+    err |= LnBufAppendJsonString(b, e->previousEntrySha256);
+    err |= LnBufAppendStr(b, ",\"ts\":");
+    err |= LnBufAppendJsonString(b, e->timestampUtc);
+    err |= LnBufAppendStr(b, ",\"tx\":");
+    err |= LnBufAppendJsonString(b, e->transactionId);
+    err |= LnBufAppendStr(b, ",\"phase\":");
+    err |= LnBufAppendJsonString(b, e->phase);
+    err |= LnBufAppendStr(b, ",\"op\":");
+    if (e->op < 0)
+        err |= LnBufAppendStr(b, "null");
+    else
+    {
+        LnI64ToStr(e->op, num);
+        err |= LnBufAppendStr(b, num);
+    }
+    err |= LnBufAppendStr(b, ",\"result\":");
+    err |= LnBufAppendJsonString(b, e->result);
+    err |= LnBufAppendStr(b, ",\"error\":");
+    if (e->error[0])
+        err |= LnBufAppendJsonString(b, e->error);
+    else
+        err |= LnBufAppendStr(b, "null");
     err |= LnBufAppendStr(b, "}");
-#undef STR
-#undef INT
-#undef BOOLV
     return err ? ERROR_NOT_ENOUGH_MEMORY : ERROR_SUCCESS;
 }
 
@@ -79,9 +88,7 @@ static void CopyField(char *dst, size_t cap, const char *src)
 static BOOL ParseEntry(const char *line, size_t len, LN_JENTRY *e)
 {
     LN_JSON *root = NULL;
-    long long v;
-    BOOL b;
-    const char *s;
+    const LN_JSON *op, *er;
 
     memset(e, 0, sizeof(*e));
     if (LnJsonParse(line, len, &root) || !root || root->type != LnJsonObject)
@@ -89,28 +96,24 @@ static BOOL ParseEntry(const char *line, size_t len, LN_JENTRY *e)
         LnJsonFree(root);
         return FALSE;
     }
-    if (!LnJsonGetInt(root, "schemaVersion", &v) || v != 1 || !LnJsonGetInt(root, "sequence", &e->sequence) ||
-        !LnJsonGetString(root, "transactionId") || !LnJsonGetString(root, "phase") ||
-        !LnJsonGetString(root, "previousEntrySha256"))
+    if (!LnJsonGetInt(root, "seq", &e->sequence) || !LnJsonGetString(root, "tx") ||
+        !LnJsonGetString(root, "phase") || !LnJsonGetString(root, "prev"))
     {
         LnJsonFree(root);
         return FALSE;
     }
-    CopyField(e->transactionId, sizeof(e->transactionId), LnJsonGetString(root, "transactionId"));
-    CopyField(e->targetIdentity, sizeof(e->targetIdentity), LnJsonGetString(root, "targetIdentity"));
-    CopyField(e->packageId, sizeof(e->packageId), LnJsonGetString(root, "packageId"));
-    CopyField(e->packageVersion, sizeof(e->packageVersion), LnJsonGetString(root, "packageVersion"));
-    CopyField(e->manifestSha256, sizeof(e->manifestSha256), LnJsonGetString(root, "manifestSha256"));
-    CopyField(e->operation, sizeof(e->operation), LnJsonGetString(root, "operation"));
+    CopyField(e->transactionId, sizeof(e->transactionId), LnJsonGetString(root, "tx"));
     CopyField(e->phase, sizeof(e->phase), LnJsonGetString(root, "phase"));
     CopyField(e->result, sizeof(e->result), LnJsonGetString(root, "result"));
-    CopyField(e->previousEntrySha256, sizeof(e->previousEntrySha256), LnJsonGetString(root, "previousEntrySha256"));
-    CopyField(e->timestampUtc, sizeof(e->timestampUtc), LnJsonGetString(root, "timestampUtc"));
-    s = LnJsonGetString(root, "error");
-    CopyField(e->error, sizeof(e->error), s);
-    if (LnJsonGetBool(root, "rebootRequired", &b)) e->rebootRequired = b;
-    if (LnJsonGetBool(root, "healthConfirmed", &b)) e->healthConfirmed = b;
-    LnJsonGetInt(root, "attempt", &e->attempt);
+    CopyField(e->previousEntrySha256, sizeof(e->previousEntrySha256), LnJsonGetString(root, "prev"));
+    CopyField(e->timestampUtc, sizeof(e->timestampUtc), LnJsonGetString(root, "ts"));
+    op = LnJsonGet(root, "op");
+    e->op = (op && op->type == LnJsonNumber) ? op->num : -1;
+    er = LnJsonGet(root, "error");
+    if (er && er->type == LnJsonString)
+        CopyField(e->error, sizeof(e->error), er->str);
+    e->rebootRequired = !strcmp(e->phase, "pending-first-boot");
+    e->healthConfirmed = !strcmp(e->phase, "confirmed");
     LnJsonFree(root);
     return TRUE;
 }
@@ -225,8 +228,6 @@ DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e)
     e->sequence = lastSeq + 1;
     strcpy(e->previousEntrySha256, lastHash);
     LnNowUtc(e->timestampUtc);
-    if (!e->targetIdentity[0])
-        strcpy(e->targetIdentity, t->identity);
 
     LnBufInit(&line);
     if (needsNewline)
@@ -293,18 +294,17 @@ DWORD LnJournalWriteState(const LN_TARGET *t)
     LN_BUF b;
     WCHAR *path;
     size_t i, k;
+    char num[24];
     DWORD err = LnJournalRead(t, &j);
 
     if (err)
         return err;
     LnBufInit(&b);
-    LnBufAppendStr(&b, "{\"schemaVersion\":1,\"derivedFromJournal\":true,\"entries\":");
-    {
-        char num[32];
-
-        LnI64ToStr((long long)j.count, num);
-        LnBufAppendStr(&b, num);
-    }
+    LnBufAppendStr(&b, "{\"schema\":1,\"derivedFromJournal\":true,\"machineId\":");
+    LnBufAppendJsonString(&b, t->identity);
+    LnI64ToStr((long long)j.count, num);
+    LnBufAppendStr(&b, ",\"entries\":");
+    LnBufAppendStr(&b, num);
     LnBufAppendStr(&b, ",\"transactions\":[");
     for (i = 0, k = 0; i < j.count; i++)
     {
@@ -321,20 +321,18 @@ DWORD LnJournalWriteState(const LN_TARGET *t)
             continue;                                   /* only the latest phase of each transaction */
         if (k++)
             LnBufAppendStr(&b, ",");
-        LnBufAppendStr(&b, "{\"transactionId\":");
+        LnBufAppendStr(&b, "{\"tx\":");
         LnBufAppendJsonString(&b, e->transactionId);
-        LnBufAppendStr(&b, ",\"packageId\":");
-        LnBufAppendJsonString(&b, e->packageId);
-        LnBufAppendStr(&b, ",\"packageVersion\":");
-        LnBufAppendJsonString(&b, e->packageVersion);
-        LnBufAppendStr(&b, ",\"operation\":");
-        LnBufAppendJsonString(&b, e->operation);
         LnBufAppendStr(&b, ",\"phase\":");
         LnBufAppendJsonString(&b, e->phase);
         LnBufAppendStr(&b, ",\"result\":");
         LnBufAppendJsonString(&b, e->result);
-        LnBufAppendStr(&b, e->rebootRequired ? ",\"rebootRequired\":true" : ",\"rebootRequired\":false");
-        LnBufAppendStr(&b, e->healthConfirmed ? ",\"healthConfirmed\":true}" : ",\"healthConfirmed\":false}");
+        LnBufAppendStr(&b, ",\"error\":");
+        if (e->error[0])
+            LnBufAppendJsonString(&b, e->error);
+        else
+            LnBufAppendStr(&b, "null");
+        LnBufAppendStr(&b, "}");
     }
     LnBufAppendStr(&b, "]}\n");
     LnJournalFree(&j);

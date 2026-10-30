@@ -31,7 +31,6 @@ DWORD LnStoreObjectPath(const LN_TARGET *t, const char *sha256, WCHAR **path)
         return ERROR_NOT_ENOUGH_MEMORY;
     wcscpy(rel, L"store\\objects\\");
     wcscat(rel, ws);
-    wcscat(rel, L"\\payload.bin");
     free(ws);
     *path = LnTargetPath(t, rel);
     return *path ? ERROR_SUCCESS : ERROR_NOT_ENOUGH_MEMORY;
@@ -112,6 +111,8 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
     {
         WCHAR *srcManifest = LnJoin(pkgDir, L"manifest.json");
         WCHAR *srcCat = LnJoin(pkgDir, L"catalog.cat");
+        WCHAR *srcSig = LnJoin(pkgDir, L"manifest.sig");
+        WCHAR *relS = PackageRel(L"manifests", m->packageId, m->releaseVersion, L"manifest.sig");
         WCHAR *relM = PackageRel(L"manifests", m->packageId, m->releaseVersion, L"manifest.json");
         WCHAR *relP = PackageRel(L"packages", m->packageId, m->releaseVersion, L"manifest.json");
         WCHAR *relC = PackageRel(L"packages", m->packageId, m->releaseVersion, L"catalog.cat");
@@ -119,23 +120,28 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
         if (srcManifest && srcCat && relM && relP && relC)
         {
             WCHAR *dM = LnTargetPath(t, relM), *dP = LnTargetPath(t, relP), *dC = LnTargetPath(t, relC);
+            WCHAR *dS = relS ? LnTargetPath(t, relS) : NULL;
 
             if (dM && dP && dC)
             {
                 err = LnCopyFileFlush(srcManifest, dM);
                 if (!err) err = LnCopyFileFlush(srcManifest, dP);
                 if (!err) err = LnCopyFileFlush(srcCat, dC);
+                if (!err && srcSig && dS) err = LnCopyFileFlush(srcSig, dS);
             }
             else
                 err = ERROR_NOT_ENOUGH_MEMORY;
             free(dM);
             free(dP);
             free(dC);
+            free(dS);
         }
         else
             err = ERROR_NOT_ENOUGH_MEMORY;
         free(srcManifest);
         free(srcCat);
+        free(srcSig);
+        free(relS);
         free(relM);
         free(relP);
         free(relC);

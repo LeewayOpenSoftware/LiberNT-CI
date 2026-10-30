@@ -66,6 +66,27 @@ BOOL LnTargetPathAllowed(const WCHAR *rel)
     return TRUE;
 }
 
+static BOOL IsGuid(const char *s)
+{
+    int i;
+
+    if (strlen(s) != 36)
+        return FALSE;
+    for (i = 0; i < 36; i++)
+    {
+        char c = s[i];
+
+        if (i == 8 || i == 13 || i == 18 || i == 23)
+        {
+            if (c != '-')
+                return FALSE;
+        }
+        else if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+            return FALSE;
+    }
+    return TRUE;
+}
+
 static DWORD MakeIdentity(const LN_TARGET *t, char out[65])
 {
     unsigned char seed[64];
@@ -88,7 +109,17 @@ static DWORD MakeIdentity(const LN_TARGET *t, char out[65])
     LnSha256Update(&c, seed, sizeof(seed));
     LnSha256Update(&c, t->root, wcslen(t->root) * sizeof(WCHAR));
     LnSha256Final(&c, h);
-    LnHexEncode(h, 32, out);
+    {
+        char hex[65];
+
+        LnHexEncode(h, 32, hex);                         /* GUID text from the first 16 bytes */
+        memcpy(out, hex, 8);       out[8] = '-';
+        memcpy(out + 9, hex + 8, 4);   out[13] = '-';
+        memcpy(out + 14, hex + 12, 4); out[18] = '-';
+        memcpy(out + 19, hex + 16, 4); out[23] = '-';
+        memcpy(out + 24, hex + 20, 12);
+        out[36] = 0;
+    }
     return ERROR_SUCCESS;
 }
 
@@ -135,13 +166,13 @@ DWORD LnTargetOpen(LN_TARGET *t, LN_TARGET_MODE mode, const WCHAR *imageRoot, BO
     err = LnReadFileAll(idPath, &data, &len);
     if (!err)
     {
-        if (len >= 64)
+        if (len >= 36)
         {
             char id[65];
 
-            memcpy(id, data, 64);
-            id[64] = 0;
-            if (LnIsSha256Hex(id))
+            memcpy(id, data, 36);
+            id[36] = 0;
+            if (IsGuid(id))
                 strcpy(t->identity, id);
             else
                 err = LN_E_MANIFEST_INVALID;
@@ -153,7 +184,7 @@ DWORD LnTargetOpen(LN_TARGET *t, LN_TARGET_MODE mode, const WCHAR *imageRoot, BO
     else if (create && (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND))
     {
         MakeIdentity(t, t->identity);
-        err = LnWriteFileAtomic(idPath, t->identity, 64);
+        err = LnWriteFileAtomic(idPath, t->identity, 36);
     }
     free(idPath);
     return err;
