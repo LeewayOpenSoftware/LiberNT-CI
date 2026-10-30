@@ -82,9 +82,7 @@ START_TEST(DrvStoreStaging)
     WCHAR PublishedPath[MAX_PATH];
     WCHAR RootBuffer[MAX_PATH];
     PWSTR LastSlash;
-    DWORD Length, Required, RepoLength;
-    SYSTEM_INFO SystemInfo;
-    HRESULT hr;
+    DWORD Required, RepoLength;
     BOOL Staged = FALSE;
 
     if (!IsUserAdmin())
@@ -109,17 +107,37 @@ START_TEST(DrvStoreStaging)
                       sizeof(TestSysContents) - sizeof(WCHAR), FALSE),
        "writing %ls failed with error %lu\n", SysPath, GetLastError());
 
-    GetNativeSystemInfo(&SystemInfo);
-    Length = RTL_NUMBER_OF(StoreInf);
-    hr = DriverStoreAddDriverPackageW(InfPath,
-                                      NULL,
-                                      NULL,
-                                      (WORD)SystemInfo.wProcessorArchitecture,
-                                      StoreInf,
-                                      &Length);
-    ok(SUCCEEDED(hr), "DriverStoreAddDriverPackageW failed with hr 0x%08lx\n", hr);
-    if (FAILED(hr))
-        goto cleanup;
+    /* Documented path: publish with SetupCopyOEMInfW, resolve the published
+     * name with SetupGetInfDriverStoreLocationW, remove with
+     * SetupUninstallOEMInfW. */
+    Required = 0;
+    if (SetupGetInfDriverStoreLocationW(L"lnpkg.inf", NULL, NULL,
+                                        StoreInf, RTL_NUMBER_OF(StoreInf),
+                                        &Required))
+    {
+        trace("lnpkg.inf was already published, reusing its store package\n");
+    }
+    else
+    {
+        if (!SetupCopyOEMInfW(InfPath, NULL, SPOST_NONE, 0,
+                              PublishedPath, RTL_NUMBER_OF(PublishedPath),
+                              NULL, NULL))
+        {
+            ok(0, "SetupCopyOEMInfW failed with error %lu\n", GetLastError());
+            goto cleanup;
+        }
+        LastSlash = wcsrchr(PublishedPath, L'\\');
+        if (!LastSlash)
+            goto cleanup;
+        Required = 0;
+        if (!SetupGetInfDriverStoreLocationW(LastSlash + 1, NULL, NULL,
+                                             StoreInf, RTL_NUMBER_OF(StoreInf),
+                                             &Required))
+        {
+            ok(0, "SetupGetInfDriverStoreLocationW failed with error %lu\n", GetLastError());
+            goto cleanup;
+        }
+    }
     Staged = TRUE;
 
     ok(PathExists(StoreInf), "staged package INF %ls does not exist\n", StoreInf);
@@ -155,8 +173,13 @@ START_TEST(DrvStoreStaging)
 cleanup:
     if (Staged)
     {
-        hr = DriverStoreDeleteDriverPackageW(StoreInf, NULL, NULL);
-        ok(SUCCEEDED(hr), "DriverStoreDeleteDriverPackageW failed with hr 0x%08lx\n", hr);
+        Required = 0;
+        if (SetupGetInfPublishedNameW(StoreInf, PublishedPath,
+                                      RTL_NUMBER_OF(PublishedPath), &Required))
+        {
+            ok(SetupUninstallOEMInfW(PublishedPath, SUOI_FORCEDELETE, NULL),
+               "SetupUninstallOEMInfW failed with error %lu\n", GetLastError());
+        }
         ok(!PathExists(StoreSys), "package binary %ls survived the delete\n", StoreSys);
     }
     DeleteFileW(InfPath);
