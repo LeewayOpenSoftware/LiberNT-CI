@@ -161,3 +161,38 @@ GetWsChangesEx(
     SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
     return FALSE;
 }
+
+HANDLE
+WINAPI
+CreateFileMappingNumaW(
+    _In_ HANDLE File,
+    _In_opt_ LPSECURITY_ATTRIBUTES Attributes,
+    _In_ DWORD Protect,
+    _In_ DWORD MaximumSizeHigh,
+    _In_ DWORD MaximumSizeLow,
+    _In_opt_ LPCWSTR Name,
+    _In_ DWORD PreferredNode)
+{
+    if (!IsUsablePreferredNode(PreferredNode))
+        return NULL;
+
+    /* A node that exists is accepted, but the section is not steered to it */
+    return CreateFileMappingW(File, Attributes, Protect, MaximumSizeHigh, MaximumSizeLow, Name);
+}
+
+HANDLE
+WINAPI
+CreateFileMappingNumaA(
+    _In_ HANDLE File,
+    _In_opt_ LPSECURITY_ATTRIBUTES Attributes,
+    _In_ DWORD Protect,
+    _In_ DWORD MaximumSizeHigh,
+    _In_ DWORD MaximumSizeLow,
+    _In_opt_ LPCSTR Name,
+    _In_ DWORD PreferredNode)
+{
+    if (!IsUsablePreferredNode(PreferredNode))
+        return NULL;
+
+    return CreateFileMappingA(File, Attributes, Protect, MaximumSizeHigh, MaximumSizeLow, Name);
+}

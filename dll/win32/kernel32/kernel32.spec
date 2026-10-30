@@ -141,8 +141,8 @@
 @ stdcall CreateFiberEx(long long long ptr ptr)
 @ stdcall CreateFileA(str long long ptr long long long)
 @ stdcall CreateFileMappingA(long ptr long long long str)
-@ stdcall -stub -version=0x600+ CreateFileMappingNumaA(ptr ptr long long long str long)
-@ stdcall -stub -version=0x600+ CreateFileMappingNumaW(ptr ptr long long long wstr long)
+@ stdcall -version=0x600+ CreateFileMappingNumaA(long ptr long long long str long) kernelbase.CreateFileMappingNumaA
+@ stdcall -version=0x600+ CreateFileMappingNumaW(long ptr long long long wstr long) kernelbase.CreateFileMappingNumaW
 @ stdcall CreateFileMappingW(long ptr long long long wstr)
 @ stdcall -version=0x600+ CreateFileTransactedA(str long long ptr long long ptr ptr ptr ptr)
 @ stdcall -version=0x600+ CreateFileTransactedW(wstr long long ptr long long ptr ptr ptr ptr)
