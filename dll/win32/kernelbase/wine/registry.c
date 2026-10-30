@@ -379,7 +379,16 @@ static NTSTATUS open_key( HKEY *retkey, HKEY root, UNICODE_STRING *name, DWORD o
     }
 
     if (root && (access & KEY_WOW64_32KEY) && !is_wow6432node( name ))
+    {
         status = open_wow6432node_parent( &subkey_root, root, options, access );
+#ifdef __REACTOS__
+        if (status)
+        {
+            subkey_root = root;
+            status = STATUS_SUCCESS;
+        }
+#endif
+    }
     else if (root && is_wow64 && !(access & KEY_WOW64_64KEY) && !is_wow6432node( name ))
     {
         subkey_root = open_wow6432node( root );

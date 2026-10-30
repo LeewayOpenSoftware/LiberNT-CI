@@ -4,6 +4,7 @@
  * PURPOSE:          Focus functions
  * FILE:             win32ss/user/ntuser/focus.c
  * PROGRAMER:        ReactOS Team
+ *                   Ahmed ARIF (arif.ing@outlook.com)
  */
 
 #include <win32k.h>
@@ -845,9 +846,7 @@ CanActivateForeground(PTHREADINFO pti)
    PPROCESSINFO ppi = pti->ppi;
 
    return pti->MessageQueue == gpqForeground ||
-          (gptiForeground && gptiForeground->ppi == ppi) ||
           (ptiLastInput && ptiLastInput->ppi == ppi) ||
-          gppiInputProvider == ppi ||
           ppi == ppiScrnSaver ||
           (pti->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD | TIF_ALLOWFOREGROUNDACTIVATE)) ||
           (ppi->W32PF_flags & W32PF_ALLOWFOREGROUNDACTIVATE);
@@ -1777,6 +1776,157 @@ IntAllowSetForegroundWindow(DWORD dwProcessId)
       ObDereferenceObject(Process);
    }
    return TRUE;
+}
+
+typedef struct _USER_PROCESS_START
+{
+   LIST_ENTRY ListEntry;
+   PEPROCESS Process;
+   BOOLEAN AllowForeground;
+   BOOLEAN ConsoleForeground;
+} USER_PROCESS_START, *PUSER_PROCESS_START;
+
+static LIST_ENTRY gProcessStartList = { &gProcessStartList, &gProcessStartList };
+
+static VOID
+IntFreeProcessStart(PUSER_PROCESS_START Start)
+{
+   RemoveEntryList(&Start->ListEntry);
+   ObDereferenceObject(Start->Process);
+   ExFreePoolWithTag(Start, USERTAG_PROCESSINFO);
+}
+
+static PUSER_PROCESS_START
+IntFindProcessStart(PEPROCESS Process)
+{
+   PLIST_ENTRY Entry, Next;
+   PUSER_PROCESS_START Start, Found = NULL;
+
+   for (Entry = gProcessStartList.Flink; Entry != &gProcessStartList; Entry = Next)
+   {
+      Next = Entry->Flink;
+      Start = CONTAINING_RECORD(Entry, USER_PROCESS_START, ListEntry);
+      if (Start->Process == Process)
+         Found = Start;
+      else if (PsGetProcessExitProcessCalled(Start->Process))
+         IntFreeProcessStart(Start);
+   }
+   return Found;
+}
+
+static PUSER_PROCESS_START
+IntGetProcessStart(PEPROCESS Process)
+{
+   PUSER_PROCESS_START Start = IntFindProcessStart(Process);
+
+   if (Start)
+      return Start;
+
+   Start = ExAllocatePoolWithTag(PagedPool, sizeof(*Start), USERTAG_PROCESSINFO);
+   if (!Start)
+      return NULL;
+
+   ObReferenceObject(Process);
+   Start->Process = Process;
+   Start->AllowForeground = FALSE;
+   Start->ConsoleForeground = FALSE;
+   InsertTailList(&gProcessStartList, &Start->ListEntry);
+   return Start;
+}
+
+static BOOL
+IntIsConsoleForeground(PEPROCESS Process)
+{
+   PPROCESSINFO ppi = PsGetProcessWin32Process(Process);
+   PUSER_PROCESS_START Start;
+
+   if (ppi && (ppi->W32PF_flags & W32PF_CONSOLEFOREGROUND))
+      return TRUE;
+
+   Start = IntFindProcessStart(Process);
+   return Start && Start->ConsoleForeground;
+}
+
+static BOOL
+IntCanStartForeground(PEPROCESS Process)
+{
+   PPROCESSINFO ppi = PsGetProcessWin32Process(Process);
+   PUSER_PROCESS_START Start;
+
+   if (!gptiForeground)
+      return TRUE;
+
+   if (ppi &&
+       (gptiForeground->ppi == ppi ||
+        (ptiLastInput && ptiLastInput->ppi == ppi) ||
+        gppiInputProvider == ppi ||
+        (ppi->W32PF_flags & (W32PF_ALLOWFOREGROUNDACTIVATE | W32PF_CONSOLEFOREGROUND))))
+   {
+      return TRUE;
+   }
+
+   Start = IntFindProcessStart(Process);
+   return Start && (Start->AllowForeground || Start->ConsoleForeground);
+}
+
+BOOL FASTCALL
+IntNotifyProcessCreate(PEPROCESS Process, PEPROCESS Creator, BOOL ConsoleApplication)
+{
+   PUSER_PROCESS_START Start = IntGetProcessStart(Process);
+
+   if (!Start)
+      return FALSE;
+
+   Start->AllowForeground = IntCanStartForeground(Creator);
+   Start->ConsoleForeground = ConsoleApplication && IntIsConsoleForeground(Creator);
+   return TRUE;
+}
+
+VOID FASTCALL
+IntApplyProcessStart(PPROCESSINFO ppi)
+{
+   PUSER_PROCESS_START Start = IntFindProcessStart(ppi->peProcess);
+
+   if (!Start)
+   {
+      ppi->W32PF_flags |= W32PF_ALLOWFOREGROUNDACTIVATE;
+      return;
+   }
+
+   if (Start->AllowForeground)
+      ppi->W32PF_flags |= W32PF_ALLOWFOREGROUNDACTIVATE;
+   if (Start->ConsoleForeground)
+      ppi->W32PF_flags |= W32PF_CONSOLEFOREGROUND;
+   IntFreeProcessStart(Start);
+}
+
+NTSTATUS FASTCALL
+IntSetConsoleForeground(PEPROCESS Process, BOOL Foreground)
+{
+   PPROCESSINFO ppi = PsGetProcessWin32Process(Process);
+   PUSER_PROCESS_START Start;
+
+   if (Foreground && !UserIsCsrProcess(PsGetCurrentProcess()) &&
+       !(gptiForeground && gptiForeground->ppi == PsGetCurrentProcessWin32Process()))
+   {
+      return STATUS_ACCESS_DENIED;
+   }
+
+   if (ppi)
+   {
+      if (Foreground)
+         ppi->W32PF_flags |= W32PF_CONSOLEFOREGROUND;
+      else
+         ppi->W32PF_flags &= ~W32PF_CONSOLEFOREGROUND;
+      return STATUS_SUCCESS;
+   }
+
+   Start = Foreground ? IntGetProcessStart(Process) : IntFindProcessStart(Process);
+   if (Start)
+      Start->ConsoleForeground = !!Foreground;
+   else if (Foreground)
+      return STATUS_NO_MEMORY;
+   return STATUS_SUCCESS;
 }
 
 /*

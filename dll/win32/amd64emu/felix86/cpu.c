@@ -52,6 +52,18 @@ EmuCoreGetRegisters(
     return (PEMU_REGISTERS)Felix86NtRegisters((FELIX86_NT_CPU *)Cpu);
 }
 
+PULONG64
+EmuCoreGetVectors(
+    _In_ PEMU_CPU Cpu,
+    _Out_ PULONG Stride)
+{
+    uint32_t Count;
+    PULONG64 Vectors = Felix86NtVectors((FELIX86_NT_CPU *)Cpu, &Count);
+
+    *Stride = Count;
+    return Vectors;
+}
+
 VOID
 EmuCoreGetContext(
     _In_ PEMU_CPU Cpu,
@@ -124,6 +136,21 @@ EmuCoreSetContext(
         Felix86NtRestoreFloating((FELIX86_NT_CPU *)Cpu, &Context->FltSave);
 }
 
+ULONG64
+EmuCoreGetFrame(
+    _In_ PEMU_CPU Cpu)
+{
+    return Felix86NtGetFrame((FELIX86_NT_CPU *)Cpu);
+}
+
+VOID
+EmuCoreSetFrame(
+    _In_ PEMU_CPU Cpu,
+    _In_ ULONG64 Frame)
+{
+    Felix86NtSetFrame((FELIX86_NT_CPU *)Cpu, Frame);
+}
+
 DECLSPEC_NORETURN
 VOID
 EmuCoreRun(
@@ -178,6 +205,7 @@ EmuCoreFault(
     Result = Felix86NtFault((FELIX86_NT_CPU *)Cpu, &Native, &Guest);
     if (Result == FELIX86_NT_FAULT_UNRELATED) return EmuFaultUnrelated;
     if (Result == FELIX86_NT_FAULT_RESUME) return EmuFaultResume;
+    if (Result == FELIX86_NT_FAULT_PARK) return EmuFaultPark;
 
     RtlZeroMemory(GuestRecord, sizeof(*GuestRecord));
     GuestRecord->ExceptionCode = Guest.Code;
@@ -190,9 +218,31 @@ EmuCoreFault(
 }
 
 VOID
+EmuCoreRequestPark(
+    _In_ PEMU_CPU Cpu)
+{
+    Felix86NtRequestPark((FELIX86_NT_CPU *)Cpu);
+}
+
+BOOLEAN
+EmuCoreCancelPark(
+    _In_ PEMU_CPU Cpu)
+{
+    return Felix86NtCancelPark((FELIX86_NT_CPU *)Cpu) != 0;
+}
+
+VOID
 Felix86NtSystemService(
     _In_ PVOID Owner,
     _Inout_ PULONG64 Registers)
 {
     EmuSystemService(Owner, (PEMU_REGISTERS)Registers);
+}
+
+VOID
+Felix86NtSystemService32(
+    _In_ PVOID Owner,
+    _Inout_ PULONG64 Registers)
+{
+    EmuFatal(STATUS_ILLEGAL_INSTRUCTION, "32-bit system call in an AMD64 process");
 }

@@ -50,6 +50,8 @@ set(WOW64_I386_EXECUTABLES
     doskey
     dxdiag
     eventcreate
+    emulation_gui
+    emulation_test
     eventvwr
     expand
     extrac32
@@ -134,6 +136,8 @@ endif()
 # payloads using the same convention) are unambiguous when launched manually.
 set(WOW64_I386_ARCH_COMMAND_TARGETS)
 foreach(_target IN ITEMS
+    emulation_gui
+    emulation_test
     glgears
     glmark2
     glmark2_runner

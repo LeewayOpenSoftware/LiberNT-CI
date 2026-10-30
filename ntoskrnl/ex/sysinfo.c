@@ -2998,12 +2998,12 @@ QSI_DEF(SystemEmulationProcessorInformation)
     if (NT_SUCCESS(Status))
     {
         PSYSTEM_PROCESSOR_INFORMATION Spi = (PSYSTEM_PROCESSOR_INFORMATION)Buffer;
-#if defined(_M_AMD64)
-        Spi->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_INTEL;
-#elif defined(_M_ARM64)
+#if defined(_M_ARM64)
         Spi->ProcessorArchitecture = (PsGetCurrentProcess()->Machine == IMAGE_FILE_MACHINE_I386) ?
                                      PROCESSOR_ARCHITECTURE_INTEL : PROCESSOR_ARCHITECTURE_ARM;
-#endif /* _M_AMD64 | _M_ARM64 */
+#else
+        Spi->ProcessorArchitecture = PROCESSOR_ARCHITECTURE_INTEL;
+#endif
     }
 #endif /* defined(_M_AMD64) || defined(_M_ARM64) */
 

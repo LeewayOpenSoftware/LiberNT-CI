@@ -6457,6 +6457,63 @@ static void test_saxreader_max_element_depth(void)
     ISAXXMLReader_Release(reader);
 }
 
+#ifdef __REACTOS__
+static void test_saxreader_parse_errors(void)
+{
+    static const struct
+    {
+        const WCHAR *xml;
+        HRESULT hr;
+    }
+    tests[] =
+    {
+        { L"<a xmlns=\"urn:a\" xmlns:p=\"urn:p\"><p:b xmlns:q=\"urn:q\" q:x=\"1\"><c>", 0xc00ce553 },
+        { L"<a><b><c>", 0xc00ce553 },
+        { L"<a>", 0xc00ce553 },
+        { L"<a>text", 0xc00ce553 },
+        { L"<a/><b>", 0xc00ce555 },
+        { L"<a/><b/>", 0xc00ce555 },
+        { L"<a/>text", 0xc00ce556 },
+        { L"<a/>&amp;", 0xc00ce556 },
+        { L"<!--", 0xc00ce561 },
+        { L"<a/><!--", 0xc00ce561 },
+        { L"<a><!--", 0xc00ce561 },
+        { L"<a><?pi", 0xc00ce55d },
+        { L"<a/><?pi", 0xc00ce55d },
+        { L"<a><![CDATA[x", 0xc00ce564 },
+        { L"<a></b>", 0xc00ce56d },
+        { L"", 0xc00ce558 },
+        { L"<?xml version=\"1.0\"?>", 0xc00ce558 },
+        { L"<a/><!DOCTYPE a>", 0xc00ce57e },
+        { L"<a>&amp", 0xc00ce559 },
+        { L"<a x=\"1", 0xc00ce560 },
+        { L"<a", 0xc00ce55e },
+        { L"</a>", 0xc00ce552 },
+        { L"<a/> ", S_OK },
+        { L"<a/><!-- c -->", S_OK },
+        { L"<a/><?pi x?>", S_OK },
+    };
+    ISAXXMLReader *reader;
+    unsigned int i;
+    HRESULT hr;
+    VARIANT v;
+
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        hr = CoCreateInstance(&CLSID_SAXXMLReader30, NULL, CLSCTX_INPROC_SERVER, &IID_ISAXXMLReader, (void **)&reader);
+        ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+
+        V_VT(&v) = VT_BSTR;
+        V_BSTR(&v) = SysAllocString(tests[i].xml);
+        hr = ISAXXMLReader_parse(reader, v);
+        ok(hr == tests[i].hr, "%u: %s: unexpected hr %#lx.\n", i, wine_dbgstr_w(tests[i].xml), hr);
+        VariantClear(&v);
+
+        ISAXXMLReader_Release(reader);
+    }
+}
+#endif
+
 START_TEST(saxreader)
 {
     ISAXXMLReader *reader;
@@ -6495,6 +6552,9 @@ START_TEST(saxreader)
     test_saxreader_dtd();
     test_saxreader_parse_input();
     test_saxreader_max_element_depth();
+#ifdef __REACTOS__
+    test_saxreader_parse_errors();
+#endif
 
     /* MXXMLWriter tests */
     get_class_support_data(mxwriter_support_data, &IID_IMXWriter);

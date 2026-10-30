@@ -1,0 +1,15 @@
+--- a/src/System.IO.Pipes/src/System/IO/Pipes/NamedPipeServerStream.cs
++++ b/src/System.IO.Pipes/src/System/IO/Pipes/NamedPipeServerStream.cs
+@@ -157,8 +157,11 @@
+         public System.IAsyncResult BeginWaitForConnection(AsyncCallback callback, object state) =>
+             TaskToApm.Begin(WaitForConnectionAsync(), callback, state);
+ 
+-        public void EndWaitForConnection(IAsyncResult asyncResult) =>
++        public void EndWaitForConnection(IAsyncResult asyncResult)
++        {
++            CheckConnectOperationsServer();
+             TaskToApm.End(asyncResult);
++        }
+ 
+         // Server can only connect from Disconnected state
+         [SuppressMessage("Microsoft.Security", "CA2122:DoNotIndirectlyExposeMethodsWithLinkDemands", Justification = "Consistent with security model")]

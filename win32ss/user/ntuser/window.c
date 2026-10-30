@@ -483,11 +483,7 @@ static void IntSendDestroyMsg(HWND hWnd)
       if ( ti->MessageQueue->spwndActive == Window || // Fixes CORE-106 RegSvr32 exit and return focus to CMD.
           (ti->MessageQueue->spwndActive == NULL && ti->MessageQueue == IntGetFocusMessageQueue()) )
       {
-         BOOL WasForeground = (ti->MessageQueue == IntGetFocusMessageQueue());
-
          co_WinPosActivateOtherWindow(Window);
-         if (WasForeground && IntGetFocusMessageQueue() != ti->MessageQueue)
-            ti->TIF_flags |= TIF_ALLOWFOREGROUNDACTIVATE;
       }
 
       if (ValidateHwndNoErr(hWnd) != Window) goto Cleanup;
@@ -806,7 +802,8 @@ LRESULT co_UserFreeWindow(PWND Window,
         (Menu = UserGetMenuObject((HMENU)Window->IDMenu)))
    {
       TRACE("UFW: IDMenu %p\n",Window->IDMenu);
-      IntDestroyMenuObject(Menu, TRUE);
+      if (Menu->hWnd != UserHMGetHandle(Window) || !IntUnlockWindowMenu(Menu))
+         IntDestroyMenuObject(Menu, TRUE);
       Window->IDMenu = 0;
    }
 
@@ -3178,11 +3175,20 @@ BOOLEAN co_UserDestroyWindow(PVOID Object)
 
    if (IntIsWindow(hWnd) && Window->head.pti == ti && ti->MessageQueue->spwndActive == Window)
    {
-      BOOL WasForeground = (ti->MessageQueue == IntGetFocusMessageQueue());
-
-      co_WinPosActivateOtherWindow(Window);
-      if (WasForeground && IntGetFocusMessageQueue() != ti->MessageQueue)
-         ti->TIF_flags |= TIF_ALLOWFOREGROUNDACTIVATE;
+      if (ti->MessageQueue == IntGetFocusMessageQueue())
+      {
+         co_WinPosActivateOtherWindow(Window);
+      }
+      if (IntIsWindow(hWnd) && ti->MessageQueue->spwndActive == Window &&
+          ti->MessageQueue != IntGetFocusMessageQueue())
+      {
+         ti->MessageQueue->spwndFocus = NULL;
+         ti->MessageQueue->spwndActive = NULL;
+         if (ti->MessageQueue->CaretInfo.hWnd)
+            co_IntDestroyCaret(ti);
+         else
+            IntNotifyWinEvent(EVENT_OBJECT_HIDE, NULL, OBJID_CARET, CHILDID_SELF, 0);
+      }
    }
 
    /* Adjust last active */

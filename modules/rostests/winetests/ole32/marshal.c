@@ -3621,6 +3621,14 @@ static void test_freethreadedmarshaler(void)
 
     ok_no_locks();
 
+#ifdef __REACTOS__
+    IStream_Seek(pStream, llZero, STREAM_SEEK_SET, NULL);
+    hr = IMarshal_ReleaseMarshalData(pFTMarshal, pStream);
+    ok_ole_success(hr, IMarshal_ReleaseMarshalData);
+
+    ok_no_locks();
+#endif
+
     /* inproc normal marshaling (for extraordinary cases) */
 
     IStream_Seek(pStream, llZero, STREAM_SEEK_SET, NULL);

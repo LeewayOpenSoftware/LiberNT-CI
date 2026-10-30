@@ -141,6 +141,43 @@ VIS_ComputeVisibleRegion(
    return VisRgn;
 }
 
+PREGION FASTCALL
+VIS_ComputeRedirectedRegion(
+   PWND Wnd,
+   BOOLEAN ClientArea)
+{
+   PREGION VisRgn, ClipRgn;
+   PWND Parent = Wnd->spwndParent;
+
+   if (!(Wnd->style & WS_VISIBLE) || !Parent || !(Parent->style & WS_VISIBLE))
+      return NULL;
+
+   VisRgn = IntSysCreateRectpRgnIndirect(ClientArea ? &Wnd->rcClient : &Wnd->rcWindow);
+   if (!VisRgn)
+      return NULL;
+
+   ClipRgn = IntSysCreateRectpRgnIndirect(&Parent->rcClient);
+   if (ClipRgn)
+   {
+      IntGdiCombineRgn(VisRgn, VisRgn, ClipRgn, RGN_AND);
+      REGION_Delete(ClipRgn);
+   }
+
+   if (Wnd->hrgnClip && !(Wnd->style & WS_MINIMIZE))
+   {
+      PREGION WndRgnClip = REGION_LockRgn(Wnd->hrgnClip);
+      if (WndRgnClip)
+      {
+          REGION_bOffsetRgn(VisRgn, -Wnd->rcWindow.left, -Wnd->rcWindow.top);
+          IntGdiCombineRgn(VisRgn, VisRgn, WndRgnClip, RGN_AND);
+          REGION_bOffsetRgn(VisRgn, Wnd->rcWindow.left, Wnd->rcWindow.top);
+          REGION_UnlockRgn(WndRgnClip);
+      }
+   }
+
+   return VisRgn;
+}
+
 VOID FASTCALL
 co_VIS_WindowLayoutChanged(
    PWND Wnd,
@@ -165,9 +202,32 @@ co_VIS_WindowLayoutChanged(
                          Wnd->rcWindow.top - Parent->rcClient.top);
 
        UserRefObjectCo(Parent, &Ref);
-       co_UserRedrawWindow(Parent, NULL, TempRgn,
-                           RDW_ERASE | RDW_INVALIDATE |
-                           RDW_ALLCHILDREN);
+       if (UserIsDesktopWindow(Parent) && IntCompositionIsEnabled())
+       {
+           PWND Child;
+           PREGION ChildRgn = IntIsWindowDrawable(Parent) ? IntSysCreateRectpRgn(0, 0, 0, 0) : NULL;
+
+           co_UserRedrawWindow(Parent, NULL, TempRgn,
+                               RDW_ERASE | RDW_INVALIDATE |
+                               RDW_NOCHILDREN);
+           for (Child = Parent->spwndChild; Child && ChildRgn; Child = Child->spwndNext)
+           {
+               if (!(Child->style & WS_VISIBLE) || IntCompositionGetRedirectSurface(Child))
+                   continue;
+               IntGdiCombineRgn(ChildRgn, TempRgn, NULL, RGN_COPY);
+               IntInvalidateWindows(Child, ChildRgn,
+                                    RDW_ERASE | RDW_FRAME | RDW_INVALIDATE |
+                                    RDW_ALLCHILDREN);
+           }
+           if (ChildRgn)
+               REGION_Delete(ChildRgn);
+       }
+       else
+       {
+           co_UserRedrawWindow(Parent, NULL, TempRgn,
+                               RDW_ERASE | RDW_INVALIDATE |
+                               RDW_ALLCHILDREN);
+       }
        UserDerefObjectCo(Parent);
 
        REGION_Delete(TempRgn);

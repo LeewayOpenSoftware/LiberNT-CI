@@ -32,7 +32,10 @@ if [ ! -d "$M/.git" ]; then
     git -C "$M" apply "$HERE/patches/mono-assemblybuilder-ignores-access-checks.patch"
     git -C "$M" apply "$HERE/patches/mono-registered-wait-thread.patch"
     git -C "$M" apply "$HERE/patches/mono-com-event-provider.patch"
+    git -C "$M" apply "$HERE/patches/mono-rcw-release-iunknown.patch"
+    git -C "$M" apply "$HERE/patches/mono-marshal-cleanup-unused-objects.patch"
     git -C "$E/corefx" apply "$HERE/patches/corefx-certificatechoices.patch"
+    git -C "$E/corefx" apply "$HERE/patches/corefx-pipe-end-wait-closed.patch"
 fi
 P="$W/wpf"
 if [ ! -d "$P/.git" ]; then
@@ -100,6 +103,9 @@ cp ../lib/net_4_x-win32/System.Security.dll /w/System.Security.patched.dll
 cd /w/mono/mcs/class/corlib && rm -f ../lib/net_4_x-win32/mscorlib.dll
 make PROFILE=net_4_x HOST_PLATFORM=win32 ENABLE_COMPILER_SERVER=0 BCL_OPTIMIZE=1 >/w/build-corlib.log 2>&1 || true
 cp ../lib/net_4_x-win32/mscorlib.dll /w/mscorlib.patched.dll
+cd /w/mono/mcs/class/System.Core && rm -f ../lib/net_4_x-win32/System.Core.dll
+make PROFILE=net_4_x HOST_PLATFORM=win32 ENABLE_COMPILER_SERVER=0 BCL_OPTIMIZE=1 >/w/build-core.log 2>&1 || true
+cp ../lib/net_4_x-win32/System.Core.dll /w/System.Core.patched.dll
 cp "$C" /w/tlbgen/
 mcs -nologo -r:"$C" -r:System.Core.dll -out:/w/tlbgen/comshape.exe /w/tlbgen/comshape.cs
 mcs -nologo -r:"$C" -r:System.Core.dll -out:/w/tlbgen/tlbgen.exe /w/tlbgen/tlbgen.cs

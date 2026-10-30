@@ -252,6 +252,9 @@ KeUserModeCallback(
     ASSERT(KeGetCurrentThread()->ApcState.KernelApcInProgress == FALSE);
     ASSERT(KeGetPreviousMode() == UserMode);
 
+    if (KeGetCurrentThread()->CallbackNestingLevel >= KI_MAX_USER_CALLBACK_NESTING)
+        return STATUS_STACK_OVERFLOW;
+
     /* Get the current user-mode stack */
     UserStackPointer = KiGetUserModeStackAddress();
     OldStack = *UserStackPointer;
@@ -288,7 +291,9 @@ KeUserModeCallback(
 
         /* Jump to user mode */
         *UserStackPointer = (ULONG_PTR)CalloutFrame;
+        KeGetCurrentThread()->CallbackNestingLevel++;
         CallbackStatus = KiCallUserMode(Result, ResultLength);
+        KeGetCurrentThread()->CallbackNestingLevel--;
         if (CallbackStatus != STATUS_CALLBACK_POP_STACK)
         {
 #ifdef _M_IX86

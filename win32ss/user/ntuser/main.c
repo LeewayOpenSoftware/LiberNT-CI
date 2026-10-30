@@ -191,8 +191,7 @@ UserProcessCreate(PEPROCESS Process)
         }
     }
 
-    // FIXME: check if this process is allowed.
-    ppiCurrent->W32PF_flags |= W32PF_ALLOWFOREGROUNDACTIVATE; // Starting application will get it toggled off.
+    IntApplyProcessStart(ppiCurrent);
 
     return STATUS_SUCCESS;
 }

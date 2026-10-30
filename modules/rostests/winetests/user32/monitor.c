@@ -201,9 +201,16 @@ static void test_enumdisplaydevices_adapter(int index, const DISPLAY_DEVICEA *de
            "#%d: got %s\n", index, device->DeviceID);
     else
     {
+#ifdef __REACTOS__
+        ok(broken(strlen(device->DeviceID) == 0) || /* XP on Testbot returns an empty string, whereas real machine doesn't */
+           broken(!_stricmp(device->DeviceID, "ROOT\\BasicDisplay")) ||
+           sscanf(device->DeviceID, "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%08X&REV_%02X", &vendor_id, &device_id, &subsys_id,
+                  &revision_id) == 4, "#%d: wrong DeviceID %s\n", index, device->DeviceID);
+#else
         ok(broken(strlen(device->DeviceID) == 0) || /* XP on Testbot returns an empty string, whereas real machine doesn't */
            sscanf(device->DeviceID, "PCI\\VEN_%04X&DEV_%04X&SUBSYS_%08X&REV_%02X", &vendor_id, &device_id, &subsys_id,
                   &revision_id) == 4, "#%d: wrong DeviceID %s\n", index, device->DeviceID);
+#endif
     }
 }
 

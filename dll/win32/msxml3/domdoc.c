@@ -1645,6 +1645,9 @@ static HRESULT WINAPI domdoc_loadXML(IXMLDOMDocument3 *iface, BSTR data, VARIANT
         domnode_create(NODE_DOCUMENT, NULL, 0, NULL, 0, NULL, &node);
         node->properties = domdoc_create_properties(doc->node->properties->version);
         attach_doc_node(doc, node);
+#ifdef __REACTOS__
+        doc->error = E_SAX_MISSINGROOT;
+#endif
 
         hr = S_FALSE;
     }

@@ -21,7 +21,7 @@ extern LONG EmuTestFailures;
         if (!(Expression)) \
         { \
             InterlockedIncrement(&EmuTestFailures); \
-            printf("EMUTEST: FAIL %s:%u error=%lu\n", __FILE__, __LINE__, GetLastError()); \
+            printf("EMUTEST: FAIL %s:%d error=%lu\n", __FILE__, __LINE__, GetLastError()); \
         } \
     } while (0)
 

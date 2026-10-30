@@ -1809,7 +1809,14 @@ static void test_GetMouseMovePointsEx( char **argv )
     SetCursorPos( 30, 30 );
     SetCursorPos( in.x, in.y );
     SetCursorPos( 150, 150 );
+#ifdef __REACTOS__
+    {
+        DWORD tick = GetTickCount();
+        do Sleep( 3 ); while (GetTickCount() == tick);
+    }
+#else
     Sleep( 3 );
+#endif
     SetCursorPos( in.x, in.y );
 
     retval = pGetMouseMovePointsEx( sizeof(MOUSEMOVEPOINT), &in, out, BUFLIM, GMMP_USE_DISPLAY_POINTS );

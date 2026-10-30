@@ -76,6 +76,7 @@
 @ stdcall -version=0x601+ CloseTouchInputHandle(ptr)
 @ stdcall CloseWindow(long)
 @ stdcall CloseWindowStation(long) NtUserCloseWindowStation
+@ stdcall ConsoleControl(long ptr long) NtUserConsoleControl
 @ stdcall CopyAcceleratorTableA(long ptr long)
 @ stdcall CopyAcceleratorTableW(long ptr long) NtUserCopyAcceleratorTable
 @ stdcall CopyIcon(long)

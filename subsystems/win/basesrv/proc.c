@@ -180,7 +180,7 @@ CSR_API(BaseSrvCreateProcess)
     if (UserNotifyProcessCreate)
     {
         UserNotifyProcessCreate(CreateProcessRequest->ClientId.UniqueProcess,
-                                Process->ClientId.UniqueThread,
+                                CsrThread->ClientId.UniqueThread,
                                 0,
                                 Flags);
     }

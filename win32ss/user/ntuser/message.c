@@ -1282,6 +1282,26 @@ co_IntPeekMessage( PMSG Msg,
            pti->pcti->fsChangeBits &= ~QS_INPUT;
         }
 
+        /* Now check for System Event messages. */
+        {
+           LONG_PTR eExtraInfo;
+           MSG eMsg;
+           DWORD dwQEvent;
+           if (MsqPeekMessage( pti,
+                               TRUE,
+                               Window,
+                               0,
+                               0,
+                               QS_EVENT,
+                              &eExtraInfo,
+                              &dwQEvent,
+                              &eMsg ))
+           {
+              handle_internal_events( pti, Window, dwQEvent, eExtraInfo, &eMsg);
+              continue;
+           }
+        }
+
         /* Now check for normal messages. */
         if (( (ProcessMask & QS_POSTMESSAGE) ||
               (ProcessMask & QS_HOTKEY) ||
@@ -1332,26 +1352,6 @@ co_IntPeekMessage( PMSG Msg,
                                        Msg))
         {
             goto GotHardwareMessage;
-        }
-
-        /* Now check for System Event messages. */
-        {
-           LONG_PTR eExtraInfo;
-           MSG eMsg;
-           DWORD dwQEvent;
-           if (MsqPeekMessage( pti,
-                               TRUE,
-                               Window,
-                               0,
-                               0,
-                               QS_EVENT,
-                              &eExtraInfo,
-                              &dwQEvent,
-                              &eMsg ))
-           {
-              handle_internal_events( pti, Window, dwQEvent, eExtraInfo, &eMsg);
-              continue;
-           }
         }
 
         /* Check for sent messages again. */

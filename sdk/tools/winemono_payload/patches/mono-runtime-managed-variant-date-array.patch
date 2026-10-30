@@ -1,0 +1,50 @@
+--- a/mono/metadata/marshal-ilgen.c
++++ b/mono/metadata/marshal-ilgen.c
+@@ -2945,6 +2945,8 @@
+ 
+ 		if (is_string)
+ 			esize = TARGET_SIZEOF_VOID_P;
++		else if (eklass == mono_class_get_date_time_class ())
++			esize = sizeof (double);
+ 		else
+ 			esize = mono_class_native_size (eklass, NULL);
+ 		src_ptr = mono_mb_add_local (mb, int_type);
+@@ -3001,6 +3003,14 @@
+ 			mono_mb_emit_icall_id (mb, conv_to_icall (conv, NULL));
+ 			mono_mb_emit_byte (mb, CEE_STELEM_REF);
+ 		}
++		else if (eklass == mono_class_get_date_time_class ()) {
++			mono_mb_emit_ldloc (mb, conv_arg);
++			mono_mb_emit_ldloc (mb, index_var);
++			mono_mb_emit_ldloc (mb, src_ptr);
++			mono_mb_emit_byte (mb, CEE_LDIND_R8);
++			mono_mb_emit_managed_call (mb, get_method_nofail (eklass, "FromOADate", 1, 0), NULL);
++			mono_mb_emit_op (mb, CEE_STELEM, eklass);
++		}
+ 		else if (m_class_get_byval_arg (eklass)->type == MONO_TYPE_VALUETYPE) {
+ 			mono_mb_emit_ldloc (mb, src_ptr);
+ 			mono_mb_emit_stloc (mb, 0);
+@@ -3087,6 +3097,8 @@
+ 
+ 		if (is_string)
+ 			esize = TARGET_SIZEOF_VOID_P;
++		else if (eklass == mono_class_get_date_time_class ())
++			esize = sizeof (double);
+ 		else
+ 			esize = mono_class_native_size (eklass, NULL);
+ 
+@@ -3146,6 +3158,14 @@
+ 			mono_mb_emit_icall_id (mb, conv_to_icall (conv, &stind_op));
+ 			mono_mb_emit_byte (mb, stind_op);
+ 		}
++		else if (eklass == mono_class_get_date_time_class ()) {
++			mono_mb_emit_ldloc (mb, dest_ptr);
++			mono_mb_emit_ldloc (mb, conv_arg);
++			mono_mb_emit_ldloc (mb, index_var);
++			mono_mb_emit_op (mb, CEE_LDELEMA, eklass);
++			mono_mb_emit_managed_call (mb, get_method_nofail (eklass, "ToOADate", 0, 0), NULL);
++			mono_mb_emit_byte (mb, CEE_STIND_R8);
++		}
+ 		else if (m_class_get_byval_arg (eklass)->type == MONO_TYPE_VALUETYPE) {
+ 			mono_mb_emit_ldloc (mb, conv_arg);
+ 			mono_mb_emit_ldloc (mb, index_var);

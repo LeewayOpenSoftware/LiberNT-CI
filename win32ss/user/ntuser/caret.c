@@ -176,7 +176,7 @@ co_IntDestroyCaret(PTHREADINFO Win32Thread)
    USER_REFERENCE_ENTRY Ref;
    ThreadQueue = Win32Thread->MessageQueue;
 
-   if (!ThreadQueue)
+   if (!ThreadQueue || !ThreadQueue->CaretInfo.hWnd)
       return FALSE;
 
    OldCaret = ThreadQueue->CaretInfo;

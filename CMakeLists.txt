@@ -366,6 +366,8 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     # We're using widl now for both MSVC and GCC builds
     include(sdk/cmake/widl-support.cmake)
 
+    include(sdk/cmake/rv64x.cmake)
+
     include_directories(
         sdk/include
         sdk/include/crt

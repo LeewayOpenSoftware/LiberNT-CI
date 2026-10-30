@@ -1,0 +1,495 @@
+diff --git a/llvm/lib/Target/RISCV/CMakeLists.txt b/llvm/lib/Target/RISCV/CMakeLists.txt
+index e1e705ed..35b91978 100644
+--- a/llvm/lib/Target/RISCV/CMakeLists.txt
++++ b/llvm/lib/Target/RISCV/CMakeLists.txt
+@@ -35,6 +35,7 @@ add_llvm_target(RISCVCodeGen
+   RISCVCallingConv.cpp
+   RISCVCodeGenPassBuilder.cpp
+   RISCVCodeGenPrepare.cpp
++  RISCVRv64X.cpp
+   RISCVConstantPoolValue.cpp
+   RISCVDeadRegisterDefinitions.cpp
+   RISCVExpandPseudoAtomics.cpp
+diff --git a/llvm/lib/Target/RISCV/RISCV.h b/llvm/lib/Target/RISCV/RISCV.h
+index 9d443c06..c4084d3b 100644
+--- a/llvm/lib/Target/RISCV/RISCV.h
++++ b/llvm/lib/Target/RISCV/RISCV.h
+@@ -39,6 +39,9 @@ public:
+ FunctionPass *createRISCVCodeGenPrepareLegacyPass();
+ void initializeRISCVCodeGenPrepareLegacyPass(PassRegistry &);
+ 
++ModulePass *createRISCVRv64XPass();
++void initializeRISCVRv64XPass(PassRegistry &);
++
+ FunctionPass *createRISCVDeadRegisterDefinitionsPass();
+ void initializeRISCVDeadRegisterDefinitionsPass(PassRegistry &);
+ 
+diff --git a/llvm/lib/Target/RISCV/RISCVRv64X.cpp b/llvm/lib/Target/RISCV/RISCVRv64X.cpp
+new file mode 100644
+index 00000000..dc034299
+--- /dev/null
++++ b/llvm/lib/Target/RISCV/RISCVRv64X.cpp
+@@ -0,0 +1,442 @@
++//===-- RISCVRv64X.cpp - Hybrid x64 interoperability for RISC-V ----------===//
++//
++// Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
++// See https://llvm.org/LICENSE.txt for license information.
++// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
++//
++//===----------------------------------------------------------------------===//
++//
++// RV64X keeps the native LP64 calling convention and adds what an emulator of
++// x64 code needs to call into native code and back:
++//
++//  * Every externally visible or address-taken function gets a 16-byte entry
++//    descriptor as prefix data, recording how each argument and the result
++//    travel, so x64 code can call it through the emulator.
++//  * Every indirect call first tests the target against the process code
++//    bitmap (TEB->ProcessEnvironmentBlock->EcCodeBitMap). Targets that are not
++//    native code are reached through an exit thunk that hands the arguments
++//    and the descriptor to __rv64x_call_x64. Processes without a bitmap only
++//    pay one load and a branch.
++//
++//===----------------------------------------------------------------------===//
++
++#include "RISCV.h"
++#include "llvm/ADT/SmallVector.h"
++#include "llvm/ADT/Statistic.h"
++#include "llvm/IR/Constants.h"
++#include "llvm/IR/IRBuilder.h"
++#include "llvm/IR/Instructions.h"
++#include "llvm/IR/IntrinsicInst.h"
++#include "llvm/IR/Intrinsics.h"
++#include "llvm/IR/MDBuilder.h"
++#include "llvm/IR/Module.h"
++#include "llvm/Pass.h"
++#include "llvm/Support/CommandLine.h"
++#include "llvm/Support/Format.h"
++#include "llvm/Support/raw_ostream.h"
++#include "llvm/Transforms/Utils/BasicBlockUtils.h"
++
++using namespace llvm;
++
++#define DEBUG_TYPE "riscv-rv64x"
++
++STATISTIC(NumDescriptors, "Number of RV64X entry descriptors");
++STATISTIC(NumCheckedCalls, "Number of RV64X checked indirect calls");
++STATISTIC(NumUncheckedCalls, "Number of indirect calls RV64X cannot check");
++
++static cl::opt<bool> EnableRv64X("riscv-rv64x", cl::Hidden, cl::init(false),
++                                 cl::desc("Emit RV64X entry descriptors and "
++                                          "checked indirect calls"));
++
++namespace {
++
++enum Rv64XKind : uint8_t {
++  KindVoid = 0,
++  KindInt64 = 1,
++  KindInt32 = 2,
++  KindInt16 = 3,
++  KindUInt16 = 4,
++  KindInt8 = 5,
++  KindUInt8 = 6,
++  KindFloat = 7,
++  KindDouble = 8,
++  KindPair = 9,
++  KindUnsupported = 15,
++};
++
++enum : uint8_t {
++  FlagVariadic = 0x10,
++  FlagStructReturn = 0x20,
++  FlagUnsupported = 0x40,
++};
++
++constexpr unsigned MaxArguments = 24;
++constexpr uint16_t DescriptorMagic = 0x5852;
++constexpr uint64_t TebPebOffset = 0x60;
++constexpr uint64_t PebCodeBitmapOffset = 0x368;
++
++struct Descriptor {
++  uint8_t Bytes[16] = {};
++  bool Supported = true;
++};
++
++class RISCVRv64X : public ModulePass {
++public:
++  static char ID;
++  RISCVRv64X() : ModulePass(ID) {}
++  bool runOnModule(Module &M) override;
++  StringRef getPassName() const override { return "RISC-V RV64X lowering"; }
++
++private:
++  Module *Mod = nullptr;
++  Type *I64Ty = nullptr;
++  PointerType *PtrTy = nullptr;
++  FunctionCallee CallX64;
++
++  uint8_t classify(Type *Ty, AttributeSet Attrs) const;
++  Descriptor describe(FunctionType *FnTy, AttributeList Attrs,
++                      ArrayRef<Type *> ArgTypes) const;
++  Constant *descriptorConstant(const Descriptor &D) const;
++  Function *getExitThunk(const Descriptor &D, FunctionType *CallTy,
++                         AttributeList Attrs);
++  Value *widen(IRBuilder<> &B, Value *V, uint8_t Kind) const;
++  Value *narrow(IRBuilder<> &B, Value *V, Type *Ty, uint8_t Kind) const;
++  bool checkCall(CallInst *CI);
++};
++
++} // end anonymous namespace
++
++char RISCVRv64X::ID = 0;
++
++INITIALIZE_PASS(RISCVRv64X, DEBUG_TYPE, "RISC-V RV64X lowering", false, false)
++
++ModulePass *llvm::createRISCVRv64XPass() { return new RISCVRv64X(); }
++
++uint8_t RISCVRv64X::classify(Type *Ty, AttributeSet Attrs) const {
++  if (Ty->isVoidTy())
++    return KindVoid;
++  if (Ty->isPointerTy())
++    return KindInt64;
++  if (Ty->isFloatTy())
++    return KindFloat;
++  if (Ty->isDoubleTy())
++    return KindDouble;
++  if (auto *IT = dyn_cast<IntegerType>(Ty)) {
++    bool Zero = Attrs.hasAttribute(Attribute::ZExt);
++    switch (IT->getBitWidth()) {
++    case 64:
++      return KindInt64;
++    case 32:
++      return KindInt32;
++    case 16:
++      return Zero ? KindUInt16 : KindInt16;
++    case 8:
++      return Zero ? KindUInt8 : KindInt8;
++    case 1:
++      return KindUInt8;
++    case 128:
++      return KindPair;
++    default:
++      return KindUnsupported;
++    }
++  }
++  if (auto *AT = dyn_cast<ArrayType>(Ty)) {
++    if (AT->getElementType()->isIntegerTy(64) && AT->getNumElements() == 1)
++      return KindInt64;
++    if (AT->getElementType()->isIntegerTy(64) && AT->getNumElements() == 2)
++      return KindPair;
++  }
++  if (auto *ST = dyn_cast<StructType>(Ty)) {
++    if (ST->getNumElements() == 2 && ST->getElementType(0)->isIntegerTy(64) &&
++        ST->getElementType(1)->isIntegerTy(64))
++      return KindPair;
++  }
++  return KindUnsupported;
++}
++
++Descriptor RISCVRv64X::describe(FunctionType *FnTy, AttributeList Attrs,
++                                ArrayRef<Type *> ArgTypes) const {
++  Descriptor D;
++  uint8_t Flags = 0, Return;
++  unsigned Index;
++
++  D.Bytes[0] = DescriptorMagic & 0xFF;
++  D.Bytes[1] = DescriptorMagic >> 8;
++  if (FnTy->isVarArg())
++    Flags |= FlagVariadic;
++  if (ArgTypes.size() > MaxArguments)
++    D.Supported = false;
++  if (!ArgTypes.empty() && Attrs.hasParamAttr(0, Attribute::StructRet))
++    Flags |= FlagStructReturn;
++
++  Return = classify(FnTy->getReturnType(), Attrs.getRetAttrs());
++  if (Return == KindUnsupported || Return == KindPair)
++    D.Supported = false;
++
++  for (Index = 0; Index < ArgTypes.size() && Index < MaxArguments; ++Index) {
++    uint8_t Kind = classify(ArgTypes[Index], Attrs.getParamAttrs(Index));
++    if (Kind == KindUnsupported || Kind == KindVoid)
++      D.Supported = false;
++    D.Bytes[4 + Index / 2] |= (Kind & 0xF) << ((Index & 1) * 4);
++  }
++
++  if (!D.Supported)
++    Flags |= FlagUnsupported;
++  D.Bytes[2] = static_cast<uint8_t>(std::min<size_t>(ArgTypes.size(), 255));
++  D.Bytes[3] = (Return & 0xF) | Flags;
++  return D;
++}
++
++Constant *RISCVRv64X::descriptorConstant(const Descriptor &D) const {
++  uint64_t Low = 0, High = 0;
++  for (unsigned Index = 0; Index < 8; ++Index) {
++    Low |= static_cast<uint64_t>(D.Bytes[Index]) << (Index * 8);
++    High |= static_cast<uint64_t>(D.Bytes[8 + Index]) << (Index * 8);
++  }
++  return ConstantStruct::getAnon(
++      {ConstantInt::get(I64Ty, Low), ConstantInt::get(I64Ty, High)},
++      /*Packed=*/true);
++}
++
++Value *RISCVRv64X::widen(IRBuilder<> &B, Value *V, uint8_t Kind) const {
++  Type *Ty = V->getType();
++  if (Ty->isPointerTy())
++    return B.CreatePtrToInt(V, I64Ty);
++  if (Ty->isFloatTy())
++    return B.CreateZExt(B.CreateBitCast(V, B.getInt32Ty()), I64Ty);
++  if (Ty->isDoubleTy())
++    return B.CreateBitCast(V, I64Ty);
++  if (Ty->isIntegerTy(64))
++    return V;
++  if (Ty->isIntegerTy())
++    return Kind == KindUInt16 || Kind == KindUInt8 ? B.CreateZExt(V, I64Ty)
++                                                    : B.CreateSExt(V, I64Ty);
++  if (auto *AT = dyn_cast<ArrayType>(Ty); AT && AT->getNumElements() == 1)
++    return B.CreateExtractValue(V, 0);
++  return nullptr;
++}
++
++Value *RISCVRv64X::narrow(IRBuilder<> &B, Value *V, Type *Ty,
++                          uint8_t Kind) const {
++  if (Ty->isPointerTy())
++    return B.CreateIntToPtr(V, Ty);
++  if (Ty->isFloatTy())
++    return B.CreateBitCast(B.CreateTrunc(V, B.getInt32Ty()), Ty);
++  if (Ty->isDoubleTy())
++    return B.CreateBitCast(V, Ty);
++  if (Ty->isIntegerTy(64))
++    return V;
++  if (Ty->isIntegerTy())
++    return B.CreateTrunc(V, Ty);
++  if (auto *AT = dyn_cast<ArrayType>(Ty); AT && AT->getNumElements() == 1)
++    return B.CreateInsertValue(PoisonValue::get(Ty), V, 0);
++  return nullptr;
++}
++
++static void encodeType(raw_ostream &OS, Type *Ty) {
++  if (Ty->isVoidTy()) {
++    OS << 'v';
++  } else if (Ty->isPointerTy()) {
++    OS << 'p';
++  } else if (Ty->isFloatTy()) {
++    OS << 'f';
++  } else if (Ty->isDoubleTy()) {
++    OS << 'd';
++  } else if (auto *IT = dyn_cast<IntegerType>(Ty)) {
++    OS << 'i' << IT->getBitWidth();
++  } else if (auto *AT = dyn_cast<ArrayType>(Ty)) {
++    OS << 'a' << AT->getNumElements();
++    encodeType(OS, AT->getElementType());
++  } else if (auto *ST = dyn_cast<StructType>(Ty)) {
++    OS << 's' << ST->getNumElements();
++    for (Type *Element : ST->elements())
++      encodeType(OS, Element);
++    OS << 'e';
++  } else if (auto *VT = dyn_cast<FixedVectorType>(Ty)) {
++    OS << 'x' << VT->getNumElements();
++    encodeType(OS, VT->getElementType());
++  } else {
++    OS << 'u' << static_cast<unsigned>(Ty->getTypeID());
++  }
++}
++
++Function *RISCVRv64X::getExitThunk(const Descriptor &D, FunctionType *CallTy,
++                                   AttributeList Attrs) {
++  SmallString<64> Name("__rv64x_exit_");
++  SmallVector<Type *, 8> Params;
++  unsigned Index;
++
++  raw_svector_ostream NameStream(Name);
++  for (uint8_t Byte : D.Bytes)
++    NameStream << format_hex_no_prefix(Byte, 2);
++  NameStream << '_';
++  encodeType(NameStream, CallTy->getReturnType());
++  for (Type *Ty : CallTy->params()) {
++    NameStream << '_';
++    encodeType(NameStream, Ty);
++  }
++
++  if (Function *Existing = Mod->getFunction(Name))
++    return Existing;
++
++  Params.push_back(PtrTy);
++  append_range(Params, CallTy->params());
++  FunctionType *ThunkTy =
++      FunctionType::get(CallTy->getReturnType(), Params, /*isVarArg=*/false);
++  Function *Thunk = Function::Create(ThunkTy, GlobalValue::LinkOnceODRLinkage,
++                                     Name, Mod);
++  Thunk->setVisibility(GlobalValue::HiddenVisibility);
++  Thunk->setComdat(Mod->getOrInsertComdat(Name));
++  Thunk->addFnAttr(Attribute::NoInline);
++  Thunk->setUWTableKind(UWTableKind::Async);
++  for (Index = 0; Index < CallTy->getNumParams(); ++Index)
++    Thunk->addParamAttrs(Index + 1, AttrBuilder(Mod->getContext(),
++                                                Attrs.getParamAttrs(Index)));
++  Thunk->addRetAttrs(AttrBuilder(Mod->getContext(), Attrs.getRetAttrs()));
++
++  BasicBlock *Entry = BasicBlock::Create(Mod->getContext(), "", Thunk);
++  IRBuilder<> B(Entry);
++  unsigned Count = std::max(1u, CallTy->getNumParams());
++  ArrayType *SlotsTy = ArrayType::get(I64Ty, Count);
++  AllocaInst *Slots = B.CreateAlloca(SlotsTy);
++
++  for (Index = 0; Index < CallTy->getNumParams(); ++Index) {
++    Value *Arg = Thunk->getArg(Index + 1);
++    uint8_t Kind = Index < MaxArguments
++                       ? (D.Bytes[4 + Index / 2] >> ((Index & 1) * 4)) & 0xF
++                       : static_cast<uint8_t>(KindInt64);
++    Value *Wide = Kind == KindPair ? nullptr : widen(B, Arg, Kind);
++    Value *Slot = B.CreateConstInBoundsGEP2_32(SlotsTy, Slots, 0, Index);
++    B.CreateStore(Wide ? Wide : ConstantInt::get(I64Ty, 0), Slot);
++  }
++
++  Constant *Desc = descriptorConstant(D);
++  Value *Result = B.CreateCall(
++      CallX64, {Thunk->getArg(0), Desc->getAggregateElement(0u),
++                Desc->getAggregateElement(1u), Slots});
++  Type *RetTy = CallTy->getReturnType();
++  if (RetTy->isVoidTy()) {
++    B.CreateRetVoid();
++  } else {
++    Value *Narrow = narrow(B, Result, RetTy, D.Bytes[3] & 0xF);
++    if (Narrow)
++      B.CreateRet(Narrow);
++    else
++      B.CreateRet(PoisonValue::get(RetTy));
++  }
++  return Thunk;
++}
++
++bool RISCVRv64X::checkCall(CallInst *CI) {
++  if (CI->isMustTailCall() || CI->isInlineAsm()) {
++    ++NumUncheckedCalls;
++    return false;
++  }
++
++  SmallVector<Type *, 8> ArgTypes;
++  for (Value *Arg : CI->args())
++    ArgTypes.push_back(Arg->getType());
++  Descriptor D = describe(CI->getFunctionType(), CI->getAttributes(), ArgTypes);
++
++  FunctionType *ThunkCallTy = FunctionType::get(
++      CI->getType(), ArgTypes, /*isVarArg=*/false);
++  Function *Thunk = getExitThunk(D, ThunkCallTy, CI->getAttributes());
++
++  IRBuilder<> B(CI);
++  Value *Callee = CI->getCalledOperand();
++  Value *Teb = B.CreateCall(Intrinsic::getOrInsertDeclaration(
++      Mod, Intrinsic::thread_pointer, {PtrTy}));
++  Value *Peb = B.CreateLoad(
++      PtrTy, B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), Teb, TebPebOffset));
++  Value *Bitmap = B.CreateLoad(
++      PtrTy,
++      B.CreateConstInBoundsGEP1_64(B.getInt8Ty(), Peb, PebCodeBitmapOffset));
++  Value *Address = B.CreatePtrToInt(Callee, I64Ty);
++  Value *ByteAddress = B.CreateGEP(B.getInt8Ty(), Bitmap,
++                                   B.CreateLShr(Address, 15));
++  Value *HasBitmap = B.CreateIsNotNull(Bitmap);
++
++  MDBuilder MDB(CI->getContext());
++  Instruction *CheckTerm = SplitBlockAndInsertIfThen(
++      HasBitmap, CI->getIterator(), /*Unreachable=*/false,
++      MDB.createUnlikelyBranchWeights());
++  B.SetInsertPoint(CheckTerm);
++  Value *Byte = B.CreateZExt(B.CreateLoad(B.getInt8Ty(), ByteAddress), I64Ty);
++  Value *Bit = B.CreateAnd(B.CreateLShr(Address, 12), 7);
++  Value *IsNative =
++      B.CreateTrunc(B.CreateLShr(Byte, Bit), B.getInt1Ty());
++  Value *IsForeign = B.CreateNot(IsNative);
++  BasicBlock *CheckBlock = CheckTerm->getParent();
++
++  BasicBlock *CallBlock = CI->getParent();
++  PHINode *Foreign =
++      PHINode::Create(B.getInt1Ty(), 2, "", CallBlock->begin());
++  Foreign->addIncoming(B.getFalse(), CheckBlock->getSinglePredecessor());
++  Foreign->addIncoming(IsForeign, CheckBlock);
++
++  Instruction *ThenTerm, *ElseTerm;
++  SplitBlockAndInsertIfThenElse(Foreign, CI->getIterator(), &ThenTerm,
++                                &ElseTerm, MDB.createUnlikelyBranchWeights());
++
++  B.SetInsertPoint(ThenTerm);
++  SmallVector<Value *, 8> ThunkArgs{Callee};
++  append_range(ThunkArgs, CI->args());
++  CallInst *ThunkCall = B.CreateCall(Thunk, ThunkArgs);
++
++  CI->moveBefore(ElseTerm->getIterator());
++  if (!CI->getType()->isVoidTy()) {
++    BasicBlock *Tail = ElseTerm->getSuccessor(0);
++    PHINode *Result = PHINode::Create(CI->getType(), 2, "", Tail->begin());
++    CI->replaceUsesWithIf(Result, [&](Use &U) {
++      return U.getUser() != Result;
++    });
++    Result->addIncoming(ThunkCall, ThunkCall->getParent());
++    Result->addIncoming(CI, CI->getParent());
++  }
++  ++NumCheckedCalls;
++  return true;
++}
++
++bool RISCVRv64X::runOnModule(Module &M) {
++  if (!EnableRv64X)
++    return false;
++
++  Mod = &M;
++  LLVMContext &Context = M.getContext();
++  I64Ty = Type::getInt64Ty(Context);
++  PtrTy = PointerType::getUnqual(Context);
++  CallX64 = M.getOrInsertFunction(
++      "__rv64x_call_x64",
++      FunctionType::get(I64Ty, {PtrTy, I64Ty, I64Ty, PtrTy}, false));
++
++  SmallVector<CallInst *, 32> Calls;
++  bool Changed = false;
++
++  for (Function &F : M) {
++    if (F.isDeclaration() || F.getName().starts_with("__rv64x_exit_"))
++      continue;
++
++    if (!F.hasLocalLinkage() || F.hasAddressTaken()) {
++      SmallVector<Type *, 8> ArgTypes(F.getFunctionType()->params());
++      Descriptor D = describe(F.getFunctionType(), F.getAttributes(), ArgTypes);
++      if (!F.hasPrefixData()) {
++        F.setPrefixData(descriptorConstant(D));
++        ++NumDescriptors;
++        Changed = true;
++      }
++    }
++
++    for (BasicBlock &BB : F)
++      for (Instruction &I : BB)
++        if (auto *CB = dyn_cast<CallBase>(&I); CB && CB->isIndirectCall()) {
++          if (auto *CI = dyn_cast<CallInst>(CB))
++            Calls.push_back(CI);
++          else
++            ++NumUncheckedCalls;
++        }
++  }
++
++  for (CallInst *CI : Calls)
++    Changed |= checkCall(CI);
++  return Changed;
++}
+diff --git a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
+index 7f607f54..d359e965 100644
+--- a/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
++++ b/llvm/lib/Target/RISCV/RISCVTargetMachine.cpp
+@@ -128,6 +128,7 @@ extern "C" LLVM_ABI LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTarget() {
+   initializeRISCVQCRelaxMarkingPass(*PR);
+   initializeRISCVGatherScatterLoweringLegacyPass(*PR);
+   initializeRISCVCodeGenPrepareLegacyPass(*PR);
++  initializeRISCVRv64XPass(*PR);
+   initializeRISCVZacasABIFixLegacyPass(*PR);
+   initializeRISCVExpandPseudoPostRALegacyPass(*PR);
+   initializeRISCVMergeBaseOffsetOptPass(*PR);
+@@ -497,6 +498,8 @@ void RISCVPassConfig::addIRPasses() {
+ 
+   if (getOptLevel() == CodeGenOptLevel::Aggressive && EnableSelectOpt)
+     addPass(createSelectOptimizePass());
++
++  addPass(createRISCVRv64XPass());
+ }
+ 
+ bool RISCVPassConfig::addPreISel() {

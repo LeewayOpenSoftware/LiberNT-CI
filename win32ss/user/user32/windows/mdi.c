@@ -1470,6 +1470,9 @@ LRESULT WINAPI DefFrameProcA( HWND hwnd, HWND hwndMDIClient,
 {
     if (hwndMDIClient)
     {
+        if (!IsWindow(hwndMDIClient))
+            return 0;
+
 	switch (message)
 	{
         case WM_SETTEXT:
@@ -1502,7 +1505,12 @@ LRESULT WINAPI DefFrameProcA( HWND hwnd, HWND hwndMDIClient,
 LRESULT WINAPI DefFrameProcW( HWND hwnd, HWND hwndMDIClient,
                                 UINT message, WPARAM wParam, LPARAM lParam)
 {
-    MDICLIENTINFO *ci = get_client_info( hwndMDIClient );
+    MDICLIENTINFO *ci;
+
+    if (hwndMDIClient && !IsWindow(hwndMDIClient))
+        return 0;
+
+    ci = get_client_info( hwndMDIClient );
 
     TRACE("%p %p %04x (%s) %08lx %08lx\n", hwnd, hwndMDIClient, message, SPY_GetMsgName(message, hwnd), wParam, lParam);
 

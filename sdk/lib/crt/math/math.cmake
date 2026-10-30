@@ -43,7 +43,33 @@ if(ARCH STREQUAL "i386")
         math/i386/cisqrt.c
         math/i386/ldexp.c
         math/i386/libm_sse2.c
+        math/amd64/_set_statfp.c
+        math/libm_sse2/_handle_error.c
+        math/libm_sse2/acos.c
+        math/libm_sse2/asin.c
+        math/libm_sse2/atan.c
+        math/libm_sse2/remainder_piby2.c
+        math/exp.c
+        math/log.c
+        math/log10.c
+        math/pow.c
+        math/trig.c
     )
+    set_source_files_properties(math/libm_sse2/acos.c PROPERTIES COMPILE_DEFINITIONS acos=__libm_sse2_core_acos)
+    set_source_files_properties(math/libm_sse2/asin.c PROPERTIES COMPILE_DEFINITIONS asin=__libm_sse2_core_asin)
+    set_source_files_properties(math/libm_sse2/atan.c PROPERTIES COMPILE_DEFINITIONS atan=__libm_sse2_core_atan)
+    set_source_files_properties(math/exp.c PROPERTIES COMPILE_DEFINITIONS exp=__libm_sse2_core_exp)
+    set_source_files_properties(math/log.c PROPERTIES COMPILE_DEFINITIONS log=__libm_sse2_core_log)
+    set_source_files_properties(math/log10.c PROPERTIES COMPILE_DEFINITIONS log10=__libm_sse2_core_log10)
+    set_source_files_properties(math/pow.c PROPERTIES COMPILE_DEFINITIONS pow=__libm_sse2_core_pow)
+    set_source_files_properties(math/trig.c PROPERTIES COMPILE_DEFINITIONS "sin=__libm_sse2_core_sin;cos=__libm_sse2_core_cos;tan=__libm_sse2_core_tan")
+    if(CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang")
+        set_source_files_properties(
+            math/amd64/_set_statfp.c math/libm_sse2/_handle_error.c math/libm_sse2/acos.c
+            math/libm_sse2/asin.c math/libm_sse2/atan.c math/libm_sse2/remainder_piby2.c
+            math/exp.c math/log.c math/log10.c math/pow.c math/trig.c
+            PROPERTIES COMPILE_OPTIONS "-msse2;-mfpmath=sse")
+    endif()
     list(APPEND LIBCNTPR_MATH_ASM_SOURCE
         math/i386/alldiv_asm.s
         math/i386/alldvrm_asm.s

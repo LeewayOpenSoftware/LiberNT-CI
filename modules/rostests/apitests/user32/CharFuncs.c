@@ -402,12 +402,14 @@ static void testCharPrevW(const TESTS_CHARPREV *pEntry, SIZE_T len, UINT i)
         wszCurrent = wszStart + pEntry->iOffset;
     else
     {
-        wszCurrent = AllocStringW(pEntry->lpszCurrent, wcslen(pEntry->lpszCurrent));
+        wszCurrent = AllocStringW(pEntry->lpszCurrent, wcslen(pEntry->lpszCurrent) + 1);
         if (!wszCurrent && pEntry->lpszCurrent)
         {
             skip("[%u] AllocStringW for wszCurrent failed\n", i);
             goto Cleanup;
         }
+        MoveMemory(wszCurrent + 1, wszCurrent, (wcslen(pEntry->lpszCurrent) + 1) * sizeof(WCHAR));
+        *wszCurrent++ = L' ';
     }
     pchW = CharPrevW(wszStart, wszCurrent);
     if (wszCurrent - wszStart >= 0)
@@ -434,8 +436,10 @@ static void testCharPrevW(const TESTS_CHARPREV *pEntry, SIZE_T len, UINT i)
     }
 
 Cleanup:
-    if (pEntry->testType != testBoth)
+    if (pEntry->testType != testBoth || !wszCurrent)
         wszCurrent = NULL;
+    else
+        wszCurrent--;
     HeapFree(GetProcessHeap(), 0, wszStart);
     HeapFree(GetProcessHeap(), 0, wszCurrent);
 }

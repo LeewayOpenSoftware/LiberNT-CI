@@ -68,6 +68,8 @@ foreach(_payload_file mesa_llvmpipe.dll vulkan_lvp.dll lvp_icd.json)
     endif()
     add_cd_file(FILE "${_payload_extract}/system32/${_payload_file}" DESTINATION reactos/system32 FOR all)
 endforeach()
+set_property(GLOBAL APPEND PROPERTY CI_SYSTEM_FILES
+    "${_payload_extract}/system32/mesa_llvmpipe.dll" "${_payload_extract}/system32/vulkan_lvp.dll")
 file(GLOB_RECURSE _payload_licenses RELATIVE "${_payload_extract}/licenses" "${_payload_extract}/licenses/*")
 foreach(_payload_license IN LISTS _payload_licenses)
     get_filename_component(_payload_license_dir "${_payload_license}" DIRECTORY)

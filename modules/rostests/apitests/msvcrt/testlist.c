@@ -56,6 +56,7 @@ extern void func_wcstoul(void);
 extern void func_wctomb(void);
 #if defined(_M_IX86)
 extern void func___getmainargs(void);
+extern void func_libm_sse2_precise(void);
 #elif defined(_M_ARM)
 extern void func___rt_div(void);
 extern void func___fto64(void);
@@ -123,6 +124,7 @@ const struct test winetest_testlist[] =
 
 #if defined(_M_IX86)
     { "__getmainargs", func___getmainargs },
+    { "libm_sse2_precise", func_libm_sse2_precise },
 #elif defined(_M_AMD64)
     { "fpcontrol", func_fpcontrol },  // x86 / arm need fixing
 #elif defined(_M_ARM)

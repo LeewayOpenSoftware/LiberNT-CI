@@ -69,15 +69,6 @@ REGISTER_SYSCLASS DefaultServerClasses[] =
     FNID_DESKTOP,
     ICLS_DESKTOP
   },
-  { ((PWSTR)WC_SWITCH),
-    CS_VREDRAW|CS_HREDRAW|CS_SAVEBITS,
-    NULL, // Use User32 procs
-    sizeof(LONG_PTR), // See user32_apitest GetClassInfo, 0: Pointer to ALTTABINFO
-    (HICON)OCR_NORMAL,
-    NULL,
-    FNID_SWITCH,
-    ICLS_SWITCH
-  },
   { ((PWSTR)WC_MENU),
     CS_DBLCLKS|CS_SAVEBITS|CS_DROPSHADOW,
     NULL, // Use User32 procs
@@ -1409,6 +1400,22 @@ IntFindClass(IN RTL_ATOM Atom,
     return Class;
 }
 
+static BOOL
+IntClassSharesBaseAtom(IN PCLS ClassList,
+                       IN PCLS Class)
+{
+    for (; ClassList != NULL; ClassList = ClassList->pclsNext)
+    {
+        if (ClassList->atomNVClassName == Class->atomNVClassName &&
+            ClassList->atomClassName != Class->atomClassName)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 _Success_(return)
 BOOL
 NTAPI
@@ -1684,6 +1691,12 @@ UserRegisterClass(IN CONST WNDCLASSEXW* lpwcx,
     if (Class != NULL)
     {
         PCLS *List;
+
+        if (IntClassSharesBaseAtom(pi->pclsPrivateList, Class) ||
+            IntClassSharesBaseAtom(pi->pclsPublicList, Class))
+        {
+            RtlPinAtomInAtomTable(gAtomTable, Class->atomNVClassName);
+        }
 
         /* Register the class */
         if (Class->Global)

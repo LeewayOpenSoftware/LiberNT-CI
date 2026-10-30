@@ -338,7 +338,11 @@ static void test_styles(void)
     check_style( "#32768",     1, CS_DROPSHADOW | CS_SAVEBITS | CS_DBLCLKS, CS_DROPSHADOW );  /* menu */
     check_style( "#32769",     1, CS_DBLCLKS, 0 );  /* desktop */
     check_style( "#32770",     1, CS_SAVEBITS | CS_DBLCLKS, 0 );  /* dialog */
+#ifdef __REACTOS__
+    check_style( "#32771",     0, CS_SAVEBITS | CS_HREDRAW | CS_VREDRAW, 0 ); /* task switch */
+#else
     todo_wine { check_style( "#32771",     1, CS_SAVEBITS | CS_HREDRAW | CS_VREDRAW, 0 ); } /* task switch */
+#endif
     check_style( "#32772",     1, 0, 0 );  /* icon title */
 }
 

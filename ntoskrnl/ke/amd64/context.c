@@ -352,3 +352,24 @@ KiSetTrapContextInternal(
     /* Set the nonvolatiles on the stack */
     RtlSetUnwindContext(Context, TargetFrame);
 }
+
+VOID
+NTAPI
+KiInitializeWow64ThreadContext(
+    _Inout_ PCONTEXT Context,
+    _In_ ULONG Eip,
+    _In_ ULONG Eax,
+    _In_ ULONG_PTR CpuArea)
+{
+    Context->Rip = Eip;
+    Context->Rax = Eax;
+    Context->Rsp = (CpuArea - 2 * sizeof(PVOID)) & ~15ULL;
+    Context->EFlags = EFLAGS_INTERRUPT_MASK;
+    Context->SegCs = KGDT64_R3_CODE | RPL_MASK;
+    Context->SegDs = KGDT64_R3_DATA | RPL_MASK;
+    Context->SegEs = KGDT64_R3_DATA | RPL_MASK;
+    Context->SegFs = KGDT64_R3_CMTEB | RPL_MASK;
+    Context->SegGs = KGDT64_R3_DATA | RPL_MASK;
+    Context->SegSs = KGDT64_R3_DATA | RPL_MASK;
+    Context->MxCsr = INITIAL_MXCSR;
+}

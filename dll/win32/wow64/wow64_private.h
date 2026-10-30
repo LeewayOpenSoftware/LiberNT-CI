@@ -595,7 +595,9 @@ static inline ULONG_PTR host_context_param( const CONTEXT *context, unsigned int
 #elif defined(__x86_64__)
 static inline ULONG_PTR host_context_pc( const CONTEXT *context ) { return context->Rip; }
 static inline ULONG_PTR host_context_param( const CONTEXT *context, unsigned int index ) { return index ? context->Rdx : context->Rcx; }
-/* TODO(riscv64): host_context_pc/host_context_param for a riscv64 host (Pc, A0, A1) */
+#elif defined(__riscv)
+static inline ULONG_PTR host_context_pc( const CONTEXT *context ) { return context->Pc; }
+static inline ULONG_PTR host_context_param( const CONTEXT *context, unsigned int index ) { return index ? context->A1 : context->A0; }
 #endif
 #endif
 

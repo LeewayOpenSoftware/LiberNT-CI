@@ -2782,7 +2782,12 @@ static void test_GetSystemMetrics( void)
     ncm.iPaddedBorderWidth = 0xcccc;
     rc = SystemParametersInfoA(SPI_GETNONCLIENTMETRICS, 0, &ncm, 0);
     ok(rc || broken(!rc) /* before Vista */, "SystemParametersInfoA failed\n");
+#ifdef __REACTOS__
+    if (rc) ok( ncm.iPaddedBorderWidth == 0 || broken(ncm.iPaddedBorderWidth == GetSystemMetrics( SM_CXPADDEDBORDER )),
+                "wrong iPaddedBorderWidth %u\n", ncm.iPaddedBorderWidth );
+#else
     if (rc) ok( ncm.iPaddedBorderWidth == 0, "wrong iPaddedBorderWidth %u\n", ncm.iPaddedBorderWidth );
+#endif
 
     minim.cbSize = sizeof( minim);
     ncm.cbSize = FIELD_OFFSET(NONCLIENTMETRICSA, iPaddedBorderWidth);
@@ -2832,8 +2837,14 @@ static void test_GetSystemMetrics( void)
     ok_gsm( SM_CXCURSOR, get_cursor_size( MulDiv( 32, dpi, USER_DEFAULT_SCREEN_DPI )));
     ok_gsm( SM_CYCURSOR, get_cursor_size( MulDiv( 32, dpi, USER_DEFAULT_SCREEN_DPI )));
     ok_gsm( SM_CYMENU, ncm.iMenuHeight + 1);
+#ifdef __REACTOS__
+    ok_gsm_2( SM_CXFULLSCREEN,
+            GetSystemMetrics( SM_CXMAXIMIZED) - 2 * GetSystemMetrics( SM_CXFRAME),
+            GetSystemMetrics( SM_CXMAXIMIZED) - 2 * (GetSystemMetrics( SM_CXFRAME) + GetSystemMetrics( SM_CXPADDEDBORDER)));
+#else
     ok_gsm( SM_CXFULLSCREEN,
             GetSystemMetrics( SM_CXMAXIMIZED) - 2 * GetSystemMetrics( SM_CXFRAME));
+#endif
     ok_gsm( SM_CYFULLSCREEN,
             GetSystemMetrics( SM_CYMAXIMIZED) - GetSystemMetrics( SM_CYMIN));
     /* SM_CYKANJIWINDOW */
@@ -2846,10 +2857,22 @@ static void test_GetSystemMetrics( void)
     /* SM_RESERVED2 */
     /* SM_RESERVED3 */
     /* SM_RESERVED4 */
+#ifdef __REACTOS__
+    ok_gsm_2( SM_CXMIN, 3 * max( CaptionWidthfromreg >= 0 ? CaptionWidthfromreg : ncm.iCaptionWidth, 8) +
+            GetSystemMetrics( SM_CYSIZE) + 4 + 4 * avcwCaption + 2 * GetSystemMetrics( SM_CXFRAME),
+            3 * max( CaptionWidthfromreg >= 0 ? CaptionWidthfromreg : ncm.iCaptionWidth, 8) +
+            GetSystemMetrics( SM_CYSIZE) + 4 + 4 * avcwCaption +
+            2 * (GetSystemMetrics( SM_CXFRAME) + GetSystemMetrics( SM_CXPADDEDBORDER)));
+    ok_gsm_2( SM_CYMIN, GetSystemMetrics( SM_CYCAPTION) +
+            2 * GetSystemMetrics( SM_CYFRAME),
+            GetSystemMetrics( SM_CYCAPTION) +
+            2 * (GetSystemMetrics( SM_CYFRAME) + GetSystemMetrics( SM_CXPADDEDBORDER)));
+#else
     ok_gsm( SM_CXMIN, 3 * max( CaptionWidthfromreg >= 0 ? CaptionWidthfromreg : ncm.iCaptionWidth, 8) +
             GetSystemMetrics( SM_CYSIZE) + 4 + 4 * avcwCaption + 2 * GetSystemMetrics( SM_CXFRAME));
     ok_gsm( SM_CYMIN, GetSystemMetrics( SM_CYCAPTION) +
             2 * GetSystemMetrics( SM_CYFRAME));
+#endif
     ok_gsm_2( SM_CXSIZE,
         ncm.iCaptionWidth,  /* classic/standard windows style */
         GetSystemMetrics( SM_CYCAPTION) - 1 /* WinXP style */
@@ -2915,12 +2938,21 @@ static void test_GetSystemMetrics( void)
         screen.cx = GetSystemMetrics( SM_CXSCREEN );
         screen.cy = GetSystemMetrics( SM_CYSCREEN );
     }
+#ifdef __REACTOS__
+    ok_gsm_3( SM_CXMAXTRACK, screen.cx + 4 + 2 * GetSystemMetrics(SM_CXFRAME),
+              screen.cx + 4 + 2 * (GetSystemMetrics(SM_CXFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER)),
+              screen.cx + 2 * GetSystemMetrics(SM_CXFRAME)); /* Win8 */
+    ok_gsm_3( SM_CYMAXTRACK, screen.cy + 4 + 2 * GetSystemMetrics(SM_CYFRAME),
+              screen.cy + 4 + 2 * (GetSystemMetrics(SM_CYFRAME) + GetSystemMetrics(SM_CXPADDEDBORDER)),
+              screen.cy + 2 * GetSystemMetrics(SM_CYFRAME)); /* Win8 */
+#else
     ok_gsm_3( SM_CXMAXTRACK, screen.cx + 4 + 2 * GetSystemMetrics(SM_CXFRAME),
               screen.cx - 4 + 2 * GetSystemMetrics(SM_CXFRAME), /* Vista */
               screen.cx + 2 * GetSystemMetrics(SM_CXFRAME)); /* Win8 */
     ok_gsm_3( SM_CYMAXTRACK, screen.cy + 4 + 2 * GetSystemMetrics(SM_CYFRAME),
               screen.cy - 4 + 2 * GetSystemMetrics(SM_CYFRAME), /* Vista */
               screen.cy + 2 * GetSystemMetrics(SM_CYFRAME)); /* Win8 */
+#endif
     /* the next two cannot really be tested as they depend on (application)
      * toolbars */
     /* SM_CXMAXIMIZED */

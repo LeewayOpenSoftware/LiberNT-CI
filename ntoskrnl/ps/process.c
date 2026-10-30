@@ -2074,23 +2074,7 @@ PspPrepareWow64Thread(IN HANDLE ProcessHandle,
 
     RtlZeroMemory(ThreadContext, sizeof(*ThreadContext));
     ThreadContext->ContextFlags = CONTEXT_FULL;
-#ifdef _M_AMD64
-    ThreadContext->Rip = CpuInit.Context.Eip;
-    ThreadContext->Rax = CpuInit.Context.Eax;
-    ThreadContext->Rsp = (CpuAddress - 2 * sizeof(PVOID)) & ~15ULL;
-    ThreadContext->EFlags = EFLAGS_INTERRUPT_MASK;
-    ThreadContext->SegCs = KGDT64_R3_CODE | RPL_MASK;
-    ThreadContext->SegDs = KGDT64_R3_DATA | RPL_MASK;
-    ThreadContext->SegEs = KGDT64_R3_DATA | RPL_MASK;
-    ThreadContext->SegFs = KGDT64_R3_CMTEB | RPL_MASK;
-    ThreadContext->SegGs = KGDT64_R3_DATA | RPL_MASK;
-    ThreadContext->SegSs = KGDT64_R3_DATA | RPL_MASK;
-    ThreadContext->MxCsr = INITIAL_MXCSR;
-#elif defined(_M_ARM64)
-    ThreadContext->Pc = CpuInit.Context.Eip;
-    ThreadContext->Sp = CpuAddress & ~15ULL;
-    ThreadContext->Cpsr = 0;
-#endif
+    KiInitializeWow64ThreadContext(ThreadContext, CpuInit.Context.Eip, CpuInit.Context.Eax, CpuAddress);
     return STATUS_SUCCESS;
 }
 #endif

@@ -4,6 +4,8 @@ if(MSVC AND ARCH STREQUAL "amd64")
     add_asm_files(wow64_asm amd64/syscall.s)
 elseif(MSVC AND ARCH STREQUAL "arm64")
     add_asm_files(wow64_asm arm64/syscall.s)
+elseif(ARCH STREQUAL "riscv64")
+    add_asm_files(wow64_asm riscv64/syscall.S)
 endif()
 
 add_library(wow64 MODULE
@@ -23,6 +25,9 @@ add_library(wow64 MODULE
 
 set_module_type(wow64 win32dll ENTRYPOINT DllMain 12)
 target_compile_definitions(wow64 PRIVATE __WINESRC__)
+if(ARCH STREQUAL "riscv64")
+    target_compile_definitions(wow64 PRIVATE WOW64_ASM_FILE)
+endif()
 target_include_directories(wow64 PRIVATE ${REACTOS_SOURCE_DIR}/ntoskrnl/include)
 add_importlibs(wow64 ntdll)
 add_dependencies(wow64 xdk)

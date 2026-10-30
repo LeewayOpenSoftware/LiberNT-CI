@@ -386,6 +386,7 @@ IntTranslateChar(WORD wVirtKey,
                  PBOOL pbDead,
                  PBOOL pbLigature,
                  PWCHAR pwcTranslatedChar,
+                 PDWORD pdwModNumber,
                  PKBDTABLES pKbdTbl)
 {
     PVK_TO_WCHAR_TABLE pVkToVchTbl;
@@ -449,6 +450,8 @@ IntTranslateChar(WORD wVirtKey,
                 *pbDead = (wch == WCH_DEAD);
                 *pbLigature = (wch == WCH_LGTR);
                 *pwcTranslatedChar = wch;
+                if (pdwModNumber)
+                    *pdwModNumber = dwModNumber;
 
                 TRACE("%lu %04x: dwModNumber %08x Char %04x\n",
                       i, wVirtKey, dwModNumber, wch);
@@ -505,6 +508,7 @@ IntToUnicodeEx(UINT wVirtKey,
     BOOL bDead, bLigature;
     static WCHAR wchDead = 0;
     int iRet = 0;
+    DWORD dwModNumber = 0;
 
     ASSERT(pKbdTbl);
 
@@ -513,6 +517,7 @@ IntToUnicodeEx(UINT wVirtKey,
                           &bDead,
                           &bLigature,
                           &wchTranslatedChar,
+                          &dwModNumber,
                           pKbdTbl))
     {
         return 0;
@@ -520,7 +525,30 @@ IntToUnicodeEx(UINT wVirtKey,
 
     if (bLigature)
     {
-        WARN("Not handling ligature (yet)\n" );
+        PLIGATURE1 pLigature = pKbdTbl->pLigature;
+        UINT i;
+
+        if (!pLigature || !pKbdTbl->cbLgEntry)
+            return 0;
+
+        while (pLigature->VirtualKey)
+        {
+            if (pLigature->VirtualKey == (wVirtKey & 0xFF) &&
+                pLigature->ModificationNumber == dwModNumber)
+            {
+                if (wchDead && cchBuff > iRet)
+                    pwszBuff[iRet++] = wchDead;
+                wchDead = 0;
+                for (i = 0; i < pKbdTbl->nLgMaxd && cchBuff > iRet; i++)
+                {
+                    if (pLigature->wch[i] == WCH_NONE || !pLigature->wch[i])
+                        break;
+                    pwszBuff[iRet++] = pLigature->wch[i];
+                }
+                return iRet;
+            }
+            pLigature = (PLIGATURE1)((PBYTE)pLigature + pKbdTbl->cbLgEntry);
+        }
         return 0;
     }
 
@@ -678,6 +706,7 @@ IntVkToChar(WORD wVk, PKBDTABLES pKbdTbl)
                          &bDead,
                          &bLigature,
                          &wch,
+                         NULL,
                          pKbdTbl))
     {
         return wch;
@@ -710,6 +739,7 @@ IntMapVkToChar(WORD wVk, PKBDTABLES pKbdTbl)
                           &bDead,
                           &bLigature,
                           &wch,
+                          NULL,
                           pKbdTbl))
     {
         return 0;

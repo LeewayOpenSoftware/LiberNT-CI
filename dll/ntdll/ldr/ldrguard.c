@@ -181,9 +181,9 @@ LdrpGuardDescribeModule(
         return TRUE;
     }
 
-    Info->Enforced = TRUE;
+    Info->Enforced = (LoadConfig->GuardFlags & IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT) != 0;
 
-    if (LoadConfig->GuardFlags & IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT)
+    if (Info->Enforced)
     {
         SIZE_T Stride = sizeof(ULONG) +
                         ((LoadConfig->GuardFlags & IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK) >>
@@ -342,7 +342,6 @@ LdrpInitializeGuard(
         return STATUS_SUCCESS;
 
     if (ConfigSize < RTL_SIZEOF_THROUGH_FIELD(IMAGE_LOAD_CONFIG_DIRECTORY, GuardCFDispatchFunctionPointer) ||
-        !(LoadConfig->GuardFlags & IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT) ||
         LoadConfig->GuardCFCheckFunctionPointer == 0 ||
         LoadConfig->GuardCFDispatchFunctionPointer == 0)
     {

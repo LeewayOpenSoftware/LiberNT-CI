@@ -4,7 +4,10 @@
 ; COPYRIGHT:   Copyright 2026 Ahmed ARIF
 
 [AddReg]
+HKLM,"SOFTWARE\Microsoft\Wow64\x86",,0x00000000,"wow64felix.dll"
 HKLM,"SOFTWARE\Microsoft\.NETFramework","InstallRoot",0x00000000,"C:\Windows\Microsoft.NET\Framework64\"
+HKLM,"SOFTWARE\Wow6432Node",,0x00000012
+HKLM,"SOFTWARE\Classes\Wow6432Node",,0x00000012
 
 ; Private native print environment. Keep this synchronized with
 ; prtprocenv.h and SetupAPI's DIRID_PRINTPROCESSOR directory token.

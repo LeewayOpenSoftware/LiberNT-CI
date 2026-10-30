@@ -1065,7 +1065,7 @@ NtCreateThread(OUT PHANDLE ThreadHandle,
 #else
             {
                 ULONG Flags = *(volatile ULONG *)ThreadContext;
-                if ((Flags & WOW64_CONTEXT_i386) && !(Flags & CONTEXT_ARM64))
+                if ((Flags & WOW64_CONTEXT_i386) && !(Flags & (CONTEXT_CONTROL & ~0xFFFFUL)))
                 {
                     Wow64Context = *(volatile WOW64_CONTEXT *)ThreadContext;
                     IsWow64Context = TRUE;

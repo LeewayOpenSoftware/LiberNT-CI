@@ -277,6 +277,9 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
 #if !defined(__REACTOS__) || !defined(_M_ARM64)
     WOW64_CONTEXT context = { WOW64_CONTEXT_CONTROL | WOW64_CONTEXT_SEGMENTS };
 #endif
+#if defined(__REACTOS__) && !defined(_M_IX86) && !defined(_M_AMD64) && !defined(_M_ARM64)
+    NTSTATUS status;
+#endif
     LDT_ENTRY entry = { 0 };
 
     if (size != sizeof(*info))
@@ -291,6 +294,11 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
     if (!selector)
         goto done;
 #else
+#if defined(__REACTOS__) && !defined(_M_IX86) && !defined(_M_AMD64)
+    status = RtlWow64GetThreadContext(handle, &context);
+    if (status)
+        return status;
+#else
     if (RtlWow64GetThreadContext(handle, &context))
     {
         CONTEXT native;
@@ -300,6 +308,7 @@ RtlWow64GetThreadSelectorEntry(HANDLE handle,
         context.SegFs = native.SegFs;
         context.SegSs = native.SegSs;
     }
+#endif
 
     selector = info->Selector | 3;
     if (selector == 0x03)

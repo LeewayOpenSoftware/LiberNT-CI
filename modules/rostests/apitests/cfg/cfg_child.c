@@ -174,6 +174,79 @@ LoadTarget(const WCHAR *DllName, const char *ExportName)
     return (PFN_CFG_TARGET)GetProcAddress(Module, ExportName);
 }
 
+static DWORD
+RvaToOffset(const IMAGE_NT_HEADERS *NtHeaders, DWORD Rva)
+{
+    const IMAGE_SECTION_HEADER *Section = IMAGE_FIRST_SECTION(NtHeaders);
+    WORD Index;
+
+    for (Index = 0; Index < NtHeaders->FileHeader.NumberOfSections; ++Index, ++Section)
+    {
+        if (Rva >= Section->VirtualAddress && Rva - Section->VirtualAddress < Section->SizeOfRawData)
+            return Section->PointerToRawData + (Rva - Section->VirtualAddress);
+    }
+    return 0;
+}
+
+static PFN_CFG_TARGET
+LoadTargetWithoutGuardTable(const char *ExportName)
+{
+    IMAGE_LOAD_CONFIG_DIRECTORY *LoadConfig;
+    const IMAGE_DATA_DIRECTORY *Directory;
+    IMAGE_NT_HEADERS *NtHeaders;
+    WCHAR Source[MAX_PATH], Copy[MAX_PATH];
+    HANDLE File;
+    HMODULE Module;
+    BYTE *Image;
+    DWORD Size, Done, Offset;
+    BOOL Written;
+
+    if (!GetSiblingPath(Source, L"cfg_guarded.dll") || !GetTempPathW(MAX_PATH, Copy) || lstrlenW(Copy) + 16 >= MAX_PATH)
+        return NULL;
+    lstrcatW(Copy, L"cfg_notable.dll");
+    File = CreateFileW(Source, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (File == INVALID_HANDLE_VALUE)
+        return NULL;
+    Size = GetFileSize(File, NULL);
+    Image = HeapAlloc(GetProcessHeap(), 0, Size);
+    Written = Image != NULL && ReadFile(File, Image, Size, &Done, NULL) && Done == Size;
+    CloseHandle(File);
+
+    if (Written)
+    {
+        NtHeaders = (IMAGE_NT_HEADERS *)(Image + ((IMAGE_DOS_HEADER *)Image)->e_lfanew);
+        Directory = &NtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_LOAD_CONFIG];
+        Offset = RvaToOffset(NtHeaders, Directory->VirtualAddress);
+        Written = Offset != 0 && Offset + RTL_SIZEOF_THROUGH_FIELD(IMAGE_LOAD_CONFIG_DIRECTORY, GuardFlags) <= Size;
+    }
+    if (Written)
+    {
+        LoadConfig = (IMAGE_LOAD_CONFIG_DIRECTORY *)(Image + Offset);
+        LoadConfig->GuardFlags &= ~(IMAGE_GUARD_CF_FUNCTION_TABLE_PRESENT | IMAGE_GUARD_CF_FUNCTION_TABLE_SIZE_MASK);
+        LoadConfig->GuardCFFunctionTable = 0;
+        LoadConfig->GuardCFFunctionCount = 0;
+
+        File = CreateFileW(Copy, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL);
+        Written = File != INVALID_HANDLE_VALUE;
+    }
+    if (Written)
+    {
+        Written = WriteFile(File, Image, Size, &Done, NULL) && Done == Size;
+        CloseHandle(File);
+    }
+    if (Image != NULL)
+        HeapFree(GetProcessHeap(), 0, Image);
+    if (!Written)
+        return NULL;
+
+    Module = LoadLibraryW(Copy);
+    printf("CFGCHILD|notable|module=%p|error=%lu\n", Module, Module ? 0 : GetLastError());
+    fflush(stdout);
+    if (Module == NULL)
+        return NULL;
+    return (PFN_CFG_TARGET)GetProcAddress(Module, ExportName);
+}
+
 static PVOID
 CreateDynamicTarget(DWORD Protection, SIZE_T Offset, PVOID *AllocationBase)
 {
@@ -236,6 +309,21 @@ main(int argc, char **argv)
     {
         Target = LoadTarget(L"cfg_guarded.dll", "CfgGuardedTarget");
         return Target != NULL && CallIndirect(Target) == 0x47f ? 0 : 0x42;
+    }
+
+    if (!strcmp(argv[1], "notable-guarded"))
+    {
+        Target = LoadTargetWithoutGuardTable("CfgGuardedTarget");
+        return Target != NULL && CallIndirect(Target) == 0x47f ? 0 : 0x50;
+    }
+
+    if (!strcmp(argv[1], "notable-interior"))
+    {
+        Target = LoadTargetWithoutGuardTable("CfgGuardedTarget");
+        if (Target == NULL)
+            return 0x51;
+        CallIndirect((PFN_CFG_TARGET)((BYTE *)Target + sizeof(DWORD)));
+        return 0;
     }
 
     if (!strcmp(argv[1], "plain-interior"))

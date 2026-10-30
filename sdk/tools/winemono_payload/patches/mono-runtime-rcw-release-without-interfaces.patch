@@ -1,0 +1,11 @@
+--- a/mono/metadata/cominterop.c
++++ b/mono/metadata/cominterop.c
+@@ -2339,7 +2339,7 @@
+ mono_System_ComObject_ReleaseInterfaces (MonoComObjectHandle obj)
+ {
+ 	g_assert (!MONO_HANDLE_IS_NULL (obj));
+-	if (!MONO_HANDLE_GETVAL (obj, itf_hash))
++	if (!MONO_HANDLE_GETVAL (obj, itf_hash) && !MONO_HANDLE_GETVAL (obj, iunknown))
+ 		return;
+ 
+ 	mono_cominterop_lock ();

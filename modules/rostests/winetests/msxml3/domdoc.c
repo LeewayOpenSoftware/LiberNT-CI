@@ -18350,6 +18350,35 @@ static void test_element_setNamedItem(void)
     free_bstrs();
 }
 
+#ifdef __REACTOS__
+static void test_loadXML_empty_parse_error(void)
+{
+    IXMLDOMParseError *error;
+    IXMLDOMDocument *doc;
+    VARIANT_BOOL b;
+    HRESULT hr;
+    LONG code;
+
+    doc = create_document(&IID_IXMLDOMDocument);
+
+    b = VARIANT_TRUE;
+    hr = IXMLDOMDocument_loadXML(doc, _bstr_(""), &b);
+    ok(hr == S_FALSE, "Unexpected hr %#lx.\n", hr);
+    ok(b == VARIANT_FALSE, "Unexpected result %d.\n", b);
+
+    hr = IXMLDOMDocument_get_parseError(doc, &error);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    code = 0;
+    hr = IXMLDOMParseError_get_errorCode(error, &code);
+    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
+    ok(code == 0xc00ce558, "Unexpected code %#lx.\n", code);
+    IXMLDOMParseError_Release(error);
+
+    IXMLDOMDocument_Release(doc);
+    free_bstrs();
+}
+#endif
+
 START_TEST(domdoc)
 {
     HRESULT hr;
@@ -18368,6 +18397,9 @@ START_TEST(domdoc)
 
     test_createProcessingInstruction();
     test_load_with_site();
+#ifdef __REACTOS__
+    test_loadXML_empty_parse_error();
+#endif
     test_domdoc();
     test_persiststream();
     test_domnode();

@@ -703,10 +703,10 @@ if(PREINSTALL_WINE_MONO)
     set_property(GLOBAL APPEND PROPERTY PREINSTALL_REGISTRY_INF_LIST "${_wine_mono_support_dir}/monosupport.inf")
 endif()
 
-# Disk image size configuration (in MiB). The 1-GiB default provides a
-# 959-MiB NTFS partition after the 1-MiB alignment gap and 64-MiB FAT boot
+# Disk image size configuration (in MiB). The 1.5-GiB default provides a
+# 1471-MiB NTFS partition after the 1-MiB alignment gap and 64-MiB FAT boot
 # partition.
-set(PREINSTALL_IMAGE_SIZE_MB 1024 CACHE STRING "Disk image size in MB, including the alignment gap, boot partition, and system partition")
+set(PREINSTALL_IMAGE_SIZE_MB 1536 CACHE STRING "Disk image size in MB, including the alignment gap, boot partition, and system partition")
 set(_rosprofiler_package_pdbs_default OFF)
 if(MSVC AND (CMAKE_BUILD_TYPE MATCHES "^[Dd]ebug$" OR
              CMAKE_CONFIGURATION_TYPES))
@@ -960,21 +960,27 @@ add_custom_target(liberntimg
 add_dependencies(liberntimg preinstall_partition)
 
 set(LIBERNT_RAM_IMAGE_FREE_MB 512 CACHE STRING
-    "Free space in MB added to the system partition of the RAM disk image (liberntramimg)")
+    "Free space in MB added to the payload of the RAM disk image system partition (liberntramimg)")
 set(_preinstall_ram_image_file ${REACTOS_BINARY_DIR}/LiberNT-ram.img)
 set(_preinstall_ram_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.ram.ntfs)
-math(EXPR _preinstall_ram_partition_sectors "${_preinstall_system_partition_sectors} + ${LIBERNT_RAM_IMAGE_FREE_MB} * 2048")
+if(TARGET native-ntfsimg)
+    set(_preinstall_ram_ntfsimg $<TARGET_FILE:native-ntfsimg>)
+else()
+    set(_preinstall_ram_ntfsimg native-ntfsimg)
+endif()
 string(UUID _ram_disk NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "LiberNT RAM disk image" TYPE SHA1)
 string(SUBSTRING "${_ram_disk}" 0 8 _ram_signature)
 add_custom_target(liberntramimg
     COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_ram_image_file} ${_preinstall_ram_partition_file}
-    COMMAND native-ntfsimg
-        --format
-        ${_preinstall_ram_partition_file}
-        ${_preinstall_ram_partition_sectors}
-        ${_preinstall_system_partition_start}
-        ${_preinstall_ntfs_sectors_per_cluster}
-        LiberNT
+    COMMAND ${CMAKE_COMMAND}
+        -DNTFSIMG=${_preinstall_ram_ntfsimg}
+        -DLIST=${CMAKE_CURRENT_BINARY_DIR}/preinstall.effective.lst
+        -DPARTITION=${_preinstall_ram_partition_file}
+        -DHIDDEN_SECTORS=${_preinstall_system_partition_start}
+        -DSECTORS_PER_CLUSTER=${_preinstall_ntfs_sectors_per_cluster}
+        -DFREE_MB=${LIBERNT_RAM_IMAGE_FREE_MB}
+        -DLABEL=LiberNT
+        -P ${REACTOS_SOURCE_DIR}/boot/format_ram_partition.cmake
     COMMAND native-ntfsimg
         --addfiles
         ${_preinstall_ram_partition_file}

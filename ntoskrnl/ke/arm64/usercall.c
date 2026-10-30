@@ -667,6 +667,9 @@ KeUserModeCallback(
     ASSERT(KeGetCurrentThread()->ApcState.KernelApcInProgress == FALSE);
     ASSERT(KeGetPreviousMode() == UserMode);
 
+    if (KeGetCurrentThread()->CallbackNestingLevel >= KI_MAX_USER_CALLBACK_NESTING)
+        return STATUS_STACK_OVERFLOW;
+
     UserStackPointer = KiGetUserModeStackAddress();
     OldStack = *UserStackPointer;
 
@@ -711,7 +714,9 @@ KeUserModeCallback(
         KeGetCurrentThread()->TrapFrame->X18 = (ULONG_PTR)Teb;
 
         *UserStackPointer = (ULONG_PTR)CalloutFrame;
+        KeGetCurrentThread()->CallbackNestingLevel++;
         CallbackStatus = KiCallUserMode(Result, ResultLength);
+        KeGetCurrentThread()->CallbackNestingLevel--;
         if (CallbackStatus == STATUS_CALLBACK_POP_STACK)
         {
             OldStack = *UserStackPointer;

@@ -157,12 +157,15 @@ EmuNtService(
     WCHAR NameBuffer[MAX_PATH + 16];
     PVOID Base = NULL;
     SIZE_T Size = 0;
+    PVOID ApcRecord = NULL;
     NTSTATUS Status;
 
     switch (Service)
     {
         case EmuNtContinue:
         case EmuNtContinueEx:
+            if (EmuIsApcReturn(Thread, (const AMD64_CONTEXT *)Arguments[0]))
+                return EmuApcReturn(Thread, (const AMD64_CONTEXT *)Arguments[0]);
             Status = EmuContinue(Thread, (const AMD64_CONTEXT *)Arguments[0]);
             *Resumed = NT_SUCCESS(Status);
             return Status;
@@ -184,14 +187,27 @@ EmuNtService(
             break;
 
         case EmuNtGetContextThread:
+            return EmuGetContextThread((HANDLE)Arguments[0], (AMD64_CONTEXT *)Arguments[1]);
+
         case EmuNtSetContextThread:
+            return EmuSetContextThread(Thread, (HANDLE)Arguments[0], (const AMD64_CONTEXT *)Arguments[1], Resumed);
+
+        case EmuNtSuspendThread:
+            return EmuSuspendThread((HANDLE)Arguments[0], (PULONG)Arguments[1]);
+
         case EmuNtQueueApcThread:
+            return EmuQueueUserApc(Service, Arguments, 1);
+
         case EmuNtQueueApcThreadEx:
+            return EmuQueueUserApc(Service, Arguments, 2);
+
         case EmuNtQueueApcThreadEx2:
-            return STATUS_NOT_IMPLEMENTED;
+            /* FIXME: special user APCs are delivered as ordinary user APCs */
+            Arguments[2] &= ~EMU_QUEUE_USER_APC_FLAGS_SPECIAL_USER_APC;
+            return EmuQueueUserApc(Service, Arguments, 3);
 
         case EmuNtCallbackReturn:
-            return STATUS_NO_CALLBACK_ACTIVE;
+            return EmuCallbackReturn(Thread, (PVOID)Arguments[0], (ULONG)Arguments[1], (NTSTATUS)Arguments[2]);
 
         case EmuNtReadFile:
         case EmuNtWriteFile:
@@ -203,12 +219,16 @@ EmuNtService(
         case EmuNtNotifyChangeDirectoryFile:
         case EmuNtNotifyChangeDirectoryFileEx:
         case EmuNtNotifyChangeKey:
+            if (!EmuWrapCompletionApc(Arguments, 2, FALSE, &ApcRecord)) return STATUS_NO_MEMORY;
+            break;
+
         case EmuNtSetTimer:
-            if (Arguments[2]) return STATUS_NOT_IMPLEMENTED;
+            /* FIXME: the records of timer APC routines are never freed */
+            if (!EmuWrapCompletionApc(Arguments, 2, TRUE, &ApcRecord)) return STATUS_NO_MEMORY;
             break;
 
         case EmuNtNotifyChangeMultipleKeys:
-            if (Arguments[4]) return STATUS_NOT_IMPLEMENTED;
+            if (!EmuWrapCompletionApc(Arguments, 4, FALSE, &ApcRecord)) return STATUS_NO_MEMORY;
             break;
 
         case EmuNtOpenDirectoryObject:
@@ -246,6 +266,7 @@ EmuNtService(
     }
 
     Status = (NTSTATUS)EmuInvokeSystemService(Service, Arguments);
+    EmuCompleteApcWrap(ApcRecord, Status);
     if (!NT_SUCCESS(Status)) return Status;
 
     switch (Service)
@@ -280,6 +301,11 @@ EmuNtService(
         case EmuNtQuerySystemInformation:
             EmuReportProcessor((ULONG)Arguments[0], (PVOID)Arguments[1], (ULONG)Arguments[2]);
             break;
+
+        case EmuNtTerminateProcess:
+            /* The guest killed its other threads to exit: host locks they held follow the shutdown rules. */
+            if (!Arguments[0]) LdrShutdownProcess();
+            break;
     }
 
     return Status;
@@ -299,6 +325,14 @@ EmuSystemService(
     ULONG64 Signature = 0;
     ULONG_PTR Result;
     BOOLEAN Resumed = FALSE;
+    ULONG64 ServiceRip = Registers->Rip;
+    ULONG64 ReturnRip = Registers->Gpr[EmuRcx];
+
+    if (Service >= EMU_HOST_SERVICE_BASE)
+    {
+        EmuHostService(Thread, Service, Registers);
+        return;
+    }
 
     if (Table == 0 && Index < EmuNtServiceCount)
     {
@@ -308,6 +342,7 @@ EmuSystemService(
     else if (Table == 1 && Index < RTL_NUMBER_OF(EmuWin32kArguments))
     {
         Count = EmuWin32kArguments[Index];
+        Signature = EmuWin32kSignatures[Index];
     }
     else
     {
@@ -321,6 +356,7 @@ EmuSystemService(
     Arguments[2] = Registers->Gpr[EmuR8];
     Arguments[3] = Registers->Gpr[EmuR9];
 
+    Registers->Rip = ReturnRip;
     Thread->HostDepth++;
     _SEH2_TRY
     {
@@ -361,5 +397,6 @@ EmuSystemService(
     _SEH2_END;
     Thread->HostDepth--;
 
+    if (Registers->Rip == ReturnRip) Registers->Rip = ServiceRip;
     if (!Resumed) Registers->Gpr[EmuRax] = Result;
 }

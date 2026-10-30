@@ -33,6 +33,14 @@
 
 #define NUMBER_POOL_LOOKASIDE_LISTS 32
 
+/* Selectors seeded into a WoW64 guest context: the AMD64 WoW64 layout that the x86 CPU backend requires. */
+#define RPL_MASK              0x0003
+#define KGDT64_R3_CMCODE      0x0020
+#define KGDT64_R3_DATA        0x0028
+#define KGDT64_R3_CMTEB       0x0050
+
+#define EFLAGS_INTERRUPT_MASK 0x200L
+
 #define PRCB_BUILD_DEBUG        1
 #define PRCB_BUILD_UNIPROCESSOR 2
 

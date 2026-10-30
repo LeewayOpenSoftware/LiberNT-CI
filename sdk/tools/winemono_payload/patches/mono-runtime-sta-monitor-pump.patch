@@ -1,0 +1,123 @@
+--- a/mono/metadata/monitor.h
++++ b/mono/metadata/monitor.h
+@@ -43,6 +43,9 @@
+ 	void *data;
+ 	MonoCoopMutex *entry_mutex;
+ 	MonoCoopCond *entry_cond;
++#ifdef HOST_WIN32
++	void *entry_event;
++#endif
+ };
+ 
+ /*
+--- a/mono/metadata/monitor.c
++++ b/mono/metadata/monitor.c
+@@ -35,6 +35,9 @@
+ #include <mono/utils/mono-os-wait.h>
+ #include "external-only.h"
+ #include "icall-decl.h"
++#ifdef HOST_WIN32
++#include <objbase.h>
++#endif
+ 
+ /*
+  * Pull the list of opcodes
+@@ -371,6 +374,12 @@
+ 		g_free (mon->entry_mutex);
+ 		mon->entry_mutex = NULL;
+ 	}
++#ifdef HOST_WIN32
++	if (mon->entry_event != NULL) {
++		CloseHandle (mon->entry_event);
++		mon->entry_event = NULL;
++	}
++#endif
+ 	/* If this isn't empty then something is seriously broken - it
+ 	 * means a thread is still waiting on the object that owned
+ 	 * this lock, but the object has been finalized.
+@@ -700,6 +709,10 @@
+ 				if (mon_status_have_waiters (old_status)) {
+ 					mono_coop_mutex_lock (mon->entry_mutex);
+ 					mono_coop_cond_signal (mon->entry_cond);
++#ifdef HOST_WIN32
++					if (mon->entry_event)
++						SetEvent (mon->entry_event);
++#endif
+ 					mono_coop_mutex_unlock (mon->entry_mutex);
+ 				}
+ 				break;
+@@ -792,8 +805,50 @@
+ 	MonoThreadsSync *mon = (MonoThreadsSync*) mon_untyped;
+ 	mono_coop_mutex_lock (mon->entry_mutex);
+ 	mono_coop_cond_broadcast (mon->entry_cond);
++#ifdef HOST_WIN32
++	if (mon->entry_event)
++		SetEvent (mon->entry_event);
++#endif
++	mono_coop_mutex_unlock (mon->entry_mutex);
++}
++
++#ifdef HOST_WIN32
++static gboolean
++mon_wait_pumps_com (void)
++{
++	APTTYPE type;
++	APTTYPEQUALIFIER qualifier;
++
++	if (FAILED (CoGetApartmentType (&type, &qualifier)))
++		return FALSE;
++	return type == APTTYPE_STA || type == APTTYPE_MAINSTA;
++}
++
++static void
++mon_init_entry_event (MonoThreadsSync *mon)
++{
++	if (mon->entry_event == NULL) {
++		HANDLE event = CreateEventW (NULL, FALSE, FALSE, NULL);
++		if (event && mono_atomic_cas_ptr (&mon->entry_event, event, NULL) != NULL)
++			CloseHandle (event);
++	}
++}
++
++static gboolean
++mon_entry_wait_pumping (MonoThreadsSync *mon, guint32 waitms)
++{
++	HANDLE event = mon->entry_event;
++	DWORD index = 0;
++	HRESULT hr;
++
+ 	mono_coop_mutex_unlock (mon->entry_mutex);
++	MONO_ENTER_GC_SAFE;
++	hr = CoWaitForMultipleHandles (0, waitms == MONO_INFINITE_WAIT ? INFINITE : waitms, 1, &event, &index);
++	MONO_EXIT_GC_SAFE;
++	mono_coop_mutex_lock (mon->entry_mutex);
++	return hr == RPC_S_CALLPENDING;
+ }
++#endif
+ 
+ 
+ /* If allow_interruption==TRUE, the method will be interrupted if abort or suspend
+@@ -867,6 +922,11 @@
+ 
+ 	/* Make sure the sync primitives are created */
+ 	mon_init_cond_var (mon);
++#ifdef HOST_WIN32
++	gboolean const pump = mon_wait_pumps_com ();
++	if (pump)
++		mon_init_entry_event (mon);
++#endif
+ retry_contended:
+ 	/* a small amount of duplicated code, but it allows us to insert the profiler
+ 	 * callbacks without impacting the fast path: from here on we don't need to go back to the
+@@ -924,6 +984,11 @@
+ 	mono_thread_info_install_interrupt (signal_monitor, mon, &interrupted);
+ 	if (!interrupted) {
+ 		timedout = FALSE;
++#ifdef HOST_WIN32
++		if (pump && mon->entry_event) {
++			timedout = mon_entry_wait_pumping (mon, waitms);
++		} else
++#endif
+ 		if (ms == MONO_INFINITE_WAIT) {
+ 			mono_coop_cond_wait (mon->entry_cond, mon->entry_mutex);
+ 		} else {

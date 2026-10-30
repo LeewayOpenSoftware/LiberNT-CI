@@ -267,6 +267,7 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_PROP_CORNER_RADIUS        L"ReactOS.Dwm.CornerRadius"
 #define DWM_PROP_WINDOW_CORNER_PREFERENCE L"ReactOS.Dwm.WindowCornerPreference"
 #define DWM_PROP_THEMED_FRAME         L"ReactOS.Dwm.ThemedFrame"
+#define DWM_PROP_NC_RENDERING_POLICY  L"ReactOS.Dwm.NcRenderingPolicy"
 #define DWM_PROP_TRANSITION           L"ReactOS.Dwm.Transition"
 #define DWM_PROP_TRANSITION_FROM_LT   L"ReactOS.Dwm.TransitionFromLT"
 #define DWM_PROP_TRANSITION_FROM_RB   L"ReactOS.Dwm.TransitionFromRB"
@@ -290,6 +291,8 @@ typedef struct _DXGK_REDIRECTION_SURFACES_SYNC
 #define DWM_CORNER_DONOTROUND   1u
 #define DWM_CORNER_ROUND        2u
 #define DWM_CORNER_ROUNDSMALL   3u
+
+#define DWM_NC_RENDERING_DISABLED   1u
 
 #define DWM_CORNER_RADIUS_96        7u
 #define DWM_CORNER_RADIUS_SMALL_96  4u

@@ -500,6 +500,11 @@ CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey,
         ZwClose(Probe);
         Probe = NULL;
         if (!NT_SUCCESS(Status)) goto Exit;
+        if (Hive && ((Flags & REG_PROCESS_PRIVATE) || (Hive->Flags & CMHIVE_FLAG_PROCESS_PRIVATE)))
+        {
+            Status = STATUS_SHARING_VIOLATION;
+            goto Exit;
+        }
     }
     else if (Status != STATUS_OBJECT_NAME_NOT_FOUND)
     {
@@ -521,6 +526,7 @@ CmpLoadAppHive(POBJECT_ATTRIBUTES TargetKey,
         if (!NT_SUCCESS(Status)) goto Exit;
         Primary = Log = NULL;
         Hive->Flags |= CMHIVE_FLAG_APPLICATION_HIVE;
+        if (Flags & REG_PROCESS_PRIVATE) Hive->Flags |= CMHIVE_FLAG_PROCESS_PRIVATE;
         Hive->Hive.HiveFlags |= HIVE_NOLAZYFLUSH;
         Constructed = TRUE;
         Hive->DeletedKcbTable = ExAllocatePoolWithTag(PagedPool,

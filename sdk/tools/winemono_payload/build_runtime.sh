@@ -26,6 +26,9 @@ cd /build/wine-mono-11.3.0/mono
 for p in /w/patches/*.patch; do patch -p1 < "$p"; done
 cd /build/wine-mono-11.3.0
 make -j"$(nproc)" libmono-2.0-x86.dll libmono-2.0-x86_64.dll libmono-2.0-arm64.dll >/w/build-runtime.log 2>&1
-for a in x86 x86_64 arm64; do cp image/bin/libmono-2.0-$a.dll /w/libmono-2.0-$a.patched.dll; done'
+for a in x86 x86_64 arm64; do
+    cp image/bin/libmono-2.0-$a.dll /w/libmono-2.0-$a.patched.dll
+    if [ -f image/bin/libmono-2.0-$a.pdb ]; then cp image/bin/libmono-2.0-$a.pdb /w/libmono-2.0-$a.patched.pdb; fi
+done'
 docker rm -f "$CN" >/dev/null
 ls -la "$W"/libmono-2.0-*.patched.dll

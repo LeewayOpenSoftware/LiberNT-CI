@@ -5,6 +5,7 @@
 extern void func_RegisterTouchWindow(void);
 extern void func_AttachThreadInput(void);
 extern void func_CalculatePopupWindowPosition(void);
+extern void func_CallbackNesting(void);
 extern void func_CharFuncs(void);
 extern void func_CloseWindow(void);
 extern void func_ComboBox(void);
@@ -13,10 +14,13 @@ extern void func_CopyImage_Icon(void);
 extern void func_CursorPresentation(void);
 extern void func_CreateDialog(void);
 extern void func_CreateIconFromResourceEx(void);
+extern void func_CoveredWindow(void);
 extern void func_CreateWindowEx(void);
 extern void func_DeferWindowPos(void);
+extern void func_DefFrameProc(void);
 extern void func_DeskWallpaper(void);
 extern void func_DestroyCursorIcon(void);
+extern void func_DestroyActiveWindow(void);
 extern void func_DestroyWindow(void);
 extern void func_DialogDpiChangeBehavior(void);
 extern void func_DM_REPOSITION(void);
@@ -29,6 +33,9 @@ extern void func_ClipboardAccess(void);
 extern void func_ClipboardData(void);
 extern void func_EnableScrollBar(void);
 extern void func_EnumDisplaySettings(void);
+extern void func_ForegroundRetake(void);
+extern void func_ForegroundRight(void);
+extern void func_ForegroundStartup(void);
 extern void func_GetClassInfo(void);
 extern void func_GetDCEx(void);
 extern void func_GetProp(void);
@@ -68,6 +75,8 @@ extern void func_NestedWindowPos(void);
 extern void func_NcPaintRgn(void);
 extern void func_NextDlgItem(void);
 extern void func_NonClientPaint(void);
+extern void func_OwnerDestroy(void);
+extern void func_PersianLayout(void);
 extern void func_PhysicalPoint(void);
 extern void func_PhysicalToLogicalPoint(void);
 extern void func_LogicalToPhysicalPoint(void);
@@ -92,6 +101,7 @@ extern void func_SetScrollInfo(void);
 extern void func_SetScrollRange(void);
 extern void func_SetWindowPlacement(void);
 extern void func_WindowDisplayAffinity(void);
+extern void func_WindowRegionFrame(void);
 extern void func_ShellWindowQueries(void);
 extern void func_ShowWindow(void);
 extern void func_SwitchToThisWindow(void);
@@ -100,6 +110,7 @@ extern void func_TopmostBand(void);
 extern void func_SystemMenu(void);
 extern void func_TrackMouseEvent(void);
 extern void func_TrackPopupMenuEx(void);
+extern void func_UncoveredWindow(void);
 extern void func_UpdateRegion(void);
 extern void func_UserHandleGrantAccess(void);
 extern void func_VirtualKey(void);
@@ -113,6 +124,7 @@ const struct test winetest_testlist[] =
     { "RegisterTouchWindow", func_RegisterTouchWindow },
     { "AttachThreadInput", func_AttachThreadInput },
     { "CalculatePopupWindowPosition", func_CalculatePopupWindowPosition },
+    { "CallbackNesting", func_CallbackNesting },
     { "CharFuncs", func_CharFuncs },
     { "CloseWindow", func_CloseWindow },
     { "ComboBox", func_ComboBox },
@@ -121,10 +133,13 @@ const struct test winetest_testlist[] =
     { "CursorPresentation", func_CursorPresentation },
     { "CreateDialog", func_CreateDialog },
     { "CreateIconFromResourceEx", func_CreateIconFromResourceEx },
+    { "CoveredWindow", func_CoveredWindow },
     { "CreateWindowEx", func_CreateWindowEx },
     { "DeferWindowPos", func_DeferWindowPos },
+    { "DefFrameProc", func_DefFrameProc },
     { "DeskWallpaper", func_DeskWallpaper },
     { "DestroyCursorIcon", func_DestroyCursorIcon },
+    { "DestroyActiveWindow", func_DestroyActiveWindow },
     { "DestroyWindow", func_DestroyWindow },
     { "DialogDpiChangeBehavior", func_DialogDpiChangeBehavior },
     { "DM_REPOSITION", func_DM_REPOSITION },
@@ -137,6 +152,9 @@ const struct test winetest_testlist[] =
     { "ClipboardData", func_ClipboardData },
     { "EnableScrollBar", func_EnableScrollBar },
     { "EnumDisplaySettings", func_EnumDisplaySettings },
+    { "ForegroundRetake", func_ForegroundRetake },
+    { "ForegroundRight", func_ForegroundRight },
+    { "ForegroundStartup", func_ForegroundStartup },
     { "GetClassInfo", func_GetClassInfo },
     { "GetDCEx", func_GetDCEx },
     { "GetProp", func_GetProp },
@@ -176,6 +194,8 @@ const struct test winetest_testlist[] =
     { "NcPaintRgn", func_NcPaintRgn },
     { "NextDlgItem", func_NextDlgItem },
     { "NonClientPaint", func_NonClientPaint },
+    { "OwnerDestroy", func_OwnerDestroy },
+    { "PersianLayout", func_PersianLayout },
     { "PhysicalPoint", func_PhysicalPoint },
     { "PhysicalToLogicalPoint", func_PhysicalToLogicalPoint },
     { "LogicalToPhysicalPoint", func_LogicalToPhysicalPoint },
@@ -200,6 +220,7 @@ const struct test winetest_testlist[] =
     { "SetScrollRange", func_SetScrollRange },
     { "SetWindowPlacement", func_SetWindowPlacement },
     { "WindowDisplayAffinity", func_WindowDisplayAffinity },
+    { "WindowRegionFrame", func_WindowRegionFrame },
     { "ShellWindowQueries", func_ShellWindowQueries },
     { "ShowWindow", func_ShowWindow },
     { "SwitchToThisWindow", func_SwitchToThisWindow },
@@ -208,6 +229,7 @@ const struct test winetest_testlist[] =
     { "TopmostBand", func_TopmostBand },
     { "TrackMouseEvent", func_TrackMouseEvent },
     { "TrackPopupMenuEx", func_TrackPopupMenuEx },
+    { "UncoveredWindow", func_UncoveredWindow },
     { "UpdateRegion", func_UpdateRegion },
     { "UserHandleGrantAccess", func_UserHandleGrantAccess },
     { "VirtualKey", func_VirtualKey },

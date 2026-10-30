@@ -35,6 +35,7 @@ extern "C" {
 #define FELIX86_NT_FAULT_UNRELATED 0
 #define FELIX86_NT_FAULT_RESUME    1
 #define FELIX86_NT_FAULT_GUEST     2
+#define FELIX86_NT_FAULT_PARK      3
 
 #define FELIX86_NT_NO_INTERRUPT    0xFFFFFFFF
 
@@ -65,16 +66,24 @@ int Felix86NtInitialize(void);
 FELIX86_NT_CPU *Felix86NtCreateCpu(void *Owner, uint64_t Teb);
 void Felix86NtDestroyCpu(FELIX86_NT_CPU *Cpu);
 uint64_t *Felix86NtRegisters(FELIX86_NT_CPU *Cpu);
+uint64_t *Felix86NtVectors(FELIX86_NT_CPU *Cpu, uint32_t *Stride);
 uint64_t Felix86NtGetFlags(FELIX86_NT_CPU *Cpu);
 void Felix86NtSetFlags(FELIX86_NT_CPU *Cpu, uint64_t Flags);
 void Felix86NtSaveFloating(FELIX86_NT_CPU *Cpu, void *Area);
 void Felix86NtRestoreFloating(FELIX86_NT_CPU *Cpu, const void *Area);
+uint64_t Felix86NtGetFrame(FELIX86_NT_CPU *Cpu);
+void Felix86NtSetFrame(FELIX86_NT_CPU *Cpu, uint64_t Frame);
 void Felix86NtRun(FELIX86_NT_CPU *Cpu) __attribute__((noreturn));
 void Felix86NtInvalidate(uint64_t Start, uint64_t End);
 int Felix86NtFault(FELIX86_NT_CPU *Cpu, FELIX86_NT_NATIVE *Native, FELIX86_NT_GUEST *Guest);
 void Felix86NtProcessor(uint16_t *Level, uint16_t *Revision);
+void Felix86NtSetMode32(FELIX86_NT_CPU *Cpu, uint64_t FsBase);
+void Felix86NtCpuid(uint32_t Leaf, uint32_t Subleaf, uint32_t *Registers);
+void Felix86NtRequestPark(FELIX86_NT_CPU *Cpu);
+int Felix86NtCancelPark(FELIX86_NT_CPU *Cpu);
 
 void Felix86NtSystemService(void *Owner, uint64_t *Registers);
+void Felix86NtSystemService32(void *Owner, uint64_t *Registers);
 void Felix86NtPrint(const char *Text);
 void Felix86NtTerminate(uint32_t Status) __attribute__((noreturn));
 void Felix86NtYield(void);

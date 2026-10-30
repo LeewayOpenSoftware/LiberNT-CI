@@ -559,7 +559,9 @@ LONG WINAPI DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_HEADER *packet)
     if (packet == NULL || packet->size < sizeof(*packet))
         return ERROR_GEN_FAILURE;
 
-    switch (packet->type)
+    if (packet->type == DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_DPI_SCALE)
+        ExpectedSize = sizeof(DISPLAYCONFIG_GET_SOURCE_DPI_SCALE);
+    else switch (packet->type)
     {
         case DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME:
             ExpectedSize = sizeof(DISPLAYCONFIG_SOURCE_DEVICE_NAME);
@@ -605,6 +607,16 @@ LONG WINAPI DisplayConfigGetDeviceInfo(DISPLAYCONFIG_DEVICE_INFO_HEADER *packet)
     }
     if (Local == NULL)
         return ERROR_GEN_FAILURE;
+
+    if (packet->type == DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_DPI_SCALE)
+    {
+        DISPLAYCONFIG_GET_SOURCE_DPI_SCALE *Scale = (DISPLAYCONFIG_GET_SOURCE_DPI_SCALE *)packet;
+
+        Scale->minRelativeScaleStep = 0;
+        Scale->curRelativeScaleStep = 0;
+        Scale->maxRelativeScaleStep = 0;
+        return ERROR_SUCCESS;
+    }
 
     switch (packet->type)
     {
@@ -704,6 +716,32 @@ LONG WINAPI DisplayConfigSetDeviceInfo( DISPLAYCONFIG_DEVICE_INFO_HEADER *packet
 
     if (packet == NULL || packet->size < sizeof(*packet))
         return ERROR_GEN_FAILURE;
+
+    if (packet->type == DISPLAYCONFIG_DEVICE_INFO_SET_SOURCE_DPI_SCALE)
+    {
+        DISPLAYCONFIG_SET_SOURCE_DPI_SCALE *Scale = (DISPLAYCONFIG_SET_SOURCE_DPI_SCALE *)packet;
+
+        if (packet->size != sizeof(*Scale))
+            return ERROR_INVALID_PARAMETER;
+        Count = DisplayConfigCollectPaths(Paths, ARRAY_SIZE(Paths));
+        if (Count < 0)
+            return ERROR_GEN_FAILURE;
+        for (Index = 0; Index < Count; Index++)
+        {
+            if (Paths[Index].AdapterId.LowPart == packet->adapterId.LowPart &&
+                Paths[Index].AdapterId.HighPart == packet->adapterId.HighPart &&
+                Paths[Index].SourceId == packet->id)
+            {
+                Local = &Paths[Index];
+                break;
+            }
+        }
+        if (Local == NULL)
+            return ERROR_GEN_FAILURE;
+        if (Scale->relativeScaleStep != 0)
+            return ERROR_INVALID_PARAMETER;
+        return ERROR_SUCCESS;
+    }
 
     switch (packet->type)
     {

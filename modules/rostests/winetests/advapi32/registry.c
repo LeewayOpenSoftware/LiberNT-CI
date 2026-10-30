@@ -1734,6 +1734,61 @@ static void test_reg_load_app_key(void)
     delete_dir(hivefilepath);
 }
 
+#ifdef __REACTOS__
+static void test_reg_load_app_key_private(void)
+{
+    static const struct
+    {
+        DWORD first;
+        DWORD second;
+        LONG result;
+    }
+    tests[] =
+    {
+        { 0, 0, ERROR_SUCCESS },
+        { 0, REG_PROCESS_APPKEY, ERROR_SHARING_VIOLATION },
+        { REG_PROCESS_APPKEY, 0, ERROR_SHARING_VIOLATION },
+        { REG_PROCESS_APPKEY, REG_PROCESS_APPKEY, ERROR_SHARING_VIOLATION },
+    };
+    char hivefilepath[2 * MAX_PATH], *p;
+    HKEY first, second;
+    unsigned int i;
+    LONG ret;
+
+    if (!set_privileges(SE_BACKUP_NAME, TRUE))
+    {
+        win_skip("Failed to set SE_BACKUP_NAME privileges, skipping tests\n");
+        return;
+    }
+
+    GetTempPathA(MAX_PATH, hivefilepath);
+    strcat(hivefilepath, "\\wine_reg_test");
+    CreateDirectoryA(hivefilepath, NULL);
+    strcat(hivefilepath, "\\private_key");
+
+    ret = RegSaveKeyA(hkey_main, hivefilepath, NULL);
+    ok(ret == ERROR_SUCCESS, "expected ERROR_SUCCESS, got %ld\n", ret);
+
+    set_privileges(SE_BACKUP_NAME, FALSE);
+
+    for (i = 0; i < ARRAY_SIZE(tests); ++i)
+    {
+        first = second = NULL;
+        ret = RegLoadAppKeyA(hivefilepath, &first, KEY_ALL_ACCESS, tests[i].first, 0);
+        ok(ret == ERROR_SUCCESS, "%u: expected ERROR_SUCCESS, got %ld\n", i, ret);
+        ret = RegLoadAppKeyA(hivefilepath, &second, KEY_ALL_ACCESS, tests[i].second, 0);
+        ok(ret == tests[i].result, "%u: expected %ld, got %ld\n", i, tests[i].result, ret);
+        if (second) RegCloseKey(second);
+        if (first) RegCloseKey(first);
+        wait_file_available(hivefilepath);
+    }
+
+    p = strrchr(hivefilepath, '\\');
+    *p = 0;
+    delete_dir(hivefilepath);
+}
+#endif
+
 /* tests that show that RegConnectRegistry and
    OpenSCManager accept computer names without the
    \\ prefix (what MSDN says).   */
@@ -5182,6 +5237,9 @@ START_TEST(registry)
     test_classesroot_mask();
     test_reg_load_key();
     test_reg_load_app_key();
+#ifdef __REACTOS__
+    test_reg_load_app_key_private();
+#endif
     test_reg_copy_tree();
     test_reg_delete_tree();
     test_rw_order();

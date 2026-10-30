@@ -29,6 +29,28 @@ Felix86NtSetJump:
     li a0, 0
     ret
 
+    .p2align 2
+    .globl Felix86NtLongJump
+Felix86NtLongJump:
+    ld ra, 0(a0)
+    ld sp, 8(a0)
+    ld s0, 16(a0)
+    ld s1, 24(a0)
+    .set slot, 0
+    .irp reg, s2,s3,s4,s5,s6,s7,s8,s9,s10,s11
+    ld \reg, 32 + slot * 8(a0)
+    .set slot, slot + 1
+    .endr
+    fld fs0, 112(a0)
+    fld fs1, 120(a0)
+    .set slot, 0
+    .irp reg, fs2,fs3,fs4,fs5,fs6,fs7,fs8,fs9,fs10,fs11
+    fld \reg, 128 + slot * 8(a0)
+    .set slot, slot + 1
+    .endr
+    mv a0, a1
+    ret
+
     .option push
     .option arch, +v
 
@@ -191,6 +213,13 @@ Felix86NtProbeZicclsm:
     sd t0, 3(t1)
     li a0, 1
     ret
+
+    .p2align 2
+    .globl Felix86NtEnterDispatcher
+Felix86NtEnterDispatcher:
+    sub t0, sp, a3
+    sd t0, 0(a1)
+    jr a2
 
     .bss
     .p2align 6

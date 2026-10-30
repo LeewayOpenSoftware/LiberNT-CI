@@ -44,7 +44,8 @@ typedef enum _EMU_FAULT
 {
     EmuFaultUnrelated,
     EmuFaultResume,
-    EmuFaultGuest
+    EmuFaultGuest,
+    EmuFaultPark
 } EMU_FAULT;
 
 #define EMU_NO_INTERRUPT 0xFFFFFFFF
@@ -66,6 +67,11 @@ PEMU_REGISTERS
 EmuCoreGetRegisters(
     _In_ PEMU_CPU Cpu);
 
+PULONG64
+EmuCoreGetVectors(
+    _In_ PEMU_CPU Cpu,
+    _Out_ PULONG Stride);
+
 VOID
 EmuCoreGetContext(
     _In_ PEMU_CPU Cpu,
@@ -75,6 +81,15 @@ VOID
 EmuCoreSetContext(
     _In_ PEMU_CPU Cpu,
     _In_ const AMD64_CONTEXT *Context);
+
+ULONG64
+EmuCoreGetFrame(
+    _In_ PEMU_CPU Cpu);
+
+VOID
+EmuCoreSetFrame(
+    _In_ PEMU_CPU Cpu,
+    _In_ ULONG64 Frame);
 
 DECLSPEC_NORETURN
 VOID
@@ -94,6 +109,14 @@ EmuCoreFault(
     _Inout_ PCONTEXT NativeContext,
     _Out_ PEXCEPTION_RECORD GuestRecord,
     _Out_ PULONG Interrupt);
+
+VOID
+EmuCoreRequestPark(
+    _In_ PEMU_CPU Cpu);
+
+BOOLEAN
+EmuCoreCancelPark(
+    _In_ PEMU_CPU Cpu);
 
 VOID
 EmuCoreGetProcessor(

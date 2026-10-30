@@ -65,6 +65,7 @@ if(ARCH STREQUAL "i386")
         ../crt/fpcontrol.c)
     list(APPEND SOURCE_CRT_TESTS
         ../crt/__getmainargs.c # FIXME: Moved here because it doesn't work on x64
+        libm_sse2_precise.c
     )
     list(APPEND ASM_SOURCE_CRT_TESTS
         ../crt/i386/setjmp_helper.s

@@ -1,0 +1,22 @@
+--- a/mono/metadata/cominterop.c
++++ b/mono/metadata/cominterop.c
+@@ -1722,7 +1722,10 @@
+ 
+ 	case MARSHAL_ACTION_MANAGED_CONV_OUT: {
+ 		if (t->byref && t->attrs & PARAM_ATTRIBUTE_OUT) {
+-			guint32 pos_null = 0;
++			guint32 pos_null = 0, pos_arg_null;
++
++			mono_mb_emit_ldarg (mb, argnum);
++			pos_arg_null = mono_mb_emit_branch (mb, CEE_BRFALSE);
+ 
+ 			mono_mb_emit_ldarg (mb, argnum);
+ 			mono_mb_emit_byte (mb, CEE_LDC_I4_0);
+@@ -1755,6 +1758,7 @@
+ 			mono_mb_emit_byte (mb, CEE_POP);
+ 
+ 			mono_mb_patch_short_branch (mb, pos_null);
++			mono_mb_patch_branch (mb, pos_arg_null);
+ 		}
+ 		break;
+ 	}

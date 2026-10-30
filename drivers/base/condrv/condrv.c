@@ -1339,6 +1339,21 @@ CdServerIoctl(
         case IOCTL_CONDRV_SETUP_INPUT:
             return STATUS_NOT_SUPPORTED;
 
+        case IOCTL_CONDRV_GET_PROCESS_LIST:
+        {
+            NTSTATUS Status;
+
+            OldIrql = ExAcquireSpinLockShared(&CdLock);
+            if (!Server->Console)
+                Status = STATUS_INVALID_HANDLE;
+            else
+                Status = CdGetProcessList(Server->Console, Irp->AssociatedIrp.SystemBuffer,
+                                          Stack->Parameters.DeviceIoControl.OutputBufferLength,
+                                          &Irp->IoStatus.Information);
+            ExReleaseSpinLockShared(&CdLock, OldIrql);
+            return Status;
+        }
+
         default:
             return STATUS_INVALID_HANDLE;
     }

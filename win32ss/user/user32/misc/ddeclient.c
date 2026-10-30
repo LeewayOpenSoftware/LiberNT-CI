@@ -1037,6 +1037,9 @@ static HDDEDATA WDML_SyncWaitTransactionReply(HCONV hConv, DWORD dwTimeout, cons
                 {
                     /* check that either pXAct has been processed or no more xActions are pending */
                     BOOL ret = (pConv->transactions == pXAct);
+#ifdef __REACTOS__
+                    DWORD err = pConv->instance->lastError;
+#endif
                     if (WDML_HandleReply(pConv, &msg, &hdd, ack) == WDML_QS_HANDLED)
                     {
                         TRACE("WDML_HandleReply returned WDML_QS_HANDLED\n");
@@ -1047,6 +1050,9 @@ static HDDEDATA WDML_SyncWaitTransactionReply(HCONV hConv, DWORD dwTimeout, cons
 
                     if (ret)
                     {
+#ifdef __REACTOS__
+                        if (!hdd || err == DMLERR_MEMORY_ERROR || pConv->instance->lastError != DMLERR_MEMORY_ERROR)
+#endif
                         pConv->instance->lastError = hdd ? DMLERR_NO_ERROR : DMLERR_NOTPROCESSED;
                         return hdd;
                     }

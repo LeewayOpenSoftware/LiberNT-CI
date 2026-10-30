@@ -28,6 +28,7 @@ UPSTREAM = {
 ASSEMBLIES = {
     "mscorlib": "lib\\mono\\4.5\\mscorlib.dll",
     "System": "lib\\mono\\gac\\System\\4.0.0.0__b77a5c561934e089\\System.dll",
+    "System.Core": "lib\\mono\\gac\\System.Core\\4.0.0.0__b77a5c561934e089\\System.Core.dll",
     "System.Security": "lib\\mono\\gac\\System.Security\\4.0.0.0__b03f5f7f11d50a3a\\System.Security.dll",
     "System.ServiceProcess": "lib\\mono\\gac\\System.ServiceProcess\\4.0.0.0__b03f5f7f11d50a3a\\System.ServiceProcess.dll",
     "WindowsBase": "lib\\mono\\gac\\WindowsBase\\4.0.0.0__31bf3856ad364e35\\WindowsBase.dll",

@@ -4045,6 +4045,7 @@ static BOOL FASTCALL MENU_ButtonDown(MTRACKER* pmt, PMENU PtMenu, UINT Flags)
           /* If the popup menu is not already "popped" */
           if (!(item->fState & MF_MOUSESELECT))
           {
+              PtMenu->TimeToHide = FALSE;
               pmt->CurrentMenu = MENU_ShowSubPopup(pmt->OwnerWnd, PtMenu, FALSE, Flags);
           }
 
@@ -4575,6 +4576,7 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
     BOOL firstClick = TRUE;
     PWND pWnd;
     PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+    POINT ptMouseLast = gpsi->ptCursor;
 
     if (pti != pwnd->head.pti)
     {
@@ -4765,6 +4767,9 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                     /* the selected menu item must be changed every time */
                     /* the mouse moves. */
 
+                    if (mt.Pt.x == ptMouseLast.x && mt.Pt.y == ptMouseLast.y)
+                        break;
+                    ptMouseLast = mt.Pt;
                     if (pmMouse)
                         fInsideMenuLoop |= MENU_MouseMove( &mt, pmMouse, wFlags );
 
@@ -6060,15 +6065,30 @@ IntSetMenu(
    if (NULL != NewMenu)
    {
       NewMenu->hWnd = UserHMGetHandle(Wnd);
-      IntReleaseMenuObject(NewMenu);
    }
    if (NULL != OldMenu)
    {
+      BOOL Locked = (OldMenu->hWnd == UserHMGetHandle(Wnd));
+
       OldMenu->hWnd = NULL;
       IntReleaseMenuObject(OldMenu);
+      if (Locked)
+         IntUnlockWindowMenu(OldMenu);
    }
 
    return TRUE;
+}
+
+BOOL FASTCALL
+IntUnlockWindowMenu(PMENU Menu)
+{
+   BOOL Destroyed = UserObjectMarkedDestroy(UserHMGetHandle(Menu));
+
+   Menu->hWnd = NULL;
+   IntReleaseMenuObject(Menu);
+   if (Destroyed)
+      IntDestroyMenuObject(Menu, TRUE);
+   return Destroyed;
 }
 
 

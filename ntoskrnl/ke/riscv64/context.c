@@ -89,3 +89,17 @@ KeTrapFrameToContext(
     Context->ContextFlags = Flags;
     KeRestoreInterrupts(Interrupts);
 }
+
+VOID
+NTAPI
+KiInitializeWow64ThreadContext(
+    _Inout_ PCONTEXT Context,
+    _In_ ULONG Eip,
+    _In_ ULONG Eax,
+    _In_ ULONG_PTR CpuArea)
+{
+    UNREFERENCED_PARAMETER(Eax);
+
+    Context->Pc = Eip;
+    Context->Sp = CpuArea & ~15ULL;
+}

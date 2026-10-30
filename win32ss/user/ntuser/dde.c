@@ -259,7 +259,8 @@ IntDdePostMessageHook(
           case WM_DDE_POKE:
           {
               DDEPOKE *pddePoke = Buffer;
-              NT_ASSERT(pddePoke != NULL);
+              if (pddePoke == NULL)
+                 break;
               switch(pddePoke->cfFormat)
               {
                  case CF_BITMAP:
@@ -275,7 +276,8 @@ IntDdePostMessageHook(
           case WM_DDE_DATA:
           {
               DDEDATA *pddeData2 = Buffer;
-              NT_ASSERT(pddeData2 != NULL);
+              if (pddeData2 == NULL)
+                 break;
               switch(pddeData2->cfFormat)
               {
                  case CF_BITMAP:

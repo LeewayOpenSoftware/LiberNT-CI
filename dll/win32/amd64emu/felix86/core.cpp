@@ -49,6 +49,7 @@ struct NtCpu {
     u64 frame = 0;
     bool compiling = false;
     bool pending = false;
+    bool park = false;
     FELIX86_NT_GUEST pending_fault{};
 };
 
@@ -160,7 +161,8 @@ void felix86_syscall(felix86_frame* frame) {
 }
 
 void felix86_syscall32(felix86_frame* frame, u32 rip_next) {
-    ERROR("32-bit system call at %llx", (unsigned long long)frame->state->ctx.rip);
+    NtCpu* cpu = (NtCpu*)frame->state;
+    Felix86NtSystemService32(cpu->owner, cpu->state.ctx.gprs);
 }
 
 void felix86_raise_hardware_breakpoint(ThreadState* state, u64 rip, int index) {
@@ -240,8 +242,8 @@ int Felix86NtInitialize(void) {
     g_config.quiet = true;
 
     set_extensions(Felix86NtProbeExtensions());
-    if (!Extensions::V || !Extensions::Zba || !Extensions::Zbb || !Extensions::Zbs) {
-        Logger::log("felix86 requires rv64gv_zba_zbb_zbs\n");
+    if (!Extensions::V || !Extensions::Zba || !Extensions::Zbb || !Extensions::Zbs || !Extensions::Zicond) {
+        Logger::log("felix86 requires rv64gv_zba_zbb_zbs_zicond\n");
         return -1;
     }
 
@@ -310,6 +312,11 @@ uint64_t* Felix86NtRegisters(FELIX86_NT_CPU* handle) {
     return ((NtCpu*)handle)->state.ctx.gprs;
 }
 
+uint64_t* Felix86NtVectors(FELIX86_NT_CPU* handle, uint32_t* stride) {
+    *stride = sizeof(XmmReg) / sizeof(u64);
+    return ((NtCpu*)handle)->state.ctx.xmm[0].data;
+}
+
 uint64_t Felix86NtGetFlags(FELIX86_NT_CPU* handle) {
     ThreadState* state = &((NtCpu*)handle)->state;
     u64 flags = state->ctx.GetFlags();
@@ -333,10 +340,21 @@ void Felix86NtRestoreFloating(FELIX86_NT_CPU* handle, const void* area) {
     felix86_fxrstor(((NtCpu*)handle)->state.ctx, (void*)area);
 }
 
+uint64_t Felix86NtGetFrame(FELIX86_NT_CPU* handle) {
+    return ((NtCpu*)handle)->frame;
+}
+
+void Felix86NtSetFrame(FELIX86_NT_CPU* handle, uint64_t frame) {
+    ((NtCpu*)handle)->frame = frame;
+}
+
+extern "C" void Felix86NtEnterDispatcher(ThreadState* state, u64* frame, u64 entry, u64 frame_size);
+
 void Felix86NtRun(FELIX86_NT_CPU* handle) {
-    ThreadState* state = &((NtCpu*)handle)->state;
+    NtCpu* cpu = (NtCpu*)handle;
+    ThreadState* state = &cpu->state;
     ThreadState::Set(state);
-    state->recompiler->enterDispatcher(state);
+    Felix86NtEnterDispatcher(state, &cpu->frame, state->recompiler->getEnterDispatcher(), sizeof(felix86_frame));
     Felix86NtTerminate(NT_STATUS_ASSERTION_FAILURE);
 }
 
@@ -356,6 +374,43 @@ void Felix86NtProcessor(uint16_t* level, uint16_t* revision) {
     }
     *level = family;
     *revision = (model << 8) | (cpuid.eax & 0xF);
+}
+
+void Felix86NtSetMode32(FELIX86_NT_CPU* handle, uint64_t fsbase) {
+    ThreadState* state = &((NtCpu*)handle)->state;
+    state->ctx.cs = 0x23;
+    state->ctx.ds = 0x2b;
+    state->ctx.es = 0x2b;
+    state->ctx.ss = 0x2b;
+    state->ctx.gs = 0x2b;
+    state->ctx.fs = 0x53;
+    state->ctx.fsbase = fsbase;
+    state->ctx.gsbase = 0;
+}
+
+void Felix86NtCpuid(uint32_t leaf, uint32_t subleaf, uint32_t* registers) {
+    Cpuid cpuid = felix86_cpuid_impl(leaf, subleaf);
+    registers[0] = cpuid.eax;
+    registers[1] = cpuid.ebx;
+    registers[2] = cpuid.ecx;
+    registers[3] = cpuid.edx;
+}
+
+void Felix86NtRequestPark(FELIX86_NT_CPU* handle) {
+    NtCpu* cpu = (NtCpu*)handle;
+    __atomic_store_n(&cpu->park, true, __ATOMIC_RELEASE);
+    mprotect(cpu->state.deferred_fault_page, page_size, PROT_READ);
+}
+
+int Felix86NtCancelPark(FELIX86_NT_CPU* handle) {
+    NtCpu* cpu = (NtCpu*)handle;
+    if (!__atomic_exchange_n(&cpu->park, false, __ATOMIC_ACQ_REL)) {
+        return 0;
+    }
+    if (!cpu->pending) {
+        mprotect(cpu->state.deferred_fault_page, page_size, PROT_READ | PROT_WRITE);
+    }
+    return 1;
 }
 
 static void jump(FELIX86_NT_NATIVE* native, sigjmp_buf& buffer, u64 value) {
@@ -515,7 +570,25 @@ int Felix86NtFault(FELIX86_NT_CPU* handle, FELIX86_NT_NATIVE* native, FELIX86_NT
         u32 instruction;
         memcpy(&instruction, (void*)pc, sizeof(instruction));
         u64 ripreg = native->X[Recompiler::allocatedGPR(X86_REF_RIP).Index()];
-        if (cpu->pending && access && instruction == safepoint_instruction && address == (u64)state - 8) {
+        bool safepoint = access && instruction == safepoint_instruction && address == (u64)state - 8;
+        if (safepoint && __atomic_exchange_n(&cpu->park, false, __ATOMIC_ACQ_REL)) {
+            if (!cpu->pending) {
+                mprotect(state->deferred_fault_page, page_size, PROT_READ | PROT_WRITE);
+            }
+            pull_registers(state, native, ripreg);
+            *native->Pc = recompiler->getRestoreState();
+            native->X[2] = cpu->frame;
+            native->X[3] = (u64)state;
+            return FELIX86_NT_FAULT_PARK;
+        }
+        if (safepoint && !cpu->pending) {
+            mprotect(state->deferred_fault_page, page_size, PROT_READ | PROT_WRITE);
+            if (__atomic_load_n(&cpu->park, __ATOMIC_ACQUIRE)) {
+                mprotect(state->deferred_fault_page, page_size, PROT_READ);
+            }
+            return FELIX86_NT_FAULT_RESUME;
+        }
+        if (cpu->pending && safepoint) {
             mprotect(state->deferred_fault_page, page_size, PROT_READ | PROT_WRITE);
             cpu->pending = false;
             pull_registers(state, native, ripreg);

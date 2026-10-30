@@ -1,0 +1,129 @@
+--- a/mono/metadata/marshal.c
++++ b/mono/metadata/marshal.c
+@@ -248,6 +248,8 @@
+ 		register_icall (mono_array_to_savearray, mono_icall_sig_ptr_object, FALSE);
+ 		register_icall (mono_array_to_lparray, mono_icall_sig_ptr_object, FALSE);
+ 		register_icall (mono_array_from_lparray, mono_icall_sig_void_object_ptr, FALSE);
++		register_icall (mono_array_from_interface_lparray, mono_icall_sig_void_object_ptr, FALSE);
++		register_icall (mono_array_to_interface_lparray, mono_icall_sig_void_object_ptr, FALSE);
+ 		register_icall (mono_byvalarray_to_byte_array, mono_icall_sig_void_object_ptr_int32, FALSE);
+ 		register_icall (mono_array_to_byte_byvalarray, mono_icall_sig_void_ptr_object_int32, FALSE);
+ 		register_icall (mono_delegate_to_ftnptr, mono_icall_sig_ptr_object, FALSE);
+@@ -788,6 +790,57 @@
+ }
+ 
+ void
++mono_array_from_interface_lparray_impl (MonoArrayHandle array_handle, gpointer* nativeArray, MonoError *error)
++{
++#ifndef DISABLE_COM
++	if (!nativeArray || MONO_HANDLE_IS_NULL (array_handle))
++		return;
++
++	MonoArray *array = MONO_HANDLE_RAW (array_handle);
++	MonoClass * const klass_element_class = m_class_get_element_class (mono_handle_class (array_handle));
++	MonoMethod * const method = mono_get_Marshal_GetObjectForIUnknown ();
++
++	for (uintptr_t i = 0; i < array->max_length; i++) {
++		MonoObject *object = NULL;
++
++		if (nativeArray [i]) {
++			gpointer args [1] = { nativeArray + i };
++
++			object = mono_runtime_invoke_checked (method, NULL, args, error);
++			if (!is_ok (error))
++				return;
++			object = mono_object_isinst_checked (object, klass_element_class, error);
++			if (!is_ok (error))
++				return;
++		}
++		mono_array_setref_internal (array, i, object);
++	}
++#endif
++}
++
++void
++mono_array_to_interface_lparray_impl (MonoArrayHandle array_handle, gpointer* nativeArray, MonoError *error)
++{
++#ifndef DISABLE_COM
++	if (!nativeArray || MONO_HANDLE_IS_NULL (array_handle))
++		return;
++
++	MonoArray *array = MONO_HANDLE_RAW (array_handle);
++	MonoClass * const klass_element_class = m_class_get_element_class (mono_handle_class (array_handle));
++
++	for (uintptr_t i = 0; i < array->max_length; i++) {
++		gpointer itf = mono_cominterop_get_com_interface (mono_array_get_internal (array, MonoObject*, i), klass_element_class, error);
++
++		if (!is_ok (error))
++			return;
++		if (itf)
++			((MonoIUnknown *)itf)->vtable->AddRef ((MonoIUnknown *)itf);
++		nativeArray [i] = itf;
++	}
++#endif
++}
++
++void
+ mono_array_from_lparray_impl (MonoArrayHandle array_handle, gpointer* nativeArray, MonoError *error)
+ {
+ #ifndef DISABLE_COM
+--- a/mono/metadata/marshal-ilgen.c
++++ b/mono/metadata/marshal-ilgen.c
+@@ -2914,6 +2914,16 @@
+ 			break;
+ 		}
+ 
++		if (mono_class_is_interface (eklass)) {
++			if ((t->attrs & PARAM_ATTRIBUTE_IN) || !(t->attrs & PARAM_ATTRIBUTE_OUT)) {
++				mono_mb_emit_ldloc (mb, conv_arg);
++				mono_mb_emit_ldarg (mb, argnum);
++				mono_mb_emit_icall_id (mb, MONO_JIT_ICALL_mono_array_from_interface_lparray);
++			}
++			mono_mb_patch_branch (mb, label1);
++			break;
++		}
++
+ 		/* FIXME: Optimize blittable case */
+ 
+ #ifndef DISABLE_NONBLITTABLE
+@@ -3032,6 +3042,16 @@
+ 			}
+ 		}
+ 
++		if (mono_class_is_interface (eklass)) {
++			mono_mb_emit_ldloc (mb, conv_arg);
++			label1 = mono_mb_emit_branch (mb, CEE_BRFALSE);
++			mono_mb_emit_ldloc (mb, conv_arg);
++			mono_mb_emit_ldarg (mb, argnum);
++			mono_mb_emit_icall_id (mb, MONO_JIT_ICALL_mono_array_to_interface_lparray);
++			mono_mb_patch_branch (mb, label1);
++			break;
++		}
++
+ 		/* FIXME: Optimize blittable case */
+ 
+ #ifndef DISABLE_NONBLITTABLE
+--- a/mono/metadata/icall-def.h
++++ b/mono/metadata/icall-def.h
+@@ -1175,6 +1175,8 @@
+ MONO_HANDLE_REGISTER_ICALL (mono_array_from_lparray, void, 2, (MonoArray, gpointer_ptr))
+ MONO_HANDLE_REGISTER_ICALL (mono_array_to_byte_byvalarray, void, 3, (gpointer, MonoArray, guint32))
+ MONO_HANDLE_REGISTER_ICALL (mono_array_to_lparray, gpointer, 1, (MonoArray))
++MONO_HANDLE_REGISTER_ICALL (mono_array_from_interface_lparray, void, 2, (MonoArray, gpointer_ptr))
++MONO_HANDLE_REGISTER_ICALL (mono_array_to_interface_lparray, void, 2, (MonoArray, gpointer_ptr))
+ MONO_HANDLE_REGISTER_ICALL (mono_array_to_savearray, gpointer, 1, (MonoArray))
+ MONO_HANDLE_REGISTER_ICALL (mono_byvalarray_to_byte_array, void, 3, (MonoArray, const_char_ptr, guint32))
+ MONO_HANDLE_REGISTER_ICALL (mono_delegate_to_ftnptr, gpointer, 1, (MonoDelegate))
+--- a/mono/metadata/jit-icall-reg.h
++++ b/mono/metadata/jit-icall-reg.h
+@@ -157,8 +157,10 @@
+ MONO_JIT_ICALL (mono_array_new_3) \
+ MONO_JIT_ICALL (mono_array_new_4) \
+ MONO_JIT_ICALL (mono_array_new_n_icall) \
++MONO_JIT_ICALL (mono_array_from_interface_lparray) \
+ MONO_JIT_ICALL (mono_array_from_lparray) \
+ MONO_JIT_ICALL (mono_array_to_byte_byvalarray) \
++MONO_JIT_ICALL (mono_array_to_interface_lparray) \
+ MONO_JIT_ICALL (mono_array_to_lparray) \
+ MONO_JIT_ICALL (mono_array_to_savearray) \
+ MONO_JIT_ICALL (mono_break) \

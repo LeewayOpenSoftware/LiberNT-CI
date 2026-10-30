@@ -2638,6 +2638,50 @@ static LRESULT window_create( HWND hwnd, const CREATESTRUCTW *create )
     return 0;
 }
 
+#ifdef __REACTOS__
+typedef struct
+{
+    HANDLE hProcess;
+    BOOL bForeground;
+} CONSOLESETFOREGROUND;
+
+#define ConsoleSetForeground 5
+
+NTSTATUS WINAPI ConsoleControl( ULONG command, void *info, DWORD length );
+
+static void set_processes_foreground( struct console *console, BOOL foreground )
+{
+    CONSOLESETFOREGROUND info;
+    DWORD *pids, size = 64 * sizeof(DWORD);
+    IO_STATUS_BLOCK io;
+    NTSTATUS status;
+    ULONG i;
+
+    if (!(pids = malloc( size ))) return;
+    status = NtDeviceIoControlFile( console->server, NULL, NULL, NULL, &io, IOCTL_CONDRV_GET_PROCESS_LIST,
+                                    NULL, 0, pids, size );
+    if (status == STATUS_BUFFER_OVERFLOW)
+    {
+        size = pids[0] * sizeof(DWORD);
+        free( pids );
+        if (!(pids = malloc( size ))) return;
+        status = NtDeviceIoControlFile( console->server, NULL, NULL, NULL, &io, IOCTL_CONDRV_GET_PROCESS_LIST,
+                                        NULL, 0, pids, size );
+    }
+    if (status == STATUS_SUCCESS)
+    {
+        for (i = 0; i < io.Information / sizeof(DWORD); i++)
+        {
+            if (!(info.hProcess = OpenProcess( PROCESS_SET_INFORMATION, FALSE, pids[i] ))) continue;
+            info.bForeground = foreground;
+            ConsoleControl( ConsoleSetForeground, &info, sizeof(info) );
+            CloseHandle( info.hProcess );
+        }
+    }
+    free( pids );
+}
+
+#endif
 static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lparam )
 {
     struct console *console = (struct console *)GetWindowLongPtrW( hwnd, 0 );
@@ -2958,6 +3002,7 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
         }
 #ifdef __REACTOS__
         if (console->window) vt_focus_event( console, TRUE );
+        set_processes_foreground( console, TRUE );
 #endif
         break;
 
@@ -2966,6 +3011,7 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
             DestroyCaret();
 #ifdef __REACTOS__
         if (console->window) vt_focus_event( console, FALSE );
+        set_processes_foreground( console, FALSE );
 #endif
         break;
 

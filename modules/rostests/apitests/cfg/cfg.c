@@ -43,6 +43,8 @@ static const CFG_CHILD_EXPECTATION ChildExpectations[] =
     {L"valid-floating-arguments", 0},
     {L"valid-vector-arguments", 0},
     {L"valid-guarded",     0},
+    {L"notable-guarded",   0},
+    {L"notable-interior",  0},
     {L"plain-interior",    0},
     {L"invalid-aligned",   STATUS_STACK_BUFFER_OVERRUN},
     {L"invalid-misaligned", STATUS_INSTRUCTION_MISALIGNMENT},

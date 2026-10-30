@@ -1,0 +1,69 @@
+--- a/mono/metadata/cominterop.c
++++ b/mono/metadata/cominterop.c
+@@ -59,28 +59,63 @@
+ 
+ #if !defined (DISABLE_COM) || defined (HOST_WIN32)
+ 
++static gboolean
++cominterop_native_call_gc_unsafe (void)
++{
++	MonoThreadInfo *info = mono_thread_info_current_unchecked ();
++	int state;
++
++	if (!info || !mono_thread_info_is_live (info))
++		return FALSE;
++	state = mono_thread_info_current_state (info);
++	return state == STATE_RUNNING || state == STATE_ASYNC_SUSPEND_REQUESTED;
++}
++
+ static int
+ mono_IUnknown_QueryInterface (MonoIUnknown *pUnk, gconstpointer riid, gpointer* ppv)
+ {
++	int result;
++
+ 	g_assert (pUnk);
+-	return pUnk->vtable->QueryInterface (pUnk, riid, ppv);
++	if (!cominterop_native_call_gc_unsafe ())
++		return pUnk->vtable->QueryInterface (pUnk, riid, ppv);
++	MONO_ENTER_GC_SAFE;
++	result = pUnk->vtable->QueryInterface (pUnk, riid, ppv);
++	MONO_EXIT_GC_SAFE;
++	return result;
+ }
+ 
+ static int
+ mono_IUnknown_AddRef (MonoIUnknown *pUnk)
+ {
++	int result;
++
+ 	// The return value is a reference count, generally transient, generally not to be used, except for debugging,
+ 	// or to assert that it is > 0.
+ 	g_assert (pUnk);
+-	return pUnk->vtable->AddRef (pUnk);
++	if (!cominterop_native_call_gc_unsafe ())
++		return pUnk->vtable->AddRef (pUnk);
++	MONO_ENTER_GC_SAFE;
++	result = pUnk->vtable->AddRef (pUnk);
++	MONO_EXIT_GC_SAFE;
++	return result;
+ }
+ 
+ static int
+ mono_IUnknown_Release (MonoIUnknown *pUnk)
+ {
++	int result;
++
+ 	// Release is like free -- null is silently ignored.
+ 	// Also, the return value is a reference count, generally transient, generally not to be used, except for debugging.
+-	return pUnk ? pUnk->vtable->Release (pUnk) : 0;
++	if (!pUnk)
++		return 0;
++	if (!cominterop_native_call_gc_unsafe ())
++		return pUnk->vtable->Release (pUnk);
++	MONO_ENTER_GC_SAFE;
++	result = pUnk->vtable->Release (pUnk);
++	MONO_EXIT_GC_SAFE;
++	return result;
+ }
+ 
+ #endif

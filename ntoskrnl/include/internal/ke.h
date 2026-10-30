@@ -156,6 +156,7 @@ extern KSCHEDULER_SUBNODE KiNode0SubNode;
 #ifndef KI_MAX_NUMA_NODES
 #define KI_MAX_NUMA_NODES 1
 #endif
+#define KI_MAX_USER_CALLBACK_NESTING 31
 #ifndef KiPrcbTimerTableLockQueue
 #define KiPrcbTimerTableLockQueue(Prcb, Index) (&(Prcb)->LockQueue[LockQueueTimerTableLock + (Index)])
 #endif
@@ -1063,6 +1064,17 @@ KeTrapFrameToContext(
     IN PKEXCEPTION_FRAME ExceptionFrame,
     IN OUT PCONTEXT Context
 );
+
+#ifdef _WIN64
+VOID
+NTAPI
+KiInitializeWow64ThreadContext(
+    _Inout_ PCONTEXT Context,
+    _In_ ULONG Eip,
+    _In_ ULONG Eax,
+    _In_ ULONG_PTR CpuArea
+);
+#endif
 
 DECLSPEC_NORETURN
 VOID

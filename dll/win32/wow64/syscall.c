@@ -41,7 +41,7 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(wow);
 
-#ifdef _MSC_VER
+#if defined(_MSC_VER) || (defined(__REACTOS__) && defined(WOW64_ASM_FILE))
 #define WOW64_ASM_CALLEE
 #else
 #define WOW64_ASM_CALLEE static __attribute__((used))
@@ -460,7 +460,8 @@ WOW64_ASM_CALLEE void call_raise_user_exception_dispatcher( ULONG code )
 /* based on RtlRaiseException: call NtRaiseException with context setup to return to caller */
 void WINAPI raise_exception( EXCEPTION_RECORD32 *rec32, void *ctx32,
                              BOOL first_chance, EXCEPTION_RECORD *rec );
-#ifdef __aarch64__
+#if defined(__REACTOS__) && defined(WOW64_ASM_FILE)
+#elif defined(__aarch64__)
 __ASM_GLOBAL_FUNC( raise_exception,
                    "sub sp, sp, #0x390\n\t"    /* sizeof(context) */
                    ".seh_stackalloc 0x390\n\t"
@@ -1068,8 +1069,9 @@ static const WCHAR *get_cpu_dll_name(void)
     {
     case IMAGE_FILE_MACHINE_I386:
         RtlInitUnicodeString( &nameW, L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\x86" );
-        /* TODO(riscv64): select the riscv64 x86 CPU backend (BTCpu* interface) for a riscv64 native_machine */
-        ret = (native_machine == IMAGE_FILE_MACHINE_ARM64 ? L"xtajit.dll" : L"wow64cpu.dll");
+        if (native_machine == IMAGE_FILE_MACHINE_ARM64) ret = L"xtajit.dll";
+        else if (native_machine == IMAGE_FILE_MACHINE_RISCV64) ret = L"wow64felix.dll";
+        else ret = L"wow64cpu.dll";
         break;
     case IMAGE_FILE_MACHINE_ARMNT:
         RtlInitUnicodeString( &nameW, L"\\Registry\\Machine\\Software\\Microsoft\\Wow64\\arm" );
@@ -1408,7 +1410,9 @@ static void free_temp_data(void)
 /**********************************************************************
  *           wow64_syscall
  */
-#ifdef __aarch64__
+#if defined(__REACTOS__) && defined(WOW64_ASM_FILE)
+NTSTATUS wow64_syscall( UINT *args, ULONG_PTR thunk );
+#elif defined(__aarch64__)
 NTSTATUS wow64_syscall( UINT *args, ULONG_PTR thunk );
 __ASM_GLOBAL_FUNC( wow64_syscall,
                    "stp x29, x30, [sp, #-16]!\n\t"
@@ -1491,7 +1495,9 @@ NTSTATUS WINAPI Wow64SystemServiceEx( UINT num, UINT *args )
 /**********************************************************************
  *           cpu_simulate
  */
-#ifdef __aarch64__
+#if defined(__REACTOS__) && defined(WOW64_ASM_FILE)
+extern void DECLSPEC_NORETURN cpu_simulate(void);
+#elif defined(__aarch64__)
 extern void DECLSPEC_NORETURN cpu_simulate(void);
 __ASM_GLOBAL_FUNC( cpu_simulate,
                    "stp x29, x30, [sp, #-16]!\n\t"

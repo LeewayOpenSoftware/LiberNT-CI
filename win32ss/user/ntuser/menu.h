@@ -163,6 +163,7 @@ BOOL FASTCALL IntRemoveMenuItem(PMENU Menu, UINT uPosition, UINT uFlags, BOOL bR
 PITEM FASTCALL MENU_FindItem( PMENU *pmenu, UINT *nPos, UINT wFlags );
 BOOL FASTCALL IntMenuItemInfo(PMENU Menu, UINT Item, BOOL ByPosition, PROSMENUITEMINFO UnsafeItemInfo, BOOL SetOrGet, PUNICODE_STRING lpstr);
 BOOL FASTCALL IntSetMenu(PWND Wnd,HMENU Menu,BOOL *Changed);
+BOOL FASTCALL IntUnlockWindowMenu(PMENU Menu);
 UINT MENU_DrawMenuBar( HDC hDC, LPRECT lprect, PWND pWnd, BOOL suppress_draw );
 BOOL MenuInit(VOID);
 BOOL MenuUpdateFont(VOID);

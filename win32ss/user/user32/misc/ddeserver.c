@@ -569,6 +569,9 @@ static	WDML_QUEUE_STATE WDML_ServerHandleRequest(WDML_CONV* pConv, WDML_XACT* pX
 	break;
     }
 
+#ifdef __REACTOS__
+    if (!fAck)
+#endif
     WDML_PostAck(pConv, WDML_SERVER_SIDE, 0, FALSE, fAck, pXAct->atom, pXAct->lParam, WM_DDE_REQUEST);
 
     WDML_DecHSZ(pConv->instance, pXAct->hszItem);
@@ -791,6 +794,31 @@ static HDDEDATA map_W_to_A( DWORD instance, void *ptr, DWORD size )
     return ret;
 }
 
+#ifdef __REACTOS__
+static HDDEDATA map_W_through_A( DWORD instance, void *ptr, DWORD size )
+{
+    HDDEDATA ret;
+    DWORD len_a, len_w;
+    const WCHAR *end;
+    char *ansi;
+
+    if (!data_looks_unicode( ptr, size ))
+        return map_A_to_W( instance, ptr, size );
+
+    size /= sizeof(WCHAR);
+    if ((end = memchrW( ptr, 0, size ))) size = end + 1 - (const WCHAR *)ptr;
+    len_a = WideCharToMultiByte( CP_ACP, 0, ptr, size, NULL, 0, NULL, NULL );
+    ansi = HeapAlloc( GetProcessHeap(), 0, len_a );
+    if (!ansi) return 0;
+    WideCharToMultiByte( CP_ACP, 0, ptr, size, ansi, len_a, NULL, NULL );
+    len_w = MultiByteToWideChar( CP_ACP, 0, ansi, len_a, NULL, 0 );
+    ret = DdeCreateDataHandle( instance, NULL, len_w * sizeof(WCHAR), 0, 0, CF_TEXT, 0 );
+    MultiByteToWideChar( CP_ACP, 0, ansi, len_a, (WCHAR *)DdeAccessData( ret, NULL ), len_w );
+    HeapFree( GetProcessHeap(), 0, ansi );
+    return ret;
+}
+#endif
+
  /******************************************************************
  *		WDML_ServerHandleExecute
  *
@@ -808,6 +836,11 @@ static	WDML_QUEUE_STATE WDML_ServerHandleExecute(WDML_CONV* pConv, WDML_XACT* pX
 
 	if (ptr)
 	{
+#ifdef __REACTOS__
+            if (pConv->instance->unicode && !IsWindowUnicode( pConv->hwndClient ))
+                hDdeData = map_W_through_A( pConv->instance->instanceID, ptr, size );
+            else
+#endif
             if (pConv->instance->unicode)  /* Unicode server, try to map A->W */
                 hDdeData = map_A_to_W( pConv->instance->instanceID, ptr, size );
             else if (!IsWindowUnicode( pConv->hwndClient )) /* ASCII server and client, try to map W->A */

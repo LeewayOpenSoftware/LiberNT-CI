@@ -113,3 +113,18 @@ index 04754f8..7b43a60 100644
          return;
      }
  
+diff --git a/src/felix86/v2/recompiler.hpp b/src/felix86/v2/recompiler.hpp
+index e438ab2..158adf9 100644
+--- a/src/felix86/v2/recompiler.hpp
++++ b/src/felix86/v2/recompiler.hpp
+@@ -530,6 +530,10 @@ struct Recompiler {
+         return restore_state_handler;
+     }
+ 
++    u64 getEnterDispatcher() {
++        return (u64)enter_dispatcher;
++    }
++
+     u64 getCompileNext() {
+         return compile_next_handler;
+     }

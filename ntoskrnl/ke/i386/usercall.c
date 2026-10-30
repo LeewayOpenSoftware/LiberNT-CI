@@ -143,6 +143,9 @@ KeUserModeCallback(IN ULONG RoutineIndex,
     ASSERT(KeGetCurrentThread()->ApcState.KernelApcInProgress == FALSE);
     ASSERT(KeGetPreviousMode() == UserMode);
 
+    if (KeGetCurrentThread()->CallbackNestingLevel >= KI_MAX_USER_CALLBACK_NESTING)
+        return STATUS_STACK_OVERFLOW;
+
     /* Get the current user-mode stack */
     UserEsp = KiGetUserModeStackAddress();
     OldStack = *UserEsp;
@@ -174,7 +177,9 @@ KeUserModeCallback(IN ULONG RoutineIndex,
 
         /* Jump to user mode */
         *UserEsp = NewStack;
+        KeGetCurrentThread()->CallbackNestingLevel++;
         CallbackStatus = KiCallUserMode(Result, ResultLength);
+        KeGetCurrentThread()->CallbackNestingLevel--;
         if (CallbackStatus != STATUS_CALLBACK_POP_STACK)
         {
             /* Only restore the exception list if we didn't crash in ring 3 */

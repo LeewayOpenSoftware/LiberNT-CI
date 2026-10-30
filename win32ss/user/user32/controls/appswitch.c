@@ -441,8 +441,28 @@ void OnPaint(HWND hWnd)
     EndPaint(hWnd, &paint);
 }
 
+static BOOL RegisterSwitcherClass(VOID)
+{
+    WNDCLASSEXW wc = { sizeof(wc) };
+
+    wc.style = CS_VREDRAW | CS_HREDRAW | CS_SAVEBITS | CS_GLOBALCLASS;
+    wc.lpfnWndProc = SwitchWndProcW;
+    wc.cbWndExtra = sizeof(LONG_PTR);
+    wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    wc.lpszClassName = WC_SWITCH;
+
+    return RegisterClassExWOWW(&wc, NULL, FNID_SWITCH, 0, FALSE) != 0 ||
+           GetLastError() == ERROR_CLASS_ALREADY_EXISTS;
+}
+
 DWORD CreateSwitcherWindow(HINSTANCE hInstance)
 {
+    if (!RegisterSwitcherClass())
+    {
+       TRACE("[ATbot] Task Switcher Window Class failed to register.\n");
+       return 0;
+    }
+
     switchdialog = CreateWindowExW( WS_EX_TOPMOST|WS_EX_DLGMODALFRAME|WS_EX_TOOLWINDOW,
                                     WC_SWITCH,
                                     L"",

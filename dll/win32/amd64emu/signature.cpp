@@ -12,15 +12,10 @@
 #undef WIN32_NO_STATUS
 #include <ntstatus.h>
 #include <ndk/ntndk.h>
-#include <type_traits>
 #include "signature.h"
 
 namespace
 {
-
-struct EMU_UNTYPED_SERVICE
-{
-};
 
 #define EMU_UNTYPED(Name) constexpr EMU_UNTYPED_SERVICE Nt##Name{};
 EMU_UNTYPED(AccessCheckByTypeAndAuditAlarm)
@@ -73,44 +68,6 @@ EMU_UNTYPED(SubscribeWnfStateChange)
 EMU_UNTYPED(UnsubscribeWnfStateChange)
 EMU_UNTYPED(UpdateWnfStateData)
 #undef EMU_UNTYPED
-
-template <typename Type>
-constexpr ULONG64 EmuArgumentKind()
-{
-    static_assert(sizeof(Type) <= sizeof(ULONG64));
-    if (sizeof(Type) == sizeof(ULONG64)) return EMU_ARGUMENT_NATIVE;
-    if (sizeof(Type) == sizeof(ULONG)) return EMU_ARGUMENT_INT32;
-    if (sizeof(Type) == sizeof(USHORT)) return std::is_signed<Type>::value ? EMU_ARGUMENT_INT16 : EMU_ARGUMENT_UINT16;
-    return std::is_signed<Type>::value ? EMU_ARGUMENT_INT8 : EMU_ARGUMENT_UINT8;
-}
-
-template <ULONG Count, typename Function>
-struct EMU_SIGNATURE;
-
-template <ULONG Count, typename Result, typename... Types>
-struct EMU_SIGNATURE<Count, Result (NTAPI *)(Types...)>
-{
-    static_assert(sizeof...(Types) * EMU_ARGUMENT_BITS <= 64);
-
-    static constexpr ULONG64 Get()
-    {
-        ULONG64 Signature = 0;
-        ULONG Shift = 0;
-
-        if (sizeof...(Types) != Count) return 0;
-        ((Signature |= EmuArgumentKind<Types>() << Shift, Shift += EMU_ARGUMENT_BITS), ...);
-        return Signature;
-    }
-};
-
-template <ULONG Count>
-struct EMU_SIGNATURE<Count, const EMU_UNTYPED_SERVICE *>
-{
-    static constexpr ULONG64 Get()
-    {
-        return 0;
-    }
-};
 
 }
 

@@ -76,8 +76,14 @@ target_compile_options(felix86_cephes PRIVATE
 
 spec2def(amd64emu.dll amd64emu.spec ADD_IMPORTLIB)
 
+set_source_files_properties(w32ksignature.cpp PROPERTIES COMPILE_OPTIONS -Wno-missing-declarations)
+
 list(APPEND SOURCE
+    apc.c
+    callback.c
+    context.c
     exception.c
+    hostcall.c
     image.c
     process.c
     redirect.c
@@ -86,6 +92,7 @@ list(APPEND SOURCE
     felix86/cpu.c
     felix86/ntsupport.c
     signature.cpp
+    w32ksignature.cpp
     amd64emu.h)
 
 add_library(amd64emu MODULE
@@ -106,6 +113,7 @@ target_include_directories(amd64emu BEFORE PRIVATE ${_felix86_adapter}/compat)
 target_include_directories(amd64emu PRIVATE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/include
     ${REACTOS_SOURCE_DIR}/win32ss
+    ${REACTOS_SOURCE_DIR}/win32ss/include
     ${REACTOS_SOURCE_DIR}/sdk/lib/crt/math)
 target_compile_definitions(amd64emu PRIVATE
     NTDDI_VERSION=${REACTOS_TARGET_NTDDI}

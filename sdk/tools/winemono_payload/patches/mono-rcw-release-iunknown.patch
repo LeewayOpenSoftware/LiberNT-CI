@@ -1,0 +1,11 @@
+--- a/mcs/class/corlib/System/__ComObject.cs
++++ b/mcs/class/corlib/System/__ComObject.cs
+@@ -94,7 +94,7 @@
+ 
+ 		~__ComObject ()
+ 		{	
+-			if (hash_table != IntPtr.Zero) {
++			if (hash_table != IntPtr.Zero || iunknown != IntPtr.Zero) {
+ 				if (synchronization_context != null) {
+ 					try {
+ 						synchronization_context.Post ((state) => ReleaseInterfaces (), this);

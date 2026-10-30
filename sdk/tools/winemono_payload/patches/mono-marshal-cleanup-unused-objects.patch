@@ -1,0 +1,11 @@
+--- a/mcs/class/corlib/System.Runtime.InteropServices/Marshal.cs
++++ b/mcs/class/corlib/System.Runtime.InteropServices/Marshal.cs
+@@ -82,8 +82,6 @@
+ 
+ 		public static void CleanupUnusedObjectsInCurrentContext ()
+ 		{
+-			if (Environment.IsRunningOnWindows)
+-				throw new PlatformNotSupportedException ();
+ 		}
+ 
+ 		[MethodImplAttribute(MethodImplOptions.InternalCall)]

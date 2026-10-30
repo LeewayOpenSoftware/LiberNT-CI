@@ -443,9 +443,29 @@ NtUserNotifyProcessCreate(
     ULONG  dwUnknown,
     ULONG  CreateFlags)
 {
-    // STUB;
-    TRACE("NtUserNotifyProcessCreate is UNIMPLEMENTED\n");
-    return FALSE;
+    PEPROCESS Process;
+    PETHREAD ParentThread;
+    BOOL Ret;
+
+    if (!UserIsCsrProcess(PsGetCurrentProcess()))
+        return FALSE;
+
+    if (!NT_SUCCESS(PsLookupProcessByProcessId(NewProcessId, &Process)))
+        return FALSE;
+
+    if (!NT_SUCCESS(PsLookupThreadByThreadId(ParentThreadId, &ParentThread)))
+    {
+        ObDereferenceObject(Process);
+        return FALSE;
+    }
+
+    UserEnterExclusive();
+    Ret = IntNotifyProcessCreate(Process, PsGetThreadProcess(ParentThread), !(CreateFlags & 2));
+    UserLeave();
+
+    ObDereferenceObject(ParentThread);
+    ObDereferenceObject(Process);
+    return Ret;
 }
 
 NTSTATUS

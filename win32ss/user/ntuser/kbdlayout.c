@@ -474,7 +474,7 @@ UserUnloadKbl(PKL pKl)
        if the keyboard layout identifier was preloaded. */
     if (pKl == gspklBaseLayout)
     {
-        if (pKl->pklNext == pKl->pklPrev)
+        if (pKl->pklNext == pKl)
         {
             /* There is only one layout */
             return FALSE;
@@ -890,7 +890,7 @@ co_IntLoadKeyboardLayoutEx(
     IN HKL hNewKL,
     IN UINT Flags)
 {
-    PKL pOldKL, pNewKL;
+    PKL pOldKL = NULL, pNewKL;
 
     UNREFERENCED_PARAMETER(hSafeFile);
 
@@ -899,11 +899,7 @@ co_IntLoadKeyboardLayoutEx(
 
     /* If hOldKL is specified, unload it and load new layput as default */
     if (hOldKL && hOldKL != hNewKL)
-    {
         pOldKL = UserHklToKbl(hOldKL);
-        if (pOldKL)
-            UserUnloadKbl(pOldKL);
-    }
 
     /* FIXME: It seems KLF_RESET is only supported for WINLOGON */
 
@@ -916,7 +912,16 @@ co_IntLoadKeyboardLayoutEx(
         if (!pNewKL)
             return NULL;
 
-        if (gspklBaseLayout)
+        if (pOldKL)
+        {
+            pNewKL->pklNext = pOldKL;
+            pNewKL->pklPrev = pOldKL->pklPrev;
+            pNewKL->pklPrev->pklNext = pNewKL;
+            pOldKL->pklPrev = pNewKL;
+            if (gspklBaseLayout == pOldKL)
+                gspklBaseLayout = pNewKL;
+        }
+        else if (gspklBaseLayout)
         {
             /* Find last not unloaded layout */
             PKL pLastKL = gspklBaseLayout->pklPrev;
@@ -942,6 +947,9 @@ co_IntLoadKeyboardLayoutEx(
 
     /* If this layout was prepared to unload, undo it */
     pNewKL->dwKL_Flags &= ~KL_UNLOAD;
+
+    if (pOldKL)
+        UserUnloadKbl(pOldKL);
 
     /* Reorder if necessary */
     if (Flags & KLF_REORDER)

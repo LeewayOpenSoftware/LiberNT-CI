@@ -107,7 +107,11 @@ BOOL post_dde_message( struct packed_message *data, UINT message, LPARAM lParam 
                  (message == WM_DDE_POKE   && size < FIELD_OFFSET(DDEPOKE, Value)) )
             return FALSE;
         }
+#ifdef __REACTOS__
+        else if (message != WM_DDE_DATA && message != WM_DDE_POKE)
+#else
         else if (message != WM_DDE_DATA)
+#endif
         {
             TRACE("WM_DDE uiLo 0\n");
             return FALSE;
@@ -190,7 +194,11 @@ BOOL unpack_dde_message( HWND hwnd, UINT message, LPARAM *lparam, PVOID buffer, 
     case WM_DDE_ADVISE:
     case WM_DDE_DATA:
     case WM_DDE_POKE:
+#ifdef __REACTOS__
+	if ((!buffer) && message != WM_DDE_DATA && message != WM_DDE_POKE) return FALSE;
+#else
 	if ((!buffer) && message != WM_DDE_DATA) return FALSE;
+#endif
 	uiHi = *lparam;
         if (size)
         {

@@ -161,6 +161,11 @@ EmuVectoredHandler(
                          &Interrupt);
     if (Fault == EmuFaultUnrelated) return EXCEPTION_CONTINUE_SEARCH;
     if (Fault == EmuFaultResume) return EXCEPTION_CONTINUE_EXECUTION;
+    if (Fault == EmuFaultPark)
+    {
+        EmuParkThread(Thread);
+        return EXCEPTION_CONTINUE_EXECUTION;
+    }
 
     Thread->HostDepth++;
     if (Interrupt == EMU_NO_INTERRUPT || !EmuSoftwareInterrupt(Thread, Interrupt, &GuestRecord))

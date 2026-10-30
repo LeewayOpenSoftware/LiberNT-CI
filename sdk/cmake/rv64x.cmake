@@ -1,0 +1,17 @@
+# PROJECT:     LiberNT Build System
+# PURPOSE:     Optional RV64X compiler (dll/win32/amd64emu/RV64X.md)
+# LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+# COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+
+set(RV64X_CLANG "" CACHE FILEPATH "Clang with the RV64X pass (submodules/llvm-rv64x.patch)")
+unset(RV64X_COMPILER_LAUNCHER CACHE)
+unset(RV64X_COMPILER_LAUNCHER)
+if(RV64X_CLANG AND ENABLE_FELIX86)
+    execute_process(COMMAND ${CMAKE_C_COMPILER} -print-resource-dir
+                    OUTPUT_VARIABLE _rv64x_resource_dir OUTPUT_STRIP_TRAILING_WHITESPACE)
+    file(WRITE ${CMAKE_BINARY_DIR}/rv64x-cc
+         "#!/bin/sh\nshift\nexec \"${RV64X_CLANG}\" -resource-dir \"${_rv64x_resource_dir}\" \"$@\"\n")
+    file(CHMOD ${CMAKE_BINARY_DIR}/rv64x-cc PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE
+         WORLD_READ WORLD_EXECUTE)
+    set(RV64X_COMPILER_LAUNCHER ${CMAKE_BINARY_DIR}/rv64x-cc)
+endif()

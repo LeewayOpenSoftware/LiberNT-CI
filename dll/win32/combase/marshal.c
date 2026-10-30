@@ -392,6 +392,9 @@ static HRESULT WINAPI ftmarshaler_ReleaseMarshalData(IMarshal *iface, IStream *s
     hr = IStream_Read(stream, &unknown_guid, sizeof(unknown_guid), NULL);
     if (hr != S_OK) return STG_E_READFAULT;
 
+#ifdef __REACTOS__
+    if (!(mshlflags & MSHLFLAGS_TABLEWEAK))
+#endif
     IUnknown_Release(data.object);
     return S_OK;
 }

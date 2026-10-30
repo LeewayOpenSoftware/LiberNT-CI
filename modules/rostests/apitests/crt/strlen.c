@@ -50,7 +50,7 @@ Test_strlen(PFN_STRLEN pstrlen)
     len = pstrlen(teststr + 4);
     eflags2 = __readeflags();
     MemoryBarrier();
-    ok((eflags2 & EFLAGS_DF) != 0, "Direction flag in ELFAGS was changed: 0x%Ix -> 0x%Ix.\n", eflags | EFLAGS_DF, eflags2);
+    ok((eflags2 & EFLAGS_DF) != 0, "Direction flag in ELFAGS was changed: 0x%Ix -> 0x%Ix.\n", (uintptr_t)(eflags | EFLAGS_DF), eflags2);
     __writeeflags(eflags);
 
     /* Only test this for the exported versions, intrinsics might do it

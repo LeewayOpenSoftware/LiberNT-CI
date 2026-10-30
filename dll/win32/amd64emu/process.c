@@ -67,6 +67,9 @@ EmuInitializeProcess(
     NTSTATUS Status;
 
     EmuProcess.GuestPeb = Host->GuestPeb;
+    InitializeListHead(&EmuProcess.Threads);
+    Status = RtlInitializeCriticalSection(&EmuProcess.ThreadLock);
+    if (!NT_SUCCESS(Status)) return Status;
     RtlInitUnicodeString(&EmuProcess.SystemRootDirectory, L"\\SystemRoot\\System32\\");
     Status = EmuBuildDirectory(&EmuProcess.SystemDirectory,
                                EmuProcess.SystemDirectoryBuffer,
@@ -97,10 +100,15 @@ EmuInitializeProcess(
 
     Status = EmuGetGuestExport("LdrInitializeThunk", &EmuProcess.LdrInitializeThunk);
     if (NT_SUCCESS(Status)) Status = EmuGetGuestExport("KiUserExceptionDispatcher", &EmuProcess.KiUserExceptionDispatcher);
+    if (NT_SUCCESS(Status)) Status = EmuGetGuestExport("KiUserCallbackDispatcher", &EmuProcess.KiUserCallbackDispatcher);
+    if (NT_SUCCESS(Status)) Status = EmuGetGuestExport("KiUserApcDispatcher", &EmuProcess.KiUserApcDispatcher);
     if (NT_SUCCESS(Status)) Status = EmuGetGuestExport("RtlUserThreadStart", &EmuProcess.RtlUserThreadStart);
     if (!NT_SUCCESS(Status)) return Status;
 
     if (!RtlAddVectoredExceptionHandler(1, EmuVectoredHandler)) return STATUS_NO_MEMORY;
+    Status = EmuInitializeHostCalls();
+    if (!NT_SUCCESS(Status)) return Status;
+    EmuInitializeCallbacks();
     return STATUS_SUCCESS;
 }
 
@@ -187,6 +195,8 @@ EmuThreadStart(
 
     Status = EmuCoreCreateCpu(Thread, Host->GuestTeb, &Thread->Cpu);
     if (!NT_SUCCESS(Status)) EmuFatal(Status, "CPU creation failed");
+    Status = EmuRegisterThread(Thread);
+    if (!NT_SUCCESS(Status)) EmuFatal(Status, "thread registration failed");
     Host->HostData = Thread;
 
     EmuBuildStartContext(Host, &Start);

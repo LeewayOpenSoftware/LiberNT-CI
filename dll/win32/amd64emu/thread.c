@@ -115,6 +115,7 @@ EmuExitThread(
     PVOID Base;
     SIZE_T Size;
 
+    EmuUnregisterThread(Thread);
     Host->HostData = NULL;
     EmuCoreDestroyCpu(Thread->Cpu);
     RtlFreeHeap(RtlGetProcessHeap(), 0, Thread);

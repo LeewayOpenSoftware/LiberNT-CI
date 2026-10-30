@@ -1468,7 +1468,9 @@ NtLoadKeyEx(IN POBJECT_ATTRIBUTES TargetKey,
         return STATUS_INVALID_PARAMETER_7;
 
     /* Validate flags */
-    if (Flags & ~(REG_NO_LAZY_FLUSH | REG_APP_HIVE))
+    if (Flags & ~(REG_NO_LAZY_FLUSH | REG_APP_HIVE | REG_PROCESS_PRIVATE))
+        return STATUS_INVALID_PARAMETER;
+    if ((Flags & REG_PROCESS_PRIVATE) && !(Flags & REG_APP_HIVE))
         return STATUS_INVALID_PARAMETER;
 
     /* Validate privilege */

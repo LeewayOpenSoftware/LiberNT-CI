@@ -5,6 +5,7 @@ list(APPEND SOURCE
     ../include/msgtrace.c
     CalculatePopupWindowPosition.c
     CallWindowProc.c
+    CallbackNesting.c
     CharFuncs.c
     CloseWindow.c
     ClipboardAccess.c
@@ -15,10 +16,13 @@ list(APPEND SOURCE
     CursorPresentation.c
     CreateDialog.c
     CreateIconFromResourceEx.c
+    CoveredWindow.c
     CreateWindowEx.c
     DeferWindowPos.c
+    DefFrameProc.c
     DeskWallpaper.c
     DestroyCursorIcon.c
+    DestroyActiveWindow.c
     DestroyWindow.c
     DialogDpiChangeBehavior.c
     DM_REPOSITION.c
@@ -29,6 +33,9 @@ list(APPEND SOURCE
     EmptyClipboard.c
     EnableScrollBar.c
     EnumDisplaySettings.c
+    ForegroundRetake.c
+    ForegroundRight.c
+    ForegroundStartup.c
     GetClassInfo.c
     GetDCEx.c
     GetProp.c
@@ -68,6 +75,8 @@ list(APPEND SOURCE
     NcPaintRgn.c
     NextDlgItem.c
     NonClientPaint.c
+    OwnerDestroy.c
+    PersianLayout.c
     PhysicalPoint.c
     PhysicalToLogicalPoint.c
     LogicalToPhysicalPoint.c
@@ -92,6 +101,7 @@ list(APPEND SOURCE
     SetScrollRange.c
     SetWindowPlacement.c
     WindowDisplayAffinity.c
+    WindowRegionFrame.c
     ShellWindowQueries.c
     ShowWindow.c
     SwitchToThisWindow.c
@@ -100,6 +110,7 @@ list(APPEND SOURCE
     SystemParametersInfo.c
     TrackMouseEvent.c
     TrackPopupMenuEx.c
+    UncoveredWindow.c
     UpdateRegion.c
     UserHandleGrantAccess.c
     VirtualKey.c

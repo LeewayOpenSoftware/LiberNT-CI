@@ -627,8 +627,13 @@ RtlpRiscv64ApplyRecordInternal(
             }
         }
 
-        Result->EstablisherFrameOffset =
-            Layout.Header.EstablisherFrameOffset;
+        if (HandlerActive &&
+            (Layout.Header.Flags &
+             (RISCV64_UNW_FLAG_EHANDLER | RISCV64_UNW_FLAG_UHANDLER)))
+        {
+            Result->EstablisherFrameOffset =
+                Layout.Header.EstablisherFrameOffset;
+        }
         Result->PrimaryFunctionEntry = FunctionEntryAddress;
     }
 
@@ -801,8 +806,7 @@ RtlpRiscv64UnwindFrame(
     }
 
     if (!RtlpRiscv64AddSigned(Cfa,
-                              LocalResult.LanguageHandler != NULL ?
-                                  LocalResult.EstablisherFrameOffset : 0,
+                              LocalResult.EstablisherFrameOffset,
                               &LocalResult.EstablisherFrame) ||
         (LocalResult.EstablisherFrame < View->StackLow) ||
         (LocalResult.EstablisherFrame > View->StackHigh))
