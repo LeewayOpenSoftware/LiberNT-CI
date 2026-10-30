@@ -1453,7 +1453,10 @@ CollectDriverCandidates(
                 : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Entries));
 
             if (!Entries)
+            {
+                HeapFree(GetProcessHeap(), 0, Detail);
                 return;
+            }
             List->Entries = Entries;
             List->Capacity = Capacity;
         }
