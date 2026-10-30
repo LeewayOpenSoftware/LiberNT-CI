@@ -26,6 +26,7 @@ add_library(kernelbase MODULE
     PssSnapshot.c
     Security.c
     SyncObjects.c
+    TimeZoneEx.c
     VirtualAlloc2.c
     VolumeInformation.c
     WerRuntime.c

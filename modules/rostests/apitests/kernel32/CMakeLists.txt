@@ -24,6 +24,7 @@ list(APPEND SOURCE
     DosPathToSessionPath.c
     IsValidLocaleName.c
     CompatLinks.c
+    TimeZoneEx.c
     FindNLSString.c
     FindPackagesByPackageFamily.c
     FLS.c

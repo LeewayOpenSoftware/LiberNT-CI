@@ -1311,6 +1311,7 @@
 @ stdcall SwitchToThread()
 @ stdcall SystemTimeToFileTime(ptr ptr)
 @ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr)
+@ stdcall -version=0x601+ SystemTimeToTzSpecificLocalTimeEx(ptr ptr ptr) kernelbase.SystemTimeToTzSpecificLocalTimeEx
 @ stdcall TerminateJobObject(ptr long)
 @ stdcall TerminateProcess(ptr long)
 @ stdcall TerminateThread(ptr long)
@@ -1329,6 +1330,7 @@
 @ stdcall TryEnterCriticalSection(ptr) ntdll.RtlTryEnterCriticalSection
 @ stdcall -version=0x600+ TrySubmitThreadpoolCallback(ptr ptr ptr)
 @ stdcall TzSpecificLocalTimeToSystemTime(ptr ptr ptr)
+@ stdcall -version=0x601+ TzSpecificLocalTimeToSystemTimeEx(ptr ptr ptr) kernelbase.TzSpecificLocalTimeToSystemTimeEx
 @ stdcall -arch=win64 UmsThreadYield(ptr)
 @ stdcall UTRegister(long str str str ptr ptr ptr)
 @ stdcall UTUnRegister(long)
