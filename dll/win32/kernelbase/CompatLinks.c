@@ -125,19 +125,6 @@ QueryProcessAffinityUpdateMode(
     return FALSE;
 }
 
-/* The link-name enumeration is not implemented */
-HANDLE
-WINAPI
-FindFirstFileNameW(
-    _In_ LPCWSTR FileName,
-    _In_ DWORD Flags,
-    _Inout_ LPDWORD StringLength,
-    _Out_writes_(*StringLength) PWSTR LinkName)
-{
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-    return INVALID_HANDLE_VALUE;
-}
-
 /* Named pipes keep no client computer name */
 BOOL
 WINAPI

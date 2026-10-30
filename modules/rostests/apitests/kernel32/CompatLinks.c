@@ -163,7 +163,7 @@ Test_ExplicitErrors(void)
         SetLastError(0xDEADBEEF);
         Find = pFindFirstFileNameW(L"C:\\", 0, &Length, Buffer);
         ok(Find == INVALID_HANDLE_VALUE, "FindFirstFileNameW returned %p\n", Find);
-        ok(GetLastError() == ERROR_CALL_NOT_IMPLEMENTED, "error %lu\n", GetLastError());
+        ok(GetLastError() != 0xDEADBEEF && GetLastError() != ERROR_SUCCESS, "no error set for a directory: %lu\n", GetLastError());
     }
 
     if (pGetPipeClientName)

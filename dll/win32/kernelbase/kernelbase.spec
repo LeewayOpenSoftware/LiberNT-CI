@@ -286,7 +286,8 @@
 @ stdcall FindFirstFileA(str ptr) kernel32.FindFirstFileA
 @ stdcall FindFirstFileExA(str long ptr long ptr long) kernel32.FindFirstFileExA
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long) kernel32.FindFirstFileExW
-@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr)
+@ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr) kernel32.FindFirstFileNameW
+@ stdcall -version=0x600+ FindNextFileNameW(long ptr wstr) kernel32.FindNextFileNameW
 @ stdcall FindFirstFileW(wstr ptr) kernel32.FindFirstFileW
 @ stdcall FindFirstFreeAce(ptr ptr)
 @ stdcall FindFirstStreamW(wstr ptr ptr long) kernel32.FindFirstStreamW
