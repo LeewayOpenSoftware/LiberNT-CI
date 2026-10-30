@@ -201,9 +201,7 @@ GroupNew(HWND hwndDlg)
                                   NULL);
         if (status != NERR_Success)
         {
-            TCHAR szText[256];
-            wsprintf(szText, TEXT("Error: %u"), status);
-            MessageBox(NULL, szText, TEXT("NetUserAdd"), MB_ICONERROR | MB_OK);
+            ShowNetworkError(status);
             return;
         }
 
@@ -269,9 +267,7 @@ GroupDelete(HWND hwndDlg)
     status = NetLocalGroupDel(NULL, szGroupName);
     if (status != NERR_Success)
     {
-        TCHAR szText[256];
-        wsprintf(szText, TEXT("Error: %u"), status);
-        MessageBox(NULL, szText, TEXT("NetLocalGroupDel"), MB_ICONERROR | MB_OK);
+        ShowNetworkError(status);
         return FALSE;
     }
 
@@ -361,9 +357,7 @@ OnGroupsPageEndLabelEdit(LPNMLVDISPINFO pnmv)
     status = NetLocalGroupSetInfo(NULL, szOldGroupName, 0, (LPBYTE)&lgrpi0, NULL);
     if (status != NERR_Success)
     {
-        TCHAR szText[256];
-        wsprintf(szText, TEXT("Error: %u"), status);
-        MessageBox(NULL, szText, TEXT("NetLocalGroupSetInfo"), MB_ICONERROR | MB_OK);
+        ShowNetworkError(status);
         return FALSE;
     }
 

@@ -136,9 +136,7 @@ UserChangePassword(HWND hwndDlg)
                                 NULL);
         if (status != NERR_Success)
         {
-            TCHAR szText[256];
-            wsprintf(szText, TEXT("Error: %u"), status);
-            MessageBox(NULL, szText, TEXT("NetUserSetInfo"), MB_ICONERROR | MB_OK);
+            ShowNetworkError(status);
         }
     }
 
@@ -303,9 +301,7 @@ UserNew(HWND hwndDlg)
                             NULL);
         if (status != NERR_Success)
         {
-            TCHAR szText[256];
-            wsprintf(szText, TEXT("Error: %u"), status);
-            MessageBox(NULL, szText, TEXT("NetUserAdd"), MB_ICONERROR | MB_OK);
+            ShowNetworkError(status);
             return;
         }
 
@@ -379,9 +375,7 @@ UserDelete(HWND hwndDlg)
     status = NetUserDel(NULL, szUserName);
     if (status != NERR_Success)
     {
-        TCHAR szText[256];
-        wsprintf(szText, TEXT("Error: %u"), status);
-        MessageBox(NULL, szText, TEXT("NetUserDel"), MB_ICONERROR | MB_OK);
+        ShowNetworkError(status);
         return FALSE;
     }
 
@@ -553,9 +547,7 @@ OnEndLabelEdit(LPNMLVDISPINFO pnmv)
     status = NetUserSetInfo(NULL, szOldUserName, 0, (LPBYTE)&useri0, NULL);
     if (status != NERR_Success)
     {
-        TCHAR szText[256];
-        wsprintf(szText, TEXT("Error: %u"), status);
-        MessageBox(NULL, szText, TEXT("NetUserSetInfo"), MB_ICONERROR | MB_OK);
+        ShowNetworkError(status);
         return FALSE;
     }
 

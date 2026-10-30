@@ -297,9 +297,7 @@ RemoveGroupFromUser(HWND hwndDlg,
                                      3, (LPBYTE)&memberInfo, 1);
     if (status != NERR_Success)
     {
-        TCHAR szText[256];
-        wsprintf(szText, TEXT("Error: %u"), status);
-        MessageBox(NULL, szText, TEXT("NetLocalGroupDelMembers"), MB_ICONERROR | MB_OK);
+        ShowNetworkError(status);
         return;
     }
 
@@ -432,9 +430,7 @@ AddSelectedGroupsToUser(HWND hwndDlg,
                 }
                 else
                 {
-                    TCHAR szText[256];
-                    wsprintf(szText, TEXT("Error: %u"), status);
-                    MessageBox(NULL, szText, TEXT("NetLocalGroupAddMembers"), MB_ICONERROR | MB_OK);
+                    ShowNetworkError(status);
                 }
             }
 
