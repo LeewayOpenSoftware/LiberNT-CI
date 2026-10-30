@@ -186,12 +186,14 @@ DrvInstSnapshotDevice(
 
 DWORD
 DrvInstRollbackDevice(
-    _In_ PCWSTR DeviceInstanceId);
+    _In_ PCWSTR DeviceInstanceId,
+    _Out_opt_ PBOOL NeedReboot);
 
 DWORD
 DrvInstRollbackDeviceToSeq(
     _In_ PCWSTR DeviceInstanceId,
-    _In_ ULONG Seq);
+    _In_ ULONG Seq,
+    _Out_opt_ PBOOL NeedReboot);
 
 DWORD
 DrvInstAcquireInstallLock(

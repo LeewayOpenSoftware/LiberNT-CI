@@ -56,12 +56,14 @@ interface drvinst
         [out] DWORD *pulCount);
 
     /* Restore a device to the state saved before its last install job.
-     * Needs an administrator. */
+     * Needs an administrator. *pbNeedReboot reports whether the rollback
+     * swapped the device's service, which only a system restart unloads. */
     DWORD
     __stdcall
     DrvInst_Rollback(
         [in] handle_t hBinding,
-        [in, string, ref] LPCWSTR pszDeviceInstanceId);
+        [in, string, ref] LPCWSTR pszDeviceInstanceId,
+        [out] BOOL *pbNeedReboot);
 
     /* Ask for one specific INF to be installed on the device. Needs an
      * administrator; the job follows the same path as DrvInst_SubmitDevice. */

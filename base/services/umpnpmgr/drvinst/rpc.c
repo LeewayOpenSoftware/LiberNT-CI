@@ -153,9 +153,12 @@ DWORD
 __stdcall
 DrvInst_Rollback(
     _In_ handle_t hBinding,
-    _In_ LPCWSTR pszDeviceInstanceId)
+    _In_ LPCWSTR pszDeviceInstanceId,
+    _Out_ BOOL *pbNeedReboot)
 {
     DWORD Error;
+
+    *pbNeedReboot = FALSE;
 
     if (!IsCallerAdministrator(hBinding))
         return ERROR_ACCESS_DENIED;
@@ -168,7 +171,7 @@ DrvInst_Rollback(
     Error = DrvInstAcquireInstallLock(60000);
     if (Error != ERROR_SUCCESS)
         return Error;
-    Error = DrvInstRollbackDevice(pszDeviceInstanceId);
+    Error = DrvInstRollbackDevice(pszDeviceInstanceId, pbNeedReboot);
     DrvInstReleaseInstallLock();
 
     return Error;

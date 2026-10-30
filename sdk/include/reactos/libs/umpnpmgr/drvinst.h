@@ -97,5 +97,7 @@ DWORD WINAPI DrvInstEnumJobs(_Out_writes_to_(*Count, *Count) DRVINST_JOB_ID *Job
 DWORD WINAPI DrvInstWait(_In_ DRVINST_JOB_ID JobId, _In_ DWORD TimeoutMs, _Out_opt_ PDRVINST_JOB_INFO Info);
 /* Restores the device to the state saved by the last install job (manual rollback). */
 DWORD WINAPI DrvInstRollback(_In_ PCWSTR DeviceInstanceId);
+/* Same, reporting whether a system restart is required to finish the rollback. */
+DWORD WINAPI DrvInstRollbackEx(_In_ PCWSTR DeviceInstanceId, _Out_opt_ PBOOL NeedReboot);
 
 #endif /* _UMPNPMGR_DRVINST_H_ */

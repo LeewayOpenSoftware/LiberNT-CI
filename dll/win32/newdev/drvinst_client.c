@@ -202,10 +202,12 @@ DrvInstWait(
 
 DWORD
 WINAPI
-DrvInstRollback(
-    _In_ PCWSTR DeviceInstanceId)
+DrvInstRollbackEx(
+    _In_ PCWSTR DeviceInstanceId,
+    _Out_opt_ PBOOL NeedReboot)
 {
     RPC_BINDING_HANDLE Binding;
+    BOOL RestartRequired = FALSE;
     DWORD Error;
 
     if (!DeviceInstanceId)
@@ -217,7 +219,7 @@ DrvInstRollback(
 
     RpcTryExcept
     {
-        Error = DrvInst_Rollback(Binding, DeviceInstanceId);
+        Error = DrvInst_Rollback(Binding, DeviceInstanceId, &RestartRequired);
     }
     RpcExcept(EXCEPTION_EXECUTE_HANDLER)
     {
@@ -226,7 +228,18 @@ DrvInstRollback(
     RpcEndExcept;
 
     RpcBindingFree(&Binding);
+
+    if (Error == ERROR_SUCCESS && NeedReboot)
+        *NeedReboot = RestartRequired;
     return Error;
+}
+
+DWORD
+WINAPI
+DrvInstRollback(
+    _In_ PCWSTR DeviceInstanceId)
+{
+    return DrvInstRollbackEx(DeviceInstanceId, NULL);
 }
 
 DWORD

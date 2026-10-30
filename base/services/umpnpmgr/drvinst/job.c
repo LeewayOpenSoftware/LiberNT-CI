@@ -437,7 +437,7 @@ ExecuteJobEx(
         QueryDrvInstValue(DRVINST_REG_AUTOROLLBACK, 1) != 0)
     {
         /* Only the snapshot of this job: an old one may not describe the device. */
-        RollbackError = DrvInstRollbackDeviceToSeq(DeviceInstanceId, SnapshotSeq);
+        RollbackError = DrvInstRollbackDeviceToSeq(DeviceInstanceId, SnapshotSeq, NULL);
         if (RollbackError == ERROR_SUCCESS)
         {
             Result.Flags |= DRVINST_RF_ROLLEDBACK;
