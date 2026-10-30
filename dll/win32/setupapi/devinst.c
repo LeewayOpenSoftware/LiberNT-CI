@@ -7359,6 +7359,39 @@ SetupDiInstallDevice(
 
     deviceInfo = (struct DeviceInfo *)DeviceInfoData->Reserved;
 
+    /* Verify the driver package against its catalog and record the result on
+     * the devnode; policy 2 (enforce) refuses packages with a hash mismatch
+     * or an unreadable catalog. */
+    if (SetupapiGetVerifyPolicy() != 0)
+    {
+        DWORD SigState = PACKAGE_SIG_UNSIGNED;
+        WCHAR Mismatch[MAX_PATH] = { 0 };
+
+        if (LnSetupVerifyDriverPackage(SelectedDriver->InfFileDetails->FileName,
+                                       &SigState, Mismatch, ARRAY_SIZE(Mismatch)) == ERROR_SUCCESS)
+        {
+            HKEY DevKey = SetupDiOpenDevRegKey(DeviceInfoSet, DeviceInfoData,
+                                               DICS_FLAG_GLOBAL, 0, DIREG_DEV,
+                                               KEY_SET_VALUE);
+            if (DevKey != INVALID_HANDLE_VALUE)
+            {
+                RegSetValueExW(DevKey, L"DriverPackageSignature", 0, REG_DWORD,
+                               (const BYTE *)&SigState, sizeof(SigState));
+                RegCloseKey(DevKey);
+            }
+
+            TRACE("install of %s signature state %lu\n",
+                  debugstr_w(SelectedDriver->InfFileDetails->FileName), SigState);
+
+            if (SetupapiGetVerifyPolicy() == 2 &&
+                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID))
+            {
+                SetLastError(ERROR_INVALID_IMAGE_HASH);
+                goto cleanup;
+            }
+        }
+    }
+
     /* Open/Create driver key information */
 #if _WIN32_WINNT >= 0x502
     hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&ClassGuid, KEY_READ | KEY_WRITE);

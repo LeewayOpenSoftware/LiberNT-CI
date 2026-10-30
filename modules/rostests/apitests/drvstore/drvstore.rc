@@ -1,0 +1,2 @@
+IDR_GOODCAT RCDATA "fixtures/lnpkg-good.cat"
+IDR_BADCAT  RCDATA "fixtures/lnpkg-badcat.cat"

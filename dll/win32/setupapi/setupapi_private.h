@@ -375,6 +375,24 @@ BOOL
 SETUPAPI_StageDriverPackage(
     IN PCWSTR SourceInfFileName);
 
+/* Driver package signature verification (M6). States returned by
+ * LnSetupVerifyDriverPackage; reusable by LiberNT Update. */
+#define PACKAGE_SIG_UNSIGNED        0
+#define PACKAGE_SIG_SIGNED_VALID    1
+#define PACKAGE_SIG_HASH_MISMATCH   2
+#define PACKAGE_SIG_CATALOG_INVALID 3
+
+DWORD
+SetupapiGetVerifyPolicy(VOID);
+
+DWORD
+WINAPI
+LnSetupVerifyDriverPackage(
+    IN PCWSTR InfPath,
+    OUT PDWORD SigState,
+    OUT PWSTR MismatchFile OPTIONAL,
+    IN DWORD MismatchFileCch OPTIONAL);
+
 BOOL
 SETUPAPI_FindDriverStoreInf(
     IN PCWSTR FileName,

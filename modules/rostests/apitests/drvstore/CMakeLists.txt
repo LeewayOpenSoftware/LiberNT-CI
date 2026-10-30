@@ -1,6 +1,8 @@
 add_executable(drvstore_apitest
     drvstore.c
-    testlist.c)
+    signature.c
+    testlist.c
+    drvstore.rc)
 
 set_module_type(drvstore_apitest win32cui)
 add_importlibs(drvstore_apitest setupapi user32 msvcrt kernel32)
