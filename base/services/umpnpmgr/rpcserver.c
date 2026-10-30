@@ -3599,6 +3599,40 @@ UpdateDeviceConfigFlags(
 }
 
 
+/* Retry the installation of a devnode whose previous install failed.
+ * Clears CONFIGFLAG_FAILEDINSTALL and re-runs the device setup. */
+static CONFIGRET
+RetryFailedDeviceInstallation(
+    _In_ LPWSTR pszDeviceInstance,
+    _Out_ PBOOL Attempted)
+{
+    HKEY hDeviceKey;
+    DWORD dwConfigFlags = 0;
+    DWORD dwSize = sizeof(dwConfigFlags);
+    DWORD dwType;
+    LONG Error;
+
+    *Attempted = FALSE;
+
+    Error = RegOpenKeyExW(hEnumKey, pszDeviceInstance, 0, KEY_QUERY_VALUE, &hDeviceKey);
+    if (Error != ERROR_SUCCESS)
+        return CR_INVALID_DEVNODE;
+
+    if (RegQueryValueExW(hDeviceKey, L"ConfigFlags", NULL, &dwType,
+                         (LPBYTE)&dwConfigFlags, &dwSize) != ERROR_SUCCESS ||
+        dwType != REG_DWORD)
+        dwConfigFlags = 0;
+    RegCloseKey(hDeviceKey);
+
+    if (!(dwConfigFlags & CONFIGFLAG_FAILEDINSTALL))
+        return CR_SUCCESS;
+
+    *Attempted = TRUE;
+    UpdateDeviceConfigFlags(pszDeviceInstance, 0, CONFIGFLAG_FAILEDINSTALL);
+    return SetupDeviceInstance(pszDeviceInstance, CM_SETUP_DEVNODE_READY);
+}
+
+
 static CONFIGRET
 EnableDeviceInstance(
     _In_ LPWSTR pszDeviceInstance)
@@ -3645,7 +3679,11 @@ ReenumerateDeviceInstance(
 
     if (ulMinorAction & CM_REENUMERATE_RETRY_INSTALLATION)
     {
-        DPRINT1("CM_REENUMERATE_RETRY_INSTALLATION not implemented!\n");
+        BOOL Attempted;
+
+        ret = RetryFailedDeviceInstallation(pszDeviceInstance, &Attempted);
+        if (ret != CR_SUCCESS || Attempted)
+            return ret;
     }
 
     RtlInitUnicodeString(&EnumerateDeviceData.DeviceInstance,
