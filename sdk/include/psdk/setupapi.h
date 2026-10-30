@@ -2522,6 +2522,17 @@ SetupVerifyInfFileW(
 WINSETUPAPI
 BOOL
 WINAPI
+SetupGetInfDriverStoreLocationA(
+  _In_ PCSTR FileName,
+  _In_opt_ PSP_ALTPLATFORM_INFO AlternativePlatformInfo,
+  _In_opt_ PCSTR LocaleName,
+  _Out_writes_opt_(ReturnBufferSize) PSTR ReturnBuffer,
+  _In_ DWORD ReturnBufferSize,
+  _Out_opt_ PDWORD RequiredSize);
+
+WINSETUPAPI
+BOOL
+WINAPI
 SetupUninstallOEMInfW(
   _In_ PCWSTR InfFileName,
   _In_ DWORD Flags,

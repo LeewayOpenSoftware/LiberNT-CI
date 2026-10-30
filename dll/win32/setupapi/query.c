@@ -739,6 +739,48 @@ BOOL WINAPI SetupGetInfDriverStoreLocationW(
     return TRUE;
 }
 
+/***********************************************************************
+ *      SetupGetInfDriverStoreLocationA (SETUPAPI.@)
+ */
+BOOL WINAPI SetupGetInfDriverStoreLocationA(
+    PCSTR FileName, PSP_ALTPLATFORM_INFO AlternativePlatformInfo,
+    PCSTR LocaleName, PSTR ReturnBuffer, DWORD ReturnBufferSize,
+    PDWORD RequiredSize)
+{
+    WCHAR FileNameW[MAX_PATH];
+    WCHAR ReturnBufferW[MAX_PATH];
+    DWORD Length = 0;
+    BOOL Ret;
+
+    if (!FileName || (!ReturnBuffer && ReturnBufferSize))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (!MultiByteToWideChar(CP_ACP, 0, FileName, -1, FileNameW, ARRAY_SIZE(FileNameW)))
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    Ret = SetupGetInfDriverStoreLocationW(FileNameW, AlternativePlatformInfo,
+                                          NULL, ReturnBufferW, ARRAY_SIZE(ReturnBufferW),
+                                          &Length);
+    if (RequiredSize)
+        *RequiredSize = Length;
+    if (!Ret)
+        return FALSE;
+    if (ReturnBufferSize < Length)
+    {
+        SetLastError(ERROR_INSUFFICIENT_BUFFER);
+        return FALSE;
+    }
+
+    WideCharToMultiByte(CP_ACP, 0, ReturnBufferW, -1, ReturnBuffer, ReturnBufferSize, NULL, NULL);
+    return TRUE;
+}
+
 BOOL WINAPI SetupQueryInfVersionInformationA(SP_INF_INFORMATION *info, UINT index, const char *key, char *buff,
     DWORD size, DWORD *req_size)
 {
