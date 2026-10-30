@@ -183,3 +183,45 @@ CreateFileMappingNumaA(
 
     return CreateFileMappingA(File, Attributes, Protect, MaximumSizeHigh, MaximumSizeLow, Name);
 }
+
+/* The ANSI form reports exactly what the wide form reports, converted */
+BOOL
+WINAPI
+GetNamedPipeClientComputerNameA(
+    _In_ HANDLE Pipe,
+    _Out_writes_bytes_(ClientComputerNameLength) LPSTR ClientComputerName,
+    _In_ ULONG ClientComputerNameLength)
+{
+    WCHAR Wide[MAX_COMPUTERNAME_LENGTH + 1];
+
+    if (!GetNamedPipeClientComputerNameW(Pipe, Wide, sizeof(Wide)))
+        return FALSE;
+
+    if (!WideCharToMultiByte(CP_ACP, 0, Wide, -1, ClientComputerName,
+                             ClientComputerNameLength, NULL, NULL))
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/*
+ * I/O rings are not provided (Windows 11 feature). The export is kept, as the
+ * import library lists it, but it reports E_NOTIMPL-equivalent failure with
+ * the capabilities cleared so that a caller never sees a version or
+ * operation it could try to use.
+ */
+HRESULT
+WINAPI
+QueryIoRingCapabilities(
+    _Out_ PVOID Capabilities)
+{
+    if (!Capabilities)
+        return E_POINTER;
+
+    /* IORING_CAPABILITIES is { IORING_VERSION MaxVersion; ULONG MaxSubmissionQueueSize;
+     * ULONG MaxCompletionQueueSize; IORING_FEATURE_FLAGS FeatureFlags; } = 16 bytes */
+    RtlZeroMemory(Capabilities, 16);
+    return HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED);
+}

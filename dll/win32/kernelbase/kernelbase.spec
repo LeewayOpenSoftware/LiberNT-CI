@@ -492,6 +492,7 @@
 @ stub GetNamedLocaleHashNode
 @ stub -version=0x600+ GetNamedPipeAttribute
 @ stdcall -version=0x600+ GetNamedPipeClientComputerNameW(ptr ptr long)
+@ stdcall -version=0x600+ GetNamedPipeClientComputerNameA(ptr ptr long)
 @ stdcall GetNamedPipeHandleStateW(long ptr ptr ptr ptr wstr long) kernel32.GetNamedPipeHandleStateW
 @ stdcall GetNamedPipeInfo(long ptr ptr ptr ptr) kernel32.GetNamedPipeInfo
 @ stdcall GetNativeSystemInfo(ptr) kernel32.GetNativeSystemInfo
@@ -981,7 +982,7 @@
 @ stdcall -version=0x600+ QueryFullProcessImageNameW(ptr long ptr ptr) kernel32.QueryFullProcessImageNameW
 @ stdcall -version=0x600+ QueryIdleProcessorCycleTime(ptr ptr) kernel32.QueryIdleProcessorCycleTime
 @ stdcall -version=0x601+ QueryIdleProcessorCycleTimeEx(long ptr ptr) kernel32.QueryIdleProcessorCycleTimeEx
-@ stub QueryIoRingCapabilities
+@ stdcall QueryIoRingCapabilities(ptr)
 @ stdcall QueryMemoryResourceNotification(ptr ptr) kernel32.QueryMemoryResourceNotification
 @ stdcall QueryPerformanceCounter(ptr) kernel32.QueryPerformanceCounter
 @ stdcall QueryPerformanceFrequency(ptr) kernel32.QueryPerformanceFrequency
