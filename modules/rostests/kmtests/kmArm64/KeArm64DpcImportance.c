@@ -59,7 +59,8 @@ HoldTarget(PVOID Parameter)
     Context->Clean = !Data->DpcQueueDepth &&
                      !Context->Prcb->DpcRoutineActive &&
                      !Context->Prcb->DpcNormalProcessingRequested &&
-                     !Context->Prcb->DpcNormalDpcPresent;
+                     !Context->Prcb->DpcNormalDpcPresent &&
+                     !(Context->Prcb->RequestSummary & IPI_DPC);
     Context->InitialCount = Data->DpcCount;
     Context->MaximumDepth = Context->Prcb->MaximumDpcQueueDepth;
     KeReleaseSpinLockFromDpcLevel(&Data->DpcLock);

@@ -3,6 +3,20 @@
 #include <tags.h>
 
 #include "lwip_glue.h"
+#include <lwip/priv/tcp_priv.h>
+#include <address.h>
+
+static void LibTCPPathMtuSync(PTCP_PCB pcb);
+
+static
+void
+LibTCPConfirmPath(PTCP_PCB pcb)
+{
+    if (IP_IS_V4(&pcb->remote_ip))
+        PathConfirmV4(ip4_addr_get_u32(ip_2_ip4(&pcb->remote_ip)));
+    else
+        LibIP6ConfirmPath(ip_2_ip6(&pcb->remote_ip));
+}
 
 static const char * const tcp_state_str[] = {
   "CLOSED",
@@ -301,6 +315,7 @@ InternalSendEventHandler(void *arg, PTCP_PCB pcb, const u16_t space)
     /* Make sure the socket didn't get closed */
     if (!arg) return ERR_OK;
 
+    LibTCPConfirmPath(pcb);
     TCPSendEventHandler(arg, space);
 
     return ERR_OK;
@@ -323,6 +338,7 @@ InternalRecvEventHandler(void *arg, PTCP_PCB pcb, struct pbuf *p, const err_t er
 
     if (p)
     {
+        LibTCPConfirmPath(pcb);
         if (!LibTCPWfpReceive(Connection, p))
         {
             tcp_recved(pcb, p->tot_len);
@@ -747,6 +763,8 @@ LibTCPSendCallback(void *arg)
         msg->Output.Send.Information = SendLength;
         goto done;
     }
+
+    LibTCPPathMtuSync(pcb);
 
     Urgent = (SendFlags & TCP_WRITE_FLAG_URG) != 0;
     if (Urgent)
@@ -1183,4 +1201,131 @@ LibTCPGetSocketStatus(
 {
     /* Translate state from enum tcp_state -> MIB_TCP_STATE */
     *State = pcb->state + 1;
+}
+
+struct lib_tcp_pmtu_msg
+{
+    PIP_INTERFACE Interface;
+    ip4_addr_t Source;
+    ip4_addr_t Destination;
+    u16_t SourcePort;
+    u16_t DestinationPort;
+    u32_t Sequence;
+    u32_t Mtu;
+};
+
+static
+void
+LibTCPResegment(PTCP_PCB pcb)
+{
+    struct tcp_seg *head, *seg;
+
+    tcp_rexmit_rto_prepare(pcb);
+    head = pcb->unsent;
+    for (seg = head; seg; seg = seg->next)
+    {
+        u16_t split = (u16_t)(pcb->mss - (LWIP_TCP_OPT_LENGTH(seg->flags)));
+
+        while (seg->len > split)
+        {
+            pcb->unsent = seg;
+            if (tcp_split_unsent_seg(pcb, split) != ERR_OK)
+                break;
+        }
+    }
+    pcb->unsent = head;
+    tcp_output(pcb);
+}
+
+static
+void
+LibTCPApplyPathMtu(PIP_INTERFACE Interface, const ip4_addr_t *Destination)
+{
+    struct tcp_pcb *pcb;
+    u16_t mss;
+
+    mss = (u16_t)(PmtuQuery(Interface, ip4_addr_get_u32(Destination), NULL) - IP_HLEN - TCP_HLEN);
+    for (pcb = tcp_active_pcbs; pcb; pcb = pcb->next)
+    {
+        if (!IP_IS_V4(&pcb->remote_ip) || !ip4_addr_eq(ip_2_ip4(&pcb->remote_ip), Destination))
+            continue;
+        if (pcb->mss <= mss)
+            continue;
+        if (!pcb->base_mss)
+            pcb->base_mss = pcb->mss;
+        pcb->mss = mss;
+        pcb->persist_backoff = 0;
+        pcb->persist_cnt = 0;
+        pcb->persist_probe = 0;
+#if TCP_OVERSIZE
+        pcb->unsent_oversize = 0;
+#if TCP_OVERSIZE_DBGCHECK
+        {
+            struct tcp_seg *seg;
+
+            for (seg = pcb->unsent; seg; seg = seg->next)
+                seg->oversize_left = 0;
+        }
+#endif
+#endif
+        LibTCPResegment(pcb);
+    }
+}
+
+static
+void
+LibTCPPathMtuCallback(void *arg)
+{
+    struct lib_tcp_pmtu_msg *msg = arg;
+    struct tcp_pcb *pcb;
+
+    for (pcb = tcp_active_pcbs; pcb; pcb = pcb->next)
+    {
+        if (IP_IS_V4(&pcb->local_ip) && ip4_addr_eq(ip_2_ip4(&pcb->local_ip), &msg->Source) &&
+            ip4_addr_eq(ip_2_ip4(&pcb->remote_ip), &msg->Destination) &&
+            pcb->local_port == msg->SourcePort && pcb->remote_port == msg->DestinationPort &&
+            TCP_SEQ_GEQ(msg->Sequence, pcb->lastack) && TCP_SEQ_LT(msg->Sequence, pcb->snd_nxt))
+            break;
+    }
+    if (pcb && PmtuLower(msg->Interface, ip4_addr_get_u32(&msg->Destination), msg->Mtu))
+        LibTCPApplyPathMtu(msg->Interface, &msg->Destination);
+}
+
+VOID
+LibTCPPathMtuExceeded(PIP_INTERFACE Interface, ULONG Source, ULONG Destination, USHORT SourcePort,
+                      USHORT DestinationPort, ULONG Sequence, ULONG Mtu)
+{
+    struct lib_tcp_pmtu_msg msg;
+
+    msg.Interface = Interface;
+    ip4_addr_set_u32(&msg.Source, Source);
+    ip4_addr_set_u32(&msg.Destination, Destination);
+    msg.SourcePort = SourcePort;
+    msg.DestinationPort = DestinationPort;
+    msg.Sequence = Sequence;
+    msg.Mtu = Mtu;
+    (void)tcpip_callback_wait(LibTCPPathMtuCallback, &msg);
+}
+
+static
+void
+LibTCPPathMtuSync(PTCP_PCB pcb)
+{
+    ULONG Mtu;
+    u16_t mss;
+
+    if (!pcb->base_mss || !IP_IS_V4(&pcb->remote_ip))
+        return;
+    Mtu = PmtuForDestination(ip4_addr_get_u32(ip_2_ip4(&pcb->remote_ip)), 0);
+    if (Mtu <= IP_HLEN + TCP_HLEN)
+        return;
+    mss = (u16_t)LWIP_MIN(pcb->base_mss, Mtu - IP_HLEN - TCP_HLEN);
+    if (mss > pcb->mss)
+        pcb->mss = mss;
+}
+
+u16_t
+LibIP4PathMtu(const ip4_addr_t *Destination, struct netif *Netif)
+{
+    return (u16_t)PmtuForDestination(ip4_addr_get_u32(Destination), Netif->mtu);
 }

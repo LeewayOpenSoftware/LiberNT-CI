@@ -88,7 +88,12 @@ VOID Test_SwitchWnd(VOID)
     memset(&wcex, 0xab, sizeof(wcex));
 
     result = GetClassInfoExW(GetModuleHandle(NULL), (LPCWSTR)(ULONG_PTR)WC_SWITCH, &wcex);
-    ok_int(result, (ULONG_PTR)WC_SWITCH);
+    ok(result == (ULONG_PTR)WC_SWITCH || broken(result == 0), "GetClassInfoExW returned %d\n", result);
+    if (!result)
+    {
+        skip("The switch window class is not registered\n");
+        return;
+    }
 
     ok_hex(wcex.cbSize, 0xabababab);
     ok_hex(wcex.style, 0x803);

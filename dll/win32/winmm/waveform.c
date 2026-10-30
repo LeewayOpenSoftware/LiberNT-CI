@@ -946,9 +946,21 @@ static LRESULT WINMM_OpenDevice(WINMM_Device *device, WINMM_OpenInfo *info,
 
         if (info->format->nSamplesPerSec == 0)
         {
+#ifdef __REACTOS__
+            ret = (info->flags & WAVE_FORMAT_DIRECT) ? MMSYSERR_INVALPARAM : WAVERR_BADFORMAT;
+#else
             ret = MMSYSERR_INVALPARAM;
+#endif
             goto error;
         }
+#ifdef __REACTOS__
+        if (info->format->wBitsPerSample % 8 != 0 ||
+            info->format->nBlockAlign != info->format->nChannels * info->format->wBitsPerSample / 8)
+        {
+            ret = WAVERR_BADFORMAT;
+            goto error;
+        }
+#endif
 
         /* we aren't guaranteed that the struct in lpFormat is a full
          * WAVEFORMATEX struct, which IAC::IsFormatSupported requires */
@@ -1004,7 +1016,11 @@ static LRESULT WINMM_OpenDevice(WINMM_Device *device, WINMM_OpenInfo *info,
             AC_BUFLEN, 0, device->orig_fmt, &device->parent->session);
 
     if(FAILED(hr)){
+#ifdef __REACTOS__
+        if((hr == AUDCLNT_E_UNSUPPORTED_FORMAT || hr == E_INVALIDARG) && !(info->flags & WAVE_FORMAT_DIRECT)){
+#else
         if(hr == AUDCLNT_E_UNSUPPORTED_FORMAT && !(info->flags & WAVE_FORMAT_DIRECT)){
+#endif
             ret = WINMM_MapDevice(device, FALSE, is_out);
             if(ret != MMSYSERR_NOERROR || info->flags & WAVE_FORMAT_QUERY)
                 goto error;

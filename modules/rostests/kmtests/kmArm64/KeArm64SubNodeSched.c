@@ -10,7 +10,6 @@ VOID Test_KeArm64SubNodeSched(VOID);
 
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
-#ifdef _M_ARM64
 
 static VOID Arm64SubNodeCheckCpu(PKSCHEDULER_SUBNODE Expected)
 {
@@ -83,14 +82,9 @@ static VOID Arm64SubNodeSched(VOID)
                (ULONGLONG)Shared->IdleCpuSet, Processors);
 }
 
-#endif /* _M_ARM64 */
 
 START_TEST(KeArm64SubNodeSched)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64SubNodeSched is ARM64-only\n");
-#else
     dump_trace("[arm64][KeArm64SubNodeSched] enter\n");
     Arm64SubNodeSched();
-#endif
 }

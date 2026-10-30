@@ -165,7 +165,12 @@ static BOOL MSACM_FillCache(PWINE_ACMDRIVERID padid)
 	padid->aFormatTag[ntag].cbwfx = aftd.cbFormatSize;
     }
 
+#ifdef __REACTOS__
+    if (!padid->pLocalDriver)
+        acmDriverClose(had, 0);
+#else
     acmDriverClose(had, 0);
+#endif
 
     return TRUE;
 
@@ -377,6 +382,10 @@ void MSACM_RegisterAllDrivers(void)
 	    if (!wcsnicmp(valname, msacmW, ARRAY_SIZE(msacmW)))
 		MSACM_RegisterDriver(valname, buf, 0);
 	    ++i;
+#ifdef __REACTOS__
+	    cnt = ARRAY_SIZE(valname);
+	    bufLen = sizeof(buf);
+#endif
 	}
     	RegCloseKey( hKey );
     }
@@ -1014,6 +1023,7 @@ PWINE_ACMLOCALDRIVERINST MSACM_OpenLocalDriver(PWINE_ACMLOCALDRIVER paldrv, LPAR
      * + first open with NULL as lParam2 (session instance),
      * + then do a second open with the real non null lParam2)
      */
+#ifndef __REACTOS__
     if (MSACM_GetNumberOfModuleRefs(paldrv->hModule, paldrv->lpDrvProc, NULL) == 0 && lParam2)
     {
         PWINE_ACMLOCALDRIVERINST   ret;
@@ -1038,6 +1048,7 @@ PWINE_ACMLOCALDRIVERINST MSACM_OpenLocalDriver(PWINE_ACMLOCALDRIVER paldrv, LPAR
         pDrvInst->bSession = TRUE;
         return ret;
     }
+#endif
     
     if (!MSACM_AddToList(pDrvInst, lParam2))
     {

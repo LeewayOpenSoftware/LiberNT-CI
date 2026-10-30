@@ -1,0 +1,57 @@
+--- a/mono/utils/mono-os-wait-win32.c
++++ b/mono/utils/mono-os-wait-win32.c
+@@ -15,6 +15,7 @@
+ #include "mono-error-internals.h"
+ #include <mono/utils/checked-build.h>
+ #include <mono/utils/w32subset.h>
++#include <objbase.h>
+ 
+ /* Empty handler only used to detect interrupt state of current thread. */
+ /* Needed in order to correctly avoid entering wait methods under */
+@@ -120,10 +121,37 @@
+ 	return win32_sleep_ex (timeout, alertable, TRUE);
+ }
+ 
++static gboolean
++win32_wait_pumps_com (BOOL alertable)
++{
++	APTTYPE type;
++	APTTYPEQUALIFIER qualifier;
++
++	if (!alertable || FAILED (CoGetApartmentType (&type, &qualifier)))
++		return FALSE;
++	return type == APTTYPE_STA || type == APTTYPE_MAINSTA;
++}
++
++static DWORD
++win32_co_wait_for_multiple_handles (DWORD count, CONST HANDLE *handles, DWORD timeout)
++{
++	DWORD index = WAIT_FAILED;
++	HRESULT const hr = CoWaitForMultipleHandles (COWAIT_ALERTABLE, timeout, count, (LPHANDLE)handles, &index);
++
++	if (hr == S_OK)
++		return index;
++	if (hr == RPC_S_CALLPENDING)
++		return WAIT_TIMEOUT;
++	SetLastError (hr == E_INVALIDARG ? ERROR_INVALID_PARAMETER : ERROR_GEN_FAILURE);
++	return WAIT_FAILED;
++}
++
+ static DWORD
+ win32_wait_for_single_object_ex_interrupt_checked (MonoThreadInfo *info, HANDLE handle, DWORD timeout, BOOL alertable)
+ {
+ 	WIN32_CHECK_INTERRUPT (info, alertable);
++	if (win32_wait_pumps_com (alertable))
++		return win32_co_wait_for_multiple_handles (1, &handle, timeout);
+ 	return WaitForSingleObjectEx (handle, timeout, alertable);
+ }
+ 
+@@ -164,6 +192,8 @@
+ win32_wait_for_multiple_objects_ex_interrupt_checked (MonoThreadInfo *info, DWORD count, CONST HANDLE *handles, BOOL waitAll, DWORD timeout, BOOL alertable)
+ {
+ 	WIN32_CHECK_INTERRUPT (info, alertable);
++	if (!waitAll && win32_wait_pumps_com (alertable))
++		return win32_co_wait_for_multiple_handles (count, handles, timeout);
+ 	return WaitForMultipleObjectsEx (count, handles, waitAll, timeout, alertable);
+ }
+ 

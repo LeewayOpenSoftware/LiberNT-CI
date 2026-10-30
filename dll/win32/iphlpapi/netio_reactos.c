@@ -77,6 +77,28 @@ static NTSTATUS ip6_ioctl(ULONG Code, PVOID Input, ULONG InputLength)
     return Status;
 }
 
+static VOID ip4_route_set_lifetime(const MIB_IPFORWARDROW *Route, ULONG Lifetime)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK Iosb;
+    IP4_ROUTE_INFO Info;
+    HANDLE File;
+
+    InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               FILE_SYNCHRONOUS_IO_NONALERT)))
+        return;
+    memset(&Info, 0, sizeof(Info));
+    Info.Index = Route->dwForwardIfIndex;
+    Info.Destination = Route->dwForwardDest;
+    Info.Mask = Route->dwForwardMask;
+    Info.NextHop = Route->dwForwardNextHop;
+    Info.ValidLifetime = Lifetime;
+    NtDeviceIoControlFile(File, NULL, NULL, NULL, &Iosb, IOCTL_IP_SET_ROUTE, &Info, sizeof(Info), NULL, 0);
+    NtClose(File);
+}
+
 static DWORD ip4_interface_set(IP4_INTERFACE_INFO *Info)
 {
     UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
@@ -381,7 +403,10 @@ DWORD WINAPI CreateIpForwardEntry2(const MIB_IPFORWARD_ROW2 *Row)
         if (GetIpForwardEntry2(&Existing) == NO_ERROR)
             return ERROR_OBJECT_ALREADY_EXISTS;
         fill_ipv4_route(&Route, Index, Row);
-        return CreateIpForwardEntry(&Route);
+        Error = CreateIpForwardEntry(&Route);
+        if (Error == NO_ERROR && Row->ValidLifetime != 0xFFFFFFFF)
+            ip4_route_set_lifetime(&Route, Row->ValidLifetime);
+        return Error;
     }
 
     fill_route_set(&Set, Ip6SetAdd, Index, Row);
@@ -850,4 +875,175 @@ VOID ip_interface_extras(ADDRESS_FAMILY Family, MIB_IPINTERFACE_ROW *Row)
         Row->AdvertiseDefaultRoute = Info4.AdvertiseDefaultRoute;
         Row->DisableDefaultRoutes = Info4.DisableDefaultRoutes;
     }
+}
+
+static NTSTATUS path_device_ioctl(ADDRESS_FAMILY Family, ULONG Code, PVOID Output, ULONG OutputLength)
+{
+    UNICODE_STRING Name;
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK Iosb;
+    NTSTATUS Status;
+    HANDLE File;
+
+    RtlInitUnicodeString(&Name, Family == AF_INET6 ? L"\\Device\\Ip6" : L"\\Device\\Ip");
+    InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = NtDeviceIoControlFile(File, NULL, NULL, NULL, &Iosb, Code, NULL, 0, Output, OutputLength);
+    NtClose(File);
+    return Status;
+}
+
+static DWORD path_query(ADDRESS_FAMILY Family, IP_PATH_TABLE **Result)
+{
+    ULONG Capacity = 64, Size;
+    IP_PATH_TABLE *Table;
+    NTSTATUS Status;
+
+    for (;;)
+    {
+        Size = FIELD_OFFSET(IP_PATH_TABLE, Rows) + Capacity * sizeof(IP_PATH_ROW);
+        Table = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size);
+        if (!Table)
+            return ERROR_NOT_ENOUGH_MEMORY;
+        Status = path_device_ioctl(Family, IOCTL_IP_QUERY_PATHS, Table, Size);
+        if (Status != STATUS_BUFFER_OVERFLOW)
+            break;
+        Capacity = Table->NumEntries + 16;
+        HeapFree(GetProcessHeap(), 0, Table);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        HeapFree(GetProcessHeap(), 0, Table);
+        return RtlNtStatusToDosError(Status);
+    }
+    *Result = Table;
+    return NO_ERROR;
+}
+
+static VOID path_address(ADDRESS_FAMILY Family, const UCHAR *Address, SOCKADDR_INET *Result)
+{
+    memset(Result, 0, sizeof(*Result));
+    Result->si_family = Family;
+    if (Family == AF_INET6)
+        memcpy(&Result->Ipv6.sin6_addr, Address, sizeof(IN6_ADDR));
+    else
+        memcpy(&Result->Ipv4.sin_addr, Address, sizeof(IN_ADDR));
+}
+
+static VOID path_row(ADDRESS_FAMILY Family, const IP_PATH_ROW *Path, MIB_IPPATH_ROW *Row)
+{
+    memset(Row, 0, sizeof(*Row));
+    path_address(Family, Path->Source, &Row->Source);
+    path_address(Family, Path->Destination, &Row->Destination);
+    path_address(Family, Path->NextHop, &Row->CurrentNextHop);
+    Row->InterfaceIndex = Path->Index;
+    ConvertInterfaceIndexToLuid(Path->Index, &Row->InterfaceLuid);
+    Row->PathMtu = Path->PathMtu;
+    Row->RttMean = 3000;
+    Row->RttDeviation = 0;
+    Row->LastReachable = Path->LastReachable;
+    Row->IsReachable = Path->IsReachable;
+    Row->LinkTransmitSpeed = Path->LinkSpeed;
+    Row->LinkReceiveSpeed = Path->LinkSpeed;
+}
+
+DWORD WINAPI GetIpPathTable(ADDRESS_FAMILY Family, PMIB_IPPATH_TABLE *Table)
+{
+    static const ADDRESS_FAMILY Families[] = { AF_INET, AF_INET6 };
+    IP_PATH_TABLE *Paths[ARRAYSIZE(Families)] = { NULL };
+    MIB_IPPATH_TABLE *Result;
+    ULONG Count = 0, i, j;
+    DWORD Error = NO_ERROR;
+
+    TRACE("(%u %p)\n", Family, Table);
+
+    if (!Table || (Family != AF_UNSPEC && Family != AF_INET && Family != AF_INET6))
+        return ERROR_INVALID_PARAMETER;
+
+    for (i = 0; i < ARRAYSIZE(Families) && !Error; i++)
+    {
+        if (Family != AF_UNSPEC && Family != Families[i])
+            continue;
+        Error = path_query(Families[i], &Paths[i]);
+        if (!Error)
+            Count += Paths[i]->NumEntries;
+    }
+    if (!Error)
+    {
+        Result = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, FIELD_OFFSET(MIB_IPPATH_TABLE, Table[Count]));
+        if (Result)
+        {
+            for (i = 0; i < ARRAYSIZE(Families); i++)
+            {
+                for (j = 0; Paths[i] && j < Paths[i]->NumEntries; j++)
+                    path_row(Families[i], &Paths[i]->Rows[j], &Result->Table[Result->NumEntries++]);
+            }
+            *Table = Result;
+        }
+        else
+            Error = ERROR_NOT_ENOUGH_MEMORY;
+    }
+    for (i = 0; i < ARRAYSIZE(Families); i++)
+        HeapFree(GetProcessHeap(), 0, Paths[i]);
+    return Error;
+}
+
+DWORD WINAPI GetIpPathEntry(PMIB_IPPATH_ROW Row)
+{
+    ADDRESS_FAMILY Family;
+    IP_PATH_TABLE *Paths;
+    NET_IFINDEX Index;
+    DWORD Error;
+    ULONG i;
+
+    TRACE("(%p)\n", Row);
+
+    if (!Row)
+        return ERROR_INVALID_PARAMETER;
+    Family = Row->Destination.si_family;
+    if ((Family != AF_INET && Family != AF_INET6) || (!Row->InterfaceLuid.Value && !Row->InterfaceIndex))
+        return ERROR_INVALID_PARAMETER;
+    Error = resolve_interface(&Row->InterfaceLuid, Row->InterfaceIndex, &Index);
+    if (Error)
+        return Error;
+    if (Row->Source.si_family != AF_UNSPEC)
+        return ERROR_NOT_FOUND;
+    Error = path_query(Family, &Paths);
+    if (Error)
+        return Error;
+    Error = ERROR_NOT_FOUND;
+    for (i = 0; i < Paths->NumEntries; i++)
+    {
+        const IP_PATH_ROW *Path = &Paths->Rows[i];
+        BOOL Same = Family == AF_INET6 ?
+                    !memcmp(Path->Destination, &Row->Destination.Ipv6.sin6_addr, sizeof(IN6_ADDR)) :
+                    !memcmp(Path->Destination, &Row->Destination.Ipv4.sin_addr, sizeof(IN_ADDR));
+
+        if (Path->Index == Index && Same)
+        {
+            path_row(Family, Path, Row);
+            Error = NO_ERROR;
+            break;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, Paths);
+    return Error;
+}
+
+DWORD WINAPI FlushIpPathTable(ADDRESS_FAMILY Family)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    TRACE("(%u)\n", Family);
+
+    if (Family != AF_UNSPEC && Family != AF_INET && Family != AF_INET6)
+        return ERROR_INVALID_PARAMETER;
+    if (Family != AF_INET6)
+        Status = path_device_ioctl(AF_INET, IOCTL_IP_FLUSH_PATHS, NULL, 0);
+    if (NT_SUCCESS(Status) && Family != AF_INET)
+        Status = path_device_ioctl(AF_INET6, IOCTL_IP_FLUSH_PATHS, NULL, 0);
+    return NT_SUCCESS(Status) ? NO_ERROR : RtlNtStatusToDosError(Status);
 }

@@ -474,6 +474,16 @@ UserRegisterHotKey(PWND pWnd,
         return FALSE;
     }
 
+    for (pHotKey = gphkFirst; pHotKey; pHotKey = pHotKey->pNext)
+    {
+        if (pHotKey->pti == pHotKeyThread && pHotKey->pWnd == pWnd && pHotKey->id == id)
+        {
+            pHotKey->fsModifiers = fsModifiers;
+            pHotKey->vk = vk;
+            return TRUE;
+        }
+    }
+
     /* Create a new hotkey */
     pHotKey = ExAllocatePoolWithTag(PagedPool, sizeof(HOT_KEY), USERTAG_HOTKEY);
     if (pHotKey == NULL)

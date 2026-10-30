@@ -3880,8 +3880,17 @@ static void test_system_debug_control(void)
     int class;
 #ifdef __REACTOS__
     SYSTEM_KERNEL_DEBUGGER_INFORMATION skdi = {0};
+    NTSTATUS (WINAPI *pRtlAdjustPrivilege)(ULONG, BOOLEAN, BOOLEAN, PBOOLEAN);
+    BOOLEAN debug_enabled = FALSE, restored;
 
     pNtQuerySystemInformation( SystemKernelDebuggerInformation, &skdi, sizeof(skdi), NULL );
+    pRtlAdjustPrivilege = (void *)GetProcAddress( GetModuleHandleA( "ntdll.dll" ), "RtlAdjustPrivilege" );
+    if (pRtlAdjustPrivilege &&
+        !pRtlAdjustPrivilege( SE_DEBUG_PRIVILEGE, FALSE, FALSE, &debug_enabled ) &&
+        debug_enabled)
+    {
+        pRtlAdjustPrivilege( SE_DEBUG_PRIVILEGE, TRUE, FALSE, &restored );
+    }
 #endif
 
     for (class = 0; class < SysDbgMaxInfoClass; ++class)
@@ -3898,7 +3907,7 @@ static void test_system_debug_control(void)
                     "class %d, got %#lx.\n", class, status );
         }
 #ifdef __REACTOS__
-        else if (class == SysDbgEnableKernelDebugger && skdi.DebuggerEnabled)
+        else if (class == SysDbgEnableKernelDebugger && skdi.DebuggerEnabled && debug_enabled)
         {
             ok( status == STATUS_INVALID_PARAMETER, "class %d, got %#lx.\n", class, status );
         }

@@ -860,6 +860,9 @@ LxExecImage(
         Process->Uid[1] = FileUid;
     if (SetGid)
         Process->Gid[1] = FileGid;
+    if (SetUid || SetGid)
+        Process->Personality &= ~LX_PER_CLEAR_ON_SETID;
+    Process->Personality = LxArchExecPersonality(Process->Personality);
     LxCredExec(Process, &Old);
     ExReleaseFastMutex(&Process->Lock);
 
@@ -898,6 +901,7 @@ LxExecImage(
         LxProcessSetCommand(Process, Request->Args, Request->ArgLength, Request->Env, Request->EnvLength, ExecPath, Request->FileName);
         LxPosixTimersRelease(Process, TRUE);
         Process->Execed = TRUE;
+        LxSpecExec(Thread);
         RtlZeroMemory(&Thread->AltStack, sizeof(Thread->AltStack));
         Thread->AltStack.Flags = LX_SS_DISABLE;
         RtlCopyMemory(Thread->Comm, Process->Comm, sizeof(Thread->Comm));

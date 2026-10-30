@@ -14,18 +14,49 @@
 
 /* GLOBALS *******************************************************************/
 
+#define IOP_TIMER_SHARDS 8
+
+typedef struct DECLSPEC_CACHEALIGN _IOP_TIMER_SHARD
+{
+    KSPIN_LOCK Lock;
+    LIST_ENTRY Head;
+    LONG Count;
+} IOP_TIMER_SHARD, *PIOP_TIMER_SHARD;
+
 /* Timer Database */
-KSPIN_LOCK IopTimerLock;
-LIST_ENTRY IopTimerQueueHead;
+static IOP_TIMER_SHARD IopTimerShards[IOP_TIMER_SHARDS];
 
 /* Timer Firing */
 KDPC IopTimerDpc;
 KTIMER IopTimer;
 
 /* Keep count of how many timers we have */
-ULONG IopTimerCount = 0;
+static LONG IopTimerCount = 0;
 
 /* PRIVATE FUNCTIONS *********************************************************/
+
+static
+PIOP_TIMER_SHARD
+IopTimerShard(
+    _In_ PIO_TIMER Timer)
+{
+    ULONG_PTR Value = (ULONG_PTR)Timer >> 6;
+
+    return &IopTimerShards[(Value ^ (Value >> 5)) % IOP_TIMER_SHARDS];
+}
+
+VOID
+FASTCALL
+IopInitTimerImplementation(VOID)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < IOP_TIMER_SHARDS; Index++)
+    {
+        KeInitializeSpinLock(&IopTimerShards[Index].Lock);
+        InitializeListHead(&IopTimerShards[Index].Head);
+    }
+}
 
 VOID
 NTAPI
@@ -37,17 +68,23 @@ IopTimerDispatch(IN PKDPC Dpc,
     KIRQL OldIrql;
     PLIST_ENTRY TimerEntry;
     PIO_TIMER Timer;
-    ULONG i;
+    PIOP_TIMER_SHARD Shard;
+    ULONG Index, i;
 
     /* Check if any Timers are actually enabled as of now */
-    if (IopTimerCount)
+    if (!ReadNoFence(&IopTimerCount)) return;
+
+    for (Index = 0; Index < IOP_TIMER_SHARDS; Index++)
     {
+        Shard = &IopTimerShards[Index];
+        if (!ReadNoFence(&Shard->Count)) continue;
+
         /* Lock the Timers */
-        KeAcquireSpinLock(&IopTimerLock, &OldIrql);
+        KeAcquireSpinLock(&Shard->Lock, &OldIrql);
 
         /* Call the Timer Routine of each enabled Timer */
-        for (TimerEntry = IopTimerQueueHead.Flink, i = IopTimerCount;
-            (TimerEntry != &IopTimerQueueHead) && i;
+        for (TimerEntry = Shard->Head.Flink, i = Shard->Count;
+            (TimerEntry != &Shard->Head) && i;
             TimerEntry = TimerEntry->Flink)
         {
             /* Get the timer and check if it's enabled */
@@ -61,7 +98,7 @@ IopTimerDispatch(IN PKDPC Dpc,
         }
 
         /* Unlock the Timers */
-        KeReleaseSpinLock(&IopTimerLock, OldIrql);
+        KeReleaseSpinLock(&Shard->Lock, OldIrql);
     }
 }
 
@@ -69,17 +106,22 @@ VOID
 NTAPI
 IopRemoveTimerFromTimerList(IN PIO_TIMER Timer)
 {
+    PIOP_TIMER_SHARD Shard = IopTimerShard(Timer);
     KIRQL OldIrql;
 
     /* Lock Timers */
-    KeAcquireSpinLock(&IopTimerLock, &OldIrql);
+    KeAcquireSpinLock(&Shard->Lock, &OldIrql);
 
     /* Remove Timer from the List and Drop the Timer Count if Enabled */
     RemoveEntryList(&Timer->IoTimerList);
-    if (Timer->TimerEnabled) IopTimerCount--;
+    if (Timer->TimerEnabled)
+    {
+        Shard->Count--;
+        InterlockedDecrement(&IopTimerCount);
+    }
 
     /* Unlock the Timers */
-    KeReleaseSpinLock(&IopTimerLock, OldIrql);
+    KeReleaseSpinLock(&Shard->Lock, OldIrql);
 }
 
 /* PUBLIC FUNCTIONS **********************************************************/
@@ -117,9 +159,9 @@ IoInitializeTimer(IN PDEVICE_OBJECT DeviceObject,
     IoTimer->Context = Context;
 
     /* Add it to the Timer List */
-    ExInterlockedInsertTailList(&IopTimerQueueHead,
+    ExInterlockedInsertTailList(&IopTimerShard(IoTimer)->Head,
                                 &IoTimer->IoTimerList,
-                                &IopTimerLock);
+                                &IopTimerShard(IoTimer)->Lock);
 
     /* Return Success */
     return STATUS_SUCCESS;
@@ -141,18 +183,19 @@ IoStartTimer(IN PDEVICE_OBJECT DeviceObject)
           DOE_REMOVE_PENDING | DOE_REMOVE_PROCESSED)))
     {
         /* Lock Timers */
-        KeAcquireSpinLock(&IopTimerLock, &OldIrql);
+        KeAcquireSpinLock(&IopTimerShard(IoTimer)->Lock, &OldIrql);
 
         /* Check if the timer isn't already enabled */
         if (!IoTimer->TimerEnabled)
         {
             /* Enable it and increase the timer count */
             IoTimer->TimerEnabled = TRUE;
-            IopTimerCount++;
+            IopTimerShard(IoTimer)->Count++;
+            InterlockedIncrement(&IopTimerCount);
         }
 
         /* Unlock Timers */
-        KeReleaseSpinLock(&IopTimerLock, OldIrql);
+        KeReleaseSpinLock(&IopTimerShard(IoTimer)->Lock, OldIrql);
     }
 }
 
@@ -167,18 +210,19 @@ IoStopTimer(PDEVICE_OBJECT DeviceObject)
     PIO_TIMER IoTimer = DeviceObject->Timer;
 
     /* Lock Timers */
-    KeAcquireSpinLock(&IopTimerLock, &OldIrql);
+    KeAcquireSpinLock(&IopTimerShard(IoTimer)->Lock, &OldIrql);
 
     /* Check if the timer is enabled */
     if (IoTimer->TimerEnabled)
     {
         /* Disable it and decrease the timer count */
         IoTimer->TimerEnabled = FALSE;
-        IopTimerCount--;
+        IopTimerShard(IoTimer)->Count--;
+        InterlockedDecrement(&IopTimerCount);
     }
 
     /* Unlock Timers */
-    KeReleaseSpinLock(&IopTimerLock, OldIrql);
+    KeReleaseSpinLock(&IopTimerShard(IoTimer)->Lock, OldIrql);
 }
 
 /* EOF */

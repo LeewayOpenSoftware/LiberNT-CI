@@ -136,10 +136,6 @@ RemoveHeadList(
 
 #if !defined(NO_KERNEL_LIST_ENTRY_CHECKS) && DBG
   RtlpCheckListEntry(ListHead);
-#ifdef EXTRA_KERNEL_LIST_ENTRY_CHECKS
-  if (ListHead->Flink == ListHead || ListHead->Blink == ListHead)
-    FatalListEntryError(ListHead->Blink, ListHead, ListHead->Flink);
-#endif
 #endif
   Entry = ListHead->Flink;
   Flink = Entry->Flink;
@@ -162,10 +158,6 @@ RemoveTailList(
 
 #if !defined(NO_KERNEL_LIST_ENTRY_CHECKS) && DBG
   RtlpCheckListEntry(ListHead);
-#ifdef EXTRA_KERNEL_LIST_ENTRY_CHECKS
-  if (ListHead->Flink == ListHead || ListHead->Blink == ListHead)
-    FatalListEntryError(ListHead->Blink, ListHead, ListHead->Flink);
-#endif
 #endif
   Entry = ListHead->Blink;
   Blink = Entry->Blink;

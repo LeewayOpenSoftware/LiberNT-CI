@@ -97,6 +97,9 @@ else()
 endif()
 option(BOOTLOADER_HTTP_BOOT "Add HTTP boot to the boot manager's startup options" ${_bootloader_http_boot})
 option(BOOTLOADER_HTTP_BOOT_DEFAULT "Start the boot manager's HTTP boot directly" OFF)
+set(BOOTLOADER_HTTP_IMAGE_URL "" CACHE STRING
+    "URL of the installed disk image the boot manager's HTTP disk image entry downloads and starts from RAM; empty leaves the entry out")
+option(BOOTLOADER_HTTP_IMAGE_DEFAULT "Start the boot manager's HTTP disk image entry by default" OFF)
 
 set(FREELDR_PREINSTALL_OPTIONS "" CACHE STRING
     "Boot options appended to the boot entry of the preinstalled disk image")
@@ -396,6 +399,7 @@ function(image_list_command _image _var)
 endfunction()
 
 ## LiveImage -- Constitutes a small RAMDISK ISO, and is also merged with the BootCD
+add_custom_target(livecd_files)
 # Create the file list
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/livecd.cmake.lst "${CMAKE_CURRENT_BINARY_DIR}/empty\n")
 # Create TEMP directory
@@ -882,7 +886,7 @@ if(DEFINED EFI_PLATFORM_ID)
             -add $<TARGET_FILE:bootmgfw> EFI/LiberNT/Boot/bootmgfw.efi
             -add ${REACTOS_BINARY_DIR}/bootloader/image/standard/BCD EFI/LiberNT/Boot/BCD)
         list(APPEND _preinstall_partition_deps bootloaderstandardbcd)
-        if(BOOTLOADER_HTTP_BOOT AND BOOTLOADER_HTTP_BOOT_URL)
+        if((BOOTLOADER_HTTP_BOOT AND BOOTLOADER_HTTP_BOOT_URL) OR BOOTLOADER_HTTP_IMAGE_URL)
             list(APPEND _preinstall_boot_partition_files
                 -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi)
             list(APPEND _preinstall_partition_deps winload)
@@ -954,6 +958,41 @@ add_custom_target(liberntimg
     DEPENDS ${_liberntimg_deps}
     VERBATIM)
 add_dependencies(liberntimg preinstall_partition)
+
+set(LIBERNT_RAM_IMAGE_FREE_MB 512 CACHE STRING
+    "Free space in MB added to the system partition of the RAM disk image (liberntramimg)")
+set(_preinstall_ram_image_file ${REACTOS_BINARY_DIR}/LiberNT-ram.img)
+set(_preinstall_ram_partition_file ${CMAKE_CURRENT_BINARY_DIR}/partition.ram.ntfs)
+math(EXPR _preinstall_ram_partition_sectors "${_preinstall_system_partition_sectors} + ${LIBERNT_RAM_IMAGE_FREE_MB} * 2048")
+string(UUID _ram_disk NAMESPACE 354fa6e5-5e45-49af-91bf-1fd2754e470a NAME "LiberNT RAM disk image" TYPE SHA1)
+string(SUBSTRING "${_ram_disk}" 0 8 _ram_signature)
+add_custom_target(liberntramimg
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_ram_image_file} ${_preinstall_ram_partition_file}
+    COMMAND native-ntfsimg
+        --format
+        ${_preinstall_ram_partition_file}
+        ${_preinstall_ram_partition_sectors}
+        ${_preinstall_system_partition_start}
+        ${_preinstall_ntfs_sectors_per_cluster}
+        LiberNT
+    COMMAND native-ntfsimg
+        --addfiles
+        ${_preinstall_ram_partition_file}
+        ${CMAKE_CURRENT_BINARY_DIR}/preinstall.effective.lst
+    COMMAND native-ntfsimg
+        --apply-security
+        ${_preinstall_ram_partition_file}
+        ${REACTOS_SOURCE_DIR}/boot/bootdata/filesecurity.txt
+    COMMAND native-mkdiskimg
+        -o ${_preinstall_ram_image_file}
+        -signature ${_ram_signature}
+        -partition ${_preinstall_ram_partition_file}
+        -start ${_preinstall_system_partition_start}
+        -type 07
+    COMMAND ${CMAKE_COMMAND} -E rm -f ${_preinstall_ram_partition_file}
+    DEPENDS ${_liberntimg_deps} native-ntfsimg native-mkdiskimg
+    VERBATIM)
+add_dependencies(liberntramimg preinstall_partition)
 
 if(STARFIVE_JH7110_SUPPORT)
     set(_jh7110_boot_partition_file ${CMAKE_CURRENT_BINARY_DIR}/jh7110-bootfs.img)

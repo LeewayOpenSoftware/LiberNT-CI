@@ -103,6 +103,7 @@ extern void func_NtSetVolumeInformationFile(void);
 extern void func_NtStartProfile(void);
 extern void func_NtSystemInformation(void);
 extern void func_NtUnloadDriver(void);
+extern void func_NtWnfState(void);
 extern void func_NtWriteFile(void);
 extern void func_RtlAllocateHeap(void);
 extern void func_RtlCreateTagHeap(void);
@@ -173,6 +174,7 @@ extern void func_TimerResolution(void);
 extern void func_UserModeException(void);
 #endif
 
+extern void func_ProcessPoolQuota(void);
 extern void func_RtlWnfAndSqm(void);
 extern void func_RtlCheckPortableOperatingSystem(void);
 
@@ -278,6 +280,7 @@ const struct test winetest_testlist[] =
     { "NtStartProfile",                 func_NtStartProfile },
     { "NtSystemInformation",            func_NtSystemInformation },
     { "NtUnloadDriver",                 func_NtUnloadDriver },
+    { "NtWnfState",                     func_NtWnfState },
     { "NtWriteFile",                    func_NtWriteFile },
     { "RtlAllocateHeap",                func_RtlAllocateHeap },
     { "RtlCreateTagHeap", func_RtlCreateTagHeap },
@@ -354,6 +357,7 @@ const struct test winetest_testlist[] =
     { "RtlVirtualUnwindChainedHandler",  func_RtlVirtualUnwindChainedHandler },
 #endif
 
+    { "ProcessPoolQuota",               func_ProcessPoolQuota },
     { "RtlWnfAndSqm", func_RtlWnfAndSqm },
     { "RtlCheckPortableOperatingSystem", func_RtlCheckPortableOperatingSystem },
     { 0, 0 }

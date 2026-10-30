@@ -1,0 +1,56 @@
+Imported from microsoft/Network-Adapter-Class-Extension e8189d3b932261500eb22041bbaa4912f9fc7ec2 (2026-01-29, Windows 11 2025 Update (25H2))
+LiberNT changes:
+  rtl/inc/kmacros.h: code_seg placement disabled (all code stays resident)
+  netcx/translator/framelayout/layer2layout.cpp: scoped-enum case labels cast to int for switches over header fields
+  netcx/translator/framelayout/layer3layout.cpp: scoped-enum case labels cast to int for switches over header fields
+  netcx/translator/framelayout/layer3layout.hpp: NextHeader enumerators initialised from Protocol through an explicit cast
+  rtl/inc/karray.h: iterator names the members of its dependent base const_iterator
+  netcx/ec/lib/dispatcher.hpp: limits.h included with the CRT spelling
+  netcx/ec/lib/dispatcher.hpp: DispatcherThread declared static before the class names it as a friend
+  rtl/inc/kdeletepolicy.h: pool deleters skip the destructor call for void pointees
+  netcx/adapter/wdfobjectcallback.hpp: derived callbacks name their dependent base class with its template arguments
+  netcx/adapter/nxexecutioncontexttask.cpp: function used as a reference tag converted to PVOID explicitly
+  netcx/adapter/nxadapter.cpp: pause function type converted to the NDIS enumeration explicitly
+  netcx/adapter/nxadapter.cpp: constant skipped by a goto given static storage so the jump crosses no initialization
+  netcx/adapter/nxadapter.cpp: buffer mode locals assigned after declaration so the error gotos cross no initialization
+  netcx/adapter/version.cpp: driver context local assigned after declaration so the error gotos cross no initialization
+  netcx/adapter/wdfobjectcallback.hpp: callback address used as a power reference tag converted to a data pointer explicitly
+  netcx/adapter/verifier.hpp: function pointers checked for null converted to a data pointer explicitly
+  netcx/translator/nxtranslationapp.cpp: null pointers converted with static_cast
+  netcx/adapter/nxadapter.cpp: null pointers converted with static_cast
+  rtl/inc/kptr.h: sized pool allocators declared before the templates that call them
+  netcx/adapter/nxadapter.cpp: callback address passed to MmIsDriverVerifyingByAddress converted to a data pointer explicitly
+  netcx/translator/nxtxxlat.hpp: GetTxDemuxProperty declared without the class qualification
+  netcx/translator/nxrxxlat.cpp: frame type taken from the NBL info pointer through ULONG_PTR
+  netcx/adapter/nxadapter.cpp: DMA address mask built with a ULL literal
+  netcx/inc/private/usermodemapping.hpp, usermodememorycopy.hpp, kernelmodemapping.hpp, netcx/bm/ibuffervector.cpp: structured exception handling written with the PSEH macros
+  rtl/inc/kmacros.h: the SDK definition of CODE_SEG undefined before the empty one
+  rtl/inc/knew.h: the nothrow operator new overloads declared noexcept
+  rtl/inc/kbitmap.h: bitmap storage held in ULONG64 words, the unit of the RTL_BITMAP_EX routines
+  rtl/inc/karray.h: the trivially copyable relocation copies through a void pointer
+  netcx/inc/private/nxapi.hpp: enumerations of different types compared through ULONG
+  netcx/adapter/nxconfiguration.hpp, nxconfiguration.cpp, netcx/ec/lib/dpc.h: WDF cleanup and DPC callbacks declared NTAPI
+  netcx/translator/nxrxxlat.cpp: buffer offset compared as size_t
+  netcx/translator/nxringcontext.cpp, framelayout/layer2layout.cpp, layer3layout.cpp, layer4layout.cpp, layoutparser.cpp: #pragma once removed from source files
+  netcx/adapter/*api.cpp: NETEXPORT definitions declared NTAPI like their table declarations
+  netcx/adapter/version.cpp, version.hpp, nxadapter.cpp, nxadapter.hpp, nxmemoryapi.cpp, nxoffload.hpp, powerpolicy/nxpowerreference.cpp, nxpowerreference.hpp, resetinterface.hpp: class library, WDF, work item and reset interface callbacks declared NTAPI
+  netcx/adapter/nxadapter.cpp, nxbufferqueueapi.cpp, nxdevice.cpp, nxexecutioncontextapi.cpp, nxqueue.cpp, nxqueueverifier.cpp: WDF cleanup and destroy lambdas written as NTAPI functions
+  netcx/adapter/verifier.hpp: the function pointer null check accepts every calling convention
+  netcx/adapter/verifier.cpp: ring index range test parenthesised
+  netcx/adapter/nxadapter.cpp: preferred NUMA node taken only when IoGetDeviceNumaNode succeeds
+  netcx/adapter/nxdevice.cpp: deliberately ignored statuses kept in named locals
+  netcx/adapter/nxoffload.cpp: configuration pointer initialised before its conditional creation
+  netcx/adapter/nxqueueverifier.cpp: fragment fields poisoned to all ones by decrement
+  netcx/adapter/nxextension.cpp: #pragma once removed from the source file
+  netcx/translator/queuecontrol.cpp: unused created state no longer read
+  netcx/translator/nxdma.cpp: DMA context passed straight to KeFlushIoBuffers, which expands to nothing on x86 and x64, and the packet marked referenced
+  netcx/translator/metadata/metadatatranslator.cpp: RSC timestamp delta widened through ULONG_PTR before it becomes NBL info
+  netcx/adapter/nxadapter.cpp: device bus address read inside the TraceLoggingWrite arguments
+LiberNT files:
+  inc/, lib/: private headers and libraries the public sources do not include; layouts and
+    values follow the NetAdapterCx and ndis 10.0.22621 x64 public symbols, so their size checks apply to 64-bit targets
+  inc/net20.h - inc/net26.h: versioned client structures from the WDK 10.0.28000 NetAdapterCx
+    2.x headers, generated by gen-net2x.py
+  lib/npimoduleid.cpp: NPI_MS_NDIS_TRANSLATOR_MODULEID, the value at that public symbol in the 22621 x64 NetAdapterCx.sys
+  inc/nxdynamics.h: client function and structure tables from netfuncenum.h 2.6 and the
+    NETEXPORT definitions, generated by gen-nxdynamics.py

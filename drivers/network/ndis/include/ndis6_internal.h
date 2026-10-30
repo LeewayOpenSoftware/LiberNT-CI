@@ -41,44 +41,7 @@
  *  the Windows 11 22000 NetAdapterCx PDB ABI used by NetAdapterCx 2.2.
  * ============================================================================ */
 
-typedef NTSTATUS
-(NTAPI *PNDIS6_WDF_CX_POWER_REFERENCE)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _In_ BOOLEAN WaitForD0,
-    _In_ BOOLEAN InvokeCompletionCallback);
-
-typedef VOID
-(NTAPI *PNDIS6_WDF_CX_ADAPTER_CALLBACK)(
-    _In_ NDIS_HANDLE AdapterContext);
-
-typedef VOID
-(NTAPI *PNDIS6_WDF_CX_UPDATE_IDLE_CONDITION)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _In_ ULONG IdleCondition);
-
-typedef PDEVICE_OBJECT
-(NTAPI *PNDIS6_WDF_CX_GET_DEVICE_OBJECT)(
-    _In_ NDIS_HANDLE AdapterContext);
-
-typedef NTSTATUS
-(NTAPI *PNDIS6_WDF_CX_GET_ASSIGNED_FDO_NAME)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _Inout_ PUNICODE_STRING FdoName);
-
-typedef NDIS_HANDLE
-(NTAPI *PNDIS6_WDF_CX_GET_NDIS_HANDLE)(
-    _In_ PDEVICE_OBJECT DeviceObject);
-
-typedef VOID
-(NTAPI *PNDIS6_WDF_CX_UPDATE_PM_PARAMETERS)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _In_ PVOID PmParameters);
-
-typedef NTSTATUS
-(NTAPI *PNDIS6_WDF_CX_ALLOCATE_MINIPORT_BLOCK)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _In_ ULONG Size,
-    _Out_ PVOID* MiniportBlock);
+#include <drivers/ndis/ndiswdf.h>
 
 /* EXECUTION_CONTEXT_FLAGS from NetAdapterCx netcx/ec/inc/executioncontext.h */
 #define NDIS6_WDF_EC_FLAG_RUN_DPC_FOR_FIRST_LOOP           0x00000001
@@ -94,7 +57,7 @@ typedef struct _NDIS6_WDF_EC_WORK_UNIT_KNOBS
 /* EXECUTION_CONTEXT_RUNTIME_KNOBS: NetAdapterCx keeps the pointer for the
  * lifetime of the adapter and reads the tunables from it at run time, so
  * the storage backing it must be persistent. */
-typedef struct _NDIS6_WDF_EC_RUNTIME_KNOBS
+typedef struct _EXECUTION_CONTEXT_RUNTIME_KNOBS
 {
     ULONG Size;                                             /* 0x00 */
     ULONG Flags;                                            /* 0x04 */
@@ -109,71 +72,12 @@ typedef struct _NDIS6_WDF_EC_RUNTIME_KNOBS
     NDIS6_WDF_EC_WORK_UNIT_KNOBS MaxPacketsReceiveComplete; /* 0x34 */
 } NDIS6_WDF_EC_RUNTIME_KNOBS, *PNDIS6_WDF_EC_RUNTIME_KNOBS; /* 0x3C */
 
-typedef struct _NDIS6_WDF_COMPLETE_ADD_PARAMS
-{
-    GUID InterfaceGuid;
-    NET_LUID NetLuid;
-    NDIS_MEDIUM MediaType;
-    UNICODE_STRING BaseName;
-    UNICODE_STRING AdapterInstanceName;
-    UNICODE_STRING DriverImageName;
-    PNDIS6_WDF_EC_RUNTIME_KNOBS ExecutionContextKnobs;
-} NDIS6_WDF_COMPLETE_ADD_PARAMS, *PNDIS6_WDF_COMPLETE_ADD_PARAMS;
-
-typedef VOID
-(NTAPI *PNDIS6_WDF_CX_MINIPORT_COMPLETE_ADD)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _In_ PNDIS6_WDF_COMPLETE_ADD_PARAMS Parameters);
-
-typedef NTSTATUS
-(NTAPI *PNDIS6_WDF_CX_DEVICE_RESET)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _In_ ULONG ResetType);
-
-typedef NTSTATUS
-(NTAPI *PNDIS6_WDF_CX_QUERY_DEVICE_RESET_SUPPORT)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _Out_ PULONG SupportedResetTypes);
-
-typedef NTSTATUS
-(NTAPI *PNDIS6_WDF_CX_GET_WMI_EVENT_GUID)(
-    _In_ NDIS_HANDLE AdapterContext,
-    _In_ NTSTATUS GuidStatus,
-    _Out_ PNDIS_GUID* Guid);
-
-typedef struct _NDIS6_WDF_CX_CHARACTERISTICS
-{
-    NDIS_OBJECT_HEADER Header;
-    PNDIS6_WDF_CX_POWER_REFERENCE EvtCxPowerReference;
-    PNDIS6_WDF_CX_ADAPTER_CALLBACK EvtCxPowerDereference;
-    PNDIS6_WDF_CX_UPDATE_IDLE_CONDITION EvtCxUpdateIdleCondition;
-    PNDIS6_WDF_CX_GET_DEVICE_OBJECT EvtCxGetDeviceObject;
-    PNDIS6_WDF_CX_GET_DEVICE_OBJECT EvtCxGetNextDeviceObject;
-    PNDIS6_WDF_CX_GET_ASSIGNED_FDO_NAME EvtCxGetAssignedFdoName;
-    PNDIS6_WDF_CX_GET_NDIS_HANDLE EvtCxGetNdisHandleFromDeviceObject;
-    PNDIS6_WDF_CX_UPDATE_PM_PARAMETERS EvtCxUpdatePMParameters;
-    PNDIS6_WDF_CX_ALLOCATE_MINIPORT_BLOCK EvtCxAllocateMiniportBlock;
-    PNDIS6_WDF_CX_MINIPORT_COMPLETE_ADD EvtCxMiniportCompleteAdd;
-    PNDIS6_WDF_CX_ADAPTER_CALLBACK EvtCxDeviceStartComplete;
-    PNDIS6_WDF_CX_DEVICE_RESET EvtCxMiniportDeviceReset;
-    PNDIS6_WDF_CX_QUERY_DEVICE_RESET_SUPPORT EvtCxMiniportQueryDeviceResetSupport;
-    PNDIS6_WDF_CX_GET_WMI_EVENT_GUID EvtCxGetWmiEventGuid;
-} NDIS6_WDF_CX_CHARACTERISTICS, *PNDIS6_WDF_CX_CHARACTERISTICS;
-
-typedef struct _NDIS6_WDF_ADD_DEVICE_INFO
-{
-    PDRIVER_OBJECT DriverObject;
-    PDEVICE_OBJECT PhysicalDeviceObject;
-    NDIS_HANDLE MiniportAdapterContext;
-    BOOLEAN WdfCxPowerManagement;
-} NDIS6_WDF_ADD_DEVICE_INFO, *PNDIS6_WDF_ADD_DEVICE_INFO;
-
 typedef struct _NDIS6_WDF_CX_DRIVER
 {
     ULONG Signature;
     PDRIVER_OBJECT DriverObject;
     PVOID DriverContext;
-    NDIS6_WDF_CX_CHARACTERISTICS Characteristics;
+    NDIS_WDF_CX_CHARACTERISTICS Characteristics;
     volatile LONG ClientCount;
     volatile LONG Deregistering;
 } NDIS6_WDF_CX_DRIVER, *PNDIS6_WDF_CX_DRIVER;
@@ -216,6 +120,7 @@ typedef struct _NDIS6_DRIVER_BLOCK
      * device stack entirely under WDF ownership. */
     BOOLEAN                                 IsWdfManaged;
     PNDIS6_WDF_CX_DRIVER                    WdfCxDriver;
+    BOOLEAN                                 IsLwm;
 } NDIS6_DRIVER_BLOCK, *PNDIS6_DRIVER_BLOCK;
 
 #define NDIS6_DRIVER_BLOCK_SIGNATURE 'dMNn'
@@ -271,6 +176,10 @@ typedef struct _NDIS6_ADAPTER_EXT
     volatile LONG                   WdfReferenceCount;
     KSPIN_LOCK                      WdfReferenceLock;
     KEVENT                          WdfReferenceDrainEvent;
+
+    UNICODE_STRING                  LwmConfigurationPath;
+    PIO_WORKITEM                    LwmStartWorkItem;
+    KEVENT                          LwmStartDoneEvent;
 
     /* Driver-supplied per-adapter context, returned via NdisMSetMiniportAttributes
      * and passed to every subsequent callback into the driver. */
@@ -598,6 +507,13 @@ Ndis6RegisterMiniportDriverInternal(
     _In_opt_ PNDIS_MINIPORT_DRIVER_WDI_CHARACTERISTICS WdiCharacteristics,
     _Out_ PNDIS_HANDLE NdisMiniportDriverHandle);
 
+NDIS_STATUS
+Ndis6RegisterLwmMiniportDriver(
+    _In_ PCUNICODE_STRING ServiceName,
+    _In_opt_ NDIS_HANDLE MiniportDriverContext,
+    _In_ PNDIS_MINIPORT_DRIVER_CHARACTERISTICS MiniportDriverCharacteristics,
+    _Out_ PNDIS_HANDLE NdisMiniportDriverHandle);
+
 BOOLEAN
 Ndis6WdiOidRequestComplete(
     _In_ PLOGICAL_ADAPTER Adapter,
@@ -685,7 +601,7 @@ Ndis6CreateLogicalAdapter(
 NDIS_STATUS
 Ndis6CreateWdfLogicalAdapter(
     _In_ PNDIS6_DRIVER_BLOCK DriverBlock,
-    _In_ PNDIS6_WDF_ADD_DEVICE_INFO AddDeviceInfo,
+    _In_ NDIS_WDF_ADD_DEVICE_INFO * AddDeviceInfo,
     _Out_ PLOGICAL_ADAPTER* AdapterOut);
 
 VOID
@@ -696,6 +612,11 @@ BOOLEAN
 Ndis6HasMandatoryKeywords(
     _In_ PDEVICE_OBJECT Pdo);
 
+VOID
+Ndis6ApplyInfInterfaceKeywords(
+    _In_ PDEVICE_OBJECT Pdo,
+    _Inout_ PNDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES General);
+
 NDIS_STATUS
 Ndis6CallMiniportInitializeEx(
     _In_ PLOGICAL_ADAPTER       Adapter);
@@ -704,6 +625,20 @@ VOID
 Ndis6CallMiniportHaltEx(
     _In_ PLOGICAL_ADAPTER       Adapter,
     _In_ NDIS_HALT_ACTION       HaltAction);
+
+VOID
+Ndis6SetNetInterfaceState(
+    _In_ PLOGICAL_ADAPTER       Adapter,
+    _In_ BOOLEAN                Enable);
+
+extern PDRIVER_OBJECT NdisDriverObject;
+
+NDIS_STATUS
+Ndis6CreateLwmInstance(
+    _In_ PNDIS6_DRIVER_BLOCK    DriverBlock,
+    _In_ const GUID *           InterfaceGuid,
+    _In_ NDIS_HANDLE            MiniportAdapterContext,
+    _Out_ PLOGICAL_ADAPTER*     AdapterOut);
 
 /* Intermediate-driver upper-miniport instantiation (NdisIMInitializeDeviceInstanceEx).
  * Creates a virtual 802.3 miniport with no PnP PDO, runs the driver's

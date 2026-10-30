@@ -8,7 +8,6 @@
 
 VOID Test_KeArm64ProcessorChange(VOID);
 
-#ifdef _M_ARM64
 
 #define KMT_PROCESSOR_CHANGE_MAX_RECORDS 64
 
@@ -211,13 +210,8 @@ static VOID KmtTestProcessorChangeCallbacks(VOID)
         KmtValidateProcessorChangeRecord(&Context.Records[FailureProcessor + 1 + Index], KeProcessorAddFailureNotify, Index, STATUS_UNSUCCESSFUL, (Index == 0) ? STATUS_UNSUCCESSFUL : STATUS_ACCESS_DENIED);
 }
 
-#endif
 
 START_TEST(KeArm64ProcessorChange)
 {
-#ifdef _M_ARM64
     KmtTestProcessorChangeCallbacks();
-#else
-    skip(FALSE, "ARM64-only processor-change callback test\n");
-#endif
 }

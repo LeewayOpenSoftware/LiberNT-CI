@@ -1754,6 +1754,31 @@ SoftGpuDdiQueryAdapterInfo(
         Desc->PageTableAlignmentInBytes = PAGE_SIZE;
         return STATUS_SUCCESS;
     }
+
+    case DXGKQAITYPE_PHYSICALADAPTERCAPS:
+    {
+        CONST DXGK_QUERYPHYSICALADAPTERCAPSIN *In;
+        DXGK_PHYSICALADAPTERCAPS *Caps;
+
+        if (pQueryAdapterInfo->pInputData == NULL ||
+            pQueryAdapterInfo->InputDataSize < sizeof(*In) ||
+            pQueryAdapterInfo->pOutputData == NULL)
+            return STATUS_INVALID_PARAMETER;
+        if (pQueryAdapterInfo->OutputDataSize < sizeof(*Caps))
+            return STATUS_BUFFER_TOO_SMALL;
+
+        In = (CONST DXGK_QUERYPHYSICALADAPTERCAPSIN *)pQueryAdapterInfo->pInputData;
+        if (In->PhysicalAdapterIndex != 0)
+            return STATUS_INVALID_PARAMETER;
+
+        Caps = (DXGK_PHYSICALADAPTERCAPS *)pQueryAdapterInfo->pOutputData;
+        RtlZeroMemory(Caps, sizeof(*Caps));
+        Caps->NumExecutionNodes = SOFTGPU_ENGINE_COUNT;
+        Caps->PagingNodeIndex = 0;
+        Caps->DxgkPhysicalAdapterHandle = Device->DxgkInterface.DeviceHandle;
+        Caps->Flags.GpuMmuSupported = SOFTGPU_GPUMMU_END_TO_END;
+        return STATUS_SUCCESS;
+    }
 #endif
 
     case DXGKQAITYPE_DRIVERCAPS:

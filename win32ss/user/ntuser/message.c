@@ -1312,12 +1312,14 @@ co_IntPeekMessage( PMSG Msg,
             if (RemoveMessages)
             {
                 pti->QuitPosted = FALSE;
-                ClearMsgBitsMask(pti, QS_POSTMESSAGE);
                 pti->pcti->fsWakeBits &= ~QS_ALLPOSTMESSAGE;
                 pti->pcti->fsChangeBits &= ~QS_ALLPOSTMESSAGE;
             }
             goto GotMessage;
         }
+
+        if (ProcessMask & QS_POSTMESSAGE)
+            ClearMsgBitsMask(pti, QS_POSTMESSAGE);
 
         /* Check for hardware events. */
         if ((ProcessMask & QS_INPUT) &&
@@ -1702,6 +1704,8 @@ UserPostMessage( HWND Wnd,
             return FALSE;
         }
 
+        Message.hwnd = UserHMGetHandle(Window);
+
         if ( Msg >= WM_DDE_FIRST && Msg <= WM_DDE_LAST )
         {
            if (!IntDdePostMessageHook(Window, Msg, wParam, &lParam, &ExtraInfo))
@@ -2051,6 +2055,9 @@ co_IntSendMessageWithCallBack(HWND hWnd,
         goto Cleanup; // Return FALSE
 
     ptiSendTo = IntSendTo(Window, Win32Thread, Msg);
+
+    if (!ptiSendTo && !CompletionCallback && CompletionCallbackContext == 1 && !(Msg & 0x80000000))
+        ptiSendTo = Window->head.pti;
 
     if (Msg & 0x80000000 &&
         !ptiSendTo)
@@ -2582,6 +2589,8 @@ IntUipiIsAllowed(PPROCESSINFO ppiSender, PPROCESSINFO ppiTarget, PWND Window, UI
     if (!ppiSender || !ppiTarget || ppiSender == ppiTarget)
         return TRUE;
     if (IntGetProcessIntegrity(ppiSender->peProcess) >= IntUipiGetTargetIntegrity(ppiTarget, Window))
+        return TRUE;
+    if (Window && Window->fnid == FNID_DESKTOP)
         return TRUE;
 
     for (i = 0; i < RTL_NUMBER_OF(gUipiAllowedMessages); i++)

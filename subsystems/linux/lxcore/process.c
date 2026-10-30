@@ -324,6 +324,7 @@ LxProcessCreate(
     Process->Instance = Instance;
     InitializeListHead(&Process->GlobalLink);
     InitializeListHead(&Process->Children);
+    InitializeListHead(&Process->Tracees);
     InitializeListHead(&Process->Threads);
     InitializeListHead(&Process->Timers);
     InitializeListHead(&Process->Vmas);
@@ -331,6 +332,7 @@ LxProcessCreate(
     ExInitializeFastMutex(&Process->Lock);
     KeInitializeEvent(&Process->VforkDone, NotificationEvent, FALSE);
     KeInitializeEvent(&Process->MmLock, SynchronizationEvent, TRUE);
+    KeInitializeEvent(&Process->ContinueEvent, NotificationEvent, FALSE);
     LxPollHeadInit(&Process->ExitPoll);
     LxPollHeadInit(&Process->SignalPoll);
     LxPollHeadInit(&Process->ChildPoll);
@@ -338,6 +340,8 @@ LxProcessCreate(
     Process->Dumpable = 1;
     Process->CoreFilter = 0x33;
     Process->ExitSignal = LX_SIGCHLD;
+    Process->LoginUid = MAXULONG;
+    Process->SessionId = MAXULONG;
     Process->CapBounding = LX_CAP_FULL_SET & ~(1ULL << LX_CAP_SYS_TIME);
     Process->CapPermitted = Process->CapEffective = Process->CapBounding;
     Process->StartTime = (LONG64)KeQueryInterruptTime();
@@ -397,6 +401,10 @@ LxProcessFork(
     Process->Dumpable = Parent->Dumpable;
     Process->CoreFilter = Parent->CoreFilter;
     Process->OomScoreAdj = Parent->OomScoreAdj;
+    Process->Personality = Parent->Personality;
+    Process->LoginUid = Parent->LoginUid;
+    Process->SessionId = Parent->SessionId;
+    Process->ThpDisable = Parent->ThpDisable;
     Process->Trace = Parent->Trace;
     for (Fd = 0; Fd < LX_MAX_FDS; Fd++)
     {
@@ -577,6 +585,7 @@ LxThreadFree(
 {
     PLX_PROCESS Process = Thread->Process;
 
+    LxPtraceRelease(Thread);
     if (Thread->SignalRetry != NULL)
         ExDeleteTimer(Thread->SignalRetry, TRUE, TRUE, NULL);
     LxNsThreadRelease(Thread);
@@ -692,18 +701,41 @@ LxProcessUsage(
         ObDereferenceObject(Referenced);
 }
 
-VOID
+BOOLEAN
 LxProcessExitStatus(
     _In_ PLX_PROCESS Process,
     _In_ LONG WaitStatus)
 {
+    BOOLEAN First;
+
     ExAcquireFastMutex(&Process->Lock);
-    if (!Process->WaitStatusValid)
+    First = !Process->WaitStatusValid;
+    if (First)
     {
         Process->WaitStatus = WaitStatus;
         Process->WaitStatusValid = TRUE;
     }
     ExReleaseFastMutex(&Process->Lock);
+    return First;
+}
+
+VOID
+LxProcessZapThreads(
+    _In_ PLX_PROCESS Process,
+    _In_opt_ PLX_THREAD Except)
+{
+    PLIST_ENTRY Entry;
+
+    ExAcquireFastMutex(&Process->Lock);
+    for (Entry = Process->Threads.Flink; Entry != &Process->Threads; Entry = Entry->Flink)
+    {
+        PLX_THREAD Thread = CONTAINING_RECORD(Entry, LX_THREAD, Link);
+
+        if (Thread != Except)
+            InterlockedOr64(&Thread->Pending, (LONG64)(1ULL << (LX_SIGKILL - 1)));
+    }
+    ExReleaseFastMutex(&Process->Lock);
+    LxSignalWakeThread(Process, 0);
 }
 
 VOID
@@ -713,8 +745,9 @@ LxProcessExitGroup(
 {
     NTSTATUS ExitCode;
     PLX_THREAD Thread;
+    BOOLEAN First;
 
-    LxProcessExitStatus(Process, WaitStatus);
+    First = LxProcessExitStatus(Process, WaitStatus);
     if ((WaitStatus & 0x7F) == 0)
         ExitCode = (WaitStatus >> 8) & 0xFF;
     else
@@ -732,6 +765,12 @@ LxProcessExitGroup(
         if ((Thread != NULL) && (Thread->Process == Process))
             PsPicoTerminateCurrentThread(ExitCode);
         return;
+    }
+    if ((ReadNoFence(&Process->Traced) != 0) && (Thread != NULL) && (Thread->Process == Process))
+    {
+        if (First)
+            LxProcessZapThreads(Process, Thread);
+        PsPicoTerminateCurrentThread(ExitCode);
     }
 
     ZwTerminateProcess(NtCurrentProcess(), ExitCode);
@@ -966,6 +1005,7 @@ LxProcessExited(
 
     LxProcessExitStatus(Process, (ExitStatus & 0xFF) << 8);
     Process->ExitTime = (LONG64)KeQueryInterruptTime();
+    LxPtraceTracerExit(Process);
     if (Process->RealTimer != NULL)
         ExCancelTimer(Process->RealTimer->Timer, NULL);
     LxPosixTimersRelease(Process, FALSE);
@@ -1028,6 +1068,8 @@ LxProcessExited(
             ExReleaseFastMutex(&Reaper->Lock);
             if (Child->Lx->Exited)
                 LxProcessNotifyParent(Reaper, Child->Lx);
+            else
+                LxJobctlOrphanCheck(Child->Lx, Process);
         }
         if (Reaper != NULL)
             LxProcessDereference(Reaper);
@@ -1035,6 +1077,8 @@ LxProcessExited(
 
     LxCgroupAttach(Process, NULL);
 
+    if ((Process->Pid != 1) && !LxPidNsIsInit(Process))
+        LxJobctlOrphanCheck(Process, NULL);
     Parent = (Process->ParentPid != 0) ? LxProcessLookup(Instance, Process->ParentPid) : NULL;
     if ((Parent != NULL) && !Parent->Exited)
         LxProcessNotifyParent(Parent, Process);
@@ -1061,8 +1105,10 @@ LxSignalFromException(
             *Code = LX_ILL_ILLOPC;
             return LX_SIGILL;
         case STATUS_BREAKPOINT:
-        case STATUS_SINGLE_STEP:
             *Code = LX_TRAP_BRKPT;
+            return LX_SIGTRAP;
+        case STATUS_SINGLE_STEP:
+            *Code = LX_TRAP_TRACE;
             return LX_SIGTRAP;
         case STATUS_DATATYPE_MISALIGNMENT:
         case STATUS_IN_PAGE_ERROR:

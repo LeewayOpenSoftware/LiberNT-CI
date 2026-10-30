@@ -1,0 +1,87 @@
+--- a/mono/metadata/cominterop.c
++++ b/mono/metadata/cominterop.c
+@@ -1128,8 +1128,12 @@
+ 
+ 	for (i = 1; i < sig_native->param_count; i++) {
+ 		int mspec_index = i + 1;
++		MonoType *param_type = sig_native->params[i];
+ 		if (mspecs[mspec_index] == NULL) {
+-			mspecs[mspec_index] = cominterop_get_ccw_default_mspec (sig_native->params[i]);
++			mspecs[mspec_index] = cominterop_get_ccw_default_mspec (param_type);
++		} else if (mspecs[mspec_index]->native == MONO_NATIVE_LPARRAY && (mspecs[mspec_index]->data.array_data.elem_type == MONO_NATIVE_MAX || mspecs[mspec_index]->data.array_data.elem_type == 0) &&
++				   param_type->type == MONO_TYPE_SZARRAY && param_type->data.klass == mono_defaults.boolean_class) {
++			mspecs[mspec_index]->data.array_data.elem_type = MONO_NATIVE_VARIANTBOOL;
+ 		}
+ 	}
+ 
+--- a/mono/metadata/marshal-ilgen.c
++++ b/mono/metadata/marshal-ilgen.c
+@@ -2453,6 +2453,13 @@
+ static inline void
+ emit_string_free_icall (MonoMethodBuilder *mb, MonoMarshalConv conv);
+ 
++static gboolean
++array_elements_are_variant_bool (MonoClass *eklass, MonoMarshalSpec *spec)
++{
++	return eklass == mono_defaults.boolean_class && spec && spec->native == MONO_NATIVE_LPARRAY &&
++		spec->data.array_data.elem_type == MONO_NATIVE_VARIANTBOOL;
++}
++
+ static int
+ emit_marshal_array_ilgen (EmitMarshalContext *m, int argnum, MonoType *t,
+ 					MonoMarshalSpec *spec, 
+@@ -2525,6 +2532,8 @@
+ 				esize = TARGET_SIZEOF_VOID_P;
+ 			else if (eklass == mono_defaults.char_class) /*can't call mono_marshal_type_size since it causes all sorts of asserts*/
+ 				esize = mono_pinvoke_is_unicode (m->piinfo) ? 2 : 1;
++			else if (array_elements_are_variant_bool (eklass, spec))
++				esize = 2;
+ 			else
+ 				esize = mono_class_native_size (eklass, NULL);
+ 
+@@ -2566,6 +2575,16 @@
+ 				mono_mb_emit_byte (mb, CEE_LDELEM_REF);
+ 				mono_mb_emit_icall_id (mb, conv_to_icall (conv, &stind_op));
+ 				mono_mb_emit_byte (mb, stind_op);
++			} else if (array_elements_are_variant_bool (eklass, spec)) {
++				mono_mb_emit_ldloc (mb, dest_ptr);
++				mono_mb_emit_ldloc (mb, src_var);
++				mono_mb_emit_ldloc (mb, index_var);
++				mono_mb_emit_byte (mb, CEE_LDELEM_U1);
++				mono_mb_emit_byte (mb, CEE_LDC_I4_0);
++				mono_mb_emit_byte (mb, CEE_PREFIX1);
++				mono_mb_emit_byte (mb, CEE_CGT_UN);
++				mono_mb_emit_byte (mb, CEE_NEG);
++				mono_mb_emit_byte (mb, CEE_STIND_I2);
+ 			} else {
+ 				/* set the src_ptr */
+ 				mono_mb_emit_ldloc (mb, src_var);
+@@ -2639,6 +2658,8 @@
+ 				esize = TARGET_SIZEOF_VOID_P;
+ 			else if (eklass == mono_defaults.char_class)
+ 				esize = mono_pinvoke_is_unicode (m->piinfo) ? 2 : 1;
++			else if (array_elements_are_variant_bool (eklass, spec))
++				esize = 2;
+ 			else
+ 				esize = mono_class_native_size (eklass, NULL);
+ 			src_ptr = mono_mb_add_local (mb, int_type);
+@@ -2721,7 +2742,18 @@
+ 				}
+ 			}
+ 			else {
+-				if (need_convert) {
++				if (need_convert && array_elements_are_variant_bool (eklass, spec)) {
++					mono_mb_emit_ldarg (mb, argnum);
++					if (t->byref)
++						mono_mb_emit_byte (mb, CEE_LDIND_REF);
++					mono_mb_emit_ldloc (mb, index_var);
++					mono_mb_emit_ldloc (mb, src_ptr);
++					mono_mb_emit_byte (mb, CEE_LDIND_I2);
++					mono_mb_emit_byte (mb, CEE_LDC_I4_0);
++					mono_mb_emit_byte (mb, CEE_PREFIX1);
++					mono_mb_emit_byte (mb, CEE_CGT_UN);
++					mono_mb_emit_byte (mb, CEE_STELEM_I1);
++				} else if (need_convert) {
+ 					/* set the src_ptr */
+ 					mono_mb_emit_ldloc (mb, src_ptr);
+ 					mono_mb_emit_stloc (mb, 0);

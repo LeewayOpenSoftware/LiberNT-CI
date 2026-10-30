@@ -328,6 +328,10 @@ static HRESULT acm_wrapper_source_query_interface(struct strmbase_pin *iface, RE
         *out = &filter->source_IQualityControl_iface;
     else if (IsEqualGUID(iid, &IID_IMediaSeeking))
         *out = &filter->passthrough.IMediaSeeking_iface;
+#ifdef __REACTOS__
+    else if (IsEqualGUID(iid, &IID_IMediaPosition))
+        *out = &filter->passthrough.IMediaPosition_iface;
+#endif
     else
         return E_NOINTERFACE;
 

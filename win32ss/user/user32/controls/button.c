@@ -517,6 +517,22 @@ LRESULT WINAPI ButtonWndProc_common(HWND hWnd, UINT uMsg,
         {
             if (unicode) DefWindowProcW( hWnd, WM_SETTEXT, wParam, lParam );
             else DefWindowProcA( hWnd, WM_SETTEXT, wParam, lParam );
+#ifdef __REACTOS__
+            if (IsWindowVisible(hWnd))
+            {
+                HWND parent = GetParent(hWnd);
+
+                hdc = GetDC(hWnd);
+                GetClientRect(hWnd, &client);
+                rc = client;
+                InflateRect(&rc, -7, 1);
+                BUTTON_CalcLabelRect(hWnd, hdc, &rc);
+                if (rc.right > client.right) rc.right = client.right;
+                if (rc.bottom > client.bottom) rc.bottom = client.bottom;
+                FillRect(hdc, &rc, GetControlColor(parent ? parent : hWnd, hWnd, hdc, WM_CTLCOLORSTATIC));
+                ReleaseDC(hWnd, hdc);
+            }
+#endif
         }
         paint_button( hWnd, btn_type, ODA_DRAWENTIRE );
         return 1; /* success. FIXME: check text length */

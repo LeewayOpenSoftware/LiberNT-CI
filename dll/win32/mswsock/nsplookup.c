@@ -780,6 +780,236 @@ NSP_QueryAddresses(_In_ PWSHANDLEINTERN data,
     return ERROR_SUCCESS;
 }
 
+#define NSP_NBNS_PORT 137
+#define NSP_NBNS_TRIES 3
+#define NSP_NBNS_TIMEOUT 750
+#define NSP_NBNS_LINKS 16
+
+typedef struct _NSP_NBNS_QUERY
+{
+    LONG References;
+    UCHAR Packet[50];
+    ULONG Addresses[NSP_MAX_ADDRESSES];
+    ULONG AddressCount;
+} NSP_NBNS_QUERY, *PNSP_NBNS_QUERY;
+
+static
+VOID
+NSP_NbnsRelease(PNSP_NBNS_QUERY Query)
+{
+    if (!InterlockedDecrement(&Query->References))
+        HeapFree(GetProcessHeap(), 0, Query);
+}
+
+static
+ULONG
+NSP_NbnsBroadcasts(PULONG Broadcasts)
+{
+    ULONG Size = 16384, Count = 0;
+    PIP_ADAPTER_ADDRESSES List, Adapter;
+    DWORD Error;
+
+    for (;;)
+    {
+        List = HeapAlloc(GetProcessHeap(), 0, Size);
+        if (!List)
+            return 0;
+        Error = GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST |
+                                     GAA_FLAG_SKIP_DNS_SERVER | GAA_FLAG_SKIP_FRIENDLY_NAME, NULL, List, &Size);
+        if (Error != ERROR_BUFFER_OVERFLOW)
+            break;
+        HeapFree(GetProcessHeap(), 0, List);
+    }
+    for (Adapter = (Error == ERROR_SUCCESS) ? List : NULL; Adapter; Adapter = Adapter->Next)
+    {
+        PIP_ADAPTER_UNICAST_ADDRESS Unicast;
+
+        if (Adapter->OperStatus != IfOperStatusUp || Adapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+            continue;
+        for (Unicast = Adapter->FirstUnicastAddress; Unicast && Count < NSP_NBNS_LINKS; Unicast = Unicast->Next)
+        {
+            ULONG Address, Mask;
+
+            if (!Unicast->Address.lpSockaddr || Unicast->Address.lpSockaddr->sa_family != AF_INET ||
+                Unicast->OnLinkPrefixLength >= 32)
+                continue;
+            Address = ((const SOCKADDR_IN *)Unicast->Address.lpSockaddr)->sin_addr.s_addr;
+            Mask = Unicast->OnLinkPrefixLength ? htonl(0xFFFFFFFFUL << (32 - Unicast->OnLinkPrefixLength)) : 0;
+            Broadcasts[Count++] = Address | ~Mask;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, List);
+    return Count;
+}
+
+static
+VOID
+NSP_NbnsParse(PNSP_NBNS_QUERY Query, const UCHAR *Reply, INT Length)
+{
+    INT Offset = 12, Data;
+    USHORT Answers, RdLength;
+
+    if (Length < 12 || memcmp(Reply, Query->Packet, 2) || !(Reply[2] & 0x80) || (Reply[2] & 0x78) || (Reply[3] & 0x0F))
+        return;
+    Answers = (USHORT)((Reply[6] << 8) | Reply[7]);
+    if (!Answers)
+        return;
+    if (Offset < Length && (Reply[Offset] & 0xC0) == 0xC0)
+        Offset += 2;
+    else if (Offset + 34 <= Length && Reply[Offset] == 0x20)
+        Offset += 34;
+    else
+        return;
+    if (Offset + 10 > Length || Reply[Offset] != 0x00 || Reply[Offset + 1] != 0x20)
+        return;
+    RdLength = (USHORT)((Reply[Offset + 8] << 8) | Reply[Offset + 9]);
+    Data = Offset + 10;
+    if (Data + RdLength > Length)
+        return;
+    for (; RdLength >= 6 && Query->AddressCount < NSP_MAX_ADDRESSES; Data += 6, RdLength -= 6)
+        RtlCopyMemory(&Query->Addresses[Query->AddressCount++], Reply + Data + 2, sizeof(ULONG));
+}
+
+static
+DWORD
+WINAPI
+NSP_NbnsQueryThread(LPVOID Parameter)
+{
+    PNSP_NBNS_QUERY Query = Parameter;
+    ULONG Broadcasts[NSP_NBNS_LINKS], Count, i;
+    SOCKADDR_IN Target = {AF_INET};
+    UCHAR Reply[576];
+    BOOL Yes = TRUE;
+    HANDLE Mutex = NULL;
+    SOCKET s;
+    INT Try;
+
+    Count = NSP_NbnsBroadcasts(Broadcasts);
+    s = Count ? socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) : INVALID_SOCKET;
+    if (s != INVALID_SOCKET)
+    {
+        SOCKADDR_IN Local = {AF_INET};
+
+        Mutex = CreateMutexW(NULL, FALSE, L"Global\\LiberNTNetbiosNameService");
+        if (Mutex)
+            WaitForSingleObject(Mutex, NSP_NBNS_TRIES * NSP_NBNS_TIMEOUT * 4);
+        Local.sin_port = htons(NSP_NBNS_PORT);
+        bind(s, (SOCKADDR *)&Local, sizeof(Local));
+        setsockopt(s, SOL_SOCKET, SO_BROADCAST, (char *)&Yes, sizeof(Yes));
+    }
+    Target.sin_port = htons(NSP_NBNS_PORT);
+    for (Try = 0; s != INVALID_SOCKET && Try < NSP_NBNS_TRIES && !Query->AddressCount; Try++)
+    {
+        DWORD Deadline = GetTickCount() + NSP_NBNS_TIMEOUT;
+
+        for (i = 0; i < Count; i++)
+        {
+            Target.sin_addr.s_addr = Broadcasts[i];
+            sendto(s, (char *)Query->Packet, sizeof(Query->Packet), 0, (SOCKADDR *)&Target, sizeof(Target));
+        }
+        while (!Query->AddressCount)
+        {
+            LONG Remaining = (LONG)(Deadline - GetTickCount());
+            struct timeval Wait;
+            fd_set Read;
+            INT Received;
+
+            if (Remaining <= 0)
+                break;
+            FD_ZERO(&Read);
+            FD_SET(s, &Read);
+            Wait.tv_sec = Remaining / 1000;
+            Wait.tv_usec = (Remaining % 1000) * 1000;
+            if (select(0, &Read, NULL, NULL, &Wait) <= 0)
+                break;
+            Received = recvfrom(s, (char *)Reply, sizeof(Reply), 0, NULL, NULL);
+            if (Received > 0)
+                NSP_NbnsParse(Query, Reply, Received);
+        }
+    }
+    if (s != INVALID_SOCKET)
+        closesocket(s);
+    if (Mutex)
+    {
+        ReleaseMutex(Mutex);
+        CloseHandle(Mutex);
+    }
+    NSP_NbnsRelease(Query);
+    return 0;
+}
+
+static
+HANDLE
+NSP_NbnsStart(_In_ PCWSTR Name, _Out_ PNSP_NBNS_QUERY *Result)
+{
+    PNSP_NBNS_QUERY Query;
+    UCHAR Label[16];
+    HANDLE Thread;
+    SIZE_T Length = wcslen(Name), i;
+
+    *Result = NULL;
+    if (!Length || Length > 15)
+        return NULL;
+    Query = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Query));
+    if (!Query)
+        return NULL;
+    memset(Label, ' ', 15);
+    Label[15] = 0x00;
+    for (i = 0; i < Length; i++)
+    {
+        if (Name[i] > 0x7E)
+        {
+            HeapFree(GetProcessHeap(), 0, Query);
+            return NULL;
+        }
+        Label[i] = (UCHAR)toupper(Name[i]);
+    }
+    Query->Packet[0] = (UCHAR)(GetTickCount() >> 3);
+    Query->Packet[1] = (UCHAR)GetCurrentThreadId();
+    Query->Packet[2] = 0x01;
+    Query->Packet[3] = 0x10;
+    Query->Packet[5] = 1;
+    Query->Packet[12] = 0x20;
+    for (i = 0; i < 16; i++)
+    {
+        Query->Packet[13 + i * 2] = (UCHAR)('A' + (Label[i] >> 4));
+        Query->Packet[14 + i * 2] = (UCHAR)('A' + (Label[i] & 0x0F));
+    }
+    Query->Packet[47] = 0x20;
+    Query->Packet[49] = 0x01;
+    Query->References = 2;
+    Thread = CreateThread(NULL, 0, NSP_NbnsQueryThread, Query, 0, NULL);
+    if (!Thread)
+    {
+        HeapFree(GetProcessHeap(), 0, Query);
+        return NULL;
+    }
+    *Result = Query;
+    return Thread;
+}
+
+static
+VOID
+NSP_NbnsFinish(_In_ HANDLE Thread, _In_ PNSP_NBNS_QUERY Query, _In_ BOOL Wait, _Inout_ PWSHOSTINFOINTERN hostinfo)
+{
+    ULONG i;
+
+    if (!Thread)
+        return;
+    if (WaitForSingleObject(Thread, Wait ? INFINITE : 0) == WAIT_OBJECT_0)
+    {
+        for (i = 0; i < Query->AddressCount; i++)
+        {
+            SOCKADDR_IN sa = {AF_INET};
+
+            sa.sin_addr.s_addr = Query->Addresses[i];
+            NSP_AddAddress(hostinfo, (SOCKADDR *)&sa, sizeof(sa));
+        }
+    }
+    CloseHandle(Thread);
+    NSP_NbnsRelease(Query);
+}
+
 typedef struct _NSP_AAAA_QUERY
 {
     PWSHANDLEINTERN data;
@@ -802,26 +1032,22 @@ NSP_AaaaQueryThread(LPVOID Parameter)
     return 0;
 }
 
+static
 INT
-NSP_GetHostByNameHeapAllocW(_In_ PWSHANDLEINTERN data,
-                            _In_ DWORD dwControlFlags,
-                            _Out_ PWSHOSTINFOINTERN hostinfo)
+NSP_QueryFamilies(_In_ PWSHANDLEINTERN data,
+                  _In_ DWORD dwQueryFlags,
+                  _In_ BOOL Aaaa,
+                  _Inout_ PWSHOSTINFOINTERN hostinfo,
+                  _Inout_ PWCHAR *Aliases,
+                  _Inout_ int *AliasIndex,
+                  _Out_ DNS_STATUS *status4,
+                  _Out_ DNS_STATUS *status6)
 {
     HANDLE hHeap = GetProcessHeap();
-    DNS_STATUS status4 = DNS_INFO_NO_RECORDS, status6 = DNS_INFO_NO_RECORDS;
-    DWORD dwQueryFlags = DNS_QUERY_STANDARD;
-    PWCHAR Aliases[WS2_INTERNAL_MAX_ALIAS] = { 0 };
-    int AliasIndex = 0, i;
-    INT result;
 
-    if (data->hostnameW == NULL)
-        return ERROR_INVALID_PARAMETER;
-
-    if (NSP_IsLocalHostName(data->hostnameW))
-        return NSP_GetLocalHostAddresses(data, hostinfo);
-
-    if ((data->families & NSP_FAMILY_INET6) &&
-        (data->families == NSP_FAMILY_INET6 || NSP_HasGlobalIpv6()))
+    *status4 = DNS_INFO_NO_RECORDS;
+    *status6 = DNS_INFO_NO_RECORDS;
+    if (Aaaa)
     {
         PNSP_AAAA_QUERY Query = HeapAlloc(hHeap, HEAP_ZERO_MEMORY, sizeof(*Query));
         HANDLE Thread = NULL;
@@ -837,13 +1063,13 @@ NSP_GetHostByNameHeapAllocW(_In_ PWSHANDLEINTERN data,
         if (!Thread)
             NSP_AaaaQueryThread(Query);
         else if (data->families & NSP_FAMILY_INET)
-            status4 = NSP_QueryAddresses(data, dwQueryFlags, DNS_TYPE_A, hostinfo, Aliases, &AliasIndex);
+            *status4 = NSP_QueryAddresses(data, dwQueryFlags, DNS_TYPE_A, hostinfo, Aliases, AliasIndex);
         if (Thread)
         {
             WaitForSingleObject(Thread, INFINITE);
             CloseHandle(Thread);
         }
-        status6 = Query->status;
+        *status6 = Query->status;
 
         for (k = Query->hostinfo.addressCount; k > 0; k--)
         {
@@ -865,8 +1091,8 @@ NSP_GetHostByNameHeapAllocW(_In_ PWSHANDLEINTERN data,
         }
         for (k = 0; k < (DWORD)Query->AliasIndex; k++)
         {
-            if (AliasIndex < WS2_INTERNAL_MAX_ALIAS - 1)
-                Aliases[AliasIndex++] = Query->Aliases[k];
+            if (*AliasIndex < WS2_INTERNAL_MAX_ALIAS - 1)
+                Aliases[(*AliasIndex)++] = Query->Aliases[k];
             else
                 HeapFree(hHeap, 0, Query->Aliases[k]);
         }
@@ -876,8 +1102,58 @@ NSP_GetHostByNameHeapAllocW(_In_ PWSHANDLEINTERN data,
     }
     else if (data->families & NSP_FAMILY_INET)
     {
-        status4 = NSP_QueryAddresses(data, dwQueryFlags, DNS_TYPE_A, hostinfo, Aliases, &AliasIndex);
+        *status4 = NSP_QueryAddresses(data, dwQueryFlags, DNS_TYPE_A, hostinfo, Aliases, AliasIndex);
     }
+
+    return ERROR_SUCCESS;
+}
+
+INT
+NSP_GetHostByNameHeapAllocW(_In_ PWSHANDLEINTERN data,
+                            _In_ DWORD dwControlFlags,
+                            _Out_ PWSHOSTINFOINTERN hostinfo)
+{
+    HANDLE hHeap = GetProcessHeap();
+    DNS_STATUS status4 = DNS_INFO_NO_RECORDS, status6 = DNS_INFO_NO_RECORDS;
+    DWORD dwQueryFlags = DNS_QUERY_STANDARD;
+    PWCHAR Aliases[WS2_INTERNAL_MAX_ALIAS] = { 0 };
+    PNSP_NBNS_QUERY Nbns = NULL;
+    HANDLE NbnsThread = NULL;
+    BOOL SingleLabel;
+    int AliasIndex = 0, i;
+    INT result, error;
+
+    if (data->hostnameW == NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    if (NSP_IsLocalHostName(data->hostnameW))
+        return NSP_GetLocalHostAddresses(data, hostinfo);
+
+    SingleLabel = !wcschr(data->hostnameW, L'.');
+    error = NSP_QueryFamilies(data, SingleLabel ? DNS_QUERY_NO_MULTICAST : dwQueryFlags,
+                              (data->families & NSP_FAMILY_INET6) &&
+                              (data->families == NSP_FAMILY_INET6 || NSP_HasGlobalIpv6()),
+                              hostinfo, Aliases, &AliasIndex, &status4, &status6);
+    if (!error && SingleLabel && !hostinfo->addressCount)
+    {
+        if (data->families & NSP_FAMILY_INET)
+            NbnsThread = NSP_NbnsStart(data->hostnameW, &Nbns);
+        error = NSP_QueryFamilies(data, DNS_QUERY_MULTICAST_ONLY, (data->families & NSP_FAMILY_INET6) != 0,
+                                  hostinfo, Aliases, &AliasIndex, &status4, &status6);
+    }
+    if (error)
+    {
+        NSP_NbnsFinish(NbnsThread, Nbns, FALSE, hostinfo);
+        for (i = 0; i < AliasIndex; i++)
+            HeapFree(hHeap, 0, Aliases[i]);
+        return error;
+    }
+
+    NSP_NbnsFinish(NbnsThread, Nbns, !hostinfo->addressCount, hostinfo);
+    if (SingleLabel && status4 == ERROR_INVALID_NAME)
+        status4 = DNS_ERROR_RCODE_NAME_ERROR;
+    if (SingleLabel && status6 == ERROR_INVALID_NAME)
+        status6 = DNS_ERROR_RCODE_NAME_ERROR;
 
     if (status4 == ERROR_INVALID_NAME || status6 == ERROR_INVALID_NAME)
     {
@@ -886,7 +1162,9 @@ NSP_GetHostByNameHeapAllocW(_In_ PWSHANDLEINTERN data,
     }
     else if (!hostinfo->addressCount)
     {
-        result = (status4 == ERROR_TIMEOUT || status6 == ERROR_TIMEOUT) ? WSATRY_AGAIN : WSAHOST_NOT_FOUND;
+        result = (status4 == ERROR_TIMEOUT || status6 == ERROR_TIMEOUT ||
+                  status4 == DNS_ERROR_RCODE_SERVER_FAILURE || status6 == DNS_ERROR_RCODE_SERVER_FAILURE) ?
+                 WSATRY_AGAIN : WSAHOST_NOT_FOUND;
     }
     else
     {

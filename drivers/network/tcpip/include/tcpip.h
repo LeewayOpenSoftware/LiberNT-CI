@@ -179,4 +179,6 @@ extern ULONG EntityMax;
 extern NTSTATUS TiGetProtocolNumber( PUNICODE_STRING FileName,
 				     PULONG Protocol );
 
+VOID TiSignalChange(VOID);
+
 /* EOF */

@@ -26,3 +26,7 @@ BOOLEAN IsInterfaceOnLink( PIP_INTERFACE Interface, PIP_ADDRESS Address );
 BOOLEAN GetInterfaceSourceAddress( PIP_INTERFACE Interface, PIP_ADDRESS Destination, PIP_ADDRESS NextHop,
                                    PIP_ADDRESS Source );
 UINT CopyInterfaceAddresses( PIP_INTERFACE Interface, PIPADDR_ENTRY Entries, UINT Count );
+VOID NteDadTimeout( VOID );
+VOID NteDadConflict( PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Sender, IPv4_RAW_ADDRESS Target, PVOID SenderLinkAddress );
+struct _IP4_ADDRESS_INFO;
+NTSTATUS IPQueryAddressV4( struct _IP4_ADDRESS_INFO *Info );

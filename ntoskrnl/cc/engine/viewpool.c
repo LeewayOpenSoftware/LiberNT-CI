@@ -105,7 +105,6 @@ CcCacheInitialize(
         }
     }
 
-    CC_LOCK_INIT(&Cache->ReclaimLock);
     CC_LOCK_INIT(&Cache->DirtyLock);
     InitializeListHead(&Cache->DirtyMaps);
 
@@ -185,71 +184,48 @@ CcLruInsert(
 
 static
 PCC_VIEW
-CcLruPop(
+CcViewReclaimShard(
     _Inout_ PCC_CACHE Cache,
-    _In_ ULONG ShardIndex)
-{
-    PCC_LRU_SHARD Shard = &Cache->Lru[ShardIndex];
-    PCC_VIEW View = NULL;
-    KIRQL OldIrql;
-
-    CC_LOCK_ACQUIRE(&Shard->Lock, &OldIrql);
-    if (!IsListEmpty(&Shard->List))
-    {
-        View = CONTAINING_RECORD(Shard->List.Flink, CC_VIEW, LruLink);
-        RemoveEntryList(&View->LruLink);
-        View->OnLru = FALSE;
-        Shard->Count--;
-    }
-    CC_LOCK_RELEASE(&Shard->Lock, OldIrql);
-    return View;
-}
-
-static
-PCC_VIEW
-CcViewReclaim(
-    _Inout_ PCC_CACHE Cache,
+    _In_ ULONG ShardIndex,
     _Out_ PCC_MAP *OldMap,
     _Out_ PVOID *OldBase)
 {
-    ULONG Budget = Cache->ViewCount;
+    PCC_LRU_SHARD Shard = &Cache->Lru[ShardIndex];
     PCC_VIEW Claimed = NULL;
-    KIRQL ReclaimIrql;
-    ULONG Start;
-    ULONG Turn = 0;
+    PCC_VIEW View;
+    PCC_MAP Map;
+    KIRQL ShardIrql;
+    KIRQL OldIrql;
 
-    *OldMap = NULL;
-    *OldBase = NULL;
-
-    CC_LOCK_ACQUIRE(&Cache->ReclaimLock, &ReclaimIrql);
-    Start = Cache->ReclaimCursor++;
-
-    while (Budget-- != 0 && Claimed == NULL)
+    CC_LOCK_ACQUIRE(&Shard->Lock, &ShardIrql);
+    if (IsListEmpty(&Shard->List))
     {
-        PCC_VIEW View = CcLruPop(Cache, (Start + Turn++) & (CC_LRU_SHARDS - 1));
-        PCC_MAP Map;
-        KIRQL OldIrql;
+        CC_LOCK_RELEASE(&Shard->Lock, ShardIrql);
+        return NULL;
+    }
 
-        if (View == NULL)
-            continue;
+    View = CONTAINING_RECORD(Shard->List.Flink, CC_VIEW, LruLink);
+    RemoveEntryList(&View->LruLink);
+    View->OnLru = FALSE;
+    Shard->Count--;
 
-        Map = View->Map;
-        if (Map == NULL)
-        {
-            if (CC_ATOMIC_READ32(&View->ReferenceCount) == 0)
-                Claimed = View;
-            continue;
-        }
+    Map = View->Map;
+    if (Map == NULL)
+    {
+        if (CC_ATOMIC_READ32(&View->ReferenceCount) == 0)
+            Claimed = View;
+    }
+    else
+    {
+        CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
 
         if (Map->ReclaimsDraining)
         {
-            CcLruInsert(Cache, View);
-            continue;
+            InsertTailList(&Shard->List, &View->LruLink);
+            View->OnLru = TRUE;
+            Shard->Count++;
         }
-
-        CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
-
-        if (View->Map == Map && CC_ATOMIC_READ32(&View->ReferenceCount) == 0)
+        else if (View->Map == Map && CC_ATOMIC_READ32(&View->ReferenceCount) == 0)
         {
             PCC_SLOT Slot = CcMapSlot(Map, CcSlotNumber(View->FileOffset), FALSE);
 
@@ -268,12 +244,32 @@ CcViewReclaim(
     }
 
     if (Claimed != NULL)
-    {
-        CcLruRemove(Cache, Claimed);
         Claimed->ReferenceCount = 1;
-    }
 
-    CC_LOCK_RELEASE(&Cache->ReclaimLock, ReclaimIrql);
+    CC_LOCK_RELEASE(&Shard->Lock, ShardIrql);
+    return Claimed;
+}
+
+static
+PCC_VIEW
+CcViewReclaim(
+    _Inout_ PCC_CACHE Cache,
+    _Out_ PCC_MAP *OldMap,
+    _Out_ PVOID *OldBase)
+{
+    ULONG Budget = Cache->ViewCount;
+    PCC_VIEW Claimed = NULL;
+    ULONG Start;
+    ULONG Turn = 0;
+
+    *OldMap = NULL;
+    *OldBase = NULL;
+
+    Start = (ULONG)CC_ATOMIC_ADD32((volatile LONG *)&Cache->ReclaimCursor, 1);
+
+    while (Budget-- != 0 && Claimed == NULL)
+        Claimed = CcViewReclaimShard(Cache, (Start + Turn++) & (CC_LRU_SHARDS - 1), OldMap, OldBase);
+
     return Claimed;
 }
 
@@ -283,11 +279,10 @@ CcMapDrainReclaims(
     _In_ VOID (*Complete)(PVOID),
     _In_opt_ PVOID Context)
 {
-    PCC_CACHE Cache = Map->Cache;
     BOOLEAN Ready;
     KIRQL OldIrql;
 
-    CC_LOCK_ACQUIRE(&Cache->ReclaimLock, &OldIrql);
+    CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
     CC_ASSERT(!Map->ReclaimsDraining);
     Map->ReclaimsDraining = TRUE;
     Ready = (Map->ReclaimsInProgress == 0);
@@ -296,7 +291,7 @@ CcMapDrainReclaims(
         Map->ReclaimComplete = Complete;
         Map->ReclaimContext = Context;
     }
-    CC_LOCK_RELEASE(&Cache->ReclaimLock, OldIrql);
+    CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
 
     if (Ready)
         Complete(Context);
@@ -307,12 +302,11 @@ VOID
 CcMapReleaseReclaim(
     _Inout_ PCC_MAP Map)
 {
-    PCC_CACHE Cache = Map->Cache;
     VOID (*Complete)(PVOID) = NULL;
     PVOID Context = NULL;
     KIRQL OldIrql;
 
-    CC_LOCK_ACQUIRE(&Cache->ReclaimLock, &OldIrql);
+    CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
     CC_ASSERT(Map->ReclaimsInProgress != 0);
     if (--Map->ReclaimsInProgress == 0 && Map->ReclaimsDraining)
     {
@@ -321,7 +315,7 @@ CcMapReleaseReclaim(
         Map->ReclaimComplete = NULL;
         Map->ReclaimContext = NULL;
     }
-    CC_LOCK_RELEASE(&Cache->ReclaimLock, OldIrql);
+    CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
 
     if (Complete != NULL)
         Complete(Context);
@@ -510,49 +504,53 @@ CcMapDetachViews(
     for (Number = First; Number < End; Number++)
     {
         PVOID Base = NULL;
-        PCC_VIEW View = NULL;
+        PCC_VIEW Candidate;
+        PCC_LRU_SHARD Shard;
         PCC_SLOT Slot;
-        KIRQL ReclaimIrql;
+        KIRQL ShardIrql;
         KIRQL OldIrql;
 
-        CC_LOCK_ACQUIRE(&Cache->ReclaimLock, &ReclaimIrql);
         CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
-
         Slot = CcMapSlot(Map, Number, FALSE);
+        Candidate = (Slot != NULL) ? Slot->View : NULL;
+        CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
+
         if (Slot == NULL)
         {
-            CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
-            CC_LOCK_RELEASE(&Cache->ReclaimLock, ReclaimIrql);
             Number |= CC_LEAF_MASK;
             continue;
         }
 
-        if (Slot->View != NULL)
+        if (Candidate == NULL)
+            continue;
+
+        Shard = &Cache->Lru[Candidate->LruShard];
+        CC_LOCK_ACQUIRE(&Shard->Lock, &ShardIrql);
+        CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
+
+        Slot = CcMapSlot(Map, Number, FALSE);
+        if ((Slot != NULL) && (Slot->View == Candidate) &&
+            (CC_ATOMIC_READ32(&Candidate->ReferenceCount) == 0))
         {
-            if (CC_ATOMIC_READ32(&Slot->View->ReferenceCount) == 0)
-            {
-                View = Slot->View;
-                Base = View->BaseAddress;
-                Slot->View = NULL;
-                Map->ViewsAttached--;
-                View->Map = NULL;
-                View->BaseAddress = NULL;
-            }
+            Base = Candidate->BaseAddress;
+            Slot->View = NULL;
+            Map->ViewsAttached--;
+            Candidate->Map = NULL;
+            Candidate->BaseAddress = NULL;
+            if (Candidate->OnLru)
+                RemoveEntryList(&Candidate->LruLink);
             else
-            {
-                AllDetached = FALSE;
-            }
+                Shard->Count++;
+            InsertTailList(&Shard->List, &Candidate->LruLink);
+            Candidate->OnLru = TRUE;
+        }
+        else if ((Slot != NULL) && (Slot->View != NULL))
+        {
+            AllDetached = FALSE;
         }
 
         CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
-
-        if (View != NULL)
-        {
-            CcLruRemove(Cache, View);
-            CcLruInsert(Cache, View);
-        }
-
-        CC_LOCK_RELEASE(&Cache->ReclaimLock, ReclaimIrql);
+        CC_LOCK_RELEASE(&Shard->Lock, ShardIrql);
 
         if (Base != NULL)
             Map->Ops.UnmapView(Map->Context, Base);

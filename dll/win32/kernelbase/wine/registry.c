@@ -160,6 +160,22 @@ static BOOL is_classes_wow6432node( HKEY key )
     return ret;
 }
 
+#ifdef __REACTOS__
+static BOOL is_redirected_classes_subkey( const UNICODE_STRING *name )
+{
+    static const WCHAR * const redirected[] =
+        { L"CLSID", L"DirectShow", L"Interface", L"Media Type", L"MediaFoundation" };
+    DWORD i, len = 0, total = name->Length / sizeof(WCHAR);
+
+    while (len < total && name->Buffer[len] != '\\') len++;
+    for (i = 0; i < ARRAY_SIZE(redirected); i++)
+    {
+        if (wcslen( redirected[i] ) == len && !wcsnicmp( name->Buffer, redirected[i], len )) return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 /* Open the Wow6432Node subkey of the specified key */
 static HANDLE open_wow6432node( HANDLE key )
 {
@@ -378,6 +394,18 @@ static NTSTATUS open_key( HKEY *retkey, HKEY root, UNICODE_STRING *name, DWORD o
     {
         was_wow6432node = is_wow6432node( name );
 #ifdef __REACTOS__
+        if (subkey && is_win64 && (access & KEY_WOW64_32KEY) && name->Length &&
+            !is_wow6432node( name ) && !is_redirected_classes_subkey( name ) &&
+            is_classes_wow6432node( subkey_root ))
+        {
+            HKEY classes = open_classes_root();
+
+            if (classes)
+            {
+                if (subkey_root != root) NtClose( subkey_root );
+                subkey_root = classes;
+            }
+        }
         status = open_subkey( &subkey, subkey_root, name, options, access, create );
 #else
         status = open_subkey( &subkey, subkey_root, name, options, access );

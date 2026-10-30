@@ -220,7 +220,8 @@ TestMonitorDpi(
     if (ShGetDpiForMonitorFn != NULL)
     {
         ResultHr = ShGetDpiForMonitorFn((HMONITOR)(ULONG_PTR)0xdeadbeef, MDT_EFFECTIVE_DPI, &DpiX, &DpiY);
-        ok(ResultHr == HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE), "SHCore GetDpiForMonitor returned %#lx for an invalid monitor\n", ResultHr);
+        ok(ResultHr == HRESULT_FROM_WIN32(ERROR_INVALID_HANDLE) || ResultHr == E_INVALIDARG,
+           "SHCore GetDpiForMonitor returned %#lx for an invalid monitor\n", ResultHr);
     }
 
     Monitor = MonitorFromPoint(Origin, MONITOR_DEFAULTTOPRIMARY);

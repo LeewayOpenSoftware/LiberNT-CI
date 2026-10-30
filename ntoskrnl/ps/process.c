@@ -21,7 +21,7 @@ extern ULONG PsMinimumWorkingSet, PsMaximumWorkingSet;
 POBJECT_TYPE PsProcessType = NULL;
 
 LIST_ENTRY PsActiveProcessHead;
-KGUARDED_MUTEX PspActiveProcessMutex;
+EX_PUSH_LOCK PspActiveProcessLock;
 
 LARGE_INTEGER ShortPsLockDelay;
 
@@ -135,7 +135,8 @@ PsGetNextProcess(IN PEPROCESS OldProcess)
     PSTRACE(PS_PROCESS_DEBUG, "Process: %p\n", OldProcess);
 
     /* Acquire the Active Process Lock */
-    KeAcquireGuardedMutex(&PspActiveProcessMutex);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&PspActiveProcessLock);
 
     /* Check if we're already starting somewhere */
     if (OldProcess)
@@ -164,7 +165,8 @@ PsGetNextProcess(IN PEPROCESS OldProcess)
     }
 
     /* Release the lock */
-    KeReleaseGuardedMutex(&PspActiveProcessMutex);
+    ExReleasePushLockShared(&PspActiveProcessLock);
+    KeLeaveCriticalRegion();
 
     /* Dereference the Process we had referenced earlier */
     if (OldProcess) ObDereferenceObject(OldProcess);
@@ -857,9 +859,11 @@ PspCreateProcess(OUT PHANDLE ProcessHandle,
     }
 
     /* The process can now be activated */
-    KeAcquireGuardedMutex(&PspActiveProcessMutex);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&PspActiveProcessLock);
     InsertTailList(&PsActiveProcessHead, &Process->ActiveProcessLinks);
-    KeReleaseGuardedMutex(&PspActiveProcessMutex);
+    ExReleasePushLockExclusive(&PspActiveProcessLock);
+    KeLeaveCriticalRegion();
 
     /* Create an access state */
     Status = SeCreateAccessStateEx(CurrentThread,

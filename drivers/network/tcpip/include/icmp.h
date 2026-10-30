@@ -29,6 +29,8 @@ typedef struct ICMP_HEADER {
 #define ICMP_TYPE_TIMESTAMP_REPLY   14 /* Timestamp reply */
 #define ICMP_TYPE_INFO_REQUEST      15 /* Information request */
 #define ICMP_TYPE_INFO_REPLY        16 /* Information reply */
+#define ICMP_TYPE_ROUTER_ADVERT     9
+#define ICMP_TYPE_ROUTER_SOLICIT    10
 
 /* ICMP codes for ICMP_TYPE_DEST_UNREACH */
 #define ICMP_CODE_DU_NET_UNREACH         0 /* Network unreachable */
@@ -77,5 +79,23 @@ VOID ICMPReply(
     PIP_PACKET IPPacket,
     UCHAR Type,
     UCHAR Code);
+
+BOOLEAN RdiscEnabled(PIP_INTERFACE Interface);
+VOID RdiscStart(PIP_INTERFACE Interface);
+VOID RdiscStop(PIP_INTERFACE Interface);
+VOID RdiscTimeout(VOID);
+VOID RdiscReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket);
+VOID RdiscStartup(VOID);
+VOID PmtuStartup(VOID);
+VOID PmtuReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket);
+VOID PmtuFlushInterface(PIP_INTERFACE Interface);
+VOID ICMPSendFragmentationNeeded(PIP_INTERFACE Interface, PIP_PACKET IPPacket, ULONG Mtu);
+VOID PathTouch(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Source, IPv4_RAW_ADDRESS Destination, IPv4_RAW_ADDRESS NextHop);
+VOID PathConfirm(IPv4_RAW_ADDRESS Destination);
+VOID PathUnreachable(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS NextHop);
+VOID PathTimeout(VOID);
+VOID PathFlush(VOID);
+struct _IP_PATH_TABLE;
+NTSTATUS PathQuery(struct _IP_PATH_TABLE *Table, ULONG Length, PULONG Information);
 
 /* EOF */

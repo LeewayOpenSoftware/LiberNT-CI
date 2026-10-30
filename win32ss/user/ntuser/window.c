@@ -483,7 +483,11 @@ static void IntSendDestroyMsg(HWND hWnd)
       if ( ti->MessageQueue->spwndActive == Window || // Fixes CORE-106 RegSvr32 exit and return focus to CMD.
           (ti->MessageQueue->spwndActive == NULL && ti->MessageQueue == IntGetFocusMessageQueue()) )
       {
+         BOOL WasForeground = (ti->MessageQueue == IntGetFocusMessageQueue());
+
          co_WinPosActivateOtherWindow(Window);
+         if (WasForeground && IntGetFocusMessageQueue() != ti->MessageQueue)
+            ti->TIF_flags |= TIF_ALLOWFOREGROUNDACTIVATE;
       }
 
       if (ValidateHwndNoErr(hWnd) != Window) goto Cleanup;
@@ -676,7 +680,10 @@ LRESULT co_UserFreeWindow(PWND Window,
          if ((Child = IntGetWindowObject(*ChildHandle)))
          {
             if (!IntWndBelongsToThread(Child, ThreadData))
+            {
+               IntSetStyle(Child, 0, WS_VISIBLE);
                IntUnlinkWindow(Child);
+            }
             else
                co_UserFreeWindow(Child, ProcessData, ThreadData, SendMessages);
 
@@ -823,6 +830,8 @@ LRESULT co_UserFreeWindow(PWND Window,
 
    IntUnregisterSessionNotification(Window, TRUE);
    IntUnlinkWindow(Window);
+
+   DefWndDestroySmallIcon2(Window);
 
    if (Window->PropListItems)
    {
@@ -1431,7 +1440,8 @@ co_UserSetParent(HWND hWndChild, HWND hWndNewParent)
       return NULL;
    }
 
-   if (Wnd->state2 & WNDS2_INDESTROY)
+   if ((Wnd->state2 & WNDS2_INDESTROY) ||
+       (Wnd->spwndParent && (Wnd->spwndParent->state & WNDS_DESTROYED)))
    {
       EngSetLastError(ERROR_INVALID_PARAMETER);
       return NULL;
@@ -3168,7 +3178,11 @@ BOOLEAN co_UserDestroyWindow(PVOID Object)
 
    if (IntIsWindow(hWnd) && Window->head.pti == ti && ti->MessageQueue->spwndActive == Window)
    {
+      BOOL WasForeground = (ti->MessageQueue == IntGetFocusMessageQueue());
+
       co_WinPosActivateOtherWindow(Window);
+      if (WasForeground && IntGetFocusMessageQueue() != ti->MessageQueue)
+         ti->TIF_flags |= TIF_ALLOWFOREGROUNDACTIVATE;
    }
 
    /* Adjust last active */

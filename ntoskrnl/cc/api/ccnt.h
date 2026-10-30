@@ -40,6 +40,7 @@ typedef struct _CC_NT_MAP
     ULONG Flags;
     KEVENT *UninitializeEvent;
     MI_ASYNC_DRAIN ReadDrain;
+    KEVENT LazyWriteGate;
 } CC_NT_MAP, *PCC_NT_MAP;
 
 C_ASSERT(FIELD_OFFSET(CC_NT_MAP, Map) == 0);
@@ -71,13 +72,26 @@ C_ASSERT(FIELD_OFFSET(PUBLIC_BCB, MappedFileOffset) == FIELD_OFFSET(CC_BCB, File
 
 extern CC_CACHE CcNtCache;
 extern CC_BACKING_OPS CcNtBackingOps;
-extern KSPIN_LOCK CcNtMapListLock;
-extern LIST_ENTRY CcNtMapList;
+#define CC_NT_MAP_BUCKETS 64
 
-VOID CcNtMapListBarrier(VOID);
+typedef struct _CC_NT_MAP_BUCKET
+{
+    KSPIN_LOCK Lock;
+    LIST_ENTRY List;
+} CC_NT_MAP_BUCKET, *PCC_NT_MAP_BUCKET;
+
+extern CC_NT_MAP_BUCKET CcNtMapBuckets[CC_NT_MAP_BUCKETS];
+
+VOID CcNtInitializeMapTable(VOID);
+PCC_NT_MAP_BUCKET CcNtMapBucket(_In_ PSECTION_OBJECT_POINTERS Pointers);
+PCC_NT_MAP CcNtInsertMap(_Inout_ PCC_NT_MAP Fresh);
+VOID CcNtLinkMap(_Inout_ PCC_NT_MAP NtMap);
+BOOLEAN CcNtIsMapTableEmpty(VOID);
+VOID CcNtMapBarrier(_In_ PCC_NT_MAP NtMap);
 VOID CcNtExpireClosedMaps(VOID);
 
 PCC_NT_MAP CcNtReferenceMap(_In_ PSECTION_OBJECT_POINTERS Pointers);
+PCC_NT_MAP CcNtReferenceFileMap(_In_ PFILE_OBJECT FileObject);
 VOID CcNtDereferenceMap(_Inout_ PCC_NT_MAP NtMap);
 VOID CcNtDestroyMap(_Inout_ PCC_NT_MAP NtMap);
 VOID CcNtBcbCreated(_Inout_ PCC_BCB Bcb);

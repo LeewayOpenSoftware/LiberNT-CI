@@ -130,11 +130,11 @@ AlpcpSignalPortReferenceWaiter(
 {
     PKEVENT WaitEvent;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     WaitEvent = Port->ReferenceWaiter;
     if (WaitEvent)
         KeSetEvent(WaitEvent, IO_NO_INCREMENT, FALSE);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 }
 
 VOID
@@ -147,13 +147,13 @@ AlpcpTrackPortReferences(
     ReferenceCount = (ULONG)InterlockedIncrement((PLONG)&Port->ReferenceCount);
     if (!Port->ReferenceWaiter) return;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (Port->ReferenceWaiter &&
         (ReferenceCount == Port->ReferenceWaitTarget))
     {
         KeSetEvent(Port->ReferenceWaiter, IO_NO_INCREMENT, FALSE);
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 }
 
 NTSTATUS
@@ -169,49 +169,49 @@ AlpcpWaitForPortReferences(
         return STATUS_SUCCESS;
 
     KeInitializeEvent(&WaitEvent, SynchronizationEvent, FALSE);
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
 
     /* The tracked counter changes without AlpcpLock. Recheck after taking the
        lock so a tracker cannot reach the target between the fast check and
        publication of the waiter. */
     if (Port->ReferenceCount == ReferenceCount)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_SUCCESS;
     }
 
     if (Port->ReferenceWaiter)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_INVALID_PARAMETER;
     }
 
     Port->ReferenceWaiter = &WaitEvent;
     Port->ReferenceWaitTarget = ReferenceCount;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     do
     {
         Status = KeWaitForSingleObject(&WaitEvent, WrLpcReply, KernelMode, TRUE, NULL);
 
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (Port->ReferenceCount == ReferenceCount)
         {
             Port->ReferenceWaiter = NULL;
             Port->ReferenceWaitTarget = 0;
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             return STATUS_SUCCESS;
         }
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
     } while (Status == STATUS_KERNEL_APC);
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (Port->ReferenceWaiter == &WaitEvent)
     {
         Port->ReferenceWaiter = NULL;
         Port->ReferenceWaitTarget = 0;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     return Status;
 }
 
@@ -411,11 +411,11 @@ NtAlpcQueryInformation(
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
-            AlpcpAcquireLock();
+            AlpcpAcquirePortLock(Port);
             Basic.Flags = Port->PortAttributes.Flags;
             Basic.SequenceNo = Port->SequenceNo;
             Basic.PortContext = Port->PortContext;
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             Status = AlpcpWriteInformation(PortInformation, Length, &Basic, sizeof(Basic), ReturnLength, PreviousMode);
             break;
 
@@ -449,7 +449,7 @@ NtAlpcQueryInformation(
             }
             if (!NT_SUCCESS(Status)) break;
 
-            AlpcpAcquireLock();
+            AlpcpAcquirePortLock(Port);
             Peer = NULL;
             if (Port->CommunicationInfo)
             {
@@ -457,7 +457,7 @@ NtAlpcQueryInformation(
                                                                        : Port->CommunicationInfo->ServerCommunicationPort;
             }
             Process = (Peer && Peer->OwnerProcess && ObReferenceObjectSafe(Peer->OwnerProcess)) ? Peer->OwnerProcess : NULL;
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
 
             if (!Process)
             {
@@ -484,14 +484,14 @@ NtAlpcQueryInformation(
                 Status = STATUS_INVALID_PARAMETER;
                 break;
             }
-            AlpcpAcquireLock();
+            AlpcpAcquirePortLock(Port);
             Peer = NULL;
             if (Port->CommunicationInfo) Peer = Port->CommunicationInfo->ServerCommunicationPort;
             if (AlpcpPortType(Port) == ALPC_PORT_TYPE_CONNECTION) Peer = Port;
             Process = (Peer && Peer->OwnerProcess) ? Peer->OwnerProcess : NULL;
             Session.SessionId = Process ? PsGetProcessSessionId(Process) : 0;
             Session.ProcessId = Process ? HandleToUlong(PsGetProcessId(Process)) : 0;
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             Status = AlpcpWriteInformation(PortInformation, Length, &Session, sizeof(Session), ReturnLength, PreviousMode);
             break;
 
@@ -609,11 +609,11 @@ NtAlpcSetInformation(
                 Status = ObReferenceObjectByHandle(Associate.CompletionPort, IO_COMPLETION_MODIFY_STATE, IoCompletionType, PreviousMode, &CompletionPort, NULL);
                 if (!NT_SUCCESS(Status)) break;
             }
-            AlpcpAcquireLock();
+            AlpcpAcquirePortLock(Port);
             OldCompletionPort = Port->CompletionPort;
             Port->CompletionPort = CompletionPort;
             Port->CompletionKey = Associate.CompletionKey;
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             if (OldCompletionPort) ObDereferenceObject(OldCompletionPort);
             break;
 
@@ -650,11 +650,11 @@ NtAlpcSetInformation(
             /* Native accepts the complete structure here for ABI stability,
                but only the legacy-request compatibility bit is mutable after
                port creation.  Quotas and security properties are immutable. */
-            AlpcpAcquireLock();
+            AlpcpAcquirePortLock(Port);
             Port->PortAttributes.Flags =
                 (Port->PortAttributes.Flags & ~ALPC_PORFLG_ALLOW_LPC_REQUESTS) |
                 (Attributes.Flags & ALPC_PORFLG_ALLOW_LPC_REQUESTS);
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             Status = STATUS_SUCCESS;
             break;
 
@@ -769,10 +769,10 @@ NtAlpcSetInformation(
                 break;
             }
             ObReferenceObject(CallbackObject);
-            AlpcpAcquireLock();
+            AlpcpAcquirePortLock(Port);
             OldCallbackObject = Port->CallbackObject;
             Port->CallbackObject = CallbackObject;
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             if (OldCallbackObject) ObDereferenceObject(OldCallbackObject);
             Status = STATUS_SUCCESS;
             break;
@@ -864,7 +864,7 @@ NtAlpcQueryInformationMessage(
     Status = AlpcpReferencePortByHandle(PortHandle, READ_CONTROL, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Message = AlpcpFindMessageForQuery(Port, &Header);
     Found = (Message != NULL);
     if (Found)
@@ -890,7 +890,7 @@ NtAlpcQueryInformationMessage(
             HandleFound = TRUE;
         }
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (!Found)
     {
@@ -994,20 +994,20 @@ NtAlpcImpersonateClientOfPort(
         return STATUS_INVALID_PORT_HANDLE;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Pending = AlpcpFindPendingMessageForReply(Port, Header.MessageId, &Header.ClientId);
     if (!Pending || (Pending->State & ALPC_MSG_STATE_CONNECTION))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         ObDereferenceObject(Port);
         return STATUS_REPLY_MESSAGE_MISMATCH;
     }
     Pending->State |= ALPC_MSG_STATE_IMPERSONATING;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     Status = AlpcpImpersonateMessage(Port, Pending, PtrToUlong(Flags));
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Pending->State &= ~ALPC_MSG_STATE_IMPERSONATING;
     FreePending = !Pending->WaitingThread &&
                   !(Pending->State & ALPC_MSG_STATE_IN_CANCELED_QUEUE) &&
@@ -1017,7 +1017,7 @@ NtAlpcImpersonateClientOfPort(
                                      ALPC_MSG_STATE_CANCELED |
                                      ALPC_MSG_STATE_DISCONNECTED));
     if (FreePending) AlpcpFreeMessage(Pending);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     ObDereferenceObject(Port);
     return Status;
@@ -1056,7 +1056,7 @@ NtAlpcImpersonateClientContainerOfPort(
         return STATUS_ACCESS_DENIED;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Pending = AlpcpFindMessageForQuery(Port, &Header);
     if (Pending && !(Pending->State & (ALPC_MSG_STATE_CONNECTION |
                                        ALPC_MSG_STATE_CANCELED |
@@ -1068,7 +1068,7 @@ NtAlpcImpersonateClientContainerOfPort(
     {
         Pending = NULL;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     ObDereferenceObject(Port);
 
     if (!Pending) return STATUS_REPLY_MESSAGE_MISMATCH;
@@ -1159,7 +1159,7 @@ AlpcpOpenSender(
         CapturedAttributes = *ObjectAttributes;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Pending = AlpcpFindMessageForQuery(Port, &Header);
     if (!Pending)
     {
@@ -1219,7 +1219,7 @@ AlpcpOpenSender(
         SenderObject = Pending->SenderProcess;
         Status = STATUS_SUCCESS;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (!NT_SUCCESS(Status)) goto Exit;
 

@@ -423,6 +423,15 @@ static VOID NETIOAPI_API_ AdapterInterfaceChanged(PVOID Context, PMIB_IPINTERFAC
     SetEvent((HANDLE)Context);
 }
 
+static VOID NETIOAPI_API_ AdapterAddressChanged(PVOID Context, PMIB_UNICASTIPADDRESS_ROW Row, MIB_NOTIFICATION_TYPE NotificationType) {
+    if (!Row)
+        return;
+    ApiLock();
+    apipa_address_changed(Row->InterfaceIndex);
+    ApiUnlock();
+    SetEvent(hAdapterStateChangedEvent);
+}
+
 /*
  * XXX Figure out the way to bind a specific adapter to a socket.
  */
@@ -432,7 +441,7 @@ DWORD WINAPI AdapterDiscoveryThread(LPVOID Context) {
     PDHCP_ADAPTER Adapter = NULL;
     HANDLE hStopEvent = (HANDLE)Context;
     HANDLE hInterfaceChanged = CreateEventW(NULL, FALSE, FALSE, NULL);
-    HANDLE hNotification = NULL;
+    HANDLE hNotification = NULL, hAddressNotification = NULL;
     HANDLE Waits[2];
     struct interface_info *ifi = NULL;
     struct protocol *proto;
@@ -447,6 +456,8 @@ DWORD WINAPI AdapterDiscoveryThread(LPVOID Context) {
     {
         hNotification = NULL;
     }
+    if (NotifyUnicastIpAddressChange(AF_INET, AdapterAddressChanged, NULL, FALSE, &hAddressNotification) != NO_ERROR)
+        hAddressNotification = NULL;
 
     while (TRUE)
     {
@@ -640,6 +651,8 @@ DWORD WINAPI AdapterDiscoveryThread(LPVOID Context) {
 
     if (hNotification)
         CancelMibChangeNotify2(hNotification);
+    if (hAddressNotification)
+        CancelMibChangeNotify2(hAddressNotification);
     if (hInterfaceChanged)
         CloseHandle(hInterfaceChanged);
 

@@ -17,7 +17,33 @@ POBJECT_TYPE CmpKeyObjectType;
 POBJECT_TYPE CmKeyObjectType = NULL;
 PCMHIVE CmiVolatileHive;
 LIST_ENTRY CmpHiveListHead;
-ERESOURCE CmpRegistryLock;
+#define CMP_REGISTRY_LOCK_SLOTS         32
+#define CMP_REGISTRY_LOCK_OWNER_BUCKETS 64
+#define CMP_REGISTRY_LOCK_EXCLUSIVE     MAXULONG
+
+typedef struct DECLSPEC_CACHEALIGN _CMP_REGISTRY_LOCK_SLOT
+{
+    EX_PUSH_LOCK Lock;
+} CMP_REGISTRY_LOCK_SLOT;
+
+typedef struct _CMP_REGISTRY_LOCK_OWNER
+{
+    struct _CMP_REGISTRY_LOCK_OWNER *Next;
+    PKTHREAD Thread;
+    ULONG Depth;
+    ULONG Slot;
+} CMP_REGISTRY_LOCK_OWNER, *PCMP_REGISTRY_LOCK_OWNER;
+
+typedef struct DECLSPEC_CACHEALIGN _CMP_REGISTRY_LOCK_OWNER_BUCKET
+{
+    KSPIN_LOCK Lock;
+    PCMP_REGISTRY_LOCK_OWNER Owners;
+    PCMP_REGISTRY_LOCK_OWNER Free;
+} CMP_REGISTRY_LOCK_OWNER_BUCKET, *PCMP_REGISTRY_LOCK_OWNER_BUCKET;
+
+static CMP_REGISTRY_LOCK_SLOT CmpRegistryLockSlots[CMP_REGISTRY_LOCK_SLOTS];
+static CMP_REGISTRY_LOCK_OWNER_BUCKET CmpRegistryLockOwners[CMP_REGISTRY_LOCK_OWNER_BUCKETS];
+static KEVENT CmpFlushStarveDoneEvent;
 KGUARDED_MUTEX CmpSelfHealQueueLock;
 LIST_ENTRY CmpSelfHealQueueListHead;
 KEVENT CmpLoadWorkerEvent;
@@ -1846,7 +1872,7 @@ CmInitSystem1(VOID)
     ExInitializePushLock(&CmpLoadHiveLock);
 
     /* Initialize registry lock */
-    ExInitializeResourceLite(&CmpRegistryLock);
+    KeInitializeEvent(&CmpFlushStarveDoneEvent, NotificationEvent, TRUE);
     CmpInitNotify();
 
     /* Initialize the cache */
@@ -2161,16 +2187,169 @@ EndPath:
     return ServicePath;
 }
 
+static
+PCMP_REGISTRY_LOCK_OWNER_BUCKET
+CmpRegistryLockOwnerBucket(
+    _In_ PKTHREAD Thread)
+{
+    ULONG_PTR Value = (ULONG_PTR)Thread >> 6;
+
+    return &CmpRegistryLockOwners[(Value ^ (Value >> 6)) % CMP_REGISTRY_LOCK_OWNER_BUCKETS];
+}
+
+static
+PCMP_REGISTRY_LOCK_OWNER
+CmpFindRegistryLockOwnerLocked(
+    _In_ PCMP_REGISTRY_LOCK_OWNER_BUCKET Bucket,
+    _In_ PKTHREAD Thread)
+{
+    PCMP_REGISTRY_LOCK_OWNER Owner;
+
+    for (Owner = Bucket->Owners; Owner; Owner = Owner->Next)
+    {
+        if (Owner->Thread == Thread) return Owner;
+    }
+    return NULL;
+}
+
+static
+PCMP_REGISTRY_LOCK_OWNER
+CmpFindRegistryLockOwner(
+    _In_ PKTHREAD Thread)
+{
+    PCMP_REGISTRY_LOCK_OWNER_BUCKET Bucket = CmpRegistryLockOwnerBucket(Thread);
+    PCMP_REGISTRY_LOCK_OWNER Owner;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+    Owner = CmpFindRegistryLockOwnerLocked(Bucket, Thread);
+    KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+    return Owner;
+}
+
+static
+PCMP_REGISTRY_LOCK_OWNER
+CmpAllocateRegistryLockOwner(
+    _In_ PCMP_REGISTRY_LOCK_OWNER_BUCKET Bucket)
+{
+    PCMP_REGISTRY_LOCK_OWNER Owner;
+    LARGE_INTEGER Delay;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+    Owner = Bucket->Free;
+    if (Owner) Bucket->Free = Owner->Next;
+    KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+    if (Owner) return Owner;
+
+    Delay.QuadPart = -10 * 1000;
+    for (;;)
+    {
+        Owner = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Owner), TAG_CM);
+        if (Owner) return Owner;
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+}
+
+static
+VOID
+CmpInsertRegistryLockOwner(
+    _In_ PKTHREAD Thread,
+    _In_ PCMP_REGISTRY_LOCK_OWNER Owner,
+    _In_ ULONG Slot)
+{
+    PCMP_REGISTRY_LOCK_OWNER_BUCKET Bucket = CmpRegistryLockOwnerBucket(Thread);
+    KIRQL OldIrql;
+
+    Owner->Thread = Thread;
+    Owner->Depth = 1;
+    Owner->Slot = Slot;
+    KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+    Owner->Next = Bucket->Owners;
+    Bucket->Owners = Owner;
+    KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+}
+
+static
+ULONG
+CmpRemoveRegistryLockOwner(
+    _In_ PKTHREAD Thread)
+{
+    PCMP_REGISTRY_LOCK_OWNER_BUCKET Bucket = CmpRegistryLockOwnerBucket(Thread);
+    PCMP_REGISTRY_LOCK_OWNER *Link, Owner;
+    ULONG Slot = 0;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+    for (Link = &Bucket->Owners; *Link; Link = &(*Link)->Next)
+    {
+        if ((*Link)->Thread == Thread) break;
+    }
+    Owner = *Link;
+    ASSERT(Owner != NULL);
+    ASSERT(Owner->Depth != 0);
+    if (--Owner->Depth != 0)
+    {
+        KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+        return CMP_REGISTRY_LOCK_SLOTS;
+    }
+    *Link = Owner->Next;
+    Slot = Owner->Slot;
+    Owner->Thread = NULL;
+    Owner->Next = Bucket->Free;
+    Bucket->Free = Owner;
+    KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+    return Slot;
+}
+
+VOID
+NTAPI
+CmpBeginStarveWriters(VOID)
+{
+    InterlockedIncrement(&CmpFlushStarveWriters);
+    KeClearEvent(&CmpFlushStarveDoneEvent);
+}
+
+VOID
+NTAPI
+CmpEndStarveWriters(VOID)
+{
+    if (InterlockedDecrement(&CmpFlushStarveWriters) == 0)
+        KeSetEvent(&CmpFlushStarveDoneEvent, IO_NO_INCREMENT, FALSE);
+}
+
 VOID
 NTAPI
 CmpLockRegistryExclusive(VOID)
 {
+    PKTHREAD Thread = KeGetCurrentThread();
+    PCMP_REGISTRY_LOCK_OWNER Owner;
+    ULONG Slot;
+
     /* Enter a critical region and lock the registry */
     KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&CmpRegistryLock, TRUE);
+    Owner = CmpFindRegistryLockOwner(Thread);
+    if (Owner)
+    {
+        ASSERT(Owner->Slot == CMP_REGISTRY_LOCK_EXCLUSIVE);
+        Owner->Depth++;
+        RtlGetCallersAddress(&CmpRegistryLockCaller, &CmpRegistryLockCallerCaller);
+        return;
+    }
 
-    /* Sanity check */
-    ASSERT(CmpFlushStarveWriters == 0);
+    Owner = CmpAllocateRegistryLockOwner(CmpRegistryLockOwnerBucket(Thread));
+    for (;;)
+    {
+        while (ReadNoFence(&CmpFlushStarveWriters))
+            KeWaitForSingleObject(&CmpFlushStarveDoneEvent, Executive, KernelMode, FALSE, NULL);
+        for (Slot = 0; Slot < CMP_REGISTRY_LOCK_SLOTS; Slot++)
+            ExAcquirePushLockExclusive(&CmpRegistryLockSlots[Slot].Lock);
+        if (!ReadNoFence(&CmpFlushStarveWriters)) break;
+        for (Slot = CMP_REGISTRY_LOCK_SLOTS; Slot > 0; Slot--)
+            ExReleasePushLockExclusive(&CmpRegistryLockSlots[Slot - 1].Lock);
+    }
+    CmpInsertRegistryLockOwner(Thread, Owner, CMP_REGISTRY_LOCK_EXCLUSIVE);
+
     RtlGetCallersAddress(&CmpRegistryLockCaller, &CmpRegistryLockCallerCaller);
 }
 
@@ -2178,20 +2357,23 @@ VOID
 NTAPI
 CmpLockRegistry(VOID)
 {
+    PKTHREAD Thread = KeGetCurrentThread();
+    PCMP_REGISTRY_LOCK_OWNER Owner;
+    ULONG Slot;
+
     /* Enter a critical region */
     KeEnterCriticalRegion();
+    Owner = CmpFindRegistryLockOwner(Thread);
+    if (Owner)
+    {
+        Owner->Depth++;
+        return;
+    }
 
-    /* Check if we have to starve writers */
-    if (CmpFlushStarveWriters)
-    {
-        /* Starve exlusive waiters */
-        ExAcquireSharedStarveExclusive(&CmpRegistryLock, TRUE);
-    }
-    else
-    {
-        /* Just grab the lock */
-        ExAcquireResourceSharedLite(&CmpRegistryLock, TRUE);
-    }
+    Owner = CmpAllocateRegistryLockOwner(CmpRegistryLockOwnerBucket(Thread));
+    Slot = KeGetCurrentProcessorNumber() % CMP_REGISTRY_LOCK_SLOTS;
+    ExAcquirePushLockShared(&CmpRegistryLockSlots[Slot].Lock);
+    CmpInsertRegistryLockOwner(Thread, Owner, Slot);
 }
 
 BOOLEAN
@@ -2199,15 +2381,17 @@ NTAPI
 CmpTestRegistryLock(VOID)
 {
     /* Test the lock */
-    return !ExIsResourceAcquiredSharedLite(&CmpRegistryLock) ? FALSE : TRUE;
+    return CmpFindRegistryLockOwner(KeGetCurrentThread()) != NULL;
 }
 
 BOOLEAN
 NTAPI
 CmpTestRegistryLockExclusive(VOID)
 {
+    PCMP_REGISTRY_LOCK_OWNER Owner = CmpFindRegistryLockOwner(KeGetCurrentThread());
+
     /* Test the lock */
-    return !ExIsResourceAcquiredExclusiveLite(&CmpRegistryLock) ? FALSE : TRUE;
+    return Owner && (Owner->Slot == CMP_REGISTRY_LOCK_EXCLUSIVE);
 }
 
 VOID
@@ -2243,6 +2427,8 @@ VOID
 NTAPI
 CmpUnlockRegistry(VOID)
 {
+    ULONG Slot;
+
     /* Sanity check */
     CMP_ASSERT_REGISTRY_LOCK();
 
@@ -2258,7 +2444,16 @@ CmpUnlockRegistry(VOID)
     }
 
     /* Release the lock and leave the critical region */
-    ExReleaseResourceLite(&CmpRegistryLock);
+    Slot = CmpRemoveRegistryLockOwner(KeGetCurrentThread());
+    if (Slot == CMP_REGISTRY_LOCK_EXCLUSIVE)
+    {
+        for (Slot = CMP_REGISTRY_LOCK_SLOTS; Slot > 0; Slot--)
+            ExReleasePushLockExclusive(&CmpRegistryLockSlots[Slot - 1].Lock);
+    }
+    else if (Slot < CMP_REGISTRY_LOCK_SLOTS)
+    {
+        ExReleasePushLockShared(&CmpRegistryLockSlots[Slot].Lock);
+    }
     KeLeaveCriticalRegion();
 }
 

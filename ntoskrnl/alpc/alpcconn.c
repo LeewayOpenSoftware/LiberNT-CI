@@ -138,7 +138,7 @@ NtAlpcCreatePort(
 
     MaxMessageLength = Present ? (ULONG)Attributes.MaxMessageLength : PORT_MAXIMUM_MESSAGE_LENGTH;
 
-    Status = AlpcpCreatePort(&Port, PreviousMode, ObjectAttributes, Present ? &Attributes : NULL, ALPC_PORT_TYPE_CONNECTION, 0, MaxMessageLength - sizeof(PORT_MESSAGE), MaxMessageLength);
+    Status = AlpcpCreatePort(&Port, NULL, PreviousMode, ObjectAttributes, Present ? &Attributes : NULL, ALPC_PORT_TYPE_CONNECTION, 0, MaxMessageLength - sizeof(PORT_MESSAGE), MaxMessageLength);
     if (!NT_SUCCESS(Status)) return Status;
 
     Status = ObInsertObject(Port, NULL, PORT_ALL_ACCESS, 0, NULL, &Handle);
@@ -294,7 +294,7 @@ AlpcpConnectPortInternal(
     Status = AlpcpCaptureAttributes(OutMessageAttributes, PreviousMode, &OutAttributes);
     if (!NT_SUCCESS(Status)) goto Failure;
 
-    Status = AlpcpCreatePort(&ClientPort, PreviousMode, ClientObjectAttributes, PortAttributes, ALPC_PORT_TYPE_CLIENT, 0, ConnectionPort->MaxConnectionInfoLength, ConnectionPort->MaxMessageLength);
+    Status = AlpcpCreatePort(&ClientPort, ConnectionPort, PreviousMode, ClientObjectAttributes, PortAttributes, ALPC_PORT_TYPE_CLIENT, 0, ConnectionPort->MaxConnectionInfoLength, ConnectionPort->MaxMessageLength);
     if (!NT_SUCCESS(Status)) goto Failure;
 
     if (ClientPort->SecurityQos.ContextTrackingMode == SECURITY_DYNAMIC_TRACKING)
@@ -349,22 +349,20 @@ AlpcpConnectPortInternal(
     Status = AlpcpCaptureSendAttributes(ClientPort, Message, InAttributes, PreviousMode);
     if (!NT_SUCCESS(Status)) goto Failure;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(ConnectionPort);
     if (ConnectionPort->Flags & (ALPC_PORT_FLAG_NAME_DELETED | ALPC_PORT_FLAG_CLOSED))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(ConnectionPort);
         Status = STATUS_OBJECT_NAME_NOT_FOUND;
         goto Failure;
     }
     Message->OwnerPort = ConnectionPort;
-    Message->PortMessage.MessageId = AlpcpNextMessageId++;
-    if (!AlpcpNextMessageId) AlpcpNextMessageId = 1;
+    Message->PortMessage.MessageId = AlpcpAllocateMessageId();
     Message->Sequence = ConnectionPort->SequenceNo++;
     Message->WaitingThread = Thread;
-    Thread->AlpcMessage = Message;
-    Thread->AlpcMessageId = Message->PortMessage.MessageId;
+    AlpcpSetThreadMessage(Thread, Message);
     AlpcpQueueMessage(ConnectionPort, Message);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(ConnectionPort);
 
     Status = AlpcpWaitForReply(Message, WaitMode, Alertable, Timeout, NULL);
     if (Status != STATUS_SUCCESS)
@@ -738,14 +736,14 @@ NtAlpcAcceptConnectPort(
         return Status;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(ConnectionPort);
     Message = AlpcpFindPendingMessage(ConnectionPort, Header.MessageId, &Header.ClientId);
     if (!Message ||
         !(Message->State & ALPC_MSG_STATE_CONNECTION) ||
         !Message->WaitingThread ||
         (Message->State & (ALPC_MSG_STATE_ACCEPTED | ALPC_MSG_STATE_REFUSED | ALPC_MSG_STATE_CANCELED)))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(ConnectionPort);
         if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
         if (SendAttributes) ExFreePoolWithTag(SendAttributes, 'AcpA');
         ObDereferenceObject(ConnectionPort);
@@ -755,7 +753,7 @@ NtAlpcAcceptConnectPort(
     ObReferenceObject(ClientThread);
     AlpcpRemovePending(Message);
     Message->State |= ALPC_MSG_STATE_ACCEPT_IN_PROGRESS;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(ConnectionPort);
 
     Message->PortMessage.u1.s1.DataLength = (CSHORT)DataLength;
     Message->PortMessage.u1.s1.TotalLength = (CSHORT)(sizeof(PORT_MESSAGE) + DataLength);
@@ -766,17 +764,17 @@ NtAlpcAcceptConnectPort(
 
     if (!AcceptConnection)
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(ConnectionPort);
         Message->State &= ~ALPC_MSG_STATE_ACCEPT_IN_PROGRESS;
         AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_REFUSED, STATUS_PORT_CONNECTION_REFUSED);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(ConnectionPort);
         if (SendAttributes) ExFreePoolWithTag(SendAttributes, 'AcpA');
         ObDereferenceObject(ClientThread);
         ObDereferenceObject(ConnectionPort);
         return STATUS_SUCCESS;
     }
 
-    Status = AlpcpCreatePort(&ServerPort, PreviousMode, ObjectAttributes, Present ? &Attributes : NULL, ALPC_PORT_TYPE_SERVER, 0, ConnectionPort->MaxConnectionInfoLength, ConnectionPort->MaxMessageLength);
+    Status = AlpcpCreatePort(&ServerPort, ConnectionPort, PreviousMode, ObjectAttributes, Present ? &Attributes : NULL, ALPC_PORT_TYPE_SERVER, 0, ConnectionPort->MaxConnectionInfoLength, ConnectionPort->MaxMessageLength);
     if (!NT_SUCCESS(Status)) goto Refuse;
     ServerPort->PortContext = PortContext;
 
@@ -821,8 +819,10 @@ NtAlpcAcceptConnectPort(
         goto Refuse;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(ConnectionPort);
     ClientPort = Message->Connection.ClientPort;
+    Info->Domain = ConnectionPort->Domain;
+    AlpcpReferenceDomain(Info->Domain);
     ServerPort->CommunicationInfo = Info;
     ClientPort->CommunicationInfo = Info;
     InsertTailList(&ConnectionPort->CommunicationPorts, &Info->CommunicationList);
@@ -831,7 +831,7 @@ NtAlpcAcceptConnectPort(
     Message->State &= ~ALPC_MSG_STATE_ACCEPT_IN_PROGRESS;
     Message->State |= ALPC_MSG_STATE_ACCEPTED;
     AlpcpSignalWaiter(ClientThread);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(ConnectionPort);
 
     Status = AlpcpWriteHandle(PortHandle, Handle, PreviousMode);
 
@@ -842,10 +842,10 @@ NtAlpcAcceptConnectPort(
     return Status;
 
 Refuse:
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(ConnectionPort);
     Message->State &= ~ALPC_MSG_STATE_ACCEPT_IN_PROGRESS;
     AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_REFUSED, STATUS_PORT_CONNECTION_REFUSED);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(ConnectionPort);
     if (ServerPort) ObDereferenceObject(ServerPort);
     if (SendAttributes) ExFreePoolWithTag(SendAttributes, 'AcpA');
     ObDereferenceObject(ClientThread);

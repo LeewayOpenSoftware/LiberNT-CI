@@ -31,6 +31,14 @@ LibIP6SetNeighbor(struct _IP6_NEIGHBOR_SET *Request);
 NTSTATUS
 LibIP6GetBestRoute(struct _IP6_BEST_ROUTE *Request);
 
+struct _IP_PATH_TABLE;
+
+NTSTATUS
+LibIP6QueryPaths(struct _IP_PATH_TABLE *Table, ULONG Length, PULONG Information);
+
+NTSTATUS
+LibIP6FlushPaths(VOID);
+
 #include <tcpioctl.h>
 /* FIXME */
 #define DWORD ULONG

@@ -415,9 +415,9 @@ AlpcpCreateViewInternal(
     View->ReferenceCount = 1;
     View->Secure = !(Flags & ALPC_VIEWFLG_NOT_SECURE);
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     InsertTailList(&Port->ViewList, &View->Entry);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     *ViewSize = Size;
     *OutView = View;
@@ -452,15 +452,15 @@ AlpcpRundownResources(
 
     for (;;)
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (IsListEmpty(&Port->ViewList))
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             break;
         }
         Entry = RemoveHeadList(&Port->ViewList);
         InitializeListHead(Entry);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         View = CONTAINING_RECORD(Entry, KALPC_VIEW, Entry);
         if (View->Section) InterlockedDecrement(&View->Section->ViewCount);
         AlpcpDereferenceView(View);
@@ -468,45 +468,45 @@ AlpcpRundownResources(
 
     for (;;)
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (IsListEmpty(&Port->SectionList))
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             break;
         }
         Entry = RemoveHeadList(&Port->SectionList);
         InitializeListHead(Entry);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         Section = CONTAINING_RECORD(Entry, KALPC_SECTION, Entry);
         AlpcpDereferenceSection(Section);
     }
 
     for (;;)
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (IsListEmpty(&Port->SecurityList))
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             break;
         }
         Entry = RemoveHeadList(&Port->SecurityList);
         InitializeListHead(Entry);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         Data = CONTAINING_RECORD(Entry, KALPC_SECURITY_DATA, Entry);
         AlpcpDereferenceSecurityData(Data);
     }
 
     for (;;)
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (IsListEmpty(&Port->ReserveList))
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             break;
         }
         Entry = RemoveHeadList(&Port->ReserveList);
         InitializeListHead(Entry);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         Reserve = CONTAINING_RECORD(Entry, KALPC_RESERVE, Entry);
         if (Reserve->Message) AlpcpFreeMessage(Reserve->Message);
         ExFreePoolWithTag(Reserve, 'RsvA');
@@ -582,17 +582,17 @@ AlpcpCaptureSendAttributes(
         if (ViewAttr->Flags & ~ALPC_VIEWFLG_VALID) return STATUS_INVALID_PARAMETER;
         if (!ViewAttr->SectionHandle) goto SkipViewAttribute;
         if (!ViewAttr->ViewBase) return STATUS_INVALID_ADDRESS;
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         Section = AlpcpLookupSection(Port, (ULONG)(ULONG_PTR)ViewAttr->SectionHandle);
         if (!Section)
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             return STATUS_INVALID_HANDLE;
         }
         View = AlpcpLookupView(Port, ViewAttr->ViewBase);
         if (View && View->Section == Section) InterlockedIncrement(&View->ReferenceCount);
         else View = NULL;
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         if (!View) return STATUS_INVALID_ADDRESS;
         Message->Attributes.View = View;
         Message->Attributes.ViewFlags = ViewAttr->Flags;
@@ -603,10 +603,10 @@ SkipViewAttribute:;
     if (Valid & ALPC_MESSAGE_SECURITY_ATTRIBUTE)
     {
         SecurityAttr = AlpcpAttributePointer(Attributes, ALPC_MESSAGE_SECURITY_ATTRIBUTE);
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         Data = AlpcpLookupSecurityData(Port, (ULONG)(ULONG_PTR)SecurityAttr->ContextHandle);
         if (Data) InterlockedIncrement(&Data->ReferenceCount);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         if (!Data) return STATUS_INVALID_PARAMETER;
         Message->Attributes.SecurityData = Data;
         Message->Attributes.ValidAttributes |= ALPC_MESSAGE_SECURITY_ATTRIBUTE;
@@ -822,9 +822,9 @@ AlpcpExposeReceiveAttributes(
             }
             else
             {
-                AlpcpAcquireLock();
+                AlpcpAcquirePortLock(Port);
                 View = AlpcpFindViewBySection(Port, SourceView->Section);
-                AlpcpReleaseLock();
+                AlpcpReleasePortLock(Port);
                 Status = STATUS_SUCCESS;
                 if (!View)
                 {
@@ -951,7 +951,7 @@ AlpcpImpersonateMessage(
     RequireLevel = (Flags & (ALPC_IMPERSONATEFLG_REQUIRE_IMPERSONATION_LEVEL |
                              ((ULONG)RequiredLevel << 2))) != 0;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (Message->Attributes.SecurityData)
     {
         Data = Message->Attributes.SecurityData;
@@ -964,7 +964,7 @@ AlpcpImpersonateMessage(
         Dynamic = (ClientPort->Flags & ALPC_PORT_FLAG_DYNAMIC_SECURITY) != 0;
         Qos = ClientPort->SecurityQos;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (Data)
     {
@@ -1105,10 +1105,10 @@ NtAlpcCreatePortSection(
     Section->OwnerPort = Port;
     Section->ReferenceCount = 1;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Section->Handle = Port->NextResourceHandle++;
     InsertTailList(&Port->SectionList, &Section->Entry);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     Handle = (ALPC_HANDLE)(ULONG_PTR)Section->Handle;
     if (PreviousMode != KernelMode)
@@ -1132,13 +1132,13 @@ NtAlpcCreatePortSection(
 
     if (!NT_SUCCESS(Status))
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (!IsListEmpty(&Section->Entry))
         {
             RemoveEntryList(&Section->Entry);
             InitializeListHead(&Section->Entry);
         }
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpDereferenceSection(Section);
     }
 
@@ -1166,7 +1166,7 @@ NtAlpcDeletePortSection(
     Status = AlpcpReferencePortByHandle(PortHandle, PORT_CONNECT, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Section = AlpcpLookupSection(Port, (ULONG)(ULONG_PTR)SectionHandle);
     if (Section && (Section->ReferenceCount == 1) && !Section->ViewCount)
     {
@@ -1177,7 +1177,7 @@ NtAlpcDeletePortSection(
     {
         DeletePending = TRUE;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (Section && !DeletePending) AlpcpDereferenceSection(Section);
     ObDereferenceObject(Port);
@@ -1228,10 +1228,10 @@ NtAlpcCreateSectionView(
     Status = AlpcpReferencePortByHandle(PortHandle, PORT_CONNECT, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Section = AlpcpLookupSection(Port, (ULONG)(ULONG_PTR)Captured.SectionHandle);
     if (Section) InterlockedIncrement(&Section->ReferenceCount);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     if (!Section)
     {
         ObDereferenceObject(Port);
@@ -1296,7 +1296,7 @@ NtAlpcDeleteSectionView(
     Status = AlpcpReferencePortByHandle(PortHandle, PORT_CONNECT, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     View = AlpcpLookupView(Port, ViewBase);
     if (View && (View->ReferenceCount == 1))
     {
@@ -1308,7 +1308,7 @@ NtAlpcDeleteSectionView(
         View->DeletePending = TRUE;
         DeletePending = TRUE;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (View && !DeletePending)
     {
@@ -1348,10 +1348,10 @@ AlpcpCreateSecurityContextForThread(
         return Status;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Data->Handle = Port->NextResourceHandle++ + ALPC_SECURITY_CONTEXT_ID_BIAS;
     InsertTailList(&Port->SecurityList, &Data->Entry);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     *SecurityData = Data;
     return STATUS_SUCCESS;
@@ -1430,13 +1430,13 @@ NtAlpcCreateSecurityContext(
 
     if (!NT_SUCCESS(Status))
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (!IsListEmpty(&Data->Entry))
         {
             RemoveEntryList(&Data->Entry);
             InitializeListHead(&Data->Entry);
         }
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpDereferenceSecurityData(Data);
     }
 
@@ -1490,7 +1490,7 @@ AlpcpDeleteOrRevokeSecurityContext(
     Status = AlpcpReferencePortByHandle(PortHandle, PORT_CONNECT, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Data = AlpcpLookupSecurityData(Port, (ULONG)(ULONG_PTR)ContextHandle);
     if (Data)
     {
@@ -1512,7 +1512,7 @@ AlpcpDeleteOrRevokeSecurityContext(
             InitializeListHead(&Data->Entry);
         }
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (Data && !Conflict && !Revoke) AlpcpDereferenceSecurityData(Data);
     ObDereferenceObject(Port);
@@ -1599,10 +1599,10 @@ NtAlpcCreateResourceReserve(
         return STATUS_NO_MEMORY;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Reserve->Handle = Port->NextResourceHandle++;
     InsertTailList(&Port->ReserveList, &Reserve->Entry);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (PreviousMode != KernelMode)
     {
@@ -1623,13 +1623,13 @@ NtAlpcCreateResourceReserve(
 
     if (!NT_SUCCESS(Status))
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (!IsListEmpty(&Reserve->Entry))
         {
             RemoveEntryList(&Reserve->Entry);
             InitializeListHead(&Reserve->Entry);
         }
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpFreeMessage(Reserve->Message);
         ExFreePoolWithTag(Reserve, 'RsvA');
     }
@@ -1660,7 +1660,7 @@ NtAlpcDeleteResourceReserve(
     Status = AlpcpReferencePortByHandle(PortHandle, PORT_CONNECT, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     for (Entry = Port->ReserveList.Flink; Entry != &Port->ReserveList; Entry = Entry->Flink)
     {
         Current = CONTAINING_RECORD(Entry, KALPC_RESERVE, Entry);
@@ -1682,7 +1682,7 @@ NtAlpcDeleteResourceReserve(
             break;
         }
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (Reserve && !DeletePending)
     {

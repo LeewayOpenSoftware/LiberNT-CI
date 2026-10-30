@@ -1,0 +1,19 @@
+/*
+ * PROJECT:     LiberNT NetAdapterCx
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Packet Monitor drop locations NetAdapterCx reports
+ * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193.001@gmail.com>
+ */
+
+#pragma once
+
+typedef enum _PKTMON_DROP_LOCATION
+{
+    PMLOC_NETCX_NETPACKET_LAYOUT_PARSE_FAIL = (int)0xE0007001,
+    PMLOC_NETCX_SOFTWARE_CHECKSUM_FAILURE = (int)0xE0007002,
+    PMLOC_NETCX_NIC_QUEUE_STOP = (int)0xE0007003,
+    PMLOC_NETCX_INVALID_NETBUFFER_LENGTH = (int)0xE0007004,
+    PMLOC_NETCX_NBL_LSO_FAILURE = (int)0xE0007005,
+    PMLOC_NETCX_NBL_USO_FAILURE = (int)0xE0007006,
+    PMLOC_NETCX_BUFFER_BOUNCE_FAILURE = (int)0xE0007007,
+} PKTMON_DROP_LOCATION;

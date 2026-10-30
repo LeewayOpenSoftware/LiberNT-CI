@@ -685,6 +685,8 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
         {
            PWND spwndActive = ptiTo->MessageQueue->spwndActive;
            PWND spwndFocus  = ptiTo->MessageQueue->spwndFocus;
+           PWND spwndCapture = ptiTo->MessageQueue->spwndCapture;
+           BOOL bForeground = (ptiTo->MessageQueue == gpqForeground);
 
            if (gptiForeground == ptiFrom)
            {
@@ -720,6 +722,35 @@ UserAttachThreadInput(PTHREADINFO ptiFrom, PTHREADINFO ptiTo, BOOL fAttach)
               {
                  ptiFrom->MessageQueue->spwndFocus = spwndFocus;
                  ptiTo->MessageQueue->spwndFocus = 0;
+              }
+           }
+           if (spwndCapture && spwndCapture->head.pti == ptiFrom)
+           {
+              ptiFrom->MessageQueue->spwndCapture = spwndCapture;
+              ptiTo->MessageQueue->spwndCapture = NULL;
+           }
+           if (bForeground && spwndActive &&
+               (spwndActive->head.pti->TIF_flags & TIF_INCLEANUP))
+           {
+              PTHREADINFO ptiLive = (spwndActive->head.pti == ptiTo) ? ptiFrom : ptiTo;
+              PWND pwnd = NULL;
+
+              if (!(ptiLive->TIF_flags & TIF_INCLEANUP) && ptiLive->pDeskInfo && ptiLive->pDeskInfo->spwnd)
+              {
+                 for (pwnd = ptiLive->pDeskInfo->spwnd->spwndChild; pwnd; pwnd = pwnd->spwndNext)
+                 {
+                    if (pwnd->head.pti == ptiLive && can_activate_window(pwnd))
+                       break;
+                 }
+              }
+              if (pwnd)
+              {
+                 spwndActive->head.pti->MessageQueue->spwndActive = NULL;
+                 ptiLive->MessageQueue->spwndActive = pwnd;
+                 ptiLive->MessageQueue->spwndFocus = pwnd;
+                 IntSetFocusMessageQueue(NULL);
+                 IntSetFocusMessageQueue(ptiLive->MessageQueue);
+                 IntSetForegroundThread(ptiLive);
               }
            }
            ptiTo->MessageQueue->iCursorLevel -= ptiFrom->iCursorLevel;

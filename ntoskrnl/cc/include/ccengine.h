@@ -65,8 +65,7 @@ typedef struct _CC_CACHE
     PCC_VIEW View;
     ULONG ViewCount;
     CC_LRU_SHARD Lru[CC_LRU_SHARDS];
-    CC_LOCK ReclaimLock;
-    ULONG ReclaimCursor;
+    volatile ULONG ReclaimCursor;
 
     CC_LOCK DirtyLock;
     LIST_ENTRY DirtyMaps;
@@ -222,6 +221,7 @@ VOID CcDirtyDiscard(_Inout_ PCC_MAP Map, _In_ ULONG64 FileOffset, _In_ ULONG64 L
 BOOLEAN CcDirtyQuery(_In_ PCC_MAP Map, _In_ ULONG64 FileOffset, _In_ ULONG64 Length);
 BOOLEAN CcDirtyCanWrite(_In_ PCC_CACHE Cache, _In_opt_ PCC_MAP Map, _In_ ULONG BytesToWrite);
 PCC_MAP CcDirtyNextMap(_Inout_ PCC_CACHE Cache);
+PCC_MAP CcDirtyNextMapAccept(_Inout_ PCC_CACHE Cache, _In_ BOOLEAN (*Accept)(_In_ PCC_MAP Map), _Out_ PBOOLEAN Accepted);
 ULONG CcDirtyLazyTarget(_In_ PCC_CACHE Cache);
 
 NTSTATUS CcBcbAcquire(_Inout_ PCC_MAP Map, _In_ ULONG64 FileOffset, _In_ ULONG Length, _In_ BOOLEAN Pinned,

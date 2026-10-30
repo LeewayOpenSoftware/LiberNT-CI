@@ -537,9 +537,7 @@ MiSegmentCreateEx(
     if (!MI_PROT_IS_ACCESSIBLE(Protection))
         return STATUS_INVALID_PAGE_PROTECTION;
 
-    if ((Protection & MI_PROT_NOCACHE) &&
-        (Kind != MiSegmentPageFileBacked ||
-         !(MiArchPteLeafFlags(MiArchPteMakeLeaf(0, MI_PROT_READWRITE, MI_LEAF_NOCACHE)) & MI_LEAF_NOCACHE)))
+    if ((Protection & MI_PROT_NOCACHE) && Kind != MiSegmentPageFileBacked)
         return STATUS_NOT_SUPPORTED;
 
     if (Kind != MiSegmentPageFileBacked && (FileOps == NULL || FileOps->Read == NULL))

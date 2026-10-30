@@ -394,7 +394,7 @@ AlpcpRegisterCompletionList(
     CompletionList->Header->EndMagic = ALPC_COMPLETION_LIST_END_MAGIC;
     RtlFillMemoryUlong(CompletionList->List, CompletionList->ListSize, MAXULONG);
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (Port->CompletionList)
     {
         Status = STATUS_PORT_ALREADY_HAS_COMPLETION_LIST;
@@ -410,7 +410,7 @@ AlpcpRegisterCompletionList(
         Port->Flags &= ~ALPC_PORT_FLAG_COMPLETION_RUNDOWN;
         CompletionList = NULL;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (CompletionList) AlpcpFreeCompletionList(CompletionList);
     return Status;
@@ -424,14 +424,14 @@ AlpcpAdjustCompletionListConcurrencyCount(
 {
     if (!ConcurrencyCount) return STATUS_INVALID_PARAMETER;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (!Port->CompletionList)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_INVALID_PARAMETER;
     }
     Port->CompletionList->ConcurrencyCount = ConcurrencyCount;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     return STATUS_SUCCESS;
 }
 
@@ -443,11 +443,11 @@ AlpcpRundownCompletionList(
     PKALPC_COMPLETION_LIST CompletionList;
     ULONGLONG State;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     CompletionList = Port->CompletionList;
     if (!CompletionList)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_INVALID_PARAMETER;
     }
     Port->Flags |= ALPC_PORT_FLAG_COMPLETION_RUNDOWN;
@@ -457,7 +457,7 @@ AlpcpRundownCompletionList(
     InterlockedExchange64(&CompletionList->Header->State, (LONGLONG)State);
     RtlZeroMemory((PVOID)CompletionList->Bitmap, CompletionList->BitmapSize);
     CompletionList->Header->ReturnCount = CompletionList->Header->PostCount;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     return STATUS_SUCCESS;
 }
 
@@ -470,23 +470,23 @@ AlpcpUnregisterCompletionList(
     PKALPC_COMPLETION_LIST CompletionList;
     ULONGLONG State;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     CompletionList = Port->CompletionList;
     if (!CompletionList)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_INVALID_PARAMETER;
     }
     State = (ULONGLONG)CompletionList->Header->State;
     if (!Force && (State >> ALPC_COMPLETION_LIST_ACTIVE_SHIFT))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_RESOURCE_IN_USE;
     }
     Port->CompletionList = NULL;
     Port->Flags &= ~(ALPC_PORT_FLAG_HAS_COMPLETION_LIST |
                      ALPC_PORT_FLAG_COMPLETION_RUNDOWN);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     AlpcpFreeCompletionList(CompletionList);
     return STATUS_SUCCESS;

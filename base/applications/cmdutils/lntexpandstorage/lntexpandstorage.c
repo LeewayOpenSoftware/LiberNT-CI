@@ -260,10 +260,14 @@ QuerySystemDrive(PULONG DriveNumber, PULONG PartitionNumber)
                              sizeof(Number),
                              &Returned,
                              NULL);
+    Returned = Result ? ERROR_SUCCESS : GetLastError();
     CloseHandle(Volume);
 
     if (!Result)
+    {
+        SetLastError(Returned);
         return FALSE;
+    }
 
     *DriveNumber = Number.DeviceNumber;
     *PartitionNumber = Number.PartitionNumber;
@@ -922,6 +926,11 @@ main(int argc, char* argv[])
     {
         if (!QuerySystemDrive(&DriveNumber, &SystemPartition))
         {
+            if (GetLastError() == ERROR_INVALID_FUNCTION)
+            {
+                Print("lntexpandstorage: the system volume is not on a disk\n");
+                return ERROR_NOT_SUPPORTED;
+            }
             Print("lntexpandstorage: cannot resolve the system drive, use /d\n");
             return 1;
         }

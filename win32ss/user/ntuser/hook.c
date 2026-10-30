@@ -313,6 +313,65 @@ co_IntCallLowLevelHook(PHOOK Hook,
 }
 
 
+static
+LRESULT
+FASTCALL
+co_HOOK_CallLowLevelChain(PHOOK Hook, INT Code, WPARAM wParam, LPARAM lParam)
+{
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+    PCLIENTINFO ClientInfo = pti->pClientInfo;
+    PHOOK SaveHook = pti->sphkCurrent;
+    LRESULT Result;
+    USER_REFERENCE_ENTRY Ref;
+
+    UserRefObjectCo(Hook, &Ref);
+    pti->sphkCurrent = Hook;
+    UserDomainLockExclusive(DLT_HOOK);
+    Hook->phkNext = IntGetNextHook(Hook);
+    UserDomainUnlockExclusive(DLT_HOOK);
+    if (ClientInfo)
+    {
+       _SEH2_TRY
+       {
+          ClientInfo->phkCurrent = Hook;
+       }
+       _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+       {
+          ClientInfo = NULL;
+       }
+       _SEH2_END;
+    }
+
+    Result = co_IntCallHookProc(Hook->HookId,
+                                Code,
+                                wParam,
+                                lParam,
+                                Hook->Proc,
+                                Hook->ihmod,
+                                Hook->offPfn,
+                                Hook->Ansi,
+                               &Hook->ModuleName);
+
+    if (ClientInfo)
+    {
+       _SEH2_TRY
+       {
+          ClientInfo->phkCurrent = SaveHook;
+       }
+       _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+       {
+          (void)0;
+       }
+       _SEH2_END;
+    }
+    pti->sphkCurrent = SaveHook;
+    UserDomainLockExclusive(DLT_HOOK);
+    Hook->phkNext = NULL;
+    UserDomainUnlockExclusive(DLT_HOOK);
+    UserDerefObjectCo(Hook);
+    return Result;
+}
+
 //
 // Dispatch MsgQueue Hook Call processor!
 //
@@ -342,7 +401,12 @@ co_CallHook( INT HookId,
           break;
     }
 
-    if (!UserObjectInDestroy(UserHMGetHandle(phk))) //// Fix CORE-10549.
+    if (!UserObjectInDestroy(UserHMGetHandle(phk)) &&
+        (HookId == WH_KEYBOARD_LL || HookId == WH_MOUSE_LL))
+    {
+       Result = co_HOOK_CallLowLevelChain(phk, Code, wParam, lParam);
+    }
+    else if (!UserObjectInDestroy(UserHMGetHandle(phk))) //// Fix CORE-10549.
     {
     /* The odds are high for this to be a Global call. */
     Result = co_IntCallHookProc( HookId,
@@ -596,7 +660,10 @@ co_UserCallNextHookEx(PHOOK Hook,
 
             if (!BadChk)
             {
-                lResult = co_HOOK_CallHookNext(Hook, Code, wParam, (LPARAM)&Mouse);
+                if (Hook->head.pti != PsGetCurrentThreadWin32Thread())
+                    lResult = co_IntCallLowLevelHook(Hook, Code, wParam, (LPARAM)&Mouse);
+                else
+                    lResult = co_HOOK_CallHookNext(Hook, Code, wParam, (LPARAM)&Mouse);
             }
             break;
         }
@@ -631,7 +698,10 @@ co_UserCallNextHookEx(PHOOK Hook,
 
             if (!BadChk)
             {
-                lResult = co_HOOK_CallHookNext(Hook, Code, wParam, (LPARAM)&Keyboard);
+                if (Hook->head.pti != PsGetCurrentThreadWin32Thread())
+                    lResult = co_IntCallLowLevelHook(Hook, Code, wParam, (LPARAM)&Keyboard);
+                else
+                    lResult = co_HOOK_CallHookNext(Hook, Code, wParam, (LPARAM)&Keyboard);
             }
             break;
         }
@@ -1227,6 +1297,9 @@ co_HOOK_CallHooks( INT HookId,
        UserDerefObjectCo(Hook);
        IntDereferenceThreadInfo(pti);
        ObDereferenceObject(pti->pEThread);
+
+       if (Result)
+          goto Exit;
     }
 
     if ( Global )
@@ -1299,19 +1372,28 @@ co_HOOK_CallHooks( INT HookId,
              TRACE("Global going Local Hook calling to Thread! %d\n",HookId );
              ObReferenceObject(pti->pEThread);
              IntReferenceThreadInfo(pti);
-             Result = co_IntCallHookProc( HookId,
-                                          Code,
-                                          wParam,
-                                          lParam,
-                                          Hook->Proc,
-                                          Hook->ihmod,
-                                          Hook->offPfn,
-                                          Hook->Ansi,
-                                         &Hook->ModuleName);
+             if (HookId == WH_KEYBOARD_LL || HookId == WH_MOUSE_LL)
+             {
+                Result = co_HOOK_CallLowLevelChain(Hook, Code, wParam, lParam);
+             }
+             else
+             {
+                Result = co_IntCallHookProc( HookId,
+                                             Code,
+                                             wParam,
+                                             lParam,
+                                             Hook->Proc,
+                                             Hook->ihmod,
+                                             Hook->offPfn,
+                                             Hook->Ansi,
+                                            &Hook->ModuleName);
+             }
              IntDereferenceThreadInfo(pti);
              ObDereferenceObject(pti->pEThread);
           }
           UserDerefObjectCo(Hook);
+          if (HookId == WH_KEYBOARD_LL || HookId == WH_MOUSE_LL)
+             break;
        }
        ExFreePoolWithTag(pHookHandles, TAG_HOOK);
        TRACE("Ret: Global HookId %d Result 0x%x\n", HookId,Result);
@@ -1539,6 +1621,11 @@ NtUserSetWindowsHookEx( HINSTANCE Mod,
     else  /* System-global hook */
     {
        ptiHook = pti; // gptiCurrent;
+       if (HookId == WH_JOURNALRECORD || HookId == WH_JOURNALPLAYBACK)
+       {
+          EngSetLastError(ERROR_ACCESS_DENIED);
+          goto Cleanup;
+       }
        if ( !Mod &&
             (HookId == WH_GETMESSAGE ||
              HookId == WH_CALLWNDPROC ||

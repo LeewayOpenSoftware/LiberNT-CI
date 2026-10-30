@@ -9,7 +9,6 @@
 
 #include "lxcore.h"
 
-#define LX_HOST_USER_LIMIT      0x100000000ULL
 #define LX_HOST_OBJECT_FILE     1
 #define LX_HOST_OBJECT_SECTION  2
 

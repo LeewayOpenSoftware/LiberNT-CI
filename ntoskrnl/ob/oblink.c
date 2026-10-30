@@ -76,7 +76,7 @@ ObpProcessDosDeviceSymbolicLink(IN POBJECT_SYMBOLIC_LINK SymbolicLink,
         /* Otherwise, use the one in the process */
         else
         {
-            DeviceMap = PsGetCurrentProcess()->DeviceMap.Object;
+            DeviceMap = ExGetObjectFastReference(PsGetCurrentProcess()->DeviceMap);
         }
 
 ReparseTargetPath:
@@ -250,17 +250,11 @@ ReparseTargetPath:
         /* If it was a drive letter */
         if (DeviceMap != NULL)
         {
-            /* Acquire the device map lock */
-            KeAcquireGuardedMutex(&ObpDeviceMapLock);
-
             /* Remove the drive entry */
             DeviceMap->DriveType[SymbolicLink->DosDeviceDriveIndex - 1] =
                 DOSDEVICE_DRIVE_UNKNOWN;
-            DeviceMap->DriveMap &=
-                ~(1 << (SymbolicLink->DosDeviceDriveIndex - 1));
-
-            /* Release the device map lock */
-            KeReleaseGuardedMutex(&ObpDeviceMapLock);
+            InterlockedAnd((PLONG)&DeviceMap->DriveMap,
+                           ~(1 << (SymbolicLink->DosDeviceDriveIndex - 1)));
 
             /* Reset the drive index, valid drive index starts from 1 */
             SymbolicLink->DosDeviceDriveIndex = 0;
@@ -307,16 +301,10 @@ ReparseTargetPath:
         /* Add a new drive entry */
         if (DeviceMap != NULL)
         {
-            /* Acquire the device map lock */
-            KeAcquireGuardedMutex(&ObpDeviceMapLock);
-
             DeviceMap->DriveType[SymbolicLink->DosDeviceDriveIndex - 1] =
                 (UCHAR)DriveType;
-            DeviceMap->DriveMap |=
-                1 << (SymbolicLink->DosDeviceDriveIndex - 1);
-
-            /* Release the device map lock */
-            KeReleaseGuardedMutex(&ObpDeviceMapLock);
+            InterlockedOr((PLONG)&DeviceMap->DriveMap,
+                          1 << (SymbolicLink->DosDeviceDriveIndex - 1));
         }
     }
 

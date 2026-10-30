@@ -385,9 +385,6 @@ typedef struct _NET_BUFFER_LIST_POOL_PARAMETERS
  * Offload Capabilities
  * ============================================================================ */
 
-#ifndef NDIS_OFFLOAD_DEFINED
-/* NDIS_OFFLOAD is complex; rely on system headers */
-#endif
 
 /* ============================================================================
  * Function Pointer Types for NDIS 6.x Miniport
@@ -946,95 +943,6 @@ Usbrndis_NdisGetDataBufferLowPriority(
 #define NDIS_ENCAPSULATION_NOT_SUPPORTED    0x00000000
 #endif
 
-#ifndef NDIS_OFFLOAD_DEFINED
-/* TCP/IP Checksum Offload structure */
-typedef struct _NDIS_TCP_IP_CHECKSUM_OFFLOAD {
-    struct {
-        ULONG Encapsulation;
-        ULONG IpOptionsSupported:2;
-        ULONG TcpOptionsSupported:2;
-        ULONG TcpChecksum:2;
-        ULONG UdpChecksum:2;
-        ULONG IpChecksum:2;
-    } IPv4Transmit;
-
-    struct {
-        ULONG Encapsulation;
-        ULONG IpOptionsSupported:2;
-        ULONG TcpOptionsSupported:2;
-        ULONG TcpChecksum:2;
-        ULONG UdpChecksum:2;
-        ULONG IpChecksum:2;
-    } IPv4Receive;
-
-    struct {
-        ULONG Encapsulation;
-        ULONG IpExtensionHeadersSupported:2;
-        ULONG TcpOptionsSupported:2;
-        ULONG TcpChecksum:2;
-        ULONG UdpChecksum:2;
-    } IPv6Transmit;
-
-    struct {
-        ULONG Encapsulation;
-        ULONG IpExtensionHeadersSupported:2;
-        ULONG TcpOptionsSupported:2;
-        ULONG TcpChecksum:2;
-        ULONG UdpChecksum:2;
-    } IPv6Receive;
-} NDIS_TCP_IP_CHECKSUM_OFFLOAD, *PNDIS_TCP_IP_CHECKSUM_OFFLOAD;
-
-/* Large Send Offload version 1 structure */
-typedef struct _NDIS_TCP_LARGE_SEND_OFFLOAD_V1 {
-    struct {
-        ULONG Encapsulation;
-        ULONG MaxOffLoadSize;
-        ULONG MinSegmentCount;
-        ULONG TcpOptions:2;
-        ULONG IpOptions:2;
-    } IPv4;
-} NDIS_TCP_LARGE_SEND_OFFLOAD_V1, *PNDIS_TCP_LARGE_SEND_OFFLOAD_V1;
-
-/* Large Send Offload version 2 structure */
-typedef struct _NDIS_TCP_LARGE_SEND_OFFLOAD_V2 {
-    struct {
-        ULONG Encapsulation;
-        ULONG MaxOffLoadSize;
-        ULONG MinSegmentCount;
-    } IPv4;
-    struct {
-        ULONG Encapsulation;
-        ULONG MaxOffLoadSize;
-        ULONG MinSegmentCount;
-        ULONG IpExtensionHeadersSupported:2;
-        ULONG TcpOptionsSupported:2;
-    } IPv6;
-} NDIS_TCP_LARGE_SEND_OFFLOAD_V2, *PNDIS_TCP_LARGE_SEND_OFFLOAD_V2;
-
-/* IPSEC Offload v1 - minimal placeholder */
-typedef struct _NDIS_IPSEC_OFFLOAD_V1 {
-    struct {
-        ULONG Encapsulation;
-    } Supported;
-    struct {
-        ULONG Encapsulation;
-    } IPv4AH;
-    struct {
-        ULONG Encapsulation;
-    } IPv4ESP;
-} NDIS_IPSEC_OFFLOAD_V1, *PNDIS_IPSEC_OFFLOAD_V1;
-
-/* Main NDIS_OFFLOAD structure */
-typedef struct _NDIS_OFFLOAD {
-    NDIS_OBJECT_HEADER              Header;
-    NDIS_TCP_IP_CHECKSUM_OFFLOAD    Checksum;
-    NDIS_TCP_LARGE_SEND_OFFLOAD_V1  LsoV1;
-    NDIS_IPSEC_OFFLOAD_V1           IPsecV1;
-    NDIS_TCP_LARGE_SEND_OFFLOAD_V2  LsoV2;
-    ULONG                           Flags;
-} NDIS_OFFLOAD, *PNDIS_OFFLOAD;
-#define NDIS_OFFLOAD_DEFINED 1
-#endif
 
 /* ============================================================================
  * NDIS_OFFLOAD_PARAMETERS Structure Definition
@@ -1068,24 +976,6 @@ typedef struct _NDIS_OFFLOAD {
 #define NDIS_OBJECT_TYPE_DEFAULT_OFFLOAD_PARAMETERS     0x91
 #endif
 
-#ifndef NDIS_OFFLOAD_PARAMETERS_DEFINED
-typedef struct _NDIS_OFFLOAD_PARAMETERS {
-    NDIS_OBJECT_HEADER      Header;
-    UCHAR                   IPv4Checksum;
-    UCHAR                   TCPIPv4Checksum;
-    UCHAR                   UDPIPv4Checksum;
-    UCHAR                   TCPIPv6Checksum;
-    UCHAR                   UDPIPv6Checksum;
-    UCHAR                   LsoV1;
-    UCHAR                   IPsecV1;
-    UCHAR                   LsoV2IPv4;
-    UCHAR                   LsoV2IPv6;
-    UCHAR                   TcpConnectionIPv4;
-    UCHAR                   TcpConnectionIPv6;
-    ULONG                   Flags;
-} NDIS_OFFLOAD_PARAMETERS, *PNDIS_OFFLOAD_PARAMETERS;
-#define NDIS_OFFLOAD_PARAMETERS_DEFINED 1
-#endif
 
 /* ============================================================================
  * NDIS 6.x OID Values

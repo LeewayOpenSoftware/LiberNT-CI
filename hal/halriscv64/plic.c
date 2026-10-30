@@ -228,6 +228,18 @@ HalpRiscvPlicUnlockEnable(KIRQL OldIrql)
     KeLowerIrql(OldIrql);
 }
 
+ULONG
+HalpSecondaryArchGsivBase(VOID)
+{
+    return RISCV_PLIC_MAX_SOURCE + 1;
+}
+
+ULONG
+HalpSecondaryArchVectorBase(VOID)
+{
+    return RISCV_PLIC_MAX_SOURCE + 1;
+}
+
 BOOLEAN
 NTAPI
 HalEnableSystemInterrupt(ULONG Vector, KIRQL Irql, KINTERRUPT_MODE Mode)
@@ -236,6 +248,8 @@ HalEnableSystemInterrupt(ULONG Vector, KIRQL Irql, KINTERRUPT_MODE Mode)
     KIRQL OldIrql;
     ULONG Bit;
 
+    if (HalpSecondaryIsIntId(Vector))
+        return HalpSecondaryEnable(Vector, Mode);
     if (!HalpRiscvPlic.Mapping || !HalpRiscvPlicValidSource(Vector) ||
         (Irql != RISCV_HAL_EXTERNAL_IRQL && Irql != PASSIVE_LEVEL) || Mode != LevelSensitive)
         return FALSE;
@@ -259,6 +273,11 @@ HalDisableSystemInterrupt(ULONG Vector, KIRQL Irql)
     KIRQL OldIrql;
     ULONG Bit;
 
+    if (HalpSecondaryIsIntId(Vector))
+    {
+        HalpSecondaryDisable(Vector);
+        return;
+    }
     if (!HalpRiscvPlic.Mapping || !HalpRiscvPlicValidSource(Vector) ||
         (Irql != RISCV_HAL_EXTERNAL_IRQL && Irql != PASSIVE_LEVEL))
         return;

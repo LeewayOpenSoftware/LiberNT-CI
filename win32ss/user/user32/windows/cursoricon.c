@@ -1896,9 +1896,6 @@ CURSORICON_LoadFromFileW(
     if(!entry)
         goto end;
 
-    /* Fix dimensions */
-    if(!cxDesired) cxDesired = entry->bWidth;
-    if(!cyDesired) cyDesired = entry->bHeight;
     cursorData.cx = cxDesired;
     cursorData.cy = cyDesired;
     /* A bit of preparation */
@@ -1977,6 +1974,9 @@ CURSORICON_LoadImageW(
     CURSORICONDIR* dir;
     WORD wResId;
     LPBYTE bits;
+    DWORD cbBits;
+    PBYTE pbBmpIcon;
+    DWORD BmpIconSize;
     CURSORDATA cursorData;
     BOOL bStatus;
     UNICODE_STRING ustrRsrc;
@@ -2044,6 +2044,7 @@ CURSORICON_LoadImageW(
     else if(hinst)
     {
         DWORD size = MAX_PATH;
+        DWORD LastError = GetLastError();
         /* Get the module name string */
         while (TRUE)
         {
@@ -2072,6 +2073,7 @@ CURSORICON_LoadImageW(
             ustrModule.Buffer[ret] = UNICODE_NULL;
             ustrModule.Length = (USHORT)(ret * sizeof(WCHAR));
             ustrModule.MaximumLength = (USHORT)(size * sizeof(WCHAR));
+            SetLastError(LastError);
             break;
         }
     }
@@ -2161,6 +2163,7 @@ CURSORICON_LoadImageW(
         FreeResource(handle);
         goto done;
     }
+    cbBits = SizeofResource(hinst, hrsrc);
 
     ZeroMemory(&cursorData, sizeof(cursorData));
 
@@ -2174,6 +2177,7 @@ CURSORICON_LoadImageW(
         cursorData.xHotspot = ptr[0];
         cursorData.yHotspot = ptr[1];
         bits += 2*sizeof(SHORT);
+        cbBits = cbBits > 2*sizeof(SHORT) ? cbBits - 2*sizeof(SHORT) : 0;
     }
     cursorData.cx = cxDesired;
     cursorData.cy = cyDesired;
@@ -2183,6 +2187,19 @@ CURSORICON_LoadImageW(
     bStatus = CURSORICON_GetCursorDataFromBMI(
         &cursorData,
         (BITMAPINFO*)bits);
+    if(!bStatus)
+    {
+        pbBmpIcon = CURSORICON_ConvertPngToBmpIcon(bits, cbBits, &BmpIconSize);
+        if(pbBmpIcon)
+        {
+            CURSORICONFILEDIR *BmpDir = (CURSORICONFILEDIR *)pbBmpIcon;
+
+            bStatus = CURSORICON_GetCursorDataFromBMI(
+                &cursorData,
+                (BITMAPINFO*)&pbBmpIcon[BmpDir->idEntries[0].dwDIBOffset]);
+            HeapFree(GetProcessHeap(), 0, pbBmpIcon);
+        }
+    }
 
     FreeResource( handle );
 

@@ -50,6 +50,9 @@ typedef struct _K1XPMIC_EXTENSION
     PDEVICE_OBJECT Button;
     PKINTERRUPT Interrupt;
     KMUTEX Lock;
+    PCALLBACK_OBJECT TimeCallback;
+    PVOID TimeRegistration;
+    LONG TimeWritePending;
 } K1XPMIC_EXTENSION, *PK1XPMIC_EXTENSION;
 
 typedef struct _K1XPMIC_BUTTON_EXTENSION
@@ -322,6 +325,71 @@ K1PmicIsr(_In_ PKINTERRUPT Interrupt, _In_ PVOID Context)
     return TRUE;
 }
 
+static VOID NTAPI
+K1PmicWriteTimeWorker(_In_ PDEVICE_OBJECT DeviceObject, _In_opt_ PVOID Context)
+{
+    PIO_WORKITEM WorkItem = Context;
+    PK1XPMIC_EXTENSION Extension = DeviceObject->DeviceExtension;
+    LARGE_INTEGER Time;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    InterlockedExchange(&Extension->TimeWritePending, 0);
+    KeQuerySystemTime(&Time);
+    K1PmicLock(Extension);
+    if (Extension->HasPmic)
+        Status = K1PmicWriteTime(Extension, &Time);
+    K1PmicUnlock(Extension);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("K1XPMIC: RTC write failed 0x%08lx\n", Status);
+    IoFreeWorkItem(WorkItem);
+}
+
+static VOID NTAPI
+K1PmicTimeChanged(_In_opt_ PVOID Context, _In_opt_ PVOID Argument1, _In_opt_ PVOID Argument2)
+{
+    PK1XPMIC_EXTENSION Extension = Context;
+    PIO_WORKITEM WorkItem;
+
+    UNREFERENCED_PARAMETER(Argument1);
+    UNREFERENCED_PARAMETER(Argument2);
+
+    if (InterlockedCompareExchange(&Extension->TimeWritePending, 1, 0) != 0)
+        return;
+
+    WorkItem = IoAllocateWorkItem(Extension->Common.Self);
+    if (!WorkItem)
+    {
+        InterlockedExchange(&Extension->TimeWritePending, 0);
+        return;
+    }
+    IoQueueWorkItem(WorkItem, K1PmicWriteTimeWorker, DelayedWorkQueue, WorkItem);
+}
+
+static VOID
+K1PmicRegisterTimeCallback(_In_ PK1XPMIC_EXTENSION Extension)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\Callback\\SetSystemTime");
+    OBJECT_ATTRIBUTES Attributes;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ExCreateCallback(&Extension->TimeCallback, &Attributes, FALSE, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("K1XPMIC: SetSystemTime callback unavailable 0x%08lx\n", Status);
+        Extension->TimeCallback = NULL;
+        return;
+    }
+
+    Extension->TimeRegistration = ExRegisterCallback(Extension->TimeCallback, K1PmicTimeChanged, Extension);
+    if (!Extension->TimeRegistration)
+    {
+        DPRINT1("K1XPMIC: SetSystemTime callback not registered\n");
+        ObDereferenceObject(Extension->TimeCallback);
+        Extension->TimeCallback = NULL;
+    }
+}
+
 static NTSTATUS
 K1PmicStart(_In_ PK1XPMIC_EXTENSION Extension, _In_ PIO_STACK_LOCATION Stack)
 {
@@ -374,6 +442,7 @@ K1PmicStart(_In_ PK1XPMIC_EXTENSION Extension, _In_ PIO_STACK_LOCATION Stack)
 
     if (NT_SUCCESS(IoRegisterShutdownNotification(Extension->Common.Self)))
         Extension->ShutdownRegistered = TRUE;
+    K1PmicRegisterTimeCallback(Extension);
 
     if (Interrupt)
     {
@@ -398,6 +467,16 @@ K1PmicStart(_In_ PK1XPMIC_EXTENSION Extension, _In_ PIO_STACK_LOCATION Stack)
 static VOID
 K1PmicStop(_In_ PK1XPMIC_EXTENSION Extension)
 {
+    if (Extension->TimeRegistration)
+    {
+        ExUnregisterCallback(Extension->TimeRegistration);
+        Extension->TimeRegistration = NULL;
+    }
+    if (Extension->TimeCallback)
+    {
+        ObDereferenceObject(Extension->TimeCallback);
+        Extension->TimeCallback = NULL;
+    }
     if (Extension->ShutdownRegistered)
     {
         IoUnregisterShutdownNotification(Extension->Common.Self);
@@ -408,6 +487,7 @@ K1PmicStop(_In_ PK1XPMIC_EXTENSION Extension)
         IoDisconnectInterrupt(Extension->Interrupt);
         Extension->Interrupt = NULL;
     }
+    K1PmicLock(Extension);
     if (Extension->SpbFile)
     {
         ObDereferenceObject(Extension->SpbFile);
@@ -415,6 +495,7 @@ K1PmicStop(_In_ PK1XPMIC_EXTENSION Extension)
         Extension->SpbDevice = NULL;
     }
     Extension->HasPmic = FALSE;
+    K1PmicUnlock(Extension);
 }
 
 static NTSTATUS

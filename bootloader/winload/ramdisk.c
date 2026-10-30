@@ -30,6 +30,14 @@
 #define ISO_RECORD_NAME       33
 #define ISO_FLAG_DIRECTORY    0x02
 
+#define MBR_SIGNATURE         0x1FE
+#define MBR_TABLE             0x1BE
+#define MBR_ENTRY_SIZE        16
+#define MBR_ENTRY_COUNT       4
+#define MBR_ENTRY_TYPE        4
+#define MBR_ENTRY_START       8
+#define MBR_ENTRY_SECTORS     12
+
 typedef struct _RD_SOURCE
 {
     PUCHAR Memory;
@@ -378,6 +386,83 @@ RdCreateVolume(
 
 static
 BOOLEAN
+RdFindImagePartition(
+    _In_ const RD_SOURCE* File,
+    _Out_ PULONGLONG Offset,
+    _Out_ PULONGLONG Length)
+{
+    const UCHAR* Entry;
+    ULONGLONG Start, Sectors;
+    ULONG i;
+
+    if (!File->Memory || File->Size < RD_SECTOR_SIZE ||
+        File->Memory[MBR_SIGNATURE] != 0x55 || File->Memory[MBR_SIGNATURE + 1] != 0xAA)
+    {
+        return FALSE;
+    }
+
+    for (i = 0; i < MBR_ENTRY_COUNT; i++)
+    {
+        Entry = File->Memory + MBR_TABLE + i * MBR_ENTRY_SIZE;
+        Start = (ULONGLONG)LeUlong(Entry + MBR_ENTRY_START) * RD_SECTOR_SIZE;
+        Sectors = LeUlong(Entry + MBR_ENTRY_SECTORS);
+        if (Entry[MBR_ENTRY_TYPE] == 0 || Sectors == 0)
+            continue;
+
+        if (Start > File->Size || Sectors * RD_SECTOR_SIZE > File->Size - Start)
+            return FALSE;
+
+        *Offset = Start;
+        *Length = Sectors * RD_SECTOR_SIZE;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+RdIsDiskImage(
+    _In_ const RD_SOURCE* File,
+    _Out_ PULONGLONG Offset,
+    _Out_ PULONGLONG Length)
+{
+    UCHAR Descriptor[ISO_BLOCK_SIZE];
+    RD_SOURCE Probe = *File;
+
+    if (RdOpenIso(&Probe, Descriptor))
+        return FALSE;
+
+    return RdFindImagePartition(File, Offset, Length);
+}
+
+static
+BOOLEAN
+RdAdoptImage(
+    _Inout_ PRD_SOURCE File)
+{
+    RdSize = ALIGN_UP_BY(File->Size, MM_PAGE_SIZE);
+    if (RdSize > RD_MAX_SIZE)
+    {
+        FwPrint(L"The RAM disk is larger than 4 GB.\r\n");
+        return FALSE;
+    }
+
+    if ((ULONG_PTR)File->Memory + RdSize > ((ULONGLONG)MmArchMaxRamdiskPage << MM_PAGE_SHIFT))
+    {
+        FwPrint(L"The RAM disk image is outside the RAM disk address range.\r\n");
+        return FALSE;
+    }
+
+    RdBase = File->Memory;
+    RtlZeroMemory(RdBase + File->Size, (SIZE_T)(RdSize - File->Size));
+    MmSetMemoryType(RdBase, (SIZE_T)RdSize, LoaderXIPRom);
+    File->Memory = NULL;
+    return TRUE;
+}
+
+static
+BOOLEAN
 RdCopyIso(
     _In_ PRD_SOURCE Source,
     _In_reads_bytes_(ISO_BLOCK_SIZE) const UCHAR* Descriptor,
@@ -448,9 +533,11 @@ OslBuildRamdisk(
     PCWSTR Path = Image ? L"\\" : BcdDevice->RamdiskPath;
     PCWSTR Leaf;
     ULONGLONG Payload;
+    ULONGLONG ImageOffset = 0, ImageLength = 0;
     ULONG FileSize = 0;
     ULONG i;
     BOOLEAN HaveMedium = FALSE;
+    BOOLEAN DiskImage = FALSE;
     BOOLEAN Success;
 
     RtlZeroMemory(&Medium, sizeof(Medium));
@@ -518,6 +605,11 @@ OslBuildRamdisk(
                                  FileName,
                                  ExtraBytes);
     }
+    else if (RdIsDiskImage(&File, &ImageOffset, &ImageLength))
+    {
+        DiskImage = TRUE;
+        Success = RdAdoptImage(&File);
+    }
     else
     {
         FileSize = (ULONG)File.Size;
@@ -542,10 +634,19 @@ OslBuildRamdisk(
 
     RtlZeroMemory(Device, sizeof(*Device));
     Device->Memory = RdBase;
-    Device->Offset = RdWriter.VolumeBase - RdBase;
-    Device->Length = RdWriter.VolumeSize;
     Device->BlockSize = RD_SECTOR_SIZE;
-    FsMemoryReader = RdReadFile;
+    if (DiskImage)
+    {
+        Device->Offset = ImageOffset;
+        Device->Length = ImageLength;
+        FsMemoryReader = NULL;
+    }
+    else
+    {
+        Device->Offset = RdWriter.VolumeBase - RdBase;
+        Device->Length = RdWriter.VolumeSize;
+        FsMemoryReader = RdReadFile;
+    }
     return TRUE;
 }
 

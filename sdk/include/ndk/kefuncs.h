@@ -723,12 +723,10 @@ KiReadSystemTime(
 
 #ifndef NTOS_MODE_USER
 
-#if defined(_M_ARM64)
 NTSYSAPI
 NTSTATUS
 NTAPI
 KeInitializeSecondaryInterruptServices(VOID);
-#endif
 
 NTSYSAPI
 BOOLEAN

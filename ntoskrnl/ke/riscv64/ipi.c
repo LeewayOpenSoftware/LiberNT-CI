@@ -27,7 +27,7 @@ VOID FASTCALL KiIpiSend(KAFFINITY Targets, ULONG Request)
     {
         PKPRCB Prcb = KiProcessorBlock[Number];
 
-        InterlockedBitTestAndSet(&Prcb->RequestSummary, Request);
+        InterlockedOr(&Prcb->RequestSummary, (LONG)Request);
         Remaining &= ~AFFINITY_MASK(Number);
         if ((Request != IPI_FREEZE) && CONTAINING_RECORD(Prcb, KPCR, Prcb)->IdlePolling)
             Targets &= ~AFFINITY_MASK(Number);
@@ -55,7 +55,7 @@ KiRiscvSendSoftwareInterrupt(_In_ KAFFINITY TargetSet, _In_ KIRQL Irql)
     if (TargetSet & Prcb->SetMember)
     {
         if (Irql == DISPATCH_LEVEL)
-            Prcb->DpcInterruptRequested = TRUE;
+            KiSetDpcInterruptRequested(Prcb);
         KiRiscvRequestSoftwareInterrupt(Irql);
     }
 
@@ -71,7 +71,7 @@ KiRiscvSendSoftwareInterrupt(_In_ KAFFINITY TargetSet, _In_ KIRQL Irql)
  * arrived, so the whole machine is quiesced while any worker runs. */
 static
 VOID
-KiRiscvExecuteGenericCall(VOID)
+KiRiscvExecuteGenericCall(_In_opt_ PKTRAP_FRAME TrapFrame)
 {
     PKIPI_BROADCAST_WORKER Function;
     ULONG_PTR Argument;
@@ -83,7 +83,11 @@ KiRiscvExecuteGenericCall(VOID)
     InterlockedDecrement(&KiRiscvGenericCall.Arriving);
     while (InterlockedCompareExchange(&KiRiscvGenericCall.Release, 0, 0) == 0)
         YieldProcessor();
+    if (TrapFrame != NULL)
+        _enable();
     Function(Argument);
+    if (TrapFrame != NULL)
+        _disable();
     InterlockedDecrement(&KiRiscvGenericCall.Remaining);
 }
 
@@ -96,21 +100,21 @@ KiIpiServiceRoutine(PKTRAP_FRAME TrapFrame, PKEXCEPTION_FRAME ExceptionFrame)
         SmpDbgIpi(Prcb->Number);
     if (Prcb->IpiFrozen == IPI_FROZEN_STATE_TARGET_FREEZE)
         KiProcessorFreezeHandler(TrapFrame, ExceptionFrame);
-    InterlockedBitTestAndReset(&Prcb->RequestSummary, IPI_FREEZE);
-    if (InterlockedBitTestAndReset(&Prcb->RequestSummary, IPI_APC))
+    InterlockedAnd(&Prcb->RequestSummary, ~IPI_FREEZE);
+    if (InterlockedAnd(&Prcb->RequestSummary, ~IPI_APC) & IPI_APC)
         HalRequestSoftwareInterrupt(APC_LEVEL);
-    if (InterlockedBitTestAndReset(&Prcb->RequestSummary, IPI_DPC))
+    if (InterlockedAnd(&Prcb->RequestSummary, ~IPI_DPC) & IPI_DPC)
     {
         if (SmpDbgEnabled)
             SmpDbgRemoteDpc(Prcb->Number, SMPDBG_SOURCE_UNKNOWN);
-        Prcb->DpcInterruptRequested = TRUE;
+        KiSetDpcInterruptRequested(Prcb);
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
     }
-    if (InterlockedBitTestAndReset(&Prcb->RequestSummary, IPI_SYNCH_REQUEST))
+    if (InterlockedAnd(&Prcb->RequestSummary, ~IPI_SYNCH_REQUEST) & IPI_SYNCH_REQUEST)
     {
         if (SmpDbgEnabled)
             SmpDbgGenericCallIpi(Prcb->Number);
-        KiRiscvExecuteGenericCall();
+        KiRiscvExecuteGenericCall(TrapFrame);
     }
     return TRUE;
 }

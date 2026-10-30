@@ -1309,6 +1309,7 @@ SffdiskDeviceControl(
             Status = SffdiskHandleStorageQueryProperty(DeviceExtension, Irp);
             break;
 
+        case IOCTL_DISK_CHECK_VERIFY:
         case IOCTL_STORAGE_CHECK_VERIFY:
         case IOCTL_STORAGE_CHECK_VERIFY2:
         {

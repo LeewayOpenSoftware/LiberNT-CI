@@ -67,6 +67,7 @@ extern ATOM AtomDwmThemedFrame;
 extern ATOM AtomDwmTransition;
 extern ATOM AtomDwmTransitionFromLT;
 extern ATOM AtomDwmTransitionFromRB;
+BOOLEAN FASTCALL IntIsPrivatePropertyAtom(_In_ ATOM Atom);
 typedef struct _USER_CRIT
 {
     EX_PUSH_LOCK Lock;

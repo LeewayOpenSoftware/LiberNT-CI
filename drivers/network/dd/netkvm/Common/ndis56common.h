@@ -123,8 +123,13 @@ static FORCEINLINE ULONG ParaNdisCurrentProcessorIndex(VOID)
 #define VIRTIO_NET_F_CTRL_RX    18      /* Control channel RX mode support */
 #define VIRTIO_NET_F_CTRL_VLAN  19      /* Control channel VLAN filtering */
 #define VIRTIO_NET_F_CTRL_RX_EXTRA 20   /* Extra RX mode control support */
+#define VIRTIO_NET_F_SPEED_DUPLEX  63
 
 #define VIRTIO_NET_S_LINK_UP    1       /* Link is up */
+
+#define VIRTIO_NET_CONFIG_SPEED_OFFSET  12
+#define VIRTIO_NET_CONFIG_DUPLEX_OFFSET 16
+#define VIRTIO_NET_DUPLEX_HALF          0x00
 
 #define VIRTIO_NET_INVALID_INTERRUPT_STATUS     0xFF
 
@@ -391,6 +396,7 @@ typedef struct _tagPARANDIS_ADAPTER
     BOOLEAN                 bUseScatterGather;
     BOOLEAN                 bBatchReceive;
     BOOLEAN                 bLinkDetectSupported;
+    BOOLEAN                 bSpeedDuplexSupported;
     BOOLEAN                 bDoHardwareChecksum;
     BOOLEAN                 bDoGuestChecksumOnReceive;
     BOOLEAN                 bDoIPCheckTx;
@@ -416,6 +422,8 @@ typedef struct _tagPARANDIS_ADAPTER
     ULONG                   ulPriorityVlanSetting;
     ULONG                   VlanId;
     ULONGLONG               ulFormalLinkSpeed;
+    ULONGLONG               ulConfiguredLinkSpeed;
+    NDIS_MEDIA_DUPLEX_STATE MediaDuplexState;
     ULONG                   ulEnableWakeup;
     tMaxPacketSize          MaxPacketSize;
     ULONG                   nEnableDPCChecker;

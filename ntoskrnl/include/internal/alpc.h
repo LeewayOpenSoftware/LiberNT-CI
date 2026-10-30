@@ -50,6 +50,7 @@
 #define ALPC_SECURITY_CONTEXT_ID_BIAS        0x10UL
 
 typedef struct _ALPC_PORT ALPC_PORT, *PALPC_PORT;
+typedef struct _ALPC_PORT_DOMAIN ALPC_PORT_DOMAIN, *PALPC_PORT_DOMAIN;
 typedef struct _KALPC_MESSAGE KALPC_MESSAGE, *PKALPC_MESSAGE;
 typedef struct _KALPC_COMPLETION_LIST KALPC_COMPLETION_LIST, *PKALPC_COMPLETION_LIST;
 
@@ -119,8 +120,17 @@ struct _KALPC_COMPLETION_LIST
     ULONG AttributeSize;
 };
 
+struct _ALPC_PORT_DOMAIN
+{
+    KGUARDED_MUTEX Lock;
+    LONG ReferenceCount;
+    LIST_ENTRY DeferredFreeList;
+    LIST_ENTRY DeferredCommunicationList;
+};
+
 typedef struct _ALPC_COMMUNICATION_INFO
 {
+    PALPC_PORT_DOMAIN Domain;
     PALPC_PORT ConnectionPort;
     PALPC_PORT ServerCommunicationPort;
     PALPC_PORT ClientCommunicationPort;
@@ -244,6 +254,7 @@ struct _KALPC_MESSAGE
     PKALPC_MESSAGE CallbackParent;
     PKALPC_MESSAGE ActiveCallback;
     PALPC_COMMUNICATION_INFO CommunicationInfo;
+    PALPC_PORT_DOMAIN Domain;
     PVOID PortContext;
     ULONG State;
     ULONG Sequence;
@@ -257,6 +268,7 @@ struct _KALPC_MESSAGE
 struct _ALPC_PORT
 {
     KEVENT WaitEvent;
+    PALPC_PORT_DOMAIN Domain;
     LIST_ENTRY PortListEntry;
     PALPC_COMMUNICATION_INFO CommunicationInfo;
     PEPROCESS OwnerProcess;
@@ -299,16 +311,58 @@ struct _ALPC_PORT
 };
 
 extern POBJECT_TYPE AlpcPortObjectType;
-extern KGUARDED_MUTEX AlpcpLock;
-extern ULONG AlpcpNextMessageId;
-extern ULONG AlpcpNextCallbackId;
-extern LIST_ENTRY AlpcpPortList;
 
-#define AlpcpAcquireLock()   KeAcquireGuardedMutex(&AlpcpLock)
+VOID
+NTAPI
+AlpcpAcquireLock(VOID);
 
 VOID
 NTAPI
 AlpcpReleaseLock(VOID);
+
+VOID
+NTAPI
+AlpcpAcquireDomainLock(
+    _In_ PALPC_PORT_DOMAIN Domain);
+
+VOID
+NTAPI
+AlpcpReleaseDomainLock(
+    _In_ PALPC_PORT_DOMAIN Domain);
+
+#define AlpcpAcquirePortLock(Port)   AlpcpAcquireDomainLock((Port)->Domain)
+#define AlpcpReleasePortLock(Port)   AlpcpReleaseDomainLock((Port)->Domain)
+
+VOID
+NTAPI
+AlpcpReferenceDomain(
+    _In_ PALPC_PORT_DOMAIN Domain);
+
+VOID
+NTAPI
+AlpcpDereferenceDomain(
+    _In_ PALPC_PORT_DOMAIN Domain);
+
+ULONG
+NTAPI
+AlpcpAllocateMessageId(VOID);
+
+ULONG
+NTAPI
+AlpcpAllocateCallbackId(VOID);
+
+VOID
+NTAPI
+AlpcpSetThreadMessage(
+    _In_ PETHREAD Thread,
+    _In_opt_ PKALPC_MESSAGE Message);
+
+VOID
+NTAPI
+AlpcpReplaceThreadMessage(
+    _In_ PETHREAD Thread,
+    _In_ PKALPC_MESSAGE Expected,
+    _In_opt_ PKALPC_MESSAGE Message);
 
 #define AlpcpPortType(Port)  ((Port)->Flags & ALPC_PORT_TYPE_MASK)
 
@@ -350,6 +404,7 @@ NTSTATUS
 NTAPI
 AlpcpCreatePort(
     _Out_ PALPC_PORT *NewPort,
+    _In_opt_ PALPC_PORT DomainPort,
     _In_ KPROCESSOR_MODE AccessMode,
     _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
     _In_opt_ PALPC_PORT_ATTRIBUTES PortAttributes,
@@ -527,6 +582,12 @@ AlpcpFindPendingMessageForReply(
     _In_ PALPC_PORT Port,
     _In_ ULONG MessageId,
     _In_opt_ PCLIENT_ID ClientId);
+
+PKALPC_MESSAGE
+NTAPI
+AlpcpFindThreadCallback(
+    _In_ PALPC_PORT Port,
+    _In_ PETHREAD Thread);
 
 PKALPC_MESSAGE
 NTAPI

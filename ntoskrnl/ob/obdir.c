@@ -139,23 +139,15 @@ POBJECT_DIRECTORY
 NTAPI
 ObpGetShadowDirectory(IN POBJECT_DIRECTORY Directory)
 {
-    PDEVICE_MAP DeviceMap;
-    POBJECT_DIRECTORY GlobalDosDirectory = NULL;
+    PDEVICE_MAP SystemDeviceMap = ObSystemDeviceMap;
+    POBJECT_DIRECTORY GlobalDosDirectory;
 
-    /* Acquire the device map lock */
-    KeAcquireGuardedMutex(&ObpDeviceMapLock);
+    if ((*(PDEVICE_MAP volatile *)&Directory->DeviceMap == NULL) || (SystemDeviceMap == NULL))
+        return NULL;
 
     /* Get the global DOS directory if any */
-    DeviceMap = Directory->DeviceMap;
-    if (DeviceMap != NULL)
-    {
-        GlobalDosDirectory = DeviceMap->GlobalDosDevicesDirectory;
-    }
-
-    /* Release the devicemap lock */
-    KeReleaseGuardedMutex(&ObpDeviceMapLock);
-
-    return GlobalDosDirectory;
+    GlobalDosDirectory = SystemDeviceMap->DosDevicesDirectory;
+    return (Directory != GlobalDosDirectory) ? GlobalDosDirectory : NULL;
 }
 
 /*++

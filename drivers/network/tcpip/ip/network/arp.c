@@ -178,6 +178,31 @@ BOOLEAN ARPTransmit(PIP_ADDRESS Address, PVOID LinkAddress,
 }
 
 
+BOOLEAN ARPTransmitDad(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Address, BOOLEAN Announce)
+{
+    IPv4_RAW_ADDRESS Sender = Announce ? Address : 0;
+    PNDIS_PACKET NdisPacket;
+
+    NdisPacket = PrepareARPPacket(
+        Interface,
+        WN2H(0x0001),
+        (USHORT)ETYPE_IPv4,
+        (UCHAR)Interface->AddressLength,
+        4,
+        Interface->Address,
+        &Sender,
+        NULL,
+        &Address,
+        ARP_OPCODE_REQUEST);
+    if (!NdisPacket)
+        return FALSE;
+
+    PC(NdisPacket)->DLComplete = ARPTransmitComplete;
+    (*Interface->Transmit)(Interface->Context, NdisPacket, 0, NULL, LAN_PROTO_ARP);
+    return TRUE;
+}
+
+
 VOID ARPReceive(
     PVOID Context,
     PIP_PACKET Packet)
@@ -268,6 +293,7 @@ VOID ARPReceive(
 
     AddrInitIPv4(&DstAddress, *((PULONG)TargetProtoAddress));
     AddrInitIPv4(&SrcAddress, *((PULONG)SenderProtoAddress));
+    NteDadConflict(Interface, SrcAddress.Address.IPv4Address, DstAddress.Address.IPv4Address, SenderHWAddress);
     if (!IsInterfaceAddress(Interface, &DstAddress))
     {
         ExFreePool(DataBuffer);

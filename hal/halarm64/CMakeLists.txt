@@ -52,7 +52,7 @@ list(APPEND SOURCES
     ${HAL_ARM64_SOURCE_DIR}/acpi/halpnpdd.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/arm64.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64.c
-    ${HAL_ARM64_SOURCE_DIR}/secondary.c
+    ${HAL_COMMON_DIR}/generic/secondary.c
     ${HAL_ARM64_SOURCE_DIR}/halarm64_acpi_int.c
     ${HAL_ARM64_SOURCE_DIR}/halext.c
     ${HAL_ARM64_SOURCE_DIR}/sysinfo.c

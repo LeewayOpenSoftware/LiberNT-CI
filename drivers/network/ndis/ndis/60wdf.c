@@ -11,36 +11,10 @@
 #define NDIS6_WDF_TAG 'fWNn'
 
 #ifdef _WIN64
-C_ASSERT(sizeof(NDIS6_WDF_ADD_DEVICE_INFO) == 32);
-C_ASSERT(sizeof(NDIS6_WDF_COMPLETE_ADD_PARAMS) == 88);
-C_ASSERT(sizeof(NDIS6_WDF_CX_CHARACTERISTICS) == 120);
+C_ASSERT(sizeof(NDIS_WDF_ADD_DEVICE_INFO) == 24);
+C_ASSERT(sizeof(NDIS_WDF_COMPLETE_ADD_PARAMS) == 88);
+C_ASSERT(sizeof(NDIS_WDF_CX_CHARACTERISTICS) == 120);
 #endif
-
-enum
-{
-    NdisWdfActionPnpStart = 0,
-    NdisWdfActionPnpQueryStop = 1,
-    NdisWdfActionPnpCancelStop = 2,
-    NdisWdfActionPnpStop = 3,
-    NdisWdfActionPnpQueryRemove = 4,
-    NdisWdfActionPnpCancelRemove = 5,
-    NdisWdfActionPnpSurpriseRemove = 6,
-    NdisWdfActionPnpRemove = 7,
-    NdisWdfActionPowerD0Implicit = 8,
-    NdisWdfActionPowerD0 = 9,
-    NdisWdfActionPowerDx = 10,
-    NdisWdfActionStartPowerManagement = 11,
-    NdisWdfActionStopPowerManagement = 12,
-    NdisWdfActionPowerDxFinal = 13,
-    NdisWdfActionPowerDxOnSystemSx = 14,
-    NdisWdfActionPowerDxOnSystemShutdown = 15,
-    NdisWdfActionPowerNone = 16,
-    NdisWdfActionPreReleaseHardware = 17,
-    NdisWdfActionPostReleaseHardware = 18,
-    NdisWdfActionPnpRebalance = 19,
-    NdisWdfActionDeviceObjectCleanup = 20
-};
-
 
 static NTSTATUS
 Ndis6WdfCompleteIrp(
@@ -142,14 +116,18 @@ static NDIS6_WDF_EC_RUNTIME_KNOBS Ndis6WdfEcKnobs = {
 static VOID
 Ndis6WdfBuildCompleteAddParameters(
     _In_ PLOGICAL_ADAPTER Adapter,
-    _Out_ PNDIS6_WDF_COMPLETE_ADD_PARAMS Parameters)
+    _Out_ NDIS_WDF_COMPLETE_ADD_PARAMS * Parameters)
 {
     PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Adapter);
     PUNICODE_STRING Name = &Adapter->NdisMiniportBlock.MiniportName;
+    NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES Keywords;
     UNICODE_STRING GuidString;
     USHORT Index;
 
     RtlZeroMemory(Parameters, sizeof(*Parameters));
+    RtlZeroMemory(&Keywords, sizeof(Keywords));
+    Keywords.MediaType = NdisMedium802_3;
+    Ndis6ApplyInfInterfaceKeywords(Adapter->NdisMiniportBlock.PhysicalDeviceObject, &Keywords);
 
     /* The canonical miniport name is \Device\{xxxxxxxx-....}. Feed the
      * per-interface GUID back to NetAdapterCx when that form is present. */
@@ -169,8 +147,18 @@ Ndis6WdfBuildCompleteAddParameters(
     }
 
     Parameters->NetLuid = Ext->NetLuid;
-    Parameters->MediaType = NdisMedium802_3;
+    Parameters->MediaType = Keywords.MediaType;
     Parameters->BaseName = *Name;
+    for (Index = 0; Index < Name->Length / sizeof(WCHAR); Index++)
+    {
+        if (Name->Buffer[Index] == L'{')
+        {
+            Parameters->BaseName.Buffer = &Name->Buffer[Index];
+            Parameters->BaseName.Length = Name->Length - Index * sizeof(WCHAR);
+            Parameters->BaseName.MaximumLength = Parameters->BaseName.Length;
+            break;
+        }
+    }
     Parameters->AdapterInstanceName = *Name;
     Parameters->DriverImageName = Ext->DriverBlock->DriverObject->DriverName;
     Parameters->ExecutionContextKnobs = &Ndis6WdfEcKnobs;
@@ -181,9 +169,9 @@ NTAPI
 NdisWdfRegisterCx(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath,
-    _In_ PVOID DriverContext,
-    _In_ PNDIS6_WDF_CX_CHARACTERISTICS Characteristics,
-    _Out_ PVOID* NdisWdfCxDriverHandle)
+    _In_ NDIS_WDF_CX_DRIVER_CONTEXT DriverContext,
+    _In_ NDIS_WDF_CX_CHARACTERISTICS * Characteristics,
+    _Out_ NDIS_WDF_CX_DRIVER * NdisWdfCxDriverHandle)
 {
     PNDIS6_WDF_CX_DRIVER CxDriver;
     ULONG Size;
@@ -198,7 +186,7 @@ NdisWdfRegisterCx(
 
     Size = Characteristics->Header.Size;
     if (Size < sizeof(NDIS_OBJECT_HEADER) ||
-        Size > sizeof(NDIS6_WDF_CX_CHARACTERISTICS))
+        Size > sizeof(NDIS_WDF_CX_CHARACTERISTICS))
     {
         return STATUS_INVALID_PARAMETER;
     }
@@ -215,7 +203,7 @@ NdisWdfRegisterCx(
     CxDriver->DriverContext = DriverContext;
     RtlCopyMemory(&CxDriver->Characteristics, Characteristics, Size);
 
-    *NdisWdfCxDriverHandle = CxDriver;
+    *NdisWdfCxDriverHandle = (NDIS_WDF_CX_DRIVER)CxDriver;
     DbgPrint("NDIS6-WDF: registered NetAdapterCx callbacks (size=%lu)\n",
              Size);
     return STATUS_SUCCESS;
@@ -224,9 +212,9 @@ NdisWdfRegisterCx(
 VOID
 NTAPI
 NdisWdfDeregisterCx(
-    _In_ PVOID NdisWdfCxDriverHandle)
+    _In_ NDIS_WDF_CX_DRIVER NdisWdfCxDriverHandle)
 {
-    PNDIS6_WDF_CX_DRIVER CxDriver = NdisWdfCxDriverHandle;
+    PNDIS6_WDF_CX_DRIVER CxDriver = (PNDIS6_WDF_CX_DRIVER)NdisWdfCxDriverHandle;
 
     if (CxDriver == NULL ||
         CxDriver->Signature != NDIS6_WDF_CX_SIGNATURE)
@@ -246,26 +234,26 @@ NdisWdfDeregisterCx(
     ExFreePoolWithTag(CxDriver, NDIS6_WDF_TAG);
 }
 
-NTSTATUS
+NDIS_STATUS
 NTAPI
 NdisWdfRegisterMiniportDriver(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath,
-    _In_ PVOID NdisWdfCxDriverHandle,
+    _In_ NDIS_WDF_CX_DRIVER NdisWdfCxDriverHandle,
     _In_opt_ NDIS_HANDLE MiniportDriverContext,
     _In_ PNDIS_MINIPORT_DRIVER_CHARACTERISTICS Characteristics,
     _Out_ PNDIS_HANDLE NdisMiniportDriverHandle)
 {
-    PNDIS6_WDF_CX_DRIVER CxDriver = NdisWdfCxDriverHandle;
+    PNDIS6_WDF_CX_DRIVER CxDriver = (PNDIS6_WDF_CX_DRIVER)NdisWdfCxDriverHandle;
 
     if (CxDriver == NULL ||
         CxDriver->Signature != NDIS6_WDF_CX_SIGNATURE ||
         CxDriver->Deregistering)
     {
-        return STATUS_INVALID_PARAMETER;
+        return NDIS_STATUS_INVALID_PARAMETER;
     }
 
-    return (NTSTATUS)Ndis6RegisterMiniportDriverInternal(
+    return Ndis6RegisterMiniportDriverInternal(
         DriverObject,
         RegistryPath,
         MiniportDriverContext,
@@ -275,16 +263,183 @@ NdisWdfRegisterMiniportDriver(
         NdisMiniportDriverHandle);
 }
 
+NDIS_STATUS
+NTAPI
+NdisLWMRegisterMiniportDriver(
+    _In_ NDIS_HANDLE MiniportDriverContext,
+    _In_ NDIS_LWM_DRIVER_CHARACTERISTICS * Characteristics,
+    _Out_ PNDIS_HANDLE NdisLwmDriverHandle)
+{
+    NDIS_MINIPORT_DRIVER_CHARACTERISTICS MiniportCharacteristics;
+
+    if (Characteristics == NULL || NdisLwmDriverHandle == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    *NdisLwmDriverHandle = NULL;
+
+    if (Characteristics->Header.Type != NDIS_OBJECT_TYPE_LWM_DRIVER_CHARACTERISTICS ||
+        Characteristics->Header.Revision == 0 ||
+        Characteristics->Header.Size < NDIS_SIZEOF_LWM_DRIVER_CHARACTERISTICS_REVISION_1)
+    {
+        return NDIS_STATUS_BAD_CHARACTERISTICS;
+    }
+
+    RtlZeroMemory(&MiniportCharacteristics, sizeof(MiniportCharacteristics));
+    MiniportCharacteristics.Header.Type = NDIS_OBJECT_TYPE_MINIPORT_DRIVER_CHARACTERISTICS;
+    MiniportCharacteristics.Header.Revision = NDIS_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
+    MiniportCharacteristics.Header.Size = NDIS_SIZEOF_MINIPORT_DRIVER_CHARACTERISTICS_REVISION_3;
+    MiniportCharacteristics.MajorNdisVersion = Characteristics->MajorNdisVersion;
+    MiniportCharacteristics.MinorNdisVersion = Characteristics->MinorNdisVersion;
+    MiniportCharacteristics.MajorDriverVersion = Characteristics->MajorDriverVersion;
+    MiniportCharacteristics.MinorDriverVersion = Characteristics->MinorDriverVersion;
+    MiniportCharacteristics.Flags = Characteristics->Flags;
+    MiniportCharacteristics.SetOptionsHandler = Characteristics->SetOptionsHandler;
+    MiniportCharacteristics.PauseHandler = Characteristics->PauseHandler;
+    MiniportCharacteristics.RestartHandler = Characteristics->RestartHandler;
+    MiniportCharacteristics.OidRequestHandler = Characteristics->OidRequestHandler;
+    MiniportCharacteristics.SendNetBufferListsHandler = Characteristics->SendNetBufferListsHandler;
+    MiniportCharacteristics.ReturnNetBufferListsHandler = Characteristics->ReturnNetBufferListsHandler;
+    MiniportCharacteristics.CancelSendHandler = Characteristics->CancelSendHandler;
+    MiniportCharacteristics.CancelOidRequestHandler = Characteristics->CancelOidRequestHandler;
+    MiniportCharacteristics.DirectOidRequestHandler = Characteristics->DirectOidRequestHandler;
+    MiniportCharacteristics.CancelDirectOidRequestHandler = Characteristics->CancelDirectOidRequestHandler;
+    MiniportCharacteristics.SynchronousOidRequestHandler = Characteristics->SynchronousOidRequestHandler;
+
+    return Ndis6RegisterLwmMiniportDriver(&Characteristics->ServiceName,
+                                          MiniportDriverContext,
+                                          &MiniportCharacteristics,
+                                          NdisLwmDriverHandle);
+}
+
+VOID
+NTAPI
+NdisLWMDeregisterMiniportDriver(
+    _In_ NDIS_HANDLE NdisLwmDriverHandle)
+{
+    NdisMDeregisterMiniportDriver(NdisLwmDriverHandle);
+}
+
+NDIS_STATUS
+NTAPI
+NdisLWMInitializeNetworkInterface(
+    _In_ NDIS_HANDLE NdisLwmDriverHandle,
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _In_ GUID const * InterfaceGuid,
+    _Out_ PNDIS_HANDLE NdisMiniportAdapterHandle)
+{
+    PNDIS6_DRIVER_BLOCK Block = (PNDIS6_DRIVER_BLOCK)NdisLwmDriverHandle;
+    PLOGICAL_ADAPTER Adapter;
+    NDIS_STATUS Status;
+
+    if (NdisMiniportAdapterHandle == NULL)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    *NdisMiniportAdapterHandle = NULL;
+    if (Block == NULL || Block->Signature != NDIS6_DRIVER_BLOCK_SIGNATURE || !Block->IsLwm ||
+        InterfaceGuid == NULL)
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    Status = Ndis6CreateLwmInstance(Block, InterfaceGuid, MiniportAdapterContext, &Adapter);
+    if (Status == NDIS_STATUS_SUCCESS)
+        *NdisMiniportAdapterHandle = (NDIS_HANDLE)Adapter;
+    return Status;
+}
+
+static
+VOID
+NTAPI
+Ndis6LwmStartWorker(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_opt_ PVOID Context)
+{
+    PLOGICAL_ADAPTER Adapter = Context;
+    PNDIS6_ADAPTER_EXT Ext = NDIS6_EXT(Adapter);
+    extern VOID Ndis6BindAllProtocolsToAdapter(PLOGICAL_ADAPTER);
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (Ndis6AttachFiltersToAdapter(Adapter) == NDIS_STATUS_SUCCESS)
+    {
+        Ndis6BindAllProtocolsToAdapter(Adapter);
+        if (Ndis6RestartDriverStack(Adapter) == NDIS_STATUS_SUCCESS)
+            ndisQueueProtocolBinding();
+    }
+    else
+    {
+        DbgPrint("NDIS6: mandatory filter attach failed on a lightweight miniport\n");
+    }
+
+    KeSetEvent(&Ext->LwmStartDoneEvent, IO_NO_INCREMENT, FALSE);
+}
+
+NDIS_STATUS
+NTAPI
+NdisLWMStartNetworkInterface(
+    _In_ NDIS_HANDLE NdisMiniportAdapterHandle)
+{
+    PLOGICAL_ADAPTER Adapter = NdisMiniportAdapterHandle;
+    PNDIS6_ADAPTER_EXT Ext;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || Ext->DriverBlock == NULL || !Ext->DriverBlock->IsLwm)
+        return NDIS_STATUS_INVALID_PARAMETER;
+
+    if (Ext->Initialized || !Ext->RegistrationAttrsValid || !Ext->GeneralAttrsValid)
+        return NDIS_STATUS_INVALID_DEVICE_REQUEST;
+
+    if (Ext->LwmStartWorkItem == NULL)
+    {
+        Ext->LwmStartWorkItem = IoAllocateWorkItem(Ext->FunctionalDeviceObject);
+        if (Ext->LwmStartWorkItem == NULL)
+            return NDIS_STATUS_RESOURCES;
+    }
+
+    Ext->Initialized = TRUE;
+    InterlockedExchange(&Ext->ProtocolBindingsClosing, 0);
+    KeClearEvent(&Ext->LwmStartDoneEvent);
+    IoQueueWorkItem(Ext->LwmStartWorkItem, Ndis6LwmStartWorker, DelayedWorkQueue, Adapter);
+    return NDIS_STATUS_SUCCESS;
+}
+
+VOID
+NTAPI
+NdisLWMUninitializeNetworkInterface(
+    _In_ NDIS_HANDLE NdisMiniportAdapterHandle)
+{
+    PLOGICAL_ADAPTER Adapter = NdisMiniportAdapterHandle;
+    PNDIS6_ADAPTER_EXT Ext;
+
+    if (Adapter == NULL || !Adapter->IsNdis6)
+        return;
+
+    Ext = NDIS6_EXT(Adapter);
+    if (Ext == NULL || Ext->DriverBlock == NULL || !Ext->DriverBlock->IsLwm)
+        return;
+
+    KeWaitForSingleObject(&Ext->LwmStartDoneEvent, Executive, KernelMode, FALSE, NULL);
+    if (Ext->Initialized)
+    {
+        Ndis6CallMiniportHaltEx(Adapter, NdisHaltDeviceDisabled);
+        Ext->Initialized = FALSE;
+    }
+    Ndis6DestroyLogicalAdapter(Adapter);
+}
+
 NTSTATUS
 NTAPI
 NdisWdfPnPAddDevice(
-    _In_ PNDIS6_WDF_ADD_DEVICE_INFO AddDeviceInfo,
+    _In_ NDIS_WDF_ADD_DEVICE_INFO * AddDeviceInfo,
     _Out_ PNDIS_HANDLE NdisMiniportAdapterHandle)
 {
     PNDIS6_DRIVER_BLOCK DriverBlock;
     PLOGICAL_ADAPTER Adapter;
     PNDIS6_WDF_CX_DRIVER CxDriver;
-    NDIS6_WDF_COMPLETE_ADD_PARAMS CompleteAdd;
+    NDIS_WDF_COMPLETE_ADD_PARAMS CompleteAdd;
     NDIS_STATUS Status;
 
     if (AddDeviceInfo == NULL || NdisMiniportAdapterHandle == NULL ||
@@ -350,8 +505,8 @@ NTSTATUS
 NTAPI
 NdisWdfPnpPowerEventHandler(
     _In_ NDIS_HANDLE NdisMiniportAdapterHandle,
-    _In_ ULONG PnpAction,
-    _In_ ULONG PowerAction)
+    _In_ NdisWdfPnpPowerAction PnpAction,
+    _In_ NdisWdfPnpPowerAction PowerAction)
 {
     PLOGICAL_ADAPTER Adapter = NdisMiniportAdapterHandle;
     PNDIS6_ADAPTER_EXT Ext;
@@ -392,10 +547,20 @@ NdisWdfPnpPowerEventHandler(
                     Ext->DriverBlock->WdfCxDriver->Characteristics.EvtCxDeviceStartComplete(
                         Ext->MiniportAdapterContext);
                 }
+                Ndis6SetNetInterfaceState(Adapter, TRUE);
             }
             return STATUS_SUCCESS;
 
         case NdisWdfActionPnpStop:
+            if (Ext->Initialized)
+            {
+                /* FIXME: a rebalance stop reports NdisHaltDeviceDisabled, not NdisHaltDeviceStopped */
+                Ndis6CallMiniportHaltEx(Adapter, Ext->WdfSurpriseRemoved ? NdisHaltDeviceSurpriseRemoved : NdisHaltDeviceDisabled);
+                Ext->Initialized = FALSE;
+                Ext->WdfBindingsStarted = FALSE;
+            }
+            return STATUS_SUCCESS;
+
         case NdisWdfActionPowerDx:
         case NdisWdfActionPowerDxFinal:
         case NdisWdfActionPowerDxOnSystemSx:
@@ -646,7 +811,7 @@ NdisWdfGetGuidToOidMap(
         GuidMap[Index].Guid.Data3 = 0x4953;
         GuidMap[Index].Guid.Data4[0] = 0x57;
         GuidMap[Index].Guid.Data4[1] = 0x44;
-        GuidMap[Index].u.Oid = OidList[Index];
+        GuidMap[Index].Oid = OidList[Index];
         GuidMap[Index].Size = sizeof(ULONG);
         GuidMap[Index].Flags = NDIS_GUID_TO_OID;
     }

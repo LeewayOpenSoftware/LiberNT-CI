@@ -285,8 +285,6 @@ Ndis6CompleteOidRequestToOrigin(
         return;
 
     RequestId = OidRequest->RequestId;
-    if (RequestId == NULL)
-        return;
 
     /* Two possible RequestId types:
      *   1. PNDIS6_OID_WAITER — a legacy-NDIS-5 forwarded request. Signal

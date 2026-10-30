@@ -21,6 +21,7 @@ ATOM AtomMessage;       // Window Message atom.
 ATOM AtomWndObj;        // Window Object atom.
 ATOM AtomLayer;         // Window Layer atom.
 ATOM AtomFlashWndState; // Window Flash State atom.
+ATOM AtomIconSmall2;
 ATOM AtomDDETrack;      // Window DDE Tracking atom.
 ATOM AtomQOS;           // Window DDE Quality of Service atom.
 HINSTANCE hModClient = NULL;
@@ -108,6 +109,54 @@ static const PCWSTR PredefinedUserAtoms[] =
     L"MoreOlePrivateData",
 };
 
+static const PCWSTR PrivatePropertyNames[] =
+{
+    L"ReactOS.Dwm.ImmersiveDarkMode",
+    L"ReactOS.Dwm.NcRenderingPolicy",
+    L"ReactOS.Dwm.TransitionsDisabled",
+    L"ReactOS.Dwm.AllowNcPaint",
+    L"ReactOS.Dwm.NcRtlLayout",
+    L"ReactOS.Dwm.ForceIconicRepresentation",
+    L"ReactOS.Dwm.HasIconicBitmap",
+    L"ReactOS.Dwm.DisallowPeek",
+    L"ReactOS.Dwm.ExcludedFromPeek",
+    L"ReactOS.Dwm.Cloak",
+    L"ReactOS.Dwm.FreezeRepresentation",
+    L"ReactOS.Dwm.PassiveUpdateMode",
+    L"ReactOS.Dwm.UseHostBackdropBrush",
+    L"ReactOS.Dwm.BorderColor",
+    L"ReactOS.Dwm.CaptionColor",
+    L"ReactOS.Dwm.TextColor",
+    L"ReactOS.Dwm.MicaEffect",
+    DWM_PROP_SYSTEM_BACKDROP_TYPE,
+    DWM_PROP_BACKDROP_OPACITY,
+    DWM_PROP_BACKDROP_COLOR,
+    DWM_PROP_BACKDROP_COLORIZATION,
+    DWM_PROP_BACKDROP_REGION,
+    DWM_PROP_CONTENT_BACKDROP,
+    DWM_PROP_BACKDROP_NC_EXTEND,
+    DWM_PROP_BACKDROP_NC_EXTEND_LEFT,
+    DWM_PROP_BACKDROP_NC_EXTEND_RIGHT,
+    DWM_PROP_BACKDROP_NC_EXTEND_BOTTOM,
+    DWM_PROP_FRAME_ALPHA,
+    DWM_PROP_CAPTION_CLOSE,
+    DWM_PROP_CAPTION_MAXIMIZE,
+    DWM_PROP_CAPTION_MINIMIZE,
+    DWM_PROP_CAPTION_ROW,
+    DWM_PROP_CAPTION_STATE,
+    DWM_PROP_SHEET_OF_GLASS,
+    DWM_PROP_FRAME_EXTEND_TOP,
+    DWM_PROP_CORNER_RADIUS,
+    DWM_PROP_WINDOW_CORNER_PREFERENCE,
+    DWM_PROP_THEMED_FRAME,
+    DWM_PROP_TRANSITION,
+    DWM_PROP_TRANSITION_FROM_LT,
+    DWM_PROP_TRANSITION_FROM_RB,
+    DWM_PROP_GPU_OUTPUT,
+};
+
+static ATOM PrivatePropertyAtoms[RTL_NUMBER_OF(PrivatePropertyNames)];
+
 static
 ATOM FASTCALL
 IntAddUserPropertyAtom(PCWSTR AtomName)
@@ -192,14 +241,35 @@ InitUserAtoms(VOID)
     AtomDwmTransitionFromLT = IntAddUserPropertyAtom(DWM_PROP_TRANSITION_FROM_LT);
     AtomDwmTransitionFromRB = IntAddUserPropertyAtom(DWM_PROP_TRANSITION_FROM_RB);
 
+    for (i = 0; i < RTL_NUMBER_OF(PrivatePropertyNames); i++)
+        PrivatePropertyAtoms[i] = IntAddUserPropertyAtom(PrivatePropertyNames[i]);
+
     AtomWndObj = IntAddGlobalAtom(L"SysWNDO", TRUE);
     AtomLayer = IntAddGlobalAtom(L"SysLayer", TRUE);
     AtomFlashWndState = IntAddGlobalAtom(L"FlashWState", TRUE);
+    AtomIconSmall2 = IntAddGlobalAtom(L"SysICS2", TRUE);
 
     return STATUS_SUCCESS;
 }
 
 /* FUNCTIONS ******************************************************************/
+
+BOOLEAN
+FASTCALL
+IntIsPrivatePropertyAtom(_In_ ATOM Atom)
+{
+    ULONG i;
+
+    if (!Atom)
+        return FALSE;
+
+    for (i = 0; i < RTL_NUMBER_OF(PrivatePropertyAtoms); i++)
+    {
+        if (PrivatePropertyAtoms[i] == Atom)
+            return TRUE;
+    }
+    return FALSE;
+}
 
 CODE_SEG("INIT")
 NTSTATUS

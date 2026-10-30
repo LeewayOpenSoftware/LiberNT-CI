@@ -284,6 +284,9 @@ FsRtlpGrantWaiters(
     PLIST_ENTRY Entry, Next;
     KIRQL Irql;
 
+    if (ReadPointerNoFence((PVOID const volatile *)&State->Waiting.Flink) == &State->Waiting)
+        return;
+
     IoAcquireCancelSpinLock(&Irql);
     for (Entry = State->Waiting.Flink; Entry != &State->Waiting; Entry = Next)
     {
@@ -880,13 +883,10 @@ FsRtlAreThereWaitingFileLocks(
 {
     PFSRTL_LOCK_STATE State = FileLock->LockInformation;
     BOOLEAN Waiting;
-    KIRQL Irql;
 
     if (!State)
         return FALSE;
 
-    IoAcquireCancelSpinLock(&Irql);
-    Waiting = !IsListEmpty(&State->Waiting);
-    IoReleaseCancelSpinLock(Irql);
+    Waiting = (ReadPointerNoFence((PVOID const volatile *)&State->Waiting.Flink) != &State->Waiting);
     return Waiting;
 }

@@ -116,11 +116,22 @@ NdisOpenConfigurationEx(
             return NDIS_STATUS_INVALID_PARAMETER;
         }
 
-        Status = IoOpenDeviceRegistryKey(
-            Adapter->NdisMiniportBlock.PhysicalDeviceObject,
-            PLUGPLAY_REGKEY_DRIVER,
-            KEY_ALL_ACCESS,
-            &KeyHandle);
+        if (NDIS6_EXT(Adapter) != NULL && NDIS6_EXT(Adapter)->LwmConfigurationPath.Buffer != NULL)
+        {
+            OBJECT_ATTRIBUTES ObjectAttributes;
+
+            InitializeObjectAttributes(&ObjectAttributes, &NDIS6_EXT(Adapter)->LwmConfigurationPath,
+                                       OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+            Status = ZwOpenKey(&KeyHandle, KEY_ALL_ACCESS, &ObjectAttributes);
+        }
+        else
+        {
+            Status = IoOpenDeviceRegistryKey(
+                Adapter->NdisMiniportBlock.PhysicalDeviceObject,
+                PLUGPLAY_REGKEY_DRIVER,
+                KEY_ALL_ACCESS,
+                &KeyHandle);
+        }
         AdapterKey = TRUE;
     }
 

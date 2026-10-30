@@ -1992,12 +1992,57 @@ Ndis6FilterDispatchOidRequest(
     return Status;
 }
 
+static
+BOOLEAN
+Ndis6QueryCachedMediumOid(
+    _In_ PNDIS6_ADAPTER_EXT Ext,
+    _Inout_ PNDIS_OID_REQUEST OidRequest,
+    _Out_ PNDIS_STATUS Status)
+{
+    ULONG Value;
+
+    if ((OidRequest->RequestType != NdisRequestQueryInformation &&
+         OidRequest->RequestType != NdisRequestQueryStatistics) ||
+        !Ext->GeneralAttrsValid)
+    {
+        return FALSE;
+    }
+
+    switch (OidRequest->DATA.QUERY_INFORMATION.Oid)
+    {
+        case OID_GEN_MEDIA_SUPPORTED:
+        case OID_GEN_MEDIA_IN_USE:
+            Value = (ULONG)Ext->GeneralAttrs.MediaType;
+            break;
+
+        case OID_GEN_PHYSICAL_MEDIUM:
+            Value = (ULONG)Ext->GeneralAttrs.PhysicalMediumType;
+            break;
+
+        default:
+            return FALSE;
+    }
+
+    if (OidRequest->DATA.QUERY_INFORMATION.InformationBufferLength < sizeof(Value))
+    {
+        OidRequest->DATA.QUERY_INFORMATION.BytesNeeded = sizeof(Value);
+        *Status = NDIS_STATUS_BUFFER_TOO_SHORT;
+        return TRUE;
+    }
+
+    RtlCopyMemory(OidRequest->DATA.QUERY_INFORMATION.InformationBuffer, &Value, sizeof(Value));
+    OidRequest->DATA.QUERY_INFORMATION.BytesWritten = sizeof(Value);
+    *Status = NDIS_STATUS_SUCCESS;
+    return TRUE;
+}
+
 NDIS_STATUS
 Ndis6FilterTerminalOidRequest(
     _In_ PLOGICAL_ADAPTER  Adapter,
     _In_ PNDIS_OID_REQUEST OidRequest)
 {
     PNDIS6_ADAPTER_EXT Ext;
+    NDIS_STATUS Status;
 
     if (Adapter == NULL || OidRequest == NULL)
         return NDIS_STATUS_INVALID_PARAMETER;
@@ -2011,6 +2056,9 @@ Ndis6FilterTerminalOidRequest(
 
     if (!Ext->Initialized || Ext->MiniportAdapterContext == NULL)
         return NDIS_STATUS_ADAPTER_NOT_READY;
+
+    if (Ndis6QueryCachedMediumOid(Ext, OidRequest, &Status))
+        return Status;
 
     return Ext->DriverBlock->Characteristics.OidRequestHandler(Ext->MiniportAdapterContext, OidRequest);
 }

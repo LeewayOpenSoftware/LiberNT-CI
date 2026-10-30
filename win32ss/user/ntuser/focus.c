@@ -203,7 +203,9 @@ co_IntSendDeactivateMessages(HWND hWndPrev, HWND hWnd, BOOL Clear)
    {
       UserRefObjectCo(WndPrev, &RefPrev);
 
-      if (co_IntSendMessage(hWndPrev, WM_NCACTIVATE, FALSE, lParam))
+      if (co_IntSendMessage(hWndPrev, WM_NCACTIVATE,
+                            MAKEWPARAM(FALSE, (hWnd && (WndPrev->style & WS_MINIMIZE)) ? 0x20 : 0),
+                            lParam))
       {
          USER_REFERENCE_ENTRY Ref;
          PWND Wnd = hWnd ? ValidateHwndNoErr(hWnd) : NULL;
@@ -470,7 +472,7 @@ IntActivateWindow(PWND Wnd, PTHREADINFO pti, HANDLE tid, DWORD Type)
       if (!gpqForeground)
       {
           // No foreground queue set.
-          co_IntSetForegroundMessageQueue( Wnd, pti, (BOOL)Type, 0);
+          co_IntSetForegroundMessageQueue( Wnd, pti, (BOOL)Type, TRUE);
       }
       else
       {
@@ -669,8 +671,8 @@ co_IntSendActivateMessages(PWND WindowPrev, PWND Window, BOOL MouseActivate, BOO
 
       co_IntSendMessage( UserHMGetHandle(Window),
                          WM_NCACTIVATE,
-                         Window == (gpqForeground ? gpqForeground->spwndActive : NULL) ?
-                         MAKEWPARAM(WA_ACTIVE, (Window->style & WS_MINIMIZE) ? 0x20 : 0) : 0,
+                         MAKEWPARAM(Window == (gpqForeground ? gpqForeground->spwndActive : NULL) ? WA_ACTIVE : WA_INACTIVE,
+                                    (Window->style & WS_MINIMIZE) ? 0x20 : 0),
                          (LPARAM)hWndPrev);
 
       co_IntSendMessage( UserHMGetHandle(Window),
@@ -837,6 +839,20 @@ CanForceFG(PPROCESSINFO ppi)
    return FALSE;
 }
 
+BOOL FASTCALL
+CanActivateForeground(PTHREADINFO pti)
+{
+   PPROCESSINFO ppi = pti->ppi;
+
+   return pti->MessageQueue == gpqForeground ||
+          (gptiForeground && gptiForeground->ppi == ppi) ||
+          (ptiLastInput && ptiLastInput->ppi == ppi) ||
+          gppiInputProvider == ppi ||
+          ppi == ppiScrnSaver ||
+          (pti->TIF_flags & (TIF_SYSTEMTHREAD | TIF_CSRSSTHREAD | TIF_ALLOWFOREGROUNDACTIVATE)) ||
+          (ppi->W32PF_flags & W32PF_ALLOWFOREGROUNDACTIVATE);
+}
+
 //
 //  Switching out foreground message queues.
 //
@@ -845,7 +861,7 @@ co_IntSetForegroundMessageQueue(
     _In_opt_ PWND Wnd,
     _In_ PTHREADINFO pti,
     _In_ BOOL MouseActivate,
-    _In_ DWORD Type )
+    _In_ BOOL bFocus )
 {
    PTHREADINFO ptiChg, ptiPrev;
    PUSER_MESSAGE_QUEUE pumq, pumqChg, pumqPrev;
@@ -947,7 +963,7 @@ co_IntSetForegroundMessageQueue(
               Msg.lParam = (LPARAM)tid; //// Fixme! Type flags?
               Msg.time = 0;
               //ERR("SFWAMQ : SAW P pti 0x%p tid 0x%p hWnd 0x%p\n",ptiChg,tid,hWnd);
-              MsqPostMessage(ptiChg, &Msg, FALSE, QS_EVENT, POSTEVENT_SAW, (LONG_PTR)Type|MouseActivate);
+              MsqPostMessage(ptiChg, &Msg, FALSE, QS_EVENT, POSTEVENT_SAW, (LONG_PTR)MouseActivate);
           }
           else // Current message queue same as changed message queue.
           {
@@ -965,7 +981,7 @@ co_IntSetForegroundMessageQueue(
               else
               {
                  //ERR("SFWAMQ : SAW I pti 0x%p hWnd 0x%p\n", ptiChg, Wnd ? UserHMGetHandle(Wnd) : NULL);
-                 Ret = co_IntSetActiveWindow(Wnd, MouseActivate, TRUE/*Type*/, FALSE);
+                 Ret = co_IntSetActiveWindow(Wnd, MouseActivate, bFocus, FALSE);
                  //if (!Ret) ERR("SFWAMQ : ISAW : return error\n");
                  return Ret;
               }
@@ -1009,7 +1025,8 @@ BOOL FASTCALL
 co_IntSetForegroundAndFocusWindow(
     _In_opt_ PWND Wnd,
     _In_ BOOL MouseActivate,
-    _In_ BOOL bFlash )
+    _In_ BOOL bFlash,
+    _In_ BOOL bFocus )
 {
    HWND hWnd = Wnd ? UserHMGetHandle(Wnd) : NULL;
    PUSER_MESSAGE_QUEUE PrevForegroundQueue;
@@ -1031,7 +1048,7 @@ co_IntSetForegroundAndFocusWindow(
          if (pti->MessageQueue == PrevForegroundQueue)
          { // Same WQ and TQ go active.
             //ERR("Same WQ and TQ go active.\n");
-            Ret = IntUserSetActiveWindow(Wnd, MouseActivate, TRUE, FALSE);
+            Ret = IntUserSetActiveWindow(Wnd, MouseActivate, bFocus, FALSE);
          }
          else if (Wnd->head.pti->MessageQueue->spwndActive == Wnd)
          { // Same WQ and it is active.
@@ -1066,7 +1083,7 @@ co_IntSetForegroundAndFocusWindow(
 
       ToggleFGActivate(pti);
 
-      return co_IntSetForegroundMessageQueue( Wnd, pti, MouseActivate, 0 );
+      return co_IntSetForegroundMessageQueue( Wnd, pti, MouseActivate, bFocus );
    }
 
    if (!Wnd) return FALSE; // No window, always return FALSE.
@@ -1076,7 +1093,7 @@ co_IntSetForegroundAndFocusWindow(
    if (pti->MessageQueue == Wnd->head.pti->MessageQueue)
    {
        //ERR("Same PQ and WQ go active.\n");
-       Ret = IntUserSetActiveWindow(Wnd, MouseActivate, TRUE, FALSE);
+       Ret = IntUserSetActiveWindow(Wnd, MouseActivate, bFocus, FALSE);
        //if (!Ret) ERR("ISFAFW : IUSAW : return error\n");
    }
    else if (Wnd->head.pti->MessageQueue->spwndActive == Wnd)
@@ -1343,7 +1360,7 @@ IntUserSetActiveWindow(
       {
          pti->TIF_flags |= TIF_ALLOWFOREGROUNDACTIVATE;
          //ERR("IntUserSetActiveWindow 3c FG set\n");
-         Ret = co_IntSetForegroundAndFocusWindow(Wnd, bMouse, TRUE);
+         Ret = co_IntSetForegroundAndFocusWindow(Wnd, bMouse, TRUE, TRUE);
          if (AllowFG)
          {
             pti->TIF_flags |= TIF_ALLOWFOREGROUNDACTIVATE;
@@ -1365,7 +1382,7 @@ co_IntMouseActivateWindow(PWND Wnd)
    TRACE("Mouse Active\n");
    if (Wnd && (Wnd->ExStyle & WS_EX_NOACTIVATE))
       return TRUE;
-   return co_IntSetForegroundAndFocusWindow(Wnd, TRUE, TRUE);
+   return co_IntSetForegroundAndFocusWindow(Wnd, TRUE, TRUE, TRUE);
 }
 
 BOOL FASTCALL
@@ -1489,7 +1506,7 @@ co_UserSetFocus(PWND Window)
             {
                 pti->ppi->W32PF_flags |= W32PF_ALLOWFOREGROUNDACTIVATE;
             }
-            if (!co_IntSetForegroundAndFocusWindow(pwndTop, FALSE, TRUE))
+            if (!co_IntSetForegroundAndFocusWindow(pwndTop, FALSE, TRUE, FALSE))
             {
                ERR("SetFocus: Set Foreground and Focus Failed!\n");
                return 0;
@@ -1673,7 +1690,7 @@ co_IntSetForegroundWindow(PWND Window)
 {
    if (Window) ASSERT_REFS_CO(Window);
 
-   return co_IntSetForegroundAndFocusWindow(Window, FALSE, TRUE);
+   return co_IntSetForegroundAndFocusWindow(Window, FALSE, TRUE, TRUE);
 }
 
 /*
@@ -1684,7 +1701,7 @@ co_IntSetForegroundWindowMouse(PWND Window)
 {
    if (Window) ASSERT_REFS_CO(Window);
 
-   return co_IntSetForegroundAndFocusWindow(Window, TRUE, FALSE);
+   return co_IntSetForegroundAndFocusWindow(Window, TRUE, FALSE, TRUE);
 }
 
 /*
@@ -1797,18 +1814,16 @@ NtUserSetActiveWindow(HWND hWnd)
    TRACE("Enter NtUserSetActiveWindow(%p)\n", hWnd);
    UserEnterExclusive();
 
-   Window = NULL;
-   if (hWnd)
+   if (!hWnd)
+      goto Exit;
+
+   if (!(Window = UserGetWindowObject(hWnd)))
    {
-      if (!(Window = UserGetWindowObject(hWnd)))
-      {
-         ERR("NtUserSetActiveWindow: Invalid handle 0x%p!\n",hWnd);
-         goto Exit; // Return NULL
-      }
+      ERR("NtUserSetActiveWindow: Invalid handle 0x%p!\n",hWnd);
+      goto Exit; // Return NULL
    }
 
-   if (!Window ||
-        Window->head.pti->MessageQueue == gptiCurrent->MessageQueue)
+   if (Window->head.pti->MessageQueue == gptiCurrent->MessageQueue)
    {
       pwndPrev = gptiCurrent->MessageQueue->spwndActive;
       hWndPrev = (pwndPrev ? UserHMGetHandle(pwndPrev) : NULL);

@@ -156,6 +156,9 @@ extern KSCHEDULER_SUBNODE KiNode0SubNode;
 #ifndef KI_MAX_NUMA_NODES
 #define KI_MAX_NUMA_NODES 1
 #endif
+#ifndef KiPrcbTimerTableLockQueue
+#define KiPrcbTimerTableLockQueue(Prcb, Index) (&(Prcb)->LockQueue[LockQueueTimerTableLock + (Index)])
+#endif
 #ifdef CONFIG_SMP
 extern ULONG KeMaximumProcessors;
 extern ULONG KeNumprocSpecified;

@@ -1172,7 +1172,7 @@ LxIpcSemop(
             Result = -LX_EINVAL;
             goto Exit;
         }
-        Deadline = (LONG64)KeQueryInterruptTime() + (LxTimespecToNs(&Timespec) + 99) / 100;
+        Deadline = (LONG64)KeQueryInterruptTime() + LxTimespecTo100ns(&Timespec);
         Timeout = &Remaining;
     }
     for (Index = 0; Index < Count; Index++)

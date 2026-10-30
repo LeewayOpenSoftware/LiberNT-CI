@@ -11,7 +11,6 @@ VOID Test_KeArm64Smt(VOID);
 
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
-#ifdef _M_ARM64
 
 static ULONG Arm64PopCount(KAFFINITY Mask)
 {
@@ -109,14 +108,9 @@ static VOID Arm64Smt(VOID)
                (ULONGLONG)Sibling[0]);
 }
 
-#endif /* _M_ARM64 */
 
 START_TEST(KeArm64Smt)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64Smt is ARM64-only\n");
-#else
     dump_trace("[arm64][KeArm64Smt] enter\n");
     Arm64Smt();
-#endif
 }

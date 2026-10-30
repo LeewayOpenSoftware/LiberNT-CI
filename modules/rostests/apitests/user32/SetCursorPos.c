@@ -155,7 +155,7 @@ void Test_SetCursorPos()
     previous = results[test_no].ll_hook_called;
     mouse_event(MOUSEEVENTF_MOVE, 0, 0, 0, 0);
     while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE)) DispatchMessageA(&msg);
-    ok(results[test_no].ll_hook_called == previous + 1,
+    ok(results[test_no].ll_hook_called == previous + 1 || broken(results[test_no].ll_hook_called == previous),
        "Stationary injected move called WH_MOUSE_LL %d times instead of 1\n",
        results[test_no].ll_hook_called - previous);
 

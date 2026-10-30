@@ -66,7 +66,7 @@ VOID ParaNdis_IndicateConnect(PARANDIS_ADAPTER *pContext, BOOLEAN bConnected, BO
     if (bConnected)
     {
         state.MediaConnectState = MediaConnectStateConnected;
-        state.MediaDuplexState = MediaDuplexStateFull;
+        state.MediaDuplexState = pContext->MediaDuplexState;
         state.XmitLinkSpeed = PARANDIS_FORMAL_LINK_SPEED;
         state.RcvLinkSpeed = PARANDIS_FORMAL_LINK_SPEED;
     }

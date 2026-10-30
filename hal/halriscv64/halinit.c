@@ -152,6 +152,7 @@ HalInitSystem(
      * unavailable CSR traps instead of silently substituting an invented QPC. */
     HalpRiscvInitializeProfile();
     HalpRiscvRegisterProfileInformation();
+    HalpSecondaryInitializeDispatch();
 
     HalpRiscvBootCounter = HalpRiscvReadTime();
     HalpRiscvInitializationFailure = RiscvHalNoFailure;

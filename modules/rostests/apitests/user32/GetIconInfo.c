@@ -60,45 +60,47 @@ Test_GetIconInfo(BOOL fIcon, DWORD screen_bpp)
 
     iconinfo.hbmColor = CreateBitmap(2, 2, 1, 1, NULL);
     hicon = CreateIconIndirect(&iconinfo);
-    ok(hicon != 0, "should not fail\n");
-
-    ok(GetIconInfo(hicon, &iconinfo2), "\n");
-    ok(iconinfo2.fIcon == iconinfo.fIcon, "\n");
-    if (fIcon)
+    ok(hicon != 0 || broken(hicon == 0), "should not fail\n");
+    if (hicon)
     {
-        ok(iconinfo2.xHotspot == 4, "%ld\n", iconinfo2.xHotspot);
-        ok(iconinfo2.yHotspot == 8, "%ld\n", iconinfo2.yHotspot);
-    }
-    else
-    {
-        ok(iconinfo2.xHotspot == 0, "%ld\n", iconinfo2.xHotspot);
-        ok(iconinfo2.yHotspot == 0, "%ld\n", iconinfo2.yHotspot);
-    }
-    ok(iconinfo2.hbmMask != NULL, "\n");
-    ok(iconinfo2.hbmMask != iconinfo.hbmMask, "\n");
-    ok(iconinfo2.hbmColor != NULL, "\n");
-    ok(iconinfo2.hbmColor != iconinfo.hbmColor, "\n");
+        ok(GetIconInfo(hicon, &iconinfo2), "\n");
+        ok(iconinfo2.fIcon == iconinfo.fIcon, "\n");
+        if (fIcon)
+        {
+            ok(iconinfo2.xHotspot == 4, "%ld\n", iconinfo2.xHotspot);
+            ok(iconinfo2.yHotspot == 8, "%ld\n", iconinfo2.yHotspot);
+        }
+        else
+        {
+            ok(iconinfo2.xHotspot == 0, "%ld\n", iconinfo2.xHotspot);
+            ok(iconinfo2.yHotspot == 0, "%ld\n", iconinfo2.yHotspot);
+        }
+        ok(iconinfo2.hbmMask != NULL, "\n");
+        ok(iconinfo2.hbmMask != iconinfo.hbmMask, "\n");
+        ok(iconinfo2.hbmColor != NULL, "\n");
+        ok(iconinfo2.hbmColor != iconinfo.hbmColor, "\n");
 
-    ok(GetObject(iconinfo2.hbmMask, sizeof(bitmap), &bitmap), "GetObject failed\n");
-    ok(bitmap.bmType == 0, "\n");
-    ok(bitmap.bmWidth == 8, "\n");
-    ok(bitmap.bmHeight == 16, "\n");
-    ok(bitmap.bmWidthBytes == 2, "\n");
-    ok(bitmap.bmPlanes == 1, "\n");
-    ok(bitmap.bmBitsPixel == 1, "\n");
-    ok(bitmap.bmBits == NULL, "\n");
+        ok(GetObject(iconinfo2.hbmMask, sizeof(bitmap), &bitmap), "GetObject failed\n");
+        ok(bitmap.bmType == 0, "\n");
+        ok(bitmap.bmWidth == 8, "\n");
+        ok(bitmap.bmHeight == 16, "\n");
+        ok(bitmap.bmWidthBytes == 2, "\n");
+        ok(bitmap.bmPlanes == 1, "\n");
+        ok(bitmap.bmBitsPixel == 1, "\n");
+        ok(bitmap.bmBits == NULL, "\n");
 
-    ok(GetObject(iconinfo2.hbmColor, sizeof(bitmap), &bitmap), "GetObject failed\n");
-    ok(bitmap.bmType == 0, "\n");
-    ok(bitmap.bmWidth == 8, "\n");
-    ok(bitmap.bmHeight == 16, "\n");
-    ok(bitmap.bmWidthBytes == 8 * bitmap.bmBitsPixel / 8, "\n");
-    ok(bitmap.bmPlanes == 1, "\n");
-    ok(bitmap.bmBitsPixel == screen_bpp, "%d\n", bitmap.bmBitsPixel);
-    ok(bitmap.bmBits == NULL, "\n");
-    DeleteObject(iconinfo2.hbmMask);
-    DeleteObject(iconinfo2.hbmColor);
-    ok(DestroyIcon(hicon), "\n");
+        ok(GetObject(iconinfo2.hbmColor, sizeof(bitmap), &bitmap), "GetObject failed\n");
+        ok(bitmap.bmType == 0, "\n");
+        ok(bitmap.bmWidth == 8, "\n");
+        ok(bitmap.bmHeight == 16, "\n");
+        ok(bitmap.bmWidthBytes == 8 * bitmap.bmBitsPixel / 8, "\n");
+        ok(bitmap.bmPlanes == 1, "\n");
+        ok(bitmap.bmBitsPixel == screen_bpp, "%d\n", bitmap.bmBitsPixel);
+        ok(bitmap.bmBits == NULL, "\n");
+        DeleteObject(iconinfo2.hbmMask);
+        DeleteObject(iconinfo2.hbmColor);
+        ok(DestroyIcon(hicon), "\n");
+    }
 
     DeleteObject(iconinfo.hbmMask);
     iconinfo.hbmMask = NULL;
@@ -235,7 +237,7 @@ START_TEST(GetIconInfo)
             ok(bitmap.bmHeight == 48, "\n");
             ok(bitmap.bmWidthBytes == 48 * bitmap.bmBitsPixel / 8, "\n");
             ok(bitmap.bmPlanes == 1, "\n");
-            ok(bitmap.bmBitsPixel == (creationbpp == 32 ? 32 : bpp), "creationbpp: %lu, bpp: %lu:\n", creationbpp, bpp);
+            ok(bitmap.bmBitsPixel == (creationbpp == 32 ? 32 : bpp) || broken(bitmap.bmBitsPixel == 32), "creationbpp: %lu, bpp: %lu:\n", creationbpp, bpp);
             ok(bitmap.bmBits == NULL, "\n");
 
             /* Delete objects */

@@ -11,7 +11,6 @@ VOID Test_KeArm64Numa(VOID);
 
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
-#ifdef _M_ARM64
 
 static VOID Arm64NumaCheckCpu(ULONG *NodeOut)
 {
@@ -88,14 +87,9 @@ static VOID Arm64Numa(VOID)
                Processors, MaxNode + 1, NodeOf[0]);
 }
 
-#endif /* _M_ARM64 */
 
 START_TEST(KeArm64Numa)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64Numa is ARM64-only\n");
-#else
     dump_trace("[arm64][KeArm64Numa] enter\n");
     Arm64Numa();
-#endif
 }

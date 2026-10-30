@@ -102,6 +102,10 @@ static struct list reg_driver_list = LIST_INIT(reg_driver_list);
 
 HMODULE MSVFW32_hModule;
 
+#ifdef __REACTOS__
+static void snapshot_loaded_codecs(void);
+#endif
+
 BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
 {
     TRACE("%p,%lx,%p\n", hinst, reason, reserved);
@@ -111,6 +115,9 @@ BOOL WINAPI DllMain( HINSTANCE hinst, DWORD reason, LPVOID reserved )
         case DLL_PROCESS_ATTACH:
             DisableThreadLibraryCalls(hinst);
             MSVFW32_hModule = hinst;
+#ifdef __REACTOS__
+            snapshot_loaded_codecs();
+#endif
             break;
     }
     return TRUE;
@@ -211,6 +218,68 @@ static int compare_fourcc(DWORD fcc1, DWORD fcc2)
   return _strnicmp(fcc_str1, fcc_str2, 4);
 }
 
+#ifdef __REACTOS__
+static DWORD *loaded_codecs;
+static DWORD loaded_codec_count;
+
+static void add_loaded_codec(const char *name)
+{
+    DWORD *codecs;
+
+    if (loaded_codecs)
+        codecs = HeapReAlloc(GetProcessHeap(), 0, loaded_codecs, (loaded_codec_count + 1) * 2 * sizeof(DWORD));
+    else
+        codecs = HeapAlloc(GetProcessHeap(), 0, 2 * sizeof(DWORD));
+    if (!codecs) return;
+    codecs[loaded_codec_count * 2] = mmioStringToFOURCCA(name, 0);
+    codecs[loaded_codec_count * 2 + 1] = mmioStringToFOURCCA(name + 5, 0);
+    loaded_codecs = codecs;
+    loaded_codec_count++;
+}
+
+static void snapshot_loaded_codecs(void)
+{
+    char name_buf[10], buf[2048], *s;
+    DWORD i = 0, name_len;
+    LONG res;
+    HKEY key;
+
+    if (!RegOpenKeyExA(HKEY_LOCAL_MACHINE, HKLM_DRIVERS32, 0, KEY_QUERY_VALUE, &key))
+    {
+        for (;;)
+        {
+            name_len = ARRAY_SIZE(name_buf);
+            res = RegEnumValueA(key, i++, name_buf, &name_len, 0, 0, NULL, NULL);
+            if (res == ERROR_NO_MORE_ITEMS) break;
+            if (res == ERROR_SUCCESS && name_len == 9 && name_buf[4] == '.')
+                add_loaded_codec(name_buf);
+        }
+        RegCloseKey(key);
+    }
+
+    if (GetPrivateProfileSectionA("drivers32", buf, sizeof(buf), "system.ini"))
+    {
+        for (s = buf; *s; s += strlen(s) + 1)
+        {
+            if (s[4] == '.' && s[9] == '=')
+                add_loaded_codec(s);
+        }
+    }
+}
+
+static BOOL is_loaded_codec(DWORD type, DWORD handler)
+{
+    DWORD i;
+
+    for (i = 0; i < loaded_codec_count; i++)
+    {
+        if (!compare_fourcc(loaded_codecs[i * 2], type) && !compare_fourcc(loaded_codecs[i * 2 + 1], handler))
+            return TRUE;
+    }
+    return FALSE;
+}
+#endif
+
 static DWORD get_size_image(LONG width, LONG height, WORD depth)
 {
     DWORD ret = width * depth;
@@ -284,7 +353,12 @@ BOOL VFWAPI ICInfo(DWORD type, DWORD handler, ICINFO *info)
             ret_type = mmioStringToFOURCCA(name_buf, 0);
             ret_handler = mmioStringToFOURCCA(name_buf + 5, 0);
             if (type && compare_fourcc(type, ret_type)) continue;
+#ifdef __REACTOS__
+            if (compare_fourcc(handler, ret_handler) &&
+                (!is_loaded_codec(ret_type, ret_handler) || handler != count++)) continue;
+#else
             if (compare_fourcc(handler, ret_handler) && handler != count++) continue;
+#endif
 
             info->fccType = ret_type;
             info->fccHandler = ret_handler;
@@ -304,7 +378,12 @@ BOOL VFWAPI ICInfo(DWORD type, DWORD handler, ICINFO *info)
             ret_type = mmioStringToFOURCCA(s, 0);
             ret_handler = mmioStringToFOURCCA(s + 5, 0);
             if (type && compare_fourcc(type, ret_type)) continue;
+#ifdef __REACTOS__
+            if (compare_fourcc(handler, ret_handler) &&
+                (!is_loaded_codec(ret_type, ret_handler) || handler != count++)) continue;
+#else
             if (compare_fourcc(handler, ret_handler) && handler != count++) continue;
+#endif
 
             info->fccType = ret_type;
             info->fccHandler = ret_handler;

@@ -26,6 +26,8 @@ typedef struct ARP_HEADER {
 
 BOOLEAN ARPTransmit(PIP_ADDRESS Address, PVOID LinkAddress, PIP_INTERFACE Interface);
 
+BOOLEAN ARPTransmitDad(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Address, BOOLEAN Announce);
+
 VOID ARPReceive(
     PVOID Context,
     PIP_PACKET Packet);

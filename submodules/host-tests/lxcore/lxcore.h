@@ -206,6 +206,7 @@ void LxHostCopy(void *Destination, const void *Source, SIZE_T Length);
 #define LX_IO_CHUNK         (64 * 1024)
 #define LX_BRK_RESERVE      (1024ULL * 1024 * 1024)
 #define LX_MMAP_MIN_ADDR    0x10000ULL
+#define LX_MMAP_GAP         (128ULL * 1024 * 1024)
 #define LX_VMA_HUGETLB      0x00020000
 #define LX_VMA_DONTDUMP     0x00040000
 #define LX_VMA_TOUCHED      0x00080000
@@ -230,6 +231,48 @@ void LxHostCopy(void *Destination, const void *Source, SIZE_T Length);
 typedef struct _LX_FILE LX_FILE, *PLX_FILE;
 typedef struct _LX_PROCESS LX_PROCESS, *PLX_PROCESS;
 typedef struct _LX_THREAD LX_THREAD, *PLX_THREAD;
+typedef struct _LX_TMPFS_INODE LX_TMPFS_INODE, *PLX_TMPFS_INODE;
+
+#define LX_HOST_USER_LIMIT      0x100000000ULL
+#define MM_HIGHEST_USER_ADDRESS ((PVOID)(ULONG_PTR)(LX_HOST_USER_LIMIT - 1))
+
+typedef enum MEM_EXTENDED_PARAMETER_TYPE
+{
+    MemExtendedParameterInvalidType,
+    MemExtendedParameterAddressRequirements,
+    MemExtendedParameterNumaNode,
+    MemExtendedParameterPartitionHandle,
+    MemExtendedParameterUserPhysicalHandle,
+    MemExtendedParameterAttributeFlags,
+    MemExtendedParameterImageMachine,
+    MemExtendedParameterMax
+} MEM_EXTENDED_PARAMETER_TYPE, *PMEM_EXTENDED_PARAMETER_TYPE;
+
+typedef struct _MEM_ADDRESS_REQUIREMENTS
+{
+    PVOID LowestStartingAddress;
+    PVOID HighestEndingAddress;
+    SIZE_T Alignment;
+} MEM_ADDRESS_REQUIREMENTS, *PMEM_ADDRESS_REQUIREMENTS;
+
+#define MEM_EXTENDED_PARAMETER_TYPE_BITS 8
+
+typedef struct MEM_EXTENDED_PARAMETER
+{
+    struct
+    {
+        ULONG64 Type : MEM_EXTENDED_PARAMETER_TYPE_BITS;
+        ULONG64 Reserved : 64 - MEM_EXTENDED_PARAMETER_TYPE_BITS;
+    };
+    union
+    {
+        ULONG64 ULong64;
+        PVOID Pointer;
+        SIZE_T Size;
+        HANDLE Handle;
+        ULONG ULong;
+    };
+} MEM_EXTENDED_PARAMETER, *PMEM_EXTENDED_PARAMETER;
 
 typedef struct _LX_VMA
 {
@@ -340,6 +383,7 @@ typedef struct _LX_CALL
 #define ObOpenObjectByPointer LxHostObOpenObjectByPointer
 #define ObReferenceObjectByHandle LxHostObReferenceObjectByHandle
 #define ZwAllocateVirtualMemory LxHostZwAllocateVirtualMemory
+#define ZwAllocateVirtualMemoryEx LxHostZwAllocateVirtualMemoryEx
 #define ZwFreeVirtualMemory LxHostZwFreeVirtualMemory
 #define ZwProtectVirtualMemory LxHostZwProtectVirtualMemory
 #define ZwQueryVirtualMemory LxHostZwQueryVirtualMemory
@@ -380,6 +424,9 @@ NTSTATUS ObReferenceObjectByHandle(HANDLE Handle, ACCESS_MASK Access, POBJECT_TY
 
 NTSTATUS ZwAllocateVirtualMemory(HANDLE Process, PVOID *BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize,
                                  ULONG AllocationType, ULONG Protect);
+NTSTATUS ZwAllocateVirtualMemoryEx(HANDLE Process, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG AllocationType,
+                                   ULONG PageProtection, PMEM_EXTENDED_PARAMETER ExtendedParameters,
+                                   ULONG ExtendedParameterCount);
 NTSTATUS ZwFreeVirtualMemory(HANDLE Process, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG FreeType);
 NTSTATUS ZwProtectVirtualMemory(HANDLE Process, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG NewProtect,
                                 PULONG OldProtect);
@@ -442,6 +489,12 @@ VOID LxMmLock(_In_ PLX_PROCESS Process);
 VOID LxMmUnlock(_In_ PLX_PROCESS Process);
 LONG LxMmFork(_In_ PLX_PROCESS Child, _In_ PLX_PROCESS Parent);
 VOID LxMmRelease(_In_ PLX_PROCESS Process);
+ULONG LxMmReleaseKeyedViews(_In_ PVOID Key, _In_opt_ VOID (*Visit)(_In_ PVOID Context, _In_ PLX_PROCESS Process),
+                            _In_opt_ PVOID Context);
+ULONG64 LxTmpfsInodeSize(_In_ PLX_TMPFS_INODE Inode);
+LONG LxTmpfsInodeRemoveRange(_In_ PLX_TMPFS_INODE Inode, _In_ ULONG64 Start, _In_ ULONG64 End);
+PLX_TMPFS_INODE LxTmpfsFileInode(_In_opt_ PLX_FILE File);
+NTSTATUS LxTmpfsMapSection(_In_ PLX_TMPFS_INODE Inode, _In_ BOOLEAN Shared, _Out_ PHANDLE Section, _Out_opt_ PULONG64 Size);
 BOOLEAN LxMmHandleFault(_In_ PLX_PROCESS Process, _In_ ULONG64 Address, _In_ ULONG Access);
 BOOLEAN LxMmFaultIn(_In_ ULONG64 Address, _In_ SIZE_T Length, _In_ BOOLEAN Write);
 LONG LxMmZero(_In_ PLX_PROCESS Process, _In_ ULONG64 Address, _In_ ULONG64 End);

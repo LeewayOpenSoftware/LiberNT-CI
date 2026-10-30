@@ -116,6 +116,7 @@ static LX_SYSCALL_ENTRY LxGenericSyscalls[] =
     LX_ENTRY(114, LxSysClockGetres, "clock_getres"),
     LX_ENTRY(115, LxSysClockNanosleep, "clock_nanosleep"),
     LX_ENTRY(116, LxSysSyslog, "syslog"),
+    LX_ENTRY(117, LxSysPtrace, "ptrace"),
     LX_ENTRY(118, LxSysSchedSetparam, "sched_setparam"),
     LX_ENTRY(119, LxSysSchedSetscheduler, "sched_setscheduler"),
     LX_ENTRY(120, LxSysSchedGetscheduler, "sched_getscheduler"),

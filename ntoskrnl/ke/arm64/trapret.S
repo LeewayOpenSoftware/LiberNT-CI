@@ -114,6 +114,25 @@ KiTrapReturn:
     cbnz    w16, .Lspsr_ready
     orr     w27, w27, #0x100       /* Keep SError masked for EL0 returns */
     str     w27, [x20, #TfSpsr]
+    mrs     x16, tpidr_el1
+    ldr     x16, [x16, #PcCurrentPrcb]
+    ldr     w16, [x16, #PbNumber]
+    ldr     x17, =KiArm64UserStepArmed
+    add     x17, x17, x16
+    tbnz    w27, #21, .Lstep_arm
+    ldrb    w16, [x17]
+    cbz     w16, .Lspsr_ready
+    mrs     x16, mdscr_el1
+    bic     x16, x16, #1
+    msr     mdscr_el1, x16
+    strb    wzr, [x17]
+    b       .Lspsr_ready
+.Lstep_arm:
+    mrs     x16, mdscr_el1
+    orr     x16, x16, #1
+    msr     mdscr_el1, x16
+    mov     w16, #1
+    strb    w16, [x17]
 .Lspsr_ready:
     msr     spsr_el1, x27
     msr     elr_el1, x28

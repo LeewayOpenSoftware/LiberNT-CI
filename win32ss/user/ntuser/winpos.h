@@ -55,6 +55,7 @@ IntEqualRect(RECTL *lprc1, RECTL *lprc2)
 }
 
 BOOL FASTCALL ActivateOtherWindowMin(PWND);
+BOOL FASTCALL can_activate_window(PWND Wnd OPTIONAL);
 UINT FASTCALL co_WinPosArrangeIconicWindows(PWND parent);
 BOOL FASTCALL IntGetClientOrigin(PWND Window, LPPOINT Point);
 LRESULT FASTCALL co_WinPosGetNonClientSize(PWND Window, RECTL* WindowRect, RECTL* ClientRect);

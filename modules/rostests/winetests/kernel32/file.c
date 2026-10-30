@@ -3092,6 +3092,10 @@ static void test_FindFirstFile_wildcards(void)
     WIN32_FIND_DATAA find_data;
     HANDLE handle;
     int i;
+#ifdef __REACTOS__
+    char fs_name[16] = "";
+    BOOL is_fat;
+#endif
     static const char* files[] = {
         "..a", "..a.a", ".a", ".a..a", ".a.a", ".aaa",
         "a", "a..a", "a.a", "a.a.a", "aa", "aaa", "aaaa", " .a"
@@ -3197,6 +3201,10 @@ static void test_FindFirstFile_wildcards(void)
     SetCurrentDirectoryA("test-dir");
     for (i = 0; i < ARRAY_SIZE(files); ++i)
         _lclose(_lcreat(files[i], 0));
+#ifdef __REACTOS__
+    GetVolumeInformationA(NULL, NULL, 0, NULL, NULL, NULL, fs_name, sizeof(fs_name));
+    is_fat = !strncmp(fs_name, "FAT", 3);
+#endif
 
     for (i = 0; i < ARRAY_SIZE(tests); ++i)
     {
@@ -3206,6 +3214,15 @@ static void test_FindFirstFile_wildcards(void)
 
         strcpy(missing, tests[i].result);
         correct[0] = incorrect[0] = 0;
+#ifdef __REACTOS__
+        if (is_fat && (tests[i].pattern[0] == '?' || tests[i].pattern[0] == '>') &&
+            strspn(tests[i].pattern + 1, ". ") == strlen(tests[i].pattern + 1))
+        {
+            char *dotdot = strstr(missing, ", '..'");
+
+            if (dotdot) memmove(dotdot, dotdot + 6, strlen(dotdot + 6) + 1);
+        }
+#endif
 
         handle = FindFirstFileA(tests[i].pattern, &find_data);
         if (handle != INVALID_HANDLE_VALUE)

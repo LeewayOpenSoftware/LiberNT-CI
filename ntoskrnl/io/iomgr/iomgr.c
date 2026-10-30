@@ -68,14 +68,12 @@ extern LIST_ENTRY DriverBootReinitListHead;
 extern LIST_ENTRY DriverReinitListHead;
 extern LIST_ENTRY IopFsNotifyChangeQueueHead;
 extern LIST_ENTRY IopErrorLogListHead;
-extern LIST_ENTRY IopTimerQueueHead;
 extern KDPC IopTimerDpc;
 extern KTIMER IopTimer;
 extern KSPIN_LOCK IoStatisticsLock;
 extern KSPIN_LOCK DriverReinitListLock;
 extern KSPIN_LOCK DriverBootReinitListLock;
 extern KSPIN_LOCK IopLogListLock;
-extern KSPIN_LOCK IopTimerLock;
 
 extern PDEVICE_OBJECT IopErrorLogObject;
 extern BOOLEAN PnPBootDriversInitialized;
@@ -612,11 +610,8 @@ IoInitSystem(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
         return FALSE;
     }
 
-    /* Initialize Timer List Lock */
-    KeInitializeSpinLock(&IopTimerLock);
-
     /* Initialize Timer List */
-    InitializeListHead(&IopTimerQueueHead);
+    IopInitTimerImplementation();
 
     /* Initialize the DPC/Timer which will call the other Timer Routines */
     ExpireTime.QuadPart = -10000000;

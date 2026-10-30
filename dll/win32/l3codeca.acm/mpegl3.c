@@ -378,6 +378,11 @@ static	LRESULT	MPEG3_FormatSuggest(PACMDRVFORMATSUGGEST adfs)
     if (adfs->cbwfxSrc < sizeof(PCMWAVEFORMAT) ||
 	adfs->cbwfxDst < sizeof(PCMWAVEFORMAT) ||
 	MPEG3_GetFormatIndex(adfs->pwfxSrc) == 0xFFFFFFFF) return ACMERR_NOTPOSSIBLE;
+#ifdef __REACTOS__
+    if ((adfs->fdwSuggest & ACM_FORMATSUGGESTF_WFORMATTAG) &&
+        adfs->pwfxDst->wFormatTag == adfs->pwfxSrc->wFormatTag)
+        return ACMERR_NOTPOSSIBLE;
+#endif
     /* FIXME: should do those tests against the real size (according to format tag */
 
     /* If no suggestion for destination, then copy source value */

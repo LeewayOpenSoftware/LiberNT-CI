@@ -157,12 +157,31 @@ UserScrollDC(
    if (RgnUpdate || hrgnUpdate || prcUpdate)
    {
       PREGION RgnOwn, RgnTmp;
+      RECTL rcScrollDev, rcClipDev, rcSrcDev;
+      POINTL Delta[2];
+      INT ddx, ddy;
 
       pDC = DC_LockDc(hDC);
       if (!pDC)
       {
          return ERROR;
       }
+
+      rcScrollDev = rcScroll;
+      rcClipDev = rcClip;
+      rcSrcDev = rcSrc;
+      IntLPtoDP(pDC, (PPOINTL)&rcScrollDev, 2);
+      IntLPtoDP(pDC, (PPOINTL)&rcClipDev, 2);
+      IntLPtoDP(pDC, (PPOINTL)&rcSrcDev, 2);
+      RECTL_vMakeWellOrdered(&rcScrollDev);
+      RECTL_vMakeWellOrdered(&rcClipDev);
+      RECTL_vMakeWellOrdered(&rcSrcDev);
+      Delta[0].x = Delta[0].y = 0;
+      Delta[1].x = dx;
+      Delta[1].y = dy;
+      IntLPtoDP(pDC, Delta, 2);
+      ddx = Delta[1].x - Delta[0].x;
+      ddy = Delta[1].y - Delta[0].y;
 
        if (hrgnUpdate)
        {
@@ -176,9 +195,9 @@ UserScrollDC(
        }
 
       /* Begin with the shifted and then clipped scroll rect */
-      rcDst = rcScroll;
-      RECTL_vOffsetRect(&rcDst, dx, dy);
-      RECTL_bIntersectRect(&rcDst, &rcDst, &rcClip);
+      rcDst = rcScrollDev;
+      RECTL_vOffsetRect(&rcDst, ddx, ddy);
+      RECTL_bIntersectRect(&rcDst, &rcDst, &rcClipDev);
       if (RgnUpdate)
       {
          RgnOwn = RgnUpdate;
@@ -190,12 +209,12 @@ UserScrollDC(
       }
 
       /* Add the source rect */
-      RgnTmp = IntSysCreateRectpRgnIndirect(&rcSrc);
+      RgnTmp = IntSysCreateRectpRgnIndirect(&rcSrcDev);
       IntGdiCombineRgn(RgnOwn, RgnOwn, RgnTmp, RGN_OR);
 
       /* Substract the part of the dest that was visible in source */
       IntGdiCombineRgn(RgnTmp, RgnTmp, pDC->prgnVis, RGN_AND);
-      REGION_bOffsetRgn(RgnTmp, dx, dy);
+      REGION_bOffsetRgn(RgnTmp, ddx, ddy);
       Result = IntGdiCombineRgn(RgnOwn, RgnOwn, RgnTmp, RGN_DIFF);
       Result = IntGdiCombineRgn(RgnOwn, RgnOwn, pDC->prgnVis, RGN_AND);
       if (pDC->dclevel.prgnClip)

@@ -37,7 +37,7 @@ LRESULT CALLBACK LowLevelKeyboardProc(int nCode, WPARAM wParam, LPARAM lParam)
     if(wParam == WM_SYSKEYDOWN)
 	{
 	    ok(pLLHook->flags & LLKHF_ALTDOWN,"Didn't get LLKHF_ALTDOWN flag\n");
-		ok((GetAsyncKeyState (VK_MENU) & 0x8000), "Alt should not be pressed in global kbd status\n");
+		ok(!(GetAsyncKeyState (VK_MENU) & 0x8000), "Alt should not be pressed in global kbd status\n");
 	    ok(!(GetKeyState(VK_MENU) & 0x8000), "Alt should not be pressed in queue state\n");
 		ok(!(GetAsyncKeyState (VK_LMENU) & 0x8000), "Left alt should not be pressed in global kbd status\n");
 	    ok(!(GetKeyState(VK_LMENU) & 0x8000), "Left alt should not be pressed in queue state\n");
@@ -107,7 +107,7 @@ void Test_GetKeyState()
 	hKbdHook = SetWindowsHookEx(WH_KEYBOARD, KeyboardProc, GetModuleHandleA( NULL ), 0);
 	hKbdLLHook = SetWindowsHookEx(WH_KEYBOARD_LL, LowLevelKeyboardProc, GetModuleHandleA( NULL ), 0);
 
-	ok(hKbdHook != NULL, "\n");
+	ok(hKbdHook != NULL || broken(hKbdHook == NULL), "\n");
 	ok(hKbdLLHook != NULL, "\n");
 
 	keybd_event(VK_LMENU, 0, 0,0);

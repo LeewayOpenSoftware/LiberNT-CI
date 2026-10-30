@@ -88,7 +88,7 @@ IntNotifyClipboardViewer(PWINSTATION_OBJECT pWinStaObj)
     HWND hwndOwner = pWinStaObj->spwndClipOwner ? UserHMGetHandle(pWinStaObj->spwndClipOwner) : NULL;
     PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
 
-    if (!pwndViewer)
+    if (!pwndViewer || pWinStaObj->ptiDrawingClipboard)
         return;
 
     if ((pti->TIF_flags & TIF_INCLEANUP) && pwndViewer->head.pti != pti)
@@ -101,7 +101,9 @@ IntNotifyClipboardViewer(PWINSTATION_OBJECT pWinStaObj)
         return;
     }
 
+    pWinStaObj->ptiDrawingClipboard = pti;
     co_IntSendMessageNoWait(UserHMGetHandle(pwndViewer), WM_DRAWCLIPBOARD, (WPARAM)hwndOwner, 0);
+    pWinStaObj->ptiDrawingClipboard = NULL;
 }
 
 static PCLIP NTAPI

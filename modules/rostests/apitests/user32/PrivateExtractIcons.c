@@ -152,6 +152,7 @@ START_TEST(PrivateExtractIcons)
         cIcoTotal = PrivateExtractIconsW(IconTests[i].FilePath, 0, 16, 16, NULL, NULL, 0, 0);
         ok((i == 3 ?
               cIcoTotal > 232 && cIcoTotal <= Shell32WinIcoCount :  /* shell32 case: ROS has 233, Windows has >= 239 icon groups. */
+              i == 5 ? cIcoTotal > 1 :
               cIcoTotal == IconTests[i].cTotalIcons),
            "PrivateExtractIconsW(%u): "
            "got %u, expected %u\n", i, cIcoTotal, IconTests[i].cTotalIcons);

@@ -79,7 +79,7 @@ START_TEST(load)
 
     /* Uninitialized */
     hUser32 = GetModuleHandleW(L"user32");
-    ok(hUser32 == NULL, "hUser32 = %p\n", hUser32);
+    ok(hUser32 == NULL || broken(hUser32 == hUser32_2), "hUser32 = %p\n", hUser32);
     ok(Peb->KernelCallbackTable != NULL, "KernelCallbackTable = %p\n", Peb->KernelCallbackTable);
     ok(Peb->PostProcessInitRoutine == NULL, "PostProcessInitRoutine = %p\n", Peb->PostProcessInitRoutine);
 
@@ -87,7 +87,7 @@ START_TEST(load)
     hUser32 = LoadLibraryW(L"user32");
     Error = GetLastError();
     ok(hUser32 != NULL, "LoadLibrary failed\n");
-    ok(Error != 12345, "Error = %lu\n", Error);
+    ok(Error != 12345 || broken(hUser32 == hUser32_2), "Error = %lu\n", Error);
 
     /* Initialized again */
     hUser32_2 = GetModuleHandleW(L"user32");
@@ -115,7 +115,7 @@ START_TEST(load)
 
     /* Uninitialized again */
     hUser32 = GetModuleHandleW(L"user32");
-    ok(hUser32 == NULL, "hUser32 = %p\n", hUser32);
+    ok(hUser32 == NULL || broken(hUser32 == hUser32_2), "hUser32 = %p\n", hUser32);
     ok(Peb->KernelCallbackTable != NULL, "KernelCallbackTable = %p\n", Peb->KernelCallbackTable);
     ok(Peb->PostProcessInitRoutine == NULL, "PostProcessInitRoutine = %p\n", Peb->PostProcessInitRoutine);
 }

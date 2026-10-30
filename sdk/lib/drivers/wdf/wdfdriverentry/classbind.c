@@ -95,13 +95,13 @@ FxStubBindClasses(
         {
             Status = ClassBindInfo->ClientBindClass(WdfVersionBindClass,
                                                     BindInfo,
-                                                    WdfDriverGlobals,
+                                                    (PWDF_COMPONENT_GLOBALS)WdfDriverGlobals,
                                                     ClassBindInfo);
         }
         else
         {
             Status = WdfVersionBindClass(BindInfo,
-                                         WdfDriverGlobals,
+                                         (PWDF_COMPONENT_GLOBALS)WdfDriverGlobals,
                                          ClassBindInfo);
         }
 
@@ -148,13 +148,13 @@ FxStubUnbindClasses(
         {
             ClassBindInfo->ClientUnbindClass(WdfVersionUnbindClass,
                                              BindInfo,
-                                             WdfDriverGlobals,
+                                             (PWDF_COMPONENT_GLOBALS)WdfDriverGlobals,
                                              ClassBindInfo);
         }
         else
         {
             WdfVersionUnbindClass(BindInfo,
-                                  WdfDriverGlobals,
+                                  (PWDF_COMPONENT_GLOBALS)WdfDriverGlobals,
                                   ClassBindInfo);
         }
 

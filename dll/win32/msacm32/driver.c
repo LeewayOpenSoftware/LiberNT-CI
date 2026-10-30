@@ -293,6 +293,21 @@ MMRESULT WINAPI acmDriverDetailsW(HACMDRIVERID hadid, PACMDRIVERDETAILSW padd, D
 	return MMSYSERR_INVALFLAG;
     }
 
+#ifdef __REACTOS__
+    {
+        PWINE_ACMDRIVERID padid = MSACM_GetDriverID(hadid);
+
+        if (padid && padid->pLocalDriver && padid->pACMDriverList)
+        {
+            ACMDRIVERDETAILSW paddw;
+            paddw.cbStruct = sizeof(paddw);
+            mmr = MSACM_Message((HACMDRIVER)padid->pACMDriverList, ACMDM_DRIVER_DETAILS, (LPARAM)&paddw, 0);
+            paddw.cbStruct = min(padd->cbStruct, sizeof(*padd));
+            memcpy(padd, &paddw, paddw.cbStruct);
+            return mmr;
+        }
+    }
+#endif
     mmr = acmDriverOpen(&acmDrvr, hadid, 0);
     if (mmr == MMSYSERR_NOERROR) {
         ACMDRIVERDETAILSW paddw;

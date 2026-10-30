@@ -1366,7 +1366,7 @@ CcmmCachedReopen(BOOLEAN Purge)
     NtMap->Pointers = &Pointers;
     NtMap->FileObject = &Object;
     NtMap->ReferenceCount = 1;
-    InsertTailList(&CcNtMapList, &NtMap->Link);
+    CcNtLinkMap(NtMap);
     CcMapInitialize(&NtMap->Map, &Cache, &CcNtBackingOps, NtMap, sizeof(Data), sizeof(Data), sizeof(Data));
     NtMap->Map.Ops.MakeViewResident = CcmmNtMakeViewResident;
     NtMap->Map.OpenCount = 1;
@@ -1391,7 +1391,7 @@ CcmmCachedReopen(BOOLEAN Purge)
         CHECK(CcPurgeCacheSection(&Pointers, NULL, 0, UNINITIALIZE_CACHE_MAPS));
     else
         CcNtExpireClosedMaps();
-    CHECK(Pointers.SharedCacheMap == NULL && IsListEmpty(&CcNtMapList));
+    CHECK(Pointers.SharedCacheMap == NULL && CcNtIsMapTableEmpty());
     CHECK(Object.References == 0 && File.Released == Purge);
     MiSegmentPurgeUnused(&World.System, ~0u);
     CHECK(File.Released == 1);
@@ -1510,8 +1510,7 @@ TestCcOnMm(void)
 {
     ULONG i;
 
-    CC_LOCK_INIT(&CcNtMapListLock);
-    InitializeListHead(&CcNtMapList);
+    CcNtInitializeMapTable();
     CcmmFaultableCopy();
     CcmmExtendingCopy();
     CcmmCopyReadsSpannedPages();

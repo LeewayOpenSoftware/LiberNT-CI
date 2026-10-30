@@ -15,6 +15,7 @@ ULONG_PTR HalpRiscvHartIds[MAXIMUM_PROCESSORS];
 ULONG HalpRiscvHartCount;
 ULONG HalpRiscvStartedProcessors = 1;
 static BOOLEAN HalpRiscvHasSmp;
+static BOOLEAN HalpRiscvSmtEnabled;
 
 typedef struct _HAL_RISCV_AP_DATA
 {
@@ -74,6 +75,64 @@ HalpRiscvCompatibleHart(const RISCV_FDT *Fdt, ULONG Cpu)
     return Letters == 0x3F;
 }
 
+static BOOLEAN
+HalpRiscvCpuMapNodeIs(const RISCV_FDT *Fdt, ULONG Node, const CHAR *Prefix, ULONG PrefixLength)
+{
+    const CHAR *Name;
+    ULONG Length, Index;
+
+    Name = RiscvFdtNodeName(Fdt, Node, &Length);
+    if (!Name || Length <= PrefixLength)
+        return FALSE;
+    for (Index = 0; Index < PrefixLength; ++Index)
+        if (Name[Index] != Prefix[Index]) return FALSE;
+    for (; Index < Length; ++Index)
+        if (Name[Index] < '0' || Name[Index] > '9') return FALSE;
+    return TRUE;
+}
+
+static BOOLEAN
+HalpRiscvCpuMapHasSmt(const RISCV_FDT *Fdt, ULONG Node, ULONG Depth)
+{
+    ULONG Child, Thread, Threads;
+
+    for (Child = RiscvFdtFirstChild(Fdt, Node);
+         Child != RISCV_FDT_NO_NODE;
+         Child = RiscvFdtNextSibling(Fdt, Child))
+    {
+        if (HalpRiscvCpuMapNodeIs(Fdt, Child, "core", 4))
+        {
+            Threads = 0;
+            for (Thread = RiscvFdtFirstChild(Fdt, Child);
+                 Thread != RISCV_FDT_NO_NODE;
+                 Thread = RiscvFdtNextSibling(Fdt, Thread))
+            {
+                if (HalpRiscvCpuMapNodeIs(Fdt, Thread, "thread", 6)) ++Threads;
+            }
+            if (Threads > 1) return TRUE;
+        }
+        else if (Depth < 4 && HalpRiscvCpuMapHasSmt(Fdt, Child, Depth + 1))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+ULONG
+NTAPI
+HalQueryMaximumProcessorCount(VOID)
+{
+    return HalpRiscvHartCount ? HalpRiscvHartCount : 1;
+}
+
+BOOLEAN
+NTAPI
+HalIsHyperThreadingEnabled(VOID)
+{
+    return HalpRiscvSmtEnabled;
+}
+
 BOOLEAN
 HalpRiscvDiscoverHarts(PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
@@ -92,6 +151,8 @@ HalpRiscvDiscoverHarts(PLOADER_PARAMETER_BLOCK LoaderBlock)
     if (!RiscvFdtOpen((const VOID *)(ULONG_PTR)Block->DeviceTree,
                       Block->DeviceTreeSize, &Fdt) ||
         !RiscvFdtFindNode(&Fdt, "/cpus", &Cpus, NULL)) return FALSE;
+    if (RiscvFdtFindNode(&Fdt, "/cpus/cpu-map", &Cpu, NULL))
+        HalpRiscvSmtEnabled = HalpRiscvCpuMapHasSmt(&Fdt, Cpu, 0);
 
     for (Cpu = RiscvFdtFirstChild(&Fdt, Cpus);
          Cpu != RISCV_FDT_NO_NODE;

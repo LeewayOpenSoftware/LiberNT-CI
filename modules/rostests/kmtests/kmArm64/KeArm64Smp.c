@@ -13,7 +13,6 @@ VOID Test_KeArm64Smp(VOID);
 
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
-#ifdef _M_ARM64
 
 static VOID Arm64SmpCheck(VOID)
 {
@@ -124,14 +123,9 @@ static VOID Arm64SmpCheck(VOID)
                (ULONG64)Active, (ULONG64)Prcb->GroupSetMember);
 }
 
-#endif /* _M_ARM64 */
 
 START_TEST(KeArm64Smp)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64Smp is ARM64-only\n");
-#else
     dump_trace("[arm64][KeArm64Smp] enter\n");
     Arm64SmpCheck();
-#endif
 }

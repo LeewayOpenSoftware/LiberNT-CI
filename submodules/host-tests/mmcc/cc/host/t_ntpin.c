@@ -108,6 +108,12 @@ CcNtReferenceMap(PSECTION_OBJECT_POINTERS Pointers)
     return Map;
 }
 
+PCC_NT_MAP
+CcNtReferenceFileMap(PFILE_OBJECT FileObject)
+{
+    return CcNtReferenceMap(FileObject->SectionObjectPointer);
+}
+
 VOID
 CcNtDereferenceMap(PCC_NT_MAP Map)
 {

@@ -64,6 +64,58 @@ IopDeleteDevice(IN PVOID ObjectBody)
         ObDereferenceObject(DeviceObject->DriverObject);
 }
 
+#define IOP_DATABASE_LOCK_SLOTS 32
+
+typedef struct DECLSPEC_CACHEALIGN _IOP_DATABASE_LOCK_SLOT
+{
+    KSPIN_LOCK Lock;
+} IOP_DATABASE_LOCK_SLOT;
+
+static IOP_DATABASE_LOCK_SLOT IopDatabaseLockSlots[IOP_DATABASE_LOCK_SLOTS];
+
+KIRQL
+NTAPI
+IopAcquireDatabaseLockShared(VOID)
+{
+    KIRQL OldIrql = KeRaiseIrqlToDpcLevel();
+
+    KeAcquireSpinLockAtDpcLevel(&IopDatabaseLockSlots[KeGetCurrentProcessorNumber() % IOP_DATABASE_LOCK_SLOTS].Lock);
+    return OldIrql;
+}
+
+VOID
+NTAPI
+IopReleaseDatabaseLockShared(
+    _In_ KIRQL OldIrql)
+{
+    KeReleaseSpinLockFromDpcLevel(&IopDatabaseLockSlots[KeGetCurrentProcessorNumber() % IOP_DATABASE_LOCK_SLOTS].Lock);
+    KeLowerIrql(OldIrql);
+}
+
+KIRQL
+NTAPI
+IopAcquireDatabaseLockExclusive(VOID)
+{
+    KIRQL OldIrql = KeRaiseIrqlToDpcLevel();
+    ULONG Slot;
+
+    for (Slot = 0; Slot < IOP_DATABASE_LOCK_SLOTS; Slot++)
+        KeAcquireSpinLockAtDpcLevel(&IopDatabaseLockSlots[Slot].Lock);
+    return OldIrql;
+}
+
+VOID
+NTAPI
+IopReleaseDatabaseLockExclusive(
+    _In_ KIRQL OldIrql)
+{
+    ULONG Slot;
+
+    for (Slot = IOP_DATABASE_LOCK_SLOTS; Slot > 0; Slot--)
+        KeReleaseSpinLockFromDpcLevel(&IopDatabaseLockSlots[Slot - 1].Lock);
+    KeLowerIrql(OldIrql);
+}
+
 static PDEVICE_OBJECT
 NTAPI
 IopAttachDeviceToDeviceStackSafe(
@@ -76,7 +128,7 @@ IopAttachDeviceToDeviceStackSafe(
     KIRQL OldIrql;
 
     /* Lock the device list while attaching the device */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockExclusive();
 
     /* Get the attached device and source extension */
     AttachedDevice = IoGetAttachedDevice(TargetDevice);
@@ -116,7 +168,7 @@ IopAttachDeviceToDeviceStackSafe(
         *AttachedToDeviceObject = AttachedDevice;
 
     /* Release the device list lock */
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockExclusive(OldIrql);
 
     return AttachedDevice;
 }
@@ -342,7 +394,7 @@ IopEditDeviceList(IN PDRIVER_OBJECT DriverObject,
     KIRQL OldIrql;
 
     /* Lock the device list while we edit it */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockExclusive();
 
     /* Check the type of operation */
     if (Type == IopRemove)
@@ -367,7 +419,7 @@ IopEditDeviceList(IN PDRIVER_OBJECT DriverObject,
                             DeviceObject);
 
                     ASSERT(FALSE);
-                    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+                    IopReleaseDatabaseLockExclusive(OldIrql);
                     return;
                 }
                 Previous = Previous->NextDevice;
@@ -385,7 +437,7 @@ IopEditDeviceList(IN PDRIVER_OBJECT DriverObject,
     }
 
     /* Release the device list lock */
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockExclusive(OldIrql);
 }
 
 VOID
@@ -760,7 +812,7 @@ IopVerifyDeviceObjectOnStack(IN PDEVICE_OBJECT BaseDeviceObject,
 
     Result = FALSE;
     /* Simply loop on the device stack and try to find our hint */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
     for (LoopObject = BaseDeviceObject; ; LoopObject = LoopObject->AttachedDevice)
     {
         /* It was found, it's a success */
@@ -776,7 +828,7 @@ IopVerifyDeviceObjectOnStack(IN PDEVICE_OBJECT BaseDeviceObject,
             break;
         }
     }
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
 
     return Result;
 }
@@ -1560,7 +1612,7 @@ IoEnumerateDeviceObjectList(IN  PDRIVER_OBJECT DriverObject,
     KIRQL OldIrql;
 
     /* Lock the device list while we enumerate it */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
 
     /* Find out how many devices we'll enumerate */
     while ((CurrentDevice = CurrentDevice->NextDevice)) ActualDevices++;
@@ -1575,7 +1627,7 @@ IoEnumerateDeviceObjectList(IN  PDRIVER_OBJECT DriverObject,
     if ((ActualDevices * sizeof(PDEVICE_OBJECT)) > DeviceObjectListSize)
     {
         /* Fail because the buffer was too small */
-        KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+        IopReleaseDatabaseLockShared(OldIrql);
         return STATUS_BUFFER_TOO_SMALL;
     }
 
@@ -1599,7 +1651,7 @@ IoEnumerateDeviceObjectList(IN  PDRIVER_OBJECT DriverObject,
     }
 
     /* Release the device list lock */
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
 
     /* Return the status */
     return STATUS_SUCCESS;
@@ -1639,10 +1691,10 @@ IoGetAttachedDeviceReference(PDEVICE_OBJECT DeviceObject)
     KIRQL OldIrql;
 
     /* Retrieve and reference the attached device under the device list lock */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
     DeviceObject = IoGetAttachedDevice(DeviceObject);
     ObReferenceObject(DeviceObject);
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
 
     return DeviceObject;
 }
@@ -1657,10 +1709,10 @@ IoGetDeviceAttachmentBaseRef(IN PDEVICE_OBJECT DeviceObject)
     KIRQL OldIrql;
 
     /* Retrieve and reference the lowest attached device under the device list lock */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
     DeviceObject = IopGetLowestDevice(DeviceObject);
     ObReferenceObject(DeviceObject);
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
 
     return DeviceObject;
 }

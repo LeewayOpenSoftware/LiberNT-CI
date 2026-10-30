@@ -55,7 +55,6 @@ ULONG SepAdtMaxListLength = 0x3000;
 #define POLICY_AUDIT_EVENT_TYPE_COUNT 9 // (AuditCategoryAccountLogon - AuditCategorySystem + 1)
 UCHAR SeAuditingState[POLICY_AUDIT_EVENT_TYPE_COUNT];
 
-KGUARDED_MUTEX SepRmDbLock;
 PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION SepLogonNotifications = NULL;
 
 /*
@@ -69,6 +68,16 @@ PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION SepLogonNotifications = NULL;
 #define MAX_LOGON_SESSION_LISTS_IN_ARRAY      16
 static PSEP_LOGON_SESSION_REFERENCES _SepLogonSessions[MAX_LOGON_SESSION_LISTS_IN_ARRAY] = {NULL};
 PSEP_LOGON_SESSION_REFERENCES* const SepLogonSessions = _SepLogonSessions;
+static KGUARDED_MUTEX SepRmDbLock[MAX_LOGON_SESSION_LISTS_IN_ARRAY];
+static KGUARDED_MUTEX SepRmNotificationLock;
+
+static
+PKGUARDED_MUTEX
+SepRmDbLockFor(
+    _In_ PLUID LogonLuid)
+{
+    return &SepRmDbLock[LogonLuid->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
+}
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
@@ -184,9 +193,12 @@ NTAPI
 SeRmInitPhase0(VOID)
 {
     NTSTATUS Status;
+    ULONG i;
 
     /* Initialize the database lock */
-    KeInitializeGuardedMutex(&SepRmDbLock);
+    for (i = 0; i < MAX_LOGON_SESSION_LISTS_IN_ARRAY; i++)
+        KeInitializeGuardedMutex(&SepRmDbLock[i]);
+    KeInitializeGuardedMutex(&SepRmNotificationLock);
 
     /* Create the system logon session */
     Status = SepRmCreateLogonSession(&SeSystemAuthenticationId);
@@ -385,7 +397,7 @@ SepRmInsertLogonSessionIntoToken(
     ASSERT(Token);
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
 
     /* Retrieve the hash bucket and loop over it */
     for (LogonSession = SepLogonSessions[Token->AuthenticationId.LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
@@ -407,7 +419,7 @@ SepRmInsertLogonSessionIntoToken(
     if (LogonSession == NULL)
     {
         DPRINT1("SepRmInsertLogonSessionIntoToken(): Couldn't insert the logon session into the specific access token!\n");
-        KeReleaseGuardedMutex(&SepRmDbLock);
+        KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
         return STATUS_NO_SUCH_LOGON_SESSION;
     }
 
@@ -421,7 +433,7 @@ SepRmInsertLogonSessionIntoToken(
     if (Token->LogonSession == NULL)
     {
         DPRINT1("SepRmInsertLogonSessionIntoToken(): Couldn't allocate new logon session into the memory pool!\n");
-        KeReleaseGuardedMutex(&SepRmDbLock);
+        KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -438,7 +450,7 @@ SepRmInsertLogonSessionIntoToken(
     InsertHeadList(&LogonSession->TokenList, &Token->LogonSession->TokenList);
 
     /* Release the database lock and we're done */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
     return STATUS_SUCCESS;
 }
 
@@ -467,7 +479,7 @@ SepRmRemoveLogonSessionFromToken(
     ASSERT(Token);
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
 
     /* Retrieve the hash bucket and loop over it */
     for (LogonSession = SepLogonSessions[Token->AuthenticationId.LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
@@ -488,7 +500,7 @@ SepRmRemoveLogonSessionFromToken(
     if (LogonSession == NULL)
     {
         DPRINT1("SepRmRemoveLogonSessionFromToken(): Couldn't remove the logon session from the access token!\n");
-        KeReleaseGuardedMutex(&SepRmDbLock);
+        KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
         return STATUS_NO_SUCH_LOGON_SESSION;
     }
 
@@ -497,7 +509,7 @@ SepRmRemoveLogonSessionFromToken(
     ExFreePoolWithTag(Token->LogonSession, TAG_LOGON_SESSION);
 
     /* Release the database lock and we're done */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
     return STATUS_SUCCESS;
 }
 
@@ -548,7 +560,7 @@ SepRmCreateLogonSession(
     InitializeListHead(&NewSession->TokenList);
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(LogonLuid));
 
     /*
      * Cache the previous session from the hash bucket, the newly created
@@ -578,7 +590,7 @@ SepRmCreateLogonSession(
 
 Leave:
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
     if (!NT_SUCCESS(Status))
     {
@@ -617,7 +629,7 @@ SepRmDeleteLogonSession(
            LogonLuid->HighPart, LogonLuid->LowPart);
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(LogonLuid));
 
     /* Retrieve the hash bucket, the database will have this session pulled away down below */
     LogonSession = &SepLogonSessions[LogonLuid->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
@@ -701,7 +713,7 @@ SepRmDeleteLogonSession(
 
 Leave:
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
     return Status;
 }
 
@@ -730,7 +742,7 @@ SepRmReferenceLogonSession(
            LogonLuid->HighPart, LogonLuid->LowPart);
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(LogonLuid));
 
     /* Retrieve the hash bucket and loop over it */
     for (CurrentSession = SepLogonSessions[LogonLuid->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
@@ -745,14 +757,14 @@ SepRmReferenceLogonSession(
             DPRINT("ReferenceCount: %lu\n", CurrentSession->ReferenceCount);
 
             /* Release the database lock */
-            KeReleaseGuardedMutex(&SepRmDbLock);
+            KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
             return STATUS_SUCCESS;
         }
     }
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
     return STATUS_NO_SUCH_LOGON_SESSION;
 }
@@ -1043,7 +1055,7 @@ SepRmDereferenceLogonSession(
            LogonLuid->HighPart, LogonLuid->LowPart);
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(LogonLuid));
 
     /* Retrieve the hash bucket and walk over it */
     for (CurrentSession = SepLogonSessions[LogonLuid->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
@@ -1058,7 +1070,7 @@ SepRmDereferenceLogonSession(
             DPRINT("ReferenceCount: %lu\n", CurrentSession->ReferenceCount);
 
             /* Release the database lock */
-            KeReleaseGuardedMutex(&SepRmDbLock);
+            KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
             /* We're done with the session */
             if (RefCount == 0)
@@ -1080,7 +1092,7 @@ SepRmDereferenceLogonSession(
     }
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
     return STATUS_NO_SUCH_LOGON_SESSION;
 }
@@ -1372,7 +1384,7 @@ SeGetLogonIdDeviceMap(
     }
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(LogonId));
 
     /* Retrieve the hash bucket and loop over it */
     for (CurrentSession = SepLogonSessions[LogonId->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
@@ -1390,7 +1402,7 @@ SeGetLogonIdDeviceMap(
     if (CurrentSession == NULL)
     {
         /* Release the database lock */
-        KeReleaseGuardedMutex(&SepRmDbLock);
+        KeReleaseGuardedMutex(SepRmDbLockFor(LogonId));
 
         return STATUS_NO_SUCH_LOGON_SESSION;
     }
@@ -1401,7 +1413,7 @@ SeGetLogonIdDeviceMap(
         *DeviceMap = CurrentSession->pDeviceMap;
 
         /* Release the database lock */
-        KeReleaseGuardedMutex(&SepRmDbLock);
+        KeReleaseGuardedMutex(SepRmDbLockFor(LogonId));
 
         return STATUS_SUCCESS;
     }
@@ -1413,7 +1425,7 @@ SeGetLogonIdDeviceMap(
     CurrentSession->ReferenceCount += 1;
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(LogonId));
 
     /* Create our object directory given the LUID */
     _snwprintf(Buffer,
@@ -1464,7 +1476,7 @@ SeGetLogonIdDeviceMap(
     }
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(LogonId));
 
     /* If we succeed... */
     if (NT_SUCCESS(Status))
@@ -1491,7 +1503,7 @@ SeGetLogonIdDeviceMap(
     }
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(LogonId));
 
     /* We're done with the session */
     SepRmDereferenceLogonSession(&CurrentSession->LogonId);
@@ -1524,7 +1536,7 @@ SeMarkLogonSessionForTerminationNotification(
            LogonId->HighPart, LogonId->LowPart);
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(LogonId));
 
     /* Retrieve the hash bucket and loop over it */
     for (SessionToMark = SepLogonSessions[LogonId->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
@@ -1546,7 +1558,7 @@ SeMarkLogonSessionForTerminationNotification(
     if (SessionToMark == NULL)
     {
         DPRINT1("SeMarkLogonSessionForTerminationNotification(): Logon session couldn't be found!\n");
-        KeReleaseGuardedMutex(&SepRmDbLock);
+        KeReleaseGuardedMutex(SepRmDbLockFor(LogonId));
         return STATUS_NOT_FOUND;
     }
 
@@ -1555,7 +1567,7 @@ SeMarkLogonSessionForTerminationNotification(
     DPRINT("SeMarkLogonSessionForTerminationNotification(): Logon session marked for termination with success!\n");
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(SepRmDbLockFor(LogonId));
     return STATUS_SUCCESS;
 }
 
@@ -1594,7 +1606,7 @@ SeRegisterLogonSessionTerminatedRoutine(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(&SepRmNotificationLock);
 
     /* Set the callback routine */
     Notification->CallbackRoutine = CallbackRoutine;
@@ -1604,7 +1616,7 @@ SeRegisterLogonSessionTerminatedRoutine(
     SepLogonNotifications = Notification;
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(&SepRmNotificationLock);
 
     return STATUS_SUCCESS;
 }
@@ -1637,7 +1649,7 @@ SeUnregisterLogonSessionTerminatedRoutine(
         return STATUS_INVALID_PARAMETER;
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmDbLock);
+    KeAcquireGuardedMutex(&SepRmNotificationLock);
 
     /* Loop all registered notification items */
     for (Current = SepLogonNotifications;
@@ -1671,7 +1683,7 @@ SeUnregisterLogonSessionTerminatedRoutine(
     }
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmDbLock);
+    KeReleaseGuardedMutex(&SepRmNotificationLock);
 
     return Status;
 }

@@ -547,6 +547,13 @@ LxSocketFromFd(
     return File;
 }
 
+LONG64
+LxSocketTimeout(
+    _In_ PLX_TIMEVAL Timeval)
+{
+    return (Timeval->Seconds >= LX_KTIME_SEC_MAX) ? 0 : LxTimevalTo100ns(Timeval);
+}
+
 LX_SYSCALL(LxSysSocket)
 {
     ULONG Domain = (ULONG)Call->Args[0];
@@ -2448,9 +2455,9 @@ LX_SYSCALL(LxSysSetsockopt)
             if (Result != 0)
                 break;
             if ((Name == LX_SO_RCVTIMEO_OLD) || (Name == LX_SO_RCVTIMEO_NEW))
-                Socket->RecvTimeout = Timeval.Seconds * 10000000LL + Timeval.Microseconds * 10;
+                Socket->RecvTimeout = LxSocketTimeout(&Timeval);
             else
-                Socket->SendTimeout = Timeval.Seconds * 10000000LL + Timeval.Microseconds * 10;
+                Socket->SendTimeout = LxSocketTimeout(&Timeval);
             break;
         }
 

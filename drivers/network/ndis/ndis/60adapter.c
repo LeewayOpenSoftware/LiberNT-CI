@@ -22,6 +22,7 @@
 
 #include "ndis6_internal.h"
 #include <ntstrsafe.h>
+#include <ndisguid.h>
 
 #define NDIS6_ADAPTER_TAG  'aDNn'  /* "nNDa" */
 
@@ -61,6 +62,63 @@ Ndis6ReadInterfaceType(
         return 6;
 
     return (NET_IFTYPE)Value;
+}
+
+static
+BOOLEAN
+Ndis6ReadAdapterKeyword(
+    _In_ HANDLE DriverKey,
+    _In_ PCWSTR Name,
+    _Out_ PULONG Value)
+{
+    union
+    {
+        KEY_VALUE_PARTIAL_INFORMATION Information;
+        UCHAR Buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(ULONG)];
+    } Query;
+    UNICODE_STRING ValueName;
+    ULONG ResultLength;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&ValueName, Name);
+    Status = ZwQueryValueKey(DriverKey, &ValueName, KeyValuePartialInformation, &Query, sizeof(Query), &ResultLength);
+    if (!NT_SUCCESS(Status) || Query.Information.Type != REG_DWORD || Query.Information.DataLength != sizeof(ULONG))
+        return FALSE;
+
+    RtlCopyMemory(Value, Query.Information.Data, sizeof(ULONG));
+    return TRUE;
+}
+
+VOID
+Ndis6ApplyInfInterfaceKeywords(
+    _In_ PDEVICE_OBJECT Pdo,
+    _Inout_ PNDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES General)
+{
+    HANDLE DriverKey;
+    ULONG Value;
+
+    if (Pdo == NULL || KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return;
+
+    if (!NT_SUCCESS(IoOpenDeviceRegistryKey(Pdo, PLUGPLAY_REGKEY_DRIVER, KEY_QUERY_VALUE, &DriverKey)))
+        return;
+
+    if (Ndis6ReadAdapterKeyword(DriverKey, L"*MediaType", &Value))
+        General->MediaType = (NDIS_MEDIUM)Value;
+    if (Ndis6ReadAdapterKeyword(DriverKey, L"*PhysicalMediaType", &Value))
+        General->PhysicalMediumType = (NDIS_PHYSICAL_MEDIUM)Value;
+    if (Ndis6ReadAdapterKeyword(DriverKey, L"*IfType", &Value))
+        General->IfType = (NET_IFTYPE)Value;
+    if (Ndis6ReadAdapterKeyword(DriverKey, L"*IfConnectorPresent", &Value))
+        General->IfConnectorPresent = Value != 0;
+    if (Ndis6ReadAdapterKeyword(DriverKey, L"*AccessType", &Value))
+        General->AccessType = (NET_IF_ACCESS_TYPE)Value;
+    if (Ndis6ReadAdapterKeyword(DriverKey, L"*ConnectionType", &Value))
+        General->ConnectionType = (NET_IF_CONNECTION_TYPE)Value;
+    if (Ndis6ReadAdapterKeyword(DriverKey, L"*DirectionType", &Value))
+        General->DirectionType = (NET_IF_DIRECTION_TYPE)Value;
+
+    ZwClose(DriverKey);
 }
 
 BOOLEAN
@@ -512,6 +570,57 @@ Ndis6ImSeedTcpipRegistry(_In_ PCUNICODE_STRING DeviceName)
  *  resources.
  * ============================================================================ */
 
+static
+VOID
+Ndis6RegisterNetInterface(
+    _Inout_ PLOGICAL_ADAPTER Adapter)
+{
+    PUNICODE_STRING Name = &Adapter->NdisMiniportBlock.MiniportName;
+    UNICODE_STRING ReferenceString;
+    USHORT Index;
+    NTSTATUS Status;
+
+    RtlInitEmptyUnicodeString(&ReferenceString, NULL, 0);
+    for (Index = 0; Index < Name->Length / sizeof(WCHAR); Index++)
+    {
+        if (Name->Buffer[Index] == L'{')
+        {
+            ReferenceString.Buffer = &Name->Buffer[Index];
+            ReferenceString.Length = Name->Length - Index * sizeof(WCHAR);
+            ReferenceString.MaximumLength = ReferenceString.Length;
+            break;
+        }
+    }
+
+    Status = IoRegisterDeviceInterface(Adapter->NdisMiniportBlock.PhysicalDeviceObject,
+                                       &GUID_DEVINTERFACE_NET,
+                                       ReferenceString.Length ? &ReferenceString : NULL,
+                                       &Adapter->NdisMiniportBlock.SymbolicLinkName);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("NDIS6: IoRegisterDeviceInterface(%wZ) failed 0x%08lx\n", Name, (ULONG)Status);
+        RtlInitEmptyUnicodeString(&Adapter->NdisMiniportBlock.SymbolicLinkName, NULL, 0);
+    }
+}
+
+VOID
+Ndis6SetNetInterfaceState(
+    _In_ PLOGICAL_ADAPTER Adapter,
+    _In_ BOOLEAN Enable)
+{
+    NTSTATUS Status;
+
+    if (Adapter->NdisMiniportBlock.SymbolicLinkName.Buffer == NULL)
+        return;
+
+    Status = IoSetDeviceInterfaceState(&Adapter->NdisMiniportBlock.SymbolicLinkName, Enable);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("NDIS6: IoSetDeviceInterfaceState(%wZ, %u) failed 0x%08lx\n",
+                 &Adapter->NdisMiniportBlock.SymbolicLinkName, Enable, (ULONG)Status);
+    }
+}
+
 static NDIS_STATUS
 Ndis6InitializeLogicalAdapter(
     _In_ PNDIS6_DRIVER_BLOCK DriverBlock,
@@ -714,6 +823,8 @@ Ndis6InitializeLogicalAdapter(
         Fdo->Flags &= ~DO_DEVICE_INITIALIZING;
     }
 
+    Ndis6RegisterNetInterface(Adapter);
+
     /* Insert into the global adapter list so legacy NdisOpenAdapter
      * (which calls MiniLocateDevice) can find this adapter by name. */
     KeAcquireSpinLock(&AdapterListLock, &OldIrql);
@@ -787,7 +898,7 @@ Ndis6CreateLogicalAdapter(
 NDIS_STATUS
 Ndis6CreateWdfLogicalAdapter(
     _In_ PNDIS6_DRIVER_BLOCK DriverBlock,
-    _In_ PNDIS6_WDF_ADD_DEVICE_INFO AddDeviceInfo,
+    _In_ NDIS_WDF_ADD_DEVICE_INFO * AddDeviceInfo,
     _Out_ PLOGICAL_ADAPTER* AdapterOut)
 {
     PNDIS6_WDF_CX_DRIVER CxDriver;
@@ -998,6 +1109,8 @@ Ndis6CallMiniportHaltEx(
     Ext = NDIS6_EXT(Adapter);
     if (Ext == NULL || Ext->DriverBlock == NULL)
         return;
+
+    Ndis6SetNetInterfaceState(Adapter, FALSE);
 
     /* Close registration-time bind/attach admission before pausing. A late
      * filter registration can otherwise observe Initialized while final halt
@@ -1552,6 +1665,13 @@ Ndis6DestroyLogicalAdapter(
     }
 
     Ndis6FreeAdapterName(&Adapter->NdisMiniportBlock.MiniportName);
+    RtlFreeUnicodeString(&Adapter->NdisMiniportBlock.SymbolicLinkName);
+    if (Ext != NULL)
+    {
+        RtlFreeUnicodeString(&Ext->LwmConfigurationPath);
+        if (Ext->LwmStartWorkItem != NULL)
+            IoFreeWorkItem(Ext->LwmStartWorkItem);
+    }
 
     /* Sever the LOGICAL_ADAPTER → Ext link before freeing Ext, so any
      * stale reference goes through a NULL check rather than touching
@@ -1579,6 +1699,7 @@ Ndis6DestroyLogicalAdapter(
 NDIS_STATUS
 Ndis6CreateImInstance(
     _In_  PNDIS6_DRIVER_BLOCK DriverBlock,
+    _In_  PDRIVER_OBJECT      DriverObject,
     _In_  PCUNICODE_STRING    DeviceName,
     _In_  NDIS_HANDLE         DeviceContext,
     _Out_ PLOGICAL_ADAPTER*   AdapterOut)
@@ -1602,7 +1723,7 @@ Ndis6CreateImInstance(
     if (!RtlCreateUnicodeString(&AdapterName, DeviceName->Buffer))
         return NDIS_STATUS_RESOURCES;
 
-    Status = IoCreateDevice(DriverBlock->DriverObject, sizeof(LOGICAL_ADAPTER),
+    Status = IoCreateDevice(DriverObject, sizeof(LOGICAL_ADAPTER),
                             &AdapterName, FILE_DEVICE_PHYSICAL_NETCARD, 0, FALSE,
                             &Fdo);
     if (!NT_SUCCESS(Status))
@@ -1721,6 +1842,202 @@ Ndis6CreateImInstance(
     return NDIS_STATUS_SUCCESS;
 }
 
+static
+NTSTATUS
+Ndis6QueryRegistryValue(
+    _In_ PCUNICODE_STRING KeyPath,
+    _In_ PCWSTR ValueName,
+    _Outptr_ PKEY_VALUE_PARTIAL_INFORMATION *Information)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING Name;
+    HANDLE Key;
+    ULONG Length = 0;
+    NTSTATUS Status;
+
+    *Information = NULL;
+    InitializeObjectAttributes(&ObjectAttributes, (PUNICODE_STRING)KeyPath,
+                               OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = ZwOpenKey(&Key, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlInitUnicodeString(&Name, ValueName);
+    Status = ZwQueryValueKey(Key, &Name, KeyValuePartialInformation, NULL, 0, &Length);
+    if (Status == STATUS_BUFFER_TOO_SMALL || Status == STATUS_BUFFER_OVERFLOW)
+    {
+        *Information = ExAllocatePoolWithTag(PagedPool, Length, NDIS6_ADAPTER_TAG);
+        if (*Information == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            Status = ZwQueryValueKey(Key, &Name, KeyValuePartialInformation, *Information, Length, &Length);
+            if (!NT_SUCCESS(Status))
+            {
+                ExFreePoolWithTag(*Information, NDIS6_ADAPTER_TAG);
+                *Information = NULL;
+            }
+        }
+    }
+    else if (NT_SUCCESS(Status))
+    {
+        Status = STATUS_OBJECT_TYPE_MISMATCH;
+    }
+    ZwClose(Key);
+    return Status;
+}
+
+static
+NTSTATUS
+Ndis6ReadLwmInterface(
+    _In_ const GUID *InterfaceGuid,
+    _Out_ PNET_IFTYPE IfType,
+    _Out_ PUNICODE_STRING ConfigurationPath)
+{
+    static const WCHAR InterfacesKey[] = L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\NetworkSetup2\\Interfaces\\";
+    static const WCHAR ConfigurationProperty[] = L"\\Properties\\{a111f1f4-5923-47c0-9a68-d0bafb577901}\\0024";
+    PKEY_VALUE_PARTIAL_INFORMATION Information;
+    UNICODE_STRING GuidString;
+    UNICODE_STRING KeyPath;
+    WCHAR KeyBuffer[192];
+    PCWSTR HivePrefix;
+    PCWSTR Path;
+    ULONG PathLength;
+    ULONG Hive;
+    NTSTATUS Status;
+
+    RtlInitEmptyUnicodeString(ConfigurationPath, NULL, 0);
+    Status = RtlStringFromGUID(InterfaceGuid, &GuidString);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlInitEmptyUnicodeString(&KeyPath, KeyBuffer, sizeof(KeyBuffer));
+    RtlAppendUnicodeToString(&KeyPath, InterfacesKey);
+    RtlAppendUnicodeStringToString(&KeyPath, &GuidString);
+    RtlAppendUnicodeToString(&KeyPath, L"\\Kernel");
+    Status = Ndis6QueryRegistryValue(&KeyPath, L"IfType", &Information);
+    if (NT_SUCCESS(Status))
+    {
+        if (Information->Type == REG_DWORD && Information->DataLength == sizeof(ULONG))
+            *IfType = (NET_IFTYPE)*(PULONG)Information->Data;
+        else
+            Status = STATUS_OBJECT_TYPE_MISMATCH;
+        ExFreePoolWithTag(Information, NDIS6_ADAPTER_TAG);
+    }
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeUnicodeString(&GuidString);
+        return Status;
+    }
+
+    RtlInitEmptyUnicodeString(&KeyPath, KeyBuffer, sizeof(KeyBuffer));
+    RtlAppendUnicodeToString(&KeyPath, InterfacesKey);
+    RtlAppendUnicodeStringToString(&KeyPath, &GuidString);
+    RtlAppendUnicodeToString(&KeyPath, ConfigurationProperty);
+    RtlFreeUnicodeString(&GuidString);
+    Status = Ndis6QueryRegistryValue(&KeyPath, L"", &Information);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* FIXME: only the hive selector and the path of the serialized NetSetup property are interpreted */
+    Status = STATUS_INVALID_PARAMETER;
+    if (Information->DataLength > 8 * sizeof(ULONG) + sizeof(WCHAR))
+    {
+        Hive = *(PULONG)&Information->Data[7 * sizeof(ULONG)];
+        Path = (PCWSTR)&Information->Data[8 * sizeof(ULONG)];
+        PathLength = 0;
+        while ((PathLength + 1) * sizeof(WCHAR) <= Information->DataLength - 8 * sizeof(ULONG) &&
+               Path[PathLength] != UNICODE_NULL)
+        {
+            PathLength++;
+        }
+
+        HivePrefix = Hive == 0 ? L"\\Registry\\Machine\\System\\CurrentControlSet\\" :
+                     Hive == 1 ? L"\\Registry\\Machine\\DEVICES\\" : NULL;
+        if (HivePrefix != NULL && PathLength != 0)
+        {
+            USHORT Size = (USHORT)((wcslen(HivePrefix) + PathLength + 1) * sizeof(WCHAR));
+
+            ConfigurationPath->Buffer = ExAllocatePoolWithTag(PagedPool, Size, NDIS6_ADAPTER_TAG);
+            if (ConfigurationPath->Buffer == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+            }
+            else
+            {
+                ConfigurationPath->Length = 0;
+                ConfigurationPath->MaximumLength = Size;
+                RtlAppendUnicodeToString(ConfigurationPath, HivePrefix);
+                RtlCopyMemory((PUCHAR)ConfigurationPath->Buffer + ConfigurationPath->Length, Path, PathLength * sizeof(WCHAR));
+                ConfigurationPath->Length += (USHORT)(PathLength * sizeof(WCHAR));
+                ConfigurationPath->Buffer[ConfigurationPath->Length / sizeof(WCHAR)] = UNICODE_NULL;
+                Status = STATUS_SUCCESS;
+            }
+        }
+    }
+    ExFreePoolWithTag(Information, NDIS6_ADAPTER_TAG);
+    return Status;
+}
+
+NDIS_STATUS
+Ndis6CreateLwmInstance(
+    _In_ PNDIS6_DRIVER_BLOCK DriverBlock,
+    _In_ const GUID *InterfaceGuid,
+    _In_ NDIS_HANDLE MiniportAdapterContext,
+    _Out_ PLOGICAL_ADAPTER *AdapterOut)
+{
+    UNICODE_STRING ConfigurationPath;
+    UNICODE_STRING Name;
+    WCHAR NameBuffer[64];
+    PLOGICAL_ADAPTER Adapter;
+    PNDIS6_ADAPTER_EXT Ext;
+    NET_IFTYPE IfType;
+    NTSTATUS Status;
+
+    *AdapterOut = NULL;
+    if (NdisDriverObject == NULL)
+        return NDIS_STATUS_FAILURE;
+
+    Status = Ndis6ReadLwmInterface(InterfaceGuid, &IfType, &ConfigurationPath);
+    if (!NT_SUCCESS(Status))
+    {
+        DbgPrint("NDIS6: no NetSetup interface for the lightweight miniport (0x%08lx)\n", (ULONG)Status);
+        return NdisConvertNtStatusToNdisStatus(Status);
+    }
+
+    Status = RtlStringCbPrintfW(NameBuffer, sizeof(NameBuffer),
+                                L"\\Device\\{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                                InterfaceGuid->Data1, InterfaceGuid->Data2, InterfaceGuid->Data3,
+                                InterfaceGuid->Data4[0], InterfaceGuid->Data4[1], InterfaceGuid->Data4[2],
+                                InterfaceGuid->Data4[3], InterfaceGuid->Data4[4], InterfaceGuid->Data4[5],
+                                InterfaceGuid->Data4[6], InterfaceGuid->Data4[7]);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeUnicodeString(&ConfigurationPath);
+        return NDIS_STATUS_RESOURCES;
+    }
+    RtlInitUnicodeString(&Name, NameBuffer);
+
+    Status = Ndis6CreateImInstance(DriverBlock, NdisDriverObject, &Name, NULL, &Adapter);
+    if (Status != NDIS_STATUS_SUCCESS)
+    {
+        RtlFreeUnicodeString(&ConfigurationPath);
+        return Status;
+    }
+
+    Ext = NDIS6_EXT(Adapter);
+    Ext->MiniportAdapterContext = MiniportAdapterContext;
+    Ext->NetLuid.Info.IfType = IfType;
+    Ext->LwmConfigurationPath = ConfigurationPath;
+    KeInitializeEvent(&Ext->LwmStartDoneEvent, NotificationEvent, TRUE);
+    Ndis6ImSeedTcpipRegistry(&Name);
+
+    *AdapterOut = Adapter;
+    return NDIS_STATUS_SUCCESS;
+}
+
 /* ============================================================================
  *  Ndis6InitializeImDeviceInstance
  *
@@ -1740,7 +2057,7 @@ Ndis6InitializeImDeviceInstance(
     NDIS_STATUS        Status;
     extern VOID Ndis6BindAllProtocolsToAdapter(PLOGICAL_ADAPTER);
 
-    Status = Ndis6CreateImInstance(DriverBlock, DeviceName, DeviceContext, &Adapter);
+    Status = Ndis6CreateImInstance(DriverBlock, DriverBlock->DriverObject, DeviceName, DeviceContext, &Adapter);
     if (Status != NDIS_STATUS_SUCCESS)
         return Status;
 

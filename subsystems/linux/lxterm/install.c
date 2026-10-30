@@ -1428,6 +1428,7 @@ LxProvisionGui(
         { L"lxwayland", "usr/local/lib/libernt/lxwayland/lxwayland", 0755, FALSE },
         { L"lxwayland.service", "etc/systemd/system/lxwayland.service", 0644, TRUE },
         { L"lx-gui-setup.service", "etc/systemd/system/lx-gui-setup.service", 0644, TRUE },
+        { L"lxsession.service", "etc/systemd/system/lxsession@.service", 0644, TRUE },
     };
     static const PCSTR Units[] = { "lxwayland.service", "lx-gui-setup.service" };
     PLX_TAR_ENTRY Entry = &Extract->Entry;

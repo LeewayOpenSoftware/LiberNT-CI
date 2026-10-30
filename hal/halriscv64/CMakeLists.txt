@@ -13,6 +13,7 @@ add_library(hal MODULE
     profile.c
     rtc.c
     sbi.c
+    ../arch/common/generic/secondary.c
     smp.c
     smp_trampoline.S
     stubs.c

@@ -90,7 +90,7 @@ CcCopyRead(
         ExRaiseStatus(STATUS_ACCESS_VIOLATION);
     Offset = (ULONG64)FileOffset->QuadPart;
     Move.BaseOffset = Offset;
-    NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
         ExRaiseStatus(STATUS_INVALID_PARAMETER);
@@ -152,7 +152,7 @@ CcCopyWrite(
         ExRaiseStatus(STATUS_ACCESS_VIOLATION);
     Offset = (ULONG64)FileOffset->QuadPart;
     Move.BaseOffset = Offset;
-    NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
         ExRaiseStatus(STATUS_INVALID_PARAMETER);
@@ -253,7 +253,7 @@ CcCanIWrite(
     _In_ BOOLEAN Wait,
     _In_ UCHAR Retrying)
 {
-    PCC_NT_MAP NtMap = (FileObject != NULL) ? CcNtReferenceMap(FileObject->SectionObjectPointer) : NULL;
+    PCC_NT_MAP NtMap = (FileObject != NULL) ? CcNtReferenceFileMap(FileObject) : NULL;
     LARGE_INTEGER Delay;
     BOOLEAN Allowed;
     ULONG Round = 0;
@@ -295,7 +295,7 @@ CcZeroData(
         ExRaiseStatus(STATUS_ACCESS_VIOLATION);
     Start = (ULONG64)StartOffset->QuadPart;
     End = (ULONG64)EndOffset->QuadPart;
-    NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    NtMap = CcNtReferenceFileMap(FileObject);
 
     if (End <= Start)
     {
@@ -358,7 +358,7 @@ CcScheduleReadAhead(
     if (FileObject == NULL || FileOffset == NULL)
         ExRaiseStatus(STATUS_ACCESS_VIOLATION);
     Offset = (ULONG64)FileOffset->QuadPart;
-    NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
         return;

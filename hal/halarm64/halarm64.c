@@ -22,17 +22,27 @@
 #include <bugcodes.h>
 #include "halext.h"
 
-BOOLEAN HalpSecondaryIsIntId(_In_ ULONG IntId);
-KIRQL HalpSecondaryIrql(_In_ ULONG IntId);
-BOOLEAN HalpSecondaryEnable(_In_ ULONG IntId, _In_ KINTERRUPT_MODE InterruptMode);
-VOID HalpSecondaryDisable(_In_ ULONG IntId);
-VOID HalpSecondaryInitializeDispatch(VOID);
-NTSTATUS HalpSecondaryRegisterInterface(_In_ ULONG BufferSize, _In_ PVOID Buffer);
-NTSTATUS HalpSecondaryQueryInformation(_In_ ULONG BufferSize, _Out_ PVOID Buffer, _Out_opt_ PULONG ReturnedLength);
+#include <halsecondary.h>
 #define NDEBUG
 #include <debug.h>
 
 #include "gic_internal.h"
+
+ULONG
+HalpSecondaryArchGsivBase(VOID)
+{
+    ULONG Base = 0x400;
+
+    if (HalpGicItsEnabled && HalpGicLpiCount != 0 && Base < HAL_ARM64_LPI_BASE + HalpGicLpiCount)
+        Base = HAL_ARM64_LPI_BASE + HalpGicLpiCount;
+    return Base;
+}
+
+ULONG
+HalpSecondaryArchVectorBase(VOID)
+{
+    return 0x1000;
+}
 
 /*
  * HAL PnP driver initialization function - defined in halpnpdd.c

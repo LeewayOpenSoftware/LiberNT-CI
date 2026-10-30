@@ -1153,6 +1153,43 @@ MMixerBuildMixerSourceLine(
     return MM_STATUS_SUCCESS;
 }
 
+static
+MIXER_STATUS
+MMixerAddDirectMixerSourceLines(
+    IN PMIXER_CONTEXT MixerContext,
+    IN OUT LPMIXER_INFO MixerInfo,
+    IN HANDLE hMixer,
+    IN PTOPOLOGY Topology,
+    IN ULONG PinId,
+    IN ULONG DestinationLineID)
+{
+    PPIN Pin = &Topology->TopologyPins[PinId];
+    LPMIXERLINE_EXT DstLine, SrcLine;
+    ULONG Index, SourcePin, bReserved;
+    MIXER_STATUS Status;
+
+    DstLine = MMixerGetSourceMixerLineByLineId(MixerInfo, DestinationLineID);
+    ASSERT(DstLine);
+
+    for (Index = 0; Index < Pin->PinConnectedFromCount; Index++)
+    {
+        SourcePin = Pin->PinConnectedFrom[Index];
+        MMixerIsTopologyPinReserved(Topology, SourcePin, &bReserved);
+        if (bReserved)
+            continue;
+
+        Status = MMixerBuildMixerSourceLine(MixerContext, MixerInfo, hMixer, Topology, SourcePin, 0, NULL, DestinationLineID, &SrcLine);
+        if (Status != MM_STATUS_SUCCESS)
+            return Status;
+
+        InsertTailList(&MixerInfo->LineList, &SrcLine->Entry);
+        DstLine->Line.cConnections++;
+        MMixerSetTopologyPinReserved(Topology, SourcePin);
+    }
+
+    return MM_STATUS_SUCCESS;
+}
+
 MIXER_STATUS
 MMixerAddMixerSourceLines(
     IN PMIXER_CONTEXT MixerContext,
@@ -1167,6 +1204,9 @@ MMixerAddMixerSourceLines(
     ULONG Index, SubIndex, PinId, CurNode, bConnected;
     MIXER_STATUS Status;
     LPMIXERLINE_EXT DstLine, SrcLine;
+
+    if (LineTerminator == MAXULONG)
+        return MM_STATUS_SUCCESS;
 
     /* get destination line */
     DstLine = MMixerGetSourceMixerLineByLineId(MixerInfo, DestinationLineID);
@@ -1301,6 +1341,13 @@ MMixerAddMixerControlsToDestinationLine(
     ULONG NodesCount, LineTerminator;
     MIXER_STATUS Status;
     LPMIXERLINE_EXT DstLine;
+
+    if ((Topology->TopologyPins[PinId].NodesConnectedFromCount == 0) &&
+        (Topology->TopologyPins[PinId].PinConnectedFromCount != 0))
+    {
+        *OutLineTerminator = MAXULONG;
+        return MMixerAddDirectMixerSourceLines(MixerContext, MixerInfo, hMixer, Topology, PinId, DestinationLineId);
+    }
 
     /* allocate nodes index array */
     Status = MMixerAllocateTopologyNodeArray(MixerContext, Topology, &Nodes);

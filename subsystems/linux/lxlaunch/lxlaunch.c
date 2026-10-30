@@ -711,3 +711,31 @@ LxLaunch(
     free(In);
     return (int)ExitCode;
 }
+
+BOOL
+LxInstanceBooted(
+    _In_ PCWSTR Name,
+    _In_ PCWSTR Root)
+{
+    UNICODE_STRING NtRoot;
+    WCHAR FullRoot[MAX_PATH];
+    LX_QUERY_INSTANCE_OUT Out = { 0 };
+    DWORD Returned = 0;
+    HANDLE Device;
+    BOOL Queried;
+
+    if (!GetFullPathNameW(Root, MAX_PATH, FullRoot, NULL) ||
+        !RtlDosPathNameToNtPathName_U(FullRoot, &NtRoot, NULL, NULL))
+    {
+        return FALSE;
+    }
+    Device = LxOpenDevice(Name);
+    Queried = (Device != INVALID_HANDLE_VALUE) &&
+              DeviceIoControl(Device, IOCTL_LX_QUERY_INSTANCE, NtRoot.Buffer, NtRoot.Length, &Out, sizeof(Out),
+                              &Returned, NULL) &&
+              (Returned >= sizeof(Out));
+    if (Device != INVALID_HANDLE_VALUE)
+        CloseHandle(Device);
+    RtlFreeUnicodeString(&NtRoot);
+    return Queried && (Out.Flags & LX_INSTANCE_BOOTED);
+}

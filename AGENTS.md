@@ -32,7 +32,8 @@ Most of the tree is still shared with ReactOS, and the components synchronised w
 
 ## Principles
 
-- Make the smallest correct change. No unrelated refactors, renames or style changes; report out-of-scope ideas instead of implementing them.
+- Make the smallest correct change, aimed at the exact defect or feature. No unrelated refactors, renames or style changes; report out-of-scope ideas instead of implementing them.
+- Whoever submits a change, a person or an agent, is responsible for all of it and must be able to justify every line.
 - Fix the underlying behavior, not the symptom. Use a workaround only to test a hypothesis, then remove it and make the real fix.
 - Never invent an API, structure, offset, constant or behavior. When the sources of truth do not answer, report the gap as `INFO_NEEDED` instead of guessing.
 - When a request allows several readings, state the one you proceed on.
@@ -48,7 +49,7 @@ Most of the tree is still shared with ReactOS, and the components synchronised w
 | Undocumented user-mode shapes and behavior | Wine. |
 | How hardware has to be driven | The hardware specification, then the Linux and EDK II drivers for the same part. |
 
-- Leaked code is strictly forbidden. Never read, copy, transcribe or reference leaked Microsoft source code, or any other code that was not lawfully published, in any form. A change that uses it is rejected, and the developer who submitted it, including through an AI tool, can be banned from the project.
+- Leaked code is strictly forbidden. Never read, copy, transcribe or reference leaked Microsoft source code, or any other code that was not lawfully published, in any form. Do not even look at it, and never open it in Ghidra, IDA, an IDE or any other tool. Any change that uses it is rejected, and whoever submitted it, directly or through an AI tool, will be permanently banned from the project, with no exception.
 - Say which source a definition came from.
 - LiberNT's own headers show what LiberNT declares today, not what is right. Check them against the sources above.
 - Never transcribe disassembled or decompiled Windows code. Use Windows 11 as a black box. Inspect the Windows 11 binaries in the cleanroom store only when there is no way around it: no header, public symbol, documentation or Windows 11 run answers the question. Use what you read only to understand the behavior, never as the implementation: the Windows code itself is not necessarily correct. Record only the fact you needed (a layout, offset, constant or behavior), never the code.
@@ -105,6 +106,7 @@ Most of the tree is still shared with ReactOS, and the components synchronised w
 
 ## Testing against Windows 11
 
+- Every feature and every bug fix comes with a test that pins its exact behavior, checked against Windows 11: a unit test, an API test or a kernel-mode test. The tests let the maintainer hold the level the OS has reached as it develops; a feature without one is not finished.
 - Before changing behavior to satisfy a LiberNT test, run the same test on Windows 11 and compare per-check results, not totals. Many LiberNT apitests are not Windows 11 clean.
 - If Windows 11 fails a check too, the expectation is the bug.
 - Run the Windows 11 baseline once per test binary and reuse its results. Rerun it only when the test binary changes in a way that alters results, and batch those reruns.
@@ -126,16 +128,35 @@ Most of the tree is still shared with ReactOS, and the components synchronised w
 - note that there is kdgdb in case of stall to attach live to the OS and debug using gdb client, like gdb multiarch
 - Compare benchmark numbers only between runs made the same way (headless, same CPU count, host not throttling the VM), and A/B against the baseline build before blaming a change.
 
+## Fixing bugs
+
+- Fix bugs recursively. A bug found while working toward a goal becomes the goal: never step past it to stay on the main task. Fix that exact bug, then return to the parent bug or goal, and treat every bug found beneath it the same way. A `TODO:` or `FIXME:` marker never replaces that fix: markers are for gaps outside the current work, not for bugs met on the way.
+- Start from the code, not from reruns. Read and analyze the code around the failure to find the cause before trying to reproduce it.
+- Catch the bug in a test: write one that reproduces it, make the fix, and confirm the fix in a separate run of that test.
+- A bug seen once, such as a race, is real. Do not shut down the harness that caught it: keep the machine stopped in the debugger and find the cause live. The harness always accepts a debugger, gdb through kdgdb on a Linux host or the kernel debugger on a Windows host, to debug it end to end.
+
 ## Verifying a fix
 
 - A fix counts only after a real boot or test run shows it working. A clean build proves nothing about behavior.
 - Fix a broken change in place. Never build on a change that does not work, and never set it aside to test something else.
-- Revert a fix proven ineffective instead of layering another on it.
+- When a run shows that an attempt does not fix the bug, revert it before the next attempt; never stack changes that fix nothing. A session's diff holds only targeted changes, each justified by a run.
 - For races, lost wakeups, deadlocks, lock ordering and hot paths: hold the first hypothesis loosely, get an independent adversarial review, accept only facts verified in the source, and confirm them with a real boot. Treat every second opinion, and your own conclusion, as claims to verify.
+- Before committing, harden the C and C++ files in the diff with cppcheck, run with the build's own include paths and defines. Write the compile database outside the build directory, pass one `--file-filter` per changed file, and use the target defines of the build directory (the amd64 ones are shown):
+
+  ```sh
+  ninja -C output-Clang-amd64-debug -t compdb > /tmp/compdb.json
+  cppcheck --project=/tmp/compdb.json --file-filter='*/ntoskrnl/alpc/alpcport.c' \
+      -D_WIN32 -D_WIN64 -D_M_AMD64 -D__x86_64__ -D__clang__ -D__GNUC__=4 \
+      '-D__has_cpp_attribute(x)=0' '-D__has_builtin(x)=0' '-D__has_attribute(x)=0' '-D__has_feature(x)=0' \
+      --enable=warning,performance,portability --platform=win64 --inline-suppr --quiet
+  ```
+
+  Read only the findings in the changed files, and treat each one as a claim to verify in the source. A confirmed defect is a bug found on the way and is fixed under "Fixing bugs"; a false positive stays as it is, without a suppression.
 
 ## Code style
 
-- No comments in code diffs. Leave existing comments where they are instead of moving or re-adding them.
+- No comments in code diffs, except the `TODO:` and `FIXME:` markers below and a single-line comment on a special case whose context another developer or agent could not recover from the code. Leave existing comments where they are instead of moving or re-adding them.
+- Mark a gap worth handling later but outside the current change with a one-line marker at that spot: `/* TODO: <what is missing> */` where a feature, flag, case or contract is left unimplemented, `/* FIXME: <what is wrong> */` where code knowingly behaves wrong or only approximates the contract. Name the gap and, if relevant, the current fallback; nothing else.
 - New files start with this header. `PROJECT` names the component, for example "LiberNT API tests" or "LiberNT Kernel"; tests use GPL-3.0-or-later.
 
 ```c

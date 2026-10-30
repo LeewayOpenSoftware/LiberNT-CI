@@ -125,8 +125,18 @@ ULONG
 NTAPI
 HalGetInterruptVector(INTERFACE_TYPE InterfaceType, ULONG BusNumber, ULONG BusInterruptLevel, ULONG BusInterruptVector, PKIRQL Irql, PKAFFINITY Affinity)
 {
-    ULONG FirstBus, LastBus;
+    ULONG FirstBus, LastBus, Vector;
 
+    if (Irql && Affinity && InterfaceType == Internal)
+    {
+        Vector = HalpSecondaryTranslateGsi(BusInterruptLevel);
+        if (Vector != (ULONG)-1)
+        {
+            *Irql = HalpSecondaryIrql(Vector);
+            *Affinity = 1;
+            return Vector;
+        }
+    }
     if (!Irql || !Affinity || BusInterruptLevel != BusInterruptVector ||
         !HalpRiscvPlicValidSource(BusInterruptLevel))
         return 0;

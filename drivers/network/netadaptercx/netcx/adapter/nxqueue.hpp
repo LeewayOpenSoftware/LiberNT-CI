@@ -1,0 +1,246 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+
+#pragma once
+
+#include <fxobject.hpp>
+#include <karray.h>
+#include <kptr.h>
+#include <netclientbuffer.h>
+#include <netclientqueue.h>
+
+#include "extension/nxextensionlayout.hpp"
+#include "queue/queue.hpp"
+
+#include "executioncontextwrapper.hpp"
+#include "kwaittask.hpp"
+#include "kobjecttask.hpp"
+
+struct NX_PRIVATE_GLOBALS;
+class NxAdapter;
+class NxQueueVerifier;
+
+#define QUEUE_CREATION_CONTEXT_SIGNATURE 0x7840dd95
+
+using unique_packet_queue = wil::unique_wdf_any<NETPACKETQUEUE>;
+
+struct QUEUE_CREATION_CONTEXT
+{
+    ULONG
+        Signature = QUEUE_CREATION_CONTEXT_SIGNATURE;
+
+    PKTHREAD
+        CurrentThread = nullptr;
+
+    NET_CLIENT_QUEUE_CONFIG const *
+        ClientQueueConfig = nullptr;
+
+    NET_CLIENT_QUEUE_NOTIFY_DISPATCH const *
+        ClientDispatch = nullptr;
+
+    NET_CLIENT_QUEUE_DISPATCH const **
+        AdapterDispatch = nullptr;
+
+    WDFOBJECT
+        ParentObject = WDF_NO_HANDLE;
+
+    Rtl::KArray<NET_EXTENSION_PRIVATE>
+        Extensions;
+
+    ULONG
+        QueueId = 0;
+
+    void *
+        ClientQueue = nullptr;
+
+    unique_packet_queue
+        CreatedQueueObject;
+
+    ExecutionContextWrapper *
+        ExecutionContext = nullptr;
+
+    BOOLEAN
+        CreateReturnContextRing = FALSE;
+};
+
+class NxQueue
+    : public NetCx::Core::Queue
+{
+public:
+
+    NxQueue(
+        _In_ QUEUE_CREATION_CONTEXT const & InitContext,
+        _In_ NET_PACKET_QUEUE_CONFIG const & QueueConfig,
+        _In_ NetCx::Core::Queue::Type QueueType
+    );
+
+    void
+    Cleanup(
+        void
+    );
+
+    virtual
+    ~NxQueue(
+        void
+    ) = default;
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    Initialize(
+        _Inout_ QUEUE_CREATION_CONTEXT & InitContext
+    );
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    ExecutionContextWrapper *
+    GetExecutionContext(
+        void
+    );
+
+    void
+    NotifyMorePacketsAvailable(
+        void
+    );
+
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY const *
+    GetTxDemuxProperty(
+        NET_CLIENT_QUEUE_TX_DEMUX_TYPE Type
+    ) const;
+
+    void
+    Start(
+        void
+    );
+
+    void
+    Stop(
+        void
+    );
+
+    void
+    Advance(
+        void
+    );
+
+    void
+    Advance(
+        NxQueueVerifier & Verifier
+    );
+
+#ifdef NETCX_UMDF
+    void
+    Advance(
+        EXECUTION_CONTEXT_POLL_PARAMETERS * Poll
+    );
+#endif
+
+    void
+    Cancel(
+        void
+    );
+
+    void
+    Cancel(
+        NxQueueVerifier & Verifier
+    );
+
+    void
+    SetArmed(
+        _In_ bool isArmed
+    );
+
+    WDFOBJECT
+    GetParent(
+        void
+    );
+
+    WDFOBJECT
+    GetWdfObject(
+        void
+    );
+
+#ifdef NETCX_UMDF
+    void
+    GetCallbacks(
+        _Out_ EXECUTION_CONTEXT_POLL * Advance,
+        _Out_ EXECUTION_CONTEXT_TASK * Start,
+        _Out_ EXECUTION_CONTEXT_TASK * Cancel,
+        _Out_ EXECUTION_CONTEXT_TASK * Stop,
+        _Out_ EXECUTION_CONTEXT_NOTIFICATION * SetNotification
+    );
+#endif
+
+    ULONG const
+        m_queueId;
+
+    NetCx::Core::Queue::Type const
+        m_queueType;
+
+private:
+
+    _IRQL_requires_(PASSIVE_LEVEL)
+    NTSTATUS
+    CreateFrameworkExecutionContext(
+        void
+    );
+
+private:
+
+    void *
+        m_clientQueue = nullptr;
+
+    NET_CLIENT_QUEUE_NOTIFY_DISPATCH const *
+        m_clientDispatch = nullptr;
+
+    NET_PACKET_QUEUE_CONFIG
+        m_packetQueueConfig = {};
+
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY
+        m_demuxPeerAddressProperty = {};
+
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY
+        m_demuxWmmProperty = {};
+
+    NET_CLIENT_QUEUE_TX_DEMUX_PROPERTY
+        m_demux8021pProperty = {};
+
+    NETPACKETQUEUE const
+        m_queue;
+
+    WDFOBJECT const
+        m_parent;
+
+    // Used when client driver does not provide their own execution context
+    wistd::unique_ptr<ExecutionContextWrapper>
+        m_frameworkExecutionContext;
+
+    ExecutionContextWrapper *
+        m_executionContext = nullptr;
+
+    EXECUTION_CONTEXT_NOTIFICATION
+        m_driverNotification = {};
+
+#ifdef NETCX_UMDF
+    EXECUTION_CONTEXT_POLL
+        m_poll{};
+
+    KObjectTask<NxQueue, &NxQueue::Start>
+        m_startTask;
+
+    KObjectTask<NxQueue, &NxQueue::Cancel>
+        m_cancelTask;
+
+    KObjectTask<NxQueue, &NxQueue::Stop>
+        m_stopTask;
+#endif
+};
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(NxQueue, GetNxQueueFromHandle);
+
+NTSTATUS
+PacketQueueCreate(
+    _In_ NX_PRIVATE_GLOBALS const & PrivateGlobals,
+    _In_ NET_PACKET_QUEUE_CONFIG const & Configuration,
+    _In_ QUEUE_CREATION_CONTEXT & InitContext,
+    _In_opt_ WDF_OBJECT_ATTRIBUTES * ClientAttributes,
+    _In_ NetCx::Core::Queue::Type Type,
+    _Out_ NETPACKETQUEUE * PacketQueue
+);

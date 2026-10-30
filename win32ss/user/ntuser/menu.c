@@ -36,6 +36,7 @@ BOOL fInEndMenu = FALSE;
 #define TF_ENDMENU              0x10000
 #define TF_SUSPENDPOPUP         0x20000
 #define TF_SKIPREMOVE           0x40000
+#define TF_ENDED                0x80000
 
 
 /* maximum allowed depth of any branch in the menu tree.
@@ -94,6 +95,13 @@ typedef struct
   PWND  OwnerWnd;    /* where notifications are sent */
   POINT Pt;
 } MTRACKER;
+
+static MTRACKER *pActiveTracker = NULL;
+static UINT ActiveTrackFlags = 0;
+static BOOL fTrackingExited = FALSE;
+
+static BOOL FASTCALL MENU_ExitTracking(PWND pWnd, PMENU Menu, BOOL bPopup, UINT wFlags);
+static VOID FASTCALL MENU_EndTracking(MTRACKER *pmt, UINT wFlags);
 
 /* Internal MenuTrackMenu() flags */
 #define TPM_INTERNAL            0xF0000000
@@ -3042,7 +3050,7 @@ PWND MENU_IsMenuActive(VOID)
 void MENU_EndMenu( PWND pwnd )
 {
     PMENU menu = NULL;
-    menu = UserGetObject(gHandleTable, top_popup_hmenu, TYPE_MENU);
+    menu = UserGetObjectNoErr(gHandleTable, top_popup_hmenu, TYPE_MENU);
     if ( menu && ( UserHMGetHandle(pwnd) == menu->hWnd || pwnd == menu->spwndNotify ) )
     {
        if (fInsideMenuLoop && top_popup)
@@ -3056,7 +3064,20 @@ void MENU_EndMenu( PWND pwnd )
           }
 
           fInEndMenu = TRUE;
-          UserPostMessage( top_popup, WM_CANCELMODE, 0, 0);
+          if (pActiveTracker && pActiveTracker->OwnerWnd->head.pti == PsGetCurrentThreadWin32Thread())
+          {
+             MTRACKER *pmt = pActiveTracker;
+             UINT wFlags = ActiveTrackFlags;
+
+             MENU_EndTracking(pmt, wFlags);
+             MENU_ExitTracking(pmt->OwnerWnd, VerifyMenu(pmt->TopMenu) ? pmt->TopMenu : NULL,
+                               (wFlags & TPM_POPUPMENU) != 0, wFlags);
+             fTrackingExited = TRUE;
+          }
+          else
+          {
+             UserPostMessage( top_popup, WM_CANCELMODE, 0, 0);
+          }
        }
     }
 }
@@ -3494,7 +3515,13 @@ static BOOL FASTCALL MENU_ShowPopup(PWND pwndOwner, PMENU menu, UINT id, UINT fl
         UserSetProp(pWnd, AtomDwmTransition,
                     (HANDLE)(ULONG_PTR)DWM_TRANSITION_PACK(MenuTransitionSeq, 0, 255, 150), FALSE);
     }
-    co_WinPosSetWindowPos( pWnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE);
+    co_WinPosSetWindowPos( pWnd, 0, 0, 0, width, height, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    if (!menu->cItems)
+    {
+        UserDerefObjectCo(pWnd);
+        return FALSE;
+    }
+    co_WinPosSetWindowPos( pWnd, HWND_TOPMOST, x, y, width, height, SWP_SHOWWINDOW | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
 
     co_IntUpdateWindows(pWnd, RDW_ALLCHILDREN, FALSE);
 
@@ -3612,6 +3639,10 @@ static void FASTCALL MENU_SelectItem(PWND pwndOwner, PMENU menu, UINT wIndex,
               PWND pwndFocus = ValidateHwndNoErr(menu->hWnd);
               if (pwndFocus)
                  IntNotifyWinEvent(EVENT_OBJECT_FOCUS, pwndFocus, OBJID_CLIENT, wIndex + 1, 0);
+           }
+           else
+           {
+              IntNotifyWinEvent(EVENT_OBJECT_FOCUS, pWnd, (menu->fFlags & MNF_SYSMENU) ? OBJID_SYSMENU : OBJID_MENU, wIndex + 1, 0);
            }
         }
     }
@@ -3933,6 +3964,11 @@ static INT FASTCALL MENU_ExecFocusedItem(MTRACKER *pmt, PMENU Menu, UINT Flags)
               else
               {
                   DWORD dwStyle = ((Menu->fFlags & MNS_STYLE_MASK) | ( pmt->TopMenu ? (pmt->TopMenu->fFlags & MNS_STYLE_MASK) : 0) );
+                  PWND pwndMenu = (Menu->fFlags & MNF_POPUP) ? ValidateHwndNoErr(Menu->hWnd) : NULL;
+
+                  if (pwndMenu)
+                      IntNotifyWinEvent(EVENT_OBJECT_INVOKED, pwndMenu, OBJID_MENU,
+                                        (dwStyle & MNS_NOTIFYBYPOS) ? Menu->iItem : Item->wID, 0);
 
                   if (dwStyle & MNS_NOTIFYBYPOS)
                       UserPostMessage(UserHMGetHandle(pmt->OwnerWnd), WM_MENUCOMMAND, Menu->iItem, (LPARAM)UserHMGetHandle(Menu));
@@ -4474,6 +4510,58 @@ static void FASTCALL MENU_KeyRight(MTRACKER *pmt, UINT Flags, UINT msg)
  *
  * Menu tracking code.
  */
+static VOID FASTCALL MENU_EndTracking(MTRACKER *pmt, UINT wFlags)
+{
+    PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
+
+    if (pmt->TrackFlags & TF_ENDED) return;
+    pmt->TrackFlags |= TF_ENDED;
+
+    MsqSetStateWindow(pti, MSQ_STATE_MENUOWNER, NULL);
+    pti->MessageQueue->QF_flags &= ~QF_CAPTURELOCKED;
+    if (VerifyMenu(pmt->TopMenu) && !(pmt->TopMenu->fFlags & MNF_POPUP) &&
+        pmt->TopMenu->iItem != NO_SELECTED_ITEM && VerifyWnd(pmt->OwnerWnd))
+    {
+        IntNotifyWinEvent(EVENT_OBJECT_FOCUS, pmt->OwnerWnd, IS_SYSTEM_MENU(pmt->TopMenu) ? OBJID_SYSMENU : OBJID_MENU, CHILDID_SELF, 0);
+    }
+    co_UserSetCapture(NULL); /* release the capture */
+
+    /* If dropdown is still painted and the close box is clicked on
+       then the menu will be destroyed as part of the DispatchMessage above.
+       This will then invalidate the menu handle in mt.hTopMenu. We should
+       check for this first.  */
+    if ( VerifyMenu( pmt->TopMenu ) )
+    {
+       if (VerifyWnd(pmt->OwnerWnd))
+       {
+           MENU_HideSubPopups(pmt->OwnerWnd, pmt->TopMenu, FALSE, wFlags);
+
+           if (pmt->TopMenu->fFlags & MNF_POPUP)
+           {
+              PWND pwndTM = ValidateHwndNoErr(pmt->TopMenu->hWnd);
+              if (pwndTM)
+              {
+                 IntNotifyWinEvent(EVENT_SYSTEM_MENUPOPUPEND, pwndTM, OBJID_CLIENT, CHILDID_SELF, 0);
+
+                 co_UserDestroyWindow(pwndTM);
+              }
+              pmt->TopMenu->hWnd = NULL;
+
+              if (!(wFlags & TPM_NONOTIFY))
+              {
+                 co_IntSendMessage( UserHMGetHandle(pmt->OwnerWnd), WM_UNINITMENUPOPUP, (WPARAM)UserHMGetHandle(pmt->TopMenu),
+                                 MAKELPARAM(0, IS_SYSTEM_MENU(pmt->TopMenu) ? MF_SYSMENU : 0));
+              }
+            }
+            MENU_SelectItem( pmt->OwnerWnd, pmt->TopMenu, NO_SELECTED_ITEM, FALSE, 0 );
+            co_IntSendMessage( UserHMGetHandle(pmt->OwnerWnd), WM_MENUSELECT, MAKEWPARAM(0, 0xffff), 0 );
+       }
+
+       /* Reset the variable for hiding menu */
+       pmt->TopMenu->TimeToHide = FALSE;
+    }
+}
+
 static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                             PWND pwnd)
 {
@@ -4524,6 +4612,9 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
 
     capture_win = IntGetCapture();
 
+    pActiveTracker = &mt;
+    ActiveTrackFlags = wFlags;
+
     while (fInsideMenuLoop)
     {
         BOOL ErrorExit = FALSE;
@@ -4543,6 +4634,12 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
             }
             else
             {
+                if (mt.TrackFlags & TF_ENDED)
+                {
+                   ErrorExit = TRUE;
+                   break;
+                }
+
                 /* ReactOS Checks */
                 if (!VerifyWnd(mt.OwnerWnd)                            ||
                     !ValidateHwndNoErr(mt.CurrentMenu->hWnd)           ||
@@ -4558,6 +4655,11 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                   HWND win = mt.CurrentMenu->fFlags & MNF_POPUP ? mt.CurrentMenu->hWnd : NULL;
                   enterIdleSent = TRUE;
                   co_IntSendMessage( UserHMGetHandle(mt.OwnerWnd), WM_ENTERIDLE, MSGF_MENU, (LPARAM) win);
+                  if (mt.TrackFlags & TF_ENDED)
+                  {
+                     ErrorExit = TRUE;
+                     break;
+                  }
                 }
                 co_IntWaitMessage(NULL, 0, 0);
             }
@@ -4605,7 +4707,7 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
                 case WM_RBUTTONDOWN:
                      if (!(wFlags & TPM_RIGHTBUTTON))
                      {
-                        if ( msg.message == WM_RBUTTONDBLCLK ) fInsideMenuLoop = FALSE; // Must exit or loop forever!
+                        if (!pmMouse) fInsideMenuLoop = FALSE;
                         break;
                      }
                     /* fall through */
@@ -4779,44 +4881,8 @@ static INT FASTCALL MENU_TrackMenu(PMENU pmenu, UINT wFlags, INT x, INT y,
         else mt.TrackFlags &= ~TF_SKIPREMOVE;
     }
 
-    MsqSetStateWindow(pti, MSQ_STATE_MENUOWNER, NULL);
-    pti->MessageQueue->QF_flags &= ~QF_CAPTURELOCKED;
-    co_UserSetCapture(NULL); /* release the capture */
-
-    /* If dropdown is still painted and the close box is clicked on
-       then the menu will be destroyed as part of the DispatchMessage above.
-       This will then invalidate the menu handle in mt.hTopMenu. We should
-       check for this first.  */
-    if ( VerifyMenu( mt.TopMenu ) )
-    {
-       if (VerifyWnd(mt.OwnerWnd))
-       {
-           MENU_HideSubPopups(mt.OwnerWnd, mt.TopMenu, FALSE, wFlags);
-
-           if (mt.TopMenu->fFlags & MNF_POPUP)
-           {
-              PWND pwndTM = ValidateHwndNoErr(mt.TopMenu->hWnd);
-              if (pwndTM)
-              {
-                 IntNotifyWinEvent(EVENT_SYSTEM_MENUPOPUPEND, pwndTM, OBJID_CLIENT, CHILDID_SELF, 0);
-
-                 co_UserDestroyWindow(pwndTM);
-              }
-              mt.TopMenu->hWnd = NULL;
-
-              if (!(wFlags & TPM_NONOTIFY))
-              {
-                 co_IntSendMessage( UserHMGetHandle(mt.OwnerWnd), WM_UNINITMENUPOPUP, (WPARAM)UserHMGetHandle(mt.TopMenu),
-                                 MAKELPARAM(0, IS_SYSTEM_MENU(mt.TopMenu) ? MF_SYSMENU : 0));
-              }
-            }
-            MENU_SelectItem( mt.OwnerWnd, mt.TopMenu, NO_SELECTED_ITEM, FALSE, 0 );
-            co_IntSendMessage( UserHMGetHandle(mt.OwnerWnd), WM_MENUSELECT, MAKEWPARAM(0, 0xffff), 0 );
-       }
-
-       /* Reset the variable for hiding menu */
-       mt.TopMenu->TimeToHide = FALSE;
-    }
+    MENU_EndTracking(&mt, wFlags);
+    pActiveTracker = NULL;
 
     EngSetLastError( ERROR_SUCCESS );
     /* The return value is only used by TrackPopupMenu */
@@ -4853,6 +4919,7 @@ static BOOL FASTCALL MENU_InitTracking(PWND pWnd, PMENU Menu, BOOL bPopup, UINT 
 
     fInsideMenuLoop = TRUE;
     fInEndMenu = FALSE;
+    fTrackingExited = FALSE;
 
     /* Send WM_ENTERMENULOOP and WM_INITMENU message only if TPM_NONOTIFY flag is not specified */
     if (!(wFlags & TPM_NONOTIFY))
@@ -4888,11 +4955,20 @@ static BOOL FASTCALL MENU_InitTracking(PWND pWnd, PMENU Menu, BOOL bPopup, UINT 
 /***********************************************************************
  *           MenuExitTracking
  */
-static BOOL FASTCALL MENU_ExitTracking(PWND pWnd, BOOL bPopup, UINT wFlags)
+static BOOL FASTCALL MENU_ExitTracking(PWND pWnd, PMENU Menu, BOOL bPopup, UINT wFlags)
 {
     TRACE("Exit Track hwnd=%p bPopup %d\n", UserHMGetHandle(pWnd), bPopup);
 
-    IntNotifyWinEvent( EVENT_SYSTEM_MENUEND, pWnd, OBJID_WINDOW, CHILDID_SELF, 0);
+    if (fTrackingExited)
+    {
+        fTrackingExited = FALSE;
+        return TRUE;
+    }
+
+    IntNotifyWinEvent( EVENT_SYSTEM_MENUEND,
+                       pWnd,
+                       (bPopup || !Menu) ? OBJID_WINDOW : (Menu->fFlags & MNF_SYSMENU ? OBJID_SYSMENU : OBJID_MENU),
+                       CHILDID_SELF, 0);
 
     if (!(wFlags & TPM_NONOTIFY))
        co_IntSendMessage( UserHMGetHandle(pWnd), WM_EXITMENULOOP, bPopup && !(wFlags & TPM_SYSTEM_MENU), 0 );
@@ -4931,7 +5007,7 @@ VOID MENU_TrackMouseMenuBar( PWND pWnd, ULONG ht, POINT pt)
         /* fetch the window menu again, it may have changed */
         pMenu = (ht == HTSYSMENU) ? get_win_sys_menu( UserHMGetHandle(pWnd) ) : IntGetMenu( UserHMGetHandle(pWnd) );
         MENU_TrackMenu(pMenu, wFlags, pt.x, pt.y, pWnd);
-        MENU_ExitTracking(pWnd, FALSE, wFlags);
+        MENU_ExitTracking(pWnd, VerifyMenu(pMenu) ? pMenu : NULL, FALSE, wFlags);
     }
 }
 
@@ -4995,7 +5071,7 @@ VOID MENU_TrackKbdMenuBar(PWND pwnd, UINT wParam, WCHAR wChar)
 
 track_menu:
     MENU_TrackMenu( TrackMenu, wFlags, 0, 0, pwnd );
-    MENU_ExitTracking( pwnd, FALSE, wFlags);
+    MENU_ExitTracking( pwnd, VerifyMenu(TrackMenu) ? TrackMenu : NULL, FALSE, wFlags);
 }
 
 BOOL FASTCALL
@@ -5047,15 +5123,22 @@ IntTrackPopupMenuEx(
           MENU_InitSysMenuPopup( menu, pWnd->style, pWnd->pcls->style, HTSYSMENU);
 
        if (MENU_ShowPopup(pWnd, menu, 0, wFlags | TPM_POPUPMENU, x, y, lpTpm ? &lpTpm->rcExclude : NULL))
+       {
           ret = MENU_TrackMenu( menu, wFlags | TPM_POPUPMENU, 0, 0, pWnd);
+          MENU_ExitTracking(pWnd, menu, TRUE, wFlags);
+       }
        else
        {
+          IntNotifyWinEvent(EVENT_SYSTEM_MENUEND, pWnd, OBJID_WINDOW, CHILDID_SELF, 0);
           MsqSetStateWindow(pti, MSQ_STATE_MENUOWNER, NULL);
           pti->MessageQueue->QF_flags &= ~QF_CAPTURELOCKED;
           co_UserSetCapture(NULL); /* release the capture */
+          if (!(wFlags & TPM_NONOTIFY))
+             co_IntSendMessage(UserHMGetHandle(pWnd), WM_EXITMENULOOP, !(wFlags & TPM_SYSTEM_MENU), 0);
+          co_UserShowCaret(0);
+          top_popup = 0;
+          top_popup_hmenu = NULL;
        }
-
-       MENU_ExitTracking(pWnd, TRUE, wFlags);
 
        if (menu->hWnd)
        {
@@ -5142,6 +5225,9 @@ PopupMenuWndProc(
 
     case WM_MOUSEACTIVATE:  /* We don't want to be activated */
       *lResult = MA_NOACTIVATE;
+      break;
+
+    case WM_SHOWWINDOW:
       break;
 
     case WM_PAINT:

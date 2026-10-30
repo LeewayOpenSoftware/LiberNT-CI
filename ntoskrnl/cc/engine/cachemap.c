@@ -65,9 +65,9 @@ CcMapUninitialize(
     if (!CcMapDetachViews(Map, 0, (ULONG64)-1))
         return FALSE;
 
-    CC_LOCK_ACQUIRE(&Map->Cache->ReclaimLock, &OldIrql);
+    CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
     Busy = (Map->ReclaimsInProgress != 0);
-    CC_LOCK_RELEASE(&Map->Cache->ReclaimLock, OldIrql);
+    CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
     if (Busy)
         return FALSE;
 

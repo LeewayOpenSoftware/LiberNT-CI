@@ -140,13 +140,14 @@ static LPWSTR FONT_mbtowc(HDC hdc, LPCSTR str, INT count, INT *plenW, UINT *pCP)
 static LPSTR FONT_GetCharsByRangeA(HDC hdc, UINT firstChar, UINT lastChar, PINT pByteLen)
 {
     INT i, count = lastChar - firstChar + 1;
-    UINT c;
+    UINT c, mbcp;
     LPSTR str;
 
     if (count <= 0)
         return NULL;
 
-    switch (GdiGetCodePage(hdc))
+    mbcp = GdiGetCodePage(hdc);
+    switch (mbcp)
     {
     case 932:
     case 936:
@@ -161,6 +162,7 @@ static LPSTR FONT_GetCharsByRangeA(HDC hdc, UINT firstChar, UINT lastChar, PINT 
     default:
         if (lastChar > 0xff)
             return NULL;
+        mbcp = 0;
         break;
     }
 
@@ -172,7 +174,10 @@ static LPSTR FONT_GetCharsByRangeA(HDC hdc, UINT firstChar, UINT lastChar, PINT 
     {
         if (c > 0xff)
             str[i++] = (BYTE)(c >> 8);
-        str[i] = (BYTE)c;
+        if (mbcp && c <= 0xff && IsDBCSLeadByteEx(mbcp, c))
+            str[i] = 0x1f;
+        else
+            str[i] = (BYTE)c;
     }
     str[i] = '\0';
 

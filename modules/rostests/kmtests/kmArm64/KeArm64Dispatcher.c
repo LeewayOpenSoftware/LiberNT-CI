@@ -8,7 +8,6 @@
 
 VOID Test_KeArm64Dispatcher(VOID);
 
-#ifdef _M_ARM64
 
 #define SCHEDULER_ROUNDS 32
 #define SCHEDULER_MODES 7
@@ -322,13 +321,9 @@ Cleanup:
     KeFlushQueuedDpcs();
 }
 
-#endif
 
 START_TEST(KeArm64Dispatcher)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64Dispatcher is ARM64-only\n");
-#else
     KAFFINITY PreviousAffinity;
     KPRIORITY PreviousPriority;
     LARGE_INTEGER Frequency;
@@ -347,5 +342,4 @@ START_TEST(KeArm64Dispatcher)
     }
     KeSetPriorityThread(KeGetCurrentThread(), PreviousPriority);
     KeRevertToUserAffinityThreadEx(PreviousAffinity);
-#endif
 }

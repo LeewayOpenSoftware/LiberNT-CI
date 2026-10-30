@@ -109,7 +109,7 @@ AlpcCallbackClientThread(
     Callback.Value++;
     RtlZeroMemory(&Reply, sizeof(Reply));
     Length = sizeof(Reply);
-    Timeout = AlpcTestRelativeTimeout(ALPC_TEST_TIMEOUT_MS);
+    Timeout = AlpcTestRelativeTimeout(500);
     Client->SecondStatus = NtAlpcSendWaitReceivePort(Client->Port, ALPC_MSGFLG_REPLY_MESSAGE, &Callback.Header, NULL, &Reply.Header, &Length, NULL, &Timeout);
     Client->SecondCookie = Reply.Cookie;
     return 0;

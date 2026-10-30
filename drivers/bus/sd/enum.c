@@ -2065,7 +2065,7 @@ SdBusEnumerateCard(
             ULONG PresentState;
 
             /* Only SDHCI controllers expose SDHCI_PRESENT_STATE. */
-            if (FdoExtension->HostType != SdBusHostSdhci)
+            if (FdoExtension->HostType != SdBusHostSdhci || FdoExtension->DisableWriteProtect)
             {
                 PdoExtension->WriteProtected = FALSE;
                 break;

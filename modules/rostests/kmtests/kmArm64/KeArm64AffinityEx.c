@@ -8,7 +8,6 @@
 
 VOID Test_KeArm64AffinityEx(VOID);
 
-#ifdef _M_ARM64
 #define KMT_AFFINITY_EX2_GROUPS 64
 #define KMT_AFFINITY_EX_PATTERN_STEP 0x33
 #define KMT_AFFINITY_EX_WIDE_STEP 0x1111
@@ -1079,13 +1078,9 @@ KmtTestInterlockedClearProcessorAffinityEx(
         ok_eq_size(RtlCompareMemory(&Buffer, &Expected, sizeof(Buffer)), sizeof(Buffer));
     }
 }
-#endif
 
 START_TEST(KeArm64AffinityEx)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64AffinityEx is ARM64-only\n");
-#else
     KAFFINITY_EX Affinity;
     KAFFINITY_EX Result;
     KAFFINITY_EX Source;
@@ -3449,5 +3444,4 @@ START_TEST(KeArm64AffinityEx)
         ok_eq_size(RtlCompareMemory(&GroupAffinity, &GroupSource, sizeof(GroupAffinity)), sizeof(GroupAffinity));
         ok_eq_size(RtlCompareMemory(&Affinity, &Source, sizeof(Affinity)), sizeof(Affinity));
     }
-#endif
 }

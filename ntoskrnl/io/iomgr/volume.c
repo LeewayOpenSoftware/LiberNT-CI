@@ -25,6 +25,18 @@ ULONG IopFsRegistrationOps;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
+static
+VOID
+IopDatabaseAdjustReference(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ LONG Delta)
+{
+    KIRQL OldIrql = IopAcquireDatabaseLockExclusive();
+
+    DeviceObject->ReferenceCount += Delta;
+    IopReleaseDatabaseLockExclusive(OldIrql);
+}
+
 /*
  * @halfplemented
  */
@@ -36,17 +48,17 @@ IopDecrementDeviceObjectRef(IN PDEVICE_OBJECT DeviceObject,
     KIRQL OldIrql;
 
     /* Acquire lock */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockExclusive();
     ASSERT(DeviceObject->ReferenceCount > 0);
 
     if (--DeviceObject->ReferenceCount > 0)
     {
-        KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+        IopReleaseDatabaseLockExclusive(OldIrql);
         return;
     }
 
     /* Release lock */
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockExclusive(OldIrql);
 
     /* Here, DO is not referenced any longer, check if we have to unload it */
     if (UnloadIfUnused || IoGetDevObjExtension(DeviceObject)->ExtensionFlags &
@@ -376,7 +388,7 @@ IopShutdownBaseFileSystems(IN PLIST_ENTRY ListHead)
         DeviceObject = IoGetAttachedDevice(DeviceObject);
 
         ObReferenceObject(DeviceObject);
-        IopInterlockedIncrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+        IopDatabaseAdjustReference(DeviceObject, 1);
 
         /* Build the shutdown IRP and call the driver */
         Irp = IoBuildSynchronousFsdRequest(IRP_MJ_SHUTDOWN,
@@ -619,7 +631,7 @@ IopMountVolume(IN PDEVICE_OBJECT DeviceObject,
             RegistrationOps = IopFsRegistrationOps;
 
             /* Release locks */
-            IopInterlockedIncrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+            IopDatabaseAdjustReference(DeviceObject, 1);
             ExReleaseResourceLite(&IopDatabaseResource);
 
             /* Call the driver */
@@ -636,7 +648,7 @@ IopMountVolume(IN PDEVICE_OBJECT DeviceObject,
             }
 
             ExAcquireResourceSharedLite(&IopDatabaseResource, TRUE);
-            IopInterlockedDecrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+            IopDatabaseAdjustReference(DeviceObject, -1);
 
             /* Check if mounting was successful */
             if (NT_SUCCESS(Status))
@@ -671,7 +683,7 @@ IopMountVolume(IN PDEVICE_OBJECT DeviceObject,
                 if (Status == STATUS_FS_DRIVER_REQUIRED)
                 {
                     /* We need to release the lock */
-                    IopInterlockedIncrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+                    IopDatabaseAdjustReference(DeviceObject, 1);
                     ExReleaseResourceLite(&IopDatabaseResource);
 
                     /* Release the device lock if we're holding it */
@@ -700,7 +712,7 @@ IopMountVolume(IN PDEVICE_OBJECT DeviceObject,
                             (Status == STATUS_USER_APC))
                         {
                             /* Don't mount if we were interrupted */
-                            IopInterlockedDecrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+                            IopDatabaseAdjustReference(DeviceObject, -1);
                             ObDereferenceObject(AttachedDeviceObject);
                             return Status;
                         }
@@ -710,7 +722,7 @@ IopMountVolume(IN PDEVICE_OBJECT DeviceObject,
                     KeEnterCriticalRegion();
                     ExAcquireResourceSharedLite(&IopDatabaseResource, TRUE);
 
-                    IopInterlockedDecrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+                    IopDatabaseAdjustReference(DeviceObject, -1);
 
                     /* When we released the lock, make sure nobody beat us */
                     if (DeviceObject->Vpb->Flags & VPB_MOUNTED)
@@ -1052,7 +1064,7 @@ IoRegisterFileSystem(IN PDEVICE_OBJECT DeviceObject)
     KeLeaveCriticalRegion();
 
     /* Ensure driver won't be unloaded */
-    IopInterlockedIncrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+    IopDatabaseAdjustReference(DeviceObject, 1);
 }
 
 /*
@@ -1085,7 +1097,7 @@ IoUnregisterFileSystem(IN PDEVICE_OBJECT DeviceObject)
     KeLeaveCriticalRegion();
 
     /* Decrease reference count to allow unload */
-    IopInterlockedDecrementUlong(LockQueueIoDatabaseLock, (PULONG)&DeviceObject->ReferenceCount);
+    IopDatabaseAdjustReference(DeviceObject, -1);
 }
 
 /*

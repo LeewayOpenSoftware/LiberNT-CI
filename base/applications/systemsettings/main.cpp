@@ -31,6 +31,7 @@ using namespace ShellFrame;
 #define BAR_ACTION (-2)
 #define TIMER_REFRESH 1
 #define TIMER_SETTING 2
+#define TIMER_SCROLL 3
 #define WM_SETTINGS_CONTROL (WM_APP + 16)
 #define WM_SETTINGS_NAVIGATE (WM_APP + 17)
 
@@ -185,6 +186,9 @@ public:
     SettingsWindow() :
         m_Page(PageId::System),
         m_Scroll(0),
+        m_ScrollTarget(0),
+        m_ScrollShown(0),
+        m_ScrollAnimating(FALSE),
         m_ContentHeight(0),
         m_HotAccount(FALSE),
         m_TrackingClient(FALSE),
@@ -505,13 +509,8 @@ protected:
                 }
                 break;
             case WM_MOUSEWHEEL:
-            {
-                m_Scroll -= MulDiv(GET_WHEEL_DELTA_WPARAM(wParam), m_Theme.Scale(64), WHEEL_DELTA);
-                ClampScroll();
-                Invalidate(NULL);
-                UpdateWindow(m_hwnd);
+                ScrollSmooth(-MulDiv(GET_WHEEL_DELTA_WPARAM(wParam), m_Theme.Scale(64), WHEEL_DELTA));
                 return 0;
-            }
             case WM_VSCROLL:
                 if ((HWND)lParam == m_ScrollBar)
                 {
@@ -646,6 +645,11 @@ protected:
                 ActivateControl((int)wParam, (int)lParam);
                 return 0;
             case WM_TIMER:
+                if (wParam == TIMER_SCROLL)
+                {
+                    OnScrollTimer();
+                    return 0;
+                }
                 if (wParam == TIMER_REFRESH || wParam == TIMER_SETTING)
                 {
                     KillTimer(m_hwnd, wParam);
@@ -1107,6 +1111,54 @@ private:
                 break;
             default:
                 break;
+        }
+    }
+
+    int MaxScroll()
+    {
+        RECT client;
+
+        GetClientRect(m_hwnd, &client);
+        return max(0, m_ContentHeight - HeaderBottom() - ((int)client.bottom - HeaderBottom()));
+    }
+
+    void ScrollSmooth(int delta)
+    {
+        if (!m_ScrollAnimating || m_Scroll != m_ScrollShown)
+            m_ScrollTarget = m_Scroll;
+        m_ScrollTarget = max(0, min(m_ScrollTarget + delta, MaxScroll()));
+        if (m_ScrollTarget == m_Scroll)
+            return;
+        m_ScrollShown = m_Scroll;
+        if (!m_ScrollAnimating)
+        {
+            m_ScrollAnimating = TRUE;
+            SetTimer(m_hwnd, TIMER_SCROLL, USER_TIMER_MINIMUM, NULL);
+        }
+    }
+
+    void OnScrollTimer()
+    {
+        int distance = m_ScrollTarget - m_Scroll;
+
+        if (m_Scroll != m_ScrollShown || distance == 0)
+        {
+            KillTimer(m_hwnd, TIMER_SCROLL);
+            m_ScrollAnimating = FALSE;
+            return;
+        }
+        if (abs(distance) <= m_Theme.Scale(2))
+            m_Scroll = m_ScrollTarget;
+        else
+            m_Scroll += distance / 3 ? distance / 3 : (distance > 0 ? 1 : -1);
+        ClampScroll();
+        m_ScrollShown = m_Scroll;
+        Invalidate(NULL);
+        UpdateWindow(m_hwnd);
+        if (m_Scroll == m_ScrollTarget)
+        {
+            KillTimer(m_hwnd, TIMER_SCROLL);
+            m_ScrollAnimating = FALSE;
         }
     }
 
@@ -2173,6 +2225,9 @@ private:
     std::vector<bool> m_GroupIcons;
     std::vector<SearchEntry> m_Index;
     int m_Scroll;
+    int m_ScrollTarget;
+    int m_ScrollShown;
+    BOOL m_ScrollAnimating;
     int m_ContentHeight;
     BOOL m_HotAccount;
     BOOL m_TrackingClient;

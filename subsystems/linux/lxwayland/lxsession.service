@@ -1,0 +1,10 @@
+[Unit]
+Description=LiberNT login session of user %i
+After=systemd-user-sessions.service systemd-logind.service
+
+[Service]
+Type=exec
+User=%i
+PAMName=login
+Environment=XDG_SESSION_CLASS=user
+ExecStart=/usr/bin/sleep infinity

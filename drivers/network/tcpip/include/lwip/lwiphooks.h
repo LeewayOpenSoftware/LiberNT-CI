@@ -20,3 +20,7 @@ u8_t LibIP6WeakSend(const ip6_addr_t *Source);
 u8_t LibIP6AddressIsManaged(struct netif *Netif, s8_t Slot);
 void LibIP6StableAddress(struct netif *Netif, const ip6_addr_t *Prefix, ip6_addr_t *Address);
 s8_t LibIP6SourceRank(struct netif *Netif, s8_t Slot);
+u16_t LibIP4PathMtu(const ip4_addr_t *Destination, struct netif *Netif);
+void LibIP6PathOutput(struct netif *Netif, const ip6_addr_t *Source, const ip6_addr_t *Destination, u8_t NextHeader,
+                      struct pbuf *p);
+void TiSignalChange(void);

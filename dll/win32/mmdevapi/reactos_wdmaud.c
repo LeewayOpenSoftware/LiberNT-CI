@@ -122,6 +122,8 @@ struct reactos_stream
     UINT64 position;
     UINT64 completed_render_frames;
     UINT64 resample_offset;
+    UINT64 render_client_frames;
+    UINT64 render_device_frames;
     BYTE *rt_buffer;
     UINT32 rt_buffer_frames;
     UINT32 rt_period_frames;
@@ -3006,6 +3008,8 @@ static NTSTATUS reactos_reset(struct reset_params *params)
             stream->render_locked = FALSE;
             stream->render_locked_frames = 0;
             stream->resample_offset = 0;
+            stream->render_client_frames = 0;
+            stream->render_device_frames = 0;
             stream->render_history_valid = FALSE;
             LeaveCriticalSection(&stream->lock);
         }
@@ -3330,6 +3334,11 @@ static NTSTATUS reactos_release_render_buffer(struct release_render_buffer_param
         hr = reactos_shared_render_write(stream->shared_render, render_data, device_frames);
         if (FAILED(hr))
             stream->render_error = ERROR_GEN_FAILURE;
+        else
+        {
+            stream->render_client_frames += params->written_frames;
+            stream->render_device_frames += device_frames;
+        }
         LeaveCriticalSection(&stream->lock);
         if (stream->event)
             SetEvent(stream->event);
@@ -4030,7 +4039,12 @@ static NTSTATUS reactos_get_position(struct get_position_params *params)
             UINT32 device_rate = stream->device_format.Format.nSamplesPerSec;
             UINT32 client_rate = stream->format.Format.nSamplesPerSec;
 
-            *params->pos = (position / device_rate) * client_rate + (position % device_rate) * client_rate / device_rate;
+            EnterCriticalSection(&stream->lock);
+            if (position >= stream->render_device_frames)
+                *params->pos = stream->render_client_frames;
+            else
+                *params->pos = (position / device_rate) * client_rate + (position % device_rate) * client_rate / device_rate;
+            LeaveCriticalSection(&stream->lock);
         }
         return STATUS_SUCCESS;
     }

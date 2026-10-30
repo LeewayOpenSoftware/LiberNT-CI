@@ -524,7 +524,11 @@ static LRESULT WINAPI MCIWndProc(HWND hWnd, UINT wMsg, WPARAM wParam, LPARAM lPa
         SetWindowPos(GetDlgItem(hWnd, CTL_MENU), 0, 32, HIWORD(lParam) - 32, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
         SetWindowPos(GetDlgItem(hWnd, CTL_TRACKBAR), 0, 64, HIWORD(lParam) - 32, LOWORD(lParam) - 64, 32, SWP_NOACTIVATE);
 
+#ifdef __REACTOS__
+        if (!(mwi->dwStyle & MCIWNDF_NOAUTOSIZEMOVIE) && mwi->mci)
+#else
         if (!(mwi->dwStyle & MCIWNDF_NOAUTOSIZEMOVIE))
+#endif
         {
             RECT rc;
 
@@ -601,13 +605,20 @@ static LRESULT WINAPI MCIWndProc(HWND hWnd, UINT wMsg, WPARAM wParam, LPARAM lPa
 
             SetCursor(hCursor);
 
+#ifdef __REACTOS__
+            if (mwi->lasterror)
+#else
             if (mwi->lasterror && !(mwi->dwStyle & MCIWNDF_NOERRORDLG))
+#endif
             {
                 /* FIXME: get the caption from resources */
                 static const WCHAR caption[] = {'M','C','I',' ','E','r','r','o','r',0};
                 WCHAR error_str[MAXERRORLENGTH];
 
                 mciGetErrorStringW(mwi->lasterror, error_str, MAXERRORLENGTH);
+#ifdef __REACTOS__
+                if (!(mwi->dwStyle & MCIWNDF_NOERRORDLG))
+#endif
                 MessageBoxW(hWnd, error_str, caption, MB_ICONEXCLAMATION | MB_OK);
                 MCIWND_notify_error(mwi);
                 goto end_of_mci_open;

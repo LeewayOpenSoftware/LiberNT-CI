@@ -2274,7 +2274,11 @@ tcp_eff_send_mss_netif(u16_t sendmss, struct netif *outif, const ip_addr_t *dest
     if (outif == NULL) {
       return sendmss;
     }
+#ifdef LWIP_HOOK_IP4_PATH_MTU
+    mtu = LWIP_HOOK_IP4_PATH_MTU(ip_2_ip4(dest), outif);
+#else
     mtu = outif->mtu;
+#endif
   }
 #endif /* LWIP_IPV4 */
 

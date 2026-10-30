@@ -73,6 +73,8 @@ typedef struct _LX_SYNTH
     ULONG Index;
     PLX_CGROUP Cgroup;
     PLX_MOUNT Mount;
+    ULONG Uid;
+    ULONG Gid;
     LX_NS_KIND NsKind;
     CHAR Prefix[128];
     PSTR LinkTarget;
@@ -179,6 +181,15 @@ typedef struct _LX_PID_ENTRY
     PLX_GENERATOR Generator;
     PLX_WRITER Writer;
 } LX_PID_ENTRY, *PLX_PID_ENTRY;
+
+typedef struct _LX_CGROUP_FILE_ATTR
+{
+    LIST_ENTRY Link;
+    ULONG Index;
+    ULONG Uid;
+    ULONG Gid;
+    ULONG Mode;
+} LX_CGROUP_FILE_ATTR, *PLX_CGROUP_FILE_ATTR;
 
 static FAST_MUTEX LxCgroupLock;
 static volatile LONG64 LxCgroupNextId = 1;
@@ -404,7 +415,9 @@ LxCgroupCreateRoot(VOID)
     InitializeListHead(&Root->DeadLink);
     InitializeListHead(&Root->DeadList);
     InitializeListHead(&Root->BpfDevice);
+    InitializeListHead(&Root->FileAttributes);
     LxEventSourceInit(&Root->Events);
+    Root->Mode = 0755;
     Root->PidsLimit = LX_PIDS_MAX;
     Root->Root = Root;
     Root->Id = (ULONG64)InterlockedIncrement64(&LxCgroupNextId);
@@ -432,7 +445,9 @@ LxCgroupCreateChild(
     InitializeListHead(&Child->DeadLink);
     InitializeListHead(&Child->DeadList);
     InitializeListHead(&Child->BpfDevice);
+    InitializeListHead(&Child->FileAttributes);
     LxEventSourceInit(&Child->Events);
+    Child->Mode = 0755;
     Child->PidsLimit = LX_PIDS_MAX;
     Child->Parent = Parent;
     Child->Root = Parent->Root;
@@ -450,6 +465,8 @@ LxCgroupFreeOne(
 {
     while (!IsListEmpty(&Cgroup->Children))
         LxCgroupFreeOne(CONTAINING_RECORD(RemoveHeadList(&Cgroup->Children), LX_CGROUP, Sibling));
+    while (!IsListEmpty(&Cgroup->FileAttributes))
+        LxFree(CONTAINING_RECORD(RemoveHeadList(&Cgroup->FileAttributes), LX_CGROUP_FILE_ATTR, Link));
     LxBpfCgroupRelease(Cgroup);
     LxFree(Cgroup->Name);
     LxFree(Cgroup);
@@ -1095,6 +1112,10 @@ LxGenPidStat(
             continue;
         if ((State == 'S') && (Thread->CurrentSyscall == MAXULONG))
             State = 'R';
+        if ((State != 'Z') && Thread->Stopped && ((Synth->Tid != 0) || (Thread->Tid == Process->Pid)))
+            State = 'T';
+        if ((State != 'Z') && LxPtraceStopped(Thread) && ((Synth->Tid != 0) || (Thread->Tid == Process->Pid)))
+            State = 't';
         if ((Synth->Tid != 0) && (Thread->EThread != NULL))
         {
             Target = Thread->EThread;
@@ -1151,6 +1172,10 @@ LxGenPidStatus(
     PLX_NS ProcNs;
     ULONG64 Ignored = 0, Caught = 0, Blocked = 0, Affinity = LxSchedActiveMask();
     ULONG SeccompMode = 0, SeccompFilters = 0;
+    LONG64 Spec = -LX_EINVAL;
+    PCSTR SpecText;
+    ULONG TracerPid = 0;
+    BOOLEAN TraceStopped = FALSE;
     PLIST_ENTRY Entry;
     CHAR Comm[16], List[256];
     LONG Signal;
@@ -1178,6 +1203,9 @@ LxGenPidStatus(
             Affinity &= Thread->Affinity;
             SeccompMode = Thread->SeccompMode;
             SeccompFilters = LxSeccompFilterCount(Thread);
+            Spec = LxSpecCtrlGet(Thread, LX_PR_SPEC_STORE_BYPASS);
+            TracerPid = LxPtraceTracerPid(Self, Thread);
+            TraceStopped = LxPtraceStopped(Thread);
             break;
         }
     }
@@ -1191,11 +1219,15 @@ LxGenPidStatus(
 
     ProcNs = LxProcPidNs(Self, Synth);
     LxTextPrintf(Text,
-                 "Name:\t%s\nUmask:\t%04lo\nState:\t%s\nTgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%lu\nTracerPid:\t0\n"
+                 "Name:\t%s\nUmask:\t%04lo\nState:\t%s\nTgid:\t%lu\nNgid:\t0\nPid:\t%lu\nPPid:\t%lu\nTracerPid:\t%lu\n"
                  "Uid:\t%lu\t%lu\t%lu\t%lu\nGid:\t%lu\t%lu\t%lu\t%lu\nFDSize:\t%lu\nGroups:\t",
-                 Comm, Process->Umask, Process->Exited ? "Z (zombie)" : "S (sleeping)", LxPidNrIn(ProcNs, Process),
+                 Comm, Process->Umask,
+                 Process->Exited ? "Z (zombie)" :
+                 (TraceStopped ? "t (tracing stop)" :
+                  ((Process->JobctlFlags & LX_JOBCTL_STOPPED) ? "T (stopped)" : "S (sleeping)")),
+                 LxPidNrIn(ProcNs, Process),
                  LxGlobalToNrIn(ProcNs, Synth->Tid ? Synth->Tid : Process->Pid),
-                 LxPidNsIsInit(Process) ? 0UL : LxGlobalToNrIn(ProcNs, Process->ParentPid),
+                 LxPidNsIsInit(Process) ? 0UL : LxGlobalToNrIn(ProcNs, Process->ParentPid), TracerPid,
                  LxCredViewId(Self, FALSE, Process->Uid[0]), LxCredViewId(Self, FALSE, Process->Uid[1]),
                  LxCredViewId(Self, FALSE, Process->Uid[2]), LxCredViewId(Self, FALSE, Process->Fsuid),
                  LxCredViewId(Self, TRUE, Process->Gid[0]), LxCredViewId(Self, TRUE, Process->Gid[1]),
@@ -1261,18 +1293,42 @@ LxGenPidStatus(
         LxTextAppend(Text, "Kthread:\t0\n", 10);
     }
     LxTextPrintf(Text,
-                 "CoreDumping:\t0\nTHP_enabled:\t1\nuntag_mask:\t0xffffffffffffff\nThreads:\t%ld\nSigQ:\t0/63429\n",
-                 Process->Exited ? 1L : (LONG)Process->ThreadCount);
+                 "CoreDumping:\t0\nTHP_enabled:\t%d\nuntag_mask:\t0xffffffffffffff\nThreads:\t%ld\nSigQ:\t0/63429\n",
+                 Process->ThpDisable != 1, Process->Exited ? 1L : (LONG)Process->ThreadCount);
+    switch (Spec)
+    {
+        case -LX_EINVAL:
+            SpecText = "unknown";
+            break;
+        case LX_PR_SPEC_NOT_AFFECTED:
+            SpecText = "not vulnerable";
+            break;
+        case LX_PR_SPEC_PRCTL | LX_PR_SPEC_FORCE_DISABLE:
+            SpecText = "thread force mitigated";
+            break;
+        case LX_PR_SPEC_PRCTL | LX_PR_SPEC_DISABLE:
+            SpecText = "thread mitigated";
+            break;
+        case LX_PR_SPEC_PRCTL | LX_PR_SPEC_ENABLE:
+            SpecText = "thread vulnerable";
+            break;
+        case LX_PR_SPEC_DISABLE:
+            SpecText = "globally mitigated";
+            break;
+        default:
+            SpecText = "vulnerable";
+            break;
+    }
     LxTextPrintf(Text,
                  "SigPnd:\t%016llx\nShdPnd:\t%016llx\nSigBlk:\t%016llx\nSigIgn:\t%016llx\nSigCgt:\t%016llx\n"
                  "CapInh:\t%016llx\nCapPrm:\t%016llx\nCapEff:\t%016llx\nCapBnd:\t%016llx\nCapAmb:\t%016llx\n"
-                 "NoNewPrivs:\t%u\nSeccomp:\t%lu\nSeccomp_filters:\t%lu\nSpeculation_Store_Bypass:\tthread vulnerable\n"
+                 "NoNewPrivs:\t%u\nSeccomp:\t%lu\nSeccomp_filters:\t%lu\nSpeculation_Store_Bypass:\t%s\n"
                  "SpeculationIndirectBranch:\tunknown\nCpus_allowed:\t%llx\nCpus_allowed_list:\t%s\n"
                  "Mems_allowed:\t1\nMems_allowed_list:\t0\nvoluntary_ctxt_switches:\t0\nnonvoluntary_ctxt_switches:\t0\n",
                  0ULL, (ULONG64)Process->Pending, Blocked, Ignored, Caught, Process->CapInheritable,
                  Process->CapPermitted, Process->CapEffective,
                  Process->CapBounding, Process->CapAmbient, Process->NoNewPrivs ? 1U : 0U, SeccompMode, SeccompFilters,
-                 Affinity, List);
+                 SpecText, Affinity, List);
     LxProcessDereference(Process);
 }
 
@@ -2279,6 +2335,225 @@ LxPagemapOpen(
     return 0;
 }
 
+static
+LONG64
+LxPidMemTransfer(
+    _In_ PLX_FILE File,
+    _In_ ULONG64 Buffer,
+    _In_ ULONG64 Length,
+    _Inout_opt_ PLONG64 Offset,
+    _In_ BOOLEAN Write)
+{
+    PLX_PROCESS Target = File->PidProcess;
+    ULONG64 Address = (ULONG64)((Offset != NULL) ? *Offset : File->Position), Done = 0;
+    PEPROCESS EProcess;
+    PUCHAR Page;
+    LONG64 Result = 0;
+
+    if ((Target == NULL) || Target->Exited)
+        return 0;
+    if (!NT_SUCCESS(PsLookupProcessByProcessId(ULongToHandle(Target->Mm->NtPid), &EProcess)))
+        return 0;
+    Page = LxAlloc(LX_PAGE_SIZE);
+    if (Page == NULL)
+    {
+        ObDereferenceObject(EProcess);
+        return -LX_ENOMEM;
+    }
+    while (Done < Length)
+    {
+        ULONG Size = (ULONG)min(Length - Done, LX_PAGE_SIZE - ((Address + Done) & (LX_PAGE_SIZE - 1)));
+
+        if (Write)
+        {
+            Result = LxCopyFromUser(Page, Buffer + Done, Size);
+            if (Result == 0)
+                Result = LxMmForceAccess(Target, EProcess, Address + Done, Page, Size, TRUE);
+        }
+        else
+        {
+            Result = LxMmForceAccess(Target, EProcess, Address + Done, Page, Size, FALSE);
+            if (Result == 0)
+                Result = LxCopyToUser(Buffer + Done, Page, Size);
+        }
+        if (Result != 0)
+            break;
+        Done += Size;
+    }
+    LxFree(Page);
+    ObDereferenceObject(EProcess);
+    if (Done == 0)
+        return Result;
+    if (Offset != NULL)
+        *Offset = (LONG64)(Address + Done);
+    else
+        File->Position = (LONG64)(Address + Done);
+    return (LONG64)Done;
+}
+
+static
+LONG64
+LxPidMemRead(
+    _In_ PLX_FILE File,
+    _In_ ULONG64 Buffer,
+    _In_ ULONG64 Length,
+    _Inout_opt_ PLONG64 Offset)
+{
+    return LxPidMemTransfer(File, Buffer, Length, Offset, FALSE);
+}
+
+static
+LONG64
+LxPidMemWrite(
+    _In_ PLX_FILE File,
+    _In_ ULONG64 Buffer,
+    _In_ ULONG64 Length,
+    _Inout_opt_ PLONG64 Offset)
+{
+    return LxPidMemTransfer(File, Buffer, Length, Offset, TRUE);
+}
+
+static
+LONG
+LxPidMemStat(
+    _In_ PLX_FILE File,
+    _Out_ PLX_STAT Stat)
+{
+    LxPagemapStat(File, Stat);
+    Stat->Mode = LX_S_IFREG | 0600;
+    return 0;
+}
+
+static const LX_FILE_OPS LxPidMemOps =
+{
+    LxPidMemRead, LxPidMemWrite, NULL, NULL, LxPidMemStat, LxPagemapSeek, NULL, NULL, NULL
+};
+
+static
+LONG
+LxPidMemOpen(
+    _In_ PLX_PROCESS Process,
+    _In_ ULONG Pid,
+    _In_ ULONG Flags,
+    _Out_ PLX_FILE *Result)
+{
+    PLX_PROCESS Target = LxProcessLookup(Process->Instance, Pid);
+    PLX_FILE File;
+
+    *Result = NULL;
+    if (Target == NULL)
+        return -LX_ESRCH;
+    if (LxPtraceAccessCheck(Process, Target) != 0)
+    {
+        LxProcessDereference(Target);
+        return -LX_EACCES;
+    }
+    File = LxFileAlloc(&LxPidMemOps, Flags & LX_O_ACCMODE, LX_S_IFREG);
+    if (File == NULL)
+    {
+        LxProcessDereference(Target);
+        return -LX_ENOMEM;
+    }
+    File->Mode = 0600;
+    File->PidProcess = Target;
+    *Result = File;
+    return 0;
+}
+
+static volatile LONG LxAuditSessionId;
+
+static
+LONG
+LxParseWrittenNumber(
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length,
+    _Out_ PULONG Value);
+
+static
+VOID
+LxGenPidLoginuid(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    PLX_PROCESS Process = LxProcessLookup(Self->Instance, Synth->Pid);
+    ULONG LoginUid;
+
+    if (Process == NULL)
+        return;
+    LoginUid = Process->LoginUid;
+    LxProcessDereference(Process);
+    if (LoginUid != MAXULONG)
+        LoginUid = LxIdFromKernel(LxCredUserNs(Self), FALSE, LoginUid);
+    LxTextPrintf(Text, "%lu", LoginUid);
+}
+
+static
+VOID
+LxGenPidSessionid(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    PLX_PROCESS Process = LxProcessLookup(Self->Instance, Synth->Pid);
+
+    if (Process == NULL)
+        return;
+    LxTextPrintf(Text, "%lu", Process->SessionId);
+    LxProcessDereference(Process);
+}
+
+static
+LONG
+LxWritePidLoginuid(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    PLX_THREAD Current = LxCurrentThread();
+    PLX_PROCESS Process;
+    ULONG Pid = (ULONG)(ULONG_PTR)File->HandlerContext, Value, LoginUid, SessionId = MAXULONG;
+    LONG Error;
+
+    if ((Current == NULL) || (Current->Process->Pid != Pid))
+        return -LX_EPERM;
+    Error = LxParseWrittenNumber(Data, Length, &Value);
+    if (Error != 0)
+        return Error;
+    Process = Current->Process;
+    LoginUid = (Value == MAXULONG) ? MAXULONG : LxIdToKernel(LxCredUserNs(Process), FALSE, Value);
+    if ((Value != MAXULONG) && (LoginUid == MAXULONG))
+        return -LX_EINVAL;
+    if ((Process->LoginUid != MAXULONG) && !LxCapable(Process, LX_CAP_AUDIT_CONTROL))
+        return -LX_EPERM;
+    if (LoginUid != MAXULONG)
+    {
+        SessionId = (ULONG)InterlockedIncrement(&LxAuditSessionId);
+        if (SessionId == MAXULONG)
+            SessionId = (ULONG)InterlockedIncrement(&LxAuditSessionId);
+    }
+    ExAcquireFastMutex(&Process->Lock);
+    Process->LoginUid = LoginUid;
+    Process->SessionId = SessionId;
+    ExReleaseFastMutex(&Process->Lock);
+    return 0;
+}
+
+static
+VOID
+LxGenPidPersonality(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    PLX_PROCESS Process = LxProcessLookup(Self->Instance, Synth->Pid);
+
+    if (Process == NULL)
+        return;
+    LxTextPrintf(Text, "%08lx\n", Process->Personality);
+    LxProcessDereference(Process);
+}
+
 static const LX_PID_ENTRY LxPidEntries[] =
 {
     { "attr", LX_S_IFDIR, 0555, NULL, NULL, NULL },
@@ -2296,9 +2571,10 @@ static const LX_PID_ENTRY LxPidEntries[] =
     { "gid_map", LX_S_IFREG, 0644, NULL, LxGenPidGidMap, LxWritePidGidMap },
     { "io", LX_S_IFREG, 0400, "rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\ncancelled_write_bytes: 0\n", NULL, NULL },
     { "limits", LX_S_IFREG, 0444, NULL, LxGenPidLimits, NULL },
-    { "loginuid", LX_S_IFREG, 0644, "4294967295", NULL, LxWriteAccept },
+    { "loginuid", LX_S_IFREG, 0644, NULL, LxGenPidLoginuid, LxWritePidLoginuid },
     { "map_files", LX_S_IFDIR, 0500, NULL, NULL, NULL },
     { "maps", LX_S_IFREG, 0444, NULL, LxGenPidMaps, NULL },
+    { "mem", LX_S_IFREG, 0600, NULL, NULL, NULL },
     { "mountinfo", LX_S_IFREG, 0444, NULL, LxGenPidMountinfo, NULL },
     { "mounts", LX_S_IFREG, 0444, NULL, LxGenPidMounts, NULL },
     { "mountstats", LX_S_IFREG, 0400, "", NULL, NULL },
@@ -2307,9 +2583,9 @@ static const LX_PID_ENTRY LxPidEntries[] =
     { "oom_score", LX_S_IFREG, 0444, "0\n", NULL, NULL },
     { "oom_score_adj", LX_S_IFREG, 0644, NULL, LxGenPidOomScoreAdj, LxWritePidOomScoreAdj },
     { "pagemap", LX_S_IFREG, 0400, NULL, NULL, NULL },
-    { "personality", LX_S_IFREG, 0400, "00000000\n", NULL, NULL },
+    { "personality", LX_S_IFREG, 0400, NULL, LxGenPidPersonality, NULL },
     { "root", LX_S_IFLNK, 0777, NULL, NULL, NULL },
-    { "sessionid", LX_S_IFREG, 0444, "4294967295", NULL, NULL },
+    { "sessionid", LX_S_IFREG, 0444, NULL, LxGenPidSessionid, NULL },
     { "setgroups", LX_S_IFREG, 0644, NULL, LxGenPidSetgroups, LxWritePidSetgroups },
     { "smaps", LX_S_IFREG, 0444, NULL, LxGenPidSmaps, NULL },
     { "stat", LX_S_IFREG, 0444, NULL, LxGenPidStat, NULL },
@@ -2724,6 +3000,248 @@ static volatile LONG64 LxTainted;
 
 static
 VOID
+LxGenDmesgRestrict(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxTextPrintf(Text, "%ld\n", LxKlogDmesgRestrictValue());
+}
+
+static
+LONG
+LxWriteDmesgRestrict(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    PLX_THREAD Current = LxCurrentThread();
+    ULONG Value;
+    LONG Error;
+
+    UNREFERENCED_PARAMETER(File);
+    if (Current == NULL)
+        return -LX_ESRCH;
+    if (!LxCapable(Current->Process, LX_CAP_SYS_ADMIN))
+        return -LX_EPERM;
+    if (Length == 0)
+        return 0;
+    Error = LxParseWrittenNumber(Data, Length, &Value);
+    if ((Error == 0) && (Value > 1))
+        Error = -LX_EINVAL;
+    if (Error == 0)
+        LxKlogSetDmesgRestrict((LONG)Value);
+    return Error;
+}
+
+static
+VOID
+LxGenPrintk(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    LONG Values[4];
+
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxKlogGetPrintk(Values);
+    LxTextPrintf(Text, "%ld\t%ld\t%ld\t%ld\n", Values[0], Values[1], Values[2], Values[3]);
+}
+
+static
+LONG
+LxWritePrintk(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(File);
+    if (Length == 0)
+        return 0;
+    return LxKlogWritePrintk(Data, Length);
+}
+
+static
+LONG
+LxWriteRatelimitValue(
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length,
+    _Inout_ PLONG Target)
+{
+    ULONG Value;
+    LONG Error;
+
+    if (Length == 0)
+        return 0;
+    Error = LxParseWrittenNumber(Data, Length, &Value);
+    if ((Error == 0) && (Value > MAXLONG))
+        Error = -LX_EINVAL;
+    if (Error == 0)
+        InterlockedExchange(Target, (LONG)Value);
+    return Error;
+}
+
+static
+VOID
+LxGenPrintkRatelimit(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxTextPrintf(Text, "%ld\n", LxPrintkRatelimitSeconds);
+}
+
+static
+LONG
+LxWritePrintkRatelimit(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(File);
+    return LxWriteRatelimitValue(Data, Length, &LxPrintkRatelimitSeconds);
+}
+
+static
+VOID
+LxGenPrintkRatelimitBurst(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxTextPrintf(Text, "%ld\n", LxPrintkRatelimitBurst);
+}
+
+static
+LONG
+LxWritePrintkRatelimitBurst(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(File);
+    return LxWriteRatelimitValue(Data, Length, &LxPrintkRatelimitBurst);
+}
+
+static
+VOID
+LxGenPrintkDevkmsg(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxTextPrintf(Text, "%s\n", LxKlogDevkmsgName());
+}
+
+static
+LONG
+LxWritePrintkDevkmsg(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(File);
+    if (Length == 0)
+        return 0;
+    return LxKlogSetDevkmsg(Data, Length);
+}
+
+static
+VOID
+LxGenYamaScope(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxTextPrintf(Text, "%ld\n", LxYamaScopeValue());
+}
+
+static
+LONG
+LxWriteYamaScope(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    PLX_THREAD Current = LxCurrentThread();
+    ULONG Value;
+    LONG Error;
+
+    UNREFERENCED_PARAMETER(File);
+    if (Current == NULL)
+        return -LX_ESRCH;
+    if (Length == 0)
+        return 0;
+    Error = LxParseWrittenNumber(Data, Length, &Value);
+    return (Error != 0) ? Error : LxYamaSetScope(Current->Process, Value);
+}
+
+static
+VOID
+LxGenSeccompActions(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text,
+    _In_ BOOLEAN Logged)
+{
+    CHAR Buffer[128];
+
+    UNREFERENCED_PARAMETER(Self);
+    UNREFERENCED_PARAMETER(Synth);
+    LxSeccompFormatActions(Logged, Buffer, sizeof(Buffer));
+    LxTextPrintf(Text, "%s\n", Buffer);
+}
+
+static
+VOID
+LxGenSeccompActionsAvail(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    LxGenSeccompActions(Self, Synth, Text, FALSE);
+}
+
+static
+VOID
+LxGenSeccompActionsLogged(
+    _In_ PLX_PROCESS Self,
+    _In_ PLX_SYNTH Synth,
+    _Inout_ PLX_TEXT Text)
+{
+    LxGenSeccompActions(Self, Synth, Text, TRUE);
+}
+
+static
+LONG
+LxWriteSeccompActionsLogged(
+    _In_ PLX_FILE File,
+    _In_reads_bytes_(Length) PCSTR Data,
+    _In_ ULONG Length)
+{
+    PLX_THREAD Current = LxCurrentThread();
+
+    UNREFERENCED_PARAMETER(File);
+    if (Current == NULL)
+        return -LX_ESRCH;
+    if (Length == 0)
+        return 0;
+    return LxSeccompWriteActionsLogged(Current->Process, Data, Length);
+}
+
+static
+VOID
 LxGenTainted(
     _In_ PLX_PROCESS Self,
     _In_ PLX_SYNTH Synth,
@@ -2895,7 +3413,7 @@ static const LX_TABLE_ENTRY LxProcSysTable[] =
     { "kernel/cap_last_cap", 0444, "40\n", NULL, NULL },
     { "kernel/core_pattern", 0644, NULL, LxGenCorePattern, LxWriteCorePattern },
     { "kernel/core_pipe_limit", 0644, "0\n", NULL, LxWriteAccept },
-    { "kernel/dmesg_restrict", 0644, "0\n", NULL, LxWriteAccept },
+    { "kernel/dmesg_restrict", 0644, NULL, LxGenDmesgRestrict, LxWriteDmesgRestrict },
     { "kernel/domainname", 0644, NULL, LxGenDomainname, LxWriteDomainname },
     { "kernel/hostname", 0644, NULL, LxGenHostname, LxWriteHostname },
     { "kernel/kptr_restrict", 0644, "1\n", NULL, LxWriteAccept },
@@ -2907,14 +3425,20 @@ static const LX_TABLE_ENTRY LxProcSysTable[] =
     { "kernel/overflowuid", 0644, NULL, LxGenOverflowUid, LxWriteOverflowUid },
     { "kernel/panic", 0644, "0\n", NULL, LxWriteAccept },
     { "kernel/pid_max", 0644, "4194304\n", NULL, LxWriteAccept },
-    { "kernel/printk", 0644, "4\t4\t1\t7\n", NULL, LxWriteAccept },
+    { "kernel/printk", 0644, NULL, LxGenPrintk, LxWritePrintk },
+    { "kernel/printk_devkmsg", 0644, NULL, LxGenPrintkDevkmsg, LxWritePrintkDevkmsg },
+    { "kernel/printk_ratelimit", 0644, NULL, LxGenPrintkRatelimit, LxWritePrintkRatelimit },
+    { "kernel/printk_ratelimit_burst", 0644, NULL, LxGenPrintkRatelimitBurst, LxWritePrintkRatelimitBurst },
     { "kernel/random/boot_id", 0444, NULL, LxGenBootId, NULL },
     { "kernel/random/entropy_avail", 0444, "256\n", NULL, NULL },
     { "kernel/random/poolsize", 0444, "256\n", NULL, NULL },
     { "kernel/random/uuid", 0444, NULL, LxGenUuid, NULL },
+    { "kernel/seccomp/actions_avail", 0444, NULL, LxGenSeccompActionsAvail, NULL },
+    { "kernel/seccomp/actions_logged", 0644, NULL, LxGenSeccompActionsLogged, LxWriteSeccompActionsLogged },
     { "kernel/sysrq", 0644, "176\n", NULL, LxWriteAccept },
     { "kernel/tainted", 0644, NULL, LxGenTainted, LxWriteTainted },
     { "kernel/threads-max", 0644, "63429\n", NULL, LxWriteAccept },
+    { "kernel/yama/ptrace_scope", 0644, NULL, LxGenYamaScope, LxWriteYamaScope },
     { "kernel/unprivileged_bpf_disabled", 0644, "2\n", NULL, LxWriteAccept },
     { "kernel/version", 0444, LX_KERNEL_UTS_VERSION "\n", NULL, NULL },
     { "lxcore/trace", 0200, "", NULL, LxWriteTrace },
@@ -4108,6 +4632,30 @@ LxCgroupFileAllowed(
 }
 
 static
+VOID
+LxCgroupFileAttributes(
+    _In_ PLX_CGROUP Cgroup,
+    _Inout_ PLX_SYNTH Synth)
+{
+    PLIST_ENTRY Entry;
+
+    ExAcquireFastMutex(&LxCgroupLock);
+    for (Entry = Cgroup->FileAttributes.Flink; Entry != &Cgroup->FileAttributes; Entry = Entry->Flink)
+    {
+        PLX_CGROUP_FILE_ATTR Attr = CONTAINING_RECORD(Entry, LX_CGROUP_FILE_ATTR, Link);
+
+        if (Attr->Index == Synth->Index)
+        {
+            Synth->Uid = Attr->Uid;
+            Synth->Gid = Attr->Gid;
+            Synth->Mode = Attr->Mode;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&LxCgroupLock);
+}
+
+static
 LONG
 LxResolveCgroup(
     _In_ PLX_PROCESS Self,
@@ -4121,11 +4669,13 @@ LxResolveCgroup(
     Cgroup = LxCgroupWalk(((Synth->Mount != NULL) && (Synth->Mount->CgroupRoot != NULL)) ? Synth->Mount->CgroupRoot :
                           Self->Instance->RootCgroup, (PCSTR *)Components, Count, &Consumed);
     Synth->Cgroup = Cgroup;
+    Synth->Uid = Cgroup->Uid;
+    Synth->Gid = Cgroup->Gid;
     if (Consumed == Count)
     {
         Synth->Id = LxCgDir;
         Synth->Type = LX_S_IFDIR;
-        Synth->Mode = 0755;
+        Synth->Mode = Cgroup->Mode;
         return 0;
     }
     if (Consumed + 1 != Count)
@@ -4146,6 +4696,9 @@ LxResolveCgroup(
                            (strstr(LxCgroupFiles[Index], ".effective") != NULL) ||
                            (strcmp(LxCgroupFiles[Index], "cpuset.cpus.isolated") == 0)) ? 0444 : 0644;
             Synth->Index = Index;
+            Synth->Uid = Cgroup->FileUid;
+            Synth->Gid = Cgroup->FileGid;
+            LxCgroupFileAttributes(Cgroup, Synth);
             return 0;
         }
     }
@@ -4499,6 +5052,20 @@ LxSynthDirStat(
     _In_ PLX_FILE File,
     _Out_ PLX_STAT Stat)
 {
+    PLX_THREAD Thread = LxCurrentThread();
+
+    if ((Thread != NULL) && (File->Mount != NULL) && (File->SynthRelative != NULL))
+    {
+        LX_NODE Node;
+
+        RtlZeroMemory(&Node, sizeof(Node));
+        Node.Path = File->Path;
+        Node.Mount = File->Mount;
+        Node.Relative = File->SynthRelative;
+        if (LxSynthStat(Thread->Process, &Node, Stat) == 0)
+            return 0;
+    }
+
     RtlZeroMemory(Stat, sizeof(*Stat));
     Stat->Mode = LX_S_IFDIR | File->Mode;
     Stat->Nlink = 2;
@@ -5348,7 +5915,9 @@ LxSynthOpen(
         }
 
         File = LxFileAlloc(&LxSynthDirOps, LX_O_RDONLY | (Flags & (LX_O_NONBLOCK | LX_O_PATH)), LX_S_IFDIR);
-        if (File == NULL)
+        if (File != NULL)
+            File->SynthRelative = LxStrDup(Node->Relative);
+        if ((File == NULL) || (File->SynthRelative == NULL))
         {
             Error = -LX_ENOMEM;
             goto Exit;
@@ -5525,9 +6094,12 @@ LxSynthOpen(
 
             case LxProcPidFile:
                 if ((Synth.Index < RTL_NUMBER_OF(LxPidEntries)) &&
-                    (strcmp(LxPidEntries[Synth.Index].Name, "pagemap") == 0))
+                    ((strcmp(LxPidEntries[Synth.Index].Name, "pagemap") == 0) ||
+                     (strcmp(LxPidEntries[Synth.Index].Name, "mem") == 0)))
                 {
-                    Error = LxPagemapOpen(Process, Synth.Pid, Flags, &File);
+                    Error = (LxPidEntries[Synth.Index].Name[0] == 'm') ?
+                            LxPidMemOpen(Process, Synth.Pid, Flags, &File) :
+                            LxPagemapOpen(Process, Synth.Pid, Flags, &File);
                     if (Error != 0)
                         goto Exit;
                     File->Ino = LxSynthIno(Node);
@@ -5732,6 +6304,11 @@ LxSynthStat(
         Stat->Rdev = (5 << 8) | 2;
         Stat->Gid = 5;
     }
+    else if ((Synth.Id == LxCgDir) || (Synth.Id == LxCgFile))
+    {
+        Stat->Uid = Synth.Uid;
+        Stat->Gid = Synth.Gid;
+    }
     if (Synth.Type == LX_S_IFLNK && Synth.LinkTarget != NULL)
         Stat->Size = (LONG64)strlen(Synth.LinkTarget);
 
@@ -5814,6 +6391,90 @@ LxSynthMkdir(
         return -LX_ENOMEM;
     if (Child->Instance == NULL)
         Child->Instance = Process->Instance;
+    Child->Uid = Child->FileUid = Process->Fsuid;
+    Child->Gid = Child->FileGid = Process->Fsgid;
+    return 0;
+}
+
+LONG
+LxCgroupSetAttributes(
+    _In_ PLX_PROCESS Process,
+    _In_ PLX_NODE Node,
+    _In_ ULONG Mode,
+    _In_ ULONG Uid,
+    _In_ ULONG Gid)
+{
+    PLX_CGROUP_FILE_ATTR Attr = NULL, New;
+    PLIST_ENTRY Entry;
+    LX_SYNTH Synth;
+    ULONG Index;
+    LONG Error;
+
+    Error = LxSynthResolve(Process, Node->Mount, Node->Relative, &Synth);
+    if (Error != 0)
+        return Error;
+    LxFree(Synth.LinkTarget);
+    if ((Synth.Id != LxCgDir) && (Synth.Id != LxCgFile))
+        return 0;
+    if ((Uid != MAXULONG) && !((Process->Fsuid == Synth.Uid) && (Uid == Synth.Uid)) &&
+        !LxCapable(Process, LX_CAP_CHOWN))
+    {
+        return -LX_EPERM;
+    }
+    if ((Gid != MAXULONG) && !LxCapable(Process, LX_CAP_CHOWN))
+    {
+        BOOLEAN Allowed = (Process->Fsuid == Synth.Uid) && ((Gid == Synth.Gid) || (Gid == Process->Fsgid));
+
+        for (Index = 0; !Allowed && (Process->Fsuid == Synth.Uid) && (Index < Process->GroupCount); Index++)
+            Allowed = (Process->Groups[Index] == Gid);
+        if (!Allowed)
+            return -LX_EPERM;
+    }
+    if ((Mode != MAXULONG) && (Process->Fsuid != Synth.Uid) && !LxCapable(Process, LX_CAP_FOWNER))
+        return -LX_EPERM;
+
+    New = (Synth.Id == LxCgFile) ? LxAlloc(sizeof(*New)) : NULL;
+    if ((Synth.Id == LxCgFile) && (New == NULL))
+        return -LX_ENOMEM;
+    ExAcquireFastMutex(&LxCgroupLock);
+    if (Synth.Id == LxCgDir)
+    {
+        if (Uid != MAXULONG)
+            Synth.Cgroup->Uid = Uid;
+        if (Gid != MAXULONG)
+            Synth.Cgroup->Gid = Gid;
+        if (Mode != MAXULONG)
+            Synth.Cgroup->Mode = Mode & 07777;
+    }
+    else
+    {
+        for (Entry = Synth.Cgroup->FileAttributes.Flink; Entry != &Synth.Cgroup->FileAttributes; Entry = Entry->Flink)
+        {
+            if (CONTAINING_RECORD(Entry, LX_CGROUP_FILE_ATTR, Link)->Index == Synth.Index)
+            {
+                Attr = CONTAINING_RECORD(Entry, LX_CGROUP_FILE_ATTR, Link);
+                break;
+            }
+        }
+        if (Attr == NULL)
+        {
+            Attr = New;
+            New = NULL;
+            Attr->Index = Synth.Index;
+            Attr->Uid = Synth.Uid;
+            Attr->Gid = Synth.Gid;
+            Attr->Mode = Synth.Mode;
+            InsertTailList(&Synth.Cgroup->FileAttributes, &Attr->Link);
+        }
+        if (Uid != MAXULONG)
+            Attr->Uid = Uid;
+        if (Gid != MAXULONG)
+            Attr->Gid = Gid;
+        if (Mode != MAXULONG)
+            Attr->Mode = Mode & 07777;
+    }
+    ExReleaseFastMutex(&LxCgroupLock);
+    LxFree(New);
     return 0;
 }
 

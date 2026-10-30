@@ -343,6 +343,8 @@ Server_StaticRefreshParams(
         DeleteIPAddress(Adapter->NteContext);
         Adapter->NteContext = 0;
     }
+    Adapter->ApipaAddress = 0;
+    set_dhcp_router_discovery(Adapter, FALSE);
     if (Adapter->RouterMib.dwForwardNextHop)
     {
         DeleteIpForwardEntry(&Adapter->RouterMib);

@@ -545,6 +545,19 @@ typedef BOOLEAN
     ULONG_PTR Context
 );
 
+#define HANDLE_TABLE_LIST_BUCKETS 16
+
+PLIST_ENTRY
+NTAPI
+ExpFirstHandleTableEntry(
+    _Out_ PULONG Bucket);
+
+PLIST_ENTRY
+NTAPI
+ExpNextHandleTableEntry(
+    _Inout_ PULONG Bucket,
+    _In_ PLIST_ENTRY Entry);
+
 CODE_SEG("INIT")
 VOID
 NTAPI

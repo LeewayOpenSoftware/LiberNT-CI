@@ -238,6 +238,8 @@ ThemeHitTestCaptionButtons(HWND hWnd, const WINDOWINFO *wi, POINT Point)
         return HTMAXBUTTON;
     if (PtInRect(&pwndData->rcCaptionButtons[MINBUTTON], pt))
         return HTMINBUTTON;
+    if (PtInRect(&pwndData->rcCaptionButtons[HELPBUTTON], pt))
+        return HTHELP;
     return HTNOWHERE;
 }
 
@@ -643,6 +645,7 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     BOOL hasLastButton = FALSE;
     BOOL lastButtonLeft = FALSE;
     BOOL composited;
+    BOOL hasMinMax, hasHelp;
     UINT dpi;
 
     /* First of all check if we have something to do here */
@@ -684,6 +687,8 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
     if (!dpi)
         dpi = 96;
     topOverhang = ThemeGetMaximizedTopOverhang(wi);
+    hasMinMax = (style & (WS_MINIMIZEBOX | WS_MAXIMIZEBOX)) && !(wi->dwExStyle & WS_EX_TOOLWINDOW);
+    hasHelp = (wi->dwExStyle & WS_EX_CONTEXTHELP) && !hasMinMax && !(wi->dwExStyle & WS_EX_TOOLWINDOW);
 
     for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
     {
@@ -692,6 +697,13 @@ static void ThemeCalculateCaptionButtonsPosEx(WINDOWINFO* wi, HWND hWnd, HTHEME 
         INT offsetType;
         BOOL hasPlacement;
         BOOL buttonLeft = FALSE;
+
+        if (((i == MAXBUTTON || i == MINBUTTON) && !hasMinMax) || (i == HELPBUTTON && !hasHelp))
+        {
+            SetRectEmpty(&pwndData->rcCaptionButtons[i]);
+            pwndData->CaptionButtonLeft[i] = FALSE;
+            continue;
+        }
 
         iPartId = rgPart[i - CLOSEBUTTON];
         if (i == CLOSEBUTTON && (wi->dwExStyle & WS_EX_TOOLWINDOW))
@@ -1019,8 +1031,13 @@ ThemeDrawCaptionButton(PDRAW_CONTEXT pcontext,
         iPartId = pcontext->wi.dwStyle & WS_MINIMIZE ? WP_RESTOREBUTTON : WP_MINBUTTON;
         break;
 
+    case HELPBUTTON:
+        if (IsRectEmpty(&pwndData->rcCaptionButtons[HELPBUTTON]))
+            return;
+        iPartId = WP_HELPBUTTON;
+        break;
+
     default:
-        //FIXME: Implement Help Button
         return;
     }
 
@@ -1739,6 +1756,9 @@ ThemeHandleButton(HWND hWnd, WPARAM wParam)
                 return;
             SCMsg = ((Style & WS_MAXIMIZE) ? SC_RESTORE : SC_MAXIMIZE);
             break;
+        case HTHELP:
+            SCMsg = SC_CONTEXTHELP;
+            break;
         default :
             return;
     }
@@ -1820,7 +1840,9 @@ DefWndNCHitTest(HWND hWnd, POINT Point)
                 (Button = ThemeHitTestCaptionButtons(hWnd, &wi, Point)) != HTNOWHERE)
                 return Button;
             ThickFrame = (wi.dwStyle & WS_THICKFRAME);
-            if (Point.y < WindowRect.top)
+            if (Point.y < WindowRect.top &&
+                !(ThickFrame && (wi.dwStyle & WS_CAPTION) == WS_CAPTION &&
+                  Point.y >= WindowRect.top - GetSystemMetrics(SM_CXPADDEDBORDER)))
             {
                 if (wi.dwStyle & WS_MINIMIZE)
                     return HTCAPTION;
@@ -1913,6 +1935,8 @@ DefWndNCHitTest(HWND hWnd, POINT Point)
                         return HTMAXBUTTON;
                     if (PtInRect(&pwndData->rcCaptionButtons[MINBUTTON], pt))
                         return HTMINBUTTON;
+                    if (PtInRect(&pwndData->rcCaptionButtons[HELPBUTTON], pt))
+                        return HTHELP;
                 }
             }
             if (Point.x < WindowRect.left)
@@ -2056,6 +2080,7 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
             case HTMINBUTTON:
             case HTMAXBUTTON:
             case HTCLOSE:
+            case HTHELP:
             {
                 ThemeHandleButton(hWnd, wParam);
                 return 0;
@@ -2072,7 +2097,7 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
     }
     case WM_GETTITLEBARINFOEX:
     {
-        static const INT Child[] = { 5, 3, 2 };
+        static const INT Child[] = { 5, 3, 2, 4 };
         PTITLEBARINFOEX Info = (PTITLEBARINFOEX)lParam;
         LRESULT Result = DefWndProc(hWnd, Msg, wParam, lParam);
         PWND_DATA pwndData;
@@ -2086,7 +2111,7 @@ ThemeWndProc(HWND hWnd, UINT Msg, WPARAM wParam, LPARAM lParam, WNDPROC DefWndPr
             return Result;
         if (IsRectEmpty(&pwndData->rcCaptionButtons[CLOSEBUTTON]))
             ThemeCalculateCaptionButtonsPos(hWnd, NULL);
-        for (i = CLOSEBUTTON; i <= MINBUTTON; i++)
+        for (i = CLOSEBUTTON; i <= HELPBUTTON; i++)
         {
             if (IsRectEmpty(&Info->rgrect[Child[i - CLOSEBUTTON]]) ||
                 IsRectEmpty(&pwndData->rcCaptionButtons[i]))

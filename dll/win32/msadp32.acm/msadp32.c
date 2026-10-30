@@ -57,6 +57,9 @@ typedef struct tagAcmAdpcmData
 {
     void (*convert)(const ACMDRVSTREAMINSTANCE *adsi,
 		    const unsigned char*, LPDWORD, unsigned char*, LPDWORD);
+#ifdef __REACTOS__
+    BOOL partial_block;
+#endif
 } AcmAdpcmData;
 
 /* table to list all supported formats... those are the basic ones. this
@@ -299,6 +302,87 @@ static	void cvtSSms16K(const ACMDRVSTREAMINSTANCE *adsi,
     }
 }
 
+#ifdef __REACTOS__
+static inline void put_mono_sample(const ACMDRVSTREAMINSTANCE *adsi, unsigned char **dst,
+                                   DWORD *written, DWORD max_out, int sample)
+{
+    if (*written < max_out)
+    {
+        if (adsi->pwfxDst->wBitsPerSample == 8)
+        {
+            **dst = C168(sample);
+            *dst += 1;
+        }
+        else
+        {
+            W16(*dst, sample);
+            *dst += 2;
+        }
+    }
+    ++*written;
+}
+
+static	void cvtMMms16K(const ACMDRVSTREAMINSTANCE *adsi,
+                        const unsigned char* src, LPDWORD nsrc,
+                        unsigned char* dst, LPDWORD ndst)
+{
+    int                 idelta;
+    int                 sample1, sample2;
+    ADPCMCOEFSET        coeff;
+    int                 nsamp;
+    int		        nsamp_blk = ((ADPCMWAVEFORMAT*)adsi->pwfxSrc)->wSamplesPerBlock;
+    DWORD	        nblock = *nsrc / adsi->pwfxSrc->nBlockAlign;
+    DWORD               tail = ((AcmAdpcmData*)adsi->dwDriver)->partial_block ?
+                               *nsrc % adsi->pwfxSrc->nBlockAlign : 0;
+    DWORD               max_out = *ndst / adsi->pwfxDst->nBlockAlign;
+    DWORD               written = 0;
+    BOOL                head = adsi->pwfxDst->wBitsPerSample != 8;
+
+    if (tail < 7)
+        tail = 0;
+    *nsrc = nblock * adsi->pwfxSrc->nBlockAlign + tail;
+    if (tail)
+        nblock++;
+
+    nsamp_blk -= 2;
+    for (; nblock > 0 && written < max_out; nblock--)
+    {
+        const unsigned char*    in_src = src;
+
+        if (nblock == 1 && tail)
+            nsamp_blk = 2 * (tail - 7);
+
+        if (*src > 6)
+        {
+                WARN("Invalid ADPCM data, stopping conversion\n");
+                break;
+        }
+        coeff = MSADPCM_CoeffSet[*src++];
+
+        idelta =  R16(src);     src += 2;
+        sample1 = R16(src);     src += 2;
+        sample2 = R16(src);     src += 2;
+
+        if (head)
+        {
+            put_mono_sample(adsi, &dst, &written, max_out, sample2);
+            put_mono_sample(adsi, &dst, &written, max_out, sample1);
+        }
+
+        for (nsamp = nsamp_blk; nsamp > 0; nsamp -= 2)
+        {
+            process_nibble(*src >> 4, &idelta, &sample1, &sample2, &coeff);
+            put_mono_sample(adsi, &dst, &written, max_out, sample1);
+            process_nibble(*src++ & 0x0F, &idelta, &sample1, &sample2, &coeff);
+            put_mono_sample(adsi, &dst, &written, max_out, sample1);
+        }
+
+        src = in_src + adsi->pwfxSrc->nBlockAlign;
+    }
+    *ndst = min(written, max_out) * adsi->pwfxDst->nBlockAlign;
+}
+
+#else
 static	void cvtMMms16K(const ACMDRVSTREAMINSTANCE *adsi,
                         const unsigned char* src, LPDWORD nsrc,
                         unsigned char* dst, LPDWORD ndst)
@@ -362,6 +446,7 @@ static	void cvtMMms16K(const ACMDRVSTREAMINSTANCE *adsi,
     }
 }
 
+#endif
 #if 0
 static	void cvtSS16msK(PACMDRVSTREAMINSTANCE adsi,
                         const unsigned char* src, LPDWORD nsrc,
@@ -485,12 +570,28 @@ static	LRESULT	ADPCM_FormatDetails(PACMFORMATDETAILSW afd, DWORD dwQuery)
 	    break;
 	case WAVE_FORMAT_ADPCM:
 	    if (afd->dwFormatIndex >= ARRAY_SIZE(ADPCM_Formats)) return ACMERR_NOTPOSSIBLE;
+#ifdef __REACTOS__
+            {
+                DWORD buffer[(sizeof(ADPCMWAVEFORMAT) + (7 - 1) * sizeof(ADPCMCOEFSET) + sizeof(DWORD) - 1) / sizeof(DWORD)];
+                ADPCMWAVEFORMAT *adpcm = (ADPCMWAVEFORMAT *)buffer;
+
+                memset(buffer, 0, sizeof(buffer));
+                adpcm->wfx.wFormatTag = WAVE_FORMAT_ADPCM;
+                adpcm->wfx.nChannels = ADPCM_Formats[afd->dwFormatIndex].nChannels;
+                adpcm->wfx.nSamplesPerSec = ADPCM_Formats[afd->dwFormatIndex].rate;
+                adpcm->wfx.wBitsPerSample = ADPCM_Formats[afd->dwFormatIndex].nBits;
+                init_wfx_adpcm(adpcm);
+                memcpy(afd->pwfx, adpcm,
+                       min(afd->cbwfx, sizeof(ADPCMWAVEFORMAT) + (7 - 1) * sizeof(ADPCMCOEFSET)));
+            }
+#else
             if (afd->cbwfx < sizeof(ADPCMWAVEFORMAT) + (7 - 1) * sizeof(ADPCMCOEFSET))
                 return ACMERR_NOTPOSSIBLE;
 	    afd->pwfx->nChannels = ADPCM_Formats[afd->dwFormatIndex].nChannels;
 	    afd->pwfx->nSamplesPerSec = ADPCM_Formats[afd->dwFormatIndex].rate;
 	    afd->pwfx->wBitsPerSample = ADPCM_Formats[afd->dwFormatIndex].nBits;
             init_wfx_adpcm((ADPCMWAVEFORMAT*)afd->pwfx);
+#endif
 	    break;
 	default:
             WARN("Unsupported tag %08lx\n", afd->dwFormatTag);
@@ -776,6 +877,9 @@ static LRESULT ADPCM_StreamConvert(PACMDRVSTREAMINSTANCE adsi, PACMDRVSTREAMHEAD
 	ADPCM_Reset(adsi, aad);
     }
 
+#ifdef __REACTOS__
+    aad->partial_block = !(adsh->fdwConvert & ACM_STREAMCONVERTF_BLOCKALIGN);
+#endif
     aad->convert(adsi, adsh->pbSrc, &nsrc, adsh->pbDst, &ndst);
     adsh->cbSrcLengthUsed = nsrc;
     adsh->cbDstLengthUsed = ndst;

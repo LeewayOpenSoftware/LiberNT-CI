@@ -164,6 +164,7 @@ OFFSET(PcCurrentThread, KIPCR, Prcb.CurrentThread),
 
 HEADER("KPRCB offsets"),
 OFFSET(PbNestingLevel, KPRCB, NestingLevel),
+OFFSET(PbNumber, KPRCB, Number),
 OFFSET(PbDpcStack, KPRCB, DpcStack),
 OFFSET(PbIsrStack, KPRCB, IsrStack),
 

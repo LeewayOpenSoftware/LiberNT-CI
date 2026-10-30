@@ -88,6 +88,9 @@ typedef struct
     };
 } WMIREGGUIDW, *PWMIREGGUIDW;
 
+typedef WMIREGGUIDW WMIREGGUID;
+typedef PWMIREGGUIDW PWMIREGGUID;
+
 typedef struct
 {
     ULONG BufferSize;

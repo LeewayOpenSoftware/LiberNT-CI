@@ -35,7 +35,6 @@ CcInitializeCacheMap(
     _In_ PCACHE_MANAGER_CALLBACKS Callbacks,
     _In_ PVOID LazyWriteContext)
 {
-    KIRQL OldIrql;
     PSECTION_OBJECT_POINTERS Pointers = FileObject->SectionObjectPointer;
     PCC_NT_PRIVATE Private;
     PCC_NT_MAP NtMap;
@@ -63,6 +62,7 @@ CcInitializeCacheMap(
         Fresh->LazyWriteContext = LazyWriteContext;
         Fresh->AllocationSize = FileSizes->AllocationSize;
         Fresh->ReferenceCount = 1;
+        KeInitializeEvent(&Fresh->LazyWriteGate, SynchronizationEvent, TRUE);
 
         SectionSize = CcNtSectionSize(FileSizes);
 
@@ -79,20 +79,9 @@ CcInitializeCacheMap(
                         (ULONG64)FileSizes->FileSize.QuadPart, (ULONG64)FileSizes->ValidDataLength.QuadPart);
         Fresh->Map.NodeByteSize = sizeof(*Fresh);
 
-        KeAcquireSpinLock(&CcNtMapListLock, &OldIrql);
-        if (Pointers->SharedCacheMap == NULL)
-        {
-            Pointers->SharedCacheMap = Fresh;
-            InsertTailList(&CcNtMapList, &Fresh->Link);
-            NtMap = Fresh;
+        NtMap = CcNtInsertMap(Fresh);
+        if (NtMap == Fresh)
             Fresh = NULL;
-        }
-        else
-        {
-            NtMap = Pointers->SharedCacheMap;
-            InterlockedIncrement(&NtMap->ReferenceCount);
-        }
-        KeReleaseSpinLock(&CcNtMapListLock, OldIrql);
 
         if (Fresh != NULL)
         {
@@ -126,7 +115,7 @@ CcUninitializeCacheMap(
     _In_opt_ PCACHE_UNINITIALIZE_EVENT UninitializeEvent)
 {
     PCC_NT_PRIVATE Private = FileObject->PrivateCacheMap;
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
     {
@@ -174,7 +163,7 @@ CcSetFileSizes(
     _In_ PFILE_OBJECT FileObject,
     _In_ PCC_FILE_SIZES FileSizes)
 {
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
     ULONG64 NewFileSize = (ULONG64)FileSizes->FileSize.QuadPart;
     ULONG64 SectionSize;
 
@@ -244,7 +233,7 @@ CcSetLogHandleForFile(
     _In_ PVOID LogHandle,
     _In_ PFLUSH_TO_LSN FlushToLsnRoutine)
 {
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
         return;
@@ -260,7 +249,7 @@ CcGetLsnForFileObject(
     _In_ PFILE_OBJECT FileObject,
     _Out_opt_ PLARGE_INTEGER OldestLsn)
 {
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
     LARGE_INTEGER Result;
     ULONG64 Oldest = 0, Newest = 0;
     ULONG DirtyBcbs;
@@ -291,49 +280,55 @@ CcGetDirtyPages(
     PCC_NT_MAP Previous = NULL;
     PLIST_ENTRY Entry;
     KIRQL OldIrql;
+    ULONG Index;
 
-    KeAcquireSpinLock(&CcNtMapListLock, &OldIrql);
-    Entry = CcNtMapList.Flink;
-
-    while (Entry != &CcNtMapList)
+    for (Index = 0; Index < CC_NT_MAP_BUCKETS; Index++)
     {
-        PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
-        ULONG64 Oldest, Newest;
-        ULONG DirtyBcbs;
+        PCC_NT_MAP_BUCKET Bucket = &CcNtMapBuckets[Index];
 
-        if (NtMap->LogHandle != LogHandle)
+        KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+        Entry = Bucket->List.Flink;
+
+        while (Entry != &Bucket->List)
         {
-            Entry = Entry->Flink;
-            continue;
+            PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
+            ULONG64 Oldest, Newest;
+            ULONG DirtyBcbs;
+
+            if (NtMap->LogHandle != LogHandle)
+            {
+                Entry = Entry->Flink;
+                continue;
+            }
+
+            InterlockedIncrement(&NtMap->ReferenceCount);
+            KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+
+            if (Previous != NULL)
+                CcNtDereferenceMap(Previous);
+
+            Previous = NtMap;
+
+            if (CcBcbDirtyLsns(&NtMap->Map, &Oldest, &Newest, &DirtyBcbs) && DirtyBcbs != 0)
+            {
+                LARGE_INTEGER Offset, OldestLsn, NewestLsn;
+
+                Offset.QuadPart = 0;
+                OldestLsn.QuadPart = (LONGLONG)Oldest;
+                NewestLsn.QuadPart = (LONGLONG)Newest;
+                DirtyPageRoutine(NtMap->FileObject, &Offset, (ULONG)min(NtMap->Map.FileSize, 0xFFFFFFFFULL),
+                                 &OldestLsn, &NewestLsn, Context1, Context2);
+
+                if (Oldest != 0 && (OldestOverall == 0 || Oldest < OldestOverall))
+                    OldestOverall = Oldest;
+            }
+
+            KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+            Entry = NtMap->Link.Flink;
         }
 
-        InterlockedIncrement(&NtMap->ReferenceCount);
-        KeReleaseSpinLock(&CcNtMapListLock, OldIrql);
-
-        if (Previous != NULL)
-            CcNtDereferenceMap(Previous);
-
-        Previous = NtMap;
-
-        if (CcBcbDirtyLsns(&NtMap->Map, &Oldest, &Newest, &DirtyBcbs) && DirtyBcbs != 0)
-        {
-            LARGE_INTEGER Offset, OldestLsn, NewestLsn;
-
-            Offset.QuadPart = 0;
-            OldestLsn.QuadPart = (LONGLONG)Oldest;
-            NewestLsn.QuadPart = (LONGLONG)Newest;
-            DirtyPageRoutine(NtMap->FileObject, &Offset, (ULONG)min(NtMap->Map.FileSize, 0xFFFFFFFFULL),
-                             &OldestLsn, &NewestLsn, Context1, Context2);
-
-            if (Oldest != 0 && (OldestOverall == 0 || Oldest < OldestOverall))
-                OldestOverall = Oldest;
-        }
-
-        KeAcquireSpinLock(&CcNtMapListLock, &OldIrql);
-        Entry = NtMap->Link.Flink;
+        KeReleaseSpinLock(&Bucket->Lock, OldIrql);
     }
-
-    KeReleaseSpinLock(&CcNtMapListLock, OldIrql);
 
     if (Previous != NULL)
         CcNtDereferenceMap(Previous);
@@ -350,21 +345,26 @@ CcIsThereDirtyData(
     KIRQL OldIrql;
     BOOLEAN Dirty = FALSE;
     PLIST_ENTRY Entry;
+    ULONG Index;
 
-    KeAcquireSpinLock(&CcNtMapListLock, &OldIrql);
-
-    for (Entry = CcNtMapList.Flink; Entry != &CcNtMapList && !Dirty; Entry = Entry->Flink)
+    for (Index = 0; (Index < CC_NT_MAP_BUCKETS) && !Dirty; Index++)
     {
-        PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
+        PCC_NT_MAP_BUCKET Bucket = &CcNtMapBuckets[Index];
 
-        if (NtMap->FileObject->Vpb == Vpb && !(NtMap->FileObject->Flags & FO_TEMPORARY_FILE) &&
-            CC_ATOMIC_READ64(&NtMap->Map.DirtyPages) != 0)
+        KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+        for (Entry = Bucket->List.Flink; Entry != &Bucket->List && !Dirty; Entry = Entry->Flink)
         {
-            Dirty = TRUE;
+            PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
+
+            if (NtMap->FileObject->Vpb == Vpb && !(NtMap->FileObject->Flags & FO_TEMPORARY_FILE) &&
+                CC_ATOMIC_READ64(&NtMap->Map.DirtyPages) != 0)
+            {
+                Dirty = TRUE;
+            }
         }
+        KeReleaseSpinLock(&Bucket->Lock, OldIrql);
     }
 
-    KeReleaseSpinLock(&CcNtMapListLock, OldIrql);
     return Dirty;
 }
 
@@ -411,7 +411,7 @@ CcSetDirtyPageThreshold(
     _In_ PFILE_OBJECT FileObject,
     _In_ ULONG DirtyPageThreshold)
 {
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
         return;

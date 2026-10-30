@@ -1,0 +1,39 @@
+--- a/mcs/class/corlib/System/__ComObject.cs
++++ b/mcs/class/corlib/System/__ComObject.cs
+@@ -35,6 +35,7 @@
+ #if !FULL_AOT_RUNTIME && !DISABLE_REMOTING
+ using Mono.Interop;
+ using System.Collections;
++using System.Reflection;
+ using System.Runtime.InteropServices;
+ using System.Runtime.CompilerServices;
+ using System.Threading;
+@@ -66,9 +67,28 @@
+ 		// keep a reference to the proxy so it doesn't get garbage collected before the RCW
+ 		ComInteropProxy proxy;
+ 
++		static readonly ConditionalWeakTable<__ComObject, Hashtable> event_providers = new ConditionalWeakTable<__ComObject, Hashtable> ();
++
+ 		[MethodImplAttribute (MethodImplOptions.InternalCall)]
+ 		internal static extern __ComObject CreateRCW (Type t);
+ 
++		internal static object GetEventProvider (object proxy, __ComObject rcw, Type eventInterface)
++		{
++			Hashtable providers = event_providers.GetValue (rcw, key => new Hashtable ());
++
++			lock (providers) {
++				object provider = providers [eventInterface];
++
++				if (provider == null) {
++					ComEventInterfaceAttribute attribute = (ComEventInterfaceAttribute) Attribute.GetCustomAttribute (eventInterface, typeof (ComEventInterfaceAttribute), false);
++
++					provider = Activator.CreateInstance (attribute.EventProvider, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, new object [] { proxy }, null);
++					providers [eventInterface] = provider;
++				}
++				return provider;
++			}
++		}
++
+ 		[MethodImplAttribute (MethodImplOptions.InternalCall)]
+ 		private extern void ReleaseInterfaces ();
+ 

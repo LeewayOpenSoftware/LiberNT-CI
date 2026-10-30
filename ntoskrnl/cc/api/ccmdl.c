@@ -99,7 +99,7 @@ CcMdlRead(
     _Out_ PMDL *MdlChain,
     _Out_ PIO_STATUS_BLOCK IoStatus)
 {
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
     ULONG64 Offset = (ULONG64)FileOffset->QuadPart;
 
     *MdlChain = NULL;
@@ -169,7 +169,7 @@ CcPrepareMdlWrite(
     _Out_ PMDL *MdlChain,
     _Out_ PIO_STATUS_BLOCK IoStatus)
 {
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
 
     *MdlChain = NULL;
 
@@ -203,7 +203,7 @@ CcMdlWriteComplete2(
     _In_ PLARGE_INTEGER FileOffset,
     _In_ PMDL MdlChain)
 {
-    PCC_NT_MAP NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    PCC_NT_MAP NtMap = CcNtReferenceFileMap(FileObject);
     ULONG64 Offset = (ULONG64)FileOffset->QuadPart;
     PMDL Mdl;
 

@@ -15,8 +15,13 @@
 
 /* GLOBALS *******************************************************************/
 
-LIST_ENTRY HandleTableListHead;
-EX_PUSH_LOCK HandleTableListLock;
+typedef struct DECLSPEC_CACHEALIGN _HANDLE_TABLE_LIST_BUCKET
+{
+    EX_PUSH_LOCK Lock;
+    LIST_ENTRY Head;
+} HANDLE_TABLE_LIST_BUCKET, *PHANDLE_TABLE_LIST_BUCKET;
+
+static HANDLE_TABLE_LIST_BUCKET HandleTableLists[HANDLE_TABLE_LIST_BUCKETS];
 ULONG ExpFreeListCount;
 #define SizeOfHandle(x) (sizeof(HANDLE) * (x))
 
@@ -82,15 +87,84 @@ VOID
 NTAPI
 ExpInitializeHandleTables(VOID)
 {
+    ULONG Bucket;
+
     /* Initialize the list of handle tables and the lock */
-    InitializeListHead(&HandleTableListHead);
-    ExInitializePushLock(&HandleTableListLock);
+    for (Bucket = 0; Bucket < HANDLE_TABLE_LIST_BUCKETS; Bucket++)
+    {
+        InitializeListHead(&HandleTableLists[Bucket].Head);
+        ExInitializePushLock(&HandleTableLists[Bucket].Lock);
+    }
 #ifdef _M_ARM64
     ExpFreeListCount = HalQueryMaximumProcessorCount();
 #else
     ExpFreeListCount = KeQueryMaximumProcessorCount();
 #endif
     ASSERT(ExpFreeListCount != 0);
+}
+
+static
+PHANDLE_TABLE_LIST_BUCKET
+ExpHandleTableListBucket(
+    _In_ PHANDLE_TABLE HandleTable)
+{
+    ULONG_PTR Value = (ULONG_PTR)HandleTable >> 6;
+
+    return &HandleTableLists[(Value ^ (Value >> 7)) % HANDLE_TABLE_LIST_BUCKETS];
+}
+
+static
+VOID
+ExpInsertHandleTableList(
+    _In_ PHANDLE_TABLE HandleTable)
+{
+    PHANDLE_TABLE_LIST_BUCKET Bucket = ExpHandleTableListBucket(HandleTable);
+
+    ExAcquirePushLockExclusive(&Bucket->Lock);
+    InsertTailList(&Bucket->Head, &HandleTable->HandleTableList);
+    ExReleasePushLockExclusive(&Bucket->Lock);
+}
+
+static
+PLIST_ENTRY
+ExpFirstHandleTableInBucket(
+    _Inout_ PULONG Bucket)
+{
+    PLIST_ENTRY Entry;
+
+    for (; *Bucket < HANDLE_TABLE_LIST_BUCKETS; (*Bucket)++)
+    {
+        ExAcquirePushLockShared(&HandleTableLists[*Bucket].Lock);
+        Entry = HandleTableLists[*Bucket].Head.Flink;
+        if (Entry != &HandleTableLists[*Bucket].Head)
+            return Entry;
+        ExReleasePushLockShared(&HandleTableLists[*Bucket].Lock);
+    }
+    return NULL;
+}
+
+PLIST_ENTRY
+NTAPI
+ExpFirstHandleTableEntry(
+    _Out_ PULONG Bucket)
+{
+    *Bucket = 0;
+    return ExpFirstHandleTableInBucket(Bucket);
+}
+
+PLIST_ENTRY
+NTAPI
+ExpNextHandleTableEntry(
+    _Inout_ PULONG Bucket,
+    _In_ PLIST_ENTRY Entry)
+{
+    Entry = Entry->Flink;
+    if (Entry != &HandleTableLists[*Bucket].Head)
+        return Entry;
+
+    ExReleasePushLockShared(&HandleTableLists[*Bucket].Lock);
+    (*Bucket)++;
+    return ExpFirstHandleTableInBucket(Bucket);
 }
 
 PHANDLE_TABLE_ENTRY
@@ -810,13 +884,11 @@ ExCreateHandleTable(IN PEPROCESS Process OPTIONAL,
 
     /* Acquire the handle table lock */
     KeEnterCriticalRegion();
-    ExAcquirePushLockExclusive(&HandleTableListLock);
 
     /* Insert it into the list */
-    InsertTailList(&HandleTableListHead, &HandleTable->HandleTableList);
+    ExpInsertHandleTableList(HandleTable);
 
     /* Release the lock */
-    ExReleasePushLockExclusive(&HandleTableListLock);
     KeLeaveCriticalRegion();
 
     /* Return the handle table */
@@ -939,9 +1011,11 @@ ExRemoveHandleTable(IN PHANDLE_TABLE HandleTable)
 {
     PAGED_CODE();
 
+    PHANDLE_TABLE_LIST_BUCKET Bucket = ExpHandleTableListBucket(HandleTable);
+
     /* Acquire the table lock */
     KeEnterCriticalRegion();
-    ExAcquirePushLockExclusive(&HandleTableListLock);
+    ExAcquirePushLockExclusive(&Bucket->Lock);
 
     /* Remove the table and reset the list */
     if (!IsListEmpty(&HandleTable->HandleTableList))
@@ -951,7 +1025,7 @@ ExRemoveHandleTable(IN PHANDLE_TABLE HandleTable)
     }
 
     /* Release the lock */
-    ExReleasePushLockExclusive(&HandleTableListLock);
+    ExReleasePushLockExclusive(&Bucket->Lock);
     KeLeaveCriticalRegion();
 }
 
@@ -1204,9 +1278,7 @@ ExDupHandleTable(IN PEPROCESS Process,
     FreeList->HighWaterMark = FreeList->HandleCount;
 
     /* Acquire the table lock and insert this new table into the list */
-    ExAcquirePushLockExclusive(&HandleTableListLock);
-    InsertTailList(&HandleTableListHead, &NewTable->HandleTableList);
-    ExReleasePushLockExclusive(&HandleTableListLock);
+    ExpInsertHandleTableList(NewTable);
 
     /* Leave the critical region we entered previously and return the table */
     KeLeaveCriticalRegion();
@@ -1351,6 +1423,21 @@ ExEnumHandleTable(IN PHANDLE_TABLE HandleTable,
 
 #include <kdbg/kdb.h>
 
+static
+PLIST_ENTRY
+ExpDebugHandleTableEntry(
+    _Inout_ PULONG Bucket,
+    _In_opt_ PLIST_ENTRY Entry)
+{
+    while (Entry == &HandleTableLists[*Bucket].Head)
+    {
+        if (++(*Bucket) >= HANDLE_TABLE_LIST_BUCKETS)
+            return NULL;
+        Entry = HandleTableLists[*Bucket].Head.Flink;
+    }
+    return Entry;
+}
+
 BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
 {
     USHORT i;
@@ -1367,6 +1454,7 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
     LONG HandleCount, ListHandleCount;
     ULONG Processor;
     ULONG TableCount = 0;
+    ULONG Bucket;
 
     if (Argc > 1)
     {
@@ -1413,9 +1501,9 @@ BOOLEAN ExpKdbgExtHandle(ULONG Argc, PCHAR Argv[])
         ProcessId = PsGetCurrentProcessId();
     }
 
-    Entry = HandleTableListHead.Flink;
-    while (Entry != &HandleTableListHead &&
-           Entry != NULL &&
+    Bucket = 0;
+    Entry = ExpDebugHandleTableEntry(&Bucket, HandleTableLists[0].Head.Flink);
+    while (Entry != NULL &&
            TableCount++ < 65536)
     {
         HANDLE_TABLE HandleTableSnapshot;
@@ -1626,7 +1714,7 @@ NextTable:
             KdbpPrint("!handle: self-linked handle-table entry %p.\n", Entry);
             break;
         }
-        Entry = NextEntry;
+        Entry = ExpDebugHandleTableEntry(&Bucket, NextEntry);
     }
     if (TableCount >= 65536)
         KdbpPrint("!handle: handle-table enumeration stopped at 65536 entries.\n");

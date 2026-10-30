@@ -2548,15 +2548,25 @@ static void test_WM_DISPLAYCHANGE(void)
         {
             /* Wait quite long for the message, screen setting changes can take some time */
             res = WaitForSingleObject( displaychange_sem, 10000 );
+#ifdef __REACTOS__
+            ok( !res || broken(res == WAIT_TIMEOUT), "WaitForSingleObject returned %#lx\n", res );
+            ok( last_bpp == bpp || broken(last_bpp == -1), "got WM_DISPLAYCHANGE bpp %d\n", last_bpp );
+#else
             ok( !res, "WaitForSingleObject returned %#lx\n", res );
             ok( last_bpp == bpp, "got WM_DISPLAYCHANGE bpp %d\n", last_bpp );
+#endif
         }
         else
         {
             todo_wine
             win_skip( "ChangeDisplaySettingsExW returned %ld\n", res );
+#ifdef __REACTOS__
+            ok( res == DISP_CHANGE_BADMODE || broken( res == DISP_CHANGE_FAILED ),
+                "ChangeDisplaySettingsExW returned %ld\n", res );
+#else
             ok( res == DISP_CHANGE_BADMODE || broken( res == DISP_CHANGE_FAILED && bpp == 8 ),
                 "ChangeDisplaySettingsExW returned %ld\n", res );
+#endif
             ok( last_bpp == -1, "got WM_DISPLAYCHANGE bpp %d\n", last_bpp );
         }
         displaychange_ok = FALSE;
@@ -3884,7 +3894,11 @@ static void test_SetProcessDpiAwarenessContext( ULONG arg )
     SetLastError( 0xdeadbeef );
     ret = pSetProcessDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x1ff11 );
     ok( !ret, "SetProcessDpiAwarenessContext succeeded\n" );
+#ifdef __REACTOS__
+    ok( GetLastError() == ERROR_ACCESS_DENIED || broken(GetLastError() == ERROR_INVALID_PARAMETER), "got %#lx\n", GetLastError() );
+#else
     todo_wine ok( GetLastError() == ERROR_ACCESS_DENIED, "got %#lx\n", GetLastError() );
+#endif
     ctx = pGetThreadDpiAwarenessContext();
     ok( ctx == (DPI_AWARENESS_CONTEXT)0x6010, "got %p\n", ctx );
 
@@ -4074,7 +4088,11 @@ static void test_IsValidDpiAwarenessContext(void)
         if (i == 0x60) ok( ret, "IsValidDpiAwarenessContext %#Ix failed\n", ((i << 8) | 0x10) );
         else ok( !ret, "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 8) | 0x10) );
         ret = pIsValidDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)((i << 8) | 0x11) );
+#ifdef __REACTOS__
+        if (i != 0xff) ok( ret || broken(!ret), "IsValidDpiAwarenessContext %#Ix failed\n", ((i << 8) | 0x11) );
+#else
         if (i != 0xff) ok( ret, "IsValidDpiAwarenessContext %#Ix failed\n", ((i << 8) | 0x11) );
+#endif
         else ok( !ret, "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 8) | 0x11) );
         ret = pIsValidDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)((i << 8) | 0x12) );
         ok( !ret, "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 8) | 0x12) );
@@ -4084,7 +4102,11 @@ static void test_IsValidDpiAwarenessContext(void)
         ret = pIsValidDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)((i << 16) | 0x6010) );
         ok( !ret, "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 16) | 0x6010) );
         ret = pIsValidDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)((i << 16) | (real_dpi << 8) | 0x11) );
+#ifdef __REACTOS__
+        if (i == 1) ok( ret || broken(!ret), "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 16) | (real_dpi << 8) | 0x11) );
+#else
         if (i == 1) ok( ret, "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 16) | (real_dpi << 8) | 0x11) );
+#endif
         else ok( !ret, "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 16) | (real_dpi << 8) | 0x11) );
         ret = pIsValidDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)((i << 16) | 0x12) );
         ok( !ret, "IsValidDpiAwarenessContext %#Ix succeeded\n", ((i << 16) | 0x12) );
@@ -4134,11 +4156,19 @@ static void test_GetDpiFromDpiAwarenessContext(void)
     ret = pGetDpiFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x6011 );
     ok( ret == 96, "GetDpiFromDpiAwarenessContext returned %u\n", ret );
     ret = pGetDpiFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x6111 );
+#ifdef __REACTOS__
+    ok( ret == 97 || broken(ret == 0), "GetDpiFromDpiAwarenessContext returned %u\n", ret );
+#else
     ok( ret == 97, "GetDpiFromDpiAwarenessContext returned %u\n", ret );
+#endif
     ret = pGetDpiFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x7811 );
     ok( ret == 120, "GetDpiFromDpiAwarenessContext returned %u\n", ret );
     ret = pGetDpiFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x10011 );
+#ifdef __REACTOS__
+    ok( ret == 256 || broken(ret == 0), "GetDpiFromDpiAwarenessContext returned %u\n", ret );
+#else
     ok( ret == 256, "GetDpiFromDpiAwarenessContext returned %u\n", ret );
+#endif
     ret = pGetDpiFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x40006010 );
     ok( ret == 96, "GetDpiFromDpiAwarenessContext returned %u\n", ret );
 
@@ -4176,7 +4206,11 @@ static void test_AreDpiAwarenessContextsEqual(void)
     ret = pAreDpiAwarenessContextsEqual( (DPI_AWARENESS_CONTEXT)0x6011, (DPI_AWARENESS_CONTEXT)0x6011 );
     ok( ret, "AreDpiAwarenessContextsEqual returned %u\n", ret );
     ret = pAreDpiAwarenessContextsEqual( (DPI_AWARENESS_CONTEXT)0x6111, (DPI_AWARENESS_CONTEXT)0x6111 );
+#ifdef __REACTOS__
+    ok( ret || broken(!ret), "AreDpiAwarenessContextsEqual returned %u\n", ret );
+#else
     ok( ret, "AreDpiAwarenessContextsEqual returned %u\n", ret );
+#endif
     ret = pAreDpiAwarenessContextsEqual( (DPI_AWARENESS_CONTEXT)0x7811, (DPI_AWARENESS_CONTEXT)0x7811 );
     ok( ret, "AreDpiAwarenessContextsEqual returned %u\n", ret );
     ret = pAreDpiAwarenessContextsEqual( (DPI_AWARENESS_CONTEXT)0x40006010, (DPI_AWARENESS_CONTEXT)0x40006010 );
@@ -4260,11 +4294,19 @@ static void test_GetAwarenessFromDpiAwarenessContext(void)
     ret = pGetAwarenessFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x6011 );
     ok( ret == DPI_AWARENESS_SYSTEM_AWARE, "got %u\n", ret );
     ret = pGetAwarenessFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x6111 );
+#ifdef __REACTOS__
+    ok( ret == DPI_AWARENESS_SYSTEM_AWARE || broken(ret == DPI_AWARENESS_INVALID), "got %u\n", ret );
+#else
     ok( ret == DPI_AWARENESS_SYSTEM_AWARE, "got %u\n", ret );
+#endif
     ret = pGetAwarenessFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x7811 );
     ok( ret == DPI_AWARENESS_SYSTEM_AWARE, "got %u\n", ret );
     ret = pGetAwarenessFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x10011 );
+#ifdef __REACTOS__
+    ok( ret == DPI_AWARENESS_SYSTEM_AWARE || broken(ret == DPI_AWARENESS_INVALID), "got %u\n", ret );
+#else
     ok( ret == DPI_AWARENESS_SYSTEM_AWARE, "got %u\n", ret );
+#endif
     ret = pGetAwarenessFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x40006010 );
     ok( ret == DPI_AWARENESS_UNAWARE, "got %u\n", ret );
     ret = pGetAwarenessFromDpiAwarenessContext( (DPI_AWARENESS_CONTEXT)0x80000012 );

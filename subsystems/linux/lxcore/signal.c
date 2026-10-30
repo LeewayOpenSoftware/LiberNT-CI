@@ -14,6 +14,8 @@
 #define LX_MINSIGSTKSZ      6144
 #define LX_UNBLOCKABLE      ((1ULL << (LX_SIGKILL - 1)) | (1ULL << (LX_SIGSTOP - 1)))
 #define LX_SIGNAL_BIT(Sig)  (1ULL << ((Sig) - 1))
+#define LX_STOP_SIGNALS     (LX_SIGNAL_BIT(LX_SIGSTOP) | LX_SIGNAL_BIT(LX_SIGTSTP) | LX_SIGNAL_BIT(LX_SIGTTIN) | \
+                             LX_SIGNAL_BIT(LX_SIGTTOU))
 #define LX_MAX_WAKE         32
 
 BOOLEAN
@@ -26,14 +28,17 @@ LxSignalIgnoredByDefault(
         case LX_SIGCONT:
         case LX_SIGURG:
         case LX_SIGWINCH:
-        case LX_SIGSTOP:
-        case LX_SIGTSTP:
-        case LX_SIGTTIN:
-        case LX_SIGTTOU:
             return TRUE;
         default:
             return FALSE;
     }
+}
+
+BOOLEAN
+LxSignalStopsByDefault(
+    _In_ LONG Signal)
+{
+    return (Signal > 0) && (Signal <= LX_NSIG) && ((LX_SIGNAL_BIT(Signal) & LX_STOP_SIGNALS) != 0);
 }
 
 VOID
@@ -48,6 +53,15 @@ LxThreadAttach(
 
     ExAcquireFastMutex(&Process->Lock);
     InsertTailList(&Process->Threads, &Thread->Link);
+    if (Process->GroupStopCount != 0)
+    {
+        Process->GroupStopCount++;
+        Thread->JobctlStop = TRUE;
+    }
+    else if (Process->JobctlFlags & LX_JOBCTL_STOPPED)
+    {
+        Thread->JobctlStop = TRUE;
+    }
     ExReleaseFastMutex(&Process->Lock);
     LxSchedApplyAffinity(Thread);
 }
@@ -161,8 +175,7 @@ LxSignalApcNormal(
     Thread = LxCurrentThread();
     if ((Base->InKernel != 0) || (Thread == NULL) || Thread->VforkExited)
         return;
-    if (((((ULONG64)Thread->Pending | (ULONG64)Thread->Process->Pending) & ~Thread->SigMask) == 0) ||
-        LxArchDeliverAsync(Thread))
+    if (!LxSignalPending(Thread) || LxArchDeliverAsync(Thread))
     {
         return;
     }
@@ -333,6 +346,293 @@ LxSignalInfoHasUid(
 }
 
 VOID
+LxSignalWakeThread(
+    _In_ PLX_PROCESS Process,
+    _In_ ULONG Tid)
+{
+    LxSignalWake(Process, Tid);
+}
+
+static
+VOID
+LxJobctlWakeStopping(
+    _In_ PLX_PROCESS Process)
+{
+    PLIST_ENTRY Entry;
+    PULONG Tids;
+    ULONG Count = 0, Capacity, Index;
+
+    Capacity = (ULONG)max(ReadNoFence(&Process->ThreadCount), 1) + 8;
+    Tids = LxAlloc(sizeof(ULONG) * Capacity);
+    if (Tids == NULL)
+    {
+        LxSignalWake(Process, 0);
+        return;
+    }
+    ExAcquireFastMutex(&Process->Lock);
+    for (Entry = Process->Threads.Flink; (Entry != &Process->Threads) && (Count < Capacity); Entry = Entry->Flink)
+    {
+        PLX_THREAD Thread = CONTAINING_RECORD(Entry, LX_THREAD, Link);
+
+        if (Thread->JobctlStop)
+            Tids[Count++] = Thread->Tid;
+    }
+    ExReleaseFastMutex(&Process->Lock);
+    for (Index = 0; Index < Count; Index++)
+        LxSignalWake(Process, Tids[Index]);
+    LxFree(Tids);
+}
+
+static
+VOID
+LxJobctlNotifyParent(
+    _In_ PLX_PROCESS Child,
+    _In_ LONG Why,
+    _In_ LONG Status)
+{
+    PLX_PROCESS Parent = (Child->ParentPid != 0) ? LxProcessLookup(Child->Instance, Child->ParentPid) : NULL;
+    ULONG64 Handler, Flags;
+    LX_SIGINFO Info;
+
+    if (Parent == NULL)
+        return;
+    if (!Parent->Exited)
+    {
+        ExAcquireFastMutex(&Parent->Lock);
+        Handler = Parent->SigAction[LX_SIGCHLD - 1].Handler;
+        Flags = Parent->SigAction[LX_SIGCHLD - 1].Flags;
+        ExReleaseFastMutex(&Parent->Lock);
+        if ((Handler != LX_SIG_IGN) && !(Flags & LX_SA_NOCLDSTOP))
+        {
+            RtlZeroMemory(&Info, sizeof(Info));
+            Info.Code = Why;
+            Info.Child.Pid = (LONG)LxPidNr(Parent, Child);
+            Info.Child.Uid = Child->Uid[0];
+            Info.Child.Status = Status;
+            LxSignalSend(Parent, NULL, LX_SIGCHLD, &Info);
+        }
+        LxPollWake(&Parent->ChildPoll, LX_POLLIN);
+    }
+    LxProcessDereference(Parent);
+}
+
+static
+VOID
+LxJobctlPrepareStop(
+    _In_ PLX_PROCESS Target)
+{
+    PLIST_ENTRY Entry;
+
+    ExAcquireFastMutex(&Target->Lock);
+    InterlockedAnd64(&Target->Pending, ~(LONG64)LX_SIGNAL_BIT(LX_SIGCONT));
+    for (Entry = Target->Threads.Flink; Entry != &Target->Threads; Entry = Entry->Flink)
+        InterlockedAnd64(&CONTAINING_RECORD(Entry, LX_THREAD, Link)->Pending, ~(LONG64)LX_SIGNAL_BIT(LX_SIGCONT));
+    ExReleaseFastMutex(&Target->Lock);
+}
+
+static
+VOID
+LxJobctlContinue(
+    _In_ PLX_PROCESS Target)
+{
+    PLIST_ENTRY Entry;
+    LONG Why = 0;
+
+    ExAcquireFastMutex(&Target->Lock);
+    InterlockedAnd64(&Target->Pending, ~(LONG64)LX_STOP_SIGNALS);
+    for (Entry = Target->Threads.Flink; Entry != &Target->Threads; Entry = Entry->Flink)
+    {
+        PLX_THREAD Thread = CONTAINING_RECORD(Entry, LX_THREAD, Link);
+
+        InterlockedAnd64(&Thread->Pending, ~(LONG64)LX_STOP_SIGNALS);
+        Thread->JobctlStop = FALSE;
+    }
+    if (Target->JobctlFlags & LX_JOBCTL_STOPPED)
+        Why = LX_CLD_CONTINUED;
+    else if (Target->GroupStopCount != 0)
+        Why = LX_CLD_STOPPED;
+    if (Why != 0)
+    {
+        Target->JobctlFlags = LX_JOBCTL_CONTINUED;
+        Target->GroupStopCount = 0;
+        Target->GroupExitCode = 0;
+    }
+    InterlockedIncrement(&Target->ContinueGeneration);
+    KeSetEvent(&Target->ContinueEvent, IO_NO_INCREMENT, FALSE);
+    ExReleaseFastMutex(&Target->Lock);
+    if (Why != 0)
+        LxJobctlNotifyParent(Target, Why, (Why == LX_CLD_CONTINUED) ? LX_SIGCONT : 0);
+}
+
+static
+VOID
+LxJobctlStop(
+    _In_ PLX_THREAD Thread,
+    _In_ LONG Signal,
+    _In_ LONG Dequeued,
+    _Inout_ PKTRAP_FRAME TrapFrame,
+    _Inout_opt_ PKEXCEPTION_FRAME ExceptionFrame)
+{
+    PLX_PROCESS Process = Thread->Process;
+    PLIST_ENTRY Entry;
+    BOOLEAN Notify = FALSE, Others = FALSE;
+    LONG Generation, ExitCode;
+
+    ExAcquireFastMutex(&Process->Lock);
+    if ((Signal != 0) && !Process->WaitStatusValid && (Process->ContinueGeneration == Dequeued))
+    {
+        if (!(Process->JobctlFlags & LX_JOBCTL_STOPPED))
+            Process->GroupExitCode = Signal;
+        Process->GroupStopCount = 0;
+        for (Entry = Process->Threads.Flink; Entry != &Process->Threads; Entry = Entry->Flink)
+        {
+            PLX_THREAD Other = CONTAINING_RECORD(Entry, LX_THREAD, Link);
+
+            if ((Other == Thread) || Other->Stopped)
+                continue;
+            Other->JobctlStop = TRUE;
+            Process->GroupStopCount++;
+            Others = TRUE;
+        }
+        Thread->JobctlStop = TRUE;
+        Process->GroupStopCount++;
+        KeClearEvent(&Process->ContinueEvent);
+    }
+    if (!Thread->JobctlStop || Process->WaitStatusValid)
+    {
+        Thread->JobctlStop = FALSE;
+        ExReleaseFastMutex(&Process->Lock);
+        return;
+    }
+    Thread->JobctlStop = FALSE;
+    if (Process->GroupStopCount != 0)
+        Process->GroupStopCount--;
+    if ((Process->GroupStopCount == 0) && !(Process->JobctlFlags & LX_JOBCTL_STOPPED))
+    {
+        Process->JobctlFlags = LX_JOBCTL_STOPPED;
+        Notify = TRUE;
+    }
+    ExitCode = Process->GroupExitCode;
+    Thread->Stopped = (Thread->Ptrace == NULL);
+    Generation = Process->ContinueGeneration;
+    ExReleaseFastMutex(&Process->Lock);
+
+    if (Others)
+        LxJobctlWakeStopping(Process);
+    if (Notify)
+        LxJobctlNotifyParent(Process, LX_CLD_STOPPED, ExitCode & 0x7F);
+    if (LxPtraceGroupStop(Thread, TrapFrame, ExceptionFrame, ExitCode, Generation))
+    {
+        Thread->Stopped = FALSE;
+        return;
+    }
+    Thread->Stopped = TRUE;
+    while ((ReadNoFence(&Process->ContinueGeneration) == Generation) &&
+           !(((ULONG64)Thread->Pending | (ULONG64)Process->Pending) & LX_SIGNAL_BIT(LX_SIGKILL)) &&
+           !(Thread->PtraceWork & LX_PTW_TRAP) && !PsIsThreadTerminating(PsGetCurrentThread()))
+    {
+        if (KeWaitForSingleObject(&Process->ContinueEvent, UserRequest, UserMode, TRUE, NULL) == STATUS_USER_APC)
+            break;
+    }
+    Thread->Stopped = FALSE;
+}
+
+static
+BOOLEAN
+LxPgrpHasStopped(
+    _In_ PLX_INSTANCE Instance,
+    _In_ ULONG Pgid)
+{
+    PLIST_ENTRY Entry;
+    BOOLEAN Stopped = FALSE;
+
+    ExAcquireFastMutex(&LxProcessListLock);
+    for (Entry = LxProcessList.Flink; Entry != &LxProcessList; Entry = Entry->Flink)
+    {
+        PLX_PROCESS Process = CONTAINING_RECORD(Entry, LX_PROCESS, GlobalLink);
+
+        if ((Process->Instance == Instance) && (Process->Pgid == Pgid) && !Process->Exited &&
+            (ReadNoFence((PLONG)&Process->JobctlFlags) & LX_JOBCTL_STOPPED))
+        {
+            Stopped = TRUE;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&LxProcessListLock);
+    return Stopped;
+}
+
+BOOLEAN
+LxPgrpOrphaned(
+    _In_ PLX_INSTANCE Instance,
+    _In_ ULONG Pgid,
+    _In_opt_ PLX_PROCESS Ignored)
+{
+    ULONG ParentPids[128], Sids[128];
+    ULONG Count = 0, Index;
+    PLIST_ENTRY Entry;
+    BOOLEAN Orphaned = TRUE;
+
+    ExAcquireFastMutex(&LxProcessListLock);
+    for (Entry = LxProcessList.Flink; (Entry != &LxProcessList) && (Count < RTL_NUMBER_OF(ParentPids));
+         Entry = Entry->Flink)
+    {
+        PLX_PROCESS Process = CONTAINING_RECORD(Entry, LX_PROCESS, GlobalLink);
+
+        if ((Process->Instance != Instance) || (Process->Pgid != Pgid) || (Process == Ignored) || Process->Exited)
+            continue;
+        ParentPids[Count] = Process->ParentPid;
+        Sids[Count++] = Process->Sid;
+    }
+    ExReleaseFastMutex(&LxProcessListLock);
+
+    for (Index = 0; (Index < Count) && Orphaned; Index++)
+    {
+        PLX_PROCESS Parent;
+
+        if (ParentPids[Index] <= 1)
+            continue;
+        Parent = LxProcessLookup(Instance, ParentPids[Index]);
+        if (Parent == NULL)
+            continue;
+        if (!Parent->Exited && (Parent->Pgid != Pgid) && (Parent->Sid == Sids[Index]))
+            Orphaned = FALSE;
+        LxProcessDereference(Parent);
+    }
+    return Orphaned;
+}
+
+VOID
+LxJobctlOrphanCheck(
+    _In_ PLX_PROCESS Process,
+    _In_opt_ PLX_PROCESS Father)
+{
+    PLX_PROCESS Parent = Father;
+    LX_SIGINFO Info;
+    ULONG Pgid = Process->Pgid;
+
+    if (Pgid == 0)
+        return;
+    if (Father == NULL)
+    {
+        Parent = (Process->ParentPid != 0) ? LxProcessLookup(Process->Instance, Process->ParentPid) : NULL;
+        if (Parent == NULL)
+            return;
+    }
+    if ((Parent->Pgid != Pgid) && (Parent->Sid == Process->Sid) &&
+        LxPgrpOrphaned(Process->Instance, Pgid, (Father == NULL) ? Process : NULL) &&
+        LxPgrpHasStopped(Process->Instance, Pgid))
+    {
+        RtlZeroMemory(&Info, sizeof(Info));
+        Info.Code = LX_SI_KERNEL;
+        LxSignalGroupInfo(Process->Instance, NULL, Pgid, LX_SIGHUP, &Info, NULL, NULL);
+        LxSignalGroupInfo(Process->Instance, NULL, Pgid, LX_SIGCONT, &Info, NULL, NULL);
+    }
+    if (Father == NULL)
+        LxProcessDereference(Parent);
+}
+
+VOID
 LxSignalSend(
     _In_ PLX_PROCESS Target,
     _In_opt_ PLX_THREAD TargetThread,
@@ -356,6 +656,10 @@ LxSignalSend(
     ExReleaseFastMutex(&Target->Lock);
 
     Blocked = (Signal != LX_SIGKILL) && (Signal != LX_SIGSTOP) && LxSignalBlocked(Target, TargetThread, Bit);
+    if (LxSignalStopsByDefault(Signal))
+        LxJobctlPrepareStop(Target);
+    else if (Signal == LX_SIGCONT)
+        LxJobctlContinue(Target);
 
     if ((Target->Pid == 1) && (Sender != NULL) && (Sender->Process->Instance == Target->Instance) &&
         (Handler == LX_SIG_DFL) && !Blocked)
@@ -372,17 +676,23 @@ LxSignalSend(
         }
     }
 
-    if (Signal == LX_SIGCONT)
-        LxSignalWake(Target, 0);
-
-    if (!Blocked && (Signal != LX_SIGKILL))
+    if (!Blocked && (Signal != LX_SIGKILL) && (ReadNoFence(&Target->Traced) == 0))
     {
         if ((Handler == LX_SIG_IGN) || ((Handler == LX_SIG_DFL) && LxSignalIgnoredByDefault(Signal)))
             return;
     }
-    if (!Blocked && ((Signal == LX_SIGKILL) || (Handler == LX_SIG_DFL)) &&
+    if (!Blocked &&
+        ((Signal == LX_SIGKILL) ||
+         ((Handler == LX_SIG_DFL) && !LxSignalStopsByDefault(Signal) && (ReadNoFence(&Target->Traced) == 0))) &&
         !((Signal != LX_SIGKILL) && LxSignalDumpsCore(Signal) && LxSignalTakenByCurrent(Target, TargetThread, Bit)))
     {
+        if ((Signal == LX_SIGKILL) && (ReadNoFence(&Target->Traced) != 0) && (Target->Mm == Target) &&
+            (Target->VmUsers == 0))
+        {
+            if (LxProcessExitStatus(Target, LX_SIGKILL))
+                LxProcessZapThreads(Target, NULL);
+            return;
+        }
         LxSignalTerminate(Target, Signal);
         return;
     }
@@ -531,8 +841,18 @@ LxSignalCheckPending(
         LX_SIGACTION Action;
         LX_SIGINFO Info;
         ULONG64 Bit;
-        LONG Signal = 1;
+        LONG Signal = 1, Generation;
 
+        if (Thread->PtraceWork & LX_PTW_TRAP)
+        {
+            LxPtraceTrap(Thread, TrapFrame, ExceptionFrame);
+            continue;
+        }
+        if (Thread->JobctlStop)
+        {
+            LxJobctlStop(Thread, 0, 0, TrapFrame, ExceptionFrame);
+            continue;
+        }
         if (Deliverable == 0)
             break;
 
@@ -540,20 +860,47 @@ LxSignalCheckPending(
             Signal++;
         Bit = LX_SIGNAL_BIT(Signal);
 
+        Generation = ReadNoFence(&Process->ContinueGeneration);
         if ((ULONG64)Thread->Pending & Bit)
             InterlockedAnd64(&Thread->Pending, ~(LONG64)Bit);
         else if (!((ULONG64)InterlockedAnd64(&Process->Pending, ~(LONG64)Bit) & Bit))
             continue;
 
-        LxSignalTakeAction(Process, Signal, &Action, &Info);
+        if ((Thread->Ptrace != NULL) && (Signal != LX_SIGKILL))
+        {
+            ExAcquireFastMutex(&Process->Lock);
+            Info = Process->PendingInfo[Signal - 1];
+            ExReleaseFastMutex(&Process->Lock);
+            Info.Signo = Signal;
+            Signal = LxPtraceSignal(Thread, TrapFrame, ExceptionFrame, Signal, &Info);
+            if (Signal == 0)
+                continue;
+            Bit = LX_SIGNAL_BIT(Signal);
+            LxSignalTakeAction(Process, Signal, &Action, NULL);
+        }
+        else
+        {
+            LxSignalTakeAction(Process, Signal, &Action, &Info);
+        }
         if ((Action.Handler == LX_SIG_IGN) && (Signal != LX_SIGKILL))
             continue;
         if (Action.Handler == LX_SIG_DFL)
         {
-            if (LxSignalIgnoredByDefault(Signal) || (Process->Pid == 1) || LxPidNsIsInit(Process))
+            if (LxSignalIgnoredByDefault(Signal) ||
+                (((Process->Pid == 1) || LxPidNsIsInit(Process)) && (Signal != LX_SIGSTOP)))
+            {
                 continue;
+            }
+            if (LxSignalStopsByDefault(Signal))
+            {
+                if ((Signal == LX_SIGSTOP) || !LxPgrpOrphaned(Process->Instance, Process->Pgid, NULL))
+                    LxJobctlStop(Thread, Signal, Generation, TrapFrame, ExceptionFrame);
+                continue;
+            }
             if (LxSignalDumpsCore(Signal) && LxCoreDump(Thread, TrapFrame, ExceptionFrame, Signal))
                 Signal |= 0x80;
+            LxPtraceEvent(Thread, TrapFrame, ExceptionFrame, LX_PTRACE_EVENT_EXIT,
+                          Process->WaitStatusValid ? (ULONG64)Process->WaitStatus : (ULONG64)Signal, FALSE);
             LxProcessExitGroup(Process, Signal);
             return;
         }
@@ -573,6 +920,26 @@ LxSignalCheckPending(
         Thread->SigMask = Thread->SuspendMask;
         Thread->Suspended = FALSE;
     }
+}
+
+VOID
+LxSignalForce(
+    _In_ PLX_THREAD Thread,
+    _In_ LONG Signal,
+    _In_ PLX_SIGINFO Info)
+{
+    PLX_PROCESS Process = Thread->Process;
+    ULONG64 Bit = LX_SIGNAL_BIT(Signal);
+
+    ExAcquireFastMutex(&Process->Lock);
+    if ((Thread->SigMask & Bit) || (Process->SigAction[Signal - 1].Handler == LX_SIG_IGN))
+    {
+        Process->SigAction[Signal - 1].Handler = LX_SIG_DFL;
+        Thread->SigMask &= ~Bit;
+    }
+    Process->PendingInfo[Signal - 1] = *Info;
+    InterlockedOr64(&Thread->Pending, (LONG64)Bit);
+    ExReleaseFastMutex(&Process->Lock);
 }
 
 BOOLEAN
@@ -665,6 +1032,7 @@ LX_SYSCALL(LxSysRtSigtimedwait)
     LX_SIGINFO Info;
     ULONG64 Signal;
     LONG64 Result;
+    BOOLEAN Interrupted = FALSE;
 
     if (Call->Args[3] != sizeof(ULONG64))
         return -LX_EINVAL;
@@ -682,7 +1050,7 @@ LX_SYSCALL(LxSysRtSigtimedwait)
             return Result;
         if ((Timeout.Seconds < 0) || (Timeout.Nanoseconds < 0) || (Timeout.Nanoseconds >= 1000000000))
             return -LX_EINVAL;
-        Deadline.QuadPart = (LONG64)KeQueryInterruptTime() + Timeout.Seconds * 10000000LL + Timeout.Nanoseconds / 100;
+        Deadline.QuadPart = (LONG64)KeQueryInterruptTime() + LxTimespecTo100ns(&Timeout);
     }
 
     for (;;)
@@ -701,7 +1069,7 @@ LX_SYSCALL(LxSysRtSigtimedwait)
             return (LONG64)Signal;
         }
 
-        if (LxSignalPending(Call->Thread))
+        if (Interrupted || LxSignalPending(Call->Thread))
             return -LX_EINTR;
 
         Now = (LONG64)KeQueryInterruptTime();
@@ -713,6 +1081,7 @@ LX_SYSCALL(LxSysRtSigtimedwait)
         Result = LxWaitHead(&Call->Process->SignalPoll, LxSigwaitReady, &Wait, &Interval);
         if ((Result < 0) && (Result != -LX_EAGAIN) && (Result != -LX_EINTR))
             return Result;
+        Interrupted = (Result == -LX_EINTR);
     }
 }
 

@@ -11,6 +11,7 @@
 #include <lwip/ip.h>
 #include <lwip/ip6.h>
 #include <lwip/nd6.h>
+#include <lwip/mld6.h>
 #include <lwip/inet_chksum.h>
 #include <lwip/prot/icmp6.h>
 #include <lwip/prot/nd6.h>
@@ -43,6 +44,8 @@
 #define LIB_IP6_RA_INITIAL_COUNT 3
 #define LIB_IP6_RA_MIN_DELAY 3
 #define LIB_IP6_RA_ROUTER_LIFETIME 1800
+#define LIB_IP6_PATHS 64
+#define LIB_IP6_PATH_IDLE 90000
 
 typedef struct _LIB_IP6_ROUTE
 {
@@ -118,10 +121,21 @@ typedef struct _LIB_IP6_RA_INFO
     } Dnssl[LIB_IP6_DNSSL];
 } LIB_IP6_RA_INFO, *PLIB_IP6_RA_INFO;
 
+typedef struct _LIB_IP6_PATH
+{
+    struct netif *Netif;
+    ip6_addr_t Destination;
+    ip6_addr_t Source;
+    ULONGLONG LastUsed;
+    ULONGLONG Confirmed;
+    BOOLEAN Local;
+} LIB_IP6_PATH, *PLIB_IP6_PATH;
+
 static LIB_IP6_ROUTE LibIP6Routes[LIB_IP6_ROUTES];
 static LIB_IP6_ADDRESS_INFO LibIP6AddressInfo[LIB_IP6_ADDRESS_INFOS];
 static LIB_IP6_RA_INFO LibIP6RaInfo[LIB_IP6_RA_NETIFS];
 static struct raw_pcb *LibIP6RaPcb;
+static LIB_IP6_PATH LibIP6Paths[LIB_IP6_PATHS];
 static struct raw_pcb *LibIP6RaSendPcb;
 static BCRYPT_ALG_HANDLE LibIP6HmacAlgorithm;
 static UCHAR LibIP6Secret[32];
@@ -1248,6 +1262,170 @@ LibIP6RouterSolicited(struct netif *Netif)
 }
 
 static
+ULONGLONG
+LibIP6UptimeMs(VOID)
+{
+    return KeQueryInterruptTime() / 10000;
+}
+
+void
+LibIP6PathOutput(struct netif *Netif, const ip6_addr_t *Source, const ip6_addr_t *Destination, u8_t NextHeader,
+                 struct pbuf *p)
+{
+    PLIB_IP6_PATH Path = NULL, Victim = NULL;
+    const ip_addr_t *Selected;
+    ULONG i;
+
+    if (!Netif || !Destination || !p)
+        return;
+    if (NextHeader == IP6_NEXTH_ICMP6 && p->len >= 1 &&
+        *(u8_t *)p->payload >= ICMP6_TYPE_RS && *(u8_t *)p->payload <= ICMP6_TYPE_RD)
+        return;
+
+    for (i = 0; i < LIB_IP6_PATHS; i++)
+    {
+        PLIB_IP6_PATH Current = &LibIP6Paths[i];
+
+        if (Current->Netif == Netif && ip6_addr_zoneless_eq(&Current->Destination, Destination))
+        {
+            Path = Current;
+            break;
+        }
+        if (!Victim || (Victim->Netif && (!Current->Netif || Current->LastUsed < Victim->LastUsed)))
+            Victim = Current;
+    }
+    if (!Path)
+    {
+        Path = Victim;
+        RtlZeroMemory(Path, sizeof(*Path));
+        Path->Netif = Netif;
+        ip6_addr_copy(Path->Destination, *Destination);
+        ip6_addr_clear_zone(&Path->Destination);
+        Path->Local = LibIP6AddressExists(&Path->Destination) || ip6_addr_isallnodes_linklocal(&Path->Destination) ||
+                      (ip6_addr_ismulticast(&Path->Destination) && mld6_lookfor_group(Netif, Destination));
+    }
+    if (Source && !ip6_addr_isany(Source))
+        ip6_addr_copy(Path->Source, *Source);
+    else if ((Selected = ip6_select_source_address(Netif, Destination)))
+        ip6_addr_copy(Path->Source, *ip_2_ip6(Selected));
+    ip6_addr_clear_zone(&Path->Source);
+    Path->LastUsed = LibIP6UptimeMs();
+}
+
+VOID
+LibIP6ConfirmPath(const ip6_addr_t *Destination)
+{
+    ULONGLONG Now = LibIP6UptimeMs();
+    ULONG i;
+
+    for (i = 0; i < LIB_IP6_PATHS; i++)
+    {
+        if (LibIP6Paths[i].Netif && ip6_addr_zoneless_eq(&LibIP6Paths[i].Destination, Destination))
+            LibIP6Paths[i].Confirmed = Now;
+    }
+}
+
+static
+VOID
+LibIP6ExpirePaths(VOID)
+{
+    ULONGLONG Now = LibIP6UptimeMs();
+    ULONG i;
+
+    for (i = 0; i < LIB_IP6_PATHS; i++)
+    {
+        if (LibIP6Paths[i].Netif && Now - LibIP6Paths[i].LastUsed >= LIB_IP6_PATH_IDLE)
+            RtlZeroMemory(&LibIP6Paths[i], sizeof(LibIP6Paths[i]));
+    }
+}
+
+struct lib_ip6_path_msg
+{
+    PIP_PATH_TABLE Table;
+    ULONG Capacity;
+    ULONG Count;
+};
+
+static
+void
+LibIP6QueryPathsCallback(void *arg)
+{
+    struct lib_ip6_path_msg *Msg = arg;
+    ULONGLONG Now = LibIP6UptimeMs();
+    ULONG i, j;
+
+    for (i = 0; i < LIB_IP6_PATHS; i++)
+    {
+        PLIB_IP6_PATH Path = &LibIP6Paths[i];
+        PIP_INTERFACE IF;
+        PIP_PATH_ROW Row;
+        ULONGLONG Elapsed;
+
+        if (!Path->Netif || !(IF = Path->Netif->state))
+            continue;
+        if (Msg->Count < Msg->Capacity)
+        {
+            Row = &Msg->Table->Rows[Msg->Count];
+            RtlZeroMemory(Row, sizeof(*Row));
+            Row->Index = IF->Index;
+            RtlCopyMemory(Row->Source, Path->Source.addr, sizeof(Row->Source));
+            RtlCopyMemory(Row->Destination, Path->Destination.addr, sizeof(Row->Destination));
+            RtlCopyMemory(Row->NextHop, Path->Destination.addr, sizeof(Row->NextHop));
+            Row->PathMtu = netif_mtu6(Path->Netif);
+            for (j = 0; j < LWIP_ND6_NUM_DESTINATIONS; j++)
+            {
+                if (ip6_addr_zoneless_eq(&destination_cache[j].destination_addr, &Path->Destination))
+                {
+                    RtlCopyMemory(Row->NextHop, destination_cache[j].next_hop_addr.addr, sizeof(Row->NextHop));
+                    if (destination_cache[j].pmtu)
+                        Row->PathMtu = destination_cache[j].pmtu;
+                    break;
+                }
+            }
+            Elapsed = Now - Path->Confirmed;
+            Row->LastReachable = (ULONG)min(Elapsed - Elapsed % 500, MAXULONG);
+            Row->IsReachable = TRUE;
+            Row->LinkSpeed = Path->Local ? 0 : (ULONGLONG)IF->Speed * 100;
+        }
+        Msg->Count++;
+    }
+}
+
+NTSTATUS
+LibIP6QueryPaths(PIP_PATH_TABLE Table, ULONG Length, PULONG Information)
+{
+    struct lib_ip6_path_msg Msg;
+
+    if (Length < FIELD_OFFSET(IP_PATH_TABLE, Rows))
+        return STATUS_BUFFER_TOO_SMALL;
+    Msg.Table = Table;
+    Msg.Capacity = (Length - FIELD_OFFSET(IP_PATH_TABLE, Rows)) / sizeof(IP_PATH_ROW);
+    Msg.Count = 0;
+    if (tcpip_callback_wait(LibIP6QueryPathsCallback, &Msg) != ERR_OK)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Table->NumEntries = Msg.Count;
+    *Information = FIELD_OFFSET(IP_PATH_TABLE, Rows) + min(Msg.Count, Msg.Capacity) * sizeof(IP_PATH_ROW);
+    return Msg.Count > Msg.Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+}
+
+static
+void
+LibIP6FlushPathsCallback(void *arg)
+{
+    LWIP_UNUSED_ARG(arg);
+    RtlZeroMemory(LibIP6Paths, sizeof(LibIP6Paths));
+    nd6_clear_destination_cache();
+}
+
+NTSTATUS
+LibIP6FlushPaths(VOID)
+{
+    if (tcpip_callback_wait(LibIP6FlushPathsCallback, NULL) != ERR_OK)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    return STATUS_SUCCESS;
+}
+
+static
 VOID
 LibIP6Timer(void *arg)
 {
@@ -1280,6 +1458,7 @@ LibIP6Timer(void *arg)
             LibIP6NewTemporary(Info->Netif, &Prefix, Valid, Preferred);
     }
     LibIP6ScheduleAdvertisements();
+    LibIP6ExpirePaths();
     sys_timeout(LIB_IP6_TIMER_INTERVAL, LibIP6Timer, NULL);
 }
 
@@ -1450,6 +1629,11 @@ LibIP6ConfigForgetNetif(struct netif *Netif)
     {
         if (LibIP6RaInfo[i].Netif == Netif)
             RtlZeroMemory(&LibIP6RaInfo[i], sizeof(LibIP6RaInfo[i]));
+    }
+    for (i = 0; i < LIB_IP6_PATHS; i++)
+    {
+        if (LibIP6Paths[i].Netif == Netif)
+            RtlZeroMemory(&LibIP6Paths[i], sizeof(LibIP6Paths[i]));
     }
 }
 

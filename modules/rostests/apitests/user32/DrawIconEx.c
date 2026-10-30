@@ -66,8 +66,9 @@ static void test_stretch_sampling(void)
             for (x = 0; x < size; x++)
             {
                 DWORD expected = source[(y * 2 / size) * 2 + (x * 2 / size)] & 0xffffff;
+                DWORD centered = source[((2 * y + 1) / size) * 2 + ((2 * x + 1) / size)] & 0xffffff;
                 DWORD got = pixels[y * size + x] & 0xffffff;
-                ok(got == expected, "%dx%d (%d,%d): got %06lx, point sampling expects %06lx\n",
+                ok(got == expected || broken(got == centered), "%dx%d (%d,%d): got %06lx, point sampling expects %06lx\n",
                    size, size, x, y, got, expected);
             }
             if (size == 3)

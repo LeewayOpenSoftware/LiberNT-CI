@@ -124,6 +124,24 @@ static	DWORD	G711_GetFormatIndex(const WAVEFORMATEX *wfx)
     return 0xFFFFFFFF;
 }
 
+#ifdef __REACTOS__
+static BOOL G711_IsStreamFormat(const WAVEFORMATEX *wfx)
+{
+    WAVEFORMATEX known = *wfx;
+    int i;
+
+    if (!wfx->nSamplesPerSec)
+        return FALSE;
+    for (i = 0; i < ARRAY_SIZE(ALaw_Formats); i++)
+    {
+        known.nSamplesPerSec = ALaw_Formats[i].rate;
+        if (G711_GetFormatIndex(&known) != 0xFFFFFFFF)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+#endif
 /***********************************************************************
  *           R16
  *
@@ -792,6 +810,11 @@ static	LRESULT	G711_FormatSuggest(PACMDRVFORMATSUGGEST adfs)
     if (adfs->cbwfxSrc < sizeof(PCMWAVEFORMAT) ||
 	adfs->cbwfxDst < sizeof(PCMWAVEFORMAT) ||
 	G711_GetFormatIndex(adfs->pwfxSrc) == 0xFFFFFFFF) return ACMERR_NOTPOSSIBLE;
+#ifdef __REACTOS__
+    if ((adfs->fdwSuggest & ACM_FORMATSUGGESTF_WFORMATTAG) &&
+        adfs->pwfxDst->wFormatTag == adfs->pwfxSrc->wFormatTag)
+        return ACMERR_NOTPOSSIBLE;
+#endif
     /* FIXME: should do those tests against the real size (according to format tag */
 
     /* If no suggestion for destination, then copy source value */
@@ -857,9 +880,14 @@ static	LRESULT	G711_StreamOpen(PACMDRVSTREAMINSTANCE adsi)
 
     assert(!(adsi->fdwOpen & ACM_STREAMOPENF_ASYNC));
 
+#ifdef __REACTOS__
+    if (!G711_IsStreamFormat(adsi->pwfxSrc) || !G711_IsStreamFormat(adsi->pwfxDst))
+	return ACMERR_NOTPOSSIBLE;
+#else
     if (G711_GetFormatIndex(adsi->pwfxSrc) == 0xFFFFFFFF ||
 	G711_GetFormatIndex(adsi->pwfxDst) == 0xFFFFFFFF)
 	return ACMERR_NOTPOSSIBLE;
+#endif
 
     aad = HeapAlloc(GetProcessHeap(), 0, sizeof(AcmG711Data));
     if (aad == 0) return MMSYSERR_NOMEM;

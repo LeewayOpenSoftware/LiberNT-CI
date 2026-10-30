@@ -502,10 +502,10 @@ BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Ho
     else
         rcClip = CurInfo->rcClip;
 
-    if (x >= rcClip.right)  x = rcClip.right - 1;
-    if (x < rcClip.left)    x = rcClip.left;
-    if (y >= rcClip.bottom) y = rcClip.bottom - 1;
-    if (y < rcClip.top)     y = rcClip.top;
+    if (x < rcClip.left)            x = rcClip.left;
+    else if (x >= rcClip.right)     x = rcClip.right - 1;
+    if (y < rcClip.top)             y = rcClip.top;
+    else if (y >= rcClip.bottom)    y = rcClip.bottom - 1;
 
     if (!Hook)
         IntAddMouseMoveHistory(x, y, EngGetTickCount32(), dwExtraInfo);
@@ -521,7 +521,8 @@ BOOL UserSetCursorPos( INT x, INT y, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Ho
     Msg.wParam = UserGetMouseButtonsState();
     Msg.lParam = MAKELPARAM(x, y);
     Msg.pt = pt;
-    co_MsqInsertMouseMessage(&Msg, flags, dwExtraInfo, Hook);
+    if (!co_MsqInsertMouseMessage(&Msg, flags, dwExtraInfo, Hook))
+        return TRUE;
 
     /* 2. Store the new cursor position */
     gpsi->ptCursor = pt;
@@ -1005,7 +1006,7 @@ UserClipCursor(
     {
         if (prcl->right < prcl->left || prcl->bottom < prcl->top)
         {
-            EngSetLastError(ERROR_INVALID_PARAMETER);
+            EngSetLastError(ERROR_ACCESS_DENIED);
             return FALSE;
         }
 

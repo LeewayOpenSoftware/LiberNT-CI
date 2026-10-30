@@ -231,52 +231,50 @@ KiUnwaitThread(IN PKTHREAD Thread,
 static
 VOID
 FASTCALL
-KiSortObjectLocks(IN PVOID Object[], IN ULONG Count, OUT PVOID Sorted[])
+KiSortObjectLocks(IN PVOID Object[], IN ULONG Count, OUT PUCHAR Order)
 {
     ULONG i, j;
-    PVOID Tmp;
+    UCHAR Tmp;
 
-    for (i = 0; i < Count; i++) Sorted[i] = Object[i];
+    for (i = 0; i < Count; i++) Order[i] = (UCHAR)i;
     for (i = 1; i < Count; i++)
     {
-        Tmp = Sorted[i];
+        Tmp = Order[i];
         j = i;
-        while ((j > 0) && ((ULONG_PTR)Sorted[j - 1] > (ULONG_PTR)Tmp))
+        while ((j > 0) && ((ULONG_PTR)Object[Order[j - 1]] > (ULONG_PTR)Object[Tmp]))
         {
-            Sorted[j] = Sorted[j - 1];
+            Order[j] = Order[j - 1];
             j--;
         }
-        Sorted[j] = Tmp;
+        Order[j] = Tmp;
     }
 }
 
+static
 VOID
 FASTCALL
-KiAcquireObjectLocks(IN PVOID Object[], IN ULONG Count)
+KiAcquireObjectLocks(IN PVOID Object[], IN PUCHAR Order, IN ULONG Count)
 {
-    PVOID Sorted[MAXIMUM_WAIT_OBJECTS];
     ULONG i;
 
-    KiSortObjectLocks(Object, Count, Sorted);
     for (i = 0; i < Count; i++)
     {
-        if ((i == 0) || (Sorted[i] != Sorted[i - 1]))
-            KiAcquireDispatcherObject((DISPATCHER_HEADER*)Sorted[i]);
+        if ((i == 0) || (Object[Order[i]] != Object[Order[i - 1]]))
+            KiAcquireDispatcherObject((DISPATCHER_HEADER*)Object[Order[i]]);
     }
 }
 
+static
 VOID
 FASTCALL
-KiReleaseObjectLocks(IN PVOID Object[], IN ULONG Count)
+KiReleaseObjectLocks(IN PVOID Object[], IN PUCHAR Order, IN ULONG Count)
 {
-    PVOID Sorted[MAXIMUM_WAIT_OBJECTS];
     ULONG i;
 
-    KiSortObjectLocks(Object, Count, Sorted);
     for (i = 0; i < Count; i++)
     {
-        if ((i == 0) || (Sorted[i] != Sorted[i - 1]))
-            KiReleaseDispatcherObject((DISPATCHER_HEADER*)Sorted[i]);
+        if ((i == 0) || (Object[Order[i]] != Object[Order[i - 1]]))
+            KiReleaseDispatcherObject((DISPATCHER_HEADER*)Object[Order[i]]);
     }
 }
 
@@ -607,25 +605,10 @@ KeDelayExecutionThread(IN KPROCESSOR_MODE WaitMode,
             Timer->TimerListEntry.Flink = NULL;
             Timer->TimerListEntry.Blink = NULL;
 
-            /* Handle Kernel Queues */
-            if (Thread->Queue)
-            {
-                /* Wake a waiter on the thread's own queue UNDER THE QUEUE LOCK.
-                 * The caller holds a different object's lock, and
-                 * KiActivateWaiterQueue mutates the queue's wait list, so it must
-                 * hold Queue->Header (else it races KeInsertQueue and corrupts
-                 * the queue wait list). A thread never KeWaitForSingleObject's on
-                 * its own KQUEUE, so this is never the already-held object. */
-                KiAcquireDispatcherObject(&Thread->Queue->Header);
-                KiActivateWaiterQueue(Thread->Queue);
-                KiReleaseDispatcherObject(&Thread->Queue->Header);
-            }
-
             /* Serialize APC insertion with the final wait publication. */
             if (!KxTryBeginThreadWait(Thread))
             {
                 KiReleaseDispatcherObject(&Timer->Header);
-                KiUndoActivateWaiterQueue(Thread);
                 KxExitDispatcherForRetry(Thread);
                 goto WaitStart;
             }
@@ -641,6 +624,7 @@ KeDelayExecutionThread(IN KPROCESSOR_MODE WaitMode,
             /* Insert the timer and swap the thread */
             KiReleaseDispatcherObject(&Timer->Header);
             KxInsertTimerNoRelease(Timer, Hand);
+            KxActivateWaiterQueue(Thread);
             WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb(), TRUE);
 
             /* Check if were swapped ok */
@@ -817,21 +801,12 @@ WaitStart:
                 Timer->TimerListEntry.Blink = NULL;
             }
 
-            /* Handle a waiter on this thread's own queue, under the queue lock */
-            if (Thread->Queue)
-            {
-                KiAcquireDispatcherObject(&Thread->Queue->Header);
-                KiActivateWaiterQueue(Thread->Queue);
-                KiReleaseDispatcherObject(&Thread->Queue->Header);
-            }
-
             /* Commit the wait under the thread lock. Recheck both late kernel
-             * APC insertion and AlertedByThreadId after queue activation, at
-             * the exact point where the thread transitions to Waiting. */
+             * APC insertion and AlertedByThreadId at the exact point where the
+             * thread transitions to Waiting. */
             if (!KxTryBeginThreadWait(Thread))
             {
                 KiReleaseDispatcherObject(&Timer->Header);
-                KiUndoActivateWaiterQueue(Thread);
                 KxExitDispatcherForRetry(Thread);
                 goto WaitStart;
             }
@@ -840,7 +815,6 @@ WaitStart:
             {
                 /* An alert is already pending: consume it and don't block */
                 KiReleaseThreadLock(Thread);
-                KiUndoActivateWaiterQueue(Thread);
                 WaitStatus = STATUS_ALERTED;
                 goto NoWait;
             }
@@ -858,6 +832,7 @@ WaitStart:
             /* Release the timer lock and insert the timer if we armed one */
             KiReleaseDispatcherObject(&Timer->Header);
             if (Timeout) KxInsertTimerNoRelease(Timer, Hand);
+            KxActivateWaiterQueue(Thread);
 
             /* Swap the thread out */
             WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb(), TRUE);
@@ -1002,22 +977,6 @@ KeWaitForSingleObject(IN PVOID Object,
                 Timer->TimerListEntry.Blink = NULL;
             }
 
-            /* Handle Kernel Queues */
-            if (Thread->Queue)
-            {
-                /* A completion-port thread may wait on its own queue handle. */
-                if (Thread->Queue == (PKQUEUE)CurrentObject)
-                {
-                    KiActivateWaiterQueue(Thread->Queue);
-                }
-                else
-                {
-                    KiAcquireDispatcherObject(&Thread->Queue->Header);
-                    KiActivateWaiterQueue(Thread->Queue);
-                    KiReleaseDispatcherObject(&Thread->Queue->Header);
-                }
-            }
-
             /* Timer expiration owns the timer object while acquiring the
              * waiter thread lock. Own it before reusing the timer block. */
             if (Timeout) KiAcquireDispatcherObject(&Timer->Header);
@@ -1027,7 +986,6 @@ KeWaitForSingleObject(IN PVOID Object,
             {
                 if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
                 KiReleaseDispatcherObject(&CurrentObject->Header);
-                KiUndoActivateWaiterQueue(Thread);
                 KxExitDispatcherForRetry(Thread);
                 goto WaitStart;
             }
@@ -1056,6 +1014,7 @@ KeWaitForSingleObject(IN PVOID Object,
                 /* Insert it */
                 KxInsertTimerNoRelease(Timer, Hand);
             }
+            KxActivateWaiterQueue(Thread);
 
             /* Do the actual swap */
             WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb(), TRUE);
@@ -1132,6 +1091,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
     PLARGE_INTEGER OriginalDueTime = Timeout;
     LARGE_INTEGER DueTime = {{0}}, NewDueTime, InterruptTime;
     ULONG Index, Hand = 0;
+    UCHAR LockOrder[MAXIMUM_WAIT_OBJECTS];
 
 
     if (Thread->WaitNext)
@@ -1168,6 +1128,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
 
     /* Sanity check */
     ASSERT(Count != 0);
+    KiSortObjectLocks(Object, Count, LockOrder);
 
     /* Check if the lock is already held */
     if (!Thread->WaitNext) goto WaitStart;
@@ -1181,7 +1142,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
     /*  If it looks like this code doesn't actually wait for any objects */
     /*  at all, it's because the setup is done by that macro.            */
     KxMultiThreadWait();
-    KiAcquireObjectLocks(Object, Count);
+    KiAcquireObjectLocks(Object, LockOrder, Count);
 
     /* Start wait loop */
     for (;;)
@@ -1193,7 +1154,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
         if (KiIsKernelApcDeliverable(Thread, Thread->WaitIrql))
         {
             /* Unlock the dispatcher */
-            KiReleaseObjectLocks(Object, Count);
+            KiReleaseObjectLocks(Object, LockOrder, Count);
             KxExitDispatcherForRetry(Thread);
         }
         else
@@ -1226,7 +1187,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
                             else
                             {
                                 /* Raise an exception (see wasm.ru) */
-                                KiReleaseObjectLocks(Object, Count);
+                                KiReleaseObjectLocks(Object, LockOrder, Count);
                                 KiExitDispatcher(Thread->WaitIrql);
                                 ExRaiseStatus(STATUS_MUTANT_LIMIT_EXCEEDED);
                             }
@@ -1259,7 +1220,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
                             (CurrentObject->Header.SignalState == (LONG)MINLONG))
                         {
                             /* Raise an exception */
-                            KiReleaseObjectLocks(Object, Count);
+                            KiReleaseObjectLocks(Object, LockOrder, Count);
                             KiExitDispatcher(Thread->WaitIrql);
                             ExRaiseStatus(STATUS_MUTANT_LIMIT_EXCEEDED);
                         }
@@ -1336,32 +1297,6 @@ KeWaitForMultipleObjects(IN ULONG Count,
 #endif
             }
 
-            /* Handle Kernel Queues */
-            if (Thread->Queue)
-            {
-                BOOLEAN QueueLockHeld = FALSE;
-
-                for (Index = 0; Index < Count; Index++)
-                {
-                    if (Object[Index] == Thread->Queue)
-                    {
-                        QueueLockHeld = TRUE;
-                        break;
-                    }
-                }
-
-                if (QueueLockHeld)
-                {
-                    KiActivateWaiterQueue(Thread->Queue);
-                }
-                else
-                {
-                    KiAcquireDispatcherObject(&Thread->Queue->Header);
-                    KiActivateWaiterQueue(Thread->Queue);
-                    KiReleaseDispatcherObject(&Thread->Queue->Header);
-                }
-            }
-
             /* Timer expiration holds the timer object while acquiring the
              * waiter thread lock. Preserve that order during publication. */
             if (Timeout) KiAcquireDispatcherObject(&Timer->Header);
@@ -1370,8 +1305,7 @@ KeWaitForMultipleObjects(IN ULONG Count,
             if (!KxTryBeginThreadWait(Thread))
             {
                 if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
-                KiReleaseObjectLocks(Object, Count);
-                KiUndoActivateWaiterQueue(Thread);
+                KiReleaseObjectLocks(Object, LockOrder, Count);
                 KxExitDispatcherForRetry(Thread);
                 goto WaitStart;
             }
@@ -1415,13 +1349,14 @@ KeWaitForMultipleObjects(IN ULONG Count,
             if (Timeout) KiReleaseDispatcherObject(&Timer->Header);
 
             /* Release the object locks */
-            KiReleaseObjectLocks(Object, Count);
+            KiReleaseObjectLocks(Object, LockOrder, Count);
 
             /* Check if we have a timer */
             if (Timeout)
             {
                 KxInsertTimerNoRelease(Timer, Hand);
             }
+            KxActivateWaiterQueue(Thread);
 
             /* Swap the thread */
             WaitStatus = (NTSTATUS)KiSwapThread(Thread, KeGetCurrentPrcb(), TRUE);
@@ -1429,18 +1364,25 @@ KeWaitForMultipleObjects(IN ULONG Count,
             /* Check if we were executing an APC */
             if (WaitStatus != STATUS_KERNEL_APC)
             {
-                KIRQL CleanupIrql = KeRaiseIrqlToSynchLevel();
-                KiAcquireObjectLocks(Object, Count);
                 for (Index = 0; Index < Count; Index++)
                 {
-                    if (WaitBlockArray[Index].WaitListEntry.Flink)
-                    {
-                        RemoveEntryList(&WaitBlockArray[Index].WaitListEntry);
-                        WaitBlockArray[Index].WaitListEntry.Flink = NULL;
-                    }
+                    if (WaitBlockArray[Index].WaitListEntry.Flink) break;
                 }
-                KiReleaseObjectLocks(Object, Count);
-                KeLowerIrql(CleanupIrql);
+                if (Index < Count)
+                {
+                    KIRQL CleanupIrql = KeRaiseIrqlToSynchLevel();
+                    KiAcquireObjectLocks(Object, LockOrder, Count);
+                    for (Index = 0; Index < Count; Index++)
+                    {
+                        if (WaitBlockArray[Index].WaitListEntry.Flink)
+                        {
+                            RemoveEntryList(&WaitBlockArray[Index].WaitListEntry);
+                            WaitBlockArray[Index].WaitListEntry.Flink = NULL;
+                        }
+                    }
+                    KiReleaseObjectLocks(Object, LockOrder, Count);
+                    KeLowerIrql(CleanupIrql);
+                }
                 return WaitStatus;
             }
 
@@ -1458,17 +1400,17 @@ WaitStart:
         /* Setup a new wait */
         Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
         KxMultiThreadWait();
-        KiAcquireObjectLocks(Object, Count);
+        KiAcquireObjectLocks(Object, LockOrder, Count);
     }
 
     /* We are done */
-    KiReleaseObjectLocks(Object, Count);
+    KiReleaseObjectLocks(Object, LockOrder, Count);
     KiExitDispatcher(Thread->WaitIrql);
     return WaitStatus;
 
 DontWait:
     /* Release the object locks but maintain high IRQL */
-    KiReleaseObjectLocks(Object, Count);
+    KiReleaseObjectLocks(Object, LockOrder, Count);
 
     /* Adjust the Quantum and return the wait status */
     KiAdjustQuantumThread(Thread);

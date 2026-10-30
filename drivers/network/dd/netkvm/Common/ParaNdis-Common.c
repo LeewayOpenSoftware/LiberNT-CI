@@ -329,8 +329,9 @@ static void ReadNicConfiguration(PARANDIS_ADAPTER *pContext, PUCHAR *ppNewMACAdd
             pContext->Limits.nPrintDiagnostic = pConfiguration->LogStatistics.ulValue;
             pContext->uNumberOfHandledRXPacketsInDPC = pConfiguration->NumberOfHandledRXPackersInDPC.ulValue;
             pContext->bDoSupportPriority = pConfiguration->PrioritySupport.ulValue != 0;
-            pContext->ulFormalLinkSpeed  = pConfiguration->ConnectRate.ulValue;
-            pContext->ulFormalLinkSpeed *= 1000000;
+            pContext->ulConfiguredLinkSpeed  = pConfiguration->ConnectRate.ulValue;
+            pContext->ulConfiguredLinkSpeed *= 1000000;
+            pContext->ulFormalLinkSpeed = pContext->ulConfiguredLinkSpeed;
             pContext->bDoHwPacketFiltering = pConfiguration->PacketFiltering.ulValue != 0;
             pContext->bUseScatterGather  = pConfiguration->ScatterGather.ulValue != 0;
             pContext->bBatchReceive      = pConfiguration->BatchReceive.ulValue != 0;
@@ -645,6 +646,31 @@ static NDIS_STATUS FinalizeFeatures(PARANDIS_ADAPTER *pContext)
     return NTStatusToNdisStatus(nt_status);
 }
 
+static BOOLEAN UpdateLinkProperties(PARANDIS_ADAPTER *pContext)
+{
+    ULONGLONG ulLinkSpeed = pContext->ulConfiguredLinkSpeed;
+    NDIS_MEDIA_DUPLEX_STATE DuplexState = MediaDuplexStateFull;
+    BOOLEAN bChanged;
+
+    if (pContext->bSpeedDuplexSupported)
+    {
+        ULONG ulSpeed = 0;
+        UCHAR uDuplex = 0;
+
+        virtio_get_config(&pContext->IODevice, VIRTIO_NET_CONFIG_SPEED_OFFSET, &ulSpeed, sizeof(ulSpeed));
+        virtio_get_config(&pContext->IODevice, VIRTIO_NET_CONFIG_DUPLEX_OFFSET, &uDuplex, sizeof(uDuplex));
+        if (ulSpeed <= MAXLONG)
+            ulLinkSpeed = (ULONGLONG)ulSpeed * 1000000;
+        if (uDuplex == VIRTIO_NET_DUPLEX_HALF)
+            DuplexState = MediaDuplexStateHalf;
+    }
+
+    bChanged = ulLinkSpeed != pContext->ulFormalLinkSpeed || DuplexState != pContext->MediaDuplexState;
+    pContext->ulFormalLinkSpeed = ulLinkSpeed;
+    pContext->MediaDuplexState = DuplexState;
+    return bChanged;
+}
+
 /**********************************************************
 Initializes the context structure
 Major variables, received from NDIS on initialization, must be be set before this call
@@ -724,6 +750,9 @@ NDIS_STATUS ParaNdis_InitializeContext(
         DumpVirtIOFeatures(pContext);
         JustForCheckClearInterrupt(pContext, "init 3");
         pContext->bLinkDetectSupported = 0 != VirtIODeviceGetHostFeature(pContext, VIRTIO_NET_F_STATUS);
+        pContext->bSpeedDuplexSupported = 0 != VirtIODeviceGetHostFeature(pContext, VIRTIO_NET_F_SPEED_DUPLEX);
+        if (pContext->bSpeedDuplexSupported)
+            VirtIODeviceEnableGuestFeature(pContext, VIRTIO_NET_F_SPEED_DUPLEX);
 
         if(pContext->bLinkDetectSupported) {
             virtio_get_config(&pContext->IODevice, sizeof(pContext->CurrentMacAddress), &linkStatus, sizeof(linkStatus));
@@ -886,6 +915,8 @@ NDIS_STATUS ParaNdis_InitializeContext(
 
     if (status == NDIS_STATUS_SUCCESS)
         status = FinalizeFeatures(pContext);
+    if (status == NDIS_STATUS_SUCCESS)
+        UpdateLinkProperties(pContext);
 
     pContext->ReuseBufferProc = (tReuseReceiveBufferProc)ReuseReceiveBufferRegular;
 
@@ -2208,6 +2239,8 @@ void ParaNdis_ReportLinkStatus(PARANDIS_ADAPTER *pContext, BOOLEAN bForce)
         virtio_get_config(&pContext->IODevice, offset, &linkStatus, sizeof(linkStatus));
         bConnected = (linkStatus & VIRTIO_NET_S_LINK_UP) != 0;
     }
+    if (UpdateLinkProperties(pContext))
+        bForce = TRUE;
     ParaNdis_IndicateConnect(pContext, bConnected, bForce);
 }
 
@@ -2247,7 +2280,7 @@ ULONG ParaNdis_DPCWorkBody(PARANDIS_ADAPTER *pContext, ULONG ulMaxPacketsToIndic
             InterlockedExchange(&pContext->bDPCInactive, 0);
             interruptSources = InterlockedExchange(&pContext->InterruptStatus, 0);
             ParaNdis_DebugHistory(pContext, hopDPC, (PVOID)1, interruptSources, 0, 0);
-            if ((interruptSources & isControl) && pContext->bLinkDetectSupported)
+            if ((interruptSources & isControl) && (pContext->bLinkDetectSupported || pContext->bSpeedDuplexSupported))
             {
                 ParaNdis_ReportLinkStatus(pContext, FALSE);
             }

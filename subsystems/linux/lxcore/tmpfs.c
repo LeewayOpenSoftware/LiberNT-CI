@@ -394,6 +394,215 @@ LxTmpfsCreate(
     return Fs;
 }
 
+static
+BOOLEAN
+LxTmpfsMemparse(
+    _Inout_ PCSTR *Cursor,
+    _Out_ PULONG64 Value)
+{
+    PCSTR Text = *Cursor;
+    ULONG64 Number = 0;
+    ULONG Base = 10, Shift = 0, Digit;
+    BOOLEAN Any = FALSE;
+
+    if ((Text[0] == '0') && ((Text[1] == 'x') || (Text[1] == 'X')))
+    {
+        Base = 16;
+        Text += 2;
+    }
+    else if (Text[0] == '0')
+    {
+        Base = 8;
+    }
+    for (;; Text++)
+    {
+        if ((*Text >= '0') && (*Text <= '9'))
+            Digit = *Text - '0';
+        else if ((*Text >= 'a') && (*Text <= 'f'))
+            Digit = *Text - 'a' + 10;
+        else if ((*Text >= 'A') && (*Text <= 'F'))
+            Digit = *Text - 'A' + 10;
+        else
+            break;
+        if (Digit >= Base)
+            break;
+        Number = Number * Base + Digit;
+        Any = TRUE;
+    }
+    if (!Any)
+        return FALSE;
+    switch (*Text | 0x20)
+    {
+        case 'k': Shift = 10; break;
+        case 'm': Shift = 20; break;
+        case 'g': Shift = 30; break;
+        case 't': Shift = 40; break;
+        case 'p': Shift = 50; break;
+        case 'e': Shift = 60; break;
+        default: break;
+    }
+    if (Shift != 0)
+        Text++;
+    *Value = Number << Shift;
+    *Cursor = Text;
+    return TRUE;
+}
+
+static
+BOOLEAN
+LxTmpfsOptionIs(
+    _In_reads_(Length) PCSTR Key,
+    _In_ SIZE_T Length,
+    _In_z_ PCSTR Name)
+{
+    return (strlen(Name) == Length) && (RtlCompareMemory(Key, Name, Length) == Length);
+}
+
+LONG
+LxTmpfsParseOptions(
+    _In_ PLX_PROCESS Process,
+    _In_opt_ PCSTR Data,
+    _Inout_ PLX_TMPFS_OPTIONS Options)
+{
+    static const PCSTR SuperblockFlags[] =
+    {
+        "dirsync", "nodirsync", "lazytime", "nolazytime", "mand", "nomand", "ro", "rw", "sync", "async",
+    };
+    LX_MEMORY_STATE State;
+    PCSTR Cursor = Data;
+
+    while ((Cursor != NULL) && (*Cursor != '\0'))
+    {
+        PCSTR Key = Cursor, Value = NULL, End;
+        SIZE_T KeyLength;
+        ULONG64 Number;
+        ULONG Index, Id;
+
+        End = strchr(Cursor, ',');
+        if (End == NULL)
+            End = Cursor + strlen(Cursor);
+        Cursor = (*End == ',') ? End + 1 : End;
+        if (End == Key)
+            continue;
+        for (KeyLength = 0; (Key + KeyLength < End) && (Key[KeyLength] != '='); KeyLength++)
+        {
+        }
+        if (Key + KeyLength < End)
+            Value = Key + KeyLength + 1;
+
+        for (Index = 0; Index < RTL_NUMBER_OF(SuperblockFlags); Index++)
+        {
+            if ((Value == NULL) && LxTmpfsOptionIs(Key, KeyLength, SuperblockFlags[Index]))
+                break;
+        }
+        if (Index < RTL_NUMBER_OF(SuperblockFlags))
+            continue;
+
+        if (LxTmpfsOptionIs(Key, KeyLength, "inode32") || LxTmpfsOptionIs(Key, KeyLength, "inode64"))
+        {
+            if (Value != NULL)
+                return -LX_EINVAL;
+            continue;
+        }
+        if (LxTmpfsOptionIs(Key, KeyLength, "noswap"))
+        {
+            if ((Value != NULL) || (LxCredUserNs(Process)->Parent != NULL) || !LxCapable(Process, LX_CAP_SYS_ADMIN))
+                return -LX_EINVAL;
+            continue;
+        }
+        if (LxTmpfsOptionIs(Key, KeyLength, "huge"))
+        {
+            if ((Value == NULL) || (End - Value != 5) || (RtlCompareMemory(Value, "never", 5) != 5))
+                return -LX_EINVAL;
+            continue;
+        }
+        if (Value == NULL)
+            return -LX_EINVAL;
+        if (LxTmpfsOptionIs(Key, KeyLength, "size"))
+        {
+            PCSTR Rest = Value;
+
+            if (!LxTmpfsMemparse(&Rest, &Number))
+                return -LX_EINVAL;
+            if (*Rest == '%')
+            {
+                LxQueryMemoryState(&State);
+                Number = (State.Total / 100) * Number + ((State.Total % 100) * Number) / 100;
+                Rest++;
+            }
+            if (Rest != End)
+                return -LX_EINVAL;
+            Options->Blocks = (Number + LX_PAGE_SIZE - 1) / LX_PAGE_SIZE;
+            Options->SeenBlocks = TRUE;
+        }
+        else if (LxTmpfsOptionIs(Key, KeyLength, "nr_blocks") || LxTmpfsOptionIs(Key, KeyLength, "nr_inodes"))
+        {
+            PCSTR Rest = Value;
+
+            if (!LxTmpfsMemparse(&Rest, &Number) || (Rest != End) || (Number > MAXLONG64))
+                return -LX_EINVAL;
+            if (Key[3] == 'b')
+            {
+                Options->Blocks = Number;
+                Options->SeenBlocks = TRUE;
+            }
+            else
+            {
+                Options->Inodes = Number;
+                Options->SeenInodes = TRUE;
+            }
+        }
+        else if (LxTmpfsOptionIs(Key, KeyLength, "mode"))
+        {
+            ULONG Mode = 0;
+            PCSTR Digit;
+
+            for (Digit = Value; (Digit < End) && (*Digit >= '0') && (*Digit <= '7'); Digit++)
+                Mode = (Mode << 3) | (ULONG)(*Digit - '0');
+            if ((Digit == Value) || (Digit != End) || (End - Value > 11))
+                return -LX_EINVAL;
+            Options->Mode = Mode & 07777;
+        }
+        else if (LxTmpfsOptionIs(Key, KeyLength, "uid") || LxTmpfsOptionIs(Key, KeyLength, "gid"))
+        {
+            PCSTR Rest = Value;
+
+            Number = 0;
+            for (; (Rest < End) && (*Rest >= '0') && (*Rest <= '9'); Rest++)
+                Number = Number * 10 + (ULONG)(*Rest - '0');
+            if ((Rest == Value) || (Rest != End) || (Number >= MAXULONG))
+                return -LX_EINVAL;
+            Id = LxIdToKernel(LxCredUserNs(Process), Key[0] == 'g', (ULONG)Number);
+            if (Id == MAXULONG)
+                return -LX_EINVAL;
+            if (Key[0] == 'g')
+                Options->Gid = Id;
+            else
+                Options->Uid = Id;
+        }
+        else
+        {
+            return -LX_EINVAL;
+        }
+    }
+    return 0;
+}
+
+VOID
+LxTmpfsApplyOptions(
+    _In_ PLX_TMPFS Fs,
+    _In_ PLX_TMPFS_OPTIONS Options)
+{
+    Fs->Root->Mode = LX_S_IFDIR | Options->Mode;
+    Fs->Root->Uid = Options->Uid;
+    Fs->Root->Gid = Options->Gid;
+    if (Options->SeenBlocks)
+        Fs->Limit = ((Options->Blocks == 0) || (Options->Blocks > MAXULONG64 / LX_PAGE_SIZE)) ?
+                    MAXULONG64 : Options->Blocks * LX_PAGE_SIZE;
+    if (Options->SeenInodes)
+        Fs->InodeLimit = ((Options->Inodes == 0) || (Options->Inodes > MAXLONG)) ? MAXLONG : (LONG)Options->Inodes;
+}
+
 VOID
 LxTmpfsInitialize(VOID)
 {

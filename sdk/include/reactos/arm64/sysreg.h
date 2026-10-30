@@ -43,6 +43,7 @@
 #define ARM64_SR_S3_0_C0_C4_0       ARM64_SR_ENCODE(3, 0, 0, 4, 0)
 #define ARM64_SR_S3_0_C0_C4_1       ARM64_SR_ENCODE(3, 0, 0, 4, 1)
 #define ARM64_SR_S3_0_C0_C4_4       ARM64_SR_ENCODE(3, 0, 0, 4, 4)
+#define ARM64_SR_S3_0_C0_C5_0       ARM64_SR_ENCODE(3, 0, 0, 5, 0)
 #define ARM64_SR_S3_0_C0_C6_0       ARM64_SR_ENCODE(3, 0, 0, 6, 0)
 #define ARM64_SR_S3_0_C0_C6_1       ARM64_SR_ENCODE(3, 0, 0, 6, 1)
 #define ARM64_SR_S3_0_C0_C6_2       ARM64_SR_ENCODE(3, 0, 0, 6, 2)

@@ -599,7 +599,8 @@ INT DIALOG_DoDialogBox( HWND hwnd, HWND owner )
                 if (bFirstEmpty)
                 {
                     /* ShowWindow the first time the queue goes empty */
-                    ShowWindow( hwnd, SW_SHOWNORMAL );
+                    if (!ShowWindow( hwnd, SW_SHOWNORMAL ))
+                        IntNotifyWinEvent(EVENT_SYSTEM_DIALOGSTART, hwnd, OBJID_WINDOW, CHILDID_SELF, 0);
                     bFirstEmpty = FALSE;
                 }
                 if (!(GetWindowLongPtrW( hwnd, GWL_STYLE ) & DS_NOIDLEMSG))
@@ -1147,8 +1148,6 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
         {
            ShowWindow( hwnd, SW_SHOWNORMAL );   /* SW_SHOW doesn't always work */
            UpdateWindow( hwnd );
-           if (modal_owner)
-               IntNotifyWinEvent(EVENT_SYSTEM_DIALOGSTART, hwnd, OBJID_WINDOW, CHILDID_SELF, 0);
         }
         return hwnd;
     }

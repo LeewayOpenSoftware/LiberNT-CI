@@ -12,6 +12,8 @@
 
 #include "precomp.h"
 
+#include <icmp.h>
+
 LIST_ENTRY ReassemblyListHead;
 KSPIN_LOCK ReassemblyListLock;
 NPAGED_LOOKASIDE_LIST IPDRList;
@@ -628,6 +630,13 @@ VOID IPv4Forward(PIP_INTERFACE IF, PIP_PACKET IPPacket)
         return;
     if (NCE->Interface == IF || !NCE->Interface->Forwarding)
     {
+        NBDereferenceNeighbor(NCE);
+        return;
+    }
+    if ((WN2H(((PIPv4_HEADER)IPPacket->Header)->FlagsFragOfs) & IPv4_DF_MASK) &&
+        IPPacket->TotalSize > NCE->Interface->MTU)
+    {
+        ICMPSendFragmentationNeeded(IF, IPPacket, NCE->Interface->MTU);
         NBDereferenceNeighbor(NCE);
         return;
     }

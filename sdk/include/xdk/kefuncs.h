@@ -1326,6 +1326,12 @@ KeQueryLogicalProcessorRelationship(
   _Out_writes_bytes_opt_(*Length) PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX Information,
   _Inout_ PULONG Length);
 
+_IRQL_requires_min_(DISPATCH_LEVEL)
+NTKERNELAPI
+LOGICAL
+NTAPI
+KeShouldYieldProcessor(VOID);
+
 $endif (_WDMDDK_ || _NTDDK_)
 
 $if (_WDMDDK_)

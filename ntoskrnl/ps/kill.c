@@ -224,7 +224,8 @@ PspCheckProcessList(VOID)
 {
     PLIST_ENTRY Entry;
 
-    KeAcquireGuardedMutex(&PspActiveProcessMutex);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&PspActiveProcessLock);
     DbgPrint("# checking PsActiveProcessHead @ %p\n", &PsActiveProcessHead);
     for (Entry = PsActiveProcessHead.Flink;
          Entry != &PsActiveProcessHead;
@@ -259,7 +260,8 @@ PspCheckProcessList(VOID)
         ExpCheckPoolAllocation(HeaderLocation, NonPagedPool, 'corP');
     }
 
-    KeReleaseGuardedMutex(&PspActiveProcessMutex);
+    ExReleasePushLockShared(&PspActiveProcessLock);
+    KeLeaveCriticalRegion();
 }
 #endif
 
@@ -277,11 +279,13 @@ PspDeleteProcess(IN PVOID ObjectBody)
     if (Process->ActiveProcessLinks.Flink)
     {
         /* Remove it from the Active List */
-        KeAcquireGuardedMutex(&PspActiveProcessMutex);
+        KeEnterCriticalRegion();
+        ExAcquirePushLockExclusive(&PspActiveProcessLock);
         RemoveEntryList(&Process->ActiveProcessLinks);
         Process->ActiveProcessLinks.Flink = NULL;
         Process->ActiveProcessLinks.Blink = NULL;
-        KeReleaseGuardedMutex(&PspActiveProcessMutex);
+        ExReleasePushLockExclusive(&PspActiveProcessLock);
+        KeLeaveCriticalRegion();
     }
 
     /* Check for Auditing information */

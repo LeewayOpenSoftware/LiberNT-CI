@@ -164,7 +164,6 @@ typedef struct _IP_INTERFACE {
     UINT  MinFrameSize;           /* Minimum frame size in bytes */
     UINT  MTU;                    /* Maximum transmission unit */
     UINT  Speed;                  /* Link speed */
-    UINT  Metric;                 /* Interface metric */
     IP_ADDRESS Unicast;           /* Unicast address */
     IP_ADDRESS PointToPoint;      /* Point to point address */
     IP_ADDRESS Netmask;           /* Netmask */
@@ -178,6 +177,9 @@ typedef struct _IP_INTERFACE {
     PVOID TCPContext;             /* TCP Content for this interface */
     SEND_RECV_STATS Stats;        /* Send/Receive statistics */
     BOOLEAN Wireless;
+    BOOLEAN HalfDuplex;
+    ULONG PhysicalMedium;
+    ULONG64 TransmitLinkSpeed;
     BOOLEAN ManualMetric;
     UINT  InterfaceMetric;
     BOOLEAN Forwarding;
@@ -195,6 +197,7 @@ typedef struct _IP_INTERFACE {
     ULONG LinkLocalAddressTimeout;
     ULONG SitePrefixLength;
     ULONG ZoneIndices[16];
+    BOOLEAN DhcpRouterDiscovery;
 } IP_INTERFACE, *PIP_INTERFACE;
 
 typedef struct _IP_NTE {
@@ -207,6 +210,10 @@ typedef struct _IP_NTE {
     ULONG Instance;
     BOOLEAN RouteOwner;
     PVOID TCPContext;
+    ULONG DadState;
+    ULONG DadProbes;
+    ULONGLONG DadNext;
+    LARGE_INTEGER Created;
 } IP_NTE, *PIP_NTE;
 
 typedef struct _IP_SET_ADDRESS {

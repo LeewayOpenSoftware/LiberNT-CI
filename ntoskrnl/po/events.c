@@ -557,18 +557,18 @@ PoNotifySystemTimeSet(VOID)
     KIRQL OldIrql;
     WIN32_POWEREVENT_PARAMETERS Parameters;
 
+    /* Raise to dispatch */
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+
+    /* Notify the callback */
+    ExNotifyCallback(SetSystemTimeCallback, NULL, NULL);
+
+    /* Lower IRQL back */
+    KeLowerIrql(OldIrql);
+
     /* Check if Win32k registered a notification callback */
     if (PopEventCallout)
     {
-        /* Raise to dispatch */
-        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-        /* Notify the callback */
-        ExNotifyCallback(SetSystemTimeCallback, NULL, NULL);
-
-        /* Lower IRQL back */
-        KeLowerIrql(OldIrql);
-
         Parameters.EventNumber = PsW32SystemTime;
         Parameters.Code = 0;
         (VOID)PopEventCallout(&Parameters);

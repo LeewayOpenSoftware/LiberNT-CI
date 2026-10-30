@@ -10,6 +10,8 @@
 
 #include "precomp.h"
 
+#include <icmp.h>
+
 NEIGHBOR_CACHE_TABLE NeighborCache[NB_HASHMASK + 1];
 
 VOID NBReferenceNeighbor(PNEIGHBOR_CACHE_ENTRY NCE)
@@ -178,6 +180,8 @@ VOID NBTimeout(VOID)
                     if (NCE->EventCount == ARP_INCOMPLETE_TIMEOUT)
                     {
                         NBFlushPacketQueue(NCE, NDIS_STATUS_NETWORK_UNREACHABLE);
+                        if (NCE->Address.Type == IP_ADDRESS_V4)
+                            PathUnreachable(NCE->Interface, NCE->Address.Address.IPv4Address);
                         NCE->EventCount = 0;
                     }
                 }
@@ -206,6 +210,8 @@ VOID NBTimeout(VOID)
                     {
                         /* We couldn't get an address to this IP at all */
                         Status = NDIS_STATUS_HOST_UNREACHABLE;
+                        if (NCE->Address.Type == IP_ADDRESS_V4)
+                            PathUnreachable(NCE->Interface, NCE->Address.Address.IPv4Address);
                     }
                     else
                     {

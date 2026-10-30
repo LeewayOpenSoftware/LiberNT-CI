@@ -2433,7 +2433,7 @@ NTSTATUS
 NTAPI
 TcpciLibraryBindClient(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS *ClientGlobals)
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals)
 {
     return WdfCxBindClient(ClassBindInfo, ClientGlobals, (PVOID const *)TcpciFunctions, RTL_NUMBER_OF(TcpciFunctions), 1);
 }
@@ -2443,7 +2443,7 @@ VOID
 NTAPI
 TcpciLibraryUnbindClient(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS *ClientGlobals)
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals)
 {
     UNREFERENCED_PARAMETER(ClientGlobals);
     WdfCxUnbindClient(ClassBindInfo);

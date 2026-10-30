@@ -11,6 +11,17 @@ DBG_DEFAULT_CHANNEL(UserProp);
 
 /* STATIC FUNCTIONS **********************************************************/
 
+static
+WORD
+IntPropertyFlags(
+    _In_ ATOM Atom,
+    _In_ BOOLEAN SystemProp)
+{
+    if (SystemProp)
+        return PROPERTY_FLAG_SYSTEM;
+    return IntIsPrivatePropertyAtom(Atom) ? (PROPERTY_FLAG_SYSTEM | PROPERTY_FLAG_PRIVATE) : 0;
+}
+
 PPROPERTY
 FASTCALL
 IntGetProp(
@@ -21,7 +32,7 @@ IntGetProp(
     PLIST_ENTRY ListEntry;
     PPROPERTY Property;
     UINT i;
-    WORD SystemFlag = SystemProp ? PROPERTY_FLAG_SYSTEM : 0;
+    WORD SystemFlag = IntPropertyFlags(Atom, SystemProp);
 
     NT_ASSERT(UserIsEntered());
     ListEntry = Window->PropListHead.Flink;
@@ -32,7 +43,7 @@ IntGetProp(
         ListEntry = ListEntry->Flink;
 
         if (Property->Atom == Atom &&
-            (Property->fs & PROPERTY_FLAG_SYSTEM) == SystemFlag)
+            (Property->fs & (PROPERTY_FLAG_SYSTEM | PROPERTY_FLAG_PRIVATE)) == SystemFlag)
         {
             return Property;
         }
@@ -101,7 +112,7 @@ UserSetProp(
             return FALSE;
         }
         Prop->Atom = Atom;
-        Prop->fs = SystemProp ? PROPERTY_FLAG_SYSTEM : 0;
+        Prop->fs = IntPropertyFlags(Atom, SystemProp);
         InsertTailList(&Window->PropListHead, &Prop->PropListEntry);
         Window->PropListItems++;
     }

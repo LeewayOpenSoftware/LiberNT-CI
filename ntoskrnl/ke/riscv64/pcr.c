@@ -8,6 +8,7 @@
 #include <ntoskrnl.h>
 
 static DECLSPEC_ALIGN(16) UCHAR KiRiscvPanicStack[KERNEL_STACK_SIZE];
+KSCHEDULER_SUBNODE KiNode0SubNode;
 
 ULONG
 NTAPI
@@ -85,7 +86,25 @@ KiRiscvInitializePcr(PKPCR Pcr, PKTHREAD Thread, ULONG_PTR HartId,
     Prcb->ParentNode = &KiNode0;
     Prcb->MultiThreadProcessorSet = Prcb->SetMember;
     Prcb->MultiThreadSetMaster = Prcb;
+    Prcb->GroupIndex = (UCHAR)Number;
+    Prcb->CoresPerPhysicalProcessor = 1;
+    Prcb->LogicalProcessorsPerCore = 1;
+    Prcb->CoreProcessorSet = Prcb->SetMember;
+    Prcb->SchedulerSubNode = &KiNode0SubNode;
     KiInitSpinLocks(Prcb, Number);
 
     Pcr->KdVersionBlock = Number ? KeGetPcr()->KdVersionBlock : NULL;
+}
+
+VOID
+NTAPI
+KiRiscvJoinSchedulerSubNode(_In_ PKPRCB Prcb)
+{
+    PKSCHEDULER_SUBNODE SubNode = Prcb->SchedulerSubNode;
+
+    InterlockedOr64((PLONG64)&SubNode->Affinity, (LONG64)Prcb->SetMember);
+    InterlockedOr64((PLONG64)&SubNode->SiblingMask, (LONG64)Prcb->SetMember);
+    InterlockedOr64((PLONG64)&SubNode->NonParkedSet, (LONG64)Prcb->SetMember);
+    if (Prcb->Number > SubNode->Highest)
+        SubNode->Highest = Prcb->Number;
 }

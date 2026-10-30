@@ -93,7 +93,6 @@ LxInstallNewFile(
     return Fd;
 }
 
-static
 LONG
 LxAnonStat(
     _In_ PLX_FILE File,
@@ -239,7 +238,6 @@ static const LX_FILE_OPS LxNullOps =
     NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL
 };
 
-static
 PLX_FILE
 LxAnonFileCreate(
     _In_ const LX_FILE_OPS *Ops,

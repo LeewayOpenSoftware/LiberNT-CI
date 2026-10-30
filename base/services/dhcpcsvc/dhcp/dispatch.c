@@ -71,7 +71,8 @@ dispatch(HANDLE hStopEvent)
 {
     int count, to_msec;
     struct protocol *l;
-    time_t howlong, cur_time;
+    time_t howlong;
+    ULONGLONG now_ms;
     HANDLE Events[3];
     int EventCount = 2;
 
@@ -86,13 +87,13 @@ dispatch(HANDLE hStopEvent)
          * Call any expired timeouts, and then if there's still
          * a timeout registered, time out the select call then.
          */
-        cur_time = GetMonotonicTime();
+        now_ms = GetTickCount64();
 
         if (timeouts)
         {
             struct timeout *t;
 
-            if (timeouts->when <= cur_time) {
+            if (timeouts->when_ms <= now_ms) {
                 t = timeouts;
                 timeouts = timeouts->next;
                 (*(t->func))(t->what);
@@ -107,10 +108,11 @@ dispatch(HANDLE hStopEvent)
              * int for poll, while not polling with a
              * negative timeout and blocking indefinitely.
              */
-            howlong = timeouts->when - cur_time;
-            if (howlong > INT_MAX / 1000)
-                howlong = INT_MAX / 1000;
-            to_msec = howlong * 1000;
+            howlong = (time_t)((timeouts->when_ms - now_ms) / 1000);
+            if (howlong >= INT_MAX / 1000)
+                to_msec = INT_MAX;
+            else
+                to_msec = (int)(timeouts->when_ms - now_ms);
         }
         else
         {
@@ -254,7 +256,14 @@ got_one(struct protocol *l)
 void
 add_timeout(time_t when, void (*where)(void *), void *what)
 {
+    add_timeout_ms((ULONGLONG)when * 1000, where, what);
+}
+
+void
+add_timeout_ms(ULONGLONG when_ms, void (*where)(void *), void *what)
+{
     struct timeout *t, *q;
+    time_t when = (time_t)(when_ms / 1000);
 
     DH_DbgPrint(MID_TRACE,("Adding timeout %x %p %x\n", when, where, what));
     /* See if this timeout supersedes an existing timeout. */
@@ -290,11 +299,12 @@ add_timeout(time_t when, void (*where)(void *), void *what)
     }
 
     q->when = when;
+    q->when_ms = when_ms;
 
     /* Now sort this timeout into the timeout list. */
 
     /* Beginning of list? */
-    if (!timeouts || timeouts->when > q->when) {
+    if (!timeouts || timeouts->when_ms > q->when_ms) {
         q->next = timeouts;
         timeouts = q;
         return;
@@ -302,7 +312,7 @@ add_timeout(time_t when, void (*where)(void *), void *what)
 
     /* Middle of list? */
     for (t = timeouts; t->next; t = t->next) {
-        if (t->next->when > q->when) {
+        if (t->next->when_ms > q->when_ms) {
             q->next = t->next;
             t->next = q;
             return;

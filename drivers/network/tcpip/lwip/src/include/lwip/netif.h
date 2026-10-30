@@ -368,6 +368,10 @@ struct netif {
 #if LWIP_IPV6
   u16_t ip6_dad_sent[LWIP_IPV6_NUM_ADDRESSES];
   u32_t ip6_dad_next[LWIP_IPV6_NUM_ADDRESSES];
+  u32_t ip6_addr_created[LWIP_IPV6_NUM_ADDRESSES];
+#if LWIP_IPV6_MLD
+  u16_t mld6_v1_timer;
+#endif
 #endif /* LWIP_IPV6 */
 #if MIB2_STATS
   /** link type (from "snmp_ifType" enum from snmp_mib2.h) */

@@ -9,33 +9,132 @@
 
 #include "ccnt.h"
 
-KSPIN_LOCK CcNtMapListLock;
-LIST_ENTRY CcNtMapList;
-static ULONG CcNtClosedMapCount;
+CC_NT_MAP_BUCKET CcNtMapBuckets[CC_NT_MAP_BUCKETS];
+static volatile LONG CcNtClosedMapCount;
+
+VOID
+CcNtInitializeMapTable(VOID)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < CC_NT_MAP_BUCKETS; Index++)
+    {
+        CC_LOCK_INIT(&CcNtMapBuckets[Index].Lock);
+        InitializeListHead(&CcNtMapBuckets[Index].List);
+    }
+    CcNtClosedMapCount = 0;
+}
+
+PCC_NT_MAP_BUCKET
+CcNtMapBucket(
+    _In_ PSECTION_OBJECT_POINTERS Pointers)
+{
+    ULONG_PTR Value = (ULONG_PTR)Pointers >> 4;
+
+    return &CcNtMapBuckets[(Value ^ (Value >> 6) ^ (Value >> 12)) & (CC_NT_MAP_BUCKETS - 1)];
+}
+
+static
+VOID
+CcNtReviveMap(
+    _Inout_ PCC_NT_MAP NtMap)
+{
+    if (NtMap->Closing)
+    {
+        NtMap->Closing = FALSE;
+        CC_ATOMIC_ADD32(&CcNtClosedMapCount, -1);
+    }
+    CC_ATOMIC_ADD32(&NtMap->ReferenceCount, 1);
+}
+
+PCC_NT_MAP
+CcNtInsertMap(
+    _Inout_ PCC_NT_MAP Fresh)
+{
+    PCC_NT_MAP_BUCKET Bucket = CcNtMapBucket(Fresh->Pointers);
+    PCC_NT_MAP NtMap;
+    KIRQL OldIrql;
+
+    CC_LOCK_ACQUIRE(&Bucket->Lock, &OldIrql);
+    NtMap = Fresh->Pointers->SharedCacheMap;
+    if (NtMap == NULL)
+    {
+        Fresh->Pointers->SharedCacheMap = Fresh;
+        InsertTailList(&Bucket->List, &Fresh->Link);
+        NtMap = Fresh;
+    }
+    else
+    {
+        CcNtReviveMap(NtMap);
+    }
+    CC_LOCK_RELEASE(&Bucket->Lock, OldIrql);
+
+    return NtMap;
+}
+
+VOID
+CcNtLinkMap(
+    _Inout_ PCC_NT_MAP NtMap)
+{
+    PCC_NT_MAP_BUCKET Bucket = CcNtMapBucket(NtMap->Pointers);
+    KIRQL OldIrql;
+
+    CC_LOCK_ACQUIRE(&Bucket->Lock, &OldIrql);
+    InsertTailList(&Bucket->List, &NtMap->Link);
+    CC_LOCK_RELEASE(&Bucket->Lock, OldIrql);
+}
+
+BOOLEAN
+CcNtIsMapTableEmpty(VOID)
+{
+    ULONG Index;
+
+    for (Index = 0; Index < CC_NT_MAP_BUCKETS; Index++)
+    {
+        if (!IsListEmpty(&CcNtMapBuckets[Index].List))
+            return FALSE;
+    }
+
+    return TRUE;
+}
 
 PCC_NT_MAP
 CcNtReferenceMap(
     _In_ PSECTION_OBJECT_POINTERS Pointers)
 {
+    PCC_NT_MAP_BUCKET Bucket;
     PCC_NT_MAP NtMap;
     KIRQL OldIrql;
 
     if (Pointers == NULL)
         return NULL;
 
-    CC_LOCK_ACQUIRE(&CcNtMapListLock, &OldIrql);
+    Bucket = CcNtMapBucket(Pointers);
+    CC_LOCK_ACQUIRE(&Bucket->Lock, &OldIrql);
     NtMap = Pointers->SharedCacheMap;
     if (NtMap != NULL)
-    {
-        if (NtMap->Closing)
-        {
-            NtMap->Closing = FALSE;
-            CcNtClosedMapCount--;
-        }
-        CC_ATOMIC_ADD32(&NtMap->ReferenceCount, 1);
-    }
-    CC_LOCK_RELEASE(&CcNtMapListLock, OldIrql);
+        CcNtReviveMap(NtMap);
+    CC_LOCK_RELEASE(&Bucket->Lock, OldIrql);
 
+    return NtMap;
+}
+
+PCC_NT_MAP
+CcNtReferenceFileMap(
+    _In_ PFILE_OBJECT FileObject)
+{
+    PSECTION_OBJECT_POINTERS Pointers = FileObject->SectionObjectPointer;
+    PCC_NT_MAP NtMap;
+
+    if (Pointers == NULL || FileObject->PrivateCacheMap == NULL)
+        return CcNtReferenceMap(Pointers);
+
+    NtMap = Pointers->SharedCacheMap;
+    if (NtMap == NULL)
+        return CcNtReferenceMap(Pointers);
+
+    ASSERT(!NtMap->Closing);
+    CC_ATOMIC_ADD32(&NtMap->ReferenceCount, 1);
     return NtMap;
 }
 
@@ -49,7 +148,7 @@ CcNtUnlinkMap(
     if (NtMap->Closing)
     {
         NtMap->Closing = FALSE;
-        CcNtClosedMapCount--;
+        CC_ATOMIC_ADD32(&CcNtClosedMapCount, -1);
     }
     RemoveEntryList(&NtMap->Link);
     InitializeListHead(&NtMap->Link);
@@ -59,20 +158,32 @@ VOID
 CcNtDereferenceMap(
     _Inout_ PCC_NT_MAP NtMap)
 {
+    PCC_NT_MAP_BUCKET Bucket;
     BOOLEAN Destroy = FALSE;
     KIRQL OldIrql;
+    LONG Count = CC_ATOMIC_READ32(&NtMap->ReferenceCount);
 
-    CC_LOCK_ACQUIRE(&CcNtMapListLock, &OldIrql);
+    while (Count > 1)
+    {
+        LONG Previous = CC_ATOMIC_CAS32(&NtMap->ReferenceCount, Count - 1, Count);
+
+        if (Previous == Count)
+            return;
+        Count = Previous;
+    }
+
+    Bucket = CcNtMapBucket(NtMap->Pointers);
+    CC_LOCK_ACQUIRE(&Bucket->Lock, &OldIrql);
     if (CC_ATOMIC_ADD32(&NtMap->ReferenceCount, -1) == 1 && NtMap->Map.OpenCount == 0 &&
         CC_ATOMIC_READ64(&NtMap->Map.DirtyPages) == 0)
     {
         if (NtMap->UninitializeEvent == NULL && !NtMap->PurgeOnClose && NtMap->Map.FileSize != 0 &&
-            (NtMap->Closing || CcNtClosedMapCount < 128))
+            (NtMap->Closing || CC_ATOMIC_READ32(&CcNtClosedMapCount) < 128))
         {
             if (!NtMap->Closing)
             {
                 NtMap->Closing = TRUE;
-                CcNtClosedMapCount++;
+                CC_ATOMIC_ADD32(&CcNtClosedMapCount, 1);
             }
         }
         else
@@ -81,7 +192,7 @@ CcNtDereferenceMap(
             Destroy = TRUE;
         }
     }
-    CC_LOCK_RELEASE(&CcNtMapListLock, OldIrql);
+    CC_LOCK_RELEASE(&Bucket->Lock, OldIrql);
 
     if (Destroy)
         CcNtDestroyMap(NtMap);
@@ -91,40 +202,54 @@ VOID
 CcNtExpireClosedMaps(VOID)
 {
     ULONG Remaining = 128;
+    ULONG Index;
 
-    while (Remaining-- != 0)
+    for (Index = 0; (Index < CC_NT_MAP_BUCKETS) && (Remaining != 0); Index++)
     {
-        PCC_NT_MAP Found = NULL;
-        PLIST_ENTRY Entry;
+        PCC_NT_MAP_BUCKET Bucket = &CcNtMapBuckets[Index];
+        PCC_NT_MAP Expired[16];
+        ULONG Batch = min(Remaining, RTL_NUMBER_OF(Expired));
+        ULONG Found = 0;
+        ULONG Destroyed;
+        PLIST_ENTRY Entry, Next;
         KIRQL OldIrql;
 
-        CC_LOCK_ACQUIRE(&CcNtMapListLock, &OldIrql);
-        for (Entry = CcNtMapList.Flink; Entry != &CcNtMapList; Entry = Entry->Flink)
+        if (CC_ATOMIC_READ32(&CcNtClosedMapCount) == 0)
+            break;
+
+        CC_LOCK_ACQUIRE(&Bucket->Lock, &OldIrql);
+        for (Entry = Bucket->List.Flink; (Entry != &Bucket->List) && (Found < Batch); Entry = Next)
         {
             PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
 
+            Next = Entry->Flink;
             if (NtMap->Closing && NtMap->ReferenceCount == 0 && NtMap->Map.OpenCount == 0 &&
                 CC_ATOMIC_READ64(&NtMap->Map.DirtyPages) == 0)
             {
                 CcNtUnlinkMap(NtMap);
-                Found = NtMap;
-                break;
+                Expired[Found++] = NtMap;
             }
         }
-        CC_LOCK_RELEASE(&CcNtMapListLock, OldIrql);
-        if (Found == NULL)
-            break;
-        CcNtDestroyMap(Found);
+        CC_LOCK_RELEASE(&Bucket->Lock, OldIrql);
+
+        for (Destroyed = 0; Destroyed < Found; Destroyed++)
+            CcNtDestroyMap(Expired[Destroyed]);
+
+        Remaining -= Found;
+        if (Found == Batch)
+            Index--;
     }
 }
 
 VOID
-CcNtMapListBarrier(VOID)
+CcNtMapBarrier(
+    _In_ PCC_NT_MAP NtMap)
 {
+    PCC_NT_MAP_BUCKET Bucket = CcNtMapBucket(NtMap->Pointers);
     KIRQL OldIrql;
 
-    CC_LOCK_ACQUIRE(&CcNtMapListLock, &OldIrql);
-    CC_LOCK_RELEASE(&CcNtMapListLock, OldIrql);
+    CC_LOCK_ACQUIRE(&Bucket->Lock, &OldIrql);
+    CC_LOCK_RELEASE(&Bucket->Lock, OldIrql);
 }
 
 static
@@ -165,7 +290,7 @@ CcNtCompleteDestroyMap(
         MiSegmentDereference(Segment);
 
     ObDereferenceObject(NtMap->FileObject);
-    CcNtMapListBarrier();
+    CcNtMapBarrier(NtMap);
     ExFreePoolWithTag(NtMap, CC_NT_MAP_TAG);
 
     if (Event != NULL)

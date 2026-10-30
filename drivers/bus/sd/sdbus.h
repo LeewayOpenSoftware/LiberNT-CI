@@ -75,6 +75,7 @@ typedef struct _FDO_EXTENSION {
     ULONG RegisterLength;
     BOOLEAN RegistersMapped;
     BOOLEAN NonRemovable;
+    BOOLEAN DisableWriteProtect;
 
     /* Controller register model; the BCM2835 SDHost backend lives in sdhost.c */
     SDBUS_HOST_TYPE HostType;

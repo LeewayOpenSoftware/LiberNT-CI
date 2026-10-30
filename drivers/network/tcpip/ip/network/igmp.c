@@ -149,7 +149,7 @@ static VOID IGMPTransmitReport(PIGMP_SEND Send)
 
     Header = Packet.Header;
     Header->VerIHL = 0x40 | (HeaderSize / 4);
-    Header->Tos = 0xc0;
+    Header->Tos = 0;
     Header->TotalLength = WH2N((USHORT)Packet.TotalSize);
     Header->Id = (USHORT)Random();
     Header->FlagsFragOfs = 0;
@@ -443,6 +443,17 @@ BOOLEAN IGMPIsMember(PVOID Owner, ULONG InterfaceIndex, IPv4_RAW_ADDRESS Group)
     }
     TcpipReleaseSpinLock(&IGMPLock, OldIrql);
     return Member;
+}
+
+BOOLEAN IGMPIsJoined(ULONG InterfaceIndex, IPv4_RAW_ADDRESS Group)
+{
+    BOOLEAN Joined;
+    KIRQL OldIrql;
+
+    TcpipAcquireSpinLock(&IGMPLock, &OldIrql);
+    Joined = IGMPFindGroup(InterfaceIndex, Group) != NULL;
+    TcpipReleaseSpinLock(&IGMPLock, OldIrql);
+    return Joined;
 }
 
 VOID IGMPTimeout(VOID)

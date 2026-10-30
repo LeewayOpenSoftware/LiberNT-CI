@@ -16,10 +16,17 @@
 #define TAG_WNF_DATA     'DfnW'
 #define TAG_WNF_SUB      'SfnW'
 
-static LIST_ENTRY ExpWnfNameListHead;
-static KGUARDED_MUTEX ExpWnfLock;
-static ULONG64 ExpWnfNextUnique = 1;
-static ULONG64 ExpWnfNextSubscriptionId = 1;
+#define WNF_NAME_BUCKET_COUNT 64
+
+typedef struct _WNF_NAME_BUCKET
+{
+    EX_PUSH_LOCK Lock;
+    LIST_ENTRY ListHead;
+} WNF_NAME_BUCKET, *PWNF_NAME_BUCKET;
+
+static WNF_NAME_BUCKET ExpWnfNameBuckets[WNF_NAME_BUCKET_COUNT];
+static LONG64 ExpWnfNextUnique;
+static LONG64 ExpWnfNextSubscriptionId;
 static BOOLEAN ExpWnfInitialized;
 
 /* PRIVATE FUNCTIONS *********************************************************/
@@ -29,8 +36,13 @@ BOOLEAN
 NTAPI
 ExpWnfInitialization(VOID)
 {
-    InitializeListHead(&ExpWnfNameListHead);
-    KeInitializeGuardedMutex(&ExpWnfLock);
+    ULONG Index;
+
+    for (Index = 0; Index < WNF_NAME_BUCKET_COUNT; Index++)
+    {
+        ExInitializePushLock(&ExpWnfNameBuckets[Index].Lock);
+        InitializeListHead(&ExpWnfNameBuckets[Index].ListHead);
+    }
     ExpWnfInitialized = TRUE;
     return TRUE;
 }
@@ -130,14 +142,88 @@ ExpWnfCaptureTypeId(PCWNF_TYPE_ID TypeId,
 }
 
 static
+PWNF_NAME_BUCKET
+ExpWnfNameBucket(ULONG64 InternalName)
+{
+    ULONG Hash = (ULONG)(InternalName ^ (InternalName >> 32)) * 0x9E3779B1;
+
+    return &ExpWnfNameBuckets[Hash >> 26];
+}
+
+static
+VOID
+ExpWnfLockBucketShared(PWNF_NAME_BUCKET Bucket)
+{
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&Bucket->Lock);
+}
+
+static
+VOID
+ExpWnfUnlockBucketShared(PWNF_NAME_BUCKET Bucket)
+{
+    ExReleasePushLockShared(&Bucket->Lock);
+    KeLeaveCriticalRegion();
+}
+
+static
+VOID
+ExpWnfLockBucketExclusive(PWNF_NAME_BUCKET Bucket)
+{
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&Bucket->Lock);
+}
+
+static
+VOID
+ExpWnfUnlockBucketExclusive(PWNF_NAME_BUCKET Bucket)
+{
+    ExReleasePushLockExclusive(&Bucket->Lock);
+    KeLeaveCriticalRegion();
+}
+
+static
+VOID
+ExpWnfLockShared(PEX_PUSH_LOCK Lock)
+{
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(Lock);
+}
+
+static
+VOID
+ExpWnfUnlockShared(PEX_PUSH_LOCK Lock)
+{
+    ExReleasePushLockShared(Lock);
+    KeLeaveCriticalRegion();
+}
+
+static
+VOID
+ExpWnfLockExclusive(PEX_PUSH_LOCK Lock)
+{
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(Lock);
+}
+
+static
+VOID
+ExpWnfUnlockExclusive(PEX_PUSH_LOCK Lock)
+{
+    ExReleasePushLockExclusive(Lock);
+    KeLeaveCriticalRegion();
+}
+
+static
 PWNF_NAME_INSTANCE
-ExpWnfLookupNameInstance(ULONG64 InternalName)
+ExpWnfFindNameInstance(PWNF_NAME_BUCKET Bucket,
+                       ULONG64 InternalName)
 {
     PLIST_ENTRY Entry;
     PWNF_NAME_INSTANCE Instance;
 
-    for (Entry = ExpWnfNameListHead.Flink;
-         Entry != &ExpWnfNameListHead;
+    for (Entry = Bucket->ListHead.Flink;
+         Entry != &Bucket->ListHead;
          Entry = Entry->Flink)
     {
         Instance = CONTAINING_RECORD(Entry, WNF_NAME_INSTANCE, NameListEntry);
@@ -149,20 +235,45 @@ ExpWnfLookupNameInstance(ULONG64 InternalName)
 }
 
 static
-NTSTATUS
-ExpWnfCreateNameInstance(PWNF_STATE_NAME_INTERNAL InternalName,
-                         PCWNF_TYPE_ID TypeId,
-                         ULONG MaximumStateSize,
-                         PSECURITY_DESCRIPTOR CapturedSd,
-                         PWNF_NAME_INSTANCE *OutInstance)
+PWNF_NAME_INSTANCE
+ExpWnfReferenceNameInstance(ULONG64 InternalName)
+{
+    PWNF_NAME_BUCKET Bucket = ExpWnfNameBucket(InternalName);
+    PWNF_NAME_INSTANCE Instance;
+
+    ExpWnfLockBucketShared(Bucket);
+    Instance = ExpWnfFindNameInstance(Bucket, InternalName);
+    if ((Instance != NULL) && !ExAcquireRundownProtection(&Instance->RunRef))
+        Instance = NULL;
+    ExpWnfUnlockBucketShared(Bucket);
+
+    return Instance;
+}
+
+static
+VOID
+ExpWnfDereferenceNameInstance(PWNF_NAME_INSTANCE Instance)
+{
+    ExReleaseRundownProtection(&Instance->RunRef);
+}
+
+static
+PWNF_NAME_INSTANCE
+ExpWnfAllocateNameInstance(PWNF_STATE_NAME_INTERNAL InternalName,
+                           PCWNF_TYPE_ID TypeId,
+                           ULONG MaximumStateSize,
+                           PSECURITY_DESCRIPTOR CapturedSd)
 {
     PWNF_NAME_INSTANCE Instance;
 
     Instance = ExAllocatePoolWithTag(PagedPool, sizeof(*Instance), TAG_WNF_INSTANCE);
     if (Instance == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
+        return NULL;
 
     RtlZeroMemory(Instance, sizeof(*Instance));
+    ExInitializeRundownProtection(&Instance->RunRef);
+    ExInitializePushLock(&Instance->StateDataLock);
+    ExInitializePushLock(&Instance->SubscriptionListLock);
     Instance->StateName.Value = InternalName->Value;
     Instance->Lifetime = (WNF_STATE_NAME_LIFETIME)InternalName->NameLifetime;
     Instance->DataScope = (WNF_DATA_SCOPE)InternalName->DataScope;
@@ -177,20 +288,39 @@ ExpWnfCreateNameInstance(PWNF_STATE_NAME_INTERNAL InternalName,
     Instance->SecurityDescriptor = CapturedSd;
     Instance->CreatorProcess = PsGetCurrentProcess();
     InitializeListHead(&Instance->SubscriptionListHead);
-    InsertTailList(&ExpWnfNameListHead, &Instance->NameListEntry);
+    return Instance;
+}
 
-    *OutInstance = Instance;
-    return STATUS_SUCCESS;
+static
+PWNF_NAME_INSTANCE
+ExpWnfInsertNameInstance(PWNF_NAME_INSTANCE Instance)
+{
+    PWNF_NAME_BUCKET Bucket = ExpWnfNameBucket(Instance->StateName.Value);
+    PWNF_NAME_INSTANCE Existing;
+
+    ExpWnfLockBucketExclusive(Bucket);
+    Existing = ExpWnfFindNameInstance(Bucket, Instance->StateName.Value);
+    if (Existing == NULL)
+    {
+        InsertTailList(&Bucket->ListHead, &Instance->NameListEntry);
+        Existing = Instance;
+    }
+    if (!ExAcquireRundownProtection(&Existing->RunRef))
+        Existing = NULL;
+    ExpWnfUnlockBucketExclusive(Bucket);
+
+    return Existing;
 }
 
 static
 NTSTATUS
-ExpWnfLookupOrCreateNameInstance(PWNF_STATE_NAME_INTERNAL InternalName,
-                                 PWNF_NAME_INSTANCE *OutInstance)
+ExpWnfReferenceOrCreateNameInstance(PWNF_STATE_NAME_INTERNAL InternalName,
+                                    PWNF_NAME_INSTANCE *OutInstance)
 {
     PWNF_NAME_INSTANCE Instance;
+    PWNF_NAME_INSTANCE Created;
 
-    Instance = ExpWnfLookupNameInstance(InternalName->Value);
+    Instance = ExpWnfReferenceNameInstance(InternalName->Value);
     if (Instance != NULL)
     {
         *OutInstance = Instance;
@@ -201,7 +331,18 @@ ExpWnfLookupOrCreateNameInstance(PWNF_STATE_NAME_INTERNAL InternalName,
     if (InternalName->NameLifetime != WnfWellKnownStateName)
         return STATUS_OBJECT_NAME_NOT_FOUND;
 
-    return ExpWnfCreateNameInstance(InternalName, NULL, 0, NULL, OutInstance);
+    Created = ExpWnfAllocateNameInstance(InternalName, NULL, 0, NULL);
+    if (Created == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Instance = ExpWnfInsertNameInstance(Created);
+    if (Instance != Created)
+        ExFreePoolWithTag(Created, TAG_WNF_INSTANCE);
+    if (Instance == NULL)
+        return STATUS_OBJECT_NAME_NOT_FOUND;
+
+    *OutInstance = Instance;
+    return STATUS_SUCCESS;
 }
 
 static
@@ -268,10 +409,10 @@ ExpWnfCallbackWorker(PVOID Parameter)
     BOOLEAN HasTypeId = FALSE;
     BOOLEAN Deliver = FALSE;
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
     InterlockedExchange(&Subscription->WorkQueued, 0);
-    if (!Subscription->Removed)
+    if (!InterlockedCompareExchange(&Subscription->Removed, 0, 0))
     {
+        ExpWnfLockShared(&Instance->StateDataLock);
         DataSize = Instance->DataSize;
         if (DataSize != 0)
         {
@@ -284,10 +425,10 @@ ExpWnfCallbackWorker(PVOID Parameter)
         ChangeStamp = Instance->ChangeStamp;
         HasTypeId = Instance->HasTypeId;
         TypeId = Instance->TypeId;
+        ExpWnfUnlockShared(&Instance->StateDataLock);
         ExpWnfEncodeToStateName(Instance->StateName.Value, &EncodedName);
         Deliver = TRUE;
     }
-    KeReleaseGuardedMutex(&ExpWnfLock);
 
     if (Deliver)
     {
@@ -304,23 +445,48 @@ ExpWnfCallbackWorker(PVOID Parameter)
         ExFreePoolWithTag(Data, TAG_WNF_DATA);
 
     InterlockedDecrement(&Instance->DeliveriesInFlight);
+    ExpWnfDereferenceNameInstance(Instance);
     ExpWnfDereferenceSubscription(Subscription);
 }
 
-/* Called with the WNF lock held */
 static
 VOID
 ExpWnfSignalSubscription(PWNF_SUBSCRIPTION Subscription)
 {
+    PWNF_NAME_INSTANCE Instance = Subscription->NameInstance;
+
     KeSetEvent(&Subscription->NotificationEvent, IO_NO_INCREMENT, FALSE);
 
     if ((Subscription->Callback != NULL) &&
         (InterlockedCompareExchange(&Subscription->WorkQueued, 1, 0) == 0))
     {
+        if (!ExAcquireRundownProtection(&Instance->RunRef))
+        {
+            InterlockedExchange(&Subscription->WorkQueued, 0);
+            return;
+        }
         InterlockedIncrement(&Subscription->RefCount);
-        InterlockedIncrement(&Subscription->NameInstance->DeliveriesInFlight);
+        InterlockedIncrement(&Instance->DeliveriesInFlight);
         ExQueueWorkItem(&Subscription->WorkItem, DelayedWorkQueue);
     }
+}
+
+static
+VOID
+ExpWnfSignalSubscriptions(PWNF_NAME_INSTANCE Instance)
+{
+    PLIST_ENTRY Entry;
+
+    ExpWnfLockShared(&Instance->SubscriptionListLock);
+    for (Entry = Instance->SubscriptionListHead.Flink;
+         Entry != &Instance->SubscriptionListHead;
+         Entry = Entry->Flink)
+    {
+        ExpWnfSignalSubscription(CONTAINING_RECORD(Entry,
+                                                   WNF_SUBSCRIPTION,
+                                                   SubscriptionListEntry));
+    }
+    ExpWnfUnlockShared(&Instance->SubscriptionListLock);
 }
 
 static
@@ -352,22 +518,45 @@ ExpWnfAllocateSubscription(WNF_CHANGE_STAMP ChangeStamp,
     return Subscription;
 }
 
-/* Called with the WNF lock held; reap the returned list after unlocking */
 static
 VOID
 ExpWnfDetachSubscription(PWNF_SUBSCRIPTION Subscription,
                          PLIST_ENTRY ReapList)
 {
     RemoveEntryList(&Subscription->SubscriptionListEntry);
-    Subscription->Removed = TRUE;
-    Subscription->NameInstance->SubscriptionCount--;
-    InsertTailList(ReapList, &Subscription->SubscriptionListEntry);
+    InterlockedExchange(&Subscription->Removed, TRUE);
+    InterlockedDecrement(&Subscription->NameInstance->SubscriptionCount);
+    if (ReapList != NULL)
+        InsertTailList(ReapList, &Subscription->SubscriptionListEntry);
+    else
+        InitializeListHead(&Subscription->SubscriptionListEntry);
+    ExpWnfDereferenceSubscription(Subscription);
+}
+
+static
+VOID
+ExpWnfAttachSubscription(PWNF_NAME_INSTANCE Instance,
+                         PWNF_SUBSCRIPTION Subscription,
+                         PWNF_STATE_NAME_INTERNAL InternalName)
+{
+    Subscription->NameInstance = Instance;
+    Subscription->StateName.Value = InternalName->Value;
+    Subscription->SubscriptionId = InterlockedIncrement64(&ExpWnfNextSubscriptionId);
+    InterlockedIncrement(&Subscription->RefCount);
+
+    ExpWnfLockExclusive(&Instance->SubscriptionListLock);
+    InsertTailList(&Instance->SubscriptionListHead,
+                   &Subscription->SubscriptionListEntry);
+    InterlockedIncrement(&Instance->SubscriptionCount);
+    ExpWnfUnlockExclusive(&Instance->SubscriptionListLock);
 }
 
 static
 VOID
 ExpWnfFreeNameInstance(PWNF_NAME_INSTANCE Instance)
 {
+    ASSERT(IsListEmpty(&Instance->SubscriptionListHead));
+
     if (Instance->DataBuffer != NULL)
         ExFreePoolWithTag(Instance->DataBuffer, TAG_WNF_DATA);
 
@@ -375,6 +564,32 @@ ExpWnfFreeNameInstance(PWNF_NAME_INSTANCE Instance)
         SeReleaseSecurityDescriptor(Instance->SecurityDescriptor, KernelMode, TRUE);
 
     ExFreePoolWithTag(Instance, TAG_WNF_INSTANCE);
+}
+
+static
+VOID
+ExpWnfDestroyNameInstance(PWNF_NAME_INSTANCE Instance)
+{
+    PWNF_SUBSCRIPTION Subscription;
+    LIST_ENTRY ReapList;
+
+    InitializeListHead(&ReapList);
+    ExWaitForRundownProtectionRelease(&Instance->RunRef);
+
+    ExpWnfLockExclusive(&Instance->SubscriptionListLock);
+    while (!IsListEmpty(&Instance->SubscriptionListHead))
+    {
+        Subscription = CONTAINING_RECORD(Instance->SubscriptionListHead.Flink,
+                                         WNF_SUBSCRIPTION,
+                                         SubscriptionListEntry);
+        KeSetEvent(&Subscription->NotificationEvent, IO_NO_INCREMENT, FALSE);
+        ExpWnfDetachSubscription(Subscription,
+                                 (Subscription->Callback == NULL) ? &ReapList : NULL);
+    }
+    ExpWnfUnlockExclusive(&Instance->SubscriptionListLock);
+
+    ExpWnfReapSubscriptionList(&ReapList);
+    ExpWnfFreeNameInstance(Instance);
 }
 
 static
@@ -390,8 +605,7 @@ ExpWnfQuerySnapshot(ULONG64 InternalName,
     PVOID Snapshot = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-    Instance = ExpWnfLookupNameInstance(InternalName);
+    Instance = ExpWnfReferenceNameInstance(InternalName);
     if (Instance == NULL)
     {
         Status = STATUS_OBJECT_NAME_NOT_FOUND;
@@ -402,6 +616,7 @@ ExpWnfQuerySnapshot(ULONG64 InternalName,
     }
     else
     {
+        ExpWnfLockShared(&Instance->StateDataLock);
         *ChangeStamp = Instance->ChangeStamp;
         *DataSize = Instance->DataSize;
         if (Instance->DataSize != 0)
@@ -414,11 +629,81 @@ ExpWnfQuerySnapshot(ULONG64 InternalName,
             else
                 Status = STATUS_INSUFFICIENT_RESOURCES;
         }
+        ExpWnfUnlockShared(&Instance->StateDataLock);
     }
-    KeReleaseGuardedMutex(&ExpWnfLock);
+    if (Instance != NULL)
+        ExpWnfDereferenceNameInstance(Instance);
 
     *Data = Snapshot;
     return Status;
+}
+
+static
+BOOLEAN
+ExpWnfRemoveNameInstance(ULONG64 InternalName,
+                         PWNF_NAME_INSTANCE Instance)
+{
+    PWNF_NAME_BUCKET Bucket = ExpWnfNameBucket(InternalName);
+    BOOLEAN Removed = FALSE;
+
+    ExpWnfLockBucketExclusive(Bucket);
+    if (ExpWnfFindNameInstance(Bucket, InternalName) == Instance)
+    {
+        RemoveEntryList(&Instance->NameListEntry);
+        Removed = TRUE;
+    }
+    ExpWnfUnlockBucketExclusive(Bucket);
+
+    return Removed;
+}
+
+static
+NTSTATUS
+ExpWnfStoreStateData(PWNF_NAME_INSTANCE Instance,
+                     PVOID *Data,
+                     ULONG Length,
+                     BOOLEAN HasTypeId,
+                     PCWNF_TYPE_ID TypeId,
+                     WNF_CHANGE_STAMP MatchingChangeStamp,
+                     LOGICAL CheckStamp)
+{
+    PVOID OldData;
+
+    if (Length > Instance->MaximumStateSize)
+        return STATUS_BUFFER_OVERFLOW;
+
+    if (!ExpWnfMatchTypeId(Instance, HasTypeId, TypeId))
+        return STATUS_INVALID_PARAMETER;
+
+    ExpWnfLockExclusive(&Instance->StateDataLock);
+    if (CheckStamp && (Instance->ChangeStamp != MatchingChangeStamp))
+    {
+        ExpWnfUnlockExclusive(&Instance->StateDataLock);
+        return STATUS_UNSUCCESSFUL;
+    }
+
+    OldData = Instance->DataBuffer;
+    Instance->DataBuffer = *Data;
+    Instance->DataSize = Length;
+    Instance->ChangeStamp++;
+    ExpWnfUnlockExclusive(&Instance->StateDataLock);
+
+    *Data = OldData;
+    ExpWnfSignalSubscriptions(Instance);
+    return STATUS_SUCCESS;
+}
+
+static
+WNF_CHANGE_STAMP
+ExpWnfReadChangeStamp(PWNF_NAME_INSTANCE Instance)
+{
+    WNF_CHANGE_STAMP ChangeStamp;
+
+    ExpWnfLockShared(&Instance->StateDataLock);
+    ChangeStamp = Instance->ChangeStamp;
+    ExpWnfUnlockShared(&Instance->StateDataLock);
+
+    return ChangeStamp;
 }
 
 /* SYSTEM CALLS **************************************************************/
@@ -439,6 +724,7 @@ NtCreateWnfStateName(PWNF_STATE_NAME StateName,
     BOOLEAN HasTypeId;
     PSECURITY_DESCRIPTOR CapturedSd = NULL;
     PWNF_NAME_INSTANCE Instance;
+    PWNF_NAME_INSTANCE Created;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -505,21 +791,21 @@ NtCreateWnfStateName(PWNF_STATE_NAME StateName,
     InternalName.DataScope = DataScope;
     InternalName.PermanentData = PersistData ? 1 : 0;
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-    InternalName.Unique = ExpWnfNextUnique++;
-    Status = ExpWnfCreateNameInstance(&InternalName,
-                                      HasTypeId ? &CapturedTypeId : NULL,
-                                      MaximumStateSize,
-                                      CapturedSd,
-                                      &Instance);
-    KeReleaseGuardedMutex(&ExpWnfLock);
-
-    if (!NT_SUCCESS(Status))
+    InternalName.Unique = InterlockedIncrement64(&ExpWnfNextUnique);
+    Instance = ExpWnfAllocateNameInstance(&InternalName,
+                                          HasTypeId ? &CapturedTypeId : NULL,
+                                          MaximumStateSize,
+                                          CapturedSd);
+    if (Instance == NULL)
     {
         if (CapturedSd != NULL)
             SeReleaseSecurityDescriptor(CapturedSd, KernelMode, TRUE);
-        return Status;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    Created = ExpWnfInsertNameInstance(Instance);
+    ASSERT(Created == Instance);
+    ExpWnfDereferenceNameInstance(Created);
 
     _SEH2_TRY
     {
@@ -527,11 +813,10 @@ NtCreateWnfStateName(PWNF_STATE_NAME StateName,
     }
     _SEH2_EXCEPT(ExSystemExceptionFilter())
     {
-        KeAcquireGuardedMutex(&ExpWnfLock);
-        RemoveEntryList(&Instance->NameListEntry);
-        KeReleaseGuardedMutex(&ExpWnfLock);
-        ExpWnfFreeNameInstance(Instance);
-        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        Status = _SEH2_GetExceptionCode();
+        if (ExpWnfRemoveNameInstance(InternalName.Value, Instance))
+            ExpWnfDestroyNameInstance(Instance);
+        _SEH2_YIELD(return Status);
     }
     _SEH2_END;
 
@@ -545,9 +830,6 @@ NtDeleteWnfStateName(PCWNF_STATE_NAME StateName)
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     WNF_STATE_NAME_INTERNAL InternalName;
     PWNF_NAME_INSTANCE Instance;
-    PWNF_SUBSCRIPTION Subscription;
-    LIST_ENTRY ReapList;
-    PLIST_ENTRY Entry;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -556,41 +838,22 @@ NtDeleteWnfStateName(PCWNF_STATE_NAME StateName)
     if (!NT_SUCCESS(Status))
         return Status;
 
-    InitializeListHead(&ReapList);
-
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    Instance = ExpWnfLookupNameInstance(InternalName.Value);
+    Instance = ExpWnfReferenceNameInstance(InternalName.Value);
     if (Instance == NULL)
-    {
-        KeReleaseGuardedMutex(&ExpWnfLock);
         return STATUS_OBJECT_NAME_NOT_FOUND;
-    }
 
     if ((Instance->CreatorProcess != PsGetCurrentProcess()) &&
         !SeSinglePrivilegeCheck(SeDebugPrivilege, PreviousMode))
     {
-        KeReleaseGuardedMutex(&ExpWnfLock);
+        ExpWnfDereferenceNameInstance(Instance);
         return STATUS_ACCESS_DENIED;
     }
 
-    RemoveEntryList(&Instance->NameListEntry);
+    ExpWnfDereferenceNameInstance(Instance);
+    if (!ExpWnfRemoveNameInstance(InternalName.Value, Instance))
+        return STATUS_OBJECT_NAME_NOT_FOUND;
 
-    while (!IsListEmpty(&Instance->SubscriptionListHead))
-    {
-        Entry = Instance->SubscriptionListHead.Flink;
-        Subscription = CONTAINING_RECORD(Entry,
-                                         WNF_SUBSCRIPTION,
-                                         SubscriptionListEntry);
-        KeSetEvent(&Subscription->NotificationEvent, IO_NO_INCREMENT, FALSE);
-        ExpWnfDetachSubscription(Subscription, &ReapList);
-    }
-
-    KeReleaseGuardedMutex(&ExpWnfLock);
-
-    ExpWnfReapSubscriptionList(&ReapList);
-
-    ExpWnfFreeNameInstance(Instance);
+    ExpWnfDestroyNameInstance(Instance);
     return STATUS_SUCCESS;
 }
 
@@ -609,9 +872,7 @@ NtUpdateWnfStateData(PCWNF_STATE_NAME StateName,
     WNF_TYPE_ID CapturedTypeId;
     BOOLEAN HasTypeId;
     PWNF_NAME_INSTANCE Instance;
-    PLIST_ENTRY Entry;
     PVOID NewData = NULL;
-    PVOID OldData;
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(ExplicitScope);
@@ -652,55 +913,22 @@ NtUpdateWnfStateData(PCWNF_STATE_NAME StateName,
         _SEH2_END;
     }
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    Status = ExpWnfLookupOrCreateNameInstance(&InternalName, &Instance);
-    if (!NT_SUCCESS(Status))
-        goto Fail;
-
-    if (Length > Instance->MaximumStateSize)
+    Status = ExpWnfReferenceOrCreateNameInstance(&InternalName, &Instance);
+    if (NT_SUCCESS(Status))
     {
-        Status = STATUS_BUFFER_OVERFLOW;
-        goto Fail;
+        Status = ExpWnfStoreStateData(Instance,
+                                      &NewData,
+                                      Length,
+                                      HasTypeId,
+                                      &CapturedTypeId,
+                                      MatchingChangeStamp,
+                                      CheckStamp);
+        ExpWnfDereferenceNameInstance(Instance);
     }
 
-    if (!ExpWnfMatchTypeId(Instance, HasTypeId, &CapturedTypeId))
-    {
-        Status = STATUS_INVALID_PARAMETER;
-        goto Fail;
-    }
-
-    if (CheckStamp && (Instance->ChangeStamp != MatchingChangeStamp))
-    {
-        Status = STATUS_UNSUCCESSFUL;
-        goto Fail;
-    }
-
-    OldData = Instance->DataBuffer;
-    Instance->DataBuffer = NewData;
-    Instance->DataSize = Length;
-    Instance->ChangeStamp++;
-
-    for (Entry = Instance->SubscriptionListHead.Flink;
-         Entry != &Instance->SubscriptionListHead;
-         Entry = Entry->Flink)
-    {
-        ExpWnfSignalSubscription(CONTAINING_RECORD(Entry,
-                                                   WNF_SUBSCRIPTION,
-                                                   SubscriptionListEntry));
-    }
-
-    KeReleaseGuardedMutex(&ExpWnfLock);
-
-    if (OldData != NULL)
-        ExFreePoolWithTag(OldData, TAG_WNF_DATA);
-
-    return STATUS_SUCCESS;
-
-Fail:
-    KeReleaseGuardedMutex(&ExpWnfLock);
     if (NewData != NULL)
         ExFreePoolWithTag(NewData, TAG_WNF_DATA);
+
     return Status;
 }
 
@@ -712,7 +940,6 @@ NtDeleteWnfStateData(PCWNF_STATE_NAME StateName,
     KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     WNF_STATE_NAME_INTERNAL InternalName;
     PWNF_NAME_INSTANCE Instance;
-    PLIST_ENTRY Entry;
     PVOID OldData;
     NTSTATUS Status;
 
@@ -724,30 +951,19 @@ NtDeleteWnfStateData(PCWNF_STATE_NAME StateName,
     if (!NT_SUCCESS(Status))
         return Status;
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    Instance = ExpWnfLookupNameInstance(InternalName.Value);
+    Instance = ExpWnfReferenceNameInstance(InternalName.Value);
     if (Instance == NULL)
-    {
-        KeReleaseGuardedMutex(&ExpWnfLock);
         return STATUS_OBJECT_NAME_NOT_FOUND;
-    }
 
+    ExpWnfLockExclusive(&Instance->StateDataLock);
     OldData = Instance->DataBuffer;
     Instance->DataBuffer = NULL;
     Instance->DataSize = 0;
     Instance->ChangeStamp = 0;
+    ExpWnfUnlockExclusive(&Instance->StateDataLock);
 
-    for (Entry = Instance->SubscriptionListHead.Flink;
-         Entry != &Instance->SubscriptionListHead;
-         Entry = Entry->Flink)
-    {
-        ExpWnfSignalSubscription(CONTAINING_RECORD(Entry,
-                                                   WNF_SUBSCRIPTION,
-                                                   SubscriptionListEntry));
-    }
-
-    KeReleaseGuardedMutex(&ExpWnfLock);
+    ExpWnfSignalSubscriptions(Instance);
+    ExpWnfDereferenceNameInstance(Instance);
 
     if (OldData != NULL)
         ExFreePoolWithTag(OldData, TAG_WNF_DATA);
@@ -886,9 +1102,7 @@ NtQueryWnfStateNameInformation(PCWNF_STATE_NAME StateName,
         _SEH2_END;
     }
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    Instance = ExpWnfLookupNameInstance(InternalName.Value);
+    Instance = ExpWnfReferenceNameInstance(InternalName.Value);
     switch (NameInfoClass)
     {
         case WnfInfoStateNameExist:
@@ -903,7 +1117,7 @@ NtQueryWnfStateNameInformation(PCWNF_STATE_NAME StateName,
             }
             else
             {
-                Value = (Instance->SubscriptionCount != 0);
+                Value = (InterlockedCompareExchange(&Instance->SubscriptionCount, 0, 0) != 0);
                 Status = STATUS_SUCCESS;
             }
             break;
@@ -915,13 +1129,14 @@ NtQueryWnfStateNameInformation(PCWNF_STATE_NAME StateName,
             }
             else
             {
-                Value = (Instance->DeliveriesInFlight == 0);
+                Value = (InterlockedCompareExchange(&Instance->DeliveriesInFlight, 0, 0) == 0);
                 Status = STATUS_SUCCESS;
             }
             break;
     }
 
-    KeReleaseGuardedMutex(&ExpWnfLock);
+    if (Instance != NULL)
+        ExpWnfDereferenceNameInstance(Instance);
 
     if (!NT_SUCCESS(Status))
         return Status;
@@ -980,26 +1195,18 @@ NtSubscribeWnfStateChange(PCWNF_STATE_NAME StateName,
     Subscription->Process = PsGetCurrentProcess();
     Subscription->Thread = PsGetCurrentThread();
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    Status = ExpWnfLookupOrCreateNameInstance(&InternalName, &Instance);
+    Status = ExpWnfReferenceOrCreateNameInstance(&InternalName, &Instance);
     if (!NT_SUCCESS(Status))
     {
-        KeReleaseGuardedMutex(&ExpWnfLock);
         ExFreePoolWithTag(Subscription, TAG_WNF_SUB);
         return Status;
     }
 
-    Subscription->NameInstance = Instance;
-    Subscription->SubscriptionId = Id = ExpWnfNextSubscriptionId++;
-    InsertTailList(&Instance->SubscriptionListHead,
-                   &Subscription->SubscriptionListEntry);
-    Instance->SubscriptionCount++;
+    ExpWnfAttachSubscription(Instance, Subscription, &InternalName);
+    Id = Subscription->SubscriptionId;
 
-    if (Instance->ChangeStamp > ChangeStamp)
+    if (ExpWnfReadChangeStamp(Instance) > ChangeStamp)
         KeSetEvent(&Subscription->NotificationEvent, IO_NO_INCREMENT, FALSE);
-
-    KeReleaseGuardedMutex(&ExpWnfLock);
 
     if (SubscriptionId != NULL)
     {
@@ -1009,17 +1216,22 @@ NtSubscribeWnfStateChange(PCWNF_STATE_NAME StateName,
         }
         _SEH2_EXCEPT(ExSystemExceptionFilter())
         {
-            InitializeListHead(&ReapList);
-            KeAcquireGuardedMutex(&ExpWnfLock);
-            ExpWnfDetachSubscription(Subscription, &ReapList);
-            KeReleaseGuardedMutex(&ExpWnfLock);
-            ExpWnfReapSubscription(Subscription);
-            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+            Status = _SEH2_GetExceptionCode();
         }
         _SEH2_END;
     }
 
-    return STATUS_SUCCESS;
+    if (!NT_SUCCESS(Status))
+    {
+        InitializeListHead(&ReapList);
+        ExpWnfLockExclusive(&Instance->SubscriptionListLock);
+        ExpWnfDetachSubscription(Subscription, &ReapList);
+        ExpWnfUnlockExclusive(&Instance->SubscriptionListLock);
+        ExpWnfReapSubscriptionList(&ReapList);
+    }
+
+    ExpWnfDereferenceNameInstance(Instance);
+    return Status;
 }
 
 NTSTATUS
@@ -1044,15 +1256,11 @@ NtUnsubscribeWnfStateChange(PCWNF_STATE_NAME StateName)
 
     InitializeListHead(&ReapList);
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    Instance = ExpWnfLookupNameInstance(InternalName.Value);
+    Instance = ExpWnfReferenceNameInstance(InternalName.Value);
     if (Instance == NULL)
-    {
-        KeReleaseGuardedMutex(&ExpWnfLock);
         return STATUS_OBJECT_NAME_NOT_FOUND;
-    }
 
+    ExpWnfLockExclusive(&Instance->SubscriptionListLock);
     for (Entry = Instance->SubscriptionListHead.Flink;
          Entry != &Instance->SubscriptionListHead;
          Entry = NextEntry)
@@ -1068,8 +1276,8 @@ NtUnsubscribeWnfStateChange(PCWNF_STATE_NAME StateName)
             Found = TRUE;
         }
     }
-
-    KeReleaseGuardedMutex(&ExpWnfLock);
+    ExpWnfUnlockExclusive(&Instance->SubscriptionListLock);
+    ExpWnfDereferenceNameInstance(Instance);
 
     ExpWnfReapSubscriptionList(&ReapList);
 
@@ -1162,27 +1370,24 @@ ExSubscribeWnfStateChange(PVOID *SubscriptionHandle,
     if (Subscription == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    Status = ExpWnfLookupOrCreateNameInstance(&InternalName, &Instance);
+    Status = ExpWnfReferenceOrCreateNameInstance(&InternalName, &Instance);
     if (!NT_SUCCESS(Status))
     {
-        KeReleaseGuardedMutex(&ExpWnfLock);
         ExFreePoolWithTag(Subscription, TAG_WNF_SUB);
         return Status;
     }
 
-    Subscription->NameInstance = Instance;
-    Subscription->SubscriptionId = ExpWnfNextSubscriptionId++;
-    InsertTailList(&Instance->SubscriptionListHead,
-                   &Subscription->SubscriptionListEntry);
-    Instance->SubscriptionCount++;
+    ExpWnfAttachSubscription(Instance, Subscription, &InternalName);
 
-    if (Instance->ChangeStamp > ChangeStamp)
-        ExpWnfSignalSubscription(Subscription);
+    if (ExpWnfReadChangeStamp(Instance) > ChangeStamp)
+    {
+        ExpWnfLockShared(&Instance->SubscriptionListLock);
+        if (!InterlockedCompareExchange(&Subscription->Removed, 0, 0))
+            ExpWnfSignalSubscription(Subscription);
+        ExpWnfUnlockShared(&Instance->SubscriptionListLock);
+    }
 
-    KeReleaseGuardedMutex(&ExpWnfLock);
-
+    ExpWnfDereferenceNameInstance(Instance);
     *SubscriptionHandle = Subscription;
     return STATUS_SUCCESS;
 }
@@ -1191,50 +1396,30 @@ VOID
 NTAPI
 ExUnsubscribeWnfStateChange(PVOID SubscriptionHandle)
 {
+    PWNF_SUBSCRIPTION Subscription = SubscriptionHandle;
     PWNF_NAME_INSTANCE Instance;
-    PWNF_SUBSCRIPTION Subscription;
-    PLIST_ENTRY InstanceEntry, SubEntry;
-    LIST_ENTRY ReapList;
-    BOOLEAN Found = FALSE;
 
     PAGED_CODE();
 
-    if ((SubscriptionHandle == NULL) || !ExpWnfInitialized)
+    if ((Subscription == NULL) || !ExpWnfInitialized)
         return;
 
-    InitializeListHead(&ReapList);
-
-    KeAcquireGuardedMutex(&ExpWnfLock);
-
-    /*
-     * Walk the registry instead of trusting the handle: NtDeleteWnfStateName
-     * reaps and frees all of a name's subscriptions, so a stale handle must
-     * quietly not match rather than be dereferenced.
-     */
-    for (InstanceEntry = ExpWnfNameListHead.Flink;
-         (InstanceEntry != &ExpWnfNameListHead) && !Found;
-         InstanceEntry = InstanceEntry->Flink)
+    if (!InterlockedCompareExchange(&Subscription->Removed, 0, 0))
     {
-        Instance = CONTAINING_RECORD(InstanceEntry,
-                                     WNF_NAME_INSTANCE,
-                                     NameListEntry);
-        for (SubEntry = Instance->SubscriptionListHead.Flink;
-             SubEntry != &Instance->SubscriptionListHead;
-             SubEntry = SubEntry->Flink)
+        Instance = ExpWnfReferenceNameInstance(Subscription->StateName.Value);
+        if (Instance != NULL)
         {
-            Subscription = CONTAINING_RECORD(SubEntry,
-                                             WNF_SUBSCRIPTION,
-                                             SubscriptionListEntry);
-            if (Subscription == SubscriptionHandle)
+            ExpWnfLockExclusive(&Instance->SubscriptionListLock);
+            if ((Subscription->NameInstance == Instance) &&
+                !InterlockedCompareExchange(&Subscription->Removed, 0, 0))
             {
-                ExpWnfDetachSubscription(Subscription, &ReapList);
-                Found = TRUE;
-                break;
+                ExpWnfDetachSubscription(Subscription, NULL);
             }
+            ExpWnfUnlockExclusive(&Instance->SubscriptionListLock);
+            ExpWnfDereferenceNameInstance(Instance);
         }
     }
 
-    KeReleaseGuardedMutex(&ExpWnfLock);
-
-    ExpWnfReapSubscriptionList(&ReapList);
+    ExpWnfReapSubscription(Subscription);
 }
+

@@ -82,12 +82,15 @@ LONG64
 LxSysCall(
     _Inout_ PLX_CALL Call)
 {
-    PLX_SYSCALL_ENTRY Entry = LxArchSyscallEntry(Call->Number);
+    PLX_SYSCALL_ENTRY Entry;
     ULONG Trace = Call->Process->Trace;
     LONG64 Start, Verdict;
 
-    if ((Call->Thread->SeccompMode != 0) && !LxSeccompCheck(Call, &Verdict))
+    if ((Call->Thread->PtraceWork & LX_PTW_SYSCALL) && !LxPtraceSyscallEntry(Call, &Verdict))
         return Verdict;
+    if ((Call->Thread->SeccompMode != 0) && !LxPtraceSeccompSuspended(Call->Thread) && !LxSeccompCheck(Call, &Verdict))
+        return Verdict;
+    Entry = LxArchSyscallEntry(Call->Number);
 
     if ((Entry != NULL) && (Entry->Handler != NULL))
     {
@@ -541,7 +544,7 @@ LxProcessVm(
         Result = -LX_EPERM;
         goto Exit;
     }
-    if (!NT_SUCCESS(PsLookupProcessByProcessId(ULongToHandle(Target->NtPid), &EProcess)))
+    if (!NT_SUCCESS(PsLookupProcessByProcessId(ULongToHandle(Target->Mm->NtPid), &EProcess)))
     {
         EProcess = NULL;
         Result = -LX_ESRCH;
@@ -724,7 +727,7 @@ LX_SYSCALL(LxSysNanosleep)
     if ((Request.Seconds < 0) || (Request.Nanoseconds < 0) || (Request.Nanoseconds >= 1000000000))
         return -LX_EINVAL;
 
-    Result = LxSleep(Request.Seconds * 10000000 + (Request.Nanoseconds + 99) / 100);
+    Result = LxSleep(LxTimespecTo100ns(&Request));
     if ((Result != 0) && (Call->Args[1] != 0))
     {
         LX_TIMESPEC Remaining = { 0, 0 };
@@ -745,7 +748,7 @@ LX_SYSCALL(LxSysClockNanosleep)
     if ((Request.Seconds < 0) || (Request.Nanoseconds < 0) || (Request.Nanoseconds >= 1000000000))
         return -LX_EINVAL;
 
-    Interval = Request.Seconds * 10000000 + (Request.Nanoseconds + 99) / 100;
+    Interval = LxTimespecTo100ns(&Request);
     if (Call->Args[1] & LX_TIMER_ABSTIME)
     {
         LONG Error = LxQueryClockIn(Call->Process, (ULONG)Call->Args[0], &Now);
@@ -1989,6 +1992,9 @@ LX_SYSCALL(LxSysSetTidAddress)
 
 LX_SYSCALL(LxSysExit)
 {
+    Call->Thread->ExitCode = ((LONG)Call->Args[0] & 0xFF) << 8;
+    LxPtraceEvent(Call->Thread, Call->TrapFrame, Call->ExceptionFrame, LX_PTRACE_EVENT_EXIT, Call->Thread->ExitCode,
+                  FALSE);
     if (Call->Process->ThreadCount <= 1)
         LxProcessExitGroup(Call->Process, ((LONG)Call->Args[0] & 0xFF) << 8);
     if (Call->Thread->VforkExited)
@@ -1999,6 +2005,9 @@ LX_SYSCALL(LxSysExit)
 
 LX_SYSCALL(LxSysExitGroup)
 {
+    Call->Thread->ExitCode = ((LONG)Call->Args[0] & 0xFF) << 8;
+    LxPtraceEvent(Call->Thread, Call->TrapFrame, Call->ExceptionFrame, LX_PTRACE_EVENT_EXIT, Call->Thread->ExitCode,
+                  FALSE);
     LxProcessExitGroup(Call->Process, ((LONG)Call->Args[0] & 0xFF) << 8);
     return 0;
 }
@@ -2216,8 +2225,8 @@ LxCreateThread(
     CLIENT_ID ClientId;
     HANDLE Handle;
     NTSTATUS Status;
-    ULONG Tid;
-    LONG Error;
+    ULONG Tid, GlobalTid;
+    LONG Error, Event;
 
     if ((Request->Flags & (LX_CLONE_VM | LX_CLONE_SIGHAND)) != (LX_CLONE_VM | LX_CLONE_SIGHAND))
         return -LX_EINVAL;
@@ -2237,6 +2246,7 @@ LxCreateThread(
     Tid = LxTidNr(Call->Process, Thread);
     Thread->Tls = (Request->Flags & LX_CLONE_SETTLS) ? Request->Tls : LxArchGetThreadPointer(Call->TrapFrame);
     Thread->SigMask = Call->Thread->SigMask;
+    Thread->SpecSsb = Call->Thread->SpecSsb;
     LxSchedInherit(Thread, Call->Thread);
     if (Request->Flags & LX_CLONE_CHILD_CLEARTID)
         Thread->ClearChildTid = Request->ChildTid;
@@ -2245,6 +2255,8 @@ LxCreateThread(
     if (Request->Flags & LX_CLONE_PARENT_SETTID)
         LxCopyToUser(Request->ParentTid, &Tid, sizeof(Tid));
 
+    GlobalTid = Thread->Tid;
+    Event = LxPtraceCloneChild(Call->Thread, Thread, Request->Flags, Request->ExitSignal);
     Status = PsPicoCreateThread(NtCurrentProcess(), Context, Thread, &Handle, &ClientId);
     if (!NT_SUCCESS(Status))
     {
@@ -2252,6 +2264,8 @@ LxCreateThread(
         return -LxStatusToErrno(Status);
     }
     ZwClose(Handle);
+    if (Event != 0)
+        LxPtraceEvent(Call->Thread, Call->TrapFrame, Call->ExceptionFrame, Event, GlobalTid, TRUE);
     return Tid;
 }
 
@@ -2272,7 +2286,7 @@ LxForkProcess(
     BOOLEAN Shared = ((Request->Flags & (LX_CLONE_VM | LX_CLONE_VFORK)) == LX_CLONE_VM);
     NTSTATUS Status;
     ULONG Pid, UserPid;
-    LONG Error;
+    LONG Error, Event;
 
     if (Request->Flags & (LX_CLONE_NEWNS | LX_CLONE_NEWUTS | LX_CLONE_NEWIPC | LX_CLONE_NEWUSER |
                           LX_CLONE_NEWPID | LX_CLONE_NEWNET | LX_CLONE_NEWCGROUP | LX_CLONE_NEWTIME))
@@ -2358,6 +2372,7 @@ LxForkProcess(
     UserPid = LxPidNr(Parent, Child);
     Thread->Tls = (Request->Flags & LX_CLONE_SETTLS) ? Request->Tls : LxArchGetThreadPointer(Call->TrapFrame);
     Thread->SigMask = Call->Thread->SigMask;
+    Thread->SpecSsb = Call->Thread->SpecSsb;
     LxSchedInherit(Thread, Call->Thread);
     LxSeccompInherit(Thread, Call->Thread);
     if ((Request->Flags & (LX_CLONE_VM | LX_CLONE_VFORK)) != LX_CLONE_VM)
@@ -2367,6 +2382,7 @@ LxForkProcess(
         Thread->ClearChildTid = Request->ChildTid;
     if (Request->Flags & LX_CLONE_CHILD_SETTID)
         Thread->SetChildTid = Request->ChildTid;
+    Event = LxPtraceCloneChild(Call->Thread, Thread, Request->Flags, Request->ExitSignal);
 
     if (Borrow)
     {
@@ -2455,6 +2471,8 @@ LxForkProcess(
         LxThreadAttach(Thread);
         Thread->VforkParent = Call->Thread;
         Call->Thread->Vfork = Thread;
+        /* FIXME: PTRACE_EVENT_VFORK waits until the parent gets its thread back; Linux stops the parent first. */
+        Call->Thread->PtraceVforkPid = (Event != 0) ? Pid : 0;
         LxArchSetThreadPointer(Call->TrapFrame, Thread->Tls);
         if (Thread->SetChildTid != 0)
             LxCopyToUser(Thread->SetChildTid, &Thread->Tid, sizeof(Thread->Tid));
@@ -2484,8 +2502,13 @@ LxForkProcess(
     if (ProcessHandle != NULL)
         ZwClose(ProcessHandle);
 
+    if (Event != 0)
+        LxPtraceEvent(Call->Thread, Call->TrapFrame, Call->ExceptionFrame, Event, Pid, TRUE);
     if (Request->Flags & LX_CLONE_VFORK)
+    {
         KeWaitForSingleObject(&Child->VforkDone, UserRequest, KernelMode, FALSE, NULL);
+        LxPtraceEvent(Call->Thread, Call->TrapFrame, Call->ExceptionFrame, LX_PTRACE_EVENT_VFORK_DONE, Pid, TRUE);
+    }
 
     return UserPid;
 }
@@ -2577,12 +2600,16 @@ LxVforkExec(
     Thread->Tid = Borrowed->Tid;
     RtlCopyMemory(Thread->NsTid, Borrowed->NsTid, sizeof(Thread->NsTid));
     Thread->SigMask = Borrowed->SigMask;
+    Thread->SpecSsb = Borrowed->SpecSsb;
     Thread->Sched = Borrowed->Sched;
     Thread->Affinity = Borrowed->Affinity;
     Thread->UserAffinity = Borrowed->UserAffinity;
     LxNsThreadInherit(Thread, Borrowed);
+    LxSeccompInherit(Thread, Borrowed);
+    LxPtraceTransfer(Borrowed, Thread);
     KeInitializeEvent(&Request->Done, NotificationEvent, FALSE);
     Request->Vfork = TRUE;
+    Request->Origin = Borrowed;
     Thread->Exec = Request;
 
     LxThreadDetach(Borrowed);
@@ -2612,6 +2639,7 @@ LxVforkExec(
         }
         if (EProcess != NULL)
             ObDereferenceObject(EProcess);
+        LxPtraceTransfer(Thread, Borrowed);
         LxThreadFree(Thread);
         Child->Mm = Owner;
         LxThreadAttach(Borrowed);
@@ -2665,12 +2693,16 @@ LxSharedVmExec(
     Thread->Tid = Current->Tid;
     RtlCopyMemory(Thread->NsTid, Current->NsTid, sizeof(Thread->NsTid));
     Thread->SigMask = Current->SigMask;
+    Thread->SpecSsb = Current->SpecSsb;
     Thread->Sched = Current->Sched;
     Thread->Affinity = Current->Affinity;
     Thread->UserAffinity = Current->UserAffinity;
     LxNsThreadInherit(Thread, Current);
+    LxSeccompInherit(Thread, Current);
+    LxPtraceTransfer(Current, Thread);
     KeInitializeEvent(&Request->Done, NotificationEvent, FALSE);
     Request->Vfork = TRUE;
+    Request->Origin = Current;
     Thread->Exec = Request;
 
     LxThreadDetach(Current);
@@ -2696,6 +2728,7 @@ LxSharedVmExec(
     }
     else
     {
+        LxPtraceTransfer(Thread, Current);
         LxThreadFree(Thread);
         if (ProcessHandle == NULL)
             LxProcessDereference(Child);
@@ -2973,7 +3006,10 @@ LxExecCommon(
     {
         Status = LxExecImage(Call->Thread, &Request, Call->TrapFrame, Call->ExceptionFrame, &Errno);
         if (NT_SUCCESS(Status))
+        {
             Result = LX_SYSCALL_NO_RESULT;
+            LxPtraceExec(Call->Thread, Call->TrapFrame, Call->ExceptionFrame);
+        }
         else if (Status == STATUS_UNSUCCESSFUL)
             Result = LX_SIGSEGV;
         else
@@ -3062,6 +3098,7 @@ typedef struct _LX_WAIT_SELECTOR
     ULONG Id;
     PLX_PROCESS PidfdTarget;
     ULONG Options;
+    BOOLEAN Trapped;
 } LX_WAIT_SELECTOR, *PLX_WAIT_SELECTOR;
 
 static
@@ -3085,6 +3122,41 @@ LxWaitMatches(
 
 static
 BOOLEAN
+LxWaitJobctlReport(
+    _In_ PLX_WAIT_SELECTOR Selector,
+    _In_ PLX_PROCESS Child,
+    _In_ BOOLEAN Consume,
+    _Out_opt_ PLONG WaitStatus)
+{
+    ULONG Options = Selector->Options;
+    BOOLEAN Found = FALSE;
+    LONG Status = 0;
+
+    if (!(Options & (LX_WSTOPPED | LX_WCONTINUED)) || Child->Exited || LxPtraceTracedBy(Child, Selector->Process))
+        return FALSE;
+    ExAcquireFastMutex(&Child->Lock);
+    if ((Options & LX_WSTOPPED) && (Child->JobctlFlags & LX_JOBCTL_STOPPED) && (Child->GroupExitCode != 0))
+    {
+        Status = (Child->GroupExitCode << 8) | 0x7F;
+        if (Consume && !(Options & LX_WNOWAIT))
+            Child->GroupExitCode = 0;
+        Found = TRUE;
+    }
+    else if ((Options & LX_WCONTINUED) && (Child->JobctlFlags & LX_JOBCTL_CONTINUED))
+    {
+        Status = 0xFFFF;
+        if (Consume && !(Options & LX_WNOWAIT))
+            Child->JobctlFlags &= ~LX_JOBCTL_CONTINUED;
+        Found = TRUE;
+    }
+    ExReleaseFastMutex(&Child->Lock);
+    if (WaitStatus != NULL)
+        *WaitStatus = Status;
+    return Found;
+}
+
+static
+BOOLEAN
 LxWaitReady(
     _In_ PVOID Context)
 {
@@ -3101,13 +3173,23 @@ LxWaitReady(
         if (!LxWaitMatches(Selector, Child))
             continue;
         Any = TRUE;
-        if (Child->Lx->Exited)
+        if ((Child->Lx->Exited && (Selector->Options & LX_WEXITED)) ||
+            LxWaitJobctlReport(Selector, Child->Lx, FALSE, NULL))
         {
             Ready = TRUE;
             break;
         }
     }
     ExReleaseFastMutex(&Process->Lock);
+    if (!Ready)
+    {
+        ULONG Tid, Uid;
+        LONG Status;
+        BOOLEAN Trapped;
+
+        Ready = LxPtraceWaitFind(Process, Selector->Type, Selector->Id, Selector->PidfdTarget, Selector->Options, FALSE,
+                                 &Tid, &Status, &Uid, &Trapped, &Any);
+    }
     return Ready || !Any;
 }
 
@@ -3131,8 +3213,10 @@ LxWaitChild(
     {
         PLIST_ENTRY Entry;
         PLX_CHILD Found = NULL;
+        PLX_PROCESS Reported = NULL;
         BOOLEAN Any = FALSE;
         LONG64 Result;
+        LONG Status;
 
         ExAcquireFastMutex(&Process->Lock);
         for (Entry = Process->Children.Flink; Entry != &Process->Children; Entry = Entry->Flink)
@@ -3144,13 +3228,37 @@ LxWaitChild(
             Any = TRUE;
             if (Child->Lx->Exited)
             {
+                if (!(Selector->Options & LX_WEXITED))
+                    continue;
                 Found = Child;
                 if (!(Selector->Options & LX_WNOWAIT))
                     RemoveEntryList(&Child->Link);
                 break;
             }
+            if (LxWaitJobctlReport(Selector, Child->Lx, TRUE, &Status))
+            {
+                Reported = Child->Lx;
+                LxProcessReference(Reported);
+                break;
+            }
         }
         ExReleaseFastMutex(&Process->Lock);
+
+        if (Reported != NULL)
+        {
+            *FoundPid = LxPidNr(Process, Reported);
+            *WaitStatus = Status;
+            *Uid = Reported->Uid[0];
+            LxProcessUsage(Reported, NULL, ChildUsage);
+            LxProcessDereference(Reported);
+            return 0;
+        }
+        if ((Found == NULL) &&
+            LxPtraceWaitFind(Process, Selector->Type, Selector->Id, Selector->PidfdTarget, Selector->Options, TRUE,
+                             FoundPid, WaitStatus, Uid, &Selector->Trapped, &Any))
+        {
+            return 0;
+        }
 
         if (Found != NULL)
         {
@@ -3204,7 +3312,7 @@ LX_SYSCALL(LxSysWait4)
 
     RtlZeroMemory(&Selector, sizeof(Selector));
     Selector.Process = Call->Process;
-    Selector.Options = (ULONG)Call->Args[2];
+    Selector.Options = (ULONG)Call->Args[2] | LX_WEXITED;
     if (Pid > 0)
     {
         Selector.Type = LX_P_PID;
@@ -3308,9 +3416,6 @@ LX_SYSCALL(LxSysWaitid)
             return -LX_EINVAL;
     }
 
-    if (!(Options & LX_WEXITED))
-        Selector.Options |= LX_WNOHANG;
-
     Result = LxWaitChild(&Selector, &FoundPid, &Status, &Uid, &Usage);
     if ((Result == 0) && (FoundPid == 0) && (Type == LX_P_PIDFD) && !(Options & LX_WNOHANG) && (Pidfd->Flags & LX_O_NONBLOCK))
         Result = -LX_EAGAIN;
@@ -3325,7 +3430,22 @@ LX_SYSCALL(LxSysWaitid)
         Info.Signo = LX_SIGCHLD;
         Info.Child.Pid = (LONG)FoundPid;
         Info.Child.Uid = LxCredViewId(Call->Process, FALSE, Uid);
-        if (Status & 0x7F)
+        if (((Status & 0xFF) == 0x7F) && Selector.Trapped)
+        {
+            Info.Code = LX_CLD_TRAPPED;
+            Info.Child.Status = (Status >> 8) & 0xFFFF;
+        }
+        else if ((Status & 0xFF) == 0x7F)
+        {
+            Info.Code = LX_CLD_STOPPED;
+            Info.Child.Status = (Status >> 8) & 0xFF;
+        }
+        else if (Status == 0xFFFF)
+        {
+            Info.Code = LX_CLD_CONTINUED;
+            Info.Child.Status = LX_SIGCONT;
+        }
+        else if (Status & 0x7F)
         {
             Info.Code = (Status & 0x80) ? LX_CLD_DUMPED : LX_CLD_KILLED;
             Info.Child.Status = Status & 0x7F;
@@ -3597,6 +3717,75 @@ LxPrctlSetMm(
     return 0;
 }
 
+LONG64
+LxSpecCtrlGet(
+    _In_ PLX_THREAD Thread,
+    _In_ ULONG64 Which)
+{
+    LONG Mode = LxArchSpecStoreBypassMode();
+
+    if (Mode == LX_SPEC_MODE_UNSUPPORTED)
+        return -LX_EINVAL;
+    if (Which != LX_PR_SPEC_STORE_BYPASS)
+        return -LX_ENODEV;
+    if (Mode == LX_SPEC_MODE_UNAFFECTED)
+        return LX_PR_SPEC_NOT_AFFECTED;
+    if (Mode == LX_SPEC_MODE_VULNERABLE)
+        return LX_PR_SPEC_ENABLE;
+    if (Thread->SpecSsb & LX_SPEC_SSB_FORCE)
+        return LX_PR_SPEC_PRCTL | LX_PR_SPEC_FORCE_DISABLE;
+    if (Thread->SpecSsb & LX_SPEC_SSB_NOEXEC)
+        return LX_PR_SPEC_PRCTL | LX_PR_SPEC_DISABLE_NOEXEC;
+    if (Thread->SpecSsb & LX_SPEC_SSB_DISABLE)
+        return LX_PR_SPEC_PRCTL | LX_PR_SPEC_DISABLE;
+    return LX_PR_SPEC_PRCTL | LX_PR_SPEC_ENABLE;
+}
+
+LONG64
+LxSpecCtrlSet(
+    _Inout_ PLX_THREAD Thread,
+    _In_ ULONG64 Which,
+    _In_ ULONG64 Control)
+{
+    if (LxArchSpecStoreBypassMode() == LX_SPEC_MODE_UNSUPPORTED)
+        return -LX_EINVAL;
+    if (Which != LX_PR_SPEC_STORE_BYPASS)
+        return -LX_ENODEV;
+    switch (Control)
+    {
+        case LX_PR_SPEC_ENABLE:
+            if (Thread->SpecSsb & LX_SPEC_SSB_FORCE)
+                return -LX_EPERM;
+            Thread->SpecSsb &= ~(LX_SPEC_SSB_DISABLE | LX_SPEC_SSB_NOEXEC);
+            return 0;
+
+        case LX_PR_SPEC_FORCE_DISABLE:
+            Thread->SpecSsb = (Thread->SpecSsb & ~LX_SPEC_SSB_NOEXEC) | LX_SPEC_SSB_DISABLE | LX_SPEC_SSB_FORCE;
+            return 0;
+
+        case LX_PR_SPEC_DISABLE:
+            Thread->SpecSsb = (Thread->SpecSsb & ~LX_SPEC_SSB_NOEXEC) | LX_SPEC_SSB_DISABLE;
+            return 0;
+
+        case LX_PR_SPEC_DISABLE_NOEXEC:
+            if (Thread->SpecSsb & LX_SPEC_SSB_FORCE)
+                return -LX_EPERM;
+            Thread->SpecSsb |= LX_SPEC_SSB_DISABLE | LX_SPEC_SSB_NOEXEC;
+            return 0;
+
+        default:
+            return -LX_ERANGE;
+    }
+}
+
+VOID
+LxSpecExec(
+    _Inout_ PLX_THREAD Thread)
+{
+    if (Thread->SpecSsb & LX_SPEC_SSB_NOEXEC)
+        Thread->SpecSsb &= ~(LX_SPEC_SSB_DISABLE | LX_SPEC_SSB_NOEXEC);
+}
+
 LX_SYSCALL(LxSysPrctl)
 {
     PLX_PROCESS Process = Call->Process;
@@ -3755,12 +3944,36 @@ LX_SYSCALL(LxSysPrctl)
         case LX_PR_GET_NO_NEW_PRIVS:
             return Process->NoNewPrivs;
 
+        case LX_PR_GET_SPECULATION_CTRL:
+            if ((Call->Args[2] | Call->Args[3] | Call->Args[4]) != 0)
+                return -LX_EINVAL;
+            return LxSpecCtrlGet(Thread, Arg);
+
+        case LX_PR_SET_SPECULATION_CTRL:
+            if ((Call->Args[3] | Call->Args[4]) != 0)
+                return -LX_EINVAL;
+            return LxSpecCtrlSet(Thread, Arg, Call->Args[2]);
+
         case LX_PR_GET_TID_ADDRESS:
             return LxCopyToUser(Arg, &Thread->ClearChildTid, sizeof(ULONG64));
 
-        case LX_PR_SET_THP_DISABLE:
+        case LX_PR_SET_PTRACER:
+            return LxPtraceSetPtracer(Process, Arg);
+
         case LX_PR_GET_THP_DISABLE:
-        case 0x59616D61:
+            if ((Arg | Call->Args[2] | Call->Args[3] | Call->Args[4]) != 0)
+                return -LX_EINVAL;
+            return Process->ThpDisable;
+
+        case LX_PR_SET_THP_DISABLE:
+            if (((Call->Args[3] | Call->Args[4]) != 0) || ((Arg == 0) && (Call->Args[2] != 0)) ||
+                (Call->Args[2] & ~(ULONG64)LX_PR_THP_DISABLE_EXCEPT_ADVISED))
+            {
+                return -LX_EINVAL;
+            }
+            Process->ThpDisable = (Arg == 0) ? 0 : (1 | (ULONG)Call->Args[2]);
+            return 0;
+
         case 0x53564D41:
             return 0;
 
@@ -3953,22 +4166,6 @@ LX_SYSCALL(LxSysGetcpu)
     return Result;
 }
 
-LX_SYSCALL(LxSysSyslog)
-{
-    switch ((ULONG)Call->Args[0])
-    {
-        case 10:
-            return 65536;
-        case 9:
-        case 2:
-        case 3:
-        case 4:
-            return 0;
-        default:
-            return 0;
-    }
-}
-
 LX_SYSCALL(LxSysIoprioGet)
 {
     UNREFERENCED_PARAMETER(Call);
@@ -3983,7 +4180,16 @@ LX_SYSCALL(LxSysKeyctl)
 
 LX_SYSCALL(LxSysPersonality)
 {
-    return (Call->Args[0] == 0xFFFFFFFF) ? 0 : 0;
+    ULONG Persona = (ULONG)Call->Args[0];
+    ULONG Old = Call->Process->Personality;
+
+    if (Persona == 0xFFFFFFFF)
+        return Old;
+    if (!LxArchPersonalityAllowed(Persona))
+        return -LX_EINVAL;
+    /* TODO: apply ADDR_NO_RANDOMIZE once exec randomizes the layout. */
+    Call->Process->Personality = Persona;
+    return Old;
 }
 
 LX_SYSCALL(LxSysMincore)
@@ -4088,7 +4294,7 @@ LX_SYSCALL(LxSysSetitimer)
     PLX_PROCESS Process = Call->Process;
     PLX_ITIMER Timer;
     LX_TIMEVAL New[2], Old[2];
-    LONG64 Value, Interval, Result;
+    LONG64 Value, Interval, Result, Now;
 
     if (Call->Args[0] > 2)
         return -LX_EINVAL;
@@ -4135,10 +4341,13 @@ LX_SYSCALL(LxSysSetitimer)
     LxItimerCurrent(Timer, Old);
     ExCancelTimer(Timer->Timer, NULL);
 
-    Value = New[1].Seconds * 10000000LL + New[1].Microseconds * 10;
-    Interval = New[0].Seconds * 10000000LL + New[0].Microseconds * 10;
+    Value = LxTimevalTo100ns(&New[1]);
+    Interval = LxTimevalTo100ns(&New[0]);
+    Now = (LONG64)KeQueryInterruptTime();
+    if (Value > LX_KTIME_MAX_100NS - Now)
+        Value = LX_KTIME_MAX_100NS - Now;
     Timer->IntervalNs = (Value != 0) ? Interval * 100 : 0;
-    Timer->Due = (Value != 0) ? (LONG64)KeQueryInterruptTime() + Value : 0;
+    Timer->Due = (Value != 0) ? Now + Value : 0;
     if (Value != 0)
         ExSetTimer(Timer->Timer, -Value, Interval, NULL);
 

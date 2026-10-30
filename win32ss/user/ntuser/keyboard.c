@@ -1184,6 +1184,33 @@ IntHandleAltNumpad(
     return FALSE; /* More key processing has to be done */
 }
 
+static BOOL
+IntIsKeyDownForQueue(PUSER_MESSAGE_QUEUE MessageQueue, WORD wSimpleVk)
+{
+    PLIST_ENTRY ListEntry;
+    PUSER_MESSAGE Message;
+    BOOL bDown = IS_KEY_DOWN(MessageQueue->afKeyState, wSimpleVk);
+
+    for (ListEntry = MessageQueue->HardwareMessagesListHead.Flink;
+         ListEntry != &MessageQueue->HardwareMessagesListHead;
+         ListEntry = ListEntry->Flink)
+    {
+        Message = CONTAINING_RECORD(ListEntry, USER_MESSAGE, ListEntry);
+        switch (Message->Msg.message)
+        {
+            case WM_KEYDOWN:
+            case WM_SYSKEYDOWN:
+            case WM_KEYUP:
+            case WM_SYSKEYUP:
+                if (IntSimplifyVk((WORD)(Message->Msg.wParam & 0xFF)) == wSimpleVk)
+                    bDown = (Message->Msg.message == WM_KEYDOWN || Message->Msg.message == WM_SYSKEYDOWN);
+                break;
+        }
+    }
+
+    return bDown;
+}
+
 /*
  * UserSendKeyboardInput
  *
@@ -1198,7 +1225,7 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
     BOOL bExt = (dwFlags & KEYEVENTF_EXTENDEDKEY) ? TRUE : FALSE;
     BOOL bIsDown = (dwFlags & KEYEVENTF_KEYUP) ? FALSE : TRUE;
     BOOL bPacket = ((dwFlags & KEYEVENTF_UNICODE) && wVk == VK_PACKET) ? TRUE : FALSE;
-    BOOL bWasSimpleDown = FALSE, bPostMsg = TRUE, bIsSimpleDown;
+    BOOL bWasSimpleDown = FALSE, bPostMsg = TRUE, bIsSimpleDown, bStateOnly;
     MSG Msg;
     static BOOL bMenuDownRecently = FALSE;
     BOOL bLangToggled = FALSE;
@@ -1227,6 +1254,7 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
     /* Update key without shifts */
     wVk2 = IntFixVk(wSimpleVk, !bExt);
     bIsSimpleDown = bIsDown || IS_KEY_DOWN(gafAsyncKeyState, wVk2);
+    bStateOnly = (!bIsDown && bIsSimpleDown && wVk2 != wSimpleVk);
 
     if (bIsDown)
     {
@@ -1371,8 +1399,16 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
 
         /* Init message */
         Msg.hwnd = Wnd ? UserHMGetHandle(Wnd) : NULL;
-        Msg.wParam = wFixedVk & 0xFF; /* Note: It's simplified by msg queue */
-        Msg.lParam = MAKELPARAM(1, wScanCode);
+        if (bPacket)
+        {
+            Msg.wParam = MAKEWPARAM(VK_PACKET, wScanCode);
+            Msg.lParam = MAKELPARAM(1, 0);
+        }
+        else
+        {
+            Msg.wParam = wFixedVk & 0xFF; /* Note: It's simplified by msg queue */
+            Msg.lParam = MAKELPARAM(1, wScanCode);
+        }
         Msg.time = dwTime;
         Msg.pt = gpsi->ptCursor;
 
@@ -1389,22 +1425,19 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
         }
 
         /* If it is VK_PACKET, high word of wParam is used for wchar */
-        if (!bPacket)
-        {
-            if (bExt)
-                Msg.lParam |= KF_EXTENDED << 16;
-            if (IS_KEY_DOWN(gafAsyncKeyState, VK_MENU))
-                Msg.lParam |= KF_ALTDOWN << 16;
-            if (bWasSimpleDown)
-                Msg.lParam |= KF_REPEAT << 16;
-            if (!bIsDown)
-                Msg.lParam |= (ULONG)KF_UP << 16;
-            /* FIXME: Set KF_DLGMODE and KF_MENUMODE when needed */
-            if (pFocusQueue->QF_flags & QF_DIALOGACTIVE)
-                Msg.lParam |= KF_DLGMODE << 16;
-            if (pFocusQueue->MenuOwner) // pti->pMenuState->fMenuStarted
-                Msg.lParam |= KF_MENUMODE << 16;
-        }
+        if (bExt && !bPacket)
+            Msg.lParam |= KF_EXTENDED << 16;
+        if (IS_KEY_DOWN(gafAsyncKeyState, VK_MENU))
+            Msg.lParam |= KF_ALTDOWN << 16;
+        if (IntIsKeyDownForQueue(pti->MessageQueue, wSimpleVk))
+            Msg.lParam |= KF_REPEAT << 16;
+        if (!bIsDown)
+            Msg.lParam |= (ULONG)KF_UP << 16;
+        /* FIXME: Set KF_DLGMODE and KF_MENUMODE when needed */
+        if (pFocusQueue->QF_flags & QF_DIALOGACTIVE)
+            Msg.lParam |= KF_DLGMODE << 16;
+        if (pFocusQueue->MenuOwner) // pti->pMenuState->fMenuStarted
+            Msg.lParam |= KF_MENUMODE << 16;
 
         // Post mouse move before posting key buttons, to keep it syned.
         if (pFocusQueue->QF_flags & QF_MOUSEMOVED)
@@ -1415,7 +1448,11 @@ ProcessKeyEvent(WORD wVk, WORD wScanCode, DWORD dwFlags, BOOL bInjected, DWORD d
         /* Post a keyboard message */
         TRACE("Posting keyboard msg %u wParam 0x%x lParam 0x%x\n", Msg.message, Msg.wParam, Msg.lParam);
         if (!Wnd) TRACE("Posting keyboard msg to the focus thread without a window\n");
-        if (!RawInputIsNoLegacy(pti->ppi, RIM_TYPEKEYBOARD))
+        if (bStateOnly)
+        {
+            SET_KEY_DOWN(pti->MessageQueue->afKeyState, wFixedVk & 0xFF, FALSE);
+        }
+        else if (!RawInputIsNoLegacy(pti->ppi, RIM_TYPEKEYBOARD))
         {
             INPUT_MESSAGE_SOURCE KbdSource = { IMDT_KEYBOARD, bInjected ? IMO_INJECTED : IMO_HARDWARE };
             MsqPostMessageEx(pti, &Msg, TRUE, QS_KEY, 0, dwExtraInfo, &KbdSource);
@@ -1485,9 +1522,10 @@ UserSendKeyboardInput(KEYBDINPUT *pKbdInput, BOOL bInjected)
         else
         {
             wVk = pKbdInput->wVk;
-            if (bInjected && (wVk & 0xFF) == VK_RSHIFT)
-                dwFlags |= KEYEVENTF_EXTENDEDKEY;
         }
+
+        if (bInjected && (wVk & 0xFF) == VK_RSHIFT)
+            dwFlags |= KEYEVENTF_EXTENDEDKEY;
 
         /* Remove all virtual key flags (KBDEXT, KBDMULTIVK, KBDSPECIAL, KBDNUMPAD) */
         wVk &= 0xFF;
@@ -1673,9 +1711,12 @@ IntTranslateKbdMessage(LPMSG lpMsg,
 
     if (lpMsg->wParam == VK_PACKET)
     {
+        if (!pti->wchInjected)
+            return FALSE;
+
         NewMsg.message = (lpMsg->message == WM_KEYDOWN) ? WM_CHAR : WM_SYSCHAR;
-        NewMsg.wParam = HIWORD(lpMsg->lParam);
-        NewMsg.lParam = LOWORD(lpMsg->lParam);
+        NewMsg.wParam = pti->wchInjected;
+        NewMsg.lParam = lpMsg->lParam;
         MsqPostMessage(pti, &NewMsg, FALSE, QS_KEY, 0, 0);
         return TRUE;
     }

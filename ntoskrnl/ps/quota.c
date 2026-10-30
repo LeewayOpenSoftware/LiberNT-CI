@@ -15,7 +15,8 @@
 
 EPROCESS_QUOTA_BLOCK PspDefaultQuotaBlock;
 static LIST_ENTRY PspQuotaBlockList = {&PspQuotaBlockList, &PspQuotaBlockList};
-static KSPIN_LOCK PspQuotaLock;
+static KSPIN_LOCK PspQuotaListLock;
+static KSPIN_LOCK PspQuotaExpansionLock;
 
 #define VALID_QUOTA_FLAGS (QUOTA_LIMITS_HARDWS_MIN_ENABLE | \
                            QUOTA_LIMITS_HARDWS_MIN_DISABLE | \
@@ -54,7 +55,7 @@ PspQuotaTypeToPoolType(
  * management is done in a different way. Furthermore,
  * quota spin lock has to be held when returning quotas.
  */
-_Requires_lock_held_(PspQuotaLock)
+_Requires_lock_held_(PspQuotaListLock)
 VOID
 NTAPI
 PspReturnQuotasOnDestroy(
@@ -104,7 +105,7 @@ PspReturnQuotasOnDestroy(
  * not permitted. Furthermore, quota spin lock
  * has to be held when returning quotas.
  */
-_Requires_lock_held_(PspQuotaLock)
+_Requires_lock_held_(PspQuotaListLock)
 VOID
 NTAPI
 PspReturnExcessQuotas(
@@ -167,6 +168,146 @@ PspReturnExcessQuotas(
     *ReturnedQuotas = AmountToReturn;
 }
 
+static
+SIZE_T
+PspReadQuota(
+    _In_ volatile SIZE_T *Value)
+{
+    return *Value;
+}
+
+static
+VOID
+PspRaiseQuotaPeak(
+    _Inout_ PSIZE_T Peak,
+    _In_ SIZE_T Usage)
+{
+    SIZE_T Current = PspReadQuota(Peak);
+
+    while (Current < Usage)
+    {
+        SIZE_T Previous = InterlockedCompareExchangeSizeT(Peak, Usage, Current);
+
+        if (Previous == Current)
+            break;
+        Current = Previous;
+    }
+}
+
+static
+BOOLEAN
+PspTryChargeQuotaEntry(
+    _Inout_ PEPROCESS_QUOTA_ENTRY QuotaEntry,
+    _In_ SIZE_T Amount,
+    _In_ BOOLEAN CheckLimit)
+{
+    SIZE_T Usage = PspReadQuota(&QuotaEntry->Usage);
+
+    for (;;)
+    {
+        SIZE_T Previous;
+
+        if (CheckLimit && (Usage + Amount > PspReadQuota(&QuotaEntry->Limit)))
+            return FALSE;
+
+        Previous = InterlockedCompareExchangeSizeT(&QuotaEntry->Usage, Usage + Amount, Usage);
+        if (Previous == Usage)
+            break;
+        Usage = Previous;
+    }
+
+    PspRaiseQuotaPeak(&QuotaEntry->Peak, Usage + Amount);
+    return TRUE;
+}
+
+static
+VOID
+PspReleaseQuotaUsage(
+    _Inout_ PSIZE_T Usage,
+    _In_opt_ PEPROCESS Process,
+    _In_ PS_QUOTA_TYPE QuotaType,
+    _In_ SIZE_T Amount)
+{
+    SIZE_T Current = PspReadQuota(Usage);
+
+    for (;;)
+    {
+        SIZE_T Previous;
+
+        if (Current < Amount)
+        {
+            KeBugCheckEx(QUOTA_UNDERFLOW,
+                         (ULONG_PTR)Process,
+                         (ULONG_PTR)QuotaType,
+                         Current,
+                         (ULONG_PTR)Amount);
+        }
+
+        Previous = InterlockedCompareExchangeSizeT(Usage, Current - Amount, Current);
+        if (Previous == Current)
+            return;
+        Current = Previous;
+    }
+}
+
+static
+NTSTATUS
+PspExpandQuota(
+    _Inout_ PEPROCESS_QUOTA_BLOCK QuotaBlock,
+    _In_ PS_QUOTA_TYPE QuotaType,
+    _In_ SIZE_T Amount)
+{
+    PEPROCESS_QUOTA_ENTRY QuotaEntry = &QuotaBlock->QuotaEntry[QuotaType];
+    NTSTATUS Status = STATUS_SUCCESS;
+    SIZE_T ReturnedQuotas;
+    SIZE_T UpdatedLimit;
+    SIZE_T Limit;
+    BOOLEAN Raised;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&PspQuotaExpansionLock, &OldIrql);
+
+    Limit = PspReadQuota(&QuotaEntry->Limit);
+    if (PspReadQuota(&QuotaEntry->Usage) + Amount <= Limit)
+    {
+        KeReleaseSpinLock(&PspQuotaExpansionLock, OldIrql);
+        return STATUS_SUCCESS;
+    }
+
+    Raised = MmRaisePoolQuota(PspQuotaTypeToPoolType(QuotaType), Limit, &UpdatedLimit);
+    if (!Raised)
+    {
+        KeAcquireSpinLockAtDpcLevel(&PspQuotaListLock);
+        PspReturnExcessQuotas(QuotaType, &ReturnedQuotas);
+        KeReleaseSpinLockFromDpcLevel(&PspQuotaListLock);
+
+        if (ReturnedQuotas != 0)
+        {
+            Limit = PspReadQuota(&QuotaEntry->Limit);
+            Raised = MmRaisePoolQuota(PspQuotaTypeToPoolType(QuotaType), Limit, &UpdatedLimit);
+        }
+    }
+
+    if (!Raised)
+    {
+        DPRINT1("PspExpandQuota(): Failed to free some resources in order to raise quota limits...\n");
+        Status = STATUS_QUOTA_EXCEEDED;
+    }
+    else
+    {
+        InterlockedExchangeAddSizeT(&QuotaEntry->Limit, UpdatedLimit - Limit);
+        if (PspReadQuota(&QuotaEntry->Usage) + Amount > PspReadQuota(&QuotaEntry->Limit))
+        {
+            DPRINT1("PspExpandQuota(): Quota amount exceeds the limit (limit -- %Iu || amount -- %Iu)\n",
+                    PspReadQuota(&QuotaEntry->Limit), Amount);
+            Status = STATUS_QUOTA_EXCEEDED;
+        }
+    }
+
+    KeReleaseSpinLock(&PspQuotaExpansionLock, OldIrql);
+    return Status;
+}
+
 /**
  * @brief
  * Internal kernel function that provides the
@@ -209,119 +350,39 @@ PspChargeProcessQuotaSpecifiedPool(
     _In_ PS_QUOTA_TYPE QuotaType,
     _In_ SIZE_T Amount)
 {
-    KIRQL OldIrql;
-    SIZE_T ReturnedQuotas;
-    SIZE_T UpdatedLimit;
+    BOOLEAN CheckLimit = (QuotaBlock != &PspDefaultQuotaBlock);
+    NTSTATUS Status;
+    SIZE_T Usage;
 
     /* Sanity checks */
     ASSERT(QuotaType < PsQuotaTypes);
     ASSERT((SSIZE_T)Amount >= 0);
 
-    /* Guard ourselves in a spin lock */
-    KeAcquireSpinLock(&PspQuotaLock, &OldIrql);
-
-    /* Are we within the bounds of quota limit? */
-    if (QuotaBlock->QuotaEntry[QuotaType].Usage + Amount >
-        QuotaBlock->QuotaEntry[QuotaType].Limit &&
-        QuotaBlock != &PspDefaultQuotaBlock)
+    if (!PspTryChargeQuotaEntry(&QuotaBlock->QuotaEntry[QuotaType], Amount, CheckLimit))
     {
-        /* We aren't... Is this a page file quota charging? */
         if (QuotaType == PsPageFile)
         {
-            /* It is, return the appropriate status code */
-            DPRINT1("PspChargeProcessQuotaSpecifiedPool(): Quota amount exceeds the limit on page file quota (limit -- %lu || amount -- %lu)\n",
-                    QuotaBlock->QuotaEntry[QuotaType].Limit, Amount);
+            DPRINT1("PspChargeProcessQuotaSpecifiedPool(): Quota amount exceeds the limit on page file quota (limit -- %Iu || amount -- %Iu)\n",
+                    PspReadQuota(&QuotaBlock->QuotaEntry[QuotaType].Limit), Amount);
             return STATUS_PAGEFILE_QUOTA_EXCEEDED;
         }
 
-        /*
-         * This is not a page file charge. What we can do at best
-         * in this scenario is to attempt to raise (expand) the
-         * quota limit charges of the block.
-         */
-        if (!MmRaisePoolQuota(PspQuotaTypeToPoolType(QuotaType),
-                              QuotaBlock->QuotaEntry[QuotaType].Limit,
-                              &UpdatedLimit))
-        {
-            /*
-             * We can't? It could be that we must free
-             * up some resources in order to raise the
-             * limit, which in that case we must return
-             * the excess of quota that hasn't been
-             * returned. If we haven't returned anything
-             * then what we're doing here is futile.
-             * Bail out...
-             */
-            PspReturnExcessQuotas(QuotaType, &ReturnedQuotas);
-            if (ReturnedQuotas == 0)
-            {
-                DPRINT1("PspChargeProcessQuotaSpecifiedPool(): Failed to free some resources in order to raise quota limits...\n");
-                KeReleaseSpinLock(&PspQuotaLock, OldIrql);
-                return STATUS_QUOTA_EXCEEDED;
-            }
+        Status = PspExpandQuota(QuotaBlock, QuotaType, Amount);
+        if (!NT_SUCCESS(Status))
+            return Status;
 
-            /* Try to raise the quota limits again */
-            MmRaisePoolQuota(PspQuotaTypeToPoolType(QuotaType),
-                             QuotaBlock->QuotaEntry[QuotaType].Limit,
-                             &UpdatedLimit);
-        }
-
-        /* Enforce a new raised limit */
-        InterlockedExchangeSizeT(&QuotaBlock->QuotaEntry[QuotaType].Limit, UpdatedLimit);
-
-        /*
-         * Now determine if the current usage and the
-         * amounting by the caller still exceeds the
-         * quota limit of the process. If it's still
-         * over the limit then there's nothing we can
-         * do, so fail.
-         */
-        if (QuotaBlock->QuotaEntry[QuotaType].Usage + Amount >
-            QuotaBlock->QuotaEntry[QuotaType].Limit)
-        {
-            DPRINT1("PspChargeProcessQuotaSpecifiedPool(): Quota amount exceeds the limit (limit -- %lu || amount -- %lu)\n",
-                    QuotaBlock->QuotaEntry[QuotaType].Limit, Amount);
+        if (!PspTryChargeQuotaEntry(&QuotaBlock->QuotaEntry[QuotaType], Amount, CheckLimit))
             return STATUS_QUOTA_EXCEEDED;
-        }
     }
 
-    /* Update the quota usage */
-    InterlockedExchangeAddSizeT(&QuotaBlock->QuotaEntry[QuotaType].Usage, Amount);
-
-    /* Update the entry peak if it's less than the usage */
-    if (QuotaBlock->QuotaEntry[QuotaType].Peak <
-        QuotaBlock->QuotaEntry[QuotaType].Usage)
+    if (Process && QuotaType != PsPageFile)
     {
-        InterlockedExchangeSizeT(&QuotaBlock->QuotaEntry[QuotaType].Peak,
-                                 QuotaBlock->QuotaEntry[QuotaType].Usage);
-    }
-
-    /* Are we being given a process as well? */
-    if (Process)
-    {
-        /* We're being given, check that's not a system one */
         ASSERT(Process != PsInitialSystemProcess);
 
-        if (QuotaType != PsPageFile)
-        {
-            InterlockedExchangeAddSizeT(&Process->ProcessQuotaUsage[QuotaType], Amount);
-
-            /*
-             * OK, we've now updated the quota usage of the process
-             * based upon the amount that the caller wanted to charge.
-             * Although the peak of process quota can be less than it was
-             * before so update the peaks as well accordingly.
-             */
-            if (Process->ProcessQuotaPeak[QuotaType] < Process->ProcessQuotaUsage[QuotaType])
-            {
-                InterlockedExchangeSizeT(&Process->ProcessQuotaPeak[QuotaType],
-                                         Process->ProcessQuotaUsage[QuotaType]);
-            }
-        }
+        Usage = InterlockedExchangeAddSizeT(&Process->ProcessQuotaUsage[QuotaType], Amount) + Amount;
+        PspRaiseQuotaPeak(&Process->ProcessQuotaPeak[QuotaType], Usage);
     }
 
-    /* Release the lock */
-    KeReleaseSpinLock(&PspQuotaLock, OldIrql);
     return STATUS_SUCCESS;
 }
 
@@ -362,29 +423,15 @@ PspReturnProcessQuotaSpecifiedPool(
     _In_ PS_QUOTA_TYPE QuotaType,
     _In_ SIZE_T Amount)
 {
-    KIRQL OldIrql;
+    PEPROCESS_QUOTA_ENTRY QuotaEntry = &QuotaBlock->QuotaEntry[QuotaType];
     SIZE_T ReturnThreshold;
-    SIZE_T AmountToReturn = 0;
+    SIZE_T AmountToReturn;
+    SIZE_T Returned;
+    SIZE_T Limit;
 
     /* Sanity checks */
     ASSERT(QuotaType < PsQuotaTypes);
     ASSERT((SSIZE_T)Amount >= 0);
-
-    /* Guard ourselves in a spin lock */
-    KeAcquireSpinLock(&PspQuotaLock, &OldIrql);
-
-    /* Does the caller return more quota than it was previously charged? */
-    if ((Process && QuotaType != PsPageFile && Process->ProcessQuotaUsage[QuotaType] < Amount) ||
-        QuotaBlock->QuotaEntry[QuotaType].Usage < Amount)
-    {
-        /* It does, crash the system! */
-        KeBugCheckEx(QUOTA_UNDERFLOW,
-                     (ULONG_PTR)Process,
-                     (ULONG_PTR)QuotaType,
-                     (Process && QuotaType != PsPageFile) ? (ULONG_PTR)Process->ProcessQuotaUsage[QuotaType] :
-                                                            QuotaBlock->QuotaEntry[QuotaType].Usage,
-                     (ULONG_PTR)Amount);
-    }
 
     /* The return threshold can be non paged or paged */
     ReturnThreshold = QuotaType ? PSP_NON_PAGED_POOL_QUOTA_THRESHOLD : PSP_PAGED_POOL_QUOTA_THRESHOLD;
@@ -393,51 +440,38 @@ PspReturnProcessQuotaSpecifiedPool(
      * We need to trim the quota limits based on the
      * amount we're going to return quotas back.
      */
-    if ((QuotaType != PsPageFile && QuotaBlock != &PspDefaultQuotaBlock) &&
-        (QuotaBlock->QuotaEntry[QuotaType].Limit > QuotaBlock->QuotaEntry[QuotaType].Usage + ReturnThreshold))
+    if (QuotaType != PsPageFile && QuotaBlock != &PspDefaultQuotaBlock)
     {
-        /*
-         * If the amount to return exceeds the threshold,
-         * the new amount becomes the default, otherwise
-         * the amount is just the one given by the caller.
-         */
         AmountToReturn = min(Amount, ReturnThreshold);
-
-        /* Add up the lots to the Return field */
-        InterlockedExchangeAddSizeT(&QuotaBlock->QuotaEntry[QuotaType].Return, AmountToReturn);
-
-        /*
-         * If the amount to return exceeds the threshold then
-         * we have lots of quota to return to Mm. So do it so
-         * and zerou out the Return field.
-         */
-        if (QuotaBlock->QuotaEntry[QuotaType].Return > ReturnThreshold)
+        Limit = PspReadQuota(&QuotaEntry->Limit);
+        while (Limit > PspReadQuota(&QuotaEntry->Usage) + ReturnThreshold)
         {
-            MmReturnPoolQuota(PspQuotaTypeToPoolType(QuotaType), QuotaBlock->QuotaEntry[QuotaType].Return);
-            InterlockedExchangeSizeT(&QuotaBlock->QuotaEntry[QuotaType].Return, 0);
+            SIZE_T Previous = InterlockedCompareExchangeSizeT(&QuotaEntry->Limit, Limit - AmountToReturn, Limit);
+
+            if (Previous != Limit)
+            {
+                Limit = Previous;
+                continue;
+            }
+
+            Returned = InterlockedExchangeAddSizeT(&QuotaEntry->Return, AmountToReturn) + AmountToReturn;
+            if (Returned > ReturnThreshold)
+            {
+                Returned = InterlockedExchangeSizeT(&QuotaEntry->Return, 0);
+                if (Returned != 0)
+                    MmReturnPoolQuota(PspQuotaTypeToPoolType(QuotaType), Returned);
+            }
+            break;
         }
-
-        /* And try to trim the limit */
-        InterlockedExchangeSizeT(&QuotaBlock->QuotaEntry[QuotaType].Limit,
-                                 QuotaBlock->QuotaEntry[QuotaType].Limit - AmountToReturn);
     }
 
-    /* Update the usage member of the block */
-    InterlockedExchangeAddSizeT(&QuotaBlock->QuotaEntry[QuotaType].Usage, -(LONG_PTR)Amount);
-
-    /* Are we being given a process? */
-    if (Process)
+    if (Process && QuotaType != PsPageFile)
     {
-        /* We're being given, check that's not a system one  */
         ASSERT(Process != PsInitialSystemProcess);
-
-        /* Decrease the process' quota usage */
-        if (QuotaType != PsPageFile)
-            InterlockedExchangeAddSizeT(&Process->ProcessQuotaUsage[QuotaType], -(LONG_PTR)Amount);
+        PspReleaseQuotaUsage(&Process->ProcessQuotaUsage[QuotaType], Process, QuotaType, Amount);
     }
 
-    /* We're done, release the lock */
-    KeReleaseSpinLock(&PspQuotaLock, OldIrql);
+    PspReleaseQuotaUsage(&QuotaEntry->Usage, Process, QuotaType, Amount);
 }
 
 /* FUNCTIONS ***************************************************************/
@@ -535,9 +569,9 @@ PspInsertQuotaBlock(
 {
     KIRQL OldIrql;
 
-    KeAcquireSpinLock(&PspQuotaLock, &OldIrql);
+    KeAcquireSpinLock(&PspQuotaListLock, &OldIrql);
     InsertTailList(&PspQuotaBlockList, &QuotaBlock->QuotaList);
-    KeReleaseSpinLock(&PspQuotaLock, OldIrql);
+    KeReleaseSpinLock(&PspQuotaListLock, OldIrql);
 }
 
 /**
@@ -597,14 +631,14 @@ PspDereferenceQuotaBlock(
         InterlockedDecrementUL(&QuotaBlock->ReferenceCount) == 0)
     {
         /* Acquire the quota lock */
-        KeAcquireSpinLock(&PspQuotaLock, &OldIrql);
+        KeAcquireSpinLock(&PspQuotaListLock, &OldIrql);
 
         /* Return all the quotas back to Mm and remove the quota from list */
         PspReturnQuotasOnDestroy(QuotaBlock);
         RemoveEntryList(&QuotaBlock->QuotaList);
 
         /* Release the lock and free the block */
-        KeReleaseSpinLock(&PspQuotaLock, OldIrql);
+        KeReleaseSpinLock(&PspQuotaListLock, OldIrql);
         ExFreePoolWithTag(QuotaBlock, TAG_QUOTA_BLOCK);
     }
 }
@@ -1185,8 +1219,12 @@ PspSetQuotaLimits(
         }
 
         /* Initialize the quota block */
+        RtlZeroMemory(QuotaBlock, sizeof(*QuotaBlock));
         QuotaBlock->ReferenceCount = 1;
         QuotaBlock->ProcessCount = 1;
+        /* FIXME: charges another thread makes between this snapshot and the swap below are returned to the new block */
+        QuotaBlock->QuotaEntry[PsNonPagedPool].Usage = Process->ProcessQuotaUsage[PsNonPagedPool];
+        QuotaBlock->QuotaEntry[PsPagedPool].Usage = Process->ProcessQuotaUsage[PsPagedPool];
         QuotaBlock->QuotaEntry[PsNonPagedPool].Peak = Process->ProcessQuotaPeak[PsNonPagedPool];
         QuotaBlock->QuotaEntry[PsPagedPool].Peak = Process->ProcessQuotaPeak[PsPagedPool];
         QuotaBlock->QuotaEntry[PsPageFile].Peak = Process->CommitChargePeak;
@@ -1201,6 +1239,10 @@ PspSetQuotaLimits(
         if (OldQuotaBlock == &PspDefaultQuotaBlock)
         {
             /* Success, insert the new quota block */
+            InterlockedExchangeAddSizeT(&PspDefaultQuotaBlock.QuotaEntry[PsNonPagedPool].Usage,
+                                        -(LONG_PTR)QuotaBlock->QuotaEntry[PsNonPagedPool].Usage);
+            InterlockedExchangeAddSizeT(&PspDefaultQuotaBlock.QuotaEntry[PsPagedPool].Usage,
+                                        -(LONG_PTR)QuotaBlock->QuotaEntry[PsPagedPool].Usage);
             PspInsertQuotaBlock(QuotaBlock);
         }
         else

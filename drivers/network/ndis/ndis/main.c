@@ -17,6 +17,7 @@
 
 /* See debug.h for debug/trace constants */
 ULONG DebugTraceLevel = MIN_TRACE;
+PDRIVER_OBJECT NdisDriverObject;
 
 #endif /* DBG */
 
@@ -61,6 +62,7 @@ DriverEntry(
   KeInitializeSpinLock(&AdapterListLock);
 
   DriverObject->DriverUnload = MainUnload;
+  NdisDriverObject = DriverObject;
 
   CancelId = 0;
 

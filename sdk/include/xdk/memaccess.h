@@ -22,6 +22,14 @@ $endif()
 #define PF_TEMPORAL_LEVEL_3         2
 #define PF_NON_TEMPORAL_LEVEL_ALL   3
 #define ReadForWriteAccess(p)                (*(p))
+#elif defined(_M_RISCV64)
+#define PreFetchCacheLine(l,a)               __builtin_prefetch((const void *) (a))
+#define PrefetchForWrite(p)                  __builtin_prefetch((const void *) (p), 1)
+#define PF_TEMPORAL_LEVEL_1         0
+#define PF_TEMPORAL_LEVEL_2         1
+#define PF_TEMPORAL_LEVEL_3         2
+#define PF_NON_TEMPORAL_LEVEL_ALL   3
+#define ReadForWriteAccess(p)                (*(p))
 #endif
 
 #if !defined(RC_INVOKED)

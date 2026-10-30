@@ -324,6 +324,15 @@ MMRESULT WINAPI acmStreamPrepareHeader(HACMSTREAM has, PACMSTREAMHEADER pash,
              pash->cbSrcLength, was->drvInst.pwfxSrc->nBlockAlign);
         return pash->cbSrcLength ? ACMERR_NOTPOSSIBLE : MMSYSERR_INVALPARAM;
     }
+#ifdef __REACTOS__
+    if (((ULONG_PTR)pash->pbSrc + pash->cbSrcLength >= (ULONG_PTR)pash->pbSrc &&
+         IsBadReadPtr(pash->pbSrc, pash->cbSrcLength)) ||
+        ((ULONG_PTR)pash->pbDst + pash->cbDstLength >= (ULONG_PTR)pash->pbDst &&
+         IsBadWritePtr(pash->pbDst, pash->cbDstLength))) {
+        WARN("invalid buffer\n");
+        return MMSYSERR_INVALPARAM;
+    }
+#endif
 
     /* Note: the ACMSTREAMHEADER and ACMDRVSTREAMHEADER structs are of same
      * size. some fields are private to msacm internals, and are exposed

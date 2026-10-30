@@ -6,3 +6,6 @@
 add_subdirectory(ndis6miniport)
 add_subdirectory(wfpcallout)
 add_subdirectory(wskclient)
+if(NOT ARCH STREQUAL "i386")
+    add_subdirectory(netcxloop)
+endif()

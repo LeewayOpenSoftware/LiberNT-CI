@@ -64,6 +64,7 @@ typedef struct _SOCKET_CONTEXT {
     ULONG Ttl;
     BOOLEAN DontFragment;
     BOOL V6Only;
+    HANDLE MembershipHandle;
 } SOCKET_CONTEXT, *PSOCKET_CONTEXT;
 
 INT

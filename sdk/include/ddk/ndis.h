@@ -863,6 +863,8 @@ typedef MDL NDIS_BUFFER, *PNDIS_BUFFER;
 #define NDIS_STATUS_OFFLOAD_PAUSE               ((NDIS_STATUS)0x40020001L)
 #define NDIS_STATUS_UPLOAD_ALL                  ((NDIS_STATUS)0x40020002L)
 #define NDIS_STATUS_OFFLOAD_RESUME              ((NDIS_STATUS)0x40020003L)
+#define NDIS_STATUS_CURRENT_MAC_ADDRESS_CHANGE  ((NDIS_STATUS)0x400200B0L)
+#define NDIS_STATUS_L2_MTU_SIZE_CHANGE          ((NDIS_STATUS)0x400200B1L)
 #define NDIS_STATUS_OFFLOAD_PARTIAL_SUCCESS     ((NDIS_STATUS)0x40020004L)
 #define NDIS_STATUS_OFFLOAD_STATE_INVALID       ((NDIS_STATUS)0x40020005L)
 #define NDIS_STATUS_TASK_OFFLOAD_CURRENT_CONFIG ((NDIS_STATUS)0x40020006L)
@@ -931,6 +933,8 @@ typedef MDL NDIS_BUFFER, *PNDIS_BUFFER;
 #define NDIS_STATUS_PM_WOL_PATTERN_REJECTED     ((NDIS_STATUS)0x40030051L)
 #define NDIS_STATUS_PM_OFFLOAD_REJECTED         ((NDIS_STATUS)0x40030052L)
 #define NDIS_STATUS_PM_CAPABILITIES_CHANGE      ((NDIS_STATUS)0x40030053L)
+#define NDIS_STATUS_PM_HARDWARE_CAPABILITIES    ((NDIS_STATUS)0x40030054L)
+#define NDIS_STATUS_PM_WAKE_REASON              ((NDIS_STATUS)0x40030055L)
 #endif
 
 #define NDIS_STATUS_NOT_RESETTABLE              ((NDIS_STATUS)0x80010001L)
@@ -2723,7 +2727,6 @@ typedef struct _NDIS_WRAPPER_HANDLE NDIS_WRAPPER_HANDLE, *PNDIS_WRAPPER_HANDLE;
 typedef struct _NDIS_PROTOCOL_BLOCK NDIS_PROTOCOL_BLOCK, *PNDIS_PROTOCOL_BLOCK;
 typedef struct _NDIS_OPEN_BLOCK NDIS_OPEN_BLOCK, *PNDIS_OPEN_BLOCK;
 typedef struct _NDIS_M_DRIVER_BLOCK NDIS_M_DRIVER_BLOCK, *PNDIS_M_DRIVER_BLOCK;
-typedef struct _NDIS_OFFLOAD NDIS_OFFLOAD, *PNDIS_OFFLOAD;
 typedef struct _NDIS_AF_LIST NDIS_AF_LIST, *PNDIS_AF_LIST;
 typedef struct _X_FILTER ETH_FILTER, *PETH_FILTER;
 #if NDIS_SUPPORT_NDIS6
@@ -6764,6 +6767,24 @@ typedef	NDIS_WAN_MAC_CHARACTERISTICS    *PNDIS_WAN_MAC_CHARACTERISTICS;
 #define NDIS_OBJECT_TYPE_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES 0xA4
 #define NDIS_OBJECT_TYPE_OFFLOAD                         0xA7
 #define NDIS_OBJECT_TYPE_OFFLOAD_ENCAPSULATION           0xA8
+#define NDIS_OFFLOAD_ENCAPSULATION_REVISION_1            1
+
+typedef struct _NDIS_OFFLOAD_ENCAPSULATION {
+  NDIS_OBJECT_HEADER Header;
+  struct {
+    ULONG Enabled;
+    ULONG EncapsulationType;
+    ULONG HeaderSize;
+  } IPv4;
+  struct {
+    ULONG Enabled;
+    ULONG EncapsulationType;
+    ULONG HeaderSize;
+  } IPv6;
+} NDIS_OFFLOAD_ENCAPSULATION, *PNDIS_OFFLOAD_ENCAPSULATION;
+
+#define NDIS_SIZEOF_OFFLOAD_ENCAPSULATION_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_OFFLOAD_ENCAPSULATION, IPv6.HeaderSize)
 #define NDIS_OBJECT_TYPE_CONFIGURATION_OBJECT            0xA9
 #define NDIS_OBJECT_TYPE_DRIVER_WRAPPER_OBJECT           0xAA
 #define NDIS_OBJECT_TYPE_HD_SPLIT_ATTRIBUTES             0xAB
@@ -7045,6 +7066,20 @@ typedef struct _NET_BUFFER_POOL_PARAMETERS {
 #define NET_BUFFER_LIST_CONTEXT_DATA_SIZE(_NBL)  \
     ((_NBL)->Context->Size)
 #define NET_BUFFER_LIST_INFO(_NBL, _Id)          ((_NBL)->NetBufferListInfo[(_Id)])
+#define NET_BUFFER_LIST_SET_HASH_TYPE(_NBL, _HashType) \
+    (NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashInfo) = \
+        UlongToPtr((PtrToUlong(NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashInfo)) & ~NDIS_HASH_TYPE_MASK) | ((_HashType) & NDIS_HASH_TYPE_MASK)))
+#define NET_BUFFER_LIST_SET_HASH_FUNCTION(_NBL, _HashFunction) \
+    (NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashInfo) = \
+        UlongToPtr((PtrToUlong(NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashInfo)) & ~NDIS_HASH_FUNCTION_MASK) | ((_HashFunction) & NDIS_HASH_FUNCTION_MASK)))
+#define NET_BUFFER_LIST_SET_HASH_VALUE(_NBL, _HashValue) \
+    (NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashValue) = UlongToPtr(_HashValue))
+#define NET_BUFFER_LIST_GET_HASH_TYPE(_NBL) \
+    (PtrToUlong(NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashInfo)) & NDIS_HASH_TYPE_MASK)
+#define NET_BUFFER_LIST_GET_HASH_FUNCTION(_NBL) \
+    (PtrToUlong(NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashInfo)) & NDIS_HASH_FUNCTION_MASK)
+#define NET_BUFFER_LIST_GET_HASH_VALUE(_NBL) \
+    (PtrToUlong(NET_BUFFER_LIST_INFO((_NBL), NetBufferListHashValue)))
 #define NET_BUFFER_LIST_STATUS(_NBL)             ((_NBL)->Status)
 #define NDIS_GET_NET_BUFFER_LIST_CANCEL_ID(_NBL) \
     NET_BUFFER_LIST_INFO((_NBL), NetBufferListCancelId)
@@ -7052,6 +7087,125 @@ typedef struct _NET_BUFFER_POOL_PARAMETERS {
     (NET_BUFFER_LIST_INFO((_NBL), NetBufferListCancelId) = (_CancelId))
 #define NdisSetNetBufferListProtocolId(_NBL, _ProtocolId) \
     (*((PUCHAR)&NET_BUFFER_LIST_INFO((_NBL), NetBufferListProtocolId)) = (UCHAR)(_ProtocolId))
+
+#if NDIS_SUPPORT_NDIS630
+typedef union _NDIS_RSC_NBL_INFO {
+  struct {
+    USHORT CoalescedSegCount;
+    USHORT DupAckCount;
+  } Info;
+  PVOID Value;
+} NDIS_RSC_NBL_INFO, *PNDIS_RSC_NBL_INFO;
+
+C_ASSERT(sizeof(NDIS_RSC_NBL_INFO) == sizeof(PVOID));
+
+#if defined(NDIS_INCLUDE_LEGACY_NAMES) || !defined(__cplusplus)
+#define NET_BUFFER_LIST_COALESCED_SEG_COUNT(_NBL) \
+  (((NDIS_RSC_NBL_INFO*)&NET_BUFFER_LIST_INFO((_NBL), TcpRecvSegCoalesceInfo))->Info.CoalescedSegCount)
+#define NET_BUFFER_LIST_DUP_ACK_COUNT(_NBL) \
+  (((NDIS_RSC_NBL_INFO*)&NET_BUFFER_LIST_INFO((_NBL), TcpRecvSegCoalesceInfo))->Info.DupAckCount)
+#else
+extern "C++" {
+inline USHORT &
+NET_BUFFER_LIST_COALESCED_SEG_COUNT(
+  _In_ NET_BUFFER_LIST *Nbl)
+{
+  return ((NDIS_RSC_NBL_INFO*)&NET_BUFFER_LIST_INFO(Nbl, TcpRecvSegCoalesceInfo))->Info.CoalescedSegCount;
+}
+
+inline USHORT const &
+NET_BUFFER_LIST_COALESCED_SEG_COUNT(
+  _In_ NET_BUFFER_LIST const *Nbl)
+{
+  return ((NDIS_RSC_NBL_INFO const*)&NET_BUFFER_LIST_INFO(Nbl, TcpRecvSegCoalesceInfo))->Info.CoalescedSegCount;
+}
+
+inline USHORT &
+NET_BUFFER_LIST_DUP_ACK_COUNT(
+  _In_ NET_BUFFER_LIST *Nbl)
+{
+  return ((NDIS_RSC_NBL_INFO*)&NET_BUFFER_LIST_INFO(Nbl, TcpRecvSegCoalesceInfo))->Info.DupAckCount;
+}
+
+inline USHORT const &
+NET_BUFFER_LIST_DUP_ACK_COUNT(
+  _In_ NET_BUFFER_LIST const *Nbl)
+{
+  return ((NDIS_RSC_NBL_INFO const*)&NET_BUFFER_LIST_INFO(Nbl, TcpRecvSegCoalesceInfo))->Info.DupAckCount;
+}
+}
+#endif
+
+#if NDIS_SUPPORT_NDIS684
+typedef struct _NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO {
+  union {
+    struct {
+      USHORT SegCount;
+      USHORT SegSize;
+    } Receive;
+    PVOID Value;
+  };
+} NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO, *PNDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO;
+
+#if NDIS_SUPPORT_NDIS689
+#define NDIS_OFFLOAD_PARAMETERS_UDP_RSC_NO_CHANGE 0
+#define NDIS_OFFLOAD_PARAMETERS_UDP_RSC_DISABLED 1
+#define NDIS_OFFLOAD_PARAMETERS_UDP_RSC_ENABLED 2
+#endif
+
+#if defined(NDIS_INCLUDE_LEGACY_NAMES) || !defined(__cplusplus)
+#define NET_BUFFER_LIST_UDP_COALESCED_SEG_COUNT(_NBL) \
+  (((NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO*)&(_NBL)->NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo])->Receive.SegCount)
+#define NET_BUFFER_LIST_UDP_COALESCED_SEG_SIZE(_NBL) \
+  (((NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO*)&(_NBL)->NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo])->Receive.SegSize)
+#else
+extern "C++" {
+inline USHORT &
+NET_BUFFER_LIST_UDP_COALESCED_SEG_COUNT(
+  _In_ NET_BUFFER_LIST *Nbl)
+{
+  return ((NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO*)&Nbl->NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo])->Receive.SegCount;
+}
+
+inline USHORT const &
+NET_BUFFER_LIST_UDP_COALESCED_SEG_COUNT(
+  _In_ NET_BUFFER_LIST const *Nbl)
+{
+  return ((NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO const*)&Nbl->NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo])->Receive.SegCount;
+}
+
+inline USHORT &
+NET_BUFFER_LIST_UDP_COALESCED_SEG_SIZE(
+  _In_ NET_BUFFER_LIST *Nbl)
+{
+  return ((NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO*)&Nbl->NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo])->Receive.SegSize;
+}
+
+inline USHORT const &
+NET_BUFFER_LIST_UDP_COALESCED_SEG_SIZE(
+  _In_ NET_BUFFER_LIST const *Nbl)
+{
+  return ((NDIS_UDP_RSC_OFFLOAD_NET_BUFFER_LIST_INFO const*)&Nbl->NetBufferListInfo[UdpRecvSegCoalesceOffloadInfo])->Receive.SegSize;
+}
+}
+#endif
+#endif
+
+#if NDIS_SUPPORT_NDIS688
+#ifdef __cplusplus
+inline
+#else
+FORCEINLINE
+#endif
+BOOLEAN
+NET_BUFFER_LIST_IS_TCP_RSC_SET(
+  _In_ NET_BUFFER_LIST const *Nbl)
+{
+  NDIS_RSC_NBL_INFO const *Info = (NDIS_RSC_NBL_INFO const *)&Nbl->NetBufferListInfo[TcpRecvSegCoalesceInfo];
+  return ((UINT_PTR)Info->Value & 0xFFFFFFFF) != 0;
+}
+#endif
+#endif
 
 /* NET_BUFFER_LIST.Flags ownership masks. */
 #if NDIS_SUPPORT_NDIS630
@@ -7368,7 +7522,6 @@ NdisFreeNetBufferListContext(
 /* Port number is a ULONG identifier used by OID requests / status indications
  * to target a specific port on a multi-port miniport. Must be declared before
  * any type that embeds it. */
-typedef ULONG NDIS_PORT_NUMBER, *PNDIS_PORT_NUMBER;
 #define NDIS_DEFAULT_PORT_NUMBER              0
 #define NDIS_OID_REQUEST_NDIS_RESERVED_SIZE   16
 
@@ -7600,14 +7753,6 @@ NTAPI
 NdisMResetMiniport(
   _In_ NDIS_HANDLE NdisMiniportHandle);
 
-typedef enum _NDIS_SUPPORTED_PAUSE_FUNCTIONS {
-  NdisPauseFunctionsUnsupported,
-  NdisPauseFunctionsSendOnly,
-  NdisPauseFunctionsReceiveOnly,
-  NdisPauseFunctionsSendAndReceive,
-  NdisPauseFunctionsUnknown
-} NDIS_SUPPORTED_PAUSE_FUNCTIONS, *PNDIS_SUPPORTED_PAUSE_FUNCTIONS;
-
 #define NDIS_LINK_STATE_REVISION_1  1
 typedef struct _NDIS_LINK_STATE {
   NDIS_OBJECT_HEADER             Header;
@@ -7709,6 +7854,19 @@ typedef struct _NDIS_STATISTICS_INFO {
 #define NDIS_SIZEOF_STATISTICS_INFO_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_STATISTICS_INFO, ifHCOutBroadcastOctets)
 #define NDIS_STATISTICS_INFO_DEFINED 1
+
+#if NDIS_SUPPORT_NDIS630
+typedef struct _NDIS_RSC_STATISTICS_INFO {
+  NDIS_OBJECT_HEADER Header;
+  ULONG64 CoalescedPkts;
+  ULONG64 CoalescedOctets;
+  ULONG64 CoalesceEvents;
+  ULONG64 Aborts;
+} NDIS_RSC_STATISTICS_INFO, *PNDIS_RSC_STATISTICS_INFO;
+#define NDIS_RSC_STATISTICS_REVISION_1 1
+#define NDIS_SIZEOF_RSC_STATISTICS_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_RSC_STATISTICS_INFO, Aborts)
+#endif
 
 #endif /* NDIS_SUPPORT_NDIS6 */
 /* ============================================================================
@@ -8437,11 +8595,45 @@ typedef struct _NDIS_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES {
 #define NDIS_SIZEOF_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES_REVISION_1 \
   RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES, TcpConnectionOffloadHardwareCapabilities)
 
+#define NDIS_MINIPORT_ADAPTER_802_11_ATTRIBUTES_REVISION_1 1
+#define NDIS_MINIPORT_ADAPTER_802_11_ATTRIBUTES_REVISION_2 2
+#define NDIS_MINIPORT_ADAPTER_802_11_ATTRIBUTES_REVISION_3 3
+
+typedef struct _NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES {
+  NDIS_OBJECT_HEADER Header;
+  ULONG OpModeCapability;
+  ULONG NumOfTXBuffers;
+  ULONG NumOfRXBuffers;
+  BOOLEAN MultiDomainCapabilityImplemented;
+  ULONG NumSupportedPhys;
+  PDOT11_PHY_ATTRIBUTES SupportedPhyAttributes;
+  PDOT11_EXTSTA_ATTRIBUTES ExtSTAAttributes;
+#if (NDIS_SUPPORT_NDIS620)
+  PDOT11_VWIFI_ATTRIBUTES VWiFiAttributes;
+  PDOT11_EXTAP_ATTRIBUTES ExtAPAttributes;
+#endif
+#if (NDIS_SUPPORT_NDIS630)
+  PDOT11_WFD_ATTRIBUTES WFDAttributes;
+#endif
+} NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES, *PNDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES;
+
+#define NDIS_SIZEOF_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES, ExtSTAAttributes)
+#if (NDIS_SUPPORT_NDIS620)
+#define NDIS_SIZEOF_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES, ExtAPAttributes)
+#endif
+#if (NDIS_SUPPORT_NDIS630)
+#define NDIS_SIZEOF_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES_REVISION_3 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES, WFDAttributes)
+#endif
+
 typedef union _NDIS_MINIPORT_ADAPTER_ATTRIBUTES {
   NDIS_OBJECT_HEADER                                Header;
   NDIS_MINIPORT_ADAPTER_REGISTRATION_ATTRIBUTES     RegistrationAttributes;
   NDIS_MINIPORT_ADAPTER_GENERAL_ATTRIBUTES          GeneralAttributes;
   NDIS_MINIPORT_ADAPTER_OFFLOAD_ATTRIBUTES          OffloadAttributes;
+  NDIS_MINIPORT_ADAPTER_NATIVE_802_11_ATTRIBUTES    Native_802_11_Attributes;
   NDIS_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES  AddDeviceRegistrationAttributes;
 } NDIS_MINIPORT_ADAPTER_ATTRIBUTES, *PNDIS_MINIPORT_ADAPTER_ATTRIBUTES;
 
@@ -9590,7 +9782,22 @@ typedef struct _NDIS_MINIPORT_VF_DRIVER_CHARACTERISTICS {
 /* NDIS_MINIPORT_ADAPTER_RSS_ATTRIBUTES  — RSS v2 (6.20 extends 6.0/6.1) */
 
 
+#define NDIS_RECEIVE_SCALE_CAPABILITIES_REVISION_1  1
 #define NDIS_RECEIVE_SCALE_CAPABILITIES_REVISION_2  2
+#if (NDIS_SUPPORT_NDIS660)
+#define NDIS_RECEIVE_SCALE_CAPABILITIES_REVISION_3  3
+#endif
+
+#define NDIS_SIZEOF_RECEIVE_SCALE_CAPABILITIES_REVISION_1 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_RECEIVE_SCALE_CAPABILITIES, NumberOfReceiveQueues)
+#if (NDIS_SUPPORT_NDIS630)
+#define NDIS_SIZEOF_RECEIVE_SCALE_CAPABILITIES_REVISION_2 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_RECEIVE_SCALE_CAPABILITIES, NumberOfIndirectionTableEntries)
+#endif
+#if (NDIS_SUPPORT_NDIS660)
+#define NDIS_SIZEOF_RECEIVE_SCALE_CAPABILITIES_REVISION_3 \
+  RTL_SIZEOF_THROUGH_FIELD(NDIS_RECEIVE_SCALE_CAPABILITIES, NumberOfIndirectionTableEntries)
+#endif
 
 /* Power-management WOL pattern (NDIS 6.20 extends Vista's NDIS_POWER_MANAGEMENT_CAPABILITIES) */
 
@@ -10265,6 +10472,30 @@ typedef struct _NDIS_NET_BUFFER_LIST_8021Q_INFO
     };
 } NDIS_NET_BUFFER_LIST_8021Q_INFO, *PNDIS_NET_BUFFER_LIST_8021Q_INFO;
 
+#if defined(NDIS_INCLUDE_LEGACY_NAMES) || !defined(__cplusplus)
+#define NDIS_GET_NET_BUFFER_LIST_VLAN_ID(_NBL) \
+  (((NDIS_NET_BUFFER_LIST_8021Q_INFO *)&(_NBL)->NetBufferListInfo[Ieee8021QNetBufferListInfo])->TagHeader.VlanId)
+#define NDIS_SET_NET_BUFFER_LIST_VLAN_ID(_NBL, _VlanId) \
+  ((NDIS_NET_BUFFER_LIST_8021Q_INFO *)&(_NBL)->NetBufferListInfo[Ieee8021QNetBufferListInfo])->TagHeader.VlanId = (_VlanId)
+#else
+extern "C++" {
+inline UINT32
+NDIS_GET_NET_BUFFER_LIST_VLAN_ID(
+  _In_ NET_BUFFER_LIST const *Nbl)
+{
+  return ((NDIS_NET_BUFFER_LIST_8021Q_INFO const *)&Nbl->NetBufferListInfo[Ieee8021QNetBufferListInfo])->TagHeader.VlanId;
+}
+
+inline void
+NDIS_SET_NET_BUFFER_LIST_VLAN_ID(
+  _In_ NET_BUFFER_LIST *Nbl,
+  _In_ UINT32 VlanId)
+{
+  ((NDIS_NET_BUFFER_LIST_8021Q_INFO *)&Nbl->NetBufferListInfo[Ieee8021QNetBufferListInfo])->TagHeader.VlanId = VlanId;
+}
+}
+#endif
+
 #if ((NDIS_SUPPORT_NDIS630))
 
 #define NDIS_SWITCH_DEFAULT_PORT_ID     0
@@ -10440,6 +10671,71 @@ NdisQueryMdl(
 
 #define NDIS_TCP_LARGE_SEND_OFFLOAD_V2_TYPE     1
 
+#define NDIS_TCP_LARGE_SEND_OFFLOAD_IPv4        0
+#define NDIS_TCP_LARGE_SEND_OFFLOAD_IPv6        1
+
+#define NDIS_LARGE_SEND_OFFLOAD_MAX_HEADER_LENGTH 128
+
+typedef struct _NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO
+{
+    union
+    {
+        struct
+        {
+            ULONG Unused :30;
+            ULONG Type :1;
+            ULONG Reserved2 :1;
+        } Transmit;
+        struct
+        {
+            ULONG MSS :20;
+            ULONG TcpHeaderOffset :10;
+            ULONG Type :1;
+            ULONG Reserved2 :1;
+        } LsoV1Transmit;
+        struct
+        {
+            ULONG TcpPayload :30;
+            ULONG Type :1;
+            ULONG Reserved2 :1;
+        } LsoV1TransmitComplete;
+        struct
+        {
+            ULONG MSS :20;
+            ULONG TcpHeaderOffset :10;
+            ULONG Type :1;
+            ULONG IPVersion :1;
+        } LsoV2Transmit;
+        struct
+        {
+            ULONG Reserved :30;
+            ULONG Type :1;
+            ULONG Reserved2 :1;
+        } LsoV2TransmitComplete;
+        PVOID Value;
+    };
+} NDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO, *PNDIS_TCP_LARGE_SEND_OFFLOAD_NET_BUFFER_LIST_INFO;
+
+#if NDIS_SUPPORT_NDIS683
+#define NDIS_UDP_SEGMENTATION_OFFLOAD_IPV4      0
+#define NDIS_UDP_SEGMENTATION_OFFLOAD_IPV6      1
+
+typedef struct _NDIS_UDP_SEGMENTATION_OFFLOAD_NET_BUFFER_LIST_INFO
+{
+    union
+    {
+        struct
+        {
+            ULONG MSS :20;
+            ULONG UdpHeaderOffset :10;
+            ULONG Reserved :1;
+            ULONG IPVersion :1;
+        } Transmit;
+        PVOID Value;
+    };
+} NDIS_UDP_SEGMENTATION_OFFLOAD_NET_BUFFER_LIST_INFO, *PNDIS_UDP_SEGMENTATION_OFFLOAD_NET_BUFFER_LIST_INFO;
+#endif
+
 typedef struct _NDIS_TCP_IP_CHECKSUM_NET_BUFFER_LIST_INFO
 {
     union
@@ -10576,6 +10872,14 @@ NDISAPI
 NTAPI
 NdisMPauseComplete(
     _In_  NDIS_HANDLE             MiniportAdapterHandle
+    );
+
+VOID
+NDISAPI
+NTAPI
+NdisMRestartComplete(
+    _In_  NDIS_HANDLE             MiniportAdapterHandle,
+    _In_  NDIS_STATUS             Status
     );
 
 _Must_inspect_result_

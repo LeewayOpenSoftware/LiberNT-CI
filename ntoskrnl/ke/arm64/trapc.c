@@ -2717,6 +2717,13 @@ KiArm64HandleSynchronousException(
 
             Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
 
+            if ((EsrClass == 0x32) && !(Esr & (1UL << 24)))
+            {
+                ARM64_WRITE_SYSREG(MDSCR_EL1, ARM64_READ_SYSREG(MDSCR_EL1) & ~1ULL);
+                KiArm64UserStepArmed[KeGetCurrentPrcb()->Number] = 0;
+                goto HandledExit;
+            }
+
             /*
              * A watchpoint reports the accessed data address in FAR_EL1, which
              * is needed to identify the closest watchpoint. Preserve it and
@@ -2886,6 +2893,9 @@ KiArm64HandleSynchronousException(
                             KeBugCheckWithTf(KERNEL_SECURITY_CHECK_FAILURE, Context->State.Registers.X[0], (ULONG_PTR)TrapFrame, (ULONG_PTR)&ExceptionRecord, 0, TrapFrame);
                         }
 
+                        if (KeGetCurrentThread()->Header.Minimal)
+                            break;
+
                         if (PsGetCurrentProcess()->DebugPort)
                             DbgkForwardException(&ExceptionRecord, TRUE, TRUE);
 
@@ -2942,106 +2952,109 @@ KiArm64HandleSynchronousException(
             Mode = KiArm64PreviousModeFromVector(Context->State.VectorId);
             if (KiArm64TryEmulateCurrentEl(Context, TrapFrame, Mode)) goto HandledExit;
 
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] UNHANDLED ESR class=0x%lx ISS=0x%lx Vec=%p ELR=%p FAR=%p SPSR=0x%lx Mode=%d Proc=%s\n",
-                    (ULONG)EsrClass, (ULONG)Iss,
-                    (PVOID)(ULONG_PTR)Context->State.VectorId,
-                    (PVOID)(ULONG_PTR)Context->State.Elr,
-                    (PVOID)(ULONG_PTR)Context->State.FaultAddress,
-                    (ULONG)Context->State.Spsr,
-                    (int)Mode,
-                    (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
-            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                    "[arm64] UNHANDLED regs sp=%p fp=%p lr=%p x19=%p x20=%p x21=%p x22=%p x28=%p\n",
-                    (PVOID)TrapFrame->Sp,
-                    (PVOID)TrapFrame->Fp,
-                    (PVOID)TrapFrame->Lr,
-                    (PVOID)Context->ExceptionFrame.X19,
-                    (PVOID)Context->ExceptionFrame.X20,
-                    (PVOID)Context->ExceptionFrame.X21,
-                    (PVOID)Context->ExceptionFrame.X22,
-                    (PVOID)Context->ExceptionFrame.X28);
-
-            if (Context->State.Elr >= (ULONG_PTR)MmSystemRangeStart)
+            if ((EsrClass != 0x00) || (Mode != UserMode))
             {
-                ULONG InstWord = 0;
-                NTSTATUS ReadStatus = STATUS_SUCCESS;
-
-                _SEH2_TRY
-                {
-                    InstWord = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
-                }
-                _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-                {
-                    ReadStatus = _SEH2_GetExceptionCode();
-                }
-                _SEH2_END;
-
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                        "[arm64] UNHANDLED kernel-insn ELR=%p word=0x%08lx status=0x%lx\n",
+                        "[arm64] UNHANDLED ESR class=0x%lx ISS=0x%lx Vec=%p ELR=%p FAR=%p SPSR=0x%lx Mode=%d Proc=%s\n",
+                        (ULONG)EsrClass, (ULONG)Iss,
+                        (PVOID)(ULONG_PTR)Context->State.VectorId,
                         (PVOID)(ULONG_PTR)Context->State.Elr,
-                        InstWord,
-                        ReadStatus);
-            }
-
-            /* Try to read the instruction word at the faulting address */
-            if (Context->State.Elr != 0 && Context->State.Elr < (ULONG_PTR)MmSystemRangeStart)
-            {
-                ULONG InstWord = 0;
-                NTSTATUS ProbeStatus = STATUS_SUCCESS;
-                _SEH2_TRY {
-                    ProbeForRead((PVOID)(ULONG_PTR)Context->State.Elr, 4, 1);
-                    InstWord = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
-                } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
-                    ProbeStatus = _SEH2_GetExceptionCode();
-                } _SEH2_END;
+                        (PVOID)(ULONG_PTR)Context->State.FaultAddress,
+                        (ULONG)Context->State.Spsr,
+                        (int)Mode,
+                        (PCSTR)((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->ImageFileName);
                 DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                        "[arm64] UNHANDLED: Instruction at ELR=%p: 0x%08lx (ProbeStatus=0x%lx)\n",
-                        (PVOID)(ULONG_PTR)Context->State.Elr, InstWord, ProbeStatus);
+                        "[arm64] UNHANDLED regs sp=%p fp=%p lr=%p x19=%p x20=%p x21=%p x22=%p x28=%p\n",
+                        (PVOID)TrapFrame->Sp,
+                        (PVOID)TrapFrame->Fp,
+                        (PVOID)TrapFrame->Lr,
+                        (PVOID)Context->ExceptionFrame.X19,
+                        (PVOID)Context->ExceptionFrame.X20,
+                        (PVOID)Context->ExceptionFrame.X21,
+                        (PVOID)Context->ExceptionFrame.X22,
+                        (PVOID)Context->ExceptionFrame.X28);
 
-                /* Walk TTBR0 page tables via KSEG0 to diagnose wrong-page vs bad-data */
+                if (Context->State.Elr >= (ULONG_PTR)MmSystemRangeStart)
                 {
-                    ULONG64 Ttbr0, L3Entry = 0;
-                    ULONG64 Entries[4];
-                    volatile ULONG64 *Slots[4];
-                    ULONG64 Elr = Context->State.Elr;
+                    ULONG InstWord = 0;
+                    NTSTATUS ReadStatus = STATUS_SUCCESS;
 
-                    Ttbr0 = ARM64_READ_SYSREG(TTBR0_EL1);
-                    if (KiArm64WalkPageTable(Ttbr0, Elr, Entries, Slots) == 4)
+                    _SEH2_TRY
                     {
-                        L3Entry = Entries[3];
+                        InstWord = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
                     }
+                    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+                    {
+                        ReadStatus = _SEH2_GetExceptionCode();
+                    }
+                    _SEH2_END;
 
                     DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                            "[arm64] UNHANDLED: TTBR0=0x%016llx L3PTE=0x%016llx\n",
-                            Ttbr0, L3Entry);
+                            "[arm64] UNHANDLED kernel-insn ELR=%p word=0x%08lx status=0x%lx\n",
+                            (PVOID)(ULONG_PTR)Context->State.Elr,
+                            InstWord,
+                            ReadStatus);
+                }
 
-                    if ((L3Entry & 0x3ULL) == 0x3ULL)
+                /* Try to read the instruction word at the faulting address */
+                if (Context->State.Elr != 0 && Context->State.Elr < (ULONG_PTR)MmSystemRangeStart)
+                {
+                    ULONG InstWord = 0;
+                    NTSTATUS ProbeStatus = STATUS_SUCCESS;
+                    _SEH2_TRY {
+                        ProbeForRead((PVOID)(ULONG_PTR)Context->State.Elr, 4, 1);
+                        InstWord = *(volatile ULONG *)(ULONG_PTR)Context->State.Elr;
+                    } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+                        ProbeStatus = _SEH2_GetExceptionCode();
+                    } _SEH2_END;
+                    DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                            "[arm64] UNHANDLED: Instruction at ELR=%p: 0x%08lx (ProbeStatus=0x%lx)\n",
+                            (PVOID)(ULONG_PTR)Context->State.Elr, InstWord, ProbeStatus);
+
+                    /* Walk TTBR0 page tables via KSEG0 to diagnose wrong-page vs bad-data */
                     {
-                        /* L3 entry is a valid page descriptor — read through KSEG0 */
-                        ULONG64 PhysPage = L3Entry & 0x0000FFFFFFFFF000ULL;
-                        ULONG PageOffset = (ULONG)(Elr & 0xFFF);
-                        volatile ULONG *Kseg0Ptr = (volatile ULONG *)MI_ARM64_PHYS_TO_VA(PhysPage | PageOffset);
-                        ULONG Kseg0Word = *Kseg0Ptr;
+                        ULONG64 Ttbr0, L3Entry = 0;
+                        ULONG64 Entries[4];
+                        volatile ULONG64 *Slots[4];
+                        ULONG64 Elr = Context->State.Elr;
 
-                        /* Also read 8 words around the fault point through KSEG0 */
-                        ULONG PageBase = PageOffset & ~0x1F; /* 32-byte aligned */
-                        volatile ULONG *Base = (volatile ULONG *)MI_ARM64_PHYS_TO_VA(PhysPage | PageBase);
+                        Ttbr0 = ARM64_READ_SYSREG(TTBR0_EL1);
+                        if (KiArm64WalkPageTable(Ttbr0, Elr, Entries, Slots) == 4)
+                        {
+                            L3Entry = Entries[3];
+                        }
 
                         DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                "[arm64] UNHANDLED: PhysAddr=0x%llx Kseg0Word=0x%08lx UserWord=0x%08lx %s\n",
-                                PhysPage | PageOffset, Kseg0Word, InstWord,
-                                (Kseg0Word == InstWord) ? "MATCH" : "MISMATCH");
-                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                "[arm64] UNHANDLED: KSEG0 dump @+0x%x: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
-                                PageBase,
-                                Base[0], Base[1], Base[2], Base[3],
-                                Base[4], Base[5], Base[6], Base[7]);
-                    }
-                    else
-                    {
-                        DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
-                                "[arm64] UNHANDLED: L3PTE invalid (0x%016llx) — page not mapped!\n", L3Entry);
+                                "[arm64] UNHANDLED: TTBR0=0x%016llx L3PTE=0x%016llx\n",
+                                Ttbr0, L3Entry);
+
+                        if ((L3Entry & 0x3ULL) == 0x3ULL)
+                        {
+                            /* L3 entry is a valid page descriptor — read through KSEG0 */
+                            ULONG64 PhysPage = L3Entry & 0x0000FFFFFFFFF000ULL;
+                            ULONG PageOffset = (ULONG)(Elr & 0xFFF);
+                            volatile ULONG *Kseg0Ptr = (volatile ULONG *)MI_ARM64_PHYS_TO_VA(PhysPage | PageOffset);
+                            ULONG Kseg0Word = *Kseg0Ptr;
+
+                            /* Also read 8 words around the fault point through KSEG0 */
+                            ULONG PageBase = PageOffset & ~0x1F; /* 32-byte aligned */
+                            volatile ULONG *Base = (volatile ULONG *)MI_ARM64_PHYS_TO_VA(PhysPage | PageBase);
+
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                    "[arm64] UNHANDLED: PhysAddr=0x%llx Kseg0Word=0x%08lx UserWord=0x%08lx %s\n",
+                                    PhysPage | PageOffset, Kseg0Word, InstWord,
+                                    (Kseg0Word == InstWord) ? "MATCH" : "MISMATCH");
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                    "[arm64] UNHANDLED: KSEG0 dump @+0x%x: %08lx %08lx %08lx %08lx %08lx %08lx %08lx %08lx\n",
+                                    PageBase,
+                                    Base[0], Base[1], Base[2], Base[3],
+                                    Base[4], Base[5], Base[6], Base[7]);
+                        }
+                        else
+                        {
+                            DbgPrintEx(DPFLTR_DEFAULT_ID, DPFLTR_ERROR_LEVEL,
+                                    "[arm64] UNHANDLED: L3PTE invalid (0x%016llx) — page not mapped!\n", L3Entry);
+                        }
                     }
                 }
             }

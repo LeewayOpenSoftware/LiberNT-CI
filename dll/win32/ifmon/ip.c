@@ -1919,6 +1919,11 @@ IpSetDns(
 
             case 2: /* addr */
                 DPRINT("Tag: addr (%S)\n", argv[i + dwCurrentIndex]);
+                if (!_wcsicmp(argv[i + dwCurrentIndex], L"none"))
+                {
+                    bHaveAddress = TRUE;
+                    break;
+                }
                 Status = RtlIpv4StringToAddressW(argv[i + dwCurrentIndex],
                                                  TRUE,
                                                  &Term,

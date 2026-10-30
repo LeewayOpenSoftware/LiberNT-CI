@@ -53,7 +53,7 @@ NetRingCollectionGetFragmentRing(
 
 inline
 NET_RING *
-NetRingCollectionGetDataBufferRing(
+NetRingCollectionGetFragmentReturnContextRing(
     NET_RING_COLLECTION const * Rings
 )
 {

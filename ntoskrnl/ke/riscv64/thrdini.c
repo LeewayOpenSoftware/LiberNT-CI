@@ -249,7 +249,6 @@ KiRiscvIdlePoll(
 {
     LARGE_INTEGER Frequency;
     ULONG64 Start, Ticks;
-    KIRQL OldIrql;
     BOOLEAN Work;
 
     if (KiRiscvIdlePollMicroseconds == 0)
@@ -281,12 +280,35 @@ KiRiscvIdlePoll(
 
     if (ReadNoFence(&Prcb->RequestSummary))
     {
-        OldIrql = KfRaiseIrql(IPI_LEVEL);
-        KiIpiProcessRequests();
-        KfLowerIrql(OldIrql);
+        __asm__ __volatile__("csrsi sip, 2" ::: "memory");
         Work = TRUE;
     }
     return Work || KiRiscvIdleWorkPending(Prcb);
+}
+
+static
+VOID
+KiRiscvEnterIdleSubNode(_In_ PKPRCB Prcb)
+{
+    PKSCHEDULER_SUBNODE SubNode = Prcb->SchedulerSubNode;
+
+    InterlockedOr64((PLONG64)&SubNode->IdleCpuSet, (LONG64)Prcb->SetMember);
+    if ((Prcb->MultiThreadProcessorSet & ~SubNode->IdleCpuSet) == 0)
+    {
+        InterlockedOr64((PLONG64)&SubNode->IdleSmtSet, (LONG64)Prcb->MultiThreadProcessorSet);
+        if ((Prcb->MultiThreadProcessorSet & ~SubNode->IdleCpuSet) != 0)
+            InterlockedAnd64((PLONG64)&SubNode->IdleSmtSet, ~(LONG64)Prcb->MultiThreadProcessorSet);
+    }
+}
+
+static
+VOID
+KiRiscvLeaveIdleSubNode(_In_ PKPRCB Prcb)
+{
+    PKSCHEDULER_SUBNODE SubNode = Prcb->SchedulerSubNode;
+
+    InterlockedAnd64((PLONG64)&SubNode->IdleCpuSet, ~(LONG64)Prcb->SetMember);
+    InterlockedAnd64((PLONG64)&SubNode->IdleSmtSet, ~(LONG64)Prcb->MultiThreadProcessorSet);
 }
 
 static
@@ -368,6 +390,7 @@ KiIdleLoop(VOID)
             Prcb->Sleeping = FALSE;
             continue;
         }
+        KiRiscvEnterIdleSubNode(Prcb);
         if (Pcr->InterruptEnable)
             HalpRiscvSuspendClockTick();
         KiRiscvIdleWait(Pcr);
@@ -379,5 +402,6 @@ KiIdleLoop(VOID)
                 KiRiscvCreditIdleTicks(Ticks);
         }
         Prcb->Sleeping = FALSE;
+        KiRiscvLeaveIdleSubNode(Prcb);
     }
 }

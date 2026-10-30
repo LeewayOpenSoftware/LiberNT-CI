@@ -8,6 +8,7 @@
 #pragma once
 
 #include <ndk/ketypes.h>
+#include "../arch/common/include/halsecondary.h"
 
 #define RISCV_SBI_EXTENSION_BASE       0x10UL
 #define RISCV_SBI_EXTENSION_TIME       0x54494D45UL

@@ -2309,7 +2309,15 @@ LxMmFaultIn(
     LxMmLock(Thread->Process->Mm);
     Result = LxMmPopulate(Thread->Process->Mm, Start, End, Write ? LX_PROT_WRITE : LX_PROT_READ, FALSE);
     LxMmUnlock(Thread->Process->Mm);
-    return (Result > 0);
+    if (Result < 0)
+        return FALSE;
+    if ((Result > 0) || (Thread->FaultAddress != Start))
+    {
+        Thread->FaultAddress = Start;
+        Thread->FaultRetries = 0;
+        return TRUE;
+    }
+    return (++Thread->FaultRetries < 8);
 }
 
 BOOLEAN
@@ -3488,6 +3496,11 @@ LX_SYSCALL(LxSysMmap)
         {
             Flags |= LX_VMA_NOMAYWRITE;
         }
+        if ((Prot & LX_PROT_READ) && (Call->Process->Personality & LX_PER_READ_IMPLIES_EXEC) &&
+            !((File != NULL) && (File->Mount != NULL) && (File->Mount->Flags & LX_MS_NOEXEC)))
+        {
+            Prot |= LX_PROT_EXEC;
+        }
         Result = LxMmMap(Call->Process, Call->Args[0], Call->Args[1], Prot, Flags, Zero ? NULL : File, Call->Args[5]);
     }
     if (File != NULL)
@@ -3500,9 +3513,21 @@ LX_SYSCALL(LxSysMunmap)
     return LxMmUnmap(Call->Process, Call->Args[0], Call->Args[1]);
 }
 
+/* FIXME: VMAs have no VM_MAYEXEC, so READ_IMPLIES_EXEC also makes noexec file mappings executable. */
+static
+ULONG
+LxReadImpliesExec(
+    _In_ PLX_PROCESS Process,
+    _In_ ULONG Prot)
+{
+    if ((Prot & LX_PROT_READ) && (Process->Personality & LX_PER_READ_IMPLIES_EXEC))
+        Prot |= LX_PROT_EXEC;
+    return Prot;
+}
+
 LX_SYSCALL(LxSysMprotect)
 {
-    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1], (ULONG)Call->Args[2]);
+    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1], LxReadImpliesExec(Call->Process, (ULONG)Call->Args[2]));
 }
 
 LX_SYSCALL(LxSysPkeyAlloc)
@@ -3530,7 +3555,7 @@ LX_SYSCALL(LxSysPkeyMprotect)
             return -LX_ENOMEM;
         return -LX_EINVAL;
     }
-    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1], (ULONG)Call->Args[2]);
+    return LxMmProtect(Call->Process, Call->Args[0], Call->Args[1], LxReadImpliesExec(Call->Process, (ULONG)Call->Args[2]));
 }
 
 LONG
@@ -3552,6 +3577,80 @@ LxMmPrepareRemote(
     LxMmUnlock(Process);
     KeUnstackDetachProcess(&ApcState);
     return (Result == -LX_ENXIO) ? -LX_EFAULT : ((Result < 0) ? Result : 0);
+}
+
+LONG
+LxMmForceAccess(
+    _In_ PLX_PROCESS Process,
+    _In_ PEPROCESS EProcess,
+    _In_ ULONG64 Address,
+    _Inout_updates_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length,
+    _In_ BOOLEAN Write)
+{
+    MEMORY_BASIC_INFORMATION Information;
+    KAPC_STATE ApcState;
+    PUCHAR Data = Buffer;
+    ULONG Done = 0;
+    LONG Error = 0;
+
+    Process = Process->Mm;
+    KeStackAttachProcess((PKPROCESS)EProcess, &ApcState);
+    LxMmLock(Process);
+    while ((Error == 0) && (Done < Length))
+    {
+        ULONG64 Cursor = Address + Done, Page = LX_ALIGN_DOWN(Cursor, LX_PAGE_SIZE);
+        ULONG Chunk = (ULONG)min((ULONG64)(Length - Done), Page + LX_PAGE_SIZE - Cursor);
+        PLX_VMA Vma = LxVmaFind(Process, Cursor);
+        BOOLEAN Cow, Changed = FALSE;
+
+        if ((Vma == NULL) || (Write && (Vma->Flags & (LX_MAP_SHARED | LX_VMA_HUGETLB)) && !(Vma->Prot & LX_PROT_WRITE)) ||
+            (LxMmPopulate(Process, Page, Page + LX_PAGE_SIZE, LX_PROT_READ, FALSE) < 0) ||
+            !NT_SUCCESS(LxVmQuery(Page, &Information)))
+        {
+            Error = -LX_EIO;
+            break;
+        }
+        Cow = LxVmaIsCow(Vma);
+        if (Write && !LxNtAllows(Information.Protect, LX_PROT_WRITE))
+        {
+            if (Cow)
+            {
+                Vma->Flags |= LX_VMA_DIRTY;
+                LxMmViewAllow(Process, Vma, PAGE_WRITECOPY);
+            }
+            Changed = NT_SUCCESS(LxVmProtectRange(Page, Page + LX_PAGE_SIZE, Cow ? PAGE_WRITECOPY : PAGE_READWRITE));
+            Error = Changed ? 0 : -LX_EIO;
+        }
+        else if (!Write && !LxNtAllows(Information.Protect, LX_PROT_READ))
+        {
+            Changed = NT_SUCCESS(LxVmProtectRange(Page, Page + LX_PAGE_SIZE, PAGE_READONLY));
+            Error = Changed ? 0 : -LX_EIO;
+        }
+        if (Error == 0)
+        {
+            _SEH2_TRY
+            {
+                if (Write)
+                    RtlCopyMemory((PVOID)(ULONG_PTR)Cursor, Data + Done, Chunk);
+                else
+                    RtlCopyMemory(Data + Done, (PVOID)(ULONG_PTR)Cursor, Chunk);
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Error = -LX_EIO;
+            }
+            _SEH2_END;
+        }
+        if (Changed)
+            LxVmProtectRange(Page, Page + LX_PAGE_SIZE, LxVmaNtProtect(Vma));
+        if (Write && (Error == 0) && (Vma->Prot & LX_PROT_EXEC))
+            LxVmFlushCode(Page, LX_PAGE_SIZE);
+        Done += Chunk;
+    }
+    LxMmUnlock(Process);
+    KeUnstackDetachProcess(&ApcState);
+    return Error;
 }
 
 static
@@ -4480,6 +4579,7 @@ LX_SYSCALL(LxSysMremap)
             LxMmUnlock(Process);
             return Result;
         }
+        Vma = LxVmaFind(Process, Old);
     }
 
     if ((Vma->Flags & (LX_VMA_VIEW | LX_MAP_SHARED)) == (LX_VMA_VIEW | LX_MAP_SHARED))

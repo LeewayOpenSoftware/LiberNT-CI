@@ -2083,7 +2083,7 @@ LxNlSetsockopt(
                     return -LX_EINVAL;
                 Result = LxCopyFromUser(&Timeval, Call->Args[3], sizeof(Timeval));
                 if (Result == 0)
-                    Socket->RecvTimeout = Timeval.Seconds * 10000000LL + Timeval.Microseconds * 10;
+                    Socket->RecvTimeout = LxSocketTimeout(&Timeval);
                 return Result;
             }
             case LX_SO_SNDTIMEO_OLD:

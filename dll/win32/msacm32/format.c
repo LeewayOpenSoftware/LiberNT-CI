@@ -791,6 +791,9 @@ MMRESULT WINAPI acmFormatSuggest(HACMDRIVER had, PWAVEFORMATEX pwfxSrc,
 
     if (had == NULL) {
 	PWINE_ACMDRIVERID	padid;
+#ifdef __REACTOS__
+	BOOL			tags_supported = FALSE;
+#endif
 
 	/* MS doc says: ACM finds the best suggestion.
 	 * Well, first found will be the "best"
@@ -801,6 +804,12 @@ MMRESULT WINAPI acmFormatSuggest(HACMDRIVER had, PWAVEFORMATEX pwfxSrc,
 	    if ((padid->fdwSupport & ACMDRIVERDETAILS_SUPPORTF_DISABLED) ||
 		acmDriverOpen(&had, (HACMDRIVERID)padid, 0) != MMSYSERR_NOERROR)
 		continue;
+#ifdef __REACTOS__
+	    if (MSACM_FindFormatTagInCache(padid, pwfxSrc->wFormatTag, NULL) &&
+		(!(fdwSuggest & ACM_FORMATSUGGESTF_WFORMATTAG) ||
+		 MSACM_FindFormatTagInCache(padid, pwfxDst->wFormatTag, NULL)))
+		tags_supported = TRUE;
+#endif
 
 	    if (MSACM_Message(had, ACMDM_FORMAT_SUGGEST, (LPARAM)&adfg, 0L) == MMSYSERR_NOERROR) {
 		mmr = MMSYSERR_NOERROR;
@@ -808,6 +817,10 @@ MMRESULT WINAPI acmFormatSuggest(HACMDRIVER had, PWAVEFORMATEX pwfxSrc,
 	    }
 	    acmDriverClose(had, 0);
 	}
+#ifdef __REACTOS__
+	if (mmr != MMSYSERR_NOERROR && !tags_supported)
+	    mmr = MMSYSERR_NODRIVER;
+#endif
     } else {
 	mmr = MSACM_Message(had, ACMDM_FORMAT_SUGGEST, (LPARAM)&adfg, 0L);
     }

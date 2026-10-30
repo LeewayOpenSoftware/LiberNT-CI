@@ -10,7 +10,7 @@
 
 #include "precomp.h"
 
-static UINT RandomNumber = 0x12345678;
+static ULONG RandomSeed;
 
 
 UINT Random(
@@ -21,9 +21,15 @@ UINT Random(
  *     Pseudo random number
  */
 {
-    RandomNumber ^= 0x78563412;
+    ULONG Value = RandomSeed ^ (ULONG)KeQueryPerformanceCounter(NULL).QuadPart;
 
-    return RandomNumber;
+    if (!Value)
+        Value = 0x9E3779B9;
+    Value ^= Value << 13;
+    Value ^= Value >> 17;
+    Value ^= Value << 5;
+    RandomSeed = Value;
+    return Value;
 }
 
 #if DBG

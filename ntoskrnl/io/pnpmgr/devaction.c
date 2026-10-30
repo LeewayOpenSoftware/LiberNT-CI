@@ -2248,9 +2248,9 @@ PiIrpSendRemoveCheckVpb(
             }
         }
 
-        oldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+        oldIrql = IopAcquireDatabaseLockShared();
         vpbDevObj = vpbDevObj->AttachedDevice;
-        KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, oldIrql);
+        IopReleaseDatabaseLockShared(oldIrql);
     } while (vpbDevObj);
 
     ASSERT(targetDevice);
@@ -2270,7 +2270,7 @@ PiSetDeviceStackRemovePending(
     PDEVICE_OBJECT Device;
     KIRQL OldIrql;
 
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockExclusive();
     for (Device = PhysicalDeviceObject; Device != NULL; Device = Device->AttachedDevice)
     {
         if (RemovePending)
@@ -2278,7 +2278,7 @@ PiSetDeviceStackRemovePending(
         else
             IoGetDevObjExtension(Device)->ExtensionFlags &= ~DOE_REMOVE_PENDING;
     }
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockExclusive(OldIrql);
 }
 
 typedef struct _PIP_LEAK_CHECK
@@ -2750,7 +2750,7 @@ PiDeviceStackIsOpen(
     BOOLEAN Open = FALSE;
     KIRQL OldIrql;
 
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
     for (Device = PhysicalDeviceObject; Device != NULL; Device = Device->AttachedDevice)
     {
         if (Device->ReferenceCount != 0)
@@ -2759,7 +2759,7 @@ PiDeviceStackIsOpen(
             break;
         }
     }
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
     return Open;
 }
 
@@ -2776,10 +2776,10 @@ PiDeviceObjectClosed(
     if (PiRemovePendingCloses == 0)
         return;
 
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
     while (IoGetDevObjExtension(Base)->AttachedTo != NULL)
         Base = IoGetDevObjExtension(Base)->AttachedTo;
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
 
     DeviceNode = IopGetDeviceNode(Base);
     if (DeviceNode == NULL ||

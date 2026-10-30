@@ -14,7 +14,6 @@ VOID Test_KeArm64ThreadProcess(VOID);
 
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
-#ifdef _M_ARM64
 
 static VOID Arm64ThreadProcessCheck(VOID)
 {
@@ -136,14 +135,9 @@ static VOID Arm64ThreadProcessCheck(VOID)
                Prcb->DpcTime, Prcb->InterruptTime);
 }
 
-#endif /* _M_ARM64 */
 
 START_TEST(KeArm64ThreadProcess)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64ThreadProcess is ARM64-only\n");
-#else
     dump_trace("[arm64][KeArm64ThreadProcess] enter\n");
     Arm64ThreadProcessCheck();
-#endif
 }

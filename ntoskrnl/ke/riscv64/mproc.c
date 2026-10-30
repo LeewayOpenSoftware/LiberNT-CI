@@ -63,6 +63,7 @@ KiRiscvStartProcessor(KI_RISCV_AP *Ap)
     Ap->Stage = 4;
     KiProcessorBlock[Prcb->Number] = Prcb;
     InterlockedOr64((PLONG64)&KiNode0.ProcessorMask, Prcb->SetMember);
+    KiRiscvJoinSchedulerSubNode(Prcb);
     InterlockedOr64((PLONG64)&KiIdleSummary, Prcb->SetMember);
     KeNumberProcessors = Prcb->Number + 1;
     InterlockedOr64((PLONG64)&KeActiveProcessors, Prcb->SetMember);
@@ -95,7 +96,7 @@ CODE_SEG("INIT") VOID NTAPI KeStartAllProcessors(VOID)
         if (!Ap) break;
         Ap->Stack = MmCreateKernelStack(FALSE, 0);
         DpcStack = MmCreateKernelStack(FALSE, 0);
-        if (!Ap->Stack || !DpcStack) goto Failed;
+        if (!Ap->Stack || !DpcStack || !KiRiscvAllocateInterruptTable(Number)) goto Failed;
         KiRiscvInitializePcr(&Ap->Pcr, &Ap->Thread.Tcb, Hart, Number, DpcStack,
                              Ap->PanicStack + sizeof(Ap->PanicStack));
         RtlZeroMemory(&State, sizeof(State));

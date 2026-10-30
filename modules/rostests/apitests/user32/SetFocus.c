@@ -42,22 +42,26 @@ static unsigned __stdcall thread_proc_0(void *arg)
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == GetDlgItem(hwnd, psh1), TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == GetDlgItem(hwnd, IDOK), TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == GetDlgItem(hwnd, IDCANCEL), TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == GetDlgItem(hwnd, psh1), TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
@@ -73,12 +77,14 @@ static unsigned __stdcall thread_proc_1(void *arg)
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == NULL, TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == NULL, TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
@@ -94,17 +100,20 @@ static unsigned __stdcall thread_proc_2(void *arg)
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == GetDlgItem(hwnd, IDCANCEL), TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == GetDlgItem(hwnd, psh1), TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     ok_int(GetFocus() == NULL, TRUE);
     ok_int(GetMainThreadFocus() == GetDlgItem(hwnd, IDOK), TRUE);
-    keybd_event(VK_TAB, KEYEVENTF_KEYUP, 0, 0);
+    keybd_event(VK_TAB, 0, 0, 0);
+    keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
     Sleep(INTERVAL);
 
     PostMessageA(hwnd, WM_COMMAND, psh4, 0);

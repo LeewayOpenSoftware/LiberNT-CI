@@ -10,6 +10,8 @@
  */
 #include "wshtcpip.h"
 #include <netioapi.h>
+#include <iofuncs.h>
+#include <tcpip_undoc.h>
 #include <stdlib.h>
 #define NDEBUG
 #include <debug.h>
@@ -1127,6 +1129,112 @@ WSHJoinLeaf(
     return NO_ERROR;
 }
 
+static
+BOOL
+IsMembershipOption(
+    IN INT Level,
+    IN INT OptionName,
+    OUT PBOOL Join)
+{
+    if (Level == IPPROTO_IP && (OptionName == IP_ADD_MEMBERSHIP || OptionName == IP_DROP_MEMBERSHIP))
+    {
+        *Join = (OptionName == IP_ADD_MEMBERSHIP);
+        return TRUE;
+    }
+    if (Level == IPPROTO_IPV6 && (OptionName == IPV6_ADD_MEMBERSHIP || OptionName == IPV6_DROP_MEMBERSHIP))
+    {
+        *Join = (OptionName == IPV6_ADD_MEMBERSHIP);
+        return TRUE;
+    }
+    return FALSE;
+}
+
+static
+INT
+ChangeUnboundMembership(
+    IN PSOCKET_CONTEXT Context,
+    IN INT Level,
+    IN BOOL Join,
+    IN PCHAR OptionValue)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK Iosb;
+    IP_MEMBERSHIP_REQUEST Request;
+    DWORD Returned;
+
+    if (!Context->MembershipHandle)
+    {
+        InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        if (!NT_SUCCESS(NtOpenFile(&Context->MembershipHandle, SYNCHRONIZE, &Attributes, &Iosb,
+                                   FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_SYNCHRONOUS_IO_NONALERT)))
+        {
+            Context->MembershipHandle = NULL;
+            return WSAENOBUFS;
+        }
+    }
+
+    memset(&Request, 0, sizeof(Request));
+    Request.Join = Join;
+    if (Level == IPPROTO_IPV6)
+    {
+        const struct ipv6_mreq *Mreq = (const struct ipv6_mreq *)OptionValue;
+
+        Request.Family = AF_INET6;
+        Request.Interface = Mreq->ipv6mr_interface;
+        memcpy(Request.Group, &Mreq->ipv6mr_multiaddr, sizeof(IN6_ADDR));
+    }
+    else
+    {
+        const struct ip_mreq *Mreq = (const struct ip_mreq *)OptionValue;
+
+        Request.Family = AF_INET;
+        Request.Interface = Mreq->imr_interface.s_addr;
+        memcpy(Request.Group, &Mreq->imr_multiaddr, sizeof(IN_ADDR));
+    }
+    if (!DeviceIoControl(Context->MembershipHandle, IOCTL_IP_CHANGE_MEMBERSHIP, &Request, sizeof(Request),
+                         NULL, 0, &Returned, NULL))
+        return WSAEINVAL;
+    return NO_ERROR;
+}
+
+static
+VOID
+DropQueuedMembership(
+    IN PSOCKET_CONTEXT Context,
+    IN PCHAR OptionValue,
+    IN INT OptionLength)
+{
+    PQUEUED_REQUEST *Link = &Context->RequestQueue;
+
+    while (*Link)
+    {
+        PQUEUED_REQUEST Queued = *Link;
+
+        if (Queued->Info->ID.toi_id == AO_OPTION_ADD_MCAST && Queued->Info->BufferSize == (ULONG)OptionLength &&
+            !memcmp(Queued->Info->Buffer, OptionValue, OptionLength))
+        {
+            *Link = Queued->Next;
+            HeapFree(GetProcessHeap(), 0, Queued->Info);
+            HeapFree(GetProcessHeap(), 0, Queued);
+            return;
+        }
+        Link = (PQUEUED_REQUEST *)&Queued->Next;
+    }
+}
+
+static
+VOID
+CloseMembershipHandle(
+    IN PSOCKET_CONTEXT Context)
+{
+    if (Context->MembershipHandle)
+    {
+        CloseHandle(Context->MembershipHandle);
+        Context->MembershipHandle = NULL;
+    }
+}
+
 INT
 SendRequest(
     IN PVOID Request,
@@ -1193,6 +1301,7 @@ WSHNotify(
 
                 QueuedRequest = NextQueuedRequest;
             }
+            CloseMembershipHandle(Context);
             HeapFree(GetProcessHeap(), 0, HelperDllSocketContext);
             break;
 
@@ -1248,6 +1357,7 @@ WSHNotify(
                 QueuedRequest = NextQueuedRequest;
             }
             Context->RequestQueue = NULL;
+            CloseMembershipHandle(Context);
             break;
 
         default:
@@ -1462,6 +1572,8 @@ WSHSetSocketInformation(
     ULONG InterfaceIndex = 0;
     ULONG UdpValue = 0;
     ULONG RecvValue = 0;
+    BOOL Join;
+    INT Error;
 
     DPRINT("WSHSetSocketInformation\n");
 
@@ -1680,6 +1792,17 @@ WSHSetSocketInformation(
 
     if (Context->SocketState == SocketStateCreated)
     {
+        if (Context->SocketType != SOCK_STREAM && IsMembershipOption(Level, OptionName, &Join))
+        {
+            Error = ChangeUnboundMembership(Context, Level, Join, OptionValue);
+            if (Error != NO_ERROR || !Join)
+            {
+                if (Error == NO_ERROR)
+                    DropQueuedMembership(Context, OptionValue, OptionLength);
+                HeapFree(GetProcessHeap(), 0, Info);
+                return Error;
+            }
+        }
         if (Context->RequestQueue)
         {
             Queued = Context->RequestQueue;

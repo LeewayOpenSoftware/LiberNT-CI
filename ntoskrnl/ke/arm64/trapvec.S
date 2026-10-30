@@ -700,6 +700,26 @@ KiArm64UserServiceEntry:
     ldr w11, [sp, #TfSpsr]
     and w11, w11, #0xFFFFFFE0
     orr w11, w11, #0x100
+    mrs x12, tpidr_el1
+    ldr x12, [x12, #PcCurrentPrcb]
+    ldr w12, [x12, #PbNumber]
+    ldr x13, =KiArm64UserStepArmed
+    add x13, x13, x12
+    tbnz w11, #21, .Luser_service_step_arm
+    ldrb w12, [x13]
+    cbz w12, .Luser_service_step_done
+    mrs x12, mdscr_el1
+    bic x12, x12, #1
+    msr mdscr_el1, x12
+    strb wzr, [x13]
+    b .Luser_service_step_done
+.Luser_service_step_arm:
+    mrs x12, mdscr_el1
+    orr x12, x12, #1
+    msr mdscr_el1, x12
+    mov w12, #1
+    strb w12, [x13]
+.Luser_service_step_done:
     msr spsr_el1, x11
     mrs x16, tpidr_el1
     ldr x16, [x16, #PcCurrentThread]

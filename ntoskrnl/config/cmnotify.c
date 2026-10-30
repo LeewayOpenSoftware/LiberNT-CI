@@ -208,10 +208,13 @@ VOID
 NTAPI
 CmpCloseNotify(PCM_KEY_BODY KeyBody)
 {
-    ExAcquireFastMutex(&CmpNotifyMutex);
     /* Remember the last handle close even if registration has not yet linked
      * its post. Referencing a key body does not keep its handles open. */
     KeyBody->NotifyClosed = TRUE;
+    KeMemoryBarrier();
+    if (!ReadPointerNoFence((PVOID const volatile *)&KeyBody->NotifyBlock)) return;
+
+    ExAcquireFastMutex(&CmpNotifyMutex);
     CmpFlushNotifyLocked(KeyBody);
     ExReleaseFastMutex(&CmpNotifyMutex);
 }
@@ -342,6 +345,8 @@ CmpNotifyChangeKey(PCM_KEY_BODY KeyBody,
     if (!(Filter & REG_NOTIFY_THREAD_AGNOSTIC) && !Post->KernelWorkItem)
         InsertTailList(&CmpNotifyThreadList, &Post->ThreadList);
     Status = STATUS_PENDING;
+    KeMemoryBarrier();
+    if (KeyBody->NotifyClosed) CmpFlushNotifyLocked(KeyBody);
 
 Unlock:
     ExReleaseFastMutex(&CmpNotifyMutex);
@@ -387,6 +392,7 @@ CmpReportNotify(IN PCM_KEY_CONTROL_BLOCK Kcb,
      * belong to the key itself. Parent KCBs also span mounted hive roots. */
     if (Filter & REG_NOTIFY_CHANGE_NAME) Kcb = Kcb->ParentKcb;
     if (!Kcb) return;
+    if (ReadPointerNoFence((PVOID const volatile *)&CmpNotifyList.Flink) == &CmpNotifyList) return;
 
     ExAcquireFastMutex(&CmpNotifyMutex);
 Restart:
@@ -425,6 +431,7 @@ CmpFlushNotify(IN PCM_KEY_BODY KeyBody,
 {
     UNREFERENCED_PARAMETER(LockHeld);
 
+    if (!KeyBody->NotifyBlock) return;
     ExAcquireFastMutex(&CmpNotifyMutex);
     CmpFlushNotifyLocked(KeyBody);
     ExReleaseFastMutex(&CmpNotifyMutex);
@@ -437,6 +444,7 @@ CmpFlushNotifyOnKcb(IN PCM_KEY_CONTROL_BLOCK Kcb)
     PLIST_ENTRY Entry;
     PCM_NOTIFY_BLOCK Notify;
 
+    if (ReadPointerNoFence((PVOID const volatile *)&CmpNotifyList.Flink) == &CmpNotifyList) return;
     ExAcquireFastMutex(&CmpNotifyMutex);
 Restart:
     for (Entry = CmpNotifyList.Flink; Entry != &CmpNotifyList; Entry = Entry->Flink)

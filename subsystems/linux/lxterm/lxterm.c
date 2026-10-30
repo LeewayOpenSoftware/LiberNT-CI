@@ -160,7 +160,8 @@ LxRunRootTool(
     _In_ PCSTR FileName,
     _In_reads_(Count) PCSTR *Args,
     _In_ ULONG Count,
-    _In_opt_ PCSTR Input)
+    _In_opt_ PCSTR Input,
+    _In_ ULONG Flags)
 {
     LX_LAUNCH Tool;
     ULONG Index;
@@ -168,6 +169,7 @@ LxRunRootTool(
     ZeroMemory(&Tool, sizeof(Tool));
     Tool.Name = L"lxterm";
     Tool.Root = Root;
+    Tool.Flags = Flags;
     Tool.Cwd = "/";
     Tool.FileName = FileName;
     Tool.Input = (Input != NULL) ? Input : "";
@@ -262,7 +264,7 @@ LxCreateDefaultUser(
         Args[Count++] = Groups;
     }
     Args[Count++] = Name;
-    if (LxRunRootTool(Root, "/usr/sbin/useradd", Args, Count, NULL) != 0)
+    if (LxRunRootTool(Root, "/usr/sbin/useradd", Args, Count, NULL, 0) != 0)
     {
         wprintf(L"The user account could not be created.\n");
         return FALSE;
@@ -273,7 +275,7 @@ LxCreateDefaultUser(
     SecureZeroMemory(Password, sizeof(Password));
     SecureZeroMemory(Again, sizeof(Again));
     Args[0] = "chpasswd";
-    Index = LxRunRootTool(Root, "/usr/sbin/chpasswd", Args, 1, Entry);
+    Index = LxRunRootTool(Root, "/usr/sbin/chpasswd", Args, 1, Entry, 0);
     SecureZeroMemory(Entry, sizeof(Entry));
     if (Index != 0)
         wprintf(L"The password could not be set.\n");
@@ -283,6 +285,33 @@ LxCreateDefaultUser(
     if (!LxAppendRootFile(Root, L"\\etc\\wsl.conf", Config))
         wprintf(L"The default user could not be saved in /etc/wsl.conf.\n");
     return TRUE;
+}
+
+static
+VOID
+LxStartUserSession(
+    _Inout_ PLX_LAUNCH Launch,
+    _In_ PLX_ACCOUNT Account)
+{
+    CHAR Unit[64], Bus[96];
+    PCSTR Args[3];
+
+    if (!LxInstanceBooted(Launch->Name, Launch->Root) ||
+        !LxRootHasFile(Launch->Root, L"\\etc\\systemd\\system\\lxsession@.service"))
+    {
+        return;
+    }
+    _snprintf(Unit, sizeof(Unit), "lxsession@%lu.service", Account->Uid);
+    Args[0] = "systemctl";
+    Args[1] = "start";
+    Args[2] = Unit;
+    if (LxRunRootTool(Launch->Root, "/usr/bin/systemctl", Args, 3, NULL, LX_CREATE_JOIN) != 0)
+    {
+        fwprintf(stderr, L"lxterm: the systemd user session of %S could not be started; see journalctl\n", Account->Name);
+        return;
+    }
+    _snprintf(Bus, sizeof(Bus), "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/%lu/bus", Account->Uid);
+    LxEnvSet(&Launch->Env, Bus);
 }
 
 static
@@ -414,6 +443,7 @@ wmain(
     }
     if (!LxSetSession(&Launch, Launch.Root, &Account))
         return 1;
+    LxStartUserSession(&Launch, &Account);
 
     Base = strrchr(Account.Shell, '/');
     Base = (Base != NULL) ? Base + 1 : Account.Shell;

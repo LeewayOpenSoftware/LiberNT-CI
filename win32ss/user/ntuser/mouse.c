@@ -622,6 +622,23 @@ NtUserTrackMouseEvent(
     return bRet;
 }
 
+static
+INT
+IntGetHighResolutionCoordinate(INT Coordinate, INT Origin, INT Extent)
+{
+    LONGLONG Value;
+
+    if (Extent <= 0)
+        return 0;
+
+    Value = ((((LONGLONG)Coordinate - Origin) << 16) + Extent - 1) / Extent;
+    if (Value < 0)
+        return 0;
+    if (Value > 0xFFFF)
+        return 0xFFFF;
+    return (INT)Value;
+}
+
 DWORD
 APIENTRY
 NtUserGetMouseMovePointsEx(
@@ -672,7 +689,7 @@ NtUserGetMouseMovePointsEx(
         goto cleanup;
     }
 
-    if (resolution != GMMP_USE_DISPLAY_POINTS)
+    if (resolution != GMMP_USE_DISPLAY_POINTS && resolution != GMMP_USE_HIGH_RESOLUTION_POINTS)
     {
         EngSetLastError(ERROR_POINT_NOT_FOUND);
         iRet = -1;
@@ -683,6 +700,11 @@ NtUserGetMouseMovePointsEx(
         INT i, Copied;
         INT Count = ARRAYSIZE(gMouseHistoryOfMoves);
         PMOUSEMOVEPOINT pPos;
+        MOUSEMOVEPOINT Point;
+        INT Left = UserGetSystemMetrics(SM_XVIRTUALSCREEN);
+        INT Top = UserGetSystemMetrics(SM_YVIRTUALSCREEN);
+        INT Width = UserGetSystemMetrics(SM_CXVIRTUALSCREEN);
+        INT Height = UserGetSystemMetrics(SM_CYVIRTUALSCREEN);
 
         for (i = 0; i < Count; i++)
         {
@@ -707,7 +729,13 @@ NtUserGetMouseMovePointsEx(
                 ProbeForWrite(lpptOut, nBufPoints * sizeof(MOUSEMOVEPOINT), 1);
             for (Copied = 0; Copied < nBufPoints && i < Count; Copied++, i++)
             {
-                lpptOut[Copied] = gMouseHistoryOfMoves[(gcMouseHistoryOfMoves - 1 - i + Count) % Count];
+                Point = gMouseHistoryOfMoves[(gcMouseHistoryOfMoves - 1 - i + Count) % Count];
+                if (resolution == GMMP_USE_HIGH_RESOLUTION_POINTS)
+                {
+                    Point.x = IntGetHighResolutionCoordinate(Point.x, Left, Width);
+                    Point.y = IntGetHighResolutionCoordinate(Point.y, Top, Height);
+                }
+                lpptOut[Copied] = Point;
             }
             iRet = Copied;
         }

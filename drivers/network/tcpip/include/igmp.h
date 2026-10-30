@@ -13,6 +13,7 @@ NTSTATUS IGMPJoinGroup(PVOID Owner, ULONG InterfaceIndex, IPv4_RAW_ADDRESS Group
 NTSTATUS IGMPLeaveGroup(PVOID Owner, ULONG InterfaceIndex, IPv4_RAW_ADDRESS Group);
 VOID IGMPLeaveAllGroups(PVOID Owner);
 BOOLEAN IGMPIsMember(PVOID Owner, ULONG InterfaceIndex, IPv4_RAW_ADDRESS Group);
+BOOLEAN IGMPIsJoined(ULONG InterfaceIndex, IPv4_RAW_ADDRESS Group);
 VOID IGMPTimeout(VOID);
 NTSTATUS LibIP6ChangeMembership(PVOID Owner, ULONG Index, const UCHAR *Group, BOOLEAN Join);
 VOID LibIP6LeaveAllGroups(PVOID Owner);

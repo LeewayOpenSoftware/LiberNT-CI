@@ -5,8 +5,10 @@
  * COPYRIGHT:   Copyright 2026 Ahmed Arif <arif193@gmail.com>
  */
 
-#include <hal.h>
-#include "halext.h"
+#include <ntifs.h>
+#include <ndk/halfuncs.h>
+#include <ndk/kefuncs.h>
+#include "../include/halsecondary.h"
 
 #define NDEBUG
 #include <debug.h>
@@ -15,17 +17,9 @@
 #undef HalSecondaryInterruptQueryPrimaryInformation
 #undef HalIsInterruptTypeSecondary
 
-#define HALP_SECONDARY_GSIV_COUNT   512
-#define HALP_SECONDARY_GSIV_MIN     0x400
-#define HALP_SECONDARY_VECTOR_BASE  0x1000
 #define HALP_SECONDARY_OWNER_MAX    64
 #define HALP_SECONDARY_CONTROLLERS  8
 #define HALP_SECONDARY_DEFAULT_IRQL 12
-#define HALP_ARM64_LPI_BASE         8192
-
-
-extern BOOLEAN HalpGicItsEnabled;
-extern ULONG HalpGicLpiCount;
 
 typedef struct _HALP_SECONDARY_LINE
 {
@@ -57,13 +51,7 @@ ULONG
 HalpSecondaryGetGsivBase(VOID)
 {
     if (HalpSecondaryGsivBase == 0)
-    {
-        ULONG Base = HALP_SECONDARY_GSIV_MIN;
-
-        if (HalpGicItsEnabled && HalpGicLpiCount != 0 && Base < HALP_ARM64_LPI_BASE + HalpGicLpiCount)
-            Base = HALP_ARM64_LPI_BASE + HalpGicLpiCount;
-        HalpSecondaryGsivBase = Base;
-    }
+        HalpSecondaryGsivBase = HalpSecondaryArchGsivBase();
     return HalpSecondaryGsivBase;
 }
 
@@ -121,8 +109,8 @@ BOOLEAN
 HalpSecondaryIsIntId(
     _In_ ULONG IntId)
 {
-    return IntId >= HALP_SECONDARY_VECTOR_BASE &&
-           IntId < HALP_SECONDARY_VECTOR_BASE + HALP_SECONDARY_GSIV_COUNT;
+    return IntId >= HalpSecondaryArchVectorBase() &&
+           IntId < HalpSecondaryArchVectorBase() + HALP_SECONDARY_GSIV_COUNT;
 }
 
 ULONG
@@ -132,7 +120,7 @@ HalpSecondaryTranslateGsi(
     ULONG Base = HalpSecondaryGetGsivBase();
 
     if (Gsi >= Base && Gsi < Base + HALP_SECONDARY_GSIV_COUNT)
-        return HALP_SECONDARY_VECTOR_BASE + (Gsi - Base);
+        return HalpSecondaryArchVectorBase() + (Gsi - Base);
     return (ULONG)-1;
 }
 
@@ -140,7 +128,7 @@ KIRQL
 HalpSecondaryIrql(
     _In_ ULONG IntId)
 {
-    PHALP_SECONDARY_LINE Line = &HalpSecondaryLines[IntId - HALP_SECONDARY_VECTOR_BASE];
+    PHALP_SECONDARY_LINE Line = &HalpSecondaryLines[IntId - HalpSecondaryArchVectorBase()];
     PHALP_SECONDARY_CONTROLLER Controller = HalpSecondaryFindController(Line);
 
     if (Controller != NULL && Controller->Interface.Irql != PASSIVE_LEVEL)
@@ -171,7 +159,7 @@ HalpSecondaryEnable(
     _In_ ULONG IntId,
     _In_ KINTERRUPT_MODE InterruptMode)
 {
-    ULONG Index = IntId - HALP_SECONDARY_VECTOR_BASE;
+    ULONG Index = IntId - HalpSecondaryArchVectorBase();
     KIRQL OldIrql;
 
     if (!HalpSecondaryIsIntId(IntId))
@@ -193,7 +181,7 @@ VOID
 HalpSecondaryDisable(
     _In_ ULONG IntId)
 {
-    ULONG Index = IntId - HALP_SECONDARY_VECTOR_BASE;
+    ULONG Index = IntId - HalpSecondaryArchVectorBase();
     KIRQL OldIrql;
 
     if (!HalpSecondaryIsIntId(IntId))
@@ -263,9 +251,9 @@ HalpSecondaryInterruptQueryPrimaryInformation(
     if (VectorData == NULL)
         return STATUS_INVALID_PARAMETER;
     IntId = HalpSecondaryTranslateGsi(VectorData->ControllerInput.Gsiv);
-    if (IntId == (ULONG)-1 || !HalpSecondaryLines[IntId - HALP_SECONDARY_VECTOR_BASE].Allocated)
+    if (IntId == (ULONG)-1 || !HalpSecondaryLines[IntId - HalpSecondaryArchVectorBase()].Allocated)
         return STATUS_NOT_FOUND;
-    Controller = HalpSecondaryFindController(&HalpSecondaryLines[IntId - HALP_SECONDARY_VECTOR_BASE]);
+    Controller = HalpSecondaryFindController(&HalpSecondaryLines[IntId - HalpSecondaryArchVectorBase()]);
     if (Controller == NULL)
         return STATUS_DEVICE_NOT_READY;
     *PrimaryGsiv = Controller->Interface.PrimaryGsiv;

@@ -576,7 +576,7 @@ LxMqDeadline(
         return (LONG)Result;
     if ((Timeout.Seconds < 0) || (Timeout.Nanoseconds < 0) || (Timeout.Nanoseconds >= 1000000000))
         return -LX_EINVAL;
-    Deadline->QuadPart = Timeout.Seconds * 10000000LL + Timeout.Nanoseconds / 100 + LX_MQ_EPOCH_100NS;
+    Deadline->QuadPart = LxTimespecTo100ns(&Timeout) + LX_MQ_EPOCH_100NS;
     return 0;
 }
 

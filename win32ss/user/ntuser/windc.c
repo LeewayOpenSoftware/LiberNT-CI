@@ -1013,6 +1013,8 @@ DceResetActiveDCEs(PWND Window)
          bRedirected = !!(dc->fs & DC_REDIRECTION);
          if (bRedirected)
          {
+            RECTL rcOld = dc->erclWindow;
+
             DC_UnlockDc(dc);
 
             /* Visibility can change without replacing the backing or moving
@@ -1021,6 +1023,14 @@ DceResetActiveDCEs(PWND Window)
             if (Window == CurrentWindow ||
                 IntIsChildWindow(Window, CurrentWindow))
             {
+               PRECTL prcNew = (pDCE->DCXFlags & DCX_WINDOW) ? &CurrentWindow->rcWindow : &CurrentWindow->rcClient;
+
+               if ((pDCE->DCXFlags & (DCX_INTERSECTRGN | DCX_EXCLUDERGN)) &&
+                   (rcOld.right - rcOld.left != prcNew->right - prcNew->left ||
+                    rcOld.bottom - rcOld.top != prcNew->bottom - prcNew->top))
+               {
+                  DceDeleteClipRgn(pDCE);
+               }
                IntCompositionRedirectDC(CurrentWindow, pDCE->hDC, pDCE->DCXFlags, pDCE->hrgnClip, TRUE);
             }
             continue;

@@ -17,6 +17,8 @@ extern "C" {
 #define DNS_QUERY_TREAT_AS_FQDN             0x1000
 #define DNS_QUERY_WIRE_ONLY                 0x100
 #define DNS_QUERY_RETURN_MESSAGE            0x200
+#define DNS_QUERY_MULTICAST_ONLY            0x400
+#define DNS_QUERY_NO_MULTICAST              0x800
 #define DNS_QUERY_DONT_RESET_TTL_VALUES     0x100000
 #define DNS_QUERY_RESERVED                  0xff000000
 

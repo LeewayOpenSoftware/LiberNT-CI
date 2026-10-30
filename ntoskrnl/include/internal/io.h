@@ -1707,6 +1707,24 @@ IopRemoveTimerFromTimerList(
     IN PIO_TIMER Timer
 );
 
+KIRQL
+NTAPI
+IopAcquireDatabaseLockShared(VOID);
+
+VOID
+NTAPI
+IopReleaseDatabaseLockShared(
+    _In_ KIRQL OldIrql);
+
+KIRQL
+NTAPI
+IopAcquireDatabaseLockExclusive(VOID);
+
+VOID
+NTAPI
+IopReleaseDatabaseLockExclusive(
+    _In_ KIRQL OldIrql);
+
 //
 // I/O Completion Routines
 //

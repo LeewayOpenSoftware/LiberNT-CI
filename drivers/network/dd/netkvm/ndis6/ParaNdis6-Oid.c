@@ -354,7 +354,7 @@ NDIS_STATUS ParaNdis6_SetGeneralAttributes(PARANDIS_ADAPTER *pContext)
         ga.XmitLinkSpeed = PARANDIS_FORMAL_LINK_SPEED;
         ga.RcvLinkSpeed = PARANDIS_FORMAL_LINK_SPEED;
         ga.MediaConnectState = MediaConnectStateConnected;
-        ga.MediaDuplexState = MediaDuplexStateFull;
+        ga.MediaDuplexState = pContext->MediaDuplexState;
     }
     else
     {

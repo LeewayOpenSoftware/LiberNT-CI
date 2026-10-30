@@ -1086,7 +1086,14 @@ static DWORD WAVE_mciRecord(MCIDEVICEID wDevID, DWORD_PTR dwFlags, DWORD_PTR pmt
 
     if (dwRet != MMSYSERR_NOERROR) {
 	TRACE("Can't open low level audio device %ld\n", dwRet);
+#ifdef __REACTOS__
+	if (dwRet == MMSYSERR_BADDEVICEID || dwRet == MMSYSERR_NODRIVER || dwRet == WAVERR_BADFORMAT)
+	    dwRet = (wmw->wInput == (WORD)WAVE_MAPPER) ? MCIERR_WAVE_INPUTSUNSUITABLE : MCIERR_WAVE_SETINPUTUNSUITABLE;
+	else
+	    dwRet = MCIERR_DEVICE_OPEN;
+#else
 	dwRet = MCIERR_DEVICE_OPEN;
+#endif
 	wmw->hWave = 0;
 	goto cleanUp;
     }
@@ -1386,6 +1393,30 @@ static DWORD WAVE_mciSet(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_WAVE_SET_PARMS
 	    WAVE_mciStop(wDevID, MCI_WAIT, NULL);
 	wmw->wOutput = WAVE_MAPPER;
     }
+#ifdef __REACTOS__
+    if ((dwFlags & (MCI_WAVE_SET_FORMATTAG | MCI_WAVE_SET_AVGBYTESPERSEC | MCI_WAVE_SET_BITSPERSAMPLE |
+                    MCI_WAVE_SET_BLOCKALIGN | MCI_WAVE_SET_CHANNELS | MCI_WAVE_SET_SAMPLESPERSEC)) &&
+        wmw->lpWaveFormat == &wmw->wfxRef)
+    {
+        WAVEFORMATEX wfx = wmw->wfxRef;
+
+        if (dwFlags & MCI_WAVE_SET_FORMATTAG)      wfx.wFormatTag = lpParms->wFormatTag;
+        if (dwFlags & MCI_WAVE_SET_BITSPERSAMPLE)  wfx.wBitsPerSample = lpParms->wBitsPerSample;
+        if (dwFlags & MCI_WAVE_SET_CHANNELS)       wfx.nChannels = lpParms->nChannels;
+        if (dwFlags & MCI_WAVE_SET_SAMPLESPERSEC)  wfx.nSamplesPerSec = lpParms->nSamplesPerSec;
+        if (dwFlags & MCI_WAVE_SET_BLOCKALIGN)     wfx.nBlockAlign = lpParms->nBlockAlign;
+        if (dwFlags & MCI_WAVE_SET_AVGBYTESPERSEC) wfx.nAvgBytesPerSec = lpParms->nAvgBytesPerSec;
+        if (wfx.wFormatTag == WAVE_FORMAT_PCM)
+        {
+            wfx.nBlockAlign = wfx.nChannels * wfx.wBitsPerSample / 8;
+            wfx.nAvgBytesPerSec = wfx.nSamplesPerSec * wfx.nBlockAlign;
+        }
+        wfx.cbSize = 0;
+        if (waveOutOpen(NULL, WAVE_MAPPER, &wfx, 0, 0, WAVE_FORMAT_QUERY) != MMSYSERR_NOERROR &&
+            waveInOpen(NULL, WAVE_MAPPER, &wfx, 0, 0, WAVE_FORMAT_QUERY) != MMSYSERR_NOERROR)
+            return MCIERR_OUTOFRANGE;
+    }
+#endif
     /* Set wave format parameters is refused after Open or Record.*/
     if (dwFlags & MCI_WAVE_SET_FORMATTAG) {
 	TRACE("MCI_WAVE_SET_FORMATTAG = %d\n", lpParms->wFormatTag);
@@ -1497,6 +1528,10 @@ static DWORD WAVE_mciStatus(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_STATUS_PARM
 	case MCI_STATUS_LENGTH:
 	    if (!wmw->hFile) {
 		lpParms->dwReturn = 0;
+#ifdef __REACTOS__
+		if (wmw->lpFileName && !wmw->lpFileName[0])
+		    break;
+#endif
 		return MCIERR_UNSUPPORTED_FUNCTION;
 	    }
 	    /* only one track in file is currently handled, so don't take care of MCI_TRACK flag */
@@ -1519,6 +1554,10 @@ static DWORD WAVE_mciStatus(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_STATUS_PARM
             TRACE("MCI_STATUS_NUMBER_OF_TRACKS => %Iu\n", lpParms->dwReturn);
 	    break;
 	case MCI_STATUS_POSITION:
+#ifdef __REACTOS__
+	    if ((dwFlags & MCI_TRACK) && lpParms->dwTrack != 1)
+		return MCIERR_OUTOFRANGE;
+#endif
 	    if (!wmw->hFile) {
 		lpParms->dwReturn = 0;
 		return MCIERR_UNSUPPORTED_FUNCTION;
@@ -1695,7 +1734,14 @@ static DWORD WAVE_mciInfo(MCIDEVICEID wDevID, DWORD dwFlags, LPMCI_INFO_PARMSW l
     } else {
 	switch (dwFlags & ~(MCI_WAIT|MCI_NOTIFY)) {
         case MCI_INFO_PRODUCT: str = L"Wine's audio player"; break;
+#ifdef __REACTOS__
+	case MCI_INFO_FILE:
+	    if (!wmw->lpFileName || !wmw->lpFileName[0]) ret = MCIERR_NONAPPLICABLE_FUNCTION;
+	    str = wmw->lpFileName;
+	    break;
+#else
 	case MCI_INFO_FILE:    str = wmw->lpFileName; break;
+#endif
         case MCI_WAVE_INPUT:   str = L"Wine Wave In"; break;
         case MCI_WAVE_OUTPUT:  str = L"Wine Wave Out"; break;
 	default:

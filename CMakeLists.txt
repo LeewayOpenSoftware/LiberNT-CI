@@ -296,6 +296,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
             add_compile_definitions(_M_AMD64 _M_X64)
         endif()
         add_definitions(-D_AMD64_ -D__x86_64__ -D_WIN64)
+        set(ARCH_64BIT TRUE)
     elseif(ARCH STREQUAL "arm")
         # _M_ARM is already defined by toolchain
         add_definitions(-D_ARM_ -D__arm__ -DWIN32)
@@ -305,10 +306,12 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
     elseif(ARCH STREQUAL "riscv64")
         # Clang defines _M_RISCV64 with the Microsoft-compatible value (100).
         add_compile_definitions(_RISCV64_ _WIN64)
+        set(ARCH_64BIT TRUE)
     elseif(ARCH STREQUAL "ppc")
         # Clang defines _M_PPC with the Microsoft-compatible CPU value.
         add_compile_definitions(_PPC_ WIN32)
     elseif(ARCH STREQUAL "arm64")
+        set(ARCH_64BIT TRUE)
         if(ARM64EC_RUNTIME)
             # ARM64EC has the x64 ABI/type model while emitting ARM64 code.
             # llvm-mingw defines __arm64ec__ and __x86_64__; define the MS

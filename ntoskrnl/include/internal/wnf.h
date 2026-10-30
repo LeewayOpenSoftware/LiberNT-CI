@@ -74,6 +74,9 @@ typedef union _WNF_STATE_NAME_INTERNAL
 typedef struct _WNF_NAME_INSTANCE
 {
     LIST_ENTRY NameListEntry;
+    EX_RUNDOWN_REF RunRef;
+    EX_PUSH_LOCK StateDataLock;
+    EX_PUSH_LOCK SubscriptionListLock;
     WNF_STATE_NAME_INTERNAL StateName;
     WNF_STATE_NAME_LIFETIME Lifetime;
     WNF_DATA_SCOPE DataScope;
@@ -95,6 +98,7 @@ typedef struct _WNF_SUBSCRIPTION
 {
     LIST_ENTRY SubscriptionListEntry;
     PWNF_NAME_INSTANCE NameInstance;
+    WNF_STATE_NAME_INTERNAL StateName;
     ULONG64 SubscriptionId;
     WNF_CHANGE_STAMP ChangeStamp;
     ULONG EventMask;
@@ -107,7 +111,7 @@ typedef struct _WNF_SUBSCRIPTION
     KEVENT RundownEvent;
     LONG RefCount;
     LONG WorkQueued;
-    BOOLEAN Removed;
+    LONG Removed;
 } WNF_SUBSCRIPTION, *PWNF_SUBSCRIPTION;
 
 /* INTERNAL PROTOTYPES *******************************************************/

@@ -109,7 +109,23 @@ KMT_TESTFUNC Test_PsUnEstablishWin32Callouts;
 KMT_TESTFUNC Test_PsWddmFault;
 KMT_TESTFUNC Test_PsWddmWindow;
 KMT_TESTFUNC Test_RtlStringSupportKM;
-#ifdef _M_ARM64
+#ifdef KMT_SMP_TESTS
+KMT_TESTFUNC Test_KeArm64Apc;
+KMT_TESTFUNC Test_KeArm64Dispatcher;
+KMT_TESTFUNC Test_KeArm64WakePlacement;
+KMT_TESTFUNC Test_KeArm64Interrupt;
+KMT_TESTFUNC Test_KeArm64IpiBroadcast;
+KMT_TESTFUNC Test_KeArm64ProcessorChange;
+KMT_TESTFUNC Test_KeArm64Numa;
+KMT_TESTFUNC Test_KeArm64DpcImportance;
+KMT_TESTFUNC Test_KeArm64Smp;
+KMT_TESTFUNC Test_KeArm64Smt;
+KMT_TESTFUNC Test_KeArm64SubNodeSched;
+KMT_TESTFUNC Test_KeArm64ThreadProcess;
+KMT_TESTFUNC Test_KeArm64AffinityEx;
+KMT_TESTFUNC Test_KeArm64SpinLock;
+#endif
+#ifdef KMT_WIN11_TESTS
 KMT_TESTFUNC Test_Win11NewKM;
 KMT_TESTFUNC Test_MmWin11KM;
 KMT_TESTFUNC Test_MmMdlWin11KM;
@@ -123,6 +139,7 @@ KMT_TESTFUNC Test_ExSequencedList;
 KMT_TESTFUNC Test_ExSingleList;
 KMT_TESTFUNC Test_ExTimer;
 KMT_TESTFUNC Test_ExUuid;
+KMT_TESTFUNC Test_CcLazyWriter;
 KMT_TESTFUNC Test_FsRtlDissect;
 KMT_TESTFUNC Test_FsRtlExpression;
 KMT_TESTFUNC Test_FsRtlLegal;
@@ -189,31 +206,17 @@ KMT_TESTFUNC Test_HalArm64Stage4;
 KMT_TESTFUNC Test_HalArm64Stage5;
 KMT_TESTFUNC Test_KdArm64Layout;
 KMT_TESTFUNC Test_KeArm64;
-KMT_TESTFUNC Test_KeArm64AffinityEx;
-KMT_TESTFUNC Test_KeArm64Apc;
-KMT_TESTFUNC Test_KeArm64Dispatcher;
-KMT_TESTFUNC Test_KeArm64DpcIpi;
-KMT_TESTFUNC Test_KeArm64DpcImportance;
 KMT_TESTFUNC Test_KeArm64PmrMigration;
-KMT_TESTFUNC Test_KeArm64WakePlacement;
 KMT_TESTFUNC Test_KeArm64Frames;
 KMT_TESTFUNC Test_KeArm64Intrinsics;
-KMT_TESTFUNC Test_KeArm64Interrupt;
-KMT_TESTFUNC Test_KeArm64IpiBroadcast;
 KMT_TESTFUNC Test_KeArm64IpiPreemption;
 KMT_TESTFUNC Test_KeArm64Irql;
 KMT_TESTFUNC Test_KeArm64LoaderCache;
 KMT_TESTFUNC Test_KeArm64PcrPrcb;
 KMT_TESTFUNC Test_KeArm64Profile;
-KMT_TESTFUNC Test_KeArm64ProcessorChange;
-KMT_TESTFUNC Test_KeArm64Smp;
-KMT_TESTFUNC Test_KeArm64SpinLock;
-KMT_TESTFUNC Test_KeArm64ThreadProcess;
 KMT_TESTFUNC Test_RtlArm64Context;
 KMT_TESTFUNC Test_RtlArm64UnwindLayout;
-KMT_TESTFUNC Test_KeArm64SubNodeSched;
-KMT_TESTFUNC Test_KeArm64Smt;
-KMT_TESTFUNC Test_KeArm64Numa;
+KMT_TESTFUNC Test_KeArm64DpcIpi;
 #endif
 KMT_TESTFUNC Test_KeDeviceQueue;
 KMT_TESTFUNC Test_KeDpc;
@@ -424,6 +427,7 @@ const KMT_TEST TestList[] =
     { "ExSingleList",                       Test_ExSingleList },
     { "ExTimer",                            Test_ExTimer },
     { "ExUuid",                             Test_ExUuid },
+    { "CcLazyWriter",                       Test_CcLazyWriter },
     /* This deliberately exercises failure reporting and is not a parity test. */
     { "-Example",                           Test_Example },
     { "FsRtlDissect",                       Test_FsRtlDissect },
@@ -504,31 +508,17 @@ const KMT_TEST TestList[] =
     { "HalArm64Stage5",                     Test_HalArm64Stage5 },
     { "KdArm64Layout",                      Test_KdArm64Layout },
     { "KeArm64",                            Test_KeArm64 },
-    { "KeArm64AffinityEx",                  Test_KeArm64AffinityEx },
-    { "KeArm64Apc",                         Test_KeArm64Apc },
-    { "KeArm64Dispatcher",                  Test_KeArm64Dispatcher },
-    { "KeArm64DpcIpi",                      Test_KeArm64DpcIpi },
-    { "KeArm64DpcImportance",               Test_KeArm64DpcImportance },
     { "KeArm64PmrMigration",                Test_KeArm64PmrMigration },
-    { "KeArm64WakePlacement",               Test_KeArm64WakePlacement },
     { "KeArm64Frames",                      Test_KeArm64Frames },
     { "KeArm64Intrinsics",                  Test_KeArm64Intrinsics },
-    { "KeArm64Interrupt",                   Test_KeArm64Interrupt },
     { "KeArm64Irql",                        Test_KeArm64Irql },
     { "KeArm64LoaderCache",                 Test_KeArm64LoaderCache },
     { "KeArm64PcrPrcb",                     Test_KeArm64PcrPrcb },
     { "KeArm64Profile",                     Test_KeArm64Profile },
-    { "KeArm64ProcessorChange",              Test_KeArm64ProcessorChange },
-    { "KeArm64IpiBroadcast",                Test_KeArm64IpiBroadcast },
     { "KeArm64IpiPreemption",               Test_KeArm64IpiPreemption },
-    { "KeArm64Smp",                         Test_KeArm64Smp },
-    { "KeArm64SpinLock",                    Test_KeArm64SpinLock },
-    { "KeArm64ThreadProcess",               Test_KeArm64ThreadProcess },
     { "RtlArm64Context",                    Test_RtlArm64Context },
     { "RtlArm64UnwindLayout",               Test_RtlArm64UnwindLayout },
-    { "KeArm64SubNodeSched",                Test_KeArm64SubNodeSched },
-    { "KeArm64Smt",                         Test_KeArm64Smt },
-    { "KeArm64Numa",                        Test_KeArm64Numa },
+    { "KeArm64DpcIpi",                      Test_KeArm64DpcIpi },
 #endif
 #if defined(_M_IX86) || defined(_M_AMD64)
     { "IoStackKM",                          Test_IoStackKM },
@@ -651,7 +641,23 @@ const KMT_TEST TestList[] =
     { "RtlRegistryKM",                      Test_RtlRegistry },
     { "RtlTimeKM",                          Test_RtlTimeKM },
     { "RtlStringSupportKM",                 Test_RtlStringSupportKM },
-#ifdef _M_ARM64
+#ifdef KMT_SMP_TESTS
+    { "KeArm64Apc",                         Test_KeArm64Apc },
+    { "KeArm64Dispatcher",                  Test_KeArm64Dispatcher },
+    { "KeArm64WakePlacement",               Test_KeArm64WakePlacement },
+    { "KeArm64Interrupt",                   Test_KeArm64Interrupt },
+    { "KeArm64ProcessorChange",              Test_KeArm64ProcessorChange },
+    { "KeArm64IpiBroadcast",                Test_KeArm64IpiBroadcast },
+    { "KeArm64Numa",                        Test_KeArm64Numa },
+    { "KeArm64DpcImportance",               Test_KeArm64DpcImportance },
+    { "KeArm64Smp",                         Test_KeArm64Smp },
+    { "KeArm64Smt",                         Test_KeArm64Smt },
+    { "KeArm64SubNodeSched",                Test_KeArm64SubNodeSched },
+    { "KeArm64ThreadProcess",               Test_KeArm64ThreadProcess },
+    { "KeArm64AffinityEx",                  Test_KeArm64AffinityEx },
+    { "KeArm64SpinLock",                    Test_KeArm64SpinLock },
+#endif
+#ifdef KMT_WIN11_TESTS
     { "Win11NewKM",                         Test_Win11NewKM },
     { "MmWin11KM",                          Test_MmWin11KM },
     { "MmMdlWin11KM",                       Test_MmMdlWin11KM },

@@ -806,7 +806,7 @@ extern WORK_QUEUE_ITEM PspReaperWorkItem;
 extern BOOLEAN PspReaping;
 extern PEPROCESS PsIdleProcess;
 extern LIST_ENTRY PsActiveProcessHead;
-extern KGUARDED_MUTEX PspActiveProcessMutex;
+extern EX_PUSH_LOCK PspActiveProcessLock;
 extern LARGE_INTEGER ShortPsLockDelay;
 extern EPROCESS_QUOTA_BLOCK PspDefaultQuotaBlock;
 extern PHANDLE_TABLE PspCidTable;

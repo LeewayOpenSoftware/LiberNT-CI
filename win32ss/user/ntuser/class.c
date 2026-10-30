@@ -42,8 +42,21 @@ static NTSTATUS IntDeregisterClassAtom(IN RTL_ATOM Atom);
  * was never drawn.  Remember the classes whose cursor could not be resolved
  * and finish them once the arrow is actually registered.
  */
-static PCLS gapclsPendingArrow[8];
+static PCLS *gapclsPendingArrow;
 static ULONG gnclsPendingArrow;
+static ULONG gcclsPendingArrow;
+
+static VOID
+IntMovePendingArrowClass(PCLS OldClass, PCLS NewClass)
+{
+    ULONG i;
+
+    for (i = 0; i < gnclsPendingArrow; i++)
+    {
+        if (gapclsPendingArrow[i] == OldClass)
+            gapclsPendingArrow[i] = NewClass;
+    }
+}
 
 REGISTER_SYSCLASS DefaultServerClasses[] =
 {
@@ -245,6 +258,8 @@ IntDestroyClass(IN OUT PCLS Class)
     /* There shouldn't be any clones anymore */
     ASSERT(Class->cWndReferenceCount == 0);
     ASSERT(Class->pclsClone == NULL);
+
+    IntMovePendingArrowClass(Class, NULL);
 
     if (Class->pclsBase == Class)
     {
@@ -826,6 +841,7 @@ IntGetClassForDesktop(IN OUT PCLS BaseClass,
                 /* Replace the base class */
                 (void)InterlockedExchangePointer((PVOID*)ClassLink,
                                                  Class);
+                IntMovePendingArrowClass(BaseClass, Class);
 
                 /* Destroy the obsolete copy on the shared heap */
                 BaseClass->pclsBase = NULL;
@@ -2327,6 +2343,32 @@ UserGetClassInfo(IN PCLS Class,
     return TRUE;
 }
 
+static VOID
+IntQueuePendingArrowClass(PCLS Class)
+{
+    PCLS *NewArray;
+    ULONG NewCount;
+
+    if (gnclsPendingArrow == gcclsPendingArrow)
+    {
+        NewCount = gcclsPendingArrow ? gcclsPendingArrow * 2 : 8;
+        NewArray = ExAllocatePoolWithTag(PagedPool, NewCount * sizeof(PCLS), USERTAG_CLASS);
+        if (NewArray == NULL)
+        {
+            ERR("No memory to defer the arrow cursor of a system class\n");
+            return;
+        }
+        if (gapclsPendingArrow)
+        {
+            RtlCopyMemory(NewArray, gapclsPendingArrow, gnclsPendingArrow * sizeof(PCLS));
+            ExFreePoolWithTag(gapclsPendingArrow, USERTAG_CLASS);
+        }
+        gapclsPendingArrow = NewArray;
+        gcclsPendingArrow = NewCount;
+    }
+    gapclsPendingArrow[gnclsPendingArrow++] = Class;
+}
+
 //
 // Register System Classes....
 //
@@ -2424,11 +2466,8 @@ UserRegisterSystemClasses(VOID)
 
             ppi->dwRegisteredClasses |= ICLASS_TO_MASK(DefaultServerClasses[i].iCls);
 
-            if (bWantsArrowCursor &&
-                gnclsPendingArrow < ARRAYSIZE(gapclsPendingArrow))
-            {
-                gapclsPendingArrow[gnclsPendingArrow++] = Class;
-            }
+            if (bWantsArrowCursor)
+                IntQueuePendingArrowClass(Class);
         }
         else
         {
@@ -2459,6 +2498,7 @@ IntApplySystemArrowToPendingClasses(
     for (i = 0; i < gnclsPendingArrow; i++)
     {
         PCLS Class = gapclsPendingArrow[i];
+        PCLS Clone;
 
         gapclsPendingArrow[i] = NULL;
         if (Class == NULL || Class->spcur != NULL)
@@ -2466,8 +2506,20 @@ IntApplySystemArrowToPendingClasses(
 
         UserReferenceObject(pcur);
         Class->spcur = pcur;
+        for (Clone = Class->pclsClone; Clone != NULL; Clone = Clone->pclsNext)
+        {
+            if (Clone->spcur == NULL)
+            {
+                UserReferenceObject(pcur);
+                Clone->spcur = pcur;
+            }
+        }
     }
+    if (gapclsPendingArrow)
+        ExFreePoolWithTag(gapclsPendingArrow, USERTAG_CLASS);
+    gapclsPendingArrow = NULL;
     gnclsPendingArrow = 0;
+    gcclsPendingArrow = 0;
 }
 
 /* SYSCALLS *****************************************************************/

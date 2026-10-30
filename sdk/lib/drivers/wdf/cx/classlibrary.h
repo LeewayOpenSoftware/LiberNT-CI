@@ -236,7 +236,7 @@ static
 NTSTATUS
 WdfCxBindClient(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS *ClientGlobals,
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals,
     _In_reads_(FunctionCount) PVOID const *Functions,
     _In_ ULONG FunctionCount,
     _In_ ULONG ClassMajorVersion)
@@ -259,7 +259,7 @@ WdfCxBindClient(
                   ClassBindInfo->FunctionTableCount * sizeof(Functions[0]));
 
     if (ClassBindInfo->ClassBindInfo != NULL)
-        *(PVOID *)ClassBindInfo->ClassBindInfo = *ClientGlobals;
+        *(PVOID *)ClassBindInfo->ClassBindInfo = ClientGlobals;
 
     return STATUS_SUCCESS;
 }

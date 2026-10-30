@@ -1,0 +1,5 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+#pragma once
+
+#include <nx.hpp>
+#include <wil/resource.h>

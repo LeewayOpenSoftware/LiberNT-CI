@@ -353,14 +353,14 @@ map_wparam_AtoW( UINT message, WPARAM wparam )
     case WM_MENUCHAR:
         ch[0] = LOBYTE(wparam);
         ch[1] = HIBYTE(wparam);
-        RtlMultiByteToUnicodeN( wch, sizeof(wch), NULL, ch, 2 );
+        MultiByteToWideChar( get_input_codepage(), 0, ch, 2, wch, 2 );
         wparam = MAKEWPARAM(wch[0], wch[1]);
         break;
     case WM_IME_CHAR:
         ch[0] = HIBYTE(wparam);
         ch[1] = LOBYTE(wparam);
-        if (ch[0]) RtlMultiByteToUnicodeN( wch, sizeof(wch[0]), NULL, ch, 2 );
-        else RtlMultiByteToUnicodeN( wch, sizeof(wch[0]), NULL, ch + 1, 1 );
+        if (ch[0]) MultiByteToWideChar( get_input_codepage(), 0, ch, 2, wch, 2 );
+        else MultiByteToWideChar( get_input_codepage(), 0, ch + 1, 1, wch, 1 );
         wparam = MAKEWPARAM(wch[0], HIWORD(wparam));
         break;
     }
@@ -2386,8 +2386,8 @@ IntConvertMsgToAnsi(LPMSG lpMsg)
             wch[0] = LOWORD(lpMsg->wParam);
             wch[1] = HIWORD(lpMsg->wParam);
             ch[0] = ch[1] = 0;
-            WideCharToMultiByte(CP_THREAD_ACP, 0, wch, 2, ch, 2, NULL, NULL);
-            lpMsg->wParam = MAKEWPARAM(ch[0] | (ch[1] << 8), 0);
+            WideCharToMultiByte(get_input_codepage(), 0, wch, 2, ch, 2, NULL, NULL);
+            lpMsg->wParam = MAKEWPARAM((BYTE)ch[0] | ((BYTE)ch[1] << 8), 0);
             break;
     }
 }

@@ -825,7 +825,7 @@ WdfVersionBindClass(
     {
         // Success - clear pClassClientModule so we don't free it
         pClassClientModule = NULL;
-        status = pClassModule->ClassLibraryInfo->ClassLibraryBindClient(ClassBindInfo, &ClientGlobals);
+        status = pClassModule->ClassLibraryInfo->ClassLibraryBindClient(ClassBindInfo, ClientGlobals);
         if (NT_SUCCESS(status))
         {
             DPRINT_TRACE_EXIT();

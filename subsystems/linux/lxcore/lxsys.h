@@ -154,6 +154,7 @@ LX_SYSCALL(LxSysTimerDelete);
 LX_SYSCALL(LxSysGetitimer);
 
 LX_SYSCALL(LxSysExit);
+LX_SYSCALL(LxSysPtrace);
 LX_SYSCALL(LxSysExitGroup);
 LX_SYSCALL(LxSysWait4);
 LX_SYSCALL(LxSysWaitid);

@@ -16,12 +16,20 @@
 
 WORK_QUEUE_ITEM CmpDelayDerefKCBWorkItem;
 
+#define CMP_DELAYED_CLOSE_SHARDS 16
+
+typedef struct DECLSPEC_CACHEALIGN _CMP_DELAYED_CLOSE_SHARD
+{
+    KGUARDED_MUTEX Lock;
+    LIST_ENTRY Head;
+} CMP_DELAYED_CLOSE_SHARD, *PCMP_DELAYED_CLOSE_SHARD;
+
 ULONG CmpDelayedCloseSize = 2048;
 ULONG CmpDelayedCloseElements;
-KGUARDED_MUTEX CmpDelayedCloseTableLock;
-BOOLEAN CmpDelayCloseWorkItemActive;
+static CMP_DELAYED_CLOSE_SHARD CmpDelayedCloseShards[CMP_DELAYED_CLOSE_SHARDS];
+static ULONG CmpDelayedCloseCursor;
+LONG CmpDelayCloseWorkItemActive;
 WORK_QUEUE_ITEM CmpDelayCloseWorkItem;
-LIST_ENTRY CmpDelayedLRUListHead;
 ULONG CmpDelayCloseIntervalInSeconds = 5;
 KDPC CmpDelayCloseDpc;
 KTIMER CmpDelayCloseTimer;
@@ -50,13 +58,35 @@ CmpDelayCloseDpcRoutine(IN PKDPC Dpc,
     ExQueueWorkItem(&CmpDelayCloseWorkItem, DelayedWorkQueue);
 }
 
+static
+PCMP_DELAYED_CLOSE_SHARD
+CmpDelayedCloseShard(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb)
+{
+    ULONG_PTR Value = (ULONG_PTR)Kcb;
+
+    return &CmpDelayedCloseShards[((Value >> 4) ^ (Value >> 10)) % CMP_DELAYED_CLOSE_SHARDS];
+}
+
+static
+VOID
+CmpTryArmDelayedCloseTimer(VOID)
+{
+    if ((CmpDelayedCloseElements > CmpDelayedCloseSize) &&
+        (InterlockedCompareExchange(&CmpDelayCloseWorkItemActive, TRUE, FALSE) == FALSE))
+    {
+        CmpArmDelayedCloseTimer();
+    }
+}
+
 _Function_class_(WORKER_THREAD_ROUTINE)
 VOID
 NTAPI
 CmpDelayCloseWorker(IN PVOID Context)
 {
     PCM_DELAYED_CLOSE_ENTRY ListEntry;
-    ULONG i, ConvKey;
+    PCMP_DELAYED_CLOSE_SHARD Shard;
+    ULONG i, ConvKey, EmptyShards = 0;
     PAGED_CODE();
 
     /* Sanity check */
@@ -65,20 +95,24 @@ CmpDelayCloseWorker(IN PVOID Context)
     /* Lock the registry */
     CmpLockRegistry();
 
-    /* Acquire the delayed close table lock */
-    KeAcquireGuardedMutex(&CmpDelayedCloseTableLock);
-
     /* Iterate */
     for (i = 0; i < (CmpDelayedCloseSize >> 2); i++)
     {
         /* Break out of the loop if there is nothing to process */
         if (CmpDelayedCloseElements <= CmpDelayedCloseSize) break;
 
-        /* Sanity check */
-        ASSERT(!IsListEmpty(&CmpDelayedLRUListHead));
+        Shard = &CmpDelayedCloseShards[CmpDelayedCloseCursor++ % CMP_DELAYED_CLOSE_SHARDS];
+        KeAcquireGuardedMutex(&Shard->Lock);
+        if (IsListEmpty(&Shard->Head))
+        {
+            KeReleaseGuardedMutex(&Shard->Lock);
+            if (++EmptyShards >= CMP_DELAYED_CLOSE_SHARDS) break;
+            continue;
+        }
+        EmptyShards = 0;
 
         /* Get the entry */
-        ListEntry = CONTAINING_RECORD(CmpDelayedLRUListHead.Blink,
+        ListEntry = CONTAINING_RECORD(Shard->Head.Blink,
                                       CM_DELAYED_CLOSE_ENTRY,
                                       DelayedLRUList);
 
@@ -86,38 +120,36 @@ CmpDelayCloseWorker(IN PVOID Context)
         ConvKey = ListEntry->KeyControlBlock->ConvKey;
 
         /* Release the delayed close table lock */
-        KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
+        KeReleaseGuardedMutex(&Shard->Lock);
 
         /* Acquire the KCB lock */
         CmpAcquireKcbLockExclusiveByKey(ConvKey);
 
         /* Reacquire the delayed close table lock */
-        KeAcquireGuardedMutex(&CmpDelayedCloseTableLock);
-
-        /* Get the entry */
-        ListEntry = CONTAINING_RECORD(CmpDelayedLRUListHead.Blink,
-                                      CM_DELAYED_CLOSE_ENTRY,
-                                      DelayedLRUList);
+        KeAcquireGuardedMutex(&Shard->Lock);
 
         /* Is the entry we have still the first one? */
-        if (CmpDelayedCloseElements <= CmpDelayedCloseSize)
+        if ((CmpDelayedCloseElements <= CmpDelayedCloseSize) || IsListEmpty(&Shard->Head))
         {
             /* No, someone already inserted an entry there */
+            KeReleaseGuardedMutex(&Shard->Lock);
             CmpReleaseKcbLockByKey(ConvKey);
-            break;
+            continue;
         }
+
+        /* Get the entry */
+        ListEntry = CONTAINING_RECORD(Shard->Head.Blink,
+                                      CM_DELAYED_CLOSE_ENTRY,
+                                      DelayedLRUList);
 
         /* Is it a different entry? */
         if (ConvKey != ListEntry->KeyControlBlock->ConvKey)
         {
             /* Release the delayed close table lock */
-            KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
+            KeReleaseGuardedMutex(&Shard->Lock);
 
             /* Release the KCB lock */
             CmpReleaseKcbLockByKey(ConvKey);
-
-            /* Reacquire the delayed close table lock */
-            KeAcquireGuardedMutex(&CmpDelayedCloseTableLock);
 
             /* Iterate again */
             continue;
@@ -125,7 +157,7 @@ CmpDelayCloseWorker(IN PVOID Context)
 
         /* Remove it from the end of the list */
         ListEntry =
-            (PCM_DELAYED_CLOSE_ENTRY)RemoveTailList(&CmpDelayedLRUListHead);
+            (PCM_DELAYED_CLOSE_ENTRY)RemoveTailList(&Shard->Head);
 
         /* Get the containing entry */
         ListEntry = CONTAINING_RECORD(ListEntry,
@@ -137,15 +169,15 @@ CmpDelayCloseWorker(IN PVOID Context)
             (ListEntry->KeyControlBlock->DelayedCloseIndex))
         {
             /* Add it to the beginning of the list */
-            InsertHeadList(&CmpDelayedLRUListHead, &ListEntry->DelayedLRUList);
+            InsertHeadList(&Shard->Head, &ListEntry->DelayedLRUList);
 
             /* Release the delayed close table lock */
-            KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
+            KeReleaseGuardedMutex(&Shard->Lock);
         }
         else
         {
             /* Release the delayed close table lock */
-            KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
+            KeReleaseGuardedMutex(&Shard->Lock);
 
             /* Zero out the DelayCloseEntry pointer */
             ListEntry->KeyControlBlock->DelayCloseEntry = NULL;
@@ -162,24 +194,19 @@ CmpDelayCloseWorker(IN PVOID Context)
 
         /* Release the KCB lock */
         CmpReleaseKcbLockByKey(ConvKey);
-
-        /* Reacquire the delayed close table lock */
-        KeAcquireGuardedMutex(&CmpDelayedCloseTableLock);
     }
 
     if (CmpDelayedCloseElements <= CmpDelayedCloseSize)
     {
         /* We're not active anymore */
-        CmpDelayCloseWorkItemActive = FALSE;
+        InterlockedExchange(&CmpDelayCloseWorkItemActive, FALSE);
+        CmpTryArmDelayedCloseTimer();
     }
     else
     {
         /* We didn't process all things, so reschedule for the next time */
         CmpArmDelayedCloseTimer();
     }
-
-    /* Release the delayed close table lock */
-    KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
 
     /* Unlock the registry */
     CmpUnlockRegistry();
@@ -191,14 +218,17 @@ NTAPI
 CmpInitializeDelayedCloseTable(VOID)
 {
 
+    ULONG i;
+
     /* Setup the delayed close lock */
-    KeInitializeGuardedMutex(&CmpDelayedCloseTableLock);
+    for (i = 0; i < CMP_DELAYED_CLOSE_SHARDS; i++)
+    {
+        KeInitializeGuardedMutex(&CmpDelayedCloseShards[i].Lock);
+        InitializeListHead(&CmpDelayedCloseShards[i].Head);
+    }
 
     /* Setup the work item */
     ExInitializeWorkItem(&CmpDelayCloseWorkItem, CmpDelayCloseWorker, NULL);
-
-    /* Setup the list head */
-    InitializeListHead(&CmpDelayedLRUListHead);
 
     /* Setup the DPC and its timer */
     KeInitializeDpc(&CmpDelayCloseDpc, CmpDelayCloseDpcRoutine, NULL);
@@ -379,6 +409,7 @@ CmpAddToDelayedClose(IN PCM_KEY_CONTROL_BLOCK Kcb,
     ULONG i;
     ULONG OldRefCount, NewRefCount;
     PCM_DELAYED_CLOSE_ENTRY Entry;
+    PCMP_DELAYED_CLOSE_SHARD Shard;
     PAGED_CODE();
 
     /* Sanity check */
@@ -429,21 +460,17 @@ CmpAddToDelayedClose(IN PCM_KEY_CONTROL_BLOCK Kcb,
     InterlockedIncrement((PLONG)&CmpDelayedCloseElements);
 
     /* Acquire the delayed close table lock */
-    KeAcquireGuardedMutex(&CmpDelayedCloseTableLock);
+    Shard = CmpDelayedCloseShard(Kcb);
+    KeAcquireGuardedMutex(&Shard->Lock);
 
     /* Insert the entry into the list */
-    InsertHeadList(&CmpDelayedLRUListHead, &Entry->DelayedLRUList);
-
-    /* Check if we need to enable anything */
-    if ((CmpDelayedCloseElements > CmpDelayedCloseSize) &&
-        !(CmpDelayCloseWorkItemActive))
-    {
-        /* Yes, we have too many elements to close, and no work item */
-        CmpArmDelayedCloseTimer();
-    }
+    InsertHeadList(&Shard->Head, &Entry->DelayedLRUList);
 
     /* Release the table lock */
-    KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
+    KeReleaseGuardedMutex(&Shard->Lock);
+
+    /* Check if we need to enable anything */
+    CmpTryArmDelayedCloseTimer();
 }
 
 VOID
@@ -451,6 +478,7 @@ NTAPI
 CmpRemoveFromDelayedClose(IN PCM_KEY_CONTROL_BLOCK Kcb)
 {
     PCM_DELAYED_CLOSE_ENTRY Entry;
+    PCMP_DELAYED_CLOSE_SHARD Shard = CmpDelayedCloseShard(Kcb);
     ULONG NewRefCount, OldRefCount;
     PAGED_CODE();
 
@@ -461,13 +489,13 @@ CmpRemoveFromDelayedClose(IN PCM_KEY_CONTROL_BLOCK Kcb)
     /* Get the entry and lock the table */
     Entry = Kcb->DelayCloseEntry;
     ASSERT(Entry);
-    KeAcquireGuardedMutex(&CmpDelayedCloseTableLock);
+    KeAcquireGuardedMutex(&Shard->Lock);
 
     /* Remove the entry */
     RemoveEntryList(&Entry->DelayedLRUList);
 
     /* Release the lock */
-    KeReleaseGuardedMutex(&CmpDelayedCloseTableLock);
+    KeReleaseGuardedMutex(&Shard->Lock);
 
     /* Free the entry */
     CmpFreeDelayItem(Entry);

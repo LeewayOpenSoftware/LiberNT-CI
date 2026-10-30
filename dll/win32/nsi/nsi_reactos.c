@@ -166,7 +166,7 @@ static UINT oper_status(DWORD status)
 {
     if (status == MIB_IF_OPER_STATUS_OPERATIONAL || status == MIB_IF_OPER_STATUS_CONNECTED) return NET_IF_OPER_STATUS_UP;
     if (status == MIB_IF_OPER_STATUS_CONNECTING) return NET_IF_OPER_STATUS_DORMANT;
-    if (status == MIB_IF_OPER_STATUS_NON_OPERATIONAL) return NET_IF_OPER_STATUS_DOWN;
+    if (status == MIB_IF_OPER_STATUS_NON_OPERATIONAL || status == MIB_IF_OPER_STATUS_DISCONNECTED) return NET_IF_OPER_STATUS_DOWN;
     return NET_IF_OPER_STATUS_UNKNOWN;
 }
 
@@ -195,6 +195,8 @@ static DWORD finish_enumeration(struct nsi_enumerate_all_ex *params, UINT_PTR to
 
 static ULONG64 interface_speed(UINT index);
 
+static BOOL ip4_query_interface(UINT index, IP4_INTERFACE_INFO *info);
+
 static BOOL fill_ndis_entry(UINT index, NET_LUID *key, struct nsi_ndis_ifinfo_rw *rw,
                             struct nsi_ndis_ifinfo_dynamic *dynamic, struct nsi_ndis_ifinfo_static *stat)
 {
@@ -205,6 +207,7 @@ static BOOL fill_ndis_entry(UINT index, NET_LUID *key, struct nsi_ndis_ifinfo_rw
     char description[MAXLEN_IFDESCR + 1];
     WCHAR alias[IF_MAX_STRING_SIZE + 1], driver[IF_MAX_STRING_SIZE + 1];
     BOOL found, has_alias = FALSE, has_driver = FALSE;
+    IP4_INTERFACE_INFO medium;
     GUID guid;
 
     memset(&row, 0, sizeof(row));
@@ -246,6 +249,7 @@ static BOOL fill_ndis_entry(UINT index, NET_LUID *key, struct nsi_ndis_ifinfo_rw
         dynamic->mtu = row.dwMtu;
         dynamic->xmit_speed = interface_speed(index);
         if (!dynamic->xmit_speed) dynamic->xmit_speed = row.dwSpeed;
+        if (!dynamic->xmit_speed && type == MIB_IF_TYPE_LOOPBACK) dynamic->xmit_speed = 1073741824;
         dynamic->rcv_speed = dynamic->xmit_speed;
         dynamic->in_discards = row.dwInDiscards;
         dynamic->in_errors = row.dwInErrors;
@@ -274,6 +278,8 @@ static BOOL fill_ndis_entry(UINT index, NET_LUID *key, struct nsi_ndis_ifinfo_rw
         stat->perm_phys_addr.Length = physical_length;
         memcpy(stat->perm_phys_addr.Address, physical, stat->perm_phys_addr.Length);
         stat->flags.hw = type != MIB_IF_TYPE_LOOPBACK;
+        if (ip4_query_interface(index, &medium))
+            stat->phys_medium_type = medium.PhysicalMedium;
     }
     return found;
 }
@@ -308,31 +314,6 @@ static DWORD get_ndis(struct nsi_get_all_parameters_ex *params)
     if (params->dynamic_size) memcpy(params->dynamic_data, &dynamic, sizeof(dynamic));
     if (params->static_size) memcpy(params->static_data, &stat, sizeof(stat));
     return ERROR_SUCCESS;
-}
-
-static ULONG automatic_metric(ULONG64 speed, UINT type)
-{
-    static const struct { ULONG64 speed; ULONG metric; } wired[] =
-    {
-        {100000000000ull, 5}, {40000000000ull, 10}, {10000000000ull, 15}, {2000000000ull, 20},
-        {200000000, 25}, {80000000, 35}, {20000000, 45}, {4000000, 55}, {500000, 65}
-    }, wireless[] =
-    {
-        {2000000000ull, 25}, {500000000, 30}, {200000000, 35}, {150000000, 40}, {80000000, 45}, {50000000, 50},
-        {20000000, 55}, {10000000, 60}, {4000000, 65}, {2000000, 70}, {500000, 75}, {200000, 80}
-    };
-    UINT i;
-
-    if (type == MIB_IF_TYPE_LOOPBACK) return 75;
-    if (type == IF_TYPE_IEEE80211)
-    {
-        for (i = 0; i < ARRAY_SIZE(wireless); i++)
-            if (speed >= wireless[i].speed) return wireless[i].metric;
-        return 85;
-    }
-    for (i = 0; i < ARRAY_SIZE(wired); i++)
-        if (speed >= wired[i].speed) return wired[i].metric;
-    return 75;
 }
 
 static void *ip6_query_table(ULONG table_id, ULONG *count);
@@ -385,6 +366,34 @@ static BOOL ip4_query_interface(UINT index, IP4_INTERFACE_INFO *info)
     return NT_SUCCESS(status);
 }
 
+static void ip4_address_info(UINT index, DWORD address, struct nsi_ip_unicast_dynamic *dynamic,
+                             struct nsi_ip_unicast_static *stat)
+{
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
+    OBJECT_ATTRIBUTES attr;
+    IO_STATUS_BLOCK iosb;
+    IP4_ADDRESS_INFO info;
+    NTSTATUS status;
+    HANDLE file;
+
+    memset(&info, 0, sizeof(info));
+    info.Index = index;
+    info.Address = address;
+    InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    status = NtOpenFile(&file, SYNCHRONIZE, &attr, &iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        FILE_SYNCHRONOUS_IO_NONALERT);
+    if (NT_SUCCESS(status))
+    {
+        status = NtDeviceIoControlFile(file, NULL, NULL, NULL, &iosb, IOCTL_IP_QUERY_ADDRESS,
+                                       &info, sizeof(info), &info, sizeof(info));
+        NtClose(file);
+    }
+    if (!NT_SUCCESS(status))
+        info.DadState = IpDadStatePreferred;
+    if (dynamic) dynamic->dad_state = info.DadState;
+    if (stat) stat->creation_time = info.CreationTime.QuadPart;
+}
+
 static void override_zone_indices(ULONG *zones, const ULONG *overrides)
 {
     UINT level;
@@ -407,8 +416,7 @@ static void fill_ip_interface(UINT index, struct nsi_ip_interface_key *key, stru
     if (rw)
     {
         memset(rw, 0, sizeof(*rw));
-        rw->metric = (have_info && !info.UseAutomaticMetric) ? info.Metric
-                                                             : automatic_metric(interface_speed(index), interface_type(index));
+        rw->metric = have_info ? info.Metric : 0;
         rw->base_reachable_time = have_info ? info.BaseReachableTime : 30000;
         rw->retransmit_time = have_info ? info.RetransmitTime : 1000;
         rw->path_mtu_discovery_timeout = have_info ? info.PathMtuDiscoveryTimeout : 600000;
@@ -496,8 +504,7 @@ static void fill_ipv6_interface(const IP6_INTERFACE_ROW *row, struct nsi_ip_inte
     if (rw)
     {
         memset(rw, 0, sizeof(*rw));
-        rw->metric = row->UseAutomaticMetric ? automatic_metric(row->LinkSpeed, row->Loopback ? MIB_IF_TYPE_LOOPBACK : interface_type(row->Index))
-                                             : row->Metric;
+        rw->metric = row->Metric;
         rw->base_reachable_time = row->BaseReachableTime;
         rw->retransmit_time = row->RetransmitTime;
         rw->path_mtu_discovery_timeout = row->PathMtuDiscoveryTimeout;
@@ -584,7 +591,12 @@ static DWORD enumerate_ipv6_unicast(struct nsi_enumerate_all_ex *params)
             dynamic->scope_id = IN6_IS_ADDR_LINKLOCAL((const IN6_ADDR *)row->Address) ? row->Index : 0;
             dynamic->dad_state = row->DadState;
         }
-        if (params->static_data) memset((struct nsi_ip_unicast_static *)params->static_data + i, 0, sizeof(struct nsi_ip_unicast_static));
+        if (params->static_data)
+        {
+            struct nsi_ip_unicast_static *stat = (struct nsi_ip_unicast_static *)params->static_data + i;
+            memset(stat, 0, sizeof(*stat));
+            stat->creation_time = row->CreationTime.QuadPart;
+        }
     }
     HeapFree(GetProcessHeap(), 0, header);
     return finish_enumeration(params, count, want_data);
@@ -826,6 +838,15 @@ static void ipv4_unicast_origin(UINT index, DWORD address, struct nsi_ip_unicast
     if (!RegQueryValueExA(key, "EnableDHCP", NULL, &type, (BYTE *)&enabled, &size) && type == REG_DWORD && enabled)
     {
         size = sizeof(text);
+        if (!RegQueryValueExA(key, "IPAutoconfigurationAddress", NULL, &type, (BYTE *)text, &size) && type == REG_SZ &&
+            !RtlIpv4StringToAddressA(text, TRUE, &end, &lease_address) && lease_address.S_un.S_addr == address)
+        {
+            rw->prefix_origin = IpPrefixOriginWellKnown;
+            rw->suffix_origin = IpSuffixOriginLinkLayerAddress;
+            RegCloseKey(key);
+            return;
+        }
+        size = sizeof(text);
         if (!RegQueryValueExA(key, "DhcpIPAddress", NULL, &type, (BYTE *)text, &size) && type == REG_SZ &&
             !RtlIpv4StringToAddressA(text, TRUE, &end, &lease_address) && lease_address.S_un.S_addr == address)
         {
@@ -899,9 +920,14 @@ static DWORD enumerate_ipv4_unicast(struct nsi_enumerate_all_ex *params)
                 {
                     struct nsi_ip_unicast_dynamic *dynamic = (struct nsi_ip_unicast_dynamic *)params->dynamic_data + written;
                     memset(dynamic, 0, sizeof(*dynamic));
-                    dynamic->dad_state = IpDadStatePreferred;
+                    ip4_address_info(indexes->indexes[i], address, dynamic, NULL);
                 }
-                if (params->static_data) memset((struct nsi_ip_unicast_static *)params->static_data + written, 0, sizeof(struct nsi_ip_unicast_static));
+                if (params->static_data)
+                {
+                    struct nsi_ip_unicast_static *stat = (struct nsi_ip_unicast_static *)params->static_data + written;
+                    memset(stat, 0, sizeof(*stat));
+                    ip4_address_info(indexes->indexes[i], address, NULL, stat);
+                }
                 written++;
             }
             count++;
@@ -962,6 +988,8 @@ struct ipv4_route
     BOOL loopback;
     BOOL immortal;
     NET_LUID luid;
+    DWORD lifetime;
+    DWORD age;
 };
 
 static void fill_ipv4_forward(struct nsi_enumerate_all_ex *params, UINT_PTR i, const struct ipv4_route *route)
@@ -979,8 +1007,8 @@ static void fill_ipv4_forward(struct nsi_enumerate_all_ex *params, UINT_PTR i, c
     {
         struct nsi_ip_forward_rw *rw = (struct nsi_ip_forward_rw *)params->rw_data + i;
         memset(rw, 0, sizeof(*rw));
-        rw->valid_lifetime = ~0u;
-        rw->preferred_lifetime = ~0u;
+        rw->valid_lifetime = route->lifetime;
+        rw->preferred_lifetime = route->lifetime;
         rw->metric = route->metric;
         rw->protocol = route->protocol;
         rw->loopback = route->loopback;
@@ -991,6 +1019,7 @@ static void fill_ipv4_forward(struct nsi_enumerate_all_ex *params, UINT_PTR i, c
     {
         struct nsi_ipv4_forward_dynamic *dynamic = (struct nsi_ipv4_forward_dynamic *)params->dynamic_data + i;
         memset(dynamic, 0, sizeof(*dynamic));
+        dynamic->age = route->age;
         dynamic->addr2.S_un.S_addr = route->dest;
     }
     if (params->static_data)
@@ -1018,6 +1047,37 @@ static void add_ipv4_route(struct ipv4_route *routes, UINT_PTR *count, DWORD des
     route->origin = origin;
     route->loopback = loopback;
     route->immortal = immortal;
+    route->lifetime = ~0u;
+    route->age = 0;
+}
+
+static void ipv4_route_origin(struct ipv4_route *route)
+{
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
+    OBJECT_ATTRIBUTES attr;
+    IO_STATUS_BLOCK iosb;
+    IP4_ROUTE_INFO info;
+    NTSTATUS status;
+    HANDLE file;
+
+    memset(&info, 0, sizeof(info));
+    info.Index = route->if_index;
+    info.Destination = route->dest;
+    info.Mask = route->mask;
+    info.NextHop = route->next_hop;
+    InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    status = NtOpenFile(&file, SYNCHRONIZE, &attr, &iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(status)) return;
+    status = NtDeviceIoControlFile(file, NULL, NULL, NULL, &iosb, IOCTL_IP_QUERY_ROUTE,
+                                   &info, sizeof(info), &info, sizeof(info));
+    NtClose(file);
+    if (!NT_SUCCESS(status)) return;
+    route->age = info.Age;
+    route->lifetime = info.ValidLifetime;
+    if (info.Origin != NlroRouterAdvertisement) return;
+    route->origin = NlroRouterAdvertisement;
+    route->immortal = FALSE;
 }
 
 static int __cdecl ipv4_route_compare(const void *left, const void *right)
@@ -1137,6 +1197,7 @@ static DWORD enumerate_ipv4_forward(struct nsi_enumerate_all_ex *params)
         }
         add_ipv4_route(routes, &count, row->dest, row->mask, row->gateway, row->ifIndex, ifaddrs[j].luid, row->metric,
                        MIB_IPPROTO_NETMGMT, NlroManual, FALSE, TRUE);
+        ipv4_route_origin(routes + count - 1);
     }
 
     qsort(routes, count, sizeof(*routes), ipv4_route_compare);
@@ -1704,6 +1765,12 @@ static HANDLE notification_wake;
 static HANDLE notification_stop;
 static HANDLE notification_complete;
 static HANDLE notification_thread;
+static HANDLE change_file;
+static HANDLE change_event;
+static IO_STATUS_BLOCK change_iosb;
+static ULONG change_generation;
+static BOOL change_pending;
+static BOOL change_unavailable;
 
 static ULONG hash_data(ULONG hash, const void *data, SIZE_T size)
 {
@@ -1820,17 +1887,49 @@ static DWORD cached_table_hash(struct nsi_table_state *states, ULONG *count, ULO
     return states[(*count)++].error;
 }
 
+static void change_request(void)
+{
+    UNICODE_STRING name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
+    OBJECT_ATTRIBUTES attr;
+    IO_STATUS_BLOCK iosb;
+    NTSTATUS status;
+
+    if (change_pending || change_unavailable || !change_event) return;
+    if (!change_file)
+    {
+        InitializeObjectAttributes(&attr, &name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+        if (!NT_SUCCESS(NtOpenFile(&change_file, SYNCHRONIZE, &attr, &iosb, FILE_SHARE_READ | FILE_SHARE_WRITE, 0)))
+        {
+            change_file = NULL;
+            change_unavailable = TRUE;
+            return;
+        }
+    }
+    status = NtDeviceIoControlFile(change_file, change_event, NULL, NULL, &change_iosb, IOCTL_IP_WAIT_CHANGE,
+                                   &change_generation, sizeof(change_generation),
+                                   &change_generation, sizeof(change_generation));
+    if (NT_SUCCESS(status))
+        change_pending = TRUE;
+    else
+        change_unavailable = TRUE;
+}
+
 static DWORD WINAPI notification_worker(void *arg)
 {
-    HANDLE handles[2] = {notification_stop, notification_wake};
+    HANDLE handles[3] = {notification_stop, notification_wake, change_event};
 
     for (;;)
     {
         struct nsi_notification **cursor;
         struct nsi_table_state states[16];
         ULONG state_count = 0;
+        DWORD wait;
 
-        if (WaitForMultipleObjects(ARRAY_SIZE(handles), handles, FALSE, 1000) == WAIT_OBJECT_0) break;
+        change_request();
+        /* TODO: changes tcpip does not signal (router-advertised IPv6 routes, neighbors, statistics) are seen only by this 1 s poll */
+        wait = WaitForMultipleObjects(change_pending ? 3 : 2, handles, FALSE, 1000);
+        if (wait == WAIT_OBJECT_0) break;
+        if (wait == WAIT_OBJECT_0 + 2) change_pending = FALSE;
         EnterCriticalSection(&notification_cs);
         cursor = &notifications;
         while (*cursor)
@@ -1850,6 +1949,14 @@ static DWORD WINAPI notification_worker(void *arg)
         }
         LeaveCriticalSection(&notification_cs);
     }
+    if (change_file)
+    {
+        IO_STATUS_BLOCK iosb;
+
+        if (change_pending) NtCancelIoFile(change_file, &iosb);
+        NtClose(change_file);
+        change_file = NULL;
+    }
     return 0;
 }
 
@@ -1859,6 +1966,7 @@ BOOL nsi_reactos_init(void)
     notification_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     notification_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
     notification_complete = CreateEventW(NULL, FALSE, FALSE, NULL);
+    change_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     return notification_wake && notification_stop && notification_complete;
 }
 
@@ -1875,6 +1983,7 @@ void nsi_reactos_cleanup(void)
         HeapFree(GetProcessHeap(), 0, notification);
     }
     CloseHandle(notification_thread);
+    if (change_event) CloseHandle(change_event);
     CloseHandle(notification_complete);
     CloseHandle(notification_stop);
     CloseHandle(notification_wake);

@@ -51,7 +51,7 @@ CcNtAcquireBcb(
         ExRaiseStatus(STATUS_ACCESS_VIOLATION);
     *Buffer = NULL;
     Offset = (ULONG64)FileOffset->QuadPart;
-    NtMap = CcNtReferenceMap(FileObject->SectionObjectPointer);
+    NtMap = CcNtReferenceFileMap(FileObject);
 
     if (NtMap == NULL)
         ExRaiseStatus(STATUS_INVALID_PARAMETER);

@@ -68,7 +68,13 @@ typedef struct _ETWP_LOGGER
     PWMI_BUFFER_HEADER FlushTail;
 } ETWP_LOGGER, *PETWP_LOGGER;
 
-static EX_PUSH_LOCK EtwpLoggerLock;
+typedef struct DECLSPEC_CACHEALIGN _ETWP_LOGGER_SLOT_LOCK
+{
+    EX_PUSH_LOCK Lock;
+} ETWP_LOGGER_SLOT_LOCK;
+
+static EX_PUSH_LOCK EtwpLoggerRegistrationLock;
+static ETWP_LOGGER_SLOT_LOCK EtwpLoggerSlotLocks[MAXLOGGERS];
 static PETWP_LOGGER EtwpLoggers[MAXLOGGERS];
 
 static const struct
@@ -189,11 +195,11 @@ EtwpReferenceLoggerById(
         return NULL;
 
     KeEnterCriticalRegion();
-    ExAcquirePushLockShared(&EtwpLoggerLock);
+    ExAcquirePushLockShared(&EtwpLoggerSlotLocks[LoggerId].Lock);
     Logger = EtwpLoggers[LoggerId];
     if (Logger)
         InterlockedIncrement(&Logger->ReferenceCount);
-    ExReleasePushLockShared(&EtwpLoggerLock);
+    ExReleasePushLockShared(&EtwpLoggerSlotLocks[LoggerId].Lock);
     KeLeaveCriticalRegion();
 
     return Logger;
@@ -208,18 +214,17 @@ EtwpReferenceLoggerByName(
     ULONG i;
 
     KeEnterCriticalRegion();
-    ExAcquirePushLockShared(&EtwpLoggerLock);
-    for (i = ETWP_FIRST_LOGGER_ID; i < MAXLOGGERS; i++)
+    for (i = ETWP_FIRST_LOGGER_ID; i < MAXLOGGERS && !Logger; i++)
     {
+        ExAcquirePushLockShared(&EtwpLoggerSlotLocks[i].Lock);
         if (EtwpLoggers[i] &&
             RtlEqualUnicodeString(&EtwpLoggers[i]->LoggerName, LoggerName, TRUE))
         {
             Logger = EtwpLoggers[i];
             InterlockedIncrement(&Logger->ReferenceCount);
-            break;
         }
+        ExReleasePushLockShared(&EtwpLoggerSlotLocks[i].Lock);
     }
-    ExReleasePushLockShared(&EtwpLoggerLock);
     KeLeaveCriticalRegion();
 
     return Logger;
@@ -502,13 +507,15 @@ EtwpUnlinkLogger(
     BOOLEAN Removed = FALSE;
 
     KeEnterCriticalRegion();
-    ExAcquirePushLockExclusive(&EtwpLoggerLock);
+    ExAcquirePushLockExclusive(&EtwpLoggerRegistrationLock);
+    ExAcquirePushLockExclusive(&EtwpLoggerSlotLocks[Logger->LoggerId].Lock);
     if (EtwpLoggers[Logger->LoggerId] == Logger)
     {
         EtwpLoggers[Logger->LoggerId] = NULL;
         Removed = TRUE;
     }
-    ExReleasePushLockExclusive(&EtwpLoggerLock);
+    ExReleasePushLockExclusive(&EtwpLoggerSlotLocks[Logger->LoggerId].Lock);
+    ExReleasePushLockExclusive(&EtwpLoggerRegistrationLock);
     KeLeaveCriticalRegion();
 
     return Removed;
@@ -766,7 +773,7 @@ EtwpStartLogger(
     }
 
     KeEnterCriticalRegion();
-    ExAcquirePushLockExclusive(&EtwpLoggerLock);
+    ExAcquirePushLockExclusive(&EtwpLoggerRegistrationLock);
 
     Slot = 0;
     for (i = ETWP_FIRST_LOGGER_ID; i < MAXLOGGERS; i++)
@@ -825,11 +832,13 @@ EtwpStartLogger(
                                       NULL);
             ZwClose(ThreadHandle);
             Logger->LoggerThreadId = ClientId.UniqueThread;
+            ExAcquirePushLockExclusive(&EtwpLoggerSlotLocks[Slot].Lock);
             EtwpLoggers[Slot] = Logger;
+            ExReleasePushLockExclusive(&EtwpLoggerSlotLocks[Slot].Lock);
         }
     }
 
-    ExReleasePushLockExclusive(&EtwpLoggerLock);
+    ExReleasePushLockExclusive(&EtwpLoggerRegistrationLock);
     KeLeaveCriticalRegion();
 
     if (!NT_SUCCESS(Status))

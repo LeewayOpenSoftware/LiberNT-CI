@@ -302,6 +302,9 @@ struct tcp_pcb {
   s16_t rtime;
 
   u16_t mss;   /* maximum segment size */
+#if LWIP_TCP_PCB_BASE_MSS
+  u16_t base_mss;
+#endif
 
   /* RTT (round trip time) estimation variables */
   u32_t rttest; /* RTT estimate in 500ms ticks */

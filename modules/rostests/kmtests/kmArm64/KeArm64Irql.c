@@ -22,6 +22,25 @@ typedef VOID (FASTCALL *PHAL_REQUEST_SOFTWARE_INTERRUPT)(_In_ KIRQL SoftwareInte
 
 typedef KIRQL (NTAPI *PKMT_KE_GET_EFFECTIVE_IRQL)(VOID);
 
+#define KMT_MAXIMUM_GROUPS 32
+
+typedef enum _KMT_IPI_TYPE
+{
+    KmtIpiAffinity = 0,
+    KmtIpiAllButSelf,
+    KmtIpiAll
+} KMT_IPI_TYPE;
+
+typedef struct _KMT_AFFINITY_EX
+{
+    USHORT Count;
+    USHORT Size;
+    ULONG Reserved;
+    KAFFINITY Bitmap[KMT_MAXIMUM_GROUPS];
+} KMT_AFFINITY_EX, *PKMT_AFFINITY_EX;
+
+typedef VOID (NTAPI *PKMT_HAL_REQUEST_IPI)(KMT_IPI_TYPE IpiType, PKMT_AFFINITY_EX Affinity);
+
 typedef struct _KMT_EFFECTIVE_IRQL_IPI_CONTEXT
 {
     PKMT_KE_GET_EFFECTIVE_IRQL GetEffectiveIrql;
@@ -44,6 +63,9 @@ static VOID Arm64IrqlCheck(VOID)
     PHAL_SET_GIC_PRIORITY_MASK HalSetGicPriorityMask;
     PHAL_GET_GIC_PRIORITY_MASK HalGetGicPriorityMask;
     PHAL_REQUEST_SOFTWARE_INTERRUPT HalRequestSoftwareInterrupt;
+    PKMT_HAL_REQUEST_IPI HalRequestIpi;
+    KMT_AFFINITY_EX Affinity;
+    ULONG Spin;
     static const KIRQL Targets[] = {
         PASSIVE_LEVEL,
         APC_LEVEL,
@@ -71,18 +93,31 @@ static VOID Arm64IrqlCheck(VOID)
     HalGetGicPriorityMask = (PHAL_GET_GIC_PRIORITY_MASK)MmGetSystemRoutineAddress(&RoutineName);
     RtlInitUnicodeString(&RoutineName, L"HalRequestSoftwareInterrupt");
     HalRequestSoftwareInterrupt = (PHAL_REQUEST_SOFTWARE_INTERRUPT)MmGetSystemRoutineAddress(&RoutineName);
+    RtlInitUnicodeString(&RoutineName, L"HalRequestIpi");
+    HalRequestIpi = (PKMT_HAL_REQUEST_IPI)MmGetSystemRoutineAddress(&RoutineName);
 
     /* Win11 takes the KfLowerIrql slow path for a same-level lower below
        DISPATCH_LEVEL. Verify that it reconciles a lazily masked GIC PMR even
        though the logical IRQL is already PASSIVE_LEVEL. The GIC helpers are
        HAL-private on Windows, so keep them out of the static import table. */
-    if (!skip(HalSetGicPriorityMask != NULL && HalGetGicPriorityMask != NULL && HalRequestSoftwareInterrupt != NULL, "GIC priority-mask helpers are not exported\n"))
+    if (!skip(HalSetGicPriorityMask != NULL && HalGetGicPriorityMask != NULL && HalRequestSoftwareInterrupt != NULL && HalRequestIpi != NULL, "GIC priority-mask helpers are not exported\n"))
     {
         HalSetGicPriorityMask(PASSIVE_LEVEL);
         BaselinePriorityMask = HalGetGicPriorityMask();
         KeRaiseIrql(HIGH_LEVEL, &OldIrql);
         HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
-        MaskedPriorityMask = HalGetGicPriorityMask();
+        RtlZeroMemory(&Affinity, sizeof(Affinity));
+        Affinity.Count = 1;
+        Affinity.Size = KMT_MAXIMUM_GROUPS;
+        Affinity.Bitmap[0] = (KAFFINITY)1 << KeGetCurrentProcessorNumber();
+        HalRequestIpi(KmtIpiAffinity, &Affinity);
+        for (Spin = 0; Spin < 100000; Spin++)
+        {
+            MaskedPriorityMask = HalGetGicPriorityMask();
+            if (MaskedPriorityMask != BaselinePriorityMask)
+                break;
+            KeStallExecutionProcessor(1);
+        }
         Pcr->CurrentIrql = PASSIVE_LEVEL;
         KeLowerIrql(PASSIVE_LEVEL);
         ReconciledPriorityMask = HalGetGicPriorityMask();

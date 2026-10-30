@@ -206,7 +206,7 @@ function(bootloader_media _target _directory _image)
         DEPENDS native-fatten native-mkisofs native-wimage bootmgfw winload ${_directory}/BCD
         VERBATIM)
 
-    add_dependencies(${_target} livecd_hives)
+    add_dependencies(${_target} livecd_hives livecd_files)
 endfunction()
 
 function(bootloader_dword _out _value)
@@ -221,6 +221,10 @@ function(bootloader_dword _out _value)
 endfunction()
 
 function(bootloader_ramdisk_device _out _path)
+    set(_parent "${_boot_device}")
+    if(ARGC GREATER 2)
+        set(_parent "${ARGV2}")
+    endif()
     string(LENGTH "${_path}" _chars)
     string(HEX "${_path}" _hex)
     set(_text "")
@@ -235,7 +239,7 @@ function(bootloader_ramdisk_device _out _path)
     bootloader_dword(_device_size "0x7c + ${_text_size}")
     bootloader_dword(_file_size "0x54 + ${_text_size}")
     set(${_out}
-        "${_ramdisk_header},${_device_size},${_ramdisk_body},${_file_size},05,00,00,00,${_boot_device},${_text}00,00"
+        "${_ramdisk_header},${_device_size},${_ramdisk_body},${_file_size},05,00,00,00,${_parent},${_text}00,00"
         PARENT_SCOPE)
 endfunction()
 
@@ -313,6 +317,42 @@ ${_object}\\Elements\\12000030\",\"Element\",,\"${_http_options}\"
 BCD,\"BCD00000000\\Objects\\{9dea862c-5cdd-4e70-acc1-f32b344d4795}\\Elements\\24000010\",\"Element\",0x10000,\"${_http_entry}\"")
         if(BOOTLOADER_HTTP_BOOT_DEFAULT)
             set(BCD_DEFAULT_ENTRY "${_http_entry}")
+        endif()
+    endif()
+
+    if(BOOTLOADER_HTTP_IMAGE_URL)
+        string(UUID _image_entry NAMESPACE ${BOOTLOADER_ID_NAMESPACE} NAME "LiberNT HTTP disk image" TYPE SHA1)
+        set(_image_entry "{${_image_entry}}")
+        string(LENGTH "${_zero},${_zero}," _image_parent_offset)
+        string(SUBSTRING "${BCD_OS_DEVICE}" ${_image_parent_offset} -1 _image_parent)
+        bootloader_ramdisk_device(_image_device "" "${_image_parent}")
+        set(_image_options "HTTPBOOTURL=${BOOTLOADER_HTTP_IMAGE_URL}")
+        if(BOOTLOADER_HTTP_BOOT_IP)
+            string(APPEND _image_options " HTTPBOOTIP=${BOOTLOADER_HTTP_BOOT_IP}")
+        endif()
+        string(APPEND _image_options " ${BCD_LOAD_OPTIONS}")
+        set(_object "BCD,\"BCD00000000\\Objects\\${_image_entry}")
+        string(APPEND BCD_HTTP_ENTRY "
+${_object}\\Description\",\"Type\",0x00010001,0x10200003
+${_object}\\Elements\\11000001\",\"Element\",0x1,${BCD_BOOT_DEVICE}
+${_object}\\Elements\\12000002\",\"Element\",,\"\\EFI\\LiberNT\\Boot\\${BOOTLOADER_OS_LOADER}\"
+${_object}\\Elements\\12000004\",\"Element\",,\"LiberNT (HTTP disk image)\"
+${_object}\\Elements\\12000005\",\"Element\",,\"en-US\"
+${_object}\\Elements\\14000006\",\"Element\",0x10000,\"{6efb52bf-1766-41db-a6b3-0ee5eff72bd7}\"
+${_object}\\Elements\\16000009\",\"Element\",0x1,00
+${_object}\\Elements\\16000060\",\"Element\",0x1,01
+${_object}\\Elements\\21000001\",\"Element\",0x1,${_image_device}
+${_object}\\Elements\\22000002\",\"Element\",,\"\\Windows\"
+${_object}\\Elements\\22000011\",\"Element\",,\"${BCD_KERNEL}\"
+${_object}\\Elements\\22000012\",\"Element\",,\"${BCD_HAL}\"
+${_object}\\Elements\\25000020\",\"Element\",0x1,00,00,00,00,00,00,00,00
+${_object}\\Elements\\250000c2\",\"Element\",0x1,00,00,00,00,00,00,00,00
+${_object}\\Elements\\26000091\",\"Element\",0x1,${BCD_SOS}
+${_object}\\Elements\\260000a0\",\"Element\",0x1,${BCD_DEBUG}
+${_object}\\Elements\\12000030\",\"Element\",,\"${_image_options}\"")
+        string(APPEND BCD_DISPLAY_ORDER ",\"${_image_entry}\"")
+        if(BOOTLOADER_HTTP_IMAGE_DEFAULT)
+            set(BCD_DEFAULT_ENTRY "${_image_entry}")
         endif()
     endif()
 

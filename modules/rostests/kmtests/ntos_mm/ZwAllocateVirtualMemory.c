@@ -8,6 +8,7 @@
 #include <kmt_test.h>
 
 static BOOLEAN MachineCanCommit(SIZE_T Bytes);
+static VOID TestCommitAboveCommitLimit(SIZE_T Bytes);
 
 #define ROUND_DOWN(n,align) (((ULONG_PTR)n) & ~((align) - 1l))
 #define DEFAULT_ALLOC_SIZE 200
@@ -176,7 +177,10 @@ SimpleErrorChecks(VOID)
     if (GetNTVersion() >= _WIN32_WINNT_VISTA && MachineCanCommit(RegionSize))
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_SUCCESS, STATUS_SUCCESS);
     else if (GetNTVersion() >= _WIN32_WINNT_VISTA)
-        ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, STATUS_COMMITMENT_LIMIT, STATUS_MEMORY_NOT_ALLOCATED);
+    {
+        TestCommitAboveCommitLimit(RegionSize);
+        RegionSize = DEFAULT_ALLOC_SIZE;
+    }
     else
         ALLOC_MEMORY_WITH_FREE(NtCurrentProcess(), Base, 0, RegionSize, (MEM_COMMIT | MEM_RESERVE), PAGE_READWRITE, InvalidParameter4, STATUS_MEMORY_NOT_ALLOCATED);
 
@@ -437,6 +441,48 @@ MachineCanCommit(SIZE_T Bytes)
 
     return PerformanceInfo.CommitLimit > PerformanceInfo.CommittedPages &&
            BYTES_TO_PAGES(Bytes) < PerformanceInfo.CommitLimit - PerformanceInfo.CommittedPages;
+}
+
+static
+VOID
+TestCommitAboveCommitLimit(SIZE_T Bytes)
+{
+    SYSTEM_PERFORMANCE_INFORMATION Before, After;
+    PVOID Base = NULL;
+    SIZE_T RegionSize = Bytes;
+    NTSTATUS Status;
+
+    Status = ZwQuerySystemInformation(SystemPerformanceInformation, &Before, sizeof(Before), NULL);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &Base, 0, &RegionSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if (NT_SUCCESS(Status))
+    {
+        Status = ZwQuerySystemInformation(SystemPerformanceInformation, &After, sizeof(After), NULL);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (NT_SUCCESS(Status))
+        {
+            ok(After.CommitLimit > Before.CommitLimit,
+               "Commit above the commit limit succeeded without growing it: %lu -> %lu\n",
+               Before.CommitLimit, After.CommitLimit);
+            ok(After.CommitLimit >= After.CommittedPages,
+               "Committed pages %lu exceed the commit limit %lu\n",
+               After.CommittedPages, After.CommitLimit);
+        }
+        RegionSize = 0;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &RegionSize, MEM_RELEASE);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+    }
+    else
+    {
+        ok_eq_hex(Status, STATUS_COMMITMENT_LIMIT);
+        ok_eq_pointer(Base, NULL);
+        RegionSize = 0;
+        Status = ZwFreeVirtualMemory(NtCurrentProcess(), &Base, &RegionSize, MEM_RELEASE);
+        ok_eq_hex(Status, STATUS_MEMORY_NOT_ALLOCATED);
+    }
 }
 
 static

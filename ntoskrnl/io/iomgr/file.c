@@ -854,7 +854,8 @@ IopParseDevice(IN PVOID ParseObject,
         }
 
         /* Check if this is a secure FSD */
-        if ((DeviceObject->Characteristics & FILE_DEVICE_SECURE_OPEN) &&
+        if ((CheckMode != KernelMode) &&
+            (DeviceObject->Characteristics & FILE_DEVICE_SECURE_OPEN) &&
             ((OpenPacket->RelatedFileObject) || (RemainingName->Length)) &&
             (!VolumeOpen))
         {
@@ -1738,7 +1739,7 @@ IopGetDevicePDO(IN PDEVICE_OBJECT DeviceObject)
 
     ASSERT(DeviceObject != NULL);
 
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
     /* Get the base DO */
     PDO = IopGetDeviceAttachmentBase(DeviceObject);
     /* Check whether that's really a PDO and if so, keep it */
@@ -1750,7 +1751,7 @@ IopGetDevicePDO(IN PDEVICE_OBJECT DeviceObject)
     {
         ObReferenceObject(PDO);
     }
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
 
     return PDO;
 }

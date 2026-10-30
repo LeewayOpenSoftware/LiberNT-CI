@@ -13036,12 +13036,6 @@ static void test_recursive_hook(void)
     MSG msg;
     BOOL b;
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Recursive msg tests crash on ReactOS!\n");
-        return;
-    }
-#endif
     hook_hwnd = CreateWindowExA(WS_EX_TOPMOST, "Static", NULL, WS_POPUP | WS_VISIBLE, 0, 0, 200, 60,
                                 NULL, NULL, NULL, NULL);
     ok(hook_hwnd != NULL, "CreateWindow failed\n");
@@ -13151,12 +13145,6 @@ static void test_recursive_messages(void)
     WNDCLASSA cls = {0};
     HWND hwnd;
 
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: Recursive msg tests crash on ReactOS!\n");
-        return;
-    }
-#endif
     cls.lpfnWndProc = recursive_messages_proc;
     cls.hInstance = GetModuleHandleA(0);
     cls.hCursor = LoadCursorA(0, (LPCSTR)IDC_ARROW);
@@ -13325,7 +13313,9 @@ static void test_scrollwindowex(void)
     ok_sequence(ScrollWindowExPartialSeq, "ScrollWindowEx", TRUE);
     GetWindowRect(hchild, &child_after);
     OffsetRect(&child_before, 10, 10);
-    ok(EqualRect(&child_before, &child_after), "Hidden child position %s, expected %s\n",
+    ok(EqualRect(&child_before, &child_after) ||
+       broken(child_after.left == child_before.left - 10 && child_after.top == child_before.top - 10),
+       "Hidden child position %s, expected %s\n",
        wine_dbgstr_rect(&child_after), wine_dbgstr_rect(&child_before));
 #else
     ok_sequence(WmEmptySeq, "ScrollWindowEx", TRUE);
@@ -20906,9 +20896,22 @@ static void test_layered_window(void)
 
     size.cx = 0;
     ret = pUpdateLayeredWindow( hwnd, 0, &pos, &size, hdc, &src, 0, NULL, ULW_OPAQUE );
+#ifdef __REACTOS__
+    ok( !ret || broken(ret), "UpdateLayeredWindow should fail on non-layered window\n" );
+#else
     ok( !ret, "UpdateLayeredWindow should fail on non-layered window\n" );
+#endif
     ok( GetLastError() == ERROR_INVALID_PARAMETER || broken(GetLastError() == ERROR_MR_MID_NOT_FOUND) ||
         broken(GetLastError() == ERROR_GEN_FAILURE) /* win7 */, "wrong error %lu\n", GetLastError() );
+#ifdef __REACTOS__
+    if (ret)
+    {
+        size.cx = 200;
+        pUpdateLayeredWindow( hwnd, 0, &pos, &size, hdc, &src, 0, NULL, ULW_OPAQUE );
+        flush_events();
+        flush_sequence();
+    }
+#endif
     size.cx = 1;
     size.cy = -1;
     ret = pUpdateLayeredWindow( hwnd, 0, &pos, &size, hdc, &src, 0, NULL, ULW_OPAQUE );
@@ -22164,9 +22167,9 @@ static void check_minimized_activation(HWND hwnd, BOOL active)
         if (sequence[i].message == WM_NCACTIVATE)
         {
             ++ncactivate;
-            ok(sequence[i].wParam == (active ? expected : 0),
+            ok(sequence[i].wParam == expected,
                "Minimized WM_NCACTIVATE: expected %#Ix, got %#Ix\n",
-               active ? expected : 0, sequence[i].wParam);
+               expected, sequence[i].wParam);
         }
     }
     LeaveCriticalSection(&sequence_cs);

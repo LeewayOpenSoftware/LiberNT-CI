@@ -29,11 +29,129 @@
 #define RISCV_INTERRUPT_EXTERNAL 9
 #define RISCV_INTERRUPT_COUNTER_OVERFLOW 13
 #define RISCV_PLIC_MAX_SOURCE    1023
+#define RISCV_SECONDARY_VECTORS  512
+#define RISCV_INTERRUPT_VECTORS  (RISCV_PLIC_MAX_SOURCE + 1 + RISCV_SECONDARY_VECTORS)
 
-/* PLIC sources are routed to CPU 0. Connect/disconnect run on that CPU at
- * SYNCH_LEVEL, excluding dispatch while changing the interrupt chain. */
 static KSPIN_LOCK KiRiscvInterruptTableLock;
-static PKINTERRUPT KiRiscvInterruptTable[RISCV_PLIC_MAX_SOURCE + 1];
+static PKINTERRUPT KiRiscvBootInterruptTable[RISCV_INTERRUPT_VECTORS];
+static PKINTERRUPT *KiRiscvInterruptTables[MAXIMUM_PROCESSORS] = {KiRiscvBootInterruptTable};
+static ULONG KiRiscvInterruptConnections[RISCV_INTERRUPT_VECTORS];
+static BOOLEAN KiSecondaryInterruptServicesEnabled;
+
+static inline
+PKINTERRUPT
+KiRiscvLoadInterruptHead(
+    _In_ ULONG Vector,
+    _In_ ULONG Cpu)
+{
+    PKINTERRUPT *Table = (PKINTERRUPT *)ReadPointerNoFence((PVOID const volatile *)&KiRiscvInterruptTables[Cpu]);
+
+    return Table ? (PKINTERRUPT)ReadPointerNoFence((PVOID const volatile *)&Table[Vector]) : NULL;
+}
+
+BOOLEAN
+NTAPI
+KiRiscvAllocateInterruptTable(
+    _In_ ULONG Number)
+{
+    PKINTERRUPT *Table;
+
+    if (Number >= MAXIMUM_PROCESSORS)
+        return FALSE;
+    if (KiRiscvInterruptTables[Number])
+        return TRUE;
+    Table = ExAllocatePoolZero(NonPagedPool, sizeof(KiRiscvBootInterruptTable), TAG_KERNEL);
+    if (!Table)
+        return FALSE;
+    InterlockedExchangePointer((PVOID volatile *)&KiRiscvInterruptTables[Number], Table);
+    return TRUE;
+}
+
+static
+VOID
+KiRiscvUpdateInterruptChain(
+    _Inout_ PKINTERRUPT Interrupt,
+    _In_ BOOLEAN Connect)
+{
+    PKINTERRUPT *Table = KiRiscvInterruptTables[KeGetCurrentProcessorNumber()];
+    PKINTERRUPT Head;
+    KIRQL OldIrql;
+
+    ASSERT(KeGetCurrentProcessorNumber() == (UCHAR)Interrupt->Number);
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    Head = Table[Interrupt->Vector];
+    if (Connect)
+    {
+        if (Head)
+        {
+            InsertTailList(&Head->InterruptListEntry, &Interrupt->InterruptListEntry);
+        }
+        else
+        {
+            InitializeListHead(&Interrupt->InterruptListEntry);
+            KeMemoryBarrier();
+            Table[Interrupt->Vector] = Interrupt;
+        }
+    }
+    else
+    {
+        if (IsListEmpty(&Head->InterruptListEntry))
+        {
+            ASSERT(Head == Interrupt);
+            Table[Interrupt->Vector] = NULL;
+        }
+        else
+        {
+            if (Head == Interrupt)
+                Table[Interrupt->Vector] = CONTAINING_RECORD(Head->InterruptListEntry.Flink,
+                                                             KINTERRUPT, InterruptListEntry);
+            RemoveEntryList(&Interrupt->InterruptListEntry);
+        }
+        InitializeListHead(&Interrupt->InterruptListEntry);
+    }
+    Interrupt->Connected = Connect;
+    KeMemoryBarrier();
+    KeLowerIrql(OldIrql);
+}
+
+static
+BOOLEAN
+KiRiscvCallInterruptServiceRoutine(
+    _In_ PKINTERRUPT Interrupt)
+{
+    KIRQL OldIrql = KeGetCurrentIrql();
+    BOOLEAN Raise = (OldIrql < Interrupt->SynchronizeIrql);
+    BOOLEAN Handled;
+
+    if (Raise)
+        KfRaiseIrql(Interrupt->SynchronizeIrql);
+    KeAcquireSpinLockAtDpcLevel(Interrupt->ActualLock);
+    Handled = Interrupt->ServiceRoutine(Interrupt, Interrupt->ServiceContext);
+    KeReleaseSpinLockFromDpcLevel(Interrupt->ActualLock);
+    if (Raise)
+        KfLowerIrql(OldIrql);
+    return Handled;
+}
+
+static
+VOID
+KiRiscvDispatchChain(
+    _In_ PKINTERRUPT Head)
+{
+    PKINTERRUPT Interrupt = Head;
+    PLIST_ENTRY Entry = &Head->InterruptListEntry;
+
+    for (;;)
+    {
+        if (KiRiscvCallInterruptServiceRoutine(Interrupt) &&
+            Interrupt->Mode == LevelSensitive)
+            break;
+        Entry = Entry->Flink;
+        if (Entry == &Head->InterruptListEntry)
+            break;
+        Interrupt = CONTAINING_RECORD(Entry, KINTERRUPT, InterruptListEntry);
+    }
+}
 
 VOID
 NTAPI
@@ -75,47 +193,60 @@ BOOLEAN
 NTAPI
 KeConnectInterrupt(PKINTERRUPT Interrupt)
 {
+    KAFFINITY PreviousAffinity = 0;
+    BOOLEAN RestoreAffinity = FALSE;
+    BOOLEAN Connected;
     PKINTERRUPT Head;
+    ULONG Vector, Cpu;
     KIRQL OldIrql;
-    BOOLEAN Connected = FALSE;
 
     if (Interrupt && Interrupt->ServiceRoutine && (Interrupt->Irql == PASSIVE_LEVEL))
         return KiConnectPassiveInterrupt(Interrupt);
 
-    if (!Interrupt || !Interrupt->ServiceRoutine ||
-        Interrupt->Vector == 0 || Interrupt->Vector > RISCV_PLIC_MAX_SOURCE ||
-        Interrupt->Number != 0 || Interrupt->Irql != SYNCH_LEVEL ||
-        Interrupt->SynchronizeIrql < Interrupt->Irql ||
-        Interrupt->SynchronizeIrql > HIGH_LEVEL ||
-        Interrupt->Mode != LevelSensitive)
+    if (!Interrupt || !Interrupt->ServiceRoutine)
         return FALSE;
-    if (Interrupt->Connected)
-        return TRUE;
+    Vector = Interrupt->Vector;
+    Cpu = (UCHAR)Interrupt->Number;
+    if (Vector == 0 || Vector >= RISCV_INTERRUPT_VECTORS ||
+        Cpu >= (ULONG)KeNumberProcessors || !KiRiscvInterruptTables[Cpu] ||
+        (Vector <= RISCV_PLIC_MAX_SOURCE && Cpu != 0) ||
+        Interrupt->SynchronizeIrql < Interrupt->Irql ||
+        Interrupt->SynchronizeIrql > HIGH_LEVEL)
+        return FALSE;
 
-    KeSetSystemAffinityThread(1);
-    OldIrql = KeAcquireSpinLockRaiseToSynch(&KiRiscvInterruptTableLock);
-    Head = KiRiscvInterruptTable[Interrupt->Vector];
-    if (!Head)
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
     {
-        InitializeListHead(&Interrupt->InterruptListEntry);
-        KiRiscvInterruptTable[Interrupt->Vector] = Interrupt;
-        KeMemoryBarrier();
-        if (HalEnableSystemInterrupt(Interrupt->Vector,
-                                     Interrupt->Irql, Interrupt->Mode))
-            Connected = TRUE;
-        else
-            KiRiscvInterruptTable[Interrupt->Vector] = NULL;
+        PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
+        RestoreAffinity = TRUE;
     }
-    else if (Interrupt->ShareVector && Head->ShareVector &&
-             Interrupt->Mode == Head->Mode && Interrupt->Irql == Head->Irql)
+    else if (Cpu != KeGetCurrentProcessorNumber())
     {
-        InsertTailList(&Head->InterruptListEntry,
-                       &Interrupt->InterruptListEntry);
-        Connected = TRUE;
+        return FALSE;
     }
-    Interrupt->Connected = Connected;
+
+    KeAcquireSpinLock(&KiRiscvInterruptTableLock, &OldIrql);
+    if (!Interrupt->Connected)
+    {
+        Head = KiRiscvInterruptTables[Cpu][Vector];
+        if (!Head)
+        {
+            KiRiscvUpdateInterruptChain(Interrupt, TRUE);
+            if (KiRiscvInterruptConnections[Vector] != 0 ||
+                HalEnableSystemInterrupt(Vector, Interrupt->Irql, Interrupt->Mode))
+                KiRiscvInterruptConnections[Vector]++;
+            else
+                KiRiscvUpdateInterruptChain(Interrupt, FALSE);
+        }
+        else if (Interrupt->ShareVector && Head->ShareVector &&
+                 Interrupt->Mode == Head->Mode && Interrupt->Irql == Head->Irql)
+        {
+            KiRiscvUpdateInterruptChain(Interrupt, TRUE);
+        }
+    }
+    Connected = Interrupt->Connected;
     KeReleaseSpinLock(&KiRiscvInterruptTableLock, OldIrql);
-    KeRevertToUserAffinityThread();
+    if (RestoreAffinity)
+        KeRevertToUserAffinityThreadEx(PreviousAffinity);
     return Connected;
 }
 
@@ -123,48 +254,59 @@ BOOLEAN
 NTAPI
 KeDisconnectInterrupt(PKINTERRUPT Interrupt)
 {
+    KAFFINITY PreviousAffinity = 0;
+    BOOLEAN RestoreAffinity = FALSE;
+    BOOLEAN Connected;
     PKINTERRUPT Head;
-    PLIST_ENTRY Next;
+    ULONG Vector, Cpu;
     KIRQL OldIrql;
 
     if (Interrupt && (Interrupt->Irql == PASSIVE_LEVEL))
         return KiDisconnectPassiveInterrupt(Interrupt);
 
-    if (!Interrupt || Interrupt->Vector == 0 ||
-        Interrupt->Vector > RISCV_PLIC_MAX_SOURCE)
+    if (!Interrupt)
         return FALSE;
-    KeSetSystemAffinityThread(1);
-    OldIrql = KeAcquireSpinLockRaiseToSynch(&KiRiscvInterruptTableLock);
-    Head = KiRiscvInterruptTable[Interrupt->Vector];
-    if (!Head || !Interrupt->Connected)
+    Vector = Interrupt->Vector;
+    Cpu = (UCHAR)Interrupt->Number;
+    if (Vector == 0 || Vector >= RISCV_INTERRUPT_VECTORS ||
+        Cpu >= (ULONG)KeNumberProcessors || !KiRiscvInterruptTables[Cpu])
+        return FALSE;
+
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
     {
-        KeReleaseSpinLock(&KiRiscvInterruptTableLock, OldIrql);
-        KeRevertToUserAffinityThread();
+        PreviousAffinity = KeSetSystemAffinityThreadEx((KAFFINITY)1 << Cpu);
+        RestoreAffinity = TRUE;
+    }
+    else if (Cpu != KeGetCurrentProcessorNumber())
+    {
         return FALSE;
     }
 
-    if (Head == Interrupt && IsListEmpty(&Head->InterruptListEntry))
+    KeAcquireSpinLock(&KiRiscvInterruptTableLock, &OldIrql);
+    Head = KiRiscvInterruptTables[Cpu][Vector];
+    Connected = Interrupt->Connected;
+    if (Head && Connected)
     {
-        HalDisableSystemInterrupt(Interrupt->Vector, Interrupt->Irql);
-        KiRiscvInterruptTable[Interrupt->Vector] = NULL;
+        if (Head == Interrupt && IsListEmpty(&Head->InterruptListEntry))
+        {
+            ASSERT(KiRiscvInterruptConnections[Vector] != 0);
+            if (--KiRiscvInterruptConnections[Vector] == 0)
+                HalDisableSystemInterrupt(Vector, Interrupt->Irql);
+        }
+        KiRiscvUpdateInterruptChain(Interrupt, FALSE);
     }
-    else if (Head == Interrupt)
-    {
-        Next = Head->InterruptListEntry.Flink;
-        RemoveEntryList(&Head->InterruptListEntry);
-        KiRiscvInterruptTable[Interrupt->Vector] =
-            CONTAINING_RECORD(Next, KINTERRUPT, InterruptListEntry);
-    }
-    else
-    {
-        RemoveEntryList(&Interrupt->InterruptListEntry);
-    }
-    Interrupt->Connected = FALSE;
-    InitializeListHead(&Interrupt->InterruptListEntry);
-    KeMemoryBarrier();
     KeReleaseSpinLock(&KiRiscvInterruptTableLock, OldIrql);
-    KeRevertToUserAffinityThread();
-    return TRUE;
+    if (RestoreAffinity)
+        KeRevertToUserAffinityThreadEx(PreviousAffinity);
+    return Connected;
+}
+
+NTSTATUS
+NTAPI
+KeInitializeSecondaryInterruptServices(VOID)
+{
+    KiSecondaryInterruptServicesEnabled = TRUE;
+    return STATUS_SUCCESS;
 }
 
 BOOLEAN
@@ -174,9 +316,30 @@ KeDispatchSecondaryInterrupt(
     _In_ ULONG_PTR Flags,
     _In_opt_ PVOID Reserved)
 {
+    PKINTERRUPT Head;
+    KIRQL OldIrql;
+    BOOLEAN Raised = FALSE;
+    BOOLEAN IsLevel;
+
     UNREFERENCED_PARAMETER(Flags);
     UNREFERENCED_PARAMETER(Reserved);
-    return KiDispatchPassiveInterrupt(Vector, NULL);
+
+    if (!KiSecondaryInterruptServicesEnabled || Vector >= RISCV_INTERRUPT_VECTORS)
+        return FALSE;
+    if (KiDispatchPassiveInterrupt(Vector, &IsLevel))
+        return !IsLevel;
+
+    if (KeGetCurrentIrql() < DISPATCH_LEVEL)
+    {
+        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+        Raised = TRUE;
+    }
+    Head = KiRiscvLoadInterruptHead(Vector, KeGetCurrentProcessorNumber());
+    if (Head)
+        KiRiscvDispatchChain(Head);
+    if (Raised)
+        KeLowerIrql(OldIrql);
+    return Head != NULL;
 }
 
 /* The debugger lists connected sources with the other processors frozen. */
@@ -184,27 +347,25 @@ PKINTERRUPT
 NTAPI
 KiRiscvQueryInterrupt(_In_ ULONG Source)
 {
-    if ((Source == 0) || (Source > RISCV_PLIC_MAX_SOURCE))
+    if ((Source == 0) || (Source >= RISCV_INTERRUPT_VECTORS))
         return NULL;
-    return KiRiscvInterruptTable[Source];
+    return KiRiscvLoadInterruptHead(Source, KeGetCurrentProcessorNumber());
 }
 
 ULONG
 NTAPI
 KiRiscvQueryInterruptLimit(VOID)
 {
-    return RISCV_PLIC_MAX_SOURCE + 1;
+    return RISCV_INTERRUPT_VECTORS;
 }
 
 static
 VOID
 KiRiscvExternalInterrupt(_Inout_ PKTRAP_FRAME TrapFrame)
 {
-    PKINTERRUPT Head, Interrupt;
-    PLIST_ENTRY Entry;
-    KIRQL OldIrql, RaisedIrql;
+    PKINTERRUPT Head;
+    KIRQL OldIrql;
     ULONG Source;
-    BOOLEAN Handled;
 
     if (KeGetCurrentIrql() >= SYNCH_LEVEL)
     {
@@ -215,33 +376,15 @@ KiRiscvExternalInterrupt(_Inout_ PKTRAP_FRAME TrapFrame)
     if (Source == 0)
         return; /* A claim of zero is a PLIC spurious notification. */
 
+    KeGetCurrentPrcb()->InterruptCount++;
+    KeGetCurrentPrcb()->DeviceInterrupts++;
     OldIrql = KfRaiseIrql(SYNCH_LEVEL);
     Head = Source <= RISCV_PLIC_MAX_SOURCE ?
-           KiRiscvInterruptTable[Source] : NULL;
+           KiRiscvLoadInterruptHead(Source, KeGetCurrentProcessorNumber()) : NULL;
     if (Head)
     {
-        Interrupt = Head;
-        Entry = &Head->InterruptListEntry;
         _enable(); /* The clock may preempt a device ISR. SEIP stays masked. */
-        do
-        {
-            RaisedIrql = SYNCH_LEVEL;
-            if (Interrupt->SynchronizeIrql > SYNCH_LEVEL)
-                RaisedIrql = KfRaiseIrql(Interrupt->SynchronizeIrql);
-            KeAcquireSpinLockAtDpcLevel(Interrupt->ActualLock);
-            Handled = Interrupt->ServiceRoutine(Interrupt,
-                                                 Interrupt->ServiceContext);
-            KeReleaseSpinLockFromDpcLevel(Interrupt->ActualLock);
-            if (Interrupt->SynchronizeIrql > SYNCH_LEVEL)
-                KfLowerIrql(RaisedIrql);
-            if (Handled && Interrupt->Mode == LevelSensitive)
-                break;
-            Entry = Entry->Flink;
-            if (Entry == &Head->InterruptListEntry)
-                break;
-            Interrupt = CONTAINING_RECORD(Entry, KINTERRUPT,
-                                          InterruptListEntry);
-        } while (TRUE);
+        KiRiscvDispatchChain(Head);
         _disable();
     }
     else
@@ -338,6 +481,7 @@ KiRiscvDeliverSoftwareInterrupts(
      * APC/DPC becomes eligible. Remote requests remain in RequestSummary. */
     __asm__ __volatile__("csrci sip, 2" ::: "memory");
     KeMemoryBarrier();
+    KeGetCurrentPrcb()->InterruptCount++;
     Irql = KfRaiseIrql(IPI_LEVEL);
     KiIpiServiceRoutine(TrapFrame, NULL);
     KfLowerIrql(Irql);
@@ -350,6 +494,8 @@ KiRiscvDeliverSoftwareInterrupts(
             (Pcr->SoftwareInterrupts & (1 << DISPATCH_LEVEL)))
         {
             KiRiscvClearSoftwareInterrupt(DISPATCH_LEVEL);
+            KiClearDpcInterruptRequested(KeGetCurrentPrcb());
+            KeMemoryBarrier();
             KfRaiseIrql(DISPATCH_LEVEL);
             _enable();
             KiDispatchInterrupt();
@@ -387,6 +533,8 @@ KiRiscvClockInterrupt(
     }
 
     /* The HAL rearms the deadline (which clears STIP) and updates time. */
+    KeGetCurrentPrcb()->InterruptCount++;
+    KeGetCurrentPrcb()->ClockInterrupts++;
     OldIrql = KfRaiseIrql(CLOCK_LEVEL);
     HalpRiscvClockInterrupt(TrapFrame);
     KfLowerIrql(OldIrql);
@@ -405,6 +553,7 @@ KiRiscvProfileInterrupt(
         return;
     }
 
+    KeGetCurrentPrcb()->InterruptCount++;
     OldIrql = KfRaiseIrql(PROFILE_LEVEL);
     HalpRiscvProfileInterrupt(TrapFrame);
     KfLowerIrql(OldIrql);

@@ -195,6 +195,7 @@ function(add_cd_file)
         # manage dependency
         if(_CD_TARGET AND NOT _CD_OPTIONAL)
             add_dependencies(bootcd ${_CD_TARGET} registry_inf)
+            add_dependencies(livecd_files ${_CD_TARGET} registry_inf)
         endif()
         foreach(item ${_CD_FILE})
             if(_CD_NAME_ON_CD)

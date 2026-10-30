@@ -172,6 +172,11 @@ if(MSVC)
     set_property(TARGET bootmgfw PROPERTY C_STANDARD 11)
 endif()
 
+if(NOT ARCH STREQUAL "ppc")
+    add_executable(testrun testrun/testrun.c)
+    bootloader_efi_application(testrun TestRunEntry)
+endif()
+
 add_custom_target(bootloader DEPENDS bootmgfw)
 
 if(ARCH STREQUAL "ppc")

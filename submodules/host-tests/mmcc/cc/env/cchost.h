@@ -175,6 +175,7 @@ extern _Thread_local ULONG CcHostProcessor;
 #define CC_ALLOCATE(b)                  malloc(b)
 #define CC_FREE(p)                      free(p)
 #define CC_ATOMIC_ADD32(v, d)           __sync_fetch_and_add((v), (d))
+#define CC_ATOMIC_CAS32(v, n, c)        __sync_val_compare_and_swap((v), (c), (n))
 #define CC_ATOMIC_ADD64(v, d)           __sync_fetch_and_add((v), (d))
 #define CC_ATOMIC_READ32(v)             __atomic_load_n((v), __ATOMIC_SEQ_CST)
 #define CC_ATOMIC_WRITE32(v, n)         __atomic_store_n((v), (n), __ATOMIC_SEQ_CST)

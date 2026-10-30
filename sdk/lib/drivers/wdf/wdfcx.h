@@ -61,6 +61,7 @@ typedef struct _WDFCX_FILEOBJECT_CONFIG {
 
 } WDFCX_FILEOBJECT_CONFIG, *PWDFCX_FILEOBJECT_CONFIG;
 
+
 /*
  * KMDF 1.25+ class-extension PnP/power ABI.
  *
@@ -179,6 +180,16 @@ typedef struct _WDFCX_PNPPOWER_EVENT_CALLBACKS
     PFN_WDFCX_DEVICE_POST_D0_EXIT_PRE_HARDWARE_DISABLED EvtCxDevicePostD0ExitPreHardwareDisabled;
 } WDFCX_PNPPOWER_EVENT_CALLBACKS, *PWDFCX_PNPPOWER_EVENT_CALLBACKS;
 
+FORCEINLINE
+VOID
+WDFCX_PNPPOWER_EVENT_CALLBACKS_INIT(
+    _Out_ PWDFCX_PNPPOWER_EVENT_CALLBACKS Config)
+{
+    RtlZeroMemory(Config, sizeof(*Config));
+    Config->Size = sizeof(*Config);
+}
+
+
 typedef NTSTATUS
 (NTAPI *PFN_WDFCX_DEVICE_WAKE_REASON_CALLBACK)(
     _In_ WDFDEVICE Device,
@@ -190,6 +201,349 @@ typedef VOID
     _In_ WDFDEVICE Device,
     _In_ BOOLEAN ChildrenArmedForWake,
     _In_ BOOLEAN DeviceWakeEnabled);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_PREPARE_HARDWARE(
+    _In_ WDFDEVICE Device,
+    _In_ WDFCMRESLIST ResourcesRaw,
+    _In_ WDFCMRESLIST ResourcesTranslated);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_PREPARE_HARDWARE_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device,
+    _In_ WDFCMRESLIST ResourcesRaw,
+    _In_ WDFCMRESLIST ResourcesTranslated);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_PREPARE_HARDWARE(
+    _In_ WDFDEVICE Device,
+    _In_ WDFCMRESLIST ResourcesRaw,
+    _In_ WDFCMRESLIST ResourcesTranslated);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_RELEASE_HARDWARE(
+    _In_ WDFDEVICE Device,
+    _In_ WDFCMRESLIST ResourcesTranslated);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_RELEASE_HARDWARE(
+    _In_ WDFDEVICE Device,
+    _In_ WDFCMRESLIST ResourcesTranslated);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_D0_ENTRY(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_D0_ENTRY(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_D0_EXIT(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_D0_EXIT(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_RESTART_EX(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_SELF_MANAGED_IO_RESTART_EX(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_SUSPEND_EX(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_SELF_MANAGED_IO_SUSPEND_EX(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_D0_ENTRY_POST_HARDWARE_ENABLED(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_D0_ENTRY_POST_HARDWARE_ENABLED(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_D0_EXIT_PRE_HARDWARE_DISABLED(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_D0_EXIT_PRE_HARDWARE_DISABLED(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_D0_ENTRY_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_RESTART_EX_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_D0_ENTRY_POST_HARDWARE_ENABLED_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_INIT(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_SELF_MANAGED_IO_INIT(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_RESTART(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_SELF_MANAGED_IO_RESTART(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_SUSPEND(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_SELF_MANAGED_IO_SUSPEND(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_ARM_WAKE_FROM_S0(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_ARM_WAKE_FROM_S0(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_ARM_WAKE_FROM_SX(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_ARM_WAKE_FROM_SX(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SURPRISE_REMOVAL(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_POST_SURPRISE_REMOVAL(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_INIT_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_RESTART_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_FLUSH(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_POST_SELF_MANAGED_IO_FLUSH(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_SELF_MANAGED_IO_CLEANUP(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_POST_SELF_MANAGED_IO_CLEANUP(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_ARM_WAKE_FROM_S0_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_DISARM_WAKE_FROM_S0(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_POST_DISARM_WAKE_FROM_S0(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_WAKE_FROM_S0_TRIGGERED(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_POST_WAKE_FROM_S0_TRIGGERED(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_ARM_WAKE_FROM_SX_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_DISARM_WAKE_FROM_SX(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_POST_DISARM_WAKE_FROM_SX(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_WAKE_FROM_SX_TRIGGERED(
+    _In_ WDFDEVICE Device);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_POST_WAKE_FROM_SX_TRIGGERED(
+    _In_ WDFDEVICE Device);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_PRE_ARM_WAKE_FROM_SX_WITH_REASON(
+    _In_ WDFDEVICE Device,
+    _In_ BOOLEAN ChildrenArmedForWake,
+    _In_ BOOLEAN DeviceWakeEnabled);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCX_DEVICE_POST_ARM_WAKE_FROM_SX_WITH_REASON(
+    _In_ WDFDEVICE Device,
+    _In_ BOOLEAN ChildrenArmedForWake,
+    _In_ BOOLEAN DeviceWakeEnabled);
+
+typedef
+VOID
+NTAPI
+EVT_WDFCX_DEVICE_PRE_ARM_WAKE_FROM_SX_WITH_REASON_FAILED_CLEANUP(
+    _In_ WDFDEVICE Device,
+    _In_ BOOLEAN ChildrenArmedForWake,
+    _In_ BOOLEAN DeviceWakeEnabled);
+
+typedef
+NTSTATUS
+NTAPI
+EVT_WDFCXDEVICE_WDM_IRP_PREPROCESS(
+    _In_ WDFDEVICE Device,
+    _Inout_ PIRP Irp,
+    _In_ PVOID DispatchContext);
 
 typedef struct _WDFCX_POWER_POLICY_EVENT_CALLBACKS
 {
@@ -212,6 +566,16 @@ typedef struct _WDFCX_POWER_POLICY_EVENT_CALLBACKS
     PFN_WDFCX_DEVICE_VOID_CALLBACK EvtCxDevicePreWakeFromSxTriggered;
     PFN_WDFCX_DEVICE_VOID_CALLBACK EvtCxDevicePostWakeFromSxTriggered;
 } WDFCX_POWER_POLICY_EVENT_CALLBACKS, *PWDFCX_POWER_POLICY_EVENT_CALLBACKS;
+
+FORCEINLINE
+VOID
+WDFCX_POWER_POLICY_EVENT_CALLBACKS_INIT(
+    _Out_ PWDFCX_POWER_POLICY_EVENT_CALLBACKS Config)
+{
+    RtlZeroMemory(Config, sizeof(*Config));
+    Config->Size = sizeof(*Config);
+}
+
 
 typedef NTSTATUS
 (NTAPI *PFN_WDFCXDEVICE_WDM_IRP_PREPROCESS)(
@@ -322,11 +686,11 @@ typedef VOID (NTAPI *PFN_WDF_CLASS_LIBRARY_DEINITIALIZE)(VOID);
 
 typedef NTSTATUS (NTAPI *PFN_WDF_CLASS_LIBRARY_BIND_CLIENT)(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS* ClientGlobals);
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals);
 
 typedef VOID (NTAPI *PFN_WDF_CLASS_LIBRARY_UNBIND_CLIENT)(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS* ClientGlobals);
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals);
 
 typedef NTSTATUS (NTAPI *PFN_WDF_CLIENT_BIND_CLASS)(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
@@ -441,5 +805,108 @@ typedef struct _WDF_TRIAGE_INFO
     PWDFDEVICE_TRIAGE_INFO WdfDeviceTriageInfo;
     PWDFIRP_TRIAGE_INFO WdfIrpTriageInfo;
 } WDF_TRIAGE_INFO, *PWDF_TRIAGE_INFO;
+
+FORCEINLINE
+PWDFCXDEVICE_INIT
+WdfCxDeviceInitAllocate(
+    _In_ PWDFDEVICE_INIT DeviceInit)
+{
+    return ((PFN_WDFCXDEVICEINITALLOCATE) WdfFunctions[WdfCxDeviceInitAllocateTableIndex])(WdfDriverGlobals, DeviceInit);
+}
+
+FORCEINLINE
+NTSTATUS
+WdfCxDeviceInitAssignWdmIrpPreprocessCallback(
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PFN_WDFCXDEVICE_WDM_IRP_PREPROCESS EvtCxDeviceWdmIrpPreprocess,
+    _In_ UCHAR MajorFunction,
+    _When_(NumMinorFunctions > 0, _In_reads_bytes_(NumMinorFunctions))
+    _When_(NumMinorFunctions == 0, _In_opt_)
+    PUCHAR MinorFunctions,
+    _In_ ULONG NumMinorFunctions)
+{
+    return ((PFN_WDFCXDEVICEINITASSIGNWDMIRPPREPROCESSCALLBACK) WdfFunctions[WdfCxDeviceInitAssignWdmIrpPreprocessCallbackTableIndex])(WdfDriverGlobals, CxDeviceInit, EvtCxDeviceWdmIrpPreprocess, MajorFunction, MinorFunctions, NumMinorFunctions);
+}
+
+FORCEINLINE
+VOID
+WdfCxDeviceInitSetIoInCallerContextCallback(
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PFN_WDF_IO_IN_CALLER_CONTEXT EvtIoInCallerContext)
+{
+    ((PFN_WDFCXDEVICEINITSETIOINCALLERCONTEXTCALLBACK) WdfFunctions[WdfCxDeviceInitSetIoInCallerContextCallbackTableIndex])(WdfDriverGlobals, CxDeviceInit, EvtIoInCallerContext);
+}
+
+FORCEINLINE
+VOID
+WdfCxDeviceInitSetRequestAttributes(
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PWDF_OBJECT_ATTRIBUTES RequestAttributes)
+{
+    ((PFN_WDFCXDEVICEINITSETREQUESTATTRIBUTES) WdfFunctions[WdfCxDeviceInitSetRequestAttributesTableIndex])(WdfDriverGlobals, CxDeviceInit, RequestAttributes);
+}
+
+FORCEINLINE
+VOID
+WdfCxDeviceInitSetFileObjectConfig(
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PWDFCX_FILEOBJECT_CONFIG CxFileObjectConfig,
+    _In_opt_ PWDF_OBJECT_ATTRIBUTES FileObjectAttributes)
+{
+    ((PFN_WDFCXDEVICEINITSETFILEOBJECTCONFIG) WdfFunctions[WdfCxDeviceInitSetFileObjectConfigTableIndex])(WdfDriverGlobals, CxDeviceInit, CxFileObjectConfig, FileObjectAttributes);
+}
+
+FORCEINLINE
+VOID
+WdfCxDeviceInitSetPnpPowerEventCallbacks(
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PWDFCX_PNPPOWER_EVENT_CALLBACKS CxPnpPowerCallbacks)
+{
+    ((PFN_WDFCXDEVICEINITSETPNPPOWEREVENTCALLBACKS) WdfFunctions[WdfCxDeviceInitSetPnpPowerEventCallbacksTableIndex])(WdfDriverGlobals, CxDeviceInit, CxPnpPowerCallbacks);
+}
+
+FORCEINLINE
+VOID
+WdfCxDeviceInitSetPowerPolicyEventCallbacks(
+    _In_ PWDFCXDEVICE_INIT CxDeviceInit,
+    _In_ PWDFCX_POWER_POLICY_EVENT_CALLBACKS CxPowerPolicyCallbacks)
+{
+    ((PFN_WDFCXDEVICEINITSETPOWERPOLICYEVENTCALLBACKS) WdfFunctions[WdfCxDeviceInitSetPowerPolicyEventCallbacksTableIndex])(WdfDriverGlobals, CxDeviceInit, CxPowerPolicyCallbacks);
+}
+
+FORCEINLINE
+NTSTATUS
+WdfCxDeviceInitAllocateContext(
+    _In_ PWDFDEVICE_INIT DeviceInit,
+    _In_ PWDF_OBJECT_ATTRIBUTES ContextAttributes,
+    _Outptr_opt_ PVOID * Context)
+{
+    return ((PFN_WDFCXDEVICEINITALLOCATECONTEXT) WdfFunctions[WdfCxDeviceInitAllocateContextTableIndex])(WdfDriverGlobals, DeviceInit, ContextAttributes, Context);
+}
+
+FORCEINLINE
+PVOID
+WdfCxDeviceInitGetTypedContextWorker(
+    _In_ PWDFDEVICE_INIT DeviceInit,
+    _In_ PCWDF_OBJECT_CONTEXT_TYPE_INFO TypeInfo)
+{
+    return ((PFN_WDFCXDEVICEINITGETTYPEDCONTEXTWORKER) WdfFunctions[WdfCxDeviceInitGetTypedContextWorkerTableIndex])(WdfDriverGlobals, DeviceInit, TypeInfo);
+}
+
+#define WdfCxDeviceInitGetTypedContext(_DeviceInit, _ContextType) \
+    ((_ContextType *) WdfCxDeviceInitGetTypedContextWorker((_DeviceInit), WDF_GET_CONTEXT_TYPE_INFO(_ContextType)))
+
+FORCEINLINE
+VOID
+WdfCxVerifierKeBugCheck(
+    _In_opt_ WDFOBJECT Object,
+    _In_ ULONG BugCheckCode,
+    _In_ ULONG_PTR BugCheckParameter1,
+    _In_ ULONG_PTR BugCheckParameter2,
+    _In_ ULONG_PTR BugCheckParameter3,
+    _In_ ULONG_PTR BugCheckParameter4)
+{
+    ((PFN_WDFCXVERIFIERKEBUGCHECK) WdfFunctions[WdfCxVerifierKeBugCheckTableIndex])(WdfDriverGlobals, Object, BugCheckCode, BugCheckParameter1, BugCheckParameter2, BugCheckParameter3, BugCheckParameter4);
+}
 
 #endif // _WDFCX_H_

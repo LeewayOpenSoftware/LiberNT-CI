@@ -597,6 +597,8 @@ User32CallHookProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
   BOOL Hit = FALSE, Loaded = FALSE;
   HMODULE mod = NULL;
   NTSTATUS Status = STATUS_SUCCESS;
+  UNICODE_STRING usCbtName = {0}, usCbtClass = {0};
+  ANSI_STRING asCbtName = {0}, asCbtClass = {0};
 
   Common = (PHOOKPROC_CALLBACK_ARGUMENTS) Arguments;
 
@@ -642,6 +644,39 @@ User32CallHookProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
 
           pCbtCreatewndw->lpcs = pCsw;
           pCbtCreatewndw->hwndInsertAfter = CbtCreatewndExtra->WndInsertAfter;
+          {
+             PWND pwndCreate = ValidateHwndNoErr((HWND)Common->wParam);
+
+             if (pwndCreate && !(pwndCreate->state & WNDS_ANSICREATOR) != !Common->Ansi)
+             {
+                if (Common->Ansi)
+                {
+                   UNICODE_STRING UnicodeString;
+
+                   if (!IS_INTRESOURCE(pCsw->lpszName))
+                   {
+                      RtlInitUnicodeString(&UnicodeString, pCsw->lpszName);
+                      if (NT_SUCCESS(RtlUnicodeStringToAnsiString(&asCbtName, &UnicodeString, TRUE)))
+                         pCsw->lpszName = (LPCWSTR)asCbtName.Buffer;
+                   }
+                   if (!IS_INTRESOURCE(pCsw->lpszClass))
+                   {
+                      RtlInitUnicodeString(&UnicodeString, pCsw->lpszClass);
+                      if (NT_SUCCESS(RtlUnicodeStringToAnsiString(&asCbtClass, &UnicodeString, TRUE)))
+                         pCsw->lpszClass = (LPCWSTR)asCbtClass.Buffer;
+                   }
+                }
+                else
+                {
+                   if (!IS_INTRESOURCE(pCsw->lpszName) &&
+                       RtlCreateUnicodeStringFromAsciiz(&usCbtName, (LPCSTR)pCsw->lpszName))
+                      pCsw->lpszName = usCbtName.Buffer;
+                   if (!IS_INTRESOURCE(pCsw->lpszClass) &&
+                       RtlCreateUnicodeStringFromAsciiz(&usCbtClass, (LPCSTR)pCsw->lpszClass))
+                      pCsw->lpszClass = usCbtClass.Buffer;
+                }
+             }
+          }
           wParam = Common->wParam;
           lParam = (LPARAM) pCbtCreatewndw;
           //ERR("HCBT_CREATEWND: hWnd %p Csw %p Name %p Class %p\n", Common->wParam, pCsw, pCsw->lpszName, pCsw->lpszClass);
@@ -701,6 +736,10 @@ User32CallHookProcFromKernel(PVOID Arguments, ULONG ArgumentLength)
           CbtCreatewndExtra->Cs.y  = pCbtCreatewndw->lpcs->y;
           CbtCreatewndExtra->Cs.cx = pCbtCreatewndw->lpcs->cx;
           CbtCreatewndExtra->Cs.cy = pCbtCreatewndw->lpcs->cy;
+          RtlFreeUnicodeString(&usCbtName);
+          RtlFreeUnicodeString(&usCbtClass);
+          RtlFreeAnsiString(&asCbtName);
+          RtlFreeAnsiString(&asCbtClass);
           HeapFree(GetProcessHeap(), 0, pCsw);
           HeapFree(GetProcessHeap(), 0, pCbtCreatewndw);
           break;

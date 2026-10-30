@@ -49,11 +49,14 @@ CcDirtyAccount(
     _In_ LONG64 Pages)
 {
     PCC_CACHE Cache = Map->Cache;
+    LONG64 Before;
     LONG64 Now;
     KIRQL OldIrql;
 
-    CC_ATOMIC_ADD64(&Map->DirtyPages, Pages);
+    Before = CC_ATOMIC_ADD64(&Map->DirtyPages, Pages);
     CC_ATOMIC_ADD64(&Cache->TotalDirtyPages, Pages);
+    if ((Before > 0) == (Before + Pages > 0))
+        return;
 
     CC_LOCK_ACQUIRE(&Cache->DirtyLock, &OldIrql);
     Now = CC_ATOMIC_READ64(&Map->DirtyPages);
@@ -348,6 +351,28 @@ CcDirtyNextMap(
         Map = CONTAINING_RECORD(Cache->DirtyMaps.Flink, CC_MAP, DirtyLink);
         RemoveEntryList(&Map->DirtyLink);
         InsertTailList(&Cache->DirtyMaps, &Map->DirtyLink);
+    }
+    CC_LOCK_RELEASE(&Cache->DirtyLock, OldIrql);
+    return Map;
+}
+
+PCC_MAP
+CcDirtyNextMapAccept(
+    _Inout_ PCC_CACHE Cache,
+    _In_ BOOLEAN (*Accept)(_In_ PCC_MAP Map),
+    _Out_ PBOOLEAN Accepted)
+{
+    PCC_MAP Map = NULL;
+    KIRQL OldIrql;
+
+    *Accepted = FALSE;
+    CC_LOCK_ACQUIRE(&Cache->DirtyLock, &OldIrql);
+    if (!IsListEmpty(&Cache->DirtyMaps))
+    {
+        Map = CONTAINING_RECORD(Cache->DirtyMaps.Flink, CC_MAP, DirtyLink);
+        RemoveEntryList(&Map->DirtyLink);
+        InsertTailList(&Cache->DirtyMaps, &Map->DirtyLink);
+        *Accepted = Accept(Map);
     }
     CC_LOCK_RELEASE(&Cache->DirtyLock, OldIrql);
     return Map;

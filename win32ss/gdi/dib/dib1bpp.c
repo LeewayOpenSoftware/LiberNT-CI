@@ -37,11 +37,30 @@ DIB_1BPP_GetPixel(SURFOBJ *SurfObj, LONG x, LONG y)
 VOID
 DIB_1BPP_HLine(SURFOBJ *SurfObj, LONG x1, LONG x2, LONG y, ULONG c)
 {
-  while(x1 < x2)
+  PBYTE addr;
+  BYTE fill = (c & 0x01) ? 0xff : 0x00;
+  BYTE mask;
+  LONG first, last;
+
+  if (x1 >= x2)
+    return;
+
+  addr = (PBYTE)SurfObj->pvScan0 + y * SurfObj->lDelta;
+  first = x1 >> 3;
+  last = (x2 - 1) >> 3;
+  if (first == last)
   {
-    DIB_1BPP_PutPixel(SurfObj, x1, y, c);
-    x1++;
+    mask = (BYTE)((0xff >> (x1 & 7)) & (0xff << (7 - ((x2 - 1) & 7))));
+    addr[first] = (BYTE)((addr[first] & ~mask) | (fill & mask));
+    return;
   }
+
+  mask = (BYTE)(0xff >> (x1 & 7));
+  addr[first] = (BYTE)((addr[first] & ~mask) | (fill & mask));
+  if (last - first > 1)
+    RtlFillMemory(addr + first + 1, last - first - 1, fill);
+  mask = (BYTE)(0xff << (7 - ((x2 - 1) & 7)));
+  addr[last] = (BYTE)((addr[last] & ~mask) | (fill & mask));
 }
 
 VOID

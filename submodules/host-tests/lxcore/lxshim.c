@@ -215,9 +215,10 @@ KeUnstackDetachProcess(PKAPC_STATE ApcState)
     WorldAttach(LxHostWorld, 0, LxHostSpace);
 }
 
+static
 NTSTATUS
-ZwAllocateVirtualMemory(HANDLE Process, PVOID *BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize,
-                        ULONG AllocationType, ULONG Protect)
+LxHostAllocate(PVOID *BaseAddress, PSIZE_T RegionSize, ULONG AllocationType, ULONG Protect, ULONG64 Lowest,
+               ULONG64 Highest)
 {
     ULONG64 Base = (ULONG64)(ULONG_PTR)*BaseAddress, Size = *RegionSize;
     ULONG Protection, Type = 0;
@@ -237,14 +238,66 @@ ZwAllocateVirtualMemory(HANDLE Process, PVOID *BaseAddress, ULONG_PTR ZeroBits, 
     if (Base == 0)
         Type |= MI_MEM_RESERVE;
 
-    Status = MiAllocateVirtualMemoryBounded(LxHostSpace, &Base, &Size, Type, Protection, 0,
-                                            (Base != 0) ? LxHostSpace->HighestVa : LX_HOST_USER_LIMIT - 1, 0, FALSE);
+    Status = MiAllocateVirtualMemoryBounded(LxHostSpace, &Base, &Size, Type, Protection, Lowest,
+                                            (Base != 0) ? LxHostSpace->HighestVa : Highest, 0, FALSE);
     if (NT_SUCCESS(Status))
     {
         *BaseAddress = (PVOID)(ULONG_PTR)Base;
         *RegionSize = (SIZE_T)Size;
     }
     return Status;
+}
+
+NTSTATUS
+ZwAllocateVirtualMemory(HANDLE Process, PVOID *BaseAddress, ULONG_PTR ZeroBits, PSIZE_T RegionSize,
+                        ULONG AllocationType, ULONG Protect)
+{
+    return LxHostAllocate(BaseAddress, RegionSize, AllocationType, Protect, 0, LX_HOST_USER_LIMIT - 1);
+}
+
+NTSTATUS
+ZwAllocateVirtualMemoryEx(HANDLE Process, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG AllocationType,
+                          ULONG PageProtection, PMEM_EXTENDED_PARAMETER ExtendedParameters,
+                          ULONG ExtendedParameterCount)
+{
+    ULONG64 Lowest = 0, Highest = LX_HOST_USER_LIMIT - 1;
+    ULONG Index;
+
+    for (Index = 0; Index < ExtendedParameterCount; Index++)
+    {
+        PMEM_ADDRESS_REQUIREMENTS Requirements = ExtendedParameters[Index].Pointer;
+
+        if (ExtendedParameters[Index].Type != MemExtendedParameterAddressRequirements || Requirements == NULL)
+            return STATUS_INVALID_PARAMETER;
+        Lowest = (ULONG64)(ULONG_PTR)Requirements->LowestStartingAddress;
+        if (Requirements->HighestEndingAddress != NULL)
+            Highest = (ULONG64)(ULONG_PTR)Requirements->HighestEndingAddress;
+    }
+    return LxHostAllocate(BaseAddress, RegionSize, AllocationType, PageProtection, Lowest, Highest);
+}
+
+PLX_TMPFS_INODE
+LxTmpfsFileInode(PLX_FILE File)
+{
+    return NULL;
+}
+
+ULONG64
+LxTmpfsInodeSize(PLX_TMPFS_INODE Inode)
+{
+    return 0;
+}
+
+LONG
+LxTmpfsInodeRemoveRange(PLX_TMPFS_INODE Inode, ULONG64 Start, ULONG64 End)
+{
+    return 0;
+}
+
+NTSTATUS
+LxTmpfsMapSection(PLX_TMPFS_INODE Inode, BOOLEAN Shared, PHANDLE Section, PULONG64 Size)
+{
+    return STATUS_NOT_SUPPORTED;
 }
 
 NTSTATUS

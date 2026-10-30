@@ -906,7 +906,7 @@ SoftModalMessageBox(IN LPMSGBOXDATA lpMsgBoxData)
     /* Initialize the dialog template */
     tpl = (DLGTEMPLATE *)buf;
 
-    tpl->style = WS_CAPTION | WS_POPUP | WS_VISIBLE | WS_CLIPSIBLINGS | WS_SYSMENU |
+    tpl->style = WS_CAPTION | WS_POPUP | WS_CLIPSIBLINGS | WS_SYSMENU |
                  DS_CENTER | DS_SETFONT | DS_NOIDLEMSG;
     tpl->dwExtendedStyle = WS_EX_WINDOWEDGE | WS_EX_CONTROLPARENT;
     if ((lpMsgBoxParams->dwStyle & (MB_SYSTEMMODAL | MB_TASKMODAL)) == MB_SYSTEMMODAL)

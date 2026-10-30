@@ -3413,6 +3413,9 @@ NtUserSwitchDesktop(HDESK hdesk)
     /* Show the new desktop window */
     co_IntShowDesktop(pdesk, UserGetSystemMetrics(SM_CXSCREEN), UserGetSystemMetrics(SM_CYSCREEN), bRedrawDesktop);
 
+    if (!gpmdev)
+        co_IntGraphicsCheck(TRUE);
+
     // TODO: Request hard-error popups to be respawned to the new desktop.
 
     /* Notify waiters that a desktop has been switched on the

@@ -150,29 +150,27 @@ AlpcpDeliverLegacyMessage(
     PVOID PortContext;
     PETHREAD Thread = PsGetCurrentThread();
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     QueuePort = AlpcpGetQueuePort(Port, &PortContext);
     if (!QueuePort || (Port->Flags & (ALPC_PORT_FLAG_CLOSED | ALPC_PORT_FLAG_DISCONNECTED)))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpFreeMessage(Message);
         return STATUS_PORT_DISCONNECTED;
     }
 
     Message->PortContext = PortContext;
     Message->OwnerPort = QueuePort;
-    Message->PortMessage.MessageId = AlpcpNextMessageId++;
-    if (!AlpcpNextMessageId) AlpcpNextMessageId = 1;
+    Message->PortMessage.MessageId = AlpcpAllocateMessageId();
     Message->Sequence = QueuePort->SequenceNo++;
 
     if (Synchronous)
     {
         Message->WaitingThread = Thread;
-        Thread->AlpcMessage = Message;
-        Thread->AlpcMessageId = Message->PortMessage.MessageId;
+        AlpcpSetThreadMessage(Thread, Message);
     }
     AlpcpQueueMessage(QueuePort, Message);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     return STATUS_SUCCESS;
 }
 
@@ -188,7 +186,7 @@ AlpcpDeliverLegacyCallback(
     PETHREAD TargetThread;
     PETHREAD CurrentThread = PsGetCurrentThread();
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Parent = AlpcpFindPendingMessageForReply(Port, Header->MessageId, &Header->ClientId);
     if (!Parent ||
         (Parent->ServerThread != CurrentThread) ||
@@ -196,7 +194,7 @@ AlpcpDeliverLegacyCallback(
         Parent->ActiveCallback ||
         !Parent->WaitingThread)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpFreeMessage(Callback);
         return STATUS_REPLY_MESSAGE_MISMATCH;
     }
@@ -207,7 +205,7 @@ AlpcpDeliverLegacyCallback(
         (TargetPort->Flags & (ALPC_PORT_FLAG_CLOSED | ALPC_PORT_FLAG_DISCONNECTED)) ||
         TargetThread->LpcExitThreadCalled)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpFreeMessage(Callback);
         return STATUS_PORT_DISCONNECTED;
     }
@@ -219,19 +217,16 @@ AlpcpDeliverLegacyCallback(
     Callback->WaitingThread = CurrentThread;
     Callback->ServerThread = TargetThread;
     Callback->PortMessage.MessageId = Parent->PortMessage.MessageId;
-    Callback->PortMessage.CallbackId = AlpcpNextCallbackId++;
-    if (!AlpcpNextCallbackId) AlpcpNextCallbackId = 1;
+    Callback->PortMessage.CallbackId = AlpcpAllocateCallbackId();
     Callback->PortMessage.ClientId = Parent->PortMessage.ClientId;
     Callback->Sequence = TargetPort->SequenceNo++;
 
     Parent->ActiveCallback = Callback;
     AlpcpMakePending(TargetPort, Callback);
-    CurrentThread->AlpcMessage = Callback;
-    CurrentThread->AlpcMessageId = Callback->PortMessage.MessageId;
-    TargetThread->AlpcMessage = Callback;
-    TargetThread->AlpcMessageId = Callback->PortMessage.MessageId;
+    AlpcpSetThreadMessage(CurrentThread, Callback);
+    AlpcpSetThreadMessage(TargetThread, Callback);
     AlpcpSignalWaiter(TargetThread);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     return STATUS_SUCCESS;
 }
 
@@ -575,21 +570,21 @@ AlpcpLegacyReply(
         }
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Message = AlpcpFindPendingMessageForReply(Port, Header.MessageId, &Header.ClientId);
     if (!Message ||
         (Message->State & ALPC_MSG_STATE_CONNECTION) ||
         (Message->PortMessage.CallbackId != Header.CallbackId) ||
         Message->ActiveCallback)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
         return STATUS_REPLY_MESSAGE_MISMATCH;
     }
 
     if (sizeof(PORT_MESSAGE) + CopyLength > Message->AllocatedLength)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
         return STATUS_PORT_MESSAGE_TOO_LONG;
     }
@@ -606,7 +601,7 @@ AlpcpLegacyReply(
         Message->CallbackParent = NULL;
     }
     AlpcpCompleteReply(Message);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
     return STATUS_SUCCESS;
@@ -650,7 +645,7 @@ AlpcpLegacyReceive(
     Status = AlpcpWaitForMessage(Port, AlpcpLegacyWaitMode(PreviousMode), FALSE, Timeout, &Message);
     if (Status != STATUS_SUCCESS) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (!AlpcpReclaimCanceledMessage(Message) &&
         (Message->State & (ALPC_MSG_STATE_CONNECTION | ALPC_MSG_STATE_SYNC)))
     {
@@ -660,7 +655,7 @@ AlpcpLegacyReceive(
     }
     if (!(Message->State & ALPC_MSG_STATE_CONNECTION)) Context = Message->PortContext;
     CopyLength = AlpcpLegacyCopyLength(&Message->PortMessage);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     if (PreviousMode != KernelMode)
     {
         _SEH2_TRY
@@ -693,9 +688,9 @@ AlpcpLegacyReceive(
     }
     else if (!NT_SUCCESS(Status))
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_DISCONNECTED, STATUS_LPC_REPLY_LOST);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
     }
     return Status;
 }
@@ -711,7 +706,7 @@ AlpcpReferenceLegacyReceivePort(
 
     *ReceivePort = NULL;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if ((AlpcpPortType(Port) == ALPC_PORT_TYPE_CLIENT) ||
         (AlpcpPortType(Port) == ALPC_PORT_TYPE_CONNECTION))
     {
@@ -727,7 +722,7 @@ AlpcpReferenceLegacyReceivePort(
     {
         *ReceivePort = Target;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     return *ReceivePort ? STATUS_SUCCESS : STATUS_PORT_DISCONNECTED;
 }
@@ -822,7 +817,7 @@ NtReplyWaitReplyPort(
     Status = AlpcpReferencePortByHandle(PortHandle, 0, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Callback = AlpcpFindPendingMessageForReply(Port, Header.MessageId, &Header.ClientId);
     if (!Callback ||
         !(Callback->State & ALPC_MSG_STATE_CALLBACK) ||
@@ -830,12 +825,12 @@ NtReplyWaitReplyPort(
         (Callback->ServerThread != Thread) ||
         !Callback->CallbackParent)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         ObDereferenceObject(Port);
         return STATUS_REPLY_MESSAGE_MISMATCH;
     }
     Parent = Callback->CallbackParent;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     Status = AlpcpLegacyReply(Port, ReplyMessage, PreviousMode);
     if (!NT_SUCCESS(Status))
@@ -844,10 +839,9 @@ NtReplyWaitReplyPort(
         return Status;
     }
 
-    AlpcpAcquireLock();
-    Thread->AlpcMessage = Parent;
-    Thread->AlpcMessageId = Parent->PortMessage.MessageId;
-    AlpcpReleaseLock();
+    AlpcpAcquirePortLock(Port);
+    AlpcpSetThreadMessage(Thread, Parent);
+    AlpcpReleasePortLock(Port);
 
     Status = AlpcpWaitForReply(Parent, AlpcpLegacyWaitMode(PreviousMode), FALSE, NULL, &ReceivedMessage);
     Status = AlpcpFinishSynchronousRequest(Parent, ReceivedMessage, Status, ReplyMessage, PreviousMode);
@@ -912,7 +906,7 @@ AlpcpCreateLegacyPort(
     if (Limit < MaxMessageLength) return STATUS_INVALID_PARAMETER_4;
     if (!MaxMessageLength) MaxMessageLength = Limit;
 
-    Status = AlpcpCreatePort(&Port, PreviousMode, ObjectAttributes, NULL, ALPC_PORT_TYPE_CONNECTION, ALPC_PORT_FLAG_LPC | (Waitable ? ALPC_PORT_FLAG_WAITABLE : 0), MaxConnectionInfoLength, MaxMessageLength);
+    Status = AlpcpCreatePort(&Port, NULL, PreviousMode, ObjectAttributes, NULL, ALPC_PORT_TYPE_CONNECTION, ALPC_PORT_FLAG_LPC | (Waitable ? ALPC_PORT_FLAG_WAITABLE : 0), MaxConnectionInfoLength, MaxMessageLength);
     if (!NT_SUCCESS(Status)) return Status;
 
     Status = ObInsertObject(Port, NULL, PORT_ALL_ACCESS, 0, NULL, &Handle);
@@ -1107,7 +1101,7 @@ NtSecureConnectPort(
         return Status;
     }
 
-    Status = AlpcpCreatePort(&ClientPort, PreviousMode, NULL, NULL, ALPC_PORT_TYPE_CLIENT, ALPC_PORT_FLAG_LPC, Port->MaxConnectionInfoLength, Port->MaxMessageLength);
+    Status = AlpcpCreatePort(&ClientPort, Port, PreviousMode, NULL, NULL, ALPC_PORT_TYPE_CLIENT, ALPC_PORT_FLAG_LPC, Port->MaxConnectionInfoLength, Port->MaxMessageLength);
     if (!NT_SUCCESS(Status))
     {
         ObDereferenceObject(Port);
@@ -1185,21 +1179,19 @@ NtSecureConnectPort(
         }
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (Port->Flags & (ALPC_PORT_FLAG_NAME_DELETED | ALPC_PORT_FLAG_CLOSED))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         Status = STATUS_OBJECT_NAME_NOT_FOUND;
         goto Failure;
     }
     Message->OwnerPort = Port;
-    Message->PortMessage.MessageId = AlpcpNextMessageId++;
-    if (!AlpcpNextMessageId) AlpcpNextMessageId = 1;
+    Message->PortMessage.MessageId = AlpcpAllocateMessageId();
     Message->WaitingThread = Thread;
-    Thread->AlpcMessage = Message;
-    Thread->AlpcMessageId = Message->PortMessage.MessageId;
+    AlpcpSetThreadMessage(Thread, Message);
     AlpcpQueueMessage(Port, Message);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     Status = AlpcpWaitForReply(Message, PreviousMode, FALSE, NULL, NULL);
     if (Status != STATUS_SUCCESS)
@@ -1306,7 +1298,7 @@ AlpcpAcceptLegacyConnection(
     LARGE_INTEGER SectionOffset;
     HANDLE Handle;
 
-    Status = AlpcpCreatePort(&ServerPort, PreviousMode, NULL, NULL, ALPC_PORT_TYPE_SERVER, ALPC_PORT_FLAG_LPC, ConnectionPort->MaxConnectionInfoLength, ConnectionPort->MaxMessageLength);
+    Status = AlpcpCreatePort(&ServerPort, ConnectionPort, PreviousMode, NULL, NULL, ALPC_PORT_TYPE_SERVER, ALPC_PORT_FLAG_LPC, ConnectionPort->MaxConnectionInfoLength, ConnectionPort->MaxMessageLength);
     if (!NT_SUCCESS(Status)) return Status;
 
     ServerPort->PortContext = PortContext;
@@ -1350,14 +1342,16 @@ AlpcpAcceptLegacyConnection(
         return Status;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(ConnectionPort);
     if (!PortContext) ServerPort->PortContext = Handle;
+    Info->Domain = ConnectionPort->Domain;
+    AlpcpReferenceDomain(Info->Domain);
     ServerPort->CommunicationInfo = Info;
     Message->Connection.ClientPort->CommunicationInfo = Info;
     InsertTailList(&ConnectionPort->CommunicationPorts, &Info->CommunicationList);
     ServerPort->Creator = PsGetCurrentThread()->Cid;
     Message->Connection.ClientPort->Creator = Message->PortMessage.ClientId;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(ConnectionPort);
 
     *OutServerPort = ServerPort;
     *OutHandle = Handle;
@@ -1593,9 +1587,9 @@ AlpcpAbandonLegacyConnect(
 {
     PETHREAD Thread;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Thread = AlpcpCompleteLegacyConnect(Port, FALSE);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     if (Thread) ObDereferenceObject(Thread);
 }
 
@@ -1619,9 +1613,9 @@ NtCompleteConnectPort(
         return STATUS_INVALID_PORT_HANDLE;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Thread = AlpcpCompleteLegacyConnect(Port, TRUE);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (Thread) ObDereferenceObject(Thread);
     ObDereferenceObject(Port);
@@ -1665,7 +1659,7 @@ NtImpersonateClientOfPort(
         return Status;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Message = AlpcpFindPendingMessageForReply(Port, Header.MessageId, &Header.ClientId);
     if (!Message || !Header.MessageId)
     {
@@ -1682,7 +1676,7 @@ NtImpersonateClientOfPort(
         Dynamic = (ClientPort->Flags & ALPC_PORT_FLAG_DYNAMIC_SECURITY) != 0;
         Qos = ClientPort->SecurityQos;
     }
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (NT_SUCCESS(Status))
     {
@@ -1744,11 +1738,11 @@ AlpcpCopyRequestData(
         return Status;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Pending = AlpcpFindPendingMessageForReply(Port, Header.MessageId, &Header.ClientId);
     if (!Pending || !Header.MessageId || !(Pending->State & ALPC_MSG_STATE_DATA_INFO))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         Status = STATUS_REPLY_MESSAGE_MISMATCH;
         goto Cleanup;
     }
@@ -1757,12 +1751,12 @@ AlpcpCopyRequestData(
     if ((Index >= DataInfo->NumberOfEntries) ||
         (BufferLength > DataInfo->Entries[Index].DataLength))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
     }
     DataInfoBaseAddress = DataInfo->Entries[Index].BaseAddress;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if (Write)
     {

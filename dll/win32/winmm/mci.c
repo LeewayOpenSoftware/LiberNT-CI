@@ -1367,6 +1367,29 @@ static	DWORD	MCI_HandleReturnValues(DWORD dwRet, LPWINE_MCIDRIVER wmd, DWORD ret
     return LOWORD(dwRet);
 }
 
+#ifdef __REACTOS__
+static BOOL MCI_HasNotifyKeyword(LPCWSTR args)
+{
+    BOOL quoted = FALSE;
+    LPCWSTR p, tok = NULL;
+
+    for (p = args; ; p++) {
+	if (*p == '"')
+	    quoted = !quoted;
+	if (!*p || (!quoted && *p == ' ')) {
+	    if (tok && p - tok == 6 && !wcsnicmp(tok, L"notify", 6))
+		return TRUE;
+	    tok = NULL;
+	    if (!*p)
+		break;
+	} else if (!tok) {
+	    tok = p;
+	}
+    }
+    return FALSE;
+}
+#endif
+
 /**************************************************************************
  * 				mciSendStringW		[WINMM.@]
  */
@@ -1517,6 +1540,12 @@ DWORD WINAPI mciSendStringW(LPCWSTR lpstrCommand, LPWSTR lpstrRet,
 	default:
 	    {
 		WCHAR   buf[138], retbuf[6];
+#ifdef __REACTOS__
+		if (MCI_HasNotifyKeyword(args)) {
+		    dwRet = MCIERR_NOTIFY_ON_AUTO_OPEN;
+		    goto errCleanUp;
+		}
+#endif
 		swprintf(buf, ARRAY_SIZE(buf), L"open %s wait", dev);
 		/* open via mciSendString handles quoting, dev!file syntax and alias creation */
 		if ((dwRet = mciSendStringW(buf, retbuf, ARRAY_SIZE(retbuf), 0)) != 0)

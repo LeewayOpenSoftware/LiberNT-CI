@@ -6599,7 +6599,7 @@ static void test_csparentdc(void)
    flush_events( TRUE );
 #ifdef __REACTOS__
     /* The parentdc_ok macro breaks if/else staements without braces */
-    if (GetNTVersion() >= _WIN32_WINNT_WIN8) {
+    if (GetNTVersion() >= _WIN32_WINNT_WIN8 && GetNTVersion() < _WIN32_WINNT_WIN10) {
         parentdc_ok(test1_win8, test_answer);
     }
     else {
@@ -6615,7 +6615,7 @@ static void test_csparentdc(void)
    flush_events( TRUE );
 #ifdef __REACTOS__
     /* The parentdc_ok macro breaks if/else staements without braces */
-    if (GetNTVersion() >= _WIN32_WINNT_WIN8) {
+    if (GetNTVersion() >= _WIN32_WINNT_WIN8 && GetNTVersion() < _WIN32_WINNT_WIN10) {
         parentdc_ok(test2_win8, test_answer);
     }
     else {
@@ -6631,7 +6631,7 @@ static void test_csparentdc(void)
    flush_events( TRUE );
 #ifdef __REACTOS__
     /* The parentdc_ok macro breaks if/else staements without braces */
-    if (GetNTVersion() >= _WIN32_WINNT_WIN8) {
+    if (GetNTVersion() >= _WIN32_WINNT_WIN8 && GetNTVersion() < _WIN32_WINNT_WIN10) {
         parentdc_ok(test3_win8, test_answer);
     }
     else {
@@ -6647,7 +6647,7 @@ static void test_csparentdc(void)
    flush_events( TRUE );
 #ifdef __REACTOS__
     /* The parentdc_ok macro breaks if/else staements without braces */
-    if (GetNTVersion() >= _WIN32_WINNT_WIN8) {
+    if (GetNTVersion() >= _WIN32_WINNT_WIN8 && GetNTVersion() < _WIN32_WINNT_WIN10) {
         parentdc_ok(test4_win8, test_answer);
     }
     else {
@@ -6663,7 +6663,7 @@ static void test_csparentdc(void)
    flush_events( TRUE );
 #ifdef __REACTOS__
     /* The parentdc_ok macro breaks if/else staements without braces */
-    if (GetNTVersion() >= _WIN32_WINNT_WIN8) {
+    if (GetNTVersion() >= _WIN32_WINNT_WIN8 && GetNTVersion() < _WIN32_WINNT_WIN10) {
         parentdc_ok(test5_win8, test_answer);
     }
     else {
@@ -6685,7 +6685,7 @@ static void test_csparentdc(void)
    flush_events( TRUE );
 #ifdef __REACTOS__
     /* The parentdc_ok macro breaks if/else staements without braces */
-    if (GetNTVersion() >= _WIN32_WINNT_WIN8) {
+    if (GetNTVersion() >= _WIN32_WINNT_WIN8 && GetNTVersion() < _WIN32_WINNT_WIN10) {
         parentdc_ok(test7_win8, test_answer);
     }
     else {
@@ -8927,11 +8927,6 @@ static void test_gettext(void)
     }
 
     /* GetWindowText doesn't crash */
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: These tests crash on ReactOS!\n");
-    } else {
-#endif
     r = GetWindowTextA( hwnd, (LPSTR)0x10, 0x1000 );
     ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextA( hwnd, (LPSTR)0x10000, 0 );
@@ -8949,9 +8944,6 @@ static void test_gettext(void)
     ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
     r = GetWindowTextW( hwnd, (LPWSTR)0x1000, 0xff000000);
     ok( r == 0, "GetWindowText should return zero (%lld)\n", (long long)r );
-#ifdef __REACTOS__
-    }
-#endif
 
     DestroyWindow(hwnd);
 }
@@ -9673,11 +9665,6 @@ static void test_layered_window(void)
 
     ret = pSetLayeredWindowAttributes( hwnd, 0, 255, LWA_ALPHA );
     ok( ret, "SetLayeredWindowAttributes should succeed on layered window\n" );
-#ifdef __REACTOS__
-    if (is_reactos()) {
-        ok(FALSE, "FIXME: This hangs on ReactOS!\n");
-    } else {
-#endif
     while (GetMessageA(&msg, 0, 0, 0))
     {
         DispatchMessageA(&msg);
@@ -9685,9 +9672,6 @@ static void test_layered_window(void)
         if (msg.message == WM_PAINT && msg.hwnd == child)
             break;
     }
-#ifdef __REACTOS__
-    }
-#endif
 
     DestroyWindow( hwnd );
     DeleteDC( hdc );

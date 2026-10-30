@@ -414,8 +414,17 @@ DefWndGetIcon(PWND pWnd, WPARAM wParam, LPARAM lParam)
             hIconRet = UserGetProp(UserHMGetHandle(pWnd), (ATOM)UserGetServerInfo(atomIconProp, ROS_SERVERINFO_ATOMICONPROP), TRUE);
             break;
         case ICON_SMALL:
+            hIconRet = UserGetProp(UserHMGetHandle(pWnd), (ATOM)UserGetServerInfo(atomIconSmProp, ROS_SERVERINFO_ATOMICONSMPROP), TRUE);
+            break;
         case ICON_SMALL2:
             hIconRet = UserGetProp(UserHMGetHandle(pWnd), (ATOM)UserGetServerInfo(atomIconSmProp, ROS_SERVERINFO_ATOMICONSMPROP), TRUE);
+            if (!hIconRet)
+            {
+                LRESULT lResult = 0;
+
+                NtUserMessageCall(UserHMGetHandle(pWnd), WM_GETICON, wParam, lParam, (ULONG_PTR)&lResult, FNID_DEFWINDOWPROC, FALSE);
+                hIconRet = (HICON)lResult;
+            }
             break;
         default:
             break;

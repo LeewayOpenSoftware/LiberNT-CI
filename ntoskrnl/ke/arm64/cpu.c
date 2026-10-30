@@ -154,6 +154,7 @@ KiArm64EnsureDcacheSweepGeometry(VOID)
  */
 ULONG KiArm64NumBreakpoints = 6;
 ULONG KiArm64NumWatchpoints = 2;
+UCHAR KiArm64UserStepArmed[MAXIMUM_PROCESSORS];
 
 /*
  * Enable self-hosted debug on the current processor.

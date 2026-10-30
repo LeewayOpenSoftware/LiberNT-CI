@@ -2496,6 +2496,15 @@ static GpStatus get_graphics_bounds(GpGraphics* graphics, GpRectF* rect)
 #define ANTIALIAS_SCALE_Y 4
 #define ANTIALIAS_SAMPLES (ANTIALIAS_SCALE_X * ANTIALIAS_SCALE_Y)
 
+C_ASSERT(ANTIALIAS_SCALE_X == 8);
+
+static UINT mask_byte_coverage(BYTE bits)
+{
+    bits = bits - ((bits >> 1) & 0x55);
+    bits = (bits & 0x33) + ((bits >> 2) & 0x33);
+    return (bits + (bits >> 4)) & 0x0f;
+}
+
 static BOOL antialiasing_enabled(const GpGraphics *graphics)
 {
     return graphics->smoothing == SmoothingModeHighQuality ||
@@ -2676,22 +2685,16 @@ static GpStatus antialias_fill_path(GpGraphics *graphics, GpBrush *brush, GpPath
 
     for (y = 0; y < fill_area.Height; y++)
     {
+        const BYTE *mask_row = mask_bits + (SIZE_T)y * ANTIALIAS_SCALE_Y * mask_stride;
+
         for (x = 0; x < fill_area.Width; x++)
         {
             ARGB color = output_bits[x + y * fill_area.Width];
             UINT coverage = 0, alpha;
-            INT sx, sy;
+            INT sy;
 
             for (sy = 0; sy < ANTIALIAS_SCALE_Y; sy++)
-                for (sx = 0; sx < ANTIALIAS_SCALE_X; sx++)
-                {
-                    INT mask_x = x * ANTIALIAS_SCALE_X + sx;
-                    INT mask_y = y * ANTIALIAS_SCALE_Y + sy;
-
-                    if (mask_bits[mask_y * mask_stride + mask_x / 8] &
-                        (0x80 >> (mask_x % 8)))
-                        coverage++;
-                }
+                coverage += mask_byte_coverage(mask_row[sy * mask_stride + x]);
 
             if (!coverage)
             {

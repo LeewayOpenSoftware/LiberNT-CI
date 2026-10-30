@@ -1,0 +1,13 @@
+; PROJECT:     LiberNT NetAdapterCx
+; LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+; PURPOSE:     NetAdapterCx service and KMDF class extension routing
+; COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif193.001@gmail.com>
+
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\NetAdapterCx","DependOnService",0x00010000,"ndis"
+HKLM,"SYSTEM\CurrentControlSet\Services\NetAdapterCx","DisplayName",0x00000000,"Network Adapter Wdf Class Extension Library"
+HKLM,"SYSTEM\CurrentControlSet\Services\NetAdapterCx","ErrorControl",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\NetAdapterCx","ImagePath",0x00020000,"system32\drivers\netadaptercx.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\NetAdapterCx","Start",0x00010001,3
+HKLM,"SYSTEM\CurrentControlSet\Services\NetAdapterCx","Type",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\NetAdapterCx\Versions\2\1","Service",0x00000000,"NetAdapterCx"

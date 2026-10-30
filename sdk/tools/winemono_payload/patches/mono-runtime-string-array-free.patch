@@ -1,0 +1,35 @@
+--- a/mono/metadata/marshal-ilgen.c
++++ b/mono/metadata/marshal-ilgen.c
+@@ -2450,6 +2450,9 @@
+ 	}
+ }
+ 
++static inline void
++emit_string_free_icall (MonoMethodBuilder *mb, MonoMarshalConv conv);
++
+ static int
+ emit_marshal_array_ilgen (EmitMarshalContext *m, int argnum, MonoType *t,
+ 					MonoMarshalSpec *spec, 
+@@ -2692,10 +2695,10 @@
+ 				}
+ 			}
+ 			else if (eklass == mono_defaults.string_class) {
+-				if (need_convert) {
+-					gboolean need_free2;
+-					MonoMarshalConv conv = mono_marshal_get_ptr_to_string_conv (m->piinfo, spec, &need_free2);
++				gboolean need_free2;
++				MonoMarshalConv conv = mono_marshal_get_ptr_to_string_conv (m->piinfo, spec, &need_free2);
+ 
++				if (need_convert) {
+ 					if (conv != MONO_MARSHAL_CONV_INVALID) {
+ 						mono_mb_emit_ldarg (mb, argnum);
+ 						if (t->byref)
+@@ -2714,7 +2717,7 @@
+ 					mono_mb_emit_ldloc (mb, src_ptr);
+ 					mono_mb_emit_byte (mb, CEE_LDIND_I);
+ 
+-					mono_mb_emit_icall (mb, mono_marshal_free);
++					emit_string_free_icall (mb, conv);
+ 				}
+ 			}
+ 			else {

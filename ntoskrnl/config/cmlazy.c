@@ -169,7 +169,7 @@ CmpLazyFlushWorker(IN PVOID Parameter)
     {
         DPRINT("Not forcing flush.\n");
         /* Starve writers before locking */
-        InterlockedIncrement(&CmpFlushStarveWriters);
+        CmpBeginStarveWriters();
         CmpLockRegistry();
     }
 
@@ -177,7 +177,7 @@ CmpLazyFlushWorker(IN PVOID Parameter)
     MoreWork = CmpDoFlushNextHive(ForceFlush, &Result, &DirtyCount);
     /* Check if we have starved writers */
     if (!ForceFlush)
-        InterlockedDecrement(&CmpFlushStarveWriters);
+        CmpEndStarveWriters();
 
     /* Not pending anymore, release the registry lock */
     CmpLazyFlushPending = FALSE;

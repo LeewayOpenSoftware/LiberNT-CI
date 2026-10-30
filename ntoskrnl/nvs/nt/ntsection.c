@@ -18,7 +18,9 @@
 
 POBJECT_TYPE MmSectionObjectType;
 
-static MI_RWLOCK MiControlLock;
+#define MI_CONTROL_LOCKS 64
+
+static MI_RWLOCK MiControlLocks[MI_CONTROL_LOCKS];
 static MI_MUTEX MiImageWindowLock;
 static MI_IMAGE_WINDOW MiImageWindows[8];
 static ULONG MiImageWindowCount;
@@ -89,25 +91,34 @@ MiFreeControlArea(
 }
 
 static
+PMI_RWLOCK
+MiControlLockFor(
+    _In_ PSECTION_OBJECT_POINTERS Pointers)
+{
+    ULONG_PTR Value = (ULONG_PTR)Pointers >> 4;
+
+    return &MiControlLocks[(Value ^ (Value >> 6) ^ (Value >> 12)) & (MI_CONTROL_LOCKS - 1)];
+}
+
+static
 VOID
 MiControlRelease(
     _In_opt_ PVOID Context)
 {
     PMI_CONTROL_AREA Control = Context;
 
-    MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
-
     if (Control->FileObject != NULL && Control->FileObject->SectionObjectPointer != NULL)
     {
         PSECTION_OBJECT_POINTERS Pointers = Control->FileObject->SectionObjectPointer;
+        PMI_RWLOCK ControlLock = MiControlLockFor(Pointers);
 
+        MI_RW_ACQUIRE_EXCLUSIVE(ControlLock);
         if (Control->Image && Pointers->ImageSectionObject == Control)
             Pointers->ImageSectionObject = NULL;
         else if (!Control->Image && Pointers->DataSectionObject == Control)
             Pointers->DataSectionObject = NULL;
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
     }
-
-    MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
 
     MiFreeControlArea(Control);
 }
@@ -303,11 +314,12 @@ PMI_CONTROL_AREA
 MiReferenceDataControlArea(
     _In_ PSECTION_OBJECT_POINTERS Pointers)
 {
+    PMI_RWLOCK ControlLock = MiControlLockFor(Pointers);
     PMI_CONTROL_AREA Control;
 
-    MI_RW_ACQUIRE_SHARED(&MiControlLock);
+    MI_RW_ACQUIRE_SHARED(ControlLock);
     MiLookupControlArea(Pointers, FALSE, &Control);
-    MI_RW_RELEASE_SHARED(&MiControlLock);
+    MI_RW_RELEASE_SHARED(ControlLock);
 
     return Control;
 }
@@ -342,6 +354,7 @@ MiCreateDataControlArea(
     _Out_ PMI_CONTROL_AREA *ControlOut)
 {
     PSECTION_OBJECT_POINTERS Pointers = FileObject->SectionObjectPointer;
+    PMI_RWLOCK ControlLock;
     PMI_CONTROL_AREA Control;
     NTSTATUS Status;
 
@@ -354,25 +367,27 @@ MiCreateDataControlArea(
     if (Control != NULL)
         goto Referenced;
 
-    MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
+    ControlLock = MiControlLockFor(Pointers);
+
+    MI_RW_ACQUIRE_EXCLUSIVE(ControlLock);
 
     while (!MiLookupControlArea(Pointers, FALSE, &Control))
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         MiWaitForControlTeardown();
-        MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
+        MI_RW_ACQUIRE_EXCLUSIVE(ControlLock);
     }
 
     if (Control != NULL)
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         goto Referenced;
     }
 
     Control = MiAllocateControlArea(FileObject, FALSE);
     if (Control == NULL)
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -380,13 +395,13 @@ MiCreateDataControlArea(
                              Control, NULL, 0, &Control->Segment);
     if (!NT_SUCCESS(Status))
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         MiFreeControlArea(Control);
         return Status;
     }
 
     Pointers->DataSectionObject = Control;
-    MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+    MI_RW_RELEASE_EXCLUSIVE(ControlLock);
 
     *ControlOut = Control;
     return STATUS_SUCCESS;
@@ -1204,6 +1219,7 @@ MiCreateImageControlArea(
     _Out_ PMI_CONTROL_AREA *ControlOut)
 {
     PSECTION_OBJECT_POINTERS Pointers = FileObject->SectionObjectPointer;
+    PMI_RWLOCK ControlLock;
     PMI_CONTROL_AREA Control;
     PMI_CONTROL_AREA Existing;
     LARGE_INTEGER FileSize;
@@ -1213,6 +1229,8 @@ MiCreateImageControlArea(
 
     if (Pointers == NULL)
         return STATUS_INVALID_FILE_FOR_SECTION;
+
+    ControlLock = MiControlLockFor(Pointers);
 
     Status = FsRtlGetFileSize(FileObject, &FileSize);
     if (!NT_SUCCESS(Status))
@@ -1230,23 +1248,23 @@ MiCreateImageControlArea(
             return IoStatus.Status;
     }
 
-    MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
+    MI_RW_ACQUIRE_EXCLUSIVE(ControlLock);
 
     while (!MiLookupControlArea(Pointers, TRUE, &Control))
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         MiWaitForControlTeardown();
-        MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
+        MI_RW_ACQUIRE_EXCLUSIVE(ControlLock);
     }
 
     if (Control != NULL)
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         *ControlOut = Control;
         return STATUS_SUCCESS;
     }
 
-    MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+    MI_RW_RELEASE_EXCLUSIVE(ControlLock);
 
     Control = MiAllocateControlArea(FileObject, TRUE);
     if (Control == NULL)
@@ -1259,25 +1277,25 @@ MiCreateImageControlArea(
         return Status;
     }
 
-    MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
+    MI_RW_ACQUIRE_EXCLUSIVE(ControlLock);
 
     while (!MiLookupControlArea(Pointers, TRUE, &Existing))
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         MiWaitForControlTeardown();
-        MI_RW_ACQUIRE_EXCLUSIVE(&MiControlLock);
+        MI_RW_ACQUIRE_EXCLUSIVE(ControlLock);
     }
 
     if (Existing != NULL)
     {
-        MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+        MI_RW_RELEASE_EXCLUSIVE(ControlLock);
         MiSegmentDereferenceAndClose(Control->Segment);
         *ControlOut = Existing;
         return STATUS_SUCCESS;
     }
 
     Pointers->ImageSectionObject = Control;
-    MI_RW_RELEASE_EXCLUSIVE(&MiControlLock);
+    MI_RW_RELEASE_EXCLUSIVE(ControlLock);
 
     *ControlOut = Control;
     return STATUS_SUCCESS;
@@ -1384,8 +1402,10 @@ MiSectionInitialize(VOID)
     OBJECT_TYPE_INITIALIZER Initializer;
     UNICODE_STRING Name;
     NTSTATUS Status;
+    ULONG Index;
 
-    MI_RW_INIT(&MiControlLock);
+    for (Index = 0; Index < MI_CONTROL_LOCKS; Index++)
+        MI_RW_INIT(&MiControlLocks[Index]);
     MI_MUTEX_INIT(&MiImageWindowLock);
 
     RtlZeroMemory(&Initializer, sizeof(Initializer));
@@ -2294,12 +2314,13 @@ MiCloseUnusedControlArea(
     _In_ PSECTION_OBJECT_POINTERS Pointers,
     _In_ BOOLEAN Image)
 {
+    PMI_RWLOCK ControlLock = MiControlLockFor(Pointers);
     PMI_CONTROL_AREA Control;
     BOOLEAN Found;
 
-    MI_RW_ACQUIRE_SHARED(&MiControlLock);
+    MI_RW_ACQUIRE_SHARED(ControlLock);
     Found = MiLookupControlArea(Pointers, Image, &Control);
-    MI_RW_RELEASE_SHARED(&MiControlLock);
+    MI_RW_RELEASE_SHARED(ControlLock);
 
     if (!Found)
         return TRUE;

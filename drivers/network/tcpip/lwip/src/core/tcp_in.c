@@ -731,6 +731,9 @@ tcp_listen_input(struct tcp_pcb_listen *pcb)
     npcb->snd_wnd = tcphdr->wnd;
     npcb->snd_wnd_max = npcb->snd_wnd;
 
+#if LWIP_TCP_PCB_BASE_MSS
+    npcb->base_mss = npcb->mss;
+#endif
 #if TCP_CALCULATE_EFF_SEND_MSS
     npcb->mss = tcp_eff_send_mss(npcb->mss, &npcb->local_ip, &npcb->remote_ip);
 #endif /* TCP_CALCULATE_EFF_SEND_MSS */
@@ -906,6 +909,9 @@ tcp_process(struct tcp_pcb *pcb)
         pcb->snd_wl1 = seqno - 1; /* initialise to seqno - 1 to force window update */
         pcb->state = ESTABLISHED;
 
+#if LWIP_TCP_PCB_BASE_MSS
+        pcb->base_mss = pcb->mss;
+#endif
 #if TCP_CALCULATE_EFF_SEND_MSS
         pcb->mss = tcp_eff_send_mss(pcb->mss, &pcb->local_ip, &pcb->remote_ip);
 #endif /* TCP_CALCULATE_EFF_SEND_MSS */

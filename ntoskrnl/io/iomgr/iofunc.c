@@ -1222,7 +1222,7 @@ IopGetDriverPathInformation(IN PFILE_OBJECT FileObject,
     }
 
     /* Lock the devices database, we'll browse it */
-    OldIrql = KeAcquireQueuedSpinLock(LockQueueIoDatabaseLock);
+    OldIrql = IopAcquireDatabaseLockShared();
     /* If we have a VPB, browse the stack from the volume */
     if (FileObject->Vpb != NULL && FileObject->Vpb->DeviceObject != NULL)
     {
@@ -1233,7 +1233,7 @@ IopGetDriverPathInformation(IN PFILE_OBJECT FileObject,
     {
         DriverPathInfo->DriverInPath = IopVerifyDriverObjectOnStack(FileObject->DeviceObject, DriverObject);
     }
-    KeReleaseQueuedSpinLock(LockQueueIoDatabaseLock, OldIrql);
+    IopReleaseDatabaseLockShared(OldIrql);
 
     /* No longer needed */
     ObDereferenceObject(DriverObject);

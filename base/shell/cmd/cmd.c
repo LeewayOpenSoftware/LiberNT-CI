@@ -2464,6 +2464,8 @@ int _tmain(int argc, const TCHAR *argv[])
         /* Do the /C or /K command */
         GetCmdLineCommand(commandline, &pCmdLine[2], bAlwaysStrip);
         nExitCode = ParseCommandLine(commandline);
+        if (nErrorLevel != 0)
+            nExitCode = nErrorLevel;
         if (fSingleCommand == 1)
         {
             // nErrorLevel = nExitCode;

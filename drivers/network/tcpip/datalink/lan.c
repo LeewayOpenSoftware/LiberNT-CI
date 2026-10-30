@@ -250,6 +250,8 @@ VOID NTAPI ProtocolRequestComplete(
 }
 
 
+static const UCHAR LanAllHostsMac[IEEE_802_ADDR_LENGTH] = { 0x01, 0x00, 0x5e, 0x00, 0x00, 0x01 };
+
 NDIS_STATUS LANUpdateMulticastList(
     PVOID Context,
     const UCHAR *Address,
@@ -659,18 +661,16 @@ BOOLEAN ReadIpConfiguration(PIP_INTERFACE Interface)
         }
 
         /* Read the InterfaceMetric value */
-        Interface->Metric = 0;
         Status = ZwQueryValueKey(ParameterHandle,
                                  &InterfaceMetric,
                                  KeyValuePartialInformation,
                                  KeyValueInfo,
                                  KeyValueInfoLength,
                                  &Unused);
-        if (NT_SUCCESS(Status) && KeyValueInfo->DataLength == sizeof(ULONG))
+        if (NT_SUCCESS(Status) && KeyValueInfo->DataLength == sizeof(ULONG) && *(PULONG)KeyValueInfo->Data)
         {
-            Interface->Metric = (UINT)*(PULONG)KeyValueInfo->Data;
-            if (Interface->Metric > 9999)
-                Interface->Metric = 9999;
+            Interface->ManualMetric = TRUE;
+            Interface->InterfaceMetric = min(*(PULONG)KeyValueInfo->Data, 9999);
         }
 
         /* Read the EnableDHCP entry */
@@ -721,7 +721,7 @@ BOOLEAN ReadIpConfiguration(PIP_INTERFACE Interface)
                 if (ParseIpConfigurationAddress((PCWSTR)GatewayInfo->Data, &RouterValue) && RouterValue != 0)
                 {
                     AddrInitIPv4(&Router, RouterValue);
-                    RouterCreateRoute(&DefaultMask, &DefaultMask, &Router, Interface);
+                    RouterCreateRoute(&DefaultMask, &DefaultMask, &Router, Interface, 0);
                 }
                 ExFreePoolWithTag(GatewayInfo, KEY_VALUE_TAG);
             }
@@ -757,6 +757,8 @@ BOOLEAN ReconfigureAdapter(PRECONFIGURE_CONTEXT Context)
     }
 
     Context->Adapter->CompletingReset = FALSE;
+
+    Interface->TransmitLinkSpeed = Adapter->LinkSpeed;
 
     if (Context->State == LAN_STATE_STARTED)
     {
@@ -1466,8 +1468,12 @@ BOOLEAN BindAdapter(
         return FALSE;
     }
 
+    IF->PhysicalMedium = BindParameters->PhysicalMediumType;
     IF->Wireless = BindParameters->PhysicalMediumType == NdisPhysicalMediumWirelessLan ||
+                   BindParameters->PhysicalMediumType == NdisPhysicalMediumWirelessWan ||
                    BindParameters->PhysicalMediumType == NdisPhysicalMediumNative802_11;
+    IF->HalfDuplex = BindParameters->MediaDuplexState == MediaDuplexStateHalf;
+    IF->TransmitLinkSpeed = BindParameters->XmitLinkSpeed;
 
     /*
      * Query per-adapter configuration from the registry
@@ -1515,6 +1521,8 @@ BOOLEAN BindAdapter(
         IPDestroyInterface(IF);
         return FALSE;
     }
+
+    LANUpdateMulticastList(Adapter, LanAllHostsMac, TRUE);
 
     return TRUE;
 }

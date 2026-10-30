@@ -14,7 +14,6 @@ VOID Test_KeArm64SpinLock(VOID);
 
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
-#ifdef _M_ARM64
 
 static VOID Arm64SpinLockCheck(VOID)
 {
@@ -290,17 +289,12 @@ Arm64SpinLockContention(ULONG Mode)
     ExFreePoolWithTag(Workers, 'slDK');
 }
 
-#endif /* _M_ARM64 */
 
 START_TEST(KeArm64SpinLock)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64SpinLock is ARM64-only\n");
-#else
     ULONG Mode;
 
     dump_trace("[arm64][KeArm64SpinLock] enter\n");
     Arm64SpinLockCheck();
     for (Mode = 0; Mode < 6; Mode++) Arm64SpinLockContention(Mode);
-#endif
 }

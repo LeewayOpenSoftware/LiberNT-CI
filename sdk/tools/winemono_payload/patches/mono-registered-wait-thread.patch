@@ -1,0 +1,328 @@
+--- a/mcs/class/corlib/System.Threading/RegisteredWaitHandle.cs
++++ b/mcs/class/corlib/System.Threading/RegisteredWaitHandle.cs
+@@ -27,10 +27,8 @@
+ // MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ // NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+ // LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+-// OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+-// WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+-//
+ 
++using System.Collections.Generic;
+ using System.Runtime.InteropServices;
+ 
+ namespace System.Threading
+@@ -43,74 +41,109 @@
+ 		WaitOrTimerCallback _callback;
+ 		object _state;
+ 		WaitHandle _finalEvent;
+-		ManualResetEvent _cancelEvent;
+-		TimeSpan _timeout;
++		ExecutionContext _context;
++		int _timeout;
++		int _dueTime;
+ 		int _callsInProcess;
+ 		bool _executeOnlyOnce;
+ 		bool _unregistered;
++		bool _unregisterCalled;
++		bool _removed;
++		bool _handleReferenced;
++		WaitThread _waitThread;
+ 
+ 		internal RegisteredWaitHandle (WaitHandle waitObject, WaitOrTimerCallback callback, object state, TimeSpan timeout, bool executeOnlyOnce)
+ 		{
+ 			_waitObject = waitObject;
+ 			_callback = callback;
+ 			_state = state;
+-			_timeout = timeout;
++			_timeout = (int) timeout.TotalMilliseconds;
+ 			_executeOnlyOnce = executeOnlyOnce;
+ 			_finalEvent = null;
+-			_cancelEvent = new ManualResetEvent (false);
+ 			_callsInProcess = 0;
+ 			_unregistered = false;
+ 		}
+ 
+-		internal void Wait (object state)
++		internal void Register (bool flowContext)
+ 		{
+-			bool release = false;
+-			try {
+-				_waitObject.SafeWaitHandle.DangerousAddRef (ref release);
+-				try {
+-					WaitHandle[] waits = new WaitHandle[] {_waitObject, _cancelEvent};
+-					do {
+-						int signal = WaitHandle.WaitAny (waits, _timeout, false);
+-						if (!_unregistered) {
+-							lock (this) {
+-								_callsInProcess++;
+-							}
+-							ThreadPool.QueueUserWorkItem (new WaitCallback (DoCallBack), (signal == WaitHandle.WaitTimeout));
+-						}
+-					} while (!_unregistered && !_executeOnlyOnce);
+-				} catch {
+-				}
++			if (flowContext)
++				_context = ExecutionContext.Capture ();
++			_waitObject.SafeWaitHandle.DangerousAddRef (ref _handleReferenced);
++			_dueTime = unchecked (Environment.TickCount + _timeout);
++			WaitThread.Add (this);
++		}
+ 
+-				lock (this) {
++		internal WaitHandle WaitObject {
++			get { return _waitObject; }
++		}
++
++		internal int Timeout {
++			get { return _timeout; }
++		}
++
++		internal int DueTime {
++			get { return _dueTime; }
++		}
++
++		internal bool Unregistered {
++			get { return _unregistered; }
++		}
++
++		internal void Signaled (bool timedOut)
++		{
++			lock (this) {
++				if (_unregistered)
++					return;
++				_callsInProcess++;
++				if (_executeOnlyOnce)
+ 					_unregistered = true;
+-					if (_callsInProcess == 0 && _finalEvent != null) {
+-						NativeEventCalls.SetEvent (_finalEvent.SafeWaitHandle);
+-						_finalEvent = null;
+-					}
+-				}
+-			} catch (ObjectDisposedException) {
+-				// Can happen if we called Unregister before we had time to execute Wait
+-				if (release)
+-					throw;
+-			} finally {
+-				if (release)
+-					_waitObject.SafeWaitHandle.DangerousRelease ();
+ 			}
++			_dueTime = unchecked (Environment.TickCount + _timeout);
++			ThreadPool.UnsafeQueueUserWorkItem (new WaitCallback (DoCallBack), timedOut);
++		}
++
++		internal void Removed ()
++		{
++			if (_handleReferenced) {
++				_handleReferenced = false;
++				_waitObject.SafeWaitHandle.DangerousRelease ();
++			}
++			lock (this) {
++				_unregistered = true;
++				_removed = true;
++				SignalFinalEventIfDone ();
++			}
++		}
++
++		void SignalFinalEventIfDone ()
++		{
++			if (_removed && _callsInProcess == 0 && _finalEvent != null) {
++				NativeEventCalls.SetEvent (_finalEvent.SafeWaitHandle);
++				_finalEvent = null;
++			}
++		}
++
++		static void InvokeCallBack (object args)
++		{
++			object[] a = (object[]) args;
++			RegisteredWaitHandle self = (RegisteredWaitHandle) a [0];
++			self._callback (self._state, (bool) a [1]);
+ 		}
+ 
+ 		private void DoCallBack (object timedOut)
+ 		{
+ 			try {
+-				if (_callback != null)
+-					_callback (_state, (bool)timedOut);
++				if (_callback != null) {
++					if (_context != null)
++						ExecutionContext.Run (_context.CreateCopy (), new ContextCallback (InvokeCallBack), new object [] { this, timedOut });
++					else
++						_callback (_state, (bool)timedOut);
++				}
+ 			} finally {
+ 				lock (this)
+ 				{
+ 					_callsInProcess--;
+-					if (_unregistered && _callsInProcess == 0 && _finalEvent != null) {
+-						NativeEventCalls.SetEvent (_finalEvent.SafeWaitHandle);
+-						_finalEvent = null;
+-					}
++					SignalFinalEventIfDone ();
+ 				}
+ 			}
+ 		}
+@@ -120,14 +153,146 @@
+ 		{
+ 			lock (this) 
+ 			{
+-				if (_unregistered)
++				if (_unregisterCalled)
+ 					return false;
+ 
++				_unregisterCalled = true;
+ 				_finalEvent = waitObject;
+ 				_unregistered = true;
+-				_cancelEvent.Set();
++				SignalFinalEventIfDone ();
++			}
++			WaitThread.Remove (this);
++			return true;
++		}
++
++		sealed class WaitThread
++		{
++			const int MaxRegistrations = WaitHandle.MaxWaitHandles - 1;
++
++			static readonly object s_lock = new object ();
++			static readonly List<WaitThread> s_threads = new List<WaitThread> ();
++
++			readonly AutoResetEvent _changed = new AutoResetEvent (false);
++			readonly List<RegisteredWaitHandle> _waits = new List<RegisteredWaitHandle> ();
++			int _reserved;
++
++			WaitThread ()
++			{
++				Thread thread = new Thread (new ThreadStart (Run));
++				thread.IsBackground = true;
++				thread.Name = "Thread Pool Wait";
++				thread.Start ();
++			}
+ 
+-				return true;
++			internal static void Add (RegisteredWaitHandle wait)
++			{
++				WaitThread target = null;
++
++				IntPtr handle = wait.WaitObject.SafeWaitHandle.DangerousGetHandle ();
++
++				lock (s_lock) {
++					foreach (WaitThread thread in s_threads) {
++						if (thread._reserved < MaxRegistrations && !thread.Waits (handle)) {
++							target = thread;
++							break;
++						}
++					}
++					if (target == null) {
++						target = new WaitThread ();
++						s_threads.Add (target);
++					}
++					Interlocked.Increment (ref target._reserved);
++				}
++
++				lock (target) {
++					wait._waitThread = target;
++					target._waits.Add (wait);
++				}
++				target._changed.Set ();
++			}
++
++			internal static void Remove (RegisteredWaitHandle wait)
++			{
++				WaitThread thread = wait._waitThread;
++
++				if (thread != null)
++					thread._changed.Set ();
++			}
++
++			bool Waits (IntPtr handle)
++			{
++				lock (this) {
++					foreach (RegisteredWaitHandle wait in _waits) {
++						if (wait.WaitObject.SafeWaitHandle.DangerousGetHandle () == handle)
++							return true;
++					}
++				}
++				return false;
++			}
++
++			void Detach (RegisteredWaitHandle wait)
++			{
++				_waits.Remove (wait);
++				wait._waitThread = null;
++				Interlocked.Decrement (ref _reserved);
++				wait.Removed ();
++			}
++
++			void Run ()
++			{
++				List<RegisteredWaitHandle> active = new List<RegisteredWaitHandle> ();
++
++				for (;;) {
++					int timeout = System.Threading.Timeout.Infinite;
++					int now = Environment.TickCount;
++
++					active.Clear ();
++					lock (this) {
++						for (int i = _waits.Count - 1; i >= 0; i--) {
++							RegisteredWaitHandle wait = _waits [i];
++
++							if (wait.Unregistered || wait.WaitObject.SafeWaitHandle.IsClosed)
++								Detach (wait);
++						}
++						active.AddRange (_waits);
++					}
++
++					WaitHandle[] handles = new WaitHandle [active.Count + 1];
++					handles [0] = _changed;
++					for (int i = 0; i < active.Count; i++) {
++						RegisteredWaitHandle wait = active [i];
++
++						handles [i + 1] = wait.WaitObject;
++						if (wait.Timeout != System.Threading.Timeout.Infinite) {
++							int remaining = Math.Max (0, unchecked (wait.DueTime - now));
++
++							if (timeout == System.Threading.Timeout.Infinite || remaining < timeout)
++								timeout = remaining;
++						}
++					}
++
++					int index;
++					try {
++						index = WaitHandle.WaitAny (handles, timeout, false);
++					} catch (AbandonedMutexException e) {
++						index = e.MutexIndex;
++					} catch (ObjectDisposedException) {
++						continue;
++					}
++
++					if (index == 0)
++						continue;
++					if (index != WaitHandle.WaitTimeout) {
++						active [index - 1].Signaled (false);
++						continue;
++					}
++
++					now = Environment.TickCount;
++					foreach (RegisteredWaitHandle wait in active) {
++						if (wait.Timeout != System.Threading.Timeout.Infinite && unchecked (wait.DueTime - now) <= 0)
++							wait.Signaled (true);
++					}
++				}
+ 			}
+ 		}
+ 	}
+--- a/mcs/class/referencesource/mscorlib/system/threading/threadpool.cs
++++ b/mcs/class/referencesource/mscorlib/system/threading/threadpool.cs
+@@ -1581,10 +1581,7 @@
+                 throw new NotSupportedException ("Timeout is too big. Maximum is Int32.MaxValue");
+ 
+             RegisteredWaitHandle waiter = new RegisteredWaitHandle (waitObject, callBack, state, new TimeSpan (0, 0, 0, 0, (int) millisecondsTimeOutInterval), executeOnlyOnce);
+-            if (compressStack)
+-                QueueUserWorkItem (new WaitCallback (waiter.Wait), null);
+-            else
+-                UnsafeQueueUserWorkItem (new WaitCallback (waiter.Wait), null);
++            waiter.Register (compressStack);
+ 
+             return waiter;
+ #endif

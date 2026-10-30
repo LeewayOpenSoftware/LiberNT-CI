@@ -129,6 +129,13 @@ void        LibTCPSetNoDelay(PTCP_PCB pcb, BOOLEAN Set);
 void        LibTCPSetKeepAlive(PTCP_PCB pcb, BOOLEAN Set);
 void        LibTcpSetKeepAliveValues(PTCP_PCB pcb, u32_t KeepAliveTime, u32_t KeepAliveInterval);
 void        LibTCPGetSocketStatus(PTCP_PCB pcb, PULONG State);
+VOID        LibTCPPathMtuExceeded(PIP_INTERFACE Interface, ULONG Source, ULONG Destination, USHORT SourcePort,
+                                  USHORT DestinationPort, ULONG Sequence, ULONG Mtu);
+BOOLEAN     PmtuLower(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Destination, ULONG Mtu);
+ULONG       PmtuQuery(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Destination, PBOOLEAN Raised);
+ULONG       PmtuForDestination(IPv4_RAW_ADDRESS Destination, ULONG Default);
+VOID        PathConfirmV4(IPv4_RAW_ADDRESS Destination);
+VOID        LibIP6ConfirmPath(const ip6_addr_t *Destination);
 
 struct lib_ip6_query
 {

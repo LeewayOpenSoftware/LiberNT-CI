@@ -10,6 +10,8 @@
 
 #include "precomp.h"
 
+#include <icmp.h>
+
 BOOLEAN PrepareNextFragment(PIPFRAGMENT_CONTEXT IFC);
 NTSTATUS IPSendFragment(PNDIS_PACKET NdisPacket,
 			PNEIGHBOR_CACHE_ENTRY NCE,
@@ -107,6 +109,7 @@ BOOLEAN PrepareNextFragment(
             FragOfs &= ~IPv4_MF_MASK;
 
         Header = IFC->Header;
+        FragOfs |= WN2H(Header->FlagsFragOfs) & IPv4_DF_MASK;
         Header->FlagsFragOfs = WH2N(FragOfs);
         Header->TotalLength = WH2N((USHORT)(DataSize + IFC->HeaderSize));
 
@@ -156,7 +159,8 @@ NTSTATUS SendFragments(
 
     /* Every non-final fragment must carry at least one 8-byte block. A smaller
      * MTU would allocate an empty buffer or underflow the fragment length. */
-    if (PathMTU <= IPPacket->HeaderSize || PathMTU - IPPacket->HeaderSize < 8)
+    if (PathMTU <= IPPacket->HeaderSize || PathMTU - IPPacket->HeaderSize < 8 ||
+        ((WN2H(((PIPv4_HEADER)IPPacket->Header)->FlagsFragOfs) & IPv4_DF_MASK) && IPPacket->TotalSize > PathMTU))
     {
         IPPacket->Free(IPPacket);
         return STATUS_INVALID_BUFFER_SIZE;
@@ -249,6 +253,10 @@ NTSTATUS IPSendDatagram(PIP_PACKET IPPacket, PNEIGHBOR_CACHE_ENTRY NCE)
 
     /* Fetch path MTU now, because it may change */
     TI_DbgPrint(MID_TRACE,("PathMTU: %d\n", NCE->Interface->MTU));
+
+    if (IPPacket->Type == IP_ADDRESS_V4 && IPPacket->HeaderSize >= sizeof(IPv4_HEADER))
+        PathTouch(NCE->Interface, ((PIPv4_HEADER)IPPacket->Header)->SrcAddr,
+                  ((PIPv4_HEADER)IPPacket->Header)->DstAddr, NCE->Address.Address.IPv4Address);
 
     return SendFragments(IPPacket, NCE, NCE->Interface->MTU);
 }

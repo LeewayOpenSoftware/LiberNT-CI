@@ -712,6 +712,27 @@ LxTtyRead(
     return Result;
 }
 
+VOID
+LxTtyKernelWrite(
+    _In_ PLX_TTY Tty,
+    _In_reads_(Length) PCSTR Text,
+    _In_ ULONG Length)
+{
+    ULONG Used = 0;
+
+    LxTtyLock(Tty);
+    if (!Tty->Hangup)
+    {
+        while ((Used < Length) && LxTtyOutputByte(Tty, (UCHAR)Text[Used]))
+            Used++;
+        if (Used != 0)
+            KeSetEvent(&Tty->OutputReady, IO_NO_INCREMENT, FALSE);
+    }
+    LxTtyUnlock(Tty);
+    if (Used != 0)
+        LxPollWake(&Tty->MasterPoll, LX_POLLIN | LX_POLLRDNORM);
+}
+
 LONG64
 LxTtyWrite(
     _In_ PLX_TTY Tty,
@@ -770,6 +791,39 @@ LxTtyWrite(
     return (LONG64)Total;
 }
 
+static
+LONG
+LxTtyCheckChange(
+    _In_ PLX_TTY Tty,
+    _In_ LONG Signal)
+{
+    PLX_THREAD Thread = LxCurrentThread();
+    PLX_PROCESS Process;
+    LX_SIGINFO Info;
+    ULONG64 Handler;
+    ULONG Foreground;
+
+    if ((Thread == NULL) || (Thread->Process->Tty != Tty))
+        return 0;
+    Process = Thread->Process;
+    LxTtyLock(Tty);
+    Foreground = Tty->ForegroundPgrp;
+    LxTtyUnlock(Tty);
+    if ((Foreground == 0) || (Foreground == Process->Pgid))
+        return 0;
+    ExAcquireFastMutex(&Process->Lock);
+    Handler = Process->SigAction[Signal - 1].Handler;
+    ExReleaseFastMutex(&Process->Lock);
+    if ((Thread->SigMask & (1ULL << (Signal - 1))) || (Handler == LX_SIG_IGN))
+        return (Signal == LX_SIGTTIN) ? -LX_EIO : 0;
+    if (LxPgrpOrphaned(Process->Instance, Process->Pgid, NULL))
+        return -LX_EIO;
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.Code = LX_SI_KERNEL;
+    LxSignalGroupInfo(Process->Instance, NULL, Process->Pgid, Signal, &Info, NULL, NULL);
+    return -LX_ERESTARTSYS;
+}
+
 LONG64
 LxTtyIoctl(
     _In_ PLX_PROCESS Process,
@@ -781,6 +835,27 @@ LxTtyIoctl(
     LX_WINSIZE WinSize;
     LONG Value;
     LONG64 Result;
+
+    switch (Request)
+    {
+        case LX_TCSETS:
+        case LX_TCSETSW:
+        case LX_TCSETSF:
+        case LX_TCSETS2:
+        case LX_TCSETSW2:
+        case LX_TCSETSF2:
+        case LX_TCFLSH:
+        case LX_TCSBRK:
+        case LX_TCXONC:
+        case LX_TIOCSPGRP:
+            Result = LxTtyCheckChange(Tty, LX_SIGTTOU);
+            if (Result != 0)
+                return ((Result == -LX_EIO) && (Request == LX_TIOCSPGRP)) ? -LX_ENOTTY : Result;
+            break;
+
+        default:
+            break;
+    }
 
     switch (Request)
     {
@@ -922,7 +997,12 @@ LxTtyFileRead(
     _In_ ULONG64 Length,
     _Inout_opt_ PLONG64 Offset)
 {
+    LONG Error;
+
     UNREFERENCED_PARAMETER(Offset);
+    Error = LxTtyCheckChange(File->Object, LX_SIGTTIN);
+    if (Error != 0)
+        return Error;
     return LxTtyRead(File->Object, Buffer, Length, (File->Flags & LX_O_NONBLOCK) != 0);
 }
 
@@ -934,8 +1014,17 @@ LxTtyFileWrite(
     _In_ ULONG64 Length,
     _Inout_opt_ PLONG64 Offset)
 {
+    PLX_TTY Tty = File->Object;
+    LONG Error;
+
     UNREFERENCED_PARAMETER(Offset);
-    return LxTtyWrite(File->Object, Buffer, Length, (File->Flags & LX_O_NONBLOCK) != 0);
+    if (Tty->Termios.Lflag & LX_TOSTOP)
+    {
+        Error = LxTtyCheckChange(Tty, LX_SIGTTOU);
+        if (Error != 0)
+            return Error;
+    }
+    return LxTtyWrite(Tty, Buffer, Length, (File->Flags & LX_O_NONBLOCK) != 0);
 }
 
 static

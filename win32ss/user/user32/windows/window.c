@@ -1443,50 +1443,60 @@ int WINAPI
 GetWindowTextA(HWND hWnd, LPSTR lpString, int nMaxCount)
 {
 #ifdef WOW64_I386_RUNTIME
-    WCHAR *Buffer;
-    INT Length;
+    WCHAR *Buffer = NULL;
+    INT Length = 0;
 
     if (lpString == NULL || nMaxCount <= 0) return 0;
-    lpString[0] = '\0';
 
-    if (wow64_is_current_process_window(hWnd)) return SendMessageA(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
-    if (!(Buffer = HeapAlloc(GetProcessHeap(), 0, nMaxCount * sizeof(*Buffer)))) return 0;
+    _SEH2_TRY
+    {
+        lpString[0] = '\0';
 
-    Buffer[0] = L'\0';
-    NtUserInternalGetWindowText(hWnd, Buffer, nMaxCount);
-    if (!WideCharToMultiByte(CP_ACP, 0, Buffer, -1, lpString, nMaxCount, NULL, NULL)) lpString[nMaxCount - 1] = '\0';
-    Length = strlen(lpString);
-    HeapFree(GetProcessHeap(), 0, Buffer);
+        if (wow64_is_current_process_window(hWnd))
+        {
+            Length = SendMessageA(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
+        }
+        else if ((Buffer = HeapAlloc(GetProcessHeap(), 0, nMaxCount * sizeof(*Buffer))))
+        {
+            Buffer[0] = L'\0';
+            NtUserInternalGetWindowText(hWnd, Buffer, nMaxCount);
+            if (!WideCharToMultiByte(CP_ACP, 0, Buffer, -1, lpString, nMaxCount, NULL, NULL)) lpString[nMaxCount - 1] = '\0';
+            Length = strlen(lpString);
+        }
+    }
+    _SEH2_EXCEPT(_SEH2_GetExceptionCode() == STATUS_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+    {
+        Length = 0;
+    }
+    _SEH2_END;
+
+    if (Buffer) HeapFree(GetProcessHeap(), 0, Buffer);
     return Length;
 #else
     PWND Wnd;
     INT Length = 0;
 
-    if (lpString == NULL || nMaxCount == 0)
+    if (lpString == NULL || nMaxCount <= 0)
         return 0;
 
     Wnd = ValidateHwnd(hWnd);
     if (!Wnd)
         return 0;
 
-    lpString[0] = '\0';
+    _SEH2_TRY
+    {
+        lpString[0] = '\0';
 
-    if (!TestWindowProcess(Wnd))
-    {
-        _SEH2_TRY
-        {
+        if (!TestWindowProcess(Wnd))
             Length = DefWindowProcA(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Length = 0;
-        }
-        _SEH2_END;
+        else
+            Length = SendMessageA(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
     }
-    else
+    _SEH2_EXCEPT(_SEH2_GetExceptionCode() == STATUS_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
     {
-        Length = SendMessageA(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
+        Length = 0;
     }
+    _SEH2_END;
     //ERR("GWTA Len %d : %s\n",Length,lpString);
     return Length;
 #endif
@@ -1556,39 +1566,50 @@ int WINAPI
 GetWindowTextW(HWND hWnd, LPWSTR lpString, int nMaxCount)
 {
 #ifdef WOW64_I386_RUNTIME
+    INT Length = 0;
+
     if (lpString == NULL || nMaxCount <= 0) return 0;
-    lpString[0] = L'\0';
-    if (wow64_is_current_process_window(hWnd)) return SendMessageW(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
-    return NtUserInternalGetWindowText(hWnd, lpString, nMaxCount);
+
+    _SEH2_TRY
+    {
+        lpString[0] = L'\0';
+        if (wow64_is_current_process_window(hWnd))
+            Length = SendMessageW(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
+        else
+            Length = NtUserInternalGetWindowText(hWnd, lpString, nMaxCount);
+    }
+    _SEH2_EXCEPT(_SEH2_GetExceptionCode() == STATUS_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
+    {
+        Length = 0;
+    }
+    _SEH2_END;
+
+    return Length;
 #else
     PWND Wnd;
     INT Length = 0;
 
-    if (lpString == NULL || nMaxCount == 0)
+    if (lpString == NULL || nMaxCount <= 0)
         return 0;
 
     Wnd = ValidateHwnd(hWnd);
     if (!Wnd)
         return 0;
 
-    lpString[0] = L'\0';
+    _SEH2_TRY
+    {
+        lpString[0] = L'\0';
 
-    if (!TestWindowProcess(Wnd))
-    {
-        _SEH2_TRY
-        {
+        if (!TestWindowProcess(Wnd))
             Length = DefWindowProcW(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
-        }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            Length = 0;
-        }
-        _SEH2_END;
+        else
+            Length = SendMessageW(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
     }
-    else
+    _SEH2_EXCEPT(_SEH2_GetExceptionCode() == STATUS_ACCESS_VIOLATION ? EXCEPTION_EXECUTE_HANDLER : EXCEPTION_CONTINUE_SEARCH)
     {
-        Length = SendMessageW(hWnd, WM_GETTEXT, nMaxCount, (LPARAM)lpString);
+        Length = 0;
     }
+    _SEH2_END;
     //ERR("GWTW Len %d : %S\n",Length,lpString);
     return Length;
 #endif

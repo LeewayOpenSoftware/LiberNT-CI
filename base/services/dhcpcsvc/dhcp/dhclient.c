@@ -55,6 +55,12 @@
 
 #include <rosdhcp.h>
 
+#include <ndk/iofuncs.h>
+#include <ndk/obfuncs.h>
+#include <netioapi.h>
+#include <tcpioctl.h>
+#include <tcpip_undoc.h>
+
 #define	PERIOD 0x2e
 #define	hyphenchar(c) ((c) == 0x2d)
 #define	bslashchar(c) ((c) == 0x5c)
@@ -101,6 +107,7 @@ int		 res_hnok(const char *dn);
 char		*option_as_string(unsigned int code, unsigned char *data, int len);
 int		 fork_privchld(int, int);
 int              check_arp( struct interface_info *ip, struct client_lease *lp );
+static void      apipa_watch(void *ipp);
 
 #define	ADVANCE(x, n) (x += ROUNDUP((n)->sa_len))
 
@@ -228,6 +235,10 @@ state_init(void *ipp)
 	ip->client->state = S_SELECTING;
 	ip->client->first_sending = GetMonotonicTime();
 	ip->client->interval = ip->client->config->initial_interval;
+
+	if (AdapterFindInfo(ip))
+		AdapterFindInfo(ip)->ApipaWaitStart = 0;
+	add_timeout_ms(GetTickCount64() + 500, apipa_watch, ip);
 
 	/* Add an immediate timeout to cause the first DHCPDISCOVER packet
 	   to go out. */
@@ -597,6 +608,198 @@ IsAddressApplied(
 }
 
 
+void
+set_dhcp_router_discovery(PDHCP_ADAPTER Adapter, BOOLEAN Enable)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK Iosb;
+    IP4_INTERFACE_INFO Info;
+    HANDLE File;
+
+    InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               FILE_SYNCHRONOUS_IO_NONALERT)))
+        return;
+
+    memset(&Info, 0, sizeof(Info));
+    Info.Index = Adapter->IfMib.dwIndex;
+    if (NT_SUCCESS(NtDeviceIoControlFile(File, NULL, NULL, NULL, &Iosb, IOCTL_IP_QUERY_INTERFACE,
+                                         &Info, sizeof(Info), &Info, sizeof(Info))) &&
+        Info.DhcpRouterDiscovery != Enable)
+    {
+        Info.DhcpRouterDiscovery = Enable;
+        NtDeviceIoControlFile(File, NULL, NULL, NULL, &Iosb, IOCTL_IP_SET_INTERFACE,
+                              &Info, sizeof(Info), NULL, 0);
+    }
+    NtClose(File);
+}
+
+static void
+set_route_lifetime(const MIB_IPFORWARDROW *Route, ULONG Lifetime)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\Device\\Ip");
+    OBJECT_ATTRIBUTES Attributes;
+    IO_STATUS_BLOCK Iosb;
+    IP4_ROUTE_INFO Info;
+    HANDLE File;
+
+    InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    if (!NT_SUCCESS(NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                               FILE_SYNCHRONOUS_IO_NONALERT)))
+        return;
+
+    memset(&Info, 0, sizeof(Info));
+    Info.Index = Route->dwForwardIfIndex;
+    Info.Destination = Route->dwForwardDest;
+    Info.Mask = Route->dwForwardMask;
+    Info.NextHop = Route->dwForwardNextHop;
+    Info.ValidLifetime = Lifetime;
+    NtDeviceIoControlFile(File, NULL, NULL, NULL, &Iosb, IOCTL_IP_SET_ROUTE, &Info, sizeof(Info), NULL, 0);
+    NtClose(File);
+}
+
+static ULONGLONG
+link_local_timeout(PDHCP_ADAPTER Adapter)
+{
+    MIB_IPINTERFACE_ROW Row;
+
+    memset(&Row, 0, sizeof(Row));
+    Row.Family = AF_INET;
+    Row.InterfaceIndex = Adapter->IfMib.dwIndex;
+    if (GetIpInterfaceEntry(&Row) != NO_ERROR)
+        return (ULONGLONG)DHCP_PANIC_TIMEOUT * 1000;
+    return Row.LinkLocalAddressTimeout;
+}
+
+static void
+autoconfig_value(const char *Path, BOOL *Enabled)
+{
+    DWORD Value, Size = sizeof(Value), Type;
+    HKEY Key;
+
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, Path, 0, KEY_READ, &Key) != ERROR_SUCCESS)
+        return;
+    if (RegQueryValueExA(Key, "IPAutoconfigurationEnabled", NULL, &Type, (LPBYTE)&Value, &Size) == ERROR_SUCCESS &&
+        Type == REG_DWORD)
+        *Enabled = Value != 0;
+    RegCloseKey(Key);
+}
+
+static BOOL
+adapter_autoconfig_enabled(PDHCP_ADAPTER Adapter)
+{
+    CHAR Path[200] = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\";
+    BOOL Enabled = TRUE;
+
+    autoconfig_value("SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters", &Enabled);
+    if (strlen(Path) + strlen(Adapter->DhclientInfo.name) < sizeof(Path))
+    {
+        strcat(Path, Adapter->DhclientInfo.name);
+        autoconfig_value(Path, &Enabled);
+    }
+    return Enabled;
+}
+
+static BOOL
+adapter_ipv4_address_state(PDHCP_ADAPTER Adapter, ULONG Address, ULONG Exclude, NL_DAD_STATE *State)
+{
+    PMIB_UNICASTIPADDRESS_TABLE Table;
+    BOOL Found = FALSE;
+    ULONG i;
+
+    if (GetUnicastIpAddressTable(AF_INET, &Table) != NO_ERROR)
+        return FALSE;
+    for (i = 0; i < Table->NumEntries && !Found; i++)
+    {
+        ULONG Current = Table->Table[i].Address.Ipv4.sin_addr.s_addr;
+
+        if (Table->Table[i].InterfaceIndex != Adapter->IfMib.dwIndex || (Address && Current != Address) ||
+            (Exclude && Current == Exclude))
+            continue;
+        Found = TRUE;
+        if (State)
+            *State = Table->Table[i].DadState;
+    }
+    FreeMibTable(Table);
+    return Found;
+}
+
+static void
+apipa_check(void *ipp)
+{
+    struct interface_info *ip = ipp;
+    PDHCP_ADAPTER Adapter = AdapterFindInfo(ip);
+    NL_DAD_STATE State;
+
+    if (!Adapter || !Adapter->NteContext || !Adapter->ApipaAddress ||
+        !adapter_ipv4_address_state(Adapter, Adapter->ApipaAddress, 0, &State))
+        return;
+    if (State == IpDadStateTentative)
+    {
+        add_timeout(GetMonotonicTime() + 1, apipa_check, ip);
+        return;
+    }
+    if (State != IpDadStateDuplicate || Adapter->ApipaAttempt >= 9)
+        return;
+
+    DeleteIPAddress(Adapter->NteContext);
+    Adapter->NteContext = 0;
+    Adapter->ApipaAddress = 0;
+    Adapter->ApipaAttempt++;
+    Adapter->ApipaDue = TRUE;
+    state_panic(ip);
+    Adapter->ApipaDue = FALSE;
+}
+
+static void
+apipa_watch(void *ipp)
+{
+    struct interface_info *ip = ipp;
+    PDHCP_ADAPTER Adapter = AdapterFindInfo(ip);
+    ULONGLONG cur_time = GetTickCount64(), next = cur_time + 500, deadline;
+    BOOL Other;
+
+    if (!Adapter || (Adapter->NteContext && !Adapter->ApipaAddress))
+        return;
+
+    Other = adapter_ipv4_address_state(Adapter, 0, Adapter->ApipaAddress, NULL);
+    if (Other && Adapter->ApipaAddress)
+    {
+        DeleteIPAddress(Adapter->NteContext);
+        Adapter->NteContext = 0;
+        Adapter->ApipaAddress = 0;
+    }
+
+    if (Other)
+        Adapter->ApipaWaitStart = 0;
+    else if (!Adapter->ApipaWaitStart)
+        Adapter->ApipaWaitStart = cur_time;
+
+    if (!Adapter->NteContext && Adapter->ApipaWaitStart)
+    {
+        deadline = Adapter->ApipaWaitStart + link_local_timeout(Adapter);
+        if (cur_time >= deadline)
+        {
+            Adapter->ApipaDue = TRUE;
+            state_panic(ip);
+            Adapter->ApipaDue = FALSE;
+        }
+        else if (deadline < next)
+            next = deadline;
+    }
+    add_timeout_ms(next, apipa_watch, ip);
+}
+
+void
+apipa_address_changed(unsigned int Index)
+{
+    PDHCP_ADAPTER Adapter = AdapterFindIndex(Index);
+
+    if (Adapter && (!Adapter->NteContext || Adapter->ApipaAddress))
+        add_timeout_ms(GetTickCount64(), apipa_watch, &Adapter->DhclientInfo);
+}
+
 void setup_adapter( PDHCP_ADAPTER Adapter, struct client_lease *new_lease ) {
     CHAR Buffer[200] = "SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters\\Interfaces\\";
     CHAR AddressBuffer[32];
@@ -612,6 +815,9 @@ void setup_adapter( PDHCP_ADAPTER Adapter, struct client_lease *new_lease ) {
     if (RegOpenKeyExA(HKEY_LOCAL_MACHINE, Buffer, 0, KEY_WRITE, &hkey) != ERROR_SUCCESS)
         hkey = NULL;
 
+    Adapter->ApipaAddress = 0;
+    set_dhcp_router_discovery(Adapter, new_lease->options[DHO_ROUTER_DISCOVERY].len == 1 &&
+                                       new_lease->options[DHO_ROUTER_DISCOVERY].data[0]);
 
     if( Adapter->NteContext && !KeepAddress )
     {
@@ -669,7 +875,7 @@ void setup_adapter( PDHCP_ADAPTER Adapter, struct client_lease *new_lease ) {
         if( Adapter->RouterMib.dwForwardNextHop != NewRouter ) {
             Adapter->RouterMib.dwForwardDest = 0; /* Default route */
             Adapter->RouterMib.dwForwardMask = 0;
-            Adapter->RouterMib.dwForwardMetric1 = 1;
+            Adapter->RouterMib.dwForwardMetric1 = 0;
             Adapter->RouterMib.dwForwardIfIndex = Adapter->IfMib.dwIndex;
 
             if( Adapter->RouterMib.dwForwardNextHop ) {
@@ -685,6 +891,8 @@ void setup_adapter( PDHCP_ADAPTER Adapter, struct client_lease *new_lease ) {
                 warning("CreateIpForwardEntry: %lu\n", err);
                 Adapter->RouterMib.dwForwardNextHop = 0;
             }
+            else if (new_lease->lease != TIME_MAX)
+                set_route_lifetime(&Adapter->RouterMib, (ULONG)new_lease->lease);
         }
 
         if (hkey && err == NO_ERROR) {
@@ -722,6 +930,8 @@ reset_adapter( PDHCP_ADAPTER Adapter) {
         DeleteIPAddress( Adapter->NteContext );
         Adapter->NteContext = 0;
     }
+    Adapter->ApipaAddress = 0;
+    set_dhcp_router_discovery(Adapter, FALSE);
 
     if (hkey) {
         RegSetValueExA(hkey, "DhcpIPAddress", 0, REG_SZ, (LPBYTE)IpAddress, strlen(IpAddress)+1);
@@ -1278,9 +1488,7 @@ state_panic(void *ipp)
     uint16_t address_low;
     int i;
     IPAddr IpAddress;
-    ULONG Buffer[20];
-    ULONG BufferSize;
-    DWORD ret;
+    ULONG attempt;
     HKEY hKey = NULL;
     PDHCP_ADAPTER Adapter = AdapterFindInfo(ip);
     NTSTATUS Status;
@@ -1326,7 +1534,7 @@ state_panic(void *ipp)
             {
                 Adapter->RouterMib.dwForwardDest = 0; /* Default route */
                 Adapter->RouterMib.dwForwardMask = 0;
-                Adapter->RouterMib.dwForwardMetric1 = 1;
+                Adapter->RouterMib.dwForwardMetric1 = 0;
                 Adapter->RouterMib.dwForwardIfIndex = Adapter->IfMib.dwIndex;
 
                 if (Adapter->RouterMib.dwForwardNextHop)
@@ -1394,7 +1602,8 @@ state_panic(void *ipp)
                 RegSetValueExA(hKey, "AddressType", 0, REG_DWORD, (LPBYTE)&dwAddressType, sizeof(DWORD));
             }
         }
-        else
+        else if (Adapter->ApipaDue && adapter_autoconfig_enabled(Adapter) &&
+                 !adapter_ipv4_address_state(Adapter, 0, 0, NULL))
         {
             /* Generate an automatic private address */
             DH_DbgPrint(MID_TRACE,("DHCPCSVC: An automatic private address will be assigned.\n"));
@@ -1402,69 +1611,57 @@ state_panic(void *ipp)
             /* FIXME: The address generation code sucks */
             srand(0);
 
-            for (;;)
+            for (attempt = 0; attempt <= Adapter->ApipaAttempt; attempt++)
             {
                 address_low = rand();
                 for (i = 0; i < ip->hw_address.hlen; i++)
                     address_low += ip->hw_address.haddr[i];
+            }
 
-                IpAddress = htonl(0xA9FE0000 | address_low);  // 169.254.X.X
+            IpAddress = htonl(0xA9FE0000 | address_low);  // 169.254.X.X
 
-                /* Send an ARP request to check if the IP address is already in use */
-                BufferSize = sizeof(Buffer);
-                ret = SendARP(IpAddress,
-                              IpAddress,
-                              Buffer,
-                              &BufferSize);
-                DH_DbgPrint(MID_TRACE,("DHCPCSVC: SendARP returned %lu\n", ret));
-                if (ret != 0)
-                {
-                    /* The IP address is not in use */
-                    DH_DbgPrint(MID_TRACE,("DHCPCSVC: Using automatic private address\n"));
-                    Status = AddIPAddress(IpAddress,
-                                          htonl(0xFFFF0000), // 255.255.0.0
-                                          Adapter->IfMib.dwIndex,
-                                          &Adapter->NteContext,
-                                          &Adapter->NteInstance);
-                    if (!NT_SUCCESS(Status))
-                    {
-                        DH_DbgPrint(MID_TRACE,("AddIPAddress: %lx\n", Status));
-                    }
-                    else
-                    {
-                        Adapter->NteNetmask = htonl(0xFFFF0000);
-                    }
+            DH_DbgPrint(MID_TRACE,("DHCPCSVC: Using automatic private address\n"));
+            Status = AddIPAddress(IpAddress,
+                                  htonl(0xFFFF0000), // 255.255.0.0
+                                  Adapter->IfMib.dwIndex,
+                                  &Adapter->NteContext,
+                                  &Adapter->NteInstance);
+            if (!NT_SUCCESS(Status))
+            {
+                DH_DbgPrint(MID_TRACE,("AddIPAddress: %lx\n", Status));
+            }
+            else
+            {
+                Adapter->NteNetmask = htonl(0xFFFF0000);
+                Adapter->ApipaAddress = IpAddress;
+                add_timeout(cur_time + 1, apipa_check, ip);
+            }
 
-                    if (hKey)
-                    {
-                        addr.S_un.S_addr = IpAddress;
-                        RtlIpv4AddressToStringA(&addr, AddressBuffer);
-                        RegSetValueExA(hKey, "DhcpIPAddress", 0, REG_SZ, (LPBYTE)AddressBuffer, strlen(AddressBuffer) + 1);
-                        RegSetValueExA(hKey, "DhcpSubnetMask", 0, REG_SZ, (LPBYTE)SubnetMask, strlen(SubnetMask) + 1);
-                        RegSetValueExA(hKey, "DhcpServer", 0, REG_SZ, (LPBYTE)Server, strlen(Server) + 1);
-                        RegDeleteValueA(hKey, "DhcpDefaultGateway");
-                        RegDeleteValueA(hKey, "DhcpDomain");
-                        RegDeleteValueA(hKey, "DhcpNameServer");
+            if (hKey)
+            {
+                addr.S_un.S_addr = IpAddress;
+                RtlIpv4AddressToStringA(&addr, AddressBuffer);
+                RegSetValueExA(hKey, "DhcpIPAddress", 0, REG_SZ, (LPBYTE)AddressBuffer, strlen(AddressBuffer) + 1);
+                RegSetValueExA(hKey, "DhcpSubnetMask", 0, REG_SZ, (LPBYTE)SubnetMask, strlen(SubnetMask) + 1);
+                RegSetValueExA(hKey, "DhcpServer", 0, REG_SZ, (LPBYTE)Server, strlen(Server) + 1);
+                RegDeleteValueA(hKey, "DhcpDefaultGateway");
+                RegDeleteValueA(hKey, "DhcpDomain");
+                RegDeleteValueA(hKey, "DhcpNameServer");
 
-                        RegSetValueExA(hKey, "IPAutoconfigurationAddress", 0, REG_SZ, (LPBYTE)AddressBuffer, strlen(AddressBuffer) + 1);
-                        RegSetValueExA(hKey, "IPAutoconfigurationMask", 0, REG_SZ, (LPBYTE)SubnetMask, strlen(SubnetMask) + 1);
+                RegSetValueExA(hKey, "IPAutoconfigurationAddress", 0, REG_SZ, (LPBYTE)AddressBuffer, strlen(AddressBuffer) + 1);
+                RegSetValueExA(hKey, "IPAutoconfigurationMask", 0, REG_SZ, (LPBYTE)SubnetMask, strlen(SubnetMask) + 1);
 
-                        RegSetValueExA(hKey, "Lease", 0, REG_DWORD, (LPBYTE)&lease, sizeof(DWORD));
-                        RegSetValueExA(hKey, "LeaseObtainedTime", 0, REG_DWORD, (LPBYTE)&cur_time, sizeof(DWORD));
-                        RegSetValueExA(hKey, "LeaseTerminatesTime", 0, REG_DWORD, (LPBYTE)&never_time, sizeof(DWORD));
-                        RegSetValueExA(hKey, "T1", 0, REG_DWORD, (LPBYTE)&cur_time, sizeof(DWORD));
-                        RegSetValueExA(hKey, "T2", 0, REG_DWORD, (LPBYTE)&cur_time, sizeof(DWORD));
-                        dwAddressType = 1;
-                        RegSetValueExA(hKey, "AddressType", 0, REG_DWORD, (LPBYTE)&dwAddressType, sizeof(DWORD));
-                    }
-
-                    goto done;
-                }
+                RegSetValueExA(hKey, "Lease", 0, REG_DWORD, (LPBYTE)&lease, sizeof(DWORD));
+                RegSetValueExA(hKey, "LeaseObtainedTime", 0, REG_DWORD, (LPBYTE)&cur_time, sizeof(DWORD));
+                RegSetValueExA(hKey, "LeaseTerminatesTime", 0, REG_DWORD, (LPBYTE)&never_time, sizeof(DWORD));
+                RegSetValueExA(hKey, "T1", 0, REG_DWORD, (LPBYTE)&cur_time, sizeof(DWORD));
+                RegSetValueExA(hKey, "T2", 0, REG_DWORD, (LPBYTE)&cur_time, sizeof(DWORD));
+                dwAddressType = 1;
+                RegSetValueExA(hKey, "AddressType", 0, REG_DWORD, (LPBYTE)&dwAddressType, sizeof(DWORD));
             }
         }
     }
 
-done:
     if (hKey)
         RegCloseKey(hKey);
 }
@@ -1528,6 +1725,8 @@ send_request(void *ipp)
             {
                 DeleteIPAddress( Adapter->NteContext );
                 Adapter->NteContext = 0;
+                Adapter->ApipaAddress = 0;
+                set_dhcp_router_discovery(Adapter, FALSE);
             }
 
             ip->client->state = S_INIT;

@@ -10,7 +10,6 @@ VOID Test_KeArm64IpiBroadcast(VOID);
 
 #define dump_trace(...) do { trace(__VA_ARGS__); DbgPrint(__VA_ARGS__); } while (0)
 
-#ifdef _M_ARM64
 
 static volatile LONG64 BroadcastMask;
 static volatile LONG BroadcastCount;
@@ -195,18 +194,13 @@ static VOID Arm64RemoteSenderCheck(VOID)
     KeRevertToUserAffinityThread();
 }
 
-#endif /* _M_ARM64 */
 
 START_TEST(KeArm64IpiBroadcast)
 {
-#ifndef _M_ARM64
-    skip(FALSE, "KeArm64IpiBroadcast is ARM64-only\n");
-#else
     dump_trace("[arm64][KeArm64IpiBroadcast] enter cpus=%lu\n", KeNumberProcessors);
     Arm64IpiBroadcastCheck();
     Arm64TargetedDpcCheck();
     Arm64DpcTargetEncodingCheck();
     Arm64RemoteSenderCheck();
     dump_trace("[arm64][KeArm64IpiBroadcast] done\n");
-#endif
 }

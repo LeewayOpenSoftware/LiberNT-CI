@@ -1,0 +1,72 @@
+--- a/mono/metadata/cominterop.c
++++ b/mono/metadata/cominterop.c
+@@ -200,6 +200,7 @@
+ static GENERATE_GET_CLASS_WITH_CACHE (interface_type_attribute, "System.Runtime.InteropServices", "InterfaceTypeAttribute")
+ static GENERATE_GET_CLASS_WITH_CACHE (icustom_query_interface, "System.Runtime.InteropServices", "ICustomQueryInterface")
+ static GENERATE_GET_CLASS_WITH_CACHE (com_visible_attribute, "System.Runtime.InteropServices", "ComVisibleAttribute")
++static GENERATE_GET_CLASS_WITH_CACHE (com_event_interface_attribute, "System.Runtime.InteropServices", "ComEventInterfaceAttribute")
+ static GENERATE_GET_CLASS_WITH_CACHE (com_default_interface_attribute, "System.Runtime.InteropServices", "ComDefaultInterfaceAttribute")
+ static GENERATE_GET_CLASS_WITH_CACHE (class_interface_attribute, "System.Runtime.InteropServices", "ClassInterfaceAttribute")
+ 
+@@ -1308,6 +1309,25 @@
+  * \returns the generated method that calls the underlying \c __ComObject
+  * rather than the proxy object.
+  */
++static gboolean
++cominterop_is_com_event_interface (MonoClass *klass)
++{
++	ERROR_DECL (error);
++	MonoCustomAttrInfo *cinfo;
++	gboolean result;
++
++	if (!mono_class_is_interface (klass))
++		return FALSE;
++	cinfo = mono_custom_attrs_from_class_checked (klass, error);
++	mono_error_cleanup (error);
++	if (!cinfo)
++		return FALSE;
++	result = mono_custom_attrs_has_attr (cinfo, mono_class_get_com_event_interface_attribute_class ());
++	if (!cinfo->cached)
++		mono_custom_attrs_free (cinfo);
++	return result;
++}
++
+ MonoMethod *
+ mono_cominterop_get_invoke (MonoMethod *method)
+ {
+@@ -1333,6 +1353,35 @@
+ 	mb = mono_mb_new (method->klass, method->name, MONO_WRAPPER_COMINTEROP_INVOKE);
+ 
+ #ifndef DISABLE_JIT
++	if (cominterop_is_com_event_interface (method->klass)) {
++		MONO_STATIC_POINTER_INIT (MonoMethod, get_event_provider)
++
++			ERROR_DECL (error);
++			get_event_provider = mono_class_get_method_from_name_checked (mono_class_get_com_object_class (), "GetEventProvider", 3, 0, error);
++			mono_error_assert_ok (error);
++
++		MONO_STATIC_POINTER_INIT_END (MonoMethod, get_event_provider)
++
++		mono_mb_emit_ldarg (mb, 0);
++		mono_mb_emit_ldarg (mb, 0);
++		mono_mb_emit_ldflda (mb, MONO_STRUCT_OFFSET (MonoTransparentProxy, rp));
++		mono_mb_emit_byte (mb, CEE_LDIND_REF);
++		mono_mb_emit_ldflda (mb, MONO_STRUCT_OFFSET (MonoComInteropProxy, com_object));
++		mono_mb_emit_byte (mb, CEE_LDIND_REF);
++		mono_mb_emit_ptr (mb, m_class_get_byval_arg (method->klass));
++		mono_mb_emit_icall (mb, cominterop_type_from_handle);
++		mono_mb_emit_managed_call (mb, get_event_provider, NULL);
++		mono_mb_emit_op (mb, CEE_CASTCLASS, method->klass);
++		for (i = 1; i <= sig->param_count; i++)
++			mono_mb_emit_ldarg (mb, i);
++		mono_mb_emit_op (mb, CEE_CALLVIRT, method);
++		mono_mb_emit_byte (mb, CEE_RET);
++
++		res = mono_mb_create_and_cache (cache, method, mb, sig, sig->param_count + 16);
++		mono_mb_free (mb);
++		return res;
++	}
++
+ 	/* get real proxy object, which is a ComInteropProxy in this case*/
+ 	mono_mb_add_local (mb, mono_get_object_type ());
+ 	mono_mb_emit_ldarg (mb, 0);

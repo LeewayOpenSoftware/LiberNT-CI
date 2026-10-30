@@ -9,6 +9,8 @@
 /* This port initializes scheduler sub-nodes and their non-parked CPU sets. */
 #define KI_CORE_PARKING
 
+#define KiPrcbTimerTableLockQueue(Prcb, Index) (&(Prcb)->TimerTableLockQueue[(Index)])
+
 #define KI_ARCH_THREAD_HANDOFF_USES_RUNNING 1
 
 /* Executive bring-up completes native interrupt setup after each HAL phase. */
@@ -727,6 +729,7 @@ extern BOOLEAN KiArm64IrqFiqConfigured;
 /* Debug register counts from ID_AA64DFR0_EL1 */
 extern ULONG KiArm64NumBreakpoints;
 extern ULONG KiArm64NumWatchpoints;
+extern UCHAR KiArm64UserStepArmed[MAXIMUM_PROCESSORS];
 
 /*
  * CPU feature flags populated from ID_AA64* register reads during

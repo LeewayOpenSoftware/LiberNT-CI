@@ -1553,7 +1553,7 @@ NTSTATUS
 NTAPI
 GpioCxLibraryBindClient(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS *ClientGlobals)
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals)
 {
     return WdfCxBindClient(ClassBindInfo,
                            ClientGlobals,
@@ -1567,7 +1567,7 @@ VOID
 NTAPI
 GpioCxLibraryUnbindClient(
     _In_ PWDF_CLASS_BIND_INFO ClassBindInfo,
-    _Inout_ PWDF_COMPONENT_GLOBALS *ClientGlobals)
+    _In_ PWDF_COMPONENT_GLOBALS ClientGlobals)
 {
     UNREFERENCED_PARAMETER(ClientGlobals);
     WdfCxUnbindClient(ClassBindInfo);

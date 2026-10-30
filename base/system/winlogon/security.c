@@ -23,8 +23,6 @@
 #define DESKTOP_INTERACTIVE_LIMITED (STANDARD_RIGHTS_READ | DESKTOP_ENUMERATE | \
     DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW)
 
-#define DESKTOP_WINLOGON_ADMINS_LIMITED (STANDARD_RIGHTS_REQUIRED | DESKTOP_ENUMERATE)
-
 #define WINSTA_ALL (WINSTA_ENUMDESKTOPS | WINSTA_READATTRIBUTES | \
     WINSTA_ACCESSCLIPBOARD | WINSTA_CREATEDESKTOP | \
     WINSTA_WRITEATTRIBUTES | WINSTA_ACCESSGLOBALATOMS | \
@@ -571,8 +569,7 @@ Quit:
  * Creates a security descriptor for the default
  * Winlogon desktop. This descriptor serves as a
  * security measure for the winlogon desktop so
- * that only Winlogon itself (and admins) can
- * interact with it.
+ * that only Winlogon itself can interact with it.
  *
  * @param[out] WinlogonDesktopSd
  * A pointer to a created security descriptor for
@@ -589,7 +586,7 @@ CreateWinlogonDesktopSecurity(
     BOOL Success = FALSE;
     SECURITY_DESCRIPTOR AbsoluteSd;
     PSECURITY_DESCRIPTOR RelativeSd = NULL;
-    PSID WinlogonSid = NULL, AdminsSid = NULL;
+    PSID WinlogonSid = NULL;
     DWORD DaclSize;
     PACL Dacl = NULL;
 
@@ -604,27 +601,9 @@ CreateWinlogonDesktopSecurity(
         return FALSE;
     }
 
-    /* Create the admins SID */
-    if (!AllocateAndInitializeSid(&NtAuthority,
-                                  2,
-                                  SECURITY_BUILTIN_DOMAIN_RID,
-                                  DOMAIN_ALIAS_RID_ADMINS,
-                                  0, 0, 0, 0, 0, 0,
-                                  &AdminsSid))
-    {
-        ERR("CreateWinlogonDesktopSecurity(): Failed to create the admins SID (error code %lu)\n", GetLastError());
-        goto Quit;
-    }
-
-    /*
-     * Build up the DACL size. This includes a number
-     * of two ACEs of two different SIDs. The first ACE
-     * gives full access to Winlogon, the last one gives
-     * limited desktop access to admins.
-     */
+    /* Build up the DACL size. Its only ACE gives full access to Winlogon. */
     DaclSize = sizeof(ACL) +
-               sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(WinlogonSid) +
-               sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(AdminsSid);
+               sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(WinlogonSid);
 
     /* Allocate the DACL now */
     Dacl = RtlAllocateHeap(RtlGetProcessHeap(),
@@ -654,17 +633,6 @@ CreateWinlogonDesktopSecurity(
         goto Quit;
     }
 
-    /* Second ACE -- Give limited desktop access to admins */
-    if (!AddAccessAllowedAceEx(Dacl,
-                               ACL_REVISION,
-                               0,
-                               DESKTOP_WINLOGON_ADMINS_LIMITED,
-                               AdminsSid))
-    {
-        ERR("CreateWinlogonDesktopSecurity(): Failed to set ACE for admins (error code %lu)\n", GetLastError());
-        goto Quit;
-    }
-
     /* Initialize the security descriptor */
     if (!InitializeSecurityDescriptor(&AbsoluteSd, SECURITY_DESCRIPTOR_REVISION))
     {
@@ -676,6 +644,12 @@ CreateWinlogonDesktopSecurity(
     if (!SetSecurityDescriptorDacl(&AbsoluteSd, TRUE, Dacl, FALSE))
     {
         ERR("CreateWinlogonDesktopSecurity(): Failed to set up DACL to absolute security descriptor (error code %lu)\n", GetLastError());
+        goto Quit;
+    }
+
+    if (!SetSecurityDescriptorOwner(&AbsoluteSd, WinlogonSid, FALSE))
+    {
+        ERR("CreateWinlogonDesktopSecurity(): Failed to set the owner of the security descriptor (error code %lu)\n", GetLastError());
         goto Quit;
     }
 
@@ -695,11 +669,6 @@ Quit:
     if (WinlogonSid != NULL)
     {
         FreeSid(WinlogonSid);
-    }
-
-    if (AdminsSid != NULL)
-    {
-        FreeSid(AdminsSid);
     }
 
     if (Dacl != NULL)

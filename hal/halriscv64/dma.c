@@ -372,7 +372,7 @@ HalpRiscvStartChannel(_Inout_ RISCV_DMA_ADAPTER *Adapter, _In_ PDEVICE_OBJECT De
     KIRQL OldIrql;
     ULONG Index;
 
-    if (Adapter->PoolPages)
+    if (Adapter->PoolPages && NumberOfMapRegisters)
     {
         ULONG Pages[RISCV_DMA_POOL_PAGES];
 
@@ -420,8 +420,7 @@ HalpRiscvAllocateAdapterChannel(PDMA_ADAPTER DmaAdapter, PDEVICE_OBJECT DeviceOb
 {
     RISCV_DMA_ADAPTER *Adapter = HalpRiscvAdapter(DmaAdapter);
 
-    if (!Adapter || !DeviceObject || !ExecutionRoutine || KeGetCurrentIrql() > DISPATCH_LEVEL ||
-        !NumberOfMapRegisters)
+    if (!Adapter || !DeviceObject || !ExecutionRoutine || KeGetCurrentIrql() > DISPATCH_LEVEL)
         return STATUS_INVALID_PARAMETER;
     if (Adapter->PoolPages && NumberOfMapRegisters > Adapter->PoolPages)
         return STATUS_INSUFFICIENT_RESOURCES;

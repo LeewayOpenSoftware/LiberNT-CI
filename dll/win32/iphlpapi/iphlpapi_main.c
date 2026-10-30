@@ -3103,6 +3103,55 @@ DWORD WINAPI GetNumberOfInterfaces( DWORD *count )
     return err;
 }
 
+#ifdef __REACTOS__
+static BOOL autoconfig_value( const WCHAR *path, BOOL *enabled )
+{
+    DWORD value, size = sizeof(value), type;
+    HKEY key;
+    BOOL found = FALSE;
+
+    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, path, 0, KEY_READ, &key )) return FALSE;
+    if (!RegQueryValueExW( key, L"IPAutoconfigurationEnabled", NULL, &type, (BYTE *)&value, &size ) &&
+        type == REG_DWORD)
+    {
+        *enabled = value != 0;
+        found = TRUE;
+    }
+    RegCloseKey( key );
+    return found;
+}
+
+static BOOL adapter_autoconfig_enabled( const NET_LUID *luid )
+{
+    static const WCHAR parameters[] = L"SYSTEM\\CurrentControlSet\\Services\\Tcpip\\Parameters";
+    WCHAR path[ARRAY_SIZE(parameters) + 12 + CHARS_IN_GUID];
+    BOOL enabled = TRUE;
+    GUID guid;
+
+    autoconfig_value( parameters, &enabled );
+    if (ConvertInterfaceLuidToGuid( luid, &guid )) return enabled;
+    wcscpy( path, parameters );
+    wcscat( path, L"\\Interfaces\\" );
+    ConvertGuidToStringW( &guid, path + wcslen( path ), CHARS_IN_GUID );
+    autoconfig_value( path, &enabled );
+    return enabled;
+}
+
+static BOOL adapter_autoconfig_active( ULONG index )
+{
+    MIB_UNICASTIPADDRESS_TABLE *table;
+    BOOL active = FALSE;
+    ULONG i;
+
+    if (GetUnicastIpAddressTable( AF_INET, &table )) return FALSE;
+    for (i = 0; i < table->NumEntries && !active; i++)
+        active = table->Table[i].InterfaceIndex == index &&
+                 (RtlUlongByteSwap( table->Table[i].Address.Ipv4.sin_addr.s_addr ) & 0xffff0000) == 0xa9fe0000;
+    FreeMibTable( table );
+    return active;
+}
+#endif
+
 /******************************************************************
  *    GetPerAdapterInfo (IPHLPAPI.@)
  *
@@ -3141,6 +3190,10 @@ DWORD WINAPI GetPerAdapterInfo( ULONG index, IP_PER_ADAPTER_INFO *info, ULONG *s
     info->CurrentDnsServer = &info->DnsServerList;
 
     /* FIXME Autoconfig: get unicast addresses and compare to 169.254.x.x */
+#ifdef __REACTOS__
+    info->AutoconfigEnabled = adapter_autoconfig_enabled( &luid );
+    info->AutoconfigActive = adapter_autoconfig_active( index );
+#endif
     return ERROR_SUCCESS;
 }
 

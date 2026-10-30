@@ -1092,6 +1092,11 @@ _CRT_RESTORE_GCC_WARNINGS
     _In_ size_t SizeInWords,
     _In_z_ const wchar_t *_Source);
 
+#if defined(__cplusplus) && defined(__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_1)
+__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_1(errno_t, wcscat_s, wchar_t, _Destination, const wchar_t *, _Source)
+__DEFINE_CPP_OVERLOAD_SECURE_FUNC_0_1(errno_t, wcscpy_s, wchar_t, _Destination, const wchar_t *, _Source)
+#endif
+
   _CRTIMP
   errno_t
   __cdecl

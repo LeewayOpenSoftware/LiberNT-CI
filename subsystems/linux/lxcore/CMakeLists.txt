@@ -14,6 +14,7 @@ list(APPEND SOURCE
     kconfig.c
     lxwin.c
     inet.c
+    klog.c
     netlink.c
     mm.c
     mqueue.c
@@ -21,6 +22,7 @@ list(APPEND SOURCE
     pipe.c
     poll.c
     process.c
+    ptrace.c
     procfs.c
     seccomp.c
     signal.c

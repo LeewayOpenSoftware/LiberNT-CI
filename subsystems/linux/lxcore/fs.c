@@ -120,6 +120,12 @@ LxVectorIo(
     File = LxCallFile(Call, 0);
     if (File == NULL)
         return -LX_EBADF;
+    if (Write && (File->Ops->WriteVector != NULL))
+    {
+        Result = LxFileWriteVector(File, Call->Args[1], (ULONG)Count, Offset);
+        LxFileDereference(File);
+        return Result;
+    }
 
     for (Index = 0; Index < Count; Index++)
     {
@@ -1469,6 +1475,15 @@ LxSetAttributesFile(
     LX_NODE Node;
     LONG Error;
 
+    if ((File->Handle == NULL) && (File->Mount != NULL) && (File->Mount->Kind == LxFsCgroup) && (File->Path != NULL))
+    {
+        Error = LxLookup(Process, LX_AT_FDCWD, File->Path, 0, &Node);
+        if (Error != 0)
+            return Error;
+        Error = LxVfsSetAttributes(Process, &Node, NULL, Mode, Uid, Gid);
+        LxNodeFree(&Node);
+        return Error;
+    }
     if (((File->Handle == NULL) && (LxTmpfsFileInode(File) == NULL)) || File->NtPipe)
         return 0;
     Error = LxVfsSetAttributes(Process, NULL, File, Mode, Uid, Gid);
@@ -2112,7 +2127,7 @@ LX_SYSCALL(LxSysMount)
 {
     PLX_PROCESS Process = Call->Process;
     ULONG Flags = (ULONG)Call->Args[3];
-    PSTR Source = NULL, Type = NULL;
+    PSTR Source = NULL, Type = NULL, Data = NULL;
     LX_NODE Target;
     LONG64 Result;
     LONG Error;
@@ -2187,11 +2202,14 @@ LX_SYSCALL(LxSysMount)
         Result = LxCopyStringFromUser(Call->Args[2], &Type, 63);
     if ((Result == 0) && (Type == NULL))
         Result = -LX_EINVAL;
+    if ((Result == 0) && (Call->Args[4] != 0))
+        Result = LxCopyStringFromUser(Call->Args[4], &Data, LX_PAGE_SIZE - 1);
     if (Result == 0)
-        Result = LxMountAdd(Process, Target.Path, (Source != NULL) ? Source : "none", Type, Flags, NULL);
+        Result = LxMountAdd(Process, Target.Path, (Source != NULL) ? Source : "none", Type, Flags, Data);
 
     LxFree(Source);
     LxFree(Type);
+    LxFree(Data);
     LxNodeFree(&Target);
     return Result;
 }

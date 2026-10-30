@@ -144,7 +144,8 @@ LxSignalPending(
 {
     if (Thread == NULL)
         return FALSE;
-    return (((ULONG64)Thread->Pending | (ULONG64)Thread->Process->Pending) & ~Thread->SigMask) != 0;
+    return ((((ULONG64)Thread->Pending | (ULONG64)Thread->Process->Pending) & ~Thread->SigMask) != 0) ||
+           Thread->JobctlStop || ((Thread->PtraceWork & LX_PTW_TRAP) != 0);
 }
 
 static
@@ -1169,7 +1170,9 @@ LX_SYSCALL(LxSysEpollPwait2)
 
         if (Result != 0)
             return Result;
-        Value = Timeout.Seconds * 10000000 + Timeout.Nanoseconds / 100;
+        if ((Timeout.Seconds < 0) || (Timeout.Nanoseconds < 0) || (Timeout.Nanoseconds >= 1000000000))
+            return -LX_EINVAL;
+        Value = LxTimespecTo100ns(&Timeout);
     }
     return LxEpollWait(Call, (LONG)Call->Args[0], Call->Args[1], (LONG)Call->Args[2], Value, Call->Args[4], Call->Args[5]);
 }

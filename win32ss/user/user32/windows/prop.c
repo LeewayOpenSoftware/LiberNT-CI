@@ -29,19 +29,27 @@
 
 #include <user32.h>
 
+#ifndef WOW64_I386_RUNTIME
+static const WCHAR PrivatePropPrefixW[] = L"ReactOS.Dwm.";
+
+static BOOLEAN
+IsPrivatePropNameW(LPCWSTR Name)
+{
+    return !wcsncmp(Name, PrivatePropPrefixW, _countof(PrivatePropPrefixW) - 1);
+}
+#endif
+
 #define ATOM_BUFFER_SIZE 256
 
 /* INTERNAL FUNCTIONS ********************************************************/
 
-HANDLE
-FASTCALL
-IntGetProp(HWND hWnd, ATOM Atom, BOOLEAN SystemProp)
+static HANDLE
+IntGetPropByFlags(HWND hWnd, ATOM Atom, WORD SystemFlag)
 {
   PLIST_ENTRY ListEntry, temp;
   PPROPERTY Property;
   PWND pWnd;
   int i;
-  WORD SystemFlag = SystemProp ? PROPERTY_FLAG_SYSTEM : 0;
 
   pWnd = ValidateHwnd(hWnd);
   if (!pWnd) return NULL;
@@ -51,7 +59,7 @@ IntGetProp(HWND hWnd, ATOM Atom, BOOLEAN SystemProp)
   {
       Property = CONTAINING_RECORD(ListEntry, PROPERTY, PropListEntry);
       if (Property->Atom == Atom &&
-          (Property->fs & PROPERTY_FLAG_SYSTEM) == SystemFlag)
+          (Property->fs & (PROPERTY_FLAG_SYSTEM | PROPERTY_FLAG_PRIVATE)) == SystemFlag)
       {
          return(Property);
       }
@@ -59,6 +67,13 @@ IntGetProp(HWND hWnd, ATOM Atom, BOOLEAN SystemProp)
       ListEntry = SharedPtrToUser(temp);
   }
   return NULL;
+}
+
+HANDLE
+FASTCALL
+IntGetProp(HWND hWnd, ATOM Atom, BOOLEAN SystemProp)
+{
+  return IntGetPropByFlags(hWnd, Atom, SystemProp ? PROPERTY_FLAG_SYSTEM : 0);
 }
 
 HANDLE
@@ -392,7 +407,7 @@ GetPropW(HWND hWnd, LPCWSTR lpString)
    * using the 32-bit WND and PROPERTY layouts. */
   return NtUserGetProp(hWnd, Atom);
 #else
-  Prop = IntGetProp(hWnd, Atom, FALSE);
+  Prop = IntGetPropByFlags(hWnd, Atom, (HIWORD(lpString) && IsPrivatePropNameW(lpString)) ? (PROPERTY_FLAG_SYSTEM | PROPERTY_FLAG_PRIVATE) : 0);
   if (Prop != NULL) Data = Prop->Data;
   return Data;
 #endif

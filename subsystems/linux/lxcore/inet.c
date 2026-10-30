@@ -1678,9 +1678,9 @@ LxInetSetsockopt(
                 if (Result != 0)
                     return Result;
                 if ((Name == LX_SO_RCVTIMEO_OLD) || (Name == LX_SO_RCVTIMEO_NEW))
-                    Socket->RecvTimeout = Timeval.Seconds * 10000000LL + Timeval.Microseconds * 10;
+                    Socket->RecvTimeout = LxSocketTimeout(&Timeval);
                 else
-                    Socket->SendTimeout = Timeval.Seconds * 10000000LL + Timeval.Microseconds * 10;
+                    Socket->SendTimeout = LxSocketTimeout(&Timeval);
                 return 0;
             }
 

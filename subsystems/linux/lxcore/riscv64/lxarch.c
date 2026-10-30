@@ -326,6 +326,143 @@ LxArchRestartSyscall(
     TrapFrame->Context.Pc -= 4;
 }
 
+LONG
+LxArchSpecStoreBypassMode(VOID)
+{
+    return LX_SPEC_MODE_UNSUPPORTED;
+}
+
+VOID
+LxArchApplySpeculation(
+    _In_ PLX_THREAD Thread,
+    _Inout_ PKTRAP_FRAME TrapFrame)
+{
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(TrapFrame);
+}
+
+LONG
+LxArchPtraceGetRegset(
+    _In_ PCONTEXT Context,
+    _In_ ULONG64 Tls,
+    _In_ LONG SyscallNr,
+    _In_ ULONG Type,
+    _Out_writes_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer,
+    _Out_ PULONG Size,
+    _Out_ PULONG Unit)
+{
+    PULONG64 Registers = (PULONG64)Buffer;
+    ULONG Index;
+
+    UNREFERENCED_PARAMETER(Tls);
+    UNREFERENCED_PARAMETER(SyscallNr);
+    RtlZeroMemory(Buffer, LX_PTRACE_REGSET_MAX);
+    switch (Type)
+    {
+        case LX_NT_PRSTATUS:
+            Registers[0] = Context->Pc;
+            for (Index = 1; Index < 32; Index++)
+                Registers[Index] = Context->X[Index];
+            *Size = 32 * sizeof(ULONG64);
+            *Unit = sizeof(ULONG64);
+            return 0;
+
+        case LX_NT_PRFPREG:
+            RtlCopyMemory(Buffer, Context->F, sizeof(Context->F));
+            *(PULONG)&Registers[32] = Context->Fcsr;
+            *Size = 33 * sizeof(ULONG64);
+            *Unit = sizeof(ULONG64);
+            return 0;
+
+        default:
+            return -LX_EINVAL;
+    }
+}
+
+LONG
+LxArchPtraceSetRegset(
+    _Inout_ PCONTEXT Context,
+    _Inout_ PULONG64 Tls,
+    _Inout_ PLONG SyscallNr,
+    _In_ ULONG Type,
+    _In_reads_bytes_(LX_PTRACE_REGSET_MAX) PUCHAR Buffer)
+{
+    PULONG64 Registers = (PULONG64)Buffer;
+    ULONG Index;
+
+    UNREFERENCED_PARAMETER(Tls);
+    UNREFERENCED_PARAMETER(SyscallNr);
+    switch (Type)
+    {
+        case LX_NT_PRSTATUS:
+            Context->Pc = Registers[0];
+            for (Index = 1; Index < 32; Index++)
+                Context->X[Index] = Registers[Index];
+            return 0;
+
+        case LX_NT_PRFPREG:
+            RtlCopyMemory(Context->F, Buffer, sizeof(Context->F));
+            Context->Fcsr = *(PULONG)&Registers[32];
+            return 0;
+
+        default:
+            return -LX_EINVAL;
+    }
+}
+
+BOOLEAN
+LxArchPtraceSingleStep(
+    _Inout_ PCONTEXT Context,
+    _In_ BOOLEAN Enable)
+{
+    UNREFERENCED_PARAMETER(Context);
+    return !Enable;
+}
+
+BOOLEAN
+LxArchPersonalityAllowed(
+    _In_ ULONG Personality)
+{
+    UNREFERENCED_PARAMETER(Personality);
+    return TRUE;
+}
+
+ULONG
+LxArchExecPersonality(
+    _In_ ULONG Personality)
+{
+    return ((Personality & 0xFF) != LX_PER_LINUX32) ? (Personality & ~0xFFUL) : Personality;
+}
+
+LONG
+LxArchPtraceSyscallNumber(
+    _In_ PKTRAP_FRAME TrapFrame,
+    _In_ LONG Recorded)
+{
+    UNREFERENCED_PARAMETER(Recorded);
+    return (LONG)TrapFrame->Context.A7;
+}
+
+LONG64
+LxArchPtraceSyscallReturn(
+    _In_ PCONTEXT Context)
+{
+    return (LONG64)Context->A0;
+}
+
+VOID
+LxArchClassifyFault(
+    _In_ PEXCEPTION_RECORD ExceptionRecord,
+    _In_ PKTRAP_FRAME TrapFrame,
+    _Inout_ PLONG Signal,
+    _Inout_ PLONG Code)
+{
+    UNREFERENCED_PARAMETER(ExceptionRecord);
+    UNREFERENCED_PARAMETER(TrapFrame);
+    UNREFERENCED_PARAMETER(Signal);
+    UNREFERENCED_PARAMETER(Code);
+}
+
 BOOLEAN
 LxArchEmulateInstruction(
     _In_ PEXCEPTION_RECORD ExceptionRecord,

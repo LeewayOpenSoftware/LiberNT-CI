@@ -1228,6 +1228,9 @@ ip6_output_if_src(struct pbuf *p, const ip6_addr_t *src, const ip6_addr_t *dest,
       dest = &dest_addr;
     }
 #endif /* LWIP_IPV6_SCOPES */
+#ifdef LWIP_HOOK_IP6_PATH_OUTPUT
+    LWIP_HOOK_IP6_PATH_OUTPUT(netif, src, dest, nexth, p);
+#endif
 
     /* generate IPv6 header */
     if (pbuf_add_header(p, IP6_HLEN)) {

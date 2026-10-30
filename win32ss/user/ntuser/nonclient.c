@@ -259,7 +259,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
    POINT capturePoint, pt;
    ULONG Style, ExStyle;
    UINT orgSnap = IntGetWindowSnapEdge(pwnd), snap = orgSnap;
-   BOOL thickframe;
+   BOOL thickframe, bMouseDrag;
    BOOL iconic;
    BOOL moved = FALSE;
    BOOL DragFullWindows = FALSE;
@@ -307,7 +307,6 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
    }
    else  /* SC_SIZE */
    {
-      if (!thickframe) return;
       if (hittest && (syscommand != SC_MOUSEMENU))
       {
           hittest += (HTLEFT - WMSZ_LEFT);
@@ -406,6 +405,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
 
    pwnd->head.pti->TIF_flags |= TIF_MOVESIZETRACKING;
 
+   bMouseDrag = (MsqGetDownKeyState(pti->MessageQueue) & MK_LBUTTON) != 0;
    for(;;)
    {
       int dx = 0, dy = 0;
@@ -421,12 +421,12 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
          break; // Exit on Return or Esc
 
       if (!g_bWindowSnapEnabled && (msg.message == WM_LBUTTONUP ||
-         (msg.message == WM_MOUSEMOVE && (MsqGetDownKeyState(pti->MessageQueue) & MK_LBUTTON) == 0)))
+         (msg.message == WM_MOUSEMOVE && bMouseDrag && (MsqGetDownKeyState(pti->MessageQueue) & MK_LBUTTON) == 0)))
       { // If no WindowSnapEnabled: Exit on button-up immediately
          break;
       }
       else if (g_bWindowSnapEnabled && (msg.message == WM_LBUTTONUP ||
-              (msg.message == WM_MOUSEMOVE && (MsqGetDownKeyState(pti->MessageQueue) & MK_LBUTTON) == 0)))
+              (msg.message == WM_MOUSEMOVE && bMouseDrag && (MsqGetDownKeyState(pti->MessageQueue) & MK_LBUTTON) == 0)))
       { // If WindowSnapEnabled: Decide whether to snap before exiting
          if (hittest == HTCAPTION && thickframe && /* Check for snapping if was moved by caption */
              IntIsSnapAllowedForWindow(pwnd) && (ExStyle & WS_EX_MDICHILD) == 0)
@@ -581,6 +581,10 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
               /* regular window moving */
               RECTL_vOffsetRect(&newRect, dx, dy);
           }
+          else if (hittest == HTBORDER)
+          {
+              RECTL_vOffsetRect(&newRect, dx, dy);
+          }
           if (ON_LEFT_BORDER(hittest)) newRect.left += dx;
           else if (ON_RIGHT_BORDER(hittest)) newRect.right += dx;
           if (ON_TOP_BORDER(hittest)) newRect.top += dy;
@@ -596,7 +600,7 @@ DefWndDoSizeMove(PWND pwnd, WORD wParam)
               unmodRect = newRect;
 
               /* Determine the hit location */
-              if (syscommand == SC_SIZE)
+              if (syscommand == SC_SIZE && hittest != HTBORDER)
               {
                   WPARAM wpSizingHit = 0;
 
@@ -2107,7 +2111,8 @@ GetNCHitEx(PWND pWnd, POINT pt)
       if (!RECTL_bPointInRect(&rcWindow, pt.x, pt.y ))
       {
             /* Check top sizing border */
-            if (pt.y < rcWindow.top)
+            if (pt.y < rcWindow.top -
+                       (((Style & WS_CAPTION) == WS_CAPTION) ? UserGetSystemMetrics(SM_CXPADDEDBORDER) : 0))
             {
                 if (pt.x < rcWindow.left+UserGetSystemMetrics(SM_CXSIZE)) return HTTOPLEFT;
                 if (pt.x >= rcWindow.right-UserGetSystemMetrics(SM_CXSIZE)) return HTTOPRIGHT;

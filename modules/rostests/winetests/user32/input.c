@@ -1174,6 +1174,20 @@ static void test_SendInput_keyboard_messages( WORD vkey, WORD scan, WCHAR wch, W
         {0},
     };
 
+#ifdef __REACTOS__
+    struct send_input_keyboard_test rshift_scan[] =
+    {
+        {.scan = 0x36, .flags = KEYEVENTF_SCANCODE, .expect_state = {[VK_SHIFT] = 0x80, [VK_RSHIFT] = 0x80},
+         .expect = {KEY_HOOK_(WM_KEYDOWN, 0x36, VK_RSHIFT, LLKHF_EXTENDED), KEY_MSG(WM_KEYDOWN, 0x36, VK_SHIFT), {0}}},
+        {.scan = scan, .flags = KEYEVENTF_SCANCODE, .expect_state = {[VK_SHIFT] = 0x80, [VK_RSHIFT] = 0x80, /*[vkey] = 0x80*/},
+         .expect = {KEY_HOOK(WM_KEYDOWN, scan, vkey), KEY_MSG(WM_KEYDOWN, scan, vkey), WIN_MSG(WM_CHAR, wch_shift, MAKELONG(1, scan)), {0}}},
+        {.scan = scan, .flags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, .expect_state = {[VK_SHIFT] = 0x80, [VK_RSHIFT] = 0x80},
+         .expect = {KEY_HOOK(WM_KEYUP, scan, vkey), KEY_MSG(WM_KEYUP, scan, vkey), {0}}},
+        {.scan = 0x36, .flags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP,
+         .expect = {KEY_HOOK_(WM_KEYUP, 0x36, VK_RSHIFT, LLKHF_EXTENDED), KEY_MSG(WM_KEYUP, 0x36, VK_SHIFT), {0}}},
+        {0},
+    };
+#else
     struct send_input_keyboard_test rshift_scan[] =
     {
         {.scan = 0x36, .flags = KEYEVENTF_SCANCODE, .expect_state = {[VK_SHIFT] = 0x80, [VK_LSHIFT] = 0x80},
@@ -1186,6 +1200,7 @@ static void test_SendInput_keyboard_messages( WORD vkey, WORD scan, WCHAR wch, W
          .expect = {KEY_HOOK(WM_KEYUP, 0x36, VK_RSHIFT), KEY_MSG(WM_KEYUP, 0x36, VK_SHIFT), {0}}},
         {0},
     };
+#endif
 
     struct send_input_keyboard_test rctrl_scan[] =
     {
@@ -2545,7 +2560,11 @@ static void test_GetRawInputBuffer(void)
     extra_info2 = GetMessageExtraInfo();
     ok( extra_info2 == extra_info1, "got %#llx, %#llx.\n", (unsigned long long)extra_info1, (unsigned long long)extra_info2 );
     GetCursorPos( &pt );
+#ifdef __REACTOS__
+    ok( t3 == t1, "got %lu, %lu.\n", t1, t3 );
+#else
     ok( t3 > t1, "got %lu, %lu.\n", t1, t3 );
+#endif
     ok( t3 < t2, "got %lu, %lu.\n", t2, t3 );
     ok( pos1 == pos2, "got pos1 (%ld, %ld), pos2 (%ld, %ld), pt (%ld %ld).\n",
         pos1 & 0xffff, pos1 >> 16, pos2 & 0xffff, pos2 >> 16, pt.x, pt.y );
@@ -2606,7 +2625,11 @@ static void test_GetRawInputBuffer(void)
     extra_info2 = GetMessageExtraInfo();
     GetCursorPos(&pt);
     ok( extra_info2 == extra_info1, "got %#llx, %#llx.\n", (unsigned long long)extra_info1, (unsigned long long)extra_info2 );
+#ifdef __REACTOS__
+    ok( t3 == t1, "got %lu, %lu.\n", t1, t3 );
+#else
     ok( t3 > t1, "got %lu, %lu.\n", t1, t3 );
+#endif
     ok( t3 < t2, "got %lu, %lu.\n", t2, t3 );
     ok( pos1 == pos2, "got pos1 (%ld, %ld), pos2 (%ld, %ld), pt (%ld %ld).\n",
         pos1 & 0xffff, pos1 >> 16, pos2 & 0xffff, pos2 >> 16, pt.x, pt.y );
@@ -4103,7 +4126,11 @@ static void test_SendInput_mouse_messages(void)
     };
     struct user_call button_up_hwnd_todo[] =
     {
+#ifdef __REACTOS__
+        MS_HOOK(WM_LBUTTONUP, 50, 50, .broken = TRUE),
+#else
         MS_HOOK(WM_LBUTTONUP, 50, 50),
+#endif
         WIN_MSG(WM_LBUTTONUP, (HWND)-1/*hwnd*/, 0, MAKELONG(50, 50), .todo = TRUE),
         {0/* placeholder for Wine spurious messages */},
         {0},

@@ -1,0 +1,5 @@
+Imported from microsoft/wil a1c0cbe1d7065aef6333399d3e25608eacdffc0f (2026-10-23), include/wil only
+LiberNT changes:
+  wil/common.h: the GCC atomic helpers for non-MSVC compilers are skipped under __REACTOS__, whose headers already define them
+  wil/common.h: WI_HEADER_INITIALIZATION_FUNCTION uses its inline-variable form for every non-MSVC compiler, so architectures outside the upstream list (riscv64, ppc) build
+  wil/result_macros.h: the assert annotation falls back to (void)0 for every non-MSVC compiler, as upstream does for Clang

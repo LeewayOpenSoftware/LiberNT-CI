@@ -157,7 +157,7 @@ AlpcpReplyToMessage(
         return Status;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Message = AlpcpFindPendingMessageForReply(Port, Header->MessageId, &Header->ClientId);
     if (!Message)
     {
@@ -178,7 +178,7 @@ AlpcpReplyToMessage(
             {
                 AlpcpFreeMessage(Message);
             }
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             AlpcpReleaseMessageAttributes(&CapturedMessage);
             if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
             return STATUS_REQUEST_CANCELED;
@@ -190,21 +190,21 @@ AlpcpReplyToMessage(
         (Message->PortMessage.CallbackId != Header->CallbackId) ||
         Message->ActiveCallback)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpReleaseMessageAttributes(&CapturedMessage);
         if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
         return STATUS_INVALID_MESSAGE;
     }
     if (sizeof(PORT_MESSAGE) + CopyLength > Message->AllocatedLength)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpReleaseMessageAttributes(&CapturedMessage);
         if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
         return STATUS_PORT_MESSAGE_TOO_LONG;
     }
     AlpcpRemovePending(Message);
     Message->State |= ALPC_MSG_STATE_REPLY_IN_PROGRESS;
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     if ((CapturedMessage.Attributes.ViewFlags & ALPC_VIEWFLG_UNMAP_EXISTING) && Message->Attributes.View) AlpcpDeleteView(Message->Attributes.View);
     AlpcpReleaseMessageAttributes(Message);
@@ -218,12 +218,12 @@ AlpcpReplyToMessage(
     if (CopyLength) RtlCopyMemory(&Message->PortMessage + 1, Buffer, CopyLength);
     if (Buffer) ExFreePoolWithTag(Buffer, 'RcpA');
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Message->State &= ~ALPC_MSG_STATE_REPLY_IN_PROGRESS;
     if (Message->State & ALPC_MSG_STATE_CANCELED)
     {
         AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_CANCELED | ALPC_MSG_STATE_DISCONNECTED, STATUS_MESSAGE_LOST);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_REQUEST_CANCELED;
     }
     if (Message->CallbackParent &&
@@ -233,10 +233,9 @@ AlpcpReplyToMessage(
 
         Parent->ActiveCallback = NULL;
         Message->CallbackParent = NULL;
-        if (Message->ServerThread && Message->ServerThread->AlpcMessage == Message)
+        if (Message->ServerThread)
         {
-            Message->ServerThread->AlpcMessage = NULL;
-            Message->ServerThread->AlpcMessageId = 0;
+            AlpcpReplaceThreadMessage(Message->ServerThread, Message, NULL);
         }
         Parent->WaitingThread = NULL;
         AlpcpRemovePending(Parent);
@@ -256,13 +255,13 @@ AlpcpReplyToMessage(
             Message->PortContext = ReplyPort->PortContext;
             AlpcpQueueMessage(ReplyPort, Message);
         }
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         ObDereferenceObject(ReplyPort);
     }
     else
     {
         AlpcpCompleteReply(Message);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
     }
     return STATUS_SUCCESS;
 }
@@ -279,7 +278,7 @@ AlpcpDeliverCallbackMessage(
     PETHREAD TargetThread;
     PETHREAD CurrentThread = PsGetCurrentThread();
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     Parent = AlpcpFindPendingMessageForReply(Port, Header->MessageId, &Header->ClientId);
     if (!Parent ||
         (Parent->ServerThread != CurrentThread) ||
@@ -287,7 +286,7 @@ AlpcpDeliverCallbackMessage(
         Parent->ActiveCallback ||
         !Parent->WaitingThread)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_INVALID_MESSAGE;
     }
 
@@ -298,7 +297,7 @@ AlpcpDeliverCallbackMessage(
                               ALPC_PORT_FLAG_DISCONNECTED)) ||
         TargetThread->LpcExitThreadCalled)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_PORT_DISCONNECTED;
     }
 
@@ -309,19 +308,16 @@ AlpcpDeliverCallbackMessage(
     Callback->WaitingThread = CurrentThread;
     Callback->ServerThread = TargetThread;
     Callback->PortMessage.MessageId = Parent->PortMessage.MessageId;
-    Callback->PortMessage.CallbackId = AlpcpNextCallbackId++;
-    if (!AlpcpNextCallbackId) AlpcpNextCallbackId = 1;
+    Callback->PortMessage.CallbackId = AlpcpAllocateCallbackId();
     Callback->PortMessage.ClientId = Parent->PortMessage.ClientId;
     Callback->Sequence = TargetPort->SequenceNo++;
 
     Parent->ActiveCallback = Callback;
     AlpcpMakePending(TargetPort, Callback);
-    CurrentThread->AlpcMessage = Callback;
-    CurrentThread->AlpcMessageId = Callback->PortMessage.MessageId;
-    TargetThread->AlpcMessage = Callback;
-    TargetThread->AlpcMessageId = Callback->PortMessage.MessageId;
+    AlpcpSetThreadMessage(CurrentThread, Callback);
+    AlpcpSetThreadMessage(TargetThread, Callback);
     AlpcpSignalWaiter(TargetThread);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
     return STATUS_SUCCESS;
 }
 
@@ -432,24 +428,22 @@ AlpcpQueueNewMessage(
         return STATUS_SUCCESS;
     }
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     QueuePort = AlpcpGetQueuePort(Port, &PortContext);
     if (!QueuePort || (Port->Flags & (ALPC_PORT_FLAG_CLOSED | ALPC_PORT_FLAG_DISCONNECTED)))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         AlpcpFreeMessage(Message);
         return STATUS_PORT_DISCONNECTED;
     }
     Message->PortContext = PortContext;
     Message->OwnerPort = QueuePort;
-    Message->PortMessage.MessageId = AlpcpNextMessageId++;
-    if (!AlpcpNextMessageId) AlpcpNextMessageId = 1;
+    Message->PortMessage.MessageId = AlpcpAllocateMessageId();
     Message->Sequence = QueuePort->SequenceNo++;
     if (Synchronous)
     {
         Message->WaitingThread = Thread;
-        Thread->AlpcMessage = Message;
-        Thread->AlpcMessageId = Message->PortMessage.MessageId;
+        AlpcpSetThreadMessage(Thread, Message);
     }
     else if (AsyncRequest)
     {
@@ -457,7 +451,7 @@ AlpcpQueueNewMessage(
         Message->ReplyPort = Port;
     }
     AlpcpQueueMessage(QueuePort, Message);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     *OutMessage = Message;
     return STATUS_SUCCESS;
@@ -508,11 +502,11 @@ AlpcpReturnMessageToQueue(
     NTSTATUS Status;
     SIZE_T RequiredLength = (USHORT)Message->PortMessage.u1.s1.TotalLength;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     if (Port->Flags & ALPC_PORT_FLAG_CLOSED)
     {
         AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_DISCONNECTED, STATUS_PORT_DISCONNECTED);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         return STATUS_PORT_DISCONNECTED;
     }
     Message->QueuePort = Port;
@@ -521,7 +515,7 @@ AlpcpReturnMessageToQueue(
     Port->MainQueueLength++;
     if (Port->Flags & ALPC_PORT_FLAG_WAITABLE) KeSetEvent(&Port->WaitEvent, IO_NO_INCREMENT, FALSE);
     AlpcpWakeWaiter(Port);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     Status = BufferLength ? AlpcpCopyOut(BufferLength, &RequiredLength, sizeof(RequiredLength), PreviousMode) : STATUS_SUCCESS;
     return NT_SUCCESS(Status) ? STATUS_BUFFER_TOO_SMALL : Status;
@@ -548,18 +542,12 @@ AlpcpReceiveToUser(
     BOOLEAN Pending = FALSE;
     BOOLEAN ThreadCallback = FALSE;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     ReceivePort = AlpcpGetReceivePort(Port);
-    Message = (PKALPC_MESSAGE)Thread->AlpcMessage;
-    if (Message && (Message->State & ALPC_MSG_STATE_CALLBACK) && (Message->ServerThread == Thread))
-    {
-        ThreadCallback = TRUE;
-    }
-    else
-    {
-        Message = NULL;
-    }
-    AlpcpReleaseLock();
+    Message = AlpcpFindThreadCallback(Port, Thread);
+    if (!Message && (ReceivePort != Port)) Message = AlpcpFindThreadCallback(ReceivePort, Thread);
+    ThreadCallback = (Message != NULL);
+    AlpcpReleasePortLock(Port);
 
     if (!ThreadCallback)
     {
@@ -579,7 +567,7 @@ AlpcpReceiveToUser(
     }
     else
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (!AlpcpReclaimCanceledMessage(Message) &&
             (Message->State & (ALPC_MSG_STATE_CONNECTION | ALPC_MSG_STATE_SYNC)) &&
             !(Message->State & ALPC_MSG_STATE_REPLIED))
@@ -588,7 +576,7 @@ AlpcpReceiveToUser(
             Message->ServerThread = Thread;
             Pending = TRUE;
         }
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
     }
 
     Status = AlpcpDeliverToUser(Port, Message, ReceiveMessage, BufferLength, AvailableLength, ReceiveAttributes, UserReceiveAttributes, PreviousMode);
@@ -599,9 +587,9 @@ AlpcpReceiveToUser(
     }
     else if (!NT_SUCCESS(Status))
     {
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_DISCONNECTED, STATUS_LPC_REPLY_LOST);
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
     }
     return Status;
 }
@@ -717,10 +705,9 @@ AlpcpSendWaitReceivePort(
 
             if (ContinueMessage)
             {
-                AlpcpAcquireLock();
-                PsGetCurrentThread()->AlpcMessage = ContinueMessage;
-                PsGetCurrentThread()->AlpcMessageId = ContinueMessage->PortMessage.MessageId;
-                AlpcpReleaseLock();
+                AlpcpAcquirePortLock(Port);
+                AlpcpSetThreadMessage(PsGetCurrentThread(), ContinueMessage);
+                AlpcpReleasePortLock(Port);
 
                 if (ReceiveMessage)
                 {
@@ -870,7 +857,7 @@ NtAlpcCancelMessage(
     Status = AlpcpReferencePortByHandle(PortHandle, PORT_CONNECT, PreviousMode, &Port);
     if (!NT_SUCCESS(Status)) return Status;
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     QueuePort = AlpcpGetQueuePort(Port, NULL);
     if (QueuePort)
     {
@@ -892,7 +879,7 @@ NtAlpcCancelMessage(
 
     if (!Message)
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         ObDereferenceObject(Port);
         return STATUS_MESSAGE_NOT_FOUND;
     }
@@ -906,7 +893,7 @@ NtAlpcCancelMessage(
                          Message->Attributes.ClientContext;
         if (MessageContext != Context.MessageContext)
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             ObDereferenceObject(Port);
             return STATUS_CONTEXT_MISMATCH;
         }
@@ -916,14 +903,14 @@ NtAlpcCancelMessage(
                           ALPC_MSG_STATE_DISCONNECTED |
                           ALPC_MSG_STATE_REPLIED))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         ObDereferenceObject(Port);
         return STATUS_REQUEST_CANCELED;
     }
 
     if ((Flags & ALPC_CANCELFLG_TRY_CANCEL) && !(Message->State & ALPC_MSG_STATE_QUEUED))
     {
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
         ObDereferenceObject(Port);
         return STATUS_MESSAGE_RETRIEVED;
     }
@@ -934,7 +921,7 @@ NtAlpcCancelMessage(
     Message->PortMessage.u1.s1.TotalLength = sizeof(PORT_MESSAGE);
     Message->PortMessage.u2.s2.Type = (CSHORT)(((USHORT)Message->PortMessage.u2.s2.Type & ~(0x00FF | LPC_CONTINUATION_REQUIRED)) | LPC_CANCELED);
     AlpcpCompleteWithStatus(Message, ALPC_MSG_STATE_CANCELED, STATUS_MESSAGE_LOST);
-    AlpcpReleaseLock();
+    AlpcpReleasePortLock(Port);
 
     ObDereferenceObject(Port);
     return Status;

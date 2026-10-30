@@ -280,6 +280,9 @@ HalpRiscvQuerySystemInformation(
                 *ReturnedLength = sizeof(*AcpiInformation);
             return STATUS_NOT_FOUND;
 
+        case HalSecondaryInterruptInformation:
+            return HalpSecondaryQueryInformation(BufferSize, Buffer, ReturnedLength);
+
         case HalFrameBufferCachingInformation:
         case HalDisplayBiosInformation:
         case HalQueryAMLIIllegalIOPortAddresses:
@@ -312,6 +315,8 @@ HalpRiscvSetSystemInformation(
     PHAL_PROFILE_SOURCE_INTERVAL Interval = Buffer;
     ULONG Index;
 
+    if (InformationClass == HalRegisterSecondaryInterruptInterface)
+        return HalpSecondaryRegisterInterface(BufferSize, Buffer);
     if (InformationClass != HalProfileSourceInterval)
         return HalpRiscvDefaultSetSystemInformation(InformationClass, BufferSize, Buffer);
     if (BufferSize < sizeof(*Interval))

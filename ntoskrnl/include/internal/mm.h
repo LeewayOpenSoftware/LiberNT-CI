@@ -793,7 +793,6 @@ MiFreePoolPages(
 
 /* pool.c *******************************************************************/
 
-_Requires_lock_held_(PspQuotaLock)
 BOOLEAN
 NTAPI
 MmRaisePoolQuota(
@@ -802,7 +801,6 @@ MmRaisePoolQuota(
     _Out_ PSIZE_T NewMaxQuota
 );
 
-_Requires_lock_held_(PspQuotaLock)
 VOID
 NTAPI
 MmReturnPoolQuota(

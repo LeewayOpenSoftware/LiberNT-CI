@@ -10,10 +10,26 @@
 POBJECT_TYPE AlpcPortObjectType;
 POBJECT_TYPE LpcPortObjectType;
 POBJECT_TYPE LpcWaitablePortObjectType;
-KGUARDED_MUTEX AlpcpLock;
-ULONG AlpcpNextMessageId = 1;
-ULONG AlpcpNextCallbackId = 1;
-LIST_ENTRY AlpcpPortList;
+#define ALPC_GLOBAL_LOCK_SLOTS  32
+#define ALPC_THREAD_LOCKS       32
+
+typedef struct DECLSPEC_CACHEALIGN _ALPC_GLOBAL_LOCK_SLOT
+{
+    EX_PUSH_LOCK Lock;
+} ALPC_GLOBAL_LOCK_SLOT;
+
+typedef struct DECLSPEC_CACHEALIGN _ALPC_THREAD_LOCK
+{
+    KSPIN_LOCK Lock;
+} ALPC_THREAD_LOCK;
+
+static ALPC_GLOBAL_LOCK_SLOT AlpcpGlobalLock[ALPC_GLOBAL_LOCK_SLOTS];
+static ALPC_THREAD_LOCK AlpcpThreadLocks[ALPC_THREAD_LOCKS];
+static PKTHREAD AlpcpExclusiveOwner;
+static LONG AlpcpNextMessageId;
+static LONG AlpcpNextCallbackId;
+static EX_PUSH_LOCK AlpcpPortListLock;
+static LIST_ENTRY AlpcpPortList;
 static LIST_ENTRY AlpcpDeferredFreeList;
 static LIST_ENTRY AlpcpDeferredCommunicationList;
 
@@ -47,8 +63,13 @@ LpcInitSystem(VOID)
 {
     OBJECT_TYPE_INITIALIZER ObjectTypeInitializer;
     UNICODE_STRING Name;
+    ULONG Index;
 
-    KeInitializeGuardedMutex(&AlpcpLock);
+    for (Index = 0; Index < ALPC_GLOBAL_LOCK_SLOTS; Index++)
+        ExInitializePushLock(&AlpcpGlobalLock[Index].Lock);
+    for (Index = 0; Index < ALPC_THREAD_LOCKS; Index++)
+        KeInitializeSpinLock(&AlpcpThreadLocks[Index].Lock);
+    ExInitializePushLock(&AlpcpPortListLock);
     InitializeListHead(&AlpcpPortList);
     InitializeListHead(&AlpcpDeferredFreeList);
     InitializeListHead(&AlpcpDeferredCommunicationList);
@@ -84,8 +105,6 @@ AlpcpAllocateMessage(
     PKALPC_MESSAGE Message;
     ULONG Allocated;
 
-    UNREFERENCED_PARAMETER(Port);
-
     if (Capacity < sizeof(PORT_MESSAGE)) Capacity = sizeof(PORT_MESSAGE);
 
     if (Capacity <= ALPC_SMALL_MESSAGE_SIZE)
@@ -105,7 +124,82 @@ AlpcpAllocateMessage(
     InitializeListHead(&Message->CanceledEntry);
     InitializeListHead(&Message->DeferredFreeEntry);
     Message->AllocatedLength = Allocated;
+    Message->Domain = Port->Domain;
+    AlpcpReferenceDomain(Message->Domain);
     return Message;
+}
+
+static
+ULONG
+AlpcpGlobalLockSlot(VOID)
+{
+    ULONG_PTR Thread = (ULONG_PTR)KeGetCurrentThread();
+
+    return (ULONG)(((Thread >> 6) * 0x9E3779B1UL) >> 27) & (ALPC_GLOBAL_LOCK_SLOTS - 1);
+}
+
+static
+PKSPIN_LOCK
+AlpcpThreadLock(
+    _In_ PETHREAD Thread)
+{
+    ULONG_PTR Value = (ULONG_PTR)Thread;
+
+    return &AlpcpThreadLocks[(((Value >> 6) * 0x9E3779B1UL) >> 27) & (ALPC_THREAD_LOCKS - 1)].Lock;
+}
+
+static
+VOID
+AlpcpFreeDeferredLists(
+    _In_ PLIST_ENTRY DeferredList,
+    _In_ PLIST_ENTRY DeferredCommunicationList)
+{
+    PLIST_ENTRY Entry;
+    PKALPC_MESSAGE Message;
+    PALPC_COMMUNICATION_INFO Info;
+
+    while (!IsListEmpty(DeferredList))
+    {
+        Entry = RemoveHeadList(DeferredList);
+        InitializeListHead(Entry);
+        Message = CONTAINING_RECORD(Entry, KALPC_MESSAGE, DeferredFreeEntry);
+        AlpcpFreeMessageContents(Message);
+    }
+    while (!IsListEmpty(DeferredCommunicationList))
+    {
+        Entry = RemoveHeadList(DeferredCommunicationList);
+        InitializeListHead(Entry);
+        Info = CONTAINING_RECORD(Entry, ALPC_COMMUNICATION_INFO, CommunicationList);
+        AlpcpFreeCommunicationInfoContents(Info);
+    }
+}
+
+static
+VOID
+AlpcpMoveList(
+    _Inout_ PLIST_ENTRY Destination,
+    _Inout_ PLIST_ENTRY Source)
+{
+    PLIST_ENTRY Entry;
+
+    InitializeListHead(Destination);
+    while (!IsListEmpty(Source))
+    {
+        Entry = RemoveHeadList(Source);
+        InsertTailList(Destination, Entry);
+    }
+}
+
+VOID
+NTAPI
+AlpcpAcquireLock(VOID)
+{
+    ULONG Index;
+
+    KeEnterGuardedRegion();
+    for (Index = 0; Index < ALPC_GLOBAL_LOCK_SLOTS; Index++)
+        ExAcquirePushLockExclusive(&AlpcpGlobalLock[Index].Lock);
+    AlpcpExclusiveOwner = KeGetCurrentThread();
 }
 
 VOID
@@ -114,39 +208,143 @@ AlpcpReleaseLock(VOID)
 {
     LIST_ENTRY DeferredList;
     LIST_ENTRY DeferredCommunicationList;
-    PLIST_ENTRY Entry;
-    PKALPC_MESSAGE Message;
-    PALPC_COMMUNICATION_INFO Info;
+    ULONG Index;
 
-    ASSERT(AlpcpLock.Owner == KeGetCurrentThread());
-    InitializeListHead(&DeferredList);
-    InitializeListHead(&DeferredCommunicationList);
-    while (!IsListEmpty(&AlpcpDeferredFreeList))
-    {
-        Entry = RemoveHeadList(&AlpcpDeferredFreeList);
-        InsertTailList(&DeferredList, Entry);
-    }
-    while (!IsListEmpty(&AlpcpDeferredCommunicationList))
-    {
-        Entry = RemoveHeadList(&AlpcpDeferredCommunicationList);
-        InsertTailList(&DeferredCommunicationList, Entry);
-    }
-    KeReleaseGuardedMutex(&AlpcpLock);
+    ASSERT(AlpcpExclusiveOwner == KeGetCurrentThread());
+    AlpcpMoveList(&DeferredList, &AlpcpDeferredFreeList);
+    AlpcpMoveList(&DeferredCommunicationList, &AlpcpDeferredCommunicationList);
+    AlpcpExclusiveOwner = NULL;
+    for (Index = ALPC_GLOBAL_LOCK_SLOTS; Index > 0; Index--)
+        ExReleasePushLockExclusive(&AlpcpGlobalLock[Index - 1].Lock);
+    KeLeaveGuardedRegion();
 
-    while (!IsListEmpty(&DeferredList))
+    AlpcpFreeDeferredLists(&DeferredList, &DeferredCommunicationList);
+}
+
+VOID
+NTAPI
+AlpcpAcquireDomainLock(
+    _In_ PALPC_PORT_DOMAIN Domain)
+{
+    KeEnterGuardedRegion();
+    ExAcquirePushLockShared(&AlpcpGlobalLock[AlpcpGlobalLockSlot()].Lock);
+    KeAcquireGuardedMutex(&Domain->Lock);
+}
+
+VOID
+NTAPI
+AlpcpReleaseDomainLock(
+    _In_ PALPC_PORT_DOMAIN Domain)
+{
+    LIST_ENTRY DeferredList;
+    LIST_ENTRY DeferredCommunicationList;
+
+    ASSERT(Domain->Lock.Owner == KeGetCurrentThread());
+    AlpcpMoveList(&DeferredList, &Domain->DeferredFreeList);
+    AlpcpMoveList(&DeferredCommunicationList, &Domain->DeferredCommunicationList);
+    KeReleaseGuardedMutex(&Domain->Lock);
+    ExReleasePushLockShared(&AlpcpGlobalLock[AlpcpGlobalLockSlot()].Lock);
+    KeLeaveGuardedRegion();
+
+    AlpcpFreeDeferredLists(&DeferredList, &DeferredCommunicationList);
+}
+
+static
+PALPC_PORT_DOMAIN
+AlpcpAllocateDomain(VOID)
+{
+    PALPC_PORT_DOMAIN Domain;
+
+    Domain = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Domain), 'DcpA');
+    if (!Domain) return NULL;
+
+    KeInitializeGuardedMutex(&Domain->Lock);
+    Domain->ReferenceCount = 1;
+    InitializeListHead(&Domain->DeferredFreeList);
+    InitializeListHead(&Domain->DeferredCommunicationList);
+    return Domain;
+}
+
+VOID
+NTAPI
+AlpcpReferenceDomain(
+    _In_ PALPC_PORT_DOMAIN Domain)
+{
+    InterlockedIncrement(&Domain->ReferenceCount);
+}
+
+VOID
+NTAPI
+AlpcpDereferenceDomain(
+    _In_ PALPC_PORT_DOMAIN Domain)
+{
+    if (InterlockedDecrement(&Domain->ReferenceCount) != 0) return;
+
+    ASSERT(IsListEmpty(&Domain->DeferredFreeList));
+    ASSERT(IsListEmpty(&Domain->DeferredCommunicationList));
+    ExFreePoolWithTag(Domain, 'DcpA');
+}
+
+ULONG
+NTAPI
+AlpcpAllocateMessageId(VOID)
+{
+    ULONG Id;
+
+    do
     {
-        Entry = RemoveHeadList(&DeferredList);
-        InitializeListHead(Entry);
-        Message = CONTAINING_RECORD(Entry, KALPC_MESSAGE, DeferredFreeEntry);
-        AlpcpFreeMessageContents(Message);
-    }
-    while (!IsListEmpty(&DeferredCommunicationList))
+        Id = (ULONG)InterlockedIncrement(&AlpcpNextMessageId);
+    } while (!Id);
+    return Id;
+}
+
+ULONG
+NTAPI
+AlpcpAllocateCallbackId(VOID)
+{
+    ULONG Id;
+
+    do
     {
-        Entry = RemoveHeadList(&DeferredCommunicationList);
-        InitializeListHead(Entry);
-        Info = CONTAINING_RECORD(Entry, ALPC_COMMUNICATION_INFO, CommunicationList);
-        AlpcpFreeCommunicationInfoContents(Info);
+        Id = (ULONG)InterlockedIncrement(&AlpcpNextCallbackId);
+    } while (!Id);
+    return Id;
+}
+
+VOID
+NTAPI
+AlpcpSetThreadMessage(
+    _In_ PETHREAD Thread,
+    _In_opt_ PKALPC_MESSAGE Message)
+{
+    ULONG MessageId = Message ? Message->PortMessage.MessageId : 0;
+    PKSPIN_LOCK Lock = AlpcpThreadLock(Thread);
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(Lock, &OldIrql);
+    Thread->AlpcMessage = Message;
+    Thread->AlpcMessageId = MessageId;
+    KeReleaseSpinLock(Lock, OldIrql);
+}
+
+VOID
+NTAPI
+AlpcpReplaceThreadMessage(
+    _In_ PETHREAD Thread,
+    _In_ PKALPC_MESSAGE Expected,
+    _In_opt_ PKALPC_MESSAGE Message)
+{
+    ULONG MessageId = Message ? Message->PortMessage.MessageId : 0;
+    PKSPIN_LOCK Lock = AlpcpThreadLock(Thread);
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(Lock, &OldIrql);
+    if (Thread->AlpcMessage == Expected)
+    {
+        Thread->AlpcMessage = Message;
+        Thread->AlpcMessageId = MessageId;
     }
+    KeReleaseSpinLock(Lock, OldIrql);
 }
 
 VOID
@@ -173,9 +371,14 @@ AlpcpFreeMessage(
     ASSERT(IsListEmpty(&Message->CanceledEntry));
     ASSERT(IsListEmpty(&Message->DeferredFreeEntry));
 
-    if (AlpcpLock.Owner == KeGetCurrentThread())
+    if (AlpcpExclusiveOwner == KeGetCurrentThread())
     {
         InsertTailList(&AlpcpDeferredFreeList, &Message->DeferredFreeEntry);
+        return;
+    }
+    if (Message->Domain->Lock.Owner == KeGetCurrentThread())
+    {
+        InsertTailList(&Message->Domain->DeferredFreeList, &Message->DeferredFreeEntry);
         return;
     }
 
@@ -189,6 +392,7 @@ AlpcpFreeMessageContents(
 {
     PVOID Object;
     PEPROCESS SenderProcess;
+    PALPC_PORT_DOMAIN Domain = Message->Domain;
 
     ASSERT(IsListEmpty(&Message->Entry));
     ASSERT(IsListEmpty(&Message->CanceledEntry));
@@ -217,6 +421,7 @@ AlpcpFreeMessageContents(
     {
         ExFreePoolWithTag(Message, 'McpA');
     }
+    AlpcpDereferenceDomain(Domain);
 }
 
 VOID
@@ -262,6 +467,7 @@ NTSTATUS
 NTAPI
 AlpcpCreatePort(
     _Out_ PALPC_PORT *NewPort,
+    _In_opt_ PALPC_PORT DomainPort,
     _In_ KPROCESSOR_MODE AccessMode,
     _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
     _In_opt_ PALPC_PORT_ATTRIBUTES PortAttributes,
@@ -272,11 +478,28 @@ AlpcpCreatePort(
 {
     NTSTATUS Status;
     PALPC_PORT Port;
+    PALPC_PORT_DOMAIN Domain;
+
+    if (DomainPort)
+    {
+        Domain = DomainPort->Domain;
+        AlpcpReferenceDomain(Domain);
+    }
+    else
+    {
+        Domain = AlpcpAllocateDomain();
+        if (!Domain) return STATUS_INSUFFICIENT_RESOURCES;
+    }
 
     Status = ObCreateObject(AccessMode, AlpcPortObjectType, ObjectAttributes, AccessMode, NULL, sizeof(ALPC_PORT), 0, 0, (PVOID*)&Port);
-    if (!NT_SUCCESS(Status)) return Status;
+    if (!NT_SUCCESS(Status))
+    {
+        AlpcpDereferenceDomain(Domain);
+        return Status;
+    }
 
     RtlZeroMemory(Port, sizeof(ALPC_PORT));
+    Port->Domain = Domain;
     KeInitializeEvent(&Port->WaitEvent, NotificationEvent, FALSE);
     InitializeListHead(&Port->PortListEntry);
     InitializeListHead(&Port->MainQueue);
@@ -320,9 +543,11 @@ AlpcpCreatePort(
         Port->SecurityQos = Port->PortAttributes.SecurityQos;
     }
 
-    AlpcpAcquireLock();
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&AlpcpPortListLock);
     InsertTailList(&AlpcpPortList, &Port->PortListEntry);
-    AlpcpReleaseLock();
+    ExReleasePushLockExclusive(&AlpcpPortListLock);
+    KeLeaveCriticalRegion();
 
     *NewPort = Port;
     return STATUS_SUCCESS;
@@ -379,10 +604,15 @@ NTAPI
 AlpcpSignalWaiter(
     _In_ PETHREAD Thread)
 {
+    PKSPIN_LOCK Lock = AlpcpThreadLock(Thread);
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(Lock, &OldIrql);
     if (!KeReadStateSemaphore(&Thread->AlpcWaitSemaphore))
     {
         KeReleaseSemaphore(&Thread->AlpcWaitSemaphore, 1, 1, FALSE);
     }
+    KeReleaseSpinLock(Lock, OldIrql);
 }
 
 VOID
@@ -482,7 +712,7 @@ AlpcpWaitForMessage(
     *Message = NULL;
     AlpcpComputeTimeout(Timeout, &Absolute, &Effective);
 
-    AlpcpAcquireLock();
+    AlpcpAcquirePortLock(Port);
     for (;;)
     {
         if (!IsListEmpty(&Port->MainQueue))
@@ -496,29 +726,29 @@ AlpcpWaitForMessage(
             }
             *Message = CONTAINING_RECORD(Entry, KALPC_MESSAGE, Entry);
             (*Message)->State &= ~ALPC_MSG_STATE_QUEUED;
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             return STATUS_SUCCESS;
         }
 
         if (Port->Flags & ALPC_PORT_FLAG_CLOSED)
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             return (Port->Flags & ALPC_PORT_FLAG_LPC) ? STATUS_PORT_DISCONNECTED : STATUS_PORT_CLOSED;
         }
 
         if (Effective && (Effective->QuadPart == 0))
         {
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             return STATUS_TIMEOUT;
         }
 
         InsertTailList(&Port->Waiters, &Thread->AlpcWaitListEntry);
         Port->Waiting++;
-        AlpcpReleaseLock();
+        AlpcpReleasePortLock(Port);
 
         Status = KeWaitForSingleObject(&Thread->AlpcWaitSemaphore, WrLpcReceive, WaitMode, Alertable, Effective);
 
-        AlpcpAcquireLock();
+        AlpcpAcquirePortLock(Port);
         if (!IsListEmpty(&Thread->AlpcWaitListEntry))
         {
             RemoveEntryList(&Thread->AlpcWaitListEntry);
@@ -531,7 +761,7 @@ AlpcpWaitForMessage(
             {
                 AlpcpWakeWaiter(Port);
             }
-            AlpcpReleaseLock();
+            AlpcpReleasePortLock(Port);
             return Status;
         }
     }
@@ -547,6 +777,7 @@ AlpcpWaitForReply(
     _Out_opt_ PKALPC_MESSAGE *ReceivedMessage)
 {
     PETHREAD Thread = PsGetCurrentThread();
+    PALPC_PORT_DOMAIN Domain = Message->Domain;
     NTSTATUS Status;
     LARGE_INTEGER Absolute;
     PLARGE_INTEGER Effective;
@@ -558,19 +789,18 @@ AlpcpWaitForReply(
     {
         Status = KeWaitForSingleObject(&Thread->AlpcWaitSemaphore, WrLpcReply, WaitMode, Alertable, Effective);
 
-        AlpcpAcquireLock();
+        AlpcpAcquireDomainLock(Domain);
         if (Thread->AlpcMessage && Thread->AlpcMessage != Message)
         {
             if (ReceivedMessage)
                 *ReceivedMessage = Thread->AlpcMessage;
-            AlpcpReleaseLock();
+            AlpcpReleaseDomainLock(Domain);
             return STATUS_SUCCESS;
         }
         if (Message->State & ALPC_MSG_STATE_CANCELED)
         {
             Status = Message->CompletionStatus ? Message->CompletionStatus : STATUS_MESSAGE_LOST;
-            Thread->AlpcMessage = NULL;
-            Thread->AlpcMessageId = 0;
+            AlpcpSetThreadMessage(Thread, NULL);
             Message->WaitingThread = NULL;
             if (Message->State & ALPC_MSG_STATE_IN_CANCELED_QUEUE)
             {
@@ -599,7 +829,7 @@ AlpcpWaitForReply(
                 Message->CancelQueuePort = NULL;
             }
             AlpcpFreeMessage(Message);
-            AlpcpReleaseLock();
+            AlpcpReleaseDomainLock(Domain);
             return Status;
         }
         if (Message->State & (ALPC_MSG_STATE_REPLIED |
@@ -608,21 +838,19 @@ AlpcpWaitForReply(
                               ALPC_MSG_STATE_DISCONNECTED))
         {
             if (ReceivedMessage) *ReceivedMessage = Message;
-            Thread->AlpcMessage = NULL;
-            Thread->AlpcMessageId = 0;
-            AlpcpReleaseLock();
+            AlpcpSetThreadMessage(Thread, NULL);
+            AlpcpReleaseDomainLock(Domain);
             return STATUS_SUCCESS;
         }
 
         if (Status != STATUS_SUCCESS)
         {
             AlpcpDetachWaiter(Message);
-            Thread->AlpcMessage = NULL;
-            Thread->AlpcMessageId = 0;
-            AlpcpReleaseLock();
+            AlpcpSetThreadMessage(Thread, NULL);
+            AlpcpReleaseDomainLock(Domain);
             return Status;
         }
-        AlpcpReleaseLock();
+        AlpcpReleaseDomainLock(Domain);
     }
 }
 
@@ -656,12 +884,9 @@ AlpcpDetachWaiter(
     if (Parent && (Parent->ActiveCallback == Message))
     {
         Parent->ActiveCallback = NULL;
-        if (Message->ServerThread &&
-            (Message->ServerThread->AlpcMessage == Message))
+        if (Message->ServerThread)
         {
-            Message->ServerThread->AlpcMessage = Parent;
-            Message->ServerThread->AlpcMessageId =
-                Parent->PortMessage.MessageId;
+            AlpcpReplaceThreadMessage(Message->ServerThread, Message, Parent);
         }
         Message->CallbackParent = NULL;
     }
@@ -704,6 +929,30 @@ AlpcpFindPendingMessageForReply(
     if ((AlpcpPortType(Port) == ALPC_PORT_TYPE_SERVER) && Info && Info->ConnectionPort)
     {
         return AlpcpFindPendingMessage(Info->ConnectionPort, MessageId, ClientId);
+    }
+    return NULL;
+}
+
+PKALPC_MESSAGE
+NTAPI
+AlpcpFindThreadCallback(
+    _In_ PALPC_PORT Port,
+    _In_ PETHREAD Thread)
+{
+    PVOID Current = Thread->AlpcMessage;
+    PLIST_ENTRY Entry;
+    PKALPC_MESSAGE Message;
+
+    if (!Current) return NULL;
+    for (Entry = Port->PendingQueue.Flink; Entry != &Port->PendingQueue; Entry = Entry->Flink)
+    {
+        Message = CONTAINING_RECORD(Entry, KALPC_MESSAGE, Entry);
+        if ((Message == Current) &&
+            (Message->State & ALPC_MSG_STATE_CALLBACK) &&
+            (Message->ServerThread == Thread))
+        {
+            return Message;
+        }
     }
     return NULL;
 }
@@ -805,12 +1054,9 @@ AlpcpCompleteWithStatus(
     if (Parent && (Parent->ActiveCallback == Message))
     {
         Parent->ActiveCallback = NULL;
-        if (Message->ServerThread &&
-            (Message->ServerThread->AlpcMessage == Message))
+        if (Message->ServerThread)
         {
-            Message->ServerThread->AlpcMessage = Parent;
-            Message->ServerThread->AlpcMessageId =
-                Parent->PortMessage.MessageId;
+            AlpcpReplaceThreadMessage(Message->ServerThread, Message, Parent);
         }
         Message->CallbackParent = NULL;
     }
@@ -908,8 +1154,7 @@ AlpcpSendPortClosed(
     Closed->h.u2.ZeroInit = 0;
     Closed->h.u2.s2.Type = LPC_PORT_CLOSED;
     Closed->h.ClientId = Port->Creator;
-    Closed->h.MessageId = AlpcpNextMessageId++;
-    if (!AlpcpNextMessageId) AlpcpNextMessageId = 1;
+    Closed->h.MessageId = AlpcpAllocateMessageId();
     Closed->CreateTime = PsGetCurrentProcess()->CreateTime;
     Message->PortContext = PortContext;
     AlpcpSetMessageSenderPort(Message, Port);
@@ -973,7 +1218,7 @@ AlpcpRundownPendingReplies(
     PALPC_COMMUNICATION_INFO CommunicationInfo;
     PKALPC_MESSAGE Message;
 
-    ASSERT(AlpcpLock.Owner == KeGetCurrentThread());
+    ASSERT(AlpcpExclusiveOwner == KeGetCurrentThread());
 
     for (PortEntry = AlpcpPortList.Flink; PortEntry != &AlpcpPortList; PortEntry = PortEntry->Flink)
     {
@@ -1006,9 +1251,14 @@ AlpcpDereferenceCommunicationInfo(
         InitializeListHead(&Info->CommunicationList);
     }
 
-    if (AlpcpLock.Owner == KeGetCurrentThread())
+    if (AlpcpExclusiveOwner == KeGetCurrentThread())
     {
         InsertTailList(&AlpcpDeferredCommunicationList, &Info->CommunicationList);
+        return;
+    }
+    if (Info->Domain->Lock.Owner == KeGetCurrentThread())
+    {
+        InsertTailList(&Info->Domain->DeferredCommunicationList, &Info->CommunicationList);
         return;
     }
 
@@ -1021,11 +1271,13 @@ AlpcpFreeCommunicationInfoContents(
     _In_ PALPC_COMMUNICATION_INFO Info)
 {
     PALPC_PORT ConnectionPort = Info->ConnectionPort;
+    PALPC_PORT_DOMAIN Domain = Info->Domain;
 
     ASSERT(IsListEmpty(&Info->CommunicationList));
     Info->ConnectionPort = NULL;
     ExFreePoolWithTag(Info, 'IcpA');
     if (ConnectionPort) ObDereferenceObject(ConnectionPort);
+    AlpcpDereferenceDomain(Domain);
 }
 
 NTSTATUS
@@ -1077,9 +1329,11 @@ AlpcpDisconnectPort(
 
     if (AlpcpPortType(Port) == ALPC_PORT_TYPE_CLIENT) AlpcpSendPortClosed(Port);
 
+    ExAcquirePushLockShared(&AlpcpPortListLock);
     if (AlpcpPortType(Port) == ALPC_PORT_TYPE_SERVER) AlpcpRundownPendingReplies(Port);
 
     AlpcpMarkSenderDisconnected(Port);
+    ExReleasePushLockShared(&AlpcpPortListLock);
     AlpcpRundownQueues(Port);
     AlpcpReleaseLock();
     return STATUS_SUCCESS;
@@ -1129,11 +1383,13 @@ AlpcpDeletePort(
         if (Info->ClientCommunicationPort == Port) Info->ClientCommunicationPort = NULL;
         if (Info->ServerCommunicationPort == Port) Info->ServerCommunicationPort = NULL;
     }
+    ExAcquirePushLockExclusive(&AlpcpPortListLock);
     if (!IsListEmpty(&Port->PortListEntry))
     {
         RemoveEntryList(&Port->PortListEntry);
         InitializeListHead(&Port->PortListEntry);
     }
+    ExReleasePushLockExclusive(&AlpcpPortListLock);
     AlpcpRundownQueues(Port);
     AlpcpReleaseLock();
 
@@ -1168,6 +1424,7 @@ AlpcpDeletePort(
     OwnerProcess = Port->OwnerProcess;
     Port->OwnerProcess = NULL;
     if (OwnerProcess) ObDereferenceObject(OwnerProcess);
+    if (Port->Domain) AlpcpDereferenceDomain(Port->Domain);
 }
 
 VOID
@@ -1177,6 +1434,12 @@ LpcExitThread(
 {
     PKALPC_MESSAGE Message;
 
+    if (!Thread->AlpcMessage && IsListEmpty(&Thread->AlpcWaitListEntry))
+    {
+        Thread->LpcExitThreadCalled = TRUE;
+        return;
+    }
+
     AlpcpAcquireLock();
     Thread->LpcExitThreadCalled = TRUE;
     if (!IsListEmpty(&Thread->AlpcWaitListEntry))
@@ -1185,8 +1448,7 @@ LpcExitThread(
         InitializeListHead(&Thread->AlpcWaitListEntry);
     }
     Message = Thread->AlpcMessage;
-    Thread->AlpcMessage = NULL;
-    Thread->AlpcMessageId = 0;
+    AlpcpSetThreadMessage(Thread, NULL);
     if (Message && (Message->WaitingThread == Thread))
     {
         if (Message->State & ALPC_MSG_STATE_CANCELED)

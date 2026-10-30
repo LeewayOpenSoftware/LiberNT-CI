@@ -387,6 +387,7 @@ KiRiscvSystemStartup(
 
     Prcb = KeGetCurrentPrcb();
     KiNode0.ProcessorMask |= Prcb->SetMember;
+    KiRiscvJoinSchedulerSubNode(Prcb);
     PoInitializePrcb(Prcb);
     KiSaveProcessorControlState(&Prcb->ProcessorState);
     ExInitPoolLookasidePointers();

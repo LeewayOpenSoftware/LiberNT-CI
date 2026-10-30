@@ -66,7 +66,7 @@
 @ stdcall FlushIpNetTable( long )
 @ stdcall FlushIpNetTable2( long long )
 @ stub FlushIpNetTableFromStack
-#@ stub FlushIpPathTable
+@ stdcall FlushIpPathTable( long )
 @ stdcall FreeMibTable( ptr )
 @ stdcall GetAdapterIndex( wstr ptr )
 @ stub GetAdapterOrderMap
@@ -112,8 +112,8 @@
 @ stdcall GetIpNetTable( ptr ptr long )
 @ stdcall GetIpNetTable2( long ptr )
 @ stub GetIpNetTableFromStack
-#@ stub GetIpPathEntry
-#@ stub GetIpPathTable
+@ stdcall GetIpPathEntry( ptr )
+@ stdcall GetIpPathTable( long ptr )
 @ stdcall GetIpStatisticsEx( ptr long )
 @ stdcall GetIpStatistics( ptr )
 @ stub GetIpStatsFromStack

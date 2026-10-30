@@ -10,6 +10,8 @@
 
 #include "precomp.h"
 
+#include <icmp.h>
+
 #define __LWIP_INET_H__
 #include "lwip/netifapi.h"
 
@@ -131,10 +133,13 @@ VOID NTAPI IPTimeoutDpcFn(PKDPC Dpc,
     if ((IpTimerExpirations % 10) == 0)
     {
         LogActiveObjects();
+        PathTimeout();
     }
 
     /* Check if datagram fragments have taken too long to assemble */
     IPDatagramReassemblyTimeout();
+
+    RouterAgeAdvertisedRoutes();
 
     /* Clean possible outdated cached neighbor addresses */
     NBTimeout();
@@ -149,6 +154,8 @@ VOID NTAPI NeighborTimeoutDpcFn(PKDPC Dpc,
                                 PVOID SystemArgument2)
 {
     NBFastTimeout();
+    NteDadTimeout();
+    RdiscTimeout();
 }
 
 
@@ -250,8 +257,7 @@ PIP_INTERFACE IPCreateInterface(
     TcpipInitializeSpinLock(&IF->Lock);
     ExInitializeRundownProtection(&IF->Rundown);
 
-    IF->TCPContext = ExAllocatePool
-	( NonPagedPool, sizeof(struct netif));
+    IF->TCPContext = ExAllocatePoolZero(NonPagedPool, sizeof(struct netif), IP_INTERFACE_TAG);
     if (!IF->TCPContext) {
         ExFreePoolWithTag(IF, IP_INTERFACE_TAG);
         return NULL;
@@ -358,6 +364,8 @@ VOID IPUnregisterInterface(
         RemoveTDIInterfaceEntity(IF);
         IF->EntityRegistered = FALSE;
     }
+    RdiscStop(IF);
+    PmtuFlushInterface(IF);
     RouterRemoveRoutesForInterface(IF);
     NBDestroyNeighborsForInterface(IF);
 

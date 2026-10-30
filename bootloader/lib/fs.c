@@ -42,8 +42,8 @@ FsReadFileA(
 {
     *Size = 0;
 
-    if (Device->Memory)
-        return FsMemoryReader ? FsMemoryReader(Path, Size) : NULL;
+    if (Device->Memory && FsMemoryReader)
+        return FsMemoryReader(Path, Size);
 
     if (!FsMount(Device))
         return NULL;
@@ -59,7 +59,7 @@ FsOpenFileA(
 {
     *Size = 0;
 
-    if (Device->Memory || !FsMount(Device) || !FsMountedVolume)
+    if ((Device->Memory && FsMemoryReader) || !FsMount(Device) || !FsMountedVolume)
         return NULL;
 
     return NtfsOpenFile(FsMountedVolume, Path, Size);
@@ -108,7 +108,7 @@ PCWSTR
 FsGetDriverName(
     _In_ PDK_DEVICE Device)
 {
-    if (Device->Memory)
+    if (Device->Memory && FsMemoryReader)
         return L"fastfat";
 
     if (FsMountedExFat)

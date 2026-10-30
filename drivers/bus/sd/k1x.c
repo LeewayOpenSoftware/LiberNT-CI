@@ -481,6 +481,7 @@ SdBusK1xAttach(_In_ PFDO_EXTENSION FdoExtension)
     }
     Extension->CardDetectInverted = SdBusK1xQuery(Key, L"cd-inverted", Value, sizeof(Value), &Length);
     Extension->NonRemovable = SdBusK1xQuery(Key, L"non-removable", Value, sizeof(Value), &Length);
+    FdoExtension->DisableWriteProtect = SdBusK1xQuery(Key, L"disable-wp", Value, sizeof(Value), &Length);
     Extension->Hs400EnhancedStrobe = SdBusK1xQuery(Key, L"mmc-hs400-enhanced-strobe", Value, sizeof(Value), &Length);
     SdBusK1xFindPowerSequence(Key, Extension);
     ZwClose(Key);

@@ -1858,7 +1858,7 @@
 @ stdcall -arch=arm64 HalInitSystem() hal.HalInitSystem
 @ stdcall -arch=arm64 HalInitializeOnResume(ptr) hal.HalInitializeOnResume
 @ stdcall -arch=arm64 HalInitializeProcessor() hal.HalInitializeProcessor
-@ stdcall -arch=arm64 HalIsHyperThreadingEnabled() hal.HalIsHyperThreadingEnabled
+@ stdcall -arch=arm64,riscv64 HalIsHyperThreadingEnabled() hal.HalIsHyperThreadingEnabled
 @ stdcall -arch=arm64 HalProcessorIdle() hal.HalProcessorIdle
 @ stdcall -arch=arm64 HalQueryEnvironmentVariableInfoEx() hal.HalQueryEnvironmentVariableInfoEx
 @ stdcall -arch=arm64 HalQueryMaximumProcessorCount() hal.HalQueryMaximumProcessorCount
@@ -2616,7 +2616,7 @@
 @ stdcall -arch=win64 KeInitializeEnumerationContext(ptr ptr)
 @ stdcall -arch=win64 KeInitializeEnumerationContextFromAffinity(ptr long int64)
 @ stdcall -arch=win64 KeInitializeEnumerationContextFromGroup(ptr ptr)
-@ stdcall -arch=arm64 KeInitializeSecondaryInterruptServices()
+@ stdcall -arch=arm64,riscv64 KeInitializeSecondaryInterruptServices()
 @ stub -arch=arm64 KeInitializeTimer2
 @ stdcall KeInitializeTriageDumpDataArray(ptr long)
 @ stdcall -arch=win64 KeInterlockedClearProcessorAffinityEx(ptr long)

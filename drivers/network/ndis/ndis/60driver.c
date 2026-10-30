@@ -265,6 +265,86 @@ Ndis6DriverUnload(
  * ============================================================================ */
 
 NDIS_STATUS
+Ndis6RegisterLwmMiniportDriver(
+    _In_ PCUNICODE_STRING ServiceName,
+    _In_opt_ NDIS_HANDLE MiniportDriverContext,
+    _In_ PNDIS_MINIPORT_DRIVER_CHARACTERISTICS MiniportDriverCharacteristics,
+    _Out_ PNDIS_HANDLE NdisMiniportDriverHandle)
+{
+    static const WCHAR ServicesKey[] = L"\\Registry\\Machine\\System\\CurrentControlSet\\Services\\";
+    PNDIS6_DRIVER_BLOCK Block;
+    NDIS_STATUS Status;
+    KIRQL OldIrql;
+    ULONG CharacteristicsSize;
+    ULONG PathLength;
+
+    *NdisMiniportDriverHandle = NULL;
+
+    if (ServiceName->Length == 0 ||
+        (ServiceName->Length & (sizeof(WCHAR) - 1)) != 0 ||
+        ServiceName->Length > MAXUSHORT - sizeof(ServicesKey))
+    {
+        return NDIS_STATUS_INVALID_PARAMETER;
+    }
+
+    Status = Ndis6ValidateMiniportDriverCharacteristics(MiniportDriverCharacteristics, &CharacteristicsSize);
+    if (Status != NDIS_STATUS_SUCCESS)
+        return Status;
+
+    Ndis6DriverInit();
+
+    Block = (PNDIS6_DRIVER_BLOCK)ExAllocatePoolWithTag(
+        NonPagedPool, sizeof(NDIS6_DRIVER_BLOCK), NDIS6_DRIVER_TAG);
+    if (Block == NULL)
+        return NDIS_STATUS_RESOURCES;
+
+    RtlZeroMemory(Block, sizeof(*Block));
+    Block->Signature             = NDIS6_DRIVER_BLOCK_SIGNATURE;
+    Block->MiniportDriverContext = MiniportDriverContext;
+    Block->IsLwm                 = TRUE;
+    RtlCopyMemory(&Block->Characteristics, MiniportDriverCharacteristics, CharacteristicsSize);
+
+    PathLength = sizeof(ServicesKey) - sizeof(WCHAR) + ServiceName->Length;
+    Block->RegistryPath.Length        = (USHORT)PathLength;
+    Block->RegistryPath.MaximumLength = (USHORT)(PathLength + sizeof(WCHAR));
+    Block->RegistryPath.Buffer        = (PWSTR)ExAllocatePoolWithTag(
+        PagedPool, Block->RegistryPath.MaximumLength, NDIS6_DRIVER_TAG);
+    if (Block->RegistryPath.Buffer == NULL)
+    {
+        ExFreePoolWithTag(Block, NDIS6_DRIVER_TAG);
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    RtlCopyMemory(Block->RegistryPath.Buffer, ServicesKey, sizeof(ServicesKey) - sizeof(WCHAR));
+    RtlCopyMemory((PUCHAR)Block->RegistryPath.Buffer + sizeof(ServicesKey) - sizeof(WCHAR),
+                  ServiceName->Buffer,
+                  ServiceName->Length);
+    Block->RegistryPath.Buffer[PathLength / sizeof(WCHAR)] = L'\0';
+
+    if (Block->Characteristics.SetOptionsHandler != NULL)
+    {
+        *NdisMiniportDriverHandle = (NDIS_HANDLE)Block;
+        Status = Block->Characteristics.SetOptionsHandler(
+            (NDIS_HANDLE)Block,
+            MiniportDriverContext);
+        if (Status != NDIS_STATUS_SUCCESS)
+        {
+            *NdisMiniportDriverHandle = NULL;
+            ExFreePoolWithTag(Block->RegistryPath.Buffer, NDIS6_DRIVER_TAG);
+            ExFreePoolWithTag(Block, NDIS6_DRIVER_TAG);
+            return Status;
+        }
+    }
+
+    KeAcquireSpinLock(&g_Ndis6DriverListLock, &OldIrql);
+    InsertTailList(&g_Ndis6DriverList, &Block->ListEntry);
+    KeReleaseSpinLock(&g_Ndis6DriverListLock, OldIrql);
+
+    *NdisMiniportDriverHandle = (NDIS_HANDLE)Block;
+    return NDIS_STATUS_SUCCESS;
+}
+
+NDIS_STATUS
 Ndis6RegisterMiniportDriverInternal(
     _In_     PDRIVER_OBJECT                          DriverObject,
     _In_     PUNICODE_STRING                         RegistryPath,
@@ -573,28 +653,6 @@ NdisMSetMiniportAttributes(
             PNDIS_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES AddDevice =
                 &MiniportAttributes->AddDeviceRegistrationAttributes;
 
-            if (InterlockedCompareExchange(&Ext->MiniportAddDeviceState, NDIS6_ADD_DEVICE_CALLING, NDIS6_ADD_DEVICE_CALLING) !=
-                    NDIS6_ADD_DEVICE_CALLING ||
-                Ext->MiniportAddDeviceAttributesValid)
-            {
-                return NDIS_STATUS_INVALID_STATE;
-            }
-
-            if (AddDevice->Header.Revision !=
-                    NDIS_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES_REVISION_1)
-            {
-                return NDIS_STATUS_BAD_VERSION;
-            }
-
-            if (AddDevice->Header.Size !=
-                    NDIS_SIZEOF_MINIPORT_ADD_DEVICE_REGISTRATION_ATTRIBUTES_REVISION_1)
-            {
-                return NDIS_STATUS_INVALID_LENGTH;
-            }
-
-            if (AddDevice->Flags != 0)
-                return NDIS_STATUS_INVALID_PARAMETER;
-
             Ext->MiniportAddDeviceContext =
                 AddDevice->MiniportAddDeviceContext;
             Ext->MiniportAddDeviceAttributesValid = TRUE;
@@ -638,7 +696,7 @@ NdisMSetMiniportAttributes(
 
             /* The MiniportAdapterContext field is the driver's per-instance
              * cookie. Every subsequent call into the driver passes this. */
-            if (!Ext->IsWdfManaged)
+            if (!Ext->IsWdfManaged && !Ext->DriverBlock->IsLwm)
                 Ext->MiniportAdapterContext = Reg->MiniportAdapterContext;
             return NDIS_STATUS_SUCCESS;
         }
@@ -706,12 +764,15 @@ NdisMSetMiniportAttributes(
             NewGen.RecvScaleCapabilities = NULL;
             NewGen.PowerManagementCapabilitiesEx = NULL;
 
+            if (Ext->IsWdfManaged)
+                Ndis6ApplyInfInterfaceKeywords(Adapter->NdisMiniportBlock.PhysicalDeviceObject, &NewGen);
+
             OldOidList = Ext->GeneralAttrs.SupportedOidList;
             Ext->GeneralAttrs = NewGen;
             Ext->GeneralAttrsValid = TRUE;
-            Adapter->NdisMiniportBlock.MediaType = Gen->MediaType;
-            Adapter->NdisMiniportBlock.MacOptions = Gen->MacOptions;
-            if (Gen->MediaType == NdisMedium802_3)
+            Adapter->NdisMiniportBlock.MediaType = NewGen.MediaType;
+            Adapter->NdisMiniportBlock.MacOptions = NewGen.MacOptions;
+            if (NewGen.MediaType == NdisMedium802_3)
                 Adapter->MediumHeaderSize = 14;
             if (OldOidList != NULL)
                 ExFreePoolWithTag(OldOidList, NDIS6_ATTR_TAG);
@@ -1321,6 +1382,7 @@ Ndis6DispatchPnp(
                     Ext->Initialized = TRUE;
                     InterlockedExchange(&Ext->ProtocolBindingsClosing, 0);
                 }
+                Ndis6SetNetInterfaceState(Adapter, TRUE);
                 Status = STATUS_SUCCESS;
 
                 /* Build the paused stack first: filter modules attach below

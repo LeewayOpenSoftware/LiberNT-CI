@@ -168,8 +168,14 @@ static void test_enumdisplaydevices_adapter(int index, const DISPLAY_DEVICEA *de
     /* DeviceKey */
     /* \Device\Video? value in HLKM\HARDWARE\DEVICEMAP\VIDEO are not necessarily in order with adapter index.
      * Check format only */
+#ifdef __REACTOS__
+    ok(sscanf(device->DeviceKey, "\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Video\\%[^\\]\\%04d", buffer, &number) == 2 ||
+       broken(strstr(device->DeviceKey, "\\Services\\") != NULL),
+       "#%d: wrong DeviceKey %s\n", index, device->DeviceKey);
+#else
     ok(sscanf(device->DeviceKey, "\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Video\\%[^\\]\\%04d", buffer, &number) == 2,
        "#%d: wrong DeviceKey %s\n", index, device->DeviceKey);
+#endif
 
     /* DeviceString */
     ok(broken(!*device->DeviceString) || /* XP on Testbot will return an empty string, whereas XP on real machine doesn't. Probably a bug in virtual adapter driver */
@@ -415,6 +421,24 @@ static HANDLE test_child_process_ChangeDisplaySettingsEx(const char *argv0, cons
     return info.hProcess;
 }
 
+#ifdef __REACTOS__
+static BOOL display_has_other_mode(const char *device)
+{
+    DEVMODEA current = {.dmSize = sizeof(current)};
+    DEVMODEA mode = {.dmSize = sizeof(mode)};
+    DWORD i;
+
+    if (!EnumDisplaySettingsA(device, ENUM_CURRENT_SETTINGS, &current))
+        return FALSE;
+    for (i = 0; EnumDisplaySettingsA(device, i, &mode); i++)
+    {
+        if (mode.dmPelsWidth != current.dmPelsWidth || mode.dmPelsHeight != current.dmPelsHeight)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+#endif
 static void test_ChangeDisplaySettingsEx(int argc, char **argv)
 {
     static const DWORD registry_fields = DM_DISPLAYORIENTATION | DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT |
@@ -523,6 +547,14 @@ static void test_ChangeDisplaySettingsEx(int argc, char **argv)
     res = ChangeDisplaySettingsExW(NULL, &dmW, NULL, CDS_TEST, NULL);
     ok(res == DISP_CHANGE_SUCCESSFUL, "ChangeDisplaySettingsExW returned unexpected %ld\n", res);
 
+#ifdef __REACTOS__
+    if (!display_has_other_mode(NULL))
+    {
+        skip("The display has no other mode\n");
+        return;
+    }
+
+#endif
     /* Test clip rectangle after resolution changes */
     /* GetClipCursor always returns result in physical pixels but GetSystemMetrics(SM_CX/CYVIRTUALSCREEN) are not.
      * Set per-monitor aware context so that virtual screen rectangles are in physical pixels */
@@ -3048,8 +3080,17 @@ static void test_display_dc(void)
             if (dm2.dmPelsWidth != dm.dmPelsWidth && dm2.dmPelsHeight != dm.dmPelsHeight)
                 break;
         }
+#ifdef __REACTOS__
+        if (!dm2.dmPelsWidth || dm2.dmPelsWidth == dm.dmPelsWidth || dm2.dmPelsHeight == dm.dmPelsHeight)
+        {
+            skip("%s has no other resolution\n", dd.DeviceName);
+            DeleteDC(hdc);
+            continue;
+        }
+#else
         ok(dm2.dmPelsWidth && dm2.dmPelsWidth != dm.dmPelsWidth && dm2.dmPelsHeight != dm.dmPelsHeight,
                 "Failed to find a different resolution for %s.\n", dd.DeviceName);
+#endif
 
         res = ChangeDisplaySettingsExA(dd.DeviceName, &dm2, NULL, CDS_RESET, NULL);
         ok(res == DISP_CHANGE_SUCCESSFUL || broken(res == DISP_CHANGE_FAILED), /* Win8 TestBots */

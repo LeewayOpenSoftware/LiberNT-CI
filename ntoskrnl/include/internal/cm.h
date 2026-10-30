@@ -1059,6 +1059,18 @@ CmpTestRegistryLockExclusive(
     VOID
 );
 
+VOID
+NTAPI
+CmpBeginStarveWriters(
+    VOID
+);
+
+VOID
+NTAPI
+CmpEndStarveWriters(
+    VOID
+);
+
 BOOLEAN
 NTAPI
 CmpTestRegistryLock(
@@ -1844,10 +1856,8 @@ extern BOOLEAN CmpNoVolatileCreates;
 extern EX_PUSH_LOCK CmpHiveListHeadLock, CmpLoadHiveLock;
 extern LIST_ENTRY CmpHiveListHead;
 extern POBJECT_TYPE CmpKeyObjectType;
-extern ERESOURCE CmpRegistryLock;
 extern PCM_KEY_HASH_TABLE_ENTRY CmpCacheTable;
 extern PCM_NAME_HASH_TABLE_ENTRY CmpNameCacheTable;
-extern KGUARDED_MUTEX CmpDelayedCloseTableLock;
 extern CMHIVE CmControlHive;
 extern WCHAR CmDefaultLanguageId[];
 extern ULONG CmDefaultLanguageIdLength;
