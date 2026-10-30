@@ -30,6 +30,7 @@ list(APPEND SOURCE
     ManifestSettings.c
     Utf8ActiveCodePage.c
     TramoE.c
+    TramoE2.c
     VerifyScripts.c
     GetDurationFormat.c
     TimeZoneEx.c
