@@ -32,6 +32,7 @@ extern void func_ForwardCycles(void);
 extern void func_DllDirectories(void);
 extern void func_ManifestSettings(void);
 extern void func_Utf8ActiveCodePage(void);
+extern void func_TramoE(void);
 extern void func_VerifyScripts(void);
 extern void func_GetDurationFormat(void);
 extern void func_TimeZoneEx(void);
@@ -136,6 +137,7 @@ const struct test winetest_testlist[] =
     { "CompatLinks", func_CompatLinks },
     { "ManifestSettings", func_ManifestSettings },
     { "Utf8ActiveCodePage", func_Utf8ActiveCodePage },
+    { "TramoE", func_TramoE },
     { "VerifyScripts", func_VerifyScripts },
     { "GetDurationFormat", func_GetDurationFormat },
     { "TimeZoneEx", func_TimeZoneEx },
