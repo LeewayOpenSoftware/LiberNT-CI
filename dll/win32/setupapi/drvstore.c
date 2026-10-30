@@ -294,6 +294,13 @@ typedef struct _STAGE_PACKAGE_CONTEXT
     PCWSTR StoreRoot;
     STAGE_NAME_LIST Sections;
     STAGE_NAME_LIST Files;
+    /* Verification pass (LnSetupVerifyDriverPackage): walk the same file set
+     * and check each staged member against the package catalog instead of
+     * copying it. */
+    BOOL VerifyOnly;
+    HCATINFO Catalog;
+    DWORD SigState;
+    WCHAR MismatchFile[MAX_PATH];
 } STAGE_PACKAGE_CONTEXT, *PSTAGE_PACKAGE_CONTEXT;
 
 static BOOL
@@ -454,6 +461,12 @@ StagePackageFile(
 }
 
 static VOID
+VerifyPackageMember(
+    IN OUT PSTAGE_PACKAGE_CONTEXT Package,
+    IN PCWSTR Relative,
+    IN BOOL FromCabinet);
+
+static VOID
 StageCopyFile(
     IN HINF hInf,
     IN PCWSTR FileName,
@@ -497,7 +510,124 @@ StageCopyFile(
         CabinetPath = Cabinet;
     }
 
+    if (Package->VerifyOnly)
+    {
+        VerifyPackageMember(Package, Relative, CabinetPath != NULL);
+        return;
+    }
+
     StagePackageFile(Package->SourceRoot, Package->StoreRoot, Relative, CabinetPath);
+}
+
+static const struct
+{
+    PCSTR Oid;
+    PCWSTR Algorithm;
+} CatalogHashAlgorithms[] =
+{
+    { szOID_OIWSEC_sha1, L"SHA1" },
+    { szOID_RSA_MD5, L"MD5" },
+    { szOID_NIST_sha256, L"SHA256" },
+    { szOID_NIST_sha384, L"SHA384" },
+    { szOID_NIST_sha512, L"SHA512" },
+};
+
+static BOOL
+VerifyFileHashWithAlgorithm(
+    IN HANDLE hFile,
+    IN CRYPTCATMEMBER *Member)
+{
+    HCATADMIN Admin = NULL;
+    DWORD HashSize = 0;
+    PBYTE Hash = NULL;
+    PCWSTR Algorithm = NULL;
+    UINT i;
+    BOOL Found = FALSE;
+
+    if (!Member->pIndirectData)
+        return FALSE;
+
+    for (i = 0; i < ARRAY_SIZE(CatalogHashAlgorithms); i++)
+    {
+        if (Member->pIndirectData->DigestAlgorithm.pszObjId &&
+            strcmp(Member->pIndirectData->DigestAlgorithm.pszObjId,
+                   CatalogHashAlgorithms[i].Oid) == 0)
+        {
+            Algorithm = CatalogHashAlgorithms[i].Algorithm;
+            break;
+        }
+    }
+    if (!Algorithm)
+        return FALSE;
+
+    if (!CryptCATAdminAcquireContext2(&Admin, NULL, Algorithm, NULL, 0))
+        return FALSE;
+
+    if (CryptCATAdminCalcHashFromFileHandle2(Admin, hFile, &HashSize, NULL, 0) && HashSize)
+    {
+        Hash = MyMalloc(HashSize);
+        if (Hash &&
+            CryptCATAdminCalcHashFromFileHandle2(Admin, hFile, &HashSize, Hash, 0) &&
+            Member->pIndirectData->Digest.cbData == HashSize &&
+            RtlEqualMemory(Member->pIndirectData->Digest.pbData, Hash, HashSize))
+        {
+            Found = TRUE;
+        }
+    }
+
+    if (Hash)
+        MyFree(Hash);
+    CryptCATAdminReleaseContext(Admin, 0);
+    return Found;
+}
+
+static VOID
+VerifyPackageMember(
+    IN OUT PSTAGE_PACKAGE_CONTEXT Package,
+    IN PCWSTR Relative,
+    IN BOOL FromCabinet)
+{
+    WCHAR FullPath[MAX_PATH];
+    HANDLE hFile;
+    CRYPTCATMEMBER *Member;
+    BOOL Found = FALSE;
+
+    /* Cabinet members are verified with the cabinet as a whole; the per-file
+     * catalog check applies to plain files only. */
+    if (FromCabinet || Package->SigState == PACKAGE_SIG_CATALOG_INVALID)
+        return;
+
+    if (!CombinePath(FullPath, Package->SourceRoot, Relative))
+        return;
+
+    hFile = CreateFileW(FullPath, GENERIC_READ, FILE_SHARE_READ, NULL,
+                        OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+    {
+        Package->SigState = PACKAGE_SIG_HASH_MISMATCH;
+        if (!Package->MismatchFile[0])
+            lstrcpynW(Package->MismatchFile, Relative, MAX_PATH);
+        return;
+    }
+
+    Member = NULL;
+    while ((Member = CryptCATEnumerateMember(Package->Catalog, Member)))
+    {
+        if (VerifyFileHashWithAlgorithm(hFile, Member))
+        {
+            Found = TRUE;
+            break;
+        }
+    }
+
+    CloseHandle(hFile);
+
+    if (!Found)
+    {
+        Package->SigState = PACKAGE_SIG_HASH_MISMATCH;
+        if (!Package->MismatchFile[0])
+            lstrcpynW(Package->MismatchFile, Relative, MAX_PATH);
+    }
 }
 
 static VOID
@@ -696,7 +826,158 @@ SETUPAPI_StageDriverPackage(
         SetupCloseInfFile(hInf);
     }
 
-    return CopyFileW(Source, Target, FALSE);
+    if (!CopyFileW(Source, Target, FALSE))
+        return FALSE;
+
+    if (SetupapiGetVerifyPolicy() != 0)
+    {
+        DWORD SigState = PACKAGE_SIG_UNSIGNED;
+        WCHAR Mismatch[MAX_PATH] = { 0 };
+        DWORD Error;
+
+        Error = LnSetupVerifyDriverPackage(Target, &SigState, Mismatch, ARRAY_SIZE(Mismatch));
+        if (Error == ERROR_SUCCESS)
+        {
+            TRACE("staged package %s signature state %lu\n", debugstr_w(Target), SigState);
+
+            if (SetupapiGetVerifyPolicy() == 2 &&
+                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID))
+            {
+                SetLastError(ERROR_INVALID_IMAGE_HASH);
+                return FALSE;
+            }
+        }
+    }
+
+    return TRUE;
+}
+
+/* Política de verificación de firma de paquetes (M6).
+ * HKLM\SYSTEM\CurrentControlSet\Control\DrvInst\VerifyPackageSignature:
+ * 0 = off, 1 = audit (default, verifica y registra pero no bloquea),
+ * 2 = enforce (rechaza paquetes con hash que no coincide o catálogo inválido).
+ * Los paquetes sin catálogo siguen permitidos en ambos modos. */
+DWORD
+SetupapiGetVerifyPolicy(VOID)
+{
+    HKEY Key;
+    DWORD Value = 1, Size = sizeof(Value), Type;
+    LONG Error;
+
+    Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SYSTEM\\CurrentControlSet\\Control\\DrvInst",
+                          0, KEY_QUERY_VALUE, &Key);
+    if (Error != ERROR_SUCCESS)
+        return 1;
+
+    Error = RegQueryValueExW(Key, L"VerifyPackageSignature", NULL, &Type,
+                             (PBYTE)&Value, &Size);
+    RegCloseKey(Key);
+
+    if (Error != ERROR_SUCCESS || Type != REG_DWORD || Value > 2)
+        return 1;
+    return Value;
+}
+
+/* Verifica el paquete de drivers al que pertenece InfPath: cada archivo
+ * referenciado por el INF debe aparecer en el catálogo [Version] CatalogFile
+ * con el hash calculado por CryptCATAdminCalcHashFromFileHandle.
+ * Devuelve ERROR_SUCCESS y el estado; el estado es un dato (Unsigned no es
+ * error). Reusable por LiberNT Update. */
+DWORD
+WINAPI
+LnSetupVerifyDriverPackage(
+    IN PCWSTR InfPath,
+    OUT PDWORD SigState,
+    OUT PWSTR MismatchFile OPTIONAL,
+    IN DWORD MismatchFileCch OPTIONAL)
+{
+    WCHAR Source[MAX_PATH], SourceRoot[MAX_PATH], CatalogPath[MAX_PATH];
+    STAGE_PACKAGE_CONTEXT Package;
+    PWSTR BaseName, CatalogName;
+    HINF hInf;
+    INFCONTEXT Context;
+    HCATINFO Catalog;
+    DWORD Length;
+
+    if (!InfPath || !SigState)
+        return ERROR_INVALID_PARAMETER;
+    *SigState = PACKAGE_SIG_UNSIGNED;
+    if (MismatchFile && MismatchFileCch)
+        MismatchFile[0] = UNICODE_NULL;
+
+    Length = GetFullPathNameW(InfPath, ARRAY_SIZE(Source), Source, &BaseName);
+    if (Length == 0 || Length >= ARRAY_SIZE(Source) || !BaseName)
+        return ERROR_INVALID_PARAMETER;
+
+    lstrcpynW(SourceRoot, Source, (INT)(BaseName - Source) + 1);
+
+    hInf = SetupOpenInfFileW(Source, NULL, INF_STYLE_WIN4, NULL);
+    if (hInf == INVALID_HANDLE_VALUE)
+        return GetLastError();
+
+    CatalogName = NULL;
+    if (SetupFindFirstLineW(hInf, L"Version", NULL, &Context))
+    {
+        do
+        {
+            WCHAR Key[LINE_LEN];
+            WCHAR Value[MAX_PATH];
+
+            if (!SetupGetStringFieldW(&Context, 0, Key, ARRAY_SIZE(Key), NULL) ||
+                _wcsnicmp(Key, L"CatalogFile", 11) != 0)
+                continue;
+            if (SetupGetStringFieldW(&Context, 1, Value, ARRAY_SIZE(Value), NULL) && Value[0])
+            {
+                CatalogName = MyMalloc(sizeof(Value));
+                if (CatalogName)
+                    lstrcpyW(CatalogName, Value);
+                break;
+            }
+        } while (SetupFindNextLine(&Context, &Context));
+    }
+
+    if (!CatalogName)
+    {
+        /* Paquete sin catálogo: estado Unsigned, no es un error. */
+        SetupCloseInfFile(hInf);
+        return ERROR_SUCCESS;
+    }
+
+    if (!CombinePath(CatalogPath, SourceRoot, CatalogName))
+    {
+        MyFree(CatalogName);
+        SetupCloseInfFile(hInf);
+        return ERROR_FILENAME_EXCED_RANGE;
+    }
+    MyFree(CatalogName);
+
+    Catalog = CryptCATOpen(CatalogPath, CRYPTCAT_OPEN_EXISTING, 0, 0, 0);
+    if (Catalog == INVALID_HANDLE_VALUE)
+    {
+        *SigState = PACKAGE_SIG_CATALOG_INVALID;
+        SetupCloseInfFile(hInf);
+        return ERROR_SUCCESS;
+    }
+
+    ZeroMemory(&Package, sizeof(Package));
+    Package.SourceRoot = SourceRoot;
+    Package.StoreRoot = SourceRoot;
+    Package.VerifyOnly = TRUE;
+    Package.Catalog = Catalog;
+    Package.SigState = PACKAGE_SIG_SIGNED_VALID;
+
+    StageCopyFiles(hInf, &Package);
+    FreeNameList(&Package.Sections);
+    FreeNameList(&Package.Files);
+
+    *SigState = Package.SigState;
+    if (MismatchFile && MismatchFileCch && Package.MismatchFile[0])
+        lstrcpynW(MismatchFile, Package.MismatchFile, MismatchFileCch);
+
+    CryptCATClose(Catalog);
+    SetupCloseInfFile(hInf);
+    return ERROR_SUCCESS;
 }
 
 static BOOL

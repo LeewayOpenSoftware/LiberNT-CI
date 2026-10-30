@@ -467,6 +467,7 @@
 @ stdcall SetupGetFileQueueFlags(long ptr)
 @ stub -version=0x600+ SetupGetInfDriverStoreLocationA
 @ stdcall SetupGetInfDriverStoreLocationW(wstr ptr wstr ptr long ptr)
+@ stdcall -version=0x600+ LnSetupVerifyDriverPackage(wstr ptr ptr long)
 @ stdcall SetupGetInfFileListA(str long str long ptr)
 @ stdcall SetupGetInfFileListW(wstr long wstr long ptr)
 @ stdcall SetupGetInfInformationA(ptr long ptr long ptr)
