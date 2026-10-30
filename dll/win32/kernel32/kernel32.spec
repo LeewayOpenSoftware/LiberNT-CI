@@ -361,10 +361,10 @@
 @ stdcall FindStringOrdinal(long wstr long wstr long long) kernelbase.FindStringOrdinal
 @ stdcall FindVolumeClose(ptr)
 @ stdcall FindVolumeMountPointClose(ptr)
-@ stdcall FlsAlloc(ptr)
-@ stdcall FlsFree(long)
-@ stdcall FlsGetValue(long)
-@ stdcall FlsSetValue(long ptr)
+@ stdcall FlsAlloc(ptr) kernelbase.FlsAlloc
+@ stdcall FlsFree(long) kernelbase.FlsFree
+@ stdcall FlsGetValue(long) kernelbase.FlsGetValue
+@ stdcall FlsSetValue(long ptr) kernelbase.FlsSetValue
 @ stdcall FlushConsoleInputBuffer(long) kernelbase.FlushConsoleInputBuffer
 @ stdcall FlushFileBuffers(long)
 @ stdcall FlushInstructionCache(long long long)

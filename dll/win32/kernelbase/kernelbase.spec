@@ -301,10 +301,10 @@
 @ stdcall FindResourceW(long wstr wstr) kernel32.FindResourceW
 @ stdcall FindStringOrdinal(long wstr long wstr long long)
 @ stdcall FindVolumeClose(ptr) kernel32.FindVolumeClose
-@ stdcall FlsAlloc(ptr) kernel32.FlsAlloc
-@ stdcall FlsFree(long) kernel32.FlsFree
-@ stdcall FlsGetValue(long) kernel32.FlsGetValue
-@ stdcall FlsSetValue(long ptr) kernel32.FlsSetValue
+@ stdcall FlsAlloc(ptr)
+@ stdcall FlsFree(long)
+@ stdcall FlsGetValue(long)
+@ stdcall FlsSetValue(long ptr)
 @ stdcall FlushConsoleInputBuffer(long)
 @ stdcall FlushFileBuffers(long) kernel32.FlushFileBuffers
 @ stdcall FlushInstructionCache(long long long) kernel32.FlushInstructionCache
