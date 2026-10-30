@@ -53,6 +53,7 @@ HKLM
 								'{40419485-C444-4567-851A-2DD7BFA1684D}' = s 'Phone and Modem'
 								'{74246bfc-4c96-11d0-abef-0020af6b0b7a}' = s 'Device Manager'
 								'{7A979262-40CE-46ff-AEEE-7884AC3B6136}' = s 'Add Hardware'
+								'{8E908FC9-BECC-40f6-915B-F4CA0E70D03D}' = s 'Network and Sharing Center'
 							}
 						}
 						NoRemove MyComputer
@@ -64,6 +65,34 @@ HKLM
 						}
 					}
 				}
+			}
+		}
+	}
+}
+
+HKCR
+{
+	NoRemove CLSID
+	{
+		ForceRemove {8E908FC9-BECC-40f6-915B-F4CA0E70D03D} = s 'Network and Sharing Center'
+		{
+			val 'System.ApplicationName' = s 'Microsoft.NetworkAndSharingCenter'
+			val 'System.ControlPanel.Category' = s '3'
+			val '{305CA226-D286-468e-B848-2B2E8E697B74} 2' = s '3'
+			val 'System.Software.TasksFileUrl' = s 'Internal'
+			val InfoTip = s 'View the status of your network and manage its connections.'
+			val LocalizedString = s 'Network and Sharing Center'
+			DefaultIcon = e '%%SystemRoot%%\system32\netshell.dll,-100'
+			Shell
+			{
+				Open
+				{
+					Command = e '%%SystemRoot%%\ImmersiveControlPanel\SystemSettings.exe "ms-settings:network"'
+				}
+			}
+			ShellFolder
+			{
+				val Attributes = d '0'
 			}
 		}
 	}
