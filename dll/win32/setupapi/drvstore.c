@@ -884,6 +884,14 @@ SetupapiGetVerifyPolicy(VOID)
  * con el hash calculado por CryptCATAdminCalcHashFromFileHandle.
  * Devuelve ERROR_SUCCESS y el estado; el estado es un dato (Unsigned no es
  * error). Reusable por LiberNT Update. */
+static HCATINFO
+OpenInfCatalog(
+    IN HINF hInf,
+    IN PCWSTR SourceRoot,
+    OUT PWSTR CatalogPath,
+    IN DWORD CatalogPathCch,
+    OUT PDWORD Error);
+
 DWORD
 WINAPI
 LnSetupVerifyDriverPackage(
@@ -1011,7 +1019,7 @@ GetCatalogSigner(
     PCCERT_CONTEXT Cert = NULL;
     CMSG_SIGNER_INFO *SignerInfo = NULL;
     CERT_INFO CertInfo;
-    DWORD ContentType, FormatType, Size;
+    DWORD ContentType, FormatType, EncodingType, Size;
     BOOL Result = FALSE;
 
     Signer[0] = UNICODE_NULL;
@@ -1020,7 +1028,7 @@ GetCatalogSigner(
     if (!CryptQueryObject(CERT_QUERY_OBJECT_FILE, (void *)CatalogPath,
                           CERT_QUERY_CONTENT_FLAG_ALL,
                           CERT_QUERY_FORMAT_FLAG_ALL, 0,
-                          &ContentType, &FormatType, &Store, &Msg, NULL))
+                          &EncodingType, &ContentType, &FormatType, &Store, &Msg, NULL))
         return FALSE;
 
     Size = 0;
@@ -1057,7 +1065,7 @@ BOOL WINAPI
 SetupVerifyInfFileW(
     IN PCWSTR InfName,
     IN PSP_ALTPLATFORM_INFO AltPlatformInfo,
-    INOUT PSP_INF_SIGNER_INFO_INF_W InfSignerInfo)
+    _Inout_ PSP_INF_SIGNER_INFO_INF_W InfSignerInfo)
 {
     WCHAR Source[MAX_PATH], SourceRoot[MAX_PATH], CatalogPath[MAX_PATH];
     CRYPTCATMEMBER *Member;
@@ -1166,7 +1174,7 @@ BOOL WINAPI
 SetupVerifyInfFileA(
     IN PCSTR InfName,
     IN PSP_ALTPLATFORM_INFO AltPlatformInfo,
-    INOUT PSP_INF_SIGNER_INFO_INF_A InfSignerInfo)
+    _Inout_ PSP_INF_SIGNER_INFO_INF_A InfSignerInfo)
 {
     SP_INF_SIGNER_INFO_INF_W InfoW;
     WCHAR InfNameW[MAX_PATH];
