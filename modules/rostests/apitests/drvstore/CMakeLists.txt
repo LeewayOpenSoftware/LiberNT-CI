@@ -1,6 +1,7 @@
 add_executable(drvstore_apitest
     drvstore.c
     signature.c
+    verifyinffile.c
     testlist.c
     drvstore.rc)
 
