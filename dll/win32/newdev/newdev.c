@@ -1401,7 +1401,6 @@ CollectDriverCandidates(
 {
     SP_DRVINFO_DATA_W DrvInfo;
     SP_DRVINSTALL_PARAMS InstallParams;
-    SP_DRVINFO_DETAIL_DATA_W Detail;
     DWORD Index = 0;
 
     DrvInfo.cbSize = sizeof(DrvInfo);
@@ -1413,15 +1412,27 @@ CollectDriverCandidates(
     {
         PNEWDEV_DRIVER_CANDIDATE Entry;
         DWORD Rank = MAXDWORD;
+        DWORD DetailSize = 0;
+        PSP_DRVINFO_DETAIL_DATA_W Detail;
 
-        Detail.cbSize = sizeof(Detail);
+        SetupDiGetDriverInfoDetailW(DevInstData->hDevInfo,
+                                    &DevInstData->devInfoData,
+                                    &DrvInfo,
+                                    NULL, 0, &DetailSize);
+        if (DetailSize < sizeof(SP_DRVINFO_DETAIL_DATA_W))
+            continue;
+        Detail = HeapAlloc(GetProcessHeap(), 0, DetailSize);
+        if (!Detail)
+            return;
+        Detail->cbSize = sizeof(*Detail);
         if (!SetupDiGetDriverInfoDetailW(DevInstData->hDevInfo,
                                          &DevInstData->devInfoData,
                                          &DrvInfo,
-                                         &Detail,
-                                         sizeof(Detail),
+                                         Detail,
+                                         DetailSize,
                                          NULL))
         {
+            HeapFree(GetProcessHeap(), 0, Detail);
             continue;
         }
 
@@ -1449,12 +1460,13 @@ CollectDriverCandidates(
 
         Entry = &List->Entries[List->Count++];
         ZeroMemory(Entry, sizeof(*Entry));
-        lstrcpynW(Entry->InfFileName, Detail.InfFileName, RTL_NUMBER_OF(Entry->InfFileName));
+        lstrcpynW(Entry->InfFileName, Detail->InfFileName, RTL_NUMBER_OF(Entry->InfFileName));
         Entry->Rank = Rank;
         Entry->DriverDate = DrvInfo.DriverDate;
         Entry->DriverVersion = DrvInfo.DriverVersion;
         Entry->Source = Source;
         lstrcpynW(Entry->Description, DrvInfo.Description, RTL_NUMBER_OF(Entry->Description));
+        HeapFree(GetProcessHeap(), 0, Detail);
         TRACE("Candidate %s rank 0x%lx source %lu\n", debugstr_w(Entry->InfFileName), Rank, Source);
     }
 }
