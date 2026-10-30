@@ -30,7 +30,11 @@
 #include <string.h>
 #include <stdarg.h>
 
+#ifdef S1_HOST_APPLIER
+#include "s1host_shim.h"
+#else
 #include <ntndk.h>
+#endif
 
 #ifndef _In_
 #define _In_
@@ -78,11 +82,21 @@ static const uint8_t S1DevPublicKey[S1_RSA2048_SIZE] = {
 0xc8,0xd7,0x6f,0x49,0x18,0x66,0x30,0xb5,0x2c,0x17,0x50,0x6f,0xea,0x27,0xeb,0x65,
 };
 
+#ifndef S1_ROOT
 #define S1_ROOT            L"\\SystemRoot\\LiberNT\\Servicing"
+#endif
+#ifndef S1_PLAN_PATH
 #define S1_PLAN_PATH       L"\\SystemRoot\\LiberNT\\Servicing\\pending\\plan.json"
+#endif
+#ifndef S1_ATTEMPT_PATH
 #define S1_ATTEMPT_PATH    L"\\SystemRoot\\LiberNT\\Servicing\\pending\\attempt.json"
+#endif
+#ifndef S1_JOURNAL_PATH
 #define S1_JOURNAL_PATH    L"\\SystemRoot\\LiberNT\\Servicing\\journal\\transactions.jsonl"
+#endif
+#ifndef S1_BACKUP_PATH
 #define S1_BACKUP_PATH     L"\\SystemRoot\\LiberNT\\Servicing\\backup"
+#endif
 
 /* No ntstatus value names a content-hash mismatch; this is a private,
  * customer-bit code the journal can record precisely. */
@@ -467,11 +481,13 @@ S1VerifyPlanAgainstManifest(
     }
 
     /* Every plan operation must appear in the signed manifest with the same
-     * target path and expected hash. */
-    FileCount = S1JsonGetArrayCount(Root, "files");
+     * target path and expected hash. The manifest schema lists the payloads
+     * it ships under "payloads" with the target the bytes install to. */
+    FileCount = S1JsonGetArrayCount(Root, "payloads");
     for (i = 0; i < Plan->OperationCount; i++)
     {
         const S1_PLAN_OP *Op = &Plan->Operations[i];
+        const char *PlanTarget = Op->Target;
         char Path[64];
         const char *ManifestPathA, *ManifestSha;
         size_t PathLen, ShaLen;
@@ -479,17 +495,17 @@ S1VerifyPlanAgainstManifest(
         S1Bool Found = S1_FALSE;
         uint8_t Expected[S1_SHA256_SIZE];
 
-        snprintf(Path, sizeof(Path), "files.%zu.path", i);
-        (void)Path;
+        if (PlanTarget[0] == '\\')
+            PlanTarget++;
         for (f = 0; f < FileCount; f++)
         {
-            snprintf(Path, sizeof(Path), "files.%zu.path", f);
+            snprintf(Path, sizeof(Path), "payloads.%zu.target", f);
             if (!S1JsonGetString(Root, Path, &ManifestPathA, &PathLen))
                 continue;
-            snprintf(Path, sizeof(Path), "files.%zu.sha256", f);
+            snprintf(Path, sizeof(Path), "payloads.%zu.sha256", f);
             if (!S1JsonGetString(Root, Path, &ManifestSha, &ShaLen))
                 continue;
-            if (PathLen == strlen(Op->Target) && memcmp(ManifestPathA, Op->Target, PathLen) == 0 &&
+            if (PathLen == strlen(PlanTarget) && memcmp(ManifestPathA, PlanTarget, PathLen) == 0 &&
                 ShaLen == S1_SHA256_SIZE * 2 && S1HexDecode(ManifestSha, Expected, S1_SHA256_SIZE) &&
                 memcmp(Expected, Op->ExpectedSha256, S1_SHA256_SIZE) == 0)
             {
@@ -613,16 +629,26 @@ S1ApplyOperation(
         return Status;
 
     /* Backup the current target if it exists (replace-file); add-file has no
-     * backup and a revert deletes the target. */
+     * backup and a revert deletes the target. The engine stages a verified
+     * backup before it defers an operation to the boot plan, so an existing
+     * backup is kept as-is. */
     if (Op->Type == S1_OP_REPLACE_FILE)
     {
         Status = S1NtOpen(TargetW, FILE_READ_DATA, FILE_OPEN, &Probe);
         if (NT_SUCCESS(Status))
         {
+            HANDLE BackupProbe;
+
             NtClose(Probe);
-            Status = S1MoveFileEx(TargetW, BackupPath, FALSE);
-            if (!NT_SUCCESS(Status))
-                return Status;
+            Status = S1NtOpen(BackupPath, FILE_READ_DATA, FILE_OPEN, &BackupProbe);
+            if (NT_SUCCESS(Status))
+                NtClose(BackupProbe);
+            else
+            {
+                Status = S1MoveFileEx(TargetW, BackupPath, FALSE);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+            }
         }
     }
 
