@@ -201,6 +201,7 @@ private:
 
     HWND m_Tree;
     CComPtr<IImageList> m_ImageList;
+    CComPtr<IContextMenu> m_ContextMenu;
     CAtlList<RootEntry *> m_Roots;
     CAtlList<EventEntry> m_Events;
     DWORD m_NextCookie;
@@ -425,6 +426,90 @@ private:
         POSITION Position = Snapshot.GetHeadPosition();
         while (Position)
             Snapshot.GetNext(Position)->OnKeyboardInput(Message, wParam, lParam);
+    }
+
+    HRESULT ShowTreeContextMenu(HTREEITEM TreeItem, POINT Point)
+    {
+        TreeItemData *Data = GetTreeItemData(TreeItem);
+        CComPtr<IShellFolder> Folder;
+        CComPtr<IContextMenu> Menu;
+        PCUITEMID_CHILD Child = NULL;
+        HRESULT hr;
+
+        if (!Data || !Data->Pidl)
+            return E_FAIL;
+
+        TreeView_SelectItem(m_Tree, TreeItem);
+
+        hr = SHBindToParent(Data->Pidl, IID_PPV_ARG(IShellFolder, &Folder), &Child);
+        if (FAILED(hr) || !Child)
+            return FAILED(hr) ? hr : E_FAIL;
+
+        hr = Folder->GetUIObjectOf(m_hWnd, 1, &Child, IID_IContextMenu, NULL, (void **)&Menu);
+        if (FAILED(hr))
+            return hr;
+
+        HMENU Popup = CreatePopupMenu();
+        if (!Popup)
+            return HRESULT_FROM_WIN32(GetLastError());
+
+        hr = Menu->QueryContextMenu(Popup, 0, 1, 0x7FFF, CMF_NORMAL);
+        if (SUCCEEDED(hr))
+        {
+            UINT Command;
+
+            m_ContextMenu = Menu;
+            Command = TrackPopupMenuEx(Popup, TPM_RETURNCMD, Point.x, Point.y, m_hWnd, NULL);
+            m_ContextMenu.Release();
+
+            if (Command != 0)
+            {
+                CMINVOKECOMMANDINFOEX Info;
+
+                ZeroMemory(&Info, sizeof(Info));
+                Info.cbSize = sizeof(Info);
+                Info.fMask = CMIC_MASK_UNICODE | CMIC_MASK_PTINVOKE;
+                Info.hwnd = m_hWnd;
+                Info.lpVerbW = MAKEINTRESOURCEW(Command - 1);
+                Info.ptInvoke = Point;
+                Info.nShow = SW_SHOWNORMAL;
+                Menu->InvokeCommand((CMINVOKECOMMANDINFO *)&Info);
+            }
+        }
+
+        DestroyMenu(Popup);
+        return hr;
+    }
+
+    LRESULT OnContextMenu(UINT, WPARAM, LPARAM lParam, BOOL&)
+    {
+        POINT Point = { (SHORT)LOWORD(lParam), (SHORT)HIWORD(lParam) };
+        HTREEITEM Target = NULL;
+
+        if (Point.x != -1 || Point.y != -1)
+        {
+            TVHITTESTINFO Hit = { };
+            Hit.pt = Point;
+            ::ScreenToClient(m_Tree, &Hit.pt);
+            TreeView_HitTest(m_Tree, &Hit);
+            Target = Hit.hItem;
+        }
+        if (!Target)
+            Target = (HTREEITEM)TreeView_GetSelection(m_Tree);
+        if (Target)
+            ShowTreeContextMenu(Target, Point);
+        return 0;
+    }
+
+    LRESULT OnMenuMessage(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL&)
+    {
+        LRESULT Result = 0;
+
+        if (!m_ContextMenu)
+            return FALSE;
+        if (FAILED(SHForwardContextMenuMsg(m_ContextMenu, uMsg, wParam, lParam, &Result, TRUE)))
+            return FALSE;
+        return Result;
     }
 
     HRESULT InsertTreeItem(
@@ -990,6 +1075,18 @@ private:
             {
                 NMTVKEYDOWN *Notify = reinterpret_cast<NMTVKEYDOWN *>(lParam);
                 NotifyKeyboardInput(WM_KEYDOWN, Notify->wVKey, 0);
+
+                if (Notify->wVKey == VK_F10 && (GetKeyState(VK_SHIFT) & 0x8000))
+                {
+                    HTREEITEM Selected = (HTREEITEM)TreeView_GetSelection(m_Tree);
+                    RECT ItemRect;
+                    if (Selected && TreeView_GetItemRect(m_Tree, Selected, &ItemRect, TRUE))
+                    {
+                        POINT Point = { (ItemRect.left + ItemRect.right) / 2, ItemRect.bottom + 2 };
+                        ::ClientToScreen(m_Tree, &Point);
+                        ShowTreeContextMenu(Selected, Point);
+                    }
+                }
                 break;
             }
 
@@ -1028,6 +1125,15 @@ private:
                 if (Header->code == NM_DBLCLK)
                     ClickType = (NSTCECLICKTYPE)(ClickType | NSTCECT_DBLCLICK);
                 NotifyItemClick(Data->Item, NamespaceHit, ClickType);
+
+                if (Header->code == NM_RCLICK)
+                {
+                    POINT ScreenPoint;
+
+                    GetCursorPos(&ScreenPoint);
+                    ShowTreeContextMenu(Hit.hItem, ScreenPoint);
+                    return TRUE;
+                }
                 break;
             }
         }
@@ -1067,6 +1173,10 @@ public:
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
         MESSAGE_HANDLER(WM_SIZE, OnSize)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
+        MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
+        MESSAGE_HANDLER(WM_INITMENUPOPUP, OnMenuMessage)
+        MESSAGE_HANDLER(WM_DRAWITEM, OnMenuMessage)
+        MESSAGE_HANDLER(WM_MEASUREITEM, OnMenuMessage)
     END_MSG_MAP()
 
     STDMETHODIMP Initialize(HWND Parent, RECT *Rect, NSTCSTYLE Style) override
