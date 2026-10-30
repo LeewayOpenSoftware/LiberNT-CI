@@ -23,8 +23,14 @@ add_library(libservicing ${SOURCE})
 target_include_directories(libservicing PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 add_dependencies(libservicing psdk)
 
+# The test hooks (LN_TESTING) exist only in this second copy of the library, never in libservicing.
+add_library(libservicing_testlib ${SOURCE})
+target_include_directories(libservicing_testlib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(libservicing_testlib PUBLIC LN_TESTING)
+add_dependencies(libservicing_testlib psdk)
+
 # unit tests (need signed fixtures: see tools/libernt-update/Build-And-Test.ps1; run on the VM or a host)
 add_executable(libservicing_tests tests/tests.c)
 set_module_type(libservicing_tests win32cui UNICODE)
-target_link_libraries(libservicing_tests libservicing)
-add_importlibs(libservicing_tests wintrust crypt32 advapi32 msvcrt kernel32)
+target_link_libraries(libservicing_tests libservicing_testlib)
+add_importlibs(libservicing_tests wintrust crypt32 advapi32 user32 ole32 msvcrt kernel32)

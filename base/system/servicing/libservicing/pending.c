@@ -215,3 +215,100 @@ DWORD LnAttemptSetHealth(const LN_TARGET *t, const char *transactionId)
     strcpy(cur.lastResult, "applied");
     return WriteAttempt(t, &cur);
 }
+
+/* The plan is a convenience for the boot applier, not an authority: it must be exactly what the signed
+ * package in the store says. Checks the stored package again (catalog, manifest signature, objects),
+ * the transaction id, and every operation against the manifest. */
+DWORD LnServicingValidatePlan(const LN_TARGET *t, const char *planJson)
+{
+    LN_JSON *root;
+    const LN_JSON *pk, *tg, *ops, *op;
+    const char *id, *ver, *digest, *txs, *machine;
+    char pinned[65], expect[65];
+    LN_MANIFEST m;
+    long long schema;
+    DWORD err = LnJsonParse(planJson, strlen(planJson), &root);
+
+    if (err)
+        return LN_E_MANIFEST_INVALID;
+    err = LN_E_MANIFEST_INVALID;
+    pk = LnJsonGet(root, "package");
+    tg = LnJsonGet(root, "target");
+    ops = LnJsonGet(root, "operations");
+    txs = LnJsonGetString(root, "transactionId");
+    id = LnJsonGetString(pk, "id");
+    ver = LnJsonGetString(pk, "version");
+    digest = LnJsonGetString(pk, "digest");
+    machine = LnJsonGetString(tg, "machineId");
+    if (!LnJsonGetInt(root, "schema", &schema) || schema != 1 || !txs || !id || !ver || !digest || !machine ||
+        !ops || ops->type != LnJsonArray || !LnJsonGetString(root, "operation") ||
+        strcmp(LnJsonGetString(root, "operation"), "install") || strcmp(machine, t->identity) ||
+        !LnJsonGetString(root, "signature"))
+        goto out;
+    if (LnPinnedCertSha256(t, pinned) || (err = LnServicingVerifyStored(t, id, ver, pinned, &m)) != 0)
+    {
+        if (!err)
+            err = LN_E_NO_TRUST_ANCHOR;
+        goto out;
+    }
+    err = LN_E_MANIFEST_INVALID;
+    LnTransactionId(t->identity, id, ver, m.manifestSha256, "install", expect);
+    if (strcmp(m.manifestSha256, digest) || strcmp(expect, txs))
+        goto outm;
+    for (op = ops->child; op; op = op->next)
+    {
+        const char *type = LnJsonGetString(op, "type"), *target = LnJsonGetString(op, "target");
+        const char *sha = LnJsonGetString(op, "sha256"), *source = LnJsonGetString(op, "source");
+        const LN_JSON *backup = LnJsonGet(op, "backup");
+        WCHAR *wt = (target && target[0] == '\\') ? LnUtf8ToWide(target + 1) : NULL;
+        char want[128];
+        BOOL found = FALSE;
+        size_t i;
+
+        if (!type || !sha || !source || !wt || (strcmp(type, "replace-file") && strcmp(type, "add-file")))
+        {
+            free(wt);
+            goto outm;
+        }
+        strcpy(want, "store/objects/");
+        strncat(want, sha, 64);
+        for (i = 0; i < m.itemCount; i++)
+        {
+            if (!m.items[i].isDelete && !_wcsicmp(m.items[i].target, wt) && !strcmp(m.items[i].sha256, sha))
+                found = TRUE;
+        }
+        free(wt);
+        if (!found || strcmp(source, want))
+            goto outm;
+        if ((!strcmp(type, "replace-file")) != (backup && backup->type == LnJsonString))
+            goto outm;                                  /* replace-file has a backup, add-file has none */
+    }
+    err = ERROR_SUCCESS;
+outm:
+    LnManifestFree(&m);
+out:
+    LnJsonFree(root);
+    return err;
+}
+
+/* A failed health check is a verifiable failure (S1-CONTRACTS.md section 5): failureRecorded=true makes the
+ * next rollback decision name it. The transaction itself stays "applied": confirmed is only ever written
+ * after a successful check, and a failed check does not rewrite history. */
+DWORD LnAttemptRecordFailure(const LN_TARGET *t, const char *transactionId)
+{
+    LN_ATTEMPT cur;
+    DWORD err = LnServicingReadAttempt(t, &cur);
+
+    if (err == LN_E_NOT_FOUND)
+    {
+        memset(&cur, 0, sizeof(cur));
+        strcpy(cur.transactionId, transactionId);
+    }
+    else if (err)
+        return err;
+    if (strcmp(cur.transactionId, transactionId))
+        return ERROR_SUCCESS;
+    cur.failureRecorded = TRUE;
+    strcpy(cur.lastResult, "failed");
+    return WriteAttempt(t, &cur);
+}

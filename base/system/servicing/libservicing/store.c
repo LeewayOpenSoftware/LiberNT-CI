@@ -113,6 +113,7 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
         WCHAR *srcCat = LnJoin(pkgDir, L"catalog.cat");
         WCHAR *srcSig = LnJoin(pkgDir, L"manifest.sig");
         WCHAR *relS = PackageRel(L"manifests", m->packageId, m->releaseVersion, L"manifest.sig");
+        WCHAR *relS2 = PackageRel(L"packages", m->packageId, m->releaseVersion, L"manifest.sig");
         WCHAR *relM = PackageRel(L"manifests", m->packageId, m->releaseVersion, L"manifest.json");
         WCHAR *relP = PackageRel(L"packages", m->packageId, m->releaseVersion, L"manifest.json");
         WCHAR *relC = PackageRel(L"packages", m->packageId, m->releaseVersion, L"catalog.cat");
@@ -121,6 +122,7 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
         {
             WCHAR *dM = LnTargetPath(t, relM), *dP = LnTargetPath(t, relP), *dC = LnTargetPath(t, relC);
             WCHAR *dS = relS ? LnTargetPath(t, relS) : NULL;
+            WCHAR *dS2 = relS2 ? LnTargetPath(t, relS2) : NULL;
 
             if (dM && dP && dC)
             {
@@ -128,6 +130,7 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
                 if (!err) err = LnCopyFileFlush(srcManifest, dP);
                 if (!err) err = LnCopyFileFlush(srcCat, dC);
                 if (!err && srcSig && dS) err = LnCopyFileFlush(srcSig, dS);
+                if (!err && srcSig && dS2) err = LnCopyFileFlush(srcSig, dS2);
             }
             else
                 err = ERROR_NOT_ENOUGH_MEMORY;
@@ -135,6 +138,7 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
             free(dP);
             free(dC);
             free(dS);
+            free(dS2);
         }
         else
             err = ERROR_NOT_ENOUGH_MEMORY;
@@ -142,6 +146,7 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
         free(srcCat);
         free(srcSig);
         free(relS);
+        free(relS2);
         free(relM);
         free(relP);
         free(relC);
@@ -172,38 +177,6 @@ DWORD LnStoreLoadManifest(const LN_TARGET *t, const char *packageId, const char 
     return err;
 }
 
-static void RemoveTree(const WCHAR *dir)
-{
-    WCHAR *pattern = LnJoin(dir, L"*");
-    WIN32_FIND_DATAW fd;
-    HANDLE h;
-
-    if (!pattern)
-        return;
-    h = FindFirstFileW(pattern, &fd);
-    free(pattern);
-    if (h != INVALID_HANDLE_VALUE)
-    {
-        do
-        {
-            WCHAR *p;
-
-            if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L".."))
-                continue;
-            p = LnJoin(dir, fd.cFileName);
-            if (!p)
-                continue;
-            if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
-                RemoveTree(p);
-            else
-                DeleteFileW(p);
-            free(p);
-        } while (FindNextFileW(h, &fd));
-        FindClose(h);
-    }
-    RemoveDirectoryW(dir);
-}
-
 DWORD LnStoreRemovePackage(const LN_TARGET *t, const char *packageId, const char *version)
 {
     WCHAR *r1 = PackageRel(L"manifests", packageId, version, L""), *r2 = PackageRel(L"packages", packageId, version, L"");
@@ -217,8 +190,8 @@ DWORD LnStoreRemovePackage(const LN_TARGET *t, const char *packageId, const char
         {
             if (!LnPathExists(p1) && !LnPathExists(p2))
                 err = LN_E_NOT_FOUND;
-            RemoveTree(p1);
-            RemoveTree(p2);
+            LnRemoveTree(p1);
+            LnRemoveTree(p2);
         }
         else
             err = ERROR_NOT_ENOUGH_MEMORY;

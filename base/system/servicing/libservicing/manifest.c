@@ -25,6 +25,7 @@ static BOOL IsIdChar(char c)
 static BOOL IsId(const char *s, size_t max)
 {
     size_t n = s ? strlen(s) : 0, i;
+    WCHAR wide[80];
 
     if (n == 0 || n > max)
         return FALSE;
@@ -34,7 +35,13 @@ static BOOL IsId(const char *s, size_t max)
     {
         if (!IsIdChar(s[i]))
             return FALSE;
+        wide[i] = (WCHAR)(unsigned char)s[i];
+        if (s[i] == '~')
+            return FALSE;
     }
+    wide[n] = 0;
+    if (LnIsReservedName(wide, n))                      /* ids become directory names in the store */
+        return FALSE;
     return TRUE;
 }
 
@@ -122,9 +129,20 @@ DWORD LnManifestParse(const char *text, size_t len, LN_MANIFEST *m)
         item->isDelete = action && !strcmp(action, "delete");
         if (action && !item->isDelete && strcmp(action, "replace"))
             goto bad;
+        {
+            long long ds;
+
+            item->driverStart = -1;
+            if (LnJsonGetInt(it, "driverStart", &ds))
+            {
+                if (ds < 0 || ds > 4)
+                    goto bad;
+                item->driverStart = (int)ds;
+            }
+        }
         item->target = LnUtf8ToWide(target);
         m->itemCount++;                                 /* owned from here, freed on failure */
-        if (!item->target || !LnTargetPathAllowed(item->target))
+        if (!item->target || !LnTargetItemAllowed(item->target, item->driverStart))
         {
             err = LN_E_FORBIDDEN_TARGET;
             goto fail;

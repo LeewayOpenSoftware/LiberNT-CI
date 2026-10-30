@@ -23,7 +23,13 @@
 
 #define CER_NAME L"trust\\Leeway-LiberNT-Update-DEV.cer"
 
+#ifdef LN_TESTING
 BOOL LnTestLockedAsPending = FALSE;
+void (*LnTestAfterStageHook)(const WCHAR *sourcePackageDir) = NULL;
+#define TEST_LOCKED_AS_PENDING LnTestLockedAsPending
+#else
+#define TEST_LOCKED_AS_PENDING FALSE
+#endif
 
 typedef struct _CTX
 {
@@ -148,7 +154,7 @@ static const LN_JENTRY *LastOf(const LN_JOURNAL *j, const char *txid)
 
 /* ---- trust anchor ------------------------------------------------------ */
 
-static DWORD PinnedCert(const LN_TARGET *t, char hash[65])
+DWORD LnPinnedCertSha256(const LN_TARGET *t, char hash[65])
 {
     WCHAR *p = LnTargetPath(t, CER_NAME);
     DWORD err;
@@ -162,49 +168,135 @@ static DWORD PinnedCert(const LN_TARGET *t, char hash[65])
     return err;
 }
 
+#define PinnedCert LnPinnedCertSha256
+
 /* ---- add-package ------------------------------------------------------- */
+
+/* Copies the package into a private staging folder (inside the protected servicing tree). What the
+ * caller names (a user folder, removable media, a share) is read exactly once; everything after
+ * this is done on the copy, so changing the source between verify and import changes nothing. */
+static DWORD StagePackage(const LN_TARGET *t, const WCHAR *pkgDir, WCHAR **stageDir)
+{
+    WCHAR leaf[48], *base, *src = NULL, *dst = NULL;
+    LARGE_INTEGER pc;
+    static const WCHAR *fixed[] = { L"manifest.json", L"manifest.sig", L"catalog.cat" };
+    LN_MANIFEST m;
+    char num[24];
+    DWORD err = ERROR_SUCCESS;
+    size_t i, k;
+
+    *stageDir = NULL;
+    QueryPerformanceCounter(&pc);
+    LnI64ToStr(pc.QuadPart, num);
+    wcscpy(leaf, L"staging\\add-");
+    for (k = 0; num[k] && k < 30; k++)
+    {
+        WCHAR one[2] = { (WCHAR)num[k], 0 };
+
+        wcscat(leaf, one);
+    }
+    base = LnTargetPath(t, leaf);
+    if (!base)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    err = LnEnsureDir(base);
+    for (i = 0; !err && i < sizeof(fixed) / sizeof(fixed[0]); i++)
+    {
+        src = LnJoin(pkgDir, fixed[i]);
+        dst = LnJoin(base, fixed[i]);
+        if (!src || !dst)
+            err = ERROR_NOT_ENOUGH_MEMORY;
+        else if (LnPathExists(src))
+            err = LnCopyFileFlush(src, dst);
+        else if (i == 0)
+            err = ERROR_FILE_NOT_FOUND;                  /* a package without a manifest */
+        free(src);
+        free(dst);
+    }
+    if (!err)
+    {
+        WCHAR *mp = LnJoin(base, L"manifest.json");
+
+        err = mp ? LnManifestLoad(mp, &m) : ERROR_NOT_ENOUGH_MEMORY;     /* the COPY decides the file list */
+        free(mp);
+        if (!err)
+        {
+            WCHAR *sp = LnJoin(pkgDir, L"payload"), *dp = LnJoin(base, L"payload");
+
+            for (i = 0; !err && sp && dp && i < m.itemCount; i++)
+            {
+                if (m.items[i].isDelete)
+                    continue;
+                src = LnJoin(sp, m.items[i].path);
+                dst = LnJoin(dp, m.items[i].path);
+                err = (src && dst) ? LnCopyFileFlush(src, dst) : ERROR_NOT_ENOUGH_MEMORY;
+                if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+                    err = LN_E_HASH_MISMATCH;            /* declared but missing */
+                free(src);
+                free(dst);
+            }
+            free(sp);
+            free(dp);
+            LnManifestFree(&m);
+        }
+    }
+    if (err)
+        LnRemoveTree(base);
+    else
+        *stageDir = base;
+    if (err)
+        free(base);
+    return err;
+}
 
 DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[65])
 {
     CTX c;
     LN_JOURNAL j;
     const LN_JENTRY *last;
-    WCHAR *mp;
+    WCHAR *stage = NULL, *mp;
     char pinned[65], buf[48];
     DWORD err;
 
     if (txId)
         txId[0] = 0;
-    mp = LnJoin(pkgDir, L"manifest.json");
+    err = StagePackage(t, pkgDir, &stage);
+    if (err)
+        return err;
+#ifdef LN_TESTING
+    if (LnTestAfterStageHook)
+        LnTestAfterStageHook(pkgDir);                    /* tests change the SOURCE here: it must not matter */
+#endif
+
+    mp = LnJoin(stage, L"manifest.json");
     if (!mp)
+    {
+        LnRemoveTree(stage);
+        free(stage);
         return ERROR_NOT_ENOUGH_MEMORY;
+    }
     memset(&c, 0, sizeof(c));
     c.t = t;
     c.op = "install";
     err = LnManifestLoad(mp, &c.m);
     free(mp);
     if (err)
-        return err;                                     /* no digest to journal against */
+        goto cleanup_nomanifest;                         /* no digest to journal against */
     LnTransactionId(t->identity, c.m.packageId, c.m.releaseVersion, c.m.manifestSha256, c.op, c.txid);
     if (txId)
         strcpy(txId, c.txid);
 
     err = PinnedCert(t, pinned);
     if (!err)
-        err = LnServicingVerifyPackage(pkgDir, pinned, NULL);
+        err = LnServicingVerifyPackage(stage, pinned, NULL);          /* only the private copy is verified */
     if (err)
     {
         Journal(&c, "failed", "error", ErrText(err, buf));              /* rejected before staging */
-        LnManifestFree(&c.m);
-        return err;
+        goto cleanup;
     }
 
     err = LnJournalRead(t, &j);
     if (err)
-    {
-        LnManifestFree(&c.m);
-        return err;
-    }
+        goto cleanup;
     last = LastOf(&j, c.txid);
     if (last && strcmp(last->phase, "failed"))
     {
@@ -216,20 +308,36 @@ DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[6
         {
             LnManifestFree(&stored);
             LnJournalFree(&j);
-            LnManifestFree(&c.m);
-            return ERROR_SUCCESS;
+            goto cleanup;
         }
     }
     LnJournalFree(&j);
 
     err = Journal(&c, "verified", "ok", NULL);
     if (!err)
-        err = LnStoreImport(t, pkgDir, &c.m);
+        err = LnStoreImport(t, stage, &c.m);
+    if (!err)
+    {
+        /* what was stored is what was verified */
+        LN_MANIFEST stored;
+
+        err = LnStoreLoadManifest(t, c.m.packageId, c.m.releaseVersion, &stored);
+        if (!err)
+        {
+            if (strcmp(stored.manifestSha256, c.m.manifestSha256))
+                err = LN_E_HASH_MISMATCH;
+            LnManifestFree(&stored);
+        }
+    }
     if (err)
         Journal(&c, "failed", "error", ErrText(err, buf));
     else
         err = Journal(&c, "staged", "ok", NULL);
+cleanup:
     LnManifestFree(&c.m);
+cleanup_nomanifest:
+    LnRemoveTree(stage);
+    free(stage);
     return err;
 }
 
@@ -412,10 +520,22 @@ static DWORD TakeBackups(const CTX *c, UNDO *u)
 
 /* ---- apply one item ----------------------------------------------------- */
 
-static BOOL IsLockedError(DWORD e)
+/* Sharing/lock violations and a mapped image are "in use". ACCESS_DENIED is what replacing a running
+ * executable returns, but it is also what a real permission problem returns: it counts as "in use"
+ * only if the file is not read-only and the temporary copy next to it could be created (so the
+ * directory is writable and the denial can only come from the open image). */
+static BOOL IsLockedError(DWORD e, const WCHAR *target)
 {
-    return e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION || e == ERROR_USER_MAPPED_FILE ||
-           e == ERROR_LOCK_VIOLATION;
+    if (e == ERROR_SHARING_VIOLATION || e == ERROR_USER_MAPPED_FILE || e == ERROR_LOCK_VIOLATION)
+        return TRUE;
+    if (e == ERROR_ACCESS_DENIED)
+    {
+        DWORD attrs = GetFileAttributesW(target);
+
+        return attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_READONLY) &&
+               !(attrs & FILE_ATTRIBUTE_DIRECTORY);
+    }
+    return FALSE;
 }
 
 /* *pending is set when the target is in use (Online only): the plan takes it at boot. */
@@ -439,7 +559,7 @@ static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
         if (!DeleteFileW(tp))
         {
             err = GetLastError();
-            if (IsLockedError(err))
+            if (IsLockedError(err, tp))
                 err = LN_E_PRECONDITION;                /* a delete of a file in use is not deferred (stage 1) */
             goto out;
         }
@@ -497,7 +617,7 @@ static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
     {
         err = GetLastError();
         DeleteFileW(tmp);
-        if ((c->t->mode == LnTargetOnline || LnTestLockedAsPending) && IsLockedError(err))
+        if ((c->t->mode == LnTargetOnline || TEST_LOCKED_AS_PENDING) && IsLockedError(err, tp))
         {
             *pending = TRUE;
             err = ERROR_SUCCESS;
@@ -530,6 +650,9 @@ static DWORD RestoreItem(const CTX *c, size_t i, const UNDO *u)
 
     if (!tp)
         return ERROR_NOT_ENOUGH_MEMORY;
+    err = LnTargetValidateReal(c->t, c->m.items[i].target);
+    if (err)
+        goto out;
     err = CurrentHash(tp, cur);
     if (err)
         goto out;
@@ -938,6 +1061,18 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
     err = PinnedCert(t, pinned);
     if (err)
         goto fail;
+    /* ENFORCE at the moment of use, not only at add-package: the store copy (manifest, catalog,
+     * signature, objects) must still verify against the pinned certificate */
+    err = LnServicingVerifyStored(t, packageId, version, pinned, NULL);
+    if (err)
+        goto fail;
+    /* every target must be a real, unaliased path: no 8.3 names, no junctions or links in the way */
+    for (i = 0; i < c.m.itemCount; i++)
+    {
+        err = LnTargetValidateReal(t, c.m.items[i].target);
+        if (err)
+            goto fail;
+    }
 
     u = calloc(c.m.itemCount, sizeof(UNDO));
     pending = calloc(c.m.itemCount, sizeof(BOOL));
@@ -1085,7 +1220,7 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
     const LN_JENTRY *last;
     size_t i;
     DWORD err;
-    char buf[48];
+    BOOL early = FALSE;
 
     err = CtxInit(&c, t, packageId, version, "apply");
     if (err)
@@ -1106,6 +1241,7 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
     {
         BOOL already = last && !strcmp(last->phase, "confirmed");
 
+        early = last && !strcmp(last->phase, "pending-first-boot");     /* the boot applier has not run yet */
         LnJournalFree(&j);
         if (err || already)
         {
@@ -1114,6 +1250,20 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
         }
     }
 
+    {
+        char pinned[65];
+
+        err = PinnedCert(t, pinned);
+        if (!err)
+            err = LnServicingVerifyStored(t, packageId, version, pinned, NULL);     /* same rule as apply */
+        if (err)
+        {
+            LogLine(t, c.txid, "confirm refused: the stored package no longer verifies");
+            LnAttemptRecordFailure(t, c.txid);
+            LnManifestFree(&c.m);
+            return err;
+        }
+    }
     /* the proof: every target is exactly what the manifest says */
     for (i = 0; i < c.m.itemCount && !err; i++)
     {
@@ -1132,7 +1282,9 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
     }
     if (err)
     {
-        Journal(&c, "failed", "error", ErrText(err, buf));
+        LogLine(t, c.txid, "confirm refused: a target does not match its final hash");
+        if (!early)
+            LnAttemptRecordFailure(t, c.txid);          /* too early (plan pending) is not a failure */
         LnManifestFree(&c.m);
         return err;
     }

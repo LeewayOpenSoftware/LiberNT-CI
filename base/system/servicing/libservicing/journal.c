@@ -11,9 +11,15 @@
  * closes. prev is the SHA-256 of the previous valid line, so a removed or altered entry breaks
  * the chain.
  *
- * A write torn by a power cut leaves a partial last line. The reader ignores an unparseable
- * line (tailTruncated is set) and the next append first terminates it with a newline. A line
- * that parses but does not continue the chain is corruption.
+ * A write torn by a power cut leaves a partial LAST line, without its newline. That one line is
+ * ignored (tailTruncated is set) and the next append truncates it away. Any other line that does
+ * not parse (in the middle, empty, or newline-terminated) is corruption, and so is a line that
+ * parses but does not continue the chain.
+ *
+ * A hash chain without a key cannot tell that the LAST entries were cut or rewritten, so
+ * journal\anchor.json keeps (seq, hash) of the last entry, rewritten after every append and
+ * compared on every read. The journal may be one entry ahead of the anchor (a crash between the
+ * two writes), never behind or different. Both files live in the protected servicing tree.
  */
 
 #include "libservicing.h"
@@ -123,6 +129,63 @@ static WCHAR *JournalPath(const LN_TARGET *t)
     return LnTargetPath(t, L"journal\\transactions.jsonl");
 }
 
+static DWORD WriteAnchor(const LN_TARGET *t, long long seq, const char *hash)
+{
+    LN_BUF b;
+    char num[24];
+    WCHAR *path = LnTargetPath(t, L"journal\\anchor.json");
+    DWORD err = 0;
+
+    if (!path)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    LnBufInit(&b);
+    LnI64ToStr(seq, num);
+    err |= LnBufAppendStr(&b, "{\"schema\":1,\"seq\":");
+    err |= LnBufAppendStr(&b, num);
+    err |= LnBufAppendStr(&b, ",\"hash\":");
+    err |= LnBufAppendJsonString(&b, hash);
+    err |= LnBufAppendStr(&b, "}\n");
+    err = err ? ERROR_NOT_ENOUGH_MEMORY : LnWriteFileAtomic(path, b.data, b.len);
+    LnBufFree(&b);
+    free(path);
+    return err;
+}
+
+/* found = FALSE when there is no anchor file */
+static DWORD ReadAnchor(const LN_TARGET *t, BOOL *found, long long *seq, char hash[65])
+{
+    WCHAR *path = LnTargetPath(t, L"journal\\anchor.json");
+    BYTE *data;
+    size_t len;
+    LN_JSON *root;
+    const char *h;
+    DWORD err;
+
+    *found = FALSE;
+    if (!path)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    err = LnReadFileAll(path, &data, &len);
+    free(path);
+    if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
+        return ERROR_SUCCESS;
+    if (err)
+        return err;
+    err = LnJsonParse((const char *)data, len, &root);
+    free(data);
+    if (err || !root)
+        return LN_E_JOURNAL_CORRUPT;
+    h = LnJsonGetString(root, "hash");
+    if (!LnJsonGetInt(root, "seq", seq) || !h || !LnIsSha256Hex(h) || *seq < 0)
+        err = LN_E_JOURNAL_CORRUPT;
+    else
+    {
+        strcpy(hash, h);
+        *found = TRUE;
+    }
+    LnJsonFree(root);
+    return err;
+}
+
 void LnJournalFree(LN_JOURNAL *j)
 {
     free(j->entries);
@@ -131,8 +194,12 @@ void LnJournalFree(LN_JOURNAL *j)
 
 /* Reads and validates; lastHash/lastSeq describe the last valid entry; needsNewline tells
  * whether the file ends in a partial line. */
-static DWORD ReadInternal(const LN_TARGET *t, LN_JOURNAL *j, char lastHash[65], long long *lastSeq, BOOL *needsNewline)
+static DWORD ReadInternal(const LN_TARGET *t, LN_JOURNAL *j, char lastHash[65], long long *lastSeq, BOOL *needsNewline,
+                          size_t *validEnd)
 {
+    BOOL anchorFound;
+    long long anchorSeq = 0;
+    char anchorHash[65];
     WCHAR *path = JournalPath(t);
     BYTE *data = NULL;
     size_t len = 0, pos = 0, cap = 0;
@@ -142,17 +209,19 @@ static DWORD ReadInternal(const LN_TARGET *t, LN_JOURNAL *j, char lastHash[65], 
     strcpy(lastHash, ZERO_HASH);
     *lastSeq = 0;
     *needsNewline = FALSE;
+    *validEnd = 0;
     if (!path)
         return ERROR_NOT_ENOUGH_MEMORY;
     err = LnReadFileAll(path, &data, &len);
     free(path);
     if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
-        return ERROR_SUCCESS;                           /* empty journal */
+    {
+        data = NULL;
+        len = 0;                                        /* empty journal */
+        err = ERROR_SUCCESS;
+    }
     if (err)
         return err;
-
-    if (len && data[len - 1] != '\n')
-        *needsNewline = TRUE;
 
     while (pos < len)
     {
@@ -162,7 +231,12 @@ static DWORD ReadInternal(const LN_TARGET *t, LN_JOURNAL *j, char lastHash[65], 
 
         while (end < len && data[end] != '\n')
             end++;
-        if (end > pos)
+        if (end == pos)
+        {
+            free(data);                                 /* an empty line is never written */
+            LnJournalFree(j);
+            return LN_E_JOURNAL_CORRUPT;
+        }
         {
             if (ParseEntry((const char *)data + pos, end - pos, &e))
             {
@@ -190,13 +264,49 @@ static DWORD ReadInternal(const LN_TARGET *t, LN_JOURNAL *j, char lastHash[65], 
                 LnSha256Hex(data + pos, end - pos, h);
                 strcpy(lastHash, h);
                 *lastSeq = e.sequence;
+                *validEnd = end < len ? end + 1 : len;
+                if (end == len)
+                    *needsNewline = TRUE;               /* a complete last line that lost only its newline */
             }
+            else if (end == len)
+                j->tailTruncated = TRUE;                /* the torn LAST line of a power cut: ignored */
             else
-                j->tailTruncated = TRUE;                /* a torn line: ignored, the chain skips it */
+            {
+                free(data);                             /* anything else that does not parse */
+                LnJournalFree(j);
+                return LN_E_JOURNAL_CORRUPT;
+            }
         }
         pos = end + 1;
     }
     free(data);
+
+    /* the anchor must agree with the tail: the journal is equal to it or exactly one entry ahead */
+    err = ReadAnchor(t, &anchorFound, &anchorSeq, anchorHash);
+    if (err)
+    {
+        LnJournalFree(j);
+        return err;
+    }
+    if (anchorFound)
+    {
+        BOOL ok = FALSE;
+
+        if (anchorSeq == *lastSeq)
+            ok = !strcmp(anchorHash, lastHash);
+        else if (anchorSeq + 1 == *lastSeq && j->count)
+            ok = !strcmp(anchorHash, j->entries[j->count - 1].previousEntrySha256);
+        if (!ok)
+        {
+            LnJournalFree(j);
+            return LN_E_JOURNAL_CORRUPT;                /* cut, rewritten or replaced */
+        }
+    }
+    else if (*lastSeq > 1)
+    {
+        LnJournalFree(j);
+        return LN_E_JOURNAL_CORRUPT;                    /* the anchor was removed */
+    }
     return ERROR_SUCCESS;
 }
 
@@ -205,8 +315,9 @@ DWORD LnJournalRead(const LN_TARGET *t, LN_JOURNAL *j)
     char h[65];
     long long seq;
     BOOL nl;
+    size_t ve;
 
-    return ReadInternal(t, j, h, &seq, &nl);
+    return ReadInternal(t, j, h, &seq, &nl, &ve);
 }
 
 DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e)
@@ -214,13 +325,16 @@ DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e)
     LN_JOURNAL j;
     char lastHash[65];
     long long lastSeq;
-    BOOL needsNewline;
+    BOOL needsNewline, torn;
     LN_BUF line;
     WCHAR *path;
     HANDLE h;
     DWORD err, wrote;
+    size_t validEnd;
+    char entryHash[65];
 
-    err = ReadInternal(t, &j, lastHash, &lastSeq, &needsNewline);
+    err = ReadInternal(t, &j, lastHash, &lastSeq, &needsNewline, &validEnd);
+    torn = j.tailTruncated;
     LnJournalFree(&j);
     if (err)
         return err;
@@ -230,11 +344,16 @@ DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e)
     LnNowUtc(e->timestampUtc);
 
     LnBufInit(&line);
-    if (needsNewline)
+    if (needsNewline && !torn)
         LnBufAppendStr(&line, "\n");
     err = Serialize(e, &line);
     if (!err)
+    {
+        size_t skip = (needsNewline && !torn) ? 1 : 0;
+
+        LnSha256Hex(line.data + skip, line.len - skip, entryHash);    /* hash of the line without its newline */
         err = LnBufAppendStr(&line, "\n");
+    }
     if (err)
     {
         LnBufFree(&line);
@@ -256,6 +375,23 @@ DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e)
             *sl = 0;
         err = LnEnsureDir(dir);
     }
+    if (!err && torn)
+    {
+        /* cut the partial last line of a power failure; everything before it is intact */
+        HANDLE t2 = CreateFileW(path, GENERIC_WRITE, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+        if (t2 == INVALID_HANDLE_VALUE)
+            err = GetLastError();
+        else
+        {
+            LARGE_INTEGER pos;
+
+            pos.QuadPart = (LONGLONG)validEnd;
+            if (!SetFilePointerEx(t2, pos, NULL, FILE_BEGIN) || !SetEndOfFile(t2) || !FlushFileBuffers(t2))
+                err = GetLastError();
+            CloseHandle(t2);
+        }
+    }
     if (!err)
     {
         h = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
@@ -273,6 +409,8 @@ DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e)
     }
     free(path);
     LnBufFree(&line);
+    if (!err)
+        err = WriteAnchor(t, e->sequence, entryHash);
     return err;
 }
 

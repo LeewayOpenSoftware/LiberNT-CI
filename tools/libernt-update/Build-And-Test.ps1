@@ -52,7 +52,7 @@ function Invoke-Cc([string[]]$cargs, [string]$what) {
 $exe = Join-Path $OutDir 'libernt-update.exe'
 $tst = Join-Path $OutDir 'libservicing-tests.exe'
 if (-not (Invoke-Cc ($common + $srcs + @((Join-Path $cli 'main.c'), '-o', $exe) + $libs) 'libernt-update.exe')) { $compileOk = $false }
-if (-not (Invoke-Cc ($common + $srcs + @((Join-Path $lib 'tests\tests.c'), '-o', $tst) + $libs) 'libservicing-tests.exe')) { $compileOk = $false }
+if (-not (Invoke-Cc ($common + @('-DLN_TESTING') + $srcs + @((Join-Path $lib 'tests\tests.c'), '-o', $tst) + $libs + @('-lole32')) 'libservicing-tests.exe (with the test hooks)')) { $compileOk = $false }
 Write-Host ("COMPILATION: " + $(if ($compileOk) { 'OK' } else { 'FAILED' }))
 if (-not $compileOk) { exit 1 }
 
@@ -67,6 +67,7 @@ if (-not $SkipFixtures) {
     & $mk -OutDir "$fx\tampered-manifest" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -TamperManifestAfterSigning | Out-Null
     & $mk -OutDir "$fx\tampered-sig" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -TamperManifestSigAfterSigning | Out-Null
     & $mk -OutDir "$fx\no-manifest-sig" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -NoManifestSig | Out-Null
+    & $mk -OutDir "$fx\junction" -PackageId ln.junction -Version 1.0 -KeyDir $KeyDir -Items @(@{ Target = 'Windows\System32\jn\evil.dll'; Content = 'evil' }) | Out-Null
     & $mk -OutDir "$fx\unsigned" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -Unsigned | Out-Null
     & $mk -OutDir "$fx\unsigned-catalog" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -UnsignedCatalog | Out-Null
     & $mk -OutDir "$fx\kernel" -PackageId ln.kernel -Version 1.0 -Items @(@{ Target = 'Windows\System32\ntoskrnl.exe'; Content = 'no' }) -KeyDir $KeyDir | Out-Null

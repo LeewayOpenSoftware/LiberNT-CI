@@ -153,6 +153,11 @@ static int CmdPending(const LN_TARGET *t)
     if (err)
         return Fail("read plan", err);
     printf("plan:\n%s", plan);
+    err = LnServicingValidatePlan(t, plan);
+    if (err)
+        printf("plan validation: REJECTED (%s, 0x%08lx): it does not match the signed package in the store\n", ErrName(err), (unsigned long)err);
+    else
+        puts("plan validation: matches the signed package in the store");
     free(plan);
     err = LnServicingReadAttempt(t, &a);
     if (err == LN_E_NOT_FOUND)

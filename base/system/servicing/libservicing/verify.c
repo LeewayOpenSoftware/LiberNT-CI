@@ -222,7 +222,9 @@ out:
     return err;
 }
 
-DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out)
+/* t == NULL: pkgDir is a package folder (payload\<path>). t != NULL: pkgDir is the copy held in the
+ * store (packages\<id>\<ver>) and the payloads are the store objects, checked by hash. */
+static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out)
 {
     LN_MANIFEST m;
     WCHAR *manifestPath = NULL, *catPath = NULL, *payloadDir = NULL;
@@ -259,7 +261,14 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256
 
         if (m.items[i].isDelete)
             continue;
-        p = LnJoin(payloadDir, m.items[i].path);
+        if (t)
+        {
+            err = LnStoreObjectPath(t, m.items[i].sha256, &p);
+            if (err)
+                goto done;
+        }
+        else
+            p = LnJoin(payloadDir, m.items[i].path);
         if (!p)
         {
             err = ERROR_NOT_ENOUGH_MEMORY;
@@ -293,7 +302,7 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256
         err = LN_E_UNSIGNED;
         goto done;
     }
-    if (trust != 0 && trust != CERT_E_UNTRUSTEDROOT && trust != CERT_E_CHAINING)
+    if (trust != 0 && trust != CERT_E_UNTRUSTEDROOT)
     {
         err = LN_E_CATALOG_INVALID;
         goto done;
@@ -338,5 +347,59 @@ done_nomanifest:
     free(manifestPath);
     free(catPath);
     free(payloadDir);
+    return err;
+}
+
+DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out)
+{
+    return VerifyCommon(NULL, pkgDir, pinnedCertSha256, out);
+}
+
+DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version,
+                              const char *pinnedCertSha256, LN_MANIFEST *out)
+{
+    WCHAR *wid = LnUtf8ToWide(packageId), *wver = LnUtf8ToWide(version), *rel, *dir;
+    LN_MANIFEST m, installed;
+    DWORD err;
+
+    if (!wid || !wver)
+    {
+        free(wid);
+        free(wver);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    rel = malloc((wcslen(wid) + wcslen(wver) + 32) * sizeof(WCHAR));
+    if (!rel)
+    {
+        free(wid);
+        free(wver);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+    wcscpy(rel, L"store\\packages\\");
+    wcscat(rel, wid);
+    wcscat(rel, L"\\");
+    wcscat(rel, wver);
+    free(wid);
+    free(wver);
+    dir = LnTargetPath(t, rel);
+    free(rel);
+    if (!dir)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    err = VerifyCommon(t, dir, pinnedCertSha256, &m);
+    free(dir);
+    if (err)
+        return err;
+    /* the manifest the engine reads (manifests\) must be the very one that was verified (packages\) */
+    err = LnStoreLoadManifest(t, packageId, version, &installed);
+    if (!err)
+    {
+        if (strcmp(installed.manifestSha256, m.manifestSha256))
+            err = LN_E_CATALOG_INVALID;
+        LnManifestFree(&installed);
+    }
+    if (!err && out)
+        *out = m;
+    else
+        LnManifestFree(&m);
     return err;
 }

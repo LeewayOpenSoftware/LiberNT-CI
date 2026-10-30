@@ -277,6 +277,25 @@ DWORD LnCopyFileFlush(const WCHAR *src, const WCHAR *dst)
     return FlushPath(dst);
 }
 
+BOOL LnIsReservedName(const WCHAR *p, size_t n)
+{
+    static const WCHAR *plain[] = { L"CON", L"PRN", L"AUX", L"NUL", L"CONIN$", L"CONOUT$", L"CLOCK$" };
+    size_t base = 0, i;
+
+    while (base < n && p[base] != L'.')                  /* "CON.txt" and "CON." are the device too */
+        base++;
+    while (base > 0 && p[base - 1] == L' ')
+        base--;
+    for (i = 0; i < sizeof(plain) / sizeof(plain[0]); i++)
+    {
+        if (wcslen(plain[i]) == base && !_wcsnicmp(p, plain[i], base))
+            return TRUE;
+    }
+    if (base == 4 && (!_wcsnicmp(p, L"COM", 3) || !_wcsnicmp(p, L"LPT", 3)) && p[3] >= L'0' && p[3] <= L'9')
+        return TRUE;
+    return FALSE;
+}
+
 BOOL LnIsSafeRelativePath(const WCHAR *path)
 {
     const WCHAR *p = path;
@@ -304,6 +323,13 @@ BOOL LnIsSafeRelativePath(const WCHAR *path)
         }
         if (p[n - 1] == L'.' || p[n - 1] == L' ')   /* trailing dot/space aliases another name */
             return FALSE;
+        if (n > 255 || LnIsReservedName(p, n))
+            return FALSE;
+        for (i = 0; i + 1 < n; i++)                 /* NAME~1 style short names alias a long name */
+        {
+            if (p[i] == L'~' && p[i + 1] >= L'0' && p[i + 1] <= L'9')
+                return FALSE;
+        }
         if (!e)
             break;
         p = e + 1;
@@ -364,4 +390,77 @@ void LnI64ToStr(long long v, char out[24])
     while (n)
         out[i++] = tmp[--n];
     out[i] = 0;
+}
+
+void LnRemoveTree(const WCHAR *dir)
+{
+    WCHAR *pattern = LnJoin(dir, L"*");
+    WIN32_FIND_DATAW fd;
+    HANDLE h;
+
+    if (!pattern)
+        return;
+    h = FindFirstFileW(pattern, &fd);
+    free(pattern);
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            WCHAR *p;
+
+            if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L".."))
+                continue;
+            p = LnJoin(dir, fd.cFileName);
+            if (!p)
+                continue;
+            if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+                RemoveDirectoryW(p);                    /* never follow a link out of the tree */
+            else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+                LnRemoveTree(p);
+            else
+                DeleteFileW(p);
+            free(p);
+        } while (FindNextFileW(h, &fd));
+        FindClose(h);
+    }
+    RemoveDirectoryW(dir);
+}
+
+DWORD LnCopyTreeFlush(const WCHAR *srcDir, const WCHAR *dstDir)
+{
+    WCHAR *pattern = LnJoin(srcDir, L"*");
+    WIN32_FIND_DATAW fd;
+    HANDLE h;
+    DWORD err = LnEnsureDir(dstDir);
+
+    if (err || !pattern)
+    {
+        free(pattern);
+        return err ? err : ERROR_NOT_ENOUGH_MEMORY;
+    }
+    h = FindFirstFileW(pattern, &fd);
+    free(pattern);
+    if (h == INVALID_HANDLE_VALUE)
+        return ERROR_SUCCESS;
+    do
+    {
+        WCHAR *s, *d;
+
+        if (!wcscmp(fd.cFileName, L".") || !wcscmp(fd.cFileName, L".."))
+            continue;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            continue;                                   /* links are not part of a package */
+        s = LnJoin(srcDir, fd.cFileName);
+        d = LnJoin(dstDir, fd.cFileName);
+        if (!s || !d)
+            err = ERROR_NOT_ENOUGH_MEMORY;
+        else if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            err = LnCopyTreeFlush(s, d);
+        else
+            err = LnCopyFileFlush(s, d);
+        free(s);
+        free(d);
+    } while (!err && FindNextFileW(h, &fd));
+    FindClose(h);
+    return err;
 }

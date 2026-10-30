@@ -39,6 +39,7 @@ extern "C" {
 #define LN_E_VERIFY_FINAL       (LN_E_BASE + 11)  /* final hash check after an operation failed */
 #define LN_E_NO_TRUST_ANCHOR    (LN_E_BASE + 12)  /* target has no trusted certificate installed */
 
+#define LN_E_INSECURE_TARGET    (LN_E_BASE + 13)  /* servicing tree owner/DACL is not SYSTEM + Administrators only */
 #define LN_SHA256_HEX_LEN   64
 #define LN_MAX_ITEMS        4096
 
@@ -82,7 +83,10 @@ DWORD LnWriteFileAtomic(const WCHAR *path, const void *data, size_t len);   /* t
 DWORD LnEnsureDir(const WCHAR *path);                                       /* recursive */
 DWORD LnCopyFileFlush(const WCHAR *src, const WCHAR *dst);                  /* copy + flush, parent created */
 BOOL LnPathExists(const WCHAR *path);
-BOOL LnIsSafeRelativePath(const WCHAR *path);                               /* no drive, no root, no .. */
+BOOL LnIsSafeRelativePath(const WCHAR *path);                               /* no drive, root, .., 8.3 aliases, device names */
+BOOL LnIsReservedName(const WCHAR *component, size_t len);                  /* CON, NUL, COM1, LPT1... with or without extension */
+void LnRemoveTree(const WCHAR *dir);
+DWORD LnCopyTreeFlush(const WCHAR *srcDir, const WCHAR *dstDir);           /* files and subdirectories, flushed */
 void LnNowUtc(char out[32]);
 void LnI64ToStr(long long v, char out[24]);
 WCHAR *LnJoin(const WCHAR *a, const WCHAR *b);                              /* a\b, free() */
@@ -126,14 +130,20 @@ typedef struct _LN_TARGET
 DWORD LnTargetOpen(LN_TARGET *t, LN_TARGET_MODE mode, const WCHAR *imageRoot, BOOL create);
 WCHAR *LnTargetPath(const LN_TARGET *t, const WCHAR *relInServicing);       /* free() */
 WCHAR *LnTargetFile(const LN_TARGET *t, const WCHAR *relInRoot);            /* free() */
-/* Rule of stage 1: user components and drivers only; never the kernel or the boot path. */
-BOOL LnTargetPathAllowed(const WCHAR *relInRoot);
+/* Stage 1 white list: DLL/EXE of user components outside the critical processes and the boot path,
+ * and .sys drivers under System32\drivers with a declared Start of 2 (auto) to 4. driverStart is -1
+ * for anything that is not a driver. The kernel, the HAL and boot-start/system-start drivers are refused. */
+BOOL LnTargetItemAllowed(const WCHAR *relInRoot, int driverStart);
+BOOL LnTargetPathAllowed(const WCHAR *relInRoot);                          /* LnTargetItemAllowed(rel, -1) */
+/* Parents must not be reparse points, and the real path must equal the lexical one (8.3, junctions). */
+DWORD LnTargetValidateReal(const LN_TARGET *t, const WCHAR *relInRoot);
 
 /* ---- manifest.c -------------------------------------------------------- */
 typedef struct _LN_ITEM
 {
     WCHAR *path;                  /* inside payload\  (NULL for delete) */
     WCHAR *target;                /* inside the target root */
+    int driverStart;              /* Start value declared for a .sys (2..4), -1 otherwise */
     char sha256[65];              /* of the new content ("" for delete) */
     BOOL isDelete;
 } LN_ITEM;
@@ -155,9 +165,15 @@ DWORD LnManifestParse(const char *text, size_t len, LN_MANIFEST *m);
 DWORD LnManifestLoad(const WCHAR *path, LN_MANIFEST *m);
 void LnManifestFree(LN_MANIFEST *m);
 
+/* sha256 of the certificate installed in the target's trust\ directory (the pinned signer) */
+DWORD LnPinnedCertSha256(const LN_TARGET *t, char hash[65]);
+
 /* ---- verify.c ---------------------------------------------------------- */
 /* pinnedCertSha256: hash of the trusted development certificate (from the target's trust\ dir). */
 DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out);
+/* Same checks over the copy held in the store (manifest, catalog, signature, objects). */
+DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version,
+                              const char *pinnedCertSha256, LN_MANIFEST *out);
 DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65]);
 
 /* ---- journal.c --------------------------------------------------------- */
@@ -210,8 +226,12 @@ DWORD LnServicingRemovePackage(const LN_TARGET *t, const char *packageId, const 
 DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const char *version);
 DWORD LnServicingExportLog(const LN_TARGET *t, const WCHAR *destDir);
 
-/* Test hook: treat a locked target of an Image as in use (pending), as an Online target would. */
-extern BOOL LnTestLockedAsPending;
+#ifdef LN_TESTING
+/* Hooks that exist only in the test build of the library (compile with -DLN_TESTING). */
+extern BOOL LnTestLockedAsPending;      /* treat a locked target of an Image as in use, as Online would */
+extern PSID LnTestExtraSid;             /* an extra principal accepted in the servicing DACL and as owner */
+extern void (*LnTestAfterStageHook)(const WCHAR *sourcePackageDir);   /* runs after add-package copied the package */
+#endif
 
 /* ---- pending.c --------------------------------------------------------- */
 /* pending\attempt.json, S1-CONTRACTS.md section 5 */
@@ -226,12 +246,15 @@ typedef struct _LN_ATTEMPT
 } LN_ATTEMPT;
 
 DWORD LnServicingReadPendingPlan(const LN_TARGET *t, char **planJson);      /* free() */
+/* The plan is not trusted: it must match the signed package in the store (digest, targets, hashes). */
+DWORD LnServicingValidatePlan(const LN_TARGET *t, const char *planJson);
 DWORD LnServicingReadAttempt(const LN_TARGET *t, LN_ATTEMPT *a);
 /* attempt+1 and lastResult=started, flushed BEFORE the applier operates (a power cut still counts) */
 DWORD LnServicingMarkBootStarted(const LN_TARGET *t, LN_ATTEMPT *a);
 DWORD LnServicingMarkBootOutcome(const LN_TARGET *t, BOOL verifiedFailure, BOOL completed);
 /* internal: written only after the final hashes were re-checked */
 DWORD LnAttemptSetHealth(const LN_TARGET *t, const char *transactionId);
+DWORD LnAttemptRecordFailure(const LN_TARGET *t, const char *transactionId);
 /* Evaluate BEFORE MarkBootStarted. healthConfirmed false and attempt >= 2 -> roll back;
  * reason: verifiable-failure (failureRecorded) or unexpected-reboot. */
 BOOL LnServicingShouldRollback(const LN_ATTEMPT *a, const char **reason);

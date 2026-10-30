@@ -14,6 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <aclapi.h>
+#include <sddl.h>
 
 static int g_checks, g_failed;
 static const WCHAR *g_fx;
@@ -132,21 +134,42 @@ static void TestJson(void)
 
 static void TestPaths(void)
 {
-    Section("paths");
+    Section("paths and the stage 1 white list");
     CHECK(LnIsSafeRelativePath(L"Windows\\System32\\a.dll"));
     CHECK(!LnIsSafeRelativePath(L"..\\x") && !LnIsSafeRelativePath(L"a\\..\\..\\x"));
     CHECK(!LnIsSafeRelativePath(L"\\Windows\\a") && !LnIsSafeRelativePath(L"C:\\a") && !LnIsSafeRelativePath(L"a/b"));
     CHECK(!LnIsSafeRelativePath(L"") && !LnIsSafeRelativePath(L"a\\\\b") && !LnIsSafeRelativePath(L"a\\b."));
     CHECK(!LnIsSafeRelativePath(L"a:stream") && !LnIsSafeRelativePath(L"a\\b*"));
-    CHECK(LnTargetPathAllowed(L"Windows\\System32\\drivers\\lnfix.sys"));
-    CHECK(LnTargetPathAllowed(L"Program Files\\App\\app.exe"));
+    /* 8.3 aliases and device names (review B3) */
+    CHECK(!LnIsSafeRelativePath(L"Windows\\System32\\NTOSKR~1.EXE") && !LnIsSafeRelativePath(L"Program Files\\PROGRA~2\\x.dll"));
+    CHECK(!LnIsSafeRelativePath(L"Windows\\System32\\CON") && !LnIsSafeRelativePath(L"Windows\\System32\\nul.dll"));
+    CHECK(!LnIsSafeRelativePath(L"Windows\\System32\\COM1.txt") && !LnIsSafeRelativePath(L"Windows\\System32\\lpt9") && !LnIsSafeRelativePath(L"Windows\\System32\\AUX .dll"));
+    CHECK(LnIsSafeRelativePath(L"Windows\\System32\\console.dll") && LnIsSafeRelativePath(L"Windows\\System32\\COM10.dll"));
+    CHECK(LnIsReservedName(L"CONOUT$", 7) && LnIsReservedName(L"prn.x.y", 7) && !LnIsReservedName(L"CONTROL", 7));
+
+    /* user components: DLL and EXE */
+    CHECK(LnTargetPathAllowed(L"Windows\\System32\\a.dll") && LnTargetPathAllowed(L"Program Files\\App\\app.exe"));
+    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\readme.txt") && !LnTargetPathAllowed(L"Windows\\System32\\a.dat"));
+    /* kernel, HAL, boot path, critical processes */
     CHECK(!LnTargetPathAllowed(L"Windows\\System32\\ntoskrnl.exe"));
     CHECK(!LnTargetPathAllowed(L"windows\\system32\\NTDLL.DLL"));
     CHECK(!LnTargetPathAllowed(L"Windows\\System32\\hal.dll") && !LnTargetPathAllowed(L"Windows\\System32\\halmacpi.dll"));
-    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\config\\SYSTEM"));
-    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\smss.exe"));
-    CHECK(!LnTargetPathAllowed(L"LiberNT\\Servicing\\journal\\transactions.jsonl"));
+    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\config\\SYSTEM.dll"));
+    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\smss.exe") && !LnTargetPathAllowed(L"Windows\\System32\\csrss.exe"));
+    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\wininit.exe") && !LnTargetPathAllowed(L"Windows\\System32\\winlogon.exe"));
+    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\services.exe") && !LnTargetPathAllowed(L"Windows\\System32\\lsass.exe"));
+    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\ci.dll"));
+    CHECK(!LnTargetPathAllowed(L"LiberNT\\Servicing\\journal\\x.dll"));
     CHECK(!LnTargetPathAllowed(L"Users\\x\\a.dll"));
+    /* drivers: only System32\drivers and only Start >= 2 */
+    CHECK(!LnTargetPathAllowed(L"Windows\\System32\\drivers\\lnfix.sys"));                       /* no declared Start */
+    CHECK(LnTargetItemAllowed(L"Windows\\System32\\drivers\\lnfix.sys", 2));
+    CHECK(LnTargetItemAllowed(L"Windows\\System32\\drivers\\lnfix.sys", 3));
+    CHECK(!LnTargetItemAllowed(L"Windows\\System32\\drivers\\lnfix.sys", 0));                   /* boot-start */
+    CHECK(!LnTargetItemAllowed(L"Windows\\System32\\drivers\\lnfix.sys", 1));                   /* system-start */
+    CHECK(!LnTargetItemAllowed(L"Windows\\System32\\lnfix.sys", 3));                            /* not under drivers\ */
+    CHECK(!LnTargetItemAllowed(L"Windows\\System32\\a.dll", 3));                                /* Start only for a .sys */
+    CHECK(!LnTargetItemAllowed(L"Windows\\System32\\drivers\\win32k.sys", 3));
 }
 
 static void TestManifest(void)
@@ -182,6 +205,42 @@ static void TestManifest(void)
     MK("{\"path\":\"a.bin\",\"target\":\"Windows\\\\System32\\\\a.dll\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\"},"
        "{\"path\":\"b.bin\",\"target\":\"windows\\\\system32\\\\A.DLL\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\"}");
     CHECK_ERR(LN_E_MANIFEST_INVALID, LnManifestParse(text, strlen(text), &m));   /* same target twice */
+    {
+        char drv[1400];
+
+        /* drivers: Start declared by the signed manifest, 2..4 only */
+        MK("{\"path\":\"d.bin\",\"target\":\"Windows\\\\System32\\\\drivers\\\\d.sys\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\",\"driverStart\":3}");
+        CHECK_ERR(0, LnManifestParse(text, strlen(text), &m));
+        CHECK(m.items[0].driverStart == 3);
+        LnManifestFree(&m);
+        MK("{\"path\":\"d.bin\",\"target\":\"Windows\\\\System32\\\\drivers\\\\d.sys\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\",\"driverStart\":0}");
+        CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnManifestParse(text, strlen(text), &m));
+        MK("{\"path\":\"d.bin\",\"target\":\"Windows\\\\System32\\\\drivers\\\\d.sys\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\"}");
+        CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnManifestParse(text, strlen(text), &m));
+        strcpy(drv, text);
+        MK("{\"path\":\"a.bin\",\"target\":\"Windows\\\\System32\\\\NTOSKR~1.EXE\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\"}");
+        CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnManifestParse(text, strlen(text), &m));
+        MK("{\"path\":\"a.bin\",\"target\":\"Windows\\\\System32\\\\winlogon.exe\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\"}");
+        CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnManifestParse(text, strlen(text), &m));
+        MK("{\"path\":\"a.bin\",\"target\":\"Windows\\\\System32\\\\a.txt\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\"}");
+        CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnManifestParse(text, strlen(text), &m));
+        /* a package id becomes a directory name in the store: no device names */
+        {
+            char bad[1400];
+
+            MK("{\"path\":\"a.bin\",\"target\":\"Windows\\\\System32\\\\a.dll\",\"sha256\":\"197c7c60ef8a8470a38d1a9212bdfde9cfe6fd4be910825fe6ac7880ac765d16\"}");
+            strcpy(bad, text);
+            {
+                char *id = strstr(bad, "p.id");
+
+                if (id)
+                    memcpy(id, "CON ", 4);                  /* "CON " is the device (trailing space) */
+                CHECK(id != NULL);
+            }
+            memmove(strstr(bad, "CON ") + 3, strstr(bad, "CON ") + 4, strlen(strstr(bad, "CON ") + 4) + 1);
+            CHECK_ERR(LN_E_MANIFEST_INVALID, LnManifestParse(bad, strlen(bad), &m));
+        }
+    }
     CHECK_ERR(LN_E_MANIFEST_INVALID, LnManifestParse("{\"schemaVersion\":2}", strlen("{\"schemaVersion\":2}"), &m));
     CHECK_ERR(LN_E_MANIFEST_INVALID, LnManifestParse("not json", 8, &m));
 #undef MK
@@ -449,8 +508,14 @@ static void TestLifecycle(void)
     WriteText(target, "damaged by someone");
     CHECK_ERR(LN_E_VERIFY_FINAL, LnServicingConfirmHealth(&t, "ln.fixture", "1.0"));
     CHECK_ERR(0, LnJournalRead(&t, &j));
-    CHECK(!LnJournalLast(&j, tx)->healthConfirmed);
+    CHECK(!LnJournalLast(&j, tx)->healthConfirmed && !strcmp(LnJournalLast(&j, tx)->phase, "applied"));   /* history is not rewritten */
     LnJournalFree(&j);
+    {
+        LN_ATTEMPT att;
+
+        CHECK_ERR(0, LnServicingReadAttempt(&t, &att));                                 /* but the failure is recorded */
+        CHECK(att.failureRecorded && !att.healthConfirmed);
+    }
 
     /* rollback works even though the updated component is damaged */
     CHECK_ERR(0, LnServicingRollback(&t, "ln.fixture", "1.0", tx));
@@ -490,37 +555,55 @@ static void TestLifecycle(void)
 static void TestFailureRollsBack(void)
 {
     LN_TARGET t;
-    WCHAR *p, *t1, *blocker;
+    WCHAR *p, *t1, *t2, *dir;
     char tx[65];
     BOOL reboot;
     LN_JOURNAL j;
+    HANDLE hold;
 
     Section("failed operation: immediate rollback, then recovery");
     CHECK(OpenImage(&t, L"fail"));
     InstallTrust(&t);
     t1 = LnTargetFile(&t, L"Windows\\System32\\first.dll");
-    blocker = LnTargetFile(&t, L"Windows\\System32\\blocked");                          /* a FILE where a directory is needed */
+    dir = LnTargetFile(&t, L"Windows\\System32\\blocked");
+    t2 = LnTargetFile(&t, L"Windows\\System32\\blocked\\second.dll");
     WriteText(t1, "first original");
-    WriteText(blocker, "i am a file");
+    WriteText(t2, "second original");
 
     p = Fx(L"twoitems");
     CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
     free(p);
-    CHECK(LnServicingApplyPackage(&t, "ln.twoitems", "1.0", &reboot, tx) != 0);       /* second item cannot be created */
+
+    /* the second file is open without FILE_SHARE_DELETE: reading it works, replacing it does not */
+    hold = CreateFileW(t2, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    CHECK(hold != INVALID_HANDLE_VALUE);
+    CHECK(LnServicingApplyPackage(&t, "ln.twoitems", "1.0", &reboot, tx) != 0);
     CHECK(FileIs(t1, "first original"));                                               /* the first one was reverted */
+    CHECK(FileIs(t2, "second original"));
     CHECK_ERR(0, LnJournalRead(&t, &j));
     {
         const LN_JENTRY *l = LnJournalLast(&j, tx);
 
         CHECK(l && !strcmp(l->phase, "rolled-back"));
     }
-    LnJournalFree(&j);
+    {
+        size_t k;
+        BOOL sawFailed = FALSE, sawPrepared = FALSE;
 
-    DeleteFileW(blocker);                                                              /* cause removed: retry succeeds */
+        for (k = 0; k < j.count; k++)
+        {
+            if (!strcmp(j.entries[k].phase, "failed")) sawFailed = TRUE;
+            if (!strcmp(j.entries[k].phase, "rollback-prepared") && !strcmp(j.entries[k].error, "verifiable-failure")) sawPrepared = TRUE;
+        }
+        CHECK(sawFailed && sawPrepared);
+    }
+    LnJournalFree(&j);
+    CloseHandle(hold);                                                                 /* cause removed: retry succeeds */
     CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.twoitems", "1.0", &reboot, tx));
-    CHECK(FileIs(t1, "first new"));
+    CHECK(FileIs(t1, "first new") && FileIs(t2, "second"));
     free(t1);
-    free(blocker);
+    free(t2);
+    free(dir);
 }
 
 static void TestCorruptStore(void)
@@ -695,6 +778,406 @@ static void TestExportLog(void)
     free(f);
 }
 
+
+/* ---- review blockers B1..B4 ---------------------------------------------------------------------------- */
+
+static PSID g_testSid;
+
+static void SetDaclSddl(const WCHAR *path, const WCHAR *sddl, BOOL protect)
+{
+    PSECURITY_DESCRIPTOR sd = NULL;
+    PACL dacl = NULL;
+    BOOL present = FALSE, deflt = FALSE;
+
+    if (ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, SDDL_REVISION_1, &sd, NULL) &&
+        GetSecurityDescriptorDacl(sd, &present, &dacl, &deflt))
+    {
+        SetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT,
+                              DACL_SECURITY_INFORMATION | (protect ? PROTECTED_DACL_SECURITY_INFORMATION : UNPROTECTED_DACL_SECURITY_INFORMATION),
+                              NULL, NULL, dacl, NULL);
+    }
+    LocalFree(sd);
+}
+
+static void TestSecurityAcl(void)
+{
+    LN_TARGET t, t2;
+    WCHAR root[MAX_PATH], *serv, sddl[256], *sidStr = NULL;
+
+    Section("B1: protected servicing tree (owner and DACL checked before anything is read)");
+    NewImage(root, L"acl");
+    CHECK_ERR(0, LnTargetOpen(&t, LnTargetImage, root, TRUE));
+    CHECK_ERR(0, LnTargetOpen(&t2, LnTargetImage, root, FALSE));                       /* what the library created is accepted */
+    serv = _wcsdup(t.servicing);
+    ConvertSidToStringSidW(g_testSid, &sidStr);
+
+    /* Authenticated Users (or anyone else) in the DACL: refused */
+    wcscpy(sddl, L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;AU)(A;OICI;FA;;;");
+    wcscat(sddl, sidStr);
+    wcscat(sddl, L")");
+    SetDaclSddl(serv, sddl, TRUE);
+    CHECK_ERR(LN_E_INSECURE_TARGET, LnTargetOpen(&t2, LnTargetImage, root, FALSE));
+    /* back to the right list, then an unprotected DACL (inherits from the parent): refused */
+    wcscpy(sddl, L"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;");
+    wcscat(sddl, sidStr);
+    wcscat(sddl, L")");
+    SetDaclSddl(serv, sddl, TRUE);
+    CHECK_ERR(0, LnTargetOpen(&t2, LnTargetImage, root, FALSE));
+    SetDaclSddl(serv, sddl, FALSE);
+    CHECK_ERR(LN_E_INSECURE_TARGET, LnTargetOpen(&t2, LnTargetImage, root, FALSE));
+    SetDaclSddl(serv, sddl, TRUE);
+    /* the parent folder counts too */
+    {
+        WCHAR parent[MAX_PATH];
+
+        wcscpy(parent, root);
+        wcscat(parent, L"\\LiberNT");
+        wcscpy(sddl, L"D:P(A;OICI;FA;;;WD)");
+        SetDaclSddl(parent, sddl, TRUE);
+        CHECK_ERR(LN_E_INSECURE_TARGET, LnTargetOpen(&t2, LnTargetImage, root, FALSE));
+    }
+    LocalFree(sidStr);
+    free(serv);
+}
+
+static void TestReverifyAtUse(void)
+{
+    LN_TARGET t;
+    WCHAR *p, *target, *cat, *man;
+    char tx[65];
+    BOOL reboot;
+    LN_JOURNAL j;
+
+    Section("B1: apply and confirm verify the stored package again");
+    CHECK(OpenImage(&t, L"reverify"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    CHECK_ERR(0, LnServicingVerifyStored(&t, "ln.fixture", "1.0", "829459d8db6adc0a4fe7500e0572149e1d469b6a3707cf48e374b7660d754a34", NULL));
+    free(p);
+
+    /* the catalog in the store is replaced by a copy without the signature: apply refuses, nothing is written */
+    cat = LnTargetPath(&t, L"store\\packages\\ln.fixture\\1.0\\catalog.cat");
+    p = Fx(L"unsigned-catalog\\catalog.cat");
+    {
+        BYTE *good;
+        size_t glen;
+
+        CHECK_ERR(0, LnReadFileAll(cat, &good, &glen));
+        CHECK_ERR(0, LnCopyFileFlush(p, cat));
+        CHECK_ERR(LN_E_UNSIGNED, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+        CHECK(!LnPathExists(target));
+        /* the manifest the engine reads differs from the verified one: refused */
+        CHECK_ERR(0, LnWriteFileAtomic(cat, good, glen));
+        man = LnTargetPath(&t, L"store\\manifests\\ln.fixture\\1.0\\manifest.json");
+        {
+            BYTE *m0;
+            size_t ml;
+            LN_BUF b;
+
+            CHECK_ERR(0, LnReadFileAll(man, &m0, &ml));
+            LnBufInit(&b);
+            LnBufAppend(&b, (char *)m0, ml);
+            LnBufAppendStr(&b, "  ");
+            CHECK_ERR(0, LnWriteFileAtomic(man, b.data, b.len));
+            CHECK(LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx) != 0);
+            CHECK(!LnPathExists(target));
+            CHECK_ERR(0, LnWriteFileAtomic(man, m0, ml));
+            LnBufFree(&b);
+            free(m0);
+        }
+        free(man);
+        free(good);
+    }
+    free(p);
+
+    /* untouched store: apply works; then the signature file is damaged and confirmation refuses */
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    CHECK(FileIs(target, "version one"));
+    {
+        WCHAR *sig = LnTargetPath(&t, L"store\\packages\\ln.fixture\\1.0\\manifest.sig");
+        BYTE *good;
+        size_t glen;
+
+        CHECK_ERR(0, LnReadFileAll(sig, &good, &glen));
+        good[5] ^= 0xff;
+        CHECK_ERR(0, LnWriteFileAtomic(sig, good, glen));
+        CHECK(LnServicingConfirmHealth(&t, "ln.fixture", "1.0") != 0);
+        good[5] ^= 0xff;
+        CHECK_ERR(0, LnWriteFileAtomic(sig, good, glen));
+        CHECK_ERR(0, LnServicingConfirmHealth(&t, "ln.fixture", "1.0"));
+        free(good);
+        free(sig);
+    }
+    CHECK_ERR(0, LnJournalRead(&t, &j));
+    CHECK(!strcmp(LnJournalLast(&j, tx)->phase, "confirmed"));
+    LnJournalFree(&j);
+    free(cat);
+    free(target);
+}
+
+static WCHAR g_swapSource[MAX_PATH];
+
+static void SwapSource(const WCHAR *sourceDir)
+{
+    WCHAR *man = LnJoin(sourceDir, L"manifest.json"), *cat = LnJoin(sourceDir, L"catalog.cat");
+
+    WriteText(man, "{\"schemaVersion\":1,\"packageId\":\"evil\"}");
+    WriteText(cat, "not a catalog");
+    wcscpy(g_swapSource, sourceDir);
+    free(man);
+    free(cat);
+}
+
+static void TestAddToctou(void)
+{
+    LN_TARGET t;
+    WCHAR src[MAX_PATH], *good, *storedMan;
+    char tx[65], orig[65], stored[65];
+    BYTE *d;
+    size_t n;
+
+    Section("B2: add-package verifies and imports a private copy");
+    CHECK(OpenImage(&t, L"toctou"));
+    InstallTrust(&t);
+    wcscpy(src, g_work);
+    wcscat(src, L"\\toctou-source");
+    good = Fx(L"good1");
+    LnRemoveTree(src);
+    CHECK_ERR(0, LnCopyTreeFlush(good, src));
+    {
+        WCHAR *m = LnJoin(good, L"manifest.json");
+
+        CHECK_ERR(0, LnReadFileAll(m, &d, &n));
+        LnSha256Hex(d, n, orig);
+        free(d);
+        free(m);
+    }
+    LnTestAfterStageHook = SwapSource;                                                 /* someone rewrites the source meanwhile */
+    CHECK_ERR(0, LnServicingAddPackage(&t, src, tx));
+    LnTestAfterStageHook = NULL;
+    storedMan = LnTargetPath(&t, L"store\\manifests\\ln.fixture\\1.0\\manifest.json");
+    CHECK_ERR(0, LnReadFileAll(storedMan, &d, &n));
+    LnSha256Hex(d, n, stored);
+    free(d);
+    CHECK(!strcmp(stored, orig));                                                      /* the store has what was verified */
+    CHECK(g_swapSource[0] != 0);                                                       /* the swap did happen */
+    {
+        BOOL reboot;
+        WCHAR *target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+
+        CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+        CHECK(FileIs(target, "version one"));
+        free(target);
+    }
+    free(storedMan);
+    free(good);
+}
+
+static void TestPathHardening(void)
+{
+    LN_TARGET t;
+    WCHAR root[MAX_PATH], outside[MAX_PATH], cmd[1024], *p, *evil;
+    char tx[65];
+    BOOL reboot;
+
+    Section("B3: junctions in the way are refused before anything is written");
+    CHECK(OpenImage(&t, L"junction"));
+    InstallTrust(&t);
+    wcscpy(root, t.root);
+    wcscpy(outside, g_work);
+    wcscat(outside, L"\\outside-the-image");
+    LnEnsureDir(outside);
+    wsprintfW(cmd, L"cmd.exe /c mklink /J \"%sWindows\\System32\\jn\" \"%s\" >NUL", root, outside);
+    {
+        STARTUPINFOW si;
+        PROCESS_INFORMATION pi;
+
+        memset(&si, 0, sizeof(si));
+        si.cb = sizeof(si);
+        CHECK(CreateProcessW(NULL, cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &si, &pi));
+        WaitForSingleObject(pi.hProcess, 15000);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+    }
+    p = Fx(L"junction");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));                                    /* the path is lexically fine */
+    free(p);
+    CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnServicingApplyPackage(&t, "ln.junction", "1.0", &reboot, tx));
+    evil = LnJoin(outside, L"evil.dll");
+    CHECK(!LnPathExists(evil));                                                        /* nothing escaped the image */
+    free(evil);
+    {
+        WCHAR rel[] = L"Windows\\System32\\jn\\evil.dll";
+
+        CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnTargetValidateReal(&t, rel));
+        CHECK_ERR(0, LnTargetValidateReal(&t, L"Windows\\System32\\fine\\x.dll"));     /* a normal new path passes */
+    }
+}
+
+static void TestJournalAnchor(void)
+{
+    LN_TARGET t;
+    LN_JENTRY e;
+    LN_JOURNAL j;
+    WCHAR *jp, *ap;
+    BYTE *data;
+    size_t len;
+    int i;
+    char *nl;
+
+    Section("B4: strict journal and anchor");
+    CHECK(OpenImage(&t, L"anchor"));
+    for (i = 0; i < 4; i++)
+    {
+        memset(&e, 0, sizeof(e));
+        strcpy(e.transactionId, "aa");
+        strcpy(e.phase, i == 0 ? "prepared" : i == 1 ? "applying" : i == 2 ? "failed" : "rolled-back");
+        strcpy(e.result, "ok");
+        e.op = -1;
+        CHECK_ERR(0, LnJournalAppend(&t, &e));
+    }
+    jp = LnTargetPath(&t, L"journal\\transactions.jsonl");
+    ap = LnTargetPath(&t, L"journal\\anchor.json");
+    CHECK(LnPathExists(ap));
+    CHECK_ERR(0, LnReadFileAll(jp, &data, &len));
+
+    /* (a) the last entry rewritten with valid JSON ("rolled-back" -> "confirmed"): the chain alone cannot see it */
+    {
+        /* the LAST line: change "rolled-back" to "confirmed" keeping JSON valid and same length class */
+        char *last = strstr((char *)data, "\"phase\":\"rolled-back\"");
+        BYTE *edited = malloc(len + 16);
+        size_t off;
+
+        CHECK(last != NULL);
+        off = (size_t)(last - (char *)data);
+        memcpy(edited, data, off);
+        memcpy(edited + off, "\"phase\":\"confirmed\"", 19);
+        memcpy(edited + off + 19, data + off + 21, len - off - 21);
+        CHECK_ERR(0, LnWriteFileAtomic(jp, edited, len - 2));
+        CHECK_ERR(LN_E_JOURNAL_CORRUPT, LnJournalRead(&t, &j));
+        CHECK_ERR(0, LnWriteFileAtomic(jp, data, len));                                 /* restored */
+        free(edited);
+    }
+    CHECK_ERR(0, LnJournalRead(&t, &j));
+    CHECK(j.count == 4);
+    LnJournalFree(&j);
+
+    /* (b) the whole last entry removed: the anchor is ahead of the journal */
+    nl = (char *)data + len - 2;
+    while (nl > (char *)data && *nl != '\n')
+        nl--;
+    CHECK_ERR(0, LnWriteFileAtomic(jp, data, (size_t)(nl - (char *)data) + 1));
+    CHECK_ERR(LN_E_JOURNAL_CORRUPT, LnJournalRead(&t, &j));
+    CHECK_ERR(0, LnWriteFileAtomic(jp, data, len));
+
+    /* (c) a broken line in the middle (not the last, not torn) */
+    {
+        LN_BUF b;
+        char *first = strchr((char *)data, '\n');
+
+        LnBufInit(&b);
+        LnBufAppend(&b, (char *)data, (size_t)(first - (char *)data) + 1);
+        LnBufAppendStr(&b, "{this is not json\n");
+        LnBufAppend(&b, first + 1, len - (size_t)(first + 1 - (char *)data));
+        CHECK_ERR(0, LnWriteFileAtomic(jp, b.data, b.len));
+        CHECK_ERR(LN_E_JOURNAL_CORRUPT, LnJournalRead(&t, &j));
+        LnBufFree(&b);
+    }
+    CHECK_ERR(0, LnWriteFileAtomic(jp, data, len));
+
+    /* (d) an unterminated last line is the torn write of a power cut: ignored, then cut away by the next append */
+    {
+        LN_BUF b;
+
+        LnBufInit(&b);
+        LnBufAppend(&b, (char *)data, len);
+        LnBufAppendStr(&b, "{\"seq\":5,\"prev\":\"00");
+        CHECK_ERR(0, LnWriteFileAtomic(jp, b.data, b.len));
+        LnBufFree(&b);
+    }
+    CHECK_ERR(0, LnJournalRead(&t, &j));
+    CHECK(j.count == 4 && j.tailTruncated);
+    LnJournalFree(&j);
+    memset(&e, 0, sizeof(e));
+    strcpy(e.transactionId, "aa"); strcpy(e.phase, "prepared"); strcpy(e.result, "ok"); e.op = -1;
+    CHECK_ERR(0, LnJournalAppend(&t, &e));
+    CHECK_ERR(0, LnJournalRead(&t, &j));
+    CHECK(j.count == 5 && !j.tailTruncated && j.entries[4].sequence == 5);
+    LnJournalFree(&j);
+
+    /* (e) crash between the append and the anchor write: one entry ahead is accepted */
+    {
+        BYTE *a0;
+        size_t al;
+
+        CHECK_ERR(0, LnReadFileAll(ap, &a0, &al));
+        memset(&e, 0, sizeof(e));
+        strcpy(e.transactionId, "aa"); strcpy(e.phase, "applying"); strcpy(e.result, "ok"); e.op = -1;
+        CHECK_ERR(0, LnJournalAppend(&t, &e));
+        CHECK_ERR(0, LnWriteFileAtomic(ap, a0, al));                                   /* anchor one behind */
+        CHECK_ERR(0, LnJournalRead(&t, &j));
+        CHECK(j.count == 6);
+        LnJournalFree(&j);
+        /* ... but two behind, or a deleted anchor, is not */
+        DeleteFileW(ap);
+        CHECK_ERR(LN_E_JOURNAL_CORRUPT, LnJournalRead(&t, &j));
+        free(a0);
+    }
+    free(data);
+    free(jp);
+    free(ap);
+}
+
+static void TestPlanValidation(void)
+{
+    LN_TARGET t;
+    WCHAR *p, *target;
+    char tx[65], *plan, *bad;
+    BOOL reboot;
+    HANDLE lock;
+
+    Section("N6: the plan must match the signed package");
+    CHECK(OpenImage(&t, L"planval"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    WriteText(target, "locked original");
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    lock = CreateFileW(target, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CloseHandle(lock);
+    CHECK_ERR(0, LnServicingReadPendingPlan(&t, &plan));
+    CHECK_ERR(0, LnServicingValidatePlan(&t, plan));
+    /* a plan whose operation points at another object, or another machine, or another digest is refused */
+    bad = _strdup(plan);
+    {
+        char *at = strstr(bad, "store/objects/");
+
+        CHECK(at != NULL);
+        if (at)
+            at[14] = (at[14] == '0') ? '1' : '0';
+    }
+    CHECK_ERR(LN_E_MANIFEST_INVALID, LnServicingValidatePlan(&t, bad));
+    free(bad);
+    bad = _strdup(plan);
+    {
+        char *at = strstr(bad, t.identity);
+
+        CHECK(at != NULL);
+        if (at)
+            at[0] = (at[0] == 'a') ? 'b' : 'a';
+    }
+    CHECK(LnServicingValidatePlan(&t, bad) != 0);
+    free(bad);
+    free(plan);
+    free(target);
+}
+
 int wmain(int argc, WCHAR **argv)
 {
     WCHAR tmp[MAX_PATH];
@@ -706,6 +1189,20 @@ int wmain(int argc, WCHAR **argv)
     }
     g_fx = argv[1];
     g_cer = argv[2];
+    {
+        HANDLE tok;
+        DWORD need = 0;
+        TOKEN_USER *tu;
+
+        /* the account running the tests is accepted next to SYSTEM/Administrators (they run unelevated) */
+        OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &tok);
+        GetTokenInformation(tok, TokenUser, NULL, 0, &need);
+        tu = malloc(need);
+        GetTokenInformation(tok, TokenUser, tu, need, &need);
+        g_testSid = tu->User.Sid;
+        LnTestExtraSid = g_testSid;
+        CloseHandle(tok);
+    }
     GetTempPathW(MAX_PATH, tmp);
     wsprintfW(g_work, L"%slnsvc-tests-%lu", tmp, GetCurrentProcessId());
     LnEnsureDir(g_work);
@@ -724,6 +1221,12 @@ int wmain(int argc, WCHAR **argv)
     TestCorruptStore();
     TestPendingPlan();
     TestExportLog();
+    TestSecurityAcl();
+    TestReverifyAtUse();
+    TestAddToctou();
+    TestPathHardening();
+    TestJournalAnchor();
+    TestPlanValidation();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
     return g_failed ? 1 : 0;
