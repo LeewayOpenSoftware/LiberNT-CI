@@ -153,8 +153,8 @@ servicio → self-test).
 - En el árbol: target `libernt-update-bootstrap` (amd64); no se agrega al
   ISO ni a `bootcd` (condición del dueño).
 - En el host: `tests/hosttest.py` (python 3, requiere administrador)
-  construye un bundle firmado con la clave DEV (`scratch/s1devkey/`, fuera
-  del repo), una raíz falsa y un hive SYSTEM generado con `RegSaveKey`, y
+  construye un bundle firmado con la clave DEV (`%USERPROFILE%\.leeway-dev-signing\`,
+  fuera del repo), una raíz falsa y un hive SYSTEM generado con `RegSaveKey`, y
   verifica: dry-run sin escrituras, rechazo de bundle sin firma, instalación
   byte-exacta, orden e idempotencia de BootExecute en el hive, rechazo de
   desinstalación con plan pendiente, desinstalación limpia con exportación

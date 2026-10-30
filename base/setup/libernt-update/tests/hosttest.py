@@ -5,7 +5,7 @@ Drives the built bootstrap binary against a fake target root and a
 RegSaveKey-generated SYSTEM hive. Requires administrator (SeRestoreName for
 RegLoadKey/SaveKey and for setting the O:SY owner on the servicing tree).
 
-Usage: python hosttest.py <path to libernt-update-bootstrap.exe> [devkey.pem]
+Usage: python hosttest.py <path to libernt-update-bootstrap.exe> [devkey.pem|devkey.pfx]
 """
 
 import ctypes
@@ -91,12 +91,26 @@ def hive_bootexecute(hive_path, subkey, loader):
     return list(value)
 
 
-def sign(data, key_path):
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding
+def load_key(key_path):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.serialization import pkcs12
     with open(key_path, "rb") as f:
-        key = serialization.load_pem_private_key(f.read(), password=None)
-    return key.sign(data, padding.PKCS1v15(), hashes.SHA256())
+        blob = f.read()
+    if key_path.lower().endswith(".pfx"):
+        password_path = os.path.splitext(key_path)[0] + "-password.txt"
+        if not os.path.exists(password_path):
+            password_path = os.path.join(os.path.dirname(key_path), "pfx-password.txt")
+        with open(password_path, "rb") as pf:
+            password = pf.read().strip()
+        key, _, _ = pkcs12.load_key_and_certificates(blob, password)
+        return key
+    return serialization.load_pem_private_key(blob, password=None)
+
+
+def sign(data, key_path):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    return load_key(key_path).sign(data, padding.PKCS1v15(), hashes.SHA256())
 
 
 def build_bundle(bundle_dir, files, key_path):
@@ -132,7 +146,7 @@ def run(exe, *args):
 def main():
     exe = os.path.abspath(sys.argv[1])
     devkey = sys.argv[2] if len(sys.argv) > 2 else os.path.join(
-        os.path.dirname(__file__), "..", "..", "..", "..", "s1devkey", "devkey.pem")
+        os.environ["USERPROFILE"], ".leeway-dev-signing", "Leeway-LiberNT-Update-DEV.pfx")
     devkey = os.path.abspath(devkey)
 
     tmp = tempfile.mkdtemp(prefix="bs-hosttest-")
