@@ -112,7 +112,11 @@ typedef struct STRUCT(_PEB)
 #endif
     ULONG SystemReserved[1];
     ULONG SpareUlong; // AtlThunkSListPtr32
-    PTR(PPEB_FREE_BLOCK) FreeList;
+    union
+    {
+        PTR(PPEB_FREE_BLOCK) FreeList; // legacy NT heap, unused
+        PTR(PVOID) ApiSetMap;          // Windows 10+ layout at this offset
+    };
     ULONG TlsExpansionCounter;
     PTR(PVOID) TlsBitmap;
     ULONG TlsBitmapBits[2];

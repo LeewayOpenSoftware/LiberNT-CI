@@ -17,7 +17,7 @@ extern "C"
 #define APISET_WIN8  (1 << 1)
 #define APISET_WIN81 (1 << 2)
 #define APISET_WIN10 (1 << 3)
-//#define APISET_WIN11 (1 << 4)
+#define APISET_WIN11 (1 << 4)
 
 
 NTSTATUS

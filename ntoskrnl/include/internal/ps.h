@@ -472,6 +472,16 @@ PspInitializeApiSetSchema(VOID);
 
 VOID
 NTAPI
+PspInitializeApiSetSection(VOID);
+
+NTSTATUS
+NTAPI
+PspMapApiSetSchema(
+    _In_ PEPROCESS Process,
+    _Out_ PVOID *ViewBase);
+
+VOID
+NTAPI
 PspTlsThreadCleanup(
     IN PETHREAD Thread
 );

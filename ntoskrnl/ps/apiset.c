@@ -54,6 +54,7 @@ typedef struct _PSP_API_SET_HASH_ENTRY
 /* GLOBALS *******************************************************************/
 
 static PPSP_API_SET_NAMESPACE PspApiSetSchema;
+static PVOID PspApiSetSection;
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -209,4 +210,91 @@ NTAPI
 PsQueryCurrentApiSetSchema(VOID)
 {
     return PspApiSetSchema;
+}
+
+/* Phase 1: copy the schema built in phase 0 into a pagefile-backed section so it
+ * can be mapped read-only into every process PEB. Best effort: on any failure the
+ * section stays NULL and processes fall back to the static apiset table. */
+CODE_SEG("INIT")
+VOID
+NTAPI
+PspInitializeApiSetSection(VOID)
+{
+    LARGE_INTEGER DECLSPEC_ALIGN(8) SectionSize;
+    HANDLE SectionHandle;
+    PVOID SectionBase = NULL;
+    SIZE_T ViewSize = 0;
+    NTSTATUS Status;
+
+    if (PspApiSetSchema == NULL)
+        return;
+
+    SectionSize.QuadPart = PspApiSetSchema->Size;
+
+    Status = ZwCreateSection(&SectionHandle,
+                             SECTION_ALL_ACCESS,
+                             NULL,
+                             &SectionSize,
+                             PAGE_READWRITE,
+                             SEC_COMMIT,
+                             NULL);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Status = ObReferenceObjectByHandle(SectionHandle,
+                                       SECTION_ALL_ACCESS,
+                                       MmSectionObjectType,
+                                       KernelMode,
+                                       &PspApiSetSection,
+                                       NULL);
+    ObCloseHandle(SectionHandle, KernelMode);
+    if (!NT_SUCCESS(Status))
+    {
+        PspApiSetSection = NULL;
+        return;
+    }
+
+    Status = MmMapViewInSystemSpace(PspApiSetSection, &SectionBase, &ViewSize);
+    if (!NT_SUCCESS(Status))
+    {
+        ObDereferenceObject(PspApiSetSection);
+        PspApiSetSection = NULL;
+        return;
+    }
+
+    RtlCopyMemory(SectionBase, PspApiSetSchema, PspApiSetSchema->Size);
+    MmUnmapViewInSystemSpace(SectionBase);
+}
+
+/* Maps the api-set schema section read-only into Process and returns its user
+ * base. A NULL section (schema unavailable) yields a NULL base without failing. */
+NTSTATUS
+NTAPI
+PspMapApiSetSchema(
+    _In_ PEPROCESS Process,
+    _Out_ PVOID *ViewBase)
+{
+    LARGE_INTEGER DECLSPEC_ALIGN(8) SectionOffset = {{0, 0}};
+    SIZE_T ViewSize = 0;
+    PVOID Base = NULL;
+    NTSTATUS Status;
+
+    *ViewBase = NULL;
+    if (PspApiSetSection == NULL)
+        return STATUS_SUCCESS;
+
+    Status = MmMapViewOfSection(PspApiSetSection,
+                                Process,
+                                &Base,
+                                0,
+                                0,
+                                &SectionOffset,
+                                &ViewSize,
+                                ViewShare,
+                                0,
+                                PAGE_READONLY);
+    if (NT_SUCCESS(Status))
+        *ViewBase = Base;
+
+    return Status;
 }

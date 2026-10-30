@@ -93,3 +93,74 @@ START_TEST(apisets)
     fail_single(&Fail2);
     fail_single(&Fail3);
 }
+
+static void
+resolve_version(PCUNICODE_STRING Apiset, DWORD Version, PBOOLEAN Resolved, PUNICODE_STRING Host)
+{
+    UNICODE_STRING Tmp = {0};
+    NTSTATUS Status = RtlDuplicateUnicodeString(RTL_DUPLICATE_UNICODE_STRING_NULL_TERMINATE, Apiset, &Tmp);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+
+    *Resolved = FALSE;
+    Status = ApiSetResolveToHost(Version, &Tmp, Resolved, Host);
+    ok_ntstatus(Status, STATUS_SUCCESS);
+
+    RtlFreeUnicodeString(&Tmp);
+}
+
+START_TEST(win11_fallback)
+{
+    /* Boot safety: the Windows 11 version mask is APISET_WIN11|APISET_WIN10, so a
+     * Win10-era contract with no WIN11 bit must still resolve to the same host. */
+    UNICODE_STRING Names[] = {
+        RTL_CONSTANT_STRING(L"api-ms-win-core-console-l1-1-0"),
+        RTL_CONSTANT_STRING(L"api-ms-win-core-handle-l1-1-0"),
+        RTL_CONSTANT_STRING(L"api-ms-win-core-heap-l1-1-0"),
+    };
+    DWORD i;
+
+    for (i = 0; i < RTL_NUMBER_OF(Names); ++i)
+    {
+        UNICODE_STRING Host10 = {0}, Host11 = {0};
+        BOOLEAN Resolved10 = FALSE, Resolved11 = FALSE;
+
+        winetest_push_context("%S", Names[i].Buffer);
+        resolve_version(&Names[i], APISET_WIN10, &Resolved10, &Host10);
+        resolve_version(&Names[i], APISET_WIN11 | APISET_WIN10, &Resolved11, &Host11);
+        ok_eq_bool(Resolved10, TRUE);
+        ok_eq_bool(Resolved11, TRUE);
+        if (Resolved10 && Resolved11)
+            ok(RtlEqualUnicodeString(&Host10, &Host11, TRUE), "Win11 host must match the Win10 host\n");
+        winetest_pop_context();
+    }
+}
+
+typedef struct _TEST_API_SET_NAMESPACE
+{
+    ULONG Version;
+    ULONG Size;
+    ULONG Flags;
+    ULONG Count;
+    ULONG EntryOffset;
+    ULONG HashOffset;
+    ULONG HashFactor;
+} TEST_API_SET_NAMESPACE;
+
+START_TEST(apisetmap)
+{
+    /* The schema the kernel maps into the PEB (D3.2). Needs a real boot; when the
+     * field is NULL (schema not mapped) the loader uses the static table instead. */
+    PVOID Map = NtCurrentPeb()->ApiSetMap;
+    const TEST_API_SET_NAMESPACE *Schema;
+
+    if (Map == NULL)
+    {
+        skip("PEB ApiSetMap is NULL; the static apiset table is in use\n");
+        return;
+    }
+
+    Schema = Map;
+    ok(Schema->Version == 6, "ApiSetMap version %lu, expected 6\n", Schema->Version);
+    ok(Schema->Count > 0, "ApiSetMap has no entries\n");
+    ok(Schema->Size >= sizeof(*Schema), "ApiSetMap size %lu too small\n", Schema->Size);
+}
