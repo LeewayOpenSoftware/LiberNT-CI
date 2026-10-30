@@ -1311,6 +1311,168 @@ ApiSetQueryApiSetPresenceEx(
     return ApiSetQuerySchemaPresence(LdrpApisetVersion(), Namespace, InSchema, Present);
 }
 
+typedef struct _LDRP_API_SET_NAMESPACE
+{
+    ULONG Version;
+    ULONG Size;
+    ULONG Flags;
+    ULONG Count;
+    ULONG EntryOffset;
+    ULONG HashOffset;
+    ULONG HashFactor;
+} LDRP_API_SET_NAMESPACE, *PLDRP_API_SET_NAMESPACE;
+
+typedef struct _LDRP_API_SET_NAMESPACE_ENTRY
+{
+    ULONG Flags;
+    ULONG NameOffset;
+    ULONG NameLength;
+    ULONG HashedLength;
+    ULONG ValueOffset;
+    ULONG ValueCount;
+} LDRP_API_SET_NAMESPACE_ENTRY, *PLDRP_API_SET_NAMESPACE_ENTRY;
+
+typedef struct _LDRP_API_SET_VALUE_ENTRY
+{
+    ULONG Flags;
+    ULONG NameOffset;
+    ULONG NameLength;
+    ULONG ValueOffset;
+    ULONG ValueLength;
+} LDRP_API_SET_VALUE_ENTRY, *PLDRP_API_SET_VALUE_ENTRY;
+
+typedef struct _LDRP_API_SET_HASH_ENTRY
+{
+    ULONG Hash;
+    ULONG Index;
+} LDRP_API_SET_HASH_ENTRY, *PLDRP_API_SET_HASH_ENTRY;
+
+static BOOLEAN
+LdrpApiSetNameIsApiSet(
+    _In_ PCUNICODE_STRING Name)
+{
+    if (Name->Length < 4 * sizeof(WCHAR))
+        return FALSE;
+    return (_wcsnicmp(Name->Buffer, L"api-", 4) == 0) ||
+           (_wcsnicmp(Name->Buffer, L"ext-", 4) == 0);
+}
+
+/* The hashed length is the name up to its last hyphen (drops the -lN-N-N tail),
+ * matching how PspInitializeApiSetSchema builds the kernel schema. */
+static ULONG
+LdrpApiSetHashedLength(
+    _In_ PCWSTR Buffer,
+    _In_ ULONG Length)
+{
+    ULONG Index;
+
+    for (Index = Length / sizeof(WCHAR); Index != 0; --Index)
+    {
+        if (Buffer[Index - 1] == L'-')
+            return (Index - 1) * sizeof(WCHAR);
+    }
+
+    return Length;
+}
+
+static ULONG
+LdrpApiSetHashName(
+    _In_ PCWSTR Buffer,
+    _In_ ULONG HashedLength,
+    _In_ ULONG HashFactor)
+{
+    ULONG Count = HashedLength / sizeof(WCHAR);
+    ULONG Hash = 0;
+    ULONG Index;
+
+    for (Index = 0; Index != Count; ++Index)
+        Hash = Hash * HashFactor + RtlDowncaseUnicodeChar(Buffer[Index]);
+
+    return Hash;
+}
+
+/* Resolves an api set through the version-6 schema mapped in the PEB. Returns
+ * FALSE for an unknown format or a miss, so the caller falls back to the static
+ * table. Parent-specific values (D3.3) are not handled: the default value wins. */
+static BOOLEAN
+LdrpResolveApiSetMap(
+    _In_ PVOID MapBase,
+    _In_ PCUNICODE_STRING Name,
+    _Out_ PUNICODE_STRING Host)
+{
+    PLDRP_API_SET_NAMESPACE Map = MapBase;
+    PLDRP_API_SET_NAMESPACE_ENTRY Entries, Entry;
+    PLDRP_API_SET_VALUE_ENTRY Value;
+    PLDRP_API_SET_HASH_ENTRY Hashes;
+    UNICODE_STRING Lookup = *Name;
+    UNICODE_STRING EntryContract, QueryContract;
+    ULONG HashedLength, Hash;
+    LONG Low, High;
+
+    Host->Buffer = NULL;
+    Host->Length = Host->MaximumLength = 0;
+
+    if (Map->Version != 6 || Map->Count == 0 || Map->HashFactor == 0)
+        return FALSE;
+    if (!LdrpApiSetNameIsApiSet(&Lookup))
+        return FALSE;
+
+    if (Lookup.Length >= 4 * sizeof(WCHAR) &&
+        _wcsnicmp(&Lookup.Buffer[Lookup.Length / sizeof(WCHAR) - 4], L".dll", 4) == 0)
+    {
+        Lookup.Length -= 4 * sizeof(WCHAR);
+    }
+
+    HashedLength = LdrpApiSetHashedLength(Lookup.Buffer, Lookup.Length);
+    if (HashedLength == 0)
+        return FALSE;
+    Hash = LdrpApiSetHashName(Lookup.Buffer, HashedLength, Map->HashFactor);
+
+    Entries = (PLDRP_API_SET_NAMESPACE_ENTRY)((PUCHAR)Map + Map->EntryOffset);
+    Hashes = (PLDRP_API_SET_HASH_ENTRY)((PUCHAR)Map + Map->HashOffset);
+
+    Low = 0;
+    High = (LONG)Map->Count - 1;
+    while (Low <= High)
+    {
+        LONG Mid = (High - Low) / 2 + Low;
+
+        if (Hash < Hashes[Mid].Hash)
+        {
+            High = Mid - 1;
+        }
+        else if (Hash > Hashes[Mid].Hash)
+        {
+            Low = Mid + 1;
+        }
+        else
+        {
+            if (Hashes[Mid].Index >= Map->Count)
+                return FALSE;
+            Entry = &Entries[Hashes[Mid].Index];
+
+            EntryContract.Buffer = (PWSTR)((PUCHAR)Map + Entry->NameOffset);
+            EntryContract.Length = EntryContract.MaximumLength = (USHORT)Entry->HashedLength;
+            QueryContract.Buffer = Lookup.Buffer;
+            QueryContract.Length = QueryContract.MaximumLength = (USHORT)HashedLength;
+            if (!RtlEqualUnicodeString(&EntryContract, &QueryContract, TRUE))
+                return FALSE;
+
+            if (Entry->ValueCount == 0)
+                return FALSE;
+            Value = (PLDRP_API_SET_VALUE_ENTRY)((PUCHAR)Map + Entry->ValueOffset);
+            if (Value->ValueLength == 0)
+                return FALSE;
+
+            Host->Buffer = (PWSTR)((PUCHAR)Map + Value->ValueOffset);
+            Host->Length = Host->MaximumLength = (USHORT)Value->ValueLength;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 NTSYSAPI
 NTSTATUS
 NTAPI
@@ -1351,11 +1513,20 @@ LdrpApplyFileNameRedirection(
     DWORD ApisetVersion = LdrpApisetVersion();
     if (ApisetVersion)
     {
-        Status = ApiSetResolveToHost(ApisetVersion, OriginalName, RedirectedDll, &ApisetName);
-        if (!NT_SUCCESS(Status))
+        PVOID ApiSetMap = NtCurrentPeb()->ApiSetMap;
+
+        if (ApiSetMap != NULL && LdrpResolveApiSetMap(ApiSetMap, OriginalName, &ApisetName))
         {
-            DPRINT1("ApiSetResolveToHost FAILED: (Status 0x%x)\n", Status);
-            return Status;
+            *RedirectedDll = TRUE;
+        }
+        else
+        {
+            Status = ApiSetResolveToHost(ApisetVersion, OriginalName, RedirectedDll, &ApisetName);
+            if (!NT_SUCCESS(Status))
+            {
+                DPRINT1("ApiSetResolveToHost FAILED: (Status 0x%x)\n", Status);
+                return Status;
+            }
         }
     }
 

@@ -134,3 +134,33 @@ START_TEST(win11_fallback)
         winetest_pop_context();
     }
 }
+
+typedef struct _TEST_API_SET_NAMESPACE
+{
+    ULONG Version;
+    ULONG Size;
+    ULONG Flags;
+    ULONG Count;
+    ULONG EntryOffset;
+    ULONG HashOffset;
+    ULONG HashFactor;
+} TEST_API_SET_NAMESPACE;
+
+START_TEST(apisetmap)
+{
+    /* The schema the kernel maps into the PEB (D3.2). Needs a real boot; when the
+     * field is NULL (schema not mapped) the loader uses the static table instead. */
+    PVOID Map = NtCurrentPeb()->ApiSetMap;
+    const TEST_API_SET_NAMESPACE *Schema;
+
+    if (Map == NULL)
+    {
+        skip("PEB ApiSetMap is NULL; the static apiset table is in use\n");
+        return;
+    }
+
+    Schema = Map;
+    ok(Schema->Version == 6, "ApiSetMap version %lu, expected 6\n", Schema->Version);
+    ok(Schema->Count > 0, "ApiSetMap has no entries\n");
+    ok(Schema->Size >= sizeof(*Schema), "ApiSetMap size %lu too small\n", Schema->Size);
+}

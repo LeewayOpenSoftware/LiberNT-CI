@@ -436,6 +436,7 @@ PspInitPhase1(VOID)
 {
     /* Initialize the System DLL and return status of operation */
     if (!NT_SUCCESS(PspInitializeSystemDll())) return FALSE;
+    PspInitializeApiSetSection();
     return TRUE;
 }
 

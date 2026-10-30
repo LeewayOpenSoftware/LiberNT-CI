@@ -533,6 +533,12 @@ MmCreatePeb(
         if (Process->Session != NULL)
             Peb->SessionId = MmGetSessionId(Process);
 
+        {
+            PVOID ApiSetBase = NULL;
+            PspMapApiSetSchema(Process, &ApiSetBase);
+            Peb->ApiSetMap = ApiSetBase;
+        }
+
         NtHeaders = (PIMAGE_NT_HEADERS32)RtlImageNtHeader(Peb->ImageBaseAddress);
         if (NtHeaders != NULL)
         {
