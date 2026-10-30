@@ -232,7 +232,7 @@ static DWORD CheckSecure(const WCHAR *path)
     SECURITY_DESCRIPTOR_CONTROL ctl = 0;
     DWORD rev, i, result = LN_E_INSECURE_TARGET;
 
-    if (GetNamedSecurityInfoW(path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
+    if (GetNamedSecurityInfoW((LPWSTR)path, SE_FILE_OBJECT, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
                               &owner, NULL, &dacl, NULL, &sd) != ERROR_SUCCESS)
         return LN_E_INSECURE_TARGET;                    /* no ACLs (FAT) or unreadable: fail closed */
     if (!owner || !dacl || !GetSecurityDescriptorControl(sd, &ctl, &rev) || !(ctl & SE_DACL_PROTECTED))
