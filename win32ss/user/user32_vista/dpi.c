@@ -185,9 +185,18 @@ User32InitializeDpiAwareness(VOID)
 {
     static const WCHAR Namespace2005[] = L"http://schemas.microsoft.com/SMI/2005/WindowsSettings";
     static const WCHAR Namespace2016[] = L"http://schemas.microsoft.com/SMI/2016/WindowsSettings";
+    static const WCHAR Namespace2017[] = L"http://schemas.microsoft.com/SMI/2017/WindowsSettings";
     WCHAR Buffer[256];
     WCHAR *Start, *End;
     DPI_AWARENESS_CONTEXT Context;
+    BOOL GdiScaling = FALSE;
+
+    /* gdiScaling asks for GDI scaling in a process that stays DPI unaware */
+    if (RtlQueryActivationContextApplicationSettings(0, NULL, Namespace2017, L"gdiScaling",
+                                                     Buffer, ARRAYSIZE(Buffer), NULL) >= 0)
+    {
+        GdiScaling = !lstrcmpiW(Buffer, L"true");
+    }
 
     if (RtlQueryActivationContextApplicationSettings(
             0,
@@ -207,6 +216,8 @@ User32InitializeDpiAwareness(VOID)
             Context = GetManifestDpiContext(Start, End - Start);
             if (Context)
             {
+                if (GdiScaling && Context == DPI_AWARENESS_CONTEXT_UNAWARE)
+                    Context = DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED;
                 SetProcessDpiAwarenessContext(Context);
                 return;
             }
@@ -226,6 +237,8 @@ User32InitializeDpiAwareness(VOID)
             ARRAYSIZE(Buffer),
             NULL) < 0)
     {
+        if (GdiScaling)
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED);
         return;
     }
 
@@ -235,6 +248,9 @@ User32InitializeDpiAwareness(VOID)
         Context = DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE;
     else
         Context = DPI_AWARENESS_CONTEXT_UNAWARE;
+
+    if (GdiScaling && Context == DPI_AWARENESS_CONTEXT_UNAWARE)
+        Context = DPI_AWARENESS_CONTEXT_UNAWARE_GDISCALED;
 
     SetProcessDpiAwarenessContext(Context);
 }

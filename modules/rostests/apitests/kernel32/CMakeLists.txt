@@ -26,6 +26,7 @@ list(APPEND SOURCE
     CompatLinks.c
     ForwardCycles.c
     DllDirectories.c
+    ManifestSettings.c
     VerifyScripts.c
     GetDurationFormat.c
     TimeZoneEx.c

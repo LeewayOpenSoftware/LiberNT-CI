@@ -30,6 +30,7 @@ extern void func_FindNLSString(void);
 extern void func_CompatLinks(void);
 extern void func_ForwardCycles(void);
 extern void func_DllDirectories(void);
+extern void func_ManifestSettings(void);
 extern void func_VerifyScripts(void);
 extern void func_GetDurationFormat(void);
 extern void func_TimeZoneEx(void);
@@ -129,6 +130,7 @@ const struct test winetest_testlist[] =
     { "GetDriveType",                func_GetDriveType },
     { "FindNLSString", func_FindNLSString },
     { "CompatLinks", func_CompatLinks },
+    { "ManifestSettings", func_ManifestSettings },
     { "VerifyScripts", func_VerifyScripts },
     { "GetDurationFormat", func_GetDurationFormat },
     { "TimeZoneEx", func_TimeZoneEx },
