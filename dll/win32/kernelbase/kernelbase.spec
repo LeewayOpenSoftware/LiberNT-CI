@@ -411,6 +411,8 @@
 @ stdcall GetDiskFreeSpaceW(wstr ptr ptr ptr ptr) kernel32.GetDiskFreeSpaceW
 @ stdcall GetDriveTypeA(str) kernel32.GetDriveTypeA
 @ stdcall GetDriveTypeW(wstr) kernel32.GetDriveTypeW
+@ stdcall GetDurationFormat(long long ptr int64 wstr ptr long)
+@ stdcall GetDurationFormatEx(wstr long ptr int64 wstr ptr long)
 @ stdcall -version=0x600+ GetDynamicTimeZoneInformation(ptr) kernel32.GetDynamicTimeZoneInformation
 @ stdcall -version=0x602+ GetDynamicTimeZoneInformationEffectiveYears(ptr ptr ptr) kernel32.GetDynamicTimeZoneInformationEffectiveYears
 @ stdcall -version=0x601+ GetEnabledXStateFeatures() kernel32.GetEnabledXStateFeatures

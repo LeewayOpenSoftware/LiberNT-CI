@@ -20,6 +20,7 @@ add_library(kernelbase MODULE
     ConsoleLegacy.c
     CpuSets.c
     DllMain.c
+    DurationFormat.c
     AppModelToken.c
     MemoryApi.c
     PackageFamily.c
