@@ -130,7 +130,22 @@ QueryFullProcessImageNameA(
 
 
 /*
- * @unimplemented
+ * Application recovery registration. There is no Windows Error Reporting
+ * service to run the callback after a crash, so the registration is only
+ * recorded for this process: a registered callback is NOT invoked by the
+ * system. Get/Register/Unregister agree with each other and nothing else.
+ */
+static RTL_SRWLOCK RecoveryLock = RTL_SRWLOCK_INIT;
+static APPLICATION_RECOVERY_CALLBACK RecoveryCallback;
+static PVOID RecoveryParameter;
+static DWORD RecoveryPingInterval;
+static DWORD RecoveryFlags;
+
+#define BASEP_RECOVERY_DEFAULT_PING_INTERVAL 5000
+#define BASEP_RECOVERY_MAX_PING_INTERVAL     (5 * 60 * 1000)
+
+/*
+ * @implemented (registration only, see above)
  */
 HRESULT
 WINAPI
@@ -140,8 +155,30 @@ GetApplicationRecoveryCallback(IN HANDLE hProcess,
                                PDWORD dwPingInterval,
                                PDWORD dwFlags)
 {
-    UNIMPLEMENTED;
-    return E_FAIL;
+    HRESULT hr = E_FAIL;
+
+    if (!hProcess || !pRecoveryCallback)
+        return E_INVALIDARG;
+
+    /* Only this process's registration is kept */
+    if (hProcess != GetCurrentProcess() && GetProcessId(hProcess) != GetCurrentProcessId())
+        return E_FAIL;
+
+    RtlAcquireSRWLockShared(&RecoveryLock);
+    if (RecoveryCallback)
+    {
+        *pRecoveryCallback = RecoveryCallback;
+        if (ppvParameter)
+            *ppvParameter = RecoveryParameter;
+        if (dwPingInterval)
+            *dwPingInterval = RecoveryPingInterval;
+        if (dwFlags)
+            *dwFlags = RecoveryFlags;
+        hr = S_OK;
+    }
+    RtlReleaseSRWLockShared(&RecoveryLock);
+
+    return hr;
 }
 
 
@@ -184,7 +221,7 @@ ApplicationRecoveryInProgress(OUT PBOOL pbCancelled)
 
 
 /*
- * @unimplemented
+ * @implemented (registration only, see above)
  */
 HRESULT
 WINAPI
@@ -193,8 +230,38 @@ RegisterApplicationRecoveryCallback(IN APPLICATION_RECOVERY_CALLBACK pRecoveryCa
                                     DWORD dwPingInterval,
                                     DWORD dwFlags)
 {
-    UNIMPLEMENTED;
-    return E_FAIL;
+    if (!pRecoveryCallback || dwFlags != 0 || dwPingInterval > BASEP_RECOVERY_MAX_PING_INTERVAL)
+        return E_INVALIDARG;
+
+    if (dwPingInterval == 0)
+        dwPingInterval = BASEP_RECOVERY_DEFAULT_PING_INTERVAL;
+
+    RtlAcquireSRWLockExclusive(&RecoveryLock);
+    RecoveryCallback = pRecoveryCallback;
+    RecoveryParameter = pvParameter;
+    RecoveryPingInterval = dwPingInterval;
+    RecoveryFlags = dwFlags;
+    RtlReleaseSRWLockExclusive(&RecoveryLock);
+
+    return S_OK;
+}
+
+
+/*
+ * @implemented (registration only, see above)
+ */
+HRESULT
+WINAPI
+UnregisterApplicationRecoveryCallback(VOID)
+{
+    RtlAcquireSRWLockExclusive(&RecoveryLock);
+    RecoveryCallback = NULL;
+    RecoveryParameter = NULL;
+    RecoveryPingInterval = 0;
+    RecoveryFlags = 0;
+    RtlReleaseSRWLockExclusive(&RecoveryLock);
+
+    return S_OK;
 }
 
 
