@@ -76,7 +76,7 @@
 @ stub -version=0x600+ CheckForReadOnlyResource
 @ stdcall CheckNameLegalDOS8Dot3A(str str long long long)
 @ stdcall CheckNameLegalDOS8Dot3W(wstr str long long long)
-@ stdcall CheckRemoteDebuggerPresent(long ptr)
+@ stdcall CheckRemoteDebuggerPresent(long ptr) kernelbase.CheckRemoteDebuggerPresent
 @ stdcall -version=0x602+ CheckTokenCapability(ptr ptr ptr) kernelbase.CheckTokenCapability
 @ stdcall ClearCommBreak(long)
 @ stdcall ClearCommError(long ptr ptr)
@@ -361,10 +361,10 @@
 @ stdcall FindStringOrdinal(long wstr long wstr long long) kernelbase.FindStringOrdinal
 @ stdcall FindVolumeClose(ptr)
 @ stdcall FindVolumeMountPointClose(ptr)
-@ stdcall FlsAlloc(ptr)
-@ stdcall FlsFree(long)
-@ stdcall FlsGetValue(long)
-@ stdcall FlsSetValue(long ptr)
+@ stdcall FlsAlloc(ptr) kernelbase.FlsAlloc
+@ stdcall FlsFree(long) kernelbase.FlsFree
+@ stdcall FlsGetValue(long) kernelbase.FlsGetValue
+@ stdcall FlsSetValue(long ptr) kernelbase.FlsSetValue
 @ stdcall FlushConsoleInputBuffer(long) kernelbase.FlushConsoleInputBuffer
 @ stdcall FlushFileBuffers(long)
 @ stdcall FlushInstructionCache(long long long)
@@ -510,7 +510,7 @@
 @ stdcall GetEnvironmentVariableW(wstr ptr long)
 @ stdcall -version=0x600+ GetErrorMode()
 @ stdcall GetExitCodeProcess(long ptr)
-@ stdcall GetExitCodeThread(long ptr)
+@ stdcall GetExitCodeThread(long ptr) kernelbase.GetExitCodeThread
 @ stdcall GetExpandedNameA(str ptr)
 @ stdcall GetExpandedNameW(wstr ptr)
 @ stdcall GetFileAttributesA(str)
@@ -634,7 +634,7 @@
 @ stdcall -norelay GetProcessHeap()
 @ stdcall GetProcessHeaps(long ptr)
 @ stdcall GetProcessId(long)
-@ stdcall GetProcessIdOfThread(ptr)
+@ stdcall GetProcessIdOfThread(ptr) kernelbase.GetProcessIdOfThread
 @ stdcall GetProcessIoCounters(long ptr)
 @ stdcall -version=0x601+ GetProcessPreferredUILanguages(long ptr ptr ptr) kernelbase.GetProcessPreferredUILanguages
 @ stdcall -version=0x602+ GetProcessInformation(long long ptr long)
@@ -700,15 +700,15 @@
 @ stdcall GetThreadContext(long ptr)
 @ stdcall -version=0x602+ GetThreadInformation(long long ptr long) kernelbase.GetThreadInformation
 @ stdcall -version=0x600+ GetThreadErrorMode() kernelbase.GetThreadErrorMode
-@ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr)
-@ stdcall GetThreadIOPendingFlag(long ptr)
-@ stdcall GetThreadId(ptr)
+@ stdcall -version=0x601+ GetThreadGroupAffinity(long ptr) kernelbase.GetThreadGroupAffinity
+@ stdcall GetThreadIOPendingFlag(long ptr) kernelbase.GetThreadIOPendingFlag
+@ stdcall GetThreadId(ptr) kernelbase.GetThreadId
 @ stdcall GetThreadLocale()
 @ stdcall -version=0x600+ GetThreadPreferredUILanguages(long ptr wstr ptr) kernelbase.GetThreadPreferredUILanguages
 @ stdcall GetThreadPriority(long)
-@ stdcall GetThreadPriorityBoost(long ptr)
+@ stdcall GetThreadPriorityBoost(long ptr) kernelbase.GetThreadPriorityBoost
 @ stdcall GetThreadSelectorEntry(long long ptr)
-@ stdcall GetThreadTimes(long ptr ptr ptr ptr)
+@ stdcall GetThreadTimes(long ptr ptr ptr ptr) kernelbase.GetThreadTimes
 @ stdcall -version=0x600+ GetThreadUILanguage()
 @ stdcall GetTickCount()
 @ stdcall -version=0x600+ -ret64 GetTickCount64()
@@ -827,7 +827,7 @@
 @ stub -version=0x600+ IsCalendarLeapYear
 @ stdcall IsDBCSLeadByte(long)
 @ stdcall IsDBCSLeadByteEx(long long)
-@ stdcall IsDebuggerPresent()
+@ stdcall IsDebuggerPresent() kernelbase.IsDebuggerPresent
 @ stdcall IsNLSDefinedString(long long ptr long long) kernelbase.IsNLSDefinedString
 @ stdcall -version=0x600+ IsNormalizedString(long wstr long) kernelbase.IsNormalizedString
 @ stdcall IsProcessInJob(long long ptr)
@@ -965,7 +965,7 @@
 @ stdcall OpenSemaphoreA(long long str)
 @ stdcall OpenSemaphoreW(long long wstr)
 @ stdcall -version=0x602+ OpenStateExplicit(ptr ptr)
-@ stdcall OpenThread(long long long)
+@ stdcall OpenThread(long long long) kernelbase.OpenThread
 @ stdcall OpenWaitableTimerA(long long str)
 @ stdcall OpenWaitableTimerW(long long wstr)
 @ stdcall OutputDebugStringA(str)
@@ -1116,7 +1116,7 @@
 @ stdcall -version=0xA00+ ResizePseudoConsole(ptr long) kernelbase.ResizePseudoConsole
 @ stdcall -version=0x601+ ResolveLocaleName(wstr ptr long) kernelbase.ResolveLocaleName
 @ stdcall RestoreLastError(long) ntdll.RtlRestoreLastWin32Error
-@ stdcall ResumeThread(long)
+@ stdcall ResumeThread(long) kernelbase.ResumeThread
 @ stdcall -arch=win64 RtlAddFunctionTable(ptr long long) ntdll.RtlAddFunctionTable
 @ stdcall -register RtlCaptureContext(ptr) ntdll.RtlCaptureContext
 @ stdcall RtlCaptureStackBackTrace(long long ptr ptr) ntdll.RtlCaptureStackBackTrace
@@ -1265,14 +1265,14 @@
 @ stdcall SetThreadContext(long ptr)
 @ stdcall -version=0x600+ SetThreadErrorMode(long ptr) kernelbase.SetThreadErrorMode
 @ stdcall SetThreadExecutionState(long)
-@ stdcall SetThreadIdealProcessor(long long)
-@ stdcall GetThreadIdealProcessorEx(ptr ptr)
+@ stdcall SetThreadIdealProcessor(long long) kernelbase.SetThreadIdealProcessor
+@ stdcall GetThreadIdealProcessorEx(ptr ptr) kernelbase.GetThreadIdealProcessorEx
 @ stdcall SetThreadIdealProcessorEx(ptr ptr ptr)
 @ stdcall -version=0x602+ SetThreadInformation(long long ptr long) kernelbase.SetThreadInformation
 @ stdcall SetThreadLocale(long)
 @ stdcall -version=0x600+ SetThreadPreferredUILanguages(long wstr ptr) kernelbase.SetThreadPreferredUILanguages
 @ stdcall SetThreadPriority(long long)
-@ stdcall SetThreadPriorityBoost(long long)
+@ stdcall SetThreadPriorityBoost(long long) kernelbase.SetThreadPriorityBoost
 @ stdcall SetThreadStackGuarantee(ptr)
 @ stdcall SetThreadUILanguage(long)
 @ stdcall -version=0x600+ SetThreadpoolStackInformation(ptr ptr) kernelbase.SetThreadpoolStackInformation
@@ -1306,9 +1306,9 @@
 @ stdcall SleepEx(long long)
 @ stdcall -version=0x600+ StartThreadpoolIo(ptr) ntdll.TpStartAsyncIoOperation
 @ stdcall -version=0x600+ SubmitThreadpoolWork(ptr) ntdll.TpPostWork
-@ stdcall SuspendThread(long)
+@ stdcall SuspendThread(long) kernelbase.SuspendThread
 @ stdcall SwitchToFiber(ptr)
-@ stdcall SwitchToThread()
+@ stdcall SwitchToThread() kernelbase.SwitchToThread
 @ stdcall SystemTimeToFileTime(ptr ptr)
 @ stdcall SystemTimeToTzSpecificLocalTime(ptr ptr ptr)
 @ stdcall -version=0x601+ SystemTimeToTzSpecificLocalTimeEx(ptr ptr ptr) kernelbase.SystemTimeToTzSpecificLocalTimeEx

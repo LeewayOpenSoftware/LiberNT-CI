@@ -54,6 +54,7 @@ list(APPEND SOURCE
     GetVolumeInformation.c
     InitOnce.c
     WineGroups12.c
+    InversionL1.c
     interlck.c
     IoCompletion.c
     IsDBCSLeadByteEx.c
