@@ -2745,6 +2745,14 @@ Quickie:
     return Status;
 }
 
+static NTSTATUS NTAPI
+LdrpLoadDllWithPath(IN BOOLEAN Redirected,
+                    IN PWSTR DllPath OPTIONAL,
+                    IN PULONG DllCharacteristics OPTIONAL,
+                    IN PUNICODE_STRING DllName,
+                    OUT PVOID *BaseAddress,
+                    IN BOOLEAN CallInit);
+
 NTSTATUS
 NTAPI
 LdrpLoadDll(IN BOOLEAN Redirected,
@@ -2753,6 +2761,28 @@ LdrpLoadDll(IN BOOLEAN Redirected,
             IN PUNICODE_STRING DllName,
             OUT PVOID *BaseAddress,
             IN BOOLEAN CallInit)
+{
+    PWSTR DefaultPath = NULL;
+    NTSTATUS Status;
+
+    /* A load given no search path honours SetDefaultDllDirectories */
+    if (!DllPath)
+        DllPath = DefaultPath = LdrpGetDefaultDllPath();
+
+    Status = LdrpLoadDllWithPath(Redirected, DllPath, DllCharacteristics, DllName, BaseAddress, CallInit);
+
+    if (DefaultPath)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, DefaultPath);
+    return Status;
+}
+
+static NTSTATUS NTAPI
+LdrpLoadDllWithPath(IN BOOLEAN Redirected,
+                    IN PWSTR DllPath OPTIONAL,
+                    IN PULONG DllCharacteristics OPTIONAL,
+                    IN PUNICODE_STRING DllName,
+                    OUT PVOID *BaseAddress,
+                    IN BOOLEAN CallInit)
 {
     PPEB Peb = NtCurrentPeb();
     NTSTATUS Status = STATUS_SUCCESS;

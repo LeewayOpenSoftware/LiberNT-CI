@@ -100,6 +100,22 @@ DbgUiGetThreadDebugObject(
 
 NTSTATUS
 NTAPI
+LdrAddDllDirectory(
+    _In_ PUNICODE_STRING Directory,
+    _Out_ PVOID *Cookie);
+
+NTSTATUS
+NTAPI
+LdrRemoveDllDirectory(
+    _In_ PVOID Cookie);
+
+NTSTATUS
+NTAPI
+LdrSetDefaultDllDirectories(
+    _In_ ULONG DirectoryFlags);
+
+NTSTATUS
+NTAPI
 LdrAddRefDll(
     _In_ ULONG Flags,
     _In_ PVOID BaseAddress

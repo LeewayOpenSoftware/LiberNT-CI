@@ -151,6 +151,7 @@
 @ stdcall -version=0x502 LdrAccessOutOfProcessResource(ptr ptr ptr ptr ptr)
 @ stdcall LdrAccessResource(ptr ptr ptr ptr)
 @ stdcall -stub -version=0x600+ LdrAddLoadAsDataTable(ptr wstr long ptr)
+@ stdcall -version=0x601+ LdrAddDllDirectory(ptr ptr)
 @ stdcall LdrAddRefDll(long ptr)
 @ stdcall -version=0x502 LdrAlternateResourcesEnabled()
 @ stdcall -version=0x502 LdrCreateOutOfProcessImage(long ptr ptr ptr)
@@ -203,6 +204,8 @@
 @ extern LdrSystemDllInitBlock
 @ stdcall LdrUnloadAlternateResourceModule(ptr)
 @ stdcall -stub -version=0x600+ LdrUnloadAlternateResourceModuleEx(long long)
+@ stdcall -version=0x601+ LdrRemoveDllDirectory(ptr)
+@ stdcall -version=0x601+ LdrSetDefaultDllDirectories(long)
 @ stdcall LdrUnloadDll(ptr)
 @ stdcall LdrUnlockLoaderLock(long ptr)
 @ stdcall -version=0x600+ LdrUnregisterDllNotification(ptr)
