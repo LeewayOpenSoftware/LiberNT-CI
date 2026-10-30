@@ -123,6 +123,7 @@ CreateShortcut(
     LPWSTR lpFilePart;
     WCHAR szPath[MAX_PATH];
     WCHAR szWorkingDirBuf[MAX_PATH];
+    HRESULT hr;
 
     /* If no working directory is provided, try to compute a default one */
     if (pszWorkingDir == NULL || pszWorkingDir[0] == L'\0')
@@ -163,14 +164,18 @@ CreateShortcut(
     wcscpy(Ptr, pszName);
 
     /* Create the shortcut */
-    return SUCCEEDED(CreateShellLink(szPath,
-                                     pszCommand,
-                                     pszArgs,
-                                     pszWorkingDir,
-                                     /* Special value to indicate no icon */
-                                     (iIconNr != -1 ? pszCommand : NULL),
-                                     iIconNr,
-                                     pszDescription));
+    hr = CreateShellLink(szPath,
+                         pszCommand,
+                         pszArgs,
+                         pszWorkingDir,
+                         /* Special value to indicate no icon */
+                         (iIconNr != -1 ? pszCommand : NULL),
+                         iIconNr,
+                         pszDescription);
+    if (FAILED(hr))
+        DPRINT1("Failed to create shortcut '%S' (hr 0x%lx)\n", szPath, hr);
+
+    return SUCCEEDED(hr);
 }
 
 
@@ -193,7 +198,10 @@ CreateShortcutsFromSection(
     WCHAR szArgs[MAX_PATH];
 
     if (!SetupFindFirstLine(hinf, pszSection, NULL, &Context))
+    {
+        DPRINT1("Shortcut section '%S' not found\n", pszSection);
         return FALSE;
+    }
 
     do
     {
@@ -203,22 +211,35 @@ CreateShortcutsFromSection(
 
         dwFieldCount = SetupGetFieldCount(&Context);
         if (dwFieldCount < 3)
+        {
+            DPRINT1("Skipping a shortcut of '%S': %lu fields\n", pszSection, dwFieldCount);
             continue;
+        }
 
         if (!SetupGetStringFieldW(&Context, 1, szCommand, ARRAYSIZE(szCommand), NULL))
+        {
+            DPRINT1("Skipping a shortcut of '%S': no command (error %lu)\n", pszSection, GetLastError());
             continue;
+        }
 
         if (ExpandEnvironmentStringsW(szCommand, szTarget, ARRAYSIZE(szTarget)) == 0 ||
             GetFileAttributesW(szTarget) == INVALID_FILE_ATTRIBUTES)
         {
+            DPRINT1("Skipping shortcut target '%S' of '%S': not installed\n", szCommand, pszSection);
             continue;
         }
 
         if (!SetupGetStringFieldW(&Context, 2, szName, ARRAYSIZE(szName), NULL))
+        {
+            DPRINT1("Skipping shortcut '%S' of '%S': no name (error %lu)\n", szCommand, pszSection, GetLastError());
             continue;
+        }
 
         if (!SetupGetStringFieldW(&Context, 3, szDescription, ARRAYSIZE(szDescription), NULL))
+        {
+            DPRINT1("Skipping shortcut '%S' of '%S': no description (error %lu)\n", szName, pszSection, GetLastError());
             continue;
+        }
 
         if (dwFieldCount < 4 || !SetupGetIntField(&Context, 4, &iIconNr))
             iIconNr = -1; /* Special value to indicate no icon */
@@ -252,34 +273,56 @@ CreateShortcuts(
     WCHAR szFolder[MAX_PATH];
     WCHAR szFolderSection[MAX_PATH];
     INT csidl;
+    HRESULT hr, hrCom;
 
-    CoInitialize(NULL);
+    hrCom = CoInitialize(NULL);
+    if (FAILED(hrCom))
+        DPRINT1("CoInitialize() failed (hr 0x%lx)\n", hrCom);
 
     if (!SetupFindFirstLine(hinf, szSection, NULL, &Context))
+    {
+        if (SUCCEEDED(hrCom))
+            CoUninitialize();
         return FALSE;
+    }
 
     do
     {
         if (SetupGetFieldCount(&Context) < 2)
+        {
+            DPRINT1("Skipping a shortcut folder of '%S': too few fields\n", szSection);
             continue;
+        }
 
         if (!SetupGetStringFieldW(&Context, 0, szFolderSection, ARRAYSIZE(szFolderSection), NULL))
             continue;
 
         if (!SetupGetIntField(&Context, 1, &csidl))
+        {
+            DPRINT1("Skipping shortcut folder '%S': no CSIDL (error %lu)\n", szFolderSection, GetLastError());
             continue;
+        }
 
         if (!SetupGetStringFieldW(&Context, 2, szFolder, ARRAYSIZE(szFolder), NULL))
+        {
+            DPRINT1("Skipping shortcut folder '%S': no sub-folder (error %lu)\n", szFolderSection, GetLastError());
             continue;
+        }
 
-        if (FAILED(SHGetFolderPathAndSubDirW(NULL, csidl|CSIDL_FLAG_CREATE, (HANDLE)-1, SHGFP_TYPE_DEFAULT, szFolder, szPath)))
+        hr = SHGetFolderPathAndSubDirW(NULL, csidl|CSIDL_FLAG_CREATE, (HANDLE)-1, SHGFP_TYPE_DEFAULT, szFolder, szPath);
+        if (FAILED(hr))
+        {
+            DPRINT1("Skipping shortcut folder '%S': CSIDL 0x%x '%S' failed (hr 0x%lx)\n",
+                    szFolderSection, csidl, szFolder, hr);
             continue;
+        }
 
         CreateShortcutsFromSection(pItemsData, pNotify, hinf, szFolderSection, szPath);
 
     } while (SetupFindNextLine(&Context, &Context));
 
-    CoUninitialize();
+    if (SUCCEEDED(hrCom))
+        CoUninitialize();
 
     return TRUE;
 }
