@@ -82,9 +82,10 @@ S1LogF(
     _In_ PCWSTR Format,
     ...)
 {
-    /* TODO(S1): append-only JSONL journal entry + optional serial log.
-     * Every journal entry is written and flushed before the next step is
-     * made visible (owner condition: the journal survives interruptions). */
+    /* Journal entry per S1-CONTRACTS.md section 2: {"seq","prev","ts","tx",
+     * "phase","op","result","error"}; append-only, hash-chained, written and
+     * flushed before the next step is visible (owner condition: the journal
+     * survives interruptions). */
 }
 
 static NTSTATUS
@@ -104,10 +105,10 @@ S1ParsePlan(
     _In_ ULONG PlanSize,
     _Out_ PS1_PLAN *Plan)
 {
-    /* TODO(S1): minimal JSON reader for the plan schema (contract with
-     * Oscar). The plan is rejected on any parse error: a plan this binary
-     * cannot read is not applied, it is reported and left for the rescue
-     * CLI (DESIGN-v0 rule 4 of the boot applier). */
+    /* Minimal JSON reader for plan.json schema 1 (S1-CONTRACTS.md section
+     * 1). The plan is rejected on any parse error, unknown schema or unknown
+     * operation type: a plan this binary cannot read is not applied, it is
+     * journaled and left for the rescue CLI (DESIGN-v0 rule 4). */
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -117,12 +118,12 @@ S1VerifyPlan(
     _In_ PVOID PlanData,
     _In_ ULONG PlanSize)
 {
-    /* TODO(S1): verify target identity against the machine, then the plan
-     * signature with the embedded development public key. Owner condition 2:
-     * Update packages enforce signature; a plan that does not verify is
-     * never applied (no audit mode for Update). The crypto primitive is
-     * bcrypt if it is mapped at this boot stage; otherwise the plan is
-     * rejected and journaled, never applied silently. */
+    /* Verify target identity (machineId/arch/line/base) against the machine,
+     * then the plan signature with the embedded development public key
+     * (S1-CONTRACTS.md sections 1 and 3). Owner condition 2: enforce, no
+     * audit for Update; a plan that does not verify is never applied. The
+     * crypto primitive is bcrypt if mapped at this boot stage; otherwise the
+     * plan is rejected and journaled, never applied silently. */
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -132,9 +133,10 @@ S1LoadAttempt(
     _Out_ PBOOLEAN HealthConfirmed,
     _Out_ PBOOLEAN FailureRecorded)
 {
-    /* TODO(S1): attempt.json holds the boot attempt counter, the health
-     * confirmation flag (written by the service once check-health passes)
-     * and the last failure marker. Missing file means a fresh plan. */
+    /* attempt.json schema 1 (S1-CONTRACTS.md section 5): tx, attempt,
+     * healthConfirmed (written ONLY by LiberNTUpdateSvc after a successful
+     * check-health; it also resets attempt to 0), failureRecorded and
+     * lastResult. Missing file means a fresh plan. */
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -144,7 +146,8 @@ S1PersistAttempt(
     _In_ BOOLEAN HealthConfirmed,
     _In_ BOOLEAN FailureRecorded)
 {
-    /* TODO(S1): rewrite attempt.json atomically (write, flush, rename). */
+    /* Rewrite attempt.json atomically: temp file, flush, rename
+     * (S1-CONTRACTS.md section 5). */
     return STATUS_NOT_IMPLEMENTED;
 }
 
@@ -156,9 +159,8 @@ S1JournalAppend(
     _In_ PCWSTR Result,
     _In_ PCWSTR Error OPTIONAL)
 {
-    /* TODO(S1): append-only JSONL: sequence, transactionId, phase,
-     * operation, timestamp, result, error, previous-entry hash. The entry
-     * is flushed to disk before returning. */
+    /* Append-only JSONL, hash-chained (S1-CONTRACTS.md section 2); the
+     * entry is flushed to disk before returning. */
     return STATUS_NOT_IMPLEMENTED;
 }
 
