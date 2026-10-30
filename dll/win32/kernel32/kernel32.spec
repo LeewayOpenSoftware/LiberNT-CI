@@ -149,8 +149,8 @@
 @ stdcall CreateFileW(wstr long long ptr long long long)
 @ stdcall -version=0x602+ CreateFile2(wstr long long long ptr)
 @ stdcall CreateHardLinkA(str str ptr)
-@ stdcall -stub -version=0x600+ CreateHardLinkTransactedA(str str ptr ptr)
-@ stdcall -stub -version=0x600+ CreateHardLinkTransactedW(wstr wstr ptr ptr)
+@ stdcall -version=0x600+ CreateHardLinkTransactedA(str str ptr ptr)
+@ stdcall -version=0x600+ CreateHardLinkTransactedW(wstr wstr ptr ptr)
 @ stdcall CreateHardLinkW(wstr wstr ptr)
 @ stdcall CreateIoCompletionPort(long long long long)
 @ stdcall CreateJobObjectA(ptr str)
@@ -182,8 +182,8 @@
 @ stdcall CreateSemaphoreW(ptr long long wstr)
 @ stdcall -i386 CreateSocketHandle()
 @ stdcall -version=0x600+ CreateSymbolicLinkA(str str long)
-@ stdcall -stub -version=0x600+ CreateSymbolicLinkTransactedA(str str long ptr)
-@ stdcall -stub -version=0x600+ CreateSymbolicLinkTransactedW(wstr wstr long ptr)
+@ stdcall -version=0x600+ CreateSymbolicLinkTransactedA(str str long ptr)
+@ stdcall -version=0x600+ CreateSymbolicLinkTransactedW(wstr wstr long ptr)
 @ stdcall -version=0x600+ CreateSymbolicLinkW(wstr wstr long)
 @ stdcall CreateTapePartition(long long long long)
 @ stdcall CreateThread(ptr long ptr long long ptr)
@@ -330,12 +330,12 @@
 @ stdcall FindFirstFileA(str ptr)
 @ stdcall FindFirstFileExA(str long ptr long ptr long)
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long)
-@ stub -version=0x600+ FindFirstFileNameTransactedW
+@ stdcall -version=0x600+ FindFirstFileNameTransactedW(wstr long ptr ptr long)
 @ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr)
-@ stub -version=0x600+ FindFirstFileTransactedA
-@ stub -version=0x600+ FindFirstFileTransactedW
+@ stdcall -version=0x600+ FindFirstFileTransactedA(str long ptr long ptr long long)
+@ stdcall -version=0x600+ FindFirstFileTransactedW(wstr long ptr long ptr long long)
 @ stdcall FindFirstFileW(wstr ptr)
-@ stub -version=0x600+ FindFirstStreamTransactedW
+@ stdcall -version=0x600+ FindFirstStreamTransactedW(wstr long ptr long long)
 @ stdcall FindFirstStreamW(wstr ptr ptr long)
 @ stdcall FindFirstVolumeA(ptr long)
 @ stdcall FindFirstVolumeMountPointA(str ptr long)
@@ -417,8 +417,8 @@
 @ stdcall GetCommandLineA()
 @ stdcall GetCommandLineW()
 @ stdcall GetCompressedFileSizeA(long ptr)
-@ stub -version=0x600+ GetCompressedFileSizeTransactedA
-@ stub -version=0x600+ GetCompressedFileSizeTransactedW
+@ stdcall -version=0x600+ GetCompressedFileSizeTransactedA(str ptr long)
+@ stdcall -version=0x600+ GetCompressedFileSizeTransactedW(wstr ptr long)
 @ stdcall GetCompressedFileSizeW(long ptr)
 @ stdcall GetComputerNameA(ptr ptr)
 @ stdcall GetComputerNameExA(long ptr ptr)
@@ -516,8 +516,8 @@
 @ stdcall GetFileAttributesA(str)
 @ stdcall GetFileAttributesExA(str long ptr)
 @ stdcall GetFileAttributesExW(wstr long ptr)
-@ stub -version=0x600+ GetFileAttributesTransactedA
-@ stub -version=0x600+ GetFileAttributesTransactedW
+@ stdcall -version=0x600+ GetFileAttributesTransactedA(str long ptr long)
+@ stdcall -version=0x600+ GetFileAttributesTransactedW(wstr long ptr long)
 @ stdcall GetFileAttributesW(wstr)
 @ stdcall -version=0x600+ GetFileBandwidthReservation(ptr ptr ptr ptr ptr ptr)
 @ stdcall GetFileInformationByHandle(long ptr)
@@ -536,8 +536,8 @@
 @ stdcall GetFirmwareEnvironmentVariableW(wstr wstr ptr long)
 @ stdcall -version=0x602+ GetFirmwareType(ptr)
 @ stdcall GetFullPathNameA(str long ptr ptr)
-@ stub -version=0x600+ GetFullPathNameTransactedA
-@ stub -version=0x600+ GetFullPathNameTransactedW
+@ stdcall -version=0x600+ GetFullPathNameTransactedA(str long ptr ptr long)
+@ stdcall -version=0x600+ GetFullPathNameTransactedW(wstr long ptr ptr long)
 @ stdcall GetFullPathNameW(wstr long ptr ptr)
 @ stdcall GetGeoInfoA(long long ptr long long)
 @ stdcall -version=0xA00+ GetGeoInfoEx(ptr long ptr long) kernelbase.GetGeoInfoEx
@@ -564,8 +564,8 @@
 @ stdcall GetLogicalProcessorInformation(ptr ptr)
 @ stdcall -version=0x601+ GetLogicalProcessorInformationEx(long ptr ptr)
 @ stdcall GetLongPathNameA(str long long)
-@ stub -version=0x600+ GetLongPathNameTransactedA
-@ stub -version=0x600+ GetLongPathNameTransactedW
+@ stdcall -version=0x600+ GetLongPathNameTransactedA(str ptr long long)
+@ stdcall -version=0x600+ GetLongPathNameTransactedW(wstr ptr long long)
 @ stdcall GetLongPathNameW(wstr long long)
 @ stdcall -version=0xA00+ GetMachineTypeAttributes(long ptr)
 @ stdcall GetMailslotInfo(long ptr ptr ptr ptr)
@@ -1207,8 +1207,8 @@
 @ stdcall SetFileApisToANSI()
 @ stdcall SetFileApisToOEM()
 @ stdcall SetFileAttributesA(str long)
-@ stub -version=0x600+ SetFileAttributesTransactedA
-@ stub -version=0x600+ SetFileAttributesTransactedW
+@ stdcall -version=0x600+ SetFileAttributesTransactedA(str long long)
+@ stdcall -version=0x600+ SetFileAttributesTransactedW(wstr long long)
 @ stdcall SetFileAttributesW(wstr long)
 @ stdcall -version=0x600+ SetFileBandwidthReservation(ptr long long long ptr ptr)
 @ stdcall SetFileCompletionNotificationModes(ptr long)

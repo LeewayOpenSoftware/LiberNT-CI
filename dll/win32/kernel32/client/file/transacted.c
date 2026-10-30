@@ -18,6 +18,8 @@
 #define NDEBUG
 #include <debug.h>
 
+WINBASEAPI HANDLE WINAPI FindFirstFileNameW(_In_ LPCWSTR, _In_ DWORD, _Inout_ LPDWORD, _Out_ PWSTR);
+
 /* PRIVATE FUNCTIONS ********************************************************/
 
 static
@@ -224,4 +226,266 @@ RemoveDirectoryTransactedA(
         return FALSE;
 
     return RemoveDirectoryA(lpPathName);
+}
+
+/* Remaining transacted entry points (same rule as above) *******************/
+
+BOOL
+WINAPI
+CreateHardLinkTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _In_ LPCWSTR lpExistingFileName,
+    _Reserved_ LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return CreateHardLinkW(lpFileName, lpExistingFileName, lpSecurityAttributes);
+}
+
+BOOL
+WINAPI
+CreateHardLinkTransactedA(
+    _In_ LPCSTR lpFileName,
+    _In_ LPCSTR lpExistingFileName,
+    _Reserved_ LPSECURITY_ATTRIBUTES lpSecurityAttributes,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return CreateHardLinkA(lpFileName, lpExistingFileName, lpSecurityAttributes);
+}
+
+BOOLEAN
+WINAPI
+CreateSymbolicLinkTransactedW(
+    _In_ LPCWSTR lpSymlinkFileName,
+    _In_ LPCWSTR lpTargetFileName,
+    _In_ DWORD dwFlags,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return CreateSymbolicLinkW(lpSymlinkFileName, lpTargetFileName, dwFlags);
+}
+
+BOOLEAN
+WINAPI
+CreateSymbolicLinkTransactedA(
+    _In_ LPCSTR lpSymlinkFileName,
+    _In_ LPCSTR lpTargetFileName,
+    _In_ DWORD dwFlags,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return CreateSymbolicLinkA(lpSymlinkFileName, lpTargetFileName, dwFlags);
+}
+
+HANDLE
+WINAPI
+FindFirstFileNameTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _In_ DWORD dwFlags,
+    _Inout_ LPDWORD StringLength,
+    _Out_ PWSTR LinkName,
+    _In_opt_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return INVALID_HANDLE_VALUE;
+
+    return FindFirstFileNameW(lpFileName, dwFlags, StringLength, LinkName);
+}
+
+HANDLE
+WINAPI
+FindFirstFileTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _In_ FINDEX_INFO_LEVELS fInfoLevelId,
+    _Out_ LPVOID lpFindFileData,
+    _In_ FINDEX_SEARCH_OPS fSearchOp,
+    _Reserved_ LPVOID lpSearchFilter,
+    _In_ DWORD dwAdditionalFlags,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return INVALID_HANDLE_VALUE;
+
+    return FindFirstFileExW(lpFileName, fInfoLevelId, lpFindFileData,
+                            fSearchOp, lpSearchFilter, dwAdditionalFlags);
+}
+
+HANDLE
+WINAPI
+FindFirstFileTransactedA(
+    _In_ LPCSTR lpFileName,
+    _In_ FINDEX_INFO_LEVELS fInfoLevelId,
+    _Out_ LPVOID lpFindFileData,
+    _In_ FINDEX_SEARCH_OPS fSearchOp,
+    _Reserved_ LPVOID lpSearchFilter,
+    _In_ DWORD dwAdditionalFlags,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return INVALID_HANDLE_VALUE;
+
+    return FindFirstFileExA(lpFileName, fInfoLevelId, lpFindFileData,
+                            fSearchOp, lpSearchFilter, dwAdditionalFlags);
+}
+
+HANDLE
+WINAPI
+FindFirstStreamTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _In_ STREAM_INFO_LEVELS InfoLevel,
+    _Out_ LPVOID lpFindStreamData,
+    _Reserved_ DWORD dwFlags,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return INVALID_HANDLE_VALUE;
+
+    return FindFirstStreamW(lpFileName, InfoLevel, lpFindStreamData, dwFlags);
+}
+
+DWORD
+WINAPI
+GetCompressedFileSizeTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _Out_opt_ LPDWORD lpFileSizeHigh,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return INVALID_FILE_SIZE;
+
+    return GetCompressedFileSizeW(lpFileName, lpFileSizeHigh);
+}
+
+DWORD
+WINAPI
+GetCompressedFileSizeTransactedA(
+    _In_ LPCSTR lpFileName,
+    _Out_opt_ LPDWORD lpFileSizeHigh,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return INVALID_FILE_SIZE;
+
+    return GetCompressedFileSizeA(lpFileName, lpFileSizeHigh);
+}
+
+BOOL
+WINAPI
+GetFileAttributesTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _In_ GET_FILEEX_INFO_LEVELS fInfoLevelId,
+    _Out_ LPVOID lpFileInformation,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return GetFileAttributesExW(lpFileName, fInfoLevelId, lpFileInformation);
+}
+
+BOOL
+WINAPI
+GetFileAttributesTransactedA(
+    _In_ LPCSTR lpFileName,
+    _In_ GET_FILEEX_INFO_LEVELS fInfoLevelId,
+    _Out_ LPVOID lpFileInformation,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return GetFileAttributesExA(lpFileName, fInfoLevelId, lpFileInformation);
+}
+
+DWORD
+WINAPI
+GetFullPathNameTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _In_ DWORD nBufferLength,
+    _Out_ LPWSTR lpBuffer,
+    _Out_opt_ LPWSTR *lpFilePart,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return 0;
+
+    return GetFullPathNameW(lpFileName, nBufferLength, lpBuffer, lpFilePart);
+}
+
+DWORD
+WINAPI
+GetFullPathNameTransactedA(
+    _In_ LPCSTR lpFileName,
+    _In_ DWORD nBufferLength,
+    _Out_ LPSTR lpBuffer,
+    _Out_opt_ LPSTR *lpFilePart,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return 0;
+
+    return GetFullPathNameA(lpFileName, nBufferLength, lpBuffer, lpFilePart);
+}
+
+DWORD
+WINAPI
+GetLongPathNameTransactedW(
+    _In_ LPCWSTR lpszShortPath,
+    _Out_ LPWSTR lpszLongPath,
+    _In_ DWORD cchBuffer,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return 0;
+
+    return GetLongPathNameW(lpszShortPath, lpszLongPath, cchBuffer);
+}
+
+DWORD
+WINAPI
+GetLongPathNameTransactedA(
+    _In_ LPCSTR lpszShortPath,
+    _Out_ LPSTR lpszLongPath,
+    _In_ DWORD cchBuffer,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return 0;
+
+    return GetLongPathNameA(lpszShortPath, lpszLongPath, cchBuffer);
+}
+
+BOOL
+WINAPI
+SetFileAttributesTransactedW(
+    _In_ LPCWSTR lpFileName,
+    _In_ DWORD dwFileAttributes,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return SetFileAttributesW(lpFileName, dwFileAttributes);
+}
+
+BOOL
+WINAPI
+SetFileAttributesTransactedA(
+    _In_ LPCSTR lpFileName,
+    _In_ DWORD dwFileAttributes,
+    _In_ HANDLE hTransaction)
+{
+    if (BaseHasTransaction(hTransaction))
+        return FALSE;
+
+    return SetFileAttributesA(lpFileName, dwFileAttributes);
 }
