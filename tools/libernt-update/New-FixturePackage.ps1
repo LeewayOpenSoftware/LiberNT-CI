@@ -10,10 +10,11 @@
     Items: array of hashtables
         @{ Target = 'Windows\System32\foo.dll'; Content = 'text' }      replace/create with that content
         @{ Target = 'Windows\System32\old.dll'; Delete = $true }        delete
+        @{ Target = 'Windows\System32\drivers\d.sys'; Content = 'x'; DriverStart = 3 }   driver
 
     Switches for negative fixtures:
-        -Unsigned          no catalog.cat at all
-        -UnsignedCatalog   a catalog that is not signed
+        -Unsigned          no catalog.cat at all (valid for a non-driver package: the catalog is optional)
+        -UnsignedCatalog   a catalog that is present but not signed (must be rejected)
         -SigningPfx/-SigningPasswordFile   sign with another certificate (the manifest then names that one)
         -TamperPayloadAfterSigning        change a payload byte after signing (payload hash no longer matches)
         -TamperManifestAfterSigning       rewrite manifest.json after signing (catalog no longer covers it)
@@ -63,7 +64,9 @@ foreach ($it in $Items) {
     $file = Join-Path $OutDir ('payload\' + $rel)
     [IO.File]::WriteAllText($file, [string]$it.Content, $utf8)
     $sha = (Get-FileHash -Algorithm SHA256 -Path $file).Hash.ToLower()
-    $payloads += [ordered]@{ path = $rel; target = $it.Target; sha256 = $sha }
+    $entry = [ordered]@{ path = $rel; target = $it.Target; sha256 = $sha }
+    if ($it.ContainsKey('DriverStart')) { $entry.driverStart = [int]$it.DriverStart }
+    $payloads += $entry
 }
 
 $manifest = [ordered]@{

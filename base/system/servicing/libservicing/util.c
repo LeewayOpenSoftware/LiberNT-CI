@@ -221,6 +221,43 @@ static DWORD FlushPath(const WCHAR *path)
     return ok ? ERROR_SUCCESS : GetLastError();
 }
 
+/* A virus scanner or indexer may hold a file the moment after it was written, and a file with a pending
+ * delete answers ACCESS_DENIED: replacing and creating are retried briefly before the error is believed. */
+static BOOL TransientFileError(DWORD e)
+{
+    return e == ERROR_SHARING_VIOLATION || e == ERROR_LOCK_VIOLATION || e == ERROR_ACCESS_DENIED;
+}
+
+static BOOL MoveReplaceRetry(const WCHAR *from, const WCHAR *to)
+{
+    int attempt;
+
+    for (attempt = 0; attempt < 40; attempt++)
+    {
+        if (MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return TRUE;
+        if (!TransientFileError(GetLastError()))
+            return FALSE;
+        Sleep(50);
+    }
+    return FALSE;
+}
+
+HANDLE LnOpenRetry(const WCHAR *path, DWORD access, DWORD share, DWORD disposition, DWORD flags)
+{
+    int attempt;
+    HANDLE h = INVALID_HANDLE_VALUE;
+
+    for (attempt = 0; attempt < 40; attempt++)
+    {
+        h = CreateFileW(path, access, share, NULL, disposition, flags, NULL);
+        if (h != INVALID_HANDLE_VALUE || !TransientFileError(GetLastError()))
+            break;
+        Sleep(50);
+    }
+    return h;
+}
+
 DWORD LnWriteFileAtomic(const WCHAR *path, const void *data, size_t len)
 {
     WCHAR tmp[MAX_PATH], parent[MAX_PATH];
@@ -236,7 +273,7 @@ DWORD LnWriteFileAtomic(const WCHAR *path, const void *data, size_t len)
 
     wcscpy(tmp, path);
     wcscat(tmp, L".tmp");
-    h = CreateFileW(tmp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+    h = LnOpenRetry(tmp, GENERIC_WRITE, 0, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH);
     if (h == INVALID_HANDLE_VALUE)
         return GetLastError();
     if (len && (!WriteFile(h, data, (DWORD)len, &wrote, NULL) || wrote != (DWORD)len))
@@ -254,7 +291,7 @@ DWORD LnWriteFileAtomic(const WCHAR *path, const void *data, size_t len)
         return err;
     }
     CloseHandle(h);
-    if (!MoveFileExW(tmp, path, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    if (!MoveReplaceRetry(tmp, path))
     {
         err = GetLastError();
         DeleteFileW(tmp);

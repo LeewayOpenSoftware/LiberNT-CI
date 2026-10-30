@@ -394,8 +394,8 @@ DWORD LnJournalAppend(const LN_TARGET *t, LN_JENTRY *e)
     }
     if (!err)
     {
-        h = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_DELETE, NULL,
-                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH, NULL);
+        h = LnOpenRetry(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_DELETE,
+                        OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_WRITE_THROUGH);
         if (h == INVALID_HANDLE_VALUE)
             err = GetLastError();
         else

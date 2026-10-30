@@ -170,6 +170,15 @@ DWORD LnPinnedCertSha256(const LN_TARGET *t, char hash[65])
 
 #define PinnedCert LnPinnedCertSha256
 
+static DWORD VerifyStagedCopy(const LN_TARGET *t, const WCHAR *stage)
+{
+    WCHAR *cer = LnTargetPath(t, CER_NAME);
+    DWORD err = cer ? LnServicingVerifyPackage(stage, cer, NULL) : ERROR_NOT_ENOUGH_MEMORY;
+
+    free(cer);
+    return err;
+}
+
 /* ---- add-package ------------------------------------------------------- */
 
 /* Copies the package into a private staging folder (inside the protected servicing tree). What the
@@ -287,7 +296,7 @@ DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[6
 
     err = PinnedCert(t, pinned);
     if (!err)
-        err = LnServicingVerifyPackage(stage, pinned, NULL);          /* only the private copy is verified */
+        err = VerifyStagedCopy(t, stage);                            /* only the private copy is verified */
     if (err)
     {
         Journal(&c, "failed", "error", ErrText(err, buf));              /* rejected before staging */
@@ -538,6 +547,29 @@ static BOOL IsLockedError(DWORD e, const WCHAR *target)
     return FALSE;
 }
 
+/* A virus scanner or an indexer may hold a freshly written file for a moment: a sharing violation on the
+ * replacement is retried a few times before it is treated as "in use". */
+static BOOL MoveReplace(const LN_TARGET *t, const WCHAR *from, const WCHAR *to)
+{
+    /* An offline image has no running programs: a scanner is the only thing that can hold the file, so it
+     * is worth waiting longer than on the running system, where a denial usually means the file is in use. */
+    int attempt, max = (t->mode == LnTargetImage) ? 50 : 10;
+
+    for (attempt = 0; attempt < max; attempt++)
+    {
+        DWORD e;
+
+        if (MoveFileExW(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return TRUE;
+        e = GetLastError();
+        if (e != ERROR_SHARING_VIOLATION && e != ERROR_LOCK_VIOLATION && e != ERROR_ACCESS_DENIED &&
+            e != ERROR_USER_MAPPED_FILE)
+            return FALSE;
+        Sleep(100);
+    }
+    return FALSE;
+}
+
 /* *pending is set when the target is in use (Online only): the plan takes it at boot. */
 static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
 {
@@ -613,7 +645,7 @@ static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
         DeleteFileW(tmp);
         goto out;
     }
-    if (!MoveFileExW(tmp, tp, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+    if (!MoveReplace(c->t, tmp, tp))
     {
         err = GetLastError();
         DeleteFileW(tmp);
@@ -686,7 +718,7 @@ static DWORD RestoreItem(const CTX *c, size_t i, const UNDO *u)
         wcscpy(tmp, tp);
         wcscat(tmp, L".lnundo");
         err = LnCopyFileFlush(bp, tmp);
-        if (!err && !MoveFileExW(tmp, tp, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        if (!err && !MoveReplace(c->t, tmp, tp))
         {
             err = GetLastError();
             DeleteFileW(tmp);
@@ -785,68 +817,6 @@ static DWORD DoRollback(CTX *c, const char *why)
 }
 
 /* ---- plan.json ---------------------------------------------------------- */
-
-static const char b64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-
-static void Base64(const BYTE *in, size_t n, LN_BUF *out)
-{
-    size_t i;
-
-    for (i = 0; i < n; i += 3)
-    {
-        unsigned v = (unsigned)in[i] << 16;
-        char q[4];
-
-        if (i + 1 < n) v |= (unsigned)in[i + 1] << 8;
-        if (i + 2 < n) v |= in[i + 2];
-        q[0] = b64[(v >> 18) & 63];
-        q[1] = b64[(v >> 12) & 63];
-        q[2] = (i + 1 < n) ? b64[(v >> 6) & 63] : '=';
-        q[3] = (i + 2 < n) ? b64[v & 63] : '=';
-        LnBufAppend(out, q, 4);
-    }
-}
-
-/* base64 of the packaging signature of manifest.json (stored beside the manifest) */
-static DWORD ManifestSignatureB64(const CTX *c, LN_BUF *out)
-{
-    WCHAR *wid = LnUtf8ToWide(c->m.packageId), *wver = LnUtf8ToWide(c->m.releaseVersion), *rel, *path;
-    BYTE *sig;
-    size_t len;
-    DWORD err;
-
-    if (!wid || !wver)
-    {
-        free(wid);
-        free(wver);
-        return ERROR_NOT_ENOUGH_MEMORY;
-    }
-    rel = malloc((wcslen(wid) + wcslen(wver) + 48) * sizeof(WCHAR));
-    if (!rel)
-    {
-        free(wid);
-        free(wver);
-        return ERROR_NOT_ENOUGH_MEMORY;
-    }
-    wcscpy(rel, L"store\\manifests\\");
-    wcscat(rel, wid);
-    wcscat(rel, L"\\");
-    wcscat(rel, wver);
-    wcscat(rel, L"\\manifest.sig");
-    free(wid);
-    free(wver);
-    path = LnTargetPath(c->t, rel);
-    free(rel);
-    if (!path)
-        return ERROR_NOT_ENOUGH_MEMORY;
-    err = LnReadFileAll(path, &sig, &len);
-    free(path);
-    if (err)
-        return err;
-    Base64(sig, len, out);
-    free(sig);
-    return ERROR_SUCCESS;
-}
 
 static DWORD WritePlan(const CTX *c, const BOOL *pending)
 {
@@ -964,17 +934,7 @@ static DWORD WritePlan(const CTX *c, const BOOL *pending)
             err |= LnBufAppendStr(&b, "null");
         err |= LnBufAppendStr(&b, "}");
     }
-    err |= LnBufAppendStr(&b, "],\"signature\":");
-    {
-        LN_BUF sig;
-
-        LnBufInit(&sig);
-        if (!ManifestSignatureB64(c, &sig) && sig.data)
-            err |= LnBufAppendJsonString(&b, sig.data);
-        else
-            err |= LnBufAppendJsonString(&b, "");
-        LnBufFree(&sig);
-    }
+    err |= LnBufAppendStr(&b, "]");
     err |= LnBufAppendStr(&b, "}\n");
     if (err)
         err = ERROR_NOT_ENOUGH_MEMORY;
@@ -993,6 +953,7 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
     CTX c;
     LN_JOURNAL j;
     const LN_JENTRY *last;
+    BOOL resumable = FALSE;
     UNDO *u = NULL;
     BOOL *pending = NULL, any = FALSE;
     char pinned[65], buf[48];
@@ -1035,6 +996,8 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
             err = LN_E_BAD_STATE;
             goto fail;
         }
+        /* read before the journal is released: `last` points into it */
+        resumable = !strcmp(last->phase, "prepared") || !strcmp(last->phase, "applying");
     }
     LnJournalFree(&j);
 
@@ -1063,7 +1026,7 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
         goto fail;
     /* ENFORCE at the moment of use, not only at add-package: the store copy (manifest, catalog,
      * signature, objects) must still verify against the pinned certificate */
-    err = LnServicingVerifyStored(t, packageId, version, pinned, NULL);
+    err = LnServicingVerifyStored(t, packageId, version, NULL);
     if (err)
         goto fail;
     /* every target must be a real, unaliased path: no 8.3 names, no junctions or links in the way */
@@ -1085,7 +1048,7 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
     /* prepared: backups taken and verified, undo.json written, before any change */
     {
         UNDO existing[1];
-        BOOL resumed = (last && (!strcmp(last->phase, "prepared") || !strcmp(last->phase, "applying")));
+        BOOL resumed = resumable;
 
         (void)existing;
         if (resumed)
@@ -1251,11 +1214,7 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
     }
 
     {
-        char pinned[65];
-
-        err = PinnedCert(t, pinned);
-        if (!err)
-            err = LnServicingVerifyStored(t, packageId, version, pinned, NULL);     /* same rule as apply */
+        err = LnServicingVerifyStored(t, packageId, version, NULL);                  /* same rule as apply */
         if (err)
         {
             LogLine(t, c.txid, "confirm refused: the stored package no longer verifies");

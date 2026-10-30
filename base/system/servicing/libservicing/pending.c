@@ -224,7 +224,7 @@ DWORD LnServicingValidatePlan(const LN_TARGET *t, const char *planJson)
     LN_JSON *root;
     const LN_JSON *pk, *tg, *ops, *op;
     const char *id, *ver, *digest, *txs, *machine;
-    char pinned[65], expect[65];
+    char expect[65];
     LN_MANIFEST m;
     long long schema;
     DWORD err = LnJsonParse(planJson, strlen(planJson), &root);
@@ -243,14 +243,11 @@ DWORD LnServicingValidatePlan(const LN_TARGET *t, const char *planJson)
     if (!LnJsonGetInt(root, "schema", &schema) || schema != 1 || !txs || !id || !ver || !digest || !machine ||
         !ops || ops->type != LnJsonArray || !LnJsonGetString(root, "operation") ||
         strcmp(LnJsonGetString(root, "operation"), "install") || strcmp(machine, t->identity) ||
-        !LnJsonGetString(root, "signature"))
+        FALSE)
         goto out;
-    if (LnPinnedCertSha256(t, pinned) || (err = LnServicingVerifyStored(t, id, ver, pinned, &m)) != 0)
-    {
-        if (!err)
-            err = LN_E_NO_TRUST_ANCHOR;
+    err = LnServicingVerifyStored(t, id, ver, &m);
+    if (err)
         goto out;
-    }
     err = LN_E_MANIFEST_INVALID;
     LnTransactionId(t->identity, id, ver, m.manifestSha256, "install", expect);
     if (strcmp(m.manifestSha256, digest) || strcmp(expect, txs))

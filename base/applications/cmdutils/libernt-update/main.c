@@ -40,6 +40,8 @@ static const char *ErrName(DWORD e)
         case LN_E_HASH_MISMATCH: return "hash-mismatch";
         case LN_E_UNSIGNED: return "unsigned";
         case LN_E_CATALOG_INVALID: return "catalog-invalid";
+        case LN_E_BAD_SIGNATURE: return "bad-manifest-signature";
+        case LN_E_INSECURE_TARGET: return "insecure-servicing-tree";
         case LN_E_CERT_MISMATCH: return "certificate-mismatch";
         case LN_E_JOURNAL_CORRUPT: return "journal-corrupt";
         case LN_E_PRECONDITION: return "precondition-failed";
@@ -223,31 +225,29 @@ int wmain(int argc, WCHAR **argv)
 
     if (!wcscmp(cmd, L"verify") || !wcscmp(cmd, L"add-package"))
     {
-        char txid[65], pinned[65] = "";
+        char txid[65];
 
         if (a >= argc)
             return (Usage(), 1);
         if (!wcscmp(cmd, L"verify"))
         {
             WCHAR *cer = NULL;
+            const WCHAR *cerPath = NULL;
             LN_MANIFEST m;
 
-            /* verify against the certificate named by the target, or by --trust-cer */
+            /* verify against the certificate named by --trust-cer, or the one installed in the target */
             if (a + 2 < argc && !wcscmp(argv[a + 1], L"--trust-cer"))
-                err = LnCertFileSha256(argv[a + 2], pinned);
+                cerPath = argv[a + 2];
             else if (t.servicing[0])
             {
                 cer = LnTargetPath(&t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
-                err = cer ? LnCertFileSha256(cer, pinned) : ERROR_NOT_ENOUGH_MEMORY;
-                free(cer);
+                cerPath = cer;
             }
-            else
-                err = LN_E_NO_TRUST_ANCHOR;
-            if (!err)
-                err = LnServicingVerifyPackage(argv[a], pinned, &m);
+            err = cerPath ? LnServicingVerifyPackage(argv[a], cerPath, &m) : LN_E_NO_TRUST_ANCHOR;
+            free(cer);
             if (err)
                 return Fail("verify", err);
-            printf("verified: %s %s (%u payloads), signer pinned\n", m.packageId, m.releaseVersion, (unsigned)m.itemCount);
+            printf("verified: %s %s (%u payloads), manifest.sig valid for the pinned certificate\n", m.packageId, m.releaseVersion, (unsigned)m.itemCount);
             LnManifestFree(&m);
             return 0;
         }

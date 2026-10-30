@@ -33,6 +33,7 @@ if (-not (Test-Path (Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx')) -or -no
 # ---- 1. COMPILATION ---------------------------------------------------------
 Write-Host '=== COMPILATION ==='
 $srcs = 'sha256','util','json','target','manifest','verify','journal','store','pending','servicing' | ForEach-Object { Join-Path $lib "$_.c" }
+$srcs += (Join-Path $repo 'base\system\servicing\pending\s1core.c')    # the portable core shared with the boot applier
 $common = @('--target=x86_64-w64-mingw32', '-O1', '-Wall', '-Wextra', '-Wno-unused-parameter', '-Wno-sign-compare', '-municode')
 $libs = @('-lwintrust', '-lcrypt32', '-ladvapi32')
 $compileOk = $true
@@ -68,6 +69,8 @@ if (-not $SkipFixtures) {
     & $mk -OutDir "$fx\tampered-sig" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -TamperManifestSigAfterSigning | Out-Null
     & $mk -OutDir "$fx\no-manifest-sig" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -NoManifestSig | Out-Null
     & $mk -OutDir "$fx\junction" -PackageId ln.junction -Version 1.0 -KeyDir $KeyDir -Items @(@{ Target = 'Windows\System32\jn\evil.dll'; Content = 'evil' }) | Out-Null
+    & $mk -OutDir "$fx\driver-cat" -PackageId ln.driver -Version 1.0 -KeyDir $KeyDir -Items @(@{ Target = 'Windows\System32\drivers\lndrv.sys'; Content = 'driver'; DriverStart = 3 }) | Out-Null
+    & $mk -OutDir "$fx\driver-nocat" -PackageId ln.driver -Version 1.0 -KeyDir $KeyDir -Unsigned -Items @(@{ Target = 'Windows\System32\drivers\lndrv.sys'; Content = 'driver'; DriverStart = 3 }) | Out-Null
     & $mk -OutDir "$fx\unsigned" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -Unsigned | Out-Null
     & $mk -OutDir "$fx\unsigned-catalog" -PackageId ln.fixture -Version 1.0 -Items $good -KeyDir $KeyDir -UnsignedCatalog | Out-Null
     & $mk -OutDir "$fx\kernel" -PackageId ln.kernel -Version 1.0 -Items @(@{ Target = 'Windows\System32\ntoskrnl.exe'; Content = 'no' }) -KeyDir $KeyDir | Out-Null

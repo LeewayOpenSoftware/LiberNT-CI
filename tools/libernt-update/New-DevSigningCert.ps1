@@ -8,6 +8,7 @@
     - Only the public certificate (.cer, DER) is exported for the bundle (PublicOut).
     - The certificate is removed from the Windows certificate store after export, so the key lives in one place.
     - Idempotent: if the PFX already exists nothing is regenerated; the public certificate is re-exported.
+    - RSA-2048: manifest.sig is verified by the portable core of the boot applier, which is RSA-2048 only.
     - This is NOT a distribution key. Do not generate or publish a production key without owner authorization.
 #>
 [CmdletBinding()]
@@ -38,7 +39,7 @@ if (-not (Test-Path $pfx)) {
     $password = [Convert]::ToBase64String($bytes)
     [IO.File]::WriteAllText($pwFile, $password)
 
-    $cert = New-SelfSignedCertificate -Subject $Subject -Type CodeSigningCert -KeyAlgorithm RSA -KeyLength 3072 `
+    $cert = New-SelfSignedCertificate -Subject $Subject -Type CodeSigningCert -KeyAlgorithm RSA -KeyLength 2048 `
         -HashAlgorithm SHA256 -KeyExportPolicy Exportable -NotAfter (Get-Date).AddYears(5) `
         -CertStoreLocation 'Cert:\CurrentUser\My'
     $sec = ConvertTo-SecureString -String $password -AsPlainText -Force

@@ -1,46 +1,49 @@
 /*
  * PROJECT:     LiberNT Update - libservicing
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     ENFORCE verification of a package: manifest, payload hashes, signed catalog,
- *              signer pinned to the development certificate
+ * PURPOSE:     ENFORCE verification of a package. The root of trust is manifest.sig
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * There is no audit mode here (owner condition 2). Order of checks, each one rejecting
- * before anything is written to the target:
- *   1. manifest.json parses and obeys the schema and the path rules;
- *   2. every payload exists inside the package and its SHA-256 matches the manifest;
- *   3. catalog.cat exists and WinVerifyTrust accepts its signature;
- *   4. the catalog members cover manifest.json and every payload (by SHA-256);
- *   5. the signer certificate hash equals manifest.certificateSha256 AND the certificate
- *      installed in the target's trust\ directory;
- *   6. manifest.sig (RSA-SHA256, PKCS#1 v1.5, made at packaging time with the development key)
- *      verifies over manifest.json with the signer's public key. The boot applier checks the same
- *      signature without WinVerifyTrust (S1-CONTRACTS.md plan.signature).
+ * Decision of the architecture (S1-CONTRACTS.md): the root of trust of Update is the SIGNATURE OF THE
+ * PACKAGE MANIFEST, made on the host when the package is built: manifest.sig = RSA-2048 PKCS#1 v1.5
+ * over the SHA-256 of manifest.json, with the development key. The boot applier verifies the same
+ * file with the same code (S1Rsa2048Sha256Verify of the portable s1core), so nothing here depends on
+ * wintrust, and nothing is applied unless the hashes of the payloads match the signed manifest.
+ *
+ * There is no audit mode (owner condition 2). Order of checks, each one rejecting before anything is
+ * written to the target:
+ *   1. manifest.json parses and obeys the schema, the white list and the path rules;
+ *   2. every payload exists (a package folder, or an object of the store) and its SHA-256 matches;
+ *   3. the pinned certificate (trust\ directory of the target) is the certificate named by the
+ *      manifest (certificateSha256);
+ *   4. manifest.sig verifies over manifest.json with the public key of that certificate;
+ *   5. catalog.cat is OPTIONAL and additional (M6: what PnP asks for the payloads of drivers). If it
+ *      is present it must verify completely (WinVerifyTrust accepts the signature, the members cover
+ *      the manifest and every payload, the signer is the pinned certificate); a package with a driver
+ *      payload must carry it.
  *
  * The development certificate is self-signed, so WinVerifyTrust reports an untrusted root
- * (CERT_E_UNTRUSTEDROOT / CERT_E_CHAINING) after it has checked the signature itself. That
- * result is accepted only because step 5 pins the exact certificate; any other failure
- * (bad digest, bad signature, expired, revoked-by-policy, unknown form) is a rejection.
+ * (CERT_E_UNTRUSTEDROOT) after it has checked the catalog signature. That result is accepted only
+ * because the signer is pinned; any other failure is a rejection.
  */
 
 #include "libservicing.h"
+#include "../pending/s1core.h"
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
 #include <wintrust.h>
 #include <softpub.h>
 #include <mscat.h>
-#include <wincrypt.h>
 
 #ifndef CERT_E_UNTRUSTEDROOT
 #define CERT_E_UNTRUSTEDROOT ((LONG)0x800B0109L)
 #endif
-#ifndef CERT_E_CHAINING
-#define CERT_E_CHAINING ((LONG)0x800B010AL)
-#endif
 #ifndef TRUST_E_NOSIGNATURE
 #define TRUST_E_NOSIGNATURE ((LONG)0x800B0100L)
 #endif
+
+/* ---- the pinned certificate ------------------------------------------------------------------- */
 
 DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65])
 {
@@ -58,8 +61,128 @@ DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65])
     return err;
 }
 
+/* Minimal DER reader: one TLV at *p. */
+static BOOL DerNext(const BYTE **p, const BYTE *end, BYTE *tag, const BYTE **content, size_t *clen)
+{
+    const BYTE *q = *p;
+    size_t len, i;
+
+    if (q + 2 > end)
+        return FALSE;
+    *tag = *q++;
+    if (*q < 0x80)
+        len = *q++;
+    else
+    {
+        size_t nb = *q++ & 0x7f;
+
+        if (nb == 0 || nb > 4 || q + nb > end)
+            return FALSE;
+        for (len = 0, i = 0; i < nb; i++)
+            len = (len << 8) | *q++;
+    }
+    if (len > (size_t)(end - q))
+        return FALSE;
+    *content = q;
+    *clen = len;
+    *p = q + len;
+    return TRUE;
+}
+
+/* RSA modulus (256 bytes, big endian) and exponent from the SubjectPublicKeyInfo of an X.509 DER. */
+static BOOL CertRsa2048Key(const BYTE *der, size_t len, BYTE modulus[256], uint32_t *exponent)
+{
+    const BYTE *p = der, *end = der + len, *cert, *tbs, *c, *spki, *bits, *rsa, *n, *e;
+    size_t certLen, tbsLen, cl, spkiLen, bitsLen, rsaLen, nLen, eLen, i;
+    BYTE tag;
+
+    if (!DerNext(&p, end, &tag, &cert, &certLen) || tag != 0x30)
+        return FALSE;
+    p = cert;
+    end = cert + certLen;
+    if (!DerNext(&p, end, &tag, &tbs, &tbsLen) || tag != 0x30)          /* tbsCertificate */
+        return FALSE;
+    p = tbs;
+    end = tbs + tbsLen;
+    if (!DerNext(&p, end, &tag, &c, &cl))
+        return FALSE;
+    if (tag == 0xA0 && !DerNext(&p, end, &tag, &c, &cl))                /* [0] version, then the serial */
+        return FALSE;
+    /* the serial number has been read; skip signature, issuer, validity, subject */
+    for (i = 0; i < 4; i++)
+    {
+        if (!DerNext(&p, end, &tag, &c, &cl))
+            return FALSE;
+    }
+    if (!DerNext(&p, end, &tag, &spki, &spkiLen) || tag != 0x30)        /* subjectPublicKeyInfo */
+        return FALSE;
+    p = spki;
+    end = spki + spkiLen;
+    if (!DerNext(&p, end, &tag, &c, &cl) || tag != 0x30)                /* algorithm */
+        return FALSE;
+    if (!DerNext(&p, end, &tag, &bits, &bitsLen) || tag != 0x03 || bitsLen < 2 || bits[0] != 0)
+        return FALSE;
+    p = bits + 1;
+    end = bits + bitsLen;
+    if (!DerNext(&p, end, &tag, &rsa, &rsaLen) || tag != 0x30)          /* RSAPublicKey */
+        return FALSE;
+    p = rsa;
+    end = rsa + rsaLen;
+    if (!DerNext(&p, end, &tag, &n, &nLen) || tag != 0x02 || !DerNext(&p, end, &tag, &e, &eLen) || tag != 0x02)
+        return FALSE;
+    while (nLen > 0 && *n == 0)                                         /* leading zero of the positive INTEGER */
+    {
+        n++;
+        nLen--;
+    }
+    if (nLen != 256 || eLen == 0 || eLen > 4)                           /* the applier core is RSA-2048 */
+        return FALSE;
+    memcpy(modulus, n, 256);
+    *exponent = 0;
+    for (i = 0; i < eLen; i++)
+        *exponent = (*exponent << 8) | e[i];
+    return TRUE;
+}
+
+/* ---- manifest.sig ---------------------------------------------------------------------------- */
+
+static DWORD VerifyManifestSignature(const WCHAR *dir, const WCHAR *cerPath)
+{
+    WCHAR *mp = LnJoin(dir, L"manifest.json"), *sp = LnJoin(dir, L"manifest.sig");
+    BYTE *man = NULL, *sig = NULL, *cer = NULL, modulus[256];
+    size_t mlen = 0, slen = 0, clen = 0;
+    uint32_t exponent = 0;
+    DWORD err = LN_E_BAD_SIGNATURE;
+
+    if (!mp || !sp)
+    {
+        err = ERROR_NOT_ENOUGH_MEMORY;
+        goto out;
+    }
+    if (!LnPathExists(sp))
+    {
+        err = LN_E_UNSIGNED;                            /* a package without manifest.sig is unsigned */
+        goto out;
+    }
+    if (LnReadFileAll(mp, &man, &mlen) || LnReadFileAll(sp, &sig, &slen) || LnReadFileAll(cerPath, &cer, &clen))
+        goto out;
+    if (slen != 256 || !CertRsa2048Key(cer, clen, modulus, &exponent))
+        goto out;
+    if (S1Rsa2048Sha256Verify(modulus, exponent, man, mlen, sig))
+        err = ERROR_SUCCESS;
+out:
+    free(man);
+    free(sig);
+    free(cer);
+    free(mp);
+    free(sp);
+    return err;
+}
+
+/* ---- optional catalog ---------------------------------------------------------------------- */
+
 /* Returns the WinVerifyTrust status and, if a signer exists, the SHA-256 of its certificate. */
-static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65], BYTE **certDer, DWORD *certLen)
+static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65])
 {
     GUID action = WINTRUST_ACTION_GENERIC_VERIFY_V2;
     WINTRUST_FILE_INFO fi;
@@ -67,8 +190,6 @@ static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65], BYTE **c
     LONG status;
 
     signerHash[0] = 0;
-    *certDer = NULL;
-    *certLen = 0;
     memset(&fi, 0, sizeof(fi));
     fi.cbStruct = sizeof(fi);
     fi.pcwszFilePath = catPath;
@@ -92,15 +213,7 @@ static LONG TrustCatalogFile(const WCHAR *catPath, char signerHash[65], BYTE **c
             CRYPT_PROVIDER_CERT *pc = sg ? WTHelperGetProvCertFromChain(sg, 0) : NULL;
 
             if (pc && pc->pCert && pc->pCert->pbCertEncoded)
-            {
                 LnSha256Hex(pc->pCert->pbCertEncoded, pc->pCert->cbCertEncoded, signerHash);
-                *certDer = malloc(pc->pCert->cbCertEncoded);
-                if (*certDer)
-                {
-                    memcpy(*certDer, pc->pCert->pbCertEncoded, pc->pCert->cbCertEncoded);
-                    *certLen = pc->pCert->cbCertEncoded;
-                }
-            }
         }
     }
     wd.dwStateAction = WTD_STATEACTION_CLOSE;
@@ -167,77 +280,54 @@ static BOOL Covered(unsigned char (*digests)[32], size_t count, const char *hex)
     return FALSE;
 }
 
-/* RSA-SHA256 (PKCS#1 v1.5) signature of the manifest bytes by the signer's key.
- * CryptoAPI wants the signature in little-endian order; the packaging tool writes big-endian. */
-static DWORD VerifyManifestSignature(const BYTE *certDer, DWORD certLen, const WCHAR *pkgDir)
+/* The additional check: the catalog, when present, must verify completely. */
+static DWORD VerifyCatalog(const WCHAR *catPath, const LN_MANIFEST *m, const char *pinnedHash)
 {
-    WCHAR *mp = LnJoin(pkgDir, L"manifest.json"), *sp = LnJoin(pkgDir, L"manifest.sig");
-    BYTE *man = NULL, *sig = NULL;
-    size_t mlen = 0, slen = 0, i;
-    PCCERT_CONTEXT ctx = NULL;
-    HCRYPTPROV prov = 0;
-    HCRYPTKEY key = 0;
-    HCRYPTHASH hash = 0;
-    DWORD err = LN_E_CATALOG_INVALID;
+    unsigned char (*digests)[32] = NULL;
+    size_t nd = 0, i;
+    char signer[65];
+    LONG trust = TrustCatalogFile(catPath, signer);
+    DWORD err;
 
-    if (!mp || !sp)
+    if (trust == TRUST_E_NOSIGNATURE)
+        return LN_E_UNSIGNED;
+    if (trust != 0 && trust != CERT_E_UNTRUSTEDROOT)
+        return LN_E_CATALOG_INVALID;
+    err = ReadCatalogDigests(catPath, &digests, &nd);
+    if (err)
+        return err;
+    err = ERROR_SUCCESS;
+    if (!Covered(digests, nd, m->manifestSha256))
+        err = LN_E_CATALOG_INVALID;
+    for (i = 0; !err && i < m->itemCount; i++)
     {
-        err = ERROR_NOT_ENOUGH_MEMORY;
-        goto out;
+        if (!m->items[i].isDelete && !Covered(digests, nd, m->items[i].sha256))
+            err = LN_E_CATALOG_INVALID;
     }
-    if (!LnPathExists(sp))
-    {
-        err = LN_E_UNSIGNED;
-        goto out;
-    }
-    if (LnReadFileAll(mp, &man, &mlen) || LnReadFileAll(sp, &sig, &slen) || slen < 64 || slen > 1024)
-        goto out;
-    ctx = CertCreateCertificateContext(X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, certDer, certLen);
-    if (!ctx)
-        goto out;
-    if (!CryptAcquireContextW(&prov, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT))
-        goto out;
-    if (!CryptImportPublicKeyInfo(prov, X509_ASN_ENCODING, &ctx->pCertInfo->SubjectPublicKeyInfo, &key))
-        goto out;
-    if (!CryptCreateHash(prov, CALG_SHA_256, 0, 0, &hash) || !CryptHashData(hash, man, (DWORD)mlen, 0))
-        goto out;
-    for (i = 0; i < slen / 2; i++)
-    {
-        BYTE tmp = sig[i];
-
-        sig[i] = sig[slen - 1 - i];
-        sig[slen - 1 - i] = tmp;
-    }
-    if (CryptVerifySignatureW(hash, sig, (DWORD)slen, key, NULL, 0))
-        err = ERROR_SUCCESS;
-out:
-    if (hash) CryptDestroyHash(hash);
-    if (key) CryptDestroyKey(key);
-    if (prov) CryptReleaseContext(prov, 0);
-    if (ctx) CertFreeCertificateContext(ctx);
-    free(man);
-    free(sig);
-    free(mp);
-    free(sp);
+    if (!err && (!signer[0] || strcmp(signer, pinnedHash)))
+        err = LN_E_CERT_MISMATCH;
+    free(digests);
     return err;
 }
 
+/* ---- the verification -------------------------------------------------------------------------- */
+
 /* t == NULL: pkgDir is a package folder (payload\<path>). t != NULL: pkgDir is the copy held in the
  * store (packages\<id>\<ver>) and the payloads are the store objects, checked by hash. */
-static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out)
+static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const WCHAR *cerPath, LN_MANIFEST *out)
 {
     LN_MANIFEST m;
-    WCHAR *manifestPath = NULL, *catPath = NULL, *payloadDir = NULL;
-    unsigned char (*digests)[32] = NULL;
-    size_t ndigests = 0, i;
-    char signer[65];
-    BYTE *certDer = NULL;
-    DWORD certLen = 0;
-    LONG trust;
+    WCHAR *manifestPath, *catPath, *payloadDir;
+    char pinned[65];
+    size_t i;
+    BOOL hasDriver = FALSE;
     DWORD err;
 
-    if (!pinnedCertSha256 || !LnIsSha256Hex(pinnedCertSha256))
+    err = LnCertFileSha256(cerPath, pinned);
+    if (err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND)
         return LN_E_NO_TRUST_ANCHOR;
+    if (err)
+        return err;
 
     manifestPath = LnJoin(pkgDir, L"manifest.json");
     catPath = LnJoin(pkgDir, L"catalog.cat");
@@ -259,6 +349,8 @@ static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const char *p
         WCHAR *p;
         char h[65];
 
+        if (m.items[i].driverStart != -1)
+            hasDriver = TRUE;
         if (m.items[i].isDelete)
             continue;
         if (t)
@@ -290,51 +382,23 @@ static DWORD VerifyCommon(const LN_TARGET *t, const WCHAR *pkgDir, const char *p
         }
     }
 
-    /* 3. signed catalog */
-    if (!LnPathExists(catPath))
-    {
-        err = LN_E_UNSIGNED;
-        goto done;
-    }
-    trust = TrustCatalogFile(catPath, signer, &certDer, &certLen);
-    if (trust == TRUST_E_NOSIGNATURE)
-    {
-        err = LN_E_UNSIGNED;
-        goto done;
-    }
-    if (trust != 0 && trust != CERT_E_UNTRUSTEDROOT)
-    {
-        err = LN_E_CATALOG_INVALID;
-        goto done;
-    }
-
-    /* 4. members cover the manifest and every payload */
-    err = ReadCatalogDigests(catPath, &digests, &ndigests);
-    if (err)
-        goto done;
-    if (!Covered(digests, ndigests, m.manifestSha256))
-    {
-        err = LN_E_CATALOG_INVALID;
-        goto done;
-    }
-    for (i = 0; i < m.itemCount; i++)
-    {
-        if (!m.items[i].isDelete && !Covered(digests, ndigests, m.items[i].sha256))
-        {
-            err = LN_E_CATALOG_INVALID;
-            goto done;
-        }
-    }
-
-    /* 5. signer pinned */
-    if (!signer[0] || strcmp(signer, m.certificateSha256) || strcmp(signer, pinnedCertSha256))
+    /* 3. the signer named by the manifest is the pinned certificate */
+    if (strcmp(m.certificateSha256, pinned))
     {
         err = LN_E_CERT_MISMATCH;
         goto done;
     }
 
-    /* 6. the packaging signature of the manifest */
-    err = VerifyManifestSignature(certDer, certLen, pkgDir);
+    /* 4. the signature of the manifest: the root of trust */
+    err = VerifyManifestSignature(pkgDir, cerPath);
+    if (err)
+        goto done;
+
+    /* 5. the catalog: additional; required for driver payloads; when present it must verify */
+    if (LnPathExists(catPath))
+        err = VerifyCatalog(catPath, &m, pinned);
+    else if (hasDriver)
+        err = LN_E_UNSIGNED;                            /* PnP wants a signed catalog for a driver (M6) */
 
 done:
     if (!err && out)
@@ -342,23 +406,20 @@ done:
     else
         LnManifestFree(&m);
 done_nomanifest:
-    free(certDer);
-    free(digests);
     free(manifestPath);
     free(catPath);
     free(payloadDir);
     return err;
 }
 
-DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out)
+DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const WCHAR *pinnedCerPath, LN_MANIFEST *out)
 {
-    return VerifyCommon(NULL, pkgDir, pinnedCertSha256, out);
+    return VerifyCommon(NULL, pkgDir, pinnedCerPath, out);
 }
 
-DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version,
-                              const char *pinnedCertSha256, LN_MANIFEST *out)
+DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version, LN_MANIFEST *out)
 {
-    WCHAR *wid = LnUtf8ToWide(packageId), *wver = LnUtf8ToWide(version), *rel, *dir;
+    WCHAR *wid = LnUtf8ToWide(packageId), *wver = LnUtf8ToWide(version), *rel, *dir, *cer;
     LN_MANIFEST m, installed;
     DWORD err;
 
@@ -382,11 +443,17 @@ DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const c
     free(wid);
     free(wver);
     dir = LnTargetPath(t, rel);
+    cer = LnTargetPath(t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
     free(rel);
-    if (!dir)
+    if (!dir || !cer)
+    {
+        free(dir);
+        free(cer);
         return ERROR_NOT_ENOUGH_MEMORY;
-    err = VerifyCommon(t, dir, pinnedCertSha256, &m);
+    }
+    err = VerifyCommon(t, dir, cer, &m);
     free(dir);
+    free(cer);
     if (err)
         return err;
     /* the manifest the engine reads (manifests\) must be the very one that was verified (packages\) */
@@ -394,7 +461,7 @@ DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const c
     if (!err)
     {
         if (strcmp(installed.manifestSha256, m.manifestSha256))
-            err = LN_E_CATALOG_INVALID;
+            err = LN_E_BAD_SIGNATURE;
         LnManifestFree(&installed);
     }
     if (!err && out)

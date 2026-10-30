@@ -369,53 +369,62 @@ static void TestTarget(void)
 
 static void TestVerify(void)
 {
-    char pin[65];
-    WCHAR *p;
+    WCHAR *p, bogus[MAX_PATH];
     LN_MANIFEST m;
 
-    Section("verify (enforce)");
-    CHECK_ERR(0, LnCertFileSha256(g_cer, pin));
-
+    Section("verify (enforce): manifest.sig is the root of trust");
     p = Fx(L"good1");
-    CHECK_ERR(0, LnServicingVerifyPackage(p, pin, &m));
+    CHECK_ERR(0, LnServicingVerifyPackage(p, g_cer, &m));
     CHECK(m.itemCount == 1);
     LnManifestFree(&m);
-    CHECK_ERR(LN_E_NO_TRUST_ANCHOR, LnServicingVerifyPackage(p, NULL, NULL));
+    CHECK_ERR(LN_E_NO_TRUST_ANCHOR, LnServicingVerifyPackage(p, L"C:\\no\\such\\certificate.cer", NULL));
+    /* a pinned certificate that is not the one the manifest names */
+    wcscpy(bogus, g_work);
+    wcscat(bogus, L"\\other.cer");
     {
-        char other[65];
+        BYTE fake[64];
 
-        memset(other, 'a', 64);
-        other[64] = 0;
-        CHECK_ERR(LN_E_CERT_MISMATCH, LnServicingVerifyPackage(p, other, NULL));      /* pinned differs */
+        memset(fake, 0x30, sizeof(fake));
+        CHECK_ERR(0, LnWriteFileAtomic(bogus, fake, sizeof(fake)));
     }
+    CHECK_ERR(LN_E_CERT_MISMATCH, LnServicingVerifyPackage(p, bogus, NULL));
     free(p);
 
     p = Fx(L"tampered-payload");
-    CHECK_ERR(LN_E_HASH_MISMATCH, LnServicingVerifyPackage(p, pin, NULL));
+    CHECK_ERR(LN_E_HASH_MISMATCH, LnServicingVerifyPackage(p, g_cer, NULL));
     free(p);
     p = Fx(L"tampered-manifest");
-    CHECK_ERR(LN_E_CATALOG_INVALID, LnServicingVerifyPackage(p, pin, NULL));          /* not covered by the catalog */
+    CHECK_ERR(LN_E_BAD_SIGNATURE, LnServicingVerifyPackage(p, g_cer, NULL));          /* manifest changed after signing */
     free(p);
     p = Fx(L"tampered-sig");
-    CHECK_ERR(LN_E_CATALOG_INVALID, LnServicingVerifyPackage(p, pin, NULL));          /* manifest.sig does not verify */
+    CHECK_ERR(LN_E_BAD_SIGNATURE, LnServicingVerifyPackage(p, g_cer, NULL));          /* manifest.sig damaged */
     free(p);
     p = Fx(L"no-manifest-sig");
-    CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, pin, NULL));                 /* manifest.sig missing */
+    CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, g_cer, NULL));               /* manifest.sig missing */
     free(p);
     p = Fx(L"unsigned");
-    CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, pin, NULL));                 /* no catalog at all */
+    CHECK_ERR(0, LnServicingVerifyPackage(p, g_cer, NULL));                           /* no catalog: it is optional */
     free(p);
     p = Fx(L"unsigned-catalog");
-    CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, pin, NULL));                 /* catalog without signature */
+    CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, g_cer, NULL));               /* a catalog that is there must verify */
     free(p);
     p = Fx(L"wrongcert");
-    CHECK_ERR(LN_E_CERT_MISMATCH, LnServicingVerifyPackage(p, pin, NULL));            /* valid signature, other signer */
+    CHECK_ERR(LN_E_CERT_MISMATCH, LnServicingVerifyPackage(p, g_cer, NULL));          /* valid signature, other signer */
     free(p);
     p = Fx(L"kernel");
-    CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnServicingVerifyPackage(p, pin, NULL));
+    CHECK_ERR(LN_E_FORBIDDEN_TARGET, LnServicingVerifyPackage(p, g_cer, NULL));
     free(p);
     p = Fx(L"missing-payload");
-    CHECK_ERR(LN_E_HASH_MISMATCH, LnServicingVerifyPackage(p, pin, NULL));
+    CHECK_ERR(LN_E_HASH_MISMATCH, LnServicingVerifyPackage(p, g_cer, NULL));
+    free(p);
+    /* drivers carry a signed catalog on top of manifest.sig (M6) */
+    p = Fx(L"driver-cat");
+    CHECK_ERR(0, LnServicingVerifyPackage(p, g_cer, &m));
+    CHECK(m.items[0].driverStart == 3);
+    LnManifestFree(&m);
+    free(p);
+    p = Fx(L"driver-nocat");
+    CHECK_ERR(LN_E_UNSIGNED, LnServicingVerifyPackage(p, g_cer, NULL));
     free(p);
 }
 
@@ -437,8 +446,11 @@ static void TestAddRejects(void)
     p = Fx(L"tampered-payload");
     CHECK_ERR(LN_E_HASH_MISMATCH, LnServicingAddPackage(&t, p, tx));
     free(p);
-    p = Fx(L"unsigned");
+    p = Fx(L"no-manifest-sig");
     CHECK_ERR(LN_E_UNSIGNED, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    p = Fx(L"tampered-sig");
+    CHECK_ERR(LN_E_BAD_SIGNATURE, LnServicingAddPackage(&t, p, tx));
     free(p);
     p = Fx(L"wrongcert");
     CHECK_ERR(LN_E_CERT_MISMATCH, LnServicingAddPackage(&t, p, tx));
@@ -613,15 +625,13 @@ static void TestCorruptStore(void)
     char tx[65];
     BOOL reboot;
     LN_MANIFEST m;
-    char pin[65];
 
     Section("corrupt store object is refused before any change");
     CHECK(OpenImage(&t, L"corrupt"));
     InstallTrust(&t);
     p = Fx(L"good1");
     CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
-    CHECK_ERR(0, LnCertFileSha256(g_cer, pin));
-    CHECK_ERR(0, LnServicingVerifyPackage(p, pin, &m));
+    CHECK_ERR(0, LnServicingVerifyPackage(p, g_cer, &m));
     free(p);
     CHECK_ERR(0, LnStoreObjectPath(&t, m.items[0].sha256, &obj));
     WriteText(obj, "flipped bits");
@@ -712,7 +722,7 @@ static void TestPendingPlan(void)
             strcat(bk, "/0001");
             CHECK(!strcmp(LnJsonGetString(op0, "backup"), bk));
         }
-        CHECK(strlen(LnJsonGetString(root, "signature")) > 300);                       /* base64 of an RSA-3072 signature */
+        CHECK(LnJsonGet(root, "signature") == NULL);                                   /* the plan is not signed: it is a local view */
     }
     LnJsonFree(root);
     free(plan);
@@ -854,7 +864,7 @@ static void TestReverifyAtUse(void)
     target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
     p = Fx(L"good1");
     CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
-    CHECK_ERR(0, LnServicingVerifyStored(&t, "ln.fixture", "1.0", "829459d8db6adc0a4fe7500e0572149e1d469b6a3707cf48e374b7660d754a34", NULL));
+    CHECK_ERR(0, LnServicingVerifyStored(&t, "ln.fixture", "1.0", NULL));
     free(p);
 
     /* the catalog in the store is replaced by a copy without the signature: apply refuses, nothing is written */
@@ -1178,10 +1188,50 @@ static void TestPlanValidation(void)
     free(target);
 }
 
+/* A crash in a test must say where: address, access type and the image base for the symbolizer. */
+static LONG WINAPI CrashReport(EXCEPTION_POINTERS *ep)
+{
+    printf("\nCRASH code 0x%08lx at %p (image base %p)", (unsigned long)ep->ExceptionRecord->ExceptionCode,
+           ep->ExceptionRecord->ExceptionAddress, (void *)GetModuleHandleW(NULL));
+    if (ep->ExceptionRecord->NumberParameters >= 2)
+        printf(", access type %Iu address %p", ep->ExceptionRecord->ExceptionInformation[0],
+               (void *)ep->ExceptionRecord->ExceptionInformation[1]);
+    {
+        HMODULE mod = NULL;
+        WCHAR name[MAX_PATH] = L"?";
+
+        if (GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCWSTR)ep->ExceptionRecord->ExceptionAddress, &mod))
+            GetModuleFileNameW(mod, name, MAX_PATH);
+        printf(", in %ls +0x%lx", name, (unsigned long)((char *)ep->ExceptionRecord->ExceptionAddress - (char *)mod));
+    }
+    {
+        /* frame-pointer walk (the debug build keeps rbp): offsets from the image base for llvm-symbolizer */
+        ULONG_PTR *fp = (ULONG_PTR *)ep->ContextRecord->Rbp;
+        char *base = (char *)GetModuleHandleW(NULL);
+        int depth;
+
+        printf("\n  frames:");
+        for (depth = 0; fp && depth < 14; depth++)
+        {
+            ULONG_PTR ret = fp[1];
+
+            printf(" %p(+0x%lx)", (void *)ret, (unsigned long)((char *)ret - base));
+            if (fp[0] <= (ULONG_PTR)fp)
+                break;
+            fp = (ULONG_PTR *)fp[0];
+        }
+    }
+    printf("\n");
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 int wmain(int argc, WCHAR **argv)
 {
     WCHAR tmp[MAX_PATH];
 
+    setvbuf(stdout, NULL, _IONBF, 0);
+    SetUnhandledExceptionFilter(CrashReport);                    /* a crash must not swallow the section names */
     if (argc < 3)
     {
         fputs("usage: libservicing-tests <fixtures-dir> <dev-certificate.cer>\n", stderr);
@@ -1204,7 +1254,7 @@ int wmain(int argc, WCHAR **argv)
         CloseHandle(tok);
     }
     GetTempPathW(MAX_PATH, tmp);
-    wsprintfW(g_work, L"%slnsvc-tests-%lu", tmp, GetCurrentProcessId());
+    wsprintfW(g_work, L"%slnsvc-tests-%lu-%lu", tmp, GetCurrentProcessId(), GetTickCount());   /* never reuse a stale tree */
     LnEnsureDir(g_work);
 
     TestSha256();
@@ -1229,5 +1279,6 @@ int wmain(int argc, WCHAR **argv)
     TestPlanValidation();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
+    LnRemoveTree(g_work);
     return g_failed ? 1 : 0;
 }

@@ -128,7 +128,7 @@ DWORD LnStoreImport(const LN_TARGET *t, const WCHAR *pkgDir, const LN_MANIFEST *
             {
                 err = LnCopyFileFlush(srcManifest, dM);
                 if (!err) err = LnCopyFileFlush(srcManifest, dP);
-                if (!err) err = LnCopyFileFlush(srcCat, dC);
+                if (!err && LnPathExists(srcCat)) err = LnCopyFileFlush(srcCat, dC);   /* optional, additional */
                 if (!err && srcSig && dS) err = LnCopyFileFlush(srcSig, dS);
                 if (!err && srcSig && dS2) err = LnCopyFileFlush(srcSig, dS2);
             }

@@ -17,7 +17,8 @@ list(APPEND SOURCE
     journal.c
     store.c
     pending.c
-    servicing.c)
+    servicing.c
+    ../pending/s1core.c)
 
 add_library(libservicing ${SOURCE})
 target_include_directories(libservicing PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})

@@ -39,6 +39,7 @@ extern "C" {
 #define LN_E_VERIFY_FINAL       (LN_E_BASE + 11)  /* final hash check after an operation failed */
 #define LN_E_NO_TRUST_ANCHOR    (LN_E_BASE + 12)  /* target has no trusted certificate installed */
 
+#define LN_E_BAD_SIGNATURE      (LN_E_BASE + 14)  /* manifest.sig does not verify with the pinned key */
 #define LN_E_INSECURE_TARGET    (LN_E_BASE + 13)  /* servicing tree owner/DACL is not SYSTEM + Administrators only */
 #define LN_SHA256_HEX_LEN   64
 #define LN_MAX_ITEMS        4096
@@ -79,6 +80,7 @@ DWORD LnBufAppendJsonWide(LN_BUF *b, const WCHAR *w);                       /* w
 char *LnWideToUtf8(const WCHAR *w);                                         /* free() */
 WCHAR *LnUtf8ToWide(const char *s);                                         /* free() */
 DWORD LnReadFileAll(const WCHAR *path, BYTE **data, size_t *len);           /* free(*data) */
+HANDLE LnOpenRetry(const WCHAR *path, DWORD access, DWORD share, DWORD disposition, DWORD flags);   /* transient errors retried */
 DWORD LnWriteFileAtomic(const WCHAR *path, const void *data, size_t len);   /* tmp + flush + replace */
 DWORD LnEnsureDir(const WCHAR *path);                                       /* recursive */
 DWORD LnCopyFileFlush(const WCHAR *src, const WCHAR *dst);                  /* copy + flush, parent created */
@@ -169,11 +171,12 @@ void LnManifestFree(LN_MANIFEST *m);
 DWORD LnPinnedCertSha256(const LN_TARGET *t, char hash[65]);
 
 /* ---- verify.c ---------------------------------------------------------- */
-/* pinnedCertSha256: hash of the trusted development certificate (from the target's trust\ dir). */
-DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const char *pinnedCertSha256, LN_MANIFEST *out);
+/* Root of trust: manifest.sig (RSA-2048 PKCS#1 v1.5 over SHA-256, verified with the s1core of the boot
+ * applier) against the pinned certificate; catalog.cat is optional, additional, required for drivers.
+ * pinnedCerPath: the trusted development certificate (the target's trust\ directory). */
+DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const WCHAR *pinnedCerPath, LN_MANIFEST *out);
 /* Same checks over the copy held in the store (manifest, catalog, signature, objects). */
-DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version,
-                              const char *pinnedCertSha256, LN_MANIFEST *out);
+DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version, LN_MANIFEST *out);
 DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65]);
 
 /* ---- journal.c --------------------------------------------------------- */
