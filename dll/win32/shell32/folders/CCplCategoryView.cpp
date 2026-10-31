@@ -11,6 +11,8 @@
 #include "precomp.h"
 #include "CCplCategoryView.h"
 
+WINE_DEFAULT_DEBUG_CHANNEL(shell);
+
 #define CPL_NAMESPACE_KEY  L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\ControlPanel\\NameSpace"
 #define CPL_ROOT_PATH      L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{21EC2020-3AEA-1069-A2DD-08002B30309D}"
 #define CPL_MAX_ITEMS      128
@@ -438,8 +440,12 @@ VOID CCplCategoryView::LoadCatalog()
     WCHAR clsid[40];
 
     FreeCatalog();
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, CPL_NAMESPACE_KEY, 0, KEY_READ, &hKey) != ERROR_SUCCESS)
+    LONG openResult = RegOpenKeyExW(HKEY_LOCAL_MACHINE, CPL_NAMESPACE_KEY, 0, KEY_READ, &hKey);
+    if (openResult != ERROR_SUCCESS)
+    {
+        ERR("Control Panel category view: cannot open the NameSpace key (error %ld)\n", openResult);
         return;
+    }
     for (DWORD index = 0; m_itemCount < CPL_MAX_ITEMS; index++)
     {
         DWORD cch = _countof(clsid);
@@ -453,7 +459,10 @@ VOID CCplCategoryView::LoadCatalog()
         StringCchCopyW(item->Clsid, _countof(item->Clsid), clsid);
         if (!CplReadClsidText(clsid, NULL, L"LocalizedString", item->Name, _countof(item->Name)) &&
             !CplReadClsidText(clsid, NULL, NULL, item->Name, _countof(item->Name)))
+        {
+            ERR("Control Panel category view: no name for %S\n", clsid);
             continue;
+        }
         CplReadClsidText(clsid, NULL, L"InfoTip", item->Tip, _countof(item->Tip));
         categories[0] = UNICODE_NULL;
         CplReadClsidText(clsid, NULL, L"System.ControlPanel.Category", categories, _countof(categories));
@@ -463,6 +472,7 @@ VOID CCplCategoryView::LoadCatalog()
         m_itemCount++;
     }
     RegCloseKey(hKey);
+    ERR("Control Panel category view: %d items loaded\n", m_itemCount);
 
     /* Sort by name */
     for (int i = 1; i < m_itemCount; i++)
@@ -513,8 +523,12 @@ HICON CCplCategoryView::LoadClsidIcon(PCWSTR clsid, int size)
     int index;
 
     StringCchPrintfW(path, _countof(path), L"CLSID\\%s\\DefaultIcon", clsid);
-    if (RegGetValueW(HKEY_CLASSES_ROOT, path, NULL, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, NULL, spec, &cb) != ERROR_SUCCESS)
+    LONG status = RegGetValueW(HKEY_CLASSES_ROOT, path, NULL, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, NULL, spec, &cb);
+    if (status != ERROR_SUCCESS)
+    {
+        ERR("Control Panel category view: no DefaultIcon for %S (error %ld)\n", clsid, status);
         return NULL;
+    }
     comma = StrRChrW(spec, NULL, L',');
     index = 0;
     if (comma)
@@ -522,8 +536,12 @@ HICON CCplCategoryView::LoadClsidIcon(PCWSTR clsid, int size)
         *comma = UNICODE_NULL;
         index = StrToIntW(comma + 1);
     }
-    if (FAILED(SHDefExtractIconW(spec, index, 0, &hLarge, &hSmall, MAKELONG(size, size))))
+    HRESULT hrIcon = SHDefExtractIconW(spec, index, 0, &hLarge, &hSmall, MAKELONG(size, size));
+    if (FAILED(hrIcon))
+    {
+        ERR("Control Panel category view: cannot extract %S,%d (hr %lx)\n", spec, index, hrIcon);
         return NULL;
+    }
     if (hSmall)
         DestroyIcon(hSmall);
     return hLarge;
