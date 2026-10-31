@@ -578,7 +578,20 @@ S1JournalWriterAppend(
                              (unsigned long long)Writer->Sequence, Hex);
         if (AnchorLen <= 0 || (size_t)AnchorLen >= sizeof(Anchor))
             return STATUS_BUFFER_OVERFLOW;
-        return S1WriteFileAtomic(AnchorPath, AnchorTemp, Anchor, (ULONG)AnchorLen);
+        {
+            NTSTATUS AnchorSt = S1WriteFileAtomic(AnchorPath, AnchorTemp, Anchor, (ULONG)AnchorLen);
+
+            if (!NT_SUCCESS(AnchorSt))
+            {
+                WCHAR Line[112];
+
+                swprintf(Line, RTL_NUMBER_OF(Line),
+                         L"S1: anchor write failed 0x%08lx (root %ls)",
+                         (unsigned long)AnchorSt, S1_ROOT);
+                S1Log(Line);
+            }
+            return AnchorSt;
+        }
     }
 }
 
@@ -619,7 +632,11 @@ S1Log(_In_ PCWSTR Msg)
         NTSTATUS S1HaltSt_ = S1JournalWriterAppend((j), (tx), (ph), (op), (res), (err)); \
         if (!NT_SUCCESS(S1HaltSt_)) \
         { \
-            S1Log(L"S1: journal append failed, halting"); \
+            WCHAR S1HaltLine_[96]; \
+            swprintf(S1HaltLine_, RTL_NUMBER_OF(S1HaltLine_), \
+                     L"S1: journal append '%hs' failed 0x%08lx, halting", (ph), \
+                     (unsigned long)S1HaltSt_); \
+            S1Log(S1HaltLine_); \
             NtTerminateProcess(NtCurrentProcess(), 1); \
         } \
     } while (0)
