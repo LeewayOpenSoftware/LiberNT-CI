@@ -68,9 +68,17 @@ Test_Rules(void)
     WCHAR Buffer[64];
     int Result;
 
-    /* The structure takes precedence over the tick count */
+    /* A structure together with a tick count is refused (measured on Windows 11: result 0, error 87) */
+    SetLastError(0xDEADBEEF);
     Result = pEx(LOCALE_NAME_INVARIANT, 0, &Both, 600000000ULL, L"ss", Buffer, ARRAYSIZE(Buffer));
-    ok(Result == 2 && !wcscmp(Buffer, L"1"), "Structure and ticks: %d '%ls'\n", Result, Buffer);
+    ok(Result == 0, "Structure and ticks: %d '%ls'\n", Result, Buffer);
+    ok(GetLastError() == ERROR_INVALID_PARAMETER, "Structure and ticks: error %lu\n", GetLastError());
+
+    /* "ss" has a leading zero, "s" does not (measured on Windows 11) */
+    Result = pEx(LOCALE_NAME_INVARIANT, 0, &Both, 0, L"ss", Buffer, ARRAYSIZE(Buffer));
+    ok(Result == 3 && !wcscmp(Buffer, L"01"), "Structure, ss: %d '%ls'\n", Result, Buffer);
+    Result = pEx(LOCALE_NAME_INVARIANT, 0, &Both, 0, L"s", Buffer, ARRAYSIZE(Buffer));
+    ok(Result == 2 && !wcscmp(Buffer, L"1"), "Structure, s: %d '%ls'\n", Result, Buffer);
 
     /* No structure and no ticks is a zero duration */
     Result = pEx(LOCALE_NAME_INVARIANT, 0, NULL, 0, L"hh:mm:ss", Buffer, ARRAYSIZE(Buffer));
