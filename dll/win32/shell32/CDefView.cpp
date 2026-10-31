@@ -3348,6 +3348,7 @@ HRESULT CDefView::OpenSelectedItems(PCSTR pszVerb)
     }
     if (!pszVerb)
         pszVerb = MAKEINTRESOURCEA(uCommand);
+    ERR("OpenSelectedItems: default command id %u (%d items in the menu, verb %p)\n", uCommand, GetMenuItemCount(hMenu), pszVerb);
 
     InvokeContextMenuCommand(pCM, pszVerb, NULL);
 
