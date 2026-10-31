@@ -295,6 +295,11 @@ typedef struct _S1_JOURNAL_WRITER
     uint64_t Sequence;
 } S1_JOURNAL_WRITER;
 
+/* A real-time scan of a small file resolves in milliseconds but can exceed
+ * a sub-second budget; waiting seconds is cheap next to a lost audit
+ * entry, so the open is retried generously. */
+#define S1_JOURNAL_APPEND_ATTEMPTS 25
+
 static NTSTATUS
 S1JournalWriterAppend(
     _Inout_ S1_JOURNAL_WRITER *Writer,
@@ -343,12 +348,12 @@ S1JournalWriterAppend(
         if (NT_SUCCESS(Status))
             break;
         if ((Status != STATUS_SHARING_VIOLATION && Status != STATUS_LOCK_NOT_GRANTED) ||
-            Try + 1 >= 5)
+            Try + 1 >= S1_JOURNAL_APPEND_ATTEMPTS)
             return Status;
         {
             LARGE_INTEGER Delay;
 
-            Delay.QuadPart = -1000000; /* 100 ms */
+            Delay.QuadPart = -1000000; /* 100 ms; 24 pauses, about 2.4 s */
             NtDelayExecution(FALSE, &Delay);
         }
     }
@@ -397,7 +402,11 @@ S1JournalWriterAppend(
 
 /* A phase transition the journal cannot record is a broken audit chain,
  * and the failure cannot be journaled either; the only honest signal
- * left is a nonzero exit. */
+ * left is a nonzero exit. Re-entering after a late halt is safe:
+ * S1RevertOperation is a no-op once its backup is consumed (the replace
+ * path returns success when the backup is gone and never touches the
+ * target, the add path re-deletes nothing), so a repeated rollback or a
+ * rollback that reaches an op never applied converges to the same state. */
 #define S1JournalOrHalt(j, tx, ph, op, res, err) \
     do { \
         if (!NT_SUCCESS(S1JournalWriterAppend((j), (tx), (ph), (op), (res), (err)))) \
@@ -832,7 +841,7 @@ NtProcessStartup(
     if (!NT_SUCCESS(Status))
     {
         S1JournalOrHalt(&Journal, Plan.TransactionId, "verify", -1, "failed",
-                              "0xC0000020");
+                        "0xC0000020");
         Attempt.Attempt = 1;
         Attempt.FailureRecorded = S1_TRUE;
         Attempt.HealthConfirmed = S1_FALSE;
@@ -866,7 +875,7 @@ NtProcessStartup(
                             ? (Attempt.FailureRecorded ? "verifiable-failure" : "unexpected-reboot")
                             : "unexpected-reboot";
         S1JournalOrHalt(&Journal, Plan.TransactionId, "rollback-prepared", -1,
-                              "started", Reason);
+                        "started", Reason);
         for (i = Plan.OperationCount; i > 0; i--)
             S1RevertOperation(&Plan, &Plan.Operations[i - 1]);
         S1JournalOrHalt(&Journal, Plan.TransactionId, "rolled-back", -1, "ok", NULL);
@@ -919,14 +928,14 @@ NtProcessStartup(
                 S1RevertOperation(&Plan, &Plan.Operations[i]);
             }
             S1JournalOrHalt(&Journal, Plan.TransactionId, "failed", -1,
-                                  "failed", "0xE0000001");
+                            "failed", "0xE0000001");
             Attempt.FailureRecorded = S1_TRUE;
             snprintf(Attempt.LastResult, sizeof(Attempt.LastResult), "%s", "failed");
             S1AttemptSave(&Attempt);
             NtTerminateProcess(NtCurrentProcess(), 0);
         }
         S1JournalOrHalt(&Journal, Plan.TransactionId, "applying",
-                              (int)Plan.Operations[i].Seq, "ok", NULL);
+                        (int)Plan.Operations[i].Seq, "ok", NULL);
     }
 
     /* 7. Applied, not confirmed: confirmation requires the service health
