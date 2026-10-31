@@ -127,7 +127,12 @@ def build_bundle(bundle_dir, files, key_path):
             "sha256": hashlib.sha256(payload).hexdigest(),
             "required": required,
         })
-    manifest = json.dumps({"schema": 1, "binaries": entries},
+    manifest = json.dumps({"schema": 1, "binaries": entries,
+                           "shortcuts": [{
+                               "name": "ln-hosttest.lnk",
+                               "target": r"LiberNT\Servicing\bin\libernt-update.exe",
+                               "arguments": "/query",
+                           }]},
                           separators=(",", ":")).encode()
     with open(os.path.join(bundle_dir, "bootstrap-manifest.json"), "wb") as f:
         f.write(manifest)
@@ -213,6 +218,9 @@ def main():
           "installed.json path round-trips with its backslashes")
     key = os.path.join(root, "LiberNT", "Servicing", "store", "dev-public-key.bin")
     check(os.path.exists(key) and os.path.getsize(key) == 256, "dev public key pinned (256 bytes)")
+    lnk = os.path.join(root, "ProgramData", "Microsoft", "Windows", "Start Menu",
+                       "Programs", "ln-hosttest.lnk")
+    check(os.path.exists(lnk), "start menu shortcut created from manifest")
     be = hive_bootexecute(hive_path, "HostTestVerify")
     check(be[:2] == ["autocheck", "autochk *"] and "LiberNTUpdatePending" in be,
           f"hive BootExecute updated preserving order: {be}")
@@ -239,6 +247,7 @@ def main():
     check(rc == 0, f"uninstall exit 0 (rc={rc})")
     check(not os.path.exists(pending), "pending.exe removed")
     check(not os.path.exists(cli), "CLI removed")
+    check(not os.path.exists(lnk), "start menu shortcut removed by uninstall")
     be = hive_bootexecute(hive_path, "HostTestVerify3")
     check("LiberNTUpdatePending" not in be and be[:2] == ["autocheck", "autochk *"],
           f"BootExecute reverted: {be}")

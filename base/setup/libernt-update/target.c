@@ -279,9 +279,13 @@ BsValidateTargetRelPath(
     _In_ const BS_TARGET *Target,
     _In_ PCWSTR Relative)
 {
-    /* Stage 1 installs only under these two prefixes (DESIGN section 4). */
+    /* Stage 1 installs only under these prefixes (DESIGN section 4), plus
+     * the all-users Start Menu folder, where the manifest may declare
+     * shortcuts; the narrow third prefix is the only exception and keeps
+     * the installer out of the rest of the profile. */
     if (_wcsnicmp(Relative, L"Windows\\", 8) != 0 &&
-        _wcsnicmp(Relative, L"LiberNT\\", 8) != 0)
+        _wcsnicmp(Relative, L"LiberNT\\", 8) != 0 &&
+        _wcsnicmp(Relative, L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\", 52) != 0)
         return ERROR_BAD_PATHNAME;
     return BsTargetValidateReal(Target, Relative);
 }

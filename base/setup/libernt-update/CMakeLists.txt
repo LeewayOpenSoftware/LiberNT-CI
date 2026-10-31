@@ -20,4 +20,4 @@ list(APPEND SOURCE
 
 add_executable(libernt-update-bootstrap ${SOURCE})
 set_module_type(libernt-update-bootstrap win32cui UNICODE)
-add_importlibs(libernt-update-bootstrap advapi32 shell32 msvcrt kernel32 ntdll)
+add_importlibs(libernt-update-bootstrap advapi32 shell32 ole32 msvcrt kernel32 ntdll)

@@ -55,11 +55,22 @@ typedef struct _BS_BUNDLE_FILE
     BOOL IsService;
 } BS_BUNDLE_FILE;
 
+/* A Start Menu entry the install materializes and the inventory tracks, so
+ * uninstall removes exactly what install created. */
+typedef struct _BS_BUNDLE_SHORTCUT
+{
+    WCHAR Name[64];                 /* .lnk file name, e.g. L"libernt-update-ui.lnk" */
+    WCHAR Target[BS_MAX_PATH_BUF];  /* root-relative exe, e.g. L"LiberNT\\Update\\libernt-update-ui.exe" */
+    WCHAR Arguments[128];
+} BS_BUNDLE_SHORTCUT;
+
 typedef struct _BS_BUNDLE
 {
     WCHAR Path[BS_MAX_PATH_BUF];
     BS_BUNDLE_FILE Files[16];
     ULONG FileCount;
+    BS_BUNDLE_SHORTCUT Shortcuts[8];
+    ULONG ShortcutCount;
     ULONG64 TotalBytes;
     char ManifestDigest[65];
 } BS_BUNDLE;

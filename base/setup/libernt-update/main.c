@@ -5,8 +5,11 @@
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
+#define INITGUID
 #include "bootstrap.h"
 #include <time.h>
+#include <objbase.h>
+#include <shlobj.h>
 
 static BS_LOG BsLogState;
 
@@ -312,6 +315,108 @@ BsInventoryLoad(
 
 /* ------------------------------------------------------------------ install */
 
+/* The all-users Start Menu Programs folder, relative to the target root.
+ * Matches FOLDERID_CommonPrograms on this tree (shellpath.c: ProgramData
+ * parent, Microsoft\Windows\Start Menu\Programs). */
+#define BS_PROGRAMS_DIR L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs"
+
+static DWORD
+BsEnsureDirChain(
+    _In_ PCWSTR Path)
+{
+    WCHAR Copy[BS_MAX_PATH_BUF];
+    WCHAR *Cursor;
+
+    if (wcslen(Path) >= RTL_NUMBER_OF(Copy))
+        return ERROR_FILENAME_EXCED_RANGE;
+    wcscpy(Copy, Path);
+    for (Cursor = Copy + 3; *Cursor; Cursor++)
+    {
+        if (*Cursor == L'\\')
+        {
+            *Cursor = 0;
+            if (!CreateDirectoryW(Copy, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+                return GetLastError();
+            *Cursor = L'\\';
+        }
+    }
+    if (!CreateDirectoryW(Copy, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+        return GetLastError();
+    return ERROR_SUCCESS;
+}
+
+/* Materialize the manifest's Start Menu shortcuts and record them in the
+ * inventory like any other installed file, so uninstall deletes exactly
+ * the paths install created. */
+static DWORD
+BsInstallShortcuts(
+    _In_ const BS_TARGET *Target,
+    _In_ const BS_BUNDLE *Bundle,
+    _Inout_ BS_INVENTORY *Inventory)
+{
+    ULONG s;
+
+    for (s = 0; s < Bundle->ShortcutCount; s++)
+    {
+        const BS_BUNDLE_SHORTCUT *Shortcut = &Bundle->Shortcuts[s];
+        WCHAR ProgramsDir[BS_MAX_PATH_BUF], LinkPath[BS_MAX_PATH_BUF];
+        WCHAR TargetPath[BS_MAX_PATH_BUF];
+        IShellLinkW *Link = NULL;
+        IPersistFile *Persist = NULL;
+        DWORD Error;
+
+        if (Inventory->FileCount >= RTL_NUMBER_OF(Inventory->Files))
+            return ERROR_BUFFER_OVERFLOW;
+
+        if (swprintf(ProgramsDir, RTL_NUMBER_OF(ProgramsDir), L"%s\\%s",
+                     Target->Root, BS_PROGRAMS_DIR) < 0 ||
+            swprintf(LinkPath, RTL_NUMBER_OF(LinkPath), L"%s\\%s",
+                     ProgramsDir, Shortcut->Name) < 0)
+            return ERROR_FILENAME_EXCED_RANGE;
+        if (swprintf(TargetPath, RTL_NUMBER_OF(TargetPath), L"%s%s",
+                     Target->Root, Shortcut->Target) < 0)
+            return ERROR_FILENAME_EXCED_RANGE;
+        if (BsValidateTargetRelPath(Target, Shortcut->Target) != ERROR_SUCCESS)
+            return ERROR_BAD_PATHNAME;
+
+        Error = BsEnsureDirChain(ProgramsDir);
+        if (Error != ERROR_SUCCESS)
+            return Error;
+
+        if (FAILED(CoCreateInstance(&CLSID_ShellLink, NULL, CLSCTX_INPROC_SERVER,
+                                    &IID_IShellLinkW, (void **)&Link)))
+            return ERROR_NOINTERFACE;
+        if (FAILED(Link->lpVtbl->QueryInterface(Link, &IID_IPersistFile,
+                                                (void **)&Persist)))
+        {
+            Link->lpVtbl->Release(Link);
+            return ERROR_NOINTERFACE;
+        }
+        Link->lpVtbl->SetPath(Link, TargetPath);
+        if (Shortcut->Arguments[0])
+            Link->lpVtbl->SetArguments(Link, Shortcut->Arguments);
+        if (FAILED(Persist->lpVtbl->Save(Persist, LinkPath, TRUE)))
+        {
+            Persist->lpVtbl->Release(Persist);
+            Link->lpVtbl->Release(Link);
+            return ERROR_WRITE_FAULT;
+        }
+        Persist->lpVtbl->Release(Persist);
+        Link->lpVtbl->Release(Link);
+
+        wcscpy(Inventory->Files[Inventory->FileCount].Path, BS_PROGRAMS_DIR);
+        wcscat(Inventory->Files[Inventory->FileCount].Path, L"\\");
+        wcscat(Inventory->Files[Inventory->FileCount].Path, Shortcut->Name);
+        Error = BsHashTargetFile(Target, Inventory->Files[Inventory->FileCount].Path,
+                                 Inventory->Files[Inventory->FileCount].Sha256);
+        if (Error != ERROR_SUCCESS)
+            return Error;
+        Inventory->FileCount++;
+        BsPrint(L"  shortcut %ls -> %ls\n", LinkPath, TargetPath);
+    }
+    return ERROR_SUCCESS;
+}
+
 static BOOL
 BsHasServiceBinary(
     _In_ const BS_BUNDLE *Bundle)
@@ -418,6 +523,9 @@ BsInstall(
     for (i = 0; i < Bundle.FileCount; i++)
         BsPrint(L"  copy %ls -> %ls\\%ls\n", Bundle.Files[i].Source,
                 Target->Root, Bundle.Files[i].Dest);
+    for (i = 0; i < Bundle.ShortcutCount; i++)
+        BsPrint(L"  shortcut %ls -> %ls\\%ls\n", Bundle.Shortcuts[i].Name,
+                Target->Root, Bundle.Shortcuts[i].Target);
     BsPrint(L"  pin development public key -> %ls\\%ls\n", Target->Root, BS_DEVKEY_FILE);
     BsPrint(L"  service: %s\n",
             ServiceWanted ? (Target->IsImage ? L"record stub in installed.json (offline)"
@@ -438,6 +546,10 @@ BsInstall(
         return Error;
     }
 
+    /* IShellLinkW needs an apartment; the process is short-lived, so the
+     * matching CoUninitialize is the process exit. */
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+
     memset(&Inventory, 0, sizeof(Inventory));
     strcpy(Inventory.ManifestDigest, Bundle.ManifestDigest);
     for (i = 0; i < Bundle.FileCount; i++)
@@ -456,6 +568,13 @@ BsInstall(
         wcscpy(Inventory.Files[Inventory.FileCount].Path, Bundle.Files[i].Dest);
         strcpy(Inventory.Files[Inventory.FileCount].Sha256, Bundle.Files[i].Sha256);
         Inventory.FileCount++;
+    }
+
+    Error = BsInstallShortcuts(Target, &Bundle, &Inventory);
+    if (Error != ERROR_SUCCESS)
+    {
+        BsPrint(L"shortcut creation failed (0x%08lx)\n", (unsigned long)Error);
+        return Error;
     }
 
     if (BsBuildTargetPath(Dest, RTL_NUMBER_OF(Dest), Target, BS_DEVKEY_FILE) != ERROR_SUCCESS)

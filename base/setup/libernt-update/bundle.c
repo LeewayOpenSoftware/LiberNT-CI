@@ -156,6 +156,32 @@ BsParseFiles(
         Bundle->FileCount++;
     }
 
+    /* Optional Start Menu shortcuts; absent array means none. */
+    Count = S1JsonGetArrayCount(Root, "shortcuts");
+    if (Count > RTL_NUMBER_OF(Bundle->Shortcuts))
+        goto fail;
+    for (i = 0; i < Count; i++)
+    {
+        BS_BUNDLE_SHORTCUT *Shortcut = &Bundle->Shortcuts[i];
+        char Path[64];
+        const char *Value;
+        size_t ValueLength;
+
+        snprintf(Path, sizeof(Path), "shortcuts.%lu.name", (unsigned long)i);
+        if (!S1JsonGetString(Root, Path, &Value, &ValueLength) ||
+            !BsCopyNarrow(Shortcut->Name, sizeof(Shortcut->Name), Value, ValueLength, TRUE))
+            goto fail;
+        snprintf(Path, sizeof(Path), "shortcuts.%lu.target", (unsigned long)i);
+        if (!S1JsonGetString(Root, Path, &Value, &ValueLength) ||
+            !BsCopyNarrow(Shortcut->Target, sizeof(Shortcut->Target), Value, ValueLength, TRUE))
+            goto fail;
+        snprintf(Path, sizeof(Path), "shortcuts.%lu.arguments", (unsigned long)i);
+        if (S1JsonGetString(Root, Path, &Value, &ValueLength) &&
+            !BsCopyNarrow(Shortcut->Arguments, sizeof(Shortcut->Arguments), Value, ValueLength, TRUE))
+            goto fail;
+        Bundle->ShortcutCount++;
+    }
+
     S1JsonFree(Root);
     return TRUE;
 
