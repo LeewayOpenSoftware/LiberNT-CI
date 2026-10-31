@@ -358,7 +358,6 @@ BsTargetInitImage(
     _In_ PCWSTR ImageRoot)
 {
     WCHAR Probe[BS_MAX_PATH_BUF];
-    WCHAR WindowsDir[BS_MAX_PATH_BUF];
     size_t RootLen;
     DWORD Attr;
 
@@ -372,10 +371,19 @@ BsTargetInitImage(
         Target->Root[wcslen(Target->Root) - 1] = 0;
     RootLen = wcslen(Target->Root);
 
-    /* --image must be an offline root, never the running system: refuse a
-     * drive root, the live Windows directory, or a reparse point. Without
-     * this, "--image C:" passes the probe below and the copies would land
-     * in the real C:\Windows before the hive load fails (Pam review E1). */
+    /* --image must be an offline root, never the running system: refuse NT
+     * namespace spellings, a drive root, the live Windows directory (in any
+     * spelling, including "C:\Windows\..", 8.3 aliases and roots reached
+     * through ancestor junctions — all collapse once the root is
+     * canonicalized), any volume root, any ancestor of the Windows
+     * directory, and anything inside the Windows directory. Without this,
+     * a wrong --image would copy into the real C:\Windows before the hive
+     * load fails against the locked live hive (Pam reviews E1). */
+    if (RootLen >= 4 &&
+        (wcsncmp(Target->Root, L"\\??\\", 4) == 0 ||
+         wcsncmp(Target->Root, L"\\\\?\\", 4) == 0 ||
+         wcsncmp(Target->Root, L"\\\\.\\", 4) == 0))
+        return ERROR_NOT_SUPPORTED;
     Attr = GetFileAttributesW(Target->Root);
     if (Attr == INVALID_FILE_ATTRIBUTES)
         return ERROR_PATH_NOT_FOUND;
@@ -383,11 +391,29 @@ BsTargetInitImage(
         return ERROR_NOT_SUPPORTED;
     if (RootLen <= 3 && Target->Root[1] == L':')
         return ERROR_NOT_SUPPORTED; /* drive root such as C: or C:\ */
-    if (!GetWindowsDirectoryW(WindowsDir, RTL_NUMBER_OF(WindowsDir)))
-        return GetLastError();
-    if (_wcsnicmp(Target->Root, WindowsDir, RootLen) == 0 &&
-        (WindowsDir[RootLen] == 0 || WindowsDir[RootLen] == L'\\'))
-        return ERROR_NOT_SUPPORTED; /* the live Windows directory itself */
+    {
+        WCHAR FinalRoot[BS_MAX_PATH_BUF], WinDir[BS_MAX_PATH_BUF], WinFinal[BS_MAX_PATH_BUF];
+        DWORD FinalLen, WinLen;
+
+        if (!GetWindowsDirectoryW(WinDir, RTL_NUMBER_OF(WinDir)))
+            return GetLastError();
+        if (BsFinalPath(Target->Root, FinalRoot, RTL_NUMBER_OF(FinalRoot)) != ERROR_SUCCESS)
+            return GetLastError();
+        if (BsFinalPath(WinDir, WinFinal, RTL_NUMBER_OF(WinFinal)) != ERROR_SUCCESS)
+            return GetLastError();
+        FinalLen = (DWORD)wcslen(FinalRoot);
+        WinLen = (DWORD)wcslen(WinFinal);
+        if (FinalLen <= 3 && FinalRoot[1] == L':')
+            return ERROR_NOT_SUPPORTED; /* canonical volume root */
+        if (_wcsicmp(FinalRoot, WinFinal) == 0)
+            return ERROR_NOT_SUPPORTED; /* the live Windows directory */
+        if (FinalLen < WinLen && _wcsnicmp(WinFinal, FinalRoot, FinalLen) == 0 &&
+            WinFinal[FinalLen] == L'\\')
+            return ERROR_NOT_SUPPORTED; /* an ancestor of the Windows directory */
+        if (WinLen < FinalLen && _wcsnicmp(FinalRoot, WinFinal, WinLen) == 0 &&
+            FinalRoot[WinLen] == L'\\')
+            return ERROR_NOT_SUPPORTED; /* inside the live Windows directory */
+    }
 
     if (swprintf(Probe, RTL_NUMBER_OF(Probe),
                  L"%s\\Windows\\System32\\config\\SYSTEM", Target->Root) < 0)
