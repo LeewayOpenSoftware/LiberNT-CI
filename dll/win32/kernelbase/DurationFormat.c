@@ -305,6 +305,13 @@ GetDurationFormatEx(
         return 0;
     }
 
+    /* Windows refuses a structure together with a tick count (ERROR_INVALID_PARAMETER) */
+    if (Duration && DurationTicks)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+
     if (Duration)
     {
         /* Year, month and day of week are ignored; wDay counts days */
