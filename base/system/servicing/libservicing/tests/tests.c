@@ -1297,7 +1297,89 @@ static void TestPlanHashFailClosed(void)
     free(target);
 }
 
-/* A crash in a test must say where: address, access type and the image base for the symbolizer. */
+static void
+TestSystemDefer(void)
+{
+    /* Route rule (god kv-optA): a replace under a system root always plans at boot, without
+     * trusting the lock probe. Each scenario runs in a fresh image and flips
+     * LNUPDATE_SYSTEM_DIRS itself; the rest of the suite runs with the rule disabled. */
+    LN_TARGET t;
+    WCHAR *p, *target;
+    char tx[65];
+    BOOL reboot;
+    LN_JOURNAL j;
+
+    Section("route rule: replace under a system dir defers without a lock");
+
+    /* default list (env unset): Windows is a system root -> deferred, file untouched */
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", NULL);
+    CHECK(OpenImage(&t, L"sysdefer1"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    WriteText(target, "old content");
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CHECK(reboot);
+    CHECK(FileIs(target, "old content"));                       /* no inline replace was attempted */
+    CHECK_ERR(0, LnJournalRead(&t, &j));
+    CHECK(!strcmp(LnJournalLast(&j, tx)->phase, "pending-first-boot") && LnJournalLast(&j, tx)->rebootRequired);
+    LnJournalFree(&j);
+    free(target);
+
+    /* empty list: the rule is off -> the same replace applies inline under \Windows */
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"");
+    CHECK(OpenImage(&t, L"sysdefer2"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    WriteText(target, "old content");
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CHECK(!reboot);
+    CHECK(FileIs(target, "version one"));
+    free(target);
+
+    /* a list without Windows: no match -> inline */
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"Program Files");
+    CHECK(OpenImage(&t, L"sysdefer3"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    WriteText(target, "old content");
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CHECK(!reboot);
+    CHECK(FileIs(target, "version one"));
+    free(target);
+
+    /* a multi-root list mentioning Windows: deferred again */
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"Program Files;Windows");
+    CHECK(OpenImage(&t, L"sysdefer4"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    WriteText(target, "old content");
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CHECK(reboot);
+    CHECK(FileIs(target, "old content"));
+    free(target);
+
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"");   /* restore the suite default */
+}
 static LONG WINAPI CrashReport(EXCEPTION_POINTERS *ep)
 {
     printf("\nCRASH code 0x%08lx at %p (image base %p)", (unsigned long)ep->ExceptionRecord->ExceptionCode,
@@ -1365,6 +1447,9 @@ int wmain(int argc, WCHAR **argv)
     GetTempPathW(MAX_PATH, tmp);
     wsprintfW(g_work, L"%slnsvc-tests-%lu-%lu", tmp, GetCurrentProcessId(), GetTickCount());   /* never reuse a stale tree */
     LnEnsureDir(g_work);
+    /* the route rule is exercised by TestSystemDefer alone; every other test keeps the pre-rule
+     * semantics (an unlocked replace under \Windows applies inline) */
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"");
 
     TestSha256();
     TestJson();
@@ -1387,6 +1472,7 @@ int wmain(int argc, WCHAR **argv)
     TestJournalAnchor();
     TestPlanValidation();
     TestPlanHashFailClosed();
+    TestSystemDefer();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
     LnRemoveTree(g_work);

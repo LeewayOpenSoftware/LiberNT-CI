@@ -570,6 +570,53 @@ static BOOL MoveReplace(const LN_TARGET *t, const WCHAR *from, const WCHAR *to)
     return FALSE;
 }
 
+/* Replaces under a system directory never apply inline: the old NTFS replace-rename ignores share
+ * semantics, so the lock probe cannot be trusted there and the target may be a mapped image. The roots
+ * are relative and configurable with LNUPDATE_SYSTEM_DIRS (semicolon-separated; empty disables); the
+ * default is "Windows". */
+static BOOL
+IsUnderSystemDir(const WCHAR *target)
+{
+    static const WCHAR kDefault[] = L"Windows";
+    WCHAR env[300];
+    const WCHAR *list, *p;
+    size_t firstLen;
+    DWORD n;
+
+    while (*target == L'\\')
+        target++;
+    firstLen = wcscspn(target, L"\\");
+    if (!firstLen)
+        return FALSE;
+    SetLastError(ERROR_SUCCESS);
+    n = GetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", env, RTL_NUMBER_OF(env));
+    if (n > 0 && n < RTL_NUMBER_OF(env))
+        list = env;                          /* set: a list, maybe empty (no system dirs) */
+    else if (n == 0 && GetLastError() != ERROR_ENVVAR_NOT_FOUND)
+        list = env;                          /* set to the empty string */
+    else
+        list = kDefault;                     /* unset or overlong: the safe default */
+    for (p = list; ; )
+    {
+        const WCHAR *end = wcschr(p, L';');
+        size_t len = end ? (size_t)(end - p) : wcslen(p);
+
+        while (len && (p[0] == L' ' || p[0] == L'\t'))
+        {
+            p++;
+            len--;
+        }
+        while (len && (p[len - 1] == L' ' || p[len - 1] == L'\t'))
+            len--;
+        if (len && len == firstLen && !_wcsnicmp(p, target, len))
+            return TRUE;
+        if (!end)
+            break;
+        p = end + 1;
+    }
+    return FALSE;
+}
+
 /* *pending is set when the target is in use (Online only): the plan takes it at boot. */
 static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
 {
@@ -603,6 +650,12 @@ static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
 
     if (!strcmp(cur, it->sha256))
         goto verify;                                    /* already in place (resumed transaction) */
+
+    if ((c->t->mode == LnTargetOnline || TEST_LOCKED_AS_PENDING) && IsUnderSystemDir(it->target))
+    {
+        *pending = TRUE;
+        goto out;
+    }
 
     err = LnStoreObjectPath(c->t, it->sha256, &obj);
     if (err)
