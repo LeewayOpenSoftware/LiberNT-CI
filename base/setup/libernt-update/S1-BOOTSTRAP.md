@@ -170,3 +170,25 @@ servicio → self-test).
 - La rotación de la clave DEV (sustituir la embebida por otra) no está
   implementada: condición 6 prohíbe generar la clave de distribución sin
   autorización.
+
+## Journal persistentemente inescribible (decisión A, corrida final S1)
+
+Si el journal no se puede escribir en absoluto (por ejemplo el atributo
+de solo lectura), cada arranque se congela **antes de tocar ningún
+fichero**: la primera fase que se journaliza (`verified`) falla,
+`S1JournalOrHalt` sale con exit 1 y smss continua (sminit.c:2585
+descarta el estado del hijo). Propiedades garantizadas:
+
+- **Nunca hay un target medio-aplicado**: el halt precede a toda
+  operación de fichero; el plan queda intacto en `pending\plan.json`.
+- **No es silencioso**: cada arranque imprime la línea `S1: journal
+  append ... failed 0x..., halting` por el depurador de kernel, y el
+  contador de intentos **no** avanza (un arranque que no pudo
+  journalizar su verificación nunca intentó la transacción).
+- **La recuperación es por el journal**: al devolver la escritura al
+  journal (quitar el atributo, corregir la ACL), el siguiente arranque
+  re-verifica y aplica el plan de nuevo (flujo (a)); el rollback por CLI
+  y el desinstalador también necesitan el journal escribible, así que la
+  única vía de salida ante un journal roto persistente es repararlo o
+  retirar el plan en frío. Contar el halt como intento no ayudaría: el
+  rollback también journaliza y se detendría igual.
