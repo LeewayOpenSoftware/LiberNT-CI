@@ -175,72 +175,58 @@ S1ReadWholeFile(
     return STATUS_SUCCESS;
 }
 
-/* Write-temp + flush + rename over the destination. */
+/* A real-time scan of a small file resolves in milliseconds but can exceed
+ * a sub-second budget; waiting seconds is cheap next to a lost audit
+ * entry, so retried opens wait generously. */
+#define S1_JOURNAL_APPEND_ATTEMPTS 25
+
+/* Whole-file rewrite in place: open (create if missing), truncate, write,
+ * flush. The boot writer used to go through a temp file + rename, but the
+ * rename needs directory rights (DELETE on the temp, add-file on the
+ * parent) that the BootExecute context does not reliably hold at smss
+ * time: LiberNT denied the well-formed rename with STATUS_ACCESS_DENIED
+ * (Dwight's run 6). A whole-file rewrite needs only write access to the
+ * file, which the protected servicing DACL always grants the writer; a
+ * crash mid-write leaves the file torn but recoverable (the plan stays
+ * pending and the two-attempt rule reverts from the backup). */
 static NTSTATUS
-S1WriteFileAtomic(
+S1WriteFileDirect(
     _In_ PCWSTR Path,
-    _In_ PCWSTR TempPath,
     _In_ PVOID Data,
     _In_ ULONG Size)
 {
     HANDLE Handle;
     NTSTATUS Status;
     IO_STATUS_BLOCK IoStatus;
-    UNICODE_STRING NewName;
-    FILE_DISPOSITION_INFORMATION DeleteInfo;
+    FILE_POSITION_INFORMATION Pos;
+    FILE_END_OF_FILE_INFORMATION Eof;
+    ULONG Try;
 
-    Status = S1NtOpen(TempPath, FILE_WRITE_DATA, FILE_CREATE, &Handle);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    Status = NtWriteFile(Handle, NULL, NULL, NULL, &IoStatus, Data, Size, NULL, NULL);
-    if (!NT_SUCCESS(Status))
+    for (Try = 0; ; Try++)
     {
-        NtClose(Handle);
-        return Status;
-    }
-    Status = NtFlushBuffersFile(Handle, &IoStatus);
-    NtClose(Handle);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    RtlInitUnicodeString(&NewName, Path);
-    {
-        /* FileRenameInformation takes a FILE_RENAME_INFORMATION (flags,
-         * root handle, name length, name), never a bare UNICODE_STRING;
-         * passing the latter only ever "worked" by accident off the
-         * caller's Length and stack garbage, and LiberNT fails it closed
-         * with STATUS_INFO_LENGTH_MISMATCH (Dwight's diagnostic boot). */
-        FILE_RENAME_INFORMATION *RenameInfo;
-        ULONG RenameSize;
-        UCHAR RenameBuf[sizeof(FILE_RENAME_INFORMATION) + (MAX_PATH * 2 + 8) * sizeof(WCHAR)];
-
-        if (NewName.Length > (MAX_PATH * 2 + 8) * sizeof(WCHAR))
-            return STATUS_BUFFER_OVERFLOW;
-        RenameInfo = (FILE_RENAME_INFORMATION *)RenameBuf;
-        RenameInfo->ReplaceIfExists = TRUE;
-        RenameInfo->RootDirectory = NULL;
-        RenameInfo->FileNameLength = NewName.Length;
-        memcpy(RenameInfo->FileName, NewName.Buffer, NewName.Length);
-        RenameSize = (ULONG)(FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) +
-                             NewName.Length);
-        Status = S1NtOpen(TempPath, FILE_READ_DATA | FILE_WRITE_DATA, FILE_OPEN, &Handle);
-        if (!NT_SUCCESS(Status))
+        Status = S1NtOpen(Path, FILE_WRITE_DATA, FILE_OPEN_IF, &Handle);
+        if (NT_SUCCESS(Status))
+            break;
+        if ((Status != STATUS_SHARING_VIOLATION && Status != STATUS_LOCK_NOT_GRANTED) ||
+            Try + 1 >= S1_JOURNAL_APPEND_ATTEMPTS)
             return Status;
-        Status = NtSetInformationFile(Handle, &IoStatus, RenameInfo, RenameSize,
-                                      FileRenameInformation);
-        NtClose(Handle);
-    }
-    if (!NT_SUCCESS(Status))
-    {
-        /* clean the temp best-effort */
-        if (NT_SUCCESS(S1NtOpen(TempPath, DELETE, FILE_OPEN, &Handle)))
         {
-            DeleteInfo.DeleteFile = TRUE;
-            NtSetInformationFile(Handle, &IoStatus, &DeleteInfo, sizeof(DeleteInfo),
-                                 FileDispositionInformation);
-            NtClose(Handle);
+            LARGE_INTEGER Delay;
+
+            Delay.QuadPart = -1000000; /* 100 ms */
+            NtDelayExecution(FALSE, &Delay);
         }
     }
+    Pos.CurrentByteOffset.QuadPart = 0;
+    NtSetInformationFile(Handle, &IoStatus, &Pos, sizeof(Pos), FilePositionInformation);
+    Eof.EndOfFile.QuadPart = 0;
+    Status = NtSetInformationFile(Handle, &IoStatus, &Eof, sizeof(Eof),
+                                  FileEndOfFileInformation);
+    if (NT_SUCCESS(Status))
+        Status = NtWriteFile(Handle, NULL, NULL, NULL, &IoStatus, Data, Size, NULL, NULL);
+    if (NT_SUCCESS(Status))
+        Status = NtFlushBuffersFile(Handle, &IoStatus);
+    NtClose(Handle);
     return Status;
 }
 
@@ -279,6 +265,32 @@ S1MoveFileEx(
                                   FileRenameInformation);
     RtlFreeHeap(RtlGetProcessHeap(), 0, Rename);
     NtClose(Handle);
+    if (Status == STATUS_ACCESS_DENIED)
+    {
+        /* The BootExecute context can hold file rights without directory
+         * rights, and the rename walks the parent (Dwight's run 6): fall
+         * back to a whole-file copy plus a best-effort delete of the
+         * source. A crash between the two leaves both files present,
+         * which every reader of this pair already tolerates. */
+        PVOID Data;
+        ULONG Size;
+
+        Status = S1ReadWholeFile(Source, &Data, &Size);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = S1WriteFileDirect(Target, Data, Size);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Data);
+        if (NT_SUCCESS(Status) &&
+            NT_SUCCESS(S1NtOpen(Source, DELETE, FILE_OPEN, &Handle)))
+        {
+            FILE_DISPOSITION_INFORMATION DeleteInfo;
+
+            DeleteInfo.DeleteFile = TRUE;
+            NtSetInformationFile(Handle, &IoStatus, &DeleteInfo, sizeof(DeleteInfo),
+                                 FileDispositionInformation);
+            NtClose(Handle);
+        }
+    }
     return Status;
 }
 
@@ -499,8 +511,8 @@ typedef struct _S1_JOURNAL_WRITER
 
 /* A real-time scan of a small file resolves in milliseconds but can exceed
  * a sub-second budget; waiting seconds is cheap next to a lost audit
- * entry, so the open is retried generously. */
-#define S1_JOURNAL_APPEND_ATTEMPTS 25
+ * entry, so the open is retried generously (S1_JOURNAL_APPEND_ATTEMPTS,
+ * defined above with the file writers). */
 
 static VOID S1Log(_In_ PCWSTR Msg);
 
@@ -588,12 +600,11 @@ S1JournalWriterAppend(
      * appends more than one entry must maintain it too, or the next read
      * reports the journal corrupt. */
     {
-        WCHAR AnchorPath[MAX_PATH * 2], AnchorTemp[MAX_PATH * 2];
+        WCHAR AnchorPath[MAX_PATH * 2];
         char Anchor[256], Hex[65];
         int AnchorLen;
 
         swprintf(AnchorPath, MAX_PATH * 2, L"%ls\\journal\\anchor.json", S1_ROOT);
-        swprintf(AnchorTemp, MAX_PATH * 2, L"%ls.new", AnchorPath);
         S1HexEncode(Writer->PrevHash, S1_SHA256_SIZE, Hex);
         AnchorLen = snprintf(Anchor, sizeof(Anchor),
                              "{\"schema\":1,\"seq\":%llu,\"hash\":\"%s\"}\n",
@@ -601,7 +612,7 @@ S1JournalWriterAppend(
         if (AnchorLen <= 0 || (size_t)AnchorLen >= sizeof(Anchor))
             return STATUS_BUFFER_OVERFLOW;
         {
-            NTSTATUS AnchorSt = S1WriteFileAtomic(AnchorPath, AnchorTemp, Anchor, (ULONG)AnchorLen);
+            NTSTATUS AnchorSt = S1WriteFileDirect(AnchorPath, Anchor, (ULONG)AnchorLen);
 
             if (!NT_SUCCESS(AnchorSt))
             {
@@ -875,16 +886,11 @@ S1AttemptSave(
 {
     char Buffer[512];
     size_t Len;
-    WCHAR TempPath[MAX_PATH * 2];
-    NTSTATUS Status;
 
     Len = S1AttemptSerialize(Attempt, Buffer, sizeof(Buffer));
     if (Len == 0)
         return STATUS_BUFFER_OVERFLOW;
-    if (swprintf(TempPath, MAX_PATH * 2, L"%ls.new", S1_ATTEMPT_PATH) < 0)
-        return STATUS_INVALID_PARAMETER;
-    Status = S1WriteFileAtomic(S1_ATTEMPT_PATH, TempPath, Buffer, (ULONG)Len);
-    return Status;
+    return S1WriteFileDirect(S1_ATTEMPT_PATH, Buffer, (ULONG)Len);
 }
 
 /* --------------------------------------------------------------- apply/rollback */
@@ -960,13 +966,13 @@ S1ApplyOperation(
         }
     }
 
-    /* Atomic replace/add from the store object. The object stays in the
+    /* Whole-file replace/add from the store object (direct write, as the
+     * boot context cannot rely on rename rights). The object stays in the
      * store: confirm re-verifies the store against the pinned certificate,
      * and immutable objects are shared with later transactions. */
     {
         PVOID ObjectData;
         ULONG ObjectSize;
-        WCHAR TempPath[MAX_PATH * 2];
 
         Status = S1ReadWholeFile(ObjectPath, &ObjectData, &ObjectSize);
         if (!NT_SUCCESS(Status))
@@ -975,8 +981,7 @@ S1ApplyOperation(
                 S1MoveFileEx(BackupPath, TargetW, TRUE);
             return Status;
         }
-        swprintf(TempPath, MAX_PATH * 2, L"%ls.s1tmp", TargetW);
-        Status = S1WriteFileAtomic(TargetW, TempPath, ObjectData, ObjectSize);
+        Status = S1WriteFileDirect(TargetW, ObjectData, ObjectSize);
         RtlFreeHeap(RtlGetProcessHeap(), 0, ObjectData);
         if (!NT_SUCCESS(Status))
         {
