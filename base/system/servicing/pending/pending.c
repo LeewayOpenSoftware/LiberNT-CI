@@ -204,12 +204,32 @@ S1WriteFileAtomic(
         return Status;
 
     RtlInitUnicodeString(&NewName, Path);
-    Status = S1NtOpen(TempPath, FILE_READ_DATA | FILE_WRITE_DATA, FILE_OPEN, &Handle);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    Status = NtSetInformationFile(Handle, &IoStatus, &NewName, sizeof(NewName),
-                                  FileRenameInformation);
-    NtClose(Handle);
+    {
+        /* FileRenameInformation takes a FILE_RENAME_INFORMATION (flags,
+         * root handle, name length, name), never a bare UNICODE_STRING;
+         * passing the latter only ever "worked" by accident off the
+         * caller's Length and stack garbage, and LiberNT fails it closed
+         * with STATUS_INFO_LENGTH_MISMATCH (Dwight's diagnostic boot). */
+        FILE_RENAME_INFORMATION *RenameInfo;
+        ULONG RenameSize;
+        UCHAR RenameBuf[sizeof(FILE_RENAME_INFORMATION) + (MAX_PATH * 2 + 8) * sizeof(WCHAR)];
+
+        if (NewName.Length > (MAX_PATH * 2 + 8) * sizeof(WCHAR))
+            return STATUS_BUFFER_OVERFLOW;
+        RenameInfo = (FILE_RENAME_INFORMATION *)RenameBuf;
+        RenameInfo->ReplaceIfExists = TRUE;
+        RenameInfo->RootDirectory = NULL;
+        RenameInfo->FileNameLength = NewName.Length;
+        memcpy(RenameInfo->FileName, NewName.Buffer, NewName.Length);
+        RenameSize = (ULONG)(FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName) +
+                             NewName.Length);
+        Status = S1NtOpen(TempPath, FILE_READ_DATA | FILE_WRITE_DATA, FILE_OPEN, &Handle);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Status = NtSetInformationFile(Handle, &IoStatus, RenameInfo, RenameSize,
+                                      FileRenameInformation);
+        NtClose(Handle);
+    }
     if (!NT_SUCCESS(Status))
     {
         /* clean the temp best-effort */
@@ -482,9 +502,7 @@ typedef struct _S1_JOURNAL_WRITER
  * entry, so the open is retried generously. */
 #define S1_JOURNAL_APPEND_ATTEMPTS 25
 
-#ifndef S1_HOST_APPLIER
 static VOID S1Log(_In_ PCWSTR Msg);
-#endif
 
 static NTSTATUS
 S1JournalWriterAppend(
