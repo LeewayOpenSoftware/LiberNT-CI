@@ -293,52 +293,111 @@ S1HashFile(
 /* --------------------------------------------------------------- paths */
 
 /* Compose the servicing root from a \SystemRoot link target, which names
- * the Windows directory, not the volume root. The last path component is
- * dropped when what remains still carries a volume marker (a drive letter
- * or an ARC "partition(n)" / device component); otherwise the whole target
- * already IS the volume. Pure string logic, separated so host tests pin
+ * Compose the servicing root from a \SystemRoot link target, which names
+ * the Windows directory, not the volume root. The volume is derived from
+ * its designator — "\??\<X>:", "\ArcName\...partition(n)", "\Device\
+ * HarddiskVolumeN" / "Harddisk<n>\Partition<p>" / "CdRom<n>" / "Floppy<n>"
+ * — never by guessing the last component, so a Windows directory nested
+ * deeper than one level or oddly named ("Win(1)", "HarddiskTools") still
+ * resolves to the volume, and an unrecognized shape fails closed (Pam's
+ * review of 970c9a4e9c). Pure string logic, separated so host tests pin
  * it. */
-static VOID
+static BOOL
 S1ServicingRootFromSystemRoot(
     _In_ PCWSTR LinkTarget,
     _Out_ PWSTR Out,
     _In_ size_t OutCch)
 {
-    WCHAR Buf[MAX_PATH * 2];
-    size_t Len = wcslen(LinkTarget), Cut = 0, i;
+    WCHAR Comp[64];
+    WCHAR Built[MAX_PATH * 2];
+    PCWSTR p = LinkTarget;
+    size_t Used = 0;
 
-    while (Len && (LinkTarget[Len - 1] == L'\\' || LinkTarget[Len - 1] == L'/'))
-        Len--;
-    if (Len >= RTL_NUMBER_OF(Buf))
-        Len = RTL_NUMBER_OF(Buf) - 1;
-    memcpy(Buf, LinkTarget, Len * sizeof(WCHAR));
-    Buf[Len] = 0;
+    Built[0] = 0;
+    if (*p != L'\\')
+        return FALSE;
 
-    for (i = Len; i > 0; i--)
+#define S1_NEXT_COMPONENT() \
+    do { \
+        size_t N_ = 0; \
+        while (*p == L'\\') \
+            p++; \
+        while (*p && *p != L'\\' && N_ < RTL_NUMBER_OF(Comp) - 1) \
+            Comp[N_++] = *p++; \
+        Comp[N_] = 0; \
+    } while (0)
+
+#define S1_KEEP_COMPONENT() \
+    do { \
+        if (Used) \
+            wcscat(Built, L"\\"); \
+        wcscat(Built, Comp); \
+        Used++; \
+    } while (0)
+
+    S1_NEXT_COMPONENT();              /* "??", "ArcName", "Device", ... */
+
+    if (!wcsicmp(Comp, L"??"))
     {
-        if (Buf[i - 1] == L'\\')
+        /* "\??\C:" — the drive designator is the volume */
+        S1_KEEP_COMPONENT();          /* keeps "??" */
+        S1_NEXT_COMPONENT();
+        if (wcslen(Comp) < 2 || Comp[1] != L':')
+            return FALSE;
+        S1_KEEP_COMPONENT();          /* keeps "C:" */
+    }
+    else if (!wcsicmp(Comp, L"ArcName"))
+    {
+        /* "\ArcName\<multi...>\partition(n)" — the partition component
+         * closes the volume designator */
+        BOOL Found = FALSE;
+
+        S1_KEEP_COMPONENT();
+        while (*p)
         {
-            Cut = i - 1;
-            break;
+            S1_NEXT_COMPONENT();
+            S1_KEEP_COMPONENT();
+            if (wcsstr(Comp, L"partition("))
+            {
+                Found = TRUE;
+                break;
+            }
+        }
+        if (!Found)
+            return FALSE;
+    }
+    else if (!wcsicmp(Comp, L"Device"))
+    {
+        S1_KEEP_COMPONENT();
+        S1_NEXT_COMPONENT();          /* HarddiskVolumeN | Harddisk<n> | CdRom<n> | Floppy<n> */
+        if (!wcsnicmp(Comp, L"HarddiskVolume", 14) ||
+            !wcsnicmp(Comp, L"CdRom", 5) ||
+            !wcsnicmp(Comp, L"Floppy", 6))
+        {
+            S1_KEEP_COMPONENT();
+        }
+        else if (!wcsnicmp(Comp, L"Harddisk", 8))
+        {
+            S1_KEEP_COMPONENT();
+            S1_NEXT_COMPONENT();      /* Partition<p> */
+            if (wcsnicmp(Comp, L"Partition", 9))
+                return FALSE;
+            S1_KEEP_COMPONENT();
+        }
+        else
+        {
+            return FALSE;
         }
     }
-
-    if (Cut)
+    else
     {
-        PCWSTR Comp = Buf + Cut + 1;
-        BOOL CompIsVolume =
-            wcschr(Comp, L':') != NULL ||
-            wcschr(Comp, L'(') != NULL ||
-            wcsncmp(Comp, L"Harddisk", 8) == 0 ||
-            wcsncmp(Comp, L"CdRom", 5) == 0 ||
-            wcsncmp(Comp, L"Floppy", 6) == 0;
-
-        /* the last component is the Windows directory unless it IS a
-         * volume designator (drive letter, ARC partition(n), device) */
-        if (!CompIsVolume)
-            Buf[Cut] = 0;
+        return FALSE;
     }
-    swprintf(Out, OutCch, L"%s\\LiberNT\\Servicing", Buf);
+#undef S1_NEXT_COMPONENT
+#undef S1_KEEP_COMPONENT
+
+    swprintf(Out, OutCch, L"\\%s\\LiberNT\\Servicing", Built);
+    return TRUE;
 }
 
 #ifndef S1_HOST_APPLIER
@@ -356,13 +415,15 @@ S1ResolveServicingRoot(VOID)
     Status = NtOpenSymbolicLinkObject(&Link, SYMBOLIC_LINK_QUERY, &Attr);
     if (!NT_SUCCESS(Status))
         return Status;
-    RtlInitEmptyUnicodeString(&Target, Buf, sizeof(Buf));
+    /* leave room for the terminating WCHAR the query may not write */
+    RtlInitEmptyUnicodeString(&Target, Buf, sizeof(Buf) - sizeof(WCHAR));
     Status = NtQuerySymbolicLinkObject(Link, &Target, NULL);
     NtClose(Link);
     if (!NT_SUCCESS(Status))
         return Status;
     Buf[Target.Length / sizeof(WCHAR)] = 0;
-    S1ServicingRootFromSystemRoot(Buf, g_ServicingRoot, RTL_NUMBER_OF(g_ServicingRoot));
+    if (!S1ServicingRootFromSystemRoot(Buf, g_ServicingRoot, RTL_NUMBER_OF(g_ServicingRoot)))
+        return STATUS_OBJECT_PATH_INVALID;
     swprintf(g_S1PlanPath, RTL_NUMBER_OF(g_S1PlanPath), L"%s\\pending\\plan.json", g_ServicingRoot);
     swprintf(g_S1AttemptPath, RTL_NUMBER_OF(g_S1AttemptPath), L"%s\\pending\\attempt.json", g_ServicingRoot);
     swprintf(g_S1JournalPath, RTL_NUMBER_OF(g_S1JournalPath), L"%s\\journal\\transactions.jsonl", g_ServicingRoot);

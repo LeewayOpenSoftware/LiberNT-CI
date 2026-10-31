@@ -39,13 +39,29 @@ static void
 Case(const WCHAR *LinkTarget, const WCHAR *Want)
 {
     WCHAR Got[MAX_PATH * 2];
+    BOOL Ok;
 
-    S1ServicingRootFromSystemRoot(LinkTarget, Got, RTL_NUMBER_OF(Got));
-    if (wcscmp(Got, Want) == 0)
+    Ok = S1ServicingRootFromSystemRoot(LinkTarget, Got, RTL_NUMBER_OF(Got));
+    if (Ok && wcscmp(Got, Want) == 0)
         printf("ok:   %ls -> %ls\n", LinkTarget, Got);
     else
     {
-        printf("FAIL: %ls -> %ls (want %ls)\n", LinkTarget, Got, Want);
+        printf("FAIL: %ls -> %ls (want %ls)\n", LinkTarget, Ok ? Got : L"<rejected>",
+               Want);
+        Failures++;
+    }
+}
+
+static void
+CaseRejected(const WCHAR *LinkTarget)
+{
+    WCHAR Got[MAX_PATH * 2];
+
+    if (!S1ServicingRootFromSystemRoot(LinkTarget, Got, RTL_NUMBER_OF(Got)))
+        printf("ok:   %ls -> rejected\n", LinkTarget);
+    else
+    {
+        printf("FAIL: %ls -> %ls (want rejected)\n", LinkTarget, Got);
         Failures++;
     }
 }
@@ -58,9 +74,15 @@ main(void)
     Case(L"\\??\\C:\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
     Case(L"\\??\\C:\\ReactOS", L"\\??\\C:\\LiberNT\\Servicing");
     Case(L"\\??\\C:\\", L"\\??\\C:\\LiberNT\\Servicing");
+    Case(L"\\??\\C:\\LiberNT\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
+    Case(L"\\??\\C:\\a\\b\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
+    Case(L"\\??\\C:\\Win(1)", L"\\??\\C:\\LiberNT\\Servicing");
+    Case(L"\\??\\C:\\HarddiskTools\\Windows", L"\\??\\C:\\LiberNT\\Servicing");
     Case(L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\ReactOS",
          L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\LiberNT\\Servicing");
     Case(L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\Windows\\",
+         L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\LiberNT\\Servicing");
+    Case(L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\a\\b\\ReactOS",
          L"\\ArcName\\multi(0)disk(0)rdisk(0)partition(1)\\LiberNT\\Servicing");
     Case(L"\\Device\\HarddiskVolume1",
          L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
@@ -68,6 +90,16 @@ main(void)
          L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
     Case(L"\\Device\\HarddiskVolume1\\Windows",
          L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
+    Case(L"\\Device\\HarddiskVolume1\\nested\\deeper\\Windows",
+         L"\\Device\\HarddiskVolume1\\LiberNT\\Servicing");
+    Case(L"\\Device\\Harddisk0\\Partition1\\Windows",
+         L"\\Device\\Harddisk0\\Partition1\\LiberNT\\Servicing");
+    Case(L"\\Device\\CdRom0\\Windows",
+         L"\\Device\\CdRom0\\LiberNT\\Servicing");
+    CaseRejected(L"\\garbage\\path");
+    CaseRejected(L"\\??\\NoColon");
+    CaseRejected(L"\\Device\\RamDisk0\\Windows");
+    CaseRejected(L"ArcName\\without\\leading\\backslash");
 
     /* the live host shape: synthesize the link target from GetWindowsDirectoryW */
     if (GetWindowsDirectoryW(WinDir, RTL_NUMBER_OF(WinDir)) && WinDir[1] == L':')
