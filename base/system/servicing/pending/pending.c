@@ -308,7 +308,7 @@ S1ServicingRootFromSystemRoot(
     _Out_ PWSTR Out,
     _In_ size_t OutCch)
 {
-    WCHAR Comp[64];
+    WCHAR Comp[64] = { 0 };
     WCHAR Built[MAX_PATH * 2];
     PCWSTR p = LinkTarget;
     size_t Used = 0;
