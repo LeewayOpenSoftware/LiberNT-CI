@@ -181,9 +181,7 @@ AddSelectedUsersToGroup(HWND hwndDlg,
                                              (LPBYTE)&memberInfo, 1);
             if (status != NERR_Success && status != ERROR_MEMBER_IN_ALIAS)
             {
-                TCHAR szText[256];
-                wsprintf(szText, TEXT("Error: %u"), status);
-                MessageBox(NULL, szText, TEXT("NetLocalGroupAddMembers"), MB_ICONERROR | MB_OK);
+                ShowNetworkError(status);
             }
             else
             {
@@ -339,9 +337,7 @@ RemoveUserFromGroup(HWND hwndDlg,
                                      3, (LPBYTE)&memberInfo, 1);
     if (status != NERR_Success)
     {
-        TCHAR szText[256];
-        wsprintf(szText, TEXT("Error: %u"), status);
-        MessageBox(NULL, szText, TEXT("NetLocalGroupDelMembers"), MB_ICONERROR | MB_OK);
+        ShowNetworkError(status);
         return;
     }
 

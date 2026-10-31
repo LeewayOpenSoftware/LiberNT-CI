@@ -175,8 +175,7 @@ GetTimeSetting(
     /* Check the time format */
     if (szTimeFormat[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 
@@ -189,8 +188,7 @@ GetTimeSetting(
     /* Check the time separator */
     if (szTimeSep[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 

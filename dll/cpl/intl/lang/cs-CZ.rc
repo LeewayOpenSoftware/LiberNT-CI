@@ -223,3 +223,8 @@ BEGIN
     IDS_ERROR_INPUT_DLL "Nebylo možné spustit input.dll"
     IDS_ERROR_UNICODE "Nebylo možné nainstalovat nový jazyk pro programy, které nepodporují Unicode!"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_ERROR_EMPTY_VALUE "A required value is empty. Enter a value and try again."
+END

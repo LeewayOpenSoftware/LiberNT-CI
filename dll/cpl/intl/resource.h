@@ -90,5 +90,7 @@
 #define IDS_ERROR_INPUT_DLL           1016
 #define IDS_ERROR_UNICODE             1017
 
+#define IDS_ERROR_EMPTY_VALUE         1200
+
 #define IDS_APPLY_DEFAULT_TITLE       1100
 #define IDS_APPLY_DEFAULT_TEXT        1101

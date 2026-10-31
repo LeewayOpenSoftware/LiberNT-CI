@@ -215,3 +215,8 @@ BEGIN
     IDS_ERROR_INPUT_DLL "input.dllを開始できません"
     IDS_ERROR_UNICODE "Unicodeをサポートしていないプログラムのための新しい言語をインストールできません。"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_ERROR_EMPTY_VALUE "A required value is empty. Enter a value and try again."
+END

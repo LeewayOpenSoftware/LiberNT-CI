@@ -283,8 +283,7 @@ GetCurrencySetting(
 
     if (szCurrSymbol[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 
@@ -306,8 +305,7 @@ GetCurrencySetting(
 
     if (szCurrDecimalSep[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 
@@ -324,8 +322,7 @@ GetCurrencySetting(
 
     if (szCurrThousandSep[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 

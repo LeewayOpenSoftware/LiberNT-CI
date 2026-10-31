@@ -493,8 +493,7 @@ GetNumberSetting(
 
     if (szNumDecimalSep[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 
@@ -511,8 +510,7 @@ GetNumberSetting(
 
     if (szNumThousandSep[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 
@@ -529,8 +527,7 @@ GetNumberSetting(
 
     if (szNumNegativeSign[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 
@@ -552,8 +549,7 @@ GetNumberSetting(
 
     if (szNumListSep[0] == L'\0')
     {
-        /* TODO: Show error message */
-
+        PrintErrorMsgBox(IDS_ERROR_EMPTY_VALUE);
         return FALSE;
     }
 

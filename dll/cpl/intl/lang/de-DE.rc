@@ -224,3 +224,8 @@ BEGIN
     IDS_ERROR_INPUT_DLL "Die Datei input.dll konnte nicht geladen werden."
     IDS_ERROR_UNICODE "Neue Sprache für Programme, die Unicode nicht unterstützen, konnte nicht installiert werden!"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_ERROR_EMPTY_VALUE "A required value is empty. Enter a value and try again."
+END

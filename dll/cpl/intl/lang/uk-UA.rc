@@ -224,3 +224,8 @@ BEGIN
     IDS_ERROR_INPUT_DLL "Не вдається запустити input.dll"
     IDS_ERROR_UNICODE "Не вдається встановити нову мову для програм, що не підтримують Юнікод!"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_ERROR_EMPTY_VALUE "A required value is empty. Enter a value and try again."
+END

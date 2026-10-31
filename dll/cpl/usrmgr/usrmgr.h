@@ -52,6 +52,10 @@ CheckAccountName(HWND hwndDlg,
                  INT nIdDlgItem,
                  LPTSTR lpAccountName);
 
+/* misc.c */
+VOID
+ShowNetworkError(NET_API_STATUS status);
+
 /* userprops.c */
 BOOL
 UserProperties(HWND hwndDlg);

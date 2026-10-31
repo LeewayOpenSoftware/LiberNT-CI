@@ -226,3 +226,8 @@ BEGIN
     IDS_ERROR_INPUT_DLL "无法启动 input.dll"
     IDS_ERROR_UNICODE "无法为不支持 Unicode 的程序安装新的语言！"
 END
+
+STRINGTABLE
+BEGIN
+    IDS_ERROR_EMPTY_VALUE "A required value is empty. Enter a value and try again."
+END

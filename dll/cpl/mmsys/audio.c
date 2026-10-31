@@ -399,6 +399,7 @@ AudioDlgProc(HWND hwndDlg,
                         pGlobalData->bAudioInChanged = TRUE;
                     }
                 }
+                break;
 
                 case IDC_DEVICE_MIDI_LIST:
                 {

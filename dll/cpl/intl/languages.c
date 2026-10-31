@@ -61,11 +61,13 @@ LanguagesPageProc(HWND hwndDlg,
             pGlobalData = (PGLOBALDATA)((LPPROPSHEETPAGE)lParam)->lParam;
             SetWindowLongPtr(hwndDlg, DWLP_USER, (LONG_PTR)pGlobalData);
 
+            /* Nothing applies this check box (the apply code below only handles East Asian files),
+             * so it is not offered */
+            EnableWindow(GetDlgItem(hwndDlg, IDC_INST_FILES_FOR_RTOL_LANG), FALSE);
+            ShowWindow(GetDlgItem(hwndDlg, IDC_INST_FILES_FOR_RTOL_LANG), SW_HIDE);
+
             if (!pGlobalData->bIsUserAdmin)
-            {
-                EnableWindow(GetDlgItem(hwndDlg, IDC_INST_FILES_FOR_RTOL_LANG), FALSE);
                 EnableWindow(GetDlgItem(hwndDlg, IDC_INST_FILES_FOR_ASIAN), FALSE);
-            }
 
             /* EAST ASIAN specific */
             switch (PRIMARYLANGID(GetUserDefaultLangID()))
