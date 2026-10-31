@@ -146,9 +146,10 @@ BsInventorySave(
      * atomically through a temp file (Pam review note). Every string is
      * JSON-escaped: recorded paths contain backslashes the parser rejects
      * as invalid escapes when they are written raw. */
-    wcstombs(VersionNarrow, BS_VERSION, sizeof(VersionNarrow));
+    if (wcstombs(VersionNarrow, BS_VERSION, sizeof(VersionNarrow)) == (size_t)-1 ||
+        wcstombs(ServiceNarrow, Inventory->ServiceState, sizeof(ServiceNarrow)) == (size_t)-1)
+        return ERROR_NO_UNICODE_TRANSLATION;
     VersionNarrow[sizeof(VersionNarrow) - 1] = 0;
-    wcstombs(ServiceNarrow, Inventory->ServiceState, sizeof(ServiceNarrow));
     ServiceNarrow[sizeof(ServiceNarrow) - 1] = 0;
     Error = BsJsonEscapeNarrow(VersionEsc, sizeof(VersionEsc), VersionNarrow);
     if (Error == ERROR_SUCCESS)
@@ -170,7 +171,8 @@ BsInventorySave(
             ManifestEsc);
     for (i = 0; i < Inventory->FileCount; i++)
     {
-        wcstombs(NarrowPath, Inventory->Files[i].Path, sizeof(NarrowPath));
+        if (wcstombs(NarrowPath, Inventory->Files[i].Path, sizeof(NarrowPath)) == (size_t)-1)
+            return ERROR_NO_UNICODE_TRANSLATION;
         NarrowPath[sizeof(NarrowPath) - 1] = 0;
         Error = BsJsonEscapeNarrow(EscapedPath, sizeof(EscapedPath), NarrowPath);
         if (Error != ERROR_SUCCESS)
