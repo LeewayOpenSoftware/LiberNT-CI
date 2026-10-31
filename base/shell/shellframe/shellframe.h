@@ -14,7 +14,7 @@
 #include <gdiplus.h>
 
 #ifndef SHELLFRAME_CUSTOM_CAPTION_BUTTONS
-#define SHELLFRAME_CUSTOM_CAPTION_BUTTONS 0
+#define SHELLFRAME_CUSTOM_CAPTION_BUTTONS 1
 #endif
 
 namespace ShellFrame
@@ -166,6 +166,13 @@ enum class CaptionButton
     Maximize,
     Close
 };
+
+/* Caption buttons drawn with the active visual style (classic frame controls without a theme) */
+SIZE CaptionButtonSize(int dpi);
+int CaptionStripWidth(int dpi);
+RECT CaptionButtonBounds(const RECT &client, CaptionButton button, int dpi);
+void DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool hot, bool pressed, bool active,
+                       bool zoomed);
 
 class FrameWindow
 {

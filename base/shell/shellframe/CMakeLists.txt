@@ -9,6 +9,7 @@ add_custom_command(
 
 list(APPEND SOURCE
     canvas.cpp
+    caption.cpp
     icons.cpp
     navigation.cpp
     theme.cpp
