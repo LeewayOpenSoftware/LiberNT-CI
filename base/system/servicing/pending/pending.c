@@ -45,6 +45,7 @@
 #include <ntndk.h>
 
 WCHAR g_ServicingRoot[MAX_PATH * 2];
+WCHAR g_VolumeRoot[MAX_PATH * 2];
 WCHAR g_S1PlanPath[MAX_PATH * 2];
 WCHAR g_S1AttemptPath[MAX_PATH * 2];
 WCHAR g_S1JournalPath[MAX_PATH * 2];
@@ -493,6 +494,16 @@ S1ResolveServicingRoot(VOID)
     Buf[Target.Length / sizeof(WCHAR)] = 0;
     if (!S1ServicingRootFromSystemRoot(Buf, g_ServicingRoot, RTL_NUMBER_OF(g_ServicingRoot)))
         return STATUS_OBJECT_PATH_INVALID;
+    {
+        static const WCHAR ServicingSuffix[] = L"\\LiberNT\\Servicing";
+        size_t RootLen = wcslen(g_ServicingRoot);
+        size_t SuffixLen = RTL_NUMBER_OF(ServicingSuffix) - 1;
+
+        if (RootLen <= SuffixLen)
+            return STATUS_OBJECT_PATH_INVALID;
+        memcpy(g_VolumeRoot, g_ServicingRoot, (RootLen - SuffixLen) * sizeof(WCHAR));
+        g_VolumeRoot[RootLen - SuffixLen] = 0;
+    }
     swprintf(g_S1PlanPath, RTL_NUMBER_OF(g_S1PlanPath), L"%s\\pending\\plan.json", g_ServicingRoot);
     swprintf(g_S1AttemptPath, RTL_NUMBER_OF(g_S1AttemptPath), L"%s\\pending\\attempt.json", g_ServicingRoot);
     swprintf(g_S1JournalPath, RTL_NUMBER_OF(g_S1JournalPath), L"%s\\journal\\transactions.jsonl", g_ServicingRoot);
@@ -935,6 +946,19 @@ S1ApplyOperation(
     HANDLE Probe;
 
     S1Widen(TargetW, Op->Target, MAX_PATH * 2);
+#ifndef S1_HOST_APPLIER
+    {
+        /* Plan targets are volume-root-relative ("\Windows\System32\...").
+         * The host shim maps them under the fake root; the native boot
+         * build must prefix the resolved volume or the open fails with
+         * STATUS_OBJECT_PATH_NOT_FOUND (Dwight's run 7). */
+        WCHAR FullTarget[MAX_PATH * 4];
+
+        if (swprintf(FullTarget, RTL_NUMBER_OF(FullTarget), L"%s%s",
+                     g_VolumeRoot, TargetW) > 0)
+            wcscpy(TargetW, FullTarget);
+    }
+#endif
     Status = S1BuildObjectPath(Op, ObjectPath, MAX_PATH * 2);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -1025,6 +1049,15 @@ S1RevertOperation(
     HANDLE Probe;
 
     S1Widen(TargetW, Op->Target, MAX_PATH * 2);
+#ifndef S1_HOST_APPLIER
+    {
+        WCHAR FullTarget[MAX_PATH * 4];
+
+        if (swprintf(FullTarget, RTL_NUMBER_OF(FullTarget), L"%s%s",
+                     g_VolumeRoot, TargetW) > 0)
+            wcscpy(TargetW, FullTarget);
+    }
+#endif
     Status = S1BuildBackupPath(Plan, Op, BackupPath, MAX_PATH * 2);
     if (!NT_SUCCESS(Status))
         return Status;
