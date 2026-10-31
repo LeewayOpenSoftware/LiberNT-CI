@@ -1932,6 +1932,32 @@ static HRESULT SHELL_InvokeRegItemDelegateExecute(LPSHELLEXECUTEINFOW sei, LPCWS
     return SHELL_InvokeDelegateExecute(szKey, sei, (LPCITEMIDLIST)sei->lpIDList, NULL);
 }
 
+static BOOL SHELL_OpenRegItemClassKey(LPCWSTR pszParsingName, LPCWSTR pszVerb, CRegKey &hkClass)
+{
+    WCHAR szKey[MAX_PATH], szCommand[MAX_PATH];
+    DWORD dwAttributes, cb = sizeof(dwAttributes);
+
+    if (!pszParsingName || pszParsingName[0] != ':' || pszParsingName[1] != ':')
+        return FALSE;
+    LPCWSTR pszLast = StrRStrIW(pszParsingName, NULL, L"::{");
+    if (!pszLast || lstrlenW(pszLast) != 2 + 38)
+        return FALSE;
+    if (FAILED(StringCchPrintfW(szKey, _countof(szKey), L"CLSID\\%s", pszLast + 2)))
+        return FALSE;
+    if (hkClass.Open(HKEY_CLASSES_ROOT, szKey, KEY_READ) != ERROR_SUCCESS)
+        return FALSE;
+    if (RegGetValueW(hkClass, L"ShellFolder", L"Attributes", RRF_RT_REG_DWORD, NULL, &dwAttributes, &cb) == ERROR_SUCCESS &&
+        (dwAttributes & SFGAO_FOLDER))
+    {
+        hkClass.Close();
+        return FALSE;
+    }
+    if (HCR_GetExecuteCommandW(hkClass, NULL, pszVerb, szCommand, sizeof(szCommand)))
+        return TRUE;
+    hkClass.Close();
+    return FALSE;
+}
+
 static HRESULT SHELL_InvokeFolderDelegateExecute(LPSHELLEXECUTEINFOW sei, LPCWSTR pszParsingName)
 {
     WCHAR szKey[MAX_PATH], szVerb[VERBKEY_CCHMAX];
@@ -2489,6 +2515,7 @@ static BOOL SHELL_execute(LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc)
     }
 
     /* process the IDList */
+    CRegKey hkRegItemClass;
     if ((sei_tmp.fMask & SEE_MASK_INVOKEIDLIST) == SEE_MASK_IDLIST)
     {
         LPCITEMIDLIST pidl = (LPCITEMIDLIST)sei_tmp.lpIDList;
@@ -2505,8 +2532,18 @@ static BOOL SHELL_execute(LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc)
 
         if (SUCCEEDED(hr))
         {
+            BOOL bRegItemVerb = FALSE;
+            if (SHELL_OpenRegItemClassKey(wszApplicationName, sei_tmp.lpVerb, hkRegItemClass))
+            {
+                bRegItemVerb = TRUE;
+                if (!(sei_tmp.fMask & SEE_MASK_CLASSALL))
+                {
+                    sei_tmp.hkeyClass = hkRegItemClass;
+                    sei_tmp.fMask |= SEE_MASK_CLASSKEY;
+                }
+            }
             hr = SHELL_InvokeRegItemDelegateExecute(&sei_tmp, wszApplicationName);
-            if (hr == S_FALSE && SHELL_InvokeFolderDelegateExecute(&sei_tmp, wszApplicationName) == S_OK)
+            if (hr == S_FALSE && !bRegItemVerb && SHELL_InvokeFolderDelegateExecute(&sei_tmp, wszApplicationName) == S_OK)
             {
                 sei->hInstApp = (HINSTANCE)42;
                 return TRUE;
