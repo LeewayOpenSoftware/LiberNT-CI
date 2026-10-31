@@ -609,7 +609,7 @@ VOID CCplCategoryView::LayoutViewBy(HDC hdc, int width)
     AddHit(rc, HK_VIEWBY, 0, LS_NORMAL, text);
     w = TextWidth(hdc, m_fontNormal, L"View by:  ");
     SetRect(&rc, width - S(24) - TextWidth(hdc, m_fontNormal, text) - w, S(14), width - S(24) - TextWidth(hdc, m_fontNormal, text), S(14) + S(22));
-    AddDeco(rc, DK_TEXT, 0, L"View by:");
+    AddDeco(rc, DK_TEXT, 1, L"View by:");
 }
 
 VOID CCplCategoryView::LayoutHome(HDC hdc, int width)
@@ -976,7 +976,8 @@ VOID CCplCategoryView::Paint(HDC hdc, const RECT *prcClient)
         CplDeco *deco = &m_deco[i];
         RECT rc = deco->Rect;
 
-        OffsetRect(&rc, 0, -m_scroll);
+        if (!(deco->Kind == DK_TEXT && deco->Arg == 1))
+            OffsetRect(&rc, 0, -m_scroll);
         if (rc.bottom < 0 || rc.top > prcClient->bottom)
             continue;
         switch (deco->Kind)
