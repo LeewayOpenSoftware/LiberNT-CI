@@ -456,6 +456,10 @@ VOID CCplCategoryView::LoadCatalog()
             break;
         if (clsid[0] != L'{')
             continue;
+        /* Network Connections is the adapter list, reached from the Network and Sharing Center and
+         * from ncpa.cpl: the all-items view does not list it next to the Center */
+        if (!StrCmpIW(clsid, L"{7007ACC7-3202-11D1-AAD2-00805FC1270E}"))
+            continue;
         StringCchCopyW(item->Clsid, _countof(item->Clsid), clsid);
         if (!CplReadClsidText(clsid, NULL, L"LocalizedString", item->Name, _countof(item->Name)) &&
             !CplReadClsidText(clsid, NULL, NULL, item->Name, _countof(item->Name)))
