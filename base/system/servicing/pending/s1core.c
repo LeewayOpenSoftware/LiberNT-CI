@@ -879,6 +879,18 @@ S1PlanParse(const char *Text, size_t Length, S1_PLAN *Plan)
         if (!S1JsonGetString(Root, Path, &S, &SL) || SL != S1_SHA256_SIZE * 2 ||
             !S1HexDecode(S, Op->ExpectedSha256, S1_SHA256_SIZE))
             return S1_FALSE;
+        /* originalSha256 is REQUIRED for replace-file (owner decision,
+         * fail closed): the rollback re-hashes the backup against it, and
+         * a plan that drops or mismatches it must be refused, never
+         * silently restored. add-file has no backup and carries none. */
+        if (Op->Type == S1_OP_REPLACE_FILE)
+        {
+            snprintf(Path, sizeof(Path), "operations.%lu.originalSha256", (unsigned long)i);
+            if (!S1JsonGetString(Root, Path, &S, &SL) || SL != S1_SHA256_SIZE * 2 ||
+                !S1HexDecode(S, Op->OriginalSha256, S1_SHA256_SIZE))
+                return S1_FALSE;
+            Op->HasOriginal = S1_TRUE;
+        }
     }
     return S1_TRUE;
 }

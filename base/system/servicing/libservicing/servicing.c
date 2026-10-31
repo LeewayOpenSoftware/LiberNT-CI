@@ -932,6 +932,10 @@ static DWORD WritePlan(const CTX *c, const BOOL *pending)
             strcat(bk, "/");
             strcat(bk, seqs);
             err |= LnBufAppendJsonString(&b, bk);
+            /* REQUIRED (owner decision, fail closed): the boot applier
+             * re-hashes the backup against this before restoring. */
+            err |= LnBufAppendStr(&b, ",\"originalSha256\":");
+            err |= LnBufAppendJsonString(&b, oldSha);
         }
         else
             err |= LnBufAppendStr(&b, "null");

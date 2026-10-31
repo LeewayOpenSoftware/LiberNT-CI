@@ -90,6 +90,12 @@ typedef struct _S1_PLAN_OP
     char Source[S1_MAX_STRING];
     char Target[S1_MAX_STRING];
     uint8_t ExpectedSha256[S1_SHA256_SIZE];
+    /* SHA-256 of the file content the op replaces, captured when the plan
+     * was written. REQUIRED for replace-file (owner decision, fail closed):
+     * the applier re-hashes the backup against it before restoring, and a
+     * plan that drops or mismatches it is refused. */
+    uint8_t OriginalSha256[S1_SHA256_SIZE];
+    S1Bool HasOriginal;
 } S1_PLAN_OP;
 
 typedef struct _S1_PLAN

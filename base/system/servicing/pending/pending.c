@@ -946,19 +946,18 @@ S1ApplyOperation(
     HANDLE Probe;
 
     S1Widen(TargetW, Op->Target, MAX_PATH * 2);
-#ifndef S1_HOST_APPLIER
     {
         /* Plan targets are volume-root-relative ("\Windows\System32\...").
-         * The host shim maps them under the fake root; the native boot
-         * build must prefix the resolved volume or the open fails with
-         * STATUS_OBJECT_PATH_NOT_FOUND (Dwight's run 7). */
+         * Both builds prefix the volume root — the real one resolved from
+         * \SystemRoot at boot, the fake root under the host shim — so the
+         * host E2E composes paths exactly like the guest (the shim used to
+         * hide this, Dwight's run 7). */
         WCHAR FullTarget[MAX_PATH * 4];
 
         if (swprintf(FullTarget, RTL_NUMBER_OF(FullTarget), L"%s%s",
                      g_VolumeRoot, TargetW) > 0)
             wcscpy(TargetW, FullTarget);
     }
-#endif
     Status = S1BuildObjectPath(Op, ObjectPath, MAX_PATH * 2);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -976,8 +975,16 @@ S1ApplyOperation(
         if (NT_SUCCESS(Status))
         {
             HANDLE BackupProbe;
+            uint8_t Current[S1_SHA256_SIZE];
 
             NtClose(Probe);
+            /* The target must still be what the plan recorded: a drifted
+             * target means the backup would capture the wrong bytes and
+             * the later originalSha256 restore check would fail. */
+            if (Op->HasOriginal == S1_TRUE &&
+                (!NT_SUCCESS(S1HashFile(TargetW, Current)) ||
+                 memcmp(Current, Op->OriginalSha256, S1_SHA256_SIZE) != 0))
+                return STATUS_S1_HASH_MISMATCH;
             Status = S1NtOpen(BackupPath, FILE_READ_DATA, FILE_OPEN, &BackupProbe);
             if (NT_SUCCESS(Status))
                 NtClose(BackupProbe);
@@ -1049,7 +1056,6 @@ S1RevertOperation(
     HANDLE Probe;
 
     S1Widen(TargetW, Op->Target, MAX_PATH * 2);
-#ifndef S1_HOST_APPLIER
     {
         WCHAR FullTarget[MAX_PATH * 4];
 
@@ -1057,7 +1063,6 @@ S1RevertOperation(
                      g_VolumeRoot, TargetW) > 0)
             wcscpy(TargetW, FullTarget);
     }
-#endif
     Status = S1BuildBackupPath(Plan, Op, BackupPath, MAX_PATH * 2);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -1067,7 +1072,15 @@ S1RevertOperation(
         Status = S1NtOpen(BackupPath, FILE_READ_DATA, FILE_OPEN, &Probe);
         if (NT_SUCCESS(Status))
         {
+            uint8_t BackupHash[S1_SHA256_SIZE];
+
             NtClose(Probe);
+            /* Fail closed (owner decision): never restore a backup that
+             * does not hash to the original content recorded in the plan;
+             * a corrupt or swapped backup means the undo is untrusted. */
+            if (!NT_SUCCESS(S1HashFile(BackupPath, BackupHash)) ||
+                memcmp(BackupHash, Op->OriginalSha256, S1_SHA256_SIZE) != 0)
+                return STATUS_S1_HASH_MISMATCH;
             return S1MoveFileEx(BackupPath, TargetW, TRUE);
         }
         return STATUS_SUCCESS; /* nothing was backed up */
@@ -1118,11 +1131,25 @@ NtProcessStartup(
     S1Log(g_ServicingRoot);
 #endif
 
-    /* 1. No plan is a successful no-op. */
+    /* 1. No plan is a successful no-op — but say which no-op it is, so a
+     * vanished servicing tree does not look identical to a healthy idle
+     * boot (Pam's review: the failure modes must be distinguishable). */
     Status = S1ReadWholeFile(S1_PLAN_PATH, &PlanData, &PlanSize);
     if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
     {
+#ifndef S1_HOST_APPLIER
+        HANDLE RootProbe;
+
+        if (!NT_SUCCESS(S1NtOpen(S1_ROOT, FILE_READ_DATA, FILE_OPEN, &RootProbe)))
+            S1Log(L"S1: servicing tree is not installed, exit 0");
+        else
+        {
+            NtClose(RootProbe);
+            S1Log(L"S1: no plan, exit 0");
+        }
+#else
         S1Log(L"S1: no plan, exit 0");
+#endif
         NtTerminateProcess(NtCurrentProcess(), 0);
     }
     if (!NT_SUCCESS(Status))
@@ -1205,7 +1232,24 @@ NtProcessStartup(
         S1JournalOrHalt(&Journal, Plan.TransactionId, "rollback-prepared", -1,
                         "started", Reason);
         for (i = Plan.OperationCount; i > 0; i--)
-            S1RevertOperation(&Plan, &Plan.Operations[i - 1]);
+        {
+            OpStatus = S1RevertOperation(&Plan, &Plan.Operations[i - 1]);
+            if (!NT_SUCCESS(OpStatus))
+            {
+                WCHAR Line[96];
+
+                /* a failed revert (e.g. a backup that fails the
+                 * originalSha256 check) must not be masked as a clean
+                 * rollback: journal it and exit 1 (owner decision) */
+                swprintf(Line, RTL_NUMBER_OF(Line),
+                         L"S1: revert op %lu failed 0x%08lx, halting",
+                         (unsigned long)i, (unsigned long)OpStatus);
+                S1Log(Line);
+                S1JournalOrHalt(&Journal, Plan.TransactionId, "failed", -1,
+                                "failed", "0xE0000001");
+                NtTerminateProcess(NtCurrentProcess(), 1);
+            }
+        }
         S1JournalOrHalt(&Journal, Plan.TransactionId, "rolled-back", -1, "ok", NULL);
         Attempt.Attempt = 0;
         Attempt.FailureRecorded = S1_FALSE;
