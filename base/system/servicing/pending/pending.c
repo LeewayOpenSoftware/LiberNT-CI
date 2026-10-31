@@ -20,7 +20,9 @@
  * whole transaction from the backup, distinguishing a verifiable failure
  * (failureRecorded) from an unexpected reboot (lastResult "started" without
  * a closing entry). The process always exits 0 so a bad package can never
- * wedge the boot; recovery is this rule or the offline rescue CLI.
+ * wedge the boot; recovery is this rule or the offline rescue CLI. The one
+ * nonzero exit is an unwritable journal: the failure itself cannot be
+ * recorded, and a silently skipped entry is worse than a loud boot.
  *
  * Native only: ntdll plus the portable s1core. Never the kernel (stage 1).
  */
@@ -310,6 +312,7 @@ S1JournalWriterAppend(
     S1_SHA256_CTX Ctx;
     HANDLE Handle;
     NTSTATUS Status;
+    ULONG Try;
     IO_STATUS_BLOCK IoStatus;
     FILE_POSITION_INFORMATION PosInfo;
     FILE_STANDARD_INFORMATION StdInfo;
@@ -331,9 +334,24 @@ S1JournalWriterAppend(
     if (Len <= 0 || (size_t)Len >= sizeof(Entry))
         return STATUS_BUFFER_OVERFLOW;
 
-    Status = S1NtOpen(S1_JOURNAL_PATH, FILE_WRITE_DATA, FILE_OPEN_IF, &Handle);
-    if (!NT_SUCCESS(Status))
-        return Status;
+    /* Real-time scanners briefly open the journal with restrictive
+     * sharing; a boot-time writer must out-wait that instead of losing
+     * the entry. */
+    for (Try = 0; ; Try++)
+    {
+        Status = S1NtOpen(S1_JOURNAL_PATH, FILE_WRITE_DATA, FILE_OPEN_IF, &Handle);
+        if (NT_SUCCESS(Status))
+            break;
+        if ((Status != STATUS_SHARING_VIOLATION && Status != STATUS_LOCK_NOT_GRANTED) ||
+            Try + 1 >= 5)
+            return Status;
+        {
+            LARGE_INTEGER Delay;
+
+            Delay.QuadPart = -1000000; /* 100 ms */
+            NtDelayExecution(FALSE, &Delay);
+        }
+    }
     Status = NtQueryInformationFile(Handle, &IoStatus, &StdInfo, sizeof(StdInfo),
                                     FileStandardInformation);
     if (!NT_SUCCESS(Status))
@@ -376,6 +394,15 @@ S1JournalWriterAppend(
         return S1WriteFileAtomic(AnchorPath, AnchorTemp, Anchor, (ULONG)AnchorLen);
     }
 }
+
+/* A phase transition the journal cannot record is a broken audit chain,
+ * and the failure cannot be journaled either; the only honest signal
+ * left is a nonzero exit. */
+#define S1JournalOrHalt(j, tx, ph, op, res, err) \
+    do { \
+        if (!NT_SUCCESS(S1JournalWriterAppend((j), (tx), (ph), (op), (res), (err)))) \
+            NtTerminateProcess(NtCurrentProcess(), 1); \
+    } while (0)
 
 /* The chain is verified on read: load the journal, verify every link, and
  * seed the writer with the last intact entry. A broken chain turns the
@@ -792,7 +819,7 @@ NtProcessStartup(
         !S1PlanCheckTransactionId(&Plan))
     {
         S1JournalLoad(&Journal, &ChainIntact);
-        S1JournalWriterAppend(&Journal, "unknown", "verify", -1, "failed", "0xC0000001");
+        S1JournalOrHalt(&Journal, "unknown", "verify", -1, "failed", "0xC0000001");
         RtlFreeHeap(RtlGetProcessHeap(), 0, PlanData);
         NtTerminateProcess(NtCurrentProcess(), 0);
     }
@@ -804,7 +831,7 @@ NtProcessStartup(
     Status = S1VerifyPlanAgainstManifest(&Plan);
     if (!NT_SUCCESS(Status))
     {
-        S1JournalWriterAppend(&Journal, Plan.TransactionId, "verify", -1, "failed",
+        S1JournalOrHalt(&Journal, Plan.TransactionId, "verify", -1, "failed",
                               "0xC0000020");
         Attempt.Attempt = 1;
         Attempt.FailureRecorded = S1_TRUE;
@@ -817,7 +844,7 @@ NtProcessStartup(
         S1AttemptSave(&Attempt);
         NtTerminateProcess(NtCurrentProcess(), 0);
     }
-    S1JournalWriterAppend(&Journal, Plan.TransactionId, "verified", -1, "ok", NULL);
+    S1JournalOrHalt(&Journal, Plan.TransactionId, "verified", -1, "ok", NULL);
 
     /* 4. Boot attempt accounting, written and flushed before any work
      * (reconciliation with Meredith: a mid-run power cut must still count). */
@@ -838,11 +865,11 @@ NtProcessStartup(
         const char *Reason = (Attempt.FailureRecorded || strcmp(Attempt.LastResult, "started") == 0)
                             ? (Attempt.FailureRecorded ? "verifiable-failure" : "unexpected-reboot")
                             : "unexpected-reboot";
-        S1JournalWriterAppend(&Journal, Plan.TransactionId, "rollback-prepared", -1,
+        S1JournalOrHalt(&Journal, Plan.TransactionId, "rollback-prepared", -1,
                               "started", Reason);
         for (i = Plan.OperationCount; i > 0; i--)
             S1RevertOperation(&Plan, &Plan.Operations[i - 1]);
-        S1JournalWriterAppend(&Journal, Plan.TransactionId, "rolled-back", -1, "ok", NULL);
+        S1JournalOrHalt(&Journal, Plan.TransactionId, "rolled-back", -1, "ok", NULL);
         Attempt.Attempt = 0;
         Attempt.FailureRecorded = S1_FALSE;
         snprintf(Attempt.LastResult, sizeof(Attempt.LastResult), "%s", "none");
@@ -879,7 +906,7 @@ NtProcessStartup(
     }
 
     /* 6. Apply the plan; journal each step before the next. */
-    S1JournalWriterAppend(&Journal, Plan.TransactionId, "applying", -1, "started", NULL);
+    S1JournalOrHalt(&Journal, Plan.TransactionId, "applying", -1, "started", NULL);
     for (i = 0; i < Plan.OperationCount; i++)
     {
         OpStatus = S1ApplyOperation(&Plan, &Plan.Operations[i]);
@@ -891,21 +918,21 @@ NtProcessStartup(
                 i--;
                 S1RevertOperation(&Plan, &Plan.Operations[i]);
             }
-            S1JournalWriterAppend(&Journal, Plan.TransactionId, "failed", -1,
+            S1JournalOrHalt(&Journal, Plan.TransactionId, "failed", -1,
                                   "failed", "0xE0000001");
             Attempt.FailureRecorded = S1_TRUE;
             snprintf(Attempt.LastResult, sizeof(Attempt.LastResult), "%s", "failed");
             S1AttemptSave(&Attempt);
             NtTerminateProcess(NtCurrentProcess(), 0);
         }
-        S1JournalWriterAppend(&Journal, Plan.TransactionId, "applying",
+        S1JournalOrHalt(&Journal, Plan.TransactionId, "applying",
                               (int)Plan.Operations[i].Seq, "ok", NULL);
     }
 
     /* 7. Applied, not confirmed: confirmation requires the service health
      * check after the boot. The next boot without it consumes the attempt
      * already written in step 4. */
-    S1JournalWriterAppend(&Journal, Plan.TransactionId, "applied", -1, "ok", NULL);
+    S1JournalOrHalt(&Journal, Plan.TransactionId, "applied", -1, "ok", NULL);
     snprintf(Attempt.LastResult, sizeof(Attempt.LastResult), "%s", "applied");
     S1AttemptSave(&Attempt);
     (void)BackupDirProbe;
