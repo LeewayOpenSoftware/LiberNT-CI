@@ -93,6 +93,8 @@ CCabinetWindow::CCabinetWindow() :
     m_TabCount(0),
     m_ActiveTab(-1),
     m_TabBand(NULL),
+    m_CaptionHot(0),
+    m_CaptionDown(0),
     m_AddressBand(NULL),
     m_SearchBox(NULL),
     m_NavBar(NULL),
@@ -465,6 +467,143 @@ CCabinetWindow::CaptionButtonsWidth()
     return GetSystemMetricsForDpi(SM_CXSIZE, GetDpiForWindow(m_hwnd)) * 3;
 }
 
+/* The caption buttons live in the extended frame, which the compositor is
+ * expected to draw. When nothing draws them (no compositor) the window had
+ * no minimize, maximize or close, so the frame draws and hit-tests its own;
+ * under a compositor these pixels stay transparent and DwmDefWindowProc
+ * answers the hit tests first, so the two never fight. */
+BOOL
+CCabinetWindow::GetCaptionButton(int ht, RECT *rc)
+{
+    RECT client;
+    int index, button;
+
+    if (!ClientCaption())
+        return FALSE;
+    switch (ht)
+    {
+        case HTCLOSE: index = 0; break;
+        case HTMAXBUTTON: index = 1; break;
+        case HTMINBUTTON: index = 2; break;
+        default: return FALSE;
+    }
+    GetClientRect(m_hwnd, &client);
+    button = CaptionButtonsWidth() / 3;
+    rc->right = client.right - index * button;
+    rc->left = rc->right - button;
+    rc->top = 0;
+    rc->bottom = min(TabStripHeight(), Scale(32));
+    return TRUE;
+}
+
+int
+CCabinetWindow::CaptionButtonAt(POINT clientPt)
+{
+    static const int buttons[] = { HTCLOSE, HTMAXBUTTON, HTMINBUTTON };
+    RECT rc;
+
+    for (UINT i = 0; i < _countof(buttons); i++)
+    {
+        if (GetCaptionButton(buttons[i], &rc) && PtInRect(&rc, clientPt))
+            return buttons[i];
+    }
+    return 0;
+}
+
+void
+CCabinetWindow::SetCaptionState(int hot, int down)
+{
+    static const int buttons[] = { HTCLOSE, HTMAXBUTTON, HTMINBUTTON };
+    int oldHot = m_CaptionHot, oldDown = m_CaptionDown;
+    RECT rc;
+
+    m_CaptionHot = hot;
+    m_CaptionDown = down;
+    for (UINT i = 0; i < _countof(buttons); i++)
+    {
+        int ht = buttons[i];
+        if ((oldHot == ht) != (hot == ht) || (oldDown == ht) != (down == ht))
+        {
+            if (GetCaptionButton(ht, &rc))
+                InvalidateRect(m_hwnd, &rc, TRUE);
+        }
+    }
+}
+
+void
+CCabinetWindow::PaintCaptionButtons(HDC dc)
+{
+    static const int buttons[] = { HTMINBUTTON, HTMAXBUTTON, HTCLOSE };
+    RECT rc;
+    int stroke = max(1, Scale(1)), half = Scale(5);
+
+    for (UINT i = 0; i < _countof(buttons); i++)
+    {
+        int ht = buttons[i], cx, cy;
+        COLORREF fill = 0;
+        BOOL filled = FALSE;
+        HPEN pen, oldPen;
+
+        if (!GetCaptionButton(ht, &rc))
+            continue;
+        if (m_CaptionDown == ht && m_CaptionHot == ht)
+        {
+            fill = ht == HTCLOSE ? RGB(139, 10, 20) : RGB(90, 90, 90);
+            filled = TRUE;
+        }
+        else if (m_CaptionHot == ht)
+        {
+            fill = ht == HTCLOSE ? RGB(196, 43, 28) : RGB(60, 60, 60);
+            filled = TRUE;
+        }
+        if (filled)
+        {
+            HBRUSH brush = CreateSolidBrush(fill);
+            FillRect(dc, &rc, brush);
+            DeleteObject(brush);
+        }
+        cx = (rc.left + rc.right) / 2;
+        cy = (rc.top + rc.bottom) / 2;
+        pen = CreatePen(PS_SOLID, stroke, RGB(255, 255, 255));
+        oldPen = (HPEN)SelectObject(dc, pen);
+        switch (ht)
+        {
+            case HTMINBUTTON:
+                MoveToEx(dc, cx - half, cy, NULL);
+                LineTo(dc, cx + half + 1, cy);
+                break;
+            case HTMAXBUTTON:
+            {
+                HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
+                if (IsZoomed(m_hwnd))
+                {
+                    int d = Scale(2);
+                    Rectangle(dc, cx - half, cy - half + d, cx + half - d + 1, cy + half + 1);
+                    MoveToEx(dc, cx - half + d, cy - half + d, NULL);
+                    LineTo(dc, cx - half + d, cy - half);
+                    LineTo(dc, cx + half + 1, cy - half);
+                    LineTo(dc, cx + half + 1, cy + half - d + 1);
+                    LineTo(dc, cx + half - d + 1, cy + half - d + 1);
+                }
+                else
+                {
+                    Rectangle(dc, cx - half, cy - half, cx + half + 1, cy + half + 1);
+                }
+                SelectObject(dc, oldBrush);
+                break;
+            }
+            case HTCLOSE:
+                MoveToEx(dc, cx - half, cy - half, NULL);
+                LineTo(dc, cx + half + 1, cy + half + 1);
+                MoveToEx(dc, cx + half, cy - half, NULL);
+                LineTo(dc, cx - half - 1, cy + half + 1);
+                break;
+        }
+        SelectObject(dc, oldPen);
+        DeleteObject(pen);
+    }
+}
+
 void
 CCabinetWindow::PaintBackground(HDC dc)
 {
@@ -520,6 +659,7 @@ CCabinetWindow::PaintBackground(HDC dc)
         FillRect(dc, &line, brush);
         DeleteObject(brush);
     }
+    PaintCaptionButtons(dc);
 }
 
 void
@@ -3204,10 +3344,55 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
                     return HTTOPRIGHT;
                 return HTTOP;
             }
+            {
+                int button = CaptionButtonAt(pt);
+                if (button)
+                    return button;
+            }
             if (pt.y < TabStripHeight())
                 return HTCAPTION;
             return HTCLIENT;
         }
+        case WM_NCMOUSEMOVE:
+            if (wParam == HTCLOSE || wParam == HTMAXBUTTON || wParam == HTMINBUTTON)
+            {
+                TRACKMOUSEEVENT track = { sizeof(track), TME_LEAVE | TME_NONCLIENT, m_hwnd, 0 };
+                TrackMouseEvent(&track);
+                SetCaptionState((int)wParam, m_CaptionDown);
+            }
+            else
+            {
+                SetCaptionState(0, 0);
+            }
+            break;
+        case WM_NCMOUSELEAVE:
+            SetCaptionState(0, 0);
+            break;
+        case WM_NCLBUTTONDOWN:
+            if (wParam == HTCLOSE || wParam == HTMAXBUTTON || wParam == HTMINBUTTON)
+            {
+                SetCaptionState((int)wParam, (int)wParam);
+                return 0;
+            }
+            break;
+        case WM_NCLBUTTONUP:
+            if (wParam == HTCLOSE || wParam == HTMAXBUTTON || wParam == HTMINBUTTON)
+            {
+                BOOL pressed = m_CaptionDown == (int)wParam;
+                WPARAM command = wParam == HTCLOSE ? SC_CLOSE :
+                                 wParam == HTMINBUTTON ? SC_MINIMIZE :
+                                 IsZoomed(m_hwnd) ? SC_RESTORE : SC_MAXIMIZE;
+                SetCaptionState((int)wParam, 0);
+                if (pressed)
+                    PostMessageW(m_hwnd, WM_SYSCOMMAND, command, lParam);
+                return 0;
+            }
+            SetCaptionState(0, 0);
+            break;
+        case WM_NCLBUTTONDBLCLK:
+            if (wParam == HTCLOSE || wParam == HTMAXBUTTON || wParam == HTMINBUTTON)
+                return 0;
+            break;
         case WM_DWMCOMPOSITIONCHANGED:
             ExtendFrame();
             SetWindowPos(m_hwnd, NULL, 0, 0, 0, 0,
