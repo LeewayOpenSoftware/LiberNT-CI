@@ -166,6 +166,10 @@ private:
     void FitCommandBar(int width);
     void UpdateViewToggles();
     int CaptionButtonsWidth();
+    BOOL GetCaptionButton(int ht, RECT *rc);
+    int CaptionButtonAt(POINT clientPt);
+    void PaintCaptionButtons(HDC dc);
+    void SetCaptionState(int hot, int down);
     BOOL ClientCaption();
     int TabStripHeight() const { return Scale(40); }
     int AddressBottom() const { return TabStripHeight() + Scale(48); }
@@ -176,6 +180,8 @@ private:
     int m_TabCount;
     int m_ActiveTab;
     CCabinetTabBand *m_TabBand;
+    int m_CaptionHot;
+    int m_CaptionDown;
     CCabinetAddressBand *m_AddressBand;
     CCabinetSearchBox *m_SearchBox;
     HWND m_NavBar;

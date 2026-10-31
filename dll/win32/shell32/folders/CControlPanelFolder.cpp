@@ -1024,14 +1024,19 @@ HRESULT WINAPI CCPLItemMenu::InvokeCommand(LPCMINVOKECOMMANDINFO lpcmi)
     if (lpcmi->lpVerb == MAKEINTRESOURCEA(0))
     {
         /* Hardcode the command here; Executing a cpl file would be fine but we also need to run things like console.dll */
-        WCHAR wszParams[MAX_PATH];
+        WCHAR wszParams[MAX_PATH * 2];
         PCWSTR wszFile = L"rundll32.exe";
-        PCWSTR wszFormat = L"shell32.dll,Control_RunDLL %s,%s";
+        PCWSTR wszFormat = L"shell32.dll,Control_RunDLL \"%s\",%s";
 
-        wsprintfW(wszParams, wszFormat, pCPanel->szName, pCPanel->szName + pCPanel->offsDispName);
+        /* The path is quoted: an unquoted path with spaces was split by Control_RunDLL and the applet silently failed */
+        if (FAILED(StringCchPrintfW(wszParams, _countof(wszParams), wszFormat,
+                                    pCPanel->szName, pCPanel->szName + pCPanel->offsDispName)))
+            return E_FAIL;
 
         /* Note: we pass the applet name to Control_RunDLL to distinguish between multiple applets in one .cpl file */
-        ShellExecuteW(NULL, NULL, wszFile, wszParams, NULL, 0);
+        INT_PTR nResult = (INT_PTR)ShellExecuteW(lpcmi->hwnd, NULL, wszFile, wszParams, NULL, 0);
+        if (nResult <= 32)
+            return HRESULT_FROM_WIN32(nResult ? nResult : ERROR_GEN_FAILURE);
     }
     else if (lpcmi->lpVerb == MAKEINTRESOURCEA(1)) //FIXME
     {
