@@ -285,7 +285,8 @@ BsValidateTargetRelPath(
      * the installer out of the rest of the profile. */
     if (_wcsnicmp(Relative, L"Windows\\", 8) != 0 &&
         _wcsnicmp(Relative, L"LiberNT\\", 8) != 0 &&
-        _wcsnicmp(Relative, L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\", 52) != 0)
+        _wcsnicmp(Relative, L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\",
+                  RTL_NUMBER_OF(L"ProgramData\\Microsoft\\Windows\\Start Menu\\Programs\\") - 1) != 0)
         return ERROR_BAD_PATHNAME;
     return BsTargetValidateReal(Target, Relative);
 }
@@ -412,7 +413,7 @@ BsTargetInitImage(
             return Error;
         FinalLen = (DWORD)wcslen(FinalRoot);
         WinLen = (DWORD)wcslen(WinFinal);
-        if (FinalLen <= 3 && FinalRoot[1] == L':')
+        if (FinalLen >= 2 && FinalLen <= 3 && FinalRoot[1] == L':')
             return ERROR_NOT_SUPPORTED; /* canonical volume root */
         if (_wcsicmp(FinalRoot, WinFinal) == 0)
             return ERROR_NOT_SUPPORTED; /* the live Windows directory */

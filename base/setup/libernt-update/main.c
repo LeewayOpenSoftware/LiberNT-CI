@@ -373,7 +373,7 @@ BsInstallShortcuts(
             swprintf(LinkPath, RTL_NUMBER_OF(LinkPath), L"%s\\%s",
                      ProgramsDir, Shortcut->Name) < 0)
             return ERROR_FILENAME_EXCED_RANGE;
-        if (swprintf(TargetPath, RTL_NUMBER_OF(TargetPath), L"%s%s",
+        if (swprintf(TargetPath, RTL_NUMBER_OF(TargetPath), L"%s\\%s",
                      Target->Root, Shortcut->Target) < 0)
             return ERROR_FILENAME_EXCED_RANGE;
         if (BsValidateTargetRelPath(Target, Shortcut->Target) != ERROR_SUCCESS)
