@@ -507,8 +507,23 @@ BsInstall(
     }
     if (BsBuildTargetPath(Dest, RTL_NUMBER_OF(Dest), Target, L"LiberNT") != ERROR_SUCCESS)
         return ERROR_FILENAME_EXCED_RANGE;
-    if (!GetDiskFreeSpaceExW(Target->Root, NULL, NULL, (ULARGE_INTEGER *)&FreeBytes))
-        return GetLastError();
+    if (Target->IsImage)
+    {
+        if (!GetDiskFreeSpaceExW(Target->Root, NULL, NULL, (ULARGE_INTEGER *)&FreeBytes))
+            return GetLastError();
+    }
+    else
+    {
+        WCHAR VolumeRoot[4];
+
+        /* Same "C:" vs "C:\" contract as GetVolumeInformationW above. */
+        VolumeRoot[0] = Target->Root[0];
+        VolumeRoot[1] = L':';
+        VolumeRoot[2] = L'\\';
+        VolumeRoot[3] = 0;
+        if (!GetDiskFreeSpaceExW(VolumeRoot, NULL, NULL, (ULARGE_INTEGER *)&FreeBytes))
+            return GetLastError();
+    }
     if (FreeBytes < Bundle.TotalBytes * 4 || FreeBytes < 32ull * 1024 * 1024)
     {
         BsPrint(L"target: not enough free space (%llu bytes free)\n",

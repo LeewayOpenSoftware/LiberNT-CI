@@ -245,6 +245,14 @@ BsTargetValidateReal(
         p = e + 1;
     }
 
+    /* Everything below guards the offline --image flow: it proves the image
+     * root is not the live system in disguise (Pam review E1). Online, the
+     * root IS the live system drive ("C:"), BsFinalPath rejects a bare
+     * drive path, and the canonical-name comparison has no meaning — the
+     * prefix allowlist in BsValidateTargetRelPath is the whole check. */
+    if (!Target->IsImage)
+        return ERROR_SUCCESS;
+
     wcscpy(RootNoSlash, Target->Root);
     RootLen = wcslen(RootNoSlash);
     if (RootLen > 3 && RootNoSlash[RootLen - 1] == L'\\')
@@ -346,9 +354,20 @@ BsTargetInitOnline(
     Target->Root[1] = L':';
     Target->Root[2] = 0;
 
-    if (!GetVolumeInformationW(Target->Root, NULL, 0, NULL, NULL, NULL,
-                               FsName, RTL_NUMBER_OF(FsName)))
-        return GetLastError();
+    /* GetVolumeInformationW requires the root WITH the trailing backslash
+     * ("C:\"); "C:" alone fails with ERROR_INVALID_NAME. Root itself stays
+     * backslash-less: BsBuildTargetPath supplies the separator. */
+    {
+        WCHAR VolumeRoot[4];
+
+        VolumeRoot[0] = Target->Root[0];
+        VolumeRoot[1] = L':';
+        VolumeRoot[2] = L'\\';
+        VolumeRoot[3] = 0;
+        if (!GetVolumeInformationW(VolumeRoot, NULL, 0, NULL, NULL, NULL,
+                                   FsName, RTL_NUMBER_OF(FsName)))
+            return GetLastError();
+    }
     if (wcscmp(FsName, L"NTFS") != 0)
         return ERROR_NOT_SUPPORTED; /* DACL protection requires NTFS */
 
