@@ -571,14 +571,14 @@ static BOOL MoveReplace(const LN_TARGET *t, const WCHAR *from, const WCHAR *to)
 }
 
 /* Replaces under a system directory never apply inline: the old NTFS replace-rename ignores share
- * semantics, so the lock probe cannot be trusted there and the target may be a mapped image. The roots
- * are relative and configurable with LNUPDATE_SYSTEM_DIRS (semicolon-separated; empty disables); the
- * default is "Windows". */
+ * semantics, so the lock probe cannot be trusted there and the target may be a mapped image. The
+ * built-in roots are the ones the target white list allows; LNUPDATE_SYSTEM_DIRS (semicolon-separated)
+ * adds roots in production, and only the test build may replace or empty the list. */
 static BOOL
 IsUnderSystemDir(const WCHAR *target)
 {
-    static const WCHAR kDefault[] = L"Windows";
-    WCHAR env[300];
+    static const WCHAR kDefault[] = L"Windows;Program Files;Program Files (x86)";
+    WCHAR env[300], combined[RTL_NUMBER_OF(kDefault) + 300];
     const WCHAR *list, *p;
     size_t firstLen;
     DWORD n;
@@ -590,12 +590,28 @@ IsUnderSystemDir(const WCHAR *target)
         return FALSE;
     SetLastError(ERROR_SUCCESS);
     n = GetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", env, RTL_NUMBER_OF(env));
-    if (n > 0 && n < RTL_NUMBER_OF(env))
-        list = env;                          /* set: a list, maybe empty (no system dirs) */
-    else if (n == 0 && GetLastError() != ERROR_ENVVAR_NOT_FOUND)
-        list = env;                          /* set to the empty string */
+    if (n == 0 && GetLastError() == ERROR_ENVVAR_NOT_FOUND)
+        list = kDefault;                     /* unset */
+#ifdef LN_TESTING
+    else if (n < RTL_NUMBER_OF(env))
+        list = env;                          /* the test build gets exact control, incl. an empty list */
+#endif
+    else if (n == 0 || n >= RTL_NUMBER_OF(env))
+        list = kDefault;                     /* set but empty or overlong: the built-in roots stay */
     else
-        list = kDefault;                     /* unset or overlong: the safe default */
+    {
+        size_t dl = wcslen(kDefault), el = wcslen(env);
+
+        if (dl + 1 + el < RTL_NUMBER_OF(combined))
+        {
+            memcpy(combined, kDefault, dl * sizeof(WCHAR));
+            combined[dl] = L';';
+            memcpy(combined + dl + 1, env, (el + 1) * sizeof(WCHAR));
+            list = combined;
+        }
+        else
+            list = kDefault;
+    }
     for (p = list; ; )
     {
         const WCHAR *end = wcschr(p, L';');
@@ -651,7 +667,8 @@ static DWORD ApplyItem(const CTX *c, const LN_ITEM *it, BOOL *pending)
     if (!strcmp(cur, it->sha256))
         goto verify;                                    /* already in place (resumed transaction) */
 
-    if ((c->t->mode == LnTargetOnline || TEST_LOCKED_AS_PENDING) && IsUnderSystemDir(it->target))
+    /* only an existing file can be a mapped image: a brand-new file (add-file) applies inline */
+    if ((c->t->mode == LnTargetOnline || TEST_LOCKED_AS_PENDING) && cur[0] && IsUnderSystemDir(it->target))
     {
         *pending = TRUE;
         goto out;

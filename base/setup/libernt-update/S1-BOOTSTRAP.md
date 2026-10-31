@@ -163,6 +163,11 @@ servicio → self-test).
 ## Límites conocidos (etapa 1)
 
 - El lock de volumen exclusivo en `--image` no está activado (TODO arriba).
+- Un paquete mixto (items fuera de los directorios de sistema aplicados en
+  línea + items de sistema diferidos al arranque) queda **parcialmente
+  aplicado** hasta el reinicio, igual que la rama "destino en uso". La regla
+  de ruta del engine diferente a boot todo reemplazo de un archivo existente
+  bajo `Windows`, `Program Files` o `Program Files (x86)`.
 - El registro del servicio solo existe online; offline queda el stub
   declarado (DESIGN §9: el modo offline no necesita el servicio).
 - El bootstrap escribe el log en `Servicing\logs\bootstrap.log` desde que el

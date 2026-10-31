@@ -1378,6 +1378,22 @@ TestSystemDefer(void)
     CHECK(FileIs(target, "old content"));
     free(target);
 
+    /* a brand-new file under \Windows is an add-file: nothing can hold it, so it applies inline */
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", NULL);
+    CHECK(OpenImage(&t, L"sysdefer5"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    CHECK(!LnPathExists(target));
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CHECK(!reboot);
+    CHECK(FileIs(target, "version one"));                       /* created inline */
+    free(target);
+
     SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"");   /* restore the suite default */
 }
 static LONG WINAPI CrashReport(EXCEPTION_POINTERS *ep)
