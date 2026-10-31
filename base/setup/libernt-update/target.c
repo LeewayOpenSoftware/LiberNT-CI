@@ -207,7 +207,8 @@ BsTargetValidateReal(
     _In_ PCWSTR Relative)
 {
     WCHAR Cur[BS_MAX_PATH_BUF], Deepest[BS_MAX_PATH_BUF];
-    WCHAR FinalRoot[BS_MAX_PATH_BUF], FinalDeep[BS_MAX_PATH_BUF], Expect[BS_MAX_PATH_BUF];
+    WCHAR FinalRoot[BS_MAX_PATH_BUF] = { 0 }, FinalDeep[BS_MAX_PATH_BUF] = { 0 };
+    WCHAR Expect[BS_MAX_PATH_BUF];
     WCHAR RootNoSlash[BS_MAX_PATH_BUF];
     PCWSTR p = Relative;
     DWORD Error;
