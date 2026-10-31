@@ -908,6 +908,15 @@ static DWORD WritePlan(const CTX *c, const BOOL *pending)
                 return HashErr;
             }
         }
+        else
+        {
+            /* LnTargetFile NULL means OOM or an invalid target path; the
+             * item must not fall through as an unhashed add-file either
+             * (Pam's residual note on the H1 re-check). */
+            LnBufFree(&b);
+            free(path);
+            return ERROR_NOT_ENOUGH_MEMORY;
+        }
 
         err |= LnBufAppendStr(&b, "{\"seq\":");
         err |= LnBufAppendStr(&b, idx);
