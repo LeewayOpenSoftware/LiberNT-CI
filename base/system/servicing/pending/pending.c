@@ -482,6 +482,10 @@ typedef struct _S1_JOURNAL_WRITER
  * entry, so the open is retried generously. */
 #define S1_JOURNAL_APPEND_ATTEMPTS 25
 
+#ifndef S1_HOST_APPLIER
+static VOID S1Log(_In_ PCWSTR Msg);
+#endif
+
 static NTSTATUS
 S1JournalWriterAppend(
     _Inout_ S1_JOURNAL_WRITER *Writer,
