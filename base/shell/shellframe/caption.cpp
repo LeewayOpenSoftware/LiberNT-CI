@@ -57,6 +57,29 @@ CaptionButtonBounds(const RECT &client, CaptionButton button, int dpi)
     return rc;
 }
 
+/* The compositor and the system caption draw the buttons through this uxtheme entry point, so
+ * the frame buttons look like those of every other window. Index order: close, maximize, minimize. */
+typedef BOOL (WINAPI *PFN_THEME_DRAW_CAPTION_BUTTON)(HDC, const RECT *, UINT, ULONG, BOOL, BOOL);
+
+static PFN_THEME_DRAW_CAPTION_BUTTON
+GetThemeDrawCaptionButton()
+{
+    static PFN_THEME_DRAW_CAPTION_BUTTON fn;
+    static bool loaded;
+
+    if (!loaded)
+    {
+        HMODULE module = GetModuleHandleW(L"uxtheme.dll");
+
+        if (!module)
+            module = LoadLibraryW(L"uxtheme.dll");
+        if (module)
+            fn = (PFN_THEME_DRAW_CAPTION_BUTTON)GetProcAddress(module, "ThemeDwmDrawCaptionButton");
+        loaded = true;
+    }
+    return fn;
+}
+
 void
 DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool hot, bool pressed, bool active,
                   bool zoomed)
@@ -65,6 +88,7 @@ DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool
     BOOL drawn = FALSE;
     HTHEME theme;
     RECT draw = rc;
+    PFN_THEME_DRAW_CAPTION_BUTTON themeDraw = GetThemeDrawCaptionButton();
 
     switch (button)
     {
@@ -83,14 +107,20 @@ DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool
         default:
             return;
     }
+
+    if (themeDraw && IsAppThemed())
+    {
+        UINT index = button == CaptionButton::Close ? 0 : button == CaptionButton::Maximize ? 1 : 2;
+        ULONG bits = (hot ? (1u << index) : 0) | (pressed ? (1u << (index + 3)) : 0) | (zoomed ? 0x200u : 0);
+
+        drawn = themeDraw(hdc, &draw, index, bits, active, FALSE);
+    }
+
     /* The states of every caption button part are numbered alike */
     state = pressed ? 3 : hot ? 2 : active ? 1 : 5;
 
-    /* The non-client theme is what the system caption and the compositor draw the buttons with; the plain
-     * WINDOW class of a control is another variant with flat glyphs and no button face. */
-    theme = IsAppThemed() ? OpenThemeDataEx(hwnd, L"WINDOW", OTD_NONCLIENT) : NULL;
-    if (!theme && IsAppThemed())
-        theme = OpenThemeData(hwnd, L"WINDOW");
+    /* No window handle: opening the theme for one would attach it to the window as its own */
+    theme = (!drawn && IsAppThemed()) ? OpenThemeDataEx(NULL, L"WINDOW", OTD_NONCLIENT) : NULL;
     if (theme)
     {
         if (IsThemePartDefined(theme, part, state) || IsThemePartDefined(theme, part, 1))
