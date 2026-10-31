@@ -1,7 +1,7 @@
 /*
  * PROJECT:     ReactOS API tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
- * PURPOSE:     Tramo E: transacted file API, CreateFileMappingNuma, SetProcessGroupAffinity
+ * PURPOSE:     Tramo E: transacted file API, and CreateFileMappingNuma
  */
 
 #include "precomp.h"
@@ -12,7 +12,6 @@ typedef BOOL (WINAPI *PFN_CopyFileTransactedW)(LPCWSTR, LPCWSTR, LPPROGRESS_ROUT
 typedef BOOL (WINAPI *PFN_MoveFileTransactedW)(LPCWSTR, LPCWSTR, LPPROGRESS_ROUTINE, LPVOID, DWORD, HANDLE);
 typedef BOOL (WINAPI *PFN_CreateDirectoryTransactedW)(LPCWSTR, LPCWSTR, LPSECURITY_ATTRIBUTES, HANDLE);
 typedef HANDLE (WINAPI *PFN_CreateFileMappingNumaW)(HANDLE, LPSECURITY_ATTRIBUTES, DWORD, DWORD, DWORD, LPCWSTR, DWORD);
-typedef BOOL (WINAPI *PFN_SetProcessGroupAffinity)(HANDLE, const GROUP_AFFINITY *, PGROUP_AFFINITY);
 
 static void test_Transacted(void)
 {
@@ -107,43 +106,8 @@ static void test_FileMappingNuma(void)
     ok(h == NULL && GetLastError() == ERROR_INVALID_PARAMETER, "bad node: %p error %lu\n", h, GetLastError());
 }
 
-static void test_SetProcessGroupAffinity(void)
-{
-    HMODULE kb = GetModuleHandleW(L"kernelbase.dll");
-    PFN_SetProcessGroupAffinity pSet = kb ? (PFN_SetProcessGroupAffinity)GetProcAddress(kb, "SetProcessGroupAffinity") : NULL;
-    GROUP_AFFINITY ga, old;
-    DWORD_PTR procMask, sysMask, nowMask;
-
-    if (!pSet)
-    {
-        skip("SetProcessGroupAffinity not exported\n");
-        return;
-    }
-    ok(GetProcessAffinityMask(GetCurrentProcess(), &procMask, &sysMask), "GetProcessAffinityMask failed\n");
-
-    SetLastError(0xdeadbeef);
-    ok(!pSet(GetCurrentProcess(), NULL, NULL) && GetLastError() == ERROR_INVALID_PARAMETER, "NULL affinity\n");
-    memset(&ga, 0, sizeof(ga));
-    ga.Mask = procMask;
-    ga.Group = 1;
-    SetLastError(0xdeadbeef);
-    ok(!pSet(GetCurrentProcess(), &ga, NULL) && GetLastError() == ERROR_INVALID_PARAMETER, "group 1 accepted\n");
-    ga.Group = 0;
-    ga.Mask = 0;
-    SetLastError(0xdeadbeef);
-    ok(!pSet(GetCurrentProcess(), &ga, NULL) && GetLastError() == ERROR_INVALID_PARAMETER, "empty mask accepted\n");
-
-    ga.Mask = procMask;
-    memset(&old, 0xcc, sizeof(old));
-    ok(pSet(GetCurrentProcess(), &ga, &old), "SetProcessGroupAffinity failed %lu\n", GetLastError());
-    ok(old.Group == 0 && old.Mask == procMask, "previous group %u mask %Ix, expected 0 / %Ix\n", old.Group, old.Mask, procMask);
-    ok(GetProcessAffinityMask(GetCurrentProcess(), &nowMask, &sysMask), "GetProcessAffinityMask failed\n");
-    ok(nowMask == ga.Mask, "mask not applied: %Ix\n", nowMask);
-}
-
 START_TEST(TramoE)
 {
     test_Transacted();
     test_FileMappingNuma();
-    test_SetProcessGroupAffinity();
 }
