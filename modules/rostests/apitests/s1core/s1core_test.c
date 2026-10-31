@@ -143,6 +143,24 @@ TestPlanAndSignature(const char *FixtureDir)
             "\"component\":\"c\",\"source\":\"s\",\"target\":\"t\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}]}";
         CHECK(!S1PlanParse(BadType, sizeof(BadType) - 1, &Plan), "unknown operation type rejected");
     }
+    {
+        static const char NoOriginal[] =
+            "{\"schema\":1,\"transactionId\":\"t\",\"target\":{\"machineId\":\"m\",\"arch\":\"a\"},"
+            "\"package\":{\"id\":\"p\",\"version\":\"v\",\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},"
+            "\"operation\":\"install\",\"operations\":[{\"seq\":1,\"type\":\"replace-file\","
+            "\"component\":\"c\",\"source\":\"s\",\"target\":\"t\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}]}";
+        CHECK(!S1PlanParse(NoOriginal, sizeof(NoOriginal) - 1, &Plan),
+              "replace-file without originalSha256 rejected (required, fail closed)");
+    }
+    {
+        static const char AddNoOriginal[] =
+            "{\"schema\":1,\"transactionId\":\"t\",\"target\":{\"machineId\":\"m\",\"arch\":\"a\"},"
+            "\"package\":{\"id\":\"p\",\"version\":\"v\",\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},"
+            "\"operation\":\"install\",\"operations\":[{\"seq\":1,\"type\":\"add-file\","
+            "\"component\":\"c\",\"source\":\"s\",\"target\":\"t\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"}]}";
+        CHECK(S1PlanParse(AddNoOriginal, sizeof(AddNoOriginal) - 1, &Plan),
+              "add-file without originalSha256 accepted (no backup)");
+    }
     free(PlanText);
     free(Sig);
     return 0;

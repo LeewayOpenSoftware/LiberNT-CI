@@ -28,6 +28,7 @@ WCHAR g_S1PlanPath[MAX_PATH * 2];
 WCHAR g_S1AttemptPath[MAX_PATH * 2];
 WCHAR g_S1JournalPath[MAX_PATH * 2];
 WCHAR g_S1BackupPath[MAX_PATH * 2];
+WCHAR g_VolumeRoot[MAX_PATH * 2];
 
 #include "../pending.c"
 
