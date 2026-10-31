@@ -959,6 +959,7 @@ void WINAPI RunDLL_CallEntry16( DWORD proc, HWND hwnd, HINSTANCE inst,
 
 #include "cpanel.h"
 #include "shell32_main.h"
+#include "shresdef.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(shlctrl);
 
@@ -977,6 +978,10 @@ void Control_UnloadApplet(CPlApplet* applet)
     HeapFree(GetProcessHeap(), 0, applet->cmd);
     HeapFree(GetProcessHeap(), 0, applet);
 }
+
+/* Why the last Control_LoadApplet failed: the caller (running in rundll32)
+ * has no other way to tell the user, and used to fail silently. */
+static DWORD g_dwLoadAppletError = 0;
 
 CPlApplet*	Control_LoadApplet(HWND hWnd, LPCWSTR cmd, CPanel* panel)
 {
@@ -1000,6 +1005,7 @@ CPlApplet*	Control_LoadApplet(HWND hWnd, LPCWSTR cmd, CPanel* panel)
     {
         if (!(applet->cmd = HeapAlloc(GetProcessHeap(), 0, (len+1) * sizeof(WCHAR))))
         {
+            g_dwLoadAppletError = ERROR_NOT_ENOUGH_MEMORY;
             WARN("Cannot allocate memory for applet path\n");
             goto theError;
         }
@@ -1007,10 +1013,12 @@ CPlApplet*	Control_LoadApplet(HWND hWnd, LPCWSTR cmd, CPanel* panel)
     }
     else
     {
+        g_dwLoadAppletError = ERROR_BAD_PATHNAME;
         WARN("Cannot expand applet path\n");
         goto theError;
     }
 
+    g_dwLoadAppletError = 0;
     applet->hWnd = hWnd;
 
 #ifdef __REACTOS__
@@ -1024,18 +1032,22 @@ CPlApplet*	Control_LoadApplet(HWND hWnd, LPCWSTR cmd, CPanel* panel)
 #endif
 
     if (!(applet->hModule = LoadLibraryW(applet->cmd))) {
+        g_dwLoadAppletError = GetLastError();
         WARN("Cannot load control panel applet %s\n", debugstr_w(applet->cmd));
 	goto theError;
     }
     if (!(applet->proc = (APPLET_PROC)GetProcAddress(applet->hModule, "CPlApplet"))) {
+        g_dwLoadAppletError = ERROR_PROC_NOT_FOUND;
         WARN("Not a valid control panel applet %s\n", debugstr_w(applet->cmd));
 	goto theError;
     }
     if (!applet->proc(hWnd, CPL_INIT, 0L, 0L)) {
+        g_dwLoadAppletError = ERROR_GEN_FAILURE;
         WARN("Init of applet has failed\n");
 	goto theError;
     }
     if ((applet->count = applet->proc(hWnd, CPL_GETCOUNT, 0L, 0L)) == 0) {
+        g_dwLoadAppletError = ERROR_NOT_FOUND;
         WARN("No subprogram in applet\n");
         applet->proc(applet->hWnd, CPL_EXIT, 0, 0);
 	goto theError;
@@ -1786,6 +1798,23 @@ Control_ShowAppletInTaskbar(CPlApplet* applet, UINT index)
 
 #endif /* __REACTOS__ */
 
+#ifdef __REACTOS__
+/* Tell the user that an applet could not be opened (shown by rundll32). */
+static void Control_ShowLoadError(HWND hWnd, LPCWSTR pszCpl)
+{
+    WCHAR szTitle[80], szReason[256], szMsg[MAX_PATH + 320];
+    DWORD dwError = g_dwLoadAppletError ? g_dwLoadAppletError : ERROR_GEN_FAILURE;
+
+    if (!LoadStringW(shell32_hInstance, IDS_CONTROLPANEL, szTitle, _countof(szTitle)))
+        szTitle[0] = UNICODE_NULL;
+    if (!FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+                        NULL, dwError, 0, szReason, _countof(szReason), NULL))
+        szReason[0] = UNICODE_NULL;
+    StringCchPrintfW(szMsg, _countof(szMsg), L"%s\n\n%s\n(0x%08lX)", pszCpl, szReason, dwError);
+    MessageBoxW(hWnd, szMsg, szTitle, MB_ICONERROR | MB_OK);
+}
+#endif
+
 static	void	Control_DoLaunch(CPanel* panel, HWND hWnd, LPCWSTR wszCmd)
    /* forms to parse:
     *	foo.cpl,@sp,str
@@ -2085,6 +2114,10 @@ static	void	Control_DoLaunch(CPanel* panel, HWND hWnd, LPCWSTR wszCmd)
 
         if (bActivated)
             DeactivateActCtx(0, cookie);
+    }
+    else
+    {
+        Control_ShowLoadError(hWnd, buffer);
     }
 
     HeapFree(GetProcessHeap(), 0, buffer);
