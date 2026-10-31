@@ -20,6 +20,10 @@ typedef struct _BS_REG_SESSION
     BOOL Loaded;
 } BS_REG_SESSION;
 
+static VOID
+BsRegCloseSm(
+    _Inout_ BS_REG_SESSION *Session);
+
 static DWORD
 BsRegOpenSm(
     _Inout_ BS_REG_SESSION *Session,
@@ -30,7 +34,7 @@ BsRegOpenSm(
     WCHAR ControlSet[64];
     DWORD Current = 1, Size;
     LONG Ret;
-    DWORD Error;
+    DWORD Error = ERROR_SUCCESS;
 
     memset(Session, 0, sizeof(*Session));
     Session->Target = Target;
@@ -56,15 +60,28 @@ BsRegOpenSm(
             return Ret;
         Session->Loaded = TRUE;
         Session->Machine = NULL;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                          L"LiberNTUpdateBootstrap\\Select", 0, KEY_READ,
-                          &Session->Machine) == ERROR_SUCCESS)
+
+        /* Single exit below: every failure after RegLoadKeyW unloads the
+         * hive, so an error never leaves the file locked for the next run
+         * (Pam review B5). An unreadable Select\\Current or a missing
+         * control set is an error, not a silent default. */
+        Ret = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                            L"LiberNTUpdateBootstrap\\Select", 0, KEY_READ,
+                            &Session->Machine);
+        if (Ret != ERROR_SUCCESS)
         {
-            Size = sizeof(Current);
-            if (RegQueryValueExW(Session->Machine, L"Current", NULL, NULL,
-                                 (BYTE *)&Current, &Size) != ERROR_SUCCESS)
-                Current = 1;
-            RegCloseKey(Session->Machine);
+            Error = Ret;
+            goto unload;
+        }
+        Size = sizeof(Current);
+        Ret = RegQueryValueExW(Session->Machine, L"Current", NULL, NULL,
+                               (BYTE *)&Current, &Size);
+        RegCloseKey(Session->Machine);
+        Session->Machine = NULL;
+        if (Ret != ERROR_SUCCESS)
+        {
+            Error = Ret;
+            goto unload;
         }
         swprintf(ControlSet, RTL_NUMBER_OF(ControlSet),
                  L"LiberNTUpdateBootstrap\\ControlSet%03lu", (unsigned long)Current);
@@ -72,11 +89,21 @@ BsRegOpenSm(
 
     if (swprintf(HivePath, RTL_NUMBER_OF(HivePath),
                  L"%s\\Control\\Session Manager", ControlSet) < 0)
-        return ERROR_FILENAME_EXCED_RANGE;
+    {
+        Error = ERROR_FILENAME_EXCED_RANGE;
+        goto unload;
+    }
     Ret = RegOpenKeyExW(HKEY_LOCAL_MACHINE, HivePath, 0, Sam, &Session->SmKey);
     if (Ret != ERROR_SUCCESS)
-        return Ret;
+    {
+        Error = Ret;
+        goto unload;
+    }
     return ERROR_SUCCESS;
+
+unload:
+    BsRegCloseSm(Session);
+    return Error;
 }
 
 static VOID

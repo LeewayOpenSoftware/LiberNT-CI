@@ -84,41 +84,55 @@ BsInventorySave(
     _In_ const BS_TARGET *Target,
     _In_ const BS_INVENTORY *Inventory)
 {
-    WCHAR Path[BS_MAX_PATH_BUF];
-    WCHAR Json[8192], *Cursor;
+    WCHAR Path[BS_MAX_PATH_BUF], Temp[BS_MAX_PATH_BUF];
+    char Json[8192], *Cursor;
     HANDLE Handle;
     DWORD Written;
     ULONG i;
 
     if (BsBuildTargetPath(Path, RTL_NUMBER_OF(Path), Target, BS_INSTALLED_JSON) != ERROR_SUCCESS)
         return ERROR_FILENAME_EXCED_RANGE;
+    if (swprintf(Temp, RTL_NUMBER_OF(Temp), L"%s.tmp", Path) < 0)
+        return ERROR_FILENAME_EXCED_RANGE;
+
+    /* Narrow UTF-8, exactly what BsInventoryLoad parses back, written
+     * atomically through a temp file (Pam review note). */
     Cursor = Json;
-    Cursor += swprintf(Cursor, RTL_NUMBER_OF(Json), L"{\"schema\":1,\"version\":\"");
-    Cursor += swprintf(Cursor, RTL_NUMBER_OF(Json) - (Cursor - Json), L"%s", BS_VERSION);
-    Cursor += swprintf(Cursor, RTL_NUMBER_OF(Json) - (Cursor - Json),
-                       L"\",\"service\":\"%s\",\"bootExecute\":%s,\"files\":[",
-                       Inventory->ServiceState,
-                       Inventory->BootExecute ? L"true" : L"false");
+    Cursor += snprintf(Cursor, sizeof(Json) - (Cursor - Json),
+                       "{\"schema\":1,\"version\":\"%S\",\"service\":\"%ls\",\"bootExecute\":%s,\"manifest\":\"%s\",\"files\":[",
+                       BS_VERSION, Inventory->ServiceState,
+                       Inventory->BootExecute ? "true" : "false",
+                       Inventory->ManifestDigest);
     for (i = 0; i < Inventory->FileCount; i++)
     {
-        Cursor += swprintf(Cursor, RTL_NUMBER_OF(Json) - (Cursor - Json),
-                           L"%s{\"path\":\"%s\",\"sha256\":\"%S\"}",
-                           i ? L"," : L"", Inventory->Files[i].Path,
-                           Inventory->Files[i].Sha256);
-    }
-    swprintf(Cursor, RTL_NUMBER_OF(Json) - (Cursor - Json), L"]}");
+        char NarrowPath[BS_MAX_PATH_BUF];
 
-    Handle = CreateFileW(Path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+        wcstombs(NarrowPath, Inventory->Files[i].Path, sizeof(NarrowPath));
+        Cursor += snprintf(Cursor, sizeof(Json) - (Cursor - Json),
+                           "%s{\"path\":\"%s\",\"sha256\":\"%s\"}",
+                           i ? "," : "", NarrowPath, Inventory->Files[i].Sha256);
+    }
+    snprintf(Cursor, sizeof(Json) - (Cursor - Json), "]}");
+
+    Handle = CreateFileW(Temp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                          FILE_ATTRIBUTE_NORMAL, NULL);
     if (Handle == INVALID_HANDLE_VALUE)
         return GetLastError();
-    if (!WriteFile(Handle, Json, (DWORD)(wcslen(Json) * sizeof(WCHAR)), &Written, NULL))
+    if (!WriteFile(Handle, Json, (DWORD)strlen(Json), &Written, NULL) ||
+        Written != (DWORD)strlen(Json))
     {
         DWORD Error = GetLastError();
         CloseHandle(Handle);
-        return Error;
+        DeleteFileW(Temp);
+        return Error ? Error : ERROR_WRITE_FAULT;
     }
     CloseHandle(Handle);
+    if (!MoveFileExW(Temp, Path, MOVEFILE_REPLACE_EXISTING))
+    {
+        DWORD Error = GetLastError();
+        DeleteFileW(Temp);
+        return Error;
+    }
     return ERROR_SUCCESS;
 }
 
@@ -181,6 +195,17 @@ BsInventoryLoad(
         }
         if (S1JsonGetUInt(Root, "bootExecute", &Boot) != S1_FALSE)
             Inventory->BootExecute = Boot != 0;
+        {
+            const char *Digest;
+            size_t DigestLength;
+
+            if (S1JsonGetString(Root, "manifest", &Digest, &DigestLength) &&
+                DigestLength == 64)
+            {
+                memcpy(Inventory->ManifestDigest, Digest, 64);
+                Inventory->ManifestDigest[64] = 0;
+            }
+        }
     }
     Count = (DWORD)S1JsonGetArrayCount(Root, "files");
     if (Count > RTL_NUMBER_OF(Inventory->Files))
@@ -232,6 +257,24 @@ BsHasServiceBinary(
     return FALSE;
 }
 
+/* The service SCM entry points at a fixed binary path; a bundle that marks
+ * a service must actually deliver that binary there (Pam review B6). */
+static BOOL
+BsHasServiceAtPath(
+    _In_ const BS_BUNDLE *Bundle,
+    _In_ PCWSTR Dest)
+{
+    ULONG i;
+
+    for (i = 0; i < Bundle->FileCount; i++)
+    {
+        if (Bundle->Files[i].IsService &&
+            wcscmp(Bundle->Files[i].Dest, Dest) == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static DWORD
 BsInstall(
     _In_ BS_TARGET *Target,
@@ -249,19 +292,31 @@ BsInstall(
     Error = BsBundleLoad(&Bundle, BundlePath);
     if (Error != ERROR_SUCCESS)
     {
-        BsPrint(L"bundle: cannot load manifest (0x%08lx)\n", (unsigned long)Error);
-        return Error;
-    }
-    Error = BsBundleVerifySignature(&Bundle);
-    if (Error != ERROR_SUCCESS)
-    {
-        BsPrint(L"bundle: manifest signature invalid (0x%08lx) — refused (enforce, condition 2)\n",
-                (unsigned long)Error);
+        BsPrint(L"bundle: cannot load or verify manifest (0x%08lx)%s\n",
+                (unsigned long)Error,
+                Error == ERROR_TRUST_FAILURE ? L" — refused (enforce, condition 2)" : L"");
         return Error;
     }
     BsPrint(L"bundle: %lu files, %llu bytes, manifest %S\n",
             Bundle.FileCount, (unsigned long long)Bundle.TotalBytes,
             Bundle.ManifestDigest);
+
+    for (i = 0; i < Bundle.FileCount; i++)
+    {
+        if (BsValidateTargetRelPath(Target, Bundle.Files[i].Dest) != ERROR_SUCCESS)
+        {
+            BsPrint(L"bundle: dest %ls is not a safe target path (refused)\n",
+                    Bundle.Files[i].Dest);
+            return ERROR_BAD_PATHNAME;
+        }
+    }
+    ServiceWanted = BsHasServiceBinary(&Bundle);
+    if (ServiceWanted && !BsHasServiceAtPath(&Bundle, BS_SERVICE_BINARY))
+    {
+        BsPrint(L"bundle: declares a service but not at %ls (refused)\n",
+                BS_SERVICE_BINARY);
+        return ERROR_BAD_PATHNAME;
+    }
 
     for (i = 0; i < Bundle.FileCount; i++)
     {
@@ -295,13 +350,12 @@ BsInstall(
         BsPrint(L"  copy %ls -> %ls\\%ls\n", Bundle.Files[i].Source,
                 Target->Root, Bundle.Files[i].Dest);
     BsPrint(L"  pin development public key -> %ls\\%ls\n", Target->Root, BS_DEVKEY_FILE);
-    BsPrint(L"  BootExecute += %s\n", BS_BOOTEXECUTE_APP);
-    ServiceWanted = BsHasServiceBinary(&Bundle);
     BsPrint(L"  service: %s\n",
             ServiceWanted ? (Target->IsImage ? L"record stub in installed.json (offline)"
                                              : L"create LiberNTUpdateSvc disabled, enable after self-test")
                           : L"explicit stub (no service binary in bundle)");
-    BsPrint(L"  self-test: read-back hashes, DACL check, pinned key, simulated transaction\n");
+    BsPrint(L"  self-test: read-back hashes, DACL check, pinned key, trust cert, simulated transaction\n");
+    BsPrint(L"  BootExecute += %s (only after the self-test passes)\n", BS_BOOTEXECUTE_APP);
     if (DryRun)
         return ERROR_SUCCESS;
 
@@ -316,28 +370,22 @@ BsInstall(
     }
 
     memset(&Inventory, 0, sizeof(Inventory));
+    strcpy(Inventory.ManifestDigest, Bundle.ManifestDigest);
     for (i = 0; i < Bundle.FileCount; i++)
     {
-        char Hex[65];
-
         if (swprintf(Source, RTL_NUMBER_OF(Source), L"%s\\%s",
                      Bundle.Path, Bundle.Files[i].Source) < 0)
             return ERROR_FILENAME_EXCED_RANGE;
-        Error = BsCopyFileToTarget(Target, Source, Bundle.Files[i].Dest, Hex);
+        Error = BsCopyFileToTarget(Target, Source, Bundle.Files[i].Dest,
+                                   Bundle.Files[i].Sha256);
         if (Error != ERROR_SUCCESS)
         {
             BsPrint(L"copy %ls failed (0x%08lx)\n", Bundle.Files[i].Source,
                     (unsigned long)Error);
             return Error;
         }
-        if (_stricmp(Hex, Bundle.Files[i].Sha256) != 0)
-        {
-            BsPrint(L"copy %ls: hash mismatch, expected %S got %S\n",
-                    Bundle.Files[i].Source, Bundle.Files[i].Sha256, Hex);
-            return ERROR_CRC;
-        }
         wcscpy(Inventory.Files[Inventory.FileCount].Path, Bundle.Files[i].Dest);
-        strcpy(Inventory.Files[Inventory.FileCount].Sha256, Hex);
+        strcpy(Inventory.Files[Inventory.FileCount].Sha256, Bundle.Files[i].Sha256);
         Inventory.FileCount++;
     }
 
@@ -360,14 +408,9 @@ BsInstall(
         CloseHandle(Key);
     }
 
-    Error = BsBootExecuteAdd(Target, BS_BOOTEXECUTE_APP);
-    if (Error != ERROR_SUCCESS)
-    {
-        BsPrint(L"BootExecute registration failed (0x%08lx)\n", (unsigned long)Error);
-        return Error;
-    }
-    Inventory.BootExecute = TRUE;
-
+    /* The service is created (or forced) DISABLED now; it is enabled only
+     * after the self-test passes, and a failed self-test leaves it
+     * disabled (Pam review B4/B6). */
     if (ServiceWanted && !Target->IsImage)
     {
         Error = BsServiceInstall(Target, FALSE, &ServiceInstalled);
@@ -385,11 +428,25 @@ BsInstall(
     Error = BsSelfTest(Target, &Bundle, &Inventory, ServiceWanted && !Target->IsImage);
     if (Error != ERROR_SUCCESS)
     {
-        BsPrint(L"self-test FAILED (0x%08lx) — service left disabled, do not reboot into update\n",
+        BsPrint(L"self-test FAILED (0x%08lx) — service left disabled, BootExecute not registered\n",
                 (unsigned long)Error);
         BsLog(&BsLogState, L"self-test failed 0x%08lx\n", (unsigned long)Error);
+        if (ServiceWanted && !Target->IsImage)
+            BsServiceInstall(Target, FALSE, &ServiceInstalled);
         return Error;
     }
+
+    Error = BsBootExecuteAdd(Target, BS_BOOTEXECUTE_APP);
+    if (Error != ERROR_SUCCESS)
+    {
+        BsPrint(L"BootExecute registration failed (0x%08lx)\n", (unsigned long)Error);
+        return Error;
+    }
+    Inventory.BootExecute = TRUE;
+    Error = BsInventorySave(Target, &Inventory);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+
     if (ServiceWanted && !Target->IsImage)
     {
         Error = BsServiceInstall(Target, TRUE, &ServiceInstalled);
@@ -425,6 +482,36 @@ BsUninstall(
         BsPrint(L"uninstall: no valid %ls (0x%08lx)\n", BS_INSTALLED_JSON,
                 (unsigned long)Error);
         return Error;
+    }
+    /* installed.json is data from the last install, not an authority: the
+     * servicing tree must still satisfy the protected-DACL rule and every
+     * recorded path must pass the same validation as at install time
+     * before anything is deleted (Pam review B2). */
+    {
+        WCHAR Tree[BS_MAX_PATH_BUF];
+
+        if (BsBuildTargetPath(Tree, RTL_NUMBER_OF(Tree), Target, BS_SERVICING_DIR) != ERROR_SUCCESS)
+            return ERROR_FILENAME_EXCED_RANGE;
+        Error = BsCheckSecure(Tree);
+        if (Error != ERROR_SUCCESS)
+        {
+            BsPrint(L"uninstall: servicing tree is not secure (0x%08lx), refusing to trust the inventory\n",
+                    (unsigned long)Error);
+            return Error;
+        }
+        for (i = 0; i < Inventory.FileCount; i++)
+        {
+            Error = BsValidateTargetRelPath(Target, Inventory.Files[i].Path);
+            if (Error != ERROR_SUCCESS)
+            {
+                BsPrint(L"uninstall: inventory path %ls is not safe (refused)\n",
+                        Inventory.Files[i].Path);
+                return Error;
+            }
+        }
+        Error = BsValidateTargetRelPath(Target, BS_DEVKEY_FILE);
+        if (Error != ERROR_SUCCESS)
+            return Error;
     }
 
     BsPrint(L"PLAN%s:\n", DryRun ? L" (dry-run)" : L"");

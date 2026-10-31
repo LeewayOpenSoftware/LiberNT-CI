@@ -169,21 +169,45 @@ BsBundleLoad(
     _Out_ BS_BUNDLE *Bundle,
     _In_ PCWSTR BundlePath)
 {
-    WCHAR ManifestPath[BS_MAX_PATH_BUF];
-    uint8_t *Manifest;
-    ULONG ManifestSize;
+    WCHAR ManifestPath[BS_MAX_PATH_BUF], SignaturePath[BS_MAX_PATH_BUF];
+    uint8_t *Manifest = NULL, *Signature = NULL;
+    ULONG ManifestSize, SignatureSize;
     S1_SHA256_CTX Ctx;
     uint8_t Digest[S1_SHA256_SIZE];
+    S1Bool Ok;
     ULONG i;
 
     memset(Bundle, 0, sizeof(*Bundle));
     wcscpy(Bundle->Path, BundlePath);
 
+    /* Read the manifest once; verify the signature over, hash and parse that
+     * same buffer. Reading it again for the signature would leave the bytes
+     * actually used uncovered (Pam review B1). */
     if (swprintf(ManifestPath, RTL_NUMBER_OF(ManifestPath),
-                 L"%s\\bootstrap-manifest.json", BundlePath) < 0)
+                 L"%s\\bootstrap-manifest.json", BundlePath) < 0 ||
+        swprintf(SignaturePath, RTL_NUMBER_OF(SignaturePath),
+                 L"%s\\bootstrap-manifest.sig", BundlePath) < 0)
         return ERROR_FILENAME_EXCED_RANGE;
     if (!BsReadWholeFile(ManifestPath, &Manifest, &ManifestSize))
         return GetLastError();
+    if (!BsReadWholeFile(SignaturePath, &Signature, &SignatureSize))
+    {
+        free(Manifest);
+        return GetLastError();
+    }
+    if (SignatureSize != S1_RSA2048_SIZE)
+    {
+        free(Manifest);
+        free(Signature);
+        return ERROR_BAD_LENGTH;
+    }
+    Ok = S1Rsa2048Sha256Verify(BsDevPublicKey, 65537, Manifest, ManifestSize, Signature);
+    free(Signature);
+    if (Ok != S1_TRUE)
+    {
+        free(Manifest);
+        return ERROR_TRUST_FAILURE;
+    }
 
     S1Sha256Init(&Ctx);
     S1Sha256Update(&Ctx, Manifest, ManifestSize);
@@ -210,37 +234,4 @@ BsBundleLoad(
         Bundle->TotalBytes += ((ULONG64)Attr.nFileSizeHigh << 32) | Attr.nFileSizeLow;
     }
     return ERROR_SUCCESS;
-}
-
-DWORD
-BsBundleVerifySignature(
-    _In_ const BS_BUNDLE *Bundle)
-{
-    WCHAR ManifestPath[BS_MAX_PATH_BUF], SignaturePath[BS_MAX_PATH_BUF];
-    uint8_t *Manifest = NULL, *Signature = NULL;
-    ULONG ManifestSize, SignatureSize;
-    S1Bool Ok;
-
-    if (swprintf(ManifestPath, RTL_NUMBER_OF(ManifestPath),
-                 L"%s\\bootstrap-manifest.json", Bundle->Path) < 0 ||
-        swprintf(SignaturePath, RTL_NUMBER_OF(SignaturePath),
-                 L"%s\\bootstrap-manifest.sig", Bundle->Path) < 0)
-        return ERROR_FILENAME_EXCED_RANGE;
-    if (!BsReadWholeFile(ManifestPath, &Manifest, &ManifestSize) ||
-        !BsReadWholeFile(SignaturePath, &Signature, &SignatureSize))
-    {
-        free(Manifest);
-        free(Signature);
-        return GetLastError();
-    }
-    if (SignatureSize != S1_RSA2048_SIZE)
-    {
-        free(Manifest);
-        free(Signature);
-        return ERROR_BAD_LENGTH;
-    }
-    Ok = S1Rsa2048Sha256Verify(BsDevPublicKey, 65537, Manifest, ManifestSize, Signature);
-    free(Manifest);
-    free(Signature);
-    return Ok == S1_TRUE ? ERROR_SUCCESS : ERROR_TRUST_FAILURE;
 }

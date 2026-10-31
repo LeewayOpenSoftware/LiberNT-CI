@@ -30,6 +30,7 @@
 #define BS_SYSTEM32_PENDING     L"Windows\\System32\\LiberNTUpdatePending.exe"
 #define BS_BOOTEXECUTE_APP      L"LiberNTUpdatePending"
 #define BS_SERVICE_NAME         L"LiberNTUpdateSvc"
+#define BS_SERVICE_BINARY       L"LiberNT\\Servicing\\bin\\LiberNTUpdateSvc.exe"
 #define BS_LOADED_HIVE_NAME     L"LiberNTUpdateBootstrap"
 
 #define BS_MAX_PATH_BUF         520
@@ -75,6 +76,7 @@ typedef struct _BS_INVENTORY
     ULONG FileCount;
     WCHAR ServiceState[16]; /* "installed", "stub", "none" */
     BOOL BootExecute;
+    char ManifestDigest[65];
 } BS_INVENTORY;
 
 typedef struct _BS_LOG
@@ -105,14 +107,13 @@ BsPrint(
 const uint8_t *
 BsDevPublicKeyBytes(VOID);
 
+/* Loads the bundle manifest ONCE, verifies the signature over those exact
+ * bytes and parses the same buffer (Pam review B1: no second read of a file
+ * that could change in between). */
 DWORD
 BsBundleLoad(
     _Out_ BS_BUNDLE *Bundle,
     _In_ PCWSTR BundlePath);
-
-DWORD
-BsBundleVerifySignature(
-    _In_ const BS_BUNDLE *Bundle);
 
 /* target.c */
 DWORD
@@ -139,6 +140,16 @@ DWORD
 BsCheckSecure(
     _In_ PCWSTR Path);
 
+/* Accepts only normalized relative paths under the allowed prefixes
+ * (Windows\ or LiberNT\) whose existing components resolve to themselves
+ * (no reparse points, no 8.3 aliases). Mirrors LnIsSafeRelativePath and
+ * LnTargetValidateReal of libservicing/util.c and libservicing/target.c;
+ * keep the three in sync. */
+DWORD
+BsValidateTargetRelPath(
+    _In_ const BS_TARGET *Target,
+    _In_ PCWSTR Relative);
+
 DWORD
 BsCreateSecureDir(
     _In_ PCWSTR Path);
@@ -147,12 +158,15 @@ DWORD
 BsEnsureSecureTree(
     _In_ const BS_TARGET *Target);
 
+/* Validates the destination, copies to a temp name next to it, verifies
+ * the hash and renames over the destination: an interruption never leaves
+ * a partial file in place. */
 DWORD
 BsCopyFileToTarget(
     _In_ const BS_TARGET *Target,
     _In_ PCWSTR Source,
     _In_ PCWSTR RelativeDest,
-    _Out_opt_ char *Sha256Out);
+    _In_ PCSTR ExpectedSha256);
 
 DWORD
 BsHashTargetFile(

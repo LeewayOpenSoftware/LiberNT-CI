@@ -29,7 +29,7 @@ BsMultiSzAdd(
     SIZE_T InLen = BsMultiSzLength(In, OutCch);
     const WCHAR *Cursor = In;
     WCHAR *Write = Out;
-    BOOL Inserted = FALSE;
+    WCHAR *AfterAutoChk = Out;
 
     if (InLen == 0)
     {
@@ -57,17 +57,6 @@ BsMultiSzAdd(
             memmove(Out, In, InLen * sizeof(WCHAR));
             return InLen;
         }
-        if (!Inserted && !IsAutoChk)
-        {
-            /* First entry outside the autocheck/autochk block: insert before
-             * it, so the app always lands after every autocheck line. */
-            size_t AppLen = wcslen(App) + 1;
-            if ((size_t)(Write - Out) + AppLen > OutCch)
-                return 0;
-            wcscpy(Write, App);
-            Write += AppLen;
-            Inserted = TRUE;
-        }
         {
             size_t Len = wcslen(Cursor) + 1;
             if ((size_t)(Write - Out) + Len > OutCch)
@@ -76,14 +65,22 @@ BsMultiSzAdd(
             Write += Len;
         }
         Cursor += wcslen(Cursor) + 1;
+        if (IsAutoChk)
+            AfterAutoChk = Write; /* insert after the LAST autocheck entry */
     }
-    if (!Inserted)
+
+    /* Insert after the last autocheck/autochk entry, never before the first
+     * one: SMSS must run the filesystem checks first (Pam review B6). */
     {
+        size_t Tail = (size_t)(Write - AfterAutoChk);
         size_t AppLen = wcslen(App) + 1;
-        if ((size_t)(Write - Out) + AppLen + 1 > OutCch)
+
+        if ((size_t)(AfterAutoChk - Out) + AppLen + Tail + 1 > OutCch)
             return 0;
-        wcscpy(Write, App);
-        Write += AppLen;
+        if (Tail)
+            memmove(AfterAutoChk + AppLen, AfterAutoChk, Tail * sizeof(WCHAR));
+        wcscpy(AfterAutoChk, App);
+        Write = AfterAutoChk + AppLen + Tail;
     }
     *Write = 0;
     return (SIZE_T)(Write - Out) + 1;

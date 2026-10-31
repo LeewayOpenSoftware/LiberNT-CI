@@ -94,7 +94,196 @@ BsCreateSecureDir(
     if (!CreateDirectoryW(Path, &Sa) && GetLastError() != ERROR_ALREADY_EXISTS)
         Error = GetLastError();
     LocalFree(Sd);
+    /* A pre-existing directory (race or a previous partial run) must satisfy
+     * the protected-DACL rule before we write into it. */
+    if (Error == ERROR_SUCCESS)
+        Error = BsCheckSecure(Path);
     return Error;
+}
+
+/* ---- relative path validation (mirrors libservicing; keep in sync) ------ */
+
+static BOOL
+BsIsReservedName(
+    _In_ PCWSTR Name,
+    _In_ size_t Length)
+{
+    static const WCHAR *const Reserved[] = {
+        L"CON", L"PRN", L"AUX", L"NUL",
+        L"COM1", L"COM2", L"COM3", L"COM4", L"COM5", L"COM6",
+        L"COM7", L"COM8", L"COM9",
+        L"LPT1", L"LPT2", L"LPT3", L"LPT4", L"LPT5", L"LPT6",
+        L"LPT7", L"LPT8", L"LPT9",
+    };
+    size_t i;
+
+    for (i = 0; i < RTL_NUMBER_OF(Reserved); i++)
+    {
+        size_t n = wcslen(Reserved[i]);
+
+        if (Length == n && _wcsnicmp(Name, Reserved[i], n) == 0)
+            return TRUE;
+    }
+    if (Length == 4 && _wcsnicmp(Name, L"COM", 3) == 0 &&
+        ((Name[3] >= L'0' && Name[3] <= L'9') ||
+         Name[3] == 0x00B9 || Name[3] == 0x00B2 || Name[3] == 0x00B3))
+        return TRUE;
+    return FALSE;
+}
+
+/* Same acceptance as LnIsSafeRelativePath (libservicing/util.c): no root,
+ * no drive, no "..", no wildcard or control characters, no trailing
+ * dot/space, no reserved names, no NAME~N short-name aliasing. */
+static BOOL
+BsIsSafeRelativePath(
+    _In_ PCWSTR Path)
+{
+    PCWSTR p = Path;
+
+    if (!Path || !*Path)
+        return FALSE;
+    if (Path[0] == L'\\' || Path[0] == L'/' || wcschr(Path, L':') || wcschr(Path, L'/'))
+        return FALSE;
+
+    while (*p)
+    {
+        PCWSTR e = wcschr(p, L'\\');
+        size_t n = e ? (size_t)(e - p) : wcslen(p);
+        size_t i;
+
+        if (n == 0)
+            return FALSE;
+        if ((n == 1 && p[0] == L'.') || (n == 2 && p[0] == L'.' && p[1] == L'.'))
+            return FALSE;
+        for (i = 0; i < n; i++)
+        {
+            if (p[i] < 0x20 || p[i] == L'*' || p[i] == L'?' || p[i] == L'"' ||
+                p[i] == L'<' || p[i] == L'>' || p[i] == L'|')
+                return FALSE;
+        }
+        if (p[n - 1] == L'.' || p[n - 1] == L' ')
+            return FALSE;
+        if (n > 255 || BsIsReservedName(p, n))
+            return FALSE;
+        for (i = 0; i + 1 < n; i++)
+        {
+            if (p[i] == L'~' && p[i + 1] >= L'0' && p[i + 1] <= L'9')
+                return FALSE;
+        }
+        if (!e)
+            break;
+        p = e + 1;
+    }
+    return TRUE;
+}
+
+static DWORD
+BsFinalPath(
+    _In_ PCWSTR Path,
+    _Out_ PWSTR Final,
+    _In_ size_t Cch)
+{
+    HANDLE Handle;
+    DWORD Len;
+
+    Handle = CreateFileW(Path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                         OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+    if (Handle == INVALID_HANDLE_VALUE)
+        return GetLastError();
+    Len = GetFinalPathNameByHandleW(Handle, Final, (DWORD)Cch,
+                                    VOLUME_NAME_DOS | FILE_NAME_NORMALIZED);
+    CloseHandle(Handle);
+    if (Len == 0 || Len >= Cch)
+        return ERROR_BAD_PATHNAME;
+    return ERROR_SUCCESS;
+}
+
+/* Mirrors LnTargetValidateReal (libservicing/target.c): the existing part
+ * of the path must resolve to exactly the name that was written — no
+ * reparse points, no 8.3 aliases — so a write cannot escape the target. */
+static DWORD
+BsTargetValidateReal(
+    _In_ const BS_TARGET *Target,
+    _In_ PCWSTR Relative)
+{
+    WCHAR Cur[BS_MAX_PATH_BUF], Deepest[BS_MAX_PATH_BUF];
+    WCHAR FinalRoot[BS_MAX_PATH_BUF], FinalDeep[BS_MAX_PATH_BUF], Expect[BS_MAX_PATH_BUF];
+    WCHAR RootNoSlash[BS_MAX_PATH_BUF];
+    PCWSTR p = Relative;
+    DWORD Error;
+    size_t RootLen;
+    PCWSTR Tail;
+
+    if (!BsIsSafeRelativePath(Relative))
+        return ERROR_BAD_PATHNAME;
+    wcscpy(Cur, Target->Root);
+    wcscpy(Deepest, Target->Root);
+    while (*p)
+    {
+        PCWSTR e = wcschr(p, L'\\');
+        size_t n = e ? (size_t)(e - p) : wcslen(p);
+        DWORD Attrs;
+
+        if (wcslen(Cur) + n + 2 >= RTL_NUMBER_OF(Cur))
+            return ERROR_BAD_PATHNAME;
+        wcsncat(Cur, p, n);
+        Attrs = GetFileAttributesW(Cur);
+        if (Attrs == INVALID_FILE_ATTRIBUTES)
+            break; /* the rest does not exist yet: the caller creates it */
+        if (Attrs & FILE_ATTRIBUTE_REPARSE_POINT)
+            return ERROR_BAD_PATHNAME; /* junction or symlink in the way */
+        if (e)
+        {
+            if (!(Attrs & FILE_ATTRIBUTE_DIRECTORY))
+                return ERROR_BAD_PATHNAME;
+            wcscpy(Deepest, Cur);
+            wcscat(Cur, L"\\");
+        }
+        if (!e)
+            break;
+        p = e + 1;
+    }
+
+    wcscpy(RootNoSlash, Target->Root);
+    RootLen = wcslen(RootNoSlash);
+    if (RootLen > 3 && RootNoSlash[RootLen - 1] == L'\\')
+        RootNoSlash[RootLen - 1] = 0;
+    Error = BsFinalPath(RootNoSlash, FinalRoot, RTL_NUMBER_OF(FinalRoot));
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    Error = BsFinalPath(Deepest, FinalDeep, RTL_NUMBER_OF(FinalDeep));
+    if (Error != ERROR_SUCCESS)
+        return Error;
+    {
+        size_t Rl = wcslen(FinalRoot);
+
+        wcscpy(Expect, FinalRoot);
+        Tail = Deepest + wcslen(Target->Root);
+        if (Rl && Expect[Rl - 1] != L'\\' && *Tail)
+            wcscat(Expect, L"\\");
+        wcscat(Expect, Tail);
+        Rl = wcslen(Expect);
+        if (Rl > 3 && Expect[Rl - 1] == L'\\')
+            Expect[Rl - 1] = 0;
+        Rl = wcslen(FinalDeep);
+        if (Rl > 3 && FinalDeep[Rl - 1] == L'\\')
+            FinalDeep[Rl - 1] = 0;
+    }
+    if (_wcsicmp(Expect, FinalDeep) != 0)
+        return ERROR_BAD_PATHNAME;
+    return ERROR_SUCCESS;
+}
+
+DWORD
+BsValidateTargetRelPath(
+    _In_ const BS_TARGET *Target,
+    _In_ PCWSTR Relative)
+{
+    /* Stage 1 installs only under these two prefixes (DESIGN section 4). */
+    if (_wcsnicmp(Relative, L"Windows\\", 8) != 0 &&
+        _wcsnicmp(Relative, L"LiberNT\\", 8) != 0)
+        return ERROR_BAD_PATHNAME;
+    return BsTargetValidateReal(Target, Relative);
 }
 
 DWORD
@@ -263,24 +452,34 @@ BsCopyFileToTarget(
     _In_ const BS_TARGET *Target,
     _In_ PCWSTR Source,
     _In_ PCWSTR RelativeDest,
-    _Out_opt_ char *Sha256Out)
+    _In_ PCSTR ExpectedSha256)
 {
-    WCHAR Dest[BS_MAX_PATH_BUF];
+    WCHAR Dest[BS_MAX_PATH_BUF], Temp[BS_MAX_PATH_BUF];
     HANDLE In, Out;
     uint8_t Buffer[64 * 1024];
     S1_SHA256_CTX Ctx;
+    uint8_t Digest[S1_SHA256_SIZE];
+    char Hex[65];
     DWORD Read, Written;
     DWORD Error;
 
+    Error = BsValidateTargetRelPath(Target, RelativeDest);
+    if (Error != ERROR_SUCCESS)
+        return Error;
     Error = BsBuildTargetPath(Dest, RTL_NUMBER_OF(Dest), Target, RelativeDest);
     if (Error != ERROR_SUCCESS)
         return Error;
+    if (swprintf(Temp, RTL_NUMBER_OF(Temp), L"%s.tmp", Dest) < 0)
+        return ERROR_FILENAME_EXCED_RANGE;
 
     In = CreateFileW(Source, GENERIC_READ, FILE_SHARE_READ, NULL,
                      OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
     if (In == INVALID_HANDLE_VALUE)
         return GetLastError();
-    Out = CreateFileW(Dest, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+    /* Copy to a temp name next to the destination, verify the hash, then
+     * rename over the destination: an interruption never leaves a partial
+     * binary in place (Pam review B4). */
+    Out = CreateFileW(Temp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                       FILE_ATTRIBUTE_NORMAL, NULL);
     if (Out == INVALID_HANDLE_VALUE)
     {
@@ -312,15 +511,25 @@ BsCopyFileToTarget(
         Error = GetLastError();
     CloseHandle(Out);
     CloseHandle(In);
-    if (Error == ERROR_SUCCESS)
+    if (Error != ERROR_SUCCESS)
     {
-        uint8_t Digest[S1_SHA256_SIZE];
-
-        S1Sha256Final(&Ctx, Digest);
-        if (Sha256Out)
-            S1HexEncode(Digest, S1_SHA256_SIZE, Sha256Out);
+        DeleteFileW(Temp);
+        return Error;
     }
-    return Error;
+    S1Sha256Final(&Ctx, Digest);
+    S1HexEncode(Digest, S1_SHA256_SIZE, Hex);
+    if (_stricmp(Hex, ExpectedSha256) != 0)
+    {
+        DeleteFileW(Temp);
+        return ERROR_CRC;
+    }
+    if (!MoveFileExW(Temp, Dest, MOVEFILE_REPLACE_EXISTING))
+    {
+        Error = GetLastError();
+        DeleteFileW(Temp);
+        return Error;
+    }
+    return ERROR_SUCCESS;
 }
 
 DWORD
@@ -373,6 +582,11 @@ BsDeleteTargetFile(
     WCHAR Path[BS_MAX_PATH_BUF];
     DWORD Error;
 
+    /* installed.json is data, not an authority: revalidate every path the
+     * same way as at install time before deleting (Pam review B2). */
+    Error = BsValidateTargetRelPath(Target, RelativePath);
+    if (Error != ERROR_SUCCESS)
+        return Error;
     Error = BsBuildTargetPath(Path, RTL_NUMBER_OF(Path), Target, RelativePath);
     if (Error != ERROR_SUCCESS)
         return Error;

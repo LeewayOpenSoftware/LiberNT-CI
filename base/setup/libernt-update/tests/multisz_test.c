@@ -68,6 +68,18 @@ main(void)
         ExpectSeq(Out, L"LiberNTUpdatePending\0onlyapp\0",
                   "prepended when no autocheck entry exists");
 
+    {
+        /* Pam review B6: a foreign entry BEFORE the autocheck block must not
+         * push the app ahead of the filesystem checks. */
+        WCHAR InForeignFirst[] = L"something\0autocheck\0autochk *\0";
+        Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), InForeignFirst,
+                             L"LiberNTUpdatePending");
+        CHECK(Chars > 0, "add with foreign first entry succeeds");
+        if (Chars)
+            ExpectSeq(Out, L"something\0autocheck\0autochk *\0LiberNTUpdatePending\0",
+                      "inserted after the last autocheck, not before the first");
+    }
+
     Chars = BsMultiSzAdd(Out, RTL_NUMBER_OF(Out), Empty, L"LiberNTUpdatePending");
     CHECK(Chars > 0, "add to empty value succeeds");
     if (Chars)

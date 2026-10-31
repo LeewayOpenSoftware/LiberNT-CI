@@ -56,12 +56,13 @@ BsServiceInstall(
                            SERVICE_CHANGE_CONFIG | SERVICE_QUERY_STATUS);
     if (Service)
     {
-        /* Already registered: idempotent re-run. */
-        if (Enable)
-            ChangeServiceConfigW(Service, SERVICE_NO_CHANGE,
-                                 SERVICE_DEMAND_START,
-                                 SERVICE_NO_CHANGE, NULL, NULL, NULL, NULL,
-                                 NULL, NULL, NULL);
+        /* Already registered: idempotent re-run, and the requested start
+         * type is enforced either way, so a failed re-install self-test
+         * cannot leave an enabled service behind (Pam review B6). */
+        ChangeServiceConfigW(Service, SERVICE_NO_CHANGE,
+                             Enable ? SERVICE_DEMAND_START : SERVICE_DISABLED,
+                             SERVICE_NO_CHANGE, NULL, NULL, NULL, NULL,
+                             NULL, NULL, NULL);
         CloseServiceHandle(Service);
         CloseServiceHandle(Manager);
         *Installed = TRUE;
