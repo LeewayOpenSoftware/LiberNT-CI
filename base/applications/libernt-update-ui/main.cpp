@@ -70,7 +70,9 @@ public:
     }
 
 protected:
-    int CaptionHeight() const override { return m_Theme.Scale(48); }
+    /* the standard system caption: this window draws none of it */
+    BOOL UseSystemCaption() const override { return TRUE; }
+    int CaptionHeight() const override { return 0; }
 
     void OnCreate() override
     {
@@ -184,11 +186,9 @@ protected:
     void OnPaint(Canvas &canvas, const RECT &client) override
     {
         const Palette &c = m_Theme.Colors();
-        RECT caption = { 0, 0, client.right, CaptionHeight() };
         int y, left, right, width;
 
         canvas.Fill(client, c.Window);
-        canvas.Fill(caption, RGB(0, 0, 0));
         m_Hits.clear();
 
         width = (std::min)((int)client.right - m_Theme.Scale(48), m_Theme.Scale(760));
@@ -202,14 +202,6 @@ protected:
             case Page::Options: y = PaintOptions(canvas, left, right, y); break;
         }
         m_ContentHeight = y + m_Scroll + m_Theme.Scale(24);
-        canvas.Fill(caption, RGB(0, 0, 0));
-        {
-            RECT title = { m_Theme.Scale(44), 0, client.right / 2, CaptionHeight() };
-
-            canvas.Text(L"LiberNT Update", title, m_Theme.Font(TextStyle::Body), c.Text,
-                        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        }
-        PaintCaptionButtons(canvas, client, c.Window);
     }
 
 private:
@@ -282,10 +274,11 @@ private:
     {
         POINT pt = { x, y };
 
-        for (size_t i = 0; i < m_Hits.size(); i++)
+        /* the last registered rectangle is the one painted on top */
+        for (size_t i = m_Hits.size(); i > 0; i--)
         {
-            if (PtInRect(&m_Hits[i].Rect, pt))
-                return (int)i;
+            if (PtInRect(&m_Hits[i - 1].Rect, pt))
+                return (int)(i - 1);
         }
         return -1;
     }
@@ -596,7 +589,7 @@ private:
         if (!m_State.Packages.empty())
         {
             int rows = m_Collapsed ? 0 : (int)m_State.Packages.size();
-            int headerHeight = m_Theme.Scale(84);
+            int headerHeight = m_Theme.Scale(96);
             int rowHeight = m_Theme.Scale(52);
             RECT head;
 
@@ -605,7 +598,7 @@ private:
             {
                 RECT t = { head.left + m_Theme.Scale(16), head.top + m_Theme.Scale(10), head.right - m_Theme.Scale(48),
                            head.top + m_Theme.Scale(34) };
-                RECT d = { t.left, t.bottom, t.right, head.bottom - m_Theme.Scale(8) };
+                RECT d = { t.left, t.bottom, t.right, head.bottom - m_Theme.Scale(36) };
                 RECT chevron = { head.right - m_Theme.Scale(40), head.top + m_Theme.Scale(30), head.right - m_Theme.Scale(20),
                                  head.top + m_Theme.Scale(50) };
                 RECT add = { head.right - m_Theme.Scale(40) - m_Theme.Scale(130), head.bottom - m_Theme.Scale(32),
