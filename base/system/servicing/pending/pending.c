@@ -32,10 +32,29 @@
 #include <string.h>
 #include <stdarg.h>
 
+/* The servicing tree lives at the root of the system volume. The native
+ * build resolves it at runtime from the \SystemRoot link, which names the
+ * Windows directory ("\??\C:\Windows" or its ARC form) — NOT the volume
+ * root. A compile-time \SystemRoot\LiberNT\Servicing made the applier look
+ * for the plan under the Windows directory, find nothing, and silently exit
+ * (found by Dwight's online run 4). The host shim provides the same g_*
+ * globals via ShimSetFakeRoot. */
 #ifdef S1_HOST_APPLIER
 #include "s1host_shim.h"
 #else
 #include <ntndk.h>
+
+WCHAR g_ServicingRoot[MAX_PATH * 2];
+WCHAR g_S1PlanPath[MAX_PATH * 2];
+WCHAR g_S1AttemptPath[MAX_PATH * 2];
+WCHAR g_S1JournalPath[MAX_PATH * 2];
+WCHAR g_S1BackupPath[MAX_PATH * 2];
+
+#define S1_ROOT            g_ServicingRoot
+#define S1_PLAN_PATH       g_S1PlanPath
+#define S1_ATTEMPT_PATH    g_S1AttemptPath
+#define S1_JOURNAL_PATH    g_S1JournalPath
+#define S1_BACKUP_PATH     g_S1BackupPath
 #endif
 
 #ifndef _In_
@@ -83,22 +102,6 @@ static const uint8_t S1DevPublicKey[S1_RSA2048_SIZE] = {
 0xa6,0xb6,0xe6,0x69,0xe4,0x0e,0x70,0x31,0x52,0xef,0x3b,0x9d,0x6d,0x65,0xc5,0x22,
 0xc8,0xd7,0x6f,0x49,0x18,0x66,0x30,0xb5,0x2c,0x17,0x50,0x6f,0xea,0x27,0xeb,0x65,
 };
-
-#ifndef S1_ROOT
-#define S1_ROOT            L"\\SystemRoot\\LiberNT\\Servicing"
-#endif
-#ifndef S1_PLAN_PATH
-#define S1_PLAN_PATH       L"\\SystemRoot\\LiberNT\\Servicing\\pending\\plan.json"
-#endif
-#ifndef S1_ATTEMPT_PATH
-#define S1_ATTEMPT_PATH    L"\\SystemRoot\\LiberNT\\Servicing\\pending\\attempt.json"
-#endif
-#ifndef S1_JOURNAL_PATH
-#define S1_JOURNAL_PATH    L"\\SystemRoot\\LiberNT\\Servicing\\journal\\transactions.jsonl"
-#endif
-#ifndef S1_BACKUP_PATH
-#define S1_BACKUP_PATH     L"\\SystemRoot\\LiberNT\\Servicing\\backup"
-#endif
 
 /* No ntstatus value names a content-hash mismatch; this is a private,
  * customer-bit code the journal can record precisely. */
@@ -286,6 +289,87 @@ S1HashFile(
     S1Sha256Final(&Ctx, Digest);
     return NT_SUCCESS(Status) || Status == STATUS_END_OF_FILE ? STATUS_SUCCESS : Status;
 }
+
+/* --------------------------------------------------------------- paths */
+
+/* Compose the servicing root from a \SystemRoot link target, which names
+ * the Windows directory, not the volume root. The last path component is
+ * dropped when what remains still carries a volume marker (a drive letter
+ * or an ARC "partition(n)" / device component); otherwise the whole target
+ * already IS the volume. Pure string logic, separated so host tests pin
+ * it. */
+static VOID
+S1ServicingRootFromSystemRoot(
+    _In_ PCWSTR LinkTarget,
+    _Out_ PWSTR Out,
+    _In_ size_t OutCch)
+{
+    WCHAR Buf[MAX_PATH * 2];
+    size_t Len = wcslen(LinkTarget), Cut = 0, i;
+
+    while (Len && (LinkTarget[Len - 1] == L'\\' || LinkTarget[Len - 1] == L'/'))
+        Len--;
+    if (Len >= RTL_NUMBER_OF(Buf))
+        Len = RTL_NUMBER_OF(Buf) - 1;
+    memcpy(Buf, LinkTarget, Len * sizeof(WCHAR));
+    Buf[Len] = 0;
+
+    for (i = Len; i > 0; i--)
+    {
+        if (Buf[i - 1] == L'\\')
+        {
+            Cut = i - 1;
+            break;
+        }
+    }
+
+    if (Cut)
+    {
+        PCWSTR Comp = Buf + Cut + 1;
+        BOOL CompIsVolume =
+            wcschr(Comp, L':') != NULL ||
+            wcschr(Comp, L'(') != NULL ||
+            wcsncmp(Comp, L"Harddisk", 8) == 0 ||
+            wcsncmp(Comp, L"CdRom", 5) == 0 ||
+            wcsncmp(Comp, L"Floppy", 6) == 0;
+
+        /* the last component is the Windows directory unless it IS a
+         * volume designator (drive letter, ARC partition(n), device) */
+        if (!CompIsVolume)
+            Buf[Cut] = 0;
+    }
+    swprintf(Out, OutCch, L"%s\\LiberNT\\Servicing", Buf);
+}
+
+#ifndef S1_HOST_APPLIER
+static NTSTATUS
+S1ResolveServicingRoot(VOID)
+{
+    UNICODE_STRING Name, Target;
+    OBJECT_ATTRIBUTES Attr;
+    HANDLE Link;
+    WCHAR Buf[MAX_PATH * 2];
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&Name, L"\\SystemRoot");
+    InitializeObjectAttributes(&Attr, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
+    Status = NtOpenSymbolicLinkObject(&Link, SYMBOLIC_LINK_QUERY, &Attr);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    RtlInitEmptyUnicodeString(&Target, Buf, sizeof(Buf));
+    Status = NtQuerySymbolicLinkObject(Link, &Target, NULL);
+    NtClose(Link);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Buf[Target.Length / sizeof(WCHAR)] = 0;
+    S1ServicingRootFromSystemRoot(Buf, g_ServicingRoot, RTL_NUMBER_OF(g_ServicingRoot));
+    swprintf(g_S1PlanPath, RTL_NUMBER_OF(g_S1PlanPath), L"%s\\pending\\plan.json", g_ServicingRoot);
+    swprintf(g_S1AttemptPath, RTL_NUMBER_OF(g_S1AttemptPath), L"%s\\pending\\attempt.json", g_ServicingRoot);
+    swprintf(g_S1JournalPath, RTL_NUMBER_OF(g_S1JournalPath), L"%s\\journal\\transactions.jsonl", g_ServicingRoot);
+    swprintf(g_S1BackupPath, RTL_NUMBER_OF(g_S1BackupPath), L"%s\\backup", g_ServicingRoot);
+    return STATUS_SUCCESS;
+}
+#endif
 
 /* --------------------------------------------------------------- journal */
 
@@ -815,6 +899,16 @@ NtProcessStartup(
     NTSTATUS Status, OpStatus;
 
     (void)ProcessParameters;
+
+#ifndef S1_HOST_APPLIER
+    /* Find the servicing tree first: everything below reads and writes
+     * under it. Failing here means the applier cannot do anything
+     * meaningful at all, so exit loudly (smss survives a BootExecute
+     * failure; sminit.c discards the status). */
+    Status = S1ResolveServicingRoot();
+    if (!NT_SUCCESS(Status))
+        NtTerminateProcess(NtCurrentProcess(), 1);
+#endif
 
     /* 1. No plan is a successful no-op. */
     Status = S1ReadWholeFile(S1_PLAN_PATH, &PlanData, &PlanSize);
