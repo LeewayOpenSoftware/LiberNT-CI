@@ -893,8 +893,21 @@ static DWORD WritePlan(const CTX *c, const BOOL *pending)
         oldSha[0] = 0;
         tp = LnTargetFile(c->t, it->target);
         if (tp)
-            CurrentHash(tp, oldSha);
-        free(tp);
+        {
+            DWORD HashErr = CurrentHash(tp, oldSha);
+
+            free(tp);
+            if (HashErr != ERROR_SUCCESS)
+            {
+                /* Fail closed (Pam review H1): a target that exists but
+                 * cannot be hashed must abort the plan, not be emitted as
+                 * an add-file with no backup — the applier would overwrite
+                 * it without an undo and a rollback would DELETE it. */
+                LnBufFree(&b);
+                free(path);
+                return HashErr;
+            }
+        }
 
         err |= LnBufAppendStr(&b, "{\"seq\":");
         err |= LnBufAppendStr(&b, idx);

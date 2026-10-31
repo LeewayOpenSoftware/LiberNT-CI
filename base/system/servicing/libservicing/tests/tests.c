@@ -1258,6 +1258,45 @@ static void TestPlanValidation(void)
     free(target);
 }
 
+static void TestPlanHashFailClosed(void)
+{
+    LN_TARGET t;
+    WCHAR *target;
+    WCHAR *p;
+    BOOL reboot = FALSE;
+    char tx[65];
+    char *plan = NULL;
+    PSECURITY_DESCRIPTOR Sd = NULL;
+
+    Section("H1: an existing but unhashable target fails the plan closed (Pam review)");
+    CHECK(OpenImage(&t, L"planhash"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    WriteText(target, "original content");
+    /* deny read to everyone, including ourselves: neither the backup copy
+     * nor the originalSha256 can be produced, so no plan may be written
+     * (an add-file plan without backup would make the rollback DELETE a
+     * system file) */
+    CHECK(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+              L"D:(D;;FR;;;WD)", SDDL_REVISION_1, &Sd, NULL));
+    CHECK(SetFileSecurityW(target, DACL_SECURITY_INFORMATION, Sd));
+    LocalFree(Sd);
+    Sd = NULL;
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    CHECK(LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx) != 0);
+    CHECK(LnServicingReadPendingPlan(&t, &plan) != 0);       /* no plan written */
+    CHECK(plan == NULL);
+    /* restore a readable DACL; the file must be untouched */
+    CHECK(ConvertStringSecurityDescriptorToSecurityDescriptorW(
+              L"D:(A;;FR;;;WD)", SDDL_REVISION_1, &Sd, NULL));
+    CHECK(SetFileSecurityW(target, DACL_SECURITY_INFORMATION, Sd));
+    LocalFree(Sd);
+    CHECK(FileIs(target, "original content"));
+    free(target);
+}
+
 /* A crash in a test must say where: address, access type and the image base for the symbolizer. */
 static LONG WINAPI CrashReport(EXCEPTION_POINTERS *ep)
 {
@@ -1347,6 +1386,7 @@ int wmain(int argc, WCHAR **argv)
     TestPathHardening();
     TestJournalAnchor();
     TestPlanValidation();
+    TestPlanHashFailClosed();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
     LnRemoveTree(g_work);

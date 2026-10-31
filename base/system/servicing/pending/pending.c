@@ -1231,19 +1231,31 @@ NtProcessStartup(
         S1Log(L"S1: two attempts without health, rolling back");
         S1JournalOrHalt(&Journal, Plan.TransactionId, "rollback-prepared", -1,
                         "started", Reason);
-        for (i = Plan.OperationCount; i > 0; i--)
         {
-            OpStatus = S1RevertOperation(&Plan, &Plan.Operations[i - 1]);
-            if (!NT_SUCCESS(OpStatus))
-            {
-                WCHAR Line[96];
+            /* Best-effort revert (Pam review R2): continue after a failure
+             * so one corrupt backup cannot block restoring the remaining
+             * operations; the first failure is journaled and exits 1 after
+             * the loop instead of halting mid-rollback. */
+            NTSTATUS RevertErr = STATUS_SUCCESS;
+            ULONG FailedOp = 0;
 
-                /* a failed revert (e.g. a backup that fails the
-                 * originalSha256 check) must not be masked as a clean
-                 * rollback: journal it and exit 1 (owner decision) */
+            for (i = Plan.OperationCount; i > 0; i--)
+            {
+                NTSTATUS OneErr = S1RevertOperation(&Plan, &Plan.Operations[i - 1]);
+
+                if (!NT_SUCCESS(OneErr) && NT_SUCCESS(RevertErr))
+                {
+                    RevertErr = OneErr;
+                    FailedOp = i;
+                }
+            }
+            if (!NT_SUCCESS(RevertErr))
+            {
+                WCHAR Line[112];
+
                 swprintf(Line, RTL_NUMBER_OF(Line),
                          L"S1: revert op %lu failed 0x%08lx, halting",
-                         (unsigned long)i, (unsigned long)OpStatus);
+                         (unsigned long)FailedOp, (unsigned long)RevertErr);
                 S1Log(Line);
                 S1JournalOrHalt(&Journal, Plan.TransactionId, "failed", -1,
                                 "failed", "0xE0000001");
@@ -1299,11 +1311,38 @@ NtProcessStartup(
             swprintf(Line, RTL_NUMBER_OF(Line), L"S1: op %lu failed 0x%08lx, rolling back",
                      (unsigned long)i, (unsigned long)OpStatus);
             S1Log(Line);
-            /* Immediate rollback of the operations already applied. */
-            while (i > 0)
+            /* Immediate rollback of the operations already applied
+             * (best-effort, Pam review R1/R2): keep reverting after a
+             * failure so one bad backup cannot block the rest; the first
+             * failure is journaled and exits 1 below. */
             {
-                i--;
-                S1RevertOperation(&Plan, &Plan.Operations[i]);
+                NTSTATUS RevertErr = STATUS_SUCCESS;
+                ULONG FailedOp = 0;
+
+                while (i > 0)
+                {
+                    NTSTATUS OneErr;
+
+                    i--;
+                    OneErr = S1RevertOperation(&Plan, &Plan.Operations[i]);
+                    if (!NT_SUCCESS(OneErr) && NT_SUCCESS(RevertErr))
+                    {
+                        RevertErr = OneErr;
+                        FailedOp = i + 1;
+                    }
+                }
+                if (!NT_SUCCESS(RevertErr))
+                {
+                    WCHAR Line[112];
+
+                    swprintf(Line, RTL_NUMBER_OF(Line),
+                             L"S1: revert op %lu failed 0x%08lx during failure rollback",
+                             (unsigned long)FailedOp, (unsigned long)RevertErr);
+                    S1Log(Line);
+                    S1JournalOrHalt(&Journal, Plan.TransactionId, "failed", -1,
+                                    "failed", "0xE0000001");
+                    NtTerminateProcess(NtCurrentProcess(), 1);
+                }
             }
             S1JournalOrHalt(&Journal, Plan.TransactionId, "failed", -1,
                             "failed", "0xE0000001");
