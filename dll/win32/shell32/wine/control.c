@@ -1048,7 +1048,7 @@ CPlApplet*	Control_LoadApplet(HWND hWnd, LPCWSTR cmd, CPanel* panel)
     }
     if ((applet->count = applet->proc(hWnd, CPL_GETCOUNT, 0L, 0L)) == 0) {
         g_dwLoadAppletError = ERROR_NOT_FOUND;
-        WARN("No subprogram in applet\n");
+        ERR("Applet %s reports no subprogram (CPL_GETCOUNT is 0)\n", debugstr_w(applet->cmd));
         applet->proc(applet->hWnd, CPL_EXIT, 0, 0);
 	goto theError;
     }
