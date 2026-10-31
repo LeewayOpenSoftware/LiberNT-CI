@@ -123,14 +123,16 @@ static BOOL CplIsDark(VOID)
 static BOOL CplReadClsidText(PCWSTR clsid, PCWSTR subkey, PCWSTR value, PWSTR out, DWORD cch)
 {
     WCHAR path[128], text[256];
-    DWORD cb = sizeof(text);
+    DWORD cb = sizeof(text), type = 0;
 
     if (subkey)
         StringCchPrintfW(path, _countof(path), L"CLSID\\%s\\%s", clsid, subkey);
     else
         StringCchPrintfW(path, _countof(path), L"CLSID\\%s", clsid);
-    if (RegGetValueW(HKEY_CLASSES_ROOT, path, value, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, NULL, text, &cb) != ERROR_SUCCESS ||
-        !text[0])
+    /* RRF_RT_ANY: this advapi32 rejects RRF_RT_REG_EXPAND_SZ without RRF_NOEXPAND, and a type of
+     * REG_EXPAND_SZ comes back already expanded as REG_SZ */
+    if (RegGetValueW(HKEY_CLASSES_ROOT, path, value, RRF_RT_ANY, &type, text, &cb) != ERROR_SUCCESS ||
+        type != REG_SZ || !text[0])
         return FALSE;
     if (text[0] == L'@')
         return SUCCEEDED(SHLoadIndirectString(text, out, cch, NULL)) && out[0];
@@ -521,13 +523,15 @@ int CCplCategoryView::FindItem(PCWSTR clsid)
 HICON CCplCategoryView::LoadClsidIcon(PCWSTR clsid, int size)
 {
     WCHAR path[128], spec[MAX_PATH + 16];
-    DWORD cb = sizeof(spec);
+    DWORD cb = sizeof(spec), type = 0;
     HICON hLarge = NULL, hSmall = NULL;
     PWSTR comma;
     int index;
 
     StringCchPrintfW(path, _countof(path), L"CLSID\\%s\\DefaultIcon", clsid);
-    LONG status = RegGetValueW(HKEY_CLASSES_ROOT, path, NULL, RRF_RT_REG_SZ | RRF_RT_REG_EXPAND_SZ, NULL, spec, &cb);
+    LONG status = RegGetValueW(HKEY_CLASSES_ROOT, path, NULL, RRF_RT_ANY, &type, spec, &cb);
+    if (status == ERROR_SUCCESS && type != REG_SZ)
+        status = ERROR_UNSUPPORTED_TYPE;
     if (status != ERROR_SUCCESS)
     {
         ERR("Control Panel category view: no DefaultIcon for %S (error %ld)\n", clsid, status);
