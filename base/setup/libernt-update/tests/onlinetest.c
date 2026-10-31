@@ -89,6 +89,110 @@ main(void)
     Error = BsValidateTargetRelPath(&Target, L"..\\Windows\\System32\\evil.exe");
     Check(Error == ERROR_BAD_PATHNAME, "online still refuses traversal");
 
+    /* 3. The reparse walk must inspect real components: a pre-planted
+     *    junction on the destination directory is refused, online and in
+     *    image mode. (Pam's review: without the separator the walk was
+     *    vacuous.) */
+    {
+        char DirA2[MAX_PATH];
+        WCHAR DirW2[MAX_PATH], LinkW[MAX_PATH], TargetW[MAX_PATH], Cmd[1024];
+
+        snprintf(DirA2, sizeof(DirA2), "%s\\s1-reparse-%lu-%lu",
+                 getenv("TEMP"), (unsigned long)GetCurrentProcessId(),
+                 (unsigned long)GetTickCount());
+        Check(CreateDirectoryA(DirA2, NULL) != 0, "reparse fixture root created");
+        mbstowcs(DirW2, DirA2, RTL_NUMBER_OF(DirW2));
+        DirW2[RTL_NUMBER_OF(DirW2) - 1] = 0;
+        swprintf(TargetW, RTL_NUMBER_OF(TargetW), L"%s\\attacker", DirW2);
+        CreateDirectoryW(TargetW, NULL);
+        swprintf(LinkW, RTL_NUMBER_OF(LinkW), L"%s\\LiberNT", DirW2);
+        swprintf(Cmd, RTL_NUMBER_OF(Cmd), L"/c mklink /J \"%s\" \"%s\"", LinkW, TargetW);
+        swprintf(Cmd, RTL_NUMBER_OF(Cmd), L"cmd.exe /c mklink /J \"%s\" \"%s\"", LinkW, TargetW);
+        {
+            STARTUPINFOW Si;
+            PROCESS_INFORMATION Pi;
+            DWORD MkErr = (DWORD)-1;
+
+            memset(&Si, 0, sizeof(Si));
+            Si.cb = sizeof(Si);
+            memset(&Pi, 0, sizeof(Pi));
+            if (CreateProcessW(NULL, Cmd, NULL, NULL, FALSE, 0, NULL, NULL, &Si, &Pi))
+            {
+                WaitForSingleObject(Pi.hProcess, 15000);
+                GetExitCodeProcess(Pi.hProcess, &MkErr);
+                CloseHandle(Pi.hProcess);
+                CloseHandle(Pi.hThread);
+            }
+            Check(MkErr == 0, "junction fixture created (mklink /J)");
+        }
+
+        memset(&Target, 0, sizeof(Target));
+        wcscpy(Target.Root, DirW2);
+        Target.IsImage = FALSE;
+        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Check(Error == ERROR_BAD_PATHNAME, "online refuses a junction on the destination dir");
+
+        Target.IsImage = TRUE;
+        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Check(Error == ERROR_BAD_PATHNAME, "image mode refuses the same junction");
+
+        /* the pre-existing plain tree still validates, both modes */
+        RemoveDirectoryW(LinkW);
+        swprintf(LinkW, RTL_NUMBER_OF(LinkW), L"%s\\LiberNT", DirW2);
+        CreateDirectoryW(LinkW, NULL);
+        swprintf(TargetW, RTL_NUMBER_OF(TargetW), L"%s\\LiberNT\\Update", DirW2);
+        CreateDirectoryW(TargetW, NULL);
+        Target.IsImage = FALSE;
+        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Check(Error == ERROR_SUCCESS, "online accepts the plain nested tree");
+        Target.IsImage = TRUE;
+        Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+        Check(Error == ERROR_SUCCESS, "image mode accepts the plain nested tree (canonical compare)");
+
+        /* final-component file symlink: refused when the privilege allows
+         * creating one, otherwise skipped */
+        {
+            WCHAR SymW[MAX_PATH], RealW[MAX_PATH];
+
+            swprintf(SymW, RTL_NUMBER_OF(SymW), L"%s\\LiberNT\\Update\\x.exe", DirW2);
+            swprintf(RealW, RTL_NUMBER_OF(RealW), L"%s\\attacker\\planted.exe", DirW2);
+            {
+                HANDLE H = CreateFileW(RealW, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
+                                       FILE_ATTRIBUTE_NORMAL, NULL);
+                if (H != INVALID_HANDLE_VALUE)
+                    CloseHandle(H);
+            }
+            if (CreateSymbolicLinkW(SymW, RealW, 0))
+            {
+                Error = BsValidateTargetRelPath(&Target, L"LiberNT\\Update\\x.exe");
+                Check(Error == ERROR_BAD_PATHNAME, "image mode refuses a final file symlink");
+            }
+            else
+            {
+                printf("skip: file-symlink case needs SeCreateSymbolicLinkPrivilege\n");
+            }
+        }
+
+        /* cleanup */
+        {
+            WCHAR DelW[MAX_PATH * 2];
+            static const WCHAR *Rel[] = { L"\\LiberNT\\Update\\x.exe",
+                                          L"\\LiberNT\\Update",
+                                          L"\\LiberNT",
+                                          L"\\attacker\\planted.exe",
+                                          L"\\attacker" };
+            size_t k;
+
+            for (k = 0; k < RTL_NUMBER_OF(Rel); k++)
+            {
+                swprintf(DelW, RTL_NUMBER_OF(DelW), L"%s%s", DirW2, Rel[k]);
+                DeleteFileW(DelW);
+                RemoveDirectoryW(DelW);
+            }
+            RemoveDirectoryW(DirW2);
+        }
+    }
+
     printf("%s\n", Failures ? "ONLINE TARGET TEST FAILED" : "ONLINE TARGET TEST PASSED");
     return Failures ? 1 : 0;
 }

@@ -217,8 +217,15 @@ BsTargetValidateReal(
 
     if (!BsIsSafeRelativePath(Relative))
         return ERROR_BAD_PATHNAME;
+    /* Root has no trailing backslash; without the separator the first
+     * component would be appended drive-relative ("C:LiberNT"), the walk
+     * would inspect nothing, and Deepest would never advance — leaving the
+     * reparse check vacuous online and the canonical compare vacuous in
+     * image mode (Pam's review of the online relaxation). */
     wcscpy(Cur, Target->Root);
+    wcscat(Cur, L"\\");
     wcscpy(Deepest, Target->Root);
+    wcscat(Deepest, L"\\");
     while (*p)
     {
         PCWSTR e = wcschr(p, L'\\');
@@ -268,6 +275,8 @@ BsTargetValidateReal(
 
         wcscpy(Expect, FinalRoot);
         Tail = Deepest + wcslen(Target->Root);
+        if (*Tail == L'\\')
+            Tail++; /* Deepest carries the separator the root omits */
         if (Rl && Expect[Rl - 1] != L'\\' && *Tail)
             wcscat(Expect, L"\\");
         wcscat(Expect, Tail);
