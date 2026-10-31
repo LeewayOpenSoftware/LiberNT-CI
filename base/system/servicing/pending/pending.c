@@ -590,18 +590,21 @@ S1JournalWriterAppend(
  * target, the add path re-deletes nothing), so a repeated rollback or a
  * rollback that reaches an op never applied converges to the same state. */
 #ifndef S1_HOST_APPLIER
-/* BootExecute processes have no console; NtDisplayString reaches the boot
- * screen and the kernel debugger, which is the only visibility a native
- * applier gets (Pam's review: a silently misresolved tree must not be
- * mute). */
+/* BootExecute processes have no console and NtDisplayString only reaches
+ * the boot video (invisible under the graphical splash and absent from
+ * the KD serial); DbgPrint lands in the kernel debugger on debug builds,
+ * which is the reliable channel for a native applier (Dwight's diag run). */
 static VOID
 S1Log(
     _In_ PCWSTR Msg)
 {
-    UNICODE_STRING Text;
+    CHAR Narrow[512];
+    SIZE_T i;
 
-    RtlInitUnicodeString(&Text, Msg);
-    NtDisplayString(&Text);
+    for (i = 0; Msg[i] && i < RTL_NUMBER_OF(Narrow) - 1; i++)
+        Narrow[i] = (CHAR)Msg[i];
+    Narrow[i] = 0;
+    DbgPrint("%s\r\n", Narrow);
 }
 #else
 static VOID
