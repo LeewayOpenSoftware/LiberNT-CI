@@ -457,14 +457,9 @@ CCabinetWindow::ClientCaption()
 int
 CCabinetWindow::CaptionButtonsWidth()
 {
-    RECT bounds;
-
     if (!ClientCaption())
         return 0;
-    if (SUCCEEDED(DwmGetWindowAttribute(m_hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, &bounds, sizeof(bounds))) &&
-        bounds.right > bounds.left)
-        return bounds.right - bounds.left;
-    return GetSystemMetricsForDpi(SM_CXSIZE, GetDpiForWindow(m_hwnd)) * 3;
+    return ShellFrame::CaptionStripWidth(GetDpiForWindow(m_hwnd));
 }
 
 /* The caption buttons live in the extended frame, which the compositor is
@@ -476,23 +471,19 @@ BOOL
 CCabinetWindow::GetCaptionButton(int ht, RECT *rc)
 {
     RECT client;
-    int index, button;
+    ShellFrame::CaptionButton button;
 
     if (!ClientCaption())
         return FALSE;
     switch (ht)
     {
-        case HTCLOSE: index = 0; break;
-        case HTMAXBUTTON: index = 1; break;
-        case HTMINBUTTON: index = 2; break;
+        case HTCLOSE: button = ShellFrame::CaptionButton::Close; break;
+        case HTMAXBUTTON: button = ShellFrame::CaptionButton::Maximize; break;
+        case HTMINBUTTON: button = ShellFrame::CaptionButton::Minimize; break;
         default: return FALSE;
     }
     GetClientRect(m_hwnd, &client);
-    button = CaptionButtonsWidth() / 3;
-    rc->right = client.right - index * button;
-    rc->left = rc->right - button;
-    rc->top = 0;
-    rc->bottom = min(TabStripHeight(), Scale(32));
+    *rc = ShellFrame::CaptionButtonBounds(client, button, GetDpiForWindow(m_hwnd));
     return TRUE;
 }
 
@@ -534,73 +525,19 @@ void
 CCabinetWindow::PaintCaptionButtons(HDC dc)
 {
     static const int buttons[] = { HTMINBUTTON, HTMAXBUTTON, HTCLOSE };
+    static const ShellFrame::CaptionButton kinds[] =
+    {
+        ShellFrame::CaptionButton::Minimize, ShellFrame::CaptionButton::Maximize, ShellFrame::CaptionButton::Close
+    };
     RECT rc;
-    int stroke = max(1, Scale(1)), half = Scale(5);
 
     for (UINT i = 0; i < _countof(buttons); i++)
     {
-        int ht = buttons[i], cx, cy;
-        COLORREF fill = 0;
-        BOOL filled = FALSE;
-        HPEN pen, oldPen;
-
-        if (!GetCaptionButton(ht, &rc))
+        if (!GetCaptionButton(buttons[i], &rc))
             continue;
-        if (m_CaptionDown == ht && m_CaptionHot == ht)
-        {
-            fill = ht == HTCLOSE ? RGB(139, 10, 20) : RGB(90, 90, 90);
-            filled = TRUE;
-        }
-        else if (m_CaptionHot == ht)
-        {
-            fill = ht == HTCLOSE ? RGB(196, 43, 28) : RGB(60, 60, 60);
-            filled = TRUE;
-        }
-        if (filled)
-        {
-            HBRUSH brush = CreateSolidBrush(fill);
-            FillRect(dc, &rc, brush);
-            DeleteObject(brush);
-        }
-        cx = (rc.left + rc.right) / 2;
-        cy = (rc.top + rc.bottom) / 2;
-        pen = CreatePen(PS_SOLID, stroke, RGB(255, 255, 255));
-        oldPen = (HPEN)SelectObject(dc, pen);
-        switch (ht)
-        {
-            case HTMINBUTTON:
-                MoveToEx(dc, cx - half, cy, NULL);
-                LineTo(dc, cx + half + 1, cy);
-                break;
-            case HTMAXBUTTON:
-            {
-                HGDIOBJ oldBrush = SelectObject(dc, GetStockObject(NULL_BRUSH));
-                if (IsZoomed(m_hwnd))
-                {
-                    int d = Scale(2);
-                    Rectangle(dc, cx - half, cy - half + d, cx + half - d + 1, cy + half + 1);
-                    MoveToEx(dc, cx - half + d, cy - half + d, NULL);
-                    LineTo(dc, cx - half + d, cy - half);
-                    LineTo(dc, cx + half + 1, cy - half);
-                    LineTo(dc, cx + half + 1, cy + half - d + 1);
-                    LineTo(dc, cx + half - d + 1, cy + half - d + 1);
-                }
-                else
-                {
-                    Rectangle(dc, cx - half, cy - half, cx + half + 1, cy + half + 1);
-                }
-                SelectObject(dc, oldBrush);
-                break;
-            }
-            case HTCLOSE:
-                MoveToEx(dc, cx - half, cy - half, NULL);
-                LineTo(dc, cx + half + 1, cy + half + 1);
-                MoveToEx(dc, cx + half, cy - half, NULL);
-                LineTo(dc, cx - half - 1, cy + half + 1);
-                break;
-        }
-        SelectObject(dc, oldPen);
-        DeleteObject(pen);
+        ShellFrame::DrawCaptionButton(m_hwnd, dc, rc, kinds[i], m_CaptionHot == buttons[i],
+                                      m_CaptionDown == buttons[i] && m_CaptionHot == buttons[i], GetActiveWindow() == m_hwnd,
+                                      IsZoomed(m_hwnd) != FALSE);
     }
 }
 
