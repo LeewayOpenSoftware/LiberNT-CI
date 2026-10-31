@@ -61,6 +61,8 @@ struct UpdateState
     std::vector<PackageRow> Packages;      /* staged or applied packages */
     std::vector<HistoryRow> History;       /* newest first */
     bool TornJournal = false;
+    bool PlanPending = false;              /* pending\plan.json waits for the next boot */
+    bool JournalLocked = false;            /* the journal cannot be appended to: the boot applier would halt */
     int PackageForBanner = -1;             /* index in Packages of the package the header is about */
 };
 

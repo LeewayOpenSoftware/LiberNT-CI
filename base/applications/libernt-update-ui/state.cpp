@@ -62,6 +62,33 @@ ReadState(UpdateState &state, bool verify)
     }
     state.TornJournal = journal.tailTruncated != FALSE;
 
+    /* A plan waits for the next boot; the applier journals its first phase before touching any file, so a journal
+     * that cannot be appended to makes every boot halt (S1-BOOTSTRAP.md, decision A). Probe without creating. */
+    {
+        char *plan = NULL;
+
+        if (LnServicingReadPendingPlan(&target, &plan) == ERROR_SUCCESS)
+        {
+            WCHAR *path = LnTargetPath(&target, L"journal\transactions.jsonl");
+
+            state.PlanPending = true;
+            if (path)
+            {
+                DWORD attrs = GetFileAttributesW(path);
+                HANDLE file = CreateFileW(path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                          NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+
+                if (file != INVALID_HANDLE_VALUE)
+                    CloseHandle(file);
+                if (attrs != INVALID_FILE_ATTRIBUTES &&
+                    ((attrs & FILE_ATTRIBUTE_READONLY) || file == INVALID_HANDLE_VALUE))
+                    state.JournalLocked = true;
+                free(path);
+            }
+        }
+        free(plan);
+    }
+
     error = LnStoreList(&target, &ids, &count);
     if (error && error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
         state.Error = error;

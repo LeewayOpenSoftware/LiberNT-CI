@@ -543,6 +543,17 @@ private:
         }
         y += iconSize + m_Theme.Scale(24);
 
+        /* a waiting plan whose journal is locked: every boot would stop before touching a file */
+        if (m_State.PlanPending && m_State.JournalLocked)
+        {
+            rc = Card(canvas, left, right, y, m_Theme.Scale(40));
+            rc.left += m_Theme.Scale(16);
+            canvas.Text(L"An update is waiting, but the update history can't be written. Fix it, then restart.", rc,
+                        m_Theme.Font(TextStyle::Body), RGB(0xFF, 0x99, 0xA4),
+                        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+            y += m_Theme.Scale(52);
+        }
+
         /* the notice of the last action */
         if (!m_Notice.empty())
         {
