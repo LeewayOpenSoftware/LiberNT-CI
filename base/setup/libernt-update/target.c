@@ -358,6 +358,8 @@ BsTargetInitImage(
     _In_ PCWSTR ImageRoot)
 {
     WCHAR Probe[BS_MAX_PATH_BUF];
+    WCHAR WindowsDir[BS_MAX_PATH_BUF];
+    size_t RootLen;
     DWORD Attr;
 
     memset(Target, 0, sizeof(*Target));
@@ -368,6 +370,24 @@ BsTargetInitImage(
     wcscpy(Target->Root, ImageRoot);
     if (Target->Root[wcslen(Target->Root) - 1] == L'\\')
         Target->Root[wcslen(Target->Root) - 1] = 0;
+    RootLen = wcslen(Target->Root);
+
+    /* --image must be an offline root, never the running system: refuse a
+     * drive root, the live Windows directory, or a reparse point. Without
+     * this, "--image C:" passes the probe below and the copies would land
+     * in the real C:\Windows before the hive load fails (Pam review E1). */
+    Attr = GetFileAttributesW(Target->Root);
+    if (Attr == INVALID_FILE_ATTRIBUTES)
+        return ERROR_PATH_NOT_FOUND;
+    if (Attr & FILE_ATTRIBUTE_REPARSE_POINT)
+        return ERROR_NOT_SUPPORTED;
+    if (RootLen <= 3 && Target->Root[1] == L':')
+        return ERROR_NOT_SUPPORTED; /* drive root such as C: or C:\ */
+    if (!GetWindowsDirectoryW(WindowsDir, RTL_NUMBER_OF(WindowsDir)))
+        return GetLastError();
+    if (_wcsnicmp(Target->Root, WindowsDir, RootLen) == 0 &&
+        (WindowsDir[RootLen] == 0 || WindowsDir[RootLen] == L'\\'))
+        return ERROR_NOT_SUPPORTED; /* the live Windows directory itself */
 
     if (swprintf(Probe, RTL_NUMBER_OF(Probe),
                  L"%s\\Windows\\System32\\config\\SYSTEM", Target->Root) < 0)
@@ -375,6 +395,8 @@ BsTargetInitImage(
     Attr = GetFileAttributesW(Probe);
     if (Attr == INVALID_FILE_ATTRIBUTES || (Attr & FILE_ATTRIBUTE_DIRECTORY))
         return ERROR_DIRECTORY;
+    if (Attr & FILE_ATTRIBUTE_REPARSE_POINT)
+        return ERROR_NOT_SUPPORTED;
     return ERROR_SUCCESS;
 }
 
