@@ -86,7 +86,11 @@ DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool
     /* The states of every caption button part are numbered alike */
     state = pressed ? 3 : hot ? 2 : active ? 1 : 5;
 
-    theme = IsAppThemed() ? OpenThemeData(hwnd, L"WINDOW") : NULL;
+    /* The non-client theme is what the system caption and the compositor draw the buttons with; the plain
+     * WINDOW class of a control is another variant with flat glyphs and no button face. */
+    theme = IsAppThemed() ? OpenThemeDataEx(hwnd, L"WINDOW", OTD_NONCLIENT) : NULL;
+    if (!theme && IsAppThemed())
+        theme = OpenThemeData(hwnd, L"WINDOW");
     if (theme)
     {
         if (IsThemePartDefined(theme, part, state) || IsThemePartDefined(theme, part, 1))
