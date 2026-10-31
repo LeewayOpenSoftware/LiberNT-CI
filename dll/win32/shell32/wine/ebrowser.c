@@ -1775,8 +1775,29 @@ static HRESULT WINAPI ICommDlgBrowser3_fnOnDefaultCommand(ICommDlgBrowser3 *ifac
             LPIDA pida = GlobalLock(medium.hGlobal);
             LPCITEMIDLIST pidl_child = (LPCITEMIDLIST) ((LPBYTE)pida+pida->aoffset[1]);
 
-            /* Handle folders by browsing to them. */
-            if(_ILIsFolder(pidl_child) || _ILIsDrive(pidl_child) || _ILIsSpecialFolder(pidl_child))
+            /* Handle folders by browsing to them. A GUID item is a folder only if its
+             * attributes say so: Control Panel items such as Mouse are GUID items that
+             * run a command and cannot be bound as a folder. */
+            BOOL browse = _ILIsFolder(pidl_child) || _ILIsDrive(pidl_child);
+            if(!browse && _ILIsSpecialFolder(pidl_child))
+            {
+                IFolderView *pfv;
+                IShellFolder *psf;
+                SFGAOF attrs = SFGAO_FOLDER;
+
+                browse = TRUE;
+                if(SUCCEEDED(IShellView_QueryInterface(shv, &IID_IFolderView, (void**)&pfv)))
+                {
+                    if(SUCCEEDED(IFolderView_GetFolder(pfv, &IID_IShellFolder, (void**)&psf)))
+                    {
+                        if(SUCCEEDED(IShellFolder_GetAttributesOf(psf, 1, &pidl_child, &attrs)))
+                            browse = (attrs & SFGAO_FOLDER) != 0;
+                        IShellFolder_Release(psf);
+                    }
+                    IFolderView_Release(pfv);
+                }
+            }
+            if(browse)
             {
                 IExplorerBrowser_BrowseToIDList(&This->IExplorerBrowser_iface, pidl_child, SBSP_RELATIVE);
                 ret = S_OK;
