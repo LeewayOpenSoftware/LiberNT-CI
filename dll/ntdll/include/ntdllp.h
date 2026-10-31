@@ -621,6 +621,12 @@ NTSTATUS
 LdrpArchApplyImageView(
     _In_ PVOID ImageBase);
 
+NTSTATUS
+LdrpArchStartEmulation(VOID);
+
+VOID
+LdrpArchDetachThread(VOID);
+
 BOOLEAN
 RtlpArchQueryPerformanceCounter(
     _Out_ PLARGE_INTEGER Counter);

@@ -19,6 +19,7 @@ typedef struct _EMU_HOST_THUNK
     PVOID Native;
     ULONG64 Stub;
     ULONG Count;
+    ULONG Named;
     CHAR Signature[EMU_HOST_MAX_ARGUMENTS + 2];
 } EMU_HOST_THUNK, *PEMU_HOST_THUNK;
 
@@ -31,8 +32,26 @@ static volatile LONG EmuHostThunkCount;
 static PUCHAR EmuStubBlock;
 static ULONG EmuStubUsed;
 static ULONG64 EmuGuestReturnStub;
+#define EMU_RV64X_SECTION ".rv64x"
+
+typedef struct _EMU_RV64X_IMAGE
+{
+    PVOID CodeBitmap;
+    PVOID CallX64;
+} EMU_RV64X_IMAGE, *PEMU_RV64X_IMAGE;
+
+static
+ULONG64
+NTAPI
+EmuCallDescribed(
+    _In_ ULONG64 Function,
+    _In_ ULONG64 DescriptorLow,
+    _In_ ULONG64 DescriptorHigh,
+    _In_opt_ const ULONG64 *Arguments);
+
 static PUCHAR EmuCodeMap;
 static ULONG_PTR EmuCodeMapLimit;
+static PVOID EmuDllNotificationCookie;
 
 static const EMU_REGISTER EmuServiceArguments[4] = { EmuR10, EmuRdx, EmuR8, EmuR9 };
 static const EMU_REGISTER EmuCallArguments[4] = { EmuRcx, EmuRdx, EmuR8, EmuR9 };
@@ -109,7 +128,6 @@ EmuDescriptorSignature(
 
     if ((Descriptor[0] | (Descriptor[1] << 8)) != EMU_HOST_DESCRIPTOR_MAGIC) return FALSE;
     if ((Descriptor[3] & EMU_HOST_DESCRIPTOR_UNSUPPORTED) || Count > EMU_HOST_MAX_ARGUMENTS) return FALSE;
-    if (Entry && (Descriptor[3] & EMU_HOST_DESCRIPTOR_VARIADIC)) return FALSE;
 
     Kind = Descriptor[3] & 0xF;
     if (Kind >= sizeof(Types) - 1) return FALSE;
@@ -120,6 +138,10 @@ EmuDescriptorSignature(
         if (!Kind || Kind >= sizeof(Types) - 1) return FALSE;
         Signature[Index + 1] = Types[Kind];
     }
+    if (Entry && (Descriptor[3] & EMU_HOST_DESCRIPTOR_VARIADIC))
+    {
+        for (; Count < EMU_HOST_MAX_ARGUMENTS; Count++) Signature[Count + 1] = EMU_HOST_TYPE_INT64;
+    }
     Signature[Count + 1] = ANSI_NULL;
     return TRUE;
 }
@@ -127,14 +149,16 @@ EmuDescriptorSignature(
 static
 VOID
 EmuMarkNativeImage(
-    _In_ PVOID Base)
+    _In_ PVOID Base,
+    _In_ BOOLEAN Native)
 {
     PIMAGE_NT_HEADERS Headers = RtlImageNtHeader(Base);
     PIMAGE_SECTION_HEADER Section;
+    PEMU_RV64X_IMAGE Image;
     ULONG_PTR Page, Last;
     ULONG Index;
 
-    if (!EmuCodeMap || !Headers) return;
+    if (!EmuCodeMap || !Headers || Headers->FileHeader.Machine != IMAGE_FILE_MACHINE_NATIVE) return;
     Section = IMAGE_FIRST_SECTION(Headers);
     for (Index = 0; Index < Headers->FileHeader.NumberOfSections; Index++, Section++)
     {
@@ -142,7 +166,23 @@ EmuMarkNativeImage(
         Page = ((ULONG_PTR)Base + Section->VirtualAddress) >> PAGE_SHIFT;
         Last = ((ULONG_PTR)Base + Section->VirtualAddress + Section->Misc.VirtualSize - 1) >> PAGE_SHIFT;
         for (; Page <= Last && Page <= (EmuCodeMapLimit >> PAGE_SHIFT); Page++)
-            InterlockedOr8((PCHAR)&EmuCodeMap[Page >> 3], (CHAR)(1 << (Page & 7)));
+        {
+            if (Native) InterlockedOr8((PCHAR)&EmuCodeMap[Page >> 3], (CHAR)(1 << (Page & 7)));
+            else InterlockedAnd8((PCHAR)&EmuCodeMap[Page >> 3], (CHAR)~(1 << (Page & 7)));
+        }
+    }
+
+    if (!Native) return;
+    Section = IMAGE_FIRST_SECTION(Headers);
+    for (Index = 0; Index < Headers->FileHeader.NumberOfSections; Index++, Section++)
+    {
+        if (!memcmp(Section->Name, EMU_RV64X_SECTION, sizeof(EMU_RV64X_SECTION)) &&
+            (Section->Characteristics & IMAGE_SCN_MEM_WRITE) && Section->Misc.VirtualSize >= sizeof(EMU_RV64X_IMAGE))
+        {
+            Image = (PEMU_RV64X_IMAGE)((PUCHAR)Base + Section->VirtualAddress);
+            InterlockedExchangePointer(&Image->CallX64, (PVOID)EmuCallDescribed);
+            InterlockedExchangePointer(&Image->CodeBitmap, EmuCodeMap);
+        }
     }
 }
 
@@ -154,8 +194,19 @@ EmuMarkNativeImages(VOID)
 
     RtlEnterCriticalSection(NtCurrentPeb()->LoaderLock);
     for (Entry = Head->Flink; Entry != Head; Entry = Entry->Flink)
-        EmuMarkNativeImage(CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks)->DllBase);
+        EmuMarkNativeImage(CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks)->DllBase, TRUE);
     RtlLeaveCriticalSection(NtCurrentPeb()->LoaderLock);
+}
+
+static
+VOID
+NTAPI
+EmuDllNotification(
+    _In_ ULONG Reason,
+    _In_ PCLDR_DLL_NOTIFICATION_DATA Data,
+    _In_opt_ PVOID Context)
+{
+    EmuMarkNativeImage(Data->Loaded.DllBase, Reason == LDR_DLL_NOTIFICATION_REASON_LOADED);
 }
 
 static
@@ -176,6 +227,8 @@ EmuInitializeCodeMap(VOID)
 
     EmuCodeMapLimit = Information.MaximumUserModeAddress;
     EmuCodeMap = Base;
+    Status = LdrRegisterDllNotification(0, EmuDllNotification, NULL, &EmuDllNotificationCookie);
+    if (!NT_SUCCESS(Status)) return Status;
     EmuMarkNativeImages();
     NtCurrentPeb()->EcCodeBitMap = Base;
     return STATUS_SUCCESS;
@@ -219,7 +272,7 @@ EmuGuestThunk(
     CHAR Described[EMU_HOST_MAX_ARGUMENTS + 2];
     UCHAR Code[] = { 0x4C, 0x8B, 0xD1, 0xB8, 0, 0, 0, 0, 0x0F, 0x05, 0xC3 };
     PEMU_HOST_THUNK Thunk;
-    ULONG Index, Count, Service;
+    ULONG Index, Count, Service, Named = MAXULONG;
     ULONG64 Stub = 0;
 
     if (Native && !Signature)
@@ -227,7 +280,11 @@ EmuGuestThunk(
         _SEH2_TRY
         {
             if (EmuDescriptorSignature((PUCHAR)Native - EMU_HOST_DESCRIPTOR_SIZE, TRUE, Described))
+            {
                 Signature = Described;
+                if (((PUCHAR)Native - EMU_HOST_DESCRIPTOR_SIZE)[3] & EMU_HOST_DESCRIPTOR_VARIADIC)
+                    Named = ((PUCHAR)Native - EMU_HOST_DESCRIPTOR_SIZE)[2];
+            }
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -267,6 +324,7 @@ EmuGuestThunk(
                 Thunk->Native = Native;
                 Thunk->Stub = Stub;
                 Thunk->Count = (ULONG)strlen(Signature) - 1;
+                Thunk->Named = min(Named, Thunk->Count);
                 strcpy(Thunk->Signature, Signature);
                 InterlockedExchange(&EmuHostThunkCount, (LONG)Count + 1);
             }
@@ -281,6 +339,7 @@ NTSTATUS
 EmuCollectArguments(
     _In_ PEMU_THREAD Thread,
     _In_ PCSTR Type,
+    _In_ ULONG Count,
     _In_ PEMU_REGISTERS Registers,
     _Out_writes_(EMU_HOST_MAX_ARGUMENTS) PULONG64 Arguments)
 {
@@ -293,7 +352,7 @@ EmuCollectArguments(
     Vectors = EmuCoreGetVectors(Thread->Cpu, &Stride);
     _SEH2_TRY
     {
-        for (Index = 0; Type[Index]; Index++)
+        for (Index = 0; Index < Count; Index++)
         {
             if (Index < 4)
                 Value = EmuIsFloatType(Type[Index]) ? Vectors[Index * Stride] : Registers->Gpr[EmuServiceArguments[Index]];
@@ -322,10 +381,19 @@ EmuHostCall(
     ULONG Count = Thunk->Count;
     ULONG64 Result;
     PULONG64 Vectors;
+    ULONG_PTR Base, Rsp;
     ULONG Stride;
     NTSTATUS Status;
 
-    Status = EmuCollectArguments(Thread, Thunk->Signature + 1, Registers, Arguments);
+    if (Thunk->Named < Count)
+    {
+        Base = (ULONG_PTR)Thread->GuestTeb->NtTib.StackBase;
+        Rsp = (ULONG_PTR)Registers->Gpr[EmuRsp];
+        if (Rsp < Base && Rsp >= (ULONG_PTR)Thread->GuestTeb->DeallocationStack)
+            Count = max(Thunk->Named, (ULONG)min((ULONG_PTR)Count, max((Base - Rsp) / sizeof(ULONG64), 1) - 1));
+    }
+
+    Status = EmuCollectArguments(Thread, Thunk->Signature + 1, Count, Registers, Arguments);
     if (!NT_SUCCESS(Status))
     {
         Registers->Gpr[EmuRax] = (ULONG)Status;
@@ -381,7 +449,7 @@ EmuCallGuest(
     _In_ PCSTR Signature,
     _In_opt_ const ULONG64 *Arguments)
 {
-    PEMU_THREAD Thread = EmuCurrentThread();
+    PEMU_THREAD Thread = EmuProcess.Attached ? EmuEnterAttachedThread() : EmuCurrentThread();
     PEMU_REGISTERS Registers;
     EMU_GUEST_CALL Call;
     PULONG64 Stack, Vectors;
@@ -518,7 +586,6 @@ EmuHostLoad(
     if (!NT_SUCCESS(Status) || wcschr(Buffer, L'\\') || wcschr(Buffer, L'/')) return 0;
 
     Status = LdrLoadDll(NULL, NULL, &Library, &Base);
-    if (NT_SUCCESS(Status)) EmuMarkNativeImages();
     if (NT_SUCCESS(Status)) Status = LdrGetProcedureAddress(Base, &Export, 0, (PVOID *)&Initialize);
     if (!NT_SUCCESS(Status))
     {
@@ -571,13 +638,35 @@ EmuCallDescribed(
     if (!Function) RtlRaiseStatus(STATUS_ACCESS_VIOLATION);
     if (!EmuDescriptorSignature(Descriptor, FALSE, Signature)) EmuFatal(STATUS_NOT_SUPPORTED, "unsupported RV64X exit");
 
-    if (RtlPcToFileHeader((PVOID)(ULONG_PTR)Function, &Base))
+    if (RtlPcToFileHeader((PVOID)(ULONG_PTR)Function, &Base) &&
+        RtlImageNtHeader(Base)->FileHeader.Machine == IMAGE_FILE_MACHINE_NATIVE)
     {
-        EmuMarkNativeImage(Base);
+        EmuMarkNativeImage(Base, TRUE);
         Count = Descriptor[2];
         return EmuInvokeNative((PVOID)(ULONG_PTR)Function, Arguments, Arguments + 8, Count > 8 ? Count - 8 : 0);
     }
     return EmuCallGuest(Function, Signature, Arguments);
+}
+
+ULONG64
+EmuNativeEntry(
+    _In_ ULONG64 Rip)
+{
+    ULONG64 Stub;
+
+    if (!EmuCodeMap || Rip > EmuCodeMapLimit) return 0;
+    if (!(EmuCodeMap[Rip >> (PAGE_SHIFT + 3)] & (1 << ((Rip >> PAGE_SHIFT) & 7)))) return 0;
+    Stub = EmuGuestThunk((PVOID)(ULONG_PTR)Rip, NULL);
+    if (!Stub)
+    {
+        PLDR_DATA_TABLE_ENTRY Entry;
+
+        if (NT_SUCCESS(LdrFindEntryForAddress((PVOID)(ULONG_PTR)Rip, &Entry)))
+            DbgPrint("AMD64EMU: AMD64 code entered %wZ+%Ix, which has no RV64X entry descriptor\n",
+                     &Entry->BaseDllName, (SIZE_T)(Rip - (ULONG_PTR)Entry->DllBase));
+        EmuFatal(STATUS_NOT_SUPPORTED, "AMD64 code entered native code that has no RV64X entry descriptor");
+    }
+    return Stub;
 }
 
 static const EMU_HOST_INTERFACE EmuHostInterface =

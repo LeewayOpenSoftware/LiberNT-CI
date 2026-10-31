@@ -52,7 +52,9 @@ extern void func_AppModelInternal(void);
 extern void func_GetSystemWow64Directory(void);
 extern void func_GetTempFileName(void);
 extern void func_GetTempPath2(void);
+extern void func_GetThreadTimes(void);
 extern void func_GetVolumeInformation(void);
+extern void func_HeapLowFragmentation(void);
 extern void func_InitOnce(void);
 extern void func_WineGroups12(void);
 extern void func_InversionL1(void);
@@ -158,7 +160,9 @@ const struct test winetest_testlist[] =
     { "GetSystemWow64Directory",     func_GetSystemWow64Directory },
     { "GetTempFileName",             func_GetTempFileName },
     { "GetTempPath2",                func_GetTempPath2 },
+    { "GetThreadTimes",              func_GetThreadTimes },
     { "GetVolumeInformation",        func_GetVolumeInformation },
+    { "HeapLowFragmentation",        func_HeapLowFragmentation },
     { "InitOnce",                    func_InitOnce },
     { "WineGroups12",                func_WineGroups12 },
     { "InversionL1", func_InversionL1 },

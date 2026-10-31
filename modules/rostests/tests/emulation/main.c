@@ -586,6 +586,39 @@ TestIndirectCalls(VOID)
 }
 
 #if defined(_M_AMD64) || defined(__x86_64__)
+#include <emmintrin.h>
+#endif
+
+static
+VOID
+TestMisalignedVectors(VOID)
+{
+    DECLSPEC_ALIGN(16) UCHAR Source[64];
+    DECLSPEC_ALIGN(16) UCHAR Target[64];
+    ULONG Offset, Index;
+    LONG Mismatches = 0;
+
+    for (Index = 0; Index < sizeof(Source); Index++) Source[Index] = (UCHAR)(Index * 7 + 1);
+    for (Offset = 1; Offset < 16; Offset++)
+    {
+        RtlZeroMemory(Target, sizeof(Target));
+#if defined(_M_AMD64) || defined(__x86_64__)
+        _mm_storeu_si128((__m128i *)(Target + Offset), _mm_loadu_si128((const __m128i *)(Source + Offset)));
+        _mm_storel_epi64((__m128i *)(Target + Offset + 16), _mm_loadl_epi64((const __m128i *)(Source + Offset + 16)));
+        _mm_store_ss((float *)(Target + Offset + 24), _mm_load_ss((const float *)(Source + Offset + 24)));
+#else
+        memcpy(Target + Offset, Source + Offset, 28);
+#endif
+        for (Index = 0; Index < sizeof(Target); Index++)
+        {
+            if (Target[Index] != ((Index >= Offset && Index < Offset + 28) ? Source[Index] : 0)) Mismatches++;
+        }
+    }
+    CHECK(Mismatches == 0);
+    printf("EMUTEST: misaligned 128-bit, 64-bit and 32-bit vector moves verified\n");
+}
+
+#if defined(_M_AMD64) || defined(__x86_64__)
 #include <reactos/emuhost.h>
 #include "rv64xtest.h"
 
@@ -664,7 +697,14 @@ TestRv64X(VOID)
     CHECK(((int (*)(PRV64X_FORMAT_CALLBACK, char *, size_t))(ULONG_PTR)Table->CallFormat)(
               (PRV64X_FORMAT_CALLBACK)_snprintf, Buffer, sizeof(Buffer)) == 13);
     CHECK(!strcmp(Buffer, "42 3.25 x 0.5"));
-    printf("EMUTEST: RV64X entry descriptors and exit thunks verified\n");
+    CHECK(((int (*)(int, short, unsigned char, long long))(ULONG_PTR)Table->NativeAdd)(7, -2, 255, -1LL) == 259);
+    CHECK(((double (*)(float, double, int, float, double, int, float, double, signed char, unsigned short))
+           (ULONG_PTR)Table->NativeMix)(0.5f, 1.0, 2, 0.25f, -1.0, 1, 2.0f, 0.5, 1, 2) ==
+          0.5f + 1.0 * 2 + 2 * 4 + 0.25f * 8 + -1.0 * 16 + 1 * 32 + 2.0f * 64 + 0.5 * 128 + 1 * 256 + 2 * 512.0);
+    CHECK(((int (*)(char *, size_t, const char *, ...))(ULONG_PTR)Table->NativeFormat)(
+              Buffer, sizeof(Buffer), "%.2f %d %s %lld %d %d %d %.1f", 3.25, 42, "x", 5000000000LL, 1, 2, 3, 0.5) == 30);
+    CHECK(!strcmp(Buffer, "3.25 42 x 5000000000 1 2 3 0.5"));
+    printf("EMUTEST: RV64X entry descriptors, exit thunks and direct native entry verified\n");
 }
 #else
 static
@@ -673,6 +713,36 @@ TestRv64X(VOID)
 {
 }
 #endif
+
+static
+VOID
+TestMachines(VOID)
+{
+    typedef BOOL (WINAPI *PIS_WOW64_PROCESS2)(HANDLE, PUSHORT, PUSHORT);
+    typedef HRESULT (WINAPI *PGET_MACHINE_TYPE_ATTRIBUTES)(USHORT, MACHINE_ATTRIBUTES *);
+    HMODULE Kernel32 = GetModuleHandleW(L"kernel32.dll");
+    PIS_WOW64_PROCESS2 pIsWow64Process2 = (PIS_WOW64_PROCESS2)GetProcAddress(Kernel32, "IsWow64Process2");
+    PGET_MACHINE_TYPE_ATTRIBUTES pGetMachineTypeAttributes =
+        (PGET_MACHINE_TYPE_ATTRIBUTES)GetProcAddress(Kernel32, "GetMachineTypeAttributes");
+    MACHINE_ATTRIBUTES Attributes;
+    USHORT ProcessMachine, NativeMachine;
+
+    if (!pIsWow64Process2 || !pGetMachineTypeAttributes ||
+        !pIsWow64Process2(GetCurrentProcess(), &ProcessMachine, &NativeMachine) ||
+        NativeMachine != IMAGE_FILE_MACHINE_RISCV64)
+    {
+        return;
+    }
+
+    CHECK(SUCCEEDED(pGetMachineTypeAttributes(IMAGE_FILE_MACHINE_RISCV64, &Attributes)) &&
+          (Attributes & UserEnabled) && (Attributes & KernelEnabled));
+    CHECK(SUCCEEDED(pGetMachineTypeAttributes(IMAGE_FILE_MACHINE_AMD64, &Attributes)) &&
+          (Attributes & UserEnabled) && !(Attributes & KernelEnabled) && !(Attributes & Wow64Container));
+    CHECK(SUCCEEDED(pGetMachineTypeAttributes(IMAGE_FILE_MACHINE_I386, &Attributes)) &&
+          (Attributes & UserEnabled) && (Attributes & Wow64Container));
+    CHECK(SUCCEEDED(pGetMachineTypeAttributes(IMAGE_FILE_MACHINE_ARM64, &Attributes)) && !Attributes);
+    printf("EMUTEST: a riscv64 machine runs riscv64, AMD64 and x86 user mode\n");
+}
 
 int
 main(
@@ -693,6 +763,7 @@ main(
           System.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64);
     CHECK(ProbeStack(16) == 459);
 
+    TestMachines();
     TestThreads();
     TestFiles();
     TestApcs();
@@ -700,6 +771,7 @@ main(
     TestStructuredExceptions();
     TestFloatingStateAcrossFault();
     EmuTestCxxExceptions();
+    TestMisalignedVectors();
     TestIndirectCalls();
     TestRv64X();
 

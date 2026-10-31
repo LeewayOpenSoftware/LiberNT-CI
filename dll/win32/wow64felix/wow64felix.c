@@ -298,6 +298,13 @@ Felix86NtSystemService32(
     FelixLoadCpuArea(Thread, &Status, Bop);
 }
 
+ULONG64
+Felix86NtNativeEntry(
+    _In_ ULONG64 Rip)
+{
+    return 0;
+}
+
 static
 VOID
 FelixInvalidate(
@@ -381,6 +388,9 @@ BTCpuProcessTerm(
     _In_ BOOL After,
     _In_ NTSTATUS Status)
 {
+    if (Process) return;
+    if (!After) Felix86NtBeginTermination();
+    else Felix86NtEndTermination(NT_SUCCESS(Status));
 }
 
 VOID

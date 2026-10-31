@@ -493,6 +493,7 @@ ListenComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Conte
         (PSOCKADDR)(&((PTRANSPORT_ADDRESS)ListenContext->ReturnConnectionInfo->RemoteAddress)->Address[0].AddressType);
     PVOID AcceptSocketContext;
     const WSK_CLIENT_CONNECTION_DISPATCH *AcceptSocketDispatch;
+    BOOLEAN Requeue = Irp->PendingReturned || NT_SUCCESS(Irp->IoStatus.Status);
     NTSTATUS Status;
 
     FUNCTION_TRACE;
@@ -539,7 +540,8 @@ ListenComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Conte
      * This is done in a separate thread at IRQL = PASSIVE_LEVEL
      */
 
-    QueueListening(ListenSocket);
+    if (Requeue)
+        QueueListening(ListenSocket);
 
     return STATUS_SUCCESS;
 }
@@ -611,14 +613,15 @@ StartListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
     /* pass the ConnectionFile from accept socket, not from ListenSocket ... */
     status = TdiListen(&tdiIrp, AcceptSocket->ConnectionFile, &lc->RequestConnectionInfo, &lc->ReturnConnectionInfo, ListenComplete, lc);
 
-    if (!NT_SUCCESS(status))
+    if (tdiIrp == NULL)
     {
         ExFreePoolWithTag(lc->ReturnConnectionInfo, TAG_NETIO);
         DereferenceSocket(ListenSocket);
         DereferenceSocket(AcceptSocket);
         goto err_out_free_lc_and_req_conn_info;
     }
-    ListenSocket->ListenIrp = tdiIrp;
+    if (status == STATUS_PENDING)
+        ListenSocket->ListenIrp = tdiIrp;
 
     return STATUS_PENDING;
 

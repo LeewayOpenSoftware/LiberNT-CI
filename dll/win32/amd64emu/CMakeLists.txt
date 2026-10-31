@@ -80,6 +80,7 @@ set_source_files_properties(w32ksignature.cpp PROPERTIES COMPILE_OPTIONS -Wno-mi
 
 list(APPEND SOURCE
     apc.c
+    attach.c
     callback.c
     context.c
     exception.c
@@ -134,3 +135,6 @@ set_module_type(amd64host nativecui ENTRYPOINT EmuHostEntry IMAGEBASE 0x3d100000
 target_link_options(amd64host PRIVATE -Wl,--stack,0x100000)
 add_importlibs(amd64host amd64emu ntdll)
 add_cd_file(TARGET amd64host DESTINATION reactos/system32 FOR all)
+
+set_target_properties(felix86_core felix86_zydis felix86_softfloat felix86_cephes amd64emu amd64host
+    PROPERTIES RV64X_EXCLUDE ON)

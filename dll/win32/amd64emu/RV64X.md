@@ -27,18 +27,28 @@ Kinds: 0 void, 1 64-bit integer or pointer, 2 32-bit integer, 3 signed 16-bit,
 4 unsigned 16-bit, 5 signed 8-bit, 6 unsigned 8-bit or `bool`, 7 `float`,
 8 `double`, 9 16-byte aggregate in two registers, 15 unsupported.
 
-**Checked indirect call.** Before an indirect call the pass loads
-`TEB->ProcessEnvironmentBlock->EcCodeBitMap` (TEB `+0x60`, PEB `+0x368`). A NULL
-bitmap, the native-process case, calls the target directly. Otherwise a target
-whose page bit is set (`bitmap[address >> 15] >> ((address >> 12) & 7)`) is native
-code and is called directly; any other target goes through the exit thunk.
-
-**Exit thunk.** One `linkonce_odr` thunk per call shape stores the arguments as
-64-bit slots (floats as their bit pattern) and calls
+**Image state.** Each image holds one `__rv64x_image` object in its `.rv64x`
+section, and both of its pointers start out NULL:
 
 ```c
-ULONG64 __rv64x_call_x64(PVOID Target, ULONG64 DescriptorLow, ULONG64 DescriptorHigh,
-                         const ULONG64 *Arguments);
+struct { PVOID CodeBitmap; PVOID CallX64; } __rv64x_image;
+```
+
+**Checked indirect call.** Before an indirect call the pass loads
+`__rv64x_image.CodeBitmap`. A NULL pointer, the case of every image in a native
+process and of code linked into the kernel, calls the target directly.
+Otherwise a target whose page bit is set
+(`bitmap[address >> 15] >> ((address >> 12) & 7)`) is native code and is called
+directly; any other target goes through the exit thunk. Keeping the pointer in
+the image rather than in the TEB lets libraries shared with the kernel, such as
+`rtl`, be built as RV64X.
+
+**Exit thunk.** One `linkonce_odr` thunk per call shape stores the arguments as
+64-bit slots (floats as their bit pattern) and calls `__rv64x_image.CallX64`
+
+```c
+ULONG64 CallX64(PVOID Target, ULONG64 DescriptorLow, ULONG64 DescriptorHigh,
+                const ULONG64 *Arguments);
 ```
 
 with the call site's descriptor, then narrows the returned bits to the call's
@@ -46,17 +56,25 @@ result type (`int` results are sign-extended as the LP64 ABI requires).
 
 ## Runtime
 
-- The riscv64 `ntdll` exports `__rv64x_call_x64`, so every RV64X module links
-  it through its `ntdll` import. It forwards to the emulator's
-  `EMU_HOST_INTERFACE::CallDescribed`; native processes never reach it because
-  their bitmap is NULL.
+- An RV64X module imports nothing for RV64X, so drivers, boot applications and
+  modules that do not import `ntdll` link as they are.
 - `amd64emu` points the host PEB's `EcCodeBitMap` at a bitmap sized from
-  `SystemBasicInformation.MaximumUserModeAddress` and marks the executable
-  sections of every host image. `CallDescribed` calls native targets that are
-  not marked yet (a DLL's own `DllMain`, for example) natively and marks their
-  image; everything else runs as x64 through `CallGuest`.
+  `SystemBasicInformation.MaximumUserModeAddress`, marks the executable
+  sections of every host image, points the image's `__rv64x_image.CallX64` at
+  `EMU_HOST_INTERFACE::CallDescribed` and then its `CodeBitmap` at the bitmap, and keeps both current with a loader DLL notification, which marks
+  images as they load and clears them as they unload. `CallDescribed` calls native targets that are not marked yet (a DLL's
+  own `DllMain`, for example) natively and marks their image; everything else
+  runs as x64 through `CallGuest`.
 - `EMU_HOST_INTERFACE::GuestThunk` with a NULL signature reads the target's entry
   descriptor, so x64 code can call any RV64X function given its address.
+- A variadic RV64X function called from x64 gets its named arguments by type,
+  then integer slots up to `EMU_HOST_MAX_ARGUMENTS` in all, taken from the x64
+  argument registers and stack and bounded by the guest stack base. x64 passes
+  variadic floating-point values in the integer registers too.
+- When x64 code branches to an address the bitmap marks native, felix86 does not
+  translate it: it continues at the guest thunk built from the target's entry
+  descriptor, so a raw native function pointer works as a call target. A
+  marked target without a descriptor ends the process with a message naming it.
 
 ## Building and testing
 
@@ -67,8 +85,13 @@ Configure the riscv64 tree with `-DRV64X_CLANG=<clang built with the patch>`
 as x64 loads `rv64xhost.dll` and checks both directions: narrow integers, mixed
 float, double and stack arguments into native code; native code calling x64
 callbacks with ten arguments, a negative `int` result, a `float` result and a
-variadic `_snprintf`. `emulation_test_rv64x` checks that RV64X code runs
+variadic `_snprintf`; and a variadic native function given a `double` in a
+register slot and 64-bit values on the stack. `emulation_test_rv64x` checks that RV64X code runs
 unchanged in a native process.
+
+With `-DRV64X_SYSTEM=ON` every user-mode module of the riscv64 build is RV64X.
+Kernel-mode modules, `amd64emu` with felix86 and `wow64felix` keep the plain
+code generation (`RV64X_EXCLUDE`).
 
 ## Stages
 
@@ -80,10 +103,11 @@ unchanged in a native process.
    them through exit thunks; the generated signature table only covers code
    without descriptors.
 3. One loader for x64 processes: native `ntdll` loads x64 images through the
-   CHPE runtime behind an EC-host switch instead of `_M_ARM64`, x64 imports bind
-   to RV64X system DLLs, felix86 leaves translated code when a target is native.
-4. Build the system DLLs as RV64X and retire the x64 userland in `SystemAMD64`.
+   CHPE runtime behind an EC-host switch instead of `_M_ARM64` and x64 imports
+   bind to RV64X system DLLs. Done so far: felix86 leaves translated code when a
+   target is native.
+4. Build the system DLLs as RV64X (done with `RV64X_SYSTEM`; the suite passes)
+   and retire the x64 userland in `SystemAMD64`, which needs stage 3.
 
-Open: variadic RV64X functions called from x64 (the stack window is unknown),
-16-byte aggregates by value and struct results, C++ `invoke` sites (left
+Open: 16-byte aggregates by value and struct results, C++ `invoke` sites (left
 unchecked), and native code generated at run time (treated as x64).

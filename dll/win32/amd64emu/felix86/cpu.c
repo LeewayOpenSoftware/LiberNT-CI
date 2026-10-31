@@ -232,6 +232,19 @@ EmuCoreCancelPark(
 }
 
 VOID
+EmuCoreBeginTermination(VOID)
+{
+    Felix86NtBeginTermination();
+}
+
+VOID
+EmuCoreEndTermination(
+    _In_ BOOLEAN Terminated)
+{
+    Felix86NtEndTermination(Terminated);
+}
+
+VOID
 Felix86NtSystemService(
     _In_ PVOID Owner,
     _Inout_ PULONG64 Registers)
@@ -245,4 +258,11 @@ Felix86NtSystemService32(
     _Inout_ PULONG64 Registers)
 {
     EmuFatal(STATUS_ILLEGAL_INSTRUCTION, "32-bit system call in an AMD64 process");
+}
+
+ULONG64
+Felix86NtNativeEntry(
+    _In_ ULONG64 Rip)
+{
+    return EmuNativeEntry(Rip);
 }
