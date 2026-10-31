@@ -94,7 +94,9 @@ main(void)
     strcpy(In.Files[0].Sha256, HexA);
     wcscpy(In.Files[1].Path, L"LiberNT\\Servicing\\bin\\libernt-update.exe");
     strcpy(In.Files[1].Sha256, HexA);
-    In.FileCount = 2;
+    wcscpy(In.Files[2].Path, L"Windows\\System32\\quo\"te\x01.dll");
+    strcpy(In.Files[2].Sha256, HexA);
+    In.FileCount = 3;
 
     Error = BsInventorySave(&Target, &In);
     Check(Error == ERROR_SUCCESS, "BsInventorySave exit 0");
@@ -144,7 +146,7 @@ main(void)
         printf("      load error 0x%08lx\n", (unsigned long)Error);
     if (Error == ERROR_SUCCESS)
     {
-        Check(Out.FileCount == 2, "file count round-trips");
+        Check(Out.FileCount == 3, "file count round-trips");
         Check(wcscmp(Out.ServiceState, L"stub") == 0, "service state round-trips");
         Check(Out.BootExecute == TRUE, "bootExecute=true round-trips");
         Check(strcmp(Out.ManifestDigest, HexA) == 0, "manifest digest round-trips");
@@ -152,6 +154,8 @@ main(void)
               "backslash path 1 round-trips");
         Check(wcscmp(Out.Files[1].Path, L"LiberNT\\Servicing\\bin\\libernt-update.exe") == 0,
               "backslash path 2 round-trips");
+        Check(wcscmp(Out.Files[2].Path, L"Windows\\System32\\quo\"te\x01.dll") == 0,
+              "quote and control-char path round-trips");
         Check(strcmp(Out.Files[0].Sha256, HexA) == 0, "sha256 round-trips");
     }
 
