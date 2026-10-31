@@ -292,6 +292,43 @@ S1HashFile(
 
 /* --------------------------------------------------------------- paths */
 
+/* Case-insensitive prefix/equality without the CRT's locale tables; the
+ * kernel-fixed link names are pure ASCII here. */
+static WCHAR
+S1Upcase(
+    _In_ WCHAR C)
+{
+    if (C >= L'a' && C <= L'z')
+        return C - (L'a' - L'A');
+    return C;
+}
+
+static BOOL
+S1CiEqual(
+    _In_ PCWSTR A,
+    _In_ PCWSTR B)
+{
+    while (*A && S1Upcase(*A) == S1Upcase(*B))
+    {
+        A++;
+        B++;
+    }
+    return *A == 0 && *B == 0;
+}
+
+static BOOL
+S1CiPrefix(
+    _In_ PCWSTR Str,
+    _In_ PCWSTR Prefix)
+{
+    while (*Prefix && S1Upcase(*Str) == S1Upcase(*Prefix))
+    {
+        Str++;
+        Prefix++;
+    }
+    return *Prefix == 0;
+}
+
 /* Compose the servicing root from a \SystemRoot link target, which names
  * Compose the servicing root from a \SystemRoot link target, which names
  * the Windows directory, not the volume root. The volume is derived from
@@ -337,7 +374,7 @@ S1ServicingRootFromSystemRoot(
 
     S1_NEXT_COMPONENT();              /* "??", "ArcName", "Device", ... */
 
-    if (!wcsicmp(Comp, L"??"))
+    if (S1CiEqual(Comp, L"??"))
     {
         /* "\??\C:" — the drive designator is the volume */
         S1_KEEP_COMPONENT();          /* keeps "??" */
@@ -346,7 +383,7 @@ S1ServicingRootFromSystemRoot(
             return FALSE;
         S1_KEEP_COMPONENT();          /* keeps "C:" */
     }
-    else if (!wcsicmp(Comp, L"ArcName"))
+    else if (S1CiEqual(Comp, L"ArcName"))
     {
         /* "\ArcName\<multi...>\partition(n)" — the partition component
          * closes the volume designator */
@@ -366,21 +403,21 @@ S1ServicingRootFromSystemRoot(
         if (!Found)
             return FALSE;
     }
-    else if (!wcsicmp(Comp, L"Device"))
+    else if (S1CiEqual(Comp, L"Device"))
     {
         S1_KEEP_COMPONENT();
         S1_NEXT_COMPONENT();          /* HarddiskVolumeN | Harddisk<n> | CdRom<n> | Floppy<n> */
-        if (!wcsnicmp(Comp, L"HarddiskVolume", 14) ||
-            !wcsnicmp(Comp, L"CdRom", 5) ||
-            !wcsnicmp(Comp, L"Floppy", 6))
+        if (S1CiPrefix(Comp, L"HarddiskVolume") ||
+            S1CiPrefix(Comp, L"CdRom") ||
+            S1CiPrefix(Comp, L"Floppy"))
         {
             S1_KEEP_COMPONENT();
         }
-        else if (!wcsnicmp(Comp, L"Harddisk", 8))
+        else if (S1CiPrefix(Comp, L"Harddisk"))
         {
             S1_KEEP_COMPONENT();
             S1_NEXT_COMPONENT();      /* Partition<p> */
-            if (wcsnicmp(Comp, L"Partition", 9))
+            if (!S1CiPrefix(Comp, L"Partition"))
                 return FALSE;
             S1_KEEP_COMPONENT();
         }
@@ -552,10 +589,36 @@ S1JournalWriterAppend(
  * path returns success when the backup is gone and never touches the
  * target, the add path re-deletes nothing), so a repeated rollback or a
  * rollback that reaches an op never applied converges to the same state. */
+#ifndef S1_HOST_APPLIER
+/* BootExecute processes have no console; NtDisplayString reaches the boot
+ * screen and the kernel debugger, which is the only visibility a native
+ * applier gets (Pam's review: a silently misresolved tree must not be
+ * mute). */
+static VOID
+S1Log(
+    _In_ PCWSTR Msg)
+{
+    UNICODE_STRING Text;
+
+    RtlInitUnicodeString(&Text, Msg);
+    NtDisplayString(&Text);
+}
+#else
+static VOID
+S1Log(_In_ PCWSTR Msg)
+{
+    (void)Msg;
+}
+#endif
+
 #define S1JournalOrHalt(j, tx, ph, op, res, err) \
     do { \
-        if (!NT_SUCCESS(S1JournalWriterAppend((j), (tx), (ph), (op), (res), (err)))) \
+        NTSTATUS S1HaltSt_ = S1JournalWriterAppend((j), (tx), (ph), (op), (res), (err)); \
+        if (!NT_SUCCESS(S1HaltSt_)) \
+        { \
+            S1Log(L"S1: journal append failed, halting"); \
             NtTerminateProcess(NtCurrentProcess(), 1); \
+        } \
     } while (0)
 
 /* The chain is verified on read: load the journal, verify every link, and
@@ -968,15 +1031,26 @@ NtProcessStartup(
      * failure; sminit.c discards the status). */
     Status = S1ResolveServicingRoot();
     if (!NT_SUCCESS(Status))
+    {
+        S1Log(L"S1: cannot resolve the servicing root");
         NtTerminateProcess(NtCurrentProcess(), 1);
+    }
+    S1Log(g_ServicingRoot);
 #endif
 
     /* 1. No plan is a successful no-op. */
     Status = S1ReadWholeFile(S1_PLAN_PATH, &PlanData, &PlanSize);
     if (Status == STATUS_OBJECT_NAME_NOT_FOUND)
+    {
+        S1Log(L"S1: no plan, exit 0");
         NtTerminateProcess(NtCurrentProcess(), 0);
+    }
     if (!NT_SUCCESS(Status))
+    {
+        S1Log(L"S1: plan read failed, exit 0");
         NtTerminateProcess(NtCurrentProcess(), 0);
+    }
+    S1Log(L"S1: plan found");
 
     /* 2. Parse and validate the plan shape. */
     if (!S1PlanParse((const char *)PlanData, PlanSize, &Plan) ||
@@ -995,6 +1069,7 @@ NtProcessStartup(
     Status = S1VerifyPlanAgainstManifest(&Plan);
     if (!NT_SUCCESS(Status))
     {
+        S1Log(L"S1: manifest verify failed");
         S1JournalOrHalt(&Journal, Plan.TransactionId, "verify", -1, "failed",
                         "0xC0000020");
         Attempt.Attempt = 1;
@@ -1009,17 +1084,34 @@ NtProcessStartup(
         NtTerminateProcess(NtCurrentProcess(), 0);
     }
     S1JournalOrHalt(&Journal, Plan.TransactionId, "verified", -1, "ok", NULL);
+    S1Log(L"S1: plan verified against manifest");
 
     /* 4. Boot attempt accounting, written and flushed before any work
      * (reconciliation with Meredith: a mid-run power cut must still count). */
-    S1AttemptLoad(Plan.TransactionId, &Attempt);
+    {
+        NTSTATUS LoadSt = S1AttemptLoad(Plan.TransactionId, &Attempt);
+        WCHAR Line[96];
+
+        swprintf(Line, RTL_NUMBER_OF(Line), L"S1: attempt load 0x%08lx attempt=%lu",
+                 (unsigned long)LoadSt, (unsigned long)Attempt.Attempt);
+        S1Log(Line);
+    }
     {
         S1_ATTEMPT Started = Attempt;
+        NTSTATUS SaveSt;
+
         Started.Attempt = Attempt.Attempt + 1;
         Started.HealthConfirmed = S1_FALSE;
         Started.FailureRecorded = S1_FALSE;
         snprintf(Started.LastResult, sizeof(Started.LastResult), "%s", "started");
-        S1AttemptSave(&Started);
+        SaveSt = S1AttemptSave(&Started);
+        {
+            WCHAR Line[96];
+
+            swprintf(Line, RTL_NUMBER_OF(Line), L"S1: attempt save 0x%08lx attempt=%lu",
+                     (unsigned long)SaveSt, (unsigned long)Started.Attempt);
+            S1Log(Line);
+        }
         Attempt = Started;
     }
 
@@ -1029,6 +1121,7 @@ NtProcessStartup(
         const char *Reason = (Attempt.FailureRecorded || strcmp(Attempt.LastResult, "started") == 0)
                             ? (Attempt.FailureRecorded ? "verifiable-failure" : "unexpected-reboot")
                             : "unexpected-reboot";
+        S1Log(L"S1: two attempts without health, rolling back");
         S1JournalOrHalt(&Journal, Plan.TransactionId, "rollback-prepared", -1,
                         "started", Reason);
         for (i = Plan.OperationCount; i > 0; i--)
@@ -1071,11 +1164,17 @@ NtProcessStartup(
 
     /* 6. Apply the plan; journal each step before the next. */
     S1JournalOrHalt(&Journal, Plan.TransactionId, "applying", -1, "started", NULL);
+    S1Log(L"S1: applying plan");
     for (i = 0; i < Plan.OperationCount; i++)
     {
         OpStatus = S1ApplyOperation(&Plan, &Plan.Operations[i]);
         if (!NT_SUCCESS(OpStatus))
         {
+            WCHAR Line[96];
+
+            swprintf(Line, RTL_NUMBER_OF(Line), L"S1: op %lu failed 0x%08lx, rolling back",
+                     (unsigned long)i, (unsigned long)OpStatus);
+            S1Log(Line);
             /* Immediate rollback of the operations already applied. */
             while (i > 0)
             {
@@ -1097,9 +1196,11 @@ NtProcessStartup(
      * check after the boot. The next boot without it consumes the attempt
      * already written in step 4. */
     S1JournalOrHalt(&Journal, Plan.TransactionId, "applied", -1, "ok", NULL);
+    S1Log(L"S1: applied");
     snprintf(Attempt.LastResult, sizeof(Attempt.LastResult), "%s", "applied");
     S1AttemptSave(&Attempt);
     (void)BackupDirProbe;
 
+    S1Log(L"S1: done, exit 0");
     NtTerminateProcess(NtCurrentProcess(), 0);
 }
