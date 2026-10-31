@@ -68,7 +68,7 @@ def make_system_hive(path):
                       ["autocheck", "autochk *"])
     winreg.CloseKey(sm)
     winreg.CloseKey(select)
-    winreg.SaveKey(key, path, 0)
+    winreg.SaveKey(key, path)
     winreg.CloseKey(key)
     winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, root_name + r"\Select")
     winreg.DeleteKey(winreg.HKEY_LOCAL_MACHINE, root_name + r"\ControlSet001\Control\Session Manager")

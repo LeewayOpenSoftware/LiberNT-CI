@@ -119,7 +119,8 @@ S1NtOpen(
     RtlInitUnicodeString(&Name, Path);
     InitializeObjectAttributes(&Attr, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
     return NtCreateFile(Handle, Access | SYNCHRONIZE, &Attr, &IoStatus, NULL,
-                        FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+                        FILE_ATTRIBUTE_NORMAL,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
                         CreateDisposition, FILE_SYNCHRONOUS_IO_NONALERT |
                         ((CreateDisposition == FILE_CREATE || CreateDisposition == FILE_OPEN_IF)
                          ? FILE_NON_DIRECTORY_FILE : 0), NULL, 0);
@@ -231,7 +232,10 @@ S1MoveFileEx(
     UNICODE_STRING NewName;
     SIZE_T BufferSize;
 
-    Status = S1NtOpen(Source, FILE_READ_DATA | FILE_WRITE_DATA, FILE_OPEN, &Handle);
+    /* Rename-by-handle requires DELETE access on the handle (Windows and
+     * LiberNT), so the open must grant it and share FILE_SHARE_DELETE. */
+    Status = S1NtOpen(Source, FILE_READ_DATA | FILE_WRITE_DATA | DELETE,
+                      FILE_OPEN, &Handle);
     if (!NT_SUCCESS(Status))
         return Status;
     RtlInitUnicodeString(&NewName, Target);
@@ -352,7 +356,25 @@ S1JournalWriterAppend(
     S1Sha256Final(&Ctx, NewHash);
     memcpy(Writer->PrevHash, NewHash, S1_SHA256_SIZE);
     Writer->Sequence++;
-    return STATUS_SUCCESS;
+    /* libservicing keeps journal\anchor.json (seq and hash of the tail
+     * entry) no more than one entry behind the journal; a boot writer that
+     * appends more than one entry must maintain it too, or the next read
+     * reports the journal corrupt. */
+    {
+        WCHAR AnchorPath[MAX_PATH * 2], AnchorTemp[MAX_PATH * 2];
+        char Anchor[256], Hex[65];
+        int AnchorLen;
+
+        swprintf(AnchorPath, MAX_PATH * 2, L"%ls\\journal\\anchor.json", S1_ROOT);
+        swprintf(AnchorTemp, MAX_PATH * 2, L"%ls.new", AnchorPath);
+        S1HexEncode(Writer->PrevHash, S1_SHA256_SIZE, Hex);
+        AnchorLen = snprintf(Anchor, sizeof(Anchor),
+                             "{\"schema\":1,\"seq\":%llu,\"hash\":\"%s\"}\n",
+                             (unsigned long long)Writer->Sequence, Hex);
+        if (AnchorLen <= 0 || (size_t)AnchorLen >= sizeof(Anchor))
+            return STATUS_BUFFER_OVERFLOW;
+        return S1WriteFileAtomic(AnchorPath, AnchorTemp, Anchor, (ULONG)AnchorLen);
+    }
 }
 
 /* The chain is verified on read: load the journal, verify every link, and
@@ -652,13 +674,30 @@ S1ApplyOperation(
         }
     }
 
-    /* Atomic replace/add from the store object. */
-    Status = S1MoveFileEx(ObjectPath, TargetW, TRUE);
-    if (!NT_SUCCESS(Status))
+    /* Atomic replace/add from the store object. The object stays in the
+     * store: confirm re-verifies the store against the pinned certificate,
+     * and immutable objects are shared with later transactions. */
     {
-        if (Op->Type == S1_OP_REPLACE_FILE)
-            S1MoveFileEx(BackupPath, TargetW, TRUE);
-        return Status;
+        PVOID ObjectData;
+        ULONG ObjectSize;
+        WCHAR TempPath[MAX_PATH * 2];
+
+        Status = S1ReadWholeFile(ObjectPath, &ObjectData, &ObjectSize);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Op->Type == S1_OP_REPLACE_FILE)
+                S1MoveFileEx(BackupPath, TargetW, TRUE);
+            return Status;
+        }
+        swprintf(TempPath, MAX_PATH * 2, L"%ls.s1tmp", TargetW);
+        Status = S1WriteFileAtomic(TargetW, TempPath, ObjectData, ObjectSize);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, ObjectData);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Op->Type == S1_OP_REPLACE_FILE)
+                S1MoveFileEx(BackupPath, TargetW, TRUE);
+            return Status;
+        }
     }
 
     /* The component is not installed until its final hash matches. */
@@ -808,6 +847,34 @@ NtProcessStartup(
         Attempt.FailureRecorded = S1_FALSE;
         snprintf(Attempt.LastResult, sizeof(Attempt.LastResult), "%s", "none");
         S1AttemptSave(&Attempt);
+        /* The transaction is over: a consumed plan must not reapply on the
+         * next boot. The engine closes a transaction by removing the plan
+         * and the attempt state together. */
+        {
+            HANDLE PlanHandle;
+            FILE_DISPOSITION_INFORMATION DeleteInfo;
+            IO_STATUS_BLOCK IoStatus;
+            static const struct
+            {
+                PCWSTR Path;
+            } ToDelete[] =
+            {
+                { S1_PLAN_PATH },
+                { S1_ATTEMPT_PATH },
+            };
+            size_t d;
+
+            for (d = 0; d < sizeof(ToDelete) / sizeof(ToDelete[0]); d++)
+            {
+                if (NT_SUCCESS(S1NtOpen(ToDelete[d].Path, DELETE, FILE_OPEN, &PlanHandle)))
+                {
+                    DeleteInfo.DeleteFile = TRUE;
+                    NtSetInformationFile(PlanHandle, &IoStatus, &DeleteInfo,
+                                         sizeof(DeleteInfo), FileDispositionInformation);
+                    NtClose(PlanHandle);
+                }
+            }
+        }
         NtTerminateProcess(NtCurrentProcess(), 0);
     }
 
