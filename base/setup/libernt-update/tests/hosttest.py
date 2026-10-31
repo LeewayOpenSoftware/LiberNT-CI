@@ -202,6 +202,15 @@ def main():
     check(open(cli, "rb").read() == payload_cli, "CLI installed byte-identical")
     check(os.path.exists(os.path.join(root, "LiberNT", "Servicing", "bootstrap", "installed.json")),
           "installed.json written")
+    with open(os.path.join(root, "LiberNT", "Servicing", "bootstrap", "installed.json"),
+              encoding="utf-8") as f:
+        inv = json.load(f)
+    check(inv.get("schema") == 1 and isinstance(inv.get("files"), list) and len(inv["files"]) >= 2,
+          f"installed.json is strict JSON with a files list: schema={inv.get('schema')}, "
+          f"files={len(inv.get('files', []))}")
+    check(any(rec.get("path") == r"Windows\System32\LiberNTUpdatePending.exe"
+              for rec in inv.get("files", [])),
+          "installed.json path round-trips with its backslashes")
     key = os.path.join(root, "LiberNT", "Servicing", "store", "dev-public-key.bin")
     check(os.path.exists(key) and os.path.getsize(key) == 256, "dev public key pinned (256 bytes)")
     be = hive_bootexecute(hive_path, "HostTestVerify")

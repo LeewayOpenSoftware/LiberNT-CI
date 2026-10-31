@@ -79,6 +79,50 @@ BsFormatError(
 
 /* ---------------------------------------------------------------- inventory */
 
+static DWORD
+BsJsonEscapeNarrow(
+    _Out_ char *Dst,
+    _In_ size_t DstCap,
+    _In_ const char *Src)
+{
+    size_t Used = 0;
+
+    while (*Src)
+    {
+        unsigned char C = (unsigned char)*Src++;
+        const char *Esc = NULL;
+        char Tmp[8];
+
+        switch (C)
+        {
+            case '"': Esc = "\\\""; break;
+            case '\\': Esc = "\\\\"; break;
+            default:
+                if (C < 0x20)
+                {
+                    snprintf(Tmp, sizeof(Tmp), "\\u%04x", C);
+                    Esc = Tmp;
+                }
+                break;
+        }
+        if (Esc)
+        {
+            size_t Len = strlen(Esc);
+
+            if (Used + Len >= DstCap) return ERROR_BUFFER_OVERFLOW;
+            memcpy(Dst + Used, Esc, Len);
+            Used += Len;
+        }
+        else
+        {
+            if (Used + 1 >= DstCap) return ERROR_BUFFER_OVERFLOW;
+            Dst[Used++] = (char)C;
+        }
+    }
+    Dst[Used] = 0;
+    return ERROR_SUCCESS;
+}
+
 DWORD
 BsInventorySave(
     _In_ const BS_TARGET *Target,
@@ -86,8 +130,11 @@ BsInventorySave(
 {
     WCHAR Path[BS_MAX_PATH_BUF], Temp[BS_MAX_PATH_BUF];
     char Json[8192], *Cursor;
+    char VersionNarrow[32], ServiceNarrow[32];
+    char VersionEsc[64], ServiceEsc[64], ManifestEsc[140];
+    char NarrowPath[BS_MAX_PATH_BUF], EscapedPath[BS_MAX_PATH_BUF * 2];
     HANDLE Handle;
-    DWORD Written;
+    DWORD Written, Error;
     ULONG i;
 
     if (BsBuildTargetPath(Path, RTL_NUMBER_OF(Path), Target, BS_INSTALLED_JSON) != ERROR_SUCCESS)
@@ -96,23 +143,43 @@ BsInventorySave(
         return ERROR_FILENAME_EXCED_RANGE;
 
     /* Narrow UTF-8, exactly what BsInventoryLoad parses back, written
-     * atomically through a temp file (Pam review note). */
+     * atomically through a temp file (Pam review note). Every string is
+     * JSON-escaped: recorded paths contain backslashes the parser rejects
+     * as invalid escapes when they are written raw. */
+    wcstombs(VersionNarrow, BS_VERSION, sizeof(VersionNarrow));
+    VersionNarrow[sizeof(VersionNarrow) - 1] = 0;
+    wcstombs(ServiceNarrow, Inventory->ServiceState, sizeof(ServiceNarrow));
+    ServiceNarrow[sizeof(ServiceNarrow) - 1] = 0;
+    Error = BsJsonEscapeNarrow(VersionEsc, sizeof(VersionEsc), VersionNarrow);
+    if (Error == ERROR_SUCCESS)
+        Error = BsJsonEscapeNarrow(ServiceEsc, sizeof(ServiceEsc), ServiceNarrow);
+    if (Error == ERROR_SUCCESS)
+        Error = BsJsonEscapeNarrow(ManifestEsc, sizeof(ManifestEsc), Inventory->ManifestDigest);
+    if (Error != ERROR_SUCCESS)
+        return Error;
+
     Cursor = Json;
-    Cursor += snprintf(Cursor, sizeof(Json) - (Cursor - Json),
-                       "{\"schema\":1,\"version\":\"%S\",\"service\":\"%ls\",\"bootExecute\":%s,\"manifest\":\"%s\",\"files\":[",
-                       BS_VERSION, Inventory->ServiceState,
-                       Inventory->BootExecute ? "true" : "false",
-                       Inventory->ManifestDigest);
+#define BS_EMIT(...) do { \
+        int N_ = snprintf(Cursor, sizeof(Json) - (size_t)(Cursor - Json), __VA_ARGS__); \
+        if (N_ < 0 || (size_t)N_ >= sizeof(Json) - (size_t)(Cursor - Json)) return ERROR_BUFFER_OVERFLOW; \
+        Cursor += N_; \
+    } while (0)
+    BS_EMIT("{\"schema\":1,\"version\":\"%s\",\"service\":\"%s\",\"bootExecute\":%s,\"manifest\":\"%s\",\"files\":[",
+            VersionEsc, ServiceEsc,
+            Inventory->BootExecute ? "true" : "false",
+            ManifestEsc);
     for (i = 0; i < Inventory->FileCount; i++)
     {
-        char NarrowPath[BS_MAX_PATH_BUF];
-
         wcstombs(NarrowPath, Inventory->Files[i].Path, sizeof(NarrowPath));
-        Cursor += snprintf(Cursor, sizeof(Json) - (Cursor - Json),
-                           "%s{\"path\":\"%s\",\"sha256\":\"%s\"}",
-                           i ? "," : "", NarrowPath, Inventory->Files[i].Sha256);
+        NarrowPath[sizeof(NarrowPath) - 1] = 0;
+        Error = BsJsonEscapeNarrow(EscapedPath, sizeof(EscapedPath), NarrowPath);
+        if (Error != ERROR_SUCCESS)
+            return Error;
+        BS_EMIT("%s{\"path\":\"%s\",\"sha256\":\"%s\"}",
+                i ? "," : "", EscapedPath, Inventory->Files[i].Sha256);
     }
-    snprintf(Cursor, sizeof(Json) - (Cursor - Json), "]}");
+    BS_EMIT("]}");
+#undef BS_EMIT
 
     Handle = CreateFileW(Temp, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS,
                          FILE_ATTRIBUTE_NORMAL, NULL);
@@ -184,7 +251,7 @@ BsInventoryLoad(
         const char *Service;
         size_t ServiceLength;
         char Narrow[16];
-        uint64_t Boot;
+        S1Bool Boot;
 
         if (S1JsonGetString(Root, "service", &Service, &ServiceLength) &&
             ServiceLength < sizeof(Narrow))
@@ -193,8 +260,8 @@ BsInventoryLoad(
             Narrow[ServiceLength] = 0;
             mbstowcs(Inventory->ServiceState, Narrow, RTL_NUMBER_OF(Inventory->ServiceState));
         }
-        if (S1JsonGetUInt(Root, "bootExecute", &Boot) != S1_FALSE)
-            Inventory->BootExecute = Boot != 0;
+        if (S1JsonGetBool(Root, "bootExecute", &Boot) == S1_TRUE)
+            Inventory->BootExecute = Boot == S1_TRUE;
         {
             const char *Digest;
             size_t DigestLength;
