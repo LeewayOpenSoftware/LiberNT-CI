@@ -359,7 +359,7 @@ BsTargetInitImage(
 {
     WCHAR Probe[BS_MAX_PATH_BUF];
     size_t RootLen;
-    DWORD Attr;
+    DWORD Attr, Error;
 
     memset(Target, 0, sizeof(*Target));
     Target->IsImage = TRUE;
@@ -397,10 +397,15 @@ BsTargetInitImage(
 
         if (!GetWindowsDirectoryW(WinDir, RTL_NUMBER_OF(WinDir)))
             return GetLastError();
-        if (BsFinalPath(Target->Root, FinalRoot, RTL_NUMBER_OF(FinalRoot)) != ERROR_SUCCESS)
-            return GetLastError();
-        if (BsFinalPath(WinDir, WinFinal, RTL_NUMBER_OF(WinFinal)) != ERROR_SUCCESS)
-            return GetLastError();
+        /* BsFinalPath already returns the error code (and reports
+         * ERROR_BAD_PATHNAME without SetLastError), so propagate it as-is:
+         * a failed canonicalization must fail closed, never open. */
+        Error = BsFinalPath(Target->Root, FinalRoot, RTL_NUMBER_OF(FinalRoot));
+        if (Error != ERROR_SUCCESS)
+            return Error;
+        Error = BsFinalPath(WinDir, WinFinal, RTL_NUMBER_OF(WinFinal));
+        if (Error != ERROR_SUCCESS)
+            return Error;
         FinalLen = (DWORD)wcslen(FinalRoot);
         WinLen = (DWORD)wcslen(WinFinal);
         if (FinalLen <= 3 && FinalRoot[1] == L':')
