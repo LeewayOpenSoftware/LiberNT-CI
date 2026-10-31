@@ -3049,7 +3049,7 @@ static BOOL LISTVIEW_Arrange(LISTVIEW_INFO *infoPtr, INT nAlignCode)
 {
     void (*next_pos)(LISTVIEW_INFO *, LPPOINT);
     POINT pos;
-    INT i;
+    INT i, pass;
 
     if (infoPtr->uView != LV_VIEW_ICON && infoPtr->uView != LV_VIEW_SMALLICON) return FALSE;
   
@@ -3069,11 +3069,26 @@ static BOOL LISTVIEW_Arrange(LISTVIEW_INFO *infoPtr, INT nAlignCode)
     default: return FALSE;
     }
     
-    infoPtr->currIconPos.x = infoPtr->currIconPos.y = 0;
-    for (i = 0; i < infoPtr->nItemCount; i++)
+    for (pass = 0; pass < 2; pass++)
     {
-	next_pos(infoPtr, &pos);
-	LISTVIEW_MoveIconTo(infoPtr, i, &pos, FALSE);
+        INT listWidth = infoPtr->rcList.right - infoPtr->rcList.left;
+
+        infoPtr->currIconPos.x = infoPtr->currIconPos.y = 0;
+        for (i = 0; i < infoPtr->nItemCount; i++)
+        {
+            next_pos(infoPtr, &pos);
+            LISTVIEW_MoveIconTo(infoPtr, i, &pos, FALSE);
+        }
+
+#ifdef __REACTOS__
+        /* The items moved: the scroll range was computed for their old places (it stopped short after
+         * a larger icon size) and the scroll bars it adds or removes change the width the rows wrap at,
+         * so lay the items out again once if the width changed. */
+        LISTVIEW_UpdateScroll(infoPtr);
+        if (infoPtr->rcList.right - infoPtr->rcList.left == listWidth) break;
+#else
+        break;
+#endif
     }
 
     return TRUE;
