@@ -59,12 +59,10 @@ struct ActionJob
     bool Reboot;
 };
 
-static HINSTANCE Instance;
-
-class UpdateWindow : public FrameWindow
+class UpdateFrame : public FrameWindow
 {
 public:
-    UpdateWindow() : m_Page(Page::Main), m_Busy(false), m_Collapsed(false), m_Scroll(0), m_ContentHeight(0), m_Hot(-1),
+    UpdateFrame() : m_Page(Page::Main), m_Busy(false), m_Collapsed(false), m_Scroll(0), m_ContentHeight(0), m_Hot(-1),
                      m_Pressed(-1), m_Expanded(-1), m_Notice(L""), m_NoticeError(false), m_Checked(false)
     {
         m_Checked = false;
@@ -76,10 +74,10 @@ protected:
 
     void OnCreate() override
     {
-        HICON small = CreateGlyphIcon(L"arrow_sync_20_regular", GetSystemMetricsForDpi(SM_CXSMICON, m_Theme.Dpi()),
+        HICON icon = CreateGlyphIcon(L"arrow_sync_20_regular", GetSystemMetricsForDpi(SM_CXSMICON, m_Theme.Dpi()),
                                       m_Theme.Colors().Accent);
 
-        SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)small);
+        SendMessageW(m_hwnd, WM_SETICON, ICON_SMALL, (LPARAM)icon);
         StartRead(true);
     }
 
@@ -193,7 +191,7 @@ protected:
         canvas.Fill(caption, RGB(0, 0, 0));
         m_Hits.clear();
 
-        width = std::min((int)client.right - m_Theme.Scale(48), m_Theme.Scale(760));
+        width = (std::min)((int)client.right - m_Theme.Scale(48), m_Theme.Scale(760));
         left = (client.right - width) / 2;
         right = left + width;
         y = CaptionHeight() + m_Theme.Scale(8) - m_Scroll;
@@ -294,9 +292,9 @@ private:
 
     void ClampScroll(const RECT &client)
     {
-        int max = std::max(0, m_ContentHeight - (int)client.bottom);
+        int limit = (std::max)(0, m_ContentHeight - (int)client.bottom);
 
-        m_Scroll = std::max(0, std::min(m_Scroll, max));
+        m_Scroll = (std::max)(0, (std::min)(m_Scroll, limit));
     }
 
     void AddHit(const RECT &rc, HitKind kind, int arg = 0)
@@ -346,7 +344,7 @@ private:
                                 AdjustTokenPrivileges(token, FALSE, &tp, 0, NULL, NULL);
                                 CloseHandle(token);
                             }
-                            ExitWindowsEx(EWX_REBOOT, SHTDN_REASON_MAJOR_OPERATING_SYSTEM | SHTDN_REASON_MINOR_UPGRADE);
+                            ExitWindowsEx(EWX_REBOOT, 0);
                         }
                         break;
                     case Head::Waiting:
@@ -827,15 +825,15 @@ int WINAPI
 wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, int showCmd)
 {
     INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES | ICC_BAR_CLASSES };
-    UpdateWindow window;
+    UpdateFrame window;
     MSG msg;
 
     UNREFERENCED_PARAMETER(previous);
     UNREFERENCED_PARAMETER(commandLine);
-    Instance = instance;
+    UNREFERENCED_PARAMETER(instance);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
     {
-        HWND existing = FindWindowW(L"LiberNTUpdateWindow", NULL);
+        HWND existing = FindWindowW(L"LiberNTUpdateFrame", NULL);
 
         if (existing)
         {
@@ -849,7 +847,7 @@ wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, int showCmd
     InitCommonControlsEx(&icc);
     if (!Startup())
         return 1;
-    if (!window.Create(L"LiberNTUpdateWindow", L"LiberNT Update", NULL, 1000, 700, showCmd))
+    if (!window.Create(L"LiberNTUpdateFrame", L"LiberNT Update", NULL, 1000, 700, showCmd))
     {
         Shutdown();
         return 1;

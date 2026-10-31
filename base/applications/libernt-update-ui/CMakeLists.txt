@@ -8,7 +8,8 @@ list(APPEND SOURCE
     main.cpp
     state.cpp)
 
-add_rc_deps(libernt-update-ui.rc res/libernt-update-ui.exe.manifest)
+file(GLOB libernt_update_ui_rc_deps res/*.*)
+add_rc_deps(libernt-update-ui.rc ${libernt_update_ui_rc_deps})
 add_executable(libernt-update-ui ${SOURCE} libernt-update-ui.rc)
 set_target_properties(libernt-update-ui PROPERTIES OUTPUT_NAME "libernt-update-ui")
 set_property(TARGET libernt-update-ui PROPERTY CXX_STANDARD 17)

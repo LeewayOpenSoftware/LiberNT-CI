@@ -16,22 +16,6 @@
 /* The transaction ids a package can have: one per operation (servicing.c: install, apply, rollback) */
 static const char *const Operations[] = { "install", "apply", "rollback" };
 
-static std::string
-Narrow(const char *text)
-{
-    return text ? std::string(text) : std::string();
-}
-
-static std::wstring
-Wide(const std::string &text)
-{
-    WCHAR *w = LnUtf8ToWide(text.c_str());
-    std::wstring result = w ? w : L"";
-
-    free(w);
-    return result;
-}
-
 static const char *
 OutcomeOf(const char *phase)
 {
