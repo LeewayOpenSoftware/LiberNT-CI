@@ -173,6 +173,21 @@ Test_NoManifestVersion(void)
         return;
     }
 
+    /* Windows (measured on Windows 11) also trusts the OS version in the PE header of an unmanifested program:
+     * a header that claims 6.3 or later is reported the real version, so the 6.2 rule only applies below that */
+    {
+        PIMAGE_NT_HEADERS Nt = RtlImageNtHeader(NtCurrentTeb()->ProcessEnvironmentBlock->ImageBaseAddress);
+
+        if (Nt && (Nt->OptionalHeader.MajorOperatingSystemVersion > 6 ||
+                   (Nt->OptionalHeader.MajorOperatingSystemVersion == 6 &&
+                    Nt->OptionalHeader.MinorOperatingSystemVersion >= 3)))
+        {
+            skip("The test program declares OS version %u.%u in its PE header\n",
+                 Nt->OptionalHeader.MajorOperatingSystemVersion, Nt->OptionalHeader.MinorOperatingSystemVersion);
+            return;
+        }
+    }
+
     ok(GetVersionExW((OSVERSIONINFOW *)&Version), "GetVersionExW failed with %lu\n", GetLastError());
     ok(Version.dwMajorVersion == 6 && Version.dwMinorVersion == 2,
        "GetVersionExW reports %lu.%lu for a program with no manifest, expected 6.2\n",
