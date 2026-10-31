@@ -657,6 +657,19 @@ HRESULT CShellLink::GetAdvertiseInfo(LPWSTR *str, DWORD dwSig)
     return S_OK;
 }
 
+static BOOL ShellLink_IsItemOffset(LPCITEMIDLIST pidl, UINT cbOffset)
+{
+    UINT cb = 0;
+
+    for (LPCITEMIDLIST p = pidl; p && p->mkid.cb; p = (LPCITEMIDLIST)((const BYTE *)p + p->mkid.cb))
+    {
+        if (cb == cbOffset)
+            return TRUE;
+        cb += p->mkid.cb;
+    }
+    return cb == cbOffset;
+}
+
 /************************************************************************
  * IPersistStream_Load (IPersistStream)
  */
@@ -779,7 +792,8 @@ HRESULT STDMETHODCALLTYPE CShellLink::Load(IStream *stm)
         return hr;
 
     LPEXP_SPECIAL_FOLDER pSpecial = (LPEXP_SPECIAL_FOLDER)SHFindDataBlock(m_pDBList, EXP_SPECIAL_FOLDER_SIG);
-    if (pSpecial && pSpecial->cbSize == sizeof(*pSpecial) && ILGetSize(m_pPidl) > pSpecial->cbOffset)
+    if (pSpecial && pSpecial->cbSize == sizeof(*pSpecial) && ILGetSize(m_pPidl) > pSpecial->cbOffset &&
+        ShellLink_IsItemOffset(m_pPidl, pSpecial->cbOffset))
     {
         if (LPITEMIDLIST folder = SHCloneSpecialIDList(NULL, pSpecial->idSpecialFolder, FALSE))
         {
@@ -2347,6 +2361,8 @@ HRESULT CShellLink::SetTargetFromPIDLOrPath(LPCITEMIDLIST pidl, LPCWSTR pszFile)
 
     ILFree(m_pPidl);
     m_pPidl = pidlNew;
+    if (m_pDBList)
+        SHRemoveDataBlock(&m_pDBList, EXP_SPECIAL_FOLDER_SIG);
 
     if (!pszFile)
     {
