@@ -1,6 +1,6 @@
-# Leeway Open Software fork of LiberNT
+# LiberNT-LDW: the Leeway Open Software development fork of LiberNT
 
-This is the Leeway Open Software working fork of LiberNT. `main-nt10` is a pure mirror of upstream, synced often; our fixes and improvements live on topic branches rebased onto it. Part of this work comes from our research in a parallel project, Aureline - Asterion (our Wine and ReactOS forks).
+This repository, **LiberNT-LDW** (Leeway Development Works, https://github.com/LeewayOpenSoftware/LiberNT-LDW), is the Leeway Open Software development fork of LiberNT (upstream: https://github.com/LiberNT/LiberNT). LDW is a provisional designation for Leeway's engineering environment, not a separate operating system: the OS is and remains LiberNT. `main-nt10` is a pure mirror of upstream, synced often; our fixes and improvements live on topic branches rebased onto it. Part of this work comes from our research in a parallel project, Aureline - Asterion (our Wine and ReactOS forks).
 
 | Branch | What it changes | Modules | Status |
 |---|---|---|---|

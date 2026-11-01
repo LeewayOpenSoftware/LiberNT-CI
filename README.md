@@ -1,3 +1,40 @@
+# LiberNT — Leeway Development Works
+
+**Experimental Development · Compatibility Research · Hardware Validation**
+
+LiberNT-LDW is the provisional development repository maintained by **Leeway Open Software**, based on the upstream LiberNT project.
+
+Leeway Development Works serves as an engineering environment for operating system development, Windows compatibility research, hardware validation, subsystem integration and experimental implementations.
+
+The objective is to contribute toward a more complete, reliable and hardware-compatible LiberNT while preserving the original project's identity and acknowledging its upstream development.
+
+### Development Focus
+- Windows NT API and subsystem compatibility.
+- Kernel and user-mode component development.
+- Windows driver infrastructure and compatibility.
+- Hardware testing on physical x86-64 systems.
+- Experimental features and subsystem integration.
+- Automated research, diagnostics and regression testing.
+- System stability, installation, servicing and recovery.
+
+### Project Relationship
+**Upstream:** https://github.com/LiberNT/LiberNT
+
+**Leeway Development Repository:** https://github.com/LeewayOpenSoftware/LiberNT-LDW
+
+LiberNT-LDW is maintained by Leeway Open Software as a development fork of LiberNT.
+
+It is not presented as a replacement for, or the official development channel of, the upstream project.
+
+### Development Status
+This repository contains experimental and ongoing development work. Features may be incomplete, unstable or subject to change.
+
+LDW is a provisional development designation and does not establish the final branding of any future operating system or distribution.
+
+The topic branches and their status are listed in [FORK.md](FORK.md). Leeway's purpose and development principles are in [PURPOSE.md](PURPOSE.md). The upstream LiberNT README follows.
+
+---
+
 > **English** | [中文](translations/zh-CN/README.md) | [Français](translations/fr-FR/README.md) | [Español](translations/es-ES/README.md) | [日本語](translations/ja-JP/README.md) | [العربية](translations/ar-MA/README.md)
 
 <p align="center">
@@ -316,10 +353,10 @@ LiberNT is built by the **LiberNT contributors**, started and maintained by [Ahm
 
 ---
 
-## Leeway Open Software fork
+## Leeway Development Works (LiberNT-LDW)
 
-This is the Leeway Open Software working fork of LiberNT. We track upstream `main-nt10` closely (it moves many times a day) and test our fixes and improvements on topic branches. Part of this work comes from our research in a parallel project, Aureline - Asterion (our Wine and ReactOS forks). The changes are public so that anyone who finds them useful can look at them.
+This repository is **LiberNT-LDW**, the Leeway Open Software development fork of LiberNT (see the introduction at the top of this file). We track upstream `main-nt10` closely (it moves many times a day) and test our fixes and improvements on topic branches. Part of this work comes from our research in a parallel project, Aureline - Asterion (our Wine and ReactOS forks). The changes are public so that anyone who finds them useful can look at them.
 
 The topic branches and their status are listed in [FORK.md](FORK.md). Our purpose and development principles are in [PURPOSE.md](PURPOSE.md).
 
-Este es el fork de trabajo de Leeway Open Software de LiberNT: seguimos de cerca el `main-nt10` upstream y probamos nuestras correcciones y mejoras en ramas por tema, en parte fruto de nuestro proyecto paralelo Aureline - Asterion. Los cambios son públicos por si a alguien le resultan útiles. Nuestro propósito y principios de desarrollo están en [PURPOSE.md](PURPOSE.md).
+Este repositorio es **LiberNT-LDW**, el fork de desarrollo de Leeway Open Software de LiberNT: seguimos de cerca el `main-nt10` upstream y probamos nuestras correcciones y mejoras en ramas por tema, en parte fruto de nuestro proyecto paralelo Aureline - Asterion. Los cambios son públicos por si a alguien le resultan útiles. Nuestro propósito y principios de desarrollo están en [PURPOSE.md](PURPOSE.md).
