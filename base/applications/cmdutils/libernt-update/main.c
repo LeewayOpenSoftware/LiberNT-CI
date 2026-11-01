@@ -28,6 +28,7 @@ static void Usage(void)
 {
     fputs("usage: libernt-update [--image <root>] <command> [arguments]\n"
           "  init [--trust-cer <file.cer>] | query | verify <dir> | add-package <dir>\n"
+          "  add-package --from <url>   fetch the package over HTTP, then verify and stage it\n"
           "  apply <id> <version> [--confirm] | confirm <id> <version> | rollback <id> <version>\n"
           "  remove-package <id> <version> | pending | export-log <dest-dir>\n", stderr);
 }
@@ -250,6 +251,30 @@ int wmain(int argc, WCHAR **argv)
                 return Fail("verify", err);
             printf("verified: %s %s (%u payloads), manifest.sig valid for the pinned certificate\n", m.packageId, m.releaseVersion, (unsigned)m.itemCount);
             LnManifestFree(&m);
+            return 0;
+        }
+        if (a + 1 < argc && !wcscmp(argv[a], L"--from"))
+        {
+            const WCHAR *url = argv[a + 1];
+            WCHAR tmpBase[MAX_PATH], tmpDir[MAX_PATH];
+            UINT unique;
+
+            if (GetTempPathW(MAX_PATH, tmpBase) == 0)
+                return Fail("fetch", GetLastError());
+            unique = GetTempFileNameW(tmpBase, L"lnup", 0, tmpDir);
+            if (unique == 0)
+                return Fail("fetch", GetLastError());
+            DeleteFileW(tmpDir);                    /* GetTempFileName made a file; we want a dir */
+            err = LnEnsureDir(tmpDir);
+            if (err)
+                return Fail("fetch", err);
+            err = LnFetchPackage(&t, url, tmpDir);
+            if (err == ERROR_SUCCESS)
+                err = LnServicingAddPackage(&t, tmpDir, txid);
+            LnRemoveTree(tmpDir);
+            if (err)
+                return Fail(err == ERROR_INVALID_DATA ? "fetch (bad URL or HTTP status)" : "add-package --from", err);
+            printf("staged, transaction %s\n", txid);
             return 0;
         }
         err = LnServicingAddPackage(&t, argv[a], txid);

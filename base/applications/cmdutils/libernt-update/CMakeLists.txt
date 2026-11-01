@@ -4,5 +4,5 @@
 add_executable(libernt-update main.c)
 set_module_type(libernt-update win32cui UNICODE)
 target_link_libraries(libernt-update libservicing)
-add_importlibs(libernt-update wintrust crypt32 advapi32 msvcrt kernel32)
+add_importlibs(libernt-update wintrust crypt32 advapi32 ws2_32 msvcrt kernel32)
 # no add_cd_file(): the stage 1 core is not installed by the ISO

@@ -32,10 +32,10 @@ if (-not (Test-Path (Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx')) -or -no
 
 # ---- 1. COMPILATION ---------------------------------------------------------
 Write-Host '=== COMPILATION ==='
-$srcs = 'sha256','util','json','target','manifest','verify','journal','store','pending','servicing' | ForEach-Object { Join-Path $lib "$_.c" }
+$srcs = 'sha256','util','json','target','manifest','verify','journal','store','pending','servicing','fetch' | ForEach-Object { Join-Path $lib "$_.c" }
 $srcs += (Join-Path $repo 'base\system\servicing\pending\s1core.c')    # the portable core shared with the boot applier
 $common = @('--target=x86_64-w64-mingw32', '-O1', '-Wall', '-Wextra', '-Wno-unused-parameter', '-Wno-sign-compare', '-municode')
-$libs = @('-lwintrust', '-lcrypt32', '-ladvapi32')
+$libs = @('-lwintrust', '-lcrypt32', '-ladvapi32', '-lws2_32')
 $compileOk = $true
 
 function Invoke-Cc([string[]]$cargs, [string]$what) {
@@ -96,7 +96,58 @@ if (-not $SkipFixtures) {
 
 # ---- 3. TESTS -------------------------------------------------------------------
 Write-Host '=== TESTS ==='
-& $tst $fx $cer
-$rc = $LASTEXITCODE
+$httpRoot = Join-Path $OutDir 'httproot'
+if (-not $SkipFixtures) {
+    Remove-Item -Recurse -Force $httpRoot -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $httpRoot | Out-Null
+    [IO.File]::WriteAllText((Join-Path $httpRoot 'blob.bin'), ('A' * 1000))
+    [IO.File]::WriteAllText((Join-Path $httpRoot 'big.bin'), ('0123456789' * 1000))
+    foreach ($pkg in 'good1', 'tampered-payload', 'tampered-manifest', 'no-manifest-sig', 'wrongcert') {
+        Copy-Item -Recurse -Force (Join-Path $fx $pkg) (Join-Path $httpRoot $pkg)
+    }
+    # review F1: a manifest naming a ~5000-char payload path must fail cleanly, not overflow the URL buffer
+    $hp = Join-Path $httpRoot 'hugepath'
+    New-Item -ItemType Directory -Force -Path $hp | Out-Null
+    $hpCert = New-Object Security.Cryptography.X509Certificates.X509Certificate2((Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx'), [IO.File]::ReadAllText((Join-Path $KeyDir 'pfx-password.txt')))
+    $hpSha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($hpCert.RawData)).Replace('-', '').ToLower()
+    $hpMan = [ordered]@{
+        schemaVersion     = 1
+        packageId         = 'ln.hugepath'
+        releaseVersion    = '1.0'
+        type              = 'system-component'
+        targetFamily      = 'LiberNT'
+        architecture      = 'amd64'
+        certificateSha256 = $hpSha
+        payloads          = @(@{ path = (('a/' * 2500) + 'f0.bin'); target = 'Windows\System32\x.dll'; sha256 = ('0' * 64) })
+    }
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText((Join-Path $hp 'manifest.json'), ($hpMan | ConvertTo-Json -Depth 6), $utf8)
+    $hpRsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($hpCert)
+    [IO.File]::WriteAllBytes((Join-Path $hp 'manifest.sig'), $hpRsa.SignData([IO.File]::ReadAllBytes((Join-Path $hp 'manifest.json')), [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1))
+}
+$server = $null
+try {
+    if (-not $SkipFixtures) {
+        $server = Start-Job -ScriptBlock { param($d) python -m http.server 8097 --bind 127.0.0.1 --directory $d } -ArgumentList $httpRoot
+        $up = $false
+        for ($i = 0; $i -lt 40; $i++) {
+            try {
+                $c = New-Object Net.Sockets.TcpClient
+                $iar = $c.BeginConnect('127.0.0.1', 8097, $null, $null)
+                if ($iar.AsyncWaitHandle.WaitOne(500) -and $c.Connected) { $up = $true }
+                $c.Close()
+                if ($up) { break }
+            } catch { }
+            Start-Sleep -Milliseconds 250
+        }
+        if ($up) { $env:LN_FETCH_TEST_URL = 'http://127.0.0.1:8097' }
+        else { Write-Host 'WARN: fetch test server did not come up; fetch tests will skip' }
+    }
+    & $tst $fx $cer
+    $rc = $LASTEXITCODE
+} finally {
+    if (Test-Path Env:LN_FETCH_TEST_URL) { Remove-Item Env:LN_FETCH_TEST_URL }
+    if ($server) { Stop-Job $server -ErrorAction SilentlyContinue; Remove-Job $server -ErrorAction SilentlyContinue }
+}
 Write-Host ("TESTS: " + $(if ($rc -eq 0) { 'PASSED' } else { 'FAILED (exit ' + $rc + ')' }))
 exit $rc

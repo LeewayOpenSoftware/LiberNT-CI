@@ -12,7 +12,7 @@ Autora: Meredith, 2026-10-30. Rama `feature/libernt-update-s1-core-meredith` sob
 | libservicing | `base/system/servicing/libservicing/` | manifest, store, journal, transacciones, verificacion ENFORCE, plan/attempt, targets Online/Image, arbol protegido |
 | libernt-update.exe | `base/applications/cmdutils/libernt-update/` | CLI: init, query, verify, add-package, apply, confirm, rollback, remove-package, pending, export-log |
 | scripts de host | `tools/libernt-update/` | `New-DevSigningCert.ps1`, `New-FixturePackage.ps1`, `Build-And-Test.ps1`, certificado publico en `certs/` |
-| tests | `libservicing/tests/tests.c` | 381 comprobaciones (con ganchos `LN_TESTING`, solo en la copia de pruebas de la libreria) |
+| tests | `libservicing/tests/tests.c` | 412 comprobaciones (con ganchos `LN_TESTING`, solo en la copia de pruebas de la libreria) |
 
 CMake propio y desconectado: ningun `CMakeLists.txt` padre incluye estas carpetas (ni hivesys.inf, ni la ISO, ni DISM).
 El CLI y la libreria necesitan privilegios de administrador (o SYSTEM) para crear/abrir el arbol protegido.
@@ -77,3 +77,27 @@ Host, Windows 11 sin elevar, wintrust real: **343 comprobaciones, 0 fallos**: SH
 - `apply` compara el `manifestSha256` del paquete re-verificado con el de la transaccion; `LnTargetOpen` rechaza reparse points en `LiberNT` y `LiberNT\Servicing`; `LnTargetValidateReal` se llama justo antes de cada escritura; `COM`/`LPT` con superindices U+00B9/B2/B3 son nombres reservados.
 - Politica de nombres de stage 1 (documentada en `target.c`): la lista blanca dice que PUEDE reemplazarse, no que es peligroso; lsasrv, samsrv, msv1_0, sechost, svchost, kernel32, kernelbase no estan en la lista de exclusion: quien firma con la clave DEV es confiable para entregarlos; el dueno decide cuando crece esa lista.
 - Pruebas negativas nuevas (29): bit flip de la firma en 4 posiciones, firma de 255/257/1 bytes, e=3, e=65539, modulo sin bit alto, modulo par, DER truncado. Host 343/0, ASan 343/0. Compilacion contra LiberNT: repetir pendiente en este commit (el anterior enlazo bien).
+
+## Entrega por red (add-package --from)
+
+`fetch.c` (libservicing) trae un paquete por HTTP a un directorio temporal y el flujo de
+verificacion y staging sigue siendo el de siempre; el transporte no es de confianza.
+
+- Cliente HTTP/1.0 minimo sobre ws2_32 crudo: en el build de campo probado, WinHTTP
+  envia la peticion pero falla al recibir la respuesta (error 12157), asi que la
+  implementacion no depende de el.
+- `libernt-update add-package --from <url>`: http:// solamente, status 200 solamente,
+  sin redirects, tope de 64 MiB por archivo (`LN_FETCH_MAX_BYTES`) y timeout de 30 s
+  (`LN_FETCH_TIMEOUT_MS`); un archivo a medio bajar se borra siempre.
+- Los nombres de los payloads salen del manifest FIRMAdo; cada payload se compara con
+  su sha256 al bajar y el add path re-verifica firma y hashes con la misma autoridad
+  de siempre.
+- Casos de prueba en `TestFetch` (31 comprobaciones): bytes exactos, 404, tope de
+  tamano, conexion rechazada, URLs rechazadas (https/userinfo/backslashes/controles/
+  no-ASCII), paquete firmado end-to-end por HTTP, payload adulterado rechazado,
+  firma del manifest verificada ANTES de bajar payloads (manifest adulterado /
+  firma de otra clave / sin firma = 404 del .sig), path de payload de ~5000 chars
+  falla limpio (review F1), tope TOTAL por paquete 256 MiB (env LN_FETCH_MAX_PACKAGE_BYTES,
+  review F2). LnFetchPackage recibe el target para anclar la firma al cert pinned. El harness
+  (`tools/libernt-update/Build-And-Test.ps1`) sirve los fixtures en
+  127.0.0.1:8097 y exporta `LN_FETCH_TEST_URL`.
