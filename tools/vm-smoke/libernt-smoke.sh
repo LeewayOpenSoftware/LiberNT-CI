@@ -149,10 +149,27 @@ ptr() { "$PY" "$QMPPY" "$QPORT" "$SW" "$SH" "$@"; }
 # applaunch (the service that runs launcher.cmd at logon) only acts when SMBIOS carries this OEM string
 QPORT=$((5900 + $(printf %s "$VM" | cksum | cut -d' ' -f1) % 100))
 QMPPY=$(dirname "$SELF")/qmp-pointer.py
-EXTRA="-qmp tcp:127.0.0.1:$QPORT,server,nowait"   # pointer is driven through QMP (HMP mouse_move pins the pointer)
+# FLOOR RULE: the QEMU window title carries the image's BASE so a Nov-1 based image is never mistaken for a regression.
+#   MAIN <sha>                          image built from leeway/main or a branch off b0b3ceb5d4
+#   NOV1-BASE (no caption fix) <sha>    image built from a branch off the Nov-1 tag
+# BASE="MAIN" or BASE="NOV1-BASE (no caption fix)" forces it. Otherwise the CI run id is taken from the image path
+# (.../images/<run id>/LiberNT.img), its head commit is looked up with gh and compared with b0b3ceb5d4 (the
+# caption fix): ancestor = MAIN, not = NOV1-BASE. If that cannot be found the label says BASE-UNKNOWN.
+GH=${GH:-/c/LiberNT/tools/gh/bin/gh.exe}; REPO_SLUG=${REPO_SLUG:-LeewayOpenSoftware/LiberNT-LDW}; MAIN_FIX=b0b3ceb5d4
+if [ -z "${BASE:-}" ]; then
+  rid=$(echo "$IMGARG $IMG" | grep -Eo '/[0-9]{9,}/' | head -1 | tr -d /); hsha=
+  [ -n "$rid" ] && hsha=$("$GH" run view "$rid" -R "$REPO_SLUG" --json headSha -q .headSha 2>/dev/null)
+  if [ -n "$hsha" ]; then
+    st=$("$GH" api "repos/$REPO_SLUG/compare/$MAIN_FIX...$hsha" -q .status 2>/dev/null)
+    case "$st" in ahead|identical) BASE=MAIN;; diverged|behind) BASE="NOV1-BASE (no caption fix)";; *) BASE=BASE-UNKNOWN;; esac
+  else BASE=BASE-UNKNOWN; fi
+fi
+SHA8=${SHA%${SHA#????????}}; LABEL="$BASE ${hsha:-$SHA8} $VM"
+EXTRA="-name \"$LABEL\" -qmp tcp:127.0.0.1:$QPORT,server,nowait"   # pointer is driven through QMP (HMP mouse_move pins the pointer)
 [ "$MODE" = launcher ] && EXTRA="$EXTRA -smbios type=11,value=libernt.applaunch"
-sh "$VMDIR/run-vm.sh" "$VM" "$RAM" $EXTRA > "$OUT/qemu.out" 2>&1 &
-echo "$VM | smoke (libernt-smoke.sh, image sha ${SHA%${SHA#????????}}) | $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RUNNING"
+log "label   $LABEL"
+eval "sh \"$VMDIR/run-vm.sh\" \"$VM\" \"$RAM\" $EXTRA" > "$OUT/qemu.out" 2>&1 &
+echo "$VM | $LABEL (libernt-smoke.sh, image sha $SHA8) | $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RUNNING"
 i=0; until [ -f "$VDIR/monitor.port" ] && mon "info status" 2>/dev/null | grep -q running; do
   i=$((i+1)); [ $i -le 30 ] || die "VM did not start (see $OUT/qemu.out)"; sleep 1
 done
@@ -299,10 +316,15 @@ cap_tests() {
   # "Show Desktop" (ledger: input / mouse, Kelly). The pointer probe at boot reports that as its own FAIL line.
   lb=$1; box0=$box
   # the pointer probe clicked the desktop: click an empty spot of the title bar so the window has the focus
-  [ "$POINTER_OK" = 1 ] && { ptr click $((x + w / 2)) $((y + BTY + BTH / 2)); sleep 1; }
+  # (the guest tablet now and then ignores the first action after a pause, so move once to wake it first)
+  [ "$POINTER_OK" = 1 ] && { ptr move $((x + w / 3)) $((y + BTY + BTH / 2 + 20)); sleep 1; ptr click $((x + w / 2)) $((y + BTY + BTH / 2)); sleep 1; }
   # start from the normal state
   if ismax; then mon "sendkey meta_l-down" >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$box0"; fi
   mon "sendkey meta_l-up" >/dev/null; sleep 3; shot "$OUT/$n-$lb-maximized.png"
+  if ! { setbox "$(winbox "$pre" "$OUT/$n-$lb-maximized.png")" && ismax; } && [ "$POINTER_OK" = 1 ]; then
+    # one retry: refocus the window by clicking its title bar, then Win+Up again
+    setbox "$box0"; ptr click $((x + w / 2)) $((y + BTY + BTH / 2)); sleep 1; mon "sendkey meta_l-up" >/dev/null; sleep 3; shot "$OUT/$n-$lb-maximized.png"
+  fi
   if setbox "$(winbox "$pre" "$OUT/$n-$lb-maximized.png")" && ismax; then log "$lb.max      PASS  Win+Up maximised it (${w}x${h}), see $n-$lb-maximized.png"
   else log "$lb.max      FAIL  Win+Up did not maximise it (box ${box:-none}), see $n-$lb-maximized.png"; FAILS=$((FAILS+1)); fi
   mon "sendkey meta_l-down" >/dev/null; sleep 3; shot "$OUT/$n-$lb-restored.png"
