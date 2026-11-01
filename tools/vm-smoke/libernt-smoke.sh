@@ -81,8 +81,29 @@ fi
 IMG=$SRC; export IMG
 SHA=$(sha256sum "$IMG" | cut -d' ' -f1)
 OUT=$OUT_ROOT/$SHA
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+if [ -z "${ONLY:-}" ] && [ "${PERWIN:-1}" = 1 ]; then
+  # One fresh VM boot per window: a window that fails to close (or opens late) can no longer spoil the
+  # next window's result. Each window's folder is $OUT/<window>/; the summary is $OUT/result.txt.
+  rm -rf "$OUT"; mkdir -p "$OUT" || die "cannot create $OUT"
+  { echo "image   $IMG"; echo "sha256  $SHA"; echo "start   $(date -u +%Y-%m-%dT%H:%M:%SZ)"; } | tee "$OUT/result.txt"
+  total=0
+  for wn in explorer cmd notepad control settings; do
+    ONLY=$wn sh "$SELF" "$IMG" > "$OUT/run-$wn.log" 2>&1; rc=$?
+    [ -f "$OUT/$wn/result.txt" ] && grep -Ev '^(image|sha256|vm|start|end|result|output) ' "$OUT/$wn/result.txt" | tee -a "$OUT/result.txt"
+    [ $rc -eq 2 ] && { echo "$wn    FAIL  could not run (see run-$wn.log)" | tee -a "$OUT/result.txt"; rc=1; }
+    total=$((total+rc))
+  done
+  echo "end     $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$OUT/result.txt"
+  if [ $total -eq 0 ]; then echo "result  PASS (5 windows, one boot each)" | tee -a "$OUT/result.txt"
+  else echo "result  $total FAIL line(s) over 5 windows (one boot each)" | tee -a "$OUT/result.txt"; fi
+  echo "output  $OUT"
+  exit $total
+fi
+if [ -n "${ONLY:-}" ]; then OUT=$OUT_ROOT/$SHA/$ONLY; VM=${2:-smoke-$(echo "$SHA" | cut -c1-8)-$ONLY}; FIRST_DELAY=${FIRST_DELAY_ONLY:-130}
+else VM=${2:-smoke-$(echo "$SHA" | cut -c1-8)}; fi
 rm -rf "$OUT"; mkdir -p "$OUT" || die "cannot create $OUT"
-VM=${2:-smoke-$(echo "$SHA" | cut -c1-8)}
+want() { [ -z "${ONLY:-}" ] || [ "$ONLY" = "$1" ]; }
 VDIR=/c/LiberNT/vm/overlays/$VM
 RES=$OUT/result.txt
 : > "$RES"
@@ -119,6 +140,7 @@ if [ "$MODE" = launcher ]; then
   { printf '@echo off\r\n'
     t=$FIRST_DELAY
     for a in 'explorer shell:MyComputerFolder' 'cmd /k' 'notepad' 'control' 'ms-settings:'; do
+      case "$a" in ms-settings:) lb=settings;; *) lb=${a%% *};; esac; want "$lb" || continue
       printf 'start "" /min cmd /c ping -n %s 127.0.0.1 ^>nul ^& start "" %s\r\n' "$t" "$a"; case "$a" in control|ms-settings:) t=$((t+SHORT_GAP));; *) t=$((t+GAP));; esac; done; } > "$VDIR/payload/launcher.cmd"
   export PAYLOAD=$(cygpath -m "$VDIR/payload")
 fi
@@ -206,6 +228,7 @@ else
   log "KEYBOARD SKIPPED  no typing in launcher mode (MODE=keys checks it)"
 fi
 
+if want explorer; then
 # ---- 3c. pointer probe -------------------------------------------------------------------------
 # Move the pointer onto the "This PC" desktop icon and click it: the icon must get a selection highlight.
 # (Known bug on current images: the pointer is pinned at the bottom-right corner and every click toggles Show Desktop.)
@@ -220,6 +243,7 @@ if [ "${pd:-0}" -gt $(( ${noise:-0} + 300 )) ]; then log "POINTER PASS  clicking
 else log "POINTER FAIL  the guest pointer did not land on the This PC icon (changed px ${pd:-0}, idle noise ${noise:-0}, need noise+300); caption-button click tests are not possible, window states are driven by keyboard instead, see 00-pointer-probe.png"; FAILS=$((FAILS+1)); fi
 mon "sendkey esc" >/dev/null; sleep 1
 
+fi
 
 # ---- 4. the windows ---------------------------------------------------------------------------
 # Every window is located by diffing the screen before and after it opens (the taskbar is ignored),
@@ -347,15 +371,15 @@ window() {
   [ $closed = no ] && [ "$verdict" = PASS ] && { verdict=FAIL; FAILS=$((FAILS+1)); }
   log "$lab    $verdict  window ${w}x${h} at ${x},${y}; caption strip $([ "$cs" = 1 ] && echo drawn || echo blank); closed by: $closed"
 }
-window 01 explorer 'explorer shell:mycomputerfolder' 8 caps
-window 02 cmd       'cmd'                             5 caps
-window 03 notepad   'notepad'                         5 caps
-window 04 control   'control'                         8
-window 05 settings  'ms-settings:'                    12
+want explorer && window 01 explorer 'explorer shell:mycomputerfolder' 8 caps
+want cmd      && window 02 cmd       'cmd'                             5 caps
+want notepad  && window 03 notepad   'notepad'                         5 caps
+want control  && window 04 control   'control'                         8
+want settings && window 05 settings  'ms-settings:'                    12
 
 # ---- 5. verdict -------------------------------------------------------------------------------
 log "end     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 rm -f "$OUT"/.cur.png "$OUT"/.prev.png "$OUT"/.pre.png "$OUT"/.m.png "$OUT"/.idle.png "$OUT"/.roll.png
-if [ $FAILS -eq 0 ]; then log "result  PASS (5/5 windows + boot)"; else log "result  $FAILS FAIL (of 5 windows)"; fi
+if [ $FAILS -eq 0 ]; then log "result  PASS"; else log "result  $FAILS FAIL"; fi
 echo "output  $OUT"
 exit $FAILS
