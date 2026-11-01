@@ -1296,8 +1296,13 @@ FailurePath:
             LdrUnloadDll(ForwarderHandle);
         }
 
-        /* Is this a static snap? */
-        if (Static)
+        /*
+         * Is this a static snap? Only the imports resolved while the process starts are critical
+         * and get a hard-error box. A DLL loaded at run time whose import is missing fails with
+         * STATUS_ENTRYPOINT_NOT_FOUND / STATUS_ORDINAL_NOT_FOUND and LoadLibrary returns
+         * ERROR_PROC_NOT_FOUND, as Windows does, without any box.
+         */
+        if (Static && LdrpInLdrInit)
         {
             UNICODE_STRING SnapTarget;
             PLDR_DATA_TABLE_ENTRY LdrEntry;
