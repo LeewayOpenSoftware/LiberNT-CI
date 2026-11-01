@@ -18,6 +18,7 @@ list(APPEND SOURCE
     store.c
     pending.c
     servicing.c
+    fetch.c
     ../pending/s1core.c)
 
 add_library(libservicing ${SOURCE})
@@ -34,4 +35,4 @@ add_dependencies(libservicing_testlib psdk)
 add_executable(libservicing_tests tests/tests.c)
 set_module_type(libservicing_tests win32cui UNICODE)
 target_link_libraries(libservicing_tests libservicing_testlib)
-add_importlibs(libservicing_tests wintrust crypt32 advapi32 user32 ole32 msvcrt kernel32)
+add_importlibs(libservicing_tests wintrust crypt32 advapi32 user32 ole32 ws2_32 msvcrt kernel32)

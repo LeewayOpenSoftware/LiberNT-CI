@@ -1433,6 +1433,97 @@ static LONG WINAPI CrashReport(EXCEPTION_POINTERS *ep)
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
+static void TestFetch(void)
+{
+    WCHAR base[512], url[1024], dest[MAX_PATH];
+    DWORD n, attr;
+    LN_TARGET t;
+    char tx[65];
+
+    Section("add-package --from (HTTP fetch)");
+    n = GetEnvironmentVariableW(L"LN_FETCH_TEST_URL", base, 512);
+    if (n == 0 || n >= 512)
+    {
+        printf("  skipped (LN_FETCH_TEST_URL not set; the serving harness starts it)\n");
+        return;
+    }
+
+    /* a plain file lands byte-exact */
+    wsprintfW(url, L"%s/blob.bin", base);
+    wsprintfW(dest, L"%s\\fetch-blob.bin", g_work);
+    CHECK_ERR(0, LnFetchFile(url, dest));
+    {
+        HANDLE f = CreateFileW(dest, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+        DWORD sz = GetFileSize(f, NULL), rd = 0;
+        CHAR *buf = malloc(sz);
+        BOOL allA = TRUE;
+        DWORD i;
+
+        CHECK(f != INVALID_HANDLE_VALUE);
+        CHECK(ReadFile(f, buf, sz, &rd, NULL) && rd == sz);
+        for (i = 0; i < sz; i++)
+            if (buf[i] != 'A')
+                allA = FALSE;
+        CHECK(sz == 1000 && allA);
+        free(buf);
+        CloseHandle(f);
+    }
+    DeleteFileW(dest);
+
+    /* a missing file fails and leaves nothing behind */
+    wsprintfW(url, L"%s/missing.bin", base);
+    wsprintfW(dest, L"%s\\fetch-missing.bin", g_work);
+    CHECK(LnFetchFile(url, dest) != 0);
+    attr = GetFileAttributesW(dest);
+    CHECK(attr == INVALID_FILE_ATTRIBUTES);
+
+    /* a larger file crosses the IO chunk with the default cap */
+    wsprintfW(url, L"%s/big.bin", base);
+    wsprintfW(dest, L"%s\\fetch-big.bin", g_work);
+    CHECK_ERR(0, LnFetchFile(url, dest));
+    {
+        HANDLE f = CreateFileW(dest, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                               FILE_ATTRIBUTE_NORMAL, NULL);
+        CHECK(GetFileSize(f, NULL) == 10000);
+        CloseHandle(f);
+    }
+    DeleteFileW(dest);
+
+    /* the cap is enforced mid-stream and the partial file is removed */
+    SetEnvironmentVariableW(L"LN_FETCH_MAX_BYTES", L"500");
+    wsprintfW(dest, L"%s\\fetch-cap.bin", g_work);
+    CHECK_ERR(ERROR_FILE_TOO_LARGE, LnFetchFile(url, dest));
+    SetEnvironmentVariableW(L"LN_FETCH_MAX_BYTES", NULL);
+    attr = GetFileAttributesW(dest);
+    CHECK(attr == INVALID_FILE_ATTRIBUTES);
+
+    /* a refused connection fails cleanly */
+    CHECK(LnFetchFile(L"http://127.0.0.1:9/x.bin", dest) != 0);
+
+    /* URL shapes the fetch refuses to even attempt (no network touched) */
+    CHECK_ERR(ERROR_INVALID_DATA, LnFetchFile(L"https://127.0.0.1/x", dest));
+    CHECK_ERR(ERROR_INVALID_DATA, LnFetchFile(L"ftp://127.0.0.1/x", dest));
+    CHECK_ERR(ERROR_INVALID_DATA, LnFetchFile(L"http://user@127.0.0.1/x", dest));
+    CHECK_ERR(ERROR_INVALID_DATA, LnFetchFile(L"http://\\\\share/x", dest));
+
+    /* a signed package fetches end to end and stages like a local one */
+    CHECK(OpenImage(&t, L"fetch"));
+    InstallTrust(&t);
+    wsprintfW(url, L"%s/good1", base);
+    wsprintfW(dest, L"%s\\fetch-pkg", g_work);
+    CHECK_ERR(0, LnFetchPackage(url, dest));
+    CHECK_ERR(0, LnServicingAddPackage(&t, dest, tx));
+    CHECK_ERR(0, LnServicingRemovePackage(&t, "ln.fixture", "1.0"));
+    LnRemoveTree(dest);
+
+    /* a payload that does not match the manifest hash is rejected at fetch time */
+    wsprintfW(url, L"%s/tampered-payload", base);
+    wsprintfW(dest, L"%s\\fetch-tampered", g_work);
+    CHECK_ERR(LN_E_HASH_MISMATCH, LnFetchPackage(url, dest));
+    LnRemoveTree(dest);
+}
+
 int wmain(int argc, WCHAR **argv)
 {
     WCHAR tmp[MAX_PATH];
@@ -1489,6 +1580,7 @@ int wmain(int argc, WCHAR **argv)
     TestPlanValidation();
     TestPlanHashFailClosed();
     TestSystemDefer();
+    TestFetch();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);
     LnRemoveTree(g_work);

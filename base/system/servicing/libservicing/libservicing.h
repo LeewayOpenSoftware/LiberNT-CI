@@ -230,6 +230,16 @@ DWORD LnServicingRemovePackage(const LN_TARGET *t, const char *packageId, const 
 DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const char *version);
 DWORD LnServicingExportLog(const LN_TARGET *t, const WCHAR *destDir);
 
+/* ---- fetch.c: HTTP download for add-package --from ---------------------- */
+/* Minimal HTTP/1.0 GET (raw winsock; WinHTTP's response path is broken on current
+ * targets). http:// only, status 200 only, no redirects, body capped
+ * (LN_FETCH_MAX_BYTES overrides the 64 MiB default, LN_FETCH_TIMEOUT_MS the 30 s one).
+ * Any failure removes a partially written destPath. */
+DWORD LnFetchFile(const WCHAR *url, const WCHAR *destPath);
+/* Downloads manifest.json, manifest.sig and the payloads the manifest names into
+ * destDir; checks each payload hash as it lands. The add path re-verifies all of it. */
+DWORD LnFetchPackage(const WCHAR *baseUrl, const WCHAR *destDir);
+
 #ifdef LN_TESTING
 /* Hooks that exist only in the test build of the library (compile with -DLN_TESTING). */
 extern BOOL LnTestLockedAsPending;      /* treat a locked target of an Image as in use, as Online would */
