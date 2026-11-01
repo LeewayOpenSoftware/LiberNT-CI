@@ -2556,6 +2556,7 @@ LsapLookupSids(PLSAPR_SID_ENUM_BUFFER SidEnumBuffer,
 {
     PLSAPR_REFERENCED_DOMAIN_LIST DomainsBuffer = NULL;
     PLSAPR_TRANSLATED_NAME_EX NamesBuffer = NULL;
+    UNICODE_STRING SidString;
     ULONG NamesBufferLength;
     ULONG i;
     ULONG Mapped = 0;
@@ -2658,8 +2659,6 @@ done:
     {
         for (i = 0; i < SidEnumBuffer->Entries; i++)
         {
-            UNICODE_STRING SidString;
-
             if (NamesBuffer[i].Use != SidTypeUnknown || NamesBuffer[i].Name.Buffer != NULL)
                 continue;
 
