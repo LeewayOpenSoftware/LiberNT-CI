@@ -344,15 +344,22 @@ LnFetchPackage(const LN_TARGET *t, const WCHAR *baseUrl, const WCHAR *destDir)
     if (err != ERROR_SUCCESS)
         goto done;
 
-    /* the manifest is untrusted until its signature checks: only then may its
-     * payload names drive further downloads */
-    err = LnVerifyManifestSignatureOnly(destDir, cer);
-    if (err != ERROR_SUCCESS)
-        goto done;
+    /* the manifest is untrusted until its signature checks: read it once and
+     * verify + parse those same bytes, then let its payload names drive the
+     * downloads */
+    {
+        BYTE *man = NULL;
+        size_t manLen = 0;
 
-    wcscpy(file, destDir);
-    wcscat(file, L"\\manifest.json");
-    err = LnManifestLoad(file, &m);
+        wcscpy(file, destDir);
+        wcscat(file, L"\\manifest.json");
+        err = LnReadFileAll(file, &man, &manLen);
+        if (err == ERROR_SUCCESS)
+            err = LnVerifyManifestSignatureMem(man, manLen, destDir, cer);
+        if (err == ERROR_SUCCESS)
+            err = LnManifestParse((const char *)man, manLen, &m);
+        free(man);
+    }
     if (err != ERROR_SUCCESS)
         goto done;
 

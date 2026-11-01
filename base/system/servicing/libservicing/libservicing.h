@@ -180,10 +180,12 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const WCHAR *pinnedCerPath, 
 /* Same checks over the copy held in the store (manifest, catalog, signature, objects). */
 DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version, LN_MANIFEST *out);
 
-/* The root-of-trust check alone (manifest.sig over manifest.json against the pinned
- * certificate), without the payload pass: a downloader can refuse an untrusted
- * manifest before acting on anything the manifest says. */
-DWORD LnVerifyManifestSignatureOnly(const WCHAR *pkgDir, const WCHAR *pinnedCerPath);
+/* The root-of-trust check alone (manifest.sig over the given manifest bytes against
+ * the pinned certificate), without the payload pass: a downloader can refuse an
+ * untrusted manifest before acting on anything the manifest says. The manifest
+ * bytes are the caller's, so verification and parsing run over one read. */
+DWORD LnVerifyManifestSignatureMem(const BYTE *man, size_t mlen, const WCHAR *sigDir,
+                                   const WCHAR *pinnedCerPath);
 DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65]);
 
 /* ---- journal.c --------------------------------------------------------- */

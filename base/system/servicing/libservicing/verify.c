@@ -156,28 +156,37 @@ BOOL LnTestCertRsa2048Key(const BYTE *der, size_t len, BYTE modulus[256], uint32
 
 /* man/cer are the bytes already read ONCE by the caller: the bytes that were hashed and parsed are the
  * bytes whose signature is checked (no second read of a file that could change in between). */
+static DWORD VerifyManifestSignatureBytes(const BYTE *man, size_t mlen, const BYTE *sig, size_t slen,
+                                          const BYTE *cer, size_t clen)
+{
+    BYTE modulus[256];
+    uint32_t exponent = 0;
+
+    if (slen != 256 || !CertRsa2048Key(cer, clen, modulus, &exponent))
+        return LN_E_BAD_SIGNATURE;
+    return S1Rsa2048Sha256Verify(modulus, exponent, man, mlen, sig) ? ERROR_SUCCESS : LN_E_BAD_SIGNATURE;
+}
+
 static DWORD VerifyManifestSignature(const WCHAR *dir, const BYTE *man, size_t mlen, const BYTE *cer, size_t clen)
 {
     WCHAR *sp = LnJoin(dir, L"manifest.sig");
-    BYTE *sig = NULL, modulus[256];
+    BYTE *sig = NULL;
     size_t slen = 0;
-    uint32_t exponent = 0;
-    DWORD err = LN_E_BAD_SIGNATURE;
+    DWORD err;
 
     if (!sp)
         return ERROR_NOT_ENOUGH_MEMORY;
     if (!LnPathExists(sp))
     {
-        err = LN_E_UNSIGNED;                            /* a package without manifest.sig is unsigned */
-        goto out;
+        free(sp);
+        return LN_E_UNSIGNED;                           /* a package without manifest.sig is unsigned */
     }
-    if (LnReadFileAll(sp, &sig, &slen) || slen != 256 || !CertRsa2048Key(cer, clen, modulus, &exponent))
-        goto out;
-    if (S1Rsa2048Sha256Verify(modulus, exponent, man, mlen, sig))
-        err = ERROR_SUCCESS;
-out:
-    free(sig);
+    err = LnReadFileAll(sp, &sig, &slen);
     free(sp);
+    if (err)
+        return LN_E_BAD_SIGNATURE;                  /* the signature must be readable to be checked */
+    err = VerifyManifestSignatureBytes(man, mlen, sig, slen, cer, clen);
+    free(sig);
     return err;
 }
 
@@ -431,31 +440,41 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const WCHAR *pinnedCerPath, 
     return VerifyCommon(NULL, pkgDir, pinnedCerPath, out);
 }
 
-/* The root-of-trust check alone (manifest.sig over manifest.json against the pinned
- * certificate), without the payload pass: a downloader can refuse an untrusted
- * manifest before acting on anything the manifest says. */
-DWORD LnVerifyManifestSignatureOnly(const WCHAR *pkgDir, const WCHAR *pinnedCerPath)
+/* The root-of-trust check alone (manifest.sig over the manifest bytes against the
+ * pinned certificate), without the payload pass: a downloader can refuse an
+ * untrusted manifest before acting on anything the manifest says. The manifest
+ * bytes are the caller's, so verification and parsing run over one read. */
+DWORD LnVerifyManifestSignatureMem(const BYTE *man, size_t mlen, const WCHAR *sigDir,
+                                   const WCHAR *pinnedCerPath)
 {
-    WCHAR *manifestPath = LnJoin(pkgDir, L"manifest.json");
-    BYTE *cerBytes = NULL, *manBytes = NULL;
-    size_t cerLen = 0, manLen = 0;
+    WCHAR *sp = LnJoin(sigDir, L"manifest.sig");
+    BYTE *sig = NULL, *cerBytes = NULL;
+    size_t slen = 0, cerLen = 0;
     DWORD err;
 
-    if (!manifestPath)
+    if (!sp)
         return ERROR_NOT_ENOUGH_MEMORY;
     err = LnReadFileAll(pinnedCerPath, &cerBytes, &cerLen);
     if (err)
     {
-        free(manifestPath);
+        free(sp);
         return err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND
                    ? LN_E_NO_TRUST_ANCHOR : err;
     }
-    err = LnReadFileAll(manifestPath, &manBytes, &manLen);
-    if (!err)
-        err = VerifyManifestSignature(pkgDir, manBytes, manLen, cerBytes, cerLen);
+    if (!LnPathExists(sp))
+    {
+        free(sp);
+        free(cerBytes);
+        return LN_E_UNSIGNED;
+    }
+    err = LnReadFileAll(sp, &sig, &slen);
+    free(sp);
+    if (err)
+        err = LN_E_BAD_SIGNATURE;
+    else
+        err = VerifyManifestSignatureBytes(man, mlen, sig, slen, cerBytes, cerLen);
+    free(sig);
     free(cerBytes);
-    free(manBytes);
-    free(manifestPath);
     return err;
 }
 
