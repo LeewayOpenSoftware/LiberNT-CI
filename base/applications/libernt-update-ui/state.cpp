@@ -316,6 +316,8 @@ ErrorSentence(DWORD error)
             return L"This can't be done in the current state.";
         case LN_E_NO_TRUST_ANCHOR:
             return L"No trusted source is set up.";
+        case LN_E_NO_BOOT_APPLIER:
+            return L"The boot updater is not installed.";
         case LN_E_INSECURE_TARGET:
             return L"The update folder is not protected.";
         case LN_E_JOURNAL_CORRUPT:
