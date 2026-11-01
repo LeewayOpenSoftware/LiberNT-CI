@@ -1512,7 +1512,7 @@ static void TestFetch(void)
     InstallTrust(&t);
     wsprintfW(url, L"%s/good1", base);
     wsprintfW(dest, L"%s\\fetch-pkg", g_work);
-    CHECK_ERR(0, LnFetchPackage(url, dest));
+    CHECK_ERR(0, LnFetchPackage(&t, url, dest));
     CHECK_ERR(0, LnServicingAddPackage(&t, dest, tx));
     CHECK_ERR(0, LnServicingRemovePackage(&t, "ln.fixture", "1.0"));
     LnRemoveTree(dest);
@@ -1520,8 +1520,37 @@ static void TestFetch(void)
     /* a payload that does not match the manifest hash is rejected at fetch time */
     wsprintfW(url, L"%s/tampered-payload", base);
     wsprintfW(dest, L"%s\\fetch-tampered", g_work);
-    CHECK_ERR(LN_E_HASH_MISMATCH, LnFetchPackage(url, dest));
-    LnRemoveTree(dest);
+    CHECK_ERR(LN_E_HASH_MISMATCH, LnFetchPackage(&t, url, dest));
+    CHECK(!LnPathExists(dest));                                 /* a failed fetch leaves no directory */
+
+    /* the manifest signature is verified before any payload name is acted on */
+    wsprintfW(url, L"%s/tampered-manifest", base);
+    wsprintfW(dest, L"%s\\fetch-tampman", g_work);
+    CHECK_ERR(LN_E_BAD_SIGNATURE, LnFetchPackage(&t, url, dest));
+    CHECK(!LnPathExists(dest));
+    wsprintfW(url, L"%s/no-manifest-sig", base);
+    CHECK_ERR(ERROR_INVALID_DATA, LnFetchPackage(&t, url, dest));   /* the sig fetch itself 404s */
+    wsprintfW(url, L"%s/wrongcert", base);
+    CHECK_ERR(LN_E_BAD_SIGNATURE, LnFetchPackage(&t, url, dest));   /* not the pinned key */
+
+    /* a manifest naming an overlong payload path fails cleanly instead of
+     * overflowing the URL buffer (review F1) */
+    wsprintfW(url, L"%s/hugepath", base);
+    wsprintfW(dest, L"%s\\fetch-huge", g_work);
+    CHECK_ERR(LN_E_MANIFEST_INVALID, LnFetchPackage(&t, url, dest));
+    CHECK(!LnPathExists(dest));
+
+    /* the total package size is capped across payloads (review F2) */
+    SetEnvironmentVariableW(L"LN_FETCH_MAX_PACKAGE_BYTES", L"5");
+    wsprintfW(url, L"%s/good1", base);
+    wsprintfW(dest, L"%s\\fetch-cap2", g_work);
+    CHECK_ERR(ERROR_FILE_TOO_LARGE, LnFetchPackage(&t, url, dest));
+    SetEnvironmentVariableW(L"LN_FETCH_MAX_PACKAGE_BYTES", NULL);
+    CHECK(!LnPathExists(dest));
+
+    /* URLs with control or non-ASCII characters are refused outright (review F3) */
+    CHECK_ERR(ERROR_INVALID_DATA, LnFetchFile(L"http://127.0.0.1/x y", dest));
+    CHECK_ERR(ERROR_INVALID_DATA, LnFetchFile(L"http://127.0.0.1/x\xE9y", dest));
 }
 
 int wmain(int argc, WCHAR **argv)

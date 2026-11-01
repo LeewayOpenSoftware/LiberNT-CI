@@ -431,6 +431,34 @@ DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const WCHAR *pinnedCerPath, 
     return VerifyCommon(NULL, pkgDir, pinnedCerPath, out);
 }
 
+/* The root-of-trust check alone (manifest.sig over manifest.json against the pinned
+ * certificate), without the payload pass: a downloader can refuse an untrusted
+ * manifest before acting on anything the manifest says. */
+DWORD LnVerifyManifestSignatureOnly(const WCHAR *pkgDir, const WCHAR *pinnedCerPath)
+{
+    WCHAR *manifestPath = LnJoin(pkgDir, L"manifest.json");
+    BYTE *cerBytes = NULL, *manBytes = NULL;
+    size_t cerLen = 0, manLen = 0;
+    DWORD err;
+
+    if (!manifestPath)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    err = LnReadFileAll(pinnedCerPath, &cerBytes, &cerLen);
+    if (err)
+    {
+        free(manifestPath);
+        return err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND
+                   ? LN_E_NO_TRUST_ANCHOR : err;
+    }
+    err = LnReadFileAll(manifestPath, &manBytes, &manLen);
+    if (!err)
+        err = VerifyManifestSignature(pkgDir, manBytes, manLen, cerBytes, cerLen);
+    free(cerBytes);
+    free(manBytes);
+    free(manifestPath);
+    return err;
+}
+
 DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version, LN_MANIFEST *out)
 {
     WCHAR *wid = LnUtf8ToWide(packageId), *wver = LnUtf8ToWide(version), *rel, *dir, *cer;

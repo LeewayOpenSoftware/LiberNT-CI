@@ -12,7 +12,7 @@ Autora: Meredith, 2026-10-30. Rama `feature/libernt-update-s1-core-meredith` sob
 | libservicing | `base/system/servicing/libservicing/` | manifest, store, journal, transacciones, verificacion ENFORCE, plan/attempt, targets Online/Image, arbol protegido |
 | libernt-update.exe | `base/applications/cmdutils/libernt-update/` | CLI: init, query, verify, add-package, apply, confirm, rollback, remove-package, pending, export-log |
 | scripts de host | `tools/libernt-update/` | `New-DevSigningCert.ps1`, `New-FixturePackage.ps1`, `Build-And-Test.ps1`, certificado publico en `certs/` |
-| tests | `libservicing/tests/tests.c` | 401 comprobaciones (con ganchos `LN_TESTING`, solo en la copia de pruebas de la libreria) |
+| tests | `libservicing/tests/tests.c` | 412 comprobaciones (con ganchos `LN_TESTING`, solo en la copia de pruebas de la libreria) |
 
 CMake propio y desconectado: ningun `CMakeLists.txt` padre incluye estas carpetas (ni hivesys.inf, ni la ISO, ni DISM).
 El CLI y la libreria necesitan privilegios de administrador (o SYSTEM) para crear/abrir el arbol protegido.
@@ -92,8 +92,12 @@ verificacion y staging sigue siendo el de siempre; el transporte no es de confia
 - Los nombres de los payloads salen del manifest FIRMAdo; cada payload se compara con
   su sha256 al bajar y el add path re-verifica firma y hashes con la misma autoridad
   de siempre.
-- Casos de prueba en `TestFetch` (20 comprobaciones): bytes exactos, 404, tope de
-  tamano, conexion rechazada, URLs rechazadas (https/userinfo/backslashes), paquete
-  firmado end-to-end por HTTP y payload adulterado rechazado. El harness
+- Casos de prueba en `TestFetch` (31 comprobaciones): bytes exactos, 404, tope de
+  tamano, conexion rechazada, URLs rechazadas (https/userinfo/backslashes/controles/
+  no-ASCII), paquete firmado end-to-end por HTTP, payload adulterado rechazado,
+  firma del manifest verificada ANTES de bajar payloads (manifest adulterado /
+  firma de otra clave / sin firma = 404 del .sig), path de payload de ~5000 chars
+  falla limpio (review F1), tope TOTAL por paquete 256 MiB (env LN_FETCH_MAX_PACKAGE_BYTES,
+  review F2). LnFetchPackage recibe el target para anclar la firma al cert pinned. El harness
   (`tools/libernt-update/Build-And-Test.ps1`) sirve los fixtures en
   127.0.0.1:8097 y exporta `LN_FETCH_TEST_URL`.

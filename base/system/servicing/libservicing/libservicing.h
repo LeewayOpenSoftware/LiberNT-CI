@@ -177,7 +177,13 @@ DWORD LnPinnedCertSha256(const LN_TARGET *t, char hash[65]);
  * pinnedCerPath: the trusted development certificate (the target's trust\ directory). */
 DWORD LnServicingVerifyPackage(const WCHAR *pkgDir, const WCHAR *pinnedCerPath, LN_MANIFEST *out);
 /* Same checks over the copy held in the store (manifest, catalog, signature, objects). */
+/* Same checks over the copy held in the store (manifest, catalog, signature, objects). */
 DWORD LnServicingVerifyStored(const LN_TARGET *t, const char *packageId, const char *version, LN_MANIFEST *out);
+
+/* The root-of-trust check alone (manifest.sig over manifest.json against the pinned
+ * certificate), without the payload pass: a downloader can refuse an untrusted
+ * manifest before acting on anything the manifest says. */
+DWORD LnVerifyManifestSignatureOnly(const WCHAR *pkgDir, const WCHAR *pinnedCerPath);
 DWORD LnCertFileSha256(const WCHAR *cerPath, char out[65]);
 
 /* ---- journal.c --------------------------------------------------------- */
@@ -236,9 +242,12 @@ DWORD LnServicingExportLog(const LN_TARGET *t, const WCHAR *destDir);
  * (LN_FETCH_MAX_BYTES overrides the 64 MiB default, LN_FETCH_TIMEOUT_MS the 30 s one).
  * Any failure removes a partially written destPath. */
 DWORD LnFetchFile(const WCHAR *url, const WCHAR *destPath);
-/* Downloads manifest.json, manifest.sig and the payloads the manifest names into
- * destDir; checks each payload hash as it lands. The add path re-verifies all of it. */
-DWORD LnFetchPackage(const WCHAR *baseUrl, const WCHAR *destDir);
+/* Downloads manifest.json and manifest.sig, verifies the signature against the pinned
+ * certificate of the target, then downloads the payloads the manifest names into
+ * destDir (a fresh package directory); checks each payload hash and caps the total
+ * (LN_FETCH_MAX_PACKAGE_BYTES overrides the 256 MiB default). Any failure removes
+ * destDir. The add path re-verifies everything authoritatively. */
+DWORD LnFetchPackage(const LN_TARGET *t, const WCHAR *baseUrl, const WCHAR *destDir);
 
 #ifdef LN_TESTING
 /* Hooks that exist only in the test build of the library (compile with -DLN_TESTING). */

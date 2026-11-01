@@ -7,8 +7,9 @@
  * Minimal HTTP/1.0 client on raw winsock. WinHTTP is not usable on current
  * targets (request path works, the response path fails), so this speaks just
  * enough HTTP to download the manifest, its signature and the payloads the
- * signed manifest names. The transport is untrusted: the existing verify and
- * stage path is the only authority.
+ * manifest names. The manifest signature is verified against the pinned
+ * certificate before anything the manifest says is acted on; the existing
+ * verify and stage path remains the final authority over the fetched copy.
  */
 #include "libservicing.h"
 
@@ -19,17 +20,21 @@
 #include <ws2tcpip.h>
 
 #define LN_FETCH_DEFAULT_CAP (64ULL * 1024ULL * 1024ULL)
+#define LN_FETCH_DEFAULT_PACKAGE_CAP (256ULL * 1024ULL * 1024ULL)
 #define LN_FETCH_DEFAULT_TIMEOUT_MS 30000
 #define LN_FETCH_IO_CHUNK 32768
+#define LN_FETCH_MAX_URL_CHARS 480      /* the request line buffer leaves headroom */
+#define LN_FETCH_MAX_HOST_CHARS 255
 
 static ULONGLONG
-LnFetchCapBytes(VOID)
+LnFetchEnvBytes(const WCHAR *name, ULONGLONG dflt)
 {
     WCHAR buf[32];
-    DWORD n = GetEnvironmentVariableW(L"LN_FETCH_MAX_BYTES", buf, 32);
+    DWORD n = GetEnvironmentVariableW(name, buf, 32);
+
     if (n > 0 && n < 32)
         return _wcstoui64(buf, NULL, 10);
-    return LN_FETCH_DEFAULT_CAP;
+    return dflt;
 }
 
 static DWORD
@@ -37,25 +42,34 @@ LnFetchTimeoutMs(VOID)
 {
     WCHAR buf[24];
     DWORD n = GetEnvironmentVariableW(L"LN_FETCH_TIMEOUT_MS", buf, 24);
+
     if (n > 0 && n < 24)
         return wcstoul(buf, NULL, 10);
     return LN_FETCH_DEFAULT_TIMEOUT_MS;
 }
 
 /* http://host[:port][/path...]; host is an IPv4 literal or a DNS name.
- * Everything else (https, userinfo, backslashes, empty path) is rejected. */
+ * Everything else (https, userinfo, backslashes, empty path) is rejected,
+ * and the host/path must be printable ASCII that fits the request line. */
 static DWORD
 LnFetchParseUrl(const WCHAR *url, WCHAR *host, DWORD hostCch, DWORD *port, const WCHAR **path)
 {
-    const WCHAR *p, *slash;
+    const WCHAR *p, *slash, *s;
 
     if (wcsncmp(url, L"http://", 7) != 0)
         return ERROR_INVALID_DATA;
     p = url + 7;
     if (wcschr(p, L'@') != NULL || wcschr(p, L'\\') != NULL)
         return ERROR_INVALID_DATA;
+    for (s = p; *s; s++)
+    {
+        if (*s > 0x7E || *s <= 0x20 || *s == 0x7F)
+            return ERROR_INVALID_DATA;
+    }
 
     slash = wcschr(p, L'/');
+    if (slash && (DWORD)(wcslen(slash)) > LN_FETCH_MAX_URL_CHARS)
+        return ERROR_INVALID_DATA;
     {
         const WCHAR *colon = wcschr(p, L':');
         const WCHAR *hend = slash ? slash : p + wcslen(p);
@@ -65,14 +79,15 @@ LnFetchParseUrl(const WCHAR *url, WCHAR *host, DWORD hostCch, DWORD *port, const
             if (hp == 0 || hp > 65535)
                 return ERROR_INVALID_DATA;
             *port = hp;
-            if ((DWORD)(colon - p) >= hostCch)
+            if ((DWORD)(colon - p) >= hostCch || (DWORD)(colon - p) > LN_FETCH_MAX_HOST_CHARS)
                 return ERROR_INVALID_DATA;
             wcsncpy(host, p, colon - p);
             host[colon - p] = 0;
         }
         else
         {
-            if ((DWORD)(hend - p) == 0 || (DWORD)(hend - p) >= hostCch)
+            if ((DWORD)(hend - p) == 0 || (DWORD)(hend - p) >= hostCch ||
+                (DWORD)(hend - p) > LN_FETCH_MAX_HOST_CHARS)
                 return ERROR_INVALID_DATA;
             wcsncpy(host, p, hend - p);
             host[hend - p] = 0;
@@ -101,15 +116,16 @@ LnFetchFile(const WCHAR *url, const WCHAR *destPath)
     LONG status;
     HANDLE f = INVALID_HANDLE_VALUE;
     BOOL started = FALSE;
-    DWORD got, sent = 0, reqLen, bodyOff;
+    DWORD got, sent = 0, reqLen = 0, bodyOff;
     CHAR *header = NULL, *hdrEnd;
     const CHAR *bodyStart;
+    int n;
 
     err = LnFetchParseUrl(url, host, 256, &port, &path);
     if (err != ERROR_SUCCESS)
         return err;
 
-    cap = LnFetchCapBytes();
+    cap = LnFetchEnvBytes(L"LN_FETCH_MAX_BYTES", LN_FETCH_DEFAULT_CAP);
     timeoutMs = LnFetchTimeoutMs();
 
     if (WSAStartup(MAKEWORD(2, 2), &wd) != 0)
@@ -126,8 +142,14 @@ LnFetchFile(const WCHAR *url, const WCHAR *destPath)
     setsockopt(s, SOL_SOCKET, SO_SNDTIMEO, (const CHAR *)&timeoutMs, sizeof(timeoutMs));
 
     {
-        CHAR hostA[256], pathA[600];
-        WideCharToMultiByte(CP_ACP, 0, host, -1, hostA, 256, NULL, NULL);
+        CHAR hostA[LN_FETCH_MAX_HOST_CHARS + 1], pathA[LN_FETCH_MAX_URL_CHARS + 1];
+
+        if (!WideCharToMultiByte(CP_ACP, 0, host, -1, hostA, sizeof(hostA), NULL, NULL) ||
+            !WideCharToMultiByte(CP_ACP, 0, path, -1, pathA, sizeof(pathA), NULL, NULL))
+        {
+            err = ERROR_INVALID_DATA;
+            goto done;
+        }
         sa.sin_family = AF_INET;
         sa.sin_port = htons((WORD)port);
         sa.sin_addr.s_addr = inet_addr(hostA);
@@ -150,11 +172,16 @@ LnFetchFile(const WCHAR *url, const WCHAR *destPath)
             goto done;
         }
 
-        WideCharToMultiByte(CP_ACP, 0, path, -1, pathA, 600, NULL, NULL);
-        reqLen = (DWORD)_snprintf(req, sizeof(req),
-                                  "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: libernt-update\r\n"
-                                  "Connection: close\r\n\r\n",
-                                  pathA, hostA);
+        n = _snprintf(req, sizeof(req),
+                      "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: libernt-update\r\n"
+                      "Connection: close\r\n\r\n",
+                      pathA, hostA);
+        if (n < 0 || (DWORD)n >= sizeof(req))
+        {
+            err = ERROR_INVALID_DATA;
+            goto done;
+        }
+        reqLen = (DWORD)n;
     }
     while (sent < reqLen)
     {
@@ -272,16 +299,19 @@ done:
     return err;
 }
 
-/* Download manifest.json + manifest.sig + the payloads named by the signed
- * manifest into destDir (a fresh package directory). Per-payload hashes are
- * checked as they land; the add path re-verifies everything authoritatively. */
+/* Download manifest.json + manifest.sig, verify the signature against the pinned
+ * certificate, then fetch the payloads the now-trusted manifest names into destDir
+ * (a fresh package directory). Per-payload hashes are checked as they land and the
+ * total is capped; any failure removes the directory. The add path re-verifies
+ * everything authoritatively over the fetched copy. */
 DWORD
-LnFetchPackage(const WCHAR *baseUrl, const WCHAR *destDir)
+LnFetchPackage(const LN_TARGET *t, const WCHAR *baseUrl, const WCHAR *destDir)
 {
-    WCHAR *url = NULL, *file = NULL, *payloadDir = NULL;
+    WCHAR *url = NULL, *file = NULL, *payloadDir = NULL, *cer = NULL;
     LN_MANIFEST m;
     DWORD err;
     size_t i;
+    ULONGLONG total = 0, cap = LnFetchEnvBytes(L"LN_FETCH_MAX_PACKAGE_BYTES", LN_FETCH_DEFAULT_PACKAGE_CAP);
 
     memset(&m, 0, sizeof(m));
 
@@ -291,7 +321,8 @@ LnFetchPackage(const WCHAR *baseUrl, const WCHAR *destDir)
 
     url = malloc(sizeof(WCHAR) * (wcslen(baseUrl) + 32));
     file = malloc(sizeof(WCHAR) * (wcslen(destDir) + 32));
-    if (!url || !file)
+    cer = LnTargetPath(t, L"trust\\Leeway-LiberNT-Update-DEV.cer");
+    if (!url || !file || !cer)
     {
         err = ERROR_NOT_ENOUGH_MEMORY;
         goto done;
@@ -310,6 +341,12 @@ LnFetchPackage(const WCHAR *baseUrl, const WCHAR *destDir)
     wcscpy(file, destDir);
     wcscat(file, L"\\manifest.sig");
     err = LnFetchFile(url, file);
+    if (err != ERROR_SUCCESS)
+        goto done;
+
+    /* the manifest is untrusted until its signature checks: only then may its
+     * payload names drive further downloads */
+    err = LnVerifyManifestSignatureOnly(destDir, cer);
     if (err != ERROR_SUCCESS)
         goto done;
 
@@ -333,9 +370,18 @@ LnFetchPackage(const WCHAR *baseUrl, const WCHAR *destDir)
     {
         char hex[65];
         WCHAR *dest, *bslash;
+        LARGE_INTEGER sz;
 
         if (m.items[i].isDelete || !m.items[i].path)
             continue;
+
+        free(url);
+        url = malloc(sizeof(WCHAR) * (wcslen(baseUrl) + wcslen(m.items[i].path) + 16));
+        if (!url)
+        {
+            err = ERROR_NOT_ENOUGH_MEMORY;
+            goto done;
+        }
 
         dest = LnJoin(payloadDir, m.items[i].path);
         if (!dest)
@@ -363,6 +409,25 @@ LnFetchPackage(const WCHAR *baseUrl, const WCHAR *destDir)
 
         err = LnFetchFile(url, dest);
         if (err == ERROR_SUCCESS)
+        {
+            HANDLE f = CreateFileW(dest, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING,
+                                   FILE_ATTRIBUTE_NORMAL, NULL);
+            if (f == INVALID_HANDLE_VALUE)
+                err = GetLastError();
+            else
+            {
+                if (GetFileSizeEx(f, &sz))
+                {
+                    total += (ULONGLONG)sz.QuadPart;
+                    if (total > cap)
+                        err = ERROR_FILE_TOO_LARGE;
+                }
+                else
+                    err = GetLastError();
+                CloseHandle(f);
+            }
+        }
+        if (err == ERROR_SUCCESS)
             err = LnSha256FileHex(dest, hex);
         if (err == ERROR_SUCCESS && strcmp(hex, m.items[i].sha256) != 0)
             err = LN_E_HASH_MISMATCH;
@@ -376,5 +441,8 @@ done:
     free(payloadDir);
     free(url);
     free(file);
+    free(cer);
+    if (err != ERROR_SUCCESS)
+        LnRemoveTree(destDir);
     return err;
 }

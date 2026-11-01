@@ -267,7 +267,7 @@ int wmain(int argc, WCHAR **argv)
             err = LnEnsureDir(tmpDir);
             if (err)
                 return Fail("fetch", err);
-            err = LnFetchPackage(url, tmpDir);
+            err = LnFetchPackage(&t, url, tmpDir);
             if (err == ERROR_SUCCESS)
                 err = LnServicingAddPackage(&t, tmpDir, txid);
             LnRemoveTree(tmpDir);

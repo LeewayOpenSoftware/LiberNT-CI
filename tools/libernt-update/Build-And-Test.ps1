@@ -98,11 +98,32 @@ if (-not $SkipFixtures) {
 Write-Host '=== TESTS ==='
 $httpRoot = Join-Path $OutDir 'httproot'
 if (-not $SkipFixtures) {
+    Remove-Item -Recurse -Force $httpRoot -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force -Path $httpRoot | Out-Null
     [IO.File]::WriteAllText((Join-Path $httpRoot 'blob.bin'), ('A' * 1000))
     [IO.File]::WriteAllText((Join-Path $httpRoot 'big.bin'), ('0123456789' * 1000))
-    Copy-Item -Recurse -Force (Join-Path $fx 'good1') (Join-Path $httpRoot 'good1')
-    Copy-Item -Recurse -Force (Join-Path $fx 'tampered-payload') (Join-Path $httpRoot 'tampered-payload')
+    foreach ($pkg in 'good1', 'tampered-payload', 'tampered-manifest', 'no-manifest-sig', 'wrongcert') {
+        Copy-Item -Recurse -Force (Join-Path $fx $pkg) (Join-Path $httpRoot $pkg)
+    }
+    # review F1: a manifest naming a ~5000-char payload path must fail cleanly, not overflow the URL buffer
+    $hp = Join-Path $httpRoot 'hugepath'
+    New-Item -ItemType Directory -Force -Path $hp | Out-Null
+    $hpCert = New-Object Security.Cryptography.X509Certificates.X509Certificate2((Join-Path $KeyDir 'Leeway-LiberNT-Update-DEV.pfx'), [IO.File]::ReadAllText((Join-Path $KeyDir 'pfx-password.txt')))
+    $hpSha = [BitConverter]::ToString([Security.Cryptography.SHA256]::Create().ComputeHash($hpCert.RawData)).Replace('-', '').ToLower()
+    $hpMan = [ordered]@{
+        schemaVersion     = 1
+        packageId         = 'ln.hugepath'
+        releaseVersion    = '1.0'
+        type              = 'system-component'
+        targetFamily      = 'LiberNT'
+        architecture      = 'amd64'
+        certificateSha256 = $hpSha
+        payloads          = @(@{ path = (('a/' * 2500) + 'f0.bin'); target = 'Windows\System32\x.dll'; sha256 = ('0' * 64) })
+    }
+    $utf8 = New-Object Text.UTF8Encoding($false)
+    [IO.File]::WriteAllText((Join-Path $hp 'manifest.json'), ($hpMan | ConvertTo-Json -Depth 6), $utf8)
+    $hpRsa = [Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($hpCert)
+    [IO.File]::WriteAllBytes((Join-Path $hp 'manifest.sig'), $hpRsa.SignData([IO.File]::ReadAllBytes((Join-Path $hp 'manifest.json')), [Security.Cryptography.HashAlgorithmName]::SHA256, [Security.Cryptography.RSASignaturePadding]::Pkcs1))
 }
 $server = $null
 try {
