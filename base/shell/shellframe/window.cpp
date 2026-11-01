@@ -206,6 +206,8 @@ FrameWindow::ClientCaption() const
 {
     BOOL composed = FALSE;
 
+    if (UseSystemCaption())
+        return FALSE;
     return UsesClientCaption() && IsAppThemed() && SUCCEEDED(DwmIsCompositionEnabled(&composed)) && composed;
 }
 
