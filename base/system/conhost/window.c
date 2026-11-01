@@ -2776,6 +2776,10 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
     case WM_KEYDOWN:
     case WM_KEYUP:
 #ifdef __REACTOS__
+        /* Win+Up/Down/Left/Right (window snap, maximise, minimise) is implemented in DefWindowProc's
+           WM_KEYDOWN. The console must not swallow it, and the application must not see the arrow key. */
+        if (msg == WM_KEYDOWN && ((GetKeyState( VK_LWIN ) | GetKeyState( VK_RWIN )) & 0x8000))
+            return DefWindowProcW( hwnd, msg, wparam, lparam );
         if (console->window && console->window->in_selection && console->window->selection_mark)
             handle_selection_key( console, msg == WM_KEYDOWN, wparam, lparam );
         else if (console->window && msg == WM_KEYDOWN && handle_edit_key( console, wparam ))
@@ -2794,6 +2798,11 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
 
     case WM_SYSKEYDOWN:
     case WM_SYSKEYUP:
+#ifdef __REACTOS__
+        /* Alt+F4 is turned into WM_SYSCOMMAND/SC_CLOSE by DefWindowProc; it is not input for the application */
+        if (wparam == VK_F4)
+            return DefWindowProcW( hwnd, msg, wparam, lparam );
+#endif
         record_key_input( console, msg == WM_SYSKEYDOWN, wparam, lparam );
         break;
 
