@@ -324,6 +324,9 @@ TerminalWindow::OnPaint(ShellFrame::Canvas &canvas, const RECT &client)
         below.top = strip.bottom;
         canvas.Fill(below, content);
     }
+#if SHELLFRAME_CUSTOM_CAPTION_BUTTONS
+    PaintCaptionButtons(canvas, client, c.TabStrip);
+#endif
 }
 
 void
