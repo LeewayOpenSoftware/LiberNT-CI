@@ -76,6 +76,23 @@ static void InstallTrust(const LN_TARGET *t)
     free(dst);
 }
 
+static void InstallApplierStub(const LN_TARGET *t)
+{
+    WCHAR *dst = LnTargetFile(t, L"Windows\\System32\\LiberNTUpdatePending.exe");
+
+    WriteText(dst, "boot applier stub");
+    free(dst);
+}
+
+static BOOL AttemptRecordExists(const LN_TARGET *t)
+{
+    WCHAR *a = LnTargetPath(t, L"pending\\attempt.json");
+    BOOL ex = a && LnPathExists(a);
+
+    free(a);
+    return ex;
+}
+
 static BOOL OpenImage(LN_TARGET *t, const WCHAR *name)
 {
     WCHAR root[MAX_PATH];
@@ -614,7 +631,9 @@ static void TestLifecycle(void)
     CHECK_ERR(0, LnJournalRead(&t, &j));
     CHECK(!strcmp(LnJournalLast(&j, tx)->phase, "confirmed") && LnJournalLast(&j, tx)->healthConfirmed);
     LnJournalFree(&j);
+    CHECK(!AttemptRecordExists(&t));                        /* a closed transaction leaves no attempt record */
     CHECK_ERR(0, LnServicingConfirmHealth(&t, "ln.fixture", "1.0"));                   /* idempotent */
+    CHECK(!AttemptRecordExists(&t));
     CHECK_ERR(0, LnServicingRemovePackage(&t, "ln.fixture", "1.0"));
     CHECK(FileIs(target, "original"));
     CHECK_ERR(LN_E_NOT_FOUND, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
@@ -727,6 +746,7 @@ static void TestPendingPlan(void)
     Section("locked target: pending-first-boot plan and attempt rules (S1-CONTRACTS.md 1, 5)");
     CHECK(OpenImage(&t, L"pending"));
     InstallTrust(&t);
+    InstallApplierStub(&t);
     target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
     WriteText(target, "locked original");
     p = Fx(L"good1");
@@ -1221,6 +1241,7 @@ static void TestPlanValidation(void)
     Section("N6: the plan must match the signed package");
     CHECK(OpenImage(&t, L"planval"));
     InstallTrust(&t);
+    InstallApplierStub(&t);
     target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
     WriteText(target, "locked original");
     p = Fx(L"good1");
@@ -1271,6 +1292,7 @@ static void TestPlanHashFailClosed(void)
     Section("H1: an existing but unhashable target fails the plan closed (Pam review)");
     CHECK(OpenImage(&t, L"planhash"));
     InstallTrust(&t);
+    InstallApplierStub(&t);
     target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
     WriteText(target, "original content");
     /* deny read to everyone, including ourselves: neither the backup copy
@@ -1298,6 +1320,46 @@ static void TestPlanHashFailClosed(void)
 }
 
 static void
+TestApplierGuard(void)
+{
+    LN_TARGET t;
+    WCHAR *p, *target, *plan;
+    char tx[65];
+    BOOL reboot;
+    LN_JOURNAL j;
+
+    Section("defer refuses when the boot applier is not installed (dx2400 stall)");
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"Windows");
+    CHECK(OpenImage(&t, L"applierguard"));
+    InstallTrust(&t);
+    target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
+    WriteText(target, "old content");
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
+    free(p);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(LN_E_PRECONDITION, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CHECK(!reboot);
+    CHECK(FileIs(target, "old content"));                       /* nothing may change */
+    CHECK_ERR(0, LnJournalRead(&t, &j));
+    CHECK(!strcmp(LnJournalLast(&j, tx)->phase, "rolled-back"));   /* refused, then the empty rollback closed it */
+    LnJournalFree(&j);
+    plan = LnTargetPath(&t, L"pending\\plan.json");
+    CHECK(!LnPathExists(plan));                                 /* no plan a boot could never consume */
+    free(plan);
+
+    /* with the applier present the same apply defers normally */
+    InstallApplierStub(&t);
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    LnTestLockedAsPending = FALSE;
+    CHECK(reboot);
+    free(target);
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"");
+}
+
+static void
 TestSystemDefer(void)
 {
     /* Route rule (god kv-optA): a replace under a system root always plans at boot, without
@@ -1315,6 +1377,7 @@ TestSystemDefer(void)
     SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", NULL);
     CHECK(OpenImage(&t, L"sysdefer1"));
     InstallTrust(&t);
+    InstallApplierStub(&t);
     target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
     WriteText(target, "old content");
     p = Fx(L"good1");
@@ -1366,6 +1429,7 @@ TestSystemDefer(void)
     SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"Program Files;Windows");
     CHECK(OpenImage(&t, L"sysdefer4"));
     InstallTrust(&t);
+    InstallApplierStub(&t);
     target = LnTargetFile(&t, L"Windows\\System32\\lnfixture.dll");
     WriteText(target, "old content");
     p = Fx(L"good1");
@@ -1488,6 +1552,7 @@ int wmain(int argc, WCHAR **argv)
     TestJournalAnchor();
     TestPlanValidation();
     TestPlanHashFailClosed();
+    TestApplierGuard();
     TestSystemDefer();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);

@@ -891,6 +891,68 @@ static DWORD DoRollback(CTX *c, const char *why)
 
 /* ---- plan.json ---------------------------------------------------------- */
 
+/* A deferred plan is only consumable when the boot applier is installed for this
+ * target, otherwise the update waits for a boot that will never apply it. Online:
+ * the applier exe sits in the running System32 and BootExecute names it. Image:
+ * the offline root is checked for the exe; its BootExecute lives in unmounted
+ * hives, and an image that carries the exe came from an installed system. */
+static DWORD
+RequireBootApplier(const LN_TARGET *t)
+{
+    if (t->mode == LnTargetImage)
+    {
+        WCHAR *p = LnTargetFile(t, L"Windows\\System32\\LiberNTUpdatePending.exe");
+        DWORD attrs;
+
+        if (!p)
+            return ERROR_NOT_ENOUGH_MEMORY;
+        attrs = GetFileAttributesW(p);
+        free(p);
+        return attrs == INVALID_FILE_ATTRIBUTES ? LN_E_PRECONDITION : ERROR_SUCCESS;
+    }
+    else
+    {
+        WCHAR exe[MAX_PATH], buf[4096];
+        DWORD n, type, bootExecLen = sizeof(buf);
+        HKEY key;
+        LONG r;
+        const WCHAR *s;
+
+        n = GetSystemDirectoryW(exe, MAX_PATH - 30);
+        if (n == 0)
+            return ERROR_NOT_ENOUGH_MEMORY;
+        wcscat(exe, L"\\LiberNTUpdatePending.exe");
+        if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES)
+            return LN_E_PRECONDITION;
+        r = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SYSTEM\\CurrentControlSet\\Control\\Session Manager", 0, KEY_READ, &key);
+        if (r != ERROR_SUCCESS)
+            return LN_E_PRECONDITION;
+        r = RegQueryValueExW(key, L"BootExecute", NULL, &type, (BYTE *)buf, &bootExecLen);
+        RegCloseKey(key);
+        if (r != ERROR_SUCCESS || (type != REG_MULTI_SZ && type != REG_SZ))
+            return LN_E_PRECONDITION;
+        for (s = (const WCHAR *)buf; s < (const WCHAR *)(buf + bootExecLen) && *s; s += wcslen(s) + 1)
+        {
+            if (wcsstr(s, L"LiberNTUpdatePending"))
+                return ERROR_SUCCESS;
+        }
+        return LN_E_PRECONDITION;
+    }
+}
+
+static void
+RemoveAttemptRecord(const LN_TARGET *t)
+{
+    WCHAR *a = LnTargetPath(t, L"pending\\attempt.json");
+
+    if (a)
+    {
+        DeleteFileW(a);
+        free(a);
+    }
+}
+
 static DWORD WritePlan(const CTX *c, const BOOL *pending)
 {
     LN_BUF b;
@@ -1203,6 +1265,14 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
 
     if (any)
     {
+        err = RequireBootApplier(t);
+        if (err)
+        {
+            LogLine(t, c.txid, "apply refused: a reboot is required but the boot applier is not installed");
+            Journal(&c, "failed", "error", ErrText(err, buf));
+            DoRollback(&c, "boot-applier-missing");
+            goto fail_logged;
+        }
         err = WritePlan(&c, pending);
         if (err)
         {
@@ -1362,6 +1432,7 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
     {
         LnAttemptSetHealth(t, c.txid);
         RemovePlanOf(&c);
+        RemoveAttemptRecord(t);                     /* the transaction is closed; a stale record would count as an attempt for the next tx */
     }
     LnManifestFree(&c.m);
     return err;
@@ -1400,6 +1471,7 @@ DWORD LnServicingRemovePackage(const LN_TARGET *t, const char *packageId, const 
         LnJournalFree(&j);
 
     err = LnStoreRemovePackage(t, packageId, version);
+    RemoveAttemptRecord(t);                     /* idempotent: close any leftover record of this transaction */
     LogLine(t, c.txid, "remove-package: store entry removed (objects are immutable and stay)");
     LnManifestFree(&c.m);
     return err;
