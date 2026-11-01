@@ -338,14 +338,14 @@ cap_click_tests() {
       ptr move $((SW/2)) $((SH-TB-6)); sleep 1; shot "$OUT/.idle.png"
       ptr $meth $(btn_x $k) $cy; sleep 1; shot "$OUT/$n-$lb-hover-$b-$meth.png"
       "$MAGICK" "$OUT/$n-$lb-hover-$b-$meth.png" -crop ${bw}x${BTH}+${bx}+$((y+BTY)) +repage -filter point -resize 600% "$OUT/$n-$lb-hover-$b-$meth-6x.png"
-      d=$(diffpx "$OUT/.idle.png" "$OUT/$n-$lb-hover-$b-$meth.png" ${bw}x${BTH}+${bx}+$((y+BTY)))
+      d=$(lumdelta "$OUT/.idle.png" "$OUT/$n-$lb-hover-$b-$meth.png" $bw $bx $((y+BTY)))   # button face luminance change x1000
       res="$res $b/$meth=${d:-0}"
       [ "${d:-0}" -gt "$best" ] && { best=${d:-0}; bm=$meth; }
     done
-    [ "$best" -gt 450 ] || hv=FAIL
+    [ "$best" -gt 25 ] || hv=FAIL
   done
-  if [ $hv = PASS ]; then log "$lb.hover    PASS  every button highlights when hovered by at least one approach (changed px:$res; need >450, pointer arrow alone ~250), see $n-$lb-hover-*.png"
-  else log "$lb.hover    FAIL  no approach (jump, small steps) highlights at least one button (changed px:$res; need >450, pointer arrow alone ~250), see $n-$lb-hover-*.png"; FAILS=$((FAILS+1)); fi
+  if [ $hv = PASS ]; then log "$lb.hover    PASS  every button changes face when hovered by at least one approach (luminance delta x1000:$res; need >25), see $n-$lb-hover-*.png"
+  else log "$lb.hover    FAIL  no approach (jump, small steps) changes the face of at least one button (luminance delta x1000:$res; need >25), see $n-$lb-hover-*.png"; FAILS=$((FAILS+1)); fi
   # maximise, then restore (the middle button twice)
   ptr click $(btn_x 2) $cy; sleep 3; shot "$OUT/$n-$lb-click-max.png"
   if setbox "$(winbox "$pre" "$OUT/$n-$lb-click-max.png")" && ismax; then
@@ -376,6 +376,15 @@ cap_click_tests() {
   cy=$(btn_cy); ptr click $(btn_x 1) $cy; sleep 3; shot "$OUT/.cur.png"
   if [ "$(diffpx "$pre" "$OUT/.cur.png" ${SW}x$((SH-TB))+0+0)" -lt 3000 ]; then log "$lb.click-close  PASS  clicking close removed the window"; CLICK_CLOSED=1
   else log "$lb.click-close  FAIL  clicking close left the window on screen"; FAILS=$((FAILS+1)); fi
+}
+# lumdelta <idle.png> <hover.png> <button width> <left x> <top y> : |mean luminance change| x1000 of the left 40% of
+# the button face (the arrow starts at the centre of the button, so it is excluded). The idle shot is taken with
+# the pointer parked away from the caption and the window active.
+lumdelta() {
+  cw=$(( $3 * 40 / 100 ))
+  a=$("$MAGICK" "$1" -crop ${cw}x${BTH}+$4+$5 +repage -colorspace Gray -format '%[fx:mean*1000]' info: 2>/dev/null)
+  b=$("$MAGICK" "$2" -crop ${cw}x${BTH}+$4+$5 +repage -colorspace Gray -format '%[fx:mean*1000]' info: 2>/dev/null)
+  awk -v a="${a:-0}" -v b="${b:-0}" 'BEGIN { d = a - b; if (d < 0) d = -d; printf "%d", d }'
 }
 # window <n> <label> <run-command> <settle seconds>
 window() {
