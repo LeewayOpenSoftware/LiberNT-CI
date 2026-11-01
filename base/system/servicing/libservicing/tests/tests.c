@@ -1338,12 +1338,12 @@ TestApplierGuard(void)
     CHECK_ERR(0, LnServicingAddPackage(&t, p, tx));
     free(p);
     LnTestLockedAsPending = TRUE;
-    CHECK_ERR(LN_E_PRECONDITION, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
+    CHECK_ERR(LN_E_NO_BOOT_APPLIER, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, tx));
     LnTestLockedAsPending = FALSE;
     CHECK(!reboot);
     CHECK(FileIs(target, "old content"));                       /* nothing may change */
     CHECK_ERR(0, LnJournalRead(&t, &j));
-    CHECK(!strcmp(LnJournalLast(&j, tx)->phase, "rolled-back"));   /* refused, then the empty rollback closed it */
+    CHECK(!strcmp(LnJournalLast(&j, tx)->phase, "failed"));        /* refused before anything changed */
     LnJournalFree(&j);
     plan = LnTargetPath(&t, L"pending\\plan.json");
     CHECK(!LnPathExists(plan));                                 /* no plan a boot could never consume */
@@ -1356,6 +1356,92 @@ TestApplierGuard(void)
     LnTestLockedAsPending = FALSE;
     CHECK(reboot);
     free(target);
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"");
+}
+
+static void
+TestBootExecuteListed(void)
+{
+    WCHAR buf[512];
+
+    Section("BootExecute walk: bytes limit, tokens, case, paths (review F1/F2)");
+    memset(buf, 0, sizeof(buf));
+    wcscpy(buf, L"autocheck autochk *");
+    wcscpy(buf + wcslen(buf) + 1, L"LiberNTUpdatePending");
+    CHECK(LnBootExecuteListed(buf, (wcslen(buf) + 1 + 20) * sizeof(WCHAR)));      /* plain MULTI_SZ */
+    CHECK(LnBootExecuteListed(buf, sizeof(buf)));                                  /* zeroed tail hides a missing double NUL */
+
+    memset(buf, 0, sizeof(buf));
+    wcscpy(buf, L"autocheck autochk * LiberNTUpdatePending");                      /* REG_SZ: the applier is not the first token of the entry */
+    CHECK(!LnBootExecuteListed(buf, (wcslen(buf) + 1) * sizeof(WCHAR)));
+    wcscpy(buf, L"LiberNTUpdatePending /log");                                     /* entry with arguments: first token matches */
+    CHECK(LnBootExecuteListed(buf, sizeof(buf)));
+
+    memset(buf, 0, sizeof(buf));
+    wcscpy(buf, L"liberntupdatepending");                                          /* case-insensitive */
+    CHECK(LnBootExecuteListed(buf, sizeof(buf)));
+    wcscpy(buf, L"C:\\Windows\\System32\\LiberNTUpdatePending.exe");               /* path and .exe stripped */
+    CHECK(LnBootExecuteListed(buf, sizeof(buf)));
+
+    memset(buf, 0, sizeof(buf));
+    wcscpy(buf, L"autocheck autochk *");
+    CHECK(!LnBootExecuteListed(buf, sizeof(buf)));                                 /* absent */
+    wcscpy(buf, L"C:\\Windows\\LiberNTUpdatePending.exe.bak");                     /* not the exe: .bak survives the strip */
+    CHECK(!LnBootExecuteListed(buf, sizeof(buf)));
+    wcscpy(buf, L"x\\NotLiberNTUpdatePending");                                    /* not a token */
+    CHECK(!LnBootExecuteListed(buf, sizeof(buf)));
+    buf[0] = 0;
+    CHECK(!LnBootExecuteListed(buf, sizeof(buf)));                                 /* empty list */
+    memset(buf, 0, sizeof(buf));
+    memset(buf, 0x41, 400);                                                        /* no terminator within the bound: limit is in bytes */
+    CHECK(!LnBootExecuteListed(buf, 400));
+}
+
+static void
+TestAttemptOwnership(void)
+{
+    LN_TARGET t;
+    WCHAR *p, *target, *attempt;
+    char txA[65], txB[65], *plan;
+    BOOL reboot;
+    LN_ATTEMPT rec;
+
+    Section("attempt record ownership: closing A never touches B's counter (review F4)");
+    CHECK(OpenImage(&t, L"attown"));
+    InstallTrust(&t);
+    InstallApplierStub(&t);
+
+    /* A: staged, applied inline, confirmed and removed while B is pending */
+    p = Fx(L"good1");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, txA));
+    free(p);
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.fixture", "1.0", &reboot, txA));
+    CHECK_ERR(0, LnServicingConfirmHealth(&t, "ln.fixture", "1.0"));
+
+    /* B: staged and deferred to boot, then a boot marks it started */
+    SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"Windows");
+    p = Fx(L"twoitems");
+    CHECK_ERR(0, LnServicingAddPackage(&t, p, txB));
+    free(p);
+    target = LnTargetFile(&t, L"Windows\\System32\\first.dll");
+    WriteText(target, "old first");
+    LnTestLockedAsPending = TRUE;
+    CHECK_ERR(0, LnServicingApplyPackage(&t, "ln.twoitems", "1.0", &reboot, txB));
+    LnTestLockedAsPending = FALSE;
+    CHECK(reboot);
+    free(target);
+    CHECK_ERR(0, LnServicingMarkBootStarted(&t, &rec));
+    CHECK_ERR(0, LnServicingReadAttempt(&t, &rec));
+    CHECK(!strcmp(rec.transactionId, txB));
+
+    /* removing the closed A (rollback path) must keep B's boot counter */
+    CHECK_ERR(0, LnServicingRemovePackage(&t, "ln.fixture", "1.0"));
+    CHECK_ERR(0, LnServicingReadAttempt(&t, &rec));
+    CHECK(!strcmp(rec.transactionId, txB));
+
+    /* removing B itself clears the record */
+    CHECK_ERR(0, LnServicingRemovePackage(&t, "ln.twoitems", "1.0"));
+    CHECK_ERR(LN_E_NOT_FOUND, LnServicingReadAttempt(&t, &rec));
     SetEnvironmentVariableW(L"LNUPDATE_SYSTEM_DIRS", L"");
 }
 
@@ -1553,6 +1639,8 @@ int wmain(int argc, WCHAR **argv)
     TestPlanValidation();
     TestPlanHashFailClosed();
     TestApplierGuard();
+    TestBootExecuteListed();
+    TestAttemptOwnership();
     TestSystemDefer();
 
     printf("\n%d checks, %d failed\n", g_checks, g_failed);

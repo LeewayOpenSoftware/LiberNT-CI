@@ -41,6 +41,7 @@ extern "C" {
 #define LN_E_NO_TRUST_ANCHOR    (LN_E_BASE + 12)  /* target has no trusted certificate installed */
 
 #define LN_E_BAD_SIGNATURE      (LN_E_BASE + 14)  /* manifest.sig does not verify with the pinned key */
+#define LN_E_NO_BOOT_APPLIER    (LN_E_BASE + 15)  /* a reboot is required but the boot updater is not installed */
 #define LN_E_INSECURE_TARGET    (LN_E_BASE + 13)  /* servicing tree owner/DACL is not SYSTEM + Administrators only */
 #define LN_SHA256_HEX_LEN   64
 #define LN_MAX_ITEMS        4096
@@ -220,6 +221,11 @@ DWORD LnStoreRemovePackage(const LN_TARGET *t, const char *packageId, const char
 DWORD LnStoreList(const LN_TARGET *t, char (**ids)[130], size_t *count);   /* "id\\version", free(*ids) */
 
 /* ---- servicing.c: add / apply / rollback ------------------------------- */
+/* TRUE when a raw BootExecute value (REG_SZ or REG_MULTI_SZ, maybe unterminated or
+ * without the double NUL) lists the LiberNT boot applier. `bytes` is the buffer
+ * size in bytes. Each entry is matched by its first token (up to a space), with
+ * any path and a trailing ".exe" stripped, case-insensitively. */
+BOOL LnBootExecuteListed(const WCHAR *multiSz, size_t bytes);
 DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[65]);
 /* Applies a package that is already in the store. Idempotent: the same request resumes or returns. */
 DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const char *version,

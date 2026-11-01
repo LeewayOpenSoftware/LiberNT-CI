@@ -839,8 +839,12 @@ static DWORD RemovePlanOf(const CTX *c)
     if (err == ERROR_SUCCESS)
     {
         WCHAR *a = LnTargetPath(c->t, L"pending\\attempt.json");
+        LN_ATTEMPT rec;
 
-        if (a)
+        /* the boot counter belongs to one transaction: a pending plan of another
+         * package must keep its record */
+        if (a && LnServicingReadAttempt(c->t, &rec) == ERROR_SUCCESS &&
+            !strcmp(rec.transactionId, c->txid))
             DeleteFileW(a);
         free(a);
     }
@@ -896,6 +900,38 @@ static DWORD DoRollback(CTX *c, const char *why)
  * the applier exe sits in the running System32 and BootExecute names it. Image:
  * the offline root is checked for the exe; its BootExecute lives in unmounted
  * hives, and an image that carries the exe came from an installed system. */
+/* TRUE when a raw BootExecute value (REG_SZ or REG_MULTI_SZ, maybe unterminated or
+ * without the double NUL) lists the LiberNT boot applier. `bytes` is the buffer
+ * size in bytes. Each entry is matched by its first token (up to a space), with
+ * any path and a trailing ".exe" stripped, case-insensitively. */
+BOOL
+LnBootExecuteListed(const WCHAR *multiSz, size_t bytes)
+{
+    const WCHAR *end = (const WCHAR *)((const BYTE *)multiSz + bytes);
+    const WCHAR *s;
+
+    for (s = multiSz; s < end && *s; s += wcslen(s) + 1)
+    {
+        WCHAR token[MAX_PATH], *base;
+        size_t len = 0;
+
+        while (s + len < end && s[len] && s[len] != L' ' && len < MAX_PATH - 1)
+        {
+            token[len] = s[len];
+            len++;
+        }
+        token[len] = 0;
+        base = wcsrchr(token, L'\\');
+        base = base ? base + 1 : token;
+        len = wcslen(base);
+        if (len > 4 && _wcsicmp(base + len - 4, L".exe") == 0)
+            base[len - 4] = 0;
+        if (_wcsicmp(base, L"LiberNTUpdatePending") == 0)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static DWORD
 RequireBootApplier(const LN_TARGET *t)
 {
@@ -908,49 +944,76 @@ RequireBootApplier(const LN_TARGET *t)
             return ERROR_NOT_ENOUGH_MEMORY;
         attrs = GetFileAttributesW(p);
         free(p);
-        return attrs == INVALID_FILE_ATTRIBUTES ? LN_E_PRECONDITION : ERROR_SUCCESS;
+        return attrs == INVALID_FILE_ATTRIBUTES ? LN_E_NO_BOOT_APPLIER : ERROR_SUCCESS;
     }
     else
     {
         WCHAR exe[MAX_PATH], buf[4096];
-        DWORD n, type, bootExecLen = sizeof(buf);
+        DWORD n, type, bootExecLen = sizeof(buf) - sizeof(WCHAR);
         HKEY key;
         LONG r;
-        const WCHAR *s;
 
         n = GetSystemDirectoryW(exe, MAX_PATH - 30);
         if (n == 0)
             return ERROR_NOT_ENOUGH_MEMORY;
         wcscat(exe, L"\\LiberNTUpdatePending.exe");
         if (GetFileAttributesW(exe) == INVALID_FILE_ATTRIBUTES)
-            return LN_E_PRECONDITION;
+            return LN_E_NO_BOOT_APPLIER;
         r = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
                           L"SYSTEM\\CurrentControlSet\\Control\\Session Manager", 0, KEY_READ, &key);
         if (r != ERROR_SUCCESS)
-            return LN_E_PRECONDITION;
+            return LN_E_NO_BOOT_APPLIER;
+        memset(buf, 0, sizeof(buf));
         r = RegQueryValueExW(key, L"BootExecute", NULL, &type, (BYTE *)buf, &bootExecLen);
         RegCloseKey(key);
         if (r != ERROR_SUCCESS || (type != REG_MULTI_SZ && type != REG_SZ))
-            return LN_E_PRECONDITION;
-        for (s = (const WCHAR *)buf; s < (const WCHAR *)(buf + bootExecLen) && *s; s += wcslen(s) + 1)
-        {
-            if (wcsstr(s, L"LiberNTUpdatePending"))
-                return ERROR_SUCCESS;
-        }
-        return LN_E_PRECONDITION;
+            return LN_E_NO_BOOT_APPLIER;
+        return LnBootExecuteListed(buf, bootExecLen) ? ERROR_SUCCESS : LN_E_NO_BOOT_APPLIER;
     }
 }
 
+/* TRUE when the route rule will defer at least one existing replace to the boot
+ * plan. Lock-driven defers cannot be predicted here and still surface at the late
+ * check before the plan is written. */
+static BOOL
+RouteRuleWouldDefer(const LN_TARGET *t, const LN_MANIFEST *m)
+{
+    size_t i;
+    BOOL enabled = (t->mode == LnTargetOnline) || TEST_LOCKED_AS_PENDING;
+
+    if (!enabled)
+        return FALSE;
+    for (i = 0; i < m->itemCount; i++)
+    {
+        WCHAR *tp;
+        BOOL defer;
+
+        if (m->items[i].isDelete || !m->items[i].path)
+            continue;
+        tp = LnTargetFile(t, m->items[i].target);
+        if (!tp)
+            continue;
+        defer = LnPathExists(tp) && IsUnderSystemDir(m->items[i].target);
+        free(tp);
+        if (defer)
+            return TRUE;
+    }
+    return FALSE;
+}
+
 static void
-RemoveAttemptRecord(const LN_TARGET *t)
+RemoveAttemptRecord(const LN_TARGET *t, const char *txid)
 {
     WCHAR *a = LnTargetPath(t, L"pending\\attempt.json");
+    LN_ATTEMPT rec;
 
-    if (a)
-    {
+    if (!a)
+        return;
+    /* the record belongs to one transaction; a pending plan of another package
+     * keeps its boot counter */
+    if (LnServicingReadAttempt(t, &rec) == ERROR_SUCCESS && !strcmp(rec.transactionId, txid))
         DeleteFileW(a);
-        free(a);
-    }
+    free(a);
 }
 
 static DWORD WritePlan(const CTX *c, const BOOL *pending)
@@ -1217,6 +1280,19 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
         goto fail;
     }
 
+    /* if the route rule will defer this apply, the boot applier must be installed
+     * before anything changes; lock-driven defers still hit the late check below */
+    if (RouteRuleWouldDefer(t, &c.m))
+    {
+        err = RequireBootApplier(t);
+        if (err)
+        {
+            LogLine(t, c.txid, "apply refused: a reboot is required but the boot updater is not installed");
+            Journal(&c, "failed", "error", ErrText(err, buf));
+            goto fail_logged;
+        }
+    }
+
     /* prepared: backups taken and verified, undo.json written, before any change */
     {
         UNDO existing[1];
@@ -1268,7 +1344,7 @@ DWORD LnServicingApplyPackage(const LN_TARGET *t, const char *packageId, const c
         err = RequireBootApplier(t);
         if (err)
         {
-            LogLine(t, c.txid, "apply refused: a reboot is required but the boot applier is not installed");
+            LogLine(t, c.txid, "apply refused: a reboot is required but the boot updater is not installed");
             Journal(&c, "failed", "error", ErrText(err, buf));
             DoRollback(&c, "boot-applier-missing");
             goto fail_logged;
@@ -1432,7 +1508,7 @@ DWORD LnServicingConfirmHealth(const LN_TARGET *t, const char *packageId, const 
     {
         LnAttemptSetHealth(t, c.txid);
         RemovePlanOf(&c);
-        RemoveAttemptRecord(t);                     /* the transaction is closed; a stale record would count as an attempt for the next tx */
+        RemoveAttemptRecord(t, c.txid);             /* the transaction is closed; a stale record would count as an attempt for the next tx */
     }
     LnManifestFree(&c.m);
     return err;
@@ -1471,7 +1547,7 @@ DWORD LnServicingRemovePackage(const LN_TARGET *t, const char *packageId, const 
         LnJournalFree(&j);
 
     err = LnStoreRemovePackage(t, packageId, version);
-    RemoveAttemptRecord(t);                     /* idempotent: close any leftover record of this transaction */
+    RemoveAttemptRecord(t, c.txid);             /* idempotent: close this transaction's leftover record */
     LogLine(t, c.txid, "remove-package: store entry removed (objects are immutable and stay)");
     LnManifestFree(&c.m);
     return err;

@@ -50,6 +50,7 @@ static const char *ErrName(DWORD e)
         case LN_E_BAD_STATE: return "bad-state";
         case LN_E_VERIFY_FINAL: return "final-hash-mismatch";
         case LN_E_NO_TRUST_ANCHOR: return "no-trust-anchor";
+        case LN_E_NO_BOOT_APPLIER: return "boot-updater-not-installed";
         default: return "win32-error";
     }
 }
