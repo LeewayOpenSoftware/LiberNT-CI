@@ -81,6 +81,9 @@ class Qmp:
             {"type": "abs", "data": {"axis": "x", "value": x}},
             {"type": "abs", "data": {"axis": "y", "value": y}}])
 
+    def hmp(self, line):
+        return self.cmd("human-monitor-command", **{"command-line": line})
+
     def button(self, down):
         return self.cmd("input-send-event", events=[{"type": "btn", "data": {"down": down, "button": "left"}}])
 
@@ -97,6 +100,12 @@ def main():
     ap.add_argument("--port", type=int, default=5701)
     ap.add_argument("--keep-img", action="store_true")
     ap.add_argument("--extra", default="", help="extra QEMU arguments")
+    ap.add_argument("--accel", default="tcg", help="QEMU accelerator (tcg, whpx, ...)")
+    ap.add_argument("--cpu", default="qemu64")
+    ap.add_argument("--display", default="gtk", help="QEMU display backend (gtk, sdl, ...)")
+    ap.add_argument("--ovmf", default="", help="OVMF firmware file: added as a read-only pflash drive (UEFI boot)")
+    ap.add_argument("--input", default="qmp", choices=["qmp", "hmp"],
+                    help="how the tablet is driven: QMP input-send-event (absolute axes) or the monitor commands mouse_move/mouse_button")
     ap.add_argument("--usb", default="qemu-xhci", help="USB controller device (qemu-xhci, usb-ehci, piix3-usb-uhci)")
     a = ap.parse_args()
 
@@ -112,13 +121,15 @@ def main():
         plog.write(line + "\n")
         plog.flush()
 
-    cmd = [a.qemu, "-m", a.mem, "-machine", a.machine, "-accel", "tcg", "-cpu", "qemu64",
+    cmd = [a.qemu, "-m", a.mem, "-machine", a.machine, "-accel", a.accel, "-cpu", a.cpu,
            "-drive", "file=%s,format=raw,if=ide,index=0" % img,
-           "-display", "gtk", "-vga", "std",
+           "-display", a.display, "-vga", "std",
            "-qmp", "tcp:127.0.0.1:%d,server,nowait" % a.port,
            "-serial", "file:" + serial,
            "-netdev", "user,id=n0", "-device", "rtl8139,netdev=n0",
            "-device", a.usb + ",id=usbc", "-device", "usb-tablet,bus=usbc.0"]
+    if a.ovmf:
+        cmd += ["-drive", "if=pflash,format=raw,readonly=on,file=" + a.ovmf]
     if a.extra:
         import shlex
         cmd += shlex.split(a.extra)
@@ -132,6 +143,18 @@ def main():
             sys.exit(2)
         qmp = Qmp(a.port)
         n = [0]
+
+        def move(x, y):
+            if a.input == "qmp":
+                qmp.move(x, y)
+            else:
+                qmp.hmp("mouse_move %d %d" % (x, y))
+
+        def click(down):
+            if a.input == "qmp":
+                qmp.button(down)
+            else:
+                qmp.hmp("mouse_button %d" % (1 if down else 0))
 
         def shot(label):
             ppm = os.path.join(a.out, "shot%02d-%s.ppm" % (n[0], label))
@@ -167,22 +190,22 @@ def main():
 
         log("probe: moving the absolute tablet; every position gets a screenshot")
         for label, x, y in POSITIONS:
-            qmp.move(x, y)
+            move(x, y)
             time.sleep(2.0)
-            qmp.move(x, y)       # a second report at the same place: a mid-flight screenshot is not a verdict
+            move(x, y)       # a second report at the same place: a mid-flight screenshot is not a verdict
             time.sleep(1.5)
             shot("move-" + label)
         label, x, y = START_CLICK
-        qmp.move(x, y)
+        move(x, y)
         time.sleep(2.0)
         shot("before-" + label)
-        qmp.button(True)
+        click(True)
         time.sleep(0.15)
-        qmp.button(False)
+        click(False)
         time.sleep(3.0)
         shot("after-" + label)
         # a second click target: the middle of the screen, then back to center, to see a click is not "sticky"
-        qmp.move(16384, 16384)
+        move(16384, 16384)
         time.sleep(2.0)
         shot("final-center")
     finally:

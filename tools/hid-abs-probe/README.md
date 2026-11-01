@@ -53,3 +53,10 @@ trace lines:
 Run the same command on that image (`--out run2`). Compare the screenshots with run 1 and read the
 ABSPROBE lines: `absolute=0` means the device was not classified absolute; `Flags=0` with `absolute=1` means the
 flag was lost; LastX/LastY far above 65536 or all equal to the maximum would point to the scaling.
+
+## More options
+
+`--accel` (tcg, whpx...), `--cpu`, `--display` (gtk, sdl...), `--ovmf <OVMF.fd>` (UEFI: added as a read-only
+pflash drive), `--machine`, `--usb` (qemu-xhci | usb-ehci | piix3-usb-uhci), `--extra "<more qemu args>"`, and
+`--input qmp|hmp`: `qmp` drives the tablet with absolute axes (0..32767); `hmp` uses the monitor commands
+`mouse_move X Y` / `mouse_button 1|0` for comparison. Absolute (0,0) is a valid position (top-left corner).
