@@ -45,7 +45,7 @@ Q=/c/msys64/ucrt64/bin
 PY=/c/msys64/usr/bin/python3
 MAGICK=$Q/magick
 export ACCEL=${ACCEL:-whpx}
-FAILS=0
+FAILS=0; TB=48
 MODE=${MODE:-launcher}      # launcher: launcher.cmd payload drives the apps (no typing; skips OOBE)
                             # keys: Win+R typing; also reports OOBE window and dead keyboard
 FIRST_DELAY=${FIRST_DELAY:-150}; GAP=${GAP:-240}   # seconds before the first app / after an app with state checks (launcher mode)
@@ -144,8 +144,13 @@ if [ "$MODE" = launcher ]; then
       printf 'start "" /min cmd /c ping -n %s 127.0.0.1 ^>nul ^& start "" %s\r\n' "$t" "$a"; case "$a" in control|ms-settings:) t=$((t+SHORT_GAP));; *) t=$((t+GAP));; esac; done; } > "$VDIR/payload/launcher.cmd"
   export PAYLOAD=$(cygpath -m "$VDIR/payload")
 fi
+# ptr <move|click|dclick> X Y : absolute pointer action in screen pixels (never exactly 0,0)
+ptr() { "$PY" "$QMPPY" "$QPORT" "$SW" "$SH" "$@"; }
 # applaunch (the service that runs launcher.cmd at logon) only acts when SMBIOS carries this OEM string
-EXTRA=; [ "$MODE" = launcher ] && EXTRA="-smbios type=11,value=libernt.applaunch"
+QPORT=$((5900 + $(printf %s "$VM" | cksum | cut -d' ' -f1) % 100))
+QMPPY=$(dirname "$SELF")/qmp-pointer.py
+EXTRA="-qmp tcp:127.0.0.1:$QPORT,server,nowait"   # pointer is driven through QMP (HMP mouse_move pins the pointer)
+[ "$MODE" = launcher ] && EXTRA="$EXTRA -smbios type=11,value=libernt.applaunch"
 sh "$VMDIR/run-vm.sh" "$VM" "$RAM" $EXTRA > "$OUT/qemu.out" 2>&1 &
 echo "$VM | smoke (libernt-smoke.sh, image sha ${SHA%${SHA#????????}}) | $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RUNNING"
 i=0; until [ -f "$VDIR/monitor.port" ] && mon "info status" 2>/dev/null | grep -q running; do
@@ -228,22 +233,20 @@ else
   log "KEYBOARD SKIPPED  no typing in launcher mode (MODE=keys checks it)"
 fi
 
-if want explorer; then
 # ---- 3c. pointer probe -------------------------------------------------------------------------
 # Move the pointer onto the "This PC" desktop icon and click it: the icon must get a selection highlight.
-# (Known bug on current images: the pointer is pinned at the bottom-right corner and every click toggles Show Desktop.)
+# The pointer is driven through QMP input-send-event: HMP mouse_move/mouse_button pin it at the bottom-right
+# corner (every click then toggles Show Desktop), so a pointer that does not move via QMP is a real FAIL.
+if want explorer; then PLOG=log; else PLOG=:; fi; POINTER_OK=0
 THISPC_X=${THISPC_X:-44}; THISPC_Y=${THISPC_Y:-105}
 IR=70x70+10+$((THISPC_Y-30))
 shot "$OUT/.pa.png"; sleep 3; shot "$OUT/.pb.png"; noise=$(diffpx "$OUT/.pa.png" "$OUT/.pb.png" $IR)   # idle noise of the region
-mon "mouse_move $(( THISPC_X * 32767 / SW )) $(( THISPC_Y * 32767 / SH ))" >/dev/null; sleep 1
-mon "mouse_button 1" >/dev/null; sleep 0.3; mon "mouse_button 0" >/dev/null; sleep 2
+ptr click $THISPC_X $THISPC_Y; sleep 2
 shot "$OUT/00-pointer-probe.png"
 pd=$(diffpx "$OUT/.pb.png" "$OUT/00-pointer-probe.png" $IR); rm -f "$OUT/.pa.png" "$OUT/.pb.png"
-if [ "${pd:-0}" -gt $(( ${noise:-0} + 300 )) ]; then log "POINTER PASS  clicking the This PC icon selected it (changed px $pd, idle noise ${noise:-0})"
-else log "POINTER FAIL  the guest pointer did not land on the This PC icon (changed px ${pd:-0}, idle noise ${noise:-0}, need noise+300); caption-button click tests are not possible, window states are driven by keyboard instead, see 00-pointer-probe.png"; FAILS=$((FAILS+1)); fi
+if [ "${pd:-0}" -gt $(( ${noise:-0} + 300 )) ]; then POINTER_OK=1; $PLOG "POINTER PASS  QMP pointer click selected the This PC icon (changed px $pd, idle noise ${noise:-0})"
+else $PLOG "POINTER FAIL  the QMP pointer click did not select the This PC icon (changed px ${pd:-0}, idle noise ${noise:-0}, need noise+300); caption-button hover/click tests skipped, window states are driven by keyboard instead, see 00-pointer-probe.png"; want explorer && FAILS=$((FAILS+1)); fi
 mon "sendkey esc" >/dev/null; sleep 1
-
-fi
 
 # ---- 4. the windows ---------------------------------------------------------------------------
 # Every window is located by diffing the screen before and after it opens (the taskbar is ignored),
@@ -265,8 +268,7 @@ winbox() {
     -connected-components 8 null: 2>/dev/null | awk '/gray\(255\)/ && $4+0 > m { m=$4+0; b=$2 } END { if (m > 20000) print b }'
 }
 # click <x> <y>: absolute pointer click through the monitor (usb-tablet scale is 0..32767)
-click() { mon "mouse_move $(( $1 * 32767 / SW )) $(( $2 * 32767 / SH ))" >/dev/null; sleep 1
-          mon "mouse_button 1" >/dev/null; sleep 0.3; mon "mouse_button 0" >/dev/null; }
+click() { ptr click "$1" "$2"; }
 # ---- caption button checks (hover, minimise/restore, maximise/restore) -------------------------
 # Buttons are laid out min | max | close, flush with the window's top-right corner. Their size depends on
 # the window's caption style (measured on the Nov-1/main images; override with CAP_<LABEL>="close_w btn_w btn_h top_off"):
@@ -290,12 +292,14 @@ btn_wd() { [ "$1" = 1 ] && echo $CLW || echo $BTW; }
 btn_l()  { case $1 in 1) echo $((x+w-RI-CLW));; 2) echo $((x+w-RI-CLW-BTW));; 3) echo $((x+w-RI-CLW-2*BTW));; esac; }
 btn_x()  { echo $(( $(btn_l $1) + $(btn_wd $1) / 2 )); }
 btn_cy() { echo $(( y + BTY + BTH / 2 )); }
-point() { mon "mouse_move $(( $1 * 32767 / SW )) $(( $2 * 32767 / SH ))" >/dev/null; sleep 1; }
+point() { ptr move "$1" "$2"; }
 cap_tests() {
   # KEYBOARD-driven window-state checks. Mouse clicks on the caption buttons cannot be tested on these
   # images: the guest pointer is pinned at the bottom-right corner, so every absolute click toggles
   # "Show Desktop" (ledger: input / mouse, Kelly). The pointer probe at boot reports that as its own FAIL line.
   lb=$1; box0=$box
+  # the pointer probe clicked the desktop: click an empty spot of the title bar so the window has the focus
+  [ "$POINTER_OK" = 1 ] && { ptr click $((x + w / 2)) $((y + BTY + BTH / 2)); sleep 1; }
   # start from the normal state
   if ismax; then mon "sendkey meta_l-down" >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$box0"; fi
   mon "sendkey meta_l-up" >/dev/null; sleep 3; shot "$OUT/$n-$lb-maximized.png"
@@ -315,11 +319,58 @@ cap_tests() {
   fi
 }
 # dclick <x> <y>: pointer to the spot, then two quick clicks
-dclick() { mon "mouse_move $(( $1 * 32767 / SW )) $(( $2 * 32767 / SH ))" >/dev/null; sleep 1
-  mon "mouse_button 1" "mouse_button 0" "mouse_button 1" "mouse_button 0" >/dev/null; }
+dclick() { ptr dclick "$1" "$2"; }
 # guest_check: stop at once with a clear FAIL when the guest is no longer running
 guest_check() { mon "info status" 2>/dev/null | grep -q running && return 0
   log "GUEST   FAIL  the VM is no longer running (powered off or crashed); remaining windows not tested"; log "result  FAIL"; exit 1; }
+cap_click_tests() {
+  # POINTER-driven checks (QMP absolute tablet): hover each caption button, then click maximise twice
+  # (maximise, restore), minimise (+ restore from the taskbar button) and close. Run only when the pointer
+  # probe passed. The window is in its normal state when this starts.
+  lb=$1; setbox "$box0"; RI0=$RI; cy=$(btn_cy)
+  ptr move $((SW/2)) $((SH-TB-6)); sleep 1; shot "$OUT/.idle.png"
+  res=; hv=PASS
+  for spec in min:3 max:2 close:1; do
+    b=${spec%:*}; k=${spec#*:}; bx=$(btn_l $k); bw=$(btn_wd $k)
+    ptr move $(btn_x $k) $cy; sleep 1; shot "$OUT/$n-$lb-hover-$b.png"
+    "$MAGICK" "$OUT/$n-$lb-hover-$b.png" -crop ${bw}x${BTH}+${bx}+$((y+BTY)) +repage -filter point -resize 600% "$OUT/$n-$lb-hover-$b-6x.png"
+    d=$(diffpx "$OUT/.idle.png" "$OUT/$n-$lb-hover-$b.png" ${bw}x${BTH}+${bx}+$((y+BTY)))
+    [ "${d:-0}" -gt 450 ] || hv=FAIL
+    res="$res $b=${d:-0}"
+  done
+  if [ $hv = PASS ]; then log "$lb.hover    PASS  min/max/close each change when hovered (changed px:$res, need >450; pointer arrow alone ~250), see $n-$lb-hover-*.png"
+  else log "$lb.hover    FAIL  no hover highlight on at least one button (changed px:$res, need >450; pointer arrow alone ~250), see $n-$lb-hover-*.png"; FAILS=$((FAILS+1)); fi
+  # maximise, then restore (the middle button twice)
+  ptr click $(btn_x 2) $cy; sleep 3; shot "$OUT/$n-$lb-click-max.png"
+  if setbox "$(winbox "$pre" "$OUT/$n-$lb-click-max.png")" && ismax; then
+    RI=0; ptr click $(btn_x 2) $(btn_cy); sleep 3; shot "$OUT/$n-$lb-click-restore.png"; RI=$RI0
+    if setbox "$(winbox "$pre" "$OUT/$n-$lb-click-restore.png")" && ! ismax; then log "$lb.click-max  PASS  clicking maximise then restore: ${w}x${h} -> maximised -> ${w}x${h}"; box0=$box
+    else log "$lb.click-max  FAIL  maximised by click but the second click did not restore it (box ${box:-none}), see $n-$lb-click-restore.png"; FAILS=$((FAILS+1)); setbox "$box0"
+      mon "sendkey meta_l-down" >/dev/null; sleep 3; setbox "$(curbox)" && box0=$box; fi
+  else log "$lb.click-max  FAIL  clicking the maximise button did not maximise the window (box ${box:-none}), see $n-$lb-click-max.png"; FAILS=$((FAILS+1)); setbox "$box0"; fi
+  # minimise by click, restore from the taskbar
+  cy=$(btn_cy); ptr click $(btn_x 3) $cy; sleep 3; shot "$OUT/$n-$lb-click-min.png"
+  if setbox "$(winbox "$pre" "$OUT/$n-$lb-click-min.png")"; then
+    log "$lb.click-min  FAIL  clicking minimise left the window on screen (${w}x${h}), see $n-$lb-click-min.png"; FAILS=$((FAILS+1)); setbox "$box0"
+  else
+    tb=$("$MAGICK" "$pre" "$OUT/$n-$lb-click-min.png" -compose difference -composite -crop $((SW*7/10))x$((TB-4))+0+$((SH-TB+2)) +repage \
+          -separate -evaluate-sequence max -threshold 10% -trim -format '%@' info: 2>/dev/null | grep -Ev '^[01]x[01]+')
+    setbox "$box0"
+    if [ -n "$tb" ]; then
+      tw=${tb%%x*}; tr=${tb#*+}; tx=${tr%%+*}
+      ow=${box0%%x*}; how=taskbar
+      ptr click $(( tx + tw / 2 )) $(( SH - TB / 2 )); sleep 3; shot "$OUT/$n-$lb-click-min-restored.png"
+      ok=0; setbox "$(winbox "$pre" "$OUT/$n-$lb-click-min-restored.png")" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1
+      if [ $ok = 0 ]; then mon "sendkey esc" >/dev/null; sleep 1; mon "sendkey alt-tab" >/dev/null; sleep 3; how=alt-tab; setbox "$(curbox)" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1; fi
+      if [ $ok = 1 ]; then log "$lb.click-min  PASS  minimise by click removed the window; it came back via $how (${w}x${h})"; box0=$box
+      else log "$lb.click-min  FAIL  minimised by click but neither its taskbar button nor Alt+Tab brought it back (box ${box:-none}), see $n-$lb-click-min-restored.png"; FAILS=$((FAILS+1)); setbox "$box0"; fi
+    else log "$lb.click-min  FAIL  window left the screen but no taskbar button was found to restore it"; FAILS=$((FAILS+1)); fi
+  fi
+  # close by click
+  cy=$(btn_cy); ptr click $(btn_x 1) $cy; sleep 3; shot "$OUT/.cur.png"
+  if [ "$(diffpx "$pre" "$OUT/.cur.png" ${SW}x$((SH-TB))+0+0)" -lt 3000 ]; then log "$lb.click-close  PASS  clicking close removed the window"; CLICK_CLOSED=1
+  else log "$lb.click-close  FAIL  clicking close left the window on screen"; FAILS=$((FAILS+1)); fi
+}
 # window <n> <label> <run-command> <settle seconds>
 window() {
   n=$1; lab=$2; cmd=$3; wait=$4; caps=${5:-}
@@ -360,11 +411,15 @@ window() {
   "$MAGICK" "$f" -crop ${CW}x${CH}+${cx}+${y} +repage -filter point -resize 600% "$c"
   cs=$("$MAGICK" "$c" -format '%[fx:standard_deviation>0.03?1:0]' info: 2>/dev/null)
   if [ "$cs" = 1 ]; then verdict=PASS; else verdict=FAIL; FAILS=$((FAILS+1)); fi
+  CLICK_CLOSED=0
   [ -n "$caps" ] && [ "$verdict" = PASS ] && cap_tests "$lab"
+  [ -n "$caps" ] && [ "$verdict" = PASS ] && [ "$POINTER_OK" = 1 ] && cap_click_tests "$lab"
   # close with Alt+F4 (keyboard: the pointer is unusable). Esc afterwards cancels the shutdown dialog
   # that Alt+F4 opens if no window had the focus. Success = the screen is back to how it was before.
   closed=no
+  [ "$CLICK_CLOSED" = 1 ] && closed=click
   for how in 1 2; do
+    [ $closed = no ] || break
     mon "sendkey alt-f4" >/dev/null; sleep 3; mon "sendkey esc" >/dev/null; sleep 1; shot "$OUT/.cur.png"
     [ "$(diffpx "$pre" "$OUT/.cur.png" ${SW}x$((SH-TB))+0+0)" -lt 3000 ] && { closed=alt-f4; break; }
   done
