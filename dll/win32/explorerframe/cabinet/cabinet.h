@@ -167,6 +167,7 @@ private:
     void FitCommandBar(int width);
     void UpdateViewToggles();
     int CaptionButtonsWidth();
+    BOOL SystemCaptionButtons(RECT *bounds);
     BOOL GetCaptionButton(int ht, RECT *rc);
     int CaptionButtonAt(POINT clientPt);
     void PaintCaptionButtons(HDC dc);

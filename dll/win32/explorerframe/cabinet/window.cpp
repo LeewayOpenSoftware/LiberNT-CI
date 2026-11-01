@@ -459,9 +459,23 @@ CCabinetWindow::ClientCaption()
 int
 CCabinetWindow::CaptionButtonsWidth()
 {
+    RECT bounds;
+
     if (!ClientCaption())
         return 0;
+    if (SystemCaptionButtons(&bounds))
+        return bounds.right - bounds.left;
     return ShellFrame::CaptionStripWidth(GetDpiForWindow(m_hwnd));
+}
+
+/* With the frame extended into the client area the system draws and hit-tests the caption
+ * buttons itself, in the place and size of the active theme. Ask where, and when it answers
+ * the frame must not draw buttons of its own on top of them. */
+BOOL
+CCabinetWindow::SystemCaptionButtons(RECT *bounds)
+{
+    return SUCCEEDED(DwmGetWindowAttribute(m_hwnd, DWMWA_CAPTION_BUTTON_BOUNDS, bounds, sizeof(*bounds))) &&
+           bounds->right > bounds->left;
 }
 
 /* The caption buttons live in the extended frame, which the compositor is
@@ -472,10 +486,10 @@ CCabinetWindow::CaptionButtonsWidth()
 BOOL
 CCabinetWindow::GetCaptionButton(int ht, RECT *rc)
 {
-    RECT client;
+    RECT client, system;
     ShellFrame::CaptionButton button;
 
-    if (!ClientCaption())
+    if (!ClientCaption() || SystemCaptionButtons(&system))
         return FALSE;
     switch (ht)
     {
