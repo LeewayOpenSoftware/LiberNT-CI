@@ -898,6 +898,9 @@ SettingsWindow::OnPaint(ShellFrame::Canvas &canvas, const RECT &client)
     }
     canvas.Fill(m_Footer, c.Card);
     canvas.Line(m_Footer.left, m_Footer.top, m_Footer.right, m_Footer.top, c.Divider);
+#if SHELLFRAME_CUSTOM_CAPTION_BUTTONS
+    PaintCaptionButtons(canvas, client, c.Window);
+#endif
 }
 
 void
