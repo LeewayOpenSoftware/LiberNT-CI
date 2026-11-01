@@ -104,7 +104,7 @@ ReadState(UpdateState &state, bool verify)
         UNREFERENCED_PARAMETER(dummy);
         if (!sep)
             continue;
-        lstrcpynA(idText, ids[i], (int)min((size_t)(sep - ids[i]) + 1, sizeof(idText)));
+        lstrcpynA(idText, ids[i], (int)std::min<size_t>((size_t)(sep - ids[i]) + 1, sizeof(idText)));
         lstrcpynA(versionText, sep + 1, sizeof(versionText));
         ZeroMemory(&manifest, sizeof(manifest));
         if (LnStoreLoadManifest(&target, idText, versionText, &manifest) != ERROR_SUCCESS)
