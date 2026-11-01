@@ -332,7 +332,7 @@ FrameWindow::PaintCaptionButtons(Canvas &canvas, const RECT &client, COLORREF ba
         RECT rc = CaptionButtonRect(button);
 
         DrawCaptionButton(m_hwnd, canvas.Dc(), rc, button, button == m_HotButton, button == m_PressedButton, m_Active,
-                          IsZoomed(m_hwnd) != FALSE);
+                          IsZoomed(m_hwnd) != FALSE, m_Theme.IsDark() != FALSE);
     }
 }
 #endif

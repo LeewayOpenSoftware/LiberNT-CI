@@ -185,7 +185,7 @@ SIZE CaptionButtonSize(int dpi);
 int CaptionStripWidth(int dpi);
 RECT CaptionButtonBounds(const RECT &client, CaptionButton button, int dpi);
 void DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool hot, bool pressed, bool active,
-                       bool zoomed);
+                       bool zoomed, bool dark = false);
 
 class FrameWindow
 {

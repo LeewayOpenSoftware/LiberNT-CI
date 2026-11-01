@@ -82,7 +82,7 @@ GetThemeDrawCaptionButton()
 
 void
 DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool hot, bool pressed, bool active,
-                  bool zoomed)
+                  bool zoomed, bool dark)
 {
     int part, state, frame;
     BOOL drawn = FALSE;
@@ -113,7 +113,9 @@ DrawCaptionButton(HWND hwnd, HDC hdc, const RECT &rc, CaptionButton button, bool
         UINT index = button == CaptionButton::Close ? 0 : button == CaptionButton::Maximize ? 1 : 2;
         ULONG bits = (hot ? (1u << index) : 0) | (pressed ? (1u << (index + 3)) : 0) | (zoomed ? 0x200u : 0);
 
-        drawn = themeDraw(hdc, &draw, index, bits, active, FALSE);
+        /* A dark frame gets the dark buttons the system caption draws: the light visual style sprites
+         * scale into a squashed glyph on a red button */
+        drawn = themeDraw(hdc, &draw, index, bits, active, dark);
     }
 
     /* The states of every caption button part are numbered alike */
