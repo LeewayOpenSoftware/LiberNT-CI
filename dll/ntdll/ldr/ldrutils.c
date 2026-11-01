@@ -1411,8 +1411,13 @@ SkipCheck:
             if (MachineMismatch)
                 return STATUS_INVALID_IMAGE_FORMAT;
 
-            /* We couldn't resolve the name, is this a static load? */
-            if (Static)
+            /*
+             * We couldn't resolve the name, is this a static load? Only the imports resolved while the
+             * process starts are critical. A DLL that fails to load at run time, or one of the imports of
+             * a DLL loaded at run time, is reported to the caller as a plain error and never as a hard-error
+             * box (Windows shows none for a failing LoadLibrary).
+             */
+            if (Static && LdrpInLdrInit)
             {
                 /*
                  * This is BAD! Static loads are CRITICAL. Bugcheck!
