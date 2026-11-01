@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """qmp-pointer.py PORT WIDTH HEIGHT ACTION X Y   - drive the guest's absolute USB tablet through QMP.
 
-ACTION is move | click | dclick | down | up. X, Y are screen pixels; they are scaled to the tablet's
+ACTION is move | steps | near | click | dclick | down | up. steps = ~10 small moves 60 ms apart
+ending on the target; near = jump 14 px left of the target, then a 1-pixel-step move onto it. X, Y are screen pixels; they are scaled to the tablet's
 0..32767 axes. HMP mouse_move/mouse_button must NOT be used for this: on these images it pins the
 pointer at the bottom-right corner, whereas QMP input-send-event positions it correctly (UHCI and xhci).
 Do not target exactly (0,0): the guest ignores it (known win32k mouse.c bug), use (1,1) or more.
@@ -43,7 +44,16 @@ def main():
     x = int(sys.argv[5]) * 32767 // w if len(sys.argv) > 5 else 0
     y = int(sys.argv[6]) * 32767 // h if len(sys.argv) > 6 else 0
     q = Qmp(port)
-    if action in ("move", "click", "dclick", "down", "up"):
+    if action == "steps":
+        sx, sy = max(x - 80 * 32767 // w, 1), min(y + 40 * 32767 // h, 32767)
+        q.move(sx, sy); time.sleep(0.4)
+        for i in range(1, 11):
+            q.move(sx + (x - sx) * i // 10, sy + (y - sy) * i // 10); time.sleep(0.06)
+        time.sleep(0.4)
+    elif action == "near":
+        q.move(max(x - 14 * 32767 // w, 1), y); time.sleep(0.6)
+        q.move(max(x - 1 * 32767 // w, 1), y); time.sleep(0.2); q.move(x, y); time.sleep(0.4)
+    elif action in ("move", "click", "dclick", "down", "up"):
         if action != "up":
             q.move(x, y); time.sleep(0.8); q.move(x, y); time.sleep(0.4)
     if action == "click":
@@ -55,7 +65,7 @@ def main():
         q.button(True)
     elif action == "up":
         q.button(False)
-    elif action != "move":
+    elif action not in ("move", "steps", "near"):
         sys.exit("unknown action " + action)
 
 

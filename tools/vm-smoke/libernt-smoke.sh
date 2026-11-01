@@ -328,18 +328,24 @@ cap_click_tests() {
   # (maximise, restore), minimise (+ restore from the taskbar button) and close. Run only when the pointer
   # probe passed. The window is in its normal state when this starts.
   lb=$1; setbox "$box0"; RI0=$RI; cy=$(btn_cy)
-  ptr move $((SW/2)) $((SH-TB-6)); sleep 1; shot "$OUT/.idle.png"
+  # Hover is tried two ways (a third, jump-next-to-then-1px, gave the same result and was dropped to keep the number of tablet events low; the guest pointer stalled after ~8 QMP actions in one run), because one absolute jump may not produce the WM_NCMOUSEMOVE sequence that
+  # hover tracking needs: (jump) one QMP move onto the button, (steps) ~10 small QMP moves 60 ms apart ending
+  # on it, (near) jump next to the button, then a 1-pixel move onto it. A button passes if any way highlights it.
   res=; hv=PASS
   for spec in min:3 max:2 close:1; do
-    b=${spec%:*}; k=${spec#*:}; bx=$(btn_l $k); bw=$(btn_wd $k)
-    ptr move $(btn_x $k) $cy; sleep 1; shot "$OUT/$n-$lb-hover-$b.png"
-    "$MAGICK" "$OUT/$n-$lb-hover-$b.png" -crop ${bw}x${BTH}+${bx}+$((y+BTY)) +repage -filter point -resize 600% "$OUT/$n-$lb-hover-$b-6x.png"
-    d=$(diffpx "$OUT/.idle.png" "$OUT/$n-$lb-hover-$b.png" ${bw}x${BTH}+${bx}+$((y+BTY)))
-    [ "${d:-0}" -gt 450 ] || hv=FAIL
-    res="$res $b=${d:-0}"
+    b=${spec%:*}; k=${spec#*:}; bx=$(btn_l $k); bw=$(btn_wd $k); best=0; bm=none
+    for meth in move steps; do
+      ptr move $((SW/2)) $((SH-TB-6)); sleep 1; shot "$OUT/.idle.png"
+      ptr $meth $(btn_x $k) $cy; sleep 1; shot "$OUT/$n-$lb-hover-$b-$meth.png"
+      "$MAGICK" "$OUT/$n-$lb-hover-$b-$meth.png" -crop ${bw}x${BTH}+${bx}+$((y+BTY)) +repage -filter point -resize 600% "$OUT/$n-$lb-hover-$b-$meth-6x.png"
+      d=$(diffpx "$OUT/.idle.png" "$OUT/$n-$lb-hover-$b-$meth.png" ${bw}x${BTH}+${bx}+$((y+BTY)))
+      res="$res $b/$meth=${d:-0}"
+      [ "${d:-0}" -gt "$best" ] && { best=${d:-0}; bm=$meth; }
+    done
+    [ "$best" -gt 450 ] || hv=FAIL
   done
-  if [ $hv = PASS ]; then log "$lb.hover    PASS  min/max/close each change when hovered (changed px:$res, need >450; pointer arrow alone ~250), see $n-$lb-hover-*.png"
-  else log "$lb.hover    FAIL  no hover highlight on at least one button (changed px:$res, need >450; pointer arrow alone ~250), see $n-$lb-hover-*.png"; FAILS=$((FAILS+1)); fi
+  if [ $hv = PASS ]; then log "$lb.hover    PASS  every button highlights when hovered by at least one approach (changed px:$res; need >450, pointer arrow alone ~250), see $n-$lb-hover-*.png"
+  else log "$lb.hover    FAIL  no approach (jump, small steps) highlights at least one button (changed px:$res; need >450, pointer arrow alone ~250), see $n-$lb-hover-*.png"; FAILS=$((FAILS+1)); fi
   # maximise, then restore (the middle button twice)
   ptr click $(btn_x 2) $cy; sleep 3; shot "$OUT/$n-$lb-click-max.png"
   if setbox "$(winbox "$pre" "$OUT/$n-$lb-click-max.png")" && ismax; then
