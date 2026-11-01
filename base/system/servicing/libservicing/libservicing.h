@@ -221,10 +221,11 @@ DWORD LnStoreRemovePackage(const LN_TARGET *t, const char *packageId, const char
 DWORD LnStoreList(const LN_TARGET *t, char (**ids)[130], size_t *count);   /* "id\\version", free(*ids) */
 
 /* ---- servicing.c: add / apply / rollback ------------------------------- */
-/* TRUE when a raw BootExecute value (REG_SZ or REG_MULTI_SZ, maybe unterminated or
- * without the double NUL) lists the LiberNT boot applier. `bytes` is the buffer
- * size in bytes. Each entry is matched by its first token (up to a space), with
- * any path and a trailing ".exe" stripped, case-insensitively. */
+/* TRUE when a raw BootExecute value (REG_SZ or REG_MULTI_SZ) lists the LiberNT boot
+ * applier. `bytes` is the buffer size in bytes. Each entry is matched by its first
+ * token (up to a space), with any path and a trailing ".exe" stripped,
+ * case-insensitively. The buffer must contain a L'\0' within `bytes` (or be zeroed
+ * past the data): the walk advances with wcslen over each entry. */
 BOOL LnBootExecuteListed(const WCHAR *multiSz, size_t bytes);
 DWORD LnServicingAddPackage(const LN_TARGET *t, const WCHAR *pkgDir, char txId[65]);
 /* Applies a package that is already in the store. Idempotent: the same request resumes or returns. */
