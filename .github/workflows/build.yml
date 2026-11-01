@@ -156,6 +156,9 @@ jobs:
     - name: Check build dependencies
       run: python3 sdk/tools/depcheck.py ${{steps.configure.outputs.outdir}} --mode depfiles --nested --fail-on-gaps
 
+    - name: Check export loops
+      run: python3 sdk/tools/check-forwarder-loops.py ${{steps.configure.outputs.outdir}}
+
   build-msvc:
     strategy:
       matrix:
