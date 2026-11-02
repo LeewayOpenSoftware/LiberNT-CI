@@ -412,7 +412,8 @@ cap_click_tests() {
       else log "$lb.click-min  FAIL  minimised by click but neither its taskbar button nor Alt+Tab brought it back (box ${box:-none}), see $n-$lb-click-min-restored.png"; FAILS=$((FAILS+1)); setbox "$box0"; fi
     else log "$lb.click-min  PASS  minimise by click removed the window"; log "$lb.taskbar-restore  FAIL  no taskbar button for the minimised window could be found or clicked (treated as a real finding, not detector noise: the taskbar showed no changed button), see $n-$lb-click-min.png"; FAILS=$((FAILS+1)); fi
   fi
-  # close by click
+  # close by click (CLOSE_BY=keys skips it so the window is closed with Alt+F4 below and that is what gets tested)
+  [ "${CLOSE_BY:-click}" = keys ] && return 0
   cy=$(btn_cy); ptr click $(btn_x 1) $cy; sleep 3; shot "$OUT/.cur.png"
   if [ "$(diffpx "$pre" "$OUT/.cur.png" ${SW}x$((SH-TB))+0+0)" -lt 3000 ]; then log "$lb.click-close  PASS  clicking close removed the window"; CLICK_CLOSED=1
   else log "$lb.click-close  FAIL  clicking close left the window on screen"; FAILS=$((FAILS+1)); fi
