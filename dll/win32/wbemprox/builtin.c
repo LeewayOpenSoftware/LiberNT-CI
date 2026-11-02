@@ -5451,7 +5451,10 @@ static enum fill_status fill_physicalmemory( struct table *table, const struct e
     rec->banklabel            = L"BANK 0";
     rec->capacity             = get_total_physical_memory();
     rec->caption              = L"Physical Memory";
-    rec->configuredclockspeed = 1600;
+    /* No SMBIOS type-17 (Memory Device) parser exists in wbemprox, so the real
+     * ConfiguredMemoryClockSpeed is unavailable here; report 0 (unknown), as Windows
+     * does when SMBIOS lacks the field, rather than a fabricated value. */
+    rec->configuredclockspeed = 0;
     rec->devicelocator        = L"DIMM 0";
     rec->formfactor           = 8; /* DIMM */
     rec->memorytype           = 9; /* RAM */

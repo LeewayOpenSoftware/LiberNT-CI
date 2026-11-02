@@ -5,4 +5,4 @@
 add_executable(wmiprobe wmiprobe.c)
 set_module_type(wmiprobe win32cui UNICODE)
 target_link_libraries(wmiprobe uuid)
-add_importlibs(wmiprobe advapi32 oleaut32 ole32 msvcrt kernel32)
+add_importlibs(wmiprobe advapi32 oleaut32 ole32 psapi msvcrt kernel32)
