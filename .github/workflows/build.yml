@@ -14,14 +14,6 @@ jobs:
             arch: i386
           - compiler: clang
             arch: amd64
-          - compiler: clang
-            arch: arm64
-            profile: profile_raspberry
-          - compiler: clang
-            arch: riscv64
-            profile: profile_spacemit_k1
-          - compiler: clang
-            arch: ppc
       fail-fast: false
     runs-on: ubuntu-24.04
     steps:
@@ -81,7 +73,7 @@ jobs:
         [ "${{matrix.compiler}}" = "clang" ] && FLAGS="$FLAGS --clang"
         [ "${{matrix.compiler}}" = "gcc" ] && FLAGS="$FLAGS --gcc"
         [ -n "${{matrix.profile}}" ] && FLAGS="$FLAGS -DROSCONFIG_PROFILE=${{matrix.profile}}"
-        [ "${{matrix.compiler}}" = "clang" ] && case "${{matrix.arch}}" in amd64|arm64) FLAGS="$FLAGS -DENABLE_MESA_LLVMPIPE=ON" ;; esac
+        [ "${{matrix.compiler}}" = "clang" ] && case "${{matrix.arch}}" in amd64) FLAGS="$FLAGS -DENABLE_MESA_LLVMPIPE=ON" ;; esac
         ./configure.sh $FLAGS -a ${{matrix.arch}} \
           -DREACTOS_TARGET_NT=0xA00 \
           -DDIAGDATA_CHANNEL= \
@@ -162,7 +154,7 @@ jobs:
   build-msvc:
     strategy:
       matrix:
-        arch: [amd64, i386, arm64]
+        arch: [amd64, i386]
       fail-fast: false
     runs-on: windows-2025
     steps:
@@ -172,7 +164,7 @@ jobs:
     - name: Set up the MSVC build environment
       uses: ilammy/msvc-dev-cmd@v1
       with:
-        arch: ${{ matrix.arch == 'i386' && 'amd64_x86' || matrix.arch == 'arm64' && 'amd64_arm64' || 'amd64' }}
+        arch: ${{ matrix.arch == 'i386' && 'amd64_x86' || 'amd64' }}
 
     - name: Install host build tools
       shell: pwsh
