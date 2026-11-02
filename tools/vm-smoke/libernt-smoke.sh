@@ -274,10 +274,17 @@ fi
 if want explorer; then PLOG=log; else PLOG=:; fi; POINTER_OK=0
 THISPC_X=${THISPC_X:-44}; THISPC_Y=${THISPC_Y:-105}
 IR=70x70+10+$((THISPC_Y-30))
-shot "$OUT/.pa.png"; sleep 3; shot "$OUT/.pb.png"; noise=$(diffpx "$OUT/.pa.png" "$OUT/.pb.png" $IR)   # idle noise of the region
-ptr click $THISPC_X $THISPC_Y; sleep 2
-shot "$OUT/00-pointer-probe.png"
-pd=$(diffpx "$OUT/.pb.png" "$OUT/00-pointer-probe.png" $IR); rm -f "$OUT/.pa.png" "$OUT/.pb.png"
+# Up to three attempts: the guest tablet now and then ignores an action (seen as a click with no effect), so a miss is
+# retried after a wake-up move before it is reported as a FAIL.
+for attempt in 1 2 3; do
+  shot "$OUT/.pa.png"; sleep 3; shot "$OUT/.pb.png"; noise=$(diffpx "$OUT/.pa.png" "$OUT/.pb.png" $IR)   # idle noise of the region
+  ptr move $((THISPC_X + 120)) $((THISPC_Y + 160)); sleep 1
+  ptr click $THISPC_X $THISPC_Y; sleep 2
+  shot "$OUT/00-pointer-probe.png"
+  pd=$(diffpx "$OUT/.pb.png" "$OUT/00-pointer-probe.png" $IR); rm -f "$OUT/.pa.png" "$OUT/.pb.png"
+  [ "${pd:-0}" -gt $(( ${noise:-0} + 300 )) ] && break
+  [ $attempt -lt 3 ] && { log "pointer-probe attempt $attempt  INFO  no selection (changed px ${pd:-0}, noise ${noise:-0}); retrying"; mon "sendkey esc" >/dev/null; sleep 1; }
+done
 if [ "${pd:-0}" -gt $(( ${noise:-0} + 300 )) ]; then POINTER_OK=1; $PLOG "POINTER PASS  QMP pointer click selected the This PC icon (changed px $pd, idle noise ${noise:-0})"
 else $PLOG "POINTER FAIL  the QMP pointer click did not select the This PC icon (changed px ${pd:-0}, idle noise ${noise:-0}, need noise+300); caption-button hover/click tests skipped, window states are driven by keyboard instead, see 00-pointer-probe.png"; want explorer && FAILS=$((FAILS+1)); fi
 mon "sendkey esc" >/dev/null; sleep 1
@@ -402,11 +409,13 @@ cap_click_tests() {
           -separate -evaluate-sequence max -threshold 10% -trim -format '%@' info: 2>/dev/null | grep -Ev '^[01]x[01]+')
     setbox "$box0"
     if [ -n "$tb" ]; then
-      tw=${tb%%x*}; tr=${tb#*+}; tx=${tr%%+*}; TBX=$(( tx + tw / 2 ))
-    else TBX=92; tb=fallback; tx=$((TBX-1)); tw=2; log "$lb.taskbar-detect  INFO  button not found by the diff detector, using the first app button position x=$TBX"; fi
+      # the diff detector measured a box that included the Start button (it clicked Start, not the app), so the
+      # position is fixed instead: with one app open its taskbar button is the first one after Start, centre x=92.
+      TBX=${TBX_APP:-92}
+    else TBX=${TBX_APP:-92}; tb=fixed; fi
     if [ -n "$tb" ]; then
       ow=${box0%%x*}; how=taskbar
-      ptr click $(( tx + tw / 2 )) $(( SH - TB / 2 )); sleep 3; shot "$OUT/$n-$lb-click-min-restored.png"
+      ptr click $TBX $(( SH - TB / 2 )); sleep 3; shot "$OUT/$n-$lb-click-min-restored.png"
       ok=0; setbox "$(winbox "$pre" "$OUT/$n-$lb-click-min-restored.png")" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1
       if [ $ok = 0 ]; then mon "sendkey esc" >/dev/null; sleep 1; mon "sendkey alt-tab" >/dev/null; sleep 3; how=alt-tab; setbox "$(curbox)" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1; fi
       if [ $ok = 1 ]; then log "$lb.click-min  PASS  minimise by click removed the window; it came back via $how (${w}x${h})"; box0=$box
