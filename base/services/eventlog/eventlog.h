@@ -44,6 +44,7 @@ typedef struct _LOGFILE
     ULONG RateTokens;       /* records that may still be written right now */
     ULONGLONG RateLastTick; /* GetTickCount64() of the last refill */
     ULONG RateDropped;      /* records dropped since the last summary record */
+    HANDLE RateTimer;       /* one-shot timer that reports the drops once the burst is over */
 } LOGFILE, *PLOGFILE;
 
 /*

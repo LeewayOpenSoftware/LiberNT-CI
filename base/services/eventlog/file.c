@@ -451,6 +451,13 @@ LogfClose(PLOGFILE LogFile,
     if (!ForceClose && LogFile->Permanent)
         return;
 
+    /* Wait for a pending drop-report timer; its callback needs the lock */
+    if (LogFile->RateTimer)
+    {
+        DeleteTimerQueueTimer(NULL, LogFile->RateTimer, INVALID_HANDLE_VALUE);
+        LogFile->RateTimer = NULL;
+    }
+
     RtlAcquireResourceExclusive(&LogFile->Lock, TRUE);
 
     LogfListRemoveItem(LogFile);
@@ -871,6 +878,57 @@ Quit:
     return Status;
 }
 
+/*
+ * Write the "events were dropped" record for what the rate limiter refused.
+ * The log lock must be held exclusive.
+ */
+static VOID
+LogfpWriteDropSummary(PLOGFILE LogFile)
+{
+    WCHAR Msg[96];
+    UNICODE_STRING Src, Comp;
+    PEVENTLOGRECORD Sum;
+    SIZE_T SumSize;
+    LARGE_INTEGER SystemTime;
+    ULONG Time;
+
+    if (LogFile->RateDropped == 0)
+        return;
+
+    if (FAILED(StringCchPrintfW(Msg, ARRAYSIZE(Msg),
+                                L"%lu events were dropped because the log was written too fast",
+                                LogFile->RateDropped)))
+        return;
+
+    NtQuerySystemTime(&SystemTime);
+    RtlTimeToSecondsSince1970(&SystemTime, &Time);
+
+    RtlInitUnicodeString(&Src, L"EventLog");
+    RtlInitUnicodeString(&Comp, L"");
+    Sum = LogfAllocAndBuildNewRecord(&SumSize, Time, EVENTLOG_WARNING_TYPE, 0, 0x80000100,
+                                     &Src, &Comp, 0, NULL, 1, Msg, 0, NULL);
+    if (!Sum)
+        return;
+
+    Sum->TimeWritten = Time;
+    if (NT_SUCCESS(ElfWriteRecord(&LogFile->LogFile, Sum, SumSize)))
+        LogFile->RateDropped = 0;
+    LogfFreeRecord(Sum);
+}
+
+/* Fires a short while after the first dropped record: the burst is over, report it */
+static VOID CALLBACK
+LogfpDropTimer(PVOID Context, BOOLEAN TimerOrWaitFired)
+{
+    PLOGFILE LogFile = Context;
+
+    UNREFERENCED_PARAMETER(TimerOrWaitFired);
+
+    RtlAcquireResourceExclusive(&LogFile->Lock, TRUE);
+    LogfpWriteDropSummary(LogFile);
+    RtlReleaseResource(&LogFile->Lock);
+}
+
 NTSTATUS
 LogfWriteRecord(PLOGFILE LogFile,
                 PEVENTLOGRECORD Record,
@@ -922,6 +980,18 @@ LogfWriteRecord(PLOGFILE LogFile,
         {
             if (LogFile->RateDropped != MAXULONG)
                 LogFile->RateDropped++;
+
+            /* Report the drops in 2 s, even if nothing else writes to this log */
+            if (LogFile->RateDropped == 1)
+            {
+                if (LogFile->RateTimer)
+                {
+                    DeleteTimerQueueTimer(NULL, LogFile->RateTimer, NULL);
+                    LogFile->RateTimer = NULL;
+                }
+                CreateTimerQueueTimer(&LogFile->RateTimer, NULL, LogfpDropTimer,
+                                      LogFile, 2000, 0, WT_EXECUTEONLYONCE);
+            }
             RtlReleaseResource(&LogFile->Lock);
             return STATUS_QUOTA_EXCEEDED;
         }
@@ -941,29 +1011,7 @@ LogfWriteRecord(PLOGFILE LogFile,
     if (NT_SUCCESS(Status) && LogFile->RateDropped != 0 &&
         LogFile->RateTokens > ELF_RATE_BURST / 2)
     {
-        WCHAR Msg[96];
-        UNICODE_STRING Src, Comp;
-        PEVENTLOGRECORD Sum;
-        SIZE_T SumSize;
-
-        if (SUCCEEDED(StringCchPrintfW(Msg, ARRAYSIZE(Msg),
-                      L"%lu events were dropped because the log was written too fast",
-                      LogFile->RateDropped)))
-        {
-            RtlInitUnicodeString(&Src, L"EventLog");
-            RtlInitUnicodeString(&Comp, L"");
-            Sum = LogfAllocAndBuildNewRecord(&SumSize, Record->TimeWritten,
-                                             EVENTLOG_WARNING_TYPE, 0, 0x80000100,
-                                             &Src, &Comp, 0, NULL,
-                                             1, Msg, 0, NULL);
-            if (Sum)
-            {
-                Sum->TimeWritten = Record->TimeWritten;
-                if (NT_SUCCESS(ElfWriteRecord(&LogFile->LogFile, Sum, SumSize)))
-                    LogFile->RateDropped = 0;
-                LogfFreeRecord(Sum);
-            }
-        }
+        LogfpWriteDropSummary(LogFile);
     }
 
     if (Status == STATUS_LOG_FILE_FULL)

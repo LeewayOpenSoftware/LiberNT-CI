@@ -96,12 +96,56 @@ Storm(DWORD N)
     return 0;
 }
 
+/*
+ * elfdump /bounds: reports events at and over the limits of the service and prints what came back.
+ * Expected: the small ones succeed (the 16-byte data event can be read back with its data),
+ * the ones with more than 256 strings or more than 256 KiB of data are refused.
+ */
+static int
+Bounds(void)
+{
+    HANDLE h = RegisterEventSourceW(NULL, L"ObsABounds");
+    static const BYTE Data16[16] = {0xde, 0xad, 0xbe, 0xef, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12};
+    const WCHAR *Strs[300];
+    BYTE *Big;
+    BOOL ok;
+    DWORD i;
+
+    if (!h)
+    {
+        wprintf(L"RegisterEventSource failed: %lu\n", GetLastError());
+        return 1;
+    }
+    for (i = 0; i < 300; i++)
+        Strs[i] = L"s";
+
+    ok = ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 901, NULL, 1, 16, Strs, (PVOID)Data16);
+    wprintf(L"data16 (1 string, 16 data bytes): %ls (error %lu)\n", ok ? L"ACCEPTED" : L"REFUSED", ok ? 0 : GetLastError());
+    ok = ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 902, NULL, 256, 0, Strs, NULL);
+    wprintf(L"256 strings: %ls (error %lu)\n", ok ? L"ACCEPTED" : L"REFUSED", ok ? 0 : GetLastError());
+    ok = ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 903, NULL, 300, 0, Strs, NULL);
+    wprintf(L"300 strings: %ls (error %lu)\n", ok ? L"ACCEPTED" : L"REFUSED", ok ? 0 : GetLastError());
+    Big = calloc(1, 300 * 1024);
+    if (Big)
+    {
+        ok = ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 904, NULL, 0, 200 * 1024, NULL, Big);
+        wprintf(L"200 KiB data: %ls (error %lu)\n", ok ? L"ACCEPTED" : L"REFUSED", ok ? 0 : GetLastError());
+        ok = ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 905, NULL, 0, 300 * 1024, NULL, Big);
+        wprintf(L"300 KiB data: %ls (error %lu)\n", ok ? L"ACCEPTED" : L"REFUSED", ok ? 0 : GetLastError());
+        free(Big);
+    }
+    DeregisterEventSource(h);
+    return 0;
+}
+
 static int Dump(int argc, WCHAR **argv);
 
 int wmain(int argc, WCHAR **argv)
 {
     if (argc > 2 && !wcscmp(argv[1], L"/storm"))
         return Storm((DWORD)_wtoi(argv[2]));
+    if (argc > 1 && !wcscmp(argv[1], L"/bounds"))
+        return Bounds();
 
     return Dump(argc, argv);
 }
