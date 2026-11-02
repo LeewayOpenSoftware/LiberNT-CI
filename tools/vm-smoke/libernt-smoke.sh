@@ -18,10 +18,22 @@
 # Output: $OUT_ROOT/<sha256 of the image>/ : NN-<window>.png, NN-<window>-caption6x.png,
 #   00-desktop.png, result.txt, com1.log (kernel debug log). Re-running an image replaces the folder.
 #
-# Env: OUT_ROOT   output root              (default E:/LiberNT/results/smoke)
-#      IMG_DIR    where images are fetched (default C:/LiberNT/images)
-#      REPO       owner/name for run ids   (default LeewayOpenSoftware/LiberNT-LDW)
-#      GH         gh binary                (default C:/LiberNT/tools/gh/bin/gh.exe)
+# Paths (all can be overridden by environment variables; the defaults are the LiberNT lab machine):
+#      QEMU       directory with qemu-system-x86_64.exe and qemu-img   (default /c/msys64/ucrt64/bin)
+#      MAGICK     ImageMagick binary                                   (default $QEMU/magick)
+#      PY         python3 (standard library only)                      (default /c/msys64/usr/bin/python3)
+#      RUNVM      run-vm.sh: boots NAME RAM [qemu args], honours LABEL, IMG, PAYLOAD, ACCEL, PORT
+#                                                                       (default $VMDIR/run-vm.sh)
+#      MONPY      mon.py: sends one HMP command to the VM monitor      (default $VMDIR/mon.py)
+#      VMDIR      directory holding RUNNING.txt, run-vm.sh and mon.py  (default /e/LiberNT/vm)
+#      OVERLAY_DIR  per-VM directories made by run-vm.sh               (default /c/LiberNT/vm/overlays)
+#      OUT_ROOT   output root                                          (default E:/LiberNT/results/smoke)
+#      IMGDIR     where CI images are fetched (IMG_DIR also works)     (default C:/LiberNT/images)
+#      REPO       owner/name for run ids and base lookup               (default LeewayOpenSoftware/LiberNT-LDW)
+#      GH         gh binary                                            (default C:/LiberNT/tools/gh/bin/gh.exe)
+#      BASE       force the base label: MAIN or "NOV1-BASE (no caption fix)"  (default: looked up with gh)
+#      MAIN_FIX   commit that carries the caption fix                  (default b0b3ceb5d4)
+# Other env:
 #      RAM        guest RAM in MB          (default 3072)
 #      ACCEL      whpx | tcg               (default whpx)
 #      BOOT_TIMEOUT  seconds to wait for the desktop (default 240)
@@ -34,16 +46,20 @@
 set -u
 IMGARG=${1:?usage: libernt-smoke.sh <image.img|artifact.zip|run-id> [name]}
 OUT_ROOT=${OUT_ROOT:-E:/LiberNT/results/smoke}
-IMG_DIR=${IMG_DIR:-C:/LiberNT/images}
+IMG_DIR=${IMGDIR:-${IMG_DIR:-C:/LiberNT/images}}
 REPO=${REPO:-LeewayOpenSoftware/LiberNT-LDW}
 GH=${GH:-C:/LiberNT/tools/gh/bin/gh.exe}
 RAM=${RAM:-3072}
 BOOT_TIMEOUT=${BOOT_TIMEOUT:-240}
 VMDIR=${VMDIR:-/e/LiberNT/vm}
 RUNNING=${RUNNING:-$VMDIR/RUNNING.txt}
-Q=/c/msys64/ucrt64/bin
-PY=/c/msys64/usr/bin/python3
-MAGICK=$Q/magick
+Q=${QEMU:-/c/msys64/ucrt64/bin}
+PY=${PY:-/c/msys64/usr/bin/python3}
+MAGICK=${MAGICK:-$Q/magick}
+RUNVM=${RUNVM:-$VMDIR/run-vm.sh}
+MONPY=${MONPY:-$VMDIR/mon.py}
+OVERLAY_DIR=${OVERLAY_DIR:-/c/LiberNT/vm/overlays}
+MAIN_FIX=${MAIN_FIX:-b0b3ceb5d4}
 export ACCEL=${ACCEL:-whpx}
 FAILS=0; TB=48
 MODE=${MODE:-launcher}      # launcher: launcher.cmd payload drives the apps (no typing; skips OOBE)
@@ -52,7 +68,7 @@ FIRST_DELAY=${FIRST_DELAY:-150}; GAP=${GAP:-240}   # seconds before the first ap
 SHORT_GAP=${SHORT_GAP:-120}                        # after apps that are only opened and closed
 
 die() { echo "SMOKE ERROR: $*" >&2; exit 2; }
-for t in "$Q/qemu-system-x86_64.exe" "$MAGICK" "$PY" "$VMDIR/run-vm.sh" "$VMDIR/mon.py"; do
+for t in "$Q/qemu-system-x86_64.exe" "$MAGICK" "$PY" "$RUNVM" "$MONPY"; do
   [ -e "$t" ] || die "missing $t"
 done
 
@@ -104,7 +120,7 @@ if [ -n "${ONLY:-}" ]; then OUT=$OUT_ROOT/$SHA/$ONLY; VM=${2:-smoke-$(echo "$SHA
 else VM=${2:-smoke-$(echo "$SHA" | cut -c1-8)}; fi
 rm -rf "$OUT"; mkdir -p "$OUT" || die "cannot create $OUT"
 want() { [ -z "${ONLY:-}" ] || [ "$ONLY" = "$1" ]; }
-VDIR=/c/LiberNT/vm/overlays/$VM
+VDIR=$OVERLAY_DIR/$VM
 RES=$OUT/result.txt
 : > "$RES"
 log() { echo "$*" | tee -a "$RES"; }
@@ -115,7 +131,7 @@ log "start   $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 # ---- 2. VM lifecycle --------------------------------------------------------------------------
 # the monitor takes one connection at a time and resets a rapid reconnect: retry a failed call
-mon() { for _t in 1 2 3 4; do o=$("$PY" "$VMDIR/mon.py" "$VM" "$@" 2>/dev/null) && { echo "$o"; return 0; }; sleep 0.5; done; return 1; }
+mon() { for _t in 1 2 3 4; do o=$("$PY" "$MONPY" "$VM" "$@" 2>/dev/null) && { echo "$o"; return 0; }; sleep 0.5; done; return 1; }
 cleanup() {
   if [ "${KEEP_VM:-0}" != 1 ]; then
     mon quit >/dev/null 2>&1
@@ -155,7 +171,7 @@ QMPPY=$(dirname "$SELF")/qmp-pointer.py
 # BASE="MAIN" or BASE="NOV1-BASE (no caption fix)" forces it. Otherwise the CI run id is taken from the image path
 # (.../images/<run id>/LiberNT.img), its head commit is looked up with gh and compared with b0b3ceb5d4 (the
 # caption fix): ancestor = MAIN, not = NOV1-BASE. If that cannot be found the label says BASE-UNKNOWN.
-GH=${GH:-/c/LiberNT/tools/gh/bin/gh.exe}; REPO_SLUG=${REPO_SLUG:-LeewayOpenSoftware/LiberNT-LDW}; MAIN_FIX=b0b3ceb5d4
+REPO_SLUG=$REPO
 if [ -z "${BASE:-}" ]; then
   rid=$(echo "$IMGARG $IMG" | grep -Eo '/[0-9]{9,}/' | head -1 | tr -d /); hsha=
   [ -n "$rid" ] && hsha=$("$GH" run view "$rid" -R "$REPO_SLUG" --json headSha -q .headSha 2>/dev/null)
@@ -165,10 +181,11 @@ if [ -z "${BASE:-}" ]; then
   else BASE=BASE-UNKNOWN; fi
 fi
 SHA8=${SHA%${SHA#????????}}; LABEL="$BASE ${hsha:-$SHA8} $VM"
-EXTRA="-name \"$LABEL\" -qmp tcp:127.0.0.1:$QPORT,server,nowait"   # pointer is driven through QMP (HMP mouse_move pins the pointer)
+export LABEL
+EXTRA="-qmp tcp:127.0.0.1:$QPORT,server,nowait"   # pointer is driven through QMP (HMP mouse_move pins the pointer)
 [ "$MODE" = launcher ] && EXTRA="$EXTRA -smbios type=11,value=libernt.applaunch"
 log "label   $LABEL"
-eval "sh \"$VMDIR/run-vm.sh\" \"$VM\" \"$RAM\" $EXTRA" > "$OUT/qemu.out" 2>&1 &
+eval "sh \"$RUNVM\" \"$VM\" \"$RAM\" $EXTRA" > "$OUT/qemu.out" 2>&1 &
 echo "$VM | $LABEL (libernt-smoke.sh, image sha $SHA8) | $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$RUNNING"
 i=0; until [ -f "$VDIR/monitor.port" ] && mon "info status" 2>/dev/null | grep -q running; do
   i=$((i+1)); [ $i -le 30 ] || die "VM did not start (see $OUT/qemu.out)"; sleep 1
@@ -391,8 +408,9 @@ cap_click_tests() {
       ok=0; setbox "$(winbox "$pre" "$OUT/$n-$lb-click-min-restored.png")" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1
       if [ $ok = 0 ]; then mon "sendkey esc" >/dev/null; sleep 1; mon "sendkey alt-tab" >/dev/null; sleep 3; how=alt-tab; setbox "$(curbox)" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1; fi
       if [ $ok = 1 ]; then log "$lb.click-min  PASS  minimise by click removed the window; it came back via $how (${w}x${h})"; box0=$box
+        [ $how = taskbar ] || { log "$lb.taskbar-restore  FAIL  clicking the taskbar button did not bring the minimised window back (Alt+Tab did), see $n-$lb-click-min-restored.png"; FAILS=$((FAILS+1)); }
       else log "$lb.click-min  FAIL  minimised by click but neither its taskbar button nor Alt+Tab brought it back (box ${box:-none}), see $n-$lb-click-min-restored.png"; FAILS=$((FAILS+1)); setbox "$box0"; fi
-    else log "$lb.click-min  FAIL  window left the screen but no taskbar button was found to restore it"; FAILS=$((FAILS+1)); fi
+    else log "$lb.click-min  PASS  minimise by click removed the window"; log "$lb.taskbar-restore  FAIL  no taskbar button for the minimised window could be found or clicked (treated as a real finding, not detector noise: the taskbar showed no changed button), see $n-$lb-click-min.png"; FAILS=$((FAILS+1)); fi
   fi
   # close by click
   cy=$(btn_cy); ptr click $(btn_x 1) $cy; sleep 3; shot "$OUT/.cur.png"
@@ -448,6 +466,13 @@ window() {
   "$MAGICK" "$f" -crop ${CW}x${CH}+${cx}+${y} +repage -filter point -resize 600% "$c"
   cs=$("$MAGICK" "$c" -format '%[fx:standard_deviation>0.03?1:0]' info: 2>/dev/null)
   if [ "$cs" = 1 ]; then verdict=PASS; else verdict=FAIL; FAILS=$((FAILS+1)); fi
+  # caption GLYPH check: min flat, max a square frame, close a symmetric X; the strip is thresholded to its bright
+  # glyph pixels and judged by glyph.py (aspect ratio, left-right and top-bottom symmetry, fill). A broken glyph
+  # (e.g. a close X squashed into an I shape) FAILs and its 6x crop is kept.
+  "$MAGICK" "$f" -crop ${CW}x${CH}+${cx}+${y} +repage -colorspace Gray -threshold 78% -compress none "$OUT/.glyph.pgm" 2>/dev/null
+  gl=$("$PY" "$(dirname "$SELF")/glyph.py" "$OUT/.glyph.pgm" 2>&1); grc=$?; rm -f "$OUT/.glyph.pgm"
+  if [ $grc -eq 0 ]; then log "$lab.glyph    PASS  min, max and close glyphs have the right shape ($(echo "$gl" | sed 's/^glyph\.\([a-z]*\) *PASS *\([0-9x]*\) px.*w\/h=\([0-9.]*\).*/\1 \2/' | tr '\n' ' '))"
+  else cp "$c" "$OUT/$n-$lab-glyph-FAIL-6x.png"; log "$lab.glyph    FAIL  broken caption glyph, see $n-$lab-glyph-FAIL-6x.png: $(echo "$gl" | grep FAIL | sed 's/  */ /g' | tr '\n' ';')"; FAILS=$((FAILS+1)); fi
   CLICK_CLOSED=0
   [ -n "$caps" ] && [ "$verdict" = PASS ] && cap_tests "$lab"
   [ -n "$caps" ] && [ "$verdict" = PASS ] && [ "$POINTER_OK" = 1 ] && cap_click_tests "$lab"
