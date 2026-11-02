@@ -1,8 +1,15 @@
-/* Test Performance Counter Consumer - Milestone B independent consumer */
+/* Test Performance Counter Consumer - Milestone B independent consumer
+   Includes independent reference values from kernel APIs for validation */
+#include <ntstatus.h>
+#define WIN32_NO_STATUS
 #include <windows.h>
 #include <winperf.h>
+#include <winternl.h>
+#include <tlhelp32.h>
 #include <stdio.h>
 #include <stdlib.h>
+
+typedef NTSTATUS (WINAPI *pNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
 
 int main(void)
 {
@@ -12,16 +19,81 @@ int main(void)
     PERF_DATA_BLOCK *pdb;
     PERF_OBJECT_TYPE *pobj;
     int loop, status;
+    MEMORYSTATUSEX memStat;
+    HANDLE hSnapshot;
+    PROCESSENTRY32 procEntry;
+    THREADENTRY32 threadEntry;
+    DWORD procCount = 0, threadCount = 0;
+    DWORD lastProcCount = 0, lastThreadCount = 0;
+    ULONGLONG uptime;
+    pNtQuerySystemInformation NtQuerySystemInformation;
+    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION procPerf[8];
+    ULONG retLen;
 
-    printf("=== Test Performance Counter Consumer ===\n");
-    printf("Reading HKEY_PERFORMANCE_DATA (2 4 238 230)\n\n");
+    printf("=== Test Performance Counter Consumer + Reference Values ===\n");
+    printf("Reading HKEY_PERFORMANCE_DATA (2 4 238 230) with kernel reference data\n\n");
+
+    NtQuerySystemInformation = (pNtQuerySystemInformation)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation");
 
     for (loop = 0; loop < 10; loop++)
     {
+        /* Collect reference values */
+        memStat.dwLength = sizeof(memStat);
+        GlobalMemoryStatusEx(&memStat);
+        DWORD memAvailMB = (DWORD)(memStat.ullAvailPhys / (1024 * 1024));
+
+        uptime = GetTickCount64() / 1000;
+
+        procCount = 0;
+        threadCount = 0;
+        hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if (hSnapshot != INVALID_HANDLE_VALUE)
+        {
+            procEntry.dwSize = sizeof(procEntry);
+            if (Process32First(hSnapshot, &procEntry))
+            {
+                do {
+                    procCount++;
+                    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, procEntry.th32ProcessID);
+                    if (hSnapshot != INVALID_HANDLE_VALUE)
+                    {
+                        threadEntry.dwSize = sizeof(threadEntry);
+                        if (Thread32First(hSnapshot, &threadEntry))
+                        {
+                            do {
+                                threadCount++;
+                            } while (Thread32Next(hSnapshot, &threadEntry));
+                        }
+                        CloseHandle(hSnapshot);
+                    }
+                } while (Process32Next(hSnapshot, &procEntry));
+            }
+            CloseHandle(hSnapshot);
+        }
+
+        /* Query processor time via NtQuerySystemInformation */
+        ULONGLONG procTimeKernel = 0, procTimeUser = 0, procTimeIdle = 0;
+        if (NtQuerySystemInformation)
+        {
+            retLen = 0;
+            if (NT_SUCCESS(NtQuerySystemInformation(SystemProcessorPerformanceInformation, procPerf, sizeof(procPerf), &retLen)))
+            {
+                if (retLen >= sizeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION))
+                {
+                    procTimeKernel = procPerf[0].KernelTime.QuadPart;
+                    procTimeUser = procPerf[0].UserTime.QuadPart;
+                    procTimeIdle = procPerf[0].IdleTime.QuadPart;
+                }
+            }
+        }
+
+        /* Query performance data */
         status = RegOpenKeyExW(HKEY_PERFORMANCE_DATA, L"2 4 238 230", 0, KEY_READ, &hKey);
         if (status != ERROR_SUCCESS)
         {
             printf("LOOP %d: RegOpenKeyEx failed (0x%x)\n", loop, status);
+            printf("  REF: MemAvail=%lu MB, ProcCount=%lu, ThreadCount=%lu, Uptime=%llu sec\n",
+                   memAvailMB, procCount, threadCount, uptime);
             Sleep(1000);
             continue;
         }
@@ -33,13 +105,15 @@ int main(void)
         if (status != ERROR_SUCCESS)
         {
             printf("LOOP %d: RegQueryValueEx failed (0x%x)\n", loop, status);
+            printf("  REF: MemAvail=%lu MB, ProcCount=%lu, ThreadCount=%lu, Uptime=%llu sec\n",
+                   memAvailMB, procCount, threadCount, uptime);
             Sleep(1000);
             continue;
         }
 
         if (cbData < sizeof(PERF_DATA_BLOCK))
         {
-            printf("LOOP %d: Buffer too small\n", loop);
+            printf("LOOP %d: Buffer too small (%lu bytes)\n", loop, cbData);
             Sleep(1000);
             continue;
         }
@@ -55,6 +129,10 @@ int main(void)
 
         printf("LOOP %d: PERF_DATA_BLOCK (v%lu.%lu, %lu objects, %lu bytes)\n",
                loop, pdb->Version, pdb->Revision, pdb->NumObjectTypes, pdb->TotalByteLength);
+        printf("  REF: MemAvail=%lu MB, ProcCount=%lu, ThreadCount=%lu, Uptime=%llu sec\n",
+               memAvailMB, procCount, threadCount, uptime);
+        printf("  CPU: Kernel=%llu, User=%llu, Idle=%llu (100ns units)\n",
+               procTimeKernel, procTimeUser, procTimeIdle);
 
         pobj = (PERF_OBJECT_TYPE *)((BYTE *)pdb + pdb->HeaderLength);
         for (int i = 0; i < pdb->NumObjectTypes && (BYTE *)pobj < buffer + cbData; i++)
@@ -64,6 +142,9 @@ int main(void)
             pobj = (PERF_OBJECT_TYPE *)((BYTE *)pobj + pobj->TotalByteLength);
         }
         printf("\n");
+
+        lastProcCount = procCount;
+        lastThreadCount = threadCount;
 
         if (loop < 9)
             Sleep(1000);
