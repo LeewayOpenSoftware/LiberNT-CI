@@ -127,7 +127,7 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
     init_counter_def(pcnt, 248, PERF_COUNTER_RAWCOUNT, sizeof(DWORD), sizeof(PERF_COUNTER_BLOCK));
 
     offset += sizeof(PERF_COUNTER_DEFINITION);
-    pobj->DefinitionLength = sizeof(PERF_COUNTER_DEFINITION);
+    pobj->DefinitionLength = sizeof(PERF_OBJECT_TYPE) + sizeof(PERF_COUNTER_DEFINITION);
 
     /* Process counter block with data */
     pcblk = (PERF_COUNTER_BLOCK *)(p + offset);
@@ -166,7 +166,7 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
     init_counter_def(pcnt, 250, PERF_COUNTER_RAWCOUNT, sizeof(DWORD), sizeof(PERF_COUNTER_BLOCK));
 
     offset += sizeof(PERF_COUNTER_DEFINITION);
-    pobj->DefinitionLength = sizeof(PERF_COUNTER_DEFINITION);
+    pobj->DefinitionLength = sizeof(PERF_OBJECT_TYPE) + sizeof(PERF_COUNTER_DEFINITION);
 
     /* Thread counter block with data */
     pcblk = (PERF_COUNTER_BLOCK *)(p + offset);

@@ -130,17 +130,18 @@ DWORD APIENTRY CollectPerfOSData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD lp
 
     /* System counter: System Up Time (counter ID 674) */
     pcnt = (PERF_COUNTER_DEFINITION *)(p + offset);
-    init_counter_def(pcnt, 674, PERF_100NSEC_TIMER, sizeof(ULONGLONG), sizeof(PERF_COUNTER_BLOCK));
+    init_counter_def(pcnt, 674, PERF_ELAPSED_TIME, sizeof(ULONGLONG), sizeof(PERF_COUNTER_BLOCK));
 
     offset += sizeof(PERF_COUNTER_DEFINITION);
-    pobj->DefinitionLength = sizeof(PERF_COUNTER_DEFINITION);
+    pobj->DefinitionLength = sizeof(PERF_OBJECT_TYPE) + sizeof(PERF_COUNTER_DEFINITION);
 
     /* System counter block with data */
     pcblk = (PERF_COUNTER_BLOCK *)(p + offset);
     pcblk->ByteLength = sizeof(PERF_COUNTER_BLOCK) + sizeof(ULONGLONG);
 
     pullData = (ULONGLONG *)(pcblk + 1);
-    *pullData = perf_time.QuadPart;  /* System up time in performance counter units */
+    /* PERF_ELAPSED_TIME: the counter holds the start time; a consumer computes (PerfTime - data) / PerfFreq */
+    *pullData = perf_time.QuadPart - (ULONGLONG)((double)GetTickCount64() * (double)perf_freq.QuadPart / 1000.0);
 
     offset += pcblk->ByteLength;
     offset = (offset + 7) & ~7u;
@@ -179,7 +180,7 @@ DWORD APIENTRY CollectPerfOSData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD lp
                      sizeof(PERF_COUNTER_BLOCK) + sizeof(DWORD));
 
     offset += sizeof(PERF_COUNTER_DEFINITION);
-    pobj->DefinitionLength = 2 * sizeof(PERF_COUNTER_DEFINITION);
+    pobj->DefinitionLength = sizeof(PERF_OBJECT_TYPE) + 2 * sizeof(PERF_COUNTER_DEFINITION);
 
     /* Memory counter block with data */
     pcblk = (PERF_COUNTER_BLOCK *)(p + offset);
@@ -221,15 +222,15 @@ DWORD APIENTRY CollectPerfOSData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD lp
     init_counter_def(pcnt, 6, PERF_100NSEC_TIMER_INV, sizeof(ULONGLONG), sizeof(PERF_COUNTER_BLOCK));
 
     offset += sizeof(PERF_COUNTER_DEFINITION);
-    pobj->DefinitionLength = sizeof(PERF_COUNTER_DEFINITION);
+    pobj->DefinitionLength = sizeof(PERF_OBJECT_TYPE) + sizeof(PERF_COUNTER_DEFINITION);
 
     /* Processor counter block with data */
     pcblk = (PERF_COUNTER_BLOCK *)(p + offset);
     pcblk->ByteLength = sizeof(PERF_COUNTER_BLOCK) + sizeof(ULONGLONG);
 
     pullData = (ULONGLONG *)(pcblk + 1);
-    /* For PERF_100NSEC_TIMER_INV: store (KernelTime + UserTime) */
-    *pullData = kernel_time + user_time;
+    /* PERF_100NSEC_TIMER_INV: the counter holds idle time; % busy = 100 * (1 - delta idle / delta time) */
+    *pullData = idle_time;
 
     offset += pcblk->ByteLength;
     offset = (offset + 7) & ~7u;

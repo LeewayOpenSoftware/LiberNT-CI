@@ -1,173 +1,384 @@
 /* Test Performance Counter Consumer - Milestone B independent consumer
-   Includes independent reference values from kernel APIs for validation */
+   Reads HKEY_PERFORMANCE_DATA, decodes every counter (type, size, offset, value) and prints the value
+   next to an independent reference collected with other APIs; also measures what a query costs. */
 #include <ntstatus.h>
 #define WIN32_NO_STATUS
 #include <windows.h>
 #include <winperf.h>
 #include <winternl.h>
 #include <tlhelp32.h>
+#include <psapi.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+
+#define QUERY L"2 4 238 230"
+#define LOOPS 10
+#define BURST 200
+#define MAX_CPUS 64
 
 typedef NTSTATUS (WINAPI *pNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS, PVOID, ULONG, PULONG);
+typedef NTSTATUS (WINAPI *pNtQueryInformationProcess)(HANDLE, PROCESSINFOCLASS, PVOID, ULONG, PULONG);
+
+/* VM_COUNTERS_EX as returned for ProcessVmCounters (class 3) */
+typedef struct
+{
+    SIZE_T PeakVirtualSize, VirtualSize;
+    ULONG PageFaultCount;
+    SIZE_T PeakWorkingSetSize, WorkingSetSize;
+    SIZE_T QuotaPeakPagedPoolUsage, QuotaPagedPoolUsage;
+    SIZE_T QuotaPeakNonPagedPoolUsage, QuotaNonPagedPoolUsage;
+    SIZE_T PagefileUsage, PeakPagefileUsage, PrivateUsage;
+} VMC_EX;
+
+/* Counter ids the providers report */
+#define C_UPTIME 674
+#define C_AVAIL_MB 6490
+#define C_COMMITTED 6492
+#define C_PROC_IDLE 6
+#define C_PROCS 248
+#define C_THREADS 250
+
+struct decoded
+{
+    int have[8];
+    ULONGLONG uptimeStart, idle, committed;
+    DWORD availMB, procs, threads;
+    LONGLONG sysPerfTime, sysPerfFreq;      /* PerfTime / PerfFreq of the System object */
+    LONGLONG cpuPerfTime, cpuPerfFreq;      /* of the Processor object */
+};
+
+struct reference
+{
+    DWORD availMB, procs, threads, ncpu;
+    ULONGLONG uptimeMs, kernel, user, idle;
+    ULONGLONG committed;
+};
+
+static pNtQuerySystemInformation NtQSI;
+static pNtQueryInformationProcess NtQIP;
+static BYTE *buffer;
+static DWORD bufSize = 8192;
+
+static ULONGLONG ft_to_u64(FILETIME ft) { return ((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime; }
+
+static void get_reference(struct reference *r)
+{
+    MEMORYSTATUSEX ms;
+    SYSTEM_INFO si;
+    HANDLE snap;
+    PROCESSENTRY32 pe;
+    THREADENTRY32 te;
+    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION perf[MAX_CPUS];
+    ULONG ret = 0, i;
+    PERFORMANCE_INFORMATION pi;
+
+    memset(r, 0, sizeof(*r));
+    ms.dwLength = sizeof(ms);
+    GlobalMemoryStatusEx(&ms);
+    r->availMB = (DWORD)(ms.ullAvailPhys / (1024 * 1024));
+    r->uptimeMs = GetTickCount64();
+    GetSystemInfo(&si);
+    r->ncpu = si.dwNumberOfProcessors;
+    if (r->ncpu > MAX_CPUS)
+        r->ncpu = MAX_CPUS;
+
+    snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD, 0);
+    if (snap != INVALID_HANDLE_VALUE)
+    {
+        pe.dwSize = sizeof(pe);
+        if (Process32First(snap, &pe))
+        {
+            do { r->procs++; } while (Process32Next(snap, &pe));
+        }
+        te.dwSize = sizeof(te);
+        if (Thread32First(snap, &te))
+        {
+            do { r->threads++; } while (Thread32Next(snap, &te));
+        }
+        CloseHandle(snap);
+    }
+
+    if (NtQSI && NT_SUCCESS(NtQSI(SystemProcessorPerformanceInformation, perf, r->ncpu * sizeof(perf[0]), &ret)))
+    {
+        for (i = 0; i < ret / sizeof(perf[0]); i++)
+        {
+            r->kernel += perf[i].KernelTime.QuadPart;
+            r->user += perf[i].UserTime.QuadPart;
+            r->idle += perf[i].IdleTime.QuadPart;
+        }
+    }
+
+    pi.cb = sizeof(pi);
+    if (GetPerformanceInfo(&pi, sizeof(pi)))
+        r->committed = (ULONGLONG)pi.CommitTotal * pi.PageSize;
+}
+
+static int query(DWORD *cb)
+{
+    int status;
+
+    *cb = bufSize;
+    status = RegQueryValueExW(HKEY_PERFORMANCE_DATA, QUERY, NULL, NULL, buffer, cb);
+    while (status == ERROR_MORE_DATA && bufSize < 4 * 1024 * 1024)
+    {
+        BYTE *bigger = realloc(buffer, bufSize * 2);
+
+        if (!bigger)
+            break;
+        buffer = bigger;
+        bufSize *= 2;
+        *cb = bufSize;
+        status = RegQueryValueExW(HKEY_PERFORMANCE_DATA, QUERY, NULL, NULL, buffer, cb);
+    }
+    return status;
+}
+
+/* Walk the block with the documented offsets, print every counter, fill `d`. Returns 0 if well formed. */
+static int decode(DWORD cb, struct decoded *d, int verbose)
+{
+    PERF_DATA_BLOCK *pdb = (PERF_DATA_BLOCK *)buffer;
+    BYTE *end = buffer + cb;
+    PERF_OBJECT_TYPE *pobj;
+    int i;
+
+    memset(d, 0, sizeof(*d));
+    if (cb < sizeof(*pdb) || memcmp(pdb->Signature, L"PERF", 8) != 0)
+        return 1;
+    pobj = (PERF_OBJECT_TYPE *)(buffer + pdb->HeaderLength);
+
+    for (i = 0; i < (int)pdb->NumObjectTypes; i++)
+    {
+        PERF_COUNTER_DEFINITION *def;
+        PERF_COUNTER_BLOCK *blk;
+        BYTE *objEnd;
+        LONG c;
+
+        if ((BYTE *)pobj + sizeof(*pobj) > end || pobj->TotalByteLength < sizeof(*pobj) ||
+            (BYTE *)pobj + pobj->TotalByteLength > end)
+            return 2;
+        objEnd = (BYTE *)pobj + pobj->TotalByteLength;
+        if (pobj->NumInstances != PERF_NO_INSTANCES)
+        {
+            printf("  OBJ %lu: has instances (%ld), not decoded\n", pobj->ObjectNameTitleIndex, pobj->NumInstances);
+            pobj = (PERF_OBJECT_TYPE *)objEnd;
+            continue;
+        }
+        if (pobj->DefinitionLength < pobj->HeaderLength ||
+            (BYTE *)pobj + pobj->DefinitionLength + sizeof(PERF_COUNTER_BLOCK) > objEnd)
+            return 3;
+        blk = (PERF_COUNTER_BLOCK *)((BYTE *)pobj + pobj->DefinitionLength);
+        if ((BYTE *)blk + blk->ByteLength > objEnd)
+            return 4;
+
+        if (pobj->ObjectNameTitleIndex == 2)
+        {
+            d->sysPerfTime = pobj->PerfTime.QuadPart;
+            d->sysPerfFreq = pobj->PerfFreq.QuadPart;
+        }
+        if (pobj->ObjectNameTitleIndex == 238)
+        {
+            d->cpuPerfTime = pobj->PerfTime.QuadPart;
+            d->cpuPerfFreq = pobj->PerfFreq.QuadPart;
+        }
+
+        def = (PERF_COUNTER_DEFINITION *)((BYTE *)pobj + pobj->HeaderLength);
+        for (c = 0; c < pobj->NumCounters; c++)
+        {
+            ULONGLONG v = 0;
+            BYTE *src;
+
+            if ((BYTE *)def + sizeof(*def) > (BYTE *)blk || def->ByteLength < sizeof(*def))
+                return 5;
+            if (def->CounterOffset + def->CounterSize > blk->ByteLength || (def->CounterSize != 4 && def->CounterSize != 8))
+                return 6;
+            src = (BYTE *)blk + def->CounterOffset;
+            if (def->CounterSize == 4)
+            {
+                DWORD x;
+                memcpy(&x, src, 4);
+                v = x;
+            }
+            else
+                memcpy(&v, src, 8);
+            if (verbose)
+                printf("  CTR obj=%lu id=%lu type=0x%08lx size=%lu offset=%lu value=%llu\n", pobj->ObjectNameTitleIndex,
+                       def->CounterNameTitleIndex, def->CounterType, def->CounterSize, def->CounterOffset, v);
+            switch (def->CounterNameTitleIndex)
+            {
+            case C_UPTIME: d->uptimeStart = v; d->have[0] = 1; break;
+            case C_AVAIL_MB: d->availMB = (DWORD)v; d->have[1] = 1; break;
+            case C_COMMITTED: d->committed = v; d->have[2] = 1; break;
+            case C_PROC_IDLE: d->idle = v; d->have[3] = 1; break;
+            case C_PROCS: d->procs = (DWORD)v; d->have[4] = 1; break;
+            case C_THREADS: d->threads = (DWORD)v; d->have[5] = 1; break;
+            }
+            def = (PERF_COUNTER_DEFINITION *)((BYTE *)def + def->ByteLength);
+        }
+        pobj = (PERF_OBJECT_TYPE *)objEnd;
+    }
+    return 0;
+}
+
+static ULONGLONG proc_cpu_100ns(void)
+{
+    FILETIME c, e, k, u;
+
+    GetProcessTimes(GetCurrentProcess(), &c, &e, &k, &u);
+    return ft_to_u64(k) + ft_to_u64(u);
+}
+
+static void vm_counters(VMC_EX *v)
+{
+    ULONG ret = 0;
+
+    memset(v, 0, sizeof(*v));
+    if (NtQIP)
+        NtQIP(GetCurrentProcess(), (PROCESSINFOCLASS)3, v, sizeof(*v), &ret);
+}
+
+static void busy_wait_ms(DWORD ms)
+{
+    ULONGLONG t0 = GetTickCount64();
+    volatile unsigned x = 0;
+
+    while (GetTickCount64() - t0 < ms)
+        x++;
+}
 
 int main(void)
 {
-    DWORD cbData;
-    BYTE *buffer = NULL;
-    DWORD bufSize = 8192;
-    PERF_DATA_BLOCK *pdb;
-    PERF_OBJECT_TYPE *pobj;
-    int loop, status;
-    MEMORYSTATUSEX memStat;
-    HANDLE hSnapshot;
-    PROCESSENTRY32 procEntry;
-    THREADENTRY32 threadEntry;
-    DWORD procCount = 0, threadCount = 0;
-    ULONGLONG uptime;
-    pNtQuerySystemInformation NtQuerySystemInformation;
-    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION procPerf[8];
-    ULONG retLen;
+    struct decoded d, prev, first;
+    struct reference ref, prevref;
+    LARGE_INTEGER qf, q0, q1;
+    VMC_EX vm0, vm1, vm2;
+    IO_COUNTERS io0, io1;
+    ULONGLONG cpu0, cpu1, cpuLoopTotal = 0;
+    DWORD cb;
+    int loop, status, bad = 0, havePrev = 0;
+    LONGLONG minAvail = 0x7fffffff, maxAvail = 0;
+    ULONGLONG minUp = ~0ull, maxUp = 0;
+    double minBusy = 1e9, maxBusy = -1e9;
+    int idleChanged = 0, upChanged = 0;
 
+    setvbuf(stdout, NULL, _IONBF, 0);
     buffer = malloc(bufSize);
     if (!buffer)
         return 1;
+    NtQSI = (pNtQuerySystemInformation)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation");
+    NtQIP = (pNtQueryInformationProcess)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess");
+    QueryPerformanceFrequency(&qf);
 
-    printf("=== Test Performance Counter Consumer + Reference Values ===\n");
-    printf("Reading HKEY_PERFORMANCE_DATA (2 4 238 230) with kernel reference data\n\n");
+    printf("=== Test Performance Counter Consumer: values vs independent reference ===\n");
+    printf("Query \"2 4 238 230\" on HKEY_PERFORMANCE_DATA, %d loops (loops 4-6 burn CPU), then a %d-query burst\n\n", LOOPS, BURST);
 
-    NtQuerySystemInformation = (pNtQuerySystemInformation)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQuerySystemInformation");
+    vm_counters(&vm0);
+    GetProcessIoCounters(GetCurrentProcess(), &io0);
+    cpu0 = proc_cpu_100ns();
+    memset(&prev, 0, sizeof(prev));
+    memset(&prevref, 0, sizeof(prevref));
 
-    for (loop = 0; loop < 10; loop++)
+    for (loop = 0; loop < LOOPS; loop++)
     {
-        /* Collect reference values */
-        memStat.dwLength = sizeof(memStat);
-        GlobalMemoryStatusEx(&memStat);
-        DWORD memAvailMB = (DWORD)(memStat.ullAvailPhys / (1024 * 1024));
+        ULONGLONG c0, c1;
 
-        uptime = GetTickCount64() / 1000;
-
-        procCount = 0;
-        threadCount = 0;
-        hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD, 0);
-        if (hSnapshot != INVALID_HANDLE_VALUE)
-        {
-            procEntry.dwSize = sizeof(procEntry);
-            if (Process32First(hSnapshot, &procEntry))
-            {
-                do {
-                    procCount++;
-                    threadEntry.dwSize = sizeof(threadEntry);
-                    if (Thread32First(hSnapshot, &threadEntry))
-                    {
-                        do {
-                            if (threadEntry.th32OwnerProcessID == procEntry.th32ProcessID)
-                                threadCount++;
-                        } while (Thread32Next(hSnapshot, &threadEntry));
-                    }
-                } while (Process32Next(hSnapshot, &procEntry));
-            }
-            CloseHandle(hSnapshot);
-        }
-
-        /* Query processor time via NtQuerySystemInformation */
-        ULONGLONG procTimeKernel = 0, procTimeUser = 0, procTimeIdle = 0;
-        if (NtQuerySystemInformation)
-        {
-            retLen = 0;
-            if (NT_SUCCESS(NtQuerySystemInformation(SystemProcessorPerformanceInformation, procPerf, sizeof(procPerf), &retLen)))
-            {
-                if (retLen >= sizeof(SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION))
-                {
-                    procTimeKernel = procPerf[0].KernelTime.QuadPart;
-                    procTimeUser = procPerf[0].UserTime.QuadPart;
-                    procTimeIdle = procPerf[0].IdleTime.QuadPart;
-                }
-            }
-        }
-
-        /* Query performance data from HKEY_PERFORMANCE_DATA */
-        cbData = bufSize;
-        status = RegQueryValueExW(HKEY_PERFORMANCE_DATA, L"2 4 238 230", NULL, NULL, buffer, &cbData);
-
-        /* The perflib reports ERROR_MORE_DATA when the buffer is too small: grow it and ask again */
-        while (status == ERROR_MORE_DATA && bufSize < 4 * 1024 * 1024)
-        {
-            BYTE *bigger = realloc(buffer, bufSize * 2);
-
-            if (!bigger)
-                break;
-            buffer = bigger;
-            bufSize *= 2;
-            cbData = bufSize;
-            status = RegQueryValueExW(HKEY_PERFORMANCE_DATA, L"2 4 238 230", NULL, NULL, buffer, &cbData);
-        }
-
-        if (status == ERROR_MORE_DATA)
-        {
-            printf("LOOP %d: Buffer too small for query (need %lu bytes)\n", loop, cbData);
-            printf("  REF: MemAvail=%lu MB, ProcCount=%lu, ThreadCount=%lu, Uptime=%llu sec\n",
-                   memAvailMB, procCount, threadCount, uptime);
-            Sleep(1000);
-            continue;
-        }
-
+        get_reference(&ref);
+        c0 = proc_cpu_100ns();
+        status = query(&cb);
+        c1 = proc_cpu_100ns();
+        cpuLoopTotal += c1 - c0;
         if (status != ERROR_SUCCESS)
         {
-            printf("LOOP %d: RegQueryValueEx failed (0x%x)\n", loop, status);
-            printf("  REF: MemAvail=%lu MB, ProcCount=%lu, ThreadCount=%lu, Uptime=%llu sec\n",
-                   memAvailMB, procCount, threadCount, uptime);
+            printf("LOOP %d: query failed (%d)\n", loop, status);
+            bad++;
             Sleep(1000);
             continue;
         }
-
-        if (cbData < sizeof(PERF_DATA_BLOCK))
+        if (decode(cb, &d, 1) != 0)
         {
-            printf("LOOP %d: Returned data too small (%lu bytes)\n", loop, cbData);
+            printf("LOOP %d: block malformed (decode)\n", loop);
+            bad++;
             Sleep(1000);
             continue;
         }
+        printf("LOOP %d: %lu bytes, consumer CPU for this query %llu x100ns\n", loop, cb, c1 - c0);
 
-        pdb = (PERF_DATA_BLOCK *)buffer;
-        if (pdb->Signature[0] != 'P' || pdb->Signature[1] != 'E' ||
-            pdb->Signature[2] != 'R' || pdb->Signature[3] != 'F')
+        /* Available MBytes: counter vs GlobalMemoryStatusEx (taken just before the query) */
+        printf("  CMP avail_mb: counter=%lu ref=%lu diff=%ld\n", d.availMB, ref.availMB, (long)d.availMB - (long)ref.availMB);
+        /* Processes / threads: counter vs toolhelp snapshot */
+        printf("  CMP procs: counter=%lu ref=%lu diff=%ld\n", d.procs, ref.procs, (long)d.procs - (long)ref.procs);
+        printf("  CMP threads: counter=%lu ref=%lu diff=%ld\n", d.threads, ref.threads, (long)d.threads - (long)ref.threads);
+        /* Committed bytes: GetPerformanceInfo (same OS source as the provider: checks the plumbing only) */
+        printf("  CMP committed_bytes: counter=%llu ref=%llu\n", d.committed, ref.committed);
+        /* Uptime: PERF_ELAPSED_TIME -> (PerfTime - start) / PerfFreq, vs GetTickCount64 */
+        if (d.sysPerfFreq > 0)
         {
-            printf("LOOP %d: Invalid signature\n", loop);
-            Sleep(1000);
-            continue;
+            double up = (double)(d.sysPerfTime - (LONGLONG)d.uptimeStart) / (double)d.sysPerfFreq;
+            printf("  CMP uptime_s: counter=%.3f ref=%.3f diff=%.3f\n", up, ref.uptimeMs / 1000.0, up - ref.uptimeMs / 1000.0);
+            if ((ULONGLONG)(up * 1000) < minUp) minUp = (ULONGLONG)(up * 1000);
+            if ((ULONGLONG)(up * 1000) > maxUp) maxUp = (ULONGLONG)(up * 1000);
         }
-
-        printf("LOOP %d: PERF_DATA_BLOCK (v%lu.%lu, %lu objects, %lu bytes)\n",
-               loop, pdb->Version, pdb->Revision, pdb->NumObjectTypes, pdb->TotalByteLength);
-        printf("  REF: MemAvail=%lu MB, ProcCount=%lu, ThreadCount=%lu, Uptime=%llu sec\n",
-               memAvailMB, procCount, threadCount, uptime);
-        printf("  CPU: Kernel=%llu, User=%llu, Idle=%llu (100ns units)\n",
-               procTimeKernel, procTimeUser, procTimeIdle);
-
-        if (loop == 0)
+        /* Processor %: two samples. counter: 100*(1 - didle/dtime) with dtime from the object's PerfTime */
+        if (havePrev && d.cpuPerfFreq > 0 && d.cpuPerfTime > prev.cpuPerfTime && ref.ncpu)
         {
-            DWORD n = cbData < 512 ? cbData : 512, k;
+            double dtime100ns = (double)(d.cpuPerfTime - prev.cpuPerfTime) * 1e7 / (double)d.cpuPerfFreq * ref.ncpu;
+            double cbusy = 100.0 * (1.0 - (double)(d.idle - prev.idle) / dtime100ns);
+            double dref = (double)((ref.kernel + ref.user) - (prevref.kernel + prevref.user));
+            double rbusy = dref > 0 ? 100.0 * (1.0 - (double)(ref.idle - prevref.idle) / dref) : -1;
 
-            printf("  HEX (first %lu of %lu bytes, header %lu):", n, cbData, pdb->HeaderLength);
-            for (k = 0; k < n; k++)
-                printf("%s%02x", (k % 32) == 0 ? "\n   " : " ", buffer[k]);
-            printf("\n");
+            printf("  CMP cpu_busy_pct: counter=%.1f ref(NtQSI)=%.1f diff=%.1f\n", cbusy, rbusy, cbusy - rbusy);
+            if (cbusy < minBusy) minBusy = cbusy;
+            if (cbusy > maxBusy) maxBusy = cbusy;
+            if (d.idle != prev.idle) idleChanged++;
         }
+        if (havePrev && d.uptimeStart != prev.uptimeStart)
+            upChanged++;
+        if ((LONGLONG)d.availMB < minAvail) minAvail = d.availMB;
+        if ((LONGLONG)d.availMB > maxAvail) maxAvail = d.availMB;
+        if (!havePrev)
+            first = d;
+        prev = d;
+        prevref = ref;
+        havePrev = 1;
 
-        pobj = (PERF_OBJECT_TYPE *)((BYTE *)pdb + pdb->HeaderLength);
-        for (int i = 0; i < pdb->NumObjectTypes && (BYTE *)pobj < buffer + cbData; i++)
+        if (loop < LOOPS - 1)
         {
-            printf("  Obj %d: ID=%lu, ctrs=%ld, inst=%ld\n",
-                   i, pobj->ObjectNameTitleIndex, pobj->NumCounters, pobj->NumInstances);
-            if (pobj->TotalByteLength == 0)
-                break;
-            pobj = (PERF_OBJECT_TYPE *)((BYTE *)pobj + pobj->TotalByteLength);
+            if (loop >= 3 && loop <= 5)
+                busy_wait_ms(900);   /* make the processor counter move */
+            else
+                Sleep(1000);
         }
-        printf("\n");
-
-        if (loop < 9)
-            Sleep(1000);
     }
 
+    printf("\nSUMMARY (changes across loops): avail_mb min=%lld max=%lld, uptime_s min=%.3f max=%.3f, cpu_busy_pct min=%.1f max=%.1f, idle counter changed in %d samples\n",
+           minAvail, maxAvail, minUp / 1000.0, maxUp / 1000.0, minBusy, maxBusy, idleChanged);
+    printf("SUMMARY: uptime start value changed between loops %d times (constant start = correct for PERF_ELAPSED_TIME)\n", upChanged);
+    printf("SUMMARY: malformed or failed loops: %d\n", bad);
+
+    /* ---- overhead ---- */
+    vm_counters(&vm1);
+    QueryPerformanceCounter(&q0);
+    cpu1 = proc_cpu_100ns();
+    {
+        int i, fails = 0;
+        for (i = 0; i < BURST; i++)
+            if (query(&cb) != ERROR_SUCCESS)
+                fails++;
+        QueryPerformanceCounter(&q1);
+        cpu1 = proc_cpu_100ns() - cpu1;
+        printf("OVERHEAD burst: %d queries (%d failed) in %.1f ms wall, consumer CPU %llu x100ns = %.3f ms/query\n", BURST, fails,
+               (double)(q1.QuadPart - q0.QuadPart) * 1000.0 / (double)qf.QuadPart, cpu1, cpu1 / 10000.0 / BURST);
+    }
+    vm_counters(&vm2);
+    GetProcessIoCounters(GetCurrentProcess(), &io1);
+    printf("OVERHEAD loops: consumer CPU in the %d queries %llu x100ns (timer tick granularity applies)\n", LOOPS, cpuLoopTotal);
+    printf("OVERHEAD memory (process, includes the providers loaded in-process): before first query PagefileUsage=%llu WorkingSet=%llu; after %d loops %llu / %llu; after burst %llu / %llu\n",
+           (ULONGLONG)vm0.PagefileUsage, (ULONGLONG)vm0.WorkingSetSize, LOOPS, (ULONGLONG)vm1.PagefileUsage,
+           (ULONGLONG)vm1.WorkingSetSize, (ULONGLONG)vm2.PagefileUsage, (ULONGLONG)vm2.WorkingSetSize);
+    printf("OVERHEAD I/O (whole consumer process, start to end): write ops %llu (bytes %llu), read ops %llu (bytes %llu); total CPU %llu x100ns\n",
+           io1.WriteOperationCount - io0.WriteOperationCount, io1.WriteTransferCount - io0.WriteTransferCount,
+           io1.ReadOperationCount - io0.ReadOperationCount, io1.ReadTransferCount - io0.ReadTransferCount,
+           proc_cpu_100ns() - cpu0);
+    (void)first;
     return 0;
 }

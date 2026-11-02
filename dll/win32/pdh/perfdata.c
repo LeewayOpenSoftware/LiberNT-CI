@@ -167,9 +167,13 @@ void perf_trace(const char *what, DWORD a, DWORD b)
     char line[160];
     DWORD written;
     int len;
-    HANDLE file = CreateFileW(L"C:\\perf_trace.txt", FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+    HANDLE file;
 
+    /* tracing is opt-in: it writes to disk, which a normal query must not do */
+    if (GetFileAttributesW(L"C:\\perf_trace.on") == INVALID_FILE_ATTRIBUTES)
+        return;
+    file = CreateFileW(L"C:\\perf_trace.txt", FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                       OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (file == INVALID_HANDLE_VALUE)
         return;
     len = _snprintf(line, sizeof(line), "%s a=%lu b=%lu pid=%lu\r\n", what, a, b, GetCurrentProcessId());
