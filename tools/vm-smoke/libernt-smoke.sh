@@ -153,7 +153,7 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 # the cap is 3 VMs at once: refuse to be the fourth
-N=$(grep -c . "$RUNNING" 2>/dev/null); N=${N:-0}
+N=$(cut -d"|" -f1 "$RUNNING" 2>/dev/null | sed "s/ *$//" | sort -u | grep -c .); N=${N:-0}   # distinct VM names: a VM that re-registers itself is one VM
 [ "$N" -lt 3 ] || die "VM cap reached ($N running, see $RUNNING)"
 rm -rf "$VDIR"                       # always a fresh guest
 if [ "$MODE" = launcher ]; then
