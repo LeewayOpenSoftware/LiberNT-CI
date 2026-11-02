@@ -44,6 +44,15 @@
 # The VM is registered in E:/LiberNT/vm/RUNNING.txt while it runs and always removed on exit.
 
 set -u
+# Run from a private copy of this script and its helpers: sh reads a script incrementally, so editing the file while
+# a run is in progress used to corrupt that run. SMOKE_SNAP marks the copy.
+if [ -z "${SMOKE_SNAP:-}" ]; then
+  _src=$(cd "$(dirname "$0")" && pwd)
+  _snap=$(mktemp -d "${TMPDIR:-/tmp}/libernt-smoke.XXXXXX") || { echo "SMOKE ERROR: cannot create a snapshot dir" >&2; exit 2; }
+  cp "$_src"/libernt-smoke.sh "$_src"/glyph.py "$_src"/qmp-pointer.py "$_snap"/ || { echo "SMOKE ERROR: cannot copy the script" >&2; exit 2; }
+  SMOKE_SNAP=$_snap; export SMOKE_SNAP
+  sh "$_snap/libernt-smoke.sh" "$@"; _rc=$?; rm -rf "$_snap"; exit $_rc
+fi
 IMGARG=${1:?usage: libernt-smoke.sh <image.img|artifact.zip|run-id> [name]}
 OUT_ROOT=${OUT_ROOT:-E:/LiberNT/results/smoke}
 IMG_DIR=${IMGDIR:-${IMG_DIR:-C:/LiberNT/images}}
