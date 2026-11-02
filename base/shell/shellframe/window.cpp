@@ -373,8 +373,14 @@ FrameWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
 
         case WM_NCHITTEST:
         {
-            LRESULT hit = DefaultProc(msg, wParam, lParam);
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+#if SHELLFRAME_CUSTOM_CAPTION_BUTTONS
+            /* The buttons are painted and laid out by the frame itself, so their rectangles win over
+             * whatever the default procedure derives from the system caption layout. */
+            if (ClientCaption() && ButtonFromHit(HitTest(pt)) != CaptionButton::None)
+                return HitTest(pt);
+#endif
+            LRESULT hit = DefaultProc(msg, wParam, lParam);
             if (hit != HTCLIENT && hit != HTCAPTION)
                 return hit;
             return HitTest(pt);
