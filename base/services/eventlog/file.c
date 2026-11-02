@@ -884,8 +884,49 @@ LogfWriteRecord(PLOGFILE LogFile,
     if (!Record || BufSize < sizeof(*Record))
         return STATUS_INVALID_PARAMETER;
 
+    /* Refuse a record that could never fit or would crowd out the log */
+    if (BufSize > ELF_MAX_RECORD_SIZE ||
+        BufSize > LogFile->LogFile.Header.MaxSize / 2)
+        return STATUS_INVALID_PARAMETER;
+
     /* Lock the log file exclusive */
     RtlAcquireResourceExclusive(&LogFile->Lock, TRUE);
+
+    /*
+     * Write-rate limit: a token bucket per log. A component that reports
+     * in a loop must not drive unbounded disk writes nor evict the history.
+     * Dropped records are counted and one summary record is written when
+     * the rate has come down again.
+     */
+    {
+        ULONGLONG Now = GetTickCount64();
+        ULONGLONG Elapsed = Now - LogFile->RateLastTick;
+
+        if (LogFile->RateLastTick == 0)
+        {
+            LogFile->RateTokens = ELF_RATE_BURST;
+        }
+        else if (Elapsed >= 20)
+        {
+            ULONGLONG Add = (Elapsed * ELF_RATE_PER_SECOND) / 1000;
+            if (Add > 0)
+            {
+                ULONGLONG Total = LogFile->RateTokens + Add;
+                LogFile->RateTokens = (ULONG)min(Total, ELF_RATE_BURST);
+            }
+        }
+        if (LogFile->RateLastTick == 0 || (Elapsed * ELF_RATE_PER_SECOND) / 1000 > 0)
+            LogFile->RateLastTick = Now;
+
+        if (LogFile->RateTokens == 0)
+        {
+            if (LogFile->RateDropped != MAXULONG)
+                LogFile->RateDropped++;
+            RtlReleaseResource(&LogFile->Lock);
+            return STATUS_QUOTA_EXCEEDED;
+        }
+        LogFile->RateTokens--;
+    }
 
     /*
      * Retrieve the record written time now, that will also be compared
@@ -895,6 +936,36 @@ LogfWriteRecord(PLOGFILE LogFile,
     RtlTimeToSecondsSince1970(&SystemTime, &Record->TimeWritten);
 
     Status = ElfWriteRecord(&LogFile->LogFile, Record, BufSize);
+
+    /* Report records the limiter dropped, once the rate is back to normal */
+    if (NT_SUCCESS(Status) && LogFile->RateDropped != 0 &&
+        LogFile->RateTokens > ELF_RATE_BURST / 2)
+    {
+        WCHAR Msg[96];
+        UNICODE_STRING Src, Comp;
+        PEVENTLOGRECORD Sum;
+        SIZE_T SumSize;
+
+        if (SUCCEEDED(StringCchPrintfW(Msg, ARRAYSIZE(Msg),
+                      L"%lu events were dropped because the log was written too fast",
+                      LogFile->RateDropped)))
+        {
+            RtlInitUnicodeString(&Src, L"EventLog");
+            RtlInitUnicodeString(&Comp, L"");
+            Sum = LogfAllocAndBuildNewRecord(&SumSize, Record->TimeWritten,
+                                             EVENTLOG_WARNING_TYPE, 0, 0x80000100,
+                                             &Src, &Comp, 0, NULL,
+                                             1, Msg, 0, NULL);
+            if (Sum)
+            {
+                Sum->TimeWritten = Record->TimeWritten;
+                if (NT_SUCCESS(ElfWriteRecord(&LogFile->LogFile, Sum, SumSize)))
+                    LogFile->RateDropped = 0;
+                LogfFreeRecord(Sum);
+            }
+        }
+    }
+
     if (Status == STATUS_LOG_FILE_FULL)
     {
         /* The event log file is full, queue a message box for the user and exit */
