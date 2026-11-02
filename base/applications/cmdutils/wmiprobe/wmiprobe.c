@@ -19,7 +19,9 @@
 #define WIN32_LEAN_AND_MEAN
 #define COBJMACROS
 #include <windows.h>
-#include <wbemidl.h>
+#define INITGUID
+#include <initguid.h>
+#include <wbemcli.h>
 #include <tlhelp32.h>
 #include <winsvc.h>
 #include <stdio.h>
@@ -59,7 +61,7 @@ static ULONGLONG CountQuery(IWbemServices *svc, const WCHAR *wql, const WCHAR *k
     return n;
 }
 
-static int GetProp(IWbemServices *svc, const WCHAR *wql, const WCHAR *prop, VARIANT *out)
+static int WmiGetProp(IWbemServices *svc, const WCHAR *wql, const WCHAR *prop, VARIANT *out)
 {
     IEnumWbemClassObject *e = NULL;
     IWbemClassObject *obj = NULL;
@@ -148,7 +150,7 @@ int wmain(void)
 
     /* --- Win32_OperatingSystem: Version vs RtlGetVersion; memory vs GlobalMemoryStatusEx --- */
     wprintf(L"== Win32_OperatingSystem ==\n");
-    if (GetProp(svc, L"SELECT Version,BuildNumber,Caption FROM Win32_OperatingSystem", L"Version", &v) && V_VT(&v) == VT_BSTR)
+    if (WmiGetProp(svc, L"SELECT Version,BuildNumber,Caption FROM Win32_OperatingSystem", L"Version", &v) && V_VT(&v) == VT_BSTR)
         wprintf(L"  WMI    Version         = %s\n", V_BSTR(&v));
     VariantClear(&v);
     {
@@ -157,7 +159,7 @@ int wmain(void)
             wprintf(L"  direct GetVersionExW    = %lu.%lu.%lu\n", ovi.dwMajorVersion, ovi.dwMinorVersion, ovi.dwBuildNumber);
     }
     ms.dwLength = sizeof(ms); GlobalMemoryStatusEx(&ms);
-    if (GetProp(svc, L"SELECT TotalVisibleMemorySize FROM Win32_OperatingSystem", L"TotalVisibleMemorySize", &v))
+    if (WmiGetProp(svc, L"SELECT TotalVisibleMemorySize FROM Win32_OperatingSystem", L"TotalVisibleMemorySize", &v))
     {
         VARIANT vs; VariantInit(&vs);
         if (SUCCEEDED(VariantChangeType(&vs, &v, 0, VT_UI8)))
@@ -171,7 +173,7 @@ int wmain(void)
     /* --- Win32_Processor: NumberOfLogicalProcessors vs GetSystemInfo --- */
     wprintf(L"== Win32_Processor ==\n");
     GetSystemInfo(&si);
-    if (GetProp(svc, L"SELECT NumberOfLogicalProcessors FROM Win32_Processor", L"NumberOfLogicalProcessors", &v))
+    if (WmiGetProp(svc, L"SELECT NumberOfLogicalProcessors FROM Win32_Processor", L"NumberOfLogicalProcessors", &v))
     {
         VARIANT vs; VariantInit(&vs);
         if (SUCCEEDED(VariantChangeType(&vs, &v, 0, VT_UI4)))
