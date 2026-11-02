@@ -123,9 +123,7 @@ typedef struct _THREADINFO
     BOOLEAN             QuitPosted;
     /* The quit exit code. */
     INT                 exitCode;
-    /* PeekMessage spin throttle: QPC of the previous peek and a count of
-     * consecutive back-to-back empty peeks, so the politeness yield fires
-     * only on a genuine spin, not on a message pump that is doing work. */
+    /* PeekMessage spin throttle: previous peek QPC and consecutive empty-peek count. */
     LONG64              llLastPeekTsc;
     ULONG               cEmptyPeekSpins;
     HDESK               hdesk;
