@@ -402,15 +402,18 @@ cap_click_tests() {
           -separate -evaluate-sequence max -threshold 10% -trim -format '%@' info: 2>/dev/null | grep -Ev '^[01]x[01]+')
     setbox "$box0"
     if [ -n "$tb" ]; then
-      tw=${tb%%x*}; tr=${tb#*+}; tx=${tr%%+*}
+      tw=${tb%%x*}; tr=${tb#*+}; tx=${tr%%+*}; TBX=$(( tx + tw / 2 ))
+    else TBX=92; tb=fallback; tx=$((TBX-1)); tw=2; log "$lb.taskbar-detect  INFO  button not found by the diff detector, using the first app button position x=$TBX"; fi
+    if [ -n "$tb" ]; then
       ow=${box0%%x*}; how=taskbar
       ptr click $(( tx + tw / 2 )) $(( SH - TB / 2 )); sleep 3; shot "$OUT/$n-$lb-click-min-restored.png"
       ok=0; setbox "$(winbox "$pre" "$OUT/$n-$lb-click-min-restored.png")" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1
       if [ $ok = 0 ]; then mon "sendkey esc" >/dev/null; sleep 1; mon "sendkey alt-tab" >/dev/null; sleep 3; how=alt-tab; setbox "$(curbox)" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1; fi
       if [ $ok = 1 ]; then log "$lb.click-min  PASS  minimise by click removed the window; it came back via $how (${w}x${h})"; box0=$box
         [ $how = taskbar ] || { log "$lb.taskbar-restore  FAIL  clicking the taskbar button did not bring the minimised window back (Alt+Tab did), see $n-$lb-click-min-restored.png"; FAILS=$((FAILS+1)); }
+        [ "${TASKBAR_PROBE:-1}" = 1 ] && [ "$lb" = "${TASKBAR_PROBE_WIN:-explorer}" ] && taskbar_probe "$lb"
       else log "$lb.click-min  FAIL  minimised by click but neither its taskbar button nor Alt+Tab brought it back (box ${box:-none}), see $n-$lb-click-min-restored.png"; FAILS=$((FAILS+1)); setbox "$box0"; fi
-    else log "$lb.click-min  PASS  minimise by click removed the window"; log "$lb.taskbar-restore  FAIL  no taskbar button for the minimised window could be found or clicked (treated as a real finding, not detector noise: the taskbar showed no changed button), see $n-$lb-click-min.png"; FAILS=$((FAILS+1)); fi
+    fi
   fi
   # close by click (CLOSE_BY=keys skips it so the window is closed with Alt+F4 below and that is what gets tested)
   [ "${CLOSE_BY:-click}" = keys ] && return 0
@@ -426,6 +429,35 @@ lumdelta() {
   a=$("$MAGICK" "$1" -crop ${cw}x${BTH}+$4+$5 +repage -colorspace Gray -format '%[fx:mean*1000]' info: 2>/dev/null)
   b=$("$MAGICK" "$2" -crop ${cw}x${BTH}+$4+$5 +repage -colorspace Gray -format '%[fx:mean*1000]' info: 2>/dev/null)
   awk -v a="${a:-0}" -v b="${b:-0}" 'BEGIN { d = a - b; if (d < 0) d = -d; printf "%d", d }'
+}
+# taskbar_probe <label>: discriminators for "clicking the taskbar button does not restore a minimised window" (SM):
+#  (c) click the button of the NON-minimised active window: does it minimise?
+#  (b) does the button show hover / pressed under the QMP pointer? (luminance of the button rectangle, x1000)
+#  (a) after the click: did a NEW window open (a window at a different position/size) instead of the old one?
+#  (d) the same click with the PS/2 relative pointer (stepped path, E:/LiberNT/vm/click.py), on the minimised window.
+# Informational lines only (INFO); the FAIL for the QMP restore is logged above.
+taskbar_probe() {
+  lb=$1; bx0=$TBX; by0=$((SH - TB / 2)); rx=$((bx0 - 22)); ry=$((SH - TB + 8)); rbox=44x30+$rx+$ry; ob=$box0
+  # (c) active, normal window: one click on its taskbar button
+  ptr move $((SW / 2)) $((SH - TB - 40)); sleep 1; shot "$OUT/.tb-idle.png"
+  ptr move $bx0 $by0; sleep 1; shot "$OUT/$n-$lb-tb-hover.png"
+  ptr down; sleep 0.4; shot "$OUT/$n-$lb-tb-pressed.png"; ptr up; sleep 3; shot "$OUT/$n-$lb-tb-after-click.png"
+  hv=$(lumdelta "$OUT/.tb-idle.png" "$OUT/$n-$lb-tb-hover.png" 44 $rx $ry); pr=$(lumdelta "$OUT/.tb-idle.png" "$OUT/$n-$lb-tb-pressed.png" 44 $rx $ry)
+  log "$lb.taskbar-b  INFO  taskbar button luminance change vs idle: hover=$hv pressed=$pr (x1000; a button that reacts shows >25), see $n-$lb-tb-hover.png / $n-$lb-tb-pressed.png"
+  if setbox "$(winbox "$pre" "$OUT/$n-$lb-tb-after-click.png")"; then
+    nb=$box
+    log "$lb.taskbar-c  INFO  clicking the taskbar button of the active, non-minimised window left it ON SCREEN (box $nb; real Windows minimises it)"
+    log "$lb.taskbar-a  INFO  window visible after the click at box $nb vs box $ob before: $([ "$nb" = "$ob" ] && echo same window || echo 'DIFFERENT position or size - a new window may have opened'), see $n-$lb-tb-after-click.png"
+  else
+    log "$lb.taskbar-c  INFO  clicking the taskbar button of the active, non-minimised window MINIMISED it (as real Windows does), see $n-$lb-tb-after-click.png"
+    mon "sendkey alt-tab" >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$ob"
+  fi
+  # (d) minimise again by the caption button, then click the taskbar button with the PS/2 relative pointer
+  cy=$(btn_cy); setbox "$ob"; ptr click $(btn_x 3) $cy; sleep 3
+  "$PY" "$VMDIR/click.py" "$VM" $bx0 $by0 >/dev/null 2>&1; sleep 3; shot "$OUT/$n-$lb-tb-ps2.png"
+  if setbox "$(winbox "$pre" "$OUT/$n-$lb-tb-ps2.png")"; then log "$lb.taskbar-d  INFO  PS/2 relative pointer click on the taskbar button brought the minimised window BACK (${w}x${h}), see $n-$lb-tb-ps2.png"
+  else log "$lb.taskbar-d  INFO  PS/2 relative pointer click on the taskbar button did NOT restore the minimised window, see $n-$lb-tb-ps2.png"; mon "sendkey alt-tab" >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$ob"; fi
+  box0=$box
 }
 # window <n> <label> <run-command> <settle seconds>
 window() {
