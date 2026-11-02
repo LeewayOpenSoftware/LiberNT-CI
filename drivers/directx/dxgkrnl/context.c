@@ -1548,6 +1548,7 @@ DxgkCreatePagingSystemContext(
     DxgkPresentLimitCoreInitialize(&Device->PresentLimit,
                                    DXGKRNL_DEFAULT_QUEUED_PRESENT_LIMIT);
     ExInitializeFastMutex(&Device->DeviceMutex);
+    KeInitializeMutex(&Device->WindowBltMutex, 0);
     KeInitializeEvent(&Device->ReferencesDrainedEvent,
                       NotificationEvent,
                       FALSE);
@@ -2115,6 +2116,7 @@ DxgkpCreateDevice(
 #endif
     DxgkPresentLimitCoreInitialize(&Device->PresentLimit, DXGKRNL_DEFAULT_QUEUED_PRESENT_LIMIT);
     ExInitializeFastMutex(&Device->DeviceMutex);
+    KeInitializeMutex(&Device->WindowBltMutex, 0);
     KeInitializeEvent(&Device->ReferencesDrainedEvent, NotificationEvent, FALSE);
 
     /*
@@ -2307,6 +2309,9 @@ NTAPI
 DxgkCreateDevice(
     _Inout_ D3DKMT_CREATEDEVICE *pCreateDevice)
 {
+    /* TODO: test devices once a test-signing mode exists; without it Windows 11 refuses them */
+    if (pCreateDevice == NULL || pCreateDevice->Flags.TestDevice)
+        return STATUS_INVALID_PARAMETER;
     return DxgkpCreateDevice(pCreateDevice, FALSE);
 }
 
@@ -2466,6 +2471,7 @@ DxgkCleanupAdapterDevices(
     Adapter->CddPrimaryBindingHandle = 0;
     Adapter->CddBindingGeneration = 0;
     DxgkpForgetCddCapture(Adapter);
+    DxgkForgetGdiBltTextures(Adapter);
     (VOID)KeWaitForSingleObject(&Adapter->AdapterMutex, Executive, KernelMode, FALSE, NULL);
     while (!IsListEmpty(&Adapter->DeviceListHead))
     {
@@ -2893,10 +2899,20 @@ DxgkCreateContextVirtual(
 
     if (pCreateContext == NULL || (pCreateContext->Flags.Value & ~RXGK_CREATECONTEXTVIRTUAL_SUPPORTED_FLAGS) != 0)
         return STATUS_INVALID_PARAMETER;
+    /* TODO: NoKmdAccess and TestContext contexts; Windows 11 refuses both from user mode in its default configuration */
+    if (pCreateContext->Flags.NoKmdAccess || pCreateContext->Flags.TestContext)
+        return STATUS_INVALID_PARAMETER;
 
     Status = DxgkReferenceOwnedDeviceByHandle(pCreateContext->hDevice, PsGetCurrentProcess(), &Adapter, &Device);
     if (!NT_SUCCESS(Status))
         return STATUS_INVALID_PARAMETER;
+
+    /* TODO: linked display adapters; a single physical adapter accepts engine affinity 0 or 1 only */
+    if (pCreateContext->EngineAffinity > 1 || pCreateContext->NodeOrdinal >= Adapter->NodeCount)
+    {
+        DxgkpDereferenceDevice(Device);
+        return STATUS_INVALID_PARAMETER;
+    }
 
     if (pCreateContext->NodeOrdinal >= Adapter->NodeCount ||
         !DxgkCapsCoreInterfaceVersionAtLeast(
@@ -2963,12 +2979,6 @@ DxgkCreateContextVirtual(
     CreateContextArg.Flags.Value = 0;
     CreateContextArg.Flags.VirtualAddressing = 1;
     CreateContextArg.Flags.GdiContext = Device->GdiDevice;
-    if (pCreateContext->Flags.TestContext &&
-        DxgkCapsCoreInterfaceVersionAtLeast(Adapter->MiniportContext->InitData.s.Version,
-                                            DXGK_CAPS_CORE_LEVEL_WDDM_3_2))
-    {
-        CreateContextArg.Flags.TestContext = 1;
-    }
     CreateContextArg.pPrivateDriverData = pCreateContext->pPrivateDriverData;
     CreateContextArg.PrivateDriverDataSize = pCreateContext->PrivateDriverDataSize;
 

@@ -1434,6 +1434,9 @@ struct _DXGKRNL_ADAPTER
     D3DKMT_HANDLE               CddPrimaryBindingHandle;
     ULONG64                     CddBindingGeneration;
     struct _DXGKRNL_CDD_CAPTURE *CddCapture;
+    BOOLEAN                     GdiHardwareAcceleration;
+    KMUTEX                      GdiBltTextureMutex;
+    LIST_ENTRY                  GdiBltTextureList;
     /* Set by an adapter reset and by a miniport Present that rejects the
      * persistent CDD bindings: the KMD's device-specific opens are gone and
      * the next Present must recreate them. */
@@ -1480,6 +1483,8 @@ struct _DXGKRNL_ADAPTER
     KSPIN_LOCK                  PagingBufferPoolLock;
     LIST_ENTRY                  PagingBufferPoolList;
     KEVENT                      PagingBufferPoolEvent;
+    /* Set by the completion DPC after it retires a node fence; waiters clear it before checking. */
+    KEVENT                      FenceProgressEvent;
 
     /*
      * GUID_DISPLAY_DEVICE_ARRIVAL device interface.
@@ -1634,6 +1639,12 @@ struct _DXGKRNL_DEVICE
     LIST_ENTRY                  OverlayListHead;
 
     FAST_MUTEX                  DeviceMutex;
+
+    /* Open of the window surface this device last Blt-presented to by window; protected by WindowBltMutex. */
+    KMUTEX                      WindowBltMutex;
+    ULONG                       WindowBltShare;
+    D3DKMT_HANDLE               WindowBltResource;
+    D3DKMT_HANDLE               WindowBltAllocation;
 };
 
 /* A published overlay owns its device and displayed-allocation references. */
@@ -3728,8 +3739,14 @@ DxgkCreateCaptureSurface(
     _In_ PDXGKRNL_DEVICE Device,
     _Inout_ struct _DXGK_REDIRECTION_SURFACE_CREATE *Create);
 
+NTSTATUS
+DxgkCreateGdiTextureSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ struct _DXGK_REDIRECTION_SURFACE_CREATE *Create);
+
 /* Adapter device cleanup owns the resources; discard only the cache record. */
 VOID DxgkpForgetCddCapture(_In_ PDXGKRNL_ADAPTER Adapter);
+VOID DxgkForgetGdiBltTextures(_In_ PDXGKRNL_ADAPTER Adapter);
 
 NTSTATUS
 DxgkDestroyRedirectionSurface(
@@ -3771,6 +3788,16 @@ DxgkPublishRedirectionPresent(
 
 NTSTATUS
 DxgkQueryWindowPresentState(_In_ ULONG_PTR WindowHandle);
+
+NTSTATUS
+DxgkIssueWindowBltTarget(
+    _In_ ULONG_PTR WindowHandle,
+    _Out_ PDXGKRNL_WINDOW_BLT_TARGET Target);
+
+VOID
+DxgkCancelWindowBltTarget(
+    _In_ ULONG_PTR WindowHandle,
+    _In_ ULONGLONG UpdateId);
 
 VOID
 DxgkRequestCompositionRefresh(VOID);
@@ -4638,6 +4665,12 @@ DxgkCommitTrackedDmaBuffer(
 VOID
 NTAPI
 DxgkAdoptTrackedDmaBuffer(
+    _In_ PDXGKRNL_SUBMIT_DMA_BUFFER Entry);
+
+/* The scheduler refused an adopted submission: its device work goes back to the submitter. */
+VOID
+NTAPI
+DxgkReturnAdoptedTrackedDmaBufferDeviceWork(
     _In_ PDXGKRNL_SUBMIT_DMA_BUFFER Entry);
 
 NTSTATUS

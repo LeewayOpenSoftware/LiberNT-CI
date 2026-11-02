@@ -927,7 +927,7 @@ BOOLEAN VidSchIsContextOrderPacketResubmittable(_In_ PVIDSCH_DMA_PACKET Packet)
         return FALSE;
     Engine = Packet->OwnerEngine;
     KeAcquireSpinLock(&Engine->QueueLock, &OldIrql);
-    Resubmittable = !Packet->Kicked && VidSchpReadState(Engine) == VidSchEngineIdle && Engine->Scheduler != NULL && (VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerRunning || VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerSuspending);
+    Resubmittable = !Packet->Kicked && VidSchPolicyResubmissionAllowed(VidSchpReadState(Engine), VidSchEngineIdle, VidSchEngineRunning) && Engine->Scheduler != NULL && (VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerRunning || VidSchpReadSchedulerState(Engine->Scheduler) == VidSchSchedulerSuspending);
     KeReleaseSpinLock(&Engine->QueueLock, OldIrql);
     return Resubmittable;
 }
@@ -2341,6 +2341,7 @@ VidSchpProcessCompletion(
 
     /* Signal completion event so VidSchWaitForIdle can wake up. */
     KeSetEvent(&Engine->CompletionEvent, IO_NO_INCREMENT, FALSE);
+    KeSetEvent(&Engine->Adapter->FenceProgressEvent, IO_NO_INCREMENT, FALSE);
 
 }
 
@@ -3949,6 +3950,7 @@ VidSchSubmitCommandTrackedMeasured(
     {
         Sched->ReleaseSlot(Sched->SchedulerHandle, Engine->SchedulerOrdinal);
         ExReleaseFastMutex(&Ctx->LifecycleMutex);
+        DxgkReturnAdoptedTrackedDmaBufferDeviceWork(Reservation);
         if (OrderedPacket)
             DxgkContextOrderAbortPacket(Packet, Status);
         if (OrderedContext != NULL)

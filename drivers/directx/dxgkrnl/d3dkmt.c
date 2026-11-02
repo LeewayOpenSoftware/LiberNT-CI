@@ -3318,126 +3318,67 @@ DxgkpQueryAdapterPerfDataClass(
     return STATUS_SUCCESS;
 }
 
-static SIZE_T
-DxgkpWideLength(
-    _In_reads_(MaxChars) PCWSTR String,
-    _In_ SIZE_T MaxChars)
-{
-    SIZE_T Length = 0;
-
-    while (Length < MaxChars && String[Length] != UNICODE_NULL)
-        ++Length;
-    return Length;
-}
+#if (NTDDI_VERSION < NTDDI_WINBLUE)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoQueryFullDriverPath(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _Out_ PUNICODE_STRING FullPath);
+#endif
 
 static NTSTATUS
 DxgkpQueryRegistryImagePath(
     _In_ PDXGKRNL_ADAPTER Adapter,
-    _In_ BOOLEAN Directory,
     _Outptr_ PWSTR *Path,
     _Out_ PULONG PathBytes)
 {
-    static const WCHAR SystemRootPrefix[] = L"\\SystemRoot\\";
-    static const WCHAR DosPrefix[] = L"\\??\\";
-    static const WCHAR StoreMarker[] = L"\\DriverStore\\FileRepository\\";
-    static const WCHAR System32[] = L"System32";
-    PKEY_VALUE_PARTIAL_INFORMATION ValueInfo = NULL;
-    HANDLE KeyHandle = NULL;
-    PCWSTR Image;
-    PCWSTR Root = NULL;
+    UNICODE_STRING FullPath;
     PWSTR Buffer;
-    SIZE_T ImageChars;
-    SIZE_T RootChars = 0;
-    SIZE_T Index;
-    SIZE_T TotalChars;
-    BOOLEAN InStore = FALSE;
     NTSTATUS Status;
 
     *Path = NULL;
     *PathBytes = 0;
-    Status = DxgkpOpenMiniportServiceKey(Adapter, &KeyHandle);
+    if (Adapter == NULL || Adapter->FunctionalDeviceObject == NULL ||
+        Adapter->FunctionalDeviceObject->DriverObject == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    RtlZeroMemory(&FullPath, sizeof(FullPath));
+    Status = IoQueryFullDriverPath(Adapter->FunctionalDeviceObject->DriverObject, &FullPath);
     if (!NT_SUCCESS(Status))
         return Status;
-    Status = DxgkpQueryRegistryValue(KeyHandle, L"ImagePath", &ValueInfo);
-    ZwClose(KeyHandle);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    if ((ValueInfo->Type != REG_SZ && ValueInfo->Type != REG_EXPAND_SZ) ||
-        ValueInfo->DataLength < sizeof(WCHAR))
+    Buffer = ExAllocatePoolWithTag(PagedPool, FullPath.Length + sizeof(WCHAR), TAG_DXGK_REGISTRY);
+    if (Buffer != NULL)
     {
-        ExFreePoolWithTag(ValueInfo, TAG_DXGK_REGISTRY);
-        return STATUS_OBJECT_TYPE_MISMATCH;
+        RtlCopyMemory(Buffer, FullPath.Buffer, FullPath.Length);
+        Buffer[FullPath.Length / sizeof(WCHAR)] = UNICODE_NULL;
+        *Path = Buffer;
+        *PathBytes = FullPath.Length;
     }
-
-    Image = (PCWSTR)ValueInfo->Data;
-    ImageChars = DxgkpWideLength(Image, ValueInfo->DataLength / sizeof(WCHAR));
-    if (ImageChars >= RTL_NUMBER_OF(SystemRootPrefix) - 1 &&
-        _wcsnicmp(Image, SystemRootPrefix, RTL_NUMBER_OF(SystemRootPrefix) - 1) == 0)
-    {
-        Image += RTL_NUMBER_OF(SystemRootPrefix) - 1;
-        ImageChars -= RTL_NUMBER_OF(SystemRootPrefix) - 1;
-        Root = SharedUserData->NtSystemRoot;
-    }
-    else if (ImageChars >= RTL_NUMBER_OF(DosPrefix) - 1 &&
-             wcsncmp(Image, DosPrefix, RTL_NUMBER_OF(DosPrefix) - 1) == 0)
-    {
-        Image += RTL_NUMBER_OF(DosPrefix) - 1;
-        ImageChars -= RTL_NUMBER_OF(DosPrefix) - 1;
-    }
-    else if (ImageChars < 2 || Image[1] != L':')
-    {
-        Root = SharedUserData->NtSystemRoot;
-    }
-    if (Root != NULL)
-        RootChars = DxgkpWideLength(Root, RTL_NUMBER_OF(SharedUserData->NtSystemRoot));
-
-    for (Index = 0; Index + RTL_NUMBER_OF(StoreMarker) - 1 <= ImageChars; ++Index)
-    {
-        if (_wcsnicmp(Image + Index, StoreMarker, RTL_NUMBER_OF(StoreMarker) - 1) == 0)
-        {
-            InStore = TRUE;
-            break;
-        }
-    }
-    if (Directory)
-    {
-        if (InStore)
-        {
-            while (ImageChars > 0 && Image[ImageChars - 1] != L'\\')
-                --ImageChars;
-            if (ImageChars > 0)
-                --ImageChars;
-        }
-        else
-        {
-            Image = System32;
-            ImageChars = RTL_NUMBER_OF(System32) - 1;
-            Root = SharedUserData->NtSystemRoot;
-            RootChars = DxgkpWideLength(Root, RTL_NUMBER_OF(SharedUserData->NtSystemRoot));
-        }
-    }
-
-    TotalChars = (Root != NULL ? RootChars + 1 : 0) + ImageChars + 1;
-    Buffer = ExAllocatePoolWithTag(PagedPool, TotalChars * sizeof(WCHAR), TAG_DXGK_REGISTRY);
-    if (Buffer == NULL)
-    {
-        ExFreePoolWithTag(ValueInfo, TAG_DXGK_REGISTRY);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
-    Index = 0;
-    if (Root != NULL)
-    {
-        RtlCopyMemory(Buffer, Root, RootChars * sizeof(WCHAR));
-        Index = RootChars;
-        Buffer[Index++] = L'\\';
-    }
-    RtlCopyMemory(Buffer + Index, Image, ImageChars * sizeof(WCHAR));
-    Buffer[Index + ImageChars] = UNICODE_NULL;
-    ExFreePoolWithTag(ValueInfo, TAG_DXGK_REGISTRY);
-    *Path = Buffer;
-    *PathBytes = (ULONG)(TotalChars * sizeof(WCHAR));
-    return STATUS_SUCCESS;
+    ExFreePool(FullPath.Buffer);
+    return Buffer != NULL ? STATUS_SUCCESS : STATUS_INSUFFICIENT_RESOURCES;
 }
+
+static VOID
+DxgkpTrimDriverStorePath(
+    _Inout_ PWSTR Path,
+    _In_ PWSTR Repository,
+    _Out_ PULONG PathBytes)
+{
+    PWSTR Cursor = Repository;
+
+    while (*Cursor != UNICODE_NULL && *Cursor != L'\\')
+        ++Cursor;
+    if (*Cursor != UNICODE_NULL)
+        ++Cursor;
+    while (*Cursor != UNICODE_NULL && *Cursor != L'\\')
+        ++Cursor;
+    *Cursor = UNICODE_NULL;
+    *PathBytes = (ULONG)((Cursor - Path) * sizeof(WCHAR));
+}
+
+#define DXGKP_QUERYREGISTRY_PATH_OVERFLOW_PAD 16
 
 static NTSTATUS
 DxgkpQueryRegistryInfo(
@@ -3454,9 +3395,13 @@ DxgkpQueryRegistryInfo(
     PWSTR PathBuffer = NULL;
     PWSTR ValueName;
     PWSTR Separator;
+    PWSTR Repository;
     const VOID *Data = NULL;
     ULONG DataBytes = 0;
+    ULONG RequiredBytes = 0;
     ULONG Capacity;
+    BOOLEAN PathQuery = FALSE;
+    BOOLEAN Overflow = FALSE;
     NTSTATUS Status;
 
     if (Info == NULL || Size < sizeof(D3DDDI_QUERYREGISTRY_INFO))
@@ -3473,7 +3418,7 @@ DxgkpQueryRegistryInfo(
     Request.ValueName[RTL_NUMBER_OF(Request.ValueName) - 1] = UNICODE_NULL;
     Capacity = Size - FIELD_OFFSET(D3DDDI_QUERYREGISTRY_INFO, OutputDword);
 
-    if (Request.QueryFlags.MutableValue || Request.QueryFlags.Reserved || Request.PhysicalAdapterIndex != 0)
+    if (Request.QueryFlags.Reserved || Request.PhysicalAdapterIndex != 0)
     {
         Status = STATUS_INVALID_PARAMETER;
     }
@@ -3494,14 +3439,18 @@ DxgkpQueryRegistryInfo(
         }
         if (NT_SUCCESS(Status))
         {
+            PWSTR SubKeyName = Request.ValueName;
+
             ValueName = Request.ValueName;
             Separator = wcsrchr(Request.ValueName, L'\\');
             ValueKey = RootKey;
-            if (Separator != NULL)
+            if (Separator != NULL && Separator != Request.ValueName)
             {
                 *Separator = UNICODE_NULL;
                 ValueName = Separator + 1;
-                RtlInitUnicodeString(&SubKey, Request.ValueName);
+                while (*SubKeyName == L'\\')
+                    SubKeyName++;
+                RtlInitUnicodeString(&SubKey, SubKeyName);
                 InitializeObjectAttributes(&ObjectAttributes, &SubKey, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
                                            RootKey, NULL);
                 Status = ZwOpenKey(&ValueKey, KEY_READ, &ObjectAttributes);
@@ -3518,25 +3467,50 @@ DxgkpQueryRegistryInfo(
         {
             if (ValueInfo->Type != Request.ValueType)
             {
-                Status = STATUS_OBJECT_TYPE_MISMATCH;
+                Status = STATUS_INVALID_PARAMETER;
             }
             else
             {
                 Data = ValueInfo->Data;
                 DataBytes = ValueInfo->DataLength;
+                if (DataBytes > Capacity)
+                {
+                    Overflow = TRUE;
+                    RequiredBytes = DataBytes;
+                }
             }
         }
     }
     else if (Request.QueryType == D3DDDI_QUERYREGISTRY_DRIVERSTOREPATH ||
              Request.QueryType == D3DDDI_QUERYREGISTRY_DRIVERIMAGEPATH)
     {
-        if (Request.ValueType != 0)
+        PathQuery = TRUE;
+        if (Request.ValueType != 0 || Request.QueryFlags.TranslatePath)
             Status = STATUS_INVALID_PARAMETER;
         else
-            Status = DxgkpQueryRegistryImagePath(Adapter,
-                                                 Request.QueryType == D3DDDI_QUERYREGISTRY_DRIVERSTOREPATH,
-                                                 &PathBuffer,
-                                                 &DataBytes);
+            Status = DxgkpQueryRegistryImagePath(Adapter, &PathBuffer, &DataBytes);
+        if (NT_SUCCESS(Status) && Request.QueryType == D3DDDI_QUERYREGISTRY_DRIVERIMAGEPATH &&
+            DataBytes + sizeof(WCHAR) > Capacity)
+        {
+            Overflow = TRUE;
+            RequiredBytes = DataBytes;
+        }
+        else if (NT_SUCCESS(Status) && Request.QueryType == D3DDDI_QUERYREGISTRY_DRIVERSTOREPATH)
+        {
+            if (DataBytes + sizeof(WCHAR) >= Capacity)
+            {
+                Overflow = TRUE;
+                RequiredBytes = DataBytes + sizeof(WCHAR);
+            }
+            else if ((Repository = wcsstr(PathBuffer, L"FileRepository")) == NULL)
+            {
+                Status = STATUS_INVALID_PARAMETER;
+            }
+            else
+            {
+                DxgkpTrimDriverStorePath(PathBuffer, Repository, &DataBytes);
+            }
+        }
         Data = PathBuffer;
     }
     else
@@ -3549,21 +3523,19 @@ DxgkpQueryRegistryInfo(
         if (!NT_SUCCESS(Status))
         {
             Info->Status = D3DDDI_QUERYREGISTRY_STATUS_FAIL;
-            if (Status == STATUS_OBJECT_NAME_NOT_FOUND ||
-                Status == STATUS_OBJECT_PATH_NOT_FOUND ||
-                Status == STATUS_OBJECT_TYPE_MISMATCH)
-            {
-                Status = STATUS_SUCCESS;
-            }
         }
-        else if (DataBytes > Capacity)
+        else if (Overflow)
         {
-            Info->OutputValueSize = DataBytes;
+            Info->OutputValueSize = RequiredBytes;
+            if (PathQuery || Request.QueryFlags.TranslatePath)
+                Info->OutputValueSize += DXGKP_QUERYREGISTRY_PATH_OVERFLOW_PAD;
             Info->Status = D3DDDI_QUERYREGISTRY_STATUS_BUFFER_OVERFLOW;
         }
         else
         {
             RtlCopyMemory(Info->OutputBinary, Data, DataBytes);
+            if (PathQuery)
+                Info->OutputString[DataBytes / sizeof(WCHAR)] = UNICODE_NULL;
             Info->OutputValueSize = DataBytes;
             Info->Status = D3DDDI_QUERYREGISTRY_STATUS_SUCCESS;
         }
@@ -6310,10 +6282,10 @@ DxgkpEscapeCaptured(
                                         &SignalSyncObject,
                                         &SignalFenceValue))
         {
-            if (EscDevice == NULL)
+            if (EscDevice == NULL || (Adapter->SchedulingCaps.MultiEngineAware && EscContext == NULL))
             {
-                DXGKRNL_WARN("DxgkEscape: command packet without valid device 0x%X\n",
-                             pEscape->hDevice);
+                DXGKRNL_WARN("DxgkEscape: command packet without valid device 0x%X or context 0x%X\n",
+                             pEscape->hDevice, pEscape->hContext);
                 Status = STATUS_INVALID_PARAMETER;
                 goto Cleanup;
             }
@@ -9271,13 +9243,62 @@ DxgkWaitForSynchronizationObject2(
  * are safe to read here and cannot change underneath the scheduler.
  */
 static NTSTATUS
-NTAPI
-DxgkWaitForSynchronizationObjectFromGpu(
-    _In_ CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *pData)
+DxgkpSelectGpuSyncValues(
+    _In_reads_(ObjectCount) CONST D3DKMT_HANDLE *ObjectHandles,
+    _In_ ULONG ObjectCount,
+    _In_ UINT64 UnionValue,
+    _In_opt_ CONST RXGK_GPU_SYNC_VALUES *Captured,
+    _Out_ PUINT64 FenceValue,
+    _Outptr_result_maybenull_ CONST UINT64 **FenceValueArray)
+{
+    PDXGKRNL_SYNC_OBJECT SyncObject;
+    BOOLEAN Monitored = FALSE;
+    BOOLEAN Legacy = FALSE;
+    BOOLEAN Fence = FALSE;
+    ULONG Index;
+
+    *FenceValue = 0;
+    *FenceValueArray = NULL;
+    for (Index = 0; Index < ObjectCount; ++Index)
+    {
+        if (!NT_SUCCESS(DxgkpReferenceSyncObjectByHandle(ObjectHandles[Index], PsGetCurrentProcess(), &SyncObject)))
+            continue;
+        if (SyncObject->PublicType >= D3DDDI_MONITORED_FENCE)
+            Monitored = TRUE;
+        else
+            Legacy = TRUE;
+        if (SyncObject->PublicType == D3DDDI_FENCE)
+            Fence = TRUE;
+        DxgkpDereferenceSyncObject(SyncObject);
+    }
+    if (Monitored && Legacy)
+        return STATUS_INVALID_PARAMETER;
+    if (Fence)
+    {
+        *FenceValue = UnionValue;
+    }
+    else if (Monitored && UnionValue != 0)
+    {
+        if (Captured == NULL)
+            *FenceValueArray = (CONST UINT64 *)(ULONG_PTR)UnionValue;
+        else if (!NT_SUCCESS(Captured->CaptureStatus))
+            return Captured->CaptureStatus;
+        else
+            *FenceValueArray = Captured->Values;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+DxgkpWaitForSynchronizationObjectFromGpu(
+    _In_ CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *pData,
+    _In_opt_ CONST RXGK_GPU_SYNC_VALUES *Captured)
 {
     PDXGKRNL_ADAPTER Adapter;
     PDXGKRNL_DEVICE Device;
     PDXGKRNL_CONTEXT Context;
+    CONST UINT64 *FenceValueArray;
+    UINT64 FenceValue;
     NTSTATUS Status;
 
     PAGED_CODE();
@@ -9285,18 +9306,29 @@ DxgkWaitForSynchronizationObjectFromGpu(
         return STATUS_INVALID_PARAMETER;
     if (pData->ObjectCount == 0 || pData->ObjectCount > D3DDDI_MAX_OBJECT_WAITED_ON)
         return STATUS_INVALID_PARAMETER;
-    if (pData->ObjectHandleArray == NULL || pData->MonitoredFenceValueArray == NULL)
+    if (pData->ObjectHandleArray == NULL)
         return STATUS_INVALID_PARAMETER;
 
     Status = DxgkReferenceContextByHandle(pData->hContext, PsGetCurrentProcess(), &Adapter, &Device, &Context);
     if (!NT_SUCCESS(Status))
         return Status;
     ASSERT(Context->Device == Device && Device->Adapter == Adapter);
-    Status = DxgkContextOrderAdmitWait(Context, DxgkContextSyncOperationWait2,
-                                       pData->ObjectHandleArray, pData->ObjectCount,
-                                       0, pData->MonitoredFenceValueArray, KernelMode);
+    Status = DxgkpSelectGpuSyncValues(pData->ObjectHandleArray, pData->ObjectCount, pData->FenceValue, Captured,
+                                      &FenceValue, &FenceValueArray);
+    if (NT_SUCCESS(Status))
+        Status = DxgkContextOrderAdmitWait(Context, DxgkContextSyncOperationWait2,
+                                           pData->ObjectHandleArray, pData->ObjectCount,
+                                           FenceValue, FenceValueArray, KernelMode);
     DxgkDereferenceContext(Context);
     return Status;
+}
+
+static NTSTATUS
+NTAPI
+DxgkWaitForSynchronizationObjectFromGpu(
+    _In_ CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *pData)
+{
+    return DxgkpWaitForSynchronizationObjectFromGpu(pData, NULL);
 }
 
 static NTSTATUS
@@ -9329,12 +9361,14 @@ DxgkSignalSynchronizationObjectFromGpu(
 }
 
 static NTSTATUS
-NTAPI
-DxgkSignalSynchronizationObjectFromGpu2(
-    _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *pData)
+DxgkpSignalSynchronizationObjectFromGpu2(
+    _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *pData,
+    _In_opt_ CONST RXGK_GPU_SYNC_VALUES *Captured)
 {
     PDXGKRNL_CONTEXT Contexts[D3DDDI_MAX_BROADCAST_CONTEXT];
     PDXGKRNL_ADAPTER Adapter = NULL;
+    CONST UINT64 *FenceValueArray;
+    UINT64 FenceValue;
     ULONG ContextCount = 0;
     ULONG SignalFlags = 0;
     ULONG Index;
@@ -9391,12 +9425,12 @@ DxgkSignalSynchronizationObjectFromGpu2(
         SignalFlags = DXGK_CONTEXT_SYNC_ENQUEUE_CPU_EVENT;
         Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2,
                                              NULL, 0, SignalFlags,
-                                             (UINT64)(ULONG_PTR)pData->CpuEventHandle, NULL, KernelMode);
+                                             (UINT64)(ULONG_PTR)pData->CpuEventHandle, NULL, UserMode);
         goto Cleanup;
     }
 
     if (pData->ObjectCount == 0 || pData->ObjectCount > D3DDDI_MAX_OBJECT_SIGNALED ||
-        pData->ObjectHandleArray == NULL || pData->MonitoredFenceValueArray == NULL)
+        pData->ObjectHandleArray == NULL)
     {
         Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
@@ -9404,14 +9438,25 @@ DxgkSignalSynchronizationObjectFromGpu2(
     if (pData->Flags.AllowFenceRewind)
         SignalFlags |= DXGK_CONTEXT_SYNC_ALLOW_FENCE_REWIND;
 
-    Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2,
-                                         pData->ObjectHandleArray, pData->ObjectCount,
-                                         SignalFlags, 0, pData->MonitoredFenceValueArray, KernelMode);
+    Status = DxgkpSelectGpuSyncValues(pData->ObjectHandleArray, pData->ObjectCount, pData->FenceValue, Captured,
+                                      &FenceValue, &FenceValueArray);
+    if (NT_SUCCESS(Status))
+        Status = DxgkContextOrderAdmitSignal(Contexts, ContextCount, DxgkContextSyncOperationSignal2,
+                                             pData->ObjectHandleArray, pData->ObjectCount,
+                                             SignalFlags, FenceValue, FenceValueArray, KernelMode);
 
 Cleanup:
     for (Index = 0; Index < ContextCount; ++Index)
         DxgkDereferenceContext(Contexts[Index]);
     return Status;
+}
+
+static NTSTATUS
+NTAPI
+DxgkSignalSynchronizationObjectFromGpu2(
+    _In_ CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *pData)
+{
+    return DxgkpSignalSynchronizationObjectFromGpu2(pData, NULL);
 }
 
 static NTSTATUS
@@ -10628,10 +10673,10 @@ DxgkProcessPriorityCleanup(
 
 /*
  * Correlates the engine's clock with the CPU's so a profiler can put GPU
- * timestamps on the same timeline as CPU ones.  Every engine in this tree is
- * executed by the CPU, so the two counters are the same counter -- reporting
- * one performance-counter reading for both is the honest answer, and it is what
- * the reference VM's display-only adapter reports too.
+ * timestamps on the same timeline as CPU ones.  A miniport that implements
+ * DxgkDdiCalibrateGpuClock owns its GPU clock; engines executed by the CPU
+ * share the performance counter, which is what the reference VM's
+ * display-only adapter reports too.
  */
 static NTSTATUS
 NTAPI
@@ -10639,6 +10684,8 @@ DxgkQueryClockCalibration(
     _Inout_ D3DKMT_QUERYCLOCKCALIBRATION *pData)
 {
     PDXGKRNL_ADAPTER Adapter;
+    PDXGKDDI_CALIBRATEGPUCLOCK CalibrateGpuClock;
+    DXGKARG_CALIBRATEGPUCLOCK Calibration;
     LARGE_INTEGER Counter;
     LARGE_INTEGER Frequency;
     NTSTATUS Status;
@@ -10654,6 +10701,28 @@ DxgkQueryClockCalibration(
     {
         DxgkDereferenceAdapter(Adapter);
         return STATUS_INVALID_PARAMETER;
+    }
+
+    CalibrateGpuClock = DXGK_CB_FULL(Adapter, DxgkDdiCalibrateGpuClock);
+    if (CalibrateGpuClock != NULL)
+    {
+        if (!DxgkAcquireKmdCall(Adapter))
+        {
+            DxgkDereferenceAdapter(Adapter);
+            return STATUS_DEVICE_NOT_READY;
+        }
+        RtlZeroMemory(&Calibration, sizeof(Calibration));
+        Status = CalibrateGpuClock(Adapter->MiniportDeviceContext, pData->NodeOrdinal, 0, &Calibration);
+        DxgkReleaseKmdCall(Adapter);
+        if (NT_SUCCESS(Status))
+        {
+            RtlZeroMemory(&pData->ClockData, sizeof(pData->ClockData));
+            pData->ClockData.GpuFrequency = Calibration.GpuFrequency;
+            pData->ClockData.GpuClockCounter = Calibration.GpuClockCounter;
+            pData->ClockData.CpuClockCounter = Calibration.CpuClockCounter;
+        }
+        DxgkDereferenceAdapter(Adapter);
+        return Status;
     }
 
     Counter = KeQueryPerformanceCounter(&Frequency);
@@ -10955,6 +11024,12 @@ DxgkSubmitCommand(
     {
         DxgkDereferenceContext(Context);
         return Status;
+    }
+    /* TODO: INFO_NEEDED: NullRendering submissions on contexts created without NullRendering; Windows 11 refuses every probed one on a NullRendering context */
+    if (SubmitCommand->Flags.NullRendering && Context->UserModeCreateFlags.NullRendering && Adapter->GpuMmuCapsValid)
+    {
+        DxgkDereferenceContext(Context);
+        return STATUS_INVALID_PARAMETER;
     }
     if (SubmitCommand->Commands == 0)
     {
@@ -12480,6 +12555,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 Packet->Version != RXGK_WDDM_PACKET_VERSION_1 ||
                 Packet->PagingQueueHandle == 0 ||
                 Packet->AllocationHandle == 0 ||
+                Packet->PropertyMaskValue == 0 ||
                 (Packet->PropertyMaskValue & ~0x7UL) != 0)
             {
                 return STATUS_INVALID_PARAMETER;
@@ -12581,8 +12657,20 @@ DxgkpDispatchBufferedIoctlWorker(
             Status = DxgkCreateContextVirtual(&Request);
             if (NT_SUCCESS(Status))
             {
+                PDXGKRNL_ADAPTER ContextAdapter;
+                PDXGKRNL_DEVICE ContextDevice;
+                BOOLEAN ReturnPrivateData = FALSE;
+
                 Packet->ContextHandle = Request.hContext;
-                KmtRequest->Information = sizeof(*Packet);
+                if (Packet->PrivateDriverDataSize != 0 && OutputLength >= Packet->Size &&
+                    NT_SUCCESS(DxgkpValidateDeviceHandleForIoctl(Request.hDevice, &ContextAdapter, &ContextDevice)))
+                {
+                    ReturnPrivateData = !ContextAdapter->MiniportContext->UseDodLayout &&
+                        DxgkCapsCoreInterfaceVersionAtLeast(ContextAdapter->MiniportContext->InitData.s.Version,
+                                                            DXGK_CAPS_CORE_LEVEL_WDDM_2_2);
+                    DxgkDereferenceDevice(ContextDevice);
+                }
+                KmtRequest->Information = ReturnPrivateData ? Packet->Size : sizeof(*Packet);
             }
             return Status;
         }
@@ -13337,7 +13425,7 @@ DxgkpDispatchBufferedIoctlWorker(
                 return STATUS_BUFFER_TOO_SMALL;
 
             pEvict = (D3DKMT_EVICT_LOCAL *)SystemBuffer;
-            if (pEvict->hDevice == 0 || pEvict->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || (pEvict->NumAllocations != 0 && pEvict->AllocationList == NULL) || pEvict->Flags.Reserved != 0)
+            if (pEvict->hDevice == 0 || pEvict->NumAllocations == 0 || pEvict->NumAllocations > DXGKP_MAX_D3DKMT_LIST_COUNT || pEvict->AllocationList == NULL || pEvict->Flags.Reserved != 0)
                 return STATUS_INVALID_PARAMETER;
 
             Status = DxgkReferenceOwnedDeviceByHandle(pEvict->hDevice, PsGetCurrentProcess(), &Adapter, &Device);
@@ -14445,7 +14533,10 @@ DxgkpDispatchBufferedIoctlWorker(
             if (InputLength < sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
 
-            return DxgkWaitForSynchronizationObjectFromGpu((CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *)SystemBuffer);
+            return DxgkpWaitForSynchronizationObjectFromGpu(
+                (CONST D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU *)SystemBuffer,
+                InputLength >= sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU) + sizeof(RXGK_GPU_SYNC_VALUES) ?
+                    (CONST RXGK_GPU_SYNC_VALUES *)((PUCHAR)SystemBuffer + sizeof(D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMGPU)) : NULL);
         }
 
         case IOCTL_D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU:
@@ -14461,7 +14552,10 @@ DxgkpDispatchBufferedIoctlWorker(
             if (InputLength < sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2) || SystemBuffer == NULL)
                 return STATUS_BUFFER_TOO_SMALL;
 
-            return DxgkSignalSynchronizationObjectFromGpu2((CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *)SystemBuffer);
+            return DxgkpSignalSynchronizationObjectFromGpu2(
+                (CONST D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2 *)SystemBuffer,
+                InputLength >= sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2) + sizeof(RXGK_GPU_SYNC_VALUES) ?
+                    (CONST RXGK_GPU_SYNC_VALUES *)((PUCHAR)SystemBuffer + sizeof(D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMGPU2)) : NULL);
         }
 
         case IOCTL_D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU:

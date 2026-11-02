@@ -365,7 +365,7 @@ typedef struct _DXGKVMM_VIRTUAL_DMA_BACKING
         BOOLEAN Write;
         BOOLEAN Pinned;
         BOOLEAN Borrowed;
-    } DataMappings[2];
+    } DataMappings[8];
 } DXGKVMM_VIRTUAL_DMA_BACKING, *PDXGKVMM_VIRTUAL_DMA_BACKING;
 
 typedef struct _DXGKVMM_ALLOCATION_SNAPSHOT_ENTRY
@@ -1693,17 +1693,22 @@ DxgkVidMmMapVirtualPresentAllocation(
         (VOID)DxgkpVidMmFreeVirtualDmaBufferMapping(Backing, Index);
         break;
     }
-    /* Make room by retiring an idle mapping of some other binding. */
+    /* Make room by retiring an idle mapping of another binding, borrowed first: only an owned one costs a page-table update. */
     if (Backing->DataMappingCount >= RTL_NUMBER_OF(Backing->DataMappings))
     {
+        ULONG Victim = MAXULONG;
+
         for (Index = 0; Index < Backing->DataMappingCount; Index++)
         {
-            if (!Backing->DataMappings[Index].Pinned)
-            {
-                (VOID)DxgkpVidMmFreeVirtualDmaBufferMapping(Backing, Index);
+            if (Backing->DataMappings[Index].Pinned)
+                continue;
+            if (Victim == MAXULONG || Backing->DataMappings[Index].Borrowed)
+                Victim = Index;
+            if (Backing->DataMappings[Index].Borrowed)
                 break;
-            }
         }
+        if (Victim != MAXULONG)
+            (VOID)DxgkpVidMmFreeVirtualDmaBufferMapping(Backing, Victim);
         if (Backing->DataMappingCount >= RTL_NUMBER_OF(Backing->DataMappings))
             return STATUS_INVALID_PARAMETER;
     }
@@ -8491,6 +8496,7 @@ C_ASSERT(sizeof(D3DKMT_CREATEALLOCATIONFLAGS) == sizeof(UINT));
 #define DXGKP_CA_FLAG_STANDARD_ALLOCATION   0x00010000U
 #define DXGKP_CA_FLAG_EXISTING_SECTION      0x00020000U
 #define DXGKP_CA_FLAG_ALLOW_NOT_ZEROED       0x00040000U
+#define DXGKP_CA_FLAG_NO_KMD_ACCESS          0x00100000U
 #define DXGKP_CA_KNOWN_FLAGS_WDDM_1_0       0x0000003FU
 #define DXGKP_CA_KNOWN_FLAGS_WDDM_1_2       0x000007FFU
 #define DXGKP_CA_KNOWN_FLAGS_WDDM_1_3       0x0000FFFFU
@@ -8570,6 +8576,9 @@ DxgkpValidateCreateAllocationFlags(
                  DXGKP_CA_FLAG_ALLOW_NOT_ZEROED;
     *StandardAllocation = (RawFlags & DXGKP_CA_FLAG_STANDARD_ALLOCATION) != 0;
     if ((RawFlags & ~KnownFlags) != 0 || (RawFlags & DXGKP_CA_INVALID_INPUT_FLAGS_MASK) != 0)
+        return STATUS_INVALID_PARAMETER;
+    /* TODO: NoKmdAccess allocations once a test-signing mode exists; without it Windows 11 refuses them */
+    if ((RawFlags & DXGKP_CA_FLAG_NO_KMD_ACCESS) != 0)
         return STATUS_INVALID_PARAMETER;
     if ((RawFlags & DXGKP_CA_FLAG_CREATE_SHARED) != 0 && (RawFlags & DXGKP_CA_FLAG_CREATE_RESOURCE) == 0)
         return STATUS_INVALID_PARAMETER;

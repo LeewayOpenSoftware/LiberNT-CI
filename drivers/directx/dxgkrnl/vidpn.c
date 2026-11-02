@@ -6394,6 +6394,14 @@ DxgkCreateRedirectionSurface(
 }
 
 NTSTATUS
+DxgkCreateGdiTextureSurface(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PDXGK_REDIRECTION_SURFACE_CREATE Create)
+{
+    return DxgkpCreateGdiSurface(Adapter, NULL, Create, D3DKMDT_GDISURFACE_TEXTURE);
+}
+
+NTSTATUS
 DxgkCreateCaptureSurface(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ PDXGKRNL_DEVICE Device,
@@ -6420,6 +6428,7 @@ DxgkDestroyRedirectionSurface(
         return STATUS_INVALID_PARAMETER;
     }
 
+    DxgkRetireGdiBltTexture(Adapter, Destroy->GlobalShare);
     Status = DxgkVidMmReferenceResource(
         Destroy->ResourceHandle, FALSE, NULL, &Resource);
     if (!NT_SUCCESS(Status))
@@ -7108,7 +7117,15 @@ DxgkSetDisplayMode(
     Status = DxgkVidMmReferenceAllocation((HANDLE)(ULONG_PTR)pSetDisplayMode->hPrimaryAllocation, Adapter, Device, &Allocation);
     if (!NT_SUCCESS(Status))
     {
-        Status = STATUS_INVALID_HANDLE;
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    if (pSetDisplayMode->ScanLineOrdering < D3DDDI_VSSLO_PROGRESSIVE ||
+        pSetDisplayMode->ScanLineOrdering > D3DDDI_VSSLO_INTERLACED_LOWERFIELDFIRST ||
+        pSetDisplayMode->DisplayOrientation < D3DDDI_ROTATION_IDENTITY ||
+        pSetDisplayMode->DisplayOrientation > D3DDDI_ROTATION_270)
+    {
+        Status = STATUS_INVALID_PARAMETER;
         goto Cleanup;
     }
     VidPnSourceId = Allocation->PrimaryVidPnSourceId;
