@@ -210,6 +210,23 @@ Probe(void)
     WCHAR Text[32], Path[MAX_PATH];
     const WCHAR *Strs[1];
 
+    /* the service host runs as SYSTEM: an administrator needs SeDebugPrivilege to open it */
+    {
+        HANDLE tok;
+        TOKEN_PRIVILEGES tp;
+
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok))
+        {
+            tp.PrivilegeCount = 1;
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            if (LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid))
+                AdjustTokenPrivileges(tok, FALSE, &tp, 0, NULL, NULL);
+            wprintf(L"SeDebugPrivilege: %ls (%lu)
+", GetLastError() == ERROR_SUCCESS ? L"enabled" : L"not held", GetLastError());
+            CloseHandle(tok);
+        }
+    }
+
     scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
     svc = scm ? OpenServiceW(scm, L"eventlog", SERVICE_QUERY_STATUS) : NULL;
     if (!svc || !QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp, sizeof(ssp), &needed))
@@ -219,6 +236,8 @@ Probe(void)
     }
     wprintf(L"eventlog host PID = %lu\n", ssp.dwProcessId);
     proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, ssp.dwProcessId);
+    if (!proc)
+        proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ssp.dwProcessId);
     if (!proc)
     {
         wprintf(L"OpenProcess failed: %lu\n", GetLastError());
@@ -273,6 +292,36 @@ Probe(void)
     return 0;
 }
 
+/* elfdump /hdr <file>: raw header of an .evt file (read with full sharing while the service has it open) */
+static int
+Hdr(const WCHAR *Path)
+{
+    HANDLE f = CreateFileW(Path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, 0, NULL);
+    DWORD h[12], got = 0, sizelo, sizehi;
+
+    if (f == INVALID_HANDLE_VALUE)
+    {
+        wprintf(L"cannot open %ls: %lu
+", Path, GetLastError());
+        return 1;
+    }
+    sizelo = GetFileSize(f, &sizehi);
+    if (!ReadFile(f, h, sizeof(h), &got, NULL) || got < sizeof(h))
+    {
+        wprintf(L"cannot read the header: %lu
+", GetLastError());
+        CloseHandle(f);
+        return 1;
+    }
+    wprintf(L"file size=%lu header: HeaderSize=%lu Signature=%08lx Major=%lu Minor=%lu StartOffset=%lu EndOffset=%lu "
+            L"CurrentRecord=%lu OldestRecord=%lu MaxSize=%lu Flags=%lx Retention=%lu
+",
+            sizelo, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10]);
+    CloseHandle(f);
+    return 0;
+}
+
 static int Dump(int argc, WCHAR **argv);
 
 int wmain(int argc, WCHAR **argv)
@@ -283,6 +332,8 @@ int wmain(int argc, WCHAR **argv)
         return Bounds();
     if (argc > 1 && !wcscmp(argv[1], L"/probe"))
         return Probe();
+    if (argc > 2 && !wcscmp(argv[1], L"/hdr"))
+        return Hdr(argv[2]);
 
     return Dump(argc, argv);
 }
