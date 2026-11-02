@@ -24,7 +24,21 @@
 #include <wbemcli.h>
 #include <tlhelp32.h>
 #include <winsvc.h>
+#include <psapi.h>
 #include <stdio.h>
+
+/* overhead helpers (god report): current working set in KB, and QPC delta in ms. */
+static ULONGLONG ws_kb(void)
+{
+    PROCESS_MEMORY_COUNTERS pmc; pmc.cb = sizeof(pmc);
+    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof(pmc)))
+        return (ULONGLONG)(pmc.WorkingSetSize / 1024);
+    return 0;
+}
+static double qpc_ms(LARGE_INTEGER a, LARGE_INTEGER b, LARGE_INTEGER f)
+{
+    return (double)(b.QuadPart - a.QuadPart) * 1000.0 / (double)f.QuadPart;
+}
 
 static ULONGLONG CountQuery(IWbemServices *svc, const WCHAR *wql, const WCHAR *keyprop,
                             WCHAR *sample, int samplelen)
@@ -125,6 +139,7 @@ int wmain(void)
     SYSTEM_INFO si;
     MEMORYSTATUSEX ms;
     ULONGLONG wmiN, directN;
+    ULONGLONG ws0, ws1;
     WCHAR sample[256];
     int fail = 0;
 
@@ -133,6 +148,7 @@ int wmain(void)
     CoInitializeSecurity(NULL, -1, NULL, NULL, RPC_C_AUTHN_LEVEL_DEFAULT,
                          RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE, NULL);
 
+    ws0 = ws_kb();
     hr = CoCreateInstance(&CLSID_WbemLocator, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IWbemLocator, (void **)&loc);
     if (FAILED(hr)) { wprintf(L"CoCreateInstance(WbemLocator) 0x%08lx\n", hr); CoUninitialize(); return 2; }
@@ -146,6 +162,7 @@ int wmain(void)
         wprintf(L"  (if this needs the winmgmt/wmisvc service, that is the blocker to report)\n");
         IWbemLocator_Release(loc); CoUninitialize(); return 3;
     }
+    ws1 = ws_kb();
     wprintf(L"ConnectServer(ROOT\\CIMV2) OK\n\n");
 
     /* --- Win32_OperatingSystem: Version vs RtlGetVersion; memory vs GlobalMemoryStatusEx --- */
@@ -200,6 +217,26 @@ int wmain(void)
     wprintf(L"  direct SCM services     = %I64u\n", directN);
     if (wmiN == (ULONGLONG)-1 || directN == (ULONGLONG)-1 || (directN && (wmiN < directN/2 || wmiN > directN*2))) fail++;
     wprintf(L"\n");
+
+    /* --- OVERHEAD (god report): working set + per-query wall time; no disk writes --- */
+    {
+        LARGE_INTEGER f, t0, t1;
+        const WCHAR *cls[4] = { L"Win32_OperatingSystem", L"Win32_Processor", L"Win32_Process", L"Win32_Service" };
+        int i; WCHAR wql[64];
+        QueryPerformanceFrequency(&f);
+        wprintf(L"== overhead ==\n");
+        wprintf(L"  WS before ConnectServer = %I64u KB\n", ws0);
+        wprintf(L"  WS after  ConnectServer = %I64u KB (delta %I64d)\n", ws1, (LONGLONG)ws1 - (LONGLONG)ws0);
+        for (i = 0; i < 4; i++)
+        {
+            _snwprintf(wql, 64, L"SELECT * FROM %s", cls[i]);
+            QueryPerformanceCounter(&t0);
+            (void)CountQuery(svc, wql, NULL, NULL, 0);
+            QueryPerformanceCounter(&t1);
+            wprintf(L"  query %-22s = %.1f ms, WS %I64u KB\n", cls[i], qpc_ms(t0, t1, f), ws_kb());
+        }
+        wprintf(L"  persistent disk writes  = none (wmiprobe writes only to stdout/serial)\n\n");
+    }
 
     IWbemServices_Release(svc);
     IWbemLocator_Release(loc);
