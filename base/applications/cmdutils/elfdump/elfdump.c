@@ -68,13 +68,18 @@ PrintRecord(const EVENTLOGRECORD *Rec)
 
 /* elfdump /storm N: report N events from this process as fast as possible (write-rate check) */
 static int
-Storm(DWORD N)
+Storm(DWORD N, DWORD DataSize)
 {
     HANDLE h = RegisterEventSourceW(NULL, L"ObsAStorm");
     DWORD i, ok = 0, failed = 0, lastErr = 0;
     WCHAR Text[32];
     const WCHAR *Strs[1];
+    BYTE *Data = NULL;
 
+    if (DataSize != 0)
+        Data = calloc(1, DataSize);
+    if (DataSize != 0 && !Data)
+        return 1;
     if (!h)
     {
         wprintf(L"RegisterEventSource failed: %lu\n", GetLastError());
@@ -84,7 +89,7 @@ Storm(DWORD N)
     for (i = 0; i < N; i++)
     {
         swprintf(Text, 32, L"storm %lu", i);
-        if (ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 888, NULL, 1, 0, Strs, NULL))
+        if (ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 888, NULL, 1, DataSize, Strs, Data))
             ok++;
         else
         {
@@ -94,6 +99,7 @@ Storm(DWORD N)
     }
     wprintf(L"Storm: %lu calls, %lu succeeded, %lu failed (last error %lu)\n", N, ok, failed, lastErr);
     DeregisterEventSource(h);
+    free(Data);
     return 0;
 }
 
@@ -323,7 +329,7 @@ static int Dump(int argc, WCHAR **argv);
 int wmain(int argc, WCHAR **argv)
 {
     if (argc > 2 && !wcscmp(argv[1], L"/storm"))
-        return Storm((DWORD)_wtoi(argv[2]));
+        return Storm((DWORD)_wtoi(argv[2]), (argc > 3) ? (DWORD)_wtoi(argv[3]) : 0);
     if (argc > 1 && !wcscmp(argv[1], L"/bounds"))
         return Bounds();
     if (argc > 1 && !wcscmp(argv[1], L"/probe"))
