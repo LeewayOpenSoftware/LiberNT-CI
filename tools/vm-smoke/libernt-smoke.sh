@@ -104,15 +104,15 @@ if [ -z "${ONLY:-}" ] && [ "${PERWIN:-1}" = 1 ]; then
   rm -rf "$OUT"; mkdir -p "$OUT" || die "cannot create $OUT"
   { echo "image   $IMG"; echo "sha256  $SHA"; echo "start   $(date -u +%Y-%m-%dT%H:%M:%SZ)"; } | tee "$OUT/result.txt"
   total=0
-  for wn in explorer cmd notepad control settings; do
+  for wn in explorer cmd notepad control settings terminal; do
     ONLY=$wn sh "$SELF" "$IMG" > "$OUT/run-$wn.log" 2>&1; rc=$?
     [ -f "$OUT/$wn/result.txt" ] && grep -Ev '^(image|sha256|vm|start|end|result|output) ' "$OUT/$wn/result.txt" | tee -a "$OUT/result.txt"
     [ $rc -eq 2 ] && { echo "$wn    FAIL  could not run (see run-$wn.log)" | tee -a "$OUT/result.txt"; rc=1; }
     total=$((total+rc))
   done
   echo "end     $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$OUT/result.txt"
-  if [ $total -eq 0 ]; then echo "result  PASS (5 windows, one boot each)" | tee -a "$OUT/result.txt"
-  else echo "result  $total FAIL line(s) over 5 windows (one boot each)" | tee -a "$OUT/result.txt"; fi
+  if [ $total -eq 0 ]; then echo "result  PASS (6 windows, one boot each)" | tee -a "$OUT/result.txt"
+  else echo "result  $total FAIL line(s) over 6 windows (one boot each)" | tee -a "$OUT/result.txt"; fi
   echo "output  $OUT"
   exit $total
 fi
@@ -155,7 +155,7 @@ if [ "$MODE" = launcher ]; then
   # window diffs). One minimised helper per app sleeps until its slot and then starts the app.
   { printf '@echo off\r\n'
     t=$FIRST_DELAY
-    for a in 'explorer shell:MyComputerFolder' 'cmd /k' 'notepad' 'control' 'ms-settings:'; do
+    for a in 'explorer shell:MyComputerFolder' 'cmd /k' 'notepad' 'control' 'ms-settings:' 'terminal'; do
       case "$a" in ms-settings:) lb=settings;; *) lb=${a%% *};; esac; want "$lb" || continue
       printf 'start "" /min cmd /c ping -n %s 127.0.0.1 ^>nul ^& start "" %s\r\n' "$t" "$a"; case "$a" in control|ms-settings:) t=$((t+SHORT_GAP));; *) t=$((t+GAP));; esac; done; } > "$VDIR/payload/launcher.cmd"
   export PAYLOAD=$(cygpath -m "$VDIR/payload")
@@ -493,6 +493,7 @@ want cmd      && window 02 cmd       'cmd'                             5 caps
 want notepad  && window 03 notepad   'notepad'                         5 caps
 want control  && window 04 control   'control'                         8
 want settings && window 05 settings  'ms-settings:'                    12
+want terminal && window 06 terminal  'terminal'                         8
 
 # ---- 5. verdict -------------------------------------------------------------------------------
 log "end     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
