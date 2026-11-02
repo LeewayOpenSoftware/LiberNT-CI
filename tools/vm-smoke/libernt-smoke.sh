@@ -13,7 +13,7 @@
 # waits for the desktop, then opens Explorer (This PC), cmd, Notepad, Control Panel and Settings
 # one at a time. For each window it saves a full screenshot and a 6x zoom of the caption buttons
 # (minimize / maximize / close) and prints PASS or FAIL. The exit code is the number of FAILs
-# (0 = all windows passed; 2 = could not run at all).
+# (0 = all windows passed; 99 = could not run at all).
 #
 # Output: $OUT_ROOT/<sha256 of the image>/ : NN-<window>.png, NN-<window>-caption6x.png,
 #   00-desktop.png, result.txt, com1.log (kernel debug log). Re-running an image replaces the folder.
@@ -48,9 +48,9 @@ set -u
 # a run is in progress used to corrupt that run. SMOKE_SNAP marks the copy.
 if [ -z "${SMOKE_SNAP:-}" ]; then
   _src=$(cd "$(dirname "$0")" && pwd)
-  _snap=$(mktemp -d "${TMPDIR:-/tmp}/libernt-smoke.XXXXXX") || { echo "SMOKE ERROR: cannot create a snapshot dir" >&2; exit 2; }
+  _snap=$(mktemp -d "${TMPDIR:-/tmp}/libernt-smoke.XXXXXX") || { echo "SMOKE ERROR: cannot create a snapshot dir" >&2; exit 99; }
   _m=$(cygpath -m "$_snap" 2>/dev/null) && _snap="/$(echo "${_m%%:*}" | tr A-Z a-z)${_m#*:}"   # /c/Users/... form: the msys2 python resolves it, but neither /tmp nor C:/...
-  cp "$_src"/libernt-smoke.sh "$_src"/glyph.py "$_src"/qmp-pointer.py "$_snap"/ || { echo "SMOKE ERROR: cannot copy the script" >&2; exit 2; }
+  cp "$_src"/libernt-smoke.sh "$_src"/glyph.py "$_src"/qmp-pointer.py "$_snap"/ || { echo "SMOKE ERROR: cannot copy the script" >&2; exit 99; }
   SMOKE_SNAP=$_snap; export SMOKE_SNAP
   sh "$_snap/libernt-smoke.sh" "$@"; _rc=$?; rm -rf "$_snap"; exit $_rc
 fi
@@ -77,7 +77,7 @@ MODE=${MODE:-launcher}      # launcher: launcher.cmd payload drives the apps (no
 FIRST_DELAY=${FIRST_DELAY:-150}; GAP=${GAP:-240}   # seconds before the first app / after an app with state checks (launcher mode)
 SHORT_GAP=${SHORT_GAP:-120}                        # after apps that are only opened and closed
 
-die() { echo "SMOKE ERROR: $*" >&2; exit 2; }
+die() { echo "SMOKE ERROR: $*" >&2; exit 99; }
 for t in "$Q/qemu-system-x86_64.exe" "$MAGICK" "$PY" "$RUNVM" "$MONPY"; do
   [ -e "$t" ] || die "missing $t"
 done
@@ -117,7 +117,7 @@ if [ -z "${ONLY:-}" ] && [ "${PERWIN:-1}" = 1 ]; then
   for wn in explorer cmd notepad control settings terminal; do
     ONLY=$wn sh "$SELF" "$IMG" > "$OUT/run-$wn.log" 2>&1; rc=$?
     [ -f "$OUT/$wn/result.txt" ] && grep -Ev '^(image|sha256|vm|start|end|result|output) ' "$OUT/$wn/result.txt" | tee -a "$OUT/result.txt"
-    [ $rc -eq 2 ] && { echo "$wn    FAIL  could not run (see run-$wn.log)" | tee -a "$OUT/result.txt"; rc=1; }
+    [ $rc -eq 99 ] && { echo "$wn    FAIL  could not run (see run-$wn.log)" | tee -a "$OUT/result.txt"; rc=1; }
     total=$((total+rc))
   done
   echo "end     $(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee -a "$OUT/result.txt"
