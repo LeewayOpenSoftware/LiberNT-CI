@@ -1816,7 +1816,7 @@ static DWORD query_perf_data( const WCHAR *query, DWORD *type, void *data, DWORD
     pdb->TotalByteLength = pdb->HeaderLength;
 
     data_size -= pdb->HeaderLength;
-    data = (char *)data + pdb->HeaderLength;
+    data = (char *)pdb + pdb->HeaderLength;
 
     err = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"System\\CurrentControlSet\\Services", 0, KEY_READ, &root);
     if (err != ERROR_SUCCESS)
