@@ -2802,6 +2802,13 @@ static LRESULT WINAPI window_proc( HWND hwnd, UINT msg, WPARAM wparam, LPARAM lp
         /* Alt+F4 is turned into WM_SYSCOMMAND/SC_CLOSE by DefWindowProc; it is not input for the application */
         if (wparam == VK_F4)
             return DefWindowProcW( hwnd, msg, wparam, lparam );
+        /* Alt+Space opens the system menu (SC_KEYMENU in DefWindowProc) */
+        if (wparam == VK_SPACE)
+            return DefWindowProcW( hwnd, msg, wparam, lparam );
+        /* Alt+Enter toggles full screen on Windows and writes nothing to the input.
+           There is no full screen mode here, so swallow it instead of echoing ^M */
+        if (wparam == VK_RETURN)
+            return 0;
 #endif
         record_key_input( console, msg == WM_SYSKEYDOWN, wparam, lparam );
         break;
