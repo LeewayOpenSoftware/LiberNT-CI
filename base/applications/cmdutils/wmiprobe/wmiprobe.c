@@ -129,6 +129,66 @@ static ULONGLONG DirectServiceCount(void)
     return n;
 }
 
+/* P0-6: direct count of RUNNING Win32 services only (no drivers), for cross-check. */
+static ULONGLONG DirectRunningWin32Count(void)
+{
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE);
+    DWORD need = 0, ret = 0, resume = 0;
+    ULONGLONG n = 0;
+    BYTE *buf;
+    if (!scm) return (ULONGLONG)-1;
+    EnumServicesStatusExW(scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
+                          SERVICE_ACTIVE, NULL, 0, &need, &ret, &resume, NULL);
+    buf = (BYTE *)HeapAlloc(GetProcessHeap(), 0, need ? need : 1);
+    if (buf && EnumServicesStatusExW(scm, SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
+                                     SERVICE_ACTIVE, buf, need, &need, &ret, &resume, NULL))
+        n = ret;
+    if (buf) HeapFree(GetProcessHeap(), 0, buf);
+    CloseServiceHandle(scm);
+    return n;
+}
+
+/* P0-6: count Win32_Service rows (State=Running) and how many are driver-typed
+ * (Win32_Service must contain only Win32 services; drivers belong to Win32_SystemDriver). */
+static int CheckRunningServiceTypes(IWbemServices *svc, ULONGLONG *total, ULONGLONG *drivers,
+                                    WCHAR *firstdrv, int fdlen)
+{
+    IEnumWbemClassObject *e = NULL; HRESULT hr; ULONGLONG n = 0, d = 0;
+    BSTR lang = SysAllocString(L"WQL");
+    BSTR q = SysAllocString(L"SELECT Name,ServiceType FROM Win32_Service WHERE State=\"Running\"");
+    if (firstdrv && fdlen) firstdrv[0] = 0;
+    hr = IWbemServices_ExecQuery(svc, lang, q,
+            WBEM_FLAG_FORWARD_ONLY | WBEM_FLAG_RETURN_IMMEDIATELY, NULL, &e);
+    SysFreeString(q); SysFreeString(lang);
+    if (FAILED(hr)) { *total = (ULONGLONG)-1; *drivers = 0; return 0; }
+    for (;;)
+    {
+        IWbemClassObject *obj = NULL; ULONG got = 0; VARIANT vt;
+        hr = IEnumWbemClassObject_Next(e, WBEM_INFINITE, 1, &obj, &got);
+        if (hr != WBEM_S_NO_ERROR || !got) break;
+        VariantInit(&vt);
+        if (SUCCEEDED(IWbemClassObject_Get(obj, L"ServiceType", 0, &vt, NULL, NULL)) &&
+            V_VT(&vt) == VT_BSTR && V_BSTR(&vt) && wcsstr(V_BSTR(&vt), L"Driver"))
+        {
+            if (d == 0 && firstdrv && fdlen)
+            {
+                VARIANT vn; VariantInit(&vn);
+                if (SUCCEEDED(IWbemClassObject_Get(obj, L"Name", 0, &vn, NULL, NULL)) &&
+                    V_VT(&vn) == VT_BSTR && V_BSTR(&vn))
+                    _snwprintf(firstdrv, fdlen - 1, L"%s (%s)", V_BSTR(&vn), V_BSTR(&vt));
+                VariantClear(&vn);
+            }
+            d++;
+        }
+        VariantClear(&vt);
+        IWbemClassObject_Release(obj);
+        n++;
+    }
+    IEnumWbemClassObject_Release(e);
+    *total = n; *drivers = d;
+    return 1;
+}
+
 int wmain(void)
 {
     HRESULT hr;
@@ -216,6 +276,52 @@ int wmain(void)
     wprintf(L"  WMI    rows            = %I64u (first: %s)\n", wmiN, sample[0] ? sample : L"-");
     wprintf(L"  direct SCM services     = %I64u\n", directN);
     if (wmiN == (ULONGLONG)-1 || directN == (ULONGLONG)-1 || (directN && (wmiN < directN/2 || wmiN > directN*2))) fail++;
+    wprintf(L"\n");
+
+    /* ===== P0-6 regression checks (WT Creed independent wmic cross-check) ===== */
+    wprintf(L"== P0-6 checks ==\n");
+
+    /* (1) Win32_Processor.LoadPercentage: was 'Invalid query' (column missing). */
+    if (WmiGetProp(svc, L"SELECT LoadPercentage,Name,NumberOfCores FROM Win32_Processor", L"LoadPercentage", &v))
+    {
+        VARIANT vs; VariantInit(&vs);
+        if (SUCCEEDED(VariantChangeType(&vs, &v, 0, VT_UI4)))
+            wprintf(L"  [P06.1 PASS] LoadPercentage query accepted, value = %lu\n", V_UI4(&vs));
+        else
+            wprintf(L"  [P06.1 PASS] LoadPercentage query accepted, vt = %u\n", V_VT(&v));
+        VariantClear(&vs);
+    }
+    else { wprintf(L"  [P06.1 FAIL] LoadPercentage query rejected (still Invalid query)\n"); fail++; }
+    VariantClear(&v);
+
+    /* (2) Win32_Process.WorkingSetSize: was 0 for every process. Check our own process > 0. */
+    {
+        WCHAR wq[128]; ULONGLONG wmiws = 0, directws = ws_kb() * 1024;
+        _snwprintf(wq, 128, L"SELECT WorkingSetSize FROM Win32_Process WHERE Handle=\"%lu\"", GetCurrentProcessId());
+        if (WmiGetProp(svc, wq, L"WorkingSetSize", &v))
+        {
+            VARIANT vs; VariantInit(&vs);
+            if (SUCCEEDED(VariantChangeType(&vs, &v, 0, VT_UI8))) wmiws = V_UI8(&vs);
+            VariantClear(&vs);
+        }
+        VariantClear(&v);
+        wprintf(L"  [P06.2 %s] WorkingSetSize(self): WMI = %I64u, direct = %I64u\n",
+                wmiws ? L"PASS" : L"FAIL", wmiws, directws);
+        if (!wmiws) fail++;
+    }
+
+    /* (3) Win32_Service(State=Running) must contain no kernel/driver-typed rows. */
+    {
+        ULONGLONG total = 0, drv = 0, directWin32 = DirectRunningWin32Count();
+        WCHAR firstdrv[160];
+        if (CheckRunningServiceTypes(svc, &total, &drv, firstdrv, 160))
+        {
+            wprintf(L"  [P06.3 %s] Win32_Service running rows = %I64u, driver-typed = %I64u (direct Win32 running = %I64u)\n",
+                    drv ? L"FAIL" : L"PASS", total, drv, directWin32);
+            if (drv) { wprintf(L"           first driver leaked into Win32_Service: %s\n", firstdrv[0] ? firstdrv : L"-"); fail++; }
+        }
+        else { wprintf(L"  [P06.3 FAIL] Win32_Service query failed\n"); fail++; }
+    }
     wprintf(L"\n");
 
     /* --- OVERHEAD (god report): working set + per-query wall time; no disk writes --- */
