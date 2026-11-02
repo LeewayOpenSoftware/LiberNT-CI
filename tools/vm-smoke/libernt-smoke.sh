@@ -545,7 +545,7 @@ want cmd      && window 02 cmd       'cmd'                             5 caps
 want notepad  && window 03 notepad   'notepad'                         5 caps
 want control  && window 04 control   'control'                         8
 want settings && window 05 settings  'ms-settings:'                    12
-want terminal && window 06 terminal  'terminal'                         8
+want terminal && window 06 terminal  'terminal'                         8 caps
 
 # ---- 5. verdict -------------------------------------------------------------------------------
 log "end     $(date -u +%Y-%m-%dT%H:%M:%SZ)"
