@@ -6,6 +6,8 @@
 #include "ntstatus.h"
 #define WIN32_NO_STATUS
 #include <stdlib.h>
+#include <stdio.h>
+#include <wchar.h>
 #include "windef.h"
 #include "winbase.h"
 #include <winperf.h>
@@ -118,4 +120,60 @@ NTSTATUS perf_get_thread_count(ULONG *count)
 
     *count = perf_info.ThreadCount;
     return STATUS_SUCCESS;
+}
+
+/*
+ * Does the perflib query string ask for one of our object ids?
+ * "Global" (or an empty query) means everything; "Foreign"/"Costly" nothing of ours;
+ * otherwise a list of decimal object ids separated by spaces.
+ */
+BOOL perf_query_wants(const WCHAR *query, const DWORD *ids, unsigned count)
+{
+    unsigned i;
+
+    if (!query || !query[0] || !_wcsicmp(query, L"Global"))
+        return TRUE;
+    if (!_wcsicmp(query, L"Foreign") || !_wcsicmp(query, L"Costly"))
+        return FALSE;
+
+    while (*query)
+    {
+        DWORD value = 0;
+        BOOL digits = FALSE;
+
+        while (*query == L' ')
+            query++;
+        while (*query >= L'0' && *query <= L'9')
+        {
+            value = value * 10 + (*query++ - L'0');
+            digits = TRUE;
+        }
+        if (!digits)
+        {
+            if (*query)
+                query++;
+            continue;
+        }
+        for (i = 0; i < count; i++)
+            if (ids[i] == value)
+                return TRUE;
+    }
+    return FALSE;
+}
+
+/* Append one line to the perf trace file so a VM run can prove which provider entry points ran */
+void perf_trace(const char *what, DWORD a, DWORD b)
+{
+    char line[160];
+    DWORD written;
+    int len;
+    HANDLE file = CreateFileW(L"C:\\perf_trace.txt", FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                              OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+    if (file == INVALID_HANDLE_VALUE)
+        return;
+    len = _snprintf(line, sizeof(line), "%s a=%lu b=%lu pid=%lu\r\n", what, a, b, GetCurrentProcessId());
+    if (len > 0)
+        WriteFile(file, line, (DWORD)len, &written, NULL);
+    CloseHandle(file);
 }

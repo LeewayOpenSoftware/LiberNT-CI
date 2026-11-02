@@ -15,6 +15,9 @@
 #include "winternl.h"
 
 #define NDEBUG
+
+BOOL perf_query_wants(const WCHAR *query, const DWORD *ids, unsigned count);
+void perf_trace(const char *what, DWORD a, DWORD b);
 #include <debug.h>
 
 /* Forward declarations - shared measurement helpers from perfdata.c */
@@ -26,6 +29,7 @@ static DWORD g_dwOpenCount = 0;
 DWORD APIENTRY OpenPerfProc(LPWSTR lpDeviceNames)
 {
     g_dwOpenCount++;
+    perf_trace("Open", g_dwOpenCount, 0);
     return ERROR_SUCCESS;
 }
 
@@ -58,7 +62,7 @@ static void init_counter_def(
 
 DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD lpcbData, LPDWORD lpNumObjectTypes)
 {
-    PERF_DATA_BLOCK *pdb;
+    LARGE_INTEGER perf_time, perf_freq;
     PERF_OBJECT_TYPE *pobj;
     PERF_COUNTER_DEFINITION *pcnt;
     PERF_COUNTER_BLOCK *pcblk;
@@ -70,6 +74,18 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
     if (!lppData || !lpcbData || !lpNumObjectTypes)
         return ERROR_INVALID_PARAMETER;
 
+    perf_trace("Collect called buffer", *lpcbData, lpValueName ? lpValueName[0] : 0);
+    {
+        static const DWORD ours[] = { 230, 232 };
+
+        if (!perf_query_wants(lpValueName, ours, 2))
+        {
+            *lpcbData = 0;
+            *lpNumObjectTypes = 0;
+            return ERROR_SUCCESS;
+        }
+    }
+
     /* Require minimum buffer size */
     if (!*lppData || *lpcbData < 2048)
         return ERROR_MORE_DATA;
@@ -79,29 +95,11 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
         !NT_SUCCESS(perf_get_thread_count(&thread_count)))
         return ERROR_NOT_READY;
 
+    /* perflib contract: write PERF_OBJECT_TYPE blocks at *lppData; the PERF_DATA_BLOCK header belongs to the caller */
     p = (BYTE *)*lppData;
-    pdb = (PERF_DATA_BLOCK *)p;
+    NtQueryPerformanceCounter(&perf_time, &perf_freq);
 
-    /* Initialize PERF_DATA_BLOCK header */
-    pdb->Signature[0] = 'P';
-    pdb->Signature[1] = 'E';
-    pdb->Signature[2] = 'R';
-    pdb->Signature[3] = 'F';
-#ifdef WORDS_BIGENDIAN
-    pdb->LittleEndian = FALSE;
-#else
-    pdb->LittleEndian = TRUE;
-#endif
-    pdb->Version = PERF_DATA_VERSION;
-    pdb->Revision = PERF_DATA_REVISION;
-    pdb->TotalByteLength = 0;  /* Update at end */
-    pdb->HeaderLength = sizeof(PERF_DATA_BLOCK);
-    pdb->NumObjectTypes = 2;
-    pdb->DefaultObject = 230;  /* Process */
-
-    NtQueryPerformanceCounter(&pdb->PerfTime, &pdb->PerfFreq);
-
-    offset = sizeof(PERF_DATA_BLOCK);
+    offset = 0;
 
     /* ===== PROCESS OBJECT (230) ===== */
     obj_offset = offset;
@@ -117,10 +115,10 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
     pobj->DetailLevel = PERF_DETAIL_NOVICE;
     pobj->NumCounters = 1;
     pobj->DefaultCounter = -1;
-    pobj->NumInstances = 1;
+    pobj->NumInstances = PERF_NO_INSTANCES;
     pobj->CodePage = 0;
-    pobj->PerfTime.QuadPart = pdb->PerfTime.QuadPart;
-    pobj->PerfFreq.QuadPart = pdb->PerfFreq.QuadPart;
+    pobj->PerfTime.QuadPart = perf_time.QuadPart;
+    pobj->PerfFreq.QuadPart = perf_freq.QuadPart;
 
     offset += sizeof(PERF_OBJECT_TYPE);
 
@@ -139,6 +137,7 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
     *pdwData = process_count;
 
     offset += pcblk->ByteLength;
+    offset = (offset + 7) & ~7u;
     pobj->TotalByteLength = offset - obj_offset;
 
     /* ===== THREAD OBJECT (232) ===== */
@@ -155,10 +154,10 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
     pobj->DetailLevel = PERF_DETAIL_NOVICE;
     pobj->NumCounters = 1;
     pobj->DefaultCounter = -1;
-    pobj->NumInstances = 1;
+    pobj->NumInstances = PERF_NO_INSTANCES;
     pobj->CodePage = 0;
-    pobj->PerfTime.QuadPart = pdb->PerfTime.QuadPart;
-    pobj->PerfFreq.QuadPart = pdb->PerfFreq.QuadPart;
+    pobj->PerfTime.QuadPart = perf_time.QuadPart;
+    pobj->PerfFreq.QuadPart = perf_freq.QuadPart;
 
     offset += sizeof(PERF_OBJECT_TYPE);
 
@@ -177,12 +176,14 @@ DWORD APIENTRY CollectPerfProcData(LPWSTR lpValueName, LPVOID *lppData, LPDWORD 
     *pdwData = thread_count;
 
     offset += pcblk->ByteLength;
+    offset = (offset + 7) & ~7u;
     pobj->TotalByteLength = offset - obj_offset;
 
-    /* Update final totals */
-    pdb->TotalByteLength = offset;
+    /* Report the data written and advance the caller's pointer past it */
+    *lppData = p + offset;
     *lpNumObjectTypes = 2;
     *lpcbData = offset;
+    perf_trace("Collect done objects", 2, offset);
 
     return ERROR_SUCCESS;
 }

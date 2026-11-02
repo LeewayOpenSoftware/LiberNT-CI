@@ -23,4 +23,8 @@ NTSTATUS perf_get_total_memory(ULONGLONG *total_pages);
 NTSTATUS perf_get_process_count(ULONG *count);
 NTSTATUS perf_get_thread_count(ULONG *count);
 
+/* perflib provider helpers */
+BOOL perf_query_wants(const WCHAR *query, const DWORD *ids, unsigned count);
+void perf_trace(const char *what, DWORD a, DWORD b);
+
 #endif /* _PDH_PERFDATA_H_ */

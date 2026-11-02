@@ -144,11 +144,23 @@ int main(void)
         printf("  CPU: Kernel=%llu, User=%llu, Idle=%llu (100ns units)\n",
                procTimeKernel, procTimeUser, procTimeIdle);
 
+        if (loop == 0)
+        {
+            DWORD n = cbData < 512 ? cbData : 512, k;
+
+            printf("  HEX (first %lu of %lu bytes, header %lu):", n, cbData, pdb->HeaderLength);
+            for (k = 0; k < n; k++)
+                printf("%s%02x", (k % 32) == 0 ? "\n   " : " ", buffer[k]);
+            printf("\n");
+        }
+
         pobj = (PERF_OBJECT_TYPE *)((BYTE *)pdb + pdb->HeaderLength);
         for (int i = 0; i < pdb->NumObjectTypes && (BYTE *)pobj < buffer + cbData; i++)
         {
             printf("  Obj %d: ID=%lu, ctrs=%ld, inst=%ld\n",
                    i, pobj->ObjectNameTitleIndex, pobj->NumCounters, pobj->NumInstances);
+            if (pobj->TotalByteLength == 0)
+                break;
             pobj = (PERF_OBJECT_TYPE *)((BYTE *)pobj + pobj->TotalByteLength);
         }
         printf("\n");
