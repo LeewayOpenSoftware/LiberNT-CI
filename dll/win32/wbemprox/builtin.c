@@ -32,6 +32,7 @@
 #include "netioapi.h"
 #include "tlhelp32.h"
 #include "winternl.h"
+#include "psapi.h"
 #include "winioctl.h"
 #include "winsvc.h"
 #include "winver.h"
@@ -560,6 +561,7 @@ static const struct column col_processor[] =
 #endif
     { L"Family",                    CIM_UINT16 },
     { L"Level",                     CIM_UINT16 },
+    { L"LoadPercentage",            CIM_UINT16 },
     { L"Manufacturer",              CIM_STRING|COL_FLAG_DYNAMIC },
     { L"MaxClockSpeed",             CIM_UINT32 },
     { L"Name",                      CIM_STRING|COL_FLAG_DYNAMIC },
@@ -1351,6 +1353,7 @@ struct record_processor
     const WCHAR *device_id;
     UINT16       family;
     UINT16       level;
+    UINT16       loadpercentage;
     const WCHAR *manufacturer;
     UINT32       maxclockspeed;
     const WCHAR *name;
@@ -5810,6 +5813,63 @@ static WCHAR *get_executablepath( DWORD process_id )
     return executable_path;
 }
 
+/* Win32_Process.WorkingSetSize: read the real working set of each process.
+ * PROCESSENTRY32 does not carry it, so query it per-pid.  Processes we are not
+ * allowed to open (System, protected) simply report 0 -- we never invent a value. */
+static UINT64 get_process_workingsetsize( DWORD pid )
+{
+    PROCESS_MEMORY_COUNTERS pmc;
+    HANDLE proc;
+    UINT64 ret = 0;
+
+    proc = OpenProcess( PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, pid );
+    if (!proc) proc = OpenProcess( PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid );
+    if (proc)
+    {
+        if (GetProcessMemoryInfo( proc, &pmc, sizeof(pmc) )) ret = pmc.WorkingSetSize;
+        CloseHandle( proc );
+    }
+    return ret;
+}
+
+/* Win32_Processor.LoadPercentage: real instantaneous CPU load, sampled from two
+ * SystemProcessorPerformanceInformation snapshots.  On NT KernelTime includes
+ * IdleTime, so busy = (Kernel+User) - Idle.  Never fabricated. */
+static UINT16 get_processor_loadpercentage( void )
+{
+    SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION *info0, *info1;
+    ULONG num = NtCurrentTeb()->Peb->NumberOfProcessors, size, i;
+    ULONGLONG idle = 0, total = 0;
+    UINT16 ret = 0;
+
+    if (!num) return 0;
+    size = num * sizeof(*info0);
+    if (!(info0 = malloc( size ))) return 0;
+    if (!(info1 = malloc( size ))) { free( info0 ); return 0; }
+
+    if (NtQuerySystemInformation( SystemProcessorPerformanceInformation, info0, size, NULL )) goto done;
+    Sleep( 200 );
+    if (NtQuerySystemInformation( SystemProcessorPerformanceInformation, info1, size, NULL )) goto done;
+
+    for (i = 0; i < num; i++)
+    {
+        LONGLONG idle_delta  = info1[i].IdleTime.QuadPart - info0[i].IdleTime.QuadPart;
+        LONGLONG total_delta = (info1[i].KernelTime.QuadPart + info1[i].UserTime.QuadPart) -
+                               (info0[i].KernelTime.QuadPart + info0[i].UserTime.QuadPart);
+        if (total_delta <= 0) continue;
+        if (idle_delta < 0) idle_delta = 0;
+        if (idle_delta > total_delta) idle_delta = total_delta;
+        idle  += idle_delta;
+        total += total_delta;
+    }
+    if (total) ret = (UINT16)(((total - idle) * 100 + total / 2) / total);
+
+done:
+    free( info0 );
+    free( info1 );
+    return ret;
+}
+
 static enum fill_status fill_process( struct table *table, const struct expr *cond )
 {
     WCHAR handle[11];
@@ -5845,6 +5905,7 @@ static enum fill_status fill_process( struct table *table, const struct expr *co
         rec->process_id     = entry.th32ProcessID;
         rec->pprocess_id    = entry.th32ParentProcessID;
         rec->thread_count   = entry.cntThreads;
+        rec->workingsetsize = get_process_workingsetsize( entry.th32ProcessID );
         /* methods */
         rec->create         = process_create;
         rec->get_owner      = process_get_owner;
@@ -6053,6 +6114,7 @@ static enum fill_status fill_processor_without_smbios( struct table *table, cons
     rec->device_id              = wcsdup( L"CPU0" );
     rec->family                 = 2;
     rec->level                  = info->ProcessorLevel;
+    rec->loadpercentage         = get_processor_loadpercentage();
     rec->manufacturer           = get_processor_reg_str( L"VendorIdentifier", L"Unknown" );
     rec->maxclockspeed          = get_processor_maxclockspeed( 0 );
     rec->name                   = get_processor_reg_str( L"ProcessorNameString", L"Unknown CPU" );
@@ -6133,6 +6195,7 @@ static enum fill_status fill_processor( struct table *table, const struct expr *
         rec->device_id              = wcsdup( device_id );
         rec->family                 = proc->family;
         rec->level                  = info.ProcessorLevel;
+        rec->loadpercentage         = get_processor_loadpercentage();
         rec->manufacturer           = get_processor_manufacturer( i, buf, len );
         rec->maxclockspeed          = get_processor_maxclockspeed( i );
         rec->name                   = get_processor_name( i, buf, len );
@@ -6512,7 +6575,7 @@ static enum fill_status fill_service( struct table *table, const struct expr *co
     if (!(manager = OpenSCManagerW( NULL, NULL, SC_MANAGER_ENUMERATE_SERVICE ))) return FILL_STATUS_FAILED;
     if (!(services = malloc( size ))) goto done;
 
-    ret = EnumServicesStatusExW( manager, SC_ENUM_PROCESS_INFO, SERVICE_TYPE_ALL,
+    ret = EnumServicesStatusExW( manager, SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
                                  SERVICE_STATE_ALL, (BYTE *)services, size, &needed,
                                  &count, NULL, NULL );
     if (!ret)
@@ -6525,7 +6588,7 @@ static enum fill_status fill_service( struct table *table, const struct expr *co
 #endif
         if (!(tmp = realloc( services, size ))) goto done;
         services = tmp;
-        ret = EnumServicesStatusExW( manager, SC_ENUM_PROCESS_INFO, SERVICE_TYPE_ALL,
+        ret = EnumServicesStatusExW( manager, SC_ENUM_PROCESS_INFO, SERVICE_WIN32,
                                      SERVICE_STATE_ALL, (BYTE *)services, size, &needed,
                                      &count, NULL, NULL );
         if (!ret) goto done;
