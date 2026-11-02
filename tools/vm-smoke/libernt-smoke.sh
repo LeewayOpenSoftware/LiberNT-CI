@@ -50,7 +50,7 @@ if [ -z "${SMOKE_SNAP:-}" ]; then
   _src=$(cd "$(dirname "$0")" && pwd)
   _snap=$(mktemp -d "${TMPDIR:-/tmp}/libernt-smoke.XXXXXX") || { echo "SMOKE ERROR: cannot create a snapshot dir" >&2; exit 99; }
   _m=$(cygpath -m "$_snap" 2>/dev/null) && _snap="/$(echo "${_m%%:*}" | tr A-Z a-z)${_m#*:}"   # /c/Users/... form: the msys2 python resolves it, but neither /tmp nor C:/...
-  cp "$_src"/libernt-smoke.sh "$_src"/glyph.py "$_src"/qmp-pointer.py "$_snap"/ || { echo "SMOKE ERROR: cannot copy the script" >&2; exit 99; }
+  cp "$_src"/libernt-smoke.sh "$_src"/glyph.py "$_src"/qmp-pointer.py "$_src"/qmp-key.py "$_snap"/ || { echo "SMOKE ERROR: cannot copy the script" >&2; exit 99; }
   SMOKE_SNAP=$_snap; export SMOKE_SNAP
   sh "$_snap/libernt-smoke.sh" "$@"; _rc=$?; rm -rf "$_snap"; exit $_rc
 fi
@@ -175,6 +175,7 @@ ptr() { "$PY" "$QMPPY" "$QPORT" "$SW" "$SH" "$@"; }
 # applaunch (the service that runs launcher.cmd at logon) only acts when SMBIOS carries this OEM string
 QPORT=$((5900 + $(printf %s "$VM" | cksum | cut -d' ' -f1) % 100))
 QMPPY=$SMOKE_SNAP/qmp-pointer.py
+qk() { "$PY" "$SMOKE_SNAP/qmp-key.py" "$QPORT" "$@"; }   # ordered key chord (modifier down first), see qmp-key.py
 # FLOOR RULE: the QEMU window title carries the image's BASE so a Nov-1 based image is never mistaken for a regression.
 #   MAIN <sha>                          image built from leeway/main or a branch off b0b3ceb5d4
 #   NOV1-BASE (no caption fix) <sha>    image built from a branch off the Nov-1 tag
@@ -262,7 +263,7 @@ else log "OOBE    PASS  bare desktop, no window open at first boot"; fi
 # Keyboard: open Run (Win+R) and type two bursts a few seconds apart; the field must change both times.
 RD=360x220+0+$((SH-TB-220))
 mon "sendkey esc" >/dev/null; sleep 1; shot "$OUT/.k0.png"
-mon "sendkey meta_l-r" >/dev/null; sleep 3; shot "$OUT/.kA.png"
+qk meta_l r >/dev/null; sleep 3; shot "$OUT/.kA.png"
 typeslow "abcdef"; sleep 2; shot "$OUT/.kB.png"
 sleep 5; typeslow "ghijkl"; sleep 2; shot "$OUT/.kC.png"
 cp "$OUT/.kC.png" "$OUT/00-keyboard.png"
@@ -307,7 +308,7 @@ mon "sendkey esc" >/dev/null; sleep 1
 CW=160; CH=32; TB=48                  # caption strip size, taskbar height to ignore
 runcmd() {                            # clear stray dialogs, Win+R, type the command, Enter
   mon "sendkey esc" >/dev/null; sleep 1; mon "sendkey esc" >/dev/null; sleep 1
-  mon "sendkey meta_l-r" >/dev/null; sleep 3
+  qk meta_l r >/dev/null; sleep 3
   typeslow "$1"; sleep 1
   mon "sendkey ret" >/dev/null
 }
@@ -324,15 +325,16 @@ click() { ptr click "$1" "$2"; }
 # Buttons are laid out min | max | close, flush with the window's top-right corner. Their size depends on
 # the window's caption style (measured on the Nov-1/main images; override with CAP_<LABEL>="close_w btn_w btn_h top_off"):
 #   close_w = width of the close button, btn_w = width of min and max, btn_h = height, top_off = px below the window top.
-capgeom() {
+capgeom() { TRI=
   case "$1" in
     explorer) g=${CAP_EXPLORER:-"43 26 18 3"} ;;
     cmd)      g=${CAP_CMD:-"43 26 18 1"} ;;
     notepad)  g=${CAP_NOTEPAD:-"43 26 18 1"} ;;
+    terminal) g=${CAP_TERMINAL:-"26 26 22 6"}; TRI=23 ;;   # Terminal draws 24x22 buttons on a 26 px pitch, 23 px in from the box edge
     *)        g="43 26 18 3" ;;
   esac
   set -- $g; CLW=$1; BTW=$2; BTH=$3; BTY=$4
-  RI=${CAP_RIGHT_INSET:-20}   # the diff box includes the window shadow on the right
+  RI=${CAP_RIGHT_INSET:-${TRI:-20}}   # the diff box includes the window shadow on the right
 }
 setbox() { box=$1; [ -n "$box" ] || return 1
   w=${box%%x*}; r=${box#*x}; h=${r%%+*}; r=${r#*+}; x=${r%%+*}; y=${r#*+}; }
@@ -353,23 +355,23 @@ cap_tests() {
   # (the guest tablet now and then ignores the first action after a pause, so move once to wake it first)
   [ "$POINTER_OK" = 1 ] && { ptr move $((x + w / 3)) $((y + BTY + BTH / 2 + 20)); sleep 1; ptr click $((x + w / 2)) $((y + BTY + BTH / 2)); sleep 1; }
   # start from the normal state
-  if ismax; then mon "sendkey meta_l-down" >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$box0"; fi
-  mon "sendkey meta_l-up" >/dev/null; sleep 3; shot "$OUT/$n-$lb-maximized.png"
+  if ismax; then qk meta_l down >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$box0"; fi
+  qk meta_l up >/dev/null; sleep 3; shot "$OUT/$n-$lb-maximized.png"
   if ! { setbox "$(winbox "$pre" "$OUT/$n-$lb-maximized.png")" && ismax; } && [ "$POINTER_OK" = 1 ]; then
     # one retry: refocus the window by clicking its title bar, then Win+Up again
-    setbox "$box0"; ptr click $((x + w / 2)) $((y + BTY + BTH / 2)); sleep 1; mon "sendkey meta_l-up" >/dev/null; sleep 3; shot "$OUT/$n-$lb-maximized.png"
+    setbox "$box0"; ptr click $((x + w / 2)) $((y + BTY + BTH / 2)); sleep 1; qk meta_l up >/dev/null; sleep 3; shot "$OUT/$n-$lb-maximized.png"
   fi
   if setbox "$(winbox "$pre" "$OUT/$n-$lb-maximized.png")" && ismax; then log "$lb.max      PASS  Win+Up maximised it (${w}x${h}), see $n-$lb-maximized.png"
   else log "$lb.max      FAIL  Win+Up did not maximise it (box ${box:-none}), see $n-$lb-maximized.png"; FAILS=$((FAILS+1)); fi
-  mon "sendkey meta_l-down" >/dev/null; sleep 3; shot "$OUT/$n-$lb-restored.png"
+  qk meta_l down >/dev/null; sleep 3; shot "$OUT/$n-$lb-restored.png"
   if setbox "$(winbox "$pre" "$OUT/$n-$lb-restored.png")" && ! ismax; then log "$lb.restore  PASS  Win+Down restored it to ${w}x${h}, see $n-$lb-restored.png"; box0=$box
   else log "$lb.restore  FAIL  Win+Down did not restore the normal size (box ${box:-none}), see $n-$lb-restored.png"; FAILS=$((FAILS+1)); setbox "$box0"; fi
-  mon "sendkey meta_l-down" >/dev/null; sleep 3; shot "$OUT/$n-$lb-minimized.png"
+  qk meta_l down >/dev/null; sleep 3; shot "$OUT/$n-$lb-minimized.png"
   if setbox "$(winbox "$pre" "$OUT/$n-$lb-minimized.png")"; then
     log "$lb.min      FAIL  Win+Down again did not minimise it (still ${w}x${h}), see $n-$lb-minimized.png"; FAILS=$((FAILS+1)); setbox "$box0"
   else
     log "$lb.min      PASS  Win+Down again minimised it (window left the screen), see $n-$lb-minimized.png"
-    mon "sendkey alt-tab" >/dev/null; sleep 3
+    qk alt tab >/dev/null; sleep 3
     ow=${box0%%x*}; if setbox "$(curbox)" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ]; then log "$lb.unmin    PASS  Alt+Tab brought it back (${w}x${h})"; box0=$box
     else log "$lb.unmin    FAIL  Alt+Tab did not bring the minimised window back (box ${box:-none})"; FAILS=$((FAILS+1)); setbox "$box0"; fi
   fi
@@ -408,7 +410,7 @@ cap_click_tests() {
     RI=0; ptr click $(btn_x 2) $(btn_cy); sleep 3; shot "$OUT/$n-$lb-click-restore.png"; RI=$RI0
     if setbox "$(winbox "$pre" "$OUT/$n-$lb-click-restore.png")" && ! ismax; then log "$lb.click-max  PASS  clicking maximise then restore: ${w}x${h} -> maximised -> ${w}x${h}"; box0=$box
     else log "$lb.click-max  FAIL  maximised by click but the second click did not restore it (box ${box:-none}), see $n-$lb-click-restore.png"; FAILS=$((FAILS+1)); setbox "$box0"
-      mon "sendkey meta_l-down" >/dev/null; sleep 3; setbox "$(curbox)" && box0=$box; fi
+      qk meta_l down >/dev/null; sleep 3; setbox "$(curbox)" && box0=$box; fi
   else log "$lb.click-max  FAIL  clicking the maximise button did not maximise the window (box ${box:-none}), see $n-$lb-click-max.png"; FAILS=$((FAILS+1)); setbox "$box0"; fi
   # minimise by click, restore from the taskbar
   cy=$(btn_cy); ptr click $(btn_x 3) $cy; sleep 3; shot "$OUT/$n-$lb-click-min.png"
@@ -427,7 +429,7 @@ cap_click_tests() {
       ow=${box0%%x*}; how=taskbar
       ptr click $TBX $(( SH - TB / 2 )); sleep 3; shot "$OUT/$n-$lb-click-min-restored.png"
       ok=0; setbox "$(winbox "$pre" "$OUT/$n-$lb-click-min-restored.png")" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1
-      if [ $ok = 0 ]; then mon "sendkey esc" >/dev/null; sleep 1; mon "sendkey alt-tab" >/dev/null; sleep 3; how=alt-tab; setbox "$(curbox)" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1; fi
+      if [ $ok = 0 ]; then mon "sendkey esc" >/dev/null; sleep 1; qk alt tab >/dev/null; sleep 3; how=alt-tab; setbox "$(curbox)" && [ "$(( w > ow ? w - ow : ow - w ))" -lt 80 ] && ok=1; fi
       if [ $ok = 1 ]; then log "$lb.click-min  PASS  minimise by click removed the window; it came back via $how (${w}x${h})"; box0=$box
         [ $how = taskbar ] || { log "$lb.taskbar-restore  FAIL  clicking the taskbar button did not bring the minimised window back (Alt+Tab did), see $n-$lb-click-min-restored.png"; FAILS=$((FAILS+1)); }
         [ "${TASKBAR_PROBE:-1}" = 1 ] && [ "$lb" = "${TASKBAR_PROBE_WIN:-explorer}" ] && taskbar_probe "$lb"
@@ -469,13 +471,13 @@ taskbar_probe() {
     log "$lb.taskbar-a  INFO  window visible after the click at box $nb vs box $ob before: $([ "$nb" = "$ob" ] && echo same window || echo 'DIFFERENT position or size - a new window may have opened'), see $n-$lb-tb-after-click.png"
   else
     log "$lb.taskbar-c  INFO  clicking the taskbar button of the active, non-minimised window MINIMISED it (as real Windows does), see $n-$lb-tb-after-click.png"
-    mon "sendkey alt-tab" >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$ob"
+    qk alt tab >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$ob"
   fi
   # (d) minimise again by the caption button, then click the taskbar button with the PS/2 relative pointer
   cy=$(btn_cy); setbox "$ob"; ptr click $(btn_x 3) $cy; sleep 3
   "$PY" "$VMDIR/click.py" "$VM" $bx0 $by0 >/dev/null 2>&1; sleep 3; shot "$OUT/$n-$lb-tb-ps2.png"
   if setbox "$(winbox "$pre" "$OUT/$n-$lb-tb-ps2.png")"; then log "$lb.taskbar-d  INFO  PS/2 relative pointer click on the taskbar button brought the minimised window BACK (${w}x${h}), see $n-$lb-tb-ps2.png"
-  else log "$lb.taskbar-d  INFO  PS/2 relative pointer click on the taskbar button did NOT restore the minimised window, see $n-$lb-tb-ps2.png"; mon "sendkey alt-tab" >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$ob"; fi
+  else log "$lb.taskbar-d  INFO  PS/2 relative pointer click on the taskbar button did NOT restore the minimised window, see $n-$lb-tb-ps2.png"; qk alt tab >/dev/null; sleep 3; setbox "$(curbox)" || setbox "$ob"; fi
   box0=$box
 }
 # window <n> <label> <run-command> <settle seconds>
@@ -534,7 +536,7 @@ window() {
   [ "$CLICK_CLOSED" = 1 ] && closed=click
   for how in 1 2; do
     [ $closed = no ] || break
-    mon "sendkey alt-f4" >/dev/null; sleep 3; mon "sendkey esc" >/dev/null; sleep 1; shot "$OUT/.cur.png"
+    qk alt f4 >/dev/null; sleep 3; mon "sendkey esc" >/dev/null; sleep 1; shot "$OUT/.cur.png"
     [ "$(diffpx "$pre" "$OUT/.cur.png" ${SW}x$((SH-TB))+0+0)" -lt 3000 ] && { closed=alt-f4; break; }
   done
   [ $closed = no ] && [ "$verdict" = PASS ] && { verdict=FAIL; FAILS=$((FAILS+1)); }
