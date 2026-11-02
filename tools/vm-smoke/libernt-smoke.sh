@@ -460,6 +460,7 @@ lumdelta() {
 taskbar_probe() {
   lb=$1; bx0=$TBX; by0=$((SH - TB / 2)); rx=$((bx0 - 22)); ry=$((SH - TB + 8)); rbox=44x30+$rx+$ry; ob=$box0
   # (c) active, normal window: one click on its taskbar button
+  ptr click $((x + w / 3)) $((y + BTY + BTH / 2)); sleep 1   # make sure the window is the foreground window first (click its caption)
   ptr move $((SW / 2)) $((SH - TB - 40)); sleep 1; shot "$OUT/.tb-idle.png"
   ptr move $bx0 $by0; sleep 1; shot "$OUT/$n-$lb-tb-hover.png"
   ptr down; sleep 0.4; shot "$OUT/$n-$lb-tb-pressed.png"; ptr up; sleep 3; shot "$OUT/$n-$lb-tb-after-click.png"
