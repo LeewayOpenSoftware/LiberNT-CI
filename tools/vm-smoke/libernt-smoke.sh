@@ -174,7 +174,7 @@ fi
 ptr() { "$PY" "$QMPPY" "$QPORT" "$SW" "$SH" "$@"; }
 # applaunch (the service that runs launcher.cmd at logon) only acts when SMBIOS carries this OEM string
 QPORT=$((5900 + $(printf %s "$VM" | cksum | cut -d' ' -f1) % 100))
-QMPPY=$(dirname "$SELF")/qmp-pointer.py
+QMPPY=$SMOKE_SNAP/qmp-pointer.py
 # FLOOR RULE: the QEMU window title carries the image's BASE so a Nov-1 based image is never mistaken for a regression.
 #   MAIN <sha>                          image built from leeway/main or a branch off b0b3ceb5d4
 #   NOV1-BASE (no caption fix) <sha>    image built from a branch off the Nov-1 tag
@@ -522,7 +522,7 @@ window() {
   # glyph pixels and judged by glyph.py (aspect ratio, left-right and top-bottom symmetry, fill). A broken glyph
   # (e.g. a close X squashed into an I shape) FAILs and its 6x crop is kept.
   "$MAGICK" "$f" -crop ${CW}x${CH}+${cx}+${y} +repage -colorspace Gray -threshold 78% -compress none "$OUT/.glyph.pgm" 2>/dev/null
-  gl=$("$PY" "$(dirname "$SELF")/glyph.py" "$OUT/.glyph.pgm" 2>&1); grc=$?; rm -f "$OUT/.glyph.pgm"
+  gl=$("$PY" "$SMOKE_SNAP/glyph.py" "$OUT/.glyph.pgm" 2>&1); grc=$?; rm -f "$OUT/.glyph.pgm"
   if [ $grc -eq 0 ]; then log "$lab.glyph    PASS  min, max and close glyphs have the right shape ($(echo "$gl" | sed 's/^glyph\.\([a-z]*\) *PASS *\([0-9x]*\) px.*w\/h=\([0-9.]*\).*/\1 \2/' | tr '\n' ' '))"
   else cp "$c" "$OUT/$n-$lab-glyph-FAIL-6x.png"; log "$lab.glyph    FAIL  broken caption glyph, see $n-$lab-glyph-FAIL-6x.png: $(echo "$gl" | grep FAIL | sed 's/  */ /g' | tr '\n' ';')"; FAILS=$((FAILS+1)); fi
   CLICK_CLOSED=0
