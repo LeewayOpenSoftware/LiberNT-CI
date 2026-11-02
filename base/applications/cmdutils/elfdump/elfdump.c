@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <windows.h>
+#include <psapi.h>
 
 static const WCHAR *
 TypeName(WORD Type)
@@ -138,6 +139,140 @@ Bounds(void)
     return 0;
 }
 
+/* Process counters of the service host, for the overhead numbers */
+typedef struct _ELFPROBE
+{
+    ULONGLONG CpuMs;        /* kernel + user */
+    ULONGLONG WriteBytes;   /* bytes written by the process (IO counters) */
+    ULONGLONG WriteOps;
+    SIZE_T Private;         /* PrivateUsage */
+    SIZE_T Working;
+    ULONGLONG LogSize;      /* file size of the log being written */
+} ELFPROBE;
+
+static BOOL
+ProbeSample(HANDLE Proc, const WCHAR *LogPath, ELFPROBE *P)
+{
+    FILETIME c, e, k, u;
+    IO_COUNTERS io;
+    PROCESS_MEMORY_COUNTERS_EX pmc;
+    WIN32_FILE_ATTRIBUTE_DATA fad;
+
+    memset(P, 0, sizeof(*P));
+    if (!GetProcessTimes(Proc, &c, &e, &k, &u))
+        return FALSE;
+    P->CpuMs = (((ULONGLONG)k.dwHighDateTime << 32 | k.dwLowDateTime) +
+                ((ULONGLONG)u.dwHighDateTime << 32 | u.dwLowDateTime)) / 10000;
+    if (GetProcessIoCounters(Proc, &io))
+    {
+        P->WriteBytes = io.WriteTransferCount;
+        P->WriteOps = io.WriteOperationCount;
+    }
+    pmc.cb = sizeof(pmc);
+    if (GetProcessMemoryInfo(Proc, (PPROCESS_MEMORY_COUNTERS)&pmc, sizeof(pmc)))
+    {
+        P->Private = pmc.PrivateUsage;
+        P->Working = pmc.WorkingSetSize;
+    }
+    if (GetFileAttributesExW(LogPath, GetFileExInfoStandard, &fad))
+        P->LogSize = ((ULONGLONG)fad.nFileSizeHigh << 32) | fad.nFileSizeLow;
+    return TRUE;
+}
+
+static VOID
+ProbePrint(const WCHAR *Tag, const ELFPROBE *B, const ELFPROBE *A, DWORD Ok)
+{
+    wprintf(L"[%ls] cpu_ms=%I64u write_bytes=%I64u write_ops=%I64u private=%I64u -> %I64u working=%I64u -> %I64u logfile=%I64u -> %I64u\n",
+            Tag, A->CpuMs - B->CpuMs, A->WriteBytes - B->WriteBytes, A->WriteOps - B->WriteOps,
+            (ULONGLONG)B->Private, (ULONGLONG)A->Private, (ULONGLONG)B->Working, (ULONGLONG)A->Working,
+            B->LogSize, A->LogSize);
+    if (Ok)
+        wprintf(L"[%ls] per 1000 ok events: cpu_ms=%I64u write_bytes=%I64u write_ops=%I64u\n", Tag,
+                (A->CpuMs - B->CpuMs) * 1000 / Ok, (A->WriteBytes - B->WriteBytes) * 1000 / Ok,
+                (A->WriteOps - B->WriteOps) * 1000 / Ok);
+}
+
+/*
+ * elfdump /probe: overhead of the event log service host.
+ * 1. finds the host PID of "eventlog" (QueryServiceStatusEx),
+ * 2. 60 s idle, 3. a burst of 400 reports (the rate limiter refuses part), 4. 1000 reports paced at 40/s.
+ * Prints CPU ms, bytes/ops written (process IO counters), PrivateUsage, working set and the size of
+ * AppEvent.Evt before/after each phase. Numbers are deltas, nothing is simulated.
+ */
+static int
+Probe(void)
+{
+    SC_HANDLE scm, svc;
+    SERVICE_STATUS_PROCESS ssp;
+    DWORD needed, i, ok, bad;
+    HANDLE proc, h;
+    ELFPROBE b, a;
+    WCHAR Text[32], Path[MAX_PATH];
+    const WCHAR *Strs[1];
+
+    scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
+    svc = scm ? OpenServiceW(scm, L"eventlog", SERVICE_QUERY_STATUS) : NULL;
+    if (!svc || !QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp, sizeof(ssp), &needed))
+    {
+        wprintf(L"cannot query the eventlog service: %lu\n", GetLastError());
+        return 1;
+    }
+    wprintf(L"eventlog host PID = %lu\n", ssp.dwProcessId);
+    proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, ssp.dwProcessId);
+    if (!proc)
+    {
+        wprintf(L"OpenProcess failed: %lu\n", GetLastError());
+        return 1;
+    }
+    GetSystemDirectoryW(Path, MAX_PATH);
+    wcscat(Path, L"\\config\\AppEvent.Evt");
+
+    ProbeSample(proc, Path, &b);
+    Sleep(60000);
+    ProbeSample(proc, Path, &a);
+    wprintf(L"[idle 60 s] cpu_ms=%I64u write_bytes=%I64u private=%I64u -> %I64u\n", a.CpuMs - b.CpuMs,
+            a.WriteBytes - b.WriteBytes, (ULONGLONG)b.Private, (ULONGLONG)a.Private);
+
+    h = RegisterEventSourceW(NULL, L"ObsAProbe");
+    if (!h)
+        return 1;
+    Strs[0] = Text;
+
+    ok = bad = 0;
+    ProbeSample(proc, Path, &b);
+    for (i = 0; i < 400; i++)
+    {
+        swprintf(Text, 32, L"probe burst %lu", i);
+        if (ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 889, NULL, 1, 0, Strs, NULL))
+            ok++;
+        else
+            bad++;
+    }
+    ProbeSample(proc, Path, &a);
+    wprintf(L"[burst] 400 calls, %lu ok, %lu refused\n", ok, bad);
+    ProbePrint(L"burst", &b, &a, ok);
+
+    Sleep(5000);
+    ok = bad = 0;
+    ProbeSample(proc, Path, &b);
+    for (i = 0; i < 1000; i++)
+    {
+        swprintf(Text, 32, L"probe paced %lu", i);
+        if (ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 890, NULL, 1, 0, Strs, NULL))
+            ok++;
+        else
+            bad++;
+        Sleep(25);
+    }
+    ProbeSample(proc, Path, &a);
+    wprintf(L"[paced 40/s] 1000 calls, %lu ok, %lu refused\n", ok, bad);
+    ProbePrint(L"paced", &b, &a, ok);
+
+    DeregisterEventSource(h);
+    CloseHandle(proc);
+    return 0;
+}
+
 static int Dump(int argc, WCHAR **argv);
 
 int wmain(int argc, WCHAR **argv)
@@ -146,6 +281,8 @@ int wmain(int argc, WCHAR **argv)
         return Storm((DWORD)_wtoi(argv[2]));
     if (argc > 1 && !wcscmp(argv[1], L"/bounds"))
         return Bounds();
+    if (argc > 1 && !wcscmp(argv[1], L"/probe"))
+        return Probe();
 
     return Dump(argc, argv);
 }
