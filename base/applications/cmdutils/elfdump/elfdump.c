@@ -210,6 +210,23 @@ Probe(void)
     WCHAR Text[32], Path[MAX_PATH];
     const WCHAR *Strs[1];
 
+    /* the service host runs as SYSTEM: an administrator needs SeDebugPrivilege to open it */
+    {
+        HANDLE tok;
+        TOKEN_PRIVILEGES tp;
+
+        if (OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok))
+        {
+            tp.PrivilegeCount = 1;
+            tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+            if (LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid))
+                AdjustTokenPrivileges(tok, FALSE, &tp, 0, NULL, NULL);
+            wprintf(L"SeDebugPrivilege: %ls (%lu)
+", GetLastError() == ERROR_SUCCESS ? L"enabled" : L"not held", GetLastError());
+            CloseHandle(tok);
+        }
+    }
+
     scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT);
     svc = scm ? OpenServiceW(scm, L"eventlog", SERVICE_QUERY_STATUS) : NULL;
     if (!svc || !QueryServiceStatusEx(svc, SC_STATUS_PROCESS_INFO, (LPBYTE)&ssp, sizeof(ssp), &needed))
@@ -219,6 +236,8 @@ Probe(void)
     }
     wprintf(L"eventlog host PID = %lu\n", ssp.dwProcessId);
     proc = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, FALSE, ssp.dwProcessId);
+    if (!proc)
+        proc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ssp.dwProcessId);
     if (!proc)
     {
         wprintf(L"OpenProcess failed: %lu\n", GetLastError());
