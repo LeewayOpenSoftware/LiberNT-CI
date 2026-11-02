@@ -24,14 +24,6 @@ typedef enum
 	dsSurpriseRemoved
 } PORT_DEVICE_STATE;
 
-typedef struct _READ_DATA
-{
-    KSPIN_LOCK SpinLock;
-    PIRP PendingIrp;
-    SIZE_T InputCount;
-    PMOUSE_INPUT_DATA PortData;
-} READ_DATA, *PREAD_DATA;
-
 typedef struct _CLASS_DRIVER_EXTENSION
 {
 	UNICODE_STRING RegistryPath;
@@ -76,7 +68,10 @@ typedef struct _CLASS_DEVICE_EXTENSION
 
 	LIST_ENTRY ListHead;
 	KSPIN_LOCK ListSpinLock;
-    PREAD_DATA ReadData;
+	KSPIN_LOCK SpinLock;
+	PIRP PendingIrp;
+	SIZE_T InputCount;
+	PMOUSE_INPUT_DATA PortData;
 	LPCWSTR DeviceName;
 } CLASS_DEVICE_EXTENSION, *PCLASS_DEVICE_EXTENSION;
 
