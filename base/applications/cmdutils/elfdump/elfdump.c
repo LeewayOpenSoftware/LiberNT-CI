@@ -292,6 +292,36 @@ Probe(void)
     return 0;
 }
 
+/* elfdump /hdr <file>: raw header of an .evt file (read with full sharing while the service has it open) */
+static int
+Hdr(const WCHAR *Path)
+{
+    HANDLE f = CreateFileW(Path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                           OPEN_EXISTING, 0, NULL);
+    DWORD h[12], got = 0, sizelo, sizehi;
+
+    if (f == INVALID_HANDLE_VALUE)
+    {
+        wprintf(L"cannot open %ls: %lu
+", Path, GetLastError());
+        return 1;
+    }
+    sizelo = GetFileSize(f, &sizehi);
+    if (!ReadFile(f, h, sizeof(h), &got, NULL) || got < sizeof(h))
+    {
+        wprintf(L"cannot read the header: %lu
+", GetLastError());
+        CloseHandle(f);
+        return 1;
+    }
+    wprintf(L"file size=%lu header: HeaderSize=%lu Signature=%08lx Major=%lu Minor=%lu StartOffset=%lu EndOffset=%lu "
+            L"CurrentRecord=%lu OldestRecord=%lu MaxSize=%lu Flags=%lx Retention=%lu
+",
+            sizelo, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10]);
+    CloseHandle(f);
+    return 0;
+}
+
 static int Dump(int argc, WCHAR **argv);
 
 int wmain(int argc, WCHAR **argv)
@@ -302,6 +332,8 @@ int wmain(int argc, WCHAR **argv)
         return Bounds();
     if (argc > 1 && !wcscmp(argv[1], L"/probe"))
         return Probe();
+    if (argc > 2 && !wcscmp(argv[1], L"/hdr"))
+        return Hdr(argv[2]);
 
     return Dump(argc, argv);
 }
