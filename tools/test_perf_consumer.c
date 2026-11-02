@@ -45,7 +45,7 @@ int main(void)
 
         procCount = 0;
         threadCount = 0;
-        hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS | TH32CS_SNAPTHREAD, 0);
         if (hSnapshot != INVALID_HANDLE_VALUE)
         {
             procEntry.dwSize = sizeof(procEntry);
@@ -53,17 +53,13 @@ int main(void)
             {
                 do {
                     procCount++;
-                    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, procEntry.th32ProcessID);
-                    if (hSnapshot != INVALID_HANDLE_VALUE)
+                    threadEntry.dwSize = sizeof(threadEntry);
+                    if (Thread32First(hSnapshot, &threadEntry))
                     {
-                        threadEntry.dwSize = sizeof(threadEntry);
-                        if (Thread32First(hSnapshot, &threadEntry))
-                        {
-                            do {
+                        do {
+                            if (threadEntry.th32OwnerProcessID == procEntry.th32ProcessID)
                                 threadCount++;
-                            } while (Thread32Next(hSnapshot, &threadEntry));
-                        }
-                        CloseHandle(hSnapshot);
+                        } while (Thread32Next(hSnapshot, &threadEntry));
                     }
                 } while (Process32Next(hSnapshot, &procEntry));
             }
@@ -86,20 +82,18 @@ int main(void)
             }
         }
 
-        /* Query performance data */
-        status = RegOpenKeyExW(HKEY_PERFORMANCE_DATA, L"2 4 238 230", 0, KEY_READ, &hKey);
-        if (status != ERROR_SUCCESS)
+        /* Query performance data from HKEY_PERFORMANCE_DATA */
+        cbData = sizeof(buffer);
+        status = RegQueryValueExW(HKEY_PERFORMANCE_DATA, L"2 4 238 230", NULL, NULL, buffer, &cbData);
+
+        if (status == ERROR_MORE_DATA)
         {
-            printf("LOOP %d: RegOpenKeyEx failed (0x%x)\n", loop, status);
+            printf("LOOP %d: Buffer too small for query (need %lu bytes)\n", loop, cbData);
             printf("  REF: MemAvail=%lu MB, ProcCount=%lu, ThreadCount=%lu, Uptime=%llu sec\n",
                    memAvailMB, procCount, threadCount, uptime);
             Sleep(1000);
             continue;
         }
-
-        cbData = sizeof(buffer);
-        status = RegQueryValueExW(hKey, L"Global", NULL, NULL, buffer, &cbData);
-        RegCloseKey(hKey);
 
         if (status != ERROR_SUCCESS)
         {
