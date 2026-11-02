@@ -685,6 +685,13 @@ USBSTOR_PdoHandlePnp(
             }
            break;
        }
+       case IRP_MN_DEVICE_USAGE_NOTIFICATION:
+       {
+           Status = STATUS_UNSUCCESSFUL;
+           if (IoForwardIrpSynchronously(DeviceExtension->LowerDeviceObject, Irp))
+               Status = Irp->IoStatus.Status;
+           break;
+       }
        case IRP_MN_QUERY_REMOVE_DEVICE:
        {
            /* The class driver that claimed the disk answers for it above us

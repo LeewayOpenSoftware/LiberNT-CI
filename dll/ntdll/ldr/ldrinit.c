@@ -3302,6 +3302,13 @@ LdrpInitializeProcess(IN PCONTEXT Context,
     RtlpInitializeActCtx(&OldShimData);
     LdrpInitializeActiveCodePage();
 
+    Status = LdrpArchLoadEmulation();
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("LDR: LdrpProcessInitialization failed to load the emulator; status %x\n", Status);
+        return Status;
+    }
+
     /* Walk the IAT and load all the DLLs */
     ImportStatus = IsCorILOnlyImage ? STATUS_SUCCESS : LdrpWalkImportDescriptor(LdrpDefaultPath.Buffer, LdrpImageEntry);
 
