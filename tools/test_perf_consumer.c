@@ -24,7 +24,6 @@ int main(void)
     PROCESSENTRY32 procEntry;
     THREADENTRY32 threadEntry;
     DWORD procCount = 0, threadCount = 0;
-    DWORD lastProcCount = 0, lastThreadCount = 0;
     ULONGLONG uptime;
     pNtQuerySystemInformation NtQuerySystemInformation;
     SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION procPerf[8];
@@ -142,9 +141,6 @@ int main(void)
             pobj = (PERF_OBJECT_TYPE *)((BYTE *)pobj + pobj->TotalByteLength);
         }
         printf("\n");
-
-        lastProcCount = procCount;
-        lastThreadCount = threadCount;
 
         if (loop < 9)
             Sleep(1000);
