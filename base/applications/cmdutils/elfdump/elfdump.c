@@ -65,7 +65,51 @@ PrintRecord(const EVENTLOGRECORD *Rec)
     }
 }
 
+/* elfdump /storm N: report N events from this process as fast as possible (write-rate check) */
+static int
+Storm(DWORD N)
+{
+    HANDLE h = RegisterEventSourceW(NULL, L"ObsAStorm");
+    DWORD i, ok = 0, failed = 0, lastErr = 0;
+    WCHAR Text[32];
+    const WCHAR *Strs[1];
+
+    if (!h)
+    {
+        wprintf(L"RegisterEventSource failed: %lu
+", GetLastError());
+        return 1;
+    }
+    Strs[0] = Text;
+    for (i = 0; i < N; i++)
+    {
+        swprintf(Text, 32, L"storm %lu", i);
+        if (ReportEventW(h, EVENTLOG_INFORMATION_TYPE, 0, 888, NULL, 1, 0, Strs, NULL))
+            ok++;
+        else
+        {
+            failed++;
+            lastErr = GetLastError();
+        }
+    }
+    wprintf(L"Storm: %lu calls, %lu succeeded, %lu failed (last error %lu)
+", N, ok, failed, lastErr);
+    DeregisterEventSource(h);
+    return 0;
+}
+
+static int Dump(int argc, WCHAR **argv);
+
 int wmain(int argc, WCHAR **argv)
+{
+    if (argc > 2 && !wcscmp(argv[1], L"/storm"))
+        return Storm((DWORD)_wtoi(argv[2]));
+
+    return Dump(argc, argv);
+}
+
+static int
+Dump(int argc, WCHAR **argv)
 {
     const WCHAR *LogName = (argc > 1) ? argv[1] : L"System";
     DWORD Max = (argc > 2) ? (DWORD)_wtoi(argv[2]) : 0xFFFFFFFF;
