@@ -221,8 +221,7 @@ Probe(void)
             tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
             if (LookupPrivilegeValueW(NULL, SE_DEBUG_NAME, &tp.Privileges[0].Luid))
                 AdjustTokenPrivileges(tok, FALSE, &tp, 0, NULL, NULL);
-            wprintf(L"SeDebugPrivilege: %ls (%lu)
-", GetLastError() == ERROR_SUCCESS ? L"enabled" : L"not held", GetLastError());
+            wprintf(L"SeDebugPrivilege: %ls (%lu)\n", GetLastError() == ERROR_SUCCESS ? L"enabled" : L"not held", GetLastError());
             CloseHandle(tok);
         }
     }
@@ -302,21 +301,18 @@ Hdr(const WCHAR *Path)
 
     if (f == INVALID_HANDLE_VALUE)
     {
-        wprintf(L"cannot open %ls: %lu
-", Path, GetLastError());
+        wprintf(L"cannot open %ls: %lu\n", Path, GetLastError());
         return 1;
     }
     sizelo = GetFileSize(f, &sizehi);
     if (!ReadFile(f, h, sizeof(h), &got, NULL) || got < sizeof(h))
     {
-        wprintf(L"cannot read the header: %lu
-", GetLastError());
+        wprintf(L"cannot read the header: %lu\n", GetLastError());
         CloseHandle(f);
         return 1;
     }
     wprintf(L"file size=%lu header: HeaderSize=%lu Signature=%08lx Major=%lu Minor=%lu StartOffset=%lu EndOffset=%lu "
-            L"CurrentRecord=%lu OldestRecord=%lu MaxSize=%lu Flags=%lx Retention=%lu
-",
+            L"CurrentRecord=%lu OldestRecord=%lu MaxSize=%lu Flags=%lx Retention=%lu\n",
             sizelo, h[0], h[1], h[2], h[3], h[4], h[5], h[6], h[7], h[8], h[9], h[10]);
     CloseHandle(f);
     return 0;
