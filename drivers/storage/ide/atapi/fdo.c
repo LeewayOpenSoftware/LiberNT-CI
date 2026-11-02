@@ -24,6 +24,7 @@ AtaFdoCreateSymLinks(
 {
     UNICODE_STRING ChannelName;
     ULONG ScsiAdapter;
+    ULONG Collisions = 0;
     WCHAR ChannelNameBuffer[sizeof("\\Device\\Ide\\IdePort99999")];
     NTSTATUS Status;
     DECLARE_PAGED_WSTRING(FdoFormat, L"\\Device\\Ide\\IdePort%lu");
@@ -61,9 +62,22 @@ AtaFdoCreateSymLinks(
         /* Create a symbolic link '\Device\ScsiPortX' -> '\Device\Ide\IdePortN' */
         Status = IoCreateSymbolicLink(&SymLinkName, &ChannelName);
         if (Status == STATUS_OBJECT_NAME_COLLISION)
+        {
+            /* Unconditional (not INFO): needed to diagnose the intermittent boot failure */
+            DbgPrint("ATAPI: CH %lu: ScsiPort%lu is taken, trying the next number\n",
+                     ChanExt->PortData.PortNumber, ScsiAdapter);
+            ++Collisions;
             continue;
+        }
         if (!NT_SUCCESS(Status))
             break;
+
+        if (Collisions != 0)
+        {
+            DbgPrint("ATAPI: CH %lu: tried %lu taken name(s), chosen ScsiPort%lu (ScsiPortCount %lu)\n",
+                     ChanExt->PortData.PortNumber, Collisions, ScsiAdapter,
+                     IoGetConfigurationInformation()->ScsiPortCount);
+        }
 
         INFO("Symlink created '%wZ' -> '%wZ'\n", &SymLinkName, &ChannelName);
 
@@ -76,9 +90,16 @@ AtaFdoCreateSymLinks(
 
         /* Create a symbolic link '\DosDevices\ScsiX:' -> '\Device\Ide\IdePortN' */
         /* The DOS name is optional: its failure must not fail the start of the channel */
-        if (NT_SUCCESS(IoCreateSymbolicLink(&SymLinkName, &ChannelName)))
+        Status = IoCreateSymbolicLink(&SymLinkName, &ChannelName);
+        if (NT_SUCCESS(Status))
         {
             INFO("Symlink created '%wZ' -> '%wZ'\n", &SymLinkName, &ChannelName);
+        }
+        else
+        {
+            DbgPrint("ATAPI: CH %lu: DOS link '%wZ' failed 0x%lx (not fatal)\n",
+                     ChanExt->PortData.PortNumber, &SymLinkName, Status);
+            Status = STATUS_SUCCESS;
         }
 
         /* Register ourselves (ATA channel) as a SCSI port adapter */
