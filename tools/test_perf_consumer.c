@@ -53,13 +53,13 @@ int main(void)
             continue;
         }
 
-        printf("LOOP %d: PERF_DATA_BLOCK (v%u.%u, %u objects, %lu bytes)\n",
+        printf("LOOP %d: PERF_DATA_BLOCK (v%lu.%lu, %lu objects, %lu bytes)\n",
                loop, pdb->Version, pdb->Revision, pdb->NumObjectTypes, pdb->TotalByteLength);
 
         pobj = (PERF_OBJECT_TYPE *)((BYTE *)pdb + pdb->HeaderLength);
         for (int i = 0; i < pdb->NumObjectTypes && (BYTE *)pobj < buffer + cbData; i++)
         {
-            printf("  Obj %d: ID=%u, ctrs=%ld, inst=%ld\n",
+            printf("  Obj %d: ID=%lu, ctrs=%ld, inst=%ld\n",
                    i, pobj->ObjectNameTitleIndex, pobj->NumCounters, pobj->NumInstances);
             pobj = (PERF_OBJECT_TYPE *)((BYTE *)pobj + pobj->TotalByteLength);
         }
