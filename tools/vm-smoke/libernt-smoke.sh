@@ -49,6 +49,7 @@ set -u
 if [ -z "${SMOKE_SNAP:-}" ]; then
   _src=$(cd "$(dirname "$0")" && pwd)
   _snap=$(mktemp -d "${TMPDIR:-/tmp}/libernt-smoke.XXXXXX") || { echo "SMOKE ERROR: cannot create a snapshot dir" >&2; exit 2; }
+  _snap=$(cygpath -m "$_snap" 2>/dev/null || echo "$_snap")   # python (msys2) must see the same path as this shell
   cp "$_src"/libernt-smoke.sh "$_src"/glyph.py "$_src"/qmp-pointer.py "$_snap"/ || { echo "SMOKE ERROR: cannot copy the script" >&2; exit 2; }
   SMOKE_SNAP=$_snap; export SMOKE_SNAP
   sh "$_snap/libernt-smoke.sh" "$@"; _rc=$?; rm -rf "$_snap"; exit $_rc
