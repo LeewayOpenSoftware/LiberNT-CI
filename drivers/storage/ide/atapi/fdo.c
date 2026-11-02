@@ -63,9 +63,9 @@ AtaFdoCreateSymLinks(
         Status = IoCreateSymbolicLink(&SymLinkName, &ChannelName);
         if (Status == STATUS_OBJECT_NAME_COLLISION)
         {
-            /* Unconditional (not INFO): needed to diagnose the intermittent boot failure */
-            DbgPrint("ATAPI: CH %lu: ScsiPort%lu is taken, trying the next number\n",
-                     ChanExt->PortData.PortNumber, ScsiAdapter);
+            /* Expected on every boot (the first channel's link already exists): not worth a line */
+            INFO("ATAPI: CH %lu: ScsiPort%lu is taken, trying the next number\n",
+                 ChanExt->PortData.PortNumber, ScsiAdapter);
             ++Collisions;
             continue;
         }
@@ -74,9 +74,9 @@ AtaFdoCreateSymLinks(
 
         if (Collisions != 0)
         {
-            DbgPrint("ATAPI: CH %lu: tried %lu taken name(s), chosen ScsiPort%lu (ScsiPortCount %lu)\n",
-                     ChanExt->PortData.PortNumber, Collisions, ScsiAdapter,
-                     IoGetConfigurationInformation()->ScsiPortCount);
+            INFO("ATAPI: CH %lu: tried %lu taken name(s), chosen ScsiPort%lu (ScsiPortCount %lu)\n",
+                 ChanExt->PortData.PortNumber, Collisions, ScsiAdapter,
+                 IoGetConfigurationInformation()->ScsiPortCount);
         }
 
         INFO("Symlink created '%wZ' -> '%wZ'\n", &SymLinkName, &ChannelName);
