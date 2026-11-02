@@ -20,12 +20,12 @@
 #
 # Paths (all can be overridden by environment variables; the defaults are the LiberNT lab machine):
 #      QEMU       directory with qemu-system-x86_64.exe and qemu-img   (default /c/msys64/ucrt64/bin)
-#      MAGICK     ImageMagick binary                                   (default $QEMU/magick)
+#      MAGICK     ImageMagick binary                                   (default $QEMU/magick); run-vm.sh also reads QEMU_SHARE (edk2 dir)
 #      PY         python3 (standard library only)                      (default /c/msys64/usr/bin/python3)
 #      RUNVM      run-vm.sh: boots NAME RAM [qemu args], honours LABEL, IMG, PAYLOAD, ACCEL, PORT
-#                                                                       (default $VMDIR/run-vm.sh)
-#      MONPY      mon.py: sends one HMP command to the VM monitor      (default $VMDIR/mon.py)
-#      VMDIR      directory holding RUNNING.txt, run-vm.sh and mon.py  (default /e/LiberNT/vm)
+#                                                                       (default: the copy next to this script)
+#      MONPY      mon.py: sends one HMP command to the VM monitor      (default: the copy next to this script)
+#      VMDIR      directory holding RUNNING.txt (the VM cap register)  (default /e/LiberNT/vm)
 #      OVERLAY_DIR  per-VM directories made by run-vm.sh               (default /c/LiberNT/vm/overlays)
 #      OUT_ROOT   output root                                          (default E:/LiberNT/results/smoke)
 #      IMGDIR     where CI images are fetched (IMG_DIR also works)     (default C:/LiberNT/images)
@@ -51,7 +51,7 @@ if [ -z "${SMOKE_SNAP:-}" ]; then
   _snap=$(mktemp -d "${TMPDIR:-/tmp}/libernt-smoke.XXXXXX") || { echo "SMOKE ERROR: cannot create a snapshot dir" >&2; exit 99; }
   _m=$(cygpath -m "$_snap" 2>/dev/null) && _snap="/$(echo "${_m%%:*}" | tr A-Z a-z)${_m#*:}"   # /c/Users/... form: the msys2 python resolves it, but neither /tmp nor C:/...
   cp "$_src"/libernt-smoke.sh "$_src"/glyph.py "$_src"/qmp-pointer.py "$_src"/qmp-key.py "$_snap"/ || { echo "SMOKE ERROR: cannot copy the script" >&2; exit 99; }
-  SMOKE_SNAP=$_snap; export SMOKE_SNAP
+  SMOKE_SNAP=$_snap; SMOKE_SRC=$_src; export SMOKE_SNAP SMOKE_SRC
   sh "$_snap/libernt-smoke.sh" "$@"; _rc=$?; rm -rf "$_snap"; exit $_rc
 fi
 IMGARG=${1:?usage: libernt-smoke.sh <image.img|artifact.zip|run-id> [name]}
@@ -61,14 +61,14 @@ REPO=${REPO:-LeewayOpenSoftware/LiberNT-LDW}
 GH=${GH:-C:/LiberNT/tools/gh/bin/gh.exe}
 RAM=${RAM:-3072}
 BOOT_TIMEOUT=${BOOT_TIMEOUT:-240}
-VMDIR=${VMDIR:-/e/LiberNT/vm}
+VMDIR=${VMDIR:-/e/LiberNT/vm}          # where RUNNING.txt lives (the VM-cap register)
 RUNNING=${RUNNING:-$VMDIR/RUNNING.txt}
 Q=${QEMU:-/c/msys64/ucrt64/bin}
 PY=${PY:-/c/msys64/usr/bin/python3}
 MAGICK=${MAGICK:-$Q/magick}
-RUNVM=${RUNVM:-$VMDIR/run-vm.sh}
-MONPY=${MONPY:-$VMDIR/mon.py}
-OVERLAY_DIR=${OVERLAY_DIR:-/c/LiberNT/vm/overlays}
+RUNVM=${RUNVM:-$SMOKE_SRC/run-vm.sh}      # vendored copies next to this script; override to use another
+MONPY=${MONPY:-$SMOKE_SRC/mon.py}
+OVERLAY_DIR=${OVERLAY_DIR:-/c/LiberNT/vm/overlays}; export OVERLAY_DIR   # run-vm.sh and mon.py read it too
 MAIN_FIX=${MAIN_FIX:-b0b3ceb5d4}
 export ACCEL=${ACCEL:-whpx}
 FAILS=0; TB=48
