@@ -13,9 +13,9 @@ typedef NTSTATUS (WINAPI *pNtQuerySystemInformation)(SYSTEM_INFORMATION_CLASS, P
 
 int main(void)
 {
-    HKEY hKey;
     DWORD cbData;
-    BYTE buffer[8192];
+    BYTE *buffer = NULL;
+    DWORD bufSize = 8192;
     PERF_DATA_BLOCK *pdb;
     PERF_OBJECT_TYPE *pobj;
     int loop, status;
@@ -28,6 +28,10 @@ int main(void)
     pNtQuerySystemInformation NtQuerySystemInformation;
     SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION procPerf[8];
     ULONG retLen;
+
+    buffer = malloc(bufSize);
+    if (!buffer)
+        return 1;
 
     printf("=== Test Performance Counter Consumer + Reference Values ===\n");
     printf("Reading HKEY_PERFORMANCE_DATA (2 4 238 230) with kernel reference data\n\n");
@@ -83,8 +87,21 @@ int main(void)
         }
 
         /* Query performance data from HKEY_PERFORMANCE_DATA */
-        cbData = sizeof(buffer);
+        cbData = bufSize;
         status = RegQueryValueExW(HKEY_PERFORMANCE_DATA, L"2 4 238 230", NULL, NULL, buffer, &cbData);
+
+        /* The perflib reports ERROR_MORE_DATA when the buffer is too small: grow it and ask again */
+        while (status == ERROR_MORE_DATA && bufSize < 4 * 1024 * 1024)
+        {
+            BYTE *bigger = realloc(buffer, bufSize * 2);
+
+            if (!bigger)
+                break;
+            buffer = bigger;
+            bufSize *= 2;
+            cbData = bufSize;
+            status = RegQueryValueExW(HKEY_PERFORMANCE_DATA, L"2 4 238 230", NULL, NULL, buffer, &cbData);
+        }
 
         if (status == ERROR_MORE_DATA)
         {
@@ -106,7 +123,7 @@ int main(void)
 
         if (cbData < sizeof(PERF_DATA_BLOCK))
         {
-            printf("LOOP %d: Buffer too small (%lu bytes)\n", loop, cbData);
+            printf("LOOP %d: Returned data too small (%lu bytes)\n", loop, cbData);
             Sleep(1000);
             continue;
         }
