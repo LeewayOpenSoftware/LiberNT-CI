@@ -76,8 +76,7 @@ Storm(DWORD N)
 
     if (!h)
     {
-        wprintf(L"RegisterEventSource failed: %lu
-", GetLastError());
+        wprintf(L"RegisterEventSource failed: %lu\n", GetLastError());
         return 1;
     }
     Strs[0] = Text;
@@ -92,8 +91,7 @@ Storm(DWORD N)
             lastErr = GetLastError();
         }
     }
-    wprintf(L"Storm: %lu calls, %lu succeeded, %lu failed (last error %lu)
-", N, ok, failed, lastErr);
+    wprintf(L"Storm: %lu calls, %lu succeeded, %lu failed (last error %lu)\n", N, ok, failed, lastErr);
     DeregisterEventSource(h);
     return 0;
 }
