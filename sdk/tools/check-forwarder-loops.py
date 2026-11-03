@@ -22,6 +22,9 @@ import struct
 import sys
 
 
+MAX_ENTRIES = 1 << 17   # a corrupt table must not turn into a multi-billion iteration loop
+
+
 class Pe:
     def __init__(self, path):
         d = open(path, "rb").read()
@@ -70,6 +73,8 @@ class Pe:
         if o is None:
             return
         nfun, nnames, afn, anm, aord = struct.unpack_from("<IIIII", self.data, o + 20)
+        if nnames > MAX_ENTRIES or nfun > MAX_ENTRIES:
+            raise ValueError("implausible export count")
         for i in range(nnames):
             no = self.off(anm + 4 * i)
             oo = self.off(aord + 2 * i)
@@ -91,14 +96,16 @@ class Pe:
             return
         step = 8 if self.is64 else 4
         o = self.off(self.imp_rva)
-        while o is not None:
+        for _ in range(MAX_ENTRIES):
+            if o is None or o + 20 > len(self.data):
+                break
             oft, _, _, name, ft = struct.unpack_from("<IIIII", self.data, o)
             if not name and not ft:
                 break
             dll = (self.cstr(name) or "").lower()
             lookup = oft or ft
             k = 0
-            while True:
+            while k < MAX_ENTRIES:
                 lo = self.off(lookup + step * k)
                 if lo is None:
                     break
@@ -122,8 +129,8 @@ def load(directory):
             if f.lower().endswith((".dll", ".drv", ".cpl", ".ocx")) and f.lower() not in dlls:
                 try:
                     dlls[f.lower()] = Pe(os.path.join(root, f))
-                except (ValueError, struct.error, OSError):
-                    pass
+                except (ValueError, struct.error, OSError) as e:
+                    print("check-forwarder-loops: skipped %s: %s" % (os.path.join(root, f), e), flush=True)
     return dlls
 
 
