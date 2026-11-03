@@ -226,6 +226,12 @@ MouHid_GetButtonFlags(
     *ButtonFlags = 0;
     *Flags = 0;
 
+    /* An absolute device (tablet, digitizer) reports positions, never deltas. The movement flag
+       must not depend on the button parsing below succeeding: a failure there used to return with
+       Flags == 0, and every absolute coordinate was then applied as a relative move. */
+    if (DeviceExtension->MouseAbsolute)
+        *Flags |= MOUSE_MOVE_ABSOLUTE;
+
     /* get usages */
     CurrentUsageListLength = DeviceExtension->UsageListLength;
     Status = HidP_GetUsages(HidP_Input,
@@ -301,11 +307,6 @@ MouHid_GetButtonFlags(
     DeviceExtension->CurrentUsageList = DeviceExtension->PreviousUsageList;
     DeviceExtension->PreviousUsageList = TempList;
 
-    if (DeviceExtension->MouseAbsolute)
-    {
-        // mouse operates absolute
-        *Flags |= MOUSE_MOVE_ABSOLUTE;
-    }
 }
 
 VOID
