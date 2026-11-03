@@ -94,6 +94,7 @@ list(APPEND SOURCE
     Mailslot.c
     MuiResources.c
     MultiByteToWideChar.c
+    NumaApis.c
     Pipes.c
     PackageNames.c
     PixeloramaCompat.c
