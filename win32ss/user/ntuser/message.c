@@ -3978,6 +3978,7 @@ NtUserWaitForInputIdle( IN HANDLE hProcess,
     SECTION_IMAGE_INFORMATION ImageInformation;
     LARGE_INTEGER Interval;
     DWORD Waited = 0;
+    ULONG StartTime;
 
     UserEnterExclusive();
 
@@ -4010,13 +4011,14 @@ NtUserWaitForInputIdle( IN HANDLE hProcess,
     {
         Interval.QuadPart = -10 * 10000;
         Status = STATUS_TIMEOUT;
+        StartTime = EngGetTickCount32();
         while (Status == STATUS_TIMEOUT &&
                (dwMilliseconds == INFINITE || Waited < dwMilliseconds))
         {
             UserLeave();
             Status = KeWaitForSingleObject(Process, UserRequest, UserMode, FALSE, &Interval);
             UserEnterExclusive();
-            Waited += 10;
+            Waited = EngGetTickCount32() - StartTime;
             W32Process = (PPROCESSINFO)Process->Win32Process;
             if (W32Process && W32Process->InputIdleEvent)
                 break;
