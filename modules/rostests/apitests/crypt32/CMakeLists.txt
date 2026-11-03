@@ -2,6 +2,7 @@
 list(APPEND SOURCE
     CertControlStore.c
     CertEnumSystemStoreLocation.c
+    CertOpenSystemStore.c
     CertUpdateStore.c
     CryptProtectMemory.c
     testlist.c)
