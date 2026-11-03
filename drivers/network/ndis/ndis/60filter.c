@@ -2079,8 +2079,48 @@ Ndis6FilterTerminalOidRequest(
         }
         DiagStatus = Ext->DriverBlock->Characteristics.OidRequestHandler(Ext->MiniportAdapterContext, OidRequest);
         InterlockedIncrement(&Ext->DiagOid);
-        DbgPrint("NDIS6 DIAG OID PDO %p: %s 0x%08lx value=0x%08lx -> 0x%08lx\n",
-                 Ext->PhysicalDeviceObject, DiagKind, DiagOid, DiagValue, (ULONG)DiagStatus);
+        if (DiagStatus == NDIS_STATUS_SUCCESS || DiagStatus == NDIS_STATUS_PENDING)
+        {
+            /* Sets are rare and tell the story of the adapter (filter,
+             * multicast list, power); successful queries are only counted
+             * and summarised by the 10 s tick. */
+            if (OidRequest->RequestType == NdisRequestSetInformation)
+            {
+                DbgPrint("NDIS6 DIAG OID PDO %p: %s 0x%08lx value=0x%08lx -> 0x%08lx\n",
+                         Ext->PhysicalDeviceObject, DiagKind, DiagOid, DiagValue, (ULONG)DiagStatus);
+            }
+        }
+        else
+        {
+            ULONG Index;
+            BOOLEAN Seen = FALSE;
+
+            InterlockedIncrement(&Ext->DiagOidFailed);
+
+            /* One line per distinct (OID, status) failure. The table is not
+             * locked: a race only repeats a line, never loses the count. */
+            for (Index = 0; Index < Ext->DiagOidFailSeenCount && Index < RTL_NUMBER_OF(Ext->DiagOidFailSeen); Index++)
+            {
+                if (Ext->DiagOidFailSeen[Index].Oid == DiagOid &&
+                    Ext->DiagOidFailSeen[Index].Status == (ULONG)DiagStatus)
+                {
+                    Seen = TRUE;
+                    break;
+                }
+            }
+
+            if (!Seen)
+            {
+                if (Ext->DiagOidFailSeenCount < RTL_NUMBER_OF(Ext->DiagOidFailSeen))
+                {
+                    Ext->DiagOidFailSeen[Ext->DiagOidFailSeenCount].Oid = DiagOid;
+                    Ext->DiagOidFailSeen[Ext->DiagOidFailSeenCount].Status = (ULONG)DiagStatus;
+                    Ext->DiagOidFailSeenCount++;
+                }
+                DbgPrint("NDIS6 DIAG OID PDO %p: %s 0x%08lx value=0x%08lx -> 0x%08lx (first failure of this kind; later ones are counted in oid_failed)\n",
+                         Ext->PhysicalDeviceObject, DiagKind, DiagOid, DiagValue, (ULONG)DiagStatus);
+            }
+        }
         return DiagStatus;
     }
 }

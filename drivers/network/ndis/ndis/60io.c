@@ -866,7 +866,7 @@ Ndis6DiagPrint(
         Vector = Ext->MsiTable->MessageInfo[0].Vector;
 
     DbgPrint("NDIS6 DIAG %s PDO %p: mode=%s msi_wanted=%u vec=%lu irql=%u isr=%ld recognized=%ld dpc=%ld "
-             "rx_calls=%ld rx_nbls=%ld tx_calls=%ld tx_nbls=%ld tx_done=%ld oids=%ld\n",
+             "rx_calls=%ld rx_nbls=%ld tx_calls=%ld tx_nbls=%ld tx_done=%ld oids=%ld oid_failed=%ld\n",
              Tag, Ext->PhysicalDeviceObject,
              Ext->MsiConnected ? "MSI" : "LINE",
              (ULONG)Ext->IntChars.MsiSupported,
@@ -874,7 +874,7 @@ Ndis6DiagPrint(
              Ext->DiagIsr, Ext->DiagIsrRecognized, Ext->DiagDpc,
              Ext->DiagRxCalls, Ext->DiagRxNbl,
              Ext->DiagTxCalls, Ext->DiagTxNbl, Ext->DiagTxComplete,
-             Ext->DiagOid);
+             Ext->DiagOid, Ext->DiagOidFailed);
 }
 
 static VOID NTAPI

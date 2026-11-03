@@ -279,6 +279,11 @@ typedef struct _NDIS6_ADAPTER_EXT
     volatile LONG                   DiagTxNbl;
     volatile LONG                   DiagTxComplete;
     volatile LONG                   DiagOid;
+    volatile LONG                   DiagOidFailed;
+    /* Distinct (OID, status) failures already printed once; a protocol that
+     * polls a counter OID the miniport rejects must not flood the log. */
+    struct { ULONG Oid; ULONG Status; } DiagOidFailSeen[8];
+    ULONG                           DiagOidFailSeenCount;
     KTIMER                          DiagTimer;
     KDPC                            DiagTimerDpc;
     BOOLEAN                         DiagTimerStarted;
