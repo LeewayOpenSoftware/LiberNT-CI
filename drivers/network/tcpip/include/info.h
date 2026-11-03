@@ -152,6 +152,12 @@ TDI_STATUS InfoTdiQueryGetIPSnmpInfo( TDIEntityID ID,
 				      PNDIS_BUFFER Buffer,
 				      PUINT BufferSize );
 
+TDI_STATUS InfoTdiQueryGetTcpStats( PNDIS_BUFFER Buffer,
+                                    PUINT BufferSize );
+
+TDI_STATUS InfoTdiQueryGetUdpStats( PNDIS_BUFFER Buffer,
+                                    PUINT BufferSize );
+
 TDI_STATUS InfoTdiQueryGetRouteTable( PIP_INTERFACE IF,
                                       PNDIS_BUFFER Buffer,
                                       PUINT BufferSize );

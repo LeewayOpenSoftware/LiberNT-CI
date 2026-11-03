@@ -934,6 +934,36 @@ LibIP6QueryCallback(void *arg)
     }
 }
 
+VOID
+LibIPGetStats(struct lib_ip_stats *Stats)
+{
+    RtlZeroMemory(Stats, sizeof(*Stats));
+
+    Stats->InReceives = lwip_stats.ip.recv;
+    Stats->OutRequests = lwip_stats.ip.xmit;
+    Stats->ForwardedDatagrams = lwip_stats.ip.fw;
+    Stats->InDelivers = lwip_stats.ip.recv >= lwip_stats.ip.drop ? lwip_stats.ip.recv - lwip_stats.ip.drop : 0;
+    Stats->InHeaderErrors = lwip_stats.ip.chkerr + lwip_stats.ip.lenerr + lwip_stats.ip.opterr;
+    Stats->InUnknownProtocols = lwip_stats.ip.proterr;
+    Stats->InDiscards = lwip_stats.ip.drop;
+    Stats->OutNoRoutes = lwip_stats.ip.rterr;
+    Stats->OutDiscards = lwip_stats.ip.memerr + lwip_stats.ip.err;
+
+    Stats->ReasmReqds = lwip_stats.ip_frag.recv;
+    Stats->ReasmOks = lwip_stats.ip_frag.recv >= lwip_stats.ip_frag.drop ? lwip_stats.ip_frag.recv - lwip_stats.ip_frag.drop : 0;
+    Stats->ReasmFails = lwip_stats.ip_frag.drop;
+    Stats->FragCreates = lwip_stats.ip_frag.xmit;
+
+    Stats->TcpInSegs = lwip_stats.tcp.recv;
+    Stats->TcpOutSegs = lwip_stats.tcp.xmit;
+    Stats->TcpInErrs = lwip_stats.tcp.chkerr + lwip_stats.tcp.lenerr + lwip_stats.tcp.proterr;
+
+    Stats->UdpInDatagrams = lwip_stats.udp.recv;
+    Stats->UdpOutDatagrams = lwip_stats.udp.xmit;
+    Stats->UdpNoPorts = lwip_stats.udp.proterr;
+    Stats->UdpInErrors = lwip_stats.udp.chkerr + lwip_stats.udp.lenerr + lwip_stats.udp.memerr;
+}
+
 NTSTATUS
 LibIP6QueryTable(ULONG TableId, PVOID Buffer, ULONG Length, PULONG Count, PULONG Needed, PVOID Statistics)
 {

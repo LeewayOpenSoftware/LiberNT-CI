@@ -137,15 +137,15 @@ unsigned int Random(void);
 
 #define LINK_STATS                      0
 
-#define IP_STATS                        0
+#define IP_STATS                        1
 
-#define IPFRAG_STATS                    0
+#define IPFRAG_STATS                    1
 
-#define TCP_STATS                       0
+#define TCP_STATS                       1
 
 #define SYS_STATS                       0
 
-#define ICMP_STATS                      0
+#define ICMP_STATS                      1
 
 void LibTCPLockCore(void);
 void LibTCPUnlockCore(void);

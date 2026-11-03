@@ -325,6 +325,12 @@ TDI_STATUS InfoTdiQueryInformationEx(
                      }
                      return TDI_INVALID_PARAMETER;
                  }
+                 else if (ID->toi_entity.tei_entity == CO_TL_ENTITY) {
+                     return InfoTdiQueryGetTcpStats(Buffer, BufferSize);
+                 }
+                 else if (ID->toi_entity.tei_entity == CL_TL_ENTITY) {
+                     return InfoTdiQueryGetUdpStats(Buffer, BufferSize);
+                 }
                  else
                      return TDI_INVALID_PARAMETER;
 
