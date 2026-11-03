@@ -2271,7 +2271,9 @@ SmpProcessFileRenames(VOID)
             RegEntry->Name.Buffer++;
         }
 
-        /* Open the file for delete access */
+        /* Open the file for delete access. Backup intent lets the restore privilege
+         * enabled above apply, so that files owned by the system installer can be
+         * replaced too. */
         InitializeObjectAttributes(&ObjectAttributes,
                                    &RegEntry->Name,
                                    OBJ_CASE_INSENSITIVE,
@@ -2282,7 +2284,7 @@ SmpProcessFileRenames(VOID)
                             &ObjectAttributes,
                             &IoStatusBlock,
                             FILE_SHARE_READ | FILE_SHARE_WRITE,
-                            FILE_SYNCHRONOUS_IO_NONALERT);
+                            FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
         if (!NT_SUCCESS(Status)) goto Quickie;
 
         /* Check if it's a rename or just a delete */
@@ -2362,7 +2364,7 @@ SmpProcessFileRenames(VOID)
                                     &ObjectAttributes,
                                     &IoStatusBlock,
                                     FILE_SHARE_READ | FILE_SHARE_WRITE,
-                                    FILE_SYNCHRONOUS_IO_NONALERT);
+                                    FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_FOR_BACKUP_INTENT);
                 if (!NT_SUCCESS(Status))
                 {
                     /* That didn't work, so bail out */
