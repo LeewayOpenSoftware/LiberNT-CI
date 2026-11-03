@@ -87,6 +87,7 @@ BOOLEAN ExpInTextModeSetup;
 BOOLEAN IoRemoteBootClient;
 ULONG InitSafeBootMode;
 BOOLEAN InitIsWinPEMode, InitWinPEModeType;
+BOOLEAN SosEnabled = FALSE; // Used by io/iomgr/driver.c!IopDisplayLoadingMessage()
 
 /* NT Boot Path */
 UNICODE_STRING NtSystemRoot;
@@ -1555,6 +1556,9 @@ Phase1InitializationDiscard(IN PVOID Context)
                  (strstr(CommandLine, "NOGUIBOOT") != NULL ||
                   strstr(CommandLine, "DEBUGPORT=SCREEN") != NULL));
 
+    /* Get the SOS setting: list the drivers on screen as they load */
+    SosEnabled = (CommandLine && strstr(CommandLine, "SOS") != NULL);
+
     /* Setup the boot video driver */
     InbvEnableBootDriver(!NoGuiBoot);
     InbvDriverInitialize(LoaderBlock, IDB_MAX_RESOURCES);
@@ -1562,9 +1566,10 @@ Phase1InitializationDiscard(IN PVOID Context)
     /* Check if GUI boot is enabled */
     if (!NoGuiBoot)
     {
-        /* It is, display the boot logo and enable printing strings */
-        InbvEnableDisplayString(FALSE);
-        DisplayBootBitmap();
+        /* It is: display the boot logo, or the SOS text screen with
+         * boot-time strings enabled so the driver list is visible */
+        InbvEnableDisplayString(SosEnabled);
+        DisplayBootBitmap(SosEnabled);
 #ifndef _WINKD_
         KdDisplayTransportKey(FALSE);
 #endif

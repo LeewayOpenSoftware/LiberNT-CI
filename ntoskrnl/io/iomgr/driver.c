@@ -1323,6 +1323,27 @@ LdrProcessDriverModule(PLDR_DATA_TABLE_ENTRY LdrEntry,
 PDEVICE_OBJECT
 IopGetDeviceObjectFromDeviceInstance(PUNICODE_STRING DeviceInstance);
 
+/**
+ * @brief   Displays a driver-loading message in SOS mode.
+ *
+ * The /SOS boot option ("Show drivers while loading" in the boot loader
+ * settings) lists every driver image on the boot screen as it is loaded,
+ * so that a hang can be attributed to the last driver shown.
+ **/
+static VOID
+FASTCALL
+IopDisplayLoadingMessage(
+    _In_ PCUNICODE_STRING ImagePath)
+{
+    extern BOOLEAN SosEnabled; // See ex/init.c
+    CHAR TextBuffer[256];
+
+    if (!SosEnabled) return;
+    if (!ImagePath || !ImagePath->Buffer || ImagePath->Length == 0) return;
+    RtlStringCbPrintfA(TextBuffer, sizeof(TextBuffer), "%wZ\r\n", ImagePath);
+    HalDisplayString(TextBuffer);
+}
+
 /*
  * IopInitializeBuiltinDriver
  *
@@ -1342,6 +1363,10 @@ IopInitializeBuiltinDriver(IN PLDR_DATA_TABLE_ENTRY BootLdrEntry)
     PLIST_ENTRY NextEntry;
     UNICODE_STRING ServiceName;
     BOOLEAN Success;
+
+    /* Display the 'Loading XXX' message in SOS mode */
+    IopDisplayLoadingMessage(BootLdrEntry->FullDllName.Length
+                                 ? &BootLdrEntry->FullDllName : ModuleName);
 
     Buffer = ExAllocatePoolWithTag(PagedPool,
                                    ModuleName->Length + sizeof(UNICODE_NULL),
@@ -3100,6 +3125,7 @@ IopLoadDriverWithImage(
      * Load the driver module
      */
     DPRINT("Loading module from %wZ\n", &ImagePath);
+    IopDisplayLoadingMessage(&ImagePath);
     /* Re-read policy and ImagePath at load time; only reuse a matching image. */
     Status = MmLoadSystemImageEx(&ImagePath,
                                  NULL,

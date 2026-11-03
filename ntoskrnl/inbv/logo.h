@@ -50,7 +50,8 @@ typedef struct tagBITMAPINFOHEADER
 CODE_SEG("INIT")
 VOID
 NTAPI
-DisplayBootBitmap(VOID);
+DisplayBootBitmap(
+    _In_ BOOLEAN TextMode);
 
 CODE_SEG("INIT")
 VOID

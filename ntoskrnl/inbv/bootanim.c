@@ -198,9 +198,23 @@ BitBltAligned(
 CODE_SEG("INIT")
 VOID
 NTAPI
-DisplayBootBitmap(VOID)
+DisplayBootBitmap(
+    _In_ BOOLEAN TextMode)
 {
     PVOID BootCopy = NULL, BootLogo = NULL;
+
+    /*
+     * Text mode (/SOS): keep the screen as a plain scrolling text surface.
+     * No logo, no animation and no status-line filter, so that the strings
+     * printed through InbvDisplayString() (version banner, driver list) stay
+     * visible on both the VGA and the framebuffer bootvid.
+     */
+    if (TextMode)
+    {
+        if (!InbvBootDriverInstalled) return;
+        InbvSetTextColor(BV_COLOR_WHITE);
+        return;
+    }
 
     if (InbvGopHandleBootBitmap())
         return;

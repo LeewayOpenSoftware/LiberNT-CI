@@ -36,6 +36,7 @@ PLOADER_SYSTEM_BLOCK WinLdrSystemBlock;
 PCWSTR BootFileSystem = NULL;
 
 BOOLEAN VirtualBias = FALSE;
+BOOLEAN SosEnabled = FALSE;
 BOOLEAN BootLogo = FALSE;
 
 extern ULONG InitSafeBootMode;
@@ -61,13 +62,22 @@ NtLdrOutputLoadMsg(
     _In_ PCSTR FileName,
     _In_opt_ PCSTR Description)
 {
-    CHAR ProgressString[256];
+    if (SosEnabled)
+    {
+        /* /SOS: list every file as it loads */
+        printf("  %s\n", FileName);
+        TRACE("Loading: %s\n", FileName);
+    }
+    else
+    {
+        /* Inform the user we load a file */
+        CHAR ProgressString[256];
 
-    /* Inform the user we load a file */
-    RtlStringCbPrintfA(ProgressString, sizeof(ProgressString),
-                       "Loading %s...",
-                       (Description ? Description : FileName));
-    UiDrawStatusText(ProgressString);
+        RtlStringCbPrintfA(ProgressString, sizeof(ProgressString),
+                           "Loading %s...",
+                           (Description ? Description : FileName));
+        UiDrawStatusText(ProgressString);
+    }
 }
 
 #ifdef UEFIBOOT
@@ -1722,6 +1732,11 @@ LoadAndBootWindows(
             return Status;
         }
     }
+
+    /* Handle the SOS option */
+    SosEnabled = !!NtLdrGetOption(BootOptions, "SOS");
+    if (SosEnabled)
+        UiResetForSOS();
 
     /* Allocate and minimally-initialize the Loader Parameter Block */
     AllocateAndInitLPB(OperatingSystemVersion, &LoaderBlock);
