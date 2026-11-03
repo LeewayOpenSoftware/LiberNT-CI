@@ -1336,11 +1336,18 @@ IopDisplayLoadingMessage(
     _In_ PCUNICODE_STRING ImagePath)
 {
     extern BOOLEAN SosEnabled; // See ex/init.c
+    static const CHAR LineEnd[] = "\r\n";
     CHAR TextBuffer[256];
 
     if (!SosEnabled) return;
     if (!ImagePath || !ImagePath->Buffer || ImagePath->Length == 0) return;
-    RtlStringCbPrintfA(TextBuffer, sizeof(TextBuffer), "%wZ\r\n", ImagePath);
+
+    /* Format the path into the buffer minus the room reserved for the line
+     * ending: RtlStringCbPrintfA() always NUL-terminates, truncating a long
+     * path (STATUS_BUFFER_OVERFLOW), and the line ending is then appended
+     * into the reserved room, so every message ends in a newline. */
+    RtlStringCbPrintfA(TextBuffer, sizeof(TextBuffer) - sizeof(LineEnd), "%wZ", ImagePath);
+    RtlStringCbCatA(TextBuffer, sizeof(TextBuffer), LineEnd);
     HalDisplayString(TextBuffer);
 }
 

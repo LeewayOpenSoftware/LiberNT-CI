@@ -89,6 +89,37 @@ ULONG InitSafeBootMode;
 BOOLEAN InitIsWinPEMode, InitWinPEModeType;
 BOOLEAN SosEnabled = FALSE; // Used by io/iomgr/driver.c!IopDisplayLoadingMessage()
 
+/**
+ * @brief   Checks whether a boot option is present in the (upper-cased)
+ *          load options as a whole token, delimited by the start or end of
+ *          the string, a space or a slash: "SOS" matches "/SOS" and
+ *          "NOGUIBOOT SOS" but not "SOSFOO" or "/MYSOS".
+ **/
+static
+BOOLEAN
+ExpIsLoadOptionPresent(
+    _In_opt_ PCSTR CommandLine,
+    _In_ PCSTR Option)
+{
+    SIZE_T Length = strlen(Option);
+    PCSTR Match;
+
+    if (!CommandLine) return FALSE;
+
+    for (Match = strstr(CommandLine, Option); Match; Match = strstr(Match + 1, Option))
+    {
+        CHAR Before = (Match == CommandLine) ? ' ' : Match[-1];
+        CHAR After = Match[Length];
+
+        if ((Before == ' ' || Before == '/') &&
+            (After == ' ' || After == '/' || After == ANSI_NULL))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 /* NT Boot Path */
 UNICODE_STRING NtSystemRoot;
 
@@ -1557,7 +1588,7 @@ Phase1InitializationDiscard(IN PVOID Context)
                   strstr(CommandLine, "DEBUGPORT=SCREEN") != NULL));
 
     /* Get the SOS setting: list the drivers on screen as they load */
-    SosEnabled = (CommandLine && strstr(CommandLine, "SOS") != NULL);
+    SosEnabled = ExpIsLoadOptionPresent(CommandLine, "SOS");
 
     /* Setup the boot video driver */
     InbvEnableBootDriver(!NoGuiBoot);
