@@ -31,6 +31,7 @@ extern void func_GetCurrentThreadStackLimits(void);
 extern void func_GetDriveType(void);
 extern void func_FindNLSString(void);
 extern void func_CompatLinks(void);
+extern void func_LdrDllNotification(void);
 extern void func_ForwardCycles(void);
 extern void func_DllDirectories(void);
 extern void func_ManifestSettings(void);
@@ -149,6 +150,7 @@ const struct test winetest_testlist[] =
     { "GetDriveType",                func_GetDriveType },
     { "FindNLSString", func_FindNLSString },
     { "CompatLinks", func_CompatLinks },
+    { "LdrDllNotification", func_LdrDllNotification },
     { "ManifestSettings", func_ManifestSettings },
     { "Utf8ActiveCodePage", func_Utf8ActiveCodePage },
     { "TramoE", func_TramoE },

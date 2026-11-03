@@ -28,6 +28,7 @@ list(APPEND SOURCE
     DosPathToSessionPath.c
     IsValidLocaleName.c
     CompatLinks.c
+    LdrDllNotification.c
     ForwardCycles.c
     DllDirectories.c
     ManifestSettings.c
