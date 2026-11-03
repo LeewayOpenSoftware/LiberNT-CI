@@ -1602,6 +1602,11 @@ LX_SYSCALL(LxSysFchmod)
 
     if (File == NULL)
         return -LX_EBADF;
+    if (File->Flags & LX_O_PATH)
+    {
+        LxFileDereference(File);
+        return -LX_EBADF;
+    }
     Error = LxSetAttributesFile(Call->Process, File, (ULONG)Call->Args[1] & 07777, MAXULONG, MAXULONG);
     LxFileDereference(File);
     return Error;
@@ -1609,6 +1614,14 @@ LX_SYSCALL(LxSysFchmod)
 
 LX_SYSCALL(LxSysFchmodat)
 {
+    return LxSetAttributesAt(Call, (LONG)Call->Args[0], Call->Args[1], 0, (ULONG)Call->Args[2] & 07777, MAXULONG,
+                             MAXULONG);
+}
+
+LX_SYSCALL(LxSysFchmodat2)
+{
+    if ((ULONG)Call->Args[3] & ~(ULONG)(LX_AT_SYMLINK_NOFOLLOW | LX_AT_EMPTY_PATH))
+        return -LX_EINVAL;
     return LxSetAttributesAt(Call, (LONG)Call->Args[0], Call->Args[1], (ULONG)Call->Args[3],
                              (ULONG)Call->Args[2] & 07777, MAXULONG, MAXULONG);
 }
@@ -1646,6 +1659,11 @@ LX_SYSCALL(LxSysFchown)
     File = LxCallFile(Call, 0);
     if (File == NULL)
         return -LX_EBADF;
+    if (File->Flags & LX_O_PATH)
+    {
+        LxFileDereference(File);
+        return -LX_EBADF;
+    }
     Error = LxSetAttributesFile(Call->Process, File, MAXULONG, Uid, Gid);
     LxFileDereference(File);
     return Error;
@@ -1655,6 +1673,8 @@ LX_SYSCALL(LxSysFchownat)
 {
     ULONG Uid = (ULONG)Call->Args[2], Gid = (ULONG)Call->Args[3];
 
+    if ((ULONG)Call->Args[4] & ~(ULONG)(LX_AT_SYMLINK_NOFOLLOW | LX_AT_EMPTY_PATH))
+        return -LX_EINVAL;
     if (!LxChownIds(Call->Process, &Uid, &Gid))
         return -LX_EINVAL;
     return LxSetAttributesAt(Call, (LONG)Call->Args[0], Call->Args[1], (ULONG)Call->Args[4], MAXULONG, Uid, Gid);
@@ -2618,6 +2638,40 @@ LxXattrFind(
     *RecordLength = 0;
     *ValueLength = 0;
     return NULL;
+}
+
+LONG
+LxXattrRemoveName(
+    _In_opt_ PLX_TMPFS_INODE Inode,
+    _In_opt_ HANDLE Handle,
+    _In_ PCSTR Name)
+{
+    PUCHAR Blob = LxAlloc(LX_XATTR_BLOB_MAX), Record;
+    ULONG Length, RecordLength;
+    USHORT ValueLength;
+    LONG Error;
+
+    if (Blob == NULL)
+        return -LX_ENOMEM;
+    if (Inode != NULL)
+        Error = LxTmpfsXattrRead(Inode, Blob, LX_XATTR_BLOB_MAX, &Length);
+    else
+        Error = LxXattrRead(Handle, Blob, LX_XATTR_BLOB_MAX, &Length);
+    if (Error == 0)
+    {
+        Record = LxXattrFind(Blob, Length, Name, &RecordLength, &ValueLength);
+        if (Record != NULL)
+        {
+            RtlMoveMemory(Record, Record + RecordLength, Length - (ULONG)(Record - Blob) - RecordLength);
+            Length -= RecordLength;
+            if (Inode != NULL)
+                Error = LxTmpfsXattrWrite(Inode, Blob, Length);
+            else
+                Error = LxXattrWrite(Handle, Blob, Length);
+        }
+    }
+    LxFree(Blob);
+    return Error;
 }
 
 static
