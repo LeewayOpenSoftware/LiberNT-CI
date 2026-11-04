@@ -86,6 +86,7 @@ list(APPEND SOURCE
     SharedMemorySecurity.c
     SharedMemoryTransfer.c
     StarvationBoost.c
+    SystemTimeChangeTimers.c
     StdHandleInheritance.c
     LocaleNameToLCID.c
     lstrcpynW.c
