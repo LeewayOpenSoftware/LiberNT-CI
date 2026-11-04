@@ -3571,6 +3571,18 @@ static BOOL WINAPI verify_ssl_policy(LPCSTR szPolicyOID,
          CERT_TRUST_IS_UNTRUSTED_ROOT, &pPolicyStatus->lChainIndex,
          &pPolicyStatus->lElementIndex);
     }
+#ifdef __REACTOS__
+    else if (pChainContext->TrustStatus.dwErrorStatus &
+     CERT_TRUST_IS_PARTIAL_CHAIN &&
+     !(checks & SECURITY_FLAG_IGNORE_UNKNOWN_CA) &&
+     !(baseChecks & CERT_CHAIN_POLICY_ALLOW_UNKNOWN_CA_FLAG))
+    {
+        pPolicyStatus->dwError = CERT_E_CHAINING;
+        find_element_with_error(pChainContext,
+         CERT_TRUST_IS_PARTIAL_CHAIN, &pPolicyStatus->lChainIndex,
+         &pPolicyStatus->lElementIndex);
+    }
+#endif
     else if (pChainContext->TrustStatus.dwErrorStatus & CERT_TRUST_IS_CYCLIC)
     {
         pPolicyStatus->dwError = CERT_E_UNTRUSTEDROOT;

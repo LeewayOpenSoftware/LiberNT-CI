@@ -5137,6 +5137,25 @@ static void check_authenticode_policy(void)
      ignoredInvalidDateBasePolicyCheck, &oct2007, &policyPara);
 }
 
+/* Regression test for the SSL chain policy over an incomplete (partial)
+ * chain.  chain0_1 is the end-entity certificate of chain0 and chain0_0 is
+ * its issuer; supplying the leaf alone (no issuer available) yields a chain
+ * flagged CERT_TRUST_IS_PARTIAL_CHAIN.  Windows (and the crypt32 base policy)
+ * reject such a chain under the SSL policy with CERT_E_CHAINING; it is only
+ * accepted when the caller explicitly opts out via
+ * SECURITY_FLAG_IGNORE_UNKNOWN_CA or CERT_CHAIN_POLICY_ALLOW_UNKNOWN_CA_FLAG. */
+static CONST_DATA_BLOB sslPartialChain[] = {
+ { sizeof(chain0_1), chain0_1 },
+};
+static const ChainPolicyCheck sslPartialChainPolicyCheck = {
+ { ARRAY_SIZE(sslPartialChain), sslPartialChain },
+ { 0, CERT_E_CHAINING, -1, -1, NULL }, NULL, 0
+};
+static const ChainPolicyCheck sslPartialChainIgnoredPolicyCheck = {
+ { ARRAY_SIZE(sslPartialChain), sslPartialChain },
+ { 0, 0, -1, -1, NULL }, NULL, 0
+};
+
 static void check_ssl_policy(void)
 {
     CERT_CHAIN_POLICY_PARA policyPara = { 0 };
@@ -5219,6 +5238,26 @@ static void check_ssl_policy(void)
     CHECK_CHAIN_POLICY_STATUS(CERT_CHAIN_POLICY_SSL, NULL,
      googlePolicyCheckWithMatchingName, &nov2016, &policyPara);
     sslPolicyPara.fdwChecks = 0;
+
+    /* A partial chain (issuer unavailable) is rejected under the SSL policy
+     * with CERT_E_CHAINING, matching the base policy. */
+    sslPolicyPara.cbSize = sizeof(sslPolicyPara);
+    sslPolicyPara.dwAuthType = AUTHTYPE_SERVER;
+    sslPolicyPara.pwszServerName = NULL;
+    sslPolicyPara.fdwChecks = 0;
+    policyPara.dwFlags = 0;
+    CHECK_CHAIN_POLICY_STATUS(CERT_CHAIN_POLICY_SSL, NULL,
+     sslPartialChainPolicyCheck, &oct2007, &policyPara);
+    /* ...unless SECURITY_FLAG_IGNORE_UNKNOWN_CA is set... */
+    sslPolicyPara.fdwChecks = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
+    CHECK_CHAIN_POLICY_STATUS(CERT_CHAIN_POLICY_SSL, NULL,
+     sslPartialChainIgnoredPolicyCheck, &oct2007, &policyPara);
+    sslPolicyPara.fdwChecks = 0;
+    /* ...or CERT_CHAIN_POLICY_ALLOW_UNKNOWN_CA_FLAG is set in dwFlags. */
+    policyPara.dwFlags = CERT_CHAIN_POLICY_ALLOW_UNKNOWN_CA_FLAG;
+    CHECK_CHAIN_POLICY_STATUS(CERT_CHAIN_POLICY_SSL, NULL,
+     sslPartialChainIgnoredPolicyCheck, &oct2007, &policyPara);
+    policyPara.dwFlags = 0;
 
     /* Check again with the openssl cert, which has a wildcard in its name,
      * with various combinations of matching and non-matching names.
