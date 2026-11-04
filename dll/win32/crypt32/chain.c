@@ -112,6 +112,36 @@ static BOOL CRYPT_CheckRestrictedRoot(HCERTSTORE store)
     return ret;
 }
 
+typedef struct _CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_ROOT
+{
+    DWORD       cbSize;
+    HCERTSTORE  hRestrictedRoot;
+    HCERTSTORE  hRestrictedTrust;
+    HCERTSTORE  hRestrictedOther;
+    DWORD       cAdditionalStore;
+    HCERTSTORE *rghAdditionalStore;
+    DWORD       dwFlags;
+    DWORD       dwUrlRetrievalTimeout;
+    DWORD       MaximumCachedCertificates;
+    DWORD       CycleDetectionModulus;
+} CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_ROOT;
+
+typedef struct _CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_FLAGS
+{
+    DWORD       cbSize;
+    HCERTSTORE  hRestrictedRoot;
+    HCERTSTORE  hRestrictedTrust;
+    HCERTSTORE  hRestrictedOther;
+    DWORD       cAdditionalStore;
+    HCERTSTORE *rghAdditionalStore;
+    DWORD       dwFlags;
+    DWORD       dwUrlRetrievalTimeout;
+    DWORD       MaximumCachedCertificates;
+    DWORD       CycleDetectionModulus;
+    HCERTSTORE  hExclusiveRoot;
+    HCERTSTORE  hExclusiveTrustedPeople;
+} CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_FLAGS;
+
 HCERTCHAINENGINE CRYPT_CreateChainEngine(HCERTSTORE root, DWORD system_store, const CERT_CHAIN_ENGINE_CONFIG *config)
 {
     CertificateChainEngine *engine;
@@ -120,7 +150,7 @@ HCERTCHAINENGINE CRYPT_CreateChainEngine(HCERTSTORE root, DWORD system_store, co
     if (root) {
         root = CertDuplicateStore(root);
     } else {
-        if(config->cbSize >= sizeof(CERT_CHAIN_ENGINE_CONFIG) && config->hExclusiveRoot)
+        if(config->cbSize >= sizeof(CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_FLAGS) && config->hExclusiveRoot)
             root = CertDuplicateStore(config->hExclusiveRoot);
         else if (config->hRestrictedRoot)
             root = CertDuplicateStore(config->hRestrictedRoot);
@@ -206,36 +236,6 @@ static void free_chain_engine(CertificateChainEngine *engine)
     CertCloseStore(engine->hRoot, 0);
     CryptMemFree(engine);
 }
-
-typedef struct _CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_ROOT
-{
-    DWORD       cbSize;
-    HCERTSTORE  hRestrictedRoot;
-    HCERTSTORE  hRestrictedTrust;
-    HCERTSTORE  hRestrictedOther;
-    DWORD       cAdditionalStore;
-    HCERTSTORE *rghAdditionalStore;
-    DWORD       dwFlags;
-    DWORD       dwUrlRetrievalTimeout;
-    DWORD       MaximumCachedCertificates;
-    DWORD       CycleDetectionModulus;
-} CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_ROOT;
-
-typedef struct _CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_FLAGS
-{
-    DWORD       cbSize;
-    HCERTSTORE  hRestrictedRoot;
-    HCERTSTORE  hRestrictedTrust;
-    HCERTSTORE  hRestrictedOther;
-    DWORD       cAdditionalStore;
-    HCERTSTORE *rghAdditionalStore;
-    DWORD       dwFlags;
-    DWORD       dwUrlRetrievalTimeout;
-    DWORD       MaximumCachedCertificates;
-    DWORD       CycleDetectionModulus;
-    HCERTSTORE  hExclusiveRoot;
-    HCERTSTORE  hExclusiveTrustedPeople;
-} CERT_CHAIN_ENGINE_CONFIG_NO_EXCLUSIVE_FLAGS;
 
 BOOL WINAPI CertCreateCertificateChainEngine(PCERT_CHAIN_ENGINE_CONFIG pConfig,
  HCERTCHAINENGINE *phChainEngine)

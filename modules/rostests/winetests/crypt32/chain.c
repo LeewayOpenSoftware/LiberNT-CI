@@ -5621,9 +5621,107 @@ static void test_chain_engine_cache_update(void)
     CertFreeCertificateContext(cert);
 }
 
+/* Deterministic CERT_CHAIN_ENGINE_CONFIG layouts for the hExclusiveRoot
+ * regression test, independent of the SDK's NTDDI level.  hExclusiveRoot and
+ * hExclusiveTrustedPeople date from Windows 7; dwExclusiveFlags from Windows 8.
+ * Windows honors hExclusiveRoot whenever the field lies within cbSize, so a
+ * Windows 7-sized config (without dwExclusiveFlags) must be honored too. */
+typedef struct {
+    DWORD       cbSize;
+    HCERTSTORE  hRestrictedRoot;
+    HCERTSTORE  hRestrictedTrust;
+    HCERTSTORE  hRestrictedOther;
+    DWORD       cAdditionalStore;
+    HCERTSTORE *rghAdditionalStore;
+    DWORD       dwFlags;
+    DWORD       dwUrlRetrievalTimeout;
+    DWORD       MaximumCachedCertificates;
+    DWORD       CycleDetectionModulus;
+    HCERTSTORE  hExclusiveRoot;
+    HCERTSTORE  hExclusiveTrustedPeople;
+} ENGINE_CONFIG_WIN7;
+
+typedef struct {
+    DWORD       cbSize;
+    HCERTSTORE  hRestrictedRoot;
+    HCERTSTORE  hRestrictedTrust;
+    HCERTSTORE  hRestrictedOther;
+    DWORD       cAdditionalStore;
+    HCERTSTORE *rghAdditionalStore;
+    DWORD       dwFlags;
+    DWORD       dwUrlRetrievalTimeout;
+    DWORD       MaximumCachedCertificates;
+    DWORD       CycleDetectionModulus;
+    HCERTSTORE  hExclusiveRoot;
+    HCERTSTORE  hExclusiveTrustedPeople;
+    DWORD       dwExclusiveFlags;
+} ENGINE_CONFIG_WIN8;
+
+static void test_hExclusiveRoot_cbSize(void)
+{
+    static CONST_DATA_BLOB leafOnly[] = {
+        { sizeof(chain0_1), chain0_1 },   /* chain0 leaf; chain0_0 is its issuer */
+    };
+    CONST_BLOB_ARRAY certs = { ARRAY_SIZE(leafOnly), leafOnly };
+    HCERTSTORE exclusiveRoot;
+    ENGINE_CONFIG_WIN7 cfg7;
+    ENGINE_CONFIG_WIN8 cfg8;
+    HCERTCHAINENGINE engine;
+    PCCERT_CHAIN_CONTEXT chain;
+    BOOL ret;
+
+    ok(sizeof(cfg7) < sizeof(cfg8), "unexpected engine config sizes %u/%u\n",
+       (unsigned)sizeof(cfg7), (unsigned)sizeof(cfg8));
+    exclusiveRoot = CertOpenStore(CERT_STORE_PROV_MEMORY, X509_ASN_ENCODING, 0,
+     CERT_STORE_CREATE_NEW_FLAG, NULL);
+    ok(exclusiveRoot != NULL, "CertOpenStore failed: %08lx\n", GetLastError());
+    ret = CertAddEncodedCertificateToStore(exclusiveRoot, X509_ASN_ENCODING,
+     chain0_0, sizeof(chain0_0), CERT_STORE_ADD_ALWAYS, NULL);
+    ok(ret, "adding exclusive root failed: %08lx\n", GetLastError());
+
+    /* Windows 7-sized config (no dwExclusiveFlags) carrying hExclusiveRoot:
+     * chain0's leaf must build to a trusted root (no partial/untrusted). */
+    memset(&cfg7, 0, sizeof(cfg7));
+    cfg7.cbSize = sizeof(cfg7);
+    cfg7.hExclusiveRoot = exclusiveRoot;
+    ret = CertCreateCertificateChainEngine((CERT_CHAIN_ENGINE_CONFIG *)&cfg7, &engine);
+    ok(ret, "CertCreateCertificateChainEngine (win7-sized) failed: %08lx\n", GetLastError());
+    if (ret) {
+        chain = getChain(engine, &certs, 0, TRUE, &oct2007, 0, 700);
+        ok(chain != NULL, "getChain (win7-sized) returned NULL\n");
+        if (chain) {
+            ok(chain->TrustStatus.dwErrorStatus == 0,
+               "win7-sized hExclusiveRoot: expected trusted chain (0), got %08lx\n",
+               chain->TrustStatus.dwErrorStatus);
+            CertFreeCertificateChain(chain);
+        }
+        CertFreeCertificateChainEngine(engine);
+    }
+
+    /* A full Windows 8-sized config must behave identically. */
+    memset(&cfg8, 0, sizeof(cfg8));
+    cfg8.cbSize = sizeof(cfg8);
+    cfg8.hExclusiveRoot = exclusiveRoot;
+    ret = CertCreateCertificateChainEngine((CERT_CHAIN_ENGINE_CONFIG *)&cfg8, &engine);
+    ok(ret, "CertCreateCertificateChainEngine (full-sized) failed: %08lx\n", GetLastError());
+    if (ret) {
+        chain = getChain(engine, &certs, 0, TRUE, &oct2007, 0, 701);
+        ok(chain != NULL, "getChain (full-sized) returned NULL\n");
+        if (chain) {
+            ok(chain->TrustStatus.dwErrorStatus == 0,
+               "full-sized hExclusiveRoot: expected trusted chain (0), got %08lx\n",
+               chain->TrustStatus.dwErrorStatus);
+            CertFreeCertificateChain(chain);
+        }
+        CertFreeCertificateChainEngine(engine);
+    }
+    CertCloseStore(exclusiveRoot, 0);
+}
+
 START_TEST(chain)
 {
     testCreateCertChainEngine();
+    test_hExclusiveRoot_cbSize();
     testVerifyCertChainPolicy();
     testGetCertChain();
     test_CERT_CHAIN_PARA_cbSize();
