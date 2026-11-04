@@ -11,6 +11,7 @@
 #include "precomp.h"
 
 #include <tcpip_undoc.h>
+#include <icmp.h>
 
 #define IP_ROUTE_TYPE_ADD 3
 #define IP_ROUTE_TYPE_DEL 2
@@ -266,6 +267,15 @@ TDI_STATUS InfoTdiQueryGetUdpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
     UdpStats.dwInErrors = LibStats.UdpInErrors;
 
     return InfoCopyOut( (PCHAR)&UdpStats, sizeof(UdpStats), Buffer, BufferSize );
+}
+
+/* IPv4 ICMP MIB. IPv4 ICMP is handled by the native stack (ip/network/icmp.c),
+   not lwIP, so the counters live there. ICMP_STATISTICS already mirrors
+   MIBICMPINFO (two MIBICMPSTATS of 13 ULONGs = 104 bytes), so copy it straight
+   out; this avoids pulling usermode ipmib.h (which drags in ifmib.h/nldef.h). */
+TDI_STATUS InfoTdiQueryGetIcmpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
+{
+    return InfoCopyOut( (PCHAR)&ICMPStats, sizeof(ICMPStats), Buffer, BufferSize );
 }
 
 TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,

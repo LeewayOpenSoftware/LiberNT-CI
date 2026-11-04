@@ -334,6 +334,15 @@ TDI_STATUS InfoTdiQueryInformationEx(
                  else
                      return TDI_INVALID_PARAMETER;
 
+              case ICMP_MIB_STATS_ID:
+                 if (ID->toi_type != INFO_TYPE_PROVIDER)
+                     return TDI_INVALID_PARAMETER;
+
+                 if (ID->toi_entity.tei_entity == CL_NL_ENTITY)
+                     return InfoTdiQueryGetIcmpStats(Buffer, BufferSize);
+                 else
+                     return TDI_INVALID_PARAMETER;
+
               case IP_MIB_ADDRTABLE_ENTRY_ID:
                  if (ID->toi_type != INFO_TYPE_PROVIDER)
                      return TDI_INVALID_PARAMETER;

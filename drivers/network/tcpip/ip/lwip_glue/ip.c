@@ -962,6 +962,8 @@ LibIPGetStats(struct lib_ip_stats *Stats)
     Stats->UdpOutDatagrams = lwip_stats.udp.xmit;
     Stats->UdpNoPorts = lwip_stats.udp.proterr;
     Stats->UdpInErrors = lwip_stats.udp.chkerr + lwip_stats.udp.lenerr + lwip_stats.udp.memerr;
+    /* IPv4 ICMP is served by the native stack (ip/network/icmp.c ICMPStats),
+     * not lwIP, so it is not copied here. */
 }
 
 NTSTATUS
