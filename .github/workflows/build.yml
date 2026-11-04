@@ -16,7 +16,9 @@ jobs:
   build-linux:
     strategy:
       matrix:
-        include: ${{ fromJSON(github.ref == 'refs/heads/leeway/main' && '[{"compiler":"gcc","arch":"i386"},{"compiler":"clang","arch":"amd64"}]' || '[{"compiler":"clang","arch":"amd64"}]') }}
+        include:
+          - compiler: clang
+            arch: amd64
       fail-fast: false
     runs-on: ubuntu-24.04
     steps:
@@ -174,7 +176,7 @@ jobs:
     if: github.ref == 'refs/heads/leeway/main'
     strategy:
       matrix:
-        arch: [amd64, i386]
+        arch: [amd64]
       fail-fast: false
     runs-on: windows-2025
     steps:
@@ -184,7 +186,7 @@ jobs:
     - name: Set up the MSVC build environment
       uses: ilammy/msvc-dev-cmd@v1
       with:
-        arch: ${{ matrix.arch == 'i386' && 'amd64_x86' || 'amd64' }}
+        arch: amd64
 
     - name: Install host build tools
       shell: pwsh
