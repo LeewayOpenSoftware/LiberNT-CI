@@ -2931,7 +2931,6 @@ LdrpLoadDllWithPath(IN BOOLEAN Redirected,
     /* Check for init flag and acquire lock */
     if (!InInit) RtlEnterCriticalSection(&LdrpLoaderLock);
 
-    _SEH2_TRY
     {
         /* Show debug message */
         if (ShowSnaps)
@@ -2957,7 +2956,7 @@ LdrpLoadDllWithPath(IN BOOLEAN Redirected,
                                 Redirected,
                                 &LdrEntry);
             if (!NT_SUCCESS(Status))
-                _SEH2_LEAVE;
+                goto Done;
 
             /* FIXME: Need to mark the DLL range for the stack DB */
             //RtlpStkMarkDllRange(LdrEntry);
@@ -3007,7 +3006,7 @@ LdrpLoadDllWithPath(IN BOOLEAN Redirected,
                     LdrUnloadDll(LdrEntry->DllBase);
 
                     /* Return the error */
-                    _SEH2_LEAVE;
+                    goto Done;
                 }
             }
             else if (LdrEntry->LoadCount != 0xFFFF)
@@ -3083,12 +3082,9 @@ LdrpLoadDllWithPath(IN BOOLEAN Redirected,
         }
 
     }
-    _SEH2_FINALLY
-    {
-        /* Release the lock */
-        if (!InInit) RtlLeaveCriticalSection(&LdrpLoaderLock);
-    }
-    _SEH2_END;
+Done:
+    /* Release the lock */
+    if (!InInit) RtlLeaveCriticalSection(&LdrpLoaderLock);
 
     /* Check for success */
     if (NT_SUCCESS(Status))
