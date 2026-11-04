@@ -78,6 +78,7 @@ list(APPEND SOURCE
     LockFileEx.c
     OpenFileByIdRename.c
     PagingFileOpen.c
+    QuantumRoundRobin.c
     SandboxLaunch.c
     SystemImageCatalog.c
     TebSegmentAfterWait.c
