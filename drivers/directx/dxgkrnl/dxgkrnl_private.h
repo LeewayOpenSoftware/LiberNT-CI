@@ -1067,6 +1067,9 @@ struct _DXGKRNL_ADAPTER
      * (device-list modifications, resource assignments, etc.).
      */
     KMUTEX                     AdapterMutex;
+    /* Processes holding a stable power request; a leaf lock so process teardown can take it. */
+    KMUTEX                     StablePowerMutex;
+    LONG                       StablePowerReferences;
 
     /* Serializes replacement of the active VidPn and every adapter-level
      * reader that does not already hold an explicit VidPn reference.  The
@@ -1629,6 +1632,10 @@ struct _DXGKRNL_DEVICE
      */
     LIST_ENTRY                  ContextListHead;
 
+    /* Wakes ordered waits for publishers above APC_LEVEL, which cannot take DeviceMutex. */
+    volatile LONG               StreamWakeQueued;
+    WORK_QUEUE_ITEM             StreamWakeWorkItem;
+
     /*
      * List of D3DKMT_SYNCHRONIZATIONOBJECT handles created against this
      * device.  Protected by DeviceMutex.
@@ -2049,6 +2056,9 @@ struct _DXGKRNL_PROCESS
      * by queued or committed tracker entries. */
     volatile LONG               InFlightSubmissions;
 
+    /* D3DKMTSetStablePowerState requests of this process, under the adapter StablePowerMutex. */
+    LONG                        StablePowerReferences;
+
     /*
      * This process's share of each node's execution clock.  Indexed by node
      * ordinal, which the adapter has already bounded to the array size, so
@@ -2223,6 +2233,8 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     volatile LONG               MutexOwned;
     volatile LONG64             SemaphoreCount;
     ULONG                       SemaphoreLimit;
+    PVOID volatile              MutexQueuedOwner;
+    volatile LONG64             SemaphoreQueuedCount;
     PKEVENT                     CpuNotificationEvent;
     BOOLEAN                     CpuNotificationEventReferenced;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
@@ -3238,6 +3250,15 @@ DxgkContextOrderAdmitCompletion(
 VOID
 DxgkContextOrderWakeDevice(
     _Inout_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkContextOrderQueueDeviceWake(
+    _Inout_ PDXGKRNL_DEVICE Device);
+
+VOID
+DxgkStablePowerNotify(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN Enabled);
 
 NTSTATUS
 DxgkAcquireProcessRecord(

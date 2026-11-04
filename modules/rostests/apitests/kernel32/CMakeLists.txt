@@ -23,6 +23,7 @@ list(APPEND SOURCE
     dosdev.c
     EnumSystemCodePages.c
     FindActCtxSectionStringW.c
+    FileStorageInfo.c
     FindFiles.c
     IsValidRelativeSecurityDescriptor.c
     DosPathToSessionPath.c
@@ -76,6 +77,7 @@ list(APPEND SOURCE
     LoadLibraryExW.c
     LockFileEx.c
     OpenFileByIdRename.c
+    PagingFileOpen.c
     SandboxLaunch.c
     SystemImageCatalog.c
     TebSegmentAfterWait.c

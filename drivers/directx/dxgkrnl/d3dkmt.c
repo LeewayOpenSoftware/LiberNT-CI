@@ -519,7 +519,6 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
-        case IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME:
         case IOCTL_D3DKMT_PUBLIC_OPERATION:
         case IOCTL_D3DKMT_CREATEDEVICE:
         case IOCTL_D3DKMT_DESTROYDEVICE:
@@ -644,6 +643,7 @@ DxgkpKmtIoctlMinimumConfiguredLevel(
         case IOCTL_D3DKMT_EVICT:
         case IOCTL_D3DKMT_QUERYCLOCKCALIBRATION:
         case IOCTL_D3DKMT_CHANGEVIDEOMEMORYRESERVATION:
+        case IOCTL_D3DKMT_SETSTABLEPOWERSTATE:
         case IOCTL_D3DKMT_REGISTERTRIMNOTIFICATION:
         case IOCTL_D3DKMT_UNREGISTERTRIMNOTIFICATION:
         case IOCTL_D3DKMT_CREATEPAGINGQUEUE:
@@ -2627,16 +2627,13 @@ DxgkpEqualDeviceInterfaceName(
 static NTSTATUS
 DxgkpOpenAdapterByDeviceObjectName(
     _In_ PCWSTR DeviceName,
-    _In_ BOOLEAN PreferRenderPair,
     _Out_ D3DKMT_HANDLE *OutHandle,
     _Out_ LUID *OutLuid)
 {
     PDXGKRNL_ADAPTER Snapshot[DXGKP_MAX_ADAPTERS];
     PDXGKRNL_ADAPTER Selected = NULL;
-    PDXGKRNL_ADAPTER RenderPair = NULL;
     UNICODE_STRING Name;
     ULONG Count;
-    ULONG RenderPairCount = 0;
     ULONG i;
     NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
@@ -2664,27 +2661,6 @@ DxgkpOpenAdapterByDeviceObjectName(
             continue;
         Selected = Snapshot[i];
         break;
-    }
-
-    /* A display-only fallback may own the desktop HDC while a unique vendor
-     * adapter supplies rendering.  Pair only this private win32k path; public
-     * device-name opens and VidPn ownership queries retain exact identity. */
-    if (PreferRenderPair &&
-        Selected != NULL &&
-        Selected->MiniportContext != NULL &&
-        Selected->MiniportContext->IsBasicDisplayFallback)
-    {
-        RenderPair = DxgkpFirstRenderPair(Snapshot, Count, Selected, &RenderPairCount);
-        if (RenderPair != NULL)
-        {
-            if (RenderPairCount > 1)
-            {
-                DXGKRNL_TRACE("DxgkpOpenAdapterByDeviceObjectName: %lu render adapters "
-                              "eligible for the basic-display DC, pairing with the first\n",
-                              RenderPairCount);
-            }
-            Selected = RenderPair;
-        }
     }
 
     if (Selected != NULL)
@@ -10803,6 +10779,48 @@ DxgkpAdapterSchedulesInHardware(
     return FALSE;
 }
 
+VOID
+DxgkStablePowerNotify(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _In_ BOOLEAN Enabled)
+{
+    DXGKARG_SETSTABLEPOWERSTATE Args;
+
+    if (DXGK_CB_FULL(Adapter, DxgkDdiSetStablePowerState) == NULL || !DxgkAcquireKmdCall(Adapter))
+        return;
+    Args.Enabled = Enabled;
+    DXGK_CB_FULL(Adapter, DxgkDdiSetStablePowerState)(Adapter->MiniportDeviceContext, &Args);
+    DxgkReleaseKmdCall(Adapter);
+}
+
+static NTSTATUS
+NTAPI
+DxgkSetStablePowerState(
+    _In_ CONST D3DKMT_SETSTABLEPOWERSTATE *pData)
+{
+    PDXGKRNL_ADAPTER Adapter;
+    PDXGKRNL_PROCESS Process = NULL;
+    NTSTATUS Status = STATUS_INVALID_PARAMETER;
+
+    PAGED_CODE();
+
+    Adapter = DxgkpValidateAdapterHandle(pData->hAdapter);
+    if (Adapter == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (NT_SUCCESS(DxgkReferenceProcessRecordByAdapter(Adapter, PsGetCurrentProcess(), &Process)))
+    {
+        /* TODO: a display-only adapter resolves to its render pair, refused until the process opened that one */
+        (VOID)KeWaitForSingleObject(&Adapter->StablePowerMutex, Executive, KernelMode, FALSE, NULL);
+        if (DxgkCapsCoreStablePowerSet(&Process->StablePowerReferences, &Adapter->StablePowerReferences, pData->Enabled != FALSE))
+            DxgkStablePowerNotify(Adapter, pData->Enabled != FALSE);
+        KeReleaseMutex(&Adapter->StablePowerMutex, FALSE);
+        DxgkDereferenceProcessRecord(Process);
+        Status = STATUS_SUCCESS;
+    }
+    DxgkDereferenceAdapter(Adapter);
+    return Status;
+}
+
 static NTSTATUS
 NTAPI
 DxgkCreateHwQueue(
@@ -12039,7 +12057,6 @@ DxgkpDispatchBufferedIoctlWorker(
         }
 
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
-        case IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME:
         {
             D3DKMT_OPENADAPTERFROMDEVICENAME *pData;
             WCHAR NameBuffer[260];
@@ -12056,7 +12073,6 @@ DxgkpDispatchBufferedIoctlWorker(
 
             Status = DxgkpOpenAdapterByDeviceObjectName(
                          NameBuffer,
-                         IoControlCode == IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME,
                          &pData->hAdapter,
                          &pData->AdapterLuid);
             if (!NT_SUCCESS(Status))
@@ -12957,7 +12973,7 @@ DxgkpDispatchBufferedIoctlWorker(
             pMap->MinimumAddress &= ~(DXGKP_GPUVA_PAGE_SIZE - 1);
             pMap->MaximumAddress &= ~(DXGKP_GPUVA_PAGE_SIZE - 1);
             StateProtection = pMap->Protection.Zero || pMap->Protection.NoAccess;
-            if (pMap->hPagingQueue == 0 || pMap->SizeInPages == 0 || pMap->SizeInPages > MAXULONGLONG / DXGKP_GPUVA_PAGE_SIZE || pMap->OffsetInPages > MAXULONGLONG / DXGKP_GPUVA_PAGE_SIZE || pMap->Reserved0 != 0 || pMap->Reserved1 != 0 || pMap->Protection.SystemUseOnly || pMap->Protection.Reserved != 0 || (pMap->Protection.Zero && pMap->Protection.NoAccess) || (StateProtection && (pMap->Protection.Write || pMap->Protection.Execute || pMap->hAllocation != 0)) || (!StateProtection && pMap->hAllocation == 0) || (pMap->BaseAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->BaseAddress == 0 && ((pMap->MinimumAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->MaximumAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->MaximumAddress != 0 && pMap->MinimumAddress >= pMap->MaximumAddress))))
+            if (pMap->hPagingQueue == 0 || pMap->SizeInPages == 0 || pMap->SizeInPages > MAXULONGLONG / DXGKP_GPUVA_PAGE_SIZE || pMap->OffsetInPages > MAXULONGLONG / DXGKP_GPUVA_PAGE_SIZE || pMap->Reserved0 != 0 || pMap->Reserved1 != 0 || pMap->Protection.SystemUseOnly || pMap->Protection.Reserved != 0 || (pMap->Protection.NoAccess && (pMap->Protection.Zero || pMap->Protection.Write || pMap->Protection.Execute)) || (StateProtection && pMap->hAllocation != 0) || (!StateProtection && pMap->hAllocation == 0) || (pMap->BaseAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->BaseAddress == 0 && ((pMap->MinimumAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->MaximumAddress & (DXGKP_GPUVA_PAGE_SIZE - 1)) != 0 || (pMap->MaximumAddress != 0 && pMap->MinimumAddress >= pMap->MaximumAddress))))
                 return STATUS_INVALID_PARAMETER;
 
             Status = DxgkpReferencePagingQueueDevice(pMap->hPagingQueue, PsGetCurrentProcess(), &Adapter, &Device);
@@ -14099,6 +14115,13 @@ DxgkpDispatchBufferedIoctlWorker(
             return DxgkChangeVideoMemoryReservation((CONST D3DKMT_CHANGEVIDEOMEMORYRESERVATION *)SystemBuffer);
         }
 
+        case IOCTL_D3DKMT_SETSTABLEPOWERSTATE:
+        {
+            if (InputLength < sizeof(D3DKMT_SETSTABLEPOWERSTATE) || SystemBuffer == NULL)
+                return STATUS_BUFFER_TOO_SMALL;
+            return DxgkSetStablePowerState((CONST D3DKMT_SETSTABLEPOWERSTATE *)SystemBuffer);
+        }
+
         case IOCTL_D3DKMT_CREATEHWQUEUE:
         {
             if (InputLength < sizeof(D3DKMT_CREATEHWQUEUE) || SystemBuffer == NULL)
@@ -15049,7 +15072,6 @@ DxgkpIsBufferedKmtIoctl(
         case IOCTL_D3DKMT_OPENADAPTERFROMHDC:
         case IOCTL_D3DKMT_OPENADAPTERFROMGDIDISPLAYNAME:
         case IOCTL_D3DKMT_OPENADAPTERFROMDEVICENAME:
-        case IOCTL_RXGK_OPENLOGICALADAPTERFROMDEVICENAME:
         case IOCTL_D3DKMT_CREATEDEVICE:
         case IOCTL_D3DKMT_DESTROYDEVICE:
         case IOCTL_D3DKMT_CREATEALLOCATION:
@@ -15162,6 +15184,7 @@ DxgkpIsBufferedKmtIoctl(
         case IOCTL_D3DKMT_RELEASEKEYEDMUTEX:
         case IOCTL_D3DKMT_QUERYCLOCKCALIBRATION:
         case IOCTL_D3DKMT_CHANGEVIDEOMEMORYRESERVATION:
+        case IOCTL_D3DKMT_SETSTABLEPOWERSTATE:
         case IOCTL_D3DKMT_CREATEHWQUEUE:
         case IOCTL_D3DKMT_DESTROYHWQUEUE:
         case IOCTL_D3DKMT_SUBMITCOMMANDTOHWQUEUE:

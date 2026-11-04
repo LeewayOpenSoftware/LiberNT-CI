@@ -20,6 +20,7 @@ extern void func_DeviceIoControl(void);
 extern void func_dosdev(void);
 extern void func_EnumSystemCodePages(void);
 extern void func_FindActCtxSectionStringW(void);
+extern void func_FileStorageInfo(void);
 extern void func_FindFiles(void);
 extern void func_FindPackagesByPackageFamily(void);
 extern void func_FLS(void);
@@ -91,6 +92,7 @@ extern void func_ProcessPreferredUILanguages(void);
 extern void func_PseudoConsoleCtrlC(void);
 extern void func_PssSnapshot(void);
 extern void func_OpenFileByIdRename(void);
+extern void func_PagingFileOpen(void);
 extern void func_PrivMoveFileIdentityW(void);
 extern void func_RenameDirectoryOldPath(void);
 extern void func_QueueUserAPC(void);
@@ -139,6 +141,7 @@ const struct test winetest_testlist[] =
     { "dosdev",                      func_dosdev },
     { "EnumSystemCodePages",         func_EnumSystemCodePages },
     { "FindActCtxSectionStringW",    func_FindActCtxSectionStringW },
+    { "FileStorageInfo",             func_FileStorageInfo },
     { "FindFiles",                   func_FindFiles },
     { "FindPackagesByPackageFamily", func_FindPackagesByPackageFamily },
     { "FLS",                         func_FLS },
@@ -208,6 +211,7 @@ const struct test winetest_testlist[] =
     { "PseudoConsoleCtrlC",          func_PseudoConsoleCtrlC },
     { "PssSnapshot",                 func_PssSnapshot },
     { "OpenFileByIdRename",          func_OpenFileByIdRename },
+    { "PagingFileOpen",              func_PagingFileOpen },
     { "PrivMoveFileIdentityW",       func_PrivMoveFileIdentityW },
     { "RenameDirectoryOldPath",      func_RenameDirectoryOldPath },
     { "QueueUserAPC",                func_QueueUserAPC },

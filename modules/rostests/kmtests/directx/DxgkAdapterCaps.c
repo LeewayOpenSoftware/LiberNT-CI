@@ -301,8 +301,77 @@ TestFeatureQueryNegotiation(VOID)
                 DXGK_FEATURE_QUERY_RESULT_SUPPORTED_ON_CONFIG);
 }
 
+static VOID TestDriverCapsQuerySize(VOID)
+{
+    static const struct
+    {
+        ULONG Selector;
+        ULONG Size;
+    } Cases[] =
+    {
+        { 0x104D, 0 },
+        { 0x1052, 0x150 },
+        { 0x2000, 0 },
+        { 0x2005, 0x210 },
+        { 0x300E, 0x220 },
+        { 0x4002, 0x228 },
+        { 0x5003, 0 },
+        { 0x5010, 0x228 },
+        { 0x5023, 0x240 },
+        { 0x8001, 0x240 },
+        { 0x9006, 0x248 },
+        { 0xD001, 0x248 },
+        { 0xE003, 0x250 },
+        { 0x11007, 0x250 },
+    };
+    ULONG Index;
+
+    for (Index = 0; Index < RTL_NUMBER_OF(Cases); ++Index)
+    {
+        ok(DxgkCapsCoreDriverCapsSize(Cases[Index].Selector) == Cases[Index].Size,
+           "DRIVERCAPS size for 0x%lx is 0x%lx, expected 0x%lx\n", Cases[Index].Selector,
+           DxgkCapsCoreDriverCapsSize(Cases[Index].Selector), Cases[Index].Size);
+    }
+}
+
+static VOID TestPhysicalAdapterCapsQuerySize(VOID)
+{
+    ok_eq_ulong(DxgkCapsCorePhysicalAdapterCapsSize(0x5023), 0x14);
+    ok_eq_ulong(DxgkCapsCorePhysicalAdapterCapsSize(0x6003), 0x18);
+    ok_eq_ulong(DxgkCapsCorePhysicalAdapterCapsSize(0xB004), 0x18);
+    ok_eq_ulong(DxgkCapsCorePhysicalAdapterCapsSize(0xC004), 0x20);
+    ok_eq_ulong(DxgkCapsCorePhysicalAdapterCapsSize(0x11007), 0x20);
+}
+
+static VOID TestStablePowerCounting(VOID)
+{
+    LONG Process1 = 0, Process2 = 0, Adapter = 0;
+
+    ok_bool_false(DxgkCapsCoreStablePowerSet(&Process1, &Adapter, FALSE), "disable without a request stays silent");
+    ok_eq_long(Process1, 0);
+    ok_bool_true(DxgkCapsCoreStablePowerSet(&Process1, &Adapter, TRUE), "first request reaches the miniport");
+    ok_bool_false(DxgkCapsCoreStablePowerSet(&Process1, &Adapter, TRUE), "second request of a process stays silent");
+    ok_bool_false(DxgkCapsCoreStablePowerSet(&Process2, &Adapter, TRUE), "second process stays silent");
+    ok_eq_long(Adapter, 2);
+    ok_bool_false(DxgkCapsCoreStablePowerSet(&Process1, &Adapter, FALSE), "a process still holds a request");
+    ok_bool_false(DxgkCapsCoreStablePowerSet(&Process1, &Adapter, FALSE), "another process still holds a request");
+    ok_eq_long(Adapter, 1);
+    ok_bool_true(DxgkCapsCoreStablePowerSet(&Process2, &Adapter, FALSE), "last release reaches the miniport");
+    ok_eq_long(Adapter, 0);
+
+    ok_bool_true(DxgkCapsCoreStablePowerSet(&Process1, &Adapter, TRUE), "request again");
+    (VOID)DxgkCapsCoreStablePowerSet(&Process1, &Adapter, TRUE);
+    ok_bool_true(DxgkCapsCoreStablePowerRelease(&Process1, &Adapter), "process exit drops every request at once");
+    ok_eq_long(Process1, 0);
+    ok_eq_long(Adapter, 0);
+    ok_bool_false(DxgkCapsCoreStablePowerRelease(&Process1, &Adapter), "exit without a request stays silent");
+}
+
 START_TEST(DxgkAdapterCaps)
 {
+    TestDriverCapsQuerySize();
+    TestStablePowerCounting();
+    TestPhysicalAdapterCapsQuerySize();
     TestVersionIsTheMinimum();
     TestRenderSupport();
     TestFeatureGating();
