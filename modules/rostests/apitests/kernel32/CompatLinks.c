@@ -184,10 +184,58 @@ Test_ExplicitErrors(void)
     }
 }
 
+static
+void
+Test_NumaExports(void)
+{
+    /* kernel32 keeps these exports as forwarders to the kernelbase bodies */
+    static const PCSTR ForwardedToKernelBase[] =
+    {
+        "CreateFileMappingNumaA", "CreateFileMappingNumaW", "MapViewOfFileExNuma", "VirtualAllocExNuma",
+    };
+    /* kernel32 implements these; the ones kernelbase exports are forwarders back to kernel32 */
+    static const PCSTR ImplementedInKernel32[] =
+    {
+        "AllocateUserPhysicalPagesNuma", "GetNumaAvailableMemoryNodeEx", "GetNumaHighestNodeNumber",
+        "GetNumaNodeNumberFromHandle", "GetNumaNodeProcessorMask2", "GetNumaProximityNode",
+        "GetNumaProximityNodeEx",
+    };
+    HMODULE KernelBase = LoadLibraryW(L"kernelbase.dll");
+    FARPROC Kernel32Proc, KernelBaseProc;
+    ULONG i;
+
+    ok(KernelBase != NULL, "kernelbase.dll did not load: %lu\n", GetLastError());
+    if (!KernelBase)
+        return;
+
+    for (i = 0; i < ARRAYSIZE(ForwardedToKernelBase); i++)
+    {
+        Kernel32Proc = Import(ForwardedToKernelBase[i]);
+        KernelBaseProc = GetProcAddress(KernelBase, ForwardedToKernelBase[i]);
+        ok(KernelBaseProc != NULL, "kernelbase!%s is not exported\n", ForwardedToKernelBase[i]);
+        ok(Kernel32Proc == KernelBaseProc, "kernel32!%s (%p) is not a forwarder to kernelbase (%p)\n",
+           ForwardedToKernelBase[i], Kernel32Proc, KernelBaseProc);
+    }
+
+    for (i = 0; i < ARRAYSIZE(ImplementedInKernel32); i++)
+    {
+        Kernel32Proc = Import(ImplementedInKernel32[i]);
+        KernelBaseProc = GetProcAddress(KernelBase, ImplementedInKernel32[i]);
+        if (KernelBaseProc)
+        {
+            ok(KernelBaseProc == Kernel32Proc, "kernelbase!%s (%p) is not a forwarder to kernel32 (%p)\n",
+               ImplementedInKernel32[i], KernelBaseProc, Kernel32Proc);
+        }
+    }
+
+    FreeLibrary(KernelBase);
+}
+
 START_TEST(CompatLinks)
 {
     g_Kernel32 = GetModuleHandleW(L"kernel32.dll");
 
+    Test_NumaExports();
     Test_Numa();
     Test_SetStdHandleEx();
     Test_ExplicitErrors();

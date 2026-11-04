@@ -11,6 +11,18 @@
 
 BOOL WINAPI GetNumaHighestNodeNumber(_Out_ PULONG HighestNodeNumber);
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+NtAllocateVirtualMemoryEx(
+    _In_ HANDLE ProcessHandle,
+    _Inout_ PVOID *BaseAddress,
+    _Inout_ PSIZE_T RegionSize,
+    _In_ ULONG AllocationType,
+    _In_ ULONG PageProtection,
+    _Inout_updates_opt_(ExtendedParameterCount) PMEM_EXTENDED_PARAMETER ExtendedParameters,
+    _In_ ULONG ExtendedParameterCount);
+
 #ifndef NUMA_NO_PREFERRED_NODE
 #define NUMA_NO_PREFERRED_NODE ((DWORD)-1)
 #endif
@@ -48,11 +60,28 @@ VirtualAllocExNuma(
     _In_ DWORD Protect,
     _In_ DWORD PreferredNode)
 {
-    if (!IsUsablePreferredNode(PreferredNode))
-        return NULL;
+    MEM_EXTENDED_PARAMETER NumaNode;
+    PVOID Base = Address;
+    NTSTATUS Status;
 
-    /* A node that exists is accepted, but the allocation is not steered to it */
-    return VirtualAllocEx(Process, Address, Size, AllocationType, Protect);
+    /* No preferred node: the plain allocator */
+    if (PreferredNode == NUMA_NO_PREFERRED_NODE)
+        return VirtualAllocEx(Process, Address, Size, AllocationType, Protect);
+
+    /* The memory manager takes the node: it checks the process handle first
+     * and then refuses a node that does not exist */
+    RtlZeroMemory(&NumaNode, sizeof(NumaNode));
+    NumaNode.Type = MemExtendedParameterNumaNode;
+    NumaNode.ULong = PreferredNode;
+
+    Status = NtAllocateVirtualMemoryEx(Process, &Base, &Size, AllocationType, Protect, &NumaNode, 1);
+    if (!NT_SUCCESS(Status))
+    {
+        SetLastError(RtlNtStatusToDosError(Status));
+        return NULL;
+    }
+
+    return Base;
 }
 
 LPVOID
