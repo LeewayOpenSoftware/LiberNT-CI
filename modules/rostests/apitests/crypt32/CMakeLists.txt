@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     CertControlStore.c
+    CertCreateChainEngine.c
     CertEnumSystemStoreLocation.c
     CertOpenSystemStore.c
     CertUpdateStore.c
