@@ -3819,7 +3819,7 @@ RtlpUserThreadStart(
     _SEH2_TRY
     {
         if (Kernel32ThreadInitThunkFunction)
-            ((VOID (NTAPI *)(ULONG, PVOID, PVOID))Kernel32ThreadInitThunkFunction)(0, StartAddress, Parameter);
+            ((VOID (FASTCALL *)(ULONG, PVOID, PVOID))Kernel32ThreadInitThunkFunction)(0, StartAddress, Parameter);
         else
             Status = ((NTSTATUS (NTAPI *)(PVOID))StartAddress)(Parameter);
     }
