@@ -577,13 +577,23 @@ IntVideoPortResetDisplayParametersEx(
 
     /* Check if we are at dispatch level or lower, and acquire the lock */
     OldIrql = KeGetCurrentIrql();
+    DPRINT1("VIDEOPRT: reset display: IRQL %u, called by INBV %u, %ux%u\n",
+            OldIrql, CalledByInbv, Columns, Rows);
     if (OldIrql <= DISPATCH_LEVEL)
     {
+        ULONG64 Spins = 0;
+
         /* Loop until the lock is free, then raise IRQL to dispatch level */
-        while (!KeTestSpinLock(&HwResetAdaptersLock));
+        while (!KeTestSpinLock(&HwResetAdaptersLock))
+        {
+            /* Diagnostic: say so once if the lock stays held for long. */
+            if (++Spins == (1ULL << 26))
+                DPRINT1("VIDEOPRT: reset display: still waiting for the adapter lock\n");
+        }
         KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
     }
     KeAcquireSpinLockAtDpcLevel(&HwResetAdaptersLock);
+    DPRINT1("VIDEOPRT: reset display: adapter lock taken\n");
 
     /* Bail out early if we don't have any resettable adapter */
     if (IsListEmpty(&HwResetAdaptersList))
@@ -637,9 +647,14 @@ IntVideoPortResetDisplayParametersEx(
             if ((DeviceExtension->DeviceOpened >= 1) &&
                 (DriverExtension->InitializationData.HwResetHw != NULL))
             {
+                DPRINT1("VIDEOPRT: reset display: HwResetHw %p of driver %p (image %p)\n",
+                        DriverExtension->InitializationData.HwResetHw,
+                        DeviceExtension->DriverObject,
+                        DeviceExtension->DriverObject ? DeviceExtension->DriverObject->DriverStart : NULL);
                 Success &= DriverExtension->InitializationData.HwResetHw(
                                 &DeviceExtension->MiniPortDeviceExtension,
                                 Columns, Rows);
+                DPRINT1("VIDEOPRT: reset display: HwResetHw returned, success %u\n", Success);
             }
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)

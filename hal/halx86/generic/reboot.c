@@ -11,6 +11,9 @@
 
 #include <hal.h>
 
+#define NDEBUG
+#include <debug.h>
+
 /* PRIVATE FUNCTIONS *********************************************************/
 
 static VOID
@@ -30,6 +33,7 @@ HalpReboot(VOID)
 
 #ifndef _MINIHAL_
     /* Modern machines need not have an 8042 keyboard controller. */
+    DPRINT1("HAL: reboot: ACPI reset register\n");
     HalpAcpiReset();
 #endif
 
@@ -67,7 +71,9 @@ HalpReboot(VOID)
 
     /* Flush write buffers and send the reset command */
     KeFlushWriteBuffer();
+    DPRINT1("HAL: reboot: keyboard controller reset\n");
     HalpWriteResetCommand();
+    DPRINT1("HAL: reboot: keyboard controller reset returned, halting\n");
 
     /* Halt the CPU */
     __halt();
@@ -99,7 +105,10 @@ HalReturnToFirmware(
         case HalRebootRoutine:
         {
             /* Acquire the display */
+            DPRINT1("HAL: reboot: taking the display back (IRQL %u, interrupts %s)\n",
+                    KeGetCurrentIrql(), (__readeflags() & 0x200) ? "on" : "off");
             InbvAcquireDisplayOwnership();
+            DPRINT1("HAL: reboot: display taken back\n");
 
             /* Call the internal reboot function */
             HalpReboot();
