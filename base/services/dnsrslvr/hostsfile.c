@@ -363,7 +363,11 @@ ReadHostsFile(VOID)
         for (;;)
         {
             if (*Ptr == 0 || *Ptr == '#')
+            {
+                /* the last line of the file may end right after the name */
+                NameEnd = Ptr;
                 break;
+            }
 
             if (isspace(*Ptr))
             {
