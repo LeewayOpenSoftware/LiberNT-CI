@@ -96,8 +96,7 @@ CheckSslPolicy(
        ExpectedError);
 }
 
-VOID
-func_CertCreateChainEngine(VOID)
+START_TEST(CertCreateChainEngine)
 {
     PCCERT_CONTEXT cert;
     HCERTSTORE store;
