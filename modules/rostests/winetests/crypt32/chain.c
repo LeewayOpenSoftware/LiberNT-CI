@@ -3538,6 +3538,11 @@ static SYSTEMTIME oct2016 = { 2016, 10, 6, 1, 0, 0, 0, 0 };
 static SYSTEMTIME nov2016 = { 2016, 11, 3, 17, 0, 0, 0, 0 };
 /* Thursday, May 14, 2020 */
 static SYSTEMTIME may2020 = { 2020, 5, 4, 14, 0, 0, 0, 0 };
+/* chain0_1 (Cert2) is only valid 1601-11-22..1628-08-26 (its issuer Cert1,
+ * chain0_0, is valid only in 2007), so a check time inside Cert2's window
+ * lets the partial-chain SSL tests distinguish accept from reject without a
+ * date error masking the result. */
+static SYSTEMTIME cert2_valid = { 1610, 6, 0, 15, 0, 0, 0, 0 };
 
 typedef struct _ChainCheck
 {
@@ -5240,23 +5245,25 @@ static void check_ssl_policy(void)
     sslPolicyPara.fdwChecks = 0;
 
     /* A partial chain (issuer unavailable) is rejected under the SSL policy
-     * with CERT_E_CHAINING, matching the base policy. */
+     * with CERT_E_CHAINING, matching the base policy.  Verified at cert2_valid
+     * so the leaf is time-valid: unpatched crypt32 wrongly ACCEPTS it (dwError
+     * 0), the fix REJECTS it (CERT_E_CHAINING), with no date error in play. */
     sslPolicyPara.cbSize = sizeof(sslPolicyPara);
     sslPolicyPara.dwAuthType = AUTHTYPE_SERVER;
     sslPolicyPara.pwszServerName = NULL;
     sslPolicyPara.fdwChecks = 0;
     policyPara.dwFlags = 0;
     CHECK_CHAIN_POLICY_STATUS(CERT_CHAIN_POLICY_SSL, NULL,
-     sslPartialChainPolicyCheck, &oct2007, &policyPara);
+     sslPartialChainPolicyCheck, &cert2_valid, &policyPara);
     /* ...unless SECURITY_FLAG_IGNORE_UNKNOWN_CA is set... */
     sslPolicyPara.fdwChecks = SECURITY_FLAG_IGNORE_UNKNOWN_CA;
     CHECK_CHAIN_POLICY_STATUS(CERT_CHAIN_POLICY_SSL, NULL,
-     sslPartialChainIgnoredPolicyCheck, &oct2007, &policyPara);
+     sslPartialChainIgnoredPolicyCheck, &cert2_valid, &policyPara);
     sslPolicyPara.fdwChecks = 0;
     /* ...or CERT_CHAIN_POLICY_ALLOW_UNKNOWN_CA_FLAG is set in dwFlags. */
     policyPara.dwFlags = CERT_CHAIN_POLICY_ALLOW_UNKNOWN_CA_FLAG;
     CHECK_CHAIN_POLICY_STATUS(CERT_CHAIN_POLICY_SSL, NULL,
-     sslPartialChainIgnoredPolicyCheck, &oct2007, &policyPara);
+     sslPartialChainIgnoredPolicyCheck, &cert2_valid, &policyPara);
     policyPara.dwFlags = 0;
 
     /* Check again with the openssl cert, which has a wildcard in its name,

@@ -3571,6 +3571,15 @@ static BOOL WINAPI verify_ssl_policy(LPCSTR szPolicyOID,
          CERT_TRUST_IS_UNTRUSTED_ROOT, &pPolicyStatus->lChainIndex,
          &pPolicyStatus->lElementIndex);
     }
+    else if (pChainContext->TrustStatus.dwErrorStatus & CERT_TRUST_IS_CYCLIC)
+    {
+        pPolicyStatus->dwError = CERT_E_UNTRUSTEDROOT;
+        find_element_with_error(pChainContext,
+         CERT_TRUST_IS_CYCLIC, &pPolicyStatus->lChainIndex,
+         &pPolicyStatus->lElementIndex);
+        /* For a cyclic chain, which element is a cycle isn't meaningful */
+        pPolicyStatus->lElementIndex = -1;
+    }
 #ifdef __REACTOS__
     else if (pChainContext->TrustStatus.dwErrorStatus &
      CERT_TRUST_IS_PARTIAL_CHAIN &&
@@ -3583,15 +3592,6 @@ static BOOL WINAPI verify_ssl_policy(LPCSTR szPolicyOID,
          &pPolicyStatus->lElementIndex);
     }
 #endif
-    else if (pChainContext->TrustStatus.dwErrorStatus & CERT_TRUST_IS_CYCLIC)
-    {
-        pPolicyStatus->dwError = CERT_E_UNTRUSTEDROOT;
-        find_element_with_error(pChainContext,
-         CERT_TRUST_IS_CYCLIC, &pPolicyStatus->lChainIndex,
-         &pPolicyStatus->lElementIndex);
-        /* For a cyclic chain, which element is a cycle isn't meaningful */
-        pPolicyStatus->lElementIndex = -1;
-    }
     else if (pChainContext->TrustStatus.dwErrorStatus &
      CERT_TRUST_IS_NOT_TIME_VALID &&
      !(checks & SECURITY_FLAG_IGNORE_CERT_DATE_INVALID) &&
