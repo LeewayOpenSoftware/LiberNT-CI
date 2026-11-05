@@ -28,6 +28,9 @@
 #define NDEBUG
 #include <debug.h>
 
+/* How long the display reset callback waits for the adapter lock. */
+#define VIDEOPRT_RESET_LOCK_WAIT_US 100000
+
 /* GLOBAL VARIABLES ***********************************************************/
 
 static PVIDEO_WIN32K_CALLOUT Win32kCallout = NULL;
@@ -580,19 +583,30 @@ IntVideoPortResetDisplayParametersEx(
     DPRINT1("VIDEOPRT: reset display: IRQL %u, called by INBV %u, %ux%u\n",
             OldIrql, CalledByInbv, Columns, Rows);
     if (OldIrql <= DISPATCH_LEVEL)
-    {
-        ULONG64 Spins = 0;
-
-        /* Loop until the lock is free, then raise IRQL to dispatch level */
-        while (!KeTestSpinLock(&HwResetAdaptersLock))
-        {
-            /* Diagnostic: say so once if the lock stays held for long. */
-            if (++Spins == (1ULL << 26))
-                DPRINT1("VIDEOPRT: reset display: still waiting for the adapter lock\n");
-        }
         KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+
+    /*
+     * This callback can run with interrupts disabled and other processors
+     * running, for a reboot or a bugcheck. If another processor holds the
+     * adapter lock, the caller would spin forever. Wait a bounded time
+     * (about 100 ms), then give up and let the caller do a full reset.
+     */
+    {
+        ULONG Waited;
+
+        for (Waited = 0; !KeTryToAcquireSpinLockAtDpcLevel(&HwResetAdaptersLock); Waited++)
+        {
+            if (Waited >= VIDEOPRT_RESET_LOCK_WAIT_US)
+            {
+                DPRINT1("VIDEOPRT: reset display: adapter lock still held after %lu us, skipping the reset\n",
+                        Waited);
+                if (OldIrql <= DISPATCH_LEVEL)
+                    KeLowerIrql(OldIrql);
+                return FALSE;
+            }
+            KeStallExecutionProcessor(1);
+        }
     }
-    KeAcquireSpinLockAtDpcLevel(&HwResetAdaptersLock);
     DPRINT1("VIDEOPRT: reset display: adapter lock taken\n");
 
     /* Bail out early if we don't have any resettable adapter */
