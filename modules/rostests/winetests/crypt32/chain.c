@@ -5687,7 +5687,10 @@ static void test_hExclusiveRoot_cbSize(void)
     ok(ret, "adding exclusive root failed: %08lx\n", GetLastError());
 
     /* Windows 7-sized config (no dwExclusiveFlags) carrying hExclusiveRoot:
-     * chain0's leaf must build to a trusted root (no partial/untrusted). */
+     * chain0's leaf must build to a trusted root: neither PARTIAL_CHAIN nor
+     * UNTRUSTED_ROOT.  chain0_0 (root, valid 2007) and chain0_1 (leaf, valid
+     * 1601-1628) have disjoint validity windows, so NOT_TIME_VALID is always
+     * set and is orthogonal to this fix; assert the trust bits, not == 0. */
     memset(&cfg7, 0, sizeof(cfg7));
     cfg7.cbSize = sizeof(cfg7);
     cfg7.hExclusiveRoot = exclusiveRoot;
@@ -5697,8 +5700,9 @@ static void test_hExclusiveRoot_cbSize(void)
         chain = getChain(engine, &certs, 0, TRUE, &oct2007, 0, 700);
         ok(chain != NULL, "getChain (win7-sized) returned NULL\n");
         if (chain) {
-            ok(chain->TrustStatus.dwErrorStatus == 0,
-               "win7-sized hExclusiveRoot: expected trusted chain (0), got %08lx\n",
+            ok((chain->TrustStatus.dwErrorStatus &
+                (CERT_TRUST_IS_PARTIAL_CHAIN | CERT_TRUST_IS_UNTRUSTED_ROOT)) == 0,
+               "win7-sized hExclusiveRoot: leaf not trusted via exclusive root, got %08lx\n",
                chain->TrustStatus.dwErrorStatus);
             CertFreeCertificateChain(chain);
         }
@@ -5715,8 +5719,9 @@ static void test_hExclusiveRoot_cbSize(void)
         chain = getChain(engine, &certs, 0, TRUE, &oct2007, 0, 701);
         ok(chain != NULL, "getChain (full-sized) returned NULL\n");
         if (chain) {
-            ok(chain->TrustStatus.dwErrorStatus == 0,
-               "full-sized hExclusiveRoot: expected trusted chain (0), got %08lx\n",
+            ok((chain->TrustStatus.dwErrorStatus &
+                (CERT_TRUST_IS_PARTIAL_CHAIN | CERT_TRUST_IS_UNTRUSTED_ROOT)) == 0,
+               "full-sized hExclusiveRoot: leaf not trusted via exclusive root, got %08lx\n",
                chain->TrustStatus.dwErrorStatus);
             CertFreeCertificateChain(chain);
         }
