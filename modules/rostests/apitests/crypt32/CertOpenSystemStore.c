@@ -338,8 +338,7 @@ Cleanup:
         CryptReleaseContext(prov, 0);
 }
 
-VOID
-func_CertOpenSystemStore(VOID)
+START_TEST(CertOpenSystemStore)
 {
     HCERTSTORE root, authRoot;
     PCCERT_CONTEXT cert = NULL;
