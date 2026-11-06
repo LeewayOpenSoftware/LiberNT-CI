@@ -53,7 +53,6 @@ set(ALPC_SOURCE
     TpAlpc.c)
 
 list(APPEND SOURCE
-    ApiSetMap.c
     DllLoadNotification.c
     DebugRegisters.c
     FileStatInformation.c

@@ -434,8 +434,6 @@ BOOLEAN
 NTAPI
 PspInitPhase1(VOID)
 {
-    if (!PspInitializeApiSetSection()) return FALSE;
-
     /* Initialize the System DLL and return status of operation */
     if (!NT_SUCCESS(PspInitializeSystemDll())) return FALSE;
     PspInitializeApiSetSection();

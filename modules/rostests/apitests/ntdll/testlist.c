@@ -25,7 +25,6 @@ extern void func_strtoul(void);
 extern void func_wcstoul(void);
 extern void func_wcstombs(void);
 
-extern void func_ApiSetMap(void);
 extern void func_DebugRegisters(void);
 extern void func_DllLoadNotification(void);
 extern void func_FileStatInformation(void);
@@ -234,7 +233,6 @@ const struct test winetest_testlist[] =
     { "load_notifications",             func_load_notifications },
     { "memmove",                        func_memmove },
     { "memset",                         func_memset },
-    { "ApiSetMap",                      func_ApiSetMap },
     { "MemoryAccounting",               func_MemoryAccounting },
     { "NtAcceptConnectPort",            func_NtAcceptConnectPort },
     { "NtAccessCheck",                  func_NtAccessCheck },
