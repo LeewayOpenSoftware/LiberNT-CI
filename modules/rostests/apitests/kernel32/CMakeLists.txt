@@ -79,6 +79,7 @@ list(APPEND SOURCE
     LoadLibraryExW.c
     LockFileEx.c
     OpenFileByIdRename.c
+    LoaderLock.c
     PagingFileOpen.c
     QuantumRoundRobin.c
     RegisterWaitPeriodic.c
