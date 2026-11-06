@@ -819,10 +819,8 @@ RtlPcToFileHeader(IN PVOID PcValue,
     PLIST_ENTRY Entry;
     PLDR_DATA_TABLE_ENTRY Module;
     PVOID ImageBase = NULL;
-    BOOLEAN Shared = !LdrpOwnsLoaderLock();
 
-    if (Shared)
-        RtlAcquireSRWLockShared(&LdrpModuleDatatableLock);
+    RtlEnterCriticalSection (NtCurrentPeb()->LoaderLock);
     ModuleListHead = &NtCurrentPeb()->Ldr->InLoadOrderModuleList;
     Entry = ModuleListHead->Flink;
     while (Entry != ModuleListHead)
@@ -837,8 +835,7 @@ RtlPcToFileHeader(IN PVOID PcValue,
         }
         Entry = Entry->Flink;
     }
-    if (Shared)
-        RtlReleaseSRWLockShared(&LdrpModuleDatatableLock);
+    RtlLeaveCriticalSection (NtCurrentPeb()->LoaderLock);
 
     *BaseOfImage = ImageBase;
     return ImageBase;

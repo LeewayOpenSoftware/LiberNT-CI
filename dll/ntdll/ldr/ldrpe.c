@@ -236,8 +236,7 @@ IatReady:
                                        ExportSize,
                                        TRUE,
                                        ImportName,
-                                       DllPath,
-                                       FALSE);
+                                       DllPath);
 
                 /* Move to the next thunk */
                 FirstThunk++;
@@ -294,8 +293,7 @@ IatReady:
                                        ExportSize,
                                        TRUE,
                                        ImportName,
-                                       DllPath,
-                                       FALSE);
+                                       DllPath);
 
                 /* Next thunks */
                 OriginalThunk++;
@@ -1137,9 +1135,7 @@ LdrpAddForwarderReference(
 
     Reference->OwnerBase = OwnerBase;
     Reference->TargetBase = TargetBase;
-    RtlAcquireSRWLockExclusive(&LdrpModuleDatatableLock);
     InsertTailList(&LdrpForwarderReferenceList, &Reference->Links);
-    RtlReleaseSRWLockExclusive(&LdrpModuleDatatableLock);
 }
 
 VOID
@@ -1161,9 +1157,7 @@ LdrpReleaseForwarderReferences(IN PVOID OwnerBase)
         }
 
         TargetBase = Reference->TargetBase;
-        RtlAcquireSRWLockExclusive(&LdrpModuleDatatableLock);
         RemoveEntryList(&Reference->Links);
-        RtlReleaseSRWLockExclusive(&LdrpModuleDatatableLock);
         RtlFreeHeap(LdrpHeap, 0, Reference);
 
         LdrUnloadDll(TargetBase);
@@ -1206,92 +1200,6 @@ LdrpFindLoadedForwarder(
     return LdrpCheckForLoadedDll(DllPath, &RawDllName, FALSE, Redirected, LdrEntry);
 }
 
-static
-NTSTATUS
-LdrpFindReferencedForwarder(
-    _In_ PVOID OwnerBase,
-    _In_opt_ PWSTR DllPath,
-    _In_ PUNICODE_STRING DllName,
-    _In_ BOOLEAN Redirected,
-    _Out_ PVOID *TargetBase)
-{
-    PLDR_DATA_TABLE_ENTRY LdrEntry;
-    NTSTATUS Status = STATUS_RETRY;
-
-    RtlAcquireSRWLockShared(&LdrpModuleDatatableLock);
-    _SEH2_TRY
-    {
-        if (!DllPath)
-            DllPath = LdrpGetModuleLoadPath(OwnerBase);
-        if (LdrpFindLoadedForwarder(DllPath, DllName, Redirected, &LdrEntry) &&
-            LdrpIsModuleReady(LdrEntry) &&
-            ((*(volatile USHORT *)&LdrEntry->LoadCount == 0xFFFF) ||
-             LdrpIsForwarderReferenced(OwnerBase, LdrEntry->DllBase)))
-        {
-            *TargetBase = LdrEntry->DllBase;
-            Status = STATUS_SUCCESS;
-        }
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = STATUS_RETRY;
-    }
-    _SEH2_END;
-    RtlReleaseSRWLockShared(&LdrpModuleDatatableLock);
-
-    return Status;
-}
-
-BOOLEAN
-NTAPI
-LdrpReferenceLoadedDll(
-    _In_opt_ PWSTR DllPath,
-    _In_ PUNICODE_STRING DllName,
-    _In_ BOOLEAN Redirected,
-    _Out_ PVOID *BaseAddress)
-{
-    PLDR_DATA_TABLE_ENTRY LdrEntry = NULL;
-    LDRP_WALK_SET Set;
-    BOOLEAN Referenced = FALSE, Walk = FALSE, SetReady = FALSE;
-
-#if defined(_M_ARM64)
-    if (ChpeIsChpeProcess())
-        return FALSE;
-#endif
-
-    RtlAcquireSRWLockShared(&LdrpLoadCountWalkLock);
-    RtlAcquireSRWLockShared(&LdrpModuleDatatableLock);
-    _SEH2_TRY
-    {
-        if (LdrpFindLoadedForwarder(DllPath, DllName, Redirected, &LdrEntry) &&
-            LdrpIsModuleReady(LdrEntry))
-        {
-            if (*(volatile USHORT *)&LdrEntry->LoadCount == 0xFFFF)
-                Referenced = TRUE;
-            else if ((SetReady = LdrpAllocateWalkSet(&Set)))
-                Referenced = LdrpTryReferenceModule(LdrEntry, FALSE, &Walk);
-        }
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        Referenced = FALSE;
-    }
-    _SEH2_END;
-    RtlReleaseSRWLockShared(&LdrpModuleDatatableLock);
-
-    if (Walk)
-        LdrpWalkLoadCount(LdrEntry, LDRP_UPDATE_REFCOUNT, &Set);
-    RtlReleaseSRWLockShared(&LdrpLoadCountWalkLock);
-    if (SetReady)
-        LdrpFreeWalkSet(&Set);
-
-    if (!Referenced)
-        return FALSE;
-
-    *BaseAddress = LdrEntry->DllBase;
-    return TRUE;
-}
-
 NTSTATUS
 NTAPI
 LdrpSnapThunk(IN PVOID ExportBase,
@@ -1302,8 +1210,7 @@ LdrpSnapThunk(IN PVOID ExportBase,
               IN ULONG ExportSize,
               IN BOOLEAN Static,
               IN LPSTR DllName,
-              IN PWSTR DllPath OPTIONAL,
-              IN BOOLEAN LookupOnly)
+              IN PWSTR DllPath OPTIONAL)
 {
     BOOLEAN IsOrdinal;
     USHORT Ordinal;
@@ -1498,7 +1405,7 @@ FailurePath:
             /* Get the Import and Forwarder Names */
             ImportName = (LPSTR)Thunk->u1.Function;
 
-            if (!ForwarderPath && !Static && !LookupOnly)
+            if (!ForwarderPath && !Static)
                 ForwarderPath = LdrpGetModuleLoadPath(ExportBase);
 
             DotPosition = strchr(ImportName, '.');
@@ -1565,11 +1472,7 @@ FailurePath:
                 }
 
                 /* Load the forwarder */
-                if (NT_SUCCESS(Status) && LookupOnly)
-                {
-                    Status = LdrpFindReferencedForwarder(ForwarderOwner, ForwarderPath, RedirectedImportName, Redirected, &ForwarderHandle);
-                }
-                else if (NT_SUCCESS(Status))
+                if (NT_SUCCESS(Status))
                 {
                     if (LdrpFindLoadedForwarder(ForwarderPath, RedirectedImportName, Redirected, &ForwarderLdrEntry) &&
                         LdrpIsForwarderReferenced(ForwarderOwner, ForwarderLdrEntry->DllBase))
@@ -1589,9 +1492,6 @@ FailurePath:
 #endif
                 RtlFreeUnicodeString(&TempUString);
             }
-
-            if (LookupOnly && !NT_SUCCESS(Status))
-                return STATUS_RETRY;
 
             /* If the load or conversion failed, use the failure path */
             if (!NT_SUCCESS(Status)) goto FailurePath;
