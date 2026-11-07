@@ -15,7 +15,6 @@
 #define IDC_BACK_BUTTON  12323
 #define IDC_NEXT_BUTTON  12324
 #define IDC_FINISH_BUTTON 12325
-#define IDC_AERO_BACKBUTTON 12330
 
 static BOOL s_bNotified;
 
@@ -333,15 +332,14 @@ static void AeroBackFinish(HWND hwnd, HWND hwndParent)
 static void AeroBackOnTimer(HWND hwnd, UINT id)
 {
     HWND hwndParent = GetParent(hwnd);
-    HWND hwndCaptionBack = GetDlgItem(hwndParent, IDC_AERO_BACKBUTTON);
     HWND hwndBack = GetDlgItem(hwndParent, IDC_BACK_BUTTON);
     HWND hwndCurrent = (HWND)SendMessageW(hwndParent, PSM_GETCURRENTPAGEHWND, 0, 0);
 
     KillTimer(hwnd, id);
 
-    if (!hwndCaptionBack)
+    if (!hwndBack)
     {
-        trace("IDC_AERO_BACKBUTTON not present (classic chrome), skipping M2 checks.\n");
+        trace("IDC_BACK_BUTTON not present (classic chrome), skipping M2 checks.\n");
         AeroBackFinish(hwnd, hwndParent);
         return;
     }
@@ -350,20 +348,19 @@ static void AeroBackOnTimer(HWND hwnd, UINT id)
     {
         case 0:
             ok(hwndCurrent == s_hwndAeroPage0, "Wizard should open on page 1.\n");
-            ok(!IsWindowVisible(hwndCaptionBack), "Title-bar Back should be hidden on page 1.\n");
-            ok(!IsWindowVisible(hwndBack), "Command-area Back should be hidden in aero chrome.\n");
-            ok((GetWindowLongW(hwndCaptionBack, GWL_STYLE) & WS_TABSTOP) != 0,
+            ok(!IsWindowVisible(hwndBack), "Title-bar Back should be hidden on page 1.\n");
+            ok((GetWindowLongW(hwndBack, GWL_STYLE) & WS_TABSTOP) != 0,
                "Title-bar Back should participate in tab order.\n");
-            ok(GetParent(hwndCaptionBack) == hwndParent, "Title-bar Back should be a child of the sheet.\n");
+            ok(GetParent(hwndBack) == hwndParent, "Title-bar Back should be a child of the sheet.\n");
 
             PropSheet_PressButton(hwndParent, PSBTN_NEXT);
             break;
         case 1:
             ok(hwndCurrent != s_hwndAeroPage0, "Wizard should be on page 2.\n");
-            ok(IsWindowVisible(hwndCaptionBack), "Title-bar Back should be visible on page 2.\n");
-            ok(IsWindowEnabled(hwndCaptionBack), "Title-bar Back should be enabled on page 2.\n");
+            ok(IsWindowVisible(hwndBack), "Title-bar Back should be visible on page 2.\n");
+            ok(IsWindowEnabled(hwndBack), "Title-bar Back should be enabled on page 2.\n");
 
-            SendMessageW(hwndCaptionBack, BM_CLICK, 0, 0);
+            SendMessageW(hwndBack, BM_CLICK, 0, 0);
             ok(InterlockedCompareExchange(&s_lAeroWizBackCount, 0, 0) == 1,
                "PSN_WIZBACK should have been sent once.\n");
             ok(SendMessageW(hwndParent, PSM_GETCURRENTPAGEHWND, 0, 0) == (LPARAM)s_hwndAeroPage0,
@@ -393,10 +390,10 @@ static void AeroBackOnTimer(HWND hwnd, UINT id)
             break;
         case 6:
             SendMessageW(hwndParent, PSM_SETWIZBUTTONS, 0, PSWIZB_NEXT);
-            ok(!IsWindowEnabled(hwndCaptionBack), "Title-bar Back should follow PSWIZB_BACK off.\n");
+            ok(!IsWindowEnabled(hwndBack), "Title-bar Back should follow PSWIZB_BACK off.\n");
 
             SendMessageW(hwndParent, PSM_SETWIZBUTTONS, 0, PSWIZB_BACK | PSWIZB_NEXT);
-            ok(IsWindowEnabled(hwndCaptionBack), "Title-bar Back should follow PSWIZB_BACK on.\n");
+            ok(IsWindowEnabled(hwndBack), "Title-bar Back should follow PSWIZB_BACK on.\n");
 
             AeroBackFinish(hwnd, hwndParent);
             break;

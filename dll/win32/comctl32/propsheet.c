@@ -1351,10 +1351,10 @@ static BOOL PROPSHEET_AdjustButtonsWizard(HWND hwndParent,
   if (psInfo->aeroChrome)
   {
     RECT rcPad;
-    HWND hwndBack;
 
-    /* Lay Back/Next/Finish/Cancel out over the command area as direct
-     * children of the sheet so GetDlgItem(hwndSheet, id) finds them. */
+    /* Lay Next/Finish/Cancel out over the command area as direct children
+     * of the sheet so GetDlgItem(hwndSheet, id) finds them. Back stays in
+     * the header as the owner-drawn aero arrow (IDC_BACK_BUTTON). */
     GetClientRect(hwndButton, &rcSheet);
     buttonWidth = rcSheet.right;
     buttonHeight = rcSheet.bottom;
@@ -1381,11 +1381,6 @@ static BOOL PROPSHEET_AdjustButtonsWizard(HWND hwndParent,
     x -= rcPad.right + buttonWidth;
     hwndButton = GetDlgItem(hwndParent, IDC_NEXT_BUTTON);
     SetWindowPos(hwndButton, 0, x, y, 0, 0,
-                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-
-    /* Back at the far left of the command area. */
-    hwndBack = GetDlgItem(hwndParent, IDC_BACK_BUTTON);
-    SetWindowPos(hwndBack, 0, rcPad.left, y, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
     return TRUE;
@@ -2765,14 +2760,6 @@ static void PROPSHEET_SetWizButtons(HWND hwndDlg, DWORD dwFlags)
   EnableWindow(hwndNext, dwFlags & PSWIZB_NEXT);
   EnableWindow(hwndFinish, enable_finish);
 
-  if (psInfo->aeroChrome)
-  {
-    HWND hwndAeroBack = GetDlgItem(hwndDlg, IDC_AERO_BACKBUTTON);
-
-    if (hwndAeroBack)
-      EnableWindow(hwndAeroBack, (dwFlags & PSWIZB_BACK) != 0);
-  }
-
   /* set the default pushbutton to an enabled button */
   if (enable_finish)
     SendMessageW(hwndDlg, DM_SETDEFID, IDC_FINISH_BUTTON, 0);
@@ -2958,7 +2945,7 @@ static void PROPSHEET_AeroHeaderRects(HWND hwndDlg, RECT *rcTitle, RECT *rcSubTi
   MapDialogRect(hwndDlg, &rcSide);
 
   left = rcSide.right;
-  if (IsWindowVisible(GetDlgItem(hwndDlg, IDC_AERO_BACKBUTTON)))
+  if (IsWindowVisible(GetDlgItem(hwndDlg, IDC_BACK_BUTTON)))
   {
     RECT rcGap;
 
@@ -3022,7 +3009,7 @@ static void PROPSHEET_AeroUpdateHeader(HWND hwndDlg, PropSheetInfo *psInfo)
   if (!hwndTitle || !hwndSubTitle)
     return;
 
-  hwndBack = GetDlgItem(hwndDlg, IDC_AERO_BACKBUTTON);
+  hwndBack = GetDlgItem(hwndDlg, IDC_BACK_BUTTON);
   if (hwndBack)
     ShowWindow(hwndBack, index > 0 ? SW_SHOW : SW_HIDE);
 
@@ -3130,23 +3117,25 @@ static void PROPSHEET_AeroSetupChrome(HWND hwndDlg, PropSheetInfo *psInfo)
   RECT rcTitle, rcSubTitle, rcBack;
   HWND hwndTitle, hwndSubTitle, hwndBack;
 
-  /* Keep Back/Next/Finish as direct children of the sheet; only hide the
-   * separator and help button so the command-area buttons remain reachable
-   * via GetDlgItem(hwndSheet, id) for PSM_* messages. */
+  /* Hide the command-area separators and help button. */
   ShowWindow(GetDlgItem(hwndDlg, IDC_SUNKEN_LINE), SW_HIDE);
   ShowWindow(GetDlgItem(hwndDlg, IDC_SUNKEN_LINEHEADER), SW_HIDE);
   ShowWindow(GetDlgItem(hwndDlg, IDHELP), SW_HIDE);
 
+  /* Move the existing Back button to the header as the aero back arrow.
+   * It keeps IDC_BACK_BUTTON so GetDlgItem(hwndSheet, IDC_BACK_BUTTON)
+   * and PSM_* messages work, and there is no separate arrow window. */
   PROPSHEET_AeroBackRect(hwndDlg, &rcBack);
-  hwndBack = CreateWindowExW(0, L"BUTTON", L"",
-                             WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
-                             rcBack.left, rcBack.top,
-                             rcBack.right - rcBack.left,
-                             rcBack.bottom - rcBack.top,
-                             hwndDlg, (HMENU)(INT_PTR)IDC_AERO_BACKBUTTON,
-                             COMCTL32_hModule, NULL);
+  hwndBack = GetDlgItem(hwndDlg, IDC_BACK_BUTTON);
   if (hwndBack)
+  {
+    SetWindowLongW(hwndBack, GWL_STYLE,
+                   WS_CHILD | WS_TABSTOP | BS_OWNERDRAW);
+    SetWindowPos(hwndBack, NULL, rcBack.left, rcBack.top,
+                 rcBack.right - rcBack.left, rcBack.bottom - rcBack.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     ShowWindow(hwndBack, SW_HIDE);
+  }
 
   PROPSHEET_AeroHeaderRects(hwndDlg, &rcTitle, &rcSubTitle);
 
@@ -3436,10 +3425,10 @@ static BOOL PROPSHEET_IsDialogMessage(HWND hwnd, LPMSG lpMsg)
    if (psInfo->aeroChrome && lpMsg->message == WM_SYSKEYDOWN &&
        lpMsg->wParam == VK_LEFT)
    {
-      HWND hwndAeroBack = GetDlgItem(hwnd, IDC_AERO_BACKBUTTON);
+      HWND hwndBackBtn = GetDlgItem(hwnd, IDC_BACK_BUTTON);
 
-      if (hwndAeroBack && IsWindowVisible(hwndAeroBack) &&
-          IsWindowEnabled(hwndAeroBack))
+      if (hwndBackBtn && IsWindowVisible(hwndBackBtn) &&
+          IsWindowEnabled(hwndBackBtn))
       {
          PROPSHEET_Back(hwnd);
          return TRUE;
@@ -3879,10 +3868,6 @@ static BOOL PROPSHEET_DoCommand(HWND hwnd, WORD wID)
 	PROPSHEET_Back(hwnd);
 	break;
 
-    case IDC_AERO_BACKBUTTON:
-	PROPSHEET_Back(hwnd);
-	break;
-
     case IDC_NEXT_BUTTON:
 	PROPSHEET_Next(hwnd);
 	break;
@@ -4251,7 +4236,7 @@ PROPSHEET_DialogProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
       DRAWITEMSTRUCT* dis = (DRAWITEMSTRUCT*)lParam;
 
       if (psInfo && psInfo->aeroChrome &&
-          dis->CtlType == ODT_BUTTON && dis->CtlID == IDC_AERO_BACKBUTTON)
+          dis->CtlType == ODT_BUTTON && dis->CtlID == IDC_BACK_BUTTON)
       {
         PROPSHEET_AeroDrawBackButton(dis);
         return TRUE;
