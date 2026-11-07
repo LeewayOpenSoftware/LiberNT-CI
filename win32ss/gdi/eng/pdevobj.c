@@ -211,6 +211,11 @@ PDEVOBJ_bEnablePDEV(
                                   (HDEV)ppdev,
                                   ppdev->pGraphicsDevice ? ppdev->pGraphicsDevice->pwszDescription : NULL,
                                   ppdev->pGraphicsDevice ? ppdev->pGraphicsDevice->DeviceObject : NULL);
+    ERR("K2TRACE: W32K DrvEnablePDEV(%S %lux%lu) dhpdev %p\n",
+        ppdev->pGraphicsDevice ? ppdev->pGraphicsDevice->szNtDeviceName : L"(none)",
+        pdevmode ? pdevmode->dmPelsWidth : 0,
+        pdevmode ? pdevmode->dmPelsHeight : 0,
+        ppdev->dhpdev);
     TRACE("DrvEnablePDEV(pdevmode %p hdev %p) => dhpdev %p\n", pdevmode, ppdev, ppdev->dhpdev);
     if (ppdev->dhpdev == NULL)
     {

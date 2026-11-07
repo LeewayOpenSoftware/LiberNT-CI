@@ -138,6 +138,8 @@ InitDisplayDriver(
     pGraphicsDevice = EngpRegisterGraphicsDevice(&ustrDeviceName,
                                                  &ustrDisplayDrivers,
                                                  &ustrDescription);
+    ERR("K2TRACE: W32K InitDisplayDriver(%ls) key=%ls drivers=%ls vga=%lu -> %p\n",
+        pwszDeviceName, pwszRegKey, awcBuffer, dwVga, pGraphicsDevice);
     if (pGraphicsDevice && dwVga)
     {
         pGraphicsDevice->StateFlags |= DISPLAY_DEVICE_VGA_COMPATIBLE;
@@ -192,6 +194,8 @@ InitVideo(VOID)
             KeDelayExecutionThread(KernelMode, FALSE, &Interval);
         }
     }
+    ERR("K2TRACE: W32K InitVideo status 0x%lx device %p\n",
+        Status, EngpFindGraphicsDevice(NULL, 0));
     if (!NT_SUCCESS(Status))
         return Status;
 
