@@ -458,6 +458,16 @@ public:
         if (uMsg == WM_KEYUP && wParam != VK_SPACE)
             return 0;
 
+        {
+            RECT rcBtn;
+            DWORD dwPos = GetMessagePos();
+
+            GetWindowRect(&rcBtn);
+            ERR("[T1] Start button press: msg 0x%x screen (%d,%d) button (%d,%d)-(%d,%d)\n", uMsg,
+                (int)(short)LOWORD(dwPos), (int)(short)HIWORD(dwPos),
+                rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom);
+        }
+
         if (!m_bMaterial)
         {
             GetParent().PostMessage(TWM_OPENSTARTMENU);
@@ -2204,6 +2214,18 @@ ChangePos:
         ResizeWorkArea();
         ApplyClipping(TRUE);
         RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ALLCHILDREN);
+
+        {
+            RECT rcTray, rcStart, rcScreen;
+
+            GetWindowRect(&rcTray);
+            m_StartButton.GetWindowRect(&rcStart);
+            GetScreenRect(m_Monitor, &rcScreen);
+            ERR("[T1] Layout: tray (%d,%d)-(%d,%d) start (%d,%d)-(%d,%d) monitor (%d,%d)-(%d,%d) pos %lu\n",
+                rcTray.left, rcTray.top, rcTray.right, rcTray.bottom,
+                rcStart.left, rcStart.top, rcStart.right, rcStart.bottom,
+                rcScreen.left, rcScreen.top, rcScreen.right, rcScreen.bottom, (ULONG)m_Position);
+        }
     }
 
     INT GetDefaultTrayHeight()
@@ -3590,6 +3612,16 @@ ChangePos:
         RECT rcStartBtn;
         m_StartButton.GetWindowRect(&rcStartBtn);
         GetWindowInfo(m_hWnd, &wi);
+
+        {
+            RECT rcTray;
+
+            GetWindowRect(&rcTray);
+            ERR("[T1] Tray non-client press: hit %d screen (%d,%d) tray (%d,%d)-(%d,%d) start (%d,%d)-(%d,%d) pos %lu lock %d\n",
+                (int)wParam, pt.x, pt.y, rcTray.left, rcTray.top, rcTray.right, rcTray.bottom,
+                rcStartBtn.left, rcStartBtn.top, rcStartBtn.right, rcStartBtn.bottom,
+                (ULONG)m_Position, (int)g_TaskbarSettings.bLock);
+        }
 
         if (IsPointWithinStartButton(&pt, &rcStartBtn, &wi))
         {
