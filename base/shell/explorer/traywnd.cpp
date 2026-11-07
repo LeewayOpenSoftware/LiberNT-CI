@@ -314,6 +314,13 @@ public:
             Size.cx = 2 * GetSystemMetrics(SM_CXEDGE) + GetSystemMetrics(SM_CYCAPTION) * 3;
         }
 
+        /* With an empty caption (orb icon) the button reports its own current
+           client size as the ideal size. A button that has not been sized yet
+           (created 0x0, e.g. on a vertical taskbar restored at logon) then
+           stays 0 wide forever. Never accept a zero ideal width. */
+        if (Size.cx <= 0)
+            Size.cx = 2 * GetSystemMetrics(SM_CXEDGE) + GetSystemMetrics(SM_CYCAPTION) * 3;
+
         Size.cy = max(Size.cy, GetSystemMetrics(SM_CYCAPTION));
 
         if (m_bModernTaskbar)
