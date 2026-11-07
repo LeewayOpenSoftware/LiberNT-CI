@@ -331,7 +331,11 @@ Lt1xConstraintModeIndex(
             Index = 1;
         SetInterface->pfnReleaseModeInfo(hSet, Mode);
     }
-    VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hSet);
+    {
+        NTSTATUS RelStatus = VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hSet);
+        if (!NT_SUCCESS(RelStatus))
+            DbgPrint("LT1X: release constraint source mode set failed 0x%08lX\n", RelStatus);
+    }
     return Index;
 }
 
@@ -339,7 +343,8 @@ Lt1xConstraintModeIndex(
    pfnCreateNewModeInfo id is unique per the manager's NextModeId accounting,
    but a set may also already hold the equivalent (seeded or carried): that is
    satisfied by pinning the existing entry.  Retries once with a fresh id on
-   a uniqueness clash so an id surprise can never fail the enumeration. */
+   a uniqueness clash so an id surprise can never fail the enumeration.  The
+   pending info is released on every path that does not consume it. */
 static
 NTSTATUS
 Lt1xAddSourceModeUnique(
@@ -356,6 +361,7 @@ Lt1xAddSourceModeUnique(
     {
         D3DKMDT_VIDPN_SOURCE_MODE *Mode;
         CONST D3DKMDT_VIDPN_SOURCE_MODE *Iter;
+        NTSTATUS RelStatus;
 
         Status = SetInterface->pfnCreateNewModeInfo(hSet, &Mode);
         if (!NT_SUCCESS(Status))
@@ -375,18 +381,26 @@ Lt1xAddSourceModeUnique(
                     Iter->Format.Graphics.Stride == Mode->Format.Graphics.Stride)
                 {
                     *IdOut = Iter->Id;
-                    SetInterface->pfnReleaseModeInfo(hSet, Iter);
-                    return STATUS_SUCCESS;
+                    RelStatus = SetInterface->pfnReleaseModeInfo(hSet, Iter);
+                    if (!NT_SUCCESS(RelStatus))
+                        DbgPrint("LT1X: release acquired mode info failed 0x%08lX\n", RelStatus);
+                    break;
                 }
                 Status = SetInterface->pfnAcquireNextModeInfo(hSet, Iter, &Iter);
             }
-            return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+            RelStatus = SetInterface->pfnReleaseModeInfo(hSet, Mode);
+            if (!NT_SUCCESS(RelStatus))
+                DbgPrint("LT1X: release pending mode info failed 0x%08lX\n", RelStatus);
+            return NT_SUCCESS(Status) ? STATUS_SUCCESS
+                                      : STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
         }
         DbgPrint("LT1X: source add mode %lu id %u failed 0x%08lX\n",
                  ModeIndex, Mode->Id, Status);
+        RelStatus = SetInterface->pfnReleaseModeInfo(hSet, Mode);
+        if (!NT_SUCCESS(RelStatus))
+            DbgPrint("LT1X: release pending mode info failed 0x%08lX\n", RelStatus);
         if (Status != STATUS_GRAPHICS_MODE_ID_MUST_BE_UNIQUE)
             return Status;
-        /* released by the retry's CreateNewModeInfo overwrite path below */
     }
     return Status;
 }
@@ -407,6 +421,7 @@ Lt1xAddTargetModeUnique(
     {
         D3DKMDT_VIDPN_TARGET_MODE *Mode;
         CONST D3DKMDT_VIDPN_TARGET_MODE *Iter;
+        NTSTATUS RelStatus;
 
         Status = SetInterface->pfnCreateNewModeInfo(hSet, &Mode);
         if (!NT_SUCCESS(Status))
@@ -425,15 +440,24 @@ Lt1xAddTargetModeUnique(
                     Iter->VideoSignalInfo.ActiveSize.cy == Mode->VideoSignalInfo.ActiveSize.cy)
                 {
                     *IdOut = Iter->Id;
-                    SetInterface->pfnReleaseModeInfo(hSet, Iter);
-                    return STATUS_SUCCESS;
+                    RelStatus = SetInterface->pfnReleaseModeInfo(hSet, Iter);
+                    if (!NT_SUCCESS(RelStatus))
+                        DbgPrint("LT1X: release acquired mode info failed 0x%08lX\n", RelStatus);
+                    break;
                 }
                 Status = SetInterface->pfnAcquireNextModeInfo(hSet, Iter, &Iter);
             }
-            return STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
+            RelStatus = SetInterface->pfnReleaseModeInfo(hSet, Mode);
+            if (!NT_SUCCESS(RelStatus))
+                DbgPrint("LT1X: release pending mode info failed 0x%08lX\n", RelStatus);
+            return NT_SUCCESS(Status) ? STATUS_SUCCESS
+                                      : STATUS_GRAPHICS_VIDPN_MODALITY_NOT_SUPPORTED;
         }
         DbgPrint("LT1X: target add mode %lu id %u failed 0x%08lX\n",
                  ModeIndex, Mode->Id, Status);
+        RelStatus = SetInterface->pfnReleaseModeInfo(hSet, Mode);
+        if (!NT_SUCCESS(RelStatus))
+            DbgPrint("LT1X: release pending mode info failed 0x%08lX\n", RelStatus);
         if (Status != STATUS_GRAPHICS_MODE_ID_MUST_BE_UNIQUE)
             return Status;
     }
@@ -499,7 +523,11 @@ Lt1xAssignCofuncModality(
         }
         if (NT_SUCCESS(Status))
             Status = VidPnInterface->pfnAssignSourceModeSet(hVidPn, Path->VidPnSourceId, hSourceModeSet);
-        VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hSourceModeSet);
+        {
+            NTSTATUS RelStatus = VidPnInterface->pfnReleaseSourceModeSet(hVidPn, hSourceModeSet);
+            if (!NT_SUCCESS(RelStatus))
+                DbgPrint("LT1X: release source mode set failed 0x%08lX\n", RelStatus);
+        }
         if (!NT_SUCCESS(Status))
             break;
 
@@ -527,7 +555,11 @@ Lt1xAssignCofuncModality(
         }
         if (NT_SUCCESS(Status))
             Status = VidPnInterface->pfnAssignTargetModeSet(hVidPn, Path->VidPnTargetId, hTargetModeSet);
-        VidPnInterface->pfnReleaseTargetModeSet(hVidPn, hTargetModeSet);
+        {
+            NTSTATUS RelStatus = VidPnInterface->pfnReleaseTargetModeSet(hVidPn, hTargetModeSet);
+            if (!NT_SUCCESS(RelStatus))
+                DbgPrint("LT1X: release target mode set failed 0x%08lX\n", RelStatus);
+        }
         if (!NT_SUCCESS(Status))
             break;
 
@@ -1583,10 +1615,18 @@ Lt1xDdiCommitVidPn(
             DbgPrint("LT1X: dispi programmed %lux%lux%lu stride %lu\n",
                      Width, Height, Bpp, Stride);
         }
-        SourceModeSetInterface->pfnReleaseModeInfo(hSourceModeSet, PinnedMode);
+        {
+            NTSTATUS RelStatus = SourceModeSetInterface->pfnReleaseModeInfo(hSourceModeSet, PinnedMode);
+            if (!NT_SUCCESS(RelStatus))
+                DbgPrint("LT1X: release pinned mode info failed 0x%08lX\n", RelStatus);
+        }
     }
-    VidPnInterface->pfnReleaseSourceModeSet(pCommitVidPn->hFunctionalVidPn,
-                                            hSourceModeSet);
+    {
+        NTSTATUS RelStatus = VidPnInterface->pfnReleaseSourceModeSet(pCommitVidPn->hFunctionalVidPn,
+                                                                     hSourceModeSet);
+        if (!NT_SUCCESS(RelStatus))
+            DbgPrint("LT1X: release commit source mode set failed 0x%08lX\n", RelStatus);
+    }
     return Status;
 }
 
@@ -1638,8 +1678,13 @@ Lt1xDdiRecommendMonitorModes(
 
     Status = pRecommendMonitorModes->pMonitorSourceModeSetInterface->pfnAddMode(
         pRecommendMonitorModes->hMonitorSourceModeSet, Mode);
-    pRecommendMonitorModes->pMonitorSourceModeSetInterface->pfnReleaseModeInfo(
-        pRecommendMonitorModes->hMonitorSourceModeSet, Mode);
+    {
+        NTSTATUS RelStatus =
+            pRecommendMonitorModes->pMonitorSourceModeSetInterface->pfnReleaseModeInfo(
+                pRecommendMonitorModes->hMonitorSourceModeSet, Mode);
+        if (!NT_SUCCESS(RelStatus))
+            DbgPrint("LT1X: release monitor mode info failed 0x%08lX\n", RelStatus);
+    }
     return Status;
 }
 
