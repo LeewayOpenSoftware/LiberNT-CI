@@ -72,3 +72,10 @@ Volume::FlushVolume()
 {
     return NtfsFlushVolumeContext(IoContext);
 }
+
+NTSTATUS
+Volume::CommitRange(_In_ ULONGLONG Offset,
+                    _In_ ULONG Length)
+{
+    return NtfsCommitRangeContext(IoContext, Offset, Length);
+}
