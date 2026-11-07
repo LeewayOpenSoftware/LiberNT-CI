@@ -54,6 +54,7 @@
 #include "tmschema.h"
 #include "resource.h"
 #include "taskbarpin.h"
+#include "jumplist.h"
 
 #include <wine/debug.h>
 
