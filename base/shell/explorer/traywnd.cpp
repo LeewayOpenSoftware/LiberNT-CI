@@ -972,6 +972,9 @@ public:
 
         SendMessage(m_DesktopWnd, WM_PROGMAN_SAVESTATE, 0, 0);
 
+        if (m_TrayBandSite)
+            m_TrayBandSite->Save();
+
         if (SHRestricted(REST_CLEARRECENTDOCSONEXIT))
             ClearRecentAndMru();
     }
@@ -2646,6 +2649,28 @@ ChangePos:
         }
     }
 
+    BOOL IsCursorAtRevealEdge(const POINT& pt)
+    {
+        RECT rcScreen;
+        const INT iMargin = 2;
+
+        if (GetScreenRect(m_Monitor, &rcScreen) == NULL)
+            return FALSE;
+
+        switch (m_Position)
+        {
+            case ABE_LEFT:
+                return pt.x <= rcScreen.left + iMargin;
+            case ABE_TOP:
+                return pt.y <= rcScreen.top + iMargin;
+            case ABE_RIGHT:
+                return pt.x >= rcScreen.right - 1 - iMargin;
+            case ABE_BOTTOM:
+                return pt.y >= rcScreen.bottom - 1 - iMargin;
+        }
+        return FALSE;
+    }
+
     void ProcessMouseTracking()
     {
         POINT pt;
@@ -2659,6 +2684,9 @@ ChangePos:
             over = TRUE;
 
         UINT state = m_AutoHideState;
+        if (!over && (state == AUTOHIDE_HIDDEN || state == AUTOHIDE_HIDING))
+            over = IsCursorAtRevealEdge(pt);
+
         if (over)
         {
             if (state == AUTOHIDE_HIDING)
@@ -2759,6 +2787,7 @@ ChangePos:
 
             KillTimer(TIMER_ID_AUTOHIDE);
             m_AutoHideState = AUTOHIDE_HIDDEN;
+            SetTimer(TIMER_ID_MOUSETRACK, MOUSETRACK_INTERVAL, NULL);
             break;
 
         case AUTOHIDE_SHOWING:
