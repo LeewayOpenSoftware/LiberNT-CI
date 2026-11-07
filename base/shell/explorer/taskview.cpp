@@ -42,6 +42,7 @@ public:
     INT m_cxWidth;
     INT m_cyRow;
     INT m_Pad;
+    BOOL m_bActivating;
 
     CTrayTaskViewWnd(ITrayWindow *pTray) :
         m_Tray(pTray),
@@ -53,7 +54,8 @@ public:
         m_cVisible(0),
         m_cxWidth(0),
         m_cyRow(0),
-        m_Pad(0)
+        m_Pad(0),
+        m_bActivating(FALSE)
     {
         ZeroMemory(&m_Pal, sizeof(m_Pal));
     }
@@ -243,14 +245,16 @@ public:
 
     VOID ActivateSel()
     {
-        if (m_iSel >= 0 && m_iSel < ItemCount())
+        HWND hWnd = NULL;
+
+        if (m_iSel >= 0 && m_iSel < ItemCount() && ::IsWindow(m_Items[m_iSel].hWnd))
+            hWnd = m_Items[m_iSel].hWnd;
+
+        if (hWnd)
         {
-            HWND hWnd = m_Items[m_iSel].hWnd;
-            if (::IsWindow(hWnd))
-            {
-                TRACE("TaskView: activating %p\n", hWnd);
-                ::SwitchToThisWindow(hWnd, TRUE);
-            }
+            TRACE("TaskView: activating %p\n", hWnd);
+            m_bActivating = TRUE;
+            ::SwitchToThisWindow(hWnd, TRUE);
         }
         DestroyWindow();
     }
@@ -407,7 +411,7 @@ public:
 
     LRESULT OnActivate(UINT, WPARAM wParam, LPARAM, BOOL&)
     {
-        if (LOWORD(wParam) == WA_INACTIVE)
+        if (LOWORD(wParam) == WA_INACTIVE && !m_bActivating)
             DestroyWindow();
         return 0;
     }
