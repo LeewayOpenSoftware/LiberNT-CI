@@ -91,6 +91,9 @@ ReadHostsFile(VOID);
 VOID
 ReloadHostsFile(VOID);
 
+VOID
+HostsRefreshIfChanged(VOID);
+
 BOOL
 HostsWatchStart(VOID);
 

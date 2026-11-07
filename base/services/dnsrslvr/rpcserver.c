@@ -112,6 +112,10 @@ R_ResolverQuery(
     if ((dwFlags & DNS_QUERY_WIRE_ONLY) != 0 && (dwFlags & DNS_QUERY_NO_WIRE_QUERY) != 0)
         return ERROR_INVALID_PARAMETER;
 
+    /* A hosts line edited a moment ago must win over what the cache learned from DNS */
+    if (!(dwFlags & DNS_QUERY_WIRE_ONLY))
+        HostsRefreshIfChanged();
+
     if (dwFlags & DNS_QUERY_WIRE_ONLY)
     {
         DPRINT("DNS query!\n");
