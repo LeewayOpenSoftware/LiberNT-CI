@@ -1012,7 +1012,8 @@ INT_PTR CALLBACK COperationsProgressDialog::DialogProc(HWND window, UINT message
         if (self->m_Taskbar)
         {
             self->m_Taskbar->SetProgressState(window, state);
-            if (total) self->m_Taskbar->SetProgressValue(window, min(points, total), total);
+            // A value switches an indeterminate button back to normal: send none then.
+            if (total && state != TBPF_INDETERMINATE) self->m_Taskbar->SetProgressValue(window, min(points, total), total);
         }
         return TRUE;
     }
