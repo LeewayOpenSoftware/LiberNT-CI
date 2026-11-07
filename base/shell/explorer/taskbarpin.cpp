@@ -1155,7 +1155,7 @@ WaitTaskbarPinWatchStop(DWORD dwMilliseconds)
 }
 
 static BOOL
-WatchTaskbarPinFolder(PCWSTR pszFolder)
+WatchTaskbarPinFolder(PCWSTR pszFolder, BOOL bResync)
 {
     const DWORD Filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE |
                          FILE_NOTIFY_CHANGE_CREATION | FILE_NOTIFY_CHANGE_SIZE;
@@ -1179,6 +1179,8 @@ WatchTaskbarPinFolder(PCWSTR pszFolder)
     Handles[0] = g_hTaskbarPinWatchStop;
     Handles[1] = Overlapped.hEvent;
     Signature = TaskbarPinFolderSignature(pszFolder);
+    if (bResync)
+        NotifyTaskbarPinWatchers();
 
     for (;;)
     {
@@ -1245,6 +1247,8 @@ WatchTaskbarPinFolder(PCWSTR pszFolder)
 static DWORD WINAPI
 TaskbarPinWatchThread(PVOID)
 {
+    BOOL bResync = FALSE;
+
     for (;;)
     {
         CStringW Folder;
@@ -1253,12 +1257,14 @@ TaskbarPinWatchThread(PVOID)
             return 0;
         if (FAILED(GetTaskbarPinFolder(TRUE, Folder)))
         {
+            bResync = TRUE;
             if (WaitTaskbarPinWatchStop(5000))
                 return 0;
             continue;
         }
-        if (WatchTaskbarPinFolder(Folder) || WaitTaskbarPinWatchStop(2000))
+        if (WatchTaskbarPinFolder(Folder, bResync) || WaitTaskbarPinWatchStop(2000))
             return 0;
+        bResync = TRUE;
     }
 }
 
