@@ -88,6 +88,15 @@ DnsIntCacheGetEntries(
 BOOL
 ReadHostsFile(VOID);
 
+VOID
+ReloadHostsFile(VOID);
+
+BOOL
+HostsWatchStart(VOID);
+
+VOID
+HostsWatchStop(VOID);
+
 
 /* llmnr.c */
 

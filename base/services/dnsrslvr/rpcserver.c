@@ -65,7 +65,9 @@ R_ResolverFlushCache(
     DPRINT("R_ResolverFlushCache(%S)\n",
            pszServerName);
 
-    return DnsIntCacheFlush(CACHE_FLUSH_NON_HOSTS_FILE_ENTRIES);
+    /* As on Windows, flushing the cache also reloads the hosts file */
+    ReloadHostsFile();
+    return ERROR_SUCCESS;
 }
 
 

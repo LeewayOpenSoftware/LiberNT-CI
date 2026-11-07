@@ -8,6 +8,7 @@
 #include <ws2tcpip.h>
 #include <stdio.h>
 #include <windns.h>
+#include <windns_undoc.h>
 #include <apitest.h>
 
 static WCHAR g_HostsPath[MAX_PATH];
@@ -103,12 +104,28 @@ static DNS_STATUS QueryAAAA(LPCWSTR Name, IP6_ADDRESS *Ip6)
 
 #define IP4(a, b, c, d) ((DWORD)((a) | ((b) << 8) | ((c) << 16) | ((DWORD)(d) << 24)))
 
+/* Ask until the answer is Expected (0 = the name must not resolve) or 2 seconds have passed */
+static DNS_STATUS WaitForA(LPCWSTR Name, DWORD Expected, DWORD *Ip4, DWORD *Elapsed)
+{
+    DWORD Start = GetTickCount();
+    DNS_STATUS Status;
+
+    for (;;)
+    {
+        Status = QueryA(Name, Ip4);
+        *Elapsed = GetTickCount() - Start;
+        if (*Ip4 == Expected || *Elapsed >= 2000)
+            return Status;
+        Sleep(50);
+    }
+}
+
 START_TEST(HostsFile)
 {
     DNS_STATUS Status;
     DWORD Ip4;
     IP6_ADDRESS Ip6;
-    DWORD Start;
+    DWORD Start, Elapsed;
 
     if (!SaveHosts() || !WriteHosts("# hosts apitest\r\n"))
     {
@@ -170,13 +187,33 @@ START_TEST(HostsFile)
     ok(Status == ERROR_SUCCESS && Ip6.IP6Dword[0] == 0xc0fe, "dual AAAA: status %lu\n", Status);
 
     /* hosts precedence over DNS for a name DNS cannot know, and re-read on change: edit and ask again */
+    /* The DNS Client service (Dnscache) may be running and caching: it has to notice the change by itself
+     * within about a second, as on Windows */
     ok(WriteHosts("10.77.0.9 hosta.apitest\r\n"), "rewrite failed\n");
-    Status = QueryA(L"hosta.apitest", &Ip4);
-    ok(Status == ERROR_SUCCESS && Ip4 == IP4(10, 77, 0, 9), "after edit: status %lu address 0x%08lx\n", Status, Ip4);
+    Status = WaitForA(L"hosta.apitest", IP4(10, 77, 0, 9), &Ip4, &Elapsed);
+    ok(Status == ERROR_SUCCESS && Ip4 == IP4(10, 77, 0, 9), "after edit: status %lu address 0x%08lx after %lu ms\n", Status, Ip4, Elapsed);
 
     ok(WriteHosts("# empty again\r\n"), "rewrite failed\n");
-    Status = QueryA(L"hosta.apitest", &Ip4);
-    ok(Status != ERROR_SUCCESS && Ip4 == 0, "after removal the name still resolves: status %lu address 0x%08lx\n", Status, Ip4);
+    Status = WaitForA(L"hosta.apitest", 0, &Ip4, &Elapsed);
+    ok(Status != ERROR_SUCCESS && Ip4 == 0, "after removal the name still resolves: status %lu address 0x%08lx after %lu ms\n", Status, Ip4, Elapsed);
+
+    /* a second add/remove cycle, so that a stale answer cannot be a first-query artifact */
+    ok(WriteHosts("10.77.0.10 cycle.apitest\r\n"), "rewrite failed\n");
+    Status = WaitForA(L"cycle.apitest", IP4(10, 77, 0, 10), &Ip4, &Elapsed);
+    ok(Status == ERROR_SUCCESS && Ip4 == IP4(10, 77, 0, 10), "cycle add: status %lu address 0x%08lx after %lu ms\n", Status, Ip4, Elapsed);
+    ok(WriteHosts("# empty\r\n"), "rewrite failed\n");
+    Status = WaitForA(L"cycle.apitest", 0, &Ip4, &Elapsed);
+    ok(Status != ERROR_SUCCESS && Ip4 == 0, "cycle removal: status %lu address 0x%08lx after %lu ms\n", Status, Ip4, Elapsed);
+
+    /* DnsFlushResolverCache reloads the hosts file at once, no waiting */
+    ok(WriteHosts("10.77.0.11 flush.apitest\r\n"), "rewrite failed\n");
+    ok(DnsFlushResolverCache(), "DnsFlushResolverCache failed\n");
+    Status = QueryA(L"flush.apitest", &Ip4);
+    ok(Status == ERROR_SUCCESS && Ip4 == IP4(10, 77, 0, 11), "after flush: status %lu address 0x%08lx\n", Status, Ip4);
+    ok(WriteHosts("# empty\r\n"), "rewrite failed\n");
+    ok(DnsFlushResolverCache(), "DnsFlushResolverCache failed\n");
+    Status = QueryA(L"flush.apitest", &Ip4);
+    ok(Status != ERROR_SUCCESS && Ip4 == 0, "after flush and removal: status %lu address 0x%08lx\n", Status, Ip4);
 
     RestoreHosts();
 }
