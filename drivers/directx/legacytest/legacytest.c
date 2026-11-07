@@ -251,14 +251,18 @@ static
 VOID
 Lt1xFillSourceMode(_In_ PLT1X_CONTEXT Ctx,
                    _In_ ULONG ModeIndex,
-                   _Out_ D3DKMDT_VIDPN_SOURCE_MODE *Mode)
+                   _Inout_ D3DKMDT_VIDPN_SOURCE_MODE *Mode)
 {
     ULONG Width, Height, Bpp, Stride;
+    /* pfnCreateNewModeInfo assigned the Id before this fill runs; keep it
+       across the zeroing (the L6j M1 failure was this Id being wiped: the
+       second source add then reused id 0 and AddMode refused it with
+       STATUS_GRAPHICS_MODE_ID_MUST_BE_UNIQUE). */
+    D3DKMDT_VIDEO_PRESENT_SOURCE_MODE_ID Id = Mode->Id;
 
     Lt1xModeGeometry(Ctx, ModeIndex, &Width, &Height, &Bpp, &Stride);
     RtlZeroMemory(Mode, sizeof(*Mode));
-    /* The Id is assigned by pfnCreateNewModeInfo and must not be touched;
-       the pin code captures it before pfnAddMode. */
+    Mode->Id = Id;
     Mode->Type = D3DKMDT_RMT_GRAPHICS;
     Mode->Format.Graphics.PrimSurfSize.cx = Width;
     Mode->Format.Graphics.PrimSurfSize.cy = Height;
@@ -276,13 +280,16 @@ static
 VOID
 Lt1xFillTargetMode(_In_ PLT1X_CONTEXT Ctx,
                    _In_ ULONG ModeIndex,
-                   _Out_ D3DKMDT_VIDPN_TARGET_MODE *Mode)
+                   _Inout_ D3DKMDT_VIDPN_TARGET_MODE *Mode)
 {
     ULONG Width, Height, Bpp, Stride;
+    /* Keep the pfnCreateNewModeInfo-assigned Id across the zeroing; see the
+       source mode fill. */
+    D3DKMDT_VIDEO_PRESENT_TARGET_MODE_ID Id = Mode->Id;
 
     Lt1xModeGeometry(Ctx, ModeIndex, &Width, &Height, &Bpp, &Stride);
     RtlZeroMemory(Mode, sizeof(*Mode));
-    /* Id comes from pfnCreateNewModeInfo; see the source mode comment. */
+    Mode->Id = Id;
     Mode->VideoSignalInfo.TotalSize.cx = Width;
     Mode->VideoSignalInfo.TotalSize.cy = Height;
     Mode->VideoSignalInfo.ActiveSize.cx = Width;
