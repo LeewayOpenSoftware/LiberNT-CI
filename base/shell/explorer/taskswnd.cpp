@@ -3165,6 +3165,14 @@ public:
     BOOL RefreshWindowList()
     {
         TRACE("Refreshing window list...\n");
+
+        for (WORD i = m_TaskItemCount; i > 0;)
+        {
+            PTASK_ITEM TaskItem = &m_TaskItems[--i];
+            if (!::IsWindow(TaskItem->hWnd) || !m_Tray->IsTaskWnd(TaskItem->hWnd))
+                DeleteTaskItem(TaskItem);
+        }
+
         /* Add all windows to the toolbar */
         return EnumWindows(s_EnumWindowsProc, (LPARAM)this);
     }
@@ -3370,6 +3378,16 @@ public:
             DeleteTask((HWND)lParam);
             break;
 
+        case HSHELL_WINDOWREPLACING:
+            if (AddTask((HWND)lParam))
+                StartMenu2_RecordUsage((HWND)lParam);
+            break;
+
+        case HSHELL_WINDOWREPLACED:
+            OnWindowDestroyed((HWND)lParam);
+            DeleteTask((HWND)lParam);
+            break;
+
         case HSHELL_RUDEAPPACTIVATED:
         case HSHELL_WINDOWACTIVATED:
             OnWindowActivated((HWND)lParam);
@@ -3405,8 +3423,6 @@ public:
         case HSHELL_SYSMENU:
         case HSHELL_ENDTASK:
         case HSHELL_ACCESSIBILITYSTATE:
-        case HSHELL_WINDOWREPLACED:
-        case HSHELL_WINDOWREPLACING:
 
         case HSHELL_GETMINRECT:
         default:
