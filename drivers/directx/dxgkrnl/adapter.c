@@ -13423,12 +13423,13 @@ DxgkpCompleteAdapterStart(
                                                            &ReleasedByDriver);
                 if (NT_SUCCESS(ReassertStatus))
                     ReassertStatus = DxgkAdapterStart(Fallback, NULL, NULL);
-                /* The restart redraws the desktop; re-acquire the inbv
-                   ownership afterwards (state flip only, no reset - a reset
-                   would zero the freshly drawn framebuffer) so the scanout
-                   that stopped at the loss resumes. */
-                if (NT_SUCCESS(ReassertStatus) && !InbvCheckDisplayOwnership())
-                    InbvAcquireDisplayOwnership();
+                /* The restarted fallback now holds the desktop the way the
+                   boot-time handover would have; the boot log must yield
+                   the display or every later present is dropped outright -
+                   DxgkpBootLogHoldsDisplay gates the present path and the
+                   present timer on inbv ownership. */
+                if (NT_SUCCESS(ReassertStatus))
+                    InbvNotifyDisplayOwnershipLost(NULL);
             }
             DXGKRNL_INFO("POSTDISPLAY_REASSERT: claimant %p failed 0x%08lX "
                          "without a claim; owner %p fallback %p restart "
