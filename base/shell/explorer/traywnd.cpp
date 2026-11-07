@@ -13,6 +13,7 @@
 #include <cfgmgr32.h>
 #include <regstr.h>
 #include "appbar.h"
+#include "taskview.h"
 
 HRESULT TrayWindowCtxMenuCreator(ITrayWindow * TrayWnd, IN HWND hWndOwner, IContextMenu ** ppCtxMenu);
 
@@ -1325,8 +1326,12 @@ public:
             break;
         }
         case IDHK_NEXT_TASK:
+            HideStartMenu();
+            TaskView_ToggleCycle(this, TRUE);
             break;
         case IDHK_PREV_TASK:
+            HideStartMenu();
+            TaskView_ToggleCycle(this, FALSE);
             break;
         case IDHK_MINIMIZE_ALL:
             MinimizeAll();
