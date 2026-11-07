@@ -13413,9 +13413,13 @@ DxgkpCompleteAdapterStart(
                    POST owner; the BasicDisplay fallback renders through the
                    inbv virtual framebuffer, so while inbv ownership stays
                    LOST the screen keeps showing the boot text even though
-                   the fallback is running.  Take the ownership back. */
+                   the fallback is running.  Take the ownership back and
+                   re-enable the bootvid display: the loss ran VidCleanUp
+                   (inbv.c), so ownership alone leaves the hardware torn
+                   down; InbvResetDisplay is the same entry KeBugCheck uses
+                   to bring the boot display back. */
                 InbvAcquireDisplayOwnership();
-                ReassertInbv = TRUE;
+                ReassertInbv = InbvResetDisplay();
             }
             DXGKRNL_INFO("POSTDISPLAY_REASSERT: claimant %p failed 0x%08lX "
                          "without a claim; owner %p fallback %p rebuild "
@@ -13425,7 +13429,9 @@ DxgkpCompleteAdapterStart(
                          Owner,
                          Fallback,
                          ReassertStatus,
-                         ReassertInbv ? "acquired" : "unchanged");
+                         Fallback == NULL ? "skipped" :
+                             ReassertInbv ? "reset" :
+                             InbvCheckDisplayOwnership() ? "owned" : "acquired");
             if (OwnerDeviceObject != NULL)
                 ObDereferenceObject(OwnerDeviceObject);
             KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
