@@ -754,6 +754,7 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
    hdcScreen = IntGetScreenDC();
    CurInfo = IntGetSysCursorInfo();
 
+#if DBG
    /* DIAG [F1]: a press in the last two screen rows */
    if ((Msg->message == WM_LBUTTONDOWN || Msg->message == WM_RBUTTONDOWN) &&
        Msg->pt.y >= UserGetSystemMetrics(SM_CYSCREEN) - 2)
@@ -778,6 +779,7 @@ co_MsqInsertMouseMessage(MSG* Msg, DWORD flags, ULONG_PTR dwExtraInfo, BOOL Hook
            }
        }
    }
+#endif
 
    /* Check if we found a window */
    if (Msg->hwnd != NULL && pwnd != NULL)
@@ -1806,9 +1808,11 @@ BOOL co_IntProcessMouseMessage(MSG* msg, BOOL* RemoveMessages, BOOL* NotForUs, L
 
     msg->hwnd = UserHMGetHandle(pwndMsg);
 
+#if DBG
     if ((msg->message == WM_LBUTTONDOWN || msg->message == WM_RBUTTONDOWN) &&
         msg->pt.y >= UserGetSystemMetrics(SM_CYSCREEN) - 2)
         ERR("[F1] process: pt (%d,%d) hwnd %p hittest %d\n", msg->pt.x, msg->pt.y, msg->hwnd, (int)hittest);
+#endif
 
     pt = msg->pt;
     message = msg->message;

@@ -2545,6 +2545,7 @@ ChangePos:
         if (dwp != NULL)
             EndDeferWindowPos(dwp);
 
+#if DBG
         {
             RECT rcS = {0}, rcR = {0}, rcT = {0};
             m_StartButton.GetWindowRect(&rcS);
@@ -2557,6 +2558,7 @@ ChangePos:
                 rcR.left, rcR.top, rcR.right, rcR.bottom, rcT.left, rcT.top, rcT.right, rcT.bottom,
                 hwndTaskToolbar);
         }
+#endif
 
         if (m_TaskSwitch != NULL)
         {
