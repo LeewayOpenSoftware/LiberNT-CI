@@ -938,9 +938,11 @@ BasepGetModuleHandleExW(BOOLEAN NoLock, DWORD dwPublicFlags, LPCWSTR lpwModuleNa
 {
     ULONG_PTR Cookie;
     NTSTATUS Status = STATUS_SUCCESS, Status2;
+    UNREFERENCED_PARAMETER(Status2);
     HANDLE hModule = NULL;
     UNICODE_STRING ModuleNameU;
     DWORD dwValid;
+    UNREFERENCED_PARAMETER(dwValid);
     BOOLEAN Redirected = FALSE; // FIXME
 
     /* Validate parameters */

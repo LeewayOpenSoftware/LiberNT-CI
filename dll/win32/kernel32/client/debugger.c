@@ -445,6 +445,7 @@ WINAPI
 DebugActiveProcess(IN DWORD dwProcessId)
 {
     NTSTATUS Status, Status1;
+    UNREFERENCED_PARAMETER(Status1);
     HANDLE Handle;
 
     /* Connect to the debugger */
@@ -486,6 +487,7 @@ WINAPI
 DebugActiveProcessStop(IN DWORD dwProcessId)
 {
     NTSTATUS Status, Status1;
+    UNREFERENCED_PARAMETER(Status1);
     HANDLE Handle;
 
     /* Get the process handle */

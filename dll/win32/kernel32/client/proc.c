@@ -549,6 +549,7 @@ WINAPI
 BasepSxsCloseHandles(IN PBASE_MSG_SXS_HANDLES Handles)
 {
     NTSTATUS Status;
+    UNREFERENCED_PARAMETER(Status);
 
     /* Sanity checks */
     ASSERT(Handles != NULL);
@@ -3328,6 +3329,7 @@ CreateProcessInternalW(IN HANDLE hUserToken,
     ULONG ResumeCount;
     PROCESS_PRIORITY_CLASS PriorityClass;
     NTSTATUS Status, AppCompatStatus, SaferStatus, IFEOStatus, ImageDbgStatus;
+    UNREFERENCED_PARAMETER(ImageDbgStatus);
     PPEB Peb, RemotePeb;
     PTEB Teb;
     INITIAL_TEB InitialTeb;
