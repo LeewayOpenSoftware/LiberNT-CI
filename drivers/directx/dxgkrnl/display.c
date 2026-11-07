@@ -4820,6 +4820,22 @@ DxgkpDisplayDispatch(
         }
     }
 
+    if (Stack->Parameters.DeviceIoControl.IoControlCode != IOCTL_VIDEO_DXGK_PRESENT_DIRTY_RECT)
+    {
+        DXGKRNL_ERR("K2TRACE: DXGK Video0 IOCTL 0x%lx -> 0x%lx adapter %p\n",
+                    Stack->Parameters.DeviceIoControl.IoControlCode, Status, g_DisplayAdapter);
+    }
+    else
+    {
+        static LONG PresentTraceCount;
+        LONG PresentSeq = InterlockedIncrement(&PresentTraceCount);
+        if (PresentSeq <= 3 || (PresentSeq % 128) == 0)
+        {
+            DXGKRNL_ERR("K2TRACE: DXGK Video0 PRESENT_DIRTY_RECT #%lu -> 0x%lx\n",
+                        PresentSeq, Status);
+        }
+    }
+
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = BytesReturned;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -4837,7 +4853,7 @@ DxgkpDisplayCreate(
 {
     UNREFERENCED_PARAMETER(DeviceObject);
 
-    DXGKRNL_TRACE("DxgkpDisplayCreate: opened\n");
+    DXGKRNL_ERR("K2TRACE: DXGK Video0 create\n");
     Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
