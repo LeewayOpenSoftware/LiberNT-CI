@@ -431,7 +431,8 @@ NotifyTopLevelWindow(HWND Wnd, PNOTIFY_CONTEXT NotifyContext)
             }
             Threads[0] = MessageThread;
             Threads[1] = NotifyContext->UIThread;
-            Timeout = MessageContext.Timeout - InitialTimeout;
+            Timeout = NotifyContext->ShutdownSettings->AutoEndTasks ?
+                      0 : MessageContext.Timeout - InitialTimeout;
             WaitStatus = WaitForMultipleObjectsEx(NotifyContext->UIThread == NULL ?
                                                   1 : 2,
                                                   Threads, FALSE, Timeout,
