@@ -346,6 +346,19 @@ NTAPI
 NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             _Inout_ PIRP Irp)
 {
+    /* A dismounted volume rejects every existing handle: the Windows
+       semantics of FSCTL_DISMOUNT_VOLUME is that I/O on open files then
+       fails with STATUS_VOLUME_DISMOUNTED, not that it keeps being served
+       from the still-attached VCB.  New opens remount through the cleared
+       VPB_MOUNTED; only the old VCB reaches this check. */
+    if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject &&
+        ((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension)->Dismounted)
+    {
+        Irp->IoStatus.Status = STATUS_VOLUME_DISMOUNTED;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_VOLUME_DISMOUNTED;
+    }
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
     if (NtfsPostAsyncRead(VolumeDeviceObject, Irp))
