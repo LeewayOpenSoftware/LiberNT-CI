@@ -51,6 +51,24 @@ GetTaskbarPinAppId(PCWSTR pszShortcut, CStringW &AppId)
     return SUCCEEDED(hr) && ReadTaskbarPinString(Store, TaskbarPinPkeyAppUserModelId, AppId);
 }
 
+BOOL
+TaskbarPin_IsAppIdCopied(PCWSTR pszShortcut)
+{
+    CComPtr<IShellLinkW> Link;
+    CComPtr<IPersistFile> Persist;
+    CComPtr<IPropertyStore> Store;
+    CStringW AppId, Command;
+    HRESULT hr = Link.CoCreateInstance(CLSID_ShellLink, IID_IShellLinkW, NULL, CLSCTX_INPROC_SERVER);
+    if (SUCCEEDED(hr))
+        hr = Link->QueryInterface(IID_PPV_ARG(IPersistFile, &Persist));
+    if (SUCCEEDED(hr))
+        hr = Persist->Load(pszShortcut, STGM_READ);
+    if (SUCCEEDED(hr))
+        hr = Link->QueryInterface(IID_PPV_ARG(IPropertyStore, &Store));
+    return SUCCEEDED(hr) && ReadTaskbarPinString(Store, TaskbarPinPkeyAppUserModelId, AppId) &&
+           !ReadTaskbarPinString(Store, TaskbarPinPkeyRelaunchCommand, Command);
+}
+
 static BOOL
 SplitTaskbarPinCommand(PCWSTR pszCommand, CStringW &Target, CStringW &Arguments)
 {

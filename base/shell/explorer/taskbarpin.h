@@ -33,5 +33,6 @@ HRESULT TaskbarPin_CreateRelaunch(PCWSTR pszCommand, PCWSTR pszName, PCWSTR pszA
 HRESULT TaskbarPin_LaunchCommand(PCWSTR pszCommand, HANDLE *phProcess);
 HRESULT TaskbarPin_LoadOrder(CAtlArray<TASKBAR_PIN_ORDER> &Order);
 HRESULT TaskbarPin_SaveOrder(const CAtlArray<TASKBAR_PIN_ORDER> &Order);
+BOOL TaskbarPin_IsAppIdCopied(PCWSTR pszShortcut);
 HRESULT TaskbarPin_StartWatch();
 VOID TaskbarPin_StopWatch();
