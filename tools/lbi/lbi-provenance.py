@@ -28,7 +28,11 @@ up/main-nt10, ledger shared/libernt/upstream-review (relative to CWD).
 The --lbi-json switch binds the manifest to one WS-B allocated attempt: the
 build's lbi.json supplies the label, the attempt UUID, the source commit
 cross-check and the inputs digest; manifest_ref is derived as
-"schema_id:attempt:<uuid>" and must equal what WS-B embedded.
+"schema_id:attempt:<uuid>" and must equal what WS-B embedded. Per the WS-B
+contract an unallocated build (allocated=false, empty attempt_id and
+manifest_ref, label 'unallocated') has no manifest of record: this tool
+refuses to mint one. ledger_ref is recorded verbatim
+("refs/lbi/seq/<N>" fresh, "refs/lbi/rev/<N>/<R>" for a servicing re-spin).
 """
 
 import argparse
@@ -139,8 +143,9 @@ def read_lbi_json(path):
     except (OSError, ValueError) as exc:
         fail("cannot read %s: %s" % (path, exc))
     if not data.get("allocated"):
-        fail("%s says allocated=false; provenance needs an allocated attempt"
-             % path)
+        fail("%s is an unallocated build (allocated=false, empty "
+             "attempt_id/manifest_ref, label 'unallocated'): no manifest of "
+             "record; refusing to mint one" % path)
     attempt = data.get("attempt_id")
     if not attempt or not ATTEMPT_RE.match(attempt):
         fail("%s has no valid attempt_id (got %r)" % (path, attempt))
