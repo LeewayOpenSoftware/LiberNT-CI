@@ -231,7 +231,10 @@ START_TEST(HostsFile)
         ok(Status == ERROR_SUCCESS && Record, "lowercase: status %lu\n", Status);
         if (Status == ERROR_SUCCESS && Record)
         {
-            ok(lstrcmpW(Record->pName, L"mixed.apitest") == 0, "answer name %S, expected mixed.apitest\n", Record->pName);
+            /* DnsQuery_W: the name is wide whatever the UNICODE setting of this test says */
+            PCWSTR Name = (PCWSTR)Record->pName;
+
+            ok(lstrcmpW(Name, L"mixed.apitest") == 0, "answer name %ls, expected mixed.apitest\n", Name);
             DnsRecordListFree(Record, DnsFreeRecordList);
         }
     }
