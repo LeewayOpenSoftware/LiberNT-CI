@@ -680,7 +680,8 @@ IoRaiseHardError(IN PIRP Irp,
     PKAPC ErrorApc;
 
     /* Don't do anything if hard errors are disabled on the thread */
-    if (Thread->HardErrorsAreDisabled)
+    if (FlagOn(Irp->Flags, IRP_PAGING_IO) ||
+        PsGetThreadHardErrorsAreDisabled(Thread))
     {
         /* Complete the request */
         Irp->IoStatus.Information = 0;
@@ -688,9 +689,9 @@ IoRaiseHardError(IN PIRP Irp,
         return;
     }
 
-    // TODO: In case we were called in the context of a paging I/O or for
-    // a synchronous operation, that happens with APCs disabled, queue the
-    // hard-error call for later processing (see also IofCompleteRequest).
+    // TODO: In case we were called for a synchronous operation that happens
+    // with APCs disabled, queue the hard-error call for later processing
+    // (see also IofCompleteRequest).
 
     /* Setup an APC and queue it to deal with the error (see OSR documentation) */
     ErrorApc = ExAllocatePoolWithTag(NonPagedPool, sizeof(*ErrorApc), TAG_APC);
