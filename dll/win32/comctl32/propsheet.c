@@ -1351,8 +1351,10 @@ static BOOL PROPSHEET_AdjustButtonsWizard(HWND hwndParent,
   if (psInfo->aeroChrome)
   {
     RECT rcPad;
+    HWND hwndBack;
 
-    /* Right-aligned Next/Finish and Cancel; no Back, Help or separator. */
+    /* Lay Back/Next/Finish/Cancel out over the command area as direct
+     * children of the sheet so GetDlgItem(hwndSheet, id) finds them. */
     GetClientRect(hwndButton, &rcSheet);
     buttonWidth = rcSheet.right;
     buttonHeight = rcSheet.bottom;
@@ -1364,18 +1366,26 @@ static BOOL PROPSHEET_AdjustButtonsWizard(HWND hwndParent,
 
     y = rcSheet.bottom - rcPad.bottom + ((rcPad.bottom - buttonHeight) / 2);
 
+    /* Cancel at the far right. */
     x = rcSheet.right - rcPad.left - buttonWidth;
     SetWindowPos(hwndButton, 0, x, y, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
+    /* Finish immediately to the left of Cancel. */
     x -= rcPad.right + buttonWidth;
+    hwndButton = GetDlgItem(hwndParent, IDC_FINISH_BUTTON);
+    SetWindowPos(hwndButton, 0, x, y, 0, 0,
+                 SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
+    /* Next immediately to the left of Finish. */
+    x -= rcPad.right + buttonWidth;
     hwndButton = GetDlgItem(hwndParent, IDC_NEXT_BUTTON);
     SetWindowPos(hwndButton, 0, x, y, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
-    hwndButton = GetDlgItem(hwndParent, IDC_FINISH_BUTTON);
-    SetWindowPos(hwndButton, 0, x, y, 0, 0,
+    /* Back at the far left of the command area. */
+    hwndBack = GetDlgItem(hwndParent, IDC_BACK_BUTTON);
+    SetWindowPos(hwndBack, 0, rcPad.left, y, 0, 0,
                  SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
     return TRUE;
@@ -3120,7 +3130,9 @@ static void PROPSHEET_AeroSetupChrome(HWND hwndDlg, PropSheetInfo *psInfo)
   RECT rcTitle, rcSubTitle, rcBack;
   HWND hwndTitle, hwndSubTitle, hwndBack;
 
-  ShowWindow(GetDlgItem(hwndDlg, IDC_BACK_BUTTON), SW_HIDE);
+  /* Keep Back/Next/Finish as direct children of the sheet; only hide the
+   * separator and help button so the command-area buttons remain reachable
+   * via GetDlgItem(hwndSheet, id) for PSM_* messages. */
   ShowWindow(GetDlgItem(hwndDlg, IDC_SUNKEN_LINE), SW_HIDE);
   ShowWindow(GetDlgItem(hwndDlg, IDC_SUNKEN_LINEHEADER), SW_HIDE);
   ShowWindow(GetDlgItem(hwndDlg, IDHELP), SW_HIDE);
