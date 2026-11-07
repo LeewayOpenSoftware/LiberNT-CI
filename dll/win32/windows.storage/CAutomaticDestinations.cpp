@@ -7,6 +7,8 @@
 
 #include "precomp.h"
 
+WINE_DEFAULT_DEBUG_CHANNEL(shell);
+
 /*
  * File: DWORD magic, DWORD version, DWORD count, then per entry
  * FILETIME last use (two DWORDs), DWORD use count, [v2: DWORD flags],
