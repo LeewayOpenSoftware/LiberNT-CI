@@ -457,6 +457,102 @@ TfyPrintOne(HWND hwnd, HDC hdc, const RECT *prcRoot, int nDepth)
         TfyPrintOne(ahChildren[i - 1], hdc, prcRoot, nDepth + 1);
 }
 
+#ifndef PW_RENDERFULLCONTENT
+#define PW_RENDERFULLCONTENT 2
+#endif
+
+#define TFY_THUMB_CACHE_SIZE 50
+
+struct TFYTHUMBCACHE
+{
+    HWND hwnd;
+    HBITMAP hbm;
+    SIZE size;
+    BOOL used;
+};
+
+static TFYTHUMBCACHE s_ThumbCache[TFY_THUMB_CACHE_SIZE];
+
+static HBITMAP
+TfyCopyBitmap(HBITMAP hbmSrc, int cx, int cy, HDC hdcRef)
+{
+    HBITMAP hbmDst;
+    HDC hdcSrc, hdcDst;
+    HGDIOBJ hOldSrc, hOldDst;
+
+    hbmDst = CreateCompatibleBitmap(hdcRef, cx, cy);
+    if (!hbmDst)
+        return NULL;
+
+    hdcSrc = CreateCompatibleDC(hdcRef);
+    hdcDst = CreateCompatibleDC(hdcRef);
+    if (!hdcSrc || !hdcDst)
+    {
+        DeleteObject(hbmDst);
+        if (hdcSrc) DeleteDC(hdcSrc);
+        if (hdcDst) DeleteDC(hdcDst);
+        return NULL;
+    }
+
+    hOldSrc = SelectObject(hdcSrc, hbmSrc);
+    hOldDst = SelectObject(hdcDst, hbmDst);
+    BitBlt(hdcDst, 0, 0, cx, cy, hdcSrc, 0, 0, SRCCOPY);
+    SelectObject(hdcDst, hOldDst);
+    SelectObject(hdcSrc, hOldSrc);
+    DeleteDC(hdcDst);
+    DeleteDC(hdcSrc);
+
+    return hbmDst;
+}
+
+static BOOL
+TfyCacheLookup(HWND hwnd, HBITMAP *phbm, SIZE *pSize)
+{
+    for (int i = 0; i < TFY_THUMB_CACHE_SIZE; i++)
+    {
+        if (s_ThumbCache[i].used && s_ThumbCache[i].hwnd == hwnd)
+        {
+            *phbm = s_ThumbCache[i].hbm;
+            *pSize = s_ThumbCache[i].size;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static void
+TfyCacheStore(HWND hwnd, HBITMAP hbm, SIZE size)
+{
+    int slot = -1;
+
+    for (int i = 0; i < TFY_THUMB_CACHE_SIZE; i++)
+    {
+        if (!s_ThumbCache[i].used)
+        {
+            slot = i;
+            break;
+        }
+        if (s_ThumbCache[i].hwnd == hwnd)
+        {
+            DeleteObject(s_ThumbCache[i].hbm);
+            s_ThumbCache[i].hbm = hbm;
+            s_ThumbCache[i].size = size;
+            return;
+        }
+    }
+
+    if (slot < 0)
+    {
+        DeleteObject(s_ThumbCache[0].hbm);
+        slot = 0;
+    }
+
+    s_ThumbCache[slot].used = TRUE;
+    s_ThumbCache[slot].hwnd = hwnd;
+    s_ThumbCache[slot].hbm = hbm;
+    s_ThumbCache[slot].size = size;
+}
+
 static HBITMAP
 TfyCaptureThumb(HWND hwnd, int maxW, int maxH, SIZE *pSize)
 {
@@ -468,8 +564,29 @@ TfyCaptureThumb(HWND hwnd, int maxW, int maxH, SIZE *pSize)
 
     pSize->cx = pSize->cy = 0;
 
-    if (!::IsWindow(hwnd) || ::IsIconic(hwnd))
+    if (!::IsWindow(hwnd))
         return NULL;
+
+    /* Minimized windows show the last good captured image, or fall back to
+       the icon+title card if nothing has been cached yet. */
+    if (::IsIconic(hwnd))
+    {
+        HBITMAP hbmCached;
+        SIZE sizeCached;
+
+        if (TfyCacheLookup(hwnd, &hbmCached, &sizeCached))
+        {
+            hdcScreen = ::GetDC(NULL);
+            if (hdcScreen)
+            {
+                hbmDst = TfyCopyBitmap(hbmCached, sizeCached.cx, sizeCached.cy, hdcScreen);
+                if (hbmDst)
+                    *pSize = sizeCached;
+                ::ReleaseDC(NULL, hdcScreen);
+            }
+        }
+        return hbmDst;
+    }
 
     if (!::GetWindowRect(hwnd, &rcWnd))
         return NULL;
@@ -492,12 +609,9 @@ TfyCaptureThumb(HWND hwnd, int maxW, int maxH, SIZE *pSize)
         BOOL bCaptured = FALSE;
         hOldSrc = SelectObject(hdcSrc, hbmSrc);
 
-        if (hwnd == ::GetForegroundWindow())
-        {
-            bCaptured = BitBlt(hdcSrc, 0, 0, w, h, hdcScreen,
-                               rcWnd.left, rcWnd.top, SRCCOPY);
-        }
-
+        /* Capture from the window itself; never grab the screen, because that
+           would include any occluder sitting on top of the window. */
+        bCaptured = ::PrintWindow(hwnd, hdcSrc, PW_RENDERFULLCONTENT);
         if (!bCaptured)
             bCaptured = ::PrintWindow(hwnd, hdcSrc, 0);
 
@@ -527,6 +641,8 @@ TfyCaptureThumb(HWND hwnd, int maxW, int maxH, SIZE *pSize)
             hbmDst = CreateCompatibleBitmap(hdcScreen, tw, th);
             if (hbmDst)
             {
+                HBITMAP hbmCopy;
+
                 hOldDst = SelectObject(hdcDst, hbmDst);
                 SetStretchBltMode(hdcDst, HALFTONE);
                 SetBrushOrgEx(hdcDst, 0, 0, NULL);
@@ -534,6 +650,15 @@ TfyCaptureThumb(HWND hwnd, int maxW, int maxH, SIZE *pSize)
                 SelectObject(hdcDst, hOldDst);
                 pSize->cx = tw;
                 pSize->cy = th;
+
+                /* Cache the scaled thumbnail for minimized-window fallback and
+                   return a copy so the card can own its bitmap. */
+                hbmCopy = TfyCopyBitmap(hbmDst, tw, th, hdcScreen);
+                if (hbmCopy)
+                {
+                    TfyCacheStore(hwnd, hbmDst, *pSize);
+                    hbmDst = hbmCopy;
+                }
             }
         }
 
@@ -542,7 +667,8 @@ TfyCaptureThumb(HWND hwnd, int maxW, int maxH, SIZE *pSize)
 
     if (hbmSrc) DeleteObject(hbmSrc);
     if (hdcSrc) DeleteDC(hdcSrc);
-    if (hdcDst) DeleteDC(hdcDst);
+    if (hbmDst == NULL && hdcDst) DeleteDC(hdcDst);
+    else if (hdcDst) DeleteDC(hdcDst);
     ::ReleaseDC(NULL, hdcScreen);
 
     return hbmDst;
@@ -625,7 +751,7 @@ public:
     VOID BuildCards(const HWND *pahWnd, UINT cWindows)
     {
         FreeCards();
-        for (UINT i = 0; i < cWindows && i < 16; i++)
+        for (UINT i = 0; i < cWindows; i++)
         {
             TFYCARD card;
             ZeroMemory(&card, sizeof(card));
@@ -637,20 +763,34 @@ public:
         }
     }
 
-    VOID LayoutCards()
+    VOID LayoutCards(int nColumns = 0)
     {
         int x = Sc(8);
-        for (SIZE_T i = 0; i < m_Cards.GetCount(); i++)
+        int y = Sc(8);
+        int nCount = (int)m_Cards.GetCount();
+        int nCols = (nColumns > 0 && nCount > nColumns) ? nColumns : nCount;
+        int yBottom = y;
+
+        if (nCols <= 0)
+            nCols = 1;
+
+        for (int i = 0; i < nCount; i++)
         {
             TFYCARD &card = m_Cards[i];
-            SetRect(&card.rc, x, Sc(8), x + CardW(), Sc(8) + CardH());
+            SetRect(&card.rc, x, y, x + CardW(), y + CardH());
             SetRect(&card.rcClose,
                     card.rc.right - Sc(24), card.rc.top + Sc(4),
                     card.rc.right - Sc(6), card.rc.top + TitleH() - Sc(4));
             x += CardW() + Sc(8);
+            yBottom = y + CardH();
+            if ((i + 1) % nCols == 0)
+            {
+                x = Sc(8);
+                y += CardH() + Sc(8);
+            }
         }
-        m_size.cx = x;
-        m_size.cy = CardH() + Sc(16);
+        m_size.cx = nCols * (CardW() + Sc(8)) + Sc(8);
+        m_size.cy = yBottom + Sc(8);
     }
 
     VOID Popup(HWND hwndOwner, const RECT *prcAnchor, const HWND *pahWnd, UINT cWindows,
@@ -659,6 +799,7 @@ public:
         MONITORINFO mi;
         POINT ptRef;
         int xPos, yPos;
+        int nColumns = 0;
 
         StartMenu2_GetFlyoutPalette(&m_Pal);
         m_nGroupId = nGroupId;
@@ -674,12 +815,20 @@ public:
             m_bFrameStarted = ShellFrame::Startup();
 
         BuildCards(pahWnd, cWindows);
-        LayoutCards();
 
         ptRef.x = (prcAnchor->left + prcAnchor->right) / 2;
         ptRef.y = prcAnchor->top;
         mi.cbSize = sizeof(mi);
         GetMonitorInfoW(MonitorFromPoint(ptRef, MONITOR_DEFAULTTONEAREST), &mi);
+
+        /* Large groups are laid out as a grid that fits on the monitor
+           instead of being truncated at 16 cards. */
+        if (m_Cards.GetCount() > 16)
+        {
+            int cxMonitor = mi.rcMonitor.right - mi.rcMonitor.left;
+            nColumns = max(1, (cxMonitor - Sc(8)) / (CardW() + Sc(8)));
+        }
+        LayoutCards(nColumns);
 
         xPos = ptRef.x - m_size.cx / 2;
         if (xPos + m_size.cx > mi.rcMonitor.right) xPos = mi.rcMonitor.right - m_size.cx;
