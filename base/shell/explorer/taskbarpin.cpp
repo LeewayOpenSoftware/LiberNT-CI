@@ -1097,3 +1097,199 @@ TaskbarPin_SaveOrder(const CAtlArray<TASKBAR_PIN_ORDER> &Order)
     RegCloseKey(hKey);
     return error == ERROR_SUCCESS ? S_OK : HRESULT_FROM_WIN32(error);
 }
+
+static HANDLE g_hTaskbarPinWatchThread = NULL;
+static HANDLE g_hTaskbarPinWatchStop = NULL;
+
+static BOOL CALLBACK
+NotifyTaskbarPinChild(HWND hWnd, LPARAM lParam)
+{
+    WCHAR szClass[32];
+
+    if (GetClassNameW(hWnd, szClass, _countof(szClass)) &&
+        !lstrcmpW(szClass, L"MSTaskSwWClass"))
+    {
+        PostMessageW(hWnd, (UINT)lParam, 0, 0);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static VOID
+NotifyTaskbarPinWatchers()
+{
+    UINT uMessage = RegisterWindowMessageW(TASKBAR_PIN_CHANGED_MESSAGE);
+    HWND hwndTray = FindWindowW(L"Shell_TrayWnd", NULL);
+    if (uMessage && hwndTray)
+        EnumChildWindows(hwndTray, NotifyTaskbarPinChild, (LPARAM)uMessage);
+}
+
+static BOOL CALLBACK
+HashTaskbarPinEntry(PCWSTR pszFolder, const TASKBAR_PIN_DIR_ENTRY *pEntry, PCWSTR pszName, LPARAM lParam)
+{
+    ULONGLONG *pHash = (ULONGLONG *)lParam;
+    ULONGLONG hash = *pHash;
+
+    for (PCWSTR p = pszName; *p; ++p)
+        hash = (hash ^ (ULONGLONG)(USHORT)*p) * 1099511628211ull;
+    hash = (hash ^ (ULONGLONG)pEntry->LastWriteTime.QuadPart) * 1099511628211ull;
+    hash = (hash ^ (ULONGLONG)pEntry->EndOfFile.QuadPart) * 1099511628211ull;
+    hash = (hash ^ (ULONGLONG)pEntry->FileAttributes) * 1099511628211ull;
+    *pHash = hash;
+    return TRUE;
+}
+
+static ULONGLONG
+TaskbarPinFolderSignature(PCWSTR pszFolder)
+{
+    ULONGLONG hash = 14695981039346656037ull;
+    if (FAILED(ForEachTaskbarPinDirEntry(pszFolder, HashTaskbarPinEntry, (LPARAM)&hash)))
+        return 0;
+    return hash;
+}
+
+static BOOL
+WaitTaskbarPinWatchStop(DWORD dwMilliseconds)
+{
+    return WaitForSingleObject(g_hTaskbarPinWatchStop, dwMilliseconds) == WAIT_OBJECT_0;
+}
+
+static BOOL
+WatchTaskbarPinFolder(PCWSTR pszFolder)
+{
+    const DWORD Filter = FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE |
+                         FILE_NOTIFY_CHANGE_CREATION | FILE_NOTIFY_CHANGE_SIZE;
+    DWORD Buffer[1024];
+    OVERLAPPED Overlapped = {};
+    HANDLE Handles[2];
+    BOOL bPending = FALSE, bDirty = FALSE, bNotify = TRUE, bStop = FALSE;
+    ULONGLONG Signature;
+
+    HANDLE hFolder = CreateFileW(pszFolder, FILE_LIST_DIRECTORY,
+                                 FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                                 OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED, NULL);
+    if (hFolder == INVALID_HANDLE_VALUE)
+        return FALSE;
+    Overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!Overlapped.hEvent)
+    {
+        CloseHandle(hFolder);
+        return FALSE;
+    }
+    Handles[0] = g_hTaskbarPinWatchStop;
+    Handles[1] = Overlapped.hEvent;
+    Signature = TaskbarPinFolderSignature(pszFolder);
+
+    for (;;)
+    {
+        if (bNotify && !bPending)
+        {
+            ResetEvent(Overlapped.hEvent);
+            if (ReadDirectoryChangesW(hFolder, Buffer, sizeof(Buffer), FALSE, Filter, NULL, &Overlapped, NULL))
+                bPending = TRUE;
+            else if (GetLastError() == ERROR_INVALID_FUNCTION || GetLastError() == ERROR_NOT_SUPPORTED ||
+                     GetLastError() == ERROR_CALL_NOT_IMPLEMENTED)
+                bNotify = FALSE;
+            else
+                break;
+        }
+
+        DWORD Timeout = bDirty ? 500 : (bNotify ? INFINITE : 3000);
+        DWORD Wait = WaitForMultipleObjects(bPending ? 2 : 1, Handles, FALSE, Timeout);
+        if (Wait == WAIT_OBJECT_0)
+        {
+            bStop = TRUE;
+            break;
+        }
+        if (Wait == WAIT_OBJECT_0 + 1)
+        {
+            DWORD cbReturned = 0;
+            BOOL bCompleted = GetOverlappedResult(hFolder, &Overlapped, &cbReturned, FALSE);
+            bPending = FALSE;
+            if (!bCompleted && GetLastError() != ERROR_NOTIFY_ENUM_DIR)
+                break;
+            bDirty = TRUE;
+            continue;
+        }
+        if (Wait != WAIT_TIMEOUT)
+            break;
+        if (bNotify)
+        {
+            bDirty = FALSE;
+            NotifyTaskbarPinWatchers();
+        }
+        else
+        {
+            ULONGLONG Current = TaskbarPinFolderSignature(pszFolder);
+            if (Current != Signature)
+            {
+                Signature = Current;
+                NotifyTaskbarPinWatchers();
+            }
+        }
+    }
+
+    if (bPending)
+    {
+        DWORD cbReturned = 0;
+        CancelIo(hFolder);
+        GetOverlappedResult(hFolder, &Overlapped, &cbReturned, TRUE);
+    }
+    CloseHandle(Overlapped.hEvent);
+    CloseHandle(hFolder);
+    if (!bStop)
+        NotifyTaskbarPinWatchers();
+    return bStop;
+}
+
+static DWORD WINAPI
+TaskbarPinWatchThread(PVOID)
+{
+    for (;;)
+    {
+        CStringW Folder;
+
+        if (WaitTaskbarPinWatchStop(0))
+            return 0;
+        if (FAILED(GetTaskbarPinFolder(TRUE, Folder)))
+        {
+            if (WaitTaskbarPinWatchStop(5000))
+                return 0;
+            continue;
+        }
+        if (WatchTaskbarPinFolder(Folder) || WaitTaskbarPinWatchStop(2000))
+            return 0;
+    }
+}
+
+HRESULT
+TaskbarPin_StartWatch()
+{
+    if (g_hTaskbarPinWatchThread)
+        return S_FALSE;
+    g_hTaskbarPinWatchStop = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!g_hTaskbarPinWatchStop)
+        return HRESULT_FROM_WIN32(GetLastError());
+    g_hTaskbarPinWatchThread = CreateThread(NULL, 0, TaskbarPinWatchThread, NULL, 0, NULL);
+    if (!g_hTaskbarPinWatchThread)
+    {
+        DWORD error = GetLastError();
+        CloseHandle(g_hTaskbarPinWatchStop);
+        g_hTaskbarPinWatchStop = NULL;
+        return HRESULT_FROM_WIN32(error);
+    }
+    return S_OK;
+}
+
+VOID
+TaskbarPin_StopWatch()
+{
+    if (!g_hTaskbarPinWatchThread)
+        return;
+    SetEvent(g_hTaskbarPinWatchStop);
+    WaitForSingleObject(g_hTaskbarPinWatchThread, 5000);
+    CloseHandle(g_hTaskbarPinWatchThread);
+    CloseHandle(g_hTaskbarPinWatchStop);
+    g_hTaskbarPinWatchThread = NULL;
+    g_hTaskbarPinWatchStop = NULL;
+}
