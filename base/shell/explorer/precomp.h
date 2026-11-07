@@ -64,22 +64,35 @@ HBITMAP CreateStartOrbBitmap(INT Size, UINT ResourceId);
 INT GetStartOrbExtent(HBITMAP Bitmap);
 BOOL DrawStartOrbBitmap(HDC hdc, HBITMAP Source, INT x, INT y, INT Size, double Scale);
 
+/* The shell's current logical DPI, cached (the value used to be read through a
+   fresh screen DC on every call). Invalidate with ShellInvalidateDpi() when the
+   DPI may have changed (WM_DPICHANGED, WM_DISPLAYCHANGE, SPI_SETNONCLIENTMETRICS). */
+extern UINT g_ShellDpi;
+UINT ShellQueryDpi(VOID);
+
+static inline UINT
+ShellGetDpi(VOID)
+{
+    if (!g_ShellDpi)
+        g_ShellDpi = ShellQueryDpi();
+    return g_ShellDpi;
+}
+
+static inline VOID
+ShellInvalidateDpi(VOID)
+{
+    g_ShellDpi = 0;
+}
+
+/* DPI of the monitor/window a window lives on. LiberNT currently has a single
+   logical desktop DPI, so this is the system value until win32k reports
+   per-monitor DPI; callers should use it so that they pick that up for free. */
+UINT ShellGetDpiForWindow(HWND hWnd);
+
 static inline INT
 ShellScaleForDpi(INT Value)
 {
-    HDC hdc = GetDC(NULL);
-    INT dpi = 96;
-
-    if (hdc)
-    {
-        dpi = GetDeviceCaps(hdc, LOGPIXELSY);
-        ReleaseDC(NULL, hdc);
-    }
-
-    if (dpi <= 0)
-        dpi = 96;
-
-    return MulDiv(Value, dpi, 96);
+    return MulDiv(Value, (INT)ShellGetDpi(), 96);
 }
 
 static inline BOOL

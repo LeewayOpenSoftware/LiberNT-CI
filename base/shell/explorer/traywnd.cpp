@@ -417,6 +417,16 @@ public:
         InvalidateRect(NULL, TRUE);
     }
 
+    /* The DPI changed: the orb images and the cached size were built for the
+       old one. Rebuild them and recompute the size. */
+    VOID RebuildForDpi()
+    {
+        if (!m_hWnd)
+            return;
+        ClearImageList();
+        UpdateThemeAppearance();
+    }
+
     VOID Initialize()
     {
         // HACK & FIXME: CORE-18016
@@ -1807,14 +1817,7 @@ GetPrimaryRect:
        are loaded) would leave an unusable or invisible strip. */
     LONG GetMinimumVerticalWidth()
     {
-        LONG cx = 62;
-        HDC hdc = ::GetDC(NULL);
-
-        if (hdc)
-        {
-            cx = MulDiv(62, ::GetDeviceCaps(hdc, LOGPIXELSX), 96);
-            ::ReleaseDC(NULL, hdc);
-        }
+        LONG cx = MulDiv(62, (INT)ShellGetDpiForWindow(m_hWnd), 96);
 
         SIZE StartBtnSize = m_StartButton.GetSize();
         LONG cxStart = StartBtnSize.cx + 2 * GetSystemMetrics(SM_CXSIZEFRAME);
@@ -3255,6 +3258,7 @@ ChangePos:
 
         if (wParam == SPI_SETNONCLIENTMETRICS)
         {
+            OnDpiMayHaveChanged();
             SendMessage(m_TrayNotify, uMsg, wParam, lParam);
             SendMessage(m_TaskSwitch, uMsg, wParam, lParam);
             UpdateFonts();
@@ -3307,8 +3311,38 @@ ChangePos:
         return EraseBackgroundWithTheme(hdc);
     }
 
+    /* Called when the logical DPI may have changed. Re-reads it and, if it did,
+       rebuilds everything that was sized from the old value. Cheap when the DPI
+       is unchanged. */
+    VOID OnDpiMayHaveChanged()
+    {
+        UINT OldDpi = g_ShellDpi;
+
+        ShellInvalidateDpi();
+        if (OldDpi && ShellGetDpi() == OldDpi)
+            return;
+
+        m_StartButton.RebuildForDpi();
+        UpdateFonts();
+        if (m_TaskSwitch)
+            ::SendMessageW(m_TaskSwitch, WM_THEMECHANGED, 0, 0);
+        if (m_TrayNotify)
+            ::SendMessageW(m_TrayNotify, WM_THEMECHANGED, 0, 0);
+        AlignControls(NULL);
+    }
+
+    LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        /* Sent by win32k once it reports per-monitor DPI; harmless before. */
+        OnDpiMayHaveChanged();
+        CheckTrayWndPosition();
+        return 0;
+    }
+
     LRESULT OnDisplayChange(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        OnDpiMayHaveChanged();
+
         /* Refresh workareas */
         RecomputeAllWorkareas();
 
@@ -4308,6 +4342,7 @@ HandleTrayContextMenu:
         MESSAGE_HANDLER(WM_CONTEXTMENU, OnContextMenu)
         MESSAGE_HANDLER(WM_TIMER, OnTimer)
         MESSAGE_HANDLER(WM_DISPLAYCHANGE, OnDisplayChange)
+        MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
         MESSAGE_HANDLER(WM_COPYDATA, OnCopyData)
         MESSAGE_HANDLER(WM_NCPAINT, OnNcPaint)
         MESSAGE_HANDLER(WM_NCACTIVATE, OnNcActivate)
