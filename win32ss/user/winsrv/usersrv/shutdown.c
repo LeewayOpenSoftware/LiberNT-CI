@@ -74,7 +74,7 @@ typedef struct tagMESSAGE_CONTEXT
 
 static HMODULE hComCtl32Lib = NULL;
 
-static VOID
+VOID
 CallInitCommonControls(VOID)
 {
     static BOOL Initialized = FALSE;
