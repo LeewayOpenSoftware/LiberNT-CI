@@ -214,6 +214,7 @@ def main():
 
     manifest = {
         "manifest": {
+            "schema_id": "lbi-provenance-manifest/1.0",
             "schema_version": "1.0",
             "manifest_id": None,
             "generated_at": datetime.now(timezone.utc).strftime(
@@ -222,8 +223,9 @@ def main():
                           "schema_ref": "WS-C-PROVENANCE.md#3"},
         },
         "build": {
-            "lbi_attempt_id": None,
             "lbi": None,
+            "lbi_attempt_id": None,
+            "manifest_ref": None,
             "source": {
                 "remote": origin_url,
                 "ref": src,
@@ -231,7 +233,6 @@ def main():
                 "tree": tree,
                 "committer_date": cdate,
             },
-            "manifest_ref": None,
         },
         "upstream": {
             "repository": args.upstream_url,
