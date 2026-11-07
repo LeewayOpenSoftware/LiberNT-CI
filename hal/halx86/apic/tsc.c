@@ -270,7 +270,6 @@ static
 VOID
 HalpInitializeQpc(VOID)
 {
-    PKUSER_SHARED_DATA Data = (PKUSER_SHARED_DATA)KI_USER_SHARED_DATA;
     ULONG64 Frequency = HalpCpuClockFrequency.QuadPart;
     ULONG64 Tsc, Current;
     UCHAR Shift = 0;
@@ -291,13 +290,26 @@ HalpInitializeQpc(VOID)
     HalpQpcBias = Current - (Tsc >> Shift);
     HalpQpcReady = TRUE;
 
-    /* Publish the data first, the enable byte last: a reader that sees it
-     * enabled sees a complete configuration. */
-    Data->QpcFrequency = HalpQpcFrequency;
-    Data->QpcBias = HalpQpcBias;
-    Data->QpcShift = Shift;
-    KeMemoryBarrier();
-    Data->QpcBypassEnabled = 1;
+#ifdef _M_AMD64
+    {
+        PKUSER_SHARED_DATA Data = (PKUSER_SHARED_DATA)KI_USER_SHARED_DATA;
+
+        /* Publish the data first, the enable byte last: a reader that sees
+         * it enabled sees a complete configuration. */
+        Data->QpcFrequency = HalpQpcFrequency;
+        Data->QpcBias = HalpQpcBias;
+        Data->QpcShift = Shift;
+        KeMemoryBarrier();
+        Data->QpcBypassEnabled = 1;
+    }
+#else
+    /* Nothing is published for user mode on x86. There, offset 0x300 of
+     * KUSER_SHARED_DATA (QpcFrequency on x64) still holds the NT5
+     * SystemCall stub pointer that ntdll calls through, and the x86 ntdll
+     * has no user-mode counter. The bypass stays off, and
+     * QueryPerformanceCounter keeps taking the system call, which returns
+     * this same counter. */
+#endif
 }
 
 CODE_SEG("INIT")
