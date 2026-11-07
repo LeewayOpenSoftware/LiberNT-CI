@@ -151,7 +151,8 @@ PagingErrorCompletion(
 
 static
 VOID
-TestPagingIoRaiseHardError(VOID)
+TestRaiseHardErrorInline(
+    IN ULONG IrpFlags)
 {
     PIRP Irp;
 
@@ -166,7 +167,7 @@ TestPagingIoRaiseHardError(VOID)
 
     RtlZeroMemory(&PagingErrorContext, sizeof(PagingErrorContext));
     Irp->Tail.Overlay.Thread = PsGetCurrentThread();
-    Irp->Flags |= IRP_PAGING_IO;
+    Irp->Flags |= IrpFlags;
     Irp->IoStatus.Status = STATUS_WRONG_VOLUME;
     Irp->IoStatus.Information = 123;
     IoSetCompletionRoutine(Irp,
@@ -376,7 +377,8 @@ TestHardError(
 START_TEST(ExHardError)
 {
     TestHardError(FALSE, FALSE, FALSE, FALSE);
-    TestPagingIoRaiseHardError();
+    TestRaiseHardErrorInline(IRP_PAGING_IO);
+    TestRaiseHardErrorInline(0);
 }
 
 /* Here's how to do the interactive test:

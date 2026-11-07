@@ -681,17 +681,14 @@ IoRaiseHardError(IN PIRP Irp,
 
     /* Don't do anything if hard errors are disabled on the thread */
     if (FlagOn(Irp->Flags, IRP_PAGING_IO) ||
-        PsGetThreadHardErrorsAreDisabled(Thread))
+        PsGetThreadHardErrorsAreDisabled(Thread) ||
+        (Thread == PsGetCurrentThread() && KeAreApcsDisabled()))
     {
         /* Complete the request */
         Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_DISK_INCREMENT);
         return;
     }
-
-    // TODO: In case we were called for a synchronous operation that happens
-    // with APCs disabled, queue the hard-error call for later processing
-    // (see also IofCompleteRequest).
 
     /* Setup an APC and queue it to deal with the error (see OSR documentation) */
     ErrorApc = ExAllocatePoolWithTag(NonPagedPool, sizeof(*ErrorApc), TAG_APC);
