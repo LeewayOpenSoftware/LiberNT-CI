@@ -625,7 +625,7 @@ public:
     VOID BuildCards(const HWND *pahWnd, UINT cWindows)
     {
         FreeCards();
-        for (UINT i = 0; i < cWindows && i < 16; i++)
+        for (UINT i = 0; i < cWindows; i++)
         {
             TFYCARD card;
             ZeroMemory(&card, sizeof(card));
@@ -637,20 +637,29 @@ public:
         }
     }
 
-    VOID LayoutCards()
+    VOID LayoutCards(INT MaxWidth)
     {
-        int x = Sc(8);
+        INT Columns = MaxWidth / (CardW() + Sc(8));
+        if (Columns < 1)
+            Columns = 1;
+        if (m_Cards.GetCount() && (SIZE_T)Columns > m_Cards.GetCount())
+            Columns = (INT)m_Cards.GetCount();
+
         for (SIZE_T i = 0; i < m_Cards.GetCount(); i++)
         {
             TFYCARD &card = m_Cards[i];
-            SetRect(&card.rc, x, Sc(8), x + CardW(), Sc(8) + CardH());
+            INT Column = (INT)i % Columns;
+            INT Row = (INT)i / Columns;
+            INT x = Sc(8) + Column * (CardW() + Sc(8));
+            INT y = Sc(8) + Row * (CardH() + Sc(8));
+            SetRect(&card.rc, x, y, x + CardW(), y + CardH());
             SetRect(&card.rcClose,
                     card.rc.right - Sc(24), card.rc.top + Sc(4),
                     card.rc.right - Sc(6), card.rc.top + TitleH() - Sc(4));
-            x += CardW() + Sc(8);
         }
-        m_size.cx = x;
-        m_size.cy = CardH() + Sc(16);
+        m_size.cx = Columns * (CardW() + Sc(8)) + Sc(8);
+        INT Rows = m_Cards.GetCount() ? ((INT)m_Cards.GetCount() + Columns - 1) / Columns : 1;
+        m_size.cy = Rows * (CardH() + Sc(8)) + Sc(8);
     }
 
     VOID Popup(HWND hwndOwner, const RECT *prcAnchor, const HWND *pahWnd, UINT cWindows,
@@ -674,18 +683,19 @@ public:
             m_bFrameStarted = ShellFrame::Startup();
 
         BuildCards(pahWnd, cWindows);
-        LayoutCards();
 
         ptRef.x = (prcAnchor->left + prcAnchor->right) / 2;
         ptRef.y = prcAnchor->top;
         mi.cbSize = sizeof(mi);
         GetMonitorInfoW(MonitorFromPoint(ptRef, MONITOR_DEFAULTTONEAREST), &mi);
+        LayoutCards(mi.rcMonitor.right - mi.rcMonitor.left);
 
         xPos = ptRef.x - m_size.cx / 2;
         if (xPos + m_size.cx > mi.rcMonitor.right) xPos = mi.rcMonitor.right - m_size.cx;
         if (xPos < mi.rcMonitor.left) xPos = mi.rcMonitor.left;
         yPos = prcAnchor->top - m_size.cy - Sc(6);
         if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
+        if (yPos + m_size.cy > mi.rcMonitor.bottom) yPos = mi.rcMonitor.top;
 
         BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg, !bHover);
         SetTimer(TFY_TIMER_ALIVE, 500, NULL);
@@ -865,7 +875,7 @@ public:
                     return 0;
                 }
                 m_iHot = -1;
-                LayoutCards();
+                LayoutCards(m_size.cx);
                 SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
                              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
                 InvalidateRect(NULL, FALSE);

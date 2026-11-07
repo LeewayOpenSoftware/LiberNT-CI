@@ -49,6 +49,7 @@
 #define IDM_GROUP_CLOSE 7
 #define IDM_JUMP_PIN 8
 #define IDM_JUMP_UNPIN 9
+#define IDM_GROUP_WINDOW_FIRST 16
 #define VALIDATE_RUDE_INTERVAL 1000
 #define VALIDATE_RUDE_MAX_COUNT 5
 #define TIMER_ID_BUTTON_ANIM 7
@@ -674,6 +675,7 @@ class CTaskSwitchWnd :
 
     HTHEME m_Theme;
     UINT m_ButtonsPerLine;
+    UINT m_RowCount;
     WORD m_ButtonCount;
 
     HIMAGELIST m_ImageList;
@@ -718,6 +720,7 @@ public:
         m_HoverPreviewPending(FALSE),
         m_Theme(NULL),
         m_ButtonsPerLine(0),
+        m_RowCount(0),
         m_ButtonCount(0),
         m_ImageList(NULL),
         m_IsGroupingEnabled(FALSE),
@@ -1995,7 +1998,7 @@ public:
             tbBtn.fsState = TBSTATE_ENABLED | TBSTATE_ELLIPSES;
             tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
             windowText[0] = 0;
-            if (!IsModernTaskbar())
+            if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_ALWAYS)
                 GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
             tbBtn.iString = (DWORD_PTR)windowText;
             tbBtn.idCommand = iInsert;
@@ -2016,8 +2019,23 @@ public:
 
     BOOL ShouldCombine(IN PTASK_GROUP TaskGroup)
     {
-        return TaskGroup && (TaskGroup->IsPinned ||
-               (m_IsGroupingEnabled && IsModernTaskbar() && TaskGroup->dwTaskCount > 1));
+        if (!TaskGroup)
+            return FALSE;
+        if (TaskGroup->IsPinned)
+            return TRUE;
+        if (!m_IsGroupingEnabled || TaskGroup->dwTaskCount <= 1)
+            return FALSE;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel == TASKBAR_GLOM_ALWAYS)
+            return TRUE;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_WHEN_FULL)
+            return FALSE;
+
+        DWORD ButtonCount = 0;
+        for (PTASK_GROUP Group = m_TaskGroups; Group; Group = Group->Next)
+            ButtonCount += Group->IsPinned ? 1 : Group->dwTaskCount;
+
+        DWORD Capacity = m_ButtonsPerLine * m_RowCount;
+        return Capacity != 0 && ButtonCount >= Capacity;
     }
 
     VOID UpdateTaskGroupLayout()
@@ -2147,15 +2165,10 @@ public:
             tbbi.fsState |= TBSTATE_WRAP;
         }
 
-        if (IsModernTaskbar())
-        {
-            windowText[0] = 0;
-            tbbi.pszText = windowText;
-        }
-        else if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
-        {
-            tbbi.pszText = windowText;
-        }
+        windowText[0] = 0;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_ALWAYS)
+            GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
+        tbbi.pszText = windowText;
 
         icon = GetWndIcon(TaskItem->hWnd);
         if (!icon)
@@ -2342,15 +2355,10 @@ public:
         tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
         tbBtn.dwData = TaskItem->Index;
 
-        if (IsModernTaskbar())
-        {
-            windowText[0] = 0;
-            tbBtn.iString = (DWORD_PTR) windowText;
-        }
-        else if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
-        {
-            tbBtn.iString = (DWORD_PTR) windowText;
-        }
+        windowText[0] = 0;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_ALWAYS)
+            GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
+        tbBtn.iString = (DWORD_PTR)windowText;
 
         /* Find out where to insert the new button */
         iIndex = CalculateTaskItemNewButtonIndex(TaskItem);
@@ -3096,6 +3104,7 @@ public:
                 m_ButtonSize.cx = NewBtnSize;
 
                 m_ButtonsPerLine = uiBtnsPerLine;
+                m_RowCount = Horizontal ? uiRows : max(1, rcClient.bottom / max(1, m_ButtonSize.cy));
 
                 for (ui = 0; ui != m_ButtonCount; ui++)
                 {
@@ -3137,6 +3146,7 @@ public:
             else
             {
                 m_ButtonsPerLine = 0;
+                m_RowCount = 0;
                 m_ButtonSize.cx = 0;
             }
         }
@@ -3194,11 +3204,12 @@ public:
         m_HoverIndex = -1;
         TaskPreview_Hide();
 
-        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
+        m_IsGroupingEnabled = g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_NEVER;
         UpdateTaskGroupLayout();
 
         m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
         UpdateButtonsSize(FALSE);
+        UpdateTaskGroupLayout();
         if (bWasModernTaskbar != IsModernTaskbar())
             RefreshTaskButtons();
         InvalidateRect(NULL, TRUE);
@@ -3240,6 +3251,7 @@ public:
 
         /* Recalculate the button size */
         UpdateButtonsSize(FALSE);
+        UpdateTaskGroupLayout();
 
 #if DUMP_TASKS != 0
         SetTimer(hwnd, 1, 5000, NULL);
@@ -3505,6 +3517,21 @@ public:
         return cWindows;
     }
 
+    UINT CollectGroupWindows(IN PTASK_GROUP TaskGroup, OUT CAtlArray<HWND> &Windows)
+    {
+        Windows.SetCount(0);
+        if (!m_TaskItemCount || !TaskGroup)
+            return 0;
+
+        PTASK_ITEM LastItem = m_TaskItems + m_TaskItemCount;
+        for (PTASK_ITEM TaskItem = m_TaskItems; TaskItem != LastItem; TaskItem++)
+        {
+            if (TaskItem->Group == TaskGroup && ::IsWindow(TaskItem->hWnd))
+                Windows.Add(TaskItem->hWnd);
+        }
+        return (UINT)Windows.GetCount();
+    }
+
     BOOL GetButtonScreenRect(IN INT Index, OUT RECT *prc)
     {
         if (Index < 0 || !m_TaskBar.GetItemRect(Index, prc))
@@ -3632,14 +3659,14 @@ public:
     {
         PTASK_GROUP TaskGroup = FindTaskGroupByIndex(Index);
         PTASK_ITEM TaskItem;
-        HWND ahWnd[16];
+        CAtlArray<HWND> Windows;
         UINT cWindows = 0;
         INT_PTR id;
         RECT rcBtn;
 
         if (TaskGroup != NULL && TaskGroup->IsCollapsed)
         {
-            cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+            cWindows = CollectGroupWindows(TaskGroup, Windows);
             id = (INT_PTR)TaskGroup;
         }
         else
@@ -3647,14 +3674,15 @@ public:
             TaskItem = FindTaskItemByIndex(Index);
             if (TaskItem == NULL || !::IsWindow(TaskItem->hWnd))
                 return;
-            ahWnd[cWindows++] = TaskItem->hWnd;
+            cWindows = 1;
+            Windows.Add(TaskItem->hWnd);
             id = (INT_PTR)TaskItem;
         }
         if (cWindows == 0 || TaskPreview_IsVisibleFor(id))
             return;
         if (!GetButtonScreenRect(Index, &rcBtn))
             return;
-        TaskPreview_ShowHover(m_TaskBar.m_hWnd, &rcBtn, ahWnd, cWindows, id);
+        TaskPreview_ShowHover(m_TaskBar.m_hWnd, &rcBtn, Windows.GetData(), cWindows, id);
     }
 
     VOID OnHotTaskChanged(IN INT Index)
@@ -3674,10 +3702,10 @@ public:
 
     VOID HandleTaskGroupClick(IN OUT PTASK_GROUP TaskGroup)
     {
-        HWND ahWnd[16];
+        CAtlArray<HWND> Windows;
         UINT cWindows;
 
-        cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        cWindows = CollectGroupWindows(TaskGroup, Windows);
         if (!cWindows)
         {
             CStringW Target = TaskGroupKey(TaskGroup);
@@ -3685,7 +3713,7 @@ public:
             TaskGroup = FindTaskGroupByKey(Target);
             if (!TaskGroup)
                 return;
-            cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+            cWindows = CollectGroupWindows(TaskGroup, Windows);
         }
         if (cWindows == 0)
         {
@@ -3695,7 +3723,7 @@ public:
         }
         if (cWindows == 1)
         {
-            PTASK_ITEM TaskItem = FindTaskItem(ahWnd[0]);
+            PTASK_ITEM TaskItem = FindTaskItem(Windows[0]);
             if (TaskItem)
                 HandleTaskItemClick(TaskItem);
             return;
@@ -3761,18 +3789,18 @@ public:
 
     HWND LastActiveGroupWindow(IN PTASK_GROUP TaskGroup)
     {
-        HWND ahWnd[16];
-        UINT cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        CAtlArray<HWND> Windows;
+        UINT cWindows = CollectGroupWindows(TaskGroup, Windows);
 
         for (HWND hWnd = ::GetTopWindow(NULL); hWnd && cWindows; hWnd = ::GetWindow(hWnd, GW_HWNDNEXT))
         {
-            for (UINT i = 0; i < cWindows; ++i)
+            for (SIZE_T i = 0; i < Windows.GetCount(); ++i)
             {
-                if (ahWnd[i] == hWnd)
+                if (Windows[i] == hWnd)
                     return hWnd;
             }
         }
-        return cWindows ? ahWnd[0] : NULL;
+        return cWindows ? Windows[0] : NULL;
     }
 
     LRESULT OnActivateTaskIndex(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -3983,14 +4011,23 @@ public:
     VOID ShowGroupMenu(IN PTASK_GROUP TaskGroup)
     {
         HMENU hMenu = CreatePopupMenu();
-        HWND ahWnd[16];
+        CAtlArray<HWND> Windows;
         UINT cWindows, i;
         INT cmd;
 
         if (!hMenu)
             return;
         TaskPreview_Hide();
-        cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        cWindows = CollectGroupWindows(TaskGroup, Windows);
+        for (i = 0; i < cWindows; ++i)
+        {
+            WCHAR Title[255];
+            if (!InternalGetWindowText(Windows[i], Title, _countof(Title)))
+                Title[0] = 0;
+            AppendMenuW(hMenu, MF_STRING, IDM_GROUP_WINDOW_FIRST + i, Title);
+        }
+        if (cWindows)
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hMenu, MF_STRING, IDM_GROUP_CASCADE, L"Cascade");
         AppendMenuW(hMenu, MF_STRING, IDM_GROUP_STACKED, L"Show windows stacked");
         AppendMenuW(hMenu, MF_STRING, IDM_GROUP_SIDEBYSIDE, L"Show windows side by side");
@@ -4001,28 +4038,33 @@ public:
         DestroyMenu(hMenu);
         if (cmd == 0 || cWindows == 0)
             return;
+        if (cmd >= IDM_GROUP_WINDOW_FIRST && cmd < IDM_GROUP_WINDOW_FIRST + (INT)cWindows)
+        {
+            ::SwitchToThisWindow(Windows[cmd - IDM_GROUP_WINDOW_FIRST], TRUE);
+            return;
+        }
         if (cmd == IDM_GROUP_CASCADE || cmd == IDM_GROUP_STACKED || cmd == IDM_GROUP_SIDEBYSIDE)
         {
             for (i = 0; i < cWindows; i++)
             {
-                if (::IsIconic(ahWnd[i]))
-                    ::ShowWindow(ahWnd[i], SW_RESTORE);
+                if (::IsIconic(Windows[i]))
+                    ::ShowWindow(Windows[i], SW_RESTORE);
             }
             if (cmd == IDM_GROUP_CASCADE)
-                CascadeWindows(NULL, 0, NULL, cWindows, ahWnd);
+                CascadeWindows(NULL, 0, NULL, cWindows, Windows.GetData());
             else
                 TileWindows(NULL, cmd == IDM_GROUP_STACKED ? MDITILE_HORIZONTAL : MDITILE_VERTICAL,
-                            NULL, cWindows, ahWnd);
+                            NULL, cWindows, Windows.GetData());
         }
         else if (cmd == IDM_GROUP_MINIMIZE)
         {
             for (i = 0; i < cWindows; i++)
-                ::ShowWindowAsync(ahWnd[i], SW_MINIMIZE);
+                ::ShowWindowAsync(Windows[i], SW_MINIMIZE);
         }
         else if (cmd == IDM_GROUP_CLOSE)
         {
             for (i = 0; i < cWindows; i++)
-                ::PostMessageW(ahWnd[i], WM_CLOSE, 0, 0);
+                ::PostMessageW(Windows[i], WM_CLOSE, 0, 0);
         }
     }
 
@@ -4604,6 +4646,7 @@ public:
             m_TaskBar.SetWindowPos(NULL, 0, 0, szClient.cx, szClient.cy, SWP_NOZORDER);
 
             UpdateButtonsSize(FALSE);
+            UpdateTaskGroupLayout();
         }
         return TRUE;
     }
@@ -4647,6 +4690,7 @@ public:
         /* Update the button spacing */
         m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
         UpdateButtonsSize(FALSE);
+        UpdateTaskGroupLayout();
         return TRUE;
     }
 
@@ -4655,11 +4699,12 @@ public:
         BOOL bSettingsChanged = FALSE;
         TaskbarSettings* newSettings = (TaskbarSettings*)lParam;
 
-        if (newSettings->bGroupButtons != g_TaskbarSettings.bGroupButtons)
+        if (newSettings->dwTaskbarGlomLevel != g_TaskbarSettings.dwTaskbarGlomLevel)
         {
             bSettingsChanged = TRUE;
+            g_TaskbarSettings.dwTaskbarGlomLevel = newSettings->dwTaskbarGlomLevel;
             g_TaskbarSettings.bGroupButtons = newSettings->bGroupButtons;
-            m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
+            m_IsGroupingEnabled = g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_NEVER;
         }
 
         if (newSettings->bSmallIcons != g_TaskbarSettings.bSmallIcons)
@@ -4674,6 +4719,8 @@ public:
             /* Refresh each task item view */
             RefreshWindowList();
             UpdateButtonsSize(FALSE);
+            UpdateTaskGroupLayout();
+            RefreshTaskButtons();
         }
 
         return 0;
@@ -4830,6 +4877,7 @@ public:
         {
             /*  Don't update the font, this will be done when we get a WM_SETFONT from our parent */
             UpdateButtonsSize(FALSE);
+            UpdateTaskGroupLayout();
         }
 
         return 0;
@@ -4862,7 +4910,7 @@ public:
     {
         m_Tray = tray;
         m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial, &m_cyTaskRow);
-        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
+        m_IsGroupingEnabled = g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_NEVER;
         Create(hWndParent, 0, szRunningApps, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_TABSTOP);
         if (!m_hWnd)
             return E_FAIL;

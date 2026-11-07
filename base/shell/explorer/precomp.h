@@ -308,10 +308,15 @@ typedef struct _TW_STUCKRECTS2
     RECT Rect;
 } TW_STRUCKRECTS2, *PTW_STUCKRECTS2;
 
+#define TASKBAR_GLOM_ALWAYS 0
+#define TASKBAR_GLOM_WHEN_FULL 1
+#define TASKBAR_GLOM_NEVER 2
+
 struct TaskbarSettings
 {
     BOOL bLock;
     BOOL bGroupButtons;
+    DWORD dwTaskbarGlomLevel;
     BOOL bShowSeconds;
     BOOL bPreferDate;
     BOOL bHideInactiveIcons;

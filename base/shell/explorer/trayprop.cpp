@@ -56,7 +56,7 @@ private:
     {
         BOOL bLock = IsDlgButtonChecked(IDC_TASKBARPROP_LOCK);
         BOOL bHide = IsDlgButtonChecked(IDC_TASKBARPROP_HIDE);
-        BOOL bGroup = IsDlgButtonChecked(IDC_TASKBARPROP_GROUP);
+        BOOL bGroup = SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_GETCURSEL) != TASKBAR_GLOM_NEVER;
         BOOL bShowQL = IsDlgButtonChecked(IDC_TASKBARPROP_SHOWQL);
         UINT uImageId = IDB_TASKBARPROP_NOLOCK_NOGROUP_NOQL;
 
@@ -110,7 +110,10 @@ public:
         CheckDlgButton(IDC_TASKBARPROP_LOCK, g_TaskbarSettings.bLock ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_HIDE, g_TaskbarSettings.sr.AutoHide ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_ONTOP, g_TaskbarSettings.sr.AlwaysOnTop ? BST_CHECKED : BST_UNCHECKED);
-        CheckDlgButton(IDC_TASKBARPROP_GROUP, g_TaskbarSettings.bGroupButtons ? BST_CHECKED : BST_UNCHECKED);
+        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Always combine, hide labels");
+        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Combine when taskbar is full");
+        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_ADDSTRING, 0, (LPARAM)L"Never combine");
+        SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_SETCURSEL, g_TaskbarSettings.dwTaskbarGlomLevel);
         //CheckDlgButton(IDC_TASKBARPROP_SHOWQL, g_TaskbarSettings.bShowQuickLaunch ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_SMALLICONS, g_TaskbarSettings.bSmallIcons ? BST_CHECKED : BST_UNCHECKED);
 
@@ -132,7 +135,12 @@ public:
         newSettings.bLock = IsDlgButtonChecked(IDC_TASKBARPROP_LOCK);
         newSettings.sr.AutoHide = IsDlgButtonChecked(IDC_TASKBARPROP_HIDE);
         newSettings.sr.AlwaysOnTop = IsDlgButtonChecked(IDC_TASKBARPROP_ONTOP);
-        newSettings.bGroupButtons = IsDlgButtonChecked(IDC_TASKBARPROP_GROUP);
+        LRESULT GlomLevel = SendDlgItemMessage(IDC_TASKBARPROP_GROUP, CB_GETCURSEL);
+        if (GlomLevel != CB_ERR)
+        {
+            newSettings.dwTaskbarGlomLevel = (DWORD)GlomLevel;
+            newSettings.bGroupButtons = (GlomLevel != TASKBAR_GLOM_NEVER);
+        }
         //newSettings.bShowQuickLaunch = IsDlgButtonChecked(IDC_TASKBARPROP_SHOWQL);
         newSettings.bSmallIcons = IsDlgButtonChecked(IDC_TASKBARPROP_SMALLICONS);
 
