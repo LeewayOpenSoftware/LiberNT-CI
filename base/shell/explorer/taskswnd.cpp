@@ -923,29 +923,65 @@ public:
         HICON icon = NULL;
         if (TaskGroup->IsPinned)
         {
-            SHFILEINFOW sfi;
-            ZeroMemory(&sfi, sizeof(sfi));
-            PCWSTR pszIconPath = TaskGroup->szLinkPath[0] ?
-                                 TaskGroup->szLinkPath : TaskGroup->szExePath;
-            // Fetch the base image; SHGFI_ICON adds a shortcut arrow for large icons.
-            DWORD_PTR Images = SHGetFileInfoW(pszIconPath, 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | (UseSmallTaskIcons() ? SHGFI_SMALLICON : SHGFI_LARGEICON));
-            if (Images)
+            if (TaskGroup->szLinkPath[0])
             {
-                icon = ImageList_GetIcon((HIMAGELIST)Images, sfi.iIcon, ILD_TRANSPARENT);
-                *pbDestroy = icon != NULL;
-            }
-            if (!icon && TaskGroup->szExePath[0])
-            {
-                HICON hLarge = NULL, hSmall = NULL;
-
-                if (ExtractIconExW(TaskGroup->szExePath, 0, &hLarge, &hSmall, 1))
+                CComPtr<IShellLinkW> Link;
+                CComPtr<IPersistFile> Persist;
+                HRESULT hr = Link.CoCreateInstance(CLSID_ShellLink, IID_IShellLinkW, NULL, CLSCTX_INPROC_SERVER);
+                if (SUCCEEDED(hr))
+                    hr = Link->QueryInterface(IID_PPV_ARG(IPersistFile, &Persist));
+                if (SUCCEEDED(hr))
+                    hr = Persist->Load(TaskGroup->szLinkPath, STGM_READ);
+                if (SUCCEEDED(hr))
                 {
-                    icon = UseSmallTaskIcons() ? hSmall : hLarge;
-                    if (!icon)
-                        icon = UseSmallTaskIcons() ? hLarge : hSmall;
-                    else if (hLarge && hSmall)
-                        DestroyIcon(UseSmallTaskIcons() ? hLarge : hSmall);
+                    WCHAR szIconPath[MAX_PATH];
+                    INT iIcon;
+                    if (SUCCEEDED(Link->GetIconLocation(szIconPath, _countof(szIconPath), &iIcon)) && szIconPath[0])
+                    {
+                        HICON hLarge = NULL, hSmall = NULL;
+                        if (ExtractIconExW(szIconPath, iIcon, &hLarge, &hSmall, 1))
+                        {
+                            icon = UseSmallTaskIcons() ? hSmall : hLarge;
+                            if (icon)
+                            {
+                                *pbDestroy = TRUE;
+                                if (hLarge && hSmall)
+                                    DestroyIcon(UseSmallTaskIcons() ? hLarge : hSmall);
+                            }
+                            else if (hLarge || hSmall)
+                            {
+                                DestroyIcon(hLarge ? hLarge : hSmall);
+                            }
+                        }
+                    }
+                }
+            }
+            if (!icon)
+            {
+                SHFILEINFOW sfi;
+                ZeroMemory(&sfi, sizeof(sfi));
+                PCWSTR pszIconPath = TaskGroup->szLinkPath[0] ?
+                                     TaskGroup->szLinkPath : TaskGroup->szExePath;
+                // Fetch the base image; SHGFI_ICON adds a shortcut arrow for large icons.
+                DWORD_PTR Images = SHGetFileInfoW(pszIconPath, 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | (UseSmallTaskIcons() ? SHGFI_SMALLICON : SHGFI_LARGEICON));
+                if (Images)
+                {
+                    icon = ImageList_GetIcon((HIMAGELIST)Images, sfi.iIcon, ILD_TRANSPARENT);
                     *pbDestroy = icon != NULL;
+                }
+                if (!icon && TaskGroup->szExePath[0])
+                {
+                    HICON hLarge = NULL, hSmall = NULL;
+
+                    if (ExtractIconExW(TaskGroup->szExePath, 0, &hLarge, &hSmall, 1))
+                    {
+                        icon = UseSmallTaskIcons() ? hSmall : hLarge;
+                        if (!icon)
+                            icon = UseSmallTaskIcons() ? hLarge : hSmall;
+                        else if (hLarge && hSmall)
+                            DestroyIcon(UseSmallTaskIcons() ? hLarge : hSmall);
+                        *pbDestroy = icon != NULL;
+                    }
                 }
             }
         }
@@ -3370,22 +3406,26 @@ public:
         case HSHELL_WINDOWCREATED:
             if (AddTask((HWND) lParam))
                 StartMenu2_RecordUsage((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_WINDOWDESTROYED:
             /* The window still exists! Delay destroying it a bit */
             OnWindowDestroyed((HWND)lParam);
             DeleteTask((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_WINDOWREPLACING:
             if (AddTask((HWND)lParam))
                 StartMenu2_RecordUsage((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_WINDOWREPLACED:
             OnWindowDestroyed((HWND)lParam);
             DeleteTask((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_RUDEAPPACTIVATED:
@@ -3408,6 +3448,7 @@ public:
 
         case HSHELL_REDRAW:
             RedrawTask((HWND) lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_TASKMAN:
@@ -3650,8 +3691,16 @@ public:
             ahWnd[cWindows++] = TaskItem->hWnd;
             id = (INT_PTR)TaskItem;
         }
-        if (cWindows == 0 || TaskPreview_IsVisibleFor(id))
+        if (!cWindows)
+        {
+            TaskPreview_Hide();
             return;
+        }
+        if (TaskPreview_IsVisibleFor(id))
+        {
+            TaskPreview_Refresh(ahWnd, cWindows, id);
+            return;
+        }
         if (!GetButtonScreenRect(Index, &rcBtn))
             return;
         TaskPreview_ShowHover(m_TaskBar.m_hWnd, &rcBtn, ahWnd, cWindows, id);

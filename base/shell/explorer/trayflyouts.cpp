@@ -653,6 +653,15 @@ public:
         m_size.cy = CardH() + Sc(16);
     }
 
+    VOID RefreshCards(const HWND *pahWnd, UINT cWindows)
+    {
+        BuildCards(pahWnd, cWindows);
+        LayoutCards();
+        SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        InvalidateRect(NULL, FALSE);
+    }
+
     VOID Popup(HWND hwndOwner, const RECT *prcAnchor, const HWND *pahWnd, UINT cWindows,
                INT_PTR nGroupId, BOOL bHover)
     {
@@ -1032,6 +1041,22 @@ VOID TaskPreview_ShowHover(IN HWND hwndOwner, IN const RECT *prcAnchor,
                            IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId)
 {
     TaskPreview_ShowEx(hwndOwner, prcAnchor, pahWnd, cWindows, nGroupId, TRUE);
+}
+
+VOID TaskPreview_Refresh(IN const HWND *pahWnd, IN UINT cWindows, IN INT_PTR nGroupId)
+{
+    if (!g_pTaskPreview || !g_pTaskPreview->IsWindow() ||
+        g_pTaskPreview->m_AnimPhase == TFY_CLOSE ||
+        g_pTaskPreview->m_nGroupId != nGroupId)
+    {
+        return;
+    }
+    if (!cWindows)
+    {
+        TaskPreview_Hide();
+        return;
+    }
+    g_pTaskPreview->RefreshCards(pahWnd, cWindows);
 }
 
 BOOL TaskPreview_IsHover(VOID)
