@@ -308,7 +308,16 @@ RegRecoverHiveFromLog(
     }
 
     WARN("Recovering the hive from %s\n", FullLogFileName);
-    return HvpApplyIncrementalLog(*ChunkBase, Required, LogData, LogSize, TRUE, NULL, &Required);
+    if (!HvpApplyIncrementalLog(*ChunkBase, Required, LogData, LogSize, TRUE, NULL, &Required))
+        return FALSE;
+
+    /* A growth write the volume refused leaves regions the log does not
+       cover zero-filled; clamp the header to the valid bins so the flat
+       hive stays consistent and flag the loss. */
+    if (HvpClampHiveToValidBins((PHBASE_BLOCK)*ChunkBase, Required) != Required)
+        ((PHBASE_BLOCK)*ChunkBase)->BootType |= HBOOT_TYPE_SELF_HEAL;
+
+    return TRUE;
 }
 
 /**
