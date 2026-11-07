@@ -506,7 +506,7 @@ static void parse_command_line( int argc, WCHAR *argv[] )
         {
             /* The mask is hexadecimal, as on Windows. */
             WCHAR *end;
-            opts.affinity_mask = (DWORD_PTR)wcstoull(argv[i], &end, 16);
+            opts.affinity_mask = (DWORD_PTR)_wcstoui64(argv[i], &end, 16);
             if (end == argv[i] || *end || !opts.affinity_mask)
                 usage();
             opts.has_affinity = TRUE;
