@@ -404,6 +404,7 @@ DECLARE_INTERFACE_(ITrayBandSite, IUnknown)
     STDMETHOD_(HRESULT, ProcessMessage) (THIS_ HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam, LRESULT *plResult) PURE;
     STDMETHOD_(HRESULT, AddContextMenus) (THIS_ HMENU hmenu, UINT indexMenu, UINT idCmdFirst, UINT idCmdLast, UINT uFlags, IContextMenu **ppcm) PURE;
     STDMETHOD_(HRESULT, Lock) (THIS_ BOOL bLock) PURE;
+    STDMETHOD_(HRESULT, Save) (THIS) PURE;
 };
 #undef INTERFACE
 
@@ -420,6 +421,7 @@ DECLARE_INTERFACE_(ITrayBandSite, IUnknown)
 #define ITrayBandSite_ProcessMessage(p,a,b,c,d,e)       (p)->lpVtbl->ProcessMessage(p,a,b,c,d,e)
 #define ITrayBandSite_AddContextMenus(p,a,b,c,d,e,f)    (p)->lpVtbl->AddContextMenus(p,a,b,c,d,e,f)
 #define ITrayBandSite_Lock(p,a)                         (p)->lpVtbl->Lock(p,a)
+#define ITrayBandSite_Save(p)                           (p)->lpVtbl->Save(p)
 #endif
 
 HRESULT CTrayBandSite_CreateInstance(IN ITrayWindow *tray, IN IDeskBand* pTaskBand, OUT ITrayBandSite** pBandSite);
