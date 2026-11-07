@@ -4725,6 +4725,13 @@ FileRecord::PromoteResidentData(
     if (!NT_SUCCESS(Status))
         goto Rollback;
 
+    if (TargetAttribute->AttributeType == TypeData)
+    {
+        Status = DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+    }
+
     WriteAttempted = TRUE;
     Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
     if (NT_SUCCESS(Status))
@@ -4737,6 +4744,8 @@ Rollback:
     if (WriteAttempted)
     {
         NTSTATUS RestoreStatus = DiskVolume->MFT->WriteFileRecordToMFT(this);
+        if (NT_SUCCESS(RestoreStatus))
+            RestoreStatus = DiskVolume->FlushVolume();
         if (!NT_SUCCESS(RestoreStatus))
         {
             Restored = FALSE;
@@ -5157,8 +5166,12 @@ FileRecord::ResizeSparseData(
     Committed = TRUE;
     if (ReleasedRuns)
     {
-        Status = DiskVolume->ReleaseClusters(
-            ReleasedRuns);
+        Status = DiskVolume->FlushVolume();
+        if (NT_SUCCESS(Status))
+        {
+            Status = DiskVolume->ReleaseClusters(
+                ReleasedRuns);
+        }
     }
     goto Done;
 
@@ -5436,6 +5449,9 @@ FileRecord::ResizeNonResidentStream(
     if (!NT_SUCCESS(Status))
         goto Rollback;
 
+    Status = DiskVolume->FlushVolume();
+    if (!NT_SUCCESS(Status))
+        goto Rollback;
     Status = MappingUpdate
         ? CommitNonResidentMappingUpdate(
             &MappingUpdate)
@@ -5445,18 +5461,42 @@ FileRecord::ResizeNonResidentStream(
         goto Rollback;
 
     if (ReleasedRuns)
-        Status = DiskVolume->ReleaseClusters(
-            ReleasedRuns);
+    {
+        Status = DiskVolume->FlushVolume();
+        if (NT_SUCCESS(Status))
+        {
+            Status = DiskVolume->ReleaseClusters(
+                ReleasedRuns);
+        }
+    }
     goto Done;
 
 Rollback:
+    NTSTATUS RestoreStatus;
     AbortNonResidentMappingUpdate(
-        &MappingUpdate);
+        &MappingUpdate,
+        &RestoreStatus);
     RtlCopyMemory(Data, RecordBackup, RecordBufferSize);
     Header = reinterpret_cast<PFileRecordHeader>(Data);
     ClearDataRunCache();
     if (AddedRuns)
-        (void)DiskVolume->ReleaseClusters(AddedRuns);
+    {
+        if (NT_SUCCESS(RestoreStatus))
+        {
+            RestoreStatus = DiskVolume->MFT->
+                WriteFileRecordToMFT(this);
+        }
+        if (NT_SUCCESS(RestoreStatus))
+            RestoreStatus = DiskVolume->FlushVolume();
+        if (NT_SUCCESS(RestoreStatus))
+        {
+            (void)DiskVolume->ReleaseClusters(AddedRuns);
+        }
+        else
+        {
+            Status = RestoreStatus;
+        }
+    }
 
 Done:
     FreeDataRun(CollapseTail);
@@ -5682,6 +5722,9 @@ FileRecord::ExtendNonResidentData(
     if (!NT_SUCCESS(Status))
         goto Rollback;
 
+    Status = DiskVolume->FlushVolume();
+    if (!NT_SUCCESS(Status))
+        goto Rollback;
     Status = MappingUpdate
         ? CommitNonResidentMappingUpdate(
             &MappingUpdate)
@@ -5691,13 +5734,31 @@ FileRecord::ExtendNonResidentData(
         goto Done;
 
 Rollback:
+    NTSTATUS RestoreStatus;
     AbortNonResidentMappingUpdate(
-        &MappingUpdate);
+        &MappingUpdate,
+        &RestoreStatus);
     RtlCopyMemory(Data, RecordBackup, RecordBufferSize);
     Header = reinterpret_cast<PFileRecordHeader>(Data);
     ClearDataRunCache();
     if (AddedRuns)
-        (void)DiskVolume->ReleaseClusters(AddedRuns);
+    {
+        if (NT_SUCCESS(RestoreStatus))
+        {
+            RestoreStatus = DiskVolume->MFT->
+                WriteFileRecordToMFT(this);
+        }
+        if (NT_SUCCESS(RestoreStatus))
+            RestoreStatus = DiskVolume->FlushVolume();
+        if (NT_SUCCESS(RestoreStatus))
+        {
+            (void)DiskVolume->ReleaseClusters(AddedRuns);
+        }
+        else
+        {
+            Status = RestoreStatus;
+        }
+    }
 
 Done:
     FreeDataRun(CombinedRuns);
@@ -6147,6 +6208,9 @@ FileRecord::WriteSparseData(
     if (!NT_SUCCESS(Status))
         goto Restore;
 
+    Status = DiskVolume->FlushVolume();
+    if (!NT_SUCCESS(Status))
+        goto Restore;
     if (MappingUpdate)
     {
         Status = CommitNonResidentMappingUpdate(
@@ -6182,8 +6246,10 @@ FileRecord::WriteSparseData(
 Restore:
     if (!Committed)
     {
+        NTSTATUS RestoreStatus;
         AbortNonResidentMappingUpdate(
-            &MappingUpdate);
+            &MappingUpdate,
+            &RestoreStatus);
         if (OwnerRecordBackup)
         {
             RtlCopyMemory(
@@ -6194,9 +6260,9 @@ Restore:
                 reinterpret_cast<PFileRecordHeader>(
                     AttributeOwner->Data);
             AttributeOwner->ClearDataRunCache();
-            if (OwnerWriteAttempted)
+            if (OwnerWriteAttempted && NT_SUCCESS(RestoreStatus))
             {
-                (void)DiskVolume->MFT->
+                RestoreStatus = DiskVolume->MFT->
                     WriteFileRecordToMFT(
                         AttributeOwner);
             }
@@ -6207,12 +6273,23 @@ Restore:
         Header =
             reinterpret_cast<PFileRecordHeader>(Data);
         ClearDataRunCache();
+        if (NT_SUCCESS(RestoreStatus))
+        {
+            RestoreStatus = DiskVolume->MFT->
+                WriteFileRecordToMFT(this);
+        }
+        if (NT_SUCCESS(RestoreStatus))
+            RestoreStatus = DiskVolume->FlushVolume();
+        if (AllocatedRuns && NT_SUCCESS(RestoreStatus))
+        {
+            (void)DiskVolume->ReleaseClusters(
+                AllocatedRuns);
+        }
+        if (!NT_SUCCESS(RestoreStatus))
+            Status = RestoreStatus;
     }
 
 Done:
-    if (!Committed && AllocatedRuns)
-        (void)DiskVolume->ReleaseClusters(
-            AllocatedRuns);
     FreeDataRun(CombinedRuns);
     FreeDataRun(AllocatedRuns);
     FreeDataRun(ExistingRuns);
@@ -6588,6 +6665,9 @@ FileRecord::WriteCompressedUnits(_Inout_ PAttribute* Attribute,
     if (!NT_SUCCESS(Status))
         goto Restore;
 
+    Status = DiskVolume->FlushVolume();
+    if (!NT_SUCCESS(Status))
+        goto Restore;
     Status = MappingUpdate
         ? CommitNonResidentMappingUpdate(&MappingUpdate)
         : DiskVolume->MFT->WriteFileRecordToMFT(this);
@@ -6599,21 +6679,42 @@ FileRecord::WriteCompressedUnits(_Inout_ PAttribute* Attribute,
     *Attribute = TargetAttribute;
 
     if (OldPhysicalRuns)
-        Status = DiskVolume->ReleaseClusters(OldPhysicalRuns);
+    {
+        Status = DiskVolume->FlushVolume();
+        if (NT_SUCCESS(Status))
+            Status = DiskVolume->ReleaseClusters(OldPhysicalRuns);
+    }
     goto Done;
 
 Restore:
     if (!Committed)
     {
-        AbortNonResidentMappingUpdate(&MappingUpdate);
+        NTSTATUS RestoreStatus;
+        AbortNonResidentMappingUpdate(&MappingUpdate, &RestoreStatus);
         RtlCopyMemory(Data, RecordBackup, RecordBufferSize);
         Header = reinterpret_cast<PFileRecordHeader>(Data);
         ClearDataRunCache();
+        if (NewPhysicalRuns)
+        {
+            if (NT_SUCCESS(RestoreStatus))
+            {
+                RestoreStatus = DiskVolume->MFT->
+                    WriteFileRecordToMFT(this);
+            }
+            if (NT_SUCCESS(RestoreStatus))
+                RestoreStatus = DiskVolume->FlushVolume();
+            if (NT_SUCCESS(RestoreStatus))
+            {
+                (void)DiskVolume->ReleaseClusters(NewPhysicalRuns);
+            }
+            else
+            {
+                Status = RestoreStatus;
+            }
+        }
     }
 
 Done:
-    if (!Committed && NewPhysicalRuns)
-        (void)DiskVolume->ReleaseClusters(NewPhysicalRuns);
     FreeDataRun(OldPhysicalRuns);
     FreeDataRun(NewPhysicalRuns);
     FreeDataRun(CompositeRuns);
@@ -7190,6 +7291,9 @@ FileRecord::PromoteResidentCompressedData(
         NULL);
     if (!NT_SUCCESS(Status))
         goto Rollback;
+    Status = DiskVolume->FlushVolume();
+    if (!NT_SUCCESS(Status))
+        goto Rollback;
     WriteAttempted = TRUE;
     Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
     if (!NT_SUCCESS(Status))
@@ -7222,6 +7326,8 @@ Rollback:
     if (WriteAttempted)
     {
         NTSTATUS RestoreStatus = DiskVolume->MFT->WriteFileRecordToMFT(this);
+        if (NT_SUCCESS(RestoreStatus))
+            RestoreStatus = DiskVolume->FlushVolume();
 
         if (!NT_SUCCESS(RestoreStatus))
         {

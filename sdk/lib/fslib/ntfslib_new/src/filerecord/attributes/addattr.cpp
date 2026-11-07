@@ -4181,6 +4181,18 @@ FileRecord::AbortNonResidentMappingUpdate(
         Update->AddedListRuns &&
         BaseRecord)
     {
+        NTSTATUS RestoreStatus = BaseRecord->DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(RestoreStatus))
+        {
+            MetadataRestored = FALSE;
+            if (NT_SUCCESS(FirstFailure))
+                FirstFailure = RestoreStatus;
+        }
+    }
+    if (MetadataRestored &&
+        Update->AddedListRuns &&
+        BaseRecord)
+    {
         (void)BaseRecord->DiskVolume->
             ReleaseClusters(
                 Update->AddedListRuns);
