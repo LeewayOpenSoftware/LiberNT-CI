@@ -45,7 +45,7 @@ typedef struct tagNOTIFY_CONTEXT
     DWORD EndNowResult;
     BOOL ShowUI;
     HANDLE UIThread;
-    DWORD UIThreadId;
+    HANDLE StopEvent;
     HWND WndClient;
     PSHUTDOWN_SETTINGS ShutdownSettings;
 } NOTIFY_CONTEXT, *PNOTIFY_CONTEXT;
@@ -65,6 +65,8 @@ typedef struct tagMESSAGE_CONTEXT
     WPARAM wParam;
     LPARAM lParam;
     DWORD Timeout;
+    volatile LONG SendState;
+    LONG RefCount;
 } MESSAGE_CONTEXT, *PMESSAGE_CONTEXT;
 
 
@@ -191,7 +193,7 @@ EndNowThreadProc(LPVOID Parameter)
 {
     PNOTIFY_CONTEXT NotifyContext = (PNOTIFY_CONTEXT)Parameter;
     MSG Msg;
-    DWORD Result;
+    DWORD Result, WaitStatus;
 
 #if 0
     SetThreadDesktop(NotifyContext->Desktop);
@@ -204,6 +206,7 @@ EndNowThreadProc(LPVOID Parameter)
                                0);
 #endif
 
+    PeekMessageW(&Msg, NULL, 0, 0, PM_NOREMOVE);
     CallInitCommonControls();
     NotifyContext->Dlg = CreateDialogParam(UserServerDllInstance,
                                            MAKEINTRESOURCE(IDD_END_NOW), NULL,
@@ -213,11 +216,37 @@ EndNowThreadProc(LPVOID Parameter)
         Result = QUERY_RESULT_ERROR;
         goto Cleanup;
     }
+    if (WaitForSingleObject(NotifyContext->StopEvent, 0) == WAIT_OBJECT_0)
+    {
+        DestroyWindow(NotifyContext->Dlg);
+        Result = QUERY_RESULT_ERROR;
+        goto Cleanup;
+    }
 
     ShowWindow(NotifyContext->Dlg, SW_SHOWNORMAL);
 
-    while (GetMessageW(&Msg, NULL, 0, 0))
+    for (;;)
     {
+        WaitStatus = MsgWaitForMultipleObjectsEx(1, &NotifyContext->StopEvent,
+                                                 INFINITE, QS_ALLINPUT,
+                                                 MWMO_INPUTAVAILABLE);
+        if (WaitStatus == WAIT_OBJECT_0)
+        {
+            Result = QUERY_RESULT_ERROR;
+            break;
+        }
+        if (WaitStatus != WAIT_OBJECT_0 + 1)
+        {
+            Result = QUERY_RESULT_ERROR;
+            break;
+        }
+        if (!PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            continue;
+        if (Msg.message == WM_QUIT)
+        {
+            Result = Msg.wParam;
+            break;
+        }
         if (!IsDialogMessage(NotifyContext->Dlg, &Msg))
         {
             TranslateMessage(&Msg);
@@ -225,9 +254,8 @@ EndNowThreadProc(LPVOID Parameter)
         }
     }
 
-    Result = Msg.wParam;
-
 Cleanup:
+    CloseHandle(NotifyContext->StopEvent);
     HeapFree(UserServerHeap, 0, NotifyContext);
     return Result;
 }
@@ -238,6 +266,12 @@ SendClientShutdown(LPVOID Parameter)
     PMESSAGE_CONTEXT Context = (PMESSAGE_CONTEXT)Parameter;
     DWORD_PTR Result;
     DWORD QueryResult;
+
+    if (InterlockedCompareExchange(&Context->SendState, 1, 0) != 0)
+    {
+        QueryResult = QUERY_RESULT_TIMEOUT;
+        goto Cleanup;
+    }
 
     /* If the shutdown is aborted, just notify the process, there is no need to wait */
     if ((Context->wParam & (MCS_QUERYENDSESSION | MCS_ENDSESSION)) == 0)
@@ -285,7 +319,8 @@ SendClientShutdown(LPVOID Parameter)
     QueryResult = (GetLastError() == 0 ? QUERY_RESULT_TIMEOUT : QUERY_RESULT_ERROR);
 
 Cleanup:
-    HeapFree(UserServerHeap, 0, Context);
+    if (InterlockedDecrement(&Context->RefCount) == 0)
+        HeapFree(UserServerHeap, 0, Context);
     return QueryResult;
 }
 
@@ -315,6 +350,8 @@ NotifyTopLevelWindow(HWND Wnd, PNOTIFY_CONTEXT NotifyContext)
     MessageContext.Msg = NotifyContext->Msg;
     MessageContext.wParam = NotifyContext->wParam;
     MessageContext.lParam = NotifyContext->lParam;
+    MessageContext.SendState = 0;
+    MessageContext.RefCount = 2;
     MessageContext.Timeout = NotifyContext->ShutdownSettings->HungAppTimeout;
     if (!NotifyContext->ShutdownSettings->AutoEndTasks)
     {
@@ -363,12 +400,33 @@ NotifyTopLevelWindow(HWND Wnd, PNOTIFY_CONTEXT NotifyContext)
                     *UIContext->ShutdownSettings = *NotifyContext->ShutdownSettings;
                     UIContext->Dlg = NULL;
                     UIContext->EndNowResult = QUERY_RESULT_ERROR;
-                    NotifyContext->UIThread = CreateThread(NULL, 0,
-                                                           EndNowThreadProc,
-                                                           UIContext, 0,
-                                                           &NotifyContext->UIThreadId);
-                    if (NotifyContext->UIThread == NULL)
+                    NotifyContext->StopEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+                    if (NotifyContext->StopEvent == NULL ||
+                        !DuplicateHandle(GetCurrentProcess(), NotifyContext->StopEvent,
+                                         GetCurrentProcess(), &UIContext->StopEvent,
+                                         0, FALSE, DUPLICATE_SAME_ACCESS))
+                    {
+                        if (NotifyContext->StopEvent != NULL)
+                        {
+                            CloseHandle(NotifyContext->StopEvent);
+                            NotifyContext->StopEvent = NULL;
+                        }
                         HeapFree(UserServerHeap, 0, UIContext);
+                    }
+                    else
+                    {
+                        NotifyContext->UIThread = CreateThread(NULL, 0,
+                                                               EndNowThreadProc,
+                                                               UIContext, 0,
+                                                               NULL);
+                        if (NotifyContext->UIThread == NULL)
+                        {
+                            CloseHandle(NotifyContext->StopEvent);
+                            NotifyContext->StopEvent = NULL;
+                            CloseHandle(UIContext->StopEvent);
+                            HeapFree(UserServerHeap, 0, UIContext);
+                        }
+                    }
                 }
             }
             Threads[0] = MessageThread;
@@ -410,6 +468,10 @@ NotifyTopLevelWindow(HWND Wnd, PNOTIFY_CONTEXT NotifyContext)
         {
             NotifyContext->QueryResult = QUERY_RESULT_ERROR;
         }
+        if (InterlockedExchange(&ThreadContext->SendState, 2) == 1)
+            WaitForSingleObjectEx(MessageThread, INFINITE, FALSE);
+        if (InterlockedDecrement(&ThreadContext->RefCount) == 0)
+            HeapFree(UserServerHeap, 0, ThreadContext);
         CloseHandle(MessageThread);
     }
     else
@@ -466,7 +528,7 @@ ThreadShutdownNotify(IN PCSR_THREAD CsrThread,
 
     Context->StartTime = 0;
     Context->UIThread = NULL;
-    Context->UIThreadId = 0;
+    Context->StopEvent = NULL;
     Context->ShowUI = !IsConsoleMode() && (Flags2 & (MCS_QUERYENDSESSION | MCS_ENDSESSION));
     Context->Dlg = NULL;
 
@@ -488,17 +550,15 @@ ThreadShutdownNotify(IN PCSR_THREAD CsrThread,
 
     if (Context->UIThread)
     {
-        MY_DPRINT("Stopping UIThread with WM_QUIT\n");
-        if (!PostThreadMessageW(Context->UIThreadId, WM_QUIT, QUERY_RESULT_ERROR, 0))
-        {
-            WaitForSingleObjectEx(Context->UIThread, 100, FALSE);
-            PostThreadMessageW(Context->UIThreadId, WM_QUIT, QUERY_RESULT_ERROR, 0);
-        }
+        MY_DPRINT("Stopping UIThread\n");
+        SetEvent(Context->StopEvent);
         WaitForSingleObjectEx(Context->UIThread,
                               Context->ShutdownSettings->WaitToKillAppTimeout,
                               FALSE);
         CloseHandle(Context->UIThread);
+        CloseHandle(Context->StopEvent);
         Context->UIThread = NULL;
+        Context->StopEvent = NULL;
         Context->Dlg = NULL;
     }
 
