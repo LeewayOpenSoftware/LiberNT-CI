@@ -763,34 +763,29 @@ public:
         }
     }
 
-    VOID LayoutCards(int nColumns = 0)
+    VOID LayoutCards(INT MaxWidth)
     {
-        int x = Sc(8);
-        int y = Sc(8);
-        int nCount = (int)m_Cards.GetCount();
-        int nCols = (nColumns > 0 && nCount > nColumns) ? nColumns : nCount;
-        int yBottom = y;
+        INT Columns = MaxWidth / (CardW() + Sc(8));
+        if (Columns < 1)
+            Columns = 1;
+        if (m_Cards.GetCount() && (SIZE_T)Columns > m_Cards.GetCount())
+            Columns = (INT)m_Cards.GetCount();
 
-        if (nCols <= 0)
-            nCols = 1;
-
-        for (int i = 0; i < nCount; i++)
+        for (SIZE_T i = 0; i < m_Cards.GetCount(); i++)
         {
             TFYCARD &card = m_Cards[i];
+            INT Column = (INT)i % Columns;
+            INT Row = (INT)i / Columns;
+            INT x = Sc(8) + Column * (CardW() + Sc(8));
+            INT y = Sc(8) + Row * (CardH() + Sc(8));
             SetRect(&card.rc, x, y, x + CardW(), y + CardH());
             SetRect(&card.rcClose,
                     card.rc.right - Sc(24), card.rc.top + Sc(4),
                     card.rc.right - Sc(6), card.rc.top + TitleH() - Sc(4));
-            x += CardW() + Sc(8);
-            yBottom = y + CardH();
-            if ((i + 1) % nCols == 0)
-            {
-                x = Sc(8);
-                y += CardH() + Sc(8);
-            }
         }
-        m_size.cx = nCols * (CardW() + Sc(8)) + Sc(8);
-        m_size.cy = yBottom + Sc(8);
+        m_size.cx = Columns * (CardW() + Sc(8)) + Sc(8);
+        INT Rows = m_Cards.GetCount() ? ((INT)m_Cards.GetCount() + Columns - 1) / Columns : 1;
+        m_size.cy = Rows * (CardH() + Sc(8)) + Sc(8);
     }
 
     VOID Popup(HWND hwndOwner, const RECT *prcAnchor, const HWND *pahWnd, UINT cWindows,
@@ -799,7 +794,6 @@ public:
         MONITORINFO mi;
         POINT ptRef;
         int xPos, yPos;
-        int nColumns = 0;
 
         StartMenu2_GetFlyoutPalette(&m_Pal);
         m_nGroupId = nGroupId;
@@ -820,21 +814,14 @@ public:
         ptRef.y = prcAnchor->top;
         mi.cbSize = sizeof(mi);
         GetMonitorInfoW(MonitorFromPoint(ptRef, MONITOR_DEFAULTTONEAREST), &mi);
-
-        /* Large groups are laid out as a grid that fits on the monitor
-           instead of being truncated at 16 cards. */
-        if (m_Cards.GetCount() > 16)
-        {
-            int cxMonitor = mi.rcMonitor.right - mi.rcMonitor.left;
-            nColumns = max(1, (cxMonitor - Sc(8)) / (CardW() + Sc(8)));
-        }
-        LayoutCards(nColumns);
+        LayoutCards(mi.rcMonitor.right - mi.rcMonitor.left);
 
         xPos = ptRef.x - m_size.cx / 2;
         if (xPos + m_size.cx > mi.rcMonitor.right) xPos = mi.rcMonitor.right - m_size.cx;
         if (xPos < mi.rcMonitor.left) xPos = mi.rcMonitor.left;
         yPos = prcAnchor->top - m_size.cy - Sc(6);
         if (yPos < mi.rcMonitor.top) yPos = prcAnchor->bottom + Sc(6);
+        if (yPos + m_size.cy > mi.rcMonitor.bottom) yPos = mi.rcMonitor.top;
 
         BeginFlyoutOpen(m_hWnd, xPos, yPos, m_size.cx, m_size.cy, m_Pal.PanelBg, !bHover);
         SetTimer(TFY_TIMER_ALIVE, 500, NULL);
@@ -1014,7 +1001,7 @@ public:
                     return 0;
                 }
                 m_iHot = -1;
-                LayoutCards();
+                LayoutCards(m_size.cx);
                 SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
                              SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
                 InvalidateRect(NULL, FALSE);
