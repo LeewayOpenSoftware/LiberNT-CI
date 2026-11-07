@@ -3910,6 +3910,7 @@ public:
         HMENU hMenu = CreatePopupMenu();
         WCHAR szName[128];
         CAtlArray<HWND> Windows;
+        CTaskJumpList JumpList;
         INT cmd;
 
         if (!hMenu)
@@ -3941,6 +3942,9 @@ public:
         if (!AppId.IsEmpty() && Windows.GetCount() > 0)
             bRelaunch = TaskbarPin_GetRelaunch(Windows[0], Command, RelaunchName, &bPrevented);
         TaskPreview_Hide();
+        // Pinned, the app's categories, Recent/Frequent and Tasks go above the commands.
+        if (JumpList.Build(hMenu, AppId, Target))
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         szName[0] = 0;
         if (bRelaunch)
             StringCchCopyW(szName, _countof(szName), RelaunchName);
@@ -3964,9 +3968,15 @@ public:
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
             AppendMenuW(hMenu, MF_STRING, IDM_JUMP_CLOSE, Windows.GetCount() > 1 ? L"Close all windows" : L"Close window");
         }
+        JumpList.BeginTrack(hMenu);
         cmd = TrackTaskMenu(hMenu);
+        JumpList.EndTrack();
         DestroyMenu(hMenu);
-        if (cmd == IDM_JUMP_LAUNCH)
+        if (JumpList.Invoke(cmd, m_hWnd))
+        {
+            // A jump list item, or the menu of a right-clicked document.
+        }
+        else if (cmd == IDM_JUMP_LAUNCH)
             LaunchTaskPath(Key, Source, !bPinned && bRelaunch ? Command.GetString() : NULL);
         else if (cmd == IDM_JUMP_PIN || cmd == IDM_JUMP_UNPIN)
         {
