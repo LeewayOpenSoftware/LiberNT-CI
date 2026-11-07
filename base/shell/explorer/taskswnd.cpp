@@ -1282,6 +1282,7 @@ public:
             return;
         CAtlArray<TASKBAR_PIN_RECORD> Records;
         HRESULT hr = TaskbarPin_Enum(CollectTaskbarPin, (LPARAM)&Records);
+        ERR("[T3] SyncTaskbarPins: enum %08lx, %u pinned shortcut(s)\n", hr, (UINT)Records.GetCount());
         if (FAILED(hr))
             return;
         if (Records.GetCount() > 1)
@@ -3907,6 +3908,8 @@ public:
         if (szName[0])
             AppendMenuW(hMenu, MF_STRING, IDM_JUMP_LAUNCH, szName);
 
+        ERR("[T3] Jump menu: target %S source %S pinned %d relaunch %d prevented %d disabled %d\n", Target.GetString(),
+            Source.GetString(), (int)bPinned, (int)bRelaunch, (int)bPrevented, (int)TaskbarPin_IsDisabled());
         if (!TaskbarPin_IsDisabled() && (bPinned || (!bPrevented && (bRelaunch || TaskbarPin_IsPinnable(Source)))))
         {
             if (GetMenuItemCount(hMenu) > 0)
@@ -3947,6 +3950,7 @@ public:
                         SetTaskGroupPin(TaskGroup, NULL);
                 }
             }
+            ERR("[T3] Jump menu %s result %08lx shortcut %S\n", cmd == IDM_JUMP_PIN ? "pin" : "unpin", hr, Shortcut.GetString());
             if (SUCCEEDED(hr))
                 SyncTaskbarPins();
             else
@@ -5005,10 +5009,15 @@ public:
         }
         if (!(AllowedEffects & DROPEFFECT_LINK) || TaskbarPin_IsDisabled() ||
             !GetDropPinPath(pDataObj, Path))
+        {
+            ERR("[T3] Drop ignored: effects 0x%lx disabled %d\n", AllowedEffects, (int)TaskbarPin_IsDisabled());
             return S_OK;
+        }
 
         CStringW Shortcut;
-        if (FAILED(TaskbarPin_Create(Path, &Shortcut)))
+        HRESULT hrDrop = TaskbarPin_Create(Path, &Shortcut);
+        ERR("[T3] Drop pin: path %S result %08lx shortcut %S\n", Path.GetString(), hrDrop, Shortcut.GetString());
+        if (FAILED(hrDrop))
             return S_OK;
 
         SyncTaskbarPins();

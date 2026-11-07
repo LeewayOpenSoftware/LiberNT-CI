@@ -622,8 +622,8 @@ SaveTaskbarPinIcon(PCWSTR pszShortcut, HICON hIcon, CStringW &IconPath)
     return hr;
 }
 
-HRESULT
-TaskbarPin_Create(PCWSTR pszSource, CStringW *pShortcut, HICON hIcon)
+static HRESULT
+TaskbarPin_CreateImpl(PCWSTR pszSource, CStringW *pShortcut, HICON hIcon)
 {
     CStringW Target, Existing, Destination, Folder, SourceAppId;
     if (!TaskbarPin_IsPinnable(pszSource, &Target))
@@ -700,6 +700,17 @@ TaskbarPin_Create(PCWSTR pszSource, CStringW *pShortcut, HICON hIcon)
     if (pShortcut)
         *pShortcut = Destination;
     return S_OK;
+}
+
+HRESULT
+TaskbarPin_Create(PCWSTR pszSource, CStringW *pShortcut, HICON hIcon)
+{
+    CStringW Folder;
+    HRESULT hrFolder = GetTaskbarPinFolder(FALSE, Folder);
+    HRESULT hr = TaskbarPin_CreateImpl(pszSource, pShortcut, hIcon);
+
+    ERR("[T3] TaskbarPin_Create(%S): result %08lx, pin folder (%08lx) %S\n", pszSource, hr, hrFolder, Folder.GetString());
+    return hr;
 }
 
 HRESULT

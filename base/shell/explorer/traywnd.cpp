@@ -2036,6 +2036,8 @@ GetPrimaryScreenRect:
             m_Position = m_DraggingPosition;
             g_TaskbarSettings.sr.Position = m_Position;
             g_TaskbarSettings.Save();
+            ERR("[T2] Docked: edge %lu saved to StuckRects2, rect (%d,%d)-(%d,%d)\n", (ULONG)m_Position,
+                rcTray.left, rcTray.top, rcTray.right, rcTray.bottom);
             IsDragging = FALSE;
 
             m_TrayRects[m_Position] = rcTray;
@@ -2907,6 +2909,8 @@ ChangePos:
     {
         BOOL bPrevLock = g_TaskbarSettings.bLock;
 
+        ERR("[T2] Lock(%d), was %d\n", (int)bLock, (int)bPrevLock);
+
         if (g_TaskbarSettings.bLock != bLock)
         {
             g_TaskbarSettings.bLock = bLock;
@@ -3389,8 +3393,13 @@ ChangePos:
         wants to resize the tray window. */
         if (!g_TaskbarSettings.bLock && GetCursorPos(&ptCursor))
         {
+            DWORD dwOldDrag = m_DraggingPosition;
+
             IsDragging = TRUE;
             m_DraggingPosition = GetDraggingRectFromPt(ptCursor, pRect, &m_DraggingMonitor);
+            if (dwOldDrag != m_DraggingPosition)
+                ERR("[T2] Moving: cursor (%d,%d) -> edge %lu rect (%d,%d)-(%d,%d)\n", ptCursor.x, ptCursor.y,
+                    (ULONG)m_DraggingPosition, pRect->left, pRect->top, pRect->right, pRect->bottom);
         }
         else
         {
@@ -3450,6 +3459,7 @@ ChangePos:
     {
         InSizeMove = TRUE;
         IsDragging = FALSE;
+        ERR("[T2] EnterSizeMove lock %d pos %lu\n", (int)g_TaskbarSettings.bLock, (ULONG)m_Position);
         if (!g_TaskbarSettings.bLock)
         {
             /* Remove the clipping on multi monitor systems while dragging around */
@@ -3461,6 +3471,7 @@ ChangePos:
 
     LRESULT OnExitSizeMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        ERR("[T2] ExitSizeMove lock %d pos %lu\n", (int)g_TaskbarSettings.bLock, (ULONG)m_Position);
         InSizeMove = FALSE;
         if (!g_TaskbarSettings.bLock)
         {
@@ -3881,6 +3892,8 @@ HandleTrayContextMenu:
 
     LRESULT OnSysCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        ERR("[T2] WM_SYSCOMMAND 0x%lx (cmd 0x%lx, hit %d) lock %d\n", (ULONG)wParam, (ULONG)(wParam & 0xFFF0), (int)(wParam & 0xF),
+            (int)g_TaskbarSettings.bLock);
         if (wParam == SC_CLOSE)
         {
             return DoExitWindows();
