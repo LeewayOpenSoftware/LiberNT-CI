@@ -2551,8 +2551,7 @@ ChangePos:
             m_StartButton.GetWindowRect(&rcS);
             ::GetWindowRect(m_Rebar, &rcR);
             ::GetWindowRect(m_hWnd, &rcT);
-            ERR("[F3b] align horiz %d client (%d,%d) start size (%d,%d) startRect (%d,%d)-(%d,%d) vis %d rebar (%d,%d)-(%d,%d) tray (%d,%d)-(%d,%d) toolbar %p
-",
+            ERR("[F3b] align horiz %d client (%d,%d) start size (%d,%d) startRect (%d,%d)-(%d,%d) vis %d rebar (%d,%d)-(%d,%d) tray (%d,%d)-(%d,%d) toolbar %p\n",
                 Horizontal, rcClient.right, rcClient.bottom, StartSize.cx, StartSize.cy,
                 rcS.left, rcS.top, rcS.right, rcS.bottom, (int)m_StartButton.IsWindowVisible(),
                 rcR.left, rcR.top, rcR.right, rcR.bottom, rcT.left, rcT.top, rcT.right, rcT.bottom,
