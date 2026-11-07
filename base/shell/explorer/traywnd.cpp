@@ -1793,6 +1793,28 @@ GetPrimaryRect:
         }
     }
 
+    /* The narrowest a vertical (left/right) taskbar may be: the Windows default
+       of about 62 pixels at 96 dpi, and never narrower than the start button
+       plus the sizing frames. A saved or computed width below this (the registry
+       can hold zero, and the start button is not laid out yet when the settings
+       are loaded) would leave an unusable or invisible strip. */
+    LONG GetMinimumVerticalWidth()
+    {
+        LONG cx = 62;
+        HDC hdc = ::GetDC(NULL);
+
+        if (hdc)
+        {
+            cx = MulDiv(62, ::GetDeviceCaps(hdc, LOGPIXELSX), 96);
+            ::ReleaseDC(NULL, hdc);
+        }
+
+        SIZE StartBtnSize = m_StartButton.GetSize();
+        LONG cxStart = StartBtnSize.cx + 2 * GetSystemMetrics(SM_CXSIZEFRAME);
+
+        return (cxStart > cx) ? cxStart : cx;
+    }
+
     VOID GetTrayRectFromScreenRect(IN DWORD Position,
                                    IN const RECT *pScreen,
                                    IN const SIZE *pTraySize OPTIONAL,
@@ -1847,7 +1869,14 @@ GetPrimaryRect:
         if (szWnd.cy > szMax.cy)
             szWnd.cy = szMax.cy;
 
-        /* FIXME - calculate */
+        /* A vertical taskbar must keep a usable width */
+        if (Position == ABE_LEFT || Position == ABE_RIGHT)
+        {
+            LONG cxMin = GetMinimumVerticalWidth();
+
+            if (szWnd.cx < cxMin)
+                szWnd.cx = cxMin;
+        }
 
         GetTrayRectFromScreenRect(Position,
                                   &rcScreen,
@@ -2025,6 +2054,27 @@ GetPrimaryScreenRect:
             m_Monitor = m_DraggingMonitor;
             m_Position = m_DraggingPosition;
             g_TaskbarSettings.sr.Position = m_Position;
+            /* Persist the docked rectangle and a size that is never empty */
+            if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
+            {
+                LONG cxMin = GetMinimumVerticalWidth();
+                LONG cx = rcTray.right - rcTray.left;
+
+                if (cx < cxMin)
+                {
+                    cx = cxMin;
+                    if (m_Position == ABE_LEFT)
+                        rcTray.right = rcTray.left + cx;
+                    else
+                        rcTray.left = rcTray.right - cx;
+                }
+                g_TaskbarSettings.sr.Size.cx = cx;
+            }
+            else
+            {
+                g_TaskbarSettings.sr.Size.cy = rcTray.bottom - rcTray.top;
+            }
+            g_TaskbarSettings.sr.Rect = rcTray;
             g_TaskbarSettings.Save();
             IsDragging = FALSE;
 
@@ -2307,6 +2357,17 @@ ChangePos:
             WndSize.cx = g_TaskbarSettings.sr.Size.cx;
         if (WndSize.cy < g_TaskbarSettings.sr.Size.cy)
             WndSize.cy = g_TaskbarSettings.sr.Size.cy;
+
+        /* A vertical taskbar needs a usable width; this also recovers a saved
+           zero/negative width (see GetMinimumVerticalWidth) */
+        {
+            LONG cxMin = GetMinimumVerticalWidth();
+
+            if (WndSize.cx < cxMin)
+                WndSize.cx = cxMin;
+            if (g_TaskbarSettings.sr.Size.cx < cxMin)
+                g_TaskbarSettings.sr.Size.cx = cxMin;
+        }
 
         /* Save the calculated size */
         m_TraySize = WndSize;
