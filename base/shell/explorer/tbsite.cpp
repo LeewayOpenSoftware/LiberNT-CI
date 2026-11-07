@@ -235,9 +235,23 @@ public:
                 case NM_NCHITTEST:
                 {
                     LPNMMOUSE nmm = (LPNMMOUSE) lParam;
+                    BOOL bTransparent = (nmm->dwHitInfo == RBHT_CLIENT || nmm->dwHitInfo == RBHT_NOWHERE ||
+                                         nmm->dwItemSpec == (DWORD_PTR) -1);
 
-                    if (nmm->dwHitInfo == RBHT_CLIENT || nmm->dwHitInfo == RBHT_NOWHERE ||
-                        nmm->dwItemSpec == (DWORD_PTR) -1)
+                    if (!bTransparent)
+                    {
+                        /* The rebar sends NM_NCHITTEST without dwHitInfo and with the band index
+                           of whatever band the point is in, so an empty part of the task band
+                           would never be transparent. Ask the rebar where the point really is
+                           (nmm->pt is in client coordinates). */
+                        RBHITTESTINFO rbhti = { nmm->pt, 0, -1 };
+
+                        ::SendMessageW(m_Rebar, RB_HITTEST, 0, (LPARAM) &rbhti);
+                        if (rbhti.flags == RBHT_CLIENT || rbhti.flags == RBHT_NOWHERE)
+                            bTransparent = TRUE;
+                    }
+
+                    if (bTransparent)
                     {
                         /* Make the rebar control appear transparent so the user
                            can drag the tray window */
