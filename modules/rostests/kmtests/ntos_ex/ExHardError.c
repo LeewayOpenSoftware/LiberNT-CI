@@ -176,6 +176,7 @@ TestRaiseHardErrorInline(
                            TRUE,
                            TRUE,
                            TRUE);
+    IoSetNextIrpStackLocation(Irp);
 
     KeEnterCriticalRegion();
     IoRaiseHardError(Irp, NULL, KmtDriverObject->DeviceObject);
