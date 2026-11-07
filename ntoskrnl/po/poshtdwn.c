@@ -297,6 +297,10 @@ PopGracefulShutdown(IN PVOID Context)
     /* Note that modified pages should be written here (MiShutdownSystem) */
     MmShutdownSystem(0);
 
+    /* From here on the lazy writer runs only the passes the shutdown asks for:
+       none may start on its own while the file systems shut down. */
+    CcStopLazyWriterTimer();
+
     /* Flush all user files before we start shutting down IO */
     /* This is where modified pages are written back by the IO manager */
     CcShutdownSystem();
