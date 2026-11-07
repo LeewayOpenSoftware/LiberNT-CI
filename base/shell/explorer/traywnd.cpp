@@ -2545,6 +2545,19 @@ ChangePos:
         if (dwp != NULL)
             EndDeferWindowPos(dwp);
 
+        {
+            RECT rcS = {0}, rcR = {0}, rcT = {0};
+            m_StartButton.GetWindowRect(&rcS);
+            ::GetWindowRect(m_Rebar, &rcR);
+            ::GetWindowRect(m_hWnd, &rcT);
+            ERR("[F3b] align horiz %d client (%d,%d) start size (%d,%d) startRect (%d,%d)-(%d,%d) vis %d rebar (%d,%d)-(%d,%d) tray (%d,%d)-(%d,%d) toolbar %p
+",
+                Horizontal, rcClient.right, rcClient.bottom, StartSize.cx, StartSize.cy,
+                rcS.left, rcS.top, rcS.right, rcS.bottom, (int)m_StartButton.IsWindowVisible(),
+                rcR.left, rcR.top, rcR.right, rcR.bottom, rcT.left, rcT.top, rcT.right, rcT.bottom,
+                hwndTaskToolbar);
+        }
+
         if (m_TaskSwitch != NULL)
         {
             /* Update the task switch window configuration */
