@@ -1,24 +1,34 @@
 #!/usr/bin/env python3
 # PROJECT:     LiberNT Source Provenance (LBI WS-C)
 # LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
-# PURPOSE:     Generate the LBI per-build provenance manifest from a git clone
+# PURPOSE:     Generate and validate the LBI per-build provenance manifest
 # COPYRIGHT:   Copyright 2026 Leeway Open Software
 """
-lbi-provenance.py - LBI WS-C prototype manifest generator (schema 1.0).
+lbi-provenance.py - LBI WS-C manifest generator and validator (schema 1.0).
 
-Implements shared/libernt/lbi/WS-C-PROVENANCE.md section 5, steps 1-6 and 8
-(artifact hashing, step 7, is left to a build-system wrapper). Every field is
+Implements shared/libernt/lbi/WS-C-PROVENANCE.md section 5. Every field is
 produced by a recorded method; fields without evidence are emitted as null
 with an explicit confidence - this tool never fabricates ancestry.
+
+Provenance claims require a full mirror: when the repository is shallow,
+every proven-ancestry confidence is downgraded to unverified and the
+manifest records the mirror state. --require-full-mirror turns that into a
+hard failure (CI gate).
 
 Usage:
   lbi-provenance.py --repo PATH [--source-ref REF] [--upstream-ref REF]
       [--source-remote NAME] [--upstream-url URL] [--ledger DIR]
       [--cmake-cache FILE] [--arch ARCH] [--build-type TYPE]
-      [--patch-id-sample N] [--output FILE]
+      [--patch-id-sample N] [--lbi-json FILE] [--artifact FILE]...
+      [--generator-ref SHA] [--require-full-mirror] [--output FILE]
+  lbi-provenance.py --check FILE
 
 Defaults follow the WS-C example: source refs/heads/leeway/main, upstream
 up/main-nt10, ledger shared/libernt/upstream-review (relative to CWD).
+The --lbi-json switch binds the manifest to one WS-B allocated attempt: the
+build's lbi.json supplies the label, the attempt UUID, the source commit
+cross-check and the inputs digest; manifest_ref is derived as
+"schema_id:attempt:<uuid>" and must equal what WS-B embedded.
 """
 
 import argparse
@@ -28,6 +38,21 @@ import re
 import subprocess
 import sys
 from datetime import datetime, timezone
+
+SCHEMA_ID = "lbi-provenance-manifest/1.0"
+SCHEMA_VERSION = "1.0"
+GENERATOR_VERSION = "0.2.0"
+CONFIDENCE_VALUES = {
+    "proven-ancestry",
+    "content-equal",
+    "patch-equal",
+    "recorded",
+    "unverified",
+    "none-recorded",
+}
+ATTEMPT_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def fail(msg):
@@ -91,9 +116,143 @@ def picked_table_stats(repo, ledger):
     return batches
 
 
+def repo_is_shallow(repo):
+    return git_out(repo, "rev-parse", "--is-shallow-repository") == "true"
+
+
+def downgrade(conf, shallow):
+    return "unverified" if (shallow and conf == "proven-ancestry") else conf
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def read_lbi_json(path):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as exc:
+        fail("cannot read %s: %s" % (path, exc))
+    if not data.get("allocated"):
+        fail("%s says allocated=false; provenance needs an allocated attempt"
+             % path)
+    attempt = data.get("attempt_id")
+    if not attempt or not ATTEMPT_RE.match(attempt):
+        fail("%s has no valid attempt_id (got %r)" % (path, attempt))
+    return data
+
+
+def build_artifact_entries(paths):
+    entries = []
+    for path in paths:
+        import os
+        if not os.path.isfile(path):
+            fail("artifact not found: %s" % path)
+        entries.append({
+            "path": path,
+            "file_name": os.path.basename(path),
+            "size": os.path.getsize(path),
+            "sha256": sha256_file(path),
+            "method": "sha256 over the file as built",
+        })
+    return entries
+
+
+def canonical_manifest_id(manifest):
+    clone = dict(manifest)
+    inner = dict(clone["manifest"])
+    inner["manifest_id"] = None
+    clone["manifest"] = inner
+    canonical = json.dumps(clone, sort_keys=True, ensure_ascii=False,
+                           separators=(",", ":")).encode()
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def walk_confidences(node, path="$"):
+    if isinstance(node, dict):
+        if "confidence" in node:
+            yield path, node["confidence"]
+        for key, value in node.items():
+            yield from walk_confidences(value, "%s.%s" % (path, key))
+    elif isinstance(node, list):
+        for index, value in enumerate(node):
+            yield from walk_confidences(value, "%s[%d]" % (path, index))
+
+
+def check_manifest(data):
+    problems = []
+
+    def require(cond, msg):
+        if not cond:
+            problems.append(msg)
+
+    manifest = data.get("manifest")
+    require(isinstance(manifest, dict), "missing manifest block")
+    if not isinstance(manifest, dict):
+        return problems
+    require(manifest.get("schema_id") == SCHEMA_ID,
+            "schema_id must be %s" % SCHEMA_ID)
+    require(manifest.get("schema_version") == SCHEMA_VERSION,
+            "schema_version must be %s" % SCHEMA_VERSION)
+    recorded_id = manifest.get("manifest_id")
+    require(bool(recorded_id) and re.match(r"^[0-9a-f]{64}$", recorded_id),
+            "manifest_id must be 64 lowercase hex")
+    if recorded_id and re.match(r"^[0-9a-f]{64}$", recorded_id):
+        require(canonical_manifest_id(data) == recorded_id,
+                "manifest_id does not match the canonical content hash")
+    generated_at = manifest.get("generated_at", "")
+    require(re.match(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$",
+                     generated_at) is not None,
+            "generated_at must be UTC ISO-8601 Zulu")
+    generator = manifest.get("generator", {})
+    require(generator.get("name") == "lbi-provenance",
+            "generator.name must be lbi-provenance")
+
+    build = data.get("build", {})
+    source = build.get("source", {})
+    require(SHA_RE.match(source.get("commit", "")) is not None,
+            "build.source.commit must be a full sha")
+    label = build.get("lbi")
+    attempt = build.get("lbi_attempt_id")
+    ref = build.get("manifest_ref")
+    if attempt is None:
+        require(label is None and ref is None,
+                "pre-B manifest must leave lbi/lbi_attempt_id/manifest_ref null")
+    else:
+        require(ATTEMPT_RE.match(attempt) is not None,
+                "lbi_attempt_id must be lowercase uuid4")
+        require(isinstance(label, str) and label,
+                "lbi label must be present with an attempt id")
+        expected_ref = "%s:attempt:%s" % (SCHEMA_ID, attempt)
+        require(ref == expected_ref,
+                "manifest_ref must be %s" % expected_ref)
+
+    shallow = manifest.get("mirror", {}).get("shallow") is True
+    for where, value in walk_confidences(data):
+        require(value in CONFIDENCE_VALUES,
+                "confidence at %s is not a taxonomy value: %r" % (where, value))
+        if shallow:
+            require(value != "proven-ancestry",
+                    "proven-ancestry at %s in a shallow-mirror manifest"
+                    % where)
+
+    for index, artifact in enumerate(data.get("artifacts", [])):
+        require(re.match(r"^[0-9a-f]{64}$", artifact.get("sha256", ""))
+                is not None,
+                "artifacts[%d].sha256 must be 64 lowercase hex" % index)
+    return problems
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--repo", required=True)
+    ap.add_argument("--check", metavar="FILE",
+                    help="validate a manifest instead of generating one")
+    ap.add_argument("--repo")
     ap.add_argument("--source-ref", default="refs/heads/leeway/main")
     ap.add_argument("--upstream-ref", default="up/main-nt10")
     ap.add_argument("--source-remote", default="origin")
@@ -104,8 +263,31 @@ def main():
     ap.add_argument("--arch")
     ap.add_argument("--build-type")
     ap.add_argument("--patch-id-sample", type=int, default=5)
+    ap.add_argument("--lbi-json",
+                    help="WS-B build lbi.json binding this manifest to an "
+                         "allocated attempt")
+    ap.add_argument("--artifact", action="append", default=[],
+                    help="build output to hash; repeatable")
+    ap.add_argument("--generator-ref",
+                    help="git sha of this tool in the source tree")
+    ap.add_argument("--require-full-mirror", action="store_true",
+                    help="exit 3 when the repository is shallow")
     ap.add_argument("--output")
     args = ap.parse_args()
+
+    if args.check:
+        with open(args.check, encoding="utf-8", errors="replace") as fh:
+            data = json.load(fh)
+        problems = check_manifest(data)
+        if problems:
+            for problem in problems:
+                sys.stderr.write("lbi-provenance: check: %s\n" % problem)
+            sys.exit(1)
+        sys.stdout.write("CHECK PASS %s\n" % data["manifest"]["manifest_id"])
+        return
+
+    if not args.repo:
+        fail("--repo is required to generate")
 
     src = args.source_ref
     up = args.upstream_ref
@@ -114,6 +296,24 @@ def main():
     cdate = git_out(args.repo, "log", "-1", "--format=%cI", head)
     origin_url = git(args.repo, "config", "remote.%s.url" % args.source_remote,
                      check=False).stdout.strip() or None
+
+    shallow = repo_is_shallow(args.repo)
+    if shallow and args.require_full_mirror:
+        sys.stderr.write("lbi-provenance: %s is a shallow mirror; "
+                         "provenance requires a full clone\n" % args.repo)
+        sys.exit(3)
+    mirror = {"shallow": shallow}
+    if shallow:
+        mirror["note"] = ("proven-ancestry claims downgraded to unverified; "
+                          "re-run against a full mirror to upgrade them")
+
+    lbi = None
+    if args.lbi_json:
+        lbi = read_lbi_json(args.lbi_json)
+        built_from = lbi.get("source_commit")
+        if built_from and built_from != head:
+            fail("lbi.json source_commit %s != %s %s; build tree mismatch"
+                 % (built_from, src, head))
 
     mb = merge_base(args.repo, up, head)
     up_tip = git(args.repo, "rev-parse", "--verify", up,
@@ -190,7 +390,7 @@ def main():
                 "shallow_clipped": count < 10000,
                 "method": "git log/rev-list on " + cand,
             }
-            lineage["confidence"] = "proven-ancestry (inside upstream clone)"
+            lineage["confidence"] = downgrade("proven-ancestry", shallow)
 
     toolchain = {"compiler": None, "generator": None, "build_type": None,
                  "arch": args.arch, "cmake_defines_digest": None}
@@ -212,20 +412,27 @@ def main():
         toolchain["cmake_defines_digest"] = hashlib.sha256(
             "\n".join(defines).encode()).hexdigest()
 
+    attempt_id = lbi.get("attempt_id") if lbi else None
     manifest = {
         "manifest": {
-            "schema_id": "lbi-provenance-manifest/1.0",
-            "schema_version": "1.0",
+            "schema_id": SCHEMA_ID,
+            "schema_version": SCHEMA_VERSION,
             "manifest_id": None,
             "generated_at": datetime.now(timezone.utc).strftime(
                 "%Y-%m-%dT%H:%M:%SZ"),
-            "generator": {"name": "lbi-provenance", "version": "0.1.0",
-                          "schema_ref": "WS-C-PROVENANCE.md#3"},
+            "generator": {"name": "lbi-provenance",
+                          "version": GENERATOR_VERSION,
+                          "schema_ref": "WS-C-PROVENANCE.md#3",
+                          "ref": args.generator_ref},
+            "mirror": mirror,
         },
         "build": {
-            "lbi": None,
-            "lbi_attempt_id": None,
-            "manifest_ref": None,
+            "lbi": lbi.get("label") if lbi else None,
+            "lbi_attempt_id": attempt_id,
+            "manifest_ref": ("%s:attempt:%s" % (SCHEMA_ID, attempt_id))
+                            if attempt_id else None,
+            "inputs_digest": lbi.get("inputs_digest") if lbi else None,
+            "ledger_ref": lbi.get("ledger_ref") if lbi else None,
             "source": {
                 "remote": origin_url,
                 "ref": src,
@@ -241,7 +448,8 @@ def main():
             "ancestry": {
                 "merge_base_with_source": mb,
                 "merge_base_method": "git merge-base %s %s" % (up, head),
-                "confidence": "proven-ancestry" if mb else "none-recorded",
+                "confidence": downgrade("proven-ancestry", shallow) if mb
+                              else "none-recorded",
             },
             "sync": {"batches": batches,
                      "ledger": args.ledger},
@@ -259,14 +467,12 @@ def main():
         "local_delta": {"differing_blobs_by_area": diff_by_area,
                         "note": "informational; vs upstream ref at generation"},
         "toolchain": toolchain,
-        "artifacts": [],
-        "notes": "artifact hashes (step 7) require a build-system wrapper; "
-                 "lbi/manifest_ref fields await WS-B allocation mechanism",
+        "artifacts": build_artifact_entries(args.artifact),
+        "notes": ("pre-B manifests leave lbi fields null; artifact hashes "
+                  "bind the manifest to the build outputs it is given"),
     }
 
-    canonical = json.dumps(manifest, sort_keys=True, ensure_ascii=False,
-                           separators=(",", ":")).encode()
-    manifest["manifest"]["manifest_id"] = hashlib.sha256(canonical).hexdigest()
+    manifest["manifest"]["manifest_id"] = canonical_manifest_id(manifest)
     out = json.dumps(manifest, indent=2, ensure_ascii=False) + "\n"
     if args.output:
         with open(args.output, "w", encoding="utf-8", newline="\n") as fh:
