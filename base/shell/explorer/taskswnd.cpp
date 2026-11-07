@@ -3281,6 +3281,9 @@ public:
             }
         }
 
+        /* Not with small icons, as on Windows. The modern style never uses small
+           task icons ("Use small taskbar buttons" is a deliberate no-op there,
+           see UseSmallTaskIcons), so it always shows the overlay. */
         if (Overlay != NULL && prcIcon != NULL && !UseSmallTaskIcons())
         {
             INT cxOv = GetSystemMetrics(SM_CXSMICON), cyOv = GetSystemMetrics(SM_CYSMICON);
