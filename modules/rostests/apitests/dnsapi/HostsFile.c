@@ -126,6 +126,7 @@ START_TEST(HostsFile)
     DWORD Ip4;
     IP6_ADDRESS Ip6;
     DWORD Start, Elapsed;
+    BOOL Flushed;
 
     if (!SaveHosts() || !WriteHosts("# hosts apitest\r\n"))
     {
@@ -206,14 +207,36 @@ START_TEST(HostsFile)
     ok(Status != ERROR_SUCCESS && Ip4 == 0, "cycle removal: status %lu address 0x%08lx after %lu ms\n", Status, Ip4, Elapsed);
 
     /* DnsFlushResolverCache reloads the hosts file at once, no waiting */
+    /* The flush is an RPC call to the service: as on Windows it fails when the DNS Client service is
+     * stopped, and then there is no cache to flush, the file is read by every query itself. */
     ok(WriteHosts("10.77.0.11 flush.apitest\r\n"), "rewrite failed\n");
-    ok(DnsFlushResolverCache(), "DnsFlushResolverCache failed\n");
+    Flushed = DnsFlushResolverCache();
+    trace("DnsFlushResolverCache returned %d (error %lu)\n", Flushed, Flushed ? 0 : GetLastError());
     Status = QueryA(L"flush.apitest", &Ip4);
     ok(Status == ERROR_SUCCESS && Ip4 == IP4(10, 77, 0, 11), "after flush: status %lu address 0x%08lx\n", Status, Ip4);
     ok(WriteHosts("# empty\r\n"), "rewrite failed\n");
-    ok(DnsFlushResolverCache(), "DnsFlushResolverCache failed\n");
+    Flushed = DnsFlushResolverCache();
     Status = QueryA(L"flush.apitest", &Ip4);
     ok(Status != ERROR_SUCCESS && Ip4 == 0, "after flush and removal: status %lu address 0x%08lx\n", Status, Ip4);
+
+    /* the answer carries the spelling of the question, also when another spelling was cached first */
+    ok(WriteHosts("10.77.0.12 Mixed.apitest\r\n"), "rewrite failed\n");
+    DnsFlushResolverCache();
+    Status = WaitForA(L"MIXED.apitest", IP4(10, 77, 0, 12), &Ip4, &Elapsed);
+    ok(Status == ERROR_SUCCESS && Ip4 == IP4(10, 77, 0, 12), "mixed case: status %lu address 0x%08lx\n", Status, Ip4);
+    {
+        PDNS_RECORD Record = NULL;
+
+        Status = DnsQuery_W(L"mixed.apitest", DNS_TYPE_A, DNS_QUERY_STANDARD, NULL, &Record, NULL);
+        ok(Status == ERROR_SUCCESS && Record, "lowercase: status %lu\n", Status);
+        if (Status == ERROR_SUCCESS && Record)
+        {
+            ok(lstrcmpW(Record->pName, L"mixed.apitest") == 0, "answer name %S, expected mixed.apitest\n", Record->pName);
+            DnsRecordListFree(Record, DnsFreeRecordList);
+        }
+    }
+    ok(WriteHosts("# empty\r\n"), "rewrite failed\n");
+    DnsFlushResolverCache();
 
     RestoreHosts();
 }
