@@ -1815,6 +1815,107 @@ GetPrimaryRect:
         return (cxStart > cx) ? cxStart : cx;
     }
 
+    /* Repair a corrupt or off-screen StuckRects2 blob in one place.
+       Called on startup and on display changes. */
+    VOID RepairStuckRects2()
+    {
+        RECT rcScreen, rcSaved, rcIntersect;
+        SIZE sz;
+        DWORD Position;
+
+        Position = g_TaskbarSettings.sr.Position;
+        if (Position > ABE_BOTTOM)
+        {
+            Position = ABE_BOTTOM;
+            g_TaskbarSettings.sr.Position = Position;
+        }
+
+        rcSaved = g_TaskbarSettings.sr.Rect;
+        rcScreen = rcSaved;
+        GetScreenRectFromRect(&rcScreen, MONITOR_DEFAULTTONEAREST);
+
+        sz = g_TaskbarSettings.sr.Size;
+        if (sz.cx <= 0 || sz.cy <= 0)
+        {
+            SIZE StartBtnSize = m_StartButton.GetSize();
+
+            if (!m_Theme)
+            {
+                sz.cx = StartBtnSize.cx + 2 * (GetSystemMetrics(SM_CXEDGE) + GetSystemMetrics(SM_CXDLGFRAME));
+                sz.cy = StartBtnSize.cy + 2 * (GetSystemMetrics(SM_CYEDGE) + GetSystemMetrics(SM_CYDLGFRAME));
+            }
+            else
+            {
+                sz.cx = StartBtnSize.cx - GetSystemMetrics(SM_CXEDGE);
+                sz.cy = GetDefaultTrayHeight();
+            }
+        }
+
+        if (sz.cx > (rcScreen.right - rcScreen.left) / 2)
+            sz.cx = (rcScreen.right - rcScreen.left) / 2;
+        if (sz.cy > (rcScreen.bottom - rcScreen.top) / 2)
+            sz.cy = (rcScreen.bottom - rcScreen.top) / 2;
+
+        if (Position == ABE_LEFT || Position == ABE_RIGHT)
+        {
+            LONG cxMin = GetMinimumVerticalWidth();
+            if (sz.cx < cxMin)
+                sz.cx = cxMin;
+        }
+        else
+        {
+            LONG cyMin = GetDefaultTrayHeight();
+            if (sz.cy < cyMin)
+                sz.cy = cyMin;
+        }
+
+        g_TaskbarSettings.sr.Size = sz;
+
+        if (IsRectEmpty(&rcSaved) || !IntersectRect(&rcIntersect, &rcSaved, &rcScreen))
+        {
+            rcSaved = rcScreen;
+            MakeTrayRectWithSize(Position, &sz, &rcSaved);
+        }
+        else
+        {
+            if (rcSaved.left < rcScreen.left)
+                rcSaved.left = rcScreen.left;
+            if (rcSaved.top < rcScreen.top)
+                rcSaved.top = rcScreen.top;
+            if (rcSaved.right > rcScreen.right)
+                rcSaved.right = rcScreen.right;
+            if (rcSaved.bottom > rcScreen.bottom)
+                rcSaved.bottom = rcScreen.bottom;
+
+            switch (Position)
+            {
+            case ABE_LEFT:
+                rcSaved.right = rcSaved.left + sz.cx;
+                if (rcSaved.right > rcScreen.right)
+                    rcSaved.right = rcScreen.right;
+                break;
+            case ABE_RIGHT:
+                rcSaved.left = rcSaved.right - sz.cx;
+                if (rcSaved.left < rcScreen.left)
+                    rcSaved.left = rcScreen.left;
+                break;
+            case ABE_TOP:
+                rcSaved.bottom = rcSaved.top + sz.cy;
+                if (rcSaved.bottom > rcScreen.bottom)
+                    rcSaved.bottom = rcScreen.bottom;
+                break;
+            case ABE_BOTTOM:
+            default:
+                rcSaved.top = rcSaved.bottom - sz.cy;
+                if (rcSaved.top < rcScreen.top)
+                    rcSaved.top = rcScreen.top;
+                break;
+            }
+        }
+
+        g_TaskbarSettings.sr.Rect = rcSaved;
+    }
+
     VOID GetTrayRectFromScreenRect(IN DWORD Position,
                                    IN const RECT *pScreen,
                                    IN const SIZE *pTraySize OPTIONAL,
@@ -2308,6 +2409,8 @@ ChangePos:
         RECT rcScreen;
         SIZE WndSize, EdgeSize, DlgFrameSize;
         SIZE StartBtnSize = m_StartButton.GetSize();
+
+        RepairStuckRects2();
 
         EdgeSize.cx = GetSystemMetrics(SM_CXEDGE);
         EdgeSize.cy = GetSystemMetrics(SM_CYEDGE);
@@ -3374,6 +3477,35 @@ ChangePos:
         return 0;
     }
 
+    /* Hit-test seam table: which code each region of the taskbar returns.
+       The rebar/task band forwards empty areas as HTTRANSPARENT (see tbsite.cpp)
+       so they fall through to the tray.  The tray itself answers:
+       - locked tray, or the Show Desktop button -> HTBORDER;
+       - inside the client area (gaps, sizer) -> HTCAPTION;
+       - the outer sizing edge -> HTTOP/HTBOTTOM/HTLEFT/HTRIGHT. */
+    LRESULT GetTrayResizeNcHit(DWORD Position) const
+    {
+        static const struct
+        {
+            DWORD Position;
+            LRESULT HitTest;
+        } s_HitTestSeam[] =
+        {
+            { ABE_TOP,    HTBOTTOM },
+            { ABE_LEFT,   HTRIGHT  },
+            { ABE_RIGHT,  HTLEFT   },
+            { ABE_BOTTOM, HTTOP    },
+        };
+
+        for (UINT i = 0; i < _countof(s_HitTestSeam); ++i)
+        {
+            if (s_HitTestSeam[i].Position == Position)
+                return s_HitTestSeam[i].HitTest;
+        }
+
+        return HTBORDER;
+    }
+
     LRESULT OnNcHitTest(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
         RECT rcClient;
@@ -3405,25 +3537,12 @@ ChangePos:
 
             /* Depending on the position of the tray window, allow only
             changing the border next to the monitor working area */
-            switch (m_Position)
+            if ((m_Position == ABE_TOP    && pt.y > rcClient.bottom) ||
+                (m_Position == ABE_LEFT   && pt.x > rcClient.right)  ||
+                (m_Position == ABE_RIGHT  && pt.x < rcClient.left)   ||
+                (m_Position == ABE_BOTTOM && pt.y < rcClient.top))
             {
-            case ABE_TOP:
-                if (pt.y > rcClient.bottom)
-                    return HTBOTTOM;
-                break;
-            case ABE_LEFT:
-                if (pt.x > rcClient.right)
-                    return HTRIGHT;
-                break;
-            case ABE_RIGHT:
-                if (pt.x < rcClient.left)
-                    return HTLEFT;
-                break;
-            case ABE_BOTTOM:
-            default:
-                if (pt.y < rcClient.top)
-                    return HTTOP;
-                break;
+                return GetTrayResizeNcHit(m_Position);
             }
         }
         return HTBORDER;
