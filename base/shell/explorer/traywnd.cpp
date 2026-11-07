@@ -2442,6 +2442,19 @@ ChangePos:
             StartSize.cx = MulDiv(StartSize.cy, 6, 5);
         }
 
+        if (!Horizontal)
+        {
+            /* On a vertical taskbar the task toolbar can still be empty (or
+               not yet laid out) when the tray is restored at logon, which
+               made the Start button zero-sized and the rebar start at y=0
+               on top of it. Never go below the button's own size. */
+            SIZE StartOwn = m_StartButton.GetSize();
+            if (StartSize.cy < StartOwn.cy)
+                StartSize.cy = StartOwn.cy;
+            if (StartSize.cx < StartOwn.cx && StartOwn.cx <= rcClient.right)
+                StartSize.cx = StartOwn.cx;
+        }
+
         if (m_StartButton.m_hWnd != NULL)
         {
             /* Resize and reposition the button */
