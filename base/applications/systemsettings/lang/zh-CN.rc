@@ -751,7 +751,7 @@ BEGIN
     IDS_RELEASE "发行版"
     IDS_DEVELOPMENT_PREVIEW "开发预览版"
     IDS_TARGET "目标"
-    IDS_TARGET_FORMAT "Windows 11 %s %s"
+    IDS_TARGET_FORMAT "Windows 11 (NT 10.0.26100 interface level)"
     IDS_PAGE_DRIVERS "Drivers"
     IDS_DRIVERS_DESC "Hardware status and driver updates"
     IDS_DRIVERS_DEVICES "Devices"
