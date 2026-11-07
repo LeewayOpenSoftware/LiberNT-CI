@@ -43,6 +43,13 @@ typedef struct _LT1X_CONTEXT
     ULONG ModeHeight;
     ULONG ModeBpp;
     ULONG Stride;
+    /* The probed boot mode, fixed at StartDevice: exposed source mode 0
+       must keep this geometry forever (Mode* above follow the committed
+       mode and change on every switch). */
+    ULONG BootWidth;
+    ULONG BootHeight;
+    ULONG BootBpp;
+    ULONG BootStride;
     BOOLEAN DispiDetected;
     DXGK_INTERFACE DxgkInterface;
 } LT1X_CONTEXT, *PLT1X_CONTEXT;
@@ -185,6 +192,10 @@ Lt1xProbeCurrentMode(_In_ PLT1X_CONTEXT Ctx)
     Ctx->ModeHeight = 768;
     Ctx->ModeBpp = 32;
     Ctx->Stride = 1024 * 4;
+    Ctx->BootWidth = Ctx->ModeWidth;
+    Ctx->BootHeight = Ctx->ModeHeight;
+    Ctx->BootBpp = Ctx->ModeBpp;
+    Ctx->BootStride = Ctx->Stride;
     Ctx->DispiDetected = FALSE;
 
     Id = Lt1xDispiRead(Ctx, 0);
@@ -218,6 +229,10 @@ Lt1xProbeCurrentMode(_In_ PLT1X_CONTEXT Ctx)
     Ctx->ModeHeight = Height;
     Ctx->ModeBpp = Bpp;
     Ctx->Stride = Stride;
+    Ctx->BootWidth = Width;
+    Ctx->BootHeight = Height;
+    Ctx->BootBpp = Bpp;
+    Ctx->BootStride = Stride;
     Ctx->DispiDetected = TRUE;
     DbgPrint("LT1X: dispi mode %lux%lux%lu stride %lu\n", Width, Height, Bpp, Stride);
 }
@@ -235,10 +250,14 @@ Lt1xModeGeometry(_In_ PLT1X_CONTEXT Ctx,
 {
     if (ModeIndex == 0 || !Lt1xAltModes)
     {
-        *Width = Ctx->ModeWidth;
-        *Height = Ctx->ModeHeight;
-        *Bpp = Ctx->ModeBpp;
-        *Stride = Ctx->Stride;
+        /* Mode 0 is the boot mode, not the live one: after a successful
+           switch Ctx->Mode* hold the new mode, and exposing them as mode 0
+           made it identical to mode 1 - the set collapsed to a single mode
+           and switching back failed with DISP_CHANGE_BADMODE (L6j). */
+        *Width = Ctx->BootWidth;
+        *Height = Ctx->BootHeight;
+        *Bpp = Ctx->BootBpp;
+        *Stride = Ctx->BootStride;
         return;
     }
     *Width = 1024;
