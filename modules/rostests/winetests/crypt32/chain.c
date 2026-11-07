@@ -4601,14 +4601,21 @@ static void testGetCertChain(void)
     }
 
     ok(simple_chain->rgpElement[0]->pCertContext == cert, "simple_chain->rgpElement[0]->pCertContext != cert\n");
-    test_name_blob(&simple_chain->rgpElement[1]->pCertContext->pCertInfo->Issuer,
-                   "US, New Jersey, Jersey City, The USERTRUST Network, USERTrust RSA Certification Authority");
-    test_name_blob(&simple_chain->rgpElement[1]->pCertContext->pCertInfo->Subject,
-                   "US, VA, Herndon, Network Solutions L.L.C., Network Solutions OV Server CA 2");
-    test_name_blob(&simple_chain->rgpElement[2]->pCertContext->pCertInfo->Issuer,
-                   "US, New Jersey, Jersey City, The USERTRUST Network, USERTrust RSA Certification Authority");
-    test_name_blob(&simple_chain->rgpElement[2]->pCertContext->pCertInfo->Subject,
-                   "US, New Jersey, Jersey City, The USERTRUST Network, USERTrust RSA Certification Authority");
+    /* rgpElement has cElement entries; with a shorter chain (e.g. offline, no
+     * intermediate) the reads below would run past the array and end the test. */
+    ok(simple_chain->cElement >= 3, "simple_chain->cElement = %lu, element 1/2 name checks not run\n",
+       simple_chain->cElement);
+    if (simple_chain->cElement >= 3)
+    {
+        test_name_blob(&simple_chain->rgpElement[1]->pCertContext->pCertInfo->Issuer,
+                       "US, New Jersey, Jersey City, The USERTRUST Network, USERTrust RSA Certification Authority");
+        test_name_blob(&simple_chain->rgpElement[1]->pCertContext->pCertInfo->Subject,
+                       "US, VA, Herndon, Network Solutions L.L.C., Network Solutions OV Server CA 2");
+        test_name_blob(&simple_chain->rgpElement[2]->pCertContext->pCertInfo->Issuer,
+                       "US, New Jersey, Jersey City, The USERTRUST Network, USERTrust RSA Certification Authority");
+        test_name_blob(&simple_chain->rgpElement[2]->pCertContext->pCertInfo->Subject,
+                       "US, New Jersey, Jersey City, The USERTRUST Network, USERTrust RSA Certification Authority");
+    }
 
     CertFreeCertificateChain(chain);
 
