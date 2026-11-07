@@ -13372,7 +13372,6 @@ DxgkpCompleteAdapterStart(
             PDEVICE_OBJECT OwnerDeviceObject = NULL;
             PDXGKRNL_MINIPORT_CONTEXT MpCtx = Adapter->MiniportContext;
             NTSTATUS ReassertStatus = STATUS_UNSUCCESSFUL;
-            BOOLEAN ReassertInbv = FALSE;
             PLIST_ENTRY Entry;
             KIRQL OldIrql;
 
@@ -13404,34 +13403,36 @@ DxgkpCompleteAdapterStart(
                 }
                 KeReleaseSpinLock(&MpCtx->AdapterListLock, OldIrql);
             }
-            if (Fallback != NULL)
-                ReassertStatus = DxgkVidPnQueueHotPlugRebuild(Fallback);
             if (Fallback != NULL && !InbvCheckDisplayOwnership())
             {
-                /* The claimant took the boot display at the top of its
-                   DxgkAdapterStart and the restartable failure cleared the
-                   POST owner; the BasicDisplay fallback renders through the
-                   inbv virtual framebuffer, so while inbv ownership stays
-                   LOST the screen keeps showing the boot text even though
-                   the fallback is running.  Take the ownership back and
-                   re-enable the bootvid display: the loss ran VidCleanUp
-                   (inbv.c), so ownership alone leaves the hardware torn
-                   down; InbvResetDisplay is the same entry KeBugCheck uses
-                   to bring the boot display back. */
-                InbvAcquireDisplayOwnership();
-                ReassertInbv = InbvResetDisplay();
+                /* The claimant's start took the boot display
+                   (InbvNotifyDisplayOwnershipLost runs VidCleanUp, a black
+                   fill of the physical framebuffer), and a no-claim failure
+                   leaves the fallback running with the desktop content
+                   destroyed and no repaint path firing.  Replay the
+                   claim-rollback recovery: stop the fallback and start it
+                   again - the same DxgkpStopPostDisplayOwner the takeover
+                   uses and the same DxgkAdapterStart the rollback uses -
+                   which re-registers the bridge and makes win32k redraw
+                   the desktop (the sequence L6d/L6e validated). */
+                DXGK_DISPLAY_INFORMATION DisplayInformation;
+                BOOLEAN ReleasedByDriver;
+
+                ReassertStatus = DxgkpStopPostDisplayOwner(Fallback,
+                                                           &DisplayInformation,
+                                                           &ReleasedByDriver);
+                if (NT_SUCCESS(ReassertStatus))
+                    ReassertStatus = DxgkAdapterStart(Fallback, NULL, NULL);
             }
             DXGKRNL_INFO("POSTDISPLAY_REASSERT: claimant %p failed 0x%08lX "
-                         "without a claim; owner %p fallback %p rebuild "
+                         "without a claim; owner %p fallback %p restart "
                          "0x%08lX inbv %s\n",
                          Adapter,
                          Status,
                          Owner,
                          Fallback,
                          ReassertStatus,
-                         Fallback == NULL ? "skipped" :
-                             ReassertInbv ? "reset" :
-                             InbvCheckDisplayOwnership() ? "owned" : "acquired");
+                         InbvCheckDisplayOwnership() ? "owned" : "lost");
             if (OwnerDeviceObject != NULL)
                 ObDereferenceObject(OwnerDeviceObject);
             KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
