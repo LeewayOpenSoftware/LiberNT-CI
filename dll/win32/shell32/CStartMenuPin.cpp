@@ -170,6 +170,10 @@ GetTaskbarPinFolder(BOOL bCreate, CStringW &Folder)
     if (FAILED(hr) || !PathAppendW(szFolder, L"TaskBar"))
         return FAILED(hr) ? hr : HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);
 
+    DWORD Attributes = GetFileAttributesW(szFolder);
+    if (Attributes != INVALID_FILE_ATTRIBUTES && !(Attributes & FILE_ATTRIBUTE_DIRECTORY))
+        return HRESULT_FROM_WIN32(ERROR_DIRECTORY);
+
     if (bCreate)
     {
         INT error = SHCreateDirectoryExW(NULL, szFolder, NULL);
