@@ -57,6 +57,13 @@ static NTSTATUS KdpBootLogAppend(_In_reads_bytes_(Length) PCHAR Data, _In_ ULONG
     ULONG Keep;
     NTSTATUS Status;
 
+    /* The handle is closed at shutdown (KdShutdownBootLog) before the file
+     * system marks the volume clean. Never append after that: a late write
+     * would re-dirty the just-cleaned volume. Output still goes to the
+     * debugger/serial through the normal KD path. */
+    if (KdpBootLogHandle == NULL)
+        return STATUS_INVALID_HANDLE;
+
     Offset.QuadPart = KdpBootLogWritten;
     Status = ZwWriteFile(KdpBootLogHandle, NULL, NULL, NULL, &IoStatus, Data, Length, &Offset, NULL);
     if (!NT_SUCCESS(Status))
@@ -201,7 +208,17 @@ static VOID NTAPI KdpBootLogThread(_In_ PVOID Context)
             Dirty = FALSE;
 
         if (Trimmed)
+        {
+            /* Shutdown boundary reached: the pre-shutdown log is drained and the
+             * file is trimmed to its final size. Signal the stopper and EXIT the
+             * worker, so no shutdown-trailer output is appended after the file
+             * system marks the volume clean (such a late append is exactly what
+             * re-dirtied the volume in J30b). KdShutdownBootLog closes the handle
+             * once this thread has terminated. */
             KeSetEvent(&KdpBootLogStopped, IO_NO_INCREMENT, FALSE);
+            PsTerminateSystemThread(STATUS_SUCCESS);
+            return;
+        }
         else if (!Dirty && (KdpBootLogDevice != NULL))
             KdpBootLogPublish();
 
@@ -396,6 +413,7 @@ NTSTATUS NTAPI KdpWriteBootLogAtCrash(_In_opt_ PROS_STORAGE_DUMP_INTERFACE Stora
 VOID NTAPI KdShutdownBootLog(VOID)
 {
     LARGE_INTEGER Timeout;
+    NTSTATUS Status;
     PAGED_CODE();
 
     if (KdpBootLogHandle == NULL)
@@ -404,7 +422,29 @@ VOID NTAPI KdShutdownBootLog(VOID)
     KdpBootLogStopping = TRUE;
     KeSetEvent(&KdpBootLogWake, IO_NO_INCREMENT, FALSE);
     Timeout.QuadPart = -10000LL * KDP_BOOT_LOG_STOP_TIMEOUT_MS;
-    KeWaitForSingleObject(&KdpBootLogStopped, Executive, KernelMode, FALSE, &Timeout);
+    Status = KeWaitForSingleObject(&KdpBootLogStopped, Executive, KernelMode, FALSE, &Timeout);
+
+    /* Close the boot-log handle before the I/O manager's phase-0 shutdown
+     * notification marks the system volume clean, so nothing can append to the
+     * file afterwards and re-dirty it. Only close once the writer has confirmed
+     * it drained, trimmed and exited (STATUS_SUCCESS); if the bounded wait
+     * elapsed the writer may still be running, so leave the handle rather than
+     * close it out from under that thread. */
+    if (Status == STATUS_SUCCESS)
+    {
+        ZwClose(KdpBootLogHandle);
+        KdpBootLogHandle = NULL;
+    }
+    else
+    {
+        /* The writer did not confirm it stopped within the bounded wait, so the
+         * handle is deliberately left open rather than closed under a possibly
+         * still-running thread. That means this boot's shutdown trailer may
+         * still append and re-dirty the volume; log it so a lab can tell this
+         * path apart from the normal clean close. */
+        DPRINT1("KD: Boot log writer did not stop in time (0x%08lx); handle left open, volume may re-dirty this shutdown\n",
+                Status);
+    }
 }
 
 VOID NTAPI KdInitializeBootLog(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
