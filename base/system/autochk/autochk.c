@@ -59,6 +59,13 @@ FILESYSTEM_CHKDSK FileSystems[] =
 
 HANDLE KeyboardHandle = NULL;
 
+/* bootex.log capture state; volumes are checked sequentially */
+static PUCHAR LogBuffer;
+static ULONG LogLength;
+static ULONG LogCapacity;
+static WCHAR LogVolumePath[128];
+static BOOLEAN LogVolumeWritable;
+
 /* FUNCTIONS ****************************************************************/
 
 //
@@ -86,6 +93,122 @@ PrintString(char* fmt,...)
     RtlFreeUnicodeString(&UnicodeString);
 
     return Len;
+}
+
+static VOID
+LogClear(IN PCWSTR VolumePath)
+{
+    ULONG Length;
+
+    LogLength = 0;
+    LogVolumeWritable = TRUE;
+
+    Length = (ULONG)wcslen(VolumePath);
+    if (Length > RTL_NUMBER_OF(LogVolumePath) - 12)
+        Length = RTL_NUMBER_OF(LogVolumePath) - 12;
+    RtlCopyMemory(LogVolumePath, VolumePath, Length * sizeof(WCHAR));
+    LogVolumePath[Length] = UNICODE_NULL;
+}
+
+static VOID
+__cdecl
+LogAppend(IN PCSTR fmt, ...)
+{
+    va_list ap;
+    INT Len;
+    PUCHAR NewBuffer;
+    ULONG NewCapacity;
+
+    if (!LogBuffer)
+    {
+        LogCapacity = 8192;
+        LogBuffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, LogCapacity);
+        if (!LogBuffer)
+            return;
+    }
+
+    va_start(ap, fmt);
+    Len = _vscprintf(fmt, ap);
+    va_end(ap);
+    if (Len < 0)
+        return;
+
+    while (LogLength + (ULONG)Len + 1 > LogCapacity)
+    {
+        NewCapacity = LogCapacity * 2;
+        NewBuffer = RtlReAllocateHeap(RtlGetProcessHeap(), 0, LogBuffer, NewCapacity);
+        if (!NewBuffer)
+            return;
+        LogBuffer = NewBuffer;
+        LogCapacity = NewCapacity;
+    }
+
+    va_start(ap, fmt);
+    _vsnprintf((PCHAR)LogBuffer + LogLength, LogCapacity - LogLength, fmt, ap);
+    va_end(ap);
+    LogLength += (ULONG)Len;
+}
+
+static VOID
+LogWriteBootEx(VOID)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING FileName;
+    IO_STATUS_BLOCK IoStatusBlock;
+    WCHAR FullPath[160];
+    ULONG Length;
+    HANDLE FileHandle;
+    NTSTATUS Status;
+
+    if (!LogBuffer || LogLength == 0)
+        return;
+
+    if (!LogVolumeWritable)
+    {
+        DPRINT1("AUTOCHK: %ws is read-only, bootex.log not written\n", LogVolumePath);
+        return;
+    }
+
+    Length = (ULONG)wcslen(LogVolumePath);
+    RtlCopyMemory(FullPath, LogVolumePath, Length * sizeof(WCHAR));
+    RtlCopyMemory(FullPath + Length, L"\\bootex.log", sizeof(L"\\bootex.log"));
+    RtlInitUnicodeString(&FileName, FullPath);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &FileName,
+                               OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+
+    Status = NtCreateFile(&FileHandle,
+                          FILE_GENERIC_WRITE | SYNCHRONIZE,
+                          &ObjectAttributes,
+                          &IoStatusBlock,
+                          NULL,
+                          FILE_ATTRIBUTE_NORMAL,
+                          0,
+                          FILE_OVERWRITE_IF,
+                          FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT | FILE_WRITE_THROUGH,
+                          NULL,
+                          0);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("AUTOCHK: bootex.log create on %ws failed (0x%08lx)\n", LogVolumePath, Status);
+        return;
+    }
+
+    Status = NtWriteFile(FileHandle,
+                         NULL,
+                         NULL,
+                         NULL,
+                         &IoStatusBlock,
+                         LogBuffer,
+                         LogLength,
+                         NULL,
+                         NULL);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("AUTOCHK: bootex.log write on %ws failed (0x%08lx)\n", LogVolumePath, Status);
+
+    NtClose(FileHandle);
 }
 
 static VOID
@@ -228,7 +351,8 @@ static NTSTATUS
 GetFileSystem(
     IN PUNICODE_STRING VolumePathU,
     IN OUT PWSTR FileSystemName,
-    IN SIZE_T FileSystemNameSize)
+    IN SIZE_T FileSystemNameSize,
+    OUT PULONG FileSystemAttributes)
 {
     NTSTATUS Status;
     OBJECT_ATTRIBUTES ObjectAttributes;
@@ -275,6 +399,8 @@ GetFileSystem(
         DPRINT1("NtQueryVolumeInformationFile() failed, Status 0x%08lx\n", Status);
         return Status;
     }
+
+    *FileSystemAttributes = FileFsAttribute->FileSystemAttributes;
 
     if (FileSystemNameSize >= FileFsAttribute->FileSystemNameLength + sizeof(WCHAR))
     {
@@ -373,6 +499,8 @@ ChkdskCallback(
     case OUTPUT:
         Output = (PTEXTOUTPUT) Argument;
         PrintString("%s", Output->Output);
+        DPRINT1("AUTOCHK: %s", Output->Output);
+        LogAppend("%s", Output->Output);
         break;
 
     case DONE:
@@ -380,6 +508,7 @@ ChkdskCallback(
         if (*Status == FALSE)
         {
             PrintString("The file system check was unable to complete successfully.\r\n\r\n");
+            LogAppend("The file system check was unable to complete successfully.\r\n");
             // Error = TRUE;
         }
         break;
@@ -395,7 +524,9 @@ CheckVolume(
 {
     NTSTATUS Status;
     BOOLEAN Success;
+    BOOLEAN FixAttempted = FALSE;
     PCWSTR DisplayName;
+    ULONG FileSystemAttributes;
     UNICODE_STRING VolumePathU;
     ULONG Count;
     WCHAR FileSystem[128];
@@ -420,10 +551,16 @@ CheckVolume(
 
     DPRINT1("AUTOCHK: Checking %wZ\n", &VolumePathU);
 
+    LogClear(VolumePath);
+    LogAppend("Checking file system on %S\r\n", DisplayName);
+
     /* Get the file system */
+    FileSystemAttributes = 0;
     Status = GetFileSystem(&VolumePathU,
                            FileSystem,
-                           sizeof(FileSystem));
+                           sizeof(FileSystem),
+                           &FileSystemAttributes);
+    LogVolumeWritable = !(FileSystemAttributes & FILE_READ_ONLY_VOLUME);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("GetFileSystem() failed, Status 0x%08lx\n", Status);
@@ -467,15 +604,20 @@ CheckVolume(
         {
             PrintString("The file system on volume %S needs to be checked for problems.\r\n", DisplayName);
             PrintString("You may cancel this check, but it is recommended that you continue.\r\n");
+            LogAppend("The file system on volume %S needs to be checked for problems.\r\n", DisplayName);
+            LogAppend("You may cancel this check, but it is recommended that you continue.\r\n");
         }
         else
         {
             PrintString("A volume check has been scheduled.\r\n");
+            LogAppend("A volume check has been scheduled.\r\n");
         }
 
         if (!KeyboardHandle || WaitForKeyboard(KeyboardHandle, TimeOut) == STATUS_TIMEOUT)
         {
             PrintString("The system will now check the file system.\r\n\r\n");
+            LogAppend("The system will now check the file system.\r\n\r\n");
+            FixAttempted = TRUE;
             Status = STATUS_SUCCESS;
             Success = FileSystems[Count].ChkdskFunc(&VolumePathU,
                                                     ChkdskCallback,
@@ -497,6 +639,8 @@ CheckVolume(
 
 Quit:
     PrintString("\r\n\r\n");
+    if (FixAttempted)
+        LogWriteBootEx();
     return Status;
 }
 
