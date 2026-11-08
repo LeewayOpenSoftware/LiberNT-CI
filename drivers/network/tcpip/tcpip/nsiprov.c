@@ -962,6 +962,445 @@ TiNsiIp4AddressesOf(
 static NTSTATUS
 TiNsiIp4Enumerate(
     _In_ ULONG Table,
+    _Inout_ PNSI_ENUMERATE_REQUEST Request);
+
+#define TI_NSI_DERIVED_METRIC 256
+#define TI_NSI_MULTICAST_PREFIX 0xe0000000
+#define TI_NSI_MULTICAST_MASK 0xf0000000
+
+typedef struct _TI_NSI_IP4_ROUTE
+{
+    ULONG Destination;
+    ULONG Mask;
+    ULONG NextHop;
+    UINT IfIndex;
+    NET_LUID Luid;
+    ULONG Metric;
+    ULONG Protocol;
+    ULONG Origin;
+    BOOLEAN Loopback;
+    BOOLEAN Immortal;
+    ULONG Lifetime;
+    ULONG Age;
+} TI_NSI_IP4_ROUTE, *PTI_NSI_IP4_ROUTE;
+
+typedef struct _TI_NSI_IP4_ROUTES
+{
+    PTI_NSI_IP4_ROUTE Routes;
+    ULONG Count;
+    ULONG Capacity;
+} TI_NSI_IP4_ROUTES, *PTI_NSI_IP4_ROUTES;
+
+static VOID
+TiNsiFillIp4Neighbour(
+    _In_ const IP4_NEIGHBOR_ROW *Row,
+    _In_ NET_LUID Luid,
+    _Out_opt_ struct nsi_ipv4_neighbour_key *OutKey,
+    _Out_opt_ struct nsi_ip_neighbour_rw *Rw,
+    _Out_opt_ struct nsi_ip_neighbour_dynamic *Dynamic)
+{
+    if (OutKey != NULL)
+    {
+        RtlZeroMemory(OutKey, sizeof(*OutKey));
+        OutKey->luid = OutKey->luid2 = Luid;
+        OutKey->addr.S_un.S_addr = Row->Address;
+    }
+    if (Rw != NULL)
+    {
+        RtlZeroMemory(Rw, sizeof(*Rw));
+        RtlCopyMemory(Rw->phys_addr, Row->PhysAddr, min(Row->PhysAddrLength, IFINFO_MAX_PHYSADDR));
+    }
+    if (Dynamic != NULL)
+    {
+        RtlZeroMemory(Dynamic, sizeof(*Dynamic));
+        Dynamic->state = Row->Type == IFINFO_NEIGHBOR_STATIC ? NlnsPermanent : NlnsReachable;
+        Dynamic->phys_addr_len = (USHORT)min(Row->PhysAddrLength, IFINFO_MAX_PHYSADDR);
+    }
+}
+
+static NTSTATUS
+TiNsiIp4NeighborsOf(
+    _In_ UINT Index,
+    _Outptr_result_maybenull_ PIP4_NEIGHBOR_ROW *Rows,
+    _Out_ PULONG Count)
+{
+    PIP4_NEIGHBOR_ROW Buffer = NULL;
+    ULONG Capacity = 0, Total = 0, Attempt;
+    NTSTATUS Status;
+
+    *Rows = NULL;
+    *Count = 0;
+    for (Attempt = 0; Attempt < 4; Attempt++)
+    {
+        Status = IfInfoIp4Neighbors(Index, Buffer, Capacity, &Total);
+        if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW)
+        {
+            IfInfoFree(Buffer);
+            return Status == STATUS_NOT_FOUND ? STATUS_SUCCESS : Status;
+        }
+        if (Total <= Capacity)
+        {
+            *Rows = Buffer;
+            *Count = Total;
+            return STATUS_SUCCESS;
+        }
+        IfInfoFree(Buffer);
+        Capacity = Total + 8;
+        Buffer = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(IP4_NEIGHBOR_ROW), NSI_PROVIDER_TAG);
+        if (Buffer == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    ExFreePoolWithTag(Buffer, NSI_PROVIDER_TAG);
+    return STATUS_BUFFER_OVERFLOW;
+}
+
+static NTSTATUS
+TiNsiIp4RoutesOf(
+    _In_ UINT Index,
+    _Outptr_result_maybenull_ PIP4_ROUTE_ROW *Rows,
+    _Out_ PULONG Count)
+{
+    PIP4_ROUTE_ROW Buffer = NULL;
+    ULONG Capacity = 0, Total = 0, Attempt;
+    NTSTATUS Status;
+
+    *Rows = NULL;
+    *Count = 0;
+    for (Attempt = 0; Attempt < 4; Attempt++)
+    {
+        Status = IfInfoIp4Routes(Index, Buffer, Capacity, &Total);
+        if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW)
+        {
+            IfInfoFree(Buffer);
+            return Status == STATUS_NOT_FOUND ? STATUS_SUCCESS : Status;
+        }
+        if (Total <= Capacity)
+        {
+            *Rows = Buffer;
+            *Count = Total;
+            return STATUS_SUCCESS;
+        }
+        IfInfoFree(Buffer);
+        Capacity = Total + 8;
+        Buffer = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(IP4_ROUTE_ROW), NSI_PROVIDER_TAG);
+        if (Buffer == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    ExFreePoolWithTag(Buffer, NSI_PROVIDER_TAG);
+    return STATUS_BUFFER_OVERFLOW;
+}
+
+static NTSTATUS
+TiNsiAddIp4Route(
+    _Inout_ PTI_NSI_IP4_ROUTES Set,
+    _In_ ULONG Destination,
+    _In_ ULONG Mask,
+    _In_ ULONG NextHop,
+    _In_ UINT IfIndex,
+    _In_ NET_LUID Luid,
+    _In_ ULONG Metric,
+    _In_ ULONG Protocol,
+    _In_ ULONG Origin,
+    _In_ BOOLEAN Loopback,
+    _In_ BOOLEAN Immortal)
+{
+    PTI_NSI_IP4_ROUTE Route;
+
+    if (Set->Count == Set->Capacity)
+    {
+        ULONG NewCapacity = Set->Capacity ? Set->Capacity * 2 : 32;
+        PTI_NSI_IP4_ROUTE Grown;
+
+        if (NewCapacity > TI_NSI_MAX_ROWS)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        Grown = ExAllocatePoolWithTag(PagedPool, NewCapacity * sizeof(*Grown), NSI_PROVIDER_TAG);
+        if (Grown == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        if (Set->Routes != NULL)
+        {
+            RtlCopyMemory(Grown, Set->Routes, Set->Count * sizeof(*Grown));
+            ExFreePoolWithTag(Set->Routes, NSI_PROVIDER_TAG);
+        }
+        Set->Routes = Grown;
+        Set->Capacity = NewCapacity;
+    }
+    Route = &Set->Routes[Set->Count++];
+    RtlZeroMemory(Route, sizeof(*Route));
+    Route->Destination = Destination;
+    Route->Mask = Mask;
+    Route->NextHop = NextHop;
+    Route->IfIndex = IfIndex;
+    Route->Luid = Luid;
+    Route->Metric = Metric;
+    Route->Protocol = Protocol;
+    Route->Origin = Origin;
+    Route->Loopback = Loopback;
+    Route->Immortal = Immortal;
+    Route->Lifetime = ~0u;
+    return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+TiNsiIp4HasAddress(
+    _In_reads_(Count) const IP4_ADDRESS_ROW *Rows,
+    _In_ ULONG Count,
+    _In_ ULONG Address)
+{
+    ULONG i;
+
+    for (i = 0; i < Count; i++)
+        if (Rows[i].Address == Address)
+            return TRUE;
+    return FALSE;
+}
+
+static BOOLEAN
+TiNsiIp4HasLocalRoute(
+    _In_reads_(Limit) const IP4_ADDRESS_ROW *Rows,
+    _In_ ULONG Limit,
+    _In_ ULONG Destination,
+    _In_ ULONG Mask)
+{
+    ULONG i;
+
+    for (i = 0; i < Limit; i++)
+    {
+        ULONG Address = Rows[i].Address, AddressMask = Rows[i].Mask;
+
+        if (AddressMask != INADDR_NONE && Destination == (Address & AddressMask) && Mask == AddressMask)
+            return TRUE;
+        if (Destination == Address && Mask == INADDR_NONE)
+            return TRUE;
+        if (TiNsiPrefixLength(AddressMask) < 31 && Destination == (Address | ~AddressMask) && Mask == INADDR_NONE)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static int
+TiNsiCompareIp4Route(
+    _In_ const VOID *Left,
+    _In_ const VOID *Right)
+{
+    const TI_NSI_IP4_ROUTE *A = Left, *B = Right;
+    ULONG DestA = RtlUlongByteSwap(A->Destination), DestB = RtlUlongByteSwap(B->Destination);
+    ULONG MaskA = RtlUlongByteSwap(A->Mask), MaskB = RtlUlongByteSwap(B->Mask);
+
+    if (DestA != DestB)
+        return DestA < DestB ? -1 : 1;
+    if (MaskA != MaskB)
+        return MaskA < MaskB ? -1 : 1;
+    if (A->IfIndex != B->IfIndex)
+        return A->IfIndex < B->IfIndex ? -1 : 1;
+    return 0;
+}
+
+static NTSTATUS
+TiNsiBuildIp4Routes(
+    _In_reads_(KeyCount) const IF_INFO_KEY *Keys,
+    _In_ ULONG KeyCount,
+    _Inout_ PTI_NSI_IP4_ROUTES Set)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG i, j;
+
+    for (i = 0; i < KeyCount && NT_SUCCESS(Status); i++)
+    {
+        NET_LUID Luid = TiNsiLuidForIndex(Keys, KeyCount, Keys[i].Index);
+        PIP4_ADDRESS_ROW Addresses = NULL;
+        PIP4_ROUTE_ROW Fibs = NULL;
+        ULONG AddressCount = 0, FibCount = 0;
+
+        Status = TiNsiIp4AddressesOf(Keys[i].Index, &Addresses, &AddressCount);
+        if (NT_SUCCESS(Status))
+            Status = TiNsiIp4RoutesOf(Keys[i].Index, &Fibs, &FibCount);
+
+        for (j = 0; NT_SUCCESS(Status) && j < AddressCount; j++)
+        {
+            ULONG Address = Addresses[j].Address, Mask = Addresses[j].Mask;
+
+            if (Mask != INADDR_NONE && !TiNsiIp4HasLocalRoute(Addresses, j, Address & Mask, Mask))
+                Status = TiNsiAddIp4Route(Set, Address & Mask, Mask, INADDR_ANY, Keys[i].Index, Luid, TI_NSI_DERIVED_METRIC,
+                                          MIB_IPPROTO_LOCAL, NlroManual, FALSE, FALSE);
+            if (NT_SUCCESS(Status))
+                Status = TiNsiAddIp4Route(Set, Address, INADDR_NONE, INADDR_ANY, Keys[i].Index, Luid, TI_NSI_DERIVED_METRIC,
+                                          MIB_IPPROTO_LOCAL, NlroManual, TRUE, FALSE);
+            if (NT_SUCCESS(Status) && TiNsiPrefixLength(Mask) < 31 &&
+                !TiNsiIp4HasLocalRoute(Addresses, j, Address | ~Mask, INADDR_NONE))
+                Status = TiNsiAddIp4Route(Set, Address | ~Mask, INADDR_NONE, INADDR_ANY, Keys[i].Index, Luid, TI_NSI_DERIVED_METRIC,
+                                          MIB_IPPROTO_LOCAL, NlroManual, TRUE, FALSE);
+        }
+        if (NT_SUCCESS(Status) && AddressCount != 0)
+        {
+            Status = TiNsiAddIp4Route(Set, RtlUlongByteSwap(TI_NSI_MULTICAST_PREFIX), RtlUlongByteSwap(TI_NSI_MULTICAST_MASK), INADDR_ANY,
+                                      Keys[i].Index, Luid, TI_NSI_DERIVED_METRIC, MIB_IPPROTO_LOCAL, NlroWellKnown, FALSE, FALSE);
+            if (NT_SUCCESS(Status))
+                Status = TiNsiAddIp4Route(Set, INADDR_NONE, INADDR_NONE, INADDR_ANY, Keys[i].Index, Luid, TI_NSI_DERIVED_METRIC,
+                                          MIB_IPPROTO_LOCAL, NlroManual, TRUE, FALSE);
+        }
+
+        for (j = 0; NT_SUCCESS(Status) && j < FibCount; j++)
+        {
+            const IP4_ROUTE_ROW *Fib = &Fibs[j];
+            BOOLEAN OnLink = Fib->Gateway == INADDR_ANY || TiNsiIp4HasAddress(Addresses, AddressCount, Fib->Gateway);
+
+            if (OnLink)
+            {
+                if (TiNsiIp4HasLocalRoute(Addresses, AddressCount, Fib->Destination, Fib->Mask))
+                    continue;
+                Status = TiNsiAddIp4Route(Set, Fib->Destination, Fib->Mask, INADDR_ANY, Keys[i].Index, Luid, Fib->Metric,
+                                          MIB_IPPROTO_NETMGMT, NlroManual, FALSE, TRUE);
+                continue;
+            }
+            Status = TiNsiAddIp4Route(Set, Fib->Destination, Fib->Mask, Fib->Gateway, Keys[i].Index, Luid, Fib->Metric,
+                                      MIB_IPPROTO_NETMGMT, NlroManual, FALSE, TRUE);
+            if (NT_SUCCESS(Status))
+            {
+                PTI_NSI_IP4_ROUTE Route = &Set->Routes[Set->Count - 1];
+
+                Route->Age = Fib->Age;
+                Route->Lifetime = Fib->ValidLifetime;
+                if (Fib->Origin == NlroRouterAdvertisement)
+                {
+                    Route->Origin = NlroRouterAdvertisement;
+                    Route->Immortal = FALSE;
+                }
+            }
+        }
+
+        IfInfoFree(Fibs);
+        IfInfoFree(Addresses);
+    }
+    return Status;
+}
+
+static VOID
+TiNsiFillIp4Forward(
+    _In_ const TI_NSI_IP4_ROUTE *Route,
+    _Out_opt_ struct nsi_ipv4_forward_key *OutKey,
+    _Out_opt_ struct nsi_ip_forward_rw *Rw,
+    _Out_opt_ struct nsi_ipv4_forward_dynamic *Dynamic,
+    _Out_opt_ struct nsi_ip_forward_static *Static)
+{
+    if (OutKey != NULL)
+    {
+        RtlZeroMemory(OutKey, sizeof(*OutKey));
+        OutKey->prefix.S_un.S_addr = Route->Destination;
+        OutKey->prefix_len = (BYTE)TiNsiPrefixLength(Route->Mask);
+        OutKey->luid = OutKey->luid2 = Route->Luid;
+        OutKey->next_hop.S_un.S_addr = Route->NextHop;
+    }
+    if (Rw != NULL)
+    {
+        RtlZeroMemory(Rw, sizeof(*Rw));
+        Rw->valid_lifetime = Route->Lifetime;
+        Rw->preferred_lifetime = Route->Lifetime;
+        Rw->metric = Route->Metric;
+        Rw->protocol = Route->Protocol;
+        Rw->loopback = Route->Loopback;
+        Rw->autoconf = TRUE;
+        Rw->immortal = Route->Immortal;
+    }
+    if (Dynamic != NULL)
+    {
+        RtlZeroMemory(Dynamic, sizeof(*Dynamic));
+        Dynamic->age = Route->Age;
+        Dynamic->addr2.S_un.S_addr = Route->Destination;
+    }
+    if (Static != NULL)
+    {
+        RtlZeroMemory(Static, sizeof(*Static));
+        Static->origin = Route->Origin;
+        Static->if_index = Route->IfIndex;
+    }
+}
+
+static NTSTATUS
+TiNsiIp4EnumerateNeighbours(
+    _In_reads_(KeyCount) const IF_INFO_KEY *Keys,
+    _In_ ULONG KeyCount,
+    _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    ULONG Capacity = Request->Count, Written = 0, Total = 0, i, j;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    for (i = 0; i < KeyCount && NT_SUCCESS(Status); i++)
+    {
+        NET_LUID Luid = TiNsiLuidForIndex(Keys, KeyCount, Keys[i].Index);
+        PIP4_NEIGHBOR_ROW Rows = NULL;
+        ULONG Count = 0;
+
+        Status = TiNsiIp4NeighborsOf(Keys[i].Index, &Rows, &Count);
+        for (j = 0; NT_SUCCESS(Status) && j < Count; j++)
+        {
+            if (Written < Capacity)
+            {
+                TiNsiFillIp4Neighbour(&Rows[j], Luid,
+                                      Request->KeyData ? (struct nsi_ipv4_neighbour_key *)Request->KeyData + Written : NULL,
+                                      Request->RwData ? (struct nsi_ip_neighbour_rw *)Request->RwData + Written : NULL,
+                                      Request->DynamicData ? (struct nsi_ip_neighbour_dynamic *)Request->DynamicData + Written : NULL);
+                Written++;
+            }
+            Total++;
+        }
+        IfInfoFree(Rows);
+    }
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Request->Count = Total;
+    return Total > Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+}
+
+static NTSTATUS
+TiNsiIp4EnumerateRoutes(
+    _In_reads_(KeyCount) const IF_INFO_KEY *Keys,
+    _In_ ULONG KeyCount,
+    _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    TI_NSI_IP4_ROUTES Set = { NULL, 0, 0 };
+    TI_NSI_IP4_ROUTE Scratch;
+    ULONG Capacity = Request->Count, i;
+    NTSTATUS Status;
+
+    Status = TiNsiBuildIp4Routes(Keys, KeyCount, &Set);
+    if (NT_SUCCESS(Status))
+    {
+        TiNsiSort(Set.Routes, Set.Count, sizeof(*Set.Routes), TiNsiCompareIp4Route, &Scratch);
+        for (i = 0; i < Set.Count && i < Capacity; i++)
+        {
+            TiNsiFillIp4Forward(&Set.Routes[i],
+                                Request->KeyData ? (struct nsi_ipv4_forward_key *)Request->KeyData + i : NULL,
+                                Request->RwData ? (struct nsi_ip_forward_rw *)Request->RwData + i : NULL,
+                                Request->DynamicData ? (struct nsi_ipv4_forward_dynamic *)Request->DynamicData + i : NULL,
+                                Request->StaticData ? (struct nsi_ip_forward_static *)Request->StaticData + i : NULL);
+        }
+        Request->Count = Set.Count;
+        Status = Set.Count > Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+    }
+    if (Set.Routes != NULL)
+        ExFreePoolWithTag(Set.Routes, NSI_PROVIDER_TAG);
+    return Status;
+}
+
+static NTSTATUS NTAPI
+TiNsiIp4NeighbourEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiIp4Enumerate(TI_NSI_IP4_NEIGHBOUR, Request);
+}
+
+static NTSTATUS NTAPI
+TiNsiIp4ForwardEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiIp4Enumerate(TI_NSI_IP4_FORWARD, Request);
+}
+
+static NTSTATUS
+TiNsiIp4Enumerate(
+    _In_ ULONG Table,
     _Inout_ PNSI_ENUMERATE_REQUEST Request)
 {
     PIF_INFO_KEY Keys = NULL;
@@ -971,6 +1410,13 @@ TiNsiIp4Enumerate(
     Status = TiNsiInterfaceKeys(&Keys, &KeyCount);
     if (!NT_SUCCESS(Status))
         return Status;
+    if (Table == TI_NSI_IP4_NEIGHBOUR || Table == TI_NSI_IP4_FORWARD)
+    {
+        Status = Table == TI_NSI_IP4_NEIGHBOUR ? TiNsiIp4EnumerateNeighbours(Keys, KeyCount, Request)
+                                               : TiNsiIp4EnumerateRoutes(Keys, KeyCount, Request);
+        IfInfoFree(Keys);
+        return Status;
+    }
 
     for (i = 0; i < KeyCount && NT_SUCCESS(Status); i++)
     {
@@ -1087,14 +1533,14 @@ static const NSI_PROVIDER_DISPATCH TiNsiIp4Dispatch[4] =
     {
         sizeof(NSI_PROVIDER_DISPATCH),
         { sizeof(struct nsi_ipv4_neighbour_key), sizeof(struct nsi_ip_neighbour_rw), sizeof(struct nsi_ip_neighbour_dynamic), 0 },
-        NULL,
+        TiNsiIp4NeighbourEnumerate,
         TiNsiIp4GetAll,
         NULL
     },
     {
         sizeof(NSI_PROVIDER_DISPATCH),
         { sizeof(struct nsi_ipv4_forward_key), sizeof(struct nsi_ip_forward_rw), sizeof(struct nsi_ipv4_forward_dynamic), sizeof(struct nsi_ip_forward_static) },
-        NULL,
+        TiNsiIp4ForwardEnumerate,
         TiNsiIp4GetAll,
         NULL
     },
