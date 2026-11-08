@@ -534,6 +534,10 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     VolCB->DiskVolume = DiskVolume;
     VolCB->BytesPerSector = DiskGeometry.BytesPerSector;
 
+    /* Start the volume-dirty lifecycle: the first metadata write marks the
+     * volume dirty, a clean dismount clears it. No-op on a read-only mount. */
+    NtfsVolumeEnableDirtyTracking(DiskVolume);
+
     // Set up storage device in VolCB.
     VolCB->StorageDevice = TargetDeviceObject;
     VolCB->StorageDevice->Vpb->DeviceObject = FSDeviceObject;

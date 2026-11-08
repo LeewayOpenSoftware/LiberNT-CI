@@ -1497,6 +1497,12 @@ NtfsDismountVolume(
 
     Status = NtfsFlushVolume(VolCB, TRUE);
 
+    /* Clean dismount: the flush put all dirty metadata on the medium, so the
+     * volume is consistent. Clear the dirty flag (MarkClean leaves a retained /
+     * user-set flag alone). A failure here leaves it dirty, which is safe. */
+    if (NT_SUCCESS(Status))
+        (void)NtfsVolumeMarkClean(VolCB->DiskVolume);
+
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     if (NT_SUCCESS(Status))
     {
@@ -1718,6 +1724,9 @@ NtfsMarkVolumeDirty(
     KeEnterCriticalRegion();
     NtfsAcquireMetadata(VolCB);
     Status = NtfsVolumeSetFlags(VolCB->DiskVolume, VOL_DIRTY, 0);
+    /* A user-requested dirty bit must survive a clean dismount. */
+    if (NT_SUCCESS(Status))
+        NtfsVolumeRetainDirty(VolCB->DiskVolume, TRUE);
     NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
     return Status;

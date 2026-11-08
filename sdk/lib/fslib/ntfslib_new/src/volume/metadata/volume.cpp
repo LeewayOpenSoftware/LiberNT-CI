@@ -193,3 +193,78 @@ Volume::SetVolumeFlags(_In_ USHORT Set,
     delete VolumeFile;
     return Status;
 }
+
+
+/*
+ * Volume-dirty lifecycle (crash consistency). A read-write session marks the
+ * volume dirty before its first metadata write lands, so a crash leaves a
+ * volume the next boot checks; a clean dismount clears it. A flag that was
+ * already set at mount, or that a user requested via FSCTL, is retained for
+ * chkdsk and never auto-cleared. Writes are serialized by the caller's
+ * metadata lock, so the flag cannot be overtaken by a second writer.
+ */
+NTSTATUS
+Volume::EnableDirtyTracking()
+{
+    NTSTATUS Status;
+    USHORT Flags;
+
+    if (IsReadOnly)
+        return STATUS_SUCCESS;
+
+    Status = QueryVolumeFlags(&Flags);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* Dirty already: an earlier crash or a chkdsk request. Keep it for chkdsk. */
+    DirtyRetained = (Flags & VOL_DIRTY) ? TRUE : FALSE;
+    DirtyMarked = DirtyRetained;
+    DirtyTracking = TRUE;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+Volume::MarkDirtyBeforeWrite()
+{
+    NTSTATUS Status;
+
+    if (!DirtyTracking || DirtyMarked || IsReadOnly)
+        return STATUS_SUCCESS;
+
+    /* Set first: the flag's own record write comes back through WriteVolume. */
+    DirtyMarked = TRUE;
+    Status = SetVolumeFlags(VOL_DIRTY, 0);
+    if (NT_SUCCESS(Status))
+        Status = FlushVolume();
+    if (!NT_SUCCESS(Status))
+        DirtyMarked = FALSE;
+    return Status;
+}
+
+NTSTATUS
+Volume::MarkClean()
+{
+    NTSTATUS Status;
+
+    if (!DirtyTracking || !DirtyMarked || DirtyRetained || IsReadOnly)
+        return STATUS_SUCCESS;
+
+    /* Everything else reaches the medium before the flag says it has. */
+    Status = FlushVolume();
+    if (NT_SUCCESS(Status))
+        Status = SetVolumeFlags(0, VOL_DIRTY);
+    if (NT_SUCCESS(Status))
+        Status = FlushVolume();
+    if (NT_SUCCESS(Status))
+        DirtyMarked = FALSE;
+    return Status;
+}
+
+void
+Volume::RetainDirty(_In_ BOOLEAN Retain)
+{
+    if (!DirtyTracking)
+        return;
+    DirtyRetained = Retain;
+    DirtyMarked = Retain;
+}

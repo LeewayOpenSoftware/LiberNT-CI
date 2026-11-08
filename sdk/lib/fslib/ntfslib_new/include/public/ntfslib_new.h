@@ -1137,6 +1137,19 @@ NtfsVolumeSetFlags(
     _In_ USHORT Set,
     _In_ USHORT Clear);
 
+NTSTATUS
+NtfsVolumeEnableDirtyTracking(
+    _In_ PNtfsVolume DiskVolume);
+
+NTSTATUS
+NtfsVolumeMarkClean(
+    _In_ PNtfsVolume DiskVolume);
+
+void
+NtfsVolumeRetainDirty(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ BOOLEAN Retain);
+
 #ifdef __cplusplus
 }
 #endif

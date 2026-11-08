@@ -270,6 +270,28 @@ NtfsVolumeSetFlags(
     return reinterpret_cast<PVolume>(DiskVolume)->SetVolumeFlags(Set, Clear);
 }
 
+NTSTATUS
+NtfsVolumeEnableDirtyTracking(
+    _In_ PNtfsVolume DiskVolume)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->EnableDirtyTracking();
+}
+
+NTSTATUS
+NtfsVolumeMarkClean(
+    _In_ PNtfsVolume DiskVolume)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->MarkClean();
+}
+
+void
+NtfsVolumeRetainDirty(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ BOOLEAN Retain)
+{
+    reinterpret_cast<PVolume>(DiskVolume)->RetainDirty(Retain);
+}
+
 #ifdef __cplusplus
 }
 #endif
