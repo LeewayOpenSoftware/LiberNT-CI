@@ -114,6 +114,31 @@ static VOID IfInfoDetectType(PLAN_ADAPTER IF, PIF_INFO_ROW Row)
     }
 }
 
+static VOID IfInfoParseGuid(PIP_INTERFACE Interface, GUID *Guid)
+{
+    UNICODE_STRING Text;
+    GUID Parsed;
+    USHORT Chars = Interface->Name.Length / sizeof(WCHAR);
+    USHORT i;
+
+    RtlZeroMemory(Guid, sizeof(*Guid));
+    Guid->Data1 = Interface->Index;
+    RtlCopyMemory(Guid->Data4 + 2, "NetDev", 6);
+
+    for (i = 0; i < Chars; i++)
+    {
+        if (Interface->Name.Buffer[i] != L'{')
+            continue;
+        if (Chars - i < 38)
+            return;
+        Text.Buffer = &Interface->Name.Buffer[i];
+        Text.Length = Text.MaximumLength = 38 * sizeof(WCHAR);
+        if (NT_SUCCESS(RtlGUIDFromString(&Text, &Parsed)))
+            *Guid = Parsed;
+        return;
+    }
+}
+
 VOID IfInfoFillRow(PIP_INTERFACE Interface, PIF_INFO_ROW Row)
 {
     PLAN_ADAPTER IF = (PLAN_ADAPTER)Interface->Context;
@@ -126,6 +151,8 @@ VOID IfInfoFillRow(PIP_INTERFACE Interface, PIF_INFO_ROW Row)
     Row->PhysAddrLength = Interface->AddressLength;
     Row->AdminStatus = MIB_IF_ADMIN_STATUS_UP;
     GetInterfaceConnectionStatus(Interface, &Row->OperStatus);
+    Row->PhysicalMedium = Interface->PhysicalMedium;
+    IfInfoParseGuid(Interface, &Row->Guid);
 
     if (IF)
     {
@@ -156,6 +183,70 @@ VOID IfInfoFillRow(PIP_INTERFACE Interface, PIF_INFO_ROW Row)
 
     GetInterfaceName(Interface, Row->Description, IFINFO_MAX_DESCRIPTION);
     Row->DescriptionLength = (UINT)strlen(Row->Description);
+}
+
+NTSTATUS IfInfoSnapshot(ULONG Capacity, PIF_INFO_ROW Rows, PULONG Count)
+{
+    PIP_INTERFACE *Refs;
+    ULONG Total = 0, Taken = 0, i;
+    KIRQL OldIrql;
+    IF_LIST_ITER(Interface);
+
+    PAGED_CODE();
+
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+    ForEachInterface(Interface) {
+        Total++;
+    } EndFor(Interface);
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    *Count = 0;
+    if (Total == 0)
+        return STATUS_SUCCESS;
+
+    Refs = ExAllocatePoolWithTag(NonPagedPool, Total * sizeof(PIP_INTERFACE), OUT_DATA_TAG);
+    if (!Refs)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+    ForEachInterface(Interface) {
+        if (Taken < Total && IPReferenceInterface(Interface))
+            Refs[Taken++] = Interface;
+    } EndFor(Interface);
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    for (i = 0; i < Taken; i++)
+    {
+        if (i < Capacity)
+            IfInfoFillRow(Refs[i], &Rows[i]);
+        IPDereferenceInterface(Refs[i]);
+    }
+    ExFreePoolWithTag(Refs, OUT_DATA_TAG);
+
+    *Count = Taken;
+    return Taken > Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+}
+
+NTSTATUS IfInfoSnapshotByIndex(UINT Index, PIF_INFO_ROW Row)
+{
+    PIP_INTERFACE Found = NULL;
+    KIRQL OldIrql;
+    IF_LIST_ITER(Interface);
+
+    PAGED_CODE();
+
+    TcpipAcquireSpinLock(&InterfaceListLock, &OldIrql);
+    ForEachInterface(Interface) {
+        if (Interface->Index == Index && !Found && IPReferenceInterface(Interface))
+            Found = Interface;
+    } EndFor(Interface);
+    TcpipReleaseSpinLock(&InterfaceListLock, OldIrql);
+
+    if (!Found)
+        return STATUS_NOT_FOUND;
+    IfInfoFillRow(Found, Row);
+    IPDereferenceInterface(Found);
+    return STATUS_SUCCESS;
 }
 
 TDI_STATUS InfoTdiQueryGetInterfaceMIB(TDIEntityID ID,

@@ -49,26 +49,6 @@ LibIP6FlushPaths(VOID);
 #define MAX_PHYSADDR_LEN 8
 #define MAX_IFDESCR_LEN  256
 
-#define IFINFO_MAX_DESCRIPTION 128
-
-typedef struct _IF_INFO_ROW {
-    UINT Index;
-    UINT Type;
-    UINT Mtu;
-    UINT Speed;
-    UINT AdminStatus;
-    ULONG OperStatus;
-    UINT PhysAddrLength;
-    UCHAR PhysAddr[MAX_PHYSADDR_SIZE];
-    SEND_RECV_STATS Stats;
-    ULONG InErrors;
-    ULONG OutErrors;
-    UINT DescriptionLength;
-    CHAR Description[IFINFO_MAX_DESCRIPTION + 1];
-} IF_INFO_ROW, *PIF_INFO_ROW;
-
-VOID IfInfoFillRow(PIP_INTERFACE Interface, PIF_INFO_ROW Row);
-
 typedef struct IPADDR_ENTRY {
 	ULONG  Addr;
 	ULONG  Index;

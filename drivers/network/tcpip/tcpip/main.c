@@ -1158,6 +1158,8 @@ VOID NTAPI TiUnload(
     }
     TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
 #endif
+    TiNsiDeregister();
+
     /* Cancel timer */
     KeCancelTimer(&IPTimer);
     KeCancelTimer(&NeighborTimer);
@@ -1374,6 +1376,8 @@ DriverEntry(
     KeInitializeSpinLock(&InterfaceListLock);
 
     /* Initialize network level protocol subsystem */
+    TiNsiRegister();
+
     IPStartup(RegistryPath);
 
     /* Initialize transport level protocol subsystems */

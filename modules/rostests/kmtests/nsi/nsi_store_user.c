@@ -8,6 +8,7 @@
 #include <kmt_test.h>
 #include <winsock2.h>
 #include <ws2ipdef.h>
+#include <iphlpapi.h>
 #include <netiodef.h>
 #include <wine/nsi.h>
 
@@ -171,6 +172,76 @@ TestDeviceRows(
     ok_eq_ulong(err, (DWORD)ERROR_NOT_SUPPORTED);
 }
 
+static void
+TestDeviceInterfaces(
+    _In_ HANDLE Device)
+{
+    struct nsiproxy_enumerate_all in;
+    struct
+    {
+        struct nsiproxy_get_parameter header;
+        BYTE key_rest[sizeof(UINT) - 1];
+    } get_param;
+    const UINT rows = 32;
+    BYTE *out;
+    DWORD out_size, returned, err, count, i;
+    const NET_LUID *luids;
+    const struct nsi_ndis_ifinfo_static *stat;
+    MIB_IFTABLE *table = NULL;
+    ULONG table_size = 0;
+
+    memset(&in, 0, sizeof(in));
+    in.module = NPI_MS_NDIS_MODULEID;
+    in.table = NSI_NDIS_IFINFO_TABLE;
+    in.key_size = sizeof(NET_LUID);
+    in.static_size = sizeof(struct nsi_ndis_ifinfo_static);
+    in.count = rows;
+    out_size = sizeof(DWORD) + rows * (in.key_size + in.static_size);
+    out = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, out_size);
+    if (!skip(out != NULL, "no buffer for the interface table\n"))
+    {
+        err = Ioctl(Device, IOCTL_NSIPROXY_WINE_ENUMERATE_ALL, &in, sizeof(in), out, out_size, &returned);
+        if (!skip(err != ERROR_NOT_FOUND, "tcpip does not provide the NDIS interface table\n"))
+        {
+            ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+            count = *(DWORD *)out;
+            ok(count >= 1 && count <= rows, "interface table has %lu rows\n", count);
+            luids = (const NET_LUID *)(out + sizeof(DWORD));
+            stat = (const struct nsi_ndis_ifinfo_static *)(out + sizeof(DWORD) + rows * in.key_size);
+            for (i = 0; i < count && i < rows; i++)
+            {
+                NET_LUID luid;
+
+                ok(stat[i].if_index != 0, "row %lu has interface index 0\n", i);
+                ok_eq_ulong((ULONG)luids[i].Info.NetLuidIndex, (ULONG)stat[i].if_index);
+                ok_eq_ulong((ULONG)luids[i].Info.IfType, (ULONG)stat[i].type);
+                ok(stat[i].descr.Length != 0, "row %lu has no description\n", i);
+                trace("interface %u type %u luid %I64x\n", stat[i].if_index, stat[i].type, luids[i].Value);
+
+                memset(&get_param, 0, sizeof(get_param));
+                get_param.header.module = NPI_MS_NDIS_MODULEID;
+                get_param.header.table = NSI_NDIS_INDEX_LUID_TABLE;
+                get_param.header.key_size = sizeof(UINT);
+                get_param.header.param_type = NSI_PARAM_TYPE_STATIC;
+                memcpy(get_param.header.key, &stat[i].if_index, sizeof(UINT));
+                luid.Value = 0;
+                err = Ioctl(Device, IOCTL_NSIPROXY_WINE_GET_PARAMETER, &get_param, sizeof(get_param), &luid, sizeof(luid), &returned);
+                ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+                ok(luid.Value == luids[i].Value, "index %u maps to luid %I64x, enumerated %I64x\n", stat[i].if_index, luid.Value, luids[i].Value);
+            }
+            if (GetIfTable(NULL, &table_size, FALSE) == ERROR_INSUFFICIENT_BUFFER)
+                table = HeapAlloc(GetProcessHeap(), 0, table_size);
+            if (table != NULL && GetIfTable(table, &table_size, FALSE) == NO_ERROR)
+                ok_eq_ulong(count, table->dwNumEntries);
+            else
+                skip(FALSE, "GetIfTable unavailable for the row count comparison\n");
+            if (table != NULL)
+                HeapFree(GetProcessHeap(), 0, table);
+        }
+        HeapFree(GetProcessHeap(), 0, out);
+    }
+}
+
 static DWORD
 ArmNotification(
     _In_ HANDLE Device,
@@ -261,6 +332,7 @@ START_TEST(NsiStore)
         module.Guid = StoreTestGuid;
         TestDeviceEnumerate(device, &module);
         TestDeviceRows(device, &module);
+        TestDeviceInterfaces(device);
         CloseHandle(device);
         TestDeviceNotifications(&module);
     }

@@ -136,19 +136,7 @@ typedef struct _LLIP_BIND_INFO {
     LL_TRANSMIT_ROUTINE Transmit; /* Transmit function for this interface */
 } LLIP_BIND_INFO, *PLLIP_BIND_INFO;
 
-typedef struct _SEND_RECV_STATS {
-    ULONG64 InBytes;
-    ULONG64 InUnicast;
-    ULONG64 InNUnicast;
-    ULONG64 InDiscarded;
-    ULONG64 InErrors;
-    ULONG64 InDiscardedUnknownProto;
-    ULONG64 OutBytes;
-    ULONG64 OutUnicast;
-    ULONG64 OutNUnicast;
-    ULONG64 OutDiscarded;
-    ULONG64 OutErrors;
-} SEND_RECV_STATS, *PSEND_RECV_STATS;
+#include "ifinfo.h"
 
 /* Information about an IP interface */
 typedef struct _IP_INTERFACE {
