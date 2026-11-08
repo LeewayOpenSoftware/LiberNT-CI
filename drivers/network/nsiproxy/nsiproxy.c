@@ -50,7 +50,7 @@ NsiProxyEnumerateAll(
     _Out_ PULONG_PTR Information)
 {
     struct nsiproxy_enumerate_all In;
-    NSI_ROW_SIZES Sizes;
+    NSI_ROW_SIZES Sizes, Registered;
     NSI_ENUMERATE_REQUEST Request;
     PUCHAR Out = Irp->AssociatedIrp.SystemBuffer;
     ULONG RowSize, Needed;
@@ -64,6 +64,16 @@ NsiProxyEnumerateAll(
     Sizes.Rw = In.rw_size;
     Sizes.Dynamic = In.dynamic_size;
     Sizes.Static = In.static_size;
+    Status = NsiQueryTableSizesKm(&In.module, In.table, &Registered);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if ((In.key_size != 0 && In.key_size != Registered.Key) ||
+        (In.rw_size != 0 && In.rw_size != Registered.Rw) ||
+        (In.dynamic_size != 0 && In.dynamic_size != Registered.Dynamic) ||
+        (In.static_size != 0 && In.static_size != Registered.Static))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
     RowSize = In.key_size + In.rw_size + In.dynamic_size + In.static_size;
     if (RowSize < In.key_size || RowSize < In.rw_size || RowSize < In.dynamic_size || RowSize < In.static_size ||
         (RowSize != 0 && In.count > (MAXULONG - sizeof(ULONG)) / RowSize))
@@ -199,7 +209,12 @@ NsiProxyGetParameter(
             case NSI_PARAM_DYNAMIC: SectionSize = Sizes.Dynamic; break;
             case NSI_PARAM_STATIC: SectionSize = Sizes.Static; break;
         }
-        if (In->data_offset <= SectionSize && DataSize > SectionSize - In->data_offset)
+        if (In->param_type > NSI_PARAM_STATIC || In->data_offset >= SectionSize)
+        {
+            ExFreePoolWithTag(In, TAG_NSIPROXY);
+            return STATUS_INVALID_PARAMETER;
+        }
+        if (DataSize > SectionSize - In->data_offset)
             DataSize = SectionSize - In->data_offset;
     }
     RtlZeroMemory(Out, OutputLength);
