@@ -9,6 +9,7 @@
 
 static PDEVICE_OBJECT NsiProxyDevice;
 static UNICODE_STRING NsiProxyLinkName = RTL_CONSTANT_STRING(L"\\DosDevices\\Nsi");
+static const UNICODE_STRING NsiProxySecurity = RTL_CONSTANT_STRING(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GR;;;AU)");
 
 static NTSTATUS
 NsiProxyComplete(
@@ -285,8 +286,8 @@ DriverEntry(
 
     UNREFERENCED_PARAMETER(RegistryPath);
 
-    Status = IoCreateDevice(DriverObject, 0, &DeviceName, FILE_DEVICE_NETWORK,
-                            FILE_DEVICE_SECURE_OPEN, FALSE, &NsiProxyDevice);
+    Status = IoCreateDeviceSecure(DriverObject, 0, &DeviceName, FILE_DEVICE_NETWORK,
+                                  FILE_DEVICE_SECURE_OPEN, FALSE, &NsiProxySecurity, NULL, &NsiProxyDevice);
     if (!NT_SUCCESS(Status))
         return Status;
     Status = IoCreateSymbolicLink(&NsiProxyLinkName, &DeviceName);

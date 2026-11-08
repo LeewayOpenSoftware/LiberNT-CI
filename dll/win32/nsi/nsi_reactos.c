@@ -1989,18 +1989,33 @@ static void read_backend_override(void)
         backend_override = value;
 }
 
+static BOOL probe_device(void)
+{
+    struct nsiproxy_enumerate_all in;
+    DWORD count = 0, received, error = ERROR_SUCCESS;
+    HANDLE device;
+
+    device = CreateFileW(L"\\\\.\\Nsi", 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (device == INVALID_HANDLE_VALUE) return FALSE;
+    memset(&in, 0, sizeof(in));
+    in.module = NPI_MS_NDIS_MODULEID;
+    in.table = NSI_NDIS_IFINFO_TABLE;
+    in.key_size = sizeof(NET_LUID);
+    if (!DeviceIoControl(device, IOCTL_NSIPROXY_WINE_ENUMERATE_ALL, &in, sizeof(in), &count, sizeof(count), &received, NULL))
+        error = GetLastError();
+    CloseHandle(device);
+    return error == ERROR_SUCCESS || error == ERROR_MORE_DATA || error == ERROR_NOT_FOUND;
+}
+
 BOOL nsi_reactos_use_device(const NPI_MODULEID *module, UINT table)
 {
     const struct nsi_table *entry;
-    HANDLE device;
 
     if (backend_override == NSI_BACKEND_EMULATION || !module) return FALSE;
     entry = find_table(module, table);
     if (!entry || !entry->device) return FALSE;
     if (device_available) return TRUE;
-    device = CreateFileW(L"\\\\.\\Nsi", 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
-    if (device == INVALID_HANDLE_VALUE) return FALSE;
-    CloseHandle(device);
+    if (!probe_device()) return FALSE;
     InterlockedExchange(&device_available, 1);
     return TRUE;
 }
