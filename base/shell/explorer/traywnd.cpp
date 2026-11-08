@@ -4780,6 +4780,16 @@ HandleTrayContextMenu:
         COM_INTERFACE_ENTRY_IID(IID_IContextMenu, IContextMenu)
     END_COM_MAP()
 
+    void SetSecondary(_In_ BOOL bSecondary)
+    {
+        m_bSecondary = bSecondary;
+    }
+
+    void SetMonitor(_In_ HMONITOR hMonitor)
+    {
+        m_Monitor = hMonitor;
+    }
+
 protected:
     //////////////////////////////////////////////////////////////////////////////////////////////
     // AppBar section
@@ -4818,15 +4828,6 @@ protected:
         SetWindowPos(hwndInsertAfter, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
     }
 
-    void SetSecondary(_In_ BOOL bSecondary)
-    {
-        m_bSecondary = bSecondary;
-    }
-
-    void SetMonitor(_In_ HMONITOR hMonitor)
-    {
-        m_Monitor = hMonitor;
-    }
 };
 
 class CTrayWindowCtxMenu :

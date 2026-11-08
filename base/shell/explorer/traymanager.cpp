@@ -57,7 +57,7 @@ HRESULT TrayManager::Close()
 
 ITrayWindow* TrayManager::GetPrimaryTray() const
 {
-    return m_PrimaryTray;
+    return m_PrimaryTray.p;
 }
 
 VOID TrayManager::TrayProcessMessages()
@@ -129,18 +129,18 @@ HRESULT TrayManager::CreateSecondaryTray(HMONITOR hMonitor)
     if (FAILED(hr))
         return hr;
 
-    m_SecondaryTrays.push_back(tray);
+    m_SecondaryTrays.Add(tray);
     return S_OK;
 }
 
 VOID TrayManager::DestroySecondaryTrays()
 {
-    for (size_t i = 0; i < m_SecondaryTrays.size(); ++i)
+    for (INT i = 0; i < m_SecondaryTrays.GetCount(); ++i)
     {
         if (m_SecondaryTrays[i] != NULL)
             m_SecondaryTrays[i]->Close();
     }
-    m_SecondaryTrays.clear();
+    m_SecondaryTrays.RemoveAll();
 }
 
 VOID TrayManager_OnDisplayChange()

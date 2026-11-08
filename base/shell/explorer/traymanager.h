@@ -7,8 +7,6 @@
 
 #pragma once
 
-#include <vector>
-
 class TrayManager
 {
 public:
@@ -33,5 +31,5 @@ private:
     VOID DestroySecondaryTrays();
 
     CComPtr<ITrayWindow> m_PrimaryTray;
-    std::vector<CComPtr<ITrayWindow>> m_SecondaryTrays;
+    CAtlArray<CComPtr<ITrayWindow>> m_SecondaryTrays;
 };
