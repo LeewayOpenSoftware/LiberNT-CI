@@ -559,6 +559,9 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     // Mount volume.
     FsRtlNotifyVolumeEvent(VolCB->StreamFileObject, FSRTL_VOLUME_MOUNT);
 
+    /* Track this volume for the shutdown data-flush sweep (NtfsFsdShutdown). */
+    NtfsRegisterVolumeForShutdown(VolCB);
+
     Status = STATUS_SUCCESS;
 
 Cleanup:
