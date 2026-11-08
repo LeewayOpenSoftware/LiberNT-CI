@@ -107,6 +107,32 @@ NsiDereferenceProvider(
         KeSetEvent(&Provider->Released, IO_NO_INCREMENT, FALSE);
 }
 
+static BOOLEAN
+NsiReferenceRegisteredProvider(
+    _In_ PNSI_PROVIDER Provider)
+{
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    BOOLEAN Found = FALSE;
+
+    if (!NsiReady)
+        return FALSE;
+    KeAcquireSpinLock(&NsiProviderLock, &OldIrql);
+    for (Entry = NsiProviderList.Flink; Entry != &NsiProviderList; Entry = Entry->Flink)
+    {
+        if (CONTAINING_RECORD(Entry, NSI_PROVIDER, ListEntry) != Provider)
+            continue;
+        if (!Provider->Deregistering)
+        {
+            InterlockedIncrement(&Provider->References);
+            Found = TRUE;
+        }
+        break;
+    }
+    KeReleaseSpinLock(&NsiProviderLock, OldIrql);
+    return Found;
+}
+
 static NTSTATUS
 NsiCheckSizes(
     _In_ const NSI_PROVIDER *Provider,
@@ -304,8 +330,11 @@ NsiNotifyChange(
     UNREFERENCED_PARAMETER(Key);
     UNREFERENCED_PARAMETER(KeySize);
 
+    if (!NsiReferenceRegisteredProvider(Provider))
+        return;
     Sequence = InterlockedIncrement(&Provider->Sequence);
     NsiDrainPendingIrps(Provider, NULL, STATUS_SUCCESS, (ULONG_PTR)(ULONG)Sequence);
+    NsiDereferenceProvider(Provider);
 }
 
 NTSTATUS
@@ -319,6 +348,7 @@ NsiRequestChangeNotificationKm(
 
     if (Provider == NULL)
         return STATUS_NOT_FOUND;
+    IoMarkIrpPending(Irp);
     IoCsqInsertIrp(&Provider->Csq, Irp, NULL);
     NsiDereferenceProvider(Provider);
     return STATUS_PENDING;

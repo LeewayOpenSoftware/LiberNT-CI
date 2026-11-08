@@ -12,13 +12,21 @@
  * PASSIVE_LEVEL for the \Device\Nsi proxy. NsiNotifyChange may be called
  * at or below DISPATCH_LEVEL.
  *
- * A change request is an IRP: NsiRequestChangeNotificationKm queues it and
- * returns STATUS_PENDING; the next NsiNotifyChange on that table completes it
- * with STATUS_SUCCESS and Information set to the table's change sequence,
- * cancellation completes it with STATUS_CANCELLED. The IRP's current stack
- * location must be valid: a dispatch routine passes its IRP as is, a kernel
- * caller that builds the IRP sets its completion routine and then calls
- * IoSetNextIrpStackLocation before requesting.
+ * A change request is an IRP: NsiRequestChangeNotificationKm marks it
+ * pending and queues it, returning STATUS_PENDING; the next NsiNotifyChange
+ * on that table completes it with STATUS_SUCCESS and Information set to the
+ * table's change sequence, cancellation completes it with STATUS_CANCELLED.
+ * The IRP's current stack location must be valid: a dispatch routine passes
+ * its IRP as is, a kernel caller that builds the IRP sets its completion
+ * routine and then calls IoSetNextIrpStackLocation before requesting.
+ *
+ * Deregistration: NsiDeregisterProvider unlinks the provider, waits for every
+ * call that holds it (consumer requests and NsiNotifyChange alike, the store
+ * references the handle under its lock before touching it) and then cancels
+ * the requests still queued. A change signalled for a handle that is being or
+ * has been deregistered is dropped. A producer must nevertheless stop raising
+ * changes before it deregisters: once the call has returned the handle value
+ * may belong to a later registration.
  */
 
 #ifndef _NSIKM_

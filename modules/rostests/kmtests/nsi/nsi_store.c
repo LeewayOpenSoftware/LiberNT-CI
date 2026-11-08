@@ -395,6 +395,123 @@ TestNotifications(VOID)
     }
 }
 
+typedef struct _NOTIFY_THREAD
+{
+    PNSI_PROVIDER Provider;
+    volatile LONG Stop;
+    volatile LONG Started;
+    LONG Iterations;
+    KEVENT Done;
+} NOTIFY_THREAD, *PNOTIFY_THREAD;
+
+static VOID NTAPI
+NotifyThread(
+    _In_ PVOID Parameter)
+{
+    PNOTIFY_THREAD Thread = Parameter;
+    ULONG Key = 1;
+
+    InterlockedExchange(&Thread->Started, 1);
+    do
+    {
+        NsiNotifyChange(Thread->Provider, NsiChangeParameter, &Key, sizeof(Key));
+        Thread->Iterations++;
+    } while (!Thread->Stop);
+    KeSetEvent(&Thread->Done, IO_NO_INCREMENT, FALSE);
+    PsTerminateSystemThread(STATUS_SUCCESS);
+}
+
+static BOOLEAN
+StartNotifyThread(
+    _In_ PNOTIFY_THREAD Thread,
+    _In_ PNSI_PROVIDER Provider,
+    _In_ BOOLEAN Once,
+    _Out_ PHANDLE Handle)
+{
+    OBJECT_ATTRIBUTES Attributes;
+    NTSTATUS Status;
+
+    RtlZeroMemory(Thread, sizeof(*Thread));
+    Thread->Provider = Provider;
+    Thread->Stop = Once;
+    KeInitializeEvent(&Thread->Done, NotificationEvent, FALSE);
+    InitializeObjectAttributes(&Attributes, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+    Status = PsCreateSystemThread(Handle, THREAD_ALL_ACCESS, &Attributes, NULL, NULL, NotifyThread, Thread);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    return NT_SUCCESS(Status);
+}
+
+static VOID
+JoinNotifyThread(
+    _In_ PNOTIFY_THREAD Thread,
+    _In_ HANDLE Handle)
+{
+    PVOID Object;
+
+    ok(WaitCompletion(&Thread->Done), "notify thread did not finish\n");
+    if (NT_SUCCESS(ObReferenceObjectByHandle(Handle, THREAD_ALL_ACCESS, *PsThreadType, KernelMode, &Object, NULL)))
+    {
+        KeWaitForSingleObject(Object, Executive, KernelMode, FALSE, NULL);
+        ObDereferenceObject(Object);
+    }
+    ZwClose(Handle);
+}
+
+static VOID
+TestNotifyRaces(VOID)
+{
+    NOTIFY_THREAD Thread;
+    HANDLE Handle;
+    KEVENT Event;
+    PIRP Irp;
+    FILE_OBJECT File;
+    PNSI_PROVIDER Scratch = NULL;
+    LARGE_INTEGER Delay;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&File, sizeof(File));
+
+    Irp = RequestChange(&TestModule, NSISTORE_TABLE, &Event, &File, &Status);
+    ok_eq_hex(Status, STATUS_PENDING);
+    if (Irp == NULL)
+        return;
+    if (StartNotifyThread(&Thread, MainProvider, TRUE, &Handle))
+    {
+        ok(WaitCompletion(&Event), "request not completed by a change from another thread\n");
+        ok_eq_hex(Irp->IoStatus.Status, STATUS_SUCCESS);
+        ok(Irp->IoStatus.Information != 0, "sequence is 0 after a change from another thread\n");
+        JoinNotifyThread(&Thread, Handle);
+    }
+    else
+    {
+        IoCancelIrp(Irp);
+        WaitCompletion(&Event);
+    }
+    IoFreeIrp(Irp);
+
+    Status = NsiRegisterProvider(&TestModule, NSISTORE_SCRATCH_TABLE, &TestDispatch, &TestModule, &Scratch);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (Scratch == NULL)
+        return;
+    if (!StartNotifyThread(&Thread, Scratch, FALSE, &Handle))
+    {
+        NsiDeregisterProvider(Scratch);
+        return;
+    }
+    while (!Thread.Started)
+    {
+        Delay.QuadPart = -10000;
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+    Delay.QuadPart = -20 * 10000;
+    KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    NsiDeregisterProvider(Scratch);
+    InterlockedExchange(&Thread.Stop, 1);
+    JoinNotifyThread(&Thread, Handle);
+    ok(Thread.Iterations > 0, "racing thread never signalled a change\n");
+    trace("%ld changes signalled while the provider was deregistered\n", Thread.Iterations);
+}
+
 NTSTATUS
 TestEntry(
     IN PDRIVER_OBJECT DriverObject,
@@ -468,5 +585,6 @@ TestMessageHandler(
     TestEnumeration();
     TestRows();
     TestNotifications();
+    TestNotifyRaces();
     return STATUS_SUCCESS;
 }
