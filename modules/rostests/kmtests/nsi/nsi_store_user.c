@@ -159,6 +159,15 @@ TestDeviceRows(
     ok_eq_ulong(returned, (DWORD)sizeof(value));
     ok_eq_ulong(value, (ULONG)NSISTORE_Y(1));
 
+    get_param.header.data_offset = FIELD_OFFSET(NSISTORE_DYNAMIC, X);
+    memset(out, 0xEE, sizeof(out));
+    err = Ioctl(Device, IOCTL_NSIPROXY_WINE_GET_PARAMETER, &get_param, sizeof(get_param), out, sizeof(out), &returned);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    ok_eq_ulong(returned, (DWORD)(sizeof(NSISTORE_DYNAMIC) - FIELD_OFFSET(NSISTORE_DYNAMIC, X)));
+    ok_eq_ulong(((const ULONG *)out)[0], (ULONG)NSISTORE_X(1));
+    ok_eq_ulong(((const ULONG *)out)[1], (ULONG)NSISTORE_Y(1));
+    ok(out[returned] == 0, "byte after the clamped parameter read is 0x%02x\n", out[returned]);
+
     get_param.header.data_offset = sizeof(NSISTORE_DYNAMIC);
     err = Ioctl(Device, IOCTL_NSIPROXY_WINE_GET_PARAMETER, &get_param, sizeof(get_param), &value, sizeof(value), &returned);
     ok_eq_ulong(err, (DWORD)ERROR_INVALID_PARAMETER);

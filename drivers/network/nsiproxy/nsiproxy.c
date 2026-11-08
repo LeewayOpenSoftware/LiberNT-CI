@@ -64,7 +64,7 @@ NsiProxyEnumerateAll(
     Sizes.Dynamic = In.dynamic_size;
     Sizes.Static = In.static_size;
     RowSize = In.key_size + In.rw_size + In.dynamic_size + In.static_size;
-    if (RowSize < In.key_size || RowSize < In.rw_size || RowSize < In.dynamic_size ||
+    if (RowSize < In.key_size || RowSize < In.rw_size || RowSize < In.dynamic_size || RowSize < In.static_size ||
         (RowSize != 0 && In.count > (MAXULONG - sizeof(ULONG)) / RowSize))
     {
         return STATUS_INVALID_PARAMETER;
@@ -151,7 +151,7 @@ NsiProxyGetAllParameters(
     Sizes.Dynamic = In->dynamic_size;
     Sizes.Static = In->static_size;
     Needed = In->rw_size + In->dynamic_size + In->static_size;
-    if (Needed < In->rw_size || Needed < In->dynamic_size)
+    if (Needed < In->rw_size || Needed < In->dynamic_size || Needed < In->static_size)
         Status = STATUS_INVALID_PARAMETER;
     else if (OutputLength < Needed)
         Status = STATUS_BUFFER_TOO_SMALL;
@@ -179,7 +179,8 @@ NsiProxyGetParameter(
     const ULONG HeaderSize = FIELD_OFFSET(struct nsiproxy_get_parameter, key);
     struct nsiproxy_get_parameter *In;
     PUCHAR Out = Irp->AssociatedIrp.SystemBuffer;
-    ULONG KeySize;
+    NSI_ROW_SIZES Sizes;
+    ULONG KeySize, SectionSize = 0, DataSize = OutputLength;
     NTSTATUS Status;
 
     *Information = 0;
@@ -189,11 +190,22 @@ NsiProxyGetParameter(
     Status = NsiProxyCopyKeyedInput(Irp, InputLength, HeaderSize, HeaderSize, KeySize, (PVOID *)&In);
     if (!NT_SUCCESS(Status))
         return Status;
+    if (NT_SUCCESS(NsiQueryTableSizesKm(&In->module, In->table, &Sizes)))
+    {
+        switch (In->param_type)
+        {
+            case NSI_PARAM_RW: SectionSize = Sizes.Rw; break;
+            case NSI_PARAM_DYNAMIC: SectionSize = Sizes.Dynamic; break;
+            case NSI_PARAM_STATIC: SectionSize = Sizes.Static; break;
+        }
+        if (In->data_offset <= SectionSize && DataSize > SectionSize - In->data_offset)
+            DataSize = SectionSize - In->data_offset;
+    }
     RtlZeroMemory(Out, OutputLength);
     Status = NsiGetParameterKm(&In->module, In->table, In->first_arg, In->key, In->key_size,
-                               In->param_type, In->data_offset, Out, OutputLength);
+                               In->param_type, In->data_offset, Out, DataSize);
     if (NT_SUCCESS(Status))
-        *Information = OutputLength;
+        *Information = DataSize;
     ExFreePoolWithTag(In, TAG_NSIPROXY);
     return Status;
 }
