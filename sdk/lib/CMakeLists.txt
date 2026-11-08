@@ -1,5 +1,6 @@
 
 add_subdirectory(atl)
+add_subdirectory(leewayui)
 add_subdirectory(cmlib)
 add_subdirectory(inflib)
 add_subdirectory(libwim)
