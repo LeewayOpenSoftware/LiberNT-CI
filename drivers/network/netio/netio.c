@@ -546,9 +546,23 @@ static void QueueListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
     KeSetEvent(&ListenSocket->StartListenEvent, IO_NO_INCREMENT, FALSE);
 }
 
+static NTSTATUS
+StartListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket);
+
 static void StartListeningOnce(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
 {
-    if (InterlockedExchange(&ListenSocket->ListenActive, 1) == 0)
+    if (InterlockedExchange(&ListenSocket->ListenActive, 1) != 0)
+    {
+        return;
+    }
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+    {
+        if (StartListening(ListenSocket) != STATUS_PENDING)
+        {
+            InterlockedExchange(&ListenSocket->ListenActive, 0);
+        }
+    }
+    else
     {
         QueueListening(ListenSocket);
     }
@@ -1149,6 +1163,10 @@ WskBind(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR LocalAddress, _Reserved_ UL
         if (!NT_SUCCESS(status2))
         {
             DPRINT1("Could not read back the bound address, status is %x\n", status2);
+        }
+        if (Socket->WskFlags == WSK_FLAG_LISTEN_SOCKET)
+        {
+            StartListeningOnce(Socket);
         }
     }
 
