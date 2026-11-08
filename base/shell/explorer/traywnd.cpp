@@ -3633,9 +3633,15 @@ ChangePos:
     LRESULT OnExitSizeMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
         InSizeMove = FALSE;
-        if (!g_TaskbarSettings.bLock)
+        if (!g_TaskbarSettings.bLock && m_Position <= ABE_BOTTOM)
         {
             FitToRebar(&m_TrayRects[m_Position]);
+
+            g_TaskbarSettings.sr.Position = m_Position;
+            g_TaskbarSettings.sr.Rect = m_TrayRects[m_Position];
+            g_TaskbarSettings.sr.Size.cx = m_TrayRects[m_Position].right - m_TrayRects[m_Position].left;
+            g_TaskbarSettings.sr.Size.cy = m_TrayRects[m_Position].bottom - m_TrayRects[m_Position].top;
+            g_TaskbarSettings.Save();
 
             /* Apply clipping */
             PostMessage(WM_SIZE, SIZE_RESTORED, 0);
