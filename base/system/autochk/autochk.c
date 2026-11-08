@@ -115,6 +115,7 @@ __cdecl
 LogAppend(IN PCSTR fmt, ...)
 {
     va_list ap;
+    CHAR Line[512];
     INT Len;
     PUCHAR NewBuffer;
     ULONG NewCapacity;
@@ -127,11 +128,14 @@ LogAppend(IN PCSTR fmt, ...)
             return;
     }
 
+    /* Native image: no _vscprintf. Format into a bounded stack buffer and
+     * truncate a single over-long line rather than measuring it first. */
     va_start(ap, fmt);
-    Len = _vscprintf(fmt, ap);
+    Len = _vsnprintf(Line, sizeof(Line) - 1, fmt, ap);
     va_end(ap);
     if (Len < 0)
-        return;
+        Len = sizeof(Line) - 1;
+    Line[Len] = ANSI_NULL;
 
     while (LogLength + (ULONG)Len + 1 > LogCapacity)
     {
@@ -143,9 +147,7 @@ LogAppend(IN PCSTR fmt, ...)
         LogCapacity = NewCapacity;
     }
 
-    va_start(ap, fmt);
-    _vsnprintf((PCHAR)LogBuffer + LogLength, LogCapacity - LogLength, fmt, ap);
-    va_end(ap);
+    RtlCopyMemory((PCHAR)LogBuffer + LogLength, Line, Len + 1);
     LogLength += (ULONG)Len;
 }
 
