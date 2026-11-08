@@ -11,6 +11,14 @@
  * Enumerate and GetAll are called at the consumer's IRQL, which is
  * PASSIVE_LEVEL for the \Device\Nsi proxy. NsiNotifyChange may be called
  * at or below DISPATCH_LEVEL.
+ *
+ * A change request is an IRP: NsiRequestChangeNotificationKm queues it and
+ * returns STATUS_PENDING; the next NsiNotifyChange on that table completes it
+ * with STATUS_SUCCESS and Information set to the table's change sequence,
+ * cancellation completes it with STATUS_CANCELLED. The IRP's current stack
+ * location must be valid: a dispatch routine passes its IRP as is, a kernel
+ * caller that builds the IRP sets its completion routine and then calls
+ * IoSetNextIrpStackLocation before requesting.
  */
 
 #ifndef _NSIKM_
@@ -108,6 +116,26 @@ VOID
 NTAPI
 NsiDeregisterProvider(
     _In_ PNSI_PROVIDER Provider);
+
+VOID
+NTAPI
+NsiNotifyChange(
+    _In_ PNSI_PROVIDER Provider,
+    _In_ NSI_CHANGE_TYPE Type,
+    _In_reads_bytes_opt_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize);
+
+NTSTATUS
+NTAPI
+NsiRequestChangeNotificationKm(
+    _In_ const NPI_MODULEID *Module,
+    _In_ ULONG Table,
+    _In_ PIRP Irp);
+
+VOID
+NTAPI
+NsiCancelChangeNotificationsKm(
+    _In_ PFILE_OBJECT FileObject);
 
 NTSTATUS
 NTAPI

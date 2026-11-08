@@ -17,6 +17,9 @@
 ; Network store (NSI) hosted in netio.sys
 @ stdcall NsiRegisterProvider(ptr long ptr ptr ptr)
 @ stdcall NsiDeregisterProvider(ptr)
+@ stdcall NsiNotifyChange(ptr long ptr long)
+@ stdcall NsiRequestChangeNotificationKm(ptr long ptr)
+@ stdcall NsiCancelChangeNotificationsKm(ptr)
 @ stdcall NsiQueryTableSizesKm(ptr long ptr)
 @ stdcall NsiEnumerateAllParametersKm(ptr long ptr ptr)
 @ stdcall NsiGetAllParametersKm(ptr long ptr long ptr long ptr ptr ptr)

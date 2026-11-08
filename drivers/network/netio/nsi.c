@@ -1,7 +1,7 @@
 /*
  * PROJECT:     NetIO driver
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Network store (NSI): provider registry and table access
+ * PURPOSE:     Network store (NSI): provider registry, table access and change requests
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -19,13 +19,24 @@ typedef struct _NSI_PROVIDER
     NSI_PROVIDER_DISPATCH Dispatch;
     PVOID Context;
     volatile LONG References;
+    volatile LONG Sequence;
     BOOLEAN Deregistering;
     KEVENT Released;
+    IO_CSQ Csq;
+    LIST_ENTRY PendingIrps;
+    KSPIN_LOCK PendingLock;
 } NSI_PROVIDER;
 
 static LIST_ENTRY NsiProviderList;
 static KSPIN_LOCK NsiProviderLock;
 static BOOLEAN NsiReady;
+
+static IO_CSQ_INSERT_IRP NsiCsqInsertIrp;
+static IO_CSQ_REMOVE_IRP NsiCsqRemoveIrp;
+static IO_CSQ_PEEK_NEXT_IRP NsiCsqPeekNextIrp;
+static IO_CSQ_ACQUIRE_LOCK NsiCsqAcquireLock;
+static IO_CSQ_RELEASE_LOCK NsiCsqReleaseLock;
+static IO_CSQ_COMPLETE_CANCELED_IRP NsiCsqCompleteCanceledIrp;
 
 VOID
 NsiInitialize(VOID)
@@ -113,6 +124,97 @@ NsiCheckSizes(
     return STATUS_SUCCESS;
 }
 
+static VOID NTAPI
+NsiCsqInsertIrp(
+    _In_ PIO_CSQ Csq,
+    _In_ PIRP Irp)
+{
+    PNSI_PROVIDER Provider = CONTAINING_RECORD(Csq, NSI_PROVIDER, Csq);
+
+    InsertTailList(&Provider->PendingIrps, &Irp->Tail.Overlay.ListEntry);
+}
+
+static VOID NTAPI
+NsiCsqRemoveIrp(
+    _In_ PIO_CSQ Csq,
+    _In_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(Csq);
+    RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+}
+
+static PIRP NTAPI
+NsiCsqPeekNextIrp(
+    _In_ PIO_CSQ Csq,
+    _In_opt_ PIRP Irp,
+    _In_opt_ PVOID PeekContext)
+{
+    PNSI_PROVIDER Provider = CONTAINING_RECORD(Csq, NSI_PROVIDER, Csq);
+    PLIST_ENTRY Entry;
+
+    Entry = (Irp == NULL) ? Provider->PendingIrps.Flink : Irp->Tail.Overlay.ListEntry.Flink;
+    for (; Entry != &Provider->PendingIrps; Entry = Entry->Flink)
+    {
+        PIRP Candidate = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+
+        if (PeekContext == NULL ||
+            IoGetCurrentIrpStackLocation(Candidate)->FileObject == (PFILE_OBJECT)PeekContext)
+        {
+            return Candidate;
+        }
+    }
+    return NULL;
+}
+
+_IRQL_raises_(DISPATCH_LEVEL)
+static VOID NTAPI
+NsiCsqAcquireLock(
+    _In_ PIO_CSQ Csq,
+    _Out_ PKIRQL Irql)
+{
+    PNSI_PROVIDER Provider = CONTAINING_RECORD(Csq, NSI_PROVIDER, Csq);
+
+    KeAcquireSpinLock(&Provider->PendingLock, Irql);
+}
+
+static VOID NTAPI
+NsiCsqReleaseLock(
+    _In_ PIO_CSQ Csq,
+    _In_ KIRQL Irql)
+{
+    PNSI_PROVIDER Provider = CONTAINING_RECORD(Csq, NSI_PROVIDER, Csq);
+
+    KeReleaseSpinLock(&Provider->PendingLock, Irql);
+}
+
+static VOID NTAPI
+NsiCsqCompleteCanceledIrp(
+    _In_ PIO_CSQ Csq,
+    _In_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(Csq);
+    Irp->IoStatus.Status = STATUS_CANCELLED;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+}
+
+static VOID
+NsiDrainPendingIrps(
+    _In_ PNSI_PROVIDER Provider,
+    _In_opt_ PFILE_OBJECT FileObject,
+    _In_ NTSTATUS Status,
+    _In_ ULONG_PTR Information)
+{
+    PIRP Irp;
+
+    while ((Irp = IoCsqRemoveNextIrp(&Provider->Csq, FileObject)) != NULL)
+    {
+        Irp->IoStatus.Status = Status;
+        Irp->IoStatus.Information = Information;
+        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+    }
+}
+
 NTSTATUS
 NTAPI
 NsiRegisterProvider(
@@ -124,6 +226,7 @@ NsiRegisterProvider(
 {
     PNSI_PROVIDER New;
     KIRQL OldIrql;
+    NTSTATUS Status;
 
     *Provider = NULL;
     if (!NsiReady)
@@ -143,6 +246,15 @@ NsiRegisterProvider(
     New->Context = Context;
     New->References = 1;
     KeInitializeEvent(&New->Released, NotificationEvent, FALSE);
+    InitializeListHead(&New->PendingIrps);
+    KeInitializeSpinLock(&New->PendingLock);
+    Status = IoCsqInitialize(&New->Csq, NsiCsqInsertIrp, NsiCsqRemoveIrp, NsiCsqPeekNextIrp,
+                             NsiCsqAcquireLock, NsiCsqReleaseLock, NsiCsqCompleteCanceledIrp);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(New, TAG_NSI);
+        return Status;
+    }
 
     KeAcquireSpinLock(&NsiProviderLock, &OldIrql);
     if (NsiFindProviderLocked(Module, Table) != NULL)
@@ -174,7 +286,60 @@ NsiDeregisterProvider(
 
     NsiDereferenceProvider(Provider);
     KeWaitForSingleObject(&Provider->Released, Executive, KernelMode, FALSE, NULL);
+    NsiDrainPendingIrps(Provider, NULL, STATUS_CANCELLED, 0);
     ExFreePoolWithTag(Provider, TAG_NSI);
+}
+
+VOID
+NTAPI
+NsiNotifyChange(
+    _In_ PNSI_PROVIDER Provider,
+    _In_ NSI_CHANGE_TYPE Type,
+    _In_reads_bytes_opt_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize)
+{
+    LONG Sequence;
+
+    UNREFERENCED_PARAMETER(Type);
+    UNREFERENCED_PARAMETER(Key);
+    UNREFERENCED_PARAMETER(KeySize);
+
+    Sequence = InterlockedIncrement(&Provider->Sequence);
+    NsiDrainPendingIrps(Provider, NULL, STATUS_SUCCESS, (ULONG_PTR)(ULONG)Sequence);
+}
+
+NTSTATUS
+NTAPI
+NsiRequestChangeNotificationKm(
+    _In_ const NPI_MODULEID *Module,
+    _In_ ULONG Table,
+    _In_ PIRP Irp)
+{
+    PNSI_PROVIDER Provider = NsiReferenceProvider(Module, Table);
+
+    if (Provider == NULL)
+        return STATUS_NOT_FOUND;
+    IoCsqInsertIrp(&Provider->Csq, Irp, NULL);
+    NsiDereferenceProvider(Provider);
+    return STATUS_PENDING;
+}
+
+VOID
+NTAPI
+NsiCancelChangeNotificationsKm(
+    _In_ PFILE_OBJECT FileObject)
+{
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    if (!NsiReady)
+        return;
+    KeAcquireSpinLock(&NsiProviderLock, &OldIrql);
+    for (Entry = NsiProviderList.Flink; Entry != &NsiProviderList; Entry = Entry->Flink)
+    {
+        NsiDrainPendingIrps(CONTAINING_RECORD(Entry, NSI_PROVIDER, ListEntry), FileObject, STATUS_CANCELLED, 0);
+    }
+    KeReleaseSpinLock(&NsiProviderLock, OldIrql);
 }
 
 NTSTATUS

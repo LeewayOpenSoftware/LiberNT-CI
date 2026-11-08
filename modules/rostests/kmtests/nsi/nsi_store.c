@@ -258,6 +258,143 @@ TestRows(VOID)
     ok_eq_hex(Status, STATUS_NOT_FOUND);
 }
 
+static NTSTATUS NTAPI
+NotifyComplete(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_opt_ PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+    KeSetEvent((PKEVENT)Context, IO_NO_INCREMENT, FALSE);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static PIRP
+RequestChange(
+    _In_ const NPI_MODULEID *Module,
+    _In_ ULONG Table,
+    _Out_ PKEVENT Event,
+    _In_opt_ PFILE_OBJECT FileObject,
+    _Out_ NTSTATUS *Status)
+{
+    PIRP Irp = IoAllocateIrp(1, FALSE);
+
+    KeInitializeEvent(Event, NotificationEvent, FALSE);
+    if (Irp == NULL)
+    {
+        *Status = STATUS_INSUFFICIENT_RESOURCES;
+        return NULL;
+    }
+    IoSetCompletionRoutine(Irp, NotifyComplete, Event, TRUE, TRUE, TRUE);
+    IoSetNextIrpStackLocation(Irp);
+    IoGetCurrentIrpStackLocation(Irp)->FileObject = FileObject;
+    *Status = NsiRequestChangeNotificationKm(Module, Table, Irp);
+    return Irp;
+}
+
+static BOOLEAN
+WaitCompletion(
+    _In_ PKEVENT Event)
+{
+    LARGE_INTEGER Timeout;
+
+    Timeout.QuadPart = -5LL * 10000000;
+    return KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, &Timeout) == STATUS_SUCCESS;
+}
+
+static VOID
+TestNotifications(VOID)
+{
+    KEVENT EventA, EventB, EventC, EventD;
+    PIRP IrpA, IrpB, IrpC, IrpD;
+    FILE_OBJECT FileA, FileB;
+    PNSI_PROVIDER Scratch = NULL;
+    ULONG Key = 1, FirstSequence;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&FileA, sizeof(FileA));
+    RtlZeroMemory(&FileB, sizeof(FileB));
+
+    IrpA = RequestChange(&TestModule, NSISTORE_TABLE, &EventA, &FileA, &Status);
+    ok_eq_hex(Status, STATUS_PENDING);
+    if (IrpA == NULL)
+        return;
+    ok(KeReadStateEvent(&EventA) == 0, "request completed before any change\n");
+    NsiNotifyChange(MainProvider, NsiChangeParameter, &Key, sizeof(Key));
+    ok(WaitCompletion(&EventA), "request not completed by a change\n");
+    ok_eq_hex(IrpA->IoStatus.Status, STATUS_SUCCESS);
+    FirstSequence = (ULONG)IrpA->IoStatus.Information;
+    ok(FirstSequence != 0, "sequence is 0 after a change\n");
+    IoFreeIrp(IrpA);
+
+    IrpA = RequestChange(&TestModule, NSISTORE_TABLE, &EventA, &FileA, &Status);
+    ok_eq_hex(Status, STATUS_PENDING);
+    if (IrpA == NULL)
+        return;
+    NsiNotifyChange(MainProvider, NsiChangeAdd, NULL, 0);
+    ok(WaitCompletion(&EventA), "second request not completed by a change\n");
+    ok_eq_ulong((ULONG)IrpA->IoStatus.Information, FirstSequence + 1);
+    IoFreeIrp(IrpA);
+
+    IrpB = RequestChange(&TestModule, NSISTORE_TABLE, &EventB, &FileA, &Status);
+    ok_eq_hex(Status, STATUS_PENDING);
+    if (IrpB == NULL)
+        return;
+    ok(IoCancelIrp(IrpB), "IoCancelIrp found no cancel routine\n");
+    ok(WaitCompletion(&EventB), "cancelled request not completed\n");
+    ok_eq_hex(IrpB->IoStatus.Status, STATUS_CANCELLED);
+    IoFreeIrp(IrpB);
+
+    IrpC = RequestChange(&TestModule, NSISTORE_TABLE, &EventC, &FileA, &Status);
+    ok_eq_hex(Status, STATUS_PENDING);
+    IrpD = RequestChange(&TestModule, NSISTORE_TABLE, &EventD, &FileB, &Status);
+    ok_eq_hex(Status, STATUS_PENDING);
+    if (IrpC == NULL || IrpD == NULL)
+    {
+        NsiCancelChangeNotificationsKm(&FileA);
+        NsiCancelChangeNotificationsKm(&FileB);
+        if (IrpC != NULL)
+            IoFreeIrp(IrpC);
+        if (IrpD != NULL)
+            IoFreeIrp(IrpD);
+        return;
+    }
+    NsiCancelChangeNotificationsKm(&FileA);
+    ok(WaitCompletion(&EventC), "request of the closed file object not completed\n");
+    ok_eq_hex(IrpC->IoStatus.Status, STATUS_CANCELLED);
+    ok(KeReadStateEvent(&EventD) == 0, "request of another file object was cancelled too\n");
+    NsiNotifyChange(MainProvider, NsiChangeDelete, &Key, sizeof(Key));
+    ok(WaitCompletion(&EventD), "surviving request not completed by a change\n");
+    ok_eq_hex(IrpD->IoStatus.Status, STATUS_SUCCESS);
+    ok_eq_ulong((ULONG)IrpD->IoStatus.Information, FirstSequence + 2);
+    IoFreeIrp(IrpC);
+    IoFreeIrp(IrpD);
+
+    Status = NsiRegisterProvider(&TestModule, NSISTORE_SCRATCH_TABLE, &TestDispatch, &TestModule, &Scratch);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (Scratch != NULL)
+    {
+        IrpA = RequestChange(&TestModule, NSISTORE_SCRATCH_TABLE, &EventA, &FileA, &Status);
+        ok_eq_hex(Status, STATUS_PENDING);
+        NsiDeregisterProvider(Scratch);
+        if (IrpA != NULL)
+        {
+            ok(WaitCompletion(&EventA), "request not completed by deregistration\n");
+            ok_eq_hex(IrpA->IoStatus.Status, STATUS_CANCELLED);
+            IoFreeIrp(IrpA);
+        }
+    }
+
+    IrpA = RequestChange(&TestModule, NSISTORE_SCRATCH_TABLE, &EventA, &FileA, &Status);
+    ok_eq_hex(Status, STATUS_NOT_FOUND);
+    if (IrpA != NULL)
+    {
+        ok(KeReadStateEvent(&EventA) == 0, "failed request was completed\n");
+        IoFreeIrp(IrpA);
+    }
+}
+
 NTSTATUS
 TestEntry(
     IN PDRIVER_OBJECT DriverObject,
@@ -282,6 +419,7 @@ TestEntry(
     ok_eq_hex(Status, STATUS_SUCCESS);
 
     KmtRegisterMessageHandler(IOCTL_NSISTORE_RUN, NULL, TestMessageHandler);
+    KmtRegisterMessageHandler(IOCTL_NSISTORE_NOTIFY, NULL, TestMessageHandler);
     return STATUS_SUCCESS;
 }
 
@@ -294,6 +432,7 @@ TestUnload(
     UNREFERENCED_PARAMETER(DriverObject);
 
     KmtUnregisterMessageHandler(IOCTL_NSISTORE_RUN, NULL, TestMessageHandler);
+    KmtUnregisterMessageHandler(IOCTL_NSISTORE_NOTIFY, NULL, TestMessageHandler);
     if (MainProvider != NULL)
     {
         NsiDeregisterProvider(MainProvider);
@@ -314,12 +453,20 @@ TestMessageHandler(
     UNREFERENCED_PARAMETER(InLength);
     UNREFERENCED_PARAMETER(OutLength);
 
-    ok_eq_ulong(ControlCode, (ULONG)IOCTL_NSISTORE_RUN);
     ok_irql(PASSIVE_LEVEL);
     if (skip(MainProvider != NULL, "provider registration failed at load\n"))
         return STATUS_SUCCESS;
+    if (ControlCode == IOCTL_NSISTORE_NOTIFY)
+    {
+        ULONG Key = 2;
+
+        NsiNotifyChange(MainProvider, NsiChangeParameter, &Key, sizeof(Key));
+        return STATUS_SUCCESS;
+    }
+    ok_eq_ulong(ControlCode, (ULONG)IOCTL_NSISTORE_RUN);
     TestRegistration();
     TestEnumeration();
     TestRows();
+    TestNotifications();
     return STATUS_SUCCESS;
 }

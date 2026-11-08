@@ -171,6 +171,75 @@ TestDeviceRows(
     ok_eq_ulong(err, (DWORD)ERROR_NOT_SUPPORTED);
 }
 
+static DWORD
+ArmNotification(
+    _In_ HANDLE Device,
+    _In_ const NPI_MODULEID *Module,
+    _In_ UINT Table,
+    _Inout_ OVERLAPPED *Overlapped)
+{
+    struct nsiproxy_request_notification in;
+    DWORD returned;
+
+    memset(&in, 0, sizeof(in));
+    in.module = *Module;
+    in.table = Table;
+    ResetEvent(Overlapped->hEvent);
+    if (DeviceIoControl(Device, IOCTL_NSIPROXY_WINE_CHANGE_NOTIFICATION, &in, sizeof(in), NULL, 0, &returned, Overlapped))
+        return ERROR_SUCCESS;
+    return GetLastError();
+}
+
+static void
+TestDeviceNotifications(
+    _In_ const NPI_MODULEID *Module)
+{
+    HANDLE device = OpenNsiDevice(FILE_FLAG_OVERLAPPED);
+    OVERLAPPED ovl;
+    DWORD err, bytes, first;
+
+    ok(device != INVALID_HANDLE_VALUE, "overlapped open of the device: %lu\n", GetLastError());
+    if (device == INVALID_HANDLE_VALUE)
+        return;
+    memset(&ovl, 0, sizeof(ovl));
+    ovl.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+
+    err = ArmNotification(device, Module, NSISTORE_TABLE, &ovl);
+    ok_eq_ulong(err, (DWORD)ERROR_IO_PENDING);
+    ok(WaitForSingleObject(ovl.hEvent, 300) == WAIT_TIMEOUT, "notification fired without a change\n");
+    ok(KmtSendToDriver(IOCTL_NSISTORE_NOTIFY) == ERROR_SUCCESS, "notify request to the test driver failed\n");
+    ok(WaitForSingleObject(ovl.hEvent, 5000) == WAIT_OBJECT_0, "notification not delivered after a change\n");
+    bytes = 0;
+    ok(GetOverlappedResult(device, &ovl, &bytes, FALSE), "GetOverlappedResult: %lu\n", GetLastError());
+    ok(bytes != 0, "sequence is 0 after a change\n");
+    first = bytes;
+
+    err = ArmNotification(device, Module, NSISTORE_TABLE, &ovl);
+    ok_eq_ulong(err, (DWORD)ERROR_IO_PENDING);
+    ok(KmtSendToDriver(IOCTL_NSISTORE_NOTIFY) == ERROR_SUCCESS, "second notify request failed\n");
+    ok(WaitForSingleObject(ovl.hEvent, 5000) == WAIT_OBJECT_0, "second notification not delivered\n");
+    bytes = 0;
+    ok(GetOverlappedResult(device, &ovl, &bytes, FALSE), "second GetOverlappedResult: %lu\n", GetLastError());
+    ok_eq_ulong(bytes, first + 1);
+
+    err = ArmNotification(device, Module, NSISTORE_TABLE, &ovl);
+    ok_eq_ulong(err, (DWORD)ERROR_IO_PENDING);
+    ok(CancelIoEx(device, &ovl), "CancelIoEx: %lu\n", GetLastError());
+    ok(WaitForSingleObject(ovl.hEvent, 5000) == WAIT_OBJECT_0, "cancelled request not completed\n");
+    ok(!GetOverlappedResult(device, &ovl, &bytes, FALSE), "cancelled request completed successfully\n");
+    ok_eq_ulong(GetLastError(), (DWORD)ERROR_OPERATION_ABORTED);
+
+    err = ArmNotification(device, Module, NSISTORE_SCRATCH_TABLE, &ovl);
+    ok_eq_ulong(err, (DWORD)ERROR_NOT_FOUND);
+
+    err = ArmNotification(device, Module, NSISTORE_TABLE, &ovl);
+    ok_eq_ulong(err, (DWORD)ERROR_IO_PENDING);
+    CloseHandle(device);
+    ok(WaitForSingleObject(ovl.hEvent, 5000) == WAIT_OBJECT_0, "request not completed by closing the handle\n");
+    ok_eq_hex((ULONG)ovl.Internal, 0xC0000120UL);
+    CloseHandle(ovl.hEvent);
+}
+
 START_TEST(NsiStore)
 {
     NPI_MODULEID module;
@@ -193,6 +262,7 @@ START_TEST(NsiStore)
         TestDeviceEnumerate(device, &module);
         TestDeviceRows(device, &module);
         CloseHandle(device);
+        TestDeviceNotifications(&module);
     }
 
     KmtCloseDriver();
