@@ -74,7 +74,10 @@ WaitIrp(
             trace("%s completed after cancel with 0x%08lx\n", Kind, Irp->IoStatus.Status);
         }
     }
-    Status = Irp->IoStatus.Status;
+    if (NT_SUCCESS(Status) || Status == STATUS_PENDING)
+    {
+        Status = Irp->IoStatus.Status;
+    }
     if (Information != NULL)
     {
         *Information = Irp->IoStatus.Information;
@@ -173,12 +176,31 @@ static
 NTSTATUS
 BindLoopback(
     _In_ PWSK_SOCKET Socket,
+    _In_ ULONG Flags,
     _Out_ PSOCKADDR_IN Address)
 {
     const WSK_PROVIDER_BASIC_DISPATCH *Basic = Socket->Dispatch;
+    PFN_WSK_BIND Bind;
+    PFN_WSK_GET_LOCAL_ADDRESS GetLocalAddress;
     KEVENT Event;
     NTSTATUS Status;
     PIRP Irp;
+
+    switch (Flags)
+    {
+        case WSK_FLAG_LISTEN_SOCKET:
+            Bind = ((const WSK_PROVIDER_LISTEN_DISPATCH *)Basic)->WskBind;
+            GetLocalAddress = ((const WSK_PROVIDER_LISTEN_DISPATCH *)Basic)->WskGetLocalAddress;
+            break;
+        case WSK_FLAG_CONNECTION_SOCKET:
+            Bind = ((const WSK_PROVIDER_CONNECTION_DISPATCH *)Basic)->WskBind;
+            GetLocalAddress = ((const WSK_PROVIDER_CONNECTION_DISPATCH *)Basic)->WskGetLocalAddress;
+            break;
+        default:
+            Bind = ((const WSK_PROVIDER_DATAGRAM_DISPATCH *)Basic)->WskBind;
+            GetLocalAddress = ((const WSK_PROVIDER_DATAGRAM_DISPATCH *)Basic)->WskGetLocalAddress;
+            break;
+    }
 
     RtlZeroMemory(Address, sizeof(*Address));
     Address->sin_family = AF_INET;
@@ -188,7 +210,7 @@ BindLoopback(
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    Status = ((const WSK_PROVIDER_LISTEN_DISPATCH *)Basic)->WskBind(Socket, (PSOCKADDR)Address, 0, Irp);
+    Status = Bind(Socket, (PSOCKADDR)Address, 0, Irp);
     Status = WaitIrp("WskBind", Irp, &Event, Status, NULL);
     IoFreeIrp(Irp);
     ok_eq_hex(Status, STATUS_SUCCESS);
@@ -201,7 +223,7 @@ BindLoopback(
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
-    Status = ((const WSK_PROVIDER_LISTEN_DISPATCH *)Basic)->WskGetLocalAddress(Socket, (PSOCKADDR)Address, Irp);
+    Status = GetLocalAddress(Socket, (PSOCKADDR)Address, Irp);
     Status = WaitIrp("WskGetLocalAddress", Irp, &Event, Status, NULL);
     IoFreeIrp(Irp);
     ok_eq_hex(Status, STATUS_SUCCESS);
@@ -312,7 +334,8 @@ TestStream(
     }
     ListenDispatch = Listener->Dispatch;
     ClientDispatch = Client->Dispatch;
-    if (!NT_SUCCESS(BindLoopback(Listener, &ListenAddress)) || !NT_SUCCESS(BindLoopback(Client, &ClientAddress)))
+    if (!NT_SUCCESS(BindLoopback(Listener, WSK_FLAG_LISTEN_SOCKET, &ListenAddress)) ||
+        !NT_SUCCESS(BindLoopback(Client, WSK_FLAG_CONNECTION_SOCKET, &ClientAddress)))
     {
         goto done;
     }
@@ -429,7 +452,8 @@ TestDatagram(
     }
     DispatchA = A->Dispatch;
     DispatchB = B->Dispatch;
-    if (!NT_SUCCESS(BindLoopback(A, &AddressA)) || !NT_SUCCESS(BindLoopback(B, &AddressB)))
+    if (!NT_SUCCESS(BindLoopback(A, WSK_FLAG_DATAGRAM_SOCKET, &AddressA)) ||
+        !NT_SUCCESS(BindLoopback(B, WSK_FLAG_DATAGRAM_SOCKET, &AddressB)))
     {
         goto done;
     }
