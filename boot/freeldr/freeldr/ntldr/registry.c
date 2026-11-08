@@ -548,6 +548,28 @@ RegImportBinaryHive(
             }
         }
 
+        /* Neither log could recover the hive (e.g. dirty from a refused
+           growth write with the log gone). Clamp to the bins the file
+           holds and import the surviving prefix, as winload does; the
+           kernel self-heal persists the consistent image. */
+        if (*ChunkSize > HBLOCK_SIZE &&
+            HvpClampHiveToValidBins((PHBASE_BLOCK)*ChunkBase,
+                                    *ChunkSize - HBLOCK_SIZE) != 0)
+        {
+            PHBASE_BLOCK ClampedHeader = (PHBASE_BLOCK)*ChunkBase;
+
+            ClampedHeader->Sequence2 = ClampedHeader->Sequence1;
+            ClampedHeader->CheckSum = HvpHiveHeaderChecksum(ClampedHeader);
+            ClampedHeader->BootType |= HBOOT_TYPE_SELF_HEAL;
+            ((PHBASE_BLOCK)*ChunkBase)->BootRecover = HBOOT_BOOT_RECOVERED_BY_HIVE_LOG;
+            WARN("Clamping the hive to its valid bins (self-heal)\n");
+        }
+        else
+        {
+            ERR("Failed to recover the hive (no valid bins)\n");
+            return FALSE;
+        }
+
         /* Now retry initializing the hive again */
         CmSystemHive = FrLdrTempAlloc(sizeof(CMHIVE), 'eviH');
         Success = RegInitializeHive(CmSystemHive, *ChunkBase, LoadAlternate);
