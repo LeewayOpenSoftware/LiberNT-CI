@@ -118,20 +118,17 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtfsDriverEntry: ExInitializeResourceLite failed %lx\n", Status);
+        IoDeleteDevice(NtfsDiskFileSystemDeviceObject);
         return Status;
     }
 
     /*
-     * Register the file-system control device for shutdown notification so
-     * NtfsFsdShutdown runs at system shutdown (NTFS/FastFAT register their
-     * control device once here, not each volume). Non-fatal on failure: the
-     * file system still mounts, only the shutdown flush is skipped.
+     * Register the file system. This also places the control device on the
+     * disk file-system queue, which IopShutdownBaseFileSystems walks at system
+     * shutdown to deliver IRP_MJ_SHUTDOWN to NtfsFsdShutdown -- the Windows-
+     * faithful path NTFS already relies on. No separate shutdown-notification
+     * registration is needed; it would only deliver the IRP a second time.
      */
-    Status = IoRegisterShutdownNotification(NtfsDiskFileSystemDeviceObject);
-    if (!NT_SUCCESS(Status))
-        DPRINT1("NtfsDriverEntry: IoRegisterShutdownNotification failed %lx\n", Status);
-
-    // Register file system
     IoRegisterFileSystem(NtfsDiskFileSystemDeviceObject);
     ObReferenceObject(NtfsDiskFileSystemDeviceObject);
 
@@ -297,9 +294,14 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (VolCB->Dismounted)
             continue;
 
+        /* The km library serves every volume through one process-global
+         * disk slot; bind this volume's disk before flushing it, exactly as
+         * every other NtfsFlushVolume caller does, or its streams would be
+         * committed through the last device probed. */
+        NtfsBindVolumeDisk(VolCB);
         FlushStatus = NtfsFlushVolume(VolCB, FALSE);
-        if (!NT_SUCCESS(FlushStatus))
-            DPRINT1("NtfsFsdShutdown: volume flush failed %lx; continuing\n", FlushStatus);
+        DPRINT1("NTFS: shutdown flush VolCB=%p status=%lx\n", VolCB, FlushStatus);
+        /* Fail-closed per volume: logged above, continue; never discard another. */
     }
     ExReleaseResourceLite(&NtfsGlobalVolumeListResource);
     KeLeaveCriticalRegion();
@@ -319,7 +321,6 @@ NTAPI
 NtfsUnload(_In_ _Unreferenced_parameter_ PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
-    IoUnregisterShutdownNotification(NtfsDiskFileSystemDeviceObject);
     NtfsDiskUnloadKm();
     ExDeleteResourceLite(&NtfsGlobalVolumeListResource);
     ObDereferenceObject(NtfsDiskFileSystemDeviceObject);
