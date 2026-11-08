@@ -2334,7 +2334,10 @@ ChangePos:
 
         m_Position = g_TaskbarSettings.sr.Position;
         rcScreen = g_TaskbarSettings.sr.Rect;
-        GetScreenRectFromRect(&rcScreen, MONITOR_DEFAULTTONEAREST);
+        if (m_bSecondary && m_Monitor != NULL)
+            GetScreenRect(m_Monitor, &rcScreen);
+        else
+            GetScreenRectFromRect(&rcScreen, MONITOR_DEFAULTTONEAREST);
 
         if (!g_TaskbarSettings.sr.Size.cx || !g_TaskbarSettings.sr.Size.cy)
         {
@@ -4731,7 +4734,6 @@ HRESULT CreateSecondaryTrayWindow(HMONITOR hMonitor, ITrayWindow ** ppTray)
     Tray->SetSecondary(TRUE);
     Tray->SetMonitor(hMonitor);
     Tray->_Init();
-    Tray->Open();
 
     *ppTray = (ITrayWindow *) Tray;
 
