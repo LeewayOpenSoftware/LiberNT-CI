@@ -118,6 +118,12 @@ KdInitializeBootLog(
 
 VOID
 NTAPI
+KdStartBootLog(
+    VOID
+);
+
+VOID
+NTAPI
 KdShutdownBootLog(
     VOID
 );

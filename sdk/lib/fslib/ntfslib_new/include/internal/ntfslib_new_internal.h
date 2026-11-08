@@ -542,6 +542,15 @@ public:
     class MasterFileTable* MFT;
     class LogFileService* LFS;
     BOOLEAN IsReadOnly = FALSE;
+    /* Volume-dirty lifecycle: the first metadata write of a read-write session
+     * marks the volume dirty (durable before the write it covers); a clean
+     * dismount clears it. DirtyRetained means it was already dirty at mount, or
+     * a user asked for it (FSCTL): MarkClean then leaves the flag alone. */
+    BOOLEAN DirtyTracking = FALSE;
+    BOOLEAN DirtyMarked = FALSE;
+    BOOLEAN DirtyRetained = FALSE;
+    /* Set after a clean shutdown cleared the flag; makes a later re-dirty logged. */
+    BOOLEAN ShutdownCleaned = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
     BOOLEAN Generate8dot3Names = FALSE;
 
@@ -728,6 +737,29 @@ public:
     NTSTATUS
     SetVolumeFlags(_In_ USHORT Set,
                    _In_ USHORT Clear);
+
+    /* Starts the dirty lifecycle on a read-write volume (see DirtyTracking). */
+    NTSTATUS
+    EnableDirtyTracking();
+
+    /* Makes the volume dirty on the medium before the first write proceeds. */
+    NTSTATUS
+    MarkDirtyBeforeWrite();
+
+    /* Clears the dirty flag after all dirty metadata is flushed, unless the
+     * flag is retained (pre-existing / user-requested). */
+    NTSTATUS
+    MarkClean();
+
+    /* Keep the dirty flag across a clean dismount (pre-existing or a user
+     * FSCTL_MARK_VOLUME_DIRTY): MarkClean will not clear it. */
+    void
+    RetainDirty(_In_ BOOLEAN Retain);
+
+    /* MarkClean on the shutdown path; also arms re-dirty logging. No write-
+     * through (that is the J30 chain mechanism, deliberately not here). */
+    NTSTATUS
+    MarkCleanForShutdown();
 
     /**
      * Copies a specified number of bytes into a buffer from the volume at a

@@ -534,6 +534,19 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     VolCB->DiskVolume = DiskVolume;
     VolCB->BytesPerSector = DiskGeometry.BytesPerSector;
 
+    /* Start the volume-dirty lifecycle: the first metadata write marks the
+     * volume dirty, a clean dismount clears it. No-op (success) on a read-only
+     * mount. VD3: a failure means $Volume could not be read, so crash detection
+     * would be silently disabled - refuse the RW mount rather than mount a
+     * volume whose dirty state cannot be tracked (Windows likewise treats an
+     * unreadable $Volume as a mount failure). */
+    Status = NtfsVolumeEnableDirtyTracking(DiskVolume);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NTFS: dirty-tracking init failed (0x%08lx); refusing mount\n", Status);
+        goto Cleanup;
+    }
+
     // Set up storage device in VolCB.
     VolCB->StorageDevice = TargetDeviceObject;
     VolCB->StorageDevice->Vpb->DeviceObject = FSDeviceObject;
@@ -561,6 +574,26 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
 
     /* Track this volume for the shutdown data-flush sweep (NtfsFsdShutdown). */
     NtfsRegisterVolumeForShutdown(VolCB);
+
+    /* Receive IRP_MJ_SHUTDOWN in I/O shutdown phase 1 (LAST-CHANCE), so the
+     * volume's dirty flag is cleared at the last write point. A phase-0
+     * (first-chance) clear runs BEFORE CmShutdownSystem flushes the registry
+     * hives, before Mm writes modified pages and before Cc flushes the cache -
+     * all of which write the boot volume after a phase-0 clean point and
+     * re-dirty it (J37 CS1: the hive flush left VOL_DIRTY=1 and autochk every
+     * boot). Last-chance fires after all of those, so NtfsFsdShutdown's
+     * NtfsDiskFlushKm commits those writes and MarkCleanForShutdown then clears
+     * with nothing left to re-dirty - which is also when Windows NTFS marks the
+     * volume clean (the FS shutdown in phase 1). The system volume is flushed,
+     * not dismounted, at shutdown. Unregistered on dismount
+     * (IoUnregisterShutdownNotification removes it from the last-chance list
+     * too); see NtfsDismountVolume. */
+    /* VD3: a failed registration (pool exhaustion) is NOT fatal - it only means
+     * a later clean shutdown leaves the bit set, which is fail-safe (next boot
+     * autochks). Log and continue rather than refuse to mount the volume (which,
+     * for the system volume, would be unbootable over a transient allocation). */
+    if (!NT_SUCCESS(IoRegisterLastChanceShutdownNotification(FSDeviceObject)))
+        DPRINT1("NTFS: last-chance shutdown registration failed; a clean shutdown may leave the volume dirty (safe: next boot autochks)\n");
 
     Status = STATUS_SUCCESS;
 

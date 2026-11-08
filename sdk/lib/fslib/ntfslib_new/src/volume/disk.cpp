@@ -50,6 +50,16 @@ Volume::WriteVolume(_In_    ULONGLONG Offset,
     if (Offset > VolumeBytes || Length > VolumeBytes - Offset)
         return STATUS_DISK_FULL;
 
+    /* The first write since the volume was last clean marks it dirty, durable
+     * before this write proceeds (MarkDirtyBeforeWrite sets DirtyMarked first,
+     * so its own $Volume write does not recurse). */
+    if (DirtyTracking && !DirtyMarked)
+    {
+        NTSTATUS DirtyStatus = MarkDirtyBeforeWrite();
+        if (!NT_SUCCESS(DirtyStatus))
+            return DirtyStatus;
+    }
+
     return NtfsWriteVolumeContext(IoContext,
                                   BytesPerSector,
                                   Offset,

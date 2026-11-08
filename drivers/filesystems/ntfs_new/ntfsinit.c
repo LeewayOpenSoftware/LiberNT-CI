@@ -278,7 +278,65 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
      * NtfsFlushVolume, which takes each volume's StreamListMutex
      * (global resource -> StreamListMutex, never the reverse).
      */
-    UNREFERENCED_PARAMETER(VolumeDeviceObject);
+    /*
+     * Two deliveries reach this routine:
+     * - the control device, through the disk file-system queue (phase 0):
+     *   flush every mounted volume's cached data, then the metadata cache;
+     * - each mounted volume's device, registered for the last-chance
+     *   shutdown (phase 1, vol.c): flush that volume again, since the hive
+     *   flush and Mm/Cc ran after phase 0, and then clear its dirty flag,
+     *   only if the flush succeeded (volume-dirty lifecycle, VD1).
+     */
+    if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
+    {
+        PVolumeContextBlock VolCB =
+            (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+
+        if (VolCB && VolCB->DiskVolume)
+        {
+            BOOLEAN Active;
+
+            /* VD1: read the lifecycle state under VolumeStateMutex and clear
+             * under the metadata gate, so this shutdown clear is serialized with
+             * dismount and with NtfsMarkVolumeDirty's set-then-retain (both of
+             * which hold the gate for their flag ops). Honor Dismounting as well
+             * as Dismounted. */
+            ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+            Active = !VolCB->Dismounted && !VolCB->Dismounting;
+            ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            if (Active)
+            {
+                NTSTATUS Status;
+
+                /* The km library serves every volume through one process-global
+                 * disk slot: bind this volume's disk before its flush and before
+                 * the flag write below. */
+                NtfsBindVolumeDisk(VolCB);
+                Status = NtfsFlushVolume(VolCB, FALSE);
+                if (NT_SUCCESS(Status))
+                    Status = NtfsDiskFlushKm();
+                if (NT_SUCCESS(Status))
+                {
+                    KeEnterCriticalRegion();
+                    NtfsAcquireMetadata(VolCB);
+                    (void)NtfsVolumeMarkCleanForShutdown(VolCB->DiskVolume);
+                    NtfsReleaseMetadata(VolCB);
+                    KeLeaveCriticalRegion();
+                }
+                else
+                {
+                    DPRINT1("NTFS: last-chance flush VolCB=%p status=%lx; dirty flag left set
+",
+                            VolCB, Status);
+                }
+            }
+        }
+
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
+    }
 
     KeEnterCriticalRegion();
     ExAcquireResourceSharedLite(&NtfsGlobalVolumeListResource, TRUE);
@@ -300,7 +358,8 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
          * committed through the last device probed. */
         NtfsBindVolumeDisk(VolCB);
         FlushStatus = NtfsFlushVolume(VolCB, FALSE);
-        DPRINT1("NTFS: shutdown flush VolCB=%p status=%lx\n", VolCB, FlushStatus);
+        DPRINT1("NTFS: shutdown flush VolCB=%p status=%lx
+", VolCB, FlushStatus);
         /* Fail-closed per volume: logged above, continue; never discard another. */
     }
     ExReleaseResourceLite(&NtfsGlobalVolumeListResource);
@@ -918,8 +977,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NotifyUnlock = TRUE;
             }
         }
-        if (VolCB->OpenHandleCount > 0)
-            VolCB->OpenHandleCount--;
+        NtfsDropOpenHandle(VolCB, FileCB);
         FileCB->CleanupComplete = TRUE;
         FirstCleanup = TRUE;
         ExReleaseFastMutex(&VolCB->VolumeStateMutex);

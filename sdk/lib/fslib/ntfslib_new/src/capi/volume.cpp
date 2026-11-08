@@ -278,6 +278,35 @@ NtfsVolumeNeedsStartupRepair(
            (Flags & (VOL_FULL_CHKDSK | VOL_ONLINE_SCAN)) != VOL_ONLINE_SCAN;
 }
 
+NTSTATUS
+NtfsVolumeEnableDirtyTracking(
+    _In_ PNtfsVolume DiskVolume)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->EnableDirtyTracking();
+}
+
+NTSTATUS
+NtfsVolumeMarkClean(
+    _In_ PNtfsVolume DiskVolume)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->MarkClean();
+}
+
+void
+NtfsVolumeRetainDirty(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ BOOLEAN Retain)
+{
+    reinterpret_cast<PVolume>(DiskVolume)->RetainDirty(Retain);
+}
+
+NTSTATUS
+NtfsVolumeMarkCleanForShutdown(
+    _In_ PNtfsVolume DiskVolume)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->MarkCleanForShutdown();
+}
+
 #ifdef __cplusplus
 }
 #endif

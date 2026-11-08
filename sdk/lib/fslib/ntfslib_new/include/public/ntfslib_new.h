@@ -1141,6 +1141,23 @@ BOOLEAN
 NtfsVolumeNeedsStartupRepair(
     _In_ USHORT Flags);
 
+NTSTATUS
+NtfsVolumeEnableDirtyTracking(
+    _In_ PNtfsVolume DiskVolume);
+
+NTSTATUS
+NtfsVolumeMarkClean(
+    _In_ PNtfsVolume DiskVolume);
+
+void
+NtfsVolumeRetainDirty(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ BOOLEAN Retain);
+
+NTSTATUS
+NtfsVolumeMarkCleanForShutdown(
+    _In_ PNtfsVolume DiskVolume);
+
 #ifdef __cplusplus
 }
 #endif
