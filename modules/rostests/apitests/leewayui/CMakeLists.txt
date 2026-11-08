@@ -5,6 +5,8 @@ add_executable(leewayui_ribbon_test
 
 set_module_type(leewayui_ribbon_test win32gui UNICODE)
 
+add_definitions(-DUNICODE -D_UNICODE)
+
 target_link_libraries(leewayui_ribbon_test
     leewayui_static
 )

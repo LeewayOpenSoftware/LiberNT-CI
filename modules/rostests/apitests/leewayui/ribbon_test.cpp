@@ -12,6 +12,7 @@
 #define COBJMACROS
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <windowsx.h>
 #include <stdio.h>
 #include <leewayui/ribbon.h>
 #include <leewayui/theme.h>
@@ -95,7 +96,7 @@ static LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
         /* Create client area (placeholder) */
         app->client_area = CreateWindow(
             L"STATIC", L"Client area (placeholder for image/content)",
-            WS_CHILD | WS_VISIBLE | SS_CENTER | SS_VCENTER,
+            WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
             0, 60, 500, 300,
             hwnd, NULL, GetModuleHandle(NULL), NULL
         );
@@ -124,7 +125,7 @@ static LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
         AppState *app = (AppState *)GetWindowLongPtr(hwnd, GWLP_USERDATA);
         if (!app) return 0;
 
-        app->current_dpi = GET_DPICHANGED_WPARAM(wparam);
+        app->current_dpi = HIWORD(wparam);
         if (app->ribbon) {
             LeewayRibbonOnDpiChanged(app->ribbon, app->current_dpi);
         }

@@ -47,7 +47,7 @@ static LRESULT CALLBACK RibbonWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPA
         /* Draw placeholder text indicating this is the ribbon */
         SetTextColor(hdc, RGB(0, 0, 0));
         SetBkMode(hdc, TRANSPARENT);
-        DrawText(hdc, L"LeewayUI Ribbon (One Tab, One Group, One Button)", -1, &rect, DT_LEFT | DT_VCENTER);
+        DrawTextW(hdc, L"LeewayUI Ribbon (One Tab, One Group, One Button)", -1, &rect, DT_LEFT | DT_VCENTER);
 
         EndPaint(hwnd, &ps);
         return 0;
@@ -82,18 +82,18 @@ HRESULT LeewayRibbonCreate(
     /* Register window class if needed */
     static BOOL class_registered = FALSE;
     if (!class_registered) {
-        WNDCLASS wc = {0};
+        WNDCLASSW wc = {0};
         wc.lpfnWndProc = RibbonWindowProc;
         wc.hInstance = GetModuleHandle(NULL);
         wc.lpszClassName = L"LeewayUIRibbon";
         wc.hCursor = LoadCursor(NULL, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-        RegisterClass(&wc);
+        RegisterClassW(&wc);
         class_registered = TRUE;
     }
 
     /* Create ribbon window */
-    HWND ribbon_window = CreateWindowEx(
+    HWND ribbon_window = CreateWindowExW(
         0, L"LeewayUIRibbon", L"",
         WS_CHILD | WS_VISIBLE,
         0, 0, 500, 60,
