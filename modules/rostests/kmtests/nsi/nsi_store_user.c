@@ -9,6 +9,7 @@
 #include <winsock2.h>
 #include <ws2ipdef.h>
 #include <iphlpapi.h>
+#include <netioapi.h>
 #include <netiodef.h>
 #include <wine/nsi.h>
 
@@ -251,6 +252,199 @@ TestDeviceInterfaces(
     }
 }
 
+static DWORD
+EnumerateTable(
+    _In_ HANDLE Device,
+    _In_ const NPI_MODULEID *Module,
+    _In_ UINT Table,
+    _In_reads_(4) const UINT *Sizes,
+    _In_ UINT Rows,
+    _Outptr_result_maybenull_ BYTE **Out,
+    _Out_ DWORD *Count)
+{
+    struct nsiproxy_enumerate_all in;
+    DWORD out_size = sizeof(DWORD) + Rows * (Sizes[0] + Sizes[1] + Sizes[2] + Sizes[3]), returned, err;
+
+    *Count = 0;
+    *Out = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, out_size);
+    if (*Out == NULL)
+        return ERROR_OUTOFMEMORY;
+    memset(&in, 0, sizeof(in));
+    in.module = *Module;
+    in.table = Table;
+    in.key_size = Sizes[0];
+    in.rw_size = Sizes[1];
+    in.dynamic_size = Sizes[2];
+    in.static_size = Sizes[3];
+    in.count = Rows;
+    err = Ioctl(Device, IOCTL_NSIPROXY_WINE_ENUMERATE_ALL, &in, sizeof(in), *Out, out_size, &returned);
+    if (err == ERROR_SUCCESS || err == ERROR_MORE_DATA)
+        *Count = *(DWORD *)*Out;
+    return err;
+}
+
+#define TABLE_ROWS 64
+
+static BOOL
+IsIn6Loopback(
+    _In_reads_(16) const BYTE *Address)
+{
+    static const BYTE loopback[16] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
+
+    return memcmp(Address, loopback, sizeof(loopback)) == 0;
+}
+#define SECTION(out, rows, offset) ((out) + sizeof(DWORD) + (rows) * (offset))
+
+static BOOL
+LuidKnown(
+    _In_ const NET_LUID *Luids,
+    _In_ DWORD Count,
+    _In_ NET_LUID Luid)
+{
+    DWORD i;
+
+    for (i = 0; i < Count; i++)
+        if (Luids[i].Value == Luid.Value)
+            return TRUE;
+    return FALSE;
+}
+
+static void
+TestDeviceIpTables(
+    _In_ HANDLE Device,
+    _In_ ADDRESS_FAMILY Family)
+{
+    const NPI_MODULEID *module = Family == AF_INET ? &NPI_MS_IPV4_MODULEID : &NPI_MS_IPV6_MODULEID;
+    const UINT bits = Family == AF_INET ? 32 : 128;
+    const UINT if_sizes[4] = { sizeof(NET_LUID), 0, 0, sizeof(struct nsi_ndis_ifinfo_static) };
+    const UINT ipif_sizes[4] = { sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw), sizeof(struct nsi_ip_interface_dynamic), 0 };
+    const UINT uni_sizes[4] = { Family == AF_INET ? sizeof(struct nsi_ipv4_unicast_key) : sizeof(struct nsi_ipv6_unicast_key), sizeof(struct nsi_ip_unicast_rw), sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static) };
+    const UINT nb_sizes[4] = { Family == AF_INET ? sizeof(struct nsi_ipv4_neighbour_key) : sizeof(struct nsi_ipv6_neighbour_key), sizeof(struct nsi_ip_neighbour_rw), sizeof(struct nsi_ip_neighbour_dynamic), 0 };
+    const UINT fw_sizes[4] = { Family == AF_INET ? sizeof(struct nsi_ipv4_forward_key) : sizeof(struct nsi_ipv6_forward_key), sizeof(struct nsi_ip_forward_rw), Family == AF_INET ? sizeof(struct nsi_ipv4_forward_dynamic) : sizeof(struct nsi_ipv6_forward_dynamic), sizeof(struct nsi_ip_forward_static) };
+    BYTE *ifinfo = NULL, *ipif = NULL, *uni = NULL, *nb = NULL, *fw = NULL;
+    const NET_LUID *luids;
+    const struct nsi_ndis_ifinfo_static *ifstat;
+    NET_LUID loopback_luid;
+    DWORD ifcount, count, i, err;
+    BOOL have_loopback_addr = FALSE;
+    MIB_UNICASTIPADDRESS_TABLE *unicast = NULL;
+    MIB_IPFORWARD_TABLE2 *forward = NULL;
+    MIB_IPNET_TABLE2 *neighbours = NULL;
+
+    loopback_luid.Value = 0;
+    err = EnumerateTable(Device, &NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE, if_sizes, TABLE_ROWS, &ifinfo, &ifcount);
+    if (skip(err == ERROR_SUCCESS && ifcount != 0, "no interface table for the IP checks (%lu)\n", err))
+        goto done;
+    luids = (const NET_LUID *)SECTION(ifinfo, TABLE_ROWS, 0);
+    ifstat = (const struct nsi_ndis_ifinfo_static *)SECTION(ifinfo, TABLE_ROWS, if_sizes[0]);
+    for (i = 0; i < ifcount && i < TABLE_ROWS; i++)
+        if (ifstat[i].type == MIB_IF_TYPE_LOOPBACK)
+            loopback_luid = luids[i];
+
+    err = EnumerateTable(Device, module, NSI_IP_INTERFACE_TABLE, ipif_sizes, TABLE_ROWS, &ipif, &count);
+    if (skip(err != ERROR_NOT_FOUND, "tcpip does not provide the IP tables for family %u yet\n", Family))
+        goto done;
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    ok(count >= 1 && count <= TABLE_ROWS, "family %u interface table has %lu rows\n", Family, count);
+    for (i = 0; i < count && i < TABLE_ROWS; i++)
+    {
+        const struct nsi_ip_interface_key *key = (const struct nsi_ip_interface_key *)SECTION(ipif, TABLE_ROWS, 0) + i;
+        const struct nsi_ip_interface_dynamic *dyn = (const struct nsi_ip_interface_dynamic *)SECTION(ipif, TABLE_ROWS, ipif_sizes[0] + ipif_sizes[1]) + i;
+
+        ok(LuidKnown(luids, ifcount, key->luid), "family %u interface row %lu: luid %I64x unknown\n", Family, i, key->luid.Value);
+        ok(dyn->if_index != 0, "family %u interface row %lu: index 0\n", Family, i);
+        ok_eq_ulong((ULONG)dyn->if_index, (ULONG)key->luid.Info.NetLuidIndex);
+    }
+
+    err = EnumerateTable(Device, module, NSI_IP_UNICAST_TABLE, uni_sizes, TABLE_ROWS, &uni, &count);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    trace("family %u: %lu unicast rows\n", Family, count);
+    for (i = 0; i < count && i < TABLE_ROWS; i++)
+    {
+        const BYTE *key = SECTION(uni, TABLE_ROWS, 0) + i * uni_sizes[0];
+        const struct nsi_ip_unicast_rw *rw = (const struct nsi_ip_unicast_rw *)SECTION(uni, TABLE_ROWS, uni_sizes[0]) + i;
+        const struct nsi_ip_unicast_dynamic *dyn = (const struct nsi_ip_unicast_dynamic *)SECTION(uni, TABLE_ROWS, uni_sizes[0] + uni_sizes[1]) + i;
+        NET_LUID luid;
+
+        memcpy(&luid, key, sizeof(luid));
+        ok(LuidKnown(luids, ifcount, luid), "family %u unicast row %lu: luid %I64x unknown\n", Family, i, luid.Value);
+        ok(rw->on_link_prefix <= bits, "family %u unicast row %lu: prefix %u\n", Family, i, rw->on_link_prefix);
+        ok(dyn->dad_state <= IpDadStatePreferred, "family %u unicast row %lu: dad state %u\n", Family, i, dyn->dad_state);
+        if (Family == AF_INET6 && luid.Value == loopback_luid.Value && IsIn6Loopback(key + sizeof(NET_LUID)))
+            have_loopback_addr = TRUE;
+        if (Family == AF_INET && luid.Value == loopback_luid.Value && ((const struct nsi_ipv4_unicast_key *)key)->addr.S_un.S_addr == htonl(INADDR_LOOPBACK))
+            have_loopback_addr = TRUE;
+    }
+    if (count != 0)
+        ok(have_loopback_addr, "family %u: loopback address missing on luid %I64x\n", Family, loopback_luid.Value);
+    if (GetUnicastIpAddressTable(Family, &unicast) == NO_ERROR)
+    {
+        ok_eq_ulong(count, unicast->NumEntries);
+        FreeMibTable(unicast);
+    }
+
+    err = EnumerateTable(Device, module, NSI_IP_NEIGHBOUR_TABLE, nb_sizes, TABLE_ROWS, &nb, &count);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    trace("family %u: %lu neighbour rows\n", Family, count);
+    for (i = 0; i < count && i < TABLE_ROWS; i++)
+    {
+        const BYTE *key = SECTION(nb, TABLE_ROWS, 0) + i * nb_sizes[0];
+        const struct nsi_ip_neighbour_dynamic *dyn = (const struct nsi_ip_neighbour_dynamic *)SECTION(nb, TABLE_ROWS, nb_sizes[0] + nb_sizes[1]) + i;
+        NET_LUID luid;
+
+        memcpy(&luid, key, sizeof(luid));
+        ok(LuidKnown(luids, ifcount, luid), "family %u neighbour row %lu: luid %I64x unknown\n", Family, i, luid.Value);
+        ok(dyn->state <= NlnsPermanent, "family %u neighbour row %lu: state %u\n", Family, i, dyn->state);
+        ok(dyn->phys_addr_len <= IF_MAX_PHYS_ADDRESS_LENGTH, "family %u neighbour row %lu: address length %u\n", Family, i, dyn->phys_addr_len);
+    }
+    if (GetIpNetTable2(Family, &neighbours) == NO_ERROR)
+    {
+        LONG delta = (LONG)count - (LONG)neighbours->NumEntries;
+
+        ok(delta >= -2 && delta <= 2, "family %u: device has %lu neighbours, iphlpapi %lu\n", Family, count, neighbours->NumEntries);
+        FreeMibTable(neighbours);
+    }
+
+    err = EnumerateTable(Device, module, NSI_IP_FORWARD_TABLE, fw_sizes, TABLE_ROWS, &fw, &count);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    trace("family %u: %lu forward rows\n", Family, count);
+    for (i = 0; i < count && i < TABLE_ROWS; i++)
+    {
+        const BYTE *key = SECTION(fw, TABLE_ROWS, 0) + i * fw_sizes[0];
+        const struct nsi_ip_forward_rw *rw = (const struct nsi_ip_forward_rw *)SECTION(fw, TABLE_ROWS, fw_sizes[0]) + i;
+        const struct nsi_ip_forward_static *stat = (const struct nsi_ip_forward_static *)SECTION(fw, TABLE_ROWS, fw_sizes[0] + fw_sizes[1] + fw_sizes[2]) + i;
+        NET_LUID luid;
+        UINT prefix_len;
+
+        if (Family == AF_INET)
+        {
+            luid = ((const struct nsi_ipv4_forward_key *)key)->luid;
+            prefix_len = ((const struct nsi_ipv4_forward_key *)key)->prefix_len;
+        }
+        else
+        {
+            luid = ((const struct nsi_ipv6_forward_key *)key)->luid;
+            prefix_len = ((const struct nsi_ipv6_forward_key *)key)->prefix_len;
+        }
+        ok(LuidKnown(luids, ifcount, luid), "family %u route %lu: luid %I64x unknown\n", Family, i, luid.Value);
+        ok(prefix_len <= bits, "family %u route %lu: prefix length %u\n", Family, i, prefix_len);
+        ok(stat->if_index != 0, "family %u route %lu: interface index 0\n", Family, i);
+        ok(rw->metric != 0 || rw->loopback, "family %u route %lu: metric 0 on a non-loopback route\n", Family, i);
+    }
+    if (GetIpForwardTable2(Family, &forward) == NO_ERROR)
+    {
+        ok_eq_ulong(count, forward->NumEntries);
+        FreeMibTable(forward);
+    }
+
+done:
+    if (fw) HeapFree(GetProcessHeap(), 0, fw);
+    if (nb) HeapFree(GetProcessHeap(), 0, nb);
+    if (uni) HeapFree(GetProcessHeap(), 0, uni);
+    if (ipif) HeapFree(GetProcessHeap(), 0, ipif);
+    if (ifinfo) HeapFree(GetProcessHeap(), 0, ifinfo);
+}
+
 typedef DWORD (WINAPI *PFN_NSI_ENUMERATE)(DWORD, DWORD, const NPI_MODULEID *, DWORD, void *, DWORD, void *, DWORD,
                                           void *, DWORD, void *, DWORD, DWORD *);
 typedef DWORD (WINAPI *PFN_NSI_GET_PARAMETER)(DWORD, const NPI_MODULEID *, DWORD, const void *, DWORD, DWORD, void *, DWORD, DWORD);
@@ -443,6 +637,8 @@ START_TEST(NsiStore)
         TestDeviceEnumerate(device, &module);
         TestDeviceRows(device, &module);
         TestDeviceInterfaces(device);
+        TestDeviceIpTables(device, AF_INET6);
+        TestDeviceIpTables(device, AF_INET);
         TestApiBackend(device);
         CloseHandle(device);
         TestDeviceNotifications(&module);
