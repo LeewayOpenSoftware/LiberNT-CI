@@ -171,6 +171,7 @@ typedef struct _NETIO_CONTEXT
     LONG RefCount;
     volatile LONG CancelBusy;
     BOOLEAN Completed;
+    PSOCKADDR UserRemoteAddress;
 } NETIO_CONTEXT, *PNETIO_CONTEXT;
 
 static void
@@ -573,7 +574,14 @@ NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Contex
         PSOCKADDR RemoteAddress =
             (PSOCKADDR)(&((PTRANSPORT_ADDRESS)Context->PeerAddrRet->RemoteAddress)->Address[0].AddressType);
 
-        memcpy(&Context->socket->RemoteAddress, RemoteAddress, sizeof(Context->socket->RemoteAddress));
+        if (Context->UserRemoteAddress != NULL)
+        {
+            memcpy(Context->UserRemoteAddress, RemoteAddress, sizeof(*Context->UserRemoteAddress));
+        }
+        else
+        {
+            memcpy(&Context->socket->RemoteAddress, RemoteAddress, sizeof(Context->socket->RemoteAddress));
+        }
     }
     IoCompleteRequest(UserIrp, IO_NETWORK_INCREMENT);
 
@@ -1357,9 +1365,77 @@ WskReceiveFrom(
     _Out_writes_bytes_opt_(*ControlLength) PCMSGHDR ControlInfo,
     _Out_opt_ PULONG ControlFlags, _Inout_ PIRP Irp)
 {
-    FUNCTION_TRACE;
+    PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
+    PTDI_CONNECTION_INFORMATION PeerAddrRet;
+    NTSTATUS status;
+    void *BufferData;
+    PNETIO_CONTEXT NetioContext;
 
-    return WskCompleteUnsupported(Irp, __FUNCTION__);
+    FUNCTION_TRACE;
+    UNREFERENCED_PARAMETER(ControlInfo);
+
+    WSK_REQUIRE_IRP(Irp);
+    IoSetNextIrpStackLocation(Irp);
+
+    status = STATUS_INVALID_PARAMETER;
+    if (Flags != 0 || Buffer == NULL || ControlLength == NULL)
+    {
+        goto err_out;
+    }
+    status = STATUS_INVALID_DEVICE_STATE;
+    if (Socket->LocalAddressHandle == NULL)
+    {
+        DPRINT1("LocalAddressHandle is not set, need to bind your socket before receiving\n");
+        goto err_out;
+    }
+
+    status = STATUS_INSUFFICIENT_RESOURCES;
+    NetioContext = NetioContextAllocate(Socket, Irp);
+    if (NetioContext == NULL)
+    {
+        goto err_out;
+    }
+    NetioContext->UserRemoteAddress = RemoteAddress;
+
+    PeerAddrRet = NULL;
+    TdiBuildNullConnectionInfo(&PeerAddrRet, TDI_ADDRESS_TYPE_IP);
+    if (PeerAddrRet == NULL)
+    {
+        goto err_out_free_nc;
+    }
+    PeerAddrRet->OptionsLength = 0;
+    NetioContext->PeerAddrRet = PeerAddrRet;
+
+    BufferData = MmGetSystemAddressForMdlSafe(Buffer->Mdl, NormalPagePriority);
+    if (BufferData == NULL)
+    {
+        DPRINT1("Error mapping MDL\n");
+        goto err_out_free_nc;
+    }
+
+    *ControlLength = 0;
+    if (ControlFlags != NULL)
+    {
+        *ControlFlags = 0;
+    }
+
+    IoMarkIrpPending(Irp);
+    ReferenceSocket(Socket);
+    NetioArmCancel(NetioContext);
+
+    status = TdiReceiveDatagram(&NetioContext->TdiIrp, Socket->LocalAddressFile, 0, ((char *)BufferData) + Buffer->Offset,
+                                Buffer->Length, PeerAddrRet, NetioComplete, NetioContext);
+    return NetioIssued(NetioContext, status);
+
+err_out_free_nc:
+    NetioContextRelease(NetioContext);
+
+err_out:
+    Irp->IoStatus.Status = status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+
+    return status;
 }
 
 static NTSTATUS WSKAPI
