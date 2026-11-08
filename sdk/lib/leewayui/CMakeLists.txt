@@ -12,3 +12,5 @@ set_target_properties(leewayui_static PROPERTIES
     CXX_STANDARD 14
     FOLDER "Libraries"
 )
+
+add_dependencies(leewayui_static psdk)

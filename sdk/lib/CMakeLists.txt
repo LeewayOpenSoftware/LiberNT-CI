@@ -1,6 +1,5 @@
 
 add_subdirectory(atl)
-add_subdirectory(leewayui)
 add_subdirectory(cmlib)
 add_subdirectory(inflib)
 add_subdirectory(libwim)
@@ -49,6 +48,7 @@ if(STACK_PROTECTOR)
 endif()
 
 add_subdirectory(ioevent)
+add_subdirectory(leewayui)
 add_subdirectory(lsalib)
 add_subdirectory(mfuuid)
 add_subdirectory(nt)
