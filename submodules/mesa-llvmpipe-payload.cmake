@@ -39,15 +39,27 @@ else()
     if(NOT _payload_have_hash STREQUAL _payload_hash)
         set(_payload_url "https://github.com/LiberNT/LiberNT/releases/download/mesa-llvmpipe-${MESA_LLVMPIPE_PAYLOAD_RELEASE}/${_payload_name}")
         message(STATUS "Downloading ${_payload_url}")
-        file(DOWNLOAD "${_payload_url}" "${_payload_zip}"
-            EXPECTED_HASH SHA256=${_payload_hash}
-            TLS_VERIFY ON
-            STATUS _payload_status)
-        list(GET _payload_status 0 _payload_code)
-        if(NOT _payload_code EQUAL 0)
+        set(_payload_download_ok FALSE)
+        set(_payload_max_attempts 5)
+        set(_payload_attempt 0)
+        while(NOT _payload_download_ok AND _payload_attempt LESS _payload_max_attempts)
+            math(EXPR _payload_attempt "${_payload_attempt} + 1")
+            if(NOT _payload_attempt EQUAL 1)
+                execute_process(COMMAND ${CMAKE_COMMAND} -E sleep 2)
+            endif()
             file(REMOVE "${_payload_zip}")
-            message(FATAL_ERROR "Downloading the LLVMpipe payload failed: ${_payload_status}")
-        endif()
+            file(DOWNLOAD "${_payload_url}" "${_payload_zip}"
+                EXPECTED_HASH SHA256=${_payload_hash}
+                TLS_VERIFY ON
+                STATUS _payload_status)
+            list(GET _payload_status 0 _payload_code)
+            if(_payload_code EQUAL 0)
+                set(_payload_download_ok TRUE)
+            elseif(_payload_attempt EQUAL _payload_max_attempts)
+                file(REMOVE "${_payload_zip}")
+                message(FATAL_ERROR "Downloading the LLVMpipe payload failed after ${_payload_max_attempts} attempts. Last status: ${_payload_status}")
+            endif()
+        endwhile()
     endif()
 endif()
 
