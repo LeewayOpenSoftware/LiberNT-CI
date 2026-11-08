@@ -675,7 +675,12 @@ ReadDone:
             !PagingIo &&
             FileCB->RequestedType == TypeData &&
             !NtfsVolumeIsReadOnly(DiskVolume) &&
-            FileCB->LastAccessStampPending)
+            FileCB->LastAccessStampPending &&
+            /* During BootExecute nothing may write the boot volume before
+             * autochk checks it, and the volume-dirty lifecycle marks it
+             * dirty on any write. Keep the stamp pending: the first read
+             * after the window writes it (last access is lazy anyway). */
+            !NtfsIsVolumeInBootExecuteWindow(VolCB))
         {
             FileCB->LastAccessStampPending = FALSE;
             /*

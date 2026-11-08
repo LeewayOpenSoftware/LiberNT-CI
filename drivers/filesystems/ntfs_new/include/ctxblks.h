@@ -476,6 +476,23 @@ NtfsIsBootExecuteWindow(_In_ PDEVICE_OBJECT VolumeDeviceObject,
            (Vpb->RealDevice->Flags & DO_SYSTEM_BOOT_PARTITION);
 }
 
+/*
+ * The same window, for callers that hold only the VolCB (the mount set
+ * StorageDevice->Vpb to the volume's VPB, vol.c). Without VolumeStateMutex
+ * the answer may be stale by one paging-file creation; PagingFileSeen only
+ * goes FALSE -> TRUE, so a racing caller at worst defers one more stamp.
+ */
+FORCEINLINE
+BOOLEAN
+NtfsIsVolumeInBootExecuteWindow(_In_ PVolumeContextBlock VolCB)
+{
+    PVPB Vpb = VolCB->StorageDevice ? VolCB->StorageDevice->Vpb : NULL;
+
+    return !VolCB->PagingFileSeen &&
+           Vpb && Vpb->RealDevice &&
+           (Vpb->RealDevice->Flags & DO_SYSTEM_BOOT_PARTITION);
+}
+
 /* Drop one handle from OpenHandleCount. Caller holds VolumeStateMutex. */
 FORCEINLINE
 VOID
