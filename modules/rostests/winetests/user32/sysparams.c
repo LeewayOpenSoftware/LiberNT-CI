@@ -3530,6 +3530,39 @@ static void scale_rect_dpi_aware( RECT *rect, DPI_AWARENESS from, DPI_AWARENESS 
         scale_rect_dpi( rect, real_dpi, USER_DEFAULT_SCREEN_DPI );
 }
 
+static void test_dpi_device_caps(void)
+{
+    DPI_AWARENESS_CONTEXT context;
+    HDC hdc;
+    UINT x, y;
+
+    if (!pSetThreadDpiAwarenessContext || !pGetThreadDpiAwarenessContext)
+    {
+        win_skip("Thread DPI awareness contexts not supported\n");
+        return;
+    }
+
+    hdc = GetDC(0);
+    ok(hdc != NULL, "GetDC failed\n");
+    if (!hdc)
+        return;
+
+    context = pGetThreadDpiAwarenessContext();
+    pSetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
+    x = GetDeviceCaps(hdc, LOGPIXELSX);
+    y = GetDeviceCaps(hdc, LOGPIXELSY);
+    ok(x == USER_DEFAULT_SCREEN_DPI && y == USER_DEFAULT_SCREEN_DPI,
+       "Unaware device caps %ux%u, expected 96x96\n", x, y);
+
+    pSetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
+    x = GetDeviceCaps(hdc, LOGPIXELSX);
+    y = GetDeviceCaps(hdc, LOGPIXELSY);
+    ok(x == real_dpi && y == real_dpi, "Monitor-aware device caps %ux%u, expected %ux%u\n",
+       x, y, real_dpi, real_dpi);
+    pSetThreadDpiAwarenessContext(context);
+    ReleaseDC(0, hdc);
+}
+
 static void test_dpi_mapping(void)
 {
     HWND hwnd, child;
@@ -4775,6 +4808,7 @@ START_TEST(sysparams)
     if (pSetThreadDpiAwarenessContext)
     {
         test_dpi_context();
+        test_dpi_device_caps();
         test_dpi_mapping();
         test_dpi_window();
     }
