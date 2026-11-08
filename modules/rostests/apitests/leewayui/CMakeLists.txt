@@ -11,3 +11,5 @@ target_link_libraries(leewayui_ribbon_test
 )
 
 add_dependencies(leewayui_ribbon_test psdk)
+
+add_cd_file(TARGET leewayui_ribbon_test DESTINATION reactos/bin FOR all)
