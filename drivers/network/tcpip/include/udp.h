@@ -70,6 +70,17 @@ NTSTATUS LibIP6QueryTable(
     PULONG Needed,
     PVOID Statistics);
 
+/* IPv4 protocol counters copied out of lwip_stats; the MIB mapping lives in ninfo.c. */
+struct lib_ip_stats
+{
+    ULONG InReceives, InDelivers, OutRequests, ForwardedDatagrams;
+    ULONG InHeaderErrors, InUnknownProtocols, InDiscards, OutNoRoutes, OutDiscards;
+    ULONG ReasmReqds, ReasmOks, ReasmFails, FragCreates;
+    ULONG TcpInSegs, TcpOutSegs, TcpInErrs;
+    ULONG UdpInDatagrams, UdpOutDatagrams, UdpNoPorts, UdpInErrors;
+};
+VOID LibIPGetStats(struct lib_ip_stats *Stats);
+
 NTSTATUS LibICMP6EchoRequest(
     PDEVICE_OBJECT DeviceObject,
     PIRP Irp,

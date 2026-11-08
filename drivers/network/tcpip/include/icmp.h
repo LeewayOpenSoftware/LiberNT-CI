@@ -53,6 +53,33 @@ typedef struct ICMP_HEADER {
 /* ICMP codes for ICMP_TYPE_PARAMETER */
 #define ICMP_CODE_TP_POINTER 1 /* Pointer indicates the error */
 
+/* IPv4 ICMP MIB counters. IPv4 ICMP is handled by this native stack (the
+ * hybrid lwIP engine never sees it), so these are maintained here and read by
+ * info.c for ICMP_MIB_STATS_ID. The layout matches MIBICMPSTATS/MIBICMPINFO
+ * (two directions of 13 ULONGs) so it can be copied straight out. */
+typedef struct _ICMP_MIB_STATS {
+    ULONG dwMsgs;
+    ULONG dwErrors;
+    ULONG dwDestUnreachs;
+    ULONG dwTimeExcds;
+    ULONG dwParmProbs;
+    ULONG dwSrcQuenchs;
+    ULONG dwRedirects;
+    ULONG dwEchos;
+    ULONG dwEchoReps;
+    ULONG dwTimestamps;
+    ULONG dwTimestampReps;
+    ULONG dwAddrMasks;
+    ULONG dwAddrMaskReps;
+} ICMP_MIB_STATS, *PICMP_MIB_STATS;
+
+typedef struct _ICMP_STATISTICS {
+    ICMP_MIB_STATS In;
+    ICMP_MIB_STATS Out;
+} ICMP_STATISTICS, *PICMP_STATISTICS;
+
+extern ICMP_STATISTICS ICMPStats;
+
 NTSTATUS
 DispEchoRequest(
     PDEVICE_OBJECT DeviceObject,
