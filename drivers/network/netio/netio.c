@@ -58,6 +58,7 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 #include <tdiconn.h>
 
 #define TAG_NETIO 'OIEN'
+#define NETIO_ACCEPT_BACKLOG 64
 
 #ifndef TAG_AFD_TDI_CONNECTION_INFORMATION
 #define TAG_AFD_TDI_CONNECTION_INFORMATION 'cTfA'
@@ -134,6 +135,15 @@ typedef struct _WSK_SOCKET_INTERNAL
     PKTHREAD ListenThread;
     KEVENT StartListenEvent;
     volatile BOOLEAN ListenThreadShouldRun;
+    LONG ListenActive;
+    BOOLEAN AcceptQueueReady;
+    KSPIN_LOCK AcceptLock;
+    KSPIN_LOCK AcceptCsqLock;
+    IO_CSQ AcceptCsq;
+    LIST_ENTRY AcceptIrpList;
+    LIST_ENTRY AcceptedSockets;
+    ULONG AcceptedCount;
+    LIST_ENTRY AcceptedEntry;
 
     /* AcceptSocket's keep a reference on their listen sockets so
      * that the Address file will be closed only if there are no
@@ -167,6 +177,38 @@ ReferenceSocket(_In_ PWSK_SOCKET_INTERNAL Socket)
 
 static void
 DereferenceSocket(_In_ PWSK_SOCKET_INTERNAL Socket);
+
+static void
+DrainAcceptQueue(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
+{
+    PIRP Irp;
+    KIRQL OldIrql;
+    LIST_ENTRY Orphans;
+    PLIST_ENTRY Entry;
+
+    while ((Irp = IoCsqRemoveNextIrp(&ListenSocket->AcceptCsq, NULL)) != NULL)
+    {
+        Irp->IoStatus.Status = STATUS_CANCELLED;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+    }
+
+    InitializeListHead(&Orphans);
+    KeAcquireSpinLock(&ListenSocket->AcceptLock, &OldIrql);
+    while (!IsListEmpty(&ListenSocket->AcceptedSockets))
+    {
+        Entry = RemoveHeadList(&ListenSocket->AcceptedSockets);
+        InsertTailList(&Orphans, Entry);
+    }
+    ListenSocket->AcceptedCount = 0;
+    KeReleaseSpinLock(&ListenSocket->AcceptLock, OldIrql);
+
+    while (!IsListEmpty(&Orphans))
+    {
+        Entry = RemoveHeadList(&Orphans);
+        DereferenceSocket(CONTAINING_RECORD(Entry, WSK_SOCKET_INTERNAL, AcceptedEntry));
+    }
+}
 
 /* This function can be called several times on the same socket.
    In particular it will be called by WskClose and later by the
@@ -203,6 +245,10 @@ void SocketShutdown(_In_ PWSK_SOCKET_INTERNAL Socket)
         Socket->ListenCancelled = TRUE;
         IoCancelIrp(Socket->ListenIrp);
         Socket->ListenIrp = NULL;
+    }
+    if (Socket->AcceptQueueReady)
+    {
+        DrainAcceptQueue(Socket);
     }
     if (Socket->ConnectionFile != NULL)
     {
@@ -498,6 +544,123 @@ static void QueueListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
     KeSetEvent(&ListenSocket->StartListenEvent, IO_NO_INCREMENT, FALSE);
 }
 
+static void StartListeningOnce(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
+{
+    if (InterlockedExchange(&ListenSocket->ListenActive, 1) == 0)
+    {
+        QueueListening(ListenSocket);
+    }
+}
+
+static PWSK_SOCKET_INTERNAL
+AcceptCsqSocket(_In_ PIO_CSQ Csq)
+{
+    return CONTAINING_RECORD(Csq, WSK_SOCKET_INTERNAL, AcceptCsq);
+}
+
+static VOID NTAPI
+AcceptCsqInsertIrp(_In_ PIO_CSQ Csq, _In_ PIRP Irp)
+{
+    InsertTailList(&AcceptCsqSocket(Csq)->AcceptIrpList, &Irp->Tail.Overlay.ListEntry);
+}
+
+static VOID NTAPI
+AcceptCsqRemoveIrp(_In_ PIO_CSQ Csq, _In_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(Csq);
+    RemoveEntryList(&Irp->Tail.Overlay.ListEntry);
+}
+
+static PIRP NTAPI
+AcceptCsqPeekNextIrp(_In_ PIO_CSQ Csq, _In_opt_ PIRP Irp, _In_opt_ PVOID PeekContext)
+{
+    PLIST_ENTRY Head = &AcceptCsqSocket(Csq)->AcceptIrpList;
+    PLIST_ENTRY Entry = (Irp == NULL) ? Head->Flink : Irp->Tail.Overlay.ListEntry.Flink;
+    PIRP Next;
+
+    for (; Entry != Head; Entry = Entry->Flink)
+    {
+        Next = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+        if (PeekContext == NULL || Next == PeekContext)
+        {
+            return Next;
+        }
+    }
+    return NULL;
+}
+
+_IRQL_raises_(DISPATCH_LEVEL)
+static VOID NTAPI
+AcceptCsqAcquireLock(_In_ PIO_CSQ Csq, _Out_ PKIRQL Irql)
+{
+    KeAcquireSpinLock(&AcceptCsqSocket(Csq)->AcceptCsqLock, Irql);
+}
+
+static VOID NTAPI
+AcceptCsqReleaseLock(_In_ PIO_CSQ Csq, _In_ KIRQL Irql)
+{
+    KeReleaseSpinLock(&AcceptCsqSocket(Csq)->AcceptCsqLock, Irql);
+}
+
+static VOID NTAPI
+AcceptCsqCompleteCanceledIrp(_In_ PIO_CSQ Csq, _In_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(Csq);
+    Irp->IoStatus.Status = STATUS_CANCELLED;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+}
+
+static void
+CompleteAcceptIrp(_In_ PWSK_SOCKET_INTERNAL ListenSocket, _In_ PWSK_SOCKET_INTERNAL AcceptSocket, _In_ PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack = IoGetCurrentIrpStackLocation(Irp);
+    PSOCKADDR LocalAddress = Stack->Parameters.Others.Argument3;
+    PSOCKADDR RemoteAddress = Stack->Parameters.Others.Argument4;
+
+    AcceptSocket->user_context = Stack->Parameters.Others.Argument1;
+    AcceptSocket->ListenDispatch = Stack->Parameters.Others.Argument2;
+    if (LocalAddress != NULL)
+    {
+        memcpy(LocalAddress, &ListenSocket->LocalAddress, sizeof(*LocalAddress));
+    }
+    if (RemoteAddress != NULL)
+    {
+        memcpy(RemoteAddress, &AcceptSocket->RemoteAddress, sizeof(*RemoteAddress));
+    }
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Information = (ULONG_PTR)&AcceptSocket->Socket;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+}
+
+static void
+QueueAcceptedSocket(_In_ PWSK_SOCKET_INTERNAL ListenSocket, _In_ PWSK_SOCKET_INTERNAL AcceptSocket)
+{
+    PIRP Irp;
+    KIRQL OldIrql;
+    BOOLEAN Queued = FALSE;
+
+    KeAcquireSpinLock(&ListenSocket->AcceptLock, &OldIrql);
+    Irp = IoCsqRemoveNextIrp(&ListenSocket->AcceptCsq, NULL);
+    if (Irp == NULL && ListenSocket->AcceptedCount < NETIO_ACCEPT_BACKLOG)
+    {
+        InsertTailList(&ListenSocket->AcceptedSockets, &AcceptSocket->AcceptedEntry);
+        ListenSocket->AcceptedCount++;
+        Queued = TRUE;
+    }
+    KeReleaseSpinLock(&ListenSocket->AcceptLock, OldIrql);
+
+    if (Irp != NULL)
+    {
+        CompleteAcceptIrp(ListenSocket, AcceptSocket, Irp);
+    }
+    else if (!Queued)
+    {
+        DPRINT1("Accept backlog of %u connections is full, dropping the new connection\n", NETIO_ACCEPT_BACKLOG);
+        DereferenceSocket(AcceptSocket);
+    }
+}
+
 static NTSTATUS NTAPI
 ListenComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Context)
 {
@@ -547,6 +710,13 @@ ListenComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Conte
             memcpy(&AcceptSocket->RemoteAddress, RemoteAddress, sizeof(AcceptSocket->RemoteAddress));
         }
     }
+    else if (NT_SUCCESS(Irp->IoStatus.Status) &&
+             !ListenSocket->ListenCancelled &&
+             (ListenSocket->CallbackMask & WSK_EVENT_ACCEPT) == 0)
+    {
+        memcpy(&AcceptSocket->RemoteAddress, RemoteAddress, sizeof(AcceptSocket->RemoteAddress));
+        QueueAcceptedSocket(ListenSocket, AcceptSocket);
+    }
     else
     {
         DereferenceSocket(AcceptSocket);	/* close the AcceptSocket */
@@ -565,7 +735,13 @@ ListenComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Conte
      */
 
     if (Requeue)
+    {
         QueueListening(ListenSocket);
+    }
+    else
+    {
+        InterlockedExchange(&ListenSocket->ListenActive, 0);
+    }
 
     return STATUS_SUCCESS;
 }
@@ -687,7 +863,10 @@ static VOID NTAPI RequeueListenThread(_In_ PVOID p)
         {
             break;
         }
-        StartListening(ListenSocket);
+        if (StartListening(ListenSocket) != STATUS_PENDING)
+        {
+            InterlockedExchange(&ListenSocket->ListenActive, 0);
+        }
     }
     PsTerminateSystemThread(STATUS_SUCCESS);
 }
@@ -777,7 +956,7 @@ WskControlSocket(
                                 ((Control->EventMask & WSK_EVENT_ACCEPT) == WSK_EVENT_ACCEPT))
                             {
                                 Socket->CallbackMask = Control->EventMask;
-                                QueueListening(Socket);
+                                StartListeningOnce(Socket);
                             }
                             else
                             {
@@ -1331,6 +1510,102 @@ static WSK_PROVIDER_CONNECTION_DISPATCH TcpDispatch = {
 };
 
 static NTSTATUS WSKAPI
+WskAccept(
+    _In_ PWSK_SOCKET ListenSocketParam,
+    _Reserved_ ULONG Flags,
+    _In_opt_ PVOID AcceptSocketContext,
+    _In_opt_ const WSK_CLIENT_CONNECTION_DISPATCH *AcceptSocketDispatch,
+    _Out_opt_ PSOCKADDR LocalAddress,
+    _Out_opt_ PSOCKADDR RemoteAddress,
+    _Inout_ PIRP Irp)
+{
+    PWSK_SOCKET_INTERNAL ListenSocket = CONTAINING_RECORD(ListenSocketParam, WSK_SOCKET_INTERNAL, Socket);
+    PWSK_SOCKET_INTERNAL AcceptSocket = NULL;
+    PIO_STACK_LOCATION Stack;
+    PLIST_ENTRY Entry;
+    NTSTATUS status;
+    KIRQL OldIrql;
+
+    FUNCTION_TRACE;
+    UNREFERENCED_PARAMETER(Flags);
+
+    WSK_REQUIRE_IRP(Irp);
+    IoSetNextIrpStackLocation(Irp);
+
+    status = STATUS_INVALID_DEVICE_STATE;
+    if (ListenSocket->WskFlags != WSK_FLAG_LISTEN_SOCKET || ListenSocket->LocalAddressHandle == NULL)
+    {
+        DPRINT1("WskAccept needs a bound listen socket\n");
+        goto err_out;
+    }
+    if (ListenSocket->CallbackMask & WSK_EVENT_ACCEPT)
+    {
+        DPRINT1("WskAccept cannot be used while the WskAcceptEvent callback is enabled\n");
+        goto err_out;
+    }
+
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+    Stack->Parameters.Others.Argument1 = AcceptSocketContext;
+    Stack->Parameters.Others.Argument2 = (PVOID)AcceptSocketDispatch;
+    Stack->Parameters.Others.Argument3 = LocalAddress;
+    Stack->Parameters.Others.Argument4 = RemoteAddress;
+
+    IoMarkIrpPending(Irp);
+    IoCsqInsertIrp(&ListenSocket->AcceptCsq, Irp, NULL);
+
+    KeAcquireSpinLock(&ListenSocket->AcceptLock, &OldIrql);
+    if (!IsListEmpty(&ListenSocket->AcceptedSockets) &&
+        IoCsqRemoveNextIrp(&ListenSocket->AcceptCsq, Irp) == Irp)
+    {
+        Entry = RemoveHeadList(&ListenSocket->AcceptedSockets);
+        ListenSocket->AcceptedCount--;
+        AcceptSocket = CONTAINING_RECORD(Entry, WSK_SOCKET_INTERNAL, AcceptedEntry);
+    }
+    KeReleaseSpinLock(&ListenSocket->AcceptLock, OldIrql);
+
+    if (AcceptSocket != NULL)
+    {
+        CompleteAcceptIrp(ListenSocket, AcceptSocket, Irp);
+    }
+    else
+    {
+        StartListeningOnce(ListenSocket);
+    }
+    return STATUS_PENDING;
+
+err_out:
+    Irp->IoStatus.Status = status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+
+    return status;
+}
+
+static NTSTATUS WSKAPI
+WskInspectComplete(
+    _In_ PWSK_SOCKET ListenSocket,
+    _In_ PWSK_INSPECT_ID InspectID,
+    _In_ WSK_INSPECT_ACTION Action,
+    _Inout_ PIRP Irp)
+{
+    FUNCTION_TRACE;
+    UNREFERENCED_PARAMETER(ListenSocket);
+    UNREFERENCED_PARAMETER(InspectID);
+    UNREFERENCED_PARAMETER(Action);
+
+    return WskCompleteUnsupported(Irp, __FUNCTION__);
+}
+
+static WSK_PROVIDER_LISTEN_DISPATCH TcpListenDispatch = {
+    .WskControlSocket = WskControlSocket,
+    .WskCloseSocket = WskCloseSocket,
+    .WskBind = WskBind,
+    .WskAccept = WskAccept,
+    .WskInspectComplete = WskInspectComplete,
+    .WskGetLocalAddress = WskGetLocalAddress,
+};
+
+static NTSTATUS WSKAPI
 WskSocket(
     _In_ PWSK_CLIENT Client,
     _In_ ADDRESS_FAMILY AddressFamily,
@@ -1422,7 +1697,7 @@ WskSocket(
             RtlInitUnicodeString(&Socket->TdiName, L"\\Device\\Udp");
             break;
         case SOCK_STREAM:
-            Socket->Socket.Dispatch = &TcpDispatch;
+            Socket->Socket.Dispatch = (Flags == WSK_FLAG_LISTEN_SOCKET) ? (const VOID *)&TcpListenDispatch : (const VOID *)&TcpDispatch;
             RtlInitUnicodeString(&Socket->TdiName, L"\\Device\\Tcp");
 
             if (Flags != WSK_FLAG_LISTEN_SOCKET)
@@ -1439,6 +1714,19 @@ WskSocket(
             {
                 KeInitializeEvent(&Socket->StartListenEvent, SynchronizationEvent, FALSE);
                 Socket->ListenThreadShouldRun = TRUE;
+                KeInitializeSpinLock(&Socket->AcceptLock);
+                KeInitializeSpinLock(&Socket->AcceptCsqLock);
+                InitializeListHead(&Socket->AcceptIrpList);
+                InitializeListHead(&Socket->AcceptedSockets);
+                status = IoCsqInitialize(&Socket->AcceptCsq, AcceptCsqInsertIrp, AcceptCsqRemoveIrp, AcceptCsqPeekNextIrp,
+                                         AcceptCsqAcquireLock, AcceptCsqReleaseLock, AcceptCsqCompleteCanceledIrp);
+                if (!NT_SUCCESS(status))
+                {
+                    DPRINT1("Could not set up the accept queue, status is %x\n", status);
+                    ExFreePoolWithTag(Socket, TAG_NETIO);
+                    goto err_out;
+                }
+                Socket->AcceptQueueReady = TRUE;
 
                 status = PsCreateSystemThread(&Socket->ListenThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL, RequeueListenThread, Socket);
                 if (!NT_SUCCESS(status))
@@ -1455,11 +1743,6 @@ WskSocket(
                     goto err_out;
                 }
                 ZwClose(Socket->ListenThreadHandle);
-            }
-
-            if (Flags == WSK_FLAG_LISTEN_SOCKET && Socket->ListenDispatch == NULL)
-            {
-                DPRINT1("Warning: no callbacks given for listen socket\n");
             }
             break;
 
