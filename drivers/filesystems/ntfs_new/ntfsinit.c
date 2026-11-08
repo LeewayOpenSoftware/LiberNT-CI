@@ -225,8 +225,27 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
         PVolumeContextBlock VolCB =
             (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
 
-        if (NT_SUCCESS(Status) && VolCB && VolCB->DiskVolume && !VolCB->Dismounted)
-            (void)NtfsVolumeMarkCleanForShutdown(VolCB->DiskVolume);
+        if (NT_SUCCESS(Status) && VolCB && VolCB->DiskVolume)
+        {
+            BOOLEAN Active;
+
+            /* VD1: read the lifecycle state under VolumeStateMutex and clear
+             * under the metadata gate, so this shutdown clear is serialized with
+             * dismount and with NtfsMarkVolumeDirty's set-then-retain (both of
+             * which hold the gate for their flag ops). Honor Dismounting as well
+             * as Dismounted. */
+            ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+            Active = !VolCB->Dismounted && !VolCB->Dismounting;
+            ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            if (Active)
+            {
+                KeEnterCriticalRegion();
+                NtfsAcquireMetadata(VolCB);
+                (void)NtfsVolumeMarkCleanForShutdown(VolCB->DiskVolume);
+                NtfsReleaseMetadata(VolCB);
+                KeLeaveCriticalRegion();
+            }
+        }
     }
 
     Irp->IoStatus.Status = Status;

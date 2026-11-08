@@ -649,16 +649,32 @@ NtfsChkdsk(
         NtfsFormatReport(Callback, "Checking file records, indexes and the volume bitmap...\n");
         Status = NtfsVolumeCheck(Volume, Locked, NtfsCheckReport, &Check, &Result);
     }
-    if (NT_SUCCESS(Status) && Locked && Dirty && Result.Errors == 0)
-        Status = NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY);
+    /* VD4: do NOT clear the on-disk dirty flag while the mounted FSD still holds
+     * a stale lifecycle. Dismount first and clear only after a SUCCESSFUL
+     * dismount, so a failed dismount leaves BOTH the mounted instance's
+     * DirtyMarked state AND the on-disk flag dirty (consistent: re-checked next
+     * boot) rather than clearing the medium under a stale instance that would
+     * then skip MarkDirtyBeforeWrite on later writes. The raw clear still runs
+     * through the locked handle (VPB_DIRECT_WRITES_ALLOWED), as chkdsk /f does. */
+    if (Locked)
+    {
+        NTSTATUS DismountStatus =
+            NtfsCheckControl(Handle, FSCTL_DISMOUNT_VOLUME, NULL, 0);
+
+        if (NT_SUCCESS(Status) && Dirty && Result.Errors == 0)
+        {
+            if (NT_SUCCESS(DismountStatus))
+                (void)NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY);
+            else
+                NtfsFormatReport(Callback,
+                    "The volume could not be dismounted after the check (status 0x%08lx); the dirty flag was left set and it will be checked again next boot.\n",
+                    DismountStatus);
+        }
+        NtfsCheckControl(Handle, FSCTL_UNLOCK_VOLUME, NULL, 0);
+    }
 
     if (Volume)
         NtfsVolumeDestroy(Volume);
-    if (Locked)
-    {
-        NtfsCheckControl(Handle, FSCTL_DISMOUNT_VOLUME, NULL, 0);
-        NtfsCheckControl(Handle, FSCTL_UNLOCK_VOLUME, NULL, 0);
-    }
     NtClose(Handle);
 
     if (!NT_SUCCESS(Status))
