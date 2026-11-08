@@ -2870,7 +2870,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
         ResolvedGeneration = VolCB->DirGeneration;
     }
-    FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(FileCB);
+    FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(VolCB, FileCB);
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
     FileCB->PagingFileOpen = BooleanFlagOn(IrpSp->Flags, SL_OPEN_PAGING_FILE);
     FileCB->ManageVolumeAccess = SeSinglePrivilegeCheck(SeExports->SeManageVolumePrivilege, Irp->RequestorMode);
