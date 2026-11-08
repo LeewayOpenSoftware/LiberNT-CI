@@ -170,6 +170,7 @@ typedef struct _NETIO_CONTEXT
     PIRP TdiIrp;
     LONG RefCount;
     volatile LONG CancelBusy;
+    PKTHREAD CancelThread;
     BOOLEAN Completed;
     PSOCKADDR UserRemoteAddress;
 } NETIO_CONTEXT, *PNETIO_CONTEXT;
@@ -481,6 +482,8 @@ NetioCancelTdiIrp(_In_ PNETIO_CONTEXT Context, _In_ KIRQL CancelIrql)
 {
     PIRP TdiIrp = Context->TdiIrp;
 
+    InterlockedIncrement(&Context->RefCount);
+    Context->CancelThread = KeGetCurrentThread();
     InterlockedExchange(&Context->CancelBusy, 1);
     IoReleaseCancelSpinLock(CancelIrql);
     if (TdiIrp != NULL)
@@ -488,6 +491,7 @@ NetioCancelTdiIrp(_In_ PNETIO_CONTEXT Context, _In_ KIRQL CancelIrql)
         IoCancelIrp(TdiIrp);
     }
     InterlockedExchange(&Context->CancelBusy, 0);
+    NetioContextRelease(Context);
 }
 
 static VOID NTAPI
@@ -516,7 +520,7 @@ NetioDisarmCancel(_In_ PNETIO_CONTEXT Context)
     CancelRoutine = IoSetCancelRoutine(Context->UserIrp, NULL);
     Context->Completed = TRUE;
     IoReleaseCancelSpinLock(OldIrql);
-    if (CancelRoutine == NULL)
+    if (CancelRoutine == NULL && Context->CancelThread != KeGetCurrentThread())
     {
         while (Context->CancelBusy != 0)
         {
