@@ -167,6 +167,7 @@ static VOID NTAPI KdpBootLogThread(_In_ PVOID Context)
     ULONG Length;
     BOOLEAN Dirty = FALSE;
     BOOLEAN Trimmed = FALSE;
+    BOOLEAN First = TRUE;
 
     UNREFERENCED_PARAMETER(Context);
 
@@ -175,6 +176,16 @@ static VOID NTAPI KdpBootLogThread(_In_ PVOID Context)
     {
         Length = KdpCopyPrintBufferFrom(&KdpBootLogPosition, KdpBootLogBuffer, sizeof(KdpBootLogBuffer), &Lost);
         Dirty = Dirty || (Lost != 0) || (Length != 0);
+        if (First)
+        {
+            /* The log opens after BootExecute, so KD output printed before the
+             * open was buffered in the bounded KD print ring; if the ring
+             * overflowed, this first drain reports how much was dropped (it is
+             * still on the debugger/serial). One line, to serial. */
+            if (Lost != 0)
+                DPRINT1("KD: boot log opened late; %I64u bytes of earlier output were dropped before open (serial only)\n", Lost);
+            First = FALSE;
+        }
         if (Lost != 0)
         {
             RtlStringCbPrintfA(Notice, sizeof(Notice), "\n[%I64u bytes of log output were lost before they could be written]\n", Lost);
@@ -449,6 +460,27 @@ VOID NTAPI KdShutdownBootLog(VOID)
 
 VOID NTAPI KdInitializeBootLog(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
+    PAGED_CODE();
+
+    /*
+     * Record the target path and prime the writer's control events, but DO NOT
+     * open the file or start the writer here. This runs pre-smss, before the
+     * BootExecute list (autochk) and before the paging file and registry hives
+     * open. Opening lastboot.log this early would (1) keep a handle on the boot
+     * volume that defeats autochk's FSCTL_LOCK_VOLUME (which needs the volume's
+     * OpenHandleCount == 1) and (2) dirty the volume before autochk checks it,
+     * so C: would be checked - and never cleared - on every boot. The open is
+     * deferred to KdStartBootLog, called once the first paging file exists
+     * (right after BootExecute). KD output buffers in the KD print ring and
+     * still reaches the debugger/serial until then.
+     */
+    RtlStringCbPrintfA(KdpBootLogName, sizeof(KdpBootLogName), "\\ArcName\\%s\\lastboot.log", LoaderBlock->ArcBootDeviceName);
+    KeInitializeEvent(&KdpBootLogWake, SynchronizationEvent, FALSE);
+    KeInitializeEvent(&KdpBootLogStopped, NotificationEvent, FALSE);
+}
+
+VOID NTAPI KdStartBootLog(VOID)
+{
     OBJECT_ATTRIBUTES ObjectAttributes;
     ANSI_STRING AnsiName;
     UNICODE_STRING FileName;
@@ -458,7 +490,16 @@ VOID NTAPI KdInitializeBootLog(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     NTSTATUS Status;
     PAGED_CODE();
 
-    RtlStringCbPrintfA(KdpBootLogName, sizeof(KdpBootLogName), "\\ArcName\\%s\\lastboot.log", LoaderBlock->ArcBootDeviceName);
+    /*
+     * Called after BootExecute (from the first paging-file creation, next to
+     * IoInitializeCrashDump). Open the boot log now that autochk has run and
+     * could lock/clear the volume, and start the writer, whose first pass drains
+     * the KD print ring that buffered the early-boot output. Runs once; a second
+     * caller (another paging file) finds the handle already set and returns.
+     */
+    if (KdpBootLogHandle != NULL || KdpBootLogName[0] == '\0')
+        return;
+
     RtlInitAnsiString(&AnsiName, KdpBootLogName);
     Status = RtlAnsiStringToUnicodeString(&FileName, &AnsiName, TRUE);
     if (!NT_SUCCESS(Status))
@@ -481,8 +522,6 @@ VOID NTAPI KdInitializeBootLog(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         KdpBootLogDevice = NULL;
     }
 
-    KeInitializeEvent(&KdpBootLogWake, SynchronizationEvent, FALSE);
-    KeInitializeEvent(&KdpBootLogStopped, NotificationEvent, FALSE);
     Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL, KdpBootLogThread, NULL);
     if (!NT_SUCCESS(Status))
     {
