@@ -467,9 +467,24 @@ IopMarkBootPartition(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     ObReferenceObject(FileObject->DeviceObject);
     IopErrorLogObject = FileObject->DeviceObject;
 
-    /* Configure the crash target while the resolved boot-volume stack is held. */
-    if (!IoInitializeDedicatedCrashDump(FileObject))
-        IoInitializeBootPageFileCrashDump(&DeviceName);
+    /*
+     * Configure a dedicated crash-dump device if one exists, while the resolved
+     * boot-volume stack is held.
+     *
+     * The boot paging file is deliberately NOT armed here. Creating or opening
+     * \pagefile.sys this early (IoInitializeBootPageFileCrashDump) writes to the
+     * boot volume - marking it dirty - and keeps a crash-dump handle open across
+     * BootExecute, so autochk can neither see a clean volume nor lock a dirty one
+     * to repair it, and the dirty bit is never cleared. Windows does not arm the
+     * paging-file dump target before SMSS either. The paging-file dump target is
+     * instead armed once SMSS creates the paging file, in NtCreatePagingFile ->
+     * IoInitializeCrashDump, on volumes flagged DO_SYSTEM_BOOT_PARTITION.
+     *
+     * Trade-off: a bugcheck in the pre-SMSS window (driver init and BootExecute)
+     * produces no paging-file-backed dump unless a dedicated dump device is
+     * configured - the dedicated path above is unchanged and still covers it.
+     */
+    IoInitializeDedicatedCrashDump(FileObject);
 
     /* Cleanup and return success */
     RtlFreeUnicodeString(&DeviceName);
