@@ -325,8 +325,7 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 }
                 else
                 {
-                    DPRINT1("NTFS: last-chance flush VolCB=%p status=%lx; dirty flag left set
-",
+                    DPRINT1("NTFS: last-chance flush VolCB=%p status=%lx; dirty flag left set\n",
                             VolCB, Status);
                 }
             }
@@ -358,8 +357,7 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
          * committed through the last device probed. */
         NtfsBindVolumeDisk(VolCB);
         FlushStatus = NtfsFlushVolume(VolCB, FALSE);
-        DPRINT1("NTFS: shutdown flush VolCB=%p status=%lx
-", VolCB, FlushStatus);
+        DPRINT1("NTFS: shutdown flush VolCB=%p status=%lx\n", VolCB, FlushStatus);
         /* Fail-closed per volume: logged above, continue; never discard another. */
     }
     ExReleaseResourceLite(&NtfsGlobalVolumeListResource);
