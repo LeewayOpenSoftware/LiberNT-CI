@@ -229,6 +229,7 @@ typedef struct _TASK_GROUP
             DWORD IsPinned : 1;
             DWORD PinSeen : 1;
             DWORD LaunchInProgress : 1;
+            DWORD PinAppIdCopied : 1;
         };
     };
 } TASK_GROUP, *PTASK_GROUP;
@@ -1082,9 +1083,9 @@ public:
 
     static PCWSTR TaskGroupKey(IN PTASK_GROUP TaskGroup)
     {
-        if (TaskGroup->szAppId[0])
-            return TaskGroup->szAppId;
-        return TaskGroup->szPinAppId[0] ? TaskGroup->szPinAppId : TaskGroup->szExePath;
+        if (TaskGroup->IsPinned)
+            return TaskGroup->szPinAppId[0] ? TaskGroup->szPinAppId : TaskGroup->szExePath;
+        return TaskGroup->szAppId[0] ? TaskGroup->szAppId : TaskGroup->szExePath;
     }
 
     static PCWSTR TaskGroupAppId(IN PTASK_GROUP TaskGroup)
@@ -1102,25 +1103,76 @@ public:
         return NULL;
     }
 
-    PTASK_GROUP FindPinGroup(IN PCWSTR pszTarget, IN PCWSTR pszAppId)
+    PTASK_GROUP FindTargetOnlyPinGroup(IN PCWSTR pszTarget)
     {
-        PTASK_GROUP TaskGroup;
-
-        if (!pszAppId[0])
-            return FindTaskGroupByKey(pszTarget);
-        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+        for (PTASK_GROUP TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
         {
-            if (!_wcsicmp(TaskGroup->szAppId, pszAppId) || !_wcsicmp(TaskGroup->szPinAppId, pszAppId))
-                return TaskGroup;
-        }
-        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
-        {
-            if (!TaskGroup->szAppId[0] && !TaskGroup->szPinAppId[0] && !TaskGroup->IsPinned &&
-                TaskGroup->szExePath[0] && !lstrcmpiW(TaskGroup->szExePath, pszTarget))
+            if (TaskGroup->IsPinned && !TaskGroup->szPinAppId[0] && TaskGroup->szExePath[0] &&
+                !lstrcmpiW(TaskGroup->szExePath, pszTarget))
             {
                 return TaskGroup;
             }
         }
+        return NULL;
+    }
+
+    PTASK_GROUP FindTaskGroupForWindow(IN PCWSTR pszExePath, IN PCWSTR pszAppId, IN DWORD dwProcessId)
+    {
+        PTASK_GROUP TaskGroup;
+
+        if (pszAppId[0])
+        {
+            for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+            {
+                if (!_wcsicmp(TaskGroup->szAppId, pszAppId) ||
+                    (!TaskGroup->szAppId[0] && !_wcsicmp(TaskGroup->szPinAppId, pszAppId)))
+                {
+                    return TaskGroup;
+                }
+            }
+            return NULL;
+        }
+
+        TaskGroup = FindTargetOnlyPinGroup(pszExePath);
+        if (TaskGroup)
+            return TaskGroup;
+
+        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+        {
+            if (TaskGroup->IsPinned && TaskGroup->PinAppIdCopied && TaskGroup->szExePath[0] &&
+                !lstrcmpiW(TaskGroup->szExePath, pszExePath))
+            {
+                return TaskGroup;
+            }
+        }
+
+        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+        {
+            if (!TaskGroup->IsPinned && !TaskGroup->szAppId[0] &&
+                ((pszExePath[0] && TaskGroup->szExePath[0] &&
+                  !_wcsicmp(TaskGroup->szExePath, pszExePath)) ||
+                 (TaskGroup->dwTaskCount && TaskGroup->dwProcessId == dwProcessId) ||
+                 (!pszExePath[0] && !TaskGroup->szExePath[0] && TaskGroup->dwProcessId == dwProcessId)))
+            {
+                return TaskGroup;
+            }
+        }
+        return NULL;
+    }
+
+    PTASK_GROUP FindPinGroup(IN PCWSTR pszTarget, IN PCWSTR pszAppId, IN BOOL bAppIdCopied)
+    {
+        if (pszAppId[0])
+        {
+            for (PTASK_GROUP TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+            {
+                if (!_wcsicmp(TaskGroup->szAppId, pszAppId) || !_wcsicmp(TaskGroup->szPinAppId, pszAppId))
+                    return TaskGroup;
+            }
+        }
+
+        if (!pszAppId[0] || (bAppIdCopied && !FindTargetOnlyPinGroup(pszTarget)))
+            return FindTaskGroupForWindow(pszTarget, L"", 0);
         return NULL;
     }
 
@@ -1212,6 +1264,7 @@ public:
             }
             TaskGroup->IsPinned = TRUE;
             TaskGroup->PinSeen = TRUE;
+            TaskGroup->PinAppIdCopied = TaskbarPin_IsAppIdCopied(pRecord->szShortcut);
             TaskGroup->PinCreationTime = pRecord->CreationTime;
             StringCchCopyW(TaskGroup->szPinAppId, _countof(TaskGroup->szPinAppId), pRecord->szAppId);
             StringCchCopyW(TaskGroup->szLinkPath,
@@ -1228,6 +1281,7 @@ public:
         }
 
         TaskGroup->IsPinned = FALSE;
+        TaskGroup->PinAppIdCopied = FALSE;
         if (TaskGroup->hPinnedIcon)
         {
             DestroyIcon(TaskGroup->hPinnedIcon);
@@ -1268,7 +1322,7 @@ public:
             return HRESULT_FROM_WIN32(GetLastError());
         Record.CreationTime = Attributes.ftCreationTime;
 
-        PTASK_GROUP Group = FindPinGroup(pszTarget, Record.szAppId);
+        PTASK_GROUP Group = FindPinGroup(pszTarget, Record.szAppId, TaskbarPin_IsAppIdCopied(pszShortcut));
         if (!Group)
             Group = AppendTaskGroup(pszTarget);
         if (!Group)
@@ -1314,7 +1368,7 @@ public:
             if (bDuplicate)
                 continue;
 
-            TaskGroup = FindPinGroup(Records[i].szTarget, Records[i].szAppId);
+            TaskGroup = FindPinGroup(Records[i].szTarget, Records[i].szAppId, TaskbarPin_IsAppIdCopied(Records[i].szShortcut));
             if (!TaskGroup)
                 TaskGroup = AppendTaskGroup(Records[i].szTarget);
             if (TaskGroup)
@@ -1342,6 +1396,9 @@ public:
             }
             TaskGroup = Next;
         }
+
+        for (WORD i = m_TaskItemCount; i > 0;)
+            RegroupTaskItemByAppId(&m_TaskItems[--i]);
 
         // Use the same order for existing running groups and pins loaded at logon.
         ApplyPinOrder(Records);
@@ -2484,26 +2541,15 @@ public:
         }
 
         /* Try to find an existing task group */
-        TaskGroup = m_TaskGroups;
-        while (TaskGroup != NULL)
+        TaskGroup = FindTaskGroupForWindow(szExePath, szAppId, dwProcessId);
+        if (TaskGroup)
         {
-            if (szAppId[0] ? (_wcsicmp(TaskGroup->szAppId, szAppId) == 0 ||
-                              (!TaskGroup->szAppId[0] && _wcsicmp(TaskGroup->szPinAppId, szAppId) == 0)) :
-                (!TaskGroup->szAppId[0] &&
-                 ((szExePath[0] && TaskGroup->szExePath[0] &&
-                   _wcsicmp(TaskGroup->szExePath, szExePath) == 0) ||
-                  (TaskGroup->dwTaskCount && TaskGroup->dwProcessId == dwProcessId) ||
-                  (!szExePath[0] && !TaskGroup->szExePath[0] &&
-                   TaskGroup->dwProcessId == dwProcessId))))
-            {
-                TaskGroup->dwTaskCount++;
-                TaskGroup->dwProcessId = dwProcessId;
-                if (szAppId[0] && !TaskGroup->szAppId[0])
-                    StringCchCopyW(TaskGroup->szAppId, _countof(TaskGroup->szAppId), szAppId);
-                ClearTaskGroupLaunch(TaskGroup);
-                return TaskGroup;
-            }
-            TaskGroup = TaskGroup->Next;
+            TaskGroup->dwTaskCount++;
+            TaskGroup->dwProcessId = dwProcessId;
+            if (szAppId[0] && !TaskGroup->szAppId[0])
+                StringCchCopyW(TaskGroup->szAppId, _countof(TaskGroup->szAppId), szAppId);
+            ClearTaskGroupLaunch(TaskGroup);
+            return TaskGroup;
         }
 
         /* Allocate a new task group */
@@ -2777,12 +2823,14 @@ public:
 
     BOOL RegroupTaskItemByAppId(IN PTASK_ITEM TaskItem)
     {
-        WCHAR szAppId[128];
+        DWORD ProcessId;
+        WCHAR szExePath[MAX_PATH], szAppId[128];
 
-        if (!TaskItem->Group)
+        if (!TaskItem->Group || !GetWindowThreadProcessId(TaskItem->hWnd, &ProcessId))
             return FALSE;
+        GetTaskExePath(ProcessId, szExePath, _countof(szExePath));
         GetWindowAppId(TaskItem->hWnd, szAppId, _countof(szAppId));
-        if (_wcsicmp(szAppId, TaskItem->Group->szAppId) == 0)
+        if (TaskItem->Group == FindTaskGroupForWindow(szExePath, szAppId, ProcessId))
             return FALSE;
 
         DeleteTaskItemButton(TaskItem);

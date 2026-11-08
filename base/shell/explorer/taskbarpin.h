@@ -25,6 +25,7 @@ BOOL TaskbarPin_IsDisabled();
 BOOL TaskbarPin_ResolveTarget(PCWSTR pszSource, CStringW &Target);
 HRESULT TaskbarPin_Find(PCWSTR pszTarget, CStringW *pShortcut = NULL, PCWSTR pszAppId = NULL);
 HRESULT TaskbarPin_Enum(TASKBAR_PIN_ENUM_PROC pfnCallback, LPARAM lParam);
+BOOL TaskbarPin_IsAppIdCopied(PCWSTR pszShortcut);
 HRESULT TaskbarPin_Create(PCWSTR pszSource, CStringW *pShortcut = NULL, HICON hIcon = NULL);
 HRESULT TaskbarPin_Remove(PCWSTR pszTarget, PCWSTR pszAppId = NULL);
 HRESULT TaskbarPin_Launch(PCWSTR pszSource, HANDLE *phProcess);
