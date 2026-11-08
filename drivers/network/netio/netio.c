@@ -73,6 +73,30 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 // #define FUNCTION_TRACE DPRINT1("%s() ...\n", __FUNCTION__)
 #define FUNCTION_TRACE do { } while (0)
 
+#define WSK_REQUIRE_IRP(Irp) \
+    do \
+    { \
+        if ((Irp) == NULL) \
+        { \
+            DPRINT1("%s: a WSK request needs an IRP, none was given\n", __FUNCTION__); \
+            return STATUS_INVALID_PARAMETER; \
+        } \
+    } while (0)
+
+static NTSTATUS
+WskCompleteUnsupported(_In_opt_ PIRP Irp, _In_ PCSTR Function)
+{
+    DPRINT1("%s is not implemented\n", Function);
+    if (Irp != NULL)
+    {
+        IoSetNextIrpStackLocation(Irp);
+        Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+    }
+    return STATUS_NOT_IMPLEMENTED;
+}
+
 typedef struct _WSK_SOCKET_INTERNAL
 {
     WSK_SOCKET Socket;
@@ -686,12 +710,19 @@ WskControlSocket(
 
     FUNCTION_TRACE;
 
+    if (RequestType == WskIoctl)
+    {
+        WSK_REQUIRE_IRP(Irp);
+    }
+    if (Irp != NULL)
+    {
+        IoSetNextIrpStackLocation(Irp);
+    }
     if (Socket == NULL)
     {
         status = STATUS_INVALID_PARAMETER;
         goto err_out;
     }
-    IoSetNextIrpStackLocation(Irp);
 
     switch (RequestType)
     {
@@ -772,6 +803,10 @@ WskControlSocket(
     }
 
 err_out:
+    if (Irp == NULL)
+    {
+        return status;
+    }
     Irp->IoStatus.Status = status;
     IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
 
@@ -784,6 +819,7 @@ WskCloseSocket(_In_ PWSK_SOCKET SocketParam, _Inout_ PIRP Irp)
     NTSTATUS status = STATUS_SUCCESS;
     PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
 
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
 
     /* There might be a reference from (for example) a pending
@@ -856,12 +892,13 @@ WskBind(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR LocalAddress, _Reserved_ UL
 {
     NTSTATUS status;
     PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
-
-    PTRANSPORT_ADDRESS ta = TdiTransportAddressFromSocketAddress(LocalAddress);
+    PTRANSPORT_ADDRESS ta;
 
     FUNCTION_TRACE;
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
 
+    ta = TdiTransportAddressFromSocketAddress(LocalAddress);
     if (ta == NULL)
     {
         status = STATUS_INSUFFICIENT_RESOURCES;
@@ -910,6 +947,7 @@ WskSendTo(
 
     FUNCTION_TRACE;
 
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
 
     status = STATUS_INSUFFICIENT_RESOURCES;
@@ -979,13 +1017,7 @@ WskReceiveFrom(
 {
     FUNCTION_TRACE;
 
-    UNIMPLEMENTED;
-    if (Irp != NULL)
-    {
-        Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
-        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
-    }
-    return STATUS_NOT_IMPLEMENTED;
+    return WskCompleteUnsupported(Irp, __FUNCTION__);
 }
 
 static NTSTATUS WSKAPI
@@ -1013,13 +1045,7 @@ WskGetLocalAddress(_In_ PWSK_SOCKET SocketParam, _Out_ PSOCKADDR LocalAddress, _
 {
     FUNCTION_TRACE;
 
-    UNIMPLEMENTED;
-    if (Irp != NULL)
-    {
-        Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
-        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
-    }
-    return STATUS_NOT_IMPLEMENTED;
+    return WskCompleteUnsupported(Irp, __FUNCTION__);
 }
 
 static NTSTATUS WSKAPI
@@ -1030,6 +1056,7 @@ WskGetRemoteAddress(_In_ PWSK_SOCKET SocketParam, _Out_ PSOCKADDR RemoteAddress,
     PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
     NTSTATUS Status = STATUS_INVALID_PARAMETER;
 
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
     if (Socket != NULL)
     {
@@ -1059,13 +1086,7 @@ WskSocketConnect(
 {
     FUNCTION_TRACE;
 
-    UNIMPLEMENTED;
-    if (Irp != NULL)
-    {
-        Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
-        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
-    }
-    return STATUS_NOT_IMPLEMENTED;
+    return WskCompleteUnsupported(Irp, __FUNCTION__);
 }
 
 static NTSTATUS WSKAPI
@@ -1080,13 +1101,7 @@ WskControlClient(
 {
     FUNCTION_TRACE;
 
-    UNIMPLEMENTED;
-    if (Irp != NULL)
-    {
-        Irp->IoStatus.Status = STATUS_NOT_IMPLEMENTED;
-        IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
-    }
-    return STATUS_NOT_IMPLEMENTED;
+    return WskCompleteUnsupported(Irp, __FUNCTION__);
 }
 
 static WSK_PROVIDER_DATAGRAM_DISPATCH UdpDispatch = {
@@ -1112,6 +1127,7 @@ WskConnect(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR RemoteAddress, _Reserved
 
     FUNCTION_TRACE;
 
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
 
     status = STATUS_INVALID_PARAMETER;
@@ -1209,6 +1225,7 @@ WskStreamIo(
 
     FUNCTION_TRACE;
 
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
     status = STATUS_INSUFFICIENT_RESOURCES;
 
@@ -1288,9 +1305,10 @@ WskDisconnect(_In_ PWSK_SOCKET SocketParam, _In_opt_ PWSK_BUF Buffer, _In_ ULONG
 
     FUNCTION_TRACE;
 
-    SocketShutdown(Socket);
-
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
+
+    SocketShutdown(Socket);
 
     Irp->IoStatus.Status = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
@@ -1331,6 +1349,7 @@ WskSocket(
 
     FUNCTION_TRACE;
 
+    WSK_REQUIRE_IRP(Irp);
     IoSetNextIrpStackLocation(Irp);
 
     if (AddressFamily != AF_INET)
