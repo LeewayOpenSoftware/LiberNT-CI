@@ -354,7 +354,10 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
     PUCHAR SourceImage;
     NTSTATUS Status, WriteStatus;
     LARGE_INTEGER FileRecordOffset;
+    ULONGLONG IndexDiskOffset = 0;
     BOOLEAN SelfReferential;
+    BOOLEAN IndexBarrierAttempted = FALSE;
+    BOOLEAN MftWriteAttempted = FALSE;
 
     // TODO: Add logging here
 
@@ -415,14 +418,63 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
             File->RecordNumber *
             FileRecordSize);
 
-    // Write file record to $MFT.
-    WriteStatus = MFTFile->WriteFileData(TypeData,
-                                         NULL,
-                                         SourceImage,
-                                         &FRSize,
-                                         &FileRecordOffset);
+    /*
+     * Directory name insert, barrier mode: while AddFileToDirectory has
+     * IndexBarrierRecordOffset armed, every record written through here is
+     * part of that insert (the directory record carrying a resident
+     * $INDEX_ROOT entry, or the directory record grown by a node split) and
+     * names a file record added in the same operation. Order this record
+     * after that one so a crash never leaves the entry naming a not-yet-
+     * durable record. The constraint goes in BEFORE the write below dirties
+     * this record's block: once a block is dirty and unconstrained the lazy
+     * writer may take it at any moment, and a constraint added afterwards
+     * cannot recall a write already on its way to the device.
+     *
+     * When the ordering cannot be installed (this record's disk offset is
+     * unresolvable, its block is not cached, or the barrier refuses it), the
+     * file record is made durable synchronously first, so this record can
+     * still be written in any order afterwards. The write never proceeds
+     * unordered, and no failure on this path is ignored. The target record
+     * itself (same offset) needs no ordering against itself.
+     */
+    WriteStatus = STATUS_SUCCESS;
+    if (DiskVolume->IndexBarrierRecordOffset != 0)
+    {
+        WriteStatus = GetFileRecordDiskOffset(File->RecordNumber, &IndexDiskOffset);
+        if (NT_SUCCESS(WriteStatus) &&
+            IndexDiskOffset != DiskVolume->IndexBarrierRecordOffset)
+        {
+            IndexBarrierAttempted = TRUE;
+            WriteStatus = DiskVolume->BarrierAfter(
+                IndexDiskOffset, FileRecordSize,
+                DiskVolume->IndexBarrierRecordOffset, FileRecordSize);
+        }
+        if (!NT_SUCCESS(WriteStatus))
+        {
+            /* Record first, synchronously; then this write may go anywhere. */
+            WriteStatus = DiskVolume->CommitRange(
+                DiskVolume->IndexBarrierRecordOffset, FileRecordSize);
+            if (WriteStatus == STATUS_NOT_IMPLEMENTED)
+                WriteStatus = DiskVolume->FlushVolume();
+            if (IndexBarrierAttempted)
+            {
+                DiskVolume->BarrierCancel(IndexDiskOffset, FileRecordSize);
+                IndexBarrierAttempted = FALSE;
+            }
+        }
+    }
 
-    if (!NT_SUCCESS(WriteStatus))
+    if (NT_SUCCESS(WriteStatus))
+    {
+        MftWriteAttempted = TRUE;
+        WriteStatus = MFTFile->WriteFileData(TypeData,
+                                             NULL,
+                                             SourceImage,
+                                             &FRSize,
+                                             &FileRecordOffset);
+    }
+
+    if (!NT_SUCCESS(WriteStatus) && MftWriteAttempted)
     {
         DPRINT1("Unable to write file record %lu! (Status: 0x%X)\n",
                 File->RecordNumber,
@@ -448,6 +500,11 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
         }
     }
 
+    /* A failed write leaves the block clean; release the constraint it was
+     * installed for. A block the $MFT write did dirty keeps it. */
+    if (!NT_SUCCESS(WriteStatus) && IndexBarrierAttempted)
+        DiskVolume->BarrierCancel(IndexDiskOffset, FileRecordSize);
+
     if (SelfReferential)
     {
         delete[] CommittedImage;
@@ -467,34 +524,6 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
      * same record commit. This low-level writer also persists NTFS metadata
      * records and therefore must not invent semantic timestamp updates.
      */
-
-    /*
-     * Directory name insert, barrier mode: when this record carries a resident
-     * $INDEX_ROOT entry that names a file record added in the same operation
-     * (IndexBarrierRecordOffset set by AddFileToDirectory), order this record
-     * after that record so a crash never leaves the entry naming a not-yet-
-     * durable record. Only the directory record is written via this path while
-     * the insert is in progress; skip the (impossible) self case.
-     */
-    if (NT_SUCCESS(WriteStatus) &&
-        DiskVolume->IndexBarrierRecordOffset != 0 &&
-        File->RecordNumber != MAXULONG)
-    {
-        ULONGLONG DirRecordDiskOffset;
-
-        if (NT_SUCCESS(GetFileRecordDiskOffset(File->RecordNumber, &DirRecordDiskOffset)))
-        {
-            if (DirRecordDiskOffset != DiskVolume->IndexBarrierRecordOffset)
-                DiskVolume->BarrierAfter(DirRecordDiskOffset, FileRecordSize,
-                                         DiskVolume->IndexBarrierRecordOffset, FileRecordSize);
-        }
-        else
-        {
-            /* Offset unresolvable (record crosses a run boundary): make both
-             * durable to stay correct. */
-            (void)DiskVolume->FlushVolume();
-        }
-    }
 
     return WriteStatus;
 }
@@ -1098,8 +1127,9 @@ ScanAgain:
          * the disk. Only this record's range is written, not the volume.
          */
         /* Barrier OFF (default): synchronous CommitRange, as bc86485f. Barrier
-         * ON: no synchronous write here; the record-before-bit ordering is set
-         * after the bitmap bit is written below (BarrierAfter). */
+         * ON: no synchronous write here; the record-before-bit ordering is
+         * installed below, right before the bitmap bit is written
+         * (BarrierAfter). */
         if (!DiskVolume->WriteBarrierEnabled())
         {
             ULONGLONG RecordDiskOffset;
@@ -1135,36 +1165,75 @@ ScanAgain:
         Status = STATUS_FILE_CORRUPT_ERROR;
         goto Done;
     }
-    Status = WriteMftBitmapByte(
-        MFTFile,
-        ByteOffset,
-        (UCHAR)(BitmapByte | BitMask));
-    if (!NT_SUCCESS(Status))
-        goto Done;
-
-    if (Candidate < RecordCount && DiskVolume->WriteBarrierEnabled())
     {
-        /* Order the bitmap bit after the new record: the bit block cannot reach
-         * the device until the record block is durable, with no synchronous
-         * write. On a crash the bit is never on disk without the record. */
-        ULONGLONG RecordDiskOffset;
-        ULONGLONG BitDiskOffset;
-        ULONG BitLength;
+        ULONGLONG BarrierRecordOffset = 0;
+        ULONGLONG BarrierBitOffset = 0;
+        ULONG BarrierBitLength = 0;
+        BOOLEAN BarrierAttempted = FALSE;
 
-        if (NT_SUCCESS(GetFileRecordDiskOffset(Candidate, &RecordDiskOffset)) &&
-            NT_SUCCESS(GetMftBitmapByteDiskOffset(MFTFile, BitmapAttribute, ByteOffset,
-                                                  &BitDiskOffset, &BitLength)))
+        /*
+         * Barrier ON: the bit block cannot reach the device until the record
+         * block is durable, with no synchronous write. The constraint is
+         * installed BEFORE the bit is written: a block that is dirty and
+         * unconstrained, even briefly, may be taken by the lazy writer, and
+         * a constraint added afterwards cannot recall it. When the ordering
+         * cannot be installed (an offset is unresolvable, the bit block is
+         * not cached, or the barrier refuses it) the record is committed
+         * synchronously first, and only then is the bit written; a record
+         * that spans a run boundary is made durable by a full flush. On a
+         * crash the bit is never on disk without the record.
+         */
+        if (Candidate < RecordCount && DiskVolume->WriteBarrierEnabled())
         {
-            DiskVolume->BarrierAfter(BitDiskOffset, BitLength,
-                                     RecordDiskOffset, FileRecordSize);
+            Status = GetFileRecordDiskOffset(Candidate, &BarrierRecordOffset);
+            if (Status == STATUS_NOT_IMPLEMENTED)
+            {
+                /* Record spans a run boundary: no single range to order on. */
+                Status = DiskVolume->FlushVolume();
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+            }
+            else
+            {
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+                Status = GetMftBitmapByteDiskOffset(
+                    MFTFile, BitmapAttribute, ByteOffset,
+                    &BarrierBitOffset, &BarrierBitLength);
+                if (NT_SUCCESS(Status))
+                {
+                    BarrierAttempted = TRUE;
+                    Status = DiskVolume->BarrierAfter(
+                        BarrierBitOffset, BarrierBitLength,
+                        BarrierRecordOffset, FileRecordSize);
+                }
+                if (!NT_SUCCESS(Status))
+                {
+                    /* Record first, synchronously; then the bit may go anywhere. */
+                    Status = DiskVolume->CommitRange(BarrierRecordOffset, FileRecordSize);
+                    if (Status == STATUS_NOT_IMPLEMENTED)
+                        Status = DiskVolume->FlushVolume();
+                    if (BarrierAttempted)
+                    {
+                        DiskVolume->BarrierCancel(BarrierBitOffset, BarrierBitLength);
+                        BarrierAttempted = FALSE;
+                    }
+                    if (!NT_SUCCESS(Status))
+                        goto Done;
+                }
+            }
         }
-        else
+
+        Status = WriteMftBitmapByte(
+            MFTFile,
+            ByteOffset,
+            (UCHAR)(BitmapByte | BitMask));
+        if (!NT_SUCCESS(Status))
         {
-            /* Offsets not resolvable (e.g. a record crossing a run boundary):
-             * make both durable to stay correct. */
-            Status = DiskVolume->FlushVolume();
-            if (!NT_SUCCESS(Status))
-                goto Done;
+            /* The bit block stayed clean; release the constraint. */
+            if (BarrierAttempted)
+                DiskVolume->BarrierCancel(BarrierBitOffset, BarrierBitLength);
+            goto Done;
         }
     }
 

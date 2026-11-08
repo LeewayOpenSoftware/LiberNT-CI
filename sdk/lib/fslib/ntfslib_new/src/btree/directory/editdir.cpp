@@ -697,8 +697,11 @@ WriteIndexNode(
 {
     LARGE_INTEGER WriteOffset;
     ULONGLONG AllocationOffset;
+    ULONGLONG NodeDiskOffset = 0;
+    ULONG NodeLength = 0;
     ULONG WriteLength = RecordSize;
     NTSTATUS Status;
+    BOOLEAN BarrierAttempted = FALSE;
 
     if (Vcn > ~(ULONGLONG)0 / AllocationUnit)
         return STATUS_FILE_CORRUPT_ERROR;
@@ -717,6 +720,70 @@ WriteIndexNode(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /*
+     * Directory name insert, barrier mode: this index-allocation node names a
+     * file record added in the same operation (IndexBarrierRecordOffset, set
+     * by AddFileToDirectory). Order the node after that record so the node
+     * cannot reach the device before the record is durable; otherwise a crash
+     * leaves a dangling index entry to a zeroed record (the J32 grow/
+     * residual the record-before-bitmap fix did not cover).
+     *
+     * The constraint is installed BEFORE the write below dirties the node's
+     * block. A block that is dirty and unconstrained, even for the moment
+     * between the write and a constraint added afterwards, may be taken by
+     * the lazy writer, and nothing can recall a write already on its way to
+     * the device. The node's disk offset comes from the $INDEX_ALLOCATION
+     * run list exactly as the bitmap barrier does. When the ordering cannot
+     * be installed (no allocation attribute, the node crosses a run boundary
+     * or sits in a sparse run, its block is not cached, or the barrier
+     * refuses it), the record is committed synchronously first and only then
+     * is the node written. The write never proceeds unordered, and no
+     * failure on this path is ignored.
+     */
+    if (DiskVolume->IndexBarrierRecordOffset != 0)
+    {
+        PAttribute IndexAllocationAttribute =
+            DirectoryFile->GetAttribute(
+                TypeIndexAllocation,
+                const_cast<PWSTR>(IndexName));
+
+        if (IndexAllocationAttribute)
+        {
+            Status = DiskVolume->MFT->GetAttributeRangeDiskOffset(
+                DirectoryFile, IndexAllocationAttribute,
+                AllocationOffset, RecordSize,
+                &NodeDiskOffset, &NodeLength);
+        }
+        else
+        {
+            Status = STATUS_NOT_FOUND;
+        }
+        if (NT_SUCCESS(Status))
+        {
+            BarrierAttempted = TRUE;
+            Status = DiskVolume->BarrierAfter(
+                NodeDiskOffset, NodeLength,
+                DiskVolume->IndexBarrierRecordOffset,
+                DiskVolume->MFT->FileRecordSize);
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            /* Record first, synchronously; then the node may go anywhere. */
+            Status = DiskVolume->CommitRange(
+                DiskVolume->IndexBarrierRecordOffset,
+                DiskVolume->MFT->FileRecordSize);
+            if (Status == STATUS_NOT_IMPLEMENTED)
+                Status = DiskVolume->FlushVolume();
+            if (BarrierAttempted)
+            {
+                DiskVolume->BarrierCancel(NodeDiskOffset, NodeLength);
+                BarrierAttempted = FALSE;
+            }
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+    }
+
     WriteOffset.QuadPart =
         (LONGLONG)AllocationOffset;
     Status = DirectoryFile->WriteFileData(
@@ -730,47 +797,10 @@ WriteIndexNode(
     {
         Status = STATUS_END_OF_FILE;
     }
-
-    /*
-     * Directory name insert, barrier mode: this index-allocation node names a
-     * file record added in the same operation (IndexBarrierRecordOffset, set by
-     * AddFileToDirectory). Order the node after that record so the node cannot
-     * reach the device before the record is durable; otherwise a crash leaves a
-     * dangling index entry to a zeroed record (the J32 grow/ residual the
-     * record-before-bitmap fix did not cover). Resolve this node's disk offset
-     * from the $INDEX_ALLOCATION run list exactly as the bitmap barrier does;
-     * fall back to a full flush when it is unresolvable or crosses a run
-     * boundary.
-     */
-    if (NT_SUCCESS(Status) && DiskVolume->IndexBarrierRecordOffset != 0)
-    {
-        PAttribute IndexAllocationAttribute =
-            DirectoryFile->GetAttribute(
-                TypeIndexAllocation,
-                const_cast<PWSTR>(IndexName));
-        ULONGLONG NodeDiskOffset = 0;
-        ULONG NodeLength = 0;
-
-        /* Resolve the node's disk offset via the MFT (GetCachedDataRuns is
-         * private to FileRecord and befriended only by MasterFileTable). On a
-         * sparse run or a node crossing a run boundary this returns an error and
-         * we fall back to a full flush. */
-        if (IndexAllocationAttribute &&
-            NT_SUCCESS(DiskVolume->MFT->GetAttributeRangeDiskOffset(
-                DirectoryFile, IndexAllocationAttribute,
-                AllocationOffset, RecordSize,
-                &NodeDiskOffset, &NodeLength)))
-        {
-            DiskVolume->BarrierAfter(
-                NodeDiskOffset, NodeLength,
-                DiskVolume->IndexBarrierRecordOffset,
-                DiskVolume->MFT->FileRecordSize);
-        }
-        else
-        {
-            Status = DiskVolume->FlushVolume();
-        }
-    }
+    /* A failed write leaves the block clean; release the constraint it was
+     * installed for. A block the write did dirty keeps it. */
+    if (!NT_SUCCESS(Status) && BarrierAttempted)
+        DiskVolume->BarrierCancel(NodeDiskOffset, NodeLength);
     return Status;
 }
 
@@ -2489,18 +2519,31 @@ Directory::AddFileToDirectory(
     Key.CaseSensitive = DirectoryFile->IsCaseSensitiveDirectory();
 
     /*
-     * Order the index entry that names the new file after the file's own record,
-     * so a crash cannot leave the entry naming a not-yet-durable (zeroed) record
-     * (J32 grow/ residual). Barrier ON: arm IndexBarrierRecordOffset; the index
-     * block writes (WriteIndexNode / WriteFileRecordToMFT) apply BarrierAfter.
-     * Barrier OFF: make the record durable synchronously before the insert, as
-     * the record-before-bitmap fix does for the bitmap bit.
+     * Order the index entry that names the new file after the file's own
+     * record, so a crash cannot leave the entry naming a not-yet-durable
+     * (zeroed) record (J32 grow/ residual). Barrier ON: arm
+     * IndexBarrierRecordOffset; the index block writes (WriteIndexNode /
+     * WriteFileRecordToMFT) install BarrierAfter before dirtying their
+     * block. Barrier OFF: make the record durable synchronously before the
+     * insert, as the record-before-bitmap fix does for the bitmap bit.
+     *
+     * The record's disk offset is what both modes order on. When it cannot
+     * be resolved there is nothing to arm and nothing to commit by range: a
+     * record spanning a run boundary is made durable by a full flush before
+     * the insert (the proven record-first fallback), and any other failure
+     * fails the insert. The insert never proceeds unordered.
      */
     {
         ULONGLONG TargetRecordOffset = 0;
 
-        if (NT_SUCCESS(DiskVolume->MFT->GetFileRecordDiskOffset(
-                FileReference & 0x0000FFFFFFFFFFFFULL, &TargetRecordOffset)))
+        Status = DiskVolume->MFT->GetFileRecordDiskOffset(
+            FileReference & 0x0000FFFFFFFFFFFFULL, &TargetRecordOffset);
+        if (Status == STATUS_NOT_IMPLEMENTED)
+        {
+            /* No single range to order on: everything durable first. */
+            Status = DiskVolume->FlushVolume();
+        }
+        else if (NT_SUCCESS(Status))
         {
             if (DiskVolume->WriteBarrierEnabled())
             {
@@ -2512,12 +2555,12 @@ Directory::AddFileToDirectory(
                     TargetRecordOffset, DiskVolume->MFT->FileRecordSize);
                 if (Status == STATUS_NOT_IMPLEMENTED)
                     Status = DiskVolume->FlushVolume();
-                if (!NT_SUCCESS(Status))
-                {
-                    NtfsFreePool(NewEntry);
-                    return Status;
-                }
             }
+        }
+        if (!NT_SUCCESS(Status))
+        {
+            NtfsFreePool(NewEntry);
+            return Status;
         }
     }
 
