@@ -1,12 +1,9 @@
 /*
- * LeewayUI Ribbon Skeleton Test Window
- * LGPL-2.1+
- *
- * Minimal test window demonstrating:
- * - One tab, one group, one large button
- * - Command table driven model
- * - Theme integration
- * - DPI awareness
+ * PROJECT:     LeewayUI
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Test window demonstrating ribbon, command table, theme, and DPI awareness
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ * PROVENANCE:  sdk/lib/leewayui/LEEWAYUI-PROVENANCE.md
  */
 
 #define COBJMACROS

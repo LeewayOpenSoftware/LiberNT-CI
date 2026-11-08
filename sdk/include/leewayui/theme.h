@@ -1,6 +1,9 @@
 /*
- * LeewayUI Theme — light/dark/high-contrast support
- * LGPL-2.1+
+ * PROJECT:     LeewayUI
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Theme support for light/dark/high-contrast modes
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ * PROVENANCE:  sdk/lib/leewayui/LEEWAYUI-PROVENANCE.md
  */
 
 #pragma once

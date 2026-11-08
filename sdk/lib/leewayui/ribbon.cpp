@@ -1,6 +1,9 @@
 /*
- * LeewayUI Ribbon Control — v0 skeleton implementation
- * LGPL-2.1+
+ * PROJECT:     LeewayUI
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Ribbon control v0 skeleton implementation
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ * PROVENANCE:  sdk/lib/leewayui/LEEWAYUI-PROVENANCE.md
  */
 
 #define COBJMACROS

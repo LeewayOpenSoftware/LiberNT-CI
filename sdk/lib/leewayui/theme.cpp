@@ -1,6 +1,9 @@
 /*
- * LeewayUI Theme — minimal skeleton implementation
- * LGPL-2.1+
+ * PROJECT:     LeewayUI
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Theme skeleton implementation for light/dark/high-contrast
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ * PROVENANCE:  sdk/lib/leewayui/LEEWAYUI-PROVENANCE.md
  */
 
 #include <windows.h>

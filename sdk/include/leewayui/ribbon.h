@@ -1,6 +1,9 @@
 /*
- * LeewayUI Ribbon Control — header for v0 skeleton
- * LGPL-2.1+
+ * PROJECT:     LeewayUI
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Ribbon control header for v0 skeleton
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ * PROVENANCE:  sdk/lib/leewayui/LEEWAYUI-PROVENANCE.md
  */
 
 #pragma once
