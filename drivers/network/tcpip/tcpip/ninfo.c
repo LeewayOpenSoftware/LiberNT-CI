@@ -437,113 +437,68 @@ static
 NTSTATUS
 InfoIp6QueryEndpoints(PUCHAR Buffer, ULONG Length, PULONG Count, PULONG Needed, PIP6_STATISTICS Stats)
 {
-    PADDRESS_FILE *Files;
-    PLIST_ENTRY Entry;
-    ULONG Total = 0, Taken = 0, i;
-    KIRQL OldIrql;
+    PENDPOINT_ROW Rows = NULL;
+    ULONG Capacity = 0, Total = 0, i, Attempt;
+    NTSTATUS Status = STATUS_SUCCESS;
 
-    TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
-    for (Entry = AddressFileListHead.Flink; Entry != &AddressFileListHead; Entry = Entry->Flink)
+    for (Attempt = 0; Attempt < 4; Attempt++)
     {
-        PADDRESS_FILE AddrFile = CONTAINING_RECORD(Entry, ADDRESS_FILE, ListEntry);
-
-        if (AddrFile->Address.Type == IP_ADDRESS_V6 &&
-            (AddrFile->Protocol == IPPROTO_TCP || AddrFile->Protocol == IPPROTO_UDP))
-            Total++;
-    }
-    TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
-
-    Files = ExAllocatePoolWithTag(NonPagedPool, max(Total, 1) * sizeof(PADDRESS_FILE), ADDR_FILE_TAG);
-    if (!Files)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
-    for (Entry = AddressFileListHead.Flink; Entry != &AddressFileListHead && Taken < Total; Entry = Entry->Flink)
-    {
-        PADDRESS_FILE AddrFile = CONTAINING_RECORD(Entry, ADDRESS_FILE, ListEntry);
-
-        if (AddrFile->Address.Type == IP_ADDRESS_V6 &&
-            (AddrFile->Protocol == IPPROTO_TCP || AddrFile->Protocol == IPPROTO_UDP))
+        Status = IfInfoEndpoints(TI_NSI_FAMILY_IPV6, IFINFO_PROTOCOL_ANY, Rows, Capacity, &Total);
+        if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW)
         {
-            ReferenceObject(AddrFile);
-            Files[Taken++] = AddrFile;
+            IfInfoFree(Rows);
+            return Status;
         }
+        if (Total <= Capacity)
+            break;
+        IfInfoFree(Rows);
+        Capacity = Total + 8;
+        Rows = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(ENDPOINT_ROW), OUT_DATA_TAG);
+        if (!Rows)
+            return STATUS_INSUFFICIENT_RESOURCES;
     }
-    TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
-
-    for (i = 0; i < Taken; i++)
+    if (Total > Capacity)
     {
-        PADDRESS_FILE AddrFile = Files[i];
+        IfInfoFree(Rows);
+        return STATUS_BUFFER_OVERFLOW;
+    }
+
+    for (i = 0; i < Total; i++)
+    {
         IP6_ENDPOINT_ROW Row;
-        BOOLEAN Emit = TRUE;
 
+        if (Stats)
+        {
+            if (Rows[i].Protocol == IPPROTO_UDP)
+            {
+                Stats->UdpNumAddresses++;
+            }
+            else
+            {
+                Stats->TcpNumConnections++;
+                if (Rows[i].State == MIB_TCP_STATE_ESTAB || Rows[i].State == MIB_TCP_STATE_CLOSE_WAIT)
+                    Stats->TcpCurrentEstablished++;
+            }
+            continue;
+        }
         RtlZeroMemory(&Row, sizeof(Row));
-        Row.Protocol = AddrFile->Protocol;
-        RtlCopyMemory(Row.LocalAddress, AddrFile->Address.Address.IPv6Address, sizeof(Row.LocalAddress));
-        Row.LocalPort = AddrFile->Port;
-        Row.ProcessId = HandleToUlong(AddrFile->ProcessId);
-        Row.CreateTime = AddrFile->CreationTime;
-        Row.ModuleInfo = (ULONG_PTR)AddrFile->SubProcessTag;
-
-        if (AddrFile->Protocol == IPPROTO_TCP)
-        {
-            if (AddrFile->Listener)
-            {
-                Row.State = MIB_TCP_STATE_LISTEN;
-            }
-            else if (AddrFile->Connection && AddrFile->Connection->SocketContext)
-            {
-                CHAR Local[sizeof(TA_IP6_ADDRESS)], Remote[sizeof(TA_IP6_ADDRESS)];
-
-                if (NT_SUCCESS(TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)Local, sizeof(Local), FALSE)) &&
-                    NT_SUCCESS(TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)Remote, sizeof(Remote), TRUE)) &&
-                    ((PTA_IP6_ADDRESS)Local)->Address[0].AddressType == TDI_ADDRESS_TYPE_IP6 &&
-                    NT_SUCCESS(TCPGetSocketStatus(AddrFile->Connection, &Row.State)))
-                {
-                    InfoIp6CopyAddress(Local, Row.LocalAddress, &Row.LocalPort);
-                    InfoIp6CopyAddress(Remote, Row.RemoteAddress, &Row.RemotePort);
-                }
-                else
-                {
-                    Emit = FALSE;
-                }
-            }
-            else
-            {
-                Emit = FALSE;
-            }
-        }
-
-        if (Emit)
-        {
-            if (Stats)
-            {
-                if (Row.Protocol == IPPROTO_UDP)
-                {
-                    Stats->UdpNumAddresses++;
-                }
-                else
-                {
-                    Stats->TcpNumConnections++;
-                    if (Row.State == MIB_TCP_STATE_ESTAB || Row.State == MIB_TCP_STATE_CLOSE_WAIT)
-                        Stats->TcpCurrentEstablished++;
-                }
-            }
-            else
-            {
-                ULONG Offset = *Needed;
-
-                if (Buffer && Offset + sizeof(Row) <= Length)
-                    RtlCopyMemory(Buffer + Offset, &Row, sizeof(Row));
-                *Needed += sizeof(Row);
-                (*Count)++;
-            }
-        }
-
-        DereferenceObject(AddrFile);
+        Row.Protocol = Rows[i].Protocol;
+        RtlCopyMemory(Row.LocalAddress, Rows[i].LocalAddress, sizeof(Row.LocalAddress));
+        Row.LocalScopeId = Rows[i].LocalScopeId;
+        Row.LocalPort = Rows[i].LocalPort;
+        Row.RemotePort = Rows[i].RemotePort;
+        RtlCopyMemory(Row.RemoteAddress, Rows[i].RemoteAddress, sizeof(Row.RemoteAddress));
+        Row.RemoteScopeId = Rows[i].RemoteScopeId;
+        Row.State = Rows[i].State;
+        Row.ProcessId = Rows[i].Pid;
+        Row.CreateTime = Rows[i].CreateTime;
+        Row.ModuleInfo = Rows[i].ModuleInfo;
+        if (Buffer && *Needed + sizeof(Row) <= Length)
+            RtlCopyMemory(Buffer + *Needed, &Row, sizeof(Row));
+        *Needed += sizeof(Row);
+        (*Count)++;
     }
-
-    ExFreePoolWithTag(Files, ADDR_FILE_TAG);
+    IfInfoFree(Rows);
     return STATUS_SUCCESS;
 }
 

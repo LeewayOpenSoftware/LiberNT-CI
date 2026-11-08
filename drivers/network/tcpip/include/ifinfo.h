@@ -117,3 +117,25 @@ VOID TiNsiNotifyInterface(UINT Index, ULONG Change);
 #define TI_NSI_TABLE_FORWARD 3
 
 VOID TiNsiNotifyIpTable(ULONG Family, ULONG Table, ULONG Change);
+
+#define IFINFO_FAMILY_ANY 2
+#define IFINFO_PROTOCOL_ANY 0
+#define IFINFO_PROTOCOL_TCP 6
+#define IFINFO_PROTOCOL_UDP 17
+
+typedef struct _ENDPOINT_ROW {
+    ULONG Family;
+    ULONG Protocol;
+    UCHAR LocalAddress[16];
+    ULONG LocalScopeId;
+    USHORT LocalPort;
+    USHORT RemotePort;
+    UCHAR RemoteAddress[16];
+    ULONG RemoteScopeId;
+    ULONG State;
+    ULONG Pid;
+    LARGE_INTEGER CreateTime;
+    ULONGLONG ModuleInfo;
+} ENDPOINT_ROW, *PENDPOINT_ROW;
+
+NTSTATUS IfInfoEndpoints(ULONG Family, ULONG Protocol, PENDPOINT_ROW Rows, ULONG Capacity, PULONG Count);

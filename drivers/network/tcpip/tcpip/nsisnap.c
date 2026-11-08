@@ -271,3 +271,131 @@ NTSTATUS IfInfoIp6Query(ULONG TableId, PVOID *Buffer, PULONG Count)
     }
     return STATUS_BUFFER_OVERFLOW;
 }
+
+static BOOLEAN IfInfoEndpointWanted(PADDRESS_FILE AddrFile, ULONG Family, ULONG Protocol)
+{
+    if (AddrFile->Protocol != IPPROTO_TCP && AddrFile->Protocol != IPPROTO_UDP)
+        return FALSE;
+    if (Protocol != IFINFO_PROTOCOL_ANY && AddrFile->Protocol != Protocol)
+        return FALSE;
+    if (Family == TI_NSI_FAMILY_IPV4)
+        return AddrFile->Address.Type == IP_ADDRESS_V4;
+    if (Family == TI_NSI_FAMILY_IPV6)
+        return AddrFile->Address.Type == IP_ADDRESS_V6;
+    return AddrFile->Address.Type == IP_ADDRESS_V4 || AddrFile->Address.Type == IP_ADDRESS_V6;
+}
+
+static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
+{
+    BOOLEAN IsV6 = AddrFile->Address.Type == IP_ADDRESS_V6;
+
+    RtlZeroMemory(Row, sizeof(*Row));
+    Row->Family = IsV6 ? TI_NSI_FAMILY_IPV6 : TI_NSI_FAMILY_IPV4;
+    Row->Protocol = AddrFile->Protocol;
+    Row->LocalPort = AddrFile->Port;
+    Row->Pid = HandleToUlong(AddrFile->ProcessId);
+    Row->CreateTime = AddrFile->CreationTime;
+    Row->ModuleInfo = (ULONG_PTR)AddrFile->SubProcessTag;
+    if (IsV6)
+        RtlCopyMemory(Row->LocalAddress, AddrFile->Address.Address.IPv6Address, 16);
+    else
+        RtlCopyMemory(Row->LocalAddress, &AddrFile->Address.Address.IPv4Address, 4);
+
+    if (AddrFile->Protocol != IPPROTO_TCP)
+        return TRUE;
+
+    if (AddrFile->Listener)
+    {
+        PADDRESS_FILE EndPoint = AddrFile->Listener->AddressFile;
+
+        Row->State = MIB_TCP_STATE_LISTEN;
+        if (!IsV6 && EndPoint)
+        {
+            RtlCopyMemory(Row->RemoteAddress, &EndPoint->Address.Address.IPv4Address, 4);
+            Row->RemotePort = EndPoint->Port;
+        }
+        return TRUE;
+    }
+    if (AddrFile->Connection && AddrFile->Connection->SocketContext)
+    {
+        CHAR Local[sizeof(TA_IP6_ADDRESS)], Remote[sizeof(TA_IP6_ADDRESS)];
+
+        if (!NT_SUCCESS(TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)Local, sizeof(Local), FALSE)) ||
+            !NT_SUCCESS(TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)Remote, sizeof(Remote), TRUE)) ||
+            !NT_SUCCESS(TCPGetSocketStatus(AddrFile->Connection, &Row->State)))
+            return FALSE;
+        if (IsV6)
+        {
+            if (((PTA_IP6_ADDRESS)Local)->Address[0].AddressType != TDI_ADDRESS_TYPE_IP6)
+                return FALSE;
+            RtlCopyMemory(Row->LocalAddress, ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_addr, 16);
+            Row->LocalPort = ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_port;
+            RtlCopyMemory(Row->RemoteAddress, ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_addr, 16);
+            Row->RemotePort = ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_port;
+        }
+        else
+        {
+            if (((PTA_IP_ADDRESS)Local)->Address[0].AddressLength != TDI_ADDRESS_LENGTH_IP)
+                return FALSE;
+            RtlCopyMemory(Row->LocalAddress, &((PTA_IP_ADDRESS)Local)->Address[0].Address[0].in_addr, 4);
+            Row->LocalPort = ((PTA_IP_ADDRESS)Local)->Address[0].Address[0].sin_port;
+            RtlCopyMemory(Row->RemoteAddress, &((PTA_IP_ADDRESS)Remote)->Address[0].Address[0].in_addr, 4);
+            Row->RemotePort = ((PTA_IP_ADDRESS)Remote)->Address[0].Address[0].sin_port;
+        }
+        return TRUE;
+    }
+    return FALSE;
+}
+
+NTSTATUS IfInfoEndpoints(ULONG Family, ULONG Protocol, PENDPOINT_ROW Rows, ULONG Capacity, PULONG Count)
+{
+    PADDRESS_FILE *Files;
+    PLIST_ENTRY Entry;
+    ULONG Total = 0, Taken = 0, Emitted = 0, i;
+    KIRQL OldIrql;
+
+    PAGED_CODE();
+
+    *Count = 0;
+    TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
+    for (Entry = AddressFileListHead.Flink; Entry != &AddressFileListHead; Entry = Entry->Flink)
+    {
+        if (IfInfoEndpointWanted(CONTAINING_RECORD(Entry, ADDRESS_FILE, ListEntry), Family, Protocol))
+            Total++;
+    }
+    TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
+
+    Files = ExAllocatePoolWithTag(NonPagedPool, max(Total, 1) * sizeof(PADDRESS_FILE), SNAPSHOT_TAG);
+    if (!Files)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    TcpipAcquireSpinLock(&AddressFileListLock, &OldIrql);
+    for (Entry = AddressFileListHead.Flink; Entry != &AddressFileListHead && Taken < Total; Entry = Entry->Flink)
+    {
+        PADDRESS_FILE AddrFile = CONTAINING_RECORD(Entry, ADDRESS_FILE, ListEntry);
+
+        if (IfInfoEndpointWanted(AddrFile, Family, Protocol))
+        {
+            ReferenceObject(AddrFile);
+            Files[Taken++] = AddrFile;
+        }
+    }
+    TcpipReleaseSpinLock(&AddressFileListLock, OldIrql);
+
+    for (i = 0; i < Taken; i++)
+    {
+        ENDPOINT_ROW Row;
+
+        if (IfInfoFillEndpoint(Files[i], &Row))
+        {
+            if (Emitted < Capacity)
+                Rows[Emitted] = Row;
+            Emitted++;
+        }
+        DereferenceObject(Files[i]);
+    }
+    ExFreePoolWithTag(Files, SNAPSHOT_TAG);
+
+    *Count = Emitted;
+    return Emitted > Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+}
