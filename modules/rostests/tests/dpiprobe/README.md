@@ -14,10 +14,10 @@ dpiprobe --variant=unaware|system|permonitor|permonitorv2 \
 - `--phase` labels the evidence; it does not itself change DPI. Use `cold` after sign-in/reboot at a fixed setting and `live` for a watch run.
 - `--wait-ms=N` keeps the message loop alive and records a final snapshot. Use this while another process changes scale or mode.
 - `--test-width/--test-height` select a CDS_TEST candidate. Without `--apply`, nothing is applied.
-- `--apply` performs CDS_TEST first and, only if successful, CDS_UPDATEREGISTRY. `--restore` then reapplies the original current mode. Use only in a disposable VM with a known alternate mode.
+- `--apply` performs CDS_TEST first and, only if successful, CDS_UPDATEREGISTRY. It is rejected unless `--restore` is also present; `--restore` reapplies the original current mode. Use only in a disposable VM with a known alternate mode and a pre-apply snapshot for rollback.
 - The log directory must already exist. Quote the command line if the log path contains spaces.
 
-Every initial snapshot contains the three DPI registry values, awareness context, system/window/monitor DPI, SHCore monitor DPI, device caps, global and explicit-DPI metrics, stock/non-client fonts, current and registry DEVMODEs, and the indexed mode list. Final snapshots repeat live values without the indexed list.
+Every initial snapshot contains the three DPI registry values, awareness context, system/window/monitor DPI, SHCore monitor DPI, device caps, global and explicit-DPI metrics, stock/non-client fonts, current and registry DEVMODEs, and the indexed mode list. Final snapshots repeat those live values and rerun the indexed enumeration so an apply/restore cannot hide a changed mode list.
 
 The window procedure logs `WM_DISPLAYCHANGE`, `WM_DPICHANGED` including the suggested rectangle, and `WM_SETTINGCHANGE`. Absence of a message is evidence, not a probe failure. Unsupported APIs are logged as `UNSUPPORTED`; invalid command lines, missing process-context support, or window creation failure return nonzero.
 

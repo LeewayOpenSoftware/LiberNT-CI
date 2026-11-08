@@ -141,7 +141,7 @@ ParseOptions(int argc, char **argv)
         return FALSE;
     if (g_Options.Apply && (g_Options.TestWidth <= 0 || g_Options.TestHeight <= 0))
         return FALSE;
-    if (g_Options.Restore && !g_Options.Apply)
+    if (g_Options.Apply != g_Options.Restore)
         return FALSE;
     return TRUE;
 }
@@ -617,7 +617,7 @@ main(int argc, char **argv)
     RunModeTest();
     PumpMessages(g_Options.WaitMs);
     if (g_Options.WaitMs != 0 || g_Options.Apply)
-        LogSnapshot("final", FALSE);
+        LogSnapshot("final", TRUE);
 
     Log("D0_PROBE_END rc=0\n");
     DestroyWindow(g_Window);

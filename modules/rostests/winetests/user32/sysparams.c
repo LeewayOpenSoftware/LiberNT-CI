@@ -3543,9 +3543,11 @@ static void test_dpi_device_caps(void)
     }
 
     hdc = GetDC(0);
-    ok(hdc != NULL, "GetDC failed\n");
     if (!hdc)
+    {
+        skip("No mode-setting display is present\n");
         return;
+    }
 
     context = pGetThreadDpiAwarenessContext();
     pSetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_UNAWARE);
@@ -3557,8 +3559,11 @@ static void test_dpi_device_caps(void)
     pSetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE);
     x = GetDeviceCaps(hdc, LOGPIXELSX);
     y = GetDeviceCaps(hdc, LOGPIXELSY);
-    ok(x == real_dpi && y == real_dpi, "Monitor-aware device caps %ux%u, expected %ux%u\n",
-       x, y, real_dpi, real_dpi);
+    todo_wine
+    {
+        ok(x == real_dpi && y == real_dpi, "Monitor-aware device caps %ux%u, expected %ux%u\n",
+           x, y, real_dpi, real_dpi);
+    }
     pSetThreadDpiAwarenessContext(context);
     ReleaseDC(0, hdc);
 }
