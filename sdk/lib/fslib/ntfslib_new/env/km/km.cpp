@@ -445,19 +445,29 @@ NtfsCacheWriteBackOne(_In_ PDEVICE_OBJECT Owner,
     return Status;
 }
 
+/* Where the next budgeted pass starts. A pass resumes after the last slot
+ * the previous one examined, so every slot comes round within
+ * NTFS_CACHE_SLOTS / budget passes instead of the low sets being revisited
+ * every second while a dirty block in a high set waits for the churn to end. */
+static ULONG NtfsCacheFlushHand = 0;
+C_ASSERT((NTFS_CACHE_SLOTS & (NTFS_CACHE_SLOTS - 1)) == 0);
+
 static
 NTSTATUS
 NtfsCacheFlushSome(_In_ ULONG Budget)
 {
     NTSTATUS Status = STATUS_SUCCESS;
-    ULONG Index;
+    ULONG Start;
+    ULONG Visited;
     ULONG Written = 0;
 
     if (!NtfsCacheReady)
         return STATUS_SUCCESS;
 
-    for (Index = 0; Index < NTFS_CACHE_SLOTS && Written < Budget; Index++)
+    Start = NtfsCacheFlushHand & (NTFS_CACHE_SLOTS - 1);
+    for (Visited = 0; Visited < NTFS_CACHE_SLOTS && Written < Budget; Visited++)
     {
+        ULONG Index = (Start + Visited) & (NTFS_CACHE_SLOTS - 1);
         ULONGLONG Block;
         BOOLEAN Dirty;
         PDEVICE_OBJECT Owner;
@@ -481,6 +491,9 @@ NtfsCacheFlushSome(_In_ ULONG Budget)
         if (Owner)
             ObDereferenceObject(Owner);
     }
+    /* Resume after the last slot examined; a full circle lands on Start. */
+    InterlockedExchange((volatile LONG*)&NtfsCacheFlushHand,
+                        (LONG)((Start + Visited) & (NTFS_CACHE_SLOTS - 1)));
     return Status;
 }
 
