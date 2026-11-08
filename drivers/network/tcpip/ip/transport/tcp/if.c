@@ -94,7 +94,12 @@ static
 err_t
 TCPLoopbackOutput6(struct netif *netif, struct pbuf *p, const ip6_addr_t *dest)
 {
-    return ERR_RTE;
+    /* Deliver the IPv6 loopback segment through lwIP's own loopback
+     * queue. netif->input is tcpip_input, so netif_poll (scheduled onto the
+     * tcpip thread by LWIP_NETIF_LOOPBACK_MULTITHREADING) re-injects it into
+     * ip6_input. Previously this returned ERR_RTE, so a SYN to ::1 was never
+     * emitted and connect() failed WSAECONNREFUSED. */
+    return netif_loop_output(netif, p);
 }
 
 err_t

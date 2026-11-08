@@ -14,6 +14,7 @@
 #include <ndk/obfuncs.h>
 #include <ndk/rtlfuncs.h>
 #include <fmifs/fmifs.h>
+#include <fslib/ntfslib.h>
 #include <stdio.h>
 
 #include <ntfsformat.h>
@@ -560,6 +561,30 @@ NtfsCheckControl(
     return NtFsControlFile(Handle, NULL, NULL, NULL, &IoStatusBlock, Code, NULL, 0, Output, OutputLength);
 }
 
+static
+BOOLEAN
+NtfsNeedsOnlineScanOnly(
+    IN HANDLE Handle)
+{
+    PNtfsVolume Volume = NULL;
+    ULONG BytesPerSector = 0;
+    USHORT Flags = 0;
+    NTSTATUS Status;
+
+    Status = NtfsDiskInitializeUm(Handle, &BytesPerSector);
+    if (NT_SUCCESS(Status))
+    {
+        NtfsSetReadOnlyMode(TRUE);
+        Status = NtfsProbePartitionAndOpenVolume(BytesPerSector, &Volume);
+        NtfsSetReadOnlyMode(FALSE);
+    }
+    if (NT_SUCCESS(Status))
+        Status = NtfsVolumeQueryFlags(Volume, &Flags);
+    if (Volume)
+        NtfsVolumeDestroy(Volume);
+    return NT_SUCCESS(Status) && (Flags & VOL_DIRTY) && !NtfsVolumeNeedsStartupRepair(Flags);
+}
+
 BOOLEAN
 NTAPI
 NtfsChkdsk(
@@ -622,6 +647,13 @@ NtfsChkdsk(
     }
     if (CheckOnlyIfDirty && Dirty && !FixErrors)
     {
+        if (NtfsNeedsOnlineScanOnly(Handle))
+        {
+            NtfsFormatReport(Callback, "The volume needs an online scan, which is not run at startup.\n");
+            NtClose(Handle);
+            *ExitStatus = (ULONG)STATUS_SUCCESS;
+            return TRUE;
+        }
         NtfsFormatReport(Callback, "The volume is dirty.\n");
         NtClose(Handle);
         return TRUE;
@@ -649,16 +681,32 @@ NtfsChkdsk(
         NtfsFormatReport(Callback, "Checking file records, indexes and the volume bitmap...\n");
         Status = NtfsVolumeCheck(Volume, Locked, NtfsCheckReport, &Check, &Result);
     }
-    if (NT_SUCCESS(Status) && Locked && Dirty && Result.Errors == 0)
-        Status = NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY);
+    /* VD4: do NOT clear the on-disk dirty flag while the mounted FSD still holds
+     * a stale lifecycle. Dismount first and clear only after a SUCCESSFUL
+     * dismount, so a failed dismount leaves BOTH the mounted instance's
+     * DirtyMarked state AND the on-disk flag dirty (consistent: re-checked next
+     * boot) rather than clearing the medium under a stale instance that would
+     * then skip MarkDirtyBeforeWrite on later writes. The raw clear still runs
+     * through the locked handle (VPB_DIRECT_WRITES_ALLOWED), as chkdsk /f does. */
+    if (Locked)
+    {
+        NTSTATUS DismountStatus =
+            NtfsCheckControl(Handle, FSCTL_DISMOUNT_VOLUME, NULL, 0);
+
+        if (NT_SUCCESS(Status) && Dirty && Result.Errors == 0)
+        {
+            if (NT_SUCCESS(DismountStatus))
+                (void)NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN);
+            else
+                NtfsFormatReport(Callback,
+                    "The volume could not be dismounted after the check (status 0x%08lx); the dirty flag was left set and it will be checked again next boot.\n",
+                    DismountStatus);
+        }
+        NtfsCheckControl(Handle, FSCTL_UNLOCK_VOLUME, NULL, 0);
+    }
 
     if (Volume)
         NtfsVolumeDestroy(Volume);
-    if (Locked)
-    {
-        NtfsCheckControl(Handle, FSCTL_DISMOUNT_VOLUME, NULL, 0);
-        NtfsCheckControl(Handle, FSCTL_UNLOCK_VOLUME, NULL, 0);
-    }
     NtClose(Handle);
 
     if (!NT_SUCCESS(Status))
@@ -681,6 +729,8 @@ NtfsChkdsk(
     }
 
     NtfsFormatReport(Callback, "No problems were found on the volume.\n");
-    *ExitStatus = (ULONG)STATUS_SUCCESS;
+    /* The repair went around the mounted file system, which was then
+     * dismounted: only a restart drops what was opened on it before. */
+    *ExitStatus = Locked ? NTFSLIB_CHKDSK_VOLUME_RELOADED : (ULONG)STATUS_SUCCESS;
     return TRUE;
 }

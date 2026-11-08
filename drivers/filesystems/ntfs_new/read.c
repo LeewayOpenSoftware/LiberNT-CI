@@ -39,15 +39,56 @@ NtfsInitializeStreamCache(_In_ PFileContextBlock FileCB,
 }
 
 /*
- * NTFS proper refreshes a file's last-access time at most once per hour; a
- * driver that rewrites the record on every read pays an exclusive lock and a
- * metadata update per I/O that Windows does not.
+ * NtfsDisableLastAccessUpdate as Windows applies it: User Managed obeys the
+ * value, System Managed (the default) enables the update only on volumes
+ * smaller than 128 GB. The policy is read once at DriverEntry and the
+ * geometry is fixed for the life of the mount, so this needs no lock.
  */
 BOOLEAN
-NtfsShouldStampLastAccess(_In_ PFileContextBlock FileCB)
+NtfsLastAccessUpdateEnabled(_In_ PVolumeContextBlock VolCB)
+{
+    ULONGLONG Clusters, BytesPerCluster;
+
+    switch (gDisableLastAccessUpdate)
+    {
+        case NTFS_LAST_ACCESS_USER_ENABLED:
+            return TRUE;
+        case NTFS_LAST_ACCESS_USER_DISABLED:
+            return FALSE;
+        default:
+            break;
+    }
+
+    /* System Managed. */
+    if (!VolCB || !VolCB->DiskVolume)
+        return FALSE;
+    Clusters = NtfsVolumeGetClustersInVolume(VolCB->DiskVolume);
+    BytesPerCluster = (ULONGLONG)NtfsVolumeGetBytesPerSector(VolCB->DiskVolume) *
+                      NtfsVolumeGetSectorsPerCluster(VolCB->DiskVolume);
+    /* Zero geometry is corrupt; a product past the limit is a large volume. */
+    if (BytesPerCluster == 0 ||
+        Clusters > NTFS_LAST_ACCESS_SYSTEM_MANAGED_LIMIT / BytesPerCluster)
+    {
+        return FALSE;
+    }
+    return Clusters * BytesPerCluster < NTFS_LAST_ACCESS_SYSTEM_MANAGED_LIMIT;
+}
+
+/*
+ * NTFS proper refreshes a file's last-access time at most once per hour, and
+ * not at all when NtfsDisableLastAccessUpdate turns it off; a driver that
+ * rewrites the record on every read pays an exclusive lock and a metadata
+ * update per I/O that Windows does not.
+ */
+BOOLEAN
+NtfsShouldStampLastAccess(_In_ PVolumeContextBlock VolCB,
+                          _In_ PFileContextBlock FileCB)
 {
     NtfsFileBasicInformation Basic;
     LARGE_INTEGER Now;
+
+    if (!NtfsLastAccessUpdateEnabled(VolCB))
+        return FALSE;
 
     if (!NT_SUCCESS(NtfsFileRecordGetBasicInformation(FileCB->FileRec, &Basic)))
         return TRUE;
@@ -634,7 +675,12 @@ ReadDone:
             !PagingIo &&
             FileCB->RequestedType == TypeData &&
             !NtfsVolumeIsReadOnly(DiskVolume) &&
-            FileCB->LastAccessStampPending)
+            FileCB->LastAccessStampPending &&
+            /* During BootExecute nothing may write the boot volume before
+             * autochk checks it, and the volume-dirty lifecycle marks it
+             * dirty on any write. Keep the stamp pending: the first read
+             * after the window writes it (last access is lazy anyway). */
+            !NtfsIsVolumeInBootExecuteWindow(VolCB))
         {
             FileCB->LastAccessStampPending = FALSE;
             /*

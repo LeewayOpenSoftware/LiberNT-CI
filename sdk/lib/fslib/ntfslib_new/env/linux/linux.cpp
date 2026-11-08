@@ -269,6 +269,48 @@ NtfsWriteVolume(_In_ ULONGLONG Offset,
 }
 
 extern "C" NTSTATUS
+NtfsCommitRangeContext(_In_opt_ void* Context,
+                       _In_ ULONGLONG Offset,
+                       _In_ ULONG Length)
+{
+    /* No write-back cache here: every write has already been issued. */
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Offset);
+    UNREFERENCED_PARAMETER(Length);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NtfsBarrierAfterContext(_In_opt_ void* Context,
+                        _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
+                        _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(LaterOffset);
+    UNREFERENCED_PARAMETER(LaterLength);
+    UNREFERENCED_PARAMETER(EarlierOffset);
+    UNREFERENCED_PARAMETER(EarlierLength);
+    return STATUS_SUCCESS;
+}
+
+void
+NtfsBarrierCancelContext(_In_opt_ void* Context,
+                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(LaterOffset);
+    UNREFERENCED_PARAMETER(LaterLength);
+}
+
+BOOLEAN
+NtfsWriteBarrierEnabledContext(_In_opt_ void* Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+    return FALSE;
+}
+
+
+extern "C" NTSTATUS
 NtfsFlushVolumeContext(_In_opt_ void* Context)
 {
     UNREFERENCED_PARAMETER(Context);
@@ -299,6 +341,28 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
     UNREFERENCED_PARAMETER(Context);
     UNREFERENCED_PARAMETER(BytesPerSector);
     return NtfsWriteVolume(Offset, Length, Buffer);
+}
+
+/* Nothing is held back in this environment: write-through is the plain write. */
+extern "C" NTSTATUS
+NtfsWriteVolumeThroughContext(_In_opt_ void* Context,
+                              _In_ ULONG BytesPerSector,
+                              _In_ ULONGLONG Offset,
+                              _In_ ULONG Length,
+                              _Inout_ PUCHAR Buffer)
+{
+    return NtfsWriteVolumeContext(Context, BytesPerSector, Offset, Length, Buffer);
+}
+
+extern "C" NTSTATUS
+NtfsFlushVolumeRangeContext(_In_opt_ void* Context,
+                            _In_ ULONGLONG Offset,
+                            _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Offset);
+    UNREFERENCED_PARAMETER(Length);
+    return STATUS_SUCCESS;
 }
 
 extern "C" BOOLEAN

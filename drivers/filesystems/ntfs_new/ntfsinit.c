@@ -32,6 +32,17 @@ NPAGED_LOOKASIDE_LIST IrpContextLookasideList;
 NPAGED_LOOKASIDE_LIST FcbLookasideList;
 NPAGED_LOOKASIDE_LIST AttrCtxtLookasideList;
 PDRIVER_OBJECT NtfsDriverObject;
+
+/*
+ * Global list of mounted NTFS volumes, walked by NtfsFsdShutdown to flush
+ * every volume's cached data at system shutdown (Windows NTFS/FastFAT keep an
+ * equivalent VcbQueue). Lock order: NtfsGlobalVolumeListResource is always
+ * acquired with NO per-volume lock held, and is held across NtfsFlushVolume
+ * (which takes the per-volume StreamListMutex) during the shutdown sweep --
+ * i.e. global resource -> per-volume StreamListMutex, never the reverse.
+ */
+LIST_ENTRY NtfsGlobalVolumeList;
+ERESOURCE NtfsGlobalVolumeListResource;
 /* FUNCTIONS ****************************************************************/
 NTSTATUS
 NTAPI
@@ -101,7 +112,23 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
     // Get global driver settings from registry
     GetGlobalSettingsFromRegistry();
 
-    // Register file system
+    // Global mounted-volume list for the shutdown data-flush sweep.
+    InitializeListHead(&NtfsGlobalVolumeList);
+    Status = ExInitializeResourceLite(&NtfsGlobalVolumeListResource);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("NtfsDriverEntry: ExInitializeResourceLite failed %lx\n", Status);
+        IoDeleteDevice(NtfsDiskFileSystemDeviceObject);
+        return Status;
+    }
+
+    /*
+     * Register the file system. This also places the control device on the
+     * disk file-system queue, which IopShutdownBaseFileSystems walks at system
+     * shutdown to deliver IRP_MJ_SHUTDOWN to NtfsFsdShutdown -- the Windows-
+     * faithful path NTFS already relies on. No separate shutdown-notification
+     * registration is needed; it would only deliver the IRP a second time.
+     */
     IoRegisterFileSystem(NtfsDiskFileSystemDeviceObject);
     ObReferenceObject(NtfsDiskFileSystemDeviceObject);
 
@@ -202,6 +229,34 @@ NtfsFsdDeviceControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     return IoCallDriver(DeviceExt->StorageDevice, Irp);
 }
 
+VOID
+NtfsRegisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB)
+{
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&NtfsGlobalVolumeListResource, TRUE);
+    if (!VolCB->OnGlobalList)
+    {
+        InsertTailList(&NtfsGlobalVolumeList, &VolCB->GlobalListEntry);
+        VolCB->OnGlobalList = TRUE;
+    }
+    ExReleaseResourceLite(&NtfsGlobalVolumeListResource);
+    KeLeaveCriticalRegion();
+}
+
+VOID
+NtfsUnregisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB)
+{
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&NtfsGlobalVolumeListResource, TRUE);
+    if (VolCB->OnGlobalList)
+    {
+        RemoveEntryList(&VolCB->GlobalListEntry);
+        VolCB->OnGlobalList = FALSE;
+    }
+    ExReleaseResourceLite(&NtfsGlobalVolumeListResource);
+    KeLeaveCriticalRegion();
+}
+
 _Function_class_(IRP_MJ_SHUTDOWN)
 _Function_class_(DRIVER_DISPATCH)
 NTSTATUS
@@ -209,18 +264,114 @@ NTAPI
 NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
                  _Inout_ PIRP Irp)
 {
-    NTSTATUS Status = NtfsDiskFlushKm();
+    PLIST_ENTRY Entry;
 
     /* Overview:
-     * Occurs when the system is being shutdown.
-     * Do any cleanup needed and return STATUS_SUCCESS.
+     * System shutdown. Flush every mounted volume's cached DATA (NT Cache
+     * Manager, layer A) by the same per-stream sweep dismount uses, then the
+     * metadata block cache (km, layer B). Order: Cc data first, then km. This
+     * is the clean-shutdown counterpart of dismount; it does NOT run on a hard
+     * power loss. Always report STATUS_SUCCESS so shutdown never stalls.
      * See: https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/irp-mj-shutdown
+     *
+     * Lock order: the global list resource is held shared across
+     * NtfsFlushVolume, which takes each volume's StreamListMutex
+     * (global resource -> StreamListMutex, never the reverse).
      */
-    UNREFERENCED_PARAMETER(VolumeDeviceObject);
-    Irp->IoStatus.Status = Status;
+    /*
+     * Two deliveries reach this routine:
+     * - the control device, through the disk file-system queue (phase 0):
+     *   flush every mounted volume's cached data, then the metadata cache;
+     * - each mounted volume's device, registered for the last-chance
+     *   shutdown (phase 1, vol.c): flush that volume again, since the hive
+     *   flush and Mm/Cc ran after phase 0, and then clear its dirty flag,
+     *   only if the flush succeeded (volume-dirty lifecycle, VD1).
+     */
+    if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
+    {
+        PVolumeContextBlock VolCB =
+            (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+
+        if (VolCB && VolCB->DiskVolume)
+        {
+            BOOLEAN Active;
+
+            /* VD1: read the lifecycle state under VolumeStateMutex and clear
+             * under the metadata gate, so this shutdown clear is serialized with
+             * dismount and with NtfsMarkVolumeDirty's set-then-retain (both of
+             * which hold the gate for their flag ops). Honor Dismounting as well
+             * as Dismounted. */
+            ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+            Active = !VolCB->Dismounted && !VolCB->Dismounting;
+            ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            if (Active)
+            {
+                NTSTATUS Status;
+
+                /* The km library serves every volume through one process-global
+                 * disk slot: bind this volume's disk before its flush and before
+                 * the flag write below. */
+                NtfsBindVolumeDisk(VolCB);
+                Status = NtfsFlushVolume(VolCB, FALSE);
+                if (NT_SUCCESS(Status))
+                    Status = NtfsDiskFlushKm();
+                if (NT_SUCCESS(Status))
+                {
+                    KeEnterCriticalRegion();
+                    NtfsAcquireMetadata(VolCB);
+                    (void)NtfsVolumeMarkCleanForShutdown(VolCB->DiskVolume);
+                    NtfsReleaseMetadata(VolCB);
+                    KeLeaveCriticalRegion();
+                }
+                else
+                {
+                    DPRINT1("NTFS: last-chance flush VolCB=%p status=%lx; dirty flag left set
+",
+                            VolCB, Status);
+                }
+            }
+        }
+
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        return STATUS_SUCCESS;
+    }
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&NtfsGlobalVolumeListResource, TRUE);
+    for (Entry = NtfsGlobalVolumeList.Flink;
+         Entry != &NtfsGlobalVolumeList;
+         Entry = Entry->Flink)
+    {
+        PVolumeContextBlock VolCB =
+            CONTAINING_RECORD(Entry, VolumeContextBlock, GlobalListEntry);
+        NTSTATUS FlushStatus;
+
+        /* A dismounted volume was already flushed on dismount; skip it. */
+        if (VolCB->Dismounted)
+            continue;
+
+        /* The km library serves every volume through one process-global
+         * disk slot; bind this volume's disk before flushing it, exactly as
+         * every other NtfsFlushVolume caller does, or its streams would be
+         * committed through the last device probed. */
+        NtfsBindVolumeDisk(VolCB);
+        FlushStatus = NtfsFlushVolume(VolCB, FALSE);
+        DPRINT1("NTFS: shutdown flush VolCB=%p status=%lx
+", VolCB, FlushStatus);
+        /* Fail-closed per volume: logged above, continue; never discard another. */
+    }
+    ExReleaseResourceLite(&NtfsGlobalVolumeListResource);
+    KeLeaveCriticalRegion();
+
+    /* Metadata block cache (layer B), after the Cc data above. */
+    NtfsDiskFlushKm();
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    return Status;
+    return STATUS_SUCCESS;
 }
 
 _Function_class_(DRIVER_UNLOAD)
@@ -230,6 +381,7 @@ NtfsUnload(_In_ _Unreferenced_parameter_ PDRIVER_OBJECT DriverObject)
 {
     UNREFERENCED_PARAMETER(DriverObject);
     NtfsDiskUnloadKm();
+    ExDeleteResourceLite(&NtfsGlobalVolumeListResource);
     ObDereferenceObject(NtfsDiskFileSystemDeviceObject);
 }
 
@@ -825,8 +977,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NotifyUnlock = TRUE;
             }
         }
-        if (VolCB->OpenHandleCount > 0)
-            VolCB->OpenHandleCount--;
+        NtfsDropOpenHandle(VolCB, FileCB);
         FileCB->CleanupComplete = TRUE;
         FirstCleanup = TRUE;
         ExReleaseFastMutex(&VolCB->VolumeStateMutex);

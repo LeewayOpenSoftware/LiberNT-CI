@@ -20,6 +20,29 @@
 #define NTFS_MAX_SIGNED_OFFSET \
     ((ULONGLONG)0x7fffffffffffffffULL)
 
+/*
+ * Every WriteVolume issued while one of these is alive goes through
+ * WriteVolumeThrough: the bytes are on the disk when the call returns, even
+ * where the environment holds ordinary metadata writes back in a cache.
+ */
+struct VolumeWriteThroughScope
+{
+    PVolume Target;
+
+    explicit VolumeWriteThroughScope(_In_ PVolume TargetVolume)
+        : Target(TargetVolume)
+    {
+        if (Target)
+            Target->WriteThroughDepth++;
+    }
+
+    ~VolumeWriteThroughScope()
+    {
+        if (Target)
+            Target->WriteThroughDepth--;
+    }
+};
+
 static NTSTATUS
 InitializeFileRecordBuffer(
     _In_ PVolume DiskVolume,
@@ -261,13 +284,171 @@ MasterFileTable::GetFileRecordDiskOffset(_In_ ULONGLONG RecordNumber,
 }
 
 NTSTATUS
+MasterFileTable::GetMftBitmapByteDiskOffset(_In_ PFileRecord MftFile,
+                                            _In_ PAttribute BitmapAttribute,
+                                            _In_ ULONGLONG ByteOffset,
+                                            _Out_ PULONGLONG DiskOffset,
+                                            _Out_ PULONG Length)
+{
+    ULONGLONG Offset;
+    PDataRun Run;
+
+    if (!MftFile || !BitmapAttribute || !DiskVolume || !DiskOffset || !Length)
+        return STATUS_INVALID_PARAMETER;
+
+    if (!BitmapAttribute->IsNonResident)
+    {
+        /* A resident $Bitmap lives inside $MFT record 0; order on that record. */
+        ULONGLONG RecordDiskOffset;
+        NTSTATUS Status = GetFileRecordDiskOffset(0, &RecordDiskOffset);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        *DiskOffset = RecordDiskOffset;
+        *Length = FileRecordSize;
+        return STATUS_SUCCESS;
+    }
+
+    Offset = ByteOffset;
+    for (Run = MftFile->GetCachedDataRuns(BitmapAttribute); Run; Run = Run->NextRun)
+    {
+        ULONGLONG RunSize = GetRunSize(Run);
+
+        if (Offset < RunSize)
+        {
+            ULONGLONG Disk;
+            ULONG Bpc;
+
+            if (Run->IsSparse)
+                return STATUS_NOT_IMPLEMENTED;
+            Disk = GetOffset(Run->LCN) + Offset;
+            Bpc = BytesPerCluster(DiskVolume);
+            if (Bpc == 0)
+                Bpc = 512;
+            *DiskOffset = Disk - (Disk % Bpc);
+            *Length = Bpc;
+            return STATUS_SUCCESS;
+        }
+        Offset -= RunSize;
+    }
+    return STATUS_NOT_FOUND;
+}
+
+NTSTATUS
+MasterFileTable::GetAttributeRangeDiskOffset(_In_ PFileRecord File,
+                                             _In_ PAttribute Attribute,
+                                             _In_ ULONGLONG ByteOffset,
+                                             _In_ ULONG Length,
+                                             _Out_ PULONGLONG DiskOffset,
+                                             _Out_ PULONG OutLength)
+{
+    ULONGLONG Offset;
+    PDataRun Run;
+
+    if (!File || !Attribute || !DiskVolume || !DiskOffset || !OutLength ||
+        !Attribute->IsNonResident)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Offset = ByteOffset;
+    for (Run = File->GetCachedDataRuns(Attribute); Run; Run = Run->NextRun)
+    {
+        ULONGLONG RunSize = GetRunSize(Run);
+
+        if (Offset < RunSize)
+        {
+            if (Run->IsSparse)
+                return STATUS_NOT_IMPLEMENTED;
+            if (RunSize - Offset < Length)
+                return STATUS_NOT_FOUND; /* range crosses a run boundary */
+            *DiskOffset = GetOffset(Run->LCN) + Offset;
+            *OutLength = Length;
+            return STATUS_SUCCESS;
+        }
+        Offset -= RunSize;
+    }
+    return STATUS_NOT_FOUND;
+}
+
+/*
+ * The bitmap extension and every bit set in it are sub-block writes, which the
+ * kernel environment holds back in its block cache. Commit them so the bits
+ * that describe a new chunk are on the disk before a record from that chunk
+ * is handed out; a cut in between otherwise leaves the chunk's bytes as the
+ * clusters' prior content under in-use bits with zero records behind them.
+ */
+NTSTATUS
+MasterFileTable::FlushMftBitmap()
+{
+    PAttribute BitmapAttribute;
+    ULONGLONG Remaining;
+    NTSTATUS Status;
+
+    if (!MFTFile || !DiskVolume)
+        return STATUS_INVALID_PARAMETER;
+
+    BitmapAttribute = MFTFile->GetAttribute(TypeBitmap, NULL);
+    if (!BitmapAttribute)
+        return STATUS_FILE_CORRUPT_ERROR;
+
+    if (!BitmapAttribute->IsNonResident)
+    {
+        /* A resident bitmap lives in the $MFT record itself. */
+        ULONGLONG DiskOffset;
+
+        Status = GetFileRecordDiskOffset(MFTFile->RecordNumber, &DiskOffset);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        return DiskVolume->FlushVolumeRange(DiskOffset, FileRecordSize);
+    }
+
+    if (BytesPerCluster(DiskVolume) == 0)
+        return STATUS_FILE_CORRUPT_ERROR;
+
+    Remaining = BitmapAttribute->NonResident.AllocatedSize;
+    for (PDataRun Run = MFTFile->GetCachedDataRuns(BitmapAttribute);
+         Run && Remaining != 0;
+         Run = Run->NextRun)
+    {
+        ULONGLONG RunBytes;
+        ULONGLONG Done = 0;
+
+        if (Run->Length == 0 ||
+            Run->Length > ~(ULONGLONG)0 / BytesPerCluster(DiskVolume))
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+        RunBytes = min(GetRunSize(Run), Remaining);
+        while (!Run->IsSparse && Done < RunBytes)
+        {
+            ULONG Chunk = (ULONG)min(RunBytes - Done, (ULONGLONG)0x100000);
+
+            Status = DiskVolume->FlushVolumeRange(
+                GetOffset(Run->LCN) + Done,
+                Chunk);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            Done += Chunk;
+        }
+        Remaining -= RunBytes;
+    }
+    if (Remaining != 0)
+        return STATUS_FILE_CORRUPT_ERROR;
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
 MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
 {
     PUCHAR CommittedImage = NULL;
     PUCHAR SourceImage;
     NTSTATUS Status, WriteStatus;
     LARGE_INTEGER FileRecordOffset;
+    ULONGLONG IndexDiskOffset = 0;
     BOOLEAN SelfReferential;
+    BOOLEAN IndexBarrierAttempted = FALSE;
+    BOOLEAN MftWriteAttempted = FALSE;
 
     // TODO: Add logging here
 
@@ -328,14 +509,68 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
             File->RecordNumber *
             FileRecordSize);
 
-    // Write file record to $MFT.
-    WriteStatus = MFTFile->WriteFileData(TypeData,
-                                         NULL,
-                                         SourceImage,
-                                         &FRSize,
-                                         &FileRecordOffset);
+    /*
+     * Directory name insert, barrier mode: while AddFileToDirectory has
+     * IndexBarrierRecordOffset armed, every record written through here is
+     * part of that insert (the directory record carrying a resident
+     * $INDEX_ROOT entry, or the directory record grown by a node split) and
+     * names a file record added in the same operation. Order this record
+     * after that one so a crash never leaves the entry naming a not-yet-
+     * durable record. The constraint goes in BEFORE the write below dirties
+     * this record's block: once a block is dirty and unconstrained the lazy
+     * writer may take it at any moment, and a constraint added afterwards
+     * cannot recall a write already on its way to the device.
+     *
+     * When the ordering cannot be installed (this record's disk offset is
+     * unresolvable, its block is not cached, or the barrier refuses it), the
+     * file record is made durable synchronously first, so this record can
+     * still be written in any order afterwards. The write never proceeds
+     * unordered, and no failure on this path is ignored. The target record
+     * itself (same offset) needs no ordering against itself.
+     */
+    WriteStatus = STATUS_SUCCESS;
+    if (DiskVolume->IndexBarrierRecordOffset != 0 &&
+        File->RecordNumber != MAXULONG)
+    {
+        /* RecordNumber is a real MFT index here (the armed window only writes
+         * directory/split records, and the ASSERT above holds it). Guarding on
+         * the sentinel documents that and skips a needless offset resolve plus
+         * record-first commit for a write that carries no index entry. */
+        WriteStatus = GetFileRecordDiskOffset(File->RecordNumber, &IndexDiskOffset);
+        if (NT_SUCCESS(WriteStatus) &&
+            IndexDiskOffset != DiskVolume->IndexBarrierRecordOffset)
+        {
+            IndexBarrierAttempted = TRUE;
+            WriteStatus = DiskVolume->BarrierAfter(
+                IndexDiskOffset, FileRecordSize,
+                DiskVolume->IndexBarrierRecordOffset, FileRecordSize);
+        }
+        if (!NT_SUCCESS(WriteStatus))
+        {
+            /* Record first, synchronously; then this write may go anywhere. */
+            WriteStatus = DiskVolume->CommitRange(
+                DiskVolume->IndexBarrierRecordOffset, FileRecordSize);
+            if (WriteStatus == STATUS_NOT_IMPLEMENTED)
+                WriteStatus = DiskVolume->FlushVolume();
+            if (IndexBarrierAttempted)
+            {
+                DiskVolume->BarrierCancel(IndexDiskOffset, FileRecordSize);
+                IndexBarrierAttempted = FALSE;
+            }
+        }
+    }
 
-    if (!NT_SUCCESS(WriteStatus))
+    if (NT_SUCCESS(WriteStatus))
+    {
+        MftWriteAttempted = TRUE;
+        WriteStatus = MFTFile->WriteFileData(TypeData,
+                                             NULL,
+                                             SourceImage,
+                                             &FRSize,
+                                             &FileRecordOffset);
+    }
+
+    if (!NT_SUCCESS(WriteStatus) && MftWriteAttempted)
     {
         DPRINT1("Unable to write file record %lu! (Status: 0x%X)\n",
                 File->RecordNumber,
@@ -360,6 +595,11 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
                     WriteStatus);
         }
     }
+
+    /* A failed write leaves the block clean; release the constraint it was
+     * installed for. A block the $MFT write did dirty keeps it. */
+    if (!NT_SUCCESS(WriteStatus) && IndexBarrierAttempted)
+        DiskVolume->BarrierCancel(IndexDiskOffset, FileRecordSize);
 
     if (SelfReferential)
     {
@@ -496,6 +736,7 @@ MasterFileTable::GetFileRecordInDirectory(
 
 static NTSTATUS
 ExtendMftDataToAllocation(
+    _In_ PVolume DiskVolume,
     _In_ PFileRecord MFTFile,
     _In_ ULONG FileRecordSize)
 {
@@ -507,6 +748,13 @@ ExtendMftDataToAllocation(
     ULONGLONG RecordBytes;
     ULONGLONG RequiredBitmapLength;
     NTSTATUS Status;
+
+    /*
+     * The zeroes must be on the disk before the records and bitmap bits that
+     * live in these bytes exist; a cut otherwise leaves whatever the clusters
+     * held before, read back as in-use bits over zero records (J36).
+     */
+    VolumeWriteThroughScope Through(DiskVolume);
 
     DataAttribute =
         MFTFile->GetAttribute(TypeData, NULL);
@@ -941,10 +1189,20 @@ ScanAgain:
             else
             {
                 Status = ExtendMftDataToAllocation(
+                    DiskVolume,
                     MFTFile,
                     FileRecordSize);
                 if (!NT_SUCCESS(Status))
                     goto Done;
+                Status = FlushMftBitmap();
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1(
+                        "Flushing the $MFT bitmap after "
+                        "growth failed: 0x%lx.\n",
+                        Status);
+                    goto Done;
+                }
             }
         }
     }
@@ -953,6 +1211,52 @@ ScanAgain:
     if (!NT_SUCCESS(Status))
         goto Done;
     RecordWritten = TRUE;
+
+    /*
+     * A record past the old end of the $MFT data means the MFT just grew.
+     * The zero-filled clusters went straight to the disk, but the grown
+     * data size in record 0, the bitmap extension and this record sit in
+     * the write-back cache, which commits blocks in no particular order. A
+     * power cut that kept the bitmap bit set below but lost record 0 would
+     * leave the bit naming a record past the on-disk end, which reads as
+     * zeros, and later index entries pointing at it. Make all of it durable
+     * before the bit is set. MFT growth happens once per growth chunk, so
+     * the extra flush is rare.
+     */
+    if (Candidate >= RecordCount)
+    {
+        Status = DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(Status))
+            goto Done;
+    }
+    else
+    {
+        /*
+         * Inside a chunk that has already grown, the record, its bitmap bit
+         * and the parent index entry are separate blocks of the write-back
+         * cache, committed in no particular order. A power cut that kept
+         * the bit and the index entry but not the record left a zeroed
+         * record that both name (JOB28 PC2-P: 136 records). Commit the
+         * record's own block first, so nothing can name it before it is on
+         * the disk. Only this record's range is written, not the volume.
+         */
+        /* Barrier OFF (default): synchronous CommitRange, as bc86485f. Barrier
+         * ON: no synchronous write here; the record-before-bit ordering is
+         * installed below, right before the bitmap bit is written
+         * (BarrierAfter). */
+        if (!DiskVolume->WriteBarrierEnabled())
+        {
+            ULONGLONG RecordDiskOffset;
+
+            Status = GetFileRecordDiskOffset(Candidate, &RecordDiskOffset);
+            if (NT_SUCCESS(Status))
+                Status = DiskVolume->CommitRange(RecordDiskOffset, FileRecordSize);
+            else if (Status == STATUS_NOT_IMPLEMENTED)
+                Status = DiskVolume->FlushVolume(); /* record spans a run boundary */
+            if (!NT_SUCCESS(Status))
+                goto Done;
+        }
+    }
 
     BitmapAttribute =
         MFTFile->GetAttribute(TypeBitmap, NULL);
@@ -975,12 +1279,77 @@ ScanAgain:
         Status = STATUS_FILE_CORRUPT_ERROR;
         goto Done;
     }
-    Status = WriteMftBitmapByte(
-        MFTFile,
-        ByteOffset,
-        (UCHAR)(BitmapByte | BitMask));
-    if (!NT_SUCCESS(Status))
-        goto Done;
+    {
+        ULONGLONG BarrierRecordOffset = 0;
+        ULONGLONG BarrierBitOffset = 0;
+        ULONG BarrierBitLength = 0;
+        BOOLEAN BarrierAttempted = FALSE;
+
+        /*
+         * Barrier ON: the bit block cannot reach the device until the record
+         * block is durable, with no synchronous write. The constraint is
+         * installed BEFORE the bit is written: a block that is dirty and
+         * unconstrained, even briefly, may be taken by the lazy writer, and
+         * a constraint added afterwards cannot recall it. When the ordering
+         * cannot be installed (an offset is unresolvable, the bit block is
+         * not cached, or the barrier refuses it) the record is committed
+         * synchronously first, and only then is the bit written; a record
+         * that spans a run boundary is made durable by a full flush. On a
+         * crash the bit is never on disk without the record.
+         */
+        if (Candidate < RecordCount && DiskVolume->WriteBarrierEnabled())
+        {
+            Status = GetFileRecordDiskOffset(Candidate, &BarrierRecordOffset);
+            if (Status == STATUS_NOT_IMPLEMENTED)
+            {
+                /* Record spans a run boundary: no single range to order on. */
+                Status = DiskVolume->FlushVolume();
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+            }
+            else
+            {
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+                Status = GetMftBitmapByteDiskOffset(
+                    MFTFile, BitmapAttribute, ByteOffset,
+                    &BarrierBitOffset, &BarrierBitLength);
+                if (NT_SUCCESS(Status))
+                {
+                    BarrierAttempted = TRUE;
+                    Status = DiskVolume->BarrierAfter(
+                        BarrierBitOffset, BarrierBitLength,
+                        BarrierRecordOffset, FileRecordSize);
+                }
+                if (!NT_SUCCESS(Status))
+                {
+                    /* Record first, synchronously; then the bit may go anywhere. */
+                    Status = DiskVolume->CommitRange(BarrierRecordOffset, FileRecordSize);
+                    if (Status == STATUS_NOT_IMPLEMENTED)
+                        Status = DiskVolume->FlushVolume();
+                    if (BarrierAttempted)
+                    {
+                        DiskVolume->BarrierCancel(BarrierBitOffset, BarrierBitLength);
+                        BarrierAttempted = FALSE;
+                    }
+                    if (!NT_SUCCESS(Status))
+                        goto Done;
+                }
+            }
+        }
+
+        Status = WriteMftBitmapByte(
+            MFTFile,
+            ByteOffset,
+            (UCHAR)(BitmapByte | BitMask));
+        if (!NT_SUCCESS(Status))
+        {
+            /* The bit block stayed clean; release the constraint. */
+            if (BarrierAttempted)
+                DiskVolume->BarrierCancel(BarrierBitOffset, BarrierBitLength);
+            goto Done;
+        }
+    }
 
     *File = NewFile;
     NewFile = NULL;

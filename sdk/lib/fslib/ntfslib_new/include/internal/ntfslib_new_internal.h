@@ -500,6 +500,57 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
 NTSTATUS
 NtfsFlushVolumeContext(_In_opt_ void* Context);
 
+/*
+ * Write-through: the bytes are on the volume when this returns, even where
+ * the environment would otherwise hold the write back in a cache. Used for
+ * the zero-fill of newly allocated metadata clusters, which must be on the
+ * disk before any record or bitmap bit that lives in them exists.
+ */
+NTSTATUS
+NtfsWriteVolumeThroughContext(_In_opt_ void* Context,
+                              _In_ ULONG BytesPerSector,
+                              _In_ ULONGLONG Offset,
+                              _In_ ULONG Length,
+                              _Inout_ PUCHAR Buffer);
+
+/* Commits whatever the environment holds back for [Offset, Offset + Length). */
+NTSTATUS
+NtfsFlushVolumeRangeContext(_In_opt_ void* Context,
+                            _In_ ULONGLONG Offset,
+                            _In_ ULONG Length);
+
+/* Puts any write the environment still holds for [Offset, Offset + Length)
+ * on the disk before returning, without flushing the device's own cache.
+ * Environments that write through at once return STATUS_SUCCESS. */
+NTSTATUS
+NtfsCommitRangeContext(_In_opt_ void* Context,
+                       _In_ ULONGLONG Offset,
+                       _In_ ULONG Length);
+
+/* Write-ordering barrier: the Later range must not reach the device until the
+ * Earlier range is durable. Called BEFORE the write that dirties the Later
+ * range. Success means the ordering is guaranteed (or the Earlier range is
+ * already durable). Any failure (the Later block is not cached, the range is
+ * not one the cache holds back, the constraint would close a dependency
+ * cycle, ...) means no ordering was installed and the caller must make the
+ * Earlier range durable synchronously before writing the Later range. It
+ * never orders silently. Environments that write through return success. */
+NTSTATUS
+NtfsBarrierAfterContext(_In_opt_ void* Context,
+                        _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
+                        _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength);
+
+/* Release a constraint installed by NtfsBarrierAfterContext on a Later range
+ * that was not written after all (write failed, or the caller fell back to a
+ * synchronous commit). A range the write did dirty keeps its constraint. */
+void
+NtfsBarrierCancelContext(_In_opt_ void* Context,
+                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength);
+
+/* TRUE when the write-ordering barrier is selected instead of CommitRange. */
+BOOLEAN
+NtfsWriteBarrierEnabledContext(_In_opt_ void* Context);
+
 #ifdef __cplusplus
 }
 #endif
@@ -542,8 +593,19 @@ public:
     class MasterFileTable* MFT;
     class LogFileService* LFS;
     BOOLEAN IsReadOnly = FALSE;
+    /* Volume-dirty lifecycle: the first metadata write of a read-write session
+     * marks the volume dirty (durable before the write it covers); a clean
+     * dismount clears it. DirtyRetained means it was already dirty at mount, or
+     * a user asked for it (FSCTL): MarkClean then leaves the flag alone. */
+    BOOLEAN DirtyTracking = FALSE;
+    BOOLEAN DirtyMarked = FALSE;
+    BOOLEAN DirtyRetained = FALSE;
+    /* Set after a clean shutdown cleared the flag; makes a later re-dirty logged. */
+    BOOLEAN ShutdownCleaned = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
     BOOLEAN Generate8dot3Names = FALSE;
+    /* While non-zero, WriteVolume behaves as WriteVolumeThrough (mft.cpp). */
+    ULONG WriteThroughDepth = 0;
 
     /*
      * Where to begin the free-cluster search. Without it every allocation
@@ -575,6 +637,16 @@ public:
     ULONGLONG IndexWorkFileReference = 0;
     ULONGLONG IndexWorkVCN = 0;
     BOOLEAN IndexWorkBufferValid = FALSE;
+
+    /* Write-ordering barrier for a directory name insert (barrier mode only).
+     * While AddFileToDirectory is adding a file, this holds the disk offset of
+     * the new file's MFT record; any index-allocation node (WriteIndexNode) or
+     * resident $INDEX_ROOT record (WriteFileRecordToMFT) written during the
+     * insert is ordered after it (BarrierAfter), so a crash cannot leave an
+     * index entry naming a not-yet-durable record (the J32 grow/ residual the
+     * record-before-bitmap fix left). 0 = not inside an insert. Set/cleared
+     * under the caller's metadata serialization. */
+    ULONGLONG IndexBarrierRecordOffset = 0;
 
     /* Free list of record-sized buffers. Every parsed record allocated and
      * freed 1 KB of pool; recycling them needs its own lock because records
@@ -729,6 +801,29 @@ public:
     SetVolumeFlags(_In_ USHORT Set,
                    _In_ USHORT Clear);
 
+    /* Starts the dirty lifecycle on a read-write volume (see DirtyTracking). */
+    NTSTATUS
+    EnableDirtyTracking();
+
+    /* Makes the volume dirty on the medium before the first write proceeds. */
+    NTSTATUS
+    MarkDirtyBeforeWrite();
+
+    /* Clears the dirty flag after all dirty metadata is flushed, unless the
+     * flag is retained (pre-existing / user-requested). */
+    NTSTATUS
+    MarkClean();
+
+    /* Keep the dirty flag across a clean dismount (pre-existing or a user
+     * FSCTL_MARK_VOLUME_DIRTY): MarkClean will not clear it. */
+    void
+    RetainDirty(_In_ BOOLEAN Retain);
+
+    /* MarkClean on the shutdown path; also arms re-dirty logging. No write-
+     * through (that is the J30 chain mechanism, deliberately not here). */
+    NTSTATUS
+    MarkCleanForShutdown();
+
     /**
      * Copies a specified number of bytes into a buffer from the volume at a
      * given offset. The offset and length do not have to be sector aligned.
@@ -770,6 +865,32 @@ public:
                          _Inout_ PUCHAR Buffer);
 
     NTSTATUS FlushVolume();
+
+    /* As WriteVolume, but the bytes are on the volume when this returns. */
+    NTSTATUS WriteVolumeThrough(_In_    ULONGLONG Offset,
+                                _In_    ULONG Length,
+                                _Inout_ PUCHAR Buffer);
+
+    /* Commits held-back writes overlapping [Offset, Offset + Length). */
+    NTSTATUS FlushVolumeRange(_In_ ULONGLONG Offset,
+                              _In_ ULONG Length);
+
+    /* Writes held back for this range reach the disk before it returns. */
+    NTSTATUS CommitRange(_In_ ULONGLONG Offset,
+                         _In_ ULONG Length);
+
+    /* Order two held-back ranges without a synchronous write: the Later range
+     * cannot reach the device before the Earlier range is durable. Call it
+     * BEFORE writing the Later range; on any failure no ordering exists and
+     * the caller must CommitRange the Earlier range first instead. */
+    NTSTATUS BarrierAfter(_In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
+                          _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength);
+
+    /* Release a BarrierAfter constraint on a Later range that was not written. */
+    void BarrierCancel(_In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength);
+
+    /* TRUE when the barrier is selected instead of the synchronous CommitRange. */
+    BOOLEAN WriteBarrierEnabled();
 
     NTSTATUS
     Initialize(_In_ PUCHAR BootSectorData,
@@ -1685,8 +1806,33 @@ public:
     WriteFileRecordToMFT(_In_ PFileRecord File);
 
     NTSTATUS
+    GetMftBitmapByteDiskOffset(_In_ PFileRecord MftFile,
+                               _In_ PAttribute BitmapAttribute,
+                               _In_ ULONGLONG ByteOffset,
+                               _Out_ PULONGLONG DiskOffset,
+                               _Out_ PULONG Length);
+
+    /* Resolve the on-disk offset of a Length-byte range at ByteOffset within a
+     * file's non-resident attribute, for the write-ordering barrier. Lives on
+     * MasterFileTable because it walks File->GetCachedDataRuns, which is private
+     * to FileRecord and befriended only here. STATUS_SUCCESS with a contiguous
+     * DiskOffset/OutLength when the whole range fits one run; STATUS_NOT_FOUND
+     * or STATUS_NOT_IMPLEMENTED otherwise (caller falls back to a full flush). */
+    NTSTATUS
+    GetAttributeRangeDiskOffset(_In_ PFileRecord File,
+                                _In_ PAttribute Attribute,
+                                _In_ ULONGLONG ByteOffset,
+                                _In_ ULONG Length,
+                                _Out_ PULONGLONG DiskOffset,
+                                _Out_ PULONG OutLength);
+
+    NTSTATUS
     GetFileRecordDiskOffset(_In_ ULONGLONG RecordNumber,
                             _Out_ PULONGLONG DiskOffset);
+
+    /* Commits the $MFT bitmap bytes the environment holds back. */
+    NTSTATUS
+    FlushMftBitmap();
 
     NTSTATUS
     IsFileRecordNumberInUse(_In_  ULONG FileRecordNumber,

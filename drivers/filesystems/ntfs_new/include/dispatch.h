@@ -2,9 +2,14 @@
 extern const BOOLEAN NtfsCachedReadsEnabled;
 
 struct _FCB;
+struct _VolumeContextBlock;
 
 BOOLEAN
-NtfsShouldStampLastAccess(_In_ struct _FCB* FileCB);
+NtfsLastAccessUpdateEnabled(_In_ struct _VolumeContextBlock* VolCB);
+
+BOOLEAN
+NtfsShouldStampLastAccess(_In_ struct _VolumeContextBlock* VolCB,
+                          _In_ struct _FCB* FileCB);
 
 // io/ntfsinit.cpp
 

@@ -530,6 +530,16 @@ NtCreatePagingFile(
     if (PagingFile->FileObject->DeviceObject->Flags & DO_SYSTEM_BOOT_PARTITION)
         IoInitializeCrashDump(PagingFile->FileHandle);
 
+    /*
+     * The first paging file is created here, right after smss has run the
+     * BootExecute list (autochk). Open the deferred kernel boot log now: doing
+     * it earlier would keep a handle on the boot volume that defeats autochk's
+     * volume lock and dirty the volume before autochk checks it. Self-guarded,
+     * so only the first paging file actually opens the log, and it is a no-op
+     * unless the boot log was armed (KdInitializeBootLog set the name).
+     */
+    KdStartBootLog();
+
     PopHiberPagingFileCreated();
 
     return STATUS_SUCCESS;

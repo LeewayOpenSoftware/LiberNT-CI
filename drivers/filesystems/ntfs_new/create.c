@@ -1888,6 +1888,7 @@ NtfsOpenVolume(
     {
         VolCB->VolumeHandleCount++;
         VolCB->OpenHandleCount++;
+        FileCB->BootLockNeutral = FALSE;
         FileObject->FsContext = FileCB;
         FileObject->Vpb = IrpSp->DeviceObject->Vpb;
     }
@@ -2869,7 +2870,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
         ResolvedGeneration = VolCB->DirGeneration;
     }
-    FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(FileCB);
+    FileCB->LastAccessStampPending = NtfsShouldStampLastAccess(VolCB, FileCB);
     FileCB->CreateOptions = IrpSp->Parameters.Create.Options;
     FileCB->PagingFileOpen = BooleanFlagOn(IrpSp->Flags, SL_OPEN_PAGING_FILE);
     FileCB->ManageVolumeAccess = SeSinglePrivilegeCheck(SeExports->SeManageVolumePrivilege, Irp->RequestorMode);
@@ -3239,6 +3240,17 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     else
     {
         VolCB->OpenHandleCount++;
+        if (FileCB->PagingFileOpen)
+            VolCB->PagingFileSeen = TRUE;
+        /* A current-directory style open (a directory, traverse access only)
+         * made during BootExecute does not hold off autochk's lock. */
+        FileCB->BootLockNeutral =
+            NtfsIsBootExecuteWindow(VolumeDeviceObject, VolCB) &&
+            !NamedDataStream &&
+            (NtfsFileRecordGetHeader(CurrentFile)->Flags & FR_IS_DIRECTORY) &&
+            !(FileCB->DesiredAccess & ~(SYNCHRONIZE | FILE_TRAVERSE));
+        if (FileCB->BootLockNeutral)
+            VolCB->BootLockNeutralHandleCount++;
         Status = STATUS_SUCCESS;
     }
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
@@ -3288,8 +3300,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (!NT_SUCCESS(Status))
         {
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
-            if (VolCB->OpenHandleCount > 0)
-                VolCB->OpenHandleCount--;
+            NtfsDropOpenHandle(VolCB, FileCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;
@@ -3320,8 +3331,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (!NT_SUCCESS(Status))
         {
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
-            if (VolCB->OpenHandleCount > 0)
-                VolCB->OpenHandleCount--;
+            NtfsDropOpenHandle(VolCB, FileCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;
@@ -3356,8 +3366,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         if (!NT_SUCCESS(Status))
         {
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
-            if (VolCB->OpenHandleCount > 0)
-                VolCB->OpenHandleCount--;
+            NtfsDropOpenHandle(VolCB, FileCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;

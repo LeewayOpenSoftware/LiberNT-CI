@@ -648,7 +648,8 @@ PNEIGHBOR_CACHE_ENTRY NBFindOrCreateNeighbor(
     {
         TI_DbgPrint(MID_TRACE,("BCAST: %s\n", A2S(&Interface->Broadcast)));
         if( IsInterfaceBroadcast(Interface, Address) ||
-            AddrIsUnspecified(Address) ) {
+            AddrIsUnspecified(Address) ||
+            Interface == Loopback ) {
             TI_DbgPrint(MID_TRACE,("Packet targeted at broadcast addr\n"));
             NCE = NBAddNeighbor(Interface, Address, NULL,
                                 Interface->AddressLength, NUD_PERMANENT, 0);

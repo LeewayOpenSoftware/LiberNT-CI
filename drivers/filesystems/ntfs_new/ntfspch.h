@@ -56,6 +56,15 @@ extern BOOLEAN gShowVersionInfo;
 extern BOOLEAN gBugCheckOnCorrupt;
 extern BOOLEAN gDisable8dot3NameCreation;
 extern INT gDisableLastAccessUpdate;
+/* NtfsDisableLastAccessUpdate policy, as fsutil behavior shows it. Windows
+ * stores the System Managed forms with bit 31 set (0x80000002, 0x80000003). */
+#define NTFS_LAST_ACCESS_USER_ENABLED        0
+#define NTFS_LAST_ACCESS_USER_DISABLED       1
+#define NTFS_LAST_ACCESS_SYSTEM_ENABLED      2
+#define NTFS_LAST_ACCESS_SYSTEM_DISABLED     3
+#define NTFS_LAST_ACCESS_SYSTEM_MANAGED_BIT  0x80000000UL
+/* System Managed enables the update only on volumes below this size. */
+#define NTFS_LAST_ACCESS_SYSTEM_MANAGED_LIMIT (128ULL * 1024 * 1024 * 1024)
 extern BOOLEAN gDisableLfsDowngrade;
 extern BOOLEAN gDisableLfsUpgrade;
 extern INT gMftZoneReservation;

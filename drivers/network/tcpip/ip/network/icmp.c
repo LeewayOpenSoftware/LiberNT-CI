@@ -12,6 +12,30 @@
 
 #include <icmp.h>
 
+/* IPv4 ICMP MIB counters (served via ICMP_MIB_STATS_ID). Plain increments at
+ * dispatch/DPC level, matching the UDPStats/IPStats convention in this driver
+ * (stats are advisory; no interlock). */
+ICMP_STATISTICS ICMPStats = { 0 };
+
+static VOID ICMPCountType(PICMP_MIB_STATS Stats, UCHAR Type)
+{
+    switch (Type)
+    {
+        case ICMP_TYPE_ECHO_REPLY:        Stats->dwEchoReps++; break;
+        case ICMP_TYPE_DEST_UNREACH:      Stats->dwDestUnreachs++; break;
+        case ICMP_TYPE_SOURCE_QUENCH:     Stats->dwSrcQuenchs++; break;
+        case ICMP_TYPE_REDIRECT:          Stats->dwRedirects++; break;
+        case ICMP_TYPE_ECHO_REQUEST:      Stats->dwEchos++; break;
+        case ICMP_TYPE_TIME_EXCEEDED:     Stats->dwTimeExcds++; break;
+        case ICMP_TYPE_PARAMETER:         Stats->dwParmProbs++; break;
+        case ICMP_TYPE_TIMESTAMP_REQUEST: Stats->dwTimestamps++; break;
+        case ICMP_TYPE_TIMESTAMP_REPLY:   Stats->dwTimestampReps++; break;
+        case 17 /* ICMP address mask request */: Stats->dwAddrMasks++; break;
+        case 18 /* ICMP address mask reply   */: Stats->dwAddrMaskReps++; break;
+        default: break;
+    }
+}
+
 NTSTATUS ICMPStartup()
 {
     RdiscStartup();
@@ -45,10 +69,19 @@ NTSTATUS ICMPSendDatagram(
  *     Status of operation
  */
 {
+    NTSTATUS Status;
+
     TI_DbgPrint(DEBUG_ICMP, ("Sending ICMP datagram (0x%x)\n", AddrFile));
 
+    ICMPStats.Out.dwMsgs++;
+    if (BufferData && DataSize >= 1)
+        ICMPCountType(&ICMPStats.Out, (UCHAR)BufferData[0]);
+
     /* just forward the call to RawIP handler */
-    return RawIPSendDatagram(AddrFile, ConnInfo, BufferData, DataSize, DataUsed);
+    Status = RawIPSendDatagram(AddrFile, ConnInfo, BufferData, DataSize, DataUsed);
+    if (!NT_SUCCESS(Status))
+        ICMPStats.Out.dwErrors++;
+    return Status;
 }
 
 
@@ -65,12 +98,15 @@ VOID ICMPReceive(
     PICMP_HEADER ICMPHeader = (PICMP_HEADER)IPPacket->Data;
     UINT32 DataSize = IPPacket->TotalSize - IPPacket->HeaderSize;
 
+    ICMPStats.In.dwMsgs++;
+
     TI_DbgPrint(DEBUG_ICMP, ("ICMPReceive: Size (%d) HeaderSize (%d) Type (%d) Code (%d) Checksum (0x%x)\n",
         IPPacket->TotalSize, IPPacket->HeaderSize, ICMPHeader->Type, ICMPHeader->Code, ICMPHeader->Checksum));
 
     /* Discard too short packets */
     if (DataSize < sizeof(ICMP_HEADER))
     {
+        ICMPStats.In.dwErrors++;
         TI_DbgPrint(DEBUG_ICMP, ("Packet doesn't fit ICMP header. Discarded\n"));
         return;
     }
@@ -78,9 +114,12 @@ VOID ICMPReceive(
     /* Discard packets with bad checksum */
     if (!IPv4CorrectChecksum(IPPacket->Data, DataSize))
     {
+        ICMPStats.In.dwErrors++;
         TI_DbgPrint(DEBUG_ICMP, ("Bad ICMP checksum. Packet discarded\n"));
         return;
     }
+
+    ICMPCountType(&ICMPStats.In, ICMPHeader->Type);
 
     RawIpReceive(Interface, IPPacket);
 
@@ -131,6 +170,7 @@ VOID ICMPReply(
     NCE = RouteGetRouteToDestination(&IPPacket->SrcAddr);
     if (!NCE)
     {
+        ICMPStats.Out.dwErrors++;
         return;
     }
 
@@ -146,6 +186,7 @@ VOID ICMPReply(
     if (!NT_SUCCESS(BuildRawIpPacket(
         &FakeAddrFile, &NewPacket, &IPPacket->SrcAddr, 0, &Source, 0, IPPacket->Data, DataSize)))
     {
+        ICMPStats.Out.dwErrors++;
         NBDereferenceNeighbor(NCE);
         return;
     }
@@ -154,6 +195,9 @@ VOID ICMPReply(
     ((PICMP_HEADER)NewPacket.Data)->Code     = Code;
     ((PICMP_HEADER)NewPacket.Data)->Checksum = 0;
     ((PICMP_HEADER)NewPacket.Data)->Checksum = (USHORT)IPv4Checksum(NewPacket.Data, DataSize, 0);
+
+    ICMPStats.Out.dwMsgs++;
+    ICMPCountType(&ICMPStats.Out, Type);
 
     IPSendDatagram(&NewPacket, NCE);
     NBDereferenceNeighbor(NCE);
