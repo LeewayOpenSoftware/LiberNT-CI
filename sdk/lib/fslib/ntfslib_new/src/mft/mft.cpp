@@ -311,6 +311,43 @@ MasterFileTable::GetMftBitmapByteDiskOffset(_In_ PFileRecord MftFile,
 }
 
 NTSTATUS
+MasterFileTable::GetAttributeRangeDiskOffset(_In_ PFileRecord File,
+                                             _In_ PAttribute Attribute,
+                                             _In_ ULONGLONG ByteOffset,
+                                             _In_ ULONG Length,
+                                             _Out_ PULONGLONG DiskOffset,
+                                             _Out_ PULONG OutLength)
+{
+    ULONGLONG Offset;
+    PDataRun Run;
+
+    if (!File || !Attribute || !DiskVolume || !DiskOffset || !OutLength ||
+        !Attribute->IsNonResident)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Offset = ByteOffset;
+    for (Run = File->GetCachedDataRuns(Attribute); Run; Run = Run->NextRun)
+    {
+        ULONGLONG RunSize = GetRunSize(Run);
+
+        if (Offset < RunSize)
+        {
+            if (Run->IsSparse)
+                return STATUS_NOT_IMPLEMENTED;
+            if (RunSize - Offset < Length)
+                return STATUS_NOT_FOUND; /* range crosses a run boundary */
+            *DiskOffset = GetOffset(Run->LCN) + Offset;
+            *OutLength = Length;
+            return STATUS_SUCCESS;
+        }
+        Offset -= RunSize;
+    }
+    return STATUS_NOT_FOUND;
+}
+
+NTSTATUS
 MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
 {
     PUCHAR CommittedImage = NULL;

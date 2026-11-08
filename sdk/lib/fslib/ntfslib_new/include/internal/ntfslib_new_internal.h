@@ -1764,6 +1764,20 @@ public:
                                _Out_ PULONGLONG DiskOffset,
                                _Out_ PULONG Length);
 
+    /* Resolve the on-disk offset of a Length-byte range at ByteOffset within a
+     * file's non-resident attribute, for the write-ordering barrier. Lives on
+     * MasterFileTable because it walks File->GetCachedDataRuns, which is private
+     * to FileRecord and befriended only here. STATUS_SUCCESS with a contiguous
+     * DiskOffset/OutLength when the whole range fits one run; STATUS_NOT_FOUND
+     * or STATUS_NOT_IMPLEMENTED otherwise (caller falls back to a full flush). */
+    NTSTATUS
+    GetAttributeRangeDiskOffset(_In_ PFileRecord File,
+                                _In_ PAttribute Attribute,
+                                _In_ ULONGLONG ByteOffset,
+                                _In_ ULONG Length,
+                                _Out_ PULONGLONG DiskOffset,
+                                _Out_ PULONG OutLength);
+
     NTSTATUS
     GetFileRecordDiskOffset(_In_ ULONGLONG RecordNumber,
                             _Out_ PULONGLONG DiskOffset);

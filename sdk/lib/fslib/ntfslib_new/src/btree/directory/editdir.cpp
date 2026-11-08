@@ -748,41 +748,28 @@ WriteIndexNode(
             DirectoryFile->GetAttribute(
                 TypeIndexAllocation,
                 const_cast<PWSTR>(IndexName));
-        ULONGLONG ByteOffset = AllocationOffset;
         ULONGLONG NodeDiskOffset = 0;
-        BOOLEAN Resolved = FALSE;
-        PDataRun Run;
+        ULONG NodeLength = 0;
 
+        /* Resolve the node's disk offset via the MFT (GetCachedDataRuns is
+         * private to FileRecord and befriended only by MasterFileTable). On a
+         * sparse run or a node crossing a run boundary this returns an error and
+         * we fall back to a full flush. */
         if (IndexAllocationAttribute &&
-            IndexAllocationAttribute->IsNonResident)
+            NT_SUCCESS(DiskVolume->MFT->GetAttributeRangeDiskOffset(
+                DirectoryFile, IndexAllocationAttribute,
+                AllocationOffset, RecordSize,
+                &NodeDiskOffset, &NodeLength)))
         {
-            for (Run = DirectoryFile->GetCachedDataRuns(IndexAllocationAttribute);
-                 Run; Run = Run->NextRun)
-            {
-                ULONGLONG RunSize = GetRunSize(Run);
-
-                if (ByteOffset < RunSize)
-                {
-                    if (!Run->IsSparse &&
-                        RunSize - ByteOffset >= RecordSize)
-                    {
-                        NodeDiskOffset =
-                            GetOffset(Run->LCN) + ByteOffset;
-                        Resolved = TRUE;
-                    }
-                    break;
-                }
-                ByteOffset -= RunSize;
-            }
-        }
-
-        if (Resolved)
             DiskVolume->BarrierAfter(
-                NodeDiskOffset, RecordSize,
+                NodeDiskOffset, NodeLength,
                 DiskVolume->IndexBarrierRecordOffset,
                 DiskVolume->MFT->FileRecordSize);
+        }
         else
+        {
             Status = DiskVolume->FlushVolume();
+        }
     }
     return Status;
 }
