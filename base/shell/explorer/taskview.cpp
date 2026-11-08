@@ -15,8 +15,11 @@ typedef struct _TASKVIEW_ITEM
 {
     HWND hWnd;
     HICON hIcon;
+    BOOL bDestroyIcon;
     WCHAR szTitle[256];
 } TASKVIEW_ITEM;
+
+#define TIMER_ID_TASKVIEW_PRUNE 3
 
 typedef CWinTraits<WS_POPUP, WS_EX_TOOLWINDOW | WS_EX_TOPMOST> CTrayTaskViewTraits;
 
@@ -32,6 +35,7 @@ public:
 
     ITrayWindow *m_Tray;
     HWND m_hTrayWnd;
+    HWND m_hwndFore;
     CSimpleArray<TASKVIEW_ITEM> m_Items;
     SM2_FLYOUT_PALETTE m_Pal;
     HFONT m_hFont;
@@ -47,6 +51,7 @@ public:
     CTrayTaskViewWnd(ITrayWindow *pTray) :
         m_Tray(pTray),
         m_hTrayWnd(pTray->GetHWND()),
+        m_hwndFore(NULL),
         m_hFont(NULL),
         m_iSel(0),
         m_iHot(-1),
@@ -69,6 +74,54 @@ public:
 
     int Sc(int v) const { return ShellScaleForDpi(v); }
 
+    static HICON GetItemIcon(HWND hWnd, BOOL *pbOwned)
+    {
+        HICON hIcon = NULL;
+        DWORD_PTR dwResult;
+        UINT uIcons[] = { ICON_SMALL2, ICON_SMALL, ICON_BIG };
+
+        *pbOwned = FALSE;
+
+        for (UINT i = 0; i < _countof(uIcons) && !hIcon; i++)
+        {
+            if (SendMessageTimeoutW(hWnd, WM_GETICON, uIcons[i], 0,
+                                    SMTO_ABORTIFHUNG | SMTO_NOTIMEOUTIFNOTHUNG, 100, &dwResult) &&
+                dwResult)
+            {
+                hIcon = (HICON)dwResult;
+            }
+        }
+
+        if (!hIcon)
+            hIcon = (HICON)GetClassLongPtrW(hWnd, GCL_HICONSM);
+        if (!hIcon)
+            hIcon = (HICON)GetClassLongPtrW(hWnd, GCL_HICON);
+
+        if (!hIcon)
+        {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(hWnd, &pid);
+            HANDLE hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (hProcess)
+            {
+                WCHAR szPath[MAX_PATH];
+                DWORD cchPath = _countof(szPath);
+                if (QueryFullProcessImageNameW(hProcess, 0, szPath, &cchPath))
+                {
+                    SHFILEINFOW sfi = { 0 };
+                    if (SHGetFileInfoW(szPath, 0, &sfi, sizeof(sfi), SHGFI_ICON | SHGFI_SMALLICON))
+                    {
+                        hIcon = sfi.hIcon;
+                        *pbOwned = TRUE;
+                    }
+                }
+                CloseHandle(hProcess);
+            }
+        }
+
+        return hIcon;
+    }
+
     static BOOL CALLBACK s_EnumProc(HWND hWnd, LPARAM lParam)
     {
         CTrayTaskViewWnd *pThis = (CTrayTaskViewWnd *)lParam;
@@ -78,9 +131,7 @@ public:
 
         TASKVIEW_ITEM item;
         item.hWnd = hWnd;
-        item.hIcon = (HICON)GetClassLongPtrW(hWnd, GCL_HICONSM);
-        if (!item.hIcon)
-            item.hIcon = (HICON)GetClassLongPtrW(hWnd, GCL_HICON);
+        item.hIcon = GetItemIcon(hWnd, &item.bDestroyIcon);
         if (InternalGetWindowText(hWnd, item.szTitle, _countof(item.szTitle)) <= 0)
             item.szTitle[0] = UNICODE_NULL;
 
@@ -88,8 +139,18 @@ public:
         return TRUE;
     }
 
+    VOID DestroyItemIcons()
+    {
+        for (INT i = 0; i < m_Items.GetSize(); i++)
+        {
+            if (m_Items[i].bDestroyIcon && m_Items[i].hIcon)
+                DestroyIcon(m_Items[i].hIcon);
+        }
+    }
+
     VOID Refresh()
     {
+        DestroyItemIcons();
         m_Items.RemoveAll();
         EnumWindows(s_EnumProc, (LPARAM)this);
     }
@@ -184,10 +245,12 @@ public:
             return;
         }
 
+        m_hwndFore = GetForegroundWindow();
+
         INT cx, cy;
         Layout(&cx, &cy);
 
-        HWND hwndFore = GetForegroundWindow();
+        HWND hwndFore = m_hwndFore;
         m_iSel = 0;
         for (INT i = 0; i < ItemCount(); i++)
         {
@@ -212,6 +275,7 @@ public:
         SetWindowPos(HWND_TOPMOST, x, y, cx, cy, SWP_SHOWWINDOW);
         SetForegroundWindow(m_hWnd);
         ::SetFocus(m_hWnd);
+        SetTimer(TIMER_ID_TASKVIEW_PRUNE, 500, NULL);
     }
 
     VOID Cycle(BOOL bForward)
@@ -257,6 +321,50 @@ public:
             ::SwitchToThisWindow(hWnd, TRUE);
         }
         DestroyWindow();
+    }
+
+    VOID Cancel()
+    {
+        HWND hwndFore = m_hwndFore;
+
+        if (hwndFore && hwndFore != m_hWnd && ::IsWindow(hwndFore))
+        {
+            m_bActivating = TRUE;
+            ::SetForegroundWindow(hwndFore);
+        }
+        DestroyWindow();
+    }
+
+    VOID PruneDeadItems()
+    {
+        BOOL bRemoved = FALSE;
+
+        for (INT i = ItemCount() - 1; i >= 0; i--)
+        {
+            if (!::IsWindow(m_Items[i].hWnd))
+            {
+                if (m_Items[i].bDestroyIcon && m_Items[i].hIcon)
+                    DestroyIcon(m_Items[i].hIcon);
+                m_Items.RemoveAt(i);
+                bRemoved = TRUE;
+            }
+        }
+
+        if (!ItemCount())
+        {
+            DestroyWindow();
+            return;
+        }
+
+        if (bRemoved)
+        {
+            if (m_iSel >= ItemCount())
+                m_iSel = ItemCount() - 1;
+            if (m_iHot >= ItemCount())
+                m_iHot = -1;
+            EnsureVisible(m_iSel);
+            InvalidateRect(NULL, FALSE);
+        }
     }
 
     VOID DrawItems(HDC hdc, const RECT *prc)
@@ -348,7 +456,7 @@ public:
         switch (wParam)
         {
             case VK_ESCAPE:
-                DestroyWindow();
+                Cancel();
                 break;
             case VK_RETURN:
             case VK_SPACE:
@@ -412,12 +520,21 @@ public:
     LRESULT OnActivate(UINT, WPARAM wParam, LPARAM, BOOL&)
     {
         if (LOWORD(wParam) == WA_INACTIVE && !m_bActivating)
-            DestroyWindow();
+            Cancel();
+        return 0;
+    }
+
+    LRESULT OnTimer(UINT, WPARAM wParam, LPARAM, BOOL&)
+    {
+        if (wParam == TIMER_ID_TASKVIEW_PRUNE)
+            PruneDeadItems();
         return 0;
     }
 
     LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL&)
     {
+        KillTimer(TIMER_ID_TASKVIEW_PRUNE);
+        DestroyItemIcons();
         if (m_hFont)
         {
             DeleteObject(m_hFont);
@@ -434,6 +551,7 @@ public:
         MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLButtonDown)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
         MESSAGE_HANDLER(WM_ACTIVATE, OnActivate)
+        MESSAGE_HANDLER(WM_TIMER, OnTimer)
         MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
     END_MSG_MAP()
 };
