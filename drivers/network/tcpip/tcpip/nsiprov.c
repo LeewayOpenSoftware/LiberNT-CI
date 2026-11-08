@@ -14,6 +14,8 @@
 
 #include <ntifs.h>
 #include <ndis.h>
+#define NDEBUG
+#include <reactos/debug.h>
 #include <netiodef.h>
 #include <ws2def.h>
 #include <ws2ipdef.h>
@@ -790,6 +792,7 @@ static PNSI_PROVIDER TiNsiIp6Providers[4];
 static VOID
 TiNsiRegisterIp6(VOID)
 {
+    NTSTATUS Status;
     static const struct
     {
         ULONG Table;
@@ -805,9 +808,13 @@ TiNsiRegisterIp6(VOID)
 
     for (i = 0; i < 4; i++)
     {
-        if (!NT_SUCCESS(NsiRegisterProvider(&NPI_MS_IPV6_MODULEID, Tables[i].Table, Tables[i].Dispatch,
-                                            (PVOID)Tables[i].Dispatch, &TiNsiIp6Providers[i])))
+        Status = NsiRegisterProvider(&NPI_MS_IPV6_MODULEID, Tables[i].Table, Tables[i].Dispatch,
+                                     (PVOID)Tables[i].Dispatch, &TiNsiIp6Providers[i]);
+        if (!NT_SUCCESS(Status))
+        {
             TiNsiIp6Providers[i] = NULL;
+            DPRINT1("NSI: registering IPv6 table %lu failed, status 0x%08lx\n", Tables[i].Table, Status);
+        }
     }
 }
 
@@ -1554,14 +1561,19 @@ static VOID
 TiNsiRegisterIp4(VOID)
 {
     ULONG i;
+    NTSTATUS Status;
 
     for (i = 0; i < 4; i++)
     {
         if (TiNsiIp4Dispatch[i].Enumerate == NULL)
             continue;
-        if (!NT_SUCCESS(NsiRegisterProvider(&NPI_MS_IPV4_MODULEID, TiNsiIp4Tables[i], &TiNsiIp4Dispatch[i],
-                                            (PVOID)(ULONG_PTR)i, &TiNsiIp4Providers[i])))
+        Status = NsiRegisterProvider(&NPI_MS_IPV4_MODULEID, TiNsiIp4Tables[i], &TiNsiIp4Dispatch[i],
+                                     (PVOID)(ULONG_PTR)i, &TiNsiIp4Providers[i]);
+        if (!NT_SUCCESS(Status))
+        {
             TiNsiIp4Providers[i] = NULL;
+            DPRINT1("NSI: registering IPv4 table %lu failed, status 0x%08lx\n", TiNsiIp4Tables[i], Status);
+        }
     }
 }
 
@@ -1707,7 +1719,10 @@ TiNsiEndpointEnumerate(
         Capacity = Count + 16;
     }
     if (Rows == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    {
+        Request->Count = Count;
+        return STATUS_BUFFER_OVERFLOW;
+    }
     if (NT_SUCCESS(Status))
     {
         for (i = 0; i < Count; i++)
@@ -1819,12 +1834,18 @@ static VOID
 TiNsiRegisterEndpoints(VOID)
 {
     ULONG i;
+    NTSTATUS Status;
 
     for (i = 0; i < 4; i++)
     {
-        if (!NT_SUCCESS(NsiRegisterProvider(TiNsiEndpointModules[i], TiNsiEndpointTables[i], &TiNsiEndpointDispatch[i],
-                                            (PVOID)(ULONG_PTR)i, &TiNsiEndpointProviders[i])))
+        Status = NsiRegisterProvider(TiNsiEndpointModules[i], TiNsiEndpointTables[i], &TiNsiEndpointDispatch[i],
+                                     (PVOID)(ULONG_PTR)i, &TiNsiEndpointProviders[i]);
+        if (!NT_SUCCESS(Status))
+        {
             TiNsiEndpointProviders[i] = NULL;
+            DPRINT1("NSI: registering %s table %lu failed, status 0x%08lx\n",
+                    i == TI_NSI_UDP_ENDPOINT ? "UDP" : "TCP", TiNsiEndpointTables[i], Status);
+        }
     }
 }
 
@@ -1931,14 +1952,22 @@ TiNsiNotifyStop(VOID)
 VOID
 TiNsiRegister(VOID)
 {
+    NTSTATUS Status;
+
     PAGED_CODE();
 
-    if (!NT_SUCCESS(NsiRegisterProvider(&NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE,
-                                        &TiNsiIfInfoDispatch, NULL, &TiNsiIfInfo)))
+    Status = NsiRegisterProvider(&NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE, &TiNsiIfInfoDispatch, NULL, &TiNsiIfInfo);
+    if (!NT_SUCCESS(Status))
+    {
         TiNsiIfInfo = NULL;
-    if (!NT_SUCCESS(NsiRegisterProvider(&NPI_MS_NDIS_MODULEID, NSI_NDIS_INDEX_LUID_TABLE,
-                                        &TiNsiIndexLuidDispatch, NULL, &TiNsiIndexLuid)))
+        DPRINT1("NSI: registering the NDIS IFINFO table failed, status 0x%08lx\n", Status);
+    }
+    Status = NsiRegisterProvider(&NPI_MS_NDIS_MODULEID, NSI_NDIS_INDEX_LUID_TABLE, &TiNsiIndexLuidDispatch, NULL, &TiNsiIndexLuid);
+    if (!NT_SUCCESS(Status))
+    {
         TiNsiIndexLuid = NULL;
+        DPRINT1("NSI: registering the NDIS INDEX_LUID table failed, status 0x%08lx\n", Status);
+    }
     TiNsiRegisterIp6();
     TiNsiRegisterIp4();
     TiNsiRegisterEndpoints();
