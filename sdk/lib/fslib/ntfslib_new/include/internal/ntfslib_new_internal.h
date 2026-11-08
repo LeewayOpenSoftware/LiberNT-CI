@@ -509,11 +509,24 @@ NtfsCommitRangeContext(_In_opt_ void* Context,
                        _In_ ULONG Length);
 
 /* Write-ordering barrier: the Later range must not reach the device until the
- * Earlier range is durable. Environments that write through make it a no-op. */
-void
+ * Earlier range is durable. Called BEFORE the write that dirties the Later
+ * range. Success means the ordering is guaranteed (or the Earlier range is
+ * already durable). Any failure (the Later block is not cached, the range is
+ * not one the cache holds back, the constraint would close a dependency
+ * cycle, ...) means no ordering was installed and the caller must make the
+ * Earlier range durable synchronously before writing the Later range. It
+ * never orders silently. Environments that write through return success. */
+NTSTATUS
 NtfsBarrierAfterContext(_In_opt_ void* Context,
                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
                         _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength);
+
+/* Release a constraint installed by NtfsBarrierAfterContext on a Later range
+ * that was not written after all (write failed, or the caller fell back to a
+ * synchronous commit). A range the write did dirty keeps its constraint. */
+void
+NtfsBarrierCancelContext(_In_opt_ void* Context,
+                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength);
 
 /* TRUE when the write-ordering barrier is selected instead of CommitRange. */
 BOOLEAN
@@ -837,9 +850,14 @@ public:
                          _In_ ULONG Length);
 
     /* Order two held-back ranges without a synchronous write: the Later range
-     * cannot reach the device before the Earlier range is durable. */
-    void BarrierAfter(_In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
-                      _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength);
+     * cannot reach the device before the Earlier range is durable. Call it
+     * BEFORE writing the Later range; on any failure no ordering exists and
+     * the caller must CommitRange the Earlier range first instead. */
+    NTSTATUS BarrierAfter(_In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
+                          _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength);
+
+    /* Release a BarrierAfter constraint on a Later range that was not written. */
+    void BarrierCancel(_In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength);
 
     /* TRUE when the barrier is selected instead of the synchronous CommitRange. */
     BOOLEAN WriteBarrierEnabled();

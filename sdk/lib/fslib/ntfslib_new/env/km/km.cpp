@@ -109,9 +109,13 @@ typedef struct _NTFS_CACHE_SLOT
     PDEVICE_OBJECT Owner; // referenced while the slot is occupied
     ULONGLONG Generation;
     /* Write-ordering barrier (BarrierAfter). DirtySeq is the global write
-     * sequence stamped when this block was last dirtied; FlushAfterSeq, when
+     * sequence stamped when this block went from clean to dirty; a write into
+     * an already dirty block keeps it, so a constraint taken against the
+     * block stays valid while later writes land in it. FlushAfterSeq, when
      * non-zero, means this block must not reach the device until every dirty
-     * block with DirtySeq <= FlushAfterSeq is clean. */
+     * block with DirtySeq <= FlushAfterSeq is clean. It may be set on a clean
+     * block ahead of the write that dirties it; until then the block is
+     * neither written back nor evicted. */
     ULONGLONG DirtySeq;
     ULONGLONG FlushAfterSeq;
     BOOLEAN Dirty;
@@ -119,8 +123,9 @@ typedef struct _NTFS_CACHE_SLOT
 
 static NTFS_CACHE_SLOT NtfsCacheSlots[NTFS_CACHE_SLOTS];
 static ULONG NtfsCacheDirtyCount = 0;
-/* Monotonic write sequence; every dirtying write stamps the block's DirtySeq.
- * Bumped only under NtfsCacheMutex. ULONGLONG never wraps in practice. */
+/* Monotonic write sequence; a write that makes a clean block dirty stamps the
+ * block's DirtySeq. Bumped only under NtfsCacheMutex. ULONGLONG never wraps in
+ * practice. */
 static ULONGLONG NtfsCacheWriteSeq = 0;
 /* Barrier vs CommitRange selector, read once from the registry. -1 = unread. */
 static volatile LONG NtfsWriteBarrierState = -1;
@@ -186,8 +191,11 @@ NtfsCacheProbe(_In_ PDEVICE_OBJECT Owner,
 }
 
 /* Where a new block should land: its own slot, else an empty way, else a
- * clean way, else way zero. Preferring clean ways keeps an install from
- * forcing a write-back when its neighbour is hot and modified. */
+ * clean unconstrained way, else a dirty way (written back first), else none.
+ * Preferring clean ways keeps an install from forcing a write-back when its
+ * neighbour is hot and modified. A clean way that carries a FlushAfterSeq is
+ * a barrier target waiting for the write that dirties it; evicting it would
+ * drop the constraint, so it is never a victim. */
 static
 NTFS_CACHE_SLOT*
 NtfsCacheVictim(_In_ PDEVICE_OBJECT Owner,
@@ -204,11 +212,15 @@ NtfsCacheVictim(_In_ PDEVICE_OBJECT Owner,
         return &Set[0];
     if (Set[1].Tag == NTFS_CACHE_EMPTY)
         return &Set[1];
-    if (!Set[0].Dirty)
+    if (!Set[0].Dirty && Set[0].FlushAfterSeq == 0)
         return &Set[0];
-    if (!Set[1].Dirty)
+    if (!Set[1].Dirty && Set[1].FlushAfterSeq == 0)
         return &Set[1];
-    return &Set[0];
+    if (Set[0].Dirty)
+        return &Set[0];
+    if (Set[1].Dirty)
+        return &Set[1];
+    return NULL;
 }
 
 static
@@ -651,19 +663,25 @@ NtfsCacheCopyOut(_In_ PDEVICE_OBJECT Owner,
 }
 
 static
-VOID
+NTSTATUS
 NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
                  _In_ ULONGLONG Block,
                  _In_reads_bytes_(NTFS_CACHE_BLOCK_SIZE) PUCHAR Data)
 {
     NTFS_CACHE_SLOT* Slot;
+    NTSTATUS Status;
 
     if (!NtfsCacheReady)
-        return;
+        return STATUS_SUCCESS;
 
     /* Never lose an update by dropping the block that is being replaced. */
     ExAcquireFastMutex(&NtfsCacheMutex);
     Slot = NtfsCacheVictim(Owner, Block);
+    if (!Slot)
+    {
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
     if (Slot->Dirty && (Slot->Tag != Block || Slot->Owner != Owner))
     {
         ULONGLONG Victim = Slot->Tag;
@@ -671,19 +689,24 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
         ObReferenceObject(VictimOwner);
 
         ExReleaseFastMutex(&NtfsCacheMutex);
-        NTSTATUS Status = NtfsCacheWriteBackOne(VictimOwner, Victim);
+        Status = NtfsCacheWriteBackOne(VictimOwner, Victim);
         ObDereferenceObject(VictimOwner);
         if (!NT_SUCCESS(Status))
-            return;
+            return Status;
         ExAcquireFastMutex(&NtfsCacheMutex);
         Slot = NtfsCacheVictim(Owner, Block);
+        if (!Slot)
+        {
+            ExReleaseFastMutex(&NtfsCacheMutex);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
     }
     // A concurrent writer may have dirtied the newly selected victim.
     // Cache fills must also preserve newer dirty data for this same block.
     if (Slot->Dirty)
     {
         ExReleaseFastMutex(&NtfsCacheMutex);
-        return;
+        return STATUS_SUCCESS;
     }
     if (!Slot->Data)
     {
@@ -693,7 +716,7 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
         if (!Slot->Data)
         {
             ExReleaseFastMutex(&NtfsCacheMutex);
-            return;
+            return STATUS_INSUFFICIENT_RESOURCES;
         }
     }
     RtlCopyMemory(Slot->Data, Data, NTFS_CACHE_BLOCK_SIZE);
@@ -707,6 +730,7 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
     Slot->FlushAfterSeq = 0;
     Slot->Dirty = FALSE;
     ExReleaseFastMutex(&NtfsCacheMutex);
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
@@ -1179,28 +1203,53 @@ NtfsWriteBarrierEnabledContext(_In_opt_ void* Context)
 }
 
 /*
- * Write-ordering barrier: the block(s) covering [LaterOffset, +LaterLength)
- * (the bitmap bit) must not reach the device until the block(s) covering
- * [EarlierOffset, +EarlierLength) (the new MFT record) are durable. An earlier
- * block that is already clean or not cached is durable and adds no constraint.
+ * Write-ordering barrier: the block covering [LaterOffset, +LaterLength) must
+ * not reach the device until the block(s) covering [EarlierOffset,
+ * +EarlierLength) (the new MFT record) are durable. An earlier block that is
+ * already clean or not cached is durable and adds no constraint.
+ *
+ * The caller installs the constraint BEFORE the write that dirties the later
+ * block, so there is no window in which the lazy writer could find the block
+ * dirty and unconstrained. For that to hold the later block must already sit
+ * in the cache (a block that is not cached is not held back by anything) and
+ * the write must be one the cache absorbs: a range that does not fit inside a
+ * single cache block is written through, straight to the device, and no
+ * constraint could stop it. Both cases, and a constraint that would close a
+ * dependency cycle (the earlier range already has to wait for the later
+ * block), are refused; the caller then makes the earlier range durable
+ * synchronously instead. Nothing is ever ordered silently.
  */
-void
+NTSTATUS
 NtfsBarrierAfterContext(_In_opt_ void* Context,
                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
                         _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength)
 {
     PDEVICE_OBJECT DeviceObject;
-    ULONGLONG LaterFirst, LaterLast, EarlierFirst, EarlierLast, b;
+    ULONGLONG LaterBlock, EarlierFirst, EarlierLast, b;
     ULONGLONG MaxEarlierSeq = 0;
+    NTFS_CACHE_SLOT* L;
+    NTSTATUS Status = STATUS_SUCCESS;
 
-    if (!NtfsCacheReady || !LaterLength || !EarlierLength)
-        return;
+    if (!LaterLength || !EarlierLength ||
+        LaterOffset > ~(ULONGLONG)0 - (LaterLength - 1) ||
+        EarlierOffset > ~(ULONGLONG)0 - (EarlierLength - 1))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    /* Only a write that fits one cache block is held back by the cache. */
+    if ((LaterOffset & (NTFS_CACHE_BLOCK_SIZE - 1)) + LaterLength >
+        NTFS_CACHE_BLOCK_SIZE)
+    {
+        return STATUS_NOT_SUPPORTED;
+    }
+    /* No cache: every write goes through in issue order, nothing to order. */
+    if (!NtfsCacheReady)
+        return STATUS_SUCCESS;
     DeviceObject = Context ? static_cast<PDEVICE_OBJECT>(Context) : PartDeviceObj;
     if (!DeviceObject)
-        return;
+        return STATUS_INVALID_PARAMETER;
 
-    LaterFirst = LaterOffset >> NTFS_CACHE_BLOCK_SHIFT;
-    LaterLast = (LaterOffset + LaterLength - 1) >> NTFS_CACHE_BLOCK_SHIFT;
+    LaterBlock = LaterOffset >> NTFS_CACHE_BLOCK_SHIFT;
     EarlierFirst = EarlierOffset >> NTFS_CACHE_BLOCK_SHIFT;
     EarlierLast = (EarlierOffset + EarlierLength - 1) >> NTFS_CACHE_BLOCK_SHIFT;
 
@@ -1211,14 +1260,96 @@ NtfsBarrierAfterContext(_In_opt_ void* Context,
         if (D && D->Dirty && D->DirtySeq > MaxEarlierSeq)
             MaxEarlierSeq = D->DirtySeq;
     }
-    if (MaxEarlierSeq != 0)
+    if (MaxEarlierSeq == 0)
     {
-        for (b = LaterFirst; b <= LaterLast; b++)
+        /* The earlier range is already durable. */
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        return STATUS_SUCCESS;
+    }
+
+    L = NtfsCacheProbe(DeviceObject, LaterBlock);
+    if (!L || !L->Data)
+    {
+        Status = STATUS_NOT_FOUND;
+    }
+    else if (L->Dirty && MaxEarlierSeq > L->FlushAfterSeq)
+    {
+        /*
+         * The later block is already dirty, so it may already be something
+         * another constrained block has to wait for. Walk the dependency
+         * closure of the earlier range: start from every dirty block the new
+         * constraint would make L wait for (DirtySeq <= MaxEarlierSeq), and
+         * widen by the FlushAfterSeq of each block reached, until nothing new
+         * is reached. If L itself (DirtySeq <= Reach) is in that closure, the
+         * new constraint would make L wait for a block that waits for L, and
+         * the writeback would never finish. Refuse it. The scan is bounded by
+         * the number of distinct FlushAfterSeq values in use, in practice one
+         * or two passes over the slot array.
+         */
+        ULONGLONG Reach = 0;
+        ULONGLONG Bound = MaxEarlierSeq;
+        ULONG i;
+
+        for (;;)
         {
-            NTFS_CACHE_SLOT* L = NtfsCacheProbe(DeviceObject, b);
-            if (L && L->Dirty && MaxEarlierSeq > L->FlushAfterSeq)
-                L->FlushAfterSeq = MaxEarlierSeq;
+            ULONGLONG Next = Reach;
+
+            for (i = 0; i < NTFS_CACHE_SLOTS; i++)
+            {
+                NTFS_CACHE_SLOT* D = &NtfsCacheSlots[i];
+                if (D != L && D->Dirty && D->Owner &&
+                    D->Tag != NTFS_CACHE_EMPTY &&
+                    D->DirtySeq != 0 && D->DirtySeq <= Bound &&
+                    D->FlushAfterSeq > Next)
+                {
+                    Next = D->FlushAfterSeq;
+                }
+            }
+            if (Next == Reach)
+                break;
+            Reach = Next;
+            if (Reach > Bound)
+                Bound = Reach;
         }
+        if (Reach != 0 && L->DirtySeq <= Reach)
+            Status = STATUS_NOT_SUPPORTED;
+    }
+    if (NT_SUCCESS(Status) && MaxEarlierSeq > L->FlushAfterSeq)
+        L->FlushAfterSeq = MaxEarlierSeq;
+    ExReleaseFastMutex(&NtfsCacheMutex);
+    return Status;
+}
+
+/*
+ * Drop a constraint installed by NtfsBarrierAfterContext on a later block the
+ * caller did not write after all (the write failed, or the caller made the
+ * earlier range durable synchronously instead). Only a clean block is
+ * released: once the block is dirty the constraint belongs to its content.
+ */
+void
+NtfsBarrierCancelContext(_In_opt_ void* Context,
+                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength)
+{
+    PDEVICE_OBJECT DeviceObject;
+    ULONGLONG First, Last, b;
+
+    if (!NtfsCacheReady || !LaterLength ||
+        LaterOffset > ~(ULONGLONG)0 - (LaterLength - 1))
+    {
+        return;
+    }
+    DeviceObject = Context ? static_cast<PDEVICE_OBJECT>(Context) : PartDeviceObj;
+    if (!DeviceObject)
+        return;
+
+    First = LaterOffset >> NTFS_CACHE_BLOCK_SHIFT;
+    Last = (LaterOffset + LaterLength - 1) >> NTFS_CACHE_BLOCK_SHIFT;
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    for (b = First; b <= Last; b++)
+    {
+        NTFS_CACHE_SLOT* L = NtfsCacheProbe(DeviceObject, b);
+        if (L && !L->Dirty)
+            L->FlushAfterSeq = 0;
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
 }
@@ -1274,9 +1405,9 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
             {
                 RtlCopyMemory(Slot->Data + BlockOffset, Buffer, Length);
                 Slot->Generation++;
-                Slot->DirtySeq = ++NtfsCacheWriteSeq;
                 if (!Slot->Dirty)
                 {
+                    Slot->DirtySeq = ++NtfsCacheWriteSeq;
                     Slot->Dirty = TRUE;
                     NtfsCacheDirtyCount++;
                 }
@@ -1330,9 +1461,9 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
                             // Install may preserve a concurrently modified block.
                             RtlCopyMemory(Slot->Data + BlockOffset, Buffer, Length);
                             Slot->Generation++;
-                            Slot->DirtySeq = ++NtfsCacheWriteSeq;
                             if (!Slot->Dirty)
                             {
+                                Slot->DirtySeq = ++NtfsCacheWriteSeq;
                                 Slot->Dirty = TRUE;
                                 NtfsCacheDirtyCount++;
                             }

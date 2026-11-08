@@ -157,9 +157,7 @@ NtfsCommitRangeContext(_In_opt_ void* Context,
     return NtfsFlushVolumeContext(Context);
 }
 
-/* Write-through environments: every write is already durable in issue order,
- * so the barrier is a no-op and the CommitRange path is used (enabled=FALSE). */
-void
+NTSTATUS
 NtfsBarrierAfterContext(_In_opt_ void* Context,
                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength,
                         _In_ ULONGLONG EarlierOffset, _In_ ULONG EarlierLength)
@@ -169,6 +167,16 @@ NtfsBarrierAfterContext(_In_opt_ void* Context,
     UNREFERENCED_PARAMETER(LaterLength);
     UNREFERENCED_PARAMETER(EarlierOffset);
     UNREFERENCED_PARAMETER(EarlierLength);
+    return STATUS_SUCCESS;
+}
+
+void
+NtfsBarrierCancelContext(_In_opt_ void* Context,
+                         _In_ ULONGLONG LaterOffset, _In_ ULONG LaterLength)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(LaterOffset);
+    UNREFERENCED_PARAMETER(LaterLength);
 }
 
 BOOLEAN
