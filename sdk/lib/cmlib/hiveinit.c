@@ -1255,6 +1255,13 @@ HvLoadHive(
             if (Result2 == Fail)
             {
                 DPRINT1("Failed to recover the hive header\n");
+                if (Result == RecoverData && BaseBlock != NULL)
+                {
+                    /* Verified header, no usable log: load the bins that
+                       are on disk, same fallback as the amd64 path. */
+                    HiveSelfHeal = TRUE;
+                    break;
+                }
                 return STATUS_REGISTRY_CORRUPT;
             }
 
@@ -1269,6 +1276,11 @@ HvLoadHive(
             if (Result2 == Fail)
             {
                 DPRINT1("Failed to recover the hive data\n");
+                if (Result == RecoverData)
+                {
+                    HiveSelfHeal = TRUE;
+                    break;
+                }
                 return STATUS_REGISTRY_CORRUPT;
             }
 
@@ -1348,6 +1360,19 @@ HvLoadHive(
         Hive->Free(HiveData, FileSize);
         Hive->Free(BaseBlock, Hive->BaseBlockAlloc);
         return STATUS_NOT_REGISTRY_FILE;
+    }
+
+    if (Result == RecoverData)
+    {
+        /* The verified header still carries the mismatched sequences that
+           sent us here, and HvpInitializeMemoryHive verifies them. Normalise
+           the in-memory copy - placed after the short-file retry because
+           that re-reads the header from disk - and keep the on-disk header
+           untouched until the self-heal write-back persists the consistent
+           state. */
+        PHBASE_BLOCK ChunkHeader = (PHBASE_BLOCK)HiveData;
+        ChunkHeader->Sequence2 = ChunkHeader->Sequence1;
+        ChunkHeader->CheckSum = HvpHiveHeaderChecksum(ChunkHeader);
     }
 
     if (ShortFileRecovered)
