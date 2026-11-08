@@ -535,16 +535,18 @@ RegImportBinaryHive(
 
         if (!RegRecoverHiveFromLog(ChunkBase, ChunkSize, SearchPath, "SYSTEM"))
         {
+            /* A missing or unusable .LOG must not refuse the primary hive
+               outright: the clamp below bounds the header to the bins the
+               chunk carries, so the boot continues from the surviving bins
+               instead of falling through to the SYSTEM.ALT fallback. */
             if (!RegRecoverHeaderHive(*ChunkBase, SearchPath, "SYSTEM"))
             {
                 ERR("Failed to recover the hive header block\n");
-                return FALSE;
             }
 
             if (!RegRecoverDataHive(*ChunkBase, SearchPath, "SYSTEM"))
             {
                 ERR("Failed to recover the hive data\n");
-                return FALSE;
             }
         }
 
@@ -552,22 +554,32 @@ RegImportBinaryHive(
            growth write with the log gone). Clamp to the bins the file
            holds and import the surviving prefix, as winload does; the
            kernel self-heal persists the consistent image. */
-        if (*ChunkSize > HBLOCK_SIZE &&
-            HvpClampHiveToValidBins((PHBASE_BLOCK)*ChunkBase,
-                                    *ChunkSize - HBLOCK_SIZE) != 0)
-        {
-            PHBASE_BLOCK ClampedHeader = (PHBASE_BLOCK)*ChunkBase;
-
-            ClampedHeader->Sequence2 = ClampedHeader->Sequence1;
-            ClampedHeader->CheckSum = HvpHiveHeaderChecksum(ClampedHeader);
-            ClampedHeader->BootType |= HBOOT_TYPE_SELF_HEAL;
-            ((PHBASE_BLOCK)*ChunkBase)->BootRecover = HBOOT_BOOT_RECOVERED_BY_HIVE_LOG;
-            WARN("Clamping the hive to its valid bins (self-heal)\n");
-        }
-        else
+        if (*ChunkSize <= HBLOCK_SIZE)
         {
             ERR("Failed to recover the hive (no valid bins)\n");
             return FALSE;
+        }
+
+        {
+            PHBASE_BLOCK ClampedHeader = (PHBASE_BLOCK)*ChunkBase;
+            ULONG ClaimedLength = ClampedHeader->Length;
+            ULONG ValidBins = HvpClampHiveToValidBins(ClampedHeader,
+                                                      *ChunkSize - HBLOCK_SIZE);
+
+            if (ValidBins == 0)
+            {
+                ERR("Failed to recover the hive (no valid bins)\n");
+                return FALSE;
+            }
+
+            if (ValidBins != ClaimedLength)
+            {
+                ClampedHeader->Sequence2 = ClampedHeader->Sequence1;
+                ClampedHeader->CheckSum = HvpHiveHeaderChecksum(ClampedHeader);
+                ClampedHeader->BootType |= HBOOT_TYPE_SELF_HEAL;
+                ClampedHeader->BootRecover = HBOOT_BOOT_RECOVERED_BY_HIVE_LOG;
+                WARN("Clamping the hive to its valid bins (self-heal)\n");
+            }
         }
 
         /* Now retry initializing the hive again */
