@@ -1219,6 +1219,22 @@ HvLoadHive(
 /* FIXME: See the comment above (near HvpQueryHiveSize) */
 #if defined(_M_AMD64)
         {
+            /*
+             * No legacy log-recovery path on amd64; the incremental log was
+             * already attempted above (HvpRecoverHiveFromLog). RecoverData
+             * still holds a verified header whose sequences mismatch - the
+             * machine died mid-transaction, and the log that held the dirty
+             * data is unavailable. Load the bins that are on disk; the
+             * valid-bin clamp below confines the loss to what was never
+             * written, and self-heal flags the truncation. A header that
+             * fails verification (RecoverHeader) cannot be trusted for a
+             * Length clamp and stays corrupt.
+             */
+            if (Result == RecoverData)
+            {
+                HiveSelfHeal = TRUE;
+                break;
+            }
             if (BaseBlock)
                 Hive->Free(BaseBlock, Hive->BaseBlockAlloc);
             return STATUS_REGISTRY_CORRUPT;

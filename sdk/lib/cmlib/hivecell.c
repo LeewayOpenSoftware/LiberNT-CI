@@ -93,9 +93,31 @@ HvpGetCellData(
     PCELL_DATA Data;
 
     if (!Hive->Flat)
+    {
+        ULONG CellType, CellBlock;
+
         LockAcquired = HvLockHiveReader(Hive);
+
+        /*
+         * A clamped self-heal load (refused growth write, log covering only
+         * part of the gap) leaves cell references from the surviving bins
+         * into the discarded tail. A release build would read out of range
+         * here; fail the lookup so the walk stops at the lost subtree.
+         */
+        CellType = HvGetCellType(CellIndex);
+        CellBlock = HvGetCellBlock(CellIndex);
+        if (CellBlock >= Hive->Storage[CellType].Length / HBLOCK_SIZE ||
+            !HvpLookupBlock(Hive, CellType, CellBlock))
+        {
+            DPRINT1("HvpGetCellData: cell 0x%lx out of range (block %lu, storage 0x%lx)\n",
+                    CellIndex, CellBlock, Hive->Storage[CellType].Length);
+            HvUnlockHiveReader(Hive, LockAcquired);
+            return NULL;
+        }
+    }
     Data = (PCELL_DATA)(HvpGetCellHeaderLocked(Hive, CellIndex) + 1);
-    HvUnlockHiveReader(Hive, LockAcquired);
+    if (!Hive->Flat)
+        HvUnlockHiveReader(Hive, LockAcquired);
     return Data;
 }
 
