@@ -86,6 +86,12 @@ typedef struct _VolumeContextBlock
     FAST_MUTEX IdleFcbMutex;
     LIST_ENTRY IdleFcbList;
     ULONG IdleFcbCount;
+
+    /* Linkage on the global mounted-volume list (ntfsinit.c), walked by
+     * NtfsFsdShutdown to flush each volume's cached data at system shutdown.
+     * Protected by NtfsGlobalVolumeListResource, never by a per-volume lock. */
+    LIST_ENTRY GlobalListEntry;
+    BOOLEAN OnGlobalList;
 } VolumeContextBlock, *PVolumeContextBlock;
 
 #define NTFS_MAX_MISSING_NAMES 256
@@ -163,6 +169,12 @@ NtfsForgetAllMissingNames(_In_ PVolumeContextBlock VolCB);
 NTSTATUS
 NtfsFlushVolume(_In_ PVolumeContextBlock VolCB,
                 _In_ BOOLEAN Purge);
+
+VOID
+NtfsRegisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
+
+VOID
+NtfsUnregisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
 
 VOID
 NtfsReleaseDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);

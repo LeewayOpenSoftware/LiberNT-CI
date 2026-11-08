@@ -122,6 +122,7 @@ NtfsReleaseDismountedVolume(
 
     if (StreamFileObject)
     {
+        NtfsUnregisterVolumeForShutdown(VolCB);
         NtfsFlushVolume(VolCB, TRUE);
         ObDereferenceObject(StreamFileObject);
         /* FIXME: Delete the volume device and free the volume context once its last file object is closed. */
