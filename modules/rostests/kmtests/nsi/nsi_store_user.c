@@ -502,6 +502,73 @@ ApiEndpointCount(
     return count;
 }
 
+static BOOL
+IsIn6LinkLocal(
+    _In_ const IN6_ADDR *Address)
+{
+    return Address->u.Byte[0] == 0xfe && (Address->u.Byte[1] & 0xc0) == 0x80;
+}
+
+static void
+TestDeviceLinkLocalListener(
+    _In_ HANDLE Device)
+{
+    const UINT tcp_sizes[4] = { sizeof(struct nsi_tcp_conn_key), 0, sizeof(struct nsi_tcp_conn_dynamic), sizeof(struct nsi_tcp_conn_static) };
+    MIB_UNICASTIPADDRESS_TABLE *unicast = NULL;
+    SOCKADDR_IN6 bind_addr, local;
+    SOCKET listener = INVALID_SOCKET;
+    BYTE *rows = NULL;
+    DWORD count = 0, i, found = 0, err, if_index = 0;
+    int len;
+    static const BYTE zero16[16];
+
+    if (GetUnicastIpAddressTable(AF_INET6, &unicast) != NO_ERROR)
+    {
+        skip(FALSE, "no IPv6 unicast table\n");
+        return;
+    }
+    for (i = 0; i < unicast->NumEntries; i++)
+    {
+        if (IsIn6LinkLocal(&unicast->Table[i].Address.Ipv6.sin6_addr))
+        {
+            bind_addr = unicast->Table[i].Address.Ipv6;
+            if_index = unicast->Table[i].InterfaceIndex;
+            break;
+        }
+    }
+    FreeMibTable(unicast);
+    if (skip(if_index != 0, "no IPv6 link-local address to listen on\n"))
+        return;
+    bind_addr.sin6_port = 0;
+    bind_addr.sin6_scope_id = if_index;
+    listener = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    if (skip(listener != INVALID_SOCKET && bind(listener, (SOCKADDR *)&bind_addr, sizeof(bind_addr)) == 0 && listen(listener, 1) == 0,
+             "IPv6 link-local listener not created: %d\n", WSAGetLastError()))
+        goto done;
+    len = sizeof(local);
+    getsockname(listener, (SOCKADDR *)&local, &len);
+
+    err = EnumerateTable(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_LISTEN_TABLE, tcp_sizes, TABLE_ROWS, &rows, &count);
+    ok(err == ERROR_SUCCESS || err == ERROR_MORE_DATA, "TCP LISTEN enumerate: %lu\n", err);
+    for (i = 0; i < count && i < TABLE_ROWS; i++)
+    {
+        const struct nsi_tcp_conn_key *key = (const struct nsi_tcp_conn_key *)SECTION(rows, TABLE_ROWS, 0) + i;
+
+        if (key->local.si_family != AF_INET6 || key->local.Ipv6.sin6_port != local.sin6_port ||
+            memcmp(&key->local.Ipv6.sin6_addr, &local.sin6_addr, sizeof(local.sin6_addr)) != 0)
+            continue;
+        found++;
+        ok_eq_ulong(key->local.Ipv6.sin6_scope_id, if_index);
+        ok(key->remote.si_family == AF_INET6 && key->remote.Ipv6.sin6_port == 0 && key->remote.Ipv6.sin6_scope_id == 0 &&
+           memcmp(&key->remote.Ipv6.sin6_addr, zero16, sizeof(zero16)) == 0, "IPv6 listener remote is not [::]:0\n");
+    }
+    ok_eq_ulong(found, 1UL);
+
+done:
+    if (rows) HeapFree(GetProcessHeap(), 0, rows);
+    if (listener != INVALID_SOCKET) closesocket(listener);
+}
+
 static void
 TestDeviceEndpoints(
     _In_ HANDLE Device)
@@ -568,6 +635,10 @@ TestDeviceEndpoints(
     ok_eq_ulong(found, 1UL);
     if (found == 1 && index < TABLE_ROWS)
     {
+        const struct nsi_tcp_conn_key *key = (const struct nsi_tcp_conn_key *)SECTION(listen_rows, TABLE_ROWS, 0) + index;
+
+        ok(key->remote.si_family == AF_INET && key->remote.Ipv4.sin_addr.S_un.S_addr == 0 && key->remote.Ipv4.sin_port == 0,
+           "IPv4 listener remote is not 0.0.0.0:0\n");
         ok_eq_ulong((ULONG)((const struct nsi_tcp_conn_dynamic *)SECTION(listen_rows, TABLE_ROWS, tcp_sizes[0]) + index)->state, (ULONG)MIB_TCP_STATE_LISTEN);
         stat = (const struct nsi_tcp_conn_static *)SECTION(listen_rows, TABLE_ROWS, tcp_sizes[0] + tcp_sizes[2]) + index;
         ok_eq_ulong((ULONG)stat->pid, GetCurrentProcessId());
@@ -599,6 +670,8 @@ TestDeviceEndpoints(
         ok_eq_ulong((ULONG)ustat->pid, GetCurrentProcessId());
         ok(ustat->create_time != 0, "UDP endpoint has no creation time\n");
     }
+
+    TestDeviceLinkLocalListener(Device);
 
     if (api_tcp_before == api_tcp_after)
         ok_eq_ulong(count_all, api_tcp_after);

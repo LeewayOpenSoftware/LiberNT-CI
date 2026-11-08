@@ -285,6 +285,16 @@ static BOOLEAN IfInfoEndpointWanted(PADDRESS_FILE AddrFile, ULONG Family, ULONG 
     return AddrFile->Address.Type == IP_ADDRESS_V4 || AddrFile->Address.Type == IP_ADDRESS_V6;
 }
 
+static BOOLEAN IfInfoIsLinkLocal(const UCHAR *Address)
+{
+    return Address[0] == 0xfe && (Address[1] & 0xc0) == 0x80;
+}
+
+static ULONG IfInfoLinkLocalScope(const UCHAR *Address, ULONG ScopeId)
+{
+    return IfInfoIsLinkLocal(Address) ? ScopeId : 0;
+}
+
 static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
 {
     BOOLEAN IsV6 = AddrFile->Address.Type == IP_ADDRESS_V6;
@@ -297,7 +307,10 @@ static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
     Row->CreateTime = AddrFile->CreationTime;
     Row->ModuleInfo = (ULONG_PTR)AddrFile->SubProcessTag;
     if (IsV6)
+    {
         RtlCopyMemory(Row->LocalAddress, AddrFile->Address.Address.IPv6Address, 16);
+        Row->LocalScopeId = IfInfoLinkLocalScope(Row->LocalAddress, AddrFile->Address.ScopeId);
+    }
     else
         RtlCopyMemory(Row->LocalAddress, &AddrFile->Address.Address.IPv4Address, 4);
 
@@ -306,14 +319,7 @@ static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
 
     if (AddrFile->Listener)
     {
-        PADDRESS_FILE EndPoint = AddrFile->Listener->AddressFile;
-
         Row->State = MIB_TCP_STATE_LISTEN;
-        if (!IsV6 && EndPoint)
-        {
-            RtlCopyMemory(Row->RemoteAddress, &EndPoint->Address.Address.IPv4Address, 4);
-            Row->RemotePort = EndPoint->Port;
-        }
         return TRUE;
     }
     if (AddrFile->Connection && AddrFile->Connection->SocketContext)
@@ -330,8 +336,10 @@ static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
                 return FALSE;
             RtlCopyMemory(Row->LocalAddress, ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_addr, 16);
             Row->LocalPort = ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_port;
+            Row->LocalScopeId = IfInfoLinkLocalScope(Row->LocalAddress, ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_scope_id);
             RtlCopyMemory(Row->RemoteAddress, ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_addr, 16);
             Row->RemotePort = ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_port;
+            Row->RemoteScopeId = IfInfoLinkLocalScope(Row->RemoteAddress, ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_scope_id);
         }
         else
         {
@@ -345,6 +353,40 @@ static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
         return TRUE;
     }
     return FALSE;
+}
+
+static VOID IfInfoResolveLinkLocalScopes(PENDPOINT_ROW Rows, ULONG Count)
+{
+    PVOID Table = NULL;
+    IP6_ADDRESS_ROW *Addresses;
+    ULONG TableCount = 0, i, j;
+    BOOLEAN Needed = FALSE;
+
+    for (i = 0; i < Count && !Needed; i++)
+        Needed = Rows[i].Family == TI_NSI_FAMILY_IPV6 && Rows[i].LocalScopeId == 0 && IfInfoIsLinkLocal(Rows[i].LocalAddress);
+    if (Needed && NT_SUCCESS(IfInfoIp6Query(Ip6TableAddresses, &Table, &TableCount)))
+    {
+        Addresses = (IP6_ADDRESS_ROW *)((PIP6_TABLE_HEADER)Table + 1);
+        for (i = 0; i < Count; i++)
+        {
+            if (Rows[i].Family != TI_NSI_FAMILY_IPV6 || Rows[i].LocalScopeId != 0 || !IfInfoIsLinkLocal(Rows[i].LocalAddress))
+                continue;
+            for (j = 0; j < TableCount; j++)
+            {
+                if (RtlCompareMemory(Addresses[j].Address, Rows[i].LocalAddress, 16) == 16)
+                {
+                    Rows[i].LocalScopeId = Addresses[j].Index;
+                    break;
+                }
+            }
+        }
+    }
+    IfInfoFree(Table);
+    for (i = 0; i < Count; i++)
+    {
+        if (Rows[i].Family == TI_NSI_FAMILY_IPV6 && Rows[i].RemoteScopeId == 0 && IfInfoIsLinkLocal(Rows[i].RemoteAddress))
+            Rows[i].RemoteScopeId = Rows[i].LocalScopeId;
+    }
 }
 
 NTSTATUS IfInfoEndpoints(ULONG Family, ULONG Protocol, PENDPOINT_ROW Rows, ULONG Capacity, PULONG Count)
@@ -396,6 +438,7 @@ NTSTATUS IfInfoEndpoints(ULONG Family, ULONG Protocol, PENDPOINT_ROW Rows, ULONG
     }
     ExFreePoolWithTag(Files, SNAPSHOT_TAG);
 
+    IfInfoResolveLinkLocalScopes(Rows, min(Emitted, Capacity));
     *Count = Emitted;
     return Emitted > Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
 }

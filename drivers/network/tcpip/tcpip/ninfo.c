@@ -248,15 +248,11 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
 
     if (AddrFile->Listener != NULL)
     {
-        PADDRESS_FILE EndPoint;
-
-        EndPoint = AddrFile->Listener->AddressFile;
-
         TcpRow.dwState = MIB_TCP_STATE_LISTEN;
         TcpRow.dwLocalAddr = AddrFile->Address.Address.IPv4Address;
         TcpRow.dwLocalPort = AddrFile->Port;
-        TcpRow.dwRemoteAddr = EndPoint->Address.Address.IPv4Address;
-        TcpRow.dwRemotePort = EndPoint->Port;
+        TcpRow.dwRemoteAddr = 0;
+        TcpRow.dwRemotePort = 0;
 
         Status = TDI_SUCCESS;
     }
