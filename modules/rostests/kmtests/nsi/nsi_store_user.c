@@ -242,6 +242,85 @@ TestDeviceInterfaces(
     }
 }
 
+typedef DWORD (WINAPI *PFN_NSI_ENUMERATE)(DWORD, DWORD, const NPI_MODULEID *, DWORD, void *, DWORD, void *, DWORD,
+                                          void *, DWORD, void *, DWORD, DWORD *);
+typedef DWORD (WINAPI *PFN_NSI_GET_PARAMETER)(DWORD, const NPI_MODULEID *, DWORD, const void *, DWORD, DWORD, void *, DWORD, DWORD);
+
+static void
+TestApiBackend(
+    _In_ HANDLE Device)
+{
+    HMODULE nsi = LoadLibraryW(L"nsi.dll");
+    PFN_NSI_ENUMERATE pNsiEnumerateObjectsAllParameters;
+    PFN_NSI_GET_PARAMETER pNsiGetParameter;
+    struct nsiproxy_enumerate_all in;
+    const DWORD rows = 32;
+    NET_LUID *api_keys = NULL, *dev_keys;
+    struct nsi_ndis_ifinfo_static *api_stat = NULL, *dev_stat;
+    BYTE *out = NULL;
+    DWORD out_size, returned, err, api_count = rows, dev_count, i, j, matched = 0;
+
+    if (skip(nsi != NULL, "nsi.dll not loadable: %lu\n", GetLastError()))
+        return;
+    pNsiEnumerateObjectsAllParameters = (PFN_NSI_ENUMERATE)GetProcAddress(nsi, "NsiEnumerateObjectsAllParameters");
+    pNsiGetParameter = (PFN_NSI_GET_PARAMETER)GetProcAddress(nsi, "NsiGetParameter");
+    ok(pNsiEnumerateObjectsAllParameters != NULL && pNsiGetParameter != NULL, "nsi.dll exports missing\n");
+    api_keys = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, rows * sizeof(*api_keys));
+    api_stat = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, rows * sizeof(*api_stat));
+    memset(&in, 0, sizeof(in));
+    in.module = NPI_MS_NDIS_MODULEID;
+    in.table = NSI_NDIS_IFINFO_TABLE;
+    in.key_size = sizeof(NET_LUID);
+    in.static_size = sizeof(struct nsi_ndis_ifinfo_static);
+    in.count = rows;
+    out_size = sizeof(DWORD) + rows * (in.key_size + in.static_size);
+    out = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, out_size);
+    if (pNsiEnumerateObjectsAllParameters != NULL && pNsiGetParameter != NULL && api_keys != NULL && api_stat != NULL && out != NULL)
+    {
+        err = Ioctl(Device, IOCTL_NSIPROXY_WINE_ENUMERATE_ALL, &in, sizeof(in), out, out_size, &returned);
+        if (!skip(err == ERROR_SUCCESS, "device interface table: %lu\n", err))
+        {
+            dev_count = *(DWORD *)out;
+            dev_keys = (NET_LUID *)(out + sizeof(DWORD));
+            dev_stat = (struct nsi_ndis_ifinfo_static *)(out + sizeof(DWORD) + rows * in.key_size);
+            err = pNsiEnumerateObjectsAllParameters(1, 1, &NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE,
+                                                    api_keys, sizeof(*api_keys), NULL, 0, NULL, 0,
+                                                    api_stat, sizeof(*api_stat), &api_count);
+            ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+            ok_eq_ulong(api_count, dev_count);
+            for (i = 0; i < api_count && i < rows; i++)
+            {
+                NET_LUID luid;
+
+                for (j = 0; j < dev_count && j < rows; j++)
+                {
+                    if (dev_keys[j].Value != api_keys[i].Value)
+                        continue;
+                    matched++;
+                    ok_eq_ulong((ULONG)api_stat[i].if_index, (ULONG)dev_stat[j].if_index);
+                    ok_eq_ulong((ULONG)api_stat[i].type, (ULONG)dev_stat[j].type);
+                    ok(IsEqualGUID(&api_stat[i].if_guid, &dev_stat[j].if_guid), "interface %u: guid differs between api and device\n", api_stat[i].if_index);
+                    ok(api_stat[i].descr.Length != 0, "interface %u: empty description through the api\n", api_stat[i].if_index);
+                    trace("interface %u api descr %ls / device descr %ls\n", api_stat[i].if_index, api_stat[i].descr.String, dev_stat[j].descr.String);
+                }
+                luid.Value = 0;
+                err = pNsiGetParameter(1, &NPI_MS_NDIS_MODULEID, NSI_NDIS_INDEX_LUID_TABLE, &api_stat[i].if_index, sizeof(UINT),
+                                       NSI_PARAM_TYPE_STATIC, &luid, sizeof(luid), 0);
+                ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+                ok(luid.Value == api_keys[i].Value, "api index %u maps to luid %I64x, enumerated %I64x\n", api_stat[i].if_index, luid.Value, api_keys[i].Value);
+            }
+            ok(matched == api_count, "%lu of %lu api rows found on the device\n", matched, api_count);
+        }
+    }
+    if (out != NULL)
+        HeapFree(GetProcessHeap(), 0, out);
+    if (api_stat != NULL)
+        HeapFree(GetProcessHeap(), 0, api_stat);
+    if (api_keys != NULL)
+        HeapFree(GetProcessHeap(), 0, api_keys);
+    FreeLibrary(nsi);
+}
+
 static DWORD
 ArmNotification(
     _In_ HANDLE Device,
@@ -333,6 +412,7 @@ START_TEST(NsiStore)
         TestDeviceEnumerate(device, &module);
         TestDeviceRows(device, &module);
         TestDeviceInterfaces(device);
+        TestApiBackend(device);
         CloseHandle(device);
         TestDeviceNotifications(&module);
     }

@@ -39,6 +39,7 @@ struct nsi_table
     UINT sizes[4];
     nsi_enumerate_func enumerate;
     nsi_get_func get;
+    BOOL device;
 };
 
 static BOOL module_equal(const NPI_MODULEID *left, const NPI_MODULEID *right)
@@ -1564,8 +1565,8 @@ static DWORD enumerate_udp(struct nsi_enumerate_all_ex *params)
 
 static const struct nsi_table tables[] =
 {
-    {&NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE, {sizeof(NET_LUID), sizeof(struct nsi_ndis_ifinfo_rw), sizeof(struct nsi_ndis_ifinfo_dynamic), sizeof(struct nsi_ndis_ifinfo_static)}, enumerate_ndis, get_ndis},
-    {&NPI_MS_NDIS_MODULEID, NSI_NDIS_INDEX_LUID_TABLE, {sizeof(UINT), 0, 0, sizeof(NET_LUID)}},
+    {&NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE, {sizeof(NET_LUID), sizeof(struct nsi_ndis_ifinfo_rw), sizeof(struct nsi_ndis_ifinfo_dynamic), sizeof(struct nsi_ndis_ifinfo_static)}, enumerate_ndis, get_ndis, TRUE},
+    {&NPI_MS_NDIS_MODULEID, NSI_NDIS_INDEX_LUID_TABLE, {sizeof(UINT), 0, 0, sizeof(NET_LUID)}, NULL, NULL, TRUE},
     {&NPI_MS_IPV4_MODULEID, NSI_IP_COMPARTMENT_TABLE, {sizeof(UINT), sizeof(struct nsi_ip_cmpt_rw), sizeof(struct nsi_ip_cmpt_dynamic), 0}, NULL, get_ipv4_compartment},
     {&NPI_MS_IPV4_MODULEID, NSI_IP_ICMPSTATS_TABLE, {0, 0, sizeof(struct nsi_ip_icmpstats_dynamic), 0}, NULL, get_ipv4_icmp},
     {&NPI_MS_IPV4_MODULEID, NSI_IP_IPSTATS_TABLE, {0, 0, sizeof(struct nsi_ip_ipstats_dynamic), sizeof(struct nsi_ip_ipstats_static)}, NULL, get_ipv4_stats},
@@ -1971,8 +1972,106 @@ static DWORD WINAPI notification_worker(void *arg)
     return 0;
 }
 
+static LONG device_available;
+static DWORD backend_override;
+
+static void read_backend_override(void)
+{
+    WCHAR text[16];
+    DWORD value = 0, size = sizeof(value);
+
+    if (GetEnvironmentVariableW(L"LIBERNT_NSI_BACKEND", text, ARRAY_SIZE(text)))
+    {
+        backend_override = wcstoul(text, NULL, 10);
+        return;
+    }
+    if (!RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\LiberNT\\Nsi", L"Backend", RRF_RT_REG_DWORD, NULL, &value, &size))
+        backend_override = value;
+}
+
+BOOL nsi_reactos_use_device(const NPI_MODULEID *module, UINT table)
+{
+    const struct nsi_table *entry;
+    HANDLE device;
+
+    if (backend_override == NSI_BACKEND_EMULATION || !module) return FALSE;
+    entry = find_table(module, table);
+    if (!entry || !entry->device) return FALSE;
+    if (device_available) return TRUE;
+    device = CreateFileW(L"\\\\.\\Nsi", 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (device == INVALID_HANDLE_VALUE) return FALSE;
+    CloseHandle(device);
+    InterlockedExchange(&device_available, 1);
+    return TRUE;
+}
+
+void nsi_reactos_overlay_rows(const NPI_MODULEID *module, UINT table, void *rw_data, void *static_data, UINT count)
+{
+    struct nsi_ndis_ifinfo_rw *rw = rw_data;
+    struct nsi_ndis_ifinfo_static *stat = static_data;
+    WCHAR text[IF_MAX_STRING_SIZE + 1];
+    UINT i;
+
+    if (!module_equal(module, &NPI_MS_NDIS_MODULEID) || table != NSI_NDIS_IFINFO_TABLE || (!rw && !stat)) return;
+    for (i = 0; i < count; i++)
+    {
+        const GUID *guid = rw ? &rw[i].network_guid : &stat[i].if_guid;
+
+        if (rw && interface_alias(guid, text, sizeof(text))) init_counted_string_w(&rw[i].alias, text);
+        if (stat && interface_description(guid, text, sizeof(text))) init_counted_string_w(&stat[i].descr, text);
+    }
+}
+
+BOOL nsi_reactos_parameter_needs_overlay(const struct nsi_get_parameter_ex *params)
+{
+    return module_equal(params->module, &NPI_MS_NDIS_MODULEID) && params->table == NSI_NDIS_IFINFO_TABLE &&
+           (params->param_type == NSI_PARAM_TYPE_RW || params->param_type == NSI_PARAM_TYPE_STATIC);
+}
+
+DWORD nsi_reactos_device_get_parameter(struct nsi_get_parameter_ex *params)
+{
+    const struct nsi_table *table;
+    struct nsi_get_all_parameters_ex get;
+    BYTE *block;
+    UINT size;
+    DWORD error;
+
+    if (!params || !params->module || params->param_type > NSI_PARAM_TYPE_STATIC) return ERROR_INVALID_PARAMETER;
+    table = find_table(params->module, params->table);
+    if (!table || params->key_size != table->sizes[0] || (params->key_size && !params->key)) return ERROR_INVALID_PARAMETER;
+    size = table->sizes[params->param_type + 1];
+    if (!size || !params->data || params->data_offset > size || params->data_size > size - params->data_offset) return ERROR_INVALID_PARAMETER;
+    if (!(block = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size))) return ERROR_OUTOFMEMORY;
+    memset(&get, 0, sizeof(get));
+    get.module = params->module;
+    get.table = params->table;
+    get.first_arg = params->first_arg;
+    get.key = params->key;
+    get.key_size = params->key_size;
+    if (params->param_type == NSI_PARAM_TYPE_RW)
+    {
+        get.rw_data = block;
+        get.rw_size = size;
+    }
+    else if (params->param_type == NSI_PARAM_TYPE_DYNAMIC)
+    {
+        get.dynamic_data = block;
+        get.dynamic_size = size;
+    }
+    else
+    {
+        get.static_data = block;
+        get.static_size = size;
+    }
+    error = NsiGetAllParametersEx(&get);
+    if (!error) memcpy(params->data, block + params->data_offset, params->data_size);
+    HeapFree(GetProcessHeap(), 0, block);
+    return error;
+}
+
 BOOL nsi_reactos_init(void)
 {
+    read_backend_override();
     InitializeCriticalSection(&notification_cs);
     notification_wake = CreateEventW(NULL, FALSE, FALSE, NULL);
     notification_stop = CreateEventW(NULL, TRUE, FALSE, NULL);
