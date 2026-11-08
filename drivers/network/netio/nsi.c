@@ -359,17 +359,32 @@ NTAPI
 NsiCancelChangeNotificationsKm(
     _In_ PFILE_OBJECT FileObject)
 {
+    LIST_ENTRY Cancelled;
     PLIST_ENTRY Entry;
+    PIRP Irp;
     KIRQL OldIrql;
 
     if (!NsiReady)
         return;
+    InitializeListHead(&Cancelled);
     KeAcquireSpinLock(&NsiProviderLock, &OldIrql);
     for (Entry = NsiProviderList.Flink; Entry != &NsiProviderList; Entry = Entry->Flink)
     {
-        NsiDrainPendingIrps(CONTAINING_RECORD(Entry, NSI_PROVIDER, ListEntry), FileObject, STATUS_CANCELLED, 0);
+        PNSI_PROVIDER Provider = CONTAINING_RECORD(Entry, NSI_PROVIDER, ListEntry);
+
+        while ((Irp = IoCsqRemoveNextIrp(&Provider->Csq, FileObject)) != NULL)
+            InsertTailList(&Cancelled, &Irp->Tail.Overlay.ListEntry);
     }
     KeReleaseSpinLock(&NsiProviderLock, OldIrql);
+
+    while (!IsListEmpty(&Cancelled))
+    {
+        Entry = RemoveHeadList(&Cancelled);
+        Irp = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
+        Irp->IoStatus.Status = STATUS_CANCELLED;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    }
 }
 
 NTSTATUS
