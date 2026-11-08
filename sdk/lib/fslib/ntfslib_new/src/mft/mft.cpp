@@ -431,6 +431,34 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
      * records and therefore must not invent semantic timestamp updates.
      */
 
+    /*
+     * Directory name insert, barrier mode: when this record carries a resident
+     * $INDEX_ROOT entry that names a file record added in the same operation
+     * (IndexBarrierRecordOffset set by AddFileToDirectory), order this record
+     * after that record so a crash never leaves the entry naming a not-yet-
+     * durable record. Only the directory record is written via this path while
+     * the insert is in progress; skip the (impossible) self case.
+     */
+    if (NT_SUCCESS(WriteStatus) &&
+        DiskVolume->IndexBarrierRecordOffset != 0 &&
+        File->RecordNumber != MAXULONG)
+    {
+        ULONGLONG DirRecordDiskOffset;
+
+        if (NT_SUCCESS(GetFileRecordDiskOffset(File->RecordNumber, &DirRecordDiskOffset)))
+        {
+            if (DirRecordDiskOffset != DiskVolume->IndexBarrierRecordOffset)
+                DiskVolume->BarrierAfter(DirRecordDiskOffset, FileRecordSize,
+                                         DiskVolume->IndexBarrierRecordOffset, FileRecordSize);
+        }
+        else
+        {
+            /* Offset unresolvable (record crosses a run boundary): make both
+             * durable to stay correct. */
+            (void)DiskVolume->FlushVolume();
+        }
+    }
+
     return WriteStatus;
 }
 

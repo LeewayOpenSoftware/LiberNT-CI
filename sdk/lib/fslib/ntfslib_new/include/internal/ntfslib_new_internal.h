@@ -604,6 +604,16 @@ public:
     ULONGLONG IndexWorkVCN = 0;
     BOOLEAN IndexWorkBufferValid = FALSE;
 
+    /* Write-ordering barrier for a directory name insert (barrier mode only).
+     * While AddFileToDirectory is adding a file, this holds the disk offset of
+     * the new file's MFT record; any index-allocation node (WriteIndexNode) or
+     * resident $INDEX_ROOT record (WriteFileRecordToMFT) written during the
+     * insert is ordered after it (BarrierAfter), so a crash cannot leave an
+     * index entry naming a not-yet-durable record (the J32 grow/ residual the
+     * record-before-bitmap fix left). 0 = not inside an insert. Set/cleared
+     * under the caller's metadata serialization. */
+    ULONGLONG IndexBarrierRecordOffset = 0;
+
     /* Free list of record-sized buffers. Every parsed record allocated and
      * freed 1 KB of pool; recycling them needs its own lock because records
      * are destroyed outside the metadata serialization. */

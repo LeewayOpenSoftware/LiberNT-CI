@@ -730,6 +730,60 @@ WriteIndexNode(
     {
         Status = STATUS_END_OF_FILE;
     }
+
+    /*
+     * Directory name insert, barrier mode: this index-allocation node names a
+     * file record added in the same operation (IndexBarrierRecordOffset, set by
+     * AddFileToDirectory). Order the node after that record so the node cannot
+     * reach the device before the record is durable; otherwise a crash leaves a
+     * dangling index entry to a zeroed record (the J32 grow/ residual the
+     * record-before-bitmap fix did not cover). Resolve this node's disk offset
+     * from the $INDEX_ALLOCATION run list exactly as the bitmap barrier does;
+     * fall back to a full flush when it is unresolvable or crosses a run
+     * boundary.
+     */
+    if (NT_SUCCESS(Status) && DiskVolume->IndexBarrierRecordOffset != 0)
+    {
+        PAttribute IndexAllocationAttribute =
+            DirectoryFile->GetAttribute(
+                TypeIndexAllocation,
+                const_cast<PWSTR>(IndexName));
+        ULONGLONG ByteOffset = AllocationOffset;
+        ULONGLONG NodeDiskOffset = 0;
+        BOOLEAN Resolved = FALSE;
+        PDataRun Run;
+
+        if (IndexAllocationAttribute &&
+            IndexAllocationAttribute->IsNonResident)
+        {
+            for (Run = DirectoryFile->GetCachedDataRuns(IndexAllocationAttribute);
+                 Run; Run = Run->NextRun)
+            {
+                ULONGLONG RunSize = GetRunSize(Run);
+
+                if (ByteOffset < RunSize)
+                {
+                    if (!Run->IsSparse &&
+                        RunSize - ByteOffset >= RecordSize)
+                    {
+                        NodeDiskOffset =
+                            GetOffset(Run->LCN) + ByteOffset;
+                        Resolved = TRUE;
+                    }
+                    break;
+                }
+                ByteOffset -= RunSize;
+            }
+        }
+
+        if (Resolved)
+            DiskVolume->BarrierAfter(
+                NodeDiskOffset, RecordSize,
+                DiskVolume->IndexBarrierRecordOffset,
+                DiskVolume->MFT->FileRecordSize);
+        else
+            Status = DiskVolume->FlushVolume();
+    }
     return Status;
 }
 
@@ -2447,6 +2501,39 @@ Directory::AddFileToDirectory(
     Key.ValueLength = 0;
     Key.CaseSensitive = DirectoryFile->IsCaseSensitiveDirectory();
 
+    /*
+     * Order the index entry that names the new file after the file's own record,
+     * so a crash cannot leave the entry naming a not-yet-durable (zeroed) record
+     * (J32 grow/ residual). Barrier ON: arm IndexBarrierRecordOffset; the index
+     * block writes (WriteIndexNode / WriteFileRecordToMFT) apply BarrierAfter.
+     * Barrier OFF: make the record durable synchronously before the insert, as
+     * the record-before-bitmap fix does for the bitmap bit.
+     */
+    {
+        ULONGLONG TargetRecordOffset = 0;
+
+        if (NT_SUCCESS(DiskVolume->MFT->GetFileRecordDiskOffset(
+                FileReference & 0x0000FFFFFFFFFFFFULL, &TargetRecordOffset)))
+        {
+            if (DiskVolume->WriteBarrierEnabled())
+            {
+                DiskVolume->IndexBarrierRecordOffset = TargetRecordOffset;
+            }
+            else
+            {
+                Status = DiskVolume->CommitRange(
+                    TargetRecordOffset, DiskVolume->MFT->FileRecordSize);
+                if (Status == STATUS_NOT_IMPLEMENTED)
+                    Status = DiskVolume->FlushVolume();
+                if (!NT_SUCCESS(Status))
+                {
+                    NtfsFreePool(NewEntry);
+                    return Status;
+                }
+            }
+        }
+    }
+
     Status = AddIndexEntry(
         DirectoryFile,
         NtfsI30Name,
@@ -2454,6 +2541,7 @@ Directory::AddFileToDirectory(
         &Key,
         NewEntry,
         EntryLength);
+    DiskVolume->IndexBarrierRecordOffset = 0;
     NtfsFreePool(NewEntry);
     if (!NT_SUCCESS(Status))
         return Status;
