@@ -25,6 +25,7 @@ public:
     VOID TrayMessageLoop();
 
     VOID OnDisplayChange();
+    VOID OnSettingsChanged();
 
 private:
     HRESULT UpdateSecondaryTrays();

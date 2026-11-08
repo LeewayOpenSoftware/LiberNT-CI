@@ -77,11 +77,17 @@ VOID TrayManager::OnDisplayChange()
     UpdateSecondaryTrays();
 }
 
+/* Live-apply entry point: called when the multi-monitor taskbar settings change. */
+VOID TrayManager::OnSettingsChanged()
+{
+    UpdateSecondaryTrays();
+}
+
 HRESULT TrayManager::UpdateSecondaryTrays()
 {
     DestroySecondaryTrays();
 
-    if (!g_TaskbarSettings.bMMTaskbarMode)
+    if (!g_TaskbarSettings.bMMTaskbarEnabled)
         return S_OK;
 
     HWND hwndPrimary = m_PrimaryTray ? m_PrimaryTray->GetHWND() : NULL;
@@ -141,4 +147,10 @@ VOID TrayManager_OnDisplayChange()
 {
     if (g_TrayManager != NULL)
         g_TrayManager->OnDisplayChange();
+}
+
+VOID TrayManager_OnSettingsChanged()
+{
+    if (g_TrayManager != NULL)
+        g_TrayManager->OnSettingsChanged();
 }

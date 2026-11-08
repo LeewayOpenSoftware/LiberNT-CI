@@ -114,12 +114,38 @@ public:
         //CheckDlgButton(IDC_TASKBARPROP_SHOWQL, g_TaskbarSettings.bShowQuickLaunch ? BST_CHECKED : BST_UNCHECKED);
         CheckDlgButton(IDC_TASKBARPROP_SMALLICONS, g_TaskbarSettings.bSmallIcons ? BST_CHECKED : BST_UNCHECKED);
 
+        /* Multiple displays (P1.9d). The controls exist only where the dialog
+           template carries them, so guard every access. */
+        HWND hMMEnable = GetDlgItem(IDC_TASKBARPROP_MMENABLE);
+        if (hMMEnable)
+            CheckDlgButton(IDC_TASKBARPROP_MMENABLE, g_TaskbarSettings.bMMTaskbarEnabled ? BST_CHECKED : BST_UNCHECKED);
+
+        HWND hMMButtons = GetDlgItem(IDC_TASKBARPROP_MMBUTTONS);
+        if (hMMButtons)
+        {
+            SendMessageW(hMMButtons, CB_RESETCONTENT, 0, 0);
+            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"All taskbars");
+            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Taskbar where window is open");
+            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Main taskbar and taskbar where window is open");
+            UINT uMode = g_TaskbarSettings.uMMTaskbarMode;
+            if (uMode > 2)
+                uMode = 0;
+            SendMessageW(hMMButtons, CB_SETCURSEL, uMode, 0);
+            EnableWindow(hMMButtons, g_TaskbarSettings.bMMTaskbarEnabled);
+        }
+
         _UpdateDialog();
         return TRUE;
     }
 
     LRESULT OnCtrlCommand(WORD wNotifyCode, WORD wID, HWND hWndCtl, BOOL &bHandled)
     {
+        if (wID == IDC_TASKBARPROP_MMENABLE)
+        {
+            HWND hMMButtons = GetDlgItem(IDC_TASKBARPROP_MMBUTTONS);
+            if (hMMButtons)
+                EnableWindow(hMMButtons, IsDlgButtonChecked(IDC_TASKBARPROP_MMENABLE));
+        }
         _UpdateDialog();
         SetModified(TRUE);
         return 0;
@@ -136,7 +162,34 @@ public:
         //newSettings.bShowQuickLaunch = IsDlgButtonChecked(IDC_TASKBARPROP_SHOWQL);
         newSettings.bSmallIcons = IsDlgButtonChecked(IDC_TASKBARPROP_SMALLICONS);
 
+        /* Multiple displays (P1.9d), where the controls are present. */
+        HWND hMMEnable = GetDlgItem(IDC_TASKBARPROP_MMENABLE);
+        if (hMMEnable)
+        {
+            newSettings.bMMTaskbarEnabled = (IsDlgButtonChecked(IDC_TASKBARPROP_MMENABLE) != 0);
+            HWND hMMButtons = GetDlgItem(IDC_TASKBARPROP_MMBUTTONS);
+            if (hMMButtons)
+            {
+                LRESULT iSel = SendMessageW(hMMButtons, CB_GETCURSEL, 0, 0);
+                if (iSel >= 0)
+                    newSettings.uMMTaskbarMode = (UINT)iSel;
+            }
+        }
+
         SendMessage(m_hwndTaskbar, TWM_SETTINGSCHANGED, 0, (LPARAM)&newSettings);
+
+        /* The settings-changed handler applies the existing fields; the
+           multi-monitor fields have no live setter there, so apply them here
+           and reconcile the secondary trays without a restart. */
+        BOOL bMMChanged = (g_TaskbarSettings.bMMTaskbarEnabled != newSettings.bMMTaskbarEnabled) ||
+                          (g_TaskbarSettings.uMMTaskbarMode != newSettings.uMMTaskbarMode);
+        g_TaskbarSettings.bMMTaskbarEnabled = newSettings.bMMTaskbarEnabled;
+        g_TaskbarSettings.uMMTaskbarMode = newSettings.uMMTaskbarMode;
+        if (bMMChanged)
+        {
+            g_TaskbarSettings.Save();
+            TrayManager_OnSettingsChanged();
+        }
 
         return PSNRET_NOERROR;
     }

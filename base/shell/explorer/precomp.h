@@ -274,6 +274,7 @@ HRESULT CreateSecondaryTrayWindow(HMONITOR hMonitor, ITrayWindow ** ppTray);
 class TrayManager;
 extern TrayManager *g_TrayManager;
 VOID TrayManager_OnDisplayChange();
+VOID TrayManager_OnSettingsChanged();
 
 VOID
 TrayProcessMessages(IN OUT ITrayWindow *Tray);
@@ -323,7 +324,8 @@ struct TaskbarSettings
     BOOL bSmallIcons;
     TrayIconsMode eCompactTrayIcons;
     BOOL bShowDesktopButton;
-    BOOL bMMTaskbarMode;
+    BOOL bMMTaskbarEnabled;   // "Show taskbar on all displays" (reg MMTaskbarEnabled)
+    UINT uMMTaskbarMode;     // "Show taskbar buttons on" 0=all 1=where-open 2=main+where-open (reg MMTaskbarMode)
     TW_STRUCKRECTS2 sr;
 
     BOOL Load();
