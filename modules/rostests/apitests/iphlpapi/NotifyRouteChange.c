@@ -46,6 +46,33 @@ static void cleanup_notification(HANDLE event, HANDLE handle, OVERLAPPED *ovr)
     if (handle) CloseHandle(handle);
 }
 
+static void test_cancel(void)
+{
+    OVERLAPPED ovr = {0};
+    HANDLE event, handle = NULL;
+    DWORD wait;
+    BOOL ret;
+
+    event = CreateEventW(NULL, FALSE, FALSE, NULL);
+    ok(event != NULL, "CreateEvent failed\n");
+    if (!event) return;
+
+    if (!register_route_change(event, &ovr, &handle))
+        goto cleanup;
+
+    SetLastError(ERROR_SUCCESS);
+    ret = CancelIPChangeNotify(&ovr);
+    ok(ret, "CancelIPChangeNotify failed\n");
+    ok_long(GetLastError(), ERROR_SUCCESS);
+
+    wait = WaitForSingleObject(event, 100);
+    ok(wait == WAIT_TIMEOUT, "Canceled notification still signaled\n");
+    ok(ovr.Internal == STATUS_CANCELLED, "Expected STATUS_CANCELLED, got %lx\n", ovr.Internal);
+
+cleanup:
+    cleanup_notification(event, handle, &ovr);
+}
+
 void func_NotifyRouteChange(void)
 {
     OVERLAPPED ovr = {0};
@@ -99,6 +126,8 @@ void func_NotifyRouteChange(void)
     error = DeleteIpForwardEntry(&route);
     if (error == NO_ERROR && added)
         wait_for_notification(event, &ovr, "delete");
+
+    test_cancel();
 
 cleanup:
     cleanup_notification(event, handle, &ovr);
