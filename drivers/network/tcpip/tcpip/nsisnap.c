@@ -94,7 +94,7 @@ NTSTATUS IfInfoIp4Addresses(UINT Index, PIP4_ADDRESS_ROW Rows, ULONG Capacity, P
     {
         IfInfoFree(Entries);
         Allocated = Total;
-        Entries = ExAllocatePoolWithTag(PagedPool, Allocated * sizeof(IPADDR_ENTRY), SNAPSHOT_TAG);
+        Entries = ExAllocatePoolWithTag(NonPagedPool, Allocated * sizeof(IPADDR_ENTRY), SNAPSHOT_TAG);
         if (!Entries)
         {
             IPDereferenceInterface(Interface);
@@ -151,7 +151,7 @@ NTSTATUS IfInfoIp4Routes(UINT Index, PIP4_ROUTE_ROW Rows, ULONG Capacity, PULONG
     {
         IfInfoFree(Fibs);
         Allocated = Total;
-        Fibs = ExAllocatePoolWithTag(PagedPool, Allocated * sizeof(FIB_ENTRY), SNAPSHOT_TAG);
+        Fibs = ExAllocatePoolWithTag(NonPagedPool, Allocated * sizeof(FIB_ENTRY), SNAPSHOT_TAG);
         if (!Fibs)
         {
             IPDereferenceInterface(Interface);
@@ -211,7 +211,7 @@ NTSTATUS IfInfoIp4Neighbors(UINT Index, PIP4_NEIGHBOR_ROW Rows, ULONG Capacity, 
     {
         IfInfoFree(Entries);
         Allocated = Total;
-        Entries = ExAllocatePoolWithTag(PagedPool, Allocated * sizeof(IPARP_ENTRY), SNAPSHOT_TAG);
+        Entries = ExAllocatePoolWithTag(NonPagedPool, Allocated * sizeof(IPARP_ENTRY), SNAPSHOT_TAG);
         if (!Entries)
         {
             IPDereferenceInterface(Interface);
