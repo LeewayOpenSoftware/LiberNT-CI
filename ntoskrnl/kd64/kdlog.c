@@ -160,6 +160,7 @@ static VOID NTAPI KdpBootLogThread(_In_ PVOID Context)
     ULONG Length;
     BOOLEAN Dirty = FALSE;
     BOOLEAN Trimmed = FALSE;
+    BOOLEAN First = TRUE;
 
     UNREFERENCED_PARAMETER(Context);
 
@@ -168,6 +169,16 @@ static VOID NTAPI KdpBootLogThread(_In_ PVOID Context)
     {
         Length = KdpCopyPrintBufferFrom(&KdpBootLogPosition, KdpBootLogBuffer, sizeof(KdpBootLogBuffer), &Lost);
         Dirty = Dirty || (Lost != 0) || (Length != 0);
+        if (First)
+        {
+            /* The log opens after BootExecute, so KD output printed before the
+             * open was buffered in the bounded KD print ring; if the ring
+             * overflowed, this first drain reports how much was dropped (it is
+             * still on the debugger/serial). One line, to serial. */
+            if (Lost != 0)
+                DPRINT1("KD: boot log opened late; %I64u bytes of earlier output were dropped before open (serial only)\n", Lost);
+            First = FALSE;
+        }
         if (Lost != 0)
         {
             RtlStringCbPrintfA(Notice, sizeof(Notice), "\n[%I64u bytes of log output were lost before they could be written]\n", Lost);
