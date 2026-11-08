@@ -370,6 +370,74 @@ MasterFileTable::GetAttributeRangeDiskOffset(_In_ PFileRecord File,
     return STATUS_NOT_FOUND;
 }
 
+/*
+ * The bitmap extension and every bit set in it are sub-block writes, which the
+ * kernel environment holds back in its block cache. Commit them so the bits
+ * that describe a new chunk are on the disk before a record from that chunk
+ * is handed out; a cut in between otherwise leaves the chunk's bytes as the
+ * clusters' prior content under in-use bits with zero records behind them.
+ */
+NTSTATUS
+MasterFileTable::FlushMftBitmap()
+{
+    PAttribute BitmapAttribute;
+    ULONGLONG Remaining;
+    NTSTATUS Status;
+
+    if (!MFTFile || !DiskVolume)
+        return STATUS_INVALID_PARAMETER;
+
+    BitmapAttribute = MFTFile->GetAttribute(TypeBitmap, NULL);
+    if (!BitmapAttribute)
+        return STATUS_FILE_CORRUPT_ERROR;
+
+    if (!BitmapAttribute->IsNonResident)
+    {
+        /* A resident bitmap lives in the $MFT record itself. */
+        ULONGLONG DiskOffset;
+
+        Status = GetFileRecordDiskOffset(MFTFile->RecordNumber, &DiskOffset);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        return DiskVolume->FlushVolumeRange(DiskOffset, FileRecordSize);
+    }
+
+    if (BytesPerCluster(DiskVolume) == 0)
+        return STATUS_FILE_CORRUPT_ERROR;
+
+    Remaining = BitmapAttribute->NonResident.AllocatedSize;
+    for (PDataRun Run = MFTFile->GetCachedDataRuns(BitmapAttribute);
+         Run && Remaining != 0;
+         Run = Run->NextRun)
+    {
+        ULONGLONG RunBytes;
+        ULONGLONG Done = 0;
+
+        if (Run->Length == 0 ||
+            Run->Length > ~(ULONGLONG)0 / BytesPerCluster(DiskVolume))
+        {
+            return STATUS_FILE_CORRUPT_ERROR;
+        }
+        RunBytes = min(GetRunSize(Run), Remaining);
+        while (!Run->IsSparse && Done < RunBytes)
+        {
+            ULONG Chunk = (ULONG)min(RunBytes - Done, (ULONGLONG)0x100000);
+
+            Status = DiskVolume->FlushVolumeRange(
+                GetOffset(Run->LCN) + Done,
+                Chunk);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            Done += Chunk;
+        }
+        Remaining -= RunBytes;
+    }
+    if (Remaining != 0)
+        return STATUS_FILE_CORRUPT_ERROR;
+
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
 {
@@ -1126,6 +1194,15 @@ ScanAgain:
                     FileRecordSize);
                 if (!NT_SUCCESS(Status))
                     goto Done;
+                Status = FlushMftBitmap();
+                if (!NT_SUCCESS(Status))
+                {
+                    DPRINT1(
+                        "Flushing the $MFT bitmap after "
+                        "growth failed: 0x%lx.\n",
+                        Status);
+                    goto Done;
+                }
             }
         }
     }

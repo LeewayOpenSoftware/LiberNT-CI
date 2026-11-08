@@ -1830,6 +1830,10 @@ public:
     GetFileRecordDiskOffset(_In_ ULONGLONG RecordNumber,
                             _Out_ PULONGLONG DiskOffset);
 
+    /* Commits the $MFT bitmap bytes the environment holds back. */
+    NTSTATUS
+    FlushMftBitmap();
+
     NTSTATUS
     IsFileRecordNumberInUse(_In_  ULONG FileRecordNumber,
                             _Out_ PBOOLEAN InUse);
