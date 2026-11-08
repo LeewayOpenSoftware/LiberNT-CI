@@ -8,6 +8,7 @@ add_subdirectory(example)
 add_subdirectory(fltmgr)
 add_subdirectory(hidparse)
 add_subdirectory(kernel32)
+add_subdirectory(nsi)
 add_subdirectory(ntos_cc)
 add_subdirectory(ntos_io)
 add_subdirectory(ntos_mm)
@@ -517,6 +518,7 @@ list(APPEND KMTEST_SOURCE
     fltmgr/fltmgr_register/fltmgr_reg_user.c
 
     hidparse/HidP_user.c
+    nsi/nsi_store_user.c
     kernel32/FileAttributes_user.c
     kernel32/FindFile_user.c
     ntos_cc/CcCopyRead_user.c
@@ -578,6 +580,7 @@ add_dependencies(kmtest_drivers
     iohelper_drv
     ioreadwrite_drv
     kernel32_drv
+    nsistore_drv
     mmmaplockedpagesspecifycache_drv
     ntcreatesection_drv
     batteryclassnotify_drv

@@ -345,11 +345,15 @@ NTSTATUS
 WfpCreateDevice(
     _In_ PDRIVER_OBJECT DriverObject);
 
+VOID
+NsiInitialize(VOID);
+
 NTSTATUS NTAPI
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
     FUNCTION_TRACE;
 
+    NsiInitialize();
     return WfpCreateDevice(DriverObject);
 }
 
