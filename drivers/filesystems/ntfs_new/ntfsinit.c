@@ -856,8 +856,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NotifyUnlock = TRUE;
             }
         }
-        if (VolCB->OpenHandleCount > 0)
-            VolCB->OpenHandleCount--;
+        NtfsDropOpenHandle(VolCB, FileCB);
         FileCB->CleanupComplete = TRUE;
         FirstCleanup = TRUE;
         ExReleaseFastMutex(&VolCB->VolumeStateMutex);

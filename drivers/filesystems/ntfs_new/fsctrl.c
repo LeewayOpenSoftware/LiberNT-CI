@@ -1389,7 +1389,9 @@ NtfsLockOrUnlockVolume(
         if (VolCB->Dismounted)
             Status = STATUS_VOLUME_DISMOUNTED;
         else if (VolCB->VolumeLockOwner ||
-                 VolCB->OpenHandleCount != 1)
+                 VolCB->OpenHandleCount -
+                     (NtfsIsBootExecuteWindow(VolumeDeviceObject, VolCB)
+                          ? VolCB->BootLockNeutralHandleCount : 0) != 1)
             Status = STATUS_ACCESS_DENIED;
         else
         {
