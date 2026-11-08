@@ -563,10 +563,20 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     // Mount volume.
     FsRtlNotifyVolumeEvent(VolCB->StreamFileObject, FSRTL_VOLUME_MOUNT);
 
-    /* Receive IRP_MJ_SHUTDOWN so the volume's dirty flag is cleared on a clean
-     * shutdown (the system volume is flushed, not dismounted, at shutdown).
-     * Unregistered on dismount; see NtfsDismountVolume. */
-    IoRegisterShutdownNotification(FSDeviceObject);
+    /* Receive IRP_MJ_SHUTDOWN in I/O shutdown phase 1 (LAST-CHANCE), so the
+     * volume's dirty flag is cleared at the last write point. A phase-0
+     * (first-chance) clear runs BEFORE CmShutdownSystem flushes the registry
+     * hives, before Mm writes modified pages and before Cc flushes the cache -
+     * all of which write the boot volume after a phase-0 clean point and
+     * re-dirty it (J37 CS1: the hive flush left VOL_DIRTY=1 and autochk every
+     * boot). Last-chance fires after all of those, so NtfsFsdShutdown's
+     * NtfsDiskFlushKm commits those writes and MarkCleanForShutdown then clears
+     * with nothing left to re-dirty - which is also when Windows NTFS marks the
+     * volume clean (the FS shutdown in phase 1). The system volume is flushed,
+     * not dismounted, at shutdown. Unregistered on dismount
+     * (IoUnregisterShutdownNotification removes it from the last-chance list
+     * too); see NtfsDismountVolume. */
+    IoRegisterLastChanceShutdownNotification(FSDeviceObject);
 
     Status = STATUS_SUCCESS;
 
