@@ -560,6 +560,53 @@ typedef DWORD (WINAPI *PFN_NSI_ENUMERATE)(DWORD, DWORD, const NPI_MODULEID *, DW
 typedef DWORD (WINAPI *PFN_NSI_GET_PARAMETER)(DWORD, const NPI_MODULEID *, DWORD, const void *, DWORD, DWORD, void *, DWORD, DWORD);
 
 static void
+TestApiIpTables(
+    _In_ HANDLE Device,
+    _In_ PFN_NSI_ENUMERATE pEnumerate)
+{
+    static const struct { ADDRESS_FAMILY family; UINT table; UINT key4; UINT key6; } tables[4] =
+    {
+        { 0, NSI_IP_INTERFACE_TABLE, sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_key) },
+        { 0, NSI_IP_UNICAST_TABLE, sizeof(struct nsi_ipv4_unicast_key), sizeof(struct nsi_ipv6_unicast_key) },
+        { 0, NSI_IP_NEIGHBOUR_TABLE, sizeof(struct nsi_ipv4_neighbour_key), sizeof(struct nsi_ipv6_neighbour_key) },
+        { 0, NSI_IP_FORWARD_TABLE, sizeof(struct nsi_ipv4_forward_key), sizeof(struct nsi_ipv6_forward_key) },
+    };
+    UINT f, k, i, j;
+
+    for (f = 0; f < 2; f++)
+    {
+        const NPI_MODULEID *module = f == 0 ? &NPI_MS_IPV4_MODULEID : &NPI_MS_IPV6_MODULEID;
+
+        for (k = 0; k < 4; k++)
+        {
+            UINT key_size = f == 0 ? tables[k].key4 : tables[k].key6;
+            UINT sizes[4] = { key_size, 0, 0, 0 };
+            BYTE *dev = NULL, *api;
+            DWORD dev_count, api_count = TABLE_ROWS, err, matched = 0;
+
+            err = EnumerateTable(Device, module, tables[k].table, sizes, TABLE_ROWS, &dev, &dev_count);
+            api = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, TABLE_ROWS * key_size);
+            if (!skip(err == ERROR_SUCCESS && api != NULL, "family %u table %u through the device: %lu\n", f, tables[k].table, err))
+            {
+                err = pEnumerate(1, 1, module, tables[k].table, api, key_size, NULL, 0, NULL, 0, NULL, 0, &api_count);
+                ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+                ok(api_count == dev_count, "family %u table %u: api %lu rows, device %lu\n", f, tables[k].table, api_count, dev_count);
+                for (i = 0; i < api_count && i < TABLE_ROWS; i++)
+                    for (j = 0; j < dev_count && j < TABLE_ROWS; j++)
+                        if (memcmp(api + i * key_size, SECTION(dev, TABLE_ROWS, 0) + j * key_size, key_size) == 0)
+                        {
+                            matched++;
+                            break;
+                        }
+                ok(matched == min(api_count, (DWORD)TABLE_ROWS), "family %u table %u: %lu of %lu api keys found on the device\n", f, tables[k].table, matched, api_count);
+            }
+            if (api) HeapFree(GetProcessHeap(), 0, api);
+            if (dev) HeapFree(GetProcessHeap(), 0, dev);
+        }
+    }
+}
+
+static void
 TestApiBackend(
     _In_ HANDLE Device)
 {
@@ -623,6 +670,7 @@ TestApiBackend(
                 ok(luid.Value == api_keys[i].Value, "api index %u maps to luid %I64x, enumerated %I64x\n", api_stat[i].if_index, luid.Value, api_keys[i].Value);
             }
             ok(matched == api_count, "%lu of %lu api rows found on the device\n", matched, api_count);
+            TestApiIpTables(Device, pNsiEnumerateObjectsAllParameters);
 
             if (!skip(dev_count >= 2, "need two interfaces for the short-buffer check, have %lu\n", dev_count))
             {

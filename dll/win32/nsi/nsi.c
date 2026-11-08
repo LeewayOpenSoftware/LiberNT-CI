@@ -218,7 +218,8 @@ DWORD WINAPI NsiEnumerateObjectsAllParametersEx( struct nsi_enumerate_all_ex *pa
         ptr += params->dynamic_size * in.count;
         if (params->static_size) memcpy( params->static_data, ptr, params->static_size * copied );
 #ifdef __REACTOS__
-        nsi_reactos_overlay_rows( params->module, params->table, params->rw_size ? params->rw_data : NULL,
+        nsi_reactos_overlay_rows( params->module, params->table, params->key_size ? params->key_data : NULL,
+                                  params->rw_size ? params->rw_data : NULL,
                                   params->static_size ? params->static_data : NULL, copied );
 #endif
     }
@@ -307,7 +308,7 @@ DWORD WINAPI NsiGetAllParametersEx( struct nsi_get_all_parameters_ex *params )
         ptr += params->dynamic_size;
         if (params->static_size) memcpy( params->static_data, ptr, params->static_size );
 #ifdef __REACTOS__
-        nsi_reactos_overlay_rows( params->module, params->table, params->rw_size ? params->rw_data : NULL,
+        nsi_reactos_overlay_rows( params->module, params->table, params->key, params->rw_size ? params->rw_data : NULL,
                                   params->static_size ? params->static_data : NULL, 1 );
 #endif
     }

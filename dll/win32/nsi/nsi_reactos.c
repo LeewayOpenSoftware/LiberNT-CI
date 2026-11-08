@@ -1570,17 +1570,17 @@ static const struct nsi_table tables[] =
     {&NPI_MS_IPV4_MODULEID, NSI_IP_COMPARTMENT_TABLE, {sizeof(UINT), sizeof(struct nsi_ip_cmpt_rw), sizeof(struct nsi_ip_cmpt_dynamic), 0}, NULL, get_ipv4_compartment},
     {&NPI_MS_IPV4_MODULEID, NSI_IP_ICMPSTATS_TABLE, {0, 0, sizeof(struct nsi_ip_icmpstats_dynamic), 0}, NULL, get_ipv4_icmp},
     {&NPI_MS_IPV4_MODULEID, NSI_IP_IPSTATS_TABLE, {0, 0, sizeof(struct nsi_ip_ipstats_dynamic), sizeof(struct nsi_ip_ipstats_static)}, NULL, get_ipv4_stats},
-    {&NPI_MS_IPV4_MODULEID, NSI_IP_INTERFACE_TABLE, {sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw), sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)}, enumerate_ip_interface},
-    {&NPI_MS_IPV4_MODULEID, NSI_IP_UNICAST_TABLE, {sizeof(struct nsi_ipv4_unicast_key), sizeof(struct nsi_ip_unicast_rw), sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)}, enumerate_ipv4_unicast},
-    {&NPI_MS_IPV4_MODULEID, NSI_IP_NEIGHBOUR_TABLE, {sizeof(struct nsi_ipv4_neighbour_key), sizeof(struct nsi_ip_neighbour_rw), sizeof(struct nsi_ip_neighbour_dynamic), 0}, enumerate_ipv4_neighbour},
-    {&NPI_MS_IPV4_MODULEID, NSI_IP_FORWARD_TABLE, {sizeof(struct nsi_ipv4_forward_key), sizeof(struct nsi_ip_forward_rw), sizeof(struct nsi_ipv4_forward_dynamic), sizeof(struct nsi_ip_forward_static)}, enumerate_ipv4_forward},
+    {&NPI_MS_IPV4_MODULEID, NSI_IP_INTERFACE_TABLE, {sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw), sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)}, enumerate_ip_interface, NULL, TRUE},
+    {&NPI_MS_IPV4_MODULEID, NSI_IP_UNICAST_TABLE, {sizeof(struct nsi_ipv4_unicast_key), sizeof(struct nsi_ip_unicast_rw), sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)}, enumerate_ipv4_unicast, NULL, TRUE},
+    {&NPI_MS_IPV4_MODULEID, NSI_IP_NEIGHBOUR_TABLE, {sizeof(struct nsi_ipv4_neighbour_key), sizeof(struct nsi_ip_neighbour_rw), sizeof(struct nsi_ip_neighbour_dynamic), 0}, enumerate_ipv4_neighbour, NULL, TRUE},
+    {&NPI_MS_IPV4_MODULEID, NSI_IP_FORWARD_TABLE, {sizeof(struct nsi_ipv4_forward_key), sizeof(struct nsi_ip_forward_rw), sizeof(struct nsi_ipv4_forward_dynamic), sizeof(struct nsi_ip_forward_static)}, enumerate_ipv4_forward, NULL, TRUE},
     {&NPI_MS_IPV6_MODULEID, NSI_IP_COMPARTMENT_TABLE, {sizeof(UINT), sizeof(struct nsi_ip_cmpt_rw), sizeof(struct nsi_ip_cmpt_dynamic), 0}, NULL, get_ipv6_compartment},
     {&NPI_MS_IPV6_MODULEID, NSI_IP_ICMPSTATS_TABLE, {0, 0, sizeof(struct nsi_ip_icmpstats_dynamic), 0}, NULL, get_ipv6_icmp},
     {&NPI_MS_IPV6_MODULEID, NSI_IP_IPSTATS_TABLE, {0, 0, sizeof(struct nsi_ip_ipstats_dynamic), sizeof(struct nsi_ip_ipstats_static)}, NULL, get_ipv6_stats},
-    {&NPI_MS_IPV6_MODULEID, NSI_IP_INTERFACE_TABLE, {sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw), sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)}, enumerate_ipv6_interface},
-    {&NPI_MS_IPV6_MODULEID, NSI_IP_UNICAST_TABLE, {sizeof(struct nsi_ipv6_unicast_key), sizeof(struct nsi_ip_unicast_rw), sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)}, enumerate_ipv6_unicast},
-    {&NPI_MS_IPV6_MODULEID, NSI_IP_NEIGHBOUR_TABLE, {sizeof(struct nsi_ipv6_neighbour_key), sizeof(struct nsi_ip_neighbour_rw), sizeof(struct nsi_ip_neighbour_dynamic), 0}, enumerate_ipv6_neighbour},
-    {&NPI_MS_IPV6_MODULEID, NSI_IP_FORWARD_TABLE, {sizeof(struct nsi_ipv6_forward_key), sizeof(struct nsi_ip_forward_rw), sizeof(struct nsi_ipv6_forward_dynamic), sizeof(struct nsi_ip_forward_static)}, enumerate_ipv6_forward},
+    {&NPI_MS_IPV6_MODULEID, NSI_IP_INTERFACE_TABLE, {sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw), sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static)}, enumerate_ipv6_interface, NULL, TRUE},
+    {&NPI_MS_IPV6_MODULEID, NSI_IP_UNICAST_TABLE, {sizeof(struct nsi_ipv6_unicast_key), sizeof(struct nsi_ip_unicast_rw), sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static)}, enumerate_ipv6_unicast, NULL, TRUE},
+    {&NPI_MS_IPV6_MODULEID, NSI_IP_NEIGHBOUR_TABLE, {sizeof(struct nsi_ipv6_neighbour_key), sizeof(struct nsi_ip_neighbour_rw), sizeof(struct nsi_ip_neighbour_dynamic), 0}, enumerate_ipv6_neighbour, NULL, TRUE},
+    {&NPI_MS_IPV6_MODULEID, NSI_IP_FORWARD_TABLE, {sizeof(struct nsi_ipv6_forward_key), sizeof(struct nsi_ip_forward_rw), sizeof(struct nsi_ipv6_forward_dynamic), sizeof(struct nsi_ip_forward_static)}, enumerate_ipv6_forward, NULL, TRUE},
     {&NPI_MS_TCP_MODULEID, NSI_TCP_STATS_TABLE, {sizeof(USHORT), 0, sizeof(struct nsi_tcp_stats_dynamic), sizeof(struct nsi_tcp_stats_static)}, NULL, get_tcp_stats},
     {&NPI_MS_TCP_MODULEID, NSI_TCP_ALL_TABLE, {sizeof(struct nsi_tcp_conn_key), 0, sizeof(struct nsi_tcp_conn_dynamic), sizeof(struct nsi_tcp_conn_static)}, enumerate_tcp},
     {&NPI_MS_TCP_MODULEID, NSI_TCP_ESTAB_TABLE, {sizeof(struct nsi_tcp_conn_key), 0, sizeof(struct nsi_tcp_conn_dynamic), sizeof(struct nsi_tcp_conn_static)}, enumerate_tcp},
@@ -2020,13 +2020,23 @@ BOOL nsi_reactos_use_device(const NPI_MODULEID *module, UINT table)
     return TRUE;
 }
 
-void nsi_reactos_overlay_rows(const NPI_MODULEID *module, UINT table, void *rw_data, void *static_data, UINT count)
+void nsi_reactos_overlay_rows(const NPI_MODULEID *module, UINT table, const void *key_data, void *rw_data, void *static_data, UINT count)
 {
     struct nsi_ndis_ifinfo_rw *rw = rw_data;
     struct nsi_ndis_ifinfo_static *stat = static_data;
     WCHAR text[IF_MAX_STRING_SIZE + 1];
     UINT i;
 
+    if (module_equal(module, &NPI_MS_IPV4_MODULEID) && table == NSI_IP_UNICAST_TABLE)
+    {
+        const struct nsi_ipv4_unicast_key *keys = key_data;
+        struct nsi_ip_unicast_rw *unicast = rw_data;
+
+        if (!keys || !unicast) return;
+        for (i = 0; i < count; i++)
+            ipv4_unicast_origin(keys[i].luid.Info.NetLuidIndex, keys[i].addr.S_un.S_addr, &unicast[i]);
+        return;
+    }
     if (!module_equal(module, &NPI_MS_NDIS_MODULEID) || table != NSI_NDIS_IFINFO_TABLE || (!rw && !stat)) return;
     for (i = 0; i < count; i++)
     {
@@ -2039,6 +2049,8 @@ void nsi_reactos_overlay_rows(const NPI_MODULEID *module, UINT table, void *rw_d
 
 BOOL nsi_reactos_parameter_needs_overlay(const struct nsi_get_parameter_ex *params)
 {
+    if (module_equal(params->module, &NPI_MS_IPV4_MODULEID))
+        return params->table == NSI_IP_UNICAST_TABLE && params->param_type == NSI_PARAM_TYPE_RW;
     return module_equal(params->module, &NPI_MS_NDIS_MODULEID) && params->table == NSI_NDIS_IFINFO_TABLE &&
            (params->param_type == NSI_PARAM_TYPE_RW || params->param_type == NSI_PARAM_TYPE_STATIC);
 }
