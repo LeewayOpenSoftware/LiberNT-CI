@@ -420,16 +420,6 @@ TDI_STATUS InfoTdiSetRoute(PIP_INTERFACE IF, PVOID Buffer, UINT BufferSize)
 }
 
 static
-VOID
-InfoIp6CopyAddress(PCHAR TransportBuffer, PUCHAR Address, PUSHORT Port)
-{
-    PTA_IP6_ADDRESS Ta6 = (PTA_IP6_ADDRESS)TransportBuffer;
-
-    RtlCopyMemory(Address, Ta6->Address[0].Address[0].sin6_addr, 16);
-    *Port = Ta6->Address[0].Address[0].sin6_port;
-}
-
-static
 NTSTATUS
 InfoIp6QueryEndpoints(PUCHAR Buffer, ULONG Length, PULONG Count, PULONG Needed, PIP6_STATISTICS Stats)
 {
