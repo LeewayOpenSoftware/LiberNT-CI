@@ -435,6 +435,16 @@ VOID NTAPI KdShutdownBootLog(VOID)
         ZwClose(KdpBootLogHandle);
         KdpBootLogHandle = NULL;
     }
+    else
+    {
+        /* The writer did not confirm it stopped within the bounded wait, so the
+         * handle is deliberately left open rather than closed under a possibly
+         * still-running thread. That means this boot's shutdown trailer may
+         * still append and re-dirty the volume; log it so a lab can tell this
+         * path apart from the normal clean close. */
+        DPRINT1("KD: Boot log writer did not stop in time (0x%08lx); handle left open, volume may re-dirty this shutdown\n",
+                Status);
+    }
 }
 
 VOID NTAPI KdInitializeBootLog(_In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
