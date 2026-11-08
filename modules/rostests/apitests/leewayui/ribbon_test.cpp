@@ -158,7 +158,7 @@ static LRESULT CALLBACK MainWindowProc(HWND hwnd, UINT msg, WPARAM wparam, LPARA
     return DefWindowProc(hwnd, msg, wparam, lparam);
 }
 
-int WINAPI WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line, int show_cmd)
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE prev_instance, LPWSTR cmd_line, int show_cmd)
 {
     (void)prev_instance;
     (void)cmd_line;
