@@ -27,6 +27,11 @@ if(ENABLE_APPSMOKE_TESTS AND NOT ENABLE_ROSTESTS AND NOT ENABLE_ROSAUTOTEST_BOOT
     add_subdirectory(rostests/apitests/appsmoke)
 endif()
 
+# LeewayUI F0 prototype: built into the image for the single VM check; remove before merge
+if(NOT ENABLE_ROSTESTS AND NOT ENABLE_ROSAUTOTEST_BOOT_RUN)
+    add_subdirectory(rostests/apitests/leewayui)
+endif()
+
 add_subdirectory(wallpapers)
 
 if(ENABLE_ROSV)
