@@ -137,17 +137,17 @@ typedef struct _LLIP_BIND_INFO {
 } LLIP_BIND_INFO, *PLLIP_BIND_INFO;
 
 typedef struct _SEND_RECV_STATS {
-    UINT InBytes;
-    UINT InUnicast;
-    UINT InNUnicast;
-    UINT InDiscarded;
-    UINT InErrors;
-    UINT InDiscardedUnknownProto;
-    UINT OutBytes;
-    UINT OutUnicast;
-    UINT OutNUnicast;
-    UINT OutDiscarded;
-    UINT OutErrors;
+    ULONG64 InBytes;
+    ULONG64 InUnicast;
+    ULONG64 InNUnicast;
+    ULONG64 InDiscarded;
+    ULONG64 InErrors;
+    ULONG64 InDiscardedUnknownProto;
+    ULONG64 OutBytes;
+    ULONG64 OutUnicast;
+    ULONG64 OutNUnicast;
+    ULONG64 OutDiscarded;
+    ULONG64 OutErrors;
 } SEND_RECV_STATS, *PSEND_RECV_STATS;
 
 /* Information about an IP interface */
