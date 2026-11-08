@@ -123,10 +123,13 @@ public:
         HWND hMMButtons = GetDlgItem(IDC_TASKBARPROP_MMBUTTONS);
         if (hMMButtons)
         {
+            /* Item order is the stored value: the combo index is written to
+               the registry as MMTaskbarMode, which Windows defines as
+               0 = all taskbars, 1 = main + where open, 2 = where open. */
             SendMessageW(hMMButtons, CB_RESETCONTENT, 0, 0);
             SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"All taskbars");
-            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Taskbar where window is open");
             SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Main taskbar and taskbar where window is open");
+            SendMessageW(hMMButtons, CB_ADDSTRING, 0, (LPARAM)L"Taskbar where window is open");
             UINT uMode = g_TaskbarSettings.uMMTaskbarMode;
             if (uMode > 2)
                 uMode = 0;
