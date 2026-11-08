@@ -825,6 +825,314 @@ TiNsiDeregisterIp6(VOID)
     }
 }
 
+
+#define TI_NSI_IP4_INTERFACE 0
+#define TI_NSI_IP4_UNICAST 1
+#define TI_NSI_IP4_NEIGHBOUR 2
+#define TI_NSI_IP4_FORWARD 3
+
+static UINT
+TiNsiPrefixLength(
+    _In_ ULONG Mask)
+{
+    ULONG Value = RtlUlongByteSwap(Mask);
+    UINT Length = 0;
+
+    while (Value & 0x80000000)
+    {
+        Length++;
+        Value <<= 1;
+    }
+    return Length;
+}
+
+static VOID
+TiNsiFillIp4Interface(
+    _In_ const IF_INFO_KEY *Key,
+    _In_opt_ const IP4_INTERFACE_INFO *Info,
+    _In_ NET_LUID Luid,
+    _Out_opt_ struct nsi_ip_interface_key *OutKey,
+    _Out_opt_ struct nsi_ip_interface_rw *Rw,
+    _Out_opt_ struct nsi_ip_interface_dynamic *Dynamic,
+    _Out_opt_ struct nsi_ip_interface_static *Static)
+{
+    static const ULONG NoOverrides[ScopeLevelCount] = { 0 };
+
+    if (OutKey != NULL)
+        OutKey->luid = Luid;
+    if (Rw != NULL)
+    {
+        RtlZeroMemory(Rw, sizeof(*Rw));
+        Rw->metric = Info ? Info->Metric : 0;
+        Rw->base_reachable_time = Info ? Info->BaseReachableTime : 30000;
+        Rw->retransmit_time = Info ? Info->RetransmitTime : 1000;
+        Rw->path_mtu_discovery_timeout = Info ? Info->PathMtuDiscoveryTimeout : 600000;
+        Rw->dad_transmits = Key->Loopback ? 0 : Info ? Info->DadTransmits : 3;
+        Rw->router_discovery_behaviour = Info ? Info->RouterDiscoveryBehavior : RouterDiscoveryDhcp;
+        Rw->link_local_address_behavior = LinkLocalDelayed;
+        Rw->link_local_address_timeout = Info ? Info->LinkLocalAddressTimeout : 6500;
+        Rw->mtu = Key->Loopback ? ~0u : Info ? Info->Mtu : Key->Mtu;
+        Rw->site_prefix_len = Info ? Info->SitePrefixLength : 64;
+        TiNsiZoneIndices(Rw->zone_indices, Key->Index, Key->Loopback, Info ? Info->ZoneIndices : NoOverrides);
+    }
+    if (Dynamic != NULL)
+    {
+        RtlZeroMemory(Dynamic, sizeof(*Dynamic));
+        Dynamic->if_index = Key->Index;
+        Dynamic->reachable_time = Info ? Info->ReachableTime : 30000;
+        Dynamic->connected = Key->OperStatus == MIB_IF_OPER_STATUS_OPERATIONAL;
+    }
+    if (Static != NULL)
+        RtlZeroMemory(Static, sizeof(*Static));
+}
+
+static VOID
+TiNsiFillIp4Unicast(
+    _In_ const IF_INFO_KEY *Key,
+    _In_ const IP4_ADDRESS_ROW *Row,
+    _In_ NET_LUID Luid,
+    _Out_opt_ struct nsi_ipv4_unicast_key *OutKey,
+    _Out_opt_ struct nsi_ip_unicast_rw *Rw,
+    _Out_opt_ struct nsi_ip_unicast_dynamic *Dynamic,
+    _Out_opt_ struct nsi_ip_unicast_static *Static)
+{
+    if (OutKey != NULL)
+    {
+        RtlZeroMemory(OutKey, sizeof(*OutKey));
+        OutKey->luid = Luid;
+        OutKey->addr.S_un.S_addr = Row->Address;
+    }
+    if (Rw != NULL)
+    {
+        RtlZeroMemory(Rw, sizeof(*Rw));
+        Rw->preferred_lifetime = ~0u;
+        Rw->valid_lifetime = ~0u;
+        Rw->prefix_origin = Key->Loopback ? IpPrefixOriginWellKnown : IpPrefixOriginManual;
+        Rw->suffix_origin = Key->Loopback ? IpSuffixOriginWellKnown : IpSuffixOriginManual;
+        Rw->on_link_prefix = TiNsiPrefixLength(Row->Mask);
+    }
+    if (Dynamic != NULL)
+    {
+        RtlZeroMemory(Dynamic, sizeof(*Dynamic));
+        Dynamic->dad_state = Row->DadState;
+    }
+    if (Static != NULL)
+    {
+        RtlZeroMemory(Static, sizeof(*Static));
+        Static->creation_time = Row->CreationTime.QuadPart;
+    }
+}
+
+static NTSTATUS
+TiNsiIp4AddressesOf(
+    _In_ UINT Index,
+    _Outptr_result_maybenull_ PIP4_ADDRESS_ROW *Rows,
+    _Out_ PULONG Count)
+{
+    PIP4_ADDRESS_ROW Buffer = NULL;
+    ULONG Capacity = 0, Total = 0, Attempt;
+    NTSTATUS Status;
+
+    *Rows = NULL;
+    *Count = 0;
+    for (Attempt = 0; Attempt < 4; Attempt++)
+    {
+        Status = IfInfoIp4Addresses(Index, Buffer, Capacity, &Total);
+        if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW)
+        {
+            IfInfoFree(Buffer);
+            return Status == STATUS_NOT_FOUND ? STATUS_SUCCESS : Status;
+        }
+        if (Total <= Capacity)
+        {
+            *Rows = Buffer;
+            *Count = Total;
+            return STATUS_SUCCESS;
+        }
+        IfInfoFree(Buffer);
+        Capacity = Total + 2;
+        Buffer = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(IP4_ADDRESS_ROW), NSI_PROVIDER_TAG);
+        if (Buffer == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    ExFreePoolWithTag(Buffer, NSI_PROVIDER_TAG);
+    return STATUS_BUFFER_OVERFLOW;
+}
+
+static NTSTATUS
+TiNsiIp4Enumerate(
+    _In_ ULONG Table,
+    _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PIF_INFO_KEY Keys = NULL;
+    ULONG KeyCount = 0, Capacity = Request->Count, Written = 0, Total = 0, i, j;
+    NTSTATUS Status;
+
+    Status = TiNsiInterfaceKeys(&Keys, &KeyCount);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    for (i = 0; i < KeyCount && NT_SUCCESS(Status); i++)
+    {
+        NET_LUID Luid = TiNsiLuidForIndex(Keys, KeyCount, Keys[i].Index);
+
+        switch (Table)
+        {
+            case TI_NSI_IP4_INTERFACE:
+            {
+                IP4_INTERFACE_INFO Info;
+                BOOLEAN HaveInfo = NT_SUCCESS(IfInfoIp4Interface(Keys[i].Index, &Info));
+
+                if (Written < Capacity)
+                {
+                    TiNsiFillIp4Interface(&Keys[i], HaveInfo ? &Info : NULL, Luid,
+                                          Request->KeyData ? (struct nsi_ip_interface_key *)Request->KeyData + Written : NULL,
+                                          Request->RwData ? (struct nsi_ip_interface_rw *)Request->RwData + Written : NULL,
+                                          Request->DynamicData ? (struct nsi_ip_interface_dynamic *)Request->DynamicData + Written : NULL,
+                                          Request->StaticData ? (struct nsi_ip_interface_static *)Request->StaticData + Written : NULL);
+                    Written++;
+                }
+                Total++;
+                break;
+            }
+            case TI_NSI_IP4_UNICAST:
+            {
+                PIP4_ADDRESS_ROW Rows;
+                ULONG Count;
+
+                Status = TiNsiIp4AddressesOf(Keys[i].Index, &Rows, &Count);
+                for (j = 0; NT_SUCCESS(Status) && j < Count; j++)
+                {
+                    if (Written < Capacity)
+                    {
+                        TiNsiFillIp4Unicast(&Keys[i], &Rows[j], Luid,
+                                            Request->KeyData ? (struct nsi_ipv4_unicast_key *)Request->KeyData + Written : NULL,
+                                            Request->RwData ? (struct nsi_ip_unicast_rw *)Request->RwData + Written : NULL,
+                                            Request->DynamicData ? (struct nsi_ip_unicast_dynamic *)Request->DynamicData + Written : NULL,
+                                            Request->StaticData ? (struct nsi_ip_unicast_static *)Request->StaticData + Written : NULL);
+                        Written++;
+                    }
+                    Total++;
+                }
+                IfInfoFree(Rows);
+                break;
+            }
+            default:
+                Status = STATUS_INVALID_PARAMETER;
+                break;
+        }
+    }
+
+    IfInfoFree(Keys);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Request->Count = Total;
+    return Total > Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+TiNsiIp4InterfaceEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiIp4Enumerate(TI_NSI_IP4_INTERFACE, Request);
+}
+
+static NTSTATUS NTAPI
+TiNsiIp4UnicastEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiIp4Enumerate(TI_NSI_IP4_UNICAST, Request);
+}
+
+static const NSI_PROVIDER_DISPATCH TiNsiIp4Dispatch[4];
+
+static NTSTATUS NTAPI
+TiNsiIp4GetAll(
+    _In_opt_ PVOID Context,
+    _In_ ULONG FirstArg,
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_writes_bytes_opt_(0) PVOID Rw,
+    _Out_writes_bytes_opt_(0) PVOID Dynamic,
+    _Out_writes_bytes_opt_(0) PVOID Static)
+{
+    ULONG Table = (ULONG)(ULONG_PTR)Context;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(FirstArg);
+
+    if (Table >= 4 || KeySize != TiNsiIp4Dispatch[Table].RowSizes.Key)
+        return STATUS_INVALID_PARAMETER;
+    return TiNsiGetFromEnumeration(TiNsiIp4Enumerate, Table, &TiNsiIp4Dispatch[Table].RowSizes, Key, Rw, Dynamic, Static);
+}
+
+static const NSI_PROVIDER_DISPATCH TiNsiIp4Dispatch[4] =
+{
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_ip_interface_key), sizeof(struct nsi_ip_interface_rw), sizeof(struct nsi_ip_interface_dynamic), sizeof(struct nsi_ip_interface_static) },
+        TiNsiIp4InterfaceEnumerate,
+        TiNsiIp4GetAll,
+        NULL
+    },
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_ipv4_unicast_key), sizeof(struct nsi_ip_unicast_rw), sizeof(struct nsi_ip_unicast_dynamic), sizeof(struct nsi_ip_unicast_static) },
+        TiNsiIp4UnicastEnumerate,
+        TiNsiIp4GetAll,
+        NULL
+    },
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_ipv4_neighbour_key), sizeof(struct nsi_ip_neighbour_rw), sizeof(struct nsi_ip_neighbour_dynamic), 0 },
+        NULL,
+        TiNsiIp4GetAll,
+        NULL
+    },
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_ipv4_forward_key), sizeof(struct nsi_ip_forward_rw), sizeof(struct nsi_ipv4_forward_dynamic), sizeof(struct nsi_ip_forward_static) },
+        NULL,
+        TiNsiIp4GetAll,
+        NULL
+    },
+};
+
+static const ULONG TiNsiIp4Tables[4] = { NSI_IP_INTERFACE_TABLE, NSI_IP_UNICAST_TABLE, NSI_IP_NEIGHBOUR_TABLE, NSI_IP_FORWARD_TABLE };
+static PNSI_PROVIDER TiNsiIp4Providers[4];
+
+static VOID
+TiNsiRegisterIp4(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < 4; i++)
+    {
+        if (TiNsiIp4Dispatch[i].Enumerate == NULL)
+            continue;
+        if (!NT_SUCCESS(NsiRegisterProvider(&NPI_MS_IPV4_MODULEID, TiNsiIp4Tables[i], &TiNsiIp4Dispatch[i],
+                                            (PVOID)(ULONG_PTR)i, &TiNsiIp4Providers[i])))
+            TiNsiIp4Providers[i] = NULL;
+    }
+}
+
+static VOID
+TiNsiDeregisterIp4(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < 4; i++)
+    {
+        if (TiNsiIp4Providers[i] != NULL)
+        {
+            NsiDeregisterProvider(TiNsiIp4Providers[i]);
+            TiNsiIp4Providers[i] = NULL;
+        }
+    }
+}
+
 VOID
 TiNsiRegister(VOID)
 {
@@ -837,6 +1145,7 @@ TiNsiRegister(VOID)
                                         &TiNsiIndexLuidDispatch, NULL, &TiNsiIndexLuid)))
         TiNsiIndexLuid = NULL;
     TiNsiRegisterIp6();
+    TiNsiRegisterIp4();
 }
 
 VOID
@@ -855,6 +1164,7 @@ TiNsiDeregister(VOID)
 {
     PAGED_CODE();
 
+    TiNsiDeregisterIp4();
     TiNsiDeregisterIp6();
     if (TiNsiIfInfo != NULL)
     {
