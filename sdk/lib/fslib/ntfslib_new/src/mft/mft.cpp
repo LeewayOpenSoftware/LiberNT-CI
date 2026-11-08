@@ -438,8 +438,13 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
      * itself (same offset) needs no ordering against itself.
      */
     WriteStatus = STATUS_SUCCESS;
-    if (DiskVolume->IndexBarrierRecordOffset != 0)
+    if (DiskVolume->IndexBarrierRecordOffset != 0 &&
+        File->RecordNumber != MAXULONG)
     {
+        /* RecordNumber is a real MFT index here (the armed window only writes
+         * directory/split records, and the ASSERT above holds it). Guarding on
+         * the sentinel documents that and skips a needless offset resolve plus
+         * record-first commit for a write that carries no index entry. */
         WriteStatus = GetFileRecordDiskOffset(File->RecordNumber, &IndexDiskOffset);
         if (NT_SUCCESS(WriteStatus) &&
             IndexDiskOffset != DiskVolume->IndexBarrierRecordOffset)
