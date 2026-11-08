@@ -55,6 +55,7 @@ NewIrp(
 static
 NTSTATUS
 WaitIrp(
+    _In_ PCSTR Kind,
     _In_ PIRP Irp,
     _In_ PKEVENT Event,
     _In_ NTSTATUS Status,
@@ -67,19 +68,10 @@ WaitIrp(
         Timeout.QuadPart = -(LONGLONG)WSKECHO_IRP_TIMEOUT_MS * 10000;
         if (KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, &Timeout) == STATUS_TIMEOUT)
         {
-            ok(FALSE, "request did not complete within %u ms, cancelling it\n", WSKECHO_IRP_TIMEOUT_MS);
+            ok(FALSE, "%s did not complete within %u ms; cancelled, now waiting without limit for the provider to complete it\n", Kind, WSKECHO_IRP_TIMEOUT_MS);
             IoCancelIrp(Irp);
-            Timeout.QuadPart = -(LONGLONG)WSKECHO_CANCEL_TIMEOUT_MS * 10000;
-            if (KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, &Timeout) == STATUS_TIMEOUT)
-            {
-                ok(FALSE, "cancelled request still pending after %u ms\n", WSKECHO_CANCEL_TIMEOUT_MS);
-                if (Information != NULL)
-                {
-                    *Information = 0;
-                }
-                return STATUS_TIMEOUT;
-            }
-            trace("request completed after cancel with 0x%08lx\n", Irp->IoStatus.Status);
+            KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, NULL);
+            trace("%s completed after cancel with 0x%08lx\n", Kind, Irp->IoStatus.Status);
         }
     }
     Status = Irp->IoStatus.Status;
@@ -167,7 +159,7 @@ CreateSocket(
         return NULL;
     }
     Status = Npi->Dispatch->WskSocket(Npi->Client, Family, Type, Protocol, Flags, NULL, NULL, NULL, NULL, NULL, Irp);
-    Status = WaitIrp(Irp, &Event, Status, &Information);
+    Status = WaitIrp("WskSocket", Irp, &Event, Status, &Information);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
@@ -197,7 +189,7 @@ BindLoopback(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     Status = ((const WSK_PROVIDER_LISTEN_DISPATCH *)Basic)->WskBind(Socket, (PSOCKADDR)Address, 0, Irp);
-    Status = WaitIrp(Irp, &Event, Status, NULL);
+    Status = WaitIrp("WskBind", Irp, &Event, Status, NULL);
     IoFreeIrp(Irp);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
@@ -210,7 +202,7 @@ BindLoopback(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     Status = ((const WSK_PROVIDER_LISTEN_DISPATCH *)Basic)->WskGetLocalAddress(Socket, (PSOCKADDR)Address, Irp);
-    Status = WaitIrp(Irp, &Event, Status, NULL);
+    Status = WaitIrp("WskGetLocalAddress", Irp, &Event, Status, NULL);
     IoFreeIrp(Irp);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Address->sin_port != 0, "bound port is 0\n");
@@ -232,7 +224,7 @@ CloseSocket(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     Status = Basic->WskCloseSocket(Socket, Irp);
-    Status = WaitIrp(Irp, &Event, Status, NULL);
+    Status = WaitIrp("WskCloseSocket", Irp, &Event, Status, NULL);
     IoFreeIrp(Irp);
     ok_eq_hex(Status, STATUS_SUCCESS);
     return Status;
@@ -275,7 +267,7 @@ StreamTransfer(
             break;
         }
         RecvStatus = RecvDispatch->WskReceive(Receiver, &Partial, 0, RecvIrp);
-        RecvStatus = WaitIrp(RecvIrp, &RecvEvent, RecvStatus, &Information);
+        RecvStatus = WaitIrp("WskReceive", RecvIrp, &RecvEvent, RecvStatus, &Information);
         IoFreeIrp(RecvIrp);
         if (!NT_SUCCESS(RecvStatus) || Information == 0)
         {
@@ -284,7 +276,7 @@ StreamTransfer(
         }
         Received += (ULONG)Information;
     }
-    Status = WaitIrp(SendIrp, &SendEvent, Status, &Information);
+    Status = WaitIrp("WskSend", SendIrp, &SendEvent, Status, &Information);
     End = KeQueryPerformanceCounter(NULL);
     IoFreeIrp(SendIrp);
     ok_eq_hex(Status, STATUS_SUCCESS);
@@ -333,9 +325,9 @@ TestStream(
     }
     AcceptStatus = ListenDispatch->WskAccept(Listener, 0, NULL, NULL, NULL, NULL, AcceptIrp);
     ConnectStatus = ClientDispatch->WskConnect(Client, (PSOCKADDR)&ListenAddress, 0, ConnectIrp);
-    ConnectStatus = WaitIrp(ConnectIrp, &ConnectEvent, ConnectStatus, NULL);
+    ConnectStatus = WaitIrp("WskConnect", ConnectIrp, &ConnectEvent, ConnectStatus, NULL);
     ok_eq_hex(ConnectStatus, STATUS_SUCCESS);
-    AcceptStatus = WaitIrp(AcceptIrp, &AcceptEvent, AcceptStatus, &Information);
+    AcceptStatus = WaitIrp("WskAccept", AcceptIrp, &AcceptEvent, AcceptStatus, &Information);
     ok_eq_hex(AcceptStatus, STATUS_SUCCESS);
     if (NT_SUCCESS(AcceptStatus))
     {
@@ -365,7 +357,7 @@ TestStream(
             Delay.QuadPart = -200 * 10000;
             KeDelayExecutionThread(KernelMode, FALSE, &Delay);
             ok(IoCancelIrp(RecvIrp), "IoCancelIrp found no cancel routine on a pending receive\n");
-            Status = WaitIrp(RecvIrp, &RecvEvent, STATUS_PENDING, &Information);
+            Status = WaitIrp("WskReceive", RecvIrp, &RecvEvent, STATUS_PENDING, &Information);
             ok_eq_hex(Status, STATUS_CANCELLED);
             IoFreeIrp(RecvIrp);
         }
@@ -381,11 +373,11 @@ TestStream(
             {
                 NTSTATUS DisconnectStatus = ClientDispatch->WskDisconnect(Client, NULL, 0, DisconnectIrp);
 
-                DisconnectStatus = WaitIrp(DisconnectIrp, &DisconnectEvent, DisconnectStatus, NULL);
+                DisconnectStatus = WaitIrp("WskDisconnect", DisconnectIrp, &DisconnectEvent, DisconnectStatus, NULL);
                 ok_eq_hex(DisconnectStatus, STATUS_SUCCESS);
                 IoFreeIrp(DisconnectIrp);
             }
-            Status = WaitIrp(RecvIrp, &RecvEvent, Status, &Information);
+            Status = WaitIrp("WskReceive", RecvIrp, &RecvEvent, Status, &Information);
             trace("receive after the peer's graceful disconnect: 0x%08lx, %Iu bytes\n", Status, Information);
             ok(NT_SUCCESS(Status) && Information == 0, "graceful disconnect did not complete the receive with 0 bytes\n");
             IoFreeIrp(RecvIrp);
@@ -458,10 +450,10 @@ TestDatagram(
     {
         RecvStatus = DispatchB->WskReceiveFrom(B, &In.Buf, 0, (PSOCKADDR)&From, &ControlLength, NULL, &ControlFlags, RecvIrp);
         SendStatus = DispatchA->WskSendTo(A, &Out.Buf, 0, (PSOCKADDR)&AddressB, 0, NULL, SendIrp);
-        SendStatus = WaitIrp(SendIrp, &SendEvent, SendStatus, &Information);
+        SendStatus = WaitIrp("WskSendTo", SendIrp, &SendEvent, SendStatus, &Information);
         ok_eq_hex(SendStatus, STATUS_SUCCESS);
         ok_eq_ulong((ULONG)Information, (ULONG)WSKECHO_DATAGRAM_BYTES);
-        RecvStatus = WaitIrp(RecvIrp, &RecvEvent, RecvStatus, &Information);
+        RecvStatus = WaitIrp("WskReceiveFrom", RecvIrp, &RecvEvent, RecvStatus, &Information);
         ok_eq_hex(RecvStatus, STATUS_SUCCESS);
         ok_eq_ulong((ULONG)Information, (ULONG)WSKECHO_DATAGRAM_BYTES);
         ok(RtlCompareMemory(Out.Memory, In.Memory, WSKECHO_DATAGRAM_BYTES) == WSKECHO_DATAGRAM_BYTES, "datagram payload differs\n");
