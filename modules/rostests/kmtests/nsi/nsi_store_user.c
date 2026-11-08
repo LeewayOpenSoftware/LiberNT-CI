@@ -445,6 +445,182 @@ done:
     if (ifinfo) HeapFree(GetProcessHeap(), 0, ifinfo);
 }
 
+static DWORD
+FindEndpointRows(
+    _In_ const BYTE *Out,
+    _In_ DWORD Count,
+    _In_ UINT KeySize,
+    _In_ UINT DynamicSize,
+    _In_ const SOCKADDR_IN *Local,
+    _In_opt_ const SOCKADDR_IN *Remote,
+    _In_ int State,
+    _Out_ DWORD *Index)
+{
+    DWORD i, found = 0;
+
+    *Index = 0;
+    for (i = 0; i < Count && i < TABLE_ROWS; i++)
+    {
+        const SOCKADDR_INET *key = (const SOCKADDR_INET *)(SECTION(Out, TABLE_ROWS, 0) + i * KeySize);
+
+        if (key[0].si_family != AF_INET || key[0].Ipv4.sin_port != Local->sin_port ||
+            key[0].Ipv4.sin_addr.S_un.S_addr != Local->sin_addr.S_un.S_addr)
+            continue;
+        if (Remote != NULL && (key[1].si_family != AF_INET || key[1].Ipv4.sin_port != Remote->sin_port ||
+                               key[1].Ipv4.sin_addr.S_un.S_addr != Remote->sin_addr.S_un.S_addr))
+            continue;
+        if (State >= 0 && DynamicSize != 0 &&
+            ((const struct nsi_tcp_conn_dynamic *)SECTION(Out, TABLE_ROWS, KeySize) + i)->state != (UINT)State)
+            continue;
+        if (found == 0)
+            *Index = i;
+        found++;
+    }
+    return found;
+}
+
+static DWORD
+ApiEndpointCount(
+    _In_ BOOL Tcp,
+    _In_ ULONG Family)
+{
+    DWORD size = 0, count = 0, err;
+    void *table;
+
+    err = Tcp ? GetExtendedTcpTable(NULL, &size, FALSE, Family, TCP_TABLE_OWNER_PID_ALL, 0)
+              : GetExtendedUdpTable(NULL, &size, FALSE, Family, UDP_TABLE_OWNER_PID, 0);
+    if (err != ERROR_INSUFFICIENT_BUFFER || size < sizeof(DWORD))
+        return 0;
+    table = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, size);
+    if (table == NULL)
+        return 0;
+    err = Tcp ? GetExtendedTcpTable(table, &size, FALSE, Family, TCP_TABLE_OWNER_PID_ALL, 0)
+              : GetExtendedUdpTable(table, &size, FALSE, Family, UDP_TABLE_OWNER_PID, 0);
+    if (err == NO_ERROR)
+        count = *(DWORD *)table;
+    HeapFree(GetProcessHeap(), 0, table);
+    return count;
+}
+
+static void
+TestDeviceEndpoints(
+    _In_ HANDLE Device)
+{
+    const UINT tcp_sizes[4] = { sizeof(struct nsi_tcp_conn_key), 0, sizeof(struct nsi_tcp_conn_dynamic), sizeof(struct nsi_tcp_conn_static) };
+    const UINT udp_sizes[4] = { sizeof(struct nsi_udp_endpoint_key), 0, 0, sizeof(struct nsi_udp_endpoint_static) };
+    WSADATA wsa;
+    SOCKET listener = INVALID_SOCKET, client = INVALID_SOCKET, accepted = INVALID_SOCKET, udp = INVALID_SOCKET;
+    SOCKADDR_IN listen_addr, client_addr, udp_addr;
+    int len;
+    BYTE *all = NULL, *estab = NULL, *listen_rows = NULL, *endpoint = NULL;
+    DWORD count_all = 0, count_estab = 0, count_listen = 0, count_udp = 0, index, found, err;
+    DWORD api_tcp_before, api_tcp_after, api_udp_before, api_udp_after;
+    const struct nsi_tcp_conn_static *stat;
+    const struct nsi_udp_endpoint_static *ustat;
+
+    if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
+    {
+        skip(FALSE, "WSAStartup failed: %d\n", WSAGetLastError());
+        return;
+    }
+    listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    client = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    udp = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (skip(listener != INVALID_SOCKET && client != INVALID_SOCKET && udp != INVALID_SOCKET, "sockets not created: %d\n", WSAGetLastError()))
+        goto done;
+
+    memset(&listen_addr, 0, sizeof(listen_addr));
+    listen_addr.sin_family = AF_INET;
+    listen_addr.sin_addr.S_un.S_addr = htonl(INADDR_LOOPBACK);
+    udp_addr = listen_addr;
+    if (skip(bind(listener, (SOCKADDR *)&listen_addr, sizeof(listen_addr)) == 0 && listen(listener, 1) == 0 &&
+             bind(udp, (SOCKADDR *)&udp_addr, sizeof(udp_addr)) == 0, "loopback bind or listen failed: %d\n", WSAGetLastError()))
+        goto done;
+    len = sizeof(listen_addr);
+    getsockname(listener, (SOCKADDR *)&listen_addr, &len);
+    len = sizeof(udp_addr);
+    getsockname(udp, (SOCKADDR *)&udp_addr, &len);
+    if (skip(connect(client, (SOCKADDR *)&listen_addr, sizeof(listen_addr)) == 0, "loopback connect failed: %d\n", WSAGetLastError()))
+        goto done;
+    len = sizeof(client_addr);
+    getsockname(client, (SOCKADDR *)&client_addr, &len);
+    accepted = accept(listener, NULL, NULL);
+    ok(accepted != INVALID_SOCKET, "accept failed: %d\n", WSAGetLastError());
+
+    api_tcp_before = ApiEndpointCount(TRUE, AF_INET) + ApiEndpointCount(TRUE, AF_INET6);
+    api_udp_before = ApiEndpointCount(FALSE, AF_INET) + ApiEndpointCount(FALSE, AF_INET6);
+    err = EnumerateTable(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_ALL_TABLE, tcp_sizes, TABLE_ROWS, &all, &count_all);
+    if (skip(err != ERROR_NOT_FOUND, "tcpip does not provide the TCP connection tables yet\n"))
+        goto done;
+    ok(err == ERROR_SUCCESS || err == ERROR_MORE_DATA, "TCP ALL enumerate: %lu\n", err);
+    err = EnumerateTable(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_ESTAB_TABLE, tcp_sizes, TABLE_ROWS, &estab, &count_estab);
+    ok(err == ERROR_SUCCESS || err == ERROR_MORE_DATA, "TCP ESTAB enumerate: %lu\n", err);
+    err = EnumerateTable(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_LISTEN_TABLE, tcp_sizes, TABLE_ROWS, &listen_rows, &count_listen);
+    ok(err == ERROR_SUCCESS || err == ERROR_MORE_DATA, "TCP LISTEN enumerate: %lu\n", err);
+    err = EnumerateTable(Device, &NPI_MS_UDP_MODULEID, NSI_UDP_ENDPOINT_TABLE, udp_sizes, TABLE_ROWS, &endpoint, &count_udp);
+    ok(err == ERROR_SUCCESS || err == ERROR_MORE_DATA, "UDP ENDPOINT enumerate: %lu\n", err);
+    api_tcp_after = ApiEndpointCount(TRUE, AF_INET) + ApiEndpointCount(TRUE, AF_INET6);
+    api_udp_after = ApiEndpointCount(FALSE, AF_INET) + ApiEndpointCount(FALSE, AF_INET6);
+    trace("device: %lu all, %lu estab, %lu listen, %lu udp; api: %lu tcp, %lu udp\n",
+          count_all, count_estab, count_listen, count_udp, api_tcp_after, api_udp_after);
+
+    found = FindEndpointRows(listen_rows, count_listen, tcp_sizes[0], tcp_sizes[2], &listen_addr, NULL, -1, &index);
+    ok_eq_ulong(found, 1UL);
+    if (found == 1 && index < TABLE_ROWS)
+    {
+        ok_eq_ulong((ULONG)((const struct nsi_tcp_conn_dynamic *)SECTION(listen_rows, TABLE_ROWS, tcp_sizes[0]) + index)->state, (ULONG)MIB_TCP_STATE_LISTEN);
+        stat = (const struct nsi_tcp_conn_static *)SECTION(listen_rows, TABLE_ROWS, tcp_sizes[0] + tcp_sizes[2]) + index;
+        ok_eq_ulong((ULONG)stat->pid, GetCurrentProcessId());
+        ok(stat->create_time != 0, "listener has no creation time\n");
+    }
+    found = FindEndpointRows(all, count_all, tcp_sizes[0], tcp_sizes[2], &listen_addr, NULL, MIB_TCP_STATE_LISTEN, &index);
+    ok_eq_ulong(found, 1UL);
+    found = FindEndpointRows(estab, count_estab, tcp_sizes[0], tcp_sizes[2], &client_addr, &listen_addr, -1, &index);
+    ok_eq_ulong(found, 1UL);
+    if (found == 1 && index < TABLE_ROWS)
+    {
+        ok_eq_ulong((ULONG)((const struct nsi_tcp_conn_dynamic *)SECTION(estab, TABLE_ROWS, tcp_sizes[0]) + index)->state, (ULONG)MIB_TCP_STATE_ESTAB);
+        stat = (const struct nsi_tcp_conn_static *)SECTION(estab, TABLE_ROWS, tcp_sizes[0] + tcp_sizes[2]) + index;
+        ok_eq_ulong((ULONG)stat->pid, GetCurrentProcessId());
+    }
+    found = FindEndpointRows(estab, count_estab, tcp_sizes[0], tcp_sizes[2], &listen_addr, &client_addr, -1, &index);
+    ok_eq_ulong(found, 1UL);
+    found = FindEndpointRows(all, count_all, tcp_sizes[0], tcp_sizes[2], &client_addr, &listen_addr, MIB_TCP_STATE_ESTAB, &index);
+    ok_eq_ulong(found, 1UL);
+    found = FindEndpointRows(all, count_all, tcp_sizes[0], tcp_sizes[2], &listen_addr, &client_addr, MIB_TCP_STATE_ESTAB, &index);
+    ok_eq_ulong(found, 1UL);
+    ok(count_estab <= count_all && count_listen <= count_all, "ESTAB %lu or LISTEN %lu exceeds ALL %lu\n", count_estab, count_listen, count_all);
+
+    found = FindEndpointRows(endpoint, count_udp, udp_sizes[0], 0, &udp_addr, NULL, -1, &index);
+    ok_eq_ulong(found, 1UL);
+    if (found == 1 && index < TABLE_ROWS)
+    {
+        ustat = (const struct nsi_udp_endpoint_static *)SECTION(endpoint, TABLE_ROWS, udp_sizes[0]) + index;
+        ok_eq_ulong((ULONG)ustat->pid, GetCurrentProcessId());
+        ok(ustat->create_time != 0, "UDP endpoint has no creation time\n");
+    }
+
+    if (api_tcp_before == api_tcp_after)
+        ok_eq_ulong(count_all, api_tcp_after);
+    else
+        trace("TCP table changed under the test (%lu -> %lu), count not compared\n", api_tcp_before, api_tcp_after);
+    if (api_udp_before == api_udp_after)
+        ok_eq_ulong(count_udp, api_udp_after);
+    else
+        trace("UDP table changed under the test (%lu -> %lu), count not compared\n", api_udp_before, api_udp_after);
+
+done:
+    if (endpoint) HeapFree(GetProcessHeap(), 0, endpoint);
+    if (listen_rows) HeapFree(GetProcessHeap(), 0, listen_rows);
+    if (estab) HeapFree(GetProcessHeap(), 0, estab);
+    if (all) HeapFree(GetProcessHeap(), 0, all);
+    if (accepted != INVALID_SOCKET) closesocket(accepted);
+    if (client != INVALID_SOCKET) closesocket(client);
+    if (listener != INVALID_SOCKET) closesocket(listener);
+    if (udp != INVALID_SOCKET) closesocket(udp);
+    WSACleanup();
+}
+
 #define NOTIFY_LIMIT_MS 1000
 
 static DWORD ArmNotification(_In_ HANDLE Device, _In_ const NPI_MODULEID *Module, _In_ UINT Table, _Inout_ OVERLAPPED *Overlapped);
@@ -797,6 +973,7 @@ START_TEST(NsiStore)
         TestDeviceInterfaces(device);
         TestDeviceIpTables(device, AF_INET6);
         TestDeviceIpTables(device, AF_INET);
+        TestDeviceEndpoints(device);
         TestDeviceIpNotifications();
         TestApiBackend(device);
         CloseHandle(device);

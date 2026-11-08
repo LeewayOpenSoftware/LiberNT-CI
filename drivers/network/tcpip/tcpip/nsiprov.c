@@ -24,6 +24,7 @@
 typedef UCHAR BYTE;
 typedef ULONG DWORD;
 typedef struct _OVERLAPPED OVERLAPPED;
+#include <tcpmib.h>
 #define WINAPI NTAPI
 
 #define _WINIOCTL_
@@ -1580,6 +1581,268 @@ TiNsiDeregisterIp4(VOID)
 }
 
 
+#define TI_NSI_TCP_ALL 0
+#define TI_NSI_TCP_ESTAB 1
+#define TI_NSI_TCP_LISTEN 2
+#define TI_NSI_UDP_ENDPOINT 3
+#define TI_NSI_ENDPOINT_FIRST_CAPACITY 64
+
+static VOID
+TiNsiFillSockaddr(
+    _Out_ SOCKADDR_INET *Address,
+    _In_ ULONG Family,
+    _In_reads_(16) const UCHAR *Bytes,
+    _In_ ULONG ScopeId,
+    _In_ USHORT Port)
+{
+    RtlZeroMemory(Address, sizeof(*Address));
+    if (Family == TI_NSI_FAMILY_IPV6)
+    {
+        Address->Ipv6.sin6_family = AF_INET6;
+        RtlCopyMemory(&Address->Ipv6.sin6_addr, Bytes, sizeof(Address->Ipv6.sin6_addr));
+        Address->Ipv6.sin6_scope_id = ScopeId;
+        Address->Ipv6.sin6_port = Port;
+    }
+    else
+    {
+        Address->Ipv4.sin_family = AF_INET;
+        RtlCopyMemory(&Address->Ipv4.sin_addr, Bytes, sizeof(Address->Ipv4.sin_addr));
+        Address->Ipv4.sin_port = Port;
+    }
+}
+
+static BOOLEAN
+TiNsiEndpointWanted(
+    _In_ ULONG Table,
+    _In_ const ENDPOINT_ROW *Row)
+{
+    switch (Table)
+    {
+        case TI_NSI_TCP_ALL:
+            return Row->Protocol == IFINFO_PROTOCOL_TCP;
+        case TI_NSI_TCP_ESTAB:
+            return Row->Protocol == IFINFO_PROTOCOL_TCP && Row->State == MIB_TCP_STATE_ESTAB;
+        case TI_NSI_TCP_LISTEN:
+            return Row->Protocol == IFINFO_PROTOCOL_TCP && Row->State == MIB_TCP_STATE_LISTEN;
+        default:
+            return Row->Protocol == IFINFO_PROTOCOL_UDP;
+    }
+}
+
+static VOID
+TiNsiFillEndpoint(
+    _In_ ULONG Table,
+    _In_ const ENDPOINT_ROW *Row,
+    _In_ ULONG Index,
+    _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    if (Table == TI_NSI_UDP_ENDPOINT)
+    {
+        if (Request->KeyData != NULL)
+        {
+            struct nsi_udp_endpoint_key *Key = (struct nsi_udp_endpoint_key *)Request->KeyData + Index;
+
+            TiNsiFillSockaddr(&Key->local, Row->Family, Row->LocalAddress, Row->LocalScopeId, Row->LocalPort);
+        }
+        if (Request->StaticData != NULL)
+        {
+            struct nsi_udp_endpoint_static *Static = (struct nsi_udp_endpoint_static *)Request->StaticData + Index;
+
+            RtlZeroMemory(Static, sizeof(*Static));
+            Static->pid = Row->Pid;
+            Static->create_time = Row->CreateTime.QuadPart;
+            Static->mod_info = Row->ModuleInfo;
+        }
+        return;
+    }
+    if (Request->KeyData != NULL)
+    {
+        struct nsi_tcp_conn_key *Key = (struct nsi_tcp_conn_key *)Request->KeyData + Index;
+
+        TiNsiFillSockaddr(&Key->local, Row->Family, Row->LocalAddress, Row->LocalScopeId, Row->LocalPort);
+        TiNsiFillSockaddr(&Key->remote, Row->Family, Row->RemoteAddress, Row->RemoteScopeId, Row->RemotePort);
+    }
+    if (Request->DynamicData != NULL)
+    {
+        struct nsi_tcp_conn_dynamic *Dynamic = (struct nsi_tcp_conn_dynamic *)Request->DynamicData + Index;
+
+        RtlZeroMemory(Dynamic, sizeof(*Dynamic));
+        Dynamic->state = Row->State;
+    }
+    if (Request->StaticData != NULL)
+    {
+        struct nsi_tcp_conn_static *Static = (struct nsi_tcp_conn_static *)Request->StaticData + Index;
+
+        RtlZeroMemory(Static, sizeof(*Static));
+        Static->pid = Row->Pid;
+        Static->create_time = Row->CreateTime.QuadPart;
+        Static->mod_info = Row->ModuleInfo;
+    }
+}
+
+static NTSTATUS
+TiNsiEndpointEnumerate(
+    _In_ ULONG Table,
+    _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PENDPOINT_ROW Rows = NULL;
+    ULONG Protocol = Table == TI_NSI_UDP_ENDPOINT ? IFINFO_PROTOCOL_UDP : IFINFO_PROTOCOL_TCP;
+    ULONG Capacity = TI_NSI_ENDPOINT_FIRST_CAPACITY, Count = 0, Available = 0, i, Attempt;
+    NTSTATUS Status = STATUS_INSUFFICIENT_RESOURCES;
+
+    PAGED_CODE();
+
+    for (Attempt = 0; Attempt < 4; Attempt++)
+    {
+        Rows = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(*Rows), NSI_PROVIDER_TAG);
+        if (Rows == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        Status = IfInfoEndpoints(IFINFO_FAMILY_ANY, Protocol, Rows, Capacity, &Count);
+        if (Status != STATUS_BUFFER_OVERFLOW)
+            break;
+        ExFreePoolWithTag(Rows, NSI_PROVIDER_TAG);
+        Rows = NULL;
+        if (Count > TI_NSI_MAX_ROWS)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        Capacity = Count + 16;
+    }
+    if (Rows == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    if (NT_SUCCESS(Status))
+    {
+        for (i = 0; i < Count; i++)
+        {
+            if (!TiNsiEndpointWanted(Table, &Rows[i]))
+                continue;
+            if (Available < Request->Count)
+                TiNsiFillEndpoint(Table, &Rows[i], Available, Request);
+            Available++;
+        }
+        Status = Available > Request->Count ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
+        Request->Count = Available;
+    }
+    ExFreePoolWithTag(Rows, NSI_PROVIDER_TAG);
+    return Status;
+}
+
+static NTSTATUS NTAPI
+TiNsiTcpAllEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiEndpointEnumerate(TI_NSI_TCP_ALL, Request);
+}
+
+static NTSTATUS NTAPI
+TiNsiTcpEstabEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiEndpointEnumerate(TI_NSI_TCP_ESTAB, Request);
+}
+
+static NTSTATUS NTAPI
+TiNsiTcpListenEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiEndpointEnumerate(TI_NSI_TCP_LISTEN, Request);
+}
+
+static NTSTATUS NTAPI
+TiNsiUdpEndpointEnumerate(_In_opt_ PVOID Context, _Inout_ PNSI_ENUMERATE_REQUEST Request)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    return TiNsiEndpointEnumerate(TI_NSI_UDP_ENDPOINT, Request);
+}
+
+static const NSI_PROVIDER_DISPATCH TiNsiEndpointDispatch[4];
+
+static NTSTATUS NTAPI
+TiNsiEndpointGetAll(
+    _In_opt_ PVOID Context,
+    _In_ ULONG FirstArg,
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_writes_bytes_opt_(0) PVOID Rw,
+    _Out_writes_bytes_opt_(0) PVOID Dynamic,
+    _Out_writes_bytes_opt_(0) PVOID Static)
+{
+    ULONG Table = (ULONG)(ULONG_PTR)Context;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(FirstArg);
+
+    if (Table >= 4 || KeySize != TiNsiEndpointDispatch[Table].RowSizes.Key)
+        return STATUS_INVALID_PARAMETER;
+    return TiNsiGetFromEnumeration(TiNsiEndpointEnumerate, Table, &TiNsiEndpointDispatch[Table].RowSizes, Key, Rw, Dynamic, Static);
+}
+
+static const NSI_PROVIDER_DISPATCH TiNsiEndpointDispatch[4] =
+{
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_tcp_conn_key), 0, sizeof(struct nsi_tcp_conn_dynamic), sizeof(struct nsi_tcp_conn_static) },
+        TiNsiTcpAllEnumerate,
+        TiNsiEndpointGetAll,
+        NULL
+    },
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_tcp_conn_key), 0, sizeof(struct nsi_tcp_conn_dynamic), sizeof(struct nsi_tcp_conn_static) },
+        TiNsiTcpEstabEnumerate,
+        TiNsiEndpointGetAll,
+        NULL
+    },
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_tcp_conn_key), 0, sizeof(struct nsi_tcp_conn_dynamic), sizeof(struct nsi_tcp_conn_static) },
+        TiNsiTcpListenEnumerate,
+        TiNsiEndpointGetAll,
+        NULL
+    },
+    {
+        sizeof(NSI_PROVIDER_DISPATCH),
+        { sizeof(struct nsi_udp_endpoint_key), 0, 0, sizeof(struct nsi_udp_endpoint_static) },
+        TiNsiUdpEndpointEnumerate,
+        TiNsiEndpointGetAll,
+        NULL
+    },
+};
+
+static const NPI_MODULEID *const TiNsiEndpointModules[4] = { &NPI_MS_TCP_MODULEID, &NPI_MS_TCP_MODULEID, &NPI_MS_TCP_MODULEID, &NPI_MS_UDP_MODULEID };
+static const ULONG TiNsiEndpointTables[4] = { NSI_TCP_ALL_TABLE, NSI_TCP_ESTAB_TABLE, NSI_TCP_LISTEN_TABLE, NSI_UDP_ENDPOINT_TABLE };
+static PNSI_PROVIDER TiNsiEndpointProviders[4];
+
+static VOID
+TiNsiRegisterEndpoints(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < 4; i++)
+    {
+        if (!NT_SUCCESS(NsiRegisterProvider(TiNsiEndpointModules[i], TiNsiEndpointTables[i], &TiNsiEndpointDispatch[i],
+                                            (PVOID)(ULONG_PTR)i, &TiNsiEndpointProviders[i])))
+            TiNsiEndpointProviders[i] = NULL;
+    }
+}
+
+static VOID
+TiNsiDeregisterEndpoints(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < 4; i++)
+    {
+        if (TiNsiEndpointProviders[i] != NULL)
+        {
+            NsiDeregisterProvider(TiNsiEndpointProviders[i]);
+            TiNsiEndpointProviders[i] = NULL;
+        }
+    }
+}
+
 #define TI_NSI_NEIGHBOUR_COALESCE_MS 100
 
 static KTIMER TiNsiNeighbourTimer;
@@ -1678,6 +1941,7 @@ TiNsiRegister(VOID)
         TiNsiIndexLuid = NULL;
     TiNsiRegisterIp6();
     TiNsiRegisterIp4();
+    TiNsiRegisterEndpoints();
     TiNsiNotifyStart();
 }
 
@@ -1698,6 +1962,7 @@ TiNsiDeregister(VOID)
     PAGED_CODE();
 
     TiNsiNotifyStop();
+    TiNsiDeregisterEndpoints();
     TiNsiDeregisterIp4();
     TiNsiDeregisterIp6();
     if (TiNsiIfInfo != NULL)
