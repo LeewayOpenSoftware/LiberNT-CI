@@ -55,6 +55,7 @@ KMT_TESTFUNC Test_WfpListen;
 KMT_TESTFUNC Test_WfpTcp;
 KMT_TESTFUNC Test_WfpUdp;
 KMT_TESTFUNC Test_WfpUser;
+KMT_TESTFUNC Test_WskEcho;
 
 /* tests with a leading '-' will not be listed */
 const KMT_TEST TestList[] =
@@ -106,6 +107,7 @@ const KMT_TEST TestList[] =
     { "WfpTcp",                       Test_WfpTcp },
     { "WfpUdp",                       Test_WfpUdp },
     { "WfpUser",                      Test_WfpUser },
+    { "WskEcho",                      Test_WskEcho },
 #ifdef _M_AMD64
     { "RtlCaptureContextUM",          Test_RtlCaptureContext },
 #endif
