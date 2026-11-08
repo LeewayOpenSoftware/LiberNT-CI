@@ -269,6 +269,17 @@ TiNsiRegister(VOID)
 }
 
 VOID
+TiNsiNotifyInterface(
+    _In_ UINT Index,
+    _In_ ULONG Change)
+{
+    if (TiNsiIfInfo != NULL)
+        NsiNotifyChange(TiNsiIfInfo, (NSI_CHANGE_TYPE)Change, &Index, sizeof(Index));
+    if (TiNsiIndexLuid != NULL && Change != TI_NSI_CHANGE_PARAMETER)
+        NsiNotifyChange(TiNsiIndexLuid, (NSI_CHANGE_TYPE)Change, &Index, sizeof(Index));
+}
+
+VOID
 TiNsiDeregister(VOID)
 {
     PAGED_CODE();

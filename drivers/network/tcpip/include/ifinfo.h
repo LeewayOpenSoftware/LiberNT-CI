@@ -51,5 +51,10 @@ VOID IfInfoFillRow(struct _IP_INTERFACE *Interface, PIF_INFO_ROW Row);
 NTSTATUS IfInfoSnapshot(ULONG Capacity, PIF_INFO_ROW Rows, PULONG Count);
 NTSTATUS IfInfoSnapshotByIndex(UINT Index, PIF_INFO_ROW Row);
 
+#define TI_NSI_CHANGE_ADD 1
+#define TI_NSI_CHANGE_DELETE 2
+#define TI_NSI_CHANGE_PARAMETER 3
+
 VOID TiNsiRegister(VOID);
 VOID TiNsiDeregister(VOID);
+VOID TiNsiNotifyInterface(UINT Index, ULONG Change);
