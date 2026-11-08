@@ -3726,7 +3726,7 @@ public:
         }
         if (TaskPreview_IsVisibleFor(id))
         {
-            TaskPreview_Refresh(ahWnd, cWindows, id);
+            TaskPreview_Refresh(Windows.GetData(), cWindows, id);
             return;
         }
         if (!GetButtonScreenRect(Index, &rcBtn))

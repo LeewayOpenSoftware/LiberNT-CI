@@ -665,7 +665,7 @@ public:
     VOID RefreshCards(const HWND *pahWnd, UINT cWindows)
     {
         BuildCards(pahWnd, cWindows);
-        LayoutCards();
+        LayoutCards(m_size.cx);
         SetWindowPos(NULL, 0, 0, m_size.cx, m_size.cy,
                      SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
         InvalidateRect(NULL, FALSE);
