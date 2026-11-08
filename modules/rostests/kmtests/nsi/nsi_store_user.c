@@ -310,6 +310,28 @@ TestApiBackend(
                 ok(luid.Value == api_keys[i].Value, "api index %u maps to luid %I64x, enumerated %I64x\n", api_stat[i].if_index, luid.Value, api_keys[i].Value);
             }
             ok(matched == api_count, "%lu of %lu api rows found on the device\n", matched, api_count);
+
+            if (!skip(dev_count >= 2, "need two interfaces for the short-buffer check, have %lu\n", dev_count))
+            {
+                BYTE *guard = (BYTE *)&api_stat[1];
+                DWORD short_count = 1;
+
+                memset(api_keys, 0xCD, 2 * sizeof(*api_keys));
+                memset(api_stat, 0xCD, 2 * sizeof(*api_stat));
+                err = pNsiEnumerateObjectsAllParameters(1, 1, &NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE,
+                                                        api_keys, sizeof(*api_keys), NULL, 0, NULL, 0,
+                                                        api_stat, sizeof(*api_stat), &short_count);
+                ok_eq_ulong(err, (DWORD)ERROR_MORE_DATA);
+                ok_eq_ulong(short_count, dev_count);
+                ok(api_keys[0].Value != 0xCDCDCDCDCDCDCDCDULL, "first key not written on a short enumerate\n");
+                ok(api_keys[1].Value == 0xCDCDCDCDCDCDCDCDULL, "second key written although only one row fit\n");
+                for (i = 0; i < sizeof(*api_stat); i++)
+                {
+                    if (guard[i] != 0xCD)
+                        break;
+                }
+                ok(i == sizeof(*api_stat), "second static row written at offset %lu although only one row fit\n", i);
+            }
         }
     }
     if (out != NULL)
