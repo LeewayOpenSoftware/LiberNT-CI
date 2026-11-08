@@ -112,6 +112,13 @@ static void test_fd_write_rearm(void)
         return;
     }
     chunk = HeapAlloc(GetProcessHeap(), 0, 65536);
+    if (chunk == NULL)
+    {
+        skip("no 64 KiB buffer\n");
+        closesocket(client);
+        closesocket(server);
+        return;
+    }
     memset(chunk, 'w', 65536);
     event = WSACreateEvent();
     ok(WSAEventSelect(client, event, FD_WRITE) == 0, "WSAEventSelect: %d\n", WSAGetLastError());

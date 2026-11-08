@@ -62,7 +62,25 @@ WaitIrp(
 {
     if (Status == STATUS_PENDING)
     {
-        KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, NULL);
+        LARGE_INTEGER Timeout;
+
+        Timeout.QuadPart = -(LONGLONG)WSKECHO_IRP_TIMEOUT_MS * 10000;
+        if (KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, &Timeout) == STATUS_TIMEOUT)
+        {
+            ok(FALSE, "request did not complete within %u ms, cancelling it\n", WSKECHO_IRP_TIMEOUT_MS);
+            IoCancelIrp(Irp);
+            Timeout.QuadPart = -(LONGLONG)WSKECHO_CANCEL_TIMEOUT_MS * 10000;
+            if (KeWaitForSingleObject(Event, Executive, KernelMode, FALSE, &Timeout) == STATUS_TIMEOUT)
+            {
+                ok(FALSE, "cancelled request still pending after %u ms\n", WSKECHO_CANCEL_TIMEOUT_MS);
+                if (Information != NULL)
+                {
+                    *Information = 0;
+                }
+                return STATUS_TIMEOUT;
+            }
+            trace("request completed after cancel with 0x%08lx\n", Irp->IoStatus.Status);
+        }
     }
     Status = Irp->IoStatus.Status;
     if (Information != NULL)
@@ -290,7 +308,7 @@ TestStream(
     PIRP AcceptIrp, ConnectIrp, RecvIrp;
     NTSTATUS AcceptStatus, ConnectStatus, Status;
     ULONG_PTR Information = 0;
-    ECHO_BUFFER Out, In;
+    ECHO_BUFFER Out = { 0 }, In = { 0 };
     LARGE_INTEGER Delay;
 
     Listener = CreateSocket(Npi, AF_INET, SOCK_STREAM, IPPROTO_TCP, WSK_FLAG_LISTEN_SOCKET);
@@ -408,7 +426,7 @@ TestDatagram(
     NTSTATUS SendStatus, RecvStatus;
     ULONG_PTR Information = 0;
     ULONG ControlLength = 0, ControlFlags = 0;
-    ECHO_BUFFER Out, In;
+    ECHO_BUFFER Out = { 0 }, In = { 0 };
 
     A = CreateSocket(Npi, AF_INET, SOCK_DGRAM, IPPROTO_UDP, WSK_FLAG_DATAGRAM_SOCKET);
     B = CreateSocket(Npi, AF_INET, SOCK_DGRAM, IPPROTO_UDP, WSK_FLAG_DATAGRAM_SOCKET);
@@ -489,8 +507,9 @@ TestRun(VOID)
     {
         return;
     }
-    Status = WskCaptureProviderNPI(&Registration, WSK_INFINITE_WAIT, &ProviderNpi);
-    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = WskCaptureProviderNPI(&Registration, WSKECHO_CAPTURE_TIMEOUT_MS, &ProviderNpi);
+    ok(NT_SUCCESS(Status), "WskCaptureProviderNPI returned 0x%08lx within %u ms (STATUS_NOINTERFACE = no provider, STATUS_TIMEOUT = provider never attached)\n",
+       Status, WSKECHO_CAPTURE_TIMEOUT_MS);
     if (NT_SUCCESS(Status))
     {
         TestStream(&ProviderNpi);

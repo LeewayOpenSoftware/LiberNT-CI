@@ -48,9 +48,13 @@ START_TEST(afunix)
     ok(listen(listener, 1) == 0, "listen: %d\n", WSAGetLastError());
 
     again = socket(AF_UNIX, SOCK_STREAM, 0);
-    result = bind(again, (struct sockaddr *)&address, sizeof(address));
-    ok(result == SOCKET_ERROR && WSAGetLastError() == WSAEADDRINUSE, "second bind to the same path: %d/%d, expected WSAEADDRINUSE\n", result, WSAGetLastError());
-    closesocket(again);
+    ok(again != INVALID_SOCKET, "second AF_UNIX socket: %d\n", WSAGetLastError());
+    if (again != INVALID_SOCKET)
+    {
+        result = bind(again, (struct sockaddr *)&address, sizeof(address));
+        ok(result == SOCKET_ERROR && WSAGetLastError() == WSAEADDRINUSE, "second bind to the same path: %d/%d, expected WSAEADDRINUSE\n", result, WSAGetLastError());
+        closesocket(again);
+    }
 
     client = socket(AF_UNIX, SOCK_STREAM, 0);
     ok(connect(client, (struct sockaddr *)&address, sizeof(address)) == 0, "connect: %d\n", WSAGetLastError());
