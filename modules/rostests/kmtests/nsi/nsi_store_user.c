@@ -445,6 +445,116 @@ done:
     if (ifinfo) HeapFree(GetProcessHeap(), 0, ifinfo);
 }
 
+#define NOTIFY_LIMIT_MS 1000
+
+static DWORD ArmNotification(_In_ HANDLE Device, _In_ const NPI_MODULEID *Module, _In_ UINT Table, _Inout_ OVERLAPPED *Overlapped);
+
+static DWORD
+ElapsedMs(
+    _In_ const LARGE_INTEGER *Start)
+{
+    LARGE_INTEGER now, freq;
+
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    return (DWORD)((now.QuadPart - Start->QuadPart) * 1000 / freq.QuadPart);
+}
+
+static void
+TestDeviceIpNotifications(void)
+{
+    const UINT if_sizes[4] = { sizeof(NET_LUID), 0, 0, sizeof(struct nsi_ndis_ifinfo_static) };
+    HANDLE unicast = OpenNsiDevice(FILE_FLAG_OVERLAPPED), forward = OpenNsiDevice(FILE_FLAG_OVERLAPPED), ifinfo = OpenNsiDevice(FILE_FLAG_OVERLAPPED);
+    HANDLE sync = OpenNsiDevice(0);
+    OVERLAPPED ovl_unicast, ovl_forward, ovl_ifinfo;
+    BYTE *out = NULL;
+    const NET_LUID *luids;
+    const struct nsi_ndis_ifinfo_static *ifstat;
+    NET_LUID loopback_luid;
+    MIB_UNICASTIPADDRESS_ROW row;
+    LARGE_INTEGER start;
+    DWORD ifcount, i, err, bytes, elapsed;
+
+    loopback_luid.Value = 0;
+    if (unicast == INVALID_HANDLE_VALUE || forward == INVALID_HANDLE_VALUE || ifinfo == INVALID_HANDLE_VALUE || sync == INVALID_HANDLE_VALUE)
+    {
+        skip(FALSE, "overlapped device handles for the notification checks\n");
+        goto done;
+    }
+    err = EnumerateTable(sync, &NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE, if_sizes, TABLE_ROWS, &out, &ifcount);
+    if (skip(err == ERROR_SUCCESS && ifcount != 0, "no interface table for the notification checks (%lu)\n", err))
+        goto done;
+    luids = (const NET_LUID *)SECTION(out, TABLE_ROWS, 0);
+    ifstat = (const struct nsi_ndis_ifinfo_static *)SECTION(out, TABLE_ROWS, if_sizes[0]);
+    for (i = 0; i < ifcount && i < TABLE_ROWS; i++)
+        if (ifstat[i].type == MIB_IF_TYPE_LOOPBACK)
+            loopback_luid = luids[i];
+    if (skip(loopback_luid.Value != 0, "no loopback interface for the notification checks\n"))
+        goto done;
+
+    memset(&ovl_unicast, 0, sizeof(ovl_unicast));
+    memset(&ovl_forward, 0, sizeof(ovl_forward));
+    memset(&ovl_ifinfo, 0, sizeof(ovl_ifinfo));
+    ovl_unicast.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ovl_forward.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    ovl_ifinfo.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    err = ArmNotification(unicast, &NPI_MS_IPV4_MODULEID, NSI_IP_UNICAST_TABLE, &ovl_unicast);
+    if (skip(err == ERROR_IO_PENDING, "unicast notification request: %lu (tcpip does not provide the IP tables yet)\n", err))
+        goto events;
+    ok_eq_ulong(ArmNotification(forward, &NPI_MS_IPV4_MODULEID, NSI_IP_FORWARD_TABLE, &ovl_forward), (DWORD)ERROR_IO_PENDING);
+    ok_eq_ulong(ArmNotification(ifinfo, &NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE, &ovl_ifinfo), (DWORD)ERROR_IO_PENDING);
+
+    InitializeUnicastIpAddressEntry(&row);
+    row.InterfaceLuid = loopback_luid;
+    row.Address.Ipv4.sin_family = AF_INET;
+    row.Address.Ipv4.sin_addr.S_un.S_addr = htonl(0x7F0000FE);
+    row.OnLinkPrefixLength = 8;
+    row.PrefixOrigin = IpPrefixOriginManual;
+    row.SuffixOrigin = IpSuffixOriginManual;
+    QueryPerformanceCounter(&start);
+    err = CreateUnicastIpAddressEntry(&row);
+    if (skip(err == NO_ERROR, "CreateUnicastIpAddressEntry on loopback: %lu\n", err))
+    {
+        CancelIoEx(unicast, &ovl_unicast);
+        CancelIoEx(forward, &ovl_forward);
+        CancelIoEx(ifinfo, &ovl_ifinfo);
+        goto events;
+    }
+    ok(WaitForSingleObject(ovl_unicast.hEvent, 5000) == WAIT_OBJECT_0, "unicast change not notified after an address add\n");
+    elapsed = ElapsedMs(&start);
+    trace("unicast add notified after %lu ms\n", elapsed);
+    ok(elapsed <= NOTIFY_LIMIT_MS, "unicast add notified after %lu ms\n", elapsed);
+    ok(GetOverlappedResult(unicast, &ovl_unicast, &bytes, FALSE) && bytes != 0, "unicast notification without a sequence\n");
+    ok(WaitForSingleObject(ovl_forward.hEvent, 5000) == WAIT_OBJECT_0, "forward change not notified after an address add\n");
+    elapsed = ElapsedMs(&start);
+    trace("forward (on-link route) notified after %lu ms\n", elapsed);
+    ok(WaitForSingleObject(ovl_ifinfo.hEvent, 300) == WAIT_TIMEOUT, "interface notification fired on an address change\n");
+
+    ok_eq_ulong(ArmNotification(unicast, &NPI_MS_IPV4_MODULEID, NSI_IP_UNICAST_TABLE, &ovl_unicast), (DWORD)ERROR_IO_PENDING);
+    ok_eq_ulong(ArmNotification(forward, &NPI_MS_IPV4_MODULEID, NSI_IP_FORWARD_TABLE, &ovl_forward), (DWORD)ERROR_IO_PENDING);
+    QueryPerformanceCounter(&start);
+    err = DeleteUnicastIpAddressEntry(&row);
+    ok_eq_ulong(err, (DWORD)NO_ERROR);
+    ok(WaitForSingleObject(ovl_unicast.hEvent, 5000) == WAIT_OBJECT_0, "unicast change not notified after an address delete\n");
+    elapsed = ElapsedMs(&start);
+    trace("unicast delete notified after %lu ms\n", elapsed);
+    ok(elapsed <= NOTIFY_LIMIT_MS, "unicast delete notified after %lu ms\n", elapsed);
+    ok(WaitForSingleObject(ovl_forward.hEvent, 5000) == WAIT_OBJECT_0, "forward change not notified after an address delete\n");
+    CancelIoEx(ifinfo, &ovl_ifinfo);
+    WaitForSingleObject(ovl_ifinfo.hEvent, 5000);
+
+events:
+    if (ovl_unicast.hEvent) CloseHandle(ovl_unicast.hEvent);
+    if (ovl_forward.hEvent) CloseHandle(ovl_forward.hEvent);
+    if (ovl_ifinfo.hEvent) CloseHandle(ovl_ifinfo.hEvent);
+done:
+    if (out) HeapFree(GetProcessHeap(), 0, out);
+    if (sync != INVALID_HANDLE_VALUE) CloseHandle(sync);
+    if (ifinfo != INVALID_HANDLE_VALUE) CloseHandle(ifinfo);
+    if (forward != INVALID_HANDLE_VALUE) CloseHandle(forward);
+    if (unicast != INVALID_HANDLE_VALUE) CloseHandle(unicast);
+}
+
 typedef DWORD (WINAPI *PFN_NSI_ENUMERATE)(DWORD, DWORD, const NPI_MODULEID *, DWORD, void *, DWORD, void *, DWORD,
                                           void *, DWORD, void *, DWORD, DWORD *);
 typedef DWORD (WINAPI *PFN_NSI_GET_PARAMETER)(DWORD, const NPI_MODULEID *, DWORD, const void *, DWORD, DWORD, void *, DWORD, DWORD);
@@ -639,6 +749,7 @@ START_TEST(NsiStore)
         TestDeviceInterfaces(device);
         TestDeviceIpTables(device, AF_INET6);
         TestDeviceIpTables(device, AF_INET);
+        TestDeviceIpNotifications();
         TestApiBackend(device);
         CloseHandle(device);
         TestDeviceNotifications(&module);

@@ -108,3 +108,12 @@ VOID IfInfoFree(PVOID Buffer);
 VOID TiNsiRegister(VOID);
 VOID TiNsiDeregister(VOID);
 VOID TiNsiNotifyInterface(UINT Index, ULONG Change);
+
+#define TI_NSI_FAMILY_IPV4 0
+#define TI_NSI_FAMILY_IPV6 1
+#define TI_NSI_TABLE_INTERFACE 0
+#define TI_NSI_TABLE_UNICAST 1
+#define TI_NSI_TABLE_NEIGHBOUR 2
+#define TI_NSI_TABLE_FORWARD 3
+
+VOID TiNsiNotifyIpTable(ULONG Family, ULONG Table, ULONG Change);

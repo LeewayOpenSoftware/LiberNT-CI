@@ -1579,6 +1579,92 @@ TiNsiDeregisterIp4(VOID)
     }
 }
 
+
+#define TI_NSI_NEIGHBOUR_COALESCE_MS 100
+
+static KTIMER TiNsiNeighbourTimer;
+static KDPC TiNsiNeighbourDpc;
+static volatile LONG TiNsiNeighbourPending[2];
+static volatile LONG TiNsiNeighbourTimerArmed;
+static BOOLEAN TiNsiNotifyReady;
+
+static PNSI_PROVIDER
+TiNsiIpProvider(
+    _In_ ULONG Family,
+    _In_ ULONG Table)
+{
+    if (Table >= 4)
+        return NULL;
+    return Family == TI_NSI_FAMILY_IPV6 ? TiNsiIp6Providers[Table] : TiNsiIp4Providers[Table];
+}
+
+static VOID NTAPI
+TiNsiNeighbourDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    ULONG Family;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(DeferredContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    InterlockedExchange(&TiNsiNeighbourTimerArmed, 0);
+    for (Family = 0; Family < 2; Family++)
+    {
+        PNSI_PROVIDER Provider = TiNsiIpProvider(Family, TI_NSI_TABLE_NEIGHBOUR);
+
+        if (InterlockedExchange(&TiNsiNeighbourPending[Family], 0) != 0 && Provider != NULL)
+            NsiNotifyChange(Provider, NsiChangeParameter, NULL, 0);
+    }
+}
+
+VOID
+TiNsiNotifyIpTable(
+    _In_ ULONG Family,
+    _In_ ULONG Table,
+    _In_ ULONG Change)
+{
+    PNSI_PROVIDER Provider;
+
+    if (!TiNsiNotifyReady || Family >= 2)
+        return;
+    if (Table == TI_NSI_TABLE_NEIGHBOUR)
+    {
+        LARGE_INTEGER Due;
+
+        InterlockedExchange(&TiNsiNeighbourPending[Family], 1);
+        if (InterlockedCompareExchange(&TiNsiNeighbourTimerArmed, 1, 0) == 0)
+        {
+            Due.QuadPart = -(LONGLONG)TI_NSI_NEIGHBOUR_COALESCE_MS * 10000;
+            KeSetTimer(&TiNsiNeighbourTimer, Due, &TiNsiNeighbourDpc);
+        }
+        return;
+    }
+    Provider = TiNsiIpProvider(Family, Table);
+    if (Provider != NULL)
+        NsiNotifyChange(Provider, (NSI_CHANGE_TYPE)Change, NULL, 0);
+}
+
+static VOID
+TiNsiNotifyStart(VOID)
+{
+    KeInitializeTimer(&TiNsiNeighbourTimer);
+    KeInitializeDpc(&TiNsiNeighbourDpc, TiNsiNeighbourDpcRoutine, NULL);
+    TiNsiNotifyReady = TRUE;
+}
+
+static VOID
+TiNsiNotifyStop(VOID)
+{
+    TiNsiNotifyReady = FALSE;
+    KeCancelTimer(&TiNsiNeighbourTimer);
+    KeFlushQueuedDpcs();
+}
+
 VOID
 TiNsiRegister(VOID)
 {
@@ -1592,6 +1678,7 @@ TiNsiRegister(VOID)
         TiNsiIndexLuid = NULL;
     TiNsiRegisterIp6();
     TiNsiRegisterIp4();
+    TiNsiNotifyStart();
 }
 
 VOID
@@ -1610,6 +1697,7 @@ TiNsiDeregister(VOID)
 {
     PAGED_CODE();
 
+    TiNsiNotifyStop();
     TiNsiDeregisterIp4();
     TiNsiDeregisterIp6();
     if (TiNsiIfInfo != NULL)
