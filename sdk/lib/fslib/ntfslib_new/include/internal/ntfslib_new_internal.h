@@ -500,6 +500,25 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
 NTSTATUS
 NtfsFlushVolumeContext(_In_opt_ void* Context);
 
+/*
+ * Write-through: the bytes are on the volume when this returns, even where
+ * the environment would otherwise hold the write back in a cache. Used for
+ * the zero-fill of newly allocated metadata clusters, which must be on the
+ * disk before any record or bitmap bit that lives in them exists.
+ */
+NTSTATUS
+NtfsWriteVolumeThroughContext(_In_opt_ void* Context,
+                              _In_ ULONG BytesPerSector,
+                              _In_ ULONGLONG Offset,
+                              _In_ ULONG Length,
+                              _Inout_ PUCHAR Buffer);
+
+/* Commits whatever the environment holds back for [Offset, Offset + Length). */
+NTSTATUS
+NtfsFlushVolumeRangeContext(_In_opt_ void* Context,
+                            _In_ ULONGLONG Offset,
+                            _In_ ULONG Length);
+
 /* Puts any write the environment still holds for [Offset, Offset + Length)
  * on the disk before returning, without flushing the device's own cache.
  * Environments that write through at once return STATUS_SUCCESS. */
@@ -585,6 +604,8 @@ public:
     BOOLEAN ShutdownCleaned = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
     BOOLEAN Generate8dot3Names = FALSE;
+    /* While non-zero, WriteVolume behaves as WriteVolumeThrough (mft.cpp). */
+    ULONG WriteThroughDepth = 0;
 
     /*
      * Where to begin the free-cluster search. Without it every allocation
@@ -844,6 +865,15 @@ public:
                          _Inout_ PUCHAR Buffer);
 
     NTSTATUS FlushVolume();
+
+    /* As WriteVolume, but the bytes are on the volume when this returns. */
+    NTSTATUS WriteVolumeThrough(_In_    ULONGLONG Offset,
+                                _In_    ULONG Length,
+                                _Inout_ PUCHAR Buffer);
+
+    /* Commits held-back writes overlapping [Offset, Offset + Length). */
+    NTSTATUS FlushVolumeRange(_In_ ULONGLONG Offset,
+                              _In_ ULONG Length);
 
     /* Writes held back for this range reach the disk before it returns. */
     NTSTATUS CommitRange(_In_ ULONGLONG Offset,

@@ -20,6 +20,29 @@
 #define NTFS_MAX_SIGNED_OFFSET \
     ((ULONGLONG)0x7fffffffffffffffULL)
 
+/*
+ * Every WriteVolume issued while one of these is alive goes through
+ * WriteVolumeThrough: the bytes are on the disk when the call returns, even
+ * where the environment holds ordinary metadata writes back in a cache.
+ */
+struct VolumeWriteThroughScope
+{
+    PVolume Target;
+
+    explicit VolumeWriteThroughScope(_In_ PVolume TargetVolume)
+        : Target(TargetVolume)
+    {
+        if (Target)
+            Target->WriteThroughDepth++;
+    }
+
+    ~VolumeWriteThroughScope()
+    {
+        if (Target)
+            Target->WriteThroughDepth--;
+    }
+};
+
 static NTSTATUS
 InitializeFileRecordBuffer(
     _In_ PVolume DiskVolume,
@@ -645,6 +668,7 @@ MasterFileTable::GetFileRecordInDirectory(
 
 static NTSTATUS
 ExtendMftDataToAllocation(
+    _In_ PVolume DiskVolume,
     _In_ PFileRecord MFTFile,
     _In_ ULONG FileRecordSize)
 {
@@ -656,6 +680,13 @@ ExtendMftDataToAllocation(
     ULONGLONG RecordBytes;
     ULONGLONG RequiredBitmapLength;
     NTSTATUS Status;
+
+    /*
+     * The zeroes must be on the disk before the records and bitmap bits that
+     * live in these bytes exist; a cut otherwise leaves whatever the clusters
+     * held before, read back as in-use bits over zero records (J36).
+     */
+    VolumeWriteThroughScope Through(DiskVolume);
 
     DataAttribute =
         MFTFile->GetAttribute(TypeData, NULL);
@@ -1090,6 +1121,7 @@ ScanAgain:
             else
             {
                 Status = ExtendMftDataToAllocation(
+                    DiskVolume,
                     MFTFile,
                     FileRecordSize);
                 if (!NT_SUCCESS(Status))

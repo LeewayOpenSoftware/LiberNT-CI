@@ -1366,12 +1366,14 @@ NtfsFlushVolumeContext(_In_opt_ void* Context)
     return NtfsCacheFlushAll(DeviceObject);
 }
 
+static
 NTSTATUS
-NtfsWriteVolumeContext(_In_opt_ void* Context,
-                       _In_ ULONG SectorBytes,
-                       _In_ ULONGLONG Offset,
-                       _In_ ULONG Length,
-                       _Inout_ PUCHAR Buffer)
+NtfsWriteVolumeInternal(_In_opt_ void* Context,
+                        _In_ ULONG SectorBytes,
+                        _In_ ULONGLONG Offset,
+                        _In_ ULONG Length,
+                        _Inout_ PUCHAR Buffer,
+                        _In_ BOOLEAN WriteThrough)
 {
     PDEVICE_OBJECT DeviceObject;
 
@@ -1389,7 +1391,7 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
      * write is never invisible; anything reaching the volume another way
      * flushes first.
      */
-    if (NtfsCacheReady && Length <= NTFS_CACHE_BLOCK_SIZE)
+    if (!WriteThrough && NtfsCacheReady && Length <= NTFS_CACHE_BLOCK_SIZE)
     {
         ULONGLONG Block = Offset >> NTFS_CACHE_BLOCK_SHIFT;
         ULONG BlockOffset = (ULONG)(Offset & (NTFS_CACHE_BLOCK_SIZE - 1));
@@ -1420,9 +1422,12 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
              * update and every later one to the same block stay in memory.
              * A fresh MFT record block otherwise costs a synchronous disk
              * write per record, and installs nothing, so its neighbours all
-             * miss too. Only sub-block writes qualify -- those are the
-             * record-sized metadata updates; whole-block writes are bulk
-             * data and keep their existing path.
+             * miss too. Writes up to one block qualify (a whole block is
+             * installed without a fetch); larger writes are bulk data and
+             * keep the direct path. Callers that need the bytes on the
+             * disk before they return -- the zero-fill of newly allocated
+             * metadata clusters -- come in through
+             * NtfsWriteVolumeThroughContext, which skips this entirely.
              */
             if (!Absorbed)
             {
@@ -1560,6 +1565,47 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
         NtfsCacheInvalidateRange(DeviceObject, Offset, Length);
 
     return Status;
+}
+
+NTSTATUS
+NtfsWriteVolumeContext(_In_opt_ void* Context,
+                       _In_ ULONG SectorBytes,
+                       _In_ ULONGLONG Offset,
+                       _In_ ULONG Length,
+                       _Inout_ PUCHAR Buffer)
+{
+    return NtfsWriteVolumeInternal(Context, SectorBytes, Offset, Length,
+                                   Buffer, FALSE);
+}
+
+/*
+ * Write-through: skips the held-back path, so the bytes are on the disk when
+ * this returns. A block dirty in the cache is committed first and the cached
+ * copy is kept in step, exactly as for a bulk write.
+ */
+NTSTATUS
+NtfsWriteVolumeThroughContext(_In_opt_ void* Context,
+                              _In_ ULONG SectorBytes,
+                              _In_ ULONGLONG Offset,
+                              _In_ ULONG Length,
+                              _Inout_ PUCHAR Buffer)
+{
+    return NtfsWriteVolumeInternal(Context, SectorBytes, Offset, Length,
+                                   Buffer, TRUE);
+}
+
+NTSTATUS
+NtfsFlushVolumeRangeContext(_In_opt_ void* Context,
+                            _In_ ULONGLONG Offset,
+                            _In_ ULONG Length)
+{
+    PDEVICE_OBJECT DeviceObject;
+
+    DeviceObject = Context ? static_cast<PDEVICE_OBJECT>(Context) : PartDeviceObj;
+    if (!DeviceObject || Offset > ~(ULONGLONG)0 - Length)
+        return STATUS_INVALID_PARAMETER;
+
+    return NtfsCacheFlushRange(DeviceObject, Offset, Length);
 }
 
 NTSTATUS

@@ -607,6 +607,12 @@ WriteLogicalRunBytes(_In_ PVolume DiskVolume,
         : STATUS_FILE_CORRUPT_ERROR;
 }
 
+/*
+ * Zeroes go to the disk write-through. A one-cluster run is exactly one
+ * cache block, which the kernel environment would otherwise hold back as a
+ * dirty block and commit later; the clusters must read as zero on the disk
+ * before anything that trusts them (an MFT record, a bitmap bit) exists.
+ */
 static NTSTATUS
 ZeroLogicalAllocatedBytes(_In_ PVolume DiskVolume,
                           _In_ PDataRun Runs,
@@ -668,7 +674,7 @@ ZeroLogicalAllocatedBytes(_In_ PVolume DiskVolume,
                     Remaining,
                     (ULONGLONG)
                         NTFS_ZERO_CHUNK_SIZE);
-                Status = DiskVolume->WriteVolume(
+                Status = DiskVolume->WriteVolumeThrough(
                     GetOffset(Run->LCN) +
                         RunOffset,
                     Chunk,

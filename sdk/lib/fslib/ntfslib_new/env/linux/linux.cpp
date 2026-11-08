@@ -343,6 +343,28 @@ NtfsWriteVolumeContext(_In_opt_ void* Context,
     return NtfsWriteVolume(Offset, Length, Buffer);
 }
 
+/* Nothing is held back in this environment: write-through is the plain write. */
+extern "C" NTSTATUS
+NtfsWriteVolumeThroughContext(_In_opt_ void* Context,
+                              _In_ ULONG BytesPerSector,
+                              _In_ ULONGLONG Offset,
+                              _In_ ULONG Length,
+                              _Inout_ PUCHAR Buffer)
+{
+    return NtfsWriteVolumeContext(Context, BytesPerSector, Offset, Length, Buffer);
+}
+
+extern "C" NTSTATUS
+NtfsFlushVolumeRangeContext(_In_opt_ void* Context,
+                            _In_ ULONGLONG Offset,
+                            _In_ ULONG Length)
+{
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(Offset);
+    UNREFERENCED_PARAMETER(Length);
+    return STATUS_SUCCESS;
+}
+
 extern "C" BOOLEAN
 NtfsIsNameInExpression(_In_ PUNICODE_STRING Expression,
                        _In_ PUNICODE_STRING Name,
