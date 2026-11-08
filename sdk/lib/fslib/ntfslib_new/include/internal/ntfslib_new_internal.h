@@ -549,6 +549,8 @@ public:
     BOOLEAN DirtyTracking = FALSE;
     BOOLEAN DirtyMarked = FALSE;
     BOOLEAN DirtyRetained = FALSE;
+    /* Set after a clean shutdown cleared the flag; makes a later re-dirty logged. */
+    BOOLEAN ShutdownCleaned = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
     BOOLEAN Generate8dot3Names = FALSE;
 
@@ -753,6 +755,11 @@ public:
      * FSCTL_MARK_VOLUME_DIRTY): MarkClean will not clear it. */
     void
     RetainDirty(_In_ BOOLEAN Retain);
+
+    /* MarkClean on the shutdown path; also arms re-dirty logging. No write-
+     * through (that is the J30 chain mechanism, deliberately not here). */
+    NTSTATUS
+    MarkCleanForShutdown();
 
     /**
      * Copies a specified number of bytes into a buffer from the volume at a

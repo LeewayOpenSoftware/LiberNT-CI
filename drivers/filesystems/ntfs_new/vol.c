@@ -563,6 +563,11 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     // Mount volume.
     FsRtlNotifyVolumeEvent(VolCB->StreamFileObject, FSRTL_VOLUME_MOUNT);
 
+    /* Receive IRP_MJ_SHUTDOWN so the volume's dirty flag is cleared on a clean
+     * shutdown (the system volume is flushed, not dismounted, at shutdown).
+     * Unregistered on dismount; see NtfsDismountVolume. */
+    IoRegisterShutdownNotification(FSDeviceObject);
+
     Status = STATUS_SUCCESS;
 
 Cleanup:

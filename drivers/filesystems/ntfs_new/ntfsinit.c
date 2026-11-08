@@ -216,7 +216,19 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
      * Do any cleanup needed and return STATUS_SUCCESS.
      * See: https://learn.microsoft.com/en-us/windows-hardware/drivers/ifs/irp-mj-shutdown
      */
-    UNREFERENCED_PARAMETER(VolumeDeviceObject);
+
+    /* Clean shutdown: the cache flush above put this volume's dirty metadata on
+     * the medium, so clear its dirty flag (only if the flush succeeded; never
+     * before it). A retained/user flag is left alone by MarkClean. */
+    if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
+    {
+        PVolumeContextBlock VolCB =
+            (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+
+        if (NT_SUCCESS(Status) && VolCB && VolCB->DiskVolume && !VolCB->Dismounted)
+            (void)NtfsVolumeMarkCleanForShutdown(VolCB->DiskVolume);
+    }
+
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);

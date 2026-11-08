@@ -1150,6 +1150,10 @@ NtfsVolumeRetainDirty(
     _In_ PNtfsVolume DiskVolume,
     _In_ BOOLEAN Retain);
 
+NTSTATUS
+NtfsVolumeMarkCleanForShutdown(
+    _In_ PNtfsVolume DiskVolume);
+
 #ifdef __cplusplus
 }
 #endif

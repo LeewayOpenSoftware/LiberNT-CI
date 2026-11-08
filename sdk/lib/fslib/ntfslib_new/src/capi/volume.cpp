@@ -292,6 +292,13 @@ NtfsVolumeRetainDirty(
     reinterpret_cast<PVolume>(DiskVolume)->RetainDirty(Retain);
 }
 
+NTSTATUS
+NtfsVolumeMarkCleanForShutdown(
+    _In_ PNtfsVolume DiskVolume)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->MarkCleanForShutdown();
+}
+
 #ifdef __cplusplus
 }
 #endif

@@ -231,6 +231,9 @@ Volume::MarkDirtyBeforeWrite()
     if (!DirtyTracking || DirtyMarked || IsReadOnly)
         return STATUS_SUCCESS;
 
+    if (ShutdownCleaned)
+        DPRINT1("NTFS: volume re-dirtied after shutdown clean\n");
+
     /* Set first: the flag's own record write comes back through WriteVolume. */
     DirtyMarked = TRUE;
     Status = SetVolumeFlags(VOL_DIRTY, 0);
@@ -267,4 +270,16 @@ Volume::RetainDirty(_In_ BOOLEAN Retain)
         return;
     DirtyRetained = Retain;
     DirtyMarked = Retain;
+}
+
+NTSTATUS
+Volume::MarkCleanForShutdown()
+{
+    NTSTATUS Status = MarkClean();
+
+    /* After a clean shutdown, any further write is a true re-dirty worth noting;
+     * no write-through (that is the owner-restricted J30 mechanism). */
+    if (NT_SUCCESS(Status) && DirtyTracking && !IsReadOnly)
+        ShutdownCleaned = TRUE;
+    return Status;
 }

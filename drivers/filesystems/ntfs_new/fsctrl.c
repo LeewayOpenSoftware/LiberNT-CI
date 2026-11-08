@@ -1503,6 +1503,9 @@ NtfsDismountVolume(
     if (NT_SUCCESS(Status))
         (void)NtfsVolumeMarkClean(VolCB->DiskVolume);
 
+    /* The volume device no longer needs shutdown notification. */
+    IoUnregisterShutdownNotification(VolumeDeviceObject);
+
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     if (NT_SUCCESS(Status))
     {
