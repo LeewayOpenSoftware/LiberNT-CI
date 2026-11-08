@@ -12,6 +12,7 @@ list(APPEND SOURCE
     icmp_echo.c
     InitializeIpInterfaceEntry.c
     NotifyIpInterfaceChange.c
+    NotifyRouteChange.c
     SendARP.c
     UnicastIpAddressChange.c
     testlist.c)

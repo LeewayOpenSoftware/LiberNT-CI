@@ -14,6 +14,7 @@ extern void func_icmp(void);
 extern void func_icmp_echo(void);
 extern void func_InitializeIpInterfaceEntry(void);
 extern void func_NotifyIpInterfaceChange(void);
+extern void func_NotifyRouteChange(void);
 extern void func_SendARP(void);
 extern void func_UnicastIpAddressChange(void);
 
@@ -31,6 +32,7 @@ const struct test winetest_testlist[] =
     { "icmp_echo",                  func_icmp_echo },
     { "InitializeIpInterfaceEntry", func_InitializeIpInterfaceEntry },
     { "NotifyIpInterfaceChange",    func_NotifyIpInterfaceChange },
+    { "NotifyRouteChange",          func_NotifyRouteChange },
     { "SendARP",                    func_SendARP },
     { "UnicastIpAddressChange",     func_UnicastIpAddressChange },
 
