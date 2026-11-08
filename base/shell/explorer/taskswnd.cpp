@@ -20,6 +20,7 @@
  */
 
 #include "precomp.h"
+#include <winternl.h>
 #include <winver.h>
 #include <commoncontrols.h>
 #include <regstr.h>
@@ -2514,10 +2515,11 @@ public:
         return FALSE;
     }
 
-    BOOL GetTaskExePath(IN DWORD dwProcessId, OUT LPWSTR pszPath, IN DWORD cchPath)
+    BOOL GetTaskExePath(IN HWND hWnd, IN DWORD dwProcessId, OUT LPWSTR pszPath, IN DWORD cchPath)
     {
         HANDLE hProcess;
         DWORD cch = cchPath;
+        WCHAR szClass[20];
 
         pszPath[0] = 0;
 
@@ -2526,6 +2528,30 @@ public:
             hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwProcessId);
         if (!hProcess)
             return FALSE;
+
+        if (GetClassNameW(hWnd, szClass, _countof(szClass)) && !lstrcmpiW(szClass, L"ConsoleWindowClass"))
+        {
+            PROCESS_BASIC_INFORMATION Basic = { 0 };
+            decltype(&NtQueryInformationProcess) QueryInformationProcess =
+                reinterpret_cast<decltype(&NtQueryInformationProcess)>(
+                    GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess"));
+
+            if (!QueryInformationProcess ||
+                !NT_SUCCESS(QueryInformationProcess(hProcess, ProcessBasicInformation, &Basic, sizeof(Basic), NULL)) ||
+                !Basic.Reserved3)
+            {
+                CloseHandle(hProcess);
+                return FALSE;
+            }
+            CloseHandle(hProcess);
+            dwProcessId = (DWORD)(ULONG_PTR)Basic.Reserved3;
+            cch = cchPath;
+            hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, dwProcessId);
+            if (!hProcess)
+                hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwProcessId);
+            if (!hProcess)
+                return FALSE;
+        }
 
         if (!QueryFullProcessImageNameW(hProcess, 0, pszPath, &cch))
             pszPath[0] = 0;
@@ -2564,8 +2590,8 @@ public:
             return NULL;
         }
 
-        GetTaskExePath(dwProcessId, szExePath, _countof(szExePath));
         GetWindowAppId(hWnd, szAppId, _countof(szAppId));
+        GetTaskExePath(hWnd, dwProcessId, szExePath, _countof(szExePath));
 
         TaskGroup = szAppId[0] ? NULL : FindLaunchingTaskGroup(dwProcessId);
         if (TaskGroup)
@@ -2864,8 +2890,8 @@ public:
 
         if (!TaskItem->Group || !GetWindowThreadProcessId(TaskItem->hWnd, &ProcessId))
             return FALSE;
-        GetTaskExePath(ProcessId, szExePath, _countof(szExePath));
         GetWindowAppId(TaskItem->hWnd, szAppId, _countof(szAppId));
+        GetTaskExePath(TaskItem->hWnd, ProcessId, szExePath, _countof(szExePath));
         if (TaskItem->Group == FindTaskGroupForWindow(szExePath, szAppId, ProcessId))
             return FALSE;
 
@@ -2889,7 +2915,7 @@ public:
         PTASK_GROUP Group = FindLaunchingTaskGroup(ProcessId);
         if (!Group)
         {
-            if (!GetTaskExePath(ProcessId, Path, _countof(Path)))
+            if (!GetTaskExePath(TaskItem->hWnd, ProcessId, Path, _countof(Path)))
                 return;
             Group = FindTaskGroupByPath(Path);
         }
@@ -4208,7 +4234,7 @@ public:
 
         if (TaskItem != NULL)
         {
-            if (IsModernTaskbar() && !(GetKeyState(VK_SHIFT) & 0x8000))
+            if (!(GetKeyState(VK_SHIFT) & 0x8000))
                 ShowJumpList(TaskItem->Group, TaskItem);
             else
                 HandleTaskItemRightClick(TaskItem);
