@@ -43,6 +43,7 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 #include <ws2def.h>
 #include <wsk.h>
 #include <ndis.h>
+#include <pseh/pseh2.h>
 
 /* If you want to see the DPRINT() output in your debugger,
  * remove the following line (or comment it out):
@@ -112,6 +113,7 @@ typedef struct _WSK_SOCKET_INTERNAL
     struct sockaddr LocalAddress;
     PFILE_OBJECT LocalAddressFile;
     HANDLE LocalAddressHandle;
+    BOOLEAN LocalAddressKnown;
 
     struct sockaddr RemoteAddress;      /* Remember latest remote connection */
     PFILE_OBJECT RemoteAddressFile;
@@ -769,6 +771,8 @@ StartListening(_In_ PWSK_SOCKET_INTERNAL ListenSocket)
         return status;
     }
     AcceptSocket->ListenSocket = ListenSocket;
+    memcpy(&AcceptSocket->LocalAddress, &ListenSocket->LocalAddress, sizeof(AcceptSocket->LocalAddress));
+    AcceptSocket->LocalAddressKnown = TRUE;
     /* Dereferenced when the AcceptSocket is closed */
     ReferenceSocket(AcceptSocket->ListenSocket);
 
@@ -1066,10 +1070,54 @@ TdiConnectionInfoFromSocketAddress(_In_ PSOCKADDR SocketAddress)
     return ConnectionInformation;
 }
 
+static NTSTATUS
+QueryLocalAddress(_In_ PWSK_SOCKET_INTERNAL Socket)
+{
+    PTDI_ADDRESS_INFO Info;
+    PMDL Mdl;
+    ULONG Size = sizeof(TDI_ADDRESS_INFO) + sizeof(TA_IP_ADDRESS);
+    NTSTATUS status = STATUS_SUCCESS;
+
+    Info = ExAllocatePoolZero(NonPagedPool, Size, TAG_NETIO);
+    if (Info == NULL)
+    {
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    Mdl = IoAllocateMdl(Info, Size, FALSE, FALSE, NULL);
+    if (Mdl == NULL)
+    {
+        ExFreePoolWithTag(Info, TAG_NETIO);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    _SEH2_TRY
+    {
+        MmProbeAndLockPages(Mdl, KernelMode, IoModifyAccess);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+    if (!NT_SUCCESS(status))
+    {
+        IoFreeMdl(Mdl);
+        ExFreePoolWithTag(Info, TAG_NETIO);
+        return status;
+    }
+
+    status = TdiQueryInformation(Socket->LocalAddressFile, TDI_QUERY_ADDRESS_INFO, Mdl);
+    if (NT_SUCCESS(status) && Info->Address.TAAddressCount >= 1)
+    {
+        memcpy(&Socket->LocalAddress, &Info->Address.Address[0].AddressType, sizeof(Socket->LocalAddress));
+    }
+    ExFreePoolWithTag(Info, TAG_NETIO);
+    return status;
+}
+
 static NTSTATUS WSKAPI
 WskBind(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR LocalAddress, _Reserved_ ULONG Flags, _Inout_ PIRP Irp)
 {
-    NTSTATUS status;
+    NTSTATUS status, status2;
     PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
     PTRANSPORT_ADDRESS ta;
 
@@ -1093,6 +1141,16 @@ WskBind(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR LocalAddress, _Reserved_ UL
                                 ta, AFD_SHARE_REUSE, &Socket->LocalAddressHandle, &Socket->LocalAddressFile);
 
     ExFreePoolWithTag(ta, TAG_NETIO);
+    if (NT_SUCCESS(status))
+    {
+        memcpy(&Socket->LocalAddress, LocalAddress, sizeof(Socket->LocalAddress));
+        Socket->LocalAddressKnown = TRUE;
+        status2 = QueryLocalAddress(Socket);
+        if (!NT_SUCCESS(status2))
+        {
+            DPRINT1("Could not read back the bound address, status is %x\n", status2);
+        }
+    }
 
 err_out:
     Irp->IoStatus.Status = status;
@@ -1222,9 +1280,24 @@ WskReleaseTcp(_In_ PWSK_SOCKET SocketParam, _In_ PWSK_DATA_INDICATION DataIndica
 static NTSTATUS WSKAPI
 WskGetLocalAddress(_In_ PWSK_SOCKET SocketParam, _Out_ PSOCKADDR LocalAddress, _Inout_ PIRP Irp)
 {
+    PWSK_SOCKET_INTERNAL Socket = CONTAINING_RECORD(SocketParam, WSK_SOCKET_INTERNAL, Socket);
+    NTSTATUS status = STATUS_INVALID_DEVICE_STATE;
+
     FUNCTION_TRACE;
 
-    return WskCompleteUnsupported(Irp, __FUNCTION__);
+    WSK_REQUIRE_IRP(Irp);
+    IoSetNextIrpStackLocation(Irp);
+
+    if (Socket->LocalAddressKnown)
+    {
+        memcpy(LocalAddress, &Socket->LocalAddress, sizeof(*LocalAddress));
+        status = STATUS_SUCCESS;
+    }
+    Irp->IoStatus.Status = status;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NETWORK_INCREMENT);
+
+    return STATUS_PENDING;
 }
 
 static NTSTATUS WSKAPI
