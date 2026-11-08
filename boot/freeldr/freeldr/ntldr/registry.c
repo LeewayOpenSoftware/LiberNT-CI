@@ -572,7 +572,13 @@ RegImportBinaryHive(
 
     /* Verify it is accessible */
     KeyNode = (PCM_KEY_NODE)HvGetCell(SystemHive, SystemRootCell);
-    ASSERT(KeyNode);
+    if (KeyNode == NULL)
+    {
+        /* A clamped self-heal hive can leave the root cell in the discarded tail */
+        ERR("System hive root cell 0x%lx is out of range\n", SystemRootCell);
+        HvReleaseCell(SystemHive, SystemRootCell);
+        return FALSE;
+    }
     ASSERT(KeyNode->Signature == CM_KEY_NODE_SIGNATURE);
     HvReleaseCell(SystemHive, SystemRootCell);
 
@@ -609,7 +615,13 @@ RegInitCurrentControlSet(
 
     /* Verify it is accessible */
     KeyNode = (PCM_KEY_NODE)HvGetCell(SystemHive, ControlCell);
-    ASSERT(KeyNode);
+    if (KeyNode == NULL)
+    {
+        ERR("Control set cell 0x%lx is out of range\n", ControlCell);
+        CurrentControlSetKey = NULL;
+        HvReleaseCell(SystemHive, ControlCell);
+        return FALSE;
+    }
     ASSERT(KeyNode->Signature == CM_KEY_NODE_SIGNATURE);
     HvReleaseCell(SystemHive, ControlCell);
 
@@ -813,7 +825,11 @@ RegOpenKey(
 
     /* Get the key node */
     KeyNode = (PCM_KEY_NODE)HvGetCell(Hive, CellIndex);
-    ASSERT(KeyNode);
+    if (KeyNode == NULL)
+    {
+        WARN("RegOpenKey: key cell 0x%lx out of range\n", CellIndex);
+        return ERROR_FILE_NOT_FOUND;
+    }
     ASSERT(KeyNode->Signature == CM_KEY_NODE_SIGNATURE);
 
     TRACE("RegOpenKey: RemainingPath '%wZ'\n", &RemainingPath);
@@ -837,7 +853,11 @@ RegOpenKey(
 
         /* Get the found key */
         KeyNode = (PCM_KEY_NODE)HvGetCell(Hive, CellIndex);
-        ASSERT(KeyNode);
+        if (KeyNode == NULL)
+        {
+            WARN("RegOpenKey: sub key cell 0x%lx out of range\n", CellIndex);
+            return ERROR_FILE_NOT_FOUND;
+        }
         ASSERT(KeyNode->Signature == CM_KEY_NODE_SIGNATURE);
     }
 
@@ -904,7 +924,12 @@ RegQueryValue(
 
     /* Get the key node */
     KeyNode = GET_CM_KEY_NODE(Hive, Key);
-    ASSERT(KeyNode);
+    if (KeyNode == NULL)
+    {
+        WARN("RegQueryValue: key cell out of range\n");
+        HvReleaseCell(Hive, HKEY_TO_HCI(Key));
+        return ERROR_FILE_NOT_FOUND;
+    }
     ASSERT(KeyNode->Signature == CM_KEY_NODE_SIGNATURE);
 
     /* Initialize value name string */
@@ -921,7 +946,12 @@ RegQueryValue(
 
     /* Get the value cell */
     ValueCell = (PCM_KEY_VALUE)HvGetCell(Hive, CellIndex);
-    ASSERT(ValueCell != NULL);
+    if (ValueCell == NULL)
+    {
+        WARN("RegQueryValue: value cell 0x%lx out of range\n", CellIndex);
+        HvReleaseCell(Hive, CellIndex);
+        return ERROR_FILE_NOT_FOUND;
+    }
 
     RepGetValueData(Hive, ValueCell, Type, Data, DataSize);
 
