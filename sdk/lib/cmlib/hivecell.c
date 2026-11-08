@@ -115,6 +115,18 @@ HvpGetCellData(
             return NULL;
         }
     }
+    else
+    {
+        /* Flat hives (the boot loaders read the preloaded image directly)
+           have no block vector to bound against; range-check the offset. */
+        if (CellIndex > Hive->BaseBlock->Length ||
+            Hive->BaseBlock->Length - CellIndex < sizeof(HCELL))
+        {
+            DPRINT1("HvpGetCellData: flat cell 0x%lx out of range (length 0x%lx)\n",
+                    CellIndex, Hive->BaseBlock->Length);
+            return NULL;
+        }
+    }
     Data = (PCELL_DATA)(HvpGetCellHeaderLocked(Hive, CellIndex) + 1);
     if (!Hive->Flat)
         HvUnlockHiveReader(Hive, LockAcquired);
