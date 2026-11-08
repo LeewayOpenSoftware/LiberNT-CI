@@ -783,6 +783,47 @@ TestApiIpTables(
 }
 
 static void
+TestApiEndpointTables(
+    _In_ HANDLE Device,
+    _In_ PFN_NSI_ENUMERATE pEnumerate)
+{
+    static const struct { const NPI_MODULEID *module; UINT table; UINT key; } tables[4] =
+    {
+        { &NPI_MS_TCP_MODULEID, NSI_TCP_ALL_TABLE, sizeof(struct nsi_tcp_conn_key) },
+        { &NPI_MS_TCP_MODULEID, NSI_TCP_ESTAB_TABLE, sizeof(struct nsi_tcp_conn_key) },
+        { &NPI_MS_TCP_MODULEID, NSI_TCP_LISTEN_TABLE, sizeof(struct nsi_tcp_conn_key) },
+        { &NPI_MS_UDP_MODULEID, NSI_UDP_ENDPOINT_TABLE, sizeof(struct nsi_udp_endpoint_key) },
+    };
+    UINT k, i, j;
+
+    for (k = 0; k < 4; k++)
+    {
+        UINT sizes[4] = { tables[k].key, 0, 0, 0 };
+        BYTE *dev = NULL, *api;
+        DWORD dev_count, api_count = TABLE_ROWS, err, matched = 0;
+
+        err = EnumerateTable(Device, tables[k].module, tables[k].table, sizes, TABLE_ROWS, &dev, &dev_count);
+        api = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, TABLE_ROWS * tables[k].key);
+        if (!skip(err == ERROR_SUCCESS && api != NULL, "endpoint table %u through the device: %lu\n", tables[k].table, err))
+        {
+            err = pEnumerate(1, 1, tables[k].module, tables[k].table, api, tables[k].key, NULL, 0, NULL, 0, NULL, 0, &api_count);
+            ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+            ok(api_count == dev_count, "endpoint table %u: api %lu rows, device %lu\n", tables[k].table, api_count, dev_count);
+            for (i = 0; i < api_count && i < TABLE_ROWS; i++)
+                for (j = 0; j < dev_count && j < TABLE_ROWS; j++)
+                    if (memcmp(api + i * tables[k].key, SECTION(dev, TABLE_ROWS, 0) + j * tables[k].key, tables[k].key) == 0)
+                    {
+                        matched++;
+                        break;
+                    }
+            ok(matched == min(api_count, (DWORD)TABLE_ROWS), "endpoint table %u: %lu of %lu api keys found on the device\n", tables[k].table, matched, api_count);
+        }
+        if (api) HeapFree(GetProcessHeap(), 0, api);
+        if (dev) HeapFree(GetProcessHeap(), 0, dev);
+    }
+}
+
+static void
 TestApiBackend(
     _In_ HANDLE Device)
 {
@@ -847,6 +888,7 @@ TestApiBackend(
             }
             ok(matched == api_count, "%lu of %lu api rows found on the device\n", matched, api_count);
             TestApiIpTables(Device, pNsiEnumerateObjectsAllParameters);
+            TestApiEndpointTables(Device, pNsiEnumerateObjectsAllParameters);
 
             if (!skip(dev_count >= 2, "need two interfaces for the short-buffer check, have %lu\n", dev_count))
             {
