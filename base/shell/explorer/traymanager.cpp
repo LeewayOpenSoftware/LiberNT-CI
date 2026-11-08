@@ -140,7 +140,7 @@ VOID TrayManager::DestroySecondaryTrays()
         if (m_SecondaryTrays[i] != NULL)
             m_SecondaryTrays[i]->Close();
     }
-    m_SecondaryTrays.RemoveAll();
+    m_SecondaryTrays.SetCount(0);
 }
 
 VOID TrayManager_OnDisplayChange()
