@@ -3,12 +3,13 @@ add_executable(leewayui_ribbon_test
     ribbon_test.rc
 )
 
-set_module_type(leewayui_ribbon_test win32gui)
+set_module_type(leewayui_ribbon_test win32gui UNICODE)
 
 target_link_libraries(leewayui_ribbon_test
     leewayui_static
-    kernel32 user32 gdi32
 )
+
+add_importlibs(leewayui_ribbon_test user32 gdi32 kernel32)
 
 add_dependencies(leewayui_ribbon_test psdk)
 
