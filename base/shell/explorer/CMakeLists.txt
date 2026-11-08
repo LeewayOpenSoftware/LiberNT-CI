@@ -27,6 +27,7 @@ list(APPEND SOURCE
     trayclock.cpp
     traydeskbtn.cpp
     trayflyouts.cpp
+    traymanager.cpp
     trayntfy.cpp
     trayprop.cpp
     traywnd.cpp

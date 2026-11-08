@@ -269,6 +269,11 @@ DECLARE_INTERFACE_(ITrayWindow, IUnknown)
 #endif
 
 HRESULT CreateTrayWindow(ITrayWindow ** ppTray);
+HRESULT CreateSecondaryTrayWindow(HMONITOR hMonitor, ITrayWindow ** ppTray);
+
+class TrayManager;
+extern TrayManager *g_TrayManager;
+VOID TrayManager_OnDisplayChange();
 
 VOID
 TrayProcessMessages(IN OUT ITrayWindow *Tray);
@@ -318,6 +323,7 @@ struct TaskbarSettings
     BOOL bSmallIcons;
     TrayIconsMode eCompactTrayIcons;
     BOOL bShowDesktopButton;
+    BOOL bMMTaskbarMode;
     TW_STRUCKRECTS2 sr;
 
     BOOL Load();
