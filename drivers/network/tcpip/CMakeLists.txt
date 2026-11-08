@@ -32,6 +32,7 @@ list(APPEND SOURCE
     tcpip/lock.c
     tcpip/main.c
     tcpip/ninfo.c
+    tcpip/nsisnap.c
     tcpip/proto.c
     tcpip/tinfo.c
     tcpip/wait.c
