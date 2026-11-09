@@ -640,6 +640,11 @@ NtfsCheckReport(
                              "Index $I30 of file %I64X holds a second entry for file 0x%I64x.\n",
                              Argument1, Argument2);
             break;
+        case NtfsCheckIndexTailTrimmed:
+            NtfsFormatReport(Check->Callback,
+                             "Index $I30 of file %I64X held entries beyond its range at VCN 0x%I64x.\n",
+                             Argument1, Argument2);
+            break;
     }
 }
 

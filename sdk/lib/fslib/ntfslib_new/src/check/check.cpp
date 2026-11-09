@@ -275,6 +275,9 @@ private:
         PUCHAR Valid;
         PUCHAR Linked;
         WalkFrame* Stack;
+        /* Per block: the offset of a tail of keys above the node's range,
+         * which a split cut short leaves in the left node; 0 if none. */
+        PULONG Trim;
         ULONG Depth;
         ULONG Blocks;
         ULONG BlockSize;
@@ -286,9 +289,11 @@ private:
     };
     static BOOLEAN KeyName(_In_ PIndexEntry Entry, _Out_ PUNICODE_STRING Name);
     BOOLEAN KeyInRange(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High);
+    BOOLEAN KeyAbove(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry High);
     void WalkIndexNode(_Inout_ IndexWalk* Walk,
                        _In_ PIndexNodeHeader Node,
                        _In_ ULONG Available,
+                       _In_ ULONG NodeBlock,
                        _In_ ULONGLONG NodeVcn,
                        _In_opt_ PIndexEntry Low,
                        _In_opt_ PIndexEntry High);
@@ -1705,10 +1710,21 @@ VolumeCheck::KeyInRange(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt
     return TRUE;
 }
 
+BOOLEAN
+VolumeCheck::KeyAbove(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry High)
+{
+    UNICODE_STRING Bound;
+    LONG Result;
+
+    return High && KeyName(High, &Bound) &&
+           NT_SUCCESS(V->CollateFileNames(Name, &Bound, Walk->CaseSensitive, &Result)) && Result > 0;
+}
+
 void
 VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
                            _In_ PIndexNodeHeader Node,
                            _In_ ULONG Available,
+                           _In_ ULONG NodeBlock,
                            _In_ ULONGLONG NodeVcn,
                            _In_opt_ PIndexEntry Low,
                            _In_opt_ PIndexEntry High)
@@ -1717,6 +1733,8 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
     ULONG Offset = Node->IndexOffset;
     ULONG End = Node->TotalIndexSize;
     PIndexEntry Previous = Low;
+    ULONG TrimFrom = 0;
+    BOOLEAN Branch = FALSE;
 
     if (End > Available || Offset >= End || (Offset & 7) != 0)
     {
@@ -1742,6 +1760,24 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
                 Walk->Unwalkable = TRUE;
                 return;
             }
+            if (TrimFrom || (!KeyInRange(Walk, &Name, Low, High) && NodeBlock != MAXULONG &&
+                             Previous != Low && KeyAbove(Walk, &Name, High)))
+            {
+                /* A tail of keys above the range of a leaf that holds keys in
+                 * range too: a split whose parent landed before its rewritten
+                 * left node. The right node has those keys; trim the tail. */
+                if ((Entry->Flags & INDEX_ENTRY_NODE) || !KeyAbove(Walk, &Name, High))
+                {
+                    Walk->Unwalkable = TRUE;
+                    Walk->Problems++;
+                    Event(NtfsCheckIndexCorrupt, Walk->Directory, NodeVcn);
+                    return;
+                }
+                if (!TrimFrom)
+                    TrimFrom = Offset;
+                Offset += Entry->EntryLength;
+                continue;
+            }
             if (!KeyInRange(Walk, &Name, Low, High))
             {
                 /* The parent links a node of another key range, for example
@@ -1757,6 +1793,16 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
             ULONGLONG Vcn;
             ULONGLONG Bytes;
             ULONG Block;
+
+            Branch = TRUE;
+            if (TrimFrom)
+            {
+                /* Only a leaf is trimmed. */
+                Walk->Unwalkable = TRUE;
+                Walk->Problems++;
+                Event(NtfsCheckIndexCorrupt, Walk->Directory, NodeVcn);
+                return;
+            }
 
             if (Entry->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) + sizeof(ULONGLONG))
             {
@@ -1807,7 +1853,11 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
             }
         }
         if (Entry->Flags & INDEX_ENTRY_END)
+        {
+            if (TrimFrom && !Branch)
+                Walk->Trim[NodeBlock] = TrimFrom;
             return;
+        }
         Previous = Entry;
         Offset += Entry->EntryLength;
     }
@@ -1872,8 +1922,11 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             Walk.Valid = AllocateMap((ULONGLONG)Walk.Blocks + 1);
             Walk.Linked = AllocateMap((ULONGLONG)Walk.Blocks + 1);
             Walk.Stack = new(PagedPool, TAG_NTFS) WalkFrame[Walk.Blocks + 1];
+            Walk.Trim = new(PagedPool, TAG_NTFS) ULONG[Walk.Blocks + 1];
+            if (Walk.Trim)
+                RtlZeroMemory(Walk.Trim, (Walk.Blocks + 1) * sizeof(ULONG));
             Walk.CaseSensitive = File->IsCaseSensitiveDirectory();
-            if (!Walk.Valid || !Walk.Linked || !Walk.Stack)
+            if (!Walk.Valid || !Walk.Linked || !Walk.Stack || !Walk.Trim)
             {
                 Event(NtfsCheckIndexCorrupt, Directory, 0);
                 delete[] Walk.Valid;
@@ -1923,6 +1976,7 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
         WalkIndexNode(&Walk,
                       &Root->Header,
                       RootAttr->Resident.DataLength - FIELD_OFFSET(IndexRootEx, Header),
+                      MAXULONG,
                       0,
                       NULL,
                       NULL);
@@ -1934,6 +1988,7 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             WalkIndexNode(&Walk,
                           &Buffer->IndexHeader,
                           Walk.BlockSize - FIELD_OFFSET(IndexBuffer, IndexHeader),
+                          Frame.Block,
                           (ULONGLONG)Frame.Block * Walk.BlockSize / Walk.VcnSize,
                           Frame.Low,
                           Frame.High);
@@ -1972,6 +2027,7 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
     {
         PUCHAR Scratch = NULL;
         ULONG Released = 0;
+        BOOLEAN Trimmed;
 
         if (RepairIndexes)
         {
@@ -2010,12 +2066,27 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
                 }
                 continue;
             }
+            Trimmed = FALSE;
+            if (Walk.Trim[Block])
+            {
+                /* End the leaf before the keys its right sibling holds; they
+                 * are not counted here. */
+                PIndexEntry Tail = reinterpret_cast<PIndexEntry>(
+                    reinterpret_cast<PUCHAR>(&Buffer->IndexHeader) + Walk.Trim[Block]);
+
+                RtlZeroMemory(Tail, FIELD_OFFSET(IndexEntry, IndexStream));
+                Tail->EntryLength = FIELD_OFFSET(IndexEntry, IndexStream);
+                Tail->Flags = INDEX_ENTRY_END;
+                Buffer->IndexHeader.TotalIndexSize = Walk.Trim[Block] + FIELD_OFFSET(IndexEntry, IndexStream);
+                Event(NtfsCheckIndexTailTrimmed, Directory, Vcn);
+                Trimmed = TRUE;
+            }
             Fixed = CheckIndexEntries(Directory,
                                       &Buffer->IndexHeader,
                                       Walk.BlockSize - FIELD_OFFSET(IndexBuffer, IndexHeader),
                                       Vcn,
                                       Runs && Scratch);
-            if (!Fixed)
+            if ((!Fixed && !Trimmed) || !Runs || !Scratch)
                 continue;
 
             RtlCopyMemory(Scratch, Buffer, Walk.BlockSize);
@@ -2024,9 +2095,10 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
                                            V->BytesPerSector)) &&
                 NT_SUCCESS(WriteStreamRange(Runs, (ULONGLONG)Block * Walk.BlockSize, Walk.BlockSize, Scratch)))
             {
-                Out->Errors -= Fixed;
-                Out->FixedIndexEntries += Fixed;
-                Event(NtfsCheckIndexEntryFixed, Directory, Fixed);
+                Out->Errors -= Fixed + (Trimmed ? 1 : 0);
+                Out->FixedIndexEntries += Fixed + (Trimmed ? 1 : 0);
+                if (Fixed)
+                    Event(NtfsCheckIndexEntryFixed, Directory, Fixed);
             }
         }
         delete[] Scratch;
@@ -2052,6 +2124,7 @@ Done:
         V->FlushVolume();
     delete[] Walk.Valid;
     delete[] Walk.Linked;
+    delete[] Walk.Trim;
     delete[] Walk.Stack;
     delete[] Allocation;
     delete[] Bitmap;

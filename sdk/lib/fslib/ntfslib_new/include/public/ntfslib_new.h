@@ -1119,7 +1119,11 @@ typedef enum NtfsCheckEvent
     NtfsCheckIndexReset,
     /* A second index entry for a name that is already counted. Argument1:
      * the directory's file record; Argument2: the file reference. */
-    NtfsCheckIndexDuplicateEntry
+    NtfsCheckIndexDuplicateEntry,
+    /* A leaf held keys above its range, which its right sibling holds after
+     * a split cut short; they were cut from the leaf. Argument1: the
+     * directory's file record; Argument2: the leaf's VCN. */
+    NtfsCheckIndexTailTrimmed
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult
