@@ -2121,21 +2121,22 @@ Directory::PushDownRoot(
         RootValueLength);
     if (!NT_SUCCESS(Status))
     {
-        NTSTATUS CleanupStatus =
-            SetIndexRecordBitmapBit(
-                DirectoryFile,
-                IndexName,
-                RecordOrdinal,
-                FALSE);
-        if (!NT_SUCCESS(CleanupStatus))
-        {
-            DPRINT1(
-                "Index bitmap bit %llu was not "
-                "released after a failed root "
-                "switch: 0x%lx.\n",
-                RecordOrdinal,
-                CleanupStatus);
-        }
+        /*
+         * A failed root switch is no proof that the old root is what the
+         * disk holds: ReplaceIndexRootValue restores only the in-memory
+         * record, and the record write it attempted may have reached the
+         * write-back cache or the disk in part. Keep the buffer allocated
+         * (its $I30 bit stays set). If the old root stands, the buffer is a
+         * block nothing names, which the check releases; if the new root
+         * landed, the buffer it names stays valid. Releasing it here would
+         * let the next split write another subtree into a block a durable
+         * root may name.
+         */
+        DPRINT1(
+            "Root switch failed (0x%lx): index "
+            "record %llu stays allocated.\n",
+            Status,
+            RecordOrdinal);
     }
 
 Done:
