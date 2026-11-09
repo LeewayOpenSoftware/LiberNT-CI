@@ -278,6 +278,34 @@ TDI_STATUS InfoTdiQueryGetIcmpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
     return InfoCopyOut( (PCHAR)&ICMPStats, sizeof(ICMPStats), Buffer, BufferSize );
 }
 
+static BOOLEAN InfoTdiFillTcpConnectionRow(PADDRESS_FILE AddrFile,
+                                           PCONNECTION_ENDPOINT Connection,
+                                           PMIB_TCPROW_OWNER_MODULE TcpRow)
+{
+    TA_IP_ADDRESS EndPoint;
+
+    if (!NT_SUCCESS(TCPGetSockAddress(Connection, (PTRANSPORT_ADDRESS)&EndPoint, sizeof(EndPoint), FALSE)) ||
+        EndPoint.TAAddressCount < 1 || EndPoint.Address[0].AddressLength != TDI_ADDRESS_LENGTH_IP)
+        return FALSE;
+    TcpRow->dwLocalAddr = EndPoint.Address[0].Address[0].in_addr;
+    TcpRow->dwLocalPort = EndPoint.Address[0].Address[0].sin_port;
+
+    if (!NT_SUCCESS(TCPGetSockAddress(Connection, (PTRANSPORT_ADDRESS)&EndPoint, sizeof(EndPoint), TRUE)) ||
+        EndPoint.TAAddressCount < 1 || EndPoint.Address[0].AddressLength != TDI_ADDRESS_LENGTH_IP)
+        return FALSE;
+    TcpRow->dwRemoteAddr = EndPoint.Address[0].Address[0].in_addr;
+    TcpRow->dwRemotePort = EndPoint.Address[0].Address[0].sin_port;
+
+    return NT_SUCCESS(TCPGetSocketStatus(Connection, &TcpRow->dwState));
+}
+
+/* One TCP address file can stand for several endpoints: its listener, and
+ * every connection associated with it, which is how an accepted connection
+ * exists at all (AFD associates it with the listening address). Report each
+ * of them; the single row this used to return lost every server-side
+ * connection. The connections are pinned under the address file lock and
+ * queried after it is released, as the socket queries take the connection
+ * lock, which is never taken below the address file lock. */
 TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
 				    PNDIS_BUFFER Buffer,
 				    PUINT BufferSize,
@@ -285,7 +313,10 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
 {
     SIZE_T Size;
     MIB_TCPROW_OWNER_MODULE TcpRow;
-    TDI_STATUS Status = TDI_INVALID_REQUEST;
+    PCONNECTION_ENDPOINT *Connections = NULL, Connection;
+    PUCHAR Rows;
+    ULONG Count = 0, Written = 0, i;
+    TDI_STATUS Status;
 
     TI_DbgPrint(DEBUG_INFO, ("Called.\n"));
 
@@ -302,8 +333,37 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
         Size = sizeof(MIB_TCPROW);
     }
 
+    LockObject(AddrFile);
+    for (Connection = AddrFile->Connection; Connection != NULL; Connection = Connection->Next)
+        Count++;
+    if (Count != 0)
+        Connections = ExAllocatePoolWithTag(NonPagedPool, Count * sizeof(*Connections), OUT_DATA_TAG);
+    Count = 0;
+    if (Connections != NULL)
+    {
+        for (Connection = AddrFile->Connection; Connection != NULL; Connection = Connection->Next)
+        {
+            ReferenceObject(Connection);
+            Connections[Count++] = Connection;
+        }
+    }
+    UnlockObject(AddrFile);
+
+    Rows = ExAllocatePoolWithTag(PagedPool, (Count + 1) * Size, OUT_DATA_TAG);
+    if (Rows == NULL)
+    {
+        for (i = 0; i < Count; i++)
+            DereferenceObject(Connections[i]);
+        if (Connections != NULL)
+            ExFreePoolWithTag(Connections, OUT_DATA_TAG);
+        return TDI_NO_RESOURCES;
+    }
+
+    RtlZeroMemory(&TcpRow, sizeof(TcpRow));
     TcpRow.dwOwningPid = HandleToUlong(AddrFile->ProcessId);
     TcpRow.liCreateTimestamp = AddrFile->CreationTime;
+    if (Class == TcpUdpClassOwner)
+        TcpRow.OwningModuleInfo[0] = (ULONG_PTR)AddrFile->SubProcessTag;
 
     if (AddrFile->Listener != NULL)
     {
@@ -312,49 +372,27 @@ TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,
         TcpRow.dwLocalPort = AddrFile->Port;
         TcpRow.dwRemoteAddr = 0;
         TcpRow.dwRemotePort = 0;
-
-        Status = TDI_SUCCESS;
+        RtlCopyMemory(Rows + Written * Size, &TcpRow, Size);
+        Written++;
     }
-    else if (AddrFile->Connection != NULL &&
-             AddrFile->Connection->SocketContext != NULL)
+
+    for (i = 0; i < Count; i++)
     {
-        TA_IP_ADDRESS EndPoint;
-
-        Status = TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)&EndPoint, sizeof(EndPoint), FALSE);
-        if (NT_SUCCESS(Status))
+        if (Connections[i] != AddrFile->Listener && Connections[i]->SocketContext != NULL &&
+            InfoTdiFillTcpConnectionRow(AddrFile, Connections[i], &TcpRow))
         {
-            ASSERT(EndPoint.TAAddressCount >= 1);
-            ASSERT(EndPoint.Address[0].AddressLength == TDI_ADDRESS_LENGTH_IP);
-            TcpRow.dwLocalAddr = EndPoint.Address[0].Address[0].in_addr;
-            TcpRow.dwLocalPort = EndPoint.Address[0].Address[0].sin_port;
-
-            Status = TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)&EndPoint, sizeof(EndPoint), TRUE);
-            if (NT_SUCCESS(Status))
-            {
-                ASSERT(EndPoint.TAAddressCount >= 1);
-                ASSERT(EndPoint.Address[0].AddressLength == TDI_ADDRESS_LENGTH_IP);
-                TcpRow.dwRemoteAddr = EndPoint.Address[0].Address[0].in_addr;
-                TcpRow.dwRemotePort = EndPoint.Address[0].Address[0].sin_port;
-
-                Status = TCPGetSocketStatus(AddrFile->Connection, &TcpRow.dwState);
-                ASSERT(NT_SUCCESS(Status));
-            }
+            RtlCopyMemory(Rows + Written * Size, &TcpRow, Size);
+            Written++;
         }
+        DereferenceObject(Connections[i]);
     }
+    if (Connections != NULL)
+        ExFreePoolWithTag(Connections, OUT_DATA_TAG);
 
-    if (NT_SUCCESS(Status))
-    {
-        if (Class == TcpUdpClassOwner)
-        {
-            RtlZeroMemory(&TcpRow.OwningModuleInfo[0], sizeof(TcpRow.OwningModuleInfo));
-            TcpRow.OwningModuleInfo[0] = (ULONG_PTR)AddrFile->SubProcessTag;
-        }
+    Status = InfoCopyOut((PCHAR)Rows, Written * Size, Buffer, BufferSize);
+    ExFreePoolWithTag(Rows, OUT_DATA_TAG);
 
-        Status = InfoCopyOut( (PCHAR)&TcpRow, Size,
-                              Buffer, BufferSize );
-    }
-
-    TI_DbgPrint(DEBUG_INFO, ("Returning %08x\n", Status));
+    TI_DbgPrint(DEBUG_INFO, ("Returning %08x, %lu rows\n", Status, Written));
 
     return Status;
 }
