@@ -610,6 +610,7 @@ NtfsChkdsk(
     ULONG DirtyMask = 0;
     USHORT Flags = 0;
     BOOLEAN Locked = FALSE;
+    ULONG CheckWrites = 0;
     BOOLEAN Dirty;
     NTSTATUS Status;
 
@@ -680,6 +681,8 @@ NtfsChkdsk(
     {
         NtfsFormatReport(Callback, "Checking file records, indexes and the volume bitmap...\n");
         Status = NtfsVolumeCheck(Volume, Locked, NtfsCheckReport, &Check, &Result);
+        /* Writes made by the check itself, before the dirty flag is cleared. */
+        CheckWrites = NtfsDiskWriteCountUm();
     }
     /* VD4: do NOT clear the on-disk dirty flag while the mounted FSD still holds
      * a stale lifecycle. Dismount first and clear only after a SUCCESSFUL
@@ -725,6 +728,17 @@ NtfsChkdsk(
     if (Result.Errors)
     {
         NtfsFormatReport(Callback, "Problems were found on the volume.\n");
+        /* The check may still have repaired part of the volume around the
+         * mounted file system, which was dismounted above: what was opened on
+         * it before is stale, so restart as after a full repair. The dirty
+         * flag stays set and the next boot checks again; a check that writes
+         * nothing does not restart, so a residue it cannot fix cannot loop. */
+        if (Locked && CheckWrites != 0)
+        {
+            NtfsFormatReport(Callback, "%lu writes were made to the volume; it must be restarted.\n",
+                             CheckWrites);
+            *ExitStatus = NTFSLIB_CHKDSK_VOLUME_RELOADED;
+        }
         return TRUE;
     }
 
