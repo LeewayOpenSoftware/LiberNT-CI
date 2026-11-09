@@ -1510,6 +1510,185 @@ FileRecord::RemoveAttributeList()
 }
 
 NTSTATUS
+FileRecord::RebuildAttributeList(
+    _In_reads_(ExtensionCount) FileRecord* const* Extensions,
+    _In_ ULONG ExtensionCount)
+{
+    PAttribute ListAttribute;
+    PUCHAR NewList = NULL;
+    PULONG Order = NULL;
+    ULONG EntryCount = 0;
+    ULONG NewLength = 0;
+    ULONG Capacity = 0;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (!DiskVolume || DiskVolume->IsReadOnly || !Data || !Header || Header->BaseFileRecord != 0 ||
+        (ExtensionCount && !Extensions))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    ListAttribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    if (!ListAttribute)
+        return STATUS_NOT_FOUND;
+
+    /* Two passes over the records: count the room the entries need, then
+     * write them. Pass 0 also checks that every extension belongs here. */
+    for (ULONG Pass = 0; Pass < 2 && NT_SUCCESS(Status); Pass++)
+    {
+        if (Pass == 1)
+        {
+            if (!EntryCount)
+                return STATUS_FILE_CORRUPT_ERROR;
+            NewList = new(PagedPool, TAG_FILE_RECORD) UCHAR[Capacity];
+            Order = new(PagedPool, TAG_FILE_RECORD) ULONG[EntryCount];
+            if (!NewList || !Order)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
+            RtlZeroMemory(NewList, Capacity);
+            EntryCount = 0;
+        }
+        for (ULONG Index = 0; Index <= ExtensionCount && NT_SUCCESS(Status); Index++)
+        {
+            FileRecord* Owner = Index == 0 ? this : Extensions[Index - 1];
+            PFileRecordHeader OwnerHeader = Owner ? Owner->Header : NULL;
+            ULONG Offset;
+
+            if (!OwnerHeader || !Owner->Data ||
+                (Owner != this &&
+                 (GetFRNFromFileRef(OwnerHeader->BaseFileRecord) != RecordNumber ||
+                  (USHORT)(OwnerHeader->BaseFileRecord >> 48) != Header->SequenceNumber ||
+                  OwnerHeader->SequenceNumber == 0)) ||
+                OwnerHeader->ActualSize > OwnerHeader->AllocatedSize)
+            {
+                Status = STATUS_FILE_CORRUPT_ERROR;
+                break;
+            }
+            for (Offset = OwnerHeader->AttributeOffset;
+                 Offset + FIELD_OFFSET(Attribute, Resident) + 8 <= OwnerHeader->ActualSize;)
+            {
+                PAttribute Attr = reinterpret_cast<PAttribute>(Owner->Data + Offset);
+                ULONG EntryLength;
+
+                if (Attr->AttributeType == TypeAttributeEndMarker)
+                    break;
+                if (Attr->Length == 0 || Attr->Length > OwnerHeader->ActualSize - Offset ||
+                    (Attr->NameLength &&
+                     (Attr->NameOffset > Attr->Length ||
+                      Attr->NameLength * sizeof(WCHAR) > Attr->Length - Attr->NameOffset)))
+                {
+                    Status = STATUS_FILE_CORRUPT_ERROR;
+                    break;
+                }
+                Offset += Attr->Length;
+                if (Attr->AttributeType == TypeAttributeList)
+                    continue;
+
+                EntryLength = ALIGN_UP_BY(0x1a + Attr->NameLength * sizeof(WCHAR), sizeof(ULONGLONG));
+                if (Pass == 0)
+                {
+                    if (Capacity > MAXUSHORT * 64)
+                    {
+                        Status = STATUS_FILE_TOO_LARGE;
+                        break;
+                    }
+                    Capacity += EntryLength;
+                    EntryCount++;
+                    continue;
+                }
+
+                PAttributeListEx Entry = reinterpret_cast<PAttributeListEx>(NewList + NewLength);
+
+                Entry->Type = Attr->AttributeType;
+                Entry->RecordLength = (UINT16)EntryLength;
+                Entry->NameLength = Attr->NameLength;
+                Entry->NameOffset = 0x1a;
+                Entry->FirstVCN = Attr->IsNonResident ? Attr->NonResident.FirstVCN : 0;
+                Entry->BaseFileRef = ((ULONGLONG)OwnerHeader->SequenceNumber << 48) | Owner->RecordNumber;
+                Entry->AttributeId = Attr->AttributeID;
+                RtlCopyMemory(NewList + NewLength + 0x1a,
+                              reinterpret_cast<PUCHAR>(Attr) + Attr->NameOffset,
+                              Attr->NameLength * sizeof(WCHAR));
+                Order[EntryCount++] = NewLength;
+                NewLength += EntryLength;
+            }
+        }
+    }
+
+    /* Sort the entries the way every list is kept: type, name, first VCN.
+     * Insertion sort on offsets; lists are short. */
+    for (ULONG Index = 1; NT_SUCCESS(Status) && Index < EntryCount; Index++)
+    {
+        ULONG Moving = Order[Index];
+        PAttributeListEx Right = reinterpret_cast<PAttributeListEx>(NewList + Moving);
+        ULONG Slot = Index;
+
+        while (Slot > 0)
+        {
+            PAttributeListEx Left = reinterpret_cast<PAttributeListEx>(NewList + Order[Slot - 1]);
+            LONG Comparison;
+
+            Status = CompareAttributeListKeys(DiskVolume,
+                                              Left->Type,
+                                              reinterpret_cast<PWSTR>(reinterpret_cast<PUCHAR>(Left) + 0x1a),
+                                              Left->NameLength,
+                                              Left->FirstVCN,
+                                              Right->Type,
+                                              reinterpret_cast<PWSTR>(reinterpret_cast<PUCHAR>(Right) + 0x1a),
+                                              Right->NameLength,
+                                              Right->FirstVCN,
+                                              &Comparison);
+            if (!NT_SUCCESS(Status) || Comparison <= 0)
+                break;
+            Order[Slot] = Order[Slot - 1];
+            Slot--;
+        }
+        Order[Slot] = Moving;
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        PUCHAR Sorted = new(PagedPool, TAG_FILE_RECORD) UCHAR[NewLength];
+
+        if (!Sorted)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            ULONG Length = 0;
+
+            for (ULONG Index = 0; Index < EntryCount; Index++)
+            {
+                PAttributeListEx Entry = reinterpret_cast<PAttributeListEx>(NewList + Order[Index]);
+
+                RtlCopyMemory(Sorted + Length, Entry, Entry->RecordLength);
+                Length += Entry->RecordLength;
+            }
+            delete[] NewList;
+            NewList = Sorted;
+        }
+    }
+
+    /* Writing more than the list holds would allocate clusters through the
+     * mapping of a list that cannot be read: refuse that. */
+    if (NT_SUCCESS(Status) &&
+        ((ListAttribute->IsNonResident && NewLength > ListAttribute->NonResident.AllocatedSize) ||
+         (!ListAttribute->IsNonResident && NewLength > ListAttribute->Resident.DataLength)))
+    {
+        Status = STATUS_DISK_FULL;
+    }
+    if (NT_SUCCESS(Status))
+        Status = ReplaceAttributeList(NewList, NewLength);
+    delete[] NewList;
+    delete[] Order;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return DiskVolume->MFT->WriteFileRecordToMFT(this);
+}
+
+NTSTATUS
 FileRecord::ReplaceAttributeList(
     _In_reads_bytes_(NewLength) PUCHAR NewList,
     _In_ ULONG NewLength)

@@ -602,6 +602,13 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
         )
+        add_test(
+            NAME ntfslib_linux_check_attrlist
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/check_attrlist_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+        )
     endif()
     if(MKNTFS_EXECUTABLE AND
        NTFSCP_EXECUTABLE AND

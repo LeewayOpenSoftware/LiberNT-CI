@@ -199,7 +199,7 @@ jobs:
 
     - name: Run the volume check tests
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|check_attrlist"
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'

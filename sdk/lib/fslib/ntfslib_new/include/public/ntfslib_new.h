@@ -1123,7 +1123,11 @@ typedef enum NtfsCheckEvent
     /* A node held entries above its range, which its right sibling holds
      * after a split cut short; they were cut from the node. Argument1: the
      * directory's file record; Argument2: the node's VCN. */
-    NtfsCheckIndexTailTrimmed
+    NtfsCheckIndexTailTrimmed,
+    /* An unreadable attribute list was written again from the attributes of
+     * the base record and of its extension records. Argument1: the file
+     * record; Argument2: the extension records found. */
+    NtfsCheckAttributeListRebuilt
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult

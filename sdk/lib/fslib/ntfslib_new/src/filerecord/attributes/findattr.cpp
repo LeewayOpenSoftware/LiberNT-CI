@@ -656,6 +656,7 @@ FileRecord::BuildCompositeDataRuns(_In_ PAttribute Attribute)
     ULONG Offset = 0;
     ULONGLONG ExpectedVCN = 0;
     BOOLEAN FoundSegment = FALSE;
+    BOOLEAN ListBroken = FALSE;
     NTSTATUS Status;
 
     /*
@@ -729,7 +730,8 @@ FileRecord::BuildCompositeDataRuns(_In_ PAttribute Attribute)
         !AttributeListData ||
         AttributeListLength == 0)
     {
-        return NULL;
+        ListBroken = TRUE;
+        goto Corrupt;
     }
 
     ListData = AttributeListData;
@@ -742,7 +744,10 @@ FileRecord::BuildCompositeDataRuns(_In_ PAttribute Attribute)
         ULONG Remaining = ListLength - Offset;
 
         if (!IsAttributeListEntryValid(ListEntry, Remaining))
+        {
+            ListBroken = TRUE;
             goto Corrupt;
+        }
 
         if (ListEntry->Type == Attribute->AttributeType &&
             AttributeNameMatchesListEntry(Attribute, ListEntry))
@@ -827,6 +832,27 @@ FileRecord::BuildCompositeDataRuns(_In_ PAttribute Attribute)
 
 Corrupt:
     FreeDataRun(Head);
+
+    /*
+     * A list that cannot be read hides only what lives in extension records.
+     * An extent in this record that starts at VCN 0 and covers the whole
+     * stream needs no other segment, so it stays usable: the checker can
+     * still clear an index bitmap while the list is broken.
+     */
+    if (ListBroken &&
+        reinterpret_cast<PUCHAR>(Attribute) >= Data &&
+        reinterpret_cast<PUCHAR>(Attribute) < Data + Header->ActualSize &&
+        Attribute->NonResident.LastVCN != ~(ULONGLONG)0)
+    {
+        ULONGLONG ClusterSize = BytesPerCluster(DiskVolume);
+
+        if (ClusterSize != 0 &&
+            Attribute->NonResident.LastVCN + 1 >=
+                (Attribute->NonResident.DataSize + ClusterSize - 1) / ClusterSize)
+        {
+            return DecodeDataRuns(Attribute);
+        }
+    }
     return NULL;
 }
 

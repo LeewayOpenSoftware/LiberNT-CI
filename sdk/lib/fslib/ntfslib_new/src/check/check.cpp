@@ -9,6 +9,10 @@
 #include "ntfslib_new_internal.h"
 
 #define CHECK_RECORD_CHUNK      64
+/* Unreadable attribute lists rebuilt in one check, and the extension
+ * records one rebuilt list may name. */
+#define CHECK_LIST_REBUILDS     32
+#define CHECK_LIST_EXTENSIONS   64
 #define CHECK_BITMAP_CHUNK      0x10000
 #define CHECK_FIRST_USER_RECORD 24
 
@@ -191,7 +195,8 @@ private:
             Kind != NtfsCheckAttributeListFixed && Kind != NtfsCheckDataAttributeInserted &&
             Kind != NtfsCheckLostNameRemoved && Kind != NtfsCheckRepairsBlocked &&
             Kind != NtfsCheckNameRelinkFailed && Kind != NtfsCheckNameFoundUncounted &&
-            Kind != NtfsCheckAttributeListRemoved && Kind != NtfsCheckIndexReset)
+            Kind != NtfsCheckAttributeListRemoved && Kind != NtfsCheckIndexReset &&
+            Kind != NtfsCheckAttributeListRebuilt)
         {
             Out->Errors++;
             Out->FoundErrors++;
@@ -259,6 +264,7 @@ private:
     static BOOLEAN KeepListEntry(_In_ void* Context, _In_ const AttributeListEx* Entry);
     BOOLEAN HasExtensions(_In_ ULONGLONG Base);
     void CheckAttributeLists();
+    void RebuildAttributeLists(_In_reads_(Count) const ULONGLONG* Bases, _In_ ULONG Count);
     struct WalkFrame
     {
         ULONG Block;
@@ -1104,6 +1110,9 @@ VolumeCheck::HasExtensions(_In_ ULONGLONG Base)
 void
 VolumeCheck::CheckAttributeLists()
 {
+    ULONGLONG Rebuild[CHECK_LIST_REBUILDS];
+    ULONG RebuildCount = 0;
+
     for (ULONGLONG Number = 0; Number < RecordCount; Number++)
     {
         ListFilterContext Filter = { this, Number };
@@ -1122,13 +1131,18 @@ VolumeCheck::CheckAttributeLists()
         {
             /* With no extension record, every attribute is in the base record
              * and the list carries nothing: removing it makes the attributes
-             * readable again. A list that names extensions is left alone. */
+             * readable again. A list with extensions is written again from
+             * the records once they are all known. */
             Event(NtfsCheckAttributeListUnreadable, Number, (ULONG)Status);
             if (RepairRecords && !HasExtensions(Number) && NT_SUCCESS(File->RemoveAttributeList()))
             {
                 Out->Errors--;
                 Out->RepairedAttributeLists++;
                 Event(NtfsCheckAttributeListRemoved, Number, 0);
+            }
+            else if (RepairRecords && HasExtensions(Number) && RebuildCount < CHECK_LIST_REBUILDS)
+            {
+                Rebuild[RebuildCount++] = Number;
             }
         }
         else if (NT_SUCCESS(Status) && Dropped)
@@ -1146,8 +1160,97 @@ VolumeCheck::CheckAttributeLists()
         }
         delete File;
     }
+    if (RebuildCount)
+        RebuildAttributeLists(Rebuild, RebuildCount);
     if (RepairRecords)
         V->FlushVolume();
+}
+
+void
+VolumeCheck::RebuildAttributeLists(_In_reads_(Count) const ULONGLONG* Bases, _In_ ULONG Count)
+{
+    ULONGLONG* Extensions = new(PagedPool, TAG_NTFS) ULONGLONG[Count * CHECK_LIST_EXTENSIONS];
+    ULONG ExtensionCount[CHECK_LIST_REBUILDS] = {};
+    BOOLEAN Usable[CHECK_LIST_REBUILDS];
+
+    if (!Extensions)
+        return;
+    for (ULONG Base = 0; Base < Count; Base++)
+        Usable[Base] = TRUE;
+
+    /* One pass over the MFT finds every record that names one of the bases.
+     * A list is only rebuilt when all of them can be read: a torn extension
+     * held attributes that a new list would drop. */
+    for (ULONGLONG First = 0; First < RecordCount; First += CHECK_RECORD_CHUNK)
+    {
+        ULONG Chunk = (ULONG)min((ULONGLONG)CHECK_RECORD_CHUNK, RecordCount - First);
+
+        if (!NT_SUCCESS(ReadRecords(First, Chunk)))
+        {
+            for (ULONG Base = 0; Base < Count; Base++)
+                Usable[Base] = FALSE;
+            break;
+        }
+        for (ULONG Index = 0; Index < Chunk; Index++)
+        {
+            PFileRecordHeader Header = reinterpret_cast<PFileRecordHeader>(Records + Index * RecordSize);
+            BOOLEAN IsFile = RtlCompareMemory(Header->Header.TypeID, "FILE", 4) == 4;
+            ULONGLONG Owner;
+
+            if (!IsFile && RtlCompareMemory(Header->Header.TypeID, "BAAD", 4) != 4)
+                continue;
+            Owner = Header->BaseFileRecord & 0x0000FFFFFFFFFFFFULL;
+            if (Owner == 0)
+                continue;
+            for (ULONG Base = 0; Base < Count; Base++)
+            {
+                if (Bases[Base] != Owner)
+                    continue;
+                if (!IsFile || !NT_SUCCESS(NtfsApplyFixup(&Header->Header, RecordSize, V->BytesPerSector)))
+                {
+                    Usable[Base] = FALSE;
+                }
+                else if ((Header->Flags & FR_IN_USE) && (USHORT)(Header->BaseFileRecord >> 48) == Sequence[Owner])
+                {
+                    if (ExtensionCount[Base] == CHECK_LIST_EXTENSIONS)
+                        Usable[Base] = FALSE;
+                    else
+                        Extensions[Base * CHECK_LIST_EXTENSIONS + ExtensionCount[Base]++] = First + Index;
+                }
+                break;
+            }
+        }
+    }
+
+    for (ULONG Base = 0; Base < Count; Base++)
+    {
+        PFileRecord Parts[CHECK_LIST_EXTENSIONS] = {};
+        PFileRecord File = NULL;
+        ULONG Loaded = 0;
+        NTSTATUS Status;
+
+        if (!Usable[Base] || ExtensionCount[Base] == 0)
+            continue;
+        Status = V->MFT->GetFileRecord((ULONG)Bases[Base], &File);
+        while (NT_SUCCESS(Status) && Loaded < ExtensionCount[Base])
+        {
+            Status = V->MFT->GetFileRecord((ULONG)Extensions[Base * CHECK_LIST_EXTENSIONS + Loaded], &Parts[Loaded]);
+            if (NT_SUCCESS(Status))
+                Loaded++;
+        }
+        if (NT_SUCCESS(Status))
+            Status = File->RebuildAttributeList(Parts, Loaded);
+        if (NT_SUCCESS(Status))
+        {
+            Out->Errors--;
+            Out->RepairedAttributeLists++;
+            Event(NtfsCheckAttributeListRebuilt, Bases[Base], Loaded);
+        }
+        for (ULONG Index = 0; Index < Loaded; Index++)
+            delete Parts[Index];
+        delete File;
+    }
+    delete[] Extensions;
 }
 
 void
@@ -2121,7 +2224,12 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             !NT_SUCCESS(File->ReadAttributeAlloc(AllocationAttr, &Allocation, &AllocationLength)) ||
             !NT_SUCCESS(File->ReadAttributeAlloc(BitmapAttr, &Bitmap, &BitmapLength)))
         {
+            /* The blocks cannot be read (an attribute list that could not be
+             * rebuilt hides their extents): no name in them can be found, so
+             * the tree is emptied and refilled like any other. */
             Event(NtfsCheckIndexCorrupt, Directory, 0);
+            Walk.Problems++;
+            Walk.Unwalkable = TRUE;
         }
         else
         {
