@@ -160,6 +160,20 @@ if(BUILD_TESTING)
         COMMAND ntfslib_resident_update_test
     )
 
+    add_executable(ntfslib_size_persist_times_test
+        tests/size_persist_times.cpp
+    )
+    target_compile_features(ntfslib_size_persist_times_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_size_persist_times_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_size_persist_times_test PRIVATE ntfslib_linux)
+    add_test(
+        NAME ntfslib_linux_size_persist_times
+        COMMAND ntfslib_size_persist_times_test
+    )
+
     add_executable(ntfslib_lznt1_roundtrip_test
         tests/lznt1_roundtrip.cpp
     )

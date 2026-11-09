@@ -174,7 +174,8 @@ jobs:
 
   ntfslib-host-tests:
     # The host tests of the NTFS library, outside the image build: a
-    # directory index that grows past its base record.
+    # directory index that grows past its base record, and a size change
+    # made with the automatic timestamps masked (the cleanup-time persist).
     runs-on: ubuntu-24.04
     steps:
     - name: Source checkout
@@ -195,11 +196,11 @@ jobs:
 
     - name: Build
       run: |
-        cmake --build build/ntfslib-linux --target ntfslib_fuse
+        cmake --build build/ntfslib-linux --target ntfslib_fuse ntfslib_size_persist_times_test
 
     - name: Run the host tests
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "grow_fragmented_index"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "grow_fragmented_index|size_persist_times"
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'

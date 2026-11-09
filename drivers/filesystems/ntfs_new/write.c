@@ -112,6 +112,31 @@ NtfsPersistPendingSize(_In_ PVolumeContextBlock VolCB,
         ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
         return Status;
     }
+    /*
+     * The size a cached write grew is written to the record here, at
+     * cleanup or just before an explicit size change. That is bookkeeping
+     * for writes that stamped the times when they happened (NtfsFastIoWrite
+     * and the write path do, once per system time tick), so the times stay
+     * where the last write left them, as on Windows, where a close moves
+     * nothing (Lab03 L3 P1: every file grown by cached writes had its
+     * LastWriteTime and ChangeTime jump to the close time, and tstime's
+     * append-close scenario shows it). SetFileDataSize and
+     * SetFileAllocationSize stamp inside the library, so take the automatic
+     * fields out of the record's mask for these two calls only. The handle's
+     * own mask comes back right after, and NtfsRefreshDirectoryRecord sets
+     * it again before any later use. An explicit SetEndOfFile or
+     * FileAllocationInformation keeps its stamp: it calls the library itself
+     * after this returns, with the handle's mask in place.
+     */
+    Status = NtfsFileRecordSetAutomaticTimestampMask(
+        FileCB->FileRec,
+        FileCB->AutomaticTimestampMask & ~NTFS_AUTOMATIC_TIMESTAMP_FIELDS);
+    if (!NT_SUCCESS(Status))
+    {
+        NtfsReleaseMetadata(VolCB);
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        return Status;
+    }
     DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
     if (DataAttribute && DataAttribute->IsNonResident)
     {
@@ -135,6 +160,7 @@ NtfsPersistPendingSize(_In_ PVolumeContextBlock VolCB,
     {
         Status = STATUS_FILE_CORRUPT_ERROR;
     }
+    (void)NtfsFileRecordSetAutomaticTimestampMask(FileCB->FileRec, FileCB->AutomaticTimestampMask);
     NtfsReleaseMetadata(VolCB);
 
     if (NT_SUCCESS(Status))
