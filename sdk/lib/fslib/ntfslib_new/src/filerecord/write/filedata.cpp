@@ -3058,6 +3058,29 @@ RestoreResident:
                     TimestampFields,
                     NULL);
         }
+        /*
+         * The record is about to publish a larger DataSize or
+         * InitializedDataSize over bytes that still sit in the write-back
+         * cache; order it after them (OrderRecordAfterRunBytes). An
+         * attribute list that lands with its new length over its old bytes
+         * reads zero entries at the tail and fails to parse, which makes
+         * every attribute of the file unreachable.
+         */
+        if (NT_SUCCESS(Status) &&
+            MetadataChanged &&
+            AttributeContentIsOrdered(TargetAttribute))
+        {
+            ULONGLONG OrderedFrom =
+                min(OldInitializedSize,
+                    (ULONGLONG)Offset->QuadPart);
+
+            Status = OrderRecordAfterRunBytes(
+                DiskVolume,
+                AttributeOwner,
+                GetCachedDataRuns(TargetAttribute),
+                OrderedFrom,
+                EndOffset - OrderedFrom);
+        }
         if (NT_SUCCESS(Status) &&
             (MetadataChanged || TimestampUpdate))
         {
