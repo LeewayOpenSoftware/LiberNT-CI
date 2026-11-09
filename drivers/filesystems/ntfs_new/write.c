@@ -317,6 +317,21 @@ NTAPI
 NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              _Inout_ PIRP Irp)
 {
+    /* See NtfsFsdRead: a dismounted volume rejects every existing handle
+       except the DASD handle that issued the dismount. */
+    if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject &&
+        ((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension)->Dismounted)
+    {
+        PFileContextBlock FileCB =
+            NtfsGetFileContext(IoGetCurrentIrpStackLocation(Irp)->FileObject);
+        if (FileCB == NULL || !FileCB->DismountedVolume)
+        {
+            Irp->IoStatus.Status = STATUS_VOLUME_DISMOUNTED;
+            Irp->IoStatus.Information = 0;
+            IoCompleteRequest(Irp, IO_NO_INCREMENT);
+            return STATUS_VOLUME_DISMOUNTED;
+        }
+    }
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
     /* Overview:
