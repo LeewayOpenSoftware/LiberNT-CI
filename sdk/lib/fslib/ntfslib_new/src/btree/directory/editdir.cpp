@@ -979,6 +979,118 @@ OrderNodeAfterIndexNodes(
         NodeLength);
 }
 
+/*
+ * The reverse pair: a node that references a VCN must not reach the disk
+ * before the record whose $INDEX_ALLOCATION run list covers that VCN. The
+ * growth of the allocation (ExtendNonResidentData, via WriteIndexNode of a
+ * new block) rewrites the record, and the parent that points at the new
+ * block is written next; committed out of order, the parent references a
+ * VCN beyond the allocation on the disk (J36 shape scan type B: 1-28 record
+ * 15668 references VCN 15-22 while only 0-14 exist). Orders the pointer
+ * range after the record; a record whose offset cannot be resolved is made
+ * durable by a full flush.
+ */
+static NTSTATUS
+OrderPointerAfterRecord(
+    _In_ PVolume DiskVolume,
+    _In_ ULONGLONG PointerDiskOffset,
+    _In_ ULONG PointerLength,
+    _In_opt_ PFileRecord PointeeRecord)
+{
+    ULONGLONG RecordDiskOffset = 0;
+
+    if (!PointeeRecord ||
+        PointeeRecord->RecordNumber == MAXULONG ||
+        !NT_SUCCESS(DiskVolume->MFT->GetFileRecordDiskOffset(
+            PointeeRecord->RecordNumber,
+            &RecordDiskOffset)))
+    {
+        return DiskVolume->FlushVolume();
+    }
+    return DiskVolume->OrderAfter(
+        PointerDiskOffset,
+        PointerLength,
+        RecordDiskOffset,
+        DiskVolume->MFT->FileRecordSize);
+}
+
+/* The pointer is the index node at NodeVcn. */
+static NTSTATUS
+OrderNodeAfterRecord(
+    _In_ PVolume DiskVolume,
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONGLONG NodeVcn,
+    _In_ ULONGLONG AllocationUnit,
+    _In_ ULONG RecordSize,
+    _In_opt_ PFileRecord PointeeRecord)
+{
+    ULONGLONG NodeDiskOffset = 0;
+    ULONG NodeLength = 0;
+
+    if (!NT_SUCCESS(ResolveIndexNodeRange(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            NodeVcn,
+            AllocationUnit,
+            RecordSize,
+            &NodeDiskOffset,
+            &NodeLength)))
+    {
+        NodeLength = 0;
+    }
+    return OrderPointerAfterRecord(
+        DiskVolume,
+        NodeDiskOffset,
+        NodeLength,
+        PointeeRecord);
+}
+
+/* The pointer is a record (the one owning $INDEX_ROOT); nothing to do when
+ * it is the record owning the allocation, they are one write. */
+static NTSTATUS
+OrderRecordAfterRecord(
+    _In_ PVolume DiskVolume,
+    _In_opt_ PFileRecord PointerRecord,
+    _In_opt_ PFileRecord PointeeRecord)
+{
+    ULONGLONG RecordDiskOffset = 0;
+    ULONG PointerLength = 0;
+
+    if (PointerRecord == PointeeRecord)
+        return STATUS_SUCCESS;
+    if (PointerRecord &&
+        PointerRecord->RecordNumber != MAXULONG &&
+        NT_SUCCESS(DiskVolume->MFT->GetFileRecordDiskOffset(
+            PointerRecord->RecordNumber,
+            &RecordDiskOffset)))
+    {
+        PointerLength = DiskVolume->MFT->FileRecordSize;
+    }
+    return OrderPointerAfterRecord(
+        DiskVolume,
+        RecordDiskOffset,
+        PointerLength,
+        PointeeRecord);
+}
+
+/* Current data size of the $INDEX_ALLOCATION, 0 when there is none. */
+static ULONGLONG
+IndexAllocationSize(
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName)
+{
+    PAttribute IndexAllocationAttribute =
+        DirectoryFile->GetAttribute(
+            TypeIndexAllocation,
+            const_cast<PWSTR>(IndexName));
+
+    return IndexAllocationAttribute
+        ? GetAttributeDataSize(IndexAllocationAttribute)
+        : 0;
+}
+
 static NTSTATUS
 SetIndexRecordBitmapBit(
     _In_ PFileRecord DirectoryFile,
@@ -1640,6 +1752,14 @@ Directory::PushDownRoot(
                 ? DirectoryFile->GetAttributeOwner(
                     IndexRootAttribute)
                 : NULL;
+            PAttribute AllocationAttribute =
+                DirectoryFile->GetAttribute(
+                    TypeIndexAllocation,
+                    const_cast<PWSTR>(IndexName));
+            PFileRecord AllocationOwner = AllocationAttribute
+                ? DirectoryFile->GetAttributeOwner(
+                    AllocationAttribute)
+                : NULL;
 
             Status = OrderRecordAfterIndexNodes(
                 DiskVolume,
@@ -1663,6 +1783,18 @@ Directory::PushDownRoot(
                     AllocationUnit,
                     RecordSize,
                     RootOwner);
+            }
+            /*
+             * The END -> Vcn root must not land before the run list that
+             * covers Vcn when the two live in different records (the node
+             * write above may have grown the allocation).
+             */
+            if (NT_SUCCESS(Status))
+            {
+                Status = OrderRecordAfterRecord(
+                    DiskVolume,
+                    RootOwner,
+                    AllocationOwner);
             }
             if (!NT_SUCCESS(Status))
                 goto Done;
@@ -1913,6 +2045,12 @@ Directory::SplitAndPromote(
      * node); whatever names them next must be ordered after them. */
     ULONGLONG ChildVcns[2] = { 0, 0 };
     BOOLEAN HaveChildren = FALSE;
+    /* Whether a new node of this split grew the $INDEX_ALLOCATION: the
+     * record carrying the grown run list must then land before any node
+     * that references the new VCN (OrderPointerAfterRecord). */
+    ULONGLONG AllocationSizeAtEntry = 0;
+    BOOLEAN AllocationGrew = FALSE;
+    PFileRecord AllocationOwner = NULL;
     NTSTATUS Status;
 
     /* One node's entry list (<= RecordSize) plus one pending entry. */
@@ -1929,6 +2067,8 @@ Directory::SplitAndPromote(
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Done;
     }
+    AllocationSizeAtEntry =
+        IndexAllocationSize(DirectoryFile, IndexName);
 
     while (Level != 0)
     {
@@ -1999,6 +2139,20 @@ Directory::SplitAndPromote(
                 if (!NT_SUCCESS(Status))
                     goto Done;
             }
+            /* ... and after the record that grew the allocation for them. */
+            if (AllocationGrew)
+            {
+                Status = OrderNodeAfterRecord(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    NodeVcn,
+                    AllocationUnit,
+                    RecordSize,
+                    AllocationOwner);
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+            }
             Status = WriteIndexNode(
                 DiskVolume,
                 DirectoryFile,
@@ -2052,6 +2206,17 @@ Directory::SplitAndPromote(
             if (!NT_SUCCESS(Status))
                 goto Done;
         }
+        /* Same for the record that grew the allocation for the children. */
+        if (AllocationGrew)
+        {
+            Status = OrderPointerAfterRecord(
+                DiskVolume,
+                0,
+                0,
+                AllocationOwner);
+            if (!NT_SUCCESS(Status))
+                goto Done;
+        }
 
         /*
          * Publish the right node first: until the parent link switches,
@@ -2081,6 +2246,22 @@ Directory::SplitAndPromote(
             SideImage);
         if (!NT_SUCCESS(Status))
             goto Done;
+        if (IndexAllocationSize(DirectoryFile, IndexName) >
+            AllocationSizeAtEntry)
+        {
+            PAttribute AllocationAttribute =
+                DirectoryFile->GetAttribute(
+                    TypeIndexAllocation,
+                    const_cast<PWSTR>(IndexName));
+
+            /* Resolved after the growth: a mapping update may have moved
+             * the run list into another record. */
+            AllocationGrew = TRUE;
+            AllocationOwner = AllocationAttribute
+                ? DirectoryFile->GetAttributeOwner(
+                    AllocationAttribute)
+                : NULL;
+        }
         Status = SetIndexRecordBitmapBit(
             DirectoryFile,
             IndexName,
@@ -2252,6 +2433,24 @@ Directory::SplitAndPromote(
                 goto Done;
             }
         }
+        /*
+         * When the root lives in another record than the allocation, the
+         * root's record must not land before the record with the grown run
+         * list (one record: one write, nothing to order).
+         */
+        if (AllocationGrew)
+        {
+            Status = OrderRecordAfterRecord(
+                DiskVolume,
+                DirectoryFile->GetAttributeOwner(
+                    IndexRootAttribute),
+                AllocationOwner);
+            if (!NT_SUCCESS(Status))
+            {
+                delete[] RootValue;
+                goto Done;
+            }
+        }
         Status = ReplaceIndexRootValue(
             DiskVolume,
             DirectoryFile,
@@ -2280,6 +2479,17 @@ Directory::SplitAndPromote(
                     RecordSize,
                     0,
                     0);
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+            }
+            /* The pushed-down node will reference the new VCNs too. */
+            if (AllocationGrew)
+            {
+                Status = OrderPointerAfterRecord(
+                    DiskVolume,
+                    0,
+                    0,
+                    AllocationOwner);
                 if (!NT_SUCCESS(Status))
                     goto Done;
             }
