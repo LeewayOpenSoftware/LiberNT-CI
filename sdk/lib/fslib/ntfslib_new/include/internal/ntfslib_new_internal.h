@@ -1051,6 +1051,22 @@ public:
     NTSTATUS
     RemoveAttributeList();
 
+    NTSTATUS
+    DropUnneededAttributeList(
+        _In_ BOOLEAN Commit,
+        _Out_ PBOOLEAN Unneeded);
+
+    NTSTATUS
+    CollapseUnneededAttributeList();
+
+    /* After a mapping growth that created the attribute list: collapse a
+     * list that names only the base record, unless removing it would leave
+     * the base record too full to create a list for the next growth. Then
+     * part of the largest mapping moves to an extension record instead, so
+     * the list is kept and names it. */
+    NTSTATUS
+    SettleGrowthAttributeList();
+
     NTSTATUS ReadSecurityDescriptor(
         _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG BufferLength);
@@ -1699,6 +1715,17 @@ private:
     BOOLEAN DirectEnumeration = FALSE;
 
     // ./editdir.cpp
+    /* Free bytes the base record of a large index keeps while it has no
+     * attribute list, so a mapping growth can still create one (the list
+     * needs about 0x50; a growth creates it up front below this). */
+#define NTFS_MAPPING_GROWTH_HEADROOM 0x110
+
+    static BOOLEAN
+    RootGrowthKeepsListRoom(
+        _In_ PFileRecord DirectoryFile,
+        _In_ PCWSTR IndexName,
+        _In_ ULONG ValueLength);
+
     static NTSTATUS
     ReplaceIndexRootValue(
         _In_ PVolume DiskVolume,

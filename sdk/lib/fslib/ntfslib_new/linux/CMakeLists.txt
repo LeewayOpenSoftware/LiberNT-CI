@@ -179,6 +179,20 @@ if(BUILD_TESTING)
         COMMAND ntfslib_check_split_trim_test
     )
 
+    add_executable(ntfslib_size_persist_times_test
+        tests/size_persist_times.cpp
+    )
+    target_compile_features(ntfslib_size_persist_times_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_size_persist_times_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_size_persist_times_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_size_persist_times
+        COMMAND ntfslib_size_persist_times_test
+    )
+
     add_executable(ntfslib_lznt1_roundtrip_test
         tests/lznt1_roundtrip.cpp
     )
@@ -244,6 +258,15 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${NTFSLS_EXECUTABLE}"
                 "${NTFSCAT_EXECUTABLE}"
                 "${NTFSINFO_EXECUTABLE}"
+        )
+    endif()
+    if(MKNTFS_EXECUTABLE)
+        add_test(
+            NAME ntfslib_linux_grow_fragmented_index
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/grow_fragmented_index_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
         )
     endif()
     if(MKNTFS_EXECUTABLE AND

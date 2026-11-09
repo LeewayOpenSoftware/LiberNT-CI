@@ -1477,6 +1477,48 @@ SelectIndexRecordSlot(
  * Replaces the complete $INDEX_ROOT value with backup/restore so a
  * failed record commit leaves the previous root intact.
  */
+/*
+ * Whether the root of a large index may grow to ValueLength bytes. While
+ * the directory has no attribute list, the root must leave the base record
+ * the room a mapping growth needs to create one: a root that fills the
+ * record leaves the next index block with neither room for its mapping nor
+ * for a list, and every insert fails STATUS_BUFFER_TOO_SMALL (Lab03 L1-B,
+ * about 1400 entries with 200-character names). When it returns FALSE the
+ * caller pushes the root down, as for a full record. Once a list exists,
+ * a mapping that does not fit moves to an extension record instead.
+ */
+BOOLEAN
+Directory::RootGrowthKeepsListRoom(
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONG ValueLength)
+{
+    PFileRecordHeader Header = DirectoryFile->Header;
+    PAttribute Root;
+    PAttribute Allocation;
+    ULONG OldLength;
+    ULONG NewLength;
+
+    if (!Header || !DirectoryFile->Data || Header->BaseFileRecord != 0 ||
+        Header->ActualSize > Header->AllocatedSize ||
+        DirectoryFile->FindAttributeInRecord(TypeAttributeList, NULL, NULL))
+    {
+        return TRUE;
+    }
+    Root = DirectoryFile->FindAttributeInRecord(TypeIndexRoot, const_cast<PWSTR>(IndexName), NULL);
+    Allocation = DirectoryFile->FindAttributeInRecord(TypeIndexAllocation, const_cast<PWSTR>(IndexName), NULL);
+    if (!Root || Root->IsNonResident || !Allocation || !Allocation->IsNonResident ||
+        ValueLength > MAXULONG - 8 - Root->Resident.DataOffset)
+    {
+        return TRUE;
+    }
+    OldLength = Root->Length;
+    NewLength = ALIGN_UP_BY(Root->Resident.DataOffset + ValueLength, sizeof(ULONGLONG));
+    if (NewLength <= OldLength)
+        return TRUE;
+    return Header->AllocatedSize - Header->ActualSize >= NewLength - OldLength + NTFS_MAPPING_GROWTH_HEADROOM;
+}
+
 NTSTATUS
 Directory::ReplaceIndexRootValue(
     _In_ PVolume DiskVolume,
@@ -1959,6 +2001,15 @@ Directory::PushDownRoot(
             Status = DiskVolume->MFT->
                 WriteFileRecordToMFT(RootOwner);
         }
+        /*
+         * The attribute list created above for the allocation's mapping
+         * is only needed if the mapping went to an extension record. When
+         * it still fit in the base record, every entry names the base
+         * record and no later path frees an extension record to notice:
+         * remove it now (base record first, then the list's clusters).
+         */
+        if (NT_SUCCESS(Status))
+            (void)DirectoryFile->SettleGrowthAttributeList();
         if (!NT_SUCCESS(Status))
         {
             RtlCopyMemory(
@@ -2826,12 +2877,14 @@ Directory::SplitAndPromote(
          * the record that grew the allocation when that is another record,
          * before the left one was rewritten (end of the split case above).
          */
-        Status = ReplaceIndexRootValue(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            RootValue,
-            RootValueLength);
+        Status = RootGrowthKeepsListRoom(DirectoryFile, IndexName, RootValueLength)
+            ? ReplaceIndexRootValue(
+                  DiskVolume,
+                  DirectoryFile,
+                  IndexName,
+                  RootValue,
+                  RootValueLength)
+            : STATUS_BUFFER_TOO_SMALL;
         delete[] RootValue;
         if (NT_SUCCESS(Status))
         {
@@ -3245,12 +3298,14 @@ Directory::AddIndexEntry(
             EntryLength);
         NewHeader->AllocatedSize = NewTotal;
 
-        Status = ReplaceIndexRootValue(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            NewRootData,
-            NewRootDataLength);
+        Status = RootGrowthKeepsListRoom(DirectoryFile, IndexName, NewRootDataLength)
+            ? ReplaceIndexRootValue(
+                  DiskVolume,
+                  DirectoryFile,
+                  IndexName,
+                  NewRootData,
+                  NewRootDataLength)
+            : STATUS_BUFFER_TOO_SMALL;
         if (Status == STATUS_BUFFER_TOO_SMALL)
         {
             /*
@@ -4834,12 +4889,14 @@ Directory::RemoveIndexEntry(
             &ReplacementLength /* reused */);
         if (!NT_SUCCESS(Status))
             goto Done;
-        Status = ReplaceIndexRootValue(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            RootValue,
-            ReplacementLength);
+        Status = RootGrowthKeepsListRoom(DirectoryFile, IndexName, ReplacementLength)
+            ? ReplaceIndexRootValue(
+                  DiskVolume,
+                  DirectoryFile,
+                  IndexName,
+                  RootValue,
+                  ReplacementLength)
+            : STATUS_BUFFER_TOO_SMALL;
         if (Status == STATUS_BUFFER_TOO_SMALL)
         {
             Status = PushDownRoot(

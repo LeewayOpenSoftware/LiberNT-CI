@@ -2506,6 +2506,57 @@ FileRecord::EnsureAttributeListForMappingGrowth(
 
 static const ULONG ResidentPromotionGrowth = 0x40 - 0x18 + 0x10;
 
+/*
+ * Free bytes below which a mapping growth creates the attribute list up
+ * front (the list itself needs about 0x50 in the base record). The index
+ * root keeps the same room free (Directory::RootGrowthKeepsListRoom).
+ */
+static const ULONG MappingGrowthHeadroom = NTFS_MAPPING_GROWTH_HEADROOM;
+
+NTSTATUS
+FileRecord::SettleGrowthAttributeList()
+{
+    PAttribute ListAttribute;
+    BOOLEAN Unneeded;
+    NTSTATUS Status;
+
+    if (!Header || !Data || Header->BaseFileRecord != 0 ||
+        Header->ActualSize > Header->AllocatedSize)
+    {
+        return STATUS_SUCCESS;
+    }
+    ListAttribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    if (!ListAttribute)
+        return STATUS_SUCCESS;
+    Status = DropUnneededAttributeList(FALSE, &Unneeded);
+    if (!NT_SUCCESS(Status) || !Unneeded)
+        return Status;
+
+    /*
+     * Collapsing hands the list's bytes to the mapping. Done after every
+     * growth, the mapping creeps into the room the list needs, until a
+     * growth can neither fit its mapping nor create a list, and every
+     * further block fails STATUS_BUFFER_TOO_SMALL (a fragmented directory
+     * index stops at about 1700 entries). So collapse only while the base
+     * record keeps that room; otherwise move part of the largest mapping to
+     * an extension record, which the list then names.
+     */
+    if (Header->AllocatedSize - Header->ActualSize + ListAttribute->Length >= MappingGrowthHeadroom)
+        return CollapseUnneededAttributeList();
+    (void)ReleaseBaseRecordSpace(MappingGrowthHeadroom);
+
+    /*
+     * Keep the list even when nothing could move out yet. Collapsing it
+     * here is what starves the record: each later growth would recreate
+     * and drop it while the mapping takes a few more bytes, until there is
+     * no room left to create a list at all (Lab03 L1-B: the mapping filled
+     * the record, free 0, no list). With the list kept, the next growth
+     * that does not fit moves mapping pairs to an extension record through
+     * the normal update path, and the list then names it, as on main.
+     */
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 FileRecord::ReleaseBaseRecordSpace(
     _In_ ULONG Required)
@@ -2927,13 +2978,15 @@ RestoreResident:
              * while the record still has headroom. A reactive retry backs
              * up a first failure inside the remaining window.
              */
-            BOOLEAN ListCreated;
+            BOOLEAN ListCreated = FALSE;
+            BOOLEAN ListCreatedHere = FALSE;
+            BOOLEAN KeepHeadroom;
 
             if (AttributeOwner == this &&
                 Header->AllocatedSize >=
                     Header->ActualSize &&
                 Header->AllocatedSize -
-                    Header->ActualSize < 0x100)
+                    Header->ActualSize < MappingGrowthHeadroom)
             {
                 Status =
                     EnsureAttributeListForMappingGrowth(
@@ -2944,14 +2997,53 @@ RestoreResident:
                         &ListCreated);
                 if (!NT_SUCCESS(Status))
                     return Status;
+                ListCreatedHere = ListCreated;
             }
 
+            /*
+             * Once an earlier growth has moved part of this mapping to an
+             * extension record, the rewrite below would pack every pair
+             * back into the base record whenever they fit, free the
+             * extension and drop the list, and the next growth would have
+             * to create the list again from less room. Each round the
+             * mapping keeps a few more bytes, until no list fits and every
+             * block fails STATUS_BUFFER_TOO_SMALL (Lab03 L1-B: 1404
+             * entries, free 0, no list). So while a list from an earlier
+             * growth exists, the base record keeps the growth headroom,
+             * and the pairs beyond it stay in extension records.
+             */
+            KeepHeadroom =
+                AttributeOwner == this &&
+                !ListCreatedHere &&
+                FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+            if (KeepHeadroom)
+                MappingReserve = MappingGrowthHeadroom;
             Status = AttributeOwner->
                 ExtendNonResidentData(
                 TargetAttribute,
                 Buffer,
                 RequestedLength,
                 (ULONGLONG)Offset->QuadPart);
+            if (KeepHeadroom)
+            {
+                MappingReserve = 0;
+                /* The reserve is a preference: fall back to the full room. */
+                if (Status == STATUS_BUFFER_TOO_SMALL)
+                {
+                    TargetAttribute = GetAttribute(AttrType, StreamName);
+                    if (!TargetAttribute ||
+                        GetAttributeOwner(TargetAttribute) != this)
+                    {
+                        return STATUS_FILE_CORRUPT_ERROR;
+                    }
+                    Status = AttributeOwner->
+                        ExtendNonResidentData(
+                        TargetAttribute,
+                        Buffer,
+                        RequestedLength,
+                        (ULONGLONG)Offset->QuadPart);
+                }
+            }
             if (Status == STATUS_BUFFER_TOO_SMALL)
             {
                 Status =
@@ -2963,6 +3055,7 @@ RestoreResident:
                         &ListCreated);
                 if (NT_SUCCESS(Status) && ListCreated)
                 {
+                    ListCreatedHere = TRUE;
                     Status = AttributeOwner->
                         ExtendNonResidentData(
                         TargetAttribute,
@@ -2977,6 +3070,16 @@ RestoreResident:
                         STATUS_BUFFER_TOO_SMALL;
                 }
             }
+            /*
+             * The list made for the growth is only needed if a mapping
+             * segment actually went to an extension record. When the
+             * grown mapping still fit in the base record every entry names
+             * the base record, so remove the list again (base record
+             * first, then the list's clusters); Windows treats a record
+             * with such a list as corrupt.
+             */
+            if (NT_SUCCESS(Status) && ListCreatedHere)
+                (void)SettleGrowthAttributeList();
             if (NT_SUCCESS(Status))
             {
                 *Length = RequestedLength;
@@ -6898,6 +7001,7 @@ FileRecord::WriteCompressedData(_In_ PAttribute TargetAttribute,
     ULONG Fill = 0;
     ULONG ChunkUnits = NTFS_COMPRESSED_WRITE_UNITS;
     BOOLEAN ListCreated;
+    BOOLEAN ListCreatedHere = FALSE;
     NTSTATUS Status = STATUS_SUCCESS;
 
     if (!TargetAttribute || !Buffer || !Length || *Length == 0)
@@ -6969,7 +7073,7 @@ FileRecord::WriteCompressedData(_In_ PAttribute TargetAttribute,
         {
             ULONG Free = Header->AllocatedSize - Header->ActualSize;
 
-            if (Free < 0x110)
+            if (Free < MappingGrowthHeadroom)
             {
                 Status = EnsureAttributeListForMappingGrowth(TypeData,
                                                              StreamName,
@@ -7028,6 +7132,8 @@ FileRecord::WriteCompressedData(_In_ PAttribute TargetAttribute,
         }
         if (!NT_SUCCESS(Status))
             break;
+        if (ListCreated)
+            ListCreatedHere = TRUE;
         if (AttributeOwner != this || ListCreated)
             ChunkUnits = NTFS_COMPRESSED_WRITE_UNITS;
 
@@ -7043,6 +7149,9 @@ FileRecord::WriteCompressedData(_In_ PAttribute TargetAttribute,
         }
     }
 
+    /* As in WriteFileData: drop a list the growth turned out not to need. */
+    if (NT_SUCCESS(Status) && ListCreatedHere)
+        (void)SettleGrowthAttributeList();
     delete[] Zeroes;
     return Status;
 }
@@ -7185,6 +7294,7 @@ FileRecord::ResizeCompressedData(_In_opt_ PWSTR StreamName,
     ULONGLONG OldSize;
     ULONG Fill;
     BOOLEAN ListCreated;
+    BOOLEAN ListCreatedHere = FALSE;
     NTSTATUS Status;
 
     TargetAttribute = GetAttribute(TypeData, StreamName);
@@ -7239,7 +7349,7 @@ FileRecord::ResizeCompressedData(_In_opt_ PWSTR StreamName,
     if (AttributeOwner == this &&
         !GetAttribute(TypeAttributeList, NULL) &&
         Header->AllocatedSize >= Header->ActualSize &&
-        Header->AllocatedSize - Header->ActualSize < 0x110)
+        Header->AllocatedSize - Header->ActualSize < MappingGrowthHeadroom)
     {
         Status = EnsureAttributeListForMappingGrowth(TypeData,
                                                      StreamName,
@@ -7248,6 +7358,7 @@ FileRecord::ResizeCompressedData(_In_opt_ PWSTR StreamName,
                                                      &ListCreated);
         if (!NT_SUCCESS(Status))
             return Status;
+        ListCreatedHere = ListCreated;
     }
     Status = AttributeOwner->WriteCompressedUnits(&TargetAttribute,
                                                   NULL,
@@ -7268,6 +7379,7 @@ FileRecord::ResizeCompressedData(_In_opt_ PWSTR StreamName,
                                                      &ListCreated);
         if (NT_SUCCESS(Status) && ListCreated)
         {
+            ListCreatedHere = TRUE;
             Status = AttributeOwner->WriteCompressedUnits(&TargetAttribute,
                                                           NULL,
                                                           0,
@@ -7278,6 +7390,9 @@ FileRecord::ResizeCompressedData(_In_opt_ PWSTR StreamName,
             Status = STATUS_BUFFER_TOO_SMALL;
         }
     }
+    /* As in WriteFileData: drop a list the growth turned out not to need. */
+    if (NT_SUCCESS(Status) && ListCreatedHere)
+        (void)SettleGrowthAttributeList();
     return Status;
 }
 

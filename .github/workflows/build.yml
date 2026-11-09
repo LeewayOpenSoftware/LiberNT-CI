@@ -278,8 +278,10 @@ jobs:
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
 
   ntfslib-host-tests:
-    # The volume check host tests of the NTFS library, outside the image
-    # build: the index walk unit test and the cluster claim smoke test.
+    # The host tests of the NTFS library, outside the image build: the
+    # volume check (index walk unit test, cluster claim smoke test), a
+    # directory index that grows past its base record, and a size change
+    # made with the automatic timestamps masked (the cleanup-time persist).
     runs-on: ubuntu-24.04
     steps:
     - name: Source checkout
@@ -300,11 +302,11 @@ jobs:
 
     - name: Build
       run: |
-        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_fuse
+        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_fuse
 
-    - name: Run the volume check tests
+    - name: Run the host tests
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times"
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'

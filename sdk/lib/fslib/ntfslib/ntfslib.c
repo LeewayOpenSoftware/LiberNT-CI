@@ -626,7 +626,7 @@ NtfsCheckReport(
             break;
         case NtfsCheckAttributeListRemoved:
             NtfsFormatReport(Check->Callback,
-                             "Deleted the unreadable attribute list of file %I64X.\n",
+                             "Removed the attribute list of file %I64X: every attribute is in the base record.\n",
                              Argument1);
             break;
         case NtfsCheckIndexBlockUnreferenced:
@@ -648,6 +648,54 @@ NtfsCheckReport(
             NtfsFormatReport(Check->Callback,
                              "Index $I30 of file %I64X held entries beyond its range at VCN 0x%I64x.\n",
                              Argument1, Argument2);
+            break;
+        case NtfsCheckAttributeListUnneeded:
+            NtfsFormatReport(Check->Callback,
+                             "The attribute list of file %I64X is not needed: every entry is in the base record.\n",
+                             Argument1);
+            break;
+        case NtfsCheckRecordBeyondMft:
+            NtfsFormatReport(Check->Callback,
+                             "File record segments %I64X to %I64X (%I64u) are marked in use in the MFT bitmap "
+                             "but lie past the end of the MFT data, so they read as zeros.\n",
+                             Argument1, Argument1 + Argument2 - 1, Argument2);
+            break;
+        case NtfsCheckRecordBeyondMftInUse:
+            NtfsFormatReport(Check->Callback,
+                             "File record segment %I64X is in use but lies past the end of the MFT data. "
+                             "It was left unchanged.\n",
+                             Argument1);
+            break;
+        case NtfsCheckAttributeSizeInvalid:
+            NtfsFormatReport(Check->Callback,
+                             "Attribute type 0x%I64X of file %I64X has invalid sizes: its data size is larger than "
+                             "its allocated size, its initialized size is larger than its data size, or its "
+                             "allocated size is not a whole number of clusters.\n",
+                             Argument2, Argument1);
+            break;
+        case NtfsCheckAttributeMappingMismatch:
+            NtfsFormatReport(Check->Callback,
+                             "The cluster mapping of attribute type 0x%I64X of file %I64X does not cover "
+                             "exactly its allocated size.\n",
+                             Argument2, Argument1);
+            break;
+        case NtfsCheckIndexEntryNotRemoved:
+            NtfsFormatReport(Check->Callback,
+                             "Could not delete the index entry for file 0x%I64x from index $I30 of file %I64X; "
+                             "the record it names is kept in use.\n",
+                             Argument2, Argument1);
+            break;
+        case NtfsCheckRecordKept:
+            NtfsFormatReport(Check->Callback,
+                             "File record segment %I64X has damaged attributes (%I64u problems). It was not deleted, "
+                             "so no other repair was made; copy its data elsewhere before repairing it.\n",
+                             Argument1, Argument2);
+            break;
+        case NtfsCheckMftBitmapNotWritten:
+            NtfsFormatReport(Check->Callback,
+                             "The corrected MFT bitmap (%I64u bytes) could not be written (status 0x%08lx); "
+                             "the records it frees stay marked in use.\n",
+                             Argument2, (ULONG)Argument1);
             break;
     }
 }

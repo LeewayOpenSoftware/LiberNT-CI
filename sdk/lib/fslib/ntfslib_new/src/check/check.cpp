@@ -10,7 +10,7 @@
 
 #define CHECK_RECORD_CHUNK      64
 #define CHECK_BITMAP_CHUNK      0x10000
-#define CHECK_FIRST_USER_RECORD 24
+#define CHECK_FIRST_USER_RECORD NTFS_FIRST_USER_FILE_RECORD
 
 namespace
 {
@@ -37,6 +37,8 @@ struct DanglingEntry
     ULONGLONG Directory;
     ULONGLONG Target;
     USHORT NameLength;
+    BOOLEAN Pending;    /* cut from an index block that is not written yet */
+    BOOLEAN Removed;    /* gone from the index on disk */
     WCHAR Name[255];
 };
 
@@ -86,6 +88,7 @@ public:
         delete[] ExtensionOwner;
         delete[] AttrListMap;
         delete[] ExtendedMap;
+        delete[] LiveBeyondMap;
     }
 
     NTSTATUS Run(_In_ BOOLEAN Repair);
@@ -132,8 +135,16 @@ private:
     PUCHAR ExtendedMap = NULL;
     /* One bit per name key: an index entry already counted for it. */
     PUCHAR NameKeyUsed = NULL;
+
+    /* MFT bitmap bits past the end of the $MFT data (CheckRecordsBeyondMft). */
+    ULONGLONG BitmapBits = 0;
+    PUCHAR LiveBeyondMap = NULL;
+    ULONG BeyondRanges = 0;
+    ULONG DanglingFailures = 0;
+
     DanglingEntry* Dangling = NULL;
     ULONG DanglingCount = 0;
+    ULONG PendingCuts = 0;
     ULONG DanglingCapacity = 0;
 
     PUCHAR UsedMap = NULL;
@@ -191,7 +202,9 @@ private:
             Kind != NtfsCheckAttributeListFixed && Kind != NtfsCheckDataAttributeInserted &&
             Kind != NtfsCheckLostNameRemoved && Kind != NtfsCheckRepairsBlocked &&
             Kind != NtfsCheckNameRelinkFailed && Kind != NtfsCheckNameFoundUncounted &&
-            Kind != NtfsCheckAttributeListRemoved && Kind != NtfsCheckIndexReset)
+            Kind != NtfsCheckAttributeListRemoved && Kind != NtfsCheckIndexReset &&
+            Kind != NtfsCheckIndexEntryNotRemoved && Kind != NtfsCheckMftBitmapNotWritten &&
+            Kind != NtfsCheckRecordKept)
         {
             Out->Errors++;
             Out->FoundErrors++;
@@ -219,8 +232,12 @@ private:
     NTSTATUS LoadMftBitmap();
     NTSTATUS ReadRecords(_In_ ULONGLONG First, _In_ ULONG Count);
     void CheckRecord(_In_ ULONGLONG Number, _Inout_ PUCHAR Record);
+    NTSTATUS CheckRecordsBeyondMft();
+    void ReportBeyondRange(_In_ ULONGLONG First, _In_ ULONGLONG Count);
+    BOOLEAN IsLiveBeyondMft(_In_ ULONGLONG Number);
     void CheckAttributes(_In_ ULONGLONG Number, _In_ ULONGLONG Owner, _In_ PUCHAR Record);
     void CheckRunList(_In_ ULONGLONG Number, _In_ ULONGLONG Owner, _In_ PAttribute Attr);
+    void CheckNonResidentSizes(_In_ ULONGLONG Number, _In_ BOOLEAN WholeMapping, _In_ PAttribute Attr);
     struct ClusterRange
     {
         ULONGLONG Lcn;
@@ -239,10 +256,14 @@ private:
     NTSTATUS RepairRange(_In_ BOOLEAN Claim, _In_ ULONGLONG Lcn, _In_ ULONGLONG Count);
     BOOLEAN RecordHasName(_In_ ULONGLONG Ordinal, _In_ const FileNameEx* Key, _In_ ULONG KeyLength);
     NTSTATUS WriteStreamRange(_In_ PDataRun Runs, _In_ ULONGLONG Offset, _In_ ULONG Length, _In_ PUCHAR Data);
-    void RememberDangling(_In_ ULONGLONG Directory, _In_ ULONGLONG Target, _In_ const FileNameEx* Key);
+    BOOLEAN RememberDangling(_In_ ULONGLONG Directory, _In_ ULONGLONG Target, _In_ const FileNameEx* Key);
+    void SettlePendingCuts(_In_ BOOLEAN Written);
+    BOOLEAN IsStillReferenced(_In_ ULONGLONG Number);
     void RememberCorrupt(_In_ ULONGLONG Number, _In_ ULONG Faults, _In_ BOOLEAN Readable);
     void RememberOrphan(_In_ ULONGLONG Number);
     NTSTATUS WriteMftBitmap();
+    void CommitMftBitmap(_In_ BOOLEAN IndexesRepaired);
+    void PlanRecordFrees();
     void RepairRecordsPass();
     void RelinkOrphans();
     void RememberLost(_In_ ULONGLONG Number, _In_ const FileNameEx* Name);
@@ -318,7 +339,8 @@ private:
                             _In_ PIndexNodeHeader Node,
                             _In_ ULONG Available,
                             _In_ ULONGLONG Vcn,
-                            _In_ BOOLEAN AllowFix);
+                            _In_ BOOLEAN AllowFix,
+                            _In_ BOOLEAN AllowCut);
     void CheckDirectory(_In_ ULONGLONG Directory);
 };
 
@@ -395,9 +417,25 @@ VolumeCheck::CheckRunList(_In_ ULONGLONG Number, _In_ ULONGLONG Owner, _In_ PAtt
             Event(NtfsCheckBadRunList, Number, Attr->AttributeType);
             return;
         }
+        /*
+         * A run length is a signed value: a top bit in its last byte makes
+         * it negative, and readers reject the whole mapping. Decoding it
+         * unsigned would accept, say, 161 clusters written as the single
+         * byte 0xA1, which every reader takes as -95.
+         */
+        if (Run[LengthBytes - 1] & 0x80)
+        {
+            Event(NtfsCheckBadRunList, Number, Attr->AttributeType);
+            return;
+        }
         for (ULONG Index = 0; Index < LengthBytes; Index++)
             Length |= (ULONGLONG)Run[Index] << (Index * 8);
         Run += LengthBytes;
+        if (Length == 0)
+        {
+            Event(NtfsCheckBadRunList, Number, Attr->AttributeType);
+            return;
+        }
         if (OffsetBytes)
         {
             for (ULONG Index = 0; Index < OffsetBytes; Index++)
@@ -434,11 +472,42 @@ VolumeCheck::CheckRunList(_In_ ULONGLONG Number, _In_ ULONGLONG Owner, _In_ PAtt
         Event(NtfsCheckBadRunList, Number, Attr->AttributeType);
 }
 
+/*
+ * The sizes of a non-resident attribute are only kept in its first segment.
+ * Data size never exceeds allocated size, initialized size never exceeds data
+ * size, and the allocation is whole clusters. When the segment is the whole
+ * attribute (a base record without an attribute list), its mapping must also
+ * cover exactly the allocated size. A data size past the mapping makes the
+ * tail of the stream unreadable. Reported only; nothing is changed.
+ */
+void
+VolumeCheck::CheckNonResidentSizes(_In_ ULONGLONG Number, _In_ BOOLEAN WholeMapping, _In_ PAttribute Attr)
+{
+    ULONGLONG Allocated = Attr->NonResident.AllocatedSize;
+
+    if (Attr->NonResident.FirstVCN != 0)
+        return;
+    if (Attr->NonResident.DataSize > Allocated ||
+        Attr->NonResident.InitalizedDataSize > Attr->NonResident.DataSize ||
+        (ClusterSize != 0 && Allocated % ClusterSize != 0))
+    {
+        Event(NtfsCheckAttributeSizeInvalid, Number, Attr->AttributeType);
+        return;
+    }
+    /* LastVCN + 1 wraps to 0 for an empty mapping, matching an allocation of 0. */
+    if (WholeMapping && ClusterSize != 0 &&
+        (Attr->NonResident.LastVCN + 1) * (ULONGLONG)ClusterSize != Allocated)
+    {
+        Event(NtfsCheckAttributeMappingMismatch, Number, Attr->AttributeType);
+    }
+}
+
 void
 VolumeCheck::CheckAttributes(_In_ ULONGLONG Number, _In_ ULONGLONG Owner, _In_ PUCHAR Record)
 {
     PFileRecordHeader Header = reinterpret_cast<PFileRecordHeader>(Record);
     ULONG Offset = Header->AttributeOffset;
+    BOOLEAN HasList = FALSE;
 
     while (Offset + sizeof(ULONG) <= Header->ActualSize)
     {
@@ -456,7 +525,10 @@ VolumeCheck::CheckAttributes(_In_ ULONGLONG Number, _In_ ULONGLONG Owner, _In_ P
         }
 
         if (Attr->AttributeType == TypeAttributeList && Owner == Number)
+        {
             SetBit(AttrListMap, Number);
+            HasList = TRUE;
+        }
 
         if (Attr->IsNonResident)
         {
@@ -466,6 +538,7 @@ VolumeCheck::CheckAttributes(_In_ ULONGLONG Number, _In_ ULONGLONG Owner, _In_ P
                 return;
             }
             CheckRunList(Number, Owner, Attr);
+            CheckNonResidentSizes(Number, Owner == Number && !HasList, Attr);
         }
         else
         {
@@ -585,15 +658,103 @@ VolumeCheck::CheckRecord(_In_ ULONGLONG Number, _Inout_ PUCHAR Record)
         ExtensionOwner[Number] = (ULONG)Owner + 1;
         Sequence[Number] = Header->SequenceNumber;
     }
+    /*
+     * A file whose record is intact but whose attributes are damaged (a
+     * bad header or run list, clusters outside the volume) still has its
+     * names, and possibly most of its data. Deleting it would lose all of
+     * that. Keep it, and report it: its faults stay structural, so this
+     * check makes no index or bitmap repair and the volume stays dirty
+     * until it is repaired by hand. Only records that cannot be parsed at
+     * all (above) are freed.
+     */
     if (RecordFaults != Faults && Owner == Number && Number >= CHECK_FIRST_USER_RECORD)
+        Event(NtfsCheckRecordKept, Number, RecordFaults - Faults);
+}
+
+void
+VolumeCheck::ReportBeyondRange(_In_ ULONGLONG First, _In_ ULONGLONG Count)
+{
+    if (!Count)
+        return;
+    Event(NtfsCheckRecordBeyondMft, First, Count);
+    BeyondRanges++;
+}
+
+/*
+ * The record scan stops at the end of the $MFT data, but the MFT bitmap can
+ * name records past it. Nothing exists there for a reader: the data size is
+ * the end of the file, so such a record reads as zeros. A crash that writes
+ * the bitmap but not the $MFT record that grew the data leaves exactly this,
+ * and so far the check never looked. Records that are readable and in use
+ * there are kept as they are (a later repair could extend the $MFT data to
+ * cover them), and index entries that name them are not treated as dangling.
+ */
+NTSTATUS
+VolumeCheck::CheckRecordsBeyondMft()
+{
+    PUCHAR Record;
+    PFileRecordHeader Header;
+    ULONGLONG RangeStart = 0, RangeCount = 0;
+
+    BitmapBits = (ULONGLONG)MftBitmapLength * 8;
+    if (BitmapBits <= RecordCount)
+        return STATUS_SUCCESS;
+
+    LiveBeyondMap = AllocateMap(BitmapBits - RecordCount);
+    Record = new(PagedPool, TAG_NTFS) UCHAR[RecordSize];
+    if (!LiveBeyondMap || !Record)
     {
-        InUseMap[Number >> 3] &= (UCHAR)~(1 << (Number & 7));
-        DirectoryMap[Number >> 3] &= (UCHAR)~(1 << (Number & 7));
-        Names[Number].Expected = Names[Number].Found = 0;
-        Names[Number].ExpectedHash = Names[Number].FoundHash = 0;
-        Out->FileRecords--;
-        RememberCorrupt(Number, RecordFaults - Faults, TRUE);
+        delete[] Record;
+        return STATUS_INSUFFICIENT_RESOURCES;
     }
+    Header = reinterpret_cast<PFileRecordHeader>(Record);
+
+    for (ULONGLONG Number = RecordCount; Number < BitmapBits; Number++)
+    {
+        ULONGLONG DiskOffset;
+        BOOLEAN Live;
+
+        if (!TestBit(MftBitmap, Number))
+            continue;
+
+        Live = NT_SUCCESS(V->MFT->GetFileRecordDiskOffset(Number, &DiskOffset)) &&
+               NT_SUCCESS(V->ReadVolume(DiskOffset, RecordSize, Record)) &&
+               RtlCompareMemory(Header->Header.TypeID, "FILE", 4) == 4 &&
+               NT_SUCCESS(NtfsApplyFixup(&Header->Header, RecordSize, V->BytesPerSector)) &&
+               (Header->Flags & FR_IN_USE) != 0 &&
+               (Header->Header.UpdateSequenceOffset < FIELD_OFFSET(FileRecordHeader, MFTRecordNumber) + sizeof(UINT32) ||
+                Header->MFTRecordNumber == (UINT32)Number);
+        if (Live)
+        {
+            ReportBeyondRange(RangeStart, RangeCount);
+            RangeCount = 0;
+            SetBit(LiveBeyondMap, Number - RecordCount);
+            Event(NtfsCheckRecordBeyondMftInUse, Number, 0);
+            continue;
+        }
+
+        if (RangeCount && RangeStart + RangeCount == Number)
+        {
+            RangeCount++;
+        }
+        else
+        {
+            ReportBeyondRange(RangeStart, RangeCount);
+            RangeStart = Number;
+            RangeCount = 1;
+        }
+    }
+    ReportBeyondRange(RangeStart, RangeCount);
+
+    delete[] Record;
+    return STATUS_SUCCESS;
+}
+
+BOOLEAN
+VolumeCheck::IsLiveBeyondMft(_In_ ULONGLONG Number)
+{
+    return LiveBeyondMap && Number >= RecordCount && Number < BitmapBits &&
+           TestBit(LiveBeyondMap, Number - RecordCount);
 }
 
 void
@@ -748,6 +909,41 @@ VolumeCheck::WriteMftBitmap()
     return Status;
 }
 
+/*
+ * The corrupt records are already out of InUseMap, DirectoryMap and the
+ * name tallies, so the index pass treats every entry that names one as
+ * dangling whether or not the record has been freed on disk yet. Their
+ * faults therefore no longer block the index repair; the records
+ * themselves are freed by RepairRecordsPass once those entries are gone.
+ */
+void
+VolumeCheck::PlanRecordFrees()
+{
+    for (ULONG Index = 0; Index < CorruptCount; Index++)
+        StructuralErrors -= Corrupt[Index].Faults;
+}
+
+/* TRUE when an index entry naming this record could not be removed. */
+BOOLEAN
+VolumeCheck::IsStillReferenced(_In_ ULONGLONG Number)
+{
+    for (ULONG Index = 0; Index < DanglingCount; Index++)
+    {
+        if (!Dangling[Index].Removed &&
+            (Dangling[Index].Target & 0x0000FFFFFFFFFFFFULL) == Number)
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/*
+ * Runs after the index repair: a record is freed only when no index
+ * entry still names it, so a later allocation can never hand a record
+ * that a directory still points at to another file. A record that is
+ * still referenced stays marked in use (it is still reported corrupt).
+ */
 void
 VolumeCheck::RepairRecordsPass()
 {
@@ -763,6 +959,11 @@ VolumeCheck::RepairRecordsPass()
         ULONGLONG DiskOffset;
         BOOLEAN Freed = TRUE;
 
+        if (!RepairIndexes || IsStillReferenced(Number))
+        {
+            StructuralErrors += Corrupt[Index].Faults;
+            continue;
+        }
         if (Corrupt[Index].Readable)
         {
             Freed = NT_SUCCESS(V->MFT->GetFileRecordDiskOffset(Number, &DiskOffset)) &&
@@ -777,24 +978,67 @@ VolumeCheck::RepairRecordsPass()
             }
         }
         if (!Freed)
+        {
+            StructuralErrors += Corrupt[Index].Faults;
             continue;
+        }
 
         MftBitmap[Number >> 3] &= (UCHAR)~(1 << (Number & 7));
         MftBitmapChanged = TRUE;
         Out->FreedRecords++;
         Out->Errors -= Corrupt[Index].Faults;
-        StructuralErrors -= Corrupt[Index].Faults;
         Event(NtfsCheckRecordFreed, Number, 0);
     }
     delete[] Record;
+    V->FlushVolume();
 
-    if (MftBitmapChanged && NT_SUCCESS(WriteMftBitmap()))
+    /* The MFT bitmap itself is written by CommitMftBitmap, next. */
+}
+
+/*
+ * Index entries first, MFT bitmap second: if the check stops in between,
+ * an index entry can only point at a record that is still marked in use,
+ * never at a free record that a later allocation could hand to another
+ * file. Bits past the end of the $MFT data are cleared only when every
+ * dangling index entry was removed, for the same reason.
+ */
+void
+VolumeCheck::CommitMftBitmap(_In_ BOOLEAN IndexesRepaired)
+{
+    ULONG BeyondFixes = 0;
+
+    if (IndexesRepaired && BeyondRanges && DanglingFailures == 0)
     {
-        Out->Errors -= MftBitmapFixes;
-        Out->FixedRecordBitmapBits += MftBitmapFixes;
-        if (MftBitmapFixes)
-            Event(NtfsCheckRecordBitmapFixed, MftBitmapFixes, 0);
+        for (ULONGLONG Number = RecordCount; Number < BitmapBits; Number++)
+        {
+            if (TestBit(MftBitmap, Number) && !IsLiveBeyondMft(Number))
+            {
+                MftBitmap[Number >> 3] &= (UCHAR)~(1 << (Number & 7));
+                BeyondFixes++;
+            }
+        }
+        if (BeyondFixes)
+            MftBitmapChanged = TRUE;
     }
+
+    if (!MftBitmapChanged)
+        return;
+    {
+        NTSTATUS WriteStatus = WriteMftBitmap();
+
+        if (!NT_SUCCESS(WriteStatus))
+        {
+            Event(NtfsCheckMftBitmapNotWritten, (ULONG)WriteStatus, MftBitmapLength);
+            return;
+        }
+    }
+
+    Out->Errors -= MftBitmapFixes;
+    Out->FixedRecordBitmapBits += MftBitmapFixes + BeyondFixes;
+    if (BeyondFixes)
+        Out->Errors -= BeyondRanges;
+    if (MftBitmapFixes + BeyondFixes)
+        Event(NtfsCheckRecordBitmapFixed, MftBitmapFixes + BeyondFixes, 0);
 }
 
 void
@@ -1109,6 +1353,7 @@ VolumeCheck::CheckAttributeLists()
         ListFilterContext Filter = { this, Number };
         ULONG Dropped, DroppedNames;
         BOOLEAN DroppedData;
+        BOOLEAN Unneeded;
         PFileRecord File;
         NTSTATUS Status;
 
@@ -1142,6 +1387,18 @@ VolumeCheck::CheckAttributeLists()
                 Event(NtfsCheckAttributeListFixed, Number, Dropped);
                 if (DroppedData && !(File->Header->Flags & FR_IS_DIRECTORY))
                     Event(NtfsCheckDataAttributeInserted, Number, 0);
+            }
+        }
+
+        /* A list that only names the base record is one Windows rejects */
+        if (NT_SUCCESS(File->DropUnneededAttributeList(FALSE, &Unneeded)) && Unneeded)
+        {
+            Event(NtfsCheckAttributeListUnneeded, Number, 0);
+            if (RepairRecords && NT_SUCCESS(File->DropUnneededAttributeList(TRUE, &Unneeded)))
+            {
+                Out->Errors--;
+                Out->RepairedAttributeLists++;
+                Event(NtfsCheckAttributeListRemoved, Number, 0);
             }
         }
         delete File;
@@ -1542,12 +1799,14 @@ VolumeCheck::CheckIndexEntries(_In_ ULONGLONG Directory,
                                _In_ PIndexNodeHeader Node,
                                _In_ ULONG Available,
                                _In_ ULONGLONG Vcn,
-                               _In_ BOOLEAN AllowFix)
+                               _In_ BOOLEAN AllowFix,
+                               _In_ BOOLEAN AllowCut)
 {
     PUCHAR Base = reinterpret_cast<PUCHAR>(Node);
     ULONG Offset = Node->IndexOffset;
     ULONG End = Node->TotalIndexSize;
     ULONG Fixed = 0;
+    BOOLEAN Dangles;
 
     if (End > Available || Offset >= End || (Offset & 7) != 0)
     {
@@ -1578,6 +1837,7 @@ VolumeCheck::CheckIndexEntries(_In_ ULONGLONG Directory,
         }
 
         Out->IndexEntries++;
+        Dangles = FALSE;
         Target = Entry->Data.Directory.IndexedFile;
         Ordinal = Target & 0x0000FFFFFFFFFFFFULL;
         if (Ordinal < RecordCount && TestBit(InUseMap, Ordinal) &&
@@ -1602,8 +1862,7 @@ VolumeCheck::CheckIndexEntries(_In_ ULONGLONG Directory,
             else
             {
                 Event(NtfsCheckIndexNameMissing, Directory, Target);
-                if (RepairIndexes)
-                    RememberDangling(Directory, Target, Key);
+                Dangles = TRUE;
             }
         }
         else if (Ordinal < RecordCount && TestBit(InUseMap, Ordinal) &&
@@ -1619,11 +1878,39 @@ VolumeCheck::CheckIndexEntries(_In_ ULONGLONG Directory,
                 Fixed++;
             }
         }
+        else if (IsLiveBeyondMft(Ordinal))
+        {
+            /* The file exists but lies past the $MFT data; keep its name. */
+            Event(NtfsCheckIndexBadEntry, Directory, Target);
+        }
         else
         {
             Event(NtfsCheckIndexBadEntry, Directory, Target);
-            if (RepairIndexes)
-                RememberDangling(Directory, Target, Key);
+            Dangles = TRUE;
+        }
+
+        /*
+         * A dangling leaf entry in an index block is cut where it stands:
+         * the block is written back by the caller. That needs no lookup by
+         * name, which a damaged or duplicate-name index can defeat. Entries
+         * in the root and in internal nodes (they carry a child pointer)
+         * go through RemoveDangling and the B+ tree code instead.
+         */
+        if (Dangles && RepairIndexes)
+        {
+            ULONG Length = Entry->EntryLength;
+
+            if (RememberDangling(Directory, Target, Key) &&
+                AllowCut && !(Entry->Flags & INDEX_ENTRY_NODE))
+            {
+                Dangling[DanglingCount - 1].Pending = TRUE;
+                RtlMoveMemory(Base + Offset, Base + Offset + Length, End - Offset - Length);
+                RtlZeroMemory(Base + End - Length, Length);
+                End -= Length;
+                Node->TotalIndexSize = End;
+                PendingCuts++;
+                continue;
+            }
         }
         Offset += Entry->EntryLength;
     }
@@ -1632,7 +1919,7 @@ VolumeCheck::CheckIndexEntries(_In_ ULONGLONG Directory,
     return Fixed;
 }
 
-void
+BOOLEAN
 VolumeCheck::RememberDangling(_In_ ULONGLONG Directory, _In_ ULONGLONG Target, _In_ const FileNameEx* Key)
 {
     if (DanglingCount == DanglingCapacity)
@@ -1641,7 +1928,10 @@ VolumeCheck::RememberDangling(_In_ ULONGLONG Directory, _In_ ULONGLONG Target, _
         DanglingEntry* Grown = new(PagedPool, TAG_NTFS) DanglingEntry[Capacity];
 
         if (!Grown)
-            return;
+        {
+            DanglingFailures++;
+            return FALSE;
+        }
         if (Dangling)
             RtlCopyMemory(Grown, Dangling, DanglingCount * sizeof(DanglingEntry));
         delete[] Dangling;
@@ -1652,13 +1942,44 @@ VolumeCheck::RememberDangling(_In_ ULONGLONG Directory, _In_ ULONGLONG Target, _
     Dangling[DanglingCount].Directory = Directory;
     Dangling[DanglingCount].Target = Target;
     Dangling[DanglingCount].NameLength = Key->NameLength;
+    Dangling[DanglingCount].Pending = FALSE;
+    Dangling[DanglingCount].Removed = FALSE;
     RtlCopyMemory(Dangling[DanglingCount].Name, Key->Name, Key->NameLength * sizeof(WCHAR));
     DanglingCount++;
+    return TRUE;
+}
+
+/*
+ * Called once the index block holding the entries cut by CheckIndexEntries
+ * was written (or failed to be). A failed write leaves them on disk, so
+ * RemoveDangling tries them again by name.
+ */
+void
+VolumeCheck::SettlePendingCuts(_In_ BOOLEAN Written)
+{
+    for (ULONG Index = DanglingCount; PendingCuts && Index-- > 0;)
+    {
+        DanglingEntry* Entry = &Dangling[Index];
+
+        if (!Entry->Pending)
+            continue;
+        Entry->Pending = FALSE;
+        PendingCuts--;
+        if (!Written)
+            continue;
+        Entry->Removed = TRUE;
+        Out->Errors--;
+        Out->RemovedIndexEntries++;
+        Event(NtfsCheckIndexEntryRemoved, Entry->Directory, Entry->Target);
+    }
+    PendingCuts = 0;
 }
 
 void
 VolumeCheck::RemoveDangling()
 {
+    ULONG Attempted = 0;
+
     for (ULONG Index = 0; Index < DanglingCount; Index++)
     {
         DanglingEntry* Entry = &Dangling[Index];
@@ -1666,8 +1987,16 @@ VolumeCheck::RemoveDangling()
         PFileRecord File;
         NTSTATUS Status;
 
-        if (!NT_SUCCESS(V->MFT->GetFileRecord((ULONG)Entry->Directory, &File)))
+        if (Entry->Removed)
             continue;
+        Attempted++;
+        Status = V->MFT->GetFileRecord((ULONG)Entry->Directory, &File);
+        if (!NT_SUCCESS(Status))
+        {
+            DanglingFailures++;
+            Event(NtfsCheckIndexEntryNotRemoved, Entry->Directory, Entry->Target);
+            continue;
+        }
 
         Name.Buffer = Entry->Name;
         Name.Length = Name.MaximumLength = (USHORT)(Entry->NameLength * sizeof(WCHAR));
@@ -1680,13 +2009,18 @@ VolumeCheck::RemoveDangling()
 
         if (NT_SUCCESS(Status))
         {
+            Entry->Removed = TRUE;
             Out->Errors--;
             Out->RemovedIndexEntries++;
-            StructuralErrors--;
             Event(NtfsCheckIndexEntryRemoved, Entry->Directory, Entry->Target);
         }
+        else
+        {
+            DanglingFailures++;
+            Event(NtfsCheckIndexEntryNotRemoved, Entry->Directory, Entry->Target);
+        }
     }
-    if (DanglingCount)
+    if (Attempted)
         V->FlushVolume();
 }
 
@@ -2084,7 +2418,7 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
     ULONG AllocationLength = 0, BitmapLength = 0;
     PDataRun Runs = NULL;
     ULONG Fixed;
-    BOOLEAN RootInBase;
+    BOOLEAN RootInBase, Written;
     IndexWalk Walk;
     NTSTATUS Status;
 
@@ -2229,7 +2563,8 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
                               &Root->Header,
                               RootAttr->Resident.DataLength - FIELD_OFFSET(IndexRootEx, Header),
                               0,
-                              RootInBase);
+                              RootInBase,
+                              FALSE);
     if (Fixed && NT_SUCCESS(V->MFT->WriteFileRecordToMFT(File)))
     {
         Out->Errors -= Fixed;
@@ -2308,15 +2643,18 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
                                       &Buffer->IndexHeader,
                                       Walk.BlockSize - FIELD_OFFSET(IndexBuffer, IndexHeader),
                                       Vcn,
+                                      Runs && Scratch,
                                       Runs && Scratch);
-            if ((!Fixed && !Trimmed) || !Runs || !Scratch)
+            if ((!Fixed && !Trimmed && !PendingCuts) || !Runs || !Scratch)
                 continue;
 
             RtlCopyMemory(Scratch, Buffer, Walk.BlockSize);
-            if (NT_SUCCESS(NtfsCommitFixup(reinterpret_cast<PNTFSRecordHeader>(Scratch),
-                                           Walk.BlockSize,
-                                           V->BytesPerSector)) &&
-                NT_SUCCESS(WriteStreamRange(Runs, (ULONGLONG)Block * Walk.BlockSize, Walk.BlockSize, Scratch)))
+            Written = NT_SUCCESS(NtfsCommitFixup(reinterpret_cast<PNTFSRecordHeader>(Scratch),
+                                                 Walk.BlockSize,
+                                                 V->BytesPerSector)) &&
+                      NT_SUCCESS(WriteStreamRange(Runs, (ULONGLONG)Block * Walk.BlockSize, Walk.BlockSize, Scratch));
+            SettlePendingCuts(Written);
+            if (Written && (Fixed || Trimmed))
             {
                 Out->Errors -= Fixed + (Trimmed ? 1 : 0);
                 Out->FixedIndexEntries += Fixed + (Trimmed ? 1 : 0);
@@ -2407,8 +2745,12 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
             CheckRecord(First + Index, Records + Index * RecordSize);
     }
 
+    Status = CheckRecordsBeyondMft();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     if (RepairRecords)
-        RepairRecordsPass();
+        PlanRecordFrees();
 
     SortNameKeys();
     if (NameKeyCount)
@@ -2420,14 +2762,16 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
     {
         ULONGLONG Blocker = ~0ULL;
 
-        /* A record the record pass freed no longer holds anything back. */
-        for (ULONG Index = 0; Index < BlockerCount; Index++)
+        /* A corrupt record the record pass will free no longer holds
+         * anything back (PlanRecordFrees took its faults out). */
+        for (ULONG Index = 0; Index < BlockerCount && Blocker == ~0ULL; Index++)
         {
-            if (Blockers[Index] < RecordCount && TestBit(MftBitmap, Blockers[Index]))
-            {
+            BOOLEAN Planned = FALSE;
+
+            for (ULONG Plan = 0; RepairRecords && Plan < CorruptCount; Plan++)
+                Planned |= Corrupt[Plan].Number == Blockers[Index];
+            if (Blockers[Index] < RecordCount && TestBit(MftBitmap, Blockers[Index]) && !Planned)
                 Blocker = Blockers[Index];
-                break;
-            }
         }
         Event(NtfsCheckRepairsBlocked, StructuralErrors, Blocker);
     }
@@ -2449,10 +2793,23 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
         }
     }
 
+    /*
+     * Crash-safe order: index entries first (cut in place above, the rest
+     * here), then the corrupt records they named, then the MFT bitmap,
+     * then the volume bitmap. A stop at any point leaves at worst records
+     * or clusters marked in use that nothing references, never an index
+     * entry naming a free record or a record whose clusters are free.
+     */
+    if (RepairIndexes)
+        RemoveDangling();
+    if (RepairRecords)
+    {
+        RepairRecordsPass();
+        CommitMftBitmap(RepairIndexes);
+    }
     Status = CheckBitmap(Repair);
     if (NT_SUCCESS(Status) && RepairIndexes)
     {
-        RemoveDangling();
         RelinkOrphans();
         RecoverLostFiles();
     }

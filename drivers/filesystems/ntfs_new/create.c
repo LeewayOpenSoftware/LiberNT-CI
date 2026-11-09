@@ -3062,6 +3062,9 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                             Status);
         }
 
+        /* Early refusal only: nothing is held here, so a section can still
+         * appear before the file is emptied below. The check that counts is
+         * repeated there under MainResource. */
         ZeroSize.QuadPart = 0;
         if (!MmCanFileBeTruncated(&FileCB->StreamCB->SectionObjectPointers, &ZeroSize))
         {
@@ -3349,19 +3352,60 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          Disposition == FILE_OVERWRITE ||
          Disposition == FILE_OVERWRITE_IF))
     {
-        KeEnterCriticalRegion();
-        NtfsAcquireMetadata(VolCB);
-        Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream, 0);
-        if (NT_SUCCESS(Status) && !FileCB->RequestedStream)
-        {
-            NtfsFileBasicInformation OverwriteBasic;
+        /*
+         * Truncating frees the stream's clusters. A paging write that already
+         * looked up its extent holds PagingIoResource shared, so take it
+         * exclusive first, as every other path that frees clusters does.
+         * Order: Main -> PagingIo -> Metadata. The cached sizes are refreshed
+         * before PagingIo is dropped so no paging write sees the old size.
+         */
+        LARGE_INTEGER OverwriteZeroSize;
 
-            RtlZeroMemory(&OverwriteBasic, sizeof(OverwriteBasic));
-            OverwriteBasic.Fields = NTFS_BASIC_INFO_FILE_ATTRIBUTES;
-            OverwriteBasic.FileAttributes = FileAttributes;
-            Status = NtfsFileRecordSetBasicInformation(FileCB->FileRec, &OverwriteBasic);
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
+        /*
+         * The mapped-file check made before the share access was granted
+         * held nothing, and a section is created under this resource
+         * (FsRtlAcquireToCreateMappedSection takes it exclusive), so a
+         * mapping can have appeared since. Emptying a mapped stream leaves
+         * views over pages the file no longer has, which nothing downstream
+         * is written to survive (Lab03 L3 P3: a refused CREATE_ALWAYS
+         * storm against a reader that maps the file hung the file for good,
+         * on this lineage and on main). Decide again here, where the answer
+         * cannot change before the stream is emptied, exactly as the named
+         * stream path does.
+         */
+        OverwriteZeroSize.QuadPart = 0;
+        if (!MmCanFileBeTruncated(&FileCB->StreamCB->SectionObjectPointers, &OverwriteZeroSize))
+        {
+            Status = STATUS_USER_MAPPED_FILE;
         }
-        NtfsReleaseMetadata(VolCB);
+        else
+        {
+            ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+            NtfsAcquireMetadata(VolCB);
+            Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream, 0);
+            if (NT_SUCCESS(Status) && !FileCB->RequestedStream)
+            {
+                NtfsFileBasicInformation OverwriteBasic;
+
+                RtlZeroMemory(&OverwriteBasic, sizeof(OverwriteBasic));
+                OverwriteBasic.Fields = NTFS_BASIC_INFO_FILE_ATTRIBUTES;
+                OverwriteBasic.FileAttributes = FileAttributes;
+                Status = NtfsFileRecordSetBasicInformation(FileCB->FileRec, &OverwriteBasic);
+            }
+            NtfsReleaseMetadata(VolCB);
+            if (NT_SUCCESS(Status))
+            {
+                if (FileCB->StreamCB)
+                    FileCB->StreamCB->SizePending = FALSE;
+                NtfsRefreshFileSizes(VolCB, FileCB, FileObject);
+            }
+            ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+            if (NT_SUCCESS(Status))
+                NtfsPurgeStreamCache(FileCB, FileObject, NULL, 0);
+        }
+        ExReleaseResourceLite(NtfsGetMainResource(FileCB));
         KeLeaveCriticalRegion();
         if (!NT_SUCCESS(Status))
         {
@@ -3380,10 +3424,6 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                             Status);
         }
 
-        if (FileCB->StreamCB)
-            FileCB->StreamCB->SizePending = FALSE;
-        NtfsRefreshFileSizes(VolCB, FileCB, FileObject);
-        NtfsPurgeStreamCache(FileCB, FileObject, NULL, 0);
         FileObject->Flags |= FO_FILE_MODIFIED | FO_FILE_SIZE_CHANGED;
         Overwritten = TRUE;
     }

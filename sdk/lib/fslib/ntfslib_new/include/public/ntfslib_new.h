@@ -62,6 +62,14 @@ enum FileRecordNumbers
  * NTFS metadata files and are hidden from directory enumeration.
  */
 #define NTFS_LAST_RESERVED_FILE_RECORD 15
+/*
+ * NTFS also keeps records 16 to 23 for itself: Windows marks them in use at
+ * format time and never allocates a file there. This is the first record a
+ * file may take, used by the format and by the record allocator. The readers
+ * keep hiding only records up to NTFS_LAST_RESERVED_FILE_RECORD, so a file
+ * that an earlier format left in 16 to 23 stays visible and unchanged.
+ */
+#define NTFS_FIRST_USER_FILE_RECORD 24
 
 /* File record flags */
 #define FR_IN_USE        0x01
@@ -1107,8 +1115,9 @@ typedef enum NtfsCheckEvent
     /* The attribute list of a file cannot be read or parsed. Argument1: the
      * file record; Argument2: the NTSTATUS. */
     NtfsCheckAttributeListUnreadable,
-    /* An unreadable attribute list was removed: every attribute of the file
-     * lives in its base record. Argument1: the file record. */
+    /* An attribute list that is unreadable, or names only the base record,
+     * was removed: every attribute of the file lives in its base record.
+     * Argument1: the file record. */
     NtfsCheckAttributeListRemoved,
     /* An index block is marked in use but no node of the index points to it.
      * Argument1: the directory's file record; Argument2: the block's VCN. */
@@ -1123,7 +1132,15 @@ typedef enum NtfsCheckEvent
     /* A node held entries above its range, which its right sibling holds
      * after a split cut short; they were cut from the node. Argument1: the
      * directory's file record; Argument2: the node's VCN. */
-    NtfsCheckIndexTailTrimmed
+    NtfsCheckIndexTailTrimmed,
+    NtfsCheckAttributeListUnneeded,
+    NtfsCheckRecordBeyondMft,
+    NtfsCheckRecordBeyondMftInUse,
+    NtfsCheckAttributeSizeInvalid,
+    NtfsCheckAttributeMappingMismatch,
+    NtfsCheckIndexEntryNotRemoved,
+    NtfsCheckMftBitmapNotWritten,       /* Arg1 = NTSTATUS, Arg2 = bitmap length in bytes */
+    NtfsCheckRecordKept                 /* Arg1 = file record, Arg2 = faults; not deleted */
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult

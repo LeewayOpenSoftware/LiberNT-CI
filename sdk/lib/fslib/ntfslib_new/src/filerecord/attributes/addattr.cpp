@@ -1484,6 +1484,98 @@ FileRecord::FilterAttributeList(
     return Status;
 }
 
+/*
+ * A file needs an attribute list only while some of its attributes live in
+ * extension records. A list whose entries all name the base record is
+ * vestigial, and Windows treats a record carrying one as corrupt. With Commit
+ * set, the list attribute is removed and the base record written. The
+ * clusters of a non-resident list stay allocated until the caller releases
+ * them after that write; the volume check frees them as lost clusters.
+ */
+NTSTATUS
+FileRecord::DropUnneededAttributeList(
+    _In_ BOOLEAN Commit,
+    _Out_ PBOOLEAN Unneeded)
+{
+    PAttribute ListAttribute;
+    ULONG Offset = 0;
+    NTSTATUS Status;
+
+    *Unneeded = FALSE;
+
+    if (!FindAttributeInRecord(TypeAttributeList, NULL, NULL))
+        return STATUS_SUCCESS;
+
+    Status = LoadAttributeList();
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    while (AttributeListData && Offset < AttributeListLength)
+    {
+        PAttributeListEx Entry = reinterpret_cast<PAttributeListEx>(AttributeListData + Offset);
+
+        if (!IsWritableAttributeListEntryValid(Entry, AttributeListLength - Offset))
+            return STATUS_FILE_CORRUPT_ERROR;
+        if (GetFRNFromFileRef(Entry->BaseFileRef) != RecordNumber)
+            return STATUS_SUCCESS;
+        Offset += Entry->RecordLength;
+    }
+
+    *Unneeded = TRUE;
+    if (!Commit)
+        return STATUS_SUCCESS;
+
+    ListAttribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    if (!ListAttribute)
+        return STATUS_FILE_CORRUPT_ERROR;
+    /* Cached extension records stay valid without the list, and callers may
+     * still hold them, so only the list data is dropped here. */
+    Status = RemoveAttributeRecord(ListAttribute);
+    delete[] AttributeListData;
+    AttributeListData = NULL;
+    AttributeListLength = 0;
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return DiskVolume->MFT->WriteFileRecordToMFT(this);
+}
+
+/*
+ * Called where an operation has just emptied and freed an extension record,
+ * so the attribute list may now name only the base record. Nothing journals
+ * this, so the order is what keeps it safe: the base record is written
+ * without the list first, and only then are the clusters of a non-resident
+ * list released. A crash in between leaves lost clusters, which the volume
+ * check reclaims, never a list whose clusters were freed.
+ */
+NTSTATUS
+FileRecord::CollapseUnneededAttributeList()
+{
+    PAttribute ListAttribute;
+    PDataRun ListRuns = NULL;
+    BOOLEAN Unneeded;
+    NTSTATUS Status;
+
+    Status = DropUnneededAttributeList(FALSE, &Unneeded);
+    if (!NT_SUCCESS(Status) || !Unneeded)
+        return Status;
+
+    ListAttribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    if (!ListAttribute)
+        return STATUS_FILE_CORRUPT_ERROR;
+    if (ListAttribute->IsNonResident)
+    {
+        ListRuns = FindNonResidentData(ListAttribute);
+        if (!ListRuns)
+            return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    Status = DropUnneededAttributeList(TRUE, &Unneeded);
+    if (NT_SUCCESS(Status) && ListRuns)
+        Status = DiskVolume->ReleaseClusters(ListRuns);
+    FreeDataRun(ListRuns);
+    return Status;
+}
+
 NTSTATUS
 FileRecord::RemoveAttributeList()
 {
@@ -1625,6 +1717,8 @@ FileRecord::RemoveListedAttribute(
     if (NT_SUCCESS(Status))
         Status = ReplaceAttributeList(NewList, NewLength);
     delete[] NewList;
+    if (NT_SUCCESS(Status) && Owner != this)
+        (void)CollapseUnneededAttributeList();
     return Status;
 }
 
@@ -4086,6 +4180,10 @@ FileRecord::CommitNonResidentMappingUpdate(
            : NULL);
     BaseRecord->ClearExtentCacheExcept(
         CacheRecordToKeep);
+
+    /* A mapping that shrank back into the base record can leave a list that
+     * names only the base record once its extension records are freed. */
+    (void)BaseRecord->CollapseUnneededAttributeList();
 
     while (Update->NewExtents)
     {
