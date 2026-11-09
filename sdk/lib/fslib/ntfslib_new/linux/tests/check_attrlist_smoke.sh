@@ -98,7 +98,7 @@ def in_use(r):
 
 
 grow = None
-for n in range(24, len(offsets)):
+for n in range(len(offsets)):
     r = record(n)
     if not in_use(r) or struct.unpack_from('<Q', r, 0x20)[0] or not struct.unpack_from('<H', r, 0x16)[0] & 2:
         continue
@@ -113,7 +113,7 @@ if grow is None:
 base = record(grow)
 lists = [(p, a) for k, p, a in attrs(base) if k == 0x20]
 spilled = False
-for n in range(24, len(offsets)):
+for n in range(len(offsets)):
     r = record(n)
     if in_use(r) and struct.unpack_from('<Q', r, 0x20)[0] & 0xFFFFFFFFFFFF == grow:
         if any(k == 0xA0 for k, p, a in attrs(r)):
