@@ -2456,15 +2456,18 @@ FileRecord::SettleGrowthAttributeList()
      */
     if (Header->AllocatedSize - Header->ActualSize + ListAttribute->Length >= MappingGrowthHeadroom)
         return CollapseUnneededAttributeList();
-    Status = ReleaseBaseRecordSpace(MappingGrowthHeadroom);
-    if (NT_SUCCESS(Status))
-    {
-        Status = DropUnneededAttributeList(FALSE, &Unneeded);
-        if (!NT_SUCCESS(Status) || !Unneeded)
-            return Status;
-    }
-    /* Nothing could move out: never leave a list naming only the base. */
-    return CollapseUnneededAttributeList();
+    (void)ReleaseBaseRecordSpace(MappingGrowthHeadroom);
+
+    /*
+     * Keep the list even when nothing could move out yet. Collapsing it
+     * here is what starves the record: each later growth would recreate
+     * and drop it while the mapping takes a few more bytes, until there is
+     * no room left to create a list at all (Lab03 L1-B: the mapping filled
+     * the record, free 0, no list). With the list kept, the next growth
+     * that does not fit moves mapping pairs to an extension record through
+     * the normal update path, and the list then names it, as on main.
+     */
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
