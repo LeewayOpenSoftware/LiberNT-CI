@@ -192,7 +192,13 @@ NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
             ReturnedStartingVcn > Vcn ||
             Extent.NextVcn <= Vcn)
         {
-            return STATUS_SUCCESS;
+            /*
+             * The range cannot be mapped to disk offsets, so the held-back
+             * blocks cannot be picked out. The caller was promised the data
+             * is on the disk: commit everything the block cache holds for
+             * this volume instead of reporting a commit that did not happen.
+             */
+            return NtfsDiskFlushVolumeKm(VolCB->StorageDevice);
         }
 
         RunEndVcn = min(Extent.NextVcn, EndVcn);
