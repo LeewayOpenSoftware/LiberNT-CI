@@ -856,6 +856,8 @@ HandleLogon(
     BOOL ret = FALSE;
     ULONG SessionId = NtCurrentPeb()->SessionId;
 
+    LogonStage("authenticated");
+
     if (!SetTokenInformation(Session->UserToken, TokenSessionId, &SessionId, sizeof(SessionId)))
         ERR("WL: SetTokenInformation(TokenSessionId) failed (error %lu)\n", GetLastError());
 
@@ -916,6 +918,7 @@ HandleLogon(
         }
         Session->hProfileInfo = ProfileInfo.hProfile;
     }
+    LogonStage("profile-loaded");
 
     /* Cache the username and domain */
     Session->UserName = WlStrDup(Session->MprNotifyInfo.pszUserName);
@@ -953,6 +956,7 @@ HandleLogon(
 
     /* Start the user shell */
     CallNotificationDlls(Session, StartShellHandler);
+    LogonStage("shell-start");
     if (!StartUserShell(Session))
     {
         //WCHAR StatusMsg[256];
@@ -986,6 +990,7 @@ cleanup:
 
     if (!ret)
     {
+        LogonStage("logon-failed");
         RemoveStatusMessage(Session);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Session->UserName);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Session->Domain);
@@ -1014,6 +1019,7 @@ cleanup:
         SwitchDesktop(Session->ApplicationDesktop);
         RemoveStatusMessage(Session);
         Session->LogonState = STATE_LOGGED_ON;
+        LogonStage("logged-on");
     }
     return ret;
 }
@@ -1309,6 +1315,8 @@ HandleLogoff(
     HANDLE hThread;
     NTSTATUS Status;
 
+    LogonStage("logoff-start");
+
     Status = CreateLogoffSecurityAttributes(&psa);
     if (!NT_SUCCESS(Status))
     {
@@ -1383,6 +1391,7 @@ HandleLogoff(
     Session->LogonId = LuidNone;
 
     Session->LogonState = STATE_LOGGED_OFF;
+    LogonStage("logged-off");
 
     return STATUS_SUCCESS;
 }
@@ -1467,6 +1476,8 @@ HandleShutdown(
     NTSTATUS Status;
     UINT uMsgId;
     BOOLEAN Old;
+
+    LogonStage("shutdown-start");
 
     /* Display the appropriate shutdown or reboot message */
     if (wlxAction == WLX_SAS_ACTION_SHUTDOWN_REBOOT)
@@ -1710,6 +1721,7 @@ DispatchSAS(
 
                 case STATE_LOGGED_OFF:
                     Session->LogonState = STATE_LOGGED_OFF_SAS;
+                    LogonStage("logged-out-sas");
 
                     CloseAllDialogWindows();
 
