@@ -1157,8 +1157,30 @@ Directory::ResetIndex(
                       IndexRootAttribute->Resident.DataOffset,
                   sizeof(RootPrefix));
 
-    /* Clear the bitmap first: a resident bitmap then reaches the disk with
-     * the root, in the same record write below. */
+    /* Unlink every node first, then free the blocks: a cut in between leaves
+     * blocks in use that nothing links, which the check releases, and never a
+     * root that links a free block. */
+    End->EntryLength = (USHORT)sizeof(EndList);
+    End->Flags = INDEX_ENTRY_END;
+    Status = BuildRootValueFromList(
+        &RootPrefix,
+        EndList,
+        sizeof(EndList),
+        FALSE,
+        &RootValue,
+        &RootValueLength);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = ReplaceIndexRootValue(
+        DiskVolume,
+        DirectoryFile,
+        IndexName,
+        RootValue,
+        RootValueLength);
+    delete[] RootValue;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     BitmapAttribute =
         DirectoryFile->GetAttribute(
             TypeBitmap,
@@ -1191,48 +1213,19 @@ Directory::ResetIndex(
             if (!NT_SUCCESS(Status))
                 return Status;
         }
-    }
 
-    End->EntryLength = (USHORT)sizeof(EndList);
-    End->Flags = INDEX_ENTRY_END;
-    Status = BuildRootValueFromList(
-        &RootPrefix,
-        EndList,
-        sizeof(EndList),
-        FALSE,
-        &RootValue,
-        &RootValueLength);
-    if (!NT_SUCCESS(Status))
-        return Status;
-    Status = ReplaceIndexRootValue(
-        DiskVolume,
-        DirectoryFile,
-        IndexName,
-        RootValue,
-        RootValueLength);
-    delete[] RootValue;
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    /* A resident bitmap kept outside the root's record has its own. */
-    BitmapAttribute =
-        DirectoryFile->GetAttribute(
-            TypeBitmap,
-            const_cast<PWSTR>(IndexName));
-    if (BitmapAttribute && !BitmapAttribute->IsNonResident)
-    {
-        PFileRecord BitmapOwner =
-            DirectoryFile->GetAttributeOwner(BitmapAttribute);
-
-        IndexRootAttribute =
+        /* A resident bitmap lives in a record: commit it. */
+        BitmapAttribute =
             DirectoryFile->GetAttribute(
-                TypeIndexRoot,
+                TypeBitmap,
                 const_cast<PWSTR>(IndexName));
-        if (!BitmapOwner)
-            return STATUS_FILE_CORRUPT_ERROR;
-        if (!IndexRootAttribute ||
-            DirectoryFile->GetAttributeOwner(IndexRootAttribute) != BitmapOwner)
+        if (BitmapAttribute && !BitmapAttribute->IsNonResident)
         {
+            PFileRecord BitmapOwner =
+                DirectoryFile->GetAttributeOwner(BitmapAttribute);
+
+            if (!BitmapOwner)
+                return STATUS_FILE_CORRUPT_ERROR;
             Status = DiskVolume->MFT->WriteFileRecordToMFT(BitmapOwner);
         }
     }
