@@ -23,6 +23,7 @@ list(APPEND SOURCE
     taskband.cpp
     taskbarpin.cpp
     taskswnd.cpp
+    taskview.cpp
     tbsite.cpp
     trayclock.cpp
     traydeskbtn.cpp

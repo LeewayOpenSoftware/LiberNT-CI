@@ -13,6 +13,7 @@
 #include <cfgmgr32.h>
 #include <regstr.h>
 #include "appbar.h"
+#include "taskview.h"
 
 HRESULT TrayWindowCtxMenuCreator(ITrayWindow * TrayWnd, IN HWND hWndOwner, IContextMenu ** ppCtxMenu);
 
@@ -57,6 +58,15 @@ HRESULT TrayWindowCtxMenuCreator(ITrayWindow * TrayWnd, IN HWND hWndOwner, ICont
 #define IDHK_SETTINGS 0x20b
 #define IDHK_ACCESSIBILITY 0x20c
 #define IDHK_SCREENSHOT 0x20d
+
+#define IDHK_TASKKEY_FIRST 0x309
+#define IDHK_TASKKEY_COUNT 50
+
+static const UINT g_TaskKeyMods[] =
+{
+    MOD_WIN, MOD_WIN | MOD_SHIFT, MOD_WIN | MOD_CONTROL, MOD_WIN | MOD_ALT,
+    MOD_WIN | MOD_CONTROL | MOD_SHIFT,
+};
 
 enum { NONE, TILED, CASCADED } g_Arrangement = NONE;
 
@@ -1355,8 +1365,12 @@ public:
             break;
         }
         case IDHK_NEXT_TASK:
+            HideStartMenu();
+            TaskView_ToggleCycle(this, TRUE);
             break;
         case IDHK_PREV_TASK:
+            HideStartMenu();
+            TaskView_ToggleCycle(this, FALSE);
             break;
         case IDHK_MINIMIZE_ALL:
             MinimizeAll();
@@ -3340,11 +3354,6 @@ ChangePos:
             MAKELONG(IDHK_ACCESSIBILITY,  MAKEWORD('U', MOD_WIN)),
             MAKELONG(IDHK_SCREENSHOT,     MAKEWORD(VK_SNAPSHOT, MOD_WIN)),
         };
-        static const UINT taskmods[] =
-        {
-            MOD_WIN, MOD_WIN | MOD_SHIFT, MOD_WIN | MOD_CONTROL, MOD_WIN | MOD_ALT,
-            MOD_WIN | MOD_CONTROL | MOD_SHIFT,
-        };
         if (!SHRestricted(REST_NOWINKEYS))
         {
             for (UINT i = 0; i < _countof(winkeys); ++i)
@@ -3352,10 +3361,10 @@ ChangePos:
                 UINT mod = HIBYTE(HIWORD(winkeys[i])), key = LOBYTE(HIWORD(winkeys[i]));
                 RegisterHotKey(m_hWnd, LOWORD(winkeys[i]), mod, key);
             }
-            for (UINT i = 0; i < _countof(taskmods); ++i)
+            for (UINT i = 0; i < _countof(g_TaskKeyMods); ++i)
             {
                 for (UINT key = '0'; key <= '9'; ++key)
-                    RegisterHotKey(m_hWnd, IDHK_ACTIVATE_TASK, taskmods[i], key);
+                    RegisterHotKey(m_hWnd, IDHK_TASKKEY_FIRST + i * 10 + (key - '0'), g_TaskKeyMods[i], key);
             }
         }
 
@@ -4207,15 +4216,17 @@ HandleTrayContextMenu:
 
     LRESULT OnHotkey(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
-        if (wParam == IDHK_ACTIVATE_TASK)
+        if (wParam >= IDHK_TASKKEY_FIRST && wParam < IDHK_TASKKEY_FIRST + IDHK_TASKKEY_COUNT)
         {
-            UINT key = HIWORD(lParam);
+            UINT idx = (UINT)(wParam - IDHK_TASKKEY_FIRST);
+            UINT key = '0' + (idx % 10);
+            UINT mod = g_TaskKeyMods[idx / 10];
             UINT index = (key == '0') ? 9 : key - '1';
-            if (key < '0' || key > '9' || !m_TaskSwitch)
+            if (!m_TaskSwitch)
                 return 0;
             HideStartMenu();
             ::SendMessageW(m_TaskSwitch, TSWM_ACTIVATETASKINDEX,
-                           MAKEWPARAM(index, LOWORD(lParam) & ~MOD_WIN), 0);
+                           MAKEWPARAM(index, mod & ~MOD_WIN), 0);
             return 0;
         }
         return HandleHotKey(wParam);
