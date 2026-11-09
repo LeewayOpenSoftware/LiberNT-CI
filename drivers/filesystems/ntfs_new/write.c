@@ -622,7 +622,15 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
          * at a time; a non-cached write promises the caller the same; a
          * write-through write says so explicitly. Commit the range so the
          * data is on the disk when the request completes. Runs larger than
-         * a block already went direct, so this only costs what was held.
+         * a block already went direct, so this only costs what was held:
+         * a small non-cached write now pays one synchronous device write,
+         * which is what it asked for.
+         *
+         * The commit stages each held-back block through non-paged pool. If
+         * that allocation fails the data is still in the block cache and the
+         * library's lazy pass writes it a second later, so a paging or
+         * non-cached write completes anyway; only a caller that asked for
+         * write-through is told.
          */
         if (Length != 0 &&
             (PagingIo ||
@@ -630,7 +638,15 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
              BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
         {
-            Status = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
+            NTSTATUS CommitStatus = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
+
+            if (!NT_SUCCESS(CommitStatus) &&
+                (CommitStatus != STATUS_INSUFFICIENT_RESOURCES ||
+                 BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
+                 BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
+            {
+                Status = CommitStatus;
+            }
         }
     }
     else
