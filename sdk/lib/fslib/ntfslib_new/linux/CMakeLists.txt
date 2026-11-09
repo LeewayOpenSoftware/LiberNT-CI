@@ -168,7 +168,7 @@ if(BUILD_TESTING)
         -Wall
         -Wextra
     )
-    target_link_libraries(ntfslib_size_persist_times_test PRIVATE ntfslib_linux)
+    target_link_libraries(ntfslib_size_persist_times_test PRIVATE ntfslib_linux ntfslib_format_host)
     add_test(
         NAME ntfslib_linux_size_persist_times
         COMMAND ntfslib_size_persist_times_test
