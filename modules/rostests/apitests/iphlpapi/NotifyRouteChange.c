@@ -13,6 +13,8 @@
 #include <iphlpapi.h>
 #include <ipmib.h>
 #include <nldef.h>
+#undef WIN32_NO_STATUS
+#include <ntstatus.h>
 
 static void wait_for_notification(HANDLE event, OVERLAPPED *ovr, const char *op)
 {
@@ -20,7 +22,7 @@ static void wait_for_notification(HANDLE event, OVERLAPPED *ovr, const char *op)
 
     ok(wait == WAIT_OBJECT_0, "%s notification timed out\n", op);
     if (wait == WAIT_OBJECT_0)
-        ok(ovr->Internal == STATUS_SUCCESS, "%s notification completed with status %lx\n", op, ovr->Internal);
+        ok(ovr->Internal == STATUS_SUCCESS, "%s notification completed with status %lx\n", op, (ULONG)ovr->Internal);
 }
 
 static BOOL register_route_change(HANDLE event, OVERLAPPED *ovr, HANDLE *handle)
@@ -34,7 +36,7 @@ static BOOL register_route_change(HANDLE event, OVERLAPPED *ovr, HANDLE *handle)
     error = NotifyRouteChange(handle, ovr);
     ok_long(error, ERROR_IO_PENDING);
     ok(*handle != NULL, "Expected a notification handle, got NULL\n");
-    ok(ovr->Internal == STATUS_PENDING, "Expected STATUS_PENDING, got %lx\n", ovr->Internal);
+    ok(ovr->Internal == STATUS_PENDING, "Expected STATUS_PENDING, got %lx\n", (ULONG)ovr->Internal);
 
     return error == ERROR_IO_PENDING;
 }
@@ -67,7 +69,7 @@ static void test_cancel(void)
 
     wait = WaitForSingleObject(event, 100);
     ok(wait == WAIT_TIMEOUT, "Canceled notification still signaled\n");
-    ok(ovr.Internal == STATUS_CANCELLED, "Expected STATUS_CANCELLED, got %lx\n", ovr.Internal);
+    ok(ovr.Internal == STATUS_CANCELLED, "Expected STATUS_CANCELLED, got %lx\n", (ULONG)ovr.Internal);
 
 cleanup:
     cleanup_notification(event, handle, &ovr);
@@ -98,7 +100,7 @@ void func_NotifyRouteChange(void)
     route.dwForwardNextHop = htonl(INADDR_LOOPBACK);
     route.dwForwardIfIndex = ifIndex;
     route.dwForwardType = MIB_IPROUTE_TYPE_DIRECT;
-    route.dwForwardProto = RouteProtocolNetmgmt;
+    route.dwForwardProto = RouteProtocolNetMgmt;
     route.dwForwardMetric1 = 1;
 
     error = CreateIpForwardEntry(&route);
