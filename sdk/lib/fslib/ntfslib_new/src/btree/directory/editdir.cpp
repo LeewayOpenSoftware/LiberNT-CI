@@ -2035,6 +2035,44 @@ Directory::PushDownRoot(
     }
 
 Done:
+    if (NT_SUCCESS(Status))
+    {
+        /*
+         * The root's pointer set changed wholesale. The record committed
+         * before the push-down (for the pushed-down node's new VCNs)
+         * carries the OLD root; until the new one lands, a cut shows that
+         * old root over leaves that later splits rewrite as half-empty,
+         * and everything under the new node is unreachable (Lab04: 65 of
+         * 200 records reachable, in every directory). Commit the record
+         * now, in both barrier modes: one write per directory lifetime,
+         * and the old root is never on the disk after this returns. The
+         * root may live in another record than the bitmap and run list,
+         * so both are committed.
+         */
+        PAttribute RootAttribute =
+            DirectoryFile->GetAttribute(
+                TypeIndexRoot,
+                const_cast<PWSTR>(IndexName));
+        PFileRecord RootOwner = RootAttribute
+            ? DirectoryFile->GetAttributeOwner(RootAttribute)
+            : NULL;
+
+        Status = OrderPointerAfterRecord(
+            DiskVolume,
+            0,
+            0,
+            DirectoryFile);
+        if (NT_SUCCESS(Status) &&
+            RootOwner &&
+            RootOwner != DirectoryFile)
+        {
+            Status = OrderPointerAfterRecord(
+                DiskVolume,
+                0,
+                0,
+                RootOwner);
+        }
+    }
     delete[] RootValue;
     delete[] Image;
     return Status;
