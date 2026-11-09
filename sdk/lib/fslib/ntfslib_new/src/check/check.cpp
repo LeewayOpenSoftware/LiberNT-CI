@@ -182,6 +182,7 @@ private:
             Kind != NtfsCheckLostNameRemoved)
         {
             Out->Errors++;
+            Out->FoundErrors++;
         }
         if (Kind == NtfsCheckRecordCorrupt || Kind == NtfsCheckBadRunList ||
             Kind == NtfsCheckClusterOutOfRange || Kind == NtfsCheckCrossLinked)
@@ -1769,6 +1770,8 @@ NtfsVolumeCheck(
         Pass.RecoveredFiles += Result->RecoveredFiles;
         Pass.RepairedAttributeLists += Result->RepairedAttributeLists;
         Pass.RemovedNames += Result->RemovedNames;
+        /* The verify pass only sees what the repairs left behind. */
+        Pass.FoundErrors = Result->FoundErrors;
         *Result = Pass;
     }
     return Status;

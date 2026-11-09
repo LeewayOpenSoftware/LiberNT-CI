@@ -1110,6 +1110,9 @@ typedef struct NtfsCheckResult
     UINT64 RepairedAttributeLists;
     UINT64 RemovedNames;
     UINT64 Errors;
+    /* Problems the first pass found, before any repair (Errors is what is
+     * left after the repairs and the verify pass). */
+    UINT64 FoundErrors;
 } NtfsCheckResult, *PNtfsCheckResult;
 
 typedef void (*PNtfsCheckCallback)(

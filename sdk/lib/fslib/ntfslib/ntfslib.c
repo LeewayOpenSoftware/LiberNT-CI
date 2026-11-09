@@ -731,9 +731,11 @@ NtfsChkdsk(
         /* The check may still have repaired part of the volume around the
          * mounted file system, which was dismounted above: what was opened on
          * it before is stale, so restart as after a full repair. The dirty
-         * flag stays set and the next boot checks again; a check that writes
-         * nothing does not restart, so a residue it cannot fix cannot loop. */
-        if (Locked && CheckWrites != 0)
+         * flag stays set and the next boot checks again. Restart only when
+         * the check wrote AND fewer problems are left than it found: a check
+         * that writes nothing, or a repair that writes on every boot without
+         * removing anything, does not restart, so neither can loop. */
+        if (Locked && CheckWrites != 0 && Result.Errors < Result.FoundErrors)
         {
             NtfsFormatReport(Callback, "%lu writes were made to the volume; it must be restarted.\n",
                              CheckWrites);
