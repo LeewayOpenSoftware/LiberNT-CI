@@ -28,6 +28,7 @@ BOOL TaskbarSettings::Save()
     SHSetValueW(hkExplorer, L"Advanced", L"PreferDateOverWeekday", REG_DWORD, &bPreferDate, sizeof(bPreferDate));
     SHSetValueW(hkExplorer, L"Advanced", L"ShowSeconds", REG_DWORD, &bShowSeconds, sizeof(bShowSeconds));
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarGlomming", REG_DWORD, &bGroupButtons, sizeof(bGroupButtons));
+    SHSetValueW(hkExplorer, L"Advanced", L"TaskbarGlomLevel", REG_DWORD, &dwTaskbarGlomLevel, sizeof(dwTaskbarGlomLevel));
     BOOL bAllowSizeMove = !bLock;
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarSizeMove", REG_DWORD, &bAllowSizeMove, sizeof(bAllowSizeMove));
     sr.cbSize = sizeof(sr);
@@ -53,9 +54,22 @@ BOOL TaskbarSettings::Load()
     dwRet = SHGetValueW(hkExplorer, L"Advanced", L"ShowSeconds", NULL, &dwValue, &cbSize);
     bShowSeconds = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : FALSE;
 
-    dwRet = SHGetValueW(hkExplorer, L"Advanced", L"TaskbarGlomming", NULL, &dwValue, &cbSize);
-    bGroupButtons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : FALSE;
+    cbSize = sizeof(dwValue);
+    dwRet = SHGetValueW(hkExplorer, L"Advanced", L"TaskbarGlomLevel", NULL, &dwValue, &cbSize);
+    if (dwRet == ERROR_SUCCESS && dwValue <= TASKBAR_GLOM_NEVER)
+    {
+        dwTaskbarGlomLevel = dwValue;
+        bGroupButtons = (dwTaskbarGlomLevel != TASKBAR_GLOM_NEVER);
+    }
+    else
+    {
+        cbSize = sizeof(dwValue);
+        dwRet = SHGetValueW(hkExplorer, L"Advanced", L"TaskbarGlomming", NULL, &dwValue, &cbSize);
+        bGroupButtons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;
+        dwTaskbarGlomLevel = bGroupButtons ? TASKBAR_GLOM_ALWAYS : TASKBAR_GLOM_NEVER;
+    }
 
+    cbSize = sizeof(dwValue);
     dwRet = SHGetValueW(hkExplorer, NULL, L"EnableAutotray", NULL, &dwValue, &cbSize);
     bHideInactiveIcons = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;
 

@@ -20,6 +20,7 @@
  */
 
 #include "precomp.h"
+#include <winternl.h>
 #include <winver.h>
 #include <commoncontrols.h>
 #include <regstr.h>
@@ -49,6 +50,7 @@
 #define IDM_GROUP_CLOSE 7
 #define IDM_JUMP_PIN 8
 #define IDM_JUMP_UNPIN 9
+#define IDM_GROUP_WINDOW_FIRST 16
 #define VALIDATE_RUDE_INTERVAL 1000
 #define VALIDATE_RUDE_MAX_COUNT 5
 #define TIMER_ID_BUTTON_ANIM 7
@@ -241,6 +243,7 @@ typedef struct _TASK_GROUP
             DWORD IsPinned : 1;
             DWORD PinSeen : 1;
             DWORD LaunchInProgress : 1;
+            DWORD PinAppIdCopied : 1;
         };
     };
 } TASK_GROUP, *PTASK_GROUP;
@@ -696,6 +699,7 @@ class CTaskSwitchWnd :
 
     HTHEME m_Theme;
     UINT m_ButtonsPerLine;
+    UINT m_RowCount;
     WORD m_ButtonCount;
 
     HIMAGELIST m_ImageList;
@@ -745,6 +749,7 @@ public:
         m_HoverPreviewPending(FALSE),
         m_Theme(NULL),
         m_ButtonsPerLine(0),
+        m_RowCount(0),
         m_ButtonCount(0),
         m_ImageList(NULL),
         m_IsGroupingEnabled(FALSE),
@@ -954,29 +959,65 @@ public:
         HICON icon = NULL;
         if (TaskGroup->IsPinned)
         {
-            SHFILEINFOW sfi;
-            ZeroMemory(&sfi, sizeof(sfi));
-            PCWSTR pszIconPath = TaskGroup->szLinkPath[0] ?
-                                 TaskGroup->szLinkPath : TaskGroup->szExePath;
-            // Fetch the base image; SHGFI_ICON adds a shortcut arrow for large icons.
-            DWORD_PTR Images = SHGetFileInfoW(pszIconPath, 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | (UseSmallTaskIcons() ? SHGFI_SMALLICON : SHGFI_LARGEICON));
-            if (Images)
+            if (TaskGroup->szLinkPath[0])
             {
-                icon = ImageList_GetIcon((HIMAGELIST)Images, sfi.iIcon, ILD_TRANSPARENT);
-                *pbDestroy = icon != NULL;
-            }
-            if (!icon && TaskGroup->szExePath[0])
-            {
-                HICON hLarge = NULL, hSmall = NULL;
-
-                if (ExtractIconExW(TaskGroup->szExePath, 0, &hLarge, &hSmall, 1))
+                CComPtr<IShellLinkW> Link;
+                CComPtr<IPersistFile> Persist;
+                HRESULT hr = Link.CoCreateInstance(CLSID_ShellLink, IID_IShellLinkW, NULL, CLSCTX_INPROC_SERVER);
+                if (SUCCEEDED(hr))
+                    hr = Link->QueryInterface(IID_PPV_ARG(IPersistFile, &Persist));
+                if (SUCCEEDED(hr))
+                    hr = Persist->Load(TaskGroup->szLinkPath, STGM_READ);
+                if (SUCCEEDED(hr))
                 {
-                    icon = UseSmallTaskIcons() ? hSmall : hLarge;
-                    if (!icon)
-                        icon = UseSmallTaskIcons() ? hLarge : hSmall;
-                    else if (hLarge && hSmall)
-                        DestroyIcon(UseSmallTaskIcons() ? hLarge : hSmall);
+                    WCHAR szIconPath[MAX_PATH];
+                    INT iIcon;
+                    if (SUCCEEDED(Link->GetIconLocation(szIconPath, _countof(szIconPath), &iIcon)) && szIconPath[0])
+                    {
+                        HICON hLarge = NULL, hSmall = NULL;
+                        if (ExtractIconExW(szIconPath, iIcon, &hLarge, &hSmall, 1))
+                        {
+                            icon = UseSmallTaskIcons() ? hSmall : hLarge;
+                            if (icon)
+                            {
+                                *pbDestroy = TRUE;
+                                if (hLarge && hSmall)
+                                    DestroyIcon(UseSmallTaskIcons() ? hLarge : hSmall);
+                            }
+                            else if (hLarge || hSmall)
+                            {
+                                DestroyIcon(hLarge ? hLarge : hSmall);
+                            }
+                        }
+                    }
+                }
+            }
+            if (!icon)
+            {
+                SHFILEINFOW sfi;
+                ZeroMemory(&sfi, sizeof(sfi));
+                PCWSTR pszIconPath = TaskGroup->szLinkPath[0] ?
+                                     TaskGroup->szLinkPath : TaskGroup->szExePath;
+                // Fetch the base image; SHGFI_ICON adds a shortcut arrow for large icons.
+                DWORD_PTR Images = SHGetFileInfoW(pszIconPath, 0, &sfi, sizeof(sfi), SHGFI_SYSICONINDEX | (UseSmallTaskIcons() ? SHGFI_SMALLICON : SHGFI_LARGEICON));
+                if (Images)
+                {
+                    icon = ImageList_GetIcon((HIMAGELIST)Images, sfi.iIcon, ILD_TRANSPARENT);
                     *pbDestroy = icon != NULL;
+                }
+                if (!icon && TaskGroup->szExePath[0])
+                {
+                    HICON hLarge = NULL, hSmall = NULL;
+
+                    if (ExtractIconExW(TaskGroup->szExePath, 0, &hLarge, &hSmall, 1))
+                    {
+                        icon = UseSmallTaskIcons() ? hSmall : hLarge;
+                        if (!icon)
+                            icon = UseSmallTaskIcons() ? hLarge : hSmall;
+                        else if (hLarge && hSmall)
+                            DestroyIcon(UseSmallTaskIcons() ? hLarge : hSmall);
+                        *pbDestroy = icon != NULL;
+                    }
                 }
             }
         }
@@ -1110,9 +1151,9 @@ public:
 
     static PCWSTR TaskGroupKey(IN PTASK_GROUP TaskGroup)
     {
-        if (TaskGroup->szAppId[0])
-            return TaskGroup->szAppId;
-        return TaskGroup->szPinAppId[0] ? TaskGroup->szPinAppId : TaskGroup->szExePath;
+        if (TaskGroup->IsPinned)
+            return TaskGroup->szPinAppId[0] ? TaskGroup->szPinAppId : TaskGroup->szExePath;
+        return TaskGroup->szAppId[0] ? TaskGroup->szAppId : TaskGroup->szExePath;
     }
 
     static PCWSTR TaskGroupAppId(IN PTASK_GROUP TaskGroup)
@@ -1130,25 +1171,76 @@ public:
         return NULL;
     }
 
-    PTASK_GROUP FindPinGroup(IN PCWSTR pszTarget, IN PCWSTR pszAppId)
+    PTASK_GROUP FindTargetOnlyPinGroup(IN PCWSTR pszTarget)
     {
-        PTASK_GROUP TaskGroup;
-
-        if (!pszAppId[0])
-            return FindTaskGroupByKey(pszTarget);
-        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+        for (PTASK_GROUP TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
         {
-            if (!_wcsicmp(TaskGroup->szAppId, pszAppId) || !_wcsicmp(TaskGroup->szPinAppId, pszAppId))
-                return TaskGroup;
-        }
-        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
-        {
-            if (!TaskGroup->szAppId[0] && !TaskGroup->szPinAppId[0] && !TaskGroup->IsPinned &&
-                TaskGroup->szExePath[0] && !lstrcmpiW(TaskGroup->szExePath, pszTarget))
+            if (TaskGroup->IsPinned && !TaskGroup->szPinAppId[0] && TaskGroup->szExePath[0] &&
+                !lstrcmpiW(TaskGroup->szExePath, pszTarget))
             {
                 return TaskGroup;
             }
         }
+        return NULL;
+    }
+
+    PTASK_GROUP FindTaskGroupForWindow(IN PCWSTR pszExePath, IN PCWSTR pszAppId, IN DWORD dwProcessId)
+    {
+        PTASK_GROUP TaskGroup;
+
+        if (pszAppId[0])
+        {
+            for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+            {
+                if (!_wcsicmp(TaskGroup->szAppId, pszAppId) ||
+                    (!TaskGroup->szAppId[0] && !_wcsicmp(TaskGroup->szPinAppId, pszAppId)))
+                {
+                    return TaskGroup;
+                }
+            }
+            return NULL;
+        }
+
+        TaskGroup = FindTargetOnlyPinGroup(pszExePath);
+        if (TaskGroup)
+            return TaskGroup;
+
+        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+        {
+            if (TaskGroup->IsPinned && TaskGroup->PinAppIdCopied && TaskGroup->szExePath[0] &&
+                !lstrcmpiW(TaskGroup->szExePath, pszExePath))
+            {
+                return TaskGroup;
+            }
+        }
+
+        for (TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+        {
+            if (!TaskGroup->IsPinned && !TaskGroup->szAppId[0] &&
+                ((pszExePath[0] && TaskGroup->szExePath[0] &&
+                  !_wcsicmp(TaskGroup->szExePath, pszExePath)) ||
+                 (TaskGroup->dwTaskCount && TaskGroup->dwProcessId == dwProcessId) ||
+                 (!pszExePath[0] && !TaskGroup->szExePath[0] && TaskGroup->dwProcessId == dwProcessId)))
+            {
+                return TaskGroup;
+            }
+        }
+        return NULL;
+    }
+
+    PTASK_GROUP FindPinGroup(IN PCWSTR pszTarget, IN PCWSTR pszAppId, IN BOOL bAppIdCopied)
+    {
+        if (pszAppId[0])
+        {
+            for (PTASK_GROUP TaskGroup = m_TaskGroups; TaskGroup; TaskGroup = TaskGroup->Next)
+            {
+                if (!_wcsicmp(TaskGroup->szAppId, pszAppId) || !_wcsicmp(TaskGroup->szPinAppId, pszAppId))
+                    return TaskGroup;
+            }
+        }
+
+        if (!pszAppId[0] || (bAppIdCopied && !FindTargetOnlyPinGroup(pszTarget)))
+            return FindTaskGroupForWindow(pszTarget, L"", 0);
         return NULL;
     }
 
@@ -1240,6 +1332,7 @@ public:
             }
             TaskGroup->IsPinned = TRUE;
             TaskGroup->PinSeen = TRUE;
+            TaskGroup->PinAppIdCopied = TaskbarPin_IsAppIdCopied(pRecord->szShortcut);
             TaskGroup->PinCreationTime = pRecord->CreationTime;
             StringCchCopyW(TaskGroup->szPinAppId, _countof(TaskGroup->szPinAppId), pRecord->szAppId);
             StringCchCopyW(TaskGroup->szLinkPath,
@@ -1256,6 +1349,7 @@ public:
         }
 
         TaskGroup->IsPinned = FALSE;
+        TaskGroup->PinAppIdCopied = FALSE;
         if (TaskGroup->hPinnedIcon)
         {
             DestroyIcon(TaskGroup->hPinnedIcon);
@@ -1296,7 +1390,7 @@ public:
             return HRESULT_FROM_WIN32(GetLastError());
         Record.CreationTime = Attributes.ftCreationTime;
 
-        PTASK_GROUP Group = FindPinGroup(pszTarget, Record.szAppId);
+        PTASK_GROUP Group = FindPinGroup(pszTarget, Record.szAppId, TaskbarPin_IsAppIdCopied(pszShortcut));
         if (!Group)
             Group = AppendTaskGroup(pszTarget);
         if (!Group)
@@ -1343,7 +1437,7 @@ public:
             if (bDuplicate)
                 continue;
 
-            TaskGroup = FindPinGroup(Records[i].szTarget, Records[i].szAppId);
+            TaskGroup = FindPinGroup(Records[i].szTarget, Records[i].szAppId, TaskbarPin_IsAppIdCopied(Records[i].szShortcut));
             if (!TaskGroup)
                 TaskGroup = AppendTaskGroup(Records[i].szTarget);
             if (TaskGroup)
@@ -1371,6 +1465,9 @@ public:
             }
             TaskGroup = Next;
         }
+
+        for (WORD i = m_TaskItemCount; i > 0;)
+            RegroupTaskItemByAppId(&m_TaskItems[--i]);
 
         // Use the same order for existing running groups and pins loaded at logon.
         ApplyPinOrder(Records);
@@ -2027,7 +2124,7 @@ public:
             tbBtn.fsState = TBSTATE_ENABLED | TBSTATE_ELLIPSES;
             tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
             windowText[0] = 0;
-            if (!IsModernTaskbar())
+            if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_ALWAYS)
                 GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
             tbBtn.iString = (DWORD_PTR)windowText;
             tbBtn.idCommand = iInsert;
@@ -2048,8 +2145,23 @@ public:
 
     BOOL ShouldCombine(IN PTASK_GROUP TaskGroup)
     {
-        return TaskGroup && (TaskGroup->IsPinned ||
-               (m_IsGroupingEnabled && IsModernTaskbar() && TaskGroup->dwTaskCount > 1));
+        if (!TaskGroup)
+            return FALSE;
+        if (TaskGroup->IsPinned)
+            return TRUE;
+        if (!m_IsGroupingEnabled || TaskGroup->dwTaskCount <= 1)
+            return FALSE;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel == TASKBAR_GLOM_ALWAYS)
+            return TRUE;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_WHEN_FULL)
+            return FALSE;
+
+        DWORD ButtonCount = 0;
+        for (PTASK_GROUP Group = m_TaskGroups; Group; Group = Group->Next)
+            ButtonCount += Group->IsPinned ? 1 : Group->dwTaskCount;
+
+        DWORD Capacity = m_ButtonsPerLine * m_RowCount;
+        return Capacity != 0 && ButtonCount >= Capacity;
     }
 
     VOID UpdateTaskGroupLayout()
@@ -2179,15 +2291,10 @@ public:
             tbbi.fsState |= TBSTATE_WRAP;
         }
 
-        if (IsModernTaskbar())
-        {
-            windowText[0] = 0;
-            tbbi.pszText = windowText;
-        }
-        else if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
-        {
-            tbbi.pszText = windowText;
-        }
+        windowText[0] = 0;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_ALWAYS)
+            GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
+        tbbi.pszText = windowText;
 
         icon = GetWndIcon(TaskItem->hWnd);
         if (!icon)
@@ -2374,15 +2481,10 @@ public:
         tbBtn.fsStyle = BTNS_CHECK | BTNS_NOPREFIX | BTNS_SHOWTEXT;
         tbBtn.dwData = TaskItem->Index;
 
-        if (IsModernTaskbar())
-        {
-            windowText[0] = 0;
-            tbBtn.iString = (DWORD_PTR) windowText;
-        }
-        else if (GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText)) > 0)
-        {
-            tbBtn.iString = (DWORD_PTR) windowText;
-        }
+        windowText[0] = 0;
+        if (g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_ALWAYS)
+            GetWndTextFromTaskItem(TaskItem, windowText, _countof(windowText));
+        tbBtn.iString = (DWORD_PTR)windowText;
 
         /* Find out where to insert the new button */
         iIndex = CalculateTaskItemNewButtonIndex(TaskItem);
@@ -2445,10 +2547,11 @@ public:
         return FALSE;
     }
 
-    BOOL GetTaskExePath(IN DWORD dwProcessId, OUT LPWSTR pszPath, IN DWORD cchPath)
+    BOOL GetTaskExePath(IN HWND hWnd, IN DWORD dwProcessId, OUT LPWSTR pszPath, IN DWORD cchPath)
     {
         HANDLE hProcess;
         DWORD cch = cchPath;
+        WCHAR szClass[20];
 
         pszPath[0] = 0;
 
@@ -2457,6 +2560,30 @@ public:
             hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwProcessId);
         if (!hProcess)
             return FALSE;
+
+        if (GetClassNameW(hWnd, szClass, _countof(szClass)) && !lstrcmpiW(szClass, L"ConsoleWindowClass"))
+        {
+            PROCESS_BASIC_INFORMATION Basic = { 0 };
+            decltype(&NtQueryInformationProcess) QueryInformationProcess =
+                reinterpret_cast<decltype(&NtQueryInformationProcess)>(
+                    GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtQueryInformationProcess"));
+
+            if (!QueryInformationProcess ||
+                !NT_SUCCESS(QueryInformationProcess(hProcess, ProcessBasicInformation, &Basic, sizeof(Basic), NULL)) ||
+                !Basic.Reserved3)
+            {
+                CloseHandle(hProcess);
+                return FALSE;
+            }
+            CloseHandle(hProcess);
+            dwProcessId = (DWORD)(ULONG_PTR)Basic.Reserved3;
+            cch = cchPath;
+            hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, dwProcessId);
+            if (!hProcess)
+                hProcess = OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, dwProcessId);
+            if (!hProcess)
+                return FALSE;
+        }
 
         if (!QueryFullProcessImageNameW(hProcess, 0, pszPath, &cch))
             pszPath[0] = 0;
@@ -2495,8 +2622,8 @@ public:
             return NULL;
         }
 
-        GetTaskExePath(dwProcessId, szExePath, _countof(szExePath));
         GetWindowAppId(hWnd, szAppId, _countof(szAppId));
+        GetTaskExePath(hWnd, dwProcessId, szExePath, _countof(szExePath));
 
         TaskGroup = szAppId[0] ? NULL : FindLaunchingTaskGroup(dwProcessId);
         if (TaskGroup)
@@ -2508,26 +2635,15 @@ public:
         }
 
         /* Try to find an existing task group */
-        TaskGroup = m_TaskGroups;
-        while (TaskGroup != NULL)
+        TaskGroup = FindTaskGroupForWindow(szExePath, szAppId, dwProcessId);
+        if (TaskGroup)
         {
-            if (szAppId[0] ? (_wcsicmp(TaskGroup->szAppId, szAppId) == 0 ||
-                              (!TaskGroup->szAppId[0] && _wcsicmp(TaskGroup->szPinAppId, szAppId) == 0)) :
-                (!TaskGroup->szAppId[0] &&
-                 ((szExePath[0] && TaskGroup->szExePath[0] &&
-                   _wcsicmp(TaskGroup->szExePath, szExePath) == 0) ||
-                  (TaskGroup->dwTaskCount && TaskGroup->dwProcessId == dwProcessId) ||
-                  (!szExePath[0] && !TaskGroup->szExePath[0] &&
-                   TaskGroup->dwProcessId == dwProcessId))))
-            {
-                TaskGroup->dwTaskCount++;
-                TaskGroup->dwProcessId = dwProcessId;
-                if (szAppId[0] && !TaskGroup->szAppId[0])
-                    StringCchCopyW(TaskGroup->szAppId, _countof(TaskGroup->szAppId), szAppId);
-                ClearTaskGroupLaunch(TaskGroup);
-                return TaskGroup;
-            }
-            TaskGroup = TaskGroup->Next;
+            TaskGroup->dwTaskCount++;
+            TaskGroup->dwProcessId = dwProcessId;
+            if (szAppId[0] && !TaskGroup->szAppId[0])
+                StringCchCopyW(TaskGroup->szAppId, _countof(TaskGroup->szAppId), szAppId);
+            ClearTaskGroupLaunch(TaskGroup);
+            return TaskGroup;
         }
 
         /* Allocate a new task group */
@@ -2809,12 +2925,14 @@ public:
 
     BOOL RegroupTaskItemByAppId(IN PTASK_ITEM TaskItem)
     {
-        WCHAR szAppId[128];
+        DWORD ProcessId;
+        WCHAR szExePath[MAX_PATH], szAppId[128];
 
-        if (!TaskItem->Group)
+        if (!TaskItem->Group || !GetWindowThreadProcessId(TaskItem->hWnd, &ProcessId))
             return FALSE;
         GetWindowAppId(TaskItem->hWnd, szAppId, _countof(szAppId));
-        if (_wcsicmp(szAppId, TaskItem->Group->szAppId) == 0)
+        GetTaskExePath(TaskItem->hWnd, ProcessId, szExePath, _countof(szExePath));
+        if (TaskItem->Group == FindTaskGroupForWindow(szExePath, szAppId, ProcessId))
             return FALSE;
 
         DeleteTaskItemButton(TaskItem);
@@ -2837,7 +2955,7 @@ public:
         PTASK_GROUP Group = FindLaunchingTaskGroup(ProcessId);
         if (!Group)
         {
-            if (!GetTaskExePath(ProcessId, Path, _countof(Path)))
+            if (!GetTaskExePath(TaskItem->hWnd, ProcessId, Path, _countof(Path)))
                 return;
             Group = FindTaskGroupByPath(Path);
         }
@@ -3509,6 +3627,7 @@ public:
                 m_ButtonSize.cx = NewBtnSize;
 
                 m_ButtonsPerLine = uiBtnsPerLine;
+                m_RowCount = Horizontal ? uiRows : max(1, rcClient.bottom / max(1, m_ButtonSize.cy));
 
                 for (ui = 0; ui != m_ButtonCount; ui++)
                 {
@@ -3550,6 +3669,7 @@ public:
             else
             {
                 m_ButtonsPerLine = 0;
+                m_RowCount = 0;
                 m_ButtonSize.cx = 0;
             }
         }
@@ -3578,6 +3698,14 @@ public:
     BOOL RefreshWindowList()
     {
         TRACE("Refreshing window list...\n");
+
+        for (WORD i = m_TaskItemCount; i > 0;)
+        {
+            PTASK_ITEM TaskItem = &m_TaskItems[--i];
+            if (!::IsWindow(TaskItem->hWnd) || !m_Tray->IsTaskWnd(TaskItem->hWnd))
+                DeleteTaskItem(TaskItem);
+        }
+
         /* Add all windows to the toolbar */
         return EnumWindows(s_EnumWindowsProc, (LPARAM)this);
     }
@@ -3599,11 +3727,12 @@ public:
         m_HoverIndex = -1;
         TaskPreview_Hide();
 
-        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
+        m_IsGroupingEnabled = g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_NEVER;
         UpdateTaskGroupLayout();
 
         m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
         UpdateButtonsSize(FALSE);
+        UpdateTaskGroupLayout();
         if (bWasModernTaskbar != IsModernTaskbar())
             RefreshTaskButtons();
         InvalidateRect(NULL, TRUE);
@@ -3645,6 +3774,7 @@ public:
 
         /* Recalculate the button size */
         UpdateButtonsSize(FALSE);
+        UpdateTaskGroupLayout();
 
 #if DUMP_TASKS != 0
         SetTimer(hwnd, 1, 5000, NULL);
@@ -3777,12 +3907,26 @@ public:
         case HSHELL_WINDOWCREATED:
             if (AddTask((HWND) lParam))
                 StartMenu2_RecordUsage((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_WINDOWDESTROYED:
             /* The window still exists! Delay destroying it a bit */
             OnWindowDestroyed((HWND)lParam);
             DeleteTask((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
+            break;
+
+        case HSHELL_WINDOWREPLACING:
+            if (AddTask((HWND)lParam))
+                StartMenu2_RecordUsage((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
+            break;
+
+        case HSHELL_WINDOWREPLACED:
+            OnWindowDestroyed((HWND)lParam);
+            DeleteTask((HWND)lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_RUDEAPPACTIVATED:
@@ -3805,6 +3949,7 @@ public:
 
         case HSHELL_REDRAW:
             RedrawTask((HWND) lParam);
+            ShowHoverPreview(m_HoverIndex);
             break;
 
         case HSHELL_TASKMAN:
@@ -3820,8 +3965,6 @@ public:
         case HSHELL_SYSMENU:
         case HSHELL_ENDTASK:
         case HSHELL_ACCESSIBILITYSTATE:
-        case HSHELL_WINDOWREPLACED:
-        case HSHELL_WINDOWREPLACING:
 
         case HSHELL_GETMINRECT:
         default:
@@ -3902,6 +4045,21 @@ public:
                 pahWnd[cWindows++] = TaskItem->hWnd;
         }
         return cWindows;
+    }
+
+    UINT CollectGroupWindows(IN PTASK_GROUP TaskGroup, OUT CAtlArray<HWND> &Windows)
+    {
+        Windows.SetCount(0);
+        if (!m_TaskItemCount || !TaskGroup)
+            return 0;
+
+        PTASK_ITEM LastItem = m_TaskItems + m_TaskItemCount;
+        for (PTASK_ITEM TaskItem = m_TaskItems; TaskItem != LastItem; TaskItem++)
+        {
+            if (TaskItem->Group == TaskGroup && ::IsWindow(TaskItem->hWnd))
+                Windows.Add(TaskItem->hWnd);
+        }
+        return (UINT)Windows.GetCount();
     }
 
     BOOL GetButtonScreenRect(IN INT Index, OUT RECT *prc)
@@ -4031,14 +4189,14 @@ public:
     {
         PTASK_GROUP TaskGroup = FindTaskGroupByIndex(Index);
         PTASK_ITEM TaskItem;
-        HWND ahWnd[16];
+        CAtlArray<HWND> Windows;
         UINT cWindows = 0;
         INT_PTR id;
         RECT rcBtn;
 
         if (TaskGroup != NULL && TaskGroup->IsCollapsed)
         {
-            cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+            cWindows = CollectGroupWindows(TaskGroup, Windows);
             id = (INT_PTR)TaskGroup;
         }
         else
@@ -4046,14 +4204,23 @@ public:
             TaskItem = FindTaskItemByIndex(Index);
             if (TaskItem == NULL || !::IsWindow(TaskItem->hWnd))
                 return;
-            ahWnd[cWindows++] = TaskItem->hWnd;
+            cWindows = 1;
+            Windows.Add(TaskItem->hWnd);
             id = (INT_PTR)TaskItem;
         }
-        if (cWindows == 0 || TaskPreview_IsVisibleFor(id))
+        if (!cWindows)
+        {
+            TaskPreview_Hide();
             return;
+        }
+        if (TaskPreview_IsVisibleFor(id))
+        {
+            TaskPreview_Refresh(Windows.GetData(), cWindows, id);
+            return;
+        }
         if (!GetButtonScreenRect(Index, &rcBtn))
             return;
-        TaskPreview_ShowHover(m_TaskBar.m_hWnd, &rcBtn, ahWnd, cWindows, id);
+        TaskPreview_ShowHover(m_TaskBar.m_hWnd, &rcBtn, Windows.GetData(), cWindows, id);
     }
 
     VOID OnHotTaskChanged(IN INT Index)
@@ -4073,10 +4240,10 @@ public:
 
     VOID HandleTaskGroupClick(IN OUT PTASK_GROUP TaskGroup)
     {
-        HWND ahWnd[16];
+        CAtlArray<HWND> Windows;
         UINT cWindows;
 
-        cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        cWindows = CollectGroupWindows(TaskGroup, Windows);
         if (!cWindows)
         {
             CStringW Target = TaskGroupKey(TaskGroup);
@@ -4084,7 +4251,7 @@ public:
             TaskGroup = FindTaskGroupByKey(Target);
             if (!TaskGroup)
                 return;
-            cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+            cWindows = CollectGroupWindows(TaskGroup, Windows);
         }
         if (cWindows == 0)
         {
@@ -4094,7 +4261,7 @@ public:
         }
         if (cWindows == 1)
         {
-            PTASK_ITEM TaskItem = FindTaskItem(ahWnd[0]);
+            PTASK_ITEM TaskItem = FindTaskItem(Windows[0]);
             if (TaskItem)
                 HandleTaskItemClick(TaskItem);
             return;
@@ -4160,18 +4327,18 @@ public:
 
     HWND LastActiveGroupWindow(IN PTASK_GROUP TaskGroup)
     {
-        HWND ahWnd[16];
-        UINT cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        CAtlArray<HWND> Windows;
+        UINT cWindows = CollectGroupWindows(TaskGroup, Windows);
 
         for (HWND hWnd = ::GetTopWindow(NULL); hWnd && cWindows; hWnd = ::GetWindow(hWnd, GW_HWNDNEXT))
         {
-            for (UINT i = 0; i < cWindows; ++i)
+            for (SIZE_T i = 0; i < Windows.GetCount(); ++i)
             {
-                if (ahWnd[i] == hWnd)
+                if (Windows[i] == hWnd)
                     return hWnd;
             }
         }
-        return cWindows ? ahWnd[0] : NULL;
+        return cWindows ? Windows[0] : NULL;
     }
 
     LRESULT OnActivateTaskIndex(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -4281,6 +4448,7 @@ public:
         HMENU hMenu = CreatePopupMenu();
         WCHAR szName[128];
         CAtlArray<HWND> Windows;
+        CTaskJumpList JumpList;
         INT cmd;
 
         if (!hMenu)
@@ -4312,6 +4480,9 @@ public:
         if (!AppId.IsEmpty() && Windows.GetCount() > 0)
             bRelaunch = TaskbarPin_GetRelaunch(Windows[0], Command, RelaunchName, &bPrevented);
         TaskPreview_Hide();
+        // Pinned, the app's categories, Recent/Frequent and Tasks go above the commands.
+        if (JumpList.Build(hMenu, AppId, Target))
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         szName[0] = 0;
         if (bRelaunch)
             StringCchCopyW(szName, _countof(szName), RelaunchName);
@@ -4337,9 +4508,15 @@ public:
                 AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
             AppendMenuW(hMenu, MF_STRING, IDM_JUMP_CLOSE, Windows.GetCount() > 1 ? L"Close all windows" : L"Close window");
         }
+        JumpList.BeginTrack(hMenu);
         cmd = TrackTaskMenu(hMenu);
+        JumpList.EndTrack();
         DestroyMenu(hMenu);
-        if (cmd == IDM_JUMP_LAUNCH)
+        if (JumpList.Invoke(cmd, m_hWnd))
+        {
+            // A jump list item, or the menu of a right-clicked document.
+        }
+        else if (cmd == IDM_JUMP_LAUNCH)
             LaunchTaskPath(Key, Source, !bPinned && bRelaunch ? Command.GetString() : NULL);
         else if (cmd == IDM_JUMP_PIN || cmd == IDM_JUMP_UNPIN)
         {
@@ -4385,14 +4562,23 @@ public:
     VOID ShowGroupMenu(IN PTASK_GROUP TaskGroup)
     {
         HMENU hMenu = CreatePopupMenu();
-        HWND ahWnd[16];
+        CAtlArray<HWND> Windows;
         UINT cWindows, i;
         INT cmd;
 
         if (!hMenu)
             return;
         TaskPreview_Hide();
-        cWindows = CollectGroupWindows(TaskGroup, ahWnd, _countof(ahWnd));
+        cWindows = CollectGroupWindows(TaskGroup, Windows);
+        for (i = 0; i < cWindows; ++i)
+        {
+            WCHAR Title[255];
+            if (!InternalGetWindowText(Windows[i], Title, _countof(Title)))
+                Title[0] = 0;
+            AppendMenuW(hMenu, MF_STRING, IDM_GROUP_WINDOW_FIRST + i, Title);
+        }
+        if (cWindows)
+            AppendMenuW(hMenu, MF_SEPARATOR, 0, NULL);
         AppendMenuW(hMenu, MF_STRING, IDM_GROUP_CASCADE, L"Cascade");
         AppendMenuW(hMenu, MF_STRING, IDM_GROUP_STACKED, L"Show windows stacked");
         AppendMenuW(hMenu, MF_STRING, IDM_GROUP_SIDEBYSIDE, L"Show windows side by side");
@@ -4403,28 +4589,33 @@ public:
         DestroyMenu(hMenu);
         if (cmd == 0 || cWindows == 0)
             return;
+        if (cmd >= IDM_GROUP_WINDOW_FIRST && cmd < IDM_GROUP_WINDOW_FIRST + (INT)cWindows)
+        {
+            ::SwitchToThisWindow(Windows[cmd - IDM_GROUP_WINDOW_FIRST], TRUE);
+            return;
+        }
         if (cmd == IDM_GROUP_CASCADE || cmd == IDM_GROUP_STACKED || cmd == IDM_GROUP_SIDEBYSIDE)
         {
             for (i = 0; i < cWindows; i++)
             {
-                if (::IsIconic(ahWnd[i]))
-                    ::ShowWindow(ahWnd[i], SW_RESTORE);
+                if (::IsIconic(Windows[i]))
+                    ::ShowWindow(Windows[i], SW_RESTORE);
             }
             if (cmd == IDM_GROUP_CASCADE)
-                CascadeWindows(NULL, 0, NULL, cWindows, ahWnd);
+                CascadeWindows(NULL, 0, NULL, cWindows, Windows.GetData());
             else
                 TileWindows(NULL, cmd == IDM_GROUP_STACKED ? MDITILE_HORIZONTAL : MDITILE_VERTICAL,
-                            NULL, cWindows, ahWnd);
+                            NULL, cWindows, Windows.GetData());
         }
         else if (cmd == IDM_GROUP_MINIMIZE)
         {
             for (i = 0; i < cWindows; i++)
-                ::ShowWindowAsync(ahWnd[i], SW_MINIMIZE);
+                ::ShowWindowAsync(Windows[i], SW_MINIMIZE);
         }
         else if (cmd == IDM_GROUP_CLOSE)
         {
             for (i = 0; i < cWindows; i++)
-                ::PostMessageW(ahWnd[i], WM_CLOSE, 0, 0);
+                ::PostMessageW(Windows[i], WM_CLOSE, 0, 0);
         }
     }
 
@@ -4461,7 +4652,7 @@ public:
 
         if (TaskItem != NULL)
         {
-            if (IsModernTaskbar() && !(GetKeyState(VK_SHIFT) & 0x8000))
+            if (!(GetKeyState(VK_SHIFT) & 0x8000))
                 ShowJumpList(TaskItem->Group, TaskItem);
             else
                 HandleTaskItemRightClick(TaskItem);
@@ -5028,6 +5219,7 @@ public:
             m_TaskBar.SetWindowPos(NULL, 0, 0, szClient.cx, szClient.cy, SWP_NOZORDER);
 
             UpdateButtonsSize(FALSE);
+            UpdateTaskGroupLayout();
         }
         return TRUE;
     }
@@ -5071,6 +5263,7 @@ public:
         /* Update the button spacing */
         m_TaskBar.UpdateTbButtonSpacing(m_Tray->IsHorizontal(), m_Theme != NULL);
         UpdateButtonsSize(FALSE);
+        UpdateTaskGroupLayout();
         return TRUE;
     }
 
@@ -5079,11 +5272,12 @@ public:
         BOOL bSettingsChanged = FALSE;
         TaskbarSettings* newSettings = (TaskbarSettings*)lParam;
 
-        if (newSettings->bGroupButtons != g_TaskbarSettings.bGroupButtons)
+        if (newSettings->dwTaskbarGlomLevel != g_TaskbarSettings.dwTaskbarGlomLevel)
         {
             bSettingsChanged = TRUE;
+            g_TaskbarSettings.dwTaskbarGlomLevel = newSettings->dwTaskbarGlomLevel;
             g_TaskbarSettings.bGroupButtons = newSettings->bGroupButtons;
-            m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
+            m_IsGroupingEnabled = g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_NEVER;
         }
 
         if (newSettings->bSmallIcons != g_TaskbarSettings.bSmallIcons)
@@ -5098,6 +5292,8 @@ public:
             /* Refresh each task item view */
             RefreshWindowList();
             UpdateButtonsSize(FALSE);
+            UpdateTaskGroupLayout();
+            RefreshTaskButtons();
         }
 
         return 0;
@@ -5258,6 +5454,7 @@ public:
         {
             /*  Don't update the font, this will be done when we get a WM_SETFONT from our parent */
             UpdateButtonsSize(FALSE);
+            UpdateTaskGroupLayout();
         }
 
         return 0;
@@ -5290,7 +5487,7 @@ public:
     {
         m_Tray = tray;
         m_bMaterial = ShellGetTaskbarMaterial(&m_crMaterial, &m_cyTaskRow);
-        m_IsGroupingEnabled = g_TaskbarSettings.bGroupButtons || IsModernTaskbar();
+        m_IsGroupingEnabled = g_TaskbarSettings.dwTaskbarGlomLevel != TASKBAR_GLOM_NEVER;
         Create(hWndParent, 0, szRunningApps, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN | WS_TABSTOP);
         if (!m_hWnd)
             return E_FAIL;
