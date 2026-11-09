@@ -920,6 +920,93 @@ WriteRunBytes(_In_ PVolume DiskVolume,
         : STATUS_FILE_CORRUPT_ERROR;
 }
 
+/*
+ * Pointer-after-pointee ordering for a record and the attribute content it is
+ * about to name. The kernel environment holds every write of one block or
+ * less back in its cache and commits dirty blocks in no dependency order, so
+ * a record saying "non-resident, N bytes initialized" or carrying a grown run
+ * list can reach the disk before the bytes it points to; after a cut the
+ * extent reads as whatever the clusters held (J36 r149: a zero $ATTRIBUTE_LIST
+ * extent made the directory unreadable, a zero INDX block made its index
+ * unreachable). Only the attributes whose missing content breaks the record
+ * or the index pay for the ordering; $DATA keeps the plain write-back path,
+ * where lost content reads as zeros, which NTFS allows after a cut.
+ */
+static BOOLEAN
+AttributeContentIsOrdered(_In_ PAttribute Attribute)
+{
+    return Attribute->AttributeType == TypeIndexAllocation ||
+           Attribute->AttributeType == TypeAttributeList ||
+           Attribute->AttributeType == TypeBitmap;
+}
+
+/*
+ * Orders PointerRecord after [Offset, Offset + Length) of Runs, run by run
+ * (Volume::OrderAfter). PointerRecord NULL, or a record whose disk offset
+ * cannot be resolved, commits the bytes synchronously instead.
+ */
+static NTSTATUS
+OrderRecordAfterRunBytes(_In_ PVolume DiskVolume,
+                         _In_opt_ PFileRecord PointerRecord,
+                         _In_ PDataRun Runs,
+                         _In_ ULONGLONG Offset,
+                         _In_ ULONGLONG Length)
+{
+    ULONGLONG PointerOffset = 0;
+    ULONG PointerLength = 0;
+    NTSTATUS Status;
+
+    if (Length == 0)
+        return STATUS_SUCCESS;
+    if (PointerRecord &&
+        PointerRecord->RecordNumber != MAXULONG &&
+        NT_SUCCESS(DiskVolume->MFT->GetFileRecordDiskOffset(
+            PointerRecord->RecordNumber,
+            &PointerOffset)))
+    {
+        PointerLength = DiskVolume->MFT->FileRecordSize;
+    }
+
+    for (PDataRun Run = Runs;
+         Run && Length != 0;
+         Run = Run->NextRun)
+    {
+        ULONGLONG BytesInRun =
+            Run->Length * BytesPerCluster(DiskVolume);
+        ULONGLONG InRun;
+
+        if (Offset >= BytesInRun)
+        {
+            Offset -= BytesInRun;
+            continue;
+        }
+        InRun = min(Length, BytesInRun - Offset);
+        if (!Run->IsSparse)
+        {
+            ULONGLONG Done = 0;
+
+            while (Done < InRun)
+            {
+                ULONG Chunk = (ULONG)min(
+                    InRun - Done,
+                    (ULONGLONG)NTFS_ZERO_CHUNK_SIZE);
+
+                Status = DiskVolume->OrderAfter(
+                    PointerOffset,
+                    PointerLength,
+                    GetOffset(Run->LCN) + Offset + Done,
+                    Chunk);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                Done += Chunk;
+            }
+        }
+        Length -= InRun;
+        Offset = 0;
+    }
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS
 ZeroRunBytes(_In_ PVolume DiskVolume,
              _In_ PDataRun Runs,
@@ -2971,6 +3058,29 @@ RestoreResident:
                     TimestampFields,
                     NULL);
         }
+        /*
+         * The record is about to publish a larger DataSize or
+         * InitializedDataSize over bytes that still sit in the write-back
+         * cache; order it after them (OrderRecordAfterRunBytes). An
+         * attribute list that lands with its new length over its old bytes
+         * reads zero entries at the tail and fails to parse, which makes
+         * every attribute of the file unreachable.
+         */
+        if (NT_SUCCESS(Status) &&
+            MetadataChanged &&
+            AttributeContentIsOrdered(TargetAttribute))
+        {
+            ULONGLONG OrderedFrom =
+                min(OldInitializedSize,
+                    (ULONGLONG)Offset->QuadPart);
+
+            Status = OrderRecordAfterRunBytes(
+                DiskVolume,
+                AttributeOwner,
+                GetCachedDataRuns(TargetAttribute),
+                OrderedFrom,
+                EndOffset - OrderedFrom);
+        }
         if (NT_SUCCESS(Status) &&
             (MetadataChanged || TimestampUpdate))
         {
@@ -4738,6 +4848,22 @@ FileRecord::PromoteResidentData(
             goto Rollback;
     }
 
+    /*
+     * The record is about to say "non-resident, NewInitializedSize bytes"
+     * over clusters whose content still sits in the write-back cache. Order
+     * the record after that content (OrderRecordAfterRunBytes).
+     */
+    if (AttributeContentIsOrdered(TargetAttribute))
+    {
+        Status = OrderRecordAfterRunBytes(DiskVolume,
+                                          this,
+                                          AllocatedRuns,
+                                          0,
+                                          NewInitializedSize);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+    }
+
     WriteAttempted = TRUE;
     Status = DiskVolume->MFT->WriteFileRecordToMFT(this);
     if (NT_SUCCESS(Status))
@@ -5731,6 +5857,27 @@ FileRecord::ExtendNonResidentData(
     Status = DiskVolume->FlushVolume();
     if (!NT_SUCCESS(Status))
         goto Rollback;
+    /*
+     * The record is about to publish the grown run list and sizes over the
+     * zeroes and data written above, which still sit in the write-back
+     * cache. Order it after them. With a mapping update the pointer is
+     * spread over the attribute list and the records it spans, so the bytes
+     * are committed synchronously instead (no pointer record).
+     */
+    if (AttributeContentIsOrdered(TargetAttribute))
+    {
+        ULONGLONG OrderedFrom =
+            min(OldInitializedSize, Offset);
+
+        Status = OrderRecordAfterRunBytes(DiskVolume,
+                                          MappingUpdate ? NULL : this,
+                                          CombinedRuns,
+                                          OrderedFrom,
+                                          Offset + Length - OrderedFrom);
+        if (!NT_SUCCESS(Status))
+            goto Rollback;
+    }
+
     Status = MappingUpdate
         ? CommitNonResidentMappingUpdate(
             &MappingUpdate)

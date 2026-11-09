@@ -892,6 +892,21 @@ public:
     /* TRUE when the barrier is selected instead of the synchronous CommitRange. */
     BOOLEAN WriteBarrierEnabled();
 
+    /* Pointer-after-pointee ordering for metadata that names bytes written in
+     * the same operation: a directory record after the INDX block its root or
+     * bitmap names, a parent node after the children it names, a record after
+     * the content of an attribute it has just made non-resident or extended.
+     * Call it BEFORE writing the Pointer range. Barrier OFF: the Pointee range
+     * is committed synchronously and the pointer may then be written in any
+     * order. Barrier ON: BarrierAfter(Pointer, Pointee) is installed, and when
+     * it cannot be (pointer block not cached, cycle, unsupported range) the
+     * Pointee is committed synchronously instead. PointerLength 0 means the
+     * pointer's block is unknown or is several blocks: the Pointee is committed
+     * synchronously in both modes. A Pointee that is already durable costs a
+     * probe per block. Nothing is ever ordered silently. */
+    NTSTATUS OrderAfter(_In_ ULONGLONG PointerOffset, _In_ ULONG PointerLength,
+                        _In_ ULONGLONG PointeeOffset, _In_ ULONG PointeeLength);
+
     NTSTATUS
     Initialize(_In_ PUCHAR BootSectorData,
                _In_opt_ void* Context);
@@ -1028,6 +1043,13 @@ public:
         _Out_ PULONG Dropped,
         _Out_ PULONG DroppedNames,
         _Out_ PBOOLEAN DroppedUnnamedData);
+
+    /* Removes the $ATTRIBUTE_LIST of a base record whose attributes all live
+     * in that record, and commits the record. The caller makes sure no
+     * extension record belongs to it; the list clusters are left for the
+     * bitmap check to free. */
+    NTSTATUS
+    RemoveAttributeList();
 
     NTSTATUS ReadSecurityDescriptor(
         _In_opt_ PUCHAR Buffer,
@@ -1621,6 +1643,14 @@ public:
         _In_ PFileRecord DirectoryFile,
         _In_ ULONGLONG FileReference,
         _In_ PUNICODE_STRING Name);
+
+    /* Empties an index whose tree cannot be walked: the root becomes an
+     * END-only leaf and every bitmap bit is cleared. The allocation is kept
+     * for reuse. Used by the volume check before it relinks the names. */
+    NTSTATUS
+    ResetIndex(
+        _In_ PFileRecord DirectoryFile,
+        _In_ PCWSTR IndexName);
 
     NTSTATUS
     RemoveIndexEntry(
