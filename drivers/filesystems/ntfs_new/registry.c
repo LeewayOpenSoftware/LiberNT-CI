@@ -9,7 +9,6 @@
 #include "ntfspch.h"
 
 #define InvalidMftZoneReservation(Num) Num < 0 || Num > 4
-#define InvalidDisableLastAccessUpdate(Num) Num < 0 || Num > 3
 #define ROUND_UP(N, S) ((((N) + (S) - 1) / (S)) * (S))
 #define KEYVAL_BUFFER_SIZE ROUND_UP(sizeof(KEY_VALUE_PARTIAL_INFORMATION) + sizeof(ULONG), 0x10)
 
@@ -170,22 +169,37 @@ GetGlobalSettingsFromRegistry()
                                                             FALSE);
     NtfsSetGenerate8dot3Names(!gDisable8dot3NameCreation);
 
-    /* Enables or disables the last access time on all files and all volumes.
-     * Options:
+    /* Enables or disables the automatic last-access time update on all files
+     * and all volumes, with the Windows 10 1803+ meaning. The low two bits are
+     * the value fsutil behavior shows; Windows itself stores the System
+     * Managed forms with bit 31 set (0x80000002 / 0x80000003), and both
+     * spellings are accepted here.
      *     0 - User Managed, Enabled
      *     1 - User Managed, Disabled
      *     2 - System Managed, Enabled (default)
      *     3 - System Managed, Disabled
+     * System Managed is decided per volume: enabled only below 128 GB
+     * (NtfsLastAccessUpdateEnabled). The policy is consulted where a read
+     * would stamp the time; an explicit SetFileInformation still writes it.
      */
-    gDisableLastAccessUpdate = QueryDwordRegistryValueEx(RegistryKey,
-                                                         L"NtfsDisableLastAccessUpdate",
-                                                         2);
-
-    if (InvalidDisableLastAccessUpdate(gDisableLastAccessUpdate))
     {
-        // We don't care if this fails or not, just give it a try.
-        SetDwordRegistryValue(RegistryKey, L"NtfsDisableLastAccessUpdate", 2);
-        gMftZoneReservation = 2;
+        ULONG RawValue = (ULONG)QueryDwordRegistryValueEx(RegistryKey,
+                                                          L"NtfsDisableLastAccessUpdate",
+                                                          NTFS_LAST_ACCESS_SYSTEM_ENABLED);
+
+        if ((RawValue & ~(NTFS_LAST_ACCESS_SYSTEM_MANAGED_BIT | 3UL)) == 0 &&
+            (!(RawValue & NTFS_LAST_ACCESS_SYSTEM_MANAGED_BIT) || (RawValue & 2)))
+        {
+            gDisableLastAccessUpdate = (INT)(RawValue & 3);
+        }
+        else
+        {
+            // Out of range: use the default, and try to repair the value.
+            SetDwordRegistryValue(RegistryKey,
+                                  L"NtfsDisableLastAccessUpdate",
+                                  NTFS_LAST_ACCESS_SYSTEM_ENABLED);
+            gDisableLastAccessUpdate = NTFS_LAST_ACCESS_SYSTEM_ENABLED;
+        }
     }
 
     /* Disables LFS downgrade when a volume is cleanly unmounted. The LFS

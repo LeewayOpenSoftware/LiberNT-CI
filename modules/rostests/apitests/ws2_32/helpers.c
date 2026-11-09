@@ -32,6 +32,14 @@ int ConnectToReactOSWebsite(SOCKET sck)
 
     /* Connect to "www.reactos.org" */
     host = gethostbyname("test.winehq.org");
+    if (!host || !host->h_addr_list[0])
+    {
+        /* No DNS (offline): fail without touching the NULL result. */
+        printf("gethostbyname failed, Winsock error code is %u\n", WSAGetLastError());
+        closesocket(sck);
+        WSACleanup();
+        return 0;
+    }
 
     sa.sin_family = AF_INET;
     sa.sin_addr.s_addr = *(u_long*)host->h_addr_list[0];

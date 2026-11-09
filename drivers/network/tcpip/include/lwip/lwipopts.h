@@ -22,6 +22,10 @@
 #define LWIP_IPV6                       1
 
 #define LWIP_NETIF_LOOPBACK             1
+/* Service the loopback queue by scheduling netif_poll onto the tcpip
+ * thread (netif_loop_output only queues otherwise; nothing here calls
+ * netif_poll). Required for IPv6 ::1 loopback output (TCPLoopbackOutput6). */
+#define LWIP_NETIF_LOOPBACK_MULTITHREADING 1
 
 #define LWIP_HAVE_LOOPIF                0
 
@@ -137,15 +141,15 @@ unsigned int Random(void);
 
 #define LINK_STATS                      0
 
-#define IP_STATS                        0
+#define IP_STATS                        1
 
-#define IPFRAG_STATS                    0
+#define IPFRAG_STATS                    1
 
-#define TCP_STATS                       0
+#define TCP_STATS                       1
 
 #define SYS_STATS                       0
 
-#define ICMP_STATS                      0
+#define ICMP_STATS                      1
 
 void LibTCPLockCore(void);
 void LibTCPUnlockCore(void);

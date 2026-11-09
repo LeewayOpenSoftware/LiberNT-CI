@@ -35,6 +35,11 @@ typedef struct _VolumeContextBlock
     SHARE_ACCESS VolumeShareAccess;
     LONG OpenHandleCount;
     LONG VolumeHandleCount;
+    /* Handles in OpenHandleCount that do not hold off a boot-time lock (see
+     * NtfsIsBootExecuteWindow); counted under VolumeStateMutex. */
+    LONG BootLockNeutralHandleCount;
+    /* A paging file has been opened on this volume: BootExecute is over. */
+    BOOLEAN PagingFileSeen;
     PFILE_OBJECT VolumeLockOwner;
     PFILE_OBJECT ShrinkOwner;
     ULONGLONG ShrinkVolumeSectors;
@@ -86,6 +91,12 @@ typedef struct _VolumeContextBlock
     FAST_MUTEX IdleFcbMutex;
     LIST_ENTRY IdleFcbList;
     ULONG IdleFcbCount;
+
+    /* Linkage on the global mounted-volume list (ntfsinit.c), walked by
+     * NtfsFsdShutdown to flush each volume's cached data at system shutdown.
+     * Protected by NtfsGlobalVolumeListResource, never by a per-volume lock. */
+    LIST_ENTRY GlobalListEntry;
+    BOOLEAN OnGlobalList;
 } VolumeContextBlock, *PVolumeContextBlock;
 
 #define NTFS_MAX_MISSING_NAMES 256
@@ -163,6 +174,12 @@ NtfsForgetAllMissingNames(_In_ PVolumeContextBlock VolCB);
 NTSTATUS
 NtfsFlushVolume(_In_ PVolumeContextBlock VolCB,
                 _In_ BOOLEAN Purge);
+
+VOID
+NtfsRegisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
+
+VOID
+NtfsUnregisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
 
 VOID
 NtfsReleaseDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);
@@ -379,6 +396,8 @@ typedef struct _FCB
     BOOLEAN WriteTimesStamped;
     BOOLEAN ShareAccessSet;
     BOOLEAN PagingFileOpen;
+    /* Counted in VolCB->BootLockNeutralHandleCount. */
+    BOOLEAN BootLockNeutral;
 
     BOOLEAN RecordFlushArmed;
     ULONGLONG FlushedAllocation;
@@ -435,6 +454,59 @@ PFSRTL_ADVANCED_FCB_HEADER
 NtfsGetCommonFcbHeader(_In_ PFileContextBlock FileCB)
 {
     return FileCB->StreamCB ? &FileCB->StreamCB->CommonFCBHeader : &FileCB->CommonFCBHeader;
+}
+
+/*
+ * The BootExecute window: the system boot volume before any paging file has
+ * been opened on it. SMSS runs the BootExecute list (autochk) in this window,
+ * and SMSS and autochk each hold their process current directory open on the
+ * volume (\Windows and \Windows\System32). Those handles can only traverse,
+ * so they must not keep autochk from locking the volume to repair and clear it.
+ * Caller holds VolumeStateMutex.
+ */
+FORCEINLINE
+BOOLEAN
+NtfsIsBootExecuteWindow(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                        _In_ PVolumeContextBlock VolCB)
+{
+    PVPB Vpb = VolumeDeviceObject->Vpb;
+
+    return !VolCB->PagingFileSeen &&
+           Vpb && Vpb->RealDevice &&
+           (Vpb->RealDevice->Flags & DO_SYSTEM_BOOT_PARTITION);
+}
+
+/*
+ * The same window, for callers that hold only the VolCB (the mount set
+ * StorageDevice->Vpb to the volume's VPB, vol.c). Without VolumeStateMutex
+ * the answer may be stale by one paging-file creation; PagingFileSeen only
+ * goes FALSE -> TRUE, so a racing caller at worst defers one more stamp.
+ */
+FORCEINLINE
+BOOLEAN
+NtfsIsVolumeInBootExecuteWindow(_In_ PVolumeContextBlock VolCB)
+{
+    PVPB Vpb = VolCB->StorageDevice ? VolCB->StorageDevice->Vpb : NULL;
+
+    return !VolCB->PagingFileSeen &&
+           Vpb && Vpb->RealDevice &&
+           (Vpb->RealDevice->Flags & DO_SYSTEM_BOOT_PARTITION);
+}
+
+/* Drop one handle from OpenHandleCount. Caller holds VolumeStateMutex. */
+FORCEINLINE
+VOID
+NtfsDropOpenHandle(_In_ PVolumeContextBlock VolCB,
+                   _In_ PFileContextBlock FileCB)
+{
+    if (VolCB->OpenHandleCount > 0)
+        VolCB->OpenHandleCount--;
+    if (FileCB->BootLockNeutral)
+    {
+        FileCB->BootLockNeutral = FALSE;
+        if (VolCB->BootLockNeutralHandleCount > 0)
+            VolCB->BootLockNeutralHandleCount--;
+    }
 }
 
 FORCEINLINE

@@ -1743,6 +1743,22 @@ NtInitializeRegistry(IN USHORT Flag)
 
     /* Release the registry lock */
     CmpUnlockRegistry();
+
+    /*
+     * Second, idempotent start point for the deferred kernel boot log. This
+     * runs at the smss SMSS-phase registry init, which is always after the
+     * BootExecute list (autochk) has run. The first paging-file creation also
+     * tries to start it; whichever reaches KdStartBootLog first opens the log,
+     * so the log still opens even when no paging file is configured or every
+     * paging-file create fails. KdStartBootLog is a no-op if already started or
+     * if the boot log was never armed.
+     */
+    KdStartBootLog();
+
+    /* The hive list is loaded and the registry lock released: the
+     * hibernation-file reserve may start now (it waits for this and for the
+     * first paging file, whichever comes last). */
+    PopHiberRegistryInitialized();
     return STATUS_SUCCESS;
 }
 

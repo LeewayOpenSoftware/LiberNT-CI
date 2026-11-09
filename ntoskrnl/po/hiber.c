@@ -69,7 +69,7 @@ static volatile LONG PopHiberStartState;
 #define POP_HIBER_START_PLATFORM    0x2
 #define POP_HIBER_START_QUEUED      0x4
 #define POP_HIBER_START_PAGEFILE    0x8
-#define POP_HIBER_START_NO_SPACE    0x10
+#define POP_HIBER_START_REGISTRY    0x10
 
 static
 BOOLEAN
@@ -1014,20 +1014,6 @@ PopHiberReserve(
 
 static
 VOID
-PopHiberQueueRetry(
-    _In_ LONG Bit)
-{
-    LONG Old = InterlockedOr(&PopHiberStartState, Bit);
-    LONG Ready = POP_HIBER_START_PAGEFILE | POP_HIBER_START_NO_SPACE;
-
-    if (((Old | Bit) & Ready) != Ready || (Old & Ready) == Ready)
-        return;
-
-    ExQueueWorkItem(&PopHiber.WorkItem, DelayedWorkQueue);
-}
-
-static
-VOID
 NTAPI
 PopHiberInitializeWorker(
     _In_ PVOID Parameter)
@@ -1040,8 +1026,10 @@ PopHiberInitializeWorker(
     PopHiberReadPolicy(&Enabled, &Percent);
     if (Enabled)
     {
-        if (PopHiberReserve(TRUE) == STATUS_DISK_FULL)
-            PopHiberQueueRetry(POP_HIBER_START_NO_SPACE);
+        /* The paging file already exists (it gates the start), so there is
+         * nothing left to wait for. On a full volume the file is reserved
+         * again when it is requested (SystemReserveHiberFile, power.c). */
+        PopHiberReserve(TRUE);
     }
     else
     {
@@ -1055,7 +1043,23 @@ PopHiberQueueStart(
     _In_ LONG Bit)
 {
     LONG Old = InterlockedOr(&PopHiberStartState, Bit);
-    LONG Ready = POP_HIBER_START_CAPTURED | POP_HIBER_START_PLATFORM;
+    /*
+     * Also wait for the first paging file. SMSS creates it right after the
+     * BootExecute list (autochk) has run. Reserving hiberfil.sys any earlier
+     * creates (and on a full volume deletes again) an MFT record on the boot
+     * volume, which marks it dirty before autochk checks it. Windows does not
+     * touch hiberfil.sys before SMSS either.
+     *
+     * And wait until SMSS's registry initialization has finished loading the
+     * hive list. The first paging file is created just before
+     * NtInitializeRegistry, so a reserve started from it ran its large
+     * create/delete on the boot volume, and its own registry reads, while
+     * the hives were being opened and recovered from the same volume. That
+     * boot then stopped right after NtInitializeRegistry (Lab01 cut-1059
+     * E2 V1b, V3r2).
+     */
+    LONG Ready = POP_HIBER_START_CAPTURED | POP_HIBER_START_PLATFORM |
+                 POP_HIBER_START_PAGEFILE | POP_HIBER_START_REGISTRY;
 
     if (((Old | Bit) & Ready) != Ready || (Old & POP_HIBER_START_QUEUED))
         return;
@@ -1085,7 +1089,14 @@ VOID
 NTAPI
 PopHiberPagingFileCreated(VOID)
 {
-    PopHiberQueueRetry(POP_HIBER_START_PAGEFILE);
+    PopHiberQueueStart(POP_HIBER_START_PAGEFILE);
+}
+
+VOID
+NTAPI
+PopHiberRegistryInitialized(VOID)
+{
+    PopHiberQueueStart(POP_HIBER_START_REGISTRY);
 }
 
 VOID

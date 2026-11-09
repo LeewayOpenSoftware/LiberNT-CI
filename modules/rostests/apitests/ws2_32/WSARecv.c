@@ -86,7 +86,7 @@ void Test_WSARecv()
     if (!ConnectToReactOSWebsite(sck))
     {
         WSACleanup();
-        skip("ConnectToReactOSWebsite failed. Aborting test.\n");
+        skip("no DNS / offline: ConnectToReactOSWebsite failed. Skipping the online part.\n");
         return;
     }
 

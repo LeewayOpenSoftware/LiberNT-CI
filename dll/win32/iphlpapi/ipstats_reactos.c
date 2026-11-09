@@ -317,130 +317,60 @@ DWORD getInterfaceStatsByIndex(DWORD index, PMIB_IFROW entry)
     return ERROR_INVALID_PARAMETER;
 }
 
+static NTSTATUS
+tdiGetMibForIcmpEntity(
+  _In_ HANDLE tcpFile,
+  _In_ TDIEntityID *ent,
+  _Out_ MIBICMPINFO *entry)
+{
+    TCP_REQUEST_QUERY_INFORMATION_EX req = TCP_REQUEST_QUERY_INFORMATION_INIT;
+    NTSTATUS Status;
+    DWORD returnSize;
+
+    ZeroMemory(entry, sizeof(*entry));
+
+    req.ID.toi_class                = INFO_CLASS_PROTOCOL;
+    req.ID.toi_type                 = INFO_TYPE_PROVIDER;
+    req.ID.toi_id                   = ICMP_MIB_STATS_ID;
+    req.ID.toi_entity               = *ent;
+
+    Status = DeviceIoControl(tcpFile,
+                             IOCTL_TCP_QUERY_INFORMATION_EX,
+                             &req,
+                             sizeof(req),
+                             entry,
+                             sizeof(*entry),
+                             &returnSize,
+                             NULL);
+
+    return Status;
+}
+
 DWORD getICMPStats(MIB_ICMP *stats)
 {
-  FILE *fp;
+  HANDLE tcpFile;
+  TDIEntityID ent;
+  NTSTATUS status;
 
   if (!stats)
     return ERROR_INVALID_PARAMETER;
 
   memset(stats, 0, sizeof(MIB_ICMP));
-  /* get most of these stats from /proc/net/snmp, no error if can't */
-  fp = fopen("/proc/net/snmp", "r");
-  if (fp) {
-    const char hdr[] = "Icmp:";
-    char buf[512] = { 0 }, *ptr;
 
-    do {
-      ptr = fgets(buf, sizeof(buf), fp);
-    } while (ptr && _strnicmp(buf, hdr, sizeof(hdr) - 1));
-    if (ptr) {
-      /* last line was a header, get another */
-      ptr = fgets(buf, sizeof(buf), fp);
-      if (ptr && _strnicmp(buf, hdr, sizeof(hdr) - 1) == 0) {
-        char *endPtr;
+  /* Query the ICMP MIB counters from tcpip.sys over TDI (lwIP tracks totals;
+     per-type counts are not available and stay zero). */
+  status = openTcpFile(&tcpFile, 0);
+  if (!NT_SUCCESS(status))
+    return RtlNtStatusToDosError(status);
 
-        ptr += sizeof(hdr);
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwMsgs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwErrors = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwDestUnreachs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwTimeExcds = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwParmProbs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwSrcQuenchs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwRedirects = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwEchoReps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwTimestamps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwTimestampReps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwAddrMasks = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpInStats.dwAddrMaskReps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwMsgs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwErrors = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwDestUnreachs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwTimeExcds = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwParmProbs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwSrcQuenchs = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwRedirects = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwEchoReps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwTimestamps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwTimestampReps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwAddrMasks = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-        if (ptr && *ptr) {
-          stats->stats.icmpOutStats.dwAddrMaskReps = strtoul(ptr, &endPtr, 10);
-          ptr = endPtr;
-        }
-      }
-    }
-    fclose(fp);
-  }
+  ent.tei_entity = CL_NL_ENTITY;
+  ent.tei_instance = 0;
+  status = tdiGetMibForIcmpEntity(tcpFile, &ent, &stats->stats);
+  closeTcpFile(tcpFile);
+
+  if (!NT_SUCCESS(status))
+    return RtlNtStatusToDosError(status);
+
   return NO_ERROR;
 }
 

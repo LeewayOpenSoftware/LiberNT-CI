@@ -1389,7 +1389,9 @@ NtfsLockOrUnlockVolume(
         if (VolCB->Dismounted)
             Status = STATUS_VOLUME_DISMOUNTED;
         else if (VolCB->VolumeLockOwner ||
-                 VolCB->OpenHandleCount != 1)
+                 VolCB->OpenHandleCount -
+                     (NtfsIsBootExecuteWindow(VolumeDeviceObject, VolCB)
+                          ? VolCB->BootLockNeutralHandleCount : 0) != 1)
             Status = STATUS_ACCESS_DENIED;
         else
         {
@@ -1497,6 +1499,21 @@ NtfsDismountVolume(
 
     Status = NtfsFlushVolume(VolCB, TRUE);
 
+    /* Clean dismount: the flush put all dirty metadata on the medium, so the
+     * volume is consistent. Clear the dirty flag (MarkClean leaves a retained /
+     * user-set flag alone). A failure here leaves it dirty, which is safe.
+     * VD1: clear under the metadata gate so it cannot race a concurrent
+     * NtfsMarkVolumeDirty set-then-retain (which also holds the gate); the
+     * Dismounting flag published above makes that FSCTL reject in parallel. */
+    if (NT_SUCCESS(Status))
+    {
+        KeEnterCriticalRegion();
+        NtfsAcquireMetadata(VolCB);
+        (void)NtfsVolumeMarkClean(VolCB->DiskVolume);
+        NtfsReleaseMetadata(VolCB);
+        KeLeaveCriticalRegion();
+    }
+
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     if (NT_SUCCESS(Status))
     {
@@ -1510,6 +1527,12 @@ NtfsDismountVolume(
     }
     VolCB->Dismounting = FALSE;
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+    /* VD2: drop the shutdown-clean callback only after a SUCCESSFUL dismount.
+     * A failed dismount leaves the volume mounted, so it must keep its callback
+     * and device reference, else a later clean shutdown leaves it dirty. */
+    if (NT_SUCCESS(Status))
+        IoUnregisterShutdownNotification(VolumeDeviceObject);
 
     if (!NT_SUCCESS(Status))
     {
@@ -1712,12 +1735,26 @@ NtfsMarkVolumeDirty(
 
     if (!FileCB || !FileCB->IsVolumeOpen || !VolCB || !VolCB->DiskVolume)
         return STATUS_INVALID_PARAMETER;
-    if (VolCB->Dismounted)
+
+    /* VD1: reject a dirty-mark on a volume that is dismounting as well as one
+     * already dismounted, under VolumeStateMutex, so this cannot slip in after
+     * dismount/shutdown has begun its clear. The set-then-retain below runs
+     * under the metadata gate, which dismount and shutdown now also hold for
+     * their clear, so a clear cannot land between the set and the retain. */
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->Dismounted || VolCB->Dismounting)
+    {
+        ExReleaseFastMutex(&VolCB->VolumeStateMutex);
         return STATUS_VOLUME_DISMOUNTED;
+    }
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
 
     KeEnterCriticalRegion();
     NtfsAcquireMetadata(VolCB);
-    Status = NtfsVolumeSetFlags(VolCB->DiskVolume, VOL_DIRTY, 0);
+    Status = NtfsVolumeSetFlags(VolCB->DiskVolume, VOL_DIRTY | VOL_FULL_CHKDSK, 0);
+    /* A user-requested dirty bit must survive a clean dismount. */
+    if (NT_SUCCESS(Status))
+        NtfsVolumeRetainDirty(VolCB->DiskVolume, TRUE);
     NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
     return Status;
@@ -2310,7 +2347,10 @@ NtfsFlushFileMetadata(_In_ PVolumeContextBlock VolCB,
                                      (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart);
         if (!NT_SUCCESS(Status))
             return Status;
-        return NtfsDiskFlushRangeKm(VolCB->StorageDevice, Offset, Length);
+        Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, Offset, Length);
+        if (NT_SUCCESS(Status))
+            Status = NtfsDiskFlushDeviceKm(VolCB->StorageDevice);
+        return Status;
     }
 
     Status = NtfsDiskFlushVolumeKm(VolCB->StorageDevice);

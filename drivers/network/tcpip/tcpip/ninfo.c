@@ -11,6 +11,7 @@
 #include "precomp.h"
 
 #include <tcpip_undoc.h>
+#include <icmp.h>
 
 #define IP_ROUTE_TYPE_ADD 3
 #define IP_ROUTE_TYPE_DEL 2
@@ -211,12 +212,70 @@ TDI_STATUS InfoTdiQueryGetIPSnmpInfo( TDIEntityID ID,
     SnmpInfo.ipsi_numaddr = max(CountInterfaceAddresses(IF), 1);
     SnmpInfo.ipsi_numroutes = RouteCount;
 
+    {
+        struct lib_ip_stats LibStats;
+        LibIPGetStats(&LibStats);
+        SnmpInfo.ipsi_inreceives = LibStats.InReceives;
+        SnmpInfo.ipsi_indelivers = LibStats.InDelivers;
+        SnmpInfo.ipsi_outrequests = LibStats.OutRequests;
+        SnmpInfo.ipsi_forwdatagrams = LibStats.ForwardedDatagrams;
+        SnmpInfo.ipsi_inhdrerrors = LibStats.InHeaderErrors;
+        SnmpInfo.ipsi_inunknownprotos = LibStats.InUnknownProtocols;
+        SnmpInfo.ipsi_indiscards = LibStats.InDiscards;
+        SnmpInfo.ipsi_outnoroutes = LibStats.OutNoRoutes;
+        SnmpInfo.ipsi_outdiscards = LibStats.OutDiscards;
+        SnmpInfo.ipsi_reasmreqds = LibStats.ReasmReqds;
+        SnmpInfo.ipsi_reasmoks = LibStats.ReasmOks;
+        SnmpInfo.ipsi_reasmfails = LibStats.ReasmFails;
+        SnmpInfo.ipsi_fragcreates = LibStats.FragCreates;
+    }
+
     Status = InfoCopyOut( (PCHAR)&SnmpInfo, sizeof(SnmpInfo),
 			  Buffer, BufferSize );
 
     TI_DbgPrint(DEBUG_INFO, ("Returning %08x\n", Status));
 
     return Status;
+}
+
+TDI_STATUS InfoTdiQueryGetTcpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
+{
+    MIB_TCPSTATS TcpStats;
+    struct lib_ip_stats LibStats;
+
+    RtlZeroMemory(&TcpStats, sizeof(TcpStats));
+    LibIPGetStats(&LibStats);
+
+    TcpStats.dwInSegs = LibStats.TcpInSegs;
+    TcpStats.dwOutSegs = LibStats.TcpOutSegs;
+    TcpStats.dwInErrs = LibStats.TcpInErrs;
+
+    return InfoCopyOut( (PCHAR)&TcpStats, sizeof(TcpStats), Buffer, BufferSize );
+}
+
+TDI_STATUS InfoTdiQueryGetUdpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
+{
+    MIB_UDPSTATS UdpStats;
+    struct lib_ip_stats LibStats;
+
+    RtlZeroMemory(&UdpStats, sizeof(UdpStats));
+    LibIPGetStats(&LibStats);
+
+    UdpStats.dwInDatagrams = LibStats.UdpInDatagrams;
+    UdpStats.dwOutDatagrams = LibStats.UdpOutDatagrams;
+    UdpStats.dwNoPorts = LibStats.UdpNoPorts;
+    UdpStats.dwInErrors = LibStats.UdpInErrors;
+
+    return InfoCopyOut( (PCHAR)&UdpStats, sizeof(UdpStats), Buffer, BufferSize );
+}
+
+/* IPv4 ICMP MIB. IPv4 ICMP is handled by the native stack (ip/network/icmp.c),
+   not lwIP, so the counters live there. ICMP_STATISTICS already mirrors
+   MIBICMPINFO (two MIBICMPSTATS of 13 ULONGs = 104 bytes), so copy it straight
+   out; this avoids pulling usermode ipmib.h (which drags in ifmib.h/nldef.h). */
+TDI_STATUS InfoTdiQueryGetIcmpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
+{
+    return InfoCopyOut( (PCHAR)&ICMPStats, sizeof(ICMPStats), Buffer, BufferSize );
 }
 
 TDI_STATUS InfoTdiQueryGetConnectionTcpTable(PADDRESS_FILE AddrFile,

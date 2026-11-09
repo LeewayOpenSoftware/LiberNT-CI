@@ -60,7 +60,7 @@ int Test_recv()
     /* Connect to "www.reactos.org" */
     if (!ConnectToReactOSWebsite(sck))
     {
-        ok(0, "ConnectToReactOSWebsite failed. Aborting test.\n");
+        skip("no DNS / offline: ConnectToReactOSWebsite failed. Skipping the online part.\n");
         return 0;
     }
 
