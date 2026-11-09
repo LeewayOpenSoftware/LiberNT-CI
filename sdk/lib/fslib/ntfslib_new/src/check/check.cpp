@@ -82,6 +82,7 @@ public:
         delete[] Lost;
         delete[] CrossLinks;
         delete[] NameKeys;
+        delete[] NameKeyUsed;
         delete[] ExtensionOwner;
         delete[] AttrListMap;
     }
@@ -126,6 +127,8 @@ private:
     BOOLEAN NameKeysIncomplete = FALSE;
     PULONG ExtensionOwner = NULL;
     PUCHAR AttrListMap = NULL;
+    /* One bit per name key: an index entry already counted for it. */
+    PUCHAR NameKeyUsed = NULL;
     DanglingEntry* Dangling = NULL;
     ULONG DanglingCount = 0;
     ULONG DanglingCapacity = 0;
@@ -243,6 +246,13 @@ private:
     void RememberNameKey(_In_ ULONGLONG Owner, _In_ ULONG Hash);
     void SortNameKeys();
     BOOLEAN HasNameKey(_In_ ULONGLONG Owner, _In_ ULONG Hash);
+    enum NameMatch
+    {
+        NameAbsent,
+        NameFresh,
+        NameRepeated
+    };
+    NameMatch ConsumeNameKey(_In_ ULONGLONG Owner, _In_ ULONG Hash);
     static BOOLEAN KeepListEntry(_In_ void* Context, _In_ const AttributeListEx* Entry);
     BOOLEAN HasExtensions(_In_ ULONGLONG Base);
     void CheckAttributeLists();
@@ -992,6 +1002,38 @@ VolumeCheck::HasNameKey(_In_ ULONGLONG Owner, _In_ ULONG Hash)
     return Low < NameKeyCount && NameKeys[Low] == Key;
 }
 
+/* Matches an index entry to one name of the file. Each name is counted once:
+ * an entry for a name that is counted already is a second copy. */
+VolumeCheck::NameMatch
+VolumeCheck::ConsumeNameKey(_In_ ULONGLONG Owner, _In_ ULONG Hash)
+{
+    ULONGLONG Key = (Owner << 32) | Hash;
+    ULONG Low = 0, High = NameKeyCount;
+
+    if (NameKeysIncomplete || !NameKeyUsed)
+        return HasNameKey(Owner, Hash) ? NameFresh : NameAbsent;
+    while (Low < High)
+    {
+        ULONG Middle = Low + (High - Low) / 2;
+
+        if (NameKeys[Middle] < Key)
+            Low = Middle + 1;
+        else
+            High = Middle;
+    }
+    if (Low >= NameKeyCount || NameKeys[Low] != Key)
+        return NameAbsent;
+    for (ULONG Index = Low; Index < NameKeyCount && NameKeys[Index] == Key; Index++)
+    {
+        if (!TestBit(NameKeyUsed, Index))
+        {
+            SetBit(NameKeyUsed, Index);
+            return NameFresh;
+        }
+    }
+    return NameRepeated;
+}
+
 struct ListFilterContext
 {
     VolumeCheck* Check;
@@ -1507,15 +1549,17 @@ VolumeCheck::CheckIndexEntries(_In_ ULONGLONG Directory,
             Sequence[Ordinal] == (USHORT)(Target >> 48) &&
             (Key->ParentFileReference & 0x0000FFFFFFFFFFFFULL) == Directory)
         {
-            if (HasNameKey(Ordinal, HashName(Key)) && Names[Ordinal].Found >= Names[Ordinal].Expected)
+            NameMatch Match = ConsumeNameKey(Ordinal, HashName(Key));
+
+            if (Match == NameRepeated)
             {
-                /* Every name of the file is counted already: this is a second
-                 * copy, which a cut can leave in a node and an ancestor. */
+                /* This name is counted already: a second copy, which a cut
+                 * can leave in a node and an ancestor. */
                 Event(NtfsCheckIndexDuplicateEntry, Directory, Target);
                 if (RepairIndexes)
                     RememberDangling(Directory, Target, Key);
             }
-            else if (HasNameKey(Ordinal, HashName(Key)))
+            else if (Match == NameFresh)
             {
                 Names[Ordinal].Found++;
                 Names[Ordinal].FoundHash += HashName(Key);
@@ -2055,6 +2099,8 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
         RepairRecordsPass();
 
     SortNameKeys();
+    if (NameKeyCount)
+        NameKeyUsed = AllocateMap(NameKeyCount);
     CheckAttributeLists();
 
     RepairIndexes = Repair && StructuralErrors == 0 && !V->IsReadOnly;
