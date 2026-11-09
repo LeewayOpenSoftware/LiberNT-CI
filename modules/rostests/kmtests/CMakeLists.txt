@@ -15,6 +15,7 @@ add_subdirectory(ntos_mm)
 add_subdirectory(ntos_po)
 add_subdirectory(tcpip)
 add_subdirectory(wfp)
+add_subdirectory(wsk)
 
 list(APPEND COMMON_SOURCE
     example/GuardedMemory.c
@@ -544,6 +545,7 @@ list(APPEND KMTEST_SOURCE
     wfp/wfp_tcp/wfp_tcp_user.c
     wfp/wfp_udp/wfp_udp_user.c
     wfp/wfp_user/wfp_user_user.c
+    wsk/wsk_echo_user.c
     ${COMMON_SOURCE}
 
     kmtest/kmtest.rc)
