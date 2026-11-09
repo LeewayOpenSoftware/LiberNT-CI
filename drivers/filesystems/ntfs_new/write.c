@@ -599,9 +599,22 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
         Irp->IoStatus.Information = Length;
 
-        /* FIXME: other uncached writes smaller than a block stay in the library block cache until a flush or its lazy writer */
-        if (!PagingIo && Length != 0 &&
-            (BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) || BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
+        /*
+         * The library holds a write that fits in one block back in its block
+         * cache until its own lazy pass. That is right for metadata and wrong
+         * for every write that reaches this point: a paging write is the
+         * cache manager or the modified page writer putting data on the
+         * volume, and the modified page writer hands over exactly one page
+         * at a time; a non-cached write promises the caller the same; a
+         * write-through write says so explicitly. Commit the range so the
+         * data is on the disk when the request completes. Runs larger than
+         * a block already went direct, so this only costs what was held.
+         */
+        if (Length != 0 &&
+            (PagingIo ||
+             BooleanFlagOn(Irp->Flags, IRP_NOCACHE) ||
+             BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
+             BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
         {
             Status = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
         }
