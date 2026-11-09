@@ -1293,19 +1293,29 @@ VolumeCheck::CheckBitmap(_In_ BOOLEAN Repair)
 
     if (NT_SUCCESS(Status))
     {
-        BOOLEAN Fix = Repair && StructuralErrors == 0 && !V->IsReadOnly;
+        /*
+         * Claiming only ever sets bits: at worst it keeps space a damaged
+         * record named, while a clear bit under live data lets the allocator
+         * hand that data's clusters to another file. So the claim does not
+         * wait for the structural findings. Freeing is safe only when every
+         * run list was parsed, so it still does.
+         */
+        BOOLEAN Claim = Repair && !V->IsReadOnly;
+        BOOLEAN Free = Claim && StructuralErrors == 0;
 
         for (ULONG Index = 0; Index < Missing.Count; Index++)
             Event(NtfsCheckUsedClustersFree, Missing.Ranges[Index].Lcn, Missing.Ranges[Index].Length);
         if (Out->LostClusters)
             Event(NtfsCheckLostClusters, Out->LostClusters, Lost.Count);
 
-        for (ULONG Index = 0; Fix && NT_SUCCESS(Status) && Index < Missing.Count; Index++)
+        for (ULONG Index = 0; Claim && NT_SUCCESS(Status) && Index < Missing.Count; Index++)
             Status = RepairRange(TRUE, Missing.Ranges[Index].Lcn, Missing.Ranges[Index].Length);
-        for (ULONG Index = 0; Fix && NT_SUCCESS(Status) && Index < Lost.Count; Index++)
+        if (Claim && NT_SUCCESS(Status))
+            Out->Errors -= Missing.Count;
+        for (ULONG Index = 0; Free && NT_SUCCESS(Status) && Index < Lost.Count; Index++)
             Status = RepairRange(FALSE, Lost.Ranges[Index].Lcn, Lost.Ranges[Index].Length);
-        if (Fix && NT_SUCCESS(Status))
-            Out->Errors -= Missing.Count + (Out->LostClusters ? 1 : 0);
+        if (Free && NT_SUCCESS(Status) && Out->LostClusters)
+            Out->Errors--;
     }
 
     delete[] Lost.Ranges;

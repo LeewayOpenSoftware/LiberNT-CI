@@ -594,11 +594,11 @@ NtfsCheckReport(
         case NtfsCheckRepairsBlocked:
             if (Argument2 == ~0ULL)
                 NtfsVerdictReport(Check->Callback,
-                                  "Index and cluster bitmap repairs were skipped: %I64u structural problems remain.\n",
+                                  "Index repairs and freeing of unused clusters were skipped: %I64u structural problems remain.\n",
                                   Argument1);
             else
                 NtfsVerdictReport(Check->Callback,
-                                  "Index and cluster bitmap repairs were skipped: %I64u structural problems remain (first in file record segment %I64X).\n",
+                                  "Index repairs and freeing of unused clusters were skipped: %I64u structural problems remain (first in file record segment %I64X).\n",
                                   Argument1, Argument2);
             break;
         case NtfsCheckLostNameRemoved:

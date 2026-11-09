@@ -1090,7 +1090,8 @@ typedef enum NtfsCheckEvent
     NtfsCheckDataAttributeInserted,
     NtfsCheckIndexNameMissing,
     NtfsCheckLostNameRemoved,
-    /* Index and cluster-bitmap repairs were skipped. Argument1: structural
+    /* Index repairs and the freeing of unused clusters were skipped (in-use
+     * clusters are still claimed). Argument1: structural
      * problems left; Argument2: the first file record still holding one, or
      * ~0 if none can be named. Not counted as a problem. */
     NtfsCheckRepairsBlocked,
