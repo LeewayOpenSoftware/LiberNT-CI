@@ -606,6 +606,10 @@ NtfsCheckReport(
                              "Removed %I64u names of file %I64X that belonged to a deleted directory.\n",
                              Argument2, Argument1);
             break;
+        case NtfsCheckNameRelinkFailed:
+        case NtfsCheckNameFoundUncounted:
+            /* Reported above, under their own cap. */
+            break;
         case NtfsCheckIndexNameMissing:
             NtfsFormatReport(Check->Callback,
                              "An index entry in index $I30 of file %I64X names file 0x%I64x, which does not have that name.\n",
