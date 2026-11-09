@@ -137,7 +137,7 @@ public:
             if (uMode > 2)
                 uMode = 0;
             SendMessageW(hMMButtons, CB_SETCURSEL, uMode, 0);
-            EnableWindow(hMMButtons, g_TaskbarSettings.bMMTaskbarEnabled);
+            ::EnableWindow(hMMButtons, g_TaskbarSettings.bMMTaskbarEnabled);
         }
 
         _UpdateDialog();
@@ -150,7 +150,7 @@ public:
         {
             HWND hMMButtons = GetDlgItem(IDC_TASKBARPROP_MMBUTTONS);
             if (hMMButtons)
-                EnableWindow(hMMButtons, IsDlgButtonChecked(IDC_TASKBARPROP_MMENABLE));
+                ::EnableWindow(hMMButtons, IsDlgButtonChecked(IDC_TASKBARPROP_MMENABLE));
         }
         _UpdateDialog();
         SetModified(TRUE);
