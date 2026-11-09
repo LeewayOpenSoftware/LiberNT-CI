@@ -438,8 +438,10 @@ typedef struct _NTFS_CHECK_CONTEXT
 
 /* Relink diagnostics come after every per-problem line, so the cap of 32
  * would always hide them: they get a small cap of their own and go to the
- * debug log as well. */
+ * debug log as well. A verbose check (autochk at boot) shows nearly all of
+ * them, since its log is the record of what the repair did. */
 #define NTFS_RELINK_DIAGNOSTICS 16
+#define NTFS_RELINK_DIAGNOSTICS_VERBOSE 4000
 
 static
 VOID
@@ -453,9 +455,11 @@ NtfsCheckReport(
 
     if (Event == NtfsCheckNameRelinkFailed || Event == NtfsCheckNameFoundUncounted)
     {
-        if (Check->RelinkDiagnosed > NTFS_RELINK_DIAGNOSTICS)
+        ULONG Limit = Check->Verbose ? NTFS_RELINK_DIAGNOSTICS_VERBOSE : NTFS_RELINK_DIAGNOSTICS;
+
+        if (Check->RelinkDiagnosed > Limit)
             return;
-        if (Check->RelinkDiagnosed++ == NTFS_RELINK_DIAGNOSTICS)
+        if (Check->RelinkDiagnosed++ == Limit)
         {
             NtfsVerdictReport(Check->Callback, "Further relink diagnostics are not shown.\n");
             return;

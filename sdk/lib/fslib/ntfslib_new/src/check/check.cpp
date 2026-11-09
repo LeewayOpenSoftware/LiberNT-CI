@@ -278,6 +278,10 @@ private:
          * an internal node, the child its END keeps; ~0 for a leaf. */
         PULONG Trim;
         PULONGLONG TrimChild;
+        /* What a lookup from the root walks, to tell a cut node's names are
+         * held elsewhere: the allocation and the root's header. */
+        PUCHAR Allocation;
+        PIndexNodeHeader RootHeader;
         ULONG Depth;
         ULONG Blocks;
         ULONG BlockSize;
@@ -291,7 +295,13 @@ private:
     BOOLEAN KeyInRange(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High);
     BOOLEAN KeyCompare(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Bound, _Out_ LONG* Result);
     BOOLEAN KeyAbove(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry High);
-    ULONG FindSplitTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_opt_ PIndexEntry High);
+    ULONG FindSplitTail(_In_ IndexWalk* Walk,
+                        _In_ PIndexNodeHeader Node,
+                        _In_opt_ PIndexEntry Low,
+                        _In_opt_ PIndexEntry High);
+    ULONG AcceptTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_opt_ PIndexEntry Low, _In_ ULONG Start);
+    BOOLEAN KeyReachable(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name);
+    void VerifyWholeCuts(_Inout_ IndexWalk* Walk);
     void LinkChild(_Inout_ IndexWalk* Walk, _In_ ULONGLONG Vcn, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High);
     void WalkIndexNode(_Inout_ IndexWalk* Walk,
                        _In_ PIndexNodeHeader Node,
@@ -1734,13 +1744,37 @@ VolumeCheck::KeyAbove(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ 
     return KeyCompare(Walk, Name, High, &Result) && Result > 0;
 }
 
+/* A tail that starts at the first entry leaves nothing in range: the split
+ * took the first entry as its median and the left node was not rewritten.
+ * Such a tail is only a candidate, and only if the node's keys are above
+ * Low like any key of its range; VerifyWholeCuts then asks that every one
+ * of them is held elsewhere. */
+ULONG
+VolumeCheck::AcceptTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_opt_ PIndexEntry Low, _In_ ULONG Start)
+{
+    PIndexEntry First = reinterpret_cast<PIndexEntry>(reinterpret_cast<PUCHAR>(Node) + Node->IndexOffset);
+    UNICODE_STRING Name;
+    LONG Result;
+
+    if (Start > Node->IndexOffset)
+        return Start;
+    /* The first entry was validated by the caller. */
+    if (!Low)
+        return Start;
+    return KeyName(First, &Name) && KeyCompare(Walk, &Name, Low, &Result) && Result > 0 ? Start : 0;
+}
+
 /* Finds where a node that a split cut short starts holding its right
  * sibling's entries: the first key above High, or the copy of High just
  * before it (the separator the split moved up). A copy of High that is the
  * last entry is the separator too, when the split took the last entry as
- * its median. 0 if there is none, or if nothing in range would remain. */
+ * its median. 0 if there is none. When the tail is the whole node, the
+ * result is the first entry's offset. */
 ULONG
-VolumeCheck::FindSplitTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_opt_ PIndexEntry High)
+VolumeCheck::FindSplitTail(_In_ IndexWalk* Walk,
+                           _In_ PIndexNodeHeader Node,
+                           _In_opt_ PIndexEntry Low,
+                           _In_opt_ PIndexEntry High)
 {
     PUCHAR Base = reinterpret_cast<PUCHAR>(Node);
     ULONG Offset = Node->IndexOffset;
@@ -1762,14 +1796,14 @@ VolumeCheck::FindSplitTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In
             return 0;
         }
         if (Entry->Flags & INDEX_ENTRY_END)
-            return PreviousEqual && PreviousOffset > Node->IndexOffset ? PreviousOffset : 0;
+            return PreviousEqual ? AcceptTail(Walk, Node, Low, PreviousOffset) : 0;
         if (!KeyName(Entry, &Name) || !KeyCompare(Walk, &Name, High, &Result))
             return 0;
         if (Result > 0)
         {
             ULONG Start = PreviousEqual ? PreviousOffset : Offset;
 
-            return Start > Node->IndexOffset ? Start : 0;
+            return AcceptTail(Walk, Node, Low, Start);
         }
         PreviousOffset = Offset;
         PreviousEqual = Result == 0;
@@ -1842,7 +1876,7 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
         return;
     }
     if (NodeBlock != MAXULONG)
-        TrimFrom = FindSplitTail(Walk, Node, High);
+        TrimFrom = FindSplitTail(Walk, Node, Low, High);
 
     while (Offset + FIELD_OFFSET(IndexEntry, IndexStream) <= End)
     {
@@ -1883,7 +1917,7 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
                 }
                 Tail += Cut->EntryLength;
             }
-            if (Tail != 0 || Internal != Branch)
+            if (Tail != 0 || (TrimFrom != Node->IndexOffset && Internal != Branch))
             {
                 Walk->Unwalkable = TRUE;
                 Walk->Problems++;
@@ -1929,6 +1963,115 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
         Offset += Entry->EntryLength;
     }
     Walk->Unwalkable = TRUE;
+}
+
+/* Whether a lookup of the name from the root finds it, in the tree as the
+ * trims will leave it: a trimmed node is read up to its cut and goes on at
+ * the child its END keeps. */
+BOOLEAN
+VolumeCheck::KeyReachable(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name)
+{
+    PIndexNodeHeader Node = Walk->RootHeader;
+    ULONG Block = MAXULONG;
+
+    for (ULONG Level = 0; Node && Level <= Walk->Blocks; Level++)
+    {
+        PUCHAR Base = reinterpret_cast<PUCHAR>(Node);
+        ULONG Offset = Node->IndexOffset;
+        ULONG End = Node->TotalIndexSize;
+        ULONGLONG Child = ~0ULL;
+        ULONGLONG Bytes;
+
+        if (Block != MAXULONG && Walk->Trim[Block])
+        {
+            End = Walk->Trim[Block];
+            Child = Walk->TrimChild[Block];
+        }
+        while (Offset + FIELD_OFFSET(IndexEntry, IndexStream) <= End)
+        {
+            PIndexEntry Entry = reinterpret_cast<PIndexEntry>(Base + Offset);
+            LONG Result;
+
+            if (Entry->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) || (Entry->EntryLength & 7) != 0 ||
+                Entry->EntryLength > End - Offset)
+            {
+                return FALSE;
+            }
+            if (!(Entry->Flags & INDEX_ENTRY_END))
+            {
+                if (!KeyCompare(Walk, Name, Entry, &Result))
+                    return FALSE;
+                if (Result == 0)
+                    return TRUE;
+            }
+            else
+            {
+                Result = -1;
+            }
+            if (Result < 0)
+            {
+                Child = ~0ULL;
+                if ((Entry->Flags & INDEX_ENTRY_NODE) &&
+                    Entry->EntryLength >= FIELD_OFFSET(IndexEntry, IndexStream) + sizeof(ULONGLONG))
+                {
+                    Child = *GetSubnodeVCN(Entry);
+                }
+                break;
+            }
+            Offset += Entry->EntryLength;
+        }
+        if (Child == ~0ULL)
+            return FALSE;
+        Bytes = Child * Walk->VcnSize;
+        if (Child > MAXULONG || (Bytes % Walk->BlockSize) != 0 || Bytes / Walk->BlockSize >= Walk->Blocks)
+            return FALSE;
+        Block = (ULONG)(Bytes / Walk->BlockSize);
+        if (!TestBit(Walk->Valid, Block) || !TestBit(Walk->Linked, Block))
+            return FALSE;
+        Node = &reinterpret_cast<PIndexBuffer>(Walk->Allocation + (ULONGLONG)Block * Walk->BlockSize)->IndexHeader;
+    }
+    return FALSE;
+}
+
+/* A node whose every entry sits above its range is cut whole, as the split
+ * that left it would have rewritten it. That is safe only if each name it
+ * holds is found by a lookup somewhere else, in the right sibling or the
+ * parent; if one is not, the node is not a split cut short and the tree is
+ * left unwalkable, to be reset as before. */
+void
+VolumeCheck::VerifyWholeCuts(_Inout_ IndexWalk* Walk)
+{
+    if (Walk->Unwalkable || !Walk->Allocation || !Walk->RootHeader)
+        return;
+    for (ULONG Block = 0; Block < Walk->Blocks; Block++)
+    {
+        PIndexNodeHeader Node =
+            &reinterpret_cast<PIndexBuffer>(Walk->Allocation + (ULONGLONG)Block * Walk->BlockSize)->IndexHeader;
+        PUCHAR Base = reinterpret_cast<PUCHAR>(Node);
+        ULONG Offset;
+
+        if (!TestBit(Walk->Linked, Block) || !Walk->Trim[Block] || Walk->Trim[Block] != Node->IndexOffset)
+            continue;
+        for (Offset = Walk->Trim[Block]; Offset + FIELD_OFFSET(IndexEntry, IndexStream) <= Node->TotalIndexSize;)
+        {
+            PIndexEntry Entry = reinterpret_cast<PIndexEntry>(Base + Offset);
+            UNICODE_STRING Name;
+
+            if (Entry->Flags & INDEX_ENTRY_END)
+                break;
+            if (!KeyName(Entry, &Name) || !KeyReachable(Walk, &Name))
+            {
+                Walk->Trim[Block] = 0;
+                Walk->Unwalkable = TRUE;
+                Walk->Problems++;
+                Event(NtfsCheckIndexCorrupt,
+                      Walk->Directory,
+                      (ULONGLONG)Block * Walk->BlockSize / Walk->VcnSize);
+                return;
+            }
+            Offset += Entry->EntryLength;
+        }
+    }
 }
 
 void
@@ -1994,6 +2137,8 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
                 RtlZeroMemory(Walk.Trim, (Walk.Blocks + 1) * sizeof(ULONG));
             Walk.TrimChild = new(PagedPool, TAG_NTFS) ULONGLONG[Walk.Blocks + 1];
             Walk.CaseSensitive = File->IsCaseSensitiveDirectory();
+            Walk.Allocation = Allocation;
+            Walk.RootHeader = &Root->Header;
             if (!Walk.Valid || !Walk.Linked || !Walk.Stack || !Walk.Trim || !Walk.TrimChild)
             {
                 Event(NtfsCheckIndexCorrupt, Directory, 0);
@@ -2061,6 +2206,7 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
                           Frame.Low,
                           Frame.High);
         }
+        VerifyWholeCuts(&Walk);
     }
 
     /* A tree that cannot be walked is emptied; every name in it is then

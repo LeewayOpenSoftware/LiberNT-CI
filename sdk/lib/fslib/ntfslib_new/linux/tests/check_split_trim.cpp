@@ -196,6 +196,8 @@ struct Fixture
         Walk.Trim = new ULONG[Blocks + 1]();
         Walk.TrimChild = new ULONGLONG[Blocks + 1]();
         Walk.Blocks = Blocks;
+        Walk.Allocation = Allocation.data();
+        Walk.RootHeader = Root;
         Walk.BlockSize = BlockSize;
         Walk.VcnSize = BlockSize;
         for (ULONG Block = 0; Block < Blocks; Block++)
@@ -238,6 +240,7 @@ struct Fixture
                                  Frame.Low,
                                  Frame.High);
         }
+        Check->VerifyWholeCuts(&Walk);
     }
 
     std::multiset<std::string> Reached()
@@ -376,6 +379,92 @@ MedianLast()
     }
 }
 
+/* The split took the first entry as its median: the left node, never
+ * rewritten, still holds every key and all of them sort above the bound
+ * that leads to it. The right node and the parent hold the names, so the
+ * node is cut to an empty leaf, or to an END pointing to the first
+ * entry's child. */
+void
+MedianFirst()
+{
+    {
+        const char* Test = "median first, leaf";
+        Fixture F;
+
+        /* L = [M, P, T] was split at M: Root = [M->0, END->1], R = [P, T]. */
+        BuildNode(F.Root, sizeof(F.RootBuffer), { { "M", 0 } }, 1);
+        F.BuildBlock(0, { { "P", ~0ULL }, { "T", ~0ULL } }, ~0ULL);
+        F.BuildBlock(1, { { "P", ~0ULL }, { "T", ~0ULL } }, ~0ULL);
+        F.Run();
+        Expect(!F.Walk.Unwalkable, Test, "the tree is walkable");
+        Expect(F.Walk.Problems == 0, Test, "no problem raised");
+        Expect(F.Walk.Trim[0] == F.Node(0)->IndexOffset, Test, "the whole leaf is cut");
+        Expect(F.Walk.TrimChild[0] == ~0ULL, Test, "a leaf keeps no END child");
+        Expect(F.Reached() == std::multiset<std::string>({ "M", "P", "T" }), Test, "every name is reached once");
+    }
+    {
+        const char* Test = "median first, separator copy";
+        Fixture F;
+
+        /* The separator is the old first key: L = [M, P, T], same split. */
+        BuildNode(F.Root, sizeof(F.RootBuffer), { { "M", 0 } }, 1);
+        F.BuildBlock(0, { { "M", ~0ULL }, { "P", ~0ULL }, { "T", ~0ULL } }, ~0ULL);
+        F.BuildBlock(1, { { "P", ~0ULL }, { "T", ~0ULL } }, ~0ULL);
+        F.Run();
+        Expect(!F.Walk.Unwalkable, Test, "the tree is walkable");
+        Expect(F.Walk.Trim[0] == F.Node(0)->IndexOffset, Test, "the whole leaf is cut");
+        Expect(F.Reached() == std::multiset<std::string>({ "M", "P", "T" }), Test, "every name is reached once");
+    }
+    {
+        const char* Test = "median first, internal";
+        Fixture F;
+
+        /* L = [M->2, P->3, END->4] was split at M, its first entry:
+         * Root = [M->0, END->1], R = [P->3, END->4], and L should have
+         * become [END->2]. The separator's child 2 stays with L. */
+        BuildNode(F.Root, sizeof(F.RootBuffer), { { "M", 0 } }, 1);
+        F.BuildBlock(0, { { "M", 2 }, { "P", 3 } }, 4);
+        F.BuildBlock(1, { { "P", 3 } }, 4);
+        F.BuildBlock(2, { { "A", ~0ULL } }, ~0ULL);
+        F.BuildBlock(3, { { "O", ~0ULL } }, ~0ULL);
+        F.BuildBlock(4, { { "X", ~0ULL } }, ~0ULL);
+        F.Run();
+        Expect(!F.Walk.Unwalkable, Test, "the tree is walkable");
+        Expect(F.Walk.Problems == 0, Test, "no problem raised");
+        Expect(F.Walk.Trim[0] == F.Node(0)->IndexOffset, Test, "the whole node is cut");
+        Expect(F.Walk.TrimChild[0] == 2, Test, "the node keeps the first entry's child as its END child");
+        for (ULONG Block = 0; Block < 5; Block++)
+            Expect(VolumeCheck::TestBit(F.Walk.Linked, Block), Test, "every node is linked once");
+        Expect(F.Reached() == std::multiset<std::string>({ "A", "M", "O", "P", "X" }), Test,
+               "every name is reached once");
+    }
+    {
+        const char* Test = "median first, names missing elsewhere";
+        Fixture F;
+
+        /* The right node lacks T: the node is not a split cut short. */
+        BuildNode(F.Root, sizeof(F.RootBuffer), { { "M", 0 } }, 1);
+        F.BuildBlock(0, { { "P", ~0ULL }, { "T", ~0ULL } }, ~0ULL);
+        F.BuildBlock(1, { { "P", ~0ULL } }, ~0ULL);
+        F.Run();
+        Expect(F.Walk.Unwalkable, Test, "the tree is unwalkable");
+        Expect(F.Walk.Trim[0] == 0, Test, "nothing is cut");
+    }
+    {
+        const char* Test = "median first, key below the range";
+        Fixture F;
+
+        /* Under a Low bound a key at or below it is not the node's own. */
+        BuildNode(F.Root, sizeof(F.RootBuffer), { { "C", 0 }, { "M", 1 } }, 2);
+        F.BuildBlock(0, { { "A", ~0ULL } }, ~0ULL);
+        F.BuildBlock(1, { { "B", ~0ULL }, { "T", ~0ULL } }, ~0ULL);
+        F.BuildBlock(2, { { "T", ~0ULL } }, ~0ULL);
+        F.Run();
+        Expect(F.Walk.Unwalkable, Test, "the tree is unwalkable");
+        Expect(F.Walk.Trim[1] == 0, Test, "nothing is cut");
+    }
+}
+
 }
 
 int
@@ -385,6 +474,7 @@ main()
     LeafTail();
     NotASplit();
     MedianLast();
+    MedianFirst();
     if (Failures)
         return 1;
     std::printf("check_split_trim: ok\n");
