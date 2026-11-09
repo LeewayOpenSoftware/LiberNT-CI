@@ -1685,6 +1685,17 @@ private:
     BOOLEAN DirectEnumeration = FALSE;
 
     // ./editdir.cpp
+    /* Free bytes the base record of a large index keeps while it has no
+     * attribute list, so a mapping growth can still create one (the list
+     * needs about 0x50; a growth creates it up front below this). */
+#define NTFS_MAPPING_GROWTH_HEADROOM 0x110
+
+    static BOOLEAN
+    RootGrowthKeepsListRoom(
+        _In_ PFileRecord DirectoryFile,
+        _In_ PCWSTR IndexName,
+        _In_ ULONG ValueLength);
+
     static NTSTATUS
     ReplaceIndexRootValue(
         _In_ PVolume DiskVolume,

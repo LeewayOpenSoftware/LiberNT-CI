@@ -2421,9 +2421,10 @@ static const ULONG ResidentPromotionGrowth = 0x40 - 0x18 + 0x10;
 
 /*
  * Free bytes below which a mapping growth creates the attribute list up
- * front (the list itself needs about 0x50 in the base record).
+ * front (the list itself needs about 0x50 in the base record). The index
+ * root keeps the same room free (Directory::RootGrowthKeepsListRoom).
  */
-static const ULONG MappingGrowthHeadroom = 0x110;
+static const ULONG MappingGrowthHeadroom = NTFS_MAPPING_GROWTH_HEADROOM;
 
 NTSTATUS
 FileRecord::SettleGrowthAttributeList()

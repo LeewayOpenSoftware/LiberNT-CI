@@ -21,8 +21,10 @@ truncate -s 128M "$image"
 "$mkntfs" -F -Q -q -L FRAGINDEX "$image"
 head -c 4096 /dev/zero | tr '\0' 'p' >"$payload"
 
-# Prints "list=L extensions=E" for /big: L is 1 when its base record has an
-# $ATTRIBUTE_LIST, E counts the in-use extension records that name it.
+# Prints "list=L extensions=E free=F attrs=..." for /big: L is 1 when its
+# base record has an $ATTRIBUTE_LIST, E counts the in-use extension records
+# that name it, F is the free space of the base record, and attrs lists its
+# attributes as type:length.
 cat >"$tool" <<'EOF'
 import struct
 import sys
@@ -96,7 +98,10 @@ for n in range(16, len(offsets)):
     r = record(n)
     if r is not None and struct.unpack_from('<Q', r, 0x20)[0] & 0xFFFFFFFFFFFF == big:
         extensions += 1
-print('list=%d extensions=%d' % (has_list, extensions))
+base = record(big)
+used, alloc = struct.unpack_from('<II', base, 0x18)
+layout = ','.join('%x:%x' % (k, len(a)) for k, a in attrs(base))
+print('list=%d extensions=%d free=0x%x attrs=%s' % (has_list, extensions, alloc - used, layout))
 EOF
 
 long=$(printf '%0190d' 0 | tr 0 n)
