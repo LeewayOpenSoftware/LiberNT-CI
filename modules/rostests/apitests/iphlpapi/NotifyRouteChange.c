@@ -5,14 +5,24 @@
  * COPYRIGHT:   Copyright 2026 Leeway Open Software <281492504+LeewayOpenSoftware@users.noreply.github.com>
  */
 
+/* ntstatus.h defines nothing once WIN32_NO_STATUS is set, so it goes first. */
+#include <ntstatus.h>
+#define WIN32_NO_STATUS
 #include <apitest.h>
 
-#define WIN32_NO_STATUS
 #include <winsock2.h>
 #include <ws2ipdef.h>
 #include <iphlpapi.h>
 #include <ipmib.h>
 #include <nldef.h>
+
+/* 198.51.100.254 is in TEST-NET-2 (RFC 5737): never routed, so the route the
+ * test adds cannot collide with anything the machine already has. */
+#define TEST_ROUTE_DEST htonl((198u << 24) | (51u << 16) | (100u << 8) | 254u)
+
+/* OVERLAPPED.Internal is a ULONG_PTR; on 64-bit builds a negative NTSTATUS
+ * constant would sign-extend and never compare equal. */
+#define OVERLAPPED_STATUS(ovr) ((NTSTATUS)(ULONG)(ovr)->Internal)
 
 static void wait_for_notification(HANDLE event, OVERLAPPED *ovr, const char *op)
 {
@@ -20,7 +30,7 @@ static void wait_for_notification(HANDLE event, OVERLAPPED *ovr, const char *op)
 
     ok(wait == WAIT_OBJECT_0, "%s notification timed out\n", op);
     if (wait == WAIT_OBJECT_0)
-        ok(ovr->Internal == STATUS_SUCCESS, "%s notification completed with status %lx\n", op, ovr->Internal);
+        ok(OVERLAPPED_STATUS(ovr) == STATUS_SUCCESS, "%s notification completed with status %lx\n", op, (ULONG)ovr->Internal);
 }
 
 static BOOL register_route_change(HANDLE event, OVERLAPPED *ovr, HANDLE *handle)
@@ -34,16 +44,47 @@ static BOOL register_route_change(HANDLE event, OVERLAPPED *ovr, HANDLE *handle)
     error = NotifyRouteChange(handle, ovr);
     ok_long(error, ERROR_IO_PENDING);
     ok(*handle != NULL, "Expected a notification handle, got NULL\n");
-    ok(ovr->Internal == STATUS_PENDING, "Expected STATUS_PENDING, got %lx\n", ovr->Internal);
+    ok(OVERLAPPED_STATUS(ovr) == STATUS_PENDING, "Expected STATUS_PENDING, got %lx\n", (ULONG)ovr->Internal);
 
     return error == ERROR_IO_PENDING;
 }
 
-static void cleanup_notification(HANDLE event, HANDLE handle, OVERLAPPED *ovr)
+/* The handle NotifyRouteChange returns is only for GetOverlappedResult; it
+ * belongs to iphlpapi and is not closed by the caller. */
+static void cleanup_notification(HANDLE event, OVERLAPPED *ovr)
 {
     CancelIPChangeNotify(ovr);
     if (event) CloseHandle(event);
-    if (handle) CloseHandle(handle);
+}
+
+/* A route through a real gateway: the stack refuses routes on the loopback
+ * interface, so the test route goes where the default route goes. */
+static BOOL find_default_gateway(MIB_IPFORWARDROW *gateway)
+{
+    MIB_IPFORWARDTABLE *table;
+    ULONG size = 0, i;
+    DWORD error;
+    BOOL found = FALSE;
+
+    error = GetIpForwardTable(NULL, &size, FALSE);
+    if (error != ERROR_INSUFFICIENT_BUFFER || !size)
+        return FALSE;
+    table = HeapAlloc(GetProcessHeap(), 0, size);
+    if (!table)
+        return FALSE;
+    error = GetIpForwardTable(table, &size, FALSE);
+    for (i = 0; error == NO_ERROR && i < table->dwNumEntries; i++)
+    {
+        if (table->table[i].dwForwardDest == 0 && table->table[i].dwForwardMask == 0 &&
+            table->table[i].dwForwardNextHop != 0)
+        {
+            *gateway = table->table[i];
+            found = TRUE;
+            break;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, table);
+    return found;
 }
 
 static void test_cancel(void)
@@ -65,20 +106,22 @@ static void test_cancel(void)
     ok(ret, "CancelIPChangeNotify failed\n");
     ok_long(GetLastError(), ERROR_SUCCESS);
 
-    wait = WaitForSingleObject(event, 100);
-    ok(wait == WAIT_TIMEOUT, "Canceled notification still signaled\n");
-    ok(ovr.Internal == STATUS_CANCELLED, "Expected STATUS_CANCELLED, got %lx\n", ovr.Internal);
+    /* The cancel completes the request with STATUS_CANCELLED, which signals
+     * the event like any other completion. */
+    wait = WaitForSingleObject(event, 1000);
+    ok(wait == WAIT_OBJECT_0, "Canceled notification was not signaled\n");
+    ok(OVERLAPPED_STATUS(&ovr) == STATUS_CANCELLED, "Expected STATUS_CANCELLED, got %lx\n", (ULONG)ovr.Internal);
 
 cleanup:
-    cleanup_notification(event, handle, &ovr);
+    cleanup_notification(event, &ovr);
 }
 
-void func_NotifyRouteChange(void)
+START_TEST(NotifyRouteChange)
 {
     OVERLAPPED ovr = {0};
     HANDLE event, handle = NULL;
-    MIB_IPFORWARDROW route = {0};
-    DWORD error, ifIndex;
+    MIB_IPFORWARDROW gateway = {0}, route = {0};
+    DWORD error;
     BOOL added = FALSE;
 
     event = CreateEventW(NULL, FALSE, FALSE, NULL);
@@ -88,23 +131,24 @@ void func_NotifyRouteChange(void)
     if (!register_route_change(event, &ovr, &handle))
         goto cleanup;
 
-    error = GetBestInterface(htonl(INADDR_LOOPBACK), &ifIndex);
-    ok_long(error, NO_ERROR);
-    if (error != NO_ERROR)
+    if (!find_default_gateway(&gateway))
+    {
+        win_skip("No default route with a gateway, skipping route change checks\n");
         goto cleanup;
+    }
 
-    route.dwForwardDest = htonl((127u << 24) | (254u << 16) | (254u << 8) | 254u);
+    route.dwForwardDest = TEST_ROUTE_DEST;
     route.dwForwardMask = htonl(0xFFFFFFFF);
-    route.dwForwardNextHop = htonl(INADDR_LOOPBACK);
-    route.dwForwardIfIndex = ifIndex;
-    route.dwForwardType = MIB_IPROUTE_TYPE_DIRECT;
-    route.dwForwardProto = RouteProtocolNetmgmt;
+    route.dwForwardNextHop = gateway.dwForwardNextHop;
+    route.dwForwardIfIndex = gateway.dwForwardIfIndex;
+    route.dwForwardType = MIB_IPROUTE_TYPE_INDIRECT;
+    route.dwForwardProto = MIB_IPPROTO_NETMGMT;
     route.dwForwardMetric1 = 1;
 
     error = CreateIpForwardEntry(&route);
     if (error == ERROR_OBJECT_ALREADY_EXISTS)
     {
-        win_skip("Loopback test route already exists\n");
+        win_skip("Test route already exists\n");
     }
     else if (error != NO_ERROR)
     {
@@ -124,11 +168,15 @@ void func_NotifyRouteChange(void)
     }
 
     error = DeleteIpForwardEntry(&route);
-    if (error == NO_ERROR && added)
-        wait_for_notification(event, &ovr, "delete");
+    if (added)
+    {
+        ok_long(error, NO_ERROR);
+        if (error == NO_ERROR)
+            wait_for_notification(event, &ovr, "delete");
+    }
 
     test_cancel();
 
 cleanup:
-    cleanup_notification(event, handle, &ovr);
+    cleanup_notification(event, &ovr);
 }
