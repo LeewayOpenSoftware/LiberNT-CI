@@ -240,8 +240,48 @@ LogWriteBootEx(VOID)
                          NULL,
                          NULL);
     if (!NT_SUCCESS(Status))
+    {
         DPRINT1("AUTOCHK: bootex.log write on %ws failed (0x%08lx)\n", LogVolumePath, Status);
+        NtClose(FileHandle);
+        return;
+    }
 
+    /*
+     * FILE_WRITE_THROUGH covers the data only. The new file's record and
+     * the root directory entry that names it are held back in the file
+     * system's write-back cache, and a check that changed the volume ends
+     * in a restart that does not wait for that cache (Lab03, b774d48: a
+     * dirty boot ended in "was changed and dismounted" and left no
+     * bootex.log on the volume). Flush the file (its data, size and
+     * record), then the volume (every held-back metadata block, the
+     * directory entry included, and the device cache), so the log is on
+     * the disk before autochk returns, whatever follows.
+     */
+    Status = NtFlushBuffersFile(FileHandle, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("AUTOCHK: bootex.log flush on %ws failed (0x%08lx)\n", LogVolumePath, Status);
+    NtClose(FileHandle);
+
+    RtlInitUnicodeString(&FileName, LogVolumePath);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &FileName,
+                               OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+    Status = NtOpenFile(&FileHandle,
+                        FILE_GENERIC_WRITE | SYNCHRONIZE,
+                        &ObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE,
+                        FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("AUTOCHK: volume open of %ws for the bootex.log flush failed (0x%08lx)\n", LogVolumePath, Status);
+        return;
+    }
+    Status = NtFlushBuffersFile(FileHandle, &IoStatusBlock);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("AUTOCHK: volume flush of %ws after bootex.log failed (0x%08lx)\n", LogVolumePath, Status);
     NtClose(FileHandle);
 }
 
