@@ -1151,6 +1151,36 @@ typedef struct _DEFERRED_INDEX_WRITE
     BOOLEAN ChainValid;
 } DEFERRED_INDEX_WRITE, *PDEFERRED_INDEX_WRITE;
 
+/*
+ * A failure after the entry is out of the index. The removal has happened,
+ * so the caller must see success; an error here made every caller abort
+ * half way (the name gone, the record and its DOS alias kept, the deleted
+ * file back at the next check). What is left behind is a duplicated key or
+ * blocks whose bits stayed set, both repaired by a check: keep the volume
+ * dirty through a clean dismount so the next boot runs one, and name the
+ * site in the debug log.
+ */
+static void
+NoteIndexDamage(
+    _In_ PVolume DiskVolume,
+    _In_ const char* What,
+    _In_ ULONGLONG Vcn,
+    _In_ NTSTATUS Status)
+{
+    DPRINT1(
+        "Index %s at VCN %llu failed after the entry "
+        "was removed: 0x%lx; the volume stays dirty "
+        "for a check.\n",
+        What,
+        Vcn,
+        Status);
+    /* The print is debug-only; the builds without it must not warn. */
+    (void)What;
+    (void)Vcn;
+    (void)Status;
+    DiskVolume->RetainDirty(TRUE);
+}
+
 static NTSTATUS
 SetIndexRecordBitmapBit(
     _In_ PFileRecord DirectoryFile,
@@ -4656,18 +4686,32 @@ Directory::RemoveIndexEntry(
                 AllocationUnit,
                 IndexRecordSize);
         }
+        if (NT_SUCCESS(Status))
+        {
+            Status = WriteIndexNode(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                Deferred.Vcn,
+                AllocationUnit,
+                IndexRecordSize,
+                Deferred.Image);
+        }
         if (!NT_SUCCESS(Status))
-            goto Done;
-        Status = WriteIndexNode(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            Deferred.Vcn,
-            AllocationUnit,
-            IndexRecordSize,
-            Deferred.Image);
-        if (!NT_SUCCESS(Status))
-            goto Done;
+        {
+            /*
+             * The ancestor already carries the key: a duplicate at worst,
+             * never a loss. The node still links its chain, so that stays
+             * allocated.
+             */
+            NoteIndexDamage(
+                DiskVolume,
+                "deferred node write",
+                Deferred.Vcn,
+                Status);
+            Deferred.ChainValid = FALSE;
+            Status = STATUS_SUCCESS;
+        }
     }
 
     /*
@@ -4676,8 +4720,9 @@ Directory::RemoveIndexEntry(
      * its key (Deferred.ChainValid). The write that dropped the pointer to
      * it is in memory; make it durable before the chain's bits are cleared
      * (CommitIndexPointerHolder), since a cleared bit lets the next split
-     * reuse a block at once. A failure is reported: the entry is gone from
-     * the index, but the caller must not take the release for granted.
+     * reuse a block at once. A failure leaves blocks whose bits stayed set,
+     * a leak the next check repairs (NoteIndexDamage); the removal itself
+     * has happened and stays successful.
      */
     if (ReleaseChain || Deferred.ChainValid)
     {
@@ -4725,19 +4770,29 @@ Directory::RemoveIndexEntry(
                 NULL,
                 VisitedVcns[VisitedCount - 1]);
         }
+        if (NT_SUCCESS(Status))
+        {
+            Status = ReleaseEndOnlyChain(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                IndexRecordSize,
+                AllocationUnit,
+                Deferred.ChainValid
+                    ? Deferred.ChainVcn
+                    : RemovedChild);
+        }
         if (!NT_SUCCESS(Status))
-            goto Done;
-        Status = ReleaseEndOnlyChain(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            IndexRecordSize,
-            AllocationUnit,
-            Deferred.ChainValid
-                ? Deferred.ChainVcn
-                : RemovedChild);
-        if (!NT_SUCCESS(Status))
-            goto Done;
+        {
+            NoteIndexDamage(
+                DiskVolume,
+                "chain release",
+                Deferred.ChainValid
+                    ? Deferred.ChainVcn
+                    : RemovedChild,
+                Status);
+            Status = STATUS_SUCCESS;
+        }
     }
     EntryCommitted = TRUE;
 
@@ -4775,11 +4830,19 @@ TouchDirectory:
                 TimestampStatus);
         }
         /*
-         * The entry is gone from the index either way, but a release that
-         * failed is reported, not swallowed: the caller must know that the
-         * directory needs a check rather than take the result for granted.
+         * The entry is gone from the index either way; the caller must see
+         * success, or it aborts a removal that has already happened. A
+         * failed release is reported through the dirty flag instead.
          */
-        Status = ReleaseStatus;
+        if (!NT_SUCCESS(ReleaseStatus))
+        {
+            NoteIndexDamage(
+                DiskVolume,
+                "empty node release",
+                0,
+                ReleaseStatus);
+        }
+        Status = STATUS_SUCCESS;
     }
 
 Done:
