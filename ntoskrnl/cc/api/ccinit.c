@@ -383,6 +383,9 @@ CcNtLazyWriter(
     _In_ PVOID Context)
 {
     LARGE_INTEGER Period;
+#if DBG
+    ULONG64 LastPass = 0;
+#endif
 
     UNREFERENCED_PARAMETER(Context);
     Period.QuadPart = -10 * 1000 * 1000;
@@ -394,11 +397,19 @@ CcNtLazyWriter(
         ULONG Aged;
         ULONG Flushed = 0;
         ULONG64 Started;
+        ULONG64 Teardown;
 
         KeWaitForSingleObject(&CcNtLazyWriterEvent, Executive, KernelMode, FALSE, &Period);
 
         CcNtTakeLazyWaiters(&Waiters);
         Started = KeQueryInterruptTime();
+#if DBG
+        /* A pass that starts late was held up by the previous pass's tail
+         * (teardown of closed maps, deferred writes), not by the timer. */
+        if (LastPass != 0 && Started - LastPass > 15 * 1000 * 1000)
+            DPRINT1("CC: lazy pass late: %I64u ms since the previous pass started\n", (Started - LastPass) / 10000);
+        LastPass = Started;
+#endif
         Aged = CcNtFlushAgedMaps(Started);
         Target = CcDirtyLazyTarget(&CcNtCache);
         if (Target != 0)
@@ -418,8 +429,17 @@ CcNtLazyWriter(
         UNREFERENCED_PARAMETER(Flushed);
 #endif
 
+        Teardown = KeQueryInterruptTime();
         CcNtExpireClosedMaps();
         CcNtProcessDeferredWrites();
+#if DBG
+        if (KeQueryInterruptTime() - Teardown >= 50 * 10 * 1000)
+        {
+            DPRINT1("CC: lazy pass teardown took %I64u ms\n", (KeQueryInterruptTime() - Teardown) / 10000);
+        }
+#else
+        UNREFERENCED_PARAMETER(Teardown);
+#endif
         CcNtReleaseLazyWaiters(&Waiters);
     }
 }
