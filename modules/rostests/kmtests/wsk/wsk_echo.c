@@ -269,14 +269,16 @@ StreamTransfer(
     ULONG_PTR Information = 0;
     ULONG Received = 0;
     LARGE_INTEGER Start, End, Frequency;
+    WSK_BUF SendBuf = Out->Buf;
 
+    SendBuf.Length = Length;
     SendIrp = NewIrp(&SendEvent);
     if (SendIrp == NULL)
     {
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     Start = KeQueryPerformanceCounter(&Frequency);
-    Status = SendDispatch->WskSend(Sender, &Out->Buf, 0, SendIrp);
+    Status = SendDispatch->WskSend(Sender, &SendBuf, 0, SendIrp);
     while (Received < Length)
     {
         WSK_BUF Partial = In->Buf;
@@ -363,7 +365,7 @@ TestStream(
         goto done;
     }
 
-    if (AllocateBuffer(&Out, WSKECHO_STREAM_BYTES) && AllocateBuffer(&In, WSKECHO_STREAM_BYTES))
+    if (AllocateBuffer(&Out, WSKECHO_LARGE_STREAM_BYTES) && AllocateBuffer(&In, WSKECHO_LARGE_STREAM_BYTES))
     {
         FillPattern(Out.Memory, WSKECHO_STREAM_BYTES, 0x11);
         RtlZeroMemory(In.Memory, WSKECHO_STREAM_BYTES);
@@ -371,6 +373,9 @@ TestStream(
         FillPattern(Out.Memory, WSKECHO_STREAM_BYTES, 0x77);
         RtlZeroMemory(In.Memory, WSKECHO_STREAM_BYTES);
         StreamTransfer(Accepted, Client, &Out, &In, WSKECHO_STREAM_BYTES);
+        FillPattern(Out.Memory, WSKECHO_LARGE_STREAM_BYTES, 0x55);
+        RtlZeroMemory(In.Memory, WSKECHO_LARGE_STREAM_BYTES);
+        StreamTransfer(Client, Accepted, &Out, &In, WSKECHO_LARGE_STREAM_BYTES);
 
         RecvIrp = NewIrp(&RecvEvent);
         if (RecvIrp != NULL)
