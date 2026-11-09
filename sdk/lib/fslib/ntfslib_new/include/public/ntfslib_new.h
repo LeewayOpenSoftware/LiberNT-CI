@@ -1120,9 +1120,9 @@ typedef enum NtfsCheckEvent
     /* A second index entry for a name that is already counted. Argument1:
      * the directory's file record; Argument2: the file reference. */
     NtfsCheckIndexDuplicateEntry,
-    /* A leaf held keys above its range, which its right sibling holds after
-     * a split cut short; they were cut from the leaf. Argument1: the
-     * directory's file record; Argument2: the leaf's VCN. */
+    /* A node held entries above its range, which its right sibling holds
+     * after a split cut short; they were cut from the node. Argument1: the
+     * directory's file record; Argument2: the node's VCN. */
     NtfsCheckIndexTailTrimmed
 } NtfsCheckEvent;
 

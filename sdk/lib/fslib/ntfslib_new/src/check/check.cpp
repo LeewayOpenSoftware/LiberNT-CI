@@ -274,8 +274,10 @@ private:
         PUCHAR Linked;
         WalkFrame* Stack;
         /* Per block: the offset of a tail of keys above the node's range,
-         * which a split cut short leaves in the left node; 0 if none. */
+         * which a split cut short leaves in the left node; 0 if none. For
+         * an internal node, the child its END keeps; ~0 for a leaf. */
         PULONG Trim;
+        PULONGLONG TrimChild;
         ULONG Depth;
         ULONG Blocks;
         ULONG BlockSize;
@@ -287,7 +289,10 @@ private:
     };
     static BOOLEAN KeyName(_In_ PIndexEntry Entry, _Out_ PUNICODE_STRING Name);
     BOOLEAN KeyInRange(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High);
+    BOOLEAN KeyCompare(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Bound, _Out_ LONG* Result);
     BOOLEAN KeyAbove(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry High);
+    ULONG FindSplitTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_opt_ PIndexEntry High);
+    void LinkChild(_Inout_ IndexWalk* Walk, _In_ ULONGLONG Vcn, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High);
     void WalkIndexNode(_Inout_ IndexWalk* Walk,
                        _In_ PIndexNodeHeader Node,
                        _In_ ULONG Available,
@@ -1713,13 +1718,102 @@ VolumeCheck::KeyInRange(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt
 }
 
 BOOLEAN
+VolumeCheck::KeyCompare(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Bound, _Out_ LONG* Result)
+{
+    UNICODE_STRING BoundName;
+
+    return Bound && KeyName(Bound, &BoundName) &&
+           NT_SUCCESS(V->CollateFileNames(Name, &BoundName, Walk->CaseSensitive, Result));
+}
+
+BOOLEAN
 VolumeCheck::KeyAbove(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry High)
 {
-    UNICODE_STRING Bound;
     LONG Result;
 
-    return High && KeyName(High, &Bound) &&
-           NT_SUCCESS(V->CollateFileNames(Name, &Bound, Walk->CaseSensitive, &Result)) && Result > 0;
+    return KeyCompare(Walk, Name, High, &Result) && Result > 0;
+}
+
+/* Finds where a node that a split cut short starts holding its right
+ * sibling's entries: the first key above High, or the copy of High just
+ * before it (the separator the split moved up). 0 if there is none, or if
+ * nothing in range would remain. */
+ULONG
+VolumeCheck::FindSplitTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_opt_ PIndexEntry High)
+{
+    PUCHAR Base = reinterpret_cast<PUCHAR>(Node);
+    ULONG Offset = Node->IndexOffset;
+    ULONG End = Node->TotalIndexSize;
+    ULONG PreviousOffset = 0;
+    BOOLEAN PreviousEqual = FALSE;
+
+    if (!High)
+        return 0;
+    while (Offset + FIELD_OFFSET(IndexEntry, IndexStream) <= End)
+    {
+        PIndexEntry Entry = reinterpret_cast<PIndexEntry>(Base + Offset);
+        UNICODE_STRING Name;
+        LONG Result;
+
+        if (Entry->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) || (Entry->EntryLength & 7) != 0 ||
+            Entry->EntryLength > End - Offset || (Entry->Flags & INDEX_ENTRY_END) ||
+            !KeyName(Entry, &Name) || !KeyCompare(Walk, &Name, High, &Result))
+        {
+            return 0;
+        }
+        if (Result > 0)
+        {
+            ULONG Start = PreviousEqual ? PreviousOffset : Offset;
+
+            return Start > Node->IndexOffset ? Start : 0;
+        }
+        PreviousOffset = Offset;
+        PreviousEqual = Result == 0;
+        Offset += Entry->EntryLength;
+    }
+    return 0;
+}
+
+void
+VolumeCheck::LinkChild(_Inout_ IndexWalk* Walk, _In_ ULONGLONG Vcn, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High)
+{
+    ULONGLONG Bytes = Vcn * Walk->VcnSize;
+    ULONG Block;
+
+    if (Vcn > MAXULONG || (Bytes % Walk->BlockSize) != 0 || Bytes / Walk->BlockSize >= Walk->Blocks)
+    {
+        /* The node lies outside the allocation. */
+        Walk->Unwalkable = TRUE;
+        Walk->Problems++;
+        Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
+        return;
+    }
+    Block = (ULONG)(Bytes / Walk->BlockSize);
+    if (TestBit(Walk->Linked, Block))
+    {
+        /* Linked twice. */
+        Walk->Unwalkable = TRUE;
+        Walk->Problems++;
+        Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
+        return;
+    }
+    SetBit(Walk->Linked, Block);
+    if (TestBit(Walk->Valid, Block))
+    {
+        Walk->Stack[Walk->Depth].Block = Block;
+        Walk->Stack[Walk->Depth].Low = Low;
+        Walk->Stack[Walk->Depth].High = High;
+        Walk->Depth++;
+        return;
+    }
+    /* A linked block that is free, or in use but not a valid INDX block
+     * (that one was reported already). */
+    Walk->Unwalkable = TRUE;
+    if (!(Block < Walk->BitmapBits && TestBit(Walk->Bitmap, Block)))
+    {
+        Walk->Problems++;
+        Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
+    }
 }
 
 void
@@ -1743,6 +1837,8 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
         Walk->Unwalkable = TRUE;
         return;
     }
+    if (NodeBlock != MAXULONG)
+        TrimFrom = FindSplitTail(Walk, Node, High);
 
     while (Offset + FIELD_OFFSET(IndexEntry, IndexStream) <= End)
     {
@@ -1755,30 +1851,53 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
             Walk->Unwalkable = TRUE;
             return;
         }
+        if (TrimFrom && Offset == TrimFrom)
+        {
+            /* A split whose parent and right node landed before the rewritten
+             * left node: from here on this node holds the right node's
+             * entries. Cut them; an internal node keeps the child of the
+             * first cut entry as its END child, as the rewrite would. */
+            BOOLEAN Internal = (Entry->Flags & INDEX_ENTRY_NODE) != 0;
+            ULONG Tail = Offset;
+
+            while (Tail + FIELD_OFFSET(IndexEntry, IndexStream) <= End)
+            {
+                PIndexEntry Cut = reinterpret_cast<PIndexEntry>(Base + Tail);
+
+                if (Cut->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) || (Cut->EntryLength & 7) != 0 ||
+                    Cut->EntryLength > End - Tail || ((Cut->Flags & INDEX_ENTRY_NODE) != 0) != Internal ||
+                    (Internal && Cut->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) + sizeof(ULONGLONG)) ||
+                    (Tail != Offset && !(Cut->Flags & INDEX_ENTRY_END) &&
+                     !(KeyName(Cut, &Name) && KeyAbove(Walk, &Name, High))))
+                {
+                    break;
+                }
+                if (Cut->Flags & INDEX_ENTRY_END)
+                {
+                    Tail = 0;
+                    break;
+                }
+                Tail += Cut->EntryLength;
+            }
+            if (Tail != 0 || Internal != Branch)
+            {
+                Walk->Unwalkable = TRUE;
+                Walk->Problems++;
+                Event(NtfsCheckIndexCorrupt, Walk->Directory, NodeVcn);
+                return;
+            }
+            Walk->Trim[NodeBlock] = TrimFrom;
+            Walk->TrimChild[NodeBlock] = Internal ? *GetSubnodeVCN(Entry) : ~0ULL;
+            if (Internal)
+                LinkChild(Walk, *GetSubnodeVCN(Entry), Previous, High);
+            return;
+        }
         if (!(Entry->Flags & INDEX_ENTRY_END))
         {
             if (!KeyName(Entry, &Name))
             {
                 Walk->Unwalkable = TRUE;
                 return;
-            }
-            if (TrimFrom || (!KeyInRange(Walk, &Name, Low, High) && NodeBlock != MAXULONG &&
-                             Previous != Low && KeyAbove(Walk, &Name, High)))
-            {
-                /* A tail of keys above the range of a leaf that holds keys in
-                 * range too: a split whose parent landed before its rewritten
-                 * left node. The right node has those keys; trim the tail. */
-                if ((Entry->Flags & INDEX_ENTRY_NODE) || !KeyAbove(Walk, &Name, High))
-                {
-                    Walk->Unwalkable = TRUE;
-                    Walk->Problems++;
-                    Event(NtfsCheckIndexCorrupt, Walk->Directory, NodeVcn);
-                    return;
-                }
-                if (!TrimFrom)
-                    TrimFrom = Offset;
-                Offset += Entry->EntryLength;
-                continue;
             }
             if (!KeyInRange(Walk, &Name, Low, High))
             {
@@ -1792,74 +1911,16 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
         }
         if (Entry->Flags & INDEX_ENTRY_NODE)
         {
-            ULONGLONG Vcn;
-            ULONGLONG Bytes;
-            ULONG Block;
-
             Branch = TRUE;
-            if (TrimFrom)
-            {
-                /* Only a leaf is trimmed. */
-                Walk->Unwalkable = TRUE;
-                Walk->Problems++;
-                Event(NtfsCheckIndexCorrupt, Walk->Directory, NodeVcn);
-                return;
-            }
-
             if (Entry->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) + sizeof(ULONGLONG))
             {
                 Walk->Unwalkable = TRUE;
                 return;
             }
-            Vcn = *GetSubnodeVCN(Entry);
-            Bytes = Vcn * Walk->VcnSize;
-            if (Vcn > MAXULONG || (Bytes % Walk->BlockSize) != 0 || Bytes / Walk->BlockSize >= Walk->Blocks)
-            {
-                /* The node lies outside the allocation. */
-                Walk->Unwalkable = TRUE;
-                Walk->Problems++;
-                Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
-            }
-            else
-            {
-                Block = (ULONG)(Bytes / Walk->BlockSize);
-                if (TestBit(Walk->Linked, Block))
-                {
-                    /* Linked twice. */
-                    Walk->Unwalkable = TRUE;
-                    Walk->Problems++;
-                    Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
-                }
-                else
-                {
-                    SetBit(Walk->Linked, Block);
-                    if (TestBit(Walk->Valid, Block))
-                    {
-                        Walk->Stack[Walk->Depth].Block = Block;
-                        Walk->Stack[Walk->Depth].Low = Previous;
-                        Walk->Stack[Walk->Depth].High = (Entry->Flags & INDEX_ENTRY_END) ? High : Entry;
-                        Walk->Depth++;
-                    }
-                    else
-                    {
-                        /* A linked block that is free, or in use but not a
-                         * valid INDX block (that one was reported already). */
-                        Walk->Unwalkable = TRUE;
-                        if (!(Block < Walk->BitmapBits && TestBit(Walk->Bitmap, Block)))
-                        {
-                            Walk->Problems++;
-                            Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
-                        }
-                    }
-                }
-            }
+            LinkChild(Walk, *GetSubnodeVCN(Entry), Previous, (Entry->Flags & INDEX_ENTRY_END) ? High : Entry);
         }
         if (Entry->Flags & INDEX_ENTRY_END)
-        {
-            if (TrimFrom && !Branch)
-                Walk->Trim[NodeBlock] = TrimFrom;
             return;
-        }
         Previous = Entry;
         Offset += Entry->EntryLength;
     }
@@ -1927,8 +1988,9 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             Walk.Trim = new(PagedPool, TAG_NTFS) ULONG[Walk.Blocks + 1];
             if (Walk.Trim)
                 RtlZeroMemory(Walk.Trim, (Walk.Blocks + 1) * sizeof(ULONG));
+            Walk.TrimChild = new(PagedPool, TAG_NTFS) ULONGLONG[Walk.Blocks + 1];
             Walk.CaseSensitive = File->IsCaseSensitiveDirectory();
-            if (!Walk.Valid || !Walk.Linked || !Walk.Stack || !Walk.Trim)
+            if (!Walk.Valid || !Walk.Linked || !Walk.Stack || !Walk.Trim || !Walk.TrimChild)
             {
                 Event(NtfsCheckIndexCorrupt, Directory, 0);
                 delete[] Walk.Valid;
@@ -2071,15 +2133,24 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             Trimmed = FALSE;
             if (Walk.Trim[Block])
             {
-                /* End the leaf before the keys its right sibling holds; they
-                 * are not counted here. */
+                /* End the node before the entries its right sibling holds;
+                 * they are not counted here. An internal node's END keeps
+                 * the child of the first entry cut. */
                 PIndexEntry Tail = reinterpret_cast<PIndexEntry>(
                     reinterpret_cast<PUCHAR>(&Buffer->IndexHeader) + Walk.Trim[Block]);
+                ULONG TailLength = FIELD_OFFSET(IndexEntry, IndexStream);
 
-                RtlZeroMemory(Tail, FIELD_OFFSET(IndexEntry, IndexStream));
-                Tail->EntryLength = FIELD_OFFSET(IndexEntry, IndexStream);
+                if (Walk.TrimChild[Block] != ~0ULL)
+                    TailLength += sizeof(ULONGLONG);
+                RtlZeroMemory(Tail, TailLength);
+                Tail->EntryLength = (UINT16)TailLength;
                 Tail->Flags = INDEX_ENTRY_END;
-                Buffer->IndexHeader.TotalIndexSize = Walk.Trim[Block] + FIELD_OFFSET(IndexEntry, IndexStream);
+                if (Walk.TrimChild[Block] != ~0ULL)
+                {
+                    Tail->Flags |= INDEX_ENTRY_NODE;
+                    *GetSubnodeVCN(Tail) = Walk.TrimChild[Block];
+                }
+                Buffer->IndexHeader.TotalIndexSize = Walk.Trim[Block] + TailLength;
                 Event(NtfsCheckIndexTailTrimmed, Directory, Vcn);
                 Trimmed = TRUE;
             }
@@ -2127,6 +2198,7 @@ Done:
     delete[] Walk.Valid;
     delete[] Walk.Linked;
     delete[] Walk.Trim;
+    delete[] Walk.TrimChild;
     delete[] Walk.Stack;
     delete[] Allocation;
     delete[] Bitmap;
