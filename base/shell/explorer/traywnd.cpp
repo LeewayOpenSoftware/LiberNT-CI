@@ -892,6 +892,7 @@ class CTrayWindow :
     HMONITOR m_PreviousMonitor;
     DWORD    m_DraggingPosition;
     HMONITOR m_DraggingMonitor;
+    BOOL     m_bSecondary;
 
     RECT m_TrayRects[4];
     SIZE m_TraySize;
@@ -935,6 +936,7 @@ public:
         m_PreviousMonitor(NULL),
         m_DraggingPosition(0),
         m_DraggingMonitor(NULL),
+        m_bSecondary(FALSE),
         m_TrayPropertiesOwner(NULL),
         m_RunFileDlgOwner(NULL),
         m_AutoHideState(NULL),
@@ -2410,7 +2412,16 @@ ChangePos:
 
     INT GetDefaultTrayHeight()
     {
-        SIZE StartSize = m_StartButton.GetSize();
+        SIZE StartSize;
+        if (m_bSecondary)
+        {
+            StartSize.cx = GetSystemMetrics(SM_CXICON);
+            StartSize.cy = GetSystemMetrics(SM_CYICON);
+        }
+        else
+        {
+            StartSize = m_StartButton.GetSize();
+        }
 
         if (!m_Theme)
         {
@@ -2470,7 +2481,10 @@ ChangePos:
 
         m_Position = g_TaskbarSettings.sr.Position;
         rcScreen = g_TaskbarSettings.sr.Rect;
-        GetScreenRectFromRect(&rcScreen, MONITOR_DEFAULTTONEAREST);
+        if (m_bSecondary && m_Monitor != NULL)
+            GetScreenRect(m_Monitor, &rcScreen);
+        else
+            GetScreenRectFromRect(&rcScreen, MONITOR_DEFAULTTONEAREST);
 
         if (!g_TaskbarSettings.sr.Size.cx || !g_TaskbarSettings.sr.Size.cy)
         {
@@ -2551,7 +2565,9 @@ ChangePos:
         BOOL Horizontal;
         HDWP dwp;
 
-        m_StartButton.UpdateSize();
+        if (!m_bSecondary)
+            m_StartButton.UpdateSize();
+
         if (prcClient != NULL)
         {
             rcClient = *prcClient;
@@ -2576,53 +2592,61 @@ ChangePos:
             return;
         }
 
-        /* Limit the Start button width to the client width, if necessary */
-        StartSize = m_StartButton.GetSize();
-        if (StartSize.cx > rcClient.right)
-            StartSize.cx = rcClient.right;
-
-        HWND hwndTaskToolbar = ::GetWindow(m_TaskSwitch, GW_CHILD);
-        if (hwndTaskToolbar)
+        if (m_bSecondary)
         {
-            DWORD size = SendMessageW(hwndTaskToolbar, TB_GETBUTTONSIZE, 0, 0);
-
-            /* Themed button covers Edge area as well */
-            StartSize.cy = HIWORD(size) + (m_Theme ? GetSystemMetrics(SM_CYEDGE) : 0);
+            StartSize.cx = 0;
+            StartSize.cy = 0;
         }
-
-        if (m_StartButton.IsModernTaskbar() && Horizontal)
+        else
         {
-            StartSize.cy = rcClient.bottom;
-            StartSize.cx = MulDiv(StartSize.cy, 6, 5);
-        }
+            /* Limit the Start button width to the client width, if necessary */
+            StartSize = m_StartButton.GetSize();
+            if (StartSize.cx > rcClient.right)
+                StartSize.cx = rcClient.right;
 
-        if (!Horizontal)
-        {
-            /* On a vertical taskbar the task toolbar can still be empty (or
-               not yet laid out) when the tray is restored at logon, which
-               made the Start button zero-sized and the rebar start at y=0
-               on top of it. Never go below the button's own size. */
-            SIZE StartOwn = m_StartButton.GetSize();
-            if (StartSize.cy < StartOwn.cy)
-                StartSize.cy = StartOwn.cy;
-            if (StartSize.cx < StartOwn.cx && StartOwn.cx <= rcClient.right)
-                StartSize.cx = StartOwn.cx;
-        }
-
-        if (m_StartButton.m_hWnd != NULL)
-        {
-            /* Resize and reposition the button */
-            dwp = m_StartButton.DeferWindowPos(dwp,
-                                               NULL,
-                                               0,
-                                               0,
-                                               StartSize.cx,
-                                               StartSize.cy,
-                                               SWP_NOZORDER | SWP_NOACTIVATE);
-            if (dwp == NULL)
+            HWND hwndTaskToolbar = ::GetWindow(m_TaskSwitch, GW_CHILD);
+            if (hwndTaskToolbar)
             {
-                ERR("DeferWindowPos for start button failed. lastErr=%d\n", GetLastError());
-                return;
+                DWORD size = SendMessageW(hwndTaskToolbar, TB_GETBUTTONSIZE, 0, 0);
+
+                /* Themed button covers Edge area as well */
+                StartSize.cy = HIWORD(size) + (m_Theme ? GetSystemMetrics(SM_CYEDGE) : 0);
+            }
+
+            if (m_StartButton.IsModernTaskbar() && Horizontal)
+            {
+                StartSize.cy = rcClient.bottom;
+                StartSize.cx = MulDiv(StartSize.cy, 6, 5);
+            }
+
+            if (!Horizontal)
+            {
+                /* On a vertical taskbar the task toolbar can still be empty (or
+                   not yet laid out) when the tray is restored at logon, which
+                   made the Start button zero-sized and the rebar start at y=0
+                   on top of it. Never go below the button's own size. */
+                SIZE StartOwn = m_StartButton.GetSize();
+                if (StartSize.cy < StartOwn.cy)
+                    StartSize.cy = StartOwn.cy;
+                if (StartSize.cx < StartOwn.cx && StartOwn.cx <= rcClient.right)
+                    StartSize.cx = StartOwn.cx;
+            }
+
+            if (m_StartButton.m_hWnd != NULL)
+            {
+                /* Resize and reposition the button */
+                dwp = m_StartButton.DeferWindowPos(dwp,
+                                                   NULL,
+                                                   0,
+                                                   0,
+                                                   StartSize.cx,
+                                                   StartSize.cy,
+                                                   SWP_NOZORDER | SWP_NOACTIVATE);
+                if (dwp == NULL)
+                {
+                    ERR("DeferWindowPos for start button failed. lastErr=%d\n", GetLastError());
+                    return;
+                }
             }
         }
 
@@ -2638,11 +2662,18 @@ ChangePos:
             TraySize.cy = 0;
         }
 
-        if (m_TrayNotify != NULL &&
-            SendMessage(m_TrayNotify,
-                        TNWM_GETMINIMUMSIZE,
-                        (WPARAM)Horizontal,
-                        (LPARAM)&TraySize))
+        if (m_bSecondary)
+        {
+            if (Horizontal)
+                ptTrayNotify.x = rcClient.right;
+            else
+                ptTrayNotify.y = rcClient.bottom;
+        }
+        else if (m_TrayNotify != NULL &&
+                 SendMessage(m_TrayNotify,
+                             TNWM_GETMINIMUMSIZE,
+                             (WPARAM)Horizontal,
+                             (LPARAM)&TraySize))
         {
             /* Move the tray notification window to the desired location */
             if (Horizontal)
@@ -3269,25 +3300,28 @@ ChangePos:
 
         SetWindowTheme(m_hWnd, L"TaskBar", NULL);
 
-        /* Create the Start button */
-        m_StartButton.Create(m_hWnd);
-
         /* Load the saved tray window settings */
         RegLoadSettings();
 
+        if (!m_bSecondary)
+        {
+            /* Create the Start button */
+            m_StartButton.Create(m_hWnd);
+
 #if 0
-        /* Create and initialize the start menu */
-        HBITMAP hbmBanner = LoadBitmapW(hExplorerInstance, MAKEINTRESOURCEW(IDB_STARTMENU));
-        m_StartMenuPopup = CreateStartMenu(this, &m_StartMenuBand, hbmBanner,
-                                           g_TaskbarSettings.sr.SmSmallIcons);
+            /* Create and initialize the start menu */
+            HBITMAP hbmBanner = LoadBitmapW(hExplorerInstance, MAKEINTRESOURCEW(IDB_STARTMENU));
+            m_StartMenuPopup = CreateStartMenu(this, &m_StartMenuBand, hbmBanner,
+                                               g_TaskbarSettings.sr.SmSmallIcons);
 #else
-        StartMenu2_Create(this, m_hWnd);
+            StartMenu2_Create(this, m_hWnd);
 #endif
-        TrayVolume_StartWatch();
-        TrayBrightness_StartWatch();
+            TrayVolume_StartWatch();
+            TrayBrightness_StartWatch();
+        }
 
         /* Create the task band */
-        hRet = CTaskBand_CreateInstance(this, m_StartButton.m_hWnd, IID_PPV_ARG(IDeskBand, &m_TaskBand));
+        hRet = CTaskBand_CreateInstance(this, m_bSecondary ? NULL : m_StartButton.m_hWnd, IID_PPV_ARG(IDeskBand, &m_TaskBand));
         if (FAILED_UNEXPECTEDLY(hRet))
             return FALSE;
 
@@ -3296,10 +3330,13 @@ ChangePos:
         if (FAILED_UNEXPECTEDLY(hRet))
             return FALSE;
 
-        /* Create the tray notification window */
-        hRet = CTrayNotifyWnd_CreateInstance(m_hWnd, IID_PPV_ARG(IUnknown, &m_TrayNotifyInstance));
-        if (FAILED_UNEXPECTEDLY(hRet))
-            return FALSE;
+        if (!m_bSecondary)
+        {
+            /* Create the tray notification window */
+            hRet = CTrayNotifyWnd_CreateInstance(m_hWnd, IID_PPV_ARG(IUnknown, &m_TrayNotifyInstance));
+            if (FAILED_UNEXPECTEDLY(hRet))
+                return FALSE;
+        }
 
         /* Get the hwnd of the rebar */
         hRet = IUnknown_GetWindow(m_TrayBandSite, &m_Rebar);
@@ -3311,22 +3348,26 @@ ChangePos:
         if (FAILED_UNEXPECTEDLY(hRet))
             return FALSE;
 
-        /* Get the hwnd of the tray notification window */
-        hRet = IUnknown_GetWindow(m_TrayNotifyInstance, &m_TrayNotify);
-        if (FAILED_UNEXPECTEDLY(hRet))
-            return FALSE;
+        if (!m_bSecondary)
+        {
+            /* Get the hwnd of the tray notification window */
+            hRet = IUnknown_GetWindow(m_TrayNotifyInstance, &m_TrayNotify);
+            if (FAILED_UNEXPECTEDLY(hRet))
+                return FALSE;
 
-        ::SendMessage(m_TrayNotify, TNWM_GETSHOWDESKTOPBUTTON, (WPARAM)&m_pShowDesktopButton, 0);
-        if (!m_pShowDesktopButton)
-            return FALSE;
+            ::SendMessage(m_TrayNotify, TNWM_GETSHOWDESKTOPBUTTON, (WPARAM)&m_pShowDesktopButton, 0);
+            if (!m_pShowDesktopButton)
+                return FALSE;
+        }
 
         SetWindowTheme(m_Rebar, L"TaskBar", NULL);
 
         UpdateFonts();
 
-        InitShellServices(&m_ShellServices);
+        if (!m_bSecondary)
+            InitShellServices(&m_ShellServices);
 
-        if (IsAutoHideState())
+        if (!m_bSecondary && IsAutoHideState())
         {
             m_AutoHideState = AUTOHIDE_HIDING;
             SetTimer(TIMER_ID_AUTOHIDE, AUTOHIDE_DELAY_HIDE, NULL);
@@ -3335,36 +3376,39 @@ ChangePos:
         /* Set the initial lock state in the band site */
         m_TrayBandSite->Lock(g_TaskbarSettings.bLock);
 
-        static const UINT winkeys[] =
+        if (!m_bSecondary)
         {
-            MAKELONG(IDHK_RUN,            MAKEWORD('R', MOD_WIN)),
-            MAKELONG(IDHK_MINIMIZE_ALL,   MAKEWORD('M', MOD_WIN)),
-            MAKELONG(IDHK_RESTORE_ALL,    MAKEWORD('M', MOD_WIN|MOD_SHIFT)),
-            MAKELONG(IDHK_HELP,           MAKEWORD(VK_F1, MOD_WIN)),
-            MAKELONG(IDHK_EXPLORE,        MAKEWORD('E', MOD_WIN)),
-            MAKELONG(IDHK_FIND,           MAKEWORD('F', MOD_WIN)),
-            MAKELONG(IDHK_FIND_COMPUTER,  MAKEWORD('F', MOD_WIN|MOD_CONTROL)),
-            MAKELONG(IDHK_NEXT_TASK,      MAKEWORD(VK_TAB, MOD_WIN)),
-            MAKELONG(IDHK_PREV_TASK,      MAKEWORD(VK_TAB, MOD_WIN|MOD_SHIFT)),
-            MAKELONG(IDHK_SYS_PROPERTIES, MAKEWORD(VK_PAUSE, MOD_WIN)),
-            MAKELONG(IDHK_DESKTOP,        MAKEWORD('D', MOD_WIN)),
-            MAKELONG(IDHK_PAGER,          MAKEWORD('B', MOD_WIN)),
-            MAKELONG(IDHK_QUICK_SETTINGS, MAKEWORD('A', MOD_WIN)),
-            MAKELONG(IDHK_SETTINGS,       MAKEWORD('I', MOD_WIN)),
-            MAKELONG(IDHK_ACCESSIBILITY,  MAKEWORD('U', MOD_WIN)),
-            MAKELONG(IDHK_SCREENSHOT,     MAKEWORD(VK_SNAPSHOT, MOD_WIN)),
-        };
-        if (!SHRestricted(REST_NOWINKEYS))
-        {
-            for (UINT i = 0; i < _countof(winkeys); ++i)
+            static const UINT winkeys[] =
             {
-                UINT mod = HIBYTE(HIWORD(winkeys[i])), key = LOBYTE(HIWORD(winkeys[i]));
-                RegisterHotKey(m_hWnd, LOWORD(winkeys[i]), mod, key);
-            }
-            for (UINT i = 0; i < _countof(g_TaskKeyMods); ++i)
+                MAKELONG(IDHK_RUN,            MAKEWORD('R', MOD_WIN)),
+                MAKELONG(IDHK_MINIMIZE_ALL,   MAKEWORD('M', MOD_WIN)),
+                MAKELONG(IDHK_RESTORE_ALL,    MAKEWORD('M', MOD_WIN|MOD_SHIFT)),
+                MAKELONG(IDHK_HELP,           MAKEWORD(VK_F1, MOD_WIN)),
+                MAKELONG(IDHK_EXPLORE,        MAKEWORD('E', MOD_WIN)),
+                MAKELONG(IDHK_FIND,           MAKEWORD('F', MOD_WIN)),
+                MAKELONG(IDHK_FIND_COMPUTER,  MAKEWORD('F', MOD_WIN|MOD_CONTROL)),
+                MAKELONG(IDHK_NEXT_TASK,      MAKEWORD(VK_TAB, MOD_WIN)),
+                MAKELONG(IDHK_PREV_TASK,      MAKEWORD(VK_TAB, MOD_WIN|MOD_SHIFT)),
+                MAKELONG(IDHK_SYS_PROPERTIES, MAKEWORD(VK_PAUSE, MOD_WIN)),
+                MAKELONG(IDHK_DESKTOP,        MAKEWORD('D', MOD_WIN)),
+                MAKELONG(IDHK_PAGER,          MAKEWORD('B', MOD_WIN)),
+                MAKELONG(IDHK_QUICK_SETTINGS, MAKEWORD('A', MOD_WIN)),
+                MAKELONG(IDHK_SETTINGS,       MAKEWORD('I', MOD_WIN)),
+                MAKELONG(IDHK_ACCESSIBILITY,  MAKEWORD('U', MOD_WIN)),
+                MAKELONG(IDHK_SCREENSHOT,     MAKEWORD(VK_SNAPSHOT, MOD_WIN)),
+            };
+            if (!SHRestricted(REST_NOWINKEYS))
             {
-                for (UINT key = '0'; key <= '9'; ++key)
-                    RegisterHotKey(m_hWnd, IDHK_TASKKEY_FIRST + i * 10 + (key - '0'), g_TaskKeyMods[i], key);
+                for (UINT i = 0; i < _countof(winkeys); ++i)
+                {
+                    UINT mod = HIBYTE(HIWORD(winkeys[i])), key = LOBYTE(HIWORD(winkeys[i]));
+                    RegisterHotKey(m_hWnd, LOWORD(winkeys[i]), mod, key);
+                }
+                for (UINT i = 0; i < _countof(g_TaskKeyMods); ++i)
+                {
+                    for (UINT key = '0'; key <= '9'; ++key)
+                        RegisterHotKey(m_hWnd, IDHK_TASKKEY_FIRST + i * 10 + (key - '0'), g_TaskKeyMods[i], key);
+                }
             }
         }
 
@@ -3532,6 +3576,9 @@ ChangePos:
 
         /* Move the tray window to the right position and resize it if necessary */
         CheckTrayWndPosition();
+
+        if (!m_bSecondary)
+            TrayManager_OnDisplayChange();
 
         return TRUE;
     }
@@ -4770,6 +4817,16 @@ protected:
         HWND hwndInsertAfter = (bAlwaysOnTop ? HWND_TOPMOST : HWND_NOTOPMOST);
         SetWindowPos(hwndInsertAfter, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
     }
+
+    void SetSecondary(_In_ BOOL bSecondary)
+    {
+        m_bSecondary = bSecondary;
+    }
+
+    void SetMonitor(_In_ HMONITOR hMonitor)
+    {
+        m_Monitor = hMonitor;
+    }
 };
 
 class CTrayWindowCtxMenu :
@@ -4921,6 +4978,21 @@ HRESULT CreateTrayWindow(ITrayWindow ** ppTray)
 
     Tray->_Init();
     Tray->Open();
+
+    *ppTray = (ITrayWindow *) Tray;
+
+    return S_OK;
+}
+
+HRESULT CreateSecondaryTrayWindow(HMONITOR hMonitor, ITrayWindow ** ppTray)
+{
+    CComPtr<CTrayWindow> Tray = new CComObject<CTrayWindow>();
+    if (Tray == NULL)
+        return E_OUTOFMEMORY;
+
+    Tray->SetSecondary(TRUE);
+    Tray->SetMonitor(hMonitor);
+    Tray->_Init();
 
     *ppTray = (ITrayWindow *) Tray;
 

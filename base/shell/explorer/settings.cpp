@@ -34,6 +34,9 @@ BOOL TaskbarSettings::Save()
     sr.cbSize = sizeof(sr);
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarSmallIcons", REG_DWORD, &bSmallIcons, sizeof(bSmallIcons));
     SHSetValueW(hkExplorer, L"Advanced", L"TaskbarSd", REG_DWORD, &bShowDesktopButton, sizeof(bShowDesktopButton));
+    SHSetValueW(hkExplorer, L"Advanced", L"MMTaskbarEnabled", REG_DWORD, &bMMTaskbarEnabled, sizeof(bMMTaskbarEnabled));
+    DWORD dwMMMode = uMMTaskbarMode;
+    SHSetValueW(hkExplorer, L"Advanced", L"MMTaskbarMode", REG_DWORD, &dwMMMode, sizeof(dwMMMode));
     SHSetValueW(hkExplorer, L"StuckRects2", L"Settings", REG_BINARY, &sr, sizeof(sr));
 
     /* TODO: AutoHide writes something to HKEY_CURRENT_USER\Software\Microsoft\Internet Explorer\Desktop\Components\0 figure out what and why */
@@ -86,6 +89,13 @@ BOOL TaskbarSettings::Load()
     bShowDesktopButton = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;
 
     BOOL bRepaired = FALSE;
+    cbSize = sizeof(dwValue);
+    dwRet = SHGetValueW(hkExplorer, L"Advanced", L"MMTaskbarEnabled", NULL, &dwValue, &cbSize);
+    bMMTaskbarEnabled = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : FALSE;
+
+    cbSize = sizeof(dwValue);
+    dwRet = SHGetValueW(hkExplorer, L"Advanced", L"MMTaskbarMode", NULL, &dwValue, &cbSize);
+    uMMTaskbarMode = (dwRet == ERROR_SUCCESS && dwValue <= 2) ? dwValue : 0;
 
     cbSize = sizeof(sr);
     dwRet = SHGetValueW(hkExplorer, L"StuckRects2", L"Settings", NULL, &sr, &cbSize);
