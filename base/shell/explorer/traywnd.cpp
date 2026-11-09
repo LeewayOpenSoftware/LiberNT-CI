@@ -458,6 +458,16 @@ public:
         if (uMsg == WM_KEYUP && wParam != VK_SPACE)
             return 0;
 
+        {
+            RECT rcBtn;
+            DWORD dwPos = GetMessagePos();
+
+            GetWindowRect(&rcBtn);
+            ERR("[T1] Start button press: msg 0x%x screen (%d,%d) button (%d,%d)-(%d,%d)\n", uMsg,
+                (int)(short)LOWORD(dwPos), (int)(short)HIWORD(dwPos),
+                rcBtn.left, rcBtn.top, rcBtn.right, rcBtn.bottom);
+        }
+
         if (!m_bMaterial)
         {
             GetParent().PostMessage(TWM_OPENSTARTMENU);
@@ -2026,6 +2036,8 @@ GetPrimaryScreenRect:
             m_Position = m_DraggingPosition;
             g_TaskbarSettings.sr.Position = m_Position;
             g_TaskbarSettings.Save();
+            ERR("[T2] Docked: edge %lu saved to StuckRects2, rect (%d,%d)-(%d,%d)\n", (ULONG)m_Position,
+                rcTray.left, rcTray.top, rcTray.right, rcTray.bottom);
             IsDragging = FALSE;
 
             m_TrayRects[m_Position] = rcTray;
@@ -2204,6 +2216,18 @@ ChangePos:
         ResizeWorkArea();
         ApplyClipping(TRUE);
         RedrawWindow(NULL, NULL, RDW_ERASE | RDW_FRAME | RDW_INTERNALPAINT | RDW_INVALIDATE | RDW_ALLCHILDREN);
+
+        {
+            RECT rcTray, rcStart, rcScreen;
+
+            GetWindowRect(&rcTray);
+            m_StartButton.GetWindowRect(&rcStart);
+            GetScreenRect(m_Monitor, &rcScreen);
+            ERR("[T1] Layout: tray (%d,%d)-(%d,%d) start (%d,%d)-(%d,%d) monitor (%d,%d)-(%d,%d) pos %lu\n",
+                rcTray.left, rcTray.top, rcTray.right, rcTray.bottom,
+                rcStart.left, rcStart.top, rcStart.right, rcStart.bottom,
+                rcScreen.left, rcScreen.top, rcScreen.right, rcScreen.bottom, (ULONG)m_Position);
+        }
     }
 
     INT GetDefaultTrayHeight()
@@ -2885,6 +2909,8 @@ ChangePos:
     {
         BOOL bPrevLock = g_TaskbarSettings.bLock;
 
+        ERR("[T2] Lock(%d), was %d\n", (int)bLock, (int)bPrevLock);
+
         if (g_TaskbarSettings.bLock != bLock)
         {
             g_TaskbarSettings.bLock = bLock;
@@ -3367,8 +3393,13 @@ ChangePos:
         wants to resize the tray window. */
         if (!g_TaskbarSettings.bLock && GetCursorPos(&ptCursor))
         {
+            DWORD dwOldDrag = m_DraggingPosition;
+
             IsDragging = TRUE;
             m_DraggingPosition = GetDraggingRectFromPt(ptCursor, pRect, &m_DraggingMonitor);
+            if (dwOldDrag != m_DraggingPosition)
+                ERR("[T2] Moving: cursor (%d,%d) -> edge %lu rect (%d,%d)-(%d,%d)\n", ptCursor.x, ptCursor.y,
+                    (ULONG)m_DraggingPosition, pRect->left, pRect->top, pRect->right, pRect->bottom);
         }
         else
         {
@@ -3428,6 +3459,7 @@ ChangePos:
     {
         InSizeMove = TRUE;
         IsDragging = FALSE;
+        ERR("[T2] EnterSizeMove lock %d pos %lu\n", (int)g_TaskbarSettings.bLock, (ULONG)m_Position);
         if (!g_TaskbarSettings.bLock)
         {
             /* Remove the clipping on multi monitor systems while dragging around */
@@ -3439,6 +3471,7 @@ ChangePos:
 
     LRESULT OnExitSizeMove(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        ERR("[T2] ExitSizeMove lock %d pos %lu\n", (int)g_TaskbarSettings.bLock, (ULONG)m_Position);
         InSizeMove = FALSE;
         if (!g_TaskbarSettings.bLock)
         {
@@ -3590,6 +3623,16 @@ ChangePos:
         RECT rcStartBtn;
         m_StartButton.GetWindowRect(&rcStartBtn);
         GetWindowInfo(m_hWnd, &wi);
+
+        {
+            RECT rcTray;
+
+            GetWindowRect(&rcTray);
+            ERR("[T1] Tray non-client press: hit %d screen (%d,%d) tray (%d,%d)-(%d,%d) start (%d,%d)-(%d,%d) pos %lu lock %d\n",
+                (int)wParam, pt.x, pt.y, rcTray.left, rcTray.top, rcTray.right, rcTray.bottom,
+                rcStartBtn.left, rcStartBtn.top, rcStartBtn.right, rcStartBtn.bottom,
+                (ULONG)m_Position, (int)g_TaskbarSettings.bLock);
+        }
 
         if (IsPointWithinStartButton(&pt, &rcStartBtn, &wi))
         {
@@ -3849,6 +3892,8 @@ HandleTrayContextMenu:
 
     LRESULT OnSysCommand(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
     {
+        ERR("[T2] WM_SYSCOMMAND 0x%lx (cmd 0x%lx, hit %d) lock %d\n", (ULONG)wParam, (ULONG)(wParam & 0xFFF0), (int)(wParam & 0xF),
+            (int)g_TaskbarSettings.bLock);
         if (wParam == SC_CLOSE)
         {
             return DoExitWindows();
