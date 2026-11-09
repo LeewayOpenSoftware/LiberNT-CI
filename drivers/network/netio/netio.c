@@ -173,6 +173,9 @@ typedef struct _NETIO_CONTEXT
     PKTHREAD CancelThread;
     BOOLEAN Completed;
     PSOCKADDR UserRemoteAddress;
+    PCHAR SendData;
+    ULONG SendLength;
+    ULONG SendDone;
 } NETIO_CONTEXT, *PNETIO_CONTEXT;
 
 static void
@@ -560,18 +563,41 @@ NetioIssued(_In_ PNETIO_CONTEXT Context, _In_ NTSTATUS Status)
     return STATUS_PENDING;
 }
 
+static BOOLEAN
+NetioContinueSend(_In_ PNETIO_CONTEXT Context);
+
 static NTSTATUS NTAPI
 NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID ContextParam)
 {
     PNETIO_CONTEXT Context = (PNETIO_CONTEXT)ContextParam;
     PIRP UserIrp = Context->UserIrp;
+    NTSTATUS Status;
+    ULONG_PTR Information;
 
     FUNCTION_TRACE;
 
     NetioDisarmCancel(Context);
 
-    UserIrp->IoStatus.Status = Irp->IoStatus.Status;
-    UserIrp->IoStatus.Information = Irp->IoStatus.Information;
+    Status = Irp->IoStatus.Status;
+    Information = Irp->IoStatus.Information;
+    if (Context->SendData != NULL)
+    {
+        if (NT_SUCCESS(Status) && Information != 0)
+        {
+            Context->SendDone += (ULONG)Information;
+            if (Context->SendDone < Context->SendLength)
+            {
+                if (NetioContinueSend(Context))
+                {
+                    return STATUS_SUCCESS;
+                }
+                Status = STATUS_CANCELLED;
+            }
+        }
+        Information = Context->SendDone;
+    }
+    UserIrp->IoStatus.Status = Status;
+    UserIrp->IoStatus.Information = Information;
 
     if (Context->PeerAddrRet != NULL && NT_SUCCESS(Irp->IoStatus.Status))
     {
@@ -593,6 +619,32 @@ NetioComplete(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp, _In_ PVOID Contex
     NetioContextRelease(Context);
 
     return STATUS_SUCCESS;
+}
+
+static BOOLEAN
+NetioContinueSend(_In_ PNETIO_CONTEXT Context)
+{
+    PIRP UserIrp = Context->UserIrp;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    IoAcquireCancelSpinLock(&OldIrql);
+    if (UserIrp->Cancel)
+    {
+        IoReleaseCancelSpinLock(OldIrql);
+        return FALSE;
+    }
+    Context->Completed = FALSE;
+    Context->TdiIrp = NULL;
+    IoSetCancelRoutine(UserIrp, NetioCancel);
+    IoReleaseCancelSpinLock(OldIrql);
+
+    InterlockedIncrement(&Context->RefCount);
+    Status = TdiSend(&Context->TdiIrp, Context->socket->ConnectionFile, 0,
+                     Context->SendData + Context->SendDone,
+                     Context->SendLength - Context->SendDone, NetioComplete, Context);
+    NetioIssued(Context, Status);
+    return TRUE;
 }
 
 typedef struct _LISTEN_CONTEXT
@@ -1667,8 +1719,10 @@ WskStreamIo(
 
     if (Direction == DIR_SEND)
     {
-        status = TdiSend(&NetioContext->TdiIrp, Socket->ConnectionFile, 0, ((char *)BufferData) + Buffer->Offset,
-                    Buffer->Length, NetioComplete, NetioContext);
+        NetioContext->SendData = ((PCHAR)BufferData) + Buffer->Offset;
+        NetioContext->SendLength = Buffer->Length;
+        status = TdiSend(&NetioContext->TdiIrp, Socket->ConnectionFile, 0, NetioContext->SendData,
+                    NetioContext->SendLength, NetioComplete, NetioContext);
     }
     else
     {
