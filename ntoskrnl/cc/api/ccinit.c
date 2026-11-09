@@ -51,6 +51,8 @@ static KSPIN_LOCK CcNtDeferredLock;
 static LIST_ENTRY CcNtLazyWaiters;
 static KSPIN_LOCK CcNtLazyWaitLock;
 static BOOLEAN CcNtReady;
+/* Set at shutdown: the lazy writer no longer starts passes on its own timer. */
+static volatile LONG CcNtLazyTimerStopped;
 
 NTSTATUS
 CcNtFlushMap(
@@ -314,10 +316,21 @@ CcNtLazyWriter(
     {
         LIST_ENTRY Waiters;
         ULONG Target;
+        NTSTATUS Status;
 
-        KeWaitForSingleObject(&CcNtLazyWriterEvent, Executive, KernelMode, FALSE, &Period);
+        Status = KeWaitForSingleObject(&CcNtLazyWriterEvent, Executive, KernelMode, FALSE, &Period);
 
         CcNtTakeLazyWaiters(&Waiters);
+        /*
+         * After shutdown has begun, a pass runs only when someone asks for one
+         * (CcWaitForCurrentLazyWriterActivity, a deferred or throttled write).
+         * A timer pass could otherwise start between the shutdown's last lazy
+         * wait and the file systems' shutdown, and its writes and map closes
+         * would land on volumes already marked clean.
+         */
+        if (Status == STATUS_TIMEOUT && CcNtLazyTimerStopped && IsListEmpty(&Waiters))
+            continue;
+
         Target = CcDirtyLazyTarget(&CcNtCache);
         if (Target != 0)
             CcRosFlushDirtyPages(Target, NULL, TRUE, TRUE);
@@ -326,6 +339,13 @@ CcNtLazyWriter(
         CcNtProcessDeferredWrites();
         CcNtReleaseLazyWaiters(&Waiters);
     }
+}
+
+VOID
+NTAPI
+CcStopLazyWriterTimer(VOID)
+{
+    InterlockedExchange(&CcNtLazyTimerStopped, 1);
 }
 
 NTSTATUS
