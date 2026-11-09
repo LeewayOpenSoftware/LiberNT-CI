@@ -183,7 +183,8 @@ private:
             Kind != NtfsCheckNameRelinked && Kind != NtfsCheckCrossLinkResolved &&
             Kind != NtfsCheckLostAndFound && Kind != NtfsCheckFileRecovered &&
             Kind != NtfsCheckAttributeListFixed && Kind != NtfsCheckDataAttributeInserted &&
-            Kind != NtfsCheckLostNameRemoved && Kind != NtfsCheckRepairsBlocked)
+            Kind != NtfsCheckLostNameRemoved && Kind != NtfsCheckRepairsBlocked &&
+            Kind != NtfsCheckNameRelinkFailed && Kind != NtfsCheckNameFoundUncounted)
         {
             Out->Errors++;
             Out->FoundErrors++;
@@ -786,8 +787,11 @@ VolumeCheck::RelinkOrphans()
                 Failed = TRUE;
                 continue;
             }
-            if (!NT_SUCCESS(V->MFT->GetFileRecord((ULONG)Parent, &ParentFile)))
+            NTSTATUS Status = V->MFT->GetFileRecord((ULONG)Parent, &ParentFile);
+
+            if (!NT_SUCCESS(Status))
             {
+                Event(NtfsCheckNameRelinkFailed, Number, ((ULONGLONG)(ULONG)Status << 32) | (ULONG)Parent);
                 Failed = TRUE;
                 OtherFailures = TRUE;
                 continue;
@@ -802,6 +806,7 @@ VolumeCheck::RelinkOrphans()
                 delete Found;
                 if (Same)
                 {
+                    Event(NtfsCheckNameFoundUncounted, Number, Parent);
                     delete ParentFile;
                     continue;
                 }
@@ -810,15 +815,17 @@ VolumeCheck::RelinkOrphans()
             {
                 Directory ParentIndex(V);
 
-                if (NT_SUCCESS(ParentIndex.AddFileToDirectory(ParentFile,
-                                                              Number | ((ULONGLONG)Sequence[Number] << 48),
-                                                              Name)))
+                Status = ParentIndex.AddFileToDirectory(ParentFile,
+                                                        Number | ((ULONGLONG)Sequence[Number] << 48),
+                                                        Name);
+                if (NT_SUCCESS(Status))
                 {
                     Relinked++;
                     Event(NtfsCheckNameRelinked, Number, Parent);
                 }
                 else
                 {
+                    Event(NtfsCheckNameRelinkFailed, Number, ((ULONGLONG)(ULONG)Status << 32) | (ULONG)Parent);
                     Failed = TRUE;
                     OtherFailures = TRUE;
                 }

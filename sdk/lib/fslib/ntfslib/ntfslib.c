@@ -433,7 +433,13 @@ typedef struct _NTFS_CHECK_CONTEXT
     PFMIFSCALLBACK Callback;
     BOOLEAN Verbose;
     ULONG Reported;
+    ULONG RelinkDiagnosed;
 } NTFS_CHECK_CONTEXT, *PNTFS_CHECK_CONTEXT;
+
+/* Relink diagnostics come after every per-problem line, so the cap of 32
+ * would always hide them: they get a small cap of their own and go to the
+ * debug log as well. */
+#define NTFS_RELINK_DIAGNOSTICS 16
 
 static
 VOID
@@ -444,6 +450,26 @@ NtfsCheckReport(
     IN UINT64 Argument2)
 {
     PNTFS_CHECK_CONTEXT Check = (PNTFS_CHECK_CONTEXT)Context;
+
+    if (Event == NtfsCheckNameRelinkFailed || Event == NtfsCheckNameFoundUncounted)
+    {
+        if (Check->RelinkDiagnosed > NTFS_RELINK_DIAGNOSTICS)
+            return;
+        if (Check->RelinkDiagnosed++ == NTFS_RELINK_DIAGNOSTICS)
+        {
+            NtfsVerdictReport(Check->Callback, "Further relink diagnostics are not shown.\n");
+            return;
+        }
+        if (Event == NtfsCheckNameRelinkFailed)
+            NtfsVerdictReport(Check->Callback,
+                              "A name of file %I64X could not be added to the index of directory file %I64X (status 0x%08lx).\n",
+                              Argument1, Argument2 & 0xFFFFFFFFULL, (ULONG)(Argument2 >> 32));
+        else
+            NtfsVerdictReport(Check->Callback,
+                              "A name of file %I64X is found in directory file %I64X by lookup, but the index walk did not count it.\n",
+                              Argument1, Argument2);
+        return;
+    }
 
     if (Event != NtfsCheckLostClusters && Event != NtfsCheckRepairsBlocked &&
         !Check->Verbose && Check->Reported >= 32)

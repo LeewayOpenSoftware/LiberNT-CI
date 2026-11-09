@@ -1093,7 +1093,16 @@ typedef enum NtfsCheckEvent
     /* Index and cluster-bitmap repairs were skipped. Argument1: structural
      * problems left; Argument2: the first file record still holding one, or
      * ~0 if none can be named. Not counted as a problem. */
-    NtfsCheckRepairsBlocked
+    NtfsCheckRepairsBlocked,
+    /* A name of an orphan could not be added back to its parent index.
+     * Argument1: the file record; Argument2: the NTSTATUS in the high 32 bits
+     * and the parent's file record in the low 32 bits. Diagnostic only; the
+     * orphan stays counted by NtfsCheckNameNotIndexed. */
+    NtfsCheckNameRelinkFailed,
+    /* A name the index walk did not count is found by a lookup in its parent
+     * directory, so it was not added again. Argument1: the file record;
+     * Argument2: the parent's file record. Diagnostic only. */
+    NtfsCheckNameFoundUncounted
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult
