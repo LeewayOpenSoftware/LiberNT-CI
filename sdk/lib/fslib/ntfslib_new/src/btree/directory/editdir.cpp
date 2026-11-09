@@ -804,6 +804,181 @@ WriteIndexNode(
     return Status;
 }
 
+/*
+ * Pointer-after-pointee ordering for the index tree. The kernel environment
+ * holds every write of one block or less back in its cache and commits the
+ * dirty blocks in slot, eviction or range order, so the order the functions
+ * below issue their writes in (child node, bitmap bit, then the parent's
+ * pointer) says nothing about the order the blocks reach the disk. A cut can
+ * then leave a root or a parent node pointing at an INDX block that never
+ * landed, with its $I30 bit set (J36 r149: root -> VCN 5, 21 of 23 blocks
+ * never written, 174 of 200 names unreachable). Each helper resolves the
+ * child node's disk range from the $INDEX_ALLOCATION run list and defers to
+ * Volume::OrderAfter; a node whose range cannot be resolved (sparse, or
+ * crossing a run boundary) is made durable by a full flush, so nothing is
+ * ordered silently.
+ */
+static NTSTATUS
+ResolveIndexNodeRange(
+    _In_ PVolume DiskVolume,
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONGLONG Vcn,
+    _In_ ULONGLONG AllocationUnit,
+    _In_ ULONG RecordSize,
+    _Out_ PULONGLONG DiskOffset,
+    _Out_ PULONG Length)
+{
+    PAttribute IndexAllocationAttribute;
+
+    *DiskOffset = 0;
+    *Length = 0;
+    if (AllocationUnit == 0 ||
+        Vcn > ~(ULONGLONG)0 / AllocationUnit)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+    IndexAllocationAttribute =
+        DirectoryFile->GetAttribute(
+            TypeIndexAllocation,
+            const_cast<PWSTR>(IndexName));
+    if (!IndexAllocationAttribute)
+        return STATUS_NOT_FOUND;
+    return DiskVolume->MFT->GetAttributeRangeDiskOffset(
+        DirectoryFile,
+        IndexAllocationAttribute,
+        Vcn * AllocationUnit,
+        RecordSize,
+        DiskOffset,
+        Length);
+}
+
+/*
+ * Orders the pointer range after each node in Vcns. PointerLength 0 commits
+ * the nodes synchronously (the pointer is unknown, is a block the cache does
+ * not hold yet, or is spread over several blocks).
+ */
+static NTSTATUS
+OrderAfterIndexNodes(
+    _In_ PVolume DiskVolume,
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_reads_(Count) const ULONGLONG* Vcns,
+    _In_ ULONG Count,
+    _In_ ULONGLONG AllocationUnit,
+    _In_ ULONG RecordSize,
+    _In_ ULONGLONG PointerDiskOffset,
+    _In_ ULONG PointerLength)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    for (ULONG Index = 0; Index < Count; Index++)
+    {
+        ULONGLONG NodeDiskOffset;
+        ULONG NodeLength;
+
+        Status = ResolveIndexNodeRange(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            Vcns[Index],
+            AllocationUnit,
+            RecordSize,
+            &NodeDiskOffset,
+            &NodeLength);
+        if (!NT_SUCCESS(Status))
+        {
+            /* Unresolvable: everything held back goes out, nodes included. */
+            return DiskVolume->FlushVolume();
+        }
+        Status = DiskVolume->OrderAfter(
+            PointerDiskOffset,
+            PointerLength,
+            NodeDiskOffset,
+            NodeLength);
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+    return Status;
+}
+
+/* The pointer is a file record (the directory's, carrying $INDEX_ROOT and
+ * $BITMAP, or whichever record owns the root). NULL or an unresolvable
+ * record commits the nodes synchronously. */
+static NTSTATUS
+OrderRecordAfterIndexNodes(
+    _In_ PVolume DiskVolume,
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_reads_(Count) const ULONGLONG* Vcns,
+    _In_ ULONG Count,
+    _In_ ULONGLONG AllocationUnit,
+    _In_ ULONG RecordSize,
+    _In_opt_ PFileRecord PointerRecord)
+{
+    ULONGLONG RecordDiskOffset = 0;
+    ULONG PointerLength = 0;
+
+    if (PointerRecord &&
+        PointerRecord->RecordNumber != MAXULONG &&
+        NT_SUCCESS(DiskVolume->MFT->GetFileRecordDiskOffset(
+            PointerRecord->RecordNumber,
+            &RecordDiskOffset)))
+    {
+        PointerLength = DiskVolume->MFT->FileRecordSize;
+    }
+    return OrderAfterIndexNodes(
+        DiskVolume,
+        DirectoryFile,
+        IndexName,
+        Vcns,
+        Count,
+        AllocationUnit,
+        RecordSize,
+        RecordDiskOffset,
+        PointerLength);
+}
+
+/* The pointer is the index node at NodeVcn (a parent about to be rewritten
+ * with a link to the children in Vcns). */
+static NTSTATUS
+OrderNodeAfterIndexNodes(
+    _In_ PVolume DiskVolume,
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONGLONG NodeVcn,
+    _In_reads_(Count) const ULONGLONG* Vcns,
+    _In_ ULONG Count,
+    _In_ ULONGLONG AllocationUnit,
+    _In_ ULONG RecordSize)
+{
+    ULONGLONG NodeDiskOffset = 0;
+    ULONG NodeLength = 0;
+
+    if (!NT_SUCCESS(ResolveIndexNodeRange(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            NodeVcn,
+            AllocationUnit,
+            RecordSize,
+            &NodeDiskOffset,
+            &NodeLength)))
+    {
+        NodeLength = 0;
+    }
+    return OrderAfterIndexNodes(
+        DiskVolume,
+        DirectoryFile,
+        IndexName,
+        Vcns,
+        Count,
+        AllocationUnit,
+        RecordSize,
+        NodeDiskOffset,
+        NodeLength);
+}
+
 static NTSTATUS
 SetIndexRecordBitmapBit(
     _In_ PFileRecord DirectoryFile,
@@ -1448,6 +1623,51 @@ Directory::PushDownRoot(
             Image);
         if (!NT_SUCCESS(Status))
             goto Done;
+
+        /*
+         * The directory record is about to name this node: the $BITMAP bit
+         * below, then the root's subnode pointer. Order the record after the
+         * node so a cut cannot leave root -> Vcn over a block that never
+         * reached the disk. The root may live in another record than the
+         * bitmap; order that one too.
+         */
+        {
+            PAttribute IndexRootAttribute =
+                DirectoryFile->GetAttribute(
+                    TypeIndexRoot,
+                    const_cast<PWSTR>(IndexName));
+            PFileRecord RootOwner = IndexRootAttribute
+                ? DirectoryFile->GetAttributeOwner(
+                    IndexRootAttribute)
+                : NULL;
+
+            Status = OrderRecordAfterIndexNodes(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                &Vcn,
+                1,
+                AllocationUnit,
+                RecordSize,
+                DirectoryFile);
+            if (NT_SUCCESS(Status) &&
+                RootOwner &&
+                RootOwner != DirectoryFile)
+            {
+                Status = OrderRecordAfterIndexNodes(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    &Vcn,
+                    1,
+                    AllocationUnit,
+                    RecordSize,
+                    RootOwner);
+            }
+            if (!NT_SUCCESS(Status))
+                goto Done;
+        }
+
         Status = SetIndexRecordBitmapBit(
             DirectoryFile,
             IndexName,
@@ -1689,6 +1909,10 @@ Directory::SplitAndPromote(
     ULONG Level = PathDepth;
     BOOLEAN Retarget = FALSE;
     ULONGLONG RetargetVcn = 0;
+    /* The two nodes the previous level wrote (new right node, rewritten left
+     * node); whatever names them next must be ordered after them. */
+    ULONGLONG ChildVcns[2] = { 0, 0 };
+    BOOLEAN HaveChildren = FALSE;
     NTSTATUS Status;
 
     /* One node's entry list (<= RecordSize) plus one pending entry. */
@@ -1757,6 +1981,24 @@ Directory::SplitAndPromote(
             Header->TotalIndexSize =
                 Header->IndexOffset +
                 ListBytes;
+            /*
+             * This node is about to name the two children the previous
+             * level wrote. Order it after them (OrderAfterIndexNodes).
+             */
+            if (HaveChildren)
+            {
+                Status = OrderNodeAfterIndexNodes(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    NodeVcn,
+                    ChildVcns,
+                    2,
+                    AllocationUnit,
+                    RecordSize);
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+            }
             Status = WriteIndexNode(
                 DiskVolume,
                 DirectoryFile,
@@ -1787,6 +2029,29 @@ Directory::SplitAndPromote(
             &NewOrdinal);
         if (!NT_SUCCESS(Status))
             goto Done;
+
+        /*
+         * Both halves of this split will name the children the previous
+         * level wrote, and the right half is a new block the cache does not
+         * hold yet, so no constraint can be placed on it: commit the
+         * children synchronously (PointerLength 0). A split above the leaf
+         * level is rare.
+         */
+        if (HaveChildren)
+        {
+            Status = OrderAfterIndexNodes(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                ChildVcns,
+                2,
+                AllocationUnit,
+                RecordSize,
+                0,
+                0);
+            if (!NT_SUCCESS(Status))
+                goto Done;
+        }
 
         /*
          * Publish the right node first: until the parent link switches,
@@ -1862,6 +2127,11 @@ Directory::SplitAndPromote(
             SideImage);
         if (!NT_SUCCESS(Status))
             goto Done;
+
+        /* The parent written next names these two. */
+        ChildVcns[0] = NewVcn;
+        ChildVcns[1] = NodeVcn;
+        HaveChildren = TRUE;
 
         if (Pending != FirstPending)
             NtfsFreePool(Pending);
@@ -1960,6 +2230,28 @@ Directory::SplitAndPromote(
             &RootValueLength);
         if (!NT_SUCCESS(Status))
             goto Done;
+        /*
+         * The record that owns the root is about to name the two children
+         * the last level wrote. Order it after them.
+         */
+        if (HaveChildren)
+        {
+            Status = OrderRecordAfterIndexNodes(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                ChildVcns,
+                2,
+                AllocationUnit,
+                RecordSize,
+                DirectoryFile->GetAttributeOwner(
+                    IndexRootAttribute));
+            if (!NT_SUCCESS(Status))
+            {
+                delete[] RootValue;
+                goto Done;
+            }
+        }
         Status = ReplaceIndexRootValue(
             DiskVolume,
             DirectoryFile,
@@ -1971,8 +2263,26 @@ Directory::SplitAndPromote(
         {
             /*
              * The root record itself is full: push the composed root
-             * list one level down and re-point the root at it.
+             * list one level down and re-point the root at it. The node
+             * PushDownRoot writes is a new block that will name the
+             * children, and the cache does not hold it yet, so the
+             * children are committed synchronously first.
              */
+            if (HaveChildren)
+            {
+                Status = OrderAfterIndexNodes(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    ChildVcns,
+                    2,
+                    AllocationUnit,
+                    RecordSize,
+                    0,
+                    0);
+                if (!NT_SUCCESS(Status))
+                    goto Done;
+            }
             Status = PushDownRoot(
                 DiskVolume,
                 DirectoryFile,
