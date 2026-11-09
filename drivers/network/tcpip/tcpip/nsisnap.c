@@ -295,7 +295,7 @@ static ULONG IfInfoLinkLocalScope(const UCHAR *Address, ULONG ScopeId)
     return IfInfoIsLinkLocal(Address) ? ScopeId : 0;
 }
 
-static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
+static VOID IfInfoFillAddressRow(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
 {
     BOOLEAN IsV6 = AddrFile->Address.Type == IP_ADDRESS_V6;
 
@@ -313,46 +313,101 @@ static BOOLEAN IfInfoFillEndpoint(PADDRESS_FILE AddrFile, PENDPOINT_ROW Row)
     }
     else
         RtlCopyMemory(Row->LocalAddress, &AddrFile->Address.Address.IPv4Address, 4);
+}
 
+static BOOLEAN IfInfoFillConnectionRow(PADDRESS_FILE AddrFile, PCONNECTION_ENDPOINT Connection, PENDPOINT_ROW Row)
+{
+    BOOLEAN IsV6 = AddrFile->Address.Type == IP_ADDRESS_V6;
+    CHAR Local[sizeof(TA_IP6_ADDRESS)], Remote[sizeof(TA_IP6_ADDRESS)];
+
+    if (!NT_SUCCESS(TCPGetSockAddress(Connection, (PTRANSPORT_ADDRESS)Local, sizeof(Local), FALSE)) ||
+        !NT_SUCCESS(TCPGetSockAddress(Connection, (PTRANSPORT_ADDRESS)Remote, sizeof(Remote), TRUE)) ||
+        !NT_SUCCESS(TCPGetSocketStatus(Connection, &Row->State)))
+        return FALSE;
+    if (IsV6)
+    {
+        if (((PTA_IP6_ADDRESS)Local)->Address[0].AddressType != TDI_ADDRESS_TYPE_IP6)
+            return FALSE;
+        RtlCopyMemory(Row->LocalAddress, ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_addr, 16);
+        Row->LocalPort = ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_port;
+        Row->LocalScopeId = IfInfoLinkLocalScope(Row->LocalAddress, ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_scope_id);
+        RtlCopyMemory(Row->RemoteAddress, ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_addr, 16);
+        Row->RemotePort = ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_port;
+        Row->RemoteScopeId = IfInfoLinkLocalScope(Row->RemoteAddress, ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_scope_id);
+    }
+    else
+    {
+        if (((PTA_IP_ADDRESS)Local)->Address[0].AddressLength != TDI_ADDRESS_LENGTH_IP)
+            return FALSE;
+        RtlCopyMemory(Row->LocalAddress, &((PTA_IP_ADDRESS)Local)->Address[0].Address[0].in_addr, 4);
+        Row->LocalPort = ((PTA_IP_ADDRESS)Local)->Address[0].Address[0].sin_port;
+        RtlCopyMemory(Row->RemoteAddress, &((PTA_IP_ADDRESS)Remote)->Address[0].Address[0].in_addr, 4);
+        Row->RemotePort = ((PTA_IP_ADDRESS)Remote)->Address[0].Address[0].sin_port;
+    }
+    return TRUE;
+}
+
+static VOID IfInfoEmitRow(const ENDPOINT_ROW *Row, PENDPOINT_ROW Rows, ULONG Capacity, PULONG Emitted)
+{
+    if (*Emitted < Capacity)
+        Rows[*Emitted] = *Row;
+    (*Emitted)++;
+}
+
+/* One address file can stand for several TCP endpoints: its listener, and
+ * every connection associated with it, which is how an accepted connection
+ * exists at all (AFD associates it with the listening address). Report each
+ * of them; reporting the listener alone lost every server-side connection. */
+static VOID IfInfoEmitEndpoints(PADDRESS_FILE AddrFile, PENDPOINT_ROW Rows, ULONG Capacity, PULONG Emitted)
+{
+    ENDPOINT_ROW Row;
+    PCONNECTION_ENDPOINT *Connections = NULL, Connection;
+    ULONG Count = 0, i;
+
+    IfInfoFillAddressRow(AddrFile, &Row);
     if (AddrFile->Protocol != IPPROTO_TCP)
-        return TRUE;
-
+    {
+        IfInfoEmitRow(&Row, Rows, Capacity, Emitted);
+        return;
+    }
     if (AddrFile->Listener)
     {
-        Row->State = MIB_TCP_STATE_LISTEN;
-        return TRUE;
+        Row.State = MIB_TCP_STATE_LISTEN;
+        IfInfoEmitRow(&Row, Rows, Capacity, Emitted);
     }
-    if (AddrFile->Connection && AddrFile->Connection->SocketContext)
-    {
-        CHAR Local[sizeof(TA_IP6_ADDRESS)], Remote[sizeof(TA_IP6_ADDRESS)];
 
-        if (!NT_SUCCESS(TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)Local, sizeof(Local), FALSE)) ||
-            !NT_SUCCESS(TCPGetSockAddress(AddrFile->Connection, (PTRANSPORT_ADDRESS)Remote, sizeof(Remote), TRUE)) ||
-            !NT_SUCCESS(TCPGetSocketStatus(AddrFile->Connection, &Row->State)))
-            return FALSE;
-        if (IsV6)
+    /* Pin the associated connections under the address file lock and query
+     * them after releasing it: the socket queries take the connection lock,
+     * which is never taken below the address file lock. */
+    LockObject(AddrFile);
+    for (Connection = AddrFile->Connection; Connection != NULL; Connection = Connection->Next)
+        Count++;
+    if (Count != 0)
+        Connections = ExAllocatePoolWithTag(NonPagedPool, Count * sizeof(*Connections), SNAPSHOT_TAG);
+    if (Connections != NULL)
+    {
+        Count = 0;
+        for (Connection = AddrFile->Connection; Connection != NULL; Connection = Connection->Next)
         {
-            if (((PTA_IP6_ADDRESS)Local)->Address[0].AddressType != TDI_ADDRESS_TYPE_IP6)
-                return FALSE;
-            RtlCopyMemory(Row->LocalAddress, ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_addr, 16);
-            Row->LocalPort = ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_port;
-            Row->LocalScopeId = IfInfoLinkLocalScope(Row->LocalAddress, ((PTA_IP6_ADDRESS)Local)->Address[0].Address[0].sin6_scope_id);
-            RtlCopyMemory(Row->RemoteAddress, ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_addr, 16);
-            Row->RemotePort = ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_port;
-            Row->RemoteScopeId = IfInfoLinkLocalScope(Row->RemoteAddress, ((PTA_IP6_ADDRESS)Remote)->Address[0].Address[0].sin6_scope_id);
+            ReferenceObject(Connection);
+            Connections[Count++] = Connection;
         }
-        else
-        {
-            if (((PTA_IP_ADDRESS)Local)->Address[0].AddressLength != TDI_ADDRESS_LENGTH_IP)
-                return FALSE;
-            RtlCopyMemory(Row->LocalAddress, &((PTA_IP_ADDRESS)Local)->Address[0].Address[0].in_addr, 4);
-            Row->LocalPort = ((PTA_IP_ADDRESS)Local)->Address[0].Address[0].sin_port;
-            RtlCopyMemory(Row->RemoteAddress, &((PTA_IP_ADDRESS)Remote)->Address[0].Address[0].in_addr, 4);
-            Row->RemotePort = ((PTA_IP_ADDRESS)Remote)->Address[0].Address[0].sin_port;
-        }
-        return TRUE;
     }
-    return FALSE;
+    UnlockObject(AddrFile);
+    if (Connections == NULL)
+        return;
+
+    for (i = 0; i < Count; i++)
+    {
+        if (Connections[i] != AddrFile->Listener && Connections[i]->SocketContext != NULL)
+        {
+            IfInfoFillAddressRow(AddrFile, &Row);
+            if (IfInfoFillConnectionRow(AddrFile, Connections[i], &Row))
+                IfInfoEmitRow(&Row, Rows, Capacity, Emitted);
+        }
+        DereferenceObject(Connections[i]);
+    }
+    ExFreePoolWithTag(Connections, SNAPSHOT_TAG);
 }
 
 static VOID IfInfoResolveLinkLocalScopes(PENDPOINT_ROW Rows, ULONG Count)
@@ -426,14 +481,7 @@ NTSTATUS IfInfoEndpoints(ULONG Family, ULONG Protocol, PENDPOINT_ROW Rows, ULONG
 
     for (i = 0; i < Taken; i++)
     {
-        ENDPOINT_ROW Row;
-
-        if (IfInfoFillEndpoint(Files[i], &Row))
-        {
-            if (Emitted < Capacity)
-                Rows[Emitted] = Row;
-            Emitted++;
-        }
+        IfInfoEmitEndpoints(Files[i], Rows, Capacity, &Emitted);
         DereferenceObject(Files[i]);
     }
     ExFreePoolWithTag(Files, SNAPSHOT_TAG);
