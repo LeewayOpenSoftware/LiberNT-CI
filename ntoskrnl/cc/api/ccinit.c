@@ -193,7 +193,7 @@ VOID
 CcNtMapDirtied(
     _Inout_ PCC_MAP Map)
 {
-    CONTAINING_RECORD(Map, CC_NT_MAP, Map)->DirtySince = KeQueryInterruptTime();
+    CC_ATOMIC_WRITE64(&CONTAINING_RECORD(Map, CC_NT_MAP, Map)->DirtySince, (LONG64)KeQueryInterruptTime());
 }
 
 static
@@ -304,7 +304,10 @@ CcRosFlushDirtyPages(
  * every dirty map whose last handle is gone or whose oldest dirty data is
  * older than CC_LAZY_MAX_AGE_SECONDS. A map that is written to continuously
  * gets such a pass every CC_LAZY_MAX_AGE_SECONDS, so no page of it is older
- * than that plus one pass. Returns the pages written.
+ * than that plus one pass. The pass writes at most CC_LAZY_AGED_MAX_PAGES
+ * and leaves the rest aged for the next one, so a large closed file cannot
+ * hold the lazy writer for seconds; deferred writers are served between
+ * maps. Returns the pages written.
  */
 static
 ULONG
@@ -318,7 +321,7 @@ CcNtFlushAgedMaps(
 
     /* CcDirtyNextMapAccept rotates the list, so one full turn ends where it
      * began; the bound covers a list that changes under us. */
-    for (Visited = 0; Visited < 256; Visited++)
+    for (Visited = 0; Visited < 256 && Total < CC_LAZY_AGED_MAX_PAGES; Visited++)
     {
         BOOLEAN Accepted;
         PCC_MAP Map = CcDirtyNextMapAccept(&CcNtCache, CcNtReferenceDirtyMap, &Accepted);
@@ -337,11 +340,19 @@ CcNtFlushAgedMaps(
             continue;
 
         NtMap = CONTAINING_RECORD(Map, CC_NT_MAP, Map);
-        Aged = (CC_ATOMIC_READ32(&NtMap->Map.OpenCount) == 0) || (Now - NtMap->DirtySince >= MaximumAge);
+        Aged = (CC_ATOMIC_READ32(&NtMap->Map.OpenCount) == 0) ||
+               (Now - (ULONG64)CC_ATOMIC_READ64(&NtMap->DirtySince) >= MaximumAge);
         if (Aged)
         {
-            Total += CcNtLazyFlushMap(NtMap, ~0u, TRUE, TRUE);
-            NtMap->DirtySince = Now;
+            ULONG Room = CC_LAZY_AGED_MAX_PAGES - Total;
+            ULONG Wanted = (CC_ATOMIC_READ64(&NtMap->Map.DirtyPages) > (LONG64)Room) ? Room : ~0u;
+
+            /* Within the room, a full flush (CcBcbCompleteFlush included);
+             * beyond it, a budgeted one, and the map stays aged. */
+            Total += CcNtLazyFlushMap(NtMap, Wanted, TRUE, TRUE);
+            if (Wanted == ~0u)
+                CC_ATOMIC_WRITE64(&NtMap->DirtySince, (LONG64)Now);
+            CcNtProcessDeferredWrites();
         }
         CcNtDereferenceMap(NtMap);
     }

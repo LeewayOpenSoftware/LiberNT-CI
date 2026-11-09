@@ -31,6 +31,8 @@
 /* A map whose oldest dirty data is this old, or whose last handle is gone,
  * is written back completely on the next lazy pass, budget or not. */
 #define CC_LAZY_MAX_AGE_SECONDS     4
+/* Pages the age-out may write in one pass; what is left waits for the next. */
+#define CC_LAZY_AGED_MAX_PAGES      2048
 /* A cached write that takes a map's dirty page count across this many
  * pages wakes the lazy writer instead of waiting for its tick. */
 #define CC_LAZY_KICK_PAGES          64
