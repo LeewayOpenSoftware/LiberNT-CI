@@ -1736,8 +1736,9 @@ VolumeCheck::KeyAbove(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ 
 
 /* Finds where a node that a split cut short starts holding its right
  * sibling's entries: the first key above High, or the copy of High just
- * before it (the separator the split moved up). 0 if there is none, or if
- * nothing in range would remain. */
+ * before it (the separator the split moved up). A copy of High that is the
+ * last entry is the separator too, when the split took the last entry as
+ * its median. 0 if there is none, or if nothing in range would remain. */
 ULONG
 VolumeCheck::FindSplitTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_opt_ PIndexEntry High)
 {
@@ -1756,11 +1757,14 @@ VolumeCheck::FindSplitTail(_In_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In
         LONG Result;
 
         if (Entry->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) || (Entry->EntryLength & 7) != 0 ||
-            Entry->EntryLength > End - Offset || (Entry->Flags & INDEX_ENTRY_END) ||
-            !KeyName(Entry, &Name) || !KeyCompare(Walk, &Name, High, &Result))
+            Entry->EntryLength > End - Offset)
         {
             return 0;
         }
+        if (Entry->Flags & INDEX_ENTRY_END)
+            return PreviousEqual && PreviousOffset > Node->IndexOffset ? PreviousOffset : 0;
+        if (!KeyName(Entry, &Name) || !KeyCompare(Walk, &Name, High, &Result))
+            return 0;
         if (Result > 0)
         {
             ULONG Start = PreviousEqual ? PreviousOffset : Offset;

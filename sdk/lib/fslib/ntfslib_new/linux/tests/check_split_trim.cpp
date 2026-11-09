@@ -3,7 +3,8 @@
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     The checker's index walk trims a node that a split cut short
  *              left holding its right sibling's entries, keeps the right
- *              END child, and loses no name
+ *              END child, and loses no name, also when the split took the
+ *              last entry as its median
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -331,18 +332,47 @@ NotASplit()
         Expect(F.Walk.Unwalkable, Test, "the tree is unwalkable");
         Expect(F.Walk.Trim[0] == 0, Test, "nothing is cut");
     }
+}
+
+/* The split took the last entry as its median: L = [A->2, M->3, END->4]
+ * became L' = [A->2, END->3] and R = [END->4] under Root = [M->0, END->1].
+ * The stale L ends with the separator copy; its END child is R's. */
+void
+MedianLast()
+{
     {
-        const char* Test = "separator copy only";
+        const char* Test = "median last, internal";
         Fixture F;
 
-        /* A key equal to the separator with nothing above it is the
-         * transient duplicate: accepted, not cut. */
+        BuildNode(F.Root, sizeof(F.RootBuffer), { { "M", 0 } }, 1);
+        F.BuildBlock(0, { { "A", 2 }, { "M", 3 } }, 4);
+        F.BuildBlock(1, {}, 4);
+        F.BuildBlock(2, { { "0", ~0ULL } }, ~0ULL);
+        F.BuildBlock(3, { { "G", ~0ULL } }, ~0ULL);
+        F.BuildBlock(4, { { "X", ~0ULL } }, ~0ULL);
+        F.Run();
+        Expect(!F.Walk.Unwalkable, Test, "the tree is walkable");
+        Expect(F.Walk.Trim[0] == OffsetOf(F.Node(0), "M"), Test, "L is cut at the separator copy");
+        Expect(F.Walk.TrimChild[0] == 3, Test, "L keeps the separator's child as its END child");
+        for (ULONG Block = 0; Block < 5; Block++)
+            Expect(VolumeCheck::TestBit(F.Walk.Linked, Block), Test, "every node is linked once");
+        Expect(F.Reached() == std::multiset<std::string>({ "0", "A", "G", "M", "X" }), Test,
+               "every name is reached exactly once");
+    }
+    {
+        const char* Test = "median last, leaf";
+        Fixture F;
+
+        /* The same in a leaf, or a key left in a leaf and in its parent for
+         * a while: the parent holds it, the leaf copy is cut. */
         BuildNode(F.Root, sizeof(F.RootBuffer), { { "M", 0 } }, 1);
         F.BuildBlock(0, { { "A", ~0ULL }, { "M", ~0ULL } }, ~0ULL);
         F.BuildBlock(1, { { "T", ~0ULL } }, ~0ULL);
         F.Run();
         Expect(!F.Walk.Unwalkable, Test, "the tree is walkable");
-        Expect(F.Walk.Trim[0] == 0, Test, "nothing is cut");
+        Expect(F.Walk.Trim[0] == OffsetOf(F.Node(0), "M"), Test, "the leaf is cut at the separator copy");
+        Expect(F.Reached() == std::multiset<std::string>({ "A", "M", "T" }), Test,
+               "every name is reached exactly once");
     }
 }
 
@@ -354,6 +384,7 @@ main()
     InternalTail();
     LeafTail();
     NotASplit();
+    MedianLast();
     if (Failures)
         return 1;
     std::printf("check_split_trim: ok\n");
