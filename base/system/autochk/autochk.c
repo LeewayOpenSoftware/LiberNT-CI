@@ -63,6 +63,8 @@ FILESYSTEM_CHKDSK FileSystems[] =
 };
 
 HANDLE KeyboardHandle = NULL;
+/* Set while PrintString shows a line from the file system checker. */
+static BOOLEAN InCheckerOutput = FALSE;
 
 /* FUNCTIONS ****************************************************************/
 
@@ -93,11 +95,16 @@ PrintString(char* fmt,...)
     {
         static ULONG MirroredLines = 0;
 
-        if (MirroredLines < AUTOCHK_MIRROR_LINES)
+        /* Only the checker's per-problem lines count against the cap; its
+         * verdicts reach the log on their own (NTFSLIB:), and autochk's own
+         * decisions are always mirrored. */
+        if (!InCheckerOutput)
+            DbgPrint("AUTOCHK: %s", buffer);
+        else if (MirroredLines < AUTOCHK_MIRROR_LINES)
             DbgPrint("AUTOCHK: %s", buffer);
         else if (MirroredLines == AUTOCHK_MIRROR_LINES)
-            DbgPrint("AUTOCHK: (further output not mirrored)\n");
-        if (MirroredLines <= AUTOCHK_MIRROR_LINES)
+            DbgPrint("AUTOCHK: (further checker output not mirrored)\n");
+        if (InCheckerOutput && MirroredLines <= AUTOCHK_MIRROR_LINES)
             MirroredLines++;
     }
 
@@ -434,7 +441,9 @@ ChkdskCallback(
 
     case OUTPUT:
         Output = (PTEXTOUTPUT) Argument;
+        InCheckerOutput = TRUE;
         PrintString("%s", Output->Output);
+        InCheckerOutput = FALSE;
         break;
 
     case DONE:

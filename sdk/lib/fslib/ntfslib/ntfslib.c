@@ -146,6 +146,35 @@ NtfsFormatReport(
     Callback(OUTPUT, 0, &TextOut);
 }
 
+/*
+ * A check's decision (dirty, in use, problems found, restart needed): shown
+ * like any report line and also written to the debug log, so a serial capture
+ * has it however many per-problem lines came before.
+ */
+static
+VOID
+NtfsVerdictReport(
+    IN PFMIFSCALLBACK Callback,
+    IN PCSTR Format,
+    ...)
+{
+    TEXTOUTPUT TextOut;
+    CHAR TextBuf[256];
+    va_list Args;
+
+    va_start(Args, Format);
+    _vsnprintf(TextBuf, sizeof(TextBuf) - 1, Format, Args);
+    va_end(Args);
+    TextBuf[sizeof(TextBuf) - 1] = ANSI_NULL;
+
+    DPRINT1("NTFSLIB: %s", TextBuf);
+    if (!Callback)
+        return;
+    TextOut.Lines = 1;
+    TextOut.Output = TextBuf;
+    Callback(OUTPUT, 0, &TextOut);
+}
+
 BOOLEAN
 NTAPI
 NtfsFormat(
@@ -416,7 +445,8 @@ NtfsCheckReport(
 {
     PNTFS_CHECK_CONTEXT Check = (PNTFS_CHECK_CONTEXT)Context;
 
-    if (Event != NtfsCheckLostClusters && !Check->Verbose && Check->Reported >= 32)
+    if (Event != NtfsCheckLostClusters && Event != NtfsCheckRepairsBlocked &&
+        !Check->Verbose && Check->Reported >= 32)
         return;
     Check->Reported++;
 
@@ -537,13 +567,13 @@ NtfsCheckReport(
             break;
         case NtfsCheckRepairsBlocked:
             if (Argument2 == ~0ULL)
-                NtfsFormatReport(Check->Callback,
-                                 "Index and cluster bitmap repairs were skipped: %I64u structural problems remain.\n",
-                                 Argument1);
+                NtfsVerdictReport(Check->Callback,
+                                  "Index and cluster bitmap repairs were skipped: %I64u structural problems remain.\n",
+                                  Argument1);
             else
-                NtfsFormatReport(Check->Callback,
-                                 "Index and cluster bitmap repairs were skipped: %I64u structural problems remain (first in file record segment %I64X).\n",
-                                 Argument1, Argument2);
+                NtfsVerdictReport(Check->Callback,
+                                  "Index and cluster bitmap repairs were skipped: %I64u structural problems remain (first in file record segment %I64X).\n",
+                                  Argument1, Argument2);
             break;
         case NtfsCheckLostNameRemoved:
             NtfsFormatReport(Check->Callback,
@@ -660,12 +690,12 @@ NtfsChkdsk(
     {
         if (NtfsNeedsOnlineScanOnly(Handle))
         {
-            NtfsFormatReport(Callback, "The volume needs an online scan, which is not run at startup.\n");
+            NtfsVerdictReport(Callback, "The volume needs an online scan, which is not run at startup.\n");
             NtClose(Handle);
             *ExitStatus = (ULONG)STATUS_SUCCESS;
             return TRUE;
         }
-        NtfsFormatReport(Callback, "The volume is dirty.\n");
+        NtfsVerdictReport(Callback, "The volume is dirty.\n");
         NtClose(Handle);
         return TRUE;
     }
@@ -675,7 +705,7 @@ NtfsChkdsk(
         Status = NtfsCheckControl(Handle, FSCTL_LOCK_VOLUME, NULL, 0);
         Locked = NT_SUCCESS(Status);
         if (!Locked)
-            NtfsFormatReport(Callback, "The volume is in use, so problems will be reported but not fixed.\n");
+            NtfsVerdictReport(Callback, "The volume is in use, so problems will be reported but not fixed.\n");
     }
 
     Status = NtfsDiskInitializeUm(Handle, &BytesPerSector);
@@ -711,7 +741,7 @@ NtfsChkdsk(
             if (NT_SUCCESS(DismountStatus))
                 (void)NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN);
             else
-                NtfsFormatReport(Callback,
+                NtfsVerdictReport(Callback,
                     "The volume could not be dismounted after the check (status 0x%08lx); the dirty flag was left set and it will be checked again next boot.\n",
                     DismountStatus);
         }
@@ -724,7 +754,7 @@ NtfsChkdsk(
 
     if (!NT_SUCCESS(Status))
     {
-        NtfsFormatReport(Callback, "The volume could not be checked (status 0x%08lx).\n", Status);
+        NtfsVerdictReport(Callback, "The volume could not be checked (status 0x%08lx).\n", Status);
         return FALSE;
     }
 
@@ -737,7 +767,8 @@ NtfsChkdsk(
         NtfsFormatReport(Callback, "%I64u clusters were returned to free space.\n", Result.FreedClusters);
     if (Result.Errors)
     {
-        NtfsFormatReport(Callback, "Problems were found on the volume.\n");
+        NtfsVerdictReport(Callback, "Problems were found on the volume (%I64u left of %I64u found).\n",
+                          Result.Errors, Result.FoundErrors);
         /* The check may still have repaired part of the volume around the
          * mounted file system, which was dismounted above: what was opened on
          * it before is stale, so restart as after a full repair. The dirty
@@ -747,14 +778,14 @@ NtfsChkdsk(
          * removing anything, does not restart, so neither can loop. */
         if (Locked && CheckWrites != 0 && Result.Errors < Result.FoundErrors)
         {
-            NtfsFormatReport(Callback, "%lu writes were made to the volume; it must be restarted.\n",
+            NtfsVerdictReport(Callback, "%lu writes were made to the volume; it must be restarted.\n",
                              CheckWrites);
             *ExitStatus = NTFSLIB_CHKDSK_VOLUME_RELOADED;
         }
         return TRUE;
     }
 
-    NtfsFormatReport(Callback, "No problems were found on the volume.\n");
+    NtfsVerdictReport(Callback, "No problems were found on the volume.\n");
     /* The repair went around the mounted file system, which was then
      * dismounted: only a restart drops what was opened on it before. */
     *ExitStatus = Locked ? NTFSLIB_CHKDSK_VOLUME_RELOADED : (ULONG)STATUS_SUCCESS;
