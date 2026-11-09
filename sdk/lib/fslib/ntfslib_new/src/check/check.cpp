@@ -499,9 +499,11 @@ VolumeCheck::CheckRecord(_In_ ULONGLONG Number, _Inout_ PUCHAR Record)
         !NT_SUCCESS(NtfsApplyFixup(&Header->Header, RecordSize, V->BytesPerSector)))
     {
         /* A FILE record whose fixup fails still names its base: the header
-         * lies in the first sector, below the bytes the fixup covers. A
-         * record without the signature holds no attribute anyone can read. */
-        if (RtlCompareMemory(Header->Header.TypeID, "FILE", 4) == 4)
+         * lies in the first sector, below the bytes the fixup covers. So does
+         * a torn record marked BAAD. A record without either signature holds
+         * no attribute anyone can read. */
+        if (RtlCompareMemory(Header->Header.TypeID, "FILE", 4) == 4 ||
+            RtlCompareMemory(Header->Header.TypeID, "BAAD", 4) == 4)
         {
             Owner = Header->BaseFileRecord & 0x0000FFFFFFFFFFFFULL;
             if (Owner != 0 && Owner < RecordCount)
