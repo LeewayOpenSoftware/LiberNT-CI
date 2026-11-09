@@ -2893,6 +2893,7 @@ RestoreResident:
              */
             BOOLEAN ListCreated = FALSE;
             BOOLEAN ListCreatedHere = FALSE;
+            BOOLEAN KeepHeadroom;
 
             if (AttributeOwner == this &&
                 Header->AllocatedSize >=
@@ -2912,12 +2913,50 @@ RestoreResident:
                 ListCreatedHere = ListCreated;
             }
 
+            /*
+             * Once an earlier growth has moved part of this mapping to an
+             * extension record, the rewrite below would pack every pair
+             * back into the base record whenever they fit, free the
+             * extension and drop the list, and the next growth would have
+             * to create the list again from less room. Each round the
+             * mapping keeps a few more bytes, until no list fits and every
+             * block fails STATUS_BUFFER_TOO_SMALL (Lab03 L1-B: 1404
+             * entries, free 0, no list). So while a list from an earlier
+             * growth exists, the base record keeps the growth headroom,
+             * and the pairs beyond it stay in extension records.
+             */
+            KeepHeadroom =
+                AttributeOwner == this &&
+                !ListCreatedHere &&
+                FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+            if (KeepHeadroom)
+                MappingReserve = MappingGrowthHeadroom;
             Status = AttributeOwner->
                 ExtendNonResidentData(
                 TargetAttribute,
                 Buffer,
                 RequestedLength,
                 (ULONGLONG)Offset->QuadPart);
+            if (KeepHeadroom)
+            {
+                MappingReserve = 0;
+                /* The reserve is a preference: fall back to the full room. */
+                if (Status == STATUS_BUFFER_TOO_SMALL)
+                {
+                    TargetAttribute = GetAttribute(AttrType, StreamName);
+                    if (!TargetAttribute ||
+                        GetAttributeOwner(TargetAttribute) != this)
+                    {
+                        return STATUS_FILE_CORRUPT_ERROR;
+                    }
+                    Status = AttributeOwner->
+                        ExtendNonResidentData(
+                        TargetAttribute,
+                        Buffer,
+                        RequestedLength,
+                        (ULONGLONG)Offset->QuadPart);
+                }
+            }
             if (Status == STATUS_BUFFER_TOO_SMALL)
             {
                 Status =
