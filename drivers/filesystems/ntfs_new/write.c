@@ -192,7 +192,13 @@ NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
             ReturnedStartingVcn > Vcn ||
             Extent.NextVcn <= Vcn)
         {
-            return STATUS_SUCCESS;
+            /*
+             * The range cannot be mapped to disk offsets, so the held-back
+             * blocks cannot be picked out. The caller was promised the data
+             * is on the disk: commit everything the block cache holds for
+             * this volume instead of reporting a commit that did not happen.
+             */
+            return NtfsDiskFlushVolumeKm(VolCB->StorageDevice);
         }
 
         RunEndVcn = min(Extent.NextVcn, EndVcn);
@@ -593,6 +599,20 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
     NtfsReleaseMetadata(VolCB);
 
+#if DBG
+    /* Lab trace: one line per paging write, so a power-cut probe can read a
+     * file's write-back timeline off COM1. The top-level IRP value tells the
+     * cache manager (2) from the modified page writer (3). Off unless the
+     * NtfsTracePagingWrites registry value asks for it: at 115200 baud the
+     * line costs more than the write and throttles every paging write. */
+    if (PagingIo && gTracePagingWrites)
+    {
+        DPRINT1("NTFS: paging write at %I64u ms: record %lu, offset %I64d, length %lu, status 0x%lx, top-level %p\n",
+                KeQueryInterruptTime() / 10000, NtfsFileRecordGetNumber(FileRec), ByteOffset.QuadPart, Length,
+                Status, IoGetTopLevelIrp());
+    }
+#endif
+
     if (NT_SUCCESS(Status))
     {
         if (!PagingIo)
@@ -614,11 +634,40 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
         Irp->IoStatus.Information = Length;
 
-        /* FIXME: other uncached writes smaller than a block stay in the library block cache until a flush or its lazy writer */
-        if (!PagingIo && Length != 0 &&
-            (BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) || BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
+        /*
+         * The library holds a write that fits in one block back in its block
+         * cache until its own lazy pass. That is right for metadata and wrong
+         * for every write that reaches this point: a paging write is the
+         * cache manager or the modified page writer putting data on the
+         * volume, and the modified page writer hands over exactly one page
+         * at a time; a non-cached write promises the caller the same; a
+         * write-through write says so explicitly. Commit the range so the
+         * data is on the disk when the request completes. Runs larger than
+         * a block already went direct, so this only costs what was held:
+         * a small non-cached write now pays one synchronous device write,
+         * which is what it asked for.
+         *
+         * The commit stages each held-back block through non-paged pool. If
+         * that allocation fails the data is still in the block cache and the
+         * library's lazy pass writes it a second later, so a paging or
+         * non-cached write completes anyway; only a caller that asked for
+         * write-through is told.
+         */
+        if (Length != 0 &&
+            (PagingIo ||
+             BooleanFlagOn(Irp->Flags, IRP_NOCACHE) ||
+             BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
+             BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
         {
-            Status = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
+            NTSTATUS CommitStatus = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
+
+            if (!NT_SUCCESS(CommitStatus) &&
+                (CommitStatus != STATUS_INSUFFICIENT_RESOURCES ||
+                 BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
+                 BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
+            {
+                Status = CommitStatus;
+            }
         }
     }
     else
