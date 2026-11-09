@@ -128,10 +128,8 @@ private:
     BOOLEAN NameKeysIncomplete = FALSE;
     PULONG ExtensionOwner = NULL;
     PUCHAR AttrListMap = NULL;
-    /* Bases that some in-use record, valid or not, names as its base; and
-     * whether an unreadable record may have named one. */
+    /* Bases that some record, valid or faulted, names as its base. */
     PUCHAR ExtendedMap = NULL;
-    BOOLEAN ExtensionsUnknown = FALSE;
     /* One bit per name key: an index entry already counted for it. */
     PUCHAR NameKeyUsed = NULL;
     DanglingEntry* Dangling = NULL;
@@ -500,12 +498,14 @@ VolumeCheck::CheckRecord(_In_ ULONGLONG Number, _Inout_ PUCHAR Record)
     if (RtlCompareMemory(Header->Header.TypeID, "FILE", 4) != 4 ||
         !NT_SUCCESS(NtfsApplyFixup(&Header->Header, RecordSize, V->BytesPerSector)))
     {
-        /* A record that was never written holds no attribute; any other
-         * unreadable one in use might hold an extension of some base. */
-        for (ULONG Byte = 0; Allocated && Byte < RecordSize && !ExtensionsUnknown; Byte++)
+        /* A FILE record whose fixup fails still names its base: the header
+         * lies in the first sector, below the bytes the fixup covers. A
+         * record without the signature holds no attribute anyone can read. */
+        if (RtlCompareMemory(Header->Header.TypeID, "FILE", 4) == 4)
         {
-            if (Record[Byte])
-                ExtensionsUnknown = TRUE;
+            Owner = Header->BaseFileRecord & 0x0000FFFFFFFFFFFFULL;
+            if (Owner != 0 && Owner < RecordCount)
+                SetBit(ExtendedMap, Owner);
         }
         if (Allocated && Number >= CHECK_FIRST_USER_RECORD)
         {
@@ -1076,12 +1076,12 @@ VolumeCheck::KeepListEntry(_In_ void* Context, _In_ const AttributeListEx* Entry
     return SequenceNumber == 0 || Check->Sequence[Record] == SequenceNumber;
 }
 
-/* TRUE unless no record can hold an attribute of Base: an in-use record
- * that names Base, valid or faulted, or an unreadable one that might, counts. */
+/* TRUE if some record names Base as its base: an in-use one, valid or
+ * faulted, or a FILE record whose fixup fails. */
 BOOLEAN
 VolumeCheck::HasExtensions(_In_ ULONGLONG Base)
 {
-    return ExtensionsUnknown || TestBit(ExtendedMap, Base);
+    return TestBit(ExtendedMap, Base);
 }
 
 void
