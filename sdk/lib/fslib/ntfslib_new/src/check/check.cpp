@@ -99,6 +99,10 @@ private:
     ULONGLONG ClusterCount = 0;
     ULONGLONG RecordCount = 0;
     ULONGLONG StructuralErrors = 0;
+    /* The first file records that raised a structural problem, to name the
+     * one that keeps the index and bitmap repairs off. */
+    ULONGLONG Blockers[16];
+    ULONG BlockerCount = 0;
     BOOLEAN RepairIndexes = FALSE;
     BOOLEAN RepairRecords = FALSE;
     BOOLEAN MftBitmapChanged = FALSE;
@@ -179,7 +183,7 @@ private:
             Kind != NtfsCheckNameRelinked && Kind != NtfsCheckCrossLinkResolved &&
             Kind != NtfsCheckLostAndFound && Kind != NtfsCheckFileRecovered &&
             Kind != NtfsCheckAttributeListFixed && Kind != NtfsCheckDataAttributeInserted &&
-            Kind != NtfsCheckLostNameRemoved)
+            Kind != NtfsCheckLostNameRemoved && Kind != NtfsCheckRepairsBlocked)
         {
             Out->Errors++;
             Out->FoundErrors++;
@@ -188,6 +192,12 @@ private:
             Kind == NtfsCheckClusterOutOfRange || Kind == NtfsCheckCrossLinked)
         {
             StructuralErrors++;
+            /* Every structural event names its file record in Arg1. */
+            if (BlockerCount < RTL_NUMBER_OF(Blockers) &&
+                (BlockerCount == 0 || Blockers[BlockerCount - 1] != Arg1))
+            {
+                Blockers[BlockerCount++] = Arg1;
+            }
         }
         if (Kind == NtfsCheckRecordCorrupt || Kind == NtfsCheckBadRunList ||
             Kind == NtfsCheckClusterOutOfRange)
@@ -1693,6 +1703,21 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
     CheckAttributeLists();
 
     RepairIndexes = Repair && StructuralErrors == 0 && !V->IsReadOnly;
+    if (Repair && !V->IsReadOnly && StructuralErrors != 0)
+    {
+        ULONGLONG Blocker = ~0ULL;
+
+        /* A record the record pass freed no longer holds anything back. */
+        for (ULONG Index = 0; Index < BlockerCount; Index++)
+        {
+            if (Blockers[Index] < RecordCount && TestBit(MftBitmap, Blockers[Index]))
+            {
+                Blocker = Blockers[Index];
+                break;
+            }
+        }
+        Event(NtfsCheckRepairsBlocked, StructuralErrors, Blocker);
+    }
     for (ULONGLONG Number = 0; Number < RecordCount; Number++)
     {
         if (TestBit(DirectoryMap, Number) && TestBit(InUseMap, Number))

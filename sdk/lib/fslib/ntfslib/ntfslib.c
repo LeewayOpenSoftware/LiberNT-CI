@@ -535,6 +535,16 @@ NtfsCheckReport(
         case NtfsCheckDataAttributeInserted:
             NtfsFormatReport(Check->Callback, "Inserting data attribute into file %I64X.\n", Argument1);
             break;
+        case NtfsCheckRepairsBlocked:
+            if (Argument2 == ~0ULL)
+                NtfsFormatReport(Check->Callback,
+                                 "Index and cluster bitmap repairs were skipped: %I64u structural problems remain.\n",
+                                 Argument1);
+            else
+                NtfsFormatReport(Check->Callback,
+                                 "Index and cluster bitmap repairs were skipped: %I64u structural problems remain (first in file record segment %I64X).\n",
+                                 Argument1, Argument2);
+            break;
         case NtfsCheckLostNameRemoved:
             NtfsFormatReport(Check->Callback,
                              "Removed %I64u names of file %I64X that belonged to a deleted directory.\n",
