@@ -286,7 +286,12 @@ main()
     if (!Check(NT_SUCCESS(Status), "NtfsProbePartitionAndOpenVolume failed"))
         goto Out;
 
-    Status = NtfsMasterFileTableGetFileRecordByReference(NtfsVolumeGetMft(Volume), 5, &Root);
+    /* A file reference carries the sequence number in its top 16 bits and the
+     * lookup refuses a mismatch; the formatter gives record N sequence N. */
+    Status = NtfsMasterFileTableGetFileRecordByReference(NtfsVolumeGetMft(Volume), (5ULL << 48) | 5, &Root);
+    if (!NT_SUCCESS(Status))
+        std::fprintf(stderr, "size_persist_times: root lookup status 0x%08x
+", static_cast<unsigned>(Status));
     if (!Check(NT_SUCCESS(Status), "root record not readable"))
         goto Out;
 
