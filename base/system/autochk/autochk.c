@@ -12,6 +12,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <stdio.h>
+#include <string.h>
 
 #define WIN32_NO_STATUS
 #include <windef.h>
@@ -38,6 +39,9 @@
 #include <debug.h>
 
 /* DEFINES ******************************************************************/
+
+/* Complete output lines copied to the debug log before the mirror stops. */
+#define AUTOCHK_MIRROR_LINES 200
 
 typedef struct _FILESYSTEM_CHKDSK
 {
@@ -78,6 +82,24 @@ PrintString(char* fmt,...)
     va_start(ap, fmt);
     Len = vsprintf(buffer, fmt, ap);
     va_end(ap);
+
+    /*
+     * Mirror complete lines to the debug log, so a serial capture shows what
+     * the check decided (dirty, skipped, in use, problems found). Progress and
+     * countdown lines end in a bare carriage return and are not mirrored. The
+     * mirror is capped so a large repair cannot slow the boot down.
+     */
+    if (strchr(buffer, '\n'))
+    {
+        static ULONG MirroredLines = 0;
+
+        if (MirroredLines < AUTOCHK_MIRROR_LINES)
+            DbgPrint("AUTOCHK: %s", buffer);
+        else if (MirroredLines == AUTOCHK_MIRROR_LINES)
+            DbgPrint("AUTOCHK: (further output not mirrored)\n");
+        if (MirroredLines <= AUTOCHK_MIRROR_LINES)
+            MirroredLines++;
+    }
 
     RtlInitAnsiString(&AnsiString, buffer);
     RtlAnsiStringToUnicodeString(&UnicodeString,
@@ -143,6 +165,45 @@ OpenKeyboard(
                       &IoStatusBlock,
                       FILE_OPEN,
                       0);
+}
+
+/*
+ * Discard key presses queued before autochk asked anything. WaitForKeyboard
+ * returns on the first queued key-down, so a key typed at the boot menu (or
+ * sent by a test harness) would otherwise cancel the first check at once.
+ */
+static VOID
+DrainKeyboard(
+    IN HANDLE KeyboardHandle)
+{
+    NTSTATUS Status;
+    IO_STATUS_BLOCK IoStatusBlock;
+    LARGE_INTEGER Offset;
+    KEYBOARD_INPUT_DATA InputData;
+    ULONG Discarded = 0;
+
+    do
+    {
+        Offset.QuadPart = 0;
+        Status = NtReadFile(KeyboardHandle,
+                            NULL,
+                            NULL,
+                            NULL,
+                            &IoStatusBlock,
+                            &InputData,
+                            sizeof(KEYBOARD_INPUT_DATA),
+                            &Offset,
+                            NULL);
+        if (!NT_SUCCESS(Status))
+            return;
+        if (Status != STATUS_PENDING)
+            Discarded++;
+    } while (Status != STATUS_PENDING);
+
+    /* Nothing is queued any more: drop the read that is now waiting */
+    NtCancelIoFile(KeyboardHandle, &IoStatusBlock);
+    if (Discarded)
+        DPRINT1("AUTOCHK: discarded %lu queued key event(s)\n", Discarded);
 }
 
 static NTSTATUS
@@ -661,6 +722,10 @@ _main(
     {
         DPRINT1("OpenKeyboard() failed, Status 0x%08lx\n", Status);
         /* Ignore keyboard interaction */
+    }
+    else
+    {
+        DrainKeyboard(KeyboardHandle);
     }
 
     if (CheckAllVolumes)
