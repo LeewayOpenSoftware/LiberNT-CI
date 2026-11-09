@@ -41,6 +41,9 @@ typedef struct _CC_NT_MAP
     KEVENT *UninitializeEvent;
     MI_ASYNC_DRAIN ReadDrain;
     KEVENT LazyWriteGate;
+    /* Interrupt time at which the map last went from clean to dirty, or at
+     * which an age-out pass last wrote it back completely. */
+    ULONG64 DirtySince;
 } CC_NT_MAP, *PCC_NT_MAP;
 
 C_ASSERT(FIELD_OFFSET(CC_NT_MAP, Map) == 0);

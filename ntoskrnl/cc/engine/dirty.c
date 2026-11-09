@@ -64,6 +64,8 @@ CcDirtyAccount(
     {
         InsertTailList(&Cache->DirtyMaps, &Map->DirtyLink);
         Map->OnDirtyList = TRUE;
+        if (Cache->MapDirtied != NULL)
+            Cache->MapDirtied(Map);
     }
     else if (Now <= 0 && Map->OnDirtyList)
     {

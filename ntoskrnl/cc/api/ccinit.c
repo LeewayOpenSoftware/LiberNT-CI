@@ -184,6 +184,15 @@ CcDeferWrite(
     CcNtKickLazyWriter();
 }
 
+/* Engine callback, under DirtyLock: a clean map got its first dirty page. */
+static
+VOID
+CcNtMapDirtied(
+    _Inout_ PCC_MAP Map)
+{
+    CONTAINING_RECORD(Map, CC_NT_MAP, Map)->DirtySince = KeQueryInterruptTime();
+}
+
 static
 BOOLEAN
 CcNtReferenceDirtyMap(
@@ -223,6 +232,40 @@ CcNtNextDirtyMap(VOID)
     return NULL;
 }
 
+/* Writes back up to MaximumPages of one map with the file system's lazy-write
+ * lock held, and returns how many pages reached the file system. */
+static
+ULONG
+CcNtLazyFlushMap(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG MaximumPages,
+    _In_ BOOLEAN Wait,
+    _In_ BOOLEAN CalledFromLazy)
+{
+    ULONG Flushed = 0;
+
+    KeEnterCriticalRegion();
+    KeWaitForSingleObject(&NtMap->LazyWriteGate, Executive, KernelMode, FALSE, NULL);
+    if (NtMap->Callbacks.AcquireForLazyWrite == NULL ||
+        NtMap->Callbacks.AcquireForLazyWrite(NtMap->LazyWriteContext, Wait))
+    {
+        CcNtFlushMap(NtMap, 0, (ULONG64)-1, MaximumPages, &Flushed);
+
+        if (NtMap->Callbacks.ReleaseFromLazyWrite != NULL)
+            NtMap->Callbacks.ReleaseFromLazyWrite(NtMap->LazyWriteContext);
+    }
+    KeSetEvent(&NtMap->LazyWriteGate, IO_NO_INCREMENT, FALSE);
+    KeLeaveCriticalRegion();
+
+    if (CalledFromLazy && Flushed != 0)
+    {
+        CcLazyWriteIos++;
+        CcLazyWritePages += Flushed;
+    }
+
+    return Flushed;
+}
+
 NTSTATUS
 CcRosFlushDirtyPages(
     ULONG Target,
@@ -233,36 +276,14 @@ CcRosFlushDirtyPages(
     ULONG Total = 0;
     ULONG Visited = 0;
 
-    UNREFERENCED_PARAMETER(Wait);
-
     while (Total < Target && Visited++ < 256)
     {
         PCC_NT_MAP NtMap = CcNtNextDirtyMap();
-        ULONG Flushed = 0;
 
         if (NtMap == NULL)
             break;
 
-        KeEnterCriticalRegion();
-        KeWaitForSingleObject(&NtMap->LazyWriteGate, Executive, KernelMode, FALSE, NULL);
-        if (NtMap->Callbacks.AcquireForLazyWrite == NULL ||
-            NtMap->Callbacks.AcquireForLazyWrite(NtMap->LazyWriteContext, Wait))
-        {
-            CcNtFlushMap(NtMap, 0, (ULONG64)-1, Target - Total, &Flushed);
-
-            if (NtMap->Callbacks.ReleaseFromLazyWrite != NULL)
-                NtMap->Callbacks.ReleaseFromLazyWrite(NtMap->LazyWriteContext);
-        }
-        KeSetEvent(&NtMap->LazyWriteGate, IO_NO_INCREMENT, FALSE);
-        KeLeaveCriticalRegion();
-
-        if (CalledFromLazy && Flushed != 0)
-        {
-            CcLazyWriteIos++;
-            CcLazyWritePages += Flushed;
-        }
-
-        Total += Flushed;
+        Total += CcNtLazyFlushMap(NtMap, Target - Total, Wait, CalledFromLazy);
         CcNtDereferenceMap(NtMap);
     }
 
@@ -270,6 +291,59 @@ CcRosFlushDirtyPages(
         *Count = Total;
 
     return STATUS_SUCCESS;
+}
+
+/*
+ * The budgeted pass writes TotalDirtyPages / CC_LAZY_DIVISOR a second, which
+ * is a rate limit for a busy cache, not a bound on how long a page stays
+ * dirty: a 1 MiB file alone in the cache took 14 passes, and nothing wrote a
+ * closed file any sooner. Before the budgeted pass, write back completely
+ * every dirty map whose last handle is gone or whose oldest dirty data is
+ * older than CC_LAZY_MAX_AGE_SECONDS. A map that is written to continuously
+ * gets such a pass every CC_LAZY_MAX_AGE_SECONDS, so no page of it is older
+ * than that plus one pass. Returns the pages written.
+ */
+static
+ULONG
+CcNtFlushAgedMaps(
+    _In_ ULONG64 Now)
+{
+    const ULONG64 MaximumAge = (ULONG64)CC_LAZY_MAX_AGE_SECONDS * 10 * 1000 * 1000;
+    PCC_MAP First = NULL;
+    ULONG Total = 0;
+    ULONG Visited;
+
+    /* CcDirtyNextMapAccept rotates the list, so one full turn ends where it
+     * began; the bound covers a list that changes under us. */
+    for (Visited = 0; Visited < 256; Visited++)
+    {
+        BOOLEAN Accepted;
+        PCC_MAP Map = CcDirtyNextMapAccept(&CcNtCache, CcNtReferenceDirtyMap, &Accepted);
+        PCC_NT_MAP NtMap;
+        BOOLEAN Aged;
+
+        if (Map == NULL || Map == First)
+        {
+            if (Map != NULL && Accepted)
+                CcNtDereferenceMap(CONTAINING_RECORD(Map, CC_NT_MAP, Map));
+            break;
+        }
+        if (First == NULL)
+            First = Map;
+        if (!Accepted)
+            continue;
+
+        NtMap = CONTAINING_RECORD(Map, CC_NT_MAP, Map);
+        Aged = (CC_ATOMIC_READ32(&NtMap->Map.OpenCount) == 0) || (Now - NtMap->DirtySince >= MaximumAge);
+        if (Aged)
+        {
+            Total += CcNtLazyFlushMap(NtMap, ~0u, TRUE, TRUE);
+            NtMap->DirtySince = Now;
+        }
+        CcNtDereferenceMap(NtMap);
+    }
+
+    return Total;
 }
 
 static
@@ -318,6 +392,7 @@ CcNtLazyWriter(
         KeWaitForSingleObject(&CcNtLazyWriterEvent, Executive, KernelMode, FALSE, &Period);
 
         CcNtTakeLazyWaiters(&Waiters);
+        CcNtFlushAgedMaps(KeQueryInterruptTime());
         Target = CcDirtyLazyTarget(&CcNtCache);
         if (Target != 0)
             CcRosFlushDirtyPages(Target, NULL, TRUE, TRUE);
@@ -370,6 +445,7 @@ CcInitializeCacheManager(VOID)
     CcNtCache.BcbBytes = sizeof(CC_NT_BCB);
     CcNtCache.BcbCreated = CcNtBcbCreated;
     CcNtCache.BcbDeleting = CcNtBcbDeleting;
+    CcNtCache.MapDirtied = CcNtMapDirtied;
 
     CcNtInitializeMapTable();
     InitializeListHead(&CcNtDeferredWrites);
