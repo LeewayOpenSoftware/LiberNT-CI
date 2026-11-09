@@ -1037,6 +1037,14 @@ public:
     NTSTATUS
     CollapseUnneededAttributeList();
 
+    /* After a mapping growth that created the attribute list: collapse a
+     * list that names only the base record, unless removing it would leave
+     * the base record too full to create a list for the next growth. Then
+     * part of the largest mapping moves to an extension record instead, so
+     * the list is kept and names it. */
+    NTSTATUS
+    SettleGrowthAttributeList();
+
     NTSTATUS ReadSecurityDescriptor(
         _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG BufferLength);

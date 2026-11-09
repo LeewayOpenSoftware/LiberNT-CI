@@ -1394,7 +1394,7 @@ Directory::PushDownRoot(
          * remove it now (base record first, then the list's clusters).
          */
         if (NT_SUCCESS(Status))
-            (void)DirectoryFile->CollapseUnneededAttributeList();
+            (void)DirectoryFile->SettleGrowthAttributeList();
         if (!NT_SUCCESS(Status))
         {
             RtlCopyMemory(

@@ -227,6 +227,15 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${NTFSINFO_EXECUTABLE}"
         )
     endif()
+    if(MKNTFS_EXECUTABLE)
+        add_test(
+            NAME ntfslib_linux_grow_fragmented_index
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/grow_fragmented_index_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+        )
+    endif()
     if(MKNTFS_EXECUTABLE AND
        NTFSLABEL_EXECUTABLE AND
        NTFSFIX_EXECUTABLE)

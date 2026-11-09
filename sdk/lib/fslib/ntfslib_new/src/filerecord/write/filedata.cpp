@@ -2419,6 +2419,53 @@ FileRecord::EnsureAttributeListForMappingGrowth(
 
 static const ULONG ResidentPromotionGrowth = 0x40 - 0x18 + 0x10;
 
+/*
+ * Free bytes below which a mapping growth creates the attribute list up
+ * front (the list itself needs about 0x50 in the base record).
+ */
+static const ULONG MappingGrowthHeadroom = 0x110;
+
+NTSTATUS
+FileRecord::SettleGrowthAttributeList()
+{
+    PAttribute ListAttribute;
+    BOOLEAN Unneeded;
+    NTSTATUS Status;
+
+    if (!Header || !Data || Header->BaseFileRecord != 0 ||
+        Header->ActualSize > Header->AllocatedSize)
+    {
+        return STATUS_SUCCESS;
+    }
+    ListAttribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    if (!ListAttribute)
+        return STATUS_SUCCESS;
+    Status = DropUnneededAttributeList(FALSE, &Unneeded);
+    if (!NT_SUCCESS(Status) || !Unneeded)
+        return Status;
+
+    /*
+     * Collapsing hands the list's bytes to the mapping. Done after every
+     * growth, the mapping creeps into the room the list needs, until a
+     * growth can neither fit its mapping nor create a list, and every
+     * further block fails STATUS_BUFFER_TOO_SMALL (a fragmented directory
+     * index stops at about 1700 entries). So collapse only while the base
+     * record keeps that room; otherwise move part of the largest mapping to
+     * an extension record, which the list then names.
+     */
+    if (Header->AllocatedSize - Header->ActualSize + ListAttribute->Length >= MappingGrowthHeadroom)
+        return CollapseUnneededAttributeList();
+    Status = ReleaseBaseRecordSpace(MappingGrowthHeadroom);
+    if (NT_SUCCESS(Status))
+    {
+        Status = DropUnneededAttributeList(FALSE, &Unneeded);
+        if (!NT_SUCCESS(Status) || !Unneeded)
+            return Status;
+    }
+    /* Nothing could move out: never leave a list naming only the base. */
+    return CollapseUnneededAttributeList();
+}
+
 NTSTATUS
 FileRecord::ReleaseBaseRecordSpace(
     _In_ ULONG Required)
@@ -2847,7 +2894,7 @@ RestoreResident:
                 Header->AllocatedSize >=
                     Header->ActualSize &&
                 Header->AllocatedSize -
-                    Header->ActualSize < 0x100)
+                    Header->ActualSize < MappingGrowthHeadroom)
             {
                 Status =
                     EnsureAttributeListForMappingGrowth(
@@ -2902,7 +2949,7 @@ RestoreResident:
              * with such a list as corrupt.
              */
             if (NT_SUCCESS(Status) && ListCreatedHere)
-                (void)CollapseUnneededAttributeList();
+                (void)SettleGrowthAttributeList();
             if (NT_SUCCESS(Status))
             {
                 *Length = RequestedLength;
@@ -6836,7 +6883,7 @@ FileRecord::WriteCompressedData(_In_ PAttribute TargetAttribute,
         {
             ULONG Free = Header->AllocatedSize - Header->ActualSize;
 
-            if (Free < 0x110)
+            if (Free < MappingGrowthHeadroom)
             {
                 Status = EnsureAttributeListForMappingGrowth(TypeData,
                                                              StreamName,
@@ -6914,7 +6961,7 @@ FileRecord::WriteCompressedData(_In_ PAttribute TargetAttribute,
 
     /* As in WriteFileData: drop a list the growth turned out not to need. */
     if (NT_SUCCESS(Status) && ListCreatedHere)
-        (void)CollapseUnneededAttributeList();
+        (void)SettleGrowthAttributeList();
     delete[] Zeroes;
     return Status;
 }
@@ -7112,7 +7159,7 @@ FileRecord::ResizeCompressedData(_In_opt_ PWSTR StreamName,
     if (AttributeOwner == this &&
         !GetAttribute(TypeAttributeList, NULL) &&
         Header->AllocatedSize >= Header->ActualSize &&
-        Header->AllocatedSize - Header->ActualSize < 0x110)
+        Header->AllocatedSize - Header->ActualSize < MappingGrowthHeadroom)
     {
         Status = EnsureAttributeListForMappingGrowth(TypeData,
                                                      StreamName,
@@ -7155,7 +7202,7 @@ FileRecord::ResizeCompressedData(_In_opt_ PWSTR StreamName,
     }
     /* As in WriteFileData: drop a list the growth turned out not to need. */
     if (NT_SUCCESS(Status) && ListCreatedHere)
-        (void)CollapseUnneededAttributeList();
+        (void)SettleGrowthAttributeList();
     return Status;
 }
 
