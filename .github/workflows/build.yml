@@ -279,7 +279,8 @@ jobs:
 
   ntfslib-host-tests:
     # The volume check host tests of the NTFS library, outside the image
-    # build: the index walk unit test and the cluster claim smoke test.
+    # build: the index walk unit test and the cluster claim smoke test, built
+    # under ASan and UBSan with the library's asserts live.
     runs-on: ubuntu-24.04
     steps:
     - name: Source checkout
@@ -296,13 +297,16 @@ jobs:
 
     - name: Configure
       run: |
-        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja
+        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNTFSLIB_SANITIZE=ON
 
     - name: Build
       run: |
         cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_fuse
 
     - name: Run the volume check tests
+      env:
+        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+        UBSAN_OPTIONS: print_stacktrace=1
       run: |
         ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim"
 
