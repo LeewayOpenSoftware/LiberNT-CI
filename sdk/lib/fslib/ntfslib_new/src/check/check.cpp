@@ -2159,6 +2159,12 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
         RelinkOrphans();
         RecoverLostFiles();
     }
+    else if (RepairIndexes && Out->ResetIndexes)
+    {
+        /* A directory that was emptied gets its names back even when the
+         * bitmap check failed; it is never left empty. */
+        RelinkOrphans();
+    }
     if (NT_SUCCESS(Status) && RepairRecords && CrossLinkCount && StructuralErrors == CrossLinkCount)
         ResolveCrossLinks();
     return Status;
