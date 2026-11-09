@@ -651,7 +651,8 @@ static VOID NteRelease(PIP_NTE Nte, PIP_NTE Successor)
     {
         if (Nte->RouteOwner)
             RouterRemoveRoute(&Network, &Nte->Unicast);
-        NBRemoveNeighbor(NCE);
+        if (AddrIsEqual(&NCE->Address, &Nte->Unicast))
+            NBRemoveNeighbor(NCE);
         NBDereferenceNeighbor(NCE);
     }
 
