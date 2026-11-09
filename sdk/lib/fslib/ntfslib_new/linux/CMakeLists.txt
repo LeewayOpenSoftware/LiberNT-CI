@@ -160,6 +160,25 @@ if(BUILD_TESTING)
         COMMAND ntfslib_resident_update_test
     )
 
+    # The index walk of the checker on hand-built nodes: a split cut short is
+    # trimmed, not reset. It includes check.cpp to reach the walk.
+    add_executable(ntfslib_check_split_trim_test
+        tests/check_split_trim.cpp
+    )
+    target_compile_features(ntfslib_check_split_trim_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_check_split_trim_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_include_directories(ntfslib_check_split_trim_test PRIVATE
+        "${NTFSLIB_ROOT}/include/internal"
+    )
+    target_link_libraries(ntfslib_check_split_trim_test PRIVATE ntfslib_linux)
+    add_test(
+        NAME ntfslib_linux_check_split_trim
+        COMMAND ntfslib_check_split_trim_test
+    )
+
     add_executable(ntfslib_lznt1_roundtrip_test
         tests/lznt1_roundtrip.cpp
     )
@@ -571,6 +590,15 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
             NAME ntfslib_linux_startup_repair
             COMMAND /bin/sh
                 "${CMAKE_CURRENT_LIST_DIR}/tests/startup_repair_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+        )
+    endif()
+    if(MKNTFS_EXECUTABLE)
+        add_test(
+            NAME ntfslib_linux_check_claim
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/check_claim_smoke.sh"
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
         )

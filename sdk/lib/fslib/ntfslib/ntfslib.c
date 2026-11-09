@@ -146,6 +146,35 @@ NtfsFormatReport(
     Callback(OUTPUT, 0, &TextOut);
 }
 
+/*
+ * A check's decision (dirty, in use, problems found, restart needed): shown
+ * like any report line and also written to the debug log, so a serial capture
+ * has it however many per-problem lines came before.
+ */
+static
+VOID
+NtfsVerdictReport(
+    IN PFMIFSCALLBACK Callback,
+    IN PCSTR Format,
+    ...)
+{
+    TEXTOUTPUT TextOut;
+    CHAR TextBuf[256];
+    va_list Args;
+
+    va_start(Args, Format);
+    _vsnprintf(TextBuf, sizeof(TextBuf) - 1, Format, Args);
+    va_end(Args);
+    TextBuf[sizeof(TextBuf) - 1] = ANSI_NULL;
+
+    DPRINT1("NTFSLIB: %s", TextBuf);
+    if (!Callback)
+        return;
+    TextOut.Lines = 1;
+    TextOut.Output = TextBuf;
+    Callback(OUTPUT, 0, &TextOut);
+}
+
 BOOLEAN
 NTAPI
 NtfsFormat(
@@ -404,7 +433,15 @@ typedef struct _NTFS_CHECK_CONTEXT
     PFMIFSCALLBACK Callback;
     BOOLEAN Verbose;
     ULONG Reported;
+    ULONG RelinkDiagnosed;
 } NTFS_CHECK_CONTEXT, *PNTFS_CHECK_CONTEXT;
+
+/* Relink diagnostics come after every per-problem line, so the cap of 32
+ * would always hide them: they get a small cap of their own and go to the
+ * debug log as well. A verbose check (autochk at boot) shows nearly all of
+ * them, since its log is the record of what the repair did. */
+#define NTFS_RELINK_DIAGNOSTICS 16
+#define NTFS_RELINK_DIAGNOSTICS_VERBOSE 4000
 
 static
 VOID
@@ -416,7 +453,30 @@ NtfsCheckReport(
 {
     PNTFS_CHECK_CONTEXT Check = (PNTFS_CHECK_CONTEXT)Context;
 
-    if (Event != NtfsCheckLostClusters && !Check->Verbose && Check->Reported >= 32)
+    if (Event == NtfsCheckNameRelinkFailed || Event == NtfsCheckNameFoundUncounted)
+    {
+        ULONG Limit = Check->Verbose ? NTFS_RELINK_DIAGNOSTICS_VERBOSE : NTFS_RELINK_DIAGNOSTICS;
+
+        if (Check->RelinkDiagnosed > Limit)
+            return;
+        if (Check->RelinkDiagnosed++ == Limit)
+        {
+            NtfsVerdictReport(Check->Callback, "Further relink diagnostics are not shown.\n");
+            return;
+        }
+        if (Event == NtfsCheckNameRelinkFailed)
+            NtfsVerdictReport(Check->Callback,
+                              "A name of file %I64X could not be added to the index of directory file %I64X (status 0x%08lx).\n",
+                              Argument1, Argument2 & 0xFFFFFFFFULL, (ULONG)(Argument2 >> 32));
+        else
+            NtfsVerdictReport(Check->Callback,
+                              "A name of file %I64X is found in directory file %I64X by lookup, but the index walk did not count it.\n",
+                              Argument1, Argument2);
+        return;
+    }
+
+    if (Event != NtfsCheckLostClusters && Event != NtfsCheckRepairsBlocked &&
+        !Check->Verbose && Check->Reported >= 32)
         return;
     Check->Reported++;
 
@@ -535,14 +595,58 @@ NtfsCheckReport(
         case NtfsCheckDataAttributeInserted:
             NtfsFormatReport(Check->Callback, "Inserting data attribute into file %I64X.\n", Argument1);
             break;
+        case NtfsCheckRepairsBlocked:
+            if (Argument2 == ~0ULL)
+                NtfsVerdictReport(Check->Callback,
+                                  "Index repairs and freeing of unused clusters were skipped: %I64u structural problems remain.\n",
+                                  Argument1);
+            else
+                NtfsVerdictReport(Check->Callback,
+                                  "Index repairs and freeing of unused clusters were skipped: %I64u structural problems remain (first in file record segment %I64X).\n",
+                                  Argument1, Argument2);
+            break;
         case NtfsCheckLostNameRemoved:
             NtfsFormatReport(Check->Callback,
                              "Removed %I64u names of file %I64X that belonged to a deleted directory.\n",
                              Argument2, Argument1);
             break;
+        case NtfsCheckNameRelinkFailed:
+        case NtfsCheckNameFoundUncounted:
+            /* Reported above, under their own cap. */
+            break;
         case NtfsCheckIndexNameMissing:
             NtfsFormatReport(Check->Callback,
                              "An index entry in index $I30 of file %I64X names file 0x%I64x, which does not have that name.\n",
+                             Argument1, Argument2);
+            break;
+        case NtfsCheckAttributeListUnreadable:
+            NtfsFormatReport(Check->Callback,
+                             "The attribute list in file %I64X cannot be read (status 0x%08lx).\n",
+                             Argument1, (ULONG)Argument2);
+            break;
+        case NtfsCheckAttributeListRemoved:
+            NtfsFormatReport(Check->Callback,
+                             "Deleted the unreadable attribute list of file %I64X.\n",
+                             Argument1);
+            break;
+        case NtfsCheckIndexBlockUnreferenced:
+            NtfsFormatReport(Check->Callback,
+                             "Index $I30 of file %I64X has an unreferenced block at VCN 0x%I64x.\n",
+                             Argument1, Argument2);
+            break;
+        case NtfsCheckIndexReset:
+            NtfsFormatReport(Check->Callback,
+                             "Rebuilding index $I30 of file %I64X (%I64u blocks dropped).\n",
+                             Argument1, Argument2);
+            break;
+        case NtfsCheckIndexDuplicateEntry:
+            NtfsFormatReport(Check->Callback,
+                             "Index $I30 of file %I64X holds a second entry for file 0x%I64x.\n",
+                             Argument1, Argument2);
+            break;
+        case NtfsCheckIndexTailTrimmed:
+            NtfsFormatReport(Check->Callback,
+                             "Index $I30 of file %I64X held entries beyond its range at VCN 0x%I64x.\n",
                              Argument1, Argument2);
             break;
     }
@@ -610,6 +714,7 @@ NtfsChkdsk(
     ULONG DirtyMask = 0;
     USHORT Flags = 0;
     BOOLEAN Locked = FALSE;
+    ULONG CheckWrites = 0;
     BOOLEAN Dirty;
     NTSTATUS Status;
 
@@ -649,12 +754,12 @@ NtfsChkdsk(
     {
         if (NtfsNeedsOnlineScanOnly(Handle))
         {
-            NtfsFormatReport(Callback, "The volume needs an online scan, which is not run at startup.\n");
+            NtfsVerdictReport(Callback, "The volume needs an online scan, which is not run at startup.\n");
             NtClose(Handle);
             *ExitStatus = (ULONG)STATUS_SUCCESS;
             return TRUE;
         }
-        NtfsFormatReport(Callback, "The volume is dirty.\n");
+        NtfsVerdictReport(Callback, "The volume is dirty.\n");
         NtClose(Handle);
         return TRUE;
     }
@@ -664,7 +769,7 @@ NtfsChkdsk(
         Status = NtfsCheckControl(Handle, FSCTL_LOCK_VOLUME, NULL, 0);
         Locked = NT_SUCCESS(Status);
         if (!Locked)
-            NtfsFormatReport(Callback, "The volume is in use, so problems will be reported but not fixed.\n");
+            NtfsVerdictReport(Callback, "The volume is in use, so problems will be reported but not fixed.\n");
     }
 
     Status = NtfsDiskInitializeUm(Handle, &BytesPerSector);
@@ -680,6 +785,8 @@ NtfsChkdsk(
     {
         NtfsFormatReport(Callback, "Checking file records, indexes and the volume bitmap...\n");
         Status = NtfsVolumeCheck(Volume, Locked, NtfsCheckReport, &Check, &Result);
+        /* Writes made by the check itself, before the dirty flag is cleared. */
+        CheckWrites = NtfsDiskWriteCountUm();
     }
     /* VD4: do NOT clear the on-disk dirty flag while the mounted FSD still holds
      * a stale lifecycle. Dismount first and clear only after a SUCCESSFUL
@@ -698,7 +805,7 @@ NtfsChkdsk(
             if (NT_SUCCESS(DismountStatus))
                 (void)NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN);
             else
-                NtfsFormatReport(Callback,
+                NtfsVerdictReport(Callback,
                     "The volume could not be dismounted after the check (status 0x%08lx); the dirty flag was left set and it will be checked again next boot.\n",
                     DismountStatus);
         }
@@ -711,7 +818,7 @@ NtfsChkdsk(
 
     if (!NT_SUCCESS(Status))
     {
-        NtfsFormatReport(Callback, "The volume could not be checked (status 0x%08lx).\n", Status);
+        NtfsVerdictReport(Callback, "The volume could not be checked (status 0x%08lx).\n", Status);
         return FALSE;
     }
 
@@ -724,11 +831,25 @@ NtfsChkdsk(
         NtfsFormatReport(Callback, "%I64u clusters were returned to free space.\n", Result.FreedClusters);
     if (Result.Errors)
     {
-        NtfsFormatReport(Callback, "Problems were found on the volume.\n");
+        NtfsVerdictReport(Callback, "Problems were found on the volume (%I64u left of %I64u found).\n",
+                          Result.Errors, Result.FoundErrors);
+        /* The check may still have repaired part of the volume around the
+         * mounted file system, which was dismounted above: what was opened on
+         * it before is stale, so restart as after a full repair. The dirty
+         * flag stays set and the next boot checks again. Restart only when
+         * the check wrote AND fewer problems are left than it found: a check
+         * that writes nothing, or a repair that writes on every boot without
+         * removing anything, does not restart, so neither can loop. */
+        if (Locked && CheckWrites != 0 && Result.Errors < Result.FoundErrors)
+        {
+            NtfsVerdictReport(Callback, "%lu writes were made to the volume; it must be restarted.\n",
+                             CheckWrites);
+            *ExitStatus = NTFSLIB_CHKDSK_VOLUME_RELOADED;
+        }
         return TRUE;
     }
 
-    NtfsFormatReport(Callback, "No problems were found on the volume.\n");
+    NtfsVerdictReport(Callback, "No problems were found on the volume.\n");
     /* The repair went around the mounted file system, which was then
      * dismounted: only a restart drops what was opened on it before. */
     *ExitStatus = Locked ? NTFSLIB_CHKDSK_VOLUME_RELOADED : (ULONG)STATUS_SUCCESS;
