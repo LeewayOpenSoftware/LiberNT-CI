@@ -1216,6 +1216,23 @@ NtfsWriteBarrierEnabledContext(_In_opt_ void* Context)
 }
 
 /*
+ * Read the registry settings of this environment once, from DriverEntry.
+ * The barrier selector is consulted while a record is allocated or an index
+ * is edited, with the volume's MetadataResource held exclusively. Reading
+ * the registry there takes the registry lock, while the configuration
+ * manager holds that lock exclusively during NtInitializeRegistry and waits
+ * for its hive-loading threads, which open the hive files on this volume
+ * and need the MetadataResource. The first allocation of the boot must not
+ * be the one that reads the value.
+ */
+extern "C"
+VOID
+NtfsDiskReadSettingsKm(VOID)
+{
+    (void)NtfsWriteBarrierEnabledKm();
+}
+
+/*
  * Write-ordering barrier: the block covering [LaterOffset, +LaterLength) must
  * not reach the device until the block(s) covering [EarlierOffset,
  * +EarlierLength) (the new MFT record) are durable. An earlier block that is

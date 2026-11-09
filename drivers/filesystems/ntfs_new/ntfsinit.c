@@ -112,6 +112,9 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
     // Get global driver settings from registry
     GetGlobalSettingsFromRegistry();
 
+    // Read the library's settings now, never later under a volume lock
+    NtfsDiskReadSettingsKm();
+
     // Global mounted-volume list for the shutdown data-flush sweep.
     InitializeListHead(&NtfsGlobalVolumeList);
     Status = ExInitializeResourceLite(&NtfsGlobalVolumeListResource);
