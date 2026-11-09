@@ -57,33 +57,57 @@ static void cleanup_notification(HANDLE event, OVERLAPPED *ovr)
     if (event) CloseHandle(event);
 }
 
-/* A route through a real gateway: the stack refuses routes on the loopback
- * interface, so the test route goes where the default route goes. */
-static BOOL find_default_gateway(MIB_IPFORWARDROW *gateway)
+/* The stack refuses routes on the loopback interface, so the test route
+ * goes where the default route goes, or, when the machine has no IPv4
+ * default route, on-link through the first real IPv4 address. */
+static BOOL find_test_route(MIB_IPFORWARDROW *route)
 {
-    MIB_IPFORWARDTABLE *table;
+    MIB_IPFORWARDTABLE *routes;
+    MIB_IPADDRTABLE *addrs;
     ULONG size = 0, i;
     DWORD error;
     BOOL found = FALSE;
 
     error = GetIpForwardTable(NULL, &size, FALSE);
-    if (error != ERROR_INSUFFICIENT_BUFFER || !size)
-        return FALSE;
-    table = HeapAlloc(GetProcessHeap(), 0, size);
-    if (!table)
-        return FALSE;
-    error = GetIpForwardTable(table, &size, FALSE);
-    for (i = 0; error == NO_ERROR && i < table->dwNumEntries; i++)
+    if (error == ERROR_INSUFFICIENT_BUFFER && size && (routes = HeapAlloc(GetProcessHeap(), 0, size)))
     {
-        if (table->table[i].dwForwardDest == 0 && table->table[i].dwForwardMask == 0 &&
-            table->table[i].dwForwardNextHop != 0)
+        error = GetIpForwardTable(routes, &size, FALSE);
+        for (i = 0; error == NO_ERROR && i < routes->dwNumEntries; i++)
         {
-            *gateway = table->table[i];
+            if (routes->table[i].dwForwardDest == 0 && routes->table[i].dwForwardMask == 0 &&
+                routes->table[i].dwForwardNextHop != 0)
+            {
+                route->dwForwardNextHop = routes->table[i].dwForwardNextHop;
+                route->dwForwardIfIndex = routes->table[i].dwForwardIfIndex;
+                route->dwForwardType = MIB_IPROUTE_TYPE_INDIRECT;
+                found = TRUE;
+                break;
+            }
+        }
+        HeapFree(GetProcessHeap(), 0, routes);
+    }
+    if (found)
+        return TRUE;
+
+    size = 0;
+    error = GetIpAddrTable(NULL, &size, FALSE);
+    if (error == ERROR_INSUFFICIENT_BUFFER && size && (addrs = HeapAlloc(GetProcessHeap(), 0, size)))
+    {
+        error = GetIpAddrTable(addrs, &size, FALSE);
+        for (i = 0; error == NO_ERROR && i < addrs->dwNumEntries; i++)
+        {
+            DWORD addr = addrs->table[i].dwAddr;
+
+            if (addr == 0 || (ntohl(addr) >> 24) == 127 || (ntohl(addr) >> 16) == 0xA9FE)
+                continue;
+            route->dwForwardNextHop = addr;
+            route->dwForwardIfIndex = addrs->table[i].dwIndex;
+            route->dwForwardType = MIB_IPROUTE_TYPE_DIRECT;
             found = TRUE;
             break;
         }
+        HeapFree(GetProcessHeap(), 0, addrs);
     }
-    HeapFree(GetProcessHeap(), 0, table);
     return found;
 }
 
@@ -120,7 +144,7 @@ START_TEST(NotifyRouteChange)
 {
     OVERLAPPED ovr = {0};
     HANDLE event, handle = NULL;
-    MIB_IPFORWARDROW gateway = {0}, route = {0};
+    MIB_IPFORWARDROW route = {0};
     DWORD error;
     BOOL added = FALSE;
 
@@ -131,17 +155,14 @@ START_TEST(NotifyRouteChange)
     if (!register_route_change(event, &ovr, &handle))
         goto cleanup;
 
-    if (!find_default_gateway(&gateway))
+    if (!find_test_route(&route))
     {
-        win_skip("No default route with a gateway, skipping route change checks\n");
+        win_skip("No IPv4 default route or non-loopback address, skipping route change checks\n");
         goto cleanup;
     }
 
     route.dwForwardDest = TEST_ROUTE_DEST;
     route.dwForwardMask = htonl(0xFFFFFFFF);
-    route.dwForwardNextHop = gateway.dwForwardNextHop;
-    route.dwForwardIfIndex = gateway.dwForwardIfIndex;
-    route.dwForwardType = MIB_IPROUTE_TYPE_INDIRECT;
     route.dwForwardProto = MIB_IPPROTO_NETMGMT;
     route.dwForwardMetric1 = 1;
 
