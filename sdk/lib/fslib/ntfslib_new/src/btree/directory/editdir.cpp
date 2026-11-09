@@ -2430,6 +2430,60 @@ Directory::SplitAndPromote(
         if (!NT_SUCCESS(Status))
             goto Done;
 
+        /*
+         * Best effort: order the parent after the rewritten left node as
+         * well. Without it a parent that lands first points at a left node
+         * that still holds the entries that moved right; a lookup survives
+         * that, but a check that tests key ranges does not and resets the
+         * whole directory. The parent write follows regardless of the
+         * result here, so a failure cannot leave the left node rewritten
+         * under an unwritten parent; it only forgoes this ordering.
+         */
+        {
+            NTSTATUS OrderStatus;
+
+            if (Level - 1 != 0)
+            {
+                OrderStatus = OrderNodeAfterIndexNodes(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    PathVcns[Level - 2],
+                    &NodeVcn,
+                    1,
+                    AllocationUnit,
+                    RecordSize);
+            }
+            else
+            {
+                PAttribute RootAttribute =
+                    DirectoryFile->GetAttribute(
+                        TypeIndexRoot,
+                        const_cast<PWSTR>(IndexName));
+
+                OrderStatus = OrderRecordAfterIndexNodes(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    &NodeVcn,
+                    1,
+                    AllocationUnit,
+                    RecordSize,
+                    RootAttribute
+                        ? DirectoryFile->GetAttributeOwner(
+                            RootAttribute)
+                        : NULL);
+            }
+            if (!NT_SUCCESS(OrderStatus))
+            {
+                DPRINT1(
+                    "Parent of index node %llu was not "
+                    "ordered after it: 0x%lx.\n",
+                    NodeVcn,
+                    OrderStatus);
+            }
+        }
+
         /* The parent written next names these two. */
         ChildVcns[0] = NewVcn;
         ChildVcns[1] = NodeVcn;
