@@ -2733,6 +2733,7 @@ ChangePos:
 #if DBG
         {
             RECT rcS = {0}, rcR = {0}, rcT = {0};
+            HWND hwndDiagToolbar = m_TaskSwitch ? ::GetWindow(m_TaskSwitch, GW_CHILD) : NULL;
             m_StartButton.GetWindowRect(&rcS);
             ::GetWindowRect(m_Rebar, &rcR);
             ::GetWindowRect(m_hWnd, &rcT);
@@ -2740,7 +2741,7 @@ ChangePos:
                 Horizontal, rcClient.right, rcClient.bottom, StartSize.cx, StartSize.cy,
                 rcS.left, rcS.top, rcS.right, rcS.bottom, (int)m_StartButton.IsWindowVisible(),
                 rcR.left, rcR.top, rcR.right, rcR.bottom, rcT.left, rcT.top, rcT.right, rcT.bottom,
-                hwndTaskToolbar);
+                hwndDiagToolbar);
         }
 #endif
 
