@@ -40,8 +40,10 @@
 
 /* DEFINES ******************************************************************/
 
-/* Complete output lines copied to the debug log before the mirror stops. */
-#define AUTOCHK_MIRROR_LINES 200
+/* Complete checker output lines copied to the debug log before the mirror
+ * stops. The serial log is the only record a lab keeps of a boot-time
+ * repair, and at 115200 baud a few thousand lines cost seconds. */
+#define AUTOCHK_MIRROR_LINES 4000
 
 typedef struct _FILESYSTEM_CHKDSK
 {
