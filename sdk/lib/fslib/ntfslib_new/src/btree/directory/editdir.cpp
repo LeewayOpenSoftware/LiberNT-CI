@@ -2165,37 +2165,14 @@ Directory::SplitAndPromote(
                 Header->IndexOffset +
                 ListBytes;
             /*
-             * This node is about to name the two children the previous
-             * level wrote. Order it after them (OrderAfterIndexNodes).
+             * This node names the two children the level below wrote. It
+             * was ordered after the new right one, and after the record
+             * that grew the allocation, before the left one was rewritten
+             * (end of the split case below), so nothing that can fail
+             * stands between a rewritten left node and this write. Landing
+             * before the rewritten left node only duplicates the moved
+             * entries, which a walk tolerates.
              */
-            if (HaveChildren)
-            {
-                Status = OrderNodeAfterIndexNodes(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    NodeVcn,
-                    ChildVcns,
-                    2,
-                    AllocationUnit,
-                    RecordSize);
-                if (!NT_SUCCESS(Status))
-                    goto Done;
-            }
-            /* ... and after the record that grew the allocation for them. */
-            if (AllocationGrew)
-            {
-                Status = OrderNodeAfterRecord(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    NodeVcn,
-                    AllocationUnit,
-                    RecordSize,
-                    AllocationOwner);
-                if (!NT_SUCCESS(Status))
-                    goto Done;
-            }
             Status = WriteIndexNode(
                 DiskVolume,
                 DirectoryFile,
@@ -2310,6 +2287,90 @@ Directory::SplitAndPromote(
             IndexName,
             NewOrdinal,
             TRUE);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+
+        /*
+         * The left node is about to be rewritten with only its half of
+         * the entries; the other half lives in the new right node. Order
+         * the left node after the right one: a cut that landed the left
+         * rewrite without the right node would lose the moved entries
+         * from a tree that still looks valid, and no check would see it.
+         */
+        Status = OrderNodeAfterIndexNodes(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            NodeVcn,
+            &NewVcn,
+            1,
+            AllocationUnit,
+            RecordSize);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+
+        /*
+         * The parent written next (the node above, or the record that owns
+         * the root) will name the new right node and, when the allocation
+         * grew for it, depends on the record carrying the grown run list.
+         * Order it now, before the left node is rewritten, so that nothing
+         * that can fail stands between the left rewrite and the parent
+         * write. The parent's own block is cached (it was read on the way
+         * down), so the barrier can hold it; when the parent splits as
+         * well, or the root is pushed down, the pointer also lands in a new
+         * block and the children are committed synchronously at that point.
+         */
+        if (Level - 1 != 0)
+        {
+            Status = OrderNodeAfterIndexNodes(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                PathVcns[Level - 2],
+                &NewVcn,
+                1,
+                AllocationUnit,
+                RecordSize);
+            if (NT_SUCCESS(Status) && AllocationGrew)
+            {
+                Status = OrderNodeAfterRecord(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    PathVcns[Level - 2],
+                    AllocationUnit,
+                    RecordSize,
+                    AllocationOwner);
+            }
+        }
+        else
+        {
+            PAttribute RootAttribute =
+                DirectoryFile->GetAttribute(
+                    TypeIndexRoot,
+                    const_cast<PWSTR>(IndexName));
+            PFileRecord RootOwner = RootAttribute
+                ? DirectoryFile->GetAttributeOwner(
+                    RootAttribute)
+                : NULL;
+
+            Status = OrderRecordAfterIndexNodes(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                &NewVcn,
+                1,
+                AllocationUnit,
+                RecordSize,
+                RootOwner);
+            if (NT_SUCCESS(Status) && AllocationGrew)
+            {
+                Status = OrderRecordAfterRecord(
+                    DiskVolume,
+                    RootOwner,
+                    AllocationOwner);
+            }
+        }
         if (!NT_SUCCESS(Status))
             goto Done;
 
@@ -2455,45 +2516,11 @@ Directory::SplitAndPromote(
         if (!NT_SUCCESS(Status))
             goto Done;
         /*
-         * The record that owns the root is about to name the two children
-         * the last level wrote. Order it after them.
+         * The record that owns the root names the two children the last
+         * level wrote. It was ordered after the new right one, and after
+         * the record that grew the allocation when that is another record,
+         * before the left one was rewritten (end of the split case above).
          */
-        if (HaveChildren)
-        {
-            Status = OrderRecordAfterIndexNodes(
-                DiskVolume,
-                DirectoryFile,
-                IndexName,
-                ChildVcns,
-                2,
-                AllocationUnit,
-                RecordSize,
-                DirectoryFile->GetAttributeOwner(
-                    IndexRootAttribute));
-            if (!NT_SUCCESS(Status))
-            {
-                delete[] RootValue;
-                goto Done;
-            }
-        }
-        /*
-         * When the root lives in another record than the allocation, the
-         * root's record must not land before the record with the grown run
-         * list (one record: one write, nothing to order).
-         */
-        if (AllocationGrew)
-        {
-            Status = OrderRecordAfterRecord(
-                DiskVolume,
-                DirectoryFile->GetAttributeOwner(
-                    IndexRootAttribute),
-                AllocationOwner);
-            if (!NT_SUCCESS(Status))
-            {
-                delete[] RootValue;
-                goto Done;
-            }
-        }
         Status = ReplaceIndexRootValue(
             DiskVolume,
             DirectoryFile,
