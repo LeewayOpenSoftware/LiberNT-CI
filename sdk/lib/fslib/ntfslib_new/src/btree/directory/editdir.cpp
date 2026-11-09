@@ -1128,6 +1128,117 @@ BuildRootValueFromList(
     return STATUS_SUCCESS;
 }
 
+NTSTATUS
+Directory::ResetIndex(
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName)
+{
+    PAttribute IndexRootAttribute;
+    PAttribute BitmapAttribute;
+    IndexRootEx RootPrefix;
+    UCHAR EndList[FIELD_OFFSET(IndexEntry, IndexStream)] = {};
+    PIndexEntry End = reinterpret_cast<PIndexEntry>(EndList);
+    PUCHAR RootValue = NULL;
+    ULONG RootValueLength;
+    NTSTATUS Status;
+
+    IndexRootAttribute =
+        DirectoryFile->GetAttribute(
+            TypeIndexRoot,
+            const_cast<PWSTR>(IndexName));
+    if (!IndexRootAttribute ||
+        IndexRootAttribute->IsNonResident ||
+        IndexRootAttribute->Resident.DataLength < sizeof(IndexRootEx))
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+    RtlCopyMemory(&RootPrefix,
+                  reinterpret_cast<PUCHAR>(IndexRootAttribute) +
+                      IndexRootAttribute->Resident.DataOffset,
+                  sizeof(RootPrefix));
+
+    /* Clear the bitmap first: a resident bitmap then reaches the disk with
+     * the root, in the same record write below. */
+    BitmapAttribute =
+        DirectoryFile->GetAttribute(
+            TypeBitmap,
+            const_cast<PWSTR>(IndexName));
+    if (BitmapAttribute)
+    {
+        ULONGLONG BitmapLength =
+            GetAttributeDataSize(BitmapAttribute);
+        ULONG WriteLength = (ULONG)BitmapLength;
+        LARGE_INTEGER WriteOffset = {};
+        PUCHAR Zeros;
+
+        if (BitmapLength > MAXULONG)
+            return STATUS_FILE_CORRUPT_ERROR;
+        if (WriteLength)
+        {
+            Zeros = new(PagedPool, TAG_BTREE) UCHAR[WriteLength];
+            if (!Zeros)
+                return STATUS_INSUFFICIENT_RESOURCES;
+            RtlZeroMemory(Zeros, WriteLength);
+            Status = DirectoryFile->WriteFileData(
+                TypeBitmap,
+                const_cast<PWSTR>(IndexName),
+                Zeros,
+                &WriteLength,
+                &WriteOffset);
+            delete[] Zeros;
+            if (NT_SUCCESS(Status) && WriteLength != (ULONG)BitmapLength)
+                Status = STATUS_END_OF_FILE;
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
+    }
+
+    End->EntryLength = (USHORT)sizeof(EndList);
+    End->Flags = INDEX_ENTRY_END;
+    Status = BuildRootValueFromList(
+        &RootPrefix,
+        EndList,
+        sizeof(EndList),
+        FALSE,
+        &RootValue,
+        &RootValueLength);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = ReplaceIndexRootValue(
+        DiskVolume,
+        DirectoryFile,
+        IndexName,
+        RootValue,
+        RootValueLength);
+    delete[] RootValue;
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* A resident bitmap kept outside the root's record has its own. */
+    BitmapAttribute =
+        DirectoryFile->GetAttribute(
+            TypeBitmap,
+            const_cast<PWSTR>(IndexName));
+    if (BitmapAttribute && !BitmapAttribute->IsNonResident)
+    {
+        PFileRecord BitmapOwner =
+            DirectoryFile->GetAttributeOwner(BitmapAttribute);
+
+        IndexRootAttribute =
+            DirectoryFile->GetAttribute(
+                TypeIndexRoot,
+                const_cast<PWSTR>(IndexName));
+        if (!BitmapOwner)
+            return STATUS_FILE_CORRUPT_ERROR;
+        if (!IndexRootAttribute ||
+            DirectoryFile->GetAttributeOwner(IndexRootAttribute) != BitmapOwner)
+        {
+            Status = DiskVolume->MFT->WriteFileRecordToMFT(BitmapOwner);
+        }
+    }
+    return Status;
+}
+
 /*
  * Moves one complete root entry list into an index buffer and leaves the
  * root as a single END entry pointing at it. This serves both the first

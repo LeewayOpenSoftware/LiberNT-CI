@@ -1103,7 +1103,20 @@ typedef enum NtfsCheckEvent
     /* A name the index walk did not count is found by a lookup in its parent
      * directory, so it was not added again. Argument1: the file record;
      * Argument2: the parent's file record. Diagnostic only. */
-    NtfsCheckNameFoundUncounted
+    NtfsCheckNameFoundUncounted,
+    /* The attribute list of a file cannot be read or parsed. Argument1: the
+     * file record; Argument2: the NTSTATUS. */
+    NtfsCheckAttributeListUnreadable,
+    /* An unreadable attribute list was removed: every attribute of the file
+     * lives in its base record. Argument1: the file record. */
+    NtfsCheckAttributeListRemoved,
+    /* An index block is marked in use but no node of the index points to it.
+     * Argument1: the directory's file record; Argument2: the block's VCN. */
+    NtfsCheckIndexBlockUnreferenced,
+    /* An index whose tree could not be walked was emptied, so its names can
+     * be added back from the files' own names. Argument1: the directory's
+     * file record; Argument2: the index blocks that were in use. */
+    NtfsCheckIndexReset
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult
@@ -1129,6 +1142,10 @@ typedef struct NtfsCheckResult
     UINT64 FoundErrors;
     /* MFT bitmap bits corrected for records found in use or free. */
     UINT64 FixedRecordBitmapBits;
+    /* Indexes emptied because their tree could not be walked. */
+    UINT64 ResetIndexes;
+    /* Index blocks in use that no node referenced, released. */
+    UINT64 ReleasedIndexBlocks;
 } NtfsCheckResult, *PNtfsCheckResult;
 
 typedef void (*PNtfsCheckCallback)(

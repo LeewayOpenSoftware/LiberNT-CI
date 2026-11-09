@@ -615,6 +615,26 @@ NtfsCheckReport(
                              "An index entry in index $I30 of file %I64X names file 0x%I64x, which does not have that name.\n",
                              Argument1, Argument2);
             break;
+        case NtfsCheckAttributeListUnreadable:
+            NtfsFormatReport(Check->Callback,
+                             "The attribute list in file %I64X cannot be read (status 0x%08lx).\n",
+                             Argument1, (ULONG)Argument2);
+            break;
+        case NtfsCheckAttributeListRemoved:
+            NtfsFormatReport(Check->Callback,
+                             "Deleted the unreadable attribute list of file %I64X.\n",
+                             Argument1);
+            break;
+        case NtfsCheckIndexBlockUnreferenced:
+            NtfsFormatReport(Check->Callback,
+                             "Index $I30 of file %I64X has an unreferenced block at VCN 0x%I64x.\n",
+                             Argument1, Argument2);
+            break;
+        case NtfsCheckIndexReset:
+            NtfsFormatReport(Check->Callback,
+                             "Rebuilding index $I30 of file %I64X (%I64u blocks dropped).\n",
+                             Argument1, Argument2);
+            break;
     }
 }
 

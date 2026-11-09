@@ -1485,6 +1485,31 @@ FileRecord::FilterAttributeList(
 }
 
 NTSTATUS
+FileRecord::RemoveAttributeList()
+{
+    PAttribute ListAttribute;
+    NTSTATUS Status;
+
+    if (!DiskVolume || DiskVolume->IsReadOnly || !Data || !Header || Header->BaseFileRecord != 0)
+        return STATUS_INVALID_PARAMETER;
+
+    ListAttribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    if (!ListAttribute)
+        return STATUS_NOT_FOUND;
+
+    Status = RemoveAttributeRecord(ListAttribute);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    delete[] AttributeListData;
+    AttributeListData = NULL;
+    AttributeListLength = 0;
+    ClearExtentCache();
+    ClearDataRunCache();
+    return DiskVolume->MFT->WriteFileRecordToMFT(this);
+}
+
+NTSTATUS
 FileRecord::ReplaceAttributeList(
     _In_reads_bytes_(NewLength) PUCHAR NewList,
     _In_ ULONG NewLength)

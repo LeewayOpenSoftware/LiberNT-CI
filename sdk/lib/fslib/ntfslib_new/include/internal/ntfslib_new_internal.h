@@ -1029,6 +1029,13 @@ public:
         _Out_ PULONG DroppedNames,
         _Out_ PBOOLEAN DroppedUnnamedData);
 
+    /* Removes the $ATTRIBUTE_LIST of a base record whose attributes all live
+     * in that record, and commits the record. The caller makes sure no
+     * extension record belongs to it; the list clusters are left for the
+     * bitmap check to free. */
+    NTSTATUS
+    RemoveAttributeList();
+
     NTSTATUS ReadSecurityDescriptor(
         _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG BufferLength);
@@ -1621,6 +1628,14 @@ public:
         _In_ PFileRecord DirectoryFile,
         _In_ ULONGLONG FileReference,
         _In_ PUNICODE_STRING Name);
+
+    /* Empties an index whose tree cannot be walked: the root becomes an
+     * END-only leaf and every bitmap bit is cleared. The allocation is kept
+     * for reuse. Used by the volume check before it relinks the names. */
+    NTSTATUS
+    ResetIndex(
+        _In_ PFileRecord DirectoryFile,
+        _In_ PCWSTR IndexName);
 
     NTSTATUS
     RemoveIndexEntry(
