@@ -709,6 +709,7 @@ VolumeCheck::RepairRecordsPass()
     if (MftBitmapChanged && NT_SUCCESS(WriteMftBitmap()))
     {
         Out->Errors -= MftBitmapFixes;
+        Out->FixedRecordBitmapBits += MftBitmapFixes;
         if (MftBitmapFixes)
             Event(NtfsCheckRecordBitmapFixed, MftBitmapFixes, 0);
     }
@@ -1770,10 +1771,13 @@ NtfsVolumeCheck(
 
         Status = Check.Run(Repair);
     }
+    /* Verify whenever anything was repaired, so Errors is always measured on
+     * what the repairs left and not just counted down as they were written. */
     if (!NT_SUCCESS(Status) || !Repair ||
         !(Result->RemovedIndexEntries || Result->RelinkedNames || Result->FreedRecords ||
           Result->ResolvedCrossLinks || Result->RecoveredFiles || Result->RepairedAttributeLists ||
-          Result->RemovedNames))
+          Result->RemovedNames || Result->FixedIndexEntries || Result->ClaimedClusters ||
+          Result->FreedClusters || Result->FixedRecordBitmapBits))
     {
         return Status;
     }
@@ -1795,6 +1799,7 @@ NtfsVolumeCheck(
         Pass.RecoveredFiles += Result->RecoveredFiles;
         Pass.RepairedAttributeLists += Result->RepairedAttributeLists;
         Pass.RemovedNames += Result->RemovedNames;
+        Pass.FixedRecordBitmapBits += Result->FixedRecordBitmapBits;
         /* The verify pass only sees what the repairs left behind. */
         Pass.FoundErrors = Result->FoundErrors;
         *Result = Pass;

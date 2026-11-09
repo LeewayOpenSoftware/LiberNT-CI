@@ -1117,6 +1117,8 @@ typedef struct NtfsCheckResult
     /* Problems the first pass found, before any repair (Errors is what is
      * left after the repairs and the verify pass). */
     UINT64 FoundErrors;
+    /* MFT bitmap bits corrected for records found in use or free. */
+    UINT64 FixedRecordBitmapBits;
 } NtfsCheckResult, *PNtfsCheckResult;
 
 typedef void (*PNtfsCheckCallback)(
