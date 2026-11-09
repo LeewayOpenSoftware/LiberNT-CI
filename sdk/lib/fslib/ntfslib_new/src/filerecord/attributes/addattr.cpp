@@ -3800,6 +3800,51 @@ FileRecord::CommitNonResidentMappingUpdate(
             return Status;
     }
 
+    /*
+     * The write-back cache commits blocks in no dependency order, so the
+     * "owner first" above holds in memory only. Order the list's block after
+     * the owner record (Volume::OrderAfter): a list naming an attribute
+     * instance in a record whose content never landed would leave that
+     * attribute unreachable. A list spanning several blocks cannot be
+     * constrained as one block; the owner record is then committed
+     * synchronously, as it is when the pointer cannot be placed.
+     */
+    if (AttributeOwner != BaseRecord)
+    {
+        PVolume TargetVolume = BaseRecord->DiskVolume;
+        ULONGLONG OwnerDiskOffset = 0;
+        ULONGLONG ListDiskOffset = 0;
+        ULONG ListLength = 0;
+
+        if (AttributeOwner->RecordNumber == MAXULONG ||
+            !NT_SUCCESS(TargetVolume->MFT->GetFileRecordDiskOffset(
+                AttributeOwner->RecordNumber,
+                &OwnerDiskOffset)))
+        {
+            Status = TargetVolume->FlushVolume();
+        }
+        else
+        {
+            if (!NT_SUCCESS(TargetVolume->MFT->GetAttributeRangeDiskOffset(
+                    BaseRecord,
+                    ListAttribute,
+                    0,
+                    Update->NewListLength,
+                    &ListDiskOffset,
+                    &ListLength)))
+            {
+                ListLength = 0;
+            }
+            Status = TargetVolume->OrderAfter(
+                ListDiskOffset,
+                ListLength,
+                OwnerDiskOffset,
+                TargetVolume->MFT->FileRecordSize);
+        }
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     WrittenLength = Update->NewListLength;
     Update->ListWriteAttempted = TRUE;
     Status = BaseRecord->WriteFileData(
@@ -3831,6 +3876,50 @@ FileRecord::CommitNonResidentMappingUpdate(
         Update->NewListLength;
     ListAttribute->NonResident.InitalizedDataSize =
         Update->NewListLength;
+
+    /*
+     * The base record is about to publish the new list length. Order it
+     * after the list bytes written above, so the record can never describe
+     * a longer list than the disk holds: the tail would read as zero entries
+     * and the list would fail to parse, which makes every attribute of the
+     * file unreachable (J36 r149, the same symptom from the promotion path).
+     */
+    {
+        PVolume TargetVolume = BaseRecord->DiskVolume;
+        ULONGLONG BaseDiskOffset = 0;
+        ULONGLONG ListDiskOffset = 0;
+        ULONG BaseLength = 0;
+        ULONG ListLength = 0;
+
+        if (!NT_SUCCESS(TargetVolume->MFT->GetAttributeRangeDiskOffset(
+                BaseRecord,
+                ListAttribute,
+                0,
+                Update->NewListLength,
+                &ListDiskOffset,
+                &ListLength)))
+        {
+            Status = TargetVolume->FlushVolume();
+        }
+        else
+        {
+            if (BaseRecord->RecordNumber != MAXULONG &&
+                NT_SUCCESS(TargetVolume->MFT->GetFileRecordDiskOffset(
+                    BaseRecord->RecordNumber,
+                    &BaseDiskOffset)))
+            {
+                BaseLength = TargetVolume->MFT->FileRecordSize;
+            }
+            Status = TargetVolume->OrderAfter(
+                BaseDiskOffset,
+                BaseLength,
+                ListDiskOffset,
+                ListLength);
+        }
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     Status = BaseRecord->DiskVolume->MFT->
         WriteFileRecordToMFT(BaseRecord);
     if (!NT_SUCCESS(Status))
