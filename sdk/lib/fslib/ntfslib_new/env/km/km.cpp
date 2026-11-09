@@ -683,6 +683,7 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
 {
     NTFS_CACHE_SLOT* Slot;
     NTSTATUS Status;
+    BOOLEAN SameBlock;
 
     if (!NtfsCacheReady)
         return STATUS_SUCCESS;
@@ -721,6 +722,7 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
         ExReleaseFastMutex(&NtfsCacheMutex);
         return STATUS_SUCCESS;
     }
+    SameBlock = (Slot->Tag == Block && Slot->Owner == Owner);
     if (!Slot->Data)
     {
         Slot->Data = (PUCHAR)ExAllocatePoolUninitialized(NonPagedPoolNx,
@@ -740,7 +742,17 @@ NtfsCacheInstall(_In_ PDEVICE_OBJECT Owner,
     Slot->Owner = Owner;
     Slot->Generation++;
     Slot->DirtySeq = 0;
-    Slot->FlushAfterSeq = 0;
+    /*
+     * A write-ordering constraint (BarrierAfter) may sit on a clean block
+     * ahead of the write that will dirty it. Re-filling that same block
+     * from the disk, which a concurrent read miss can do, must keep the
+     * constraint: resetting it would let the pointer write that follows
+     * reach the device unordered. Only a slot that changes identity starts
+     * without one; NtfsCacheVictim never hands out a clean constrained
+     * slot for another block.
+     */
+    if (!SameBlock)
+        Slot->FlushAfterSeq = 0;
     Slot->Dirty = FALSE;
     ExReleaseFastMutex(&NtfsCacheMutex);
     return STATUS_SUCCESS;
