@@ -85,6 +85,7 @@ public:
         delete[] NameKeyUsed;
         delete[] ExtensionOwner;
         delete[] AttrListMap;
+        delete[] ExtendedMap;
     }
 
     NTSTATUS Run(_In_ BOOLEAN Repair);
@@ -127,6 +128,10 @@ private:
     BOOLEAN NameKeysIncomplete = FALSE;
     PULONG ExtensionOwner = NULL;
     PUCHAR AttrListMap = NULL;
+    /* Bases that some in-use record, valid or not, names as its base; and
+     * whether an unreadable record may have named one. */
+    PUCHAR ExtendedMap = NULL;
+    BOOLEAN ExtensionsUnknown = FALSE;
     /* One bit per name key: an index entry already counted for it. */
     PUCHAR NameKeyUsed = NULL;
     DanglingEntry* Dangling = NULL;
@@ -490,6 +495,13 @@ VolumeCheck::CheckRecord(_In_ ULONGLONG Number, _Inout_ PUCHAR Record)
     if (RtlCompareMemory(Header->Header.TypeID, "FILE", 4) != 4 ||
         !NT_SUCCESS(NtfsApplyFixup(&Header->Header, RecordSize, V->BytesPerSector)))
     {
+        /* A record that was never written holds no attribute; any other
+         * unreadable one in use might hold an extension of some base. */
+        for (ULONG Byte = 0; Allocated && Byte < RecordSize && !ExtensionsUnknown; Byte++)
+        {
+            if (Record[Byte])
+                ExtensionsUnknown = TRUE;
+        }
         if (Allocated && Number >= CHECK_FIRST_USER_RECORD)
         {
             Event(NtfsCheckRecordCorrupt, Number, 0);
@@ -514,6 +526,10 @@ VolumeCheck::CheckRecord(_In_ ULONGLONG Number, _Inout_ PUCHAR Record)
     }
     if (!InUse)
         return;
+
+    Owner = Header->BaseFileRecord & 0x0000FFFFFFFFFFFFULL;
+    if (Owner != 0 && Owner < RecordCount)
+        SetBit(ExtendedMap, Owner);
 
     if (Header->AllocatedSize != RecordSize || Header->ActualSize > RecordSize ||
         Header->AttributeOffset < sizeof(NTFSRecordHeader) || (Header->AttributeOffset & 7) != 0 ||
@@ -1055,15 +1071,12 @@ VolumeCheck::KeepListEntry(_In_ void* Context, _In_ const AttributeListEx* Entry
     return SequenceNumber == 0 || Check->Sequence[Record] == SequenceNumber;
 }
 
+/* TRUE unless no record can hold an attribute of Base: an in-use record
+ * that names Base, valid or faulted, or an unreadable one that might, counts. */
 BOOLEAN
 VolumeCheck::HasExtensions(_In_ ULONGLONG Base)
 {
-    for (ULONGLONG Number = 0; Number < RecordCount; Number++)
-    {
-        if (ExtensionOwner[Number] == (ULONG)Base + 1)
-            return TRUE;
-    }
-    return FALSE;
+    return ExtensionsUnknown || TestBit(ExtendedMap, Base);
 }
 
 void
@@ -2073,7 +2086,9 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
     Records = new(PagedPool, TAG_NTFS) UCHAR[CHECK_RECORD_CHUNK * RecordSize];
     ExtensionOwner = new(PagedPool, TAG_NTFS) ULONG[(ULONG)RecordCount];
     AttrListMap = AllocateMap(RecordCount);
-    if (!UsedMap || !DirectoryMap || !InUseMap || !Sequence || !Names || !Records || !ExtensionOwner || !AttrListMap)
+    ExtendedMap = AllocateMap(RecordCount);
+    if (!UsedMap || !DirectoryMap || !InUseMap || !Sequence || !Names || !Records || !ExtensionOwner || !AttrListMap ||
+        !ExtendedMap)
         return STATUS_INSUFFICIENT_RESOURCES;
     RtlZeroMemory(ExtensionOwner, (ULONG)RecordCount * sizeof(ULONG));
     RtlZeroMemory(Sequence, (ULONG)RecordCount * sizeof(USHORT));
