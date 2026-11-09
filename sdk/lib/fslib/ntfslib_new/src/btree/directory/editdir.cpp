@@ -1181,6 +1181,98 @@ NoteIndexDamage(
     DiskVolume->RetainDirty(TRUE);
 }
 
+/*
+ * A left half that a split holds back. Right, parent, then left: the left
+ * node may be rewritten with only its half of the entries once the node
+ * that links the new right node is written, else a cut that lands the left
+ * node first leaves the moved entries unreachable although every record
+ * exists.
+ */
+typedef struct _DEFERRED_LEFT_NODE
+{
+    PUCHAR Image;       /* RecordSize bytes, the rewritten left half */
+    ULONGLONG LeftVcn;
+    ULONGLONG RightVcn; /* the new right sibling of that level */
+} DEFERRED_LEFT_NODE, *PDEFERRED_LEFT_NODE;
+
+/*
+ * Writes the left halves a split held back, highest level first. Each is
+ * ordered after its own right sibling (the moved entries must be on the
+ * disk first) and after the nodes that may link that sibling: the left and
+ * right nodes of the level above, or, for the highest level, the node or
+ * record the split ended in (TopParentVcn when TopParentIsNode, else
+ * TopParentRecord). Only then may a left half land, so a cut can duplicate
+ * the moved entries but never lose them.
+ */
+static NTSTATUS
+WriteDeferredLeftNodes(
+    _In_ PVolume DiskVolume,
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONGLONG AllocationUnit,
+    _In_ ULONG RecordSize,
+    _In_reads_(Count) const DEFERRED_LEFT_NODE* Deferred,
+    _In_ ULONG Count,
+    _In_ BOOLEAN TopParentIsNode,
+    _In_ ULONGLONG TopParentVcn,
+    _In_opt_ PFileRecord TopParentRecord)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    for (ULONG Index = Count; Index-- > 0;)
+    {
+        ULONGLONG Pointees[3];
+        ULONG PointeeCount = 0;
+
+        Pointees[PointeeCount++] = Deferred[Index].RightVcn;
+        if (Index + 1 < Count)
+        {
+            Pointees[PointeeCount++] = Deferred[Index + 1].LeftVcn;
+            Pointees[PointeeCount++] = Deferred[Index + 1].RightVcn;
+        }
+        else if (TopParentIsNode)
+        {
+            Pointees[PointeeCount++] = TopParentVcn;
+        }
+        Status = OrderNodeAfterIndexNodes(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            Deferred[Index].LeftVcn,
+            Pointees,
+            PointeeCount,
+            AllocationUnit,
+            RecordSize);
+        if (NT_SUCCESS(Status) &&
+            Index + 1 == Count &&
+            !TopParentIsNode &&
+            TopParentRecord)
+        {
+            Status = OrderNodeAfterRecord(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                Deferred[Index].LeftVcn,
+                AllocationUnit,
+                RecordSize,
+                TopParentRecord);
+        }
+        if (!NT_SUCCESS(Status))
+            break;
+        Status = WriteIndexNode(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            Deferred[Index].LeftVcn,
+            AllocationUnit,
+            RecordSize,
+            Deferred[Index].Image);
+        if (!NT_SUCCESS(Status))
+            break;
+    }
+    return Status;
+}
+
 static NTSTATUS
 SetIndexRecordBitmapBit(
     _In_ PFileRecord DirectoryFile,
@@ -2141,6 +2233,11 @@ Directory::SplitAndPromote(
     ULONGLONG AllocationSizeAtEntry = 0;
     BOOLEAN AllocationGrew = FALSE;
     PFileRecord AllocationOwner = NULL;
+    /* Left halves held back until the node that links their right sibling
+     * is written (right, parent, then left); index 0 is the lowest level
+     * split, DeferredCount - 1 the highest. */
+    PDEFERRED_LEFT_NODE Deferred = NULL;
+    ULONG DeferredCount = 0;
     NTSTATUS Status;
 
     /* One node's entry list (<= RecordSize) plus one pending entry. */
@@ -2157,6 +2254,17 @@ Directory::SplitAndPromote(
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto Done;
     }
+    Deferred =
+        new(PagedPool, TAG_BTREE)
+            DEFERRED_LEFT_NODE[PathDepth != 0 ? PathDepth : 1];
+    if (!Deferred)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
+    RtlZeroMemory(Deferred,
+                  sizeof(DEFERRED_LEFT_NODE) *
+                      (PathDepth != 0 ? PathDepth : 1));
     AllocationSizeAtEntry =
         IndexAllocationSize(DirectoryFile, IndexName);
 
@@ -2228,6 +2336,21 @@ Directory::SplitAndPromote(
                 AllocationUnit,
                 RecordSize,
                 NodeImage);
+            if (NT_SUCCESS(Status))
+            {
+                /* The links are written; now the left halves may follow. */
+                Status = WriteDeferredLeftNodes(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    AllocationUnit,
+                    RecordSize,
+                    Deferred,
+                    DeferredCount,
+                    TRUE,
+                    NodeVcn,
+                    NULL);
+            }
             goto Done;
         }
 
@@ -2338,34 +2461,14 @@ Directory::SplitAndPromote(
             goto Done;
 
         /*
-         * The left node is about to be rewritten with only its half of
-         * the entries; the other half lives in the new right node. Order
-         * the left node after the right one: a cut that landed the left
-         * rewrite without the right node would lose the moved entries
-         * from a tree that still looks valid, and no check would see it.
-         */
-        Status = OrderNodeAfterIndexNodes(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            NodeVcn,
-            &NewVcn,
-            1,
-            AllocationUnit,
-            RecordSize);
-        if (!NT_SUCCESS(Status))
-            goto Done;
-
-        /*
          * The parent written next (the node above, or the record that owns
          * the root) will name the new right node and, when the allocation
          * grew for it, depends on the record carrying the grown run list.
-         * Order it now, before the left node is rewritten, so that nothing
-         * that can fail stands between the left rewrite and the parent
-         * write. The parent's own block is cached (it was read on the way
-         * down), so the barrier can hold it; when the parent splits as
-         * well, or the root is pushed down, the pointer also lands in a new
-         * block and the children are committed synchronously at that point.
+         * Order it after them. The parent's own block is cached (it was
+         * read on the way down), so the barrier can hold it; when the
+         * parent splits as well, or the root is pushed down, the pointer
+         * also lands in a new block and the children are committed
+         * synchronously at that point.
          */
         if (Level - 1 != 0)
         {
@@ -2431,8 +2534,27 @@ Directory::SplitAndPromote(
         if (!NT_SUCCESS(Status))
             goto Done;
 
+        /*
+         * The left half is held back (WriteDeferredLeftNodes): it may be
+         * written only after the node that links the new right node, else
+         * a cut that lands the left half first leaves the moved entries
+         * unreachable although every record exists. Right, parent, left.
+         */
+        if (DeferredCount >= (PathDepth != 0 ? PathDepth : 1))
+        {
+            Status = STATUS_FILE_CORRUPT_ERROR;
+            goto Done;
+        }
+        Deferred[DeferredCount].Image =
+            new(PagedPool, TAG_BTREE)
+                UCHAR[RecordSize];
+        if (!Deferred[DeferredCount].Image)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Done;
+        }
         Status = BuildIndexBufferImage(
-            SideImage,
+            Deferred[DeferredCount].Image,
             RecordSize,
             DiskVolume->BytesPerSector,
             NodeVcn,
@@ -2449,70 +2571,9 @@ Directory::SplitAndPromote(
                 : 0);
         if (!NT_SUCCESS(Status))
             goto Done;
-        Status = WriteIndexNode(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            NodeVcn,
-            AllocationUnit,
-            RecordSize,
-            SideImage);
-        if (!NT_SUCCESS(Status))
-            goto Done;
-
-        /*
-         * Best effort: order the parent after the rewritten left node as
-         * well. Without it a parent that lands first points at a left node
-         * that still holds the entries that moved right; a lookup survives
-         * that, but a check that tests key ranges does not and resets the
-         * whole directory. The parent write follows regardless of the
-         * result here, so a failure cannot leave the left node rewritten
-         * under an unwritten parent; it only forgoes this ordering.
-         */
-        {
-            NTSTATUS OrderStatus;
-
-            if (Level - 1 != 0)
-            {
-                OrderStatus = OrderNodeAfterIndexNodes(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    PathVcns[Level - 2],
-                    &NodeVcn,
-                    1,
-                    AllocationUnit,
-                    RecordSize);
-            }
-            else
-            {
-                PAttribute RootAttribute =
-                    DirectoryFile->GetAttribute(
-                        TypeIndexRoot,
-                        const_cast<PWSTR>(IndexName));
-
-                OrderStatus = OrderRecordAfterIndexNodes(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    &NodeVcn,
-                    1,
-                    AllocationUnit,
-                    RecordSize,
-                    RootAttribute
-                        ? DirectoryFile->GetAttributeOwner(
-                            RootAttribute)
-                        : NULL);
-            }
-            if (!NT_SUCCESS(OrderStatus))
-            {
-                DPRINT1(
-                    "Parent of index node %llu was not "
-                    "ordered after it: 0x%lx.\n",
-                    NodeVcn,
-                    OrderStatus);
-            }
-        }
+        Deferred[DeferredCount].LeftVcn = NodeVcn;
+        Deferred[DeferredCount].RightVcn = NewVcn;
+        DeferredCount++;
 
         /* The parent written next names these two. */
         ChildVcns[0] = NewVcn;
@@ -2629,6 +2690,28 @@ Directory::SplitAndPromote(
             RootValue,
             RootValueLength);
         delete[] RootValue;
+        if (NT_SUCCESS(Status))
+        {
+            /* The root links the new right node; the left halves follow. */
+            IndexRootAttribute =
+                DirectoryFile->GetAttribute(
+                    TypeIndexRoot,
+                    const_cast<PWSTR>(IndexName));
+            Status = WriteDeferredLeftNodes(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                AllocationUnit,
+                RecordSize,
+                Deferred,
+                DeferredCount,
+                FALSE,
+                0,
+                IndexRootAttribute
+                    ? DirectoryFile->GetAttributeOwner(
+                        IndexRootAttribute)
+                    : NULL);
+        }
         if (Status == STATUS_BUFFER_TOO_SMALL)
         {
             /*
@@ -2674,6 +2757,29 @@ Directory::SplitAndPromote(
                 TRUE,
                 RecordSize,
                 AllocationUnit);
+            if (NT_SUCCESS(Status))
+            {
+                /* The pushed-down node and the record that points at it
+                 * are written (and committed); the left halves follow. */
+                IndexRootAttribute =
+                    DirectoryFile->GetAttribute(
+                        TypeIndexRoot,
+                        const_cast<PWSTR>(IndexName));
+                Status = WriteDeferredLeftNodes(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    AllocationUnit,
+                    RecordSize,
+                    Deferred,
+                    DeferredCount,
+                    FALSE,
+                    0,
+                    IndexRootAttribute
+                        ? DirectoryFile->GetAttributeOwner(
+                            IndexRootAttribute)
+                        : NULL);
+            }
         }
     }
 
@@ -2682,6 +2788,12 @@ Done:
         NtfsFreePool(Pending);
     if (Promoted)
         NtfsFreePool(Promoted);
+    if (Deferred)
+    {
+        for (ULONG Index = 0; Index < DeferredCount; Index++)
+            delete[] Deferred[Index].Image;
+        delete[] Deferred;
+    }
     delete[] SideImage;
     delete[] Scratch;
     return Status;
