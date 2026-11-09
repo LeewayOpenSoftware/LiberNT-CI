@@ -578,6 +578,18 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
     NtfsReleaseMetadata(VolCB);
 
+#if DBG
+    /* Lab trace: one line per paging write, so a power-cut probe can read a
+     * file's write-back timeline off COM1. The top-level IRP value tells the
+     * cache manager (2) from the modified page writer (3). */
+    if (PagingIo)
+    {
+        DPRINT1("NTFS: paging write at %I64u ms: record %lu, offset %I64d, length %lu, status 0x%lx, top-level %p\n",
+                KeQueryInterruptTime() / 10000, NtfsFileRecordGetNumber(FileRec), ByteOffset.QuadPart, Length,
+                Status, IoGetTopLevelIrp());
+    }
+#endif
+
     if (NT_SUCCESS(Status))
     {
         if (!PagingIo)

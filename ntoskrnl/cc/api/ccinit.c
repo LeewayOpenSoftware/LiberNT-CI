@@ -9,6 +9,9 @@
 
 #include "ccnt.h"
 
+#define NDEBUG
+#include <debug.h>
+
 typedef struct _CC_NT_DEFERRED_WRITE
 {
     LIST_ENTRY Link;
@@ -388,14 +391,32 @@ CcNtLazyWriter(
     {
         LIST_ENTRY Waiters;
         ULONG Target;
+        ULONG Aged;
+        ULONG Flushed = 0;
+        ULONG64 Started;
 
         KeWaitForSingleObject(&CcNtLazyWriterEvent, Executive, KernelMode, FALSE, &Period);
 
         CcNtTakeLazyWaiters(&Waiters);
-        CcNtFlushAgedMaps(KeQueryInterruptTime());
+        Started = KeQueryInterruptTime();
+        Aged = CcNtFlushAgedMaps(Started);
         Target = CcDirtyLazyTarget(&CcNtCache);
         if (Target != 0)
-            CcRosFlushDirtyPages(Target, NULL, TRUE, TRUE);
+            CcRosFlushDirtyPages(Target, &Flushed, TRUE, TRUE);
+
+#if DBG
+        /* Lab trace: one line per pass that had work, so a power-cut probe
+         * can read the write-back cadence off COM1. */
+        if (Aged != 0 || Target != 0)
+        {
+            DPRINT1("CC: lazy pass at %I64u ms: aged %lu, target %lu, flushed %lu, dirty left %I64d, took %I64u ms\n",
+                    Started / 10000, Aged, Target, Flushed, CC_ATOMIC_READ64(&CcNtCache.TotalDirtyPages),
+                    (KeQueryInterruptTime() - Started) / 10000);
+        }
+#else
+        UNREFERENCED_PARAMETER(Aged);
+        UNREFERENCED_PARAMETER(Flushed);
+#endif
 
         CcNtExpireClosedMaps();
         CcNtProcessDeferredWrites();
