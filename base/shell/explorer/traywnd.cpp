@@ -314,6 +314,13 @@ public:
             Size.cx = 2 * GetSystemMetrics(SM_CXEDGE) + GetSystemMetrics(SM_CYCAPTION) * 3;
         }
 
+        /* With an empty caption (orb icon) the button reports its own current
+           client size as the ideal size. A button that has not been sized yet
+           (created 0x0, e.g. on a vertical taskbar restored at logon) then
+           stays 0 wide forever. Never accept a zero ideal width. */
+        if (Size.cx <= 0)
+            Size.cx = 2 * GetSystemMetrics(SM_CXEDGE) + GetSystemMetrics(SM_CYCAPTION) * 3;
+
         Size.cy = max(Size.cy, GetSystemMetrics(SM_CYCAPTION));
 
         if (m_bModernTaskbar)
@@ -1803,6 +1810,28 @@ GetPrimaryRect:
         }
     }
 
+    /* The narrowest a vertical (left/right) taskbar may be: the Windows default
+       of about 62 pixels at 96 dpi, and never narrower than the start button
+       plus the sizing frames. A saved or computed width below this (the registry
+       can hold zero, and the start button is not laid out yet when the settings
+       are loaded) would leave an unusable or invisible strip. */
+    LONG GetMinimumVerticalWidth()
+    {
+        LONG cx = 62;
+        HDC hdc = ::GetDC(NULL);
+
+        if (hdc)
+        {
+            cx = MulDiv(62, ::GetDeviceCaps(hdc, LOGPIXELSX), 96);
+            ::ReleaseDC(NULL, hdc);
+        }
+
+        SIZE StartBtnSize = m_StartButton.GetSize();
+        LONG cxStart = StartBtnSize.cx + 2 * GetSystemMetrics(SM_CXSIZEFRAME);
+
+        return (cxStart > cx) ? cxStart : cx;
+    }
+
     VOID GetTrayRectFromScreenRect(IN DWORD Position,
                                    IN const RECT *pScreen,
                                    IN const SIZE *pTraySize OPTIONAL,
@@ -1857,7 +1886,14 @@ GetPrimaryRect:
         if (szWnd.cy > szMax.cy)
             szWnd.cy = szMax.cy;
 
-        /* FIXME - calculate */
+        /* A vertical taskbar must keep a usable width */
+        if (Position == ABE_LEFT || Position == ABE_RIGHT)
+        {
+            LONG cxMin = GetMinimumVerticalWidth();
+
+            if (szWnd.cx < cxMin)
+                szWnd.cx = cxMin;
+        }
 
         GetTrayRectFromScreenRect(Position,
                                   &rcScreen,
@@ -2035,6 +2071,27 @@ GetPrimaryScreenRect:
             m_Monitor = m_DraggingMonitor;
             m_Position = m_DraggingPosition;
             g_TaskbarSettings.sr.Position = m_Position;
+            /* Persist the docked rectangle and a size that is never empty */
+            if (m_Position == ABE_LEFT || m_Position == ABE_RIGHT)
+            {
+                LONG cxMin = GetMinimumVerticalWidth();
+                LONG cx = rcTray.right - rcTray.left;
+
+                if (cx < cxMin)
+                {
+                    cx = cxMin;
+                    if (m_Position == ABE_LEFT)
+                        rcTray.right = rcTray.left + cx;
+                    else
+                        rcTray.left = rcTray.right - cx;
+                }
+                g_TaskbarSettings.sr.Size.cx = cx;
+            }
+            else
+            {
+                g_TaskbarSettings.sr.Size.cy = rcTray.bottom - rcTray.top;
+            }
+            g_TaskbarSettings.sr.Rect = rcTray;
             g_TaskbarSettings.Save();
             ERR("[T2] Docked: edge %lu saved to StuckRects2, rect (%d,%d)-(%d,%d)\n", (ULONG)m_Position,
                 rcTray.left, rcTray.top, rcTray.right, rcTray.bottom);
@@ -2332,6 +2389,17 @@ ChangePos:
         if (WndSize.cy < g_TaskbarSettings.sr.Size.cy)
             WndSize.cy = g_TaskbarSettings.sr.Size.cy;
 
+        /* A vertical taskbar needs a usable width; this also recovers a saved
+           zero/negative width (see GetMinimumVerticalWidth) */
+        {
+            LONG cxMin = GetMinimumVerticalWidth();
+
+            if (WndSize.cx < cxMin)
+                WndSize.cx = cxMin;
+            if (g_TaskbarSettings.sr.Size.cx < cxMin)
+                g_TaskbarSettings.sr.Size.cx = cxMin;
+        }
+
         /* Save the calculated size */
         m_TraySize = WndSize;
 
@@ -2403,6 +2471,19 @@ ChangePos:
         {
             StartSize.cy = rcClient.bottom;
             StartSize.cx = MulDiv(StartSize.cy, 6, 5);
+        }
+
+        if (!Horizontal)
+        {
+            /* On a vertical taskbar the task toolbar can still be empty (or
+               not yet laid out) when the tray is restored at logon, which
+               made the Start button zero-sized and the rebar start at y=0
+               on top of it. Never go below the button's own size. */
+            SIZE StartOwn = m_StartButton.GetSize();
+            if (StartSize.cy < StartOwn.cy)
+                StartSize.cy = StartOwn.cy;
+            if (StartSize.cx < StartOwn.cx && StartOwn.cx <= rcClient.right)
+                StartSize.cx = StartOwn.cx;
         }
 
         if (m_StartButton.m_hWnd != NULL)
@@ -2494,6 +2575,20 @@ ChangePos:
 
         if (dwp != NULL)
             EndDeferWindowPos(dwp);
+
+#if DBG
+        {
+            RECT rcS = {0}, rcR = {0}, rcT = {0};
+            m_StartButton.GetWindowRect(&rcS);
+            ::GetWindowRect(m_Rebar, &rcR);
+            ::GetWindowRect(m_hWnd, &rcT);
+            ERR("[F3b] align horiz %d client (%d,%d) start size (%d,%d) startRect (%d,%d)-(%d,%d) vis %d rebar (%d,%d)-(%d,%d) tray (%d,%d)-(%d,%d) toolbar %p\n",
+                Horizontal, rcClient.right, rcClient.bottom, StartSize.cx, StartSize.cy,
+                rcS.left, rcS.top, rcS.right, rcS.bottom, (int)m_StartButton.IsWindowVisible(),
+                rcR.left, rcR.top, rcR.right, rcR.bottom, rcT.left, rcT.top, rcT.right, rcT.bottom,
+                hwndTaskToolbar);
+        }
+#endif
 
         if (m_TaskSwitch != NULL)
         {
