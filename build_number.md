@@ -23,14 +23,30 @@ The exact git SHA of every build is recorded in its build manifest, not in the l
 - **Builds within the same integration increment the second number:** `1058.1`, `1058.2`, …
 - **A cut goes through these states:** CUT REQUESTED, then CUT IN PROGRESS, then CUT VALIDATION, then PUBLISHED. The previous baseline then becomes SUPERSEDED.
   - A published cut's source snapshot is immutable (a commit or tag).
-  - Compilation attempts made while preparing a cut are provisional candidates under a separately approved scheme. They never take official numbers retroactively.
+  - Builds compiled while preparing a cut use the TARGET integration's normal build sequence (for cut 1059: `1059.1`, `1059.2`, …), failed attempts included. They keep their identities even if the cut is delayed or rejected. Publication approval is a separate decision. There is no provisional numbering scheme (owner clarification, 2026-11-08).
+- **No limit on builds per integration.** An integration may run to `1059.598` or beyond, through merges, features, fixes, upstream syncs and rebuilds. The build counter tracks compilation activity; the integration counter tracks owner-ordered consolidation milestones.
 - **Separate concepts:** build success, validation success, a cut and its publication are different things. Publication is not a production-stability declaration.
+
+## Cut boundaries
+
+Every cut records four git boundaries:
+
+1. the exact commit of the previous published cut;
+2. the commits accumulated since that cut;
+3. the commit boundary captured when the owner orders the next cut;
+4. the final validated commit that is published as the new integration.
+
+When the owner says "Cut integration N", god consolidates every relevant commit accumulated since boundary 1, resolves the integration issues, validates the result and publishes it only after the owner's approval.
+
+| Cut | 1. Previous published cut | 2. Accumulated since | 3. Boundary at the order (2026-11-08) | 4. Validated and published |
+|---|---|---|---|---|
+| 1059 | 1058: `4fadd7fbf47` (the owner still has to confirm this snapshot) | `4fadd7fbf47..73fb270537b` on `leeway/main`, plus `test/integration-2026-11-08-zf` `6e541e6d75f` and the device write-cache flush port `2f1be760b5d` | `leeway/main` `73fb270537b`, `-zf` `6e541e6d75f`, M1 `2f1be760b5d` | pending; candidate `cut/1059-candidate` `1605a09126e` |
 
 ## Current state
 
 | Integration | State | Date | Notes |
 |---|---|---|---|
-| **1059** | CUT REQUESTED | 2026-11-08 | Ordered by the owner on the current development state: 1058 → 1059 (+1, no jump authorized). Scope pending the owner's confirmation. Not published. |
+| **1059** | CUT IN PROGRESS | 2026-11-08 | Ordered by the owner: 1058 → 1059 (+1, no jump authorized). Scope: "consolidate all of them". Candidate `cut/1059-candidate` `1605a09126e`. Not published. Its cut-preparation compilation attempts (CI 42532982863, 42533468443 and 42537294225, all from 2026-11-08) take `1059.1`, `1059.2`, … in order of attempt when the ledger allocates them. |
 | **1058** | ACTIVE BASELINE | 2026-11-06 | Reached by 16 integration advances of +1 from the starting baseline 1042. Development since then (the direct commits below, today's work) belongs to 1058. |
 
 **Reconciliation note.** The 16 advances are the 16 landings on `leeway/main` listed below, read from its first-parent history and the hive integration records:
