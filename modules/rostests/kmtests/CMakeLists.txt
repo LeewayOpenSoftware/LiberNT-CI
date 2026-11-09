@@ -8,6 +8,7 @@ add_subdirectory(example)
 add_subdirectory(fltmgr)
 add_subdirectory(hidparse)
 add_subdirectory(kernel32)
+add_subdirectory(nsi)
 add_subdirectory(ntos_cc)
 add_subdirectory(ntos_io)
 add_subdirectory(ntos_mm)
@@ -517,6 +518,7 @@ list(APPEND KMTEST_SOURCE
     fltmgr/fltmgr_register/fltmgr_reg_user.c
 
     hidparse/HidP_user.c
+    nsi/nsi_store_user.c
     kernel32/FileAttributes_user.c
     kernel32/FindFile_user.c
     ntos_cc/CcCopyRead_user.c
@@ -548,10 +550,10 @@ list(APPEND KMTEST_SOURCE
 
 add_executable(kmtest ${KMTEST_SOURCE})
 set_module_type(kmtest win32cui)
-target_link_libraries(kmtest ${PSEH_LIB})
+target_link_libraries(kmtest uuid ${PSEH_LIB})
 # kmtest/filter.c resolves fltlib.dll at runtime so kmtest still starts on
 # NT 5.x systems without Filter Manager.
-add_importlibs(kmtest advapi32 ws2_32 setupapi newdev fwpuclnt user32 msvcrt kernel32 ntdll)
+add_importlibs(kmtest advapi32 ws2_32 iphlpapi setupapi newdev fwpuclnt user32 msvcrt kernel32 ntdll)
 target_compile_definitions(kmtest PRIVATE KMT_USER_MODE NTDDI_VERSION=${REACTOS_TARGET_NTDDI})
 #add_pch(kmtest include/kmt_test.h)
 add_rostests_file(TARGET kmtest)
@@ -578,6 +580,7 @@ add_dependencies(kmtest_drivers
     iohelper_drv
     ioreadwrite_drv
     kernel32_drv
+    nsistore_drv
     mmmaplockedpagesspecifycache_drv
     ntcreatesection_drv
     batteryclassnotify_drv

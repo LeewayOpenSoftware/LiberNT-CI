@@ -26,6 +26,7 @@ KMT_TESTFUNC Test_IoCreateFile;
 KMT_TESTFUNC Test_IoDeviceObject;
 KMT_TESTFUNC Test_IoReadWrite;
 KMT_TESTFUNC Test_MmMapLockedPagesSpecifyCache;
+KMT_TESTFUNC Test_NsiStore;
 KMT_TESTFUNC Test_NtCreateSection;
 KMT_TESTFUNC Test_NtSystemDebugControl;
 KMT_TESTFUNC Test_NtUserPhysicalPages;
@@ -79,6 +80,7 @@ const KMT_TEST TestList[] =
     { "IoDeviceObject",               Test_IoDeviceObject },
     { "IoReadWrite",                  Test_IoReadWrite },
     { "MmMapLockedPagesSpecifyCache", Test_MmMapLockedPagesSpecifyCache },
+    { "NsiStore",                     Test_NsiStore },
     { "NtCreateSection",              Test_NtCreateSection },
     { "NtSystemDebugControl",         Test_NtSystemDebugControl },
     { "NtUserPhysicalPages",          Test_NtUserPhysicalPages },
