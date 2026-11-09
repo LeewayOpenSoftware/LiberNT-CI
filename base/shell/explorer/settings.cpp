@@ -71,6 +71,8 @@ BOOL TaskbarSettings::Load()
     dwRet = SHGetValueW(hkExplorer, L"Advanced", L"TaskbarSd", NULL, &dwValue, &cbSize);
     bShowDesktopButton = (dwRet == ERROR_SUCCESS) ? (dwValue != 0) : TRUE;
 
+    BOOL bRepaired = FALSE;
+
     cbSize = sizeof(sr);
     dwRet = SHGetValueW(hkExplorer, L"StuckRects2", L"Settings", NULL, &sr, &cbSize);
 
@@ -85,12 +87,21 @@ BOOL TaskbarSettings::Load()
         sr.Rect.left = sr.Rect.top = 0;
         sr.Rect.bottom = sr.Rect.right = 1;
         sr.Size.cx = sr.Size.cy = 0;
+        bRepaired = TRUE;
     }
     else
     {
         if (sr.Position > ABE_BOTTOM)
+        {
             sr.Position = ABE_BOTTOM;
+            bRepaired = TRUE;
+        }
     }
+
+    sr.cbSize = sizeof(sr);
+
+    if (bRepaired)
+        Save();
 
     return TRUE;
 }

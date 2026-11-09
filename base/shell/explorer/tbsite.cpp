@@ -254,7 +254,8 @@ public:
                     if (bTransparent)
                     {
                         /* Make the rebar control appear transparent so the user
-                           can drag the tray window */
+                           can drag the tray window.  This is the task-band half of
+                           the hit-test seam table in traywnd.cpp. */
                         *plResult = HTTRANSPARENT;
                     }
                     return S_OK;
