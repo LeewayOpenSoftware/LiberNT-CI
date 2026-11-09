@@ -221,14 +221,6 @@ Volume::~Volume()
     CachedBitmapData = NULL;
     delete[] BitmapWorkBuffer;
     BitmapWorkBuffer = NULL;
-    while (RecordPoolHead)
-    {
-        PUCHAR Next = *(PUCHAR*)RecordPoolHead;
-
-        delete[] RecordPoolHead;
-        RecordPoolHead = Next;
-    }
-    RecordPoolCount = 0;
     for (ULONG Index = 0; Index < NTFS_SECURITY_CACHE_ENTRIES; Index++)
     {
         delete[] SecurityCacheData[Index];
@@ -241,6 +233,18 @@ Volume::~Volume()
     delete LFS;
     delete[] AttrDefCache;
     delete[] UpcaseTable;
+
+    /* Last: every file record this volume still owned ($MFT and $MFTMirr in
+     * the table above) hands its buffer back to the pool when it is deleted,
+     * so the pool is drained only once nothing can add to it. */
+    while (RecordPoolHead)
+    {
+        PUCHAR Next = *(PUCHAR*)RecordPoolHead;
+
+        delete[] RecordPoolHead;
+        RecordPoolHead = Next;
+    }
+    RecordPoolCount = 0;
 }
 
 static
