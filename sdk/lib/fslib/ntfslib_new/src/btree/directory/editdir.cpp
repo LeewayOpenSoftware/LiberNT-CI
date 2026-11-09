@@ -1091,6 +1091,49 @@ IndexAllocationSize(
         : 0;
 }
 
+/*
+ * Freeing an index block. The write that drops the last pointer to the
+ * block (a parent node, or the record holding $INDEX_ROOT) must be durable
+ * before the block's $I30 bit is cleared, in both barrier modes. The bit
+ * clears in memory at once, so the next split can reuse the block and write
+ * a node of another subtree into it; were the old pointer still on the disk
+ * when that content landed, a cut would leave a parent pointing into a
+ * foreign subtree. No constraint can express "before the block is reused",
+ * so this is the one ordering that stays a synchronous commit with the
+ * barrier on. A block is freed only when a leaf empties, so the cost is
+ * bounded. PointerRecord names the record that held the pointer; NULL means
+ * the node at PointerVcn held it.
+ */
+static NTSTATUS
+CommitIndexPointerHolder(
+    _In_ PVolume DiskVolume,
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONGLONG AllocationUnit,
+    _In_ ULONG RecordSize,
+    _In_opt_ PFileRecord PointerRecord,
+    _In_ ULONGLONG PointerVcn)
+{
+    if (PointerRecord)
+    {
+        return OrderPointerAfterRecord(
+            DiskVolume,
+            0,
+            0,
+            PointerRecord);
+    }
+    return OrderAfterIndexNodes(
+        DiskVolume,
+        DirectoryFile,
+        IndexName,
+        &PointerVcn,
+        1,
+        AllocationUnit,
+        RecordSize,
+        0,
+        0);
+}
+
 static NTSTATUS
 SetIndexRecordBitmapBit(
     _In_ PFileRecord DirectoryFile,
@@ -3381,19 +3424,14 @@ RemoveMaxFromSubtree(
         }
 
         /*
-         * The rightmost subtree is a bare END chain: free it, donate the
-         * last entry's key upward, and let its child become the new
-         * rightmost subtree.
+         * The rightmost subtree is a bare END chain. Donate the last
+         * entry's key upward and let its child become the new rightmost
+         * subtree first; the chain's bits are released only once that
+         * write is durable (CommitIndexPointerHolder), so a reused block
+         * can never be reached through a stale pointer on the disk. A
+         * failed release leaks the chain's blocks until the next check,
+         * which is the safe side; the donated key is kept either way.
          */
-        Status = ReleaseEndOnlyChain(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            RecordSize,
-            AllocationUnit,
-            RightVcn);
-        if (!NT_SUCCESS(Status))
-            goto Done;
         Status = BuildKeyOnlyEntry(
             LastReal,
             KeyEntry,
@@ -3432,8 +3470,39 @@ RemoveMaxFromSubtree(
             AllocationUnit,
             RecordSize,
             Image);
-        if (NT_SUCCESS(Status))
-            *Found = TRUE;
+        if (!NT_SUCCESS(Status))
+            goto Done;
+        *Found = TRUE;
+        {
+            NTSTATUS ReleaseStatus =
+                CommitIndexPointerHolder(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    AllocationUnit,
+                    RecordSize,
+                    NULL,
+                    Vcn);
+
+            if (NT_SUCCESS(ReleaseStatus))
+            {
+                ReleaseStatus = ReleaseEndOnlyChain(
+                    DiskVolume,
+                    DirectoryFile,
+                    IndexName,
+                    RecordSize,
+                    AllocationUnit,
+                    RightVcn);
+            }
+            if (!NT_SUCCESS(ReleaseStatus))
+            {
+                DPRINT1(
+                    "Index END chain at VCN %llu was "
+                    "not released: 0x%lx.\n",
+                    RightVcn,
+                    ReleaseStatus);
+            }
+        }
         goto Done;
     }
 
@@ -3972,6 +4041,46 @@ Directory::ReleaseEmptyIndexNode(
     if (!NT_SUCCESS(Status))
         goto Done;
 
+    /*
+     * The pointer to the freed block(s) is gone from the parent in memory.
+     * Make that write durable before the bits are cleared
+     * (CommitIndexPointerHolder): a cleared bit lets the next split reuse a
+     * block at once, and a stale parent on the disk would then point into a
+     * foreign subtree after a cut. Failing here leaks the blocks, which is
+     * the safe side.
+     */
+    if (ParentIsRoot)
+    {
+        RootAttribute =
+            DirectoryFile->GetAttribute(
+                TypeIndexRoot,
+                const_cast<PWSTR>(IndexName));
+        Status = CommitIndexPointerHolder(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            AllocationUnit,
+            IndexRecordSize,
+            RootAttribute
+                ? DirectoryFile->GetAttributeOwner(
+                    RootAttribute)
+                : NULL,
+            0);
+    }
+    else
+    {
+        Status = CommitIndexPointerHolder(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            AllocationUnit,
+            IndexRecordSize,
+            NULL,
+            Path[Level - 1]);
+    }
+    if (!NT_SUCCESS(Status))
+        goto Done;
+
     BitmapStatus = STATUS_SUCCESS;
     for (ULONG Index = Level;
          Index < PathCount;
@@ -4109,6 +4218,12 @@ Directory::RemoveIndexEntry(
     BOOLEAN MaxFound = FALSE;
     BOOLEAN LeafEmptied = FALSE;
     BOOLEAN EntryCommitted = FALSE;
+    /* A keyless subtree under the removed entry: its blocks are released
+     * only after the write that dropped the pointer to it is durable. */
+    BOOLEAN ReleaseChain = FALSE;
+    /* The pointer removal went through a root push-down or a split, so
+     * it is spread over new blocks; a full flush makes it durable. */
+    BOOLEAN CompoundWrite = FALSE;
     NTSTATUS TimestampStatus;
     NTSTATUS ReleaseStatus;
     NTSTATUS Status;
@@ -4382,15 +4497,12 @@ Directory::RemoveIndexEntry(
     }
     else
     {
-        Status = ReleaseEndOnlyChain(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            IndexRecordSize,
-            AllocationUnit,
-            RemovedChild);
-        if (!NT_SUCCESS(Status))
-            goto Done;
+        /*
+         * The subtree holds no key: the entry simply disappears below,
+         * and the chain's bits are released once that write is durable
+         * (see ReleaseChain before EntryCommitted).
+         */
+        ReleaseChain = TRUE;
         ReleaseKey = &Key;
     }
 
@@ -4513,6 +4625,7 @@ Directory::RemoveIndexEntry(
                 TRUE,
                 IndexRecordSize,
                 AllocationUnit);
+            CompoundWrite = TRUE;
         }
         if (!NT_SUCCESS(Status))
             goto Done;
@@ -4542,6 +4655,7 @@ Directory::RemoveIndexEntry(
                 MatchOffset,
                 Replacement,
                 ReplacementLength);
+            CompoundWrite = TRUE;
         }
         else
         {
@@ -4556,6 +4670,72 @@ Directory::RemoveIndexEntry(
         }
         if (!NT_SUCCESS(Status))
             goto Done;
+    }
+
+    /*
+     * The write that dropped the pointer to the keyless subtree is in
+     * memory. Make it durable before the chain's bits are cleared
+     * (CommitIndexPointerHolder): a cleared bit lets the next split reuse a
+     * block at once, and a stale pointer on the disk would then lead into a
+     * foreign subtree after a cut. A failed release leaks the chain's
+     * blocks until the next check, which is the safe side; the entry
+     * removal stands.
+     */
+    if (ReleaseChain)
+    {
+        NTSTATUS ChainStatus;
+
+        if (CompoundWrite)
+        {
+            ChainStatus = DiskVolume->FlushVolume();
+        }
+        else if (MatchedInRoot)
+        {
+            IndexRootAttribute =
+                DirectoryFile->GetAttribute(
+                    TypeIndexRoot,
+                    const_cast<PWSTR>(IndexName));
+            ChainStatus = CommitIndexPointerHolder(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                AllocationUnit,
+                IndexRecordSize,
+                IndexRootAttribute
+                    ? DirectoryFile->GetAttributeOwner(
+                        IndexRootAttribute)
+                    : NULL,
+                0);
+        }
+        else
+        {
+            ChainStatus = CommitIndexPointerHolder(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                AllocationUnit,
+                IndexRecordSize,
+                NULL,
+                VisitedVcns[VisitedCount - 1]);
+        }
+        if (NT_SUCCESS(ChainStatus))
+        {
+            ChainStatus = ReleaseEndOnlyChain(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                IndexRecordSize,
+                AllocationUnit,
+                RemovedChild);
+        }
+        if (!NT_SUCCESS(ChainStatus))
+        {
+            DPRINT1(
+                "Index END chain at VCN %llu was "
+                "not released: 0x%lx.\n",
+                RemovedChild,
+                ChainStatus);
+        }
     }
     EntryCommitted = TRUE;
 
