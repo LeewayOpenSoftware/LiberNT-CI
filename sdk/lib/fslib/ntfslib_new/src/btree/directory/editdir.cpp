@@ -1134,6 +1134,23 @@ CommitIndexPointerHolder(
         0);
 }
 
+/*
+ * A node write that RemoveMaxFromSubtree leaves to its caller. The node
+ * gives up its collation maximum, which the caller writes into an ancestor
+ * as the replacement key; the node must not reach the disk before that
+ * ancestor, or a cut leaves the key in no node. The caller orders and
+ * writes the image, then releases ChainVcn (an END-only chain the node no
+ * longer references) once that write is durable.
+ */
+typedef struct _DEFERRED_INDEX_WRITE
+{
+    PUCHAR Image;          /* caller-owned, RecordSize bytes */
+    ULONGLONG Vcn;
+    BOOLEAN Valid;
+    ULONGLONG ChainVcn;
+    BOOLEAN ChainValid;
+} DEFERRED_INDEX_WRITE, *PDEFERRED_INDEX_WRITE;
+
 static NTSTATUS
 SetIndexRecordBitmapBit(
     _In_ PFileRecord DirectoryFile,
@@ -3341,7 +3358,8 @@ RemoveMaxFromSubtree(
         PIndexEntry* KeyEntry,
     _Out_ PULONG KeyLength,
     _Out_ PBOOLEAN Found,
-    _Out_ PBOOLEAN LeafEmptied)
+    _Out_ PBOOLEAN LeafEmptied,
+    _Inout_ PDEFERRED_INDEX_WRITE Deferred)
 {
     PIndexBuffer NodeBuffer;
     PIndexEntry Entry;
@@ -3440,7 +3458,8 @@ RemoveMaxFromSubtree(
             KeyEntry,
             KeyLength,
             Found,
-            LeafEmptied);
+            LeafEmptied,
+            Deferred);
         if (!NT_SUCCESS(Status) || *Found)
             goto Done;
 
@@ -3453,11 +3472,11 @@ RemoveMaxFromSubtree(
         /*
          * The rightmost subtree is a bare END chain. Donate the last
          * entry's key upward and let its child become the new rightmost
-         * subtree first; the chain's bits are released only once that
-         * write is durable (CommitIndexPointerHolder), so a reused block
-         * can never be reached through a stale pointer on the disk. A
-         * failed release leaks the chain's blocks until the next check,
-         * which is the safe side; the donated key is kept either way.
+         * subtree. The node image is handed to the caller (Deferred): it
+         * must not reach the disk before the ancestor that takes the key,
+         * and the chain's bits are released only once that node write is
+         * durable, so a reused block can never be reached through a stale
+         * pointer on the disk.
          */
         Status = BuildKeyOnlyEntry(
             LastReal,
@@ -3489,47 +3508,12 @@ RemoveMaxFromSubtree(
             *GetSubnodeVCN(EndEntry) =
                 DonatedChild;
         }
-        Status = WriteIndexNode(
-            DiskVolume,
-            DirectoryFile,
-            IndexName,
-            Vcn,
-            AllocationUnit,
-            RecordSize,
-            Image);
-        if (!NT_SUCCESS(Status))
-            goto Done;
+        RtlCopyMemory(Deferred->Image, Image, RecordSize);
+        Deferred->Vcn = Vcn;
+        Deferred->Valid = TRUE;
+        Deferred->ChainVcn = RightVcn;
+        Deferred->ChainValid = TRUE;
         *Found = TRUE;
-        {
-            NTSTATUS ReleaseStatus =
-                CommitIndexPointerHolder(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    AllocationUnit,
-                    RecordSize,
-                    NULL,
-                    Vcn);
-
-            if (NT_SUCCESS(ReleaseStatus))
-            {
-                ReleaseStatus = ReleaseEndOnlyChain(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    RecordSize,
-                    AllocationUnit,
-                    RightVcn);
-            }
-            if (!NT_SUCCESS(ReleaseStatus))
-            {
-                DPRINT1(
-                    "Index END chain at VCN %llu was "
-                    "not released: 0x%lx.\n",
-                    RightVcn,
-                    ReleaseStatus);
-            }
-        }
         goto Done;
     }
 
@@ -3548,16 +3532,15 @@ RemoveMaxFromSubtree(
     *LeafEmptied =
         LastRealOffset ==
             NodeBuffer->IndexHeader.IndexOffset;
-    Status = WriteIndexNode(
-        DiskVolume,
-        DirectoryFile,
-        IndexName,
-        Vcn,
-        AllocationUnit,
-        RecordSize,
-        Image);
-    if (NT_SUCCESS(Status))
-        *Found = TRUE;
+    /*
+     * The leaf gives up its maximum; the caller writes it into an ancestor
+     * first and this image after, ordered behind it (Deferred), so a cut
+     * can duplicate the key but never lose it.
+     */
+    RtlCopyMemory(Deferred->Image, Image, RecordSize);
+    Deferred->Vcn = Vcn;
+    Deferred->Valid = TRUE;
+    *Found = TRUE;
 
 Done:
     if (!NT_SUCCESS(Status) || !*Found)
@@ -3571,44 +3554,6 @@ Done:
     }
     delete[] Image;
     return Status;
-}
-
-static NTSTATUS
-BuildChildlessEntry(
-    _In_ PIndexEntry Source,
-    _Outptr_result_bytebuffer_(*EntryLength)
-        PIndexEntry* NewEntry,
-    _Out_ PULONG EntryLength)
-{
-    PIndexEntry Entry;
-    ULONG Length = Source->EntryLength;
-
-    *NewEntry = NULL;
-    *EntryLength = 0;
-    if (Source->Flags & INDEX_ENTRY_NODE)
-    {
-        if (Length <
-            FIELD_OFFSET(IndexEntry, IndexStream) +
-                sizeof(ULONGLONG))
-        {
-            return STATUS_FILE_CORRUPT_ERROR;
-        }
-        Length -= sizeof(ULONGLONG);
-    }
-    Entry =
-        reinterpret_cast<PIndexEntry>(
-            NtfsAllocatePoolWithTag(
-                PagedPool,
-                Length,
-                TAG_BTREE));
-    if (!Entry)
-        return STATUS_INSUFFICIENT_RESOURCES;
-    RtlCopyMemory(Entry, Source, Length);
-    Entry->EntryLength = (USHORT)Length;
-    Entry->Flags &= ~INDEX_ENTRY_NODE;
-    *NewEntry = Entry;
-    *EntryLength = Length;
-    return STATUS_SUCCESS;
 }
 
 static NTSTATUS
@@ -3716,8 +3661,6 @@ Directory::ReleaseEmptyIndexNode(
     const BOOLEAN ViewIndex =
         PathKey->CollationRule !=
             ATTRDEF_COLLATION_FILENAME;
-    IndexSearchKey ReinsertKey;
-    UNICODE_STRING ReinsertName;
     PAttribute RootAttribute;
     PIndexRootEx IndexRoot;
     PIndexNodeHeader ParentHeader;
@@ -3725,9 +3668,7 @@ Directory::ReleaseEmptyIndexNode(
     PIndexEntry Link;
     PIndexEntry LastReal;
     PIndexEntry EndEntry;
-    PIndexEntry Reinsert = NULL;
     PUCHAR NodeImage = NULL;
-    PUCHAR ParentBackup = NULL;
     PUCHAR RootValue = NULL;
     PUCHAR RootBackup = NULL;
     ULONGLONG Path[64];
@@ -3735,7 +3676,6 @@ Directory::ReleaseEmptyIndexNode(
     ULONG PathCount = 0;
     ULONG Level;
     ULONG LinkOffset;
-    ULONG ReinsertLength = 0;
     ULONG RootBackupLength = 0;
     BOOLEAN Descend;
     BOOLEAN FoundExact;
@@ -3743,6 +3683,9 @@ Directory::ReleaseEmptyIndexNode(
     BOOLEAN ParentIsRoot;
     NTSTATUS BitmapStatus;
     NTSTATUS Status;
+
+    /* Kept for the callers; the reinsert that used it is gone. */
+    (void)IndexedAttributeType;
 
     RootAttribute =
         DirectoryFile->GetAttribute(
@@ -3976,71 +3919,31 @@ Directory::ReleaseEmptyIndexNode(
         Level--;
     }
 
-    if (!ParentIsRoot)
+    if (!(Link->Flags & INDEX_ENTRY_END) || LastReal)
     {
-        ParentBackup =
-            new(PagedPool, TAG_BTREE)
-                UCHAR[IndexRecordSize];
-        if (!ParentBackup)
-        {
-            Status = STATUS_INSUFFICIENT_RESOURCES;
-            goto Done;
-        }
-        RtlCopyMemory(ParentBackup,
-                      NodeImage,
-                      IndexRecordSize);
+        /*
+         * Releasing the chain here would take a key out of the parent
+         * (the link's own key, or the last entry whose child the END link
+         * would adopt) and put it back through a fresh insert: two held-
+         * back writes the cache may land in either order, and a cut
+         * between them loses a live name from a tree that looks valid.
+         * Leave the empty leaf and its END-only chain in place instead:
+         * linked, bits set, no keys, a valid shape that the next insert in
+         * its key range reuses and that is freed when its link key is
+         * removed (RemoveIndexEntry). Only a chain that reaches the root
+         * with no key left is released, below.
+         */
+        Status = STATUS_SUCCESS;
+        goto Done;
     }
 
-    if (!(Link->Flags & INDEX_ENTRY_END))
-    {
-        Status = BuildChildlessEntry(
-            Link,
-            &Reinsert,
-            &ReinsertLength);
-        if (!NT_SUCCESS(Status))
-            goto Done;
-        CutEntryInNodeHeader(ParentHeader,
-                             LinkOffset,
-                             Link->EntryLength);
-    }
-    else if (LastReal)
-    {
-        ULONGLONG DonatedChild =
-            *GetSubnodeVCN(LastReal);
-
-        Status = BuildChildlessEntry(
-            LastReal,
-            &Reinsert,
-            &ReinsertLength);
-        if (!NT_SUCCESS(Status))
-            goto Done;
-        CutEntryInNodeHeader(
-            ParentHeader,
-            (ULONG)(
-                reinterpret_cast<PUCHAR>(LastReal) -
-                reinterpret_cast<PUCHAR>(
-                    ParentHeader)),
-            LastReal->EntryLength);
-        EndEntry =
-            reinterpret_cast<PIndexEntry>(
-                reinterpret_cast<PUCHAR>(
-                    ParentHeader) +
-                ParentHeader->TotalIndexSize -
-                (FIELD_OFFSET(IndexEntry,
-                              IndexStream) +
-                 sizeof(ULONGLONG)));
-        *GetSubnodeVCN(EndEntry) = DonatedChild;
-    }
-    else
-    {
-        EndEntry->EntryLength =
-            FIELD_OFFSET(IndexEntry, IndexStream);
-        EndEntry->Flags = INDEX_ENTRY_END;
-        ParentHeader->TotalIndexSize -=
-            sizeof(ULONGLONG);
-        ParentHeader->Flags &=
-            ~NTFS_INDEX_HEADER_LARGE;
-    }
+    EndEntry->EntryLength =
+        FIELD_OFFSET(IndexEntry, IndexStream);
+    EndEntry->Flags = INDEX_ENTRY_END;
+    ParentHeader->TotalIndexSize -=
+        sizeof(ULONGLONG);
+    ParentHeader->Flags &=
+        ~NTFS_INDEX_HEADER_LARGE;
 
     if (ParentIsRoot)
     {
@@ -4069,12 +3972,12 @@ Directory::ReleaseEmptyIndexNode(
         goto Done;
 
     /*
-     * The pointer to the freed block(s) is gone from the parent in memory.
+     * The pointer to the freed chain is gone from the parent in memory.
      * Make that write durable before the bits are cleared
-     * (CommitIndexPointerHolder): a cleared bit lets the next split reuse a
-     * block at once, and a stale parent on the disk would then point into a
-     * foreign subtree after a cut. Failing here leaks the blocks, which is
-     * the safe side.
+     * (CommitIndexPointerHolder): a cleared bit lets the next split reuse
+     * a block at once, and a stale parent on the disk would then point
+     * into a foreign subtree after a cut. Failing here leaks the blocks,
+     * which is the safe side.
      */
     if (ParentIsRoot)
     {
@@ -4124,65 +4027,11 @@ Directory::ReleaseEmptyIndexNode(
         if (!NT_SUCCESS(ClearStatus))
             BitmapStatus = ClearStatus;
     }
-
-    if (Reinsert)
-    {
-        MakeEntrySearchKey(PathKey->CollationRule,
-                           Reinsert,
-                           &ReinsertName,
-                           &ReinsertKey);
-        ReinsertKey.CaseSensitive = PathKey->CaseSensitive;
-        Status = AddIndexEntry(
-            DirectoryFile,
-            IndexName,
-            IndexedAttributeType,
-            &ReinsertKey,
-            Reinsert,
-            ReinsertLength);
-        if (!NT_SUCCESS(Status))
-        {
-            for (ULONG Index = Level;
-                 Index < PathCount;
-                 Index++)
-            {
-                (void)SetIndexRecordBitmapBit(
-                    DirectoryFile,
-                    IndexName,
-                    (Path[Index] * AllocationUnit) /
-                        IndexRecordSize,
-                    TRUE);
-            }
-            if (ParentIsRoot)
-            {
-                (void)ReplaceIndexRootValue(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    RootBackup,
-                    RootBackupLength);
-            }
-            else
-            {
-                (void)WriteIndexNode(
-                    DiskVolume,
-                    DirectoryFile,
-                    IndexName,
-                    Path[Level - 1],
-                    AllocationUnit,
-                    IndexRecordSize,
-                    ParentBackup);
-            }
-            goto Done;
-        }
-    }
     Status = BitmapStatus;
 
 Done:
-    if (Reinsert)
-        NtfsFreePool(Reinsert);
     delete[] RootBackup;
     delete[] RootValue;
-    delete[] ParentBackup;
     delete[] NodeImage;
     return Status;
 }
@@ -4251,6 +4100,9 @@ Directory::RemoveIndexEntry(
     /* The pointer removal went through a root push-down or a split, so
      * it is spread over new blocks; a full flush makes it durable. */
     BOOLEAN CompoundWrite = FALSE;
+    /* The node that gave up the replacement key, written after the
+     * ancestor that took it (RemoveMaxFromSubtree). */
+    DEFERRED_INDEX_WRITE Deferred = {};
     NTSTATUS TimestampStatus;
     NTSTATUS ReleaseStatus;
     NTSTATUS Status;
@@ -4323,6 +4175,14 @@ Directory::RemoveIndexEntry(
             UCHAR[IndexRecordSize];
     if (!NodeImage)
         return STATUS_INSUFFICIENT_RESOURCES;
+    Deferred.Image =
+        new(PagedPool, TAG_BTREE)
+            UCHAR[IndexRecordSize];
+    if (!Deferred.Image)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto Done;
+    }
 
     while (!FoundExact)
     {
@@ -4498,7 +4358,8 @@ Directory::RemoveIndexEntry(
         &MaxKey,
         &MaxKeyLength,
         &MaxFound,
-        &LeafEmptied);
+        &LeafEmptied,
+        &Deferred);
     if (!NT_SUCCESS(Status))
         goto Done;
     if (MaxFound)
@@ -4700,21 +4561,16 @@ Directory::RemoveIndexEntry(
     }
 
     /*
-     * The write that dropped the pointer to the keyless subtree is in
-     * memory. Make it durable before the chain's bits are cleared
-     * (CommitIndexPointerHolder): a cleared bit lets the next split reuse a
-     * block at once, and a stale pointer on the disk would then lead into a
-     * foreign subtree after a cut. A failed release leaks the chain's
-     * blocks until the next check, which is the safe side; the entry
-     * removal stands.
+     * The ancestor now carries the replacement key. Write the node that
+     * gave it up, ordered after the ancestor (a compound write spread the
+     * ancestor over new blocks: full flush), so a cut can duplicate the
+     * key but never lose it.
      */
-    if (ReleaseChain)
+    if (Deferred.Valid)
     {
-        NTSTATUS ChainStatus;
-
         if (CompoundWrite)
         {
-            ChainStatus = DiskVolume->FlushVolume();
+            Status = DiskVolume->FlushVolume();
         }
         else if (MatchedInRoot)
         {
@@ -4722,7 +4578,77 @@ Directory::RemoveIndexEntry(
                 DirectoryFile->GetAttribute(
                     TypeIndexRoot,
                     const_cast<PWSTR>(IndexName));
-            ChainStatus = CommitIndexPointerHolder(
+            Status = OrderNodeAfterRecord(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                Deferred.Vcn,
+                AllocationUnit,
+                IndexRecordSize,
+                IndexRootAttribute
+                    ? DirectoryFile->GetAttributeOwner(
+                        IndexRootAttribute)
+                    : NULL);
+        }
+        else
+        {
+            Status = OrderNodeAfterIndexNodes(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                Deferred.Vcn,
+                &VisitedVcns[VisitedCount - 1],
+                1,
+                AllocationUnit,
+                IndexRecordSize);
+        }
+        if (!NT_SUCCESS(Status))
+            goto Done;
+        Status = WriteIndexNode(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            Deferred.Vcn,
+            AllocationUnit,
+            IndexRecordSize,
+            Deferred.Image);
+        if (!NT_SUCCESS(Status))
+            goto Done;
+    }
+
+    /*
+     * A keyless END-only chain was taken out of the tree above, either by
+     * the entry removal itself (ReleaseChain) or by the node that donated
+     * its key (Deferred.ChainValid). The write that dropped the pointer to
+     * it is in memory; make it durable before the chain's bits are cleared
+     * (CommitIndexPointerHolder), since a cleared bit lets the next split
+     * reuse a block at once. A failure is reported: the entry is gone from
+     * the index, but the caller must not take the release for granted.
+     */
+    if (ReleaseChain || Deferred.ChainValid)
+    {
+        if (Deferred.ChainValid)
+        {
+            Status = CommitIndexPointerHolder(
+                DiskVolume,
+                DirectoryFile,
+                IndexName,
+                AllocationUnit,
+                IndexRecordSize,
+                NULL,
+                Deferred.Vcn);
+        }
+        else if (CompoundWrite)
+        {
+            Status = DiskVolume->FlushVolume();
+        }
+        else if (MatchedInRoot)
+        {
+            IndexRootAttribute =
+                DirectoryFile->GetAttribute(
+                    TypeIndexRoot,
+                    const_cast<PWSTR>(IndexName));
+            Status = CommitIndexPointerHolder(
                 DiskVolume,
                 DirectoryFile,
                 IndexName,
@@ -4736,7 +4662,7 @@ Directory::RemoveIndexEntry(
         }
         else
         {
-            ChainStatus = CommitIndexPointerHolder(
+            Status = CommitIndexPointerHolder(
                 DiskVolume,
                 DirectoryFile,
                 IndexName,
@@ -4745,30 +4671,26 @@ Directory::RemoveIndexEntry(
                 NULL,
                 VisitedVcns[VisitedCount - 1]);
         }
-        if (NT_SUCCESS(ChainStatus))
-        {
-            ChainStatus = ReleaseEndOnlyChain(
-                DiskVolume,
-                DirectoryFile,
-                IndexName,
-                IndexRecordSize,
-                AllocationUnit,
-                RemovedChild);
-        }
-        if (!NT_SUCCESS(ChainStatus))
-        {
-            DPRINT1(
-                "Index END chain at VCN %llu was "
-                "not released: 0x%lx.\n",
-                RemovedChild,
-                ChainStatus);
-        }
+        if (!NT_SUCCESS(Status))
+            goto Done;
+        Status = ReleaseEndOnlyChain(
+            DiskVolume,
+            DirectoryFile,
+            IndexName,
+            IndexRecordSize,
+            AllocationUnit,
+            Deferred.ChainValid
+                ? Deferred.ChainVcn
+                : RemovedChild);
+        if (!NT_SUCCESS(Status))
+            goto Done;
     }
     EntryCommitted = TRUE;
 
 TouchDirectory:
     if (EntryCommitted)
     {
+        ReleaseStatus = STATUS_SUCCESS;
         if (ReleaseKey)
         {
             ReleaseStatus = ReleaseEmptyIndexNode(
@@ -4798,7 +4720,12 @@ TouchDirectory:
                 "timestamp update failed: 0x%lx.\n",
                 TimestampStatus);
         }
-        Status = STATUS_SUCCESS;
+        /*
+         * The entry is gone from the index either way, but a release that
+         * failed is reported, not swallowed: the caller must know that the
+         * directory needs a check rather than take the result for granted.
+         */
+        Status = ReleaseStatus;
     }
 
 Done:
@@ -4808,6 +4735,7 @@ Done:
         NtfsFreePool(Replacement);
     delete[] Scratch;
     delete[] RootValue;
+    delete[] Deferred.Image;
     delete[] NodeImage;
     return Status;
 }
