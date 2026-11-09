@@ -1533,6 +1533,7 @@ LdrpApplyFileNameRedirection(
     PCUNICODE_STRING PrevNewName = *NewName;
     UNICODE_STRING ApisetName = {0};
     NTSTATUS Status = STATUS_SUCCESS;
+    DBG_UNREFERENCED_LOCAL_VARIABLE(PrevNewName);
 
     DWORD ApisetVersion = LdrpApisetVersion();
     if (ApisetVersion)
