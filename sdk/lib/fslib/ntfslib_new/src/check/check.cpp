@@ -246,14 +246,20 @@ private:
     static BOOLEAN KeepListEntry(_In_ void* Context, _In_ const AttributeListEx* Entry);
     BOOLEAN HasExtensions(_In_ ULONGLONG Base);
     void CheckAttributeLists();
+    struct WalkFrame
+    {
+        ULONG Block;
+        PIndexEntry Low;
+        PIndexEntry High;
+    };
     struct IndexWalk
     {
         ULONGLONG Directory;
         PUCHAR Bitmap;
         ULONGLONG BitmapBits;
         PUCHAR Valid;
-        PUCHAR Reached;
-        PULONG Stack;
+        PUCHAR Linked;
+        WalkFrame* Stack;
         ULONG Depth;
         ULONG Blocks;
         ULONG BlockSize;
@@ -261,8 +267,16 @@ private:
         ULONG InUse;
         ULONG Problems;
         BOOLEAN Unwalkable;
+        BOOLEAN CaseSensitive;
     };
-    void WalkIndexNode(_Inout_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_ ULONG Available);
+    static BOOLEAN KeyName(_In_ PIndexEntry Entry, _Out_ PUNICODE_STRING Name);
+    BOOLEAN KeyInRange(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High);
+    void WalkIndexNode(_Inout_ IndexWalk* Walk,
+                       _In_ PIndexNodeHeader Node,
+                       _In_ ULONG Available,
+                       _In_ ULONGLONG NodeVcn,
+                       _In_opt_ PIndexEntry Low,
+                       _In_opt_ PIndexEntry High);
     void RecoverLostFiles();
     void RememberCrossLink(_In_ ULONGLONG Owner, _In_ PAttribute Attr, _In_ ULONGLONG Vcn, _In_ ULONGLONG Length);
     void ResolveCrossLinks();
@@ -1493,7 +1507,15 @@ VolumeCheck::CheckIndexEntries(_In_ ULONGLONG Directory,
             Sequence[Ordinal] == (USHORT)(Target >> 48) &&
             (Key->ParentFileReference & 0x0000FFFFFFFFFFFFULL) == Directory)
         {
-            if (HasNameKey(Ordinal, HashName(Key)))
+            if (HasNameKey(Ordinal, HashName(Key)) && Names[Ordinal].Found >= Names[Ordinal].Expected)
+            {
+                /* Every name of the file is counted already: this is a second
+                 * copy, which a cut can leave in a node and an ancestor. */
+                Event(NtfsCheckIndexDuplicateEntry, Directory, Target);
+                if (RepairIndexes)
+                    RememberDangling(Directory, Target, Key);
+            }
+            else if (HasNameKey(Ordinal, HashName(Key)))
             {
                 Names[Ordinal].Found++;
                 Names[Ordinal].FoundHash += HashName(Key);
@@ -1589,12 +1611,55 @@ VolumeCheck::RemoveDangling()
         V->FlushVolume();
 }
 
+BOOLEAN
+VolumeCheck::KeyName(_In_ PIndexEntry Entry, _Out_ PUNICODE_STRING Name)
+{
+    const FileNameEx* Key = reinterpret_cast<const FileNameEx*>(Entry->IndexStream);
+
+    if (Entry->StreamLength < FIELD_OFFSET(FileNameEx, Name) ||
+        Entry->StreamLength > Entry->EntryLength - FIELD_OFFSET(IndexEntry, IndexStream) ||
+        Entry->StreamLength < FIELD_OFFSET(FileNameEx, Name) + Key->NameLength * sizeof(WCHAR))
+    {
+        return FALSE;
+    }
+    Name->Buffer = const_cast<PWSTR>(Key->Name);
+    Name->Length = Name->MaximumLength = (USHORT)(Key->NameLength * sizeof(WCHAR));
+    return TRUE;
+}
+
+BOOLEAN
+VolumeCheck::KeyInRange(_In_ IndexWalk* Walk, _In_ PUNICODE_STRING Name, _In_opt_ PIndexEntry Low, _In_opt_ PIndexEntry High)
+{
+    UNICODE_STRING Bound;
+    LONG Result;
+
+    /* Bounds are inclusive: a cut can leave the same key in a node and in
+     * one of its ancestors for a while, and that is not a broken tree. */
+    if (Low && KeyName(Low, &Bound) &&
+        NT_SUCCESS(V->CollateFileNames(Name, &Bound, Walk->CaseSensitive, &Result)) && Result < 0)
+    {
+        return FALSE;
+    }
+    if (High && KeyName(High, &Bound) &&
+        NT_SUCCESS(V->CollateFileNames(Name, &Bound, Walk->CaseSensitive, &Result)) && Result > 0)
+    {
+        return FALSE;
+    }
+    return TRUE;
+}
+
 void
-VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, _In_ ULONG Available)
+VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk,
+                           _In_ PIndexNodeHeader Node,
+                           _In_ ULONG Available,
+                           _In_ ULONGLONG NodeVcn,
+                           _In_opt_ PIndexEntry Low,
+                           _In_opt_ PIndexEntry High)
 {
     PUCHAR Base = reinterpret_cast<PUCHAR>(Node);
     ULONG Offset = Node->IndexOffset;
     ULONG End = Node->TotalIndexSize;
+    PIndexEntry Previous = Low;
 
     if (End > Available || Offset >= End || (Offset & 7) != 0)
     {
@@ -1605,12 +1670,30 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, 
     while (Offset + FIELD_OFFSET(IndexEntry, IndexStream) <= End)
     {
         PIndexEntry Entry = reinterpret_cast<PIndexEntry>(Base + Offset);
+        UNICODE_STRING Name;
 
         if (Entry->EntryLength < FIELD_OFFSET(IndexEntry, IndexStream) || (Entry->EntryLength & 7) != 0 ||
             Entry->EntryLength > End - Offset)
         {
             Walk->Unwalkable = TRUE;
             return;
+        }
+        if (!(Entry->Flags & INDEX_ENTRY_END))
+        {
+            if (!KeyName(Entry, &Name))
+            {
+                Walk->Unwalkable = TRUE;
+                return;
+            }
+            if (!KeyInRange(Walk, &Name, Low, High))
+            {
+                /* The parent links a node of another key range, for example
+                 * one whose slot was freed and reused. */
+                Walk->Unwalkable = TRUE;
+                Walk->Problems++;
+                Event(NtfsCheckIndexCorrupt, Walk->Directory, NodeVcn);
+                return;
+            }
         }
         if (Entry->Flags & INDEX_ENTRY_NODE)
         {
@@ -1635,26 +1718,40 @@ VolumeCheck::WalkIndexNode(_Inout_ IndexWalk* Walk, _In_ PIndexNodeHeader Node, 
             else
             {
                 Block = (ULONG)(Bytes / Walk->BlockSize);
-                if (!TestBit(Walk->Valid, Block) || TestBit(Walk->Reached, Block))
+                if (TestBit(Walk->Linked, Block))
                 {
-                    /* An in-use block that failed its own check was reported
-                     * already; a free one, or one reached twice, was not. */
+                    /* Linked twice. */
                     Walk->Unwalkable = TRUE;
-                    if (!(Block < Walk->BitmapBits && TestBit(Walk->Bitmap, Block)) || TestBit(Walk->Reached, Block))
-                    {
-                        Walk->Problems++;
-                        Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
-                    }
+                    Walk->Problems++;
+                    Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
                 }
                 else
                 {
-                    SetBit(Walk->Reached, Block);
-                    Walk->Stack[Walk->Depth++] = Block;
+                    SetBit(Walk->Linked, Block);
+                    if (TestBit(Walk->Valid, Block))
+                    {
+                        Walk->Stack[Walk->Depth].Block = Block;
+                        Walk->Stack[Walk->Depth].Low = Previous;
+                        Walk->Stack[Walk->Depth].High = (Entry->Flags & INDEX_ENTRY_END) ? High : Entry;
+                        Walk->Depth++;
+                    }
+                    else
+                    {
+                        /* A linked block that is free, or in use but not a
+                         * valid INDX block (that one was reported already). */
+                        Walk->Unwalkable = TRUE;
+                        if (!(Block < Walk->BitmapBits && TestBit(Walk->Bitmap, Block)))
+                        {
+                            Walk->Problems++;
+                            Event(NtfsCheckIndexCorrupt, Walk->Directory, Vcn);
+                        }
+                    }
                 }
             }
         }
         if (Entry->Flags & INDEX_ENTRY_END)
             return;
+        Previous = Entry;
         Offset += Entry->EntryLength;
     }
     Walk->Unwalkable = TRUE;
@@ -1716,9 +1813,10 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             Walk.Bitmap = Bitmap;
             Walk.BitmapBits = (ULONGLONG)BitmapLength * 8;
             Walk.Valid = AllocateMap((ULONGLONG)Walk.Blocks + 1);
-            Walk.Reached = AllocateMap((ULONGLONG)Walk.Blocks + 1);
-            Walk.Stack = new(PagedPool, TAG_NTFS) ULONG[Walk.Blocks + 1];
-            if (!Walk.Valid || !Walk.Reached || !Walk.Stack)
+            Walk.Linked = AllocateMap((ULONGLONG)Walk.Blocks + 1);
+            Walk.Stack = new(PagedPool, TAG_NTFS) WalkFrame[Walk.Blocks + 1];
+            Walk.CaseSensitive = File->IsCaseSensitiveDirectory();
+            if (!Walk.Valid || !Walk.Linked || !Walk.Stack)
             {
                 Event(NtfsCheckIndexCorrupt, Directory, 0);
                 delete[] Walk.Valid;
@@ -1765,13 +1863,23 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             }
         }
 
-        WalkIndexNode(&Walk, &Root->Header, RootAttr->Resident.DataLength - FIELD_OFFSET(IndexRootEx, Header));
+        WalkIndexNode(&Walk,
+                      &Root->Header,
+                      RootAttr->Resident.DataLength - FIELD_OFFSET(IndexRootEx, Header),
+                      0,
+                      NULL,
+                      NULL);
         while (Walk.Depth)
         {
-            ULONG Block = Walk.Stack[--Walk.Depth];
-            PIndexBuffer Buffer = reinterpret_cast<PIndexBuffer>(Allocation + Block * Walk.BlockSize);
+            WalkFrame Frame = Walk.Stack[--Walk.Depth];
+            PIndexBuffer Buffer = reinterpret_cast<PIndexBuffer>(Allocation + Frame.Block * Walk.BlockSize);
 
-            WalkIndexNode(&Walk, &Buffer->IndexHeader, Walk.BlockSize - FIELD_OFFSET(IndexBuffer, IndexHeader));
+            WalkIndexNode(&Walk,
+                          &Buffer->IndexHeader,
+                          Walk.BlockSize - FIELD_OFFSET(IndexBuffer, IndexHeader),
+                          (ULONGLONG)Frame.Block * Walk.BlockSize / Walk.VcnSize,
+                          Frame.Low,
+                          Frame.High);
         }
     }
 
@@ -1819,14 +1927,26 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
             PIndexBuffer Buffer = reinterpret_cast<PIndexBuffer>(Allocation + Block * Walk.BlockSize);
             ULONGLONG Vcn = (ULONGLONG)Block * Walk.BlockSize / Walk.VcnSize;
 
-            if (!TestBit(Walk.Valid, Block))
+            if (!TestBit(Bitmap, Block))
                 continue;
-            if (!TestBit(Walk.Reached, Block))
+            if (!TestBit(Walk.Valid, Block))
+            {
+                /* In use but not a valid block. If nothing links it, it was
+                 * never written: its corruption was counted, release it.
+                 * A linked one made the tree unwalkable. */
+                if (!TestBit(Walk.Linked, Block) && RepairIndexes && !Walk.Unwalkable)
+                {
+                    Bitmap[Block >> 3] &= (UCHAR)~(1 << (Block & 7));
+                    Released++;
+                }
+                continue;
+            }
+            if (!TestBit(Walk.Linked, Block))
             {
                 /* No lookup reaches it, so its names are not counted; they
                  * are relinked into the tree and the block is released. */
                 Event(NtfsCheckIndexBlockUnreferenced, Directory, Vcn);
-                if (RepairIndexes)
+                if (RepairIndexes && !Walk.Unwalkable)
                 {
                     Bitmap[Block >> 3] &= (UCHAR)~(1 << (Block & 7));
                     Released++;
@@ -1874,7 +1994,7 @@ Done:
     if (RepairIndexes)
         V->FlushVolume();
     delete[] Walk.Valid;
-    delete[] Walk.Reached;
+    delete[] Walk.Linked;
     delete[] Walk.Stack;
     delete[] Allocation;
     delete[] Bitmap;

@@ -1116,7 +1116,10 @@ typedef enum NtfsCheckEvent
     /* An index whose tree could not be walked was emptied, so its names can
      * be added back from the files' own names. Argument1: the directory's
      * file record; Argument2: the index blocks that were in use. */
-    NtfsCheckIndexReset
+    NtfsCheckIndexReset,
+    /* A second index entry for a name that is already counted. Argument1:
+     * the directory's file record; Argument2: the file reference. */
+    NtfsCheckIndexDuplicateEntry
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult

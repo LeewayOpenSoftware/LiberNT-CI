@@ -635,6 +635,11 @@ NtfsCheckReport(
                              "Rebuilding index $I30 of file %I64X (%I64u blocks dropped).\n",
                              Argument1, Argument2);
             break;
+        case NtfsCheckIndexDuplicateEntry:
+            NtfsFormatReport(Check->Callback,
+                             "Index $I30 of file %I64X holds a second entry for file 0x%I64x.\n",
+                             Argument1, Argument2);
+            break;
     }
 }
 
