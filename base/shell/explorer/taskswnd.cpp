@@ -59,6 +59,19 @@
 #define TSWM_TASKDRAGEND (WM_USER + 6)
 #define TSWM_MARKFULLSCREEN (WM_USER + 7)
 
+/* ITaskbarList3 button decorations. explorerframe's CTaskbarList sends these
+   (keep its copy in sync). wParam = the client's window; the result is TRUE
+   when a task button took the change. */
+#define TSWM_SETPROGRESSSTATE (WM_USER + 0x40) /* lParam = TBPFLAG */
+#define TSWM_SETPROGRESSVALUE (WM_USER + 0x41) /* lParam = 0..TASK_PROGRESS_MAX */
+#define TSWM_SETOVERLAYICON (WM_USER + 0x42)   /* lParam = HICON or NULL; copied */
+#define TSWM_SETACTIVEALT (WM_USER + 0x43)
+#define TASK_PROGRESS_MAX 0xFFFF
+#define TIMER_ID_TASK_DECOR 8
+#define TASK_DECOR_ANIM_INTERVAL 60    /* indeterminate progress animation */
+#define TASK_DECOR_CHECK_INTERVAL 1000 /* only checks for a vanished owned source */
+#define TASK_DECOR_ANIM_STEPS 32
+
 static BOOL
 SHELL_GetMonitorRect(
     _In_opt_ HMONITOR hMonitor,
@@ -239,6 +252,15 @@ typedef struct _TASK_ITEM
     INT Index;
     INT IconIndex;
     TASK_ANIM Anim;
+
+    /* ITaskbarList3 state. A source is the owned window (for example a copy
+       progress dialog) that set the state on this button; NULL means the
+       task window itself, whose state goes away with the task item. */
+    HICON hOverlayIcon;
+    HWND hOverlaySource;
+    HWND hProgressSource;
+    WORD ProgressValue;
+    BYTE ProgressState;
 
     union
     {
@@ -699,6 +721,11 @@ class CTaskSwitchWnd :
     RECT m_rcAnimBounds;
     BOOL m_bAnimTimer;
 
+    HWND m_hActiveAlt;
+    UINT m_TaskbarButtonCreatedMsg;
+    UINT m_DecorPhase;
+    UINT m_DecorTimerInterval;
+
     UINT m_uHardErrorMsg;
     CHardErrorThread m_HardErrorThread;
 
@@ -728,7 +755,10 @@ public:
         m_DropIndex(-1),
         m_DragGroup(NULL),
         m_DragWnd(NULL),
-        m_bAnimTimer(FALSE)
+        m_bAnimTimer(FALSE),
+        m_hActiveAlt(NULL),
+        m_DecorPhase(0),
+        m_DecorTimerInterval(0)
     {
         ZeroMemory(&m_ButtonSize, sizeof(m_ButtonSize));
         ZeroMemory(&m_DragGrab, sizeof(m_DragGrab));
@@ -737,6 +767,7 @@ public:
         SetRectEmpty(&m_rcAnimBounds);
         m_uHardErrorMsg = RegisterWindowMessageW(L"HardError");
         m_TaskbarPinChangedMsg = RegisterWindowMessageW(TASKBAR_PIN_CHANGED_MESSAGE);
+        m_TaskbarButtonCreatedMsg = RegisterWindowMessageW(L"TaskbarButtonCreated");
     }
     virtual ~CTaskSwitchWnd() { }
 
@@ -2678,6 +2709,14 @@ public:
 
     VOID DeleteTaskItem(IN OUT PTASK_ITEM TaskItem)
     {
+        if (TaskItem->hOverlayIcon)
+        {
+            DestroyIcon(TaskItem->hOverlayIcon);
+            TaskItem->hOverlayIcon = NULL;
+        }
+        if (TaskItem->hWnd == m_hActiveAlt)
+            m_hActiveAlt = NULL;
+
         if (!m_IsDestroying)
         {
             /* Delete the task button from the toolbar */
@@ -2845,6 +2884,9 @@ public:
                 if (!m_IsDestroying)
                 {
                     AddTaskItemButton(TaskItem);
+                    /* ITaskbarList3 clients wait for this before decorating their button. */
+                    if (m_TaskbarButtonCreatedMsg)
+                        ::PostMessageW(hWnd, m_TaskbarButtonCreatedMsg, 0, 0);
                 }
             }
         }
@@ -2873,6 +2915,10 @@ public:
         }
 
         TaskItem = FindTaskItem(hWnd);
+        if (TaskItem == NULL)
+        {
+            TaskItem = FindActiveAltTaskItem(hWnd);
+        }
         if (TaskItem == NULL)
         {
             TaskItem = FindOtherTaskItem(hWnd);
@@ -2916,6 +2962,372 @@ public:
                 DeleteTaskItem(--CurrentTask);
             } while (CurrentTask != m_TaskItems);
         }
+    }
+
+    /* ---- ITaskbarList3: progress and overlay icons on task buttons ---- */
+
+    /* The button that SetActiveAlt chose for windows of its process that have
+       no button of their own. */
+    PTASK_ITEM FindActiveAltTaskItem(IN HWND hWnd)
+    {
+        DWORD dwProcessId = 0, dwAltProcessId = 0;
+
+        if (!m_hActiveAlt || !::IsWindow(m_hActiveAlt) ||
+            !GetWindowThreadProcessId(hWnd, &dwProcessId) ||
+            !GetWindowThreadProcessId(m_hActiveAlt, &dwAltProcessId) ||
+            dwProcessId != dwAltProcessId)
+        {
+            return NULL;
+        }
+        return FindTaskItem(m_hActiveAlt);
+    }
+
+    static BOOL IsValidProgressState(IN LPARAM State)
+    {
+        return State == TBPF_NOPROGRESS || State == TBPF_INDETERMINATE || State == TBPF_NORMAL ||
+               State == TBPF_ERROR || State == TBPF_PAUSED;
+    }
+
+    /* The button a decoration call means: the window's own button, the button
+       on which this window set the decoration (it may be gone already), or,
+       for an owned window such as the copy progress dialog, the button of
+       its nearest owner that has one. */
+    PTASK_ITEM FindDecorTaskItem(IN HWND hWnd, IN BOOL bOverlay)
+    {
+        PTASK_ITEM TaskItem;
+        HWND hOwner;
+        INT i;
+
+        if (!hWnd)
+            return NULL;
+        TaskItem = FindTaskItem(hWnd);
+        if (TaskItem != NULL)
+            return TaskItem;
+        for (i = 0; i < m_TaskItemCount; i++)
+        {
+            if ((bOverlay ? m_TaskItems[i].hOverlaySource : m_TaskItems[i].hProgressSource) == hWnd)
+                return &m_TaskItems[i];
+        }
+        hOwner = hWnd;
+        for (i = 0; i < 32 && ::IsWindow(hOwner); i++)
+        {
+            hOwner = ::GetWindow(hOwner, GW_OWNER);
+            if (!hOwner)
+                break;
+            TaskItem = FindTaskItem(hOwner);
+            if (TaskItem != NULL)
+                return TaskItem;
+        }
+        return NULL;
+    }
+
+    VOID InvalidateTaskItemButton(IN PTASK_ITEM TaskItem)
+    {
+        INT Index = TaskItem->Index;
+        RECT rc;
+
+        if (TaskItem->Group != NULL && TaskItem->Group->IsCollapsed)
+            Index = TaskItem->Group->Index;
+        if (Index >= 0 && m_TaskBar.GetItemRect(Index, &rc))
+            m_TaskBar.InvalidateRect(&rc, TRUE);
+    }
+
+    VOID ClearTaskItemOverlay(IN OUT PTASK_ITEM TaskItem)
+    {
+        if (TaskItem->hOverlayIcon)
+            DestroyIcon(TaskItem->hOverlayIcon);
+        TaskItem->hOverlayIcon = NULL;
+        TaskItem->hOverlaySource = NULL;
+    }
+
+    /* The timer runs only while it has work: fast while some progress is
+       indeterminate, slow while a decoration belongs to an owned window that
+       may vanish without telling us, and not at all otherwise. */
+    VOID UpdateTaskDecorTimer()
+    {
+        BOOL bAnimate = FALSE, bCheck = FALSE;
+        UINT Interval = 0;
+        INT i;
+
+        for (i = 0; !m_IsDestroying && i < m_TaskItemCount; i++)
+        {
+            if (m_TaskItems[i].ProgressState == TBPF_INDETERMINATE)
+                bAnimate = TRUE;
+            if (m_TaskItems[i].hProgressSource || m_TaskItems[i].hOverlaySource)
+                bCheck = TRUE;
+        }
+        if (bAnimate)
+            Interval = TASK_DECOR_ANIM_INTERVAL;
+        else if (bCheck)
+            Interval = TASK_DECOR_CHECK_INTERVAL;
+        if (Interval == m_DecorTimerInterval)
+            return;
+        if (Interval == 0 || !SetTimer(TIMER_ID_TASK_DECOR, Interval, NULL))
+        {
+            KillTimer(TIMER_ID_TASK_DECOR);
+            Interval = 0;
+        }
+        m_DecorTimerInterval = Interval;
+    }
+
+    VOID OnTaskDecorTimer()
+    {
+        INT i;
+
+        m_DecorPhase = (m_DecorPhase + 1) % TASK_DECOR_ANIM_STEPS;
+        for (i = 0; i < m_TaskItemCount; i++)
+        {
+            PTASK_ITEM TaskItem = &m_TaskItems[i];
+            BOOL bRedraw = (TaskItem->ProgressState == TBPF_INDETERMINATE);
+
+            if (TaskItem->hProgressSource && !::IsWindow(TaskItem->hProgressSource))
+            {
+                TRACE("Progress source 0x%p of button %d is gone\n", TaskItem->hProgressSource, TaskItem->Index);
+                TaskItem->hProgressSource = NULL;
+                TaskItem->ProgressState = TBPF_NOPROGRESS;
+                TaskItem->ProgressValue = 0;
+                bRedraw = TRUE;
+            }
+            if (TaskItem->hOverlaySource && !::IsWindow(TaskItem->hOverlaySource))
+            {
+                ClearTaskItemOverlay(TaskItem);
+                bRedraw = TRUE;
+            }
+            if (bRedraw)
+                InvalidateTaskItemButton(TaskItem);
+        }
+        UpdateTaskDecorTimer();
+    }
+
+    LRESULT OnSetProgressState(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        HWND hWnd = (HWND)wParam;
+        PTASK_ITEM TaskItem;
+
+        if (!IsValidProgressState(lParam))
+            return FALSE;
+        TaskItem = FindDecorTaskItem(hWnd, FALSE);
+        if (TaskItem == NULL)
+            return FALSE;
+        TRACE("SetProgressState 0x%p -> button %d: %ld\n", hWnd, TaskItem->Index, (LONG)lParam);
+        if (lParam == TBPF_NOPROGRESS)
+        {
+            TaskItem->hProgressSource = NULL;
+            TaskItem->ProgressValue = 0;
+        }
+        else
+        {
+            TaskItem->hProgressSource = (TaskItem->hWnd == hWnd) ? NULL : hWnd;
+        }
+        if (TaskItem->ProgressState != (BYTE)lParam)
+        {
+            TaskItem->ProgressState = (BYTE)lParam;
+            InvalidateTaskItemButton(TaskItem);
+        }
+        UpdateTaskDecorTimer();
+        return TRUE;
+    }
+
+    LRESULT OnSetProgressValue(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        HWND hWnd = (HWND)wParam;
+        WORD Value = (WORD)min((ULONG_PTR)lParam, (ULONG_PTR)TASK_PROGRESS_MAX);
+        PTASK_ITEM TaskItem = FindDecorTaskItem(hWnd, FALSE);
+        BOOL bChanged = FALSE;
+
+        if (TaskItem == NULL)
+            return FALSE;
+        /* As on Windows, a value switches no-progress and indeterminate to normal. */
+        if (TaskItem->ProgressState == TBPF_NOPROGRESS || TaskItem->ProgressState == TBPF_INDETERMINATE)
+        {
+            TaskItem->ProgressState = TBPF_NORMAL;
+            bChanged = TRUE;
+        }
+        TaskItem->hProgressSource = (TaskItem->hWnd == hWnd) ? NULL : hWnd;
+        if (TaskItem->ProgressValue != Value)
+        {
+            TaskItem->ProgressValue = Value;
+            bChanged = TRUE;
+        }
+        if (bChanged)
+            InvalidateTaskItemButton(TaskItem);
+        UpdateTaskDecorTimer();
+        return TRUE;
+    }
+
+    LRESULT OnSetOverlayIcon(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        HWND hWnd = (HWND)wParam;
+        PTASK_ITEM TaskItem = FindDecorTaskItem(hWnd, TRUE);
+        HICON hCopy = NULL;
+
+        if (TaskItem == NULL)
+            return FALSE;
+        /* The caller may destroy its icon as soon as the call returns. */
+        if (lParam)
+        {
+            hCopy = CopyIcon((HICON)lParam);
+            if (!hCopy)
+            {
+                WARN("SetOverlayIcon 0x%p: CopyIcon(0x%p) failed %lu\n", hWnd, (HICON)lParam, GetLastError());
+                return FALSE;
+            }
+        }
+        TRACE("SetOverlayIcon 0x%p -> button %d: 0x%p\n", hWnd, TaskItem->Index, hCopy);
+        ClearTaskItemOverlay(TaskItem);
+        TaskItem->hOverlayIcon = hCopy;
+        TaskItem->hOverlaySource = (hCopy && TaskItem->hWnd != hWnd) ? hWnd : NULL;
+        InvalidateTaskItemButton(TaskItem);
+        UpdateTaskDecorTimer();
+        return TRUE;
+    }
+
+    LRESULT OnSetActiveAlt(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+    {
+        HWND hWnd = (HWND)wParam;
+
+        m_hActiveAlt = FindTaskItem(hWnd) ? hWnd : NULL;
+        return m_hActiveAlt != NULL;
+    }
+
+    /* The items whose progress and overlay a toolbar button shows. A group
+       button shows the first of its windows that has each. */
+    BOOL GetButtonDecorItems(IN INT Index, OUT PTASK_ITEM *pProgress, OUT PTASK_ITEM *pOverlay)
+    {
+        PTASK_GROUP TaskGroup = FindTaskGroupByIndex(Index);
+        PTASK_ITEM TaskItem;
+        INT i;
+
+        *pProgress = *pOverlay = NULL;
+        if (Index < 0)
+            return FALSE;
+        if (TaskGroup == NULL)
+        {
+            TaskItem = FindTaskItemByIndex(Index);
+            if (TaskItem != NULL && TaskItem->ProgressState != TBPF_NOPROGRESS)
+                *pProgress = TaskItem;
+            if (TaskItem != NULL && TaskItem->hOverlayIcon)
+                *pOverlay = TaskItem;
+        }
+        else
+        {
+            for (i = 0; i < m_TaskItemCount && (!*pProgress || !*pOverlay); i++)
+            {
+                TaskItem = &m_TaskItems[i];
+                if (TaskItem->Group != TaskGroup)
+                    continue;
+                if (!*pProgress && TaskItem->ProgressState != TBPF_NOPROGRESS)
+                    *pProgress = TaskItem;
+                if (!*pOverlay && TaskItem->hOverlayIcon)
+                    *pOverlay = TaskItem;
+            }
+        }
+        return *pProgress || *pOverlay;
+    }
+
+    static VOID FillRectColor(IN HDC hdc, IN const RECT *prc, IN COLORREF Color)
+    {
+        COLORREF OldColor = SetBkColor(hdc, Color);
+
+        ExtTextOutW(hdc, 0, 0, ETO_OPAQUE, prc, NULL, 0, NULL);
+        SetBkColor(hdc, OldColor);
+    }
+
+    /* Progress runs along the bottom of the button; the overlay sits on the
+       icon's lower right corner. As on Windows, no overlay with small icons. */
+    VOID DrawButtonDecorations(IN HDC hdc, IN const RECT *prcButton, IN const RECT *prcIcon, IN INT Index)
+    {
+        PTASK_ITEM Progress, Overlay;
+
+        if (!GetButtonDecorItems(Index, &Progress, &Overlay))
+            return;
+
+        if (Progress != NULL)
+        {
+            RECT rcTrack = *prcButton, rcFill;
+            INT cyBar = max(3, ShellScaleForDpi(3));
+            INT cxTrack;
+            COLORREF crFill;
+
+            InflateRect(&rcTrack, -ShellScaleForDpi(3), 0);
+            rcTrack.bottom -= ShellScaleForDpi(2);
+            rcTrack.top = rcTrack.bottom - cyBar;
+            cxTrack = rcTrack.right - rcTrack.left;
+            if (cxTrack > 0 && rcTrack.top > prcButton->top)
+            {
+                switch (Progress->ProgressState)
+                {
+                case TBPF_ERROR:  crFill = RGB(218, 38, 38); break;
+                case TBPF_PAUSED: crFill = RGB(230, 180, 30); break;
+                default:          crFill = RGB(6, 176, 37); break;
+                }
+                FillRectColor(hdc, &rcTrack, GetSysColor(COLOR_3DSHADOW));
+                rcFill = rcTrack;
+                if (Progress->ProgressState == TBPF_INDETERMINATE)
+                {
+                    INT cxBand = max(cxTrack / 4, 1);
+
+                    rcFill.left = rcTrack.left - cxBand +
+                                  MulDiv(cxTrack + cxBand, (INT)m_DecorPhase, TASK_DECOR_ANIM_STEPS - 1);
+                    rcFill.right = rcFill.left + cxBand;
+                    rcFill.left = max(rcFill.left, rcTrack.left);
+                    rcFill.right = min(rcFill.right, rcTrack.right);
+                }
+                else
+                {
+                    rcFill.right = rcTrack.left + MulDiv(cxTrack, Progress->ProgressValue, TASK_PROGRESS_MAX);
+                }
+                if (rcFill.right > rcFill.left)
+                    FillRectColor(hdc, &rcFill, crFill);
+            }
+        }
+
+        /* Not with small icons, as on Windows. The modern style never uses small
+           task icons ("Use small taskbar buttons" is a deliberate no-op there,
+           see UseSmallTaskIcons), so it always shows the overlay. */
+        if (Overlay != NULL && prcIcon != NULL && !UseSmallTaskIcons())
+        {
+            INT cxOv = GetSystemMetrics(SM_CXSMICON), cyOv = GetSystemMetrics(SM_CYSMICON);
+            INT x = prcIcon->right - cxOv + cxOv / 4;
+            INT y = prcIcon->bottom - cyOv + cyOv / 4;
+
+            x = max(prcButton->left, min(x, prcButton->right - cxOv));
+            y = max(prcButton->top, min(y, prcButton->bottom - cyOv));
+            DrawIconEx(hdc, x, y, Overlay->hOverlayIcon, cxOv, cyOv, 0, NULL, DI_NORMAL);
+        }
+    }
+
+    BOOL ButtonHasDecorations(IN INT Index)
+    {
+        PTASK_ITEM Progress, Overlay;
+
+        return GetButtonDecorItems(Index, &Progress, &Overlay);
+    }
+
+    VOID GetTaskIconSize(OUT INT *pcx, OUT INT *pcy)
+    {
+        *pcx = *pcy = 0;
+        if (!m_ImageList || !ImageList_GetIconSize(m_ImageList, pcx, pcy) || *pcx <= 0 || *pcy <= 0)
+        {
+            *pcx = GetSystemMetrics(UseSmallTaskIcons() ? SM_CXSMICON : SM_CXICON);
+            *pcy = GetSystemMetrics(UseSmallTaskIcons() ? SM_CYSMICON : SM_CYICON);
+        }
+    }
+
+    /* Classic buttons: the toolbar has drawn the button; find its icon the
+       way the list-style toolbar places it, then draw on top. */
+    VOID DrawClassicButtonDecorations(IN const NMTBCUSTOMDRAW *nmtbcd)
+    {
+        DWORD dwPadding = (DWORD)m_TaskBar.SendMessageW(TB_GETPADDING, 0, 0);
+        RECT rcIcon;
+        INT cx, cy;
+
+        GetTaskIconSize(&cx, &cy);
+        rcIcon.left = nmtbcd->nmcd.rc.left + GetSystemMetrics(SM_CXEDGE) + LOWORD(dwPadding) / 2;
+        rcIcon.top = nmtbcd->nmcd.rc.top + HIWORD(dwPadding) / 2;
+        rcIcon.right = rcIcon.left + cx;
+        rcIcon.bottom = rcIcon.top + cy;
+        DrawButtonDecorations(nmtbcd->nmcd.hdc, &nmtbcd->nmcd.rc, &rcIcon, (INT)nmtbcd->nmcd.dwItemSpec);
     }
 
     VOID FlashTaskItem(IN OUT PTASK_ITEM TaskItem)
@@ -3251,6 +3663,8 @@ public:
         CancelTaskPreview();
         KillTimer(TIMER_ID_BUTTON_ANIM);
         KillTimer(TIMER_ID_VALIDATE_RUDE_APP);
+        KillTimer(TIMER_ID_TASK_DECOR);
+        m_DecorTimerInterval = 0;
 
         /* Unregister the shell hook */
         RegisterShellHook(m_hWnd, FALSE);
@@ -4136,7 +4550,8 @@ public:
         DeleteObject(hpenEdge);
     }
 
-    LRESULT DrawWin7TaskButtonWorker(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN INT IconIndex, IN INT nLayers)
+    LRESULT DrawWin7TaskButtonWorker(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN INT IconIndex, IN INT nLayers,
+                                     IN INT ButtonIndex = -1)
     {
         HDC hdc = nmtbcd->nmcd.hdc;
         RECT rc = nmtbcd->nmcd.rc;
@@ -4233,12 +4648,25 @@ public:
             ImageList_Draw(m_ImageList, IconIndex, hdc, x, y, ILD_TRANSPARENT);
         }
 
+        if (ButtonIndex >= 0)
+        {
+            RECT rcIcon;
+            INT cx, cy;
+
+            GetTaskIconSize(&cx, &cy);
+            rcIcon.left = rcFace.left + ((rcFace.right - rcFace.left) - cx) / 2;
+            rcIcon.top = rcFace.top + ((rcFace.bottom - rcFace.top) - cy) / 2;
+            rcIcon.right = rcIcon.left + cx;
+            rcIcon.bottom = rcIcon.top + cy;
+            DrawButtonDecorations(hdc, &rcFace, &rcIcon, ButtonIndex);
+        }
+
         return CDRF_SKIPDEFAULT;
     }
 
     LRESULT DrawWin7TaskButton(IN OUT NMTBCUSTOMDRAW *nmtbcd, IN PTASK_ITEM TaskItem)
     {
-        return DrawWin7TaskButtonWorker(nmtbcd, TaskItem->IconIndex, 1);
+        return DrawWin7TaskButtonWorker(nmtbcd, TaskItem->IconIndex, 1, TaskItem->Index);
     }
 
     VOID DrawDraggedTaskButton(IN const NMTBCUSTOMDRAW *nmtbcd)
@@ -4264,7 +4692,7 @@ public:
         if (TaskGroup ? GroupContainsActive(TaskGroup) : (TaskItem && m_ActiveTaskItem == TaskItem))
             cd.nmcd.uItemState |= CDIS_CHECKED;
         if (TaskGroup)
-            DrawWin7TaskButtonWorker(&cd, TaskGroup->IconIndex, (INT)TaskGroup->dwTaskCount);
+            DrawWin7TaskButtonWorker(&cd, TaskGroup->IconIndex, (INT)TaskGroup->dwTaskCount, Index);
         else if (TaskItem)
             DrawWin7TaskButton(&cd, TaskItem);
     }
@@ -4325,7 +4753,8 @@ public:
         {
             if (IsModernTaskbar())
                 return DrawWin7TaskButtonWorker(nmtbcd, TaskGroup->IconIndex,
-                                                (INT)TaskGroup->dwTaskCount);
+                                                (INT)TaskGroup->dwTaskCount,
+                                                (INT)nmtbcd->nmcd.dwItemSpec);
         }
         return Ret;
     }
@@ -4388,6 +4817,13 @@ public:
 
             case CDDS_ITEMPREPAINT:
                 Ret = HandleItemPaint(nmtbcd);
+                if (!(Ret & CDRF_SKIPDEFAULT) && ButtonHasDecorations((INT)nmtbcd->nmcd.dwItemSpec))
+                    Ret |= CDRF_NOTIFYPOSTPAINT;
+                break;
+
+            case CDDS_ITEMPOSTPAINT:
+                DrawClassicButtonDecorations(nmtbcd);
+                Ret = CDRF_DODEFAULT;
                 break;
 
             case CDDS_PREPAINT:
@@ -4771,6 +5207,10 @@ public:
                 break;
             }
 
+            case TIMER_ID_TASK_DECOR:
+                OnTaskDecorTimer();
+                break;
+
             case TIMER_ID_BUTTON_ANIM:
             {
                 RECT rcAnim = m_rcAnimBounds;
@@ -5079,6 +5519,10 @@ public:
         MESSAGE_HANDLER(TSWM_TASKDRAGMOVE, OnTaskDragMove)
         MESSAGE_HANDLER(TSWM_TASKDRAGEND, OnTaskDragEnd)
         MESSAGE_HANDLER(TSWM_MARKFULLSCREEN, OnMarkFullscreen)
+        MESSAGE_HANDLER(TSWM_SETPROGRESSSTATE, OnSetProgressState)
+        MESSAGE_HANDLER(TSWM_SETPROGRESSVALUE, OnSetProgressValue)
+        MESSAGE_HANDLER(TSWM_SETOVERLAYICON, OnSetOverlayIcon)
+        MESSAGE_HANDLER(TSWM_SETACTIVEALT, OnSetActiveAlt)
         MESSAGE_HANDLER(WM_COPYDATA, OnCopyData)
         MESSAGE_HANDLER(WM_WINDOWPOSCHANGED, OnWindowPosChanged)
     END_MSG_MAP()
