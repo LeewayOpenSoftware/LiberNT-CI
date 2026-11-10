@@ -15,13 +15,20 @@
 extern "C" {
 #endif
 
+/* Framework command IDs (0xF001-0xF005) */
+#define LWUI_CMD_STATUSBAR_TOGGLE 0xF001  /* Toggle status bar visibility */
+#define LWUI_CMD_HELP             0xF002  /* Help/F1 button */
+#define LWUI_CMD_MINIMIZE         0xF003  /* Minimize ribbon button */
+#define LWUI_CMD_MAXIMIZE         0xF004  /* Maximize ribbon button */
+#define LWUI_CMD_MENU             0xF005  /* App menu button */
+
 /* ===== Command and State Management ===== */
 
 typedef struct {
     UINT32 id;
-    WCHAR *label;
-    WCHAR *tooltip;
-    WCHAR *keytip;
+    const WCHAR *label;
+    const WCHAR *tooltip;
+    const WCHAR *keytip;
     UINT32 icon_id;
     BOOL enabled;
     BOOL checked;
@@ -37,10 +44,12 @@ typedef enum {
     LWUI_CONTROL_BUTTON_LARGE = 0,    /* 32x32 icon + label */
     LWUI_CONTROL_BUTTON_SMALL,         /* 16x16 icon, optional label */
     LWUI_CONTROL_BUTTON_SMALL_ICON,    /* 16x16 icon only */
-    LWUI_CONTROL_BUTTON_TOGGLE,        /* Toggle state (checked/unchecked) */
-    LWUI_CONTROL_BUTTON_SPLIT,         /* Primary action + dropdown arrow */
-    LWUI_CONTROL_BUTTON_DROPDOWN,      /* Dropdown menu */
-    LWUI_CONTROL_GALLERY,              /* Grid of items with scrolling */
+    LWUI_CONTROL_TOGGLE_LARGE,         /* Large toggle: 32x32 icon + label + checked indicator */
+    LWUI_CONTROL_TOGGLE_SMALL,         /* Small toggle: 16x16 icon + checked indicator */
+    LWUI_CONTROL_SPLIT_LARGE,          /* Large split: primary action area + dropdown arrow */
+    LWUI_CONTROL_SPLIT_SMALL,          /* Small split: icon + dropdown arrow */
+    LWUI_CONTROL_DROPDOWN,             /* Dropdown menu: label + arrow */
+    LWUI_CONTROL_GALLERY,              /* Grid of items with scrolling (gallery_id == command_id) */
     LWUI_CONTROL_COMBO,                /* Combo box (framework gap, not F1) */
     LWUI_CONTROL_COLORWELL,            /* Color picker (framework gap, not F1) */
     LWUI_CONTROL_CHECKBOX,             /* Checkbox (framework gap, not F1) */
@@ -52,24 +61,28 @@ typedef enum {
 typedef struct LeewayUIPlacement {
     UINT32 command_id;
     LeewayUIControlKind kind;
-    WCHAR *keytip;              /* Per-placement keytip (may differ from command keytip) */
-    struct LeewayUIPlacement *sibling;
+    const WCHAR *keytip;        /* Per-placement keytip (may differ from command keytip) */
+    /* For galleries (kind==LWUI_CONTROL_GALLERY): gallery_id == command_id; items set via SetCollectionItems */
+    const struct LeewayUIPlacement *sibling;
 } LeewayUIPlacement;
 
 typedef struct LeewayUIGroup {
-    WCHAR *label;
-    UINT32 min_columns;         /* Minimum columns in "large" variant */
-    UINT32 max_columns;         /* Maximum columns in "small" variant */
-    LeewayUIPlacement *controls;
-    struct LeewayUIGroup *sibling;
+    const WCHAR *label;
+    const WCHAR *keytip;        /* Group-level keytip (e.g., Alt,H for Home group) */
+    UINT32 min_columns;         /* Minimum columns in largest variant */
+    UINT32 max_columns;         /* Maximum columns in smallest variant */
+    UINT32 variant_order;       /* Collapse order: 0=full, 1=medium, 2=small, 3=popup (framework-set) */
+    UINT32 launcher_id;         /* Dialog launcher command ID for this group (0 if none) */
+    const LeewayUIPlacement *controls;  /* Sibling-linked placement list; app provides const data */
+    const struct LeewayUIGroup *sibling;
 } LeewayUIGroup;
 
 typedef struct LeewayUITab {
     UINT32 id;
-    WCHAR *label;
-    WCHAR *keytip;
-    LeewayUIGroup *groups;
-    struct LeewayUITab *sibling;
+    const WCHAR *label;
+    const WCHAR *keytip;
+    const LeewayUIGroup *groups;  /* Sibling-linked group list; app provides const data */
+    const struct LeewayUITab *sibling;
 } LeewayUITab;
 
 /* ===== Collections: Items for Galleries/Dropdowns ===== */
@@ -238,14 +251,30 @@ HRESULT WINAPI LeewayRibbonCreate(HWND parent, const LeewayUICommand *table, UIN
                                    LeewayUICommandStateHandler state,
                                    void *app_context, ILeewayRibbon **out);
 
+/* Layout and content: SetLayout copies the tree; app provides const nodes on stack/static */
 HRESULT WINAPI LeewayRibbonSetLayout(ILeewayRibbon *ribbon, const LeewayUITab *tabs);
+
+/* QAT persistence: HKCU\Software\Leeway\<AppName>\QAT, value "Items" (REG_BINARY UINT32[]) */
 HRESULT WINAPI LeewayRibbonSetQAT(ILeewayRibbon *ribbon, const LeewayUIQAT *qat);
+HRESULT WINAPI LeewayRibbonPersistQAT(ILeewayRibbon *ribbon);
+HRESULT WINAPI LeewayRibbonLoadQATFromRegistry(ILeewayRibbon *ribbon, HKEY root, const WCHAR *app_name);
+
 HRESULT WINAPI LeewayRibbonSetAppMenu(ILeewayRibbon *ribbon, const LeewayUIAppMenu *app_menu);
 HRESULT WINAPI LeewayRibbonSetTheme(ILeewayRibbon *ribbon, const LeewayUITheme *theme);
 HRESULT WINAPI LeewayRibbonSetDPI(ILeewayRibbon *ribbon, UINT32 dpi);
+
+/* Invalidation: by command ID or all controls */
+HRESULT WINAPI LeewayRibbonInvalidateCommand(ILeewayRibbon *ribbon, UINT32 command_id);
+HRESULT WINAPI LeewayRibbonInvalidateAll(ILeewayRibbon *ribbon);
 HRESULT WINAPI LeewayRibbonInvalidateRegion(ILeewayRibbon *ribbon, const RECT *rc);
+
+/* Ribbon state and layout */
+UINT32 WINAPI LeewayRibbonGetHeight(ILeewayRibbon *ribbon);  /* Current ribbon height (changes on minimize/DPI) */
+BOOL WINAPI LeewayRibbonIsMinimized(ILeewayRibbon *ribbon);
+HRESULT WINAPI LeewayRibbonMinimizeRibbon(ILeewayRibbon *ribbon, BOOL minimize);
+
 HWND WINAPI LeewayRibbonGetHWND(ILeewayRibbon *ribbon);
-HRESULT WINAPI LeewayRibbonDestroy(ILeewayRibbon *ribbon);
+HRESULT WINAPI LeewayRibbonDestroy(ILeewayRibbon *ribbon);  /* Only destructor; Release is an alias */
 
 #ifdef __cplusplus
 }
