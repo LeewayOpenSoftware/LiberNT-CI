@@ -17,6 +17,7 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon);
 void PaintRibbonCleanup(ILeewayRibbon *ribbon);
 void PaintRibbonInvalidateCommand(ILeewayRibbon *ribbon, UINT32 command_id);
 void PaintRibbonInvalidateAll(ILeewayRibbon *ribbon);
+void PaintRibbonSetTextToolActive(ILeewayRibbon *ribbon, BOOL active);
 
 #ifdef __cplusplus
 }

@@ -266,3 +266,10 @@ void PaintRibbonInvalidateAll(ILeewayRibbon *ribbon)
     if (ribbon)
         LeewayRibbonInvalidateAll(ribbon);
 }
+
+/* Activate/deactivate Text contextual tab (called when tool changes) */
+void PaintRibbonSetTextToolActive(ILeewayRibbon *ribbon, BOOL active)
+{
+    if (ribbon)
+        LeewayRibbonSetContext(ribbon, L"IsTextTool", active);
+}
