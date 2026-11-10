@@ -2557,6 +2557,47 @@ FileRecord::SettleGrowthAttributeList()
     return STATUS_SUCCESS;
 }
 
+/*
+ * Every mapping update ends here. A list that names only the base record is
+ * dropped, as Windows treats it as corrupt. But dropped after each growth
+ * of a mapping that fills the base record, it hands its bytes to the
+ * mapping, until a growth can neither fit the mapping nor create a list:
+ * a sparse write or a cluster move then fails STATUS_BUFFER_TOO_SMALL with
+ * the base record full and no list. So when dropping it would leave the
+ * base record without the growth headroom, part of the largest mapping
+ * moves to an extension record first, and the list, which then names it,
+ * is kept. Only when nothing can move is the list dropped anyway.
+ */
+NTSTATUS
+FileRecord::SettleUnneededAttributeList()
+{
+    PAttribute ListAttribute;
+    BOOLEAN Unneeded;
+    NTSTATUS Status;
+
+    if (!Header || !Data || Header->BaseFileRecord != 0 ||
+        Header->ActualSize > Header->AllocatedSize ||
+        ReleasingBaseRecordSpace)
+    {
+        return STATUS_SUCCESS;
+    }
+    ListAttribute = FindAttributeInRecord(TypeAttributeList, NULL, NULL);
+    if (!ListAttribute)
+        return STATUS_SUCCESS;
+    Status = DropUnneededAttributeList(FALSE, &Unneeded);
+    if (!NT_SUCCESS(Status) || !Unneeded)
+        return Status;
+
+    if (Header->AllocatedSize - Header->ActualSize + ListAttribute->Length < MappingGrowthHeadroom &&
+        NT_SUCCESS(ReleaseBaseRecordSpace(MappingGrowthHeadroom)))
+    {
+        Status = DropUnneededAttributeList(FALSE, &Unneeded);
+        if (!NT_SUCCESS(Status) || !Unneeded)
+            return Status;
+    }
+    return CollapseUnneededAttributeList();
+}
+
 NTSTATUS
 FileRecord::ReleaseBaseRecordSpace(
     _In_ ULONG Required)
@@ -2638,11 +2679,14 @@ FileRecord::ReleaseBaseRecordSpace(
     MappingReserve = 0;
     if (NT_SUCCESS(Status))
     {
+        /* The commit settles the list again: not from inside this move. */
+        ReleasingBaseRecordSpace = TRUE;
         Status = MappingUpdate
             ? CommitNonResidentMappingUpdate(
                 &MappingUpdate)
             : DiskVolume->MFT->
                 WriteFileRecordToMFT(this);
+        ReleasingBaseRecordSpace = FALSE;
         if (!NT_SUCCESS(Status))
         {
             if (MappingUpdate)
@@ -2951,11 +2995,65 @@ RestoreResident:
         }
         if (SparseFile)
         {
+            /*
+             * A sparse write adds a run pair for every hole, so its mapping
+             * fills the base record as an extending write does: create the
+             * list while the record still has the headroom for it, or once
+             * the mapping no longer fits, and drop it again if the mapping
+             * stayed in the base record.
+             */
+            BOOLEAN ListCreated = FALSE;
+            BOOLEAN ListCreatedHere = FALSE;
+            ULONG SparseLength = *Length;
+
+            if (AttributeOwner == this &&
+                Header->AllocatedSize >= Header->ActualSize &&
+                Header->AllocatedSize - Header->ActualSize < MappingGrowthHeadroom)
+            {
+                Status = EnsureAttributeListForMappingGrowth(AttrType,
+                                                             StreamName,
+                                                             &TargetAttribute,
+                                                             &AttributeOwner,
+                                                             &ListCreated);
+                if (!NT_SUCCESS(Status))
+                    return Status;
+                ListCreatedHere = ListCreated;
+            }
             Status = WriteSparseData(
                 TargetAttribute,
                 Buffer,
                 Length,
                 (ULONGLONG)Offset->QuadPart);
+            if (Status == STATUS_BUFFER_TOO_SMALL)
+            {
+                TargetAttribute = GetAttribute(AttrType, StreamName);
+                AttributeOwner = TargetAttribute
+                    ? GetAttributeOwner(TargetAttribute)
+                    : NULL;
+                if (!TargetAttribute || !AttributeOwner)
+                    return STATUS_FILE_CORRUPT_ERROR;
+                Status = EnsureAttributeListForMappingGrowth(AttrType,
+                                                             StreamName,
+                                                             &TargetAttribute,
+                                                             &AttributeOwner,
+                                                             &ListCreated);
+                if (NT_SUCCESS(Status) && ListCreated)
+                {
+                    ListCreatedHere = TRUE;
+                    *Length = SparseLength;
+                    Status = WriteSparseData(
+                        TargetAttribute,
+                        Buffer,
+                        Length,
+                        (ULONGLONG)Offset->QuadPart);
+                }
+                else if (NT_SUCCESS(Status))
+                {
+                    Status = STATUS_BUFFER_TOO_SMALL;
+                }
+            }
+            if (NT_SUCCESS(Status) && ListCreatedHere)
+                (void)SettleGrowthAttributeList();
             if (NT_SUCCESS(Status))
                 *Length = RequestedLength;
             return Status;

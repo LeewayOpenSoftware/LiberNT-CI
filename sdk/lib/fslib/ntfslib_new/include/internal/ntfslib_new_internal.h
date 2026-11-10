@@ -1075,6 +1075,13 @@ public:
     NTSTATUS
     SettleGrowthAttributeList();
 
+    /* After any mapping update: drop a list that names only the base
+     * record, unless that would leave the base record without the room to
+     * create a list for the next growth; then part of the largest mapping
+     * moves to an extension record instead, which the list names. */
+    NTSTATUS
+    SettleUnneededAttributeList();
+
     /* Rewrites an unreadable $ATTRIBUTE_LIST of a base record from the
      * attributes of the record itself and of every extension record that
      * names it, and commits the record. The caller passes ALL of those
@@ -1225,6 +1232,7 @@ private:
     PFileRecordExtentCacheEntry ExtentCache = NULL;
     FileRecord* BaseRecordOwner = NULL;
     ULONG MappingReserve = 0;
+    BOOLEAN ReleasingBaseRecordSpace = FALSE;
     PUCHAR AttributeListData = NULL;
     ULONG AttributeListLength = 0;
     UINT32 AutomaticTimestampMask =
