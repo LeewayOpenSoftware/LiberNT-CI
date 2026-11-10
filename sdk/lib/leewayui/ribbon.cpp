@@ -95,6 +95,118 @@ static void RenderButtonSmall(HDC hdc, RECT *rc, LeewayUICommand *cmd, BOOL hove
     DrawTextW(hdc, cmd->label, -1, rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 }
 
+/* Helper: render a toggle button (same as large but with checked indicator) */
+static void RenderButtonToggle(HDC hdc, RECT *rc, LeewayUICommand *cmd, BOOL hovered, BOOL pressed, LeewayUITheme *theme)
+{
+    if (!cmd) return;
+
+    COLORREF bg = cmd->checked ? theme->pressed_color : (pressed ? theme->pressed_color : (hovered ? theme->hover_color : theme->bg_color));
+    HBRUSH btn_brush = CreateSolidBrush(bg);
+    FillRect(hdc, rc, btn_brush);
+    DeleteObject(btn_brush);
+
+    HBRUSH border_brush = CreateSolidBrush(cmd->checked ? theme->pressed_color : theme->border_color);
+    FrameRect(hdc, rc, border_brush);
+    DeleteObject(border_brush);
+
+    if (cmd->checked) {
+        HPEN check_pen = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
+        SelectObject(hdc, check_pen);
+        MoveToEx(hdc, rc->left + 4, rc->top + 16, NULL);
+        LineTo(hdc, rc->left + 10, rc->top + 22);
+        LineTo(hdc, rc->left + 28, rc->top + 4);
+        DeleteObject(check_pen);
+    }
+
+    SetTextColor(hdc, cmd->enabled ? theme->text_color : theme->disabled_color);
+    SetBkMode(hdc, TRANSPARENT);
+    RECT text_rc = *rc;
+    text_rc.top += 24;
+    DrawTextW(hdc, cmd->label, -1, &text_rc, DT_CENTER | DT_TOP | DT_SINGLELINE);
+}
+
+/* Helper: render a split button (primary action + dropdown arrow) */
+static void RenderButtonSplit(HDC hdc, RECT *rc, LeewayUICommand *cmd, BOOL hovered, BOOL pressed, LeewayUITheme *theme)
+{
+    if (!cmd) return;
+
+    /* Main button area */
+    RECT main_rc = *rc;
+    main_rc.right -= 12;
+
+    COLORREF bg = pressed ? theme->pressed_color : (hovered ? theme->hover_color : theme->bg_color);
+    HBRUSH btn_brush = CreateSolidBrush(bg);
+    FillRect(hdc, &main_rc, btn_brush);
+    DeleteObject(btn_brush);
+
+    HBRUSH border_brush = CreateSolidBrush(theme->border_color);
+    FrameRect(hdc, &main_rc, border_brush);
+
+    /* Dropdown arrow area */
+    RECT arrow_rc;
+    arrow_rc.left = main_rc.right;
+    arrow_rc.top = main_rc.top;
+    arrow_rc.right = rc->right;
+    arrow_rc.bottom = main_rc.bottom;
+
+    FillRect(hdc, &arrow_rc, btn_brush);
+    FrameRect(hdc, &arrow_rc, border_brush);
+    DeleteObject(border_brush);
+    DeleteObject(btn_brush);
+
+    /* Draw small down arrow */
+    HPEN arrow_pen = CreatePen(PS_SOLID, 1, theme->text_color);
+    SelectObject(hdc, arrow_pen);
+    INT cx = arrow_rc.left + (arrow_rc.right - arrow_rc.left) / 2;
+    INT cy = arrow_rc.top + (arrow_rc.bottom - arrow_rc.top) / 2;
+    MoveToEx(hdc, cx - 2, cy - 1, NULL);
+    LineTo(hdc, cx + 3, cy - 1);
+    MoveToEx(hdc, cx - 1, cy + 1, NULL);
+    LineTo(hdc, cx + 2, cy + 1);
+    DeleteObject(arrow_pen);
+
+    SetTextColor(hdc, cmd->enabled ? theme->text_color : theme->disabled_color);
+    SetBkMode(hdc, TRANSPARENT);
+    RECT text_rc = *rc;
+    text_rc.top += 24;
+    text_rc.right = main_rc.right;
+    DrawTextW(hdc, cmd->label, -1, &text_rc, DT_CENTER | DT_TOP | DT_SINGLELINE);
+}
+
+/* Helper: render a dropdown button (label + arrow) */
+static void RenderButtonDropdown(HDC hdc, RECT *rc, LeewayUICommand *cmd, BOOL hovered, BOOL pressed, LeewayUITheme *theme)
+{
+    if (!cmd) return;
+
+    COLORREF bg = pressed ? theme->pressed_color : (hovered ? theme->hover_color : theme->bg_color);
+    HBRUSH btn_brush = CreateSolidBrush(bg);
+    FillRect(hdc, rc, btn_brush);
+    DeleteObject(btn_brush);
+
+    HBRUSH border_brush = CreateSolidBrush(theme->border_color);
+    FrameRect(hdc, rc, border_brush);
+    DeleteObject(border_brush);
+
+    SetTextColor(hdc, cmd->enabled ? theme->text_color : theme->disabled_color);
+    SetBkMode(hdc, TRANSPARENT);
+
+    /* Draw label and small arrow */
+    RECT text_rc = *rc;
+    text_rc.right -= 8;
+    DrawTextW(hdc, cmd->label, -1, &text_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+
+    /* Draw arrow */
+    HPEN arrow_pen = CreatePen(PS_SOLID, 1, theme->text_color);
+    SelectObject(hdc, arrow_pen);
+    INT cx = rc->right - 4;
+    INT cy = rc->top + (rc->bottom - rc->top) / 2;
+    MoveToEx(hdc, cx - 2, cy - 1, NULL);
+    LineTo(hdc, cx + 1, cy - 1);
+    MoveToEx(hdc, cx - 1, cy + 1, NULL);
+    LineTo(hdc, cx, cy + 1);
+    DeleteObject(arrow_pen);
+}
+
 /* Main paint handler for ribbon */
 static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
 {
@@ -104,6 +216,30 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
     HBRUSH bg_brush = CreateSolidBrush(ribbon->theme.bg_color);
     FillRect(hdc, rc, bg_brush);
     DeleteObject(bg_brush);
+
+    INT content_y = 0;
+
+    /* Render QAT (Quick Access Toolbar) if present */
+    if (ribbon->qat && ribbon->qat->count > 0) {
+        INT qat_x = 4;
+        for (UINT32 i = 0; i < ribbon->qat->count && i < 10; i++) {
+            LeewayUICommand qat_cmd;
+            if (SUCCEEDED(GetCommandState(ribbon, ribbon->qat->items[i].command_id, &qat_cmd))) {
+                RECT qat_btn_rc;
+                qat_btn_rc.left = qat_x;
+                qat_btn_rc.top = 2;
+                qat_btn_rc.right = qat_x + BUTTON_SMALL_SIZE;
+                qat_btn_rc.bottom = qat_btn_rc.top + BUTTON_SMALL_SIZE;
+
+                BOOL hovered = (ribbon->hovered_command_id == ribbon->qat->items[i].command_id);
+                BOOL pressed = (ribbon->pressed_command_id == ribbon->qat->items[i].command_id);
+                RenderButtonSmall(hdc, &qat_btn_rc, &qat_cmd, hovered, pressed, &ribbon->theme);
+
+                qat_x += BUTTON_SMALL_SIZE + 2;
+            }
+        }
+        content_y = BUTTON_SMALL_SIZE + 6;
+    }
 
     if (!ribbon->tabs) {
         /* Placeholder: no layout set yet */
@@ -117,12 +253,12 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
     UINT32 tab_index = 0;
     LeewayUITab *tab = ribbon->tabs;
     INT tab_x = 8;
-    INT content_y = RIBBON_TAB_HEIGHT;
+    INT tab_y = content_y;
 
     while (tab && tab_index < 10) {
         RECT tab_rc;
         tab_rc.left = tab_x;
-        tab_rc.top = 2;
+        tab_rc.top = tab_y;
         tab_rc.right = tab_x + 80;
         tab_rc.bottom = tab_rc.top + RIBBON_TAB_HEIGHT - 4;
 
@@ -147,7 +283,7 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
     if (ribbon->active_tab_index == 0 && ribbon->tabs) {
         tab = ribbon->tabs;
         INT group_x = 8;
-        INT group_y = content_y + 4;
+        INT group_y = tab_y + RIBBON_TAB_HEIGHT;
 
         LeewayUIGroup *group = tab->groups;
         while (group) {
@@ -180,12 +316,27 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
                     BOOL hovered = (ribbon->hovered_command_id == placement->command_id);
                     BOOL pressed = (ribbon->pressed_command_id == placement->command_id);
 
-                    if (placement->kind == LWUI_CONTROL_BUTTON_LARGE) {
+                    switch (placement->kind) {
+                    case LWUI_CONTROL_BUTTON_LARGE:
                         RenderButtonLarge(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
-                    } else if (placement->kind == LWUI_CONTROL_BUTTON_SMALL) {
+                        break;
+                    case LWUI_CONTROL_BUTTON_SMALL:
                         btn_rc.right = btn_rc.left + BUTTON_SMALL_SIZE;
                         btn_rc.bottom = btn_rc.top + BUTTON_SMALL_SIZE;
                         RenderButtonSmall(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
+                        break;
+                    case LWUI_CONTROL_BUTTON_TOGGLE:
+                        RenderButtonToggle(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
+                        break;
+                    case LWUI_CONTROL_BUTTON_SPLIT:
+                        RenderButtonSplit(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
+                        break;
+                    case LWUI_CONTROL_BUTTON_DROPDOWN:
+                        RenderButtonDropdown(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
+                        break;
+                    default:
+                        RenderButtonLarge(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
+                        break;
                     }
                 }
 
