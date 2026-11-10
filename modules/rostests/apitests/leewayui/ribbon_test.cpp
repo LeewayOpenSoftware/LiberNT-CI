@@ -81,6 +81,18 @@ static void BuildTestLayout(ILeewayRibbon *ribbon)
 
     static LeewayUIQAT qat = {&qat_items[0], 2};
     LeewayRibbonSetQAT(ribbon, &qat);
+
+    /* Set up app menu */
+    static LeewayUIAppMenuItem app_menu_items[] = {
+        {1, LWUI_CONTROL_BUTTON_SMALL, L"Open", NULL},
+        {2, LWUI_CONTROL_BUTTON_SMALL, L"Save", NULL},
+        {6, LWUI_CONTROL_BUTTON_SMALL, L"Print", NULL},
+    };
+    app_menu_items[0].sibling = &app_menu_items[1];
+    app_menu_items[1].sibling = &app_menu_items[2];
+
+    static LeewayUIAppMenu app_menu = {&app_menu_items[0]};
+    LeewayRibbonSetAppMenu(ribbon, &app_menu);
 }
 
 /* Command handlers */

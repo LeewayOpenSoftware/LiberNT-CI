@@ -241,6 +241,24 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
         content_y = BUTTON_SMALL_SIZE + 6;
     }
 
+    /* Render app menu button (File) */
+    if (ribbon->app_menu) {
+        RECT app_menu_rc;
+        app_menu_rc.left = rc->right - 40;
+        app_menu_rc.top = 2;
+        app_menu_rc.right = rc->right - 2;
+        app_menu_rc.bottom = content_y + BUTTON_SMALL_SIZE;
+
+        COLORREF app_menu_bg = RGB(180, 0, 0);
+        HBRUSH app_menu_brush = CreateSolidBrush(app_menu_bg);
+        FillRect(hdc, &app_menu_rc, app_menu_brush);
+        DeleteObject(app_menu_brush);
+
+        SetTextColor(hdc, RGB(255, 255, 255));
+        SetBkMode(hdc, TRANSPARENT);
+        DrawTextW(hdc, L"File", -1, &app_menu_rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
     if (!ribbon->tabs) {
         /* Placeholder: no layout set yet */
         SetTextColor(hdc, ribbon->theme.text_color);
