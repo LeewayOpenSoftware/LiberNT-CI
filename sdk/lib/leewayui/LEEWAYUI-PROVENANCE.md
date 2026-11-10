@@ -84,3 +84,12 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 - Artwork: placeholder glyph (rounded tile with the label's initial) drawn in code; Aureline masters arrive through the resolver (icons/README.md)
 - Licence: LGPL-2.1+
 - IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-10 — ribbon_test.cpp: the Photo Viewer ribbon on F1; test CMake import libraries (Leeway Open Software)
+- Type: code (test)
+- Change: the test window builds RIBBON-APPS-SPEC.md §1 from static const tables (Home, View, reserved Animation contextual tab behind a demo toggle, zoom gallery 710 -> 711-720 + Fit/Actual size, rotate and slideshow split menus, QAT defaults with persistence, app menu rows, accelerator table for tooltips, demo icon resolver, query-state predicates). The View tab's Fit placement takes keytip B because F is Full screen there. Test CMake adds advapi32 and uxtheme import libraries.
+- Sources consulted (inspiration only): RIBBON-APPS-SPEC.md §1; shimgvw resource ids (in-tree LiberNT source, LGPL/GPL-compatible, used as id values only).
+- Third-party code added: none
+- Artwork: demo icons are coloured discs drawn in code; not shipped
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
