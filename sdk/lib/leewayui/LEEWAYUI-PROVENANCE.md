@@ -66,3 +66,12 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 ---
 
 *Seed entries are the F0 design/doc work to date. Code commits (first skeleton onward) append here.*
+
+### 2026-11-10 — theme.h / theme.cpp / dpi.h: named colours, live mode detection, C linkage (Leeway Open Software)
+- Type: code (F1)
+- Change: the theme object now owns the palette: `LeewayThemeColor` enum with an Aureline light set, a dark set and a system-colour path for high contrast and classic; mode detected live (SPI_GETHIGHCONTRAST, IsThemeActive, AppsUseLightTheme); brushes by name kept over the same table; `LeewayThemeIsFlat`. theme.h and dpi.h get `extern "C"` guards. Rationale: the ribbon never hard-codes a colour (RIBBON-CONTROLS-DESIGN.md §5).
+- Sources consulted (inspiration only): RIBBON-CONTROLS-DESIGN.md §3/§5; public Windows API documentation for the calls named above. No Microsoft colour tables or theme files.
+- Third-party code added: none
+- Artwork: n/a (palette values are our own)
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
