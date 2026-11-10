@@ -75,3 +75,12 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 - Artwork: n/a (palette values are our own)
 - Licence: LGPL-2.1+
 - IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-10 — ribbon.h / ribbon.cpp: F1 D-R1 plain-C API and working control (Leeway Open Software)
+- Type: code (F1)
+- Change: plain-C redesign of the F1 header after the Meredith and Pam reviews (`shell/appframework/review/ribbon-h-review-*.md`): `LeewayUICommandState` from query-state with InvalidateCommand/InvalidateAll (G3); layout tree as arrays + counts with per-placement keytips, app-declared group variant order (G11), contextual tabs (G13), keytip collision check (G18), app menu rows, QAT defaults, help id, app name; collections by command id with the last-choice flag (G4); framework ids 0xF001-0xF005 (spec §0); theme from the F0 theme object; icon resolver returning HICONs for (id, size, variant, fg, bg) with the glyph-on-dark and high-contrast mono rules (G10); accelerator text in tooltips (G22); WM_NOTIFY height/QAT/minimise; QAT persistence `HKCU\Software\Leeway\<app>\QAT`; PreTranslateMessage for keytips and Ctrl+F1. ribbon.cpp implements tab strip, band, column packing and variants, all F1 control kinds, popups (menu, gallery, collapsed group, minimised band, app menu, QAT customise), tooltips, keytip badges, focus walk, double-buffered painting.
+- Sources consulted (inspiration only): RIBBON-CONTROLS-DESIGN.md, RIBBON-APPS-SPEC.md, the two reviews, Pam's frame.h; public Win32 API documentation (TrackMouseEvent, CopyAcceleratorTable, GetKeyNameText, WM_NOTIFY, DrawIconEx, DrawState). Behaviour described from the design, not from any product's code; no Microsoft ribbon code, markup, metrics tables or resources.
+- Third-party code added: none
+- Artwork: placeholder glyph (rounded tile with the label's initial) drawn in code; Aureline masters arrive through the resolver (icons/README.md)
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
