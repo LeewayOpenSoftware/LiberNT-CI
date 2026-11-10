@@ -227,93 +227,25 @@ typedef struct {
 
 typedef struct ILeewayRibbon ILeewayRibbon;
 
-/* ===== Ribbon Interface ===== */
+/* ===== Main Ribbon Structure (opaque) ===== */
+struct ILeewayRibbon;
+typedef struct ILeewayRibbon ILeewayRibbon;
 
-typedef struct ILeewayRibbon {
-    HRESULT (*QueryInterface)(ILeewayRibbon *self, REFIID iid, void **out);
-    ULONG (*AddRef)(ILeewayRibbon *self);
-    ULONG (*Release)(ILeewayRibbon *self);
-
-    /* Basic ribbon setup */
-    HRESULT (*SetCommandTable)(ILeewayRibbon *self,
-                                const LeewayUICommand *commands, UINT32 count,
-                                LeewayUICommandExecuteHandler exec,
-                                LeewayUICommandStateHandler state,
-                                void *app_context);
-
-    /* Layout and structure (F1 gaps G1-G3) */
-    HRESULT (*SetLayout)(ILeewayRibbon *self, const LeewayUITab *tabs);
-    HRESULT (*SetQAT)(ILeewayRibbon *self, const LeewayUIQAT *qat);
-    HRESULT (*SetAppMenu)(ILeewayRibbon *self, const LeewayUIAppMenu *app_menu);
-
-    /* Control-specific operations (F1 gaps G4, G5, G6) */
-    HRESULT (*SetCollectionItems)(ILeewayRibbon *self, UINT32 gallery_id,
-                                   const LeewayUICollectionItem *items);
-    HRESULT (*SetSplitButtonConfig)(ILeewayRibbon *self, UINT32 command_id,
-                                     const LeewayUISplitButtonConfig *config);
-    HRESULT (*GetQATItems)(ILeewayRibbon *self, LeewayUIQATItem **items, UINT32 *count);
-    HRESULT (*PersistQAT)(ILeewayRibbon *self);
-    HRESULT (*LoadQATFromRegistry)(ILeewayRibbon *self, HKEY hkey_root, const WCHAR *app_name);
-
-    /* App menu and galleries */
-    HRESULT (*ShowAppMenu)(ILeewayRibbon *self, POINT pt);
-    HRESULT (*ShowGalleryPopup)(ILeewayRibbon *self, UINT32 gallery_id, POINT pt);
-
-    /* Icon resolver (F1 gap G10) */
-    HRESULT (*SetIconResolver)(ILeewayRibbon *self, const LeewayUIIconResolver *resolver);
-    HRESULT (*ResolveIconSVG)(ILeewayRibbon *self, UINT32 icon_id, UINT32 size,
-                               BOOL is_dark_band, WCHAR **out_path);
-
-    /* Theme and appearance (F1 gap G8) */
-    HRESULT (*SetTheme)(ILeewayRibbon *self, const LeewayUITheme *theme);
-
-    /* DPI handling (F1 gap G9) */
-    HRESULT (*SetDPI)(ILeewayRibbon *self, UINT32 dpi);
-    HRESULT (*HandleDPIChanged)(ILeewayRibbon *self, UINT32 new_dpi);
-
-    /* Resize and collapse policy (F1 gap G11) */
-    HRESULT (*SetResizePolicy)(ILeewayRibbon *self, const LeewayUIResizePolicy *policy);
-    HRESULT (*GetCurrentResizeState)(ILeewayRibbon *self, LeewayUIResizeState *out);
-
-    /* Keyboard and keytips (F1 gaps G18) */
-    HRESULT (*EnableKeyTips)(ILeewayRibbon *self, BOOL enable);
-    HRESULT (*HandleKeyDown)(ILeewayRibbon *self, UINT vkey, const LeewayUIKeyboardState *state);
-
-    /* Tooltips (F1 gap G22) */
-    HRESULT (*ShowTooltip)(ILeewayRibbon *self, UINT32 command_id, POINT pt);
-    HRESULT (*HideTooltip)(ILeewayRibbon *self);
-
-    /* Minimize/collapse band (F1 gap G21) */
-    HRESULT (*MinimizeRibbon)(ILeewayRibbon *self, BOOL minimize);
-
-    /* Help button integration (F1 gap G24) */
-    HRESULT (*SetHelpButtonHandler)(ILeewayRibbon *self,
-                                     HRESULT (*handler)(void *app_context));
-
-    /* Rendering and invalidation (F1 gap G3) */
-    HRESULT (*InvalidateRegion)(ILeewayRibbon *self, const RECT *rc);
-    HRESULT (*Render)(ILeewayRibbon *self, HDC hdc, const RECT *rc);
-
-    /* Accessibility (F1 gap G20) */
-    HRESULT (*GetAccessibleObject)(ILeewayRibbon *self, UINT32 child_id,
-                                    LeewayUIAccessibleObject *out);
-    HRESULT (*NotifyAccessibleChange)(ILeewayRibbon *self, UINT32 child_id, UINT32 event);
-
-    /* Multi-placement support (F1 gap G12) */
-    HRESULT (*SetPlacementKeytip)(ILeewayRibbon *self, UINT32 command_id,
-                                   const WCHAR *tab_name, const WCHAR *keytip);
-
-    /* Window and lifecycle */
-    HWND (*GetHWND)(ILeewayRibbon *self);
-    HRESULT (*Destroy)(ILeewayRibbon *self);
-} ILeewayRibbon;
-
-/* ===== Factory Functions ===== */
+/* ===== Factory and API Functions ===== */
 
 HRESULT WINAPI LeewayRibbonCreate(HWND parent, const LeewayUICommand *table, UINT32 count,
                                    LeewayUICommandExecuteHandler exec,
                                    LeewayUICommandStateHandler state,
                                    void *app_context, ILeewayRibbon **out);
+
+HRESULT WINAPI LeewayRibbonSetLayout(ILeewayRibbon *ribbon, const LeewayUITab *tabs);
+HRESULT WINAPI LeewayRibbonSetQAT(ILeewayRibbon *ribbon, const LeewayUIQAT *qat);
+HRESULT WINAPI LeewayRibbonSetAppMenu(ILeewayRibbon *ribbon, const LeewayUIAppMenu *app_menu);
+HRESULT WINAPI LeewayRibbonSetTheme(ILeewayRibbon *ribbon, const LeewayUITheme *theme);
+HRESULT WINAPI LeewayRibbonSetDPI(ILeewayRibbon *ribbon, UINT32 dpi);
+HRESULT WINAPI LeewayRibbonInvalidateRegion(ILeewayRibbon *ribbon, const RECT *rc);
+HWND WINAPI LeewayRibbonGetHWND(ILeewayRibbon *ribbon);
+HRESULT WINAPI LeewayRibbonDestroy(ILeewayRibbon *ribbon);
 
 #ifdef __cplusplus
 }
