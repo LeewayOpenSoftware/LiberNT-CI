@@ -280,9 +280,10 @@ jobs:
   ntfslib-host-tests:
     # The host tests of the NTFS library, outside the image build: the
     # volume check (index walk unit test, cluster claim smoke test), a
-    # directory index that grows past its base record, and a size change
-    # made with the automatic timestamps masked (the cleanup-time persist),
-    # built under ASan and UBSan with the library's asserts live.
+    # directory index that grows past its base record, a size change made
+    # with the automatic timestamps masked (the cleanup-time persist), and
+    # the shape verifier, which also runs after every change here. Built
+    # under ASan and UBSan with the library's asserts live.
     runs-on: ubuntu-24.04
     steps:
     - name: Source checkout
@@ -299,7 +300,8 @@ jobs:
 
     - name: Configure
       run: |
-        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNTFSLIB_SANITIZE=ON
+        # Shape invariants after each change, as in a checked build.
+        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNTFSLIB_SANITIZE=ON -DNTFSLIB_VERIFY_SHAPE=ON
 
     - name: Build
       run: |
@@ -310,7 +312,7 @@ jobs:
         ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
         UBSAN_OPTIONS: print_stacktrace=1
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist"
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'

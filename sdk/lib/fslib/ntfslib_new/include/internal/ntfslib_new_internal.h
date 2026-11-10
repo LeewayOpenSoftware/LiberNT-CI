@@ -598,6 +598,9 @@ public:
      * dismount clears it. DirtyRetained means it was already dirty at mount, or
      * a user asked for it (FSCTL): MarkClean then leaves the flag alone. */
     BOOLEAN DirtyTracking = FALSE;
+    /* Nonzero while the volume check runs: it repairs damage the shape
+     * verifier would report on every change it makes. */
+    ULONG ShapeVerifySuppressed = 0;
     BOOLEAN DirtyMarked = FALSE;
     BOOLEAN DirtyRetained = FALSE;
     /* Set after a clean shutdown cleared the flag; makes a later re-dirty logged. */
@@ -1059,6 +1062,11 @@ public:
     NTSTATUS
     CollapseUnneededAttributeList();
 
+    /* Checked builds: the shape invariants of this file after a mutation
+     * that returned Status (src/verify/shape.cpp). */
+    void
+    VerifyShapeAfterMutation(_In_ NTSTATUS Status);
+
     /* After a mapping growth that created the attribute list: collapse a
      * list that names only the base record, unless removing it would leave
      * the base record too full to create a list for the next growth. Then
@@ -1066,6 +1074,16 @@ public:
      * the list is kept and names it. */
     NTSTATUS
     SettleGrowthAttributeList();
+
+    /* Rewrites an unreadable $ATTRIBUTE_LIST of a base record from the
+     * attributes of the record itself and of every extension record that
+     * names it, and commits the record. The caller passes ALL of those
+     * extension records. The list keeps its clusters: a list that would need
+     * more than it has is not written. */
+    NTSTATUS
+    RebuildAttributeList(
+        _In_reads_(ExtensionCount) FileRecord* const* Extensions,
+        _In_ ULONG ExtensionCount);
 
     NTSTATUS ReadSecurityDescriptor(
         _In_opt_ PUCHAR Buffer,
@@ -1675,6 +1693,21 @@ public:
         _In_ ULONG IndexedAttributeType,
         _In_ const IndexSearchKey* SearchKey,
         _In_ ULONGLONG FileReference);
+    NTSTATUS
+    RemoveIndexEntryInner(
+        _In_ PFileRecord DirectoryFile,
+        _In_ PCWSTR IndexName,
+        _In_ ULONG IndexedAttributeType,
+        _In_ const IndexSearchKey* SearchKey,
+        _In_ ULONGLONG FileReference);
+    NTSTATUS
+    AddIndexEntryInner(
+        _In_ PFileRecord DirectoryFile,
+        _In_ PCWSTR IndexName,
+        _In_ ULONG IndexedAttributeType,
+        _In_ const IndexSearchKey* Key,
+        _In_ PIndexEntry NewEntry,
+        _In_ ULONG EntryLength);
 
     NTSTATUS
     PushDownResidentRoot(
@@ -2556,6 +2589,30 @@ private:
         return FALSE;
     }
 } *PLogFileService;
+
+/*
+ * Shape invariants after each successful mutation (src/verify/shape.cpp):
+ * on in checked builds, and in portable builds with NTFSLIB_VERIFY_SHAPE.
+ */
+#if !defined(NTFSLIB_VERIFY_SHAPE) && !defined(NTFSLIB_PORTABLE) && DBG
+#define NTFSLIB_VERIFY_SHAPE 1
+#endif
+
+void
+NtfsVerifyShapeAfterMutation(
+    _In_ PVolume DiskVolume,
+    _In_ ULONGLONG FileRecord,
+    _In_opt_ PCWSTR IndexName);
+
+#ifdef NTFSLIB_VERIFY_SHAPE
+#define NTFS_VERIFY_SHAPE_AFTER(Status, Volume, File, IndexName) \
+    do { \
+        if (NT_SUCCESS(Status)) \
+            NtfsVerifyShapeAfterMutation((Volume), (File), (IndexName)); \
+    } while (0)
+#else
+#define NTFS_VERIFY_SHAPE_AFTER(Status, Volume, File, IndexName) ((void)0)
+#endif
 
 #endif // __cplusplus
 

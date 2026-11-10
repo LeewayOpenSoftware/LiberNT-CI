@@ -65,6 +65,7 @@ add_library(ntfslib_linux STATIC
     "${NTFSLIB_ROOT}/src/volume/disk.cpp"
     "${NTFSLIB_ROOT}/src/volume/volume.cpp"
     "${NTFSLIB_ROOT}/src/util.cpp"
+    "${NTFSLIB_ROOT}/src/verify/shape.cpp"
 )
 
 # The formatter is independent of the environment layer, so it builds here as
@@ -100,6 +101,13 @@ target_compile_definitions(ntfslib_linux
 )
 if(NTFSLIB_DEBUG)
     target_compile_definitions(ntfslib_linux PRIVATE NTFSLIB_DEBUG=1)
+endif()
+
+# Shape invariants after each change (src/verify/shape.cpp), as in checked
+# builds: a broken one is printed and asserted.
+option(NTFSLIB_VERIFY_SHAPE "Verify record and index shapes after each change" OFF)
+if(NTFSLIB_VERIFY_SHAPE)
+    target_compile_definitions(ntfslib_linux PRIVATE NTFSLIB_VERIFY_SHAPE=1)
 endif()
 
 target_compile_options(ntfslib_linux PUBLIC
@@ -649,6 +657,27 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
             NAME ntfslib_linux_check_claim
             COMMAND /bin/sh
                 "${CMAKE_CURRENT_LIST_DIR}/tests/check_claim_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+        )
+        add_test(
+            NAME ntfslib_linux_verify_shape
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/verify_shape_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+        )
+        add_test(
+            NAME ntfslib_linux_check_attrlist
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/check_attrlist_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+        )
+        add_test(
+            NAME ntfslib_linux_check_attrlist_rebuild
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/check_attrlist_rebuild_smoke.sh"
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
         )
