@@ -203,6 +203,46 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
         return hr;
     }
 
+    /* Initialize collections */
+
+    /* Rotate dropdown (310): rotate right 90, rotate left 90, rotate 180, flip vertical, flip horizontal */
+    static const LeewayUICollectionItem rotateItems[] = {
+        { 311, L"Rotate right 90°", 0 },
+        { 312, L"Rotate left 90°", 0 },
+        { 313, L"Rotate 180°", 0 },
+        { 314, L"Flip vertical", 0 },
+        { 315, L"Flip horizontal", 0 },
+    };
+    LeewayRibbonSetCollection(*pRibbon, 310, rotateItems, _countof(rotateItems), 0);
+
+    /* Save as format dropdown (204): PNG, JPEG, BMP, GIF, Other */
+    static const LeewayUICollectionItem saveAsItems[] = {
+        { 301, L"PNG", 0 },
+        { 302, L"JPEG", 0 },
+        { 303, L"BMP", 0 },
+        { 304, L"GIF", 0 },
+        { 305, L"Other formats", 0 },
+    };
+    LeewayRibbonSetCollection(*pRibbon, IDM_FILESAVEAS, saveAsItems, _countof(saveAsItems), 0);
+
+    /* Zoom gallery (380): 12.5%, 25%, 50%, 100%, 200%, 400%, 800% */
+    static const LeewayUICollectionItem zoomItems[] = {
+        { 234, L"12.5 %", 0 },
+        { 235, L"25 %", 0 },
+        { 236, L"50 %", 0 },
+        { 237, L"100 %", 0 },
+        { 238, L"200 %", 0 },
+        { 239, L"400 %", 0 },
+        { 240, L"800 %", 0 },
+    };
+    LeewayRibbonSetCollection(*pRibbon, 380, zoomItems, _countof(zoomItems), 0);
+
+    /* TODO: Brush gallery (320): enumerate brush types from tools model (321-339) */
+    /* TODO: Shapes gallery (340): line/curve/rect/polygon/ellipse/rrect */
+    /* TODO: Outline/Fill options (345-346): outline only/outline+fill/fill only */
+    /* TODO: Size dropdown (360): enumerate line widths from tools model (361-365) */
+    /* TODO: Palette (372): enumerate palette colors from palette model */
+
     return S_OK;
 }
 
