@@ -662,6 +662,11 @@ NtfsCheckReport(
         case NtfsCheckNameFoundUncounted:
             /* Reported above, under their own cap. */
             break;
+        case NtfsCheckShapeFault:
+        case NtfsCheckShapeIndexesSkipped:
+        case NtfsCheckShapeNotRun:
+            /* Reported above, never capped. */
+            break;
         case NtfsCheckIndexNameMissing:
             NtfsFormatReport(Check->Callback,
                              "An index entry in index $I30 of file %I64X names file 0x%I64x, which does not have that name.\n",
