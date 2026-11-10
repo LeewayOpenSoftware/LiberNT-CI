@@ -280,8 +280,9 @@ jobs:
   ntfslib-host-tests:
     # The host tests of the NTFS library, outside the image build: the
     # volume check (index walk unit test, cluster claim smoke test), a
-    # directory index that grows past its base record, and a size change
-    # made with the automatic timestamps masked (the cleanup-time persist).
+    # directory index that grows past its base record, a size change made
+    # with the automatic timestamps masked (the cleanup-time persist), and
+    # the shape verifier, which also runs after every change here.
     runs-on: ubuntu-24.04
     steps:
     - name: Source checkout
@@ -298,7 +299,8 @@ jobs:
 
     - name: Configure
       run: |
-        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja
+        # Shape invariants after each change, as in a checked build.
+        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja -DNTFSLIB_VERIFY_SHAPE=ON
 
     - name: Build
       run: |
@@ -306,7 +308,7 @@ jobs:
 
     - name: Run the host tests
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape"
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'

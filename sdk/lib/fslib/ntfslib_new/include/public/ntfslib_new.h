@@ -1186,6 +1186,70 @@ NtfsVolumeCheck(
     _In_opt_ void* Context,
     _Out_ PNtfsCheckResult Result);
 
+/*
+ * Shape invariants of one file, read back from the disk (src/verify). The
+ * checked build runs them after each mutation; autochk and the host tests
+ * can run them on any file. Record is the file record the fault names,
+ * Detail depends on the invariant.
+ */
+typedef enum NtfsShapeInvariant
+{
+    NtfsShapeOk = 0,
+    NtfsShapeRecordUnreadable,          /* Detail: NTSTATUS */
+    NtfsShapeRecordMalformed,           /* Detail: attribute offset */
+    NtfsShapeNotBaseRecord,             /* Detail: its base reference */
+    NtfsShapeListUnreadable,            /* Detail: NTSTATUS */
+    NtfsShapeListEntryBad,              /* Detail: offset in the list */
+    NtfsShapeListEntryMissing,          /* Record: the record named; Detail: attribute type */
+    NtfsShapeAttributeNotListed,        /* Detail: attribute type */
+    NtfsShapeExtensionWithoutList,      /* Record: the extension; Detail: its base */
+    NtfsShapeExtensionNotListed,        /* Record: the extension; Detail: its base */
+    NtfsShapeMappingGap,                /* Detail: attribute type */
+    NtfsShapeIndexRootBad,              /* Detail: depends */
+    NtfsShapeIndexBlockBeyondAllocation,/* Detail: VCN */
+    NtfsShapeIndexBlockInvalid,         /* Detail: VCN */
+    NtfsShapeIndexBlockFree,            /* Detail: VCN (referenced, bitmap bit clear) */
+    NtfsShapeIndexBlockShared,          /* Detail: VCN (referenced twice) */
+    NtfsShapeIndexBlockUnreachable      /* Detail: VCN (in use, not referenced) */
+} NtfsShapeInvariant;
+
+typedef struct NtfsShapeFault
+{
+    NtfsShapeInvariant Invariant;
+    ULONGLONG Record;
+    ULONGLONG Detail;
+} NtfsShapeFault, *PNtfsShapeFault;
+
+/* Scan the whole MFT for extension records of the file (slow). */
+#define NTFS_VERIFY_SCAN_EXTENSIONS 0x1
+/* Internal: the bounded checked-build hook. */
+#define NTFS_VERIFY_HOOK            0x2
+
+/* STATUS_FILE_CORRUPT_ERROR with Fault filled when an invariant is broken. */
+NTSTATUS
+NtfsVerifyRecordShape(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ ULONGLONG FileRecord,
+    _In_ ULONG Flags,
+    _Out_ PNtfsShapeFault Fault);
+
+NTSTATUS
+NtfsVerifyIndexShape(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ ULONGLONG FileRecord,
+    _In_ PCWSTR IndexName,
+    _In_ ULONG Flags,
+    _Out_ PNtfsShapeFault Fault);
+
+/* Every file and every index of the volume, in one MFT pass; stops at the
+ * first broken invariant. */
+NTSTATUS
+NtfsVerifyVolumeShape(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ ULONG Flags,
+    _Out_ PULONGLONG FilesChecked,
+    _Out_ PNtfsShapeFault Fault);
+
 NTSTATUS
 NtfsVolumeQueryFlags(
     _In_ PNtfsVolume DiskVolume,

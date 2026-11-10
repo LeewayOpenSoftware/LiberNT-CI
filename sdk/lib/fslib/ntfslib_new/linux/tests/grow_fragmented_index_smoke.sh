@@ -139,3 +139,7 @@ if test "$rc" -ne 0; then
     echo "check: exit $rc" >&2
     exit 1
 fi
+
+# Every list names its extensions, every mapping covers its allocation, and
+# every index block in use is reachable.
+"$driver" --verify-shape "$image" >/dev/null

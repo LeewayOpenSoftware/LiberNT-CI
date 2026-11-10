@@ -67,10 +67,12 @@ public:
                 _Out_ PNtfsCheckResult Result)
         : V(TargetVolume), Report(Callback), ReportContext(Context), Out(Result)
     {
+        V->ShapeVerifySuppressed++;
     }
 
     ~VolumeCheck()
     {
+        V->ShapeVerifySuppressed--;
         delete[] UsedMap;
         delete[] MftBitmap;
         delete[] DirectoryMap;

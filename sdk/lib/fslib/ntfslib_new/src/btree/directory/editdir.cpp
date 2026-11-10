@@ -3155,6 +3155,22 @@ Directory::AddIndexEntry(
     _In_ PIndexEntry NewEntry,
     _In_ ULONG EntryLength)
 {
+    NTSTATUS Status = AddIndexEntryInner(DirectoryFile, IndexName, IndexedAttributeType,
+                                         Key, NewEntry, EntryLength);
+
+    NTFS_VERIFY_SHAPE_AFTER(Status, DiskVolume, DirectoryFile->RecordNumber, IndexName);
+    return Status;
+}
+
+NTSTATUS
+Directory::AddIndexEntryInner(
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONG IndexedAttributeType,
+    _In_ const IndexSearchKey* Key,
+    _In_ PIndexEntry NewEntry,
+    _In_ ULONG EntryLength)
+{
     PAttribute IndexRootAttribute;
     PAttribute IndexAllocationAttribute;
     PAttribute BitmapAttribute;
@@ -4454,6 +4470,21 @@ Directory::RemoveFileFromDirectory(
 
 NTSTATUS
 Directory::RemoveIndexEntry(
+    _In_ PFileRecord DirectoryFile,
+    _In_ PCWSTR IndexName,
+    _In_ ULONG IndexedAttributeType,
+    _In_ const IndexSearchKey* SearchKey,
+    _In_ ULONGLONG FileReference)
+{
+    NTSTATUS Status = RemoveIndexEntryInner(DirectoryFile, IndexName, IndexedAttributeType,
+                                            SearchKey, FileReference);
+
+    NTFS_VERIFY_SHAPE_AFTER(Status, DiskVolume, DirectoryFile->RecordNumber, IndexName);
+    return Status;
+}
+
+NTSTATUS
+Directory::RemoveIndexEntryInner(
     _In_ PFileRecord DirectoryFile,
     _In_ PCWSTR IndexName,
     _In_ ULONG IndexedAttributeType,
