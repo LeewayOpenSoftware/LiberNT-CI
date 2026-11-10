@@ -547,6 +547,9 @@ LRESULT CMainWindow::OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHa
     m_hMenu = ::LoadMenuW(g_hinstExe, MAKEINTRESOURCEW(ID_MENU));
     SetMenu(m_hMenu);
 
+    // Initialize the ribbon
+    PaintRibbonInitialize(m_hWnd, &m_pRibbon);
+
     // Create the status bar
     DWORD style = SBARS_SIZEGRIP | WS_CHILD | (registrySettings.ShowStatusBar ? WS_VISIBLE : 0);
     g_hStatusBar = ::CreateWindowExW(0, STATUSCLASSNAME, NULL, style, 0, 0, 0, 0, m_hWnd,
@@ -599,6 +602,9 @@ LRESULT CMainWindow::OnDestroy(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
         ::DestroyMenu(m_hMenu);
         m_hMenu = NULL;
     }
+
+    PaintRibbonCleanup(m_pRibbon);
+    m_pRibbon = NULL;
 
     PostQuitMessage(0); /* send a WM_QUIT to the message queue */
     return 0;

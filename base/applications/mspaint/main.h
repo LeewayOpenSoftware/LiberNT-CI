@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "paint_ribbon_api.h"
+
 class CMainWindow : public CWindowImpl<CMainWindow>
 {
 public:
@@ -27,7 +29,7 @@ public:
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
     END_MSG_MAP()
 
-    CMainWindow() : m_hMenu(NULL) { }
+    CMainWindow() : m_hMenu(NULL), m_pRibbon(NULL) { }
 
     HWND DoCreate();
     BOOL GetOpenFileName(IN OUT LPWSTR pszFile, INT cchMaxFile);
@@ -40,6 +42,7 @@ public:
 
 private:
     HMENU m_hMenu;
+    ILeewayRibbon *m_pRibbon;
 
     LRESULT OnDropFiles(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
