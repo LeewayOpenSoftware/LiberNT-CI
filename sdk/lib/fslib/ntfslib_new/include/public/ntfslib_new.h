@@ -1140,7 +1140,11 @@ typedef enum NtfsCheckEvent
     NtfsCheckAttributeMappingMismatch,
     NtfsCheckIndexEntryNotRemoved,
     NtfsCheckMftBitmapNotWritten,       /* Arg1 = NTSTATUS, Arg2 = bitmap length in bytes */
-    NtfsCheckRecordKept                 /* Arg1 = file record, Arg2 = faults; not deleted */
+    NtfsCheckRecordKept,                /* Arg1 = file record, Arg2 = faults; not deleted */
+    /* An unreadable attribute list was written again from the attributes of
+     * the base record and of its extension records. Argument1: the file
+     * record; Argument2: the extension records found. */
+    NtfsCheckAttributeListRebuilt
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult

@@ -1075,6 +1075,16 @@ public:
     NTSTATUS
     SettleGrowthAttributeList();
 
+    /* Rewrites an unreadable $ATTRIBUTE_LIST of a base record from the
+     * attributes of the record itself and of every extension record that
+     * names it, and commits the record. The caller passes ALL of those
+     * extension records. The list keeps its clusters: a list that would need
+     * more than it has is not written. */
+    NTSTATUS
+    RebuildAttributeList(
+        _In_reads_(ExtensionCount) FileRecord* const* Extensions,
+        _In_ ULONG ExtensionCount);
+
     NTSTATUS ReadSecurityDescriptor(
         _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG BufferLength);
