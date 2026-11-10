@@ -441,6 +441,28 @@ typedef struct _NTFS_CHECK_CONTEXT
  * debug log as well. A verbose check (autochk at boot) shows nearly all of
  * them, since its log is the record of what the repair did. */
 #define NTFS_RELINK_DIAGNOSTICS 16
+
+/* NtfsShapeInvariant, in order. */
+static const PCSTR NtfsShapeInvariantNames[] =
+{
+    "none",
+    "record unreadable",
+    "record malformed",
+    "not a base record",
+    "attribute list unreadable",
+    "bad attribute list entry",
+    "attribute list names a missing attribute",
+    "attribute not in the attribute list",
+    "extension record without an attribute list",
+    "extension record not in the attribute list",
+    "mapping does not cover the allocation",
+    "bad index root",
+    "index block beyond the allocation",
+    "invalid index block",
+    "index block in use but marked free",
+    "index block referenced twice",
+    "index block in use but unreachable"
+};
 #define NTFS_RELINK_DIAGNOSTICS_VERBOSE 4000
 
 static
@@ -472,6 +494,32 @@ NtfsCheckReport(
             NtfsVerdictReport(Check->Callback,
                               "A name of file %I64X is found in directory file %I64X by lookup, but the index walk did not count it.\n",
                               Argument1, Argument2);
+        return;
+    }
+
+    /* Shape verdicts are never capped: the first one decides the result. */
+    if (Event == NtfsCheckShapeFault)
+    {
+        ULONG Invariant = (ULONG)(Argument1 >> 48);
+
+        NtfsVerdictReport(Check->Callback,
+                          "The shape check found a problem in file record segment %I64X: invariant %lu (%s), detail 0x%I64x.\n",
+                          Argument1 & 0x0000FFFFFFFFFFFFULL, Invariant,
+                          Invariant < RTL_NUMBER_OF(NtfsShapeInvariantNames) ? NtfsShapeInvariantNames[Invariant] : "unknown",
+                          Argument2);
+        return;
+    }
+    if (Event == NtfsCheckShapeIndexesSkipped)
+    {
+        NtfsVerdictReport(Check->Callback,
+                          "The shape check skipped %I64u indexes larger than %I64u MB.\n",
+                          Argument1, Argument2 / (1024 * 1024));
+        return;
+    }
+    if (Event == NtfsCheckShapeNotRun)
+    {
+        NtfsVerdictReport(Check->Callback,
+                          "The shape check could not run (status 0x%08lx).\n", (ULONG)Argument1);
         return;
     }
 
