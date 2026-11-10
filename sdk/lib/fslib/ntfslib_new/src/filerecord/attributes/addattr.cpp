@@ -4361,8 +4361,9 @@ FileRecord::CommitNonResidentMappingUpdate(
         CacheRecordToKeep);
 
     /* A mapping that shrank back into the base record can leave a list that
-     * names only the base record once its extension records are freed. */
-    (void)BaseRecord->CollapseUnneededAttributeList();
+     * names only the base record once its extension records are freed. It
+     * is dropped only while the base record keeps the growth headroom. */
+    (void)BaseRecord->SettleUnneededAttributeList();
 
     while (Update->NewExtents)
     {

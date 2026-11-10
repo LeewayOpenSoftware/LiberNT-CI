@@ -308,7 +308,7 @@ jobs:
 
     - name: Run the host tests
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill"
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'
