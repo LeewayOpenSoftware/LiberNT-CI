@@ -11,6 +11,11 @@ option(
     "Link GNU C++ support into Linux test executables to avoid loader-dominated startup"
     ON
 )
+option(
+    NTFSLIB_SANITIZE
+    "Build the library, the FUSE frontend and the tests under AddressSanitizer and UndefinedBehaviorSanitizer, with asserts kept"
+    OFF
+)
 
 set(NTFSLIB_ROOT "${CMAKE_CURRENT_LIST_DIR}/..")
 
@@ -111,6 +116,28 @@ target_include_directories(ntfslib_linux
     PRIVATE
         "${NTFSLIB_ROOT}/include/internal"
 )
+
+# Sanitizers: one interface target carried PUBLIC by both libraries, so every
+# executable that links them (the FUSE frontend, the tests) is instrumented
+# and linked against the runtimes with the same flags, once. Undefined
+# behaviour is fatal, not recovered, and -UNDEBUG keeps the library's ASSERTs
+# live whatever the build type adds.
+if(NTFSLIB_SANITIZE)
+    add_library(ntfslib_sanitize INTERFACE)
+    target_compile_options(ntfslib_sanitize INTERFACE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer
+        -fno-sanitize-recover=undefined
+        -UNDEBUG
+    )
+    target_link_options(ntfslib_sanitize INTERFACE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer
+        -fno-sanitize-recover=undefined
+    )
+    target_link_libraries(ntfslib_linux PUBLIC ntfslib_sanitize)
+    target_link_libraries(ntfslib_format_host PUBLIC ntfslib_sanitize)
+endif()
 
 if(NTFSLIB_BUILD_FUSE)
     add_subdirectory(fuse)

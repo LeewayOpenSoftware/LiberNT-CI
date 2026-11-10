@@ -281,7 +281,8 @@ jobs:
     # The host tests of the NTFS library, outside the image build: the
     # volume check (index walk unit test, cluster claim smoke test), a
     # directory index that grows past its base record, and a size change
-    # made with the automatic timestamps masked (the cleanup-time persist).
+    # made with the automatic timestamps masked (the cleanup-time persist),
+    # built under ASan and UBSan with the library's asserts live.
     runs-on: ubuntu-24.04
     steps:
     - name: Source checkout
@@ -298,13 +299,16 @@ jobs:
 
     - name: Configure
       run: |
-        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja
+        cmake -S sdk/lib/fslib/ntfslib_new/linux -B build/ntfslib-linux -G Ninja -DCMAKE_BUILD_TYPE=Debug -DNTFSLIB_SANITIZE=ON
 
     - name: Build
       run: |
         cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_fuse
 
     - name: Run the host tests
+      env:
+        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+        UBSAN_OPTIONS: print_stacktrace=1
       run: |
         ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times"
 
