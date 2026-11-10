@@ -269,7 +269,7 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
 
     /* Render tabs */
     UINT32 tab_index = 0;
-    LeewayUITab *tab = ribbon->tabs;
+    const LeewayUITab *tab = ribbon->tabs;
     INT tab_x = 8;
     INT tab_y = content_y;
 
@@ -303,7 +303,7 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
         INT group_x = 8;
         INT group_y = tab_y + RIBBON_TAB_HEIGHT;
 
-        LeewayUIGroup *group = tab->groups;
+        const LeewayUIGroup *group = tab->groups;
         while (group) {
             /* Group label */
             RECT group_label_rc;
@@ -317,7 +317,7 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
             DrawTextW(hdc, group->label, -1, &group_label_rc, DT_CENTER | DT_TOP | DT_SINGLELINE);
 
             /* Group controls */
-            LeewayUIPlacement *placement = group->controls;
+            const LeewayUIPlacement *placement = group->controls;
             INT control_x = group_x;
             INT control_y = group_y;
             INT controls_per_row = 1;
@@ -343,13 +343,23 @@ static void RibbonPaint(ILeewayRibbon *ribbon, HDC hdc, RECT *rc)
                         btn_rc.bottom = btn_rc.top + BUTTON_SMALL_SIZE;
                         RenderButtonSmall(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
                         break;
-                    case LWUI_CONTROL_BUTTON_TOGGLE:
+                    case LWUI_CONTROL_TOGGLE_LARGE:
+                    case LWUI_CONTROL_TOGGLE_SMALL:
+                        if (placement->kind == LWUI_CONTROL_TOGGLE_SMALL) {
+                            btn_rc.right = btn_rc.left + BUTTON_SMALL_SIZE;
+                            btn_rc.bottom = btn_rc.top + BUTTON_SMALL_SIZE;
+                        }
                         RenderButtonToggle(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
                         break;
-                    case LWUI_CONTROL_BUTTON_SPLIT:
+                    case LWUI_CONTROL_SPLIT_LARGE:
+                    case LWUI_CONTROL_SPLIT_SMALL:
+                        if (placement->kind == LWUI_CONTROL_SPLIT_SMALL) {
+                            btn_rc.right = btn_rc.left + BUTTON_SMALL_SIZE;
+                            btn_rc.bottom = btn_rc.top + BUTTON_SMALL_SIZE;
+                        }
                         RenderButtonSplit(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
                         break;
-                    case LWUI_CONTROL_BUTTON_DROPDOWN:
+                    case LWUI_CONTROL_DROPDOWN:
                         RenderButtonDropdown(hdc, &btn_rc, &cmd_state, hovered, pressed, &ribbon->theme);
                         break;
                     default:
@@ -477,6 +487,58 @@ HRESULT WINAPI LeewayRibbonInvalidateRegion(ILeewayRibbon *ribbon, const RECT *r
     if (ribbon && ribbon->window_handle) {
         InvalidateRect(ribbon->window_handle, rc, FALSE);
     }
+    return S_OK;
+}
+
+HRESULT WINAPI LeewayRibbonInvalidateCommand(ILeewayRibbon *ribbon, UINT32 command_id)
+{
+    if (ribbon && ribbon->window_handle) {
+        InvalidateRect(ribbon->window_handle, NULL, FALSE);
+    }
+    return S_OK;
+}
+
+HRESULT WINAPI LeewayRibbonInvalidateAll(ILeewayRibbon *ribbon)
+{
+    if (ribbon && ribbon->window_handle) {
+        InvalidateRect(ribbon->window_handle, NULL, FALSE);
+    }
+    return S_OK;
+}
+
+UINT32 WINAPI LeewayRibbonGetHeight(ILeewayRibbon *ribbon)
+{
+    /* QAT (20px) + tabs (24px) + groups (80px) = 124px */
+    if (!ribbon) return 0;
+
+    /* TODO: account for minimize state and actual content */
+    return 124;
+}
+
+BOOL WINAPI LeewayRibbonIsMinimized(ILeewayRibbon *ribbon)
+{
+    /* TODO: track minimize state via LWUI_CMD_MINIMIZE command */
+    return FALSE;
+}
+
+HRESULT WINAPI LeewayRibbonMinimizeRibbon(ILeewayRibbon *ribbon, BOOL minimize)
+{
+    if (!ribbon) return E_INVALIDARG;
+    /* TODO: store minimize state and invalidate */
+    return S_OK;
+}
+
+HRESULT WINAPI LeewayRibbonPersistQAT(ILeewayRibbon *ribbon)
+{
+    if (!ribbon) return E_INVALIDARG;
+    /* TODO: write HKCU\Software\Leeway\<AppName>\QAT Items value */
+    return S_OK;
+}
+
+HRESULT WINAPI LeewayRibbonLoadQATFromRegistry(ILeewayRibbon *ribbon, HKEY root, const WCHAR *app_name)
+{
+    if (!ribbon || !root || !app_name) return E_INVALIDARG;
+    /* TODO: read HKCU\Software\Leeway\<app_name>\QAT Items, drop stale ids */
     return S_OK;
 }
 
