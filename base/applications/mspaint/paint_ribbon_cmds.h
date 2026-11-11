@@ -44,7 +44,7 @@ static const LeewayUICommand g_paintCommands[] = {
     { IDM_EDITUNDO,                 L"Undo",                    L"Undo action",         L"U",   0, TRUE, FALSE, TRUE },
     { IDM_EDITREDO,                 L"Redo",                    L"Redo action",         L"Y",   0, TRUE, FALSE, TRUE },
     { IDM_EDITCUT,                  L"Cut",                     L"Cut to clipboard",    L"X",   0, TRUE, FALSE, TRUE },
-    { IDM_EDITCOPY,                 L"Copy",                    L"Copy to clipboard",   L"C",   0, TRUE, FALSE, TRUE },
+    { IDM_EDITCOPY,                 L"Copy",                    L"Copy to clipboard",   L"CP",   0, TRUE, FALSE, TRUE },
     { IDM_EDITPASTE,                L"Paste",                   L"Paste from clipboard", L"V",   0, TRUE, FALSE, TRUE },
     { IDM_EDITDELETESELECTION,      L"Delete",                  L"Delete selection",    NULL,   0, TRUE, FALSE, TRUE },
     { IDM_EDITINVERTSELECTION,      L"Invert selection",        L"Invert selection",    NULL,   0, TRUE, FALSE, TRUE },
@@ -76,11 +76,11 @@ static const LeewayUICommand g_paintCommands[] = {
     /* Selection tools (600-615): radio set */
     { ID_FREESEL,                   L"Free form",               L"Free form selection", NULL,   0, TRUE, FALSE, TRUE },
     { ID_RECTSEL,                   L"Rectangle",               L"Rectangle selection", L"SE",  0, TRUE, FALSE, TRUE },
-    { ID_RUBBER,                    L"Eraser",                  L"Eraser",              L"E",   0, TRUE, FALSE, TRUE },
+    { ID_RUBBER,                    L"Eraser",                  L"Eraser",              L"ER",   0, TRUE, FALSE, TRUE },
     { ID_FILL,                      L"Fill with color",         L"Fill with color",     L"K",   0, TRUE, FALSE, TRUE },
     { ID_COLOR,                     L"Color picker",            L"Color picker",        L"I",   0, TRUE, FALSE, TRUE },
     { ID_ZOOM,                      L"Magnifier",               L"Magnifier",           L"M",   0, TRUE, FALSE, TRUE },
-    { ID_PEN,                       L"Pencil",                  L"Pencil",              L"P",   0, TRUE, FALSE, TRUE },
+    { ID_PEN,                       L"Pencil",                  L"Pencil",              L"PE",   0, TRUE, FALSE, TRUE },
     { ID_BRUSH,                     L"Brush",                   L"Brush",               NULL,   0, TRUE, FALSE, TRUE },
     { ID_AIRBRUSH,                  L"Airbrush",                L"Airbrush",            NULL,   0, TRUE, FALSE, TRUE },
     { ID_TEXT,                      L"Text",                    L"Text tool",           L"T",   0, TRUE, FALSE, TRUE },
@@ -137,74 +137,76 @@ static const LeewayUICommand g_paintCommands[] = {
     { 393,                          L"Transparent",             L"Transparent text background", L"R", 0, TRUE, FALSE, TRUE },
 };
 
-/* Keytips are unique per tab level: the groups' and the placements' share one namespace
- * (LeewayRibbonSetLayout returns LWUI_E_KEYTIP_COLLISION otherwise). */
+/* Keytips (spec 2): per tab level, groups and placements share one namespace and must be
+ * prefix-free (no keytip equal to, or the start of, another). Copy is CP (C is a prefix of
+ * C1/C2), Pencil PE (prefix of PA), Eraser ER (prefix of EC); groups carry no keytip.
+ * LeewayRibbonSetLayout returns LWUI_E_KEYTIP_COLLISION otherwise. */
 
 /* Placements for Home tab */
 static const LeewayUIPlacement g_homeClipboardPlacement[] = {
-    { IDM_EDITPASTE,       LWUI_CONTROL_SPLIT_LARGE, L"V" },
-    { IDM_EDITCUT,         LWUI_CONTROL_BUTTON_SMALL, NULL },
-    { IDM_EDITCOPY,        LWUI_CONTROL_BUTTON_SMALL, NULL },
+    { IDM_EDITPASTE,       LWUI_CONTROL_SPLIT_LARGE, L"V", 0 },
+    { IDM_EDITCUT,         LWUI_CONTROL_BUTTON_SMALL, NULL, 0 },
+    { IDM_EDITCOPY,        LWUI_CONTROL_BUTTON_SMALL, NULL, 0 },
 };
 
 static const LeewayUIPlacement g_homeImagePlacement[] = {
-    { ID_RECTSEL,          LWUI_CONTROL_SPLIT_LARGE, L"SE" },
-    { IDM_IMAGECROP,       LWUI_CONTROL_BUTTON_SMALL, L"RP" },
-    { IDM_IMAGESTRETCHSKEW, LWUI_CONTROL_BUTTON_SMALL, L"RE" },
-    { 310,                 LWUI_CONTROL_DROPDOWN,    L"RO" },
+    { ID_RECTSEL,          LWUI_CONTROL_SPLIT_LARGE, L"SE", 0 },
+    { IDM_IMAGECROP,       LWUI_CONTROL_BUTTON_SMALL, L"RP", 0 },
+    { IDM_IMAGESTRETCHSKEW, LWUI_CONTROL_BUTTON_SMALL, L"RE", 0 },
+    { 310,                 LWUI_CONTROL_DROPDOWN,    L"RO", 0 },
 };
 
 static const LeewayUIPlacement g_homeToolsPlacement[] = {
-    { ID_PEN,              LWUI_CONTROL_BUTTON_SMALL_ICON, L"P" },
-    { ID_FILL,             LWUI_CONTROL_BUTTON_SMALL_ICON, L"K" },
-    { ID_TEXT,             LWUI_CONTROL_BUTTON_SMALL_ICON, L"T" },
-    { ID_RUBBER,           LWUI_CONTROL_BUTTON_SMALL_ICON, L"E" },
-    { ID_COLOR,            LWUI_CONTROL_BUTTON_SMALL_ICON, L"I" },
-    { ID_ZOOM,             LWUI_CONTROL_BUTTON_SMALL_ICON, L"M" },
+    { ID_PEN,              LWUI_CONTROL_TOGGLE_SMALL, L"PE", 0 },
+    { ID_FILL,             LWUI_CONTROL_TOGGLE_SMALL, L"K", 0 },
+    { ID_TEXT,             LWUI_CONTROL_TOGGLE_SMALL, L"T", 0 },
+    { ID_RUBBER,           LWUI_CONTROL_TOGGLE_SMALL, L"ER", 0 },
+    { ID_COLOR,            LWUI_CONTROL_TOGGLE_SMALL, L"I", 0 },
+    { ID_ZOOM,             LWUI_CONTROL_TOGGLE_SMALL, L"M", 0 },
 };
 
 static const LeewayUIPlacement g_homeBrushesPlacement[] = {
-    { 320,                 LWUI_CONTROL_GALLERY, L"B" },
+    { 320,                 LWUI_CONTROL_GALLERY, L"B", 0 },
 };
 
 static const LeewayUIPlacement g_homeShapesPlacement[] = {
-    { 340,                 LWUI_CONTROL_GALLERY, L"SH" },
-    { 345,                 LWUI_CONTROL_DROPDOWN, L"O" },
-    { 346,                 LWUI_CONTROL_DROPDOWN, L"F" },
+    { 340,                 LWUI_CONTROL_GALLERY_STRIP, L"SH", 0 },
+    { 345,                 LWUI_CONTROL_DROPDOWN, L"O", 0 },
+    { 346,                 LWUI_CONTROL_DROPDOWN, L"F", 0 },
 };
 
 static const LeewayUIPlacement g_homeSizePlacement[] = {
-    { 360,                 LWUI_CONTROL_DROPDOWN, L"SZ" },
+    { 360,                 LWUI_CONTROL_DROPDOWN, L"SZ", 0 },
 };
 
 static const LeewayUIPlacement g_homeColoursPlacement[] = {
-    { 370,                 LWUI_CONTROL_COLORWELL, L"C1" },
-    { 371,                 LWUI_CONTROL_COLORWELL, L"C2" },
-    { 372,                 LWUI_CONTROL_GALLERY, L"PA" },
-    { IDM_COLORSEDITPALETTE, LWUI_CONTROL_BUTTON_LARGE, L"EC" },
+    { 370,                 LWUI_CONTROL_COLORWELL, L"C1", 0 },
+    { 371,                 LWUI_CONTROL_COLORWELL, L"C2", 0 },
+    { 372,                 LWUI_CONTROL_GALLERY_STRIP, L"PA", 234 },
+    { IDM_COLORSEDITPALETTE, LWUI_CONTROL_BUTTON_LARGE, L"EC", 0 },
 };
 
 /* Groups for Home tab */
 static const LeewayUIGroup g_homeGroups[] = {
-    { L"Clipboard", L"CB", LWUI_VARIANT_ORDER(LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
+    { L"Clipboard", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
       _countof(g_homeClipboardPlacement), g_homeClipboardPlacement },
 
-    { L"Image", L"IM", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED), 0,
+    { L"Image", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED), IDM_IMAGEATTRIBUTES,
       _countof(g_homeImagePlacement), g_homeImagePlacement },
 
-    { L"Tools", L"TL", LWUI_VARIANT_ORDER(LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Tools", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_homeToolsPlacement), g_homeToolsPlacement },
 
-    { L"Brushes", L"BR", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Brushes", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_homeBrushesPlacement), g_homeBrushesPlacement },
 
-    { L"Shapes", L"SG", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Shapes", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_homeShapesPlacement), g_homeShapesPlacement },
 
-    { L"Size", L"SI", LWUI_VARIANT_ORDER(LWUI_VARIANT_SMALL, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Size", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_SMALL, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_homeSizePlacement), g_homeSizePlacement },
 
-    { L"Colours", L"CL", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Colours", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_homeColoursPlacement), g_homeColoursPlacement },
 };
 
@@ -219,32 +221,32 @@ static const LeewayUITab g_homeTab = {
 
 /* Placements for View tab */
 static const LeewayUIPlacement g_viewZoomPlacement[] = {
-    { IDM_CTRL_PLUS,       LWUI_CONTROL_BUTTON_LARGE, L"I" },
-    { IDM_CTRL_MINUS,      LWUI_CONTROL_BUTTON_LARGE, L"O" },
-    { IDM_VIEWZOOM100,     LWUI_CONTROL_BUTTON_SMALL, L"1" },
-    { 380,                 LWUI_CONTROL_GALLERY, L"Z" },
+    { IDM_CTRL_PLUS,       LWUI_CONTROL_BUTTON_LARGE, L"I", 0 },
+    { IDM_CTRL_MINUS,      LWUI_CONTROL_BUTTON_LARGE, L"O", 0 },
+    { IDM_VIEWZOOM100,     LWUI_CONTROL_BUTTON_SMALL, L"1", 0 },
+    { 380,                 LWUI_CONTROL_GALLERY, L"Z", 0 },
 };
 
 static const LeewayUIPlacement g_viewShowPlacement[] = {
-    { 381,                 LWUI_CONTROL_BUTTON_SMALL_ICON, L"R" },
-    { IDM_VIEWSHOWGRID,    LWUI_CONTROL_BUTTON_SMALL_ICON, L"G" },
-    { IDM_VIEWSTATUSBAR,   LWUI_CONTROL_BUTTON_SMALL_ICON, L"S" },
+    { 381,                 LWUI_CONTROL_CHECKBOX, L"R", 0 },
+    { IDM_VIEWSHOWGRID,    LWUI_CONTROL_CHECKBOX, L"G", 0 },
+    { IDM_VIEWSTATUSBAR,   LWUI_CONTROL_CHECKBOX, L"S", 0 },
 };
 
 static const LeewayUIPlacement g_viewDisplayPlacement[] = {
-    { IDM_VIEWFULLSCREEN,  LWUI_CONTROL_TOGGLE_LARGE, L"F" },
-    { IDM_VIEWSHOWMINIATURE, LWUI_CONTROL_TOGGLE_LARGE, L"T" },
+    { IDM_VIEWFULLSCREEN,  LWUI_CONTROL_TOGGLE_LARGE, L"F", 0 },
+    { IDM_VIEWSHOWMINIATURE, LWUI_CONTROL_TOGGLE_LARGE, L"T", 0 },
 };
 
 /* Groups for View tab */
 static const LeewayUIGroup g_viewGroups[] = {
-    { L"Zoom", L"ZM", LWUI_VARIANT_ORDER(LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
+    { L"Zoom", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
       _countof(g_viewZoomPlacement), g_viewZoomPlacement },
 
-    { L"Show or hide", L"SH", LWUI_VARIANT_ORDER(LWUI_VARIANT_SMALL, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Show or hide", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_SMALL, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_viewShowPlacement), g_viewShowPlacement },
 
-    { L"Display", L"DI", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
+    { L"Display", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
       _countof(g_viewDisplayPlacement), g_viewDisplayPlacement },
 };
 
@@ -259,34 +261,34 @@ static const LeewayUITab g_viewTab = {
 
 /* Placements for Text tab (contextual: IsTextTool) */
 static const LeewayUIPlacement g_textFontPlacement[] = {
-    { 390,                 LWUI_CONTROL_COMBO, L"FF" },
-    { 391,                 LWUI_CONTROL_COMBO, L"FS" },
-    { IDM_BOLD,            LWUI_CONTROL_TOGGLE_SMALL, L"B" },
-    { IDM_ITALIC,          LWUI_CONTROL_TOGGLE_SMALL, L"I" },
-    { IDM_UNDERLINE,       LWUI_CONTROL_TOGGLE_SMALL, L"U" },
-    { IDM_VERTICAL,        LWUI_CONTROL_TOGGLE_SMALL, L"VT" },
+    { 390,                 LWUI_CONTROL_COMBO, L"FF", 130 },
+    { 391,                 LWUI_CONTROL_COMBO, L"FS", 50 },
+    { IDM_BOLD,            LWUI_CONTROL_TOGGLE_SMALL, L"B", 0 },
+    { IDM_ITALIC,          LWUI_CONTROL_TOGGLE_SMALL, L"I", 0 },
+    { IDM_UNDERLINE,       LWUI_CONTROL_TOGGLE_SMALL, L"U", 0 },
+    { IDM_VERTICAL,        LWUI_CONTROL_TOGGLE_SMALL, L"VT", 0 },
 };
 
 static const LeewayUIPlacement g_textBackgroundPlacement[] = {
-    { 392,                 LWUI_CONTROL_TOGGLE_SMALL, L"O" },
-    { 393,                 LWUI_CONTROL_TOGGLE_SMALL, L"R" },
+    { 392,                 LWUI_CONTROL_TOGGLE_SMALL, L"O", 0 },
+    { 393,                 LWUI_CONTROL_TOGGLE_SMALL, L"R", 0 },
 };
 
 static const LeewayUIPlacement g_textColoursPlacement[] = {
-    { 370,                 LWUI_CONTROL_COLORWELL, L"C1" },
-    { 371,                 LWUI_CONTROL_COLORWELL, L"C2" },
-    { 372,                 LWUI_CONTROL_GALLERY, L"PA" },
+    { 370,                 LWUI_CONTROL_COLORWELL, L"C1", 0 },
+    { 371,                 LWUI_CONTROL_COLORWELL, L"C2", 0 },
+    { 372,                 LWUI_CONTROL_GALLERY_STRIP, L"PA", 234 },
 };
 
 /* Groups for Text tab */
 static const LeewayUIGroup g_textGroups[] = {
-    { L"Font", L"FT", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED), 0,
+    { L"Font", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED), 0,
       _countof(g_textFontPlacement), g_textFontPlacement },
 
-    { L"Background", L"BG", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Background", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_textBackgroundPlacement), g_textBackgroundPlacement },
 
-    { L"Colours", L"CL", LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Colours", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_textColoursPlacement), g_textColoursPlacement },
 };
 
@@ -334,7 +336,7 @@ static const LeewayUILayout g_paintLayout = {
     _countof(g_paintTabs), g_paintTabs,
     _countof(g_paintAppMenuIds), g_paintAppMenuIds,
     _countof(g_paintQATIds), g_paintQATIds,
-    0, /* help_command_id: execute(LWUI_HELP) */
+    IDM_HELPINFO, /* help_command_id: the help button runs About */
 };
 
 /* ---- Collections (galleries, dropdowns, split menus) ---- */
@@ -343,62 +345,75 @@ static const LeewayUILayout g_paintLayout = {
  * 347-352 outline/fill, 361-368 sizes and 1001-1028 palette cells are new. */
 
 static const LeewayUICollectionItem g_paintRotateItems[] = {
-    { 311, L"Rotate right 90\u00B0", 0 }, { 312, L"Rotate left 90\u00B0", 0 }, { 313, L"Rotate 180\u00B0", 0 },
-    { 314, L"Flip vertical", 0 }, { 315, L"Flip horizontal", 0 },
+    { 311, L"Rotate right 90\u00B0", 0, LWUI_COLOR_NONE, 0 }, { 312, L"Rotate left 90\u00B0", 0, LWUI_COLOR_NONE, 0 },
+    { 313, L"Rotate 180\u00B0", 0, LWUI_COLOR_NONE, 0 }, { 314, L"Flip vertical", 0, LWUI_COLOR_NONE, 0 },
+    { 315, L"Flip horizontal", 0, LWUI_COLOR_NONE, 0 },
+    { IDM_IMAGEINVERTCOLORS, L"Invert colors", 0, LWUI_COLOR_NONE, 0 }, { IDM_IMAGEDELETEIMAGE, L"Delete image", 0, LWUI_COLOR_NONE, 0 },
+    { IDM_COLORSGRAYSCALE, L"Grayscale", 0, LWUI_COLOR_NONE, 0 }, { IDM_COLORSMONOCHROME, L"Monochrome", 0, LWUI_COLOR_NONE, 0 },
+};
+
+static const LeewayUICollectionItem g_paintPasteItems[] = {
+    { IDM_EDITPASTE, L"Paste", 0, LWUI_COLOR_NONE, 0 }, { IDM_EDITPASTEFROM, L"Paste from...", 0, LWUI_COLOR_NONE, 0 },
+};
+
+static const LeewayUICollectionItem g_paintSelectItems[] = {
+    { ID_RECTSEL, L"Rectangular selection", 0, LWUI_COLOR_NONE, 0 }, { ID_FREESEL, L"Free-form selection", 0, LWUI_COLOR_NONE, 0 },
+    { IDM_EDITSELECTALL, L"Select all", 0, LWUI_COLOR_NONE, 0 }, { IDM_EDITINVERTSELECTION, L"Invert selection", 0, LWUI_COLOR_NONE, 0 },
+    { IDM_EDITDELETESELECTION, L"Delete", 0, LWUI_COLOR_NONE, 0 }, { IDM_IMAGEDRAWOPAQUE, L"Transparent selection", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintSaveAsItems[] = {
-    { 301, L"PNG", 0 }, { 302, L"JPEG", 0 }, { 303, L"BMP", 0 }, { 304, L"GIF", 0 }, { 305, L"Other formats", 0 },
+    { 301, L"PNG", 0, LWUI_COLOR_NONE, 0 }, { 302, L"JPEG", 0, LWUI_COLOR_NONE, 0 }, { 303, L"BMP", 0, LWUI_COLOR_NONE, 0 }, { 304, L"GIF", 0, LWUI_COLOR_NONE, 0 }, { 305, L"Other formats", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintZoomItems[] = {
-    { IDM_VIEWZOOM125, L"12.5 %", 0 }, { IDM_VIEWZOOM25, L"25 %", 0 }, { IDM_VIEWZOOM50, L"50 %", 0 },
-    { IDM_VIEWZOOM100, L"100 %", 0 }, { IDM_VIEWZOOM200, L"200 %", 0 }, { IDM_VIEWZOOM400, L"400 %", 0 },
-    { IDM_VIEWZOOM800, L"800 %", 0 },
+    { IDM_VIEWZOOM125, L"12.5 %", 0, LWUI_COLOR_NONE, 0 }, { IDM_VIEWZOOM25, L"25 %", 0, LWUI_COLOR_NONE, 0 }, { IDM_VIEWZOOM50, L"50 %", 0, LWUI_COLOR_NONE, 0 },
+    { IDM_VIEWZOOM100, L"100 %", 0, LWUI_COLOR_NONE, 0 }, { IDM_VIEWZOOM200, L"200 %", 0, LWUI_COLOR_NONE, 0 }, { IDM_VIEWZOOM400, L"400 %", 0, LWUI_COLOR_NONE, 0 },
+    { IDM_VIEWZOOM800, L"800 %", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintBrushItems[] = {
-    { 321, L"Brush", 0 }, { 322, L"Airbrush", 0 }, { 323, L"Calligraphy brush", 0 }, { 324, L"Oil brush", 0 },
-    { 325, L"Crayon", 0 }, { 326, L"Marker", 0 }, { 327, L"Natural pencil", 0 }, { 328, L"Watercolor brush", 0 },
+    { ID_BRUSH, L"Brush", 0, LWUI_COLOR_NONE, 0 }, { ID_AIRBRUSH, L"Airbrush", 0, LWUI_COLOR_NONE, 0 },
+    { 321, L"Calligraphy 1", 0, LWUI_COLOR_NONE, 0 }, { 322, L"Calligraphy 2", 0, LWUI_COLOR_NONE, 0 },
+    { 323, L"Oil brush", 0, LWUI_COLOR_NONE, 0 }, { 324, L"Crayon", 0, LWUI_COLOR_NONE, 0 },
+    { 325, L"Marker", 0, LWUI_COLOR_NONE, 0 }, { 326, L"Watercolor", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintShapeItems[] = {
-    { ID_LINE, L"Line", 0 }, { ID_BEZIER, L"Curve", 0 }, { ID_RECT, L"Rectangle", 0 },
-    { ID_SHAPE, L"Polygon", 0 }, { ID_ELLIPSE, L"Ellipse", 0 }, { ID_RRECT, L"Rounded rectangle", 0 },
+    { ID_LINE, L"Line", 0, LWUI_COLOR_NONE, 0 }, { ID_BEZIER, L"Curve", 0, LWUI_COLOR_NONE, 0 }, { ID_RECT, L"Rectangle", 0, LWUI_COLOR_NONE, 0 },
+    { ID_SHAPE, L"Polygon", 0, LWUI_COLOR_NONE, 0 }, { ID_ELLIPSE, L"Ellipse", 0, LWUI_COLOR_NONE, 0 }, { ID_RRECT, L"Rounded rectangle", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintOutlineItems[] = {
-    { 347, L"No outline", 0 }, { 348, L"Solid color", 0 }, { 349, L"Dashed", 0 },
+    { 347, L"No outline", 0, LWUI_COLOR_NONE, 0 }, { 348, L"Solid color", 0, LWUI_COLOR_NONE, 0 }, { 349, L"Dashed", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintFillItems[] = {
-    { 350, L"No fill", 0 }, { 351, L"Solid color", 0 }, { 352, L"Color 2", 0 },
+    { 350, L"No fill", 0, LWUI_COLOR_NONE, 0 }, { 351, L"Solid color", 0, LWUI_COLOR_NONE, 0 }, { 352, L"Color 2", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintSizeItems[] = {
-    { 361, L"1 px", 0 }, { 362, L"2 px", 0 }, { 363, L"3 px", 0 }, { 364, L"4 px", 0 }, { 365, L"5 px", 0 },
-    { 366, L"8 px", 0 }, { 367, L"12 px", 0 }, { 368, L"16 px", 0 },
+    { 361, L"1 px", 0, LWUI_COLOR_NONE, 0 }, { 362, L"2 px", 0, LWUI_COLOR_NONE, 0 }, { 363, L"3 px", 0, LWUI_COLOR_NONE, 0 }, { 364, L"4 px", 0, LWUI_COLOR_NONE, 0 }, { 365, L"5 px", 0, LWUI_COLOR_NONE, 0 },
+    { 366, L"8 px", 0, LWUI_COLOR_NONE, 0 }, { 367, L"12 px", 0, LWUI_COLOR_NONE, 0 }, { 368, L"16 px", 0, LWUI_COLOR_NONE, 0 },
 };
 
 #define PAINT_PALETTE_FIRST 1001
 #define PAINT_PALETTE_COUNT 28
 
-/* The 28 colors of Paint's classic palette, in its order (two rows of 14). */
-static const COLORREF g_paintPaletteColors[PAINT_PALETTE_COUNT] = {
-    RGB(0, 0, 0), RGB(128, 128, 128), RGB(128, 0, 0), RGB(128, 128, 0), RGB(0, 128, 0), RGB(0, 128, 128), RGB(0, 0, 128),
-    RGB(128, 0, 128), RGB(128, 128, 64), RGB(0, 64, 64), RGB(0, 128, 255), RGB(0, 64, 128), RGB(64, 0, 255), RGB(128, 64, 0),
-    RGB(255, 255, 255), RGB(192, 192, 192), RGB(255, 0, 0), RGB(255, 255, 0), RGB(0, 255, 0), RGB(0, 255, 255), RGB(0, 0, 255),
-    RGB(255, 0, 255), RGB(255, 255, 128), RGB(0, 255, 128), RGB(128, 255, 255), RGB(128, 128, 255), RGB(255, 0, 128), RGB(255, 128, 64),
-};
-
+/* Cells are swatches (LWUI_COLLECTION_COLORS): left click executes id (Color 1), right click alt_id (Color 2). */
+#define PAINT_PALETTE_ALT_FIRST 1101
+#define PAL(n, name, r, g, b) { PAINT_PALETTE_FIRST + (n), name, 0, RGB(r, g, b), PAINT_PALETTE_ALT_FIRST + (n) }
 static const LeewayUICollectionItem g_paintPaletteItems[PAINT_PALETTE_COUNT] = {
-    { 1001, L"Black", 0 }, { 1002, L"Gray", 0 }, { 1003, L"Dark red", 0 }, { 1004, L"Olive", 0 }, { 1005, L"Dark green", 0 },
-    { 1006, L"Teal", 0 }, { 1007, L"Navy", 0 }, { 1008, L"Purple", 0 }, { 1009, L"Khaki", 0 }, { 1010, L"Dark teal", 0 },
-    { 1011, L"Sky blue", 0 }, { 1012, L"Dark blue", 0 }, { 1013, L"Indigo", 0 }, { 1014, L"Brown", 0 },
-    { 1015, L"White", 0 }, { 1016, L"Light gray", 0 }, { 1017, L"Red", 0 }, { 1018, L"Yellow", 0 }, { 1019, L"Green", 0 },
-    { 1020, L"Cyan", 0 }, { 1021, L"Blue", 0 }, { 1022, L"Magenta", 0 }, { 1023, L"Light yellow", 0 }, { 1024, L"Mint", 0 },
-    { 1025, L"Light cyan", 0 }, { 1026, L"Periwinkle", 0 }, { 1027, L"Rose", 0 }, { 1028, L"Orange", 0 },
+    PAL(0, L"Black", 0, 0, 0), PAL(1, L"Gray", 128, 128, 128), PAL(2, L"Dark red", 128, 0, 0), PAL(3, L"Olive", 128, 128, 0),
+    PAL(4, L"Dark green", 0, 128, 0), PAL(5, L"Teal", 0, 128, 128), PAL(6, L"Navy", 0, 0, 128), PAL(7, L"Purple", 128, 0, 128),
+    PAL(8, L"Khaki", 128, 128, 64), PAL(9, L"Dark teal", 0, 64, 64), PAL(10, L"Sky blue", 0, 128, 255), PAL(11, L"Dark blue", 0, 64, 128),
+    PAL(12, L"Indigo", 64, 0, 255), PAL(13, L"Brown", 128, 64, 0),
+    PAL(14, L"White", 255, 255, 255), PAL(15, L"Light gray", 192, 192, 192), PAL(16, L"Red", 255, 0, 0), PAL(17, L"Yellow", 255, 255, 0),
+    PAL(18, L"Green", 0, 255, 0), PAL(19, L"Cyan", 0, 255, 255), PAL(20, L"Blue", 0, 0, 255), PAL(21, L"Magenta", 255, 0, 255),
+    PAL(22, L"Light yellow", 255, 255, 128), PAL(23, L"Mint", 0, 255, 128), PAL(24, L"Light cyan", 128, 255, 255),
+    PAL(25, L"Periwinkle", 128, 128, 255), PAL(26, L"Rose", 255, 0, 128), PAL(27, L"Orange", 255, 128, 64),
 };
+#undef PAL
 
 /* Fills every collection. Call after LeewayRibbonSetLayout (collections are kept
  * across layouts, so the order does not matter to the ribbon). Returns the first
@@ -407,18 +422,20 @@ static inline HRESULT PaintRibbonSetCollections(ILeewayRibbon *ribbon)
 {
     HRESULT hr = S_OK, h;
 
-#define PAINT_SETCOLL(cmd, arr) \
-    do { h = LeewayRibbonSetCollection(ribbon, (cmd), (arr), _countof(arr), 0); if (FAILED(h) && SUCCEEDED(hr)) hr = h; } while (0)
+#define PAINT_SETCOLL(cmd, arr, flags) \
+    do { h = LeewayRibbonSetCollection(ribbon, (cmd), (arr), _countof(arr), (flags)); if (FAILED(h) && SUCCEEDED(hr)) hr = h; } while (0)
 
-    PAINT_SETCOLL(310, g_paintRotateItems);
-    PAINT_SETCOLL(IDM_FILESAVEAS, g_paintSaveAsItems);
-    PAINT_SETCOLL(380, g_paintZoomItems);
-    PAINT_SETCOLL(320, g_paintBrushItems);
-    PAINT_SETCOLL(340, g_paintShapeItems);
-    PAINT_SETCOLL(345, g_paintOutlineItems);
-    PAINT_SETCOLL(346, g_paintFillItems);
-    PAINT_SETCOLL(360, g_paintSizeItems);
-    PAINT_SETCOLL(372, g_paintPaletteItems);
+    PAINT_SETCOLL(IDM_EDITPASTE, g_paintPasteItems, 0);
+    PAINT_SETCOLL(ID_RECTSEL, g_paintSelectItems, 0);
+    PAINT_SETCOLL(310, g_paintRotateItems, 0);
+    PAINT_SETCOLL(IDM_FILESAVEAS, g_paintSaveAsItems, 0);
+    PAINT_SETCOLL(380, g_paintZoomItems, 0);
+    PAINT_SETCOLL(320, g_paintBrushItems, 0);
+    PAINT_SETCOLL(340, g_paintShapeItems, 0);
+    PAINT_SETCOLL(345, g_paintOutlineItems, 0);
+    PAINT_SETCOLL(346, g_paintFillItems, 0);
+    PAINT_SETCOLL(360, g_paintSizeItems, 0);
+    PAINT_SETCOLL(372, g_paintPaletteItems, LWUI_COLLECTION_COLORS);
 #undef PAINT_SETCOLL
     return hr;
 }

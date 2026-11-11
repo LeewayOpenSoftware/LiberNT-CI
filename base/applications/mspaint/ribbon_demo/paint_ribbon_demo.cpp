@@ -209,9 +209,15 @@ static void Dab(POINT a, POINT b)
 /* ---- commands ---- */
 static void Command(UINT id)
 {
-    if (id >= 1001 && id < 1001 + PAINT_PALETTE_COUNT)
+    if (id >= PAINT_PALETTE_FIRST && id < PAINT_PALETTE_FIRST + PAINT_PALETTE_COUNT)      /* left click: Color 1 */
     {
-        (g_target == 1 ? g_c1 : g_c2) = g_paintPaletteColors[id - 1001];
+        g_c1 = g_paintPaletteItems[id - PAINT_PALETTE_FIRST].color;
+        Status();
+        return;
+    }
+    if (id >= PAINT_PALETTE_ALT_FIRST && id < PAINT_PALETTE_ALT_FIRST + PAINT_PALETTE_COUNT)   /* right click: Color 2 */
+    {
+        g_c2 = g_paintPaletteItems[id - PAINT_PALETTE_ALT_FIRST].color;
         Status();
         return;
     }
@@ -221,9 +227,9 @@ static void Command(UINT id)
         Status();
         return;
     }
-    if (id >= 321 && id <= 328)
+    if (id >= 321 && id <= 326)          /* brush styles: drawn as the brush */
     {
-        SelectTool(id == 322 ? ID_AIRBRUSH : ID_BRUSH);
+        SelectTool(ID_BRUSH);
         return;
     }
     if (id >= ID_FREESEL && id <= ID_RRECT)
@@ -233,8 +239,8 @@ static void Command(UINT id)
     }
     switch (id)
     {
-        case 370: g_target = 1; wcscpy(g_note, L"palette sets color 1"); Status(); break;
-        case 371: g_target = 2; wcscpy(g_note, L"palette sets color 2"); Status(); break;
+        case 370: g_target = 1; break;               /* Edit colors changes the selected well */
+        case 371: g_target = 2; break;
         case IDM_COLORSEDITPALETTE:
         {
             static COLORREF custom[16];
@@ -343,9 +349,9 @@ static HRESULT WINAPI OnQueryState(UINT32 id, LeewayUICommandState *st, void *)
         case IDM_VERTICAL: st->checked = g_vertical; break;
         case 392: st->checked = g_opaque; break;
         case 393: st->checked = !g_opaque; break;
-        case 370: st->checked = g_target == 1; break;
-        case 371: st->checked = g_target == 2; break;
         case IDM_FILEFROMSCANNERORCAMERA: st->enabled = FALSE; break;
+        case 370: st->color = g_c1; break;          /* the colour wells show the colors */
+        case 371: st->color = g_c2; break;
         case 380:
             swprintf(zoomLabel, 16, L"%u %%", g_zoom);
             st->label = zoomLabel;
