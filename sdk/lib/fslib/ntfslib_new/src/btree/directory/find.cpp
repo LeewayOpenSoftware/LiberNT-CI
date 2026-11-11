@@ -278,6 +278,10 @@ Directory::FindNextFile(_In_  PFileRecord File,
             DiskVolume->IndexWorkFileReference != DirectoryReference ||
             DiskVolume->IndexWorkVCN != ChildVCN)
         {
+            /* The refill below overwrites the buffer before it can fail
+             * (short read, bad fixup, wrong VCN): the cached key must not
+             * survive it, or the next lookup of that node parses this one. */
+            DiskVolume->IndexWorkBufferValid = FALSE;
             BitmapByte = IndexRecordNumber >> 3;
             BitmapMask = (UCHAR)(1 << (IndexRecordNumber & 7));
             Status = File->CopyData(BitmapAttribute,

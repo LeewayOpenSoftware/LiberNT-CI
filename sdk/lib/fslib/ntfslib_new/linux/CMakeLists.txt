@@ -228,6 +228,20 @@ if(BUILD_TESTING)
         COMMAND ntfslib_size_persist_times_test
     )
 
+    add_executable(ntfslib_lookup_index_cache_test
+        tests/lookup_index_cache.cpp
+    )
+    target_compile_features(ntfslib_lookup_index_cache_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_lookup_index_cache_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_lookup_index_cache_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_lookup_index_cache
+        COMMAND ntfslib_lookup_index_cache_test
+    )
+
     add_executable(ntfslib_lznt1_roundtrip_test
         tests/lznt1_roundtrip.cpp
     )

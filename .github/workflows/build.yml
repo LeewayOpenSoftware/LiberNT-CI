@@ -305,14 +305,14 @@ jobs:
 
     - name: Build
       run: |
-        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_fuse
+        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_lookup_index_cache_test ntfslib_fuse
 
     - name: Run the host tests
       env:
         ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
         UBSAN_OPTIONS: print_stacktrace=1
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|lookup_index_cache"
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'
