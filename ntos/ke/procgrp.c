@@ -11,8 +11,6 @@
 #define NDEBUG
 #include <debug.h>
 
-#define TAG_KE_CACHE 'cPeK'
-
 /* PRIVATE TYPES *************************************************************/
 
 /* KeSetTimer2 and friends are internal exports not declared by the DDK. */
@@ -1371,43 +1369,6 @@ KeQueryPrcbAddress(
     return KiProcessorBlock[Number];
 }
 
-/* Sampled once at boot: the relationship query runs up to DISPATCH_LEVEL and cannot visit each processor */
-static PKI_CACHE_RECORD KiProcessorCaches;
-static ULONG KiProcessorCacheCount;
-
-CODE_SEG("INIT")
-VOID
-NTAPI
-KiCaptureProcessorCaches(VOID)
-{
-    PKI_CACHE_RECORD Records;
-    ULONG Count, Sets;
-
-    PAGED_CODE();
-
-    Records = ExAllocatePoolWithTag(PagedPool,
-                                    KI_MAX_CACHE_RECORDS * sizeof(KI_CACHE_RECORD),
-                                    TAG_KE_CACHE);
-    if (Records == NULL)
-        return;
-
-    KiQueryProcessorTopology(Records, KI_MAX_CACHE_RECORDS, &Count, NULL, 0, &Sets);
-
-    if (Count != 0)
-    {
-        KiProcessorCaches = ExAllocatePoolWithTag(NonPagedPoolNx,
-                                                  Count * sizeof(KI_CACHE_RECORD),
-                                                  TAG_KE_CACHE);
-        if (KiProcessorCaches != NULL)
-        {
-            RtlCopyMemory(KiProcessorCaches, Records, Count * sizeof(KI_CACHE_RECORD));
-            KiProcessorCacheCount = Count;
-        }
-    }
-
-    ExFreePoolWithTag(Records, TAG_KE_CACHE);
-}
-
 /*
  * @implemented
  *
@@ -1425,7 +1386,6 @@ KeQueryLogicalProcessorRelationship(
     const ULONG CoreSize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Processor.GroupMask) + sizeof(GROUP_AFFINITY);
     const ULONG NumaSize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, NumaNode) + sizeof(NUMA_NODE_RELATIONSHIP);
     const ULONG GroupSize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Group.GroupInfo) + sizeof(PROCESSOR_GROUP_INFO);
-    const ULONG CacheSize = FIELD_OFFSET(SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX, Cache) + sizeof(CACHE_RELATIONSHIP);
     KAFFINITY ActiveMask = KeActiveProcessors;
     ULONG ActiveCount = KeQueryActiveProcessorCount(NULL);
     ULONG MaximumCount = KeQueryMaximumProcessorCount();
@@ -1459,14 +1419,6 @@ KeQueryLogicalProcessorRelationship(
         RequiredLength += CoreSize * CoreCount;
     if ((RelationshipType == RelationProcessorPackage) || (RelationshipType == RelationAll))
         RequiredLength += CoreSize;
-    if ((RelationshipType == RelationCache) || (RelationshipType == RelationAll))
-    {
-        for (Index = 0; Index < KiProcessorCacheCount; Index++)
-        {
-            if (KiProcessorCaches[Index].ProcessorSet & CoreMask)
-                RequiredLength += CacheSize;
-        }
-    }
     if ((RelationshipType == RelationNumaNode) || (RelationshipType == RelationAll))
         RequiredLength += NumaSize;
     if ((RelationshipType == RelationGroup) || (RelationshipType == RelationAll))
@@ -1512,31 +1464,6 @@ KeQueryLogicalProcessorRelationship(
         Record->Processor.GroupMask[0].Mask = ActiveMask;
         Record->Processor.GroupMask[0].Group = 0;
         Offset += CoreSize;
-    }
-
-    if ((RelationshipType == RelationCache) || (RelationshipType == RelationAll))
-    {
-        for (Index = 0; Index < KiProcessorCacheCount; Index++)
-        {
-            PKI_CACHE_RECORD Cache = &KiProcessorCaches[Index];
-
-            if (!(Cache->ProcessorSet & CoreMask))
-                continue;
-
-            Record = (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)(Buffer + Offset);
-            RtlZeroMemory(Record, CacheSize);
-            Record->Relationship = RelationCache;
-            Record->Size = CacheSize;
-            Record->Cache.Level = Cache->Descriptor.Level;
-            Record->Cache.Associativity = Cache->Descriptor.Associativity;
-            Record->Cache.LineSize = Cache->Descriptor.LineSize;
-            Record->Cache.CacheSize = Cache->Descriptor.Size;
-            Record->Cache.Type = Cache->Descriptor.Type;
-            Record->Cache.GroupCount = 1;
-            Record->Cache.GroupMask.Mask = Cache->ProcessorSet & ActiveMask;
-            Record->Cache.GroupMask.Group = 0;
-            Offset += CacheSize;
-        }
     }
 
     /* Single NUMA node (node 0). */
@@ -1614,15 +1541,17 @@ KeSetSelectedCpuSetsThread(
     _In_ ULONG CpuSetCount,
     _In_reads_(CpuSetCount) PULONG64 CpuSetMasks)
 {
-    KAFFINITY Selected;
-    KAFFINITY Affinity;
-    KIRQL OldIrql;
+    KAFFINITY Active = KeActiveProcessors;
     ULONG i;
 
     if (Thread == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if ((CpuSetCount != 0) && (CpuSetMasks == NULL))
+    /* An empty selection clears any restriction, which is the honest default. */
+    if (CpuSetCount == 0)
+        return STATUS_SUCCESS;
+
+    if (CpuSetMasks == NULL)
         return STATUS_INVALID_PARAMETER;
 
     /* Only group 0 exists, so no other group may carry a selection. */
@@ -1632,24 +1561,16 @@ KeSetSelectedCpuSetsThread(
             return STATUS_NOT_SUPPORTED;
     }
 
-    Selected = (CpuSetCount != 0) ? (KAFFINITY)CpuSetMasks[0] : 0;
-    if ((Selected & ~KeActiveProcessors) != 0)
-        return STATUS_INVALID_PARAMETER;
+    if (CpuSetMasks[0] == 0)
+        return STATUS_SUCCESS;
 
-    OldIrql = KiAcquireDispatcherLock();
-    KiAcquireThreadLock(Thread);
+    /* A selection covering every active processor imposes no real restriction.
+     * A proper subset would require per-thread CPU-set state that cannot be
+     * stored without changing the KTHREAD layout, so it is honestly rejected. */
+    if ((CpuSetMasks[0] & Active) == Active)
+        return STATUS_SUCCESS;
 
-    Affinity = KiThreadUserAffinityMask(Thread);
-    if ((Affinity & Selected) != 0)
-        Affinity &= Selected;
-
-    if (!Thread->SystemAffinityActive)
-        KiSetAffinityThread(Thread, Affinity);
-
-    KiReleaseThreadLock(Thread);
-    KiReleaseDispatcherLock(OldIrql);
-
-    return STATUS_SUCCESS;
+    return STATUS_NOT_SUPPORTED;
 }
 
 /*

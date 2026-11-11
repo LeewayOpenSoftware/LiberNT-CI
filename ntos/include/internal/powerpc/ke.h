@@ -176,23 +176,6 @@ KeSetContextReturnRegister(_Inout_ PCONTEXT Context, _In_ ULONG_PTR ReturnValue)
     Context->Gpr3 = ReturnValue;
 }
 
-/* TODO: this port's debug service passes no third or fourth argument yet */
-FORCEINLINE
-ULONG_PTR
-KeGetContextServiceArgument3(_In_ PCONTEXT Context)
-{
-    UNREFERENCED_PARAMETER(Context);
-    return 0;
-}
-
-FORCEINLINE
-ULONG_PTR
-KeGetContextServiceArgument4(_In_ PCONTEXT Context)
-{
-    UNREFERENCED_PARAMETER(Context);
-    return 0;
-}
-
 FORCEINLINE
 ULONG_PTR
 KeGetContextStackRegister(_In_ PCONTEXT Context)
@@ -333,7 +316,7 @@ KiGetLinkedTrapFrame(
 }
 
 /* System services that raise or continue unlink the service trap frame on
- * the way out; the trap frame holds every register, so nothing else is saved. */
+ * entry; the trap frame holds every register, so nothing else is saved. */
 typedef struct _KI_SERVICE_EXCEPTION_STATE
 {
     UCHAR Reserved;
@@ -352,8 +335,7 @@ KiEnterServiceException(
     UNREFERENCED_PARAMETER(Context);
     UNREFERENCED_PARAMETER(PreviousMode);
     UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Thread);
-    UNREFERENCED_PARAMETER(TrapFrame);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
     return ExceptionFrame;
 }
 
@@ -375,7 +357,8 @@ KiLeaveServiceException(
     _In_ PKTHREAD Thread,
     _In_ PKTRAP_FRAME TrapFrame)
 {
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(TrapFrame);
 }
 
 FORCEINLINE

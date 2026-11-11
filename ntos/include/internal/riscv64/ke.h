@@ -146,20 +146,6 @@ KeSetContextReturnRegister(_Inout_ PCONTEXT Context, _In_ ULONG_PTR ReturnValue)
 
 FORCEINLINE
 ULONG_PTR
-KeGetContextServiceArgument3(_In_ PCONTEXT Context)
-{
-    return Context->A3;
-}
-
-FORCEINLINE
-ULONG_PTR
-KeGetContextServiceArgument4(_In_ PCONTEXT Context)
-{
-    return Context->A4;
-}
-
-FORCEINLINE
-ULONG_PTR
 KeGetContextStackRegister(_In_ PCONTEXT Context)
 {
     return Context->Sp;
@@ -401,7 +387,7 @@ KiGetLinkedTrapFrame(
 }
 
 /* System services that raise or continue unlink the service trap frame on
- * the way out; the trap frame holds every register, so nothing else is saved. */
+ * entry; the trap frame holds every register, so nothing else is saved. */
 typedef struct _KI_SERVICE_EXCEPTION_STATE
 {
     UCHAR Reserved;
@@ -420,8 +406,7 @@ KiEnterServiceException(
     UNREFERENCED_PARAMETER(Context);
     UNREFERENCED_PARAMETER(PreviousMode);
     UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Thread);
-    UNREFERENCED_PARAMETER(TrapFrame);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
     return ExceptionFrame;
 }
 
@@ -443,7 +428,8 @@ KiLeaveServiceException(
     _In_ PKTHREAD Thread,
     _In_ PKTRAP_FRAME TrapFrame)
 {
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(TrapFrame);
 }
 
 FORCEINLINE
@@ -548,12 +534,6 @@ KiClearDpcThreadState(
 #define KiPrcbDpcTimeLimit(Prcb) ((Prcb)->DpcTimeLimitTicks)
 #define KiPrcbDpcWatchdogCount(Prcb) ((Prcb)->DpcWatchdogCount)
 #define KiPrcbDpcWatchdogPeriod(Prcb) ((Prcb)->DpcWatchdogPeriodTicks)
-extern PCONTEXT KiProcessorContext[MAXIMUM_PROCESSORS];
-#define KiPrcbContext(Prcb) (KiProcessorContext[(Prcb)->Number])
-/* TODO: this processor block has no type, vendor or context fields, so the debugger data names none */
-#define KI_PRCB_CPU_TYPE_OFFSET 0
-#define KI_PRCB_VENDOR_STRING_OFFSET 0
-#define KI_PRCB_CONTEXT_OFFSET 0
 #define KiClockTickSuspended(Prcb) ((Prcb)->Sleeping != FALSE)
 
 #ifdef __cplusplus

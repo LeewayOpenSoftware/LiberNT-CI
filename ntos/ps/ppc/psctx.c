@@ -129,13 +129,6 @@ PspArchSetInstrumentationCallback(
     return STATUS_INVALID_INFO_CLASS;
 }
 
-BOOLEAN
-NTAPI
-PspArchManagesExecutableWrites(VOID)
-{
-    return FALSE;
-}
-
 VOID
 NTAPI
 PspArchInitializeUserThreadStartup(

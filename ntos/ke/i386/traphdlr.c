@@ -347,6 +347,7 @@ KiNpxHandler(IN PKTRAP_FRAME TrapFrame,
         }
     }
 
+    /* Check for divide by zero */
     if (Error & FSW_ZERO_DIVIDE)
     {
         /* Issue fault */

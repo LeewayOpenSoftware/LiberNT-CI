@@ -32,5 +32,3 @@
 
 /* Root entries below this index translate the user half. */
 #define MI_RISCV_ROOT_KERNEL_INDEX 256
-
-#define MI_RISCV64_SESSION_TOP_ENTRIES 1

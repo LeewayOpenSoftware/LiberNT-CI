@@ -125,10 +125,7 @@ KeFlushIoBuffers(
     _In_ BOOLEAN DmaOperation)
 {
     ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
-
-    /* Callers built for the architectures where this is an empty macro pass a buffered request's NULL MDL */
-    if (Mdl == NULL)
-        return;
+    ASSERT(Mdl != NULL);
 
     /* The HAL sets coherency only for a firmware-declared coherent DMA host.
      * In that case a fence orders CPU and device accesses; no cache clean or

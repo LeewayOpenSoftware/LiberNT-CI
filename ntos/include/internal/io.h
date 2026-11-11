@@ -108,12 +108,10 @@
 
 typedef struct _FILE_OBJECT_EXTENSION
 {
-    TXN_PARAMETER_BLOCK TxnParameters;
     PDEVICE_OBJECT TopDeviceObjectHint;
     PVOID FilterContext;
     ULONG FoExtFlags;
     IO_PRIORITY_HINT PriorityHint;
-    PMDL IoStatusBlockRange;
 
 } FILE_OBJECT_EXTENSION, *PFILE_OBJECT_EXTENSION;
 
@@ -171,20 +169,6 @@ IopWriteIoStatusBlock(PIO_STATUS_BLOCK Destination,
     UNREFERENCED_PARAMETER(Is32Bit);
 #endif
     *Destination = *Source;
-}
-
-/* WoW64 passes a temporary native status block whose Pointer is the caller's 32-bit one; the caller guards the read with SEH */
-FORCEINLINE
-PIO_STATUS_BLOCK
-IopGetWow64IoStatusBlock(PIO_STATUS_BLOCK IoStatusBlock)
-{
-    PIO_STATUS_BLOCK Wow64IoStatusBlock;
-
-    ProbeForRead(IoStatusBlock, sizeof(*IoStatusBlock), sizeof(ULONG));
-    Wow64IoStatusBlock = IoStatusBlock->Pointer;
-    ProbeForWrite(Wow64IoStatusBlock, sizeof(NTSTATUS) + sizeof(ULONG), sizeof(ULONG));
-
-    return Wow64IoStatusBlock;
 }
 
 //
@@ -437,23 +421,11 @@ typedef struct _IO_UNLOAD_SAFE_COMPLETION_CONTEXT
 //
 typedef struct _IO_WORKITEM
 {
-    WORK_QUEUE_ITEM WorkItem;
-    PIO_WORKITEM_ROUTINE Routine;
-    PVOID IoObject;
+    WORK_QUEUE_ITEM Item;
+    PDEVICE_OBJECT DeviceObject;
+    PIO_WORKITEM_ROUTINE WorkerRoutine;
     PVOID Context;
-    /* TODO: WorkOnBehalfThread, Type and ActivityId are kept zero */
-    struct _ETHREAD *WorkOnBehalfThread;
-    ULONG Type;
-    GUID ActivityId;
 } IO_WORKITEM;
-
-C_ASSERT((sizeof(PVOID) != 8) || (FIELD_OFFSET(IO_WORKITEM, Routine) == 0x20));
-C_ASSERT((sizeof(PVOID) != 8) || (FIELD_OFFSET(IO_WORKITEM, IoObject) == 0x28));
-C_ASSERT((sizeof(PVOID) != 8) || (FIELD_OFFSET(IO_WORKITEM, Context) == 0x30));
-C_ASSERT((sizeof(PVOID) != 8) || (FIELD_OFFSET(IO_WORKITEM, WorkOnBehalfThread) == 0x38));
-C_ASSERT((sizeof(PVOID) != 8) || (FIELD_OFFSET(IO_WORKITEM, Type) == 0x40));
-C_ASSERT((sizeof(PVOID) != 8) || (FIELD_OFFSET(IO_WORKITEM, ActivityId) == 0x44));
-C_ASSERT((sizeof(PVOID) != 8) || (sizeof(IO_WORKITEM) == 0x58));
 
 //
 // I/O Wrapper around the Kernel Interrupt
@@ -1079,7 +1051,7 @@ NTSTATUS
 NTAPI
 IopReassignSystemRoot(
     IN PLOADER_PARAMETER_BLOCK LoaderBlock,
-    OUT PANSI_STRING NtDeviceName
+    OUT PANSI_STRING NtBootPath
 );
 
 CODE_SEG("INIT")
@@ -1184,13 +1156,6 @@ IopCreateVpb(
 VOID
 NTAPI
 IopDereferenceVpbAndFree(
-    IN PVPB Vpb
-);
-
-VOID
-NTAPI
-IopReleaseStorageVpb(
-    IN PDEVICE_OBJECT DeviceObject,
     IN PVPB Vpb
 );
 
@@ -1417,11 +1382,10 @@ PnpRootCreateDeviceObject(
 
 NTSTATUS
 PnpRootCreateDevice(
-    _In_ PCUNICODE_STRING ServiceName,
-    _In_reads_bytes_opt_(CompatibleIdsSize) PCWSTR CompatibleIds,
-    _In_ ULONG CompatibleIdsSize,
-    _Out_ PDEVICE_OBJECT *PhysicalDeviceObject,
-    _Out_opt_ PUNICODE_STRING FullInstancePath);
+    IN PUNICODE_STRING ServiceName,
+    OUT PDEVICE_OBJECT *PhysicalDeviceObject,
+    OUT PUNICODE_STRING FullInstancePath
+);
 
 NTSTATUS
 PnpRootRegisterDevice(
@@ -1430,14 +1394,6 @@ PnpRootRegisterDevice(
 VOID
 PnpRootRetireDevice(
     _In_ PDEVICE_OBJECT DeviceObject);
-
-BOOLEAN
-PnpRootForgetDevice(
-    _In_ PDEVICE_OBJECT DeviceObject);
-
-NTSTATUS
-PnpRootCreateInstance(
-    _In_ PCUNICODE_STRING InstancePath);
 
 VOID
 PnpRootInitializeDevExtension(VOID);
@@ -1513,6 +1469,15 @@ IopInitializeDriverModule(
     _Out_ PDRIVER_OBJECT *DriverObject,
     _Out_ NTSTATUS *DriverEntryStatus,
     _In_ BOOLEAN HoldPnpUnloadBarrier);
+
+NTSTATUS
+FASTCALL
+IopAttachFilterDrivers(
+    IN PDEVICE_NODE DeviceNode,
+    IN HANDLE EnumSubKey,
+    IN HANDLE ClassKey,
+    IN BOOLEAN Lower
+);
 
 VOID
 NTAPI
@@ -1699,6 +1664,14 @@ IoChangeFileObjectFilterContext(
     IN BOOLEAN Define
 );
 
+VOID
+NTAPI
+IopDoNameTransmogrify(
+    IN PIRP Irp,
+    IN PFILE_OBJECT FileObject,
+    IN PREPARSE_DATA_BUFFER DataBuffer
+);
+
 NTSTATUS
 NTAPI
 IoComputeDesiredAccessFileObject(
@@ -1848,20 +1821,6 @@ NTSTATUS
 PiQueryRemoveDevice(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Out_ PPI_QUERY_REMOVE_DATA RemoveData);
-
-VOID
-PiQueueDeviceActionEx(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ DEVICE_ACTION Action,
-    _In_opt_ PKEVENT CompletionEvent,
-    _Out_opt_ NTSTATUS *CompletionStatus,
-    _Out_opt_ PPI_QUERY_REMOVE_DATA RemoveData);
-
-NTSTATUS
-PiPerformSyncDeviceActionEx(
-    _In_ PDEVICE_OBJECT DeviceObject,
-    _In_ DEVICE_ACTION Action,
-    _Out_opt_ PPI_QUERY_REMOVE_DATA RemoveData);
 
 //
 // PnP notifications

@@ -9,7 +9,6 @@
 
 static DECLSPEC_ALIGN(16) UCHAR KiRiscvPanicStack[KERNEL_STACK_SIZE];
 KSCHEDULER_SUBNODE KiNode0SubNode;
-PCONTEXT KiProcessorContext[MAXIMUM_PROCESSORS];
 
 ULONG
 NTAPI
@@ -77,7 +76,6 @@ KiRiscvInitializePcr(PKPCR Pcr, PKTHREAD Thread, ULONG_PTR HartId,
     Prcb->IdleThread = Thread;
     Prcb->DpcStack = DpcStack;
     Prcb->Number = Number;
-    KiPrcbContext(Prcb) = &Prcb->ProcessorState.ContextFrame;
 #ifndef CONFIG_SMP
     Prcb->BuildType |= PRCB_BUILD_UNIPROCESSOR;
 #endif

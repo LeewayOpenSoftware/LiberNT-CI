@@ -172,20 +172,6 @@ KeSetContextReturnRegister(PCONTEXT Context, ULONG_PTR ReturnValue)
 
 FORCEINLINE
 ULONG_PTR
-KeGetContextServiceArgument3(PCONTEXT Context)
-{
-    return Context->R8;
-}
-
-FORCEINLINE
-ULONG_PTR
-KeGetContextServiceArgument4(PCONTEXT Context)
-{
-    return Context->R9;
-}
-
-FORCEINLINE
-ULONG_PTR
 KeGetContextStackRegister(PCONTEXT Context)
 {
     return Context->Rsp;
@@ -221,7 +207,7 @@ KiGetLinkedTrapFrame(PKTRAP_FRAME TrapFrame)
 
 typedef struct _KI_SERVICE_EXCEPTION_STATE
 {
-    KEXCEPTION_FRAME ExceptionFrame;
+    UCHAR Reserved;
 } KI_SERVICE_EXCEPTION_STATE, *PKI_SERVICE_EXCEPTION_STATE;
 
 FORCEINLINE
@@ -235,18 +221,9 @@ KiEnterServiceException(
     _Out_ PKI_SERVICE_EXCEPTION_STATE State)
 {
     UNREFERENCED_PARAMETER(Context);
-    UNREFERENCED_PARAMETER(Thread);
-    UNREFERENCED_PARAMETER(TrapFrame);
     UNREFERENCED_PARAMETER(PreviousMode);
-
-    /* A system service has no frame of nonvolatiles; the state carries one */
-    if (ExceptionFrame == NULL)
-    {
-        /* FIXME: nonvolatiles a partial context leaves out are zeroed, not kept */
-        RtlZeroMemory(&State->ExceptionFrame, sizeof(State->ExceptionFrame));
-        ExceptionFrame = &State->ExceptionFrame;
-    }
-
+    UNREFERENCED_PARAMETER(State);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
     return ExceptionFrame;
 }
 
@@ -268,7 +245,8 @@ KiLeaveServiceException(
     _In_ PKTHREAD Thread,
     _In_ PKTRAP_FRAME TrapFrame)
 {
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(TrapFrame);
 }
 
 FORCEINLINE
@@ -769,10 +747,6 @@ KiClearDpcThreadState(
 #define KiPrcbDpcTimeLimit(Prcb) ((Prcb)->DpcTimeLimit)
 #define KiPrcbDpcWatchdogCount(Prcb) ((Prcb)->DpcWatchdogCount)
 #define KiPrcbDpcWatchdogPeriod(Prcb) ((Prcb)->DpcWatchdogPeriod)
-#define KiPrcbContext(Prcb) ((Prcb)->Context)
-#define KI_PRCB_CPU_TYPE_OFFSET FIELD_OFFSET(KPRCB, CpuType)
-#define KI_PRCB_VENDOR_STRING_OFFSET FIELD_OFFSET(KPRCB, VendorString)
-#define KI_PRCB_CONTEXT_OFFSET FIELD_OFFSET(KPRCB, Context)
 #define KiClockTickSuspended(Prcb) FALSE
 
 #define _KeIsExecutingDpc() ((BOOLEAN)__readgsbyte(FIELD_OFFSET(KIPCR, Prcb.DpcRoutineActive)))

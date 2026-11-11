@@ -8,10 +8,6 @@
 #define KI_USER_MODE_CALLBACK_ENTRY KiCallUserMode
 #endif
 
-#ifndef KI_DPC_TARGET_PROCESSOR_OFFSET
-#define KI_DPC_TARGET_PROCESSOR_OFFSET MAXIMUM_PROCESSORS
-#endif
-
 #ifdef __cplusplus
 extern "C"
 {
@@ -99,8 +95,10 @@ extern KSPIN_LOCK KiNmiCallbackListLock;
 extern PVOID KeUserApcDispatcher;
 extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;
+#if defined(_M_ARM64)
 extern PVOID KeUserExceptionDispatcherWorker;
 extern PVOID KeUserEmulationDispatcher;
+#endif
 extern PVOID KeRaiseUserExceptionDispatcher;
 #if (NTDDI_VERSION < NTDDI_WIN8)
 VOID
@@ -151,6 +149,7 @@ extern USHORT KeProcessorRevision;
 extern ULONG64 KeFeatureBits;
 extern KAFFINITY KeActiveProcessors;
 extern ULONG KeBugCheckActive;
+BOOLEAN KiClaimBugCheckEntry(PKPRCB Prcb);
 BOOLEAN KiIsBugCheckEntryOwner(PKPRCB Prcb);
 VOID KiSetFreezeFailure(VOID);
 BOOLEAN KiHasFreezeFailure(VOID);
@@ -210,11 +209,6 @@ KiQueryProcessorTopology(
     _Out_writes_to_opt_(MaxSets, *SetCount) PKAFFINITY Sets,
     _In_ ULONG MaxSets,
     _Out_ PULONG SetCount);
-
-CODE_SEG("INIT")
-VOID
-NTAPI
-KiCaptureProcessorCaches(VOID);
 extern ETHREAD KiInitialThread;
 extern EPROCESS KiInitialProcess;
 extern PULONG KiInterruptTemplateObject;
@@ -235,6 +229,7 @@ extern ULONG KiServiceLimit;
 extern LIST_ENTRY KeBugcheckCallbackListHead, KeBugcheckReasonCallbackListHead;
 extern KSPIN_LOCK BugCheckCallbackLock;
 extern KDPC KiTimerExpireDpc;
+extern KSPIN_LOCK KiTimerAdjustmentLock;
 extern KTIMER_TABLE_ENTRY KiTimerTableListHead[TIMER_TABLE_SIZE];
 extern FAST_MUTEX KiGenericCallDpcMutex;
 extern LIST_ENTRY KiProfileListHead, KiProfileSourceListHead;
@@ -248,6 +243,10 @@ extern KAFFINITY KiIdleSummary;
 extern PVOID KeUserApcDispatcher;
 extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;
+#if defined(_M_ARM64)
+extern PVOID KeUserExceptionDispatcherWorker;
+extern PVOID KeUserEmulationDispatcher;
+#endif
 extern PVOID KeRaiseUserExceptionDispatcher;
 extern ULONG KeTimeIncrement;
 extern ULONG KeTimeAdjustment;
@@ -255,8 +254,7 @@ extern BOOLEAN KiTimeAdjustmentEnabled;
 extern BOOLEAN KiRelaxedTiming;
 extern LONG KiTickOffset;
 extern ULONG KiFreezeFlag;
-extern ULONG KiDPCTimeoutSeconds;
-extern ULONG KiDPCWatchdogSeconds;
+extern ULONG KiDPCTimeout;
 extern PGDI_BATCHFLUSH_ROUTINE KeGdiFlushUserBatch;
 
 NTSTATUS
@@ -407,10 +405,6 @@ KiIdleSchedule(
     IN PKPRCB Prcb
 );
 
-VOID
-FASTCALL
-KiYieldDelayExecution(VOID);
-
 typedef enum _KI_BALANCE_REASON
 {
     KiBalanceWakePlacement = 1,
@@ -441,18 +435,15 @@ KiSetAffinityThread(
     IN KAFFINITY Affinity
 );
 
-KAFFINITY
-FASTCALL
-KiThreadCpuSetAffinity(
-    IN PKTHREAD Thread,
-    IN KAFFINITY Affinity
-);
-
 PKTHREAD
 FASTCALL
 KiSelectNextThread(
     IN PKPRCB Prcb
 );
+
+BOOLEAN
+FASTCALL
+KiSignalTimer(IN PKTIMER Timer);
 
 BOOLEAN
 FASTCALL
@@ -717,23 +708,6 @@ KeSwitchKernelStack(
     IN PVOID StackLimit
 );
 
-/* Each architecture runs KiRunStackCallout(Context) with its stack pointer moved to StackTop */
-VOID
-FASTCALL
-KiCallOnKernelStack(
-    _In_ PVOID Context,
-    _In_ PVOID StackTop);
-
-VOID
-FASTCALL
-KiRunStackCallout(
-    _In_ PVOID Context);
-
-VOID
-NTAPI
-KiDeleteCalloutStacks(
-    _Inout_ PKTHREAD Thread);
-
 VOID
 NTAPI
 KeRundownThread(VOID);
@@ -848,12 +822,6 @@ KeInitializeProcess(
 
 VOID
 NTAPI
-KeUninitializeProcess(
-    _Inout_ struct _KPROCESS *Process
-);
-
-VOID
-NTAPI
 KeSetQuantumProcess(
     IN PKPROCESS Process,
     IN UCHAR Quantum
@@ -955,16 +923,6 @@ KeInitializeEventPair(PKEVENT_PAIR EventPair);
 
 VOID
 NTAPI
-KiSchedulerApcTerminate(
-    _In_ PKAPC Apc,
-    _Inout_ PKNORMAL_ROUTINE *NormalRoutine,
-    _Inout_ PVOID *NormalContext,
-    _Inout_ PVOID *SystemArgument1,
-    _Inout_ PVOID *SystemArgument2
-);
-
-VOID
-NTAPI
 KiInitializeUserApc(
     IN PKEXCEPTION_FRAME Reserved,
     IN PKTRAP_FRAME TrapFrame,
@@ -1029,26 +987,6 @@ KeQueryTotalCycleTimeThread(
 VOID
 KiDisplayAndLogBugCheckString(
     _In_z_ PCSTR String);
-
-BOOLEAN
-NTAPI
-KiReadValidMemory(
-    _Out_writes_bytes_(Size) PVOID Buffer,
-    _In_ ULONG_PTR Address,
-    _In_ ULONG Size);
-
-/* Moves a context to its caller without taking a lock; CallerFrame says its program counter is a return address */
-BOOLEAN
-NTAPI
-KiUnwindFrame(
-    _Inout_ PCONTEXT Context,
-    _In_ BOOLEAN CallerFrame);
-
-/* The same through a chain of records holding the caller's frame pointer and then the return address */
-BOOLEAN
-NTAPI
-KiUnwindFrameRecord(
-    _Inout_ PCONTEXT Context);
 
 #ifdef _WIN64
 /* Architecture register dump for the bugcheck screen and log. */
@@ -1230,7 +1168,6 @@ NTSTATUS
 NTAPI
 KiContinue(
     IN PCONTEXT Context,
-    IN PCONTEXT SourceContext,
     IN PKEXCEPTION_FRAME ExceptionFrame,
     IN PKTRAP_FRAME TrapFrame
 );
@@ -1238,9 +1175,8 @@ KiContinue(
 NTSTATUS
 NTAPI
 KiContinueExtendedState(
-    _In_ PCONTEXT SourceContext,
-    _In_ ULONG ContextFlags,
-    _In_ KPROCESSOR_MODE PreviousMode);
+    _In_ PCONTEXT Context,
+    _In_ ULONG ContextFlags);
 
 #ifndef _M_AMD64
 VOID
@@ -1357,11 +1293,6 @@ KxThawExecution(
 
 BOOLEAN
 NTAPI
-KxIsFreezeOwner(
-    _In_ PKPRCB Prcb);
-
-BOOLEAN
-NTAPI
 KeFreezeExecution(IN PKTRAP_FRAME TrapFrame,
                   IN PKEXCEPTION_FRAME ExceptionFrame);
 
@@ -1420,21 +1351,6 @@ VOID
 FASTCALL
 KiRetireDpcList(
     IN PKPRCB Prcb
-);
-
-CHAR
-NTAPI
-KeExchangePriorityFloorThread(
-    _Inout_ PKTHREAD Thread,
-    _Inout_ PCHAR StoredFloor,
-    _In_ LONG NewFloor
-);
-
-BOOLEAN
-FASTCALL
-KiIsDpcThreadBusy(
-    _In_ PKPRCB Prcb,
-    _In_ PKTHREAD Thread
 );
 
 VOID
@@ -1544,27 +1460,6 @@ private:
 };
 
 }
-
-
-//
-// Processor group queries the kernel exports. The published headers declare
-// these only under SINGLE_GROUP_LEGACY_API, which this build does not define,
-// so they are declared here against the published prototypes.
-//
-ULONG
-NTAPI
-KeQueryActiveProcessorCount(
-    _Out_opt_ PKAFFINITY ActiveProcessors);
-
-USHORT
-NTAPI
-KeQueryHighestNodeNumber(
-    VOID);
-
-USHORT
-NTAPI
-KeGetCurrentNodeNumber(
-    VOID);
 
 #endif
 

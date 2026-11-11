@@ -1426,10 +1426,9 @@ MiDeleteSection(
     }
 }
 
-CODE_SEG("INIT")
+static
 NTSTATUS
-NTAPI
-MmCreatePhysicalMemorySection(VOID)
+MiCreatePhysicalMemorySection(VOID)
 {
     UNICODE_STRING Name = RTL_CONSTANT_STRING(L"\\Device\\PhysicalMemory");
     OBJECT_ATTRIBUTES ObjectAttributes;
@@ -1530,6 +1529,7 @@ MiSectionInitialize(VOID)
     if (!NT_SUCCESS(Status))
         return Status;
 
+    MiCreatePhysicalMemorySection();
     return STATUS_SUCCESS;
 }
 
@@ -1778,28 +1778,8 @@ MmCreateSection(
     _In_opt_ HANDLE FileHandle,
     _In_opt_ PFILE_OBJECT FileObject)
 {
-    /* Whatever the thread was doing before, what this caller passes is the kernel's own */
-    return MiCreateSectionWithMode(SectionObject, KernelMode, FALSE, DesiredAccess, ObjectAttributes,
+    return MiCreateSectionWithMode(SectionObject, ExGetPreviousMode(), FALSE, DesiredAccess, ObjectAttributes,
                                    MaximumSize, SectionPageProtection, AllocationAttributes, FileHandle, FileObject);
-}
-
-/*
- * The same, for a scanner that only reads the file: the file stays free to be
- * renamed, overwritten or deleted while such a section is open.
- */
-NTSTATUS
-NTAPI
-MmCreateSectionForDataScan(
-    _Out_ PVOID *SectionObject,
-    _In_ ACCESS_MASK DesiredAccess,
-    _In_opt_ POBJECT_ATTRIBUTES ObjectAttributes,
-    _Inout_ PLARGE_INTEGER MaximumSize,
-    _In_ ULONG SectionPageProtection,
-    _In_ ULONG AllocationAttributes,
-    _In_ PFILE_OBJECT FileObject)
-{
-    return MiCreateSectionWithMode(SectionObject, KernelMode, TRUE, DesiredAccess, ObjectAttributes,
-                                   MaximumSize, SectionPageProtection, AllocationAttributes, NULL, FileObject);
 }
 
 BOOLEAN
@@ -2556,9 +2536,8 @@ NtCreateSection(
         return STATUS_DYNAMIC_CODE_BLOCKED;
     }
 
-    Status = MiCreateSectionWithMode(&SectionObject, PreviousMode, FALSE, DesiredAccess, ObjectAttributes,
-                                     &SafeMaximumSize, SectionPageProtection, AllocationAttributes, FileHandle,
-                                     NULL);
+    Status = MmCreateSection(&SectionObject, DesiredAccess, ObjectAttributes, &SafeMaximumSize,
+                             SectionPageProtection, AllocationAttributes, FileHandle, NULL);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -2769,7 +2748,6 @@ NtMapViewOfSection(
         if (NT_SUCCESS(Status) && Section->Control->Image &&
             Section->Control->ImageInformation.ImageContainsCode &&
             Section->Control->ImageInformation.Machine != PsGetProcessMachine(Process) &&
-            Section->Control->ImageInformation.Machine != PsWow64GetProcessMachine(Process) &&
             Section->Control->ImageInformation.Machine != IMAGE_FILE_MACHINE_NATIVE &&
             !(Section->Control->ImageInformation.Machine == IMAGE_FILE_MACHINE_ARM64EC &&
               PsGetProcessMachine(Process) == IMAGE_FILE_MACHINE_ARM64))

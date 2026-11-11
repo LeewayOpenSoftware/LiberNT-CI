@@ -64,7 +64,7 @@ MiRotateReleaseLocked(
     {
         if (Vad->RotateFrames != NULL && Vad->RotateFrames[i] != 0)
         {
-            MI_ASSERT(MiPfnTracked(&Space->System->Pfn, Vad->RotateFrames[i]));
+            MI_ASSERT(Vad->RotateFrames[i] < Space->System->Pfn.FrameCount);
             MiPfnShareDecrement(&Space->System->Pfn, (ULONG)Vad->RotateFrames[i], TRUE);
         }
 
@@ -117,7 +117,7 @@ MiRotatePopulateLocked(
             break;
         }
 
-        MI_ASSERT(Frame != 0 && MiPfnTracked(&Space->System->Pfn, Frame));
+        MI_ASSERT(Frame != 0 && Frame < Space->System->Pfn.FrameCount);
         MiPfnInitializePage(&Space->System->Pfn, Frame, MiPtSlotAddress(Slot, TableFrame, Va), TableFrame,
                             MiSoftMake(MiSoftDemandZero, Vad->Protection, 0), 0);
         MiPtWrite(Space, Va, Slot, TableFrame,
@@ -155,7 +155,7 @@ MiRotateQuery(
 
             Mapped[i] = MiArchPteIsValid(Pte) ? (MI_FRAME_NUMBER)MiArchPteFrame(Pte) : 0;
             Regular[i] = Vad->RotateFrames[First + i];
-            MI_ASSERT(Regular[i] != 0 && MiPfnTracked(&Space->System->Pfn, Regular[i]));
+            MI_ASSERT(Regular[i] != 0 && Regular[i] < Space->System->Pfn.FrameCount);
         }
     }
 
@@ -213,7 +213,7 @@ MiRotateApply(
         }
 
         MI_ASSERT(MiArchPteRead(Slot) == 0);
-        MI_ASSERT(Frames != NULL || (Frame != 0 && MiPfnTracked(&Space->System->Pfn, Frame)));
+        MI_ASSERT(Frames != NULL || (Frame != 0 && Frame < Space->System->Pfn.FrameCount));
         MiPtWrite(Space, Va, Slot, TableFrame,
                   MiArchPteMakeLeaf(Frame, Vad->Protection,
                                     MI_LEAF_USER | MI_LEAF_DIRTY | ((Frames != NULL) ? LeafFlags : 0)));

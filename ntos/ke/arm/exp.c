@@ -276,13 +276,11 @@ KeRaiseUserException(
 NTSTATUS
 NTAPI
 KiContinueExtendedState(
-    _In_ PCONTEXT SourceContext,
-    _In_ ULONG ContextFlags,
-    _In_ KPROCESSOR_MODE PreviousMode)
+    _In_ PCONTEXT Context,
+    _In_ ULONG ContextFlags)
 {
-    UNREFERENCED_PARAMETER(SourceContext);
+    UNREFERENCED_PARAMETER(Context);
     UNREFERENCED_PARAMETER(ContextFlags);
-    UNREFERENCED_PARAMETER(PreviousMode);
 
     return STATUS_SUCCESS;
 }

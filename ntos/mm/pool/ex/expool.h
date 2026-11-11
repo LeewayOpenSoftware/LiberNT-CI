@@ -71,13 +71,6 @@ ExpPoolTypeFromHeap(_In_ ULONG HeapIndex)
 }
 
 PVOID ExpPoolAllocate(_In_ ULONG HeapIndex, _In_ SIZE_T NumberOfBytes, _In_ ULONG Tag, _In_ ULONG HeapFlags);
-typedef enum _EX_POOL_GROWTH
-{
-    ExpPoolGrowthFailed,
-    ExpPoolGrowthExtended,
-    ExpPoolGrowthRoom
-} EX_POOL_GROWTH;
-
-EX_POOL_GROWTH ExpPoolGrow(_In_ ULONG HeapIndex, _In_ SIZE_T NumberOfBytes, _In_ LONG Generation);
+BOOLEAN ExpPoolGrow(_In_ ULONG HeapIndex, _In_ SIZE_T NumberOfBytes, _In_ LONG Generation);
 PPOOL_HEAP ExpPoolHeapFromAddress(_In_ PVOID Block, _Out_ PULONG HeapIndex);
 VOID MiDumpPoolConsumers(_In_ BOOLEAN CalledFromDbg, _In_ ULONG Tag, _In_ ULONG Mask, _In_ ULONG Flags);

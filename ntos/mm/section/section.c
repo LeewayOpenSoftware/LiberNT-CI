@@ -815,7 +815,7 @@ MiSegmentAdoptFrame(
     PMI_PTE Proto;
     MI_PTE Pte;
 
-    if (Segment->Kind != MiSegmentPageFileBacked || !MiPfnTracked(&System->Pfn, Frame))
+    if (Segment->Kind != MiSegmentPageFileBacked || Frame >= System->Pfn.FrameCount)
         return STATUS_INVALID_PARAMETER;
 
     MI_MUTEX_ACQUIRE(&Segment->Lock);
@@ -1565,8 +1565,7 @@ MiReleaseViewPageEx(
     if (Clones && MiCloneDeletePage(Space, VirtualAddress, Slot, TableFrame, NewValue))
         return;
 
-    if (!MiArchPteIsValid(Pte) || !MiPfnTracked(&System->Pfn, MiArchPteFrame(Pte)) ||
-        !(MI_PFN_FLAGS(&System->Pfn.Pfn[MiArchPteFrame(Pte)]) & MI_PFN_FLAG_PROTOTYPE))
+    if (!MiArchPteIsValid(Pte) || !(MI_PFN_FLAGS(&System->Pfn.Pfn[MiArchPteFrame(Pte)]) & MI_PFN_FLAG_PROTOTYPE))
     {
         if (Pte == NewValue)
             return;
@@ -1630,7 +1629,7 @@ MiTlbBatchFlush(
 
         MI_ASSERT((Entry->Va & (PAGE_SIZE - 1)) == 0);
         MI_ASSERT(i == 0 || Batch->Entry[i - 1].Va <= Entry->Va);
-        MI_ASSERT(MiPfnTracked(&System->Pfn, Entry->Frame));
+        MI_ASSERT(Entry->Frame < System->Pfn.FrameCount);
         MI_ASSERT(MI_ATOMIC_READ32(&System->Pfn.Pfn[Entry->Frame].ShareCount) > 0);
         MI_ASSERT((Entry->Segment == NULL) == (Entry->Proto == NULL));
         MI_ASSERT(Entry->Clone == NULL || (Entry->Segment == NULL && !Entry->Private));
@@ -1719,7 +1718,7 @@ MiTlbBatchInsert(
 
     MI_ASSERT(Batch != NULL && Batch->Count < MI_TLB_BATCH_SIZE);
     MI_ASSERT((VirtualAddress & (PAGE_SIZE - 1)) == 0);
-    MI_ASSERT(MiPfnTracked(&Space->System->Pfn, Frame));
+    MI_ASSERT(Frame < Space->System->Pfn.FrameCount);
     MI_ASSERT(MI_ATOMIC_READ32(&Space->System->Pfn.Pfn[Frame].ShareCount) > 0);
     MI_ASSERT((Segment == NULL) == (Proto == NULL));
     MI_ASSERT(Clone == NULL || (Segment == NULL && !Private));
@@ -2079,8 +2078,7 @@ MiSetMappedViewProtection(
             continue;
 
         if (Pte == 0 || MiSoftKind(Pte) == MiSoftPrototype ||
-            (MiArchPteIsValid(Pte) && MiPfnTracked(&System->Pfn, MiArchPteFrame(Pte)) &&
-             (MI_PFN_FLAGS(&System->Pfn.Pfn[MiArchPteFrame(Pte)]) & MI_PFN_FLAG_PROTOTYPE)))
+            (MiArchPteIsValid(Pte) && (MI_PFN_FLAGS(&System->Pfn.Pfn[MiArchPteFrame(Pte)]) & MI_PFN_FLAG_PROTOTYPE)))
         {
             MiReleaseViewPage(Space, Vad, Va, Slot, TableFrame, MiSoftMake(MiSoftPrototype, Protection, 0));
         }
@@ -2900,7 +2898,7 @@ MiAssertPendingReads(
         MI_ASSERT(Link->Flink->Blink == Link && Link->Blink->Flink == Link);
         MI_ASSERT(Read->Segment == Segment && Read->Proto != NULL && Read->Mapping != NULL);
         MI_ASSERT(MiSoftKind(Read->Original) == MiSoftSubsection);
-        MI_ASSERT(MiPfnTracked(&Segment->System->Pfn, Read->Frame) && Read->Bytes <= PAGE_SIZE);
+        MI_ASSERT(Read->Frame < Segment->System->Pfn.FrameCount && Read->Bytes <= PAGE_SIZE);
         for (OtherLink = Segment->PendingReads.Flink; OtherLink != Link; OtherLink = OtherLink->Flink)
         {
             PMI_SEGMENT_READ Other = CONTAINING_RECORD(OtherLink, MI_SEGMENT_READ, Link);
@@ -3355,17 +3353,10 @@ MiWritePrototypePage(
 
         if (NT_SUCCESS(Status))
         {
-            if (MI_MUTEX_TRY_ACQUIRE(&Segment->FlushLock))
-            {
-                Status = MiSegmentWritePage(Segment, Page, Frame, Entry->OriginalPte);
-                MiPfnWriteComplete(&System->Pfn, Frame, Entry->OriginalPte, (BOOLEAN)NT_SUCCESS(Status));
-                MI_MUTEX_RELEASE(&Segment->FlushLock);
-            }
-            else
-            {
-                Status = STATUS_CANT_WAIT;
-                MiPfnWriteComplete(&System->Pfn, Frame, Entry->OriginalPte, FALSE);
-            }
+            MI_MUTEX_ACQUIRE(&Segment->FlushLock);
+            Status = MiSegmentWritePage(Segment, Page, Frame, Entry->OriginalPte);
+            MiPfnWriteComplete(&System->Pfn, Frame, Entry->OriginalPte, (BOOLEAN)NT_SUCCESS(Status));
+            MI_MUTEX_RELEASE(&Segment->FlushLock);
 
             if (Segment->FileOps.ReleaseForModWrite != NULL)
                 Segment->FileOps.ReleaseForModWrite(Segment->FileContext, ModWriteToken);

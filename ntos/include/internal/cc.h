@@ -41,19 +41,8 @@
 //
 extern ULONG CcRosTraceLevel;
 extern LIST_ENTRY DirtyVacbListHead;
-
-VOID
-NTAPI
-CcNtQueryDirtyPages(
-    _Out_ PULONG TotalDirtyPages,
-    _Out_ PULONG DirtyPageThreshold
-);
-
-VOID
-NTAPI
-CcNtSetDirtyPageThreshold(
-    _In_ ULONG DirtyPageThreshold
-);
+extern ULONG CcDirtyPageThreshold;
+extern ULONG CcTotalDirtyPages;
 extern LIST_ENTRY CcDeferredWrites;
 extern KSPIN_LOCK CcDeferredWriteSpinLock;
 extern ULONG CcNumberWorkerThreads;

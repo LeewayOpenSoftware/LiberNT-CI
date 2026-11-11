@@ -2112,6 +2112,7 @@ WmipNameEventInstance(
     if (!NewWnode)
         return Wnode;
 
+    ExFreePool(Wnode);
     return NewWnode;
 }
 

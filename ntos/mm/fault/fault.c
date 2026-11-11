@@ -256,12 +256,12 @@ MiMakePageValid(
     _In_ ULONG Protection,
     _In_ BOOLEAN Dirty)
 {
-    ULONG Flags = MI_SPACE_LEAF_OWNER(Space) | (Dirty ? MI_LEAF_DIRTY : 0);
+    ULONG Flags = (Space->IsSystem ? MI_LEAF_GLOBAL : MI_LEAF_USER) | (Dirty ? MI_LEAF_DIRTY : 0);
 
     MI_ASSERT(Slot != NULL);
     MI_ASSERT((VirtualAddress & (PAGE_SIZE - 1)) == 0);
-    MI_ASSERT(MiPfnTracked(&Space->System->Pfn, TableFrame));
-    MI_ASSERT(MiPfnTracked(&Space->System->Pfn, Frame));
+    MI_ASSERT(TableFrame < Space->System->Pfn.FrameCount);
+    MI_ASSERT(Frame < Space->System->Pfn.FrameCount);
     MI_ASSERT(MI_ATOMIC_READ32(&Space->System->Pfn.Pfn[Frame].ShareCount) > 0);
     MI_ASSERT(MI_PROT_IS_ACCESSIBLE(Protection));
     MI_ASSERT(!MiArchPteIsValid(MiArchPteRead(Slot)));

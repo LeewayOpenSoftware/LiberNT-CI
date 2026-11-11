@@ -363,7 +363,7 @@
 @ stdcall IoAcquireRemoveLockEx(ptr ptr str long long)
 @ stdcall IoAcquireVpbSpinLock(ptr)
 @ extern IoAdapterObjectType
-@ stdcall IoAllocateAdapterChannel(ptr ptr long ptr ptr) IopAllocateAdapterChannel
+@ stdcall IoAllocateAdapterChannel(ptr ptr long ptr ptr)
 @ stdcall IoAllocateController(ptr ptr ptr ptr)
 @ stdcall IoAllocateDriverObjectExtension(ptr ptr long ptr)
 @ stdcall IoAllocateErrorLogEntry(ptr long)
@@ -2151,9 +2151,9 @@
 @ stdcall -arch=win64 EtwSetInformation(int64 long ptr long)
 @ stdcall EtwTelemetryCoverageReport(ptr)
 @ stub -arch=win64 EtwWriteEndScenario
-@ stdcall EtwWriteEx(int64 ptr int64 long ptr ptr long ptr)
+@ stub -arch=win64 EtwWriteEx
 @ stub -arch=win64 EtwWriteStartScenario
-@ stdcall EtwWriteString(int64 long int64 ptr ptr)
+@ stub -arch=win64 EtwWriteString
 @ stdcall -arch=win64 EtwWriteTransfer(int64 ptr ptr ptr long ptr)
 @ stdcall EtwpDisableStackWalkApc()
 @ stdcall EtwpReenableStackWalkApc(long)
@@ -2282,7 +2282,7 @@
 @ stub -arch=win64 ExUnregisterExtension
 @ stdcall -arch=win64 ExUnsubscribeWnfStateChange(ptr)
 @ stub -arch=win64 ExUpdateLicenseData
-@ fastcall -arch=win64 ExfTryAcquirePushLockShared(ptr)
+@ stub -arch=win64 ExfTryAcquirePushLockShared
 @ cdecl FirstEntrySList(ptr)
 @ stdcall FsRtlAcknowledgeEcp(ptr)
 @ stub -arch=win64 FsRtlAcquireEofLock
@@ -2822,12 +2822,12 @@
 @ stdcall -arch=win64 PcwRegister(ptr ptr)
 @ stdcall -arch=win64 PcwUnregister(ptr)
 @ stub -arch=win64 PfFileInfoNotify
-@ stdcall PoClearPowerRequest(ptr long)
+@ stub -arch=win64 PoClearPowerRequest
 @ stub -arch=win64 PoCpuIdledSinceLastCallImprecise
 @ stdcall PoCreatePowerLimitRequest(ptr ptr ptr ptr)
-@ stdcall PoCreatePowerRequest(ptr ptr ptr)
+@ stub -arch=win64 PoCreatePowerRequest
 @ stdcall PoDeletePowerLimitRequest(ptr)
-@ stdcall PoDeletePowerRequest(ptr)
+@ stub -arch=win64 PoDeletePowerRequest
 @ stub -arch=arm64 PoDirectedDripsClearDeviceFlags
 @ stub -arch=arm64 PoDirectedDripsSetDeviceFlags
 @ stdcall PoDisableSleepStates(long long ptr)
@@ -2865,7 +2865,7 @@
 @ stub -arch=win64 PoSetFixedWakeSource
 @ stub -arch=win64 PoSetPowerButtonHoldState
 @ stdcall PoSetPowerLimitValue(ptr ptr long ptr)
-@ stdcall PoSetPowerRequest(ptr long)
+@ stub -arch=win64 PoSetPowerRequest
 @ stub -arch=win64 PoSetSystemWakeDevice
 @ stdcall PoSetUserPresent(long)
 @ stub -arch=win64 PoStartDeviceBusy
@@ -3016,7 +3016,7 @@
 @ stub -arch=win64 RtlClearBitsEx
 @ stdcall RtlCmDecodeMemIoResource(ptr ptr)
 @ stdcall RtlCmEncodeMemIoResource(ptr long int64 int64)
-@ stdcall RtlCompareAltitudes(ptr ptr)
+@ stub -arch=win64 RtlCompareAltitudes
 @ stub -arch=win64 RtlCompareExchangePointerMapping
 @ stub -arch=win64 RtlCompareExchangePropertyStore
 @ stdcall RtlCompareUnicodeStrings(wstr long wstr long long)

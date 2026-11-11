@@ -175,13 +175,6 @@ PspArchSetInstrumentationCallback(
     return STATUS_NOT_SUPPORTED;
 }
 
-BOOLEAN
-NTAPI
-PspArchManagesExecutableWrites(VOID)
-{
-    return FALSE;
-}
-
 VOID
 NTAPI
 PspArchInitializeUserThreadStartup(

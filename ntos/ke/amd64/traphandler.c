@@ -103,10 +103,6 @@ KiDpcInterruptHandler(VOID)
             OldThread->WaitReason = WrDispatchInt;
 
             KxQueueReadyThread(OldThread, Prcb);
-
-            /* A thread placed here by another processor may still be leaving it */
-            KiWaitForThreadSwapOut(NewThread);
-
             KiSwapContext(APC_LEVEL, OldThread);
         }
     }
@@ -398,4 +394,15 @@ KiSystemCallHandler(
     _SEH2_END;
 
     return (PVOID)DescriptorTable->Base[ServiceNumber];
+}
+
+
+// FIXME: we need to
+VOID
+KiSystemService(IN PKTHREAD Thread,
+                IN PKTRAP_FRAME TrapFrame,
+                IN ULONG Instruction)
+{
+    UNIMPLEMENTED;
+    __debugbreak();
 }

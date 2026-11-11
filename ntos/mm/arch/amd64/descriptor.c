@@ -50,8 +50,7 @@ static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
     TRUE,
     FALSE,
     0,
-    FALSE,
-    MI_AMD64_SESSION_TOP_ENTRIES
+    FALSE
 };
 
 const MI_ARCH_DESCRIPTOR *

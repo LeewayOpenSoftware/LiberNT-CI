@@ -219,14 +219,8 @@ CmpInitializeMachineDependentConfiguration(_In_ PLOADER_PARAMETER_BLOCK LoaderBl
                          &ObjectAttributes,
                          0,
                          NULL,
-                         REG_OPTION_VOLATILE,
+                         0,
                          &Disposition);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("ARM64: Failed to create the CentralProcessor key: 0x%lx\n", Status);
-        NtClose(SystemHandle);
-        return Status;
-    }
     NtClose(KeyHandle);
 
     /* Check if the key was newly created */

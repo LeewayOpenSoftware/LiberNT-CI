@@ -128,21 +128,9 @@ KdShowShutdownLog(
     VOID
 );
 
-BOOLEAN
-NTAPI
-KdScreenIsBootLog(
-    VOID
-);
-
 VOID
 NTAPI
 KdEnableBugCheckDebugger(
-    VOID
-);
-
-BOOLEAN
-NTAPI
-KdBugCheckDebuggerRequested(
     VOID
 );
 
@@ -735,10 +723,6 @@ extern PCHAR KdPrintCircularBuffer;
 extern ULONG KdPrintBufferSize;
 extern ULONG KdPrintBufferChanges;
 extern KSPIN_LOCK KdpPrintSpinLock;
-
-VOID
-NTAPI
-KdpResetPrintLock(VOID);
 
 extern BREAKPOINT_ENTRY KdpBreakpointTable[KD_BREAKPOINT_MAX];
 extern KD_BREAKPOINT_TYPE KdpBreakpointInstruction;

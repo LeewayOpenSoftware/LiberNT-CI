@@ -337,7 +337,6 @@ KiArm64PrepareBootPcr(_Inout_opt_ PLOADER_PARAMETER_BLOCK LoaderBlock)
     KeArm64CurrentPcr = Pcr;
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
-    Pcr->Prcb.Context = &Pcr->Prcb.ProcessorState.ContextFrame;
     Pcr->LockArray = Pcr->Prcb.LockQueue;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
 
@@ -916,7 +915,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
 
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
-    Pcr->Prcb.Context = &Pcr->Prcb.ProcessorState.ContextFrame;
     Pcr->LockArray = Pcr->Prcb.LockQueue;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
     Pcr->Prcb.CurrentThread = IdleThread;
@@ -976,7 +974,6 @@ KiInitializePcr(_In_ ULONG ProcessorNumber,
 
     Pcr->Self = (struct _KPCR *)Pcr;
     Pcr->CurrentPrcb = &Pcr->Prcb;
-    Pcr->Prcb.Context = &Pcr->Prcb.ProcessorState.ContextFrame;
     Pcr->LockArray = Pcr->Prcb.LockQueue;
     Pcr->CurrentIrql = PASSIVE_LEVEL;
 
@@ -1204,7 +1201,7 @@ KiInitializeSystem(_Inout_ PLOADER_PARAMETER_BLOCK LoaderBlock)
         (ULONG_PTR)(Value))
 
         LoaderBlock->Thread = ARM64_LDR_TO_VIRT(LoaderBlock->Thread);
-        LoaderBlock->Process = (ULONG_PTR)&KiInitialProcess.Pcb;
+        LoaderBlock->Process = ARM64_LDR_TO_VIRT(LoaderBlock->Process);
         if (LoaderBlock->KernelStack != 0)
         {
             LoaderBlock->KernelStack = ARM64_LDR_TO_VIRT(LoaderBlock->KernelStack);

@@ -46,10 +46,6 @@
 #define KeSetContextReturnRegister(Context, ReturnValue) \
     ((Context)->R0 = (ReturnValue))
 
-/* TODO: this port's debug service passes no third or fourth argument yet */
-#define KeGetContextServiceArgument3(Context) ((ULONG_PTR)0)
-#define KeGetContextServiceArgument4(Context) ((ULONG_PTR)0)
-
 //
 // Macro to get trap and exception frame from a thread stack
 //
@@ -202,8 +198,7 @@ KiEnterServiceException(
     UNREFERENCED_PARAMETER(Context);
     UNREFERENCED_PARAMETER(PreviousMode);
     UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Thread);
-    UNREFERENCED_PARAMETER(TrapFrame);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
     return ExceptionFrame;
 }
 
@@ -225,7 +220,8 @@ KiLeaveServiceException(
     _In_ PKTHREAD Thread,
     _In_ PKTRAP_FRAME TrapFrame)
 {
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(TrapFrame);
 }
 
 #define KiGetPreviousMode(tf) \

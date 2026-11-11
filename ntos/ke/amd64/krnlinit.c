@@ -177,6 +177,7 @@ KiSystemStartupBootStack(VOID)
     Prcb->NextThread = NULL;
     Prcb->IdleThread = Thread;
 
+    /* Initialize PRCB pool lookaside pointers */
     ExInitPoolLookasidePointers();
 
     /* Lower to APC_LEVEL */
@@ -260,7 +261,7 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
 
     /* Initialize the Timer Expiration DPC */
     KeInitializeDpc(&KiTimerExpireDpc, KiTimerExpiration, NULL);
-    KiSetTargetProcessorDpc(&KiTimerExpireDpc, 0);
+    KeSetTargetProcessorDpc(&KiTimerExpireDpc, 0);
 
     /* Initialize Profiling data */
     KeInitializeSpinLock(&KiProfileLock);

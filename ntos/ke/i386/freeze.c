@@ -27,15 +27,6 @@ KxThawExecution(
     UNIMPLEMENTED;
 }
 
-BOOLEAN
-NTAPI
-KxIsFreezeOwner(
-    _In_ PKPRCB Prcb)
-{
-    UNREFERENCED_PARAMETER(Prcb);
-    return FALSE;
-}
-
 KCONTINUE_STATUS
 NTAPI
 KxSwitchKdProcessor(

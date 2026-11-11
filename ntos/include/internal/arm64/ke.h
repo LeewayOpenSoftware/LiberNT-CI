@@ -6,9 +6,6 @@
 
 #pragma once
 
-/* Windows 11 ARM64 encodes an explicit DPC target as 0x800 plus the processor index */
-#define KI_DPC_TARGET_PROCESSOR_OFFSET 0x800
-
 #define KI_EMULATED_USER_MACHINE IMAGE_FILE_MACHINE_AMD64
 #define KI_EMULATED_USER_SYSTEM_DLL NULL
 
@@ -529,20 +526,6 @@ KeSetContextReturnRegister(
 
 FORCEINLINE
 ULONG_PTR
-KeGetContextServiceArgument3(_In_ PCONTEXT Context)
-{
-    return Context->X3;
-}
-
-FORCEINLINE
-ULONG_PTR
-KeGetContextServiceArgument4(_In_ PCONTEXT Context)
-{
-    return Context->X4;
-}
-
-FORCEINLINE
-ULONG_PTR
 KeGetContextStackRegister(
     _In_ PCONTEXT Context)
 {
@@ -752,8 +735,6 @@ extern ULONG KiArm64NumWatchpoints;
 extern UCHAR KiArm64UserStepArmed[MAXIMUM_PROCESSORS];
 extern UCHAR KiArm64UserDebugArmed[MAXIMUM_PROCESSORS];
 VOID NTAPI KiArm64LoadUserDebugState(_In_ PKTRAP_FRAME TrapFrame);
-PKINTERRUPT NTAPI KiArm64QueryInterrupt(_In_ ULONG IntId);
-ULONG NTAPI KiArm64QueryInterruptLimit(VOID);
 VOID NTAPI KiArm64SaveUserDebugState(_Inout_ PKTRAP_FRAME TrapFrame);
 VOID NTAPI KiArm64SaveUserDebugRegisters(_Out_ PBOOLEAN Valid, _Out_writes_(ARM64_MAX_BREAKPOINTS) PULONG Bcr,
                                          _Out_writes_(ARM64_MAX_BREAKPOINTS) PULONG64 Bvr,
@@ -1026,8 +1007,6 @@ KiEnterServiceException(
                                            KiArm64ContextNeedsNonvolatiles(Context, PreviousMode));
     }
 
-    if (ExceptionFrame == NULL) ExceptionFrame = &State->ExceptionFrame;
-
     *ExceptionFrame = *((PKEXCEPTION_FRAME)TrapFrame - 1);
     return ExceptionFrame;
 }
@@ -1148,11 +1127,6 @@ KiClearDpcThreadState(
 #define KiPrcbDpcTimeLimit(Prcb) ((Prcb)->DpcTimeLimitTicks)
 #define KiPrcbDpcWatchdogCount(Prcb) ((Prcb)->DpcWatchdogCount)
 #define KiPrcbDpcWatchdogPeriod(Prcb) ((Prcb)->DpcWatchdogPeriodTicks)
-#define KiPrcbContext(Prcb) ((Prcb)->Context)
-/* TODO: the debugger data offsets of the processor type and vendor string on ARM64 are not known */
-#define KI_PRCB_CPU_TYPE_OFFSET 0
-#define KI_PRCB_VENDOR_STRING_OFFSET 0
-#define KI_PRCB_CONTEXT_OFFSET FIELD_OFFSET(KPRCB, Context)
 #define KiClockTickSuspended(Prcb) FALSE
 
 #define KiIsUserModeTrap(TrapFrame) ((TrapFrame)->PreviousMode == UserMode)

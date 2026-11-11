@@ -144,7 +144,6 @@ KiInitializeContextThread(IN PKTHREAD Thread,
 
         /* Set the previous mode as user */
         TrapFrame->PreviousMode = UserMode;
-        TrapFrame->ExceptionActive = KEXCEPTION_ACTIVE_EXCEPTION_FRAME;
 
         /* Terminate the Exception Handler List */
         TrapFrame->ExceptionFrame = 0;

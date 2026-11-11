@@ -93,20 +93,6 @@ KeSetContextReturnRegister(PCONTEXT Context, ULONG_PTR ReturnValue)
 
 FORCEINLINE
 ULONG_PTR
-KeGetContextServiceArgument3(PCONTEXT Context)
-{
-    return Context->Ebx;
-}
-
-FORCEINLINE
-ULONG_PTR
-KeGetContextServiceArgument4(PCONTEXT Context)
-{
-    return Context->Edi;
-}
-
-FORCEINLINE
-ULONG_PTR
 KeGetContextStackRegister(PCONTEXT Context)
 {
     return Context->Esp;
@@ -158,8 +144,7 @@ KiEnterServiceException(
     UNREFERENCED_PARAMETER(Context);
     UNREFERENCED_PARAMETER(PreviousMode);
     UNREFERENCED_PARAMETER(State);
-    UNREFERENCED_PARAMETER(Thread);
-    UNREFERENCED_PARAMETER(TrapFrame);
+    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
     return ExceptionFrame;
 }
 
@@ -181,7 +166,8 @@ KiLeaveServiceException(
     _In_ PKTHREAD Thread,
     _In_ PKTRAP_FRAME TrapFrame)
 {
-    Thread->TrapFrame = KiGetLinkedTrapFrame(TrapFrame);
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(TrapFrame);
 }
 
 
@@ -1174,12 +1160,6 @@ extern ULONG KiDpcTimeCount[MAXIMUM_PROCESSORS];
 #define KiPrcbDpcTimeLimit(Prcb) ((Prcb)->DpcTimeLimit)
 #define KiPrcbDpcWatchdogCount(Prcb) ((Prcb)->DpcWatchDogCount)
 #define KiPrcbDpcWatchdogPeriod(Prcb) ((Prcb)->DpcWatchdogPeriod)
-extern PCONTEXT KiProcessorContext[MAXIMUM_PROCESSORS];
-#define KiPrcbContext(Prcb) (KiProcessorContext[(Prcb)->Number])
-#define KI_PRCB_CPU_TYPE_OFFSET FIELD_OFFSET(KPRCB, CpuType)
-#define KI_PRCB_VENDOR_STRING_OFFSET FIELD_OFFSET(KPRCB, VendorString)
-/* TODO: this processor block has no context pointer, so the debugger data names none */
-#define KI_PRCB_CONTEXT_OFFSET 0
 #define KiClockTickSuspended(Prcb) FALSE
 
 #define _KeIsExecutingDpc() ((BOOLEAN)__readfsbyte(FIELD_OFFSET(KIPCR, PrcbData.DpcRoutineActive)))

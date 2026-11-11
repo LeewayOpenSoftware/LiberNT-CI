@@ -52,11 +52,7 @@ static const MI_ARCH_DESCRIPTOR MiArchDescriptor =
     NULL,
     0,
     0xFFFFFFE000000000ULL,
-    TRUE,
-    FALSE,
-    0,
-    FALSE,
-    MI_RISCV64_SESSION_TOP_ENTRIES
+    TRUE
 };
 
 const MI_ARCH_DESCRIPTOR *

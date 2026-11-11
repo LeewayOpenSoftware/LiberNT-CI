@@ -295,7 +295,7 @@ MiSetPrivatePageProtectionAt(
     {
         ULONG Frame = (ULONG)MiArchPteFrame(Pte);
         PMI_PFN Entry = &System->Pfn.Pfn[Frame];
-        ULONG Flags = MI_SPACE_LEAF_OWNER(Space) |
+        ULONG Flags = (Space->IsSystem ? MI_LEAF_GLOBAL : MI_LEAF_USER) |
                       (MiArchPteIsDirty(Pte) ? MI_LEAF_DIRTY : 0);
 
         if (MiArchPteIsDirty(Pte))
@@ -1629,7 +1629,7 @@ MiWorkingSetPageLocked(
     Information->Protection = Protection;
     Information->ShareCount = 1;
 
-    if ((!MI_VAD_IS_DIRECT(Vad) || (Vad->Type == MiVadLarge && Vad->Segment != NULL)) && MiPfnTracked(Db, Frame))
+    if ((!MI_VAD_IS_DIRECT(Vad) || (Vad->Type == MiVadLarge && Vad->Segment != NULL)) && Frame < Db->FrameCount)
     {
         LONG Shares = MI_ATOMIC_READ32(&Db->Pfn[Frame].ShareCount);
 
@@ -1882,7 +1882,7 @@ MiMapFramesUser(
             MiPfnExecCleanClear(&Space->System->Pfn, (ULONG)Frames[i]);
         MiPtWrite(Space, Va, Slot, TableFrame,
                   MiArchPteMakeLeaf(Frames[i], Protection,
-                                    PageFlags | MI_LEAF_DIRTY | MI_SPACE_LEAF_OWNER(Space)));
+                                    PageFlags | MI_LEAF_DIRTY | (Space->IsSystem ? MI_LEAF_GLOBAL : MI_LEAF_USER)));
     }
 
     if (!NT_SUCCESS(Status))

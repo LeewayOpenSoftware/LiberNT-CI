@@ -12,14 +12,8 @@
 #define NDEBUG
 #include <debug.h>
 
-ULONG
-NTAPI
-HalpKdReadPciConfig(
-    _In_ ULONG BusNumber,
-    _In_ ULONG SlotNumber,
-    _Out_writes_bytes_(Length) PVOID Buffer,
-    _In_ ULONG Offset,
-    _In_ ULONG Length);
+#undef UNIMPLEMENTED
+#define UNIMPLEMENTED KdpDprintf("%s is unimplemented\n", __FUNCTION__)
 
 /* FUNCTIONS *****************************************************************/
 
@@ -179,25 +173,8 @@ KdpSysReadBusData(
     _In_ ULONG Length,
     _Out_ PULONG ActualLength)
 {
-    ULONG Read;
-
-    /* A processor frozen by NMI may hold the PCI configuration lock, so a stopped machine never waits on it */
-    if (KdEnteredDebugger && (BusDataType == PCIConfiguration))
-    {
-        Read = HalpKdReadPciConfig(BusNumber, SlotNumber, Buffer, Offset, Length);
-        if (Read == MAXULONG)
-        {
-            *ActualLength = 0;
-            return STATUS_DEVICE_BUSY;
-        }
-    }
-    else
-    {
-        Read = HalGetBusDataByOffset(BusDataType, BusNumber, SlotNumber, Buffer, Offset, Length);
-    }
-
-    *ActualLength = Read;
-    return (Read != 0) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+    UNIMPLEMENTED;
+    return STATUS_UNSUCCESSFUL;
 }
 
 NTSTATUS
@@ -211,15 +188,8 @@ KdpSysWriteBusData(
     _In_ ULONG Length,
     _Out_ PULONG ActualLength)
 {
-    /* FIXME: on a stopped machine this waits for a PCI configuration lock a frozen processor may hold */
-    *ActualLength = HalSetBusDataByOffset(BusDataType,
-                                          BusNumber,
-                                          SlotNumber,
-                                          Buffer,
-                                          Offset,
-                                          Length);
-
-    return (*ActualLength != 0) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+    UNIMPLEMENTED;
+    return STATUS_UNSUCCESSFUL;
 }
 
 /* KdpSysReadControlSpace/KdpSysWriteControlSpace live in kd64/kdcontrol.c,
@@ -343,10 +313,8 @@ NTSTATUS
 NTAPI
 KdpSysCheckLowMemory(IN ULONG Flags)
 {
-    UNREFERENCED_PARAMETER(Flags);
-
-    /* /NOLOWMEM is not honoured, so no pattern below 4 GB can have been corrupted */
-    return STATUS_SUCCESS;
+    UNIMPLEMENTED;
+    return STATUS_UNSUCCESSFUL;
 }
 
 NTSTATUS

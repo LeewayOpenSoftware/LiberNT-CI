@@ -230,56 +230,6 @@ KiSetupUserCalloutFrame(
 #endif
 }
 
-/* The system calls a callback makes need a stack's worth below the callout frame */
-#define KI_USER_CALLOUT_STACK (KERNEL_STACK_SIZE + PAGE_SIZE)
-
-typedef struct _KI_USER_CALLOUT
-{
-    PVOID *Result;
-    PULONG ResultLength;
-    NTSTATUS Status;
-} KI_USER_CALLOUT, *PKI_USER_CALLOUT;
-
-static
-VOID
-NTAPI
-KiUserCalloutOnStack(
-    _In_opt_ PVOID Parameter)
-{
-    PKI_USER_CALLOUT Callout = Parameter;
-
-    Callout->Status = KiCallUserMode(Callout->Result, Callout->ResultLength);
-}
-
-/*
- * Callbacks nest as deep as the count allows, not as deep as one stack goes:
- * once the thread's stack cannot give a callout the room it needs, the callout
- * goes on with a stack of its own, which is freed when the callback returns.
- */
-static
-NTSTATUS
-KiCallUserModeWithStack(
-    _Out_ PVOID *Result,
-    _Out_ PULONG ResultLength)
-{
-    KI_USER_CALLOUT Callout;
-    NTSTATUS Status;
-
-    if (NT_SUCCESS(MmGrowKernelStackEx(&Callout, KI_USER_CALLOUT_STACK)))
-        return KiCallUserMode(Result, ResultLength);
-
-    Callout.Result = Result;
-    Callout.ResultLength = ResultLength;
-    Callout.Status = STATUS_STACK_OVERFLOW;
-    Status = KeExpandKernelStackAndCalloutEx(KiUserCalloutOnStack,
-                                             &Callout,
-                                             KI_USER_CALLOUT_STACK,
-                                             TRUE,
-                                             NULL);
-
-    return NT_SUCCESS(Status) ? Callout.Status : Status;
-}
-
 NTSTATUS
 NTAPI
 KeUserModeCallback(
@@ -289,7 +239,7 @@ KeUserModeCallback(
     OUT PVOID *Result,
     OUT PULONG ResultLength)
 {
-    ULONG_PTR OldStack, UserPage;
+    ULONG_PTR OldStack;
     PUCHAR UserArguments;
     PUCALLOUT_FRAME CalloutFrame;
     PULONG_PTR UserStackPointer;
@@ -318,14 +268,6 @@ KeUserModeCallback(
         CalloutFrame = (PUCALLOUT_FRAME)ALIGN_DOWN_POINTER_BY(OldStack - ArgumentLength - sizeof(UCALLOUT_FRAME), 16);
         UserArguments = (PUCHAR)(CalloutFrame + 1);
 
-        /* The user stack grows only through its guard page, so a frame larger than a page is reached from the top down */
-        for (UserPage = (ULONG_PTR)PAGE_ALIGN(OldStack - 1);
-             UserPage > (ULONG_PTR)CalloutFrame;
-             UserPage -= PAGE_SIZE)
-        {
-            ProbeForWrite((PVOID)UserPage, sizeof(UCHAR), sizeof(UCHAR));
-        }
-
         /* Make sure it's all writable */
         ProbeForWrite(CalloutFrame,
                       sizeof(UCALLOUT_FRAME) + ArgumentLength,
@@ -350,7 +292,7 @@ KeUserModeCallback(
         /* Jump to user mode */
         *UserStackPointer = (ULONG_PTR)CalloutFrame;
         KeGetCurrentThread()->CallbackNestingLevel++;
-        CallbackStatus = KiCallUserModeWithStack(Result, ResultLength);
+        CallbackStatus = KiCallUserMode(Result, ResultLength);
         KeGetCurrentThread()->CallbackNestingLevel--;
         if (CallbackStatus != STATUS_CALLBACK_POP_STACK)
         {

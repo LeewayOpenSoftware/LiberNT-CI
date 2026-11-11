@@ -30,7 +30,6 @@
 typedef struct _ETWP_LOGGER
 {
     LONG ReferenceCount;
-    volatile LONG Writers;
     USHORT LoggerId;
     BOOLEAN StopRequested;
     BOOLEAN LimitReached;
@@ -52,7 +51,6 @@ typedef struct _ETWP_LOGGER
     ULONG NumberOfBuffers;
     ULONG FreeBuffers;
     ULONG EventsLost;
-    ULONG EventsLogged;
     ULONG BuffersWritten;
     ULONG LogBuffersLost;
     ULONG RealTimeBuffersLost;
@@ -61,10 +59,8 @@ typedef struct _ETWP_LOGGER
     HANDLE LoggerThreadId;
     PETHREAD LoggerThread;
     KEVENT WakeEvent;
-    KDPC WakeDpc;
     KMUTEX FileLock;
-    KSPIN_LOCK BufferSpinLock;
-    KGUARDED_MUTEX BufferMutex;
+    KGUARDED_MUTEX BufferLock;
     PWMI_BUFFER_HEADER HeaderBuffer;
     PWMI_BUFFER_HEADER CurrentBuffer;
     PWMI_BUFFER_HEADER FreeList;
@@ -74,7 +70,7 @@ typedef struct _ETWP_LOGGER
 
 typedef struct DECLSPEC_CACHEALIGN _ETWP_LOGGER_SLOT_LOCK
 {
-    KSPIN_LOCK Lock;
+    EX_PUSH_LOCK Lock;
 } ETWP_LOGGER_SLOT_LOCK;
 
 static EX_PUSH_LOCK EtwpLoggerRegistrationLock;
@@ -126,120 +122,10 @@ EtwpQueryClock(
 
     if (Logger->ClockType == EVENT_TRACE_CLOCK_SYSTEMTIME)
         KeQuerySystemTime(&Time);
-    else if (Logger->ClockType == EVENT_TRACE_CLOCK_CPUCYCLE)
-        Time.QuadPart = (LONGLONG)ReadTimeStampCounter();
     else
         Time = KeQueryPerformanceCounter(NULL);
 
     return Time.QuadPart;
-}
-
-/*
- * A session whose buffers can page is written at or below APC_LEVEL only;
- * the buffers of any other are taken at HIGH_LEVEL, so they can be written
- * from any level.
- */
-static
-KIRQL
-EtwpLockBuffers(
-    _In_ PETWP_LOGGER Logger)
-{
-    KIRQL OldIrql = PASSIVE_LEVEL;
-
-    if (Logger->PoolType == PagedPool)
-    {
-        KeAcquireGuardedMutex(&Logger->BufferMutex);
-    }
-    else
-    {
-        KeRaiseIrql(HIGH_LEVEL, &OldIrql);
-        KeAcquireSpinLockAtDpcLevel(&Logger->BufferSpinLock);
-    }
-
-    return OldIrql;
-}
-
-static
-VOID
-EtwpUnlockBuffers(
-    _In_ PETWP_LOGGER Logger,
-    _In_ KIRQL OldIrql)
-{
-    if (Logger->PoolType == PagedPool)
-    {
-        KeReleaseGuardedMutex(&Logger->BufferMutex);
-    }
-    else
-    {
-        KeReleaseSpinLockFromDpcLevel(&Logger->BufferSpinLock);
-        KeLowerIrql(OldIrql);
-    }
-}
-
-static
-KIRQL
-EtwpLockSlot(
-    _In_ USHORT LoggerId)
-{
-    KIRQL OldIrql;
-
-    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
-    KeAcquireSpinLockAtDpcLevel(&EtwpLoggerSlotLocks[LoggerId].Lock);
-
-    return OldIrql;
-}
-
-static
-VOID
-EtwpUnlockSlot(
-    _In_ USHORT LoggerId,
-    _In_ KIRQL OldIrql)
-{
-    KeReleaseSpinLockFromDpcLevel(&EtwpLoggerSlotLocks[LoggerId].Lock);
-    KeLowerIrql(OldIrql);
-}
-
-/* Waits out the writers still filling in room they made in a buffer */
-static
-VOID
-EtwpWaitForBufferWriters(
-    _In_ PWMI_BUFFER_HEADER Buffer)
-{
-    LARGE_INTEGER Interval;
-
-    Interval.QuadPart = -10 * 1000;
-    while (ReadAcquire(&Buffer->ReferenceCount) != 0)
-        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
-}
-
-static
-VOID
-NTAPI
-EtwpWakeLoggerDpc(
-    _In_ PKDPC Dpc,
-    _In_opt_ PVOID DeferredContext,
-    _In_opt_ PVOID SystemArgument1,
-    _In_opt_ PVOID SystemArgument2)
-{
-    PETWP_LOGGER Logger = DeferredContext;
-
-    UNREFERENCED_PARAMETER(Dpc);
-    UNREFERENCED_PARAMETER(SystemArgument1);
-    UNREFERENCED_PARAMETER(SystemArgument2);
-
-    KeSetEvent(&Logger->WakeEvent, IO_NO_INCREMENT, FALSE);
-}
-
-/* Tells the logger thread a buffer is waiting, from whatever level the writer is at */
-static
-VOID
-EtwpWakeLogger(
-    _In_ PETWP_LOGGER Logger)
-{
-    if (KeGetCurrentIrql() <= DISPATCH_LEVEL)
-        KeSetEvent(&Logger->WakeEvent, IO_NO_INCREMENT, FALSE);
-    else
-        KeInsertQueueDpc(&Logger->WakeDpc, NULL, NULL);
 }
 
 static
@@ -278,15 +164,8 @@ VOID
 EtwpDereferenceLogger(
     _In_ PETWP_LOGGER Logger)
 {
-    LARGE_INTEGER Interval;
-
     if (InterlockedDecrement(&Logger->ReferenceCount) != 0)
         return;
-
-    Interval.QuadPart = -10 * 1000;
-    while (ReadAcquire(&Logger->Writers) != 0)
-        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
-    KeRemoveQueueDpcEx(&Logger->WakeDpc, TRUE);
 
     if (Logger->LoggerThread)
         ObDereferenceObject(Logger->LoggerThread);
@@ -311,47 +190,19 @@ EtwpReferenceLoggerById(
     _In_ USHORT LoggerId)
 {
     PETWP_LOGGER Logger = NULL;
-    KIRQL OldIrql;
 
     if (LoggerId >= MAXLOGGERS)
         return NULL;
 
-    OldIrql = EtwpLockSlot(LoggerId);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&EtwpLoggerSlotLocks[LoggerId].Lock);
     Logger = EtwpLoggers[LoggerId];
     if (Logger)
         InterlockedIncrement(&Logger->ReferenceCount);
-    EtwpUnlockSlot(LoggerId, OldIrql);
+    ExReleasePushLockShared(&EtwpLoggerSlotLocks[LoggerId].Lock);
+    KeLeaveCriticalRegion();
 
     return Logger;
-}
-
-/* Lets a writer at any level into a session, which is not freed until it leaves */
-static
-PETWP_LOGGER
-EtwpEnterLogger(
-    _In_ USHORT LoggerId)
-{
-    PETWP_LOGGER Logger;
-    KIRQL OldIrql;
-
-    if (LoggerId >= MAXLOGGERS)
-        return NULL;
-
-    OldIrql = EtwpLockSlot(LoggerId);
-    Logger = EtwpLoggers[LoggerId];
-    if (Logger)
-        InterlockedIncrement(&Logger->Writers);
-    EtwpUnlockSlot(LoggerId, OldIrql);
-
-    return Logger;
-}
-
-static
-VOID
-EtwpLeaveLogger(
-    _In_ PETWP_LOGGER Logger)
-{
-    InterlockedDecrement(&Logger->Writers);
 }
 
 static
@@ -363,17 +214,17 @@ EtwpReferenceLoggerByName(
     ULONG i;
 
     KeEnterCriticalRegion();
-    ExAcquirePushLockShared(&EtwpLoggerRegistrationLock);
     for (i = ETWP_FIRST_LOGGER_ID; i < MAXLOGGERS && !Logger; i++)
     {
+        ExAcquirePushLockShared(&EtwpLoggerSlotLocks[i].Lock);
         if (EtwpLoggers[i] &&
             RtlEqualUnicodeString(&EtwpLoggers[i]->LoggerName, LoggerName, TRUE))
         {
             Logger = EtwpLoggers[i];
             InterlockedIncrement(&Logger->ReferenceCount);
         }
+        ExReleasePushLockShared(&EtwpLoggerSlotLocks[i].Lock);
     }
-    ExReleasePushLockShared(&EtwpLoggerRegistrationLock);
     KeLeaveCriticalRegion();
 
     return Logger;
@@ -381,7 +232,7 @@ EtwpReferenceLoggerByName(
 
 static
 PWMI_BUFFER_HEADER
-EtwpTakeFreeBuffer(
+EtwpTakeBuffer(
     _In_ PETWP_LOGGER Logger)
 {
     PWMI_BUFFER_HEADER Buffer = Logger->FreeList;
@@ -390,8 +241,16 @@ EtwpTakeFreeBuffer(
     {
         Logger->FreeList = Buffer->NextBuffer;
         Logger->FreeBuffers--;
-        EtwpInitializeBuffer(Logger, Buffer, ETW_BUFFER_TYPE_GENERIC);
     }
+    else if (Logger->NumberOfBuffers < Logger->MaximumBuffers)
+    {
+        Buffer = ExAllocatePoolWithTag(Logger->PoolType, Logger->BufferSize, ETWP_TAG);
+        if (Buffer)
+            Logger->NumberOfBuffers++;
+    }
+
+    if (Buffer)
+        EtwpInitializeBuffer(Logger, Buffer, ETW_BUFFER_TYPE_GENERIC);
 
     return Buffer;
 }
@@ -410,97 +269,6 @@ EtwpQueueCurrentBuffer(
         Logger->FlushHead = Buffer;
     Logger->FlushTail = Buffer;
     Logger->CurrentBuffer = NULL;
-}
-
-/*
- * Makes room for a record in the session's current buffer and holds the buffer
- * until the writer has filled the room in. A new buffer is only allocated
- * where the caller's level allows it, and never with the buffers locked.
- */
-static
-NTSTATUS
-EtwpReserveRecord(
-    _In_ PETWP_LOGGER Logger,
-    _In_ ULONG Reserved,
-    _Out_ PWMI_BUFFER_HEADER *OutBuffer,
-    _Out_ PUCHAR *OutRecord)
-{
-    PWMI_BUFFER_HEADER Buffer, Spare = NULL;
-    KIRQL CallerIrql = KeGetCurrentIrql();
-    BOOLEAN Wake = FALSE;
-    BOOLEAN Done = FALSE;
-    NTSTATUS Status = STATUS_SUCCESS;
-    KIRQL OldIrql;
-
-    while (!Done)
-    {
-        OldIrql = EtwpLockBuffers(Logger);
-
-        if (Spare)
-        {
-            Spare->NextBuffer = Logger->FreeList;
-            Logger->FreeList = Spare;
-            Logger->FreeBuffers++;
-            Spare = NULL;
-        }
-
-        Buffer = Logger->CurrentBuffer;
-        if (!Logger->StopRequested && Buffer && Buffer->CurrentOffset + Reserved > Logger->BufferSize)
-        {
-            EtwpQueueCurrentBuffer(Logger);
-            Wake = TRUE;
-            Buffer = NULL;
-        }
-        if (!Logger->StopRequested && !Buffer)
-        {
-            Buffer = EtwpTakeFreeBuffer(Logger);
-            Logger->CurrentBuffer = Buffer;
-        }
-
-        Done = TRUE;
-        if (Logger->StopRequested)
-        {
-            Status = STATUS_INVALID_HANDLE;
-        }
-        else if (Buffer)
-        {
-            *OutBuffer = Buffer;
-            *OutRecord = (PUCHAR)Buffer + Buffer->CurrentOffset;
-            Buffer->CurrentOffset += Reserved;
-            InterlockedIncrement(&Buffer->ReferenceCount);
-        }
-        else if (Logger->NumberOfBuffers < Logger->MaximumBuffers && CallerIrql <= DISPATCH_LEVEL)
-        {
-            Logger->NumberOfBuffers++;
-            Done = FALSE;
-        }
-        else
-        {
-            InterlockedIncrement((PLONG)&Logger->EventsLost);
-            Status = STATUS_NO_MEMORY;
-        }
-
-        EtwpUnlockBuffers(Logger, OldIrql);
-
-        if (!Done)
-        {
-            Spare = ExAllocatePoolWithTag(Logger->PoolType, Logger->BufferSize, ETWP_TAG);
-            if (!Spare)
-            {
-                OldIrql = EtwpLockBuffers(Logger);
-                Logger->NumberOfBuffers--;
-                EtwpUnlockBuffers(Logger, OldIrql);
-                InterlockedIncrement((PLONG)&Logger->EventsLost);
-                Status = STATUS_NO_MEMORY;
-                Done = TRUE;
-            }
-        }
-    }
-
-    if (Wake)
-        EtwpWakeLogger(Logger);
-
-    return Status;
 }
 
 static
@@ -700,11 +468,10 @@ EtwpFlushBuffers(
     _In_ BOOLEAN IncludeCurrent)
 {
     PWMI_BUFFER_HEADER Buffer, List;
-    KIRQL OldIrql;
 
     KeWaitForSingleObject(&Logger->FileLock, Executive, KernelMode, FALSE, NULL);
 
-    OldIrql = EtwpLockBuffers(Logger);
+    KeAcquireGuardedMutex(&Logger->BufferLock);
     if (IncludeCurrent &&
         Logger->CurrentBuffer &&
         Logger->CurrentBuffer->CurrentOffset > sizeof(WMI_BUFFER_HEADER))
@@ -714,20 +481,19 @@ EtwpFlushBuffers(
     List = Logger->FlushHead;
     Logger->FlushHead = NULL;
     Logger->FlushTail = NULL;
-    EtwpUnlockBuffers(Logger, OldIrql);
+    KeReleaseGuardedMutex(&Logger->BufferLock);
 
     while (List)
     {
         Buffer = List;
         List = Buffer->NextBuffer;
-        EtwpWaitForBufferWriters(Buffer);
         EtwpWriteBuffer(Logger, Buffer);
 
-        OldIrql = EtwpLockBuffers(Logger);
+        KeAcquireGuardedMutex(&Logger->BufferLock);
         Buffer->NextBuffer = Logger->FreeList;
         Logger->FreeList = Buffer;
         Logger->FreeBuffers++;
-        EtwpUnlockBuffers(Logger, OldIrql);
+        KeReleaseGuardedMutex(&Logger->BufferLock);
     }
 
     KeReleaseMutex(&Logger->FileLock, FALSE);
@@ -739,17 +505,16 @@ EtwpUnlinkLogger(
     _In_ PETWP_LOGGER Logger)
 {
     BOOLEAN Removed = FALSE;
-    KIRQL OldIrql;
 
     KeEnterCriticalRegion();
     ExAcquirePushLockExclusive(&EtwpLoggerRegistrationLock);
-    OldIrql = EtwpLockSlot(Logger->LoggerId);
+    ExAcquirePushLockExclusive(&EtwpLoggerSlotLocks[Logger->LoggerId].Lock);
     if (EtwpLoggers[Logger->LoggerId] == Logger)
     {
         EtwpLoggers[Logger->LoggerId] = NULL;
         Removed = TRUE;
     }
-    EtwpUnlockSlot(Logger->LoggerId, OldIrql);
+    ExReleasePushLockExclusive(&EtwpLoggerSlotLocks[Logger->LoggerId].Lock);
     ExReleasePushLockExclusive(&EtwpLoggerRegistrationLock);
     KeLeaveCriticalRegion();
 
@@ -768,7 +533,6 @@ EtwpLoggerThread(
     BOOLEAN SelfStop = FALSE;
     ULONG FlushTimer;
     NTSTATUS Status;
-    KIRQL OldIrql;
 
     for (;;)
     {
@@ -788,9 +552,9 @@ EtwpLoggerThread(
 
         if (ReadBooleanNoFence(&Logger->LimitReached) && EtwpUnlinkLogger(Logger))
         {
-            OldIrql = EtwpLockBuffers(Logger);
+            KeAcquireGuardedMutex(&Logger->BufferLock);
             Logger->StopRequested = TRUE;
-            EtwpUnlockBuffers(Logger, OldIrql);
+            KeReleaseGuardedMutex(&Logger->BufferLock);
             SelfStop = TRUE;
             break;
         }
@@ -915,7 +679,6 @@ EtwpStartLogger(
     ULONG Mode = Info->LogFileMode;
     ULONG MinimumBuffers, i, Slot;
     NTSTATUS Status;
-    KIRQL OldIrql;
 
     if (!LoggerName->Length)
         return STATUS_OBJECT_NAME_INVALID;
@@ -943,10 +706,8 @@ EtwpStartLogger(
     RtlZeroMemory(Logger, sizeof(*Logger));
     Logger->ReferenceCount = 2;
     KeInitializeEvent(&Logger->WakeEvent, SynchronizationEvent, FALSE);
-    KeInitializeDpc(&Logger->WakeDpc, EtwpWakeLoggerDpc, Logger);
     KeInitializeMutex(&Logger->FileLock, 0);
-    KeInitializeSpinLock(&Logger->BufferSpinLock);
-    KeInitializeGuardedMutex(&Logger->BufferMutex);
+    KeInitializeGuardedMutex(&Logger->BufferLock);
 
     Mode &= ETWP_LOGGER_MODE_MASK;
     if (!(Mode & EVENT_TRACE_STOP_ON_HYBRID_SHUTDOWN))
@@ -971,12 +732,8 @@ EtwpStartLogger(
     Logger->FlushTimer = Info->FlushTimer;
     if (!Logger->FlushTimer && (Mode & EVENT_TRACE_REAL_TIME_MODE))
         Logger->FlushTimer = 1;
-    Logger->ClockType = EVENT_TRACE_CLOCK_PERFCOUNTER;
-    if (Info->Wnode.ClientContext == EVENT_TRACE_CLOCK_SYSTEMTIME ||
-        Info->Wnode.ClientContext == EVENT_TRACE_CLOCK_CPUCYCLE)
-    {
-        Logger->ClockType = Info->Wnode.ClientContext;
-    }
+    Logger->ClockType = (Info->Wnode.ClientContext == EVENT_TRACE_CLOCK_SYSTEMTIME) ? EVENT_TRACE_CLOCK_SYSTEMTIME :
+                                                                                      EVENT_TRACE_CLOCK_PERFCOUNTER;
     Logger->InstanceGuid = Info->Wnode.Guid;
     KeQuerySystemTime(&Logger->StartTime);
 
@@ -1075,9 +832,9 @@ EtwpStartLogger(
                                       NULL);
             ZwClose(ThreadHandle);
             Logger->LoggerThreadId = ClientId.UniqueThread;
-            OldIrql = EtwpLockSlot((USHORT)Slot);
+            ExAcquirePushLockExclusive(&EtwpLoggerSlotLocks[Slot].Lock);
             EtwpLoggers[Slot] = Logger;
-            EtwpUnlockSlot((USHORT)Slot, OldIrql);
+            ExReleasePushLockExclusive(&EtwpLoggerSlotLocks[Slot].Lock);
         }
     }
 
@@ -1100,14 +857,12 @@ NTSTATUS
 EtwpStopLogger(
     _In_ PETWP_LOGGER Logger)
 {
-    KIRQL OldIrql;
-
     if (!EtwpUnlinkLogger(Logger))
         return STATUS_WMI_INSTANCE_NOT_FOUND;
 
-    OldIrql = EtwpLockBuffers(Logger);
+    KeAcquireGuardedMutex(&Logger->BufferLock);
     Logger->StopRequested = TRUE;
-    EtwpUnlockBuffers(Logger, OldIrql);
+    KeReleaseGuardedMutex(&Logger->BufferLock);
 
     KeSetEvent(&Logger->WakeEvent, IO_NO_INCREMENT, FALSE);
     KeWaitForSingleObject(Logger->LoggerThread, Executive, KernelMode, FALSE, NULL);
@@ -1144,7 +899,6 @@ EtwpUpdateLogger(
     UNICODE_STRING NewName, OldName;
     HANDLE FileHandle;
     NTSTATUS Status = STATUS_SUCCESS;
-    KIRQL OldIrql;
 
     if (LogFileName->Length)
     {
@@ -1197,14 +951,14 @@ EtwpUpdateLogger(
             return Status;
     }
 
-    OldIrql = EtwpLockBuffers(Logger);
+    KeAcquireGuardedMutex(&Logger->BufferLock);
     if (Info->MaximumBuffers >= Logger->MinimumBuffers)
         Logger->MaximumBuffers = Info->MaximumBuffers;
     Logger->LogFileMode = (Logger->LogFileMode & ~EVENT_TRACE_REAL_TIME_MODE) |
                           (Info->LogFileMode & EVENT_TRACE_REAL_TIME_MODE);
     if (Info->FlushTimer)
         Logger->FlushTimer = Info->FlushTimer;
-    EtwpUnlockBuffers(Logger, OldIrql);
+    KeReleaseGuardedMutex(&Logger->BufferLock);
 
     KeSetEvent(&Logger->WakeEvent, IO_NO_INCREMENT, FALSE);
     return STATUS_SUCCESS;
@@ -1216,10 +970,8 @@ EtwpQueryLogger(
     _In_ PETWP_LOGGER Logger,
     _Inout_ PWMI_LOGGER_INFORMATION Info)
 {
-    KIRQL OldIrql;
-
     KeWaitForSingleObject(&Logger->FileLock, Executive, KernelMode, FALSE, NULL);
-    OldIrql = EtwpLockBuffers(Logger);
+    KeAcquireGuardedMutex(&Logger->BufferLock);
 
     Info->Wnode.ProviderId = 0;
     Info->Wnode.HistoricalContext = Logger->LoggerId;
@@ -1245,98 +997,8 @@ EtwpQueryLogger(
     Info->LoggerThreadId64 = (ULONG_PTR)Logger->LoggerThreadId;
     Info->RealTimeConsumerCount = 0;
 
-    EtwpUnlockBuffers(Logger, OldIrql);
+    KeReleaseGuardedMutex(&Logger->BufferLock);
     KeReleaseMutex(&Logger->FileLock, FALSE);
-}
-
-/* The handle a session's events are written through names it by its logger identifier */
-TRACEHANDLE
-EtwpTraceHandleFromLoggerId(
-    _In_ ULONG LoggerId)
-{
-    return (TRACEHANDLE)LoggerId;
-}
-
-ULONG
-EtwpLoggerIdFromTraceHandle(
-    _In_ TRACEHANDLE TraceHandle)
-{
-    return (USHORT)TraceHandle;
-}
-
-NTSTATUS
-EtwpQueryLoggerById(
-    _In_ ULONG LoggerId,
-    _Out_opt_ PWMI_LOGGER_INFORMATION Information,
-    _Out_opt_ PULONG EventsLogged)
-{
-    WMI_LOGGER_INFORMATION Snapshot;
-    PETWP_LOGGER Logger;
-
-    PAGED_CODE();
-
-    if (LoggerId >= MAXLOGGERS)
-        return STATUS_WMI_INSTANCE_NOT_FOUND;
-
-    Logger = EtwpReferenceLoggerById((USHORT)LoggerId);
-    if (!Logger)
-        return STATUS_WMI_INSTANCE_NOT_FOUND;
-
-    if (Information)
-    {
-        RtlZeroMemory(&Snapshot, sizeof(Snapshot));
-        EtwpQueryLogger(Logger, &Snapshot);
-        *Information = Snapshot;
-    }
-    if (EventsLogged)
-        *EventsLogged = ReadULongNoFence(&Logger->EventsLogged);
-
-    EtwpDereferenceLogger(Logger);
-    return STATUS_SUCCESS;
-}
-
-NTSTATUS
-EtwpFindLoggerByName(
-    _In_ PCUNICODE_STRING LoggerName,
-    _Out_ PULONG LoggerId)
-{
-    PETWP_LOGGER Logger;
-
-    PAGED_CODE();
-
-    Logger = EtwpReferenceLoggerByName(LoggerName);
-    if (!Logger)
-        return STATUS_WMI_INSTANCE_NOT_FOUND;
-
-    *LoggerId = Logger->LoggerId;
-    EtwpDereferenceLogger(Logger);
-    return STATUS_SUCCESS;
-}
-
-/* Lists the running sessions, as many as fit, and says how many there are */
-ULONG
-EtwpEnumerateLoggers(
-    _Out_writes_to_(Count, return) PULONG LoggerIds,
-    _In_ ULONG Count)
-{
-    ULONG Found = 0, i;
-
-    PAGED_CODE();
-
-    KeEnterCriticalRegion();
-    ExAcquirePushLockShared(&EtwpLoggerRegistrationLock);
-    for (i = ETWP_FIRST_LOGGER_ID; i < MAXLOGGERS; i++)
-    {
-        if (!EtwpLoggers[i])
-            continue;
-        if (Found < Count)
-            LoggerIds[Found] = i;
-        Found++;
-    }
-    ExReleasePushLockShared(&EtwpLoggerRegistrationLock);
-    KeLeaveCriticalRegion();
-
-    return Found;
 }
 
 static
@@ -1403,49 +1065,7 @@ EtwpReturnString(
     *(PWCHAR)((PUCHAR)UserBuffer + Source->Length) = UNICODE_NULL;
 }
 
-/* Copies an event's data behind its header, piece by piece where it came as MOF pointers */
 static
-NTSTATUS
-EtwpCopyEventData(
-    _Out_writes_bytes_(Length) PUCHAR Destination,
-    _In_ ULONG Length,
-    _In_ BOOLEAN UseMofPointers,
-    _In_reads_(FieldCount) const MOF_FIELD *MofFields,
-    _In_ ULONG FieldCount,
-    _In_ PVOID Fields,
-    _In_ KPROCESSOR_MODE PreviousMode)
-{
-    NTSTATUS Status = STATUS_SUCCESS;
-    ULONG i;
-
-    _SEH2_TRY
-    {
-        if (UseMofPointers)
-        {
-            for (i = 0; i < FieldCount; i++)
-            {
-                if (!MofFields[i].Length)
-                    continue;
-                if (PreviousMode != KernelMode)
-                    ProbeForRead((PVOID)(ULONG_PTR)MofFields[i].DataPtr, MofFields[i].Length, sizeof(UCHAR));
-                RtlCopyMemory(Destination, (PVOID)(ULONG_PTR)MofFields[i].DataPtr, MofFields[i].Length);
-                Destination += MofFields[i].Length;
-            }
-        }
-        else
-        {
-            RtlCopyMemory(Destination, (PUCHAR)Fields + sizeof(EVENT_TRACE_HEADER), Length);
-        }
-    }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-    {
-        Status = _SEH2_GetExceptionCode();
-    }
-    _SEH2_END;
-
-    return Status;
-}
-
 NTSTATUS
 EtwpTraceClassicEvent(
     _In_opt_ HANDLE TraceHandle,
@@ -1455,18 +1075,21 @@ EtwpTraceClassicEvent(
 {
     MOF_FIELD MofFields[MAX_MOF_FIELDS];
     EVENT_TRACE_HEADER Header;
-    PEVENT_TRACE_HEADER Record = NULL;
-    PWMI_BUFFER_HEADER Buffer = NULL;
+    PEVENT_TRACE_HEADER Record;
+    PWMI_BUFFER_HEADER Buffer;
     PETWP_LOGGER Logger;
     PETHREAD Thread = PsGetCurrentThread();
-    ULONG FieldCount = 0, Total = FieldSize, DataLength, Reserved, i;
-    BOOLEAN UseMofPointers = FALSE;
+    ULONG FieldCount = 0, Total = FieldSize, Reserved, i;
     BOOLEAN Narrow;
-    PUCHAR Captured = NULL;
+    PUCHAR Data;
     NTSTATUS Status = STATUS_SUCCESS;
 
     if (!Fields || FieldSize < sizeof(EVENT_TRACE_HEADER) || FieldSize > MAXUSHORT)
         return STATUS_INVALID_PARAMETER;
+
+    Logger = EtwpReferenceLoggerById((USHORT)(ULONG_PTR)TraceHandle);
+    if (!Logger)
+        return STATUS_INVALID_HANDLE;
 
     _SEH2_TRY
     {
@@ -1483,7 +1106,6 @@ EtwpTraceClassicEvent(
 
         if (Header.Flags & WNODE_FLAG_USE_MOF_PTR)
         {
-            UseMofPointers = TRUE;
             FieldCount = (FieldSize - sizeof(Header)) / sizeof(MOF_FIELD);
             if (FieldCount > MAX_MOF_FIELDS)
             {
@@ -1512,86 +1134,97 @@ EtwpTraceClassicEvent(
     _SEH2_END;
 
     Reserved = ALIGN_UP_BY(Total, sizeof(ULONG64));
-    if (NT_SUCCESS(Status) && Reserved > MAXUSHORT)
+    if (NT_SUCCESS(Status) &&
+        (Reserved > MAXUSHORT || Reserved > Logger->BufferSize - sizeof(WMI_BUFFER_HEADER)))
+    {
         Status = STATUS_BUFFER_OVERFLOW;
+    }
     if (!NT_SUCCESS(Status))
+    {
+        EtwpDereferenceLogger(Logger);
         return Status;
-
-    DataLength = Total - sizeof(Header);
-
-    /* A caller in user mode has its data taken in first, so that a fault leaves no record half written */
-    if (PreviousMode != KernelMode && DataLength)
-    {
-        Captured = ExAllocatePoolWithTag(PagedPool, DataLength, ETWP_TAG);
-        if (!Captured)
-            return STATUS_NO_MEMORY;
-
-        Status = EtwpCopyEventData(Captured, DataLength, UseMofPointers, MofFields, FieldCount, Fields, PreviousMode);
-        if (!NT_SUCCESS(Status))
-        {
-            ExFreePoolWithTag(Captured, ETWP_TAG);
-            return Status;
-        }
     }
 
-    Logger = EtwpEnterLogger((USHORT)(ULONG_PTR)TraceHandle);
-    if (!Logger)
-    {
-        if (Captured)
-            ExFreePoolWithTag(Captured, ETWP_TAG);
-        return STATUS_INVALID_HANDLE;
-    }
+    Narrow = (sizeof(PVOID) == sizeof(ULONG)) ||
+             (PreviousMode != KernelMode && PsGetCurrentProcessWow64Process() != NULL);
 
-    if (Reserved > Logger->BufferSize - sizeof(WMI_BUFFER_HEADER))
+    KeAcquireGuardedMutex(&Logger->BufferLock);
+
+    if (Logger->StopRequested)
     {
-        Status = STATUS_BUFFER_OVERFLOW;
-    }
-    else if (Logger->PoolType == PagedPool && KeGetCurrentIrql() > APC_LEVEL)
-    {
-        InterlockedIncrement((PLONG)&Logger->EventsLost);
-        Status = STATUS_NO_MEMORY;
+        Status = STATUS_INVALID_HANDLE;
     }
     else
     {
-        Status = EtwpReserveRecord(Logger, Reserved, &Buffer, (PUCHAR *)&Record);
+        Buffer = Logger->CurrentBuffer;
+        if (Buffer && Buffer->CurrentOffset + Reserved > Logger->BufferSize)
+        {
+            EtwpQueueCurrentBuffer(Logger);
+            KeSetEvent(&Logger->WakeEvent, IO_NO_INCREMENT, FALSE);
+            Buffer = NULL;
+        }
+        if (!Buffer)
+        {
+            Buffer = EtwpTakeBuffer(Logger);
+            Logger->CurrentBuffer = Buffer;
+        }
+        if (!Buffer)
+        {
+            Logger->EventsLost++;
+            Status = STATUS_NO_MEMORY;
+        }
     }
 
     if (NT_SUCCESS(Status))
     {
-        if (Captured)
-            RtlCopyMemory(Record + 1, Captured, DataLength);
-        else
-            Status = EtwpCopyEventData((PUCHAR)(Record + 1), DataLength, UseMofPointers, MofFields, FieldCount, Fields, KernelMode);
-        if (!NT_SUCCESS(Status))
-            RtlZeroMemory(Record + 1, DataLength);
+        Record = (PEVENT_TRACE_HEADER)((PUCHAR)Buffer + Buffer->CurrentOffset);
+        Data = (PUCHAR)(Record + 1);
 
-        Narrow = (sizeof(PVOID) == sizeof(ULONG)) ||
-                 (PreviousMode != KernelMode && PsGetCurrentProcessWow64Process() != NULL);
-
-        RtlZeroMemory(Record, sizeof(*Record));
-        Record->Size = (USHORT)Reserved;
-        Record->HeaderType = Narrow ? TRACE_HEADER_TYPE_FULL_HEADER32 : TRACE_HEADER_TYPE_FULL_HEADER64;
-        Record->MarkerFlags = (TRACE_HEADER_FLAG | TRACE_HEADER_EVENT_TRACE) >> 24;
-        Record->Class = Header.Class;
-        Record->ThreadId = HandleToUlong(PsGetCurrentThreadId());
-        Record->ProcessId = HandleToUlong(PsGetCurrentProcessId());
-        /* TODO: keep the caller's time stamp when WNODE_FLAG_USE_TIMESTAMP asks for it */
-        Record->TimeStamp.QuadPart = EtwpQueryClock(Logger);
-        Record->Guid = Header.Guid;
-        Record->KernelTime = Thread->Tcb.KernelTime;
-        Record->UserTime = Thread->Tcb.UserTime;
-        RtlZeroMemory((PUCHAR)Record + Total, Reserved - Total);
+        _SEH2_TRY
+        {
+            if (Header.Flags & WNODE_FLAG_USE_MOF_PTR)
+            {
+                for (i = 0; i < FieldCount; i++)
+                {
+                    if (!MofFields[i].Length)
+                        continue;
+                    if (PreviousMode != KernelMode)
+                        ProbeForRead((PVOID)(ULONG_PTR)MofFields[i].DataPtr, MofFields[i].Length, sizeof(UCHAR));
+                    RtlCopyMemory(Data, (PVOID)(ULONG_PTR)MofFields[i].DataPtr, MofFields[i].Length);
+                    Data += MofFields[i].Length;
+                }
+            }
+            else
+            {
+                RtlCopyMemory(Data, (PUCHAR)Fields + sizeof(Header), FieldSize - sizeof(Header));
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
 
         if (NT_SUCCESS(Status))
-            InterlockedIncrement((PLONG)&Logger->EventsLogged);
-
-        InterlockedDecrement(&Buffer->ReferenceCount);
+        {
+            RtlZeroMemory(Record, sizeof(*Record));
+            Record->Size = (USHORT)Reserved;
+            Record->HeaderType = Narrow ? TRACE_HEADER_TYPE_FULL_HEADER32 : TRACE_HEADER_TYPE_FULL_HEADER64;
+            Record->MarkerFlags = (TRACE_HEADER_FLAG | TRACE_HEADER_EVENT_TRACE) >> 24;
+            Record->Class = Header.Class;
+            Record->ThreadId = HandleToUlong(PsGetCurrentThreadId());
+            Record->ProcessId = HandleToUlong(PsGetCurrentProcessId());
+            Record->TimeStamp.QuadPart = EtwpQueryClock(Logger);
+            Record->Guid = Header.Guid;
+            Record->KernelTime = Thread->Tcb.KernelTime;
+            Record->UserTime = Thread->Tcb.UserTime;
+            RtlZeroMemory((PUCHAR)Record + Total, Reserved - Total);
+            Buffer->CurrentOffset += Reserved;
+        }
     }
 
-    EtwpLeaveLogger(Logger);
-    if (Captured)
-        ExFreePoolWithTag(Captured, ETWP_TAG);
-
+    KeReleaseGuardedMutex(&Logger->BufferLock);
+    EtwpDereferenceLogger(Logger);
     return Status;
 }
 

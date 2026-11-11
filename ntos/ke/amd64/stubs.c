@@ -208,9 +208,6 @@ KiIdleLoop(VOID)
             NewThread->State = Running;
             KiReleasePrcbLock(Prcb);
 
-            /* A thread taken from another processor may still be leaving it */
-            KiWaitForThreadSwapOut(NewThread);
-
             _enable();
             KiIdleSwapContext(OldThread);
         }

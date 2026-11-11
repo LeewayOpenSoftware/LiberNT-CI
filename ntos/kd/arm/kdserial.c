@@ -125,11 +125,4 @@ KdPortPutBufferEx(IN PCPPORT PortInformation,
     }
 }
 
-
-BOOLEAN
-KdpArchKeyboardControllerPresent(VOID)
-{
-    return FALSE;
-}
-
 /* EOF */

@@ -373,7 +373,7 @@ static ULONG_PTR NTAPI KdpCaptureLiveDumpContext(_In_ ULONG_PTR Argument)
 {
     UNREFERENCED_PARAMETER(Argument);
 
-    RtlCaptureContext(KiPrcbContext(KeGetCurrentPrcb()));
+    RtlCaptureContext(KeGetCurrentPrcb()->CrashDumpContext);
     return 0;
 }
 #endif
