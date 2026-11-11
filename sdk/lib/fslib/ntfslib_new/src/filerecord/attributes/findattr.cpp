@@ -585,12 +585,13 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
         ? 0x48
         : 0x40;
 
-    if (!DataAttr || !DataAttr->IsNonResident ||
-        DataAttr->Length < MinimumHeader ||
+    if (!DataAttr || !DataAttr->IsNonResident)
+        return NULL;
+    if (DataAttr->Length < MinimumHeader ||
         DataAttr->NonResident.DataRunsOffset < MinimumHeader ||
         DataAttr->NonResident.DataRunsOffset >= DataAttr->Length)
     {
-        return NULL;
+        goto Corrupt;
     }
 
     DataRunPtr = (PUCHAR)DataAttr + DataAttr->NonResident.DataRunsOffset;
@@ -655,7 +656,7 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
 
         Run = new(PagedPool, TAG_DATA_RUN) DataRun();
         if (!Run)
-            goto Corrupt;
+            goto Fail;
         Run->NextRun = NULL;
         Run->LCN = RunLCN;
         Run->Length = RunLength;
@@ -684,6 +685,10 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
     return Head;
 
 Corrupt:
+    /* The mapping pairs on the medium cannot be valid: keep the volume dirty
+     * for the next check (Windows marks it dirty on a corrupt run list). */
+    DiskVolume->NoteCorruption();
+Fail:
     FreeDataRun(Head);
     return NULL;
 }
