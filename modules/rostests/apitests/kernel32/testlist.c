@@ -3,6 +3,7 @@
 #include <apitest.h>
 
 extern void func_ActCtxWithXmlNamespaces(void);
+extern void func_ActCtxDependencyVersions(void);
 extern void func_ApiSetCoreSynch(void);
 extern void func_BaseSetLastNTError(void);
 extern void func_BaseThreadInitThunk(void);
@@ -10,9 +11,11 @@ extern void func_CallbackCallingConventions(void);
 extern void func_Arm64ThreadContext(void);
 extern void func_ConsoleAlias(void);
 extern void func_ConsoleCP(void);
+extern void func_ConsoleInputSignal(void);
 extern void func_ConsoleDbcsCells(void);
 extern void func_ConsoleProcessInheritance(void);
 extern void func_ConsoleVirtualTerminal(void);
+extern void func_CopyContext(void);
 extern void func_CreateAfterMissingName(void);
 extern void func_CreateDirectoryRoot(void);
 extern void func_CreateProcess(void);
@@ -72,11 +75,13 @@ extern void func_IsDBCSLeadByteEx(void);
 extern void func_JapaneseCalendar(void);
 extern void func_JobObject(void);
 extern void func_JobObjectUI(void);
+extern void func_KnownDlls(void);
 extern void func_LCMapString(void);
 extern void func_LoadLibraryExW(void);
 extern void func_LockFileEx(void);
 extern void func_QuantumRoundRobin(void);
 extern void func_RegisterWaitPeriodic(void);
+extern void func_RemoteThreadInit(void);
 extern void func_SandboxLaunch(void);
 extern void func_SystemImageCatalog(void);
 extern void func_SystemTimeChangeTimers(void);
@@ -97,7 +102,9 @@ extern void func_PackageNames(void);
 extern void func_PixeloramaCompat(void);
 extern void func_ProcessPreferredUILanguages(void);
 extern void func_PseudoConsoleCtrlC(void);
+extern void func_PseudoConsoleVtInput(void);
 extern void func_PssSnapshot(void);
+extern void func_ResourceUILanguage(void);
 extern void func_OpenFileByIdRename(void);
 extern void func_PagingFileOpen(void);
 extern void func_PrivMoveFileIdentityW(void);
@@ -127,6 +134,7 @@ extern void func_WaitForMultipleObjects(void);
 extern void func_WerRegisterFile(void);
 extern void func_WideCharToMultiByte(void);
 extern void func_Wow64GetThreadContext(void);
+extern void func_WriteFileBadBuffer(void);
 extern void func_WriteFileSeekBack(void);
 extern void func_XState(void);
 
@@ -134,6 +142,7 @@ const struct test winetest_testlist[] =
 {
     { "SetFileAllocationInfo", func_SetFileAllocationInfo },
     { "ActCtxWithXmlNamespaces",     func_ActCtxWithXmlNamespaces },
+    { "ActCtxDependencyVersions",    func_ActCtxDependencyVersions },
     { "ApiSetCoreSynch",             func_ApiSetCoreSynch },
     { "BaseSetLastNTError",          func_BaseSetLastNTError },
     { "BaseThreadInitThunk",         func_BaseThreadInitThunk },
@@ -141,9 +150,11 @@ const struct test winetest_testlist[] =
     { "Arm64ThreadContext",          func_Arm64ThreadContext },
     { "ConsoleAlias", func_ConsoleAlias },
     { "ConsoleCP",                   func_ConsoleCP },
+    { "ConsoleInputSignal",          func_ConsoleInputSignal },
     { "ConsoleDbcsCells",            func_ConsoleDbcsCells },
     { "ConsoleProcessInheritance",   func_ConsoleProcessInheritance },
     { "ConsoleVirtualTerminal",      func_ConsoleVirtualTerminal },
+    { "CopyContext",                 func_CopyContext },
     { "CreateAfterMissingName",      func_CreateAfterMissingName },
     { "CreateDirectoryRoot",         func_CreateDirectoryRoot },
     { "CreateProcess",               func_CreateProcess },
@@ -201,6 +212,7 @@ const struct test winetest_testlist[] =
     { "JapaneseCalendar",            func_JapaneseCalendar },
     { "JobObject",                   func_JobObject },
     { "JobObjectUI",                 func_JobObjectUI },
+    { "KnownDlls",                   func_KnownDlls },
     { "LCMapString",                 func_LCMapString },
     { "LoadLibraryExW",              func_LoadLibraryExW },
     { "LockFileEx",                  func_LockFileEx },
@@ -209,6 +221,7 @@ const struct test winetest_testlist[] =
     { "TebSegmentAfterWait",           func_TebSegmentAfterWait },
     { "QuantumRoundRobin",           func_QuantumRoundRobin },
     { "RegisterWaitPeriodic",        func_RegisterWaitPeriodic },
+    { "RemoteThreadInit",            func_RemoteThreadInit },
     { "SandboxLaunch",               func_SandboxLaunch },
     { "SharedMemorySecurity",        func_SharedMemorySecurity },
     { "SharedMemoryTransfer",        func_SharedMemoryTransfer },
@@ -226,7 +239,9 @@ const struct test winetest_testlist[] =
     { "PixeloramaCompat",            func_PixeloramaCompat },
     { "ProcessPreferredUILanguages", func_ProcessPreferredUILanguages },
     { "PseudoConsoleCtrlC",          func_PseudoConsoleCtrlC },
+    { "PseudoConsoleVtInput",        func_PseudoConsoleVtInput },
     { "PssSnapshot",                 func_PssSnapshot },
+    { "ResourceUILanguage",          func_ResourceUILanguage },
     { "OpenFileByIdRename",          func_OpenFileByIdRename },
     { "PagingFileOpen",              func_PagingFileOpen },
     { "PrivMoveFileIdentityW",       func_PrivMoveFileIdentityW },
@@ -255,6 +270,7 @@ const struct test winetest_testlist[] =
     { "WerRegisterFile",             func_WerRegisterFile },
     { "WideCharToMultiByte",         func_WideCharToMultiByte },
     { "Wow64GetThreadContext",       func_Wow64GetThreadContext },
+    { "WriteFileBadBuffer",          func_WriteFileBadBuffer },
     { "WriteFileSeekBack",           func_WriteFileSeekBack },
     { "XState",                      func_XState },
     { "ForwardCycles",               func_ForwardCycles },

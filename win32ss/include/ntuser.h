@@ -836,6 +836,7 @@ typedef struct _WND
 
     PVOID DialogPointer;
     ULONG DpiContext; /* Awareness context captured from the creating thread. */
+    ULONG DpiHostingBehavior; /* DPI_HOSTING_BEHAVIOR of the creating thread. */
     ULONG DialogDpiChangeBehavior;
     ULONG DialogControlDpiChangeBehavior;
 } WND, *PWND;
@@ -1024,6 +1025,7 @@ typedef LONG_PTR
 #define SRVINFO_APIHOOK     0x0010
 #define SRVINFO_CTFIME_ENABLED 0x0020
 #define SRVINFO_KBDPREF     0x0080
+#define SRVINFO_DPIVIRTUALIZATION 0x0100
 
 #define NUM_SYSCOLORS 31
 
@@ -2871,6 +2873,14 @@ ULONG
 NTAPI
 NtUserGetWindowDpiAwarenessContext(_In_ HWND hWnd);
 
+LONG
+NTAPI
+NtUserGetThreadDpiHostingBehavior(VOID);
+
+LONG
+NTAPI
+NtUserGetWindowDpiHostingBehavior(_In_ HWND hWnd);
+
 HANDLE
 NTAPI
 NtUserGetProp(
@@ -2890,6 +2900,10 @@ NtUserSetProcessDpiAwarenessContext(
 ULONG
 NTAPI
 NtUserSetThreadDpiAwarenessContext(_In_ ULONG DpiContext);
+
+LONG
+NTAPI
+NtUserSetThreadDpiHostingBehavior(_In_ LONG Behavior);
 
 BOOL
 NTAPI
@@ -3827,6 +3841,8 @@ NtUserYieldTask(VOID);
 #define ROS_SERVERINFO_ATOMICONPROP               6
 #define ROS_SERVERINFO_ATOMICONSMPROP             7
 #define ROS_SERVERINFO_SRVIFLAGS                  8
+#define ROS_SERVERINFO_LOGPIXELS                  9
+#define ROS_SERVERINFO_PADDEDBORDER               10
 #define THUNKED_MENUITEMINFO_ROS_GETW             6
 #define TWOPARAM_ROUTINE_SETMENUBARHEIGHT         0xfffd0050
 #define TWOPARAM_ROUTINE_SETGUITHRDHANDLE         0xfffd0051
@@ -3853,6 +3869,7 @@ NtUserYieldTask(VOID);
 #define HWNDPARAM_ROUTINE_ROS_SETDPICHANGEBEHAVIOR 0x100c
 #define HWNDPARAM_ROUTINE_ROS_GETDPICHANGEBEHAVIOR 0x100d
 #define TWOPARAM_ROUTINE_ROS_QUERYMENU 0x100e
+#define HWND_ROUTINE_ROS_ENABLENCDPISCALING 0x1010
 #define ROS_DPI_CHANGE_BEHAVIOR_DIALOG 0x80000000
 #define SPI_ROS_SETDESKWALLPAPERBITMAP 0x80000003
 

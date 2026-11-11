@@ -2464,7 +2464,13 @@ FileRecord::EnsureAttributeListForMappingGrowth(
         return STATUS_SUCCESS;
     }
 
-    Status = CreateInitialAttributeList();
+    Status = CreateInitialAttributeList(
+        AttrType == TypeData &&
+        (*TargetAttribute)->IsNonResident &&
+        (*TargetAttribute)->Flags == 0 &&
+        (*TargetAttribute)->NonResident.FirstVCN == 0
+        ? *TargetAttribute
+        : NULL);
     if (Status == STATUS_BUFFER_TOO_SMALL)
         return STATUS_SUCCESS;
     if (!NT_SUCCESS(Status))
@@ -2736,6 +2742,7 @@ FileRecord::WriteFileData(_In_     AttributeType AttrType,
     ULONG OldResidentDataLength;
     ULONG RequestedLength;
     BOOLEAN SpaceReleased = FALSE;
+    BOOLEAN Unnamed;
 
     if (!Length || !Offset ||
         (!Buffer && *Length != 0))
@@ -2839,11 +2846,11 @@ Retry:
                  AttrType != TypeBitmap &&
                  AttrType != TypeAttributeList) ||
                 (AttributeOwner != this &&
-                 (AttrType != TypeData ||
-                  TargetAttribute->NameLength == 0)))
+                 AttrType != TypeData))
             {
                 return STATUS_BUFFER_TOO_SMALL;
             }
+            Unnamed = TargetAttribute->NameLength == 0;
 
             Status = AttributeOwner->PromoteResidentData(
                 TargetAttribute,
@@ -2879,6 +2886,13 @@ Retry:
             {
                 *Length = RequestedLength;
                 if (AttributeOwner != this &&
+                    AttrType == TypeData &&
+                    Unnamed)
+                {
+                    Status = SynchronizeExtensionDataSizes();
+                }
+                if (NT_SUCCESS(Status) &&
+                    AttributeOwner != this &&
                     TimestampFields != 0)
                 {
                     Status = UpdateAutomaticTimestamps(
@@ -3335,6 +3349,7 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
     ULONG OldDataLength;
     BOOLEAN HasAttributeList;
     BOOLEAN SparseFile;
+    BOOLEAN UnnamedData;
     NTSTATUS Status;
 
     if (!DiskVolume)
@@ -3387,12 +3402,14 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
 
     if (TargetAttribute->IsNonResident)
     {
+        BOOLEAN Unnamed;
+
         if (AttributeOwner != this &&
-             (AttrType != TypeData ||
-              TargetAttribute->NameLength == 0))
+            AttrType != TypeData)
         {
             return STATUS_NOT_IMPLEMENTED;
         }
+        Unnamed = TargetAttribute->NameLength == 0;
         SparseFile =
             TargetAttribute->Flags == ATTR_SPARSE;
         if (!SparseFile && AttrType == TypeData)
@@ -3421,6 +3438,12 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
             ResizeNonResidentData(TargetAttribute,
                                   NewSize);
         if (NT_SUCCESS(Status) &&
+            AttributeOwner != this &&
+            Unnamed)
+        {
+            Status = SynchronizeExtensionDataSizes();
+        }
+        if (NT_SUCCESS(Status) &&
             AttributeOwner != this)
         {
             Status = UpdateAutomaticTimestamps(
@@ -3436,11 +3459,13 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
      * resident form or logical size.
      */
     if (HasAttributeList &&
-        (AttrType != TypeData ||
-         TargetAttribute->NameLength == 0))
+        AttrType != TypeData)
     {
         return STATUS_NOT_IMPLEMENTED;
     }
+    UnnamedData =
+        AttrType == TypeData &&
+        TargetAttribute->NameLength == 0;
 
     Status = AttributeOwner->
         ValidateResidentAttributeForUpdate(
@@ -3516,6 +3541,12 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
             NewSize,
             NewSize);
         if (NT_SUCCESS(Status) &&
+            AttributeOwner != this &&
+            UnnamedData)
+        {
+            Status = SynchronizeExtensionDataSizes();
+        }
+        if (NT_SUCCESS(Status) &&
             AttributeOwner != this)
         {
             Status = UpdateAutomaticTimestamps(
@@ -3526,8 +3557,8 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
     if (!NT_SUCCESS(Status))
         goto RestoreResident;
 
-    if (AttrType == TypeData &&
-        TargetAttribute->NameLength == 0)
+    if (UnnamedData &&
+        AttributeOwner == this)
     {
         Status = SynchronizeFileNameSizes(
             0,
@@ -3550,7 +3581,9 @@ FileRecord::SetFileDataSize(_In_ AttributeType AttrType,
     if (NT_SUCCESS(Status))
     {
         NtfsReleaseRecordScratch(DiskVolume, RecordBackup, RecordBufferSize);
-        if (AttributeOwner != this)
+        if (AttributeOwner != this && UnnamedData)
+            Status = SynchronizeExtensionDataSizes();
+        if (NT_SUCCESS(Status) && AttributeOwner != this)
         {
             Status = UpdateAutomaticTimestamps(
                 TimestampFields);
@@ -3640,6 +3673,7 @@ FileRecord::SetFileAllocationSize(
     PFileRecord AttributeOwner;
     PStandardInformationEx Standard;
     ULONG ResidentDataLength;
+    BOOLEAN Unnamed;
     NTSTATUS Status;
 
     if (!DiskVolume)
@@ -3671,19 +3705,13 @@ FileRecord::SetFileAllocationSize(
         SpeculativeAllocation = FALSE;
         AttributeOwner->SpeculativeAllocation = FALSE;
     }
-    if (AttributeOwner != this &&
-         (TargetAttribute->AttributeType !=
-              TypeData ||
-          TargetAttribute->NameLength == 0))
-    {
-        return STATUS_NOT_IMPLEMENTED;
-    }
     if (TargetAttribute->AttributeType != TypeData ||
         (TargetAttribute->Flags & ~ATTR_SPARSE) != 0)
     {
         return STATUS_NOT_IMPLEMENTED;
     }
 
+    Unnamed = TargetAttribute->NameLength == 0;
     if (TargetAttribute->IsNonResident)
     {
         ULONGLONG NewDataSize =
@@ -3724,10 +3752,15 @@ FileRecord::SetFileAllocationSize(
                        NonResident.AllocatedSize
                  : 0) != OldAllocatedSize))
         {
-            Status = UpdateAutomaticTimestamps(
-                AutomaticTimestampFieldsForAttribute(
-                    TypeData,
-                    NewDataSize != OldDataSize));
+            if (Unnamed)
+                Status = SynchronizeExtensionDataSizes();
+            if (NT_SUCCESS(Status))
+            {
+                Status = UpdateAutomaticTimestamps(
+                    AutomaticTimestampFieldsForAttribute(
+                        TypeData,
+                        NewDataSize != OldDataSize));
+            }
         }
         return Status;
     }
@@ -3754,6 +3787,12 @@ FileRecord::SetFileAllocationSize(
         0,
         ResidentDataLength,
         NewAllocationSize);
+    if (NT_SUCCESS(Status) &&
+        AttributeOwner != this &&
+        Unnamed)
+    {
+        Status = SynchronizeExtensionDataSizes();
+    }
     if (NT_SUCCESS(Status) &&
         AttributeOwner != this)
     {
@@ -5109,6 +5148,31 @@ FileRecord::ResizeNonResidentData(
     return ResizeNonResidentStream(TargetAttribute,
                                    NewDataSize,
                                    NewDataSize);
+}
+
+NTSTATUS
+FileRecord::SynchronizeExtensionDataSizes()
+{
+    PAttribute DataAttribute;
+    NTSTATUS Status;
+
+    ASSERT(Header->BaseFileRecord == 0);
+    DataAttribute = GetAttribute(TypeData, NULL);
+    if (!DataAttribute)
+        return STATUS_FILE_CORRUPT_ERROR;
+    ASSERT(DataAttribute->NameLength == 0);
+    ASSERT(GetAttributeOwner(DataAttribute) != this);
+
+    Status = DataAttribute->IsNonResident
+        ? SynchronizeFileNameSizes(
+              DataAttribute->NonResident.AllocatedSize,
+              DataAttribute->NonResident.DataSize)
+        : SynchronizeFileNameSizes(
+              0,
+              DataAttribute->Resident.DataLength);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    return DiskVolume->MFT->WriteFileRecordToMFT(this);
 }
 
 NTSTATUS

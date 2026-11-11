@@ -12,6 +12,7 @@ KMT_TESTFUNC Test_DxgkDeviceWork;
 KMT_TESTFUNC Test_DxgkHotPlugWork;
 KMT_TESTFUNC Test_DxgkChildDescriptor;
 KMT_TESTFUNC Test_DxgkPostDisplayHandoff;
+KMT_TESTFUNC Test_DxgkPresentUserSource;
 KMT_TESTFUNC Test_DxgkGpuVaAddress;
 KMT_TESTFUNC Test_DxgkGpuVaPageTable;
 KMT_TESTFUNC Test_DxgkGpuVaPte;
@@ -199,9 +200,13 @@ KMT_TESTFUNC Test_KeWddmExports;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeApcInject;
 KMT_TESTFUNC Test_KeApcScheduling;
+KMT_TESTFUNC Test_KeApcQueueTransitions;
+KMT_TESTFUNC Test_KeDpcQueueTransitions;
 #ifdef _M_AMD64
 KMT_TESTFUNC Test_KeSwitchReaper;
+KMT_TESTFUNC Test_KeXState;
 KMT_TESTFUNC Test_KeSwitchSelfWake;
+KMT_TESTFUNC Test_KeTrapFilterX87;
 KMT_TESTFUNC Test_KeStandbySteal;
 #endif
 KMT_TESTFUNC Test_KeDeferredReady;
@@ -372,6 +377,7 @@ const KMT_TEST TestList[] =
     { "DxgkHotPlugWork",                   Test_DxgkHotPlugWork },
     { "DxgkChildDescriptor",               Test_DxgkChildDescriptor },
     { "DxgkPostDisplayHandoff",            Test_DxgkPostDisplayHandoff },
+    { "DxgkPresentUserSource",             Test_DxgkPresentUserSource },
     { "DxgkGpuVaAddress",                   Test_DxgkGpuVaAddress },
     { "DxgkGpuVaPageTable",                 Test_DxgkGpuVaPageTable },
     { "DxgkGpuVaPte",                       Test_DxgkGpuVaPte },
@@ -532,9 +538,13 @@ const KMT_TEST TestList[] =
     { "KeApc",                              Test_KeApc },
     { "KeApcInject",                        Test_KeApcInject },
     { "KeApcScheduling",                    Test_KeApcScheduling },
+    { "KeApcQueueTransitions",              Test_KeApcQueueTransitions },
+    { "KeDpcQueueTransitions",              Test_KeDpcQueueTransitions },
 #ifdef _M_AMD64
     { "KeSwitchReaper",                     Test_KeSwitchReaper },
+    { "KeXState",                           Test_KeXState },
     { "KeSwitchSelfWake",                   Test_KeSwitchSelfWake },
+    { "KeTrapFilterX87",                    Test_KeTrapFilterX87 },
     { "KeStandbySteal",                     Test_KeStandbySteal },
 #endif
     { "KeDeferredReady",                    Test_KeDeferredReady },

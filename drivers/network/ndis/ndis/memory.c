@@ -37,7 +37,7 @@ NdisAllocateMemoryWithTag(
 
   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
-  Block = ExAllocatePoolWithTag(NonPagedPool, Length, Tag);
+  Block = ExAllocatePoolWithTag(NonPagedPoolNx, Length, Tag);
   *VirtualAddress = Block;
 
   if (!Block) {
@@ -59,10 +59,15 @@ NdisAllocateMemoryWithTagPriority(
     IN ULONG            Tag,
     IN EX_POOL_PRIORITY Priority)
 {
+  PVOID Memory;
+
   UNREFERENCED_PARAMETER(NdisHandle);
 
   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
-  return ExAllocatePoolWithTagPriority(NonPagedPool, Length, Tag, Priority);
+  Memory = ExAllocatePoolWithTagPriority(NonPagedPoolNx, Length, Tag, Priority);
+  if (!Memory)
+      DbgPrint("NDIS6: NdisAllocateMemoryWithTagPriority of %u bytes (tag %.4s) failed\n", Length, (PCSTR)&Tag);
+  return Memory;
 }
 
 VOID
@@ -129,7 +134,7 @@ NdisAllocateMemory(
   else
   {
       /* Allocate plain nonpaged memory */
-      *VirtualAddress = ExAllocatePool(NonPagedPool, Length);
+      *VirtualAddress = ExAllocatePool(NonPagedPoolNx, Length);
   }
 
   if (!*VirtualAddress) {

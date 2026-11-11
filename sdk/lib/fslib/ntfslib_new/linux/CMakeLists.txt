@@ -424,6 +424,16 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${NTFSFIX_EXECUTABLE}"
         )
         add_test(
+            NAME ntfslib_linux_full_base_growth
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/full_base_growth_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+                "${NTFSCP_EXECUTABLE}"
+                "${NTFSCAT_EXECUTABLE}"
+                "${NTFSFIX_EXECUTABLE}"
+        )
+        add_test(
             NAME ntfslib_linux_truncate
             COMMAND /bin/sh
                 "${CMAKE_CURRENT_LIST_DIR}/tests/truncate_smoke.sh"
@@ -736,6 +746,14 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${CMAKE_CURRENT_LIST_DIR}/tests/check_shape_smoke.sh"
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
+        add_test(
+            NAME ntfslib_linux_check_crosslink
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/check_crosslink_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+                "${NTFSCP_EXECUTABLE}"
+                "${NTFSCAT_EXECUTABLE}"
         )
     endif()
     if(MKNTFS_EXECUTABLE AND
@@ -757,4 +775,10 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${XXD_EXECUTABLE}"
         )
     endif()
+    add_test(
+        NAME ntfslib_linux_case_sensitive
+        COMMAND /bin/sh
+            "${CMAKE_CURRENT_LIST_DIR}/tests/case_sensitive_smoke.sh"
+            "$<TARGET_FILE:ntfslib_fuse>"
+    )
 endif()

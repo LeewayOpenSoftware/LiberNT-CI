@@ -16,12 +16,14 @@
 #define LX_NR_EPOLL_CTL         21
 #define LX_NR_EPOLL_PWAIT       22
 #define LX_NR_FCNTL             25
+#define LX_NR_IOCTL             29
 #define LX_NR_MKDIRAT           34
 #define LX_NR_UNLINKAT          35
 #define LX_NR_FCHMODAT          53
 #define LX_NR_OPENAT            56
 #define LX_NR_CLOSE             57
 #define LX_NR_PIPE2             59
+#define LX_NR_LSEEK             62
 #define LX_NR_READ              63
 #define LX_NR_WRITE             64
 #define LX_NR_EXIT_GROUP        94
@@ -42,6 +44,7 @@
 #define LX_EINTR                4
 #define LX_EAGAIN               11
 #define LX_EEXIST               17
+#define LX_ENODEV               19
 #define LX_ENOTCONN             107
 
 #define LX_O_RDONLY             0
@@ -52,6 +55,7 @@
 #define LX_F_GETFL              3
 #define LX_F_SETFL              4
 #define LX_MFD_CLOEXEC          1
+#define LX_SEEK_END             2
 
 #define LX_PROT_READ            1
 #define LX_PROT_WRITE           2

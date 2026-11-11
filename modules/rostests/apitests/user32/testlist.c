@@ -3,6 +3,7 @@
 #include <apitest.h>
 
 extern void func_RegisterTouchWindow(void);
+extern void func_AltTabHook(void);
 extern void func_AttachThreadInput(void);
 extern void func_CalculatePopupWindowPosition(void);
 extern void func_CallbackNesting(void);
@@ -24,8 +25,13 @@ extern void func_DestroyActiveWindow(void);
 extern void func_DestroyWindow(void);
 extern void func_DialogAccelerator(void);
 extern void func_DialogDpiChangeBehavior(void);
+extern void func_DpiHostingBehavior(void);
 extern void func_DM_REPOSITION(void);
 extern void func_Dpi(void);
+extern void func_DpiAwareness(void);
+extern void func_DpiProcessDefault(void);
+extern void func_DpiScaling(void);
+extern void func_DpiVirtualization(void);
 extern void func_DrawIconEx(void);
 extern void func_DrawText(void);
 extern void func_desktop(void);
@@ -34,6 +40,7 @@ extern void func_ClipboardAccess(void);
 extern void func_ClipboardData(void);
 extern void func_EnableScrollBar(void);
 extern void func_EnumDisplaySettings(void);
+extern void func_ForegroundAfterHide(void);
 extern void func_ForegroundRetake(void);
 extern void func_ForegroundRight(void);
 extern void func_ForegroundStartup(void);
@@ -108,6 +115,7 @@ extern void func_SetWindowPlacement(void);
 extern void func_WindowDisplayAffinity(void);
 extern void func_WindowRegionFrame(void);
 extern void func_ShellWindowQueries(void);
+extern void func_ShellWindowZOrder(void);
 extern void func_ShowWindow(void);
 extern void func_SwitchToThisWindow(void);
 extern void func_SystemParametersInfo(void);
@@ -128,6 +136,7 @@ extern void func_wsprintfApi(void);
 const struct test winetest_testlist[] =
 {
     { "RegisterTouchWindow", func_RegisterTouchWindow },
+    { "AltTabHook", func_AltTabHook },
     { "AttachThreadInput", func_AttachThreadInput },
     { "CalculatePopupWindowPosition", func_CalculatePopupWindowPosition },
     { "CallbackNesting", func_CallbackNesting },
@@ -149,8 +158,13 @@ const struct test winetest_testlist[] =
     { "DestroyWindow", func_DestroyWindow },
     { "DialogAccelerator", func_DialogAccelerator },
     { "DialogDpiChangeBehavior", func_DialogDpiChangeBehavior },
+    { "DpiHostingBehavior", func_DpiHostingBehavior },
     { "DM_REPOSITION", func_DM_REPOSITION },
     { "Dpi", func_Dpi },
+    { "DpiAwareness", func_DpiAwareness },
+    { "DpiProcessDefault", func_DpiProcessDefault },
+    { "DpiScaling", func_DpiScaling },
+    { "DpiVirtualization", func_DpiVirtualization },
     { "DrawIconEx", func_DrawIconEx },
     { "DrawText", func_DrawText },
     { "desktop", func_desktop },
@@ -159,6 +173,7 @@ const struct test winetest_testlist[] =
     { "ClipboardData", func_ClipboardData },
     { "EnableScrollBar", func_EnableScrollBar },
     { "EnumDisplaySettings", func_EnumDisplaySettings },
+    { "ForegroundAfterHide", func_ForegroundAfterHide },
     { "ForegroundRetake", func_ForegroundRetake },
     { "ForegroundRight", func_ForegroundRight },
     { "ForegroundStartup", func_ForegroundStartup },
@@ -233,6 +248,7 @@ const struct test winetest_testlist[] =
     { "WindowDisplayAffinity", func_WindowDisplayAffinity },
     { "WindowRegionFrame", func_WindowRegionFrame },
     { "ShellWindowQueries", func_ShellWindowQueries },
+    { "ShellWindowZOrder", func_ShellWindowZOrder },
     { "ShowWindow", func_ShowWindow },
     { "SwitchToThisWindow", func_SwitchToThisWindow },
     { "SystemMenu", func_SystemMenu },

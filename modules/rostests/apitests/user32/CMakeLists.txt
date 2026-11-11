@@ -1,6 +1,7 @@
 add_subdirectory(makeimg)
 
 list(APPEND SOURCE
+    AltTabHook.c
     AttachThreadInput.c
     ../include/msgtrace.c
     CalculatePopupWindowPosition.c
@@ -29,12 +30,17 @@ list(APPEND SOURCE
     DialogDpiChangeBehavior.c
     DM_REPOSITION.c
     Dpi.c
+    DpiHostingBehavior.c
+    DpiAwareness.c
+    DpiScaling.c
+    DpiVirtualization.c
     DrawIconEx.c
     DrawText.c
     desktop.c
     EmptyClipboard.c
     EnableScrollBar.c
     EnumDisplaySettings.c
+    ForegroundAfterHide.c
     ForegroundRetake.c
     ForegroundRight.c
     ForegroundStartup.c
@@ -108,6 +114,7 @@ list(APPEND SOURCE
     WindowDisplayAffinity.c
     WindowRegionFrame.c
     ShellWindowQueries.c
+    ShellWindowZOrder.c
     ShowWindow.c
     SwitchToThisWindow.c
     SystemMenu.c
@@ -145,6 +152,12 @@ set_module_type(user32_apitest_menuui win32gui UNICODE)
 add_importlibs(user32_apitest_menuui user32 msvcrt kernel32)
 add_rostests_file(TARGET user32_apitest_menuui)
 add_dependencies(user32_apitest user32_apitest_menuui)
+
+add_executable(user32_apitest_fghide user32_apitest_fghide.c)
+set_module_type(user32_apitest_fghide win32gui UNICODE)
+add_importlibs(user32_apitest_fghide user32 msvcrt kernel32)
+add_rostests_file(TARGET user32_apitest_fghide)
+add_dependencies(user32_apitest user32_apitest_fghide)
 
 add_rostests_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/verclasstest1.manifest")
 add_rostests_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/verclasstest2.manifest")

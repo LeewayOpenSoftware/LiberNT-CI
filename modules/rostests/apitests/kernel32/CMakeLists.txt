@@ -6,6 +6,7 @@ add_subdirectory(utf8acp)
 add_message_headers(ANSI FormatMessage.mc)
 
 list(APPEND SOURCE
+    ActCtxDependencyVersions.c
     ConsoleAlias.c
     ApiSetCoreSynch.c
     BaseSetLastNTError.c
@@ -13,9 +14,11 @@ list(APPEND SOURCE
     CallbackCallingConventions.c
     Arm64ThreadContext.c
     ConsoleCP.c
+    ConsoleInputSignal.c
     ConsoleDbcsCells.c
     ConsoleProcessInheritance.c
     ConsoleVirtualTerminal.c
+    CopyContext.c
     CreateAfterMissingName.c
     CreateDirectoryRoot.c
     CreateProcess.c
@@ -75,6 +78,7 @@ list(APPEND SOURCE
     JapaneseCalendar.c
     JobObject.c
     JobObjectUI.c
+    KnownDlls.c
     LCMapString.c
     LoadLibraryExW.c
     LockFileEx.c
@@ -102,12 +106,15 @@ list(APPEND SOURCE
     PixeloramaCompat.c
     ProcessPreferredUILanguages.c
     PseudoConsoleCtrlC.c
+    PseudoConsoleVtInput.c
     PssSnapshot.c
     PrivMoveFileIdentityW.c
     QueryPerformanceCounter.c
     QueueUserAPC.c
     QueryProcessCycleTime.c
     ReadFile.c
+    ResourceUILanguage.c
+    RemoteThreadInit.c
     RenameDirectoryOldPath.c
     ResizePseudoConsole.c
     SetComputerNameExW.c
@@ -132,6 +139,7 @@ list(APPEND SOURCE
     WideCharToMultiByte.c
     Wow64GetThreadContext.c
     WriteFile.c
+    WriteFileBadBuffer.c
     WriteFileSeekBack.c
     XState.c
 )

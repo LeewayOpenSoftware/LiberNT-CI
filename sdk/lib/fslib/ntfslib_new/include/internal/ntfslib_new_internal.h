@@ -1500,7 +1500,7 @@ private:
         _Out_ PBOOLEAN OwnerReferenced);
 
     NTSTATUS
-    CreateInitialAttributeList();
+    CreateInitialAttributeList(_In_opt_ PAttribute GrowingData = NULL);
 
     NTSTATUS
     EnsureAttributeListForMappingGrowth(
@@ -1610,6 +1610,9 @@ private:
         _In_ PAttribute TargetAttribute,
         _In_ ULONGLONG NewDataSize,
         _In_ ULONGLONG RequestedAllocationSize);
+
+    NTSTATUS
+    SynchronizeExtensionDataSizes();
 
     NTSTATUS
     UpdateFileNameSizes(_In_ ULONGLONG AllocatedSize,
@@ -1741,6 +1744,17 @@ typedef struct IndexSearchKey
     ULONG ValueLength;
     BOOLEAN CaseSensitive;
 } IndexSearchKey, *PIndexSearchKey;
+
+NTSTATUS
+NtfsFindIndexInsertionPoint(
+    _In_ PVolume DiskVolume,
+    _In_ PIndexNodeHeader Header,
+    _In_ ULONG HeaderBytes,
+    _In_ const IndexSearchKey* Key,
+    _Out_ PULONG InsertionOffset,
+    _Out_ PULONGLONG ChildVcn,
+    _Out_ PBOOLEAN Descend,
+    _Out_opt_ PBOOLEAN FoundExact = NULL);
 
 typedef class Directory : BTree
 {

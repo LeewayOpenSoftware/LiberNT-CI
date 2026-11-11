@@ -57,6 +57,7 @@ extern void func_NtContinue(void);
 extern void func_NullGsSelector(void);
 extern void func_RtlRestoreContextConsolidate(void);
 extern void func_RtlVirtualUnwindFragment(void);
+extern void func_RtlVirtualUnwindTailJump(void);
 extern void func_SyscallStub(void);
 extern void func_x87Exception(void);
 #endif
@@ -68,6 +69,7 @@ extern void func_NtCreateKey(void);
 extern void func_NtCreateKeyCached(void);
 extern void func_NtCreateProfile(void);
 extern void func_NtCreateSection(void);
+extern void func_NtCreateSection_CachedRead(void);
 extern void func_NtCreateSection_ConcurrentImage(void);
 extern void func_NtCreateThread(void);
 extern void func_NtCreateThreadWin32(void);
@@ -80,6 +82,8 @@ extern void func_NtImpersonateAnonymousToken(void);
 extern void func_NtLoadUnloadKey(void);
 extern void func_NtMapViewOfSection(void);
 extern void func_NtMapViewOfSection_ImageZeroBits(void);
+extern void func_NtKeDispatcherTransitions(void);
+extern void func_NtKeHandoff(void);
 extern void func_NtMutant(void);
 extern void func_NtNotifyChangeMultipleKeys(void);
 extern void func_NtOpenKey(void);
@@ -250,6 +254,7 @@ const struct test winetest_testlist[] =
     { "NullGsSelector",                 func_NullGsSelector },
     { "RtlRestoreContextConsolidate",   func_RtlRestoreContextConsolidate },
     { "RtlVirtualUnwindFragment",       func_RtlVirtualUnwindFragment },
+    { "RtlVirtualUnwindTailJump",       func_RtlVirtualUnwindTailJump },
     { "SyscallStub",                    func_SyscallStub },
     { "x87Exception",                   func_x87Exception },
 #endif
@@ -261,6 +266,7 @@ const struct test winetest_testlist[] =
     { "NtCreateKeyCached",              func_NtCreateKeyCached },
     { "NtCreateProfile",                func_NtCreateProfile },
     { "NtCreateSection",                func_NtCreateSection },
+    { "NtCreateSection_CachedRead", func_NtCreateSection_CachedRead },
     { "NtCreateSection_ConcurrentImage", func_NtCreateSection_ConcurrentImage },
     { "NtCreateThread",                 func_NtCreateThread },
     { "NtCreateThreadWin32",            func_NtCreateThreadWin32 },
@@ -273,6 +279,8 @@ const struct test winetest_testlist[] =
     { "NtLoadUnloadKey",                func_NtLoadUnloadKey },
     { "NtMapViewOfSection",             func_NtMapViewOfSection },
     { "NtMapViewOfSection_ImageZeroBits", func_NtMapViewOfSection_ImageZeroBits },
+    { "NtKeDispatcherTransitions",       func_NtKeDispatcherTransitions },
+    { "NtKeHandoff",                     func_NtKeHandoff },
     { "NtMutant",                       func_NtMutant },
     { "NtNotifyChangeMultipleKeys",     func_NtNotifyChangeMultipleKeys },
     { "NtOpenKeyEx",                    func_NtOpenKeyEx },

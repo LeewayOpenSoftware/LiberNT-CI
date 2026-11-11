@@ -25,6 +25,13 @@
 
 #include "cdd.h"
 
+#define RCDD_SURFACE_HOOKS (HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE | \
+                            HOOK_TEXTOUT | HOOK_LINETO | HOOK_PAINT | HOOK_PLGBLT | \
+                            HOOK_STROKEPATH | \
+                            HOOK_FILLPATH | HOOK_STROKEANDFILLPATH | HOOK_STRETCHBLT | \
+                            HOOK_STRETCHBLTROP | HOOK_ALPHABLEND | HOOK_TRANSPARENTBLT | \
+                            HOOK_GRADIENTFILL)
+
 /*
  * RcddEnableSurface
  *
@@ -58,36 +65,6 @@ RcddEnableSurface(
    }
 
    /*
-    * Re-query the mode dxgkrnl actually committed. RcddInitScreenInfo captured
-    * the geometry at EnablePDEV time, BEFORE CommitVidPn ran — if the committed
-    * native mode differs, drawing with the stale stride would shear the
-    * scan-out. Adopt the committed stride; refuse a width/height mismatch
-    * (GDI was already promised the EnablePDEV geometry).
-    */
-   {
-      VIDEO_MODE_INFORMATION CommittedMode;
-
-      RtlZeroMemory(&CommittedMode, sizeof(CommittedMode));
-      if (!EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_QUERY_CURRENT_MODE,
-                              NULL, 0, &CommittedMode, sizeof(CommittedMode),
-                              &ulTemp))
-      {
-         if (ulTemp < sizeof(CommittedMode))
-            return NULL;
-         if (CommittedMode.VisScreenWidth != (ULONG)ppdev->ScreenWidth ||
-             CommittedMode.VisScreenHeight != (ULONG)ppdev->ScreenHeight)
-         {
-            /* Committed native mode differs from what EnablePDEV promised
-             * GDI — a sheared scan-out is worse than no surface. */
-            return NULL;
-         }
-
-         if (CommittedMode.ScreenStride != 0)
-            ppdev->ScreenDelta = CommittedMode.ScreenStride;
-      }
-   }
-
-   /*
     * Map the DOD primary (dxgkrnl's system-memory scan-out surface) into our
     * address space. GDI draws straight into it and RcddPresent scans dirty
     * rectangles out through the miniport's DxgkDdiPresentDisplayOnly.
@@ -105,6 +82,36 @@ RcddEnableSurface(
    ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
    if (ppdev->ScreenPtr == NULL)
       goto CleanupMapping;
+
+   /*
+    * Re-query the mode dxgkrnl actually committed. RcddInitScreenInfo captured
+    * the geometry at EnablePDEV time, BEFORE CommitVidPn ran — if the committed
+    * native mode differs, drawing with the stale stride would shear the
+    * scan-out. Adopt the committed stride; refuse a width/height mismatch
+    * (GDI was already promised the EnablePDEV geometry).
+    */
+   {
+      VIDEO_MODE_INFORMATION CommittedMode;
+
+      RtlZeroMemory(&CommittedMode, sizeof(CommittedMode));
+      if (!EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_QUERY_CURRENT_MODE,
+                              NULL, 0, &CommittedMode, sizeof(CommittedMode),
+                              &ulTemp))
+      {
+         if (ulTemp < sizeof(CommittedMode))
+            goto CleanupMapping;
+         if (CommittedMode.VisScreenWidth != (ULONG)ppdev->ScreenWidth ||
+             CommittedMode.VisScreenHeight != (ULONG)ppdev->ScreenHeight)
+         {
+            /* Committed native mode differs from what EnablePDEV promised
+             * GDI — a sheared scan-out is worse than no surface. */
+            goto CleanupMapping;
+         }
+
+         if (CommittedMode.ScreenStride != 0)
+            ppdev->ScreenDelta = CommittedMode.ScreenStride;
+      }
+   }
 
    MinimumStride = (((ULONGLONG)ppdev->ScreenWidth * ppdev->BitsPerPixel) + 7) / 8;
    RequiredBytes = (ULONGLONG)ppdev->ScreenDelta * ppdev->ScreenHeight;
@@ -153,12 +160,7 @@ RcddEnableSurface(
     * seam is escape.c.
     */
    SurfaceBits = ppdev->ScreenPtr;
-   flHooks = HOOK_BITBLT | HOOK_COPYBITS | HOOK_SYNCHRONIZE |
-             HOOK_TEXTOUT | HOOK_LINETO | HOOK_PAINT | HOOK_PLGBLT |
-             HOOK_STROKEPATH |
-             HOOK_FILLPATH | HOOK_STROKEANDFILLPATH | HOOK_STRETCHBLT |
-             HOOK_STRETCHBLTROP | HOOK_ALPHABLEND | HOOK_TRANSPARENTBLT |
-             HOOK_GRADIENTFILL;
+   flHooks = RCDD_SURFACE_HOOKS;
 
    /*
     * Hand GDI a plain DIB over the draw buffer. No raster ops are implemented
@@ -235,4 +237,53 @@ RcddDisableSurface(
                          &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
       ppdev->ScreenPtr = NULL;
    }
+}
+
+VOID
+RcddRemapSurface(
+   IN PRCDD_PDEV ppdev)
+{
+   VIDEO_MEMORY VideoMemory;
+   VIDEO_MEMORY_INFORMATION VideoMemoryInfo;
+   ULONGLONG RequiredBytes;
+   PVOID OldPtr = ppdev->ScreenPtr;
+   ULONG ulTemp;
+
+   if (ppdev->hSurfEng == NULL || OldPtr == NULL || ppdev->ScreenDelta == 0)
+      return;
+
+   RtlZeroMemory(&VideoMemoryInfo, sizeof(VideoMemoryInfo));
+   VideoMemory.RequestedVirtualAddress = NULL;
+   if (EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_MAP_VIDEO_MEMORY,
+                          &VideoMemory, sizeof(VIDEO_MEMORY),
+                          &VideoMemoryInfo, sizeof(VIDEO_MEMORY_INFORMATION),
+                          &ulTemp) ||
+       ulTemp < sizeof(VIDEO_MEMORY_INFORMATION) ||
+       VideoMemoryInfo.FrameBufferBase == NULL)
+   {
+      return;
+   }
+
+   RequiredBytes = (ULONGLONG)ppdev->ScreenDelta * ppdev->ScreenHeight;
+   if (VideoMemoryInfo.FrameBufferBase != OldPtr &&
+       RequiredBytes <= VideoMemoryInfo.FrameBufferLength)
+   {
+      RtlCopyMemory(VideoMemoryInfo.FrameBufferBase, OldPtr, (SIZE_T)RequiredBytes);
+   }
+   if (VideoMemoryInfo.FrameBufferBase == OldPtr ||
+       RequiredBytes > VideoMemoryInfo.FrameBufferLength ||
+       !EngModifySurface(ppdev->hSurfEng, ppdev->hDevEng, RCDD_SURFACE_HOOKS, 0,
+                         NULL, VideoMemoryInfo.FrameBufferBase,
+                         (LONG)ppdev->ScreenDelta, NULL))
+   {
+      VideoMemory.RequestedVirtualAddress = VideoMemoryInfo.FrameBufferBase;
+      EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
+                         &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
+      return;
+   }
+
+   ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
+   VideoMemory.RequestedVirtualAddress = OldPtr;
+   EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY,
+                      &VideoMemory, sizeof(VIDEO_MEMORY), NULL, 0, &ulTemp);
 }
