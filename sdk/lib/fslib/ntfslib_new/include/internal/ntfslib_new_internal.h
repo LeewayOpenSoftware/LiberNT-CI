@@ -279,6 +279,47 @@ NtfsDirectoryStoreInfo(
     _Inout_ PULONG BufferLength,
     _Out_ PULONG EntrySize);
 
+/*
+ * Shared data built on first use (the $UpCase table, the run list and
+ * attribute list of $MFT's own record) is published once: the builder fills
+ * a private copy and installs it with a compare-exchange, and readers load
+ * the pointer with acquire order, so no reader sees a pointer before the data
+ * behind it. A builder that loses the race frees its copy. A published
+ * pointer is only replaced or freed under the exclusive metadata lock.
+ */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
+static inline PVOID
+NtfsLoadPublished(_In_ PVOID const volatile* Slot)
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    PVOID Value = *Slot;
+    _ReadWriteBarrier();
+    return Value;
+#else
+    return __atomic_load_n(const_cast<PVOID*>(Slot), __ATOMIC_ACQUIRE);
+#endif
+}
+
+/* Installs Value if Slot is still NULL. Returns the pointer Slot holds now:
+ * Value if it was installed, the earlier one if another builder won. */
+static inline PVOID
+NtfsPublishOnce(_Inout_ PVOID volatile* Slot, _In_ PVOID Value)
+{
+    PVOID Previous;
+
+#if defined(_MSC_VER) && !defined(__clang__)
+    Previous = _InterlockedCompareExchangePointer(Slot, Value, NULL);
+#else
+    Previous = NULL;
+    __atomic_compare_exchange_n(const_cast<PVOID*>(Slot), &Previous, Value, false,
+                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+#endif
+    return Previous ? Previous : Value;
+}
+
 /* $MFTMirr holds the first cluster of $MFT, and at least 4 records. Fully
  * parenthesized: "!IsFileRecordInMFTMirr(n)" and "x && IsFileRecordInMFTMirr(n)"
  * must apply to the whole test. */
@@ -774,11 +815,22 @@ public:
                      _In_  BOOLEAN CaseSensitive,
                      _Out_ LONG* Result);
 
+    /* The $UpCase table for callers that index it with any WCHAR
+     * (NtfsIsNameInExpression): NULL unless it is loaded and complete, and
+     * those callers then fall back to RtlUpcaseUnicodeChar. */
     PWSTR
     GetUpcaseTable()
     {
-        return UpcaseTable;
+        PWSTR Table = static_cast<PWSTR>(
+            NtfsLoadPublished(reinterpret_cast<PVOID const volatile*>(&UpcaseTable)));
+
+        return Table && UpcaseTableLength >= 0x10000 ? Table : NULL;
     }
+
+    /* The $UpCase table and its length in WCHARs, loaded on first use. */
+    NTSTATUS
+    GetUpcase(_Out_ PWSTR* Table,
+              _Out_ PULONG Length);
 
     /**
      * Gets the volume label as a 16-bit string and its length in bytes.
@@ -960,7 +1012,10 @@ private:
     USHORT VolumeLabelCacheLength = 0;
     BOOLEAN VolumeLabelCached = FALSE;
 
-    /* $UpCase table, read from disk on first use by UpcaseWideString(). */
+    /* $UpCase table, read at mount (Initialize) or on first use, and
+     * published with NtfsPublishOnce: UpcaseTableLength is stored before the
+     * pointer, and every loader stores the same value ($UpCase never
+     * changes). Read the pair through GetUpcase(). */
     PWSTR UpcaseTable = NULL;
     ULONG UpcaseTableLength = 0; // In WCHARs
 

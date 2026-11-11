@@ -323,6 +323,17 @@ Volume::Initialize(_In_ PUCHAR BootSectorData,
     VolumeFile = NULL;
 
     /*
+     * Read $UpCase now, for read-only mounts too, so that name lookups find
+     * it published instead of loading it on first use. A volume whose
+     * $UpCase cannot be read still mounts (chkdsk must open it): lookups
+     * then try again and fail, and pattern matching uses
+     * RtlUpcaseUnicodeChar.
+     */
+    Status = LoadUpcaseTable();
+    if (!NT_SUCCESS(Status))
+        DPRINT1("$UpCase not readable at mount (0x%lx)\n", (unsigned long)Status);
+
+    /*
      * Diagnostic readers do not need journal replay. In particular, freshly
      * formatted images may contain an uninitialized (all-0xff) $LogFile,
      * which is valid for read-only inspection but has no restart page to
