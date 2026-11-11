@@ -228,6 +228,20 @@ if(BUILD_TESTING)
         COMMAND ntfslib_size_persist_times_test
     )
 
+    add_executable(ntfslib_mft_mirror_fallback_test
+        tests/mft_mirror_fallback.cpp
+    )
+    target_compile_features(ntfslib_mft_mirror_fallback_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_mft_mirror_fallback_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_mft_mirror_fallback_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_mft_mirror_fallback
+        COMMAND ntfslib_mft_mirror_fallback_test
+    )
+
     add_executable(ntfslib_lookup_index_cache_test
         tests/lookup_index_cache.cpp
     )

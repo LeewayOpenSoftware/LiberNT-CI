@@ -279,10 +279,13 @@ NtfsDirectoryStoreInfo(
     _Inout_ PULONG BufferLength,
     _Out_ PULONG EntrySize);
 
+/* $MFTMirr holds the first cluster of $MFT, and at least 4 records. Fully
+ * parenthesized: "!IsFileRecordInMFTMirr(n)" and "x && IsFileRecordInMFTMirr(n)"
+ * must apply to the whole test. */
 #define IsFileRecordInMFTMirr(FileRecordNumber) \
-((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) > (FileRecordSize << 2)) ? \
-FileRecordNumber < ((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) / FileRecordSize) \
-: FileRecordNumber < 4
+((((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) > (FileRecordSize << 2)) ? \
+  ((FileRecordNumber) < ((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) / FileRecordSize)) : \
+  ((FileRecordNumber) < 4)))
 
 #define LONGLONG_SIGN_EXTEND(Number, Bytes) \
 (((Number) << ((sizeof(LONGLONG) - (Bytes)) * 8)) >> ((sizeof(LONGLONG) - (Bytes)) * 8))
