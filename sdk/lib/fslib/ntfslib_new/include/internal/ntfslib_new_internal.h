@@ -2080,6 +2080,16 @@ public:
     GetFileRecord(_In_   ULONG FileRecordNumber,
                   _Out_  PFileRecord* File);
 
+    /* The same, but for a record the caller already knows is in use from
+     * its own header flag: the $MFT:$Bitmap bit is not consulted. A record
+     * is committed before its bitmap bit, so a cut can leave a live record
+     * whose bit is still clear; the volume check reads those before it
+     * writes the bitmap back. */
+    NTSTATUS
+    GetFileRecord(_In_   ULONG FileRecordNumber,
+                  _Out_  PFileRecord* File,
+                  _In_   BOOLEAN IgnoreMftBitmap);
+
     /* Resolves one component inside a directory whose record the caller
      * already holds, so a repeat open in a known directory does not walk the
      * path from the root again. */

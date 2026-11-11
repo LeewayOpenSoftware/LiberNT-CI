@@ -343,6 +343,7 @@ private:
     void RememberCrossLink(_In_ ULONGLONG Owner, _In_ PAttribute Attr, _In_ ULONGLONG Vcn, _In_ ULONGLONG Length);
     void ResolveCrossLinks();
     void RemoveDangling();
+    NTSTATUS LoadLiveRecord(_In_ ULONGLONG Number, _Out_ PFileRecord* File);
     ULONG CheckIndexEntries(_In_ ULONGLONG Directory,
                             _In_ PIndexNodeHeader Node,
                             _In_ ULONG Available,
@@ -1370,7 +1371,7 @@ VolumeCheck::CheckAttributeLists()
 
         if (!TestBit(AttrListMap, Number) || !TestBit(InUseMap, Number))
             continue;
-        if (!NT_SUCCESS(V->MFT->GetFileRecord((ULONG)Number, &File)))
+        if (!NT_SUCCESS(LoadLiveRecord(Number, &File)))
             continue;
 
         Status = File->FilterAttributeList(KeepListEntry, &Filter, FALSE, &Dropped, &DroppedNames, &DroppedData);
@@ -1490,7 +1491,7 @@ VolumeCheck::RebuildAttributeLists(_In_reads_(Count) const ULONGLONG* Bases, _In
 
         if (!Usable[Base] || ExtensionCount[Base] == 0)
             continue;
-        Status = V->MFT->GetFileRecord((ULONG)Bases[Base], &File);
+        Status = LoadLiveRecord(Bases[Base], &File);
         while (NT_SUCCESS(Status) && Loaded < ExtensionCount[Base])
         {
             Status = V->MFT->GetFileRecord((ULONG)Extensions[Base * CHECK_LIST_EXTENSIONS + Loaded], &Parts[Loaded]);
@@ -2095,7 +2096,7 @@ VolumeCheck::RemoveDangling()
         if (Entry->Removed)
             continue;
         Attempted++;
-        Status = V->MFT->GetFileRecord((ULONG)Entry->Directory, &File);
+        Status = LoadLiveRecord(Entry->Directory, &File);
         if (!NT_SUCCESS(Status))
         {
             DanglingFailures++;
@@ -2513,6 +2514,21 @@ VolumeCheck::VerifyWholeCuts(_Inout_ IndexWalk* Walk)
     }
 }
 
+/*
+ * A base record the record pass found in use by its own header flag. Its
+ * $MFT:$Bitmap bit can still be clear: a record is committed before its bit,
+ * so a cut in between leaves exactly that, and the repaired bitmap is only
+ * written after the index passes (CommitMftBitmap). Reading such a record
+ * through the bitmap failed, so the check reported its index corrupt at
+ * VCN 0 without walking it, and every name in it as missing from its
+ * parent (Lab04 DOR OFF1, BB4).
+ */
+NTSTATUS
+VolumeCheck::LoadLiveRecord(_In_ ULONGLONG Number, _Out_ PFileRecord* File)
+{
+    return V->MFT->GetFileRecord((ULONG)Number, File, Number < RecordCount && TestBit(InUseMap, Number));
+}
+
 void
 VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
 {
@@ -2530,7 +2546,7 @@ VolumeCheck::CheckDirectory(_In_ ULONGLONG Directory)
     RtlZeroMemory(&Walk, sizeof(Walk));
     Walk.Directory = Directory;
     Out->Directories++;
-    Status = V->MFT->GetFileRecord((ULONG)Directory, &File);
+    Status = LoadLiveRecord(Directory, &File);
     if (!NT_SUCCESS(Status))
     {
         Event(NtfsCheckIndexCorrupt, Directory, 0);
