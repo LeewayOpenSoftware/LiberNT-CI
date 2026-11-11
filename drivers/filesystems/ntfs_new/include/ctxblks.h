@@ -67,7 +67,14 @@ typedef struct _VolumeContextBlock
     LIST_ENTRY RecordIdentityHash[256];
     ULONG RecordCacheCount;
 
-    /* One stable parent record for repeated leaf lookups in a directory. */
+    /*
+     * One stable parent record for repeated leaf lookups in a directory.
+     * Lookups take the record out of the slot under CachedLookupParentMutex,
+     * use it alone, and put it back (create.c), so two lookups never share
+     * it and none destroys it under another. Paths that create, rename or
+     * delete still use it in place: they hold the metadata lock exclusive.
+     */
+    FAST_MUTEX CachedLookupParentMutex;
     PNtfsFileRecord CachedLookupParent;
     LONG CachedLookupParentGeneration;
     USHORT CachedLookupParentPathLength;
