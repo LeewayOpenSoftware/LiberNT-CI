@@ -10,35 +10,44 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+/* cmlib.h brings the host SAL set the cmlib sources themselves compile with, so
+ * including it before bitmap.c defines _In_/_Out_ without pulling the <sal.h>
+ * chain (sdk/include/psdk/specstrings.h -> sal.h), which is absent on a Linux
+ * host. __drv_aliasesMem is the only driver annotation bitmap.c uses. */
 #include <typedefs.h>
-#include <driverspecs.h>
+#include <cmlib.h>
+#ifndef __drv_aliasesMem
+#define __drv_aliasesMem
+#endif
 
 #ifndef min
 #define min(a, b) (((a) < (b)) ? (a) : (b))
 #endif
 
-unsigned char BitScanForward(unsigned long *Index, unsigned long Mask)
+/* Signatures match bitmap.c's callers (BITMAP_INDEX is 32-bit; the 64-bit wrappers
+ * write an `unsigned long`), so this is correct on both LLP64 and LP64. */
+unsigned char BitScanForward(unsigned int *Index, unsigned int Mask)
 {
     if (!Mask) return 0;
-    *Index = (unsigned long)__builtin_ctzl(Mask);
+    *Index = (unsigned int)__builtin_ctz(Mask);
     return 1;
 }
-unsigned char BitScanReverse(unsigned long *Index, unsigned long Mask)
+unsigned char BitScanReverse(unsigned int *Index, unsigned int Mask)
 {
     if (!Mask) return 0;
-    *Index = 31u - (unsigned long)__builtin_clzl(Mask);
+    *Index = 31u - (unsigned int)__builtin_clz(Mask);
     return 1;
 }
-unsigned char BitScanForward64(unsigned long *Index, unsigned long long Mask)
+unsigned char BitScanForward64(unsigned int *Index, unsigned long long Mask)
 {
     if (!Mask) return 0;
-    *Index = (unsigned long)__builtin_ctzll(Mask);
+    *Index = (unsigned int)__builtin_ctzll(Mask);
     return 1;
 }
-unsigned char BitScanReverse64(unsigned long *Index, unsigned long long Mask)
+unsigned char BitScanReverse64(unsigned int *Index, unsigned long long Mask)
 {
     if (!Mask) return 0;
-    *Index = 63u - (unsigned long)__builtin_clzll(Mask);
+    *Index = 63u - (unsigned int)__builtin_clzll(Mask);
     return 1;
 }
 
@@ -58,8 +67,6 @@ VOID NTAPI RtlFillMemoryUlonglong(PVOID Destination, SIZE_T Length, ULONGLONG Pa
 /* The real kernel bitmap routines (RtlInitializeBitMap, RtlSetBits, RtlClearBits,
  * RtlFindSetBits, RtlClearAllBits, RtlCheckBit). */
 #include <bitmap.c>
-
-#include <cmlib.h>
 
 VOID NTAPI RtlInitUnicodeString(PUNICODE_STRING Dest, PCWSTR Source)
 {
