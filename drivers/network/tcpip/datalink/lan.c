@@ -321,6 +321,46 @@ NDIS_STATUS LANUpdateMulticastList(
                     Count * IEEE_802_ADDR_LENGTH);
 }
 
+/* An NDIS reset returns the miniport's receive filters to their defaults.
+ * Send the multicast list and the packet filter again, so that group
+ * addresses already joined (IPv6 all-nodes, which carries router
+ * advertisements, and IGMP groups) keep reaching the stack. */
+static VOID LanReplayReceiveFilters(
+    PLAN_ADAPTER Adapter)
+{
+    UCHAR List[LAN_MAX_MULTICAST][IEEE_802_ADDR_LENGTH];
+    ULONG Count;
+    KIRQL OldIrql;
+    NDIS_STATUS Status;
+
+    if (Adapter->Media != NdisMedium802_3)
+        return;
+
+    KeAcquireSpinLock(&Adapter->Lock, &OldIrql);
+    Count = Adapter->MulticastCount;
+    RtlCopyMemory(List, Adapter->MulticastList, Count * IEEE_802_ADDR_LENGTH);
+    KeReleaseSpinLock(&Adapter->Lock, OldIrql);
+
+    if (Count)
+    {
+        Status = NDISCall(Adapter,
+                          NdisRequestSetInformation,
+                          OID_802_3_MULTICAST_LIST,
+                          List,
+                          Count * IEEE_802_ADDR_LENGTH);
+        if (Status != NDIS_STATUS_SUCCESS)
+            TI_DbgPrint(MIN_TRACE, ("Could not restore the multicast list (0x%X).\n", Status));
+    }
+
+    Status = NDISCall(Adapter,
+                      NdisRequestSetInformation,
+                      OID_GEN_CURRENT_PACKET_FILTER,
+                      &Adapter->PacketFilter,
+                      sizeof(UINT));
+    if (Status != NDIS_STATUS_SUCCESS)
+        TI_DbgPrint(MIN_TRACE, ("Could not restore the packet filter (0x%X).\n", Status));
+}
+
 static VOID LanSendDone(
     PLAN_ADAPTER Adapter)
 {
@@ -764,6 +804,9 @@ BOOLEAN ReconfigureAdapter(PRECONFIGURE_CONTEXT Context)
          * than destroy neighbors, because the routes still reference them. */
         NBInvalidateNeighborsForInterface(Interface);
     }
+
+    if (Context->Adapter->CompletingReset)
+        LanReplayReceiveFilters(Adapter);
 
     Context->Adapter->CompletingReset = FALSE;
 
