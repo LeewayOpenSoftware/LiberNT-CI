@@ -854,7 +854,15 @@ static void LayoutQatRow(ILeewayRibbon *r, Surface *surf, int y, int width)
     (void)width;
 }
 
-/* Hosted combo boxes (G14): one real COMBOBOX child per COMBO placement on the visible band. */
+/* Hosted combo boxes (G14): the typing part is a plain EDIT child (coloured
+ * through WM_CTLCOLOREDIT, so it follows the theme in every mode); the frame
+ * and the arrow are drawn by the ribbon and the list is the ribbon's own menu
+ * popup. Nothing depends on the system combo's theme. */
+static void ComboEditRect(ILeewayRibbon *r, const RECT *rc, RECT *out)
+{
+    SetRect(out, rc->left + Sc(r, 3), rc->top + Sc(r, 3), rc->right - Sc(r, M_ARROW_W) - Sc(r, 2), rc->bottom - Sc(r, 3));
+}
+
 static void SyncHosted(ILeewayRibbon *r)
 {
     for (UINT32 i = 0; i < r->hosted_count; i++) r->hosted[i].used = FALSE;
@@ -870,23 +878,14 @@ static void SyncHosted(ILeewayRibbon *r)
         }
         h->used = TRUE;
         if (!h->hwnd) {
-            h->hwnd = CreateWindowExW(0, L"COMBOBOX", NULL, WS_CHILD | WS_VSCROLL | WS_CLIPSIBLINGS | CBS_DROPDOWN | CBS_AUTOHSCROLL,
+            h->hwnd = CreateWindowExW(0, L"EDIT", NULL, WS_CHILD | WS_CLIPSIBLINGS | ES_LEFT | ES_AUTOHSCROLL,
                                       0, 0, 10, 10, r->hwnd, (HMENU)(UINT_PTR)it->cmd, GetModuleHandleW(NULL), NULL);
             if (!h->hwnd) continue;
-            h->gen = r->coll_gen - 1;
+            SendMessageW(h->hwnd, EM_SETLIMITTEXT, 127, 0);
         }
         SendMessageW(h->hwnd, WM_SETFONT, (WPARAM)r->font, FALSE);
-        if (h->gen != r->coll_gen) {
-            SendMessageW(h->hwnd, CB_RESETCONTENT, 0, 0);
-            Collection *c = FindCollection(r, it->cmd);
-            for (UINT32 k = 0; c && k < c->count; k++) {
-                SendMessageW(h->hwnd, CB_ADDSTRING, 0, (LPARAM)(c->items[k].label ? c->items[k].label : L""));
-            }
-            h->gen = r->coll_gen;
-        }
-        HWND focus = GetFocus();
-        BOOL editing = focus && (focus == h->hwnd || IsChild(h->hwnd, focus));
-        if (!editing) {
+        h->gen = r->coll_gen;
+        if (GetFocus() != h->hwnd) {
             LeewayUICommandState st;
             QueryState(r, it->cmd, &st, NULL, NULL, NULL);
             if (st.label) lstrcpynW(h->text, st.label, 128);
@@ -894,11 +893,13 @@ static void SyncHosted(ILeewayRibbon *r)
             GetWindowTextW(h->hwnd, cur, 128);
             if (lstrcmpW(cur, h->text) != 0) {
                 SetWindowTextW(h->hwnd, h->text);
-                SendMessageW(h->hwnd, CB_SETEDITSEL, 0, MAKELPARAM(-1, 0));   /* no selection highlight while unfocused */
+                SendMessageW(h->hwnd, EM_SETSEL, (WPARAM)-1, 0);   /* no selection highlight while unfocused */
             }
             EnableWindow(h->hwnd, st.enabled);
         }
-        SetWindowPos(h->hwnd, NULL, it->rc.left, it->rc.top, it->rc.right - it->rc.left, Sc(r, M_COMBO_LIST_H),
+        RECT er;
+        ComboEditRect(r, &it->rc, &er);
+        SetWindowPos(h->hwnd, NULL, er.left, er.top, er.right - er.left, er.bottom - er.top,
                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     }
     for (UINT32 i = 0; i < r->hosted_count; i++) {
@@ -1399,7 +1400,18 @@ static void PaintItem(ILeewayRibbon *r, HDC hdc, Surface *s, int index, COLORREF
     case IT_GROUPBTN:
     case IT_CONTROL:
     case IT_SPLITARROW: {
-        if (it->kind == IT_CONTROL && it->ckind == LWUI_CONTROL_COMBO && s == &r->s) break;   /* hosted combo box draws itself */
+        if (it->kind == IT_CONTROL && it->ckind == LWUI_CONTROL_COMBO && s == &r->s) {
+            /* hosted combo: frame and arrow here, the EDIT child draws the text */
+            RECT box = rc;
+            InflateRect(&box, -1, -1);
+            FrameRound(r, hdc, &box, Col(r, LWUI_COLOR_POPUP_BG), Col(r, (hover || pressed) ? LWUI_COLOR_HOVER_BORDER : LWUI_COLOR_GROUP_BORDER), Sc(r, 3), TRUE);
+            if (hover || pressed) {
+                RECT ar = {rc.right - Sc(r, M_ARROW_W) - Sc(r, 2), box.top + 1, box.right - 1, box.bottom - 1};
+                ButtonFace(r, hdc, &ar, hover, pressed, FALSE);
+            }
+            DrawArrowDown(r, hdc, rc.right - Sc(r, M_ARROW_W) / 2 - Sc(r, 1), (rc.top + rc.bottom) / 2, text);
+            break;
+        }
         if (it->kind == IT_CONTROL && it->ckind == LWUI_CONTROL_CHECKBOX) {
             ButtonFace(r, hdc, &rc, hover, pressed, FALSE);
             int cb = Sc(r, M_CHECK);
@@ -2242,7 +2254,12 @@ static void MainActivate(ILeewayRibbon *r, int index, BOOL from_keytip)
         if (!st.enabled) return;
         if (it.kind == IT_CONTROL && it.ckind == LWUI_CONTROL_COMBO) {
             Hosted *h = FindHosted(r, it.cmd);
-            if (h && h->hwnd) { SetFocus(h->hwnd); return; }   /* hosted: the keytip or click focuses the box */
+            if (h && h->hwnd && from_keytip) {
+                SetFocus(h->hwnd);   /* the keytip puts the caret in the box */
+                SendMessageW(h->hwnd, EM_SETSEL, 0, -1);
+                return;
+            }
+            /* a click lands on the arrow (the EDIT child takes the text area): open the list */
             OpenPopup(r, PK_MENU, &it.rc, r->hwnd, it.cmd, NULL, it.tab, from_keytip);
             return;
         }
@@ -2908,25 +2925,22 @@ static LRESULT CALLBACK RibbonWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     case WM_COMMAND: {
         Hosted *h = FindHostedByWindow(r, (HWND)lp);
         if (!h) return 0;
-        if (HIWORD(wp) == CBN_SELCHANGE) {
-            int sel = (int)SendMessageW(h->hwnd, CB_GETCURSEL, 0, 0);
-            if (sel >= 0 && SendMessageW(h->hwnd, CB_GETLBTEXTLEN, sel, 0) < 128) {
-                SendMessageW(h->hwnd, CB_GETLBTEXT, sel, (LPARAM)h->text);
-                SetWindowTextW(h->hwnd, h->text);
-                SendMessageW(h->hwnd, CB_SETEDITSEL, 0, MAKELPARAM(-1, 0));
-            }
-            Exec(r, h->cmd);
-            if (r->parent) SetFocus(r->parent);
-        } else if (HIWORD(wp) == CBN_KILLFOCUS) {
+        if (HIWORD(wp) == EN_KILLFOCUS) {
             WCHAR cur[128];
             GetWindowTextW(h->hwnd, cur, 128);
+            SendMessageW(h->hwnd, EM_SETSEL, (WPARAM)-1, 0);
             if (lstrcmpW(cur, h->text) != 0) ComboCommitted(r, h);
         }
         return 0;
     }
     case WM_CTLCOLOREDIT:
-    case WM_CTLCOLORLISTBOX:
-        return DefWindowProcW(hwnd, msg, wp, lp);
+    case WM_CTLCOLORSTATIC: {
+        /* the hosted combo's edit takes the theme's popup colours (dark mode included) */
+        HDC dc = (HDC)wp;
+        SetTextColor(dc, Col(r, LWUI_COLOR_TEXT));
+        SetBkColor(dc, Col(r, LWUI_COLOR_POPUP_BG));
+        return (LRESULT)Br(r, LWUI_COLOR_POPUP_BG);
+    }
     case WM_MOUSEWHEEL: {
         POINT pt = {GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
         ScreenToClient(hwnd, &pt);
@@ -3573,6 +3587,9 @@ HRESULT WINAPI LeewayRibbonOnThemeChanged(ILeewayRibbon *r)
     DropGdi(r);
     CreateFonts(r);
     ClearIcons(r);
+    for (UINT32 i = 0; i < r->hosted_count; i++) {
+        if (r->hosted[i].hwnd) InvalidateRect(r->hosted[i].hwnd, NULL, TRUE);
+    }
     Relayout(r);
     return S_OK;
 }
@@ -3639,9 +3656,20 @@ BOOL WINAPI LeewayRibbonPreTranslateMessage(ILeewayRibbon *r, MSG *msg)
                     if (r->parent) SetFocus(r->parent);
                     return TRUE;
                 }
-                if (msg->wParam == VK_ESCAPE && !SendMessageW(h->hwnd, CB_GETDROPPEDSTATE, 0, 0)) {
+                if (msg->wParam == VK_ESCAPE) {
                     SetWindowTextW(h->hwnd, h->text);
                     if (r->parent) SetFocus(r->parent);
+                    return TRUE;
+                }
+                if (msg->wParam == VK_DOWN || msg->wParam == VK_F4) {
+                    EnsureLayout(r);
+                    for (UINT32 i = 0; i < r->s.n; i++) {
+                        Item *it = &r->s.items[i];
+                        if (it->kind == IT_CONTROL && it->ckind == LWUI_CONTROL_COMBO && it->cmd == h->cmd) {
+                            OpenPopup(r, PK_MENU, &it->rc, r->hwnd, it->cmd, NULL, it->tab, TRUE);
+                            break;
+                        }
+                    }
                     return TRUE;
                 }
                 return FALSE;

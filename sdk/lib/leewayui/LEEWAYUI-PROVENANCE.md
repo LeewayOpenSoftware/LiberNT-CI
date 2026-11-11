@@ -120,3 +120,12 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 - Artwork: n/a
 - Licence: LGPL-2.1+
 - IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-11 — ribbon.cpp: themed combo box for dark mode (Leeway Open Software)
+- Type: code (F1)
+- Change: the hosted COMBO is an EDIT child coloured via `WM_CTLCOLOREDIT` plus a ribbon-drawn frame and arrow; the list is the ribbon's menu popup; Down/F4 open it, Enter commits, Esc reverts. Replaces the system combo box (light frame under dark themes). No undocumented theme classes.
+- Sources consulted (inspiration only): public Win32 documentation for EDIT control messages.
+- Third-party code added: none
+- Artwork: n/a
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
