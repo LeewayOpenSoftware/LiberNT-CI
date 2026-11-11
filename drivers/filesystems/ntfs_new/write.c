@@ -74,6 +74,7 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     }
 
     ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    NtfsDropPagingExtent(FileCB->StreamCB);
     Header->AllocationSize.QuadPart = Allocation;
     if (Header->FileSize.QuadPart < EndOffset)
         Header->FileSize.QuadPart = EndOffset;
@@ -104,6 +105,7 @@ NtfsPersistPendingSize(_In_ PVolumeContextBlock VolCB,
     FileSize = Header->FileSize.QuadPart;
 
     ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    NtfsDropPagingExtent(FileCB->StreamCB);
     NtfsAcquireMetadata(VolCB);
     Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
     if (!NT_SUCCESS(Status))
