@@ -300,7 +300,9 @@ NtfsDirectoryStoreInfo(
 
 #define MFTDiskOffset (MFTLCN * BytesPerCluster(DiskVolume))
 #define MFTMirrDiskOffset (MFTMirrLCN * BytesPerCluster(DiskVolume))
-#define FileRecordOffset(FileRecordNumber) (FileRecordNumber * FileRecordSize)
+/* In 64 bits: both operands are ULONGs, and with 1 KB records their 32-bit
+ * product wraps from record 4194304 (4 GB into $MFT) on. */
+#define FileRecordOffset(FileRecordNumber) ((ULONGLONG)(FileRecordNumber) * FileRecordSize)
 
 #define GetOffset(LCN) (LCN * BytesPerCluster(DiskVolume))
 #define GetRunSize(Run) (Run->Length * BytesPerCluster(DiskVolume))
