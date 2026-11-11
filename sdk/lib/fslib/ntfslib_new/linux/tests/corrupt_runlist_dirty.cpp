@@ -13,6 +13,12 @@
  * then the same after breaking the first mapping-pairs byte of $Boot's
  * $DATA on the medium: the read must fail and the dismount must leave
  * VOL_DIRTY set on the medium.
+ *
+ * A crash can also come before any write or dismount. The driver commits a
+ * noted corruption when it releases the metadata lock
+ * (NtfsVolumeCommitCorruptionDirty); a session that reads the broken run
+ * list, commits as the driver does and then stops without MarkClean must
+ * leave VOL_DIRTY on the medium too. The commit is a no-op in the control.
  */
 
 #include <cstdio>
@@ -210,7 +216,7 @@ Out:
  * clean (MarkClean), close. Returns the read status through ReadStatus.
  */
 bool
-Session(const char* Path, NTSTATUS* ReadStatus)
+Session(const char* Path, NTSTATUS* ReadStatus, bool Crash = false)
 {
     PNtfsVolume Volume = NULL;
     PNtfsFileRecord Record = NULL;
@@ -239,6 +245,21 @@ Session(const char* Path, NTSTATUS* ReadStatus)
         goto Out;
     *ReadStatus = NtfsFileRecordCopyData(Record, TypeData, NULL, Buffer, &Length, 0);
     std::printf("read $Boot:$DATA: 0x%08x\n", (unsigned)*ReadStatus);
+    /* What the driver does on the outermost metadata-lock release; a second
+     * call must be harmless. */
+    Status = NtfsVolumeCommitCorruptionDirty(Volume);
+    if (!Check(NT_SUCCESS(Status), "CommitCorruptionDirty failed") ||
+        !Check(NT_SUCCESS(NtfsVolumeCommitCorruptionDirty(Volume)), "second commit failed"))
+    {
+        goto Out;
+    }
+    if (Crash)
+    {
+        /* Crash: no further write, no dismount. */
+        std::printf("crash after the read\n");
+        Ok = true;
+        goto Out;
+    }
     Status = NtfsVolumeMarkClean(Volume);
     std::printf("clean dismount: 0x%08x\n", (unsigned)Status);
     Ok = Check(NT_SUCCESS(Status), "MarkClean failed");
@@ -250,6 +271,25 @@ Out:
         NtfsVolumeDestroy(Volume);
     NtfsDiskCloseLinux();
     return Ok;
+}
+
+/* What chkdsk leaves behind: the dirty flag cleared on the medium. */
+bool
+ClearDirty(const char* Path)
+{
+    PNtfsVolume Volume = NULL;
+    ULONG BytesPerSector = 0;
+    bool Ok = false;
+
+    if (NT_SUCCESS(NtfsDiskInitializeLinuxWritable(Path, &BytesPerSector)) &&
+        NT_SUCCESS(NtfsProbePartitionAndOpenVolume(BytesPerSector, &Volume)))
+    {
+        Ok = NT_SUCCESS(NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY));
+    }
+    if (Volume)
+        NtfsVolumeDestroy(Volume);
+    NtfsDiskCloseLinux();
+    return Check(Ok, "could not clear the dirty flag");
 }
 
 /* The dirty flag as it is on the medium, read by a fresh mount. */
@@ -312,6 +352,22 @@ main()
 
     if (!BreakDataRunList(Path, 7))
         goto Out;
+
+    /* A crash right after the corrupt read: no write, no dismount. */
+    ReadStatus = STATUS_SUCCESS;
+    if (!Session(Path, &ReadStatus, true) ||
+        !Check(!NT_SUCCESS(ReadStatus), "read over a corrupt run list succeeded") ||
+        !FlagsOnMedium(Path, &Flags))
+    {
+        goto Out;
+    }
+    std::printf("after corrupt read and crash: flags 0x%04x\n", Flags);
+    if (!Check((Flags & VOL_DIRTY) != 0, "volume clean after a corrupt read and a crash") ||
+        !ClearDirty(Path))
+    {
+        goto Out;
+    }
+
     ReadStatus = STATUS_SUCCESS;
     if (!Session(Path, &ReadStatus) ||
         !Check(!NT_SUCCESS(ReadStatus), "read over a corrupt run list succeeded") ||

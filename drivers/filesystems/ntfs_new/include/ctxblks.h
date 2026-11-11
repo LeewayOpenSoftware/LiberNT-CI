@@ -722,6 +722,13 @@ NtfsReleaseMetadata(_In_ PVolumeContextBlock VolCB)
 {
     BOOLEAN Last = ExIsResourceAcquiredSharedLite(&VolCB->MetadataResource) == 1;
 
+    /* A read under this lock met corrupt on-disk structure: make the volume
+     * dirty on the medium before the lock goes, so a crash before the next
+     * write still gets the volume checked at boot. The dismount path clears
+     * or keeps the flag itself (MarkClean). */
+    if (Last && VolCB->DiskVolume && !VolCB->Dismounting && !VolCB->Dismounted)
+        (void)NtfsVolumeCommitCorruptionDirty(VolCB->DiskVolume);
+
     ExReleaseResourceLite(&VolCB->MetadataResource);
     if (Last)
         ExfReleasePushLockExclusive(&VolCB->MetadataGate);
