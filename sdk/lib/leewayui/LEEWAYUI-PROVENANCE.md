@@ -129,3 +129,10 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 - Artwork: n/a
 - Licence: LGPL-2.1+
 - IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-11 — ribbon.cpp: keytip badge placement (Leeway Open Software)
+- Type: code (F1, cosmetic)
+- Change: badge positions per item kind (tabs below the tab, QAT below the icon, large on the bottom edge, large split at the control bottom, small centred on the icon at the edge, gallery expander on itself); badge height 14.
+- Sources consulted (inspiration only): RIBBON-CONTROLS-DESIGN.md §3 (keytip behaviour described from behaviour, not copied).
+- Third-party code added: none. Artwork: n/a. Licence: LGPL-2.1+.
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)

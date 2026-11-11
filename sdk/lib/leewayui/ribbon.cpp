@@ -35,7 +35,7 @@ enum {
     M_ICON_L = 32, M_ICON_S = 16, M_LARGE_H = 66, M_LARGE_MIN_W = 46, M_SMALL_H = 22,
     M_GROUP_LABEL_H = 16, M_TAB_PAD = 11, M_APPBTN_W = 52, M_ARROW_W = 12, M_SEP_W = 6,
     M_MENU_ROW_H = 24, M_APPMENU_ROW_H = 40, M_APPMENU_W = 240, M_GALLERY_CELL_W = 76, M_GALLERY_CELL_H = 26,
-    M_STRIP_BTN = 20, M_KEYTIP_H = 16, M_TIP_PAD = 6, M_LAUNCHER = 12,
+    M_STRIP_BTN = 20, M_KEYTIP_H = 14, M_TIP_PAD = 6, M_LAUNCHER = 12,
     M_CELL = 22, M_COMBO_W = 110, M_STRIP_SCROLL_W = 14, M_CHECK = 13, M_COMBO_LIST_H = 200, M_SWATCH_L = 26,
 };
 #define MAX_HOSTED 16
@@ -1538,10 +1538,33 @@ static void PaintKeytips(ILeewayRibbon *r, HDC hdc, Surface *s, BOOL popup_keyti
         if (!KeytipShownFor(r, it, popup_keytips)) continue;
         const WCHAR *k = EffectiveKeytip(r, it);
         if (!k) continue;
+        /* Badges sit on the control's lower edge so the icon and label stay readable:
+         * tabs hang into the band's top edge (or stay inside the strip when minimised),
+         * QAT icons get theirs just below, large buttons straddle the edge under the
+         * label, small buttons straddle it centred on their icon, gallery expanders
+         * take the badge on themselves, menu rows at the left of the row. */
         int cx, cy;
-        if (it->flags & IF_LARGE) { cx = (it->rc.left + it->rc.right) / 2; cy = it->rc.bottom - Sc(r, 4); }
-        else if (it->kind == IT_TAB || it->kind == IT_APPBUTTON) { cx = (it->rc.left + it->rc.right) / 2; cy = it->rc.bottom - Sc(r, 2); }
-        else { cx = it->rc.left + Sc(r, 10); cy = it->rc.bottom - Sc(r, 2); }
+        if (it->kind == IT_TAB || it->kind == IT_APPBUTTON) {
+            cx = (it->rc.left + it->rc.right) / 2;
+            cy = (r->minimized || popup_keytips) ? it->rc.bottom - Sc(r, 7) : it->rc.bottom + Sc(r, 5);
+        } else if (it->kind == IT_QAT) {
+            cx = (it->rc.left + it->rc.right) / 2;
+            cy = it->rc.bottom + Sc(r, 3);
+        } else if (it->kind == IT_GALEXPAND) {
+            cx = (it->rc.left + it->rc.right) / 2;
+            cy = (it->rc.top + it->rc.bottom) / 2;
+        } else if (it->kind == IT_MENUROW) {
+            cx = it->rc.left + Sc(r, 14);
+            cy = it->rc.bottom - Sc(r, 3);
+        } else if (it->flags & IF_LARGE) {
+            cx = (it->rc.left + it->rc.right) / 2;
+            cy = it->rc.bottom + Sc(r, 1);
+            /* a large split's primary half ends at the split line: use the whole control's bottom */
+            if (it->kind == IT_CONTROL && IsSplitKind(it->ckind)) cy += Sc(r, M_LARGE_H - M_ICON_L - 6);
+        } else {
+            cx = it->rc.left + Sc(r, 3) + Sc(r, M_ICON_S) / 2;
+            cy = it->rc.bottom - Sc(r, 2);
+        }
         DrawKeytip(r, hdc, k, cx, cy);
     }
 }
