@@ -111,3 +111,12 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 - Artwork: n/a (demo palette colours are plain RGB values; demo icons are discs drawn in code)
 - Licence: LGPL-2.1+
 - IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-11 — ribbon.cpp: MSAA accessibility tree, G20 (Leeway Open Software)
+- Type: code (F1)
+- Change: `WM_GETOBJECT`/`OBJID_CLIENT` on the ribbon and popup windows returns an `IAccessible` over the item list (names, roles, states, values, descriptions, shortcuts, default actions, locations, hit test, navigation, focus); focus and reorder events. oleacc/oleaut32 loaded at run time; IIDs defined locally; no link or C++ runtime dependency.
+- Sources consulted (inspiration only): RIBBON-CONTROLS-DESIGN.md §3; public Microsoft Active Accessibility documentation (interface contract, role and state constants from the SDK header). No code copied.
+- Third-party code added: none
+- Artwork: n/a
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
