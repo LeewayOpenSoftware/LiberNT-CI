@@ -311,8 +311,17 @@ jobs:
       env:
         ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
         UBSAN_OPTIONS: print_stacktrace=1
+        NTFSLIB_KEEP_FAILED: ${{ runner.temp }}/ntfslib-failed
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency"
+
+    - name: Upload the images of failed host tests
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: ntfslib-failed-images
+        path: ${{ runner.temp }}/ntfslib-failed
+        if-no-files-found: ignore
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'
