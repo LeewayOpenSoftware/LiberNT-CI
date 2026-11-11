@@ -4529,6 +4529,28 @@ FileRecord::AbortNonResidentMappingUpdate(
         }
     }
 
+    /*
+     * The restore writes above still sit in the write-back cache, and the
+     * records that named the new layout may already be on the medium. Make
+     * the restored layout durable before the new extension records, the new
+     * list clusters and (in the callers) the new data clusters go back for
+     * reuse; otherwise another file can claim them while the abandoned
+     * layout is the durable one. If the flush fails, keep them (a leak).
+     */
+    if (MetadataRestored &&
+        BaseRecord &&
+        (Update->OwnerWriteAttempted ||
+         Update->ListWriteAttempted))
+    {
+        NTSTATUS FlushStatus = BaseRecord->DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(FlushStatus))
+        {
+            MetadataRestored = FALSE;
+            if (NT_SUCCESS(FirstFailure))
+                FirstFailure = FlushStatus;
+        }
+    }
+
     while (Update->NewExtents)
     {
         PNONRESIDENT_MAPPING_NEW_EXTENT Next =

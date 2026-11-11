@@ -1119,6 +1119,10 @@ Restore:
             Status = RestoreStatus;
         }
     }
+    /* The record that named Runs may have reached the medium: make the
+     * restored one durable before Runs can be reused (else keep them). */
+    if (Restored && WriteAttempted && !NT_SUCCESS(DiskVolume->FlushVolume()))
+        Restored = FALSE;
     if (Restored)
         (void)DiskVolume->ReleaseClusters(Runs);
 
@@ -1415,6 +1419,17 @@ Restore:
             RecoveryStatus = RestoreStatus;
     }
     Restored = NT_SUCCESS(RecoveryStatus);
+    /* Records naming the staged owner and NewRuns may have reached the
+     * medium: make the restored ones durable before either is reused. */
+    if (Restored && (OwnerWriteAttempted || BaseWriteAttempted))
+    {
+        NTSTATUS FlushStatus = DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(FlushStatus))
+        {
+            Restored = FALSE;
+            RecoveryStatus = FlushStatus;
+        }
+    }
     if (StagedOwner && Restored)
     {
         NTSTATUS CleanupStatus = DiskVolume->MFT->DeallocateExtensionFileRecord(StagedOwner);
