@@ -509,6 +509,20 @@ HalpBiosDisplayReset(VOID)
     ULONG OldEflags;
     BOOLEAN Success;
 
+    PVOID Frames[10];
+    USHORT FrameCount, i;
+    static LONG CallCount;
+
+    /* Name the callers: this call reprograms the VGA out of the VBE
+     * framebuffer mode and runs with interrupts disabled, so a call after
+     * a WDDM adapter took the scanout is worth tracing. */
+    FrameCount = RtlCaptureStackBackTrace(0, RTL_NUMBER_OF(Frames), Frames, NULL);
+    DbgPrint("HAL: HalpBiosDisplayReset #%ld irql %u frames %u:", InterlockedIncrement(&CallCount),
+             (ULONG)KeGetCurrentIrql(), (ULONG)FrameCount);
+    for (i = 0; i < FrameCount; i++)
+        DbgPrint(" %p", Frames[i]);
+    DbgPrint("\n");
+
     /* Save flags and disable interrupts */
     OldEflags = __readeflags();
     _disable();
@@ -519,6 +533,7 @@ HalpBiosDisplayReset(VOID)
 
     /* Restore previous flags */
     __writeeflags(OldEflags);
+    DbgPrint("HAL: HalpBiosDisplayReset done success %u\n", (ULONG)Success);
     return Success;
 }
 #endif // _M_AMD64
