@@ -514,7 +514,6 @@ SearchAllocation:
         WriteOffset.QuadPart =
             (LONGLONG)AllocationOffset;
         WriteLength = IndexRecordSize;
-        DiskVolume->IndexWorkBufferValid = FALSE;
         Status = Parent->WriteFileData(
             TypeIndexAllocation,
             const_cast<PWSTR>(NtfsI30Name),
