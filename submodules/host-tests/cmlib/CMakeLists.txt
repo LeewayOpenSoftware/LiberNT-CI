@@ -23,9 +23,10 @@ list(TRANSFORM CMLIB_SOURCES PREPEND "${CMLIB_DIR}/")
 add_library(cmlib_host STATIC ${CMLIB_SOURCES})
 target_include_directories(cmlib_host PUBLIC
     "${REACTOS_SOURCE_ROOT}/sdk/include/host"
+    "${REACTOS_SOURCE_ROOT}/sdk/include"
     "${CMLIB_DIR}")
 target_compile_definitions(cmlib_host PUBLIC
-    _NTSYSTEM_ NASSERT NTDDI_VERSION=0x0A000010 CMLIB_HOST __NO_CTYPE_INLINES)
+    _NTSYSTEM_ NASSERT NTDDI_VERSION=0x0A000010 CMLIB_HOST __NO_CTYPE_INLINES TARGET_amd64)
 if(NOT MSVC)
     target_compile_options(cmlib_host PRIVATE -fshort-wchar -Wno-multichar)
 endif()

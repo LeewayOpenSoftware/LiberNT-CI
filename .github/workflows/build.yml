@@ -326,7 +326,7 @@ jobs:
       with:
         sparse-checkout: |
           sdk/lib/cmlib
-          sdk/include/host
+          sdk/include
           submodules/host-tests/cmlib
 
     - name: Install host build tools
