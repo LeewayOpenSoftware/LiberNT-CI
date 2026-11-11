@@ -54,6 +54,9 @@ extern "C" {
 #define LWUI_ICON_GLYPH         0x80000000u
 #define LWUI_ICON_ID_MASK       0x7FFFFFFFu
 
+/* "no colour" for LeewayUICommandState.color and LeewayUICollectionItem.color */
+#define LWUI_COLOR_NONE         0xFFFFFFFFu
+
 /* ---- Command table ---- */
 
 typedef struct {
@@ -75,8 +78,9 @@ typedef struct {
     BOOL enabled;
     BOOL checked;
     BOOL visible;
-    const WCHAR *label;
+    const WCHAR *label;         /* for a COMBO this is the current text */
     const WCHAR *tooltip;
+    COLORREF color;             /* colour wells (G15): the colour shown; pre-filled LWUI_COLOR_NONE */
 } LeewayUICommandState;
 
 typedef HRESULT (*LeewayUICommandExecuteHandler)(UINT32 id, void *app_context);
@@ -95,10 +99,18 @@ typedef enum {
     LWUI_CONTROL_SPLIT_SMALL,       /* SPLIT S */
     LWUI_CONTROL_DROPDOWN,          /* DD: the whole control opens the collection as a menu */
     LWUI_CONTROL_GALLERY,           /* GAL: small control opening the collection as a grid */
-    LWUI_CONTROL_COMBO,             /* gap G14: drawn as a dropdown until implemented */
-    LWUI_CONTROL_COLORWELL,         /* gap G15: drawn as a small button until implemented */
-    LWUI_CONTROL_CHECKBOX,          /* gap G19: drawn as a small toggle until implemented */
-    LWUI_CONTROL_LAUNCHER,          /* gap G17: use LeewayUIGroup.launcher_id instead */
+    LWUI_CONTROL_COMBO,             /* COMBO (G14): editable combo box hosted in the band; items = the
+                                       command's collection (ids may be 0: text-only choices); the current
+                                       text comes from query-state label; a choice or Enter executes the
+                                       command and the app reads LeewayRibbonGetComboText. In a popup
+                                       (collapsed group, minimised band) it degrades to a dropdown. */
+    LWUI_CONTROL_COLORWELL,         /* CWELL (G15): large toggle showing LeewayUICommandState.color */
+    LWUI_CONTROL_CHECKBOX,          /* CHK (G19): small check-box row; checked from query-state */
+    LWUI_CONTROL_LAUNCHER,          /* G17: use LeewayUIGroup.launcher_id instead */
+    LWUI_CONTROL_GALLERY_STRIP,     /* in-ribbon gallery (G16): three rows of cells from the collection
+                                       with scroll up/down and an expand button opening the full gallery;
+                                       LeewayUIPlacement.width sets the strip width. In MIXED/SMALL
+                                       variants it becomes the dropdown gallery. */
 } LeewayUIControlKind;
 
 /* ---- Layout tree (arrays + counts, so tables can be static const and
@@ -108,6 +120,7 @@ typedef struct {
     UINT32 command_id;
     LeewayUIControlKind kind;
     const WCHAR *keytip;        /* per-placement keytip; NULL = the command's keytip */
+    UINT32 width;               /* logical px for COMBO and GALLERY_STRIP; 0 = default (110 / 3 cells) */
 } LeewayUIPlacement;
 
 /* Group resize variants (gap G11). The app declares the order the group
@@ -161,12 +174,15 @@ typedef struct {
  * makes a split button's primary action repeat the last chosen item. */
 
 typedef struct {
-    UINT32 id;
+    UINT32 id;                  /* executed on choice; 0 allowed for COMBO text-only choices */
     const WCHAR *label;
     UINT32 icon_id;
+    COLORREF color;             /* LWUI_COLLECTION_COLORS: the cell's colour; LWUI_COLOR_NONE = a text row below the grid */
+    UINT32 alt_id;              /* executed on right-click of a gallery cell (Paint: Colour 2); 0 = none */
 } LeewayUICollectionItem;
 
 #define LWUI_COLLECTION_LAST_CHOICE_PRIMARY 0x00000001u
+#define LWUI_COLLECTION_COLORS              0x00000002u   /* gallery cells are colour swatches (G15 palette) */
 
 /* ---- Icons (gap G10) ----
  * The resolver returns an HICON of size_px (alpha icons draw with DrawIconEx);
@@ -214,6 +230,10 @@ HRESULT WINAPI LeewayRibbonSetLayout(ILeewayRibbon *ribbon, const LeewayUILayout
  * split button); count 0 removes it. */
 HRESULT WINAPI LeewayRibbonSetCollection(ILeewayRibbon *ribbon, UINT32 command_id,
                                          const LeewayUICollectionItem *items, UINT32 count, UINT32 flags);
+
+/* COMBO text (G14): the text of the hosted combo for command_id after it
+ * executed (a choice or Enter). E_NOT_SUFFICIENT_BUFFER with *cch = needed. */
+HRESULT WINAPI LeewayRibbonGetComboText(ILeewayRibbon *ribbon, UINT32 command_id, WCHAR *buffer, UINT32 *cch);
 
 /* Contextual tabs (G13): tabs whose context equals name appear while active;
  * the first one is selected on appear and the previous tab restored on disappear. */

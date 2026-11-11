@@ -93,3 +93,21 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 - Artwork: demo icons are coloured discs drawn in code; not shipped
 - Licence: LGPL-2.1+
 - IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-10 — ribbon.h / ribbon.cpp: Paint framework gaps G13-G17, G19 (Leeway Open Software)
+- Type: code (F1)
+- Change: hosted COMBO boxes in the band with `LeewayRibbonGetComboText` (G14); colour wells drawing `LeewayUICommandState.color` (G15); in-ribbon gallery strips (`LWUI_CONTROL_GALLERY_STRIP`: three rows of cells, scroll up/down, expand to the full gallery; `LeewayUIPlacement.width`) with colour cells (`LWUI_COLLECTION_COLORS`, `LeewayUICollectionItem.color`) and a right-click route (`alt_id`) (G15/G16); colour-grid gallery popup with text rows below; check-box rows (G19); the group launcher kept (G17); contextual tabs exercised (G13). The keytip check now also rejects prefixes (a shorter keytip would fire before a longer one could be typed). Trailing fields only: existing initialisers keep compiling.
+- Sources consulted (inspiration only): RIBBON-APPS-SPEC.md §2, RIBBON-CONTROLS-DESIGN.md §2; public Win32 documentation for the combo box messages. No Microsoft ribbon code, markup, metrics or assets.
+- Third-party code added: none
+- Artwork: n/a (swatches and placeholder glyphs drawn in code)
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-10 — ribbon_test.cpp: Paint-layout mode (Leeway Open Software)
+- Type: code (test)
+- Change: `ribbon_test paint` builds the RIBBON-APPS-SPEC.md §2 Paint ribbon from static const tables: Home (Clipboard, Image with launcher, Tools radio set, Brushes, Shapes strip, Size, Colours with wells and palette strip), View (zoom, check-box rows, display) and the contextual Text tab (font combos, styles, background, colours). Keytip corrections applied where the spec had prefix clashes (Copy CP, Pencil PE, Eraser ER). Viewer tables get the new trailing fields spelled out.
+- Sources consulted (inspiration only): RIBBON-APPS-SPEC.md §2; mspaint resource ids from the in-tree source (values only).
+- Third-party code added: none
+- Artwork: n/a (demo palette colours are plain RGB values; demo icons are discs drawn in code)
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
