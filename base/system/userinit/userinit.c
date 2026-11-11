@@ -619,6 +619,7 @@ NotifyLogon(VOID)
 
 /*
  * Expands the path for the ReactOS Installer "reactos.exe".
+ * See also base/setup/welcome/welcome.c!ExpandInstallerPath()
  */
 static BOOL
 ExpandInstallerPath(

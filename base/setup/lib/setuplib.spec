@@ -80,4 +80,3 @@
 
 ;; bootsup
 @ stdcall InstallBootManagerAndBootEntries(long ptr ptr ptr ptr)
-@ stdcall RemoveHostSetupBoot(ptr)

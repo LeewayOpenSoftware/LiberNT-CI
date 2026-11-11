@@ -91,7 +91,7 @@ FindVolumeFormatPlan(
     return NULL;
 }
 
-BOOLEAN
+static BOOLEAN
 PlanVolumeFormat(
     _In_ PVOLENTRY Volume,
     _In_ PCWSTR FileSystem,

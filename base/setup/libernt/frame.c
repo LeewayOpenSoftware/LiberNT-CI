@@ -464,8 +464,7 @@ SetupFrameProc(
             }
             Margins.cxLeftWidth = Frame.Watermark.cx + Frame.Corner;
             Margins.cyTopHeight = Frame.Corner;
-            if (!pSetupData->bWindowsHost)
-                DwmExtendFrameIntoClientArea(hwnd, &Margins);
+            DwmExtendFrameIntoClientArea(hwnd, &Margins);
 
             GetWindowRect(GetDlgItem(hwnd, IDC_FRAME_PAGE), &rc);
             MapWindowPoints(HWND_DESKTOP, hwnd, (LPPOINT)&rc, 2);
