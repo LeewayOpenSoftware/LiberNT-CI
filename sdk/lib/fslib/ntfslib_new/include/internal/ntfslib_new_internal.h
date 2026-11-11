@@ -1500,7 +1500,7 @@ private:
         _Out_ PBOOLEAN OwnerReferenced);
 
     NTSTATUS
-    CreateInitialAttributeList();
+    CreateInitialAttributeList(_In_opt_ PAttribute GrowingData = NULL);
 
     NTSTATUS
     EnsureAttributeListForMappingGrowth(
@@ -1610,6 +1610,9 @@ private:
         _In_ PAttribute TargetAttribute,
         _In_ ULONGLONG NewDataSize,
         _In_ ULONGLONG RequestedAllocationSize);
+
+    NTSTATUS
+    SynchronizeExtensionDataSizes();
 
     NTSTATUS
     UpdateFileNameSizes(_In_ ULONGLONG AllocatedSize,
