@@ -315,7 +315,7 @@ jobs:
         UBSAN_OPTIONS: print_stacktrace=1
         NTFSLIB_KEEP_FAILED: ${{ runner.temp }}/ntfslib-failed
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty|full_base_growth"
 
     - name: Upload the images of failed host tests
       if: ${{ failure() }}
