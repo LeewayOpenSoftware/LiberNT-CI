@@ -679,13 +679,11 @@ public:
      * under the caller's metadata serialization. */
     PUCHAR BitmapWorkBuffer = NULL;
 
-    /* Scratch for index-block reads during lookups; a pool allocation per
-     * name resolution was a fifth of the lookup. Descents never nest. */
+    /* Scratch for index-block reads while a directory index is edited
+     * (editdir.cpp). Editing runs under the exclusive metadata lock; lookups
+     * and enumerations no longer use it (IndexPool, Directory). */
     PUCHAR IndexWorkBuffer = NULL;
     ULONG IndexWorkBufferSize = 0;
-    ULONGLONG IndexWorkFileReference = 0;
-    ULONGLONG IndexWorkVCN = 0;
-    BOOLEAN IndexWorkBufferValid = FALSE;
 
     /* Write-ordering barrier for a directory name insert (barrier mode only).
      * While AddFileToDirectory is adding a file, this holds the disk offset of
@@ -704,6 +702,22 @@ public:
     PUCHAR RecordPoolHead = NULL;
     ULONG RecordPoolCount = 0;
     ULONG RecordPoolBufferSize = 0;
+
+    /* Free list of index-block-sized buffers for name lookups, under
+     * RecordPoolMutex. Each lookup takes its own buffer: a pool allocation
+     * per name resolution was a fifth of the lookup, and one shared buffer
+     * let a lookup parse a block another one was reading
+     * (fs-review/NTFS-LOOKUP-CONCURRENCY.md, L1). */
+    PUCHAR IndexPoolHead = NULL;
+    ULONG IndexPoolCount = 0;
+    ULONG IndexPoolBufferSize = 0;
+
+    PUCHAR
+    AcquireIndexScratch(_In_ ULONG Size);
+
+    void
+    ReleaseIndexScratch(_In_opt_ PUCHAR Buffer,
+                        _In_ ULONG Size);
 
     FAST_MUTEX SecurityCacheMutex;
     ULONG SecurityCacheId[NTFS_SECURITY_CACHE_ENTRIES] = {};
@@ -1813,6 +1827,9 @@ private:
     ULONG EnumerationDepth = 0;
     LONG EnumerationLoadedDepth = -1;
     ULONGLONG EnumerationLoadedVCN = ~(ULONGLONG)0;
+    /* The index block EnumerationLoaded* names; owned by this directory. */
+    PUCHAR EnumerationBuffer = NULL;
+    ULONG EnumerationBufferSize = 0;
     BOOLEAN DirectEnumeration = FALSE;
 
     // ./editdir.cpp

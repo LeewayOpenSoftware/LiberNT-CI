@@ -245,6 +245,60 @@ Volume::~Volume()
         RecordPoolHead = Next;
     }
     RecordPoolCount = 0;
+    while (IndexPoolHead)
+    {
+        PUCHAR Next = *(PUCHAR*)IndexPoolHead;
+
+        delete[] IndexPoolHead;
+        IndexPoolHead = Next;
+    }
+    IndexPoolCount = 0;
+}
+
+PUCHAR
+Volume::AcquireIndexScratch(_In_ ULONG Size)
+{
+    PUCHAR Buffer = NULL;
+
+    if (Size < sizeof(PUCHAR))
+        return NULL;
+    NtfsAcquireMutex(&RecordPoolMutex);
+    if (IndexPoolHead && IndexPoolBufferSize == Size)
+    {
+        Buffer = IndexPoolHead;
+        IndexPoolHead = *(PUCHAR*)Buffer;
+        IndexPoolCount--;
+    }
+    NtfsReleaseMutex(&RecordPoolMutex);
+    if (!Buffer)
+        Buffer = new(PagedPool, TAG_NTFS) UCHAR[Size];
+    return Buffer;
+}
+
+void
+Volume::ReleaseIndexScratch(_In_opt_ PUCHAR Buffer,
+                            _In_ ULONG Size)
+{
+    BOOLEAN Pooled = FALSE;
+
+    if (!Buffer)
+        return;
+    if (Size >= sizeof(PUCHAR))
+    {
+        NtfsAcquireMutex(&RecordPoolMutex);
+        if (IndexPoolCount < 16 &&
+            (IndexPoolCount == 0 || IndexPoolBufferSize == Size))
+        {
+            *(PUCHAR*)Buffer = IndexPoolHead;
+            IndexPoolHead = Buffer;
+            IndexPoolBufferSize = Size;
+            IndexPoolCount++;
+            Pooled = TRUE;
+        }
+        NtfsReleaseMutex(&RecordPoolMutex);
+    }
+    if (!Pooled)
+        delete[] Buffer;
 }
 
 static
