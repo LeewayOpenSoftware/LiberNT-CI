@@ -4223,6 +4223,29 @@ FileRecord::CommitNonResidentMappingUpdate(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /*
+     * Everything below retires what the old list named: the superseded
+     * first extent and the old mapping attributes are rewritten out of
+     * their records, emptied extension records are freed for reuse, and the
+     * old list's clusters go back to the volume bitmap. The write-back cache
+     * commits blocks in no dependency order, so any of those could land, or
+     * be reused by another file, while the base record above still holds the
+     * old list on the medium. A crash then leaves the durable old list naming
+     * removed attributes or another file's clusters, and the stream (or the
+     * whole file, when the list itself is overwritten) is unreachable.
+     * Commit the published layout first, when there is anything to retire
+     * (a plain append of new extents retires nothing).
+     */
+    if (Update->SupersededListRuns ||
+        Update->OldExtents ||
+        (Update->SupersededOwner &&
+         Update->SupersededOwner != BaseRecord))
+    {
+        Status = BaseRecord->DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     delete[] BaseRecord->AttributeListData;
     BaseRecord->AttributeListData = NULL;
     BaseRecord->AttributeListLength = 0;
