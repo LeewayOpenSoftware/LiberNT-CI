@@ -77,7 +77,7 @@ int main(void)
 
     /* A cell that spans several blocks: a size well over HBLOCK_SIZE. */
     Big = HvAllocateCell(Hive, 3 * HBLOCK_SIZE - 0x40, Stable, HCELL_NIL);
-    if (Big == HCELL_NIL) { fprintf(stderr, "FAIL alloc big\n"); return 2; }
+    if (Big == HCELL_NIL) { fprintf(stderr, "FAIL alloc big\n"); HvFree(Hive); return 2; }
 
     /* A cell whose header lands on a block boundary. A bin begins with its header, so
      * only a cell inside a multi-block bin can start on an interior block boundary.
@@ -85,7 +85,7 @@ int main(void)
      * pack in 8-byte steps from <bin>+0x20, so one lands exactly on <bin>+HBLOCK_SIZE.
      * Bounded; fail the setup if never hit. */
     Cell = HvAllocateCell(Hive, 3 * HBLOCK_SIZE - 0x40, Stable, HCELL_NIL);
-    if (Cell == HCELL_NIL) { fprintf(stderr, "FAIL alloc scratch\n"); return 2; }
+    if (Cell == HCELL_NIL) { fprintf(stderr, "FAIL alloc scratch\n"); HvFree(Hive); return 2; }
     HvFreeCell(Hive, Cell);
     for (i = 0; i < 8192 && Aligned == HCELL_NIL; i++)
     {
@@ -97,6 +97,7 @@ int main(void)
     if (Aligned == HCELL_NIL)
     {
         fprintf(stderr, "FAIL setup: no block-aligned cell produced\n");
+        HvFree(Hive);
         return 2;
     }
 
@@ -122,5 +123,9 @@ int main(void)
            "(aligned cell %#lx, big cell %#lx spans %lu blocks)\n",
            Checks, Failures, (unsigned long)Aligned, (unsigned long)Big,
            (unsigned long)Blocks);
+
+    /* Release the hive through TestFree: bins, map, free display, the dirty and
+     * unreconciled vectors and the base block (the sanitizer build runs LSan). */
+    HvFree(Hive);
     return Failures ? 1 : 0;
 }
