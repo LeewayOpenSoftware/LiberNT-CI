@@ -675,6 +675,8 @@ public:
      * valid: the volume must stay dirty so the next boot checks it. Readers
      * may set it without the metadata lock, so it is only ever stored TRUE. */
     volatile BOOLEAN CorruptionNoted = FALSE;
+    /* Set once CommitCorruptionDirtyOnce has made its single attempt. */
+    BOOLEAN CorruptionCommitTried = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
     BOOLEAN Generate8dot3Names = FALSE;
     /* While non-zero, WriteVolume behaves as WriteVolumeThrough (mft.cpp). */
@@ -922,6 +924,17 @@ public:
      * makes the dirty flag durable and keeps it (see CorruptionNoted). */
     void
     NoteCorruption();
+
+    /* Writes and retains the dirty flag for a noted corruption (no-op when
+     * none is noted, on a read-only mount, or without dirty tracking). The
+     * caller holds the metadata lock. */
+    NTSTATUS
+    CommitCorruptionDirty();
+
+    /* CommitCorruptionDirty at most once per mount; cheap when nothing is
+     * pending. The driver calls it on the outermost metadata-lock release. */
+    NTSTATUS
+    CommitCorruptionDirtyOnce();
 
     /* MarkClean on the shutdown path; also arms re-dirty logging. No write-
      * through (that is the J30 chain mechanism, deliberately not here). */

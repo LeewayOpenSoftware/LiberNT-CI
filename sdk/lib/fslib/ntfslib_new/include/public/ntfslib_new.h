@@ -1332,6 +1332,13 @@ NTSTATUS
 NtfsVolumeMarkCleanForShutdown(
     _In_ PNtfsVolume DiskVolume);
 
+/* After a read met corrupt structure, write and retain the dirty flag now
+ * rather than at the next write or the dismount. Once per mount, cheap when
+ * nothing is pending. Caller holds the metadata lock. */
+NTSTATUS
+NtfsVolumeCommitCorruptionDirty(
+    _In_ PNtfsVolume DiskVolume);
+
 #ifdef __cplusplus
 }
 #endif

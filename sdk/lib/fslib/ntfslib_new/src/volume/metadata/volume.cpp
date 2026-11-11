@@ -259,22 +259,7 @@ Volume::MarkClean()
      * runs the check.
      */
     if (DirtyTracking && CorruptionNoted && !IsReadOnly)
-    {
-        if (!DirtyMarked || !DirtyRetained)
-        {
-            DirtyMarked = TRUE;
-            Status = SetVolumeFlags(VOL_DIRTY, 0);
-            if (NT_SUCCESS(Status))
-                Status = FlushVolume();
-            if (!NT_SUCCESS(Status))
-            {
-                DirtyMarked = FALSE;
-                return Status;
-            }
-            DirtyRetained = TRUE;
-        }
-        return STATUS_SUCCESS;
-    }
+        return CommitCorruptionDirty();
 
     if (!DirtyTracking || !DirtyMarked || DirtyRetained || IsReadOnly)
         return STATUS_SUCCESS;
@@ -288,6 +273,52 @@ Volume::MarkClean()
     if (NT_SUCCESS(Status))
         DirtyMarked = FALSE;
     return Status;
+}
+
+/*
+ * Make a noted corruption durable now: the volume flag says dirty on the
+ * medium and is retained, so a crash before the next write or the dismount
+ * still leaves a volume the next boot checks. Caller holds the metadata lock.
+ */
+NTSTATUS
+Volume::CommitCorruptionDirty()
+{
+    NTSTATUS Status;
+
+    if (!DirtyTracking || !CorruptionNoted || IsReadOnly)
+        return STATUS_SUCCESS;
+
+    /* Under the lock DirtyMarked means the dirty flag reached the medium:
+     * MarkDirtyBeforeWrite clears it again when its write or flush fails. */
+    if (DirtyMarked)
+    {
+        DirtyRetained = TRUE;
+        return STATUS_SUCCESS;
+    }
+
+    DirtyMarked = TRUE;
+    Status = SetVolumeFlags(VOL_DIRTY, 0);
+    if (NT_SUCCESS(Status))
+        Status = FlushVolume();
+    if (!NT_SUCCESS(Status))
+    {
+        DirtyMarked = FALSE;
+        return Status;
+    }
+    DirtyRetained = TRUE;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+Volume::CommitCorruptionDirtyOnce()
+{
+    /* Cheap when nothing is pending: this runs on every outermost release of
+     * the metadata lock. One attempt per mount; on failure MarkClean tries
+     * again at dismount. */
+    if (!CorruptionNoted || CorruptionCommitTried)
+        return STATUS_SUCCESS;
+    CorruptionCommitTried = TRUE;
+    return CommitCorruptionDirty();
 }
 
 void
