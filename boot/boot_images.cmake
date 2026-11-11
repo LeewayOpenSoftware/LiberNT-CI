@@ -907,7 +907,7 @@ add_custom_target(preinstall_partition
         -DMAX_SYMBOL_MB=${ROSPROFILER_IMAGE_PDB_BUDGET_MB}
         -DPDB_DIR=${_rosprofiler_pdb_dir}
         -DPACKAGE_PDBS=${ROSPROFILER_PACKAGE_IMAGE_PDBS}
-        -P ${REACTOS_SOURCE_DIR}/sdk/cmake/pack_rosprofiler_symbols.cmake
+        -P ${REACTOS_SOURCE_DIR}/boot/pack_rosprofiler_symbols.cmake
     COMMAND native-fatten ${_preinstall_boot_partition_file}
         -format ${_preinstall_boot_partition_sectors} ${_preinstall_boot_partition_fs} LIBERNTBOOT
         ${_preinstall_boot_partition_options}
@@ -969,7 +969,7 @@ add_custom_target(liberntramimg
         -DSECTORS_PER_CLUSTER=${_preinstall_ntfs_sectors_per_cluster}
         -DFREE_MB=${LIBERNT_RAM_IMAGE_FREE_MB}
         -DLABEL=LiberNT
-        -P ${REACTOS_SOURCE_DIR}/sdk/cmake/format_ram_partition.cmake
+        -P ${REACTOS_SOURCE_DIR}/boot/format_ram_partition.cmake
     COMMAND native-ntfsimg
         --addfiles
         ${_preinstall_ram_partition_file}
