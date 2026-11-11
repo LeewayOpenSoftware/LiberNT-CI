@@ -245,6 +245,60 @@ Volume::~Volume()
         RecordPoolHead = Next;
     }
     RecordPoolCount = 0;
+    while (IndexPoolHead)
+    {
+        PUCHAR Next = *(PUCHAR*)IndexPoolHead;
+
+        delete[] IndexPoolHead;
+        IndexPoolHead = Next;
+    }
+    IndexPoolCount = 0;
+}
+
+PUCHAR
+Volume::AcquireIndexScratch(_In_ ULONG Size)
+{
+    PUCHAR Buffer = NULL;
+
+    if (Size < sizeof(PUCHAR))
+        return NULL;
+    NtfsAcquireMutex(&RecordPoolMutex);
+    if (IndexPoolHead && IndexPoolBufferSize == Size)
+    {
+        Buffer = IndexPoolHead;
+        IndexPoolHead = *(PUCHAR*)Buffer;
+        IndexPoolCount--;
+    }
+    NtfsReleaseMutex(&RecordPoolMutex);
+    if (!Buffer)
+        Buffer = new(PagedPool, TAG_NTFS) UCHAR[Size];
+    return Buffer;
+}
+
+void
+Volume::ReleaseIndexScratch(_In_opt_ PUCHAR Buffer,
+                            _In_ ULONG Size)
+{
+    BOOLEAN Pooled = FALSE;
+
+    if (!Buffer)
+        return;
+    if (Size >= sizeof(PUCHAR))
+    {
+        NtfsAcquireMutex(&RecordPoolMutex);
+        if (IndexPoolCount < 16 &&
+            (IndexPoolCount == 0 || IndexPoolBufferSize == Size))
+        {
+            *(PUCHAR*)Buffer = IndexPoolHead;
+            IndexPoolHead = Buffer;
+            IndexPoolBufferSize = Size;
+            IndexPoolCount++;
+            Pooled = TRUE;
+        }
+        NtfsReleaseMutex(&RecordPoolMutex);
+    }
+    if (!Pooled)
+        delete[] Buffer;
 }
 
 static
@@ -321,6 +375,17 @@ Volume::Initialize(_In_ PUCHAR BootSectorData,
     NtfsMinorVersion = VolumeInfo->MinorVersion;
     delete VolumeFile;
     VolumeFile = NULL;
+
+    /*
+     * Read $UpCase now, for read-only mounts too, so that name lookups find
+     * it published instead of loading it on first use. A volume whose
+     * $UpCase cannot be read still mounts (chkdsk must open it): lookups
+     * then try again and fail, and pattern matching uses
+     * RtlUpcaseUnicodeChar.
+     */
+    Status = LoadUpcaseTable();
+    if (!NT_SUCCESS(Status))
+        DPRINT1("$UpCase not readable at mount (0x%lx)\n", (unsigned long)Status);
 
     /*
      * Diagnostic readers do not need journal replay. In particular, freshly
