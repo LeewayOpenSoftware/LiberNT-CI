@@ -228,6 +228,9 @@ Volume::MarkDirtyBeforeWrite()
 {
     NTSTATUS Status;
 
+    /* A noted corruption keeps the flag this write is about to set. */
+    if (DirtyTracking && CorruptionNoted)
+        DirtyRetained = TRUE;
     if (!DirtyTracking || DirtyMarked || IsReadOnly)
         return STATUS_SUCCESS;
 
@@ -249,6 +252,30 @@ Volume::MarkClean()
 {
     NTSTATUS Status;
 
+    /*
+     * A read met corrupt structure during this session: leave the volume
+     * dirty, even if nothing was written since mount (Windows marks the
+     * volume dirty when it raises a corruption status), so the next boot
+     * runs the check.
+     */
+    if (DirtyTracking && CorruptionNoted && !IsReadOnly)
+    {
+        if (!DirtyMarked || !DirtyRetained)
+        {
+            DirtyMarked = TRUE;
+            Status = SetVolumeFlags(VOL_DIRTY, 0);
+            if (NT_SUCCESS(Status))
+                Status = FlushVolume();
+            if (!NT_SUCCESS(Status))
+            {
+                DirtyMarked = FALSE;
+                return Status;
+            }
+            DirtyRetained = TRUE;
+        }
+        return STATUS_SUCCESS;
+    }
+
     if (!DirtyTracking || !DirtyMarked || DirtyRetained || IsReadOnly)
         return STATUS_SUCCESS;
 
@@ -261,6 +288,16 @@ Volume::MarkClean()
     if (NT_SUCCESS(Status))
         DirtyMarked = FALSE;
     return Status;
+}
+
+void
+Volume::NoteCorruption()
+{
+    if (!CorruptionNoted)
+    {
+        DPRINT1("NTFS: corrupt on-disk structure found; the volume stays dirty\n");
+        CorruptionNoted = TRUE;
+    }
 }
 
 void

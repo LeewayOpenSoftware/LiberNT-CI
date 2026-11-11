@@ -671,6 +671,10 @@ public:
     BOOLEAN DirtyRetained = FALSE;
     /* Set after a clean shutdown cleared the flag; makes a later re-dirty logged. */
     BOOLEAN ShutdownCleaned = FALSE;
+    /* Set (never cleared) when a read found on-disk structure that cannot be
+     * valid: the volume must stay dirty so the next boot checks it. Readers
+     * may set it without the metadata lock, so it is only ever stored TRUE. */
+    volatile BOOLEAN CorruptionNoted = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
     BOOLEAN Generate8dot3Names = FALSE;
     /* While non-zero, WriteVolume behaves as WriteVolumeThrough (mft.cpp). */
@@ -912,6 +916,12 @@ public:
      * FSCTL_MARK_VOLUME_DIRTY): MarkClean will not clear it. */
     void
     RetainDirty(_In_ BOOLEAN Retain);
+
+    /* Records that a read met corrupt on-disk structure. No I/O: callable
+     * from any read path. The next metadata write, or the clean dismount,
+     * makes the dirty flag durable and keeps it (see CorruptionNoted). */
+    void
+    NoteCorruption();
 
     /* MarkClean on the shutdown path; also arms re-dirty logging. No write-
      * through (that is the J30 chain mechanism, deliberately not here). */
