@@ -2936,6 +2936,48 @@ VolumeCheck::Run(_In_ BOOLEAN Repair)
 
 }
 
+/*
+ * The shape invariants (src/verify) on what the check and its repairs left:
+ * a broken one counts as a problem the check could not fix, so the volume is
+ * not reported clean and its dirty flag is not cleared. It costs one more MFT
+ * pass and one more walk of each index; an index with more than
+ * NTFS_CHECK_SHAPE_INDEX_BYTES of allocation is not walked, and the skipped
+ * ones are reported. When the verifier cannot run at all, that is reported
+ * and the check's own verdict stands.
+ */
+static void
+VerifyCheckedShape(
+    _In_ PNtfsVolume DiskVolume,
+    _In_opt_ PNtfsCheckCallback Callback,
+    _In_opt_ void* Context,
+    _Inout_ PNtfsCheckResult Result)
+{
+    NtfsShapeVolumeStats Stats;
+    NtfsShapeFault Fault;
+    NTSTATUS Status;
+
+    Status = NtfsVerifyVolumeShapeBounded(DiskVolume, 0, NTFS_CHECK_SHAPE_INDEX_BYTES, &Stats, &Fault);
+    Result->ShapeFiles = Stats.FilesChecked;
+    Result->ShapeSkippedIndexes = Stats.IndexesSkipped;
+    if (Stats.IndexesSkipped && Callback)
+        Callback(Context, NtfsCheckShapeIndexesSkipped, Stats.IndexesSkipped, NTFS_CHECK_SHAPE_INDEX_BYTES);
+    if (Status == STATUS_FILE_CORRUPT_ERROR && Fault.Invariant != NtfsShapeOk)
+    {
+        if (Callback)
+        {
+            Callback(Context, NtfsCheckShapeFault,
+                     ((UINT64)Fault.Invariant << 48) | (Fault.Record & 0x0000FFFFFFFFFFFFULL), Fault.Detail);
+        }
+        /* Found and left: the restart rule (Errors < FoundErrors) is unchanged. */
+        Result->Errors++;
+        Result->FoundErrors++;
+    }
+    else if (!NT_SUCCESS(Status) && Callback)
+    {
+        Callback(Context, NtfsCheckShapeNotRun, (ULONG)Status, 0);
+    }
+}
+
 extern "C"
 NTSTATUS
 NtfsVolumeCheck(
@@ -2965,6 +3007,8 @@ NtfsVolumeCheck(
           Result->FreedClusters || Result->FixedRecordBitmapBits || Result->ResetIndexes ||
           Result->ReleasedIndexBlocks))
     {
+        if (NT_SUCCESS(Status))
+            VerifyCheckedShape(DiskVolume, Callback, Context, Result);
         return Status;
     }
 
@@ -2992,5 +3036,7 @@ NtfsVolumeCheck(
         Pass.FoundErrors = Result->FoundErrors;
         *Result = Pass;
     }
+    if (NT_SUCCESS(Status))
+        VerifyCheckedShape(DiskVolume, Callback, Context, Result);
     return Status;
 }
