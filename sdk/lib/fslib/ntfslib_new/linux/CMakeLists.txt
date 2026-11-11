@@ -746,6 +746,7 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${CMAKE_CURRENT_LIST_DIR}/tests/check_shape_smoke.sh"
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
+        )
         add_test(
             NAME ntfslib_linux_check_crosslink
             COMMAND /bin/sh
