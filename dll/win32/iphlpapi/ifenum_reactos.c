@@ -169,25 +169,31 @@ static NTSTATUS getInterfaceInfoSet( HANDLE tcpFile,
                     DWORD numAddrs;
                     IPAddrEntry *addrs;
                     TDIEntityID ip_ent;
+                    DWORD if_index = infoSetInt[curInterf].if_info.ent.if_index;
                     int j;
 
-                    status = getNthIpEntity( tcpFile, curInterf, &ip_ent );
+                    /* The IF and IP entity lists stop matching by position once an
+                     * interface was removed, so find the IP entity by index; an
+                     * interface without an address is still an interface. */
+                    memset( &infoSetInt[curInterf].ip_addr, 0,
+                            sizeof( infoSetInt[curInterf].ip_addr ) );
+                    status = getIpEntityForIfIndex( tcpFile, if_index, &ip_ent );
                     if( NT_SUCCESS(status) )
                         status = tdiGetIpAddrsForIpEntity
                             ( tcpFile, &ip_ent, &addrs, &numAddrs );
                     for( j = 0; NT_SUCCESS(status) && j < numAddrs; j++ ) {
-                        TRACE("ADDR %d: index %d (target %d)\n", j, addrs[j].iae_index, infoSetInt[curInterf].if_info.ent.if_index);
-                        if( addrs[j].iae_index ==
-                            infoSetInt[curInterf].if_info.ent.if_index ) {
+                        TRACE("ADDR %d: index %d (target %d)\n", j, addrs[j].iae_index, if_index);
+                        if( addrs[j].iae_index == if_index ) {
                             memcpy( &infoSetInt[curInterf].ip_addr,
                                     &addrs[j],
                                     sizeof( addrs[j] ) );
-                            curInterf++;
                             break;
                         }
                     }
                     if ( NT_SUCCESS(status) )
                         tdiFreeThingSet(addrs);
+                    status = STATUS_SUCCESS;
+                    curInterf++;
                 }
             }
         }
