@@ -1077,6 +1077,10 @@ public:
     PFileRecordHeader Header;
     PUCHAR Data = NULL;
     ULONG RecordNumber = MAXULONG;
+    /* An append at EOF grew the unnamed data stream past what it needed
+     * (ExtendNonResidentData); TrimSpeculativeAllocation gives it back. Kept
+     * on the object that owns the data attribute, never on disk. */
+    BOOLEAN SpeculativeAllocation = FALSE;
 
     // ./filerecord.cpp
     FileRecord(_In_ PVolume DiskVolume,
@@ -1245,6 +1249,9 @@ public:
         _In_ AttributeType AttrType,
         _In_opt_ PWSTR StreamName,
         _In_ ULONGLONG NewAllocationSize);
+
+    NTSTATUS
+    TrimSpeculativeAllocation();
 
     NTSTATUS
     SetCompression(_In_opt_ PWSTR StreamName,
