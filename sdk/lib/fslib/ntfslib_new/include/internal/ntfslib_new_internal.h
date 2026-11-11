@@ -320,6 +320,26 @@ NtfsPublishOnce(_Inout_ PVOID volatile* Slot, _In_ PVOID Value)
     return Previous ? Previous : Value;
 }
 
+/* Installs Value if Slot still holds Expected. Returns what Slot held, so
+ * the caller succeeded if and only if that is Expected. Used to prepend to
+ * lists that readers walk without a lock and only writers under the
+ * exclusive metadata lock ever shorten. */
+static inline PVOID
+NtfsCompareExchangePublished(_Inout_ PVOID volatile* Slot,
+                             _In_ PVOID Value,
+                             _In_opt_ PVOID Expected)
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    return _InterlockedCompareExchangePointer(Slot, Value, Expected);
+#else
+    PVOID Previous = Expected;
+
+    __atomic_compare_exchange_n(const_cast<PVOID*>(Slot), &Previous, Value, false,
+                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    return Previous;
+#endif
+}
+
 /* $MFTMirr holds the first cluster of $MFT, and at least 4 records. Fully
  * parenthesized: "!IsFileRecordInMFTMirr(n)" and "x && IsFileRecordInMFTMirr(n)"
  * must apply to the whole test. */
