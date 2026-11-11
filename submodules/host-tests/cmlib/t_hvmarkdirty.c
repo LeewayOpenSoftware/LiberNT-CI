@@ -79,9 +79,14 @@ int main(void)
     Big = HvAllocateCell(Hive, 3 * HBLOCK_SIZE - 0x40, Stable, HCELL_NIL);
     if (Big == HCELL_NIL) { fprintf(stderr, "FAIL alloc big\n"); return 2; }
 
-    /* A cell whose header lands on a block boundary. Minimal cells bump-allocate in
-     * 8-byte steps through the multi-block bin the big cell created, so one index is
-     * an exact multiple of HBLOCK_SIZE. Bounded; fail the setup if never hit. */
+    /* A cell whose header lands on a block boundary. A bin begins with its header, so
+     * only a cell inside a multi-block bin can start on an interior block boundary.
+     * Make a multi-block bin and free it, then carve small cells from its start: they
+     * pack in 8-byte steps from <bin>+0x20, so one lands exactly on <bin>+HBLOCK_SIZE.
+     * Bounded; fail the setup if never hit. */
+    Cell = HvAllocateCell(Hive, 3 * HBLOCK_SIZE - 0x40, Stable, HCELL_NIL);
+    if (Cell == HCELL_NIL) { fprintf(stderr, "FAIL alloc scratch\n"); return 2; }
+    HvFreeCell(Hive, Cell);
     for (i = 0; i < 8192 && Aligned == HCELL_NIL; i++)
     {
         Cell = HvAllocateCell(Hive, 1, Stable, HCELL_NIL);
@@ -95,7 +100,11 @@ int main(void)
         return 2;
     }
 
+    /* Allocation marks cells dirty, so clear the vector before each case to test
+     * HvMarkCellDirty in isolation (otherwise a neighbour masks the bug). */
+
     /* --- block-aligned cell: its own block must come back dirty --- */
+    RtlClearAllBits(&Hive->DirtyVector);
     HvMarkCellDirty(Hive, Aligned, FALSE);
     CHECK(HvIsCellDirty(Hive, Aligned) == TRUE);
 
@@ -103,6 +112,7 @@ int main(void)
     Size = HvGetCellSize(Hive, HvGetCell(Hive, Big));
     HvReleaseCell(Hive, Big);
     CHECK(Size > (LONG)HBLOCK_SIZE);
+    RtlClearAllBits(&Hive->DirtyVector);
     HvMarkCellDirty(Hive, Big, FALSE);
     Blocks = BlockOf(Big + (ULONG)Size - 1) - BlockOf(Big) + 1;
     for (b = 0; b < Blocks; b++)

@@ -20,10 +20,14 @@ set(CMLIB_SOURCES
     hivebin.c hivecell.c hiveinit.c hivelog.c hivesum.c hivewrt.c)
 list(TRANSFORM CMLIB_SOURCES PREPEND "${CMLIB_DIR}/")
 
-add_library(cmlib_host STATIC ${CMLIB_SOURCES})
+# cmlib_host_support.c pulls in the real Rtl bitmap code (sdk/lib/rtl/bitmap.c via
+# #include <bitmap.c>) and the hive allocator/flush callbacks, exactly as mkhive does.
+add_library(cmlib_host STATIC ${CMLIB_SOURCES} cmlib_host_support.c)
 target_include_directories(cmlib_host PUBLIC
     "${REACTOS_SOURCE_ROOT}/sdk/include/host"
     "${REACTOS_SOURCE_ROOT}/sdk/include"
+    "${REACTOS_SOURCE_ROOT}/sdk/include/psdk"
+    "${REACTOS_SOURCE_ROOT}/sdk/lib/rtl"
     "${CMLIB_DIR}")
 target_compile_definitions(cmlib_host PUBLIC
     _NTSYSTEM_ NASSERT NTDDI_VERSION=0x0A000010 CMLIB_HOST __NO_CTYPE_INLINES TARGET_amd64)

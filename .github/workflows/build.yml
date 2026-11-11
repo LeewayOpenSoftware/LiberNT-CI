@@ -326,6 +326,7 @@ jobs:
       with:
         sparse-checkout: |
           sdk/lib/cmlib
+          sdk/lib/rtl
           sdk/include
           submodules/host-tests/cmlib
 
