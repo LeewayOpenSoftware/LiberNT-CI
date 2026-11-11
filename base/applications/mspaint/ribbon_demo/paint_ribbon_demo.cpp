@@ -183,13 +183,22 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR pCmdLin
         return 1;
     }
 
-    ShowWindow(g_hWnd, nCmdShow);
+    /* Ensure window is shown (at least SW_SHOW) */
+    int show = nCmdShow;
+    if (show == 0) show = SW_SHOW;
+
+    ShowWindow(g_hWnd, show);
     UpdateWindow(g_hWnd);
+    SetForegroundWindow(g_hWnd);
 
     /* Message loop */
-    MSG msg;
-    while (GetMessageW(&msg, NULL, 0, 0))
+    MSG msg = {};
+    BOOL bRet;
+    while ((bRet = GetMessageW(&msg, NULL, 0, 0)) != 0)
     {
+        if (bRet == -1)
+            break;
+
         if (g_pRibbon && LeewayRibbonPreTranslateMessage(g_pRibbon, &msg))
             continue;
 
