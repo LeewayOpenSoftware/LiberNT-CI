@@ -80,7 +80,10 @@ static LRESULT CALLBACK WindowProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lP
         hr = LeewayRibbonSetLayout(g_pRibbon, (LeewayUILayout *)&g_paintLayout);
         if (FAILED(hr))
         {
-            MessageBoxW(hWnd, L"LeewayRibbonSetLayout failed", L"Error", MB_OK | MB_ICONERROR);
+            wchar_t errMsg[256];
+            swprintf_s(errMsg, _countof(errMsg),
+                      L"LeewayRibbonSetLayout failed: 0x%08X", hr);
+            MessageBoxW(hWnd, errMsg, L"Error", MB_OK | MB_ICONERROR);
             LeewayRibbonDestroy(g_pRibbon);
             g_pRibbon = NULL;
             return -1;
