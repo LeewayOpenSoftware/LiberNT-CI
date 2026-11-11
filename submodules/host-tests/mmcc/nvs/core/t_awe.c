@@ -8,7 +8,7 @@
  */
 
 #include "mmharness.h"
-#include <mm/include/misys.h>
+#include <nvs/include/misys.h>
 
 static void
 AweLifecycle(void)

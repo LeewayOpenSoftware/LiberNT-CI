@@ -13,9 +13,9 @@ parser.add_argument('--cc', required=True)
 parser.add_argument('--dpc-source')
 args = parser.parse_args()
 root = pathlib.Path(args.root)
-dpc = pathlib.Path(args.dpc_source).read_text() if args.dpc_source else (root / 'ntos/ke/dpc.c').read_text()
-header = (root / 'ntos/include/internal/ke_x.h').read_text()
-timer = (root / 'ntos/ke/timerobj.c').read_text()
+dpc = pathlib.Path(args.dpc_source).read_text() if args.dpc_source else (root / 'ntoskrnl/ke/dpc.c').read_text()
+header = (root / 'ntoskrnl/include/internal/ke_x.h').read_text()
+timer = (root / 'ntoskrnl/ke/timerobj.c').read_text()
 
 
 def function(source, signature):

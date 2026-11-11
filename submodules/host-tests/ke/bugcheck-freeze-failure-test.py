@@ -12,9 +12,9 @@ parser.add_argument('--root', required=True)
 parser.add_argument('--cc', required=True)
 args = parser.parse_args()
 root = pathlib.Path(args.root)
-bug = (root / 'ntos/ke/bug.c').read_text()
-freeze = (root / 'ntos/ke/freeze.c').read_text()
-kd = (root / 'ntos/kd64/kdapi.c').read_text()
+bug = (root / 'ntoskrnl/ke/bug.c').read_text()
+freeze = (root / 'ntoskrnl/ke/freeze.c').read_text()
+kd = (root / 'ntoskrnl/kd64/kdapi.c').read_text()
 
 
 def body(source, name):
@@ -31,7 +31,7 @@ def body(source, name):
 start = bug.index('    if (!KiClaimBugCheckEntry(Prcb))', bug.index('KeBugCheckWithTf('))
 end = bug.index('    IsDoubleFault =', start)
 prologue = bug[start:end]
-trap = (root / 'ntos/kd64/kdtrap.c').read_text()
+trap = (root / 'ntoskrnl/kd64/kdtrap.c').read_text()
 assert 'KdEnterDebugger(TrapFrame, ExceptionFrame);\n    if (KiHasFreezeFailure()) return TRUE;' in trap
 assert 'KdExitDebugger(Enable);\n    if (KiHasFreezeFailure()) return TRUE;' in trap
 fixture = r'''

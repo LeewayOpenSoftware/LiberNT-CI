@@ -18,7 +18,7 @@ def main():
     parser.add_argument('--compdb', required=True)
     args = parser.parse_args()
     entries = json.loads(pathlib.Path(args.compdb).read_text())
-    entry = next(item for item in entries if item['file'].replace('\\', '/').endswith('/ntos/mm/section/section.c'))
+    entry = next(item for item in entries if item['file'].replace('\\', '/').endswith('/ntoskrnl/nvs/section/section.c'))
     original = shlex.split(entry['command'])
     command = []
     index = 0
@@ -34,7 +34,7 @@ def main():
         root = pathlib.Path(directory)
         source = root / 'probe.c'
         assembly = root / 'probe.s'
-        source.write_text('#include <mm/env/km/mikm.h>\nPVOID MiProbePublishedPointer(PVOID volatile *Slot)\n{\n    return MI_ATOMIC_READ_POINTER(Slot);\n}\n')
+        source.write_text('#include <nvs/env/km/mikm.h>\nPVOID MiProbePublishedPointer(PVOID volatile *Slot)\n{\n    return MI_ATOMIC_READ_POINTER(Slot);\n}\n')
         subprocess.run(command + ['-S', '-o', str(assembly), str(source)], cwd=entry['directory'], check=True)
         text = assembly.read_text()
         match = re.search(r'MiProbePublishedPointer:.*?\.Lfunc_end\d+:', text, re.DOTALL)

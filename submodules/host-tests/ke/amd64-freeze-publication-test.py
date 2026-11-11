@@ -13,8 +13,8 @@ parser.add_argument('--cc', required=True)
 parser.add_argument('--repeat', type=int, default=1)
 args = parser.parse_args()
 root = pathlib.Path(args.root)
-freeze_source = (root / 'ntos/ke/amd64/freeze.c').read_text()
-init_source = (root / 'ntos/ke/amd64/krnlinit.c').read_text()
+freeze_source = (root / 'ntoskrnl/ke/amd64/freeze.c').read_text()
+init_source = (root / 'ntoskrnl/ke/amd64/krnlinit.c').read_text()
 
 
 def body(source, name):

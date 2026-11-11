@@ -8,7 +8,7 @@
  */
 
 #pragma once
-#include <mm/include/miproc.h>
+#include <nvs/include/miproc.h>
 
 #define NTAPI
 #define NonPagedPool 0

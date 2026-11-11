@@ -5,7 +5,7 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
-#include <mm/pool/ex/expool.h>
+#include <nvs/pool/ex/expool.h>
 #include <pthread.h>
 #include <string.h>
 #include <sys/mman.h>

@@ -9,7 +9,7 @@
 
 #include "mmharness.h"
 #include <time.h>
-#include <mm/include/misys.h>
+#include <nvs/include/misys.h>
 
 #define KB64 0x10000ULL
 

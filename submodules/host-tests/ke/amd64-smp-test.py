@@ -207,7 +207,7 @@ int main(void) {
 }
 '''
 for marker, name in [('NOTE', 'KiNoteFreezeEpoch'), ('EPOCH', 'KiQueryFreezeEpoch'), ('ACTIVE', 'KiIsFreezeActive'), ('ACQUIRE', 'KiAcquireFreezeActiveSet'), ('RELEASE', 'KiReleaseFreezeActiveSet'), ('TARGETS', 'KiFreezeTargetSet'), ('FREEZE', 'KxFreezeExecution'), ('THAW', 'KxThawExecution')]:
-    freeze = freeze.replace('@' + marker + '@', body('ntos/ke/amd64/freeze.c', name))
+    freeze = freeze.replace('@' + marker + '@', body('ntoskrnl/ke/amd64/freeze.c', name))
 
 startup = r'''
 #include <assert.h>
@@ -311,7 +311,7 @@ int main(void) {
     }
     return 0;
 }
-'''.replace('@STARTUP@', body('ntos/ke/amd64/mproc.c', 'KeStartAllProcessors'))
+'''.replace('@STARTUP@', body('ntoskrnl/ke/amd64/mproc.c', 'KeStartAllProcessors'))
 
 with tempfile.TemporaryDirectory(prefix='ke-amd64-smp-') as tmp:
     path = pathlib.Path(tmp)

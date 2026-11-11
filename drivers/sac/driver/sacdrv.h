@@ -13,7 +13,7 @@
 
 #include <ntifs.h>
 #include <stdio.h>
-#include <ntos/include/internal/hdl.h>
+#include <ntoskrnl/include/internal/hdl.h>
 #include <sacmsg.h>
 
 /* DEFINES ********************************************************************/

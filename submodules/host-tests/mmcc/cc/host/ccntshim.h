@@ -10,7 +10,7 @@
 #pragma once
 
 #ifdef MM_HOST_TEST
-#include <mm/include/mm.h>
+#include <nvs/include/mm.h>
 #endif
 #include <cc/include/ccengine.h>
 #include <pthread.h>

@@ -32,15 +32,15 @@ def main():
                 command.append(word)
             index += 1
         return entry, command
-    entry, command = compiler_for('/ntos/mm/section/section.c')
+    entry, command = compiler_for('/ntoskrnl/nvs/section/section.c')
     with tempfile.TemporaryDirectory(prefix='mm-atomic-read64-') as directory:
         root = pathlib.Path(directory)
         source = root / 'probe.c'
         assembly = root / 'probe.s'
         source.write_text(r'''
-#include <mm/include/mm.h>
-#include <mm/include/miproc.h>
-#include <mm/include/misys.h>
+#include <nvs/include/mm.h>
+#include <nvs/include/miproc.h>
+#include <nvs/include/misys.h>
 #define CHECK_ALIGNMENT(type, member) _Static_assert(__alignof__(type) >= 8 && __builtin_offsetof(type, member) % 8 == 0, #type "." #member)
 CHECK_ALIGNMENT(MI_ADDRESS_SPACE, CommittedPages);
 CHECK_ALIGNMENT(MI_ADDRESS_SPACE, PageFileGeneration);
@@ -64,11 +64,11 @@ LONG64 MiProbeRead64(volatile LONG64 *Slot)
         match = re.search(r'_?MiProbeRead64:.*?Lfunc_end\d+:', text, re.DOTALL)
         if not match or not re.search(r'\block\s+cmpxchg8b\b', match.group()):
             raise RuntimeError('i386 64-bit memory-manager read is not an atomic compare-exchange')
-        entry, command = compiler_for('/ntos/mm/pool/va/varegion.c')
+        entry, command = compiler_for('/ntoskrnl/nvs/pool/va/varegion.c')
         source.write_text(r'''
-#include <mm/pool/include/poolenv.h>
-#include <mm/pool/include/poolva.h>
-#include <mm/pool/include/pooltrack.h>
+#include <nvs/pool/include/poolenv.h>
+#include <nvs/pool/include/poolva.h>
+#include <nvs/pool/include/pooltrack.h>
 _Static_assert(__alignof__(POOL_VA_REGION) >= 8 &&
                __builtin_offsetof(POOL_VA_REGION, CommittedPages) % 8 == 0 &&
                __builtin_offsetof(POOL_VA_REGION, PeakCommittedPages) % 8 == 0,

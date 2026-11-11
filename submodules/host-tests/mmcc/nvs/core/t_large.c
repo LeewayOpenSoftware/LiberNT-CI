@@ -8,7 +8,7 @@
  */
 
 #include "mmharness.h"
-#include <mm/include/misys.h>
+#include <nvs/include/misys.h>
 
 #define LARGE_FLAGS (MI_MEM_RESERVE | MI_MEM_COMMIT | MI_MEM_LARGE_PAGES)
 

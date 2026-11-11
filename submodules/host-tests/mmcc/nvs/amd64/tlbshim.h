@@ -9,7 +9,7 @@
 
 #pragma once
 
-#include <mm/include/mienv.h>
+#include <nvs/include/mienv.h>
 
 #define MAXIMUM_PROCESSORS 64
 #define NTAPI

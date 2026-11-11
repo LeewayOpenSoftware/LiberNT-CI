@@ -12,8 +12,8 @@ parser.add_argument('--root', required=True)
 parser.add_argument('--cc', required=True)
 args = parser.parse_args()
 root = pathlib.Path(args.root)
-clock = (root / 'ntos/ke/clock.c').read_text()
-header = (root / 'ntos/include/internal/ke_x.h').read_text()
+clock = (root / 'ntoskrnl/ke/clock.c').read_text()
+header = (root / 'ntoskrnl/include/internal/ke_x.h').read_text()
 
 
 def function(source, signature):

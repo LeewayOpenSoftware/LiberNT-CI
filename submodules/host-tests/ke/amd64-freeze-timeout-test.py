@@ -11,7 +11,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--root', required=True)
 parser.add_argument('--cc', required=True)
 args = parser.parse_args()
-source = (pathlib.Path(args.root) / 'ntos/ke/amd64/freeze.c').read_text()
+source = (pathlib.Path(args.root) / 'ntoskrnl/ke/amd64/freeze.c').read_text()
 
 def body(name):
     start = source.index('\n' + name + '(')

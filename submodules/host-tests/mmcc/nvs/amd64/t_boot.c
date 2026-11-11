@@ -8,7 +8,7 @@
  */
 
 #include "bootshim.h"
-#include <mm/arch/amd64/archdef.h>
+#include <nvs/arch/amd64/archdef.h>
 
 static PUCHAR Ram;
 static ULONG Failures, Checks, Invalidations;

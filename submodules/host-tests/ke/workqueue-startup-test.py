@@ -139,14 +139,14 @@ int main(void) {
 }
 '''
 for marker, path, name in [
-    ('NECESSARY', 'ntos/ex/work.c', 'ExpNewThreadNecessary'),
-    ('PHASE0', 'ntos/ex/init.c', 'ExpInitSystemPhase0'),
-    ('THREADS', 'ntos/ex/work.c', 'ExpInitializeWorkerThreads'),
-    ('ENQUEUE', 'ntos/ex/work.c', 'ExQueueWorkItem'),
+    ('NECESSARY', 'ntoskrnl/ex/work.c', 'ExpNewThreadNecessary'),
+    ('PHASE0', 'ntoskrnl/ex/init.c', 'ExpInitSystemPhase0'),
+    ('THREADS', 'ntoskrnl/ex/work.c', 'ExpInitializeWorkerThreads'),
+    ('ENQUEUE', 'ntoskrnl/ex/work.c', 'ExQueueWorkItem'),
 ]:
     fixture = fixture.replace('@' + marker + '@', body(path, name))
 try:
-    queues = body('ntos/ex/work.c', 'ExpInitializeWorkerQueues')
+    queues = body('ntoskrnl/ex/work.c', 'ExpInitializeWorkerQueues')
 except ValueError:
     queues = ''
 fixture = fixture.replace('@QUEUES@', queues)
