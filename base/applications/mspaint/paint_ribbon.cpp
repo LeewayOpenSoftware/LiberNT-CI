@@ -13,7 +13,7 @@ extern CMainWindow mainWindow;
 extern BOOL g_showGrid;
 
 /* Execute handler: route ribbon commands to the main window */
-static HRESULT WINAPI OnRibbonExecute(UINT32 id, void *app_context)
+static HRESULT OnRibbonExecute(UINT32 id, void *app_context)
 {
     HWND hWnd = (HWND)app_context;
 
@@ -27,7 +27,7 @@ static HRESULT WINAPI OnRibbonExecute(UINT32 id, void *app_context)
 }
 
 /* Query-state handler: read current state from Paint's model */
-static HRESULT WINAPI OnRibbonQueryState(UINT32 id, LeewayUICommandState *state, void *app_context)
+static HRESULT OnRibbonQueryState(UINT32 id, LeewayUICommandState *state, void *app_context)
 {
     HWND hWnd = (HWND)app_context;
     if (!hWnd || !state)

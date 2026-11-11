@@ -17,3 +17,6 @@ set_target_properties(leewayui_static PROPERTIES
 )
 
 add_dependencies(leewayui_static psdk)
+
+# leewayui_static calls uxtheme (IsThemeActive, SetWindowTheme). A static library cannot carry
+# import libraries, so every consumer module must list `uxtheme` in its add_importlibs().
