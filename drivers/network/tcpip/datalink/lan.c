@@ -349,8 +349,7 @@ static VOID LanReplayReceiveFilters(
                           List,
                           Count * IEEE_802_ADDR_LENGTH);
         if (Status != NDIS_STATUS_SUCCESS)
-            TI_DbgPrint(MIN_TRACE, ("Could not restore the multicast list (0x%X).
-", Status));
+            TI_DbgPrint(MIN_TRACE, ("Could not restore the multicast list (0x%X).\n", Status));
     }
 
     Status = NDISCall(Adapter,
@@ -359,8 +358,7 @@ static VOID LanReplayReceiveFilters(
                       &Adapter->PacketFilter,
                       sizeof(UINT));
     if (Status != NDIS_STATUS_SUCCESS)
-        TI_DbgPrint(MIN_TRACE, ("Could not restore the packet filter (0x%X).
-", Status));
+        TI_DbgPrint(MIN_TRACE, ("Could not restore the packet filter (0x%X).\n", Status));
 }
 
 static VOID LanSendDone(
