@@ -102,3 +102,12 @@ Audit trail for the clean-room LeewayUI ribbon (OWNER DECISION 2026-11-08, `RIBB
 - Artwork: n/a (swatches and placeholder glyphs drawn in code)
 - Licence: LGPL-2.1+
 - IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
+
+### 2026-11-10 — ribbon_test.cpp: Paint-layout mode (Leeway Open Software)
+- Type: code (test)
+- Change: `ribbon_test paint` builds the RIBBON-APPS-SPEC.md §2 Paint ribbon from static const tables: Home (Clipboard, Image with launcher, Tools radio set, Brushes, Shapes strip, Size, Colours with wells and palette strip), View (zoom, check-box rows, display) and the contextual Text tab (font combos, styles, background, colours). Keytip corrections applied where the spec had prefix clashes (Copy CP, Pencil PE, Eraser ER). Viewer tables get the new trailing fields spelled out.
+- Sources consulted (inspiration only): RIBBON-APPS-SPEC.md §2; mspaint resource ids from the in-tree source (values only).
+- Third-party code added: none
+- Artwork: n/a (demo palette colours are plain RGB values; demo icons are discs drawn in code)
+- Licence: LGPL-2.1+
+- IP clearance: prototyping only — distribution clearance NOT assumed (see design §8)
