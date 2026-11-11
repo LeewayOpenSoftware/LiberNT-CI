@@ -1144,7 +1144,17 @@ typedef enum NtfsCheckEvent
     /* An unreadable attribute list was written again from the attributes of
      * the base record and of its extension records. Argument1: the file
      * record; Argument2: the extension records found. */
-    NtfsCheckAttributeListRebuilt
+    NtfsCheckAttributeListRebuilt,
+    /* After the check and its repairs, the shape verifier found a broken
+     * invariant (src/verify), counted in Errors. Argument1: the
+     * NtfsShapeInvariant in bits 48-63, the file record in bits 0-47;
+     * Argument2: the fault's Detail. */
+    NtfsCheckShapeFault,
+    /* The shape verifier did not walk Argument1 indexes because each has more
+     * than Argument2 bytes of allocation (NTFS_CHECK_SHAPE_INDEX_BYTES). */
+    NtfsCheckShapeIndexesSkipped,
+    /* The shape verifier could not run; Argument1: NTSTATUS. Not an error. */
+    NtfsCheckShapeNotRun
 } NtfsCheckEvent;
 
 typedef struct NtfsCheckResult
@@ -1174,6 +1184,10 @@ typedef struct NtfsCheckResult
     UINT64 ResetIndexes;
     /* Index blocks in use that no node referenced, released. */
     UINT64 ReleasedIndexBlocks;
+    /* Files the shape verifier went through after the check (it stops at the
+     * first broken invariant), and indexes it skipped as too large. */
+    UINT64 ShapeFiles;
+    UINT64 ShapeSkippedIndexes;
 } NtfsCheckResult, *PNtfsCheckResult;
 
 typedef void (*PNtfsCheckCallback)(
@@ -1252,6 +1266,28 @@ NtfsVerifyVolumeShape(
     _In_ PNtfsVolume DiskVolume,
     _In_ ULONG Flags,
     _Out_ PULONGLONG FilesChecked,
+    _Out_ PNtfsShapeFault Fault);
+
+typedef struct NtfsShapeVolumeStats
+{
+    ULONGLONG FilesChecked;
+    ULONGLONG IndexesChecked;
+    /* Indexes not walked: more than IndexByteLimit bytes of allocation. */
+    ULONGLONG IndexesSkipped;
+} NtfsShapeVolumeStats, *PNtfsShapeVolumeStats;
+
+/* NtfsVerifyVolumeShape with a bound: an index with more than IndexByteLimit
+ * bytes of allocation is counted in IndexesSkipped and not walked (0: walk
+ * every index). The check (NtfsVolumeCheck) runs it with
+ * NTFS_CHECK_SHAPE_INDEX_BYTES. */
+#define NTFS_CHECK_SHAPE_INDEX_BYTES (64ULL * 1024 * 1024)
+
+NTSTATUS
+NtfsVerifyVolumeShapeBounded(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ ULONG Flags,
+    _In_ ULONGLONG IndexByteLimit,
+    _Out_ PNtfsShapeVolumeStats Stats,
     _Out_ PNtfsShapeFault Fault);
 
 NTSTATUS

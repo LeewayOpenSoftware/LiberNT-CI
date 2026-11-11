@@ -71,7 +71,12 @@ public:
 
     NTSTATUS VerifyRecord(_In_ ULONGLONG Base, _In_ ULONG Flags);
     NTSTATUS VerifyIndex(_In_ ULONGLONG Base, _In_ PCWSTR IndexName, _In_ ULONG Flags);
-    NTSTATUS VerifyVolume(_In_ ULONG Flags, _Out_ PULONGLONG Files);
+    NTSTATUS VerifyVolume(_In_ ULONG Flags, _Out_ PNtfsShapeVolumeStats Stats);
+
+    /* Indexes with more allocation than this are not walked (0: no limit);
+     * IndexSkipped tells that the last VerifyIndex skipped its walk. */
+    ULONGLONG IndexByteLimit = 0;
+    BOOLEAN IndexSkipped = FALSE;
 
 private:
     PVolume V;
@@ -654,13 +659,13 @@ ShapeVerifier::VerifyRecord(_In_ ULONGLONG Base, _In_ ULONG Flags)
  * list names it (one MFT pass, so no per-file scan).
  */
 NTSTATUS
-ShapeVerifier::VerifyVolume(_In_ ULONG Flags, _Out_ PULONGLONG Files)
+ShapeVerifier::VerifyVolume(_In_ ULONG Flags, _Out_ PNtfsShapeVolumeStats Stats)
 {
     PUCHAR Record;
     PFileRecordHeader Header;
     NTSTATUS Status;
 
-    *Files = 0;
+    RtlZeroMemory(Stats, sizeof(*Stats));
     Status = Setup();
     if (!NT_SUCCESS(Status))
         return Status;
@@ -695,7 +700,7 @@ ShapeVerifier::VerifyVolume(_In_ ULONG Flags, _Out_ PULONGLONG Files)
             continue;
         }
 
-        (*Files)++;
+        Stats->FilesChecked++;
         Status = File.VerifyRecord(Number, Flags & ~NTFS_VERIFY_SCAN_EXTENSIONS);
         for (ULONG Index = 0; NT_SUCCESS(Status) && Index < File.Count; Index++)
         {
@@ -712,7 +717,15 @@ ShapeVerifier::VerifyVolume(_In_ ULONG Flags, _Out_ PULONGLONG Files)
                     continue;
                 RtlCopyMemory(Name, AttrName(Attr), Attr->NameLength * sizeof(WCHAR));
                 Name[Attr->NameLength] = 0;
+                Index_.IndexByteLimit = IndexByteLimit;
                 Status = Index_.VerifyIndex(Number, Name, Flags & ~NTFS_VERIFY_SCAN_EXTENSIONS);
+                if (NT_SUCCESS(Status))
+                {
+                    if (Index_.IndexSkipped)
+                        Stats->IndexesSkipped++;
+                    else
+                        Stats->IndexesChecked++;
+                }
             }
         }
     }
@@ -853,8 +866,10 @@ ShapeVerifier::VerifyIndex(_In_ ULONGLONG Base, _In_ PCWSTR IndexName, _In_ ULON
     }
     DataSize = Segments[0].Attr->NonResident.DataSize;
     Blocks = DataSize / BlockSize;
-    if ((Flags & NTFS_VERIFY_HOOK) && DataSize > SHAPE_HOOK_INDEX_BYTES)
+    if ((Flags & NTFS_VERIFY_HOOK) ? DataSize > SHAPE_HOOK_INDEX_BYTES
+                                   : IndexByteLimit && DataSize > IndexByteLimit)
     {
+        IndexSkipped = TRUE;
         Status = STATUS_SUCCESS;
         goto Done;
     }
@@ -989,10 +1004,30 @@ NtfsVerifyVolumeShape(
     _Out_ PULONGLONG FilesChecked,
     _Out_ PNtfsShapeFault Fault)
 {
+    NtfsShapeVolumeStats Stats;
+    NTSTATUS Status;
+
     if (!DiskVolume || !FilesChecked || !Fault)
         return STATUS_INVALID_PARAMETER;
+    Status = NtfsVerifyVolumeShapeBounded(DiskVolume, Flags, 0, &Stats, Fault);
+    *FilesChecked = Stats.FilesChecked;
+    return Status;
+}
+
+extern "C"
+NTSTATUS
+NtfsVerifyVolumeShapeBounded(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ ULONG Flags,
+    _In_ ULONGLONG IndexByteLimit,
+    _Out_ PNtfsShapeVolumeStats Stats,
+    _Out_ PNtfsShapeFault Fault)
+{
+    if (!DiskVolume || !Stats || !Fault)
+        return STATUS_INVALID_PARAMETER;
     ShapeVerifier Verifier(reinterpret_cast<PVolume>(DiskVolume), Fault);
-    return Verifier.VerifyVolume(Flags, FilesChecked);
+    Verifier.IndexByteLimit = IndexByteLimit;
+    return Verifier.VerifyVolume(Flags & ~NTFS_VERIFY_HOOK, Stats);
 }
 
 extern "C"
