@@ -206,7 +206,6 @@ UpdateDriverForPlugAndPlayDevicesW(
     BOOL FoundCurrentDriver = FALSE;
     BOOL ret = FALSE, Wow64 = FALSE;
     DWORD InstallError = ERROR_SUCCESS; /* Last InstallCurrentDriver failure on a matching device */
-    DWORD LastError;
 
     DevInstData.hDevInfo = INVALID_HANDLE_VALUE;
 
