@@ -19,9 +19,16 @@ NtfsDiskPrepareMountKm(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG SectorBytes);
 
-/* Drops clean blocks cached for a device that failed to mount. */
+/* Drops clean blocks cached for a device that failed to mount, and what was
+ * learned about the device for media ordering. */
 VOID
 NtfsDiskReleaseKm(_In_ PDEVICE_OBJECT DeviceObject);
+
+/* Forget what was learned about a device for media ordering (write cache,
+ * FUA, counters); the next use probes it again. Call when a volume on it is
+ * released, so a reused device object is never trusted on an old answer. */
+VOID
+NtfsDiskForgetDeviceKm(_In_ PDEVICE_OBJECT DeviceObject);
 
 /* Writes out metadata held back by the block cache. */
 NTSTATUS
@@ -67,6 +74,7 @@ typedef struct _NTFS_DURABILITY_STATS
     BOOLEAN WriteCache;      /* the device may hold completed writes */
     BOOLEAN Fua;             /* SL_WRITE_THROUGH reaches the medium */
     BOOLEAN FlushRejected;   /* the device refused IRP_MJ_FLUSH_BUFFERS */
+    BOOLEAN NotDurable;      /* volatile cache, flush refused, no FUA: ordering is not on the medium */
     ULONG Flushes;           /* device flushes issued for ordering and explicitly */
     ULONG FlushesSkipped;    /* ordering edges that needed no flush */
     ULONG FuaWrites;
