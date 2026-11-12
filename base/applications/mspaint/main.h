@@ -51,6 +51,8 @@ public:
     BOOL PreTranslateRibbon(MSG *pMsg);
     void SetRibbonAccelerators(HACCEL hAccel);
     void SaveAsFormat(PCWSTR pszExt);
+    void ShowChromeForPreview(BOOL bShow);
+    void alignChildrenToMainWindow();
 
 private:
     HMENU m_hMenu;
@@ -80,7 +82,6 @@ private:
     LRESULT OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnMouseWheel(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 
-    void alignChildrenToMainWindow();
     void saveImage(BOOL overwrite);
     void InsertSelectionFromHBITMAP(HBITMAP bitmap, HWND window);
     BOOL ConfirmSave();

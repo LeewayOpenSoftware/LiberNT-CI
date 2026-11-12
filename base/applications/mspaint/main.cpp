@@ -8,6 +8,7 @@
  */
 
 #include "precomp.h"
+#include "paint_print.h"
 
 #include <dlgs.h>
 #include <mapi.h>
@@ -338,8 +339,24 @@ static HWND DoHtmlHelpW(HWND hwndCaller, LPCWSTR pszFile, UINT uCommand, DWORD_P
     return s_pHtmlHelpW(hwndCaller, pszFile, uCommand, dwData);
 }
 
+void CMainWindow::ShowChromeForPreview(BOOL bShow)
+{
+    int nCmd = bShow ? SW_SHOWNA : SW_HIDE;
+    if (m_pRibbon)
+        ::ShowWindow(LeewayRibbonGetHWND(m_pRibbon), nCmd);
+    if (canvasWindow.IsWindow())
+        canvasWindow.ShowWindow(nCmd);
+    if (::IsWindow(g_hStatusBar))
+        ::ShowWindow(g_hStatusBar, nCmd);
+}
+
 void CMainWindow::alignChildrenToMainWindow()
 {
+    if (PaintPrintIsActive())
+    {
+        PaintPrintLayout(m_hWnd);
+        return;
+    }
     RECT clientRect, rc;
     GetClientRect(&clientRect);
     RECT rcSpace = clientRect;
@@ -431,6 +448,7 @@ LRESULT CMainWindow::OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL&
                  SWP_NOZORDER | SWP_NOACTIVATE);
     if (m_pRibbon)
         LeewayRibbonSetDPI(m_pRibbon, dpi);
+    PaintPrintSetDPI(dpi);
     if (::IsWindow(g_hStatusBar))
     {
         ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, MulDiv(21, dpi, 96), 0);
@@ -865,6 +883,7 @@ LRESULT CMainWindow::OnDestroy(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
             ::DestroyIcon(m_hStatusIcons[i]);
         m_hStatusIcons[i] = NULL;
     }
+    PaintPrintCleanup();
     PaintRibbonCleanup(m_pRibbon);
     m_pRibbon = NULL;
 
@@ -1151,36 +1170,13 @@ LRESULT CMainWindow::OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
             saveImage(FALSE);
             break;
         case IDM_FILEPAGESETUP:
-            // DUMMY: Shows the dialog only, no functionality
-            PAGESETUPDLG psd;
-            ZeroMemory(&psd, sizeof(psd));
-            psd.lStructSize = sizeof(psd);
-            psd.hwndOwner = m_hWnd;
-            PageSetupDlg(&psd);
+            PaintPrintPageSetup(m_hWnd);
+            break;
+        case IDM_FILEPAGEVIEW:
+            PaintPrintPreview(m_hWnd);
             break;
         case IDM_FILEPRINT:
-            // TODO: Test whether it actually works
-            PRINTDLG pd;
-            ZeroMemory(&pd, sizeof(pd));
-            pd.lStructSize = sizeof(pd);
-            pd.hwndOwner = m_hWnd;
-            pd.hDevMode = NULL;  // freed by user
-            pd.hDevNames = NULL;  // freed by user
-            pd.Flags = PD_USEDEVMODECOPIESANDCOLLATE | PD_RETURNDC;
-            pd.nCopies = 1;
-            pd.nFromPage = 0xffff;
-            pd.nToPage = 0xffff;
-            pd.nMinPage = 1;
-            pd.nMaxPage = 0xffff;
-            if (PrintDlg(&pd) == TRUE)
-            {
-                ::BitBlt(pd.hDC, 0, 0, imageModel.GetWidth(), imageModel.GetHeight(), imageModel.GetDC(), 0, 0, SRCCOPY);
-                DeleteDC(pd.hDC);
-            }
-            if (pd.hDevMode)
-                GlobalFree(pd.hDevMode);
-            if (pd.hDevNames)
-                GlobalFree(pd.hDevNames);
+            PaintPrintNow(m_hWnd);
             break;
         case IDM_FILESEND:
             canvasWindow.OnEndDraw(FALSE);
@@ -1664,6 +1660,9 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, INT nCm
     while (::GetMessage(&msg, NULL, 0, 0))
     {
         if (fontsDialog.IsWindow() && fontsDialog.IsDialogMessage(&msg))
+            continue;
+
+        if (PaintPrintPreTranslate(&msg))
             continue;
 
         if (mainWindow.PreTranslateRibbon(&msg))
