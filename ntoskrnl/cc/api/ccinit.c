@@ -280,17 +280,25 @@ CcRosFlushDirtyPages(
 {
     ULONG Total = 0;
     ULONG Visited = 0;
+    ULONG Empty = 0;
 
     while (Total < Target && Visited++ < 256)
     {
         PCC_NT_MAP NtMap = CcNtNextDirtyMap();
+        ULONG Written;
 
         if (NtMap == NULL)
             break;
 
-        Total += CcNtLazyFlushMap(NtMap, Target - Total, Wait, CalledFromLazy);
+        Written = CcNtLazyFlushMap(NtMap, Target - Total, Wait, CalledFromLazy);
+        if (Written == 0)
+            Empty++;
+        Total += Written;
         CcNtDereferenceMap(NtMap);
     }
+
+    if (Empty != 0)
+        DPRINT1("CCCOUNT pass visits %lu empty %lu written %lu\n", Visited, Empty, Total);
 
     if (Count != NULL)
         *Count = Total;
