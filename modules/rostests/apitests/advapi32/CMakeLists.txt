@@ -37,6 +37,7 @@ list(APPEND SOURCE
     TriggerInfo.c
     TokenBnoIsolation.c
     TokenDefaultPrivileges.c
+    TokenIntegrity.c
     TokenIntegrityLevel.c
     TraceGuids.c
     svchlp.c)
