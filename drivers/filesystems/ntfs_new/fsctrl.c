@@ -1575,6 +1575,13 @@ NtfsDismountVolume(
     VolCB->Dismounting = FALSE;
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
 
+    if (NT_SUCCESS(Status))
+    {
+        DPRINT1("NTFS: dismounted volume %p (storage %p), device VPB %s\n",
+                VolumeDeviceObject, VolCB->StorageDevice,
+                SpareVpb ? "not swapped" : "swapped for the next mount");
+    }
+
     if (SpareVpb)
         ExFreePoolWithTag(SpareVpb, TAG_NTFS);
 
