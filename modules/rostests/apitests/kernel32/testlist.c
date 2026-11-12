@@ -78,6 +78,7 @@ extern void func_LockFileEx(void);
 extern void func_QuantumRoundRobin(void);
 extern void func_RegisterWaitPeriodic(void);
 extern void func_SandboxLaunch(void);
+extern void func_MitigationPolicyProbe(void);
 extern void func_SystemImageCatalog(void);
 extern void func_SystemTimeChangeTimers(void);
 extern void func_TebSegmentAfterWait(void);
@@ -204,6 +205,7 @@ const struct test winetest_testlist[] =
     { "LCMapString",                 func_LCMapString },
     { "LoadLibraryExW",              func_LoadLibraryExW },
     { "LockFileEx",                  func_LockFileEx },
+    { "MitigationPolicyProbe",         func_MitigationPolicyProbe },
     { "SystemImageCatalog",            func_SystemImageCatalog },
     { "SystemTimeChangeTimers",      func_SystemTimeChangeTimers },
     { "TebSegmentAfterWait",           func_TebSegmentAfterWait },
