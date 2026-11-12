@@ -19,8 +19,9 @@ NtfsDiskPrepareMountKm(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG SectorBytes);
 
-/* Drops clean blocks cached for a device that failed to mount, and what was
- * learned about the device for media ordering. */
+/* Drops clean blocks cached for a device whose volume is gone (a failed
+ * mount, a dismount), and what was learned about the device for media
+ * ordering. Dirty blocks stay. */
 VOID
 NtfsDiskReleaseKm(_In_ PDEVICE_OBJECT DeviceObject);
 

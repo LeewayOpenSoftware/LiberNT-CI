@@ -124,9 +124,11 @@ NtfsReleaseDismountedVolume(
     {
         NtfsUnregisterVolumeForShutdown(VolCB);
         NtfsFlushVolume(VolCB, TRUE);
-        /* The storage device object may be reused by another volume: what the
-         * environment learned about it for media ordering must go with us. */
-        NtfsDiskForgetDeviceKm(VolCB->StorageDevice);
+        /* The storage device object may be reused by another volume: its clean
+         * cached blocks and what the environment learned about it for media
+         * ordering go with us (dirty blocks, if the flush failed, stay and are
+         * retried by the lazy writer, fail-closed). */
+        NtfsDiskReleaseKm(VolCB->StorageDevice);
         ObDereferenceObject(StreamFileObject);
         /* FIXME: Delete the volume device and free the volume context once its last file object is closed. */
     }
