@@ -432,7 +432,10 @@ LRESULT CMainWindow::OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL&
     if (m_pRibbon)
         LeewayRibbonSetDPI(m_pRibbon, dpi);
     if (::IsWindow(g_hStatusBar))
+    {
         ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, MulDiv(21, dpi, 96), 0);
+        MakeStatusIcons();
+    }
     alignChildrenToMainWindow();
     return 0;
 }
@@ -444,6 +447,86 @@ static LRESULT CALLBACK StatusBarForwardProc(HWND hWnd, UINT uMsg, WPARAM wParam
     if (uMsg == WM_HSCROLL || uMsg == WM_COMMAND)
         return ::SendMessageW((HWND)dwRefData, uMsg, wParam, lParam);
     return ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+// Small status-bar glyphs drawn with GDI (own art): 0 cursor cross, 1 selection box, 2 image frame
+static HICON MakeStatusGlyph(int kind, int px)
+{
+    BITMAPINFO bi = { { sizeof(BITMAPINFOHEADER), px, -px, 1, 32, BI_RGB } };
+    void *bits = NULL;
+    HDC hdcScreen = ::GetDC(NULL);
+    HDC hdc = ::CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmColor = ::CreateDIBSection(hdcScreen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    HBITMAP hbmMask = ::CreateBitmap(px, px, 1, 1, NULL);
+    ::ReleaseDC(NULL, hdcScreen);
+    HICON hIcon = NULL;
+    if (hbmColor && hbmMask && bits)
+    {
+        const COLORREF key = RGB(255, 0, 255);
+        HGDIOBJ old = ::SelectObject(hdc, hbmColor);
+        RECT rc = { 0, 0, px, px };
+        HBRUSH hbr = ::CreateSolidBrush(key);
+        ::FillRect(hdc, &rc, hbr);
+        ::DeleteObject(hbr);
+        int w = (px >= 24) ? 2 : 1;
+        COLORREF ink = ::GetSysColor(COLOR_WINDOWTEXT);
+        HPEN pen = ::CreatePen(kind == 1 ? PS_DOT : PS_SOLID, 1, ink);
+        HPEN penSolid = ::CreatePen(PS_SOLID, w, ink);
+        HGDIOBJ oldPen = ::SelectObject(hdc, penSolid);
+        HGDIOBJ oldBrush = ::SelectObject(hdc, ::GetStockObject(HOLLOW_BRUSH));
+        int m = px / 8, c = px / 2, e = px - 1 - m;
+        if (kind == 0)
+        {
+            ::MoveToEx(hdc, m, c, NULL); ::LineTo(hdc, e + 1, c);
+            ::MoveToEx(hdc, c, m, NULL); ::LineTo(hdc, c, e + 1);
+            int a = px / 6;
+            POINT t1[3] = { { c, m }, { c - a, m + a }, { c + a, m + a } };
+            POINT t2[3] = { { c, e }, { c - a, e - a }, { c + a, e - a } };
+            POINT t3[3] = { { m, c }, { m + a, c - a }, { m + a, c + a } };
+            POINT t4[3] = { { e, c }, { e - a, c - a }, { e - a, c + a } };
+            ::Polyline(hdc, t1, 3); ::Polyline(hdc, t2, 3); ::Polyline(hdc, t3, 3); ::Polyline(hdc, t4, 3);
+        }
+        else if (kind == 1)
+        {
+            ::SelectObject(hdc, pen);
+            ::Rectangle(hdc, m, m, e + 1, e + 1);
+        }
+        else
+        {
+            ::Rectangle(hdc, m, m + px / 4, e - px / 4 + 1, e + 1);
+            ::MoveToEx(hdc, e - px / 4, m, NULL); ::LineTo(hdc, e + 1, m);
+            ::MoveToEx(hdc, e, m, NULL); ::LineTo(hdc, e, m + px / 4 + 1);
+        }
+        ::SelectObject(hdc, oldPen);
+        ::SelectObject(hdc, oldBrush);
+        ::DeleteObject(pen);
+        ::DeleteObject(penSolid);
+        ::SelectObject(hdc, old);
+        DWORD *pix = (DWORD *)bits;
+        for (int i = 0; i < px * px; i++)
+            pix[i] = ((pix[i] & 0x00FFFFFF) == ((GetBValue(key)) | (GetGValue(key) << 8) | (GetRValue(key) << 16))) ? 0 : (pix[i] | 0xFF000000);
+        ICONINFO ii = { TRUE, 0, 0, hbmMask, hbmColor };
+        hIcon = ::CreateIconIndirect(&ii);
+    }
+    if (hbmColor) ::DeleteObject(hbmColor);
+    if (hbmMask) ::DeleteObject(hbmMask);
+    ::DeleteDC(hdc);
+    return hIcon;
+}
+
+void CMainWindow::MakeStatusIcons()
+{
+    if (!::IsWindow(g_hStatusBar))
+        return;
+    int px = MulDiv(16, (int)LeewayDpiGetForWindow(m_hWnd), 96);
+    for (int i = 0; i < 3; i++)
+    {
+        HICON h = MakeStatusGlyph(i, px);
+        ::SendMessageW(g_hStatusBar, SB_SETICON, i + 1, (LPARAM)h);
+        if (m_hStatusIcons[i])
+            ::DestroyIcon(m_hStatusIcons[i]);
+        m_hStatusIcons[i] = h;
+    }
 }
 
 static const int kZoomSteps[7] = { 125, 250, 500, 1000, 2000, 4000, 8000 };
@@ -776,6 +859,12 @@ LRESULT CMainWindow::OnDestroy(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
         m_hMenu = NULL;
     }
 
+    for (int i = 0; i < 3; i++)
+    {
+        if (m_hStatusIcons[i])
+            ::DestroyIcon(m_hStatusIcons[i]);
+        m_hStatusIcons[i] = NULL;
+    }
     PaintRibbonCleanup(m_pRibbon);
     m_pRibbon = NULL;
 
@@ -957,6 +1046,8 @@ LRESULT CMainWindow::OnSize(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHand
         ::SendMessageW(g_hStatusBar, SB_SETPARTS, 5, (LPARAM)&test);
         UpdateStatusInfo();
         PlaceZoomControls();
+        if (!m_hStatusIcons[0])
+            MakeStatusIcons();
     }
     alignChildrenToMainWindow();
     return 0;

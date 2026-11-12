@@ -57,6 +57,7 @@ private:
     ILeewayRibbon *m_pRibbon;
     BOOL m_bRibbonDirty = FALSE;
     HWND m_hZoomSlider = NULL;
+    HICON m_hStatusIcons[3] = { NULL, NULL, NULL };
     HWND m_hZoomOut = NULL;
     HWND m_hZoomIn = NULL;
 
@@ -74,6 +75,7 @@ private:
     LRESULT OnHScroll(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     void StepZoom(int delta);
     void PlaceZoomControls();
+    void MakeStatusIcons();
     LRESULT OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnMouseWheel(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);

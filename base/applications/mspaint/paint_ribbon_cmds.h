@@ -170,7 +170,7 @@ static const LeewayUIPlacement g_homeBrushesPlacement[] = {
 };
 
 static const LeewayUIPlacement g_homeShapesPlacement[] = {
-    { 340,                 LWUI_CONTROL_GALLERY_STRIP, L"SH", 234 },
+    { 340,                 LWUI_CONTROL_GALLERY_STRIP, L"SH", 160 },
     { 345,                 LWUI_CONTROL_DROPDOWN, L"O", 0 },
     { 346,                 LWUI_CONTROL_DROPDOWN, L"F", 0 },
 };

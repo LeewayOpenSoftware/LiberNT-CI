@@ -18,6 +18,42 @@ extern BOOL g_showGrid;
 
 static ILeewayRibbon *s_ribbon;
 
+/* Custom palette slots persist in HKCU\Software\Leeway\Paint\CustomColors (10 DWORDs, 0x01000000 = defined) */
+static const WCHAR kPaintRegKey[] = L"Software\\Leeway\\Paint";
+
+static void LoadCustomColours()
+{
+    HKEY hk;
+    DWORD data[PAINT_PALETTE_COUNT - PAINT_PALETTE_STD] = { 0 }, size = sizeof(data), type = 0;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, kPaintRegKey, 0, KEY_READ, &hk) != ERROR_SUCCESS)
+        return;
+    if (RegQueryValueExW(hk, L"CustomColors", NULL, &type, (LPBYTE)data, &size) == ERROR_SUCCESS && type == REG_BINARY)
+    {
+        for (UINT i = 0; i < size / sizeof(DWORD) && i < _countof(data); i++)
+        {
+            if (data[i] & 0x01000000)
+            {
+                g_paintCustomSet[i] = TRUE;
+                g_paintPaletteItems[PAINT_PALETTE_STD + i].color = data[i] & 0x00FFFFFF;
+            }
+        }
+    }
+    RegCloseKey(hk);
+}
+
+static void SaveCustomColours()
+{
+    HKEY hk;
+    DWORD data[PAINT_PALETTE_COUNT - PAINT_PALETTE_STD];
+    for (UINT i = 0; i < _countof(data); i++)
+        data[i] = g_paintCustomSet[i] ? (g_paintPaletteItems[PAINT_PALETTE_STD + i].color | 0x01000000) : 0;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, kPaintRegKey, 0, NULL, 0, KEY_WRITE, NULL, &hk, NULL) == ERROR_SUCCESS)
+    {
+        RegSetValueExW(hk, L"CustomColors", 0, REG_BINARY, (const BYTE *)data, sizeof(data));
+        RegCloseKey(hk);
+    }
+}
+
 #include "paint_ribbon_strings.h"
 
 /* Label text comes from the resource string tables (en-US, es-ES, ...); the literal is the fallback */
@@ -103,6 +139,7 @@ static BOOL HandleLocal(UINT32 id, HWND hWnd)
                 return TRUE;
             g_paintCustomSet[n - PAINT_PALETTE_STD] = TRUE;
             g_paintPaletteItems[n].color = c;
+            SaveCustomColours();
             if (s_ribbon)
                 PaintSetCollTr(s_ribbon, 372, g_paintPaletteItems, _countof(g_paintPaletteItems),
                                LWUI_COLLECTION_COLORS);
@@ -278,7 +315,7 @@ static HRESULT OnRibbonQueryState(UINT32 id, LeewayUICommandState *state, void *
     }
     case IDM_EDITPASTE:
     case IDM_EDITPASTEFROM:
-        state->enabled = mainWindow.CanPaste();
+        state->enabled = TRUE; /* like Win7 Paint: always available; an empty clipboard pastes nothing */
         break;
     case IDM_IMAGECROP:
         state->enabled = HasTrueSelection();
@@ -429,6 +466,7 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
     }
 
     s_ribbon = *pRibbon;
+    LoadCustomColours();
     LeewayRibbonSetGalleryDrawCallback(*pRibbon, PaintGalleryDraw, NULL);
 
     /* Collections: galleries, dropdowns and split menus (paint_ribbon_cmds.h) */
