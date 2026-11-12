@@ -720,7 +720,7 @@
 @ stdcall GetThreadPriorityBoost(long ptr)
 @ stdcall -version=0xA00+ GetThreadSelectedCpuSets(ptr ptr long ptr) kernelbase.GetThreadSelectedCpuSets
 @ stdcall GetThreadSelectorEntry(long long ptr)
-@ stdcall GetThreadTimes(long ptr ptr ptr ptr) kernelbase.GetThreadTimes
+@ stdcall GetThreadTimes(long ptr ptr ptr ptr)
 @ stdcall -version=0x600+ GetThreadUILanguage()
 @ stdcall GetTickCount()
 @ stdcall -version=0x600+ -ret64 GetTickCount64()
