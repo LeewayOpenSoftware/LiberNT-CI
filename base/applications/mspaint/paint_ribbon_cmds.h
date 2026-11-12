@@ -42,8 +42,8 @@ static const LeewayUICommand g_paintCommands[] = {
     { IDM_FILEEXIT,                 L"Exit",                    L"Exit Paint",          L"X",   LWUI_AUR_COMMON_EXIT, TRUE, FALSE, TRUE },
 
     /* Edit commands (220-229) */
-    { IDM_EDITUNDO,                 L"Undo",                    L"Undo action",         L"U",   0, TRUE, FALSE, TRUE },
-    { IDM_EDITREDO,                 L"Redo",                    L"Redo action",         L"Y",   0, TRUE, FALSE, TRUE },
+    { IDM_EDITUNDO,                 L"Undo",                    L"Undo action",         L"U",   LWUI_AUR_COMMON_UNDO, TRUE, FALSE, TRUE },
+    { IDM_EDITREDO,                 L"Redo",                    L"Redo action",         L"Y",   LWUI_AUR_COMMON_REDO, TRUE, FALSE, TRUE },
     { IDM_EDITCUT,                  L"Cut",                     L"Cut to clipboard",    L"X",   LWUI_AUR_COMMON_CUT, TRUE, FALSE, TRUE },
     { IDM_EDITCOPY,                 L"Copy",                    L"Copy to clipboard",   L"CP",   LWUI_AUR_COMMON_COPY, TRUE, FALSE, TRUE },
     { IDM_EDITPASTE,                L"Paste",                   L"Paste from clipboard", L"V",   LWUI_AUR_COMMON_PASTE, TRUE, FALSE, TRUE },
