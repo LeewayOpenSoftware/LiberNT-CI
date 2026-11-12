@@ -170,7 +170,7 @@ static const LeewayUIPlacement g_homeBrushesPlacement[] = {
 };
 
 static const LeewayUIPlacement g_homeShapesPlacement[] = {
-    { 340,                 LWUI_CONTROL_GALLERY_STRIP, L"SH", 168 },
+    { 340,                 LWUI_CONTROL_GALLERY_STRIP, L"SH", 172 },
     { 345,                 LWUI_CONTROL_DROPDOWN, L"O", 0 },
     { 346,                 LWUI_CONTROL_DROPDOWN, L"F", 0 },
 };
@@ -182,7 +182,7 @@ static const LeewayUIPlacement g_homeSizePlacement[] = {
 static const LeewayUIPlacement g_homeColoursPlacement[] = {
     { 370,                 LWUI_CONTROL_COLORWELL, L"C1", 0 },
     { 371,                 LWUI_CONTROL_COLORWELL, L"C2", 0 },
-    { 372,                 LWUI_CONTROL_GALLERY_STRIP, L"PA", 234 },
+    { 372,                 LWUI_CONTROL_GALLERY_STRIP, L"PA", 240 },
     { IDM_COLORSEDITPALETTE, LWUI_CONTROL_BUTTON_LARGE, L"EC", 0 },
 };
 
@@ -276,7 +276,7 @@ static const LeewayUIPlacement g_textBackgroundPlacement[] = {
 static const LeewayUIPlacement g_textColoursPlacement[] = {
     { 370,                 LWUI_CONTROL_COLORWELL, L"C1", 0 },
     { 371,                 LWUI_CONTROL_COLORWELL, L"C2", 0 },
-    { 372,                 LWUI_CONTROL_GALLERY_STRIP, L"PA", 234 },
+    { 372,                 LWUI_CONTROL_GALLERY_STRIP, L"PA", 240 },
 };
 
 /* Groups for Text tab */
