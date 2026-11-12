@@ -1,0 +1,17 @@
+/*
+ * PROJECT:     LiberNT WinRT Windows.Management.Deployment
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * PURPOSE:     Runtime classes registered by windows.management.deployment.dll
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+#pragma makedep register
+#pragma winrt ns_prefix
+
+import "windows.foundation.idl";
+import "windows.applicationmodel.idl";
+import "windows.management.deployment.idl";
+
+namespace Windows.Management.Deployment {
+    runtimeclass PackageManager;
+}
