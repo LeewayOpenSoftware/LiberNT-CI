@@ -32,8 +32,26 @@ static void DrawImagePage(HDC hdc, const RECT *content, UINT dpi)
     if (iw <= 0 || ih <= 0 || dpi == 0)
         return;
     int cw = content->right - content->left, ch = content->bottom - content->top;
-    LONGLONG w = MulDiv(iw, dpi, 96), h = MulDiv(ih, dpi, 96); /* actual size */
-    if (w > cw || h > ch)
+    UINT scale = s_settings.scale_percent ? s_settings.scale_percent : 100;
+    BOOL fit = (s_settings.fit_pages_x || s_settings.fit_pages_y);
+    LONGLONG w = (LONGLONG)MulDiv(iw, dpi, 96) * scale / 100, h = (LONGLONG)MulDiv(ih, dpi, 96) * scale / 100;
+    if (fit)
+    {
+        /* fit to the page: scale up or down to the margin box */
+        w = MulDiv(iw, dpi, 96);
+        h = MulDiv(ih, dpi, 96);
+        if (w * ch > h * cw)
+        {
+            h = h * cw / w;
+            w = cw;
+        }
+        else
+        {
+            w = w * ch / h;
+            h = ch;
+        }
+    }
+    else if (w > cw || h > ch)
     {
         /* shrink to fit, keep the aspect ratio */
         if (w * ch > h * cw)
@@ -49,7 +67,8 @@ static void DrawImagePage(HDC hdc, const RECT *content, UINT dpi)
     }
     if (w < 1 || h < 1)
         return;
-    int x = content->left + (cw - (int)w) / 2, y = content->top + (ch - (int)h) / 2;
+    int x = content->left + (s_settings.center_h ? (cw - (int)w) / 2 : 0);
+    int y = content->top + (s_settings.center_v ? (ch - (int)h) / 2 : 0);
     int old = ::SetStretchBltMode(hdc, HALFTONE);
     ::SetBrushOrgEx(hdc, 0, 0, NULL);
     ::StretchBlt(hdc, x, y, (int)w, (int)h, imageModel.GetDC(), 0, 0, iw, ih, SRCCOPY);
