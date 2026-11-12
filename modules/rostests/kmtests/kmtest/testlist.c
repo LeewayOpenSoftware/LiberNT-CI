@@ -7,6 +7,7 @@
 #include <kmt_test.h>
 
 KMT_TESTFUNC Test_CcCopyRead;
+KMT_TESTFUNC Test_CcCoherency;
 KMT_TESTFUNC Test_CcCopyWrite;
 KMT_TESTFUNC Test_CcMapData;
 KMT_TESTFUNC Test_CcPinMappedData;
@@ -62,6 +63,7 @@ KMT_TESTFUNC Test_WskEcho;
 const KMT_TEST TestList[] =
 {
     { "CcCopyRead",                    Test_CcCopyRead },
+    { "CcCoherency",                   Test_CcCoherency },
     { "CcCopyWrite",                   Test_CcCopyWrite },
     { "CcMapData",                     Test_CcMapData },
     { "CcPinMappedData",               Test_CcPinMappedData },

@@ -526,6 +526,7 @@ list(APPEND KMTEST_SOURCE
     kernel32/FileAttributes_user.c
     kernel32/FindFile_user.c
     ntos_cc/CcCopyRead_user.c
+    ntos_cc/CcCoherency_user.c
     ntos_cc/CcCopyWrite_user.c
     ntos_cc/CcMapData_user.c
     ntos_cc/CcPinMappedData_user.c
@@ -592,6 +593,7 @@ add_dependencies(kmtest_drivers
     poirp_drv
     tcpip_drv
     cccopyread_drv
+    cccoherency_drv
     cccopywrite_drv
     ccmapdata_drv
     ccpinmappeddata_drv

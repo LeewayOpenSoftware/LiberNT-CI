@@ -32,6 +32,20 @@ target_compile_definitions(cccopywrite_drv PRIVATE KMT_STANDALONE_DRIVER)
 add_rostests_file(TARGET cccopywrite_drv)
 
 #
+# CcCoherency
+#
+list(APPEND CCCOHERENCY_DRV_SOURCE
+    ../kmtest_drv/kmtest_standalone.c
+    CcCoherency_drv.c)
+
+add_library(cccoherency_drv MODULE ${CCCOHERENCY_DRV_SOURCE})
+set_module_type(cccoherency_drv kernelmodedriver)
+target_link_libraries(cccoherency_drv kmtest_printf ${PSEH_LIB})
+add_importlibs(cccoherency_drv ntoskrnl hal)
+target_compile_definitions(cccoherency_drv PRIVATE KMT_STANDALONE_DRIVER)
+add_rostests_file(TARGET cccoherency_drv)
+
+#
 # CcMapData
 #
 list(APPEND CCMAPDATA_DRV_SOURCE
