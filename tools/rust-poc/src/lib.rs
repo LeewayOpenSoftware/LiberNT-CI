@@ -14,10 +14,11 @@ use core::ffi::{c_int, c_ulong};
 use core::panic::PanicInfo;
 use core::slice;
 
-/// Leeway-reserved EXPERIMENTAL bugcheck code for an unrecoverable Rust-side panic.
+/// Leeway provisional EXPERIMENTAL bugcheck code (0x4C450001, 'LE'+01) for an
+/// unrecoverable Rust-side panic. Owner-approved 2026-11-12; exclusive to lnrspoc tests.
 /// Documented in README.md "Bugcheck code registry". Not a Microsoft code; ours, for
 /// our kernel. Only ever reached via the panic handler, never on normal init/op.
-const LEEWAY_RUST_PANIC: c_ulong = 0xE000_0001;
+const LEEWAY_RUST_PANIC: c_ulong = 0x4C45_0001;
 
 extern "C" {
     /// Supplied by ntoskrnl at driver link time. Never returns.
