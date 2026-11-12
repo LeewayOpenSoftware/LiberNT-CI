@@ -335,10 +335,13 @@ SoftGpuEdidListsMode(
         if (Edid[Index] == 0 && Edid[Index + 1] == 0)
             continue;
 
-        if ((Edid[Index + 2] | ((Edid[Index + 4] & 0xF0) << 4)) == Width &&
-            (Edid[Index + 5] | ((Edid[Index + 7] & 0xF0) << 4)) == Height)
         {
-            return TRUE;
+            ULONG DtdWidth = Edid[Index + 2] | ((Edid[Index + 4] & 0xF0) << 4);
+            ULONG DtdHeight = Edid[Index + 5] | ((Edid[Index + 7] & 0xF0) << 4);
+
+            /* Panels report 1366 where BIOSes and the CVT/GTF tables use 1360 (width rounded to a multiple of 8). */
+            if (DtdHeight == Height && DtdWidth >= Width && DtdWidth - Width <= 8)
+                return TRUE;
         }
     }
 
@@ -442,6 +445,9 @@ SoftGpuVbeQueryModes(
             ModeListCount++;
         }
 
+        /* The EDID first: it decides which unlisted BIOS modes are worth probing below. */
+        SoftGpuVbeReadEdid(Config, Call, ReadMemory, Segment, Offset);
+
         for (Index = 0; Index < ModeListCount; Index++)
         {
             RtlZeroMemory(&Registers, sizeof(Registers));
@@ -457,8 +463,47 @@ SoftGpuVbeQueryModes(
             }
         }
 
+        /*
+         * Many BIOSes accept mode numbers they do not list (a panel-native
+         * 1360x768 or 1366x768 is the usual case).  With an EDID in hand, ask
+         * for every unlisted number in the standard range and keep the ones
+         * the monitor says it supports.
+         */
+        if (Config->EdidLength != 0 && VbeVersion >= 0x0200)
+        {
+            USHORT Probe;
+            ULONG Listed;
+
+            for (Probe = 0x100; Probe < 0x200; Probe++)
+            {
+                for (Listed = 0; Listed < ModeListCount; Listed++)
+                {
+                    if (ModeList[Listed] == Probe)
+                        break;
+                }
+                if (Listed < ModeListCount)
+                    continue;
+
+                RtlZeroMemory(&Registers, sizeof(Registers));
+                Registers.Eax = 0x4F01;
+                Registers.Ecx = Probe;
+                Registers.SegEs = Segment;
+                Registers.Edi = Offset + SOFTGPU_VBE_INFO_SIZE;
+                if (Call(0x10, &Registers) &&
+                    (Registers.Eax & 0xFFFF) == SOFTGPU_VBE_SUCCESS &&
+                    NT_SUCCESS(ReadMemory(Segment, (USHORT)(Offset + SOFTGPU_VBE_INFO_SIZE), ModeInfo, sizeof(ModeInfo))) &&
+                    SoftGpuEdidListsMode(Config->Edid,
+                                         SoftGpuReadUshort(ModeInfo, 0x12),
+                                         SoftGpuReadUshort(ModeInfo, 0x14)))
+                {
+                    if (SoftGpuVbeAddMode(Config, Probe, ModeInfo, VbeVersion, VideoMemorySize))
+                        DPRINT1("SOFTGPU: VBE unlisted mode 0x%04X accepted (%lux%lu)\n", (UINT)Probe,
+                                (ULONG)SoftGpuReadUshort(ModeInfo, 0x12), (ULONG)SoftGpuReadUshort(ModeInfo, 0x14));
+                }
+            }
+        }
+
         DPRINT1("SOFTGPU: VBE accepted %lu mode(s) before the EDID prune\n", Config->ModeCount);
-        SoftGpuVbeReadEdid(Config, Call, ReadMemory, Segment, Offset);
         SoftGpuVbePruneModes(Config);
         for (Index = 0; Index < Config->ModeCount; Index++)
             DPRINT1("SOFTGPU: VBE kept %lux%lu (mode 0x%04X)\n",
