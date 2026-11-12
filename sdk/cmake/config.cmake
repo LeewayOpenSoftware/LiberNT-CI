@@ -352,7 +352,7 @@ if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
 endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
-    cmake_dependent_option(ENABLE_KERNEL_UBSAN "Whether to report undefined behavior in kernel-mode modules at run time" ON
+    cmake_dependent_option(ENABLE_KERNEL_UBSAN "Whether to report undefined behavior in kernel-mode modules at run time" OFF
                            "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 endif()
 
