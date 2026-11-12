@@ -156,6 +156,7 @@ InitVideo(VOID)
     HKEY hkey;
 
     TRACE("----------------------------- InitVideo() -------------------------------\n");
+    ERR("K2TRACE2: W32K InitVideo enter\n");
 
     /* Check if VGA mode is requested, by finding the special volatile key created by VIDEOPRT */
     Status = RegOpenKey(L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\GraphicsDrivers\\BaseVideo", &hkey);
@@ -184,7 +185,9 @@ InitVideo(VOID)
         Interval.QuadPart = -(100LL * 10000LL); /* 100 ms, relative */
         for (Attempt = 0; ; Attempt++)
         {
+            ERR("K2TRACE2: W32K EngpUpdateGraphicsDeviceList attempt %lu\n", Attempt);
             Status = EngpUpdateGraphicsDeviceList();
+            ERR("K2TRACE2: W32K EngpUpdateGraphicsDeviceList attempt %lu -> 0x%lx\n", Attempt, Status);
             if ((Status != STATUS_OBJECT_NAME_NOT_FOUND &&
                  (!NT_SUCCESS(Status) || EngpFindGraphicsDevice(NULL, 0) != NULL)) ||
                 Attempt >= 150)

@@ -5064,6 +5064,8 @@ DxgkDisplayRegister(
     PAGED_CODE();
 
     DXGKRNL_TRACE("DxgkDisplayRegister: Adapter=%p\n", Adapter);
+    DXGKRNL_INFO("K2TRACE2: DxgkDisplayRegister enter adapter %p fallback=%d device %p\n",
+                 Adapter, (int)Adapter->IsBasicDisplayFallback, g_DisplayDeviceObject);
 
     /*
      * POST geometry is owned by the public ownership callback. In-tree
@@ -5386,6 +5388,9 @@ DxgkDisplayUnregister(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
     PVOID OldFb = NULL;
+
+    DXGKRNL_INFO("K2TRACE2: DxgkDisplayUnregister enter adapter %p registered %p device %p\n",
+                 Adapter, g_DisplayAdapter, g_DisplayDeviceObject);
 
     PAGED_CODE();
 
