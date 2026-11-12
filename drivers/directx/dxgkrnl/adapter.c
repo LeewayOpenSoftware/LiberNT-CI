@@ -590,6 +590,71 @@ DxgkpShouldRegisterDisplayBridge(
     return RegisterDisplayBridge;
 }
 
+static BOOLEAN
+DxgkpPciHeaderAccess(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_ PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length,
+    _In_ BOOLEAN Write)
+{
+    ULONG Done;
+
+    if (!Adapter->PciBusInterfaceValid ||
+        (Write ? Adapter->PciBusInterface.SetBusData == NULL : Adapter->PciBusInterface.GetBusData == NULL))
+    {
+        return FALSE;
+    }
+    Done = Write ? Adapter->PciBusInterface.SetBusData(Adapter->PciBusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                                                       Buffer, Offset, Length)
+                 : Adapter->PciBusInterface.GetBusData(Adapter->PciBusInterface.Context, PCI_WHICHSPACE_CONFIG,
+                                                       Buffer, Offset, Length);
+    return Done == Length;
+}
+
+/*
+ * A claimant whose DxgkDdiStartDevice fails after poking the PCI header
+ * (BAR sizing) can leave the shared display device with its memory decode
+ * off or its BARs unassigned, so every write to the linear framebuffer the
+ * BasicDisplay fallback keeps using is dropped (black screen, and each
+ * store is a bus exit, so a full-screen present takes seconds).  Put the
+ * header back the way it was before the claimant's start.
+ */
+static VOID
+DxgkpRestorePciHeader(
+    _In_ PDXGKRNL_ADAPTER Source,
+    _In_ PDXGKRNL_ADAPTER Target)
+{
+    UCHAR Now[0x40];
+    USHORT Command;
+    USHORT Disabled;
+    PUCHAR Saved = Source->PciHeaderSnapshot;
+
+    if (!Source->PciHeaderSnapshotValid)
+        return;
+    RtlZeroMemory(Now, sizeof(Now));
+    if (!DxgkpPciHeaderAccess(Target, Now, 0, sizeof(Now), FALSE))
+    {
+        DXGKRNL_INFO("K2PCI: claimant %p: cannot read the PCI header through adapter %p\n", Source, Target);
+        return;
+    }
+    DXGKRNL_INFO("K2PCI: before restore cmd=0x%04X->0x%04X bar0=0x%08lX->0x%08lX bar2=0x%08lX->0x%08lX\n",
+                 *(PUSHORT)(Saved + 4), *(PUSHORT)(Now + 4),
+                 *(PULONG)(Saved + 0x10), *(PULONG)(Now + 0x10),
+                 *(PULONG)(Saved + 0x18), *(PULONG)(Now + 0x18));
+    if (RtlCompareMemory(Saved + 4, Now + 4, 0x3C) == 0x3C)
+        return;
+    Command = *(PUSHORT)(Saved + 4);
+    Disabled = (USHORT)(Command & ~(PCI_ENABLE_IO_SPACE | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER));
+    (VOID)DxgkpPciHeaderAccess(Target, &Disabled, 4, sizeof(Disabled), TRUE);
+    (VOID)DxgkpPciHeaderAccess(Target, Saved + 0x10, 0x10, 0x18, TRUE);
+    (VOID)DxgkpPciHeaderAccess(Target, &Command, 4, sizeof(Command), TRUE);
+    RtlZeroMemory(Now, sizeof(Now));
+    if (DxgkpPciHeaderAccess(Target, Now, 0, sizeof(Now), FALSE))
+        DXGKRNL_INFO("K2PCI: after restore cmd=0x%04X bar0=0x%08lX bar2=0x%08lX\n",
+                     *(PUSHORT)(Now + 4), *(PULONG)(Now + 0x10), *(PULONG)(Now + 0x18));
+}
+
 /* Complete the claimant-bound handoff after the complete start state has been
  * published. A successful or non-restartable claimant commits the handoff.
  * A restartable failure starts the retained BasicDisplay FDO again while the
@@ -13403,6 +13468,9 @@ DxgkpCompleteAdapterStart(
                 }
                 KeReleaseSpinLock(&MpCtx->AdapterListLock, OldIrql);
             }
+            if (Adapter->PciHeaderSnapshotValid)
+                DxgkpRestorePciHeader(Adapter, Adapter->PciBusInterfaceValid ? Adapter :
+                                      (Fallback != NULL ? Fallback : Adapter));
             if (Fallback != NULL && !InbvCheckDisplayOwnership())
             {
                 /* The claimant's start took the boot display
@@ -14281,6 +14349,14 @@ DxgkAdapterStart(
         /* TODO: keep boot output in a virtual frame buffer for the boot image relay instead of dropping it */
         DXGKRNL_TRACE("DxgkAdapterStart: POST display adapter %p takes the display from the boot screen\n", Adapter);
         InbvNotifyDisplayOwnershipLost(Adapter->MiniportContext->IsBasicDisplayFallback ? NULL : DxgkpInbvResetDisplay);
+    }
+
+    /* Remember the PCI header so a failed claimant can be undone. */
+    Adapter->PciHeaderSnapshotValid = FALSE;
+    if (!Adapter->MiniportContext->IsBasicDisplayFallback)
+    {
+        Adapter->PciHeaderSnapshotValid =
+            DxgkpPciHeaderAccess(Adapter, Adapter->PciHeaderSnapshot, 0, sizeof(Adapter->PciHeaderSnapshot), FALSE);
     }
 
     /* Call miniport start. */
