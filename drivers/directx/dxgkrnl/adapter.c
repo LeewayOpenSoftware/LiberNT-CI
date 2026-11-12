@@ -591,6 +591,9 @@ DxgkpShouldRegisterDisplayBridge(
 }
 
 static PDXGKRNL_ADAPTER g_K2PciProbeAdapter;
+/* Copy of the display PDO's PCI bus interface: the claimant owns the only valid one and goes away. */
+static BUS_INTERFACE_STANDARD g_K2PciBus;
+static BOOLEAN g_K2PciBusValid;
 
 static BOOLEAN
 DxgkpPciHeaderAccess(
@@ -601,16 +604,18 @@ DxgkpPciHeaderAccess(
     _In_ BOOLEAN Write)
 {
     ULONG Done;
+    PBUS_INTERFACE_STANDARD Bus;
 
-    if (!Adapter->PciBusInterfaceValid ||
-        (Write ? Adapter->PciBusInterface.SetBusData == NULL : Adapter->PciBusInterface.GetBusData == NULL))
-    {
+    if (Adapter->PciBusInterfaceValid)
+        Bus = &Adapter->PciBusInterface;
+    else if (g_K2PciBusValid)
+        Bus = &g_K2PciBus;
+    else
         return FALSE;
-    }
-    Done = Write ? Adapter->PciBusInterface.SetBusData(Adapter->PciBusInterface.Context, PCI_WHICHSPACE_CONFIG,
-                                                       Buffer, Offset, Length)
-                 : Adapter->PciBusInterface.GetBusData(Adapter->PciBusInterface.Context, PCI_WHICHSPACE_CONFIG,
-                                                       Buffer, Offset, Length);
+    if (Write ? Bus->SetBusData == NULL : Bus->GetBusData == NULL)
+        return FALSE;
+    Done = Write ? Bus->SetBusData(Bus->Context, PCI_WHICHSPACE_CONFIG, Buffer, Offset, Length)
+                 : Bus->GetBusData(Bus->Context, PCI_WHICHSPACE_CONFIG, Buffer, Offset, Length);
     return Done == Length;
 }
 
@@ -14387,6 +14392,11 @@ DxgkAdapterStart(
     {
         Adapter->PciHeaderSnapshotValid =
             DxgkpPciHeaderAccess(Adapter, Adapter->PciHeaderSnapshot, 0, sizeof(Adapter->PciHeaderSnapshot), FALSE);
+        if (Adapter->PciBusInterfaceValid)
+        {
+            g_K2PciBus = Adapter->PciBusInterface;
+            g_K2PciBusValid = TRUE;
+        }
     }
 
     /* Call miniport start. */
