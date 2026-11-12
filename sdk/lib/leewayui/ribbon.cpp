@@ -3200,6 +3200,13 @@ static BOOL KnownId(ILeewayRibbon *r, UINT32 id)
     return FindCommand(r, id) != NULL || IsFrameworkId(id);
 }
 
+static void LogUnknownId(const WCHAR *where, UINT32 id)
+{
+    WCHAR msg[200];
+    wsprintfW(msg, L"LeewayUI: SetLayout rejected %s command id 0x%04X: not in the command table -> LWUI_E_UNKNOWN_COMMAND. Add it to the table or remove it from the layout.\n", where, id);
+    OutputDebugStringW(msg);
+}
+
 static HRESULT ReportCollision(const WCHAR *where, const WCHAR *keytip, UINT32 a, UINT32 b)
 {
     WCHAR msg[200];
@@ -3305,9 +3312,9 @@ static Layout *CopyLayout(ILeewayRibbon *r, const LeewayUILayout *src, HRESULT *
                 pl[k].kind = sg->controls[k].kind;
                 pl[k].keytip = ArenaStr(a, sg->controls[k].keytip);
                 pl[k].width = sg->controls[k].width;
-                if (!KnownId(r, pl[k].command_id)) { *hr = LWUI_E_UNKNOWN_COMMAND; goto fail; }
+                if (!KnownId(r, pl[k].command_id)) { *hr = LWUI_E_UNKNOWN_COMMAND; LogUnknownId(L"tab/group", pl[k].command_id); goto fail; }
             }
-            if (dg->launcher_id && !KnownId(r, dg->launcher_id)) { *hr = LWUI_E_UNKNOWN_COMMAND; goto fail; }
+            if (dg->launcher_id && !KnownId(r, dg->launcher_id)) { *hr = LWUI_E_UNKNOWN_COMMAND; LogUnknownId(L"group launcher", dg->launcher_id); goto fail; }
         }
     }
     l->appmenu_count = src->appmenu_count;
@@ -3315,16 +3322,16 @@ static Layout *CopyLayout(ILeewayRibbon *r, const LeewayUILayout *src, HRESULT *
     if (!l->appmenu_ids) goto fail;
     for (UINT32 i = 0; i < src->appmenu_count; i++) {
         l->appmenu_ids[i] = src->appmenu_ids[i];
-        if (!KnownId(r, src->appmenu_ids[i])) { *hr = LWUI_E_UNKNOWN_COMMAND; goto fail; }
+        if (!KnownId(r, src->appmenu_ids[i])) { *hr = LWUI_E_UNKNOWN_COMMAND; LogUnknownId(L"app-menu", src->appmenu_ids[i]); goto fail; }
     }
     l->qat_count = src->qat_count;
     l->qat_default_ids = (UINT32 *)ArenaAlloc(a, sizeof(UINT32) * (src->qat_count ? src->qat_count : 1));
     if (!l->qat_default_ids) goto fail;
     for (UINT32 i = 0; i < src->qat_count; i++) {
         l->qat_default_ids[i] = src->qat_default_ids[i];
-        if (!KnownId(r, src->qat_default_ids[i])) { *hr = LWUI_E_UNKNOWN_COMMAND; goto fail; }
+        if (!KnownId(r, src->qat_default_ids[i])) { *hr = LWUI_E_UNKNOWN_COMMAND; LogUnknownId(L"QAT", src->qat_default_ids[i]); goto fail; }
     }
-    if (l->help_command_id && !KnownId(r, l->help_command_id)) { *hr = LWUI_E_UNKNOWN_COMMAND; goto fail; }
+    if (l->help_command_id && !KnownId(r, l->help_command_id)) { *hr = LWUI_E_UNKNOWN_COMMAND; LogUnknownId(L"help button", l->help_command_id); goto fail; }
     *hr = CheckKeytips(r, l);
     if (FAILED(*hr)) goto fail;
     return l;
@@ -3344,7 +3351,10 @@ HRESULT WINAPI LeewayRibbonCreate(HWND parent, const LeewayUICommand *table, UIN
 {
     if (!out) return E_POINTER;
     *out = NULL;
-    if (!parent || (!table && count)) return E_INVALIDARG;
+    if (!parent || (!table && count)) {
+        OutputDebugStringW(L"LeewayUI: LeewayRibbonCreate E_INVALIDARG (null parent, or null table with count>0)\n");
+        return E_INVALIDARG;
+    }
 
     ILeewayRibbon *r = (ILeewayRibbon *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(ILeewayRibbon));
     if (!r) return E_OUTOFMEMORY;
@@ -3380,7 +3390,10 @@ HRESULT WINAPI LeewayRibbonCreate(HWND parent, const LeewayUICommand *table, UIN
     HWND hwnd = CreateWindowExW(0, RIBBON_CLASS, L"", WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS | WS_CLIPCHILDREN,
                                 0, 0, prc.right, (int)ComputeHeight(r), parent, (HMENU)(UINT_PTR)RIBBON_CTRL_ID,
                                 GetModuleHandleW(NULL), r);
-    if (!hwnd) { LeewayRibbonDestroy(r); return HRESULT_FROM_WIN32(GetLastError()); }
+    if (!hwnd) {
+        WCHAR m[96]; wsprintfW(m, L"LeewayUI: LeewayRibbonCreate CreateWindowEx failed, gle=%lu\n", GetLastError()); OutputDebugStringW(m);
+        LeewayRibbonDestroy(r); return HRESULT_FROM_WIN32(GetLastError());
+    }
     r->hwnd = hwnd;
     *out = r;
     return S_OK;
