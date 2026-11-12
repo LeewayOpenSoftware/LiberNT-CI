@@ -2,6 +2,7 @@ add_library(leewayui_static STATIC
     ribbon.cpp
     theme.cpp
     dpi.cpp
+    aureline_icons.cpp
 )
 
 target_include_directories(leewayui_static PUBLIC

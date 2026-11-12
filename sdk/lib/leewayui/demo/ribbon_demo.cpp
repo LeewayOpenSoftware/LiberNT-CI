@@ -15,6 +15,8 @@
  */
 #include <windows.h>
 #include <leewayui/ribbon.h>
+#include <leewayui/ribbon_icons.h>
+#include <leewayui/aureline_icons.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -85,22 +87,22 @@ static HRESULT CALLBACK OnState(UINT32 id, LeewayUICommandState *st, void *ctx)
 #define SPS LWUI_CONTROL_SPLIT_SMALL
 
 static const LeewayUICommand kTable[] = {
-    { CMD_NEW,    L"New",    0,0, LWUI_ICON_NONE, 1,0,1 },
-    { CMD_OPEN,   L"Open",   0,0, LWUI_ICON_NONE, 1,0,1 },
-    { CMD_SAVE,   L"Save",   0,0, LWUI_ICON_NONE, 1,0,1 },
-    { CMD_SAVEAS, L"Save As",0,0, LWUI_ICON_NONE, 1,0,1 },
-    { CMD_PRINT,  L"Print",  0,0, LWUI_ICON_NONE, 1,0,1 },
-    { CMD_PASTE,  L"Paste",  0,L"V", LWUI_ICON_NONE, 1,0,1 },
-    { CMD_CUT,    L"Cut",    0,L"X", LWUI_ICON_NONE, 1,0,1 },
-    { CMD_COPY,   L"Copy",   0,L"C", LWUI_ICON_NONE, 1,0,1 },
+    { CMD_NEW,    L"New",    0,0, LWUI_AUR_COMMON_NEW, 1,0,1 },
+    { CMD_OPEN,   L"Open",   0,0, LWUI_AUR_COMMON_OPEN, 1,0,1 },
+    { CMD_SAVE,   L"Save",   0,0, LWUI_AUR_COMMON_SAVE, 1,0,1 },
+    { CMD_SAVEAS, L"Save As",0,0, LWUI_AUR_COMMON_SAVEAS, 1,0,1 },
+    { CMD_PRINT,  L"Print",  0,0, LWUI_AUR_COMMON_PRINT, 1,0,1 },
+    { CMD_PASTE,  L"Paste",  0,L"V", LWUI_AUR_COMMON_PASTE, 1,0,1 },
+    { CMD_CUT,    L"Cut",    0,L"X", LWUI_AUR_COMMON_CUT, 1,0,1 },
+    { CMD_COPY,   L"Copy",   0,L"C", LWUI_AUR_COMMON_COPY, 1,0,1 },
     { CMD_BOLD,   L"Bold",   0,L"1", LWUI_ICON_NONE, 1,0,1 },
     { CMD_ITALIC, L"Italic", 0,L"2", LWUI_ICON_NONE, 1,0,1 },
     { CMD_UNDER,  L"Underline",0,L"3", LWUI_ICON_NONE, 1,0,1 },
-    { CMD_TEXTCOLOR, L"Text colour", 0,L"FC", LWUI_ICON_NONE, 1,0,1 },
-    { CMD_HIGHLIGHT, L"Highlight",  0,L"H",  LWUI_ICON_NONE, 1,0,1 },
-    { CMD_ALIGNL, L"Left",   0,L"AL", LWUI_ICON_NONE, 1,0,1 },
-    { CMD_ALIGNC, L"Center", 0,L"AC", LWUI_ICON_NONE, 1,0,1 },
-    { CMD_ALIGNR, L"Right",  0,L"AR", LWUI_ICON_NONE, 1,0,1 },
+    { CMD_TEXTCOLOR, L"Text colour", 0,L"FC", LWUI_AUR_WORDPAD_TEXT_COLOUR, 1,0,1 },
+    { CMD_HIGHLIGHT, L"Highlight",  0,L"H",  LWUI_AUR_WORDPAD_HIGHLIGHT, 1,0,1 },
+    { CMD_ALIGNL, L"Left",   0,L"AL", LWUI_AUR_WORDPAD_ALIGN_LEFT, 1,0,1 },
+    { CMD_ALIGNC, L"Center", 0,L"AC", LWUI_AUR_WORDPAD_ALIGN_CENTRE, 1,0,1 },
+    { CMD_ALIGNR, L"Right",  0,L"AR", LWUI_AUR_WORDPAD_ALIGN_RIGHT, 1,0,1 },
     { CMD_ZOOMIN, L"Zoom In",0,L"I", LWUI_ICON_NONE, 1,0,1 },
     { CMD_ZOOMOUT,L"Zoom Out",0,L"O",LWUI_ICON_NONE, 1,0,1 },
     { CMD_ZOOM100,L"100%",   0,L"J", LWUI_ICON_NONE, 1,0,1 },
@@ -199,6 +201,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                            OnExecute, OnState, 0, &g_ribbon);
         LeewayRibbonSetLayout(g_ribbon, &kLayout);
         SetColourCollections(g_ribbon);
+        static LeewayAurelineConfig s_aur = { L"test-icons", TRUE };
+        LeewayRibbonUseAurelineIcons(g_ribbon, &s_aur);
         return 0;
     }
     case WM_SIZE: {
