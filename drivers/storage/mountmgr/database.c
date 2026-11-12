@@ -781,6 +781,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     Offset = 0;
     for (;;)
     {
+        DPRINT1("MMCOUNT loop reset offset %lu\n", (ULONG)Offset);
         DatabaseEntry = GetRemoteDatabaseEntry(DatabaseHandle, Offset);
         if (DatabaseEntry == NULL)
         {
@@ -808,6 +809,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     /* Start looping on reparse points */
     for (;;)
     {
+        DPRINT1("MMCOUNT loop reparse\n");
         RtlCopyMemory(&SavedReparsePointInformation, &ReparsePointInformation, sizeof(FILE_REPARSE_POINT_INFORMATION));
         Status = ZwQueryDirectoryFile(Handle,
                                       NULL,
@@ -853,6 +855,8 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         for (;;)
         {
             UNICODE_STRING DbName;
+
+            DPRINT1("MMCOUNT loop reparse-inner offset %lu\n", (ULONG)Offset);
 
             DatabaseEntry = GetRemoteDatabaseEntry(DatabaseHandle, Offset);
             if (DatabaseEntry == NULL)
@@ -1099,6 +1103,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     Offset = 0;
     for (;;)
     {
+        DPRINT1("MMCOUNT loop prune offset %lu\n", (ULONG)Offset);
         /* Get the entry */
         DatabaseEntry = GetRemoteDatabaseEntry(DatabaseHandle, Offset);
         if (DatabaseEntry == NULL)
@@ -1154,6 +1159,7 @@ CloseReparse:
 CloseRDB:
     CloseRemoteDatabase(DatabaseHandle);
 ReleaseRDS:
+    DPRINT1("MMCOUNT worker exit\n");
     ReleaseRemoteDatabaseSemaphore(DeviceExtension);
     return;
 }
