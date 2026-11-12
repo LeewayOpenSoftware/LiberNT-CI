@@ -643,11 +643,7 @@ DxgkpSnapshotPciHeader(
         DxgkpReleasePciRestoreBus(Adapter);
 }
 
-/*
- * Put the header snapshot back through this adapter's own bus interface (same
- * PDO by construction), once the lower stack has finished its STOP/REMOVE.
- * Runs only for a claimant that failed its start while the fallback kept the screen.
- */
+/* Restore the header after a failed claimant's lower teardown (own PDO, flag-gated). */
 static VOID
 DxgkpRestorePciAfterLowerTeardown(
     _In_ PDXGKRNL_ADAPTER Adapter)
@@ -664,12 +660,10 @@ DxgkpRestorePciAfterLowerTeardown(
     RtlZeroMemory(Now, sizeof(Now));
     if (!DxgkpPciHeaderAccess(Adapter, Now, 0, sizeof(Now), FALSE))
     {
-        DXGKRNL_INFO("PCIRESTORE: adapter %p: cannot read the PCI header
-", Adapter);
+        DXGKRNL_INFO("PCIRESTORE: adapter %p: cannot read the PCI header\n", Adapter);
         return;
     }
-    DXGKRNL_INFO("PCIRESTORE: before restore cmd=0x%04X->0x%04X bar0=0x%08lX->0x%08lX bar2=0x%08lX->0x%08lX
-",
+    DXGKRNL_INFO("PCIRESTORE: before restore cmd=0x%04X->0x%04X bar0=0x%08lX->0x%08lX bar2=0x%08lX->0x%08lX\n",
                  *(PUSHORT)(Saved + 4), *(PUSHORT)(Now + 4),
                  *(PULONG)(Saved + 0x10), *(PULONG)(Now + 0x10),
                  *(PULONG)(Saved + 0x18), *(PULONG)(Now + 0x18));
@@ -678,17 +672,14 @@ DxgkpRestorePciAfterLowerTeardown(
     if (!DxgkpPciHeaderAccess(Adapter, &Disabled, 4, sizeof(Disabled), TRUE) ||
         !DxgkpPciHeaderAccess(Adapter, Saved + 0x10, 0x10, 0x18, TRUE))
     {
-        DXGKRNL_INFO("PCIRESTORE: adapter %p: short config write, decodes left off
-", Adapter);
+        DXGKRNL_INFO("PCIRESTORE: adapter %p: short config write, decodes left off\n", Adapter);
         return;
     }
     if (!DxgkpPciHeaderAccess(Adapter, &Command, 4, sizeof(Command), TRUE))
-        DXGKRNL_INFO("PCIRESTORE: adapter %p: short command write
-", Adapter);
+        DXGKRNL_INFO("PCIRESTORE: adapter %p: short command write\n", Adapter);
     RtlZeroMemory(Now, sizeof(Now));
     if (DxgkpPciHeaderAccess(Adapter, Now, 0, sizeof(Now), FALSE))
-        DXGKRNL_INFO("PCIRESTORE: after restore cmd=0x%04X bar0=0x%08lX bar2=0x%08lX
-",
+        DXGKRNL_INFO("PCIRESTORE: after restore cmd=0x%04X bar0=0x%08lX bar2=0x%08lX\n",
                      *(PUSHORT)(Now + 4), *(PULONG)(Now + 0x10), *(PULONG)(Now + 0x18));
 }
 
