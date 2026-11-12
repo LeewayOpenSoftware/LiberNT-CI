@@ -154,6 +154,8 @@ TestProcessObjectLabel(VOID)
     if (Sacl != NULL && Sacl->AceCount == 1 && GetAce(Sacl, 0, (PVOID *)&Ace))
     {
         ok(Ace->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE, "ACE type %u\n", Ace->Header.AceType);
+        ok(Ace->Mask == (SYSTEM_MANDATORY_LABEL_NO_WRITE_UP | SYSTEM_MANDATORY_LABEL_NO_READ_UP),
+           "Process label mask 0x%lx, expected 0x3\n", Ace->Mask);
         Sid = (PSID)&Ace->SidStart;
         ObjectRid = *GetSidSubAuthority(Sid, *GetSidSubAuthorityCount(Sid) - 1);
         ok(ObjectRid == TokenRid, "Process object label 0x%lx, token 0x%lx\n", ObjectRid, TokenRid);
