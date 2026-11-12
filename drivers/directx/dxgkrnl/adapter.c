@@ -590,6 +590,8 @@ DxgkpShouldRegisterDisplayBridge(
     return RegisterDisplayBridge;
 }
 
+static PDXGKRNL_ADAPTER g_K2PciProbeAdapter;
+
 static BOOLEAN
 DxgkpPciHeaderAccess(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -642,8 +644,8 @@ DxgkpRestorePciHeader(
                  *(PUSHORT)(Saved + 4), *(PUSHORT)(Now + 4),
                  *(PULONG)(Saved + 0x10), *(PULONG)(Now + 0x10),
                  *(PULONG)(Saved + 0x18), *(PULONG)(Now + 0x18));
-    if (RtlCompareMemory(Saved + 4, Now + 4, 0x3C) == 0x3C)
-        return;
+    /* No early-out: QEMU shows the BARs unmapped while the guest-visible header reads intact,
+       so rewrite the saved header unconditionally to make the device remap. */
     Command = *(PUSHORT)(Saved + 4);
     Disabled = (USHORT)(Command & ~(PCI_ENABLE_IO_SPACE | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER));
     (VOID)DxgkpPciHeaderAccess(Target, &Disabled, 4, sizeof(Disabled), TRUE);
@@ -653,6 +655,29 @@ DxgkpRestorePciHeader(
     if (DxgkpPciHeaderAccess(Target, Now, 0, sizeof(Now), FALSE))
         DXGKRNL_INFO("K2PCI: after restore cmd=0x%04X bar0=0x%08lX bar2=0x%08lX\n",
                      *(PUSHORT)(Now + 4), *(PULONG)(Now + 0x10), *(PULONG)(Now + 0x18));
+}
+
+/* Diagnostic: log the VGA PCI header as the surviving fallback adapter sees it. */
+VOID
+DxgkpK2PciProbe(
+    _In_ PCSTR Tag)
+{
+    UCHAR Now[0x40];
+    PDXGKRNL_ADAPTER Adapter = g_K2PciProbeAdapter;
+
+    if (Adapter == NULL)
+    {
+        DXGKRNL_INFO("K2PCI: probe %s: no adapter\n", Tag);
+        return;
+    }
+    RtlZeroMemory(Now, sizeof(Now));
+    if (!DxgkpPciHeaderAccess(Adapter, Now, 0, sizeof(Now), FALSE))
+    {
+        DXGKRNL_INFO("K2PCI: probe %s: cannot read header via %p\n", Tag, Adapter);
+        return;
+    }
+    DXGKRNL_INFO("K2PCI: probe %s cmd=0x%04X bar0=0x%08lX bar2=0x%08lX bar6=0x%08lX\n", Tag,
+                 *(PUSHORT)(Now + 4), *(PULONG)(Now + 0x10), *(PULONG)(Now + 0x18), *(PULONG)(Now + 0x30));
 }
 
 /* Complete the claimant-bound handoff after the complete start state has been
@@ -13468,9 +13493,9 @@ DxgkpCompleteAdapterStart(
                 }
                 KeReleaseSpinLock(&MpCtx->AdapterListLock, OldIrql);
             }
-            if (Adapter->PciHeaderSnapshotValid)
-                DxgkpRestorePciHeader(Adapter, Adapter->PciBusInterfaceValid ? Adapter :
-                                      (Fallback != NULL ? Fallback : Adapter));
+            if (Fallback != NULL)
+                g_K2PciProbeAdapter = Fallback;
+            DxgkpK2PciProbe("reassert-before-restart");
             if (Fallback != NULL && !InbvCheckDisplayOwnership())
             {
                 /* The claimant's start took the boot display
@@ -13499,6 +13524,11 @@ DxgkpCompleteAdapterStart(
                 if (NT_SUCCESS(ReassertStatus))
                     InbvNotifyDisplayOwnershipLost(NULL);
             }
+            DxgkpK2PciProbe("reassert-after-restart");
+            /* The restart (PDO stop/start) is what unmaps the VGA BARs, so restore after it. */
+            if (Adapter->PciHeaderSnapshotValid)
+                DxgkpRestorePciHeader(Adapter, Fallback != NULL ? Fallback : Adapter);
+            DxgkpK2PciProbe("reassert-end");
             DXGKRNL_INFO("POSTDISPLAY_REASSERT: claimant %p failed 0x%08lX "
                          "without a claim; owner %p fallback %p restart "
                          "0x%08lX inbv %s\n",

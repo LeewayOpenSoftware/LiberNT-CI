@@ -3289,6 +3289,8 @@ DxgkpPresentExitDiag(
 
     if (Seq > 8 && (Seq & 1023) != 0)
         return;
+    if (Seq <= 2)
+        DxgkpK2PciProbe("present-exit");
     DXGKRNL_INFO("K2PRESENT: %s #%ld adapter %p fb=%d inbv=%s vidpn=%d "
                  "shadow=%p pitch=%lu size=%lu mode=%lux%lu postva=%p "
                  "postsize=%Iu status 0x%08lX\n",
@@ -4911,6 +4913,7 @@ DxgkpDisplayCreate(
     UNREFERENCED_PARAMETER(DeviceObject);
 
     DXGKRNL_ERR("K2TRACE: DXGK Video0 create\n");
+    DxgkpK2PciProbe("video0-create");
     Irp->IoStatus.Status = STATUS_SUCCESS;
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);

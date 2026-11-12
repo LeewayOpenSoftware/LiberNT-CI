@@ -3750,6 +3750,10 @@ NTSTATUS
 DxgkVidPnRebuildForHotPlug(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
+VOID
+DxgkpK2PciProbe(
+    _In_ PCSTR Tag);
+
 NTSTATUS
 DxgkVidPnQueueHotPlugRebuild(
     _In_ PDXGKRNL_ADAPTER Adapter);
