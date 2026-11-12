@@ -9,6 +9,7 @@
 #pragma once
 
 #include "paint_ribbon_api.h"
+#include "../../../sdk/include/leewayui/dpi.h"
 
 #define WM_RIBBONREFRESH (WM_APP + 21)
 
@@ -29,6 +30,7 @@ public:
         MESSAGE_HANDLER(WM_SYSCOLORCHANGE, OnSysColorChange)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
+        MESSAGE_HANDLER(0x02E0 /* WM_DPICHANGED */, OnDpiChanged)
         MESSAGE_HANDLER(WM_RIBBONREFRESH, OnRibbonRefresh)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
     END_MSG_MAP()
@@ -62,6 +64,7 @@ private:
     LRESULT OnSysColorChange(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnNotify(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnMouseWheel(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 

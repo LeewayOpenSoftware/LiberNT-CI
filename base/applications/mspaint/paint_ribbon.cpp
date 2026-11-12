@@ -182,6 +182,11 @@ static HRESULT OnRibbonQueryState(UINT32 id, LeewayUICommandState *state, void *
     }
 
     BOOL brush = (toolsModel.GetActiveTool() == TOOL_BRUSH);
+    if (id == 370 || id == 371)
+    {
+        state->color = (id == 370) ? paletteModel.GetFgColor() : paletteModel.GetBgColor();
+        return S_OK;
+    }
     switch (id)
     {
     case IDM_EDITUNDO:  state->enabled = mainWindow.CanUndo(); break;

@@ -422,6 +422,20 @@ void CMainWindow::InvalidateRibbon()
     }
 }
 
+LRESULT CMainWindow::OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    UINT dpi = HIWORD(wParam);
+    const RECT *prc = (const RECT *)lParam;
+    SetWindowPos(NULL, prc->left, prc->top, prc->right - prc->left, prc->bottom - prc->top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    if (m_pRibbon)
+        LeewayRibbonSetDPI(m_pRibbon, dpi);
+    if (::IsWindow(g_hStatusBar))
+        ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, MulDiv(21, dpi, 96), 0);
+    alignChildrenToMainWindow();
+    return 0;
+}
+
 LRESULT CMainWindow::OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
     m_bRibbonDirty = FALSE;
@@ -612,7 +626,7 @@ LRESULT CMainWindow::OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHa
     DWORD style = SBARS_SIZEGRIP | WS_CHILD | (registrySettings.ShowStatusBar ? WS_VISIBLE : 0);
     g_hStatusBar = ::CreateWindowExW(0, STATUSCLASSNAME, NULL, style, 0, 0, 0, 0, m_hWnd,
                                      NULL, g_hinstExe, NULL);
-    ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, 21, 0);
+    ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, MulDiv(21, LeewayDpiGetForWindow(m_hWnd), 96), 0);
 
     // Create the tool box
     toolBoxContainer.DoCreate(m_hWnd);
