@@ -70,6 +70,7 @@ list(APPEND SOURCE
     ShellItemProperties.cpp
     Shell_NotifyIconGetRect.cpp
     ShellState.cpp
+    StockIconShield.cpp
     SHGetAttributesFromDataObject.cpp
     SHGetUserDisplayName.cpp
     SHLimitInputEdit.cpp
