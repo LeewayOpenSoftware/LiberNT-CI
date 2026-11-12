@@ -662,6 +662,27 @@ DxgkpRestorePciHeader(
                      *(PUSHORT)(Now + 4), *(PULONG)(Now + 0x10), *(PULONG)(Now + 0x18));
 }
 
+/*
+ * pci.sys disables the decodes (IO, memory, bus master) of a device whose stack
+ * is stopped or removed.  A failed claimant takes the shared display device
+ * down this way while the BasicDisplay fallback keeps drawing into its linear
+ * framebuffer, so once the lower stack has finished its teardown put the header
+ * back for the fallback.
+ */
+static VOID
+DxgkpRestorePciAfterLowerTeardown(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    if (!Adapter->PciHeaderSnapshotValid || g_K2PciProbeAdapter == NULL ||
+        g_K2PciProbeAdapter == Adapter)
+    {
+        return;
+    }
+    DxgkpK2PciProbe("after-lower-teardown-before");
+    DxgkpRestorePciHeader(Adapter, g_K2PciProbeAdapter);
+    DxgkpK2PciProbe("after-lower-teardown-after");
+}
+
 /* Diagnostic: log the VGA PCI header as the surviving fallback adapter sees it. */
 VOID
 DxgkpK2PciProbe(
@@ -16565,7 +16586,9 @@ DxgkpMiniportPnpDispatch(
                 IoCompleteRequest(Irp, IO_NO_INCREMENT);
                 return Status;
             }
-            return DxgkpForwardIrp(Adapter, Irp);
+            Status = DxgkpForwardIrp(Adapter, Irp);
+            DxgkpRestorePciAfterLowerTeardown(Adapter);
+            return Status;
         }
 
         case IRP_MN_REMOVE_DEVICE:
@@ -16584,6 +16607,7 @@ DxgkpMiniportPnpDispatch(
                 Irp->IoStatus.Status = STATUS_SUCCESS;
                 IoSkipCurrentIrpStackLocation(Irp);
                 Status = IoCallDriver(LowerDevice, Irp);
+                DxgkpRestorePciAfterLowerTeardown(Adapter);
                 DxgkpDeleteRemovedAdapterFdo(Adapter);
                 ObDereferenceObject(LowerDevice);
                 return Status;
