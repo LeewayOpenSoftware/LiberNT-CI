@@ -26,12 +26,15 @@ static const WCHAR *const g_color_names[LWUI_COLOR_COUNT] = {
 };
 
 /* Aureline light: Aero-inspired blues, our own values (design §9). */
+/* Flat-white light theme matching the owner's Paint reference (values sampled by
+ * Pam from owner-reference-paint-ribbon-es.png): white tab strip, flat #F5F6F7
+ * body with no gradient (BAND_BG == BAND_BG2), grey dividers, no Aero blue. */
 static const COLORREF g_light[LWUI_COLOR_COUNT] = {
-    RGB(220, 229, 240), RGB(243, 247, 251), RGB(225, 234, 245), RGB(30, 40, 60), RGB(158, 178, 204), RGB(176, 192, 212),
-    RGB(212, 224, 239), RGB(60, 76, 96), RGB(30, 38, 50), RGB(140, 150, 160), RGB(218, 234, 252), RGB(120, 170, 230),
-    RGB(180, 208, 240), RGB(80, 130, 200), RGB(30, 38, 50), RGB(200, 222, 246), RGB(100, 150, 210), RGB(190, 204, 220),
-    RGB(250, 252, 255), RGB(140, 160, 190), RGB(255, 255, 225), RGB(20, 20, 20), RGB(120, 120, 120), RGB(31, 95, 184),
-    RGB(255, 255, 255), RGB(31, 95, 184), RGB(236, 222, 184), RGB(200, 216, 236), RGB(31, 95, 184),
+    RGB(255, 255, 255), RGB(245, 246, 247), RGB(245, 246, 247), RGB(30, 30, 30), RGB(218, 219, 220), RGB(227, 228, 229),
+    RGB(245, 246, 247), RGB(68, 68, 68), RGB(30, 30, 30), RGB(160, 160, 160), RGB(229, 241, 251), RGB(112, 176, 232),
+    RGB(201, 224, 247), RGB(98, 162, 228), RGB(30, 30, 30), RGB(201, 224, 247), RGB(98, 162, 228), RGB(227, 228, 229),
+    RGB(255, 255, 255), RGB(197, 207, 223), RGB(240, 240, 240), RGB(30, 30, 30), RGB(140, 140, 140), RGB(25, 121, 202),
+    RGB(255, 255, 255), RGB(25, 121, 202), RGB(236, 222, 184), RGB(230, 231, 232), RGB(120, 120, 120),
 };
 
 static const COLORREF g_dark[LWUI_COLOR_COUNT] = {
