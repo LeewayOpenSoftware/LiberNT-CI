@@ -31,6 +31,7 @@
 #include <windows.h>
 #include <stdint.h>
 #include <leewayui/theme.h>
+#include <leewayui/ribbon.h>   /* LeewayUIIconResolver for the frame's ribbon */
 
 #ifdef __cplusplus
 extern "C" {
@@ -149,6 +150,12 @@ UINT32  WINAPI LeewayPrintPreviewGetPage(ILeewayPrintPreview *pv);
 /* Pages shown side by side: 1 or 2. */
 HRESULT WINAPI LeewayPrintPreviewSetPagesShown(ILeewayPrintPreview *pv, UINT32 pages);
 UINT32  WINAPI LeewayPrintPreviewGetPagesShown(ILeewayPrintPreview *pv);
+
+/* Give the frame's ribbon the same icon resolver the app uses for its main
+ * ribbon (e.g. the stock Aureline resolver), so the Print Preview tab shows
+ * real icons. NULL = the placeholder glyphs. */
+HRESULT WINAPI LeewayPrintPreviewSetIconResolver(ILeewayPrintPreview *pv,
+                                                 LeewayUIIconResolver resolver, void *resolver_context);
 
 /* Forward from the top-level window, same as the ribbon. */
 HRESULT WINAPI LeewayPrintPreviewOnThemeChanged(ILeewayPrintPreview *pv);
