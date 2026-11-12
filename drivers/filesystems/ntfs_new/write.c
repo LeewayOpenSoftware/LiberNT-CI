@@ -215,6 +215,10 @@ NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
     ULONG ExtentCount;
     ULONG Chunk;
     NTSTATUS Status;
+    PAttribute DataAttribute;
+    ULONGLONG RecordOffset;
+    ULONG RecordLength;
+    BOOLEAN ResidentInBaseRecord;
 
     ClusterSize = (ULONGLONG)VolCB->BytesPerSector *
                   NtfsVolumeGetSectorsPerCluster(VolCB->DiskVolume);
@@ -237,7 +241,31 @@ NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
                                                       &ReturnedStartingVcn,
                                                       &Extent,
                                                       &ExtentCount);
+
+        /*
+         * A resident stream has no runs to map, but its bytes are in the file
+         * record. When that is the base record (no attribute list, so the
+         * attribute cannot sit in an extension record) and the record maps to
+         * one disk range, commit that range: the same per-range commit the
+         * non-resident path below does for its runs.
+         */
+        ResidentInBaseRecord = FALSE;
+        if (Status == STATUS_END_OF_FILE)
+        {
+            DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec,
+                                                       FileCB->RequestedType,
+                                                       FileCB->RequestedStream);
+            ResidentInBaseRecord =
+                DataAttribute != NULL &&
+                !DataAttribute->IsNonResident &&
+                NtfsFileRecordGetAllocationSignature(FileCB->FileRec) != 0 &&
+                NT_SUCCESS(NtfsFileRecordGetDiskRange(FileCB->FileRec, &RecordOffset, &RecordLength));
+        }
         NtfsReleaseMetadata(VolCB);
+
+        if (ResidentInBaseRecord)
+            return NtfsDiskFlushRangeKm(VolCB->StorageDevice, RecordOffset, RecordLength);
+
         if ((!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW) ||
             ExtentCount != 1 ||
             ReturnedStartingVcn > Vcn ||
