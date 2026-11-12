@@ -299,6 +299,10 @@ jobs:
         if [ -d "$OUT/_wow64_i386/modules/rostests/apitests" ]; then
           find "$OUT/_wow64_i386/modules/rostests/apitests" -type f -name '*_apitest.exe' -exec cp -v {} apitests-out/wow64/ \;
         fi
+        find "$OUT/modules/rostests/tests" -type f -name 'lowil.exe' -exec cp -v {} apitests-out/amd64/ \;
+        if [ -d "$OUT/_wow64_i386/modules/rostests/tests" ]; then
+          find "$OUT/_wow64_i386/modules/rostests/tests" -type f -name 'lowil.exe' -exec cp -v {} apitests-out/wow64/ \;
+        fi
         ls -lR apitests-out | head -100
 
     - name: Upload the apitests binaries
