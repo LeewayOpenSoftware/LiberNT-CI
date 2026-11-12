@@ -163,6 +163,7 @@ KMT_TESTFUNC Test_IoFilesystem;
 KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIommu;
 KMT_TESTFUNC Test_InbvVirtualFrameBuffer;
+KMT_TESTFUNC Test_IoAsyncPagingCompletion;
 KMT_TESTFUNC Test_IoIrp;
 KMT_TESTFUNC Test_IoWaitCompletionPacket;
 KMT_TESTFUNC Test_ExWorkItem;
@@ -476,6 +477,7 @@ const KMT_TEST TestList[] =
     { "IoInterrupt",                        Test_IoInterrupt },
     { "IoIommu",                            Test_IoIommu },
     { "InbvVirtualFrameBuffer",              Test_InbvVirtualFrameBuffer },
+    { "IoAsyncPagingCompletion",            Test_IoAsyncPagingCompletion },
     { "IoIrp",                              Test_IoIrp },
     { "IoWaitCompletionPacket",             Test_IoWaitCompletionPacket },
     { "ExWorkItem",                         Test_ExWorkItem },

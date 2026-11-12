@@ -172,6 +172,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoBuildIoctlKM.c
     ntos_io/IoLargeMemoryResource.c
     ntos_io/IoArbiter.c
+    ntos_io/IoAsyncPagingCompletion.c
     ntos_io/IoCancelKM.c
     ntos_io/IoContainerId.c
     ntos_io/IoCreateFile.c
