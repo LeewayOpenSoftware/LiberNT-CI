@@ -3282,6 +3282,115 @@ BasepIsBlankImage(
     return (Header == 0) || (Header == MAXULONG);
 }
 
+static
+BOOLEAN
+BasepEnvironmentHasRunAsInvoker(
+    _In_opt_ LPVOID lpEnvironment,
+    _In_ DWORD dwCreationFlags)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"__COMPAT_LAYER");
+    UNICODE_STRING Value;
+    WCHAR Buffer[260];
+    PWCHAR Token, End;
+    NTSTATUS Status;
+
+    if (lpEnvironment && !(dwCreationFlags & CREATE_UNICODE_ENVIRONMENT))
+        lpEnvironment = NULL;
+
+    RtlInitEmptyUnicodeString(&Value, Buffer, sizeof(Buffer) - sizeof(WCHAR));
+    Status = RtlQueryEnvironmentVariable_U(lpEnvironment, &Name, &Value);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+    Buffer[Value.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    for (Token = Buffer; *Token; Token = End)
+    {
+        while (*Token == L' ') Token++;
+        for (End = Token; *End && *End != L' '; End++);
+        if ((End - Token) == 11 && !_wcsnicmp(Token, L"RunAsInvoker", 11))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static
+BOOLEAN
+BasepIsTokenElevated(
+    _In_opt_ HANDLE hUserToken)
+{
+    TOKEN_ELEVATION Elevation;
+    HANDLE TokenHandle = hUserToken;
+    ULONG Length;
+    NTSTATUS Status;
+
+    if (!TokenHandle)
+    {
+        Status = NtOpenProcessToken(NtCurrentProcess(), TOKEN_QUERY, &TokenHandle);
+        if (!NT_SUCCESS(Status))
+            return TRUE;
+    }
+
+    Status = NtQueryInformationToken(TokenHandle,
+                                     TokenElevation,
+                                     &Elevation,
+                                     sizeof(Elevation),
+                                     &Length);
+    if (TokenHandle != hUserToken)
+        NtClose(TokenHandle);
+
+    if (!NT_SUCCESS(Status))
+        return TRUE;
+    return Elevation.TokenIsElevated != 0;
+}
+
+static
+BOOLEAN
+BasepImageRequiresElevation(
+    _In_opt_ HANDLE hUserToken,
+    _In_ LPCWSTR lpApplicationName,
+    _In_opt_ LPVOID lpEnvironment,
+    _In_ DWORD dwCreationFlags)
+{
+    ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION RunLevel;
+    ACTCTXW ActCtx;
+    HANDLE ActCtxHandle;
+    DWORD LastError;
+    BOOL Queried;
+
+    if (!lpApplicationName || BasepIsTokenElevated(hUserToken))
+        return FALSE;
+
+    LastError = GetLastError();
+
+    RtlZeroMemory(&ActCtx, sizeof(ActCtx));
+    ActCtx.cbSize = sizeof(ActCtx);
+    ActCtx.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID;
+    ActCtx.lpSource = lpApplicationName;
+    ActCtx.lpResourceName = MAKEINTRESOURCEW(1);
+    ActCtxHandle = CreateActCtxW(&ActCtx);
+    if (ActCtxHandle == INVALID_HANDLE_VALUE)
+    {
+        SetLastError(LastError);
+        return FALSE;
+    }
+
+    RtlZeroMemory(&RunLevel, sizeof(RunLevel));
+    Queried = QueryActCtxW(0,
+                           ActCtxHandle,
+                           NULL,
+                           RunlevelInformationInActivationContext,
+                           &RunLevel,
+                           sizeof(RunLevel),
+                           NULL);
+    ReleaseActCtx(ActCtxHandle);
+    SetLastError(LastError);
+
+    if (!Queried || RunLevel.RunLevel != ACTCTX_RUN_LEVEL_REQUIRE_ADMIN)
+        return FALSE;
+
+    return !BasepEnvironmentHasRunAsInvoker(lpEnvironment, dwCreationFlags);
+}
+
 /*
  * @implemented
  */
@@ -4220,6 +4329,15 @@ StartScan:
                 goto Quickie;
             }
         }
+    }
+
+    if (NT_SUCCESS(Status) &&
+        BasepImageRequiresElevation(hUserToken, lpApplicationName, lpEnvironment, dwCreationFlags))
+    {
+        DPRINT1("Image %S requires elevation\n", lpApplicationName);
+        SetLastError(ERROR_ELEVATION_REQUIRED);
+        Result = FALSE;
+        goto Quickie;
     }
 
     ImageError = ERROR_BAD_EXE_FORMAT;

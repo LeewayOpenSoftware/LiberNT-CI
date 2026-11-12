@@ -726,8 +726,16 @@ static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
             startup.dwFlags |= STARTF_SHELLPRIVATE;
     }
 
-    BOOL createdProcess;
-    if (psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb) && !SHELL_IsTokenElevated())
+    BOOL createdProcess = FALSE;
+    BOOL promptRunAs = psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb) && !SHELL_IsTokenElevated();
+    if (!promptRunAs)
+    {
+        createdProcess = CreateProcessW(NULL, (LPWSTR)lpCmd, NULL, NULL, FALSE,
+                                        dwCreationFlags, env, lpDirectory, &startup, &info);
+        // The image manifest asks for an administrator: elevate as "runas" would.
+        promptRunAs = !createdProcess && GetLastError() == ERROR_ELEVATION_REQUIRED;
+    }
+    if (promptRunAs)
     {
         HRESULT hr = PromptAndRunProcessAs(psei->hwnd, (LPWSTR)lpCmd, dwCreationFlags,
                                                  env, lpDirectory, &startup, &info);
@@ -737,11 +745,6 @@ static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
             retval = 33; // Pretend cancel is success.
             goto done;
         }
-    }
-    else
-    {
-        createdProcess = CreateProcessW(NULL, (LPWSTR)lpCmd, NULL, NULL, FALSE,
-                                        dwCreationFlags, env, lpDirectory, &startup, &info);
     }
 
     if (createdProcess)
