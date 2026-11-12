@@ -1,13 +1,12 @@
 /*
- * PROJECT:     ReactOS Picture and Fax Viewer
- * LICENSE:     GPL-2.0 (https://spdx.org/licenses/GPL-2.0)
- * PURPOSE:     Standalone native demo of the viewer chrome: the real viewer model
- *              (vribbon_model.c, vribbon.cpp), LeewayUI ribbon and LeewayUI frame
- *              around a small GDI+ image view. Builds with MSYS2 clang64, see build.sh.
+ * PROJECT:     LiberNT Photo Viewer
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Win7 Photo Viewer V0 on LeewayUI: menu-based UI with LeewayUI frame
+ *              for chrome (status bar, zoom slider) and GDI+ image rendering.
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Usage: viewer_demo.exe [image]   Ctrl+O opens, arrows page, Ctrl+wheel zooms.
- * Not the viewer: no scrolling, no slideshow, no delete/print/save.
+ * Usage: photoviewer.exe [image]   Ctrl+O opens, arrows page, Ctrl+wheel zooms.
+ * V0: menu strip (File, Print, Open, Help), status bar with zoom slider.
  */
 
 #define NOMINMAX
@@ -21,12 +20,12 @@
 #include <string>
 #include <vector>
 #include <leewayui/frame.h>
-#include "../resource.h"
-#include "../vribbon.h"
+
+// Command IDs for menu
+enum { ID_FILE_OPEN = 1001, ID_FILE_EXIT = 1002, ID_PRINT_PRINT = 2001, ID_HELP_ABOUT = 4001 };
 
 static HINSTANCE g_inst;
 static HWND g_hwnd;
-static VRB_RIBBON *g_rib;
 static LeewayUIFrame *g_frame;
 static RECT g_work;
 
@@ -86,7 +85,6 @@ static void Refresh()
         FitZoom();
     LeewayFrameSetZoom(g_frame, g_zoom);
     StatusInfo();
-    VRB_RibbonInvalidateAll(g_rib);
     InvalidateRect(g_hwnd, &g_work, FALSE);
 }
 
@@ -96,14 +94,14 @@ static void LoadAt(size_t i)
     if (!n || n->GetLastStatus() != Gdiplus::Ok)
     {
         delete n;
-        MessageBoxW(g_hwnd, L"Cannot open this image.", L"Photo Viewer demo", MB_ICONWARNING);
+        MessageBoxW(g_hwnd, L"Cannot open this image.", L"Windows Photo Viewer", MB_ICONWARNING);
         return;
     }
     delete g_img;
     g_img = n;
     g_idx = i;
     g_fit = true;
-    SetWindowTextW(g_hwnd, (Base(g_files[i]) + L" - Photo Viewer (ribbon demo)").c_str());
+    SetWindowTextW(g_hwnd, (Base(g_files[i]) + L" - Windows Photo Viewer").c_str());
     Refresh();
 }
 
@@ -201,37 +199,33 @@ static void Page(int d)
     LoadAt((g_idx + g_files.size() + d) % g_files.size());
 }
 
-/* ---- host of the viewer model ---- */
-
-static BOOL HostPredicate(void *, VRB_PRED p)
-{
-    switch (p)
-    {
-        case VRB_P_ALWAYS:          return TRUE;
-        case VRB_P_HAS_IMAGE:       return g_img != NULL;
-        case VRB_P_HAS_LIST:        return g_files.size() > 1;
-        case VRB_P_CAN_ZOOM_IN:     return g_img && g_zoom < 1600;
-        case VRB_P_CAN_ZOOM_OUT:    return g_img && g_zoom > 10;
-        case VRB_P_IS_FIT:          return g_img && g_fit;
-        case VRB_P_IS_ACTUAL:       return g_img && !g_fit && g_zoom == 100;
-        case VRB_P_STATUSBAR_SHOWN: return LeewayFrameIsStatusBarShown(g_frame);
-        case VRB_P_RIBBON_MINIMIZED:return LeewayRibbonIsMinimized(VRB_RibbonFramework(g_rib));
-        default:                    return FALSE;       /* slideshow, save, delete, print... not in the demo */
-    }
-}
-
-static HRESULT HostExecute(void *, UINT id)
-{
-    SendMessageW(g_hwnd, WM_COMMAND, id, 0);
-    return S_OK;
-}
-
-static UINT HostZoom(void *) { return g_zoom; }
+/* ---- frame callbacks ---- */
 
 static void OnFrameZoom(UINT32 p, void *) { SetZoomPercent(p); }
-
 static void Layout();
 static void OnFrameRelayout(const LeewayUIFrameRects *, void *) { Layout(); }
+
+/* ---- menu creation ---- */
+
+static HMENU CreateMenuBar()
+{
+    HMENU hMenu = CreateMenuW();
+    HMENU hFileMenu = CreateMenuW();
+    AppendMenuW(hFileMenu, MFT_STRING, ID_FILE_OPEN, L"&Open\tCtrl+O");
+    AppendMenuW(hFileMenu, MFT_SEPARATOR, 0, nullptr);
+    AppendMenuW(hFileMenu, MFT_STRING, ID_FILE_EXIT, L"E&xit");
+    AppendMenuW(hMenu, MFT_POPUP, (UINT_PTR)hFileMenu, L"&File");
+
+    HMENU hPrintMenu = CreateMenuW();
+    AppendMenuW(hPrintMenu, MFT_STRING, ID_PRINT_PRINT, L"&Print");
+    AppendMenuW(hMenu, MFT_POPUP, (UINT_PTR)hPrintMenu, L"&Print");
+
+    HMENU hHelpMenu = CreateMenuW();
+    AppendMenuW(hHelpMenu, MFT_STRING, ID_HELP_ABOUT, L"&About");
+    AppendMenuW(hMenu, MFT_POPUP, (UINT_PTR)hHelpMenu, L"&Help");
+
+    return hMenu;
+}
 
 /* ---- window ---- */
 
@@ -291,41 +285,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
     {
         case WM_COMMAND:
         {
-            UINT id = LOWORD(wp), pct;
-            if (VRB_ZoomPercentOfCommand(id, &pct))
-            {
-                SetZoomPercent(pct);
-                return 0;
-            }
+            UINT id = LOWORD(wp);
             switch (id)
             {
-                case VRB_CMD_OPEN:      OpenDialog(); break;
-                case VRB_CMD_EXIT:      DestroyWindow(hwnd); break;
-                case IDC_PREV_PIC:      Page(-1); break;
-                case IDC_NEXT_PIC:      Page(1); break;
-                case IDC_BEST_FIT:
-                case VRB_CMD_ZOOM_FIT:  g_fit = true; Refresh(); break;
-                case IDC_REAL_SIZE:
-                case VRB_CMD_ZOOM_ACTUAL: SetZoomPercent(100); break;
-                case IDC_ZOOM_IN:       StepZoom(1); break;
-                case IDC_ZOOM_OUT:      StepZoom(-1); break;
-                case IDC_ROT_CLOCKW:    Rotate(Gdiplus::Rotate90FlipNone); break;
-                case IDC_ROT_COUNCW:    Rotate(Gdiplus::Rotate270FlipNone); break;
-                case VRB_LWUI_STATUSBAR_TOGGLE:
-                    LeewayFrameShowStatusBar(g_frame, !LeewayFrameIsStatusBarShown(g_frame), TRUE);
-                    Layout();
-                    VRB_RibbonInvalidate(g_rib, id);
-                    break;
-                case VRB_LWUI_RIBBON_MINIMIZE:
-                    LeewayRibbonMinimizeRibbon(VRB_RibbonFramework(g_rib), !LeewayRibbonIsMinimized(VRB_RibbonFramework(g_rib)));
-                    Layout();
-                    VRB_RibbonInvalidate(g_rib, id);
-                    break;
-                case VRB_LWUI_HELP:
-                    MessageBoxW(hwnd, L"Photo Viewer ribbon demo.\nThe chrome (ribbon, status bar, zoom slider) is the real "
-                                      L"LeewayUI code; the image view here is minimal.",
-                                L"Photo Viewer", MB_OK | MB_ICONINFORMATION);
-                    break;
+                case ID_FILE_OPEN:  OpenDialog(); break;
+                case ID_FILE_EXIT:  DestroyWindow(hwnd); break;
+                case ID_PRINT_PRINT: MessageBoxW(hwnd, L"Print not implemented in V0.", L"Photo Viewer", MB_ICONINFORMATION); break;
+                case ID_HELP_ABOUT: MessageBoxW(hwnd, L"Windows Photo Viewer V0 on LeewayUI\nImage navigation: arrows, Ctrl+wheel to zoom, Ctrl+O to open",
+                                                L"Windows Photo Viewer", MB_OK | MB_ICONINFORMATION); break;
             }
             return 0;
         }
@@ -367,8 +334,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_DESTROY:
             LeewayFrameDestroy(g_frame);
             g_frame = NULL;
-            VRB_RibbonDestroy(g_rib);
-            g_rib = NULL;
             PostQuitMessage(0);
             return 0;
     }
@@ -388,32 +353,31 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show)
     wc.lpfnWndProc = WndProc;
     wc.hInstance = inst;
     wc.hCursor = LoadCursor(NULL, IDC_ARROW);
-    wc.lpszClassName = L"LwuiViewerDemo";
+    wc.lpszClassName = L"PhotoViewerW7";
     RegisterClassW(&wc);
-    g_hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, wc.lpszClassName, L"Photo Viewer (ribbon demo)", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
+    g_hwnd = CreateWindowExW(WS_EX_ACCEPTFILES, wc.lpszClassName, L"Windows Photo Viewer", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
                              CW_USEDEFAULT, CW_USEDEFAULT, 1100, 760, NULL, NULL, inst, NULL);
 
-    VRB_HOST host = { NULL, HostPredicate, HostExecute, HostZoom };
-    if (FAILED(VRB_RibbonCreate(g_hwnd, inst, &host, &g_rib)))
-    {
-        MessageBoxW(NULL, L"Could not create the ribbon.", L"Photo Viewer demo", MB_ICONERROR);
-        return 1;
-    }
+    // Create menu bar
+    SetMenu(g_hwnd, CreateMenuBar());
+
+    // Create LeewayUI frame for status bar and zoom slider (no ribbon)
+    static const UINT32 kZoomLevels[] = { 10, 25, 50, 75, 100, 150, 200, 400, 800, 1600 };
     LeewayUIFrameDesc d = {};
     d.struct_size = sizeof(d);
     d.owner = g_hwnd;
     d.instance = inst;
-    d.app_name = L"PhotoViewerDemo";
+    d.app_name = L"PhotoViewer";
     d.flags = LWUI_FRAME_STATUSBAR | LWUI_FRAME_ZOOM_SLIDER;
-    d.default_chrome = LWUI_CHROME_RIBBON;
-    d.ribbon = VRB_RibbonFramework(g_rib);
-    d.zoom_levels = g_VrbZoomPercents;
-    d.zoom_level_count = VRB_ZOOM_LEVELS;
+    d.default_chrome = LWUI_CHROME_PILL;
+    d.pill_height = 40;
+    d.zoom_levels = kZoomLevels;
+    d.zoom_level_count = 10;
     d.on_zoom = OnFrameZoom;
     d.on_layout = OnFrameRelayout;
     if (FAILED(LeewayFrameCreate(&d, &g_frame)))
     {
-        MessageBoxW(NULL, L"Could not create the frame.", L"Photo Viewer demo", MB_ICONERROR);
+        MessageBoxW(NULL, L"Could not create the frame.", L"Windows Photo Viewer", MB_ICONERROR);
         return 1;
     }
     Layout();
@@ -429,8 +393,6 @@ int WINAPI wWinMain(HINSTANCE inst, HINSTANCE, PWSTR, int show)
     MSG m;
     while (GetMessageW(&m, NULL, 0, 0) > 0)
     {
-        if (g_rib && LeewayRibbonPreTranslateMessage(VRB_RibbonFramework(g_rib), &m))
-            continue;
         TranslateMessage(&m);
         DispatchMessageW(&m);
     }
