@@ -279,7 +279,7 @@ jobs:
       run: |
         OUT=${{steps.configure.outputs.outdir}}
         mkdir -p kmtests-out
-        find "$OUT/modules/rostests/kmtests" -type f \( -name '*.exe' -o -name '*.sys' -o -name '*.dll' -o -name '*.inf' \) -exec cp -v {} kmtests-out/ \;
+        find "$OUT/modules/rostests/kmtests" "$OUT/modules/rostests/drivers/flushfail" -type f \( -name '*.exe' -o -name '*.sys' -o -name '*.dll' -o -name '*.inf' \) -exec cp -v {} kmtests-out/ \;
         ls -l kmtests-out
 
     - name: Upload the kmtests binaries
