@@ -308,6 +308,36 @@ static HRESULT OnRibbonQueryState(UINT32 id, LeewayUICommandState *state, void *
     return S_OK;
 }
 
+/* Shapes gallery: each cell draws its own outline (ids are the tool commands) */
+static HRESULT PaintGalleryDraw(UINT32 cmd, UINT32 item, HDC hdc, const RECT *cell, COLORREF fg, UINT32 dpi, void *ctx)
+{
+    if (item < ID_LINE || item > ID_RRECT) /* the strip passes command_id 0 */
+        return E_NOTIMPL;
+    int w = dpi ? (int)((dpi + 48) / 96) : 1;
+    if (w < 1)
+        w = 1;
+    HPEN pen = CreatePen(PS_SOLID, w, fg);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HGDIOBJ oldBrush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+    RECT c = *cell;
+    int m = (c.right - c.left) / 5;
+    InflateRect(&c, -m, -m);
+    int l = c.left, t = c.top, r = c.right, b = c.bottom, cx = (l + r) / 2;
+    switch (item)
+    {
+    case ID_LINE:    MoveToEx(hdc, l, b, NULL); LineTo(hdc, r, t); break;
+    case ID_BEZIER:  { POINT p[4] = { { l, b }, { l, t }, { cx, b }, { r, t } }; PolyBezier(hdc, p, 4); } break;
+    case ID_RECT:    Rectangle(hdc, l, t, r, b); break;
+    case ID_SHAPE:   { POINT p[5] = { { l, b }, { l, t + (b - t) / 3 }, { cx, t }, { r, t + (b - t) / 3 }, { r, b } }; Polygon(hdc, p, 5); } break;
+    case ID_ELLIPSE: Ellipse(hdc, l, t, r, b); break;
+    case ID_RRECT:   RoundRect(hdc, l, t, r, b, (r - l) / 3, (b - t) / 3); break;
+    }
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(pen);
+    return S_OK;
+}
+
 /* Initialize Paint ribbon: called from CMainWindow::OnCreate */
 HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
 {
@@ -376,6 +406,7 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
     }
 
     s_ribbon = *pRibbon;
+    LeewayRibbonSetGalleryDrawCallback(*pRibbon, PaintGalleryDraw, NULL);
 
     /* Collections: galleries, dropdowns and split menus (paint_ribbon_cmds.h) */
     hr = PaintRibbonSetCollections(*pRibbon);
