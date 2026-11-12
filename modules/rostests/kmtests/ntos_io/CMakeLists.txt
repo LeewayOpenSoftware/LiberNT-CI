@@ -2,6 +2,20 @@
 include_directories(../include)
 
 #
+# IoAsyncPageWrite
+#
+list(APPEND IOASYNCPAGEWRITE_DRV_SOURCE
+    ../kmtest_drv/kmtest_standalone.c
+    IoAsyncPageWrite_drv.c)
+
+add_library(ioasyncpagewrite_drv MODULE ${IOASYNCPAGEWRITE_DRV_SOURCE})
+set_module_type(ioasyncpagewrite_drv kernelmodedriver)
+target_link_libraries(ioasyncpagewrite_drv kmtest_printf ${PSEH_LIB})
+add_importlibs(ioasyncpagewrite_drv ntoskrnl hal)
+target_compile_definitions(ioasyncpagewrite_drv PRIVATE KMT_STANDALONE_DRIVER)
+add_rostests_file(TARGET ioasyncpagewrite_drv)
+
+#
 # IoCreateFile
 #
 list(APPEND IOCREATEFILE_DRV_SOURCE
