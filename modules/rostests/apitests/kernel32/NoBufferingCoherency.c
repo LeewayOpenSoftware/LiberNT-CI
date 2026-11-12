@@ -18,6 +18,7 @@
 
 #define PROBE_SECTOR 4096u          /* at least any volume's sector size */
 #define PROBE_REGION (PROBE_SECTOR * 4u)
+#define PROBE_OTHER  (PROBE_SECTOR * 3u)   /* the concurrent cached writer's range */
 
 static void
 Probe(PCSTR Path, ULONG Offset, ULONG Length, UCHAR Fill, UCHAR Fill2)
@@ -56,6 +57,14 @@ Probe(PCSTR Path, ULONG Offset, ULONG Length, UCHAR Fill, UCHAR Fill2)
     Ok = ReadFile(Cached, Buffer, Length, &Done, &Overlapped);
     ok(Ok && Done == Length && Buffer[0] == Fill, "%s: warm read failed (%lu)\n", Path, GetLastError());
 
+    /* A cached writer on another range, not flushed: the non-cached write
+     * below must not lose it (its flush has to come before its purge) */
+    memset(Buffer, 0x99, PROBE_SECTOR);
+    ZeroMemory(&Overlapped, sizeof(Overlapped));
+    Overlapped.Offset = PROBE_OTHER;
+    Ok = WriteFile(Cached, Buffer, PROBE_SECTOR, &Done, &Overlapped);
+    ok(Ok && Done == PROBE_SECTOR, "%s: cached write of the other range failed (%lu)\n", Path, GetLastError());
+
     /* Overwrite the same range on a non-cached handle */
     NoBuffering = CreateFileA(Path, GENERIC_READ | GENERIC_WRITE,
                               FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
@@ -79,6 +88,14 @@ Probe(PCSTR Path, ULONG Offset, ULONG Length, UCHAR Fill, UCHAR Fill2)
         ok(Buffer[0] == Fill2 && Buffer[Length - 1] == Fill2,
            "%s: offset %lu length %lu: stale cache after a non-cached write (0x%02x, 0x%02x)\n",
            Path, Offset, Length, Buffer[0], Buffer[Length - 1]);
+
+        /* The other writer's cached data is still there */
+        memset(Buffer, 0, PROBE_SECTOR);
+        ZeroMemory(&Overlapped, sizeof(Overlapped));
+        Overlapped.Offset = PROBE_OTHER;
+        Ok = ReadFile(Cached, Buffer, PROBE_SECTOR, &Done, &Overlapped);
+        ok(Ok && Done == PROBE_SECTOR && Buffer[0] == 0x99 && Buffer[PROBE_SECTOR - 1] == 0x99,
+           "%s: a cached write to another range was lost (0x%02x)\n", Path, Buffer[0]);
     }
 
     CloseHandle(Cached);
