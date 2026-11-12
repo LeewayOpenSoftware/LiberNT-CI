@@ -578,6 +578,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     PDEVICE_EXTENSION DeviceExtension = ((PRECONCILE_WORK_ITEM_CONTEXT)Parameter)->DeviceExtension;
     PDEVICE_INFORMATION DeviceInformation = ((PRECONCILE_WORK_ITEM_CONTEXT)Parameter)->DeviceInformation;
     DEVICE_INFORMATION Snapshot;
+    DPRINT1("MMCOUNT worker %wZ\n", &DeviceInformation->DeviceName);
 
     /* We're unloading, do nothing */
     if (Unloading)

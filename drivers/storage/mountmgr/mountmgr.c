@@ -1560,6 +1560,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
     {
         MmpAcquireDeviceLock(DeviceExtension);
 
+        DPRINT1("MMCOUNT caller mountmgr.c:1563 %wZ\n", &DeviceInformation->DeviceName);
         ReconcileThisDatabaseWithMaster(DeviceExtension, DeviceInformation);
 
         NextEntry = DeviceExtension->DeviceListHead.Flink;
@@ -1568,6 +1569,7 @@ MountMgrMountedDeviceArrival(IN PDEVICE_EXTENSION DeviceExtension,
         {
             if (!CurrentDevice->NoDatabase)
             {
+                DPRINT1("MMCOUNT caller mountmgr.c:1571 %wZ\n", &CurrentDevice->DeviceName);
                 ReconcileThisDatabaseWithMaster(DeviceExtension, CurrentDevice);
             }
 
