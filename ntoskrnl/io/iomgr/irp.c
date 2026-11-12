@@ -853,6 +853,70 @@ IopFreeReserveIrp(IN CCHAR PriorityBoost)
     KeSetEvent(&IopReserveIrpAllocator.WaitEvent, PriorityBoost, FALSE);
 }
 
+/*
+ * Finish an asynchronous paging IRP: hand its status to the issuer (I/O status
+ * block, event, and when asked its completion routine, called the way an I/O
+ * APC routine is), then free it. The pages of its MDL belong to Mm and are left
+ * alone.
+ */
+static
+VOID
+IopEndAsynchronousPagingIrp(IN PIRP Irp,
+                            IN CCHAR PriorityBoost,
+                            IN BOOLEAN CallRoutine)
+{
+    PIO_APC_ROUTINE ApcRoutine = Irp->Overlay.AsynchronousParameters.UserApcRoutine;
+    PVOID ApcContext = Irp->Overlay.AsynchronousParameters.UserApcContext;
+    IO_STATUS_BLOCK IoStatus = Irp->IoStatus;
+    PIO_STATUS_BLOCK UserIosb = Irp->UserIosb;
+
+    if (UserIosb != NULL)
+    {
+        *UserIosb = IoStatus;
+    }
+    else
+    {
+        UserIosb = &IoStatus;
+    }
+
+    if (Irp->UserEvent != NULL)
+    {
+        KeSetEvent(Irp->UserEvent, PriorityBoost, FALSE);
+    }
+
+    if (CallRoutine && ApcRoutine != NULL)
+    {
+        ApcRoutine(ApcContext, UserIosb, 0);
+    }
+
+    if (Irp == IopReserveIrpAllocator.ReserveIrp)
+    {
+        IopFreeReserveIrp(PriorityBoost);
+    }
+    else
+    {
+        IoFreeIrp(Irp);
+    }
+}
+
+static
+VOID
+NTAPI
+IopCompletePageWrite(IN PKAPC Apc,
+                     IN PKNORMAL_ROUTINE* NormalRoutine,
+                     IN PVOID* NormalContext,
+                     IN PVOID* SystemArgument1,
+                     IN PVOID* SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(NormalRoutine);
+    UNREFERENCED_PARAMETER(NormalContext);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    IopEndAsynchronousPagingIrp(CONTAINING_RECORD(Apc, IRP, Tail.Apc),
+                                (CCHAR)(ULONG_PTR)*SystemArgument1,
+                                TRUE);
+}
+
 /* FUNCTIONS *****************************************************************/
 
 /*
@@ -1779,11 +1843,11 @@ IofCompleteRequest(IN PIRP Irp,
                 }
             }
         }
-        else
+        else if (Irp->Tail.Overlay.Thread != NULL)
         {
-#if 0
-            /* Page 166 */
-            KeInitializeApc(&Irp->Tail.Apc
+            /* Asynchronous paging I/O (a page write): finish it in the
+             * issuing thread, where its completion routine expects to run */
+            KeInitializeApc(&Irp->Tail.Apc,
                             &Irp->Tail.Overlay.Thread->Tcb,
                             Irp->ApcEnvironment,
                             IopCompletePageWrite,
@@ -1791,14 +1855,20 @@ IofCompleteRequest(IN PIRP Irp,
                             NULL,
                             KernelMode,
                             NULL);
-            KeInsertQueueApc(&Irp->Tail.Apc,
-                             NULL,
-                             NULL,
-                             PriorityBoost);
-#else
-            /* Not implemented yet. */
-            UNIMPLEMENTED_DBGBREAK("Not supported!\n");
-#endif
+            if (!KeInsertQueueApc(&Irp->Tail.Apc,
+                                  (PVOID)(ULONG_PTR)PriorityBoost,
+                                  NULL,
+                                  PriorityBoost))
+            {
+                /* The thread is exiting: still release the IRP */
+                IopEndAsynchronousPagingIrp(Irp, PriorityBoost, FALSE);
+            }
+        }
+        else
+        {
+            /* No issuing thread to run the completion routine in */
+            DPRINT1("Asynchronous paging IRP %p without a thread: completion routine not called\n", Irp);
+            IopEndAsynchronousPagingIrp(Irp, PriorityBoost, FALSE);
         }
 
         /* Get out of here */
