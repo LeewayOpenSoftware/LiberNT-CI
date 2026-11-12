@@ -6,7 +6,7 @@
  */
 
 #include <kmt_test.h>
-#include "../../../../ntos/include/internal/hdl.h"
+#include "../../../../ntoskrnl/include/internal/hdl.h"
 
 START_TEST(ExHeadless)
 {

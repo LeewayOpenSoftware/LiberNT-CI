@@ -216,6 +216,23 @@ TestFarRelativeDueTime(VOID)
 }
 
 static VOID
+TestTimerBucketCancellation(VOID)
+{
+    KTIMER Timer;
+    LARGE_INTEGER DueTime;
+    ULONG Increment = KeQueryTimeIncrement();
+    ULONG Index;
+
+    KeInitializeTimer(&Timer);
+    for (Index = 0; Index < 512; Index++)
+    {
+        DueTime.QuadPart = -(LONGLONG)(Index + 512) * Increment;
+        ok_bool_false(KeSetTimer(&Timer, DueTime, NULL), "Timer should not already be inserted");
+        ok_bool_true(KeCancelTimer(&Timer), "Timer should be cancellable");
+    }
+}
+
+static VOID
 TestAbsoluteTimerSystemTimeJump(VOID)
 {
     KTIMER Near, Far, Periodic;
