@@ -28,7 +28,8 @@ int leeway_rs_poc_validate(const unsigned char *buf,
 /* ---- v2: pool allocator + SpinLock exercisers (always present; never bugcheck) ----
  * Each returns 0 on success or a distinct negative code (see src/lib.rs). They allocate
  * from the nonpaged pool via the Rust #[global_allocator] and lock over a KSPIN_LOCK, so
- * they import ntoskrnl Ex*/Ke* routines, but none of them can panic or bugcheck. */
+ * they import the ntoskrnl pool and spin-lock routines, but none of them can panic or
+ * bugcheck. */
 
 /* Load-time self-test: one pooled KBox + one SpinLock critical section. Returns 0 ok. */
 int leeway_rs_poc_v2_selftest(void);
