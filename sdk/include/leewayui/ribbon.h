@@ -111,6 +111,7 @@ typedef enum {
                                        with scroll up/down and an expand button opening the full gallery;
                                        LeewayUIPlacement.width sets the strip width. In MIXED/SMALL
                                        variants it becomes the dropdown gallery. */
+    LWUI_CONTROL_SPLIT_SMALL_ICON,  /* SPLIT S, icon only (no label); split button + arrow, 16 px icon */
 } LeewayUIControlKind;
 
 /* ---- Layout tree (arrays + counts, so tables can be static const and
@@ -146,6 +147,7 @@ typedef struct {
     UINT32 launcher_id;         /* command of the dialog launcher at the group's corner, 0 = none (G17) */
     UINT32 control_count;
     const LeewayUIPlacement *controls;
+    UINT32 rows;                /* small-control rows per column: 0 = default 3; 2 for Win7 two-row groups */
 } LeewayUIGroup;
 
 typedef struct {

@@ -92,6 +92,7 @@ static HRESULT CALLBACK OnState(UINT32 id, LeewayUICommandState *st, void *ctx)
 #define S0 LWUI_CONTROL_BUTTON_SMALL
 #define TS LWUI_CONTROL_TOGGLE_SMALL
 #define SPS LWUI_CONTROL_SPLIT_SMALL
+#define SPSI LWUI_CONTROL_SPLIT_SMALL_ICON
 
 static const LeewayUICommand kTable[] = {
     { CMD_NEW,    L"New",    0,0, LWUI_AUR_COMMON_NEW, 1,0,1 },
@@ -120,7 +121,7 @@ static const LeewayUIPlacement kClip[] = {
 };
 static const LeewayUIPlacement kFont[] = {
     { CMD_BOLD, TS, 0, 0 }, { CMD_ITALIC, TS, 0, 0 }, { CMD_UNDER, TS, 0, 0 },
-    { CMD_TEXTCOLOR, SPS, 0, 0 }, { CMD_HIGHLIGHT, SPS, 0, 0 },
+    { CMD_TEXTCOLOR, SPS, 0, 0 }, { CMD_HIGHLIGHT, SPSI, 0, 0 },
 };
 static const LeewayUIPlacement kPara[] = {
     { CMD_ALIGNL, TS, 0, 0 }, { CMD_ALIGNC, TS, 0, 0 }, { CMD_ALIGNR, TS, 0, 0 },
@@ -130,7 +131,7 @@ static const LeewayUIPlacement kZoom[] = {
 };
 static const LeewayUIGroup kHomeGroups[] = {
     { L"Clipboard", 0, 0, 0, 3, kClip },
-    { L"Font",      0, 0, 0, 5, kFont },
+    { L"Font",      0, 0, 0, 5, kFont, 2 },
     { L"Paragraph", 0, 0, 0, 3, kPara },
 };
 static const LeewayUIGroup kViewGroups[] = {

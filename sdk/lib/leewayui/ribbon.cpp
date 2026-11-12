@@ -411,12 +411,12 @@ static BOOL IsLargeKind(LeewayUIControlKind k)
 static BOOL HasArrow(LeewayUIControlKind k)
 {
     return k == LWUI_CONTROL_DROPDOWN || k == LWUI_CONTROL_GALLERY || k == LWUI_CONTROL_COMBO ||
-           k == LWUI_CONTROL_SPLIT_LARGE || k == LWUI_CONTROL_SPLIT_SMALL;
+           k == LWUI_CONTROL_SPLIT_LARGE || k == LWUI_CONTROL_SPLIT_SMALL || k == LWUI_CONTROL_SPLIT_SMALL_ICON;
 }
 
 static BOOL IsSplitKind(LeewayUIControlKind k)
 {
-    return k == LWUI_CONTROL_SPLIT_LARGE || k == LWUI_CONTROL_SPLIT_SMALL;
+    return k == LWUI_CONTROL_SPLIT_LARGE || k == LWUI_CONTROL_SPLIT_SMALL || k == LWUI_CONTROL_SPLIT_SMALL_ICON;
 }
 
 static BOOL IsToggleKind(LeewayUIControlKind k)
@@ -639,7 +639,8 @@ static int PackGroup(ILeewayRibbon *r, HDC hdc, const LeewayUIGroup *g, UINT32 v
 {
     int pad = Sc(r, M_PAD);
     int large_h = Sc(r, M_LARGE_H);
-    int small_h = Sc(r, M_SMALL_H);
+    int rowcap = (g->rows >= 2 && g->rows <= 3) ? (int)g->rows : 3;
+    int small_h = large_h / rowcap;   /* 3 rows -> M_SMALL_H (unchanged); 2 rows -> taller (Win7) */
     int x = ox + pad;
     int top = oy + pad;
     int arrow_w = Sc(r, M_ARROW_W);
@@ -727,14 +728,14 @@ static int PackGroup(ILeewayRibbon *r, HDC hdc, const LeewayUIGroup *g, UINT32 v
                 x += w + Sc(r, 2);
                 col_x = x;
             } else {
-                BOOL with_label = (variant != LWUI_VARIANT_SMALL) && kind != LWUI_CONTROL_BUTTON_SMALL_ICON;
+                BOOL with_label = (variant != LWUI_VARIANT_SMALL) && kind != LWUI_CONTROL_BUTTON_SMALL_ICON && kind != LWUI_CONTROL_SPLIT_SMALL_ICON;
                 if (kind == LWUI_CONTROL_CHECKBOX) with_label = TRUE;
                 BOOL arrow = HasArrow(kind);
                 int w;
                 if (kind == LWUI_CONTROL_COMBO) w = Sc(r, p->width ? (int)p->width : M_COMBO_W);
                 else if (kind == LWUI_CONTROL_CHECKBOX) w = Sc(r, M_CHECK) + Sc(r, 10) + TextWidth(hdc, label) + Sc(r, 4);
                 else w = SmallWidth(r, hdc, label, with_label, arrow);
-                if (rows == 3) { x = col_x + col_w + Sc(r, 2); col_x = x; rows = 0; col_w = 0; }
+                if (rows == rowcap) { x = col_x + col_w + Sc(r, 2); col_x = x; rows = 0; col_w = 0; }
                 if (rows == 0) col_x = x;
                 if (surf) {
                     Item *it = SurfaceAdd(surf);
@@ -3304,6 +3305,7 @@ static Layout *CopyLayout(ILeewayRibbon *r, const LeewayUILayout *src, HRESULT *
             dg->variant_order = sg->variant_order;
             dg->launcher_id = sg->launcher_id;
             dg->control_count = sg->control_count;
+            dg->rows = sg->rows;
             LeewayUIPlacement *pl = (LeewayUIPlacement *)ArenaAlloc(a, sizeof(LeewayUIPlacement) * (sg->control_count ? sg->control_count : 1));
             if (!pl) goto fail;
             dg->controls = pl;
