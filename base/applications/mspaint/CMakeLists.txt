@@ -17,6 +17,7 @@ list(APPEND SOURCE
     miniature.cpp
     mouse.cpp
     paint_ribbon.cpp
+    paint_print.cpp
     palette.cpp
     palettemodel.cpp
     registry.cpp
