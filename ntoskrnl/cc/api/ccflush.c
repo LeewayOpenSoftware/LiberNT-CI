@@ -106,3 +106,41 @@ CcPurgeCacheSection(
 
     return Purged;
 }
+
+/*
+ * Make the cache coherent with a non-cached write about to reach the disk:
+ * flush the range, then (unless the caller asks not to) purge it so later
+ * cached and mapped reads re-read the new data. The routine returns VOID; it
+ * reports through IoStatus. Success is set only when coherency was actually
+ * achieved, so a purge that leaves any page in range cached or mapped yields
+ * STATUS_PURGE_FAILED (an existing, public status, which the one caller,
+ * fastfat, already handles). See AUDIT-R1-IO-CC-FS.md section R2-A.1.
+ */
+VOID
+NTAPI
+CcCoherencyFlushAndPurgeCache(
+    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
+    _In_opt_ PLARGE_INTEGER FileOffset,
+    _In_ ULONG Length,
+    _Out_ PIO_STATUS_BLOCK IoStatus,
+    _In_opt_ ULONG Flags)
+{
+    CcFlushCache(SectionObjectPointer, FileOffset, Length, IoStatus);
+
+    /* A failed flush is reported as-is; the data is not yet on disk, so
+     * purging would discard it. */
+    if (!NT_SUCCESS(IoStatus->Status))
+        return;
+
+    if (Flags & CC_FLUSH_AND_PURGE_NO_PURGE)
+        return;
+
+    /* Purge the just-flushed range. A pinned BCB or a surviving mapped page
+     * makes this fail; coherency is then not guaranteed, so say so instead
+     * of leaving the flush's STATUS_SUCCESS. */
+    if (!CcPurgeCacheSection(SectionObjectPointer, FileOffset, Length, 0))
+    {
+        IoStatus->Status = STATUS_PURGE_FAILED;
+        IoStatus->Information = 0;
+    }
+}
