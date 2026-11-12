@@ -32,6 +32,7 @@ extern void func_GetCPInfo(void);
 extern void func_GetCurrentDirectory(void);
 extern void func_GetCurrentThreadStackLimits(void);
 extern void func_GetDriveType(void);
+extern void func_NoBufferingCoherency(void);
 extern void func_FindNLSString(void);
 extern void func_CompatLinks(void);
 extern void func_LdrDllNotification(void);
@@ -163,6 +164,7 @@ const struct test winetest_testlist[] =
     { "GetCurrentDirectory",         func_GetCurrentDirectory },
     { "GetCurrentThreadStackLimits", func_GetCurrentThreadStackLimits },
     { "GetDriveType",                func_GetDriveType },
+    { "NoBufferingCoherency",        func_NoBufferingCoherency },
     { "FindNLSString", func_FindNLSString },
     { "CompatLinks", func_CompatLinks },
     { "LdrDllNotification", func_LdrDllNotification },

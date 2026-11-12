@@ -35,6 +35,7 @@ list(APPEND SOURCE
     ForwardCycles.c
     DllDirectories.c
     ManifestSettings.c
+    NoBufferingCoherency.c
     Utf8ActiveCodePage.c
     TramoE.c
     TramoE2.c
