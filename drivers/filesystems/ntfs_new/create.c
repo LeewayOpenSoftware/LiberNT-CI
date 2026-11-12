@@ -1958,6 +1958,7 @@ NtfsOpenVolume(
         VolCB->OpenHandleCount++;
         FileCB->BootLockNeutral = FALSE;
         FileObject->FsContext = FileCB;
+        InterlockedIncrement(&VolCB->FileObjectCount);
         FileObject->Vpb = IrpSp->DeviceObject->Vpb;
     }
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
@@ -3346,6 +3347,7 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         }
         FileObject->FsContext = FileCB->StreamCB;
         FileObject->FsContext2 = FileCB;
+        InterlockedIncrement(&VolCB->FileObjectCount);
         FileObject->Vpb = VolumeDeviceObject->Vpb;
     }
 
@@ -3373,6 +3375,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
             NtfsDropOpenHandle(VolCB, FileCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            if (FileObject->FsContext2 == FileCB)
+                InterlockedDecrement(&VolCB->FileObjectCount);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;
             FileObject->SectionObjectPointer = NULL;
@@ -3404,6 +3408,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
             NtfsDropOpenHandle(VolCB, FileCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            if (FileObject->FsContext2 == FileCB)
+                InterlockedDecrement(&VolCB->FileObjectCount);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;
             FileObject->SectionObjectPointer = NULL;
@@ -3486,6 +3492,8 @@ NtfsFsdCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
             NtfsDropOpenHandle(VolCB, FileCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+            if (FileObject->FsContext2 == FileCB)
+                InterlockedDecrement(&VolCB->FileObjectCount);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;
             FileObject->SectionObjectPointer = NULL;

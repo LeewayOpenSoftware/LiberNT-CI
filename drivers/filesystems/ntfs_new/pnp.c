@@ -125,8 +125,133 @@ NtfsReleaseDismountedVolume(
         NtfsUnregisterVolumeForShutdown(VolCB);
         NtfsFlushVolume(VolCB, TRUE);
         ObDereferenceObject(StreamFileObject);
-        /* FIXME: Delete the volume device and free the volume context once its last file object is closed. */
     }
+}
+
+/*
+ * Called by the close of a file object that carried a context once the
+ * volume has none left. A volume that is still mounted keeps going; a
+ * dismounted one can receive no further request (every file object of it is
+ * closed, and the device's VPB already belongs to the next mount), so its
+ * volume context and device are released here.
+ */
+VOID
+NtfsDeleteDismountedVolume(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject)
+{
+    PVolumeContextBlock VolCB =
+        (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    PFILE_OBJECT StreamFileObject;
+    PVPB Vpb;
+    PVPB FreeVpb = NULL;
+    KIRQL OldIrql;
+
+    if (!VolCB->Dismounted)
+        return;
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (!VolCB->Dismounted || VolCB->Deleted || VolCB->FileObjectCount != 0)
+    {
+        ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+        return;
+    }
+    VolCB->Deleted = TRUE;
+    StreamFileObject = VolCB->StreamFileObject;
+    VolCB->StreamFileObject = NULL;
+    VolCB->VolumeLockOwner = NULL;
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+    NtfsUnregisterVolumeForShutdown(VolCB);
+    if (StreamFileObject)
+        ObDereferenceObject(StreamFileObject);
+
+    DPRINT1("NTFS: deleting dismounted volume %p (storage %p)\n",
+            VolumeDeviceObject, VolCB->StorageDevice);
+
+    ExAcquireFastMutex(&VolCB->DirCacheMutex);
+    if (VolCB->CachedDir && !VolCB->CachedDirBusy)
+    {
+        NtfsDirectoryDestroy(VolCB->CachedDir);
+        VolCB->CachedDir = NULL;
+    }
+    ExReleaseFastMutex(&VolCB->DirCacheMutex);
+
+    ExAcquireFastMutex(&VolCB->CachedLookupParentMutex);
+    if (VolCB->CachedLookupParent)
+    {
+        NtfsFileRecordDestroy(VolCB->CachedLookupParent);
+        VolCB->CachedLookupParent = NULL;
+    }
+    ExReleaseFastMutex(&VolCB->CachedLookupParentMutex);
+
+    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    while (!IsListEmpty(&VolCB->RecordCacheList))
+    {
+        PNtfsCachedRecord Entry =
+            CONTAINING_RECORD(VolCB->RecordCacheList.Flink, NtfsCachedRecord, Link);
+
+        RemoveEntryList(&Entry->Link);
+        RemoveEntryList(&Entry->HashLink);
+        RemoveEntryList(&Entry->IdentityLink);
+        VolCB->RecordCacheCount--;
+        /* A record still in use (none should be) is leaked, not freed. */
+        if (Entry->InUse == 0)
+        {
+            if (Entry->Record)
+                NtfsFileRecordDestroy(Entry->Record);
+            ExFreePoolWithTag(Entry, TAG_NTFS);
+        }
+    }
+    ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+
+    NtfsForgetAllMissingNames(VolCB);
+
+    ExAcquireFastMutex(&VolCB->IdleFcbMutex);
+    while (!IsListEmpty(&VolCB->IdleFcbList))
+    {
+        PFileContextBlock FileCB =
+            CONTAINING_RECORD(RemoveHeadList(&VolCB->IdleFcbList), FileContextBlock, IdleLink);
+
+        VolCB->IdleFcbCount--;
+        ExDeleteResourceLite(&FileCB->MainResource);
+        ExDeleteResourceLite(&FileCB->PagingIoResource);
+        ExFreePool(FileCB);
+    }
+    ExReleaseFastMutex(&VolCB->IdleFcbMutex);
+
+    FsRtlNotifyUninitializeSync(&VolCB->NotifySync);
+    FsRtlDeleteTunnelCache(&VolCB->Tunnel);
+
+    if (VolCB->DiskVolume)
+    {
+        NtfsVolumeDestroy(VolCB->DiskVolume);
+        VolCB->DiskVolume = NULL;
+    }
+
+    ExDeleteResourceLite(&VolCB->MetadataResource);
+
+    /*
+     * The I/O manager dropped the closing file object's VPB reference before
+     * the close. The old VPB is no longer the device's (the dismount swapped
+     * it) and was kept persistent for this volume, so it is freed here once
+     * nothing references it.
+     */
+    IoAcquireVpbSpinLock(&OldIrql);
+    Vpb = VolumeDeviceObject->Vpb;
+    if (Vpb && Vpb->RealDevice && Vpb->RealDevice->Vpb != Vpb)
+    {
+        Vpb->DeviceObject = NULL;
+        Vpb->Flags &= ~VPB_PERSISTENT;
+        if (Vpb->ReferenceCount == 0)
+            FreeVpb = Vpb;
+    }
+    VolumeDeviceObject->Vpb = NULL;
+    IoReleaseVpbSpinLock(OldIrql);
+
+    if (FreeVpb)
+        ExFreePool(FreeVpb);
+
+    IoDeleteDevice(VolumeDeviceObject);
 }
 
 _Function_class_(IRP_MJ_PNP)
