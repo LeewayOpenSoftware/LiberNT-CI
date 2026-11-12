@@ -2699,14 +2699,21 @@ MiSegmentPurge(
     _In_ ULONG64 Length)
 {
     BOOLEAN Complete = TRUE;
-    ULONG64 First = MI_PAGE_ALIGN_UP(Offset) >> PAGE_SHIFT;
+    /* A-2: purge every page that OVERLAPS [Offset, Offset+Length). Round the
+     * range OUTWARD (start down, end up) so a sub-page or partial first/last
+     * page is still examined; the old inward rounding (First=ALIGN_UP(Offset),
+     * Last=(Offset+Length)>>PAGE_SHIFT) skipped partial pages entirely yet still
+     * returned TRUE, so a non-cached write smaller than a page left stale cached
+     * data while reporting a complete purge. Matches the outward rounding every
+     * other range walk in this file already uses. */
+    ULONG64 First = Offset >> PAGE_SHIFT;
     ULONG64 Last;
     ULONG64 Page;
 
     MI_MUTEX_ACQUIRE(&Segment->Lock);
     Segment->ReadGeneration++;
 
-    Last = (Length == 0) ? MiSegmentPages(Segment) : ((Offset + Length) >> PAGE_SHIFT);
+    Last = (Length == 0) ? MiSegmentPages(Segment) : (MI_PAGE_ALIGN_UP(Offset + Length) >> PAGE_SHIFT);
     if (Last > MiSegmentPages(Segment))
         Last = MiSegmentPages(Segment);
 
