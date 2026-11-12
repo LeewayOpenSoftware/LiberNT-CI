@@ -61,12 +61,15 @@ typedef struct _EXPAND_CONTEXT
     BOOLEAN NestRestored;
 } EXPAND_CONTEXT, *PEXPAND_CONTEXT;
 
+/* Where the stack is right now: the address of a local, handed out through a volatile so the
+ * compiler does not treat it as a returned stack address (it is only ever compared with limits) */
 static
 ULONG_PTR
 GetSp(VOID)
 {
     volatile UCHAR Here = 0;
-    return (ULONG_PTR)&Here;
+    volatile ULONG_PTR Sp = (ULONG_PTR)&Here;
+    return Sp;
 }
 
 static
