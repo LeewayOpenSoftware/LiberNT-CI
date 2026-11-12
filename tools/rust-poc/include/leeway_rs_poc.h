@@ -25,6 +25,25 @@ int leeway_rs_poc_validate(const unsigned char *buf,
 #define LNRSPOC_E_SHORT    (-2) /* len_bytes < 4: no room for the length prefix */
 #define LNRSPOC_E_LENFIELD (-3) /* declared length exceeds available payload    */
 
+/* ---- v2: pool allocator + SpinLock exercisers (always present; never bugcheck) ----
+ * Each returns 0 on success or a distinct negative code (see src/lib.rs). They allocate
+ * from the nonpaged pool via the Rust #[global_allocator] and lock over a KSPIN_LOCK, so
+ * they import ntoskrnl Ex*/Ke* routines, but none of them can panic or bugcheck. */
+
+/* Load-time self-test: one pooled KBox + one SpinLock critical section. Returns 0 ok. */
+int leeway_rs_poc_v2_selftest(void);
+
+/* Allocation stress: `iters` rounds of alloc/write/read-back/free. Returns 0 ok. */
+int leeway_rs_poc_alloc_stress(unsigned long iters);
+
+/* Lock stress: `iters` acquire/modify/release cycles, then verify the count. 0 ok. */
+int leeway_rs_poc_lock_stress(unsigned long iters);
+
+/* OOM negative test: deliberately exhaust the nonpaged pool and prove failure is a
+ * returned error, not a crash. Returns the block count taken before the pool said no
+ * (>0), or a negative code. Reaching the caller at all is the proof. All blocks freed. */
+int leeway_rs_poc_oom_probe(void);
+
 /* TEST-ONLY. Present only when the staticlib is built with `--features test-ioctls`
  * (and the driver with -DLNRSPOC_TEST_IOCTLS). Triggers the controlled bugcheck
  * (KeBugCheckEx, code LEEWAY_RUST_PANIC 0x4C450001). Reachable solely via the
