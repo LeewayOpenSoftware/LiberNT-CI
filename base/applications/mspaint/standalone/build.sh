@@ -35,3 +35,6 @@ llvm-windres -DLANGUAGE_EN_US -DUNICODE -D_UNICODE -I"$MP" -I"$ROOT/sdk/include"
 $CXX -static -mwindows -municode -o "$OUT/mspaint.exe" $OBJS "$OUT/obj/rsrc.o" \
   -lgdi32 -luser32 -lcomctl32 -lcomdlg32 -luxtheme -ldwmapi -lshcore -ladvapi32 -lmsimg32 -lshell32 -lole32 -loleaut32 -luuid -lshlwapi -lgdiplus -lhtmlhelp -lrpcrt4 -lversion -limm32 -lwinmm
 echo "built $OUT/mspaint.exe"
+
+# Aureline icons next to the exe
+mkdir -p "$OUT/icons"; cp -r "$ROOT/sdk/lib/leewayui/icons/paint" "$ROOT/sdk/lib/leewayui/icons/common" "$OUT/icons/"
