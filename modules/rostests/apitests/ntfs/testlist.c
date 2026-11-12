@@ -10,10 +10,12 @@
 
 extern void func_MissingSecurity(void);
 extern void func_FullBaseGrowth(void);
+extern void func_DismountRemount(void);
 
 const struct test winetest_testlist[] =
 {
     { "MissingSecurity", func_MissingSecurity },
     { "FullBaseGrowth", func_FullBaseGrowth },
+    { "DismountRemount", func_DismountRemount },
     { 0, 0 }
 };
