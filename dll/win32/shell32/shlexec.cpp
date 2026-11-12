@@ -650,6 +650,8 @@ again:
 static BOOL SHELL_IsTokenElevated(void)
 {
     TOKEN_ELEVATION Elevation;
+    ULONG_PTR LabelBuffer[(sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE) / sizeof(ULONG_PTR)];
+    PTOKEN_MANDATORY_LABEL Label = (PTOKEN_MANDATORY_LABEL)LabelBuffer;
     HANDLE hToken;
     DWORD cbSize;
     BOOL bElevated = FALSE;
@@ -658,6 +660,12 @@ static BOOL SHELL_IsTokenElevated(void)
     {
         if (GetTokenInformation(hToken, TokenElevation, &Elevation, sizeof(Elevation), &cbSize))
             bElevated = (Elevation.TokenIsElevated != 0);
+        if (bElevated &&
+            GetTokenInformation(hToken, TokenIntegrityLevel, Label, sizeof(LabelBuffer), &cbSize))
+        {
+            bElevated = *GetSidSubAuthority(Label->Label.Sid, *GetSidSubAuthorityCount(Label->Label.Sid) - 1) >=
+                        SECURITY_MANDATORY_HIGH_RID;
+        }
         CloseHandle(hToken);
     }
     return bElevated;
@@ -726,8 +734,16 @@ static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
             startup.dwFlags |= STARTF_SHELLPRIVATE;
     }
 
-    BOOL createdProcess;
-    if (psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb) && !SHELL_IsTokenElevated())
+    BOOL createdProcess = FALSE;
+    BOOL promptRunAs = psei->lpVerb && !StrCmpIW(L"runas", psei->lpVerb) && !SHELL_IsTokenElevated();
+    if (!promptRunAs)
+    {
+        createdProcess = CreateProcessW(NULL, (LPWSTR)lpCmd, NULL, NULL, FALSE,
+                                        dwCreationFlags, env, lpDirectory, &startup, &info);
+        // The image manifest asks for an administrator: elevate as "runas" would.
+        promptRunAs = !createdProcess && GetLastError() == ERROR_ELEVATION_REQUIRED;
+    }
+    if (promptRunAs)
     {
         HRESULT hr = PromptAndRunProcessAs(psei->hwnd, (LPWSTR)lpCmd, dwCreationFlags,
                                                  env, lpDirectory, &startup, &info);
@@ -737,11 +753,6 @@ static UINT_PTR SHELL_ExecuteW(const WCHAR *lpCmd, WCHAR *env, BOOL shWait,
             retval = 33; // Pretend cancel is success.
             goto done;
         }
-    }
-    else
-    {
-        createdProcess = CreateProcessW(NULL, (LPWSTR)lpCmd, NULL, NULL, FALSE,
-                                        dwCreationFlags, env, lpDirectory, &startup, &info);
     }
 
     if (createdProcess)
