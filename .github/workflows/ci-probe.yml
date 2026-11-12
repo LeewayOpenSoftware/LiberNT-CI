@@ -1,0 +1,9 @@
+name: CI probe
+on: [push, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "runner ok"
