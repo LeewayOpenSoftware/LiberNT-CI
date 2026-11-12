@@ -91,7 +91,8 @@ typedef struct _BUTTON_INFO
     SIZE             glyph_size;
     RECT             text_margin;
     HANDLE           image; /* Original handle set with BM_SETIMAGE and returned with BM_GETIMAGE. */
-    HIMAGELIST       shield;
+    HIMAGELIST       shield;          /* elevation shield (BCM_SETSHIELD) image list, owned */
+    BUTTON_IMAGELIST saved_imagelist; /* caller's image list, parked while the shield holds the slot */
     union
     {
         HICON   icon;
@@ -950,7 +951,12 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
         if (!imagelist) return FALSE;
 
-        infoPtr->imagelist = *imagelist;
+        /* While the shield occupies the live slot, remember the caller's list so it
+         * is restored when the shield is cleared and reported by BCM_GETIMAGELIST. */
+        if (infoPtr->shield)
+            infoPtr->saved_imagelist = *imagelist;
+        else
+            infoPtr->imagelist = *imagelist;
         return TRUE;
     }
 
@@ -960,27 +966,30 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
         if (!imagelist) return FALSE;
 
-        *imagelist = infoPtr->imagelist;
+        *imagelist = infoPtr->shield ? infoPtr->saved_imagelist : infoPtr->imagelist;
         return TRUE;
     }
 
     case BCM_SETSHIELD:
     {
+        /* Button_SetElevationRequiredState. The shield replaces the button's image
+         * (as on Windows), but the caller's image list is parked, not lost, so the
+         * two coexist: it is restored on clear and still returned by BCM_GETIMAGELIST. */
         if (lParam && !infoPtr->shield)
         {
             infoPtr->shield = BUTTON_CreateShieldImageList();
-            /* FIXME: the shield borrows the image list slot, so BCM_GETIMAGELIST reports it and a caller image list hides it */
-            if (infoPtr->shield && !infoPtr->imagelist.himl)
+            if (infoPtr->shield)
             {
+                infoPtr->saved_imagelist = infoPtr->imagelist;
                 infoPtr->imagelist.himl = infoPtr->shield;
-                SetRect(&infoPtr->imagelist.margin, 0, 0, 2, 0);
                 infoPtr->imagelist.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+                SetRect(&infoPtr->imagelist.margin, 0, 0, 2, 0);
             }
         }
         else if (!lParam && infoPtr->shield)
         {
-            if (infoPtr->imagelist.himl == infoPtr->shield)
-                memset(&infoPtr->imagelist, 0, sizeof(infoPtr->imagelist));
+            infoPtr->imagelist = infoPtr->saved_imagelist;
+            memset(&infoPtr->saved_imagelist, 0, sizeof(infoPtr->saved_imagelist));
             ImageList_Destroy(infoPtr->shield);
             infoPtr->shield = NULL;
         }
