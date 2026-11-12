@@ -599,6 +599,14 @@ NTAPI
 KiFreezeIfRequested(
     VOID);
 
+/* trap.S: run Callout(Parameter) on the stack described by Control (KeExpandKernelStackAndCalloutEx) */
+VOID
+NTAPI
+KiSwitchStackAndCallout(
+    _In_opt_ PVOID Parameter,
+    _In_ PEXPAND_STACK_CALLOUT Callout,
+    _In_ PKSTACK_CONTROL Control);
+
 VOID
 NTAPI
 KiInitializeXStateConfiguration(
