@@ -394,6 +394,24 @@ static const LeewayUICollectionItem g_paintSizeItems[] = {
     { 366, L"8 px", 0, LWUI_COLOR_NONE, 0 }, { 367, L"12 px", 0, LWUI_COLOR_NONE, 0 }, { 368, L"16 px", 0, LWUI_COLOR_NONE, 0 },
 };
 
+/* Optional label translator (resources); NULL keeps the English literals. */
+typedef const WCHAR *(*PaintTrFn)(const WCHAR *);
+static PaintTrFn g_paintTr = NULL;
+
+static inline HRESULT PaintSetCollTr(ILeewayRibbon *ribbon, UINT32 cmd, const LeewayUICollectionItem *items, UINT32 n, UINT32 flags)
+{
+    LeewayUICollectionItem tmp[64];
+    if (n > 64)
+        n = 64;
+    for (UINT32 i = 0; i < n; i++)
+    {
+        tmp[i] = items[i];
+        if (g_paintTr && tmp[i].label)
+            tmp[i].label = g_paintTr(tmp[i].label);
+    }
+    return LeewayRibbonSetCollection(ribbon, cmd, tmp, n, flags);
+}
+
 #define PAINT_PALETTE_FIRST 1001
 #define PAINT_PALETTE_COUNT 30     /* 20 standard colours + 10 custom slots */
 #define PAINT_PALETTE_STD   20
@@ -425,7 +443,7 @@ static inline HRESULT PaintRibbonSetCollections(ILeewayRibbon *ribbon)
     HRESULT hr = S_OK, h;
 
 #define PAINT_SETCOLL(cmd, arr, flags) \
-    do { h = LeewayRibbonSetCollection(ribbon, (cmd), (arr), _countof(arr), (flags)); if (FAILED(h) && SUCCEEDED(hr)) hr = h; } while (0)
+    do { h = PaintSetCollTr(ribbon, (cmd), (arr), _countof(arr), (flags)); if (FAILED(h) && SUCCEEDED(hr)) hr = h; } while (0)
 
     PAINT_SETCOLL(IDM_EDITPASTE, g_paintPasteItems, 0);
     PAINT_SETCOLL(ID_RECTSEL, g_paintSelectItems, 0);

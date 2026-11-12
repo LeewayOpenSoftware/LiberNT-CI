@@ -31,7 +31,7 @@ for p in $PIDS; do wait $p || FAIL=1; done
 # resources: strip ReactOS-only includes into a generated rc
 MPW="$(cd "$MP" && pwd -W)"
 sed -e 's#<winuser.rh>#<winuser.h>#' -e '/reactos\/version.rc/d' -e "s#\"img/#\"$MPW/img/#g" -e "s#\"lang/#\"$MPW/lang/#g" -e "s#\"mspaint.exe.manifest\"#\"$MPW/mspaint.exe.manifest\"#" "$MP/rsrc.rc" > "$OUT/rsrc_gen.rc"
-llvm-windres -DLANGUAGE_EN_US -DUNICODE -D_UNICODE -I"$MP" -I"$ROOT/sdk/include" -I"$ROOT/sdk/include/reactos" "$OUT/rsrc_gen.rc" -O coff -o "$OUT/obj/rsrc.o"
+llvm-windres --codepage=65001 -DLANGUAGE_EN_US -DLANGUAGE_ES_ES -DUNICODE -D_UNICODE -I"$MP" -I"$ROOT/sdk/include" -I"$ROOT/sdk/include/reactos" "$OUT/rsrc_gen.rc" -O coff -o "$OUT/obj/rsrc.o"
 $CXX -static -mwindows -municode -o "$OUT/mspaint.exe" $OBJS "$OUT/obj/rsrc.o" \
   -lgdi32 -luser32 -lcomctl32 -lcomdlg32 -luxtheme -ldwmapi -lshcore -ladvapi32 -lmsimg32 -lshell32 -lole32 -loleaut32 -luuid -lshlwapi -lgdiplus -lhtmlhelp -lrpcrt4 -lversion -limm32 -lwinmm
 echo "built $OUT/mspaint.exe"

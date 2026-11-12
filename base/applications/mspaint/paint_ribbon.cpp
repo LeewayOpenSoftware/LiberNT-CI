@@ -8,12 +8,38 @@
 
 #include "precomp.h"
 #include "paint_ribbon.h"
+#include "paint_ribbon_ids.h"
+#include <vector>
+#include <deque>
 #include "../../../sdk/include/leewayui/aureline_icons.h"
 
 extern CMainWindow mainWindow;
 extern BOOL g_showGrid;
 
 static ILeewayRibbon *s_ribbon;
+
+#include "paint_ribbon_strings.h"
+
+/* Label text comes from the resource string tables (en-US, es-ES, ...); the literal is the fallback */
+static const WCHAR *PaintTr(const WCHAR *en)
+{
+    static std::deque<std::wstring> s_cache; /* deque: element addresses stay valid */
+    if (!en)
+        return en;
+    for (size_t i = 0; i < _countof(g_ribbonStrings); i++)
+    {
+        if (wcscmp(g_ribbonStrings[i].en, en) != 0)
+            continue;
+        WCHAR buf[256];
+        if (::LoadStringW(g_hinstExe, g_ribbonStrings[i].id, buf, _countof(buf)) > 0)
+        {
+            s_cache.push_back(buf);
+            return s_cache.back().c_str();
+        }
+        break;
+    }
+    return en;
+}
 
 static const struct { UINT id; int zoom; } g_zoomIds[] = {
     { IDM_VIEWZOOM125, 125 }, { IDM_VIEWZOOM25, 250 }, { IDM_VIEWZOOM50, 500 }, { IDM_VIEWZOOM100, 1000 },
@@ -78,8 +104,8 @@ static BOOL HandleLocal(UINT32 id, HWND hWnd)
             g_paintCustomSet[n - PAINT_PALETTE_STD] = TRUE;
             g_paintPaletteItems[n].color = c;
             if (s_ribbon)
-                LeewayRibbonSetCollection(s_ribbon, 372, g_paintPaletteItems, _countof(g_paintPaletteItems),
-                                          LWUI_COLLECTION_COLORS);
+                PaintSetCollTr(s_ribbon, 372, g_paintPaletteItems, _countof(g_paintPaletteItems),
+                               LWUI_COLLECTION_COLORS);
         }
         if (bAlt)
             paletteModel.SetBgColor(g_paintPaletteItems[n].color);
@@ -288,9 +314,36 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
     if (!hwndMain || !pRibbon)
         return E_INVALIDARG;
 
+    g_paintTr = PaintTr;
+
+    /* Translated copies of the command table and the layout (the ribbon copies what it is given) */
+    std::vector<std::wstring> keep;
+    keep.reserve(1024);
+    std::vector<LeewayUICommand> cmds(g_paintCommands, g_paintCommands + _countof(g_paintCommands));
+    for (size_t i = 0; i < cmds.size(); i++)
+    {
+        cmds[i].label = PaintTr(cmds[i].label);
+        cmds[i].tooltip = PaintTr(cmds[i].tooltip);
+    }
+    LeewayUICommand appBtn = { LWUI_APPMENU, PaintTr(L"File"), NULL, NULL, 0, TRUE, FALSE, TRUE };
+    cmds.push_back(appBtn);
+
+    std::vector<std::vector<LeewayUIGroup> > groupSets(_countof(g_paintTabs));
+    std::vector<LeewayUITab> tabs(g_paintTabs, g_paintTabs + _countof(g_paintTabs));
+    for (size_t t = 0; t < tabs.size(); t++)
+    {
+        groupSets[t].assign(tabs[t].groups, tabs[t].groups + tabs[t].group_count);
+        for (size_t g = 0; g < groupSets[t].size(); g++)
+            groupSets[t][g].label = PaintTr(groupSets[t][g].label);
+        tabs[t].groups = groupSets[t].data();
+        tabs[t].label = PaintTr(tabs[t].label);
+    }
+    LeewayUILayout layout = g_paintLayout;
+    layout.tabs = tabs.data();
+
     /* Create ribbon with Paint's command table */
     HRESULT hr = LeewayRibbonCreate(hwndMain,
-                                    g_paintCommands, _countof(g_paintCommands),
+                                    cmds.data(), (UINT32)cmds.size(),
                                     OnRibbonExecute,
                                     OnRibbonQueryState,
                                     (void *)hwndMain,
@@ -299,7 +352,7 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
         return hr;
 
     /* Set the layout */
-    hr = LeewayRibbonSetLayout(*pRibbon, (LeewayUILayout *)&g_paintLayout);
+    hr = LeewayRibbonSetLayout(*pRibbon, &layout);
     if (FAILED(hr))
     {
         LeewayRibbonDestroy(*pRibbon);
