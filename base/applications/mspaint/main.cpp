@@ -447,6 +447,17 @@ LRESULT CMainWindow::OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BO
     return 0;
 }
 
+BOOL CMainWindow::PreTranslateRibbon(MSG *pMsg)
+{
+    return m_pRibbon && LeewayRibbonPreTranslateMessage(m_pRibbon, pMsg);
+}
+
+void CMainWindow::SetRibbonAccelerators(HACCEL hAccel)
+{
+    if (m_pRibbon)
+        LeewayRibbonSetAccelerators(m_pRibbon, hAccel);
+}
+
 void CMainWindow::SaveAsFormat(PCWSTR pszExt)
 {
     if (!g_isAFile)
@@ -1459,12 +1470,16 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, INT nCm
 
     // Load the access keys
     HACCEL hAccel = ::LoadAcceleratorsW(hInstance, MAKEINTRESOURCEW(800));
+    mainWindow.SetRibbonAccelerators(hAccel);
 
     // The message loop
     MSG msg;
     while (::GetMessage(&msg, NULL, 0, 0))
     {
         if (fontsDialog.IsWindow() && fontsDialog.IsDialogMessage(&msg))
+            continue;
+
+        if (mainWindow.PreTranslateRibbon(&msg))
             continue;
 
         if (::TranslateAcceleratorW(mainWindow, hAccel, &msg))

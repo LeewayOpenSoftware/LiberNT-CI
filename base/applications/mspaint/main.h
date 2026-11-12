@@ -46,6 +46,8 @@ public:
     BOOL CanRedo() const;
     BOOL CanPaste() const;
     void InvalidateRibbon();
+    BOOL PreTranslateRibbon(MSG *pMsg);
+    void SetRibbonAccelerators(HACCEL hAccel);
     void SaveAsFormat(PCWSTR pszExt);
 
 private:
