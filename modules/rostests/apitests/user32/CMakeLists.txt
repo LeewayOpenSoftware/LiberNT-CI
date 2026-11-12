@@ -78,6 +78,7 @@ list(APPEND SOURCE
     MaximizedCaptionClick.c
     MenuUI.c
     MenuItemData.c
+    MenuBarBackground.c
     MessageStateAnalyzer.c
     MinimizedPosition.c
     ModernUser32.c
@@ -104,6 +105,7 @@ list(APPEND SOURCE
     ScrollWindowEx.c
     UnhookWinEvent.c
     SendMessageTimeout.c
+    ServiceAccountDesktop.c
     SendMessageTimeoutHung.c
     SetActiveWindow.c
     SetCursorPos.c
@@ -130,6 +132,8 @@ list(APPEND SOURCE
     VirtualKey.c
     WaitForInputIdle.c
     WindowBand.c
+    WindowStationErrors.c
+    WindowStationSecurity.c
     WndProc.c
     wsprintf.c)
 

@@ -2107,9 +2107,15 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
               PULONG OriginalValue,
               PULONG NewValue)
 {
+    PPCI_DEVICE PciDevice = DeviceExtension->PciDevice;
+    ULONG Index = (Offset - FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses)) / sizeof(ULONG);
     ULONG Size;
     ULONG AllOnes;
     USHORT Segment = PciPdoGetSegment(DeviceExtension);
+
+    ASSERT(Offset >= FIELD_OFFSET(PCI_COMMON_CONFIG, u.type0.BaseAddresses));
+    ASSERT((Offset % sizeof(ULONG)) == 0);
+    ASSERT(Index < PCI_TYPE0_ADDRESSES);
 
     /* Read the original value */
     Size = PciPdoGetBusDataByOffset(DeviceExtension,
@@ -2120,6 +2126,13 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
     {
         DPRINT1("Wrong size %lu (seg %u)\n", Size, Segment);
         return FALSE;
+    }
+
+    /* A started function keeps decoding while it is queried again, so its registers are sized once */
+    if (PciDevice->BarSizeValid & (1 << Index))
+    {
+        *NewValue = PciDevice->BarSize[Index];
+        return TRUE;
     }
 
     /* Write all ones to determine which bits are held to zero */
@@ -2156,6 +2169,8 @@ PdoReadPciBar(PPDO_DEVICE_EXTENSION DeviceExtension,
         return FALSE;
     }
 
+    PciDevice->BarSize[Index] = *NewValue;
+    PciDevice->BarSizeValid |= (UCHAR)(1 << Index);
     return TRUE;
 }
 
@@ -2576,8 +2591,6 @@ PciPdoAppendBarRequirements(
 }
 
 
-static UCHAR PciPdoExpressPortType(_In_ PPDO_DEVICE_EXTENSION DeviceExtension);
-
 static
 BOOLEAN
 PciPdoSizeSecondaryMemory(
@@ -2726,6 +2739,7 @@ PdoQueryResourceRequirements(
     BOOLEAN AllowMsi;
     BOOLEAN AllowMsix;
     UCHAR InterruptPin;
+    UCHAR LegacyLine;
     ULONG MsixMessageCount;
     UCHAR MsiMessageCount;
     ULONG MessageNumberLimit;
@@ -3074,15 +3088,14 @@ PdoQueryResourceRequirements(
     MsixOption = (HasMsix && AllowMsix);
     MsiOption = (HasMsi && AllowMsi);
     LegacyOption = (InterruptResourcesAllowed && InterruptPin != 0);
-#ifdef HAL_PCI_FIRMWARE_ROUTING_AUTHORITATIVE
-    /* Without a route in the firmware interrupt map there is no legacy vector. */
-    if (LegacyOption &&
-        (PciPdoRoutedInterruptLine(DeviceExtension, InterruptPin,
-                                   PciConfig.u.type0.InterruptLine) == 0))
+    LegacyLine = 0;
+    if (LegacyOption)
     {
-        LegacyOption = FALSE;
+        LegacyLine = PciPdoRoutedInterruptLine(DeviceExtension, InterruptPin,
+                                               PciConfig.u.type0.InterruptLine);
+        if (LegacyLine == 0 || LegacyLine == 0xFF)
+            LegacyOption = FALSE;
     }
-#endif
     if (FdoExtension && FdoExtension->OscMasked)
     {
         ULONG Masked = FdoExtension->OscMasked;
@@ -3180,15 +3193,9 @@ PdoQueryResourceRequirements(
             {
                 Dest->ShareDisposition = CmResourceShareShared;
                 Dest->Flags = CM_RESOURCE_INTERRUPT_LEVEL_SENSITIVE;
-#ifdef HAL_PCI_FIRMWARE_ROUTING_AUTHORITATIVE
-                Dest->u.Interrupt.MinimumVector =
-                    PciPdoRoutedInterruptLine(DeviceExtension, InterruptPin,
-                                              PciConfig.u.type0.InterruptLine);
-                Dest->u.Interrupt.MaximumVector = Dest->u.Interrupt.MinimumVector;
-#else
-                Dest->u.Interrupt.MinimumVector = 0;
-                Dest->u.Interrupt.MaximumVector = 0xFF;
-#endif
+                ASSERT(LegacyLine != 0 && LegacyLine != 0xFF);
+                Dest->u.Interrupt.MinimumVector = LegacyLine;
+                Dest->u.Interrupt.MaximumVector = LegacyLine;
             }
             else
             {
@@ -4080,7 +4087,6 @@ InterfacePciDevicePresentEx(
 static VOID PciSaveMsiState(_In_ PPDO_DEVICE_EXTENSION DeviceExtension);
 static VOID PciRestoreMsiState(_In_ PPDO_DEVICE_EXTENSION DeviceExtension);
 
-static
 UCHAR
 PciPdoExpressPortType(
     _In_ PPDO_DEVICE_EXTENSION DeviceExtension)
@@ -4423,11 +4429,16 @@ PciPdoFunctionLevelReset(
     BOOLEAN Version2;
     ULONG Waited, Id = MAXULONG;
 
-    PciPdoGetBusDataByOffset(DeviceExtension, &Express.AsUSHORT, Offset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, ExpressCapabilities),
-                             sizeof(Express.AsUSHORT));
+    if (PciPdoGetBusDataByOffset(DeviceExtension, &Express.AsUSHORT,
+                                 Offset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, ExpressCapabilities),
+                                 sizeof(Express.AsUSHORT)) != sizeof(Express.AsUSHORT) ||
+        PciPdoGetBusDataByOffset(DeviceExtension, &Control.AsUSHORT,
+                                 Offset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, DeviceControl),
+                                 sizeof(Control.AsUSHORT)) != sizeof(Control.AsUSHORT))
+    {
+        return STATUS_DEVICE_NOT_CONNECTED;
+    }
     Version2 = Express.CapabilityVersion >= 2;
-    PciPdoGetBusDataByOffset(DeviceExtension, &Control.AsUSHORT, Offset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, DeviceControl),
-                             sizeof(Control.AsUSHORT));
     PciPdoGetBusDataByOffset(DeviceExtension, &LinkControl, Offset + FIELD_OFFSET(PCI_EXPRESS_CAPABILITY, LinkControl),
                              sizeof(LinkControl));
     if (Version2)

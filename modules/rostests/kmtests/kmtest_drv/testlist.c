@@ -41,6 +41,7 @@ KMT_TESTFUNC Test_DxgkKeyedMutex;
 KMT_TESTFUNC Test_DxgkCoreConcurrency;
 KMT_TESTFUNC Test_DxgkContextSync;
 KMT_TESTFUNC Test_DxgkPresentQueue;
+KMT_TESTFUNC Test_DxgkVsyncPower;
 KMT_TESTFUNC Test_Rpi5Vc4Pointer;
 KMT_TESTFUNC Test_DxgkSyncWait;
 KMT_TESTFUNC Test_DxgkTrackedWork;
@@ -52,6 +53,9 @@ KMT_TESTFUNC Test_Dxgmms2Timeline;
 KMT_TESTFUNC Test_Dxgmms2VidMm;
 #ifdef KMT_DXGK_WDDM_ABI
 KMT_TESTFUNC Test_DxgkWddmAbi;
+#endif
+#ifdef KMT_KUBSAN
+KMT_TESTFUNC Test_KubsanHandlers;
 #endif
 #ifdef KMT_SOFTGPU_GPUVA_ISOLATION
 KMT_TESTFUNC Test_SoftGpuGpuVaIsolation;
@@ -86,6 +90,7 @@ KMT_TESTFUNC Test_ExTimerExtra;
 KMT_TESTFUNC Test_ExTimerInvalidAttributes;
 KMT_TESTFUNC Test_ExTimerCombinedAttributes;
 KMT_TESTFUNC Test_ExTimeZone;
+KMT_TESTFUNC Test_ExHeadless;
 KMT_TESTFUNC Test_ExLicenseDif;
 KMT_TESTFUNC Test_IoArbiter;
 KMT_TESTFUNC Test_IoLargeMemoryResource;
@@ -138,6 +143,7 @@ KMT_TESTFUNC Test_MmSectionWin11KM;
 KMT_TESTFUNC Test_MmPteWin11KM;
 #endif
 KMT_TESTFUNC Test_ExResource;
+KMT_TESTFUNC Test_ExResourceDeleteHeld;
 KMT_TESTFUNC Test_ExResourceBoost;
 KMT_TESTFUNC Test_ExResourceBoostOwnerPointer;
 KMT_TESTFUNC Test_ExRundown;
@@ -161,6 +167,8 @@ KMT_TESTFUNC Test_HalBusData;
 KMT_TESTFUNC Test_HalMessageState;
 KMT_TESTFUNC Test_HalPortIo;
 #endif
+KMT_TESTFUNC Test_HalDmaAlignment;
+KMT_TESTFUNC Test_HalRealTimeClock;
 KMT_TESTFUNC Test_HalSystemInfo;
 KMT_TESTFUNC Test_IoContainerId;
 KMT_TESTFUNC Test_IoDriverKeyOpen;
@@ -169,6 +177,7 @@ KMT_TESTFUNC Test_IoGetRequestorProcess;
 KMT_TESTFUNC Test_IoCreateDeviceSecure;
 KMT_TESTFUNC Test_IoDeleteDeviceName;
 KMT_TESTFUNC Test_IoReadPartitionTable;
+KMT_TESTFUNC Test_IoPciMessageEnable;
 KMT_TESTFUNC Test_IoCreateFile;
 KMT_TESTFUNC Test_IoCreateFileAccessCheck;
 KMT_TESTFUNC Test_IoCreateSystemThread;
@@ -177,8 +186,12 @@ KMT_TESTFUNC Test_IoDeviceInterface;
 KMT_TESTFUNC Test_IoDeviceSecurity;
 KMT_TESTFUNC Test_IoEvent;
 KMT_TESTFUNC Test_IoInterfaceOrderCheck;
+KMT_TESTFUNC Test_IoResourceSearch;
+KMT_TESTFUNC Test_IoCreateDriverContext;
+KMT_TESTFUNC Test_PciLineInterrupt;
 KMT_TESTFUNC Test_IoStorageDumpPath;
 KMT_TESTFUNC Test_IoWmiAcpi;
+KMT_TESTFUNC Test_ZwWriteFileAppend;
 KMT_TESTFUNC Test_IoFilesystem;
 KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIommu;
@@ -214,6 +227,7 @@ KMT_TESTFUNC Test_IoTimerKM;
 KMT_TESTFUNC Test_IoVolume;
 KMT_TESTFUNC Test_KdBootLog;
 KMT_TESTFUNC Test_KdBreakContinue;
+KMT_TESTFUNC Test_KdTimeSlipEvent;
 KMT_TESTFUNC Test_KdbSchedulerCommands;
 KMT_TESTFUNC Test_KdbDeviceCommands;
 KMT_TESTFUNC Test_KdbCliCommands;
@@ -224,6 +238,7 @@ KMT_TESTFUNC Test_KdbLocks;
 KMT_TESTFUNC Test_KdbThreadApc;
 KMT_TESTFUNC Test_KdChangeOption;
 KMT_TESTFUNC Test_KdbSystemBreak;
+KMT_TESTFUNC Test_KdShutdownCrash;
 KMT_TESTFUNC Test_KdDebuggerPresent;
 KMT_TESTFUNC Test_KdPrintComponent;
 KMT_TESTFUNC Test_KdPrintStatus;
@@ -245,6 +260,7 @@ KMT_TESTFUNC Test_KeTrapFilterX87;
 KMT_TESTFUNC Test_KeStandbySteal;
 #endif
 KMT_TESTFUNC Test_KeDeferredReady;
+KMT_TESTFUNC Test_KeIdleSteal;
 KMT_TESTFUNC Test_KeCacheInvalidation;
 KMT_TESTFUNC Test_KeClockKeepAlive;
 KMT_TESTFUNC Test_KeClockWatchdog;
@@ -280,6 +296,7 @@ KMT_TESTFUNC Test_KeEvent;
 KMT_TESTFUNC Test_KeExpandKernelStack;
 KMT_TESTFUNC Test_KeFloatPointState;
 KMT_TESTFUNC Test_KeGuardedMutex;
+KMT_TESTFUNC Test_CmBootFlush;
 KMT_TESTFUNC Test_CmCallbacks;
 KMT_TESTFUNC Test_CmTransactions;
 KMT_TESTFUNC Test_CmKeyKM;
@@ -322,6 +339,7 @@ KMT_TESTFUNC Test_KeTimer;
 KMT_TESTFUNC Test_KeWaitMultiple;
 KMT_TESTFUNC Test_KernelType;
 KMT_TESTFUNC Test_MmAllocateContiguousNode;
+KMT_TESTFUNC Test_MmContiguousCacheTypes;
 KMT_TESTFUNC Test_MmMdl;
 KMT_TESTFUNC Test_MmMdlDispatch;
 KMT_TESTFUNC Test_MmLargePages;
@@ -370,6 +388,7 @@ KMT_TESTFUNC Test_PoProcessorStateHandler;
 KMT_TESTFUNC Test_PoKernelPowerRequest;
 KMT_TESTFUNC Test_PsNotify;
 KMT_TESTFUNC Test_PsQuota;
+KMT_TESTFUNC Test_PsGetVersion;
 KMT_TESTFUNC Test_PsSystemThread;
 KMT_TESTFUNC Test_PsPico;
 KMT_TESTFUNC Test_PsJobCommit;
@@ -478,6 +497,7 @@ const KMT_TEST TestList[] =
     { "DxgkCoreConcurrency",                Test_DxgkCoreConcurrency },
     { "DxgkContextSync",                   Test_DxgkContextSync },
     { "DxgkPresentQueue",                  Test_DxgkPresentQueue },
+    { "DxgkVsyncPower",                    Test_DxgkVsyncPower },
     { "Rpi5Vc4Pointer",                    Test_Rpi5Vc4Pointer },
     { "DxgkSyncWait",                      Test_DxgkSyncWait },
     { "DxgkTrackedWork",                   Test_DxgkTrackedWork },
@@ -489,6 +509,9 @@ const KMT_TEST TestList[] =
     { "Dxgmms2VidMm",                      Test_Dxgmms2VidMm },
 #ifdef KMT_DXGK_WDDM_ABI
     { "DxgkWddmAbi",                       Test_DxgkWddmAbi },
+#endif
+#ifdef KMT_KUBSAN
+    { "KubsanHandlers",                    Test_KubsanHandlers },
 #endif
 #ifdef KMT_SOFTGPU_GPUVA_ISOLATION
     { "SoftGpuGpuVaIsolation",             Test_SoftGpuGpuVaIsolation },
@@ -523,8 +546,10 @@ const KMT_TEST TestList[] =
     { "-ExTimerInvalidAttributes",           Test_ExTimerInvalidAttributes },
     { "-ExTimerCombinedAttributes",          Test_ExTimerCombinedAttributes },
     { "ExTimeZone",                         Test_ExTimeZone },
+    { "ExHeadless",                         Test_ExHeadless },
     { "ExLicenseDif",                       Test_ExLicenseDif },
     { "ExResource",                         Test_ExResource },
+    { "ExResourceDeleteHeld",               Test_ExResourceDeleteHeld },
     { "ExResourceBoost",                    Test_ExResourceBoost },
     { "ExResourceBoostOwnerPointer",        Test_ExResourceBoostOwnerPointer },
     { "ExRundown",                          Test_ExRundown },
@@ -550,6 +575,8 @@ const KMT_TEST TestList[] =
     { "-HalMessageState",                   Test_HalMessageState },
     { "HalPortIo",                          Test_HalPortIo },
 #endif
+    { "HalDmaAlignment",                    Test_HalDmaAlignment },
+    { "HalRealTimeClock",                   Test_HalRealTimeClock },
     { "HalSystemInfo",                      Test_HalSystemInfo },
     { "IoContainerId",                      Test_IoContainerId },
     { "-IoDriverKeyOpen",                   Test_IoDriverKeyOpen },
@@ -562,11 +589,15 @@ const KMT_TEST TestList[] =
     { "IoCreateFileAccessCheck",            Test_IoCreateFileAccessCheck },
     { "IoCreateSystemThread",               Test_IoCreateSystemThread },
     { "IoWmiAcpi",                          Test_IoWmiAcpi },
+    { "ZwWriteFileAppend",                  Test_ZwWriteFileAppend },
     { "-IoCustomTargetEventReport",         Test_IoCustomTargetEventReport },
     { "IoDeviceInterface",                  Test_IoDeviceInterface },
     { "IoDeviceSecurity",                   Test_IoDeviceSecurity },
     { "IoEvent",                            Test_IoEvent },
     { "-IoInterfaceOrderCheck",             Test_IoInterfaceOrderCheck },
+    { "IoResourceSearch",                   Test_IoResourceSearch },
+    { "IoCreateDriverContext",              Test_IoCreateDriverContext },
+    { "PciLineInterrupt",                   Test_PciLineInterrupt },
     { "IoStorageDumpPath",            Test_IoStorageDumpPath },
     { "IoFilesystem",                       Test_IoFilesystem },
     { "IoInterrupt",                        Test_IoInterrupt },
@@ -597,6 +628,7 @@ const KMT_TEST TestList[] =
     { "IoLargeMemoryResource",              Test_IoLargeMemoryResource },
     { "IoCancelKM",                         Test_IoCancelKM },
     { "IoCloseIrqlKM",                      Test_IoCloseIrqlKM },
+    { "CmBootFlush",                        Test_CmBootFlush },
     { "CmCallbacks",                        Test_CmCallbacks },
     { "CmTransactions",                     Test_CmTransactions },
     { "CmKeyKM",                            Test_CmKeyKM },
@@ -621,6 +653,7 @@ const KMT_TEST TestList[] =
     { "IoPciExpressInterfaces",             Test_IoPciExpressInterfaces },
     { "IoPciEnumeration",                   Test_IoPciEnumeration },
     { "IoPciRom",                           Test_IoPciRom },
+    { "IoPciMessageEnable",                 Test_IoPciMessageEnable },
     { "IoStackLimits",                      Test_IoStackLimits },
     { "IoVpb",                              Test_IoVpb },
     { "SmcLib",                             Test_SmcLib },
@@ -630,8 +663,10 @@ const KMT_TEST TestList[] =
     { "IoVolume",                           Test_IoVolume },
     { "KdBootLog",                          Test_KdBootLog },
     { "-KdBreakContinue",                   Test_KdBreakContinue },
+    { "-KdTimeSlipEvent",                   Test_KdTimeSlipEvent },
     { "-KdbSchedulerCommands",              Test_KdbSchedulerCommands },
     { "-KdbSystemBreak",                    Test_KdbSystemBreak },
+    { "-KdShutdownCrash",                   Test_KdShutdownCrash },
     { "-KdbDeviceCommands",                 Test_KdbDeviceCommands },
     { "-KdbCliCommands",                    Test_KdbCliCommands },
     { "-KdbObjectCommands",                 Test_KdbObjectCommands },
@@ -661,6 +696,7 @@ const KMT_TEST TestList[] =
     { "KeStandbySteal",                     Test_KeStandbySteal },
 #endif
     { "KeDeferredReady",                    Test_KeDeferredReady },
+    { "KeIdleSteal",                        Test_KeIdleSteal },
     { "KeCacheInvalidation",                Test_KeCacheInvalidation },
     { "KeClockKeepAlive",                   Test_KeClockKeepAlive },
     { "-KeClockWatchdog",                   Test_KeClockWatchdog },
@@ -727,6 +763,7 @@ const KMT_TEST TestList[] =
     { "KeWaitMultiple",                     Test_KeWaitMultiple },
     { "KernelType",                         Test_KernelType },
     { "MmAllocateContiguousNode",           Test_MmAllocateContiguousNode },
+    { "MmContiguousCacheTypes",             Test_MmContiguousCacheTypes },
     { "MmMdl",                              Test_MmMdl },
     { "MmMdlDispatch",                      Test_MmMdlDispatch },
     { "MmLargePages",                       Test_MmLargePages },
@@ -814,6 +851,7 @@ const KMT_TEST TestList[] =
     { "RtlIsValidOemCharacter",             Test_RtlIsValidOemCharacter },
     { "PsProcessInfo",                      Test_PsProcessInfo },
     { "PsNotifyKM",                         Test_PsNotifyKM },
+    { "PsGetVersion",                       Test_PsGetVersion },
     { "PsSystemThread",                     Test_PsSystemThread },
     { "PsPico",                             Test_PsPico },
     { "PsJobCommit",                        Test_PsJobCommit },

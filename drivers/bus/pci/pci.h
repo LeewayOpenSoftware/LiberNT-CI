@@ -75,6 +75,8 @@ typedef struct _PCI_DEVICE
     PVOID SavedMsixTable;
     BOOLEAN SleepStateSaved;
     BOOLEAN Reported;
+    UCHAR BarSizeValid;
+    ULONG BarSize[PCI_TYPE0_ADDRESSES];
 } PCI_DEVICE, *PPCI_DEVICE;
 
 
@@ -514,6 +516,10 @@ NTSTATUS
 PdoPowerControl(
     PDEVICE_OBJECT DeviceObject,
     PIRP Irp);
+
+UCHAR
+PciPdoExpressPortType(
+    _In_ PPDO_DEVICE_EXTENSION DeviceExtension);
 
 VOID
 PciSetPowerLevel(

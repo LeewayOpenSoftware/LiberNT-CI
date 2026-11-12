@@ -134,6 +134,12 @@ ScPowerCard(
     if (Minor != SCARD_POWER_DOWN && Error != ERROR_SUCCESS)
     {
         DPRINT1("SCARDSVR: powering the card in '%s' failed %lu\n", Reader->Name, Error);
+        if (ScIoctl(Reader, IOCTL_SMARTCARD_GET_STATE, NULL, 0, &State, sizeof(State), &Returned) == ERROR_SUCCESS &&
+            State <= SCARD_ABSENT)
+        {
+            ScUpdateCard(Reader, State, NULL, 0, FALSE);
+            return SCARD_W_REMOVED_CARD;
+        }
         ScUpdateCard(Reader, SCARD_SWALLOWED, NULL, 0, TRUE);
         return Error == ERROR_NOT_READY ? SCARD_W_REMOVED_CARD : SCARD_W_UNRESPONSIVE_CARD;
     }
@@ -175,6 +181,15 @@ ScSetProtocol(
         return SCARD_E_PROTO_MISMATCH;
     if (Error != ERROR_SUCCESS)
         return ScMapError(Error);
+    if (Returned < sizeof(Selected))
+    {
+        DWORD Attribute = SCARD_ATTR_CURRENT_PROTOCOL_TYPE;
+
+        Error = ScIoctl(Reader, IOCTL_SMARTCARD_GET_ATTRIBUTE, &Attribute, sizeof(Attribute), &Selected,
+                        sizeof(Selected), &Returned);
+        if (Error != ERROR_SUCCESS)
+            return ScMapError(Error);
+    }
     EnterCriticalSection(&ScLock);
     Reader->State = SCARD_SPECIFIC;
     Reader->Protocol = Selected;
@@ -247,16 +262,19 @@ ScTrackReader(
         if (First || Present != WasPresent)
         {
             EnterCriticalSection(&ScLock);
-            if (!First)
+            if (!First || Present)
                 ++Reader->Events;
             Reader->Mute = FALSE;
             LeaveCriticalSection(&ScLock);
-            ScUpdateCard(Reader, State, NULL, 0, FALSE);
             if (Present && State < SCARD_NEGOTIABLE)
             {
                 EnterCriticalSection(&Reader->IoLock);
                 ScPowerCard(Reader, SCARD_RESET_CARD);
                 LeaveCriticalSection(&Reader->IoLock);
+            }
+            else
+            {
+                ScUpdateCard(Reader, State, NULL, 0, FALSE);
             }
             DPRINT1("SCARDSVR: '%s' card %s, state %lu\n", Reader->Name, Present ? "present" : "absent",
                     Reader->State);

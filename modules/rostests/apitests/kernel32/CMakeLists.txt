@@ -1,5 +1,6 @@
 
 add_subdirectory(appinitdll)
+add_subdirectory(loaderwait)
 add_subdirectory(muitest)
 add_subdirectory(redirptest)
 add_subdirectory(werhandler)
@@ -81,6 +82,7 @@ list(APPEND SOURCE
     HeapLowFragmentation.c
     HighResolutionTimerClock.c
     HeapSummary.c
+    IdleClockAccounting.c
     InitOnce.c
     interlck.c
     IoCompletion.c
@@ -111,6 +113,7 @@ list(APPEND SOURCE
     StarvationBoost.c
     SystemTimeChangeTimers.c
     TzSpecificLocalTimeEx.c
+    TimeZoneKeepsTime.c
     StdHandleInheritance.c
     StreamRename.c
     PosixRename.c
@@ -156,6 +159,9 @@ list(APPEND SOURCE
     SetWaitableTimerEx.c
     WaitableTimerHighResolution.c
     WaitableTimerApcReset.c
+    WaitableTimerCancelAtApc.c
+    WaitableTimerCloseAtExpiry.c
+    WaitableTimerSignalTime.c
     WaitableTimerThreadExit.c
     SwitchToThreadCost.c
     SuspendThread.c
@@ -168,6 +174,7 @@ list(APPEND SOURCE
     SecureBootFlag.c
     TerminateProcess.c
     TerminateThread.c
+    TlsFree.c
     ExitedClientId.c
     ExitedProcessImage.c
     ThreadKernelStack.c
@@ -183,6 +190,7 @@ list(APPEND SOURCE
     TimerResolutionSleep.c
     ThreadContextInCallback.c
     TransactedFileApis.c
+    ProcessorEfficiency.c
     TunnelCache.c
     UEFIFirmware.c
     VolumeMountPoints.c

@@ -14,6 +14,7 @@ add_subdirectory(ntos_cc)
 add_subdirectory(ntos_io)
 add_subdirectory(ntos_mm)
 add_subdirectory(ntos_po)
+add_subdirectory(ntos_ps)
 add_subdirectory(tcpip)
 add_subdirectory(wfp)
 
@@ -105,6 +106,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkCoreConcurrency.c
     directx/DxgkContextSync.c
     directx/DxgkPresentQueue.c
+    directx/DxgkVsyncPower.c
     directx/Rpi5Vc4Pointer.c
     directx/DxgkSyncWait.c
     directx/DxgkTrackedWork.c
@@ -117,6 +119,8 @@ list(APPEND KMTEST_DRV_SOURCE
     example/Example.c
     example/KernelType.c
     hal/HalBusData.c
+    hal/HalDmaAlignment.c
+    hal/HalRealTimeClock.c
     hal/HalSystemInfo.c
     ndis/NdisIfProvider.c
     ndis/NdisRwLock.c
@@ -131,6 +135,7 @@ list(APPEND KMTEST_DRV_SOURCE
     npfs/NpfsVolumeInfo.c
     novp_fsrtl/FsRtlRemoveDotsFromPath.c
     ntos_cc/CcLazyWriter.c
+    ntos_cm/CmBootFlush.c
     ntos_cm/CmCallbacks.c
     ntos_cm/CmKeyKM.c
     ntos_cm/CmSecurity.c
@@ -153,6 +158,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExPools.c
     ntos_ex/ExPushLock.c
     ntos_ex/ExResource.c
+    ntos_ex/ExResourceDeleteHeld.c
     ntos_ex/ExResourceBoost.c
     ntos_ex/ExResourceExtra.c
     ntos_ex/ExRundown.c
@@ -166,6 +172,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/InbvVirtualFrameBuffer.c
     ntos_ex/ExUuid.c
     ntos_ex/ExWorkItem.c
+    ntos_ex/ExHeadless.c
     ntos_ex/ExLicenseDif.c
     ntos_ex/ExWddm.c
     ntos_fsrtl/FsRtlDissect.c
@@ -185,6 +192,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoCreateDeviceSecure.c
     ntos_io/IoDeleteDeviceName.c
     ntos_io/IoReadPartitionTable.c
+    ntos_io/IoPciMessageEnable.c
     ntos_io/IoCreateFile.c
     ntos_io/IoCreateFileAccessCheck.c
     ntos_io/IoCreateSystemThread.c
@@ -197,6 +205,9 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoGetRequestorProcess.c
     ntos_io/IoEvent.c
     ntos_io/IoInterfaceOrder.c
+    ntos_io/IoResourceSearch.c
+    ntos_io/IoCreateDriverContext.c
+    ntos_io/PciLineInterrupt.c
     ntos_io/IoStorageDumpPath.c
     ntos_io/IoFilesystem.c
     ntos_io/IoInterrupt.c
@@ -223,8 +234,10 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoNullDeviceKM.c
     ntos_io/IoVolume.c
     ntos_io/IoWmiAcpi.c
+    ntos_io/ZwWriteFileAppend.c
     ntos_kd/KdBootLog.c
     ntos_kd/KdBreakContinue.c
+    ntos_kd/KdTimeSlipEvent.c
     ntos_kd/KdbCliCommands.c
     ntos_kd/KdbContextCommands.c
     ntos_kd/KdbDeviceCommands.c
@@ -233,6 +246,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_kd/KdbObjectCommands.c
     ntos_kd/KdbSchedulerCommands.c
     ntos_kd/KdbSystemBreak.c
+    ntos_kd/KdShutdownCrash.c
     ntos_kd/KdbThreadApc.c
     ntos_kd/KdChangeOption.c
     ntos_kd/KdDebuggerPresent.c
@@ -249,6 +263,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeApcScheduling.c
     ntos_ke/KeApcDpcTransitions.c
     ntos_ke/KeDeferredReady.c
+    ntos_ke/KeIdleSteal.c
     ntos_ke/KeBadInstructionPointer.c
     ntos_ke/KeBugCheckCbKM.c
     ntos_ke/KeBugCheckStop.c
@@ -286,6 +301,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeTimer2KM.c
     ntos_ke/KeWaitMultiple.c
     ntos_mm/MmAllocateContiguousNode.c
+    ntos_mm/MmContiguousCacheTypes.c
     ntos_mm/MmDriverMemory.c
     ntos_mm/MmMdl.c
     ntos_mm/MmMdlDispatch.c
@@ -343,6 +359,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ps/PsWddm.c
     ntos_ps/PsProcessInfo.c
     ntos_ps/PsQuota.c
+    ntos_ps/PsGetVersion.c
     ntos_ps/PsSystemThread.c
     ntos_ps/PsPico.c
     ntos_ps/PsJobCommit.c
@@ -419,6 +436,10 @@ endif()
 if(REACTOS_USE_WDDM AND (REACTOS_WDDM_TARGET_LEVEL GREATER_EQUAL 2000))
     list(APPEND KMTEST_DRV_SOURCE directx/SoftGpuGpuVaIsolation.c)
     set(KMTEST_SOFTGPU_GPUVA_ISOLATION TRUE)
+endif()
+
+if(ENABLE_KERNEL_UBSAN)
+    list(APPEND KMTEST_DRV_SOURCE kubsan/KubsanHandlers.c)
 endif()
 
 if(ARCH STREQUAL "amd64")
@@ -498,6 +519,9 @@ target_include_directories(kmtest_drv PRIVATE
 if(KMTEST_DXGK_WDDM_ABI)
     target_compile_definitions(kmtest_drv PRIVATE
         KMT_DXGK_WDDM_ABI)
+endif()
+if(ENABLE_KERNEL_UBSAN)
+    target_compile_definitions(kmtest_drv PRIVATE KMT_KUBSAN)
 endif()
 if(KMTEST_SOFTGPU_GPUVA_ISOLATION)
     target_compile_definitions(kmtest_drv PRIVATE
@@ -607,6 +631,7 @@ list(APPEND KMTEST_SOURCE
     ntos_cc/CcSetFileSizes_user.c
     ntos_io/IoAddDeviceUnload_user.c
     ntos_io/IoFilterRequirements_user.c
+    ntos_io/IoRemoveChild_user.c
     ntos_io/IoCreateFile_user.c
     ntos_io/IoDeviceObject_user.c
     ntos_io/IoHandleAccess_user.c
@@ -638,6 +663,7 @@ list(APPEND KMTEST_SOURCE
     ntos_po/PoSleepInformation_user.c
     ntos_po/PoIrp_user.c
     ntos_po/PoExecutionState_user.c
+    ntos_ps/XpdmVersion_user.c
     ntos_po/PoFxState_user.c
     ntos_po/PoShutdownPersist_user.c
     ntos_po/PoShutdownTime_user.c
@@ -673,6 +699,8 @@ configure_file(ntos_io/kmtest_addfail.inf kmtest_addfail.inf COPYONLY)
 add_rostests_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/kmtest_addfail.inf")
 configure_file(ntos_io/kmtest_filterreq.inf kmtest_filterreq.inf COPYONLY)
 add_rostests_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/kmtest_filterreq.inf")
+configure_file(ntos_io/kmtest_remchild.inf kmtest_remchild.inf COPYONLY)
+add_rostests_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/kmtest_remchild.inf")
 
 #
 # Group targets
@@ -694,6 +722,7 @@ add_dependencies(kmtest_drivers
     iodeviceobject_drv
     iohelper_drv
     ioreadwrite_drv
+    ioremovechild_drv
     kernel32_drv
     mmmaplockedpagesspecifycache_drv
     ntcreatesection_drv

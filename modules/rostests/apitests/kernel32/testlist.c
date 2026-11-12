@@ -77,6 +77,7 @@ extern void func_GetWsChangesEx(void);
 extern void func_HeapLowFragmentation(void);
 extern void func_HighResolutionTimerClock(void);
 extern void func_HeapSummary(void);
+extern void func_IdleClockAccounting(void);
 extern void func_InitOnce(void);
 extern void func_interlck(void);
 extern void func_IoCompletion(void);
@@ -151,6 +152,9 @@ extern void func_SetUnhandledExceptionFilter(void);
 extern void func_SetWaitableTimerEx(void);
 extern void func_WaitableTimerHighResolution(void);
 extern void func_WaitableTimerApcReset(void);
+extern void func_WaitableTimerCancelAtApc(void);
+extern void func_WaitableTimerCloseAtExpiry(void);
+extern void func_WaitableTimerSignalTime(void);
 extern void func_WaitableTimerThreadExit(void);
 extern void func_SwitchToThreadCost(void);
 extern void func_SuspendThread(void);
@@ -163,6 +167,7 @@ extern void func_SystemFileCacheSize(void);
 extern void func_SecureBootFlag(void);
 extern void func_TerminateProcess(void);
 extern void func_TerminateThread(void);
+extern void func_TlsFree(void);
 extern void func_ExitedClientId(void);
 extern void func_ExitedProcessImage(void);
 extern void func_ThreadKernelStack(void);
@@ -174,8 +179,10 @@ extern void func_SwitchToThreadRoundRobin(void);
 extern void func_YieldStealSwitch(void);
 extern void func_ThreadPowerThrottling(void);
 extern void func_ThreadPreferredUILanguages(void);
+extern void func_TimeZoneKeepsTime(void);
 extern void func_ProcessPowerThrottling(void);
 extern void func_TransactedFileApis(void);
+extern void func_ProcessorEfficiency(void);
 extern void func_TunnelCache(void);
 extern void func_TimerResolutionSleep(void);
 extern void func_ThreadContextInCallback(void);
@@ -277,6 +284,7 @@ const struct test winetest_testlist[] =
     { "HeapLowFragmentation",        func_HeapLowFragmentation },
     { "HighResolutionTimerClock",    func_HighResolutionTimerClock },
     { "HeapSummary",                 func_HeapSummary },
+    { "IdleClockAccounting",         func_IdleClockAccounting },
     { "InitOnce",                    func_InitOnce },
     { "interlck",                    func_interlck },
     { "IoCompletion",                func_IoCompletion },
@@ -348,6 +356,9 @@ const struct test winetest_testlist[] =
     { "SetWaitableTimerEx",          func_SetWaitableTimerEx },
     { "WaitableTimerHighResolution", func_WaitableTimerHighResolution },
     { "WaitableTimerApcReset",       func_WaitableTimerApcReset },
+    { "WaitableTimerCancelAtApc",    func_WaitableTimerCancelAtApc },
+    { "WaitableTimerCloseAtExpiry",  func_WaitableTimerCloseAtExpiry },
+    { "WaitableTimerSignalTime",     func_WaitableTimerSignalTime },
     { "WaitableTimerThreadExit",     func_WaitableTimerThreadExit },
     { "SwitchToThreadCost", func_SwitchToThreadCost },
     { "SuspendThread",               func_SuspendThread },
@@ -360,6 +371,7 @@ const struct test winetest_testlist[] =
     { "SecureBootFlag",              func_SecureBootFlag },
     { "TerminateProcess",            func_TerminateProcess },
     { "TerminateThread",             func_TerminateThread },
+    { "TlsFree",                     func_TlsFree },
     { "ExitedClientId",              func_ExitedClientId },
     { "ExitedProcessImage",          func_ExitedProcessImage },
     { "ThreadKernelStack",           func_ThreadKernelStack },
@@ -371,8 +383,10 @@ const struct test winetest_testlist[] =
     { "YieldStealSwitch",            func_YieldStealSwitch },
     { "ThreadPowerThrottling",       func_ThreadPowerThrottling },
     { "ThreadPreferredUILanguages",  func_ThreadPreferredUILanguages },
+    { "TimeZoneKeepsTime",           func_TimeZoneKeepsTime },
     { "ProcessPowerThrottling",      func_ProcessPowerThrottling },
     { "TransactedFileApis",          func_TransactedFileApis },
+    { "ProcessorEfficiency",         func_ProcessorEfficiency },
     { "TunnelCache",                 func_TunnelCache },
     { "TimerResolutionSleep",        func_TimerResolutionSleep },
     { "ThreadContextInCallback",     func_ThreadContextInCallback },

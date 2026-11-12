@@ -55,6 +55,7 @@ KMT_TESTFUNC Test_KdPullRemoteFile;
 KMT_TESTFUNC Test_KeContextSegments;
 KMT_TESTFUNC Test_KeNonCanonicalReturn;
 KMT_TESTFUNC Test_KeSystemCallInt2E;
+KMT_TESTFUNC Test_IoRemoveChild;
 KMT_TESTFUNC Test_MmMapLockedPagesSpecifyCache;
 KMT_TESTFUNC Test_NtCreateSection;
 KMT_TESTFUNC Test_NtSystemDebugControl;
@@ -69,6 +70,7 @@ KMT_TESTFUNC Test_PoShutdownPersist;
 KMT_TESTFUNC Test_PoShutdownTime;
 KMT_TESTFUNC Test_PoInitiatePowerAction;
 KMT_TESTFUNC Test_BatteryClassNotify;
+KMT_TESTFUNC Test_XpdmVersion;
 KMT_TESTFUNC Test_PoIrp;
 KMT_TESTFUNC Test_PoFxState;
 KMT_TESTFUNC Test_NdisSgDma;
@@ -144,6 +146,7 @@ const KMT_TEST TestList[] =
     { "KdDebugService",               Test_KdDebugService },
     { "KdLiveDump",                   Test_KdLiveDump },
     { "KdPullRemoteFile",             Test_KdPullRemoteFile },
+    { "IoRemoveChild",                Test_IoRemoveChild },
     { "MmMapLockedPagesSpecifyCache", Test_MmMapLockedPagesSpecifyCache },
     { "NtCreateSection",              Test_NtCreateSection },
     { "NdisSgDma",                    Test_NdisSgDma },
@@ -162,6 +165,7 @@ const KMT_TEST TestList[] =
     { "PoFxState",                     Test_PoFxState },
     { "IoDeviceNumaNode",              Test_IoDeviceNumaNode },
     { "BatteryClassNotify",           Test_BatteryClassNotify },
+    { "XpdmVersion",                  Test_XpdmVersion },
     { "PoIrp",                        Test_PoIrp },
     { "RtlAvlTree",                   Test_RtlAvlTree },
     { "RtlException",                 Test_RtlException },
