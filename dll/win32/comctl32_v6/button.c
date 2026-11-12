@@ -91,6 +91,7 @@ typedef struct _BUTTON_INFO
     SIZE             glyph_size;
     RECT             text_margin;
     HANDLE           image; /* Original handle set with BM_SETIMAGE and returned with BM_GETIMAGE. */
+    HIMAGELIST       shield;
     union
     {
         HICON   icon;
@@ -435,6 +436,25 @@ static int get_draw_state(const BUTTON_INFO *infoPtr)
     }
 }
 
+static HIMAGELIST BUTTON_CreateShieldImageList(void)
+{
+    INT cx = GetSystemMetrics(SM_CXSMICON), cy = GetSystemMetrics(SM_CYSMICON);
+    HIMAGELIST himl;
+    HICON icon;
+
+    icon = LoadImageW(NULL, (LPCWSTR)IDI_SHIELD, IMAGE_ICON, cx, cy, LR_SHARED);
+    if (!icon)
+        return NULL;
+
+    himl = ImageList_Create(cx, cy, ILC_COLOR32 | ILC_MASK, 1, 0);
+    if (himl && ImageList_AddIcon(himl, icon) < 0)
+    {
+        ImageList_Destroy(himl);
+        himl = NULL;
+    }
+    return himl;
+}
+
 static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     BUTTON_INFO *infoPtr = (BUTTON_INFO *)GetWindowLongPtrW(hWnd, 0);
@@ -501,6 +521,8 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
             DeleteObject(infoPtr->u.bitmap);
         else if (infoPtr->image_type == IMAGE_ICON)
             DestroyIcon(infoPtr->u.icon);
+        if (infoPtr->shield)
+            ImageList_Destroy(infoPtr->shield);
         Free(infoPtr->note);
         Free(infoPtr);
         break;
@@ -940,6 +962,30 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
         *imagelist = infoPtr->imagelist;
         return TRUE;
+    }
+
+    case BCM_SETSHIELD:
+    {
+        if (lParam && !infoPtr->shield)
+        {
+            infoPtr->shield = BUTTON_CreateShieldImageList();
+            /* FIXME: the shield borrows the image list slot, so BCM_GETIMAGELIST reports it and a caller image list hides it */
+            if (infoPtr->shield && !infoPtr->imagelist.himl)
+            {
+                infoPtr->imagelist.himl = infoPtr->shield;
+                SetRect(&infoPtr->imagelist.margin, 0, 0, 2, 0);
+                infoPtr->imagelist.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+            }
+        }
+        else if (!lParam && infoPtr->shield)
+        {
+            if (infoPtr->imagelist.himl == infoPtr->shield)
+                memset(&infoPtr->imagelist, 0, sizeof(infoPtr->imagelist));
+            ImageList_Destroy(infoPtr->shield);
+            infoPtr->shield = NULL;
+        }
+        InvalidateRect(hWnd, NULL, TRUE);
+        return 1;
     }
 
     case BCM_SETSPLITINFO:
