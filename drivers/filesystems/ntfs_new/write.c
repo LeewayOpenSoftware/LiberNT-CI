@@ -427,6 +427,7 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PWSTR RequestedStream;
     BOOLEAN ResourceAcquired = FALSE;
     BOOLEAN PagingIo = FALSE;
+    BOOLEAN PurgePagingHeld = FALSE;
     PVOID BounceBuffer = NULL;
     PMDL LockMdl = NULL;
     BOOLEAN LockFailed = FALSE;
@@ -555,12 +556,57 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
               FileObj->SectionObjectPointer->DataSectionObject != NULL))
     {
         IO_STATUS_BLOCK FlushStatus;
+        PLARGE_INTEGER PurgeOffset;
+        ULONG PurgeLength;
 
         CcFlushCache(FileObj->SectionObjectPointer, NULL, 0, &FlushStatus);
         if (!NT_SUCCESS(FlushStatus.Status))
         {
             Status = FlushStatus.Status;
             goto Complete;
+        }
+
+        /*
+         * This non-cached write is about to change the data on disk. Flushing
+         * is not enough: cached pages already present stay stale, and a page
+         * fault during the write could re-read the old bytes. Hold
+         * PagingIoResource exclusive across the purge and the write so no
+         * fault reads stale data in the window, and purge the cache so later
+         * cached and mapped reads re-read the new data. (Matches fastfat's
+         * non-cached write coherency; see AUDIT-R1-IO-CC-FS.md A-3.)
+         */
+        ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+        PurgePagingHeld = TRUE;
+
+        /*
+         * Purge only the range being written; a whole-file purge throws away
+         * unrelated cached data. An append-at-end-of-file write has no
+         * resolved offset here, so fall back to the whole file for it.
+         */
+        if (ByteOffset.HighPart < 0)
+        {
+            PurgeOffset = NULL;
+            PurgeLength = 0;
+        }
+        else
+        {
+            PurgeOffset = &ByteOffset;
+            PurgeLength = Length;
+        }
+
+        if (!CcPurgeCacheSection(FileObj->SectionObjectPointer, PurgeOffset, PurgeLength, FALSE))
+        {
+            /*
+             * A pinned or mapped view survived the purge, so a later read of
+             * that view can still return the old bytes. Holding
+             * PagingIoResource exclusive across the write blocks faults in the
+             * meantime, but a surviving mapped view is not refreshed. Record
+             * it rather than silently leave stale data; ntfs_new has no
+             * PurgeFailureMode to hard-fail on, as fastfat does.
+             */
+            DPRINT1("NTFS: non-cached write left a mapped/pinned view un-purged: "
+                    "offset %I64d length %lu\n",
+                    ByteOffset.QuadPart, Length);
         }
     }
 
@@ -765,12 +811,22 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Irp->IoStatus.Information = 0;
     }
 
+    if (PurgePagingHeld)
+    {
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        PurgePagingHeld = FALSE;
+    }
     ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
                                    : NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     ResourceAcquired = FALSE;
 
 Complete:
+    if (PurgePagingHeld)
+    {
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        PurgePagingHeld = FALSE;
+    }
     if (ResourceAcquired)
     {
         ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
