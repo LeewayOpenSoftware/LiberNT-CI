@@ -659,6 +659,7 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
             NtfsDropPagingExtent(Stream);
             Stream->Deleted = TRUE;
             Stream->SizePending = FALSE;
+            Stream->ResidentSizeDeferred = FALSE;
             ExReleaseResourceLite(&Stream->PagingIoResource);
         }
         if (FileObject->SectionObjectPointer)

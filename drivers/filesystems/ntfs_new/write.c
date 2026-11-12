@@ -102,6 +102,8 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     /* A deferred resident size is written by the paging write itself;
      * NtfsPersistPendingSize only handles non-resident streams. */
     FileCB->StreamCB->SizePending = !SizePersisted && !ResidentDeferred;
+    if (ResidentDeferred)
+        FileCB->StreamCB->ResidentSizeDeferred = TRUE;
     ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
 
     if (FileObj->PrivateCacheMap != NULL)
@@ -109,6 +111,22 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     FileObj->Flags |= FO_FILE_SIZE_CHANGED;
     FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_SIZE;
     return TRUE;
+}
+
+static
+VOID
+NtfsSettleResidentSize(_In_ PFileContextBlock FileCB)
+{
+    PAttribute DataAttribute;
+    ULONGLONG RecordSize;
+
+    DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
+    if (!DataAttribute)
+        return;
+    RecordSize = DataAttribute->IsNonResident ? DataAttribute->NonResident.DataSize
+                                              : DataAttribute->Resident.DataLength;
+    if (RecordSize >= (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart)
+        FileCB->StreamCB->ResidentSizeDeferred = FALSE;
 }
 
 NTSTATUS
@@ -661,6 +679,8 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                                  &ByteOffset);
         if (TimesSuppressed)
             (void)NtfsFileRecordSetAutomaticTimestampMask(FileRec, FileCB->AutomaticTimestampMask);
+        if (NT_SUCCESS(Status) && PagingIo && FileCB->StreamCB && FileCB->StreamCB->ResidentSizeDeferred)
+            NtfsSettleResidentSize(FileCB);
 
         /* The library updates duplicated $FILE_NAME information through a
          * separate parent record. Invalidate parsed directory snapshots
