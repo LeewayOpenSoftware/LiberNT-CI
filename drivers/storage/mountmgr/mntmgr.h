@@ -85,6 +85,11 @@ typedef struct _DEVICE_INFORMATION
     LONG MountState;
     PVOID TargetDeviceNotificationEntry;
     PDEVICE_EXTENSION DeviceExtension;
+    /* Consecutive failed writes to this device's remote database and the time
+     * of the last one; the reconcile backs off while they keep failing.
+     * Protected by the remote database semaphore. */
+    ULONG RemoteDatabaseFailures;
+    LARGE_INTEGER RemoteDatabaseLastFailure;
 } DEVICE_INFORMATION, *PDEVICE_INFORMATION;
 
 typedef struct _SYMLINK_INFORMATION
