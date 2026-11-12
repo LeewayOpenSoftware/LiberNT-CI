@@ -1,0 +1,7 @@
+# Pinned Rust toolchain for the lnrspoc kernel-driver PoC (reproducible builds).
+# Exact nightly: 1.98.0-nightly, commit 423e3d2529999d5e57fa0351783d1292b9219ad4, date 2026-05-24.
+# core/compiler_builtins are rebuilt for the custom kernel target via -Zbuild-std, which needs nightly + rust-src.
+[toolchain]
+channel = "nightly-2026-05-24"
+components = ["rust-src", "llvm-tools"]
+profile = "minimal"
