@@ -12,7 +12,7 @@
 
 /* ranges: common 0x0100, paint 0x0200, viewer 0x0300, wordpad 0x0400. */
 
-/* --- common (27) --- */
+/* --- common (29) --- */
 #define LWUI_AUR_COMMON_ABOUT            0x0100u   /* aur.common.about */
 #define LWUI_AUR_COMMON_CLOSE            0x0101u   /* aur.common.close */
 #define LWUI_AUR_COMMON_COPY             0x0102u   /* aur.common.copy */
@@ -29,17 +29,19 @@
 #define LWUI_AUR_COMMON_PASTE            0x010Du   /* aur.common.paste */
 #define LWUI_AUR_COMMON_PRINT            0x010Eu   /* aur.common.print */
 #define LWUI_AUR_COMMON_PROPERTIES       0x010Fu   /* aur.common.properties */
-#define LWUI_AUR_COMMON_REPLACE          0x0110u   /* aur.common.replace */
-#define LWUI_AUR_COMMON_RIBBON_MIN       0x0111u   /* aur.common.ribbon-min */
-#define LWUI_AUR_COMMON_ROTATE_LEFT      0x0112u   /* aur.common.rotate-left */
-#define LWUI_AUR_COMMON_ROTATE_RIGHT     0x0113u   /* aur.common.rotate-right */
-#define LWUI_AUR_COMMON_SAVE             0x0114u   /* aur.common.save */
-#define LWUI_AUR_COMMON_SAVEAS           0x0115u   /* aur.common.saveas */
-#define LWUI_AUR_COMMON_SELECT_ALL       0x0116u   /* aur.common.select-all */
-#define LWUI_AUR_COMMON_STATUSBAR        0x0117u   /* aur.common.statusbar */
-#define LWUI_AUR_COMMON_ZOOM             0x0118u   /* aur.common.zoom */
-#define LWUI_AUR_COMMON_ZOOM_IN          0x0119u   /* aur.common.zoom-in */
-#define LWUI_AUR_COMMON_ZOOM_OUT         0x011Au   /* aur.common.zoom-out */
+#define LWUI_AUR_COMMON_REDO             0x0110u   /* aur.common.redo */
+#define LWUI_AUR_COMMON_REPLACE          0x0111u   /* aur.common.replace */
+#define LWUI_AUR_COMMON_RIBBON_MIN       0x0112u   /* aur.common.ribbon-min */
+#define LWUI_AUR_COMMON_ROTATE_LEFT      0x0113u   /* aur.common.rotate-left */
+#define LWUI_AUR_COMMON_ROTATE_RIGHT     0x0114u   /* aur.common.rotate-right */
+#define LWUI_AUR_COMMON_SAVE             0x0115u   /* aur.common.save */
+#define LWUI_AUR_COMMON_SAVEAS           0x0116u   /* aur.common.saveas */
+#define LWUI_AUR_COMMON_SELECT_ALL       0x0117u   /* aur.common.select-all */
+#define LWUI_AUR_COMMON_STATUSBAR        0x0118u   /* aur.common.statusbar */
+#define LWUI_AUR_COMMON_UNDO             0x0119u   /* aur.common.undo */
+#define LWUI_AUR_COMMON_ZOOM             0x011Au   /* aur.common.zoom */
+#define LWUI_AUR_COMMON_ZOOM_IN          0x011Bu   /* aur.common.zoom-in */
+#define LWUI_AUR_COMMON_ZOOM_OUT         0x011Cu   /* aur.common.zoom-out */
 
 /* --- paint (24) --- */
 #define LWUI_AUR_PAINT_BG_OPAQUE         0x0200u   /* aur.paint.bg-opaque */
