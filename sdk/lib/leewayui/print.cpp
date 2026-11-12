@@ -40,6 +40,7 @@ HRESULT WINAPI LeewayPrintSettingsInitDefault(LeewayPrintSettings *s)
     ZeroMemory(s, sizeof(*s));
     s->margins_cmm.left = s->margins_cmm.top = DEFAULT_MARGIN_CMM;
     s->margins_cmm.right = s->margins_cmm.bottom = DEFAULT_MARGIN_CMM;
+    s->scale_percent = 100;   /* actual size; fit_pages_x/y = 0 */
 
     PRINTDLGW pd;
     ZeroMemory(&pd, sizeof(pd));
