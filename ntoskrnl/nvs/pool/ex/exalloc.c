@@ -47,13 +47,13 @@ ExpPoolExpandTracker(VOID)
     if (Wanted > EX_POOL_BOOT_SLOTS)
         Wanted = EX_POOL_BOOT_SLOTS;
 
-    if (Tracker->TableCount >= Wanted)
+    if (PoolTagTrackerCount(Tracker) >= Wanted)
         return;
 
     if (InterlockedCompareExchange(&ExpPoolState.TrackerExpanding, 1, 0) != 0)
         return;
 
-    while (Tracker->TableCount < Wanted)
+    while (PoolTagTrackerCount(Tracker) < Wanted)
     {
         Table = PoolHeapAllocate(ExpPoolState.Heap[EX_POOL_HEAP_NONPAGED], sizeof(POOL_TAG_TABLE),
                                  'TlpX', 0);
@@ -82,12 +82,17 @@ ExpPoolAllocate(
     if (Heap == NULL)
         return NULL;
 
-    if (ExpPoolState.Tracker.TableCount < (ULONG)KeNumberProcessors)
+    if (PoolTagTrackerCount(&ExpPoolState.Tracker) < (ULONG)KeNumberProcessors)
         ExpPoolExpandTracker();
 
-    Block = PoolHeapAllocateEx(Heap, NumberOfBytes, Tag, HeapFlags, &Actual);
-    if (Block == NULL && HeapIndex == EX_POOL_HEAP_NONPAGED && ExpPoolAttachExpansion())
+    for (;;)
+    {
+        LONG Generation = (LONG)POOL_LOAD_ACQUIRE32(&ExpPoolState.Generation[HeapIndex]);
+
         Block = PoolHeapAllocateEx(Heap, NumberOfBytes, Tag, HeapFlags, &Actual);
+        if (Block != NULL || !ExpPoolGrow(HeapIndex, NumberOfBytes, Generation))
+            break;
+    }
 
     if (Block != NULL)
     {

@@ -15,7 +15,7 @@
 # a time; every path not listed here stays uninitialized, which is how FEX's
 # multi-gigabyte prebuilt test-binary repositories are kept out of the tree.
 
-src-git fex-arm64ec https://github.com/eotics-com/FEX.git;main-ros External/Catch2,External/Vulkan-Headers,External/drm-headers,External/fmt,External/jemalloc_glibc,External/range-v3,External/rpmalloc,External/tracy,External/unordered_dense,External/vixl,External/xxhash,External/zydis,External/zydis/dependencies/zycore,Source/Common/cpp-optparse
+src-git fex-arm64ec https://github.com/LiberNT/FEX.git;main-ros External/Catch2,External/Vulkan-Headers,External/drm-headers,External/fmt,External/jemalloc_glibc,External/range-v3,External/rpmalloc,External/tracy,External/unordered_dense,External/vixl,External/xxhash,External/zydis,External/zydis/dependencies/zycore,Source/Common/cpp-optparse
 
 # Pinned to a commit, not the branch head: ros-dev moves and its 2026-11-11 head adds
 # Crocus d3dkmt sources that include drivers/directx/hdgfx_umd.h, which this tree

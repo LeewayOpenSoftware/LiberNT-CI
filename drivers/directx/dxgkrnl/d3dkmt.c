@@ -5941,7 +5941,7 @@ DxgkpBeginSynchronizedLock(
                 return Status;
         }
 
-        if (!DxgkBeginKmdTransaction(Adapter))
+        if (!DxgkBeginKmdTransactionPastMonitorPower(Adapter))
             return STATUS_DELETE_PENDING;
         if (!DxgkpDeviceExecutionActive(Device))
         {
@@ -11189,7 +11189,7 @@ DxgkSubmitCommand(
      * through VidMm. The scheduler pins an existing command mapping when
      * present, but an absent mapping must not reject that driver contract. */
 
-    if (!DxgkBeginKmdTransaction(Adapter))
+    if (!DxgkBeginKmdTransactionPastMonitorPower(Adapter))
     {
         DxgkDereferenceContext(Context);
         return STATUS_DELETE_PENDING;
@@ -15548,8 +15548,8 @@ DxgkDispatchDeviceControl(
      * Route \Device\Video0 IOCTLs (IOCTL_VIDEO_*) to the display handler.
      * The display handler completes the IRP and returns TRUE.
      */
-    if (DxgkDisplayDispatchIoctl(DeviceObject, Irp))
-        return STATUS_SUCCESS;
+    if (DxgkDisplayDispatchIoctl(DeviceObject, Irp, &Status))
+        return Status;
 
     if (Stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_RXGK_QUERY_MONITOR_DESCRIPTOR)
         return DxgkpChildQueryMonitorDescriptor(DeviceObject, Irp);

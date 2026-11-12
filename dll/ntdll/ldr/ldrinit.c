@@ -1452,6 +1452,8 @@ LdrShutdownThread(VOID)
     RtlProcessFlsData(Teb->FlsData, 2);
     Teb->FlsData = NULL;
 
+    RtlpFreeThreadPreferredUILanguages();
+
     /* Check for Fiber data */
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     if (Teb->ReservedPad2)

@@ -48,7 +48,9 @@ add_library(ntfslib_linux STATIC
     "${NTFSLIB_ROOT}/src/filerecord/write/filedata.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/write/filename.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/write/move.cpp"
+    "${NTFSLIB_ROOT}/src/filerecord/write/objectid.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/write/reparse.cpp"
+    "${NTFSLIB_ROOT}/src/filerecord/write/streamrename.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/filerecord.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/fixup.cpp"
     "${NTFSLIB_ROOT}/src/lfs/lfs.cpp"
@@ -747,6 +749,15 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
         )
+        add_test(
+            NAME ntfslib_linux_check_crosslink
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/check_crosslink_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+                "${NTFSCP_EXECUTABLE}"
+                "${NTFSCAT_EXECUTABLE}"
+        )
     endif()
     if(MKNTFS_EXECUTABLE AND
        NTFSCP_EXECUTABLE AND
@@ -767,4 +778,10 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${XXD_EXECUTABLE}"
         )
     endif()
+    add_test(
+        NAME ntfslib_linux_case_sensitive
+        COMMAND /bin/sh
+            "${CMAKE_CURRENT_LIST_DIR}/tests/case_sensitive_smoke.sh"
+            "$<TARGET_FILE:ntfslib_fuse>"
+    )
 endif()

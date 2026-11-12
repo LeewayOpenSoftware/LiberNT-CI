@@ -9,10 +9,12 @@ list(APPEND SOURCE
     keyboard.c
     misc.c
     mouse.c
+    packet.c
     pnp.c
     ps2pp.c
     readwrite.c
     registry.c
+    sync_core.c
     i8042prt.h)
 
 add_library(i8042prt MODULE

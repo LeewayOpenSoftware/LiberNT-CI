@@ -4,6 +4,7 @@ list(APPEND SOURCE
     ControlServiceEx.c
     CopySid.c
     CreateService.c
+    CryptCreateHash.c
     DuplicateTokenEx.c
     EnableTraceEx.c
     EnumerateTraceGuidsEx.c
@@ -13,30 +14,41 @@ list(APPEND SOURCE
     InitiateShutdown.c
     IntegrityLabels.c
     LogonSession.c
+    LogonSessionEnd.c
     LogonUserNetwork.c
     IsTextUnicode.c
     LockServiceDatabase.c
     LookupAccountName.c
     LookupAccountSid.c
+    MachineGuid.c
     OpenTrace.c
     QueryServiceConfig2.c
     RegCreateKeyEx.c
     RegCreateKeyTransacted.c
     RegEnumKey.c
     RegEnumValueW.c
+    RegFlushKey.c
+    RegNotifyThreadExit.c
+    RegLoadAppKey.c
     RegOpenKeyExW.c
     RegOpenKeyTransacted.c
     RegQueryInfoKey.c
     RegQueryValueExW.c
     RtlEncryptMemory.c
     SaferIdentifyLevel.c
+    SaferLevels.c
+    SaferRules.c
     ServiceArgs.c
     ServiceCrash.c
     ServiceEnv.c
     ServiceNetwork.c
+    ServicePowerSetting.c
+    StartServiceCtrlDispatcher.c
     TriggerInfo.c
     TokenBnoIsolation.c
+    TraceEvents.c
     TraceGuids.c
+    UserHiveAccess.c
     svchlp.c)
 
 list(APPEND PCH_SKIP_SOURCE

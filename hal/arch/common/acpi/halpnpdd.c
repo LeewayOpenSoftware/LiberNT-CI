@@ -832,9 +832,9 @@ HalpDispatchPnpFdo(
             DPRINT("Querying interface for FDO\n");
             Status = HalpQueryInterface(DeviceObject,
                                         IoStackLocation->Parameters.QueryInterface.InterfaceType,
-                                        IoStackLocation->Parameters.QueryInterface.Size,
-                                        IoStackLocation->Parameters.QueryInterface.InterfaceSpecificData,
                                         IoStackLocation->Parameters.QueryInterface.Version,
+                                        IoStackLocation->Parameters.QueryInterface.InterfaceSpecificData,
+                                        IoStackLocation->Parameters.QueryInterface.Size,
                                         IoStackLocation->Parameters.QueryInterface.Interface,
                                         (PVOID)&Irp->IoStatus.Information);
             break;
@@ -987,9 +987,9 @@ HalpDispatchPnpPdo(
             DPRINT("Querying interface for PDO\n");
             Status = HalpQueryInterface(DeviceObject,
                                         IoStackLocation->Parameters.QueryInterface.InterfaceType,
-                                        IoStackLocation->Parameters.QueryInterface.Size,
-                                        IoStackLocation->Parameters.QueryInterface.InterfaceSpecificData,
                                         IoStackLocation->Parameters.QueryInterface.Version,
+                                        IoStackLocation->Parameters.QueryInterface.InterfaceSpecificData,
+                                        IoStackLocation->Parameters.QueryInterface.Size,
                                         IoStackLocation->Parameters.QueryInterface.Interface,
                                         (PVOID)&Irp->IoStatus.Information);
             break;
@@ -1200,6 +1200,7 @@ HaliInitPnpDriver(VOID)
     PAGED_CODE();
 
     /* Create the driver */
+    /* TODO: Windows 11 ARM64 reports this HAL as ROOT\ARM64_HAL\0000, so its driver is not ACPI_HAL there */
     RtlInitUnicodeString(&DriverString, L"\\Driver\\ACPI_HAL");
     Status = IoCreateDriver(&DriverString, HalpDriverEntry);
 

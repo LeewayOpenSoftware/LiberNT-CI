@@ -197,24 +197,26 @@ UpdateDriverForPlugAndPlayDevicesW(
     OUT PBOOL bRebootRequired OPTIONAL)
 {
     DEVINSTDATA DevInstData;
-    DWORD i;
+    DWORD i, LastError;
     LPWSTR Buffer = NULL;
     DWORD BufferSize;
     LPCWSTR CurrentHardwareId; /* Pointer into Buffer */
     DWORD Property;
     BOOL FoundHardwareId, FoundAtLeastOneDevice = FALSE;
     BOOL FoundCurrentDriver = FALSE;
-    BOOL ret = FALSE;
+    BOOL ret = FALSE, Wow64 = FALSE;
     DWORD InstallError = ERROR_SUCCESS; /* Last InstallCurrentDriver failure on a matching device */
-    DWORD LastError;
 
     DevInstData.hDevInfo = INVALID_HANDLE_VALUE;
 
     TRACE("UpdateDriverForPlugAndPlayDevicesW(%p %s %s 0x%x %p)\n",
         hwndParent, debugstr_w(HardwareId), debugstr_w(FullInfPath), InstallFlags, bRebootRequired);
 
-    if (bRebootRequired)
-        *bRebootRequired = FALSE;
+    if (IsWow64Process(GetCurrentProcess(), &Wow64) && Wow64)
+    {
+        SetLastError(ERROR_IN_WOW64);
+        return FALSE;
+    }
 
     if (!HardwareId || !FullInfPath)
     {
@@ -235,6 +237,9 @@ UpdateDriverForPlugAndPlayDevicesW(
         SetLastError(ERROR_FILE_NOT_FOUND);
         goto cleanup;
     }
+
+    if (bRebootRequired)
+        *bRebootRequired = FALSE;
 
     /* Enumerate all devices of the system */
     DevInstData.hDevInfo = SetupDiGetClassDevsW(NULL, NULL, hwndParent, DIGCF_ALLCLASSES | DIGCF_PRESENT);

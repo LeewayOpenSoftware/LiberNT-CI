@@ -1132,6 +1132,11 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
 
     /* Remove the timer from the timer list and check if it's empty */
     Hand = Timer->Header.Hand;
+    ASSERT(Hand < TIMER_TABLE_SIZE);
+    ASSERT(Hand == KiComputeTimerTableIndex(Timer->DueTime.QuadPart));
+    ASSERT(Timer->TimerListEntry.Flink != NULL && Timer->TimerListEntry.Blink != NULL);
+    ASSERT(Timer->TimerListEntry.Flink->Blink == &Timer->TimerListEntry);
+    ASSERT(Timer->TimerListEntry.Blink->Flink == &Timer->TimerListEntry);
     if (RemoveEntryList(&Timer->TimerListEntry))
     {
         /* Get the respective timer table entry */
@@ -1302,6 +1307,12 @@ KxRemoveTreeTimer(IN PKTIMER Timer)
         Removed = TRUE;
 
         /* Remove it from the timer list */
+        ASSERT((Timer->TimerListEntry.Flink == NULL) == (Timer->TimerListEntry.Blink == NULL));
+        if (Timer->TimerListEntry.Flink != NULL)
+        {
+            ASSERT(Timer->TimerListEntry.Flink->Blink == &Timer->TimerListEntry);
+            ASSERT(Timer->TimerListEntry.Blink->Flink == &Timer->TimerListEntry);
+        }
         if (Timer->TimerListEntry.Flink && RemoveEntryList(&Timer->TimerListEntry))
         {
             /* Get the entry and check if it's empty */
@@ -1915,6 +1926,20 @@ KiCompleteThreadSwitch(
 // This routine must be entered with the PRCB lock held and it will exit
 // with the PRCB lock released!
 //
+FORCEINLINE
+VOID
+KiAssertReadyQueue(IN PKPRCB Prcb,
+                   IN KPRIORITY Priority)
+{
+    UNREFERENCED_PARAMETER(Prcb);
+    UNREFERENCED_PARAMETER(Priority);
+    ASSERT(Priority >= 0 && Priority <= HIGH_PRIORITY);
+    ASSERT(((Prcb->ReadySummary & PRIORITY_MASK(Priority)) == 0) ==
+           IsListEmpty(&Prcb->DispatcherReadyListHead[Priority]));
+    ASSERT(Prcb->DispatcherReadyListHead[Priority].Flink->Blink == &Prcb->DispatcherReadyListHead[Priority]);
+    ASSERT(Prcb->DispatcherReadyListHead[Priority].Blink->Flink == &Prcb->DispatcherReadyListHead[Priority]);
+}
+
 _Requires_lock_held_(Prcb->PrcbLock)
 _Releases_lock_(Prcb->PrcbLock)
 FORCEINLINE
@@ -1963,6 +1988,7 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
         /* Sanity check */
         ASSERT((Priority >= 0) && (Priority <= HIGH_PRIORITY));
+        KiAssertReadyQueue(Prcb, Priority);
 
         /* Insert this thread in the appropriate order */
         Preempted ? InsertHeadList(&Prcb->DispatcherReadyListHead[Priority],
@@ -1972,6 +1998,7 @@ KxQueueReadyThread(IN PKTHREAD Thread,
 
         /* Update the ready summary */
         Prcb->ReadySummary |= PRIORITY_MASK(Priority);
+        KiAssertReadyQueue(Prcb, Priority);
 
         /* Sanity check */
         ASSERT(Priority == Thread->Priority);
@@ -2015,12 +2042,16 @@ KiSelectReadyThread(IN KPRIORITY Priority,
 
     /* Make sure the list isn't empty at the highest priority */
     ASSERT(IsListEmpty(&Prcb->DispatcherReadyListHead[HighPriority]) == FALSE);
+    KiAssertReadyQueue(Prcb, HighPriority);
 
     /* Get the first thread on the list */
     ListEntry = Prcb->DispatcherReadyListHead[HighPriority].Flink;
     Thread = CONTAINING_RECORD(ListEntry, KTHREAD, WaitListEntry);
 
     /* Make sure this thread is here for a reason */
+    ASSERT(Thread != Prcb->IdleThread);
+    ASSERT(Thread->State == Ready && !Thread->ProcessReadyQueue);
+    ASSERT(ListEntry->Flink->Blink == ListEntry && ListEntry->Blink->Flink == ListEntry);
     ASSERT(HighPriority == Thread->Priority);
     ASSERT(KiThreadAffinityMask(Thread) & AFFINITY_MASK(Prcb->Number));
     ASSERT(Thread->NextProcessor == Prcb->Number);
@@ -2031,6 +2062,7 @@ KiSelectReadyThread(IN KPRIORITY Priority,
         /* The list is empty now, reset the ready summary */
         Prcb->ReadySummary ^= PRIORITY_MASK(HighPriority);
     }
+    KiAssertReadyQueue(Prcb, HighPriority);
 
     /* Sanity check and return the thread */
 Quickie:
@@ -2186,6 +2218,9 @@ _KeAcquireGuardedMutexUnsafe(IN OUT PKGUARDED_MUTEX GuardedMutex)
         KiAcquireGuardedMutex(GuardedMutex);
     }
 
+    ASSERT((GuardedMutex->Count & GM_LOCK_BIT) == 0);
+    ASSERT(GuardedMutex->Owner == NULL);
+
     /* Set the Owner */
     GuardedMutex->Owner = Thread;
 }
@@ -2250,6 +2285,9 @@ _KeAcquireGuardedMutex(IN PKGUARDED_MUTEX GuardedMutex)
         /* The Guarded Mutex was already locked, enter contented case */
         KiAcquireGuardedMutex(GuardedMutex);
     }
+
+    ASSERT((GuardedMutex->Count & GM_LOCK_BIT) == 0);
+    ASSERT(GuardedMutex->Owner == NULL);
 
     /* Set the Owner and Special APC Disable state */
     GuardedMutex->Owner = Thread;
@@ -2318,6 +2356,9 @@ _KeTryToAcquireGuardedMutex(IN OUT PKGUARDED_MUTEX GuardedMutex)
         /* Return failure */
         return FALSE;
     }
+
+    ASSERT((GuardedMutex->Count & GM_LOCK_BIT) == 0);
+    ASSERT(GuardedMutex->Owner == NULL);
 
     /* Set the Owner and APC State */
     GuardedMutex->Owner = Thread;

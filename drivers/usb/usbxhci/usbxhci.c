@@ -1279,6 +1279,12 @@ XHCI_AckPortChangeInternal(
     if (!Extension || !Port || !ChangeMask)
         return;
 
+    if (XHCI_IsDebuggerPort(Extension, Port))
+    {
+        InterlockedAnd(&Extension->DebugPortChange[0], ~(LONG)(ChangeMask & XHCI_PORTSC_CHANGE_MASK));
+        return;
+    }
+
     PortStatusReg = XHCI_GetPortStatusRegister(Extension, Port);
     if (!PortStatusReg)
         return;
@@ -2922,10 +2928,11 @@ XHCI_ResetEndpointRing(
                 StreamId <= Endpoint->StreamRingCount)
             {
                 PXHCI_STREAM_CONTEXT StreamCtx = &Endpoint->StreamContexts[StreamId];
-                StreamCtx->StreamInfo = XHCI_STREAM_CTX_TYPE_PRIMARY;
                 StreamCtx->TrDequeuePointer =
                     (RingPtr->PhysicalAddress.QuadPart & ~0xFULL) |
+                    ((ULONGLONG)XHCI_STREAM_CTX_TYPE_PRIMARY << XHCI_STREAM_CTX_TYPE_SHIFT) |
                     (RingPtr->CycleState & 0x1);
+                StreamCtx->StoppedEdtla = 0;
             }
         }
     }
@@ -2952,6 +2959,18 @@ XHCI_GetMaxStreamId(
 }
 
 static
+ULONG
+XHCI_MaxPStreams(
+    _In_ USHORT MaxStreamId)
+{
+    ULONG MaxPStreams = 1;
+
+    while ((2UL << MaxPStreams) < (ULONG)MaxStreamId + 1)
+        MaxPStreams++;
+    return MaxPStreams;
+}
+
+static
 MPSTATUS
 XHCI_AllocateStreamResources(
     _In_ PXHCI_EXTENSION Extension,
@@ -2968,7 +2987,7 @@ XHCI_AllocateStreamResources(
         return MP_STATUS_ERROR;
 
     StreamRingCount = (SIZE_T)MaxStreamId + 1;
-    ContextSize = sizeof(XHCI_STREAM_CONTEXT) * StreamRingCount;
+    ContextSize = sizeof(XHCI_STREAM_CONTEXT) * ((SIZE_T)2 << XHCI_MaxPStreams(MaxStreamId));
     AllocationSize = XHCI_ALIGN_UP(ContextSize, 64);
 
     {
@@ -2977,14 +2996,7 @@ XHCI_AllocateStreamResources(
         PHYSICAL_ADDRESS BoundaryAddress;
 
         LowAddress.QuadPart = 0;
-        /*
-         * xHCI spec requires Stream Context Array to be 64-byte aligned.
-         * Use BoundaryAddress (alignment constraint) instead of SkipBytes.
-         * MmAllocateContiguousMemorySpecifyCache with BoundaryAddress ensures
-         * the allocation doesn't cross a boundary of that size, effectively
-         * guaranteeing alignment to 64 bytes when the size is a multiple of 64.
-         */
-        BoundaryAddress.QuadPart = 64;
+        BoundaryAddress.QuadPart = 0;
         if (Extension && Extension->Supports64Bit &&
             !(Extension->Quirks & XHCI_QUIRK_FORCE_32BIT_DMA))
         {
@@ -3599,15 +3611,7 @@ XHCI_ConfigureSlotEndpoint(
      */
     if (Endpoint->StreamsEnabled && Endpoint->MaxStreamId != 0)
     {
-        ULONG MaxPStreams = 0;
-        USHORT StreamCount = Endpoint->MaxStreamId;
-
-        /* Calculate log2(StreamCount + 1) - StreamCount is already validated as power of 2 */
-        while (StreamCount > 0)
-        {
-            MaxPStreams++;
-            StreamCount >>= 1;
-        }
+        ULONG MaxPStreams = XHCI_MaxPStreams(Endpoint->MaxStreamId);
 
         EpCtx->EpInfo |= ((MaxPStreams & 0x1F) << XHCI_EPCTX_MAX_PSTREAMS_SHIFT);
         EpCtx->EpInfo |= XHCI_EPCTX_LSA_FLAG;
@@ -4560,7 +4564,7 @@ XHCI_PrepareBounceBuffer(
     }
 
     Lowest.QuadPart = 0;
-    Highest.QuadPart = 0xFFFFFFFFull;
+    Highest.QuadPart = XHCI_Requires32BitDma(Extension) ? 0xFFFFFFFFull : 0xFFFFFFFFFFFFFFFFull;
     Boundary.QuadPart = 0;
 
     CacheType = XHCI_GetDmaCacheType(Extension);
@@ -4586,7 +4590,7 @@ XHCI_PrepareBounceBuffer(
     if (DataIn)
         RtlZeroMemory(Buffer, Length);
 
-    if ((Transfer->BouncePhysicalAddress.QuadPart >> 32) != 0)
+    if (XHCI_Requires32BitDma(Extension) && (Transfer->BouncePhysicalAddress.QuadPart >> 32) != 0)
     {
         DPRINT1("usbxhci: bounce buffer above 4G (PA=%I64x len=%lu)\n",
                 Transfer->BouncePhysicalAddress.QuadPart,
@@ -4708,7 +4712,7 @@ XHCI_InitBouncePool(
     KeInitializeSpinLock(&Extension->BounceBufferLock);
 
     Low.QuadPart = 0;
-    High.QuadPart = 0xFFFFFFFFull;
+    High.QuadPart = XHCI_Requires32BitDma(Extension) ? 0xFFFFFFFFull : 0xFFFFFFFFFFFFFFFFull;
     Boundary.QuadPart = 0;
     CacheType = XHCI_GetDmaCacheType(Extension);
 
@@ -4729,7 +4733,7 @@ XHCI_InitBouncePool(
         }
 
         Physical = MmGetPhysicalAddress(Buffer);
-        if ((Physical.QuadPart >> 32) != 0)
+        if (XHCI_Requires32BitDma(Extension) && (Physical.QuadPart >> 32) != 0)
         {
             DPRINT1("usbxhci: bounce pool entry above 4G (slot=%lu PA=%I64x)\n",
                     Index,
@@ -5249,21 +5253,25 @@ XHCI_HandleEnumerationTransfer(
                 BufferLength >= sizeof(USB_DEVICE_DESCRIPTOR))
             {
                 PUSB_DEVICE_DESCRIPTOR DevDesc = (PUSB_DEVICE_DESCRIPTOR)Buffer;
+                ULONG DescriptorMps = DevDesc->bMaxPacketSize0;
 
+                /* USB 3.2 9.6.1: a bcdUSB 3.x device gives bMaxPacketSize0 as an exponent (9 = 512). */
+                if (DevDesc->bcdUSB >= 0x0300 && DescriptorMps < 16)
+                    DescriptorMps = 1UL << DescriptorMps;
 
                 if (Endpoint->EndpointProperties.DeviceSpeed < UsbSuperSpeed &&
-                    Endpoint->EndpointProperties.MaxPacketSize != DevDesc->bMaxPacketSize0 &&
-                    DevDesc->bMaxPacketSize0 != 0)
+                    Endpoint->EndpointProperties.MaxPacketSize != DescriptorMps &&
+                    DescriptorMps != 0)
                 {
-                    DPRINT1("usbxhci: Detected EP0 MPS mismatch (Msg=%u vs Ctx=%u) -- updating\n",
-                            DevDesc->bMaxPacketSize0,
+                    DPRINT1("usbxhci: Detected EP0 MPS mismatch (Msg=%lu vs Ctx=%lu) -- updating\n",
+                            DescriptorMps,
                             Endpoint->EndpointProperties.MaxPacketSize);
 
-                    Endpoint->EndpointProperties.MaxPacketSize = DevDesc->bMaxPacketSize0;
+                    Endpoint->EndpointProperties.MaxPacketSize = DescriptorMps;
 
                     if (KeGetCurrentIrql() <= PASSIVE_LEVEL)
                     {
-                        XHCI_UpdateEp0MaxPacketSize(Extension, Endpoint->Slot, DevDesc->bMaxPacketSize0);
+                        XHCI_UpdateEp0MaxPacketSize(Extension, Endpoint->Slot, DescriptorMps);
                     }
                     else
                     {
@@ -5281,7 +5289,7 @@ XHCI_HandleEnumerationTransfer(
                             {
                                 Work->Extension = Extension;
                                 Work->Slot = Endpoint->Slot;
-                                Work->MaxPacketSize = DevDesc->bMaxPacketSize0;
+                                Work->MaxPacketSize = DescriptorMps;
                                 ExInitializeWorkItem(&Work->WorkItem, XHCI_UpdateEp0MaxPacketSizeWorker, Work);
                                 ExQueueWorkItem(&Work->WorkItem, CriticalWorkQueue);
                             }
@@ -6645,6 +6653,11 @@ XHCI_FinalizeDisableSlot(
     Slot->RootPortNumber = 0;
     Slot->RouteString = 0;
     Slot->HubFieldsConfigured = FALSE;
+    if (Slot->DebugAdopted)
+    {
+        Slot->DeviceContext = Slot->OwnDeviceContext;
+        Slot->DebugAdopted = FALSE;
+    }
     Slot->HighestEndpointId = 1;
     XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
     RtlZeroMemory(Slot->EndpointTable, sizeof(Slot->EndpointTable));
@@ -8912,6 +8925,69 @@ XHCI_AddressDeviceSlot(
     return Status;
 }
 
+static
+BOOLEAN
+XHCI_AdoptDebugHub(
+    _Inout_ PXHCI_EXTENSION Extension,
+    _In_ PUSBPORT_ENDPOINT_PROPERTIES EndpointProperties,
+    _Out_ PXHCI_DEVICE_SLOT *AdoptedSlot)
+{
+    PKD_USB_SHARE Share = &Extension->DebugShareInfo;
+    ULONG Route = EndpointProperties->RouteString & XHCI_SLOT_ROUTE_MASK;
+    ULONG RootPort = EndpointProperties->RootPortNumber ? EndpointProperties->RootPortNumber :
+                                                          EndpointProperties->PortNumber;
+    PXHCI_DEVICE_SLOT Slot;
+    PULONG Context;
+    ULONG Hub;
+
+    *AdoptedSlot = NULL;
+    if (!Extension->DebugShare || !Extension->DebugHubShare || RootPort != Share->Port)
+        return FALSE;
+
+    for (Hub = 0; Hub < Extension->DebugHubCount; Hub++)
+    {
+        if (Extension->DebugHubRoute[Hub] == Route)
+            break;
+    }
+
+    if (Hub == Extension->DebugHubCount)
+        return FALSE;
+
+    Slot = XHCI_GetSlot(Extension, Extension->DebugHubSlot[Hub]);
+    Context = (PULONG)(ULONG_PTR)Share->ContextAddresses[Hub];
+    if (!Slot || Slot->InUse || !Context)
+        return TRUE;
+
+    Slot->OwnDeviceContext = Slot->DeviceContext;
+    Slot->DeviceContext.VirtualAddress = Context;
+    Slot->DeviceContext.PhysicalAddress.QuadPart = Share->DeviceContexts[Hub];
+    Slot->DeviceContext.Length = XHCI_DC_CONTEXT_LENGTH(Extension);
+    Slot->DebugAdopted = TRUE;
+    if (XHCI_AssignSlot(Extension, Slot->SlotId) != MP_STATUS_SUCCESS)
+    {
+        Slot->DeviceContext = Slot->OwnDeviceContext;
+        Slot->DebugAdopted = FALSE;
+        return TRUE;
+    }
+
+    Slot->Addressed = TRUE;
+    Slot->Configured = TRUE;
+    Slot->PortNumber = (UCHAR)EndpointProperties->PortNumber;
+    Slot->RootPortNumber = (UCHAR)RootPort;
+    Slot->RouteString = Route;
+    Slot->HubAddress = EndpointProperties->TtHubAddr;
+    Slot->TtPortNumber = EndpointProperties->TtPortNumber;
+    Slot->DeviceSpeed = EndpointProperties->DeviceSpeed;
+    Slot->IsHub = TRUE;
+    Slot->HubPortCount = (UCHAR)((Context[1] & XHCI_SLOT_MAX_PORTS_MASK) >> XHCI_SLOT_MAX_PORTS_SHIFT);
+    Slot->MultiTt = (Context[0] & XHCI_SLOT_MTT_BIT) != 0;
+    Slot->TtThinkTime = (UCHAR)((Context[2] & XHCI_SLOT_TT_THINK_TIME_MASK) >> XHCI_SLOT_TT_THINK_TIME_SHIFT);
+    Slot->HasTtInfo = EndpointProperties->DeviceSpeed == UsbHighSpeed;
+    Slot->HubFieldsConfigured = (Context[0] & XHCI_SLOT_HUB_BIT) && Slot->HubPortCount;
+    *AdoptedSlot = Slot;
+    return TRUE;
+}
+
 static MPSTATUS
 XHCI_BringupDefaultControlEndpoint(
     _Inout_ PXHCI_EXTENSION Extension,
@@ -8922,6 +8998,7 @@ XHCI_BringupDefaultControlEndpoint(
     UCHAR SlotId = 0;
     ULONG CompletionCode = 0;
     PXHCI_DEVICE_SLOT Slot;
+    BOOLEAN Adopted;
 
     if (!Extension || !Endpoint || !EndpointProperties)
         return MP_STATUS_ERROR;
@@ -8929,37 +9006,44 @@ XHCI_BringupDefaultControlEndpoint(
     KeInitializeSpinLock(&Endpoint->Lock);
     XHCI_InitEndpointTransferState(Endpoint);
 
-    DPRINT("usbxhci: EP0 bring-up: issuing ENABLE_SLOT for port %u (MPS=%lu)\n",
-            EndpointProperties->PortNumber,
-            EndpointProperties->MaxPacketSize);
-
-    Status = XHCI_SendCommand(Extension,
-                              XHCI_TRB_TYPE_ENABLE_SLOT,
-                              0,
-                              0,
-                              0,
-                              XHCI_COMMAND_TIMEOUT_MS,
-                              TRUE,
-                              &SlotId,
-                              &CompletionCode);
-    if (Status != MP_STATUS_SUCCESS)
-    {
-        DPRINT1("usbxhci: EnableSlot failed for EP0 (Status=%lu Code=%lu)\n",
-                Status,
-                CompletionCode);
-        return Status;
-    }
-
-    Slot = XHCI_GetSlot(Extension, SlotId);
-    if (!Slot || !Slot->InUse)
+    Adopted = XHCI_AdoptDebugHub(Extension, EndpointProperties, &Slot);
+    if (Adopted && !Slot)
         return MP_STATUS_ERROR;
 
-    Status = XHCI_AddressDeviceSlot(Extension,
-                                    Slot,
-                                    EndpointProperties,
-                                    TRUE);
-    if (Status != MP_STATUS_SUCCESS)
-        return Status;
+    if (!Adopted)
+    {
+        DPRINT("usbxhci: EP0 bring-up: issuing ENABLE_SLOT for port %u (MPS=%lu)\n",
+                EndpointProperties->PortNumber,
+                EndpointProperties->MaxPacketSize);
+
+        Status = XHCI_SendCommand(Extension,
+                                  XHCI_TRB_TYPE_ENABLE_SLOT,
+                                  0,
+                                  0,
+                                  0,
+                                  XHCI_COMMAND_TIMEOUT_MS,
+                                  TRUE,
+                                  &SlotId,
+                                  &CompletionCode);
+        if (Status != MP_STATUS_SUCCESS)
+        {
+            DPRINT1("usbxhci: EnableSlot failed for EP0 (Status=%lu Code=%lu)\n",
+                    Status,
+                    CompletionCode);
+            return Status;
+        }
+
+        Slot = XHCI_GetSlot(Extension, SlotId);
+        if (!Slot || !Slot->InUse)
+            return MP_STATUS_ERROR;
+
+        Status = XHCI_AddressDeviceSlot(Extension,
+                                        Slot,
+                                        EndpointProperties,
+                                        TRUE);
+        if (Status != MP_STATUS_SUCCESS)
+            return Status;
+    }
 
     Endpoint->Slot = Slot;
     Endpoint->SlotId = Slot->SlotId;
@@ -8981,6 +9065,15 @@ XHCI_BringupDefaultControlEndpoint(
         Slot->EndpointTable[Endpoint->EndpointId] = Endpoint;
 
 	    XHCI_UpdateDeviceAddressMap(Extension, Slot, 0);
+
+    if (Adopted)
+    {
+        XHCI_StopEndpoint(Extension, Slot, 1);
+        Status = XHCI_SetEndpointDequeue(Extension, Slot, 1, &Endpoint->TransferRing);
+        DPRINT1("usbxhci: took over the kernel debugger's hub in slot %u (0x%lx)\n", Slot->SlotId, Status);
+        if (Status != MP_STATUS_SUCCESS)
+            return Status;
+    }
 
 	    return MP_STATUS_SUCCESS;
 	}
@@ -11107,6 +11200,156 @@ XHCI_SubmitTransfer(PVOID MiniPortExtension,
     }
 }
 
+#define XHCI_HUB_FEATURE_PORT_RESET         4
+#define XHCI_HUB_FEATURE_C_PORT_CONNECTION  16
+#define XHCI_HUB_FEATURE_C_PORT_RESET       20
+#define XHCI_HUB_FEATURE_C_PORT_LINK_STATE  25
+#define XHCI_HUB_FEATURE_C_PORT_CONFIG_ERR  26
+#define XHCI_HUB_FEATURE_BH_PORT_RESET      28
+#define XHCI_HUB_FEATURE_C_BH_PORT_RESET    29
+
+static
+USHORT
+XHCI_DebugHubChangeBit(
+    _In_ USHORT Feature)
+{
+    if (Feature >= XHCI_HUB_FEATURE_C_PORT_CONNECTION && Feature <= XHCI_HUB_FEATURE_C_PORT_RESET)
+        return (USHORT)(1 << (Feature - XHCI_HUB_FEATURE_C_PORT_CONNECTION));
+    if (Feature == XHCI_HUB_FEATURE_C_BH_PORT_RESET)
+        return 1 << 5;
+    if (Feature == XHCI_HUB_FEATURE_C_PORT_LINK_STATE)
+        return 1 << 6;
+    if (Feature == XHCI_HUB_FEATURE_C_PORT_CONFIG_ERR)
+        return 1 << 7;
+    return 0;
+}
+
+static
+BOOLEAN
+XHCI_AnswerDebugHubRequest(
+    _In_ PXHCI_EXTENSION Extension,
+    _In_ PXHCI_ENDPOINT Endpoint,
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    PUSBPORT_TRANSFER_PARAMETERS Parameters = Transfer->TransferParameters;
+    PUSB_DEFAULT_PIPE_SETUP_PACKET Setup = &Parameters->SetupPacket;
+    PXHCI_DEVICE_SLOT Slot = Endpoint->Slot;
+    USB_PORT_STATUS_AND_CHANGE Reply;
+    volatile LONG *Changes;
+    BOOLEAN Hidden, Super;
+    ULONG Hub, Length = 0;
+
+    if (!Slot || !Slot->DebugAdopted || !Extension->DebugHubShare)
+        return FALSE;
+
+    for (Hub = 0; Hub < Extension->DebugHubCount; Hub++)
+    {
+        if (Extension->DebugHubSlot[Hub] == Slot->SlotId)
+            break;
+    }
+
+    if (Hub == Extension->DebugHubCount)
+        return FALSE;
+
+    Reply.AsUlong32 = 0;
+    if (Setup->bmRequestType.B == 0 && Setup->bRequest == USB_REQUEST_SET_CONFIGURATION)
+    {
+        Transfer->BytesTransferred = 0;
+        Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
+        return TRUE;
+    }
+
+    if (Setup->bmRequestType.Type != BMREQUEST_CLASS || Setup->bmRequestType.Recipient != BMREQUEST_TO_OTHER ||
+        Setup->wIndex.LowByte != Extension->DebugHubPort[Hub])
+    {
+        return FALSE;
+    }
+
+    Hidden = (Hub + 1 == Extension->DebugHubCount);
+    Changes = &Extension->DebugPortChange[Hub + 1];
+    Super = (Slot->DeviceSpeed == UsbSuperSpeed);
+
+    if (Setup->bRequest == USB_REQUEST_GET_STATUS && Setup->bmRequestType.Dir == BMREQUEST_DEVICE_TO_HOST)
+    {
+        if (Super)
+            Reply.PortStatus.Usb30PortStatus.PortPower = 1;
+        else
+            Reply.PortStatus.Usb20PortStatus.PortPower = 1;
+
+        if (!Hidden)
+        {
+            Reply.PortStatus.Usb20PortStatus.CurrentConnectStatus = 1;
+            Reply.PortStatus.Usb20PortStatus.PortEnabledDisabled = 1;
+            if (!Super && Extension->DebugNextSpeed[Hub] == XHCI_PORTSC_SPEED_LOW)
+                Reply.PortStatus.Usb20PortStatus.LowSpeedDeviceAttached = 1;
+            else if (!Super && Extension->DebugNextSpeed[Hub] == XHCI_PORTSC_SPEED_HIGH)
+                Reply.PortStatus.Usb20PortStatus.HighSpeedDeviceAttached = 1;
+            Reply.PortChange.AsUshort16 = (USHORT)*Changes;
+        }
+
+        Length = sizeof(Reply);
+    }
+    else if (Setup->bRequest == USB_REQUEST_SET_FEATURE && !Hidden &&
+             (Setup->wValue.W == XHCI_HUB_FEATURE_PORT_RESET || Setup->wValue.W == XHCI_HUB_FEATURE_BH_PORT_RESET))
+    {
+        InterlockedOr(Changes, Setup->wValue.W == XHCI_HUB_FEATURE_PORT_RESET ? 1 << 4 : 1 << 5);
+    }
+    else if (Setup->bRequest == USB_REQUEST_CLEAR_FEATURE)
+    {
+        InterlockedAnd(Changes, ~(LONG)XHCI_DebugHubChangeBit(Setup->wValue.W));
+    }
+    else if (Setup->bmRequestType.Dir == BMREQUEST_DEVICE_TO_HOST)
+    {
+        Length = sizeof(Reply);
+    }
+
+    Length = min(Length, (ULONG)Setup->wLength);
+    Length = min(Length, Parameters->TransferBufferLength);
+    if (Length)
+        Length = XHCI_CopyBufferToSgList(Transfer->SgList, &Reply, Length);
+
+    Transfer->BytesTransferred = Length;
+    Transfer->UsbdStatus = USBD_STATUS_SUCCESS;
+    return TRUE;
+}
+
+static
+MPSTATUS
+XHCI_CompleteDebugHubRequest(
+    _In_ PXHCI_EXTENSION Extension,
+    _Inout_ PXHCI_ENDPOINT Endpoint,
+    _Inout_ PXHCI_TRANSFER Transfer)
+{
+    PXHCI_SWENUM_WORK Work;
+    KIRQL OldIrql;
+
+    if (XHCI_ReferenceEndpointForSwEnum(Endpoint))
+    {
+        Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), XHCI_TAG);
+        if (Work)
+        {
+            RtlZeroMemory(Work, sizeof(*Work));
+            InterlockedOr((volatile LONG *)&Transfer->Flags, XHCI_TRANSFER_FLAG_SWENUM_PENDING);
+            Work->Extension = Extension;
+            Work->Transfer = Transfer;
+            Work->Endpoint = Endpoint;
+            Work->EndpointProperties = Endpoint->EndpointProperties;
+            Work->SlotId = Endpoint->Slot->SlotId;
+            InterlockedIncrement(&Extension->SwEnumWorkerCount);
+            ExInitializeWorkItem(&Work->Item, XHCI_SwEnumWorker, Work);
+            ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
+            return MP_STATUS_SUCCESS;
+        }
+
+        XHCI_DereferenceEndpointForSwEnum(Endpoint);
+    }
+
+    KeAcquireSpinLock(&Endpoint->Lock, &OldIrql);
+    XHCI_RemoveActiveTransferLocked(Endpoint, Transfer);
+    KeReleaseSpinLock(&Endpoint->Lock, OldIrql);
+    return MP_STATUS_NO_RESOURCES;
+}
+
 static MPSTATUS
 XHCI_SubmitControlTransfer(
     _In_ PXHCI_EXTENSION Extension,
@@ -11466,6 +11709,9 @@ XHCI_SubmitControlTransfer(
     {
         ForceBounce = TRUE;
     }
+
+    if (XHCI_AnswerDebugHubRequest(Extension, Endpoint, Transfer))
+        return XHCI_CompleteDebugHubRequest(Extension, Endpoint, Transfer);
 
     if (TransferParameters->SetupPacket.bmRequestType.B == 0 &&
         TransferParameters->SetupPacket.bRequest == USB_REQUEST_SET_ADDRESS)
@@ -13135,6 +13381,46 @@ XHCI_CloseEndpoint(PVOID MiniPortExtension,
 
 static
 VOID
+XHCI_PrepareDebugHubShare(
+    _Inout_ PXHCI_EXTENSION Extension)
+{
+    PKD_USB_SHARE Share = &Extension->DebugShareInfo;
+    PULONG Context, Next;
+    ULONG Index, Route, NextRoute;
+
+    Extension->DebugHubShare = FALSE;
+    Extension->DebugHubCount = 0;
+
+    for (Index = 0; Index + 1 < Share->SlotCount; Index++)
+    {
+        Context = (PULONG)(ULONG_PTR)Share->ContextAddresses[Index];
+        Next = (PULONG)(ULONG_PTR)Share->ContextAddresses[Index + 1];
+        if (!Context || !Next || Share->Endpoints[Index])
+            return;
+
+        Route = Context[0] & XHCI_SLOT_ROUTE_MASK;
+        NextRoute = Next[0] & XHCI_SLOT_ROUTE_MASK;
+        if ((NextRoute & ((1UL << (4 * Index)) - 1)) != Route || !((NextRoute >> (4 * Index)) & 0xF))
+            return;
+
+        Extension->DebugHubSlot[Index] = Share->Slots[Index];
+        Extension->DebugHubRoute[Index] = Route;
+        Extension->DebugHubPort[Index] = (UCHAR)((NextRoute >> (4 * Index)) & 0xF);
+        Extension->DebugNextSpeed[Index] = (UCHAR)((Next[0] & XHCI_SLOT_SPEED_MASK) >> XHCI_SLOT_SPEED_SHIFT);
+        Extension->DebugPortChange[Index] = Index ? USB_PORT_STATUS_CONNECT : XHCI_PORTSC_CSC;
+    }
+
+    if (Index == 0 || !Share->Endpoints[Index])
+        return;
+
+    Extension->DebugHubCount = (UCHAR)Index;
+    Extension->DebugHubShare = TRUE;
+    DPRINT1("usbxhci: the OS takes over the kernel debugger's %lu hub(s); hub port %u stays with the debugger\n",
+            Index, Extension->DebugHubPort[Index - 1]);
+}
+
+static
+VOID
 XHCI_ReadDebugShare(
     _Inout_ PXHCI_EXTENSION Extension)
 {
@@ -13186,6 +13472,7 @@ XHCI_ReadDebugShare(
     Extension->DebugShare = TRUE;
     DPRINT1("usbxhci: the kernel debugger keeps root port %lu and %lu slot(s), sharing the controller\n",
             Share->Port, Share->SlotCount);
+    XHCI_PrepareDebugHubShare(Extension);
 }
 
 static
@@ -15899,8 +16186,17 @@ XHCI_RH_GetPortStatus(
 
     if (XHCI_IsDebuggerPort(Extension, Port))
     {
+        PortValue = XHCI_PORTSC_PP;
+        if (Extension->DebugHubShare)
+        {
+            PortValue = XHCI_READ_REGISTER_ULONG(
+                            &Extension->OperationalRegisters->PortRegister[Port - 1].PortStatusAndControl);
+            PortValue = (PortValue & ~XHCI_PORTSC_CHANGE_MASK) |
+                        ((ULONG)Extension->DebugPortChange[0] & XHCI_PORTSC_CHANGE_MASK);
+        }
+
         RtlZeroMemory(PortStatus, sizeof(*PortStatus));
-        XHCI_RH_UpdatePortStatusFields(Extension, Port, XHCI_PORTSC_PP, PortStatus);
+        XHCI_RH_UpdatePortStatusFields(Extension, Port, PortValue, PortStatus);
         return MP_STATUS_SUCCESS;
     }
 
@@ -16015,7 +16311,16 @@ XHCI_RH_SetFeaturePortReset(
         return MP_STATUS_ERROR;
 
     if (XHCI_IsDebuggerPort(Extension, Port))
+    {
+        if (Extension->DebugHubShare)
+        {
+            InterlockedOr(&Extension->DebugPortChange[0], XHCI_PORTSC_PRC);
+            if (XhciRegPacket.UsbPortInvalidateRootHub)
+                XhciRegPacket.UsbPortInvalidateRootHub(Extension);
+        }
+
         return MP_STATUS_SUCCESS;
+    }
 
     PortStatusReg = XHCI_GetPortStatusRegister(Extension, Port);
     if (!PortStatusReg)

@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     MissingSecurity.c
+    IndexMetadata.c
     FullBaseGrowth.c
     testlist.c)
 

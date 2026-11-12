@@ -24,6 +24,10 @@ sdk/tools/wpp                   # Synced to Wine-11.14 (Module was moved into wr
 The following headers are shared with Wine.
 sdk/include/psdk/msasn1.h       # Synced to Wine-11.13-83-ge8781e7c8d0
 sdk/include/psdk/rpcproxy.h     # Synced to Wine-11.14
+sdk/include/psdk/sapi.idl       # Synced to Wine-11.14
+sdk/include/psdk/sapiaut.idl    # Synced to Wine-11.14
+sdk/include/psdk/sapiddk.idl    # Synced to Wine-11.14
+sdk/include/psdk/sperror.h      # Synced to Wine-11.14
 sdk/include/psdk/netioapi.h     # Synced to Wine-11.14 (mirrors sdk/include/wine/netioapi.h)
 sdk/include/psdk/winevt.h       # Synced to Wine-11.14
 sdk/include/psdk/wldp.h         # Synced to Wine-11.13-83-ge8781e7c8d0 (LiberNT adds the documented declarations)
@@ -51,12 +55,15 @@ dll/directx/wine/dpnhpast       # Synced to Wine-11.14
 dll/directx/wine/dpwsockx       # Synced to Wine-11.14
 dll/directx/wine/dsdmo          # Synced to Wine-11.14
 dll/directx/wine/dsound         # Synced to Wine-11.14
+dll/directx/wine/colorcnv       # Synced to Wine-11.21 (LiberNT pixel conversion instead of FFmpeg)
 dll/directx/wine/dxdiagn        # Synced to Wine-11.14
+dll/directx/wine/mp3dmod        # Synced to Wine-11.21 (LiberNT output framing and IPropertyStore)
 dll/directx/wine/msdmo          # Synced to Wine-11.14
+dll/directx/wine/msvproc        # Synced to Wine-11.21 (LiberNT pixel conversion instead of FFmpeg)
 dll/directx/wine/qcap           # Synced to Wine-11.14
 dll/directx/wine/qedit          # Synced to Wine-11.14
 dll/directx/wine/quartz         # Synced to Wine-11.14
-dll/directx/wine/wined3d        # Synced to Wine-11.14
+dll/directx/wine/wined3d        # Synced to Wine-11.14 (LiberNT GLSL fixes under __REACTOS__)
 dll/directx/wine/winegstreamer  # Synced to Wine-11.14 (ReactOS native parser backend)
 
 dll/win32/activeds            # Synced to Wine-11.14
@@ -222,6 +229,7 @@ dll/win32/rpcrt4              # Synced to Wine-11.14
 dll/win32/rsabase             # Synced to Wine-11.14
 dll/win32/rsaenh              # Synced to Wine-11.14
 dll/win32/rtworkq             # Synced to Wine-11.14
+dll/win32/sapi                # Synced to Wine-11.14 (LiberNT drops the empty Wine default voice token)
 dll/win32/sccbase             # Synced to Wine-11.14
 dll/win32/schannel            # Synced to Wine-11.14
 dll/win32/scrrun              # Synced to Wine-11.14
@@ -275,7 +283,7 @@ dll/win32/windows.media.devices # Synced to Wine-11.14
 dll/win32/windows.media.mediacontrol # Synced to Wine-11.14
 dll/win32/windows.media.playback.backgroundmediaplayer # Synced to Wine-11.14
 dll/win32/windows.media.playback.mediaplayer # Synced to Wine-11.14
-dll/win32/windows.media.speech # Synced to Wine-11.14
+dll/win32/windows.media.speech # Synced to Wine-11.14 (LiberNT synthesizes through the SAPI voices)
 dll/win32/windows.networking  # Synced to Wine-11.14
 dll/win32/windows.networking.connectivity # Synced to Wine-11.14
 dll/win32/windows.networking.hostname # Synced to Wine-11.14

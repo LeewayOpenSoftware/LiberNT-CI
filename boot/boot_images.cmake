@@ -36,7 +36,7 @@ function(freeldr_ini_add_http_boot SOURCE OUTPUT URL STATIC_IP DEFAULT_OS OPTION
     string(REPLACE "${_os_marker}"
                    "HttpBoot=\"ReactOS HTTP Boot - Debug\""
                    _contents "${_contents}")
-    set(_http_boot_entry "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\Windows\nOptions=/KERNEL=ntkrnlmp.exe /DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS")
+    set(_http_boot_entry "[HttpBoot]\nBootType=Windows2003\nSystemPath=ramdisk(0)\\Windows\nOptions=/DEBUG /DEBUGPORT=COM1 /BAUDRATE=115200 /SOS /FASTDETECT /MININT /LOADSYMBOLS")
     if(OPTIONS)
         string(APPEND _http_boot_entry " ${OPTIONS}")
     endif()
@@ -110,28 +110,6 @@ if(FREELDR_PREINSTALL_OPTIONS)
     string(REGEX REPLACE "(Options=[^\r\n]*)" "\\1 ${FREELDR_PREINSTALL_OPTIONS}" _contents "${_contents}")
     set(FREELDR_PREINSTALL_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/preinstall_options.ini")
     file(CONFIGURE OUTPUT "${FREELDR_PREINSTALL_INI}" CONTENT "${_contents}" @ONLY)
-endif()
-
-# On x86 hal.dll is the UP PIC HAL, unlike the SMP HAL named hal.dll on
-# amd64. Pair our SMP media entries explicitly without changing other
-# architectures or overriding a HAL explicitly requested by an entry.
-if(ARCH STREQUAL "i386" AND NOT (SARCH STREQUAL "pc98" OR SARCH STREQUAL "xbox"))
-    foreach(_media BOOTCD PREINSTALL)
-        set(_source "${FREELDR_${_media}_INI}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_source}")
-        file(READ "${_source}" _contents)
-        string(REGEX MATCHALL "Options=[^\r\n]*" _options "${_contents}")
-        foreach(_option IN LISTS _options)
-            if(_option MATCHES "/KERNEL=ntkrnlmp\\.exe([ /]|$)" AND
-               NOT _option MATCHES "/HAL=")
-                string(REPLACE "/KERNEL=ntkrnlmp.exe"
-                    "/KERNEL=ntkrnlmp.exe /HAL=halmacpi.dll" _paired "${_option}")
-                string(REPLACE "${_option}" "${_paired}" _contents "${_contents}")
-            endif()
-        endforeach()
-        set(FREELDR_${_media}_INI "${CMAKE_CURRENT_BINARY_DIR}/bootdata/${_media}_i386.ini")
-        file(CONFIGURE OUTPUT "${FREELDR_${_media}_INI}" CONTENT "${_contents}" @ONLY)
-    endforeach()
 endif()
 
 if(SPACEMIT_K1_SUPPORT)
@@ -396,6 +374,10 @@ function(image_list_command _image _var)
         -DOPTIONAL=${CMAKE_CURRENT_BINARY_DIR}/${_image}.optional.$<CONFIG>.lst
         -DOUTPUT=${CMAKE_CURRENT_BINARY_DIR}/${_image}.effective.lst
         -DSYSTEM_DIR=Windows
+        -DINVENTORY=${CMAKE_CURRENT_BINARY_DIR}/${_image}.files
+        "-DINVENTORY_HEADER=LiberNT ${KERNEL_VERSION} ${KERNEL_VERSION_BUILD}-${REVISION}"
+        -DINVENTORY_BUILD=${LIBERNT_BUILD_NUMBER}
+        -DINVENTORY_IMAGE=${_image}
         -P ${REACTOS_SOURCE_DIR}/sdk/cmake/optional_files.cmake PARENT_SCOPE)
 endfunction()
 
@@ -1052,6 +1034,44 @@ if(STARFIVE_JH7110_SUPPORT)
             ${STARFIVE_JH7110_BOOT_SCRIPT} ${STARFIVE_JH7110_BOOT_SCRIPT_SOURCE}
         VERBATIM)
     add_dependencies(liberntimg jh7110sdimg)
+endif()
+
+if(NINTENDO_SWITCH_SUPPORT)
+    set(_switch_media_dir ${REACTOS_BINARY_DIR}/bootloader/image/mediawim)
+    set(_switch_partition_file ${CMAKE_CURRENT_BINARY_DIR}/switch-sd.fat)
+    set(_switch_sd_image_file ${REACTOS_BINARY_DIR}/LiberNT-switch-sd.img)
+    add_custom_target(switchsdimg
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${_switch_partition_file} ${_switch_sd_image_file}
+        COMMAND native-fatten ${_switch_partition_file}
+            -format ${NINTENDO_SWITCH_SD_SECTORS} fat32 LIBERNT
+            -mkdir bootloader
+            -mkdir bootloader/ini
+            -mkdir switchroot
+            -mkdir switchroot/libernt
+            -mkdir EFI
+            -mkdir EFI/BOOT
+            -mkdir EFI/LiberNT
+            -mkdir EFI/LiberNT/Boot
+            -add ${NINTENDO_SWITCH_HEKATE_INI} bootloader/ini/libernt.ini
+            -add ${NINTENDO_SWITCH_BL33} switchroot/libernt/bl33.bin
+            -add ${NINTENDO_SWITCH_BOOT_SCRIPT} switchroot/libernt/boot.scr
+            -add ${NINTENDO_SWITCH_BOOT_SCRIPT_SOURCE} switchroot/libernt/boot.cmd
+            -add ${NINTENDO_SWITCH_README} switchroot/libernt/README.txt
+            -add $<TARGET_FILE:bootmgfw> EFI/BOOT/BOOTAA64.EFI
+            -add $<TARGET_FILE:winload> EFI/LiberNT/Boot/winload.efi
+            -add ${_switch_media_dir}/BCD EFI/LiberNT/Boot/BCD
+            -add ${_switch_media_dir}/boot.wim boot.wim
+        COMMAND native-mkdiskimg
+            -o ${_switch_sd_image_file}
+            -partition ${_switch_partition_file}
+            -start ${NINTENDO_SWITCH_SD_START}
+            -type 0c
+        COMMAND ${CMAKE_COMMAND} -E rm -f ${_switch_partition_file}
+        DEPENDS native-fatten native-mkdiskimg
+            ${NINTENDO_SWITCH_BL33} ${NINTENDO_SWITCH_BOOT_SCRIPT} ${NINTENDO_SWITCH_BOOT_SCRIPT_SOURCE}
+            ${NINTENDO_SWITCH_HEKATE_INI} ${NINTENDO_SWITCH_README}
+        VERBATIM)
+    add_dependencies(switchsdimg bootloaderwimcd)
 endif()
 
 set(_liberntvhd_layout_args

@@ -31,6 +31,9 @@
 #define WM_CABINET_FOCUSVIEW (WM_APP + 3)
 #define IDT_CABINET_STATUS 1
 #define IDT_CABINET_SEARCH 2
+#define IDT_CABINET_SELECTION 3
+#define IDT_CABINET_SELECTION_SIZE 4
+#define CABINET_SELECTION_IDLE_MS 200
 
 HINSTANCE
 CabinetModule()
@@ -104,6 +107,16 @@ CCabinetWindow::CCabinetWindow() :
     m_DetailsBar(NULL),
     m_ViewBar(NULL),
     m_Status(NULL),
+    m_SelectionMousePosition(),
+    m_SelectionSizeView(NULL),
+    m_SelectionSizeGeneration(0),
+    m_SelectionSizeIndex(0),
+    m_SelectionSizeCount(0),
+    m_SelectionSizeVisited(0),
+    m_SelectionSizeLimit(0),
+    m_SelectionSize(0),
+    m_SelectionSizeReady(FALSE),
+    m_SelectionSizeHaveSize(FALSE),
     m_DetailsIcon(NULL),
     m_DetailsName(NULL),
     m_DetailsList(NULL),
@@ -148,6 +161,7 @@ CCabinetWindow::CCabinetWindow() :
 
 CCabinetWindow::~CCabinetWindow()
 {
+    CancelSelectionSize();
     ClearPreview();
     if (m_DetailsIconHandle)
         DestroyIcon(m_DetailsIconHandle);
@@ -177,7 +191,7 @@ CCabinetWindow::~CCabinetWindow()
 int
 CCabinetWindow::Scale(int value) const
 {
-    return MulDiv(value, m_hwnd ? GetDpiForWindow(m_hwnd) : 96, 96);
+    return MulDiv(value, m_hwnd ? GetDpiForWindow(m_hwnd) : GetDpiForSystem(), 96);
 }
 
 void
@@ -563,11 +577,13 @@ void
 CCabinetWindow::PaintBackground(HDC dc)
 {
     CabinetPalette palette;
-    RECT client;
+    RECT client, clip, hit;
     struct { int Top; int Bottom; COLORREF Color; } bands[5];
 
     CabinetGetPalette(&palette);
     GetClientRect(m_hwnd, &client);
+    if (GetClipBox(dc, &clip) == ERROR)
+        clip = client;
     {
         RECT glass = { 0, 0, client.right, TabStripHeight() };
         FillRect(dc, &glass, ClientCaption() ? (HBRUSH)GetStockObject(BLACK_BRUSH) : GetSysColorBrush(COLOR_3DFACE));
@@ -584,7 +600,7 @@ CCabinetWindow::PaintBackground(HDC dc)
         FillRect(dc, &rc, brush);
         DeleteObject(brush);
     }
-    if (!IsRectEmpty(&m_PanelRect))
+    if (IntersectRect(&hit, &m_PanelRect, &clip))
     {
         RECT outer = m_PanelRect;
         int radius = Scale(8), saved = SaveDC(dc);
@@ -597,28 +613,34 @@ CCabinetWindow::PaintBackground(HDC dc)
         CabinetFillRound(dc, outer, radius - 1, palette.Window);
         RestoreDC(dc, saved);
     }
-    if (IsAppThemed())
+    SetRect(&hit, 0, TabStripHeight(), client.right, AddressBottom() - 1);
+    if (IsAppThemed() && IntersectRect(&hit, &hit, &clip))
     {
-        Gdiplus::Graphics graphics(dc);
-        Gdiplus::LinearGradientBrush shade(Gdiplus::PointF(0.0f, 0.0f),
-                                           Gdiplus::PointF(0.0f, (float)(AddressBottom() - 1) + 1.0f),
-                                           Gdiplus::Color(255, GetRValue(palette.Band), GetGValue(palette.Band),
-                                                          GetBValue(palette.Band)),
-                                           Gdiplus::Color(255, GetRValue(palette.BandShade),
-                                                          GetGValue(palette.BandShade), GetBValue(palette.BandShade)));
+        TRIVERTEX vertex[2] = {
+            { 0, 0, (COLOR16)(GetRValue(palette.Band) << 8), (COLOR16)(GetGValue(palette.Band) << 8),
+              (COLOR16)(GetBValue(palette.Band) << 8), 0xFF00 },
+            { client.right, AddressBottom(), (COLOR16)(GetRValue(palette.BandShade) << 8),
+              (COLOR16)(GetGValue(palette.BandShade) << 8), (COLOR16)(GetBValue(palette.BandShade) << 8), 0xFF00 } };
+        GRADIENT_RECT mesh = { 0, 1 };
+        int saved = SaveDC(dc);
 
-        graphics.FillRectangle(&shade, 0, TabStripHeight(), (INT)client.right, AddressBottom() - 1 - TabStripHeight());
+        IntersectClipRect(dc, hit.left, hit.top, hit.right, hit.bottom);
+        GdiGradientFill(dc, vertex, _countof(vertex), &mesh, 1, GRADIENT_FILL_RECT_V);
+        RestoreDC(dc, saved);
     }
     if (m_Status && IsWindowVisible(m_Status))
     {
         RECT status;
-        int saved = SaveDC(dc);
         GetWindowRect(m_Status, &status);
         MapWindowPoints(NULL, m_hwnd, (POINT *)&status, 2);
-        OffsetWindowOrgEx(dc, -status.left, -status.top, NULL);
-        IntersectClipRect(dc, 0, 0, status.right - status.left, status.bottom - status.top);
-        SendMessageW(m_Status, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT | PRF_ERASEBKGND);
-        RestoreDC(dc, saved);
+        if (IntersectRect(&hit, &status, &clip))
+        {
+            int saved = SaveDC(dc);
+            OffsetWindowOrgEx(dc, -status.left, -status.top, NULL);
+            IntersectClipRect(dc, 0, 0, status.right - status.left, status.bottom - status.top);
+            SendMessageW(m_Status, WM_PRINTCLIENT, (WPARAM)dc, PRF_CLIENT | PRF_ERASEBKGND);
+            RestoreDC(dc, saved);
+        }
     }
     if ((m_DetailsPane || m_PreviewPane) && !IsRectEmpty(&m_PaneRect))
     {
@@ -1021,6 +1043,32 @@ DetailsPropertyText(IShellItem2 *item, REFPROPERTYKEY key)
     return text;
 }
 
+static BOOL
+GetSelectionItemSize(IShellItem *item, ULONGLONG *size)
+{
+    PWSTR path = NULL;
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    IShellItem2 *item2 = NULL;
+    BOOL found = FALSE;
+
+    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)))
+    {
+        if (GetFileAttributesExW(path, GetFileExInfoStandard, &data) &&
+            !(data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            *size = ((ULONGLONG)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+            found = TRUE;
+        }
+        CoTaskMemFree(path);
+    }
+    if (!found && SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItem2, &item2))))
+    {
+        found = SUCCEEDED(item2->GetUInt64(PKEY_Size, size));
+        item2->Release();
+    }
+    return found;
+}
+
 void
 CCabinetWindow::UpdateDetails()
 {
@@ -1057,36 +1105,12 @@ CCabinetWindow::UpdateDetails()
     }
     if (selected > 1)
     {
-        IShellItemArray *items = NULL;
-        ULONGLONG size = 0;
-        BOOL haveSize = FALSE;
+        ULONGLONG size = m_SelectionSize;
+        BOOL haveSize = m_SelectionSizeReady && m_SelectionSizeCount == selected && m_SelectionSizeHaveSize;
 
         LoadText(IDS_CAB_SELECTED, format, _countof(format));
         StringCchPrintfW(name, _countof(name), format, selected);
         m_DetailsIconHandle = JumboIcon(tab->Pidl);
-        if (SUCCEEDED(folderView->Items(SVGIO_SELECTION, IID_PPV_ARG(IShellItemArray, &items))))
-        {
-            DWORD itemCount = 0;
-            items->GetCount(&itemCount);
-            for (DWORD i = 0; i < itemCount && i < 4096; i++)
-            {
-                IShellItem *one = NULL;
-                IShellItem2 *one2 = NULL;
-                ULONGLONG oneSize = 0;
-                if (SUCCEEDED(items->GetItemAt(i, &one)) &&
-                    SUCCEEDED(one->QueryInterface(IID_PPV_ARG(IShellItem2, &one2))) &&
-                    SUCCEEDED(one2->GetUInt64(PKEY_Size, &oneSize)))
-                {
-                    size += oneSize;
-                    haveSize = TRUE;
-                }
-                if (one2)
-                    one2->Release();
-                if (one)
-                    one->Release();
-            }
-            items->Release();
-        }
         if (haveSize)
         {
             IPropertyDescription *desc = NULL;
@@ -1210,6 +1234,7 @@ CCabinetWindow::SetPane(BOOL details, BOOL preview)
     if (m_DetailsBar)
         SendMessageW(m_DetailsBar, TB_CHECKBUTTON, IDC_COMMAND(CabinetCommand::Details), MAKELONG(details, 0));
     OnSize();
+    UpdateStatus();
     UpdateDetails();
     UpdatePreview();
 }
@@ -1596,15 +1621,17 @@ void
 CCabinetWindow::SavePlacement()
 {
     WINDOWPLACEMENT placement = { sizeof(placement) };
+    WCHAR name[32];
     HKEY key;
 
     if (!GetWindowPlacement(m_hwnd, &placement))
         return;
+    StringCchPrintfW(name, _countof(name), L"Placement%u", GetDpiForWindow(m_hwnd));
     if (RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\LiberNT\\Explorer", 0, NULL, 0, KEY_SET_VALUE, NULL, &key,
                         NULL) == ERROR_SUCCESS)
     {
         DWORD pane = m_PreviewPane ? 2 : m_DetailsPane ? 1 : 0;
-        RegSetValueExW(key, L"Placement", 0, REG_BINARY, (const BYTE *)&placement, sizeof(placement));
+        RegSetValueExW(key, name, 0, REG_BINARY, (const BYTE *)&placement, sizeof(placement));
         RegSetValueExW(key, L"Pane", 0, REG_DWORD, (const BYTE *)&pane, sizeof(pane));
         RegCloseKey(key);
     }
@@ -1751,6 +1778,7 @@ CCabinetWindow::Open(PCIDLIST_ABSOLUTE pidl, PCUITEMID_CHILD select, int showCmd
     WNDCLASSEXW wc = { sizeof(wc) };
     WINDOWPLACEMENT placement = { sizeof(placement) };
     DWORD size = sizeof(placement);
+    WCHAR name[32];
 
     if (!GetClassInfoExW(g_hInstance, CABINET_CLASS, &wc))
     {
@@ -1764,9 +1792,10 @@ CCabinetWindow::Open(PCIDLIST_ABSOLUTE pidl, PCUITEMID_CHILD select, int showCmd
             return HRESULT_FROM_WIN32(GetLastError());
     }
     if (!CreateWindowExW(WS_EX_WINDOWEDGE, CABINET_CLASS, L"File Explorer", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-                         CW_USEDEFAULT, CW_USEDEFAULT, 1000, 680, NULL, NULL, g_hInstance, this))
+                         CW_USEDEFAULT, CW_USEDEFAULT, Scale(1000), Scale(680), NULL, NULL, g_hInstance, this))
         return HRESULT_FROM_WIN32(GetLastError());
-    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiberNT\\Explorer", L"Placement", RRF_RT_REG_BINARY, NULL,
+    StringCchPrintfW(name, _countof(name), L"Placement%u", GetDpiForWindow(m_hwnd));
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\LiberNT\\Explorer", name, RRF_RT_REG_BINARY, NULL,
                      &placement, &size) == ERROR_SUCCESS && size == sizeof(placement) &&
         placement.length == sizeof(placement))
     {
@@ -1898,7 +1927,7 @@ CCabinetWindow::CreateNavigationPane()
         CabinetPalette palette;
 
         if (tree)
-            TreeView_SetItemHeight(tree, Scale(26));
+            TreeView_SetItemHeight(tree, max(Scale(26), TreeView_GetItemHeight(tree)));
         CabinetGetPalette(&palette);
         SetNavigationBackground(palette.Body);
     }
@@ -1975,6 +2004,8 @@ CCabinetWindow::CloseTab(int index)
 
     if (index < 0 || index >= m_TabCount)
         return;
+    if (index == m_ActiveTab)
+        CancelSelectionSize();
     tab = &m_Tabs[index];
     if (tab->ViewEvents)
     {
@@ -2021,6 +2052,7 @@ CCabinetWindow::ActivateTab(int index)
 {
     if (index < 0 || index >= m_TabCount)
         return;
+    CancelSelectionSize();
     m_ActiveTab = index;
     SyncTabs();
     PlaceBrowsers();
@@ -2120,6 +2152,7 @@ CCabinetWindow::NavigateUp()
 void
 CCabinetWindow::Refresh()
 {
+    CancelSelectionSize();
     IShellView *view = CurrentView();
 
     if (view)
@@ -2142,6 +2175,8 @@ CCabinetWindow::OnNavigationComplete(IExplorerBrowser *browser, PCIDLIST_ABSOLUT
     }
     if (!tab)
         return;
+    if (tab == ActiveTab())
+        CancelSelectionSize();
     FreeIdList(&tab->Pidl);
     tab->Pidl = ILClone(pidl);
     if (!m_InHistoryNavigation)
@@ -2272,6 +2307,10 @@ CCabinetWindow::OnViewCreated(IExplorerBrowser *browser, IShellView *view)
 void
 CCabinetWindow::OnSelectionChanged()
 {
+    CancelSelectionSize();
+    if (DeferSelectionUpdate())
+        return;
+
     UpdateStatus();
     UpdateCommands();
     UpdateDetails();
@@ -2502,9 +2541,108 @@ CCabinetWindow::UpdateViewToggles()
                  MAKELONG(mode == FVM_ICON && size >= 96, 0));
 }
 
-void
-CCabinetWindow::UpdateStatus()
+BOOL
+CCabinetWindow::DeferSelectionUpdate()
 {
+    if (!GetCursorPos(&m_SelectionMousePosition))
+        return FALSE;
+    return SetTimer(m_hwnd, IDT_CABINET_SELECTION, CABINET_SELECTION_IDLE_MS, NULL) != 0;
+}
+
+void
+CCabinetWindow::CancelSelectionSize()
+{
+    IShellItemArray *view = m_SelectionSizeView;
+
+    ++m_SelectionSizeGeneration;
+    m_SelectionSizeView = NULL;
+    m_SelectionSizeIndex = 0;
+    m_SelectionSizeCount = 0;
+    m_SelectionSizeVisited = 0;
+    m_SelectionSizeLimit = 0;
+    m_SelectionSize = 0;
+    m_SelectionSizeReady = FALSE;
+    m_SelectionSizeHaveSize = FALSE;
+    if (m_hwnd)
+        KillTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE);
+    if (view)
+        view->Release();
+}
+
+void
+CCabinetWindow::UpdateSelectionSize()
+{
+    IShellItemArray *view = m_SelectionSizeView;
+    ULONG generation = m_SelectionSizeGeneration;
+    int index = m_SelectionSizeIndex, visited = m_SelectionSizeVisited;
+    DWORD limit = m_SelectionSizeLimit;
+    ULONGLONG total = m_SelectionSize;
+    BOOL haveSize = m_SelectionSizeHaveSize, done = FALSE;
+    DWORD start = GetTickCount();
+
+    KillTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE);
+    if (!view)
+        return;
+    view->AddRef();
+    do
+    {
+        IShellItem *item = NULL;
+        ULONGLONG size = 0;
+        HRESULT hr = view->GetItemAt(index, &item);
+        index++;
+        visited++;
+        if (generation != m_SelectionSizeGeneration)
+        {
+            if (item)
+                item->Release();
+            break;
+        }
+        if (SUCCEEDED(hr) && item)
+        {
+            if (GetSelectionItemSize(item, &size))
+            {
+                total += size;
+                haveSize = TRUE;
+            }
+            item->Release();
+        }
+        if (generation != m_SelectionSizeGeneration)
+            break;
+        if ((DWORD)visited >= limit)
+            done = TRUE;
+    } while (!done && GetTickCount() - start < 8);
+    view->Release();
+    if (generation != m_SelectionSizeGeneration)
+        return;
+    m_SelectionSizeIndex = index;
+    m_SelectionSizeVisited = visited;
+    m_SelectionSize = total;
+    m_SelectionSizeHaveSize = haveSize;
+    if (!done)
+    {
+        if (!SetTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE, 1, NULL))
+            CancelSelectionSize();
+        return;
+    }
+    view = m_SelectionSizeView;
+    m_SelectionSizeView = NULL;
+    m_SelectionSizeReady = TRUE;
+    view->Release();
+    if (generation != m_SelectionSizeGeneration || !m_hwnd)
+        return;
+    UpdateStatus(TRUE);
+    if (generation == m_SelectionSizeGeneration && m_DetailsPane)
+        UpdateDetails();
+}
+
+void
+CCabinetWindow::UpdateStatus(BOOL mouseIdle)
+{
+    if (!mouseIdle && (GetAsyncKeyState(VK_LBUTTON) < 0 || GetAsyncKeyState(VK_RBUTTON) < 0) &&
+        DeferSelectionUpdate())
+        return;
+
+    ULONG generation = m_SelectionSizeGeneration;
     IShellView *view = CurrentView();
     IFolderView *folderView = NULL;
     int count = 0, selected = 0;
@@ -2516,36 +2654,58 @@ CCabinetWindow::UpdateStatus()
         return;
     if (SUCCEEDED(view->QueryInterface(IID_PPV_ARG(IFolderView, &folderView))))
     {
-        IShellItemArray *array = NULL;
         folderView->ItemCount(SVGIO_ALLVIEW, &count);
         folderView->ItemCount(SVGIO_SELECTION, &selected);
-        if (selected && selected <= 4096 &&
-            SUCCEEDED(folderView->Items(SVGIO_SELECTION, IID_PPV_ARG(IShellItemArray, &array))))
+        if (generation != m_SelectionSizeGeneration || !m_hwnd)
         {
-            DWORD itemCount = 0;
-            array->GetCount(&itemCount);
-            for (DWORD i = 0; i < itemCount; i++)
+            folderView->Release();
+            view->Release();
+            return;
+        }
+        if ((m_SelectionSizeView || m_SelectionSizeReady) && m_SelectionSizeCount != selected)
+        {
+            CancelSelectionSize();
+            folderView->Release();
+            view->Release();
+            if (m_hwnd)
+                PostMessageW(m_hwnd, WM_CABINET_STATUS, 0, 0);
+            return;
+        }
+        if (selected && (selected <= 4096 || m_DetailsPane) &&
+            !m_SelectionSizeView && !m_SelectionSizeReady)
+        {
+            IShellItemArray *array = NULL;
+            DWORD arrayCount = 0;
+            HRESULT hr = folderView->Items(SVGIO_SELECTION, IID_PPV_ARG(IShellItemArray, &array));
+            if (SUCCEEDED(hr) && array)
+                hr = array->GetCount(&arrayCount);
+            if (generation == m_SelectionSizeGeneration && m_hwnd)
             {
-                IShellItem *item = NULL;
-                IShellItem2 *item2 = NULL;
-                ULONGLONG size = 0;
-                if (SUCCEEDED(array->GetItemAt(i, &item)) &&
-                    SUCCEEDED(item->QueryInterface(IID_PPV_ARG(IShellItem2, &item2))) &&
-                    SUCCEEDED(item2->GetUInt64(PKEY_Size, &size)))
+                m_SelectionSizeCount = selected;
+                m_SelectionSizeLimit = min(arrayCount, 4096);
+                if (SUCCEEDED(hr) && array && m_SelectionSizeLimit)
                 {
-                    selectedSize += size;
-                    haveSize = TRUE;
+                    m_SelectionSizeView = array;
+                    array = NULL;
+                    if (!SetTimer(m_hwnd, IDT_CABINET_SELECTION_SIZE, 1, NULL))
+                        CancelSelectionSize();
                 }
-                if (item2)
-                    item2->Release();
-                if (item)
-                    item->Release();
+                else if (SUCCEEDED(hr))
+                    m_SelectionSizeReady = TRUE;
             }
-            array->Release();
+            if (array)
+                array->Release();
+        }
+        if (selected <= 4096 && m_SelectionSizeReady && m_SelectionSizeCount == selected)
+        {
+            selectedSize = m_SelectionSize;
+            haveSize = m_SelectionSizeHaveSize;
         }
         folderView->Release();
     }
     view->Release();
+    if (generation != m_SelectionSizeGeneration || !m_hwnd)
+        return;
     if (count == 1)
         LoadText(IDS_CAB_ITEM, items, _countof(items));
     else
@@ -3476,12 +3636,35 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             UpdatePreview();
             return 0;
         case WM_CABINET_CHANGED:
+            CancelSelectionSize();
             SetTimer(m_hwnd, IDT_CABINET_STATUS, 200, NULL);
             return 0;
         case WM_CABINET_FOCUSVIEW:
             FocusView();
             return 0;
         case WM_TIMER:
+            if (wParam == IDT_CABINET_SELECTION_SIZE)
+            {
+                UpdateSelectionSize();
+                return 0;
+            }
+            if (wParam == IDT_CABINET_SELECTION)
+            {
+                POINT position;
+                if ((GetAsyncKeyState(VK_LBUTTON) < 0 || GetAsyncKeyState(VK_RBUTTON) < 0) &&
+                    GetCursorPos(&position) &&
+                    (position.x != m_SelectionMousePosition.x || position.y != m_SelectionMousePosition.y))
+                {
+                    m_SelectionMousePosition = position;
+                    return 0;
+                }
+                KillTimer(m_hwnd, IDT_CABINET_SELECTION);
+                UpdateStatus(TRUE);
+                UpdateCommands();
+                UpdateDetails();
+                UpdatePreview();
+                return 0;
+            }
             if (wParam == IDT_CABINET_STATUS)
             {
                 KillTimer(m_hwnd, IDT_CABINET_STATUS);
@@ -3556,6 +3739,7 @@ CCabinetWindow::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam)
             CloseTab(0);
             return 0;
         case WM_DESTROY:
+            CancelSelectionSize();
             ClearPreview();
             if (m_ChangeNotify)
                 SHChangeNotifyDeregister(m_ChangeNotify);
