@@ -201,7 +201,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                            OnExecute, OnState, 0, &g_ribbon);
         LeewayRibbonSetLayout(g_ribbon, &kLayout);
         SetColourCollections(g_ribbon);
-        static LeewayAurelineConfig s_aur = { L"test-icons", TRUE };
+        static LeewayAurelineConfig s_aur = { L"../icons", TRUE };
         LeewayRibbonUseAurelineIcons(g_ribbon, &s_aur);
         return 0;
     }
