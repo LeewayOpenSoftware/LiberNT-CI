@@ -7,17 +7,7 @@
 
 #include <kmt_test.h>
 
-IO_PRIORITY_HINT
-NTAPI
-IoGetIoPriorityHint(
-    _In_ PIRP Irp);
-
-NTSTATUS
-NTAPI
-IoSetIoPriorityHint(
-    _In_ PIRP Irp,
-    _In_ IO_PRIORITY_HINT PriorityHint);
-
+/* IoGetIoPriorityHint and IoSetIoPriorityHint come from wdm.h */
 BOOLEAN
 NTAPI
 IoTryQueueWorkItem(
