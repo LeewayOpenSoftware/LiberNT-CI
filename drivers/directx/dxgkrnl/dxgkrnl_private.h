@@ -1111,6 +1111,11 @@ struct _DXGKRNL_ADAPTER
     /* Parent-owned interface for this adapter's PCI configuration space. */
     BUS_INTERFACE_STANDARD      PciBusInterface;
     BOOLEAN                     PciBusInterfaceValid;
+    /* PCI config header (first 0x40 bytes) taken just before a non-fallback
+       claimant's DxgkDdiStartDevice, to put the device back if that start
+       fails and the BasicDisplay fallback has to keep the screen. */
+    UCHAR                       PciHeaderSnapshot[0x40];
+    BOOLEAN                     PciHeaderSnapshotValid;
 
     /*
      * Power state tracking.
