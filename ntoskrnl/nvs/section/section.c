@@ -2737,7 +2737,24 @@ MiSegmentPurge(
         }
 
         if (Kind == MiSoftTransition)
+        {
+            /* A-2 review (data-loss guard): discarding a page writes back nothing, so a
+             * MODIFIED (dirty) transition page must never be purged out from under
+             * unwritten data. With outward rounding the walk now reaches partial first
+             * and last pages whose dirty bytes OUTSIDE [Offset, Offset+Length) the caller
+             * never flushed; silently discarding them would lose that data. Refuse such a
+             * page (Complete = FALSE) so the caller flushes first; a page already written
+             * back by a preceding flush is clean here and is discarded as before. */
+            ULONG Frame = (ULONG)MiSoftValue(MiArchPteRead(Proto));
+
+            if (MiPfnIsModified(&Segment->System->Pfn, Frame))
+            {
+                Complete = FALSE;
+                continue;
+            }
+
             MiSegmentDiscardPage(Segment, Proto);
+        }
     }
 
     MI_MUTEX_RELEASE(&Segment->Lock);
