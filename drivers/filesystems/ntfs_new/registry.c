@@ -279,5 +279,14 @@ GetGlobalSettingsFromRegistry()
                                                      L"NtfsTracePagingWrites",
                                                      FALSE);
 
+    /* Re-reads and checks the shape of every record (and index) a metadata
+     * change touched, right after the change (checked builds only). It runs
+     * inside the request and adds deep frames and reads to it, so it is off
+     * unless a lab turns it on. Default is OFF (0). Read once at load.
+     */
+    NtfsSetShapeVerifyAfterMutation(QueryBooleanRegistryValueEx(RegistryKey,
+                                                                L"NtfsVerifyShapeAfterMutation",
+                                                                FALSE));
+
     CloseRegistryKey(RegistryKey);
 }
