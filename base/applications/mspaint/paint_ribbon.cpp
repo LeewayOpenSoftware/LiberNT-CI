@@ -50,47 +50,48 @@ static void ApplySize(int px)
 }
 
 /* Execute handler: ribbon-only ids act on the models, the rest go to the main window as WM_COMMAND */
-static HRESULT OnRibbonExecute(UINT32 id, void *app_context)
+static BOOL HandleLocal(UINT32 id, HWND hWnd)
 {
-    HWND hWnd = (HWND)app_context;
 
     /* Framework commands handled by the ribbon itself */
     if (id == LWUI_APPMENU || id == LWUI_QAT_CUSTOMIZE || id == LWUI_RIBBON_MINIMIZE)
-        return S_OK;
+        return TRUE;
 
     if (id >= ID_FREESEL && id <= ID_RRECT)
     {
         toolsModel.SetActiveTool((TOOLTYPE)(id - ID_FREESEL + 1));
-        return S_OK;
+        return TRUE;
     }
     if (id >= PAINT_PALETTE_FIRST && id < PAINT_PALETTE_FIRST + PAINT_PALETTE_COUNT)
     {
         paletteModel.SetFgColor(g_paintPaletteItems[id - PAINT_PALETTE_FIRST].color);
-        return S_OK;
+        return TRUE;
     }
     if (id >= PAINT_PALETTE_ALT_FIRST && id < PAINT_PALETTE_ALT_FIRST + PAINT_PALETTE_COUNT)
     {
         paletteModel.SetBgColor(g_paintPaletteItems[id - PAINT_PALETTE_ALT_FIRST].color);
-        return S_OK;
+        return TRUE;
     }
     if (id >= 361 && id <= 368)
     {
         ApplySize(g_sizePx[id - 361]);
-        return S_OK;
+        return TRUE;
     }
 
     switch (id)
     {
     case 380: case 310: case 320: case 340: case 345: case 346: case 360: case 372:
-        return S_OK; /* galleries and drop-downs: their items execute */
+        return TRUE; /* galleries and drop-downs: their items execute */
     case IDM_IMAGECROP:
-        id = IDM_CROPSELECTION;
-        break;
-    case 301: mainWindow.SaveAsFormat(L".png"); return S_OK;
-    case 302: mainWindow.SaveAsFormat(L".jpg"); return S_OK;
-    case 303: mainWindow.SaveAsFormat(L".bmp"); return S_OK;
-    case 304: mainWindow.SaveAsFormat(L".gif"); return S_OK;
-    case 305: id = IDM_FILESAVEAS; break;
+        SendMessageW(hWnd, WM_COMMAND, MAKEWPARAM(IDM_CROPSELECTION, 0), 0);
+        return TRUE;
+    case 301: mainWindow.SaveAsFormat(L".png"); return TRUE;
+    case 302: mainWindow.SaveAsFormat(L".jpg"); return TRUE;
+    case 303: mainWindow.SaveAsFormat(L".bmp"); return TRUE;
+    case 304: mainWindow.SaveAsFormat(L".gif"); return TRUE;
+    case 305:
+        SendMessageW(hWnd, WM_COMMAND, MAKEWPARAM(IDM_FILESAVEAS, 0), 0);
+        return TRUE;
     case 311: case 312: case 313:
     {
         int n = (id == 311) ? 1 : (id == 312) ? 3 : 2;
@@ -98,51 +99,51 @@ static HRESULT OnRibbonExecute(UINT32 id, void *app_context)
             selectionModel.RotateNTimes90Degrees(n);
         else
             imageModel.RotateNTimes90Degrees(n);
-        return S_OK;
+        return TRUE;
     }
     case 314:
         if (selectionModel.m_bShow)
             selectionModel.FlipVertically();
         else
             imageModel.FlipVertically();
-        return S_OK;
+        return TRUE;
     case 315:
         if (selectionModel.m_bShow)
             selectionModel.FlipHorizontally();
         else
             imageModel.FlipHorizontally();
-        return S_OK;
+        return TRUE;
     case 321: case 322: case 323:
         toolsModel.SetBrushStyle(id == 321 ? BrushStyleSquare : id == 322 ? BrushStyleForeSlash : BrushStyleBackSlash);
         toolsModel.SetActiveTool(TOOL_BRUSH);
-        return S_OK;
-    case 347: toolsModel.SetShapeStyle(2); return S_OK; /* fill only */
-    case 348: toolsModel.SetShapeStyle(0); return S_OK; /* outline only */
-    case 350: toolsModel.SetShapeStyle(0); return S_OK;
-    case 351: toolsModel.SetShapeStyle(2); return S_OK;
-    case 352: toolsModel.SetShapeStyle(1); return S_OK;
+        return TRUE;
+    case 347: toolsModel.SetShapeStyle(2); return TRUE; /* fill only */
+    case 348: toolsModel.SetShapeStyle(0); return TRUE; /* outline only */
+    case 350: toolsModel.SetShapeStyle(0); return TRUE;
+    case 351: toolsModel.SetShapeStyle(2); return TRUE;
+    case 352: toolsModel.SetShapeStyle(1); return TRUE;
     case 370:
     {
         COLORREF c = paletteModel.GetFgColor();
         if (mainWindow.ChooseColor(&c))
             paletteModel.SetFgColor(c);
-        return S_OK;
+        return TRUE;
     }
     case 371:
     {
         COLORREF c = paletteModel.GetBgColor();
         if (mainWindow.ChooseColor(&c))
             paletteModel.SetBgColor(c);
-        return S_OK;
+        return TRUE;
     }
     case 390: case 391:
         if (toolsModel.GetActiveTool() == TOOL_TEXT && !::IsWindowVisible(fontsDialog))
             SendMessageW(hWnd, WM_COMMAND, MAKEWPARAM(IDM_FORMATICONBAR, 0), 0);
-        return S_OK;
+        return TRUE;
     case 392: case 393:
         toolsModel.SetBackgroundTransparent(id == 393);
         toolsModel.NotifyToolSettingsChanged();
-        return S_OK;
+        return TRUE;
     case IDM_BOLD: case IDM_ITALIC: case IDM_UNDERLINE:
     {
         DWORD &v = (id == IDM_BOLD) ? registrySettings.Bold :
@@ -154,12 +155,25 @@ static HRESULT OnRibbonExecute(UINT32 id, void *app_context)
             ::SendMessageW(hbar, TB_CHECKBUTTON, id, MAKELPARAM(v, 0));
         }
         toolsModel.NotifyToolChanged();
-        return S_OK;
+        return TRUE;
     }
     }
 
-    /* Route other commands to the main window as WM_COMMAND */
-    SendMessageW(hWnd, WM_COMMAND, MAKEWPARAM(id, 0), 0);
+    return FALSE;
+}
+
+/* Called by CMainWindow::OnCommand first: ribbon-only ids (menu, accelerator or ribbon) act here */
+BOOL PaintRibbonHandleCommand(UINT32 id)
+{
+    return HandleLocal(id, mainWindow);
+}
+
+/* Execute handler: ribbon-only ids act on the models, the rest go to the main window as WM_COMMAND */
+static HRESULT OnRibbonExecute(UINT32 id, void *app_context)
+{
+    HWND hWnd = (HWND)app_context;
+    if (!HandleLocal(id, hWnd))
+        SendMessageW(hWnd, WM_COMMAND, MAKEWPARAM(id, 0), 0);
     return S_OK;
 }
 

@@ -14,6 +14,7 @@ extern "C" {
 #endif
 
 HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon);
+BOOL PaintRibbonHandleCommand(UINT32 id);
 void PaintRibbonCleanup(ILeewayRibbon *ribbon);
 void PaintRibbonInvalidateCommand(ILeewayRibbon *ribbon, UINT32 command_id);
 void PaintRibbonInvalidateAll(ILeewayRibbon *ribbon);

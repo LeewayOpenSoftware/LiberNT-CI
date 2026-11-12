@@ -924,6 +924,9 @@ LRESULT CMainWindow::OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
         return 0;
     }
 
+    if (m_pRibbon && PaintRibbonHandleCommand(LOWORD(wParam)))
+        return 0;
+
     BOOL textShown = (toolsModel.GetActiveTool() == TOOL_TEXT && ::IsWindowVisible(textEditWindow));
     switch (LOWORD(wParam))
     {
