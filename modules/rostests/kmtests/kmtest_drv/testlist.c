@@ -325,6 +325,8 @@ KMT_TESTFUNC Test_MmDriverMemory;
 KMT_TESTFUNC Test_MmMapReserve;
 KMT_TESTFUNC Test_MmPhysical;
 KMT_TESTFUNC Test_MmPrefetchPages;
+KMT_TESTFUNC Test_MmPurgeCoherency;
+KMT_TESTFUNC Test_MmSectionCreateAcquire;
 KMT_TESTFUNC Test_MmPrivatePages;
 KMT_TESTFUNC Test_IoStackKM;
 KMT_TESTFUNC Test_IoActivityId;
@@ -608,6 +610,8 @@ const KMT_TEST TestList[] =
     { "MmDriverMemory",                     Test_MmDriverMemory },
     { "MmPhysical",                         Test_MmPhysical },
     { "MmPrefetchPages",                    Test_MmPrefetchPages },
+    { "MmPurgeCoherency",                   Test_MmPurgeCoherency },
+    { "MmSectionCreateAcquire",             Test_MmSectionCreateAcquire },
     { "MmPrivatePages",                     Test_MmPrivatePages },
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },
