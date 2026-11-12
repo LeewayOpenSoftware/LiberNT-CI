@@ -241,6 +241,15 @@ HRESULT WINAPI LeewayRibbonSetContext(ILeewayRibbon *ribbon, const WCHAR *name, 
 
 HRESULT WINAPI LeewayRibbonSetIconResolver(ILeewayRibbon *ribbon, LeewayUIIconResolver resolver, void *resolver_context);
 
+/* Recent files pane in the application menu (G5). The ribbon reads the most-
+ * recently-used list from HKCU\Software\Leeway\<app_name>\Recent (REG_SZ values
+ * "0".."N-1", most-recent first) and shows it as a right pane; choosing one calls
+ * on_open with the full path. max_items 0 hides the pane. The app maintains the
+ * list with LeewayRibbonAddRecentFile (push + dedup + persist). */
+typedef void (*LeewayUIRecentOpenHandler)(const WCHAR *path, void *context);
+HRESULT WINAPI LeewayRibbonSetRecentProvider(ILeewayRibbon *ribbon, LeewayUIRecentOpenHandler on_open, void *context, UINT32 max_items);
+HRESULT WINAPI LeewayRibbonAddRecentFile(ILeewayRibbon *ribbon, const WCHAR *path);
+
 /* Accelerator table whose keys are shown in tooltips (G22); the ribbon copies it. NULL = none. */
 HRESULT WINAPI LeewayRibbonSetAccelerators(ILeewayRibbon *ribbon, HACCEL accelerators);
 

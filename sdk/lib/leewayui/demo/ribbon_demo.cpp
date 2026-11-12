@@ -47,6 +47,13 @@ static const COLORREF kPalette[16] = {
     RGB(255,255,255), RGB(191,191,191), RGB(127,127,127), RGB(89,89,89),
 };
 
+static void CALLBACK OnRecentOpen(const WCHAR *path, void *ctx)
+{
+    (void)ctx;
+    swprintf(g_status, 256, L"open recent: %s", path);
+    OutputDebugStringW(g_status);
+}
+
 static HRESULT CALLBACK OnExecute(UINT32 id, void *ctx)
 {
     (void)ctx;
@@ -190,6 +197,45 @@ static void SaveWindowBmp(HWND hwnd, const WCHAR *path)
     free(bits); SelectObject(mem, old); DeleteObject(bmp); DeleteDC(mem); ReleaseDC(hwnd, dc);
 }
 
+static void SaveHwndBmp(HWND hwnd, const WCHAR *path)
+{
+    RECT wr; GetWindowRect(hwnd, &wr);
+    int w = wr.right - wr.left, h = wr.bottom - wr.top;
+    if (w <= 0 || h <= 0) return;
+    HDC dc = GetDC(hwnd), mem = CreateCompatibleDC(dc);
+    HBITMAP bmp = CreateCompatibleBitmap(dc, w, h);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    if (!PrintWindow(hwnd, mem, PW_RENDERFULLCONTENT)) PrintWindow(hwnd, mem, 0);
+    BITMAPFILEHEADER fh = {}; BITMAPINFOHEADER ih = {};
+    ih.biSize = sizeof ih; ih.biWidth = w; ih.biHeight = h; ih.biPlanes = 1; ih.biBitCount = 24; ih.biCompression = BI_RGB;
+    int stride = ((w * 3 + 3) & ~3); int img = stride * h;
+    BYTE *bits = (BYTE *)malloc(img); BITMAPINFO bi = {}; bi.bmiHeader = ih;
+    GetDIBits(mem, bmp, 0, h, bits, &bi, DIB_RGB_COLORS);
+    fh.bfType = 0x4D42; fh.bfOffBits = sizeof fh + sizeof ih; fh.bfSize = fh.bfOffBits + img;
+    FILE *f = _wfopen(path, L"wb");
+    if (f) { fwrite(&fh, sizeof fh, 1, f); fwrite(&ih, sizeof ih, 1, f); fwrite(bits, img, 1, f); fclose(f); }
+    free(bits); SelectObject(mem, old); DeleteObject(bmp); DeleteDC(mem); ReleaseDC(hwnd, dc);
+}
+
+static void SaveScreenRectBmp(HWND hwnd, const WCHAR *path)
+{
+    RECT wr; GetWindowRect(hwnd, &wr);
+    int w = wr.right - wr.left, h = wr.bottom - wr.top;
+    HDC sdc = GetDC(NULL), mem = CreateCompatibleDC(sdc);
+    HBITMAP bmp = CreateCompatibleBitmap(sdc, w, h);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    BitBlt(mem, 0, 0, w, h, sdc, wr.left, wr.top, SRCCOPY);
+    BITMAPFILEHEADER fh = {}; BITMAPINFOHEADER ih = {};
+    ih.biSize = sizeof ih; ih.biWidth = w; ih.biHeight = h; ih.biPlanes = 1; ih.biBitCount = 24; ih.biCompression = BI_RGB;
+    int stride = ((w * 3 + 3) & ~3); int img = stride * h;
+    BYTE *bits = (BYTE *)malloc(img); BITMAPINFO bi = {}; bi.bmiHeader = ih;
+    GetDIBits(mem, bmp, 0, h, bits, &bi, DIB_RGB_COLORS);
+    fh.bfType = 0x4D42; fh.bfOffBits = sizeof fh + sizeof ih; fh.bfSize = fh.bfOffBits + img;
+    FILE *f = _wfopen(path, L"wb");
+    if (f) { fwrite(&fh, sizeof fh, 1, f); fwrite(&ih, sizeof ih, 1, f); fwrite(bits, img, 1, f); fclose(f); }
+    free(bits); SelectObject(mem, old); DeleteObject(bmp); DeleteDC(mem); ReleaseDC(NULL, sdc);
+}
+
 static const WCHAR *g_shot;
 static const WCHAR *g_openSurface; /* "appmenu" | "textcolor" | NULL */
 
@@ -203,6 +249,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         SetColourCollections(g_ribbon);
         static LeewayAurelineConfig s_aur = { L"../icons", TRUE };
         LeewayRibbonUseAurelineIcons(g_ribbon, &s_aur);
+        LeewayRibbonSetRecentProvider(g_ribbon, OnRecentOpen, NULL, 8);
+        LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Docs\\Quarterly Report.rtf");
+        LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Docs\\Notes.txt");
+        LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Users\\me\\Letter.rtf");
+        LeewayRibbonAddRecentFile(g_ribbon, L"D:\\Projects\\readme.md");
         return 0;
     }
     case WM_SIZE: {
@@ -267,9 +318,24 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR cmd, int show)
     UpdateWindow(hwnd);
 
     if (g_shot) {
-        /* drive a surface open, let it paint, screenshot, exit */
-        for (int i = 0; i < 6; i++) { MSG m; while (PeekMessage(&m, 0, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessage(&m); } Sleep(120); }
-        SaveWindowBmp(hwnd, g_shot);
+        auto pump = [](){ MSG m; while (PeekMessage(&m, 0, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessage(&m); } };
+        for (int i = 0; i < 6; i++) { pump(); Sleep(120); }
+        if (g_openSurface && !wcscmp(g_openSurface, L"appmenu") && g_ribbon) {
+            HWND rb = LeewayRibbonGetHWND(g_ribbon);
+            const int cand[][2] = { {26,37},{26,50},{26,25},{40,37},{20,40},{26,103} };
+            HWND pop = NULL;
+            for (int c = 0; c < 6 && !pop; c++) {
+                LPARAM pt = MAKELPARAM(cand[c][0], cand[c][1]);
+                SendMessage(rb, WM_LBUTTONDOWN, MK_LBUTTON, pt);
+                SendMessage(rb, WM_LBUTTONUP, 0, pt);
+                for (int i = 0; i < 4; i++) { pump(); Sleep(80); }
+                pop = FindWindowW(L"LeewayUIRibbonPopup", NULL);
+            }
+            if (pop) { SaveHwndBmp(pop, g_shot); }
+            else { fputws(L"NO POPUP", stderr); SaveWindowBmp(hwnd, g_shot); }
+        } else {
+            SaveWindowBmp(hwnd, g_shot);
+        }
         return 0;
     }
 

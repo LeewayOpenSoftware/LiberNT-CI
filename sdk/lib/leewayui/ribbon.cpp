@@ -27,6 +27,7 @@
 #define MAX_KEYTIP      4
 #define MAX_CONTEXTS    16
 #define MAX_QAT         32
+#define MAX_RECENT      16
 #define MAX_GROUPS      32
 
 /* Logical metrics at 96 dpi; everything is scaled through LeewayDpiScale. */
@@ -34,7 +35,7 @@ enum {
     M_QAT_H = 24, M_STRIP_H = 26, M_BAND_H = 92, M_PAD = 3,
     M_ICON_L = 32, M_ICON_S = 16, M_LARGE_H = 66, M_LARGE_MIN_W = 46, M_SMALL_H = 22,
     M_GROUP_LABEL_H = 16, M_TAB_PAD = 11, M_APPBTN_W = 52, M_ARROW_W = 12, M_SEP_W = 6,
-    M_MENU_ROW_H = 24, M_APPMENU_ROW_H = 40, M_APPMENU_W = 240, M_GALLERY_CELL_W = 76, M_GALLERY_CELL_H = 26,
+    M_MENU_ROW_H = 24, M_APPMENU_ROW_H = 40, M_APPMENU_W = 240, M_RECENT_W = 200, M_GALLERY_CELL_W = 76, M_GALLERY_CELL_H = 26,
     M_STRIP_BTN = 20, M_KEYTIP_H = 14, M_TIP_PAD = 6, M_LAUNCHER = 12,
     M_CELL = 22, M_COMBO_W = 110, M_STRIP_SCROLL_W = 14, M_CHECK = 13, M_COMBO_LIST_H = 200, M_SWATCH_L = 26,
 };
@@ -128,6 +129,7 @@ enum ItemFlags {
     IF_CHECKED = 32,    /* menu row currently checked */
     IF_CONTEXT = 64,    /* contextual tab */
     IF_DISABLED = 128,  /* gallery scroll button at its end */
+    IF_RECENT = 256,    /* app-menu recent-files row (cmd = index; +IF_DISABLED = header) */
 };
 
 struct Item {
@@ -196,6 +198,13 @@ struct ILeewayRibbon {
     LeewayUICommandExecuteHandler execute;
     LeewayUICommandStateHandler state;
     void *ctx;
+
+    LeewayUIRecentOpenHandler recent_open;
+    void *recent_ctx;
+    UINT32 recent_max;
+    UINT32 recent_count;
+    WCHAR recent_paths[MAX_RECENT][MAX_PATH];
+    const WCHAR *recent_names[MAX_RECENT];
 
     ILeewayTheme *theme;
     UINT32 dpi;
@@ -1260,7 +1269,7 @@ static void PaintItem(ILeewayRibbon *r, HDC hdc, Surface *s, int index, COLORREF
     COLORREF color = it->color;
     if (it->kind == IT_CONTROL || it->kind == IT_SPLITARROW || it->kind == IT_QAT || it->kind == IT_HELP ||
         it->kind == IT_MINBTN || it->kind == IT_LAUNCHER || it->kind == IT_GALCELL ||
-        (it->kind == IT_MENUROW && !(it->flags & IF_CHECKMARK))) {
+        (it->kind == IT_MENUROW && !(it->flags & (IF_CHECKMARK | IF_RECENT)))) {
         QueryState(r, it->cmd, &st, &label, NULL, &icon_id);
         enabled = st.enabled;
         checked = st.checked;
@@ -1505,12 +1514,15 @@ static void PaintItem(ILeewayRibbon *r, HDC hdc, Surface *s, int index, COLORREF
         if (it->flags & IF_CHECKMARK) {
             if (checked) DrawCheck(r, hdc, x + Sc(r, 8), (rc.top + rc.bottom) / 2, text);
             x += Sc(r, 20);
+        } else if (it->flags & IF_RECENT) {
+            x += Sc(r, 4);
         } else {
             int sz = (it->flags & IF_ICON32) ? Sc(r, M_ICON_L) : Sc(r, M_ICON_S);
             DrawIconSlot(r, hdc, x, rc.top + (rc.bottom - rc.top - sz) / 2, sz, icon_id, label, enabled, surface_bg);
             x += sz + Sc(r, 8);
         }
         RECT lr = {x, rc.top, rc.right - Sc(r, 6), rc.bottom};
+        if ((it->flags & IF_RECENT) && (it->flags & IF_DISABLED)) { SelectObject(hdc, r->font_bold); text = Col(r, LWUI_COLOR_TEXT_DISABLED); }
         SetTextColor(hdc, text);
         DrawTextW(hdc, label ? label : L"", -1, &lr, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
         break;
@@ -1729,6 +1741,7 @@ static LRESULT CALLBACK TipWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 static void ClosePopup(ILeewayRibbon *r);
 static void Exec(ILeewayRibbon *r, UINT32 id);
 static void OpenPopup(ILeewayRibbon *r, PopupKind kind, const RECT *anchor_client, HWND anchor_hwnd, UINT32 owner_cmd, const LeewayUIGroup *grp, UINT32 tab, BOOL keytips);
+static void ReadRecent(ILeewayRibbon *r);
 
 static void PopupSetRect(Popup *p, const RECT *anchor_screen, int w, int h)
 {
@@ -1864,8 +1877,31 @@ static void BuildPopup(Popup *p, HDC hdc, int ribbon_width, int *out_w, int *out
                 y += row;
             }
         }
-        *out_w = w + 2 * pad;
-        *out_h = y + pad;
+        int left_h = y;
+        int total_w = w + 2 * pad;
+        if (r->recent_open && r->recent_max > 0) {
+            ReadRecent(r);
+            if (r->recent_count > 0) {
+                int rw = Sc(r, M_RECENT_W);
+                int rx = w + 2 * pad;
+                int ry = pad;
+                Item *hdr = SurfaceAdd(s);
+                if (hdr) { hdr->kind = IT_MENUROW; hdr->cmd = 0; hdr->label = L"Recent"; hdr->icon_id = 0; hdr->flags = IF_RECENT | IF_DISABLED; SetRect(&hdr->rc, rx, ry, rx + rw, ry + row); }
+                ry += row;
+                for (UINT32 i = 0; i < r->recent_count; i++) {
+                    Item *ri = SurfaceAdd(s);
+                    if (!ri) break;
+                    ri->kind = IT_MENUROW; ri->cmd = i; ri->label = r->recent_names[i];
+                    ri->icon_id = 0; ri->flags = IF_RECENT;
+                    SetRect(&ri->rc, rx, ry, rx + rw, ry + row);
+                    ry += row;
+                }
+                total_w = rx + rw + pad;
+                if (ry > left_h) left_h = ry;
+            }
+        }
+        *out_w = total_w;
+        *out_h = left_h + pad;
         break;
     }
     case PK_QATMENU: {
@@ -1933,6 +1969,15 @@ static void PopupActivate(Popup *p, int index)
     Item it = p->s.items[index];
     switch (it.kind) {
     case IT_MENUROW: {
+        if (it.flags & IF_RECENT) {
+            if (!(it.flags & IF_DISABLED) && r->recent_open && it.cmd < r->recent_count) {
+                WCHAR path[MAX_PATH];
+                lstrcpynW(path, r->recent_paths[it.cmd], MAX_PATH);
+                ClosePopup(r);
+                r->recent_open(path, r->recent_ctx);
+            }
+            return;
+        }
         if (p->kind == PK_QATMENU) {
             if (it.cmd == LWUI_QAT_CUSTOMIZE) {
                 r->qat_below = !r->qat_below;
@@ -3494,6 +3539,84 @@ HRESULT WINAPI LeewayRibbonSetContext(ILeewayRibbon *r, const WCHAR *name, BOOL 
         }
     }
     Relayout(r);
+    return S_OK;
+}
+
+/* ---- recent files (G5) ---- */
+static void RecentRegBase(ILeewayRibbon *r, WCHAR *out, int cch)
+{
+    const WCHAR *app = (r->layout && r->layout->app_name) ? r->layout->app_name : NULL;
+    if (!app) { out[0] = 0; return; }
+    wsprintfW(out, L"Software\\Leeway\\%s\\Recent", app); (void)cch;
+    out[cch - 1] = 0;
+}
+
+static const WCHAR *BaseName(const WCHAR *path)
+{
+    const WCHAR *b = path;
+    for (const WCHAR *p = path; *p; p++)
+        if (*p == L'\\' || *p == L'/') b = p + 1;
+    return b;
+}
+
+static void ReadRecent(ILeewayRibbon *r)
+{
+    r->recent_count = 0;
+    WCHAR key[256]; RecentRegBase(r, key, 256);
+    if (!key[0]) return;
+    HKEY h;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, key, 0, KEY_READ, &h) != ERROR_SUCCESS) return;
+    UINT32 cap = (r->recent_max && r->recent_max < MAX_RECENT) ? r->recent_max : MAX_RECENT;
+    for (UINT32 i = 0; i < cap; i++) {
+        WCHAR name[16]; wsprintfW(name, L"%u", i);
+        DWORD type = 0, cb = sizeof(r->recent_paths[0]);
+        if (RegQueryValueExW(h, name, NULL, &type, (BYTE *)r->recent_paths[r->recent_count], &cb) != ERROR_SUCCESS || type != REG_SZ)
+            break;
+        r->recent_paths[r->recent_count][MAX_PATH - 1] = 0;
+        if (!r->recent_paths[r->recent_count][0]) break;
+        r->recent_names[r->recent_count] = BaseName(r->recent_paths[r->recent_count]);
+        r->recent_count++;
+    }
+    RegCloseKey(h);
+}
+
+static void WriteRecent(ILeewayRibbon *r)
+{
+    WCHAR key[256]; RecentRegBase(r, key, 256);
+    if (!key[0]) return;
+    HKEY h;
+    if (RegCreateKeyExW(HKEY_CURRENT_USER, key, 0, NULL, 0, KEY_WRITE, NULL, &h, NULL) != ERROR_SUCCESS) return;
+    for (UINT32 i = 0; i < MAX_RECENT; i++) { WCHAR nm[16]; wsprintfW(nm, L"%u", i); RegDeleteValueW(h, nm); }
+    for (UINT32 i = 0; i < r->recent_count; i++) {
+        WCHAR nm[16]; wsprintfW(nm, L"%u", i);
+        RegSetValueExW(h, nm, 0, REG_SZ, (const BYTE *)r->recent_paths[i],
+                       (DWORD)((lstrlenW(r->recent_paths[i]) + 1) * sizeof(WCHAR)));
+    }
+    RegCloseKey(h);
+}
+
+HRESULT WINAPI LeewayRibbonSetRecentProvider(ILeewayRibbon *r, LeewayUIRecentOpenHandler on_open, void *context, UINT32 max_items)
+{
+    if (!r) return E_INVALIDARG;
+    r->recent_open = on_open;
+    r->recent_ctx = context;
+    r->recent_max = (max_items > MAX_RECENT) ? MAX_RECENT : max_items;
+    return S_OK;
+}
+
+HRESULT WINAPI LeewayRibbonAddRecentFile(ILeewayRibbon *r, const WCHAR *path)
+{
+    if (!r || !path || !path[0]) return E_INVALIDARG;
+    ReadRecent(r);
+    WCHAR tmp[MAX_RECENT][MAX_PATH]; UINT32 n = 0;
+    lstrcpynW(tmp[n++], path, MAX_PATH);
+    for (UINT32 i = 0; i < r->recent_count && n < MAX_RECENT; i++)
+        if (lstrcmpiW(r->recent_paths[i], path) != 0) lstrcpynW(tmp[n++], r->recent_paths[i], MAX_PATH);
+    UINT32 cap = r->recent_max ? ((r->recent_max < MAX_RECENT) ? r->recent_max : MAX_RECENT) : MAX_RECENT;
+    if (n > cap) n = cap;
+    for (UINT32 i = 0; i < n; i++) { lstrcpynW(r->recent_paths[i], tmp[i], MAX_PATH); r->recent_names[i] = BaseName(r->recent_paths[i]); }
+    r->recent_count = n;
+    WriteRecent(r);
     return S_OK;
 }
 
