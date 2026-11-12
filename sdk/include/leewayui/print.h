@@ -45,7 +45,14 @@ typedef struct {
     HGLOBAL dev_mode;      /* DEVMODEW (printer + paper + orientation); may be NULL until first use */
     HGLOBAL dev_names;     /* DEVNAMESW (driver/device/output); may be NULL */
     RECT    margins_cmm;   /* page margins, hundredths of a millimetre (left/top/right/bottom) */
-    UINT32  reserved;
+    /* Per-document print scaling (Win7 Paint Page Setup). The frame does not act
+     * on these - the app reads them in render_page (and, later, the Win7-style
+     * Page setup dialog edits them). WordPad can ignore them (scale 100). */
+    UINT32  scale_percent; /* 100 = actual size; 0 is treated as 100 */
+    UINT16  fit_pages_x;   /* 0 = use scale_percent; else "fit to X pages across" */
+    UINT16  fit_pages_y;   /* 0 = use scale_percent; else "...by Y pages down" */
+    BOOL    center_h;      /* centre horizontally on the sheet */
+    BOOL    center_v;      /* centre vertically */
 } LeewayPrintSettings;
 
 /* Fill s with the default printer and 25.4 mm (1 in) margins. dev_mode/dev_names
@@ -116,6 +123,9 @@ typedef enum {
 } LeewayPreviewAction;
 typedef void (*LeewayPreviewActionFn)(LeewayPreviewAction action, void *ctx);
 
+/* config.flags */
+#define LWUI_PREVIEW_FIT  0x00000001u   /* reserved: show a "Fit to page" toggle in the tab (lands with the Win7 Page setup layer) */
+
 typedef struct {
     LeewayPreviewPageCountFn   page_count;    /* required */
     LeewayPreviewRenderPageFn  render_page;   /* required */
@@ -124,6 +134,7 @@ typedef struct {
     const LeewayPrintSettings *settings;      /* paper geometry source; NULL = Letter + 1in */
     const WCHAR               *app_name;       /* persist one/two-up + zoom under HKCU\Software\Leeway\<app_name>; NULL = none */
     LeewayThemePref            theme;          /* SYSTEM / LIGHT / DARK */
+    UINT32                     flags;          /* LWUI_PREVIEW_* (0 = defaults) */
 } LeewayPrintPreviewConfig;
 
 /* Create the frame as a child of `parent` (hidden). The app positions it with
