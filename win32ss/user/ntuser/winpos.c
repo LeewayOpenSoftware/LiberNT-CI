@@ -1428,6 +1428,7 @@ typedef struct _WINPOS_ENTRY
    BOOL bDeferActivate;
    BOOL bNoActivate;
    BOOL bCompositedPureMove;
+   BOOL bExposedParent;
    BOOL bRefreshFrame;
    UINT Flags;
    HWND hwndBand;
@@ -2059,7 +2060,9 @@ co_WinPosBatchSyncPaint(PWINPOS_ENTRY Entry)
    UINT flags = Entry->Flags;
    PWINDOWPOS WinPos = &Entry->WinPos;
 
+   /* SWP_NOREDRAW, also set for a window that is not visible, leaves every painting of the change to the caller */
    if(!(flags & SWP_DEFERERASE) &&
+      !(WinPos->flags & SWP_NOREDRAW) &&
       !((Window->state & WNDS_BEINGACTIVATED) && (WinPos->flags & SWP_AGG_STATUSFLAGS) == SWP_AGG_NOPOSCHANGE))
    {
        /* erase parent when hiding or resizing child */
@@ -2070,7 +2073,9 @@ co_WinPosBatchSyncPaint(PWINPOS_ENTRY Entry)
        {
            PWND Parent = Window->spwndParent;
            if (!Parent || UserIsDesktopWindow(Parent)) Parent = Window;
-           UserSyncAndPaintWindows( Parent, RDW_ERASENOW | RDW_CLIPCHILDREN);
+           /* A parent that clips its children has nothing under the child to erase unless the change uncovered some of it */
+           if (Parent == Window || Entry->bExposedParent || !(Parent->style & WS_CLIPCHILDREN))
+               UserSyncAndPaintWindows( Parent, RDW_ERASENOW | RDW_CLIPCHILDREN);
        }
 
        /* Give newly shown windows a chance to redraw */
@@ -2104,6 +2109,7 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
    BOOL PosChanged = FALSE;
    BOOL bComposited = FALSE;
    BOOL bCompositedPureMove = FALSE;
+   BOOL bExposedParent = FALSE;
    BOOL bExComposited = FALSE;
    PWND pwndAncestor;
    UINT ZOrderFlags;
@@ -2662,6 +2668,7 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
              if (RgnType != ERROR && RgnType != NULLREGION)
              {
                 co_VIS_WindowLayoutChanged(Window, ExposedRgn);
+                bExposedParent = TRUE;
              }
              REGION_Delete(ExposedRgn);
          }
@@ -2752,6 +2759,7 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
    Entry->WinPos = WinPos;
    Entry->NewWindowRect = NewWindowRect;
    Entry->bCompositedPureMove = bCompositedPureMove;
+   Entry->bExposedParent = bExposedParent;
    if (!Entry->bDeferActivate)
       co_WinPosBatchSyncPaint(Entry);
    return TRUE;
@@ -2816,7 +2824,11 @@ co_WinPosBatchChanged(PWINPOS_ENTRY Entry)
          WinPos.y -= Window->spwndParent->rcClient.top;
       }
       TRACE("WM_WINDOWPOSCHANGED hwnd %p Flags %04x\n",WinPos.hwnd,WinPos.flags);
-      co_IntSendSystemMessageNoWait(WinPos.hwnd, WM_WINDOWPOSCHANGED, 0, (LPARAM) &WinPos);
+      /* SetWindowPos returns after the owner thread handled the change; a dying caller cannot wait */
+      if (Entry->bRequest && !(gptiCurrent->TIF_flags & TIF_INCLEANUP))
+         co_IntSendSystemMessage(WinPos.hwnd, WM_WINDOWPOSCHANGED, 0, (LPARAM) &WinPos);
+      else
+         co_IntSendSystemMessageNoWait(WinPos.hwnd, WM_WINDOWPOSCHANGED, 0, (LPARAM) &WinPos);
    }
 
    if (Entry->bRefreshFrame && Window && IntIsWindow(WinPos.hwnd))

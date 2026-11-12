@@ -17,6 +17,7 @@ extern void func_CreateDialog(void);
 extern void func_CreateIconFromResourceEx(void);
 extern void func_CoveredWindow(void);
 extern void func_CreateWindowEx(void);
+extern void func_CrossThreadWindowPos(void);
 extern void func_DeferWindowPos(void);
 extern void func_DefFrameProc(void);
 extern void func_DeskWallpaper(void);
@@ -61,6 +62,7 @@ extern void func_GetUserObjectInformation(void);
 extern void func_GetWindowPlacement(void);
 extern void func_GhostWindow(void);
 extern void func_GW_ENABLEDPOPUP(void);
+extern void func_HiddenChildWindowPos(void);
 extern void func_ImeWindow(void);
 extern void func_InitializeLpkHooks(void);
 extern void func_InputMessageSource(void);
@@ -150,6 +152,7 @@ const struct test winetest_testlist[] =
     { "CreateIconFromResourceEx", func_CreateIconFromResourceEx },
     { "CoveredWindow", func_CoveredWindow },
     { "CreateWindowEx", func_CreateWindowEx },
+    { "CrossThreadWindowPos", func_CrossThreadWindowPos },
     { "DeferWindowPos", func_DeferWindowPos },
     { "DefFrameProc", func_DefFrameProc },
     { "DeskWallpaper", func_DeskWallpaper },
@@ -194,6 +197,7 @@ const struct test winetest_testlist[] =
     { "GetWindowPlacement", func_GetWindowPlacement },
     { "GhostWindow", func_GhostWindow },
     { "GW_ENABLEDPOPUP", func_GW_ENABLEDPOPUP },
+    { "HiddenChildWindowPos", func_HiddenChildWindowPos },
     { "ImeWindow", func_ImeWindow },
     { "InitializeLpkHooks", func_InitializeLpkHooks },
     { "InputMessageSource", func_InputMessageSource },

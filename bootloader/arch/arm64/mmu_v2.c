@@ -921,7 +921,7 @@ typedef struct _ARM64_MAPPING_REQUEST
     ULONGLONG VirtualBase;
     ULONGLONG PhysicalBase;
     ULONGLONG Size;
-    ULONG Attributes;
+    ULONGLONG Attributes;
     BOOLEAN TableOnly;
 } ARM64_MAPPING_REQUEST, *PARM64_MAPPING_REQUEST;
 
@@ -955,7 +955,7 @@ static BOOLEAN Arm64MappingPlanAddMapping(PARM64_MAPPING_PLAN Plan,
                                           ULONGLONG VirtualBase,
                                           ULONGLONG PhysicalBase,
                                           ULONGLONG Size,
-                                          ULONG Attributes,
+                                          ULONGLONG Attributes,
                                           BOOLEAN TableOnly);
 static BOOLEAN Arm64MappingPlanEnsureTables(PARM64_MAPPING_PLAN Plan,
                                             ULONGLONG VirtualBase,
@@ -2030,23 +2030,37 @@ Arm64MappingPlanAddMapping(
     ULONGLONG VirtualBase,
     ULONGLONG PhysicalBase,
     ULONGLONG Size,
-    ULONG Attributes,
+    ULONGLONG Attributes,
     BOOLEAN TableOnly)
 {
     if (Size == 0)
         return TRUE;
-
-    if (Plan->RequestCount >= ARM64_PLAN_MAX_REQUESTS)
-    {
-        ERR("ARM64: Mapping plan request overflow (max %u)\n", ARM64_PLAN_MAX_REQUESTS);
-        return FALSE;
-    }
 
     ULONGLONG alignedVa = VirtualBase & ~(PAGE_SIZE - 1ULL);
     ULONGLONG alignedPa = PhysicalBase & ~(PAGE_SIZE - 1ULL);
     ULONGLONG offset = PhysicalBase - alignedPa;
     ULONGLONG alignedSize = Size + offset;
     alignedSize = (alignedSize + PAGE_SIZE - 1ULL) & ~(PAGE_SIZE - 1ULL);
+
+    if (Plan->RequestCount != 0)
+    {
+        ARM64_MAPPING_REQUEST *Last = &Plan->Requests[Plan->RequestCount - 1];
+
+        if (Last->Target == Target && Last->TableOnly == TableOnly &&
+            Last->Attributes == Attributes &&
+            Last->VirtualBase + Last->Size == alignedVa &&
+            Last->PhysicalBase + Last->Size == alignedPa)
+        {
+            Last->Size += alignedSize;
+            return TRUE;
+        }
+    }
+
+    if (Plan->RequestCount >= ARM64_PLAN_MAX_REQUESTS)
+    {
+        ERR("ARM64: Mapping plan request overflow (max %u)\n", ARM64_PLAN_MAX_REQUESTS);
+        return FALSE;
+    }
 
     ARM64_MAPPING_REQUEST *Request = &Plan->Requests[Plan->RequestCount++];
     Request->Target = Target;

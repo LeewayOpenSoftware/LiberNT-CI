@@ -20,6 +20,7 @@ list(APPEND SOURCE
     CreateIconFromResourceEx.c
     CoveredWindow.c
     CreateWindowEx.c
+    CrossThreadWindowPos.c
     DeferWindowPos.c
     DefFrameProc.c
     DeskWallpaper.c
@@ -60,6 +61,7 @@ list(APPEND SOURCE
     GetWindowPlacement.c
     GhostWindow.c
     GW_ENABLEDPOPUP.c
+    HiddenChildWindowPos.c
     ImeWindow.c
     InitializeLpkHooks.c
     InputMessageSource.c

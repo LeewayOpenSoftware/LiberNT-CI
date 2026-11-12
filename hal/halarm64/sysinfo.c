@@ -188,7 +188,13 @@ NTAPI
 HalConvertDeviceIdtToIrql(
     _In_ ULONG Vector)
 {
-    UNREFERENCED_PARAMETER(Vector);
+    if ((HalpArm64MsiRoutingCount != 0) &&
+        ((Vector - HalpArm64MsiRoutingBase) < HalpArm64MsiRoutingCount))
+    {
+        return HALP_ARM64_MSI_DEFAULT_IRQL;
+    }
+
+    /* TODO: a line-based vector's IRQL is only known to HalGetInterruptVector */
     return 0;
 }
 
@@ -281,6 +287,7 @@ HalGetMessageRoutingInfo(
     if (RoutingInfo->Vector == 0)
         return STATUS_INVALID_PARAMETER;
 
+    /* TODO: a message's processor is not kept per vector and taken in turn over its affinity as in the x86 HAL */
     TargetInfo.Version = HAL_INTERRUPT_TARGET_INFORMATION_VERSION;
     TargetInfo.TargetProcessors = RoutingInfo->TargetProcessors;
     TargetInfo.ProcessorNumber = 0;

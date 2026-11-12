@@ -558,9 +558,15 @@ HalpPciSetExtendedConfigWindow(
     _In_ ULONG StartBus,
     _In_ ULONG EndBus)
 {
+#ifndef _MINIHAL_
     HalpPciExtendedConfigBase = BaseAddress;
     HalpPciExtendedConfigStartBus = StartBus;
     HalpPciExtendedConfigEndBus = min(EndBus, PCI_MAX_BRIDGE_NUMBER);
+#else
+    UNREFERENCED_PARAMETER(BaseAddress);
+    UNREFERENCED_PARAMETER(StartBus);
+    UNREFERENCED_PARAMETER(EndBus);
+#endif
 }
 #endif
 

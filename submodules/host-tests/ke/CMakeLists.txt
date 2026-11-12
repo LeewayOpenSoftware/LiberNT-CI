@@ -13,6 +13,19 @@ add_test(NAME ke.xstate_layout COMMAND ke_xstate_layout)
 if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
     find_package(Python3 QUIET COMPONENTS Interpreter)
     if(Python3_Interpreter_FOUND)
+# Leeway: the tests below read the clean-room kernel's sources (ntos/ke/ktimer.c, clockint.c, freezecpu.c, ...),
+# which main-nt10 introduced in cc2dc4dffda and which this tree does not carry (owner decision B, 2026-11-12:
+# Leeway keeps its kernel). They are kept, not run; re-enable them if that kernel is ever adopted.
+#        add_test(NAME ke.time_adjustment COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/time-adjustment-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.timer_expired_list COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timer-expired-list-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.timer_insertion COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timer-insertion-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.timer_setter COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/timer-setter-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.wait_timer_cleanup COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/wait-timer-cleanup-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
         add_test(NAME ke.amd64_interrupt COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/amd64-interrupt-test.py
             --source ${REACTOS_HOST_SOURCE_ROOT}/ntoskrnl/ke/amd64/interrupt.c --cc ${CMAKE_C_COMPILER})
         add_test(NAME ke.amd64_smp COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/amd64-smp-test.py
@@ -21,6 +34,16 @@ if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
             --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
         add_test(NAME ke.amd64_freeze_timeout COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/amd64-freeze-timeout-test.py
             --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.amd64_freeze_targets COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/amd64-freeze-targets-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.amd64_processor_number COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/amd64-processor-number-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.amd64_ap_start COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/amd64-ap-start-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.freeze_owner COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/freeze-owner-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
+#        add_test(NAME ke.clock_set_time COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/clock-set-time-test.py
+#            --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
         add_test(NAME ke.amd64_freeze_publication COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/amd64-freeze-publication-test.py
             --root ${REACTOS_HOST_SOURCE_ROOT} --cc ${CMAKE_C_COMPILER})
         add_test(NAME ex.workqueue_startup COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/workqueue-startup-test.py

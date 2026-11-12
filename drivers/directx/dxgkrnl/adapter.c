@@ -591,6 +591,38 @@ DxgkpShouldRegisterDisplayBridge(
     return RegisterDisplayBridge;
 }
 
+/* A Basic Display fallback that starts after another adapter took the boot
+ * display stays retired, as it would have been had it started first */
+static BOOLEAN
+DxgkpFallbackYieldsDisplay(
+    _In_ PDXGKRNL_ADAPTER Adapter)
+{
+    PDEVICE_OBJECT OwnerDeviceObject;
+    PDXGKRNL_ADAPTER Owner;
+    BOOLEAN Yields;
+
+    PAGED_CODE();
+
+    if (Adapter->MiniportContext == NULL || !Adapter->IsBasicDisplayFallback)
+        return FALSE;
+
+    (VOID)KeWaitForSingleObject(&g_PostDisplayOwnershipMutex,
+                                Executive,
+                                KernelMode,
+                                FALSE,
+                                NULL);
+    Owner = DxgkpReferencePostDisplayOwner(&OwnerDeviceObject);
+    Yields = Owner != NULL &&
+             Owner != Adapter &&
+             Owner->MiniportContext != NULL &&
+             !Owner->IsBasicDisplayFallback;
+    if (OwnerDeviceObject != NULL)
+        ObDereferenceObject(OwnerDeviceObject);
+    KeReleaseMutex(&g_PostDisplayOwnershipMutex, FALSE);
+
+    return Yields;
+}
+
 /* Complete the claimant-bound handoff after the complete start state has been
  * published. A successful claimant commits the handoff. A non-restartable
  * failure defers the rollback to the claimant's RemoveDevice, when its
@@ -14018,6 +14050,16 @@ DxgkAdapterStart(
 
     PAGED_CODE();
 
+    if (DxgkpFallbackYieldsDisplay(Adapter))
+    {
+        /* TODO: a retired fallback does not take the display back when the adapter holding it goes away */
+        DxgkpSetBasicDisplayUiSuppressed(Adapter, TRUE);
+        DXGKRNL_INFO("DISPLAY_BRIDGE: BasicDisplay adapter %p stays retired; "
+                     "another adapter owns the desktop\n",
+                     Adapter);
+        return STATUS_SUCCESS;
+    }
+
     RtlZeroMemory(&Progress, sizeof(Progress));
     AdapterStart100ns = DxgkpTraceNow100ns();
 
@@ -14307,7 +14349,7 @@ DxgkAdapterStart(
         }
     }
 
-    if (!Adapter->IsBasicDisplayFallback && DxgkpIsPostDisplayDevice(Adapter))
+    if (!Adapter->IsBasicDisplayFallback && DxgkpIsPostDisplayDevice(Adapter) && !DxgkpScreenLogRequested())
     {
         /* TODO: keep boot output in a virtual frame buffer for the boot image relay instead of dropping it */
         DXGKRNL_TRACE("DxgkAdapterStart: POST display adapter %p takes the display from the boot screen\n", Adapter);

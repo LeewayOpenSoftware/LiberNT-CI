@@ -5,9 +5,10 @@ if(NOT ARCH STREQUAL "i386" AND NOT ARCH STREQUAL "amd64")
     return()
 endif()
 
-include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/include)
+include_directories(${REACTOS_SOURCE_DIR}/ntoskrnl/include ${REACTOS_SOURCE_DIR}/win32ss)
 
 list(APPEND SOURCE
+    GuiServiceFailure.c
     SystemCall.c
     XStateConfig.cpp
     XStateSave.c
