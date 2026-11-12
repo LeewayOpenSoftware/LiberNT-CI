@@ -751,6 +751,13 @@ CmpDestroySecurityCache(
     IN PCMHIVE Hive
 );
 
+VOID
+NTAPI
+CmpRemoveFromSecurityCache(
+    IN PHHIVE Hive,
+    IN HCELL_INDEX SecurityCell
+);
+
 //
 // Value Cache Functions
 //
