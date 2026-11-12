@@ -71,6 +71,7 @@ if(FREELDR_WIM_RAMDISK)
         ${REACTOS_SOURCE_DIR}/sdk/lib/libwim/wimcore.c
         ${REACTOS_SOURCE_DIR}/sdk/lib/libwim/xpress_huff.c)
     set_property(TARGET freeldr_wimcore PROPERTY C_STANDARD 11)
+    set_bootloader_optimization(freeldr_wimcore)
     target_include_directories(freeldr_wimcore PRIVATE
         ${REACTOS_SOURCE_DIR}/sdk/include/reactos/libs/libwim
         ${REACTOS_SOURCE_DIR}/boot/freeldr/freeldr/include)

@@ -197,6 +197,10 @@ jobs:
       timeout-minutes: 10
       run: python3 -u sdk/tools/check-forwarder-loops.py ${{steps.configure.outputs.outdir}}
 
+    - name: Check the FreeLoader size
+      # The PC loader stops itself at boot when its PE exceeds MAX_FREELDR_PE_SIZE.
+      run: python3 -u sdk/tools/check-freeldr-size.py ${{steps.configure.outputs.outdir}}
+
   build-rostests:
     # Compile the test suite (modules/rostests) with clang for amd64. A
     # separate build, because ENABLE_ROSTESTS also changes what goes into

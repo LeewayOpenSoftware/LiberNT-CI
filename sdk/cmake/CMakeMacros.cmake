@@ -1283,3 +1283,14 @@ function(libernt_standard_disk_signature _signature)
     string(SUBSTRING "${_disk}" 0 8 _value)
     set(${_signature} ${_value} PARENT_SCOPE)
 endfunction()
+
+# The PC FreeLoader checks its own PE header at boot (lib/mm/meminit.c) and stops
+# when SizeOfImage exceeds MAX_FREELDR_PE_SIZE (x86common.h). Unoptimized code
+# does not fit: the bootloader targets keep -O1, the Debug level before OPTIMIZE=0.
+function(set_bootloader_optimization)
+    if(OPTIMIZE STREQUAL "0" AND (CMAKE_C_COMPILER_ID STREQUAL "GNU" OR CMAKE_C_COMPILER_ID STREQUAL "Clang"))
+        foreach(_target ${ARGN})
+            target_compile_options(${_target} PRIVATE -O1)
+        endforeach()
+    endif()
+endfunction()

@@ -71,5 +71,6 @@ endif()
 
 add_asm_files(blrtl_asm ${ASM_SOURCE})
 add_library(blrtl ${SOURCE} ${blrtl_asm})
+set_bootloader_optimization(blrtl)
 add_pch(blrtl ${NTOS_RTL_SOURCE_DIR}/rtl.h SOURCE)
 add_dependencies(blrtl psdk asm)
