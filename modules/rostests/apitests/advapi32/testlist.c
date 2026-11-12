@@ -62,6 +62,7 @@ extern void func_TraceEvents(void);
 extern void func_TokenDefaultPrivileges(void);
 extern void func_TokenIntegrity(void);
 extern void func_TokenIntegrityLevel(void);
+extern void func_TokenUac(void);
 extern void func_TraceGuids(void);
 extern void func_UserHiveAccess(void);
 
@@ -127,6 +128,7 @@ const struct test winetest_testlist[] =
     { "TokenDefaultPrivileges", func_TokenDefaultPrivileges },
     { "TokenIntegrity", func_TokenIntegrity },
     { "TokenIntegrityLevel", func_TokenIntegrityLevel },
+    { "TokenUac", func_TokenUac },
     { "TraceGuids", func_TraceGuids },
     { "UserHiveAccess", func_UserHiveAccess },
     { 0, 0 }
