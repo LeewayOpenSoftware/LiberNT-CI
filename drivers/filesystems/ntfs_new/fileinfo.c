@@ -1433,7 +1433,7 @@ NtfsSetLinkInformation(_In_ PVolumeContextBlock VolCB,
 {
     PNtfsMasterFileTable Mft = NtfsVolumeGetMft(VolCB->DiskVolume);
     PFILE_OBJECT TargetFileObject;
-    PFileContextBlock TargetFileCB;
+    PFileContextBlock TargetFileCB = NULL;
     PNtfsFileRecord ExistingRecord = NULL;
     PNtfsFileRecord RefreshedRecord = NULL;
     UNICODE_STRING ParentName;
@@ -2273,6 +2273,7 @@ NtfsUnlinkReplacedTarget(_In_ PVolumeContextBlock VolCB,
     PLIST_ENTRY Bucket;
     PLIST_ENTRY Entry;
     PLIST_ENTRY Next;
+    ULONGLONG TargetReference;
     ULONG RemainingNameLength = 0;
     ULONG RecordCount = 0;
     ULONG Index;
@@ -2291,8 +2292,10 @@ NtfsUnlinkReplacedTarget(_In_ PVolumeContextBlock VolCB,
         return Status;
     }
     LastLink = NtfsFileRecordGetLinkCount(Target) <= 1;
+    TargetReference = NtfsFileRecordGetReference(Target);
+    ASSERT((TargetReference & 0x0000FFFFFFFFFFFFULL) == RecordNumber);
 
-    Bucket = NtfsStreamHashBucket(VolCB, RecordNumber);
+    Bucket = NtfsStreamHashBucket(VolCB, TargetReference);
     ExAcquireFastMutex(&VolCB->StreamListMutex);
     for (Entry = Bucket->Flink; Entry != Bucket; Entry = Entry->Flink)
     {
@@ -2300,7 +2303,7 @@ NtfsUnlinkReplacedTarget(_In_ PVolumeContextBlock VolCB,
 
         PLIST_ENTRY CcbEntry;
 
-        if ((StreamCB->FileReference & 0x0000FFFFFFFFFFFFULL) != RecordNumber)
+        if (StreamCB->FileReference != TargetReference)
             continue;
         if (!ImageStream && StreamCB->RequestedType == TypeData && !StreamCB->RequestedStream.Length)
         {
@@ -2352,7 +2355,7 @@ NtfsUnlinkReplacedTarget(_In_ PVolumeContextBlock VolCB,
         {
             PStreamContextBlock StreamCB = CONTAINING_RECORD(Entry, StreamContextBlock, HashEntry);
 
-            if ((StreamCB->FileReference & 0x0000FFFFFFFFFFFFULL) == RecordNumber)
+            if (StreamCB->FileReference == TargetReference)
             {
                 StreamCB->Unlinked = TRUE;
                 StreamCB->DeletePending = TRUE;
@@ -2390,7 +2393,7 @@ NtfsSetRenameInformation(_In_ PVolumeContextBlock VolCB,
                          _In_ KPROCESSOR_MODE AccessMode)
 {
     PFILE_OBJECT TargetFileObject;
-    PFileContextBlock TargetFileCB;
+    PFileContextBlock TargetFileCB = NULL;
     PNtfsFileRecord RefreshedRecord = NULL;
     PNtfsFileRecord ExistingRecord = NULL;
     UNICODE_STRING ParentName;

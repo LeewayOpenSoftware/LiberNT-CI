@@ -7,9 +7,11 @@ extern void func_devclass(void);
 extern void func_DevicePdoName(void);
 extern void func_DevicePowerOnDisable(void);
 extern void func_DeviceRemoveVeto(void);
+extern void func_InboxClasses(void);
 extern void func_InterruptAffinityPolicy(void);
 extern void func_SetupDiGetActualModelsSection(void);
 extern void func_InvalidDeviceInfoSet(void);
+extern void func_LegacyDeviceParent(void);
 extern void func_NewDeviceInstall(void);
 extern void func_SetupInstallServicesFromInfSectionEx(void);
 extern void func_SetupCommitFileQueue(void);
@@ -17,6 +19,7 @@ extern void func_SetupDiInstallClassExA(void);
 extern void func_SetupDiOpenDeviceInterface(void);
 extern void func_SetupInstallFile(void);
 extern void func_SetupInstallRegisterDlls(void);
+extern void func_SysButtonDevices(void);
 extern void func_UsbInterfaceIds(void);
 
 const struct test winetest_testlist[] =
@@ -26,9 +29,11 @@ const struct test winetest_testlist[] =
     { "DevicePdoName", func_DevicePdoName },
     { "DevicePowerOnDisable", func_DevicePowerOnDisable },
     { "DeviceRemoveVeto", func_DeviceRemoveVeto },
+    { "InboxClasses", func_InboxClasses },
     { "InterruptAffinityPolicy", func_InterruptAffinityPolicy },
     { "SetupDiGetActualModelsSection", func_SetupDiGetActualModelsSection },
     { "InvalidDeviceInfoSet", func_InvalidDeviceInfoSet },
+    { "LegacyDeviceParent", func_LegacyDeviceParent },
     { "NewDeviceInstall", func_NewDeviceInstall },
     { "SetupInstallServicesFromInfSectionEx", func_SetupInstallServicesFromInfSectionEx},
     { "SetupCommitFileQueue", func_SetupCommitFileQueue },
@@ -36,6 +41,7 @@ const struct test winetest_testlist[] =
     { "SetupDiOpenDeviceInterface", func_SetupDiOpenDeviceInterface },
     { "SetupInstallFile", func_SetupInstallFile },
     { "SetupInstallRegisterDlls", func_SetupInstallRegisterDlls },
+    { "SysButtonDevices", func_SysButtonDevices },
     { "UsbInterfaceIds", func_UsbInterfaceIds },
     { 0, 0 }
 };

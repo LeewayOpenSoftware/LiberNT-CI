@@ -97,7 +97,6 @@ BuspIsPciLinkDevice(
            wcsstr(DeviceData->HardwareIDs, L"PNP0C0F") != NULL;
 }
 
-static
 BOOLEAN
 BuspIsPciRootDevice(
     _In_ PPDO_DEVICE_DATA DeviceData)
@@ -1473,7 +1472,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = addr16->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addr16->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum;
                 }
                 else
                 {
@@ -1503,7 +1502,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Memory.Alignment = Alignment;
                     RequirementDescriptor->u.Memory.Length = addr16->Address.AddressLength;
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr16->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum;
                 }
 
                 RequirementDescriptor++;
@@ -1547,7 +1546,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = addr32->Address.AddressLength;
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addr32->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum;
                 }
                 else
                 {
@@ -1577,7 +1576,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Memory.Alignment = Alignment;
                     RequirementDescriptor->u.Memory.Length = addr32->Address.AddressLength;
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr32->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum;
                 }
 
                 RequirementDescriptor++;
@@ -1625,7 +1624,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = BuspGetAddressResourceLength(addr64->Address.AddressLength);
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addr64->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum;
                 }
                 else
                 {
@@ -1654,7 +1653,7 @@ BuspCreateRequirementsListFromAcpiResources(
 
                     BuspSetMemoryRequirementLength(RequirementDescriptor, addr64->Address.AddressLength, Alignment);
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addr64->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum;
                 }
 
                 RequirementDescriptor++;
@@ -1702,7 +1701,7 @@ BuspCreateRequirementsListFromAcpiResources(
                     RequirementDescriptor->u.Port.Alignment = Alignment;
                     RequirementDescriptor->u.Port.Length = BuspGetAddressResourceLength(addrx->Address.AddressLength);
                     RequirementDescriptor->u.Port.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum + addrx->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Port.MaximumAddress.QuadPart = Maximum;
                 }
                 else
                 {
@@ -1731,7 +1730,7 @@ BuspCreateRequirementsListFromAcpiResources(
 
                     BuspSetMemoryRequirementLength(RequirementDescriptor, addrx->Address.AddressLength, Alignment);
                     RequirementDescriptor->u.Memory.MinimumAddress.QuadPart = Minimum;
-                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum + addrx->Address.AddressLength - 1;
+                    RequirementDescriptor->u.Memory.MaximumAddress.QuadPart = Maximum;
                 }
 
                 RequirementDescriptor++;
@@ -4297,6 +4296,16 @@ Bus_PDO_QueryDeviceRelations(
 
         status = STATUS_SUCCESS;
         Irp->IoStatus.Information = (ULONG_PTR)deviceRelations;
+        break;
+
+    case BusRelations:
+        if (!BuspIsPciRootDevice(DeviceData))
+        {
+            status = Irp->IoStatus.Status;
+            break;
+        }
+
+        status = Bus_QueryChildRelations(DeviceData->ParentFdo->DeviceExtension, DeviceData->Common.Self, Irp);
         break;
 
     default:

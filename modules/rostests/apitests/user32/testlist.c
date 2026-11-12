@@ -79,6 +79,7 @@ extern void func_LookupIconIdFromDirectoryEx(void);
 extern void func_MaximizedCaptionClick(void);
 extern void func_MenuUI(void);
 extern void func_MenuItemData(void);
+extern void func_MenuBarBackground(void);
 extern void func_MessageStateAnalyzer(void);
 extern void func_MinimizedPosition(void);
 extern void func_ModernUser32(void);
@@ -106,6 +107,7 @@ extern void func_ScrollWindowEx(void);
 extern void func_UnhookWinEvent(void);
 extern void func_SendMessageTimeout(void);
 extern void func_SendMessageTimeoutHung(void);
+extern void func_ServiceAccountDesktop(void);
 extern void func_SetActiveWindow(void);
 extern void func_SetCursorPos(void);
 extern void func_SetFocus(void);
@@ -131,6 +133,8 @@ extern void func_UserHandleGrantAccess(void);
 extern void func_VirtualKey(void);
 extern void func_WaitForInputIdle(void);
 extern void func_WindowBand(void);
+extern void func_WindowStationErrors(void);
+extern void func_WindowStationSecurity(void);
 extern void func_CallWindowProc(void);
 extern void func_WndProc(void);
 extern void func_wsprintfApi(void);
@@ -214,6 +218,7 @@ const struct test winetest_testlist[] =
     { "MaximizedCaptionClick", func_MaximizedCaptionClick },
     { "MenuUI", func_MenuUI },
     { "MenuItemData", func_MenuItemData },
+    { "MenuBarBackground", func_MenuBarBackground },
     { "MessageStateAnalyzer", func_MessageStateAnalyzer },
     { "MinimizedPosition", func_MinimizedPosition },
     { "ModernUser32", func_ModernUser32 },
@@ -241,6 +246,7 @@ const struct test winetest_testlist[] =
     { "UnhookWinEvent", func_UnhookWinEvent },
     { "SendMessageTimeout", func_SendMessageTimeout },
     { "SendMessageTimeoutHung", func_SendMessageTimeoutHung },
+    { "ServiceAccountDesktop", func_ServiceAccountDesktop },
     { "SetActiveWindow", func_SetActiveWindow },
     { "SetCursorPos", func_SetCursorPos },
     { "SetFocus", func_SetFocus },
@@ -266,6 +272,8 @@ const struct test winetest_testlist[] =
     { "VirtualKey", func_VirtualKey },
     { "WaitForInputIdle", func_WaitForInputIdle },
     { "WindowBand", func_WindowBand },
+    { "WindowStationErrors", func_WindowStationErrors },
+    { "WindowStationSecurity", func_WindowStationSecurity },
     { "CallWindowProc", func_CallWindowProc },
     { "WndProc", func_WndProc },
     { "wsprintfApi", func_wsprintfApi },

@@ -9,6 +9,11 @@
 #include <winuser.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
+#include <regstr.h>
+
+/* ok_eq_ulong evaluates its value twice: a call with an effect goes through this once */
+#define ok_once(call, expected) \
+    do { ULONG Once_ = (ULONG)(call); ok(Once_ == (ULONG)(expected), #call " = %lu, expected %lu\n", Once_, (ULONG)(expected)); } while (0)
 
 static
 BOOLEAN
@@ -30,6 +35,7 @@ LocateStarted(
     return TRUE;
 }
 
+#if defined(_M_IX86) || defined(_M_AMD64)
 /* IoReportDetectedDevice names the device ROOT\<service>\0000 and gives it DETECTED<interface>\<service> and DETECTED\<service> */
 static
 VOID
@@ -51,6 +57,7 @@ CheckReportedHal(VOID)
     ok(_wcsicmp(Ids + wcslen(Ids) + 1, L"DETECTED\\ACPI_HAL") == 0,
        "second compatible ID %ls\n", Ids + wcslen(Ids) + 1);
 }
+#endif
 
 /* A reported device's driver object name never becomes part of a root device ID */
 static
@@ -143,6 +150,141 @@ CheckBasicDisplayFallback(VOID)
     LocateStarted(L"ROOT\\BASICDISPLAY\\0000", &Node);
 }
 
+/* With an ESRT the HAL reports ACPI_HAL\UEFI, and each firmware resource has HARDWARE\UEFI\ESRT\{guid} with the
+ * values Windows 11 writes there; without one there is neither */
+static VOID CheckFirmwareResources(VOID)
+{
+    static const PCWSTR Values[] = { L"Type", L"Version", L"LowestSupportedVersion", L"LastAttemptVersion",
+                                     L"LastAttemptStatus" };
+    WCHAR Name[64];
+    DWORD Index, Value, Length, Size, Type, Resources = 0;
+    DEVINST Uefi;
+    HKEY Esrt, Resource;
+    BOOL Device;
+    LONG Error;
+    ULONG Item;
+
+    Device = (CM_Locate_DevNodeW(&Uefi, (DEVINSTID_W)L"ACPI_HAL\\UEFI\\0", CM_LOCATE_DEVNODE_NORMAL) == CR_SUCCESS);
+    Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"HARDWARE\\UEFI\\ESRT", 0, KEY_READ, &Esrt);
+    if (!Device)
+    {
+        ok(Error != ERROR_SUCCESS, "Firmware resources are published without an ACPI_HAL\\UEFI device\n");
+        if (Error == ERROR_SUCCESS)
+            RegCloseKey(Esrt);
+        return;
+    }
+
+    ok(Error == ERROR_SUCCESS, "ACPI_HAL\\UEFI exists but HARDWARE\\UEFI\\ESRT does not (%ld)\n", Error);
+    if (Error != ERROR_SUCCESS)
+        return;
+
+    for (Index = 0;; Index++)
+    {
+        Length = RTL_NUMBER_OF(Name);
+        if (RegEnumKeyExW(Esrt, Index, Name, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        if (RegOpenKeyExW(Esrt, Name, 0, KEY_QUERY_VALUE, &Resource) != ERROR_SUCCESS)
+            continue;
+        Resources++;
+        for (Item = 0; Item < RTL_NUMBER_OF(Values); Item++)
+        {
+            Size = sizeof(Value);
+            ok(RegQueryValueExW(Resource, Values[Item], NULL, &Type, (PBYTE)&Value, &Size) == ERROR_SUCCESS && Type == REG_DWORD,
+               "The firmware resource %ls has no %ls value\n", Name, Values[Item]);
+        }
+        RegCloseKey(Resource);
+    }
+    RegCloseKey(Esrt);
+
+    ok(Resources != 0, "HARDWARE\\UEFI\\ESRT lists no firmware resource\n");
+    trace("%lu firmware resources\n", Resources);
+}
+
+static
+BOOLEAN
+IsNullDriverDevice(
+    _In_ DEVINST Device)
+{
+    WCHAR Value[MAX_PATH];
+    ULONG Flags = 0;
+    ULONG Size;
+
+    Size = sizeof(Value);
+    if (CM_Get_DevNode_Registry_PropertyW(Device, CM_DRP_DRIVER, NULL, Value, &Size, 0) != CR_SUCCESS) return FALSE;
+
+    Size = sizeof(Value);
+    if (CM_Get_DevNode_Registry_PropertyW(Device, CM_DRP_SERVICE, NULL, Value, &Size, 0) == CR_SUCCESS && Value[0] != UNICODE_NULL)
+        return FALSE;
+
+    Size = sizeof(Flags);
+    if (CM_Get_DevNode_Registry_PropertyW(Device, CM_DRP_CAPABILITIES, NULL, &Flags, &Size, 0) == CR_SUCCESS &&
+        (Flags & CM_DEVCAP_RAWDEVICEOK))
+    {
+        return FALSE;
+    }
+
+    Flags = 0;
+    Size = sizeof(Flags);
+    CM_Get_DevNode_Registry_PropertyW(Device, CM_DRP_CONFIGFLAGS, NULL, &Flags, &Size, 0);
+    return !(Flags & (CONFIGFLAG_REINSTALL | CONFIGFLAG_FAILEDINSTALL));
+}
+
+/* A bus-reported device left needing install was offered to user mode: its install or its failure gave it a class */
+static VOID CheckInstallOffered(PCWSTR Id, DEVINST Device, DEVINST Root)
+{
+    ULONG Status = 0, Problem = 0;
+    WCHAR Guid[64];
+    ULONG Size = sizeof(Guid);
+    DEVINST Parent;
+
+    if (CM_Get_DevNode_Status(&Status, &Problem, Device, 0) != CR_SUCCESS || !(Status & DN_HAS_PROBLEM) ||
+        Problem != CM_PROB_FAILED_INSTALL || CM_Get_Parent(&Parent, Device, 0) != CR_SUCCESS || Parent == Root)
+    {
+        return;
+    }
+
+    ok(CM_Get_DevNode_Registry_PropertyW(Device, CM_DRP_CLASSGUID, NULL, Guid, &Size, 0) == CR_SUCCESS,
+       "%ls needs install and was not offered to user mode\n", Id);
+}
+
+/* A null-driver device that cannot run raw stays down without a problem, also after a setup (Windows 11: "Configured" only) */
+static VOID CheckNullDrivers(VOID)
+{
+    ULONG Status, Problem, Size = 0, Checked = 0;
+    DEVINST Device, Root = 0;
+    PWSTR List, Id;
+
+    ok_once(CMP_WaitNoPendingInstallEvents(5000), (ULONG)WAIT_OBJECT_0);
+    ok_once(CM_Locate_DevNodeW(&Root, NULL, CM_LOCATE_DEVNODE_NORMAL), (ULONG)CR_SUCCESS);
+
+    if (CM_Get_Device_ID_List_SizeW(&Size, NULL, CM_GETIDLIST_FILTER_PRESENT) != CR_SUCCESS || Size == 0) return;
+    List = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size * sizeof(WCHAR));
+    if (List == NULL) return;
+
+    if (CM_Get_Device_ID_ListW(NULL, List, Size, CM_GETIDLIST_FILTER_PRESENT) == CR_SUCCESS)
+    {
+        for (Id = List; *Id != UNICODE_NULL; Id += wcslen(Id) + 1)
+        {
+            if (CM_Locate_DevNodeW(&Device, Id, CM_LOCATE_DEVNODE_NORMAL) != CR_SUCCESS) continue;
+
+            CheckInstallOffered(Id, Device, Root);
+            if (!IsNullDriverDevice(Device)) continue;
+
+            ok_once(CM_Get_DevNode_Status(&Status, &Problem, Device, 0), (ULONG)CR_SUCCESS);
+            ok(!(Status & (DN_STARTED | DN_HAS_PROBLEM)), "%ls: status 0x%lx, problem %lu\n", Id, Status, Problem);
+
+            ok_once(CM_Setup_DevNode(Device, CM_SETUP_DEVNODE_READY), (ULONG)CR_SUCCESS);
+            ok_once(CM_Get_DevNode_Status(&Status, &Problem, Device, 0), (ULONG)CR_SUCCESS);
+            ok(!(Status & (DN_STARTED | DN_HAS_PROBLEM)), "%ls after a setup request: status 0x%lx, problem %lu\n", Id,
+               Status, Problem);
+            Checked++;
+        }
+    }
+
+    HeapFree(GetProcessHeap(), 0, List);
+    ok(Checked != 0, "No present device is configured with a null driver\n");
+}
+
 START_TEST(IoDeviceTree)
 {
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -151,4 +293,6 @@ START_TEST(IoDeviceTree)
     CheckRootDevices();
     CheckAcpiInstances();
     CheckBasicDisplayFallback();
+    CheckFirmwareResources();
+    CheckNullDrivers();
 }

@@ -217,7 +217,7 @@ VOID NBTimeout(VOID)
                     else
                     {
                         /* This guy was stale for way too long */
-                        Status = NDIS_STATUS_REQUEST_ABORTED;
+                        Status = NDIS_STATUS_HOST_UNREACHABLE;
                     }
 
                     NBFlushPacketQueue(NCE, Status);
@@ -342,7 +342,7 @@ VOID NBInvalidateNeighborsForInterface(PIP_INTERFACE Interface)
             if (NCE->Interface != Interface)
                 continue;
 
-            NBFlushPacketQueue(NCE, NDIS_STATUS_REQUEST_ABORTED);
+            NBFlushPacketQueue(NCE, NDIS_STATUS_NETWORK_UNREACHABLE);
             if (!(NCE->State & NUD_PERMANENT))
             {
                 NCE->State = NUD_INCOMPLETE;
@@ -376,7 +376,7 @@ VOID NBDestroyNeighborsForInterface(PIP_INTERFACE Interface)
                 /* Unlink and destroy the NCE */
                 *PrevNCE = NCE->Next;
 
-                NBFlushPacketQueue(NCE, NDIS_STATUS_REQUEST_ABORTED);
+                NBFlushPacketQueue(NCE, NDIS_STATUS_NETWORK_UNREACHABLE);
                 NCE->Removed = TRUE;
                 TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_NEIGHBOUR, TI_NSI_CHANGE_DELETE);
                 NBDereferenceNeighbor(NCE);
@@ -736,7 +736,7 @@ BOOLEAN NBQueuePacket(
   if (NCE->Removed)
     {
       TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
-      PacketComplete(PacketContext, NdisPacket, NDIS_STATUS_REQUEST_ABORTED);
+      PacketComplete(PacketContext, NdisPacket, NDIS_STATUS_HOST_UNREACHABLE);
       ExFreePoolWithTag(Packet, NEIGHBOR_PACKET_TAG);
       return TRUE;
     }
@@ -787,7 +787,7 @@ VOID NBRemoveNeighbor(
           /* Found it, now unlink it from the list */
           *PrevNCE = CurNCE->Next;
 
-	  NBFlushPacketQueue( CurNCE, NDIS_STATUS_REQUEST_ABORTED );
+	  NBFlushPacketQueue( CurNCE, NDIS_STATUS_HOST_UNREACHABLE );
           CurNCE->Removed = TRUE;
           TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_NEIGHBOUR, TI_NSI_CHANGE_DELETE);
           NBDereferenceNeighbor(CurNCE);

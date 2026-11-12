@@ -26,6 +26,7 @@ extern void func_strtoul(void);
 extern void func_wcstoul(void);
 extern void func_wcstombs(void);
 
+extern void func_AppendOnlyWrite(void);
 extern void func_BootLog(void);
 extern void func_DbgCommandString(void);
 extern void func_DebugRegisters(void);
@@ -219,12 +220,14 @@ extern void func_ScanfSecure(void);
 extern void func_StackProbe(void);
 extern void func_TimerResolution(void);
 extern void func_SehHandlerLocals(void);
+extern void func_UserHiveLinks(void);
 #if defined(_M_IX86) || defined(_M_AMD64)
 extern void func_UserModeException(void);
 #endif
 
 extern void func_ProcessPoolQuota(void);
 extern void func_ProcessUserModeIopl(void);
+extern void func_LinkReparseLimit(void);
 extern void func_ObjectQuotaLimit(void);
 extern void func_RtlWnfAndSqm(void);
 extern void func_WinSqmSession(void);
@@ -257,6 +260,7 @@ const struct test winetest_testlist[] =
     { "wcstoul", func_wcstoul },
     { "wcstombs", func_wcstombs },
 
+    { "AppendOnlyWrite",                func_AppendOnlyWrite },
     { "BootLog",                        func_BootLog },
     { "DbgCommandString",               func_DbgCommandString },
     { "DebugRegisters",                 func_DebugRegisters },
@@ -446,6 +450,7 @@ const struct test winetest_testlist[] =
     { "StackProbe",                     func_StackProbe },
     { "TimerResolution",                func_TimerResolution },
     { "SehHandlerLocals",               func_SehHandlerLocals },
+    { "UserHiveLinks",                  func_UserHiveLinks },
 #if defined(_M_IX86) || defined(_M_AMD64)
     { "UserModeException",              func_UserModeException },
 #endif
@@ -460,6 +465,7 @@ const struct test winetest_testlist[] =
 
     { "ProcessPoolQuota",               func_ProcessPoolQuota },
     { "ProcessUserModeIopl",            func_ProcessUserModeIopl },
+    { "LinkReparseLimit",               func_LinkReparseLimit },
     { "ObjectQuotaLimit",               func_ObjectQuotaLimit },
     { "RtlWnfAndSqm", func_RtlWnfAndSqm },
     { "WinSqmSession", func_WinSqmSession },

@@ -54,6 +54,7 @@ set(ALPC_SOURCE
     TpAlpc.c)
 
 list(APPEND SOURCE
+    AppendOnlyWrite.c
     BootLog.c
     DllLoadNotification.c
     DbgCommandString.c
@@ -165,6 +166,7 @@ list(APPEND SOURCE
     ProcessPoolQuota.c
     ProcessUserModeIopl.c
     ObjectQuotaLimit.c
+    LinkReparseLimit.c
     RtlWnfAndSqm.c
     WinSqmSession.c
     RtlCheckPortableOperatingSystem.c
@@ -233,6 +235,7 @@ list(APPEND SOURCE
     StackProbe.c
     SystemInfo.c
     Timer.c
+    UserHiveLinks.c
     precomp.h)
 
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")

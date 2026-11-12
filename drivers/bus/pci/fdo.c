@@ -63,6 +63,7 @@ FdoEnumerateDevices(
     PCI_SLOT_NUMBER SlotNumber;
     PLIST_ENTRY CurrentEntry;
     ULONG DeviceNumber;
+    ULONG DeviceCount;
     ULONG FunctionNumber;
     ULONG Bus;
     ULONG Size;
@@ -98,8 +99,17 @@ FdoEnumerateDevices(
 
     SlotNumber.u.AsULONG = 0;
 
+    DeviceCount = PCI_MAX_DEVICES;
+    if (DeviceExtension->ParentPdo != NULL)
+    {
+        UCHAR PortType = PciPdoExpressPortType(DeviceExtension->ParentPdo);
+
+        if (PortType == PciExpressRootPort || PortType == PciExpressDownstreamSwitchPort)
+            DeviceCount = 1;
+    }
+
     /* Enumerate devices on this bus */
-    for (DeviceNumber = 0; DeviceNumber < PCI_MAX_DEVICES; DeviceNumber++)
+    for (DeviceNumber = 0; DeviceNumber < DeviceCount; DeviceNumber++)
     {
         SlotNumber.u.bits.DeviceNumber = DeviceNumber;
         for (FunctionNumber = 0; FunctionNumber < PCI_MAX_FUNCTION; FunctionNumber++)
@@ -836,10 +846,14 @@ FdoPnpControl(
             }
 
             Status = FdoQueryBusRelations(DeviceObject, Irp, IrpSp);
-            IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
-            Irp->IoStatus.Status = Status;
-            IoCompleteRequest(Irp, IO_NO_INCREMENT);
-            return Status;
+            if (!NT_SUCCESS(Status))
+            {
+                IoReleaseRemoveLock(&DeviceExtension->RemoveLock, Irp);
+                Irp->IoStatus.Status = Status;
+                IoCompleteRequest(Irp, IO_NO_INCREMENT);
+                return Status;
+            }
+            break;
 
         case IRP_MN_QUERY_REMOVE_DEVICE:
             /* Succeed query - don't change state yet */

@@ -49,6 +49,7 @@ endif()
 
 add_subdirectory(ioevent)
 add_subdirectory(leewayui)
+add_subdirectory(kubsan)
 add_subdirectory(lsalib)
 add_subdirectory(mfuuid)
 add_subdirectory(nt)

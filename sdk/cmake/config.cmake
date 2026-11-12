@@ -57,9 +57,9 @@ elseif(ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64")
     "Which CPU ReactOS should be optimized for.")
 endif()
 
-set(OPTIMIZE "4" CACHE STRING
+set(OPTIMIZE "0" CACHE STRING
 "What level of optimization to use.
- 0 = Off
+ 0 = Off (-O0)
  1 = Optimize for size (-Os) with some additional options
  2 = Optimize for size (-Os)
  3 = Optimize debugging experience (-Og)
@@ -349,6 +349,11 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     option(STACK_PROTECTOR "Whether to enable the GCC stack checker while compiling" OFF)
+endif()
+
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    cmake_dependent_option(ENABLE_KERNEL_UBSAN "Whether to report undefined behavior in kernel-mode modules at run time" ON
+                           "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 endif()
 
 set(USE_DUMMY_PSEH FALSE CACHE BOOL
