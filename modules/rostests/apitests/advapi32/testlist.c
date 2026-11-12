@@ -43,6 +43,7 @@ extern void func_TokenBnoIsolation(void);
 extern void func_TokenDefaultPrivileges(void);
 extern void func_TokenIntegrity(void);
 extern void func_TokenIntegrityLevel(void);
+extern void func_TokenUac(void);
 extern void func_TraceGuids(void);
 
 const struct test winetest_testlist[] =
@@ -88,6 +89,7 @@ const struct test winetest_testlist[] =
     { "TokenDefaultPrivileges", func_TokenDefaultPrivileges },
     { "TokenIntegrity", func_TokenIntegrity },
     { "TokenIntegrityLevel", func_TokenIntegrityLevel },
+    { "TokenUac", func_TokenUac },
     { "TraceGuids", func_TraceGuids },
     { 0, 0 }
 };

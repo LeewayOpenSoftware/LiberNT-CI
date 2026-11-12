@@ -39,6 +39,7 @@ list(APPEND SOURCE
     TokenDefaultPrivileges.c
     TokenIntegrity.c
     TokenIntegrityLevel.c
+    TokenUac.c
     TraceGuids.c
     svchlp.c)
 
