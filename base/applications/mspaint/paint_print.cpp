@@ -16,27 +16,6 @@ static HWND s_hwndMain = NULL;
 static WCHAR s_iconRoot[MAX_PATH];
 static LeewayAurelineConfig s_iconCfg;
 
-/* Paint's own Theme override (HKCU\Software\Leeway\Paint\Theme = light|dark), else follow the system */
-static LeewayThemePref ReadThemeOverride()
-{
-    WCHAR sv[16] = L"";
-    DWORD cb = sizeof(sv) - sizeof(WCHAR), type = 0;
-    HKEY hk;
-    LeewayThemePref pref = LEEWAY_THEME_PREF_SYSTEM;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Leeway\\Paint", 0, KEY_READ, &hk) == ERROR_SUCCESS)
-    {
-        if (RegQueryValueExW(hk, L"Theme", NULL, &type, (LPBYTE)sv, &cb) == ERROR_SUCCESS && type == REG_SZ)
-        {
-            if (!lstrcmpiW(sv, L"light"))
-                pref = LEEWAY_THEME_PREF_LIGHT;
-            else if (!lstrcmpiW(sv, L"dark"))
-                pref = LEEWAY_THEME_PREF_DARK;
-        }
-        RegCloseKey(hk);
-    }
-    return pref;
-}
-
 static void EnsureSettings()
 {
     if (!s_settingsInit)
@@ -171,7 +150,7 @@ void PaintPrintPreview(HWND hwndMain)
         cfg.on_action = PvAction;
         cfg.settings = &s_settings;
         cfg.app_name = L"Paint";
-        cfg.theme = ReadThemeOverride();
+        cfg.theme = LEEWAY_THEME_PREF_SYSTEM; /* app_name carries Paint's Theme override */
         if (FAILED(LeewayPrintPreviewCreate(hwndMain, &cfg, &s_pv)))
         {
             s_pv = NULL;
