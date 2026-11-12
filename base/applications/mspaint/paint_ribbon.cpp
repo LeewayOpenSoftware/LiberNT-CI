@@ -8,6 +8,7 @@
 
 #include "precomp.h"
 #include "paint_ribbon.h"
+#include "../../../sdk/include/leewayui/aureline_icons.h"
 
 extern CMainWindow mainWindow;
 extern BOOL g_showGrid;
@@ -275,6 +276,21 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
         LeewayRibbonDestroy(*pRibbon);
         *pRibbon = NULL;
         return hr;
+    }
+
+    /* Aureline icons from <exe dir>\icons; a missing file leaves the letter placeholder */
+    static WCHAR s_iconRoot[MAX_PATH];
+    static LeewayAurelineConfig s_iconCfg;
+    if (GetModuleFileNameW(NULL, s_iconRoot, _countof(s_iconRoot)))
+    {
+        WCHAR *pSlash = wcsrchr(s_iconRoot, L'\\');
+        if (pSlash && (size_t)(pSlash - s_iconRoot) + 7 < _countof(s_iconRoot))
+        {
+            wcscpy(pSlash + 1, L"icons");
+            s_iconCfg.root = s_iconRoot;
+            s_iconCfg.mono_fallback_to_colour = TRUE;
+            LeewayRibbonUseAurelineIcons(*pRibbon, &s_iconCfg);
+        }
     }
 
     /* Collections: galleries, dropdowns and split menus (paint_ribbon_cmds.h) */

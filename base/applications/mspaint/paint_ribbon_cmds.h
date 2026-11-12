@@ -13,6 +13,7 @@
 #include <windows.h>
 #include <stdlib.h>
 #include "../../../sdk/include/leewayui/ribbon.h"
+#include "../../../sdk/include/leewayui/ribbon_icons.h"
 #include "resource.h"
 
 #ifndef _countof
@@ -24,72 +25,72 @@
 
 static const LeewayUICommand g_paintCommands[] = {
     /* File commands (201-218) */
-    { IDM_FILENEW,                  L"New",                     L"New image",           L"N",   0, TRUE, FALSE, TRUE },
-    { IDM_FILEOPEN,                 L"Open",                    L"Open image",          L"O",   0, TRUE, FALSE, TRUE },
-    { IDM_FILESAVE,                 L"Save",                    L"Save image",          L"S",   0, TRUE, FALSE, TRUE },
-    { IDM_FILESAVEAS,               L"Save as",                 L"Save image as",       L"A",   0, TRUE, FALSE, TRUE },
+    { IDM_FILENEW,                  L"New",                     L"New image",           L"N",   LWUI_AUR_COMMON_NEW, TRUE, FALSE, TRUE },
+    { IDM_FILEOPEN,                 L"Open",                    L"Open image",          L"O",   LWUI_AUR_COMMON_OPEN, TRUE, FALSE, TRUE },
+    { IDM_FILESAVE,                 L"Save",                    L"Save image",          L"S",   LWUI_AUR_COMMON_SAVE, TRUE, FALSE, TRUE },
+    { IDM_FILESAVEAS,               L"Save as",                 L"Save image as",       L"A",   LWUI_AUR_COMMON_SAVEAS, TRUE, FALSE, TRUE },
     { IDM_FILEFROMSCANNERORCAMERA,  L"From scanner",            L"From scanner or camera", L"M",   0, FALSE, FALSE, TRUE },
-    { IDM_FILEPRINT,                L"Print",                   L"Print image",         L"P",   0, TRUE, FALSE, TRUE },
-    { IDM_FILEPAGESETUP,            L"Page setup",              L"Page setup",          L"G",   0, TRUE, FALSE, TRUE },
+    { IDM_FILEPRINT,                L"Print",                   L"Print image",         L"P",   LWUI_AUR_COMMON_PRINT, TRUE, FALSE, TRUE },
+    { IDM_FILEPAGESETUP,            L"Page setup",              L"Page setup",          L"G",   LWUI_AUR_COMMON_PAGESETUP, TRUE, FALSE, TRUE },
     { IDM_FILEPAGEVIEW,             L"Print preview",           L"Print preview",       L"V",   0, TRUE, FALSE, TRUE },
-    { IDM_FILESEND,                 L"Send in e-mail",          L"Send in e-mail",      L"D",   0, TRUE, FALSE, TRUE },
+    { IDM_FILESEND,                 L"Send in e-mail",          L"Send in e-mail",      L"D",   LWUI_AUR_COMMON_EMAIL, TRUE, FALSE, TRUE },
     { IDM_FILEASWALLPAPERPLANE,     L"Set as background",       L"Set as desktop background", L"B", 0, TRUE, FALSE, TRUE },
     { IDM_FILEASWALLPAPERCENTERED,  L"Centered",                NULL,                   NULL,   0, TRUE, FALSE, FALSE },
     { IDM_FILEASWALLPAPERSTRETCHED, L"Stretched",               NULL,                   NULL,   0, TRUE, FALSE, FALSE },
-    { IDM_IMAGEATTRIBUTES,          L"Properties",              L"Image properties",    L"I",   0, TRUE, FALSE, TRUE },
-    { IDM_HELPINFO,                 L"About Paint",             L"About Paint",         L"T",   0, TRUE, FALSE, TRUE },
-    { IDM_FILEEXIT,                 L"Exit",                    L"Exit Paint",          L"X",   0, TRUE, FALSE, TRUE },
+    { IDM_IMAGEATTRIBUTES,          L"Properties",              L"Image properties",    L"I",   LWUI_AUR_COMMON_PROPERTIES, TRUE, FALSE, TRUE },
+    { IDM_HELPINFO,                 L"About Paint",             L"About Paint",         L"T",   LWUI_AUR_COMMON_ABOUT, TRUE, FALSE, TRUE },
+    { IDM_FILEEXIT,                 L"Exit",                    L"Exit Paint",          L"X",   LWUI_AUR_COMMON_EXIT, TRUE, FALSE, TRUE },
 
     /* Edit commands (220-229) */
     { IDM_EDITUNDO,                 L"Undo",                    L"Undo action",         L"U",   0, TRUE, FALSE, TRUE },
     { IDM_EDITREDO,                 L"Redo",                    L"Redo action",         L"Y",   0, TRUE, FALSE, TRUE },
-    { IDM_EDITCUT,                  L"Cut",                     L"Cut to clipboard",    L"X",   0, TRUE, FALSE, TRUE },
-    { IDM_EDITCOPY,                 L"Copy",                    L"Copy to clipboard",   L"CP",   0, TRUE, FALSE, TRUE },
-    { IDM_EDITPASTE,                L"Paste",                   L"Paste from clipboard", L"V",   0, TRUE, FALSE, TRUE },
-    { IDM_EDITDELETESELECTION,      L"Delete",                  L"Delete selection",    NULL,   0, TRUE, FALSE, TRUE },
+    { IDM_EDITCUT,                  L"Cut",                     L"Cut to clipboard",    L"X",   LWUI_AUR_COMMON_CUT, TRUE, FALSE, TRUE },
+    { IDM_EDITCOPY,                 L"Copy",                    L"Copy to clipboard",   L"CP",   LWUI_AUR_COMMON_COPY, TRUE, FALSE, TRUE },
+    { IDM_EDITPASTE,                L"Paste",                   L"Paste from clipboard", L"V",   LWUI_AUR_COMMON_PASTE, TRUE, FALSE, TRUE },
+    { IDM_EDITDELETESELECTION,      L"Delete",                  L"Delete selection",    NULL,   LWUI_AUR_COMMON_DELETE, TRUE, FALSE, TRUE },
     { IDM_EDITINVERTSELECTION,      L"Invert selection",        L"Invert selection",    NULL,   0, TRUE, FALSE, TRUE },
-    { IDM_EDITSELECTALL,            L"Select all",              L"Select all",          NULL,   0, TRUE, FALSE, TRUE },
+    { IDM_EDITSELECTALL,            L"Select all",              L"Select all",          NULL,   LWUI_AUR_COMMON_SELECT_ALL, TRUE, FALSE, TRUE },
     { IDM_EDITPASTEFROM,            L"Paste from...",           L"Paste from file",     NULL,   0, TRUE, FALSE, TRUE },
 
     /* Image commands (250-263) */
-    { IDM_IMAGEROTATEMIRROR,        L"Rotate/Flip",             L"Rotate or flip",      NULL,   0, TRUE, FALSE, TRUE },
-    { IDM_IMAGESTRETCHSKEW,         L"Resize",                  L"Resize or skew",      L"RE",  0, TRUE, FALSE, TRUE },
-    { IDM_IMAGECROP,                L"Crop",                    L"Crop image",          L"RP",  0, TRUE, FALSE, TRUE },
+    { IDM_IMAGEROTATEMIRROR,        L"Rotate/Flip",             L"Rotate or flip",      NULL,   LWUI_AUR_COMMON_ROTATE_RIGHT, TRUE, FALSE, TRUE },
+    { IDM_IMAGESTRETCHSKEW,         L"Resize",                  L"Resize or skew",      L"RE",  LWUI_AUR_PAINT_RESIZE, TRUE, FALSE, TRUE },
+    { IDM_IMAGECROP,                L"Crop",                    L"Crop image",          L"RP",  LWUI_AUR_PAINT_CROP, TRUE, FALSE, TRUE },
     { IDM_IMAGEINVERTCOLORS,        L"Invert colors",           L"Invert colors",       NULL,   0, TRUE, FALSE, TRUE },
     { IDM_IMAGEDELETEIMAGE,         L"Delete image",            L"Delete image",        NULL,   0, TRUE, FALSE, TRUE },
-    { IDM_IMAGEDRAWOPAQUE,          L"Transparent selection",   L"Toggle transparency", NULL,   0, TRUE, FALSE, TRUE },
-    { IDM_COLORSEDITPALETTE,        L"Edit palette",            L"Edit palette",        L"EC",  0, TRUE, FALSE, TRUE },
+    { IDM_IMAGEDRAWOPAQUE,          L"Transparent selection",   L"Toggle transparency", NULL,   LWUI_AUR_PAINT_BG_TRANSPARENT, TRUE, FALSE, TRUE },
+    { IDM_COLORSEDITPALETTE,        L"Edit palette",            L"Edit palette",        L"EC",  LWUI_AUR_PAINT_EDIT_COLOURS, TRUE, FALSE, TRUE },
     { IDM_COLORSMODERNPALETTE,      L"Modern palette",          NULL,                   NULL,   0, TRUE, FALSE, FALSE },
     { IDM_COLORSOLDPALETTE,         L"Old palette",             NULL,                   NULL,   0, TRUE, FALSE, FALSE },
     { IDM_COLORSGRAYSCALE,          L"Grayscale",               NULL,                   NULL,   0, TRUE, FALSE, TRUE },
     { IDM_COLORSMONOCHROME,         L"Monochrome",              NULL,                   NULL,   0, TRUE, FALSE, TRUE },
 
     /* View commands (230-240) */
-    { IDM_VIEWSTATUSBAR,            L"Status bar",              L"Show status bar",     L"S",   0, TRUE, FALSE, TRUE },
+    { IDM_VIEWSTATUSBAR,            L"Status bar",              L"Show status bar",     L"S",   LWUI_AUR_COMMON_STATUSBAR, TRUE, FALSE, TRUE },
     { IDM_VIEWSHOWGRID,             L"Gridlines",               L"Show gridlines",      L"G",   0, TRUE, FALSE, TRUE },
-    { IDM_VIEWSHOWMINIATURE,        L"Thumbnail",               L"Show thumbnail",      L"T",   0, TRUE, FALSE, TRUE },
-    { IDM_VIEWFULLSCREEN,           L"Full screen",             L"Toggle full screen",  L"F",   0, TRUE, FALSE, TRUE },
-    { IDM_VIEWZOOM100,              L"100 %",                   L"Zoom to 100 percent", L"1",   0, TRUE, FALSE, TRUE },
-    { IDM_CTRL_PLUS,                L"Zoom in",                 L"Zoom in",             L"I",   0, TRUE, FALSE, TRUE },
-    { IDM_CTRL_MINUS,               L"Zoom out",                L"Zoom out",            L"O",   0, TRUE, FALSE, TRUE },
+    { IDM_VIEWSHOWMINIATURE,        L"Thumbnail",               L"Show thumbnail",      L"T",   LWUI_AUR_PAINT_THUMBNAIL, TRUE, FALSE, TRUE },
+    { IDM_VIEWFULLSCREEN,           L"Full screen",             L"Toggle full screen",  L"F",   LWUI_AUR_COMMON_FULLSCREEN, TRUE, FALSE, TRUE },
+    { IDM_VIEWZOOM100,              L"100 %",                   L"Zoom to 100 percent", L"1",   LWUI_AUR_COMMON_ZOOM, TRUE, FALSE, TRUE },
+    { IDM_CTRL_PLUS,                L"Zoom in",                 L"Zoom in",             L"I",   LWUI_AUR_COMMON_ZOOM_IN, TRUE, FALSE, TRUE },
+    { IDM_CTRL_MINUS,               L"Zoom out",                L"Zoom out",            L"O",   LWUI_AUR_COMMON_ZOOM_OUT, TRUE, FALSE, TRUE },
 
     /* Selection tools (600-615): radio set */
-    { ID_FREESEL,                   L"Free form",               L"Free form selection", NULL,   0, TRUE, FALSE, TRUE },
-    { ID_RECTSEL,                   L"Rectangle",               L"Rectangle selection", L"SE",  0, TRUE, FALSE, TRUE },
-    { ID_RUBBER,                    L"Eraser",                  L"Eraser",              L"ER",   0, TRUE, FALSE, TRUE },
-    { ID_FILL,                      L"Fill with color",         L"Fill with color",     L"K",   0, TRUE, FALSE, TRUE },
-    { ID_COLOR,                     L"Color picker",            L"Color picker",        L"I",   0, TRUE, FALSE, TRUE },
-    { ID_ZOOM,                      L"Magnifier",               L"Magnifier",           L"M",   0, TRUE, FALSE, TRUE },
-    { ID_PEN,                       L"Pencil",                  L"Pencil",              L"PE",   0, TRUE, FALSE, TRUE },
-    { ID_BRUSH,                     L"Brush",                   L"Brush",               NULL,   0, TRUE, FALSE, TRUE },
-    { ID_AIRBRUSH,                  L"Airbrush",                L"Airbrush",            NULL,   0, TRUE, FALSE, TRUE },
-    { ID_TEXT,                      L"Text",                    L"Text tool",           L"T",   0, TRUE, FALSE, TRUE },
-    { ID_LINE,                      L"Line",                    L"Line",                NULL,   0, TRUE, FALSE, TRUE },
-    { ID_BEZIER,                    L"Curve",                   L"Curve",               NULL,   0, TRUE, FALSE, TRUE },
-    { ID_RECT,                      L"Rectangle",               L"Rectangle",           NULL,   0, TRUE, FALSE, TRUE },
-    { ID_SHAPE,                     L"Polygon",                 L"Polygon",             NULL,   0, TRUE, FALSE, TRUE },
-    { ID_ELLIPSE,                   L"Ellipse",                 L"Ellipse",             NULL,   0, TRUE, FALSE, TRUE },
-    { ID_RRECT,                     L"Rounded rectangle",       L"Rounded rectangle",   NULL,   0, TRUE, FALSE, TRUE },
+    { ID_FREESEL,                   L"Free form",               L"Free form selection", NULL,   LWUI_AUR_PAINT_SELECT_FREE, TRUE, FALSE, TRUE },
+    { ID_RECTSEL,                   L"Rectangle",               L"Rectangle selection", L"SE",  LWUI_AUR_PAINT_SELECT_RECT, TRUE, FALSE, TRUE },
+    { ID_RUBBER,                    L"Eraser",                  L"Eraser",              L"ER",   LWUI_AUR_PAINT_ERASER, TRUE, FALSE, TRUE },
+    { ID_FILL,                      L"Fill with color",         L"Fill with color",     L"K",   LWUI_AUR_PAINT_FILL, TRUE, FALSE, TRUE },
+    { ID_COLOR,                     L"Color picker",            L"Color picker",        L"I",   LWUI_AUR_PAINT_PICKER, TRUE, FALSE, TRUE },
+    { ID_ZOOM,                      L"Magnifier",               L"Magnifier",           L"M",   LWUI_AUR_PAINT_MAGNIFIER, TRUE, FALSE, TRUE },
+    { ID_PEN,                       L"Pencil",                  L"Pencil",              L"PE",   LWUI_AUR_PAINT_PENCIL, TRUE, FALSE, TRUE },
+    { ID_BRUSH,                     L"Brush",                   L"Brush",               NULL,   LWUI_AUR_PAINT_BRUSH, TRUE, FALSE, TRUE },
+    { ID_AIRBRUSH,                  L"Airbrush",                L"Airbrush",            NULL,   LWUI_AUR_PAINT_BRUSH, TRUE, FALSE, TRUE },
+    { ID_TEXT,                      L"Text",                    L"Text tool",           L"T",   LWUI_AUR_PAINT_TEXT, TRUE, FALSE, TRUE },
+    { ID_LINE,                      L"Line",                    L"Line",                NULL,   LWUI_AUR_PAINT_SHAPES, TRUE, FALSE, TRUE },
+    { ID_BEZIER,                    L"Curve",                   L"Curve",               NULL,   LWUI_AUR_PAINT_SHAPES, TRUE, FALSE, TRUE },
+    { ID_RECT,                      L"Rectangle",               L"Rectangle",           NULL,   LWUI_AUR_PAINT_SHAPES, TRUE, FALSE, TRUE },
+    { ID_SHAPE,                     L"Polygon",                 L"Polygon",             NULL,   LWUI_AUR_PAINT_SHAPES, TRUE, FALSE, TRUE },
+    { ID_ELLIPSE,                   L"Ellipse",                 L"Ellipse",             NULL,   LWUI_AUR_PAINT_SHAPES, TRUE, FALSE, TRUE },
+    { ID_RRECT,                     L"Rounded rectangle",       L"Rounded rectangle",   NULL,   LWUI_AUR_PAINT_SHAPES, TRUE, FALSE, TRUE },
 
     /* Text formatting (280-283) */
     { IDM_BOLD,                     L"Bold",                    L"Bold",                L"B",   0, TRUE, FALSE, TRUE },
@@ -98,7 +99,7 @@ static const LeewayUICommand g_paintCommands[] = {
     { IDM_VERTICAL,                 L"Vertical",                L"Vertical text",       L"VT",  0, TRUE, FALSE, TRUE },
 
     /* Zoom gallery (380) */
-    { 380,                          L"Zoom level",              L"Select zoom level",   L"Z",   0, TRUE, FALSE, TRUE },
+    { 380,                          L"Zoom level",              L"Select zoom level",   L"Z",   LWUI_AUR_COMMON_ZOOM, TRUE, FALSE, TRUE },
 
     /* Paint new/collection commands (300-399) */
     { 301,                          L"PNG",                     L"Save as PNG",         NULL,   0, TRUE, FALSE, FALSE },
@@ -107,22 +108,22 @@ static const LeewayUICommand g_paintCommands[] = {
     { 304,                          L"GIF",                     L"Save as GIF",         NULL,   0, TRUE, FALSE, FALSE },
     { 305,                          L"Other formats",           L"Save as other format", NULL,   0, TRUE, FALSE, FALSE },
 
-    { 310,                          L"Rotate",                  L"Rotate image",        L"RO",  0, TRUE, FALSE, TRUE },
-    { 311,                          L"Rotate right 90\u00B0",        NULL,                   NULL,   0, TRUE, FALSE, FALSE },
-    { 312,                          L"Rotate left 90\u00B0",         NULL,                   NULL,   0, TRUE, FALSE, FALSE },
+    { 310,                          L"Rotate",                  L"Rotate image",        L"RO",  LWUI_AUR_COMMON_ROTATE_RIGHT, TRUE, FALSE, TRUE },
+    { 311,                          L"Rotate right 90\u00B0",        NULL,                   NULL,   LWUI_AUR_COMMON_ROTATE_RIGHT, TRUE, FALSE, FALSE },
+    { 312,                          L"Rotate left 90\u00B0",         NULL,                   NULL,   LWUI_AUR_COMMON_ROTATE_LEFT, TRUE, FALSE, FALSE },
     { 313,                          L"Rotate 180\u00B0",             NULL,                   NULL,   0, TRUE, FALSE, FALSE },
     { 314,                          L"Flip vertical",           NULL,                   NULL,   0, TRUE, FALSE, FALSE },
     { 315,                          L"Flip horizontal",         NULL,                   NULL,   0, TRUE, FALSE, FALSE },
 
-    { 320,                          L"Brushes",                 L"Select brush",        L"B",   0, TRUE, FALSE, TRUE },
+    { 320,                          L"Brushes",                 L"Select brush",        L"B",   LWUI_AUR_PAINT_BRUSH, TRUE, FALSE, TRUE },
     /* 321-339: brush styles (app-provided at runtime) */
 
-    { 340,                          L"Shapes",                  L"Select shape",        L"SH",  0, TRUE, FALSE, TRUE },
-    { 345,                          L"Outline",                 L"Shape outline",       L"O",   0, TRUE, FALSE, TRUE },
-    { 346,                          L"Fill",                    L"Shape fill",          L"F",   0, TRUE, FALSE, TRUE },
+    { 340,                          L"Shapes",                  L"Select shape",        L"SH",  LWUI_AUR_PAINT_SHAPES, TRUE, FALSE, TRUE },
+    { 345,                          L"Outline",                 L"Shape outline",       L"O",   LWUI_AUR_PAINT_OUTLINE, TRUE, FALSE, TRUE },
+    { 346,                          L"Fill",                    L"Shape fill",          L"F",   LWUI_AUR_PAINT_SHAPE_FILL, TRUE, FALSE, TRUE },
     /* 347-352: outline/fill options */
 
-    { 360,                          L"Size",                    L"Line width",          L"SZ",  0, TRUE, FALSE, TRUE },
+    { 360,                          L"Size",                    L"Line width",          L"SZ",  LWUI_AUR_PAINT_SIZE, TRUE, FALSE, TRUE },
     /* 361-365: line width options */
 
     { 370,                          L"Color 1",                 L"Foreground color",    L"C1",  0, TRUE, FALSE, TRUE },
@@ -132,8 +133,8 @@ static const LeewayUICommand g_paintCommands[] = {
 
     { 390,                          L"Font family",             L"Select font",         L"FF",  0, TRUE, FALSE, TRUE },
     { 391,                          L"Font size",               L"Select font size",    L"FS",  0, TRUE, FALSE, TRUE },
-    { 392,                          L"Opaque",                  L"Opaque text background", L"O", 0, TRUE, FALSE, TRUE },
-    { 393,                          L"Transparent",             L"Transparent text background", L"R", 0, TRUE, FALSE, TRUE },
+    { 392,                          L"Opaque",                  L"Opaque text background", L"O", LWUI_AUR_PAINT_BG_OPAQUE, TRUE, FALSE, TRUE },
+    { 393,                          L"Transparent",             L"Transparent text background", L"R", LWUI_AUR_PAINT_BG_TRANSPARENT, TRUE, FALSE, TRUE },
 };
 
 /* Keytips (spec 2): per tab level, groups and placements share one namespace and must be

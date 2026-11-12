@@ -20,7 +20,7 @@ for s in $SRCS; do
   OBJS="$OBJS $OUT/obj/$s.o"
   [ "$(jobs -r | wc -l)" -ge 3 ] && { wait -n || FAIL=1; }
 done
-for s in ribbon frame dpi theme; do
+for s in ribbon frame dpi theme aureline_icons; do
   $CXX $FL $INC -c "$LWUI/$s.cpp" -o "$OUT/obj/lw_$s.o" &
   PIDS="$PIDS $!"
   OBJS="$OBJS $OUT/obj/lw_$s.o"
