@@ -75,13 +75,13 @@ START_TEST(TokenDefaultPrivileges)
 
     if (IsMember(DOMAIN_ALIAS_RID_USERS) || IsMember(DOMAIN_ALIAS_RID_ADMINS))
     {
-        ExpectPrivilege(Privileges, SE_INC_WORKING_SET_NAME);
-        ExpectPrivilege(Privileges, SE_TIME_ZONE_NAME);
+        ExpectPrivilege(Privileges, L"SeIncreaseWorkingSetPrivilege");
+        ExpectPrivilege(Privileges, L"SeTimeZonePrivilege");
     }
     if (IsMember(DOMAIN_ALIAS_RID_ADMINS))
     {
-        ExpectPrivilege(Privileges, SE_DELEGATE_SESSION_USER_IMPERSONATE_NAME);
-        Entry = FindPrivilege(Privileges, SE_CREATE_PAGEFILE_NAME);
+        ExpectPrivilege(Privileges, L"SeDelegateSessionUserImpersonatePrivilege");
+        Entry = FindPrivilege(Privileges, L"SeCreatePagefilePrivilege");
         ok(Entry != NULL, "SeCreatePagefilePrivilege is missing from an administrator token\n");
         if (Entry)
             ok(!(Entry->Attributes & SE_PRIVILEGE_ENABLED_BY_DEFAULT),
