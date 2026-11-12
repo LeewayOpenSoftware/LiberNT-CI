@@ -62,6 +62,7 @@ CmpRemoveFromSecurityCache(IN PHHIVE Hive,
     ULONG Low = 0, High, Middle, Move;
 
     if ((SecurityCell == HCELL_NIL) || (CmHive->SecurityCount == 0)) return;
+    ASSERT(CmHive->SecurityCache != NULL);
 
     /* Binary search for the cell */
     High = CmHive->SecurityCount - 1;
@@ -79,7 +80,8 @@ CmpRemoveFromSecurityCache(IN PHHIVE Hive,
     }
     if (Low > High) return;
 
-    /* Drop the cached descriptor and close the gap in the array */
+    /* Drop the cached descriptor and close the gap in the array. Whatever fills
+     * the cache must allocate CM_KEY_SECURITY_CACHE with TAG_CM. */
     Cached = CmHive->SecurityCache[Middle].CachedSecurity;
     if (Cached)
     {
