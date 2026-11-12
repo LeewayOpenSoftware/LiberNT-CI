@@ -199,6 +199,7 @@ void ToolsModel::SetActiveTool(TOOLTYPE nActiveTool)
         case TOOL_FILL:
         case TOOL_AIRBRUSH:
         case TOOL_RRECT:
+        case TOOL_PRESET:
         case TOOL_RUBBER:
         case TOOL_BRUSH:
         case TOOL_PEN:
@@ -255,6 +256,7 @@ SIZE ToolsModel::GetToolSize() const
         case TOOL_BEZIER:
         case TOOL_RECT:
         case TOOL_RRECT:
+        case TOOL_PRESET:
         case TOOL_SHAPE:
         case TOOL_ELLIPSE:
             size.cx = size.cy = GetLineWidth();

@@ -170,7 +170,7 @@ static const LeewayUIPlacement g_homeBrushesPlacement[] = {
 };
 
 static const LeewayUIPlacement g_homeShapesPlacement[] = {
-    { 340,                 LWUI_CONTROL_GALLERY_STRIP, L"SH", 0 },
+    { 340,                 LWUI_CONTROL_GALLERY_STRIP, L"SH", 234 },
     { 345,                 LWUI_CONTROL_DROPDOWN, L"O", 0 },
     { 346,                 LWUI_CONTROL_DROPDOWN, L"F", 0 },
 };
@@ -376,9 +376,16 @@ static const LeewayUICollectionItem g_paintBrushItems[] = {
     { 323, L"Calligraphy 2", 0, LWUI_COLOR_NONE, 0 },
 };
 
+#define PAINT_PRESET_FIRST 1201 /* 1201 + index into PresetShapePoints */
 static const LeewayUICollectionItem g_paintShapeItems[] = {
-    { ID_LINE, L"Line", 0, LWUI_COLOR_NONE, 0 }, { ID_BEZIER, L"Curve", 0, LWUI_COLOR_NONE, 0 }, { ID_RECT, L"Rectangle", 0, LWUI_COLOR_NONE, 0 },
-    { ID_SHAPE, L"Polygon", 0, LWUI_COLOR_NONE, 0 }, { ID_ELLIPSE, L"Ellipse", 0, LWUI_COLOR_NONE, 0 }, { ID_RRECT, L"Rounded rectangle", 0, LWUI_COLOR_NONE, 0 },
+    { ID_LINE, L"Line", 0, LWUI_COLOR_NONE, 0 }, { ID_BEZIER, L"Curve", 0, LWUI_COLOR_NONE, 0 }, { ID_ELLIPSE, L"Ellipse", 0, LWUI_COLOR_NONE, 0 },
+    { ID_RECT, L"Rectangle", 0, LWUI_COLOR_NONE, 0 }, { ID_RRECT, L"Rounded rectangle", 0, LWUI_COLOR_NONE, 0 }, { ID_SHAPE, L"Polygon", 0, LWUI_COLOR_NONE, 0 },
+    { 1201, L"Triangle", 0, LWUI_COLOR_NONE, 0 }, { 1202, L"Right triangle", 0, LWUI_COLOR_NONE, 0 }, { 1203, L"Diamond", 0, LWUI_COLOR_NONE, 0 },
+    { 1204, L"Pentagon", 0, LWUI_COLOR_NONE, 0 }, { 1205, L"Hexagon", 0, LWUI_COLOR_NONE, 0 }, { 1206, L"Right arrow", 0, LWUI_COLOR_NONE, 0 },
+    { 1207, L"Left arrow", 0, LWUI_COLOR_NONE, 0 }, { 1208, L"Up arrow", 0, LWUI_COLOR_NONE, 0 }, { 1209, L"Down arrow", 0, LWUI_COLOR_NONE, 0 },
+    { 1210, L"Four-point star", 0, LWUI_COLOR_NONE, 0 }, { 1211, L"Five-point star", 0, LWUI_COLOR_NONE, 0 }, { 1212, L"Six-point star", 0, LWUI_COLOR_NONE, 0 },
+    { 1213, L"Rectangular callout", 0, LWUI_COLOR_NONE, 0 }, { 1214, L"Oval callout", 0, LWUI_COLOR_NONE, 0 }, { 1215, L"Cloud callout", 0, LWUI_COLOR_NONE, 0 },
+    { 1216, L"Heart", 0, LWUI_COLOR_NONE, 0 }, { 1217, L"Lightning", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintOutlineItems[] = {

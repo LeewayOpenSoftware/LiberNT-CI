@@ -388,6 +388,7 @@ LRESULT CToolSettingsWindow::OnPaint(UINT nMsg, WPARAM wParam, LPARAM lParam, BO
         case TOOL_SHAPE:
         case TOOL_ELLIPSE:
         case TOOL_RRECT:
+        case TOOL_PRESET:
             drawBox(hdc, &rect1);
             drawLine(hdc, &rect2);
             break;
@@ -455,6 +456,7 @@ LRESULT CToolSettingsWindow::OnLButtonDown(UINT nMsg, WPARAM wParam, LPARAM lPar
         case TOOL_SHAPE:
         case TOOL_ELLIPSE:
         case TOOL_RRECT:
+        case TOOL_PRESET:
             iItem = getBoxRects(rects, &rect1, &pt);
             if (iItem != -1)
                 toolsModel.SetShapeStyle(iItem);

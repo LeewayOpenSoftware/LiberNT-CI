@@ -113,6 +113,12 @@ static BOOL HandleLocal(UINT32 id, HWND hWnd)
             paletteModel.SetFgColor(g_paintPaletteItems[n].color);
         return TRUE;
     }
+    if (id >= PAINT_PRESET_FIRST && id < PAINT_PRESET_FIRST + PRESET_SHAPE_COUNT)
+    {
+        toolsModel.SetPresetShape((int)(id - PAINT_PRESET_FIRST));
+        toolsModel.SetActiveTool(TOOL_PRESET);
+        return TRUE;
+    }
     if (id >= 361 && id <= 368)
     {
         ApplySize(g_sizePx[id - 361]);
@@ -237,6 +243,11 @@ static HRESULT OnRibbonQueryState(UINT32 id, LeewayUICommandState *state, void *
         return S_OK;
     }
 
+    if (id >= PAINT_PRESET_FIRST && id < PAINT_PRESET_FIRST + PRESET_SHAPE_COUNT)
+    {
+        state->checked = (toolsModel.GetActiveTool() == TOOL_PRESET && toolsModel.GetPresetShape() == (int)(id - PAINT_PRESET_FIRST));
+        return S_OK;
+    }
     BOOL brush = (toolsModel.GetActiveTool() == TOOL_BRUSH);
     if (id == 370 || id == 371)
     {
@@ -311,7 +322,8 @@ static HRESULT OnRibbonQueryState(UINT32 id, LeewayUICommandState *state, void *
 /* Shapes gallery: each cell draws its own outline (ids are the tool commands) */
 static HRESULT PaintGalleryDraw(UINT32 cmd, UINT32 item, HDC hdc, const RECT *cell, COLORREF fg, UINT32 dpi, void *ctx)
 {
-    if (item < ID_LINE || item > ID_RRECT) /* the strip passes command_id 0 */
+    BOOL preset = (item >= PAINT_PRESET_FIRST && item < PAINT_PRESET_FIRST + PRESET_SHAPE_COUNT);
+    if (!preset && (item < ID_LINE || item > ID_RRECT)) /* the strip passes command_id 0 */
         return E_NOTIMPL;
     int w = dpi ? (int)((dpi + 48) / 96) : 1;
     if (w < 1)
@@ -323,6 +335,17 @@ static HRESULT PaintGalleryDraw(UINT32 cmd, UINT32 item, HDC hdc, const RECT *ce
     int m = (c.right - c.left) / 5;
     InflateRect(&c, -m, -m);
     int l = c.left, t = c.top, r = c.right, b = c.bottom, cx = (l + r) / 2;
+    if (preset)
+    {
+        POINT pts[64];
+        int n = PresetShapePoints((int)(item - PAINT_PRESET_FIRST), l, t, r, b, pts);
+        if (n >= 3)
+            Polygon(hdc, pts, n);
+        SelectObject(hdc, oldPen);
+        SelectObject(hdc, oldBrush);
+        DeleteObject(pen);
+        return S_OK;
+    }
     switch (item)
     {
     case ID_LINE:    MoveToEx(hdc, l, b, NULL); LineTo(hdc, r, t); break;

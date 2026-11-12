@@ -11,6 +11,10 @@
 void Line(HDC hdc, LONG x1, LONG y1, LONG x2, LONG y2, COLORREF color, int thickness);
 void Line(HDC hdc, LONG x1, LONG y1, LONG x2, LONG y2, HBRUSH hBrush, INT thickness);
 
+#define PRESET_SHAPE_COUNT 17
+/* Fills out[] (max 64) with the closed outline of preset shape idx scaled into the box; returns the point count. */
+int PresetShapePoints(int idx, LONG x1, LONG y1, LONG x2, LONG y2, POINT *out);
+
 void Rect(HDC hdc, LONG x1, LONG y1, LONG x2, LONG y2, COLORREF fg, COLORREF bg, int thickness, int style);
 void Rect(HDC hdc, LONG x1, LONG y1, LONG x2, LONG y2, HBRUSH hFgBrush, HBRUSH hBgBrush, INT thickness, INT style);
 

@@ -1000,6 +1000,26 @@ struct RectTool : TwoPointDrawTool
     }
 };
 
+// TOOL_PRESET
+struct PresetTool : TwoPointDrawTool
+{
+    void OnDrawOverlayOnImage(HDC hdc) override
+    {
+        if (!m_bDrawing)
+            return;
+        if (GetAsyncKeyState(VK_SHIFT) < 0)
+            regularize(g_ptStart.x, g_ptStart.y, g_ptEnd.x, g_ptEnd.y);
+        POINT pts[64];
+        int n = PresetShapePoints(toolsModel.GetPresetShape(), g_ptStart.x, g_ptStart.y, g_ptEnd.x, g_ptEnd.y, pts);
+        if (n < 3)
+            return;
+        if (m_bLeftButton)
+            Poly(hdc, pts, n, toolsModel.GetFgBrush(), toolsModel.GetBgBrush(), toolsModel.GetLineWidth(), toolsModel.GetShapeStyle(), TRUE, FALSE);
+        else
+            Poly(hdc, pts, n, toolsModel.GetBgBrush(), toolsModel.GetFgBrush(), toolsModel.GetLineWidth(), toolsModel.GetShapeStyle(), TRUE, FALSE);
+    }
+};
+
 // TOOL_SHAPE
 struct ShapeTool : ToolBase
 {
@@ -1148,6 +1168,7 @@ ToolBase::createToolObject(TOOLTYPE type)
         case TOOL_SHAPE:    return new ShapeTool();
         case TOOL_ELLIPSE:  return new EllipseTool();
         case TOOL_RRECT:    return new RRectTool();
+        case TOOL_PRESET:   return new PresetTool();
     }
     UNREACHABLE;
     return NULL;
