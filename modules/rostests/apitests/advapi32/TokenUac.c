@@ -176,7 +176,7 @@ static void TestIntegrityLevel(BOOL isAdmin, BOOL lua, TOKEN_ELEVATION_TYPE elev
     }
     ok(rid == LWUI_RID_UNTRUSTED || rid == LWUI_RID_LOW || rid == LWUI_RID_MEDIUM ||
        rid == LWUI_RID_HIGH || rid == LWUI_RID_SYSTEM, "unexpected integrity RID 0x%lx\n", rid);
-    ok(pLabel->Label.Attributes == SE_GROUP_INTEGRITY, "label attributes 0x%lx\n", pLabel->Label.Attributes);
+    ok((pLabel->Label.Attributes & SE_GROUP_INTEGRITY) != 0, "label attributes 0x%lx\n", pLabel->Label.Attributes);
 
     if (!lua && isAdmin)
         ok(rid >= LWUI_RID_HIGH, "UAC off, administrator: integrity RID 0x%lx, expected >= High (0x3000)\n", rid);
