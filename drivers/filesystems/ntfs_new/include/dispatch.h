@@ -288,11 +288,14 @@ NTSTATUS
 NtfsPersistPendingSize(_In_ struct _VolumeContextBlock* VolCB,
                        _In_ struct _FCB* FileCB);
 
+/* Durable: the bytes are on the medium when this returns (a write-through
+ * write); otherwise they are on the device, which may still hold them. */
 NTSTATUS
 NtfsCommitFileRange(_In_ struct _VolumeContextBlock* VolCB,
                     _In_ struct _FCB* FileCB,
                     _In_ ULONGLONG FileOffset,
-                    _In_ ULONGLONG Length);
+                    _In_ ULONGLONG Length,
+                    _In_ BOOLEAN Durable);
 
 _Function_class_(IRP_MJ_QUERY_INFORMATION)
 _Function_class_(DRIVER_DISPATCH)
