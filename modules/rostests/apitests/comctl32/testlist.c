@@ -2,6 +2,7 @@
 #include <apitest.h>
 
 extern void func_buttonv6(void);
+extern void func_ButtonShield(void);
 extern void func_ImageListApi(void);
 extern void func_ListViewGroups(void);
 extern void func_LoadIconWithScaleDown(void);
@@ -17,6 +18,7 @@ extern void func_tooltipv6(void);
 const struct test winetest_testlist[] =
 {
     { "buttonv6", func_buttonv6 },
+    { "ButtonShield", func_ButtonShield },
     { "ImageListApi", func_ImageListApi },
     { "ListViewGroups", func_ListViewGroups },
     { "LoadIconWithScaleDown", func_LoadIconWithScaleDown },
