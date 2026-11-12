@@ -41,55 +41,8 @@ static const COLORREF g_dark[LWUI_COLOR_COUNT] = {
     RGB(255, 255, 255), RGB(111, 176, 242), RGB(96, 84, 52), RGB(60, 70, 86), RGB(200, 216, 236),
 };
 
-/* Override: env LEEWAYUI_THEME, then HKCU\Software\Leeway\<exe name>\Theme, then HKCU\Software\Leeway\Theme
- * (value "Mode" = light | dark | system). Returns 1 light, 0 dark, -1 no override. */
-static int ReadThemeOverride(void)
-{
-    WCHAR buf[32];
-    DWORD n = GetEnvironmentVariableW(L"LEEWAYUI_THEME", buf, 32);
-    if (!(n > 0 && n < 32))
-    {
-        WCHAR path[MAX_PATH], key[MAX_PATH + 40];
-        buf[0] = 0;
-        for (int pass = 0; pass < 2 && !buf[0]; pass++)
-        {
-            if (pass == 0)
-            {
-                if (!GetModuleFileNameW(NULL, path, MAX_PATH))
-                    continue;
-                WCHAR *base = wcsrchr(path, L'\\');
-                base = base ? base + 1 : path;
-                WCHAR *dot = wcsrchr(base, L'.');
-                if (dot)
-                    *dot = 0;
-                wsprintfW(key, L"Software\\Leeway\\%s\\Theme", base);
-            }
-            else
-            {
-                lstrcpyW(key, L"Software\\Leeway\\Theme");
-            }
-            HKEY hk;
-            if (RegOpenKeyExW(HKEY_CURRENT_USER, key, 0, KEY_READ, &hk) == ERROR_SUCCESS)
-            {
-                DWORD type = 0, size = sizeof(buf) - sizeof(WCHAR);
-                if (RegQueryValueExW(hk, L"Mode", NULL, &type, (LPBYTE)buf, &size) != ERROR_SUCCESS || type != REG_SZ)
-                    buf[0] = 0;
-                else
-                    buf[size / sizeof(WCHAR)] = 0;
-                RegCloseKey(hk);
-            }
-        }
-    }
-    if (!lstrcmpiW(buf, L"light")) return 1;
-    if (!lstrcmpiW(buf, L"dark")) return 0;
-    return -1;
-}
-
 static BOOL ReadAppsUseLightTheme(void)
 {
-    int ovr = ReadThemeOverride();
-    if (ovr >= 0)
-        return ovr != 0;
     HKEY key;
     DWORD value = 1, size = sizeof(value), type = 0;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
