@@ -243,6 +243,15 @@ HRESULT WINAPI LeewayRibbonSetContext(ILeewayRibbon *ribbon, const WCHAR *name, 
 
 HRESULT WINAPI LeewayRibbonSetIconResolver(ILeewayRibbon *ribbon, LeewayUIIconResolver resolver, void *resolver_context);
 
+/* Gallery item-draw callback (Paint shapes). When set, each gallery / in-ribbon-strip
+ * cell calls it to draw its own glyph (a shape outline) in GDI: draw inside `cell`
+ * using `fg` for a thin outline scaled from `dpi`. Return S_OK if you drew the cell,
+ * or E_NOTIMPL to fall back to the icon/label. command_id is the gallery's owning
+ * command (0 if unknown); item_id is the collection item (the key to draw by). */
+typedef HRESULT (*LeewayUIGalleryDrawHandler)(UINT32 command_id, UINT32 item_id, HDC hdc,
+                                              const RECT *cell, COLORREF fg, UINT32 dpi, void *context);
+HRESULT WINAPI LeewayRibbonSetGalleryDrawCallback(ILeewayRibbon *ribbon, LeewayUIGalleryDrawHandler handler, void *context);
+
 /* Recent files pane in the application menu (G5). The ribbon reads the most-
  * recently-used list from HKCU\Software\Leeway\<app_name>\Recent (REG_SZ values
  * "0".."N-1", most-recent first) and shows it as a right pane; choosing one calls

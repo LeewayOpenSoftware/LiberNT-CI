@@ -245,6 +245,8 @@ struct ILeewayRibbon {
 
     LeewayUIIconResolver resolver;
     void *resolver_ctx;
+    LeewayUIGalleryDrawHandler gallery_draw;
+    void *gallery_draw_ctx;
     IconEntry *icons;
     UINT32 icon_count, icon_cap;
 
@@ -1376,6 +1378,11 @@ static void PaintItem(ILeewayRibbon *r, HDC hdc, Surface *s, int index, COLORREF
         RECT cell = rc;
         InflateRect(&cell, -1, -1);
         ButtonFace(r, hdc, &cell, hover, pressed, checked);
+        if (r->gallery_draw) {
+            RECT cc = cell;
+            if (r->gallery_draw(0, it->cmd, hdc, &cc, text, r->dpi, r->gallery_draw_ctx) == S_OK)
+                break;
+        }
         if (it->color != LWUI_COLOR_NONE) {
             RECT sw = rc;
             InflateRect(&sw, -Sc(r, 4), -Sc(r, 4));
@@ -3632,6 +3639,14 @@ HRESULT WINAPI LeewayRibbonAddRecentFile(ILeewayRibbon *r, const WCHAR *path)
     for (UINT32 i = 0; i < n; i++) { lstrcpynW(r->recent_paths[i], tmp[i], MAX_PATH); r->recent_names[i] = BaseName(r->recent_paths[i]); }
     r->recent_count = n;
     WriteRecent(r);
+    return S_OK;
+}
+
+HRESULT WINAPI LeewayRibbonSetGalleryDrawCallback(ILeewayRibbon *r, LeewayUIGalleryDrawHandler handler, void *context)
+{
+    if (!r) return E_INVALIDARG;
+    r->gallery_draw = handler;
+    r->gallery_draw_ctx = context;
     return S_OK;
 }
 
