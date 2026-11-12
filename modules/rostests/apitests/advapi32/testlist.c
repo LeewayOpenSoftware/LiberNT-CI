@@ -40,6 +40,7 @@ extern void func_ServiceEnv(void);
 extern void func_TriggerInfo(void);
 extern void func_ServiceNetwork(void);
 extern void func_TokenBnoIsolation(void);
+extern void func_TokenDefaultPrivileges(void);
 extern void func_TokenIntegrityLevel(void);
 extern void func_TraceGuids(void);
 
@@ -83,6 +84,7 @@ const struct test winetest_testlist[] =
     { "TriggerInfo", func_TriggerInfo },
     { "ServiceNetwork", func_ServiceNetwork },
     { "TokenBnoIsolation", func_TokenBnoIsolation },
+    { "TokenDefaultPrivileges", func_TokenDefaultPrivileges },
     { "TokenIntegrityLevel", func_TokenIntegrityLevel },
     { "TraceGuids", func_TraceGuids },
     { 0, 0 }
