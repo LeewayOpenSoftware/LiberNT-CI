@@ -143,11 +143,13 @@ KMT_TESTFUNC Test_ExUuid;
 KMT_TESTFUNC Test_CcLazyWriter;
 KMT_TESTFUNC Test_FsRtlDissect;
 KMT_TESTFUNC Test_FsRtlExpression;
+KMT_TESTFUNC Test_FsRtlFileLockState;
 KMT_TESTFUNC Test_FsRtlLegal;
 KMT_TESTFUNC Test_FsRtlMcb;
 KMT_TESTFUNC Test_FsRtlQueryFileLock;
 KMT_TESTFUNC Test_FsRtlRemoveDotsFromPath;
 KMT_TESTFUNC Test_FsRtlTunnel;
+KMT_TESTFUNC Test_FsRtlVolumeStartup;
 #if defined(_M_IX86) || defined(_M_AMD64)
 KMT_TESTFUNC Test_HalBusData;
 KMT_TESTFUNC Test_HalPortIo;
@@ -186,6 +188,7 @@ KMT_TESTFUNC Test_ExWddmTls;
 KMT_TESTFUNC Test_ExWddmWindow;
 KMT_TESTFUNC Test_IoMdl;
 KMT_TESTFUNC Test_IoModern;
+KMT_TESTFUNC Test_IoPriorityHint;
 KMT_TESTFUNC Test_IoDeviceNumaNode;
 KMT_TESTFUNC Test_IoReportRootDevice;
 #if defined(_M_IX86) || defined(_M_AMD64)
@@ -456,11 +459,13 @@ const KMT_TEST TestList[] =
     { "-Example",                           Test_Example },
     { "FsRtlDissect",                       Test_FsRtlDissect },
     { "FsRtlExpression",                    Test_FsRtlExpression },
+    { "FsRtlFileLockState",                 Test_FsRtlFileLockState },
     { "FsRtlLegal",                         Test_FsRtlLegal },
     { "FsRtlMcb",                           Test_FsRtlMcb },
     { "FsRtlQueryFileLock",                 Test_FsRtlQueryFileLock },
     { "FsRtlRemoveDotsFromPath",            Test_FsRtlRemoveDotsFromPath },
     { "FsRtlTunnel",                        Test_FsRtlTunnel },
+    { "FsRtlVolumeStartup",                 Test_FsRtlVolumeStartup },
 #if defined(_M_IX86) || defined(_M_AMD64)
     { "HalBusData",                         Test_HalBusData },
     { "HalPortIo",                          Test_HalPortIo },
@@ -510,6 +515,7 @@ const KMT_TEST TestList[] =
     { "IoNullDeviceKM",                     Test_IoNullDeviceKM },
     { "IoMdl",                              Test_IoMdl },
     { "IoModern",                           Test_IoModern },
+    { "IoPriorityHint",                     Test_IoPriorityHint },
     { "IoActivityId",                       Test_IoActivityId },
     { "IoAcpiCmosRegion",                   Test_IoAcpiCmosRegion },
     { "IoAcpiIoctl",                        Test_IoAcpiIoctl },

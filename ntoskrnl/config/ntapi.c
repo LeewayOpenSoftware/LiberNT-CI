@@ -1755,6 +1755,11 @@ NtInitializeRegistry(IN USHORT Flag)
      */
     KdStartBootLog();
 
+    /* Same phase: the BootExecute list (autochk, autoconv) has finished, so
+     * file systems may stop deferring to the volume startup applications.
+     * This is what FsRtlAreVolumeStartupApplicationsComplete reports. */
+    FsRtlSetVolumeStartupApplicationsComplete();
+
     /* The hive list is loaded and the registry lock released: the
      * hibernation-file reserve may start now (it waits for this and for the
      * first paging file, whichever comes last). */

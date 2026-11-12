@@ -2488,3 +2488,54 @@ IoPropagateActivityIdToThread(
     *OriginalId = IoSetActivityIdThread(PropagatedId);
     return STATUS_SUCCESS;
 }
+
+/* I/O PRIORITY HINT *********************************************************/
+
+C_ASSERT(((MaxIoPriorityTypes - 1) << IRP_IO_PRIORITY_HINT_SHIFT) <= IRP_IO_PRIORITY_HINT_MASK);
+C_ASSERT((IRP_IO_PRIORITY_HINT_MASK & IRP_IO_PRIORITY_HINT_VALID) == 0);
+C_ASSERT(((IRP_IO_PRIORITY_HINT_MASK | IRP_IO_PRIORITY_HINT_VALID) & 0xFFFF) == 0);
+
+/*
+ * @implemented
+ *
+ * An IRP carries an explicit hint only after IoSetIoPriorityHint; otherwise
+ * it reports the I/O priority of the thread that issued it (NT semantics:
+ * the I/O manager derives the IRP priority from the requesting thread).
+ */
+IO_PRIORITY_HINT
+NTAPI
+IoGetIoPriorityHint(
+    _In_ PIRP Irp)
+{
+    PETHREAD Thread;
+
+    if (Irp->Flags & IRP_IO_PRIORITY_HINT_VALID)
+    {
+        return (IO_PRIORITY_HINT)((Irp->Flags & IRP_IO_PRIORITY_HINT_MASK) >>
+                                  IRP_IO_PRIORITY_HINT_SHIFT);
+    }
+
+    /* No explicit hint: inherit from the issuing thread (or the caller when
+     * the IRP has not been tied to a thread yet) */
+    Thread = Irp->Tail.Overlay.Thread;
+    if (Thread == NULL) Thread = PsGetCurrentThread();
+    return (IO_PRIORITY_HINT)Thread->ThreadIoPriority;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoSetIoPriorityHint(
+    _In_ PIRP Irp,
+    _In_ IO_PRIORITY_HINT PriorityHint)
+{
+    if ((ULONG)PriorityHint >= MaxIoPriorityTypes)
+        return STATUS_INVALID_PARAMETER;
+
+    Irp->Flags = (Irp->Flags & ~IRP_IO_PRIORITY_HINT_MASK) |
+                 ((ULONG)PriorityHint << IRP_IO_PRIORITY_HINT_SHIFT) |
+                 IRP_IO_PRIORITY_HINT_VALID;
+    return STATUS_SUCCESS;
+}
