@@ -1735,6 +1735,35 @@ SoftGpuPresentRectStaged(
     return STATUS_SUCCESS;
 }
 
+static VOID
+SoftGpuK2PresentLog(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_opt_ const DXGKARG_PRESENT_DISPLAYONLY *Present,
+    _In_ PCSTR Tag,
+    _In_opt_ PVOID Destination,
+    _In_ ULONG DestinationPitch,
+    _In_ SIZE_T DestinationSize,
+    _In_ NTSTATUS Status)
+{
+    static LONG K2PresentCount;
+    LONG Count = InterlockedIncrement(&K2PresentCount);
+
+    if (Count > 12 && (Count % 100) != 0)
+        return;
+    DPRINT1("K2PRES: #%ld %s status=0x%08lx moves=%lu dirty=%lu srcPitch=%ld dst=%p dstPitch=%lu dstSize=%Iu "
+            "direct=%d hwptr=%d primaryValid=%d scanout=%p scanoutPitch=%lu scanoutSize=%Iu "
+            "fb=%p fbPhys=0x%I64X fbSize=%Iu dev=%lux%lu stopped=%ld\n",
+            Count, Tag, (ULONG)Status,
+            Present ? Present->NumMoves : 0, Present ? Present->NumDirtyRects : 0,
+            Present ? (LONG)Present->Pitch : 0L,
+            Destination, DestinationPitch, DestinationSize,
+            (int)Device->PlatformDirectScanout, (int)Device->PlatformHardwarePointer,
+            (int)Device->CurrentPrimaryValid, Device->Scanout, Device->ScanoutPitch,
+            (SIZE_T)Device->ScanoutSize, Device->FrameBuffer,
+            Device->FrameBufferPhys.QuadPart, Device->FrameBufferSize,
+            Device->Width, Device->Height, Device->Stopped);
+}
+
 NTSTATUS
 APIENTRY
 SoftGpuDdiPresentDisplayOnly(
@@ -1767,6 +1796,9 @@ SoftGpuDdiPresentDisplayOnly(
         (PresentDisplayOnly->NumDirtyRects != 0 &&
          PresentDisplayOnly->pDirtyRect == NULL))
     {
+        if (Device != NULL)
+            SoftGpuK2PresentLog(Device, PresentDisplayOnly, "badparam", NULL, 0, 0,
+                                STATUS_INVALID_PARAMETER);
         return STATUS_INVALID_PARAMETER;
     }
 
@@ -1799,12 +1831,14 @@ SoftGpuDdiPresentDisplayOnly(
     if (InterlockedCompareExchange(&Device->Stopped, 0, 0) != 0)
     {
         Status = STATUS_DELETE_PENDING;
+        SoftGpuK2PresentLog(Device, PresentDisplayOnly, "stopped", NULL, 0, 0, Status);
         goto CleanupMutex;
     }
     if (Device->PlatformDirectScanout)
     {
         Status = SoftGpuPlatformPresentDisplayOnly(Device,
                                                    PresentDisplayOnly);
+        SoftGpuK2PresentLog(Device, PresentDisplayOnly, "platform", NULL, 0, 0, Status);
         if (Status != STATUS_NOT_SUPPORTED)
             goto CleanupMutex;
     }
@@ -1851,6 +1885,9 @@ SoftGpuDdiPresentDisplayOnly(
         DestinationPitch = Device->ScanoutPitch;
     }
 
+    SoftGpuK2PresentLog(Device, PresentDisplayOnly,
+                        Destination == NULL ? "nodest" : "dest",
+                        Destination, DestinationPitch, DestinationSize, STATUS_SUCCESS);
     if (Destination == NULL)
     {
         Status = STATUS_SUCCESS;
@@ -1905,6 +1942,8 @@ SoftGpuDdiPresentDisplayOnly(
             SoftGpuPlatformScanoutWritten(Device, &Rect);
     }
     KeMemoryBarrier();
+    SoftGpuK2PresentLog(Device, PresentDisplayOnly, "done", Destination,
+                        DestinationPitch, DestinationSize, Status);
 
 CleanupMutex:
     KeReleaseMutex(&Device->ScanoutMutex, FALSE);
