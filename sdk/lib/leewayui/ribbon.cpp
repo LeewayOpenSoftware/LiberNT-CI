@@ -3463,6 +3463,7 @@ HRESULT WINAPI LeewayRibbonSetLayout(ILeewayRibbon *r, const LeewayUILayout *lay
     r->strip_count = 0;
     FreeLayout(r->layout);
     r->layout = l;
+    if (l->app_name) LeewayThemeApplyAppOverride(r->theme, l->app_name);
     r->active_tab = FirstVisibleTab(r);
     r->restore_tab = r->active_tab == 0xFFFFFFFF ? 0 : r->active_tab;
     r->s.focus = -1;
@@ -3648,6 +3649,13 @@ HRESULT WINAPI LeewayRibbonSetGalleryDrawCallback(ILeewayRibbon *r, LeewayUIGall
     r->gallery_draw = handler;
     r->gallery_draw_ctx = context;
     return S_OK;
+}
+
+HRESULT WINAPI LeewayRibbonSetThemePreference(ILeewayRibbon *r, LeewayThemePref pref)
+{
+    if (!r) return E_INVALIDARG;
+    LeewayThemeSetPreference(r->theme, pref);
+    return LeewayRibbonOnThemeChanged(r);
 }
 
 HRESULT WINAPI LeewayRibbonSetIconResolver(ILeewayRibbon *r, LeewayUIIconResolver resolver, void *resolver_context)

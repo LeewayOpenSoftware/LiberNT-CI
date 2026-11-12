@@ -12,6 +12,7 @@
 
 struct ILeewayTheme {
     LeewayThemeMode mode;
+    LeewayThemePref pref;
     COLORREF colors[LWUI_COLOR_COUNT];
     HBRUSH brushes[LWUI_COLOR_COUNT];
 };
@@ -97,9 +98,18 @@ static void DropBrushes(ILeewayTheme *theme)
     }
 }
 
+static LeewayThemeMode ResolveMode(ILeewayTheme *theme)
+{
+    LeewayThemeMode sys = DetectMode();
+    if (sys == LEEWAY_THEME_MODE_HIGH_CONTRAST || sys == LEEWAY_THEME_MODE_CLASSIC) return sys;
+    if (theme->pref == LEEWAY_THEME_PREF_LIGHT) return LEEWAY_THEME_MODE_LIGHT;
+    if (theme->pref == LEEWAY_THEME_PREF_DARK) return LEEWAY_THEME_MODE_DARK;
+    return sys;
+}
+
 static void Reload(ILeewayTheme *theme)
 {
-    theme->mode = DetectMode();
+    theme->mode = ResolveMode(theme);
     switch (theme->mode) {
     case LEEWAY_THEME_MODE_LIGHT:
         CopyMemory(theme->colors, g_light, sizeof(theme->colors));
@@ -142,6 +152,38 @@ void LeewayThemeDestroy(ILeewayTheme *theme)
 LeewayThemeMode LeewayThemeGetMode(ILeewayTheme *theme)
 {
     return theme ? theme->mode : LEEWAY_THEME_MODE_LIGHT;
+}
+
+void LeewayThemeSetPreference(ILeewayTheme *theme, LeewayThemePref pref)
+{
+    if (!theme) return;
+    theme->pref = pref;
+    Reload(theme);
+}
+
+void LeewayThemeApplyAppOverride(ILeewayTheme *theme, const WCHAR *app_name)
+{
+    if (!theme || !app_name || !app_name[0]) return;
+    LeewayThemePref pref = LEEWAY_THEME_PREF_SYSTEM;
+    WCHAR key[256]; wsprintfW(key, L"Software\\Leeway\\%s", app_name); key[255] = 0;
+    HKEY h;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, key, 0, KEY_READ, &h) == ERROR_SUCCESS) {
+        DWORD type = 0, cb; WCHAR sv[16]; DWORD dv = 0;
+        cb = sizeof(sv);
+        if (RegQueryValueExW(h, L"Theme", NULL, &type, (LPBYTE)sv, &cb) == ERROR_SUCCESS) {
+            if (type == REG_SZ) {
+                sv[15] = 0;
+                if (lstrcmpiW(sv, L"light") == 0) pref = LEEWAY_THEME_PREF_LIGHT;
+                else if (lstrcmpiW(sv, L"dark") == 0) pref = LEEWAY_THEME_PREF_DARK;
+            } else if (type == REG_DWORD) {
+                CopyMemory(&dv, sv, sizeof(dv));
+                if (dv == 1) pref = LEEWAY_THEME_PREF_LIGHT; else if (dv == 2) pref = LEEWAY_THEME_PREF_DARK;
+            }
+        }
+        RegCloseKey(h);
+    }
+    theme->pref = pref;
+    Reload(theme);
 }
 
 COLORREF LeewayThemeGetColor(ILeewayTheme *theme, LeewayThemeColor which)
