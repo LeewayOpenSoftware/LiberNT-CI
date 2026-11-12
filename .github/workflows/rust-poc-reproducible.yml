@@ -51,31 +51,45 @@ jobs:
         run: |
           echo "LLVM_BIN=$(dirname $(find $(rustc --print sysroot) -name llvm-nm | head -1))" >> "$GITHUB_ENV"
 
-      - name: "Static safety checks (default build: no bugcheck on normal op)"
+      - name: "Static safety checks (default build: sanctioned externs only, no bugcheck)"
         run: |
+          # The v2 allocator + spin lock legitimately import ntoskrnl pool/spin-lock
+          # routines, so the default build is no longer extern-free. The real safety
+          # property is: externs are a subset of a sanctioned Ex*/Ke* allowlist, and
+          # KeBugCheckEx is ABSENT (LTO proves no panic is reachable on normal op).
           L="$RUNNER_TEMP/b1/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a"
-          OBJ=$("$LLVM_BIN/llvm-ar" t "$L" | grep -i leeway | head -1)
-          "$LLVM_BIN/llvm-ar" x "$L" "$OBJ"
-          echo "== undefined externs (default => expect none) =="
-          U=$("$LLVM_BIN/llvm-nm" "$OBJ" | grep ' U ' || true); echo "${U:-<none>}"
-          if [ -n "$U" ]; then echo "::error::unexpected extern in default build"; exit 1; fi
+          D="$RUNNER_TEMP/x1"; rm -rf "$D"; mkdir -p "$D"; ( cd "$D"
+            for OBJ in $("$LLVM_BIN/llvm-ar" t "$L" | grep -i leeway); do "$LLVM_BIN/llvm-ar" x "$L" "$OBJ"; done )
+          U=$("$LLVM_BIN/llvm-nm" "$D"/*.o 2>/dev/null | grep ' U ' | awk '{print $NF}' | sort -u)
+          echo "== undefined externs (default) =="; echo "${U:-<none>}"
+          ALLOW="ExAllocatePoolWithTag ExFreePoolWithTag KeInitializeSpinLock KeAcquireSpinLockRaiseToDpc KeReleaseSpinLock"
+          for s in $U; do
+            case " $ALLOW " in *" $s "*) ;; *) echo "::error::unexpected extern in default build: $s"; exit 1;; esac
+          done
+          if printf '%s\n' $U | grep -qx 'KeBugCheckEx'; then
+            echo "::error::KeBugCheckEx reachable in default build (bugcheck must be absent on normal op)"; exit 1; fi
           echo "== opcode scan: forbidden x87/MMX/AVX =="
-          "$LLVM_BIN/llvm-objdump" -d "$OBJ" > dis.txt
+          "$LLVM_BIN/llvm-objdump" -d "$D"/*.o > dis.txt
           if grep -iwE 'fld|fstp|fadd|fmul|fdiv|emms|femms' dis.txt; then echo "::error::x87/MMX found"; exit 1; fi
           if grep -iE '%ymm|%zmm|vzeroupper' dis.txt; then echo "::error::AVX found"; exit 1; fi
-          echo "default build clean"
+          echo "default build clean (externs sanctioned, no bugcheck, no FP)"
 
-      - name: "Static checks (test-ioctls build: only KeBugCheckEx extern)"
+      - name: "Static checks (test-ioctls build: sanctioned externs + KeBugCheckEx)"
         run: |
           CARGO_TARGET_DIR="$RUNNER_TEMP/bp" cargo build --release --locked --features test-ioctls
           L="$RUNNER_TEMP/bp/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a"
-          OBJ=$("$LLVM_BIN/llvm-ar" t "$L" | grep -i leeway | head -1)
-          "$LLVM_BIN/llvm-ar" x "$L" "$OBJ"
-          echo "== undefined externs (test build => expect ONLY KeBugCheckEx) =="
-          U=$("$LLVM_BIN/llvm-nm" "$OBJ" | grep ' U ' | awk '{print $NF}' | sort -u)
-          echo "$U"
-          if [ "$U" != "KeBugCheckEx" ]; then echo "::error::unexpected externs: $U"; exit 1; fi
-          echo "test build extern surface OK"
+          D="$RUNNER_TEMP/xp"; rm -rf "$D"; mkdir -p "$D"; ( cd "$D"
+            for OBJ in $("$LLVM_BIN/llvm-ar" t "$L" | grep -i leeway); do "$LLVM_BIN/llvm-ar" x "$L" "$OBJ"; done )
+          U=$("$LLVM_BIN/llvm-nm" "$D"/*.o 2>/dev/null | grep ' U ' | awk '{print $NF}' | sort -u)
+          echo "== undefined externs (test build) =="; echo "$U"
+          # test-ioctls adds exactly the gated bugcheck path on top of the sanctioned set.
+          ALLOW="ExAllocatePoolWithTag ExFreePoolWithTag KeInitializeSpinLock KeAcquireSpinLockRaiseToDpc KeReleaseSpinLock KeBugCheckEx"
+          for s in $U; do
+            case " $ALLOW " in *" $s "*) ;; *) echo "::error::unexpected extern in test build: $s"; exit 1;; esac
+          done
+          if ! printf '%s\n' $U | grep -qx 'KeBugCheckEx'; then
+            echo "::error::test build must reference KeBugCheckEx (the gated bugcheck path)"; exit 1; fi
+          echo "test build extern surface OK (sanctioned + KeBugCheckEx)"
 
       - name: Upload staticlib
         uses: actions/upload-artifact@v4
