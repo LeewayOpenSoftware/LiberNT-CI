@@ -1524,6 +1524,7 @@ MountMgrQueryDosVolumePaths(IN PDEVICE_EXTENSION DeviceExtension,
         ReconcileContext.DeviceExtension = DeviceExtension;
         ReconcileContext.DeviceInformation = FailedDevice;
         MmpReleaseDeviceLock(DeviceExtension);
+        DPRINT1("MMCOUNT caller device.c:1527 %wZ\n", &FailedDevice->DeviceName);
         ReconcileThisDatabaseWithMasterWorker(&ReconcileContext);
         MmpAcquireDeviceLock(DeviceExtension);
 
@@ -2187,6 +2188,7 @@ MountMgrVolumeMountPointChanged(IN PDEVICE_EXTENSION DeviceExtension,
         Status = FindDeviceInfo(DeviceExtension, SourceDeviceName, FALSE, &DeviceInformation);
         if (NT_SUCCESS(Status))
         {
+            DPRINT1("MMCOUNT caller device.c:2190 %wZ\n", &DeviceInformation->DeviceName);
             ReconcileThisDatabaseWithMaster(DeviceExtension, DeviceInformation);
         }
         else
@@ -2715,6 +2717,7 @@ MountMgrDeviceControl(IN PDEVICE_OBJECT DeviceObject,
         // NOTE: On Win7+, this is handled during driver re-initialization.
             DeviceExtension->AutomaticDriveLetter = TRUE;
             MountMgrAssignDriveLetters(DeviceExtension);
+            DPRINT1("MMCOUNT caller device.c:2718 ReconcileAll\n");
             ReconcileAllDatabasesWithMaster(DeviceExtension);
             WaitForOnlinesToComplete(DeviceExtension);
             Status = STATUS_SUCCESS;
