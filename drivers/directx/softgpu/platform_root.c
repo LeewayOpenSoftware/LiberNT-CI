@@ -176,6 +176,9 @@ SoftGpuVbeAddMode(
     ULONG Base = ModeInfo[0x28] | (ModeInfo[0x29] << 8) | (ModeInfo[0x2A] << 16) | ((ULONG)ModeInfo[0x2B] << 24);
     ULONG Index;
 
+    DPRINT1("SOFTGPU: VBE mode 0x%04X %lux%lu bpp=%u attr=0x%04X model=%u base=0x%08lX pitch=%lu\n",
+            ModeNumber, Width, Height, (UINT)ModeInfo[0x19], (UINT)SoftGpuReadUshort(ModeInfo, 0),
+            (UINT)ModeInfo[0x1B], Base, Pitch);
     if ((SoftGpuReadUshort(ModeInfo, 0) & SOFTGPU_VBE_MODE_REQUIRED) != SOFTGPU_VBE_MODE_REQUIRED ||
         ModeInfo[0x19] != 32 ||
         ModeInfo[0x1B] != SOFTGPU_VBE_DIRECT_COLOR ||
@@ -230,13 +233,39 @@ SoftGpuVbeReadEdid(
         !NT_SUCCESS(ReadMemory(Segment, Offset, Edid, sizeof(Edid))) ||
         !RtlEqualMemory(Edid, Header, sizeof(Header)))
     {
+        DPRINT1("SOFTGPU: VBE EDID 4F15 BL=1 failed eax=0x%08lX header=%02X%02X%02X%02X\n",
+                Registers.Eax, (UINT)Edid[0], (UINT)Edid[1], (UINT)Edid[2], (UINT)Edid[3]);
         return;
     }
 
     for (Index = 0; Index < sizeof(Edid); Index++)
         Sum += Edid[Index];
     if (Sum != 0)
+    {
+        DPRINT1("SOFTGPU: VBE EDID checksum bad (sum 0x%02X)\n", (UINT)Sum);
         return;
+    }
+
+    DPRINT1("SOFTGPU: VBE EDID ok mfg=%c%c%c product=0x%04X edid %u.%u extensions=%u\n",
+            (CHAR)('@' + ((Edid[8] >> 2) & 0x1F)),
+            (CHAR)('@' + (((Edid[8] & 0x03) << 3) | (Edid[9] >> 5))),
+            (CHAR)('@' + (Edid[9] & 0x1F)),
+            (UINT)(Edid[10] | (Edid[11] << 8)), (UINT)Edid[18], (UINT)Edid[19], (UINT)Edid[126]);
+    {
+        ULONG Dtd;
+
+        for (Dtd = 54; Dtd < 126; Dtd += 18)
+        {
+            if (Edid[Dtd] == 0 && Edid[Dtd + 1] == 0)
+                continue;
+            DPRINT1("SOFTGPU: VBE EDID DTD %lux%lu pixclk=%lu0kHz hblank=%lu vblank=%lu\n",
+                    (ULONG)(Edid[Dtd + 2] | ((Edid[Dtd + 4] & 0xF0) << 4)),
+                    (ULONG)(Edid[Dtd + 5] | ((Edid[Dtd + 7] & 0xF0) << 4)),
+                    (ULONG)(Edid[Dtd] | (Edid[Dtd + 1] << 8)),
+                    (ULONG)(Edid[Dtd + 3] | ((Edid[Dtd + 4] & 0x0F) << 8)),
+                    (ULONG)(Edid[Dtd + 6] | ((Edid[Dtd + 7] & 0x0F) << 8)));
+        }
+    }
 
     RtlCopyMemory(Config->Edid, Edid, sizeof(Edid));
     Config->EdidLength = sizeof(Edid);
@@ -395,6 +424,11 @@ SoftGpuVbeQueryModes(
         RtlEqualMemory(Info, "VESA", 4))
     {
         VbeVersion = SoftGpuReadUshort(Info, 0x04);
+        DPRINT1("SOFTGPU: VBE %x.%02x capabilities=0x%08lX memory=%u x 64KB oem=%04X:%04X\n",
+                VbeVersion >> 8, VbeVersion & 0xFF,
+                (ULONG)Info[0x0A] | ((ULONG)Info[0x0B] << 8) | ((ULONG)Info[0x0C] << 16) | ((ULONG)Info[0x0D] << 24),
+                (UINT)SoftGpuReadUshort(Info, 0x12), (UINT)SoftGpuReadUshort(Info, 0x08),
+                (UINT)SoftGpuReadUshort(Info, 0x06));
         ListOffset = SoftGpuReadUshort(Info, 0x0E);
         ListSegment = SoftGpuReadUshort(Info, 0x10);
         VideoMemorySize = (ULONGLONG)SoftGpuReadUshort(Info, 0x12) * 0x10000;
@@ -423,8 +457,13 @@ SoftGpuVbeQueryModes(
             }
         }
 
+        DPRINT1("SOFTGPU: VBE accepted %lu mode(s) before the EDID prune\n", Config->ModeCount);
         SoftGpuVbeReadEdid(Config, Call, ReadMemory, Segment, Offset);
         SoftGpuVbePruneModes(Config);
+        for (Index = 0; Index < Config->ModeCount; Index++)
+            DPRINT1("SOFTGPU: VBE kept %lux%lu (mode 0x%04X)\n",
+                    Config->Modes[Index].Width, Config->Modes[Index].Height,
+                    (UINT)Config->Modes[Index].PlatformMode);
 
         for (Index = 0; Index < Config->ModeCount; Index++)
         {
