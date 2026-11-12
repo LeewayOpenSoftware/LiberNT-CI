@@ -36,6 +36,7 @@ list(APPEND SOURCE
     ServiceNetwork.c
     TriggerInfo.c
     TokenBnoIsolation.c
+    TokenDefaultPrivileges.c
     TraceGuids.c
     svchlp.c)
 
