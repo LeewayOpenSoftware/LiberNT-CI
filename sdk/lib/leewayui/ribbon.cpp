@@ -117,7 +117,7 @@ struct Context {
 enum ItemKind {
     IT_GROUPFRAME, IT_APPBUTTON, IT_TAB, IT_QAT, IT_QATMORE, IT_HELP, IT_MINBTN,
     IT_CONTROL, IT_SPLITARROW, IT_GROUPBTN, IT_LAUNCHER, IT_MENUROW, IT_SEPARATOR,
-    IT_GALCELL, IT_GALUP, IT_GALDOWN, IT_GALEXPAND
+    IT_GALCELL, IT_GALUP, IT_GALDOWN, IT_GALEXPAND, IT_OVERFLOW
 };
 
 enum ItemFlags {
@@ -166,7 +166,7 @@ struct Surface {
     int hover, pressed, focus;
 };
 
-enum PopupKind { PK_MENU, PK_GALLERY, PK_GROUP, PK_TAB, PK_APPMENU, PK_QATMENU };
+enum PopupKind { PK_MENU, PK_GALLERY, PK_GROUP, PK_TAB, PK_APPMENU, PK_QATMENU, PK_OVERFLOW };
 
 struct Popup {
     HWND hwnd;
@@ -228,6 +228,7 @@ struct ILeewayRibbon {
     Surface s;
     BOOL dirty;
     UINT32 variants[MAX_GROUPS];
+    UINT32 overflow_from;   /* first band group hidden behind the overflow chevron */
 
     Popup *popup;
 
@@ -675,24 +676,23 @@ static int PackGroup(ILeewayRibbon *r, HDC hdc, const LeewayUIGroup *g, UINT32 v
         }
         x += w;
     } else {
-        int col_x = x, col_w = 0, rows = 0;
-        for (UINT32 i = 0; i < g->control_count; i++) {
+        for (UINT32 i = 0; i < g->control_count; ) {
             const LeewayUIPlacement *p = &g->controls[i];
             LeewayUICommandState st;
             const WCHAR *label;
             QueryState(r, p->command_id, &st, &label, NULL, NULL);
-            if (!st.visible) continue;
+            if (!st.visible) { i++; continue; }
             LeewayUIControlKind kind = p->kind;
             BOOL strip = (kind == LWUI_CONTROL_GALLERY_STRIP) && variant == LWUI_VARIANT_LARGE;
             if (kind == LWUI_CONTROL_GALLERY_STRIP && !strip) kind = LWUI_CONTROL_GALLERY;   /* degrade to the dropdown form */
             BOOL large = (variant == LWUI_VARIANT_LARGE) && (IsLargeKind(kind) || kind == LWUI_CONTROL_COLORWELL);
             if (large || strip) {
-                if (rows) { x = col_x + col_w + Sc(r, 2); rows = 0; col_w = 0; }
+                /* a large/strip control is a full-height column of its own */
                 int w;
                 if (strip) {
                     w = PackStrip(r, surf, p, x, top, large_h, g, tab);
                     x += w + Sc(r, 2);
-                    col_x = x;
+                    i++;
                     continue;
                 }
                 w = LargeWidth(r, hdc, label);
@@ -728,51 +728,94 @@ static int PackGroup(ILeewayRibbon *r, HDC hdc, const LeewayUIGroup *g, UINT32 v
                     }
                 }
                 x += w + Sc(r, 2);
-                col_x = x;
-            } else {
-                BOOL with_label = (variant != LWUI_VARIANT_SMALL) && kind != LWUI_CONTROL_BUTTON_SMALL_ICON && kind != LWUI_CONTROL_SPLIT_SMALL_ICON;
-                if (kind == LWUI_CONTROL_CHECKBOX) with_label = TRUE;
-                BOOL arrow = HasArrow(kind);
+                i++;
+                continue;
+            }
+            /* A maximal run of small controls, packed ROW-MAJOR across rowcap rows
+             * (G11b): the run flows left-to-right, top row first, so a two-row Font
+             * group lays the family + size combos side by side on the first row
+             * instead of stacking them. Each row is packed independently, so the
+             * narrow buttons below a wide combo stay compact (Win7 behaviour). A
+             * single-column run (cols == 1) is identical to the old column packing,
+             * so the default three-row groups are unchanged. */
+            #define LWUI_RUN_MAX 64
+            UINT32 idx[LWUI_RUN_MAX];
+            int    sw[LWUI_RUN_MAX];
+            BOOL   swl[LWUI_RUN_MAX];
+            int cnt = 0;
+            UINT32 j = i;
+            for (; j < g->control_count && cnt < LWUI_RUN_MAX; j++) {
+                const LeewayUIPlacement *q = &g->controls[j];
+                LeewayUICommandState qs;
+                const WCHAR *ql;
+                QueryState(r, q->command_id, &qs, &ql, NULL, NULL);
+                if (!qs.visible) continue;
+                LeewayUIControlKind qk = q->kind;
+                BOOL qstrip = (qk == LWUI_CONTROL_GALLERY_STRIP) && variant == LWUI_VARIANT_LARGE;
+                if (qk == LWUI_CONTROL_GALLERY_STRIP && !qstrip) qk = LWUI_CONTROL_GALLERY;
+                BOOL qlarge = (variant == LWUI_VARIANT_LARGE) && (IsLargeKind(qk) || qk == LWUI_CONTROL_COLORWELL);
+                if (qlarge || qstrip) break;
+                BOOL qwith = (variant != LWUI_VARIANT_SMALL) && qk != LWUI_CONTROL_BUTTON_SMALL_ICON && qk != LWUI_CONTROL_SPLIT_SMALL_ICON;
+                if (qk == LWUI_CONTROL_CHECKBOX) qwith = TRUE;
+                BOOL qarrow = HasArrow(qk);
                 int w;
-                if (kind == LWUI_CONTROL_COMBO) w = Sc(r, p->width ? (int)p->width : M_COMBO_W);
-                else if (kind == LWUI_CONTROL_CHECKBOX) w = Sc(r, M_CHECK) + Sc(r, 10) + TextWidth(hdc, label) + Sc(r, 4);
-                else w = SmallWidth(r, hdc, label, with_label, arrow);
-                if (rows == rowcap) { x = col_x + col_w + Sc(r, 2); col_x = x; rows = 0; col_w = 0; }
-                if (rows == 0) col_x = x;
+                if (qk == LWUI_CONTROL_COMBO) w = Sc(r, q->width ? (int)q->width : M_COMBO_W);
+                else if (qk == LWUI_CONTROL_CHECKBOX) w = Sc(r, M_CHECK) + Sc(r, 10) + TextWidth(hdc, ql) + Sc(r, 4);
+                else w = SmallWidth(r, hdc, ql, qwith, qarrow);
+                idx[cnt] = j; sw[cnt] = w; swl[cnt] = qwith; cnt++;
+            }
+            int cols = (cnt + rowcap - 1) / rowcap;
+            if (cols < 1) cols = 1;
+            int row_x[3] = { x, x, x };     /* rowcap is 2 or 3 */
+            int run_right = x;
+            for (int k = 0; k < cnt; k++) {
+                int row = k / cols;
+                if (row >= rowcap) row = rowcap - 1;
+                const LeewayUIPlacement *q = &g->controls[idx[k]];
+                LeewayUICommandState qs;
+                const WCHAR *ql;
+                QueryState(r, q->command_id, &qs, &ql, NULL, NULL);
+                LeewayUIControlKind qk = q->kind;
+                if (qk == LWUI_CONTROL_GALLERY_STRIP) qk = LWUI_CONTROL_GALLERY;
+                BOOL qarrow = HasArrow(qk);
+                int w = sw[k];
+                int cx = row_x[row];
                 if (surf) {
                     Item *it = SurfaceAdd(surf);
                     if (it) {
                         it->kind = IT_CONTROL;
-                        it->cmd = p->command_id;
-                        it->ckind = kind;
+                        it->cmd = q->command_id;
+                        it->ckind = qk;
                         it->grp = g;
                         it->tab = tab;
-                        it->keytip = p->keytip;
-                        it->color = st.color;
-                        it->flags = (with_label ? IF_LABEL : 0) | (arrow ? IF_ARROW : 0);
-                        if (kind == LWUI_CONTROL_COMBO) it->flags = IF_LABEL | IF_ARROW;
-                        SetRect(&it->rc, col_x, top + rows * small_h, col_x + w, top + (rows + 1) * small_h);
-                        if (IsSplitKind(kind)) {
+                        it->keytip = q->keytip;
+                        it->color = qs.color;
+                        it->flags = (swl[k] ? IF_LABEL : 0) | (qarrow ? IF_ARROW : 0);
+                        if (qk == LWUI_CONTROL_COMBO) it->flags = IF_LABEL | IF_ARROW;
+                        SetRect(&it->rc, cx, top + row * small_h, cx + w, top + (row + 1) * small_h);
+                        if (IsSplitKind(qk)) {
                             it->rc.right -= arrow_w;
                             it->flags &= ~IF_ARROW;
                             Item *ar = SurfaceAdd(surf);
                             if (ar) {
                                 ar->kind = IT_SPLITARROW;
-                                ar->cmd = p->command_id;
-                                ar->ckind = kind;
+                                ar->cmd = q->command_id;
+                                ar->ckind = qk;
                                 ar->grp = g;
                                 ar->tab = tab;
                                 ar->flags = IF_ARROW;
-                                SetRect(&ar->rc, col_x + w - arrow_w, it->rc.top, col_x + w, it->rc.bottom);
+                                SetRect(&ar->rc, cx + w - arrow_w, it->rc.top, cx + w, it->rc.bottom);
                             }
                         }
                     }
                 }
-                if (w > col_w) col_w = w;
-                rows++;
+                row_x[row] += w + Sc(r, 2);
+                if (row_x[row] > run_right) run_right = row_x[row];
             }
+            x = run_right;
+            i = j;
+            #undef LWUI_RUN_MAX
         }
-        if (rows) x = col_x + col_w + Sc(r, 2);
         if (variant != LWUI_VARIANT_COLLAPSED && g->launcher_id && surf) {
             Item *it = SurfaceAdd(surf);
             if (it) {
@@ -828,12 +871,47 @@ static void LayoutBand(ILeewayRibbon *r, HDC hdc, Surface *surf, UINT32 tab, con
         step[pick]++;
     }
 
+    /* widths[] reflects the chosen step[] from the fit loop. If the groups still
+     * overrun the band at their most collapsed, hide the rightmost ones behind an
+     * overflow chevron (G11a) rather than letting them spill past the edge. */
+    int chev_w = Sc(r, M_STRIP_BTN) + Sc(r, 6);
+    UINT32 of = n;
+    {
+        int used = 0;
+        for (UINT32 i = 0; i < n; i++) {
+            int add = widths[i] + (i ? sep : 0);
+            if (used + add <= avail) { used += add; }
+            else { of = i; break; }
+        }
+        if (of < n) {
+            used = 0; of = n;
+            for (UINT32 i = 0; i < n; i++) {
+                int add = widths[i] + (i ? sep : 0);
+                if (used + add <= avail - chev_w) { used += add; }
+                else { of = i; break; }
+            }
+            if (of == 0) of = 1;   /* always keep at least the first group on the band */
+        }
+    }
+    r->overflow_from = of;
+
     int x = rc->left + pad;
-    for (UINT32 i = 0; i < n; i++) {
+    for (UINT32 i = 0; i < of; i++) {
         UINT32 v = VariantAt(&t->groups[i], step[i]);
         if (variants) variants[i] = v;
         int w = PackGroup(r, hdc, &t->groups[i], v, surf, x, rc->top + pad, tab, band_h);
         x += w + sep;
+    }
+    if (of < n && surf) {
+        Item *ov = SurfaceAdd(surf);
+        if (ov) {
+            int b = Sc(r, M_STRIP_BTN);
+            int by = rc->top + pad + (band_h - b) / 2;
+            ov->kind = IT_OVERFLOW;
+            ov->tab = tab;
+            ov->keytip = NULL;
+            SetRect(&ov->rc, rc->right - pad - b, by, rc->right - pad, by + b);
+        }
     }
 }
 
@@ -1540,6 +1618,13 @@ static void PaintItem(ILeewayRibbon *r, HDC hdc, Surface *s, int index, COLORREF
         FillRect(hdc, &l, Br(r, LWUI_COLOR_SEPARATOR));
         break;
     }
+    case IT_OVERFLOW: {
+        ButtonFace(r, hdc, &rc, hover, pressed, FALSE);
+        SetTextColor(hdc, text);
+        SelectObject(hdc, r->font);
+        DrawTextW(hdc, L"»", -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        break;
+    }
     }
 
     if (s->focus == index && GetFocus() == r->hwnd && s == &r->s) {
@@ -1609,7 +1694,7 @@ static void PaintMain(ILeewayRibbon *r, HDC hdc, const RECT *client)
     }
     /* frames first, then everything else, tabs last so the active tab joins the band */
     for (UINT32 i = 0; i < r->s.n; i++) if (r->s.items[i].kind == IT_GROUPFRAME) PaintItem(r, hdc, &r->s, (int)i, band_bg);
-    for (UINT32 i = 0; i < r->s.n; i++) if (r->s.items[i].kind != IT_GROUPFRAME && r->s.items[i].kind != IT_TAB) PaintItem(r, hdc, &r->s, (int)i, r->s.items[i].kind == IT_CONTROL || r->s.items[i].kind == IT_SPLITARROW || r->s.items[i].kind == IT_GROUPBTN ? band_bg : Col(r, LWUI_COLOR_STRIP_BG));
+    for (UINT32 i = 0; i < r->s.n; i++) if (r->s.items[i].kind != IT_GROUPFRAME && r->s.items[i].kind != IT_TAB) PaintItem(r, hdc, &r->s, (int)i, r->s.items[i].kind == IT_CONTROL || r->s.items[i].kind == IT_SPLITARROW || r->s.items[i].kind == IT_GROUPBTN || r->s.items[i].kind == IT_OVERFLOW ? band_bg : Col(r, LWUI_COLOR_STRIP_BG));
     for (UINT32 i = 0; i < r->s.n; i++) if (r->s.items[i].kind == IT_TAB) PaintItem(r, hdc, &r->s, (int)i, Col(r, LWUI_COLOR_STRIP_BG));
     if (r->kt_level) PaintKeytips(r, hdc, &r->s, FALSE);
 }
@@ -1618,7 +1703,7 @@ static void PaintPopup(Popup *p, HDC hdc, const RECT *client)
 {
     ILeewayRibbon *r = p->r;
     COLORREF bg;
-    if (p->kind == PK_GROUP || p->kind == PK_TAB) {
+    if (p->kind == PK_GROUP || p->kind == PK_TAB || p->kind == PK_OVERFLOW) {
         VGradient(r, hdc, client, Col(r, LWUI_COLOR_BAND_BG), Col(r, LWUI_COLOR_BAND_BG2));
         bg = Col(r, LWUI_COLOR_BAND_BG);
     } else {
@@ -1967,6 +2052,21 @@ static void BuildPopup(Popup *p, HDC hdc, int ribbon_width, int *out_w, int *out
         *out_h = Sc(r, M_BAND_H);
         break;
     }
+    case PK_OVERFLOW: {
+        int band_h = Sc(r, M_BAND_H) - 2 * Sc(r, M_PAD);
+        const LeewayUITab *t = &r->layout->tabs[p->tab];
+        UINT32 n = t->group_count;
+        if (n > MAX_GROUPS) n = MAX_GROUPS;
+        int sep = Sc(r, M_SEP_W);
+        int x = pad;
+        for (UINT32 i = r->overflow_from; i < n; i++) {
+            int w = PackGroup(r, hdc, &t->groups[i], VariantAt(&t->groups[i], 0), s, x, pad, p->tab, band_h);
+            x += w + sep;
+        }
+        *out_w = (x > pad ? x - sep : pad) + pad;
+        *out_h = band_h + 2 * pad;
+        break;
+    }
     }
 }
 
@@ -2307,6 +2407,9 @@ static void MainActivate(ILeewayRibbon *r, int index, BOOL from_keytip)
         return;
     case IT_GROUPBTN:
         OpenPopup(r, PK_GROUP, &it.rc, r->hwnd, 0, it.grp, it.tab, from_keytip);
+        return;
+    case IT_OVERFLOW:
+        OpenPopup(r, PK_OVERFLOW, &it.rc, r->hwnd, 0, NULL, it.tab, from_keytip);
         return;
     case IT_GALCELL:
         if (it.cmd) Exec(r, it.cmd);
