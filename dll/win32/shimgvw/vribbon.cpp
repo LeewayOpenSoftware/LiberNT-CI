@@ -46,7 +46,7 @@ struct VRB_RIBBON
 BOOL
 VRB_RibbonIsDefaultChrome(void)
 {
-    return VRB_ReadChromeIsRibbon(TRUE);
+    return VRB_ReadChromeIsRibbon(FALSE);
 }
 
 static void
