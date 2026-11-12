@@ -92,6 +92,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ex/zone.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/dbcsname.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fastio.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/fsfltcb.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/faulttol.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/bytelock.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/fsrtl/cancelwait.c
