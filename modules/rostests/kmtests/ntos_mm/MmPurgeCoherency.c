@@ -30,6 +30,10 @@ START_TEST(MmPurgeCoherency)
     TestRange(File, 4000,         200,  0xC4);   /* crosses a page boundary */
     TestRange(File, 0,            4097, 0xD5);   /* full page + 1 byte (partial last) */
     TestRange(File, 2 * 4096 + 1, 4095, 0xE6);   /* partial first of the last page */
+    /* A-2 data-loss guard: a DIRTY boundary page whose dirty bytes lie OUTSIDE the
+     * purged range must NOT be discarded -- the purge must return FALSE and the
+     * out-of-range bytes must survive. Dirty one page, purge a sub-range of it
+     * without flushing, then read the untouched bytes back and assert they persist. */
 
     KmtCloseScratchFile(File);
 }

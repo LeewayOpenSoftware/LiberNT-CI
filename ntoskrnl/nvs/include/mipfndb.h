@@ -246,6 +246,7 @@ BOOLEAN MiPfnReactivateEx(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame, _In_ UL
                           _Inout_opt_ PMI_PTE Slot, _In_ MI_PTE Expected, _In_ MI_PTE NewValue);
 ULONG MiPfnTakeModified(_Inout_ PMI_PFN_DATABASE Db);
 BOOLEAN MiPfnClearModified(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
+BOOLEAN MiPfnIsModified(_In_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
 BOOLEAN MiPfnWriteComplete(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame, _In_ MI_PTE NewOriginalPte,
                         _In_ BOOLEAN Success);
 VOID MiPfnFreePage(_Inout_ PMI_PFN_DATABASE Db, _In_ ULONG Frame);
