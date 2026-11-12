@@ -642,6 +642,7 @@
 #define IDI_SHELL_NONE_52           52
 #define IDI_SHELL_NONE_53           53
 #define IDI_SHELL_NOT_CONNECTED_HDD 54
+#define IDI_SHELL_UAC_SHIELD      78  /* SHGetStockIconInfo SIID_SHIELD (77) + 1 */
 #define IDI_SHELL_MULTIPLE_FILES   133
 #define IDI_SHELL_OPEN_WITH        134
 #define IDI_SHELL_FIND_COMPUTER    135

@@ -923,12 +923,62 @@ void Test_MessagesThemed()
     DestroyWindow(hWnd2);
 }
 
+void Test_Shield()
+{
+    /* BCM_SETSHIELD / Button_SetElevationRequiredState: draws the UAC shield on
+     * push buttons and command links. Leeway contract (UAC P0): the message
+     * returns 1 for an applicable button type and the control redraws. */
+    static const struct { LONG style; const char *name; BOOL applies; } types[] =
+    {
+        { BS_PUSHBUTTON,     "BS_PUSHBUTTON",     TRUE  },
+        { BS_DEFPUSHBUTTON,  "BS_DEFPUSHBUTTON",  TRUE  },
+        { BS_COMMANDLINK,    "BS_COMMANDLINK",    TRUE  },
+        { BS_CHECKBOX,       "BS_CHECKBOX",       FALSE },
+    };
+    UINT i;
+
+    for (i = 0; i < ARRAYSIZE(types); i++)
+    {
+        HWND hwnd;
+        LRESULT ret;
+
+        hwnd = CreateWindowW(L"Button", L"Install", types[i].style | WS_POPUP,
+                             10, 10, 160, 40, 0, NULL, NULL, NULL);
+        ok(hwnd != NULL, "[%s] CreateWindowW failed\n", types[i].name);
+        if (!hwnd) continue;
+
+        ret = SendMessageW(hwnd, BCM_SETSHIELD, 0, (LPARAM)TRUE);
+        if (types[i].applies)
+            ok(ret == 1, "[%s] BCM_SETSHIELD(TRUE) returned %ld, expected 1\n",
+               types[i].name, (LONG)ret);
+        else
+            ok(ret == 0, "[%s] BCM_SETSHIELD(TRUE) returned %ld, expected 0\n",
+               types[i].name, (LONG)ret);
+
+        /* Idempotent: setting it again while already set still succeeds. */
+        ret = SendMessageW(hwnd, BCM_SETSHIELD, 0, (LPARAM)TRUE);
+        if (types[i].applies)
+            ok(ret == 1, "[%s] BCM_SETSHIELD(TRUE) again returned %ld\n",
+               types[i].name, (LONG)ret);
+
+        /* The macro clears it again. */
+        ret = Button_SetElevationRequiredState(hwnd, FALSE);
+        if (types[i].applies)
+            ok(ret == 1, "[%s] Button_SetElevationRequiredState(FALSE) returned %ld\n",
+               types[i].name, (LONG)ret);
+
+        ok(IsWindow(hwnd), "[%s] window destroyed by BCM_SETSHIELD\n", types[i].name);
+        DestroyWindow(hwnd);
+    }
+}
+
 START_TEST(buttonv6)
 {
     LoadLibraryW(L"comctl32.dll"); /* same as statically linking to comctl32 and doing InitCommonControls */
     Test_TextMargin();
     Test_Imagelist();
     Test_GetIdealSizeNoThemes();
+    Test_Shield();
 
     Test_MessagesNonThemed();
     if (IsThemeActive())

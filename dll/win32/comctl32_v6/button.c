@@ -86,6 +86,7 @@ typedef struct _BUTTON_INFO
     INT              note_length;
     DWORD            image_type; /* IMAGE_BITMAP or IMAGE_ICON */
     BUTTON_IMAGELIST imagelist;
+    BOOL             image_is_shield; /* imagelist holds the UAC shield from BCM_SETSHIELD (owned here) */
     UINT             split_style;
     HIMAGELIST       glyph;      /* this is a font character code when split_style doesn't have BCSS_IMAGE */
     SIZE             glyph_size;
@@ -497,6 +498,8 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
     case WM_NCDESTROY:
         SetWindowLongPtrW( hWnd, 0, 0 );
+        if (infoPtr->image_is_shield && infoPtr->imagelist.himl)
+            ImageList_Destroy(infoPtr->imagelist.himl);
         if (infoPtr->image_type == IMAGE_BITMAP)
             DeleteObject(infoPtr->u.bitmap);
         else if (infoPtr->image_type == IMAGE_ICON)
@@ -928,6 +931,11 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
         if (!imagelist) return FALSE;
 
+        if (infoPtr->image_is_shield && infoPtr->imagelist.himl)
+        {
+            ImageList_Destroy(infoPtr->imagelist.himl);
+            infoPtr->image_is_shield = FALSE;
+        }
         infoPtr->imagelist = *imagelist;
         return TRUE;
     }
@@ -938,8 +946,51 @@ static LRESULT CALLBACK BUTTON_WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, L
 
         if (!imagelist) return FALSE;
 
+        if (infoPtr->image_is_shield) return FALSE;
         *imagelist = infoPtr->imagelist;
         return TRUE;
+    }
+    case BCM_SETSHIELD:
+    {
+        /* Button_SetElevationRequiredState: wParam is 0, lParam = fRequired.
+         * Show the UAC shield on push buttons and command links by using the
+         * stock IDI_SHIELD icon as the button's imagelist image. */
+        if (btn_type != BS_PUSHBUTTON && btn_type != BS_DEFPUSHBUTTON &&
+            btn_type != BS_COMMANDLINK && btn_type != BS_DEFCOMMANDLINK)
+            return 0;
+
+        if (lParam)
+        {
+            if (!infoPtr->image_is_shield)
+            {
+                int cx = GetSystemMetrics(SM_CXSMICON);
+                int cy = GetSystemMetrics(SM_CYSMICON);
+                HICON icon = (HICON)LoadImageW(NULL, IDI_SHIELD, IMAGE_ICON, cx, cy, LR_SHARED);
+                HIMAGELIST himl = ImageList_Create(cx, cy, ILC_COLOR32 | ILC_MASK, 1, 0);
+
+                if (!icon || !himl)
+                {
+                    if (himl) ImageList_Destroy(himl);
+                    return 0;
+                }
+                ImageList_AddIcon(himl, icon);  /* LR_SHARED icon: not destroyed */
+
+                infoPtr->imagelist.himl = himl;
+                infoPtr->imagelist.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+                infoPtr->imagelist.margin.left = infoPtr->imagelist.margin.right = GetSystemMetrics(SM_CXEDGE);
+                infoPtr->imagelist.margin.top = infoPtr->imagelist.margin.bottom = 0;
+                infoPtr->image_is_shield = TRUE;
+            }
+        }
+        else if (infoPtr->image_is_shield)
+        {
+            ImageList_Destroy(infoPtr->imagelist.himl);
+            memset(&infoPtr->imagelist, 0, sizeof(infoPtr->imagelist));
+            infoPtr->image_is_shield = FALSE;
+        }
+
+        InvalidateRect(hWnd, NULL, TRUE);
+        return 1;
     }
 
     case BCM_SETSPLITINFO:
