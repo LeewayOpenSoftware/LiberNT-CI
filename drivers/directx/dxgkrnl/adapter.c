@@ -590,12 +590,7 @@ DxgkpShouldRegisterDisplayBridge(
     return RegisterDisplayBridge;
 }
 
-/* BasicDisplay fallback that keeps drawing into the display device after a failed claimant. */
-static PDXGKRNL_ADAPTER g_PciRestoreTarget;
-/* Copy of the display PDO's PCI bus interface: the claimant owns the only valid one and goes away. */
-static BUS_INTERFACE_STANDARD g_PciBus;
-static BOOLEAN g_PciBusValid;
-
+/* A failed claimant's stack teardown makes pci.sys clear the display device's decodes. */
 static BOOLEAN
 DxgkpPciHeaderAccess(
     _In_ PDXGKRNL_ADAPTER Adapter,
@@ -604,14 +599,10 @@ DxgkpPciHeaderAccess(
     _In_ ULONG Length,
     _In_ BOOLEAN Write)
 {
+    PBUS_INTERFACE_STANDARD Bus = &Adapter->PciRestoreBus;
     ULONG Done;
-    PBUS_INTERFACE_STANDARD Bus;
 
-    if (Adapter != NULL && Adapter->PciBusInterfaceValid)
-        Bus = &Adapter->PciBusInterface;
-    else if (g_PciBusValid)
-        Bus = &g_PciBus;
-    else
+    if (!Adapter->PciRestoreBusHeld)
         return FALSE;
     if (Write ? Bus->SetBusData == NULL : Bus->GetBusData == NULL)
         return FALSE;
@@ -620,61 +611,85 @@ DxgkpPciHeaderAccess(
     return Done == Length;
 }
 
-/*
- * Write the PCI header the claimant saw before its start back to the shared
- * display device (command register last, with the decodes off while the BARs
- * are written).
- */
 static VOID
-DxgkpRestorePciHeader(
-    _In_ PDXGKRNL_ADAPTER Source,
-    _In_ PDXGKRNL_ADAPTER Target)
+DxgkpReleasePciRestoreBus(
+    _Inout_ PDXGKRNL_ADAPTER Adapter)
 {
-    UCHAR Now[0x40];
-    USHORT Command;
-    USHORT Disabled;
-    PUCHAR Saved = Source->PciHeaderSnapshot;
+    if (!Adapter->PciRestoreBusHeld)
+        return;
+    Adapter->PciRestoreBusHeld = FALSE;
+    if (Adapter->PciRestoreBus.InterfaceDereference != NULL)
+        Adapter->PciRestoreBus.InterfaceDereference(Adapter->PciRestoreBus.Context);
+    RtlZeroMemory(&Adapter->PciRestoreBus, sizeof(Adapter->PciRestoreBus));
+}
 
-    if (!Source->PciHeaderSnapshotValid)
+static VOID
+DxgkpSnapshotPciHeader(
+    _Inout_ PDXGKRNL_ADAPTER Adapter)
+{
+    PAGED_CODE();
+    Adapter->PciHeaderSnapshotValid = FALSE;
+    if (!Adapter->PciBusInterfaceValid ||
+        Adapter->PciBusInterface.InterfaceReference == NULL ||
+        Adapter->PciBusInterface.InterfaceDereference == NULL)
         return;
-    RtlZeroMemory(Now, sizeof(Now));
-    if (!DxgkpPciHeaderAccess(Target, Now, 0, sizeof(Now), FALSE))
-    {
-        DXGKRNL_INFO("PCIRESTORE: claimant %p: cannot read the PCI header through adapter %p\n", Source, Target);
-        return;
-    }
-    DXGKRNL_INFO("PCIRESTORE: before restore cmd=0x%04X->0x%04X bar0=0x%08lX->0x%08lX bar2=0x%08lX->0x%08lX\n",
-                 *(PUSHORT)(Saved + 4), *(PUSHORT)(Now + 4),
-                 *(PULONG)(Saved + 0x10), *(PULONG)(Now + 0x10),
-                 *(PULONG)(Saved + 0x18), *(PULONG)(Now + 0x18));
-    Command = *(PUSHORT)(Saved + 4);
-    Disabled = (USHORT)(Command & ~(PCI_ENABLE_IO_SPACE | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER));
-    (VOID)DxgkpPciHeaderAccess(Target, &Disabled, 4, sizeof(Disabled), TRUE);
-    (VOID)DxgkpPciHeaderAccess(Target, Saved + 0x10, 0x10, 0x18, TRUE);
-    (VOID)DxgkpPciHeaderAccess(Target, &Command, 4, sizeof(Command), TRUE);
-    RtlZeroMemory(Now, sizeof(Now));
-    if (DxgkpPciHeaderAccess(Target, Now, 0, sizeof(Now), FALSE))
-        DXGKRNL_INFO("PCIRESTORE: after restore cmd=0x%04X bar0=0x%08lX bar2=0x%08lX\n",
-                     *(PUSHORT)(Now + 4), *(PULONG)(Now + 0x10), *(PULONG)(Now + 0x18));
+    /* Own reference, so the interface outlives DxgkAdapterRemove. */
+    Adapter->PciBusInterface.InterfaceReference(Adapter->PciBusInterface.Context);
+    Adapter->PciRestoreBus = Adapter->PciBusInterface;
+    Adapter->PciRestoreBusHeld = TRUE;
+    Adapter->PciHeaderSnapshotValid =
+        DxgkpPciHeaderAccess(Adapter, Adapter->PciHeaderSnapshot, 0, sizeof(Adapter->PciHeaderSnapshot), FALSE);
+    if (!Adapter->PciHeaderSnapshotValid)
+        DxgkpReleasePciRestoreBus(Adapter);
 }
 
 /*
- * pci.sys disables the decodes (IO, memory, bus master) of a device whose stack
- * is stopped or removed.  A failed claimant takes the shared display device
- * down this way while the BasicDisplay fallback keeps drawing into its linear
- * framebuffer, so once the lower stack has finished its teardown put the header
- * back for the fallback.
+ * Put the header snapshot back through this adapter's own bus interface (same
+ * PDO by construction), once the lower stack has finished its STOP/REMOVE.
+ * Runs only for a claimant that failed its start while the fallback kept the screen.
  */
 static VOID
 DxgkpRestorePciAfterLowerTeardown(
     _In_ PDXGKRNL_ADAPTER Adapter)
 {
-    if (!Adapter->PciHeaderSnapshotValid || g_PciRestoreTarget == NULL ||
-        g_PciRestoreTarget == Adapter)
+    UCHAR Now[0x40];
+    USHORT Command;
+    USHORT Disabled;
+    PUCHAR Saved = Adapter->PciHeaderSnapshot;
+
+    PAGED_CODE();
+    if (InterlockedExchange(&Adapter->PciRestorePending, 0) == 0 ||
+        !Adapter->PciHeaderSnapshotValid || !Adapter->PciRestoreBusHeld)
+        return;
+    RtlZeroMemory(Now, sizeof(Now));
+    if (!DxgkpPciHeaderAccess(Adapter, Now, 0, sizeof(Now), FALSE))
     {
+        DXGKRNL_INFO("PCIRESTORE: adapter %p: cannot read the PCI header
+", Adapter);
         return;
     }
-    DxgkpRestorePciHeader(Adapter, g_PciRestoreTarget);
+    DXGKRNL_INFO("PCIRESTORE: before restore cmd=0x%04X->0x%04X bar0=0x%08lX->0x%08lX bar2=0x%08lX->0x%08lX
+",
+                 *(PUSHORT)(Saved + 4), *(PUSHORT)(Now + 4),
+                 *(PULONG)(Saved + 0x10), *(PULONG)(Now + 0x10),
+                 *(PULONG)(Saved + 0x18), *(PULONG)(Now + 0x18));
+    Command = *(PUSHORT)(Saved + 4);
+    Disabled = (USHORT)(Command & ~(PCI_ENABLE_IO_SPACE | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER));
+    if (!DxgkpPciHeaderAccess(Adapter, &Disabled, 4, sizeof(Disabled), TRUE) ||
+        !DxgkpPciHeaderAccess(Adapter, Saved + 0x10, 0x10, 0x18, TRUE))
+    {
+        DXGKRNL_INFO("PCIRESTORE: adapter %p: short config write, decodes left off
+", Adapter);
+        return;
+    }
+    if (!DxgkpPciHeaderAccess(Adapter, &Command, 4, sizeof(Command), TRUE))
+        DXGKRNL_INFO("PCIRESTORE: adapter %p: short command write
+", Adapter);
+    RtlZeroMemory(Now, sizeof(Now));
+    if (DxgkpPciHeaderAccess(Adapter, Now, 0, sizeof(Now), FALSE))
+        DXGKRNL_INFO("PCIRESTORE: after restore cmd=0x%04X bar0=0x%08lX bar2=0x%08lX
+",
+                     *(PUSHORT)(Now + 4), *(PULONG)(Now + 0x10), *(PULONG)(Now + 0x18));
 }
 
 /* Complete the claimant-bound handoff after the complete start state has been
@@ -13490,8 +13505,8 @@ DxgkpCompleteAdapterStart(
                 }
                 KeReleaseSpinLock(&MpCtx->AdapterListLock, OldIrql);
             }
-            if (Fallback != NULL)
-                g_PciRestoreTarget = Fallback;
+            if (Fallback != NULL && Fallback != Adapter && Adapter->PciHeaderSnapshotValid)
+                InterlockedExchange(&Adapter->PciRestorePending, 1);
             if (Fallback != NULL && !InbvCheckDisplayOwnership())
             {
                 /* The claimant's start took the boot display
@@ -14372,17 +14387,12 @@ DxgkAdapterStart(
         InbvNotifyDisplayOwnershipLost(Adapter->MiniportContext->IsBasicDisplayFallback ? NULL : DxgkpInbvResetDisplay);
     }
 
-    /* Remember the PCI header so a failed claimant can be undone. */
+    InterlockedExchange(&Adapter->PciRestorePending, 0);
     Adapter->PciHeaderSnapshotValid = FALSE;
     if (!Adapter->MiniportContext->IsBasicDisplayFallback)
     {
-        Adapter->PciHeaderSnapshotValid =
-            DxgkpPciHeaderAccess(Adapter, Adapter->PciHeaderSnapshot, 0, sizeof(Adapter->PciHeaderSnapshot), FALSE);
-        if (Adapter->PciBusInterfaceValid)
-        {
-            g_PciBus = Adapter->PciBusInterface;
-            g_PciBusValid = TRUE;
-        }
+        DxgkpReleasePciRestoreBus(Adapter);
+        DxgkpSnapshotPciHeader(Adapter);
     }
 
     /* Call miniport start. */
@@ -16578,11 +16588,13 @@ DxgkpMiniportPnpDispatch(
                 IoSkipCurrentIrpStackLocation(Irp);
                 Status = IoCallDriver(LowerDevice, Irp);
                 DxgkpRestorePciAfterLowerTeardown(Adapter);
+                DxgkpReleasePciRestoreBus(Adapter);
                 DxgkpDeleteRemovedAdapterFdo(Adapter);
                 ObDereferenceObject(LowerDevice);
                 return Status;
             }
 
+            DxgkpReleasePciRestoreBus(Adapter);
             DxgkpDeleteRemovedAdapterFdo(Adapter);
             Irp->IoStatus.Status = STATUS_SUCCESS;
             IoCompleteRequest(Irp, IO_NO_INCREMENT);
