@@ -225,6 +225,7 @@ static ULONG FatTraceLoggedCount;
 static
 VOID
 FatTraceWriteFailure(
+    _In_ PIRP_CONTEXT IrpContext,
     _In_ PFCB Fcb,
     _In_ PIRP Irp,
     _In_ ULONGLONG Vbo,
@@ -241,11 +242,11 @@ FatTraceWriteFailure(
         return;
     FatTraceLoggedFcbs[FatTraceLoggedCount++] = Fcb;
 
-    DbgPrint("CCTRACE fastfat write fcb %p '%wZ' vbo 0x%I64x len 0x%lx paging %d write-through %d status 0x%08lx\n",
+    DbgPrint("CCTRACE fastfat write fcb %p '%wZ' vbo 0x%I64x len 0x%lx paging %d write-through %d status 0x%08lx thread %p top %p ctxflags 0x%lx\n",
              Fcb, &Fcb->FullFileName, Vbo, Bytes,
              FlagOn(Irp->Flags, IRP_PAGING_IO) != 0,
              (FlagOn(IrpSp->Flags, SL_WRITE_THROUGH) || FlagOn(IrpSp->FileObject->Flags, FO_WRITE_THROUGH)) != 0,
-             Status);
+             Status, PsGetCurrentThread(), IoGetTopLevelIrp(), IrpContext->Flags);
 }
 
 NTSTATUS
@@ -2332,7 +2333,7 @@ Return Value:
 
                 if (!NT_SUCCESS( Status = Irp->IoStatus.Status )) {
 
-                    FatTraceWriteFailure( FcbOrDcb, Irp, StartingVbo, BytesToWrite, Status );
+                    FatTraceWriteFailure( IrpContext, FcbOrDcb, Irp, StartingVbo, BytesToWrite, Status );
                     FatNormalizeAndRaiseStatus( IrpContext, Status );
 
                 } else {
@@ -2710,7 +2711,7 @@ Return Value:
 
             if (!NT_SUCCESS( Status = Irp->IoStatus.Status )) {
 
-                FatTraceWriteFailure( FcbOrDcb, Irp, StartingVbo, ByteCount, Status );
+                FatTraceWriteFailure( IrpContext, FcbOrDcb, Irp, StartingVbo, ByteCount, Status );
                 FatNormalizeAndRaiseStatus( IrpContext, Status );
             }
 

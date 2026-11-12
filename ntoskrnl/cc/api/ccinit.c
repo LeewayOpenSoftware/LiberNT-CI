@@ -271,8 +271,9 @@ CcTraceFailedMap(
         !NT_SUCCESS(ObQueryNameString(Device, NameInfo, sizeof(NameBuffer), &Returned)))
         NameInfo->Name = None;
 
-    DPRINT1("CCTRACE map %p file '%wZ' on %wZ fs %wZ write-back status 0x%08lx alloc %I64d\n",
-            NtMap, FileName, &NameInfo->Name, FsName, Status, NtMap->AllocationSize.QuadPart);
+    DPRINT1("CCTRACE map %p file '%wZ' on %wZ fs %wZ write-back status 0x%08lx alloc %I64d thread %p top %p\n",
+            NtMap, FileName, &NameInfo->Name, FsName, Status, NtMap->AllocationSize.QuadPart,
+            PsGetCurrentThread(), IoGetTopLevelIrp());
 }
 
 /* Writes back up to MaximumPages of one map with the file system's lazy-write

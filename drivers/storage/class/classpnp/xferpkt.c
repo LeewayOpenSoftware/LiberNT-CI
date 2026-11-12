@@ -927,6 +927,46 @@ NTSTATUS SubmitTransferPacket(PTRANSFER_PACKET Pkt)
 }
 
 
+/* CCTRACE (test-only): the first failed WRITE packet per disk, once: CDB opcode and FUA bit,
+ * LBA, SRB and SCSI status, sense key/ASC/ASCQ, the status the packet's IRP got, retry. */
+static PDEVICE_OBJECT ClasspTraceXferLoggedFdos[4];
+static ULONG ClasspTraceXferLoggedCount;
+
+static
+VOID
+ClasspTraceXferWriteFailure(
+    _In_ PTRANSFER_PACKET Pkt,
+    _In_ PIRP PacketIrp,
+    _In_ BOOLEAN Retry)
+{
+    PUCHAR Cdb = (PUCHAR)SrbGetCdb(Pkt->Srb);
+    PSENSE_DATA Sense = (PSENSE_DATA)SrbGetSenseInfoBuffer(Pkt->Srb);
+    ULONG Index, Lba = 0;
+    UCHAR Key = 0xff, Asc = 0xff, Ascq = 0xff;
+
+    if (Cdb == NULL || (Cdb[0] != SCSIOP_WRITE && Cdb[0] != SCSIOP_WRITE16))
+        return;
+    for (Index = 0; Index < ClasspTraceXferLoggedCount; Index++)
+        if (ClasspTraceXferLoggedFdos[Index] == Pkt->Fdo)
+            return;
+    if (ClasspTraceXferLoggedCount >= RTL_NUMBER_OF(ClasspTraceXferLoggedFdos))
+        return;
+    ClasspTraceXferLoggedFdos[ClasspTraceXferLoggedCount++] = Pkt->Fdo;
+
+    if (Cdb[0] == SCSIOP_WRITE)
+        Lba = ((ULONG)Cdb[2] << 24) | ((ULONG)Cdb[3] << 16) | ((ULONG)Cdb[4] << 8) | Cdb[5];
+    if ((Pkt->Srb->SrbStatus & SRB_STATUS_AUTOSENSE_VALID) && Sense != NULL &&
+        SrbGetSenseInfoBufferLength(Pkt->Srb) >= sizeof(SENSE_DATA))
+    {
+        Key = Sense->SenseKey;
+        Asc = Sense->AdditionalSenseCode;
+        Ascq = Sense->AdditionalSenseCodeQualifier;
+    }
+    DbgPrint("CCTRACE classpnp xfer fdo %p WRITE op 0x%02x fua %d lba %lu srbstatus 0x%02x scsistatus 0x%02x sense %02x/%02x/%02x -> status 0x%08lx retry %d thread %p\n",
+             Pkt->Fdo, Cdb[0], (Cdb[1] & 0x08) != 0, Lba, Pkt->Srb->SrbStatus, SrbGetScsiStatus(Pkt->Srb),
+             Key, Asc, Ascq, PacketIrp->IoStatus.Status, Retry, PsGetCurrentThread());
+}
+
 NTSTATUS
 NTAPI /* ReactOS Change: GCC Does not support STDCALL by default */
 TransferPktComplete(IN PDEVICE_OBJECT NullFdo, IN PIRP Irp, IN PVOID Context)
@@ -1054,6 +1094,7 @@ TransferPktComplete(IN PDEVICE_OBJECT NullFdo, IN PIRP Irp, IN PVOID Context)
          *  This call looks at the returned SENSE info to figure out what to do.
          */
         shouldRetry = InterpretTransferPacketError(pkt);
+        ClasspTraceXferWriteFailure(pkt, Irp, shouldRetry);
 
         /*
          *  If the SRB queue is locked-up, release it.
