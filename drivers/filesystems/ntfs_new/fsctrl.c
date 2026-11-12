@@ -2402,7 +2402,8 @@ NtfsFlushFileMetadata(_In_ PVolumeContextBlock VolCB,
         Status = NtfsCommitFileRange(VolCB,
                                      FileCB,
                                      0,
-                                     (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart);
+                                     (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart,
+                                     FALSE); /* the device flush below covers it */
         if (!NT_SUCCESS(Status))
             return Status;
         Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, Offset, Length);
