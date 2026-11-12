@@ -107,10 +107,13 @@ static void SaveBmp(HWND h, const WCHAR *path)
 
 int wmain(int argc, wchar_t **argv)
 {
-    LeewayThemePref theme = LEEWAY_THEME_PREF_LIGHT;
+    LeewayThemePref theme = LEEWAY_THEME_PREF_SYSTEM;   /* default: honour system / per-app override */
     const WCHAR *shot = NULL; BOOL two = FALSE; int dpi = 0;
     for (int i = 1; i < argc; i++) {
-        if (!wcscmp(argv[i], L"--theme") && i+1 < argc) { i++; theme = !wcscmp(argv[i], L"dark") ? LEEWAY_THEME_PREF_DARK : LEEWAY_THEME_PREF_LIGHT; }
+        if (!wcscmp(argv[i], L"--theme") && i+1 < argc) { i++;
+            theme = !wcscmp(argv[i], L"dark") ? LEEWAY_THEME_PREF_DARK
+                  : !wcscmp(argv[i], L"light") ? LEEWAY_THEME_PREF_LIGHT
+                  : LEEWAY_THEME_PREF_SYSTEM; }
         else if (!wcscmp(argv[i], L"--two")) two = TRUE;
         else if (!wcscmp(argv[i], L"--dpi") && i+1 < argc) dpi = _wtoi(argv[++i]);
         else if (!wcscmp(argv[i], L"--shot") && i+1 < argc) shot = argv[++i];

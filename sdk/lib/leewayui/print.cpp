@@ -216,6 +216,34 @@ enum {
 
 static const WCHAR kFrameClass[] = L"LeewayUIPrintPreview";
 
+/* Per-app Theme override, same key/format as LeewayThemeApplyAppOverride:
+ * HKCU\Software\Leeway\<app>\Theme (REG_SZ system|light|dark, or REG_DWORD 0|1|2).
+ * Returns SYSTEM when absent/invalid. Used to resolve the effective preference so
+ * the frame's canvas theme AND its ribbon honour it, like the ribbon does. */
+static LeewayThemePref PvReadAppThemePref(const WCHAR *app_name)
+{
+    LeewayThemePref pref = LEEWAY_THEME_PREF_SYSTEM;
+    if (!app_name || !app_name[0]) return pref;
+    WCHAR key[256]; wsprintfW(key, L"Software\\Leeway\\%s", app_name); key[255] = 0;
+    HKEY h;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, key, 0, KEY_READ, &h) == ERROR_SUCCESS) {
+        DWORD type = 0, cb = 0; WCHAR sv[16]; DWORD dv = 0;
+        cb = sizeof(sv);
+        if (RegQueryValueExW(h, L"Theme", NULL, &type, (LPBYTE)sv, &cb) == ERROR_SUCCESS) {
+            if (type == REG_SZ) {
+                sv[15] = 0;
+                if (lstrcmpiW(sv, L"light") == 0) pref = LEEWAY_THEME_PREF_LIGHT;
+                else if (lstrcmpiW(sv, L"dark") == 0) pref = LEEWAY_THEME_PREF_DARK;
+            } else if (type == REG_DWORD) {
+                CopyMemory(&dv, sv, sizeof(dv));
+                if (dv == 1) pref = LEEWAY_THEME_PREF_LIGHT; else if (dv == 2) pref = LEEWAY_THEME_PREF_DARK;
+            }
+        }
+        RegCloseKey(h);
+    }
+    return pref;
+}
+
 struct ILeewayPrintPreview {
     HWND  hwnd;
     HWND  parent;
@@ -356,8 +384,10 @@ static void PvScrollClamp(ILeewayPrintPreview *pv)
     int ch = cv.bottom - cv.top, cw = cv.right - cv.left;
     int maxy = pv->content_h - ch; if (maxy < 0) maxy = 0;
     int maxx = pv->content_w - cw; if (maxx < 0) maxx = 0;
-    if (pv->scroll_y > maxy) pv->scroll_y = maxy; if (pv->scroll_y < 0) pv->scroll_y = 0;
-    if (pv->scroll_x > maxx) pv->scroll_x = maxx; if (pv->scroll_x < 0) pv->scroll_x = 0;
+    if (pv->scroll_y > maxy) pv->scroll_y = maxy;
+    if (pv->scroll_y < 0) pv->scroll_y = 0;
+    if (pv->scroll_x > maxx) pv->scroll_x = maxx;
+    if (pv->scroll_x < 0) pv->scroll_x = 0;
 }
 
 /* ---- painting ---- */
@@ -539,17 +569,23 @@ HRESULT WINAPI LeewayPrintPreviewCreate(HWND parent, const LeewayPrintPreviewCon
     if (!pv->hwnd) { free(pv); return HRESULT_FROM_WIN32(GetLastError()); }
     SetWindowLongPtrW(pv->hwnd, GWLP_USERDATA, (LONG_PTR)pv);
 
+    /* Resolve the effective preference: an explicit LIGHT/DARK from the app wins;
+     * otherwise honour the HKCU per-app Theme override (like the ribbon), falling
+     * back to SYSTEM. Apply the same value to both the canvas theme and the ribbon
+     * (the frame's ribbon layout has no app_name, so it cannot auto-apply it). */
+    LeewayThemePref eff = pv->cfg.theme;
+    if (eff == LEEWAY_THEME_PREF_SYSTEM && pv->cfg.app_name)
+        eff = PvReadAppThemePref(pv->cfg.app_name);
+    pv->cfg.theme = eff;
+
     LeewayThemeCreate(&pv->theme);
-    if (pv->theme) {
-        if (pv->cfg.app_name) LeewayThemeApplyAppOverride(pv->theme, pv->cfg.app_name);
-        LeewayThemeSetPreference(pv->theme, pv->cfg.theme);
-    }
+    if (pv->theme) LeewayThemeSetPreference(pv->theme, eff);
 
     HRESULT hr = LeewayRibbonCreate(pv->hwnd, kPvTable, (UINT32)(sizeof(kPvTable)/sizeof(kPvTable[0])),
                                     PvExecute, PvState, pv, &pv->ribbon);
     if (FAILED(hr)) { DestroyWindow(pv->hwnd); LeewayThemeDestroy(pv->theme); free(pv); return hr; }
     LeewayRibbonSetLayout(pv->ribbon, &kPvLayout);
-    LeewayRibbonSetThemePreference(pv->ribbon, pv->cfg.theme);
+    LeewayRibbonSetThemePreference(pv->ribbon, eff);
     /* match the ribbon's DPI source (GetDeviceCaps on the window); SetDPI keeps it in sync later */
     { HDC dc = GetDC(pv->hwnd); if (dc) { int d = GetDeviceCaps(dc, LOGPIXELSX); if (d > 0) pv->dpi = (UINT32)d; ReleaseDC(pv->hwnd, dc); } }
 
