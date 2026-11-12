@@ -55,7 +55,7 @@ GetIidsNone(ULONG *Count, IID **Iids)
 static HRESULT
 GetTrustBase(TrustLevel *Level)
 {
-    *Level = BaseTrust;
+    *Level = PartialTrust;
     return S_OK;
 }
 

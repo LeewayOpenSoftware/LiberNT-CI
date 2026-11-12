@@ -42,13 +42,48 @@ CheckEmpty(
     IIterable_Package_Release(Packages);
 }
 
+typedef LONG (WINAPI *GET_PACKAGES_BY_FAMILY)(const WCHAR *, UINT32 *, WCHAR **, UINT32 *, WCHAR *);
+
+static void
+TestPackagesByFamily(void)
+{
+    GET_PACKAGES_BY_FAMILY GetPackages;
+    UINT32 Count, Length;
+    LONG Error;
+
+    GetPackages = (GET_PACKAGES_BY_FAMILY)GetProcAddress(GetModuleHandleW(L"kernelbase.dll"), "GetPackagesByPackageFamily");
+    if (!GetPackages)
+    {
+        skip("GetPackagesByPackageFamily is not exported\n");
+        return;
+    }
+
+    Count = Length = 0;
+    Error = GetPackages(MissingFamily, &Count, NULL, &Length, NULL);
+    ok(Error == ERROR_SUCCESS && Count == 0 && Length == 0,
+       "missing family: error %ld count %u length %u\n", Error, Count, Length);
+
+    Count = 1;
+    Length = 0;
+    Error = GetPackages(MissingFamily, &Count, NULL, &Length, NULL);
+    ok(Error == ERROR_INVALID_PARAMETER && Count == 1, "count without names: error %ld count %u\n", Error, Count);
+
+    Count = 0;
+    Length = 16;
+    Error = GetPackages(MissingFamily, &Count, NULL, &Length, NULL);
+    ok(Error == ERROR_INVALID_PARAMETER && Length == 16, "length without buffer: error %ld length %u\n", Error, Length);
+}
+
 START_TEST(PackageManager)
 {
     IPackageManager *Manager;
     IIterable_Package *Packages;
     IInspectable *Instance;
     HSTRING Class, Family, User, Name, Publisher;
+    TrustLevel Trust = BaseTrust;
     HRESULT hr;
+
+    TestPackagesByFamily();
 
     hr = RoInitialize(RO_INIT_MULTITHREADED);
     ok(hr == S_OK || hr == S_FALSE, "RoInitialize returned hr %#lx\n", hr);
@@ -60,6 +95,9 @@ START_TEST(PackageManager)
     ok(hr == S_OK, "PackageManager activation failed, hr %#lx\n", hr);
     if (FAILED(hr))
         goto Done;
+
+    hr = IInspectable_GetTrustLevel(Instance, &Trust);
+    ok(hr == S_OK && Trust == PartialTrust, "trust level returned hr %#lx value %d\n", hr, Trust);
 
     hr = IInspectable_QueryInterface(Instance, &IID_IPackageManager, (void **)&Manager);
     ok(hr == S_OK, "IPackageManager query failed, hr %#lx\n", hr);

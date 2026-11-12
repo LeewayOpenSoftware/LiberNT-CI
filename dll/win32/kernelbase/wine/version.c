@@ -1685,9 +1685,11 @@ LONG WINAPI /* DECLSPEC_HOTPATCH */ GetPackageFamilyName( HANDLE process, UINT32
 LONG WINAPI DECLSPEC_HOTPATCH GetPackagesByPackageFamily(const WCHAR *family_name, UINT32 *count,
                                                          WCHAR *full_names, UINT32 *buffer_len, WCHAR *buffer)
 {
-    FIXME( "(%s %p %p %p %p): stub\n", debugstr_w(family_name), count, full_names, buffer_len, buffer );
+    TRACE( "(%s %p %p %p %p)\n", debugstr_w(family_name), count, full_names, buffer_len, buffer );
 
     if (!count || !buffer_len)
+        return ERROR_INVALID_PARAMETER;
+    if ((!full_names && *count) || (!buffer && *buffer_len))
         return ERROR_INVALID_PARAMETER;
 
     *count = 0;
