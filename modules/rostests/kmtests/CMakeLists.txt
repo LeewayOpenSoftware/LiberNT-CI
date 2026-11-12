@@ -183,6 +183,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoInterrupt.c
     ntos_io/IoIommu.c
     ntos_io/IoIrp.c
+    ntos_io/IoIrpWorkItemEx.c
     ntos_io/IoWaitCompletionPacket.c
     ntos_io/IoStackKM.c
     ntos_io/IoActivityId.c

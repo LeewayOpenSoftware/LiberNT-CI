@@ -2424,7 +2424,7 @@
 @ stub -arch=win64 IoAcquireKsrPersistentMemoryEx
 @ stub -arch=win64 IoAddBugcheckTriageThread
 @ stub -arch=win64 IoAdjustStackSizeForRedirection
-@ stub -arch=win64 IoAllocateIrpEx
+@ stdcall -arch=win64 IoAllocateIrpEx(ptr long long)
 @ stub -arch=win64 IoAllocateMiniCompletionPacket
 @ stub -arch=win64 IoAllocateSfioStreamIdentifier
 @ stub -arch=win64 IoApplyPriorityInfoThread
@@ -2472,7 +2472,7 @@
 @ stub -arch=win64 IoGetFsTrackOffsetState
 @ stub -arch=win64 IoGetFsZeroingOffset
 @ stub -arch=win64 IoGetGenericIrpExtension
-@ stub -arch=win64 IoGetInitiatorProcess
+@ stdcall -arch=win64 IoGetInitiatorProcess(ptr)
 @ stub -arch=win64 IoGetIoAttributionHandle
 @ stdcall IoGetIommuInterface(long ptr)
 @ stdcall IoGetIommuInterfaceEx(long int64 ptr)
@@ -2539,7 +2539,7 @@
 @ stub -arch=win64 IoSetIoAttributionIrp
 @ stub -arch=win64 IoSetIoCompletionEx
 @ stub -arch=win64 IoSetIoCompletionEx3
-@ stub -arch=win64 IoSetIoPriorityHint
+@ stdcall -arch=win64 IoSetIoPriorityHint(ptr long)
 @ stub -arch=win64 IoSetIoPriorityHintIntoFileObject
 @ stub -arch=win64 IoSetIoPriorityHintIntoThread
 @ stdcall IoSetIrpExtraCreateParameter(ptr ptr)
@@ -2552,7 +2552,7 @@
 @ stub -arch=win64 IoSteerInterrupt
 @ stub -arch=win64 IoTestDependency
 @ stub -arch=win64 IoTransferActivityId
-@ stub -arch=win64 IoTryQueueWorkItem
+@ stdcall -arch=win64 IoTryQueueWorkItem(ptr ptr long ptr)
 @ stdcall IoUninitializeWorkItem(ptr)
 @ stdcall IoUnregisterBootDriverCallback(ptr)
 @ stub -arch=win64 IoUnregisterContainerNotification

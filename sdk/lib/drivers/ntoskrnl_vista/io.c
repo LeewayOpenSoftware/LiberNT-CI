@@ -22,6 +22,11 @@ typedef struct _EX_WORKITEM_CONTEXT
 } EX_WORKITEM_CONTEXT, *PEX_WORKITEM_CONTEXT;
 
 #define TAG_IOWI 'IWOI'
+
+/* The priority hint of an IRP lives in three bits of Irp->Flags that no IRP_* flag uses,
+ * as the hint plus one, so that zero means that no hint was set. */
+#define IOP_IRP_PRIORITY_HINT_SHIFT 17
+#define IOP_IRP_PRIORITY_HINT_MASK  (7UL << IOP_IRP_PRIORITY_HINT_SHIFT)
 #define TAG_IOVP 'PVOI'
 
 typedef struct _IOP_DEVPROP_LEGACY_MAP
@@ -1246,7 +1251,27 @@ NTAPI
 IoGetIoPriorityHint(
     _In_ PIRP Irp)
 {
-    return IoPriorityNormal;
+    ULONG Stored = (Irp->Flags & IOP_IRP_PRIORITY_HINT_MASK) >> IOP_IRP_PRIORITY_HINT_SHIFT;
+
+    /* An IRP nobody gave a hint to is a normal-priority one */
+    if (Stored == 0 || Stored > MaxIoPriorityTypes)
+        return IoPriorityNormal;
+
+    return (IO_PRIORITY_HINT)(Stored - 1);
+}
+
+NTSTATUS
+NTAPI
+IoSetIoPriorityHint(
+    _In_ PIRP Irp,
+    _In_ IO_PRIORITY_HINT PriorityHint)
+{
+    if ((ULONG)PriorityHint >= MaxIoPriorityTypes)
+        return STATUS_INVALID_PARAMETER;
+
+    Irp->Flags = (Irp->Flags & ~IOP_IRP_PRIORITY_HINT_MASK) |
+                 (((ULONG)PriorityHint + 1) << IOP_IRP_PRIORITY_HINT_SHIFT);
+    return STATUS_SUCCESS;
 }
 
 NTKRNLVISTAAPI

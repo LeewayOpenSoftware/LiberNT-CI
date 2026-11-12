@@ -164,6 +164,7 @@ KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIommu;
 KMT_TESTFUNC Test_InbvVirtualFrameBuffer;
 KMT_TESTFUNC Test_IoIrp;
+KMT_TESTFUNC Test_IoIrpWorkItemEx;
 KMT_TESTFUNC Test_IoWaitCompletionPacket;
 KMT_TESTFUNC Test_ExWorkItem;
 KMT_TESTFUNC Test_ExWddm;
@@ -479,6 +480,7 @@ const KMT_TEST TestList[] =
     { "IoIommu",                            Test_IoIommu },
     { "InbvVirtualFrameBuffer",              Test_InbvVirtualFrameBuffer },
     { "IoIrp",                              Test_IoIrp },
+    { "IoIrpWorkItemEx",                    Test_IoIrpWorkItemEx },
     { "IoWaitCompletionPacket",             Test_IoWaitCompletionPacket },
     { "ExWorkItem",                         Test_ExWorkItem },
     { "ExWddm",                            Test_ExWddm },

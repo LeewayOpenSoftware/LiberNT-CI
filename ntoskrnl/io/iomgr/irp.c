@@ -2488,3 +2488,34 @@ IoPropagateActivityIdToThread(
     *OriginalId = IoSetActivityIdThread(PropagatedId);
     return STATUS_SUCCESS;
 }
+
+/*
+ * The device object lets the I/O manager reserve room for an IRP extension.
+ * This kernel keeps no per-device extension size, so the IRP is a plain one.
+ */
+PIRP
+NTAPI
+IoAllocateIrpEx(
+    _In_opt_ PDEVICE_OBJECT DeviceObject,
+    _In_ CCHAR StackSize,
+    _In_ BOOLEAN ChargeQuota)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    return IoAllocateIrp(StackSize, ChargeQuota);
+}
+
+/*
+ * The initiator is the process on whose behalf another process opened the file.
+ * This kernel records no such process for any file object, so there is never one
+ * to report; callers then use the requestor process.
+ */
+PEPROCESS
+NTAPI
+IoGetInitiatorProcess(
+    _In_ PFILE_OBJECT FileObject)
+{
+    UNREFERENCED_PARAMETER(FileObject);
+
+    return NULL;
+}

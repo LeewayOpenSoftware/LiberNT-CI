@@ -21,10 +21,19 @@ IopWorkItemCallback(IN PVOID Parameter)
 {
     PIO_WORKITEM IoWorkItem = (PIO_WORKITEM)Parameter;
     PDEVICE_OBJECT DeviceObject = IoWorkItem->DeviceObject;
+    PIO_WORKITEM_ROUTINE WorkerRoutine = IoWorkItem->WorkerRoutine;
+    PIO_WORKITEM_ROUTINE_EX WorkerRoutineEx = IoWorkItem->WorkerRoutineEx;
+    PVOID Context = IoWorkItem->Context;
     PAGED_CODE();
 
+    /* The item is off the queue: from here on it may be queued again, or freed by its routine */
+    InterlockedExchange(&IoWorkItem->Queued, 0);
+
     /* Call the work routine */
-    IoWorkItem->WorkerRoutine(DeviceObject, IoWorkItem->Context);
+    if (WorkerRoutineEx != NULL)
+        WorkerRoutineEx(DeviceObject, Context, IoWorkItem);
+    else
+        WorkerRoutine(DeviceObject, Context);
 
     /* Dereference the device object */
     ObDereferenceObject(DeviceObject);
@@ -84,7 +93,9 @@ IoQueueWorkItem(IN PIO_WORKITEM IoWorkItem,
 
     /* Setup the work item */
     IoWorkItem->WorkerRoutine = WorkerRoutine;
+    IoWorkItem->WorkerRoutineEx = NULL;
     IoWorkItem->Context = Context;
+    InterlockedExchange(&IoWorkItem->Queued, 1);
 
     /* Queue the work item */
     ExQueueWorkItem(&IoWorkItem->Item, QueueType);
@@ -118,10 +129,40 @@ IoAllocateWorkItem(IN PDEVICE_OBJECT DeviceObject)
 
     /* Initialize it */
     IoWorkItem->DeviceObject = DeviceObject;
+    IoWorkItem->WorkerRoutineEx = NULL;
+    IoWorkItem->Queued = 0;
     ExInitializeWorkItem(&IoWorkItem->Item, IopWorkItemCallback, IoWorkItem);
 
     /* Return it */
     return IoWorkItem;
+}
+
+/*
+ * Queues the work item unless it is already waiting in a queue.
+ * Returns TRUE if this call queued it.
+ */
+BOOLEAN
+NTAPI
+IoTryQueueWorkItem(
+    _Inout_ PIO_WORKITEM IoWorkItem,
+    _In_ PIO_WORKITEM_ROUTINE_EX WorkerRoutine,
+    _In_ WORK_QUEUE_TYPE QueueType,
+    _In_opt_ PVOID Context)
+{
+    ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    /* Only one caller takes the item from idle to queued */
+    if (InterlockedCompareExchange(&IoWorkItem->Queued, 1, 0) != 0)
+        return FALSE;
+
+    ObReferenceObject(IoWorkItem->DeviceObject);
+
+    IoWorkItem->WorkerRoutine = NULL;
+    IoWorkItem->WorkerRoutineEx = WorkerRoutine;
+    IoWorkItem->Context = Context;
+
+    ExQueueWorkItem(&IoWorkItem->Item, QueueType);
+    return TRUE;
 }
 
 /* EOF */
