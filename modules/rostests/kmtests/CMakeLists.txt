@@ -261,6 +261,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/ZwMapViewOfSection.c
     ntos_ob/ObCallbacks.c
     ntos_ob/ObHandle.c
+    ntos_ob/ObIsDosDeviceLocallyMapped.c
     ntos_ob/ObOpenByPointer.c
     ntos_ob/ObQuery.c
     ntos_ob/ObReference.c
@@ -300,6 +301,7 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlTableElementKM.c
     rtl/RtlGuidKM.c
     rtl/RtlImageKM.c
+    rtl/RtlIsProcessorFeaturePresentKM.c
     rtl/RtlHashTableKM.c
     rtl/RtlTimeKM.c
     rtl/RtlIsValidOemCharacter.c

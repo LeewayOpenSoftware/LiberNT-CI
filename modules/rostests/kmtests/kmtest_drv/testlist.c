@@ -294,7 +294,9 @@ KMT_TESTFUNC Test_NpfsReadWrite;
 KMT_TESTFUNC Test_NpfsVolumeInfo;
 KMT_TESTFUNC Test_ObCallbacks;
 KMT_TESTFUNC Test_ObHandle;
+KMT_TESTFUNC Test_ObIsDosDeviceLocallyMapped;
 KMT_TESTFUNC Test_ObQuery;
+KMT_TESTFUNC Test_RtlIsProcessorFeaturePresentKM;
 KMT_TESTFUNC Test_ObReference;
 KMT_TESTFUNC Test_ObSecurity;
 KMT_TESTFUNC Test_ObSymbolicLink;
@@ -625,7 +627,9 @@ const KMT_TEST TestList[] =
     { "ObCallbacks",                        Test_ObCallbacks },
     { "ObHandle",                           Test_ObHandle },
     { "ObOpenByPointer",                    Test_ObOpenByPointer },
+    { "ObIsDosDeviceLocallyMapped",         Test_ObIsDosDeviceLocallyMapped },
     { "ObQuery",                            Test_ObQuery },
+    { "RtlIsProcessorFeaturePresentKM",     Test_RtlIsProcessorFeaturePresentKM },
     { "ObReference",                        Test_ObReference },
     { "ObSecurity",                         Test_ObSecurity },
     { "ObSecurityDescKM",                   Test_ObSecurityDescKM },
