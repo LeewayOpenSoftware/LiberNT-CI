@@ -31,6 +31,18 @@ typedef enum {
 
 LeewayThemeMode LeewayThemeGetMode(ILeewayTheme *theme);
 
+/* Per-app theme override (default SYSTEM = follow Windows AppsUseLightTheme).
+ * LIGHT/DARK force that palette. High contrast and classic always win. */
+typedef enum {
+    LEEWAY_THEME_PREF_SYSTEM = 0,
+    LEEWAY_THEME_PREF_LIGHT,
+    LEEWAY_THEME_PREF_DARK
+} LeewayThemePref;
+void LeewayThemeSetPreference(ILeewayTheme *theme, LeewayThemePref pref);
+/* Read HKCU\Software\Leeway\<app_name>\Theme (REG_SZ system|light|dark, or
+ * REG_DWORD 0|1|2) and apply it; absent/invalid = system. */
+void LeewayThemeApplyAppOverride(ILeewayTheme *theme, const WCHAR *app_name);
+
 /* Named colours (RIBBON-CONTROLS-DESIGN.md §5: the control never hard-codes
  * a colour). High contrast and classic map to the system colours. */
 typedef enum {

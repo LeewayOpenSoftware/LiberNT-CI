@@ -262,6 +262,7 @@ static void SaveScreenRectBmp(HWND hwnd, const WCHAR *path)
     free(bits); SelectObject(mem, old); DeleteObject(bmp); DeleteDC(mem); ReleaseDC(NULL, sdc);
 }
 
+static int g_themePref = -1;
 static const WCHAR *g_shot;
 static const WCHAR *g_openSurface; /* "appmenu" | "textcolor" | NULL */
 
@@ -281,6 +282,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             { SH_POLY,0,0,LWUI_COLOR_NONE,0 },{ SH_OVAL,0,0,LWUI_COLOR_NONE,0 },{ SH_RROUND,0,0,LWUI_COLOR_NONE,0 } };
         LeewayRibbonSetCollection(g_ribbon, CMD_SHAPES, shapes, 6, 0);
         LeewayRibbonSetGalleryDrawCallback(g_ribbon, OnGalleryDraw, NULL);
+        if (g_themePref >= 0) LeewayRibbonSetThemePreference(g_ribbon, (LeewayThemePref)g_themePref);
         LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Docs\\Quarterly Report.rtf");
         LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Docs\\Notes.txt");
         LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Users\\me\\Letter.rtf");
@@ -334,6 +336,12 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR cmd, int show)
     for (int i = 1; i < argc; i++) {
         if (!wcscmp(argv[i], L"--shot") && i + 1 < argc) g_shot = argv[++i];
         else if (!wcscmp(argv[i], L"--surface") && i + 1 < argc) g_openSurface = argv[++i];
+        else if (!wcscmp(argv[i], L"--theme") && i + 1 < argc) {
+            const WCHAR *t = argv[++i];
+            if (!wcscmp(t, L"light")) g_themePref = LEEWAY_THEME_PREF_LIGHT;
+            else if (!wcscmp(t, L"dark")) g_themePref = LEEWAY_THEME_PREF_DARK;
+            else g_themePref = LEEWAY_THEME_PREF_SYSTEM;
+        }
     }
     (void)cmd;
 

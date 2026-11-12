@@ -30,6 +30,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include <leewayui/theme.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -251,6 +252,10 @@ HRESULT WINAPI LeewayRibbonSetIconResolver(ILeewayRibbon *ribbon, LeewayUIIconRe
 typedef HRESULT (*LeewayUIGalleryDrawHandler)(UINT32 command_id, UINT32 item_id, HDC hdc,
                                               const RECT *cell, COLORREF fg, UINT32 dpi, void *context);
 HRESULT WINAPI LeewayRibbonSetGalleryDrawCallback(ILeewayRibbon *ribbon, LeewayUIGalleryDrawHandler handler, void *context);
+
+/* Theme override (default system). Forces the ribbon's palette and repaints.
+ * SetLayout also auto-applies the HKCU per-app override for layout.app_name. */
+HRESULT WINAPI LeewayRibbonSetThemePreference(ILeewayRibbon *ribbon, LeewayThemePref pref);
 
 /* Recent files pane in the application menu (G5). The ribbon reads the most-
  * recently-used list from HKCU\Software\Leeway\<app_name>\Recent (REG_SZ values
