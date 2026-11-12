@@ -27,11 +27,11 @@ int leeway_rs_poc_validate(const unsigned char *buf,
 
 /* TEST-ONLY. Present only when the staticlib is built with `--features test-ioctls`
  * (and the driver with -DLNRSPOC_TEST_IOCTLS). Triggers the controlled bugcheck
- * (KeBugCheckEx, code LEEWAY_RUST_PANIC 0xE0000001). Reachable solely via the
+ * (KeBugCheckEx, code LEEWAY_RUST_PANIC 0x4C450001). Reachable solely via the
  * documented test IOCTL inside a disposable VM. Does not return. Never ship. */
 void leeway_rs_poc_force_panic(void);
 
-#define LEEWAY_RUST_PANIC 0xE0000001UL /* Leeway experimental bugcheck code */
+#define LEEWAY_RUST_PANIC 0x4C450001UL /* Leeway provisional experimental bugcheck code (not public) */
 
 #ifdef __cplusplus
 }

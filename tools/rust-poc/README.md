@@ -40,11 +40,23 @@ tools/rust-poc/
 ## Bugcheck code registry (Leeway, experimental)
 | Symbol | Value | Meaning | Reachable from |
 |---|---|---|---|
-| `LEEWAY_RUST_PANIC` | `0xE0000001` | Unrecoverable Rust-side panic (controlled bring-down via `KeBugCheckEx`) | ONLY the gated test IOCTL `IOCTL_LNRSPOC_FORCE_PANIC` (test builds, disposable VM) |
+| `LEEWAY_RUST_PANIC` | `0x4C450001` | Unrecoverable Rust-side panic (controlled bring-down via `KeBugCheckEx`) | ONLY the gated test IOCTL `IOCTL_LNRSPOC_FORCE_PANIC` (`test-ioctls` build, disposable VM) |
 
-These are **our** codes for **our** kernel (not Microsoft bugcheck codes). `0xE0000001`
-is a provisional Leeway experimental value; the owner assigns the final reserved code.
-`P1`/`P2` carry the panic source line/column to aid `!analyze`.
+`0x4C450001` ("LE" = Leeway, experiment 01) is a **provisional, experimental** code for
+**our** kernel — not a Microsoft bugcheck code and **not a public or stable contract**. It
+is **exclusive to controlled lnrspoc testing** (owner-approved 2026-11-12): it fires only on
+an explicit `IOCTL_LNRSPOC_FORCE_PANIC` in the `test-ioctls` build and **never in normal
+driver operation** (the default build has no bugcheck path at all — see "Safety posture"),
+and deliberate crashes are run **only in a disposable VM** where the dump diagnostics and KD
+Rust-symbol resolution are verified. `P1`/`P2` carry the panic source line/column for `!analyze`.
+
+**Collision check (2026-11-12, tree `b7274436923`):** `0x4C450001` has **zero** occurrences
+anywhere in the source tree — no entry in `sdk/include/reactos/mc/bugcodes.mc` (whose NT
+bugcheck codes are all small, e.g. `0x117`/`0x121`/`0x141`), none in the KMDF
+`sdk/include/wdf/kmdf/*/wdfbugcodes.h`, and it is not a documented Windows bugcheck code. The
+earlier candidate `0xE0000001` was rejected because it already defines the NTSTATUS
+`STATUS_S1_HASH_MISMATCH` (`base/system/servicing/pending/pending.c:110`) in the adjacent
+S1-servicing domain.
 
 ## Build
 Off by default. Enable only via CI or an explicit configure:
