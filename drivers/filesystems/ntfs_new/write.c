@@ -427,6 +427,7 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PWSTR RequestedStream;
     BOOLEAN ResourceAcquired = FALSE;
     BOOLEAN PagingIo = FALSE;
+    BOOLEAN PurgePagingHeld = FALSE;
     PVOID BounceBuffer = NULL;
     PMDL LockMdl = NULL;
     BOOLEAN LockFailed = FALSE;
@@ -562,6 +563,19 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             Status = FlushStatus.Status;
             goto Complete;
         }
+
+        /*
+         * This non-cached write is about to change the data on disk. Flushing
+         * is not enough: cached pages already present stay stale, and a page
+         * fault during the write could re-read the old bytes. Hold
+         * PagingIoResource exclusive across the purge and the write so no
+         * fault reads stale data in the window, and purge the cache so later
+         * cached and mapped reads re-read the new data. (Matches fastfat's
+         * non-cached write coherency; see AUDIT-R1-IO-CC-FS.md A-3.)
+         */
+        ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+        PurgePagingHeld = TRUE;
+        CcPurgeCacheSection(FileObj->SectionObjectPointer, NULL, 0, FALSE);
     }
 
     /*
@@ -765,12 +779,22 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Irp->IoStatus.Information = 0;
     }
 
+    if (PurgePagingHeld)
+    {
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        PurgePagingHeld = FALSE;
+    }
     ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
                                    : NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     ResourceAcquired = FALSE;
 
 Complete:
+    if (PurgePagingHeld)
+    {
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        PurgePagingHeld = FALSE;
+    }
     if (ResourceAcquired)
     {
         ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
