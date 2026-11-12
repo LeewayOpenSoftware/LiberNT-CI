@@ -407,6 +407,9 @@ TestIrpHandler(
 
     UNREFERENCED_PARAMETER(DeviceObject);
 
+    /* Every Cc call below takes resources: kernel APCs must be off, as in a real FS */
+    FsRtlEnterFileSystem();
+
     Irp->IoStatus.Information = 0;
 
     if (IoStack->MajorFunction == IRP_MJ_CREATE)
@@ -500,6 +503,8 @@ TestIrpHandler(
     }
 
 Complete:
+    FsRtlExitFileSystem();
+
     if (Status == STATUS_PENDING)
     {
         IoMarkIrpPending(Irp);
