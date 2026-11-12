@@ -1,9 +1,9 @@
-# lnrspoc - experimental Rust kernel-driver PoC (v1)
+# lnrspoc - experimental Rust kernel-driver PoC (v2)
 
-Owner-approved 2026-11-12 (`kernel/OWNER-OK-RUST-POC-2026-11-12.md`). Establishes a
-safe, maintainable path to link Rust into our existing NT kernel **behind a C ABI** -
-not a kernel rewrite. This is an experiment: **off by default, never on the ISO,
-ntoskrnl untouched.**
+Owner-approved 2026-11-12 (v1 `kernel/OWNER-OK-RUST-POC-2026-11-12.md`; v2
+`kernel/OWNER-OK-RUST-POC-V2-2026-11-12.md`). Establishes a safe, maintainable path to
+link Rust into our existing NT kernel **behind a C ABI** - not a kernel rewrite. This is
+an experiment: **off by default, never on the ISO, ntoskrnl untouched.**
 
 ## What it is
 - `leeway_rs_poc` - a `no_std` Rust **staticlib** (no heap, no locks in v1) exposing one
@@ -11,7 +11,16 @@ ntoskrnl untouched.**
   CRC-32. Every buffer access is bounds-checked; expected failures are **returned**,
   never faulted.
 - `lnrspoc.sys` - a minimal WDM driver that links the staticlib and calls it from a
-  self-test (on load) and an IOCTL. It is the host for the experiment.
+  self-test (on load) and IOCTLs. It is the host for the experiment.
+
+**v2 adds** (owner-approved 2026-11-12), still `no_std`, still off by default:
+- a pool-backed `#[global_allocator]` (NT nonpaged pool via `ExAllocatePoolWithTag`) with
+  a **fallible** `try_*` / `KBox` surface - allocation failure returns `Err`, never panics
+  or bugchecks (no infallible `alloc` path is used anywhere);
+- `SpinLock<T>` - RAII over a `KSPIN_LOCK`; acquire raises IRQL to DISPATCH_LEVEL, the
+  guard restores it on drop (every scope exit);
+- bindgen-style **NDK struct bindings** with compile-time `size_of`/`offset_of!`
+  assertions (`src/ndk.rs`), which closes layout-correctness acceptance test 4.
 
 ## Layout
 ```
@@ -20,7 +29,11 @@ tools/rust-poc/
   rust-toolchain.toml         pinned nightly (exact date + components)
   .cargo/config.toml          build-std + custom target + v0 mangling
   targets/x86_64-unknown-libernt-kernel.json   custom kernel target spec
-  src/lib.rs                  the crate (validator, CRC-32, panic->bugcheck)
+  src/lib.rs                  crate root (validator, CRC-32, panic->bugcheck, v2 exercisers)
+  src/alloc_pool.rs           pool #[global_allocator] + fallible try_*/KBox + OOM probe
+  src/sync.rs                 SpinLock<T> RAII over KSPIN_LOCK (IRQL raise/restore)
+  src/ndk.rs                  NDK struct bindings + size/offset const_assert (test 4)
+  tools/gen-ndk.sh            regenerate src/ndk.rs with bindgen (output is authoritative)
   include/leeway_rs_poc.h      C ABI contract (authoritative; cbindgen can regen)
   driver/lnrspoc.c             WDM host driver
   CMakeLists.txt               builds staticlib (custom cargo) + driver; NO add_cd_file
@@ -30,8 +43,9 @@ tools/rust-poc/
 ## Toolchain pin (reproducibility)
 - Channel: **nightly-2026-05-24** (`1.98.0-nightly`, commit
   `423e3d2529999d5e57fa0351783d1292b9219ad4`), components `rust-src`, `llvm-tools`.
-- Nightly is required: `-Zbuild-std` rebuilds `core`/`compiler_builtins` for the custom
-  target, and `-Zjson-target-spec` loads the target file. Both are unstable as of 2026.
+- Nightly is required: `-Zbuild-std` rebuilds `core`/`alloc`/`compiler_builtins` for the
+  custom target, and `-Zjson-target-spec` loads the target file. Both are unstable as of
+  2026. `alloc` is built from v2 on for the pool `#[global_allocator]`.
 - `profile.release` uses `panic="abort"`, `lto=true`, `codegen-units=1`, `opt-level="z"`,
   and `trim-paths="all"` so two clean builds are byte-identical (verified: see
   `kernel/RUST-POC-RESULTS.md`). Offline/air-gapped hosts: `cargo vendor` + `--offline
@@ -73,14 +87,29 @@ cd tools/rust-poc && cargo build --release --locked
 - `IOCTL_LNRSPOC_VALIDATE` (0x800, METHOD_BUFFERED): input = record bytes, output =
   `unsigned long` CRC-32. Returns `STATUS_SUCCESS` + CRC, or `STATUS_DATA_ERROR` on
   malformed input (never faults).
+- `IOCTL_LNRSPOC_V2_SELFTEST` (0x805): runs the pool+SpinLock load self-test on demand;
+  output = `int` result (0 = PASS).
+- `IOCTL_LNRSPOC_ALLOC_STRESS` (0x802) / `IOCTL_LNRSPOC_LOCK_STRESS` (0x803): input =
+  `unsigned long` iteration count, output = `int` result. Allocator / lock churn. Safe,
+  non-destructive, present in every build.
+- `IOCTL_LNRSPOC_OOM_PROBE` (0x804): deliberately exhausts the nonpaged pool and proves
+  failure is a returned `Err`, not a crash; output = `int` block count (>0) or a negative
+  code. All blocks are freed. Safe (non-destructive) but pool-heavy: a disposable VM.
 - `IOCTL_LNRSPOC_FORCE_PANIC` (0x801): **destructive**, test builds only. Triggers the
   controlled bugcheck. Run ONLY in a disposable VM.
 
 ## Safety posture
 - **No bugcheck on normal operation** - verified: in the default build the optimizer
-  proves `validate()` cannot panic and removes the panic handler and the `KeBugCheckEx`
-  reference entirely (the staticlib has *zero* undefined externs). The bugcheck path
-  exists only in the `test-ioctls` build, whose sole undefined extern is `KeBugCheckEx`.
+  proves nothing on the normal path can panic and removes the panic handler and the
+  `KeBugCheckEx` reference entirely. The default build's only undefined externs are the
+  **sanctioned** ntoskrnl pool/spin-lock routines (`ExAllocatePoolWithTag`,
+  `ExFreePoolWithTag`, `KeInitializeSpinLock`, `KeAcquireSpinLockRaiseToDpc`,
+  `KeReleaseSpinLock`) - **never `KeBugCheckEx`**. The bugcheck path appears only in the
+  `test-ioctls` build, which adds exactly `KeBugCheckEx` to that set. Both facts are gated
+  in CI (`rust-poc-reproducible.yml`).
+- **Allocation failure is a value, not a trap** - the pool allocator's public surface is
+  fallible (`try_alloc`, `KBox::try_new` -> `Result`); the OOM probe exhausts the pool and
+  observes a returned `Err`. `handle_alloc_error` is never reachable.
 - **panic = abort** - no unwinding across the FFI boundary; a panic is an immediate,
   controlled bugcheck, not UB crossing into C frames. No EH tables emitted.
 - **No FP/MMX/AVX** in our code path (ABI-permitted scalar SSE is absent too); verified
