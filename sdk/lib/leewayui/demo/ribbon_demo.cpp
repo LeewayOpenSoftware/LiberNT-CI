@@ -28,6 +28,8 @@ enum {
     CMD_TEXTCOLOR = 1403, CMD_HIGHLIGHT = 1913,
     CMD_ALIGNL = 1501, CMD_ALIGNC = 1502, CMD_ALIGNR = 1503,
     CMD_ZOOMIN = 1601, CMD_ZOOMOUT = 1602, CMD_ZOOM100 = 1603,
+    CMD_SHAPES = 340,
+    SH_LINE = 610, SH_CURVE = 611, SH_RECT = 612, SH_POLY = 613, SH_OVAL = 614, SH_RROUND = 615,
     /* text colour cells (fixed palette ids) */
     COL_BLACK = 1800, COL_AUTOMATIC = 1816,
     /* highlight colour cells */
@@ -46,6 +48,26 @@ static const COLORREF kPalette[16] = {
     RGB(0,176,240), RGB(0,112,192), RGB(0,32,96), RGB(112,48,160),
     RGB(255,255,255), RGB(191,191,191), RGB(127,127,127), RGB(89,89,89),
 };
+
+static HRESULT CALLBACK OnGalleryDraw(UINT32 cmd, UINT32 item, HDC hdc, const RECT *cell, COLORREF fg, UINT32 dpi, void *ctx)
+{
+    (void)cmd; (void)ctx;
+    int w = dpi ? (int)((dpi + 48) / 96) : 1; if (w < 1) w = 1;
+    HPEN pen = CreatePen(PS_SOLID, w, fg); HGDIOBJ op = SelectObject(hdc, pen);
+    HGDIOBJ ob = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
+    RECT c = *cell; int m = (c.right - c.left) / 5; InflateRect(&c, -m, -m);
+    int l=c.left,t=c.top,rr=c.right,b=c.bottom,cx=(l+rr)/2;
+    switch (item) {
+    case SH_LINE: MoveToEx(hdc,l,b,NULL); LineTo(hdc,rr,t); break;
+    case SH_CURVE: { POINT p[4]={{l,b},{(l+cx)/1,t},{cx,b},{rr,t}}; PolyBezier(hdc,p,4); } break;
+    case SH_RECT: Rectangle(hdc,l,t,rr,b); break;
+    case SH_POLY: { POINT p[3]={{cx,t},{l,b},{rr,b}}; Polygon(hdc,p,3); } break;
+    case SH_OVAL: Ellipse(hdc,l,t,rr,b); break;
+    case SH_RROUND: RoundRect(hdc,l,t,rr,b,(rr-l)/3,(b-t)/3); break;
+    default: SelectObject(hdc,op); SelectObject(hdc,ob); DeleteObject(pen); return E_NOTIMPL;
+    }
+    SelectObject(hdc,op); SelectObject(hdc,ob); DeleteObject(pen); return S_OK;
+}
 
 static void CALLBACK OnRecentOpen(const WCHAR *path, void *ctx)
 {
@@ -92,6 +114,7 @@ static HRESULT CALLBACK OnState(UINT32 id, LeewayUICommandState *st, void *ctx)
 #define S0 LWUI_CONTROL_BUTTON_SMALL
 #define TS LWUI_CONTROL_TOGGLE_SMALL
 #define SPS LWUI_CONTROL_SPLIT_SMALL
+#define SPSI LWUI_CONTROL_SPLIT_SMALL_ICON
 
 static const LeewayUICommand kTable[] = {
     { CMD_NEW,    L"New",    0,0, LWUI_AUR_COMMON_NEW, 1,0,1 },
@@ -113,6 +136,7 @@ static const LeewayUICommand kTable[] = {
     { CMD_ZOOMIN, L"Zoom In",0,L"I", LWUI_ICON_NONE, 1,0,1 },
     { CMD_ZOOMOUT,L"Zoom Out",0,L"O",LWUI_ICON_NONE, 1,0,1 },
     { CMD_ZOOM100,L"100%",   0,L"J", LWUI_ICON_NONE, 1,0,1 },
+    { CMD_SHAPES, L"Shapes", 0,L"SH", LWUI_ICON_NONE, 1,0,1 },
 };
 
 static const LeewayUIPlacement kClip[] = {
@@ -120,24 +144,26 @@ static const LeewayUIPlacement kClip[] = {
 };
 static const LeewayUIPlacement kFont[] = {
     { CMD_BOLD, TS, 0, 0 }, { CMD_ITALIC, TS, 0, 0 }, { CMD_UNDER, TS, 0, 0 },
-    { CMD_TEXTCOLOR, SPS, 0, 0 }, { CMD_HIGHLIGHT, SPS, 0, 0 },
+    { CMD_TEXTCOLOR, SPS, 0, 0 }, { CMD_HIGHLIGHT, SPSI, 0, 0 },
 };
 static const LeewayUIPlacement kPara[] = {
     { CMD_ALIGNL, TS, 0, 0 }, { CMD_ALIGNC, TS, 0, 0 }, { CMD_ALIGNR, TS, 0, 0 },
 };
+static const LeewayUIPlacement kShapes[] = { { CMD_SHAPES, LWUI_CONTROL_GALLERY_STRIP, 0, 120 } };
 static const LeewayUIPlacement kZoom[] = {
     { CMD_ZOOMIN, S0, 0, 0 }, { CMD_ZOOMOUT, S0, 0, 0 }, { CMD_ZOOM100, S0, 0, 0 },
 };
 static const LeewayUIGroup kHomeGroups[] = {
     { L"Clipboard", 0, 0, 0, 3, kClip },
-    { L"Font",      0, 0, 0, 5, kFont },
+    { L"Font",      0, 0, 0, 5, kFont, 2 },
     { L"Paragraph", 0, 0, 0, 3, kPara },
+    { L"Shapes", 0, 0, 0, 1, kShapes },
 };
 static const LeewayUIGroup kViewGroups[] = {
     { L"Zoom", 0, 0, 0, 3, kZoom },
 };
 static const LeewayUITab kTabs[] = {
-    { 1, L"Home", L"H", 0, 3, kHomeGroups },
+    { 1, L"Home", L"H", 0, 4, kHomeGroups },
     { 2, L"View", L"V", 0, 1, kViewGroups },
 };
 static const UINT32 kAppMenu[] = { CMD_NEW, CMD_OPEN, CMD_SAVE, CMD_SAVEAS, CMD_PRINT };
@@ -250,6 +276,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         static LeewayAurelineConfig s_aur = { L"../icons", TRUE };
         LeewayRibbonUseAurelineIcons(g_ribbon, &s_aur);
         LeewayRibbonSetRecentProvider(g_ribbon, OnRecentOpen, NULL, 8);
+        static const LeewayUICollectionItem shapes[] = {
+            { SH_LINE,0,0,LWUI_COLOR_NONE,0 },{ SH_CURVE,0,0,LWUI_COLOR_NONE,0 },{ SH_RECT,0,0,LWUI_COLOR_NONE,0 },
+            { SH_POLY,0,0,LWUI_COLOR_NONE,0 },{ SH_OVAL,0,0,LWUI_COLOR_NONE,0 },{ SH_RROUND,0,0,LWUI_COLOR_NONE,0 } };
+        LeewayRibbonSetCollection(g_ribbon, CMD_SHAPES, shapes, 6, 0);
+        LeewayRibbonSetGalleryDrawCallback(g_ribbon, OnGalleryDraw, NULL);
         LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Docs\\Quarterly Report.rtf");
         LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Docs\\Notes.txt");
         LeewayRibbonAddRecentFile(g_ribbon, L"C:\\Users\\me\\Letter.rtf");
