@@ -280,6 +280,7 @@ CcRosFlushDirtyPages(
 {
     ULONG Total = 0;
     ULONG Visited = 0;
+    PCC_NT_MAP First = NULL;
 
     while (Total < Target && Visited++ < 256)
     {
@@ -287,6 +288,15 @@ CcRosFlushDirtyPages(
 
         if (NtMap == NULL)
             break;
+
+        if (NtMap == First)
+        {
+            CcNtDereferenceMap(NtMap);
+            break;
+        }
+
+        if (First == NULL)
+            First = NtMap;
 
         Total += CcNtLazyFlushMap(NtMap, Target - Total, Wait, CalledFromLazy);
         CcNtDereferenceMap(NtMap);
