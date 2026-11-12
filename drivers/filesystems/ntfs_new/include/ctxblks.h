@@ -198,6 +198,10 @@ NtfsRegisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
 VOID
 NtfsUnregisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
 
+BOOLEAN
+NtfsIsStorageDeviceInUse(_In_ PDEVICE_OBJECT StorageDevice,
+                         _In_opt_ PVolumeContextBlock Except);
+
 VOID
 NtfsReleaseDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);
 

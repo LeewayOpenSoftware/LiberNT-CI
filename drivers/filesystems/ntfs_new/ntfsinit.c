@@ -246,6 +246,36 @@ NtfsRegisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB)
     KeLeaveCriticalRegion();
 }
 
+/* Whether a mounted volume other than Except still does its I/O through
+ * StorageDevice. A dismount moves the device to a fresh VPB, so the next
+ * volume can mount on the same storage device while the old one lives on. */
+BOOLEAN
+NtfsIsStorageDeviceInUse(_In_ PDEVICE_OBJECT StorageDevice,
+                         _In_opt_ PVolumeContextBlock Except)
+{
+    PLIST_ENTRY Entry;
+    BOOLEAN InUse = FALSE;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&NtfsGlobalVolumeListResource, TRUE);
+    for (Entry = NtfsGlobalVolumeList.Flink;
+         Entry != &NtfsGlobalVolumeList;
+         Entry = Entry->Flink)
+    {
+        PVolumeContextBlock Other =
+            CONTAINING_RECORD(Entry, VolumeContextBlock, GlobalListEntry);
+
+        if (Other != Except && Other->StorageDevice == StorageDevice && !Other->Dismounted)
+        {
+            InUse = TRUE;
+            break;
+        }
+    }
+    ExReleaseResourceLite(&NtfsGlobalVolumeListResource);
+    KeLeaveCriticalRegion();
+    return InUse;
+}
+
 VOID
 NtfsUnregisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB)
 {

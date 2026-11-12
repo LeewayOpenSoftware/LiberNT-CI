@@ -127,8 +127,12 @@ NtfsReleaseDismountedVolume(
         /* The storage device object may be reused by another volume: its clean
          * cached blocks and what the environment learned about it for media
          * ordering go with us (dirty blocks, if the flush failed, stay and are
-         * retried by the lazy writer, fail-closed). */
-        NtfsDiskReleaseKm(VolCB->StorageDevice);
+         * retried by the lazy writer, fail-closed). Not while the next volume
+         * already runs on the same storage device: those blocks and that
+         * answer are its own now, and its mount preparation started them
+         * afresh. */
+        if (!NtfsIsStorageDeviceInUse(VolCB->StorageDevice, VolCB))
+            NtfsDiskReleaseKm(VolCB->StorageDevice);
         ObDereferenceObject(StreamFileObject);
     }
 }
