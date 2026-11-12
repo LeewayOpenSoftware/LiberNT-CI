@@ -167,7 +167,7 @@ typedef struct _NTFS_DEVICE_DURABILITY
     ULONG FlushesSkipped;       /* edges that needed nothing (already durable, or no write cache) */
     ULONG FuaWrites;
 } NTFS_DEVICE_DURABILITY;
-#define NTFS_DEVICE_TABLE 8
+#define NTFS_DEVICE_TABLE 16
 /* Under NtfsCacheMutex, except the probe (PASSIVE_LEVEL, mutex dropped). */
 static NTFS_DEVICE_DURABILITY NtfsDeviceTable[NTFS_DEVICE_TABLE];
 static volatile LONG NtfsDurableOrderingState = -1; /* -1 unread, 0 off, 1 on */
@@ -396,6 +396,9 @@ NtfsCacheWriteBackOne(_In_ PDEVICE_OBJECT Owner,
     PDEVICE_OBJECT Target = NULL;
     ULONGLONG Generation = 0;
     ULONGLONG NeedDurable = 0;
+
+    /* Synchronous IRPs, a recursive KMUTEX and the device probe: PASSIVE only. */
+    NT_ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
 
     /* The writeback mutex is recursive (an NT KMUTEX), so the dependency
      * flush below can call back into this function for an earlier block. */
@@ -968,38 +971,54 @@ NtfsDiskPrepareMountKm(
         return Status;
 
     NtfsCacheDiscardOwner(DeviceObject);
+    /* A new volume on this device object: whatever an earlier one learned
+     * about the device no longer applies (F1 of the durability review). */
+    NtfsDiskForgetDeviceKm(DeviceObject);
     return STATUS_SUCCESS;
 }
 
 VOID
 NtfsDiskReleaseKm(_In_ PDEVICE_OBJECT DeviceObject)
 {
+    NtfsCacheDiscardOwner(DeviceObject);
+    NtfsDiskForgetDeviceKm(DeviceObject);
+}
+
+/*
+ * Forget what was learned about a device. A DEVICE_OBJECT address is reused
+ * after its object is freed (mount/dismount churn, removable media), so an
+ * entry must not outlive the volume it was probed for: a stale "no write
+ * cache" would skip every ordering flush on the next volume. Called by every
+ * mount preparation for its target device, by the failed-mount release and
+ * by the dismounted-volume release; the next use probes afresh. The counters
+ * go to the debug log first; a lab reads them off COM1.
+ */
+VOID
+NtfsDiskForgetDeviceKm(_In_ PDEVICE_OBJECT DeviceObject)
+{
     ULONG i;
 
-    NtfsCacheDiscardOwner(DeviceObject);
-    /* The device object may be reused by another volume: probe it afresh.
-     * The counters go to the debug log first; a lab reads them off COM1. */
-    if (NtfsCacheReady)
+    if (!NtfsCacheReady || !DeviceObject)
+        return;
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    for (i = 0; i < NTFS_DEVICE_TABLE; i++)
     {
-        ExAcquireFastMutex(&NtfsCacheMutex);
-        for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+        NTFS_DEVICE_DURABILITY* E = &NtfsDeviceTable[i];
+        if (E->Device == DeviceObject)
         {
-            NTFS_DEVICE_DURABILITY* E = &NtfsDeviceTable[i];
-            if (E->Device == DeviceObject)
+            if (E->Probed)
             {
-                if (E->Probed)
-                {
-                    DPRINT1("NTFS: device %p durability: write cache %s, FUA %s, flushes %lu, "
-                            "edges without flush %lu, FUA writes %lu, unflushed writes %lu%s\n",
-                            DeviceObject, E->WriteCache ? "on" : "off", E->Fua ? "yes" : "no",
-                            E->Flushes, E->FlushesSkipped, E->FuaWrites, E->WritesSinceFlush,
-                            E->FlushRejected ? ", flush rejected" : "");
-                }
-                RtlZeroMemory(E, sizeof(*E));
+                DPRINT1("NTFS: device %p durability: write cache %s, FUA %s, flushes %lu, "
+                        "edges without flush %lu, FUA writes %lu, unflushed writes %lu%s\n",
+                        DeviceObject, E->WriteCache ? "on" : "off", E->Fua ? "yes" : "no",
+                        E->Flushes, E->FlushesSkipped, E->FuaWrites, E->WritesSinceFlush,
+                        (E->WriteCache && E->FlushRejected && !E->Fua) ? ", NOT DURABLE (flush rejected)" :
+                        E->FlushRejected ? ", flush rejected" : "");
             }
+            RtlZeroMemory(E, sizeof(*E));
         }
-        ExReleaseFastMutex(&NtfsCacheMutex);
     }
+    ExReleaseFastMutex(&NtfsCacheMutex);
 }
 
 typedef struct _NTFS_DISK_IO_CONTEXT
@@ -1440,8 +1459,10 @@ NtfsDeviceMakeDurable(_In_ PDEVICE_OBJECT Device, _In_ ULONGLONG NeedSeq)
         if (E && E->Device == Device && !E->FlushRejected)
         {
             E->FlushRejected = TRUE;
-            DPRINT1("NTFS: device %p rejects cache flushes (0x%lx); ordering relies on the device\n",
-                    Device, Status);
+            DPRINT1("NTFS: device %p rejects cache flushes (0x%lx); %s\n",
+                    Device, Status,
+                    E->Fua ? "write-through writes still use FUA" :
+                    "NOT DURABLE: a volatile cache here loses ordering on power loss");
         }
         ExReleaseFastMutex(&NtfsCacheMutex);
         Status = STATUS_SUCCESS;
@@ -1501,6 +1522,7 @@ NtfsDiskDurabilityStatsKm(_In_ PDEVICE_OBJECT DeviceObject,
             Stats->WriteCache = E->WriteCache;
             Stats->Fua = E->Fua;
             Stats->FlushRejected = E->FlushRejected;
+            Stats->NotDurable = (E->WriteCache && E->FlushRejected && !E->Fua);
             Stats->Flushes = E->Flushes;
             Stats->FlushesSkipped = E->FlushesSkipped;
             Stats->FuaWrites = E->FuaWrites;
