@@ -3299,9 +3299,12 @@ BasepEnvironmentHasRunAsInvoker(
 
     RtlInitEmptyUnicodeString(&Value, Buffer, sizeof(Buffer) - sizeof(WCHAR));
     Status = RtlQueryEnvironmentVariable_U(lpEnvironment, &Name, &Value);
+    DPRINT1("RUNASINVOKER-TRACE env %p flags 0x%lx status 0x%lx length %u\n",
+            lpEnvironment, dwCreationFlags, Status, Value.Length);
     if (!NT_SUCCESS(Status))
         return FALSE;
     Buffer[Value.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    DPRINT1("RUNASINVOKER-TRACE value '%S'\n", Buffer);
 
     for (Token = Buffer; *Token; Token = End)
     {
