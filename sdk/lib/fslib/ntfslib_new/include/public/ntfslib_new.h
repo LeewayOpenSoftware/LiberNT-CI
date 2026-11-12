@@ -948,6 +948,13 @@ void
 NtfsSetGenerate8dot3Names(
     _In_ BOOLEAN Generate);
 
+/* Shape verification after every metadata change (builds with the hook
+ * compiled in: checked or NTFSLIB_VERIFY_SHAPE). Off by default in kernel
+ * builds. */
+void
+NtfsSetShapeVerifyAfterMutation(
+    _In_ BOOLEAN Enable);
+
 /*
  * Opens subsequent volumes without journal recovery or write support.
  * Intended for diagnostic readers such as the Linux FUSE frontend.
