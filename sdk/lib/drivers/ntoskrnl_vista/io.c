@@ -957,7 +957,20 @@ IoQueueWorkItemEx(
     _In_ WORK_QUEUE_TYPE QueueType,
     _In_opt_ __drv_aliasesMem PVOID Context)
 {
-    PEX_WORKITEM_CONTEXT newContext = ExAllocatePoolWithTag(NonPagedPoolMustSucceed, sizeof(*newContext), TAG_IOWI);
+    PEX_WORKITEM_CONTEXT newContext;
+
+    /*
+     * NonPagedPoolMustSucceed is obsolete: the allocator bug-checks on
+     * failure, which turns transient memory pressure into a crash. Use a
+     * non-executable nonpaged allocation and tolerate failure. This routine
+     * returns VOID, so it cannot report the error to the caller; a failed
+     * allocation leaves IoWorkItem unqueued (and still owned by the caller,
+     * so nothing leaks), rather than crashing the system.
+     */
+    newContext = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*newContext), TAG_IOWI);
+    if (newContext == NULL)
+        return;
+
     newContext->WorkItem = IoWorkItem;
     newContext->WorkItemRoutineEx = WorkerRoutine;
     newContext->Context = Context;
