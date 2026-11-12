@@ -13,6 +13,8 @@
 extern CMainWindow mainWindow;
 extern BOOL g_showGrid;
 
+static ILeewayRibbon *s_ribbon;
+
 static const struct { UINT id; int zoom; } g_zoomIds[] = {
     { IDM_VIEWZOOM125, 125 }, { IDM_VIEWZOOM25, 250 }, { IDM_VIEWZOOM50, 500 }, { IDM_VIEWZOOM100, 1000 },
     { IDM_VIEWZOOM200, 2000 }, { IDM_VIEWZOOM400, 4000 }, { IDM_VIEWZOOM800, 8000 },
@@ -62,14 +64,27 @@ static BOOL HandleLocal(UINT32 id, HWND hWnd)
         toolsModel.SetActiveTool((TOOLTYPE)(id - ID_FREESEL + 1));
         return TRUE;
     }
-    if (id >= PAINT_PALETTE_FIRST && id < PAINT_PALETTE_FIRST + PAINT_PALETTE_COUNT)
+    if ((id >= PAINT_PALETTE_FIRST && id < PAINT_PALETTE_FIRST + PAINT_PALETTE_COUNT) ||
+        (id >= PAINT_PALETTE_ALT_FIRST && id < PAINT_PALETTE_ALT_FIRST + PAINT_PALETTE_COUNT))
     {
-        paletteModel.SetFgColor(g_paintPaletteItems[id - PAINT_PALETTE_FIRST].color);
-        return TRUE;
-    }
-    if (id >= PAINT_PALETTE_ALT_FIRST && id < PAINT_PALETTE_ALT_FIRST + PAINT_PALETTE_COUNT)
-    {
-        paletteModel.SetBgColor(g_paintPaletteItems[id - PAINT_PALETTE_ALT_FIRST].color);
+        BOOL bAlt = (id >= PAINT_PALETTE_ALT_FIRST);
+        UINT n = id - (bAlt ? PAINT_PALETTE_ALT_FIRST : PAINT_PALETTE_FIRST);
+        if (n >= PAINT_PALETTE_STD && !g_paintCustomSet[n - PAINT_PALETTE_STD])
+        {
+            /* An empty custom slot: define it first */
+            COLORREF c = bAlt ? paletteModel.GetBgColor() : paletteModel.GetFgColor();
+            if (!mainWindow.ChooseColor(&c))
+                return TRUE;
+            g_paintCustomSet[n - PAINT_PALETTE_STD] = TRUE;
+            g_paintPaletteItems[n].color = c;
+            if (s_ribbon)
+                LeewayRibbonSetCollection(s_ribbon, 372, g_paintPaletteItems, _countof(g_paintPaletteItems),
+                                          LWUI_COLLECTION_COLORS);
+        }
+        if (bAlt)
+            paletteModel.SetBgColor(g_paintPaletteItems[n].color);
+        else
+            paletteModel.SetFgColor(g_paintPaletteItems[n].color);
         return TRUE;
     }
     if (id >= 361 && id <= 368)
@@ -307,6 +322,8 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
         }
     }
 
+    s_ribbon = *pRibbon;
+
     /* Collections: galleries, dropdowns and split menus (paint_ribbon_cmds.h) */
     hr = PaintRibbonSetCollections(*pRibbon);
     if (FAILED(hr))
@@ -322,6 +339,7 @@ HRESULT PaintRibbonInitialize(HWND hwndMain, ILeewayRibbon **pRibbon)
 /* Cleanup Paint ribbon */
 void PaintRibbonCleanup(ILeewayRibbon *ribbon)
 {
+    s_ribbon = NULL;
     if (ribbon)
         LeewayRibbonDestroy(ribbon);
 }

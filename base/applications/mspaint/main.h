@@ -30,6 +30,7 @@ public:
         MESSAGE_HANDLER(WM_SYSCOLORCHANGE, OnSysColorChange)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
+        MESSAGE_HANDLER(WM_HSCROLL, OnHScroll)
         MESSAGE_HANDLER(0x02E0 /* WM_DPICHANGED */, OnDpiChanged)
         MESSAGE_HANDLER(WM_RIBBONREFRESH, OnRibbonRefresh)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
@@ -55,6 +56,9 @@ private:
     HMENU m_hMenu;
     ILeewayRibbon *m_pRibbon;
     BOOL m_bRibbonDirty = FALSE;
+    HWND m_hZoomSlider = NULL;
+    HWND m_hZoomOut = NULL;
+    HWND m_hZoomIn = NULL;
 
     LRESULT OnDropFiles(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -67,6 +71,9 @@ private:
     LRESULT OnSysColorChange(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnNotify(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnHScroll(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    void StepZoom(int delta);
+    void PlaceZoomControls();
     LRESULT OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnMouseWheel(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);

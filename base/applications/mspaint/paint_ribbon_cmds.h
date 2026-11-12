@@ -188,7 +188,7 @@ static const LeewayUIPlacement g_homeColoursPlacement[] = {
 
 /* Groups for Home tab */
 static const LeewayUIGroup g_homeGroups[] = {
-    { L"Clipboard", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
+    { L"Clipboard", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_MIXED, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE), 0,
       _countof(g_homeClipboardPlacement), g_homeClipboardPlacement },
 
     { L"Image", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_MIXED, LWUI_VARIANT_SMALL, LWUI_VARIANT_COLLAPSED), IDM_IMAGEATTRIBUTES,
@@ -395,21 +395,26 @@ static const LeewayUICollectionItem g_paintSizeItems[] = {
 };
 
 #define PAINT_PALETTE_FIRST 1001
-#define PAINT_PALETTE_COUNT 28
+#define PAINT_PALETTE_COUNT 30     /* 20 standard colours + 10 custom slots */
+#define PAINT_PALETTE_STD   20
+#define PAINT_CUSTOM_EMPTY  RGB(255, 255, 255)
 
-/* Cells are swatches (LWUI_COLLECTION_COLORS): left click executes id (Color 1), right click alt_id (Color 2). */
+/* Cells are swatches (LWUI_COLLECTION_COLORS): left click executes id (Color 1), right click alt_id (Color 2).
+ * Order is the classic Win7 one: two rows of ten, then ten custom slots (empty until defined). */
 #define PAINT_PALETTE_ALT_FIRST 1101
 #define PAL(n, name, r, g, b) { PAINT_PALETTE_FIRST + (n), name, 0, RGB(r, g, b), PAINT_PALETTE_ALT_FIRST + (n) }
-static const LeewayUICollectionItem g_paintPaletteItems[PAINT_PALETTE_COUNT] = {
-    PAL(0, L"Black", 0, 0, 0), PAL(1, L"Gray", 128, 128, 128), PAL(2, L"Dark red", 128, 0, 0), PAL(3, L"Olive", 128, 128, 0),
-    PAL(4, L"Dark green", 0, 128, 0), PAL(5, L"Teal", 0, 128, 128), PAL(6, L"Navy", 0, 0, 128), PAL(7, L"Purple", 128, 0, 128),
-    PAL(8, L"Khaki", 128, 128, 64), PAL(9, L"Dark teal", 0, 64, 64), PAL(10, L"Sky blue", 0, 128, 255), PAL(11, L"Dark blue", 0, 64, 128),
-    PAL(12, L"Indigo", 64, 0, 255), PAL(13, L"Brown", 128, 64, 0),
-    PAL(14, L"White", 255, 255, 255), PAL(15, L"Light gray", 192, 192, 192), PAL(16, L"Red", 255, 0, 0), PAL(17, L"Yellow", 255, 255, 0),
-    PAL(18, L"Green", 0, 255, 0), PAL(19, L"Cyan", 0, 255, 255), PAL(20, L"Blue", 0, 0, 255), PAL(21, L"Magenta", 255, 0, 255),
-    PAL(22, L"Light yellow", 255, 255, 128), PAL(23, L"Mint", 0, 255, 128), PAL(24, L"Light cyan", 128, 255, 255),
-    PAL(25, L"Periwinkle", 128, 128, 255), PAL(26, L"Rose", 255, 0, 128), PAL(27, L"Orange", 255, 128, 64),
+static LeewayUICollectionItem g_paintPaletteItems[PAINT_PALETTE_COUNT] = {
+    PAL(0, L"Black", 0, 0, 0), PAL(1, L"Gray-50%", 127, 127, 127), PAL(2, L"Dark red", 136, 0, 21), PAL(3, L"Red", 237, 28, 36),
+    PAL(4, L"Orange", 255, 127, 39), PAL(5, L"Yellow", 255, 242, 0), PAL(6, L"Green", 34, 177, 76), PAL(7, L"Turquoise", 0, 162, 232),
+    PAL(8, L"Indigo", 63, 72, 204), PAL(9, L"Purple", 163, 73, 164),
+    PAL(10, L"White", 255, 255, 255), PAL(11, L"Gray-25%", 195, 195, 195), PAL(12, L"Brown", 185, 122, 87), PAL(13, L"Rose", 255, 174, 201),
+    PAL(14, L"Gold", 255, 201, 14), PAL(15, L"Light yellow", 239, 228, 176), PAL(16, L"Lime", 181, 230, 29), PAL(17, L"Light turquoise", 153, 217, 234),
+    PAL(18, L"Blue-gray", 112, 146, 190), PAL(19, L"Lavender", 200, 191, 231),
+    PAL(20, L"Custom 1", 255, 255, 255), PAL(21, L"Custom 2", 255, 255, 255), PAL(22, L"Custom 3", 255, 255, 255), PAL(23, L"Custom 4", 255, 255, 255),
+    PAL(24, L"Custom 5", 255, 255, 255), PAL(25, L"Custom 6", 255, 255, 255), PAL(26, L"Custom 7", 255, 255, 255), PAL(27, L"Custom 8", 255, 255, 255),
+    PAL(28, L"Custom 9", 255, 255, 255), PAL(29, L"Custom 10", 255, 255, 255),
 };
+static BOOL g_paintCustomSet[PAINT_PALETTE_COUNT - PAINT_PALETTE_STD];
 #undef PAL
 
 /* Fills every collection. Call after LeewayRibbonSetLayout (collections are kept

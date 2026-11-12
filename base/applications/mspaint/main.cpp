@@ -410,6 +410,7 @@ void CMainWindow::alignChildrenToMainWindow()
     }
 
     ::EndDeferWindowPos(hDWP);
+    PlaceZoomControls();
 }
 
 void CMainWindow::InvalidateRibbon()
@@ -436,6 +437,17 @@ LRESULT CMainWindow::OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL&
     return 0;
 }
 
+// The status bar ignores control notifications: forward the zoom controls' to the main window
+static LRESULT CALLBACK StatusBarForwardProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+                                             UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    if (uMsg == WM_HSCROLL || uMsg == WM_COMMAND)
+        return ::SendMessageW((HWND)dwRefData, uMsg, wParam, lParam);
+    return ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+static const int kZoomSteps[7] = { 125, 250, 500, 1000, 2000, 4000, 8000 };
+
 void CMainWindow::UpdateStatusInfo()
 {
     if (!::IsWindow(g_hStatusBar))
@@ -445,6 +457,54 @@ void CMainWindow::UpdateStatusInfo()
     strZoom.Format(L"%d%%", toolsModel.GetZoom() / 10);
     ::SendMessageW(g_hStatusBar, SB_SETTEXT, 3, (LPARAM)(LPCWSTR)strImage);
     ::SendMessageW(g_hStatusBar, SB_SETTEXT, 4, (LPARAM)(LPCWSTR)strZoom);
+
+    if (m_hZoomSlider)
+    {
+        int pos = 3;
+        for (int i = 0; i < 7; i++)
+            if (kZoomSteps[i] == toolsModel.GetZoom())
+                pos = i;
+        ::SendMessageW(m_hZoomSlider, TBM_SETPOS, TRUE, pos);
+    }
+}
+
+void CMainWindow::PlaceZoomControls()
+{
+    if (!m_hZoomSlider || !::IsWindow(g_hStatusBar))
+        return;
+    RECT rc;
+    if (!::SendMessageW(g_hStatusBar, SB_GETRECT, 4, (LPARAM)&rc))
+        return;
+    int k = (int)LeewayDpiGetForWindow(m_hWnd);
+    int cx = MulDiv(24, k, 96), x = rc.left + MulDiv(54, k, 96), h = rc.bottom - rc.top - 2;
+    int sw = rc.right - x - 2 * cx - MulDiv(6, k, 96);
+    UINT f = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    ::SetWindowPos(m_hZoomOut, HWND_TOP, x, rc.top + 1, cx, h, f);
+    ::SetWindowPos(m_hZoomSlider, HWND_TOP, x + cx, rc.top + 1, sw > 20 ? sw : 20, h, f);
+    ::SetWindowPos(m_hZoomIn, HWND_TOP, x + cx + (sw > 20 ? sw : 20), rc.top + 1, cx, h, f);
+}
+
+void CMainWindow::StepZoom(int delta)
+{
+    int pos = 3;
+    for (int i = 0; i < 7; i++)
+        if (kZoomSteps[i] == toolsModel.GetZoom())
+            pos = i;
+    pos += delta;
+    if (pos < 0 || pos > 6)
+        return;
+    toolsModel.SetZoom(kZoomSteps[pos]);
+}
+
+LRESULT CMainWindow::OnHScroll(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    if ((HWND)lParam == m_hZoomSlider)
+    {
+        int pos = (int)::SendMessageW(m_hZoomSlider, TBM_GETPOS, 0, 0);
+        if (pos >= 0 && pos <= 6 && kZoomSteps[pos] != toolsModel.GetZoom())
+            toolsModel.SetZoom(kZoomSteps[pos]);
+    }
+    return 0;
 }
 
 LRESULT CMainWindow::OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
@@ -650,6 +710,16 @@ LRESULT CMainWindow::OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHa
     g_hStatusBar = ::CreateWindowExW(0, STATUSCLASSNAME, NULL, style, 0, 0, 0, 0, m_hWnd,
                                      NULL, g_hinstExe, NULL);
     ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, MulDiv(21, LeewayDpiGetForWindow(m_hWnd), 96), 0);
+
+    // Zoom controls laid over the status bar's last part
+    ::SetWindowSubclass(g_hStatusBar, StatusBarForwardProc, 1, (DWORD_PTR)m_hWnd);
+    m_hZoomOut = ::CreateWindowExW(0, L"BUTTON", L"\u2212", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hStatusBar,
+                                   (HMENU)(UINT_PTR)9001, g_hinstExe, NULL);
+    m_hZoomIn = ::CreateWindowExW(0, L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hStatusBar,
+                                  (HMENU)(UINT_PTR)9002, g_hinstExe, NULL);
+    m_hZoomSlider = ::CreateWindowExW(0, TRACKBAR_CLASSW, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_NOTICKS, 0, 0, 0, 0,
+                                      g_hStatusBar, (HMENU)(UINT_PTR)9003, g_hinstExe, NULL);
+    ::SendMessageW(m_hZoomSlider, TBM_SETRANGE, TRUE, MAKELONG(0, 6));
 
     // Create the tool box
     toolBoxContainer.DoCreate(m_hWnd);
@@ -880,12 +950,13 @@ LRESULT CMainWindow::OnSize(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHand
     // Parts: filler | cursor | selection size | image size | zoom
     int w = LOWORD(lParam);
     int k = (int)LeewayDpiGetForWindow(m_hWnd);
-    int test[] = { w - MulDiv(500, k, 96), w - MulDiv(380, k, 96), w - MulDiv(260, k, 96), w - MulDiv(130, k, 96), -1 };
+    int test[] = { w - MulDiv(760, k, 96), w - MulDiv(640, k, 96), w - MulDiv(520, k, 96), w - MulDiv(360, k, 96), -1 };
     if (::IsWindow(g_hStatusBar))
     {
         ::SendMessageW(g_hStatusBar, WM_SIZE, 0, 0);
         ::SendMessageW(g_hStatusBar, SB_SETPARTS, 5, (LPARAM)&test);
         UpdateStatusInfo();
+        PlaceZoomControls();
     }
     alignChildrenToMainWindow();
     return 0;
@@ -937,6 +1008,12 @@ LRESULT CMainWindow::OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
     if (canvasWindow.m_drawing && ::GetCapture())
     {
         ATLTRACE("locking!\n");
+        return 0;
+    }
+
+    if (LOWORD(wParam) == 9001 || LOWORD(wParam) == 9002)
+    {
+        StepZoom(LOWORD(wParam) == 9001 ? -1 : 1);
         return 0;
     }
 
