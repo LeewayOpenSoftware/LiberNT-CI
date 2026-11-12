@@ -3,6 +3,8 @@ on:
   push:
     branches-ignore: [main-nt10]
   pull_request:
+  # Manual restart for a branch whose push event was lost (GitHub incident of 2026-11-12).
+  workflow_dispatch:
 
 concurrency:
   group: build-${{ github.ref }}
