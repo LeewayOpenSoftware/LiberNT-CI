@@ -8,6 +8,7 @@
 #include "precomp.h"
 #include <winbase.h>
 #include <sddl.h>
+#include <aclapi.h>
 
 static DWORD
 GetTokenIntegrityRid(HANDLE Token)
@@ -98,6 +99,69 @@ TestChildProcess(PCSTR Self)
 }
 
 static VOID
+TestLabelGroup(VOID)
+{
+    BYTE Buffer[4096];
+    PTOKEN_GROUPS Groups = (PTOKEN_GROUPS)Buffer;
+    SID_IDENTIFIER_AUTHORITY LabelAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+    HANDLE Token;
+    DWORD Length, i, Labels = 0;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token))
+    {
+        skip("OpenProcessToken failed: %lu\n", GetLastError());
+        return;
+    }
+    ok(GetTokenInformation(Token, TokenGroups, Groups, sizeof(Buffer), &Length),
+       "GetTokenInformation(TokenGroups) failed: %lu\n", GetLastError());
+    CloseHandle(Token);
+
+    for (i = 0; i < Groups->GroupCount; i++)
+    {
+        if (memcmp(GetSidIdentifierAuthority(Groups->Groups[i].Sid), &LabelAuthority, sizeof(LabelAuthority)))
+            continue;
+        Labels++;
+        ok(Groups->Groups[i].Attributes == (SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED),
+           "Label group attributes 0x%lx, expected 0x60\n", Groups->Groups[i].Attributes);
+    }
+    ok(Labels == 1, "%lu label groups in the token, expected 1\n", Labels);
+}
+
+static VOID
+TestProcessObjectLabel(VOID)
+{
+    PSECURITY_DESCRIPTOR Descriptor = NULL;
+    PACL Sacl = NULL;
+    PSYSTEM_MANDATORY_LABEL_ACE Ace;
+    HANDLE Token;
+    DWORD Error, TokenRid, ObjectRid;
+    PSID Sid;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token))
+    {
+        skip("OpenProcessToken failed: %lu\n", GetLastError());
+        return;
+    }
+    TokenRid = GetTokenIntegrityRid(Token);
+    CloseHandle(Token);
+
+    Error = GetSecurityInfo(GetCurrentProcess(), SE_KERNEL_OBJECT, LABEL_SECURITY_INFORMATION,
+                            NULL, NULL, NULL, &Sacl, &Descriptor);
+    ok(Error == ERROR_SUCCESS, "GetSecurityInfo(LABEL) on the process failed: %lu\n", Error);
+    if (Error != ERROR_SUCCESS)
+        return;
+    ok(Sacl != NULL && Sacl->AceCount == 1, "The process object has no mandatory label\n");
+    if (Sacl != NULL && Sacl->AceCount == 1 && GetAce(Sacl, 0, (PVOID *)&Ace))
+    {
+        ok(Ace->Header.AceType == SYSTEM_MANDATORY_LABEL_ACE_TYPE, "ACE type %u\n", Ace->Header.AceType);
+        Sid = (PSID)&Ace->SidStart;
+        ObjectRid = *GetSidSubAuthority(Sid, *GetSidSubAuthorityCount(Sid) - 1);
+        ok(ObjectRid == TokenRid, "Process object label 0x%lx, token 0x%lx\n", ObjectRid, TokenRid);
+    }
+    LocalFree(Descriptor);
+}
+
+static VOID
 TestLabelNames(VOID)
 {
     static const struct
@@ -156,5 +220,7 @@ START_TEST(TokenIntegrityLevel)
 
     TestOwnToken();
     TestChildProcess(argv[0]);
+    TestLabelGroup();
+    TestProcessObjectLabel();
     TestLabelNames();
 }
