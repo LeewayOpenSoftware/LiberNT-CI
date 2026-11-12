@@ -1,9 +1,15 @@
 # Reproducible-build + static-safety gate for the experimental Rust kernel-driver PoC.
-# Manual only (workflow_dispatch). Builds ONLY the Rust staticlib (no kernel link), so
-# it never enables LIBERNT_ENABLE_RUST for the OS build and never touches the ISO.
+# Runs on push to leeway/exp-rust-poc (and manual dispatch). Builds ONLY the Rust
+# staticlib (no kernel link): it never enables LIBERNT_ENABLE_RUST for the OS build
+# and never touches the ISO.
 name: rust-poc-reproducible
 
 on:
+  push:
+    branches: [leeway/exp-rust-poc]
+    paths:
+      - 'tools/rust-poc/**'
+      - '.github/workflows/rust-poc-reproducible.yml'
   workflow_dispatch:
 
 permissions:
@@ -45,7 +51,7 @@ jobs:
         run: |
           echo "LLVM_BIN=$(dirname $(find $(rustc --print sysroot) -name llvm-nm | head -1))" >> "$GITHUB_ENV"
 
-      - name: Static safety checks (default build: no bugcheck on normal op)
+      - name: "Static safety checks (default build: no bugcheck on normal op)"
         run: |
           L="$RUNNER_TEMP/b1/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a"
           OBJ=$("$LLVM_BIN/llvm-ar" t "$L" | grep -i leeway | head -1)
@@ -59,7 +65,7 @@ jobs:
           if grep -iE '%ymm|%zmm|vzeroupper' dis.txt; then echo "::error::AVX found"; exit 1; fi
           echo "default build clean"
 
-      - name: Static checks (test-ioctls build: only KeBugCheckEx extern)
+      - name: "Static checks (test-ioctls build: only KeBugCheckEx extern)"
         run: |
           CARGO_TARGET_DIR="$RUNNER_TEMP/bp" cargo build --release --locked --features test-ioctls
           L="$RUNNER_TEMP/bp/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a"
