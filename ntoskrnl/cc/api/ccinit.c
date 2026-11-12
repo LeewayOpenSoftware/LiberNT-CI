@@ -237,6 +237,44 @@ CcNtNextDirtyMap(VOID)
     return NULL;
 }
 
+/* CCTRACE (test-only): name the first maps whose write-back fails, once each:
+ * file name, the volume device, the file system on it, the status. */
+static PCC_NT_MAP CcTraceLoggedMaps[8];
+static ULONG CcTraceLoggedCount;
+
+static
+VOID
+CcTraceFailedMap(
+    _In_ PCC_NT_MAP NtMap,
+    _In_ NTSTATUS Status)
+{
+    UCHAR NameBuffer[sizeof(OBJECT_NAME_INFORMATION) + 128 * sizeof(WCHAR)];
+    POBJECT_NAME_INFORMATION NameInfo = (POBJECT_NAME_INFORMATION)NameBuffer;
+    PFILE_OBJECT FileObject = NtMap->FileObject;
+    PDEVICE_OBJECT Device = FileObject != NULL ? FileObject->DeviceObject : NULL;
+    UNICODE_STRING None = RTL_CONSTANT_STRING(L"?");
+    PUNICODE_STRING FileName = &None, FsName = &None;
+    ULONG Returned, Index;
+
+    for (Index = 0; Index < CcTraceLoggedCount; Index++)
+        if (CcTraceLoggedMaps[Index] == NtMap)
+            return;
+    if (CcTraceLoggedCount >= RTL_NUMBER_OF(CcTraceLoggedMaps))
+        return;
+    CcTraceLoggedMaps[CcTraceLoggedCount++] = NtMap;
+
+    if (FileObject != NULL && FileObject->FileName.Buffer != NULL)
+        FileName = &FileObject->FileName;
+    if (Device != NULL && Device->Vpb != NULL && Device->Vpb->DeviceObject != NULL)
+        FsName = &Device->Vpb->DeviceObject->DriverObject->DriverName;
+    if (Device == NULL ||
+        !NT_SUCCESS(ObQueryNameString(Device, NameInfo, sizeof(NameBuffer), &Returned)))
+        NameInfo->Name = None;
+
+    DPRINT1("CCTRACE map %p file '%wZ' on %wZ fs %wZ write-back status 0x%08lx alloc %I64d\n",
+            NtMap, FileName, &NameInfo->Name, FsName, Status, NtMap->AllocationSize.QuadPart);
+}
+
 /* Writes back up to MaximumPages of one map with the file system's lazy-write
  * lock held, and returns how many pages reached the file system. */
 static
@@ -254,7 +292,10 @@ CcNtLazyFlushMap(
     if (NtMap->Callbacks.AcquireForLazyWrite == NULL ||
         NtMap->Callbacks.AcquireForLazyWrite(NtMap->LazyWriteContext, Wait))
     {
-        CcNtFlushMap(NtMap, 0, (ULONG64)-1, MaximumPages, &Flushed);
+        NTSTATUS Status = CcNtFlushMap(NtMap, 0, (ULONG64)-1, MaximumPages, &Flushed);
+
+        if (!NT_SUCCESS(Status))
+            CcTraceFailedMap(NtMap, Status);
 
         if (NtMap->Callbacks.ReleaseFromLazyWrite != NULL)
             NtMap->Callbacks.ReleaseFromLazyWrite(NtMap->LazyWriteContext);

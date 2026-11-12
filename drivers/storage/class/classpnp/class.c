@@ -3759,6 +3759,47 @@ Return Value:
 }
 
 
+/* CCTRACE (test-only): the first failed WRITE per disk, once: CDB opcode and FUA bit,
+ * LBA, SRB and SCSI status, sense key/ASC/ASCQ, the NTSTATUS it maps to, retry. */
+static PDEVICE_OBJECT ClasspTraceLoggedFdos[4];
+static ULONG ClasspTraceLoggedCount;
+
+static
+VOID
+ClasspTraceWriteFailure(
+    _In_ PDEVICE_OBJECT Fdo,
+    _In_ PSCSI_REQUEST_BLOCK Srb,
+    _In_ NTSTATUS Status,
+    _In_ BOOLEAN Retry)
+{
+    PUCHAR Cdb = (PUCHAR)SrbGetCdb(Srb);
+    PSENSE_DATA Sense = (PSENSE_DATA)SrbGetSenseInfoBuffer(Srb);
+    ULONG Index, Lba = 0;
+    UCHAR Key = 0xff, Asc = 0xff, Ascq = 0xff;
+
+    if (Cdb == NULL || (Cdb[0] != SCSIOP_WRITE && Cdb[0] != SCSIOP_WRITE16))
+        return;
+    for (Index = 0; Index < ClasspTraceLoggedCount; Index++)
+        if (ClasspTraceLoggedFdos[Index] == Fdo)
+            return;
+    if (ClasspTraceLoggedCount >= RTL_NUMBER_OF(ClasspTraceLoggedFdos))
+        return;
+    ClasspTraceLoggedFdos[ClasspTraceLoggedCount++] = Fdo;
+
+    if (Cdb[0] == SCSIOP_WRITE)
+        Lba = ((ULONG)Cdb[2] << 24) | ((ULONG)Cdb[3] << 16) | ((ULONG)Cdb[4] << 8) | Cdb[5];
+    if ((Srb->SrbStatus & SRB_STATUS_AUTOSENSE_VALID) && Sense != NULL &&
+        SrbGetSenseInfoBufferLength(Srb) >= sizeof(SENSE_DATA))
+    {
+        Key = Sense->SenseKey;
+        Asc = Sense->AdditionalSenseCode;
+        Ascq = Sense->AdditionalSenseCodeQualifier;
+    }
+    DbgPrint("CCTRACE classpnp fdo %p WRITE op 0x%02x fua %d lba %lu srbstatus 0x%02x scsistatus 0x%02x sense %02x/%02x/%02x -> status 0x%08lx retry %d\n",
+             Fdo, Cdb[0], (Cdb[1] & 0x08) != 0, Lba, Srb->SrbStatus, SrbGetScsiStatus(Srb),
+             Key, Asc, Ascq, Status, Retry);
+}
+
 /*++////////////////////////////////////////////////////////////////////////////
 
 ClassIoComplete()
@@ -3850,6 +3891,8 @@ ClassIoComplete(
                 ((ULONG)(ULONG_PTR)irpStack->Parameters.Others.Argument4),
             &status,
             &retryInterval);
+
+        ClasspTraceWriteFailure(Fdo, srb, status, retry);
 
         //
         // For Persistent Reserve requests, make sure user gets back partial data.

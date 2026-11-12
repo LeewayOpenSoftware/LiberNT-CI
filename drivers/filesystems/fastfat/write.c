@@ -218,6 +218,36 @@ Return Value:
 
 
 _Requires_lock_held_(_Global_critical_region_)
+/* CCTRACE (test-only): the first non-cached write that fails, once per file. */
+static PVOID FatTraceLoggedFcbs[8];
+static ULONG FatTraceLoggedCount;
+
+static
+VOID
+FatTraceWriteFailure(
+    _In_ PFCB Fcb,
+    _In_ PIRP Irp,
+    _In_ ULONGLONG Vbo,
+    _In_ ULONG Bytes,
+    _In_ NTSTATUS Status)
+{
+    PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
+    ULONG Index;
+
+    for (Index = 0; Index < FatTraceLoggedCount; Index++)
+        if (FatTraceLoggedFcbs[Index] == Fcb)
+            return;
+    if (FatTraceLoggedCount >= RTL_NUMBER_OF(FatTraceLoggedFcbs))
+        return;
+    FatTraceLoggedFcbs[FatTraceLoggedCount++] = Fcb;
+
+    DbgPrint("CCTRACE fastfat write fcb %p '%wZ' vbo 0x%I64x len 0x%lx paging %d write-through %d status 0x%08lx\n",
+             Fcb, &Fcb->FullFileName, Vbo, Bytes,
+             FlagOn(Irp->Flags, IRP_PAGING_IO) != 0,
+             (FlagOn(IrpSp->Flags, SL_WRITE_THROUGH) || FlagOn(IrpSp->FileObject->Flags, FO_WRITE_THROUGH)) != 0,
+             Status);
+}
+
 NTSTATUS
 FatCommonWrite (
     IN PIRP_CONTEXT IrpContext,
@@ -2302,6 +2332,7 @@ Return Value:
 
                 if (!NT_SUCCESS( Status = Irp->IoStatus.Status )) {
 
+                    FatTraceWriteFailure( FcbOrDcb, Irp, StartingVbo, BytesToWrite, Status );
                     FatNormalizeAndRaiseStatus( IrpContext, Status );
 
                 } else {
@@ -2679,6 +2710,7 @@ Return Value:
 
             if (!NT_SUCCESS( Status = Irp->IoStatus.Status )) {
 
+                FatTraceWriteFailure( FcbOrDcb, Irp, StartingVbo, ByteCount, Status );
                 FatNormalizeAndRaiseStatus( IrpContext, Status );
             }
 
