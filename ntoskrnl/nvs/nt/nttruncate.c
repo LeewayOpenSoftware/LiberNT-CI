@@ -39,7 +39,7 @@ MmCanFileBeTruncated(
     }
 
     if (Allowed && NewFileSize != NULL)
-        MiSegmentPurge(Control->Segment, (ULONG64)NewFileSize->QuadPart, 0);
+        MiSegmentPurge(Control->Segment, (ULONG64)NewFileSize->QuadPart, 0, TRUE);
 
     MiDereferenceControlArea(Control);
     return Allowed;

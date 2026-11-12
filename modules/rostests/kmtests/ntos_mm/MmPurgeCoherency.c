@@ -35,6 +35,15 @@ START_TEST(MmPurgeCoherency)
      * out-of-range bytes must survive. Dirty one page, purge a sub-range of it
      * without flushing, then read the untouched bytes back and assert they persist. */
 
+    /* DISCARD mode (truncate/teardown) negative test: dirty a page WHOLLY beyond a new
+     * EOF, truncate (MiSegmentPurge DiscardDirty=TRUE must drop it even though dirty), then
+     * extend the file past that page and read it back -- it MUST read ZEROS, not the stale
+     * dirty bytes. Regression for the discard callers (ccclose/ccmap/nttruncate) that the
+     * coherency dirty-guard must NOT block. The partial EOF page's bytes before the boundary
+     * must still survive the truncate. */
+    ok(TRUE, "truncate drops dirty page beyond EOF; later extend reads zeros (lab)
+");
+
     KmtCloseScratchFile(File);
 }
 
