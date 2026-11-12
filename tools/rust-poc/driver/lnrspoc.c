@@ -1,9 +1,10 @@
 /*
- * lnrspoc.sys - Leeway experimental Rust kernel-driver PoC host (v1).
+ * lnrspoc.sys - Leeway experimental Rust kernel-driver PoC host (v2).
  *
  * A minimal WDM driver whose only job is to exercise the Rust staticlib
  * (leeway_rs_poc) across a C ABI. EXPERIMENTAL, off by default, never placed on
- * installation media. ntoskrnl is not touched.
+ * installation media. ntoskrnl is not touched. v2 adds pool-allocator and SpinLock
+ * exercisers (IOCTLs 0x802-0x805), all on the non-bugcheck path.
  *
  * Normal operation never bugchecks: DriverEntry runs a self-test on a known-good
  * record and logs the result; IOCTL_LNRSPOC_VALIDATE forwards a caller buffer to the
@@ -25,6 +26,16 @@
 #define IOCTL_LNRSPOC_FORCE_PANIC \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #endif
+/* v2 exercisers (always present; safe, non-destructive). Input (where used): one ULONG
+ * iteration count. Output: one LONG result code (0 = PASS, negative = failure). */
+#define IOCTL_LNRSPOC_ALLOC_STRESS \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_LNRSPOC_LOCK_STRESS \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x803, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_LNRSPOC_OOM_PROBE \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_LNRSPOC_V2_SELFTEST \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
@@ -36,7 +47,13 @@ LnrspocSelfTest(VOID)
     unsigned char rec[8] = { 0x04, 0x00, 0x00, 0x00, 't', 'e', 's', 't' };
     unsigned long crc = 0;
     int rc = leeway_rs_poc_validate(rec, sizeof(rec), &crc);
+    int v2;
     DbgPrint("lnrspoc: self-test validate rc=%d crc=0x%08lx\n", rc, crc);
+
+    /* v2 self-test: exercise the pool allocator and SpinLock once at load. This stays
+     * on the non-bugcheck path (allocation/lock failure is returned, never trapped). */
+    v2 = leeway_rs_poc_v2_selftest();
+    DbgPrint("lnrspoc: v2 self-test (pool+spinlock) rc=%d\n", v2);
 }
 
 static NTSTATUS
@@ -86,6 +103,50 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             /* Expected, non-fatal: malformed input. Map to a status, never fault. */
             status = STATUS_DATA_ERROR;
         }
+        break;
+    }
+    case IOCTL_LNRSPOC_ALLOC_STRESS:
+    case IOCTL_LNRSPOC_LOCK_STRESS:
+    case IOCTL_LNRSPOC_OOM_PROBE:
+    case IOCTL_LNRSPOC_V2_SELFTEST:
+    {
+        /* All four return a LONG result in the output buffer (0 = PASS). The two stress
+         * IOCTLs read a ULONG iteration count from the input buffer. None can bugcheck. */
+        unsigned long *in = (unsigned long *)Irp->AssociatedIrp.SystemBuffer;
+        ULONG inLen = sp->Parameters.DeviceIoControl.InputBufferLength;
+        ULONG outLen = sp->Parameters.DeviceIoControl.OutputBufferLength;
+        ULONG code = sp->Parameters.DeviceIoControl.IoControlCode;
+        unsigned long iters = 0;
+        int rc;
+
+        if (Irp->AssociatedIrp.SystemBuffer == NULL || outLen < sizeof(int))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        if (code == IOCTL_LNRSPOC_ALLOC_STRESS || code == IOCTL_LNRSPOC_LOCK_STRESS)
+        {
+            if (inLen < sizeof(unsigned long))
+            {
+                status = STATUS_BUFFER_TOO_SMALL;
+                break;
+            }
+            iters = *in;
+        }
+
+        if (code == IOCTL_LNRSPOC_ALLOC_STRESS)
+            rc = leeway_rs_poc_alloc_stress(iters);
+        else if (code == IOCTL_LNRSPOC_LOCK_STRESS)
+            rc = leeway_rs_poc_lock_stress(iters);
+        else if (code == IOCTL_LNRSPOC_OOM_PROBE)
+            rc = leeway_rs_poc_oom_probe();
+        else
+            rc = leeway_rs_poc_v2_selftest();
+
+        DbgPrint("lnrspoc: v2 ioctl 0x%lx -> rc=%d\n", code, rc);
+        *(int *)Irp->AssociatedIrp.SystemBuffer = rc;
+        info = sizeof(int);
+        status = STATUS_SUCCESS;
         break;
     }
 #ifdef LNRSPOC_TEST_IOCTLS
@@ -147,6 +208,6 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     DriverObject->DriverUnload = LnrspocUnload;
 
     LnrspocSelfTest();
-    DbgPrint("lnrspoc: loaded (Rust PoC v1)\n");
+    DbgPrint("lnrspoc: loaded (Rust PoC v2: pool allocator + SpinLock)\n");
     return STATUS_SUCCESS;
 }
