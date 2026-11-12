@@ -658,6 +658,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     PDEVICE_INFORMATION DeviceInformation = ((PRECONCILE_WORK_ITEM_CONTEXT)Parameter)->DeviceInformation;
     DEVICE_INFORMATION Snapshot;
     NTSTATUS DatabaseResult = STATUS_PENDING;
+    DPRINT1("MMCOUNT worker %wZ\n", &DeviceInformation->DeviceName);
 
     /* We're unloading, do nothing */
     if (Unloading)

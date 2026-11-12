@@ -239,6 +239,7 @@ MountMgrTargetDeviceNotification(IN PVOID NotificationStructure,
             if (DeviceInformation->NeedsReconcile)
             {
                 DeviceInformation->NeedsReconcile = FALSE;
+                DPRINT1("MMCOUNT caller notify.c:242 %wZ\n", &DeviceInformation->DeviceName);
                 ReconcileThisDatabaseWithMaster(DeviceExtension, DeviceInformation);
             }
         }
