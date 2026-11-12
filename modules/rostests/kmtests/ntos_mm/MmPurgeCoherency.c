@@ -317,7 +317,9 @@ TestVolume(
     TestRange(Cached, NonCached, 0,                           PAGE_SIZE + PC_SECTOR, 0x4D, TRUE);
     TestRange(Cached, NonCached, 2 * PAGE_SIZE + PC_SECTOR,   PAGE_SIZE - PC_SECTOR, 0x5E, TRUE);
 
+    trace("Volume %S: purge ranges done, truncate-discard case next\n", Directory);
     TestTruncateDiscard(Cached, NonCached);
+    trace("Volume %S: done\n", Directory);
 
     ZwClose(NonCached);
     ZwClose(Cached);
