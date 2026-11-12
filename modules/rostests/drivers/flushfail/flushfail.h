@@ -23,6 +23,11 @@
 #define IOCTL_FLUSHFAIL_STATS \
     CTL_CODE(FILE_DEVICE_FLUSHFAIL, 0x801, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+/* Input: ULONG, nonzero = from now on every IRP_MJ_WRITE below the filtered
+ * volume completes with STATUS_DEVICE_DATA_ERROR (a disk whose writes fail). */
+#define IOCTL_FLUSHFAIL_WRITEFAIL \
+    CTL_CODE(FILE_DEVICE_FLUSHFAIL, 0x802, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 typedef struct _FLUSHFAIL_STATS
 {
     ULONG Attached;          /* 1 once a volume is filtered */
@@ -30,4 +35,5 @@ typedef struct _FLUSHFAIL_STATS
     ULONG CacheQueriesFaked; /* StorageDeviceWriteCacheProperty / IOCTL_DISK_GET_CACHE_INFORMATION answers rewritten */
     ULONG WritesSeen;        /* IRP_MJ_WRITE passed through */
     ULONG WriteThroughSeen;  /* of those, with SL_WRITE_THROUGH (FUA requested although not advertised) */
+    ULONG WritesRejected;    /* IRP_MJ_WRITE completed with STATUS_DEVICE_DATA_ERROR (writefail mode) */
 } FLUSHFAIL_STATS, *PFLUSHFAIL_STATS;

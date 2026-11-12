@@ -9,6 +9,7 @@
  *
  *              What it changes for the file system mounted through it:
  *              - IRP_MJ_FLUSH_BUFFERS completes with STATUS_INVALID_DEVICE_REQUEST
+ *              - in writefail mode, IRP_MJ_WRITE completes with STATUS_DEVICE_DATA_ERROR
  *              - IOCTL_STORAGE_QUERY_PROPERTY(StorageDeviceWriteCacheProperty)
  *                answers write cache enabled, write-back, FUA not supported,
  *                flush not supported
@@ -35,6 +36,8 @@ typedef struct _FLUSHFAIL_EXTENSION
 
 static PDEVICE_OBJECT FlushFailControlDevice;
 static FLUSHFAIL_STATS FlushFailStats;
+/* writefail mode: writes below the filtered volume fail (IOCTL_FLUSHFAIL_WRITEFAIL). */
+static volatile LONG FlushFailWriteFail;
 
 static
 NTSTATUS
@@ -110,6 +113,11 @@ FlushFailFilterDispatch(_In_ PFLUSHFAIL_EXTENSION Ext, _In_ PIRP Irp)
             InterlockedIncrement((PLONG)&FlushFailStats.WritesSeen);
             if (IrpSp->Flags & SL_WRITE_THROUGH)
                 InterlockedIncrement((PLONG)&FlushFailStats.WriteThroughSeen);
+            if (FlushFailWriteFail)
+            {
+                InterlockedIncrement((PLONG)&FlushFailStats.WritesRejected);
+                return FlushFailComplete(Irp, STATUS_DEVICE_DATA_ERROR, 0);
+            }
             return FlushFailPassThrough(Ext, Irp);
 
         case IRP_MJ_DEVICE_CONTROL:
@@ -236,6 +244,13 @@ FlushFailControlDispatch(_In_ PDEVICE_OBJECT DeviceObject, _In_ PIRP Irp)
             {
                 case IOCTL_FLUSHFAIL_ATTACH:
                     return FlushFailComplete(Irp, FlushFailAttach(DeviceObject->DriverObject, Irp), 0);
+
+                case IOCTL_FLUSHFAIL_WRITEFAIL:
+                    if (IrpSp->Parameters.DeviceIoControl.InputBufferLength < sizeof(ULONG))
+                        return FlushFailComplete(Irp, STATUS_BUFFER_TOO_SMALL, 0);
+                    InterlockedExchange(&FlushFailWriteFail, *(PULONG)Irp->AssociatedIrp.SystemBuffer != 0);
+                    DbgPrint("flushfail: writefail %s\n", FlushFailWriteFail ? "on: every write below the volume fails" : "off");
+                    return FlushFailComplete(Irp, STATUS_SUCCESS, 0);
 
                 case IOCTL_FLUSHFAIL_STATS:
                     if (IrpSp->Parameters.DeviceIoControl.OutputBufferLength < sizeof(FLUSHFAIL_STATS))

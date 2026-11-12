@@ -113,6 +113,27 @@ DoAttach(const wchar_t *Drive)
 
 static
 int
+DoWriteFail(BOOL Enable)
+{
+    HANDLE Control;
+    DWORD Returned;
+    ULONG Value = Enable ? 1 : 0;
+
+    Control = OpenControl();
+    if (Control == INVALID_HANDLE_VALUE)
+        return Fail(L"opening the control device");
+    if (!DeviceIoControl(Control, IOCTL_FLUSHFAIL_WRITEFAIL, &Value, sizeof(Value), NULL, 0, &Returned, NULL))
+    {
+        CloseHandle(Control);
+        return Fail(L"IOCTL_FLUSHFAIL_WRITEFAIL");
+    }
+    CloseHandle(Control);
+    wprintf(L"flushfail: writefail %s\n", Enable ? L"on" : L"off");
+    return 0;
+}
+
+static
+int
 DoStats(void)
 {
     FLUSHFAIL_STATS Stats;
@@ -129,9 +150,9 @@ DoStats(void)
     }
     CloseHandle(Control);
     wprintf(L"flushfail stats: attached %lu, flushes rejected %lu, cache queries faked %lu, "
-            L"writes %lu, write-through writes %lu\n",
+            L"writes %lu, write-through writes %lu, writes rejected %lu\n",
             Stats.Attached, Stats.FlushesRejected, Stats.CacheQueriesFaked,
-            Stats.WritesSeen, Stats.WriteThroughSeen);
+            Stats.WritesSeen, Stats.WriteThroughSeen, Stats.WritesRejected);
     return 0;
 }
 
@@ -142,6 +163,8 @@ wmain(int argc, wchar_t *argv[])
         return DoAttach(argv[2]);
     if (argc == 2 && _wcsicmp(argv[1], L"stats") == 0)
         return DoStats();
-    wprintf(L"usage: flushfail attach <drive>:  |  flushfail stats\n");
+    if (argc == 3 && _wcsicmp(argv[1], L"writefail") == 0 && (_wcsicmp(argv[2], L"on") == 0 || _wcsicmp(argv[2], L"off") == 0))
+        return DoWriteFail(_wcsicmp(argv[2], L"on") == 0);
+    wprintf(L"usage: flushfail attach <drive>:  |  flushfail writefail on|off  |  flushfail stats\n");
     return 1;
 }
