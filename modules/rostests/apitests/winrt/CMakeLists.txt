@@ -3,6 +3,7 @@ list(APPEND SOURCE
     AppInstallManager.c
     guid.c
     NotificationData.c
+    PackageManager.c
     PenDevice.c
     shortcut.c
     ToastHistory.c

@@ -258,6 +258,7 @@ windows.gaming.input.dll
 windows.gaming.ui.gamebar.dll
 windows.globalization.dll
 windows.graphics.dll
+windows.management.deployment.dll
 windows.media.dll
 windows.media.devices.dll
 windows.media.mediacontrol.dll
