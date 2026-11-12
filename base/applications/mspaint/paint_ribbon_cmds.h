@@ -129,7 +129,6 @@ static const LeewayUICommand g_paintCommands[] = {
     { 371,                          L"Color 2",                 L"Background color",    L"C2",  0, TRUE, FALSE, TRUE },
     { 372,                          L"Palette",                 L"Palette",             L"PA",  0, TRUE, FALSE, TRUE },
 
-    { 381,                          L"Rulers",                  L"Show rulers",         L"R",   0, TRUE, FALSE, TRUE },
 
     { 390,                          L"Font family",             L"Select font",         L"FF",  0, TRUE, FALSE, TRUE },
     { 391,                          L"Font size",               L"Select font size",    L"FS",  0, TRUE, FALSE, TRUE },
@@ -228,7 +227,6 @@ static const LeewayUIPlacement g_viewZoomPlacement[] = {
 };
 
 static const LeewayUIPlacement g_viewShowPlacement[] = {
-    { 381,                 LWUI_CONTROL_CHECKBOX, L"R", 0 },
     { IDM_VIEWSHOWGRID,    LWUI_CONTROL_CHECKBOX, L"G", 0 },
     { IDM_VIEWSTATUSBAR,   LWUI_CONTROL_CHECKBOX, L"S", 0 },
 };
@@ -315,7 +313,6 @@ static const UINT32 g_paintAppMenuIds[] = {
     IDM_FILESAVE,
     IDM_FILESAVEAS,
     IDM_FILEPRINT,
-    IDM_FILEFROMSCANNERORCAMERA,
     IDM_FILESEND,
     IDM_FILEASWALLPAPERPLANE,
     IDM_IMAGEATTRIBUTES,
@@ -358,7 +355,7 @@ static const LeewayUICollectionItem g_paintPasteItems[] = {
 
 static const LeewayUICollectionItem g_paintSelectItems[] = {
     { ID_RECTSEL, L"Rectangular selection", 0, LWUI_COLOR_NONE, 0 }, { ID_FREESEL, L"Free-form selection", 0, LWUI_COLOR_NONE, 0 },
-    { IDM_EDITSELECTALL, L"Select all", 0, LWUI_COLOR_NONE, 0 }, { IDM_EDITINVERTSELECTION, L"Invert selection", 0, LWUI_COLOR_NONE, 0 },
+    { IDM_EDITSELECTALL, L"Select all", 0, LWUI_COLOR_NONE, 0 },
     { IDM_EDITDELETESELECTION, L"Delete", 0, LWUI_COLOR_NONE, 0 }, { IDM_IMAGEDRAWOPAQUE, L"Transparent selection", 0, LWUI_COLOR_NONE, 0 },
 };
 
@@ -374,9 +371,8 @@ static const LeewayUICollectionItem g_paintZoomItems[] = {
 
 static const LeewayUICollectionItem g_paintBrushItems[] = {
     { ID_BRUSH, L"Brush", 0, LWUI_COLOR_NONE, 0 }, { ID_AIRBRUSH, L"Airbrush", 0, LWUI_COLOR_NONE, 0 },
-    { 321, L"Calligraphy 1", 0, LWUI_COLOR_NONE, 0 }, { 322, L"Calligraphy 2", 0, LWUI_COLOR_NONE, 0 },
-    { 323, L"Oil brush", 0, LWUI_COLOR_NONE, 0 }, { 324, L"Crayon", 0, LWUI_COLOR_NONE, 0 },
-    { 325, L"Marker", 0, LWUI_COLOR_NONE, 0 }, { 326, L"Watercolor", 0, LWUI_COLOR_NONE, 0 },
+    { 321, L"Square brush", 0, LWUI_COLOR_NONE, 0 }, { 322, L"Calligraphy 1", 0, LWUI_COLOR_NONE, 0 },
+    { 323, L"Calligraphy 2", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintShapeItems[] = {
@@ -385,7 +381,7 @@ static const LeewayUICollectionItem g_paintShapeItems[] = {
 };
 
 static const LeewayUICollectionItem g_paintOutlineItems[] = {
-    { 347, L"No outline", 0, LWUI_COLOR_NONE, 0 }, { 348, L"Solid color", 0, LWUI_COLOR_NONE, 0 }, { 349, L"Dashed", 0, LWUI_COLOR_NONE, 0 },
+    { 347, L"No outline", 0, LWUI_COLOR_NONE, 0 }, { 348, L"Solid color", 0, LWUI_COLOR_NONE, 0 },
 };
 
 static const LeewayUICollectionItem g_paintFillItems[] = {

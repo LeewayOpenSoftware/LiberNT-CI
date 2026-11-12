@@ -10,20 +10,24 @@ OUT="$HERE/out"; mkdir -p "$OUT/obj"
 LWUI="$ROOT/sdk/lib/leewayui"
 CXX=${CXX:-clang++}
 INC="-I$MP -I$HERE/shim -I$ROOT/sdk/lib/atl -I$ROOT/sdk/include -I$ROOT/sdk/include/reactos -I$LWUI"
-FL="-std=gnu++17 -O2 -fms-extensions -fexceptions -include $HERE/shim/compat.h -DUNICODE -D_UNICODE -DINITGUID -D__REACTOS__ -DLANGUAGE_EN_US -D_WIN32_WINNT=0x0A00 -Wno-everything $CXXFLAGS_EXTRA"
+FL="-std=gnu++17 -O2 -fms-extensions -fexceptions -include $HERE/shim/compat.h -DUNICODE -D_UNICODE -DINITGUID -D__REACTOS__ -DLANGUAGE_EN_US -D_WIN32_WINNT=0x0A00 -Wno-everything -Werror=return-type $CXXFLAGS_EXTRA"
 SRCS="canvas dialogs dib drawing fullscreen history main miniature mouse paint_ribbon palette palettemodel registry selectionmodel sizebox textedit toolbox toolsettings toolsmodel"
 OBJS=""
+PIDS=""
 for s in $SRCS; do
   $CXX $FL $INC -c "$MP/$s.cpp" -o "$OUT/obj/$s.o" &
+  PIDS="$PIDS $!"
   OBJS="$OBJS $OUT/obj/$s.o"
-  [ "$(jobs -r | wc -l)" -ge 3 ] && wait -n
+  [ "$(jobs -r | wc -l)" -ge 3 ] && { wait -n || FAIL=1; }
 done
 for s in ribbon frame dpi theme; do
   $CXX $FL $INC -c "$LWUI/$s.cpp" -o "$OUT/obj/lw_$s.o" &
+  PIDS="$PIDS $!"
   OBJS="$OBJS $OUT/obj/lw_$s.o"
-  [ "$(jobs -r | wc -l)" -ge 3 ] && wait -n
+  [ "$(jobs -r | wc -l)" -ge 3 ] && { wait -n || FAIL=1; }
 done
-wait
+for p in $PIDS; do wait $p || FAIL=1; done
+[ -z "$FAIL" ] || { echo COMPILE FAILED; exit 1; }
 # resources: strip ReactOS-only includes into a generated rc
 MPW="$(cd "$MP" && pwd -W)"
 sed -e 's#<winuser.rh>#<winuser.h>#' -e '/reactos\/version.rc/d' -e "s#\"img/#\"$MPW/img/#g" -e "s#\"lang/#\"$MPW/lang/#g" -e "s#\"mspaint.exe.manifest\"#\"$MPW/mspaint.exe.manifest\"#" "$MP/rsrc.rc" > "$OUT/rsrc_gen.rc"

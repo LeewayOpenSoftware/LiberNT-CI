@@ -10,6 +10,8 @@
 
 #include "paint_ribbon_api.h"
 
+#define WM_RIBBONREFRESH (WM_APP + 21)
+
 class CMainWindow : public CWindowImpl<CMainWindow>
 {
 public:
@@ -27,6 +29,7 @@ public:
         MESSAGE_HANDLER(WM_SYSCOLORCHANGE, OnSysColorChange)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
         MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
+        MESSAGE_HANDLER(WM_RIBBONREFRESH, OnRibbonRefresh)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
     END_MSG_MAP()
 
@@ -41,10 +44,12 @@ public:
     BOOL CanRedo() const;
     BOOL CanPaste() const;
     void InvalidateRibbon();
+    void SaveAsFormat(PCWSTR pszExt);
 
 private:
     HMENU m_hMenu;
     ILeewayRibbon *m_pRibbon;
+    BOOL m_bRibbonDirty = FALSE;
 
     LRESULT OnDropFiles(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -57,6 +62,7 @@ private:
     LRESULT OnSysColorChange(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnNotify(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnMouseWheel(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 
     void alignChildrenToMainWindow();

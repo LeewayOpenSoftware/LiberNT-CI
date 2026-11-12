@@ -414,8 +414,36 @@ void CMainWindow::alignChildrenToMainWindow()
 
 void CMainWindow::InvalidateRibbon()
 {
+    // Coalesce: models notify very often while drawing
+    if (m_pRibbon && !m_bRibbonDirty && ::IsWindow(m_hWnd))
+    {
+        m_bRibbonDirty = TRUE;
+        PostMessage(WM_RIBBONREFRESH);
+    }
+}
+
+LRESULT CMainWindow::OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    m_bRibbonDirty = FALSE;
     if (m_pRibbon)
+    {
+        LeewayRibbonSetContext(m_pRibbon, L"IsTextTool", toolsModel.GetActiveTool() == TOOL_TEXT);
         PaintRibbonInvalidateAll(m_pRibbon);
+    }
+    return 0;
+}
+
+void CMainWindow::SaveAsFormat(PCWSTR pszExt)
+{
+    if (!g_isAFile)
+    {
+        // No file name yet: the Save As dialog picks the name and the format
+        saveImage(FALSE);
+        return;
+    }
+    canvasWindow.OnEndDraw(FALSE);
+    PathRenameExtensionW(g_szFileName, pszExt);
+    imageModel.SaveImage(g_szFileName);
 }
 
 LRESULT CMainWindow::OnNotify(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)

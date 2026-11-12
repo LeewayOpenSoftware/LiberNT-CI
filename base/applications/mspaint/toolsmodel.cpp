@@ -313,6 +313,7 @@ void ToolsModel::NotifyToolChanged()
         fontsDialog.SendMessage(WM_TOOLSMODELTOOLCHANGED, m_activeTool);
     if (textEditWindow.IsWindow())
         textEditWindow.SendMessage(WM_TOOLSMODELTOOLCHANGED, m_activeTool);
+    mainWindow.InvalidateRibbon();
 }
 
 void ToolsModel::NotifyToolSettingsChanged()
@@ -321,6 +322,7 @@ void ToolsModel::NotifyToolSettingsChanged()
         toolSettingsWindow.SendMessage(WM_TOOLSMODELSETTINGSCHANGED);
     if (textEditWindow.IsWindow())
         textEditWindow.SendMessage(WM_TOOLSMODELSETTINGSCHANGED);
+    mainWindow.InvalidateRibbon();
 }
 
 void ToolsModel::NotifyZoomChanged()
@@ -331,6 +333,7 @@ void ToolsModel::NotifyZoomChanged()
         textEditWindow.SendMessage(WM_TOOLSMODELZOOMCHANGED);
     if (canvasWindow.IsWindow())
         canvasWindow.SendMessage(WM_TOOLSMODELZOOMCHANGED);
+    mainWindow.InvalidateRibbon();
 }
 
 void ToolsModel::resetTool()
