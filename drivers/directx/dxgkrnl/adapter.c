@@ -606,7 +606,7 @@ DxgkpPciHeaderAccess(
     ULONG Done;
     PBUS_INTERFACE_STANDARD Bus;
 
-    if (Adapter->PciBusInterfaceValid)
+    if (Adapter != NULL && Adapter->PciBusInterfaceValid)
         Bus = &Adapter->PciBusInterface;
     else if (g_K2PciBusValid)
         Bus = &g_K2PciBus;
@@ -670,11 +670,6 @@ DxgkpK2PciProbe(
     UCHAR Now[0x40];
     PDXGKRNL_ADAPTER Adapter = g_K2PciProbeAdapter;
 
-    if (Adapter == NULL)
-    {
-        DXGKRNL_INFO("K2PCI: probe %s: no adapter\n", Tag);
-        return;
-    }
     RtlZeroMemory(Now, sizeof(Now));
     if (!DxgkpPciHeaderAccess(Adapter, Now, 0, sizeof(Now), FALSE))
     {
