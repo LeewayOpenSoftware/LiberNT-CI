@@ -19,6 +19,7 @@
 #include <leewayui/aureline_icons.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 /* ---- command ids (WordPad-shaped, arbitrary for the demo) ---- */
 enum {
@@ -265,6 +266,7 @@ static void SaveScreenRectBmp(HWND hwnd, const WCHAR *path)
 static int g_themePref = -1;
 static const WCHAR *g_shot;
 static const WCHAR *g_openSurface; /* "appmenu" | "textcolor" | NULL */
+static int g_width = 1000;          /* --width <px>: narrow it to force the band overflow chevron */
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
@@ -336,6 +338,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR cmd, int show)
     for (int i = 1; i < argc; i++) {
         if (!wcscmp(argv[i], L"--shot") && i + 1 < argc) g_shot = argv[++i];
         else if (!wcscmp(argv[i], L"--surface") && i + 1 < argc) g_openSurface = argv[++i];
+        else if (!wcscmp(argv[i], L"--width") && i + 1 < argc) g_width = _wtoi(argv[++i]);
         else if (!wcscmp(argv[i], L"--theme") && i + 1 < argc) {
             const WCHAR *t = argv[++i];
             if (!wcscmp(t, L"light")) g_themePref = LEEWAY_THEME_PREF_LIGHT;
@@ -351,7 +354,7 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR cmd, int show)
     wc.lpszClassName = L"RibbonDemoMain";
     RegisterClassW(&wc);
     HWND hwnd = CreateWindowW(wc.lpszClassName, L"LeewayUI ribbon-f2 demo (WordPad shape)",
-                              WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 1000, 640,
+                              WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, g_width, 640,
                               0, 0, hi, 0);
     ShowWindow(hwnd, g_shot ? SW_SHOW : show);
     UpdateWindow(hwnd);
@@ -359,7 +362,25 @@ int WINAPI wWinMain(HINSTANCE hi, HINSTANCE, LPWSTR cmd, int show)
     if (g_shot) {
         auto pump = [](){ MSG m; while (PeekMessage(&m, 0, 0, 0, PM_REMOVE)) { TranslateMessage(&m); DispatchMessage(&m); } };
         for (int i = 0; i < 6; i++) { pump(); Sleep(120); }
-        if (g_openSurface && !wcscmp(g_openSurface, L"appmenu") && g_ribbon) {
+        if (g_openSurface && !wcscmp(g_openSurface, L"overflow") && g_ribbon) {
+            HWND rb = LeewayRibbonGetHWND(g_ribbon);
+            RECT rc; GetClientRect(rb, &rc);
+            HWND pop = NULL;
+            for (int dx = 8; dx <= 30 && !pop; dx += 6) {
+                int cx = rc.right - dx;
+                for (int cy = 52; cy <= 150 && !pop; cy += 6) {
+                    LPARAM pt = MAKELPARAM(cx, cy);
+                    SendMessage(rb, WM_LBUTTONDOWN, MK_LBUTTON, pt);
+                    SendMessage(rb, WM_LBUTTONUP, 0, pt);
+                    pump();
+                    pop = FindWindowW(L"LeewayUIRibbonPopup", NULL);
+                }
+            }
+            for (int i = 0; i < 4; i++) { pump(); Sleep(60); }
+            if (!pop) pop = FindWindowW(L"LeewayUIRibbonPopup", NULL);
+            if (pop) { SaveHwndBmp(pop, g_shot); }
+            else { fputws(L"NO POPUP", stderr); SaveWindowBmp(hwnd, g_shot); }
+        } else if (g_openSurface && !wcscmp(g_openSurface, L"appmenu") && g_ribbon) {
             HWND rb = LeewayRibbonGetHWND(g_ribbon);
             const int cand[][2] = { {26,37},{26,50},{26,25},{40,37},{20,40},{26,103} };
             HWND pop = NULL;
