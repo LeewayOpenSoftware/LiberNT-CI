@@ -8,6 +8,8 @@
  */
 
 #include <ntifs.h>
+#include <ntddstor.h>
+#include <ntdddisk.h>
 #include <ntfs_km.h>
 #include <ntfslib_new_internal.h>
 
@@ -83,7 +85,7 @@ NtfsGenerate8dot3Name(_In_ PCUNICODE_STRING Name,
 
 
 static NTSTATUS WriteDisk(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONGLONG Offset,
-                          _In_ ULONG Length, _In_ PUCHAR Buffer);
+                          _In_ ULONG Length, _In_ PUCHAR Buffer, _In_ ULONG StackFlags = 0);
 
 /* METADATA BLOCK CACHE *****************************************************/
 
@@ -118,6 +120,13 @@ typedef struct _NTFS_CACHE_SLOT
      * neither written back nor evicted. */
     ULONGLONG DirtySeq;
     ULONGLONG FlushAfterSeq;
+    /* Media-ordering stamp (NtfsBarrierAfterContext): this block must not be
+     * written until every write completed with a sequence <= DurableBeforeSeq
+     * is on the medium, i.e. the device's write cache has been flushed past
+     * it. Set when the earlier range is already on the device (written
+     * through, or written back) and therefore carries no FlushAfterSeq.
+     * Cleared, like FlushAfterSeq, when the block has been written. */
+    ULONGLONG DurableBeforeSeq;
     BOOLEAN Dirty;
 } NTFS_CACHE_SLOT;
 
@@ -129,6 +138,44 @@ static ULONG NtfsCacheDirtyCount = 0;
 static ULONGLONG NtfsCacheWriteSeq = 0;
 /* Barrier vs CommitRange selector, read once from the registry. -1 = unread. */
 static volatile LONG NtfsWriteBarrierState = -1;
+
+/*
+ * Media ordering on a device with a volatile write cache.
+ *
+ * A completed write is on the device, not necessarily on the medium: a disk
+ * with its write cache enabled may keep it, and on power loss keep or drop
+ * completed writes in any order. CommitRange and the write-ordering barrier
+ * only order completions, so a pointer could reach the medium before its
+ * pointee. The device is asked once what it can do (storage write-cache
+ * property, else the disk cache information); when it may hold writes, the
+ * ordering edges below flush its cache before the pointer is written, and
+ * never otherwise. A flush is issued only when a write completed since the
+ * previous flush could be one the edge depends on, which batches them.
+ * Write-through writes carry SL_WRITE_THROUGH (FUA) when the device honours
+ * it. Settings: Control\FileSystem\NtfsDurableOrdering (DWORD, default 1).
+ */
+typedef struct _NTFS_DEVICE_DURABILITY
+{
+    PDEVICE_OBJECT Device;      /* key; forgotten by NtfsDiskReleaseKm */
+    BOOLEAN Probed;
+    BOOLEAN WriteCache;         /* the device may hold completed writes (enabled or unknown) */
+    BOOLEAN Fua;                /* SL_WRITE_THROUGH reaches the medium */
+    BOOLEAN FlushRejected;      /* the device refused IRP_MJ_FLUSH_BUFFERS */
+    ULONGLONG MinSeqSinceFlush; /* smallest sequence among writes completed since the last flush; ~0 when none */
+    ULONG WritesSinceFlush;
+    ULONG Flushes;              /* device flushes this code issued */
+    ULONG FlushesSkipped;       /* edges that needed nothing (already durable, or no write cache) */
+    ULONG FuaWrites;
+} NTFS_DEVICE_DURABILITY;
+#define NTFS_DEVICE_TABLE 8
+/* Under NtfsCacheMutex, except the probe (PASSIVE_LEVEL, mutex dropped). */
+static NTFS_DEVICE_DURABILITY NtfsDeviceTable[NTFS_DEVICE_TABLE];
+static volatile LONG NtfsDurableOrderingState = -1; /* -1 unread, 0 off, 1 on */
+static NTFS_DEVICE_DURABILITY* NtfsDeviceEntry(_In_ PDEVICE_OBJECT Device);
+static VOID NtfsDeviceNoteWrite(_In_ PDEVICE_OBJECT Device, _In_ ULONGLONG Seq);
+static NTSTATUS NtfsDeviceMakeDurable(_In_ PDEVICE_OBJECT Device, _In_ ULONGLONG NeedSeq);
+static ULONG NtfsDeviceWriteThroughFlags(_In_ PDEVICE_OBJECT Device);
+static BOOLEAN NtfsDurableOrderingEnabled(VOID);
 
 
 /* Above this many blocks held back, write some out before taking on more.
@@ -170,6 +217,7 @@ NtfsCacheDiscardAll(VOID)
         NtfsCacheSlots[Index].Dirty = FALSE;
         NtfsCacheSlots[Index].DirtySeq = 0;
         NtfsCacheSlots[Index].FlushAfterSeq = 0;
+        NtfsCacheSlots[Index].DurableBeforeSeq = 0;
     }
     NtfsCacheDirtyCount = 0;
 }
@@ -212,9 +260,9 @@ NtfsCacheVictim(_In_ PDEVICE_OBJECT Owner,
         return &Set[0];
     if (Set[1].Tag == NTFS_CACHE_EMPTY)
         return &Set[1];
-    if (!Set[0].Dirty && Set[0].FlushAfterSeq == 0)
+    if (!Set[0].Dirty && Set[0].FlushAfterSeq == 0 && Set[0].DurableBeforeSeq == 0)
         return &Set[0];
-    if (!Set[1].Dirty && Set[1].FlushAfterSeq == 0)
+    if (!Set[1].Dirty && Set[1].FlushAfterSeq == 0 && Set[1].DurableBeforeSeq == 0)
         return &Set[1];
     if (Set[0].Dirty)
         return &Set[0];
@@ -231,6 +279,7 @@ NtfsCacheInitialize(VOID)
     {
         ExInitializeFastMutex(&NtfsCacheMutex);
         KeInitializeMutex(&NtfsCacheWritebackMutex, 0);
+        RtlZeroMemory(NtfsDeviceTable, sizeof(NtfsDeviceTable));
         RtlZeroMemory(NtfsCacheSlots, sizeof(NtfsCacheSlots));
         NtfsCacheDiscardAll();
         KeInitializeTimer(&NtfsCacheLazyTimer);
@@ -279,6 +328,7 @@ NtfsCacheInvalidateRange(_In_ PDEVICE_OBJECT Owner,
             Slot->Tag = NTFS_CACHE_EMPTY;
             Slot->DirtySeq = 0;
             Slot->FlushAfterSeq = 0;
+            Slot->DurableBeforeSeq = 0;
             Slot->Generation++;
             ObDereferenceObjectDeferDelete(Slot->Owner);
             Slot->Owner = NULL;
@@ -345,6 +395,7 @@ NtfsCacheWriteBackOne(_In_ PDEVICE_OBJECT Owner,
     NTFS_CACHE_SLOT* Slot;
     PDEVICE_OBJECT Target = NULL;
     ULONGLONG Generation = 0;
+    ULONGLONG NeedDurable = 0;
 
     /* The writeback mutex is recursive (an NT KMUTEX), so the dependency
      * flush below can call back into this function for an earlier block. */
@@ -419,14 +470,22 @@ NtfsCacheWriteBackOne(_In_ PDEVICE_OBJECT Owner,
         Target = Slot->Owner;
         ObReferenceObject(Target);
         Generation = Slot->Generation;
+        /* Everything this block is ordered after has been written (the loop
+         * above) and must now be on the medium before this block is. */
+        NeedDurable = max(Slot->FlushAfterSeq, Slot->DurableBeforeSeq);
         // Keep dirty data unevictable until the write actually succeeds.
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
 
     if (Target)
     {
-        Status = WriteDisk(Target, Block << NTFS_CACHE_BLOCK_SHIFT,
-                           NTFS_CACHE_BLOCK_SIZE, Staged);
+        /* FAIL CLOSED here too: an edge whose earlier side cannot be made
+         * durable leaves the later block dirty and in the cache. */
+        if (NeedDurable != 0)
+            Status = NtfsDeviceMakeDurable(Target, NeedDurable);
+        if (NT_SUCCESS(Status))
+            Status = WriteDisk(Target, Block << NTFS_CACHE_BLOCK_SHIFT,
+                               NTFS_CACHE_BLOCK_SIZE, Staged);
         ExAcquireFastMutex(&NtfsCacheMutex);
         Slot = NtfsCacheProbe(Target, Block);
         if (NT_SUCCESS(Status) && Slot && Slot->Dirty &&
@@ -434,8 +493,11 @@ NtfsCacheWriteBackOne(_In_ PDEVICE_OBJECT Owner,
         {
             Slot->Dirty = FALSE;
             NtfsCacheDirtyCount--;
-            /* Constraint satisfied: this block is now durable. */
+            /* Constraint satisfied: this block is on the device; the device
+             * remembers it as a write still to be flushed. */
+            NtfsDeviceNoteWrite(Target, Slot->DirtySeq);
             Slot->FlushAfterSeq = 0;
+            Slot->DurableBeforeSeq = 0;
         }
         ExReleaseFastMutex(&NtfsCacheMutex);
         ObDereferenceObject(Target);
@@ -885,6 +947,7 @@ NtfsCacheDiscardOwner(_In_ PDEVICE_OBJECT DeviceObject)
             NtfsCacheSlots[Index].Tag = NTFS_CACHE_EMPTY;
             NtfsCacheSlots[Index].DirtySeq = 0;
             NtfsCacheSlots[Index].FlushAfterSeq = 0;
+            NtfsCacheSlots[Index].DurableBeforeSeq = 0;
             NtfsCacheSlots[Index].Generation++;
             ObDereferenceObjectDeferDelete(NtfsCacheSlots[Index].Owner);
             NtfsCacheSlots[Index].Owner = NULL;
@@ -911,7 +974,32 @@ NtfsDiskPrepareMountKm(
 VOID
 NtfsDiskReleaseKm(_In_ PDEVICE_OBJECT DeviceObject)
 {
+    ULONG i;
+
     NtfsCacheDiscardOwner(DeviceObject);
+    /* The device object may be reused by another volume: probe it afresh.
+     * The counters go to the debug log first; a lab reads them off COM1. */
+    if (NtfsCacheReady)
+    {
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+        {
+            NTFS_DEVICE_DURABILITY* E = &NtfsDeviceTable[i];
+            if (E->Device == DeviceObject)
+            {
+                if (E->Probed)
+                {
+                    DPRINT1("NTFS: device %p durability: write cache %s, FUA %s, flushes %lu, "
+                            "edges without flush %lu, FUA writes %lu, unflushed writes %lu%s\n",
+                            DeviceObject, E->WriteCache ? "on" : "off", E->Fua ? "yes" : "no",
+                            E->Flushes, E->FlushesSkipped, E->FuaWrites, E->WritesSinceFlush,
+                            E->FlushRejected ? ", flush rejected" : "");
+                }
+                RtlZeroMemory(E, sizeof(*E));
+            }
+        }
+        ExReleaseFastMutex(&NtfsCacheMutex);
+    }
 }
 
 typedef struct _NTFS_DISK_IO_CONTEXT
@@ -981,12 +1069,13 @@ NtfsFreeDiskIoIrp(
 
 static
 NTSTATUS
-NtfsPerformDiskIo(
+NtfsPerformDiskIoEx(
     _In_ UCHAR MajorFunction,
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONGLONG Offset,
     _In_ ULONG Length,
-    _Inout_updates_bytes_(Length) PUCHAR Buffer)
+    _Inout_updates_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG StackFlags)
 {
     NTFS_DISK_IO_CONTEXT IoContext;
     PIO_STACK_LOCATION IoStack;
@@ -1036,7 +1125,7 @@ NtfsPerformDiskIo(
     }
 
     IoStack = IoGetNextIrpStackLocation(Irp);
-    SetFlag(IoStack->Flags, SL_OVERRIDE_VERIFY_VOLUME);
+    SetFlag(IoStack->Flags, SL_OVERRIDE_VERIFY_VOLUME | StackFlags);
     IoSetCompletionRoutine(Irp,
                            NtfsDiskIoCompletion,
                            &IoContext,
@@ -1073,6 +1162,355 @@ NtfsPerformDiskIo(
     return Status;
 }
 
+static
+NTSTATUS
+NtfsPerformDiskIo(
+    _In_ UCHAR MajorFunction,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ ULONGLONG Offset,
+    _In_ ULONG Length,
+    _Inout_updates_bytes_(Length) PUCHAR Buffer)
+{
+    return NtfsPerformDiskIoEx(MajorFunction, DeviceObject, Offset, Length, Buffer, 0);
+}
+
+/*
+ * A device control request built like the data transfers above: not queued
+ * on the thread, completed in our routine, freed by us, so it can be sent
+ * with normal kernel APCs disabled. METHOD_BUFFERED only.
+ */
+static
+NTSTATUS
+NtfsDeviceIoctl(_In_ PDEVICE_OBJECT DeviceObject,
+                _In_ ULONG IoControlCode,
+                _In_reads_bytes_opt_(InputLength) PVOID Input,
+                _In_ ULONG InputLength,
+                _Out_writes_bytes_(OutputLength) PVOID Output,
+                _In_ ULONG OutputLength)
+{
+    NTFS_DISK_IO_CONTEXT IoContext;
+    PIO_STACK_LOCATION IoStack;
+    PIRP Irp;
+    PUCHAR SystemBuffer;
+    ULONG BufferLength = max(InputLength, OutputLength);
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    if (!DeviceObject || !Output || !OutputLength ||
+        (InputLength != 0 && !Input))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    SystemBuffer = (PUCHAR)ExAllocatePoolZero(NonPagedPoolNx, BufferLength, 'CftN');
+    if (!SystemBuffer)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    if (InputLength)
+        RtlCopyMemory(SystemBuffer, Input, InputLength);
+    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+    if (!Irp)
+    {
+        ExFreePoolWithTag(SystemBuffer, 'CftN');
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    KeInitializeEvent(&IoContext.Event, NotificationEvent, FALSE);
+    IoContext.IoStatus.Status = STATUS_PENDING;
+    IoContext.IoStatus.Information = 0;
+    IoContext.Buffer = NULL;
+    IoContext.Length = 0;
+    Irp->AssociatedIrp.SystemBuffer = SystemBuffer;
+    Irp->Flags = IRP_BUFFERED_IO;
+    Irp->RequestorMode = KernelMode;
+    Irp->UserIosb = &IoContext.IoStatus;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+    IoStack = IoGetNextIrpStackLocation(Irp);
+    IoStack->MajorFunction = IRP_MJ_DEVICE_CONTROL;
+    IoStack->Parameters.DeviceIoControl.IoControlCode = IoControlCode;
+    IoStack->Parameters.DeviceIoControl.InputBufferLength = InputLength;
+    IoStack->Parameters.DeviceIoControl.OutputBufferLength = OutputLength;
+    IoSetCompletionRoutine(Irp, NtfsDiskIoCompletion, &IoContext, TRUE, TRUE, TRUE);
+    Status = IoCallDriver(DeviceObject, Irp);
+    if (Status == STATUS_PENDING)
+        KeWaitForSingleObject(&IoContext.Event, Executive, KernelMode, FALSE, NULL);
+    NT_ASSERT(IoContext.IoStatus.Status != STATUS_PENDING);
+    Status = IoContext.IoStatus.Status;
+    if (NT_SUCCESS(Status))
+    {
+        ULONG_PTR Bytes = min(IoContext.IoStatus.Information, (ULONG_PTR)OutputLength);
+        RtlZeroMemory(Output, OutputLength);
+        RtlCopyMemory(Output, SystemBuffer, Bytes);
+        if (Bytes < OutputLength)
+            Status = STATUS_BUFFER_TOO_SMALL;
+    }
+    IoFreeIrp(Irp);
+    ExFreePoolWithTag(SystemBuffer, 'CftN');
+    return Status;
+}
+
+static
+BOOLEAN
+NtfsDurableOrderingEnabled(VOID)
+{
+    LONG State = NtfsDurableOrderingState;
+
+    if (State < 0)
+    {
+        RTL_QUERY_REGISTRY_TABLE Table[2];
+        ULONG One = 1;
+        ULONG Val = 1;
+
+        RtlZeroMemory(Table, sizeof(Table));
+        Table[0].Flags = RTL_QUERY_REGISTRY_DIRECT;
+        Table[0].Name = L"NtfsDurableOrdering";
+        Table[0].EntryContext = &Val;
+        Table[0].DefaultType = REG_DWORD;
+        Table[0].DefaultData = &One;
+        Table[0].DefaultLength = sizeof(ULONG);
+        (void)RtlQueryRegistryValues(RTL_REGISTRY_CONTROL, L"FileSystem",
+                                     Table, NULL, NULL);
+        State = (Val != 0) ? 1 : 0;
+        InterlockedCompareExchange(&NtfsDurableOrderingState, State, -1);
+        State = NtfsDurableOrderingState;
+    }
+    return (State != 0);
+}
+
+/* Ask the device once. Unknown answers count as "may hold writes". */
+static
+VOID
+NtfsDeviceProbe(_In_ PDEVICE_OBJECT Device,
+                _Out_ PBOOLEAN WriteCache,
+                _Out_ PBOOLEAN Fua)
+{
+    STORAGE_PROPERTY_QUERY Query;
+    STORAGE_WRITE_CACHE_PROPERTY Property;
+    DISK_CACHE_INFORMATION CacheInfo;
+    NTSTATUS Status;
+
+    *WriteCache = TRUE;
+    *Fua = FALSE;
+    RtlZeroMemory(&Query, sizeof(Query));
+    Query.PropertyId = StorageDeviceWriteCacheProperty;
+    Query.QueryType = PropertyStandardQuery;
+    Status = NtfsDeviceIoctl(Device, IOCTL_STORAGE_QUERY_PROPERTY,
+                             &Query, sizeof(Query), &Property, sizeof(Property));
+    if (NT_SUCCESS(Status))
+    {
+        *WriteCache = (Property.WriteCacheEnabled != WriteCacheDisabled);
+        *Fua = (Property.WriteThroughSupported == WriteThroughSupported);
+        DPRINT1("NTFS: device %p write cache %s (type %u), FUA %s, flush %s\n",
+                Device,
+                Property.WriteCacheEnabled == WriteCacheEnabled ? "on" :
+                Property.WriteCacheEnabled == WriteCacheDisabled ? "off" : "unknown",
+                Property.WriteCacheType,
+                *Fua ? "yes" : "no",
+                Property.FlushCacheSupported ? "yes" : "no");
+        return;
+    }
+    Status = NtfsDeviceIoctl(Device, IOCTL_DISK_GET_CACHE_INFORMATION,
+                             NULL, 0, &CacheInfo, sizeof(CacheInfo));
+    if (NT_SUCCESS(Status))
+    {
+        *WriteCache = CacheInfo.WriteCacheEnabled ? TRUE : FALSE;
+        DPRINT1("NTFS: device %p write cache %s (disk cache information), FUA unknown\n",
+                Device, *WriteCache ? "on" : "off");
+        return;
+    }
+    DPRINT1("NTFS: device %p does not report its write cache (0x%lx): treated as volatile\n",
+            Device, Status);
+}
+
+/* The device's entry, probed on first use. NULL when the table is full, which
+ * callers treat as "may hold writes, no FUA". Call at PASSIVE_LEVEL with no
+ * cache mutex held. */
+static
+NTFS_DEVICE_DURABILITY*
+NtfsDeviceEntry(_In_ PDEVICE_OBJECT Device)
+{
+    NTFS_DEVICE_DURABILITY* E = NULL;
+    ULONG i;
+    BOOLEAN NeedProbe = FALSE;
+    BOOLEAN WriteCache, Fua;
+
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+    {
+        if (NtfsDeviceTable[i].Device == Device)
+        {
+            E = &NtfsDeviceTable[i];
+            break;
+        }
+    }
+    if (!E)
+    {
+        for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+        {
+            if (NtfsDeviceTable[i].Device == NULL)
+            {
+                E = &NtfsDeviceTable[i];
+                RtlZeroMemory(E, sizeof(*E));
+                E->Device = Device;
+                E->WriteCache = TRUE;
+                E->MinSeqSinceFlush = ~0ULL;
+                break;
+            }
+        }
+    }
+    if (E && !E->Probed)
+        NeedProbe = TRUE;
+    ExReleaseFastMutex(&NtfsCacheMutex);
+    if (!NeedProbe)
+        return E;
+    NtfsDeviceProbe(Device, &WriteCache, &Fua);
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    if (E->Device == Device && !E->Probed)
+    {
+        E->WriteCache = WriteCache;
+        E->Fua = Fua;
+        E->Probed = TRUE;
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+    return E;
+}
+
+/* A write with sequence Seq completed at Device. Caller holds NtfsCacheMutex. */
+static
+VOID
+NtfsDeviceNoteWrite(_In_ PDEVICE_OBJECT Device, _In_ ULONGLONG Seq)
+{
+    ULONG i;
+
+    for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+    {
+        NTFS_DEVICE_DURABILITY* E = &NtfsDeviceTable[i];
+        if (E->Device == Device)
+        {
+            if (Seq < E->MinSeqSinceFlush)
+                E->MinSeqSinceFlush = Seq;
+            E->WritesSinceFlush++;
+            return;
+        }
+    }
+}
+
+/*
+ * Make every write completed with a sequence <= NeedSeq durable at Device.
+ * Nothing to do when the device holds no writes, when nothing was written
+ * since the last flush, or when every write since then is younger than what
+ * is needed. Otherwise one device flush; the bookkeeping is reset before it
+ * is issued, so a write completing meanwhile is counted as unflushed. A
+ * device that rejects the flush (no cache to flush) is accepted; any other
+ * failure is returned and the caller fails closed.
+ */
+static
+NTSTATUS
+NtfsDeviceMakeDurable(_In_ PDEVICE_OBJECT Device, _In_ ULONGLONG NeedSeq)
+{
+    NTFS_DEVICE_DURABILITY* E;
+    BOOLEAN Flush = TRUE;
+    NTSTATUS Status;
+
+    if (!NtfsDurableOrderingEnabled())
+        return STATUS_SUCCESS;
+    E = NtfsDeviceEntry(Device);
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    if (E && E->Device == Device)
+    {
+        if (!E->WriteCache || E->WritesSinceFlush == 0 ||
+            E->MinSeqSinceFlush > NeedSeq)
+        {
+            Flush = FALSE;
+            E->FlushesSkipped++;
+        }
+        else
+        {
+            E->MinSeqSinceFlush = ~0ULL;
+            E->WritesSinceFlush = 0;
+            E->Flushes++;
+        }
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+    if (!Flush)
+        return STATUS_SUCCESS;
+    Status = NtfsPerformDiskIo(IRP_MJ_FLUSH_BUFFERS, Device, 0, 0, NULL);
+    if (Status == STATUS_INVALID_DEVICE_REQUEST ||
+        Status == STATUS_NOT_SUPPORTED ||
+        Status == STATUS_NOT_IMPLEMENTED)
+    {
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        if (E && E->Device == Device && !E->FlushRejected)
+        {
+            E->FlushRejected = TRUE;
+            DPRINT1("NTFS: device %p rejects cache flushes (0x%lx); ordering relies on the device\n",
+                    Device, Status);
+        }
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        Status = STATUS_SUCCESS;
+    }
+    else if (!NT_SUCCESS(Status))
+    {
+        /* Nothing is known to be on the medium: the next edge flushes again. */
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        if (E && E->Device == Device)
+        {
+            E->MinSeqSinceFlush = 0;
+            E->WritesSinceFlush++;
+        }
+        ExReleaseFastMutex(&NtfsCacheMutex);
+    }
+    return Status;
+}
+
+/* SL_WRITE_THROUGH for a write that must be on the medium at completion,
+ * when the device honours it; 0 otherwise (the caller's edge flushes). */
+static
+ULONG
+NtfsDeviceWriteThroughFlags(_In_ PDEVICE_OBJECT Device)
+{
+    NTFS_DEVICE_DURABILITY* E;
+    ULONG Flags = 0;
+
+    if (!NtfsDurableOrderingEnabled())
+        return 0;
+    E = NtfsDeviceEntry(Device);
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    if (E && E->Device == Device && E->WriteCache && E->Fua)
+    {
+        Flags = SL_WRITE_THROUGH;
+        E->FuaWrites++;
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+    return Flags;
+}
+
+VOID
+NtfsDiskDurabilityStatsKm(_In_ PDEVICE_OBJECT DeviceObject,
+                          _Out_ PNTFS_DURABILITY_STATS Stats)
+{
+    ULONG i;
+
+    RtlZeroMemory(Stats, sizeof(*Stats));
+    if (!NtfsCacheReady)
+        return;
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+    {
+        NTFS_DEVICE_DURABILITY* E = &NtfsDeviceTable[i];
+        if (E->Device == DeviceObject)
+        {
+            Stats->Probed = E->Probed;
+            Stats->WriteCache = E->WriteCache;
+            Stats->Fua = E->Fua;
+            Stats->FlushRejected = E->FlushRejected;
+            Stats->Flushes = E->Flushes;
+            Stats->FlushesSkipped = E->FlushesSkipped;
+            Stats->FuaWrites = E->FuaWrites;
+            Stats->WritesSinceFlush = E->WritesSinceFlush;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+}
+
 NTSTATUS
 ReadDisk(_In_ PDEVICE_OBJECT DeviceObject,
          _In_ ULONGLONG Offset,
@@ -1102,19 +1540,19 @@ NTSTATUS
 WriteDisk(_In_ PDEVICE_OBJECT DeviceObject,
           _In_ ULONGLONG Offset,
           _In_ ULONG Length,
-          _In_ PUCHAR Buffer)
+          _In_ PUCHAR Buffer,
+          _In_ ULONG StackFlags)
 {
     NTSTATUS Status;
-
     do
     {
         ULONG Chunk = min(Length, NTFS_DISK_IO_CHUNK_SIZE);
-
-        Status = NtfsPerformDiskIo(IRP_MJ_WRITE,
-                                   DeviceObject,
-                                   Offset,
-                                   Chunk,
-                                   Buffer);
+        Status = NtfsPerformDiskIoEx(IRP_MJ_WRITE,
+                                     DeviceObject,
+                                     Offset,
+                                     Chunk,
+                                     Buffer,
+                                     StackFlags);
         Offset += Chunk;
         Buffer += Chunk;
         Length -= Chunk;
@@ -1273,7 +1711,7 @@ NtfsCommitRangeContext(_In_opt_ void* Context,
     DeviceObject = Context ? static_cast<PDEVICE_OBJECT>(Context) : PartDeviceObj;
     if (!DeviceObject)
         return STATUS_INVALID_PARAMETER;
-    return NtfsDiskFlushRangeKm(DeviceObject, Offset, Length);
+    return NtfsDiskCommitRangeKm(DeviceObject, Offset, Length);
 }
 
 /* Barrier vs CommitRange selector: Control\FileSystem value NtfsWriteBarrier
@@ -1328,6 +1766,7 @@ VOID
 NtfsDiskReadSettingsKm(VOID)
 {
     (void)NtfsWriteBarrierEnabledKm();
+    (void)NtfsDurableOrderingEnabled();
 }
 
 /*
@@ -1357,7 +1796,7 @@ NtfsBarrierAfterContext(_In_opt_ void* Context,
     ULONGLONG MaxEarlierSeq = 0;
     NTFS_CACHE_SLOT* L;
     NTSTATUS Status = STATUS_SUCCESS;
-
+    BOOLEAN Stamp = FALSE;
     if (!LaterLength || !EarlierLength ||
         LaterOffset > ~(ULONGLONG)0 - (LaterLength - 1) ||
         EarlierOffset > ~(ULONGLONG)0 - (EarlierLength - 1))
@@ -1380,7 +1819,12 @@ NtfsBarrierAfterContext(_In_opt_ void* Context,
     LaterBlock = LaterOffset >> NTFS_CACHE_BLOCK_SHIFT;
     EarlierFirst = EarlierOffset >> NTFS_CACHE_BLOCK_SHIFT;
     EarlierLast = (EarlierOffset + EarlierLength - 1) >> NTFS_CACHE_BLOCK_SHIFT;
-
+    /* Does this device hold completed writes? (PASSIVE_LEVEL, probes once.) */
+    if (NtfsDurableOrderingEnabled())
+    {
+        NTFS_DEVICE_DURABILITY* E = NtfsDeviceEntry(DeviceObject);
+        Stamp = (E == NULL || E->WriteCache);
+    }
     ExAcquireFastMutex(&NtfsCacheMutex);
     for (b = EarlierFirst; b <= EarlierLast; b++)
     {
@@ -1388,17 +1832,27 @@ NtfsBarrierAfterContext(_In_opt_ void* Context,
         if (D && D->Dirty && D->DirtySeq > MaxEarlierSeq)
             MaxEarlierSeq = D->DirtySeq;
     }
-    if (MaxEarlierSeq == 0)
+    if (MaxEarlierSeq == 0 && !Stamp)
     {
-        /* The earlier range is already durable. */
+        /* The earlier range is already on the device, and the device holds
+         * nothing: durable. */
         ExReleaseFastMutex(&NtfsCacheMutex);
         return STATUS_SUCCESS;
     }
-
     L = NtfsCacheProbe(DeviceObject, LaterBlock);
     if (!L || !L->Data)
     {
         Status = STATUS_NOT_FOUND;
+    }
+    else if (MaxEarlierSeq == 0)
+    {
+        /* On the device but maybe not on the medium: the later block waits
+         * for a flush past every write completed up to now. No dependency on
+         * a dirty block is added, so no cycle can form. */
+        if (NtfsCacheWriteSeq > L->DurableBeforeSeq)
+            L->DurableBeforeSeq = NtfsCacheWriteSeq;
+        ExReleaseFastMutex(&NtfsCacheMutex);
+        return STATUS_SUCCESS;
     }
     else if (L->Dirty && MaxEarlierSeq > L->FlushAfterSeq)
     {
@@ -1444,6 +1898,10 @@ NtfsBarrierAfterContext(_In_opt_ void* Context,
     }
     if (NT_SUCCESS(Status) && MaxEarlierSeq > L->FlushAfterSeq)
         L->FlushAfterSeq = MaxEarlierSeq;
+    /* Part of the earlier range may be on the device already (a bulk write
+     * next to a cached block): cover it with the medium stamp as well. */
+    if (NT_SUCCESS(Status) && Stamp && NtfsCacheWriteSeq > L->DurableBeforeSeq)
+        L->DurableBeforeSeq = NtfsCacheWriteSeq;
     ExReleaseFastMutex(&NtfsCacheMutex);
     return Status;
 }
@@ -1477,7 +1935,10 @@ NtfsBarrierCancelContext(_In_opt_ void* Context,
     {
         NTFS_CACHE_SLOT* L = NtfsCacheProbe(DeviceObject, b);
         if (L && !L->Dirty)
+        {
             L->FlushAfterSeq = 0;
+            L->DurableBeforeSeq = 0;
+        }
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
 }
@@ -1627,7 +2088,9 @@ NtfsWriteVolumeInternal(_In_opt_ void* Context,
     PUCHAR WriteBuffer;
     ULONGLONG SectorAlignedOffset;
     ULONG SectorAlignedLength;
-
+    /* A write-through write is on the medium at completion where the device
+     * honours FUA; elsewhere the ordering edge that follows flushes. */
+    ULONG StackFlags = WriteThrough ? NtfsDeviceWriteThroughFlags(DeviceObject) : 0;
     SectorAlignedOffset = Offset - (Offset % SectorBytes);
     SectorAlignedLength = ALIGN_UP_BY((Offset - SectorAlignedOffset) + Length,
                                       SectorBytes);
@@ -1639,7 +2102,8 @@ NtfsWriteVolumeInternal(_In_opt_ void* Context,
         Status = WriteDisk(DeviceObject,
                            SectorAlignedOffset,
                            SectorAlignedLength,
-                           Buffer);
+                           Buffer,
+                           StackFlags);
     }
 
     else
@@ -1677,7 +2141,8 @@ NtfsWriteVolumeInternal(_In_opt_ void* Context,
                 Status = WriteDisk(DeviceObject,
                                    SectorAlignedOffset + Done,
                                    Piece,
-                                   WriteBuffer);
+                                   WriteBuffer,
+                                   StackFlags);
             }
             Done += Piece;
         }
@@ -1686,6 +2151,15 @@ NtfsWriteVolumeInternal(_In_opt_ void* Context,
         delete[] WriteBuffer;
     }
 
+    /* A direct write completed: it is on the device, unflushed unless it
+     * went through with FUA. Stamp it after every dirty block of this moment
+     * so an edge taken from here on can tell it from older writes. */
+    if (NT_SUCCESS(Status) && StackFlags == 0 && NtfsCacheReady)
+    {
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        NtfsDeviceNoteWrite(DeviceObject, ++NtfsCacheWriteSeq);
+        ExReleaseFastMutex(&NtfsCacheMutex);
+    }
     /* Keep whatever we still hold in step with what just went to the disk. */
     if (NT_SUCCESS(Status))
         NtfsCacheUpdateRange(DeviceObject, Offset, Length, Buffer);
@@ -1810,12 +2284,43 @@ NtfsDiskFlushDeviceKm(_In_ PDEVICE_OBJECT DeviceObject)
 
     if (!DeviceObject)
         return STATUS_INVALID_PARAMETER;
+    /* An explicit flush covers every write completed so far: forget them. */
+    if (NtfsCacheReady)
+    {
+        ULONG i;
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+        {
+            if (NtfsDeviceTable[i].Device == DeviceObject)
+            {
+                NtfsDeviceTable[i].MinSeqSinceFlush = ~0ULL;
+                NtfsDeviceTable[i].WritesSinceFlush = 0;
+                NtfsDeviceTable[i].Flushes++;
+            }
+        }
+        ExReleaseFastMutex(&NtfsCacheMutex);
+    }
     Status = NtfsPerformDiskIo(IRP_MJ_FLUSH_BUFFERS, DeviceObject, 0, 0, NULL);
     if (Status == STATUS_INVALID_DEVICE_REQUEST ||
         Status == STATUS_NOT_SUPPORTED ||
         Status == STATUS_NOT_IMPLEMENTED)
     {
         Status = STATUS_SUCCESS;
+    }
+    else if (!NT_SUCCESS(Status) && NtfsCacheReady)
+    {
+        /* Nothing is known to be on the medium: the next edge flushes again. */
+        ULONG i;
+        ExAcquireFastMutex(&NtfsCacheMutex);
+        for (i = 0; i < NTFS_DEVICE_TABLE; i++)
+        {
+            if (NtfsDeviceTable[i].Device == DeviceObject)
+            {
+                NtfsDeviceTable[i].MinSeqSinceFlush = 0;
+                NtfsDeviceTable[i].WritesSinceFlush++;
+            }
+        }
+        ExReleaseFastMutex(&NtfsCacheMutex);
     }
     return Status;
 }
@@ -1843,6 +2348,25 @@ NtfsDiskFlushRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
     if (!DeviceObject || Offset > ~(ULONGLONG)0 - Length)
         return STATUS_INVALID_PARAMETER;
     return NtfsCacheFlushRange(DeviceObject, Offset, Length);
+}
+
+extern "C"
+NTSTATUS
+NtfsDiskCommitRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
+                     _In_ ULONGLONG Offset,
+                     _In_ ULONG Length)
+{
+    NTSTATUS Status;
+
+    if (!DeviceObject || Offset > ~(ULONGLONG)0 - Length)
+        return STATUS_INVALID_PARAMETER;
+    Status = NtfsCacheFlushRange(DeviceObject, Offset, Length);
+    /* CommitRange: the bytes are on the medium when this returns, so the
+     * pointer the caller writes next cannot overtake them. The range's own
+     * writes, and any direct write of it, completed before now. */
+    if (NT_SUCCESS(Status))
+        Status = NtfsDeviceMakeDurable(DeviceObject, ~0ULL);
+    return Status;
 }
 
 extern "C"
