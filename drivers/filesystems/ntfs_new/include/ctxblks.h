@@ -39,6 +39,10 @@ typedef struct _VolumeContextBlock
     SHARE_ACCESS VolumeShareAccess;
     LONG OpenHandleCount;
     LONG VolumeHandleCount;
+    /* File objects of this volume that carry a context, from the create
+     * that attached it to the close that frees it. The last close of a
+     * dismounted volume deletes it (NtfsDeleteDismountedVolume). */
+    LONG FileObjectCount;
     /* Handles in OpenHandleCount that do not hold off a boot-time lock (see
      * NtfsIsBootExecuteWindow); counted under VolumeStateMutex. */
     LONG BootLockNeutralHandleCount;
@@ -49,6 +53,8 @@ typedef struct _VolumeContextBlock
     ULONGLONG ShrinkVolumeSectors;
     BOOLEAN Dismounting;
     BOOLEAN Dismounted;
+    /* NtfsDeleteDismountedVolume has run (or is running). */
+    BOOLEAN Deleted;
     FAST_MUTEX StreamListMutex;
     LIST_ENTRY StreamList;
     LIST_ENTRY StreamHash[256];
@@ -194,6 +200,9 @@ NtfsUnregisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
 
 VOID
 NtfsReleaseDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);
+
+VOID
+NtfsDeleteDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);
 
 PNtfsCachedRecord
 NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,

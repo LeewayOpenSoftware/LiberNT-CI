@@ -7,7 +7,7 @@
  * After FSCTL_DISMOUNT_VOLUME succeeds the volume must give up the VPB of the
  * device: the next open mounts a new volume through the current top of the
  * storage stack, even while the handle that dismounted (and locked) the old
- * volume is still open.
+ * volume is still open, and that many cycles of it keep working.
  */
 
 #include <apitest.h>
@@ -16,6 +16,7 @@
 
 #define TEST_VOLUME_LABEL L"NTFSTEST"
 #define TEST_CONTENT "dismount-remount"
+#define TEST_CYCLES 16
 
 static WCHAR VolumeRoot[] = L"C:\\";
 static WCHAR VolumeDevice[] = L"\\\\.\\C:";
@@ -146,6 +147,7 @@ START_TEST(DismountRemount)
 {
     HANDLE Handle;
     DWORD Bytes;
+    ULONG Cycle;
     BOOL Ok;
 
     if (!FindTestVolume())
@@ -162,9 +164,16 @@ START_TEST(DismountRemount)
     ok(Ok, "Writing the test file failed with %lu\n", GetLastError());
     CloseHandle(Handle);
 
-    TestLockedDismount();
-    TestPlainDismount();
-    TestPlainDismount();
+    /*
+     * Every cycle leaves a dismounted volume behind until its last file
+     * object closes; the kernel debugger log shows one 'deleting dismounted
+     * volume' line per cycle when they are all released.
+     */
+    for (Cycle = 0; Cycle < TEST_CYCLES; Cycle++)
+    {
+        TestLockedDismount();
+        TestPlainDismount();
+    }
 
     ok(DeleteFileW(TestFile), "Deleting the test file failed with %lu\n", GetLastError());
 }

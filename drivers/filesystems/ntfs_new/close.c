@@ -24,6 +24,8 @@ NTAPI
 NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              _Inout_ PIRP Irp)
 {
+    BOOLEAN HadContext = FALSE;
+
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
     /* Overview:
@@ -46,6 +48,7 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
         if (FileCB)
         {
+            HadContext = TRUE;
             PVolumeContextBlock VolCB =
                 (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
             // Cleanup normally tore the private cache map down already; a
@@ -147,5 +150,15 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     Irp->IoStatus.Information = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+    /* The last file object of a dismounted volume takes the volume with it. */
+    if (HadContext)
+    {
+        PVolumeContextBlock VolCB =
+            (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+
+        if (InterlockedDecrement(&VolCB->FileObjectCount) == 0)
+            NtfsDeleteDismountedVolume(VolumeDeviceObject);
+    }
     return STATUS_SUCCESS;
 }
