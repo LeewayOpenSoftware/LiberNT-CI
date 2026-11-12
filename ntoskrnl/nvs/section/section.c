@@ -2696,17 +2696,40 @@ BOOLEAN
 MiSegmentPurge(
     _Inout_ PMI_SEGMENT Segment,
     _In_ ULONG64 Offset,
-    _In_ ULONG64 Length)
+    _In_ ULONG64 Length,
+    _In_ BOOLEAN DiscardDirty)
 {
     BOOLEAN Complete = TRUE;
-    ULONG64 First = MI_PAGE_ALIGN_UP(Offset) >> PAGE_SHIFT;
+    ULONG64 First;
     ULONG64 Last;
     ULONG64 Page;
+
+    /* Two contracts share this walk (A-2):
+     *  - COHERENCY purge (DiscardDirty = FALSE: ccflush, mmbacking): must purge every
+     *    page that OVERLAPS [Offset, Offset+Length), so round OUTWARD (start down, end
+     *    up) to reach a sub-page or partial first/last page; a still-dirty page is
+     *    REFUSED (Complete = FALSE) so the caller flushes first, never dropping unwritten
+     *    bytes that lie outside the flushed range.
+     *  - DISCARD purge (DiscardDirty = TRUE: truncate/teardown - ccclose, ccmap,
+     *    nttruncate): pages wholly at/beyond the boundary are thrown away even when dirty,
+     *    but the partial boundary page is KEPT (round the start UP), because its bytes
+     *    before the boundary are still valid and the FS zeroes the tail. This is the
+     *    original pre-A-2 behaviour, required so a dirty page beyond a new EOF does not
+     *    survive a truncate and reappear after a later extend. */
+    if (DiscardDirty)
+        First = MI_PAGE_ALIGN_UP(Offset) >> PAGE_SHIFT;          /* keep the partial boundary page */
+    else
+        First = Offset >> PAGE_SHIFT;                            /* reach the partial first page */
 
     MI_MUTEX_ACQUIRE(&Segment->Lock);
     Segment->ReadGeneration++;
 
-    Last = (Length == 0) ? MiSegmentPages(Segment) : ((Offset + Length) >> PAGE_SHIFT);
+    if (Length == 0)
+        Last = MiSegmentPages(Segment);
+    else if (DiscardDirty)
+        Last = (Offset + Length) >> PAGE_SHIFT;                  /* keep a partial trailing page */
+    else
+        Last = MI_PAGE_ALIGN_UP(Offset + Length) >> PAGE_SHIFT;  /* reach the partial last page */
     if (Last > MiSegmentPages(Segment))
         Last = MiSegmentPages(Segment);
 
@@ -2730,7 +2753,24 @@ MiSegmentPurge(
         }
 
         if (Kind == MiSoftTransition)
+        {
+            /* Coherency purge: a MODIFIED (dirty) transition page is not written back by
+             * MiSegmentDiscardPage, so refuse it (the caller must flush first) rather than
+             * drop unwritten data. Discard purge (truncate/teardown) deliberately throws
+             * dirty pages away - the bytes are being discarded on purpose. */
+            if (!DiscardDirty)
+            {
+                ULONG Frame = (ULONG)MiSoftValue(MiArchPteRead(Proto));
+
+                if (MiPfnIsModified(&Segment->System->Pfn, Frame))
+                {
+                    Complete = FALSE;
+                    continue;
+                }
+            }
+
             MiSegmentDiscardPage(Segment, Proto);
+        }
     }
 
     MI_MUTEX_RELEASE(&Segment->Lock);
