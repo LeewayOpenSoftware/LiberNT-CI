@@ -345,6 +345,14 @@ void CMainWindow::alignChildrenToMainWindow()
     RECT rcSpace = clientRect;
     const UINT uFlags = (SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREPOSITION | SWP_NOCOPYBITS);
 
+    if (m_pRibbon)
+    {
+        UINT32 cyRibbon = LeewayRibbonGetHeight(m_pRibbon);
+        ::SetWindowPos(LeewayRibbonGetHWND(m_pRibbon), NULL, 0, 0, rcSpace.right - rcSpace.left,
+                       cyRibbon, uFlags);
+        rcSpace.top += cyRibbon;
+    }
+
     if (::IsWindowVisible(g_hStatusBar))
     {
         ::GetWindowRect(g_hStatusBar, &rc);
@@ -353,7 +361,7 @@ void CMainWindow::alignChildrenToMainWindow()
 
     HDWP hDWP = ::BeginDeferWindowPos(3);
 
-    if (::IsWindowVisible(toolBoxContainer))
+    if (!m_pRibbon && ::IsWindowVisible(toolBoxContainer))
     {
         if (registrySettings.Bar2ID == BAR2ID_RIGHT)
         {
@@ -373,7 +381,7 @@ void CMainWindow::alignChildrenToMainWindow()
         }
     }
 
-    if (::IsWindowVisible(paletteWindow))
+    if (!m_pRibbon && ::IsWindowVisible(paletteWindow))
     {
         if (registrySettings.Bar1ID == BAR1ID_BOTTOM)
         {
@@ -402,6 +410,21 @@ void CMainWindow::alignChildrenToMainWindow()
     }
 
     ::EndDeferWindowPos(hDWP);
+}
+
+void CMainWindow::InvalidateRibbon()
+{
+    if (m_pRibbon)
+        PaintRibbonInvalidateAll(m_pRibbon);
+}
+
+LRESULT CMainWindow::OnNotify(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    NMHDR *pnmh = (NMHDR *)lParam;
+    if (m_pRibbon && pnmh && pnmh->hwndFrom == LeewayRibbonGetHWND(m_pRibbon) &&
+        (pnmh->code == LWUI_RBN_HEIGHTCHANGED || pnmh->code == LWUI_RBN_MINIMIZED))
+        alignChildrenToMainWindow();
+    return 0;
 }
 
 void CMainWindow::saveImage(BOOL overwrite)
@@ -548,7 +571,14 @@ LRESULT CMainWindow::OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHa
     SetMenu(m_hMenu);
 
     // Initialize the ribbon
-    PaintRibbonInitialize(m_hWnd, &m_pRibbon);
+    HRESULT hrRibbon = PaintRibbonInitialize(m_hWnd, &m_pRibbon);
+    if (FAILED(hrRibbon))
+    {
+        WCHAR szMsg[64];
+        StringCchPrintfW(szMsg, _countof(szMsg), L"PAINT: ribbon init failed 0x%08lX\n", (ULONG)hrRibbon);
+        OutputDebugStringW(szMsg);
+        { FILE *f = _wfopen(L"C:/Users/Nicolas/AppData/Local/Temp/pv/rib.txt", L"a"); if (f) { fputws(szMsg, f); fclose(f);} }
+    }
 
     // Create the status bar
     DWORD style = SBARS_SIZEGRIP | WS_CHILD | (registrySettings.ShowStatusBar ? WS_VISIBLE : 0);
@@ -558,10 +588,18 @@ LRESULT CMainWindow::OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHa
 
     // Create the tool box
     toolBoxContainer.DoCreate(m_hWnd);
+    if (m_pRibbon)
+    {
+        // The ribbon replaces the menu bar, tool box and palette
+        SetMenu(NULL);
+        toolBoxContainer.ShowWindow(SW_HIDE);
+    }
 
     // Create the palette window
     RECT rcEmpty = { 0, 0, 0, 0 }; // Rely on WM_SIZE
     style = WS_CHILD | (registrySettings.ShowPalette ? WS_VISIBLE : 0);
+    if (m_pRibbon)
+        style &= ~WS_VISIBLE;
     paletteWindow.Create(m_hWnd, rcEmpty, NULL, style, WS_EX_STATICEDGE);
 
     // Create the canvas
