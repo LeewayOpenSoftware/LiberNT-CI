@@ -1000,6 +1000,11 @@ NtfsDiskForgetDeviceKm(_In_ PDEVICE_OBJECT DeviceObject)
 
     if (!NtfsCacheReady || !DeviceObject)
         return;
+    /* Serialize with a write-back in flight: its completion bookkeeping then
+     * lands before the entry goes, never on a zeroed or re-created one. The
+     * writeback mutex is taken before the cache mutex, as the write-back does. */
+    NT_ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    KeWaitForSingleObject(&NtfsCacheWritebackMutex, Executive, KernelMode, FALSE, NULL);
     ExAcquireFastMutex(&NtfsCacheMutex);
     for (i = 0; i < NTFS_DEVICE_TABLE; i++)
     {
@@ -1019,6 +1024,7 @@ NtfsDiskForgetDeviceKm(_In_ PDEVICE_OBJECT DeviceObject)
         }
     }
     ExReleaseFastMutex(&NtfsCacheMutex);
+    KeReleaseMutex(&NtfsCacheWritebackMutex, FALSE);
 }
 
 typedef struct _NTFS_DISK_IO_CONTEXT
