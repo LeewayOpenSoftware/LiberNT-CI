@@ -15,8 +15,8 @@
 #include <ntddk.h>
 #include "leeway_rs_poc.h"
 
-#define LNRSPOC_DEVICE_NAME L"\Device\Lnrspoc"
-#define LNRSPOC_DOS_NAME    L"\DosDevices\Lnrspoc"
+#define LNRSPOC_DEVICE_NAME L"\\Device\\Lnrspoc"
+#define LNRSPOC_DOS_NAME    L"\\DosDevices\\Lnrspoc"
 
 /* METHOD_BUFFERED IOCTLs. 0x800+ is the customer/driver-defined function range. */
 #define IOCTL_LNRSPOC_VALIDATE \
