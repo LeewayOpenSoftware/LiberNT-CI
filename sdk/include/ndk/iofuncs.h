@@ -51,6 +51,20 @@ IoAssignDriveLetters(
     _Out_ PSTRING NtSystemPathString
 );
 
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoAsynchronousPageWrite(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ PMDL MemoryDescriptorList,
+    _In_ PLARGE_INTEGER StartingOffset,
+    _In_ PIO_APC_ROUTINE ApcRoutine,
+    _In_ PVOID ApcContext,
+    _In_ IO_PAGING_PRIORITY Priority,
+    _Out_ PIO_STATUS_BLOCK IoStatusBlock,
+    _Out_opt_ PIRP *Irp
+);
+
 NTSTATUS
 NTAPI
 IoSynchronousInvalidateDeviceRelations(

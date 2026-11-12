@@ -1300,6 +1300,78 @@ IoSynchronousPageWrite(IN PFILE_OBJECT FileObject,
 
 /*
  * @implemented
+ *
+ * Asynchronous form of IoSynchronousPageWrite: the write completes in the
+ * background, and ApcRoutine(ApcContext, IoStatusBlock, 0) then runs in the
+ * calling thread, from a kernel APC queued by IofCompleteRequest, after the
+ * status was stored in IoStatusBlock. The IRP is returned in *Irp before the
+ * driver is called. Priority is accepted; paging writes have no priority
+ * queue to place it in yet.
+ */
+NTSTATUS
+NTAPI
+IoAsynchronousPageWrite(IN PFILE_OBJECT FileObject,
+                        IN PMDL Mdl,
+                        IN PLARGE_INTEGER Offset,
+                        IN PIO_APC_ROUTINE ApcRoutine,
+                        IN PVOID ApcContext,
+                        IN IO_PAGING_PRIORITY Priority,
+                        OUT PIO_STATUS_BLOCK StatusBlock,
+                        OUT PIRP *IrpOut OPTIONAL)
+{
+    PIRP Irp;
+    PIO_STACK_LOCATION StackPtr;
+    PDEVICE_OBJECT DeviceObject;
+
+    UNREFERENCED_PARAMETER(Priority);
+
+    IOTRACE(IO_API_DEBUG, "FileObject: %p. Mdl: %p. Offset: %p\n",
+            FileObject, Mdl, Offset);
+
+    if (IrpOut != NULL)
+    {
+        *IrpOut = NULL;
+    }
+
+    /* Get the Device Object */
+    DeviceObject = IoGetRelatedDeviceObject(FileObject);
+
+    /* Allocate IRP */
+    Irp = IoAllocateIrp(DeviceObject->StackSize, FALSE);
+    if (!Irp) return STATUS_INSUFFICIENT_RESOURCES;
+
+    /* Get the Stack */
+    StackPtr = IoGetNextIrpStackLocation(Irp);
+
+    /* Paging write without IRP_SYNCHRONOUS_PAGING_IO: completed by APC */
+    Irp->MdlAddress = Mdl;
+    Irp->UserBuffer = MmGetMdlVirtualAddress(Mdl);
+    Irp->UserIosb = StatusBlock;
+    Irp->UserEvent = NULL;
+    Irp->RequestorMode = KernelMode;
+    Irp->Flags = IRP_PAGING_IO | IRP_NOCACHE;
+    Irp->Overlay.AsynchronousParameters.UserApcRoutine = ApcRoutine;
+    Irp->Overlay.AsynchronousParameters.UserApcContext = ApcContext;
+    Irp->Tail.Overlay.OriginalFileObject = FileObject;
+    Irp->Tail.Overlay.Thread = PsGetCurrentThread();
+
+    /* Set the Stack Settings */
+    StackPtr->Parameters.Write.Length = MmGetMdlByteCount(Mdl);
+    StackPtr->Parameters.Write.ByteOffset = *Offset;
+    StackPtr->MajorFunction = IRP_MJ_WRITE;
+    StackPtr->FileObject = FileObject;
+
+    if (IrpOut != NULL)
+    {
+        *IrpOut = Irp;
+    }
+
+    /* Call the Driver */
+    return IoCallDriver(DeviceObject, Irp);
+}
+
+/*
+ * @implemented
  */
 NTSTATUS
 NTAPI

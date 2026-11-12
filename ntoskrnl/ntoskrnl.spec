@@ -372,6 +372,7 @@
 @ stdcall IoAllocateWorkItem(ptr)
 @ fastcall IoAssignDriveLetters(ptr ptr ptr ptr)
 @ stdcall IoAssignResources(ptr ptr ptr ptr ptr ptr)
+@ stdcall IoAsynchronousPageWrite(ptr ptr ptr ptr ptr long ptr ptr)
 @ stdcall IoAttachDevice(ptr ptr ptr)
 @ stdcall IoAttachDeviceByPointer(ptr ptr)
 @ stdcall IoAttachDeviceToDeviceStack(ptr ptr)
