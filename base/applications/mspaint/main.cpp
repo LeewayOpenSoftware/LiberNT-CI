@@ -436,9 +436,21 @@ LRESULT CMainWindow::OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL&
     return 0;
 }
 
+void CMainWindow::UpdateStatusInfo()
+{
+    if (!::IsWindow(g_hStatusBar))
+        return;
+    CStringW strImage, strZoom;
+    strImage.Format(L"%d x %d px", imageModel.GetWidth(), imageModel.GetHeight());
+    strZoom.Format(L"%d%%", toolsModel.GetZoom() / 10);
+    ::SendMessageW(g_hStatusBar, SB_SETTEXT, 3, (LPARAM)(LPCWSTR)strImage);
+    ::SendMessageW(g_hStatusBar, SB_SETTEXT, 4, (LPARAM)(LPCWSTR)strZoom);
+}
+
 LRESULT CMainWindow::OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
     m_bRibbonDirty = FALSE;
+    UpdateStatusInfo();
     if (m_pRibbon)
     {
         LeewayRibbonSetContext(m_pRibbon, L"IsTextTool", toolsModel.GetActiveTool() == TOOL_TEXT);
@@ -865,11 +877,15 @@ LRESULT CMainWindow::OnInitMenuPopup(UINT nMsg, WPARAM wParam, LPARAM lParam, BO
 
 LRESULT CMainWindow::OnSize(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
-    int test[] = { LOWORD(lParam) - 260, LOWORD(lParam) - 140, LOWORD(lParam) - 20 };
+    // Parts: filler | cursor | selection size | image size | zoom
+    int w = LOWORD(lParam);
+    int k = (int)LeewayDpiGetForWindow(m_hWnd);
+    int test[] = { w - MulDiv(500, k, 96), w - MulDiv(380, k, 96), w - MulDiv(260, k, 96), w - MulDiv(130, k, 96), -1 };
     if (::IsWindow(g_hStatusBar))
     {
         ::SendMessageW(g_hStatusBar, WM_SIZE, 0, 0);
-        ::SendMessageW(g_hStatusBar, SB_SETPARTS, 3, (LPARAM)&test);
+        ::SendMessageW(g_hStatusBar, SB_SETPARTS, 5, (LPARAM)&test);
+        UpdateStatusInfo();
     }
     alignChildrenToMainWindow();
     return 0;

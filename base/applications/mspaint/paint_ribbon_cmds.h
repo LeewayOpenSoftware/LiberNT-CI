@@ -76,7 +76,7 @@ static const LeewayUICommand g_paintCommands[] = {
 
     /* Selection tools (600-615): radio set */
     { ID_FREESEL,                   L"Free form",               L"Free form selection", NULL,   LWUI_AUR_PAINT_SELECT_FREE, TRUE, FALSE, TRUE },
-    { ID_RECTSEL,                   L"Rectangle",               L"Rectangle selection", L"SE",  LWUI_AUR_PAINT_SELECT_RECT, TRUE, FALSE, TRUE },
+    { ID_RECTSEL,                   L"Select",                  L"Rectangle selection", L"SE",  LWUI_AUR_PAINT_SELECT_RECT, TRUE, FALSE, TRUE },
     { ID_RUBBER,                    L"Eraser",                  L"Eraser",              L"ER",   LWUI_AUR_PAINT_ERASER, TRUE, FALSE, TRUE },
     { ID_FILL,                      L"Fill with color",         L"Fill with color",     L"K",   LWUI_AUR_PAINT_FILL, TRUE, FALSE, TRUE },
     { ID_COLOR,                     L"Color picker",            L"Color picker",        L"I",   LWUI_AUR_PAINT_PICKER, TRUE, FALSE, TRUE },
@@ -166,7 +166,7 @@ static const LeewayUIPlacement g_homeToolsPlacement[] = {
 };
 
 static const LeewayUIPlacement g_homeBrushesPlacement[] = {
-    { 320,                 LWUI_CONTROL_GALLERY, L"B", 0 },
+    { 320,                 LWUI_CONTROL_SPLIT_LARGE, L"B", 0 },
 };
 
 static const LeewayUIPlacement g_homeShapesPlacement[] = {
@@ -176,7 +176,7 @@ static const LeewayUIPlacement g_homeShapesPlacement[] = {
 };
 
 static const LeewayUIPlacement g_homeSizePlacement[] = {
-    { 360,                 LWUI_CONTROL_DROPDOWN, L"SZ", 0 },
+    { 360,                 LWUI_CONTROL_SPLIT_LARGE, L"SZ", 0 },
 };
 
 static const LeewayUIPlacement g_homeColoursPlacement[] = {
@@ -203,7 +203,7 @@ static const LeewayUIGroup g_homeGroups[] = {
     { L"Shapes", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_homeShapesPlacement), g_homeShapesPlacement },
 
-    { L"Size", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_SMALL, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
+    { L"Size", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
       _countof(g_homeSizePlacement), g_homeSizePlacement },
 
     { L"Colours", NULL, LWUI_VARIANT_ORDER(LWUI_VARIANT_LARGE, LWUI_VARIANT_COLLAPSED, LWUI_VARIANT_NONE, LWUI_VARIANT_NONE), 0,
