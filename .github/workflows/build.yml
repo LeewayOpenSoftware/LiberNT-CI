@@ -272,6 +272,26 @@ jobs:
           ninja -C "$OUT" -k0
         fi
 
+    - name: Collect the kmtests binaries
+      # kmtest.exe + kmtest_drv.sys (and the standalone test drivers), the
+      # flushfail test filter where the branch has it, and ntfs_apitest.exe,
+      # for a lab run against the LiberNT.img of the same commit; the images
+      # themselves are built without ENABLE_ROSTESTS and carry no tests. A
+      # directory the branch does not build is skipped (find reports it and
+      # exits non-zero); an empty result still fails the upload below.
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p kmtests-out
+        find "$OUT/modules/rostests/kmtests" "$OUT/modules/rostests/drivers/flushfail" "$OUT/modules/rostests/apitests/ntfs" -type f \( -name '*.exe' -o -name '*.sys' -o -name '*.dll' -o -name '*.inf' \) -exec cp -v {} kmtests-out/ \; || true
+        ls -l kmtests-out
+
+    - name: Upload the kmtests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: kmtests-clang-amd64-${{github.sha}}
+        path: kmtests-out/
+        if-no-files-found: error
+
     - name: Save ccache
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
       uses: actions/cache/save@v5
