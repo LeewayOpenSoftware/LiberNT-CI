@@ -30,6 +30,7 @@ extern void func_ExcludeClipRect(void);
 extern void func_ExtCreatePen(void);
 extern void func_ExtCreateRegion(void);
 extern void func_ExtTextOut(void);
+extern void func_FormatCharWidth(void);
 extern void func_FrameRgn(void);
 extern void func_GdiBatch(void);
 extern void func_GdiConvertBitmap(void);
@@ -118,6 +119,7 @@ const struct test winetest_testlist[] =
     { "ExtCreatePen", func_ExtCreatePen },
     { "ExtCreateRegion", func_ExtCreateRegion },
     { "ExtTextOut", func_ExtTextOut },
+    { "FormatCharWidth", func_FormatCharWidth },
     { "FrameRgn", func_FrameRgn },
     { "GdiBatch", func_GdiBatch },
     { "GdiConvertBitmap", func_GdiConvertBitmap },
