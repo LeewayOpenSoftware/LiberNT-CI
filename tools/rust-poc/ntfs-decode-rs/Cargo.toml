@@ -1,0 +1,23 @@
+# R1c: experimental Rust port of NtfsDecodeMappingPairs, exported as the ntfslib rig's
+# alternative implementation (ntfs_alt_impl). no_std staticlib; links with -DNTFSLIB_DIFF_ALT
+# into ntfslib_decode_diff_test. Not shipped; off by default; the C decoder stays production.
+[package]
+name = "ntfs-decode-rs"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Leeway experimental (R1c) no_std Rust NTFS mapping-pairs decoder. Rig alt impl; not production."
+
+[lib]
+name = "ntfs_decode_rs"
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
