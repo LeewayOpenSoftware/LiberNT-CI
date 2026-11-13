@@ -5405,7 +5405,7 @@ IntNeedRequestFontSize(PFONTLINK_CHAIN pChain, FT_Face face, PLIST_ENTRY TargetE
     return TRUE;
 }
 
-/* A default-ignorable format character the font has no glyph for takes no room, as on Windows */
+/* A default-ignorable format character the font has no glyph for takes no room */
 static BOOL
 IntIsInvisibleFormatChar(
     _In_ PFONTLINK_CHAIN pChain,
@@ -8590,6 +8590,8 @@ IntExtTextOutW(
      */
     X64 = RealXStart64;
     Y64 = RealYStart64;
+    DestRect.left = DestRect.right = (LONG)((X64 + 32) >> 6);
+    DestRect.top = DestRect.bottom = (LONG)((Y64 + 32) >> 6);
     DoBreak = FALSE;
     bResult = TRUE; /* Assume success */
     for (i = 0; i < Count; ++i)
@@ -8617,6 +8619,7 @@ IntExtTextOutW(
                 X64 += vec.x;
                 Y64 -= vec.y;
             }
+            DestRect.left = DestRect.right = (LONG)((X64 + 32) >> 6);
             continue;
         }
 
