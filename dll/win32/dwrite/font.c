@@ -3361,31 +3361,32 @@ static UINT32 collection_find_family(struct dwrite_fontcollection *collection, c
 }
 
 #ifdef __REACTOS__
+static const struct { const WCHAR *from; const WCHAR *to; } reactos_family_map[] =
+{
+    { L"Segoe UI", L"Selawik" },
+    { L"Segoe UI Light", L"Selawik Light" },
+    { L"Segoe UI Semilight", L"Selawik Semilight" },
+    { L"Segoe UI Semibold", L"Selawik Semibold" },
+    { L"Segoe UI Variable", L"Selawik" },
+    { L"Segoe UI Variable Text", L"Selawik" },
+    { L"Segoe UI Variable Display", L"Selawik" },
+    { L"Segoe UI Variable Small", L"Selawik" },
+    { L"Segoe Fluent Icons", L"Segoe MDL2 Assets" },
+    { L"Segoe UI Symbol", L"Segoe MDL2 Assets" },
+    { L"Calibri", L"Selawik" },
+    { L"Cambria", L"Georgia" },
+    { L"Consolas", L"Lucida Console" },
+    { L"Cascadia Code", L"Lucida Console" },
+    { L"Cascadia Mono", L"Lucida Console" },
+};
+
 static const WCHAR *reactos_family_substitute(const WCHAR *name)
 {
-    static const struct { const WCHAR *from; const WCHAR *to; } map[] =
-    {
-        { L"Segoe UI", L"Selawik" },
-        { L"Segoe UI Light", L"Selawik Light" },
-        { L"Segoe UI Semilight", L"Selawik Semilight" },
-        { L"Segoe UI Semibold", L"Selawik Semibold" },
-        { L"Segoe UI Variable", L"Selawik" },
-        { L"Segoe UI Variable Text", L"Selawik" },
-        { L"Segoe UI Variable Display", L"Selawik" },
-        { L"Segoe UI Variable Small", L"Selawik" },
-        { L"Segoe Fluent Icons", L"Segoe MDL2 Assets" },
-        { L"Segoe UI Symbol", L"Segoe MDL2 Assets" },
-        { L"Calibri", L"Selawik" },
-        { L"Cambria", L"Georgia" },
-        { L"Consolas", L"Lucida Console" },
-        { L"Cascadia Code", L"Lucida Console" },
-        { L"Cascadia Mono", L"Lucida Console" },
-    };
     ULONG i;
 
-    for (i = 0; i < ARRAY_SIZE(map); i++)
+    for (i = 0; i < ARRAY_SIZE(reactos_family_map); i++)
     {
-        if (!wcsicmp(name, map[i].from)) return map[i].to;
+        if (!wcsicmp(name, reactos_family_map[i].from)) return reactos_family_map[i].to;
     }
     return NULL;
 }
@@ -4683,6 +4684,64 @@ static BOOL fontcollection_add_replacement(struct dwrite_fontcollection *collect
     return TRUE;
 }
 
+#ifdef __REACTOS__
+static void fontcollection_add_win32_family(struct dwrite_fontcollection *collection, const WCHAR *name)
+{
+    struct dwrite_fontfamily_data *family_data, *target;
+    struct dwrite_font_data *font_data;
+    IDWriteLocalizedStrings *strings;
+    UINT32 count = collection->count, i, j;
+
+    if (collection_find_family(collection, name) != ~0u)
+        return;
+
+    if (FAILED(create_localizedstrings(&strings)))
+        return;
+
+    add_localizedstring(strings, L"en-us", name);
+    if (FAILED(init_fontfamily_data(strings, &target)))
+    {
+        IDWriteLocalizedStrings_Release(strings);
+        return;
+    }
+    IDWriteLocalizedStrings_Release(strings);
+
+    for (i = 0; i < count; ++i)
+    {
+        family_data = collection->family_data[i];
+        for (j = 0; j < family_data->count; ++j)
+        {
+            font_data = family_data->fonts[j];
+            if (font_data->simulations != DWRITE_FONT_SIMULATIONS_NONE || wcsicmp(font_data->lf.lfFaceName, name))
+                continue;
+            if (SUCCEEDED(fontfamily_add_font(target, font_data)))
+                addref_font_data(font_data);
+        }
+    }
+
+    if (!target->count || FAILED(fontcollection_add_family(collection, target)))
+    {
+        release_fontfamily_data(target);
+        return;
+    }
+
+    if (collection->family_model == DWRITE_FONT_FAMILY_MODEL_WEIGHT_STRETCH_STYLE)
+    {
+        fontfamily_add_bold_simulated_face(target);
+        fontfamily_add_oblique_simulated_face(target);
+    }
+    TRACE("win32 family %s, %u faces\n", debugstr_w(name), target->count);
+}
+
+static void fontcollection_add_win32_families(struct dwrite_fontcollection *collection)
+{
+    ULONG i;
+
+    for (i = 0; i < ARRAY_SIZE(reactos_family_map); i++)
+        fontcollection_add_win32_family(collection, reactos_family_map[i].to);
+}
+#endif
+
 /* Add family mappings from HKCU\Software\Wine\Fonts\Replacements. This only affects
    system font collections. */
 static void fontcollection_add_replacements(struct dwrite_fontcollection *collection)
@@ -4916,7 +4975,12 @@ HRESULT create_font_collection_from_set(IDWriteFactory7 *factory, IDWriteFontSet
     }
 
     if (set->is_system)
+    {
+#ifdef __REACTOS__
+        fontcollection_add_win32_families(collection);
+#endif
         fontcollection_add_replacements(collection);
+    }
 
     hr = IDWriteFontCollection3_QueryInterface(&collection->IDWriteFontCollection3_iface, riid, ret);
     IDWriteFontCollection3_Release(&collection->IDWriteFontCollection3_iface);
