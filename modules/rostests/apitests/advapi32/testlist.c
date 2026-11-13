@@ -18,6 +18,7 @@ extern void func_HKEY_CLASSES_ROOT(void);
 extern void func_InitiateShutdown(void);
 extern void func_ImpersonateRestricted(void);
 extern void func_IntegrityLabels(void);
+extern void func_LogonProcess(void);
 extern void func_LogonSession(void);
 extern void func_LogonSessionEnd(void);
 extern void func_LogonUserNetwork(void);
@@ -62,6 +63,7 @@ extern void func_TraceEvents(void);
 extern void func_TokenDefaultPrivileges(void);
 extern void func_TokenIntegrity(void);
 extern void func_TokenIntegrityLevel(void);
+extern void func_TokenUac(void);
 extern void func_TraceGuids(void);
 extern void func_UserHiveAccess(void);
 
@@ -83,6 +85,7 @@ const struct test winetest_testlist[] =
     { "InitiateShutdown", func_InitiateShutdown },
     { "ImpersonateRestricted", func_ImpersonateRestricted },
     { "IntegrityLabels", func_IntegrityLabels },
+    { "LogonProcess", func_LogonProcess },
     { "LogonSession", func_LogonSession },
     { "LogonSessionEnd", func_LogonSessionEnd },
     { "LogonUserNetwork", func_LogonUserNetwork },
@@ -127,6 +130,7 @@ const struct test winetest_testlist[] =
     { "TokenDefaultPrivileges", func_TokenDefaultPrivileges },
     { "TokenIntegrity", func_TokenIntegrity },
     { "TokenIntegrityLevel", func_TokenIntegrityLevel },
+    { "TokenUac", func_TokenUac },
     { "TraceGuids", func_TraceGuids },
     { "UserHiveAccess", func_UserHiveAccess },
     { 0, 0 }

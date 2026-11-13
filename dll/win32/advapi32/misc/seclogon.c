@@ -171,7 +171,10 @@ CreateProcessWithTokenW(
     if (lpStartupInfo->lpDesktop != NULL && lpStartupInfo->lpDesktop[0] != UNICODE_NULL)
         Request.Desktop = lpStartupInfo->lpDesktop;
     else if (SeclCallerDesktop(Desktop, ARRAYSIZE(Desktop)))
+    {
         Request.Desktop = Desktop;
+        Request.dwDesktopInherited = TRUE;
+    }
 
     /* Without a directory of its own, the process starts where the caller is */
     if (lpCurrentDirectory == NULL)

@@ -2753,40 +2753,169 @@ BOOL WINAPI ConvertSidToStringSidA(PSID pSid, LPSTR *pstr)
 /******************************************************************************
  * CreateProcessWithLogonW [ADVAPI32.@]
  */
+static DWORD
+GetEnvironmentBlockSize(_In_opt_ LPVOID Environment, _In_ BOOL Unicode)
+{
+    SIZE_T Length;
+
+    if (!Environment)
+        return 0;
+    if (Unicode)
+    {
+        PCWSTR End = Environment;
+
+        while (End[0] || End[1])
+            End++;
+        Length = (End - (PCWSTR)Environment + 2) * sizeof(WCHAR);
+    }
+    else
+    {
+        PCSTR End = Environment;
+
+        while (End[0] || End[1])
+            End++;
+        Length = End - (PCSTR)Environment + 2;
+    }
+    return (DWORD)Length;
+}
+
+static BOOL
+StartSecondaryLogonService(void)
+{
+    SC_HANDLE manager, service;
+    SERVICE_STATUS status;
+    BOOL running = FALSE;
+    ULONG i;
+
+    if (!(manager = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT)))
+        return FALSE;
+    service = OpenServiceW(manager, L"seclogon", SERVICE_START | SERVICE_QUERY_STATUS);
+    CloseServiceHandle(manager);
+    if (!service)
+        return FALSE;
+
+    if (StartServiceW(service, 0, NULL) || GetLastError() == ERROR_SERVICE_ALREADY_RUNNING)
+    {
+        for (i = 0; i < 100 && QueryServiceStatus(service, &status); i++)
+        {
+            if (status.dwCurrentState == SERVICE_RUNNING)
+            {
+                running = TRUE;
+                break;
+            }
+            if (status.dwCurrentState == SERVICE_STOPPED)
+                break;
+            Sleep(100);
+        }
+    }
+    CloseServiceHandle(service);
+    return running;
+}
+
+static DWORD
+CallSecondaryLogon(SECL_REQUEST *request, SECL_RESPONSE *response)
+{
+    LPWSTR string_binding = NULL;
+    handle_t binding = NULL;
+    RPC_STATUS status;
+
+    status = RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL, (RPC_WSTR)L"\\pipe\\seclogon",
+                                      NULL, (RPC_WSTR *)&string_binding);
+    if (status == RPC_S_OK)
+    {
+        status = RpcBindingFromStringBindingW((RPC_WSTR)string_binding, &binding);
+        RpcStringFreeW((RPC_WSTR *)&string_binding);
+    }
+    if (status != RPC_S_OK)
+    {
+        WARN("binding to seclogon failed with %ld\n", status);
+        return status;
+    }
+
+    ZeroMemory(response, sizeof(*response));
+    RpcTryExcept
+    {
+        SeclCreateProcessWithLogonW(binding, request, response);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        response->dwError = RpcExceptionCode();
+    }
+    RpcEndExcept;
+
+    RpcBindingFree(&binding);
+    return response->dwError;
+}
+
 BOOL WINAPI CreateProcessWithLogonW( LPCWSTR user_name, LPCWSTR domain, LPCWSTR password,
                                      DWORD logon_flags, LPCWSTR application_name, LPWSTR command_line,
                                      DWORD creation_flags, void *environment, LPCWSTR current_directory,
                                      STARTUPINFOW *startup_info, PROCESS_INFORMATION *process_information )
 {
-    HANDLE token;
+    PUNICODE_STRING desktop_info;
+    LPWSTR desktop = NULL;
+    SECL_REQUEST request;
+    SECL_RESPONSE response;
 
-    FIXME("%s %s %p 0x%08lx %s %s 0x%08lx %p %s %p %p: semi-stub\n", debugstr_w(user_name), debugstr_w(domain),
-          password, logon_flags, debugstr_w(application_name), debugstr_w(command_line), creation_flags,
+    TRACE("%s %s 0x%08lx %s %s 0x%08lx %p %s %p %p\n", debugstr_w(user_name), debugstr_w(domain),
+          logon_flags, debugstr_w(application_name), debugstr_w(command_line), creation_flags,
           environment, debugstr_w(current_directory), startup_info, process_information);
 
-    if (LogonUserW(user_name, domain, password, 0, 0, &token))
+    if (!user_name || !startup_info || !process_information)
     {
-        void *env = environment;
-        BOOL ret = TRUE;
-
-        if (!environment)
-        {
-            ret = CreateEnvironmentBlock(&env, token, FALSE);
-            creation_flags |= CREATE_UNICODE_ENVIRONMENT;
-        }
-
-        if (ret)
-        {
-            ret = CreateProcessAsUserW( token, application_name, command_line, NULL, NULL, FALSE,
-                    creation_flags, env, current_directory, startup_info, process_information );
-        }
-        if (env != environment)
-            DestroyEnvironmentBlock(env);
-        CloseHandle(token);
-        return ret;
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
     }
 
-    return FALSE;
+    ZeroMemory(&request, sizeof(request));
+    request.Username = (LPWSTR)user_name;
+    request.Domain = (LPWSTR)domain;
+    request.Password = (LPWSTR)password;
+    request.ApplicationName = (LPWSTR)application_name;
+    request.CommandLine = command_line;
+    request.CurrentDirectory = (LPWSTR)current_directory;
+    request.Environment = environment;
+    request.dwEnvironmentSize = GetEnvironmentBlockSize(environment,
+                                                        (creation_flags & CREATE_UNICODE_ENVIRONMENT) != 0);
+    request.dwLogonFlags = logon_flags;
+    request.dwCreationFlags = creation_flags;
+    request.dwProcessId = GetCurrentProcessId();
+    if (startup_info->lpDesktop && *startup_info->lpDesktop)
+    {
+        request.Desktop = startup_info->lpDesktop;
+    }
+    else
+    {
+        desktop_info = &NtCurrentPeb()->ProcessParameters->DesktopInfo;
+        if (desktop_info->Length &&
+            (desktop = HeapAlloc(GetProcessHeap(), 0, desktop_info->Length + sizeof(WCHAR))))
+        {
+            memcpy(desktop, desktop_info->Buffer, desktop_info->Length);
+            desktop[desktop_info->Length / sizeof(WCHAR)] = 0;
+        }
+        request.Desktop = desktop;
+        request.dwDesktopInherited = TRUE;
+    }
+
+    if (CallSecondaryLogon(&request, &response) == RPC_S_SERVER_UNAVAILABLE &&
+        StartSecondaryLogonService())
+    {
+        CallSecondaryLogon(&request, &response);
+    }
+    HeapFree(GetProcessHeap(), 0, desktop);
+
+    if (response.dwError != ERROR_SUCCESS)
+    {
+        WARN("seclogon returned %lu\n", response.dwError);
+        SetLastError(response.dwError);
+        return FALSE;
+    }
+
+    process_information->hProcess = (HANDLE)response.hProcess;
+    process_information->hThread = (HANDLE)response.hThread;
+    process_information->dwProcessId = response.dwProcessId;
+    process_information->dwThreadId = response.dwThreadId;
+    return TRUE;
 }
 
 #ifndef __REACTOS__

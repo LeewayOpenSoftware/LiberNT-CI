@@ -18,6 +18,7 @@ list(APPEND SOURCE
     HKEY_CLASSES_ROOT.c
     InitiateShutdown.c
     IntegrityLabels.c
+    LogonProcess.c
     LogonSession.c
     LogonSessionEnd.c
     LogonUserNetwork.c
@@ -61,6 +62,7 @@ list(APPEND SOURCE
     TokenDefaultPrivileges.c
     TokenIntegrity.c
     TokenIntegrityLevel.c
+    TokenUac.c
     TraceGuids.c
     UserHiveAccess.c
     svchlp.c)

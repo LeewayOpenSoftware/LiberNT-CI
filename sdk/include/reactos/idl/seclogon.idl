@@ -19,6 +19,7 @@ typedef struct _SECL_REQUEST
     DWORD dwProcessId;
     [string] WCHAR *Desktop;
     DWORD_PTR hToken;
+    DWORD dwDesktopInherited;
 } SECL_REQUEST, *PSECL_REQUEST;
 
 typedef struct _SECL_RESPONSE
