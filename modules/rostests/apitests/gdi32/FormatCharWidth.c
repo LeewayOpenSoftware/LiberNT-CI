@@ -142,6 +142,42 @@ TestMarkWithDx(
 }
 
 static
+HFONT
+CreateHebrewFont(
+    _In_ HDC hdc)
+{
+    static const PCWSTR Faces[] = { L"Segoe UI", L"Tahoma", L"Arial", L"DejaVu Sans", L"FreeSans" };
+    static const WCHAR Needed[] = { 0x05E9, 0x05B8, 0x05DC, 0x05D5, 0x05DD };
+    WORD Glyphs[ARRAYSIZE(Needed)];
+    HFONT hFont, hOldFont;
+    UINT i, j;
+
+    for (i = 0; i < ARRAYSIZE(Faces); i++)
+    {
+        hFont = CreateFontW(-20, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                            CLIP_DEFAULT_PRECIS, ANTIALIASED_QUALITY, DEFAULT_PITCH, Faces[i]);
+        if (hFont == NULL)
+            continue;
+
+        hOldFont = SelectObject(hdc, hFont);
+        j = 0;
+        if (GetGlyphIndicesW(hdc, Needed, ARRAYSIZE(Needed), Glyphs, GGI_MARK_NONEXISTING_GLYPHS) == ARRAYSIZE(Needed))
+        {
+            while (j < ARRAYSIZE(Needed) && Glyphs[j] != 0xFFFF)
+                j++;
+        }
+        SelectObject(hdc, hOldFont);
+
+        if (j == ARRAYSIZE(Needed))
+            return hFont;
+
+        DeleteObject(hFont);
+    }
+
+    return NULL;
+}
+
+static
 VOID
 TestRtlCombiningMark(
     _In_ HDC hdc,
@@ -150,12 +186,25 @@ TestRtlCombiningMark(
     static const WCHAR Bare[] = { 0x05E9, 0x05DC, 0x05D5, 0x05DD };
     static const WCHAR Pointed[] = { 0x05E9, 0x05B8, 0x05DC, 0x05D5, 0x05DD };
     ULONG BareInk, PointedInk;
+    HFONT hFont, hOldFont;
     LONG Right;
+
+    hFont = CreateHebrewFont(hdc);
+    if (hFont == NULL)
+    {
+        skip("no installed font has the Hebrew letters and the qamats point\n");
+        return;
+    }
+    hOldFont = SelectObject(hdc, hFont);
 
     BareInk = DrawInk(hdc, Bits, Bare, ARRAYSIZE(Bare), NULL, &Right);
     PointedInk = DrawInk(hdc, Bits, Pointed, ARRAYSIZE(Pointed), NULL, &Right);
+    ok(BareInk > 0, "the Hebrew letters were not drawn\n");
     ok(PointedInk > BareInk, "the Hebrew point was not drawn: %lu ink pixels with it, %lu without\n",
        PointedInk, BareInk);
+
+    SelectObject(hdc, hOldFont);
+    DeleteObject(hFont);
 }
 
 START_TEST(FormatCharWidth)
