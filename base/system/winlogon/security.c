@@ -812,7 +812,7 @@ AllowWinstaAccessToUser(
     BOOL Success = FALSE;
     SECURITY_DESCRIPTOR AbsoluteSd;
     PSECURITY_DESCRIPTOR RelativeSd = NULL;
-    PSID WinlogonSid = NULL, AdminsSid = NULL, InteractiveSid = NULL;
+    PSID WinlogonSid = NULL, AdminsSid = NULL;
     SECURITY_INFORMATION SecurityInformation;
     DWORD DaclSize;
     PACL Dacl = NULL;
@@ -840,32 +840,19 @@ AllowWinstaAccessToUser(
         goto Quit;
     }
 
-    /* Create the interactive logon SID */
-    if (!AllocateAndInitializeSid(&NtAuthority,
-                                  1,
-                                  SECURITY_INTERACTIVE_RID,
-                                  0, 0, 0, 0, 0, 0, 0,
-                                  &InteractiveSid))
-    {
-        ERR("AllowWinstaAccessToUser(): Failed to create the interactive SID (error code %lu)\n", GetLastError());
-        goto Quit;
-    }
-
     /*
      * Build up the DACL size. This includes a number
-     * of eight ACEs of four different SIDs. The first ACE
+     * of six ACEs of three different SIDs. The first ACE
      * gives full winsta access to Winlogon, the second one gives
      * generic access to Winlogon. Such approach is the same
-     * for both interactive logon users and logon user as well.
-     * Only admins are given limited powers.
+     * for the logon user as well. Only admins are given
+     * limited powers.
      */
     DaclSize = sizeof(ACL) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(WinlogonSid) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(WinlogonSid) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(AdminsSid) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(AdminsSid) +
-               sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(InteractiveSid) +
-               sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(InteractiveSid) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(LogonSid) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(LogonSid);
 
@@ -930,29 +917,7 @@ AllowWinstaAccessToUser(
         goto Quit;
     }
 
-    /* Fifth ACE -- Give full winsta access to interactive logon users */
-    if (!AddAccessAllowedAceEx(Dacl,
-                               ACL_REVISION,
-                               NO_PROPAGATE_INHERIT_ACE,
-                               WINSTA_ALL,
-                               InteractiveSid))
-    {
-        ERR("AllowWinstaAccessToUser(): Failed to set ACE for interactive SID (error code %lu)\n", GetLastError());
-        goto Quit;
-    }
-
-    /* Sixth ACE -- Give generic access to interactive logon users */
-    if (!AddAccessAllowedAceEx(Dacl,
-                               ACL_REVISION,
-                               INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
-                               GENERIC_ACCESS,
-                               InteractiveSid))
-    {
-        ERR("AllowWinstaAccessToUser(): Failed to set ACE for interactive SID (error code %lu)\n", GetLastError());
-        goto Quit;
-    }
-
-    /* Seventh ACE -- Give full winsta access to logon user */
+    /* Fifth ACE -- Give full winsta access to logon user */
     if (!AddAccessAllowedAceEx(Dacl,
                                ACL_REVISION,
                                NO_PROPAGATE_INHERIT_ACE,
@@ -963,7 +928,7 @@ AllowWinstaAccessToUser(
         goto Quit;
     }
 
-    /* Eighth ACE -- Give generic access to logon user */
+    /* Sixth ACE -- Give generic access to logon user */
     if (!AddAccessAllowedAceEx(Dacl,
                                ACL_REVISION,
                                INHERIT_ONLY_ACE | OBJECT_INHERIT_ACE | CONTAINER_INHERIT_ACE,
@@ -1017,11 +982,6 @@ Quit:
         FreeSid(AdminsSid);
     }
 
-    if (InteractiveSid != NULL)
-    {
-        FreeSid(InteractiveSid);
-    }
-
     if (Dacl != NULL)
     {
         RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
@@ -1061,7 +1021,7 @@ AllowDesktopAccessToUser(
     BOOL Success = FALSE;
     SECURITY_DESCRIPTOR AbsoluteSd;
     PSECURITY_DESCRIPTOR RelativeSd = NULL;
-    PSID WinlogonSid = NULL, AdminsSid = NULL, InteractiveSid = NULL;
+    PSID WinlogonSid = NULL, AdminsSid = NULL;
     SECURITY_INFORMATION SecurityInformation;
     DWORD DaclSize;
     PACL Dacl = NULL;
@@ -1089,29 +1049,16 @@ AllowDesktopAccessToUser(
         goto Quit;
     }
 
-    /* Create the interactive logon SID */
-    if (!AllocateAndInitializeSid(&NtAuthority,
-                                  1,
-                                  SECURITY_INTERACTIVE_RID,
-                                  0, 0, 0, 0, 0, 0, 0,
-                                  &InteractiveSid))
-    {
-        ERR("AllowDesktopAccessToUser(): Failed to create the interactive SID (error code %lu)\n", GetLastError());
-        goto Quit;
-    }
-
     /*
      * Build up the DACL size. This includes a number
-     * of four ACEs of four different SIDs. The first ACE
+     * of three ACEs of three different SIDs. The first ACE
      * gives full desktop access to Winlogon, the second one gives
-     * generic limited desktop access to admins. The last two give
-     * full power to both interactive logon users and logon user as
-     * well.
+     * generic limited desktop access to admins. The last one gives
+     * full power to the logon user.
      */
     DaclSize = sizeof(ACL) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(WinlogonSid) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(AdminsSid) +
-               sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(InteractiveSid) +
                sizeof(ACCESS_ALLOWED_ACE) - sizeof(DWORD) + GetLengthSid(LogonSid);
 
     /* Allocate the DACL now */
@@ -1153,18 +1100,7 @@ AllowDesktopAccessToUser(
         goto Quit;
     }
 
-    /* Third ACE -- Give full desktop access to interactive logon users */
-    if (!AddAccessAllowedAceEx(Dacl,
-                               ACL_REVISION,
-                               0,
-                               DESKTOP_ALL,
-                               InteractiveSid))
-    {
-        ERR("AllowDesktopAccessToUser(): Failed to set ACE for interactive SID (error code %lu)\n", GetLastError());
-        goto Quit;
-    }
-
-    /* Fourth ACE -- Give full desktop access to logon user */
+    /* Third ACE -- Give full desktop access to logon user */
     if (!AddAccessAllowedAceEx(Dacl,
                                ACL_REVISION,
                                0,
@@ -1216,11 +1152,6 @@ Quit:
     if (AdminsSid != NULL)
     {
         FreeSid(AdminsSid);
-    }
-
-    if (InteractiveSid != NULL)
-    {
-        FreeSid(InteractiveSid);
     }
 
     if (Dacl != NULL)
