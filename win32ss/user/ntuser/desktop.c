@@ -621,6 +621,62 @@ IntIsServiceAccountProcess(
     return IsService;
 }
 
+/* Checked against the process's own token: an open made for another process carries the caller's (NtUserResolveDesktop) */
+static
+BOOLEAN
+IntProcessHasWinStaAccess(
+    _In_ PEPROCESS Process,
+    _In_ HWINSTA hWinSta,
+    _In_ ACCESS_MASK Access)
+{
+    SECURITY_SUBJECT_CONTEXT Subject;
+    PSECURITY_DESCRIPTOR Descriptor;
+    PPRIVILEGE_SET Privileges = NULL;
+    ACCESS_MASK Granted = 0;
+    BOOLEAN MemoryAllocated;
+    BOOLEAN Allowed = FALSE;
+    PVOID WinSta;
+    NTSTATUS Status;
+
+    if (Process == PsGetCurrentProcess())
+    {
+        if (!NT_SUCCESS(ObReferenceObjectByHandle(hWinSta, Access, ExWindowStationObjectType,
+                                                  UserMode, &WinSta, NULL)))
+        {
+            return FALSE;
+        }
+        ObDereferenceObject(WinSta);
+        return TRUE;
+    }
+
+    Status = ObReferenceObjectByHandle(hWinSta, 0, ExWindowStationObjectType, KernelMode, &WinSta, NULL);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = ObGetObjectSecurity(WinSta, &Descriptor, &MemoryAllocated);
+    if (NT_SUCCESS(Status) && Descriptor != NULL)
+    {
+        RtlZeroMemory(&Subject, sizeof(Subject));
+        Subject.ImpersonationLevel = SecurityAnonymous;
+        Subject.PrimaryToken = PsReferencePrimaryToken(Process);
+        if (Subject.PrimaryToken != NULL)
+        {
+            SeLockSubjectContext(&Subject);
+            Allowed = SeAccessCheck(Descriptor, &Subject, TRUE, Access, 0, &Privileges,
+                                    &ExWindowStationObjectType->TypeInfo.GenericMapping,
+                                    UserMode, &Granted, &Status);
+            SeUnlockSubjectContext(&Subject);
+            if (Privileges != NULL)
+                SeFreePrivileges(Privileges);
+            PsDereferencePrimaryToken(Subject.PrimaryToken);
+        }
+        ObReleaseObjectSecurity(Descriptor, MemoryAllocated);
+    }
+
+    ObDereferenceObject(WinSta);
+    return Allowed;
+}
+
 NTSTATUS
 FASTCALL
 IntResolveDesktop(
@@ -1034,31 +1090,19 @@ IntResolveDesktop(
 
             // TODO: Check also that we compare wrt. window station WinSta0
             // which is the only one that can be interactive on the system.
-            /* A process that names the window station got in through its DACL, which is what grants another logon session (CreateProcessWithTokenW) */
-            if ((!bUseDefaultWinSta && Process == PsGetCurrentProcess()) ||
-                (bInherit && RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
+            if ((bInherit && RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
                 RtlEqualLuid(&ProcessLuid, &WinStaObject->luidUser))
             {
                 /* We are interactive on this window station */
                 bAccessAllowed = TRUE;
                 Status = STATUS_SUCCESS;
             }
-            else if (!bUseDefaultWinSta && !IntIsServiceAccountProcess(Process))
+            /* A named WinSta0 from another logon needs a logon SID grant: admins and the user SID hold less */
+            else if (!bUseDefaultWinSta && !IntIsServiceAccountProcess(Process) &&
+                     IntProcessHasWinStaAccess(Process, hTempWinSta, WINSTA_CREATEDESKTOP))
             {
-                PVOID GrantedWinSta;
-
-                /* A named WinSta0 from another logon needs a logon SID grant: admins and the user SID hold less */
-                if (NT_SUCCESS(ObReferenceObjectByHandle(hTempWinSta,
-                                                         WINSTA_CREATEDESKTOP,
-                                                         ExWindowStationObjectType,
-                                                         UserMode,
-                                                         &GrantedWinSta,
-                                                         NULL)))
-                {
-                    ObDereferenceObject(GrantedWinSta);
-                    bAccessAllowed = TRUE;
-                    Status = STATUS_SUCCESS;
-                }
+                bAccessAllowed = TRUE;
+                Status = STATUS_SUCCESS;
             }
         }
         else
