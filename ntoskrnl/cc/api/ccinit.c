@@ -20,6 +20,7 @@ typedef struct _CC_NT_DEFERRED_WRITE
     PVOID Context1;
     PVOID Context2;
     ULONG BytesToWrite;
+    ULONG StalledPassesSeen;   /* CcNtStalledPasses when queued */
 } CC_NT_DEFERRED_WRITE, *PCC_NT_DEFERRED_WRITE;
 
 typedef struct _CC_NT_LAZY_WAITER
@@ -56,6 +57,13 @@ static KSPIN_LOCK CcNtLazyWaitLock;
 static BOOLEAN CcNtReady;
 /* Set at shutdown: the lazy writer no longer starts passes on its own timer. */
 static volatile LONG CcNtLazyTimerStopped;
+/* Set by a pass that found only maps in failure backoff: no kicks until then
+ * (the timer pass still runs); the throttled and deferred writers stop waiting. */
+static volatile LONG64 CcNtLazyStalledUntil;
+/* Lazy thread only: earliest backoff release seen in the current pass (0 = none).
+ * CcNtStalledPasses counts the passes that ended stalled, once each. */
+static ULONG64 CcNtPassSkippedUntil;
+static volatile LONG CcNtStalledPasses;
 
 NTSTATUS
 CcNtFlushMap(
@@ -104,8 +112,14 @@ CcNtFlushMap(
 VOID
 CcNtKickLazyWriter(VOID)
 {
-    if (CcNtReady)
+    if (CcNtReady && !CcNtLazyIsStalled())
         KeSetEvent(&CcNtLazyWriterEvent, IO_NO_INCREMENT, FALSE);
+}
+
+BOOLEAN
+CcNtLazyIsStalled(VOID)
+{
+    return (BOOLEAN)((ULONG64)KeQueryInterruptTime() < (ULONG64)CC_ATOMIC_READ64(&CcNtLazyStalledUntil));
 }
 
 ULONG
@@ -137,7 +151,9 @@ CcNtProcessDeferredWrites(VOID)
         {
             PCC_NT_DEFERRED_WRITE First = CONTAINING_RECORD(CcNtDeferredWrites.Flink, CC_NT_DEFERRED_WRITE, Link);
 
-            if (CcDirtyCanWrite(&CcNtCache, NULL, First->BytesToWrite))
+            if (CcDirtyCanWrite(&CcNtCache, NULL, First->BytesToWrite) ||
+                (CcNtLazyIsStalled() &&
+                 (ULONG)CcNtStalledPasses - First->StalledPassesSeen >= CC_NT_STALLED_DEFERRED_PASSES))
             {
                 RemoveEntryList(&First->Link);
                 Deferred = First;
@@ -178,6 +194,7 @@ CcDeferWrite(
     Deferred->Context1 = Context1;
     Deferred->Context2 = Context2;
     Deferred->BytesToWrite = BytesToWrite;
+    Deferred->StalledPassesSeen = (ULONG)CcNtStalledPasses;
 
     KeAcquireSpinLock(&CcNtDeferredLock, &OldIrql);
     if (Retrying)
@@ -217,21 +234,99 @@ CcNtReferenceDirtyMap(
 }
 
 static
-PCC_NT_MAP
-CcNtNextDirtyMap(VOID)
+BOOLEAN
+CcNtMapInBackoff(
+    _In_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 Now)
 {
+    return (BOOLEAN)(Now < (ULONG64)CC_ATOMIC_READ64(&NtMap->FlushBackoffUntil));
+}
+
+/* Lazy thread: a map in backoff was skipped; keep the earliest release of the pass. */
+static
+VOID
+CcNtNoteBackoffSkip(
+    _In_ ULONG64 Until)
+{
+    if (CcNtPassSkippedUntil == 0 || Until < CcNtPassSkippedUntil)
+        CcNtPassSkippedUntil = Until;
+}
+
+/* After a lazy write-back of one map: a failure puts the map into a growing
+ * backoff (50 ms doubling up to the 1 s period) and is logged once per map;
+ * a success ends the backoff. */
+static
+VOID
+CcNtNoteLazyFlushResult(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ NTSTATUS Status,
+    _In_ ULONG Flushed)
+{
+    ULONG64 Delay;
+
+    if (NT_SUCCESS(Status) || Flushed != 0)
+    {
+        if (NtMap->FlushFailures != 0 && NtMap->FlushFailureLogged)
+            DPRINT1("CC: write-back of map %p '%wZ' works again after %lu failures\n",
+                    NtMap, NtMap->FileObject != NULL ? &NtMap->FileObject->FileName : NULL, NtMap->FlushFailures);
+        NtMap->FlushFailures = 0;
+        NtMap->FlushFailureLogged = FALSE;
+        CC_ATOMIC_WRITE64(&NtMap->FlushBackoffUntil, 0);
+        return;
+    }
+
+    if (NtMap->FlushFailures < CC_NT_BACKOFF_MAX_FAILURES)
+        NtMap->FlushFailures++;
+    NtMap->FlushFailureStatus = Status;
+    Delay = (ULONG64)CC_NT_BACKOFF_FIRST_100NS << (NtMap->FlushFailures - 1);
+    if (Delay > CC_NT_BACKOFF_MAX_100NS)
+        Delay = CC_NT_BACKOFF_MAX_100NS;
+    CC_ATOMIC_WRITE64(&NtMap->FlushBackoffUntil, (LONG64)(KeQueryInterruptTime() + Delay));
+    if (!NtMap->FlushFailureLogged)
+    {
+        NtMap->FlushFailureLogged = TRUE;
+        DPRINT1("CC: write-back of map %p '%wZ' fails with 0x%08lx (%I64d dirty pages); backing off\n",
+                NtMap, NtMap->FileObject != NULL ? &NtMap->FileObject->FileName : NULL, Status,
+                CC_ATOMIC_READ64(&NtMap->Map.DirtyPages));
+    }
+}
+
+/* The next dirty map. Only the lazy writer skips maps in failure backoff: an
+ * explicit flush (shutdown, sleep) must try every dirty map. A skip is not a
+ * try, so healthy maps behind failing ones are still reached. */
+static
+PCC_NT_MAP
+CcNtNextDirtyMap(
+    _In_ BOOLEAN LazyWriter)
+{
+    ULONG64 Now = KeQueryInterruptTime();
     BOOLEAN Accepted;
     PCC_MAP Map;
-    ULONG Tries;
+    ULONG Tries = 0;
+    ULONG Skips = 0;
 
-    for (Tries = 0; Tries < 16; Tries++)
+    while (Tries < 16 && Skips < 64)
     {
+        PCC_NT_MAP NtMap;
+        ULONG64 Until;
+
         Map = CcDirtyNextMapAccept(&CcNtCache, CcNtReferenceDirtyMap, &Accepted);
         if (Map == NULL)
             break;
 
-        if (Accepted)
-            return CONTAINING_RECORD(Map, CC_NT_MAP, Map);
+        if (!Accepted)
+        {
+            Tries++;
+            continue;
+        }
+        NtMap = CONTAINING_RECORD(Map, CC_NT_MAP, Map);
+        Until = (ULONG64)CC_ATOMIC_READ64(&NtMap->FlushBackoffUntil);
+        if (!LazyWriter || Now >= Until)
+            return NtMap;
+
+        CcNtNoteBackoffSkip(Until);
+        CcNtDereferenceMap(NtMap);
+        Skips++;
     }
 
     return NULL;
@@ -247,6 +342,7 @@ CcNtLazyFlushMap(
     _In_ BOOLEAN Wait,
     _In_ BOOLEAN CalledFromLazy)
 {
+    NTSTATUS Status = STATUS_SUCCESS;
     ULONG Flushed = 0;
 
     KeEnterCriticalRegion();
@@ -254,7 +350,9 @@ CcNtLazyFlushMap(
     if (NtMap->Callbacks.AcquireForLazyWrite == NULL ||
         NtMap->Callbacks.AcquireForLazyWrite(NtMap->LazyWriteContext, Wait))
     {
-        CcNtFlushMap(NtMap, 0, (ULONG64)-1, MaximumPages, &Flushed);
+        Status = CcNtFlushMap(NtMap, 0, (ULONG64)-1, MaximumPages, &Flushed);
+        if (CalledFromLazy)
+            CcNtNoteLazyFlushResult(NtMap, Status, Flushed);
 
         if (NtMap->Callbacks.ReleaseFromLazyWrite != NULL)
             NtMap->Callbacks.ReleaseFromLazyWrite(NtMap->LazyWriteContext);
@@ -280,13 +378,23 @@ CcRosFlushDirtyPages(
 {
     ULONG Total = 0;
     ULONG Visited = 0;
+    PCC_NT_MAP First = NULL;
 
     while (Total < Target && Visited++ < 256)
     {
-        PCC_NT_MAP NtMap = CcNtNextDirtyMap();
+        PCC_NT_MAP NtMap = CcNtNextDirtyMap(CalledFromLazy);
 
         if (NtMap == NULL)
             break;
+
+        if (NtMap == First)
+        {
+            CcNtDereferenceMap(NtMap);
+            break;
+        }
+
+        if (First == NULL)
+            First = NtMap;
 
         Total += CcNtLazyFlushMap(NtMap, Target - Total, Wait, CalledFromLazy);
         CcNtDereferenceMap(NtMap);
@@ -342,6 +450,12 @@ CcNtFlushAgedMaps(
             continue;
 
         NtMap = CONTAINING_RECORD(Map, CC_NT_MAP, Map);
+        if (CcNtMapInBackoff(NtMap, Now))
+        {
+            CcNtNoteBackoffSkip((ULONG64)CC_ATOMIC_READ64(&NtMap->FlushBackoffUntil));
+            CcNtDereferenceMap(NtMap);
+            continue;
+        }
         Aged = (CC_ATOMIC_READ32(&NtMap->Map.OpenCount) == 0) ||
                (Now - (ULONG64)CC_ATOMIC_READ64(&NtMap->DirtySince) >= MaximumAge);
         if (Aged)
@@ -434,10 +548,20 @@ CcNtLazyWriter(
             DPRINT1("CC: lazy pass late: %I64u ms since the previous pass started\n", (Started - LastPass) / 10000);
         LastPass = Started;
 #endif
+        CcNtPassSkippedUntil = 0;
         Aged = CcNtFlushAgedMaps(Started);
         Target = CcDirtyLazyTarget(&CcNtCache);
         if (Target != 0)
             CcRosFlushDirtyPages(Target, &Flushed, TRUE, TRUE);
+
+        /* Stalled only when the whole pass wrote nothing and skipped a map in backoff. */
+        if (Aged == 0 && Flushed == 0 && CcNtPassSkippedUntil != 0)
+        {
+            CC_ATOMIC_WRITE64(&CcNtLazyStalledUntil, (LONG64)CcNtPassSkippedUntil);
+            InterlockedIncrement(&CcNtStalledPasses);
+        }
+        else
+            CC_ATOMIC_WRITE64(&CcNtLazyStalledUntil, 0);
 
 #if DBG
         /* Lab trace: one line per pass that had work, so a power-cut probe
@@ -490,7 +614,8 @@ CcWaitForCurrentLazyWriterActivity(VOID)
     InsertTailList(&CcNtLazyWaiters, &Waiter.Link);
     KeReleaseSpinLock(&CcNtLazyWaitLock, OldIrql);
 
-    CcNtKickLazyWriter();
+    /* Not through CcNtKickLazyWriter: a waiter must not wait out a stall. */
+    KeSetEvent(&CcNtLazyWriterEvent, IO_NO_INCREMENT, FALSE);
     return KeWaitForSingleObject(&Waiter.Event, Executive, KernelMode, FALSE, NULL);
 }
 
