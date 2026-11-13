@@ -9,6 +9,7 @@
 #include "precomp.h"
 #include "paint_ribbon.h"
 #include "paint_ribbon_ids.h"
+#include <string>
 #include <vector>
 #include <deque>
 #include "../../../sdk/include/leewayui/aureline_icons.h"
