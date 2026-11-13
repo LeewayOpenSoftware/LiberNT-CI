@@ -704,13 +704,10 @@ CreateEnvironmentBlock(OUT LPVOID *lpEnvironment,
     if (hToken == NULL)
         return TRUE;
 
+    /* A logon without a loaded profile still gets the system and per-user variables */
     hKeyUser = GetCurrentUserKey(hToken);
     if (hKeyUser == NULL)
-    {
-        DPRINT1("GetCurrentUserKey() failed\n");
-        RtlDestroyEnvironment(*Environment);
-        return FALSE;
-    }
+        DPRINT("The user hive is not loaded (Error %lu)\n", GetLastError());
 
     /* Set 'USERPROFILE' variable */
     Length = ARRAYSIZE(Buffer);
@@ -773,19 +770,22 @@ CreateEnvironmentBlock(OUT LPVOID *lpEnvironment,
             LocalFree(lpDomainName);
     }
 
-    /* Set user environment variables */
-    SetUserEnvironment(Environment,
-                       hKeyUser,
-                       L"Environment",
-                       IsLocalSystemToken(hToken));
+    if (hKeyUser != NULL)
+    {
+        /* Set user environment variables */
+        SetUserEnvironment(Environment,
+                           hKeyUser,
+                           L"Environment",
+                           IsLocalSystemToken(hToken));
 
-    /* Set user volatile environment variables */
-    SetUserEnvironment(Environment,
-                       hKeyUser,
-                       L"Volatile Environment",
-                       FALSE);
+        /* Set user volatile environment variables */
+        SetUserEnvironment(Environment,
+                           hKeyUser,
+                           L"Volatile Environment",
+                           FALSE);
 
-    RegCloseKey(hKeyUser);
+        RegCloseKey(hKeyUser);
+    }
 
     return TRUE;
 }
