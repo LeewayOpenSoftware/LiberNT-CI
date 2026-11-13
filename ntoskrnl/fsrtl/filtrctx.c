@@ -43,7 +43,10 @@ FsRtlPTeardownPerFileObjectContexts(IN PFILE_OBJECT FileObject)
     /* A context a filter never removed belongs to the filter; only the links go, so a new file object at this address starts clean */
     while (!IsListEmpty(&FOContext->FilterContexts))
     {
-        RemoveHeadList(&FOContext->FilterContexts);
+        PLIST_ENTRY Entry = RemoveHeadList(&FOContext->FilterContexts);
+
+        /* The filter's own late RemoveEntryList then touches nothing of ours */
+        InitializeListHead(Entry);
     }
 
     ExFreePoolWithTag(FOContext, 'FOCX');
