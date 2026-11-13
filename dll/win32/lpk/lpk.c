@@ -275,7 +275,7 @@ LpkExtTextOut(
 
         bReorder = BIDI_Reorder(hdc, lpString, uCount, GCP_REORDER,
                                 (fuOptions & ETO_RTLREADING) ? WINE_GCPW_FORCE_RTL : WINE_GCPW_FORCE_LTR,
-                                reordered_str, uCount, NULL, &glyphs, &cGlyphs);
+                                reordered_str, uCount, NULL, &glyphs, &cGlyphs, (lpDx == NULL));
 
         /* Now display the reordered text if any of the arrays is valid and if BIDI_Reorder() succeeded */
         if ((glyphs || reordered_str) && bReorder)
@@ -338,7 +338,7 @@ LpkGetCharacterPlacement(
 
     cGlyphs = (INT)nSet;
     BIDI_Reorder(hdc, lpString, uCount, dwFlags, WINE_GCPW_FORCE_LTR, lpResults->lpOutString,
-                 nSet, lpResults->lpOrder, &lpGlyphs, &cGlyphs);
+                 nSet, lpResults->lpOrder, &lpGlyphs, &cGlyphs, FALSE);
 
     lpResults->nGlyphs = (UINT)cGlyphs;
 

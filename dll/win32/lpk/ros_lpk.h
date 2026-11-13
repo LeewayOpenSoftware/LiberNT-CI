@@ -102,7 +102,8 @@ BOOL BIDI_Reorder(
     _In_ INT uCountOut,          /* [in] Size of output buffer */
     _Out_ UINT *lpOrder,         /* [out] Logical -> Visual order map */
     _Out_ WORD **lpGlyphs,       /* [out] reordered, mirrored, shaped glyphs to display */
-    _Out_ INT *cGlyphs           /* [out] number of glyphs generated */
+    _Out_ INT *cGlyphs,          /* [out] number of glyphs generated */
+    _In_ BOOL bDropFormatBlanks  /* [in] leave out the blank glyphs of format characters */
     );
 
 #endif /* _LPK_H */

@@ -313,6 +313,36 @@ static void BidiLines(int baselevel, LPWSTR pszOutLine, LPCWSTR pszLine, const W
 }
 
 /*************************************************************
+ *    LPK_IsBlankFormatGlyph
+ *
+ * TRUE for the blank zero-width glyph Uniscribe shapes a format character to
+ */
+static BOOL LPK_IsBlankFormatGlyph(LPCWSTR lpRun, INT cChars, const WORD *pwLogClust,
+                                   INT iGlyph, WORD wGlyph, const SCRIPT_VISATTR *psva, WORD wgBlank)
+{
+    INT i;
+    WCHAR ch;
+
+    if (!psva->fZeroWidth || psva->fDiacritic || wGlyph != wgBlank)
+        return FALSE;
+
+    for (i = 0; i < cChars; i++)
+    {
+        if (pwLogClust[i] != iGlyph)
+            continue;
+
+        ch = lpRun[i];
+        if ((ch >= 0x200B && ch <= 0x200F) || (ch >= 0x202A && ch <= 0x202E) ||
+            (ch >= 0x2060 && ch <= 0x2064) || (ch >= 0x2066 && ch <= 0x206F) || ch == 0xFEFF)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
+/*************************************************************
  *    BIDI_Reorder
  *
  *     Returns TRUE if reordering was required and done.
@@ -327,9 +357,12 @@ BOOL BIDI_Reorder(
                 INT uCountOut,  /* [in] Size of output buffer */
                 UINT *lpOrder, /* [out] Logical -> Visual order map */
                 WORD **lpGlyphs, /* [out] reordered, mirrored, shaped glyphs to display */
-                INT *cGlyphs /* [out] number of glyphs generated */
+                INT *cGlyphs, /* [out] number of glyphs generated */
+                BOOL bDropFormatBlanks /* [in] leave out the blank glyphs of format characters */
     )
 {
+    SCRIPT_FONTPROPERTIES sfp;
+    BOOL bHaveBlank = FALSE;
     WORD *chartype;
     BYTE *levels;
     INT i, done;
@@ -611,22 +644,19 @@ BOOL BIDI_Reorder(
                 while (res == E_OUTOFMEMORY)
                 {
                     cMaxGlyphs *= 2;
-                    run_glyphs = HeapReAlloc(GetProcessHeap(), 0, run_glyphs, sizeof(WORD) * cMaxGlyphs);
-                    if (run_glyphs)
+                    WORD *new_glyphs = HeapReAlloc(GetProcessHeap(), 0, run_glyphs, sizeof(WORD) * cMaxGlyphs);
+                    SCRIPT_VISATTR *new_psva = NULL;
+
+                    if (new_glyphs)
                     {
-                        SCRIPT_VISATTR *new_psva = HeapReAlloc(GetProcessHeap(), 0, psva, sizeof(SCRIPT_VISATTR) * cMaxGlyphs);
+                        run_glyphs = new_glyphs;
+                        new_psva = HeapReAlloc(GetProcessHeap(), 0, psva, sizeof(SCRIPT_VISATTR) * cMaxGlyphs);
                         if (new_psva)
-                        {
                             psva = new_psva;
-                        }
-                        else
-                        {
-                            HeapFree(GetProcessHeap(), 0, run_glyphs);
-                            run_glyphs = NULL;
-                        }
                     }
-                    if (!run_glyphs)
+                    if (!new_glyphs || !new_psva)
                     {
+                        HeapFree(GetProcessHeap(), 0, run_glyphs);
                         WARN("Out of memory\n");
                         HeapFree(GetProcessHeap(), 0, runOrder);
                         HeapFree(GetProcessHeap(), 0, visOrder);
@@ -659,11 +689,19 @@ BOOL BIDI_Reorder(
                         *lpGlyphs = HeapReAlloc(GetProcessHeap(), 0, *lpGlyphs, sizeof(WORD) * (glyph_i + cOutGlyphs));
                    else
                         *lpGlyphs = HeapAlloc(GetProcessHeap(), 0, sizeof(WORD) * (glyph_i + cOutGlyphs));
-                    /* The blank glyphs Uniscribe gives format characters take no room, as on Windows */
+                    if (bDropFormatBlanks && !bHaveBlank)
+                    {
+                        sfp.cBytes = sizeof(sfp);
+                        bHaveBlank = (ScriptGetFontProperties(hDC, &psc, &sfp) == S_OK);
+                    }
+
                     for (k = 0; k < cOutGlyphs; k++)
                     {
-                        if (psva[k].fZeroWidth)
+                        if (bHaveBlank && LPK_IsBlankFormatGlyph(lpString + done + curItem->iCharPos, cChars,
+                                                                 pwLogClust, k, run_glyphs[k], &psva[k], sfp.wgBlank))
+                        {
                             continue;
+                        }
                         (*lpGlyphs)[glyph_i++] = run_glyphs[k];
                     }
                 }
