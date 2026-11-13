@@ -472,6 +472,7 @@ Volume::ReloadSize()
             CachedBitmapFile = NULL;
             CachedBitmapData = NULL;
             ReservedClustersKnown = FALSE;
+            FreeClusterCountKnown = FALSE;
             SectorsInVolume = PartitionBootSector->SectorsInVolume;
             ClustersInVolume = SectorsInVolume / SectorsPerCluster;
         }

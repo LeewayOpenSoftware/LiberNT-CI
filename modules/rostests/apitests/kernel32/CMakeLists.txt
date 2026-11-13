@@ -45,6 +45,7 @@ list(APPEND SOURCE
     DefaultActCtx.c
     DeleteFileCase.c
     DeviceIoControl.c
+    EmulatedProcess.c
     dosdev.c
     EnumDateTimeFormats.c
     EnumSystemCodePages.c
@@ -114,6 +115,7 @@ list(APPEND SOURCE
     KernelBaseUrl.c
     KnownDlls.c
     LCMapString.c
+    LoadLibraryAlteredSearchPath.c
     LoadLibraryExW.c
     LockFileClose.c
     LockFileEx.c

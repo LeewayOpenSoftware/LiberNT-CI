@@ -40,7 +40,9 @@ static const PCWSTR Values[] = { L"FilterInformationIsList", L"FilterReportedMag
                                  L"ChildPdoRemoves", L"ChildPdoQueryRemoves", L"EjectMissing", L"ChildInterfaceEnabled",
                                  L"LargeMemory", L"StartLargeMemory", L"NullChild", L"ChildAddDevices", L"FailChildStart",
                                  L"DriverUnloaded", L"HoldEntry", L"EntryHeld", L"SlowAddDevice", L"AddDeviceEntered",
-                                 L"HoldQueryRemoves", L"HoldCancels", L"HoldCompletes", L"HoldReregistered" };
+                                 L"HoldQueryRemoves", L"HoldCancels", L"HoldCompletes", L"HoldReregistered",
+                                 L"NoRequirements", L"NoListFilterSeen", L"NoListStartMask", L"NoListRestartMask",
+                                 L"NoListEmpty" };
 
 static BOOL FixtureInf(PWSTR InfPath, DWORD Count)
 {
@@ -790,6 +792,17 @@ static VOID CheckTargetRemoval(DEVINST Bus)
     ok(ChildStarted(Bus, 0), "The child went although its holder refused\n");
     ok(DeviceIoControl(File, IOCTL_RELEASE_CHILD, NULL, 0, NULL, 0, &Returned, NULL), "Release failed: %lu\n", GetLastError());
 
+    /* A handle nobody closes keeps the child */
+    Mode = 3;
+    VetoType = PNP_VetoTypeUnknown;
+    ok(DeviceIoControl(File, IOCTL_HOLD_CHILD, &Mode, sizeof(Mode), NULL, 0, &Returned, NULL),
+       "The holder did not open the child: %lu\n", GetLastError());
+    ok_once(CM_Query_And_Remove_SubTreeW(Child, &VetoType, VetoName, RTL_NUMBER_OF(VetoName), CM_REMOVE_UI_NOT_OK),
+            (ULONG)CR_REMOVE_VETOED);
+    ok_eq_ulong((ULONG)VetoType, (ULONG)PNP_VetoOutstandingOpen);
+    ok(ChildStarted(Bus, 0), "The child went with a handle still open\n");
+    ok(DeviceIoControl(File, IOCTL_RELEASE_CHILD, NULL, 0, NULL, 0, &Returned, NULL), "Release failed: %lu\n", GetLastError());
+
     Mode = 2;
     ok(DeviceIoControl(File, IOCTL_HOLD_CHILD, &Mode, sizeof(Mode), NULL, 0, &Returned, NULL),
        "The holder did not register on the child: %lu\n", GetLastError());
@@ -834,6 +847,37 @@ static VOID CheckLargeMemory(DEVINST Bus)
 
     SetRequest(L"LargeMemory", 0);
     RestartChild(Bus);
+}
+
+/* A bus that reports no requirements still lets the function driver add some; the wait only bounds a lost restart */
+static VOID CheckNoRequirements(DEVINST Bus)
+{
+    DWORD Start, Value = 0;
+
+    SetRequest(L"NoRequirements", 1);
+    RestartChild(Bus);
+    ok(ReadValue(L"NoListFilterSeen", &Value) && Value == 1,
+       "The function driver was not asked to filter a device without requirements (%lu)\n", Value);
+    Value = 0;
+    ok(ReadValue(L"NoListStartMask", &Value) && Value == 3,
+       "The device did not start with the requirements its function driver added (mask %lu)\n", Value);
+    Start = GetTickCount();
+    Value = 0;
+    while (!ReadValue(L"NoListRestartMask", &Value) && GetTickCount() - Start < 1000)
+        Sleep(10);
+    ok(Value == 3, "The restart did not carry the requirements the function driver added (mask %lu)\n", Value);
+
+    SetRequest(L"NoListEmpty", 1);
+    RestartChild(Bus);
+    Value = MAXDWORD;
+    ok(ReadValue(L"NoListStartMask", &Value) && Value == 0, "The device started with resources nobody asked for (mask %lu)\n", Value);
+
+    SetRequest(L"NoListEmpty", 0);
+    SetRequest(L"NoRequirements", 0);
+    RestartChild(Bus);
+    Value = 0;
+    ok(ReadValue(L"StartPrivateMask", &Value) && Value == 3,
+       "A device that once needed no resources was not asked for its requirements after its removal (mask %lu)\n", Value);
 }
 
 /* A setting held by another driver is not given to the child, which is left with a resource conflict */
@@ -1120,6 +1164,7 @@ static VOID RunFixture(HDEVINFO Devices, PSP_DEVINFO_DATA Device, PCWSTR InfPath
         CheckTargetRemoval(Device->DevInst);
         CheckApplicationRemoval(Device->DevInst);
         CheckLargeMemory(Device->DevInst);
+        CheckNoRequirements(Device->DevInst);
         CheckOccupiedMemory(Device->DevInst);
         CheckNullChild(Device->DevInst);
         CheckEject(Device->DevInst);

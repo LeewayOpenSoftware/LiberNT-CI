@@ -57,6 +57,7 @@ ServiceControlHandler(
             RpcMgmtStopServerListening(NULL);
             LlmnrStop();
             HostsWatchStop();
+            WskNameStop();
             DnsIntCacheFree();
             UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOPPED, 0);
             break;
@@ -112,6 +113,8 @@ ServiceMain(
     ReloadHostsFile();
 
     LlmnrStart();
+
+    WskNameStart();
 
     hThread = CreateThread(NULL,
                            0,

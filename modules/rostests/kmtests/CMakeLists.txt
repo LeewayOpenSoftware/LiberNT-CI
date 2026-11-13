@@ -1,5 +1,7 @@
 
-include_directories(include)
+include_directories(
+    include
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/drivers)
 
 #
 # subdirectories containing special-purpose drivers
@@ -12,11 +14,13 @@ add_subdirectory(nsi)
 add_subdirectory(ndis)
 add_subdirectory(ntfs)
 add_subdirectory(ntos_cc)
+add_subdirectory(ntos_cm)
 add_subdirectory(ntos_io)
 add_subdirectory(ntos_mm)
 add_subdirectory(ntos_po)
 add_subdirectory(ntos_ps)
 add_subdirectory(tcpip)
+add_subdirectory(netio)
 add_subdirectory(wfp)
 add_subdirectory(wsk)
 
@@ -80,6 +84,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkChildDescriptor.c
     directx/DxgkPostDisplayHandoff.c
     directx/DxgkPresentUserSource.c
+    directx/MonitorBrightnessKey.c
     directx/DxgkGpuVaAddress.c
     directx/DxgkGpuVaPageTable.c
     directx/DxgkGpuVaPte.c
@@ -202,6 +207,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoCsqKM.c
     ntos_io/IoCustomTargetEvent.c
     ntos_io/IoDeviceInterface.c
+    ntos_io/IoDeviceTextProperties.c
     ntos_io/IoDeviceSecurity.c
     ntos_io/IoDriverKey.c
     ntos_io/IoDriverSection.c
@@ -209,6 +215,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoEvent.c
     ntos_io/IoInterfaceOrder.c
     ntos_io/IoResourceSearch.c
+    ntos_io/IoMessageInterruptClaim.c
     ntos_io/IoCreateDriverContext.c
     ntos_io/PciLineInterrupt.c
     ntos_io/IoStorageDumpPath.c
@@ -343,6 +350,7 @@ list(APPEND KMTEST_DRV_SOURCE
     smclib/SmcLib.c
     ntos_po/PoDisplayState.c
     ntos_po/PoSleepInformation.c
+    ntos_po/PoBatteryState.c
     ntos_po/PoFxState.c
     ntos_po/PoFxState_pnp.c
     ntos_po/PoPowerButton.c
@@ -552,7 +560,7 @@ else()
     target_link_options(kmtest_drv PRIVATE -Wl,--forceinteg)
 endif()
 target_link_libraries(kmtest_drv kmtest_printf chkstk memcmp poguid wdmguid arblib wdmsec ${PSEH_LIB})
-add_importlibs(kmtest_drv ksecdd ndis smclib ntoskrnl hal)
+add_importlibs(kmtest_drv battc ksecdd ndis smclib ntoskrnl hal)
 if(REACTOS_USE_WDDM)
     add_importlibs(kmtest_drv dxgkrnl dxgmms2)
 endif()
@@ -614,6 +622,8 @@ list(APPEND KMTEST_SOURCE
     fltmgr/fltmgr_load/fltmgr_user.c
     fltmgr/fltmgr_register/fltmgr_reg_user.c
 
+    ntos_cm/CmFlushReaders_user.c
+
     ntfs/NtfsTxfRecovery_user.c
 
     hidparse/HidP_user.c
@@ -642,6 +652,7 @@ list(APPEND KMTEST_SOURCE
     ntos_io/IoCustomTargetEvent_user.c
     ntos_io/IoDeviceTree_user.c
     ntos_io/IoDriverKey_user.c
+    ntos_io/IoErrorLogEntry_user.c
     ntos_io/IoInterfaceOrder_user.c
     ntos_io/IoMessageRestart_user.c
     ntos_io/IoRemovalPolicy_user.c
@@ -673,6 +684,7 @@ list(APPEND KMTEST_SOURCE
     ntos_po/PoShutdownTime_user.c
     ntos_po/PoInitiatePowerAction_user.c
     tcpip/TcpIp_user.c
+    netio/wskname/wskname_user.c
     wfp/wfp_listen/wfp_listen_user.c
     wfp/wfp_tcp/wfp_tcp_user.c
     wfp/wfp_udp/wfp_udp_user.c

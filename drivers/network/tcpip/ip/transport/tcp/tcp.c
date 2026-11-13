@@ -386,21 +386,11 @@ NTSTATUS TCPConnect
         return STATUS_INVALID_PARAMETER;
     }
 
-    if (RemoteAddress.Type == IP_ADDRESS_V6 &&
-        !RemoteAddress.Address.IPv6Address[0] && !RemoteAddress.Address.IPv6Address[1] &&
-        !RemoteAddress.Address.IPv6Address[2] && !RemoteAddress.Address.IPv6Address[3] &&
-        !RemoteAddress.Address.IPv6Address[4] && RemoteAddress.Address.IPv6Address[5] == 0xFFFF)
+    if (TCPUnmapFromDualStack(&RemoteAddress) &&
+        !TCPAddressFileAcceptsMapped(Connection->AddressFile))
     {
-        ULONG IPv4Address;
-
-        if (!Connection->AddressFile->DualStack)
-        {
-            UnlockObject(Connection);
-            return STATUS_INVALID_ADDRESS;
-        }
-
-        RtlCopyMemory(&IPv4Address, &RemoteAddress.Address.IPv6Address[6], sizeof(IPv4Address));
-        AddrInitIPv4(&RemoteAddress, IPv4Address);
+        UnlockObject(Connection);
+        return STATUS_INVALID_ADDRESS;
     }
 
     if (RemoteAddress.Type == IP_ADDRESS_V4 ? !RemoteAddress.Address.IPv4Address : AddrIsUnspecified(&RemoteAddress))
@@ -791,7 +781,7 @@ UINT TCPAllocatePort(const UINT HintPort)
         }
     }
     else
-        return AllocatePortFromRange( &TCPPorts, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST );
+        return AllocatePortFromRangeExcluding(&TCPPorts, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST, &TCPPorts6);
 }
 
 VOID TCPFreePort(const UINT Port)
@@ -807,7 +797,7 @@ UINT TCPAllocatePortForAddress(const IP_ADDRESS *Address, const UINT HintPort)
     if (HintPort)
         return AllocatePort(&TCPPorts6, HintPort) ? HintPort : (UINT)-1;
 
-    return AllocatePortFromRange(&TCPPorts6, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST);
+    return AllocatePortFromRangeExcluding(&TCPPorts6, DYNAMIC_PORT_FIRST, DYNAMIC_PORT_LAST, &TCPPorts);
 }
 
 VOID TCPFreePortForAddress(const IP_ADDRESS *Address, const UINT Port)
@@ -834,6 +824,32 @@ VOID TCPMapToDualStack(
     Address->ScopeId = 0;
 }
 
+BOOLEAN TCPUnmapFromDualStack(
+    PIP_ADDRESS Address)
+{
+    ULONG IPv4Address;
+
+    if (Address->Type != IP_ADDRESS_V6 ||
+        Address->Address.IPv6Address[0] || Address->Address.IPv6Address[1] ||
+        Address->Address.IPv6Address[2] || Address->Address.IPv6Address[3] ||
+        Address->Address.IPv6Address[4] || Address->Address.IPv6Address[5] != 0xFFFF)
+    {
+        return FALSE;
+    }
+
+    RtlCopyMemory(&IPv4Address, &Address->Address.IPv6Address[6], sizeof(IPv4Address));
+    AddrInitIPv4(Address, IPv4Address);
+    return TRUE;
+}
+
+BOOLEAN TCPAddressFileAcceptsMapped(
+    PADDRESS_FILE AddrFile)
+{
+    return AddrFile->DualStack ||
+           (AddrFile->Family == TDI_ADDRESS_TYPE_IP6 &&
+            AddrFile->Address.Type == IP_ADDRESS_V4);
+}
+
 NTSTATUS TCPGetSockAddress
 ( PCONNECTION_ENDPOINT Connection,
   PTRANSPORT_ADDRESS Address,
@@ -858,7 +874,7 @@ NTSTATUS TCPGetSockAddress
         return Status;
 
     LibIPAddressFromLwip(&ipaddr, &IpAddress);
-    if (Connection->AddressFile && Connection->AddressFile->DualStack)
+    if (Connection->AddressFile && Connection->AddressFile->Family == TDI_ADDRESS_TYPE_IP6)
         TCPMapToDualStack(&IpAddress);
     return AddrBuildTransportAddress(&IpAddress, WH2N(Port), Address, AddressLength);
 }

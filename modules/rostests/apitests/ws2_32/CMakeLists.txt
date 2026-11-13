@@ -15,6 +15,7 @@ list(APPEND SOURCE
     connect_any.c
     connect_select.c
     dualstack.c
+    dualstack_mapped.c
     getaddrinfo.c
     gethostname.c
     getnameinfo.c

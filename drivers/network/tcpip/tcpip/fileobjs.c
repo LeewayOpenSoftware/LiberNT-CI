@@ -717,6 +717,8 @@ NTSTATUS FileOpenAddress(
     return Status;
 
   DualStack = (Address->TAAddressCount == 2);
+  if (DualStack && TCPUnmapFromDualStack(&BindAddress))
+      DualStack = FALSE;
 
   /* If it's shared and has a port specified, look for a match */
   if (BindPort != 0)
@@ -1014,7 +1016,6 @@ NTSTATUS FileCloseAddress(
       LockObject(AddrFile);
       if (AddrFile->Port)
       {
-          /* The port came from the set of this address's family. */
           TCPFreePortForAddress(&AddrFile->Address, AddrFile->Port);
           AddrFile->Port = 0;
       }

@@ -13,6 +13,7 @@ KMT_TESTFUNC Test_DxgkHotPlugWork;
 KMT_TESTFUNC Test_DxgkChildDescriptor;
 KMT_TESTFUNC Test_DxgkPostDisplayHandoff;
 KMT_TESTFUNC Test_DxgkPresentUserSource;
+KMT_TESTFUNC Test_MonitorBrightnessKey;
 KMT_TESTFUNC Test_DxgkGpuVaAddress;
 KMT_TESTFUNC Test_DxgkGpuVaPageTable;
 KMT_TESTFUNC Test_DxgkGpuVaPte;
@@ -183,10 +184,12 @@ KMT_TESTFUNC Test_IoCreateFileAccessCheck;
 KMT_TESTFUNC Test_IoCreateSystemThread;
 KMT_TESTFUNC Test_IoCustomTargetEventReport;
 KMT_TESTFUNC Test_IoDeviceInterface;
+KMT_TESTFUNC Test_IoDeviceTextProperties;
 KMT_TESTFUNC Test_IoDeviceSecurity;
 KMT_TESTFUNC Test_IoEvent;
 KMT_TESTFUNC Test_IoInterfaceOrderCheck;
 KMT_TESTFUNC Test_IoResourceSearch;
+KMT_TESTFUNC Test_IoMessageInterruptClaim;
 KMT_TESTFUNC Test_IoCreateDriverContext;
 KMT_TESTFUNC Test_PciLineInterrupt;
 KMT_TESTFUNC Test_IoStorageDumpPath;
@@ -380,6 +383,7 @@ KMT_TESTFUNC Test_PoPowerButton;
 KMT_TESTFUNC Test_PoSettingSession;
 KMT_TESTFUNC Test_PoSetSystemState;
 KMT_TESTFUNC Test_PoSleepInformation;
+KMT_TESTFUNC Test_PoBatteryState;
 KMT_TESTFUNC Test_PoFxState;
 KMT_TESTFUNC Test_PoPowerLimit;
 KMT_TESTFUNC Test_TmTransactions;
@@ -593,10 +597,12 @@ const KMT_TEST TestList[] =
     { "ZwWriteFileAppend",                  Test_ZwWriteFileAppend },
     { "-IoCustomTargetEventReport",         Test_IoCustomTargetEventReport },
     { "IoDeviceInterface",                  Test_IoDeviceInterface },
+    { "IoDeviceTextProperties",             Test_IoDeviceTextProperties },
     { "IoDeviceSecurity",                   Test_IoDeviceSecurity },
     { "IoEvent",                            Test_IoEvent },
     { "-IoInterfaceOrderCheck",             Test_IoInterfaceOrderCheck },
     { "IoResourceSearch",                   Test_IoResourceSearch },
+    { "IoMessageInterruptClaim",            Test_IoMessageInterruptClaim },
     { "IoCreateDriverContext",              Test_IoCreateDriverContext },
     { "PciLineInterrupt",                   Test_PciLineInterrupt },
     { "IoStorageDumpPath",            Test_IoStorageDumpPath },
@@ -785,6 +791,7 @@ const KMT_TEST TestList[] =
     { "MmSelfMap",                          Test_MmSelfMap },
     { "MmUserLayout",                       Test_MmUserLayout },
     { "MmLoaderBlock",                      Test_MmLoaderBlock },
+    { "MonitorBrightnessKey",               Test_MonitorBrightnessKey },
     { "NdisIfProvider",                     Test_NdisIfProvider },
     { "NdisRwLock",                         Test_NdisRwLock },
     { "NdisProcessorGroup",                 Test_NdisProcessorGroup },
@@ -815,6 +822,7 @@ const KMT_TEST TestList[] =
     { "-PoSettingSession",                  Test_PoSettingSession },
     { "PoSetSystemState",                   Test_PoSetSystemState },
     { "-PoSleepInformation",                Test_PoSleepInformation },
+    { "PoBatteryState",                     Test_PoBatteryState },
     { "PoFxState",                          Test_PoFxState },
     { "PoPowerLimit",                       Test_PoPowerLimit },
     { "TmTransactions",                     Test_TmTransactions },
