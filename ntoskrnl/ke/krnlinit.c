@@ -396,6 +396,45 @@ KeExpandKernelStackAndCalloutEx(
     return STATUS_SUCCESS;
 }
 
+#define KI_STACK_CHAIN_MAXIMUM 32
+
+BOOLEAN
+NTAPI
+KiFindStackLimits(
+    _In_ PKTHREAD Thread,
+    _In_ ULONG_PTR Address,
+    _Out_ PULONG_PTR LowLimit,
+    _Out_ PULONG_PTR HighLimit)
+{
+    ULONG_PTR Low = Thread->StackLimit;
+    ULONG_PTR High = (ULONG_PTR)Thread->StackBase;
+    ULONG_PTR Initial = (ULONG_PTR)Thread->InitialStack;
+    PKSTACK_CONTROL Control;
+    ULONG i;
+
+    for (i = 0; i < KI_STACK_CHAIN_MAXIMUM; i++)
+    {
+        if (Address >= Low && Address < High)
+        {
+            *LowLimit = Low;
+            *HighLimit = High;
+            return TRUE;
+        }
+
+        /* The stack that holds InitialStack is the one the thread started on: it has no control block */
+        if (!Thread->CalloutActive || (Initial > Low && Initial <= High))
+            break;
+
+        Control = ALIGN_DOWN_POINTER_BY((PUCHAR)High - sizeof(KSTACK_CONTROL), 16);
+        Low = Control->Previous.StackLimit;
+        High = Control->Previous.StackBase;
+        if (Low >= High)
+            break;
+    }
+
+    return FALSE;
+}
+
 #else /* i386, arm, arm64, ...: the callout runs on the current stack (no expansion yet) */
 
 NTSTATUS

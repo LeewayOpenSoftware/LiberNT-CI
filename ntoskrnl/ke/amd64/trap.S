@@ -1736,6 +1736,8 @@ ENDFUNC
  * stack, which stays mapped. rbp is the frame pointer of this frame, so the unwinder and
  * a stack walk cross the switch: unwinding it restores rsp from rbp and pops the saved
  * registers from the original stack.
+ * FIXME: no exception handler here: an exception the callout does not handle is searched for
+ * handlers only within the limits of the stack it was raised on.
  */
 PUBLIC KiSwitchStackAndCallout
 .PROC KiSwitchStackAndCallout

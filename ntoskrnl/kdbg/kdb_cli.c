@@ -9502,6 +9502,9 @@ KdbpAddFaultAddress(
     PLDR_DATA_TABLE_ENTRY LdrEntry;
     PKTHREAD Thread = KdbCurrentThread ? &KdbCurrentThread->Tcb : NULL;
     ULONG Index;
+#ifdef _M_AMD64
+    ULONG_PTR StackLow, StackHigh;
+#endif
 
     if (*Count >= 3 || Address < (ULONG_PTR)MmSystemRangeStart ||
         KdbpSymFindModule((PVOID)Address, -1, &LdrEntry))
@@ -9509,8 +9512,13 @@ KdbpAddFaultAddress(
         return;
     }
 
+#ifdef _M_AMD64
+    if (Thread && KiFindStackLimits(Thread, Address, &StackLow, &StackHigh))
+        return;
+#else
     if (Thread && Address >= (ULONG_PTR)Thread->StackLimit && Address < (ULONG_PTR)Thread->InitialStack)
         return;
+#endif
 
     for (Index = 0; Index < *Count; Index++)
     {

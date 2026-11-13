@@ -380,6 +380,19 @@ RtlWalkFrameChain(OUT PVOID *Callers,
 }
 #endif
 
+BOOLEAN
+NTAPI
+RtlpFindStackLimits(
+    IN ULONG_PTR Address,
+    OUT PULONG_PTR LowLimit,
+    OUT PULONG_PTR HighLimit)
+{
+    UNREFERENCED_PARAMETER(Address);
+    UNREFERENCED_PARAMETER(LowLimit);
+    UNREFERENCED_PARAMETER(HighLimit);
+    return FALSE;
+}
+
 VOID
 NTAPI
 RtlpGetStackLimits(

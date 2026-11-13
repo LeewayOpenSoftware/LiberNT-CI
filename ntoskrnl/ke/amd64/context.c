@@ -23,6 +23,7 @@ KeContextToTrapFrame(IN PCONTEXT Context,
                      IN KPROCESSOR_MODE PreviousMode)
 {
     KIRQL OldIrql;
+    ULONG_PTR StackLow, StackHigh;
 
     /* Make sure we have an amd64 context, then remove the flag */
     ASSERT(ContextFlags & CONTEXT_AMD64);
@@ -167,8 +168,7 @@ KeContextToTrapFrame(IN PCONTEXT Context,
         /* Thread creation fills the new thread's frame from the creator. */
         if ((PreviousMode != KernelMode ||
              (TrapFrame->SegCs & MODE_MASK) != KernelMode) &&
-            (ULONG_PTR)TrapFrame >= (ULONG_PTR)KeGetCurrentThread()->StackLimit &&
-            (ULONG_PTR)TrapFrame < (ULONG_PTR)KeGetCurrentThread()->InitialStack)
+            KiFindStackLimits(KeGetCurrentThread(), (ULONG_PTR)TrapFrame, &StackLow, &StackHigh))
         {
             /* Preserve disabled slots too: GetThreadContext must still see
              * their addresses on the next system call. */
