@@ -160,6 +160,14 @@ Volume::SetVolumeFlags(_In_ USHORT Set,
     if (IsReadOnly)
         return STATUS_MEDIA_WRITE_PROTECTED;
 
+    /* The record write below would mark the volume dirty under this stale copy */
+    if (DirtyTracking && !DirtyMarked)
+    {
+        Status = MarkDirtyBeforeWrite();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     Status = MFT->GetFileAttributeFromFileRecordNumber(TypeVolumeInformation,
                                                        NULL,
                                                        _Volume,
