@@ -99,8 +99,7 @@ IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags)
    return TRUE;
 }
 
-/* TRUE for a layered window whose content came from UpdateLayeredWindow: its
- * surface is the sprite, USER never erases or repaints it on its own. */
+/* A layered window painted by UpdateLayeredWindow: its surface is the sprite, USER never repaints it. */
 BOOL FASTCALL
 IntIsUpdateLayeredWindow(PWND pWnd)
 {

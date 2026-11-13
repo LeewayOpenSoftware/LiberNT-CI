@@ -2502,6 +2502,7 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
               * repaints. */
              PREGION SrcRgn = VisAfter;
              PREGION ExtentRgn = NULL;
+             BOOL bSprite = bComposited && IntIsUpdateLayeredWindow(Window);
 
              if (bComposited)
              {
@@ -2544,17 +2545,18 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
                 {
                    IntInvalidateWindows( Parent, DirtyRgn, RDW_ERASE | RDW_INVALIDATE);
                 }
-                /* An UpdateLayeredWindow sprite keeps what ULW put in its
-                 * backing: showing or moving it is composition damage, not a
-                 * repaint (the erase would blank the surface). */
-                if (bComposited && IntIsUpdateLayeredWindow(Window))
+                /* A ULW sprite keeps its backing: show/size is damage, not an erase and repaint */
+                if (bSprite)
                    IntCompositionDamageWindow(Window);
                 else
                    IntInvalidateWindows(Window, DirtyRgn, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
              }
              else if (RgnType != ERROR && RgnType == NULLREGION) // Must be the same. See CORE-7166 & CORE-15934, NC HACK fix.
              {
-                if (WinPos.flags & SWP_FRAMECHANGED && WinPos.flags & SWP_DEFERERASE)
+                /* A ULW sprite has no system-drawn frame: a frame change is damage only */
+                if (bSprite && (WinPos.flags & SWP_FRAMECHANGED))
+                    IntCompositionDamageWindow(Window);
+                if (!bSprite && WinPos.flags & SWP_FRAMECHANGED && WinPos.flags & SWP_DEFERERASE)
                 {
                     PREGION ClientRgn = IntSysCreateRectpRgnIndirect(&Window->rcClient);
                     if (ClientRgn)
@@ -2566,7 +2568,8 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
                         REGION_Delete(ClientRgn);
                     }
                 }
-                if ( !PosChanged &&
+                if ( !bSprite &&
+                     !PosChanged &&
                      !(WinPos.flags & SWP_DEFERERASE) &&
                       (WinPos.flags & SWP_FRAMECHANGED) )
                 {
