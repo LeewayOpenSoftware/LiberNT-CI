@@ -520,7 +520,9 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     {
         PFileContextBlock FileCB =
             NtfsGetFileContext(IoGetCurrentIrpStackLocation(Irp)->FileObject);
-        if (FileCB == NULL || !FileCB->DismountedVolume)
+        if ((FileCB == NULL || !FileCB->DismountedVolume) &&
+            !NtfsServesPagingAfterDismount(
+                (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension, Irp))
         {
             Irp->IoStatus.Status = STATUS_VOLUME_DISMOUNTED;
             Irp->IoStatus.Information = 0;

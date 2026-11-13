@@ -541,6 +541,19 @@ NtfsIsVolumeInBootExecuteWindow(_In_ PVolumeContextBlock VolCB)
            (Vpb->RealDevice->Flags & DO_SYSTEM_BOOT_PARTITION);
 }
 
+/* Running images page in from the boot volume autochk dismounted until it restarts */
+FORCEINLINE
+BOOLEAN
+NtfsServesPagingAfterDismount(_In_ PVolumeContextBlock VolCB,
+                              _In_ PIRP Irp)
+{
+    PVPB Vpb = VolCB->Vpb;
+
+    return (Irp->Flags & IRP_PAGING_IO) &&
+           Vpb && Vpb->RealDevice &&
+           (Vpb->RealDevice->Flags & DO_SYSTEM_BOOT_PARTITION);
+}
+
 /* Drop one handle from OpenHandleCount. Caller holds VolumeStateMutex. */
 FORCEINLINE
 VOID
