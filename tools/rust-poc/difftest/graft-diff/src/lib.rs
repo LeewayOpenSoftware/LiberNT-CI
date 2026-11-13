@@ -19,3 +19,14 @@ fn on_panic(_info: &PanicInfo) -> ! {
         core::hint::spin_loop();
     }
 }
+
+/// Host-only alias so Stanley's `t_reparse.c` links our Rust as the production symbol
+/// `IopValidateMountPointBuffer` (NTAPI is empty on host; ULONG == u32 in his ntoskrnl.h).
+/// This lets the real 3-way run (rust vs reparse.c vs Oracle) use the shipped harness.
+#[no_mangle]
+pub unsafe extern "C" fn IopValidateMountPointBuffer(
+    buffer: *const core::ffi::c_void,
+    buffer_length: u32,
+) -> i32 {
+    reparse_graft::leeway_rs_poc_validate_mount_point(buffer, buffer_length)
+}
