@@ -249,6 +249,7 @@ mshtml.tlb
 cryptowinrt.dll
 installservice.dll
 threadpoolwinrt.dll
+twinapi.appcore.dll
 windows.applicationmodel.dll
 windows.devices.bluetooth.dll
 windows.devices.enumeration.dll

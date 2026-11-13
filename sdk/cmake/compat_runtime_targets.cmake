@@ -296,6 +296,7 @@ set(COMPAT_RUNTIME_MODULES
     thumbcache
     traffic
     twinapi
+    twinapi_appcore
     tzres
     ucrtbase
     uiautomationcore
