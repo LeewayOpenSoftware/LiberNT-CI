@@ -45,6 +45,9 @@ namespace Windows.System.Profile {
 
     declare {
         interface Windows.Foundation.EventHandler<IInspectable *>;
+        interface Windows.Foundation.Collections.IMapView<HSTRING, HSTRING>;
+        interface Windows.Foundation.AsyncOperationCompletedHandler<Windows.Foundation.Collections.IMapView<HSTRING, HSTRING> *>;
+        interface Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IMapView<HSTRING, HSTRING> *>;
     }
 
     [
@@ -90,6 +93,17 @@ namespace Windows.System.Profile {
     {
         [propget] HRESULT VersionInfo([out, retval] Windows.System.Profile.AnalyticsVersionInfo **value);
         [propget] HRESULT DeviceForm([out, retval] HSTRING *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 6.0),
+        exclusiveto(Windows.System.Profile.AnalyticsInfo),
+        uuid(101704ea-a7f9-46d2-ab94-016865afdb25)
+    ]
+    interface IAnalyticsInfoStatics2 : IInspectable
+    {
+        HRESULT GetSystemPropertiesAsync([in] Windows.Foundation.Collections.IIterable<HSTRING> *attribute_names,
+                [out, retval] Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IMapView<HSTRING, HSTRING> *> **operation);
     }
 
     [
@@ -140,7 +154,7 @@ namespace Windows.System.Profile {
         contract(Windows.Foundation.UniversalApiContract, 1.0),
         marshaling_behavior(agile),
         static(Windows.System.Profile.IAnalyticsInfoStatics, Windows.Foundation.UniversalApiContract, 1.0),
-        /* static(Windows.System.Profile.IAnalyticsInfoStatics2, Windows.Foundation.UniversalApiContract, 6.0), */
+        static(Windows.System.Profile.IAnalyticsInfoStatics2, Windows.Foundation.UniversalApiContract, 6.0),
         threading(both)
     ]
     runtimeclass AnalyticsInfo
