@@ -210,3 +210,98 @@ pub unsafe extern "C" fn leeway_rs_poc_validate_reparse_graft(
     let data = unsafe { slice::from_raw_parts(buf as *const u8, total) };
     validate_name_grafting(data, reparse_tag as u32)
 }
+
+// ===========================================================================
+// R1a mirror: exact equivalent of Stanley's shipped C IopValidateMountPointBuffer
+// (fix/io3-name-grafting ff2e252ff4d). THIS is the swap-equivalent used for the
+// differential that gates a future C->Rust swap. It differs from
+// validate_name_grafting above: MOUNT_POINT only, NULL -> DATA_INVALID (not
+// INVALID_PARAMETER), len>=16, ReparseDataLength may be <= len-8 (trailing slack
+// allowed, not exact), substitute/print ranges must not overlap when print!=0, and
+// the first WCHAR of the substitute name must be L'\' (backslash). It returns only
+// STATUS_SUCCESS or STATUS_IO_REPARSE_DATA_INVALID, matching his function exactly.
+// Contract source: Stanley msg r1a-io3-meredith2 / god FWD 2026-11-13.
+// ===========================================================================
+
+const WCHAR_BACKSLASH: u16 = 0x005C; // L'\'
+
+/// Core mount-point validation. Mirrors `IopValidateMountPointBuffer(buf, len)`:
+/// SUCCESS iff every rule holds, else `STATUS_IO_REPARSE_DATA_INVALID`.
+pub fn validate_mount_point(buf: &[u8]) -> NtStatus {
+    let len = buf.len() as u32;
+    if len < 16 {
+        return STATUS_IO_REPARSE_DATA_INVALID; // fixed(8) + MP field header(8)
+    }
+    let tag = match rd_u32(buf, 0) {
+        Some(v) => v,
+        None => return STATUS_IO_REPARSE_DATA_INVALID,
+    };
+    if tag != IO_REPARSE_TAG_MOUNT_POINT {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    let rdl = match rd_u16(buf, 4) {
+        Some(v) => v as u32,
+        None => return STATUS_IO_REPARSE_DATA_INVALID,
+    };
+    // 8 <= ReparseDataLength <= 16384-8  AND  ReparseDataLength <= len-8
+    if rdl < MOUNT_POINT_FIELD_HEADER
+        || rdl > MAX_REPARSE_DATA_BUFFER_SIZE - FIXED_HEADER_SIZE
+        || rdl > len - FIXED_HEADER_SIZE
+    {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    let path_len = rdl - MOUNT_POINT_FIELD_HEADER;
+
+    let so = match rd_u16(buf, 8) { Some(v) => v as u32, None => return STATUS_IO_REPARSE_DATA_INVALID };
+    let sl = match rd_u16(buf, 10) { Some(v) => v as u32, None => return STATUS_IO_REPARSE_DATA_INVALID };
+    let po = match rd_u16(buf, 12) { Some(v) => v as u32, None => return STATUS_IO_REPARSE_DATA_INVALID };
+    let pl = match rd_u16(buf, 14) { Some(v) => v as u32, None => return STATUS_IO_REPARSE_DATA_INVALID };
+
+    // all offsets and lengths even
+    if ((so | sl | po | pl) & 1) != 0 {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    // off+len <= path, no wrap
+    if !range_within(so, sl, path_len) || !range_within(po, pl, path_len) {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    // substitute length >= one WCHAR
+    if sl < 2 {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    // when a print name is present, the two ranges must not overlap
+    if pl != 0 && so < po + pl && po < so + sl {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    // first WCHAR of the substitute name must be a backslash. PathBuffer starts at
+    // offset 16 (fixed 8 + MP field header 8); substitute name starts at +so.
+    let first = match rd_u16(buf, FIXED_HEADER_SIZE + MOUNT_POINT_FIELD_HEADER + so) {
+        Some(v) => v,
+        None => return STATUS_IO_REPARSE_DATA_INVALID,
+    };
+    if first != WCHAR_BACKSLASH {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    STATUS_SUCCESS
+}
+
+/// C ABI mirror of `IopValidateMountPointBuffer(PREPARSE_DATA_BUFFER buf, ULONG len)`.
+/// Returns `STATUS_SUCCESS` or `STATUS_IO_REPARSE_DATA_INVALID` only. A NULL buffer is
+/// `STATUS_IO_REPARSE_DATA_INVALID` (matching the C function, which treats NULL as a
+/// malformed buffer, not caller misuse). Borrows the buffer; retains/allocates/frees
+/// nothing. Safe at IRQL <= DISPATCH_LEVEL.
+///
+/// # Safety
+/// `buf` must point to `len` readable bytes valid for the call, or be NULL.
+#[no_mangle]
+pub unsafe extern "C" fn leeway_rs_poc_validate_mount_point(
+    buf: *const c_void,
+    len: c_ulong,
+) -> NtStatus {
+    if buf.is_null() {
+        return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+    // SAFETY: caller guarantees `buf` is readable for `len` bytes (header contract).
+    let data = unsafe { slice::from_raw_parts(buf as *const u8, len as usize) };
+    validate_mount_point(data)
+}

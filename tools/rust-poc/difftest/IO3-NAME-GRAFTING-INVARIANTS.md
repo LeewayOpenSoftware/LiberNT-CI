@@ -85,3 +85,40 @@ range-only C correction clean.
 - **D-2 in-kernel** (`IOCTL_LNRSPOC_VALIDATE_GRAFT`, code `0x806`): the same corpus driven
   through `lnrspoc.sys`, under Driver Verifier + special pool + NonPagedPoolNx, must return
   the same status as the kernel C validator with no bugcheck/OOB. Lab leg (Pam mu3j).
+
+---
+
+## R1a mirror — `IopValidateMountPointBuffer` (the swap-equivalent)
+
+Stanley's shipped C fix (`fix/io3-name-grafting` `ff2e252ff4d`) is `NTSTATUS
+IopValidateMountPointBuffer(PREPARSE_DATA_BUFFER buf, ULONG len)`. The Rust function
+`leeway_rs_poc_validate_mount_point(buf, len)` (`src/reparse_graft.rs`) mirrors it **exactly**
+— this, not the broader `validate_name_grafting` above, is the function a future C→Rust swap
+would substitute, so it is what the differential gates on. It returns **only**
+`STATUS_SUCCESS` or `STATUS_IO_REPARSE_DATA_INVALID`.
+
+SUCCESS iff ALL hold (else `IO_REPARSE_DATA_INVALID`):
+- `buf != NULL` (NULL is a malformed buffer here, **not** `INVALID_PARAMETER`);
+- `len >= 16`;
+- `ReparseTag == IO_REPARSE_TAG_MOUNT_POINT` (0xA0000003) — MOUNT_POINT only;
+- `8 <= ReparseDataLength <= 16384 - 8` **and** `ReparseDataLength <= len - 8` (trailing
+  slack beyond the declared length is allowed — this differs from `validate_name_grafting`,
+  which requires exact `8 + ReparseDataLength == len`);
+- with `path = ReparseDataLength - 8`: the substitute and print offsets and lengths are all
+  even and `offset + length <= path` (32-bit, no wrap);
+- `SubstituteNameLength >= 2`;
+- when `PrintNameLength != 0`, `[SubOff, SubOff+SubLen)` and `[PrintOff, PrintOff+PrintLen)`
+  do **not** overlap;
+- the first WCHAR of the substitute name (`PathBuffer + SubstituteNameOffset`, where
+  PathBuffer starts at byte 16) is `L'\'` (0x005C).
+
+Differential (added to `run-differential.sh`): `validate_mount_point` vs an independent C
+oracle `graft_ref_validate_mp` over a mount-point corpus + a boundary-straddling fuzz
+(build-valid-then-perturb). Latest host run: **mount-point checks=3,000,011, disagreements=0,
+SUCCESS=504,759, INVALID=2,495,252**; negative control (drop the backslash check) ⇒ 53,831
+disagreements. The **confirming** run links the Rust staticlib into Stanley's own
+`submodules/host-tests/iomgr` (`t_reparse.c` Oracle() + `reparse.c`) once those files are
+available to me — requested.
+
+D-2 in-kernel: `IOCTL_LNRSPOC_VALIDATE_MP` (0x807) drives `validate_mount_point`; input = the
+raw `REPARSE_DATA_BUFFER` bytes, output = the `NTSTATUS`.

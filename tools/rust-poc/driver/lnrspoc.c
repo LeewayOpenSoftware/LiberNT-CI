@@ -40,6 +40,10 @@
  * output = the LONG NTSTATUS from leeway_rs_poc_validate_reparse_graft. Never bugchecks. */
 #define IOCTL_LNRSPOC_VALIDATE_GRAFT \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* R1a mirror (D-2, the swap-equivalent). Input = the raw REPARSE_DATA_BUFFER bytes;
+ * output = the LONG NTSTATUS from leeway_rs_poc_validate_mount_point. Never bugchecks. */
+#define IOCTL_LNRSPOC_VALIDATE_MP \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
@@ -173,6 +177,27 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
                                                   inLen - sizeof(unsigned long), tag);
         DbgPrint("lnrspoc: validate_graft tag=0x%lx len=%lu -> 0x%lx\n",
                  tag, (unsigned long)(inLen - sizeof(unsigned long)), (unsigned long)nt);
+        *(long *)Irp->AssociatedIrp.SystemBuffer = nt;
+        info = sizeof(long);
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_LNRSPOC_VALIDATE_MP:
+    {
+        /* METHOD_BUFFERED: input = raw REPARSE_DATA_BUFFER bytes; output = LONG NTSTATUS.
+         * The swap-equivalent of IopValidateMountPointBuffer. Never bugchecks. */
+        unsigned char *buf = (unsigned char *)Irp->AssociatedIrp.SystemBuffer;
+        ULONG inLen = sp->Parameters.DeviceIoControl.InputBufferLength;
+        ULONG outLen = sp->Parameters.DeviceIoControl.OutputBufferLength;
+        long nt;
+
+        if (buf == NULL || outLen < sizeof(long))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        nt = leeway_rs_poc_validate_mount_point(buf, inLen);
+        DbgPrint("lnrspoc: validate_mp len=%lu -> 0x%lx\n", (unsigned long)inLen, (unsigned long)nt);
         *(long *)Irp->AssociatedIrp.SystemBuffer = nt;
         info = sizeof(long);
         status = STATUS_SUCCESS;
