@@ -209,8 +209,10 @@ fn decode(a: &[u8], clusters: u64, sink: RunSink, ctx: *mut c_void) -> i32 {
 /// # Safety
 /// `attr` must be NULL or point to `avail` readable bytes valid for the call; `sink` (if
 /// non-NULL) must be a valid C function. The buffer is borrowed, never retained.
-#[no_mangle]
-pub unsafe extern "C" fn decode_mapping_pairs(
+///
+/// No `#[no_mangle]`: this is reached only through the `ntfs_alt_impl()` table's function
+/// pointer, so it needs no exported C symbol (and must not clash with one).
+unsafe extern "C" fn decode_mapping_pairs(
     attr: *const u8,
     avail: u32,
     clusters_in_volume: u64,
