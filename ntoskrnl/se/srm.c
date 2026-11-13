@@ -22,6 +22,14 @@ typedef struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION
     PSE_LOGON_SESSION_TERMINATED_ROUTINE CallbackRoutine;
 } SEP_LOGON_SESSION_TERMINATED_NOTIFICATION, *PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION;
 
+typedef struct _SEP_LSA_NOTICE
+{
+    LIST_ENTRY Entry;
+    LUID LogonId;
+} SEP_LSA_NOTICE, *PSEP_LSA_NOTICE;
+
+#define SEP_LSA_NOTICE_TIMEOUT (-5LL * 1000 * 1000 * 10)
+
 VOID
 NTAPI
 SepRmCommandServerThread(
@@ -37,6 +45,12 @@ NTSTATUS
 SepRmCreateLogonSession(
     _In_ PLUID LogonLuid);
 
+static
+VOID
+NTAPI
+SepLsaNoticeWorker(
+    _In_ PVOID Context);
+
 
 /* GLOBALS ********************************************************************/
 
@@ -47,6 +61,13 @@ HANDLE SeRmCommandPort;
 HANDLE SeLsaInitEvent;
 
 static HANDLE SepRmCommandMessagePort;
+
+static HANDLE SepLsaCommandPort;
+static BOOLEAN SepLsaReady;
+static BOOLEAN SepLsaNoticeQueued;
+static LIST_ENTRY SepLsaNoticeList;
+static KGUARDED_MUTEX SepLsaNoticeLock;
+static WORK_QUEUE_ITEM SepLsaNoticeWorkItem;
 
 BOOLEAN SepAdtAuditingEnabled;
 ULONG SepAdtMinListLength = 0x2000;
@@ -199,6 +220,10 @@ SeRmInitPhase0(VOID)
     for (i = 0; i < MAX_LOGON_SESSION_LISTS_IN_ARRAY; i++)
         KeInitializeGuardedMutex(&SepRmDbLock[i]);
     KeInitializeGuardedMutex(&SepRmNotificationLock);
+
+    KeInitializeGuardedMutex(&SepLsaNoticeLock);
+    InitializeListHead(&SepLsaNoticeList);
+    ExInitializeWorkItem(&SepLsaNoticeWorkItem, SepLsaNoticeWorker, NULL);
 
     /* Create the system logon session */
     Status = SepRmCreateLogonSession(&SeSystemAuthenticationId);
@@ -1043,6 +1068,182 @@ AllocateLinksAgain:
  * without issues. STATUS_NO_SUCH_LOGON_SESSION is returned if no
  * such logon exists otherwise.
  */
+static
+BOOLEAN
+SepIsWellKnownLogonId(
+    _In_ PLUID LogonId)
+{
+    LUID SystemLuid = SYSTEM_LUID;
+
+    return (LogonId->HighPart == 0 && LogonId->LowPart <= SystemLuid.LowPart);
+}
+
+static
+NTSTATUS
+SepConnectToLsa(
+    _Out_ PHANDLE PortHandle)
+{
+    UNICODE_STRING PortName = RTL_CONSTANT_STRING(L"\\SeLsaCommandPort");
+    ALPC_PORT_ATTRIBUTES PortAttributes;
+    LARGE_INTEGER Timeout;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    *PortHandle = NULL;
+
+    RtlZeroMemory(&PortAttributes, sizeof(PortAttributes));
+    PortAttributes.MaxMessageLength = PORT_MAXIMUM_MESSAGE_LENGTH;
+    PortAttributes.SecurityQos.Length = sizeof(PortAttributes.SecurityQos);
+    PortAttributes.SecurityQos.ImpersonationLevel = SecurityImpersonation;
+    PortAttributes.SecurityQos.ContextTrackingMode = SECURITY_DYNAMIC_TRACKING;
+    PortAttributes.SecurityQos.EffectiveOnly = TRUE;
+
+    Timeout.QuadPart = SEP_LSA_NOTICE_TIMEOUT;
+    Status = ZwAlpcConnectPort(PortHandle,
+                               &PortName,
+                               NULL,
+                               &PortAttributes,
+                               ALPC_SYNC_CONNECTION,
+                               NULL,
+                               NULL,
+                               NULL,
+                               NULL,
+                               NULL,
+                               &Timeout);
+    if (Status == STATUS_TIMEOUT)
+        Status = STATUS_IO_TIMEOUT;
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Security: Connect to LSA Port failed 0x%lx\n", Status);
+        *PortHandle = NULL;
+    }
+
+    return Status;
+}
+
+static
+NTSTATUS
+SepTellLsaSessionEnded(
+    _In_ HANDLE PortHandle,
+    _In_ PLUID LogonId)
+{
+    LSAP_RM_API_MESSAGE Message;
+    LSAP_RM_API_MESSAGE Reply;
+    LARGE_INTEGER Timeout;
+    SIZE_T Length;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(&Message, sizeof(Message));
+    Message.Header.u1.s1.TotalLength = (CSHORT)(sizeof(PORT_MESSAGE) + sizeof(ULONG) + sizeof(LUID));
+    Message.Header.u1.s1.DataLength = Message.Header.u1.s1.TotalLength - (CSHORT)sizeof(PORT_MESSAGE);
+    Message.ApiNumber = LsapLogonSessionDeletedApi;
+    Message.u.LogonLuid = *LogonId;
+
+    Length = sizeof(Reply);
+    Timeout.QuadPart = SEP_LSA_NOTICE_TIMEOUT;
+    Status = ZwAlpcSendWaitReceivePort(PortHandle,
+                                       ALPC_MSGFLG_SYNC_REQUEST,
+                                       &Message.Header,
+                                       NULL,
+                                       &Reply.Header,
+                                       &Length,
+                                       NULL,
+                                       &Timeout);
+    if (Status == STATUS_TIMEOUT)
+        Status = STATUS_IO_TIMEOUT;
+    if (!NT_SUCCESS(Status))
+        DPRINT1("Security: LSA did not take an ended logon session 0x%lx\n", Status);
+
+    return Status;
+}
+
+static
+VOID
+NTAPI
+SepLsaNoticeWorker(
+    _In_ PVOID Context)
+{
+    PSEP_LSA_NOTICE Notice;
+    PLIST_ENTRY Entry;
+    HANDLE PortHandle;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(Context);
+
+    for (;;)
+    {
+        KeAcquireGuardedMutex(&SepLsaNoticeLock);
+        if (!SepLsaReady || IsListEmpty(&SepLsaNoticeList))
+        {
+            SepLsaNoticeQueued = FALSE;
+            KeReleaseGuardedMutex(&SepLsaNoticeLock);
+            return;
+        }
+        Entry = RemoveHeadList(&SepLsaNoticeList);
+        PortHandle = SepLsaCommandPort;
+        KeReleaseGuardedMutex(&SepLsaNoticeLock);
+
+        Notice = CONTAINING_RECORD(Entry, SEP_LSA_NOTICE, Entry);
+
+        Status = (PortHandle != NULL) ? STATUS_SUCCESS : SepConnectToLsa(&PortHandle);
+        if (NT_SUCCESS(Status))
+            Status = SepTellLsaSessionEnded(PortHandle, &Notice->LogonId);
+
+        if (NT_SUCCESS(Status))
+        {
+            ExFreePoolWithTag(Notice, TAG_LOGON_SESSION);
+            KeAcquireGuardedMutex(&SepLsaNoticeLock);
+            SepLsaCommandPort = PortHandle;
+            KeReleaseGuardedMutex(&SepLsaNoticeLock);
+            continue;
+        }
+
+        /* The port is lost: the notice waits for the next one, which connects again */
+        if (PortHandle != NULL)
+            ObCloseHandle(PortHandle, KernelMode);
+
+        KeAcquireGuardedMutex(&SepLsaNoticeLock);
+        SepLsaCommandPort = NULL;
+        InsertHeadList(&SepLsaNoticeList, &Notice->Entry);
+        SepLsaNoticeQueued = FALSE;
+        KeReleaseGuardedMutex(&SepLsaNoticeLock);
+        return;
+    }
+}
+
+static
+VOID
+SepQueueLsaNotice(
+    _In_ PLUID LogonId)
+{
+    PSEP_LSA_NOTICE Notice;
+    BOOLEAN Queue;
+
+    PAGED_CODE();
+
+    Notice = ExAllocatePoolWithTag(PagedPool, sizeof(*Notice), TAG_LOGON_SESSION);
+    /* FIXME: without memory LSA is not told, and the session stays until shutdown */
+    if (Notice == NULL)
+        return;
+
+    Notice->LogonId = *LogonId;
+
+    KeAcquireGuardedMutex(&SepLsaNoticeLock);
+    InsertTailList(&SepLsaNoticeList, &Notice->Entry);
+    Queue = SepLsaReady && !SepLsaNoticeQueued;
+    if (Queue)
+        SepLsaNoticeQueued = TRUE;
+    KeReleaseGuardedMutex(&SepLsaNoticeLock);
+
+    if (Queue)
+        ExQueueWorkItem(&SepLsaNoticeWorkItem, DelayedWorkQueue);
+}
+
 NTSTATUS
 SepRmDereferenceLogonSession(
     _In_ PLUID LogonLuid)
@@ -1069,6 +1270,14 @@ SepRmDereferenceLogonSession(
             RefCount = --CurrentSession->ReferenceCount;
             DPRINT("ReferenceCount: %lu\n", CurrentSession->ReferenceCount);
 
+            /* Once the lock is gone LSA may delete the session, so only a local copy is used after it */
+            DeviceMap = NULL;
+            if (RefCount == 0)
+            {
+                DeviceMap = CurrentSession->pDeviceMap;
+                CurrentSession->pDeviceMap = NULL;
+            }
+
             /* Release the database lock */
             KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
@@ -1076,15 +1285,16 @@ SepRmDereferenceLogonSession(
             if (RefCount == 0)
             {
                 /* Get rid of the LUID device map */
-                DeviceMap = CurrentSession->pDeviceMap;
                 if (DeviceMap != NULL)
                 {
-                    CurrentSession->pDeviceMap = NULL;
                     SepCleanupLUIDDeviceMapDirectory(LogonLuid);
                     ObfDereferenceDeviceMap(DeviceMap);
                 }
 
-                /* FIXME: Alert LSA and filesystems that a logon is about to be deleted */
+                if (!SepIsWellKnownLogonId(LogonLuid))
+                    SepQueueLsaNotice(LogonLuid);
+
+                /* FIXME: Alert filesystems that a logon is about to be deleted */
             }
 
             return STATUS_SUCCESS;
@@ -1113,12 +1323,11 @@ BOOLEAN
 NTAPI
 SepRmCommandServerThreadInit(VOID)
 {
-    ALPC_PORT_ATTRIBUTES PortAttributes;
     SEP_RM_API_MESSAGE Message;
-    UNICODE_STRING PortName;
     SIZE_T BufferLength;
     HANDLE PortHandle;
     NTSTATUS Status;
+    BOOLEAN Queue;
     BOOLEAN Result;
 
     PortHandle = NULL;
@@ -1173,46 +1382,26 @@ SepRmCommandServerThreadInit(VOID)
         goto Cleanup;
     }
 
-    /* Setup security QOS */
-    RtlZeroMemory(&PortAttributes, sizeof(PortAttributes));
-    PortAttributes.MaxMessageLength = PORT_MAXIMUM_MESSAGE_LENGTH;
-    PortAttributes.SecurityQos.Length = sizeof(PortAttributes.SecurityQos);
-    PortAttributes.SecurityQos.ImpersonationLevel = SecurityImpersonation;
-    PortAttributes.SecurityQos.ContextTrackingMode = SECURITY_DYNAMIC_TRACKING;
-    PortAttributes.SecurityQos.EffectiveOnly = TRUE;
+    /* The port carries the notices of ended logon sessions; a failed connect is retried by the next notice */
+    SepConnectToLsa(&PortHandle);
 
-    /* Connect to LSASS */
-    RtlInitUnicodeString(&PortName, L"\\SeLsaCommandPort");
-    Status = ZwAlpcConnectPort(&PortHandle,
-                               &PortName,
-                               NULL,
-                               &PortAttributes,
-                               ALPC_SYNC_CONNECTION,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL,
-                               NULL);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("Security Rm Init: Connect to LSA Port failed 0x%lx\n", Status);
-        goto Cleanup;
-    }
+    KeAcquireGuardedMutex(&SepLsaNoticeLock);
+    SepLsaCommandPort = PortHandle;
+    SepLsaReady = TRUE;
+    Queue = !IsListEmpty(&SepLsaNoticeList) && !SepLsaNoticeQueued;
+    if (Queue)
+        SepLsaNoticeQueued = TRUE;
+    KeReleaseGuardedMutex(&SepLsaNoticeLock);
+
+    if (Queue)
+        ExQueueWorkItem(&SepLsaNoticeWorkItem, DelayedWorkQueue);
 
     DPRINT("SepRmCommandServerThreadInit: done\n");
 
 Cleanup:
     /* Check for failure */
     if (!NT_SUCCESS(Status))
-    {
-        if (PortHandle != NULL)
-        {
-            ObCloseHandle(PortHandle, KernelMode);
-        }
-
         Result = FALSE;
-    }
 
     return Result;
 }
