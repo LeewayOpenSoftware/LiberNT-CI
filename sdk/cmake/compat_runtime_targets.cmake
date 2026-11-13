@@ -323,11 +323,36 @@ set(COMPAT_RUNTIME_MODULES
     winscard
     wintypes
     winusb
+    windows_applicationmodel
+    windows_devices_bluetooth
+    windows_devices_enumeration
+    windows_devices_radios
+    windows_devices_usb
+    windows_gaming_input
+    windows_gaming_ui_gamebar
+    windows_globalization
+    windows_graphics
     windows_management_deployment
+    windows_media
+    windows_media_devices
+    windows_media_mediacontrol
+    windows_media_playback_backgroundmediaplayer
+    windows_media_playback_mediaplayer
+    windows_media_speech
+    windows_networking
     windows_networking_connectivity
+    windows_networking_hostname
+    windows_perception_stub
     windows_security_authentication_onlineid
+    windows_security_credentials_ui_userconsentverifier
     windows_storage
+    windows_storage_applicationdata
+    windows_system_profile_systemid
+    windows_system_profile_systemmanufacturers
     windows_ui
+    windows_ui_core_textinput
+    windows_ui_xaml
+    windows_web
     windowscodecs
     winhttp
     wininet
