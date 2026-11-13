@@ -29,6 +29,7 @@ BEGIN
     IDS_TOOLTIP_FIT_TOGGLE "Ajustar a la ventana / zoom 100%"
     IDS_EMAIL_FAILED "No se pudo enviar la imagen: no hay cliente de correo."
     IDS_BURN_FAILED "No hay grabadora de discos disponible."
+    IDS_ROTATE_LOSSY "Esta imagen no se puede girar sin volver a codificarla, lo que pierde algo de calidad. Guardar el giro de todos modos?"
     /* Tooltips */
     IDS_TOOLTIP_NEXT_PIC "Siguiente imagen"
     IDS_TOOLTIP_PREV_PIC "Imagen anterior"

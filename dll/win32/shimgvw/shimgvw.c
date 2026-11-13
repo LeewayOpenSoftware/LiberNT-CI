@@ -134,6 +134,7 @@ typedef struct tagPREVIEW_DATA
      * surfaces read these; the verb checks and the file check set them. */
     BOOL m_bEnBestFit, m_bEnRealSize, m_bEnZoomIn, m_bEnZoomOut;
     BOOL m_bEnDelete, m_bEnSaveAs, m_bEnPrint, m_bEnModify;
+    INT m_nRotQuarter;           /* net clockwise quarter turns not yet saved */
 } PREVIEW_DATA, *PPREVIEW_DATA;
 
 static VOID Preview_ToggleSlideShowEx(PPREVIEW_DATA pData, BOOL StartTimer);
@@ -477,11 +478,125 @@ Preview_pFreeImage(PPREVIEW_DATA pData)
     }
 }
 
+/* ---- rotation is kept in memory while browsing and written back when the picture is left ---- */
+
+static BOOL
+Preview_FindEncoder(const GUID *pFormat, CLSID *pClsid)
+{
+    UINT num = 0, size = 0, j;
+    ImageCodecInfo *info;
+    BOOL found = FALSE;
+
+    if (GdipGetImageEncodersSize(&num, &size) != Ok || !size)
+        return FALSE;
+    info = QuickAlloc(size, FALSE);
+    if (!info)
+        return FALSE;
+    GdipGetImageEncoders(num, size, info);
+    for (j = 0; j < num && !found; ++j)
+    {
+        if (IsEqualGUID(pFormat, &info[j].FormatID))
+        {
+            *pClsid = info[j].Clsid;
+            found = TRUE;
+        }
+    }
+    QuickFree(info);
+    return found;
+}
+
+/* Saves pImage to szFile through a temporary file so a failed encode never damages the original. */
+static BOOL
+Preview_SaveReplacing(GpImage *pImage, LPCWSTR pszFile, const CLSID *pClsid, const EncoderParameters *pParams)
+{
+    WCHAR szTmp[MAX_PATH + 16];
+    BOOL ok;
+
+    if (FAILED(StringCchPrintfW(szTmp, _countof(szTmp), L"%s.lwrot.tmp", pszFile)))
+        return FALSE;
+    ok = GdipSaveImageToFile(pImage, szTmp, pClsid, pParams) == Ok;
+    if (ok)
+        ok = MoveFileExW(szTmp, pszFile, MOVEFILE_REPLACE_EXISTING);
+    if (!ok)
+        DeleteFileW(szTmp);
+    return ok;
+}
+
+static GUID g_OrigFormat; /* raw format of the file as loaded: a rotated GpImage reports MemoryBMP */
+
+static VOID
+Preview_FlushRotation(PPREVIEW_DATA pData)
+{
+    /* JPEG lossless transform: EncoderTransformation, {8d0eb2d1-a58e-4ea8-aa14-108074b7b6f9} */
+    static const GUID s_EncTransform = { 0x8d0eb2d1, 0xa58e, 0x4ea8, { 0xaa, 0x14, 0x10, 0x80, 0x74, 0xb7, 0xb6, 0xf9 } };
+    /* EncoderQuality, {1d5be4b5-fa4a-452d-9cdd-5db35105e7eb} */
+    static const GUID s_EncQuality = { 0x1d5be4b5, 0xfa4a, 0x452d, { 0x9c, 0xdd, 0x5d, 0xb3, 0x51, 0x05, 0xe7, 0xeb } };
+    INT turns = pData->m_nRotQuarter & 3;
+    GUID rawFormat;
+    CLSID clsid;
+    EncoderParameters params;
+    ULONG value;
+    BOOL isJpeg;
+
+    pData->m_nRotQuarter = 0;
+    if (!turns || !g_pImage || !g_szFile[0] || GetFileAttributesW(g_szFile) == INVALID_FILE_ATTRIBUTES)
+        return;
+    if (pData->m_Anime.m_nFrameCount > 1)
+        return; /* animations are not re-encoded */
+    rawFormat = g_OrigFormat;
+    if (!Preview_FindEncoder(&rawFormat, &clsid))
+        return; /* no encoder for the format: the rotation stays a view setting */
+
+    isJpeg = IsEqualGUID(&rawFormat, &ImageFormatJPEG);
+    Anime_Pause(&pData->m_Anime);
+    if (isJpeg)
+    {
+        GpImage *pOrig = NULL;
+        BOOL done = FALSE;
+
+        /* lossless: transform the stored file, not the decoded pixels (needs 16 px aligned sides) */
+        if (SUCCEEDED(LoadImageFromPath(g_szFile, &pOrig)) && pOrig)
+        {
+            value = (turns == 1) ? 13 : (turns == 2) ? 14 : 15; /* EncoderValueTransformRotate90/180/270 */
+            params.Count = 1;
+            params.Parameter[0].Guid = s_EncTransform;
+            params.Parameter[0].NumberOfValues = 1;
+            params.Parameter[0].Type = EncoderParameterValueTypeLong;
+            params.Parameter[0].Value = &value;
+            done = Preview_SaveReplacing(pOrig, g_szFile, &clsid, &params);
+            GdipDisposeImage(pOrig);
+        }
+        if (!done)
+        {
+            WCHAR szText[256], szTitle[128];
+            if (!LoadStringW(g_hInstance, IDS_ROTATE_LOSSY, szText, _countof(szText)))
+                StringCchCopyW(szText, _countof(szText), L"This picture cannot be rotated without re-encoding it, which loses some quality. Save the rotation anyway?");
+            LoadStringW(g_hInstance, IDS_APPTITLE, szTitle, _countof(szTitle));
+            if (MessageBoxW(pData->m_hwnd, szText, szTitle, MB_ICONQUESTION | MB_YESNO) == IDYES)
+            {
+                value = 100;
+                params.Count = 1;
+                params.Parameter[0].Guid = s_EncQuality;
+                params.Parameter[0].NumberOfValues = 1;
+                params.Parameter[0].Type = EncoderParameterValueTypeLong;
+                params.Parameter[0].Value = &value;
+                Preview_SaveReplacing(g_pImage, g_szFile, &clsid, &params);
+            }
+        }
+    }
+    else
+    {
+        Preview_SaveReplacing(g_pImage, g_szFile, &clsid, NULL);
+    }
+    Anime_Start(&pData->m_Anime, 0);
+}
+
 static VOID
 Preview_pLoadImage(PPREVIEW_DATA pData, LPCWSTR szOpenFileName)
 {
     HRESULT hr;
     BOOL bCanDel;
+    Preview_FlushRotation(Preview_GetData(g_hMainWnd));
     Preview_pFreeImage(pData);
     InvalidateRect(pData->m_hwnd, NULL, FALSE); /* Schedule redraw in case we change to "No preview" */
 
@@ -497,6 +612,7 @@ Preview_pLoadImage(PPREVIEW_DATA pData, LPCWSTR szOpenFileName)
         return;
     }
 
+    GdipGetImageRawFormat(g_pImage, &g_OrigFormat);
     Anime_LoadInfo(&pData->m_Anime);
 
     /* Reset zoom and redraw display */
@@ -1758,6 +1874,7 @@ Preview_Delete(PPREVIEW_DATA pData)
     if (error)
         return;
 
+    pData->m_nRotQuarter = 0; /* the file is gone: nothing to write back */
     /* Reload the file list and go next file */
     pFreeFileList(g_pCurrentFile);
     g_pCurrentFile = pBuildFileList(szNextFile);
@@ -2178,6 +2295,7 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
         case IDC_ROT_CLOCKW:
             if (g_pImage)
             {
+                pData->m_nRotQuarter = (pData->m_nRotQuarter + 1) & 3;
                 GdipImageRotateFlip(g_pImage, Rotate90FlipNone);
                 Preview_UpdateImage(pData);
             }
@@ -2186,6 +2304,7 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
         case IDC_ROT_COUNCW:
             if (g_pImage)
             {
+                pData->m_nRotQuarter = (pData->m_nRotQuarter + 3) & 3;
                 GdipImageRotateFlip(g_pImage, Rotate270FlipNone);
                 Preview_UpdateImage(pData);
             }
@@ -2196,6 +2315,7 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
             {
                 GdipImageRotateFlip(g_pImage, Rotate90FlipNone);
                 Preview_pSaveImage(pData, g_szFile);
+                pData->m_nRotQuarter = 0;
                 Preview_UpdateImage(pData);
             }
             break;
@@ -2205,6 +2325,7 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
             {
                 GdipImageRotateFlip(g_pImage, Rotate270FlipNone);
                 Preview_pSaveImage(pData, g_szFile);
+                pData->m_nRotQuarter = 0;
                 Preview_UpdateImage(pData);
             }
             break;
@@ -2304,6 +2425,9 @@ Preview_OnDestroy(HWND hwnd)
 
     KillTimer(hwnd, SLIDESHOW_TIMER_ID);
     KillTimer(hwnd, HIDECURSOR_TIMER_ID);
+
+    if (Preview_IsMainWnd(hwnd))
+        Preview_FlushRotation(pData);
 
     pFreeFileList(g_pCurrentFile);
     g_pCurrentFile = NULL;
