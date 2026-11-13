@@ -97,3 +97,19 @@ jobs:
           name: lnrspoc-staticlib-${{ env.RUST_POC_SHA256 }}
           path: ${{ runner.temp }}/b1/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a
           if-no-files-found: error
+
+  io3-differential:
+    # D-1: the IO-3 name-grafting validator (same source) vs an independent C reference,
+    # over a corpus + a structured sweep + a deterministic fuzz. Exit 0 iff 0 disagreements
+    # and every status class was produced (non-vacuous). Host-side only; no kernel link.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install nightly-2026-05-24 --profile minimal --component rust-src
+          rustc +nightly-2026-05-24 --version --verbose
+      - name: Run D-1 differential (2,000,000 fuzz iterations)
+        run: |
+          chmod +x tools/rust-poc/difftest/run-differential.sh
+          ITERS=2000000 tools/rust-poc/difftest/run-differential.sh

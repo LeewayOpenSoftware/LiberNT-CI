@@ -36,6 +36,10 @@
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x804, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_LNRSPOC_V2_SELFTEST \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x805, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* R1b (D-2): name-grafting validator. Input = [ULONG reparse_tag][reparse buffer bytes];
+ * output = the LONG NTSTATUS from leeway_rs_poc_validate_reparse_graft. Never bugchecks. */
+#define IOCTL_LNRSPOC_VALIDATE_GRAFT \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x806, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
@@ -146,6 +150,31 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         DbgPrint("lnrspoc: v2 ioctl 0x%lx -> rc=%d\n", code, rc);
         *(int *)Irp->AssociatedIrp.SystemBuffer = rc;
         info = sizeof(int);
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_LNRSPOC_VALIDATE_GRAFT:
+    {
+        /* METHOD_BUFFERED: input = [ULONG reparse_tag][reparse buffer...]; output = LONG
+         * NTSTATUS. The validator borrows the buffer, never retains it, never bugchecks. */
+        unsigned char *buf = (unsigned char *)Irp->AssociatedIrp.SystemBuffer;
+        ULONG inLen = sp->Parameters.DeviceIoControl.InputBufferLength;
+        ULONG outLen = sp->Parameters.DeviceIoControl.OutputBufferLength;
+        unsigned long tag;
+        long nt;
+
+        if (buf == NULL || outLen < sizeof(long) || inLen < sizeof(unsigned long))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        tag = *(unsigned long *)buf;
+        nt = leeway_rs_poc_validate_reparse_graft(buf + sizeof(unsigned long),
+                                                  inLen - sizeof(unsigned long), tag);
+        DbgPrint("lnrspoc: validate_graft tag=0x%lx len=%lu -> 0x%lx\n",
+                 tag, (unsigned long)(inLen - sizeof(unsigned long)), (unsigned long)nt);
+        *(long *)Irp->AssociatedIrp.SystemBuffer = nt;
+        info = sizeof(long);
         status = STATUS_SUCCESS;
         break;
     }
