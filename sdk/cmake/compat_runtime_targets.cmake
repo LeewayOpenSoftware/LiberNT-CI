@@ -324,6 +324,8 @@ set(COMPAT_RUNTIME_MODULES
     wintypes
     winusb
     windows_management_deployment
+    windows_networking_connectivity
+    windows_security_authentication_onlineid
     windows_storage
     windows_ui
     windowscodecs
