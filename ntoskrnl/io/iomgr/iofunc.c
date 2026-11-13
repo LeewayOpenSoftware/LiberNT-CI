@@ -4276,10 +4276,22 @@ NtSetInformationFile(IN HANDLE FileHandle,
             /* Protect write in SEH */
             _SEH2_TRY
             {
-                /* Write the offset */
-                FileObject->CurrentByteOffset =
+                LARGE_INTEGER Offset =
                     ((PFILE_POSITION_INFORMATION)FileInformation)->
                     CurrentByteOffset;
+
+                /* The position is kept here, so it is checked here: not negative, sector-aligned when unbuffered */
+                if ((Offset.QuadPart < 0) ||
+                    ((FileObject->Flags & FO_NO_INTERMEDIATE_BUFFERING) &&
+                     (DeviceObject->SectorSize != 0) &&
+                     (Offset.QuadPart % DeviceObject->SectorSize) != 0))
+                {
+                    Status = STATUS_INVALID_PARAMETER;
+                    _SEH2_LEAVE;
+                }
+
+                /* Write the offset */
+                FileObject->CurrentByteOffset = Offset;
 
                 /* Fill out the I/O Status Block */
                 IoStatusBlock->Information = 0;
