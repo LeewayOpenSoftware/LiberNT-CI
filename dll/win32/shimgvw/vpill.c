@@ -24,6 +24,7 @@
 
 #define STRIP_CLASS L"ShImgVw:CMenuStrip"
 #define PILL_CLASS  L"ShImgVw:CPillBar"
+#define PROBE_TIMER 0x7A11
 #define SLIDER_CLASS L"ShImgVw:CPillZoom"
 
 /* Pill items, left to right */
@@ -63,6 +64,11 @@ struct VPILL
     BOOL plain;             /* no layered windows: opaque capsule-shaped popup, no shadow */
     int margin;             /* shadow margin around the capsule (0 when plain) */
     HBITMAP hbmSnap;        /* the last rendered pill (premultiplied), for WM_PRINT */
+    DWORD iconPx[PI_COUNT + 1][32 * 32];    /* premultiplied ARGB behind icon[] */
+    COLORREF probeRef;      /* expected screen colour at probePt once the layered pill is up */
+    POINT probePt;
+    BOOL probeArmed;
+    int probeBad;
 };
 
 static ATOM s_atoms[3];
@@ -378,16 +384,66 @@ DrawGlyph(GpGraphics *g, int item, float cx, float cy, float s, BOOL enabled, BO
 
 /* ---- Aureline icons: embedded ICON resources (res/aureline), 32 px frame ---- */
 
+/* Reads the icon's pixels ourselves (GetIconInfo + GetDIBits) instead of GdipCreateBitmapFromHICON;
+ * a picture with no visible pixel is rejected so the drawn glyph is used instead. */
 static GpBitmap *
-LoadIcon32(VPILL *p, UINT id)
+LoadIcon32(VPILL *p, UINT id, DWORD *px)
 {
     HICON hi = (HICON)LoadImageW(p->inst, MAKEINTRESOURCEW(id), IMAGE_ICON, 32, 32, 0);
     GpBitmap *bmp = NULL;
+    ICONINFO ii;
+    BITMAPINFO bi;
+    DWORD mask[32 * 32];
+    HDC hdc;
+    BOOL any = FALSE, hasAlpha = FALSE;
+    int i;
 
     if (!hi)
         return NULL;
-    GdipCreateBitmapFromHICON(hi, &bmp);
+    ZeroMemory(&ii, sizeof(ii));
+    if (!GetIconInfo(hi, &ii))
+    {
+        DestroyIcon(hi);
+        return NULL;
+    }
+    ZeroMemory(&bi, sizeof(bi));
+    bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+    bi.bmiHeader.biWidth = 32;
+    bi.bmiHeader.biHeight = -32;
+    bi.bmiHeader.biPlanes = 1;
+    bi.bmiHeader.biBitCount = 32;
+    bi.bmiHeader.biCompression = BI_RGB;
+    hdc = GetDC(NULL);
+    ZeroMemory(px, 32 * 32 * sizeof(DWORD));
+    if (ii.hbmColor && GetDIBits(hdc, ii.hbmColor, 0, 32, px, &bi, DIB_RGB_COLORS) == 32)
+    {
+        for (i = 0; i < 32 * 32; i++)
+            if (px[i] >> 24)
+                hasAlpha = TRUE;
+        if (!hasAlpha && ii.hbmMask)
+        {
+            ZeroMemory(mask, sizeof(mask));
+            if (GetDIBits(hdc, ii.hbmMask, 0, 32, mask, &bi, DIB_RGB_COLORS) == 32)
+                for (i = 0; i < 32 * 32; i++)
+                    px[i] = (mask[i] & 0xFFFFFF) ? 0 : (px[i] | 0xFF000000);
+        }
+        for (i = 0; i < 32 * 32; i++)
+        {
+            DWORD a = px[i] >> 24;
+            if (a)
+                any = TRUE;
+            px[i] = (a << 24) | ((((px[i] >> 16) & 0xFF) * a / 255) << 16) | ((((px[i] >> 8) & 0xFF) * a / 255) << 8) |
+                    (((px[i] & 0xFF) * a / 255));
+        }
+    }
+    ReleaseDC(NULL, hdc);
+    if (ii.hbmColor)
+        DeleteObject(ii.hbmColor);
+    if (ii.hbmMask)
+        DeleteObject(ii.hbmMask);
     DestroyIcon(hi);
+    if (!any || GdipCreateBitmapFromScan0(32, 32, 32 * 4, PixelFormat32bppPARGB, (BYTE *)px, &bmp) != Ok)
+        return NULL;
     return bmp;
 }
 
@@ -401,7 +457,7 @@ LoadIcons(VPILL *p)
     };
     int i;
     for (i = 0; i < PI_COUNT + 1; i++)
-        p->icon[i] = LoadIcon32(p, ids[i]);
+        p->icon[i] = LoadIcon32(p, ids[i], p->iconPx[i]);
 }
 
 static void
@@ -663,6 +719,16 @@ RenderPill(VPILL *p)
     {
         if (!UpdateLayeredWindow(p->pill, hdcScreen, &ptDst, &p->size, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA))
             p->needPlain = TRUE;
+        else
+        {
+            int px = p->capsule.left + Sc(p, 6), py = (p->capsule.top + p->capsule.bottom) / 2;
+            DWORD v = ((DWORD *)bits)[(size_t)py * p->size.cx + px];
+
+            p->probeArmed = (v >> 24) == 255;
+            p->probeRef = RGB((v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF);
+            p->probePt.x = wr.left + px;
+            p->probePt.y = wr.top + py;
+        }
     }
     SelectObject(hdcMem, hbmOld);
 done:
@@ -677,9 +743,11 @@ done:
     if (p->plain)
     {
         HRGN rgn = CreateRoundRectRgn(0, 0, p->size.cx + 1, p->size.cy + 1, p->size.cy, p->size.cy);
-        SetWindowRgn(p->pill, rgn, FALSE);
+        SetWindowRgn(p->pill, rgn, TRUE);
         InvalidateRect(p->pill, NULL, FALSE);
     }
+    else if (p->probeArmed && IsWindowVisible(p->pill))
+        SetTimer(p->pill, PROBE_TIMER, 400, NULL);
     if (p->needPlain)
     {
         p->needPlain = FALSE;
@@ -887,7 +955,7 @@ ToggleSlider(VPILL *p)
                                 WS_POPUP, x, y, w, h, p->main, NULL, p->inst, NULL);
     if (p->slider)
     {
-        SetWindowRgn(p->slider, CreateRoundRectRgn(0, 0, w + 1, h + 1, Sc(p, 14), Sc(p, 14)), FALSE);
+        SetWindowRgn(p->slider, CreateRoundRectRgn(0, 0, w + 1, h + 1, Sc(p, 14), Sc(p, 14)), TRUE);
         ShowWindow(p->slider, SW_SHOWNA);
         SetCapture(p->slider);
     }
@@ -903,6 +971,42 @@ PillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         return DefWindowProcW(hwnd, msg, wp, lp);
     switch (msg)
     {
+        case WM_TIMER:
+            /* A layered pill that the system accepted but never put on screen (no layered
+             * compositing): compare one capsule pixel with what we rendered, twice, then go plain. */
+            if (wp == PROBE_TIMER)
+            {
+                HDC sdc;
+                COLORREF c;
+                int dr, dg, db;
+
+                if (!p->probeArmed || p->plain || !IsWindowVisible(hwnd))
+                    return 0;
+                sdc = GetDC(NULL);
+                c = sdc ? GetPixel(sdc, p->probePt.x, p->probePt.y) : CLR_INVALID;
+                if (sdc)
+                    ReleaseDC(NULL, sdc);
+                if (c == CLR_INVALID)
+                    return 0;
+                dr = abs((int)GetRValue(c) - (int)GetRValue(p->probeRef));
+                dg = abs((int)GetGValue(c) - (int)GetGValue(p->probeRef));
+                db = abs((int)GetBValue(c) - (int)GetBValue(p->probeRef));
+                if (dr > 24 || dg > 24 || db > 24)
+                {
+                    if (++p->probeBad >= 2)
+                    {
+                        KillTimer(hwnd, PROBE_TIMER);
+                        p->probeArmed = FALSE;
+                        SwitchToPlain(p);
+                    }
+                }
+                else
+                {
+                    KillTimer(hwnd, PROBE_TIMER);
+                    p->probeArmed = FALSE;
+                }
+            }
+            return 0;
         case WM_NCHITTEST:
         {
             POINT pt = { GET_X_LPARAM(lp), GET_Y_LPARAM(lp) };
