@@ -328,8 +328,7 @@ static BOOL LPK_IsBlankFormatGlyph(LPCWSTR lpRun, INT cChars, const WORD *pwLogC
             continue;
 
         ch = lpRun[i];
-        if ((ch >= 0x200B && ch <= 0x200F) || (ch >= 0x202A && ch <= 0x202E) ||
-            (ch >= 0x2060 && ch <= 0x2064) || (ch >= 0x2066 && ch <= 0x206F) || ch == 0xFEFF)
+        if ((ch >= 0x200B && ch <= 0x200F) || (ch >= 0x202A && ch <= 0x202E) || ch == 0xFEFF)
         {
             return TRUE;
         }
