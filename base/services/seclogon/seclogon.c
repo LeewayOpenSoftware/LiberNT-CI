@@ -171,9 +171,11 @@ DllMain(
         case DLL_PROCESS_ATTACH:
             DisableThreadLibraryCalls(hinstDLL);
             hDllInstance = hinstDLL;
+            InitializeCriticalSection(&DesktopAccessLock);
             break;
 
         case DLL_PROCESS_DETACH:
+            DeleteCriticalSection(&DesktopAccessLock);
             break;
     }
 
