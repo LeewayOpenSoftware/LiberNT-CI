@@ -466,6 +466,7 @@ RawUserFsCtrl(IN PIO_STACK_LOCATION IoStackLocation,
               IN PVCB Vcb)
 {
     NTSTATUS Status;
+    BOOLEAN Deleted = FALSE;
     PAGED_CODE();
 
     DPRINT("RawUserFsCtrl(%p, %p)\n", IoStackLocation, Vcb);
@@ -528,17 +529,12 @@ RawUserFsCtrl(IN PIO_STACK_LOCATION IoStackLocation,
         /* Dismount request */
         case FSCTL_DISMOUNT_VOLUME:
 
-            /* Make sure we're locked */
-            if (Vcb->VcbState & VCB_STATE_LOCKED)
-            {
-                /* Do nothing, just return success */
-                Status = STATUS_SUCCESS;
-            }
-            else
-            {
-                /* We can't dismount, device not locked */
-                Status = STATUS_ACCESS_DENIED;
-            }
+            /* Windows dismounts RAW with or without a lock: the volume is marked
+             * dismounted and the real device gets a fresh VPB, so a later open
+             * mounts anew; the open handles keep this VCB until the last close. */
+            Vcb->VcbState |= VCB_STATE_DISMOUNTED;
+            Deleted = RawCheckForDismount(Vcb, FALSE);
+            Status = STATUS_SUCCESS;
             break;
 
         /* Unknown request */
@@ -549,8 +545,9 @@ RawUserFsCtrl(IN PIO_STACK_LOCATION IoStackLocation,
             break;
     }
 
-    /* Unlock device */
-    KeReleaseMutex(&Vcb->Mutex, FALSE);
+    /* Unlock device (a deleted VCB released its mutex itself) */
+    if (!Deleted)
+        KeReleaseMutex(&Vcb->Mutex, FALSE);
 
     /* In case of status change, notify */
     switch (IoStackLocation->Parameters.FileSystemControl.FsControlCode)
@@ -1029,10 +1026,9 @@ RawCleanup(IN PVCB Vcb,
     /* Remove shared access */
     IoRemoveShareAccess(IoStackLocation->FileObject, &Vcb->ShareAccess);
 
-    /* Check if we're to dismount */
+    /* Check if we're to dismount (any of several open handles may have asked) */
     if (Vcb->VcbState & VCB_STATE_DISMOUNTED)
     {
-        ASSERT(Vcb->OpenCount == 1);
         RawCheckForDismount(Vcb, FALSE);
     }
 
