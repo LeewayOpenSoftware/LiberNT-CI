@@ -2804,7 +2804,7 @@
 @ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
 @ stub -arch=win64 ObDereferenceObjectDeferDeleteWithTag
 @ stdcall ObGetFilterVersion()
-@ stub -arch=win64 ObIsDosDeviceLocallyMapped
+@ stdcall -arch=win64 ObIsDosDeviceLocallyMapped(long ptr)
 @ stub -arch=win64 ObOpenObjectByNameEx
 @ stub -arch=win64 ObOpenObjectByPointerWithTag
 @ stdcall ObReferenceObjectByHandleWithTag(ptr long ptr long long ptr ptr)
@@ -3122,7 +3122,7 @@
 @ stub -arch=win64 RtlIsPartialPlaceholder
 @ stub -arch=win64 RtlIsPartialPlaceholderFileHandle
 @ stub -arch=win64 RtlIsPartialPlaceholderFileInfo
-@ stub -arch=win64 RtlIsProcessorFeaturePresent
+@ stdcall -arch=win64 RtlIsProcessorFeaturePresent(long) ExIsProcessorFeaturePresent
 @ stub -arch=win64 RtlIsSandboxedToken
 @ stdcall RtlIsServicePackVersionInstalled(long)
 @ stdcall RtlIsStateSeparationEnabled()
