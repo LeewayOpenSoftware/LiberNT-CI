@@ -185,9 +185,15 @@ KdpSysReadBusData(
 {
     ULONG Read;
 
-    /* A processor frozen by NMI may hold the PCI configuration lock, so a stopped machine never waits on it */
-    if (KdEnteredDebugger && (BusDataType == PCIConfiguration))
+    /* A processor frozen by NMI may hold a HAL bus lock: a stopped machine only reads PCI, and never waits on its lock */
+    if (KdEnteredDebugger)
     {
+        if (BusDataType != PCIConfiguration)
+        {
+            *ActualLength = 0;
+            return STATUS_DEVICE_BUSY;
+        }
+
         Read = HalpKdReadPciConfig(BusNumber, SlotNumber, Buffer, Offset, Length);
         if (Read == MAXULONG)
         {
@@ -215,7 +221,13 @@ KdpSysWriteBusData(
     _In_ ULONG Length,
     _Out_ PULONG ActualLength)
 {
-    /* FIXME: on a stopped machine this waits for a PCI configuration lock a frozen processor may hold */
+    /* A write takes a HAL bus lock a frozen processor may hold: a stopped machine refuses rather than hangs */
+    if (KdEnteredDebugger)
+    {
+        *ActualLength = 0;
+        return STATUS_DEVICE_BUSY;
+    }
+
     *ActualLength = HalSetBusDataByOffset(BusDataType, BusNumber, SlotNumber, Buffer, Offset, Length);
     return (*ActualLength != 0) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
