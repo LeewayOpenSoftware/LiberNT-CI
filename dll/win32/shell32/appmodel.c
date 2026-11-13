@@ -30,6 +30,7 @@ INT WINAPI Shell_GetCachedImageIndexW(LPCWSTR szPath, INT nIndex, UINT bSimulate
 
 HRESULT WINAPI SHGetStockIconInfo(SHSTOCKICONID siid, UINT uFlags, SHSTOCKICONINFO *psii)
 {
+    HMODULE module;
     UINT resource;
 
     TRACE("(%d, 0x%x, %p)\n", siid, uFlags, psii);
@@ -44,10 +45,23 @@ HRESULT WINAPI SHGetStockIconInfo(SHSTOCKICONID siid, UINT uFlags, SHSTOCKICONIN
         return E_INVALIDARG;
     }
 
-    resource = (UINT)siid + 1;
-    if (!FindResourceW(shell32_hInstance, MAKEINTRESOURCEW(resource), (LPCWSTR)RT_GROUP_ICON))
+    if (siid == SIID_SHIELD)
+    {
+        /* SIID_SHIELD is the user32 IDI_SHIELD icon, resource 106 */
+        module = GetModuleHandleW(L"user32.dll");
+        resource = 106;
+    }
+    else
+    {
+        module = shell32_hInstance;
+        resource = (UINT)siid + 1;
+    }
+    if (!module || !FindResourceW(module, MAKEINTRESOURCEW(resource), (LPCWSTR)RT_GROUP_ICON))
+    {
+        module = shell32_hInstance;
         resource = 1;
-    if (!GetModuleFileNameW(shell32_hInstance, psii->szPath, ARRAYSIZE(psii->szPath)))
+    }
+    if (!GetModuleFileNameW(module, psii->szPath, ARRAYSIZE(psii->szPath)))
         return HRESULT_FROM_WIN32(GetLastError());
     psii->iIcon = -(INT)resource;
     psii->iSysImageIndex = -1;
@@ -59,7 +73,7 @@ HRESULT WINAPI SHGetStockIconInfo(SHSTOCKICONID siid, UINT uFlags, SHSTOCKICONIN
     {
         BOOL smallicon = (uFlags & SHGSI_SMALLICON) != 0;
 
-        psii->hIcon = LoadImageW(shell32_hInstance, MAKEINTRESOURCEW(resource), IMAGE_ICON,
+        psii->hIcon = LoadImageW(module, MAKEINTRESOURCEW(resource), IMAGE_ICON,
                                  GetSystemMetrics(smallicon ? SM_CXSMICON : SM_CXICON),
                                  GetSystemMetrics(smallicon ? SM_CYSMICON : SM_CYICON), 0);
         if (!psii->hIcon)

@@ -2,6 +2,7 @@
 list(APPEND SOURCE
     ../include/msgtrace.c
     button.c
+    ButtonShield.c
     imagelist.c
     ListViewGroups.c
     LoadIconWithScaleDown.c

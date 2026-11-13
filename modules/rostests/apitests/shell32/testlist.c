@@ -64,6 +64,7 @@ extern void func_ShellExecuteW(void);
 extern void func_ShellHook(void);
 extern void func_Shell_NotifyIconGetRect(void);
 extern void func_ShellState(void);
+extern void func_StockIconShield(void);
 extern void func_SHGetAttributesFromDataObject(void);
 extern void func_SHOpenFolderAndSelectItems(void);
 extern void func_SHGetComputerDisplayNameW(void);
@@ -160,6 +161,7 @@ const struct test winetest_testlist[] =
     { "ShellHook", func_ShellHook },
     { "Shell_NotifyIconGetRect", func_Shell_NotifyIconGetRect },
     { "ShellState", func_ShellState },
+    { "StockIconShield", func_StockIconShield },
     { "SHGetAttributesFromDataObject", func_SHGetAttributesFromDataObject },
     { "SHOpenFolderAndSelectItems", func_SHOpenFolderAndSelectItems },
     { "SHGetComputerDisplayNameW", func_SHGetComputerDisplayNameW },
