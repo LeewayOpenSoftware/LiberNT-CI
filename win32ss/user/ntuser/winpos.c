@@ -2544,7 +2544,13 @@ co_WinPosBatchApply(PWINPOS_ENTRY Entry)
                 {
                    IntInvalidateWindows( Parent, DirtyRgn, RDW_ERASE | RDW_INVALIDATE);
                 }
-                IntInvalidateWindows(Window, DirtyRgn, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
+                /* An UpdateLayeredWindow sprite keeps what ULW put in its
+                 * backing: showing or moving it is composition damage, not a
+                 * repaint (the erase would blank the surface). */
+                if (bComposited && IntIsUpdateLayeredWindow(Window))
+                   IntCompositionDamageWindow(Window);
+                else
+                   IntInvalidateWindows(Window, DirtyRgn, RDW_ERASE | RDW_FRAME | RDW_INVALIDATE | RDW_ALLCHILDREN);
              }
              else if (RgnType != ERROR && RgnType == NULLREGION) // Must be the same. See CORE-7166 & CORE-15934, NC HACK fix.
              {

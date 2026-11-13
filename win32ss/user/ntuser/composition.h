@@ -132,6 +132,7 @@ NTSTATUS IntCompositionDwmSetGpuOutput(_In_ PVOID pUser);
 
 /* Layered-window alpha/colorkey for the dwm frame descriptor (layered.c). */
 BOOL FASTCALL IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags);
+BOOL FASTCALL IntIsUpdateLayeredWindow(PWND pWnd);
 
 /* Redirection surface for a window (NULL when composition is off or the window
  * is not redirected — callers then fall back to the primary). */
