@@ -209,6 +209,54 @@ static void TestAlpha(void)
     Settle();
 }
 
+/* The photo viewer's pill (lab diag a18226f3649): an OWNED popup, WS_POPUP |
+ * WS_CLIPSIBLINGS, WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, no
+ * TOPMOST, painted with UpdateLayeredWindow every few ms: first while hidden
+ * at 0,0, then shown and painted again with a new destination (a move), then
+ * repainted in place. UpdateLayeredWindow returned TRUE every time and the
+ * pill never reached the screen. */
+static void TestOwnedPill(void)
+{
+    HWND hwnd;
+    HBITMAP hbm = NULL;
+    HDC hdcSrc;
+    COLORREF cr;
+    int i;
+
+    hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                           L"UlwTestClass", L"Pill", WS_POPUP | WS_CLIPSIBLINGS,
+                           0, 0, 64, 64, s_Backdrop, NULL, GetModuleHandleW(NULL), NULL);
+    ok(hwnd != NULL, "CreateWindowExW (owned pill) failed, error %lu\n", GetLastError());
+    if (!hwnd)
+        return;
+
+    hdcSrc = CreateSource(64, 64, 255, 0, 255, 255, &hbm);
+    ok(hdcSrc != NULL, "could not create the source DIB\n");
+    if (hdcSrc)
+    {
+        /* Hidden, at the creation position, as the viewer does before ShowWindow */
+        ok(Ulw(hwnd, hdcSrc, 0, 0, 64, 64, 255), "UpdateLayeredWindow (owned, hidden) failed, error %lu\n", GetLastError());
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        ok(IsWindowVisible(hwnd), "the owned pill is not visible after ShowWindow\n");
+        /* Shown: the first update also moves it to its place */
+        ok(Ulw(hwnd, hdcSrc, 40, 40, 64, 64, 255), "UpdateLayeredWindow (owned, shown, moved) failed, error %lu\n", GetLastError());
+        Settle();
+        cr = ScreenPixel(72, 72);
+        ok(NearColor(cr, 255, 0, 255, 2), "owned pill after show+move: screen pixel is %#lx, expected magenta\n", cr);
+        /* Repainted in place a few times, as an animation would */
+        for (i = 0; i < 3; i++)
+            ok(Ulw(hwnd, hdcSrc, 40, 40, 64, 64, 255), "UpdateLayeredWindow (owned, repaint %d) failed, error %lu\n", i, GetLastError());
+        Settle();
+        cr = ScreenPixel(72, 72);
+        ok(NearColor(cr, 255, 0, 255, 2), "owned pill after repaints: screen pixel is %#lx, expected magenta\n", cr);
+        cr = ScreenPixel(20, 20);
+        ok(NearColor(cr, 255, 255, 255, 2), "beside the owned pill: screen pixel is %#lx, expected the white backdrop\n", cr);
+    }
+    DestroySource(hdcSrc, hbm);
+    DestroyWindow(hwnd);
+    Settle();
+}
+
 START_TEST(UpdateLayeredWindow)
 {
     WNDCLASSW wc = { 0 };
@@ -233,6 +281,7 @@ START_TEST(UpdateLayeredWindow)
     TestUpdateThenShow();
     TestShowThenUpdate();
     TestAlpha();
+    TestOwnedPill();
 
     DestroyWindow(s_Backdrop);
     PumpMessages();
