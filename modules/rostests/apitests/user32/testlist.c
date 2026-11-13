@@ -117,6 +117,7 @@ extern void func_SetProp(void);
 extern void func_SetScrollInfo(void);
 extern void func_SetScrollRange(void);
 extern void func_SetWindowPlacement(void);
+extern void func_SetWindowPosZOrder(void);
 extern void func_WindowDisplayAffinity(void);
 extern void func_WindowRegionFrame(void);
 extern void func_ShellWindowQueries(void);
@@ -136,6 +137,7 @@ extern void func_WaitForInputIdle(void);
 extern void func_WindowBand(void);
 extern void func_WindowStationErrors(void);
 extern void func_WindowStationSecurity(void);
+extern void func_WindowPosInsertAfter(void);
 extern void func_CallWindowProc(void);
 extern void func_WndProc(void);
 extern void func_wsprintfApi(void);
@@ -257,6 +259,7 @@ const struct test winetest_testlist[] =
     { "SetScrollInfo", func_SetScrollInfo },
     { "SetScrollRange", func_SetScrollRange },
     { "SetWindowPlacement", func_SetWindowPlacement },
+    { "SetWindowPosZOrder", func_SetWindowPosZOrder },
     { "WindowDisplayAffinity", func_WindowDisplayAffinity },
     { "WindowRegionFrame", func_WindowRegionFrame },
     { "ShellWindowQueries", func_ShellWindowQueries },
@@ -276,6 +279,7 @@ const struct test winetest_testlist[] =
     { "WindowBand", func_WindowBand },
     { "WindowStationErrors", func_WindowStationErrors },
     { "WindowStationSecurity", func_WindowStationSecurity },
+    { "WindowPosInsertAfter", func_WindowPosInsertAfter },
     { "CallWindowProc", func_CallWindowProc },
     { "WndProc", func_WndProc },
     { "wsprintfApi", func_wsprintfApi },
