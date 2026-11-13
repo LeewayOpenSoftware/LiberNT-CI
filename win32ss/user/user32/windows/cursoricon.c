@@ -149,7 +149,8 @@ CURSORICON_ConvertPngToBmpIcon(
 
     int channels = png_get_channels(png_ptr, info_ptr);
     int rowbytes = png_get_rowbytes(png_ptr, info_ptr);
-    int imageSize = height * rowbytes;
+    int dibStride = (channels * width + 3) & ~3;
+    int imageSize = height * dibStride;
     TRACE("rowbytes %d, channels %d, imageSize %d\n", rowbytes, channels, imageSize);
 
     /* Allocate rows data */
@@ -199,7 +200,7 @@ CURSORICON_ConvertPngToBmpIcon(
                 if (channels == 4)
                     *pb++ = row[j + 3]; /* Alpha */
             }
-            pb += (channels * width) % 4;
+            pb += dibStride - channels * width;
         }
     }
 
@@ -257,8 +258,22 @@ CURSORICON_ConvertPngToBmpIcon(
     pb += sizeof(info);
     RtlCopyMemory(pb, imageBytes, imageSize);
     pb += imageSize;
-    RtlFillMemory(pb, maskSize, 0xFF); /* Mask bits for AND operation */
-
+    /* AND mask as Windows builds it: transparent only where the alpha is 0 */
+    RtlZeroMemory(pb, maskSize);
+    if (channels == 4)
+    {
+        DWORD maskStride = maskSize / height;
+        for (int y = 0; y < (int)height; y++)
+        {
+            const BYTE *src = imageBytes + (SIZE_T)y * dibStride;
+            PBYTE dst = pb + (SIZE_T)y * maskStride;
+            for (int x = 0; x < (int)width; x++)
+            {
+                if (src[x * 4 + 3] == 0)
+                    dst[x / 8] |= (BYTE)(0x80 >> (x % 8));
+            }
+        }
+    }
     HeapFree(GetProcessHeap(), 0, imageBytes);
     return pbBmpIcon;
 }
