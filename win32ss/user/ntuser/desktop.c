@@ -621,7 +621,7 @@ IntIsServiceAccountProcess(
     return IsService;
 }
 
-/* Checked against the process's own token: an open made for another process carries the caller's (NtUserResolveDesktop) */
+/* Checked against the primary token: the open carries the caller's token (NtUserResolveDesktop) or an impersonated one */
 static
 BOOLEAN
 IntProcessHasWinStaAccess(
@@ -637,17 +637,6 @@ IntProcessHasWinStaAccess(
     BOOLEAN Allowed = FALSE;
     PVOID WinSta;
     NTSTATUS Status;
-
-    if (Process == PsGetCurrentProcess())
-    {
-        if (!NT_SUCCESS(ObReferenceObjectByHandle(hWinSta, Access, ExWindowStationObjectType,
-                                                  UserMode, &WinSta, NULL)))
-        {
-            return FALSE;
-        }
-        ObDereferenceObject(WinSta);
-        return TRUE;
-    }
 
     Status = ObReferenceObjectByHandle(hWinSta, 0, ExWindowStationObjectType, KernelMode, &WinSta, NULL);
     if (!NT_SUCCESS(Status))
