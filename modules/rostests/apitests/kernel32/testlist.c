@@ -139,6 +139,7 @@ extern void func_MuiResources(void);
 extern void func_MultiByteToWideChar(void);
 extern void func_NamedPipeClientComputerName(void);
 extern void func_NlsStringApis(void);
+extern void func_NoBufferingCoherency(void);
 extern void func_NumaApis(void);
 extern void func_PerfConsumer(void);
 extern void func_PerfProvider(void);
@@ -365,6 +366,7 @@ const struct test winetest_testlist[] =
     { "MultiByteToWideChar",         func_MultiByteToWideChar },
     { "NamedPipeClientComputerName", func_NamedPipeClientComputerName },
     { "NlsStringApis",               func_NlsStringApis },
+    { "NoBufferingCoherency",        func_NoBufferingCoherency },
     { "NumaApis",                    func_NumaApis },
     { "PerfConsumer",              func_PerfConsumer },
     { "PerfProvider",              func_PerfProvider },
