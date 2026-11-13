@@ -57,6 +57,10 @@ struct VPILL
     BOOL tracking;
     POINT origin;           /* last pill position, screen */
     GpBitmap *icon[PI_COUNT + 1];   /* Aureline art per slot, [PI_COUNT] = the 'actual size' state */
+    int lastCx, lastCy;     /* last layout size, to re-place the pill after a switch */
+    BOOL needPlain;         /* UpdateLayeredWindow failed: switch to the plain pill */
+    BOOL plain;             /* no layered windows: opaque capsule-shaped popup, no shadow */
+    int margin;             /* shadow margin around the capsule (0 when plain) */
     HBITMAP hbmSnap;        /* the last rendered pill (premultiplied), for WM_PRINT */
 };
 
@@ -433,7 +437,7 @@ DrawPillIcon(GpGraphics *g, GpBitmap *bmp, float cx, float cy, float size, BOOL 
 static void
 PillMetrics(VPILL *p)
 {
-    int M = Sc(p, 12), H = Sc(p, 50), pad = Sc(p, 16);
+    int M = p->margin, H = Sc(p, 50), pad = Sc(p, 16);
     int small = Sc(p, 34), zoomW = Sc(p, 50), nav = Sc(p, 36), play = Sc(p, 48);
     int gap = Sc(p, 2), sep = Sc(p, 16);
     int x, leftW, rightW, extra;
@@ -476,6 +480,31 @@ ItemEnabled(VPILL *p, int i)
     return TRUE;
 }
 
+static void RenderPill(VPILL *p);
+static void PillTipSync(VPILL *p);
+static HWND CreatePillWindow(VPILL *p);
+static void PillMetrics(VPILL *p);
+
+static void
+SwitchToPlain(VPILL *p)
+{
+    if (p->plain)
+        return;
+    if (p->slider)
+        DestroyWindow(p->slider);
+    if (p->tip)
+        DestroyWindow(p->tip);
+    DestroyWindow(p->pill);
+    p->plain = TRUE;
+    p->margin = 0;
+    p->pill = CreatePillWindow(p);
+    p->tip = p->pill ? CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                                       0, 0, 0, 0, p->pill, NULL, p->inst, NULL) : NULL;
+    PillMetrics(p);
+    PillTipSync(p);
+    VPill_Layout(p, p->lastCx, p->lastCy);
+}
+
 static void
 RenderPill(VPILL *p)
 {
@@ -488,7 +517,7 @@ RenderPill(VPILL *p)
     BLENDFUNCTION bf = { AC_SRC_OVER, 0, 255, AC_SRC_ALPHA };
     POINT ptSrc = { 0, 0 }, ptDst;
     BOOL fit = p->host.IsFit ? p->host.IsFit(p->host.ctx) : FALSE;
-    float M = (float)Sc(p, 12), cw = (float)(p->capsule.right - p->capsule.left), ch = (float)(p->capsule.bottom - p->capsule.top);
+    float M = (float)p->margin, cw = (float)(p->capsule.right - p->capsule.left), ch = (float)(p->capsule.bottom - p->capsule.top);
     float rad = ch / 2;
     int i, k;
     RECT wr;
@@ -519,6 +548,7 @@ RenderPill(VPILL *p)
         GdipSetTextRenderingHint(g, TextRenderingHintAntiAlias);
 
         /* drop shadow: stacked translucent capsules, widest first */
+        GdipGraphicsClear(g, p->plain ? ARGB(255, 0xE4, 0xE8, 0xEE) : ARGB(0, 0, 0, 0));
         for (k = (int)M; k >= 1; k--)
         {
             br = NULL;
@@ -618,7 +648,11 @@ RenderPill(VPILL *p)
     GetWindowRect(p->pill, &wr);
     ptDst.x = wr.left;
     ptDst.y = wr.top;
-    UpdateLayeredWindow(p->pill, hdcScreen, &ptDst, &p->size, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA);
+    if (!p->plain)
+    {
+        if (!UpdateLayeredWindow(p->pill, hdcScreen, &ptDst, &p->size, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA))
+            p->needPlain = TRUE;
+    }
     SelectObject(hdcMem, hbmOld);
 done:
     if (hbm)
@@ -629,6 +663,17 @@ done:
     }
     DeleteDC(hdcMem);
     ReleaseDC(NULL, hdcScreen);
+    if (p->plain)
+    {
+        HRGN rgn = CreateRoundRectRgn(0, 0, p->size.cx + 1, p->size.cy + 1, p->size.cy, p->size.cy);
+        SetWindowRgn(p->pill, rgn, FALSE);
+        InvalidateRect(p->pill, NULL, FALSE);
+    }
+    if (p->needPlain)
+    {
+        p->needPlain = FALSE;
+        SwitchToPlain(p);
+    }
 }
 
 static int
@@ -847,6 +892,23 @@ PillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             pt.x -= wr.left;
             pt.y -= wr.top;
             return PtInRect(&p->capsule, pt) ? HTCLIENT : HTTRANSPARENT;
+        }
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            if (p->plain && p->hbmSnap)
+            {
+                HDC mem = CreateCompatibleDC(hdc);
+                HGDIOBJ old = SelectObject(mem, p->hbmSnap);
+                BitBlt(hdc, 0, 0, p->size.cx, p->size.cy, mem, 0, 0, SRCCOPY);
+                SelectObject(mem, old);
+                DeleteDC(mem);
+            }
+            EndPaint(hwnd, &ps);
+            return 0;
         }
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
@@ -1193,6 +1255,35 @@ MakeFont(VPILL *p)
         p->font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
 }
 
+/* HKCU\Software\Leeway\PhotoViewer\PillWindow = "plain" forces the non-layered pill. */
+static BOOL
+PillForcedPlain(void)
+{
+    HKEY hKey;
+    WCHAR buf[16];
+    DWORD cb = sizeof(buf), type = 0;
+    BOOL plain = FALSE;
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\Leeway\\PhotoViewer", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        buf[0] = 0;
+        if (RegQueryValueExW(hKey, L"PillWindow", NULL, &type, (LPBYTE)buf, &cb) == ERROR_SUCCESS && type == REG_SZ)
+            plain = !lstrcmpiW(buf, L"plain");
+        RegCloseKey(hKey);
+    }
+    return plain;
+}
+
+static HWND
+CreatePillWindow(VPILL *p)
+{
+    HWND h = CreateWindowExW((p->plain ? 0 : WS_EX_LAYERED) | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, PILL_CLASS, NULL,
+                             WS_POPUP, 0, 0, 10, 10, p->main, NULL, p->inst, NULL);
+    if (h)
+        SetWindowLongPtrW(h, GWLP_USERDATA, (LONG_PTR)p);
+    return h;
+}
+
 VPILL *
 VPill_Create(HWND main, HINSTANCE inst, const VPILL_HOST *host)
 {
@@ -1218,8 +1309,9 @@ VPill_Create(HWND main, HINSTANCE inst, const VPILL_HOST *host)
     MakeFont(p);
 
     p->strip = CreateWindowExW(0, STRIP_CLASS, NULL, WS_CHILD | WS_VISIBLE | WS_CLIPSIBLINGS, 0, 0, 10, 10, main, NULL, inst, NULL);
-    p->pill = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, PILL_CLASS, NULL, WS_POPUP,
-                              0, 0, 10, 10, main, NULL, inst, NULL);
+    p->plain = PillForcedPlain();
+    p->margin = p->plain ? 0 : Sc(p, 12);
+    p->pill = CreatePillWindow(p);
     if (!p->strip || !p->pill)
     {
         VPill_Destroy(p);
@@ -1291,6 +1383,8 @@ VPill_Layout(VPILL *p, int cx, int cy)
     UINT flags = SWP_NOACTIVATE;
     if (!p)
         return;
+    p->lastCx = cx;
+    p->lastCy = cy;
     sh = (int)VPill_StripHeight(p);
     MoveWindow(p->strip, 0, 0, cx, sh, TRUE);
     StripLayout(p);
@@ -1327,5 +1421,7 @@ VPill_OnDpiChanged(VPILL *p, UINT dpi)
     if (!p)
         return;
     p->dpi = dpi ? dpi : 96;
+    if (!p->plain)
+        p->margin = Sc(p, 12);
     MakeFont(p);
 }

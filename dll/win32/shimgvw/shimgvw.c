@@ -2298,6 +2298,8 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
                 pData->m_nRotQuarter = (pData->m_nRotQuarter + 1) & 3;
                 GdipImageRotateFlip(g_pImage, Rotate90FlipNone);
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
@@ -2307,6 +2309,8 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
                 pData->m_nRotQuarter = (pData->m_nRotQuarter + 3) & 3;
                 GdipImageRotateFlip(g_pImage, Rotate270FlipNone);
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
@@ -2317,6 +2321,8 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
                 Preview_pSaveImage(pData, g_szFile);
                 pData->m_nRotQuarter = 0;
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
@@ -2327,6 +2333,8 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
                 Preview_pSaveImage(pData, g_szFile);
                 pData->m_nRotQuarter = 0;
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
