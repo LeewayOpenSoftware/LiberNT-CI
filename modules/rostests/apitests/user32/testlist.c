@@ -74,6 +74,7 @@ extern void func_IsTopLevelWindow(void);
 extern void func_IsServerSideWindow(void);
 extern void func_JobUiWindowAccess(void);
 extern void func_KbdLayout(void);
+extern void func_LayeredShowAfterUlw(void);
 extern void func_LargeMessageBuffers(void);
 extern void func_keybd_event(void);
 extern void func_LoadImage(void);
@@ -218,6 +219,7 @@ const struct test winetest_testlist[] =
     { "IsServerSideWindow", func_IsServerSideWindow },
     { "JobUiWindowAccess", func_JobUiWindowAccess },
     { "KbdLayout", func_KbdLayout },
+    { "LayeredShowAfterUlw", func_LayeredShowAfterUlw },
     { "LargeMessageBuffers", func_LargeMessageBuffers },
     { "keybd_event", func_keybd_event },
     { "LoadImage", func_LoadImage },

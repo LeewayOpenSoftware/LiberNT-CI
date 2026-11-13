@@ -73,6 +73,7 @@ list(APPEND SOURCE
     IsServerSideWindow.c
     JobUiWindowAccess.c
     KbdLayout.c
+    LayeredShowAfterUlw.c
     LargeMessageBuffers.c
     keybd_event.c
     LoadImage.c
