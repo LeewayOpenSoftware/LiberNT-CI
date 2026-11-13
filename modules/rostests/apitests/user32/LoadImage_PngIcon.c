@@ -24,7 +24,7 @@ static const BYTE s_png_rgb[79] = {
     0xEE, 0xE8, 0x57, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
 };
 
-#include <pshpack2.h>
+#pragma pack(push, 2)
 typedef struct
 {
     BYTE bWidth;
@@ -44,7 +44,7 @@ typedef struct
     WORD idCount;
     TEST_ICONDIRENTRY idEntries[1];
 } TEST_ICONDIR;
-#include <poppack.h>
+#pragma pack(pop)
 
 static BOOL WriteIco(LPCWSTR path, const BYTE *png, DWORD cbPng, WORD bpp)
 {
