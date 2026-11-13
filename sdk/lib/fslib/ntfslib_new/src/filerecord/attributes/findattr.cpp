@@ -567,35 +567,45 @@ FileRecord::GetAttributeData(_In_     AttributeType Type,
 }
 
 
-PDataRun
-FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
+/*
+ * Decodes the mapping pairs of a nonresident attribute record. Reads only
+ * [AttributeBytes, AttributeBytes + Attribute->Length), and Attribute->Length
+ * must fit in AvailableLength. Allocates nothing; each run goes to Sink.
+ * STATUS_FILE_CORRUPT_ERROR when the bytes cannot be a valid mapping.
+ */
+extern "C"
+NTSTATUS
+NtfsDecodeMappingPairs(_In_reads_bytes_(AvailableLength) const UCHAR *AttributeBytes,
+                       _In_ ULONG AvailableLength,
+                       _In_ ULONGLONG ClustersInVolume,
+                       _In_opt_ PNTFS_RUN_SINK Sink,
+                       _In_opt_ PVOID Context)
 {
     const ULONGLONG MaximumValue = ~(ULONGLONG)0;
-    PUCHAR DataRunPtr;
-    PUCHAR DataRunEnd;
-    PDataRun Head = NULL;
-    PDataRun Tail = NULL;
+    const Attribute *DataAttr = reinterpret_cast<const Attribute *>(AttributeBytes);
+    const UCHAR *DataRunPtr;
+    const UCHAR *DataRunEnd;
     ULONGLONG PreviousLCN = 0;
     ULONGLONG LogicalClusters = 0;
-
     ULONG MinimumHeader;
+    NTSTATUS Status;
 
-    MinimumHeader = DataAttr &&
-                    (DataAttr->Flags & (ATTR_COMPRESSION_MASK | ATTR_SPARSE))
-        ? 0x48
-        : 0x40;
+    if (!AttributeBytes || AvailableLength < FIELD_OFFSET(Attribute, NonResident.CompressedDataSize))
+        return STATUS_FILE_CORRUPT_ERROR;
+    if (!DataAttr->IsNonResident)
+        return STATUS_INVALID_PARAMETER;
 
-    if (!DataAttr || !DataAttr->IsNonResident)
-        return NULL;
-    if (DataAttr->Length < MinimumHeader ||
+    MinimumHeader = (DataAttr->Flags & (ATTR_COMPRESSION_MASK | ATTR_SPARSE)) ? 0x48 : 0x40;
+    if (DataAttr->Length > AvailableLength ||
+        DataAttr->Length < MinimumHeader ||
         DataAttr->NonResident.DataRunsOffset < MinimumHeader ||
         DataAttr->NonResident.DataRunsOffset >= DataAttr->Length)
     {
-        goto Corrupt;
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
-    DataRunPtr = (PUCHAR)DataAttr + DataAttr->NonResident.DataRunsOffset;
-    DataRunEnd = (PUCHAR)DataAttr + DataAttr->Length;
+    DataRunPtr = AttributeBytes + DataAttr->NonResident.DataRunsOffset;
+    DataRunEnd = AttributeBytes + DataAttr->Length;
 
     while (DataRunPtr < DataRunEnd && *DataRunPtr != 0)
     {
@@ -604,7 +614,6 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
         ULONGLONG RunLength = 0;
         ULONGLONG RunLCN = 0;
         BOOLEAN IsSparse = OffsetSize == 0;
-        PDataRun Run;
 
         if (LengthSize == 0 ||
             LengthSize > sizeof(ULONGLONG) ||
@@ -612,7 +621,7 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
             (SIZE_T)(DataRunEnd - DataRunPtr) <
                 (SIZE_T)(1 + LengthSize + OffsetSize))
         {
-            goto Corrupt;
+            return STATUS_FILE_CORRUPT_ERROR;
         }
 
         RtlCopyMemory(&RunLength, DataRunPtr + 1, LengthSize);
@@ -623,7 +632,7 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
         if (LONGLONG_SIGN_EXTEND((LONGLONG)RunLength, LengthSize) <= 0 ||
             LogicalClusters > MaximumValue - RunLength)
         {
-            goto Corrupt;
+            return STATUS_FILE_CORRUPT_ERROR;
         }
 
         if (!IsSparse)
@@ -640,33 +649,26 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
                 (Delta >= 0 &&
                  PreviousLCN > MaximumValue - (ULONGLONG)Delta))
             {
-                goto Corrupt;
+                return STATUS_FILE_CORRUPT_ERROR;
             }
 
             RunLCN = Delta < 0
                 ? PreviousLCN - ((ULONGLONG)(-(Delta + 1)) + 1)
                 : PreviousLCN + (ULONGLONG)Delta;
-            if (RunLCN >= DiskVolume->ClustersInVolume ||
-                RunLength > DiskVolume->ClustersInVolume - RunLCN)
+            if (RunLCN >= ClustersInVolume ||
+                RunLength > ClustersInVolume - RunLCN)
             {
-                goto Corrupt;
+                return STATUS_FILE_CORRUPT_ERROR;
             }
             PreviousLCN = RunLCN;
         }
 
-        Run = new(PagedPool, TAG_DATA_RUN) DataRun();
-        if (!Run)
-            goto Fail;
-        Run->NextRun = NULL;
-        Run->LCN = RunLCN;
-        Run->Length = RunLength;
-        Run->IsSparse = IsSparse;
-
-        if (Tail)
-            Tail->NextRun = Run;
-        else
-            Head = Run;
-        Tail = Run;
+        if (Sink)
+        {
+            Status = Sink(Context, RunLCN, RunLength, IsSparse);
+            if (!NT_SUCCESS(Status))
+                return Status;
+        }
 
         LogicalClusters += RunLength;
         DataRunPtr += 1 + LengthSize + OffsetSize;
@@ -679,17 +681,69 @@ FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
             DataAttr->NonResident.LastVCN -
             DataAttr->NonResident.FirstVCN + 1)
     {
-        goto Corrupt;
+        return STATUS_FILE_CORRUPT_ERROR;
     }
 
-    return Head;
+    return STATUS_SUCCESS;
+}
 
-Corrupt:
+namespace
+{
+
+struct DataRunListBuilder
+{
+    PDataRun Head;
+    PDataRun Tail;
+};
+
+NTSTATUS
+AppendDataRun(_In_opt_ PVOID Context,
+              _In_ ULONGLONG Lcn,
+              _In_ ULONGLONG Length,
+              _In_ BOOLEAN IsSparse)
+{
+    DataRunListBuilder *List = static_cast<DataRunListBuilder *>(Context);
+    PDataRun Run = new(PagedPool, TAG_DATA_RUN) DataRun();
+
+    if (!Run)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Run->NextRun = NULL;
+    Run->LCN = Lcn;
+    Run->Length = Length;
+    Run->IsSparse = IsSparse;
+
+    if (List->Tail)
+        List->Tail->NextRun = Run;
+    else
+        List->Head = Run;
+    List->Tail = Run;
+    return STATUS_SUCCESS;
+}
+
+}
+
+PDataRun
+FileRecord::DecodeDataRuns(_In_ PAttribute DataAttr)
+{
+    DataRunListBuilder List = { NULL, NULL };
+    NTSTATUS Status;
+
+    if (!DataAttr || !DataAttr->IsNonResident)
+        return NULL;
+
+    Status = NtfsDecodeMappingPairs(reinterpret_cast<const UCHAR *>(DataAttr),
+                                    DataAttr->Length,
+                                    DiskVolume->ClustersInVolume,
+                                    AppendDataRun,
+                                    &List);
+    if (NT_SUCCESS(Status))
+        return List.Head;
+
     /* The mapping pairs on the medium cannot be valid: keep the volume dirty
      * for the next check (Windows marks it dirty on a corrupt run list). */
-    DiskVolume->NoteCorruption();
-Fail:
-    FreeDataRun(Head);
+    if (Status == STATUS_FILE_CORRUPT_ERROR)
+        DiskVolume->NoteCorruption();
+    FreeDataRun(List.Head);
     return NULL;
 }
 

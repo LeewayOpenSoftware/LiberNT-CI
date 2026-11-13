@@ -272,6 +272,32 @@ if(BUILD_TESTING)
         COMMAND ntfslib_lost_write_dirty_test
     )
 
+    # Differential test of the on-disk decoders (mapping pairs, update sequence
+    # fixup, directory index entries): the library, a spec model and, with
+    # NTFSLIB_DIFF_ALT, an alternative implementation must agree on a corpus
+    # harvested from fresh volumes and on generated input. See
+    # tests/decode_diff/decode_diff.md.
+    add_executable(ntfslib_decode_diff_test
+        tests/decode_diff/decode_diff.cpp
+        tests/decode_diff/lib_impl.cpp
+        tests/decode_diff/model.c
+    )
+    target_compile_features(ntfslib_decode_diff_test PRIVATE cxx_std_17)
+    target_include_directories(ntfslib_decode_diff_test PRIVATE
+        "${NTFSLIB_ROOT}/include/internal"
+        "${CMAKE_CURRENT_LIST_DIR}/tests/decode_diff")
+    target_link_libraries(ntfslib_decode_diff_test PRIVATE ntfslib_linux ntfslib_format_host)
+    set(NTFSLIB_DIFF_ALT "" CACHE FILEPATH
+        "Static library that provides ntfs_alt_impl() for the decoder differential test")
+    if(NTFSLIB_DIFF_ALT)
+        target_compile_definitions(ntfslib_decode_diff_test PRIVATE NTFSLIB_DIFF_HAVE_ALT=1)
+        target_link_libraries(ntfslib_decode_diff_test PRIVATE "${NTFSLIB_DIFF_ALT}" ${CMAKE_DL_LIBS})
+    endif()
+    add_test(
+        NAME ntfslib_linux_decode_diff
+        COMMAND ntfslib_decode_diff_test 100000
+    )
+
     add_executable(ntfslib_lookup_index_cache_test
         tests/lookup_index_cache.cpp
     )

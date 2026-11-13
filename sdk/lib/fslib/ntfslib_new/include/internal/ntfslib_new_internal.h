@@ -224,6 +224,22 @@ NtfsApplyFixup(_Inout_ PNTFSRecordHeader Header,
                _In_ ULONG RecordSize,
                _In_ ULONG BytesPerSector);
 
+/* Receives each decoded run in order; a failure status stops the decode and is returned */
+typedef NTSTATUS (*PNTFS_RUN_SINK)(_In_opt_ PVOID Context,
+                                   _In_ ULONGLONG Lcn,
+                                   _In_ ULONGLONG Length,
+                                   _In_ BOOLEAN IsSparse);
+
+#ifdef __cplusplus
+extern "C"
+#endif
+NTSTATUS
+NtfsDecodeMappingPairs(_In_reads_bytes_(AvailableLength) const UCHAR *AttributeBytes,
+                       _In_ ULONG AvailableLength,
+                       _In_ ULONGLONG ClustersInVolume,
+                       _In_opt_ PNTFS_RUN_SINK Sink,
+                       _In_opt_ PVOID Context);
+
 NTSTATUS
 NtfsCommitFixup(_Inout_ PNTFSRecordHeader Header,
                 _In_ ULONG RecordSize,
