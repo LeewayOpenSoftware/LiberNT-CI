@@ -243,7 +243,10 @@ Volume::MarkDirtyBeforeWrite()
     if (NT_SUCCESS(Status))
         Status = FlushVolume();
     if (!NT_SUCCESS(Status))
+    {
         DirtyMarked = FALSE;
+        NoteLostWrite(Status);
+    }
     return Status;
 }
 
