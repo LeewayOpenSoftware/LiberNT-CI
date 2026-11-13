@@ -73,6 +73,16 @@ long leeway_rs_poc_validate_reparse_graft(const void *buf,
 #define LNRSPOC_STATUS_IO_REPARSE_DATA_INVALID ((long)0xC0000278) /* malformed buffer   */
 #define LNRSPOC_STATUS_IO_REPARSE_TAG_NOT_HANDLED ((long)0xC0000279) /* non-graft tag   */
 
+/* R1a mirror: exact equivalent of the shipped C IopValidateMountPointBuffer(buf, len)
+ * (fix/io3-name-grafting ff2e252ff4d). This is the swap-equivalent validated by the
+ * differential. MOUNT_POINT only; returns STATUS_SUCCESS or STATUS_IO_REPARSE_DATA_INVALID
+ * only (a NULL buffer is treated as malformed, not caller misuse). SUCCESS iff: len>=16;
+ * tag==MOUNT_POINT; 8<=ReparseDataLength<=16384-8 and <=len-8; with path=ReparseDataLength-8
+ * the substitute/print offsets and lengths are all even and off+len<=path (no wrap);
+ * substitute length>=2; when print length!=0 the ranges do not overlap; and the first
+ * WCHAR of the substitute name is L'\\'. No alloc/lock; safe at IRQL <= DISPATCH_LEVEL. */
+long leeway_rs_poc_validate_mount_point(const void *buf, unsigned long len);
+
 /* TEST-ONLY. Present only when the staticlib is built with `--features test-ioctls`
  * (and the driver with -DLNRSPOC_TEST_IOCTLS). Triggers the controlled bugcheck
  * (KeBugCheckEx, code LEEWAY_RUST_PANIC 0x4C450001). Reachable solely via the

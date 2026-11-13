@@ -19,6 +19,10 @@ extern "C" long leeway_rs_poc_validate_reparse_graft(const void *buf, unsigned l
                                                      unsigned long reparse_tag);
 extern "C" long graft_ref_validate(const unsigned char *buf, unsigned long len,
                                    unsigned long reparse_tag);
+/* R1a mirror: Stanley's IopValidateMountPointBuffer(buf, len) and its independent oracle. */
+extern "C" long leeway_rs_poc_validate_mount_point(const void *buf, unsigned long len);
+extern "C" long graft_ref_validate_mp(const unsigned char *buf, unsigned long len,
+                                      unsigned long ignored);
 
 static const unsigned long MOUNT_POINT = 0xA0000003UL;
 static const unsigned long SYMLINK = 0xA000000CUL;
@@ -170,23 +174,146 @@ static void fuzz(long iters)
     }
 }
 
+/* ==== R1a mount-point differential: validate_mount_point vs its independent oracle ==== */
+static long g_mp_checks = 0, g_mp_disagree = 0, g_mp_success = 0, g_mp_inv = 0;
+
+static void check_mp(const unsigned char *buf, unsigned long len)
+{
+    long r = leeway_rs_poc_validate_mount_point(buf, len);
+    long c = graft_ref_validate_mp(buf, len, 0);
+    g_mp_checks++;
+    if (c == 0x00000000L) g_mp_success++; else g_mp_inv++;
+    if (r != c)
+    {
+        g_mp_disagree++;
+        if (g_mp_disagree <= 20)
+            std::fprintf(stderr, "MP DISAGREE #%ld: len=%lu rust=0x%08lx c=0x%08lx\n",
+                         g_mp_disagree, len, (unsigned long)r, (unsigned long)c);
+    }
+}
+
+/* Build a MOUNT_POINT buffer; optionally place a backslash as the substitute's first
+ * WCHAR, and optionally add trailing slack past ReparseDataLength. */
+static std::vector<unsigned char> make_mp(uint16_t so, uint16_t sl, uint16_t po, uint16_t pl,
+                                          unsigned long pathlen, bool backslash,
+                                          unsigned long slack)
+{
+    unsigned long rdl = 8UL + pathlen;          /* MP field header is 8 */
+    unsigned long len = 8UL + rdl + slack;
+    std::vector<unsigned char> b(len, 0);
+    unsigned long tag = MOUNT_POINT;
+    b[0]=tag&0xff; b[1]=(tag>>8)&0xff; b[2]=(tag>>16)&0xff; b[3]=(tag>>24)&0xff;
+    b[4]=rdl&0xff; b[5]=(rdl>>8)&0xff;
+    b[8]=so&0xff; b[9]=(so>>8)&0xff;
+    b[10]=sl&0xff; b[11]=(sl>>8)&0xff;
+    b[12]=po&0xff; b[13]=(po>>8)&0xff;
+    b[14]=pl&0xff; b[15]=(pl>>8)&0xff;
+    /* PathBuffer starts at offset 16. */
+    if (backslash && sl >= 2 && (unsigned long)(16 + so + 1) < len)
+    { b[16+so] = 0x5C; b[16+so+1] = 0x00; } /* L'\\' little-endian */
+    return b;
+}
+
+static void corpus_mp()
+{
+    /* valid: substitute "\x" (4 bytes), no print. */
+    { auto b = make_mp(0,4,0,0,8,true,0); check_mp(b.data(),(unsigned long)b.size()); }
+    /* valid with non-overlapping print after substitute. */
+    { auto b = make_mp(0,4,4,4,8,true,0); check_mp(b.data(),(unsigned long)b.size()); }
+    /* valid with trailing slack (rdl < len-8). */
+    { auto b = make_mp(0,4,0,0,8,true,16); check_mp(b.data(),(unsigned long)b.size()); }
+    /* missing backslash -> invalid. */
+    { auto b = make_mp(0,4,0,0,8,false,0); check_mp(b.data(),(unsigned long)b.size()); }
+    /* overlapping substitute/print -> invalid. */
+    { auto b = make_mp(0,4,2,4,8,true,0); check_mp(b.data(),(unsigned long)b.size()); }
+    /* substitute length 0 -> invalid (also no backslash room). */
+    { auto b = make_mp(0,0,0,0,8,false,0); check_mp(b.data(),(unsigned long)b.size()); }
+    /* odd offset -> invalid. */
+    { auto b = make_mp(1,4,0,0,8,true,0); check_mp(b.data(),(unsigned long)b.size()); }
+    /* substitute OOB -> invalid. */
+    { auto b = make_mp(0,20,0,0,8,true,0); check_mp(b.data(),(unsigned long)b.size()); }
+    /* len<16 -> invalid. */
+    { unsigned char z[12]={0}; check_mp(z,12); }
+    /* NULL -> invalid. */
+    { check_mp(nullptr,16); }
+    /* wrong tag (symlink) -> invalid for the MP validator. */
+    { auto b = make_mp(0,4,0,0,8,true,0); b[0]=0x0C; b[1]=0x00; b[2]=0x00; b[3]=0xA0; check_mp(b.data(),(unsigned long)b.size()); }
+}
+
+static void fuzz_mp(long iters)
+{
+    std::vector<unsigned char> b;
+    for (long i = 0; i < iters; i++)
+    {
+        uint64_t r = xrand();
+        if ((r & 3) != 0)
+        {
+            /* Boundary-straddling: build a WELL-FORMED MP buffer with random-but-valid
+             * fields, then perturb one thing so we land on both sides of the accept
+             * boundary (this is what makes the accept-path differential meaningful). */
+            unsigned long pathlen = ((unsigned long)(xrand() % 32)) * 2 + 2; /* even, >=2 */
+            unsigned long so = ((unsigned long)(xrand() % (pathlen / 2))) * 2; /* even, <path */
+            unsigned long maxsl = pathlen - so;
+            unsigned long sl = maxsl >= 2 ? (((unsigned long)(xrand() % (maxsl / 2)) + 1) * 2) : 2;
+            if (sl > maxsl) sl = maxsl;
+            /* place a non-overlapping print after the substitute, sometimes empty */
+            unsigned long po = so + sl, pl = 0;
+            if ((xrand() & 1) && po + 2 <= pathlen)
+            { unsigned long room = pathlen - po; pl = room >= 2 ? ((xrand() % (room / 2) + 1) * 2) : 0; if (pl > room) pl = room; }
+            unsigned long slack = (xrand() % 3) * 2;
+            auto buf = make_mp((uint16_t)so, (uint16_t)sl, (uint16_t)po, (uint16_t)pl,
+                               pathlen, /*backslash=*/true, slack);
+            /* Perturb one field ~half the time so valid and invalid both occur often. */
+            switch (xrand() % 7)
+            {
+            case 0: break;                              /* leave valid */
+            case 1: buf[16 + so] = 0x2F; buf[16 + so + 1] = 0x00; break; /* '/' not '\\' */
+            case 2: buf[10] = (unsigned char)(sl + 1); break;           /* odd substitute length */
+            case 3: if (pathlen >= 2) buf[10] = (unsigned char)((maxsl + 2) & 0xff); break; /* OOB */
+            case 4: buf[8] = 1; break;                  /* odd offset */
+            case 5: { unsigned long rdl = 8 + pathlen; buf[4] = (unsigned char)((rdl - 2) & 0xff); } break; /* shrink rdl */
+            default: buf[12] = (unsigned char)so; buf[13] = (unsigned char)(so >> 8);
+                     buf[14] = (unsigned char)sl; buf[15] = (unsigned char)(sl >> 8); break; /* overlap print */
+            }
+            check_mp(buf.data(), (unsigned long)buf.size());
+        }
+        else
+        {
+            /* Pure-random buffers (mostly rejected; catch any structural surprise). */
+            unsigned long len = (r & 0x3f) == 0 ? (unsigned long)(xrand() % 16500)
+                                                : (unsigned long)(xrand() % 300);
+            b.assign(len, 0);
+            for (unsigned long j = 0; j < len; j++) b[j] = (unsigned char)(xrand() & 0xff);
+            check_mp(len ? b.data() : (const unsigned char *)"", len);
+        }
+    }
+}
+
 int main(int argc, char **argv)
 {
     long iters = (argc > 1) ? std::atol(argv[1]) : 3000000L;
+    /* Generic name-grafting validator (my broader structural spec). */
     corpus();
     structured();
     fuzz(iters);
-    std::printf("checks=%ld disagreements=%ld\n", g_checks, g_disagree);
-    std::printf("coverage: SUCCESS=%ld INVALID_PARAMETER=%ld IO_REPARSE_DATA_INVALID=%ld "
-                "TAG_NOT_HANDLED=%ld other=%ld\n",
+    /* R1a mount-point mirror (the swap-equivalent) vs its independent oracle. */
+    corpus_mp();
+    fuzz_mp(iters);
+
+    std::printf("[name-grafting] checks=%ld disagreements=%ld\n", g_checks, g_disagree);
+    std::printf("[name-grafting] coverage: SUCCESS=%ld INVALID_PARAMETER=%ld "
+                "IO_REPARSE_DATA_INVALID=%ld TAG_NOT_HANDLED=%ld other=%ld\n",
                 g_success, g_invalid, g_data_inv, g_tag_nh, g_other);
-    if (g_disagree != 0)
+    std::printf("[mount-point]   checks=%ld disagreements=%ld SUCCESS=%ld INVALID=%ld\n",
+                g_mp_checks, g_mp_disagree, g_mp_success, g_mp_inv);
+
+    if (g_disagree != 0 || g_mp_disagree != 0)
     {
         std::printf("RESULT=FAIL\n");
         return 1;
     }
-    /* Guard against a vacuous pass: require every status to have been produced. */
-    if (g_success == 0 || g_data_inv == 0 || g_tag_nh == 0 || g_invalid == 0)
+    if (g_success == 0 || g_data_inv == 0 || g_tag_nh == 0 || g_invalid == 0 ||
+        g_mp_success == 0 || g_mp_inv == 0)
     {
         std::printf("RESULT=FAIL (coverage gap: a status class was never produced)\n");
         return 2;
