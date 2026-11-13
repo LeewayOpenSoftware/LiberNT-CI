@@ -340,7 +340,8 @@ IopDoNameTransmogrify(IN PIRP Irp,
 
     ASSERT(Irp->IoStatus.Status == STATUS_REPARSE);
 
-    /* The buffer comes from the file system, possibly from disk: check it before any use */
+    /* The buffer comes from the file system, possibly from disk: check it before any use.
+       Still trusted: the file system allocated at least header + ReparseDataLength bytes. */
     if (DataBuffer == NULL ||
         DataBuffer->ReparseTag != Irp->IoStatus.Information ||
         DataBuffer->ReparseDataLength > MAXIMUM_REPARSE_DATA_BUFFER_SIZE - REPARSE_DATA_BUFFER_HEADER_SIZE)

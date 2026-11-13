@@ -410,7 +410,7 @@ jobs:
   iomgr-host-tests:
     # Host test of the I/O manager's mount-point reparse validator, which
     # IoIsValidNameGraftingBuffer and IopDoNameTransmogrify share: malformed
-    # buffers (name past the data, odd lengths, overlapping names, lengths
+    # buffers (name past the data, odd lengths, a relative name, lengths
     # over the buffer) are refused, and 200000 generated buffers agree with
     # an independent oracle. Each buffer is allocated to its exact length, so
     # ASan reports any read past it. Built under ASan and UBSan.

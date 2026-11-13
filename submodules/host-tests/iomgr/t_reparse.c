@@ -95,10 +95,12 @@ static const CASE Cases[] =
     { "print offset+len > body",       MP, 8 + 48,   0, 26, 40, 10, 16 + 48, BS, BAD },
     { "print length wraps",            MP, 8 + 48,   0, 26, 28, 0xFFFE, 16 + 48, BS, BAD },
 
-    { "overlap, print inside sub",     MP, 8 + 48,   0, 26,  4, 10, 16 + 48, BS, BAD },
-    { "overlap, same name",            MP, 8 + 48,   0, 26,  0, 26, 16 + 48, BS, BAD },
-    { "overlap, print ends in sub",    MP, 8 + 48,  10, 26,  0, 12, 16 + 48, BS, BAD },
-    { "overlap, print starts in sub",  MP, 8 + 48,   0, 26, 24, 18, 16 + 48, BS, BAD },
+    /* Nothing public forbids the two names to alias, and junction tools write it */
+    { "overlap, print inside sub",     MP, 8 + 48,   0, 26,  4, 10, 16 + 48, BS, OK },
+    { "overlap, same name",            MP, 8 + 48,   0, 26,  0, 26, 16 + 48, BS, OK },
+    { "overlap, print ends in sub",    MP, 8 + 48,  10, 26,  0, 12, 16 + 48, BS, OK },
+    { "overlap, print starts in sub",  MP, 8 + 48,   0, 26, 24, 18, 16 + 48, BS, OK },
+    { "overlap, print past the body",  MP, 8 + 48,   0, 26, 24, 26, 16 + 48, BS, BAD },
 
     { "odd substitute length",         MP, 8 + 48,   0, 25, 28, 18, 16 + 48, BS, BAD },
     { "odd substitute offset",         MP, 8 + 48,   1, 26, 28, 18, 16 + 48, BS, BAD },
@@ -137,8 +139,6 @@ Oracle(const UCHAR *Bytes, ULONG BufferLength)
         return 0;
     Path = Data - FIELDS_LENGTH;
     if (sl < 2 || ((so | sl | po | pl) & 1) || so + sl > Path || po + pl > Path)
-        return 0;
-    if (pl && so < po + pl && po < so + sl)
         return 0;
     memcpy(&First, Bytes + PATH_OFFSET + so, 2);
     return First == BS;

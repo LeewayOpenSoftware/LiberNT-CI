@@ -57,13 +57,6 @@ IopValidateMountPointBuffer(
         return STATUS_IO_REPARSE_DATA_INVALID;
     }
 
-    if (PrintLength != 0 &&
-        SubstituteOffset < PrintOffset + PrintLength &&
-        PrintOffset < SubstituteOffset + SubstituteLength)
-    {
-        return STATUS_IO_REPARSE_DATA_INVALID;
-    }
-
     Substitute = (PCWSTR)((PUCHAR)Buffer->MountPointReparseBuffer.PathBuffer + SubstituteOffset);
     if (Substitute[0] != OBJ_NAME_PATH_SEPARATOR)
         return STATUS_IO_REPARSE_DATA_INVALID;
