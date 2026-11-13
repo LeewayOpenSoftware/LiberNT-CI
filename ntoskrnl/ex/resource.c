@@ -652,9 +652,7 @@ ExpWaitForResource(IN PERESOURCE Resource,
     NTSTATUS Status;
     LARGE_INTEGER Timeout;
     PKTHREAD Thread;
-#if DBG
     KLOCK_QUEUE_HANDLE LockHandle;
-#endif
 
     /* Increase contention count and use a 5 second timeout */
     Resource->ContentionCount++;
@@ -727,6 +725,9 @@ ExpWaitForResource(IN PERESOURCE Resource,
             Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
             Thread->WaitNext = TRUE;
 
+            /* The entries are only stable under the resource lock (SYNCH_LEVEL: the DPC-level form) */
+            KeAcquireInStackQueuedSpinLockAtDpcLevel(&Resource->SpinLock, &LockHandle);
+
             /* Get the owner thread and boost it */
             ExpBoostOwnerThread(Thread, &Resource->OwnerEntry);
 
@@ -745,12 +746,12 @@ ExpWaitForResource(IN PERESOURCE Resource,
                         Owner++;
 
                         /* Boost it */
-
-                        /* Boost it */
                         ExpBoostOwnerThread(Thread, Owner);
                     }
                 }
             }
+
+            KeReleaseInStackQueuedSpinLockFromDpcLevel(&LockHandle);
         }
     }
 }
@@ -1498,6 +1499,18 @@ ExDeleteResourceLite(IN PERESOURCE Resource)
     /* Release the lock */
     KeReleaseInStackQueuedSpinLock(&LockHandle);
 
+    /* A referenced owner-pointer thread goes with its entry */
+    ExpClearOwnerEntry(&Resource->OwnerEntry);
+    if (Resource->OwnerTable)
+    {
+        ULONG i;
+
+        for (i = 1; i < Resource->OwnerTable->TableSize; i++)
+        {
+            ExpClearOwnerEntry(&Resource->OwnerTable[i]);
+        }
+    }
+
     /* Free every  structure */
     if (Resource->OwnerTable) ExFreePoolWithTag(Resource->OwnerTable, TAG_RESOURCE_TABLE);
     if (Resource->SharedWaiters) ExFreePoolWithTag(Resource->SharedWaiters, TAG_RESOURCE_SEMAPHORE);
@@ -1794,7 +1807,8 @@ ExReinitializeResourceLite(IN PERESOURCE Resource)
         Size = Owner->TableSize;
         for (i = 0; i < Size; i++)
         {
-            /* Zero the table */
+            /* Zero the table; entry 0 holds the size, the others may name a referenced thread */
+            if (i != 0) ExpClearOwnerEntry(&Owner[i]);
             Owner[i].OwnerThread = 0;
             Owner[i].OwnerCount = 0;
         }
@@ -1814,7 +1828,7 @@ ExReinitializeResourceLite(IN PERESOURCE Resource)
     if (Event) KeInitializeEvent(Event, SynchronizationEvent, FALSE);
 
     /* Clear the resource data */
-    Resource->OwnerEntry.OwnerThread = 0;
+    ExpClearOwnerEntry(&Resource->OwnerEntry);
     Resource->OwnerEntry.OwnerCount = 0;
     Resource->ContentionCount = 0;
     Resource->NumberOfSharedWaiters = 0;
@@ -2083,10 +2097,9 @@ ExSetResourceOwnerPointerEx(IN PERESOURCE Resource,
     ERESOURCE_THREAD Thread;
     KLOCK_QUEUE_HANDLE LockHandle;
     POWNER_ENTRY Owner, ThisOwner;
-
-    /* Sanity check */
     BOOLEAN Named = (Flags & FLAG_OWNER_POINTER_IS_THREAD) != 0;
 
+    /* Sanity check */
     ASSERT(OwnerPointer != 0);
     ASSERT(Named || (((ULONG_PTR)OwnerPointer & 3) == 3));
 
@@ -2136,7 +2149,15 @@ ExSetResourceOwnerPointerEx(IN PERESOURCE Resource,
             ThisOwner->OwnerCount += Owner->OwnerCount;
             Owner->OwnerCount = 0;
             ExpClearOwnerEntry(Owner);
-            if (Named) ObDereferenceObjectDeferDelete((PVOID)((ULONG_PTR)OwnerPointer & ~(ULONG_PTR)0x3));
+
+            /* The entry that keeps the owner takes the thread reference unless it holds one already */
+            if (Named)
+            {
+                if (ThisOwner->OwnerReferenced)
+                    ObDereferenceObjectDeferDelete((PVOID)((ULONG_PTR)OwnerPointer & ~(ULONG_PTR)0x3));
+                else
+                    ThisOwner->OwnerReferenced = 1;
+            }
             ASSERT(Resource->ActiveEntries >= 2);
             Resource->ActiveEntries--;
         }
