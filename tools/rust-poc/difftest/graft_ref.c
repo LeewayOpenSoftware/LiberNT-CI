@@ -1,27 +1,23 @@
-/* Independent C reference oracle for the IO-3 name-grafting validator.
+/* Independent C reference oracle for the IO-3 mount-point validator.
  *
- * This is a deliberately plain, struct-free byte-level implementation of the SAME
- * invariants documented in src/reparse_graft.rs and kernel/rust/IO3-NAME-GRAFTING-
- * INVARIANTS.md. It is written independently of the Rust (different style, no shared
- * code) so it is a genuine oracle for the differential test, not a transliteration.
+ * Deliberately plain, struct-free, byte-level, written independently of the Rust, encoding
+ * the SAME contract as Stanley's shipped IopValidateMountPointBuffer at 1d45eab8da4 (the
+ * overlap rule is DROPPED there: aliased substitute/print names are legal) and as
+ * src/reparse_graft.rs / IO3-NAME-GRAFTING-INVARIANTS.md (V1-V7). Returns SUCCESS or
+ * IO_REPARSE_DATA_INVALID only; a NULL buffer is a malformed buffer, not caller misuse.
  *
- * Decision order matches the Rust FFI entry exactly so that inputs failing more than one
- * invariant still produce the same status in both:
- *   NULL -> INVALID_PARAMETER;  bad tag -> TAG_NOT_HANDLED;  then structural checks.
- *
- * Once Stanley's R1a C correction (IoIsValidNameGraftingBuffer) lands, this oracle is
- * replaced in the harness by his function and the differential re-run against it.
+ * NOTE: this is the AUTHOR's own reference, so a 0-disagreement run here shows the Rust
+ * agrees with a second transcription of the contract, NOT with the production C. The
+ * production-equivalence run links the Rust staticlib into Stanley's host harness
+ * (submodules/host-tests/iomgr, reparse.c + Oracle()); that is pending the harness files.
  */
 #include <stddef.h>
 
 #define GR_SUCCESS                 ((long)0x00000000)
-#define GR_INVALID_PARAMETER       ((long)0xC000000D)
 #define GR_IO_REPARSE_DATA_INVALID ((long)0xC0000278)
-#define GR_TAG_NOT_HANDLED         ((long)0xC0000279)
-
 #define GR_MOUNT_POINT 0xA0000003UL
-#define GR_SYMLINK     0xA000000CUL
 #define GR_FIXED       8UL
+#define GR_FIELDHDR    8UL
 #define GR_MAX         (16UL * 1024UL)
 
 static unsigned long gr_rd16(const unsigned char *b, unsigned long o)
@@ -34,71 +30,27 @@ static unsigned long gr_rd32(const unsigned char *b, unsigned long o)
            ((unsigned long)b[o + 2] << 16) | ((unsigned long)b[o + 3] << 24);
 }
 
-long graft_ref_validate(const unsigned char *buf, unsigned long len, unsigned long tag)
-{
-    unsigned long etag, rdl, fh, pathlen, so, sl, po, pl;
-
-    if (buf == NULL)                                     /* I1  */
-        return GR_INVALID_PARAMETER;
-    if (tag != GR_MOUNT_POINT && tag != GR_SYMLINK)      /* I4  */
-        return GR_TAG_NOT_HANDLED;
-    if (len < GR_FIXED || len > GR_MAX)                  /* I2  */
-        return GR_IO_REPARSE_DATA_INVALID;
-
-    etag = gr_rd32(buf, 0);
-    rdl = gr_rd16(buf, 4);                               /* Reserved @6 ignored */
-    if (etag != tag)                                     /* I3  */
-        return GR_IO_REPARSE_DATA_INVALID;
-    if (GR_FIXED + rdl != len)                           /* I5  */
-        return GR_IO_REPARSE_DATA_INVALID;
-
-    fh = (tag == GR_MOUNT_POINT) ? 8UL : 12UL;
-    if (rdl < fh)                                        /* I6  */
-        return GR_IO_REPARSE_DATA_INVALID;
-    pathlen = rdl - fh;
-
-    so = gr_rd16(buf, 8);
-    sl = gr_rd16(buf, 10);
-    po = gr_rd16(buf, 12);
-    pl = gr_rd16(buf, 14);
-
-    if (((so | sl | po | pl) & 1UL) != 0UL)              /* I7  */
-        return GR_IO_REPARSE_DATA_INVALID;
-    if (so > pathlen || sl > pathlen - so)               /* I8  */
-        return GR_IO_REPARSE_DATA_INVALID;
-    if (po > pathlen || pl > pathlen - po)               /* I9  */
-        return GR_IO_REPARSE_DATA_INVALID;
-    if (sl == 0UL)                                       /* I10 */
-        return GR_IO_REPARSE_DATA_INVALID;
-
-    return GR_SUCCESS;
-}
-
-/* Independent C oracle for Stanley's IopValidateMountPointBuffer contract (R1a,
- * fix/io3-name-grafting ff2e252ff4d). MOUNT_POINT only; returns SUCCESS or
- * IO_REPARSE_DATA_INVALID only (NULL is a malformed buffer, not caller misuse).
- * The `tag` parameter is ignored (the tag is read from the buffer); kept for a
- * uniform harness signature. Written independently of the Rust mirror. */
+/* The `ignored` parameter keeps a uniform (buf,len,x) harness signature; there is no tag
+ * argument in the real contract (the tag is read from the buffer). */
 long graft_ref_validate_mp(const unsigned char *buf, unsigned long len, unsigned long ignored)
 {
     unsigned long tag, rdl, path, so, sl, po, pl, first;
     (void)ignored;
-    if (buf == NULL) return GR_IO_REPARSE_DATA_INVALID;
-    if (len < 16UL) return GR_IO_REPARSE_DATA_INVALID;
+    if (buf == NULL) return GR_IO_REPARSE_DATA_INVALID;                 /* V1 */
+    if (len < GR_FIXED + GR_FIELDHDR) return GR_IO_REPARSE_DATA_INVALID; /* V2: len>=16 */
     tag = gr_rd32(buf, 0);
-    if (tag != GR_MOUNT_POINT) return GR_IO_REPARSE_DATA_INVALID;
+    if (tag != GR_MOUNT_POINT) return GR_IO_REPARSE_DATA_INVALID;       /* V3 */
     rdl = gr_rd16(buf, 4);
-    if (rdl < 8UL) return GR_IO_REPARSE_DATA_INVALID;
-    if (rdl > GR_MAX - 8UL) return GR_IO_REPARSE_DATA_INVALID;
-    if (rdl > len - 8UL) return GR_IO_REPARSE_DATA_INVALID;
-    path = rdl - 8UL;
+    if (rdl < GR_FIELDHDR || rdl > GR_MAX - GR_FIXED || rdl > len - GR_FIXED)
+        return GR_IO_REPARSE_DATA_INVALID;                             /* V4 */
+    path = rdl - GR_FIELDHDR;
     so = gr_rd16(buf, 8); sl = gr_rd16(buf, 10); po = gr_rd16(buf, 12); pl = gr_rd16(buf, 14);
-    if (((so | sl | po | pl) & 1UL) != 0UL) return GR_IO_REPARSE_DATA_INVALID;
-    if (so > path || sl > path - so) return GR_IO_REPARSE_DATA_INVALID;
-    if (po > path || pl > path - po) return GR_IO_REPARSE_DATA_INVALID;
-    if (sl < 2UL) return GR_IO_REPARSE_DATA_INVALID;
-    if (pl != 0UL && so < po + pl && po < so + sl) return GR_IO_REPARSE_DATA_INVALID;
-    first = gr_rd16(buf, 16UL + so);          /* PathBuffer at offset 16, + substitute offset */
-    if (first != 0x005CUL) return GR_IO_REPARSE_DATA_INVALID; /* L'\' */
+    if (((so | sl | po | pl) & 1UL) != 0UL) return GR_IO_REPARSE_DATA_INVALID; /* V5 even */
+    if (so > path || sl > path - so) return GR_IO_REPARSE_DATA_INVALID;        /* V5 range */
+    if (po > path || pl > path - po) return GR_IO_REPARSE_DATA_INVALID;        /* V5 range */
+    if (sl < 2UL) return GR_IO_REPARSE_DATA_INVALID;                   /* V6 */
+    /* NO overlap check: aliased names are legal at 1d45eab8da4. */
+    first = gr_rd16(buf, 16UL + so);   /* PathBuffer at byte 16, + substitute offset */
+    if (first != 0x005CUL) return GR_IO_REPARSE_DATA_INVALID;          /* V7: leading backslash */
     return GR_SUCCESS;
 }
