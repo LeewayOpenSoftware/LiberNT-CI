@@ -1130,10 +1130,10 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
     ULONG Hand;
     PKTIMER_TABLE_ENTRY TableEntry;
 
-    /* Remove the timer from the timer list and check if it's empty */
-    Hand = Timer->Header.Hand;
+    /* Header.Hand keeps only the low byte of the 512-bucket index */
+    Hand = KiComputeTimerTableIndex(Timer->DueTime.QuadPart);
     ASSERT(Hand < TIMER_TABLE_SIZE);
-    ASSERT(Hand == KiComputeTimerTableIndex(Timer->DueTime.QuadPart));
+    ASSERT(Timer->Header.Hand == (UCHAR)Hand);
     ASSERT(Timer->TimerListEntry.Flink != NULL && Timer->TimerListEntry.Blink != NULL);
     ASSERT(Timer->TimerListEntry.Flink->Blink == &Timer->TimerListEntry);
     ASSERT(Timer->TimerListEntry.Blink->Flink == &Timer->TimerListEntry);
