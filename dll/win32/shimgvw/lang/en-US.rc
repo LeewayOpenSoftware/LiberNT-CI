@@ -28,6 +28,8 @@ BEGIN
     IDS_TOOLTIP_FIT_TOGGLE "Fit to window / actual size"
     IDS_EMAIL_FAILED "The picture could not be sent. No e-mail program is available."
     IDS_BURN_FAILED "There is no disc burner available to burn this picture."
+    IDS_DELETE_RECYCLE "Are you sure you want to move this picture to the Recycle Bin?"
+    IDS_DELETE_PERMANENT "Are you sure you want to permanently delete this picture?"
     IDS_ROTATE_LOSSY "This picture cannot be rotated without re-encoding it, which loses some quality. Save the rotation anyway?"
     /* Tooltips */
     IDS_TOOLTIP_NEXT_PIC "Next Picture"

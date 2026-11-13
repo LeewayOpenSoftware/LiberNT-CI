@@ -1867,9 +1867,23 @@ Preview_Delete(PPREVIEW_DATA pData)
         szNextFile[_countof(szNextFile) - 1] = UNICODE_NULL; /* Avoid buffer overrun */
     }
 
-    /* Confirm file deletion and delete if allowed */
+    /* Ask first, as the shell does for the Recycle Bin: it says where the file goes */
+    {
+        BOOL bPermanent = GetKeyState(VK_SHIFT) < 0;
+        WCHAR szText[300], szTitle[128];
+        UINT ids = bPermanent ? IDS_DELETE_PERMANENT : IDS_DELETE_RECYCLE;
+        if (!LoadStringW(g_hInstance, ids, szText, _countof(szText)))
+            StringCchCopyW(szText, _countof(szText), bPermanent ?
+                           L"Are you sure you want to permanently delete this picture?" :
+                           L"Are you sure you want to move this picture to the Recycle Bin?");
+        LoadStringW(g_hInstance, IDS_APPTITLE, szTitle, _countof(szTitle));
+        if (MessageBoxW(pData->m_hwnd, szText, szTitle, MB_ICONQUESTION | MB_YESNO | MB_DEFBUTTON1) != IDYES)
+            return;
+    }
+
+    /* Delete: to the Recycle Bin unless Shift is held */
     FileOp.pFrom = szCurFile;
-    FileOp.fFlags = GetKeyState(VK_SHIFT) < 0 ? 0 : FOF_ALLOWUNDO;
+    FileOp.fFlags = FOF_NOCONFIRMATION | (GetKeyState(VK_SHIFT) < 0 ? 0 : FOF_ALLOWUNDO);
     error = g_szFile[0] ? SHFileOperationW(&FileOp) : ERROR_FILE_NOT_FOUND;
     if (error)
         return;
