@@ -595,6 +595,28 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
  *    Status code.
  */
 
+static
+BOOLEAN
+IntIsServiceAccountProcess(
+    _In_ PEPROCESS Process)
+{
+    PACCESS_TOKEN Token;
+    PTOKEN_USER User = NULL;
+    BOOLEAN IsService = TRUE;
+
+    Token = PsReferencePrimaryToken(Process);
+    if (Token == NULL)
+        return TRUE;
+    if (NT_SUCCESS(SeQueryInformationToken(Token, TokenUser, (PVOID*)&User)))
+    {
+        IsService = RtlEqualSid(User->User.Sid, SeExports->SeNetworkServiceSid) ||
+                    RtlEqualSid(User->User.Sid, SeExports->SeLocalServiceSid);
+        ExFreePool(User);
+    }
+    PsDereferencePrimaryToken(Token);
+    return IsService;
+}
+
 NTSTATUS
 FASTCALL
 IntResolveDesktop(
@@ -1015,7 +1037,7 @@ IntResolveDesktop(
                 bAccessAllowed = TRUE;
                 Status = STATUS_SUCCESS;
             }
-            else if (!bUseDefaultWinSta)
+            else if (!bUseDefaultWinSta && !IntIsServiceAccountProcess(Process))
             {
                 PVOID GrantedWinSta;
 
