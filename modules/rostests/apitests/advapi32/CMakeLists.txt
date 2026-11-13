@@ -60,6 +60,7 @@ list(APPEND SOURCE
     TraceEvents.c
     TokenDefaultPrivileges.c
     TokenIntegrity.c
+    TokenIntegrityLevel.c
     TraceGuids.c
     UserHiveAccess.c
     svchlp.c)
