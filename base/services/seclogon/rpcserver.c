@@ -536,8 +536,9 @@ SeclCreateProcessWithLogonW(
     if (pRequest->dwDesktopInherited)
     {
         Grant = GrantDesktopAccess(hToken, StartupInfo.lpDesktop, &dwError);
-        if (Grant == NULL)
-            WARN("Granting access to %S failed with Error %lu\n", StartupInfo.lpDesktop, dwError);
+        ERR("LABDIAG seclogon: grant on %S -> %p, Error %lu, WinSta added %d, Desktop added %d\n",
+            StartupInfo.lpDesktop, Grant, Grant ? 0 : dwError,
+            Grant ? Grant->WinStaAdded : -1, Grant ? Grant->DesktopAdded : -1);
         dwError = ERROR_SUCCESS;
     }
 

@@ -1018,6 +1018,16 @@ IntResolveDesktop(
             else if (!bUseDefaultWinSta)
             {
                 PVOID GrantedWinSta;
+                OBJECT_HANDLE_INFORMATION HandleInfo = {0};
+                NTSTATUS DiagStatus;
+
+                DiagStatus = ObReferenceObjectByHandle(hTempWinSta, 0, ExWindowStationObjectType,
+                                                       KernelMode, &GrantedWinSta, &HandleInfo);
+                if (NT_SUCCESS(DiagStatus))
+                    ObDereferenceObject(GrantedWinSta);
+                ERR("LABDIAG IntResolveDesktop: '%wZ' process LUID 0x%x-%x, WinSta0 LUID 0x%x-%x, granted 0x%08lx\n",
+                    DesktopPath, ProcessLuid.HighPart, ProcessLuid.LowPart,
+                    WinStaObject->luidUser.HighPart, WinStaObject->luidUser.LowPart, HandleInfo.GrantedAccess);
 
                 /* A named WinSta0 from another logon needs a DACL grant beyond the admins' read access */
                 if (NT_SUCCESS(ObReferenceObjectByHandle(hTempWinSta,
@@ -1249,6 +1259,8 @@ IntResolveDesktop(
 
         /* Startup connects with the rights allowed by the desktop's DACL. */
         Status = ObOpenObjectByName(ObjectAttributes, ExDesktopObjectType, UserMode, NULL, MAXIMUM_ALLOWED, NULL, (PHANDLE)&hDesktop);
+        if (!NT_SUCCESS(Status) || !bUseDefaultWinSta)
+            ERR("LABDIAG IntResolveDesktop: desktop '%wZ' open Status 0x%08lx\n", ObjectName, Status);
         if (!NT_SUCCESS(Status))
         {
             ERR("Failed to open the desktop '%wZ' on window station 0x%p, Status 0x%08lx\n",
