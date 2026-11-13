@@ -65,6 +65,8 @@ SeclCreateProcessWithLogonW(
     PROFILEINFOW ProfileInfo;
     HANDLE hToken = NULL;
     HANDLE hTargetProcessHandle = NULL;
+    PVOID Environment = NULL;
+    DWORD CreationFlags;
     DWORD SessionId;
 
     ULONG dwError = ERROR_SUCCESS;
@@ -72,11 +74,13 @@ SeclCreateProcessWithLogonW(
 
     TRACE("SeclCreateProcessWithLogonW(%p %p %p)\n", hBinding, pRequest, pResponse);
 
+    ZeroMemory(&ProfileInfo, sizeof(ProfileInfo));
+    ZeroMemory(&ProcessInfo, sizeof(ProcessInfo));
+
     if (pRequest != NULL)
     {
         TRACE("Username: '%S'\n", pRequest->Username);
         TRACE("Domain: '%S'\n", pRequest->Domain);
-        TRACE("Password: '%S'\n", pRequest->Password);
         TRACE("ApplicationName: '%S'\n", pRequest->ApplicationName);
         TRACE("CommandLine: '%S'\n", pRequest->CommandLine);
         TRACE("CurrentDirectory: '%S'\n", pRequest->CurrentDirectory);
@@ -94,8 +98,6 @@ SeclCreateProcessWithLogonW(
         WARN("OpenProcess() failed with Error %lu\n", dwError);
         goto done;
     }
-
-    ZeroMemory(&ProfileInfo, sizeof(ProfileInfo));
 
     /* Logon */
     rc = LogonUser(pRequest->Username,
@@ -139,10 +141,21 @@ SeclCreateProcessWithLogonW(
     ZeroMemory(&StartupInfo, sizeof(StartupInfo));
     StartupInfo.cb = sizeof(StartupInfo);
 
-    /* FIXME: Get startup info from the caller */
+    StartupInfo.lpDesktop = pRequest->Desktop ? pRequest->Desktop : L"WinSta0\\Default";
 
-    /* Initialize the process information */
-    ZeroMemory(&ProcessInfo, sizeof(ProcessInfo));
+    /* FIXME: Get the rest of the startup info from the caller */
+
+    CreationFlags = pRequest->dwCreationFlags;
+    if (pRequest->Environment == NULL)
+    {
+        if (!CreateEnvironmentBlock(&Environment, hToken, FALSE))
+        {
+            dwError = GetLastError();
+            WARN("CreateEnvironmentBlock() failed with Error %lu\n", dwError);
+            goto done;
+        }
+        CreationFlags |= CREATE_UNICODE_ENVIRONMENT;
+    }
 
     /* Create Process */
     rc = CreateProcessAsUserW(hToken,
@@ -151,8 +164,8 @@ SeclCreateProcessWithLogonW(
                               NULL,  // lpProcessAttributes,
                               NULL,  // lpThreadAttributes,
                               FALSE, // bInheritHandles,
-                              pRequest->dwCreationFlags,
-                              pRequest->Environment,  // lpEnvironment,
+                              CreationFlags,
+                              Environment ? Environment : pRequest->Environment,
                               pRequest->CurrentDirectory,
                               &StartupInfo,
                               &ProcessInfo);
@@ -195,6 +208,9 @@ done:
 
     if (ProcessInfo.hProcess)
         CloseHandle(ProcessInfo.hProcess);
+
+    if (Environment != NULL)
+        DestroyEnvironmentBlock(Environment);
 
     if (ProfileInfo.hProfile != NULL)
         UnloadUserProfile(hToken, ProfileInfo.hProfile);
