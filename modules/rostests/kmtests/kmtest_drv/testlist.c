@@ -358,6 +358,8 @@ KMT_TESTFUNC Test_MmSection;
 KMT_TESTFUNC Test_MmSystemViewCache;
 KMT_TESTFUNC Test_MmWddmRanges;
 KMT_TESTFUNC Test_MmPhysicalAddressRace;
+KMT_TESTFUNC Test_MmPurgeCoherency;
+KMT_TESTFUNC Test_MmSectionCreateAcquire;
 KMT_TESTFUNC Test_MmWddmRotate;
 KMT_TESTFUNC Test_MmWddmRotateValid;
 KMT_TESTFUNC Test_MmReservedMapping;
@@ -798,6 +800,8 @@ const KMT_TEST TestList[] =
     { "MmSystemViewCache",                  Test_MmSystemViewCache },
     { "MmWddmRanges",                       Test_MmWddmRanges },
     { "MmPhysicalAddressRace",              Test_MmPhysicalAddressRace },
+    { "MmPurgeCoherency",                   Test_MmPurgeCoherency },
+    { "MmSectionCreateAcquire",             Test_MmSectionCreateAcquire },
     { "MmWddmRotate",                       Test_MmWddmRotate },
     { "MmWddmRotateValid",                  Test_MmWddmRotateValid },
     { "MmMapReserve",                       Test_MmMapReserve },

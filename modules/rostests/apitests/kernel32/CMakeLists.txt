@@ -146,6 +146,7 @@ list(APPEND SOURCE
     MultiByteToWideChar.c
     NamedPipeClientComputerName.c
     NlsStringApis.c
+    NoBufferingCoherency.c
     NumaApis.c
     PerfConsumer.c
     PerfProvider.c

@@ -334,6 +334,8 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/MmSystemViewCache.c
     ntos_mm/MmWddm.c
     ntos_mm/MmPhysicalAddressRace.c
+    ntos_mm/MmPurgeCoherency.c
+    ntos_mm/MmSectionCreateAcquire.c
     ntos_mm/ZwAllocateVirtualMemory.c
     ntos_zw/ZwDuplicateKM.c
     ntos_zw/ZwFileKM.c
@@ -651,6 +653,7 @@ list(APPEND KMTEST_SOURCE
     ntos_se/SeAuditAlarm.c
     ntos_se/SeSecurityDirectory.c
     ntos_se/SeSaclParts.c
+    ntos_cc/CcCoherency_user.c
     ntos_cc/CcCopyRead_user.c
     ntos_cc/CcCopyWrite_user.c
     ntos_cc/CcMapData_user.c
@@ -762,6 +765,7 @@ add_dependencies(kmtest_drivers
     poirp_drv
     tcpip_drv
     cccopyread_drv
+    cccoherency_drv
     cccopywrite_drv
     ccmapdata_drv
     ccpinmappeddata_drv
