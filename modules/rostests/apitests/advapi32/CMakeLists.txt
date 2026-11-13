@@ -58,6 +58,7 @@ list(APPEND SOURCE
     TokenBnoIsolation.c
     TokenLinkedToken.c
     TraceEvents.c
+    TokenDefaultPrivileges.c
     TraceGuids.c
     UserHiveAccess.c
     svchlp.c)

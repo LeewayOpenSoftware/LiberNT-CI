@@ -59,6 +59,7 @@ extern void func_StartServiceCtrlDispatcher(void);
 extern void func_TokenBnoIsolation(void);
 extern void func_TokenLinkedToken(void);
 extern void func_TraceEvents(void);
+extern void func_TokenDefaultPrivileges(void);
 extern void func_TraceGuids(void);
 extern void func_UserHiveAccess(void);
 
@@ -121,6 +122,7 @@ const struct test winetest_testlist[] =
     { "TokenBnoIsolation", func_TokenBnoIsolation },
     { "TokenLinkedToken", func_TokenLinkedToken },
     { "TraceEvents", func_TraceEvents },
+    { "TokenDefaultPrivileges", func_TokenDefaultPrivileges },
     { "TraceGuids", func_TraceGuids },
     { "UserHiveAccess", func_UserHiveAccess },
     { 0, 0 }
