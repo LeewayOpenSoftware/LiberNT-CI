@@ -11,6 +11,7 @@
 
 #include <windows.h>
 #include <winioctl.h>
+#include <mountmgr.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include "flushfail.h"
@@ -156,6 +157,29 @@ DoStats(void)
     return 0;
 }
 
+/* Ask the mount manager to reconcile every remote database (device.c ReconcileAll),
+ * the one user-mode request that rewrites a volume's database while that volume
+ * rejects writes; mount point and drive letter changes only touch other volumes. */
+static
+int
+DoMmReconcile(void)
+{
+    HANDLE MountMgr;
+    DWORD Returned;
+    BOOL Ok;
+
+    MountMgr = CreateFileW(MOUNTMGR_DOS_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+    if (MountMgr == INVALID_HANDLE_VALUE)
+        return Fail(L"open MountPointManager");
+    Ok = DeviceIoControl(MountMgr, IOCTL_MOUNTMGR_AUTO_DL_ASSIGNMENTS, NULL, 0, NULL, 0, &Returned, NULL);
+    CloseHandle(MountMgr);
+    if (!Ok)
+        return Fail(L"IOCTL_MOUNTMGR_AUTO_DL_ASSIGNMENTS");
+    wprintf(L"flushfail: mount manager reconcile requested\n");
+    return 0;
+}
+
 int
 wmain(int argc, wchar_t *argv[])
 {
@@ -163,8 +187,10 @@ wmain(int argc, wchar_t *argv[])
         return DoAttach(argv[2]);
     if (argc == 2 && _wcsicmp(argv[1], L"stats") == 0)
         return DoStats();
+    if (argc == 2 && _wcsicmp(argv[1], L"mmreconcile") == 0)
+        return DoMmReconcile();
     if (argc == 3 && _wcsicmp(argv[1], L"writefail") == 0 && (_wcsicmp(argv[2], L"on") == 0 || _wcsicmp(argv[2], L"off") == 0))
         return DoWriteFail(_wcsicmp(argv[2], L"on") == 0);
-    wprintf(L"usage: flushfail attach <drive>:  |  flushfail writefail on|off  |  flushfail stats\n");
+    wprintf(L"usage: flushfail attach <drive>:  |  flushfail writefail on|off  |  flushfail stats  |  flushfail mmreconcile\n");
     return 1;
 }
