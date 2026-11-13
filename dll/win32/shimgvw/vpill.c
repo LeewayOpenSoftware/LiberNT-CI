@@ -406,7 +406,7 @@ static void
 LoadIcons(VPILL *p)
 {
     static const WCHAR *slugs[PI_COUNT + 1] =
-        { L"zoom", L"fit", L"prev", L"slideshow", L"next", L"rotate.ccw", L"rotate.cw", L"delete", L"actual" };
+        { L"zoom", L"fit", L"prev", L"slideshow", L"next", L"rotate-ccw", L"rotate-cw", L"delete", L"actual" };
     int i;
     for (i = 0; i < PI_COUNT + 1; i++)
         p->icon[i] = LoadIcon32(p, slugs[i]);
@@ -771,6 +771,13 @@ SliderProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 br = CreateSolidBrush(RGB(0xF4, 0xF7, 0xFB));
                 FillRect(hdc, &rc, br);
                 DeleteObject(br);
+                {
+                    HGDIOBJ op = SelectObject(hdc, CreatePen(PS_SOLID, 1, RGB(0x9A, 0xA6, 0xB4)));
+                    HGDIOBJ ob = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+                    RoundRect(hdc, 0, 0, rc.right, rc.bottom, Sc(p, 14), Sc(p, 14));
+                    SelectObject(hdc, ob);
+                    DeleteObject(SelectObject(hdc, op));
+                }
                 SliderGeometry(p, hwnd, &track);
                 br = CreateSolidBrush(RGB(0x9A, 0xA6, 0xB4));
                 FillRect(hdc, &track, br);
@@ -866,9 +873,10 @@ ToggleSlider(VPILL *p)
     x = pt.x - w / 2;
     y = pt.y - h - Sc(p, 4);
     p->slider = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TOPMOST, SLIDER_CLASS, NULL,
-                                WS_POPUP | WS_BORDER, x, y, w, h, p->main, NULL, p->inst, NULL);
+                                WS_POPUP, x, y, w, h, p->main, NULL, p->inst, NULL);
     if (p->slider)
     {
+        SetWindowRgn(p->slider, CreateRoundRectRgn(0, 0, w + 1, h + 1, Sc(p, 14), Sc(p, 14)), FALSE);
         ShowWindow(p->slider, SW_SHOWNA);
         SetCapture(p->slider);
     }
@@ -915,6 +923,7 @@ PillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 #ifdef VPILL_TESTHOOK
         case WM_APP + 0x79: /* test builds: force the hot item (a real hover is cancelled by WM_MOUSELEAVE) */
             p->hotPill = (int)wp;
+            p->downPill = lp ? (int)wp : -1;
             RenderPill(p);
             return 0;
         case WM_APP + 0x78:
@@ -1047,8 +1056,8 @@ StripPaint(VPILL *p, HDC hdc)
     int i;
 
     GetClientRect(p->strip, &rc);
-    tv[0].x = 0; tv[0].y = 0; tv[0].Red = 0xFB00; tv[0].Green = 0xFC00; tv[0].Blue = 0xFD00; tv[0].Alpha = 0;
-    tv[1].x = rc.right; tv[1].y = rc.bottom; tv[1].Red = 0xE900; tv[1].Green = 0xEE00; tv[1].Blue = 0xF400; tv[1].Alpha = 0;
+    tv[0].x = 0; tv[0].y = 0; tv[0].Red = 0xFF00; tv[0].Green = 0xFF00; tv[0].Blue = 0xFF00; tv[0].Alpha = 0;
+    tv[1].x = rc.right; tv[1].y = rc.bottom; tv[1].Red = 0xE600; tv[1].Green = 0xEA00; tv[1].Blue = 0xF000; tv[1].Alpha = 0;
     GradientFill(hdc, tv, 2, &gr, 1, GRADIENT_FILL_RECT_V);
     br = CreateSolidBrush(RGB(0xC5, 0xCC, 0xD6));
     {
@@ -1075,7 +1084,7 @@ StripPaint(VPILL *p, HDC hdc)
             DeleteObject(b);
         }
         Text(p, it->idsLabel, t, _countof(t));
-        SetTextColor(hdc, RGB(0x1F, 0x2A, 0x36));
+        SetTextColor(hdc, RGB(0x14, 0x18, 0x1F));
         tr.left += Sc(p, 10);
         tr.right -= it->dropdown ? Sc(p, 14) : Sc(p, 10);
         DrawTextW(hdc, t, -1, &tr, DT_SINGLELINE | DT_VCENTER | DT_LEFT | DT_NOPREFIX);
@@ -1237,7 +1246,7 @@ RegisterClasses(HINSTANCE inst)
     s_atoms[1] = RegisterClassW(&wc);
     wc.lpszClassName = SLIDER_CLASS;
     wc.lpfnWndProc = SliderProc;
-    wc.style = 0;
+    wc.style = CS_DROPSHADOW;
     s_atoms[2] = RegisterClassW(&wc);
 }
 
