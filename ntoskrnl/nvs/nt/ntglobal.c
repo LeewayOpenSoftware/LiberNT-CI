@@ -85,6 +85,7 @@ static PKEVENT MiLowMemoryCondition;
 static PKEVENT MiHighMemoryCondition;
 static ULONG64 MiLowMemoryPages;
 static ULONG64 MiHighMemoryPages;
+static LONG MiMemoryConditionState = -1;     /* 0 neither, 1 low, 2 high, -1 not yet set */
 
 /* Everyone may wait on and read a condition (CreateMemoryResourceNotification), administrators and the system own it */
 static
@@ -155,12 +156,18 @@ MiCreateConditionEvent(
 
     Status = ZwCreateEvent(&Handle, EVENT_ALL_ACCESS, &ObjectAttributes, NotificationEvent, FALSE);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Memory condition event %ws not created: 0x%lx\n", Path, Status);
         return NULL;
+    }
 
     Status = ObReferenceObjectByHandle(Handle, 0, ExEventObjectType, KernelMode, &Event, NULL);
     ZwClose(Handle);
     if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Memory condition event %ws not referenced: 0x%lx\n", Path, Status);
         return NULL;
+    }
 
     return (PKEVENT)Event;
 }
@@ -180,7 +187,10 @@ MiMemoryNotificationInitialize(VOID)
 
     /* TODO: the LowMemoryThreshold and HighMemoryThreshold values of the memory management key are not read yet */
     if (!NT_SUCCESS(MiCreateConditionSd(&Sd)))
+    {
+        DPRINT1("Memory condition events not created: no security descriptor\n");
         return;
+    }
 
     MiLowMemoryCondition = MiCreateConditionEvent(L"\\KernelObjects\\LowMemoryCondition", Sd);
     MiHighMemoryCondition = MiCreateConditionEvent(L"\\KernelObjects\\HighMemoryCondition", Sd);
@@ -189,30 +199,35 @@ MiMemoryNotificationInitialize(VOID)
     MiUpdateMemoryNotification(MmAvailablePages);
 }
 
-/* The two conditions exclude each other; between the levels neither holds */
+/* The two conditions exclude each other; between the levels neither holds. The events are touched on a transition only */
 VOID
 MiUpdateMemoryNotification(
     _In_ ULONG64 AvailablePages)
 {
+    LONG State;
+
     if (MiLowMemoryCondition == NULL || MiHighMemoryCondition == NULL)
         return;
 
-    if (AvailablePages <= MiLowMemoryPages)
+    State = (AvailablePages <= MiLowMemoryPages) ? 1 : (AvailablePages >= MiHighMemoryPages) ? 2 : 0;
+    if (InterlockedExchange(&MiMemoryConditionState, State) == State)
+        return;
+
+    if (State == 1)
     {
         KeClearEvent(MiHighMemoryCondition);
         KeSetEvent(MiLowMemoryCondition, 0, FALSE);
-        return;
     }
-
-    if (AvailablePages >= MiHighMemoryPages)
+    else if (State == 2)
     {
         KeClearEvent(MiLowMemoryCondition);
         KeSetEvent(MiHighMemoryCondition, 0, FALSE);
-        return;
     }
-
-    KeClearEvent(MiLowMemoryCondition);
-    KeClearEvent(MiHighMemoryCondition);
+    else
+    {
+        KeClearEvent(MiLowMemoryCondition);
+        KeClearEvent(MiHighMemoryCondition);
+    }
 }
 
 NTSTATUS
