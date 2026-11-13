@@ -344,6 +344,17 @@ Volume::NoteLostWrite(_In_ NTSTATUS Status)
     }
 }
 
+BOOLEAN
+Volume::ReportsDirty(_In_ USHORT Flags)
+{
+    if (CorruptionNoted)
+        return TRUE;
+    if (!(Flags & VOL_DIRTY))
+        return FALSE;
+    /* The flag a read-write mount sets for itself is not a check request */
+    return !DirtyTracking || DirtyRetained;
+}
+
 void
 Volume::RetainDirty(_In_ BOOLEAN Retain)
 {

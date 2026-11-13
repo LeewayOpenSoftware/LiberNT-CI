@@ -1332,6 +1332,11 @@ NTSTATUS
 NtfsVolumeMarkCleanForShutdown(
     _In_ PNtfsVolume DiskVolume);
 
+BOOLEAN
+NtfsVolumeReportsDirty(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ USHORT Flags);
+
 /* After a read met corrupt structure, write and retain the dirty flag now
  * rather than at the next write or the dismount. Once per mount, cheap when
  * nothing is pending. Caller holds the metadata lock. */
