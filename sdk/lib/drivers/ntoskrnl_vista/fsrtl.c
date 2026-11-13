@@ -852,18 +852,12 @@ FsRtlAreThereCurrentOrInProgressFileLocks(
     return FsRtlAreThereCurrentFileLocks(FileLock);
 }
 
-NTKRNLVISTAAPI
-VOID
-NTAPI
-CcCoherencyFlushAndPurgeCache(
-    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer,
-    _In_opt_ PLARGE_INTEGER FileOffset,
-    _In_ ULONG Length,
-    _Out_ PIO_STATUS_BLOCK IoStatus,
-    _In_opt_ ULONG Flags)
-{
-    CcFlushCache(SectionObjectPointer, FileOffset, Length, IoStatus);
-}
+/*
+ * CcCoherencyFlushAndPurgeCache now has a real implementation in the kernel
+ * (ntoskrnl/cc/api/ccflush.c) that flushes AND purges. The flush-only shim
+ * that used to live here is removed so the kernel symbol is the only one;
+ * drivers import it from the kernel. See AUDIT-R1-IO-CC-FS.md R2-A.1.
+ */
 
 NTKRNLVISTAAPI
 BOOLEAN
