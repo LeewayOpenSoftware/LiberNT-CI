@@ -1015,6 +1015,23 @@ IntResolveDesktop(
                 bAccessAllowed = TRUE;
                 Status = STATUS_SUCCESS;
             }
+            else if (!bUseDefaultWinSta)
+            {
+                PVOID GrantedWinSta;
+
+                /* A named WinSta0 from another logon needs a DACL grant beyond the admins' read access */
+                if (NT_SUCCESS(ObReferenceObjectByHandle(hTempWinSta,
+                                                         WINSTA_ACCESSGLOBALATOMS,
+                                                         ExWindowStationObjectType,
+                                                         UserMode,
+                                                         &GrantedWinSta,
+                                                         NULL)))
+                {
+                    ObDereferenceObject(GrantedWinSta);
+                    bAccessAllowed = TRUE;
+                    Status = STATUS_SUCCESS;
+                }
+            }
         }
         else
         {
