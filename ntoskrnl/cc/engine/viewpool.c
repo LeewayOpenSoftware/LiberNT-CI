@@ -734,15 +734,26 @@ CcCacheCheck(
 BOOLEAN
 CcMapViewAttached(
     _Inout_ PCC_MAP Map,
-    _In_ ULONG64 FileOffset)
+    _In_ ULONG64 FileOffset,
+    _Out_ PULONG64 NextOffset)
 {
+    ULONG64 Number = CcSlotNumber(FileOffset);
+    ULONG64 Limit;
     PCC_SLOT Slot;
     BOOLEAN Attached;
     KIRQL OldIrql;
 
     CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
-    Slot = CcMapSlot(Map, CcSlotNumber(FileOffset), FALSE);
+    Limit = (ULONG64)(ULONG)CC_ATOMIC_READ32(&Map->LeafCount) << CC_LEAF_SHIFT;
+    Slot = CcMapSlot(Map, Number, FALSE);
     Attached = (Slot != NULL && Slot->View != NULL);
     CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
+
+    if (Number >= Limit)
+        *NextOffset = (ULONG64)-1;
+    else if (Slot == NULL)
+        *NextOffset = ((Number | CC_LEAF_MASK) + 1) << CC_VIEW_SHIFT;
+    else
+        *NextOffset = (Number + 1) << CC_VIEW_SHIFT;
     return Attached;
 }

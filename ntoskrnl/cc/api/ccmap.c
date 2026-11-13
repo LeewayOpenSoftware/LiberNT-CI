@@ -228,6 +228,7 @@ CcNtZeroResidentRuns(
 {
     ULONG64 Offset = Start;
     ULONG64 ViewEnd;
+    ULONG64 NextOffset;
     ULONG64 RunStart;
     NTSTATUS Status;
 
@@ -238,9 +239,9 @@ CcNtZeroResidentRuns(
             ViewEnd = End;
 
         /* Only a view still attached can keep cache pages resident past the purge */
-        if (!CcMapViewAttached(&NtMap->Map, Offset))
+        if (!CcMapViewAttached(&NtMap->Map, Offset, &NextOffset))
         {
-            Offset = ViewEnd;
+            Offset = NextOffset;
             continue;
         }
         if (!NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
