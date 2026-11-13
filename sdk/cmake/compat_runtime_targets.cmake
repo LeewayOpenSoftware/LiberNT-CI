@@ -323,6 +323,7 @@ set(COMPAT_RUNTIME_MODULES
     winscard
     wintypes
     winusb
+    windows_management_deployment
     windows_storage
     windows_ui
     windowscodecs
