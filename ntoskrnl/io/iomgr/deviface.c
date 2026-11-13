@@ -2211,6 +2211,10 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
     if (DeviceInstance.Length == 0)
     {
         DPRINT1("No device instance in link name '%wZ'\n", SymbolicLinkName);
+        /* a disabled interface leaves the enabled list even on a late failure, so a sibling check
+         * does not read it as a live instance and keep the link alive */
+        if (!Enable)
+            IopUntrackEnabledInterface(SymbolicLinkName);
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
     DeviceInstance.MaximumLength = DeviceInstance.Length;
@@ -2219,6 +2223,10 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
                                                   TAG_IO);
     if (DeviceInstance.Buffer == NULL)
     {
+        /* a disabled interface leaves the enabled list even on a late failure, so a sibling check
+         * does not read it as a live instance and keep the link alive */
+        if (!Enable)
+            IopUntrackEnabledInterface(SymbolicLinkName);
         /* no memory */
         return STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -2252,6 +2260,10 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
     LinkObjectName.Buffer = ExAllocatePoolWithTag(PagedPool, LinkObjectName.MaximumLength, TAG_IO);
     if (LinkObjectName.Buffer == NULL)
     {
+        /* a disabled interface leaves the enabled list even on a late failure, so a sibling check
+         * does not read it as a live instance and keep the link alive */
+        if (!Enable)
+            IopUntrackEnabledInterface(SymbolicLinkName);
         if (PhysicalDeviceObject) ObDereferenceObject(PhysicalDeviceObject);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
