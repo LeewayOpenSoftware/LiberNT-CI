@@ -1226,7 +1226,7 @@ EtwpTraceClassicEvent(
             Record->UserTime = Thread->Tcb.UserTime;
             RtlZeroMemory((PUCHAR)Record + Total, Reserved - Total);
             Buffer->CurrentOffset += Reserved;
-            Logger->EventsLogged++;
+            Logger->EventsLogged++;   /* under BufferLock, like the offset */
         }
     }
 
@@ -1243,11 +1243,12 @@ EtwpTraceHandleFromLoggerId(
     return (TRACEHANDLE)LoggerId;
 }
 
+/* A handle with anything above the logger id set names no session (MAXLOGGERS is past every id) */
 ULONG
 EtwpLoggerIdFromTraceHandle(
     _In_ TRACEHANDLE TraceHandle)
 {
-    return (USHORT)TraceHandle;
+    return (TraceHandle >> 16) ? MAXLOGGERS : (USHORT)TraceHandle;
 }
 
 /* A snapshot of a running session in the form WmiQueryTraceInformation hands out */

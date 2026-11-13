@@ -188,9 +188,13 @@ IoWMIWriteEvent(_Inout_ PVOID WnodeEventItem)
     DPRINT1("IoWMIWriteEvent() called for WnodeEventItem %p (Flags = 0x%08lx), returning success\n",
             WnodeEventItem, Header->Flags);
 
-    /* A traced event goes to the session its handle names, at any level, and the buffer stays the caller's */
+    /* A traced event goes to the session its handle names and the buffer stays the caller's; the session lookup
+     * takes a push lock, so above APC_LEVEL (a DPC) the event is dropped until the loggers take events there */
     if (Header->Flags & WNODE_FLAG_TRACED_GUID)
     {
+        if (KeGetCurrentIrql() > APC_LEVEL)
+            return STATUS_SUCCESS;
+
         return EtwpTraceClassicEvent((HANDLE)(ULONG_PTR)Header->HistoricalContext,
                                      ((PEVENT_TRACE_HEADER)Header)->Size,
                                      Header,
