@@ -464,7 +464,7 @@ BOOL BIDI_Reorder(
             HeapFree(GetProcessHeap(), 0, run_glyphs);
             return FALSE;
         }
-        psva = HeapAlloc(GetProcessHeap(),0,sizeof(SCRIPT_VISATTR) * uCount);
+        psva = HeapAlloc(GetProcessHeap(),0,sizeof(SCRIPT_VISATTR) * cMaxGlyphs);
         if (!psva)
         {
             WARN("Out of memory\n");
@@ -612,6 +612,19 @@ BOOL BIDI_Reorder(
                 {
                     cMaxGlyphs *= 2;
                     run_glyphs = HeapReAlloc(GetProcessHeap(), 0, run_glyphs, sizeof(WORD) * cMaxGlyphs);
+                    if (run_glyphs)
+                    {
+                        SCRIPT_VISATTR *new_psva = HeapReAlloc(GetProcessHeap(), 0, psva, sizeof(SCRIPT_VISATTR) * cMaxGlyphs);
+                        if (new_psva)
+                        {
+                            psva = new_psva;
+                        }
+                        else
+                        {
+                            HeapFree(GetProcessHeap(), 0, run_glyphs);
+                            run_glyphs = NULL;
+                        }
+                    }
                     if (!run_glyphs)
                     {
                         WARN("Out of memory\n");
@@ -646,9 +659,13 @@ BOOL BIDI_Reorder(
                         *lpGlyphs = HeapReAlloc(GetProcessHeap(), 0, *lpGlyphs, sizeof(WORD) * (glyph_i + cOutGlyphs));
                    else
                         *lpGlyphs = HeapAlloc(GetProcessHeap(), 0, sizeof(WORD) * (glyph_i + cOutGlyphs));
+                    /* The blank glyphs Uniscribe gives format characters take no room, as on Windows */
                     for (k = 0; k < cOutGlyphs; k++)
-                        (*lpGlyphs)[glyph_i+k] = run_glyphs[k];
-                    glyph_i += cOutGlyphs;
+                    {
+                        if (psva[k].fZeroWidth)
+                            continue;
+                        (*lpGlyphs)[glyph_i++] = run_glyphs[k];
+                    }
                 }
             }
             HeapFree(GetProcessHeap(), 0, runOrder);
