@@ -988,6 +988,9 @@ typedef struct _KPRCB
      * the OffsetPrcbContext member of KDDEBUGGER_DATA64.
      */
     PCONTEXT Context;
+
+    /* Top of the stack first-level interrupt service routines run on */
+    PVOID IsrStack;
 #endif
 } KPRCB, *PKPRCB;
 

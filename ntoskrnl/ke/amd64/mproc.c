@@ -112,6 +112,10 @@ KeStartAllProcessors(VOID)
                                             &APInfo->DoubleFaultStack[DOUBLE_FAULT_STACK_SIZE],
                                             &APInfo->NmiStack[DOUBLE_FAULT_STACK_SIZE]);
 
+        /* Without an ISR stack the processor keeps taking interrupts on the interrupted stack */
+        APInfo->Pcr.Prcb.IsrStack = MmCreateKernelStack(FALSE, 0);
+        if (!APInfo->Pcr.Prcb.IsrStack) DPRINT1("Processor %lu: no ISR stack\n", ProcessorCount);
+
         /* Build the processor state the trampoline restores in long mode */
         ProcessorState = &APInfo->Pcr.Prcb.ProcessorState;
         RtlZeroMemory(ProcessorState, sizeof(*ProcessorState));

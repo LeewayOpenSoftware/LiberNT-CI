@@ -285,6 +285,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeSystemThreadException.c
     ntos_ke/KeUnhandledException.c
     ntos_ke/KeDevQueue.c
+    ntos_ke/KeIsrStack.c
     ntos_ke/KeCriticalRegionKM.c
     ntos_ke/KeDpc.c
     ntos_ke/KeDpcFlush.c

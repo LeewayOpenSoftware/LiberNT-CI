@@ -953,8 +953,10 @@ PUBLIC KiIpiInterrupt
    /* No error code */
     EnterTrap (TF_SAVE_ALL OR TF_IRQL)
 
-    /* Service the hardware IPI */
+    /* Service the hardware IPI on the ISR stack */
+    SwitchToIsrStack
     call KiIpiInterruptHandler
+    SwitchFromIsrStack
 
     /* Return */
     ExitTrap (TF_SAVE_ALL OR TF_IRQL)
@@ -1012,6 +1014,9 @@ FUNC KiInterruptDispatch
     /* Save the address of the InterruptListEntry in rsi */
     lea rsi, [rbx + KINTERRUPT_InterruptListEntry]
 
+    /* The service routines run on the ISR stack; interrupts are still disabled here */
+    SwitchToIsrStack
+
 .DoDispatchInterrupt:
     /* Raise IRQL to SynchronizeIrql */
     movzx rax, byte ptr [rbx + KINTERRUPT_SynchronizeIrql]
@@ -1052,6 +1057,9 @@ FUNC KiInterruptDispatch
     jmp .DoDispatchInterrupt
 
 .Done:
+    /* Back to the stack the trap frame is on; interrupts are disabled */
+    SwitchFromIsrStack
+
     /* Restore rbx and rsi */
     mov rbx, [rbp + KTRAP_FRAME_Rbx]
     mov rsi, [rbp + KTRAP_FRAME_Rsi]

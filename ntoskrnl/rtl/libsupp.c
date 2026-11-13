@@ -517,6 +517,26 @@ RtlpGetStackLimits(
     OUT PULONG_PTR HighLimit)
 {
     PKTHREAD CurrentThread = KeGetCurrentThread();
+#ifdef _M_AMD64
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    ULONG_PTR StackPointer = (ULONG_PTR)&CurrentThread;
+    ULONG_PTR IsrStack = (ULONG_PTR)Prcb->IsrStack;
+    ULONG_PTR DpcStack = (ULONG_PTR)Prcb->DpcStack;
+
+    /* Interrupt service routines and DPCs run on per-processor stacks */
+    if ((IsrStack - StackPointer) <= ISR_STACK_SIZE)
+    {
+        *LowLimit = IsrStack - ISR_STACK_SIZE;
+        *HighLimit = IsrStack;
+        return;
+    }
+    if ((DpcStack - StackPointer) <= KERNEL_STACK_SIZE)
+    {
+        *LowLimit = DpcStack - KERNEL_STACK_SIZE;
+        *HighLimit = DpcStack;
+        return;
+    }
+#endif
     *LowLimit = (ULONG_PTR)CurrentThread->StackLimit;
 #ifdef _M_IX86
     *HighLimit = (ULONG_PTR)CurrentThread->InitialStack -

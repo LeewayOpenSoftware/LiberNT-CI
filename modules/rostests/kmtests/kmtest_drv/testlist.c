@@ -344,6 +344,8 @@ KMT_TESTFUNC Test_KeThreadedDpc;
 KMT_TESTFUNC Test_KeTime;
 KMT_TESTFUNC Test_KeTimer2KM;
 KMT_TESTFUNC Test_MmSecureKM;
+KMT_TESTFUNC Test_KeIsrStack;
+KMT_TESTFUNC Test_KeIsrStackStress;
 KMT_TESTFUNC Test_KeTimer;
 KMT_TESTFUNC Test_KeWaitMultiple;
 KMT_TESTFUNC Test_KernelType;
@@ -780,6 +782,8 @@ const KMT_TEST TestList[] =
     { "KeSpinLock",                         Test_KeSpinLock },
     { "KeThreadedDpc",                      Test_KeThreadedDpc },
     { "KeTime",                             Test_KeTime },
+    { "KeIsrStack",                         Test_KeIsrStack },
+    { "KeIsrStackStress",                   Test_KeIsrStackStress },
     { "KeTimer",                            Test_KeTimer },
     { "KeTimer2KM",                         Test_KeTimer2KM },
     { "KeWaitMultiple",                     Test_KeWaitMultiple },

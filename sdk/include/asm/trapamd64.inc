@@ -480,6 +480,25 @@ debug_registers_restored:
 ENDM
 
 
+/* rsp = rbp = the trap frame, interrupts disabled: continue on the processor's ISR stack unless
+   already on it (nested interrupt) or it does not exist yet. Clobbers rax, rcx, rdx. */
+MACRO(SwitchToIsrStack)
+    mov rax, gs:[PcIsrStack]
+    mov rcx, rax
+    sub rcx, rsp
+    lea rdx, [rax - 32]
+    cmp rcx, ISR_STACK_SIZE
+    cmovbe rdx, rsp
+    test rax, rax
+    cmovz rdx, rsp
+    mov rsp, rdx
+ENDM
+
+/* Interrupts disabled: back to the trap frame */
+MACRO(SwitchFromIsrStack)
+    mov rsp, rbp
+ENDM
+
 #ifdef _USE_ML
 MACRO(TRAP_ENTRY, Trap, Flags)
     EXTERN Trap&Handler :PROC
@@ -488,9 +507,11 @@ MACRO(TRAP_ENTRY, Trap, Flags)
         /* Common code to create the trap frame */
         EnterTrap Flags
 
-        /* Call the C handler */
+        /* Call the C handler on the ISR stack */
+        SwitchToIsrStack
         mov rcx, rbp
         call Trap&Handler
+        SwitchFromIsrStack
 
         /* Leave */
         ExitTrap Flags
@@ -504,9 +525,11 @@ MACRO(TRAP_ENTRY, Trap, Flags)
         /* Common code to create the trap frame */
         EnterTrap Flags
 
-        /* Call the C handler */
+        /* Call the C handler on the ISR stack */
+        SwitchToIsrStack
         mov rcx, rbp
         call \Trap\()Handler
+        SwitchFromIsrStack
 
         /* Leave */
         ExitTrap Flags

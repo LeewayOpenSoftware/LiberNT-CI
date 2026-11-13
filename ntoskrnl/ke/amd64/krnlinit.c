@@ -329,4 +329,9 @@ KiInitializeKernel(IN PKPROCESS InitProcess,
     DpcStack = MmCreateKernelStack(FALSE, 0);
     if (!DpcStack) KeBugCheckEx(NO_PAGES_AVAILABLE, 1, 0, 0, 0);
     Prcb->DpcStack = DpcStack;
+
+    /* Allocate the ISR stack; until then interrupts stay on the interrupted stack */
+    C_ASSERT(ISR_STACK_SIZE == KERNEL_STACK_SIZE);
+    Prcb->IsrStack = MmCreateKernelStack(FALSE, 0);
+    if (!Prcb->IsrStack) KeBugCheckEx(NO_PAGES_AVAILABLE, 2, 0, 0, 0);
 }
