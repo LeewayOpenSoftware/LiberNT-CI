@@ -650,6 +650,8 @@ again:
 static BOOL SHELL_IsTokenElevated(void)
 {
     TOKEN_ELEVATION Elevation;
+    ULONG_PTR LabelBuffer[(sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE) / sizeof(ULONG_PTR)];
+    PTOKEN_MANDATORY_LABEL Label = (PTOKEN_MANDATORY_LABEL)LabelBuffer;
     HANDLE hToken;
     DWORD cbSize;
     BOOL bElevated = FALSE;
@@ -658,6 +660,12 @@ static BOOL SHELL_IsTokenElevated(void)
     {
         if (GetTokenInformation(hToken, TokenElevation, &Elevation, sizeof(Elevation), &cbSize))
             bElevated = (Elevation.TokenIsElevated != 0);
+        if (bElevated &&
+            GetTokenInformation(hToken, TokenIntegrityLevel, Label, sizeof(LabelBuffer), &cbSize))
+        {
+            bElevated = *GetSidSubAuthority(Label->Label.Sid, *GetSidSubAuthorityCount(Label->Label.Sid) - 1) >=
+                        SECURITY_MANDATORY_HIGH_RID;
+        }
         CloseHandle(hToken);
     }
     return bElevated;
