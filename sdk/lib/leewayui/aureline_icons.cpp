@@ -22,7 +22,7 @@ static const char *RelForId(UINT32 id)
     return NULL;
 }
 
-HICON WINAPI
+HICON
 LeewayRibbonAurelineResolver(UINT32 icon_id, UINT32 size_px, LeewayUIIconVariant variant,
                              COLORREF fg, COLORREF bg, void *resolver_context)
 {
