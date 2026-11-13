@@ -118,6 +118,16 @@ namespace Windows.System.Profile {
     }
 
     [
+        contract(Windows.Foundation.UniversalApiContract, 11.0),
+        exclusiveto(Windows.System.Profile.AnalyticsVersionInfo),
+        uuid(76e915b1-ff36-407c-9f57-160d3e540747)
+    ]
+    interface IAnalyticsVersionInfo2 : IInspectable
+    {
+        [propget] HRESULT ProductName([out, retval] HSTRING *value);
+    }
+
+    [
         contract(Windows.Foundation.UniversalApiContract, 3.0),
         exclusiveto(Windows.System.Profile.SystemIdentificationInfo),
         uuid(0c659e7d-c3c2-4d33-a2df-21bc41916eb3)
@@ -147,7 +157,7 @@ namespace Windows.System.Profile {
     runtimeclass AnalyticsVersionInfo
     {
         [default] interface Windows.System.Profile.IAnalyticsVersionInfo;
-        /* [contract(Windows.Foundation.UniversalApiContract, 11.0)] interface Windows.System.Profile.IAnalyticsVersionInfo2; */
+        [contract(Windows.Foundation.UniversalApiContract, 11.0)] interface Windows.System.Profile.IAnalyticsVersionInfo2;
     }
 
     [

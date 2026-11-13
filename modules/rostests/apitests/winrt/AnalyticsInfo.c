@@ -11,7 +11,6 @@
 #include <windows.system.profile.h>
 #include <initguid.h>
 
-DEFINE_GUID(IID_IAnalyticsVersionInfo2_Win11, 0x76e915b1, 0xff36, 0x407c, 0x9f, 0x57, 0x16, 0x0d, 0x3e, 0x54, 0x07, 0x47);
 
 typedef LONG (WINAPI *RTL_GET_VERSION)(RTL_OSVERSIONINFOW *);
 
@@ -288,7 +287,10 @@ START_TEST(AnalyticsInfo)
     IAnalyticsInfoStatics *Statics;
     IAnalyticsInfoStatics2 *Statics2;
     IAnalyticsVersionInfo *VersionInfo;
-    IInspectable *Instance, *Other;
+    IAnalyticsVersionInfo2 *VersionInfo2;
+    WCHAR ProductName[256];
+    DWORD Size;
+    IInspectable *Instance;
     TrustLevel Trust = FullTrust;
     WCHAR Expected[24];
     HSTRING Value;
@@ -343,11 +345,22 @@ START_TEST(AnalyticsInfo)
         hr = IAnalyticsVersionInfo_get_DeviceFamilyVersion(VersionInfo, &Value);
         CheckString("DeviceFamilyVersion", hr, Value, Expected);
 
-        Other = NULL;
-        hr = IAnalyticsVersionInfo_QueryInterface(VersionInfo, &IID_IAnalyticsVersionInfo2_Win11, (void **)&Other);
-        trace("IAnalyticsVersionInfo2 query returned hr %#lx, Windows 11 returns S_OK\n", hr);
-        if (Other)
-            IInspectable_Release(Other);
+        VersionInfo2 = NULL;
+        hr = IAnalyticsVersionInfo_QueryInterface(VersionInfo, &IID_IAnalyticsVersionInfo2, (void **)&VersionInfo2);
+        ok(hr == S_OK && VersionInfo2 != NULL, "IAnalyticsVersionInfo2 query returned hr %#lx\n", hr);
+        if (SUCCEEDED(hr) && VersionInfo2)
+        {
+            Size = sizeof(ProductName);
+            if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"ProductName",
+                             RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, NULL, ProductName, &Size))
+            {
+                ProductName[0] = UNICODE_NULL;
+            }
+            Value = NULL;
+            hr = IAnalyticsVersionInfo2_get_ProductName(VersionInfo2, &Value);
+            CheckString("ProductName", hr, Value, ProductName);
+            IAnalyticsVersionInfo2_Release(VersionInfo2);
+        }
         IAnalyticsVersionInfo_Release(VersionInfo);
     }
     IAnalyticsInfoStatics_Release(Statics);

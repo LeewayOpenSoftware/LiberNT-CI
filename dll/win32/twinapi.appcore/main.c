@@ -20,16 +20,23 @@ GetIidsNone(ULONG *Count, IID **Iids)
     return S_OK;
 }
 
+static IAnalyticsVersionInfo VersionInfo;
+static IAnalyticsVersionInfo2 VersionInfo2;
+
 static HRESULT WINAPI
 VersionInfo_QueryInterface(IAnalyticsVersionInfo *Iface, REFIID Iid, void **Out)
 {
     if (IsEqualGUID(Iid, &IID_IUnknown) || IsEqualGUID(Iid, &IID_IInspectable) ||
         IsEqualGUID(Iid, &IID_IAgileObject) || IsEqualGUID(Iid, &IID_IAnalyticsVersionInfo))
     {
-        *Out = Iface;
+        *Out = &VersionInfo;
         return S_OK;
     }
-    /* TODO: IAnalyticsVersionInfo2 (ProductName), answered on Windows 11 */
+    if (IsEqualGUID(Iid, &IID_IAnalyticsVersionInfo2))
+    {
+        *Out = &VersionInfo2;
+        return S_OK;
+    }
     FIXME("AnalyticsVersionInfo: no interface %s\n", debugstr_guid(Iid));
     *Out = NULL;
     return E_NOINTERFACE;
@@ -108,7 +115,70 @@ static const IAnalyticsVersionInfoVtbl VersionInfoVtbl =
     VersionInfo_get_DeviceFamilyVersion,
 };
 
+static HRESULT WINAPI
+VersionInfo2_QueryInterface(IAnalyticsVersionInfo2 *Iface, REFIID Iid, void **Out)
+{
+    return VersionInfo_QueryInterface(&VersionInfo, Iid, Out);
+}
+
+static ULONG WINAPI
+VersionInfo2_AddRef(IAnalyticsVersionInfo2 *Iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI
+VersionInfo2_Release(IAnalyticsVersionInfo2 *Iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI
+VersionInfo2_GetIids(IAnalyticsVersionInfo2 *Iface, ULONG *Count, IID **Iids)
+{
+    return GetIidsNone(Count, Iids);
+}
+
+static HRESULT WINAPI
+VersionInfo2_GetRuntimeClassName(IAnalyticsVersionInfo2 *Iface, HSTRING *Name)
+{
+    return VersionInfo_GetRuntimeClassName(&VersionInfo, Name);
+}
+
+static HRESULT WINAPI
+VersionInfo2_GetTrustLevel(IAnalyticsVersionInfo2 *Iface, TrustLevel *Level)
+{
+    *Level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI
+VersionInfo2_get_ProductName(IAnalyticsVersionInfo2 *Iface, HSTRING *Value)
+{
+    WCHAR Name[256];
+    DWORD Size = sizeof(Name);
+    LSTATUS Error;
+
+    Error = RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"ProductName",
+                         RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, NULL, Name, &Size);
+    if (Error)
+        return HRESULT_FROM_WIN32(Error);
+    return WindowsCreateString(Name, wcslen(Name), Value);
+}
+
+static const IAnalyticsVersionInfo2Vtbl VersionInfo2Vtbl =
+{
+    VersionInfo2_QueryInterface,
+    VersionInfo2_AddRef,
+    VersionInfo2_Release,
+    VersionInfo2_GetIids,
+    VersionInfo2_GetRuntimeClassName,
+    VersionInfo2_GetTrustLevel,
+    VersionInfo2_get_ProductName,
+};
+
 static IAnalyticsVersionInfo VersionInfo = { &VersionInfoVtbl };
+static IAnalyticsVersionInfo2 VersionInfo2 = { &VersionInfo2Vtbl };
 
 static IActivationFactory AnalyticsFactory;
 static IAnalyticsInfoStatics AnalyticsStatics;
