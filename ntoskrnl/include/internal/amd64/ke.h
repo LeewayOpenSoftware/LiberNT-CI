@@ -607,6 +607,15 @@ KiSwitchStackAndCallout(
     _In_ PEXPAND_STACK_CALLOUT Callout,
     _In_ PKSTACK_CONTROL Control);
 
+/* The limits of the stack of Thread that holds Address: its current stack or one a callout left */
+BOOLEAN
+NTAPI
+KiFindStackLimits(
+    _In_ PKTHREAD Thread,
+    _In_ ULONG_PTR Address,
+    _Out_ PULONG_PTR LowLimit,
+    _Out_ PULONG_PTR HighLimit);
+
 VOID
 NTAPI
 KiInitializeXStateConfiguration(

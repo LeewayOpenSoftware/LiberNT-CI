@@ -1258,7 +1258,18 @@ RtlpWalkFrameChain(OUT PVOID *Callers,
             /* Check, if we have left our stack */
             if ((Context.Rsp <= StackLow) || (Context.Rsp >= StackHigh))
             {
-                break;
+                ULONG_PTR NextLow, NextHigh;
+
+                /* A kernel callout continues on the stack it was called from */
+                if ((CurrentMode != KernelMode) ||
+                    !RtlpFindStackLimits(Context.Rsp, &NextLow, &NextHigh) ||
+                    (Context.Rsp <= NextLow))
+                {
+                    break;
+                }
+
+                StackLow = NextLow;
+                StackHigh = NextHigh;
             }
 
             /* Continue with new Rip */

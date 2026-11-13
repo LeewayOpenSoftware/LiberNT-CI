@@ -530,6 +530,23 @@ RtlpGetStackLimits(
 #endif
 }
 
+BOOLEAN
+NTAPI
+RtlpFindStackLimits(
+    IN ULONG_PTR Address,
+    OUT PULONG_PTR LowLimit,
+    OUT PULONG_PTR HighLimit)
+{
+#ifdef _M_AMD64
+    return KiFindStackLimits(KeGetCurrentThread(), Address, LowLimit, HighLimit);
+#else
+    UNREFERENCED_PARAMETER(Address);
+    UNREFERENCED_PARAMETER(LowLimit);
+    UNREFERENCED_PARAMETER(HighLimit);
+    return FALSE;
+#endif
+}
+
 /* RTL Atom Tables ************************************************************/
 
 NTSTATUS

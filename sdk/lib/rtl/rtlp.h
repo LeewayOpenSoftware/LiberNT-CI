@@ -85,6 +85,12 @@ NTAPI
 RtlpGetStackLimits(PULONG_PTR LowLimit,
                    PULONG_PTR HighLimit);
 
+BOOLEAN
+NTAPI
+RtlpFindStackLimits(ULONG_PTR Address,
+                    PULONG_PTR LowLimit,
+                    PULONG_PTR HighLimit);
+
 #ifdef _M_IX86
 
 PEXCEPTION_REGISTRATION_RECORD
