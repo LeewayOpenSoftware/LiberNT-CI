@@ -9,6 +9,9 @@
 
 #include "ccnt.h"
 
+#define NDEBUG
+#include <debug.h>
+
 static
 ULONG64
 CcNtSectionSize(_In_ PCC_FILE_SIZES FileSizes)
@@ -164,6 +167,52 @@ CcUninitializeCacheMap(
     return TRUE;
 }
 
+static
+NTSTATUS
+CcNtZeroMove(
+    _In_opt_ PVOID Context,
+    _In_ PVOID CacheAddress,
+    _In_ ULONG64 FileOffset,
+    _In_ ULONG Length)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(FileOffset);
+
+    _SEH2_TRY
+    {
+        RtlZeroMemory(CacheAddress, Length);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+VOID
+CcNtZeroTailOfLastPage(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 NewFileSize,
+    _In_ ULONG64 End)
+{
+    ULONG64 PageStart = NewFileSize & ~((ULONG64)PAGE_SIZE - 1);
+    NTSTATUS Status;
+
+    if (NewFileSize >= End || PageStart == NewFileSize)
+        return;
+    if (!NtMap->Map.Ops.IsResident(NtMap->Map.Context, PageStart, PAGE_SIZE))
+        return;
+
+    Status = CcCopyRange(&NtMap->Map, NewFileSize, End - NewFileSize, TRUE, CcNtZeroMove, NULL, NULL);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("CcSetFileSizes: zeroing [%I64x, %I64x) beyond the new end failed 0x%lx\n", NewFileSize, End, Status);
+}
+
 VOID
 NTAPI
 CcSetFileSizes(
@@ -196,6 +245,7 @@ CcSetFileSizes(
     {
         ULONG64 Boundary = ROUND_TO_PAGES(NewFileSize);
 
+        CcNtZeroTailOfLastPage(NtMap, NewFileSize, Boundary);
         CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
         CcMapDetachViews(&NtMap->Map, ROUND_UP(NewFileSize, CC_VIEW_SIZE), (ULONG64)-1);
         MiSegmentPurge(NtMap->Control->Segment, Boundary, 0, TRUE);
