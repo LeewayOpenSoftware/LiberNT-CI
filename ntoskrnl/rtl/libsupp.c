@@ -523,6 +523,10 @@ RtlpGetStackLimits(
         sizeof(FX_SAVE_AREA);
 #else
     *HighLimit = (ULONG_PTR)CurrentThread->InitialStack;
+
+    /* On an expansion stack InitialStack is still on the stack the thread came from */
+    if ((*HighLimit <= *LowLimit) || (*HighLimit > (ULONG_PTR)CurrentThread->StackBase))
+        *HighLimit = (ULONG_PTR)CurrentThread->StackBase;
 #endif
 }
 
