@@ -202,7 +202,6 @@ ExFatMountVolume(
     VolumeDevice->SectorSize = (USHORT)Vcb->BytesPerSector;
     VolumeDevice->StackSize = StorageDevice->StackSize + 1;
     VolumeDevice->Vpb = Vpb;
-    StorageDevice->Vpb = Vpb;
 
     Vcb->StreamFileObject = IoCreateStreamFileObject(NULL, StorageDevice);
     if (!Vcb->StreamFileObject)
@@ -215,8 +214,7 @@ ExFatMountVolume(
     Vcb->StreamFileObject->PrivateCacheMap = NULL;
     Vcb->StreamFileObject->Vpb = Vpb;
 
-    StorageDevice->Vpb->DeviceObject = VolumeDevice;
-    StorageDevice->Vpb->RealDevice = StorageDevice;
+    Vpb->DeviceObject = VolumeDevice;
     Vpb->SerialNumber = Vcb->SerialNumber;
     Vpb->VolumeLabelLength = 0;
     if (Label[0])
@@ -228,7 +226,7 @@ ExFatMountVolume(
                       UnicodeLabel.Buffer,
                       Vpb->VolumeLabelLength);
     }
-    StorageDevice->Vpb->Flags |= VPB_MOUNTED;
+    Vpb->Flags |= VPB_MOUNTED;
 
     VolumeDevice->Flags &= ~DO_DEVICE_INITIALIZING;
 

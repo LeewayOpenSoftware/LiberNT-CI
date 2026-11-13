@@ -466,12 +466,12 @@ NtfsMountVolume(PDEVICE_OBJECT DeviceObject,
 
     Lookaside = TRUE;
 
-    NewDeviceObject->Vpb = DeviceToMount->Vpb;
+    Vcb->Vpb = Stack->Parameters.MountVolume.Vpb;
+    NewDeviceObject->Vpb = Vcb->Vpb;
 
     Vcb->StorageDevice = DeviceToMount;
-    Vcb->StorageDevice->Vpb->DeviceObject = NewDeviceObject;
-    Vcb->StorageDevice->Vpb->RealDevice = Vcb->StorageDevice;
-    Vcb->StorageDevice->Vpb->Flags |= VPB_MOUNTED;
+    Vcb->Vpb->DeviceObject = NewDeviceObject;
+    Vcb->Vpb->Flags |= VPB_MOUNTED;
     NewDeviceObject->StackSize = Vcb->StorageDevice->StackSize + 1;
     NewDeviceObject->Flags &= ~DO_DEVICE_INITIALIZING;
 
