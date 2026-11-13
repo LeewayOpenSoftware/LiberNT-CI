@@ -432,6 +432,42 @@ StopRpcServer(VOID)
 }
 
 
+/* The token of the RPC client itself, never that of a process the request names */
+static
+BOOL
+SeclClientPrimaryToken(
+    _In_ handle_t hBinding,
+    _Out_ PHANDLE phToken)
+{
+    HANDLE hClientToken = NULL;
+    DWORD dwError;
+    BOOL bResult;
+
+    *phToken = NULL;
+
+    if (RpcImpersonateClient(hBinding) != RPC_S_OK)
+    {
+        SetLastError(ERROR_ACCESS_DENIED);
+        return FALSE;
+    }
+
+    bResult = OpenThreadToken(GetCurrentThread(), TOKEN_DUPLICATE | TOKEN_QUERY, TRUE, &hClientToken);
+    dwError = GetLastError();
+    RpcRevertToSelf();
+
+    if (!bResult)
+    {
+        SetLastError(dwError);
+        return FALSE;
+    }
+
+    bResult = DuplicateTokenEx(hClientToken, MAXIMUM_ALLOWED, NULL, SecurityImpersonation,
+                               TokenPrimary, phToken);
+    CloseHandle(hClientToken);
+    return bResult;
+}
+
+
 VOID
 __stdcall
 SeclCreateProcessWithLogonW(
@@ -444,7 +480,6 @@ SeclCreateProcessWithLogonW(
 
     PROFILEINFOW ProfileInfo;
     HANDLE hToken = NULL;
-    HANDLE hCallerToken = NULL;
     PDESKTOP_GRANT Grant = NULL;
     HANDLE hTargetProcessHandle = NULL;
     PVOID Environment = NULL;
@@ -471,7 +506,7 @@ SeclCreateProcessWithLogonW(
         TRACE("ProcessId: %lu\n", pRequest->dwProcessId);
     }
 
-    hTargetProcessHandle = OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION,
+    hTargetProcessHandle = OpenProcess(PROCESS_DUP_HANDLE,
                                        FALSE,
                                        pRequest->dwProcessId);
     if (hTargetProcessHandle == NULL)
@@ -484,9 +519,7 @@ SeclCreateProcessWithLogonW(
     if (pRequest->dwLogonFlags & LOGON_NETCREDENTIALS_ONLY)
     {
         /* FIXME: the credentials are not attached to the new process for network access */
-        rc = OpenProcessToken(hTargetProcessHandle, TOKEN_DUPLICATE, &hCallerToken) &&
-             DuplicateTokenEx(hCallerToken, MAXIMUM_ALLOWED, NULL, SecurityImpersonation,
-                              TokenPrimary, &hToken);
+        rc = SeclClientPrimaryToken(hBinding, &hToken);
     }
     else
     {
@@ -622,8 +655,6 @@ done:
     if (hToken != NULL)
         CloseHandle(hToken);
 
-    if (hCallerToken != NULL)
-        CloseHandle(hCallerToken);
 
     if (pResponse != NULL)
         pResponse->dwError = dwError;
