@@ -309,37 +309,80 @@ Statics2_GetTrustLevel(IAnalyticsInfoStatics2 *Iface, TrustLevel *Level)
     return S_OK;
 }
 
+static UINT32
+GetAvailableProperties(_Out_writes_(4) struct string_entry *Entries, _Out_writes_(MAX_PATH) WCHAR *Image)
+{
+    UINT32 Count = 0;
+    WCHAR *Name;
+    DWORD Length;
+
+    Length = GetModuleFileNameW(NULL, Image, MAX_PATH);
+    if (Length && Length < MAX_PATH)
+    {
+        Name = wcsrchr(Image, L'\\');
+        Entries[Count].key = L"App";
+        Entries[Count++].value = Name ? Name + 1 : Image;
+    }
+    Entries[Count].key = L"FlightRing";
+    Entries[Count++].value = L"Retail";
+    Entries[Count].key = L"AttrDataVer";
+    Entries[Count++].value = L"508";
+    if (sizeof(void *) == 8)
+    {
+        /* Windows 11 reports DeviceFamily only to 64-bit callers */
+        Entries[Count].key = L"DeviceFamily";
+        Entries[Count++].value = L"Windows.Desktop";
+    }
+    /* TODO: OSVersionFull, which Windows 11 builds from BuildLabEx and reports only to 64-bit callers */
+    return Count;
+}
+
 static HRESULT
 GetSystemProperties(IUnknown *Invoker, IUnknown *Param, PROPVARIANT *Result, BOOL CalledAsync)
 {
     IIterable_HSTRING *Names = (IIterable_HSTRING *)Param;
+    struct string_entry Available[4], Selected[4];
+    UINT32 AvailableCount, SelectedCount = 0, Requested = 0, i;
     IIterator_HSTRING *Iterator;
     IMapView_HSTRING_HSTRING *View;
     boolean HasCurrent = FALSE;
+    WCHAR Image[MAX_PATH];
+    const WCHAR *Text;
     HSTRING Name;
     HRESULT hr;
 
-    if (Names)
-    {
-        if (FAILED(hr = IIterable_HSTRING_First(Names, &Iterator)))
-            return hr;
-        hr = IIterator_HSTRING_get_HasCurrent(Iterator, &HasCurrent);
-        while (SUCCEEDED(hr) && HasCurrent)
-        {
-            if (SUCCEEDED(hr = IIterator_HSTRING_get_Current(Iterator, &Name)))
-            {
-                /* TODO: system property values; unknown names are left out of the map */
-                FIXME("AnalyticsInfo system property %s\n", debugstr_hstring(Name));
-                WindowsDeleteString(Name);
-                hr = IIterator_HSTRING_MoveNext(Iterator, &HasCurrent);
-            }
-        }
-        IIterator_HSTRING_Release(Iterator);
-        if (FAILED(hr))
-            return hr;
-    }
+    AvailableCount = GetAvailableProperties(Available, Image);
 
-    if (FAILED(hr = string_view_create(NULL, 0, &View)))
+    if (FAILED(hr = IIterable_HSTRING_First(Names, &Iterator)))
+        return hr;
+    hr = IIterator_HSTRING_get_HasCurrent(Iterator, &HasCurrent);
+    while (SUCCEEDED(hr) && HasCurrent)
+    {
+        if (FAILED(hr = IIterator_HSTRING_get_Current(Iterator, &Name)))
+            break;
+        Requested++;
+        Text = WindowsGetStringRawBuffer(Name, NULL);
+        for (i = 0; i < AvailableCount; i++)
+        {
+            if (!wcscmp(Text, Available[i].key))
+                break;
+        }
+        if (i < AvailableCount && SelectedCount < ARRAY_SIZE(Selected))
+            Selected[SelectedCount++] = Available[i];
+        else
+            TRACE("system property %s is not available\n", debugstr_hstring(Name));
+        WindowsDeleteString(Name);
+        hr = IIterator_HSTRING_MoveNext(Iterator, &HasCurrent);
+    }
+    IIterator_HSTRING_Release(Iterator);
+    if (FAILED(hr))
+        return hr;
+
+    if (Requested)
+        hr = string_view_create(Selected, SelectedCount, &View);
+    else
+        hr = string_view_create(Available, AvailableCount, &View);
+    if (FAILED(hr))
         return hr;
     Result->vt = VT_UNKNOWN;
     Result->punkVal = (IUnknown *)View;
@@ -351,6 +394,9 @@ Statics2_GetSystemPropertiesAsync(IAnalyticsInfoStatics2 *Iface, IIterable_HSTRI
                                   IAsyncOperation_IMapView_HSTRING_HSTRING **Operation)
 {
     if (!Operation)
+        return E_POINTER;
+    *Operation = NULL;
+    if (!Names)
         return E_POINTER;
     return async_operation_inspectable_create(&IID_IAsyncOperation_IMapView_HSTRING_HSTRING, (IUnknown *)Iface,
                                               (IUnknown *)Names, GetSystemProperties,
