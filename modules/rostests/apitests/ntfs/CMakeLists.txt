@@ -5,6 +5,7 @@ list(APPEND SOURCE
     FullBaseGrowth.c
     FreeClusters.c
     DismountRemount.c
+    AppendAfterWrite.c
     testlist.c)
 
 add_executable(ntfs_apitest ${SOURCE})

@@ -355,6 +355,7 @@ typedef struct _SCB
     SHARE_ACCESS ShareAccess;
     SECTION_OBJECT_POINTERS SectionObjectPointers;
     BOOLEAN SizePending;
+    BOOLEAN ResidentSizeDeferred;
     BOOLEAN Deleted;
     BOOLEAN DeletePending;
     BOOLEAN Unlinked;

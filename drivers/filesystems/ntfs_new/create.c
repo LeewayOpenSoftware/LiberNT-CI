@@ -831,6 +831,7 @@ NtfsOpenNamedDataStream(
         if (NT_SUCCESS(Status))
         {
             FileCB->StreamCB->SizePending = FALSE;
+            FileCB->StreamCB->ResidentSizeDeferred = FALSE;
             InterlockedIncrement(&VolCB->DirGeneration);
             if (*Created)
             {
@@ -3511,7 +3512,10 @@ NtfsCommonCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             if (NT_SUCCESS(Status))
             {
                 if (FileCB->StreamCB)
+                {
                     FileCB->StreamCB->SizePending = FALSE;
+                    FileCB->StreamCB->ResidentSizeDeferred = FALSE;
+                }
                 NtfsRefreshFileSizes(VolCB, FileCB, NULL);
             }
             ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));

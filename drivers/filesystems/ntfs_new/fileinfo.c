@@ -125,7 +125,8 @@
      // Information from the stream represented by this file object.
      DataAttribute = NtfsGetHandleDataAttribute(FileCB);
 
-     if (DataAttribute && FileCB->StreamCB && FileCB->StreamCB->SizePending)
+     if (DataAttribute && FileCB->StreamCB &&
+        (FileCB->StreamCB->SizePending || FileCB->StreamCB->ResidentSizeDeferred))
      {
          Buffer->EndOfFile = NtfsGetCommonFcbHeader(FileCB)->FileSize;
          Buffer->AllocationSize = NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
@@ -456,7 +457,8 @@ GetFileNetworkOpenInformation(_In_ PFileContextBlock FileCB,
     // Information from the stream represented by this file object.
     DataAttribute = NtfsGetHandleDataAttribute(FileCB);
 
-    if (DataAttribute && FileCB->StreamCB && FileCB->StreamCB->SizePending)
+    if (DataAttribute && FileCB->StreamCB &&
+        (FileCB->StreamCB->SizePending || FileCB->StreamCB->ResidentSizeDeferred))
     {
         Buffer->EndOfFile = NtfsGetCommonFcbHeader(FileCB)->FileSize;
         Buffer->AllocationSize = NtfsGetCommonFcbHeader(FileCB)->AllocationSize;
@@ -1082,7 +1084,8 @@ NtfsRefreshFileSizes(_In_ PVolumeContextBlock VolCB,
     if (!FileCB || !FileCB->FileRec)
         return;
     Header = NtfsGetCommonFcbHeader(FileCB);
-    SizePending = FileCB->StreamCB && FileCB->StreamCB->SizePending;
+    SizePending = FileCB->StreamCB &&
+                  (FileCB->StreamCB->SizePending || FileCB->StreamCB->ResidentSizeDeferred);
     FileSize = Header->FileSize.QuadPart;
     ValidDataLength = Header->ValidDataLength.QuadPart;
 
@@ -1226,6 +1229,7 @@ NtfsMarkFileRecordStreamsDeleted(_In_ PVolumeContextBlock VolCB,
         {
             StreamCB->Deleted = TRUE;
             StreamCB->SizePending = FALSE;
+            StreamCB->ResidentSizeDeferred = FALSE;
         }
     }
     ExReleaseFastMutex(&VolCB->StreamListMutex);
