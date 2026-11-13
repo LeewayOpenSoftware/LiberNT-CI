@@ -502,7 +502,8 @@ RenderPill(VPILL *p)
             if (i == PI_PLAY)
             {
                 /* the dominant, accent-filled centre button */
-                br = down ? VGrad(cx, cy - d / 2, d, ARGB(255, 0x3F, 0x86, 0xD8), ARGB(255, 0x14, 0x4C, 0x9A))
+                br = !en ? VGrad(cx, cy - d / 2, d, ARGB(255, 0xD3, 0xD9, 0xE0), ARGB(255, 0xA9, 0xB2, 0xBD))
+                    : down ? VGrad(cx, cy - d / 2, d, ARGB(255, 0x3F, 0x86, 0xD8), ARGB(255, 0x14, 0x4C, 0x9A))
                           : VGrad(cx, cy - d / 2, d, hot ? ARGB(255, 0x9A, 0xD2, 0xFB) : ARGB(255, 0x7C, 0xC0, 0xF7),
                                   hot ? ARGB(255, 0x2D, 0x78, 0xD0) : ARGB(255, 0x1F, 0x5F, 0xB8));
                 pen = MakePen(ARGB(255, 0x17, 0x3F, 0x7A), 1.2f);

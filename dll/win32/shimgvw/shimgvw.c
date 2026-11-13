@@ -930,6 +930,8 @@ ZoomWnd_OnDraw(
         LoadStringW(g_hInstance, IDS_NOPREVIEW, szText, _countof(szText));
 
         SelectObject(hdcMem, GetStockFont(DEFAULT_GUI_FONT));
+        if (pData->m_pPill)
+            SetBkMode(hdcMem, TRANSPARENT);
         OffsetRect(&rcClient, -prcPaint->left, -prcPaint->top);
         DrawTextW(hdcMem, szText, -1, &rcClient, DT_SINGLELINE | DT_CENTER | DT_VCENTER |
                                                  DT_NOPREFIX);
