@@ -204,6 +204,15 @@ Session(const char* Path, bool FailWrite)
     std::printf("metadata write%s: 0x%08x\n", FailWrite ? " with writes failing" : "", (unsigned)Status);
     if (!Check(FailWrite ? !NT_SUCCESS(Status) : NT_SUCCESS(Status), "unexpected metadata write status"))
         goto Out;
+    if (!FailWrite &&
+        (!Check(NT_SUCCESS(NtfsVolumeQueryFlags(Volume, &Flags)) && (Flags & VOL_DIRTY),
+                "a mounted volume that was written is not dirty on the medium") ||
+         !Check(!NtfsVolumeReportsDirty(Volume, Flags), "the mount's own dirty flag is reported as dirty")))
+    {
+        goto Out;
+    }
+    if (FailWrite && !Check(NtfsVolumeReportsDirty(Volume, 0), "a lost metadata write is not reported as dirty"))
+        goto Out;
     if (FailWrite && !ReopenImage(Path, Descriptor, O_RDWR))
         goto Out;
 

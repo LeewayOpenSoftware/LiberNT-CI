@@ -1765,13 +1765,13 @@ NtfsIsVolumeDirty(
     KeEnterCriticalRegion();
     NtfsAcquireMetadata(VolCB);
     Status = NtfsVolumeQueryFlags(VolCB->DiskVolume, &Flags);
+    if (NT_SUCCESS(Status) && NtfsVolumeReportsDirty(VolCB->DiskVolume, Flags))
+        Result |= VOLUME_IS_DIRTY;
     NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
     if (!NT_SUCCESS(Status))
         return Status;
 
-    if (Flags & VOL_DIRTY)
-        Result |= VOLUME_IS_DIRTY;
     if (Flags & VOL_UPGRADE_ON_MNT)
         Result |= VOLUME_UPGRADE_SCHEDULED;
     *(PULONG)Irp->AssociatedIrp.SystemBuffer = Result;
