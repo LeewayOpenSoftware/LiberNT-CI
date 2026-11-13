@@ -1152,6 +1152,8 @@ SepTellLsaSessionEnded(
                                        &Length,
                                        NULL,
                                        &Timeout);
+    if (Status == STATUS_TIMEOUT)
+        Status = STATUS_IO_TIMEOUT;
     if (!NT_SUCCESS(Status))
         DPRINT1("Security: LSA did not take an ended logon session 0x%lx\n", Status);
 
@@ -1268,6 +1270,14 @@ SepRmDereferenceLogonSession(
             RefCount = --CurrentSession->ReferenceCount;
             DPRINT("ReferenceCount: %lu\n", CurrentSession->ReferenceCount);
 
+            /* Once the lock is gone LSA may delete the session, so only a local copy is used after it */
+            DeviceMap = NULL;
+            if (RefCount == 0)
+            {
+                DeviceMap = CurrentSession->pDeviceMap;
+                CurrentSession->pDeviceMap = NULL;
+            }
+
             /* Release the database lock */
             KeReleaseGuardedMutex(SepRmDbLockFor(LogonLuid));
 
@@ -1275,10 +1285,8 @@ SepRmDereferenceLogonSession(
             if (RefCount == 0)
             {
                 /* Get rid of the LUID device map */
-                DeviceMap = CurrentSession->pDeviceMap;
                 if (DeviceMap != NULL)
                 {
-                    CurrentSession->pDeviceMap = NULL;
                     SepCleanupLUIDDeviceMapDirectory(LogonLuid);
                     ObfDereferenceDeviceMap(DeviceMap);
                 }
