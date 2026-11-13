@@ -120,7 +120,7 @@ static inline HRESULT SHIMGVW_HResultFromWin32(DWORD hr)
     return HRESULT_FROM_WIN32(hr);
 }
 
-static inline HRESULT HResultFromGdiplus(Status status)
+static inline HRESULT HResultFromGdiplus(GpStatus status)
 {
     switch ((UINT)status)
     {
