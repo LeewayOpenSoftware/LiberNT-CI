@@ -376,26 +376,14 @@ DrawGlyph(GpGraphics *g, int item, float cx, float cy, float s, BOOL enabled, BO
     }
 }
 
-/* ---- Aureline icons: icons/viewer/aur.viewer.<slug>.ico next to the module, 32 px frame ---- */
+/* ---- Aureline icons: embedded ICON resources (res/aureline), 32 px frame ---- */
 
 static GpBitmap *
-LoadIcon32(VPILL *p, const WCHAR *slug)
+LoadIcon32(VPILL *p, UINT id)
 {
-    WCHAR path[MAX_PATH];
-    HICON hi;
+    HICON hi = (HICON)LoadImageW(p->inst, MAKEINTRESOURCEW(id), IMAGE_ICON, 32, 32, 0);
     GpBitmap *bmp = NULL;
-    WCHAR *slash;
 
-    if (!GetModuleFileNameW(p->inst, path, MAX_PATH))
-        return NULL;
-    slash = wcsrchr(path, L'\\');
-    if (!slash)
-        return NULL;
-    *slash = 0;
-    if (FAILED(StringCchCatW(path, MAX_PATH, L"\\icons\\viewer\\aur.viewer.")) ||
-        FAILED(StringCchCatW(path, MAX_PATH, slug)) || FAILED(StringCchCatW(path, MAX_PATH, L".ico")))
-        return NULL;
-    hi = (HICON)LoadImageW(NULL, path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
     if (!hi)
         return NULL;
     GdipCreateBitmapFromHICON(hi, &bmp);
@@ -406,11 +394,14 @@ LoadIcon32(VPILL *p, const WCHAR *slug)
 static void
 LoadIcons(VPILL *p)
 {
-    static const WCHAR *slugs[PI_COUNT + 1] =
-        { L"zoom", L"fit", L"prev", L"slideshow", L"next", L"rotate-ccw", L"rotate-cw", L"delete", L"actual" };
+    static const UINT ids[PI_COUNT + 1] =
+    {
+        IDI_PILL_ZOOM, IDI_PILL_FIT, IDI_PILL_PREV, IDI_PILL_PLAY, IDI_PILL_NEXT,
+        IDI_PILL_ROT_CCW, IDI_PILL_ROT_CW, IDI_PILL_DELETE, IDI_PILL_ACTUAL
+    };
     int i;
     for (i = 0; i < PI_COUNT + 1; i++)
-        p->icon[i] = LoadIcon32(p, slugs[i]);
+        p->icon[i] = LoadIcon32(p, ids[i]);
 }
 
 static void
@@ -439,10 +430,10 @@ static void
 PillMetrics(VPILL *p)
 {
     int M = p->margin, H = Sc(p, 50), pad = Sc(p, 16);
-    int small = Sc(p, 34), zoomW = Sc(p, 50), nav = Sc(p, 36), play = Sc(p, 48);
+    int btnS = Sc(p, 34), zoomW = Sc(p, 50), nav = Sc(p, 36), play = Sc(p, 48);
     int gap = Sc(p, 2), sep = Sc(p, 16);
     int x, leftW, rightW, extra;
-    int y = M + (H - small) / 2;
+    int y = M + (H - btnS) / 2;
 
     if (p->overlay)
     {
@@ -460,24 +451,24 @@ PillMetrics(VPILL *p)
         return;
     }
 
-    leftW = zoomW + gap + small;
-    rightW = small * 3 + gap * 2;
+    leftW = zoomW + gap + btnS;
+    rightW = btnS * 3 + gap * 2;
     extra = rightW - leftW;
     if (extra < 0)
         extra = 0;
     x = M + pad + extra;
-    SetRect(&p->itemRc[PI_ZOOM], x, y, x + zoomW, y + small); x += zoomW + gap;
-    SetRect(&p->itemRc[PI_FIT], x, y, x + small, y + small); x += small + sep;
+    SetRect(&p->itemRc[PI_ZOOM], x, y, x + zoomW, y + btnS); x += zoomW + gap;
+    SetRect(&p->itemRc[PI_FIT], x, y, x + btnS, y + btnS); x += btnS + sep;
     y = M + (H - nav) / 2;
     SetRect(&p->itemRc[PI_PREV], x, y, x + nav, y + nav); x += nav + gap;
     y = M + (H - play) / 2;
     SetRect(&p->itemRc[PI_PLAY], x, y, x + play, y + play); x += play + gap;
     y = M + (H - nav) / 2;
     SetRect(&p->itemRc[PI_NEXT], x, y, x + nav, y + nav); x += nav + sep;
-    y = M + (H - small) / 2;
-    SetRect(&p->itemRc[PI_CCW], x, y, x + small, y + small); x += small + gap;
-    SetRect(&p->itemRc[PI_CW], x, y, x + small, y + small); x += small + gap;
-    SetRect(&p->itemRc[PI_DEL], x, y, x + small, y + small); x += small;
+    y = M + (H - btnS) / 2;
+    SetRect(&p->itemRc[PI_CCW], x, y, x + btnS, y + btnS); x += btnS + gap;
+    SetRect(&p->itemRc[PI_CW], x, y, x + btnS, y + btnS); x += btnS + gap;
+    SetRect(&p->itemRc[PI_DEL], x, y, x + btnS, y + btnS); x += btnS;
     SetRect(&p->capsule, M, M, x + pad, M + H);
     p->size.cx = p->capsule.right + M;
     p->size.cy = p->capsule.bottom + M;

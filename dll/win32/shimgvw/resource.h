@@ -121,6 +121,17 @@
 #define IDC_MENU_OPENWITH  644
 #define IDC_MENU_PROPS     645
 
+/* Pill glyphs (Aureline), embedded */
+#define IDI_PILL_ZOOM      200
+#define IDI_PILL_FIT       201
+#define IDI_PILL_PREV      202
+#define IDI_PILL_PLAY      203
+#define IDI_PILL_NEXT      204
+#define IDI_PILL_ROT_CCW   205
+#define IDI_PILL_ROT_CW    206
+#define IDI_PILL_DELETE    207
+#define IDI_PILL_ACTUAL    208
+
 #define IDS_MENU_FILE      560
 #define IDS_MENU_PRINT     561
 #define IDS_MENU_EMAIL     562
