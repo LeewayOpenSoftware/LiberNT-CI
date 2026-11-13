@@ -309,8 +309,39 @@ Statics2_GetTrustLevel(IAnalyticsInfoStatics2 *Iface, TrustLevel *Level)
     return S_OK;
 }
 
+static BOOL
+GetOsVersionFull(_Out_writes_(Length) WCHAR *Text, _In_ SIZE_T Length)
+{
+    RTL_OSVERSIONINFOEXW Version;
+    DWORD Revision = 0, Size = sizeof(Revision);
+    WCHAR BuildLab[128];
+    WCHAR *Tail;
+    int Written;
+
+    Size = sizeof(BuildLab);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"BuildLabEx",
+                     RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, NULL, BuildLab, &Size))
+    {
+        return FALSE;
+    }
+    Tail = wcschr(BuildLab, L'.');
+    if (!Tail || !(Tail = wcschr(Tail + 1, L'.')))
+        return FALSE;
+
+    Version.dwOSVersionInfoSize = sizeof(Version);
+    if (RtlGetVersion(&Version))
+        return FALSE;
+    Size = sizeof(Revision);
+    RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR",
+                 RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY, NULL, &Revision, &Size);
+    Written = _snwprintf(Text, Length, L"%lu.%lu.%lu.%lu%ls", Version.dwMajorVersion, Version.dwMinorVersion,
+                         Version.dwBuildNumber, Revision, Tail);
+    return Written > 0 && (SIZE_T)Written < Length;
+}
+
 static UINT32
-GetAvailableProperties(_Out_writes_(4) struct string_entry *Entries, _Out_writes_(MAX_PATH) WCHAR *Image)
+GetAvailableProperties(_Out_writes_(5) struct string_entry *Entries, _Out_writes_(MAX_PATH) WCHAR *Image,
+                       _Out_writes_(OsVersionLength) WCHAR *OsVersion, _In_ SIZE_T OsVersionLength)
 {
     UINT32 Count = 0;
     WCHAR *Name;
@@ -332,8 +363,12 @@ GetAvailableProperties(_Out_writes_(4) struct string_entry *Entries, _Out_writes
         /* Windows 11 reports DeviceFamily only to 64-bit callers */
         Entries[Count].key = L"DeviceFamily";
         Entries[Count++].value = L"Windows.Desktop";
+        if (GetOsVersionFull(OsVersion, OsVersionLength))
+        {
+            Entries[Count].key = L"OSVersionFull";
+            Entries[Count++].value = OsVersion;
+        }
     }
-    /* TODO: OSVersionFull, which Windows 11 builds from BuildLabEx and reports only to 64-bit callers */
     return Count;
 }
 
@@ -341,17 +376,17 @@ static HRESULT
 GetSystemProperties(IUnknown *Invoker, IUnknown *Param, PROPVARIANT *Result, BOOL CalledAsync)
 {
     IIterable_HSTRING *Names = (IIterable_HSTRING *)Param;
-    struct string_entry Available[4], Selected[4];
+    struct string_entry Available[5], Selected[5];
     UINT32 AvailableCount, SelectedCount = 0, Requested = 0, i;
     IIterator_HSTRING *Iterator;
     IMapView_HSTRING_HSTRING *View;
     boolean HasCurrent = FALSE;
-    WCHAR Image[MAX_PATH];
+    WCHAR Image[MAX_PATH], OsVersion[192];
     const WCHAR *Text;
     HSTRING Name;
     HRESULT hr;
 
-    AvailableCount = GetAvailableProperties(Available, Image);
+    AvailableCount = GetAvailableProperties(Available, Image, OsVersion, ARRAY_SIZE(OsVersion));
 
     if (FAILED(hr = IIterable_HSTRING_First(Names, &Iterator)))
         return hr;

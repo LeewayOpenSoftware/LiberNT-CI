@@ -256,6 +256,40 @@ GetSystemProperties(
     return SUCCEEDED(hr) ? Map : NULL;
 }
 
+static const WCHAR *
+ExpectedOsVersionFull(
+    _Out_writes_(Length) WCHAR *Text,
+    _In_ SIZE_T Length)
+{
+    RTL_GET_VERSION GetVersionNt;
+    RTL_OSVERSIONINFOW Version;
+    DWORD Revision = 0, Size;
+    WCHAR BuildLab[128], *Tail;
+
+    if (sizeof(void *) != 8)
+        return NULL;
+    Size = sizeof(BuildLab);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"BuildLabEx",
+                     RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, NULL, BuildLab, &Size))
+    {
+        return NULL;
+    }
+    Tail = wcschr(BuildLab, L'.');
+    if (!Tail || !(Tail = wcschr(Tail + 1, L'.')))
+        return NULL;
+    GetVersionNt = (RTL_GET_VERSION)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "RtlGetVersion");
+    Version.dwOSVersionInfoSize = sizeof(Version);
+    if (!GetVersionNt || GetVersionNt(&Version))
+        return NULL;
+    Size = sizeof(Revision);
+    RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"UBR",
+                 RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY, NULL, &Revision, &Size);
+    _snwprintf(Text, Length, L"%lu.%lu.%lu.%lu%ls", Version.dwMajorVersion, Version.dwMinorVersion,
+               Version.dwBuildNumber, Revision, Tail);
+    Text[Length - 1] = UNICODE_NULL;
+    return Text;
+}
+
 static void
 TestSystemProperties(
     _In_ IAnalyticsInfoStatics2 *Statics2)
@@ -263,7 +297,7 @@ TestSystemProperties(
     const WCHAR *Family = sizeof(void *) == 8 ? L"Windows.Desktop" : NULL;
     IMapView_HSTRING_HSTRING *Map;
     WCHAR Image[MAX_PATH], *App;
-    HSTRING Value = NULL, Name;
+    WCHAR OsVersion[192];
     UINT32 Size;
 
     GetModuleFileNameW(NULL, Image, ARRAYSIZE(Image));
@@ -278,13 +312,7 @@ TestSystemProperties(
         CheckProperty(Map, "named", L"FlightRing", L"Retail");
         CheckProperty(Map, "named", L"LiberNTNoSuchAttribute", NULL);
         CheckProperty(Map, "named", L"AttrDataVer", NULL);
-        Name = CreateHString(L"OSVersionFull");
-        if (SUCCEEDED(IMapView_HSTRING_HSTRING_Lookup(Map, Name, &Value)))
-            trace("OSVersionFull is %ls\n", WindowsGetStringRawBuffer(Value, NULL));
-        else
-            trace("OSVersionFull is absent, Windows 11 reports it to 64-bit callers\n");
-        WindowsDeleteString(Value);
-        WindowsDeleteString(Name);
+        CheckProperty(Map, "named", L"OSVersionFull", ExpectedOsVersionFull(OsVersion, ARRAYSIZE(OsVersion)));
         IMapView_HSTRING_HSTRING_Release(Map);
     }
 
