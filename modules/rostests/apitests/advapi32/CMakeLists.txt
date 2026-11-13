@@ -12,6 +12,7 @@ list(APPEND SOURCE
     HKEY_CLASSES_ROOT.c
     InitiateShutdown.c
     IntegrityLabels.c
+    LogonProcess.c
     LogonSession.c
     LogonUserNetwork.c
     IsTextUnicode.c
