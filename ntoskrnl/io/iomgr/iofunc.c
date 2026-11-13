@@ -4280,7 +4280,8 @@ NtSetInformationFile(IN HANDLE FileHandle,
                     ((PFILE_POSITION_INFORMATION)FileInformation)->
                     CurrentByteOffset;
 
-                /* The position is kept here, so it is checked here: not negative, sector-aligned when unbuffered */
+                /* The position is kept here, so it is checked here: not negative, sector-aligned when unbuffered
+                 * (a filter on top usually reports no sector size: zero means the alignment is not checked) */
                 if ((Offset.QuadPart < 0) ||
                     ((FileObject->Flags & FO_NO_INTERMEDIATE_BUFFERING) &&
                      (DeviceObject->SectorSize != 0) &&
