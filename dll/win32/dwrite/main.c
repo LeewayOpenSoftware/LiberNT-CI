@@ -33,6 +33,7 @@
 #include "dwrite_private.h"
 #include "unixlib.h"
 #include "wine/debug.h"
+#include <lntfontdiag.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(dwrite);
 
@@ -1235,6 +1236,11 @@ static HRESULT WINAPI dwritefactory_CreateTextFormat(IDWriteFactory7 *iface, WCH
     TRACE("%p, %s, %p, %d, %d, %d, %.8e, %s, %p.\n", iface, debugstr_w(family_name), collection, weight, style, stretch,
         size, debugstr_w(locale), format);
 
+    if (LntFontDiagOn())
+        LntFontDiagPrint("LNTFONT %lu DWriteFormat '%.32ws' wt %d style %d stretch %d size/100 %ld locale '%.16ws' coll %p\n",
+                         GetCurrentProcessId(), family_name ? family_name : L"", weight, style, stretch,
+                         (LONG)(size * 100.0f), locale ? locale : L"", collection);
+
     *format = NULL;
 
     if (collection)
@@ -1277,6 +1283,25 @@ static HRESULT WINAPI dwritefactory_GetGdiInterop(IDWriteFactory7 *iface, IDWrit
     return hr;
 }
 
+static HRESULT lnt_create_textlayout(struct textlayout_desc *desc, IDWriteTextLayout **layout)
+{
+    DWRITE_TEXT_METRICS metrics;
+    HRESULT hr = create_textlayout(desc, layout);
+
+    if (LntFontDiagOn() && desc->string != NULL)
+    {
+        ZeroMemory(&metrics, sizeof(metrics));
+        if (SUCCEEDED(hr) && *layout != NULL)
+            IDWriteTextLayout_GetMetrics(*layout, &metrics);
+        LntFontDiagPrint("LNTFONT %lu DWriteLayout '%.*ws' n %u gdi %d max/100 %ld x %ld -> 0x%lx w/100 %ld wtw/100 %ld h/100 %ld lines %u\n",
+                         GetCurrentProcessId(), (int)(desc->length > 64 ? 64 : desc->length), desc->string, desc->length,
+                         desc->is_gdi_compatible, (LONG)(desc->max_width * 100.0f), (LONG)(desc->max_height * 100.0f), hr,
+                         (LONG)(metrics.width * 100.0f), (LONG)(metrics.widthIncludingTrailingWhitespace * 100.0f),
+                         (LONG)(metrics.height * 100.0f), metrics.lineCount);
+    }
+    return hr;
+}
+
 static HRESULT WINAPI dwritefactory_CreateTextLayout(IDWriteFactory7 *iface, WCHAR const* string,
     UINT32 length, IDWriteTextFormat *format, FLOAT max_width, FLOAT max_height, IDWriteTextLayout **layout)
 {
@@ -1294,7 +1319,7 @@ static HRESULT WINAPI dwritefactory_CreateTextLayout(IDWriteFactory7 *iface, WCH
     desc.ppdip = 1.0f;
     desc.transform = NULL;
     desc.use_gdi_natural = FALSE;
-    return create_textlayout(&desc, layout);
+    return lnt_create_textlayout(&desc, layout);
 }
 
 static HRESULT WINAPI dwritefactory_CreateGdiCompatibleTextLayout(IDWriteFactory7 *iface, WCHAR const* string,
@@ -1316,7 +1341,7 @@ static HRESULT WINAPI dwritefactory_CreateGdiCompatibleTextLayout(IDWriteFactory
     desc.ppdip = pixels_per_dip;
     desc.transform = transform;
     desc.use_gdi_natural = use_gdi_natural;
-    return create_textlayout(&desc, layout);
+    return lnt_create_textlayout(&desc, layout);
 }
 
 static HRESULT WINAPI dwritefactory_CreateEllipsisTrimmingSign(IDWriteFactory7 *iface, IDWriteTextFormat *format,

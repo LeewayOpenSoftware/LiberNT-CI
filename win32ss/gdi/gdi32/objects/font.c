@@ -17,6 +17,7 @@
 
 #define NDEBUG
 #include <debug.h>
+#include <lntfontdiag.h>
 
 /*
  *  For TranslateCharsetInfo
@@ -1697,7 +1698,15 @@ CreateFontIndirectExW(const ENUMLOGFONTEXDVW *elfexd)
      */
     if ( elfexd )
     {
-        return NtGdiHfontCreate((PENUMLOGFONTEXDVW) elfexd, 0, 0, 0, NULL );
+        HFONT hFont = NtGdiHfontCreate((PENUMLOGFONTEXDVW) elfexd, 0, 0, 0, NULL );
+        if (LntFontDiagOn())
+        {
+            const LOGFONTW *Font = &elfexd->elfEnumLogfontEx.elfLogFont;
+            LntFontDiagPrint("LNTFONT %lu CreateFont '%.32ws' h %ld w %ld wt %ld q %u -> %p\n",
+                             GetCurrentProcessId(), Font->lfFaceName, Font->lfHeight, Font->lfWidth,
+                             Font->lfWeight, Font->lfQuality, hFont);
+        }
+        return hFont;
     }
     else return NULL;
 }

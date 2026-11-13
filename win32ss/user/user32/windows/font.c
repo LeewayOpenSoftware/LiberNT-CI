@@ -28,6 +28,7 @@
 /* INCLUDES ******************************************************************/
 
 #include <user32.h>
+#include <lntfontdiag.h>
 
 DWORD WINAPI GdiGetCodePage(HDC hdc);
 
@@ -259,7 +260,22 @@ GetTabbedTextExtentW(
 INT WINAPI DrawTextExW( HDC hdc, LPWSTR str, INT i_count,
                         LPRECT rect, UINT flags, LPDRAWTEXTPARAMS dtp )
 {
-   return DrawTextExWorker( hdc, str, i_count, rect, flags, dtp );
+   RECT In = { 0, 0, 0, 0 };
+   LOGFONTW Font;
+   INT Ret;
+
+   if (rect != NULL) In = *rect;
+   Ret = DrawTextExWorker( hdc, str, i_count, rect, flags, dtp );
+   if (LntFontDiagOn() && str != NULL)
+   {
+       LntFontDiagDescribeFont(hdc, &Font);
+       LntFontDiagPrint("LNTFONT %lu DrawText '%.*ws' n %d flags 0x%x in %ld,%ld,%ld,%ld out %ld,%ld,%ld,%ld -> %d | '%.32ws' h %ld wt %ld q %u\n",
+                        GetCurrentProcessId(), LNT_FONTDIAG_TEXT(i_count), str, i_count, flags,
+                        In.left, In.top, In.right, In.bottom,
+                        rect ? rect->left : 0, rect ? rect->top : 0, rect ? rect->right : 0, rect ? rect->bottom : 0,
+                        Ret, Font.lfFaceName, Font.lfHeight, Font.lfWeight, Font.lfQuality);
+   }
+   return Ret;
 }
 
 /***********************************************************************

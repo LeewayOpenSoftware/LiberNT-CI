@@ -10,6 +10,7 @@
 
 #define NDEBUG
 #include <debug.h>
+#include <lntfontdiag.h>
 
 static BOOL
 is_simple_ltr_text(
@@ -310,6 +311,9 @@ GetTextExtentExPointW(
     _Out_writes_to_opt_(cchString, *lpnFit) LPINT lpnDx,
     _Out_ LPSIZE lpSize)
 {
+    LOGFONTW Font;
+    BOOL Ret;
+
     /* Windows doesn't check nMaxExtent validity in unicode version */
     if (nMaxExtent < -1)
     {
@@ -317,13 +321,22 @@ GetTextExtentExPointW(
     }
 
     if (cchString >= 0 && is_simple_ltr_text(lpszString, cchString))
-        return GetTextExtentExPointWPri(hdc, lpszString, cchString, nMaxExtent,
+        Ret = GetTextExtentExPointWPri(hdc, lpszString, cchString, nMaxExtent,
                                        lpnFit, lpnDx, lpSize);
+    else if (LoadLPK(LPK_GTEP))
+        Ret = LpkGetTextExtentExPoint(hdc, lpszString, cchString, nMaxExtent, lpnFit, lpnDx, lpSize, 0, 0);
+    else
+        Ret = NtGdiGetTextExtentExW(hdc, lpszString, cchString, nMaxExtent, (PULONG)lpnFit, (PULONG)lpnDx, lpSize, 0);
 
-    if (LoadLPK(LPK_GTEP))
-        return LpkGetTextExtentExPoint(hdc, lpszString, cchString, nMaxExtent, lpnFit, lpnDx, lpSize, 0, 0);
-
-    return NtGdiGetTextExtentExW(hdc, lpszString, cchString, nMaxExtent, (PULONG)lpnFit, (PULONG)lpnDx, lpSize, 0);
+    if (LntFontDiagOn() && lpszString != NULL)
+    {
+        LntFontDiagDescribeFont(hdc, &Font);
+        LntFontDiagPrint("LNTFONT %lu ExtentEx '%.*ws' n %d max %d -> %d %ld x %ld fit %d | '%.32ws' h %ld wt %ld q %u\n",
+                         GetCurrentProcessId(), LNT_FONTDIAG_TEXT(cchString), lpszString, cchString, nMaxExtent, Ret,
+                         lpSize ? lpSize->cx : -1, lpSize ? lpSize->cy : -1, lpnFit ? *lpnFit : -1,
+                         Font.lfFaceName, Font.lfHeight, Font.lfWeight, Font.lfQuality);
+    }
+    return Ret;
 }
 
 
@@ -428,7 +441,18 @@ GetTextExtentPoint32W(
     _In_ int cchString,
     _Out_ LPSIZE lpSize)
 {
-    return NtGdiGetTextExtent(hdc, lpString, cchString, lpSize, 0);
+    LOGFONTW Font;
+    BOOL Ret;
+
+    Ret = NtGdiGetTextExtent(hdc, lpString, cchString, lpSize, 0);
+    if (LntFontDiagOn() && lpString != NULL)
+    {
+        LntFontDiagDescribeFont(hdc, &Font);
+        LntFontDiagPrint("LNTFONT %lu Extent32 '%.*ws' n %d -> %d %ld x %ld | '%.32ws' h %ld wt %ld q %u\n",
+                         GetCurrentProcessId(), LNT_FONTDIAG_TEXT(cchString), lpString, cchString, Ret,
+                         lpSize ? lpSize->cx : -1, lpSize ? lpSize->cy : -1, Font.lfFaceName, Font.lfHeight, Font.lfWeight, Font.lfQuality);
+    }
+    return Ret;
 }
 
 /*
@@ -562,6 +586,16 @@ ExtTextOutW(
     _In_reads_opt_(cwc) const INT *lpDx)
 {
     PDC_ATTR pdcattr;
+    LOGFONTW Font;
+
+    if (LntFontDiagOn() && lpString != NULL && !(fuOptions & ETO_GLYPH_INDEX))
+    {
+        LntFontDiagDescribeFont(hdc, &Font);
+        LntFontDiagPrint("LNTFONT %lu TextOut '%.*ws' n %u at %d,%d opt 0x%x rect %ld,%ld,%ld,%ld dx %p | '%.32ws' h %ld wt %ld q %u\n",
+                         GetCurrentProcessId(), LNT_FONTDIAG_TEXT((INT)cwc), lpString, cwc, x, y, fuOptions,
+                         lprc ? lprc->left : 0, lprc ? lprc->top : 0, lprc ? lprc->right : 0, lprc ? lprc->bottom : 0,
+                         lpDx, Font.lfFaceName, Font.lfHeight, Font.lfWeight, Font.lfQuality);
+    }
 
     // Need both, should return a parameter error? No they don't!
     if ( !lpDx && fuOptions & ETO_PDY )
