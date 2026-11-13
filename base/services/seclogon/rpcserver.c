@@ -61,22 +61,80 @@ GetLogonSid(
     return NULL;
 }
 
+typedef struct _DESKTOP_GRANT
+{
+    LIST_ENTRY ListEntry;
+    LONG Count;
+    BOOL WinStaAdded;
+    BOOL DesktopAdded;
+    PSID Sid;
+    WCHAR Path[MAX_PATH];
+} DESKTOP_GRANT, *PDESKTOP_GRANT;
+
+typedef struct _DESKTOP_GRANT_WAIT
+{
+    PDESKTOP_GRANT Grant;
+    HANDLE hProcess;
+    HANDLE hWait;
+    LONG Owners;
+} DESKTOP_GRANT_WAIT, *PDESKTOP_GRANT_WAIT;
+
+static LIST_ENTRY DesktopGrantList = { &DesktopGrantList, &DesktopGrantList };
+
+static
+BOOL
+FindAllowAce(
+    _In_opt_ PACL Dacl,
+    _In_ PSID Sid,
+    _Out_opt_ PDWORD Index)
+{
+    ACL_SIZE_INFORMATION Information;
+    PACCESS_ALLOWED_ACE Ace;
+    DWORD i;
+
+    if (Dacl == NULL ||
+        !GetAclInformation(Dacl, &Information, sizeof(Information), AclSizeInformation))
+    {
+        return FALSE;
+    }
+    for (i = 0; i < Information.AceCount; i++)
+    {
+        if (GetAce(Dacl, i, (PVOID *)&Ace) &&
+            Ace->Header.AceType == ACCESS_ALLOWED_ACE_TYPE &&
+            EqualSid((PSID)&Ace->SidStart, Sid))
+        {
+            if (Index)
+                *Index = i;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 static
 DWORD
 AllowSid(
     _In_ HANDLE hObject,
     _In_ PSID Sid,
-    _In_ ACCESS_MASK Access)
+    _In_ ACCESS_MASK Access,
+    _Out_ PBOOL Added)
 {
     PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
     PACL OldDacl = NULL, NewDacl = NULL;
     EXPLICIT_ACCESSW Entry;
     DWORD dwError;
 
+    *Added = FALSE;
     dwError = GetSecurityInfo(hObject, SE_WINDOW_OBJECT, DACL_SECURITY_INFORMATION,
                               NULL, NULL, &OldDacl, NULL, &SecurityDescriptor);
     if (dwError != ERROR_SUCCESS)
         return dwError;
+
+    if (FindAllowAce(OldDacl, Sid, NULL))
+    {
+        LocalFree(SecurityDescriptor);
+        return ERROR_SUCCESS;
+    }
 
     ZeroMemory(&Entry, sizeof(Entry));
     Entry.grfAccessPermissions = Access;
@@ -91,27 +149,48 @@ AllowSid(
     {
         dwError = SetSecurityInfo(hObject, SE_WINDOW_OBJECT, DACL_SECURITY_INFORMATION,
                                   NULL, NULL, NewDacl, NULL);
+        *Added = (dwError == ERROR_SUCCESS);
         LocalFree(NewDacl);
     }
     LocalFree(SecurityDescriptor);
     return dwError;
 }
 
-/* Windows grants the new logon access to the window station and desktop it inherits */
+static
+VOID
+RevokeSid(
+    _In_ HANDLE hObject,
+    _In_ PSID Sid)
+{
+    PSECURITY_DESCRIPTOR SecurityDescriptor = NULL;
+    PACL Dacl = NULL;
+    DWORD Index;
+
+    if (GetSecurityInfo(hObject, SE_WINDOW_OBJECT, DACL_SECURITY_INFORMATION,
+                        NULL, NULL, &Dacl, NULL, &SecurityDescriptor) != ERROR_SUCCESS)
+    {
+        return;
+    }
+    if (FindAllowAce(Dacl, Sid, &Index) && DeleteAce(Dacl, Index))
+        SetSecurityInfo(hObject, SE_WINDOW_OBJECT, DACL_SECURITY_INFORMATION, NULL, NULL, Dacl, NULL);
+    LocalFree(SecurityDescriptor);
+}
+
+/* Caller holds DesktopAccessLock: the desktop is opened through the process window station */
 static
 DWORD
-GrantDesktopAccess(
-    _In_ HANDLE hToken,
-    _In_ PCWSTR DesktopPath)
+OpenDesktopPath(
+    _In_ PCWSTR DesktopPath,
+    _Out_ HWINSTA *phWinSta,
+    _Out_ HDESK *phDesktop)
 {
     WCHAR WinStaName[MAX_PATH];
     PCWSTR DesktopName, Separator;
-    HWINSTA hWinSta = NULL, hOldWinSta;
-    HDESK hDesktop = NULL;
-    PVOID SidBuffer;
-    PSID Sid;
+    HWINSTA hOldWinSta;
     DWORD dwError;
 
+    *phWinSta = NULL;
+    *phDesktop = NULL;
     Separator = wcschr(DesktopPath, L'\\');
     if (Separator)
     {
@@ -127,46 +206,193 @@ GrantDesktopAccess(
         DesktopName = DesktopPath;
     }
 
-    Sid = GetLogonSid(hToken, &SidBuffer);
-    if (Sid == NULL)
+    *phWinSta = OpenWindowStationW(WinStaName, FALSE, READ_CONTROL | WRITE_DAC | WINSTA_ENUMDESKTOPS);
+    if (*phWinSta == NULL)
         return GetLastError();
 
-    EnterCriticalSection(&DesktopAccessLock);
     hOldWinSta = GetProcessWindowStation();
-    hWinSta = OpenWindowStationW(WinStaName, FALSE, READ_CONTROL | WRITE_DAC | WINSTA_ENUMDESKTOPS);
-    if (hWinSta == NULL)
-    {
-        dwError = GetLastError();
-        goto done;
-    }
-    dwError = AllowSid(hWinSta, Sid, WINSTA_ALL_ACCESS | STANDARD_RIGHTS_REQUIRED);
-    if (dwError != ERROR_SUCCESS)
-        goto done;
-
-    if (!SetProcessWindowStation(hWinSta))
-    {
-        dwError = GetLastError();
-        goto done;
-    }
-    hDesktop = OpenDesktopW(DesktopName, 0, FALSE, READ_CONTROL | WRITE_DAC);
-    dwError = hDesktop ? ERROR_SUCCESS : GetLastError();
+    if (!SetProcessWindowStation(*phWinSta))
+        return GetLastError();
+    *phDesktop = OpenDesktopW(DesktopName, 0, FALSE, READ_CONTROL | WRITE_DAC);
+    dwError = *phDesktop ? ERROR_SUCCESS : GetLastError();
     SetProcessWindowStation(hOldWinSta);
+    return dwError;
+}
+
+static
+VOID
+CloseDesktopPath(
+    _In_opt_ HWINSTA hWinSta,
+    _In_opt_ HDESK hDesktop)
+{
     if (hDesktop)
+        CloseDesktop(hDesktop);
+    if (hWinSta)
+        CloseWindowStation(hWinSta);
+}
+
+/* Windows grants the new logon access to the window station and desktop it inherits */
+static
+PDESKTOP_GRANT
+GrantDesktopAccess(
+    _In_ HANDLE hToken,
+    _In_ PCWSTR DesktopPath,
+    _Out_ PDWORD pdwError)
+{
+    PDESKTOP_GRANT Grant = NULL;
+    PLIST_ENTRY Entry;
+    HWINSTA hWinSta;
+    HDESK hDesktop;
+    PVOID SidBuffer;
+    PSID Sid;
+    DWORD dwError, SidLength;
+
+    if (wcslen(DesktopPath) >= MAX_PATH)
+    {
+        *pdwError = ERROR_INVALID_PARAMETER;
+        return NULL;
+    }
+    Sid = GetLogonSid(hToken, &SidBuffer);
+    if (Sid == NULL)
+    {
+        *pdwError = GetLastError();
+        return NULL;
+    }
+
+    EnterCriticalSection(&DesktopAccessLock);
+    for (Entry = DesktopGrantList.Flink; Entry != &DesktopGrantList; Entry = Entry->Flink)
+    {
+        Grant = CONTAINING_RECORD(Entry, DESKTOP_GRANT, ListEntry);
+        if (EqualSid(Grant->Sid, Sid) && !_wcsicmp(Grant->Path, DesktopPath))
+        {
+            Grant->Count++;
+            dwError = ERROR_SUCCESS;
+            goto done;
+        }
+    }
+
+    SidLength = GetLengthSid(Sid);
+    Grant = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Grant) + SidLength);
+    if (Grant == NULL)
+    {
+        dwError = ERROR_NOT_ENOUGH_MEMORY;
+        goto done;
+    }
+    Grant->Count = 1;
+    Grant->Sid = (PSID)(Grant + 1);
+    CopySid(SidLength, Grant->Sid, Sid);
+    wcscpy(Grant->Path, DesktopPath);
+
+    dwError = OpenDesktopPath(DesktopPath, &hWinSta, &hDesktop);
+    if (dwError == ERROR_SUCCESS)
+        dwError = AllowSid(hWinSta, Sid, WINSTA_ALL_ACCESS | STANDARD_RIGHTS_REQUIRED, &Grant->WinStaAdded);
+    if (dwError == ERROR_SUCCESS)
     {
         dwError = AllowSid(hDesktop, Sid,
                            DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU |
                            DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD | DESKTOP_JOURNALPLAYBACK |
                            DESKTOP_ENUMERATE | DESKTOP_WRITEOBJECTS | DESKTOP_SWITCHDESKTOP |
-                           STANDARD_RIGHTS_REQUIRED);
-        CloseDesktop(hDesktop);
+                           STANDARD_RIGHTS_REQUIRED,
+                           &Grant->DesktopAdded);
     }
+    if (dwError != ERROR_SUCCESS)
+    {
+        if (Grant->WinStaAdded)
+            RevokeSid(hWinSta, Sid);
+        HeapFree(GetProcessHeap(), 0, Grant);
+        Grant = NULL;
+    }
+    else
+    {
+        InsertTailList(&DesktopGrantList, &Grant->ListEntry);
+    }
+    CloseDesktopPath(hWinSta, hDesktop);
 
 done:
-    if (hWinSta)
-        CloseWindowStation(hWinSta);
     LeaveCriticalSection(&DesktopAccessLock);
     HeapFree(GetProcessHeap(), 0, SidBuffer);
-    return dwError;
+    *pdwError = dwError;
+    return Grant;
+}
+
+static
+VOID
+ReleaseDesktopGrant(
+    _In_ PDESKTOP_GRANT Grant)
+{
+    HWINSTA hWinSta;
+    HDESK hDesktop;
+
+    EnterCriticalSection(&DesktopAccessLock);
+    if (--Grant->Count != 0)
+    {
+        LeaveCriticalSection(&DesktopAccessLock);
+        return;
+    }
+    RemoveEntryList(&Grant->ListEntry);
+    OpenDesktopPath(Grant->Path, &hWinSta, &hDesktop);
+    if (hDesktop && Grant->DesktopAdded)
+        RevokeSid(hDesktop, Grant->Sid);
+    if (hWinSta && Grant->WinStaAdded)
+        RevokeSid(hWinSta, Grant->Sid);
+    CloseDesktopPath(hWinSta, hDesktop);
+    LeaveCriticalSection(&DesktopAccessLock);
+    HeapFree(GetProcessHeap(), 0, Grant);
+}
+
+static
+VOID
+FinishDesktopGrantWait(
+    _In_ PDESKTOP_GRANT_WAIT Wait)
+{
+    if (InterlockedDecrement(&Wait->Owners) != 0)
+        return;
+    UnregisterWait(Wait->hWait);
+    ReleaseDesktopGrant(Wait->Grant);
+    CloseHandle(Wait->hProcess);
+    HeapFree(GetProcessHeap(), 0, Wait);
+}
+
+static
+VOID
+CALLBACK
+DesktopGrantProcessExited(
+    _In_ PVOID Context,
+    _In_ BOOLEAN TimedOut)
+{
+    UNREFERENCED_PARAMETER(TimedOut);
+    FinishDesktopGrantWait(Context);
+}
+
+/* Keeps Grant until hProcess exits; FALSE leaves Grant with the caller */
+static
+BOOL
+WatchDesktopGrant(
+    _In_ PDESKTOP_GRANT Grant,
+    _In_ HANDLE hProcess)
+{
+    PDESKTOP_GRANT_WAIT Wait;
+
+    Wait = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Wait));
+    if (Wait == NULL)
+        return FALSE;
+    if (!DuplicateHandle(GetCurrentProcess(), hProcess, GetCurrentProcess(), &Wait->hProcess,
+                         SYNCHRONIZE, FALSE, 0))
+    {
+        HeapFree(GetProcessHeap(), 0, Wait);
+        return FALSE;
+    }
+    Wait->Grant = Grant;
+    Wait->Owners = 2;
+    if (!RegisterWaitForSingleObject(&Wait->hWait, Wait->hProcess, DesktopGrantProcessExited,
+                                     Wait, INFINITE, WT_EXECUTEONLYONCE))
+    {
+        CloseHandle(Wait->hProcess);
+        HeapFree(GetProcessHeap(), 0, Wait);
+        return FALSE;
+    }
+    FinishDesktopGrantWait(Wait);
+    return TRUE;
 }
 
 
@@ -219,6 +445,7 @@ SeclCreateProcessWithLogonW(
     PROFILEINFOW ProfileInfo;
     HANDLE hToken = NULL;
     HANDLE hCallerToken = NULL;
+    PDESKTOP_GRANT Grant = NULL;
     HANDLE hTargetProcessHandle = NULL;
     PVOID Environment = NULL;
     DWORD CreationFlags;
@@ -308,9 +535,8 @@ SeclCreateProcessWithLogonW(
     StartupInfo.lpDesktop = pRequest->Desktop ? pRequest->Desktop : L"WinSta0\\Default";
     if (pRequest->dwDesktopInherited)
     {
-        /* TODO: remove the grant when the last process of this logon ends */
-        dwError = GrantDesktopAccess(hToken, StartupInfo.lpDesktop);
-        if (dwError != ERROR_SUCCESS)
+        Grant = GrantDesktopAccess(hToken, StartupInfo.lpDesktop, &dwError);
+        if (Grant == NULL)
             WARN("Granting access to %S failed with Error %lu\n", StartupInfo.lpDesktop, dwError);
         dwError = ERROR_SUCCESS;
     }
@@ -348,6 +574,9 @@ SeclCreateProcessWithLogonW(
         goto done;
     }
 
+    if (Grant && WatchDesktopGrant(Grant, ProcessInfo.hProcess))
+        Grant = NULL;
+
     /* Return process info to the caller */
     if (pResponse != NULL)
     {
@@ -380,6 +609,9 @@ done:
 
     if (ProcessInfo.hProcess)
         CloseHandle(ProcessInfo.hProcess);
+
+    if (Grant != NULL)
+        ReleaseDesktopGrant(Grant);
 
     if (Environment != NULL)
         DestroyEnvironmentBlock(Environment);
