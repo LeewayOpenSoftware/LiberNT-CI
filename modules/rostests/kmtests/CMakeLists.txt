@@ -201,6 +201,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoDeleteDeviceName.c
     ntos_io/IoReadPartitionTable.c
     ntos_io/IoPciMessageEnable.c
+    ntos_io/IoPagingIrpRetire.c
     ntos_io/IoCreateFile.c
     ntos_io/IoCreateFileAccessCheck.c
     ntos_io/IoCreateSystemThread.c
@@ -275,6 +276,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeDeferredReady.c
     ntos_ke/KeIdleSteal.c
     ntos_ke/KeBadInstructionPointer.c
+    ntos_ke/KeKernelStackOverflow.c
     ntos_ke/KeBugCheckCbKM.c
     ntos_ke/KeBugCheckStop.c
     ntos_ke/KeSystemThreadException.c
@@ -313,6 +315,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/MmAllocateContiguousNode.c
     ntos_mm/MmContiguousCacheTypes.c
     ntos_mm/MmDriverMemory.c
+    ntos_mm/MmMemoryNotification.c
     ntos_mm/MmMdl.c
     ntos_mm/MmMdlDispatch.c
     ntos_mm/MmLargePages.c

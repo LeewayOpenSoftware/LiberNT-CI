@@ -116,6 +116,7 @@ list(APPEND SOURCE
     SetScrollInfo.c
     SetScrollRange.c
     SetWindowPlacement.c
+    SetWindowPosZOrder.c
     WindowDisplayAffinity.c
     WindowRegionFrame.c
     ShellWindowQueries.c
@@ -135,6 +136,7 @@ list(APPEND SOURCE
     WindowBand.c
     WindowStationErrors.c
     WindowStationSecurity.c
+    WindowPosInsertAfter.c
     WndProc.c
     wsprintf.c)
 
