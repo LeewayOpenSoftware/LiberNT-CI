@@ -634,6 +634,8 @@ OFFSET(PcDeferredReadyListHead, KIPCR, Prcb.DeferredReadyListHead),
 OFFSET(PcSystemCalls, KIPCR, Prcb.KeSystemCalls),
 OFFSET(PcDpcRoutineActive, KIPCR, Prcb.DpcRoutineActive),
 OFFSET(PcInterruptCount, KIPCR, Prcb.InterruptCount),
+OFFSET(PcIsrStack, KIPCR, Prcb.IsrStack),
+CONSTANT(ISR_STACK_SIZE),
 OFFSET(PcDebuggerSavedIRQL, KIPCR, Prcb.DebuggerSavedIRQL),
 OFFSET(PcTickOffset, KIPCR, Prcb.TickOffset), // not Win 10
 OFFSET(PcMasterOffset, KIPCR, Prcb.MasterOffset),
