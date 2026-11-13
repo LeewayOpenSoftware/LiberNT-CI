@@ -2,7 +2,8 @@
  * PROJECT:     LiberNT kernel-mode tests
  * LICENSE:     GPL-2.0-or-later (https://spdx.org/licenses/GPL-2.0-or-later)
  * PURPOSE:     Test driver for Cc purge coherency: CcPurgeCacheSection on
- *              partial pages (T-A4) and CcCoherencyFlushAndPurgeCache (T-A3)
+ *              partial pages (T-A4), CcCoherencyFlushAndPurgeCache (T-A3) and
+ *              a shrink while the view holding the new end is pinned
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
  * A small file system whose paging I/O reads and writes a non-paged backing
@@ -386,6 +387,67 @@ Test_CoherencyFlushAndPurge(
     ResetCache(FileObject);
 }
 
+/* Shrink while the view holding the new end of file is pinned --------------- */
+
+static
+VOID
+SetTestFileSize(
+    _In_ PFILE_OBJECT FileObject,
+    _In_ LONGLONG FileSize,
+    _In_ LONGLONG ValidDataLength)
+{
+    PTEST_FCB Fcb = FileObject->FsContext;
+
+    Fcb->Header.FileSize.QuadPart = FileSize;
+    Fcb->Header.ValidDataLength.QuadPart = ValidDataLength;
+    CcSetFileSizes(FileObject, (PCC_FILE_SIZES)&Fcb->Header.AllocationSize);
+}
+
+static
+VOID
+Test_ShrinkPinnedEofView(
+    _In_ PFILE_OBJECT FileObject)
+{
+    const ULONG Cut = PAGE_SIZE + 0x200;
+    LARGE_INTEGER Offset;
+    IO_STATUS_BLOCK IoStatus;
+    PVOID Bcb, Buffer;
+    BOOLEAN Pinned = FALSE;
+
+    WarmCache(FileObject, 0x11);
+    ok(DirtyRange(FileObject, 0, TEST_SIZE, 0x33), "CcCopyWrite failed\n");
+
+    Offset.QuadPart = 0;
+    _SEH2_TRY
+    {
+        Pinned = CcPinRead(FileObject, &Offset, PAGE_SIZE, PIN_WAIT, &Bcb, &Buffer);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Pinned = FALSE;
+    }
+    _SEH2_END;
+    ok(Pinned, "CcPinRead failed\n");
+
+    /* The file system frees the clusters beyond the cut, and zeroes them on the extend */
+    SetTestFileSize(FileObject, Cut, Cut);
+    if (Pinned)
+        CcUnpinData(Bcb);
+    RtlZeroMemory(Disk + Cut, TEST_SIZE - Cut);
+    SetTestFileSize(FileObject, TEST_SIZE, Cut);
+
+    ok(CachedRangeIs(FileObject, 0, Cut, 0x33), "pinned shrink: bytes before the cut were lost\n");
+    ok(CachedRangeIs(FileObject, Cut, TEST_SIZE - Cut, 0),
+       "pinned shrink: stale bytes beyond the cut reappeared after the extend\n");
+
+    CcFlushCache(FileObject->SectionObjectPointer, NULL, 0, &IoStatus);
+    ok(DiskRangeIs(0, Cut, 0x33), "pinned shrink: bytes before the cut did not reach the disk\n");
+    ok(DiskRangeIs(Cut, TEST_SIZE - Cut, 0), "pinned shrink: stale bytes beyond the cut reached the disk\n");
+
+    SetTestFileSize(FileObject, TEST_SIZE, TEST_SIZE);
+    ResetCache(FileObject);
+}
+
 /* IRP handler --------------------------------------------------------------- */
 
 static
@@ -444,6 +506,7 @@ TestIrpHandler(
             /* The user-mode half writes once: run the tests from here */
             Test_PurgePartialPage(IoStack->FileObject);
             Test_CoherencyFlushAndPurge(IoStack->FileObject);
+            Test_ShrinkPinnedEofView(IoStack->FileObject);
             Irp->IoStatus.Information = IoStack->Parameters.Write.Length;
             Status = STATUS_SUCCESS;
             goto Complete;
