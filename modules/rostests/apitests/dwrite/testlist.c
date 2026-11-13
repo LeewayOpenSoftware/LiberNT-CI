@@ -6,6 +6,7 @@ extern void func_FontFallbackLocale(void);
 extern void func_FontFallbackSource(void);
 extern void func_GlyphJustification(void);
 extern void func_HasVariations(void);
+extern void func_SegoeUiMetrics(void);
 extern void func_SystemFontFallback(void);
 extern void func_TrailingWhitespace(void);
 
@@ -16,6 +17,7 @@ const struct test winetest_testlist[] =
     { "FontFallbackSource", func_FontFallbackSource },
     { "GlyphJustification", func_GlyphJustification },
     { "HasVariations", func_HasVariations },
+    { "SegoeUiMetrics", func_SegoeUiMetrics },
     { "SystemFontFallback", func_SystemFontFallback },
     { "TrailingWhitespace", func_TrailingWhitespace },
 
