@@ -53,6 +53,48 @@ MmDeleteKernelStack(
                         (ULONG)((GuiStack ? MmLargeStackSize : KERNEL_STACK_SIZE) >> PAGE_SHIFT));
 }
 
+/* Stack for KeExpandKernelStackAndCalloutEx: a large-stack reservation with CommitSize
+ * (rounded up to pages) committed up front, so the callout never has to grow it from a
+ * fault. Wait == FALSE (DISPATCH_LEVEL callers) makes one attempt. */
+PVOID
+NTAPI
+MmCreateExpansionStack(
+    _In_ SIZE_T CommitSize,
+    _In_ BOOLEAN Wait,
+    _Out_ PULONG_PTR StackLimit)
+{
+    ULONG Reserve = (ULONG)(MmLargeStackSize >> PAGE_SHIFT);
+    ULONG Commit = (ULONG)BYTES_TO_PAGES(CommitSize);
+    ULONG Attempts = 0;
+    NTSTATUS Status;
+    ULONG64 Top;
+
+    *StackLimit = 0;
+    if (Commit == 0)
+        Commit = 1;
+    if (Commit > Reserve)
+        return NULL;
+
+    do
+    {
+        Status = MiCreateKernelStack(&MiSystem, Reserve, Commit, &Top);
+    } while (Wait && NT_SUCCESS(MiWaitForMemory(Status, &Attempts)) && Status == STATUS_NO_MEMORY);
+
+    if (!NT_SUCCESS(Status))
+        return NULL;
+
+    *StackLimit = (ULONG_PTR)(Top - (ULONG64)Commit * PAGE_SIZE);
+    return (PVOID)(ULONG_PTR)Top;
+}
+
+VOID
+NTAPI
+MmDeleteExpansionStack(
+    _In_ PVOID StackTop)
+{
+    MiDeleteKernelStack(&MiSystem, (ULONG64)(ULONG_PTR)StackTop, (ULONG)(MmLargeStackSize >> PAGE_SHIFT));
+}
+
 NTSTATUS
 NTAPI
 MmGrowKernelStackEx(

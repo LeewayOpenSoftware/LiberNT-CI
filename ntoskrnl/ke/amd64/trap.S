@@ -553,6 +553,11 @@ FUNC KiPageFault
     jnz SkipStackCheck
     test rcx, rcx
     jz SkipStackCheck
+    /* The previous frame is on another stack while a callout runs on an expansion stack */
+    cmp rcx, [rax + KTHREAD_StackLimit]
+    jb SkipStackCheck
+    cmp rcx, [rax + KTHREAD_StackBase]
+    jae SkipStackCheck
     cmp rcx, rbp
     jbe KernelStackOverflow
     sub rcx, rbp
@@ -1713,6 +1718,70 @@ FUNC KeSwitchKernelStack
     ret
 
 ENDFUNC
+
+
+/*!
+ * VOID
+ * KiSwitchStackAndCallout(
+ *     PVOID Parameter,                 // rcx
+ *     PEXPAND_STACK_CALLOUT Callout,   // rdx
+ *     PKSTACK_CONTROL Control);        // r8: at the top of the new stack, 16-byte aligned.
+ *                                      //     StackBase/ActualLimit describe the new stack,
+ *                                      //     Previous.StackBase/StackLimit the current one.
+ *
+ * Runs Callout(Parameter) on the new stack for KeExpandKernelStackAndCalloutEx. While the
+ * callout runs the current thread's StackBase/StackLimit describe the new stack (that is
+ * what MmGrowKernelStack reads; RtlpGetStackLimits falls back to StackBase). Nothing else of
+ * the thread moves: TrapFrame, InitialStack and the state save area stay on the original
+ * stack, which stays mapped. rbp is the frame pointer of this frame, so the unwinder and
+ * a stack walk cross the switch: unwinding it restores rsp from rbp and pops the saved
+ * registers from the original stack.
+ */
+PUBLIC KiSwitchStackAndCallout
+.PROC KiSwitchStackAndCallout
+    push rbp
+    .pushreg rbp
+    push rbx
+    .pushreg rbx
+    push rsi
+    .pushreg rsi
+    mov rbp, rsp
+    .setframe rbp, 0
+    .endprolog
+
+    /* rbx = the control block, rsi = the current thread */
+    mov rbx, r8
+    mov rsi, gs:[PcCurrentThread]
+
+    /* Remember where we come from */
+    mov [rbx + KSTACK_CONTROL_PreviousKernelStack], rsp
+
+    /* Describe the new stack in the thread */
+    mov rax, [rbx + KSTACK_CONTROL_StackBase]
+    mov [rsi + KTHREAD_StackBase], rax
+    mov rax, [rbx + KSTACK_CONTROL_ActualLimit]
+    mov [rsi + KTHREAD_StackLimit], rax
+
+    /* Switch: the control block is the top of the new stack; home space below it */
+    mov rsp, rbx
+    sub rsp, 32
+
+    /* Callout(Parameter) */
+    mov rax, rdx
+    call rax
+
+    /* Back to the original stack and restore the thread's description of it */
+    mov rsp, rbp
+    mov rax, [rbx + KSTACK_CONTROL_PreviousStackBase]
+    mov [rsi + KTHREAD_StackBase], rax
+    mov rax, [rbx + KSTACK_CONTROL_PreviousStackLimit]
+    mov [rsi + KTHREAD_StackLimit], rax
+
+    pop rsi
+    pop rbx
+    pop rbp
+    ret
+.ENDP
 
 
 

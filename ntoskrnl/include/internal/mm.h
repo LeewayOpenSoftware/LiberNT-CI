@@ -1012,6 +1012,18 @@ NTAPI
 MmDeleteKernelStack(PVOID Stack,
                     BOOLEAN GuiStack);
 
+PVOID
+NTAPI
+MmCreateExpansionStack(
+    _In_ SIZE_T CommitSize,
+    _In_ BOOLEAN Wait,
+    _Out_ PULONG_PTR StackLimit);
+
+VOID
+NTAPI
+MmDeleteExpansionStack(
+    _In_ PVOID StackTop);
+
 /* balance.c / pagefile.c******************************************************/
 
 FORCEINLINE VOID UpdateTotalCommittedPages(LONG_PTR Delta)
