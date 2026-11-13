@@ -312,11 +312,7 @@ static void BidiLines(int baselevel, LPWSTR pszOutLine, LPCWSTR pszLine, const W
     HeapFree(GetProcessHeap(), 0, run);
 }
 
-/*************************************************************
- *    LPK_IsBlankFormatGlyph
- *
- * TRUE for the blank zero-width glyph Uniscribe shapes a format character to
- */
+/* TRUE for the blank zero-width glyph Uniscribe shapes a format character to */
 static BOOL LPK_IsBlankFormatGlyph(LPCWSTR lpRun, INT cChars, const WORD *pwLogClust,
                                    INT iGlyph, WORD wGlyph, const SCRIPT_VISATTR *psva, WORD wgBlank)
 {
