@@ -966,6 +966,17 @@ IopInitializeDriverModuleImpl(
     ASSERT(ModuleObject->SizeOfImage == ROUND_TO_PAGES(NtHeaders->OptionalHeader.SizeOfImage));
     ASSERT(ModuleObject->EntryPoint == RVA(ModuleObject->DllBase, NtHeaders->OptionalHeader.AddressOfEntryPoint));
 
+    /* A driver image linked without an entry point would have the kernel
+     * execute its own PE header; refuse it here as an invalid driver image. */
+    if (NtHeaders->OptionalHeader.AddressOfEntryPoint == 0)
+    {
+        DPRINT1("Driver '%wZ' has no entry point; refusing to start it\n", &DriverName);
+        RtlFreeUnicodeString(&ServiceName);
+        RtlFreeUnicodeString(&DriverName);
+        MmUnloadSystemImage(ModuleObject);
+        return STATUS_INVALID_IMAGE_FORMAT;
+    }
+
     /* Obtain the registry path for the DriverInit routine */
     ULONG infoLength;
     Status = ZwQueryKey(ServiceHandle, KeyNameInformation, NULL, 0, &infoLength);
