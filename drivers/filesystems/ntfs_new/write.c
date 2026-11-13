@@ -27,6 +27,7 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     LONGLONG Target;
     NTSTATUS Status;
     BOOLEAN SizePersisted = FALSE;
+    BOOLEAN ResidentDeferred = FALSE;
 
     if (EndOffset > Allocation)
     {
@@ -43,8 +44,24 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
         }
         DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType,
                                                    FileCB->RequestedStream);
-        if (EndOffset <= PAGE_SIZE &&
-            (Allocation == 0 || (DataAttribute && !DataAttribute->IsNonResident)))
+        if (EndOffset <= PAGE_SIZE && DataAttribute && !DataAttribute->IsNonResident)
+        {
+            /*
+             * A resident value holds its bytes in the record itself. Growing
+             * it here would write the record with the new length and zeros,
+             * and the bytes would only follow with the lazy writer's paging
+             * write: a power cut in between left the file at its new size,
+             * all zero (Lab04 DOR OFF1, \dor\f4.dat: 300 bytes, all zero).
+             * Grow the cache sizes only. The paging write is clamped to the
+             * in-memory file size and writes the value's length and bytes in
+             * one record write (promoting it if it no longer fits), so the
+             * record never holds the new size without the data; a cut before
+             * it leaves the old, shorter file.
+             */
+            Status = STATUS_SUCCESS;
+            ResidentDeferred = TRUE;
+        }
+        else if (EndOffset <= PAGE_SIZE && Allocation == 0)
         {
             Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType,
                                                    FileCB->RequestedStream, EndOffset);
@@ -55,7 +72,11 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
             Status = NtfsFileRecordSetFileAllocationSize(FileCB->FileRec, FileCB->RequestedType,
                                                          FileCB->RequestedStream, Target);
         }
-        if (NT_SUCCESS(Status))
+        if (ResidentDeferred)
+        {
+            Allocation = EndOffset;
+        }
+        else if (NT_SUCCESS(Status))
         {
             DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
             if (DataAttribute)
@@ -74,10 +95,13 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     }
 
     ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    NtfsDropPagingExtent(FileCB->StreamCB);
     Header->AllocationSize.QuadPart = Allocation;
     if (Header->FileSize.QuadPart < EndOffset)
         Header->FileSize.QuadPart = EndOffset;
-    FileCB->StreamCB->SizePending = !SizePersisted;
+    /* A deferred resident size is written by the paging write itself;
+     * NtfsPersistPendingSize only handles non-resident streams. */
+    FileCB->StreamCB->SizePending = !SizePersisted && !ResidentDeferred;
     ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
 
     if (FileObj->PrivateCacheMap != NULL)
@@ -104,6 +128,7 @@ NtfsPersistPendingSize(_In_ PVolumeContextBlock VolCB,
     FileSize = Header->FileSize.QuadPart;
 
     ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    NtfsDropPagingExtent(FileCB->StreamCB);
     NtfsAcquireMetadata(VolCB);
     Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
     if (!NT_SUCCESS(Status))

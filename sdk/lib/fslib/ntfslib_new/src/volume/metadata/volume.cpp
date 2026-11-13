@@ -228,6 +228,9 @@ Volume::MarkDirtyBeforeWrite()
 {
     NTSTATUS Status;
 
+    /* A noted corruption keeps the flag this write is about to set. */
+    if (DirtyTracking && CorruptionNoted)
+        DirtyRetained = TRUE;
     if (!DirtyTracking || DirtyMarked || IsReadOnly)
         return STATUS_SUCCESS;
 
@@ -249,6 +252,15 @@ Volume::MarkClean()
 {
     NTSTATUS Status;
 
+    /*
+     * A read met corrupt structure during this session: leave the volume
+     * dirty, even if nothing was written since mount (Windows marks the
+     * volume dirty when it raises a corruption status), so the next boot
+     * runs the check.
+     */
+    if (DirtyTracking && CorruptionNoted && !IsReadOnly)
+        return CommitCorruptionDirty();
+
     if (!DirtyTracking || !DirtyMarked || DirtyRetained || IsReadOnly)
         return STATUS_SUCCESS;
 
@@ -261,6 +273,62 @@ Volume::MarkClean()
     if (NT_SUCCESS(Status))
         DirtyMarked = FALSE;
     return Status;
+}
+
+/*
+ * Make a noted corruption durable now: the volume flag says dirty on the
+ * medium and is retained, so a crash before the next write or the dismount
+ * still leaves a volume the next boot checks. Caller holds the metadata lock.
+ */
+NTSTATUS
+Volume::CommitCorruptionDirty()
+{
+    NTSTATUS Status;
+
+    if (!DirtyTracking || !CorruptionNoted || IsReadOnly)
+        return STATUS_SUCCESS;
+
+    /* Under the lock DirtyMarked means the dirty flag reached the medium:
+     * MarkDirtyBeforeWrite clears it again when its write or flush fails. */
+    if (DirtyMarked)
+    {
+        DirtyRetained = TRUE;
+        return STATUS_SUCCESS;
+    }
+
+    DirtyMarked = TRUE;
+    Status = SetVolumeFlags(VOL_DIRTY, 0);
+    if (NT_SUCCESS(Status))
+        Status = FlushVolume();
+    if (!NT_SUCCESS(Status))
+    {
+        DirtyMarked = FALSE;
+        return Status;
+    }
+    DirtyRetained = TRUE;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+Volume::CommitCorruptionDirtyOnce()
+{
+    /* Cheap when nothing is pending: this runs on every outermost release of
+     * the metadata lock. One attempt per mount; on failure MarkClean tries
+     * again at dismount. */
+    if (!CorruptionNoted || CorruptionCommitTried)
+        return STATUS_SUCCESS;
+    CorruptionCommitTried = TRUE;
+    return CommitCorruptionDirty();
+}
+
+void
+Volume::NoteCorruption()
+{
+    if (!CorruptionNoted)
+    {
+        DPRINT1("NTFS: corrupt on-disk structure found; the volume stays dirty\n");
+        CorruptionNoted = TRUE;
+    }
 }
 
 void

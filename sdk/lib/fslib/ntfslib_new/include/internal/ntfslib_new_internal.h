@@ -279,10 +279,74 @@ NtfsDirectoryStoreInfo(
     _Inout_ PULONG BufferLength,
     _Out_ PULONG EntrySize);
 
+/*
+ * Shared data built on first use (the $UpCase table, the run list and
+ * attribute list of $MFT's own record) is published once: the builder fills
+ * a private copy and installs it with a compare-exchange, and readers load
+ * the pointer with acquire order, so no reader sees a pointer before the data
+ * behind it. A builder that loses the race frees its copy. A published
+ * pointer is only replaced or freed under the exclusive metadata lock.
+ */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+
+static inline PVOID
+NtfsLoadPublished(_In_ PVOID const volatile* Slot)
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    PVOID Value = *Slot;
+    _ReadWriteBarrier();
+    return Value;
+#else
+    return __atomic_load_n(const_cast<PVOID*>(Slot), __ATOMIC_ACQUIRE);
+#endif
+}
+
+/* Installs Value if Slot is still NULL. Returns the pointer Slot holds now:
+ * Value if it was installed, the earlier one if another builder won. */
+static inline PVOID
+NtfsPublishOnce(_Inout_ PVOID volatile* Slot, _In_ PVOID Value)
+{
+    PVOID Previous;
+
+#if defined(_MSC_VER) && !defined(__clang__)
+    Previous = _InterlockedCompareExchangePointer(Slot, Value, NULL);
+#else
+    Previous = NULL;
+    __atomic_compare_exchange_n(const_cast<PVOID*>(Slot), &Previous, Value, false,
+                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+#endif
+    return Previous ? Previous : Value;
+}
+
+/* Installs Value if Slot still holds Expected. Returns what Slot held, so
+ * the caller succeeded if and only if that is Expected. Used to prepend to
+ * lists that readers walk without a lock and only writers under the
+ * exclusive metadata lock ever shorten. */
+static inline PVOID
+NtfsCompareExchangePublished(_Inout_ PVOID volatile* Slot,
+                             _In_ PVOID Value,
+                             _In_opt_ PVOID Expected)
+{
+#if defined(_MSC_VER) && !defined(__clang__)
+    return _InterlockedCompareExchangePointer(Slot, Value, Expected);
+#else
+    PVOID Previous = Expected;
+
+    __atomic_compare_exchange_n(const_cast<PVOID*>(Slot), &Previous, Value, false,
+                                __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
+    return Previous;
+#endif
+}
+
+/* $MFTMirr holds the first cluster of $MFT, and at least 4 records. Fully
+ * parenthesized: "!IsFileRecordInMFTMirr(n)" and "x && IsFileRecordInMFTMirr(n)"
+ * must apply to the whole test. */
 #define IsFileRecordInMFTMirr(FileRecordNumber) \
-((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) > (FileRecordSize << 2)) ? \
-FileRecordNumber < ((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) / FileRecordSize) \
-: FileRecordNumber < 4
+((((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) > (FileRecordSize << 2)) ? \
+  ((FileRecordNumber) < ((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) / FileRecordSize)) : \
+  ((FileRecordNumber) < 4)))
 
 #define LONGLONG_SIGN_EXTEND(Number, Bytes) \
 (((Number) << ((sizeof(LONGLONG) - (Bytes)) * 8)) >> ((sizeof(LONGLONG) - (Bytes)) * 8))
@@ -297,7 +361,9 @@ FileRecordNumber < ((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector)
 
 #define MFTDiskOffset (MFTLCN * BytesPerCluster(DiskVolume))
 #define MFTMirrDiskOffset (MFTMirrLCN * BytesPerCluster(DiskVolume))
-#define FileRecordOffset(FileRecordNumber) (FileRecordNumber * FileRecordSize)
+/* In 64 bits: both operands are ULONGs, and with 1 KB records their 32-bit
+ * product wraps from record 4194304 (4 GB into $MFT) on. */
+#define FileRecordOffset(FileRecordNumber) ((ULONGLONG)(FileRecordNumber) * FileRecordSize)
 
 #define GetOffset(LCN) (LCN * BytesPerCluster(DiskVolume))
 #define GetRunSize(Run) (Run->Length * BytesPerCluster(DiskVolume))
@@ -605,6 +671,12 @@ public:
     BOOLEAN DirtyRetained = FALSE;
     /* Set after a clean shutdown cleared the flag; makes a later re-dirty logged. */
     BOOLEAN ShutdownCleaned = FALSE;
+    /* Set (never cleared) when a read found on-disk structure that cannot be
+     * valid: the volume must stay dirty so the next boot checks it. Readers
+     * may set it without the metadata lock, so it is only ever stored TRUE. */
+    volatile BOOLEAN CorruptionNoted = FALSE;
+    /* Set once CommitCorruptionDirtyOnce has made its single attempt. */
+    BOOLEAN CorruptionCommitTried = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
     BOOLEAN Generate8dot3Names = FALSE;
     /* While non-zero, WriteVolume behaves as WriteVolumeThrough (mft.cpp). */
@@ -633,13 +705,11 @@ public:
      * under the caller's metadata serialization. */
     PUCHAR BitmapWorkBuffer = NULL;
 
-    /* Scratch for index-block reads during lookups; a pool allocation per
-     * name resolution was a fifth of the lookup. Descents never nest. */
+    /* Scratch for index-block reads while a directory index is edited
+     * (editdir.cpp). Editing runs under the exclusive metadata lock; lookups
+     * and enumerations no longer use it (IndexPool, Directory). */
     PUCHAR IndexWorkBuffer = NULL;
     ULONG IndexWorkBufferSize = 0;
-    ULONGLONG IndexWorkFileReference = 0;
-    ULONGLONG IndexWorkVCN = 0;
-    BOOLEAN IndexWorkBufferValid = FALSE;
 
     /* Write-ordering barrier for a directory name insert (barrier mode only).
      * While AddFileToDirectory is adding a file, this holds the disk offset of
@@ -658,6 +728,22 @@ public:
     PUCHAR RecordPoolHead = NULL;
     ULONG RecordPoolCount = 0;
     ULONG RecordPoolBufferSize = 0;
+
+    /* Free list of index-block-sized buffers for name lookups, under
+     * RecordPoolMutex. Each lookup takes its own buffer: a pool allocation
+     * per name resolution was a fifth of the lookup, and one shared buffer
+     * let a lookup parse a block another one was reading
+     * (fs-review/NTFS-LOOKUP-CONCURRENCY.md, L1). */
+    PUCHAR IndexPoolHead = NULL;
+    ULONG IndexPoolCount = 0;
+    ULONG IndexPoolBufferSize = 0;
+
+    PUCHAR
+    AcquireIndexScratch(_In_ ULONG Size);
+
+    void
+    ReleaseIndexScratch(_In_opt_ PUCHAR Buffer,
+                        _In_ ULONG Size);
 
     FAST_MUTEX SecurityCacheMutex;
     ULONG SecurityCacheId[NTFS_SECURITY_CACHE_ENTRIES] = {};
@@ -769,11 +855,22 @@ public:
                      _In_  BOOLEAN CaseSensitive,
                      _Out_ LONG* Result);
 
+    /* The $UpCase table for callers that index it with any WCHAR
+     * (NtfsIsNameInExpression): NULL unless it is loaded and complete, and
+     * those callers then fall back to RtlUpcaseUnicodeChar. */
     PWSTR
     GetUpcaseTable()
     {
-        return UpcaseTable;
+        PWSTR Table = static_cast<PWSTR>(
+            NtfsLoadPublished(reinterpret_cast<PVOID const volatile*>(&UpcaseTable)));
+
+        return Table && UpcaseTableLength >= 0x10000 ? Table : NULL;
     }
+
+    /* The $UpCase table and its length in WCHARs, loaded on first use. */
+    NTSTATUS
+    GetUpcase(_Out_ PWSTR* Table,
+              _Out_ PULONG Length);
 
     /**
      * Gets the volume label as a 16-bit string and its length in bytes.
@@ -821,6 +918,23 @@ public:
      * FSCTL_MARK_VOLUME_DIRTY): MarkClean will not clear it. */
     void
     RetainDirty(_In_ BOOLEAN Retain);
+
+    /* Records that a read met corrupt on-disk structure. No I/O: callable
+     * from any read path. The next metadata write, or the clean dismount,
+     * makes the dirty flag durable and keeps it (see CorruptionNoted). */
+    void
+    NoteCorruption();
+
+    /* Writes and retains the dirty flag for a noted corruption (no-op when
+     * none is noted, on a read-only mount, or without dirty tracking). The
+     * caller holds the metadata lock. */
+    NTSTATUS
+    CommitCorruptionDirty();
+
+    /* CommitCorruptionDirty at most once per mount; cheap when nothing is
+     * pending. The driver calls it on the outermost metadata-lock release. */
+    NTSTATUS
+    CommitCorruptionDirtyOnce();
 
     /* MarkClean on the shutdown path; also arms re-dirty logging. No write-
      * through (that is the J30 chain mechanism, deliberately not here). */
@@ -955,7 +1069,10 @@ private:
     USHORT VolumeLabelCacheLength = 0;
     BOOLEAN VolumeLabelCached = FALSE;
 
-    /* $UpCase table, read from disk on first use by UpcaseWideString(). */
+    /* $UpCase table, read at mount (Initialize) or on first use, and
+     * published with NtfsPublishOnce: UpcaseTableLength is stored before the
+     * pointer, and every loader stores the same value ($UpCase never
+     * changes). Read the pair through GetUpcase(). */
     PWSTR UpcaseTable = NULL;
     ULONG UpcaseTableLength = 0; // In WCHARs
 
@@ -983,6 +1100,10 @@ public:
     PFileRecordHeader Header;
     PUCHAR Data = NULL;
     ULONG RecordNumber = MAXULONG;
+    /* An append at EOF grew the unnamed data stream past what it needed
+     * (ExtendNonResidentData); TrimSpeculativeAllocation gives it back. Kept
+     * on the object that owns the data attribute, never on disk. */
+    BOOLEAN SpeculativeAllocation = FALSE;
 
     // ./filerecord.cpp
     FileRecord(_In_ PVolume DiskVolume,
@@ -1151,6 +1272,9 @@ public:
         _In_ AttributeType AttrType,
         _In_opt_ PWSTR StreamName,
         _In_ ULONGLONG NewAllocationSize);
+
+    NTSTATUS
+    TrimSpeculativeAllocation();
 
     NTSTATUS
     SetCompression(_In_opt_ PWSTR StreamName,
@@ -1389,7 +1513,7 @@ private:
         _Out_ PBOOLEAN OwnerReferenced);
 
     NTSTATUS
-    CreateInitialAttributeList();
+    CreateInitialAttributeList(_In_opt_ PAttribute GrowingData = NULL);
 
     NTSTATUS
     EnsureAttributeListForMappingGrowth(
@@ -1499,6 +1623,9 @@ private:
         _In_ PAttribute TargetAttribute,
         _In_ ULONGLONG NewDataSize,
         _In_ ULONGLONG RequestedAllocationSize);
+
+    NTSTATUS
+    SynchronizeExtensionDataSizes();
 
     NTSTATUS
     UpdateFileNameSizes(_In_ ULONGLONG AllocatedSize,
@@ -1753,6 +1880,9 @@ private:
     ULONG EnumerationDepth = 0;
     LONG EnumerationLoadedDepth = -1;
     ULONGLONG EnumerationLoadedVCN = ~(ULONGLONG)0;
+    /* The index block EnumerationLoaded* names; owned by this directory. */
+    PUCHAR EnumerationBuffer = NULL;
+    ULONG EnumerationBufferSize = 0;
     BOOLEAN DirectEnumeration = FALSE;
 
     // ./editdir.cpp
@@ -1949,6 +2079,16 @@ public:
     NTSTATUS
     GetFileRecord(_In_   ULONG FileRecordNumber,
                   _Out_  PFileRecord* File);
+
+    /* The same, but for a record the caller already knows is in use from
+     * its own header flag: the $MFT:$Bitmap bit is not consulted. A record
+     * is committed before its bitmap bit, so a cut can leave a live record
+     * whose bit is still clear; the volume check reads those before it
+     * writes the bitmap back. */
+    NTSTATUS
+    GetFileRecord(_In_   ULONG FileRecordNumber,
+                  _Out_  PFileRecord* File,
+                  _In_   BOOLEAN IgnoreMftBitmap);
 
     /* Resolves one component inside a directory whose record the caller
      * already holds, so a repeat open in a known directory does not walk the

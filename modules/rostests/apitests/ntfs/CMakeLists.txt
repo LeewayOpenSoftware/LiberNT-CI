@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     MissingSecurity.c
+    FullBaseGrowth.c
     testlist.c)
 
 add_executable(ntfs_apitest ${SOURCE})

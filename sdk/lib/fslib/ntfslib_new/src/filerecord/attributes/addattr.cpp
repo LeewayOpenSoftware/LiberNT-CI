@@ -1902,10 +1902,11 @@ FileRecord::RemoveListedAttribute(
 }
 
 NTSTATUS
-FileRecord::CreateInitialAttributeList()
+FileRecord::CreateInitialAttributeList(_In_opt_ PAttribute GrowingData)
 {
     PAttribute Candidate = NULL;
     PAttribute Candidates[2] = {};
+    PAttribute DataCandidate = NULL;
     PAttribute EaCandidate = NULL;
     PAttribute EaInformationCandidate = NULL;
     PAttribute FallbackCandidate = NULL;
@@ -1930,6 +1931,7 @@ FileRecord::CreateInitialAttributeList()
     ULONG MovedCount = 0;
     ULONG Offset;
     ULONG WrittenLength;
+    BOOLEAN BaseFull;
     BOOLEAN BaseWriteAttempted = FALSE;
     BOOLEAN BaseRestored = TRUE;
     BOOLEAN EndMarkerFound = FALSE;
@@ -2018,6 +2020,18 @@ FileRecord::CreateInitialAttributeList()
         {
             FallbackCandidate = Attribute;
         }
+        else if (Attribute->IsNonResident &&
+                 Attribute->AttributeType == TypeData &&
+                 Attribute->Flags == 0 &&
+                 Attribute->NonResident.FirstVCN == 0 &&
+                 (GrowingData
+                      ? Attribute == GrowingData
+                      : !DataCandidate ||
+                        Attribute->Length >
+                            DataCandidate->Length))
+        {
+            DataCandidate = Attribute;
+        }
         else if (!Attribute->IsNonResident &&
                  Attribute->AttributeType ==
                     TypeEAInformation &&
@@ -2051,7 +2065,12 @@ FileRecord::CreateInitialAttributeList()
         Status = STATUS_FILE_CORRUPT_ERROR;
         goto Done;
     }
-    if (Candidate)
+    ASSERT(!GrowingData || DataCandidate == GrowingData);
+    if (GrowingData && DataCandidate)
+    {
+        Candidates[CandidateCount++] = DataCandidate;
+    }
+    else if (Candidate)
     {
         Candidates[CandidateCount++] = Candidate;
     }
@@ -2072,11 +2091,20 @@ FileRecord::CreateInitialAttributeList()
         Candidates[CandidateCount++] =
             FallbackCandidate;
     }
+    BaseFull =
+        Header->ActualSize >
+            Header->AllocatedSize ||
+        Header->AllocatedSize -
+            Header->ActualSize < 0x50;
     if (CandidateCount == 0 &&
-        (Header->ActualSize >
-             Header->AllocatedSize ||
-         Header->AllocatedSize -
-             Header->ActualSize < 0x50))
+        BaseFull &&
+        DataCandidate)
+    {
+        Candidates[CandidateCount++] =
+            DataCandidate;
+    }
+    if (CandidateCount == 0 &&
+        BaseFull)
     {
         Status = STATUS_BUFFER_TOO_SMALL;
         goto Done;
@@ -4223,6 +4251,29 @@ FileRecord::CommitNonResidentMappingUpdate(
     if (!NT_SUCCESS(Status))
         return Status;
 
+    /*
+     * Everything below retires what the old list named: the superseded
+     * first extent and the old mapping attributes are rewritten out of
+     * their records, emptied extension records are freed for reuse, and the
+     * old list's clusters go back to the volume bitmap. The write-back cache
+     * commits blocks in no dependency order, so any of those could land, or
+     * be reused by another file, while the base record above still holds the
+     * old list on the medium. A crash then leaves the durable old list naming
+     * removed attributes or another file's clusters, and the stream (or the
+     * whole file, when the list itself is overwritten) is unreachable.
+     * Commit the published layout first, when there is anything to retire
+     * (a plain append of new extents retires nothing).
+     */
+    if (Update->SupersededListRuns ||
+        Update->OldExtents ||
+        (Update->SupersededOwner &&
+         Update->SupersededOwner != BaseRecord))
+    {
+        Status = BaseRecord->DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     delete[] BaseRecord->AttributeListData;
     BaseRecord->AttributeListData = NULL;
     BaseRecord->AttributeListLength = 0;
@@ -4526,6 +4577,28 @@ FileRecord::AbortNonResidentMappingUpdate(
                 FirstFailure = NT_SUCCESS(RestoreStatus)
                     ? STATUS_END_OF_FILE
                     : RestoreStatus;
+        }
+    }
+
+    /*
+     * The restore writes above still sit in the write-back cache, and the
+     * records that named the new layout may already be on the medium. Make
+     * the restored layout durable before the new extension records, the new
+     * list clusters and (in the callers) the new data clusters go back for
+     * reuse; otherwise another file can claim them while the abandoned
+     * layout is the durable one. If the flush fails, keep them (a leak).
+     */
+    if (MetadataRestored &&
+        BaseRecord &&
+        (Update->OwnerWriteAttempted ||
+         Update->ListWriteAttempted))
+    {
+        NTSTATUS FlushStatus = BaseRecord->DiskVolume->FlushVolume();
+        if (!NT_SUCCESS(FlushStatus))
+        {
+            MetadataRestored = FALSE;
+            if (NT_SUCCESS(FirstFailure))
+                FirstFailure = FlushStatus;
         }
     }
 

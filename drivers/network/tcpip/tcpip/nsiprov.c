@@ -1864,12 +1864,19 @@ TiNsiDeregisterEndpoints(VOID)
     }
 }
 
-#define TI_NSI_NEIGHBOUR_COALESCE_MS 100
+/*
+ * Change notifications are throttled per (family, table): the first change
+ * goes out at once, every further change inside the window is folded into
+ * one trailing notification. A consumer re-reads and diffs the table on each
+ * notification, so one notification stands for any number of changes.
+ */
+#define TI_NSI_NOTIFY_COALESCE_MS 100
 
-static KTIMER TiNsiNeighbourTimer;
-static KDPC TiNsiNeighbourDpc;
-static volatile LONG TiNsiNeighbourPending[2];
-static volatile LONG TiNsiNeighbourTimerArmed;
+static KTIMER TiNsiNotifyTimer;
+static KDPC TiNsiNotifyDpc;
+static volatile LONG TiNsiNotifyPending[2][4];   /* change types folded while throttled */
+static volatile LONG TiNsiNotifyThrottled[2][4]; /* a notification went out in this window */
+static volatile LONG TiNsiNotifyTimerArmed;
 static BOOLEAN TiNsiNotifyReady;
 
 static PNSI_PROVIDER
@@ -1882,28 +1889,73 @@ TiNsiIpProvider(
     return Family == TI_NSI_FAMILY_IPV6 ? TiNsiIp6Providers[Table] : TiNsiIp4Providers[Table];
 }
 
+static VOID
+TiNsiNotifyArmTimer(VOID)
+{
+    LARGE_INTEGER Due;
+
+    if (InterlockedCompareExchange(&TiNsiNotifyTimerArmed, 1, 0) == 0)
+    {
+        Due.QuadPart = -(LONGLONG)TI_NSI_NOTIFY_COALESCE_MS * 10000;
+        KeSetTimer(&TiNsiNotifyTimer, Due, &TiNsiNotifyDpc);
+    }
+}
+
+static NSI_CHANGE_TYPE
+TiNsiFoldedChange(
+    _In_ LONG Mask)
+{
+    BOOLEAN Add = (Mask & (1 << TI_NSI_CHANGE_ADD)) != 0;
+    BOOLEAN Delete = (Mask & (1 << TI_NSI_CHANGE_DELETE)) != 0;
+
+    if (Add && Delete)
+        return NsiChangeBulk;
+    if (Add)
+        return NsiChangeAdd;
+    if (Delete)
+        return NsiChangeDelete;
+    return NsiChangeParameter;
+}
+
 static VOID NTAPI
-TiNsiNeighbourDpcRoutine(
+TiNsiNotifyDpcRoutine(
     _In_ PKDPC Dpc,
     _In_opt_ PVOID DeferredContext,
     _In_opt_ PVOID SystemArgument1,
     _In_opt_ PVOID SystemArgument2)
 {
-    ULONG Family;
+    ULONG Family, Table;
+    BOOLEAN Rearm = FALSE;
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(DeferredContext);
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    InterlockedExchange(&TiNsiNeighbourTimerArmed, 0);
+    /* Disarm before scanning so a change folded after the scan arms it again */
+    InterlockedExchange(&TiNsiNotifyTimerArmed, 0);
     for (Family = 0; Family < 2; Family++)
     {
-        PNSI_PROVIDER Provider = TiNsiIpProvider(Family, TI_NSI_TABLE_NEIGHBOUR);
+        for (Table = 0; Table < 4; Table++)
+        {
+            LONG Mask = InterlockedExchange(&TiNsiNotifyPending[Family][Table], 0);
+            PNSI_PROVIDER Provider;
 
-        if (InterlockedExchange(&TiNsiNeighbourPending[Family], 0) != 0 && Provider != NULL)
-            NsiNotifyChange(Provider, NsiChangeParameter, NULL, 0);
+            if (Mask == 0)
+            {
+                /* Quiet window: the next change goes out at once again */
+                InterlockedExchange(&TiNsiNotifyThrottled[Family][Table], 0);
+                continue;
+            }
+            /* The trailing notification opens a new window */
+            Provider = TiNsiIpProvider(Family, Table);
+            if (Provider != NULL)
+                NsiNotifyChange(Provider, TiNsiFoldedChange(Mask), NULL, 0);
+            Rearm = TRUE;
+        }
     }
+    if (Rearm && TiNsiNotifyReady)
+        TiNsiNotifyArmTimer();
 }
 
 VOID
@@ -1914,30 +1966,29 @@ TiNsiNotifyIpTable(
 {
     PNSI_PROVIDER Provider;
 
-    if (!TiNsiNotifyReady || Family >= 2)
+    if (!TiNsiNotifyReady || Family >= 2 || Table >= 4)
         return;
-    if (Table == TI_NSI_TABLE_NEIGHBOUR)
+    if (InterlockedCompareExchange(&TiNsiNotifyThrottled[Family][Table], 1, 0) != 0)
     {
-        LARGE_INTEGER Due;
-
-        InterlockedExchange(&TiNsiNeighbourPending[Family], 1);
-        if (InterlockedCompareExchange(&TiNsiNeighbourTimerArmed, 1, 0) == 0)
-        {
-            Due.QuadPart = -(LONGLONG)TI_NSI_NEIGHBOUR_COALESCE_MS * 10000;
-            KeSetTimer(&TiNsiNeighbourTimer, Due, &TiNsiNeighbourDpc);
-        }
+        /* Inside the window: fold into the trailing notification */
+        InterlockedOr(&TiNsiNotifyPending[Family][Table], 1 << Change);
+        TiNsiNotifyArmTimer();
         return;
     }
     Provider = TiNsiIpProvider(Family, Table);
     if (Provider != NULL)
         NsiNotifyChange(Provider, (NSI_CHANGE_TYPE)Change, NULL, 0);
+    TiNsiNotifyArmTimer();
 }
 
 static VOID
 TiNsiNotifyStart(VOID)
 {
-    KeInitializeTimer(&TiNsiNeighbourTimer);
-    KeInitializeDpc(&TiNsiNeighbourDpc, TiNsiNeighbourDpcRoutine, NULL);
+    RtlZeroMemory((PVOID)TiNsiNotifyPending, sizeof(TiNsiNotifyPending));
+    RtlZeroMemory((PVOID)TiNsiNotifyThrottled, sizeof(TiNsiNotifyThrottled));
+    TiNsiNotifyTimerArmed = 0;
+    KeInitializeTimer(&TiNsiNotifyTimer);
+    KeInitializeDpc(&TiNsiNotifyDpc, TiNsiNotifyDpcRoutine, NULL);
     TiNsiNotifyReady = TRUE;
 }
 
@@ -1945,7 +1996,7 @@ static VOID
 TiNsiNotifyStop(VOID)
 {
     TiNsiNotifyReady = FALSE;
-    KeCancelTimer(&TiNsiNeighbourTimer);
+    KeCancelTimer(&TiNsiNotifyTimer);
     KeFlushQueuedDpcs();
 }
 

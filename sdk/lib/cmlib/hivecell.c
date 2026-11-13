@@ -157,6 +157,8 @@ HvMarkCellDirty(
     BOOLEAN LockAcquired = FALSE;
     ULONG CellBlock;
     ULONG CellLastBlock;
+    ULONG LastBlock;
+    LONG CellSize;
 
     ASSERT(RegistryHive->ReadOnly == FALSE);
 
@@ -172,11 +174,28 @@ HvMarkCellDirty(
         LockAcquired = TRUE;
     }
 
+    /*
+     * Mark every block the cell touches, from its header to its last byte.
+     * Deriving the range from the cell index alone marked no block at all
+     * for a cell that starts on a block boundary (inside a multi-block bin),
+     * and only the first block of a cell that spans several, so the change
+     * was neither logged nor flushed past that block.
+     */
+    CellSize = HvpGetCellHeaderLocked(RegistryHive, CellIndex)->Size;
+    if (CellSize < 0)
+        CellSize = -CellSize;
+    if (CellSize < (LONG)sizeof(HCELL))
+        CellSize = sizeof(HCELL);
+
     CellBlock     = HvGetCellBlock(CellIndex);
-    CellLastBlock = HvGetCellBlock(CellIndex + HBLOCK_SIZE - 1);
+    CellLastBlock = HvGetCellBlock(CellIndex + (ULONG)CellSize - 1);
+    LastBlock     = RegistryHive->Storage[Stable].Length / HBLOCK_SIZE;
+    ASSERT(CellBlock < LastBlock);
+    if (CellLastBlock >= LastBlock)
+        CellLastBlock = LastBlock - 1;
 
     RtlSetBits(&RegistryHive->DirtyVector,
-               CellBlock, CellLastBlock - CellBlock);
+               CellBlock, CellLastBlock - CellBlock + 1);
     RegistryHive->DirtyCount++;
 
     /*

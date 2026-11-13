@@ -67,7 +67,14 @@ typedef struct _VolumeContextBlock
     LIST_ENTRY RecordIdentityHash[256];
     ULONG RecordCacheCount;
 
-    /* One stable parent record for repeated leaf lookups in a directory. */
+    /*
+     * One stable parent record for repeated leaf lookups in a directory.
+     * Lookups take the record out of the slot under CachedLookupParentMutex,
+     * use it alone, and put it back (create.c), so two lookups never share
+     * it and none destroys it under another. Paths that create, rename or
+     * delete still use it in place: they hold the metadata lock exclusive.
+     */
+    FAST_MUTEX CachedLookupParentMutex;
     PNtfsFileRecord CachedLookupParent;
     LONG CachedLookupParentGeneration;
     USHORT CachedLookupParentPathLength;
@@ -343,6 +350,22 @@ typedef struct _SCB
     /* System time of the last automatic write-time stamp by a cached
      * write of this stream (write.c, NtfsCachedWrite). */
     LONGLONG LastWriteStampTime;
+    /*
+     * The last allocated extent a paging read resolved (read.c), so that
+     * page-ins inside it skip the volume-wide metadata lock. It is filled
+     * and used only under PagingIoResource shared, and NtfsDropPagingExtent
+     * clears it right after every exclusive acquisition: every path that
+     * frees, moves, compresses, zeroes or shrinks the stream, or marks it
+     * deleted, holds PagingIoResource exclusive. ExtentLock orders the
+     * shared holders among themselves.
+     */
+    KSPIN_LOCK ExtentLock;
+    BOOLEAN ExtentValid;
+    ULONG ExtentClusterSize;
+    ULONGLONG ExtentFirstVcn;
+    ULONGLONG ExtentNextVcn;
+    ULONGLONG ExtentLcn;
+    ULONGLONG ExtentValidData;
     NTFS_NATIVE_SCB NativeScb;
 } StreamContextBlock, *PStreamContextBlock;
 
@@ -526,6 +549,22 @@ NtfsGetPagingIoResource(_In_ PFileContextBlock FileCB)
     return FileCB->StreamCB ? &FileCB->StreamCB->PagingIoResource : &FileCB->PagingIoResource;
 }
 
+/* Forget the paging-read extent of a stream. The caller holds the stream's
+ * PagingIoResource exclusive. */
+static inline
+VOID
+NtfsDropPagingExtent(_In_opt_ PStreamContextBlock StreamCB)
+{
+    KIRQL OldIrql;
+
+    if (!StreamCB)
+        return;
+    ASSERT(ExIsResourceAcquiredExclusiveLite(&StreamCB->PagingIoResource));
+    KeAcquireSpinLock(&StreamCB->ExtentLock, &OldIrql);
+    StreamCB->ExtentValid = FALSE;
+    KeReleaseSpinLock(&StreamCB->ExtentLock, OldIrql);
+}
+
 NTSTATUS
 NtfsCheckRecordAccess(
     _In_ PNtfsFileRecord File,
@@ -682,6 +721,13 @@ VOID
 NtfsReleaseMetadata(_In_ PVolumeContextBlock VolCB)
 {
     BOOLEAN Last = ExIsResourceAcquiredSharedLite(&VolCB->MetadataResource) == 1;
+
+    /* A read under this lock met corrupt on-disk structure: make the volume
+     * dirty on the medium before the lock goes, so a crash before the next
+     * write still gets the volume checked at boot. The dismount path clears
+     * or keeps the flag itself (MarkClean). */
+    if (Last && VolCB->DiskVolume && !VolCB->Dismounting && !VolCB->Dismounted)
+        (void)NtfsVolumeCommitCorruptionDirty(VolCB->DiskVolume);
 
     ExReleaseResourceLite(&VolCB->MetadataResource);
     if (Last)

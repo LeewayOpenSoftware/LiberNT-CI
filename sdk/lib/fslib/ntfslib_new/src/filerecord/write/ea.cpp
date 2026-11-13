@@ -1286,6 +1286,15 @@ RestoreBase:
             MetadataRestored = FALSE;
     }
 
+    /* Records naming NewOwner and NewEaRuns may have reached the medium:
+     * make the restored ones durable before either is reused. */
+    if (MetadataRestored &&
+        (ListWriteAttempted || BaseWriteAttempted) &&
+        !NT_SUCCESS(DiskVolume->FlushVolume()))
+    {
+        MetadataRestored = FALSE;
+    }
+
     if (NewOwner &&
         !NewOwnerPublished &&
         MetadataRestored)

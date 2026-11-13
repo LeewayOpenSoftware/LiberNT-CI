@@ -228,6 +228,48 @@ if(BUILD_TESTING)
         COMMAND ntfslib_size_persist_times_test
     )
 
+    add_executable(ntfslib_mft_mirror_fallback_test
+        tests/mft_mirror_fallback.cpp
+    )
+    target_compile_features(ntfslib_mft_mirror_fallback_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_mft_mirror_fallback_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_mft_mirror_fallback_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_mft_mirror_fallback
+        COMMAND ntfslib_mft_mirror_fallback_test
+    )
+
+    add_executable(ntfslib_corrupt_runlist_dirty_test
+        tests/corrupt_runlist_dirty.cpp
+    )
+    target_compile_features(ntfslib_corrupt_runlist_dirty_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_corrupt_runlist_dirty_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_corrupt_runlist_dirty_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_corrupt_runlist_dirty
+        COMMAND ntfslib_corrupt_runlist_dirty_test
+    )
+
+    add_executable(ntfslib_lookup_index_cache_test
+        tests/lookup_index_cache.cpp
+    )
+    target_compile_features(ntfslib_lookup_index_cache_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_lookup_index_cache_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_lookup_index_cache_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_lookup_index_cache
+        COMMAND ntfslib_lookup_index_cache_test
+    )
+
     add_executable(ntfslib_lznt1_roundtrip_test
         tests/lznt1_roundtrip.cpp
     )
@@ -375,6 +417,16 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
             NAME ntfslib_linux_growth_write
             COMMAND /bin/sh
                 "${CMAKE_CURRENT_LIST_DIR}/tests/growth_write_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+                "${NTFSCP_EXECUTABLE}"
+                "${NTFSCAT_EXECUTABLE}"
+                "${NTFSFIX_EXECUTABLE}"
+        )
+        add_test(
+            NAME ntfslib_linux_full_base_growth
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/full_base_growth_smoke.sh"
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
                 "${NTFSCP_EXECUTABLE}"

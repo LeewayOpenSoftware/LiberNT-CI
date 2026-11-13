@@ -102,6 +102,14 @@ NTSTATUS
 MasterFileTable::GetFileRecord(_In_   ULONG FileRecordNumber,
                                _Out_  PFileRecord* File)
 {
+    return GetFileRecord(FileRecordNumber, File, FALSE);
+}
+
+NTSTATUS
+MasterFileTable::GetFileRecord(_In_   ULONG FileRecordNumber,
+                               _Out_  PFileRecord* File,
+                               _In_   BOOLEAN IgnoreMftBitmap)
+{
     NTSTATUS Status;
     ULONG BytesToRead;
     BOOLEAN IsRecordInUse;
@@ -143,13 +151,20 @@ MasterFileTable::GetFileRecord(_In_   ULONG FileRecordNumber,
      */
 
     // If the file record is not in use, fail.
-    Status = IsFileRecordNumberInUse(FileRecordNumber,
-                                     &IsRecordInUse);
-
-    if (!NT_SUCCESS(Status))
+    if (IgnoreMftBitmap)
     {
-        DPRINT1("Failed to determine if file record number is in use!\n");
-        goto Failed;
+        IsRecordInUse = TRUE;
+    }
+    else
+    {
+        Status = IsFileRecordNumberInUse(FileRecordNumber,
+                                         &IsRecordInUse);
+
+        if (!NT_SUCCESS(Status))
+        {
+            DPRINT1("Failed to determine if file record number is in use!\n");
+            goto Failed;
+        }
     }
 
     if (!IsRecordInUse)
