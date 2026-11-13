@@ -113,6 +113,7 @@ void PaletteModel::NotifyColorChanged()
         canvasWindow.SendMessage(WM_PALETTEMODELCOLORCHANGED);
     if (textEditWindow.IsWindow())
         textEditWindow.SendMessage(WM_PALETTEMODELCOLORCHANGED);
+    mainWindow.InvalidateRibbon();
 }
 
 void PaletteModel::NotifyPaletteChanged()

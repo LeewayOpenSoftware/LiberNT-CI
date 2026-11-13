@@ -199,6 +199,7 @@ void ToolsModel::SetActiveTool(TOOLTYPE nActiveTool)
         case TOOL_FILL:
         case TOOL_AIRBRUSH:
         case TOOL_RRECT:
+        case TOOL_PRESET:
         case TOOL_RUBBER:
         case TOOL_BRUSH:
         case TOOL_PEN:
@@ -255,6 +256,7 @@ SIZE ToolsModel::GetToolSize() const
         case TOOL_BEZIER:
         case TOOL_RECT:
         case TOOL_RRECT:
+        case TOOL_PRESET:
         case TOOL_SHAPE:
         case TOOL_ELLIPSE:
             size.cx = size.cy = GetLineWidth();
@@ -313,6 +315,7 @@ void ToolsModel::NotifyToolChanged()
         fontsDialog.SendMessage(WM_TOOLSMODELTOOLCHANGED, m_activeTool);
     if (textEditWindow.IsWindow())
         textEditWindow.SendMessage(WM_TOOLSMODELTOOLCHANGED, m_activeTool);
+    mainWindow.InvalidateRibbon();
 }
 
 void ToolsModel::NotifyToolSettingsChanged()
@@ -321,6 +324,7 @@ void ToolsModel::NotifyToolSettingsChanged()
         toolSettingsWindow.SendMessage(WM_TOOLSMODELSETTINGSCHANGED);
     if (textEditWindow.IsWindow())
         textEditWindow.SendMessage(WM_TOOLSMODELSETTINGSCHANGED);
+    mainWindow.InvalidateRibbon();
 }
 
 void ToolsModel::NotifyZoomChanged()
@@ -331,6 +335,7 @@ void ToolsModel::NotifyZoomChanged()
         textEditWindow.SendMessage(WM_TOOLSMODELZOOMCHANGED);
     if (canvasWindow.IsWindow())
         canvasWindow.SendMessage(WM_TOOLSMODELZOOMCHANGED);
+    mainWindow.InvalidateRibbon();
 }
 
 void ToolsModel::resetTool()

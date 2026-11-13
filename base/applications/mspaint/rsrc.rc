@@ -57,9 +57,11 @@ CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "mspaint.exe.manifest"
 #endif
 #ifdef LANGUAGE_EN_US
     #include "lang/en-US.rc"
+    #include "lang/ribbon-en-US.rc"
 #endif
 #ifdef LANGUAGE_ES_ES
     #include "lang/es-ES.rc"
+    #include "lang/ribbon-es-ES.rc"
 #endif
 #ifdef LANGUAGE_ET_EE
     #include "lang/et-EE.rc"

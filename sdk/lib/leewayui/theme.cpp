@@ -12,6 +12,7 @@
 
 struct ILeewayTheme {
     LeewayThemeMode mode;
+    LeewayThemePref pref;
     COLORREF colors[LWUI_COLOR_COUNT];
     HBRUSH brushes[LWUI_COLOR_COUNT];
 };
@@ -25,18 +26,21 @@ static const WCHAR *const g_color_names[LWUI_COLOR_COUNT] = {
 };
 
 /* Aureline light: Aero-inspired blues, our own values (design §9). */
+/* Flat-white light theme matching the owner's Paint reference (values sampled by
+ * Pam from owner-reference-paint-ribbon-es.png): white tab strip, flat #F5F6F7
+ * body with no gradient (BAND_BG == BAND_BG2), grey dividers, no Aero blue. */
 static const COLORREF g_light[LWUI_COLOR_COUNT] = {
-    RGB(220, 229, 240), RGB(243, 247, 251), RGB(225, 234, 245), RGB(30, 40, 60), RGB(158, 178, 204), RGB(176, 192, 212),
-    RGB(212, 224, 239), RGB(60, 76, 96), RGB(30, 38, 50), RGB(140, 150, 160), RGB(218, 234, 252), RGB(120, 170, 230),
-    RGB(180, 208, 240), RGB(80, 130, 200), RGB(30, 38, 50), RGB(200, 222, 246), RGB(100, 150, 210), RGB(190, 204, 220),
-    RGB(250, 252, 255), RGB(140, 160, 190), RGB(255, 255, 225), RGB(20, 20, 20), RGB(120, 120, 120), RGB(31, 95, 184),
-    RGB(255, 255, 255), RGB(31, 95, 184), RGB(236, 222, 184), RGB(200, 216, 236), RGB(31, 95, 184),
+    RGB(255, 255, 255), RGB(245, 246, 247), RGB(245, 246, 247), RGB(30, 30, 30), RGB(218, 219, 220), RGB(227, 228, 229),
+    RGB(245, 246, 247), RGB(68, 68, 68), RGB(30, 30, 30), RGB(160, 160, 160), RGB(229, 241, 251), RGB(112, 176, 232),
+    RGB(201, 224, 247), RGB(98, 162, 228), RGB(30, 30, 30), RGB(201, 224, 247), RGB(98, 162, 228), RGB(227, 228, 229),
+    RGB(255, 255, 255), RGB(197, 207, 223), RGB(240, 240, 240), RGB(30, 30, 30), RGB(140, 140, 140), RGB(25, 121, 202),
+    RGB(255, 255, 255), RGB(25, 121, 202), RGB(236, 222, 184), RGB(230, 231, 232), RGB(120, 120, 120),
 };
 
 static const COLORREF g_dark[LWUI_COLOR_COUNT] = {
     RGB(32, 36, 42), RGB(45, 50, 58), RGB(38, 42, 50), RGB(220, 226, 234), RGB(70, 78, 90), RGB(70, 78, 90),
     RGB(38, 42, 50), RGB(170, 180, 195), RGB(230, 234, 240), RGB(120, 128, 140), RGB(62, 72, 88), RGB(100, 140, 200),
-    RGB(50, 80, 120), RGB(90, 140, 210), RGB(230, 234, 240), RGB(44, 70, 104), RGB(90, 140, 210), RGB(70, 78, 90),
+    RGB(50, 80, 120), RGB(90, 140, 210), RGB(230, 234, 240), RGB(40, 100, 172), RGB(120, 185, 250), RGB(70, 78, 90),
     RGB(40, 44, 52), RGB(90, 100, 115), RGB(60, 64, 72), RGB(255, 255, 255), RGB(140, 150, 165), RGB(31, 95, 184),
     RGB(255, 255, 255), RGB(111, 176, 242), RGB(96, 84, 52), RGB(60, 70, 86), RGB(200, 216, 236),
 };
@@ -97,9 +101,18 @@ static void DropBrushes(ILeewayTheme *theme)
     }
 }
 
+static LeewayThemeMode ResolveMode(ILeewayTheme *theme)
+{
+    LeewayThemeMode sys = DetectMode();
+    if (sys == LEEWAY_THEME_MODE_HIGH_CONTRAST || sys == LEEWAY_THEME_MODE_CLASSIC) return sys;
+    if (theme->pref == LEEWAY_THEME_PREF_LIGHT) return LEEWAY_THEME_MODE_LIGHT;
+    if (theme->pref == LEEWAY_THEME_PREF_DARK) return LEEWAY_THEME_MODE_DARK;
+    return sys;
+}
+
 static void Reload(ILeewayTheme *theme)
 {
-    theme->mode = DetectMode();
+    theme->mode = ResolveMode(theme);
     switch (theme->mode) {
     case LEEWAY_THEME_MODE_LIGHT:
         CopyMemory(theme->colors, g_light, sizeof(theme->colors));
@@ -142,6 +155,38 @@ void LeewayThemeDestroy(ILeewayTheme *theme)
 LeewayThemeMode LeewayThemeGetMode(ILeewayTheme *theme)
 {
     return theme ? theme->mode : LEEWAY_THEME_MODE_LIGHT;
+}
+
+void LeewayThemeSetPreference(ILeewayTheme *theme, LeewayThemePref pref)
+{
+    if (!theme) return;
+    theme->pref = pref;
+    Reload(theme);
+}
+
+void LeewayThemeApplyAppOverride(ILeewayTheme *theme, const WCHAR *app_name)
+{
+    if (!theme || !app_name || !app_name[0]) return;
+    LeewayThemePref pref = LEEWAY_THEME_PREF_SYSTEM;
+    WCHAR key[256]; wsprintfW(key, L"Software\\Leeway\\%s", app_name); key[255] = 0;
+    HKEY h;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, key, 0, KEY_READ, &h) == ERROR_SUCCESS) {
+        DWORD type = 0, cb; WCHAR sv[16]; DWORD dv = 0;
+        cb = sizeof(sv);
+        if (RegQueryValueExW(h, L"Theme", NULL, &type, (LPBYTE)sv, &cb) == ERROR_SUCCESS) {
+            if (type == REG_SZ) {
+                sv[15] = 0;
+                if (lstrcmpiW(sv, L"light") == 0) pref = LEEWAY_THEME_PREF_LIGHT;
+                else if (lstrcmpiW(sv, L"dark") == 0) pref = LEEWAY_THEME_PREF_DARK;
+            } else if (type == REG_DWORD) {
+                CopyMemory(&dv, sv, sizeof(dv));
+                if (dv == 1) pref = LEEWAY_THEME_PREF_LIGHT; else if (dv == 2) pref = LEEWAY_THEME_PREF_DARK;
+            }
+        }
+        RegCloseKey(h);
+    }
+    theme->pref = pref;
+    Reload(theme);
 }
 
 COLORREF LeewayThemeGetColor(ILeewayTheme *theme, LeewayThemeColor which)

@@ -26,6 +26,7 @@ enum TOOLTYPE
     TOOL_ELLIPSE  = 15,
     TOOL_RRECT    = 16,
     TOOL_MAX = TOOL_RRECT,
+    TOOL_PRESET   = 17, // ribbon-only: a preset shape (triangle, arrow, star, callout...) dragged in a box
 };
 
 enum BrushStyle : int
@@ -87,6 +88,7 @@ private:
     BrushStyle m_brushStyle;
     TOOLTYPE m_activeTool;
     TOOLTYPE m_oldActiveTool;
+    int m_presetShape = 0;
     INT m_airBrushRadius;
     int m_rubberRadius;
     BOOL m_transpBg;
@@ -103,6 +105,9 @@ public:
     ~ToolsModel();
 
     BOOL IsSelection() const;
+
+    int GetPresetShape() const { return m_presetShape; }
+    void SetPresetShape(int nPreset) { m_presetShape = nPreset; }
 
     int GetLineWidth() const;
     void SetLineWidth(int nLineWidth);

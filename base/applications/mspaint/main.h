@@ -8,6 +8,11 @@
 
 #pragma once
 
+#include "paint_ribbon_api.h"
+#include "../../../sdk/include/leewayui/dpi.h"
+
+#define WM_RIBBONREFRESH (WM_APP + 21)
+
 class CMainWindow : public CWindowImpl<CMainWindow>
 {
 public:
@@ -24,10 +29,14 @@ public:
         MESSAGE_HANDLER(WM_KEYDOWN, OnKeyDown)
         MESSAGE_HANDLER(WM_SYSCOLORCHANGE, OnSysColorChange)
         MESSAGE_HANDLER(WM_COMMAND, OnCommand)
+        MESSAGE_HANDLER(WM_NOTIFY, OnNotify)
+        MESSAGE_HANDLER(WM_HSCROLL, OnHScroll)
+        MESSAGE_HANDLER(0x02E0 /* WM_DPICHANGED */, OnDpiChanged)
+        MESSAGE_HANDLER(WM_RIBBONREFRESH, OnRibbonRefresh)
         MESSAGE_HANDLER(WM_MOUSEWHEEL, OnMouseWheel)
     END_MSG_MAP()
 
-    CMainWindow() : m_hMenu(NULL) { }
+    CMainWindow() : m_hMenu(NULL), m_pRibbon(NULL) { }
 
     HWND DoCreate();
     BOOL GetOpenFileName(IN OUT LPWSTR pszFile, INT cchMaxFile);
@@ -37,9 +46,22 @@ public:
     BOOL CanUndo() const;
     BOOL CanRedo() const;
     BOOL CanPaste() const;
+    void InvalidateRibbon();
+    void UpdateStatusInfo();
+    BOOL PreTranslateRibbon(MSG *pMsg);
+    void SetRibbonAccelerators(HACCEL hAccel);
+    void SaveAsFormat(PCWSTR pszExt);
+    void ShowChromeForPreview(BOOL bShow);
+    void alignChildrenToMainWindow();
 
 private:
     HMENU m_hMenu;
+    ILeewayRibbon *m_pRibbon;
+    BOOL m_bRibbonDirty = FALSE;
+    HWND m_hZoomSlider = NULL;
+    HICON m_hStatusIcons[3] = { NULL, NULL, NULL };
+    HWND m_hZoomOut = NULL;
+    HWND m_hZoomIn = NULL;
 
     LRESULT OnDropFiles(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
@@ -51,9 +73,15 @@ private:
     LRESULT OnKeyDown(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnSysColorChange(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnNotify(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnHScroll(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    void StepZoom(int delta);
+    void PlaceZoomControls();
+    void MakeStatusIcons();
+    LRESULT OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+    LRESULT OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
     LRESULT OnMouseWheel(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
 
-    void alignChildrenToMainWindow();
     void saveImage(BOOL overwrite);
     void InsertSelectionFromHBITMAP(HBITMAP bitmap, HWND window);
     BOOL ConfirmSave();

@@ -8,6 +8,7 @@
  */
 
 #include "precomp.h"
+#include "paint_print.h"
 
 #include <dlgs.h>
 #include <mapi.h>
@@ -338,12 +339,36 @@ static HWND DoHtmlHelpW(HWND hwndCaller, LPCWSTR pszFile, UINT uCommand, DWORD_P
     return s_pHtmlHelpW(hwndCaller, pszFile, uCommand, dwData);
 }
 
+void CMainWindow::ShowChromeForPreview(BOOL bShow)
+{
+    int nCmd = bShow ? SW_SHOWNA : SW_HIDE;
+    if (m_pRibbon)
+        ::ShowWindow(LeewayRibbonGetHWND(m_pRibbon), nCmd);
+    if (canvasWindow.IsWindow())
+        canvasWindow.ShowWindow(nCmd);
+    if (::IsWindow(g_hStatusBar))
+        ::ShowWindow(g_hStatusBar, nCmd);
+}
+
 void CMainWindow::alignChildrenToMainWindow()
 {
+    if (PaintPrintIsActive())
+    {
+        PaintPrintLayout(m_hWnd);
+        return;
+    }
     RECT clientRect, rc;
     GetClientRect(&clientRect);
     RECT rcSpace = clientRect;
     const UINT uFlags = (SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREPOSITION | SWP_NOCOPYBITS);
+
+    if (m_pRibbon)
+    {
+        UINT32 cyRibbon = LeewayRibbonGetHeight(m_pRibbon);
+        ::SetWindowPos(LeewayRibbonGetHWND(m_pRibbon), NULL, 0, 0, rcSpace.right - rcSpace.left,
+                       cyRibbon, uFlags);
+        rcSpace.top += cyRibbon;
+    }
 
     if (::IsWindowVisible(g_hStatusBar))
     {
@@ -353,7 +378,7 @@ void CMainWindow::alignChildrenToMainWindow()
 
     HDWP hDWP = ::BeginDeferWindowPos(3);
 
-    if (::IsWindowVisible(toolBoxContainer))
+    if (!m_pRibbon && ::IsWindowVisible(toolBoxContainer))
     {
         if (registrySettings.Bar2ID == BAR2ID_RIGHT)
         {
@@ -373,7 +398,7 @@ void CMainWindow::alignChildrenToMainWindow()
         }
     }
 
-    if (::IsWindowVisible(paletteWindow))
+    if (!m_pRibbon && ::IsWindowVisible(paletteWindow))
     {
         if (registrySettings.Bar1ID == BAR1ID_BOTTOM)
         {
@@ -402,6 +427,230 @@ void CMainWindow::alignChildrenToMainWindow()
     }
 
     ::EndDeferWindowPos(hDWP);
+    PlaceZoomControls();
+}
+
+void CMainWindow::InvalidateRibbon()
+{
+    // Coalesce: models notify very often while drawing
+    if (m_pRibbon && !m_bRibbonDirty && ::IsWindow(m_hWnd))
+    {
+        m_bRibbonDirty = TRUE;
+        PostMessage(WM_RIBBONREFRESH);
+    }
+}
+
+LRESULT CMainWindow::OnDpiChanged(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    UINT dpi = HIWORD(wParam);
+    const RECT *prc = (const RECT *)lParam;
+    SetWindowPos(NULL, prc->left, prc->top, prc->right - prc->left, prc->bottom - prc->top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+    if (m_pRibbon)
+        LeewayRibbonSetDPI(m_pRibbon, dpi);
+    PaintPrintSetDPI(dpi);
+    if (::IsWindow(g_hStatusBar))
+    {
+        ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, MulDiv(21, dpi, 96), 0);
+        MakeStatusIcons();
+    }
+    alignChildrenToMainWindow();
+    return 0;
+}
+
+// The status bar ignores control notifications: forward the zoom controls' to the main window
+static LRESULT CALLBACK StatusBarForwardProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam,
+                                             UINT_PTR uIdSubclass, DWORD_PTR dwRefData)
+{
+    if (uMsg == WM_HSCROLL || uMsg == WM_COMMAND)
+        return ::SendMessageW((HWND)dwRefData, uMsg, wParam, lParam);
+    return ::DefSubclassProc(hWnd, uMsg, wParam, lParam);
+}
+
+// Small status-bar glyphs drawn with GDI (own art): 0 cursor cross, 1 selection box, 2 image frame
+static HICON MakeStatusGlyph(int kind, int px)
+{
+    BITMAPINFO bi = { { sizeof(BITMAPINFOHEADER), px, -px, 1, 32, BI_RGB } };
+    void *bits = NULL;
+    HDC hdcScreen = ::GetDC(NULL);
+    HDC hdc = ::CreateCompatibleDC(hdcScreen);
+    HBITMAP hbmColor = ::CreateDIBSection(hdcScreen, &bi, DIB_RGB_COLORS, &bits, NULL, 0);
+    HBITMAP hbmMask = ::CreateBitmap(px, px, 1, 1, NULL);
+    ::ReleaseDC(NULL, hdcScreen);
+    HICON hIcon = NULL;
+    if (hbmColor && hbmMask && bits)
+    {
+        const COLORREF key = RGB(255, 0, 255);
+        HGDIOBJ old = ::SelectObject(hdc, hbmColor);
+        RECT rc = { 0, 0, px, px };
+        HBRUSH hbr = ::CreateSolidBrush(key);
+        ::FillRect(hdc, &rc, hbr);
+        ::DeleteObject(hbr);
+        int w = (px >= 24) ? 2 : 1;
+        COLORREF ink = ::GetSysColor(COLOR_WINDOWTEXT);
+        HPEN pen = ::CreatePen(kind == 1 ? PS_DOT : PS_SOLID, 1, ink);
+        HPEN penSolid = ::CreatePen(PS_SOLID, w, ink);
+        HGDIOBJ oldPen = ::SelectObject(hdc, penSolid);
+        HGDIOBJ oldBrush = ::SelectObject(hdc, ::GetStockObject(HOLLOW_BRUSH));
+        int m = px / 8, c = px / 2, e = px - 1 - m;
+        if (kind == 0)
+        {
+            ::MoveToEx(hdc, m, c, NULL); ::LineTo(hdc, e + 1, c);
+            ::MoveToEx(hdc, c, m, NULL); ::LineTo(hdc, c, e + 1);
+            int a = px / 6;
+            POINT t1[3] = { { c, m }, { c - a, m + a }, { c + a, m + a } };
+            POINT t2[3] = { { c, e }, { c - a, e - a }, { c + a, e - a } };
+            POINT t3[3] = { { m, c }, { m + a, c - a }, { m + a, c + a } };
+            POINT t4[3] = { { e, c }, { e - a, c - a }, { e - a, c + a } };
+            ::Polyline(hdc, t1, 3); ::Polyline(hdc, t2, 3); ::Polyline(hdc, t3, 3); ::Polyline(hdc, t4, 3);
+        }
+        else if (kind == 1)
+        {
+            ::SelectObject(hdc, pen);
+            ::Rectangle(hdc, m, m, e + 1, e + 1);
+        }
+        else
+        {
+            ::Rectangle(hdc, m, m + px / 4, e - px / 4 + 1, e + 1);
+            ::MoveToEx(hdc, e - px / 4, m, NULL); ::LineTo(hdc, e + 1, m);
+            ::MoveToEx(hdc, e, m, NULL); ::LineTo(hdc, e, m + px / 4 + 1);
+        }
+        ::SelectObject(hdc, oldPen);
+        ::SelectObject(hdc, oldBrush);
+        ::DeleteObject(pen);
+        ::DeleteObject(penSolid);
+        ::SelectObject(hdc, old);
+        DWORD *pix = (DWORD *)bits;
+        for (int i = 0; i < px * px; i++)
+            pix[i] = ((pix[i] & 0x00FFFFFF) == ((GetBValue(key)) | (GetGValue(key) << 8) | (GetRValue(key) << 16))) ? 0 : (pix[i] | 0xFF000000);
+        ICONINFO ii = { TRUE, 0, 0, hbmMask, hbmColor };
+        hIcon = ::CreateIconIndirect(&ii);
+    }
+    if (hbmColor) ::DeleteObject(hbmColor);
+    if (hbmMask) ::DeleteObject(hbmMask);
+    ::DeleteDC(hdc);
+    return hIcon;
+}
+
+void CMainWindow::MakeStatusIcons()
+{
+    if (!::IsWindow(g_hStatusBar))
+        return;
+    int px = MulDiv(16, (int)LeewayDpiGetForWindow(m_hWnd), 96);
+    for (int i = 0; i < 3; i++)
+    {
+        HICON h = MakeStatusGlyph(i, px);
+        ::SendMessageW(g_hStatusBar, SB_SETICON, i + 1, (LPARAM)h);
+        if (m_hStatusIcons[i])
+            ::DestroyIcon(m_hStatusIcons[i]);
+        m_hStatusIcons[i] = h;
+    }
+}
+
+static const int kZoomSteps[7] = { 125, 250, 500, 1000, 2000, 4000, 8000 };
+
+void CMainWindow::UpdateStatusInfo()
+{
+    if (!::IsWindow(g_hStatusBar))
+        return;
+    CStringW strImage, strZoom;
+    strImage.Format(L"%d x %d px", imageModel.GetWidth(), imageModel.GetHeight());
+    strZoom.Format(L"%d%%", toolsModel.GetZoom() / 10);
+    ::SendMessageW(g_hStatusBar, SB_SETTEXT, 3, (LPARAM)(LPCWSTR)strImage);
+    ::SendMessageW(g_hStatusBar, SB_SETTEXT, 4, (LPARAM)(LPCWSTR)strZoom);
+
+    if (m_hZoomSlider)
+    {
+        int pos = 3;
+        for (int i = 0; i < 7; i++)
+            if (kZoomSteps[i] == toolsModel.GetZoom())
+                pos = i;
+        ::SendMessageW(m_hZoomSlider, TBM_SETPOS, TRUE, pos);
+    }
+}
+
+void CMainWindow::PlaceZoomControls()
+{
+    if (!m_hZoomSlider || !::IsWindow(g_hStatusBar))
+        return;
+    RECT rc;
+    if (!::SendMessageW(g_hStatusBar, SB_GETRECT, 4, (LPARAM)&rc))
+        return;
+    int k = (int)LeewayDpiGetForWindow(m_hWnd);
+    int cx = MulDiv(24, k, 96), x = rc.left + MulDiv(54, k, 96), h = rc.bottom - rc.top - 2;
+    int sw = rc.right - x - 2 * cx - MulDiv(6, k, 96);
+    UINT f = SWP_NOACTIVATE | SWP_SHOWWINDOW;
+    ::SetWindowPos(m_hZoomOut, HWND_TOP, x, rc.top + 1, cx, h, f);
+    ::SetWindowPos(m_hZoomSlider, HWND_TOP, x + cx, rc.top + 1, sw > 20 ? sw : 20, h, f);
+    ::SetWindowPos(m_hZoomIn, HWND_TOP, x + cx + (sw > 20 ? sw : 20), rc.top + 1, cx, h, f);
+}
+
+void CMainWindow::StepZoom(int delta)
+{
+    int pos = 3;
+    for (int i = 0; i < 7; i++)
+        if (kZoomSteps[i] == toolsModel.GetZoom())
+            pos = i;
+    pos += delta;
+    if (pos < 0 || pos > 6)
+        return;
+    toolsModel.SetZoom(kZoomSteps[pos]);
+}
+
+LRESULT CMainWindow::OnHScroll(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    if ((HWND)lParam == m_hZoomSlider)
+    {
+        int pos = (int)::SendMessageW(m_hZoomSlider, TBM_GETPOS, 0, 0);
+        if (pos >= 0 && pos <= 6 && kZoomSteps[pos] != toolsModel.GetZoom())
+            toolsModel.SetZoom(kZoomSteps[pos]);
+    }
+    return 0;
+}
+
+LRESULT CMainWindow::OnRibbonRefresh(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    m_bRibbonDirty = FALSE;
+    UpdateStatusInfo();
+    if (m_pRibbon)
+    {
+        LeewayRibbonSetContext(m_pRibbon, L"IsTextTool", toolsModel.GetActiveTool() == TOOL_TEXT);
+        PaintRibbonInvalidateAll(m_pRibbon);
+    }
+    return 0;
+}
+
+BOOL CMainWindow::PreTranslateRibbon(MSG *pMsg)
+{
+    return m_pRibbon && LeewayRibbonPreTranslateMessage(m_pRibbon, pMsg);
+}
+
+void CMainWindow::SetRibbonAccelerators(HACCEL hAccel)
+{
+    if (m_pRibbon)
+        LeewayRibbonSetAccelerators(m_pRibbon, hAccel);
+}
+
+void CMainWindow::SaveAsFormat(PCWSTR pszExt)
+{
+    if (!g_isAFile)
+    {
+        // No file name yet: the Save As dialog picks the name and the format
+        saveImage(FALSE);
+        return;
+    }
+    canvasWindow.OnEndDraw(FALSE);
+    PathRenameExtensionW(g_szFileName, pszExt);
+    imageModel.SaveImage(g_szFileName);
+}
+
+LRESULT CMainWindow::OnNotify(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
+{
+    NMHDR *pnmh = (NMHDR *)lParam;
+    if (m_pRibbon && pnmh && pnmh->hwndFrom == LeewayRibbonGetHWND(m_pRibbon) &&
+        (pnmh->code == LWUI_RBN_HEIGHTCHANGED || pnmh->code == LWUI_RBN_MINIMIZED))
+        alignChildrenToMainWindow();
+    return 0;
 }
 
 void CMainWindow::saveImage(BOOL overwrite)
@@ -547,18 +796,46 @@ LRESULT CMainWindow::OnCreate(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHa
     m_hMenu = ::LoadMenuW(g_hinstExe, MAKEINTRESOURCEW(ID_MENU));
     SetMenu(m_hMenu);
 
+    // Initialize the ribbon
+    HRESULT hrRibbon = PaintRibbonInitialize(m_hWnd, &m_pRibbon);
+    if (FAILED(hrRibbon))
+    {
+        WCHAR szMsg[64];
+        StringCchPrintfW(szMsg, _countof(szMsg), L"PAINT: ribbon init failed 0x%08lX\n", (ULONG)hrRibbon);
+        OutputDebugStringW(szMsg);
+        { FILE *f = _wfopen(L"C:/Users/Nicolas/AppData/Local/Temp/pv/rib.txt", L"a"); if (f) { fputws(szMsg, f); fclose(f);} }
+    }
+
     // Create the status bar
     DWORD style = SBARS_SIZEGRIP | WS_CHILD | (registrySettings.ShowStatusBar ? WS_VISIBLE : 0);
     g_hStatusBar = ::CreateWindowExW(0, STATUSCLASSNAME, NULL, style, 0, 0, 0, 0, m_hWnd,
                                      NULL, g_hinstExe, NULL);
-    ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, 21, 0);
+    ::SendMessageW(g_hStatusBar, SB_SETMINHEIGHT, MulDiv(21, LeewayDpiGetForWindow(m_hWnd), 96), 0);
+
+    // Zoom controls laid over the status bar's last part
+    ::SetWindowSubclass(g_hStatusBar, StatusBarForwardProc, 1, (DWORD_PTR)m_hWnd);
+    m_hZoomOut = ::CreateWindowExW(0, L"BUTTON", L"\u2212", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hStatusBar,
+                                   (HMENU)(UINT_PTR)9001, g_hinstExe, NULL);
+    m_hZoomIn = ::CreateWindowExW(0, L"BUTTON", L"+", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON, 0, 0, 0, 0, g_hStatusBar,
+                                  (HMENU)(UINT_PTR)9002, g_hinstExe, NULL);
+    m_hZoomSlider = ::CreateWindowExW(0, TRACKBAR_CLASSW, NULL, WS_CHILD | WS_VISIBLE | TBS_HORZ | TBS_NOTICKS, 0, 0, 0, 0,
+                                      g_hStatusBar, (HMENU)(UINT_PTR)9003, g_hinstExe, NULL);
+    ::SendMessageW(m_hZoomSlider, TBM_SETRANGE, TRUE, MAKELONG(0, 6));
 
     // Create the tool box
     toolBoxContainer.DoCreate(m_hWnd);
+    if (m_pRibbon)
+    {
+        // The ribbon replaces the menu bar, tool box and palette
+        SetMenu(NULL);
+        toolBoxContainer.ShowWindow(SW_HIDE);
+    }
 
     // Create the palette window
     RECT rcEmpty = { 0, 0, 0, 0 }; // Rely on WM_SIZE
     style = WS_CHILD | (registrySettings.ShowPalette ? WS_VISIBLE : 0);
+    if (m_pRibbon)
+        style &= ~WS_VISIBLE;
     paletteWindow.Create(m_hWnd, rcEmpty, NULL, style, WS_EX_STATICEDGE);
 
     // Create the canvas
@@ -599,6 +876,16 @@ LRESULT CMainWindow::OnDestroy(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
         ::DestroyMenu(m_hMenu);
         m_hMenu = NULL;
     }
+
+    for (int i = 0; i < 3; i++)
+    {
+        if (m_hStatusIcons[i])
+            ::DestroyIcon(m_hStatusIcons[i]);
+        m_hStatusIcons[i] = NULL;
+    }
+    PaintPrintCleanup();
+    PaintRibbonCleanup(m_pRibbon);
+    m_pRibbon = NULL;
 
     PostQuitMessage(0); /* send a WM_QUIT to the message queue */
     return 0;
@@ -768,11 +1055,18 @@ LRESULT CMainWindow::OnInitMenuPopup(UINT nMsg, WPARAM wParam, LPARAM lParam, BO
 
 LRESULT CMainWindow::OnSize(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled)
 {
-    int test[] = { LOWORD(lParam) - 260, LOWORD(lParam) - 140, LOWORD(lParam) - 20 };
+    // Parts: filler | cursor | selection size | image size | zoom
+    int w = LOWORD(lParam);
+    int k = (int)LeewayDpiGetForWindow(m_hWnd);
+    int test[] = { w - MulDiv(760, k, 96), w - MulDiv(640, k, 96), w - MulDiv(520, k, 96), w - MulDiv(360, k, 96), -1 };
     if (::IsWindow(g_hStatusBar))
     {
         ::SendMessageW(g_hStatusBar, WM_SIZE, 0, 0);
-        ::SendMessageW(g_hStatusBar, SB_SETPARTS, 3, (LPARAM)&test);
+        ::SendMessageW(g_hStatusBar, SB_SETPARTS, 5, (LPARAM)&test);
+        UpdateStatusInfo();
+        PlaceZoomControls();
+        if (!m_hStatusIcons[0])
+            MakeStatusIcons();
     }
     alignChildrenToMainWindow();
     return 0;
@@ -827,6 +1121,15 @@ LRESULT CMainWindow::OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
         return 0;
     }
 
+    if (LOWORD(wParam) == 9001 || LOWORD(wParam) == 9002)
+    {
+        StepZoom(LOWORD(wParam) == 9001 ? -1 : 1);
+        return 0;
+    }
+
+    if (m_pRibbon && PaintRibbonHandleCommand(LOWORD(wParam)))
+        return 0;
+
     BOOL textShown = (toolsModel.GetActiveTool() == TOOL_TEXT && ::IsWindowVisible(textEditWindow));
     switch (LOWORD(wParam))
     {
@@ -867,36 +1170,13 @@ LRESULT CMainWindow::OnCommand(UINT nMsg, WPARAM wParam, LPARAM lParam, BOOL& bH
             saveImage(FALSE);
             break;
         case IDM_FILEPAGESETUP:
-            // DUMMY: Shows the dialog only, no functionality
-            PAGESETUPDLG psd;
-            ZeroMemory(&psd, sizeof(psd));
-            psd.lStructSize = sizeof(psd);
-            psd.hwndOwner = m_hWnd;
-            PageSetupDlg(&psd);
+            PaintPrintPageSetup(m_hWnd);
+            break;
+        case IDM_FILEPAGEVIEW:
+            PaintPrintPreview(m_hWnd);
             break;
         case IDM_FILEPRINT:
-            // TODO: Test whether it actually works
-            PRINTDLG pd;
-            ZeroMemory(&pd, sizeof(pd));
-            pd.lStructSize = sizeof(pd);
-            pd.hwndOwner = m_hWnd;
-            pd.hDevMode = NULL;  // freed by user
-            pd.hDevNames = NULL;  // freed by user
-            pd.Flags = PD_USEDEVMODECOPIESANDCOLLATE | PD_RETURNDC;
-            pd.nCopies = 1;
-            pd.nFromPage = 0xffff;
-            pd.nToPage = 0xffff;
-            pd.nMinPage = 1;
-            pd.nMaxPage = 0xffff;
-            if (PrintDlg(&pd) == TRUE)
-            {
-                ::BitBlt(pd.hDC, 0, 0, imageModel.GetWidth(), imageModel.GetHeight(), imageModel.GetDC(), 0, 0, SRCCOPY);
-                DeleteDC(pd.hDC);
-            }
-            if (pd.hDevMode)
-                GlobalFree(pd.hDevMode);
-            if (pd.hDevNames)
-                GlobalFree(pd.hDevNames);
+            PaintPrintNow(m_hWnd);
             break;
         case IDM_FILESEND:
             canvasWindow.OnEndDraw(FALSE);
@@ -1373,12 +1653,19 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, INT nCm
 
     // Load the access keys
     HACCEL hAccel = ::LoadAcceleratorsW(hInstance, MAKEINTRESOURCEW(800));
+    mainWindow.SetRibbonAccelerators(hAccel);
 
     // The message loop
     MSG msg;
     while (::GetMessage(&msg, NULL, 0, 0))
     {
         if (fontsDialog.IsWindow() && fontsDialog.IsDialogMessage(&msg))
+            continue;
+
+        if (PaintPrintPreTranslate(&msg))
+            continue;
+
+        if (mainWindow.PreTranslateRibbon(&msg))
             continue;
 
         if (::TranslateAcceleratorW(mainWindow, hAccel, &msg))

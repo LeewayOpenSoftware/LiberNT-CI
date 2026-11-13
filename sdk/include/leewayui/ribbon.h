@@ -30,6 +30,7 @@
 
 #include <windows.h>
 #include <stdint.h>
+#include <leewayui/theme.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -111,6 +112,7 @@ typedef enum {
                                        with scroll up/down and an expand button opening the full gallery;
                                        LeewayUIPlacement.width sets the strip width. In MIXED/SMALL
                                        variants it becomes the dropdown gallery. */
+    LWUI_CONTROL_SPLIT_SMALL_ICON,  /* SPLIT S, icon only (no label); split button + arrow, 16 px icon */
 } LeewayUIControlKind;
 
 /* ---- Layout tree (arrays + counts, so tables can be static const and
@@ -146,6 +148,7 @@ typedef struct {
     UINT32 launcher_id;         /* command of the dialog launcher at the group's corner, 0 = none (G17) */
     UINT32 control_count;
     const LeewayUIPlacement *controls;
+    UINT32 rows;                /* small-control rows per column: 0 = default 3; 2 for Win7 two-row groups */
 } LeewayUIGroup;
 
 typedef struct {
@@ -240,6 +243,28 @@ HRESULT WINAPI LeewayRibbonGetComboText(ILeewayRibbon *ribbon, UINT32 command_id
 HRESULT WINAPI LeewayRibbonSetContext(ILeewayRibbon *ribbon, const WCHAR *name, BOOL active);
 
 HRESULT WINAPI LeewayRibbonSetIconResolver(ILeewayRibbon *ribbon, LeewayUIIconResolver resolver, void *resolver_context);
+
+/* Gallery item-draw callback (Paint shapes). When set, each gallery / in-ribbon-strip
+ * cell calls it to draw its own glyph (a shape outline) in GDI: draw inside `cell`
+ * using `fg` for a thin outline scaled from `dpi`. Return S_OK if you drew the cell,
+ * or E_NOTIMPL to fall back to the icon/label. command_id is the gallery's owning
+ * command (0 if unknown); item_id is the collection item (the key to draw by). */
+typedef HRESULT (*LeewayUIGalleryDrawHandler)(UINT32 command_id, UINT32 item_id, HDC hdc,
+                                              const RECT *cell, COLORREF fg, UINT32 dpi, void *context);
+HRESULT WINAPI LeewayRibbonSetGalleryDrawCallback(ILeewayRibbon *ribbon, LeewayUIGalleryDrawHandler handler, void *context);
+
+/* Theme override (default system). Forces the ribbon's palette and repaints.
+ * SetLayout also auto-applies the HKCU per-app override for layout.app_name. */
+HRESULT WINAPI LeewayRibbonSetThemePreference(ILeewayRibbon *ribbon, LeewayThemePref pref);
+
+/* Recent files pane in the application menu (G5). The ribbon reads the most-
+ * recently-used list from HKCU\Software\Leeway\<app_name>\Recent (REG_SZ values
+ * "0".."N-1", most-recent first) and shows it as a right pane; choosing one calls
+ * on_open with the full path. max_items 0 hides the pane. The app maintains the
+ * list with LeewayRibbonAddRecentFile (push + dedup + persist). */
+typedef void (*LeewayUIRecentOpenHandler)(const WCHAR *path, void *context);
+HRESULT WINAPI LeewayRibbonSetRecentProvider(ILeewayRibbon *ribbon, LeewayUIRecentOpenHandler on_open, void *context, UINT32 max_items);
+HRESULT WINAPI LeewayRibbonAddRecentFile(ILeewayRibbon *ribbon, const WCHAR *path);
 
 /* Accelerator table whose keys are shown in tooltips (G22); the ribbon copies it. NULL = none. */
 HRESULT WINAPI LeewayRibbonSetAccelerators(ILeewayRibbon *ribbon, HACCEL accelerators);

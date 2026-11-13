@@ -51,6 +51,108 @@ Line(HDC hdc, LONG x1, LONG y1, LONG x2, LONG y2, HBRUSH hBrush, INT thickness)
     FillRect(hdc, &rc, hBrush);
 }
 
+// Unit-box (0..1000) outlines of the preset shapes, scaled into the dragged box.
+int PresetShapePoints(int idx, LONG x1, LONG y1, LONG x2, LONG y2, POINT *out)
+{
+    static const POINT tri[] = { {500,0},{1000,1000},{0,1000} };
+    static const POINT rtri[] = { {0,0},{1000,1000},{0,1000} };
+    static const POINT dia[] = { {500,0},{1000,500},{500,1000},{0,500} };
+    static const POINT pent[] = { {500,0},{1000,382},{809,1000},{191,1000},{0,382} };
+    static const POINT hex[] = { {250,0},{750,0},{1000,500},{750,1000},{250,1000},{0,500} };
+    static const POINT arR[] = { {0,300},{550,300},{550,50},{1000,500},{550,950},{550,700},{0,700} };
+    static const POINT arL[] = { {1000,300},{450,300},{450,50},{0,500},{450,950},{450,700},{1000,700} };
+    static const POINT arU[] = { {300,1000},{300,450},{50,450},{500,0},{950,450},{700,450},{700,1000} };
+    static const POINT arD[] = { {300,0},{700,0},{700,550},{950,550},{500,1000},{50,550},{300,550} };
+    static const POINT call[] = { {0,0},{1000,0},{1000,700},{450,700},{200,1000},{250,700},{0,700} };
+    static const POINT bolt[] = { {400,0},{850,0},{550,380},{900,380},{250,1000},{430,520},{100,520} };
+    POINT unit[64];
+    int n = 0;
+    const POINT *fixed = NULL;
+    switch (idx)
+    {
+        case 0: fixed = tri; n = _countof(tri); break;
+        case 1: fixed = rtri; n = _countof(rtri); break;
+        case 2: fixed = dia; n = _countof(dia); break;
+        case 3: fixed = pent; n = _countof(pent); break;
+        case 4: fixed = hex; n = _countof(hex); break;
+        case 5: fixed = arR; n = _countof(arR); break;
+        case 6: fixed = arL; n = _countof(arL); break;
+        case 7: fixed = arU; n = _countof(arU); break;
+        case 8: fixed = arD; n = _countof(arD); break;
+        case 9: case 10: case 11: // 4, 5 and 6 point stars
+        {
+            int pts = (idx == 9) ? 4 : (idx == 10) ? 5 : 6;
+            double inner = (idx == 9) ? 0.4 : (idx == 10) ? 0.382 : 0.5;
+            for (int i = 0; i < pts * 2; i++)
+            {
+                double a = -3.14159265358979 / 2 + i * 3.14159265358979 / pts;
+                double r = (i & 1) ? 500 * inner : 500;
+                unit[n].x = (LONG)(500 + r * cos(a));
+                unit[n].y = (LONG)(500 + r * sin(a));
+                n++;
+            }
+            break;
+        }
+        case 12: fixed = call; n = _countof(call); break;
+        case 13: // oval callout: ellipse with a tail at the lower left
+        {
+            for (int i = 0; i < 32; i++)
+            {
+                double deg = i * 360.0 / 32;
+                if (deg > 100 && deg < 140)
+                {
+                    if (deg < 110)
+                    {
+                        unit[n].x = 200; unit[n].y = 1000; n++;
+                    }
+                    continue;
+                }
+                double a = deg * 3.14159265358979 / 180;
+                unit[n].x = (LONG)(500 + 500 * cos(a));
+                unit[n].y = (LONG)(350 + 350 * sin(a));
+                n++;
+            }
+            break;
+        }
+        case 14: // cloud callout: scalloped ellipse
+        {
+            for (int i = 0; i < 48; i++)
+            {
+                double a = i * 2 * 3.14159265358979 / 48;
+                double k = 0.86 + 0.14 * fabs(sin(4 * a));
+                unit[n].x = (LONG)(500 + 500 * k * cos(a));
+                unit[n].y = (LONG)(420 + 420 * k * sin(a));
+                n++;
+            }
+            break;
+        }
+        case 15: // heart
+        {
+            for (int i = 0; i < 40; i++)
+            {
+                double t = i * 2 * 3.14159265358979 / 40;
+                double hx = 16 * pow(sin(t), 3);
+                double hy = -(13 * cos(t) - 5 * cos(2 * t) - 2 * cos(3 * t) - cos(4 * t));
+                unit[n].x = (LONG)(500 + hx * 31);
+                unit[n].y = (LONG)(450 + hy * 31);
+                n++;
+            }
+            break;
+        }
+        case 16: fixed = bolt; n = _countof(bolt); break;
+        default: return 0;
+    }
+    LONG left = min(x1, x2), top = min(y1, y2);
+    LONG w = abs(x2 - x1), h = abs(y2 - y1);
+    for (int i = 0; i < n; i++)
+    {
+        POINT u = fixed ? fixed[i] : unit[i];
+        out[i].x = left + MulDiv(u.x, w, 1000);
+        out[i].y = top + MulDiv(u.y, h, 1000);
+    }
+    return n;
+}
+
 void
 Rect(HDC hdc, LONG x1, LONG y1, LONG x2, LONG y2, COLORREF fg,  COLORREF bg, int thickness, int style)
 {

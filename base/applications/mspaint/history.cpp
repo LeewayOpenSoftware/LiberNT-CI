@@ -30,6 +30,8 @@ void ImageModel::NotifyImageChanged()
 
     if (miniature.IsWindow())
         miniature.Invalidate();
+
+    mainWindow.InvalidateRibbon();
 }
 
 ImageModel::ImageModel()
