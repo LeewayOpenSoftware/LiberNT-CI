@@ -176,11 +176,34 @@ RevokeSid(
     LocalFree(SecurityDescriptor);
 }
 
+#define GRANT_WINSTA_ACCESS (WINSTA_ALL_ACCESS | STANDARD_RIGHTS_REQUIRED)
+#define GRANT_DESKTOP_ACCESS (DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU | \
+                              DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD | DESKTOP_JOURNALPLAYBACK | \
+                              DESKTOP_ENUMERATE | DESKTOP_WRITEOBJECTS | DESKTOP_SWITCHDESKTOP | \
+                              STANDARD_RIGHTS_REQUIRED)
+
+static
+BOOL
+IsServiceAccountToken(
+    _In_ HANDLE hToken)
+{
+    BYTE Buffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    PTOKEN_USER User = (PTOKEN_USER)Buffer;
+    DWORD Length;
+
+    if (!GetTokenInformation(hToken, TokenUser, User, sizeof(Buffer), &Length))
+        return TRUE;
+    return IsWellKnownSid(User->User.Sid, WinNetworkServiceSid) ||
+           IsWellKnownSid(User->User.Sid, WinLocalServiceSid);
+}
+
 /* Caller holds DesktopAccessLock: the desktop is opened through the process window station */
 static
 DWORD
 OpenDesktopPath(
     _In_ PCWSTR DesktopPath,
+    _In_ ACCESS_MASK WinStaAccess,
+    _In_ ACCESS_MASK DesktopAccess,
     _Out_ HWINSTA *phWinSta,
     _Out_ HDESK *phDesktop)
 {
@@ -206,14 +229,14 @@ OpenDesktopPath(
         DesktopName = DesktopPath;
     }
 
-    *phWinSta = OpenWindowStationW(WinStaName, FALSE, READ_CONTROL | WRITE_DAC | WINSTA_ENUMDESKTOPS);
+    *phWinSta = OpenWindowStationW(WinStaName, FALSE, WinStaAccess);
     if (*phWinSta == NULL)
         return GetLastError();
 
     hOldWinSta = GetProcessWindowStation();
     if (!SetProcessWindowStation(*phWinSta))
         return GetLastError();
-    *phDesktop = OpenDesktopW(DesktopName, 0, FALSE, READ_CONTROL | WRITE_DAC);
+    *phDesktop = OpenDesktopW(DesktopName, 0, FALSE, DesktopAccess);
     dwError = *phDesktop ? ERROR_SUCCESS : GetLastError();
     SetProcessWindowStation(hOldWinSta);
     return dwError;
@@ -231,10 +254,41 @@ CloseDesktopPath(
         CloseWindowStation(hWinSta);
 }
 
+/* Caller holds DesktopAccessLock: what is granted must be what the client may already use itself */
+static
+DWORD
+CheckClientDesktopAccess(
+    _In_ handle_t hBinding,
+    _In_ PCWSTR DesktopPath)
+{
+    HANDLE hClientToken = NULL;
+    HWINSTA hWinSta = NULL;
+    HDESK hDesktop = NULL;
+    DWORD dwError;
+
+    if (RpcImpersonateClient(hBinding) != RPC_S_OK)
+        return ERROR_ACCESS_DENIED;
+
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &hClientToken))
+        dwError = GetLastError();
+    else if (IsServiceAccountToken(hClientToken))
+        dwError = ERROR_ACCESS_DENIED;
+    else
+        dwError = OpenDesktopPath(DesktopPath, GRANT_WINSTA_ACCESS, GRANT_DESKTOP_ACCESS, &hWinSta, &hDesktop);
+
+    RpcRevertToSelf();
+
+    CloseDesktopPath(hWinSta, hDesktop);
+    if (hClientToken != NULL)
+        CloseHandle(hClientToken);
+    return dwError;
+}
+
 /* Windows grants the new logon access to the window station and desktop it inherits */
 static
 PDESKTOP_GRANT
 GrantDesktopAccess(
+    _In_ handle_t hBinding,
     _In_ HANDLE hToken,
     _In_ PCWSTR DesktopPath,
     _Out_ PDWORD pdwError)
@@ -252,6 +306,11 @@ GrantDesktopAccess(
         *pdwError = ERROR_INVALID_PARAMETER;
         return NULL;
     }
+    if (IsServiceAccountToken(hToken))
+    {
+        *pdwError = ERROR_ACCESS_DENIED;
+        return NULL;
+    }
     Sid = GetLogonSid(hToken, &SidBuffer);
     if (Sid == NULL)
     {
@@ -260,6 +319,13 @@ GrantDesktopAccess(
     }
 
     EnterCriticalSection(&DesktopAccessLock);
+    dwError = CheckClientDesktopAccess(hBinding, DesktopPath);
+    if (dwError != ERROR_SUCCESS)
+    {
+        Grant = NULL;
+        goto done;
+    }
+
     for (Entry = DesktopGrantList.Flink; Entry != &DesktopGrantList; Entry = Entry->Flink)
     {
         Grant = CONTAINING_RECORD(Entry, DESKTOP_GRANT, ListEntry);
@@ -283,18 +349,12 @@ GrantDesktopAccess(
     CopySid(SidLength, Grant->Sid, Sid);
     wcscpy(Grant->Path, DesktopPath);
 
-    dwError = OpenDesktopPath(DesktopPath, &hWinSta, &hDesktop);
+    dwError = OpenDesktopPath(DesktopPath, READ_CONTROL | WRITE_DAC | WINSTA_ENUMDESKTOPS, READ_CONTROL | WRITE_DAC,
+                              &hWinSta, &hDesktop);
     if (dwError == ERROR_SUCCESS)
-        dwError = AllowSid(hWinSta, Sid, WINSTA_ALL_ACCESS | STANDARD_RIGHTS_REQUIRED, &Grant->WinStaAdded);
+        dwError = AllowSid(hWinSta, Sid, GRANT_WINSTA_ACCESS, &Grant->WinStaAdded);
     if (dwError == ERROR_SUCCESS)
-    {
-        dwError = AllowSid(hDesktop, Sid,
-                           DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW | DESKTOP_CREATEMENU |
-                           DESKTOP_HOOKCONTROL | DESKTOP_JOURNALRECORD | DESKTOP_JOURNALPLAYBACK |
-                           DESKTOP_ENUMERATE | DESKTOP_WRITEOBJECTS | DESKTOP_SWITCHDESKTOP |
-                           STANDARD_RIGHTS_REQUIRED,
-                           &Grant->DesktopAdded);
-    }
+        dwError = AllowSid(hDesktop, Sid, GRANT_DESKTOP_ACCESS, &Grant->DesktopAdded);
     if (dwError != ERROR_SUCCESS)
     {
         if (Grant->WinStaAdded)
@@ -330,7 +390,8 @@ ReleaseDesktopGrant(
         return;
     }
     RemoveEntryList(&Grant->ListEntry);
-    OpenDesktopPath(Grant->Path, &hWinSta, &hDesktop);
+    OpenDesktopPath(Grant->Path, READ_CONTROL | WRITE_DAC | WINSTA_ENUMDESKTOPS, READ_CONTROL | WRITE_DAC,
+                    &hWinSta, &hDesktop);
     if (hDesktop && Grant->DesktopAdded)
         RevokeSid(hDesktop, Grant->Sid);
     if (hWinSta && Grant->WinStaAdded)
@@ -686,7 +747,7 @@ SeclCreateProcessWithLogonW(
     StartupInfo.lpDesktop = pRequest->Desktop ? pRequest->Desktop : L"WinSta0\\Default";
     if (pRequest->dwDesktopInherited)
     {
-        Grant = GrantDesktopAccess(hToken, StartupInfo.lpDesktop, &dwError);
+        Grant = GrantDesktopAccess(hBinding, hToken, StartupInfo.lpDesktop, &dwError);
         if (Grant == NULL)
             WARN("Granting access to %S failed with Error %lu\n", StartupInfo.lpDesktop, dwError);
         dwError = ERROR_SUCCESS;
@@ -772,7 +833,6 @@ done:
 
     if (hToken != NULL)
         CloseHandle(hToken);
-
 
     if (pResponse != NULL)
         pResponse->dwError = dwError;

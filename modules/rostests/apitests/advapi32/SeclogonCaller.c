@@ -1,13 +1,16 @@
 /*
  * PROJECT:     LiberNT API tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     The secondary logon service serves only the caller's own process, in the caller's own session
+ * PURPOSE:     The secondary logon service serves only the caller's own process, in the caller's own session,
+ *              and gives the new logon only a desktop the caller may use itself
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
+ *              Copyright 2026 Leeway Open Software
  */
 
 #include "precomp.h"
 #include <lm.h>
 #include <sddl.h>
+#include <winuser.h>
 #include <seclogon_c.h>
 
 #define TEST_USER L"LntSeclCallerTest"
@@ -68,8 +71,10 @@ StartSeclogon(VOID)
 /* Asks the service for a suspended child of the test user on behalf of the process named in the request */
 static
 DWORD
-RequestChild(
+RequestChildEx(
     _In_ DWORD dwNamedProcessId,
+    _In_ DWORD dwLogonFlags,
+    _In_opt_ PWSTR Desktop,
     _Out_ PDWORD pdwChildProcessId)
 {
     SECL_REQUEST Request;
@@ -91,6 +96,9 @@ RequestChild(
     Request.CommandLine = ChildCommandLine;
     Request.dwCreationFlags = CREATE_SUSPENDED;
     Request.dwProcessId = dwNamedProcessId;
+    Request.dwLogonFlags = dwLogonFlags;
+    Request.Desktop = Desktop;
+    Request.dwDesktopInherited = (Desktop != NULL);
 
     RpcTryExcept
     {
@@ -109,6 +117,15 @@ RequestChild(
         *pdwChildProcessId = Response.dwProcessId;
 
     return dwError;
+}
+
+static
+DWORD
+RequestChild(
+    _In_ DWORD dwNamedProcessId,
+    _Out_ PDWORD pdwChildProcessId)
+{
+    return RequestChildEx(dwNamedProcessId, 0, NULL, pdwChildProcessId);
 }
 
 static
@@ -269,6 +286,53 @@ TestOtherSession(VOID)
         SetOwnPrivilege(L"SeTcbPrivilege", FALSE, &WasEnabled);
 }
 
+static
+BOOL
+CanOpenDesktop(
+    _In_ PCWSTR Name)
+{
+    HDESK hDesktop = OpenDesktopW(Name, 0, FALSE, DESKTOP_READOBJECTS | DESKTOP_CREATEWINDOW);
+
+    if (hDesktop == NULL)
+        return FALSE;
+    CloseDesktop(hDesktop);
+    return TRUE;
+}
+
+/* A desktop the caller cannot use is never opened to the new logon, here the caller's own (LOGON_NETCREDENTIALS_ONLY) */
+static
+VOID
+TestDesktopGrant(VOID)
+{
+    WCHAR WinSta[64], Desktop[64], Path[160];
+    DWORD dwChild, dwError;
+
+    if (!GetUserObjectInformationW(GetProcessWindowStation(), UOI_NAME, WinSta, sizeof(WinSta), NULL) ||
+        _wcsicmp(WinSta, L"WinSta0") != 0 ||
+        !GetUserObjectInformationW(GetThreadDesktop(GetCurrentThreadId()), UOI_NAME, Desktop, sizeof(Desktop), NULL))
+    {
+        skip("Not on the interactive window station\n");
+        return;
+    }
+
+    if (CanOpenDesktop(L"Winlogon"))
+    {
+        skip("The caller can already open the Winlogon desktop\n");
+    }
+    else
+    {
+        dwError = RequestChildEx(GetCurrentProcessId(), LOGON_NETCREDENTIALS_ONLY, L"WinSta0\\Winlogon", &dwChild);
+        trace("a request inheriting WinSta0\\Winlogon: error %lu\n", dwError);
+        ok(!CanOpenDesktop(L"Winlogon"), "the request opened the Winlogon desktop to the caller's logon\n");
+        EndChild(dwChild);
+    }
+
+    StringCchPrintfW(Path, ARRAYSIZE(Path), L"%s\\%s", WinSta, Desktop);
+    dwError = RequestChildEx(GetCurrentProcessId(), LOGON_NETCREDENTIALS_ONLY, Path, &dwChild);
+    ok(dwError == ERROR_SUCCESS, "a request inheriting the caller's own desktop %ls: error %lu\n", Path, dwError);
+    EndChild(dwChild);
+}
+
 START_TEST(SeclogonCaller)
 {
     USER_INFO_1 User = {0};
@@ -300,6 +364,7 @@ START_TEST(SeclogonCaller)
     StartSeclogon();
     TestForeignProcess();
     TestOtherSession();
+    TestDesktopGrant();
 
     NetUserDel(NULL, TEST_USER);
 }
