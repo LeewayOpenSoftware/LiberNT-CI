@@ -18,6 +18,7 @@ list(APPEND SOURCE
     HKEY_CLASSES_ROOT.c
     InitiateShutdown.c
     IntegrityLabels.c
+    LogonProcess.c
     LogonSession.c
     LogonSessionEnd.c
     LogonUserNetwork.c
