@@ -2472,7 +2472,7 @@
 @ stub -arch=win64 IoGetFsTrackOffsetState
 @ stub -arch=win64 IoGetFsZeroingOffset
 @ stub -arch=win64 IoGetGenericIrpExtension
-@ stub -arch=win64 IoGetInitiatorProcess
+@ stdcall -arch=win64 IoGetInitiatorProcess(ptr)
 @ stub -arch=win64 IoGetIoAttributionHandle
 @ stdcall IoGetIommuInterface(long ptr)
 @ stdcall IoGetIommuInterfaceEx(long int64 ptr)
@@ -2552,7 +2552,7 @@
 @ stub -arch=win64 IoSteerInterrupt
 @ stub -arch=win64 IoTestDependency
 @ stub -arch=win64 IoTransferActivityId
-@ stub -arch=win64 IoTryQueueWorkItem
+@ stdcall -arch=win64 IoTryQueueWorkItem(ptr ptr long ptr)
 @ stdcall IoUninitializeWorkItem(ptr)
 @ stdcall IoUnregisterBootDriverCallback(ptr)
 @ stub -arch=win64 IoUnregisterContainerNotification

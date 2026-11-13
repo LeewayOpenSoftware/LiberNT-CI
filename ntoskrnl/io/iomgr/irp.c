@@ -2553,3 +2553,18 @@ IoSetIoPriorityHint(
                  IRP_IO_PRIORITY_HINT_VALID;
     return STATUS_SUCCESS;
 }
+
+/*
+ * The initiator is the process on whose behalf another process opened the file.
+ * This kernel records no such process for any file object, so there is never one
+ * to report; callers then use the requestor process.
+ */
+PEPROCESS
+NTAPI
+IoGetInitiatorProcess(
+    _In_ PFILE_OBJECT FileObject)
+{
+    UNREFERENCED_PARAMETER(FileObject);
+
+    return NULL;
+}

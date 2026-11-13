@@ -22,6 +22,11 @@ typedef struct _EX_WORKITEM_CONTEXT
 } EX_WORKITEM_CONTEXT, *PEX_WORKITEM_CONTEXT;
 
 #define TAG_IOWI 'IWOI'
+
+/* The priority hint of an IRP lives in three bits of Irp->Flags that no IRP_* flag uses,
+ * as the hint plus one, so that zero means that no hint was set. */
+#define IOP_IRP_PRIORITY_HINT_SHIFT 17
+#define IOP_IRP_PRIORITY_HINT_MASK  (7UL << IOP_IRP_PRIORITY_HINT_SHIFT)
 #define TAG_IOVP 'PVOI'
 
 typedef struct _IOP_DEVPROP_LEGACY_MAP
