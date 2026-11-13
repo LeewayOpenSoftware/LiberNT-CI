@@ -79,6 +79,34 @@ RtlpCheckForActiveDebugger(VOID)
     return FALSE;
 }
 
+ULONG
+NTAPI
+DebugPrint(
+    _In_ PSTRING DebugString,
+    _In_ ULONG ComponentId,
+    _In_ ULONG Level);
+
+/* The two hooks of sdk/lib/rtl/debug.c (upstream 7fdb0385a88). Upstream's kernel
+ * defers the print when no output is enabled; this kernel prints as it always did. */
+BOOLEAN
+NTAPI
+RtlpDebugPrintWanted(
+    _Out_ PNTSTATUS Status)
+{
+    *Status = STATUS_SUCCESS;
+    return TRUE;
+}
+
+NTSTATUS
+NTAPI
+RtlpDebugPrint(
+    _In_ PSTRING DebugString,
+    _In_ ULONG ComponentId,
+    _In_ ULONG Level)
+{
+    return DebugPrint(DebugString, ComponentId, Level);
+}
+
 BOOLEAN
 NTAPI
 RtlpSetInDbgPrint(VOID)

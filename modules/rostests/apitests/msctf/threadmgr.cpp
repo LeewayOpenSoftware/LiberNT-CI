@@ -681,17 +681,47 @@ static void TestLangBarItemMgr(TSF_FIXTURE *pFixture)
     pMgr->Release();
 }
 
+static void TestNestedActivate(TSF_FIXTURE *pFixture)
+{
+    ITfThreadMgrEx *pEx = NULL;
+    TfClientId tid = 0;
+
+    ok_hr(pFixture->pThreadMgr->Activate(&tid), S_OK);
+    ok_long(tid, pFixture->tid);
+    ok_hr(pFixture->pThreadMgr->Deactivate(), S_OK);
+    ok_hr(pFixture->pThreadMgr->QueryInterface(IID_ITfThreadMgrEx, (void **)&pEx), S_OK);
+    if (!pEx)
+        return;
+    tid = 0;
+    ok_hr(pEx->ActivateEx(&tid, 0), S_FALSE);
+    ok_long(tid, pFixture->tid);
+    ok_hr(pEx->Deactivate(), S_OK);
+    pEx->Release();
+}
+
 START_TEST(threadmgr)
 {
     TSF_FIXTURE fixture;
     BOOL fRegistered;
+    ITfThreadMgr *pActiveMgr = NULL;
+    TfClientId tidActive = 0;
 
     CoInitialize(NULL);
     fRegistered = TestTip_Register();
     if (!fRegistered)
         skip("Cannot register the test text service; run as administrator\n");
     else
+    {
+        g_pTip->hrAdviseKeySink = E_UNEXPECTED;
+        g_pTip->hrUnadviseKeySink = E_UNEXPECTED;
+        g_pTip->hrPreserveKey = E_UNEXPECTED;
+        g_pTip->hrUnpreserveKey = E_UNEXPECTED;
+        CoCreateInstance(CLSID_TF_ThreadMgr, NULL, CLSCTX_INPROC_SERVER, IID_ITfThreadMgr, (void **)&pActiveMgr);
+        ok(pActiveMgr != NULL, "no thread manager\n");
+        if (pActiveMgr)
+            ok_hr(pActiveMgr->Activate(&tidActive), S_OK);
         TestTip_Activate();
+    }
 
     if (Fixture_Init(&fixture, L"abc"))
     {
@@ -700,11 +730,16 @@ START_TEST(threadmgr)
             fixture.pThreadMgr->SetFocus(fixture.pDocMgr);
             TestTip_Activate();
         }
+        TestNestedActivate(&fixture);
         TestClientIdChecks(&fixture);
         TestUIElements(&fixture);
         if (fRegistered && g_pTip->tid)
         {
             ok_long(g_pTip->cActivate, 1);
+            ok_hr(g_pTip->hrAdviseKeySink, S_OK);
+            ok_hr(g_pTip->hrUnadviseKeySink, S_OK);
+            ok_hr(g_pTip->hrPreserveKey, S_OK);
+            ok_hr(g_pTip->hrUnpreserveKey, S_OK);
             TestFunctionProviders(&fixture, g_pTip->tid, CLSID_TestTip);
             TestPreservedKeys(&fixture, g_pTip->tid);
             TestTip_Deactivate();
@@ -717,6 +752,11 @@ START_TEST(threadmgr)
         TestLangBarItemMgr(&fixture);
     }
     Fixture_Done(&fixture);
+    if (pActiveMgr)
+    {
+        pActiveMgr->Deactivate();
+        pActiveMgr->Release();
+    }
     {
         ITfThreadMgrEx *pEx = NULL;
         DWORD dwFlags = 0xdead;

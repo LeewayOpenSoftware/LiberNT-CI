@@ -181,6 +181,7 @@ KMT_TESTFUNC Test_IoCreateDeviceSecure;
 KMT_TESTFUNC Test_IoDeleteDeviceName;
 KMT_TESTFUNC Test_IoReadPartitionTable;
 KMT_TESTFUNC Test_IoPciMessageEnable;
+KMT_TESTFUNC Test_IoPagingIrpRetire;
 KMT_TESTFUNC Test_IoCreateFile;
 KMT_TESTFUNC Test_IoCreateFileAccessCheck;
 KMT_TESTFUNC Test_IoCreateSystemThread;
@@ -326,6 +327,7 @@ KMT_TESTFUNC Test_KeAffinityKM;
 KMT_TESTFUNC Test_KeBugCheckCbKM;
 KMT_TESTFUNC Test_KeBugCheckStop;
 KMT_TESTFUNC Test_KeBadInstructionPointer;
+KMT_TESTFUNC Test_KeKernelStackOverflow;
 KMT_TESTFUNC Test_KeSystemThreadException;
 KMT_TESTFUNC Test_KeUnhandledException;
 KMT_TESTFUNC Test_KePcr;
@@ -423,6 +425,7 @@ KMT_TESTFUNC Test_RtlGetVersion;
 KMT_TESTFUNC Test_RtlIntSafe;
 KMT_TESTFUNC Test_RtlIsValidOemCharacter;
 KMT_TESTFUNC Test_MmDriverMemory;
+KMT_TESTFUNC Test_MmMemoryNotification;
 KMT_TESTFUNC Test_MmMapReserve;
 KMT_TESTFUNC Test_MmPhysical;
 KMT_TESTFUNC Test_MmPrefetchPages;
@@ -676,6 +679,7 @@ const KMT_TEST TestList[] =
     { "IoPciEnumeration",                   Test_IoPciEnumeration },
     { "IoPciRom",                           Test_IoPciRom },
     { "IoPciMessageEnable",                 Test_IoPciMessageEnable },
+    { "IoPagingIrpRetire",                  Test_IoPagingIrpRetire },
     { "IoStackLimits",                      Test_IoStackLimits },
     { "IoVpb",                              Test_IoVpb },
     { "IoShareAccessEx",                    Test_IoShareAccessEx },
@@ -756,6 +760,7 @@ const KMT_TEST TestList[] =
     { "KeBugCheckCbKM",                     Test_KeBugCheckCbKM },
     { "-KeBugCheckStop",                    Test_KeBugCheckStop },
     { "-KeBadInstructionPointer",           Test_KeBadInstructionPointer },
+    { "-KeKernelStackOverflow",             Test_KeKernelStackOverflow },
     { "-KeSystemThreadException",           Test_KeSystemThreadException },
     { "-KeUnhandledException",              Test_KeUnhandledException },
     { "KeCriticalRegionKM",                 Test_KeCriticalRegionKM },
@@ -802,6 +807,7 @@ const KMT_TEST TestList[] =
     { "MmWddmRotateValid",                  Test_MmWddmRotateValid },
     { "MmMapReserve",                       Test_MmMapReserve },
     { "MmDriverMemory",                     Test_MmDriverMemory },
+    { "MmMemoryNotification",               Test_MmMemoryNotification },
     { "MmPhysical",                         Test_MmPhysical },
     { "MmPrefetchPages",                    Test_MmPrefetchPages },
     { "MmPrivatePages",                     Test_MmPrivatePages },

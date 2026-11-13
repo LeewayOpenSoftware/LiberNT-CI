@@ -6,10 +6,12 @@ list(APPEND SOURCE
     composition.cpp
     editsession.cpp
     inputmode.cpp
+    keyroute.cpp
     langbar.cpp
     langbarmgr.cpp
     layouttip.cpp
     owner.cpp
+    profilemgr.cpp
     profiles.cpp
     property.cpp
     range.cpp
