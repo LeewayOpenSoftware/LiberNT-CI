@@ -541,8 +541,9 @@ IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
         /* Check if we have a Security Descriptor */
         if (DeviceObject->SecurityDescriptor)
         {
-            /* Dereference it */
+            /* Dereference it; the delete procedure must not release it again */
             ObDereferenceSecurityDescriptor(DeviceObject->SecurityDescriptor, 1);
+            DeviceObject->SecurityDescriptor = NULL;
         }
 
         /* Remove the device from the list */
