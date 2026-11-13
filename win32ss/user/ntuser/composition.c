@@ -5098,6 +5098,17 @@ IntCompositionRedirectDC(_In_opt_ PWND Wnd, _In_ HDC hDC, _In_ ULONG DcxFlags, _
                                            (DcxFlags & DCX_CLIPSIBLINGS) != 0);
     }
 
+    /* A hidden top-level layered window still owns its whole surface:
+     * UpdateLayeredWindow paints it before ShowWindow (the usual pattern), and
+     * the classic VisRgn, empty while hidden, would clip that paint to nothing;
+     * the window then shows an empty backing. Nothing else draws into a
+     * layered window's surface, so the full own rectangle is the right clip. */
+    if (prgn == NULL && Wnd == ancestor &&
+        (Wnd->ExStyle & WS_EX_LAYERED) && !(Wnd->style & WS_VISIBLE))
+    {
+        prgn = IntSysCreateRectpRgnIndirect(&rcOwn);
+    }
+
     if (prgn == NULL)
         prgn = IntSysCreateRectpRgn(0, 0, 0, 0);
     if (prgn == NULL)
