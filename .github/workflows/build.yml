@@ -349,7 +349,7 @@ jobs:
 
     - name: Build
       run: |
-        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_lookup_index_cache_test ntfslib_mft_mirror_fallback_test ntfslib_corrupt_runlist_dirty_test ntfslib_fuse
+        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_lookup_index_cache_test ntfslib_mft_mirror_fallback_test ntfslib_corrupt_runlist_dirty_test ntfslib_lost_write_dirty_test ntfslib_fuse
 
     - name: Run the host tests
       env:
@@ -357,7 +357,7 @@ jobs:
         UBSAN_OPTIONS: print_stacktrace=1
         NTFSLIB_KEEP_FAILED: ${{ runner.temp }}/ntfslib-failed
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty|full_base_growth"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty|lost_write_dirty|full_base_growth"
 
     - name: Upload the images of failed host tests
       if: ${{ failure() }}

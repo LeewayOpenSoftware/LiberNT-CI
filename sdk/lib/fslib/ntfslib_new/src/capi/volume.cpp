@@ -328,6 +328,14 @@ NtfsVolumeRetainDirty(
     reinterpret_cast<PVolume>(DiskVolume)->RetainDirty(Retain);
 }
 
+BOOLEAN
+NtfsVolumeReportsDirty(
+    _In_ PNtfsVolume DiskVolume,
+    _In_ USHORT Flags)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->ReportsDirty(Flags);
+}
+
 NTSTATUS
 NtfsVolumeMarkCleanForShutdown(
     _In_ PNtfsVolume DiskVolume)

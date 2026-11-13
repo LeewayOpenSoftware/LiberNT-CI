@@ -19,9 +19,17 @@ NtfsDiskPrepareMountKm(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG SectorBytes);
 
-/* Drops clean blocks cached for a device that failed to mount. */
+/* Drops clean blocks cached for a device whose volume is gone (a failed
+ * mount, a dismount), and what was learned about the device for media
+ * ordering. Dirty blocks stay. */
 VOID
 NtfsDiskReleaseKm(_In_ PDEVICE_OBJECT DeviceObject);
+
+/* Forget what was learned about a device for media ordering (write cache,
+ * FUA, counters); the next use probes it again. Call when a volume on it is
+ * released, so a reused device object is never trusted on an old answer. */
+VOID
+NtfsDiskForgetDeviceKm(_In_ PDEVICE_OBJECT DeviceObject);
 
 /* Writes out metadata held back by the block cache. */
 NTSTATUS
@@ -49,6 +57,34 @@ NTSTATUS
 NtfsDiskFlushRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
                     _In_ ULONGLONG Offset,
                     _In_ ULONG Length);
+
+/* As NtfsDiskFlushRangeKm, and the bytes are on the medium when it returns:
+ * the device's write cache is flushed when the device may hold writes, so a
+ * pointer written next cannot overtake the range on power loss. This is the
+ * library's CommitRange, and what a write-through write needs. */
+NTSTATUS
+NtfsDiskCommitRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
+                     _In_ ULONGLONG Offset,
+                     _In_ ULONG Length);
+
+/* What the environment learned about a device and what it did for media
+ * ordering; for tests and for the debugger. Zeroed for an unknown device. */
+typedef struct _NTFS_DURABILITY_STATS
+{
+    BOOLEAN Probed;
+    BOOLEAN WriteCache;      /* the device may hold completed writes */
+    BOOLEAN Fua;             /* SL_WRITE_THROUGH reaches the medium */
+    BOOLEAN FlushRejected;   /* the device refused IRP_MJ_FLUSH_BUFFERS */
+    BOOLEAN NotDurable;      /* volatile cache, flush refused, no FUA: ordering is not on the medium */
+    ULONG Flushes;           /* device flushes issued for ordering and explicitly */
+    ULONG FlushesSkipped;    /* ordering edges that needed no flush */
+    ULONG FuaWrites;
+    ULONG WritesSinceFlush;
+} NTFS_DURABILITY_STATS, *PNTFS_DURABILITY_STATS;
+
+VOID
+NtfsDiskDurabilityStatsKm(_In_ PDEVICE_OBJECT DeviceObject,
+                          _Out_ PNTFS_DURABILITY_STATS Stats);
 
 NTSTATUS
 NtfsDiskReadKm(_In_ PDEVICE_OBJECT DeviceObject,

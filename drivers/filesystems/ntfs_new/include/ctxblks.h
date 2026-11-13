@@ -28,6 +28,10 @@ typedef struct _VolumeContextBlock
 {
     PNtfsVolume DiskVolume;
     PDEVICE_OBJECT StorageDevice;
+    /* The volume's VPB, as handed to the mount request. It belongs to the
+     * real volume device; StorageDevice may be a filter attached above it
+     * and then carries a VPB of its own (or none). */
+    PVPB Vpb;
     PFILE_OBJECT StreamFileObject;
     ERESOURCE MetadataResource;
     EX_PUSH_LOCK MetadataGate;
@@ -520,8 +524,8 @@ NtfsIsBootExecuteWindow(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 }
 
 /*
- * The same window, for callers that hold only the VolCB (the mount set
- * StorageDevice->Vpb to the volume's VPB, vol.c). Without VolumeStateMutex
+ * The same window, for callers that hold only the VolCB (the mount stored
+ * the volume's VPB in VolCB->Vpb, vol.c). Without VolumeStateMutex
  * the answer may be stale by one paging-file creation; PagingFileSeen only
  * goes FALSE -> TRUE, so a racing caller at worst defers one more stamp.
  */
@@ -529,7 +533,7 @@ FORCEINLINE
 BOOLEAN
 NtfsIsVolumeInBootExecuteWindow(_In_ PVolumeContextBlock VolCB)
 {
-    PVPB Vpb = VolCB->StorageDevice ? VolCB->StorageDevice->Vpb : NULL;
+    PVPB Vpb = VolCB->Vpb;
 
     return !VolCB->PagingFileSeen &&
            Vpb && Vpb->RealDevice &&

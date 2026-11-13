@@ -253,7 +253,8 @@ NTSTATUS
 NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
                     _In_ PFileContextBlock FileCB,
                     _In_ ULONGLONG FileOffset,
-                    _In_ ULONGLONG Length)
+                    _In_ ULONGLONG Length,
+                    _In_ BOOLEAN Durable)
 {
     NtfsRetrievalExtent Extent;
     ULONGLONG ReturnedStartingVcn;
@@ -311,7 +312,9 @@ NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
             while (RunLength != 0)
             {
                 Chunk = (ULONG)min(RunLength, 0x40000000ULL);
-                Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Chunk);
+                Status = Durable
+                         ? NtfsDiskCommitRangeKm(VolCB->StorageDevice, DiskOffset, Chunk)
+                         : NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Chunk);
                 if (!NT_SUCCESS(Status))
                     return Status;
                 DiskOffset += Chunk;
@@ -849,7 +852,11 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
              BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
         {
-            NTSTATUS CommitStatus = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
+            /* Write-through promises the medium (Windows NTFS writes it with
+             * FUA); a paging or non-cached write only promises the device. */
+            NTSTATUS CommitStatus = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length,
+                                                        BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
+                                                        BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH));
 
             if (!NT_SUCCESS(CommitStatus) &&
                 (CommitStatus != STATUS_INSUFFICIENT_RESOURCES ||

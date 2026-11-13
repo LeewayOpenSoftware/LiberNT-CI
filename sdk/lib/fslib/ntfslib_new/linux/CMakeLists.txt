@@ -258,6 +258,20 @@ if(BUILD_TESTING)
         COMMAND ntfslib_corrupt_runlist_dirty_test
     )
 
+    add_executable(ntfslib_lost_write_dirty_test
+        tests/lost_write_dirty.cpp
+    )
+    target_compile_features(ntfslib_lost_write_dirty_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_lost_write_dirty_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_lost_write_dirty_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_lost_write_dirty
+        COMMAND ntfslib_lost_write_dirty_test
+    )
+
     add_executable(ntfslib_lookup_index_cache_test
         tests/lookup_index_cache.cpp
     )
