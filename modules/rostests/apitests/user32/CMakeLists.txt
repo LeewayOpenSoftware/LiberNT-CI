@@ -66,6 +66,7 @@ list(APPEND SOURCE
     ImeWindow.c
     InitializeLpkHooks.c
     InputMessageSource.c
+    LoadImage_PngIcon.c
     InvalidHandles.c
     IsTopLevelWindow.c
     IsServerSideWindow.c
