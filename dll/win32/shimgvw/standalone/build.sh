@@ -7,8 +7,8 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 SH="$HERE/.."; ROOT="$SH/../../.."; LW="$ROOT/sdk/lib/leewayui"
 OUT="$HERE/out"; mkdir -p "$OUT/obj"
 INC="-I$HERE/shim -I$SH -I$ROOT/sdk/include -I$ROOT/sdk/include/reactos -I$LW"
-DEF="-include $HERE/shim/pre.h -DUNICODE -D_UNICODE -D__REACTOS__ -D_WIN32_WINNT=0x0A00 -Wno-everything"
-for f in shimgvw util anime vribbon_model; do
+DEF="-include $HERE/shim/pre.h -DUNICODE -D_UNICODE -D__REACTOS__ -D_WIN32_WINNT=0x0A00 -DVPILL_TESTHOOK -Wno-everything"
+for f in shimgvw util anime vribbon_model vpill; do
   clang -std=gnu11 -O2 $DEF $INC -c "$SH/$f.c" -o "$OUT/obj/$f.o" &
 done
 for f in loader vribbon; do
@@ -24,6 +24,10 @@ SHW="$(cd "$SH" && pwd -W)"
 sed -e '/reactos\/version.rc/d' -e '/manifest_hosted/d' -e 's#<winuser.rh>#<winuser.h>#' \
     -e '/WINE_REGISTRY/d' -e 's#"res/#"'"$SHW"'/res/#g' -e 's#"lang/#"'"$SHW"'/lang/#g' "$SH/shimgvw.rc" > "$OUT/rc_gen.rc"
 llvm-windres --codepage=65001 -DLANGUAGE_EN_US -DUNICODE -D_UNICODE -I"$SH" -I"$ROOT/sdk/include" -I"$ROOT/sdk/include/reactos" "$OUT/rc_gen.rc" -O coff -o "$OUT/obj/rsrc.o"
+SAW="$(cd "$HERE" && pwd -W)"
+printf '1 24 "%s/photoviewer.manifest"
+' "$SAW" > "$OUT/manifest.rc"
+llvm-windres "$OUT/manifest.rc" -O coff -o "$OUT/obj/manifest.o"
 clang++ -static -mwindows -municode -Wl,--allow-multiple-definition -o "$OUT/photoviewer.exe" "$OUT"/obj/*.o \
   -lgdiplus -lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -ladvapi32 -luser32 -lole32 -loleaut32 \
   -lshlwapi -luuid -luxtheme -ldwmapi -lshcore -lmsimg32 -lwinmm -limm32 -lversion

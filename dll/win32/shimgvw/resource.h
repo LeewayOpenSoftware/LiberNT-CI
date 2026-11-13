@@ -112,3 +112,33 @@
 
 /* Keyboard accelerators */
 #define IDR_ACCELERATOR 600
+
+/* Pill chrome: menu strip, commands and strings */
+#define IDC_MENU_COPY      640
+#define IDC_MENU_COPYPATH  641
+#define IDC_MENU_EMAIL     642
+#define IDC_MENU_BURN      643
+#define IDC_MENU_OPENWITH  644
+#define IDC_MENU_PROPS     645
+
+#define IDS_MENU_FILE      560
+#define IDS_MENU_PRINT     561
+#define IDS_MENU_EMAIL     562
+#define IDS_MENU_BURN      563
+#define IDS_MENU_OPEN      564
+#define IDS_ITEM_OPEN      565
+#define IDS_ITEM_SAVEAS    566
+#define IDS_ITEM_COPY      567
+#define IDS_ITEM_COPYPATH  568
+#define IDS_ITEM_DELETE    569
+#define IDS_ITEM_WALLPAPER 570
+#define IDS_ITEM_PROPS     571
+#define IDS_ITEM_EXIT      572
+#define IDS_ITEM_PRINT     573
+#define IDS_ITEM_BURN      574
+#define IDS_ITEM_EDIT      575
+#define IDS_ITEM_OPENWITH  576
+#define IDS_TOOLTIP_DISPLAYSIZE 577
+#define IDS_TOOLTIP_FIT_TOGGLE  578
+#define IDS_EMAIL_FAILED   579
+#define IDS_BURN_FAILED    580

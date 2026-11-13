@@ -202,6 +202,8 @@ BOOL VRB_QatSave(const UINT *ids, UINT count);
 
 /* Frame options kept next to the QAT under HKCU\Software\Leeway\PhotoViewer. */
 BOOL VRB_ReadChromeIsRibbon(BOOL default_value);
+/* ChromeStyle "classic": the plain bottom toolbar instead of the pill. */
+BOOL VRB_ReadChromeIsClassic(void);
 BOOL VRB_ReadStatusBarShown(void);
 void VRB_WriteStatusBarShown(BOOL shown);
 

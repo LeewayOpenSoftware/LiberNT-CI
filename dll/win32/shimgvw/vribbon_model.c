@@ -502,6 +502,13 @@ VRB_ReadChromeIsRibbon(BOOL default_value)
 }
 
 BOOL
+VRB_ReadChromeIsClassic(void)
+{
+    WCHAR buf[16];
+    return VrbReadString(L"ChromeStyle", buf, 16) && !_wcsicmp(buf, L"classic");
+}
+
+BOOL
 VRB_ReadStatusBarShown(void)
 {
     HKEY hKey;
