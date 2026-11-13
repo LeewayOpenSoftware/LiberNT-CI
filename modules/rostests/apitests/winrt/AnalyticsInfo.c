@@ -369,6 +369,114 @@ ExpectedFamilyVersion(
     _snwprintf(Text, Length, L"%I64u", Packed);
 }
 
+static const WCHAR *
+SkipDigits(
+    _In_ const WCHAR *Text,
+    _In_ SIZE_T Minimum,
+    _In_ SIZE_T Maximum)
+{
+    SIZE_T Count = 0;
+
+    while (iswdigit(Text[Count]) && Count < Maximum)
+        Count++;
+    return Count >= Minimum && !iswdigit(Text[Count]) ? Text + Count : NULL;
+}
+
+static const WCHAR *
+SkipBranch(
+    _In_ const WCHAR *Text)
+{
+    const WCHAR *Start = Text;
+
+    while ((*Text >= L'a' && *Text <= L'z') || iswdigit(*Text) || *Text == L'_')
+        Text++;
+    return Text > Start ? Text : NULL;
+}
+
+static BOOL
+IsStamp(
+    _In_ const WCHAR *Text)
+{
+    Text = SkipDigits(Text, 6, 6);
+    if (!Text || *Text++ != L'-')
+        return FALSE;
+    Text = SkipDigits(Text, 4, 4);
+    return Text && !*Text;
+}
+
+static BOOL
+IsBuildLabEx(
+    _In_ const WCHAR *Text)
+{
+    static const WCHAR *const Arches[] = { L"amd64", L"x86", L"arm64", L"riscv64", L"ppc" };
+    SIZE_T i, Length;
+
+    if (!(Text = SkipDigits(Text, 1, 10)) || *Text++ != L'.' ||
+        !(Text = SkipDigits(Text, 1, 10)) || *Text++ != L'.')
+    {
+        return FALSE;
+    }
+    for (i = 0; i < ARRAYSIZE(Arches); i++)
+    {
+        Length = wcslen(Arches[i]);
+        if (!wcsncmp(Text, Arches[i], Length) &&
+            (!wcsncmp(Text + Length, L"fre.", 4) || !wcsncmp(Text + Length, L"chk.", 4)))
+        {
+            break;
+        }
+    }
+    if (i == ARRAYSIZE(Arches))
+        return FALSE;
+    Text += Length + 4;
+    if (!(Text = SkipBranch(Text)) || *Text++ != L'.')
+        return FALSE;
+    return IsStamp(Text);
+}
+
+static BOOL
+IsBuildLab(
+    _In_ const WCHAR *Text)
+{
+    if (!(Text = SkipDigits(Text, 1, 10)) || *Text++ != L'.' ||
+        !(Text = SkipBranch(Text)) || *Text++ != L'.')
+    {
+        return FALSE;
+    }
+    return IsStamp(Text);
+}
+
+static void
+TestBuildLab(void)
+{
+    WCHAR BuildLab[128], BuildLabEx[128];
+    DWORD Size;
+
+    Size = sizeof(BuildLabEx);
+    if (RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"BuildLabEx",
+                     RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, NULL, BuildLabEx, &Size))
+    {
+        skip("no BuildLabEx value\n");
+        return;
+    }
+    if (!wcscmp(BuildLabEx, L"unallocated"))
+    {
+        skip("unallocated build, BuildLabEx has no shape to check\n");
+        return;
+    }
+    ok(IsBuildLabEx(BuildLabEx), "BuildLabEx %ls is not build.revision.archtype.branch.yymmdd-hhmm\n", BuildLabEx);
+
+    Size = sizeof(BuildLab);
+    if (!RegGetValueW(HKEY_LOCAL_MACHINE, L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion", L"BuildLab",
+                      RRF_RT_REG_SZ | RRF_SUBKEY_WOW6464KEY, NULL, BuildLab, &Size))
+    {
+        ok(IsBuildLab(BuildLab), "BuildLab %ls is not build.branch.yymmdd-hhmm\n", BuildLab);
+    }
+    else
+    {
+        ok(0, "BuildLabEx %ls is set but BuildLab is missing\n", BuildLabEx);
+    }
+}
+
 START_TEST(AnalyticsInfo)
 {
     IActivationFactory *Factory;
@@ -383,6 +491,8 @@ START_TEST(AnalyticsInfo)
     WCHAR Expected[24];
     HSTRING Value;
     HRESULT hr;
+
+    TestBuildLab();
 
     hr = RoInitialize(RO_INIT_MULTITHREADED);
     ok(hr == S_OK || hr == S_FALSE, "RoInitialize returned hr %#lx\n", hr);
