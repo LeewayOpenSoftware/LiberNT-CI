@@ -239,7 +239,7 @@ TestFamilies(VOID)
     {
         Exists = FALSE;
         IDWriteFontCollection_FindFamilyName(Collection, Families[i], &Index, &Exists);
-        trace("DirectWrite system collection: '%ls' %s\n", Families[i], Exists ? "found" : "NOT found");
+        ok(Exists, "DirectWrite system collection lacks '%ls'\n", Families[i]);
     }
 
     IDWriteFontCollection_Release(Collection);
@@ -252,7 +252,7 @@ START_TEST(SegoeUiMetrics)
     HBITMAP hBitmap, hOld;
     PULONG Bits = NULL;
     LONG Extent, Ink;
-    FLOAT DWrite, DWriteSelawik, GdiPlus;
+    FLOAT DWrite, DWriteFace, DWriteSelawik, GdiPlus;
     HDC hdc;
     ULONG i;
     INT Pixels;
@@ -287,15 +287,18 @@ START_TEST(SegoeUiMetrics)
                 continue;
             }
             DWrite = DWriteWidth(Cases[i].Family, Cases[i].Weight, Cases[i].Text, Pixels);
+            DWriteFace = DWriteWidth(Cases[i].GdiFace, DWRITE_FONT_WEIGHT_NORMAL, Cases[i].Text, Pixels);
             DWriteSelawik = DWriteWidth(L"Selawik", Cases[i].Weight, Cases[i].Text, Pixels);
             GdiPlus = GdiPlusWidth(hdc, Cases[i].GdiFace, Cases[i].Text, Pixels, GpName);
 
-            trace("%lu %dpx GDI '%ls'->'%ls' extent %ld ink %ld | DWrite '%ls' w%u %.1f (Selawik %.1f) | GDI+ '%ls' %.1f\n",
+            trace("%lu %dpx GDI '%ls'->'%ls' extent %ld ink %ld | DWrite '%ls' w%u %.1f, '%ls' %.1f (Selawik %.1f) | GDI+ '%ls' %.1f\n",
                   i, Pixels, Cases[i].GdiFace, Face, Extent, Ink, Cases[i].Family, Cases[i].Weight,
-                  DWrite, DWriteSelawik, GpName, GdiPlus);
+                  DWrite, Cases[i].GdiFace, DWriteFace, DWriteSelawik, GpName, GdiPlus);
 
             ok(Ink <= Extent + 2, "%lu %dpx: GDI draws %ld px past its own extent %ld\n", i, Pixels, Ink - Extent, Extent);
             ok(DWrite + 2.0f + Ink / 25.0f >= Ink, "%lu %dpx: DirectWrite measures %.1f, GDI draws %ld\n", i, Pixels, DWrite, Ink);
+            ok(DWriteFace + 2.0f + Ink / 50.0f >= Ink, "%lu %dpx: DirectWrite '%ls' measures %.1f, GDI draws %ld\n",
+               i, Pixels, Cases[i].GdiFace, DWriteFace, Ink);
             if (GdiPlus >= 0.0f)
                 ok(GdiPlus + 2.0f + Ink / 25.0f >= Ink, "%lu %dpx: GDI+ measures %.1f, GDI draws %ld\n", i, Pixels, GdiPlus, Ink);
         }
