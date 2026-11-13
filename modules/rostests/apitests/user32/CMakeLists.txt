@@ -42,6 +42,7 @@ list(APPEND SOURCE
     GetDCEx.c
     GetProp.c
     WindowRegionDC.c
+    UpdateLayeredWindow.c
     GetIconInfo.c
     GetKeyState.c
     GetMessageTime.c
