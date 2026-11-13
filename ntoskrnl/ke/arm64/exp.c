@@ -622,11 +622,13 @@ KiDispatchException(_In_ PEXCEPTION_RECORD ExceptionRecord,
         }
 
         /* 3rd strike, kill the process */
-        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p\n",
+        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p, P0: %Ix, P1: %Ix\n",
                 PsGetCurrentProcess()->ImageFileName,
                 ExceptionRecord->ExceptionCode,
                 ExceptionRecord->ExceptionAddress,
-                PsGetCurrentProcess()->SectionBaseAddress);
+                PsGetCurrentProcess()->SectionBaseAddress,
+                ExceptionRecord->ExceptionInformation[0],
+                ExceptionRecord->ExceptionInformation[1]);
         DPRINT1("[arm64][EXC] KILL PC=%p LR=%p FP=%p SP=%p Far=%p\n",
                 (PVOID)(ULONG_PTR)Context.Pc,
                 (PVOID)(ULONG_PTR)Context.Lr,
