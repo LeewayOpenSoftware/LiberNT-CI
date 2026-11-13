@@ -282,7 +282,7 @@ CcNtCompleteDestroyMap(
 
     Uninitialized = CcMapUninitialize(&NtMap->Map);
     ASSERT(Uninitialized);
-    MiSegmentPurge(Segment, ROUND_UP(FileSize, (ULONG64)PAGE_SIZE), 0);
+    MiSegmentPurge(Segment, ROUND_UP(FileSize, (ULONG64)PAGE_SIZE), 0, TRUE);
     MiSegmentFlush(Segment, 0, FileSize);
     if (Event != NULL || FileSize == 0 || NtMap->PurgeOnClose)
         MiSegmentDereferenceAndClose(Segment);

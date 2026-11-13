@@ -1579,6 +1579,15 @@ MiPfnClearModified(
 }
 
 BOOLEAN
+MiPfnIsModified(
+    _In_ PMI_PFN_DATABASE Db,
+    _In_ ULONG Frame)
+{
+    /* Non-destructive read of the modified (dirty) flag, unlike MiPfnClearModified. */
+    return (BOOLEAN)((MI_PFN_FLAGS(&Db->Pfn[Frame]) & MI_PFN_FLAG_MODIFIED) != 0);
+}
+
+BOOLEAN
 MiPfnWriteComplete(
     _Inout_ PMI_PFN_DATABASE Db,
     _In_ ULONG Frame,

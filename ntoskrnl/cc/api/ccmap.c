@@ -198,7 +198,7 @@ CcSetFileSizes(
 
         CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
         CcMapDetachViews(&NtMap->Map, ROUND_UP(NewFileSize, CC_VIEW_SIZE), (ULONG64)-1);
-        MiSegmentPurge(NtMap->Control->Segment, Boundary, 0);
+        MiSegmentPurge(NtMap->Control->Segment, Boundary, 0, TRUE);
     }
 
     NtMap->AllocationSize = FileSizes->AllocationSize;
