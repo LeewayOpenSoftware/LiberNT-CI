@@ -13,7 +13,10 @@ static volatile LONG EtwpTelemetryCoverageRound;
 
 /* A registration lives in a slot; its handle is the slot number (1-based) with the slot's generation above it,
  * so a handle outlives its registration only as a refusal. Writes run at any IRQL and read the table without
- * the lock: slots are only ever added, a freed registration's slot keeps its generation bumped. */
+ * the lock: slots are only ever added, a freed registration's slot keeps its generation bumped. The generation
+ * is 32 bits per slot: a handle comes back only after 2^32 register/unregister cycles of one slot, each a pool
+ * allocation under the lock, so no wrap handling. A generation-0 handle is the small number the old counter
+ * handed out, so a guessed small handle validates while that slot is in use: inherent in the format. */
 typedef struct _ETWP_REGISTRATION
 {
     GUID ProviderId;
@@ -35,6 +38,8 @@ typedef struct _ETWP_BLOCK
 static PETWP_BLOCK EtwpBlocks[ETWP_MAX_BLOCKS];
 static KSPIN_LOCK EtwpRegistrationLock;
 
+/* Only for callers holding EtwpRegistrationLock: EtwUnregister frees the registration right after clearing
+ * its slot, so a pointer read without the lock needs a rundown before any dereference */
 static
 PETWP_REGISTRATION
 EtwpRegistrationFromHandle(
@@ -57,6 +62,15 @@ EtwpRegistrationFromHandle(
         return NULL;
 
     return Registration;
+}
+
+/* The lock-free question the writers ask at any IRQL: the answer is never dereferenced */
+static
+BOOLEAN
+EtwpIsRegistered(
+    _In_ REGHANDLE RegHandle)
+{
+    return EtwpRegistrationFromHandle(RegHandle) != NULL;
 }
 
 _IRQL_requires_max_(HIGH_LEVEL)
@@ -264,7 +278,7 @@ EtwWriteTransfer(
 
     if (EventDescriptor == NULL || UserDataCount > ETWP_MAX_EVENT_DATA_DESCRIPTORS)
         return STATUS_INVALID_PARAMETER;
-    if (EtwpRegistrationFromHandle(RegHandle) == NULL)
+    if (!EtwpIsRegistered(RegHandle))
         return STATUS_INVALID_HANDLE;
 
     /* No session is enabled for any provider yet, so the event is accepted and dropped */
@@ -306,7 +320,7 @@ EtwWriteString(
     UNREFERENCED_PARAMETER(Keyword);
     UNREFERENCED_PARAMETER(ActivityId);
 
-    if (EtwpRegistrationFromHandle(RegHandle) == NULL)
+    if (!EtwpIsRegistered(RegHandle))
         return STATUS_INVALID_HANDLE;
     if (String == NULL)
         return STATUS_INVALID_PARAMETER;
