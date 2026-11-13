@@ -19,6 +19,8 @@ static const WCHAR *const PropertyNames[] =
     L"App", L"AppVer", L"DeviceFamily", L"FlightRing", L"OSVersionFull", L"LiberNTNoSuchAttribute",
 };
 
+static UINT32 NameCount;
+
 typedef struct _NAME_ITERATOR
 {
     IIterator_HSTRING IIterator_HSTRING_iface;
@@ -82,7 +84,7 @@ Iterator_get_Current(IIterator_HSTRING *Iface, HSTRING *Value)
     NAME_ITERATOR *Iterator = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface);
 
     *Value = NULL;
-    if (Iterator->Index >= ARRAYSIZE(PropertyNames))
+    if (Iterator->Index >= NameCount)
         return E_BOUNDS;
     *Value = CreateHString(PropertyNames[Iterator->Index]);
     return S_OK;
@@ -91,7 +93,7 @@ Iterator_get_Current(IIterator_HSTRING *Iface, HSTRING *Value)
 static HRESULT WINAPI
 Iterator_get_HasCurrent(IIterator_HSTRING *Iface, boolean *Value)
 {
-    *Value = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface)->Index < ARRAYSIZE(PropertyNames);
+    *Value = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface)->Index < NameCount;
     return S_OK;
 }
 
@@ -100,7 +102,7 @@ Iterator_MoveNext(IIterator_HSTRING *Iface, boolean *Value)
 {
     NAME_ITERATOR *Iterator = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface);
 
-    if (Iterator->Index < ARRAYSIZE(PropertyNames))
+    if (Iterator->Index < NameCount)
         Iterator->Index++;
     return Iterator_get_HasCurrent(Iface, Value);
 }
@@ -110,7 +112,7 @@ Iterator_GetMany(IIterator_HSTRING *Iface, UINT32 Size, HSTRING *Items, UINT32 *
 {
     NAME_ITERATOR *Iterator = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface);
 
-    for (*Count = 0; *Count < Size && Iterator->Index < ARRAYSIZE(PropertyNames); (*Count)++)
+    for (*Count = 0; *Count < Size && Iterator->Index < NameCount; (*Count)++)
         Items[*Count] = CreateHString(PropertyNames[Iterator->Index++]);
     return S_OK;
 }
@@ -201,46 +203,104 @@ static const IIterable_HSTRINGVtbl NamesVtbl =
 static IIterable_HSTRING Names = { (IIterable_HSTRINGVtbl *)&NamesVtbl };
 
 static void
-TestSystemProperties(
-    _In_ IAnalyticsInfoStatics2 *Statics2)
+CheckProperty(
+    _In_ IMapView_HSTRING_HSTRING *Map,
+    _In_ const char *Call,
+    _In_ const WCHAR *Key,
+    _In_opt_ const WCHAR *Expected)
+{
+    HSTRING Name = CreateHString(Key), Value = NULL;
+    boolean Found = FALSE;
+    HRESULT hr;
+
+    hr = IMapView_HSTRING_HSTRING_HasKey(Map, Name, &Found);
+    ok(hr == S_OK, "%s: HasKey(%ls) returned hr %#lx\n", Call, Key, hr);
+    if (!Expected)
+    {
+        ok(!Found, "%s: %ls is present, Windows 11 leaves it out\n", Call, Key);
+    }
+    else
+    {
+        ok(Found, "%s: %ls is absent, expected %ls\n", Call, Key, Expected);
+        if (Found && SUCCEEDED(IMapView_HSTRING_HSTRING_Lookup(Map, Name, &Value)))
+        {
+            ok(!wcscmp(WindowsGetStringRawBuffer(Value, NULL), Expected), "%s: %ls is %ls, expected %ls\n",
+               Call, Key, WindowsGetStringRawBuffer(Value, NULL), Expected);
+        }
+    }
+    WindowsDeleteString(Value);
+    WindowsDeleteString(Name);
+}
+
+static IMapView_HSTRING_HSTRING *
+GetSystemProperties(
+    _In_ IAnalyticsInfoStatics2 *Statics2,
+    _In_ UINT32 Count)
 {
     IAsyncOperation_IMapView_HSTRING_HSTRING *Operation = NULL;
     IMapView_HSTRING_HSTRING *Map = NULL;
     AsyncStatus Status;
-    HSTRING Name, Value;
-    boolean Found;
-    UINT32 Size = 0, i;
     HRESULT hr, Error;
 
+    NameCount = Count;
     hr = IAnalyticsInfoStatics2_GetSystemPropertiesAsync(Statics2, &Names, &Operation);
-    ok(hr == S_OK && Operation != NULL, "GetSystemPropertiesAsync returned hr %#lx\n", hr);
+    ok(hr == S_OK && Operation != NULL, "GetSystemPropertiesAsync(%u names) returned hr %#lx\n", Count, hr);
     if (FAILED(hr) || !Operation)
-        return;
+        return NULL;
 
     Status = WaitAsync((IUnknown *)Operation, 5000, &Error);
-    ok(Status == Completed, "GetSystemPropertiesAsync status %d, error %#lx\n", Status, Error);
+    ok(Status == Completed, "GetSystemPropertiesAsync(%u names) status %d, error %#lx\n", Count, Status, Error);
     hr = IAsyncOperation_IMapView_HSTRING_HSTRING_GetResults(Operation, &Map);
     ok(hr == S_OK && Map != NULL, "GetResults returned hr %#lx\n", hr);
-    if (SUCCEEDED(hr) && Map)
+    IAsyncOperation_IMapView_HSTRING_HSTRING_Release(Operation);
+    return SUCCEEDED(hr) ? Map : NULL;
+}
+
+static void
+TestSystemProperties(
+    _In_ IAnalyticsInfoStatics2 *Statics2)
+{
+    const WCHAR *Family = sizeof(void *) == 8 ? L"Windows.Desktop" : NULL;
+    IMapView_HSTRING_HSTRING *Map;
+    WCHAR Image[MAX_PATH], *App;
+    HSTRING Value = NULL, Name;
+    UINT32 Size;
+
+    GetModuleFileNameW(NULL, Image, ARRAYSIZE(Image));
+    App = wcsrchr(Image, L'\\') ? wcsrchr(Image, L'\\') + 1 : Image;
+
+    Map = GetSystemProperties(Statics2, ARRAYSIZE(PropertyNames));
+    if (Map)
     {
-        IMapView_HSTRING_HSTRING_get_Size(Map, &Size);
-        trace("GetSystemPropertiesAsync returned %u properties\n", Size);
-        for (i = 0; i < ARRAYSIZE(PropertyNames); i++)
-        {
-            Name = CreateHString(PropertyNames[i]);
-            Found = FALSE;
-            IMapView_HSTRING_HSTRING_HasKey(Map, Name, &Found);
-            Value = NULL;
-            if (Found && SUCCEEDED(IMapView_HSTRING_HSTRING_Lookup(Map, Name, &Value)))
-                trace("system property %ls = %ls\n", PropertyNames[i], WindowsGetStringRawBuffer(Value, NULL));
-            else
-                trace("system property %ls is absent\n", PropertyNames[i]);
-            WindowsDeleteString(Value);
-            WindowsDeleteString(Name);
-        }
+        CheckProperty(Map, "named", L"App", App);
+        CheckProperty(Map, "named", L"AppVer", NULL);
+        CheckProperty(Map, "named", L"DeviceFamily", Family);
+        CheckProperty(Map, "named", L"FlightRing", L"Retail");
+        CheckProperty(Map, "named", L"LiberNTNoSuchAttribute", NULL);
+        CheckProperty(Map, "named", L"AttrDataVer", NULL);
+        Name = CreateHString(L"OSVersionFull");
+        if (SUCCEEDED(IMapView_HSTRING_HSTRING_Lookup(Map, Name, &Value)))
+            trace("OSVersionFull is %ls\n", WindowsGetStringRawBuffer(Value, NULL));
+        else
+            trace("OSVersionFull is absent, Windows 11 reports it to 64-bit callers\n");
+        WindowsDeleteString(Value);
+        WindowsDeleteString(Name);
         IMapView_HSTRING_HSTRING_Release(Map);
     }
-    IAsyncOperation_IMapView_HSTRING_HSTRING_Release(Operation);
+
+    Map = GetSystemProperties(Statics2, 0);
+    if (Map)
+    {
+        Size = 0;
+        IMapView_HSTRING_HSTRING_get_Size(Map, &Size);
+        trace("the default set has %u properties\n", Size);
+        CheckProperty(Map, "default", L"App", App);
+        CheckProperty(Map, "default", L"AttrDataVer", L"508");
+        CheckProperty(Map, "default", L"DeviceFamily", Family);
+        CheckProperty(Map, "default", L"FlightRing", L"Retail");
+        CheckProperty(Map, "default", L"AppVer", NULL);
+        IMapView_HSTRING_HSTRING_Release(Map);
+    }
 }
 
 static void
