@@ -1244,7 +1244,7 @@ ExDeleteTimer(IN PEX_TIMER Timer,
 
     ASSERT(KeGetCurrentIrql() <= (Wait ? APC_LEVEL : DISPATCH_LEVEL));
 
-    /* Wait without Cancel stops Windows with an undocumented code; the timer is cancelled instead */
+    /* The WDK allows Wait only with Cancel: a wait is for a cancelled timer's last callback */
     if (Wait) Cancel = TRUE;
 
     KeAcquireSpinLock(&Timer->Lock, &OldIrql);
@@ -1264,8 +1264,11 @@ ExDeleteTimer(IN PEX_TIMER Timer,
 
     if (Cancel)
     {
+        /* A cancelling delete lets no further callback start: an expiry already queued is dropped too */
         Timer->Set = FALSE;
         Cancelled = KeCancelTimer(&Timer->KeTimer);
+        KeRemoveQueueDpc(&Timer->TimerDpc);
+        Timer->ExpiredWhileDisabled = TRUE;
     }
     else if (ExpTimerStillSet(Timer))
     {
