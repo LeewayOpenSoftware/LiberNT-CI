@@ -9,12 +9,12 @@
  * NOTE: this is the AUTHOR's own reference, so a 0-disagreement run here shows the Rust
  * agrees with a second transcription of the contract, NOT with the production C. The
  * production-equivalence run links the Rust staticlib into Stanley's host harness
- * (submodules/host-tests/iomgr, reparse.c + Oracle()); that is pending the harness files.
+ * (submodules/host-tests/iomgr, reparse.c + Oracle()); run via difftest/run-io3-harness.sh.
  */
 #include <stddef.h>
 
-#define GR_SUCCESS                 ((long)0x00000000)
-#define GR_IO_REPARSE_DATA_INVALID ((long)0xC0000278)
+#define GR_SUCCESS                 ((int)0x00000000)
+#define GR_IO_REPARSE_DATA_INVALID ((int)0xC0000278)
 #define GR_MOUNT_POINT 0xA0000003UL
 #define GR_FIXED       8UL
 #define GR_FIELDHDR    8UL
@@ -32,7 +32,7 @@ static unsigned long gr_rd32(const unsigned char *b, unsigned long o)
 
 /* The `ignored` parameter keeps a uniform (buf,len,x) harness signature; there is no tag
  * argument in the real contract (the tag is read from the buffer). */
-long graft_ref_validate_mp(const unsigned char *buf, unsigned long len, unsigned long ignored)
+int graft_ref_validate_mp(const unsigned char *buf, unsigned long len, unsigned long ignored)
 {
     unsigned long tag, rdl, path, so, sl, po, pl, first;
     (void)ignored;

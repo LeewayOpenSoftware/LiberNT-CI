@@ -16,9 +16,9 @@
 #include <cstdlib>
 
 /* Match the kernel ABI exactly: len is 32-bit (ULONG), status is 32-bit (LONG). */
-extern "C" long leeway_rs_poc_validate_mount_point(const void *buf, uint32_t len);
-extern "C" long graft_ref_validate_mp(const unsigned char *buf, unsigned long len,
-                                      unsigned long ignored);
+extern "C" int leeway_rs_poc_validate_mount_point(const void *buf, uint32_t len);
+extern "C" int graft_ref_validate_mp(const unsigned char *buf, unsigned long len,
+                                     unsigned long ignored);
 
 static const unsigned long MOUNT_POINT = 0xA0000003UL;
 
@@ -26,16 +26,16 @@ static long g_checks = 0, g_disagree = 0, g_success = 0, g_invalid = 0;
 
 static void check(const unsigned char *buf, uint32_t len)
 {
-    long r = leeway_rs_poc_validate_mount_point(buf, len);
-    long c = graft_ref_validate_mp(buf, (unsigned long)len, 0);
+    int r = leeway_rs_poc_validate_mount_point(buf, len);
+    int c = graft_ref_validate_mp(buf, (unsigned long)len, 0);
     g_checks++;
-    if (c == 0x00000000L) g_success++; else g_invalid++;
+    if (c == 0) g_success++; else g_invalid++;
     if (r != c)
     {
         g_disagree++;
         if (g_disagree <= 20)
             std::fprintf(stderr, "DISAGREE #%ld: len=%u rust=0x%08lx c=0x%08lx\n",
-                         g_disagree, len, (unsigned long)r, (unsigned long)c);
+                         g_disagree, len, (unsigned)r, (unsigned)c);
     }
 }
 
