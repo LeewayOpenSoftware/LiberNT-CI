@@ -1041,9 +1041,9 @@ IntResolveDesktop(
             {
                 PVOID GrantedWinSta;
 
-                /* A named WinSta0 from another logon needs a DACL grant beyond the admins' read access */
+                /* A named WinSta0 from another logon needs a logon SID grant: admins and the user SID hold less */
                 if (NT_SUCCESS(ObReferenceObjectByHandle(hTempWinSta,
-                                                         WINSTA_ACCESSGLOBALATOMS,
+                                                         WINSTA_CREATEDESKTOP,
                                                          ExWindowStationObjectType,
                                                          UserMode,
                                                          &GrantedWinSta,
