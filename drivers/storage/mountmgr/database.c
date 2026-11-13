@@ -552,6 +552,85 @@ WriteUniqueIdToMaster(IN PDEVICE_EXTENSION DeviceExtension,
     return Status;
 }
 
+/* After this many consecutive failed writes, a device's remote database is
+ * left alone for MOUNTMGR_REMOTE_DB_BACKOFF before the next attempt, so a disk
+ * that fails every write is not rewritten in an endless loop. */
+#define MOUNTMGR_REMOTE_DB_FAILURE_LIMIT 3
+#define MOUNTMGR_REMOTE_DB_BACKOFF       (60LL * 10 * 1000 * 1000) /* 60 s, in 100 ns */
+
+/* Remember the outcome of a remote database write in a reconcile pass: the
+ * first failure sticks, STATUS_PENDING means nothing was written yet. */
+static
+VOID
+TrackRemoteDatabaseWrite(IN OUT PNTSTATUS Result,
+                         IN NTSTATUS Status)
+{
+    if (NT_SUCCESS(*Result))
+    {
+        *Result = Status;
+    }
+}
+
+/* Called with the device lock held, on a device that is in the device list */
+static
+BOOLEAN
+RemoteDatabaseBackingOff(IN PDEVICE_INFORMATION DeviceInformation)
+{
+    LARGE_INTEGER Now;
+
+    if (DeviceInformation->RemoteDatabaseFailures < MOUNTMGR_REMOTE_DB_FAILURE_LIMIT)
+    {
+        return FALSE;
+    }
+
+    KeQuerySystemTime(&Now);
+    return (Now.QuadPart - DeviceInformation->RemoteDatabaseLastFailure.QuadPart <
+            MOUNTMGR_REMOTE_DB_BACKOFF);
+}
+
+/* Fold a reconcile pass's write outcome into the device, if it still exists */
+static
+VOID
+RecordRemoteDatabaseResult(IN PDEVICE_EXTENSION DeviceExtension,
+                           IN PDEVICE_INFORMATION DeviceInformation,
+                           IN NTSTATUS Result)
+{
+    PLIST_ENTRY Entry;
+
+    MmpAcquireDeviceLock(DeviceExtension);
+    for (Entry = DeviceExtension->DeviceListHead.Flink;
+         Entry != &DeviceExtension->DeviceListHead;
+         Entry = Entry->Flink)
+    {
+        if (CONTAINING_RECORD(Entry, DEVICE_INFORMATION, DeviceListEntry) == DeviceInformation)
+        {
+            break;
+        }
+    }
+
+    if (Entry != &DeviceExtension->DeviceListHead)
+    {
+        if (NT_SUCCESS(Result))
+        {
+            DeviceInformation->RemoteDatabaseFailures = 0;
+        }
+        else
+        {
+            KeQuerySystemTime(&DeviceInformation->RemoteDatabaseLastFailure);
+            if (DeviceInformation->RemoteDatabaseFailures < MAXULONG)
+            {
+                DeviceInformation->RemoteDatabaseFailures++;
+            }
+            if (DeviceInformation->RemoteDatabaseFailures == MOUNTMGR_REMOTE_DB_FAILURE_LIMIT)
+            {
+                DPRINT1("MountMgr: remote database on %wZ not writable (0x%lx), backing off\n",
+                        &DeviceInformation->DeviceName, Result);
+            }
+        }
+    }
+    MmpReleaseDeviceLock(DeviceExtension);
+}
+
 /*
  * @implemented
  */
@@ -578,6 +657,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     PDEVICE_EXTENSION DeviceExtension = ((PRECONCILE_WORK_ITEM_CONTEXT)Parameter)->DeviceExtension;
     PDEVICE_INFORMATION DeviceInformation = ((PRECONCILE_WORK_ITEM_CONTEXT)Parameter)->DeviceInformation;
     DEVICE_INFORMATION Snapshot;
+    NTSTATUS DatabaseResult = STATUS_PENDING;
 
     /* We're unloading, do nothing */
     if (Unloading)
@@ -612,6 +692,13 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
 
     /* If not found, or if removable, bail out */
     if (Entry == &DeviceExtension->DeviceListHead || DeviceInformation->Removable)
+    {
+        MmpReleaseDeviceLock(DeviceExtension);
+        goto ReleaseRDS;
+    }
+
+    /* Its remote database kept failing to be written: leave it alone for a while */
+    if (RemoteDatabaseBackingOff(DeviceInformation))
     {
         MmpReleaseDeviceLock(DeviceExtension);
         goto ReleaseRDS;
@@ -722,7 +809,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
     {
         if (DatabaseHandle != 0)
         {
-            TruncateRemoteDatabase(DatabaseHandle, 0);
+            TrackRemoteDatabaseWrite(&DatabaseResult, TruncateRemoteDatabase(DatabaseHandle, 0));
             CloseRemoteDatabase(DatabaseHandle);
         }
         FreePool(Snapshot.DeviceName.Buffer);
@@ -753,7 +840,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         ZwClose(Handle);
         if (DatabaseHandle != 0)
         {
-            TruncateRemoteDatabase(DatabaseHandle, 0);
+            TrackRemoteDatabaseWrite(&DatabaseResult, TruncateRemoteDatabase(DatabaseHandle, 0));
             CloseRemoteDatabase(DatabaseHandle);
         }
         FreePool(Snapshot.DeviceName.Buffer);
@@ -771,6 +858,8 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         }
         if (DatabaseHandle == 0)
         {
+            /* Could not create it either: that is a failed write too */
+            TrackRemoteDatabaseWrite(&DatabaseResult, STATUS_UNSUCCESSFUL);
             ZwClose(Handle);
             FreePool(Snapshot.DeviceName.Buffer);
             goto ReleaseRDS;
@@ -791,6 +880,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
 
         DatabaseEntry->EntryReferences = 0;
         Status = WriteRemoteDatabaseEntry(DatabaseHandle, Offset, DatabaseEntry);
+        TrackRemoteDatabaseWrite(&DatabaseResult, Status);
         if (!NT_SUCCESS(Status))
         {
             FreePool(DatabaseEntry);
@@ -883,6 +973,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
             {
                 ++DatabaseEntry->EntryReferences;
                 Status = WriteRemoteDatabaseEntry(DatabaseHandle, Offset, DatabaseEntry);
+                TrackRemoteDatabaseWrite(&DatabaseResult, Status);
                 if (!NT_SUCCESS(Status))
                 {
                     goto FreeDBEntry;
@@ -907,6 +998,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
                     /* And then, reference & write the entry */
                     ++DatabaseEntry->EntryReferences;
                     Status = WriteRemoteDatabaseEntry(DatabaseHandle, Offset, DatabaseEntry);
+                    TrackRemoteDatabaseWrite(&DatabaseResult, Status);
                     if (!NT_SUCCESS(Status))
                     {
                         goto ReleaseDeviceLock;
@@ -924,6 +1016,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
                     /* Reference the entry, and update to remote */
                     ++DatabaseEntry->EntryReferences;
                     Status = WriteRemoteDatabaseEntry(DatabaseHandle, Offset, DatabaseEntry);
+                    TrackRemoteDatabaseWrite(&DatabaseResult, Status);
                     if (!NT_SUCCESS(Status))
                     {
                         goto FreeUniqueId;
@@ -946,6 +1039,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
                     /* And then, reference & write the entry */
                     ++DatabaseEntry->EntryReferences;
                     Status = WriteRemoteDatabaseEntry(DatabaseHandle, Offset, DatabaseEntry);
+                    TrackRemoteDatabaseWrite(&DatabaseResult, Status);
                     if (!NT_SUCCESS(Status))
                     {
                         goto FreeUniqueId;
@@ -962,6 +1056,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
                      * the know unique ID
                      */
                     Status = DeleteRemoteDatabaseEntry(DatabaseHandle, Offset);
+                    TrackRemoteDatabaseWrite(&DatabaseResult, Status);
                     if (!NT_SUCCESS(Status))
                     {
                         goto FreeUniqueId;
@@ -987,6 +1082,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
 
                     /* And write it remotely */
                     Status = AddRemoteDatabaseEntry(DatabaseHandle, DatabaseEntry);
+                    TrackRemoteDatabaseWrite(&DatabaseResult, Status);
                     if (!NT_SUCCESS(Status))
                     {
                        goto FreeUniqueId;
@@ -1025,6 +1121,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
 
                     /* And write it remotely */
                     Status = AddRemoteDatabaseEntry(DatabaseHandle, DatabaseEntry);
+                    TrackRemoteDatabaseWrite(&DatabaseResult, Status);
                     FreePool(DatabaseEntry);
                     FreePool(UniqueId);
 
@@ -1111,6 +1208,7 @@ ReconcileThisDatabaseWithMasterWorker(IN PVOID Parameter)
         if (DatabaseEntry->EntryReferences == 0)
         {
             Status = DeleteRemoteDatabaseEntry(DatabaseHandle, Offset);
+            TrackRemoteDatabaseWrite(&DatabaseResult, Status);
             if (!NT_SUCCESS(Status))
             {
                 FreePool(DatabaseEntry);
@@ -1156,6 +1254,10 @@ CloseReparse:
 CloseRDB:
     CloseRemoteDatabase(DatabaseHandle);
 ReleaseRDS:
+    if (DatabaseResult != STATUS_PENDING)
+    {
+        RecordRemoteDatabaseResult(DeviceExtension, DeviceInformation, DatabaseResult);
+    }
     ReleaseRemoteDatabaseSemaphore(DeviceExtension);
     return;
 }
