@@ -11,10 +11,238 @@
 #include <windows.system.profile.h>
 #include <initguid.h>
 
-DEFINE_GUID(IID_IAnalyticsInfoStatics2_Win11, 0x101704ea, 0xa7f9, 0x46d2, 0xab, 0x94, 0x01, 0x68, 0x65, 0xaf, 0xdb, 0x25);
 DEFINE_GUID(IID_IAnalyticsVersionInfo2_Win11, 0x76e915b1, 0xff36, 0x407c, 0x9f, 0x57, 0x16, 0x0d, 0x3e, 0x54, 0x07, 0x47);
 
 typedef LONG (WINAPI *RTL_GET_VERSION)(RTL_OSVERSIONINFOW *);
+
+static const WCHAR *const PropertyNames[] =
+{
+    L"App", L"AppVer", L"DeviceFamily", L"FlightRing", L"OSVersionFull", L"LiberNTNoSuchAttribute",
+};
+
+typedef struct _NAME_ITERATOR
+{
+    IIterator_HSTRING IIterator_HSTRING_iface;
+    LONG Ref;
+    UINT32 Index;
+} NAME_ITERATOR;
+
+static HRESULT WINAPI
+Iterator_QueryInterface(IIterator_HSTRING *Iface, REFIID Iid, void **Out)
+{
+    if (IsEqualGUID(Iid, &IID_IUnknown) || IsEqualGUID(Iid, &IID_IInspectable) ||
+        IsEqualGUID(Iid, &IID_IAgileObject) || IsEqualGUID(Iid, &IID_IIterator_HSTRING))
+    {
+        *Out = Iface;
+        IIterator_HSTRING_AddRef(Iface);
+        return S_OK;
+    }
+    *Out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI
+Iterator_AddRef(IIterator_HSTRING *Iface)
+{
+    return InterlockedIncrement(&CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface)->Ref);
+}
+
+static ULONG WINAPI
+Iterator_Release(IIterator_HSTRING *Iface)
+{
+    NAME_ITERATOR *Iterator = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface);
+    ULONG Ref = InterlockedDecrement(&Iterator->Ref);
+
+    if (!Ref)
+        HeapFree(GetProcessHeap(), 0, Iterator);
+    return Ref;
+}
+
+static HRESULT WINAPI
+Iterator_GetIids(IIterator_HSTRING *Iface, ULONG *Count, IID **Iids)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI
+Iterator_GetRuntimeClassName(IIterator_HSTRING *Iface, HSTRING *Name)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI
+Iterator_GetTrustLevel(IIterator_HSTRING *Iface, TrustLevel *Level)
+{
+    *Level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI
+Iterator_get_Current(IIterator_HSTRING *Iface, HSTRING *Value)
+{
+    NAME_ITERATOR *Iterator = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface);
+
+    *Value = NULL;
+    if (Iterator->Index >= ARRAYSIZE(PropertyNames))
+        return E_BOUNDS;
+    *Value = CreateHString(PropertyNames[Iterator->Index]);
+    return S_OK;
+}
+
+static HRESULT WINAPI
+Iterator_get_HasCurrent(IIterator_HSTRING *Iface, boolean *Value)
+{
+    *Value = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface)->Index < ARRAYSIZE(PropertyNames);
+    return S_OK;
+}
+
+static HRESULT WINAPI
+Iterator_MoveNext(IIterator_HSTRING *Iface, boolean *Value)
+{
+    NAME_ITERATOR *Iterator = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface);
+
+    if (Iterator->Index < ARRAYSIZE(PropertyNames))
+        Iterator->Index++;
+    return Iterator_get_HasCurrent(Iface, Value);
+}
+
+static HRESULT WINAPI
+Iterator_GetMany(IIterator_HSTRING *Iface, UINT32 Size, HSTRING *Items, UINT32 *Count)
+{
+    NAME_ITERATOR *Iterator = CONTAINING_RECORD(Iface, NAME_ITERATOR, IIterator_HSTRING_iface);
+
+    for (*Count = 0; *Count < Size && Iterator->Index < ARRAYSIZE(PropertyNames); (*Count)++)
+        Items[*Count] = CreateHString(PropertyNames[Iterator->Index++]);
+    return S_OK;
+}
+
+static const IIterator_HSTRINGVtbl IteratorVtbl =
+{
+    Iterator_QueryInterface,
+    Iterator_AddRef,
+    Iterator_Release,
+    Iterator_GetIids,
+    Iterator_GetRuntimeClassName,
+    Iterator_GetTrustLevel,
+    Iterator_get_Current,
+    Iterator_get_HasCurrent,
+    Iterator_MoveNext,
+    Iterator_GetMany,
+};
+
+static HRESULT WINAPI
+Names_QueryInterface(IIterable_HSTRING *Iface, REFIID Iid, void **Out)
+{
+    if (IsEqualGUID(Iid, &IID_IUnknown) || IsEqualGUID(Iid, &IID_IInspectable) ||
+        IsEqualGUID(Iid, &IID_IAgileObject) || IsEqualGUID(Iid, &IID_IIterable_HSTRING))
+    {
+        *Out = Iface;
+        return S_OK;
+    }
+    *Out = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI
+Names_AddRef(IIterable_HSTRING *Iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI
+Names_Release(IIterable_HSTRING *Iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI
+Names_GetIids(IIterable_HSTRING *Iface, ULONG *Count, IID **Iids)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI
+Names_GetRuntimeClassName(IIterable_HSTRING *Iface, HSTRING *Name)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI
+Names_GetTrustLevel(IIterable_HSTRING *Iface, TrustLevel *Level)
+{
+    *Level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT WINAPI
+Names_First(IIterable_HSTRING *Iface, IIterator_HSTRING **Value)
+{
+    NAME_ITERATOR *Iterator = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Iterator));
+
+    *Value = NULL;
+    if (!Iterator)
+        return E_OUTOFMEMORY;
+    Iterator->IIterator_HSTRING_iface.lpVtbl = (IIterator_HSTRINGVtbl *)&IteratorVtbl;
+    Iterator->Ref = 1;
+    *Value = &Iterator->IIterator_HSTRING_iface;
+    return S_OK;
+}
+
+static const IIterable_HSTRINGVtbl NamesVtbl =
+{
+    Names_QueryInterface,
+    Names_AddRef,
+    Names_Release,
+    Names_GetIids,
+    Names_GetRuntimeClassName,
+    Names_GetTrustLevel,
+    Names_First,
+};
+
+static IIterable_HSTRING Names = { (IIterable_HSTRINGVtbl *)&NamesVtbl };
+
+static void
+TestSystemProperties(
+    _In_ IAnalyticsInfoStatics2 *Statics2)
+{
+    IAsyncOperation_IMapView_HSTRING_HSTRING *Operation = NULL;
+    IMapView_HSTRING_HSTRING *Map = NULL;
+    AsyncStatus Status;
+    HSTRING Name, Value;
+    boolean Found;
+    UINT32 Size = 0, i;
+    HRESULT hr, Error;
+
+    hr = IAnalyticsInfoStatics2_GetSystemPropertiesAsync(Statics2, &Names, &Operation);
+    ok(hr == S_OK && Operation != NULL, "GetSystemPropertiesAsync returned hr %#lx\n", hr);
+    if (FAILED(hr) || !Operation)
+        return;
+
+    Status = WaitAsync((IUnknown *)Operation, 5000, &Error);
+    ok(Status == Completed, "GetSystemPropertiesAsync status %d, error %#lx\n", Status, Error);
+    hr = IAsyncOperation_IMapView_HSTRING_HSTRING_GetResults(Operation, &Map);
+    ok(hr == S_OK && Map != NULL, "GetResults returned hr %#lx\n", hr);
+    if (SUCCEEDED(hr) && Map)
+    {
+        IMapView_HSTRING_HSTRING_get_Size(Map, &Size);
+        trace("GetSystemPropertiesAsync returned %u properties\n", Size);
+        for (i = 0; i < ARRAYSIZE(PropertyNames); i++)
+        {
+            Name = CreateHString(PropertyNames[i]);
+            Found = FALSE;
+            IMapView_HSTRING_HSTRING_HasKey(Map, Name, &Found);
+            Value = NULL;
+            if (Found && SUCCEEDED(IMapView_HSTRING_HSTRING_Lookup(Map, Name, &Value)))
+                trace("system property %ls = %ls\n", PropertyNames[i], WindowsGetStringRawBuffer(Value, NULL));
+            else
+                trace("system property %ls is absent\n", PropertyNames[i]);
+            WindowsDeleteString(Value);
+            WindowsDeleteString(Name);
+        }
+        IMapView_HSTRING_HSTRING_Release(Map);
+    }
+    IAsyncOperation_IMapView_HSTRING_HSTRING_Release(Operation);
+}
 
 static void
 CheckString(
@@ -58,6 +286,7 @@ START_TEST(AnalyticsInfo)
 {
     IActivationFactory *Factory;
     IAnalyticsInfoStatics *Statics;
+    IAnalyticsInfoStatics2 *Statics2;
     IAnalyticsVersionInfo *VersionInfo;
     IInspectable *Instance, *Other;
     TrustLevel Trust = FullTrust;
@@ -81,11 +310,14 @@ START_TEST(AnalyticsInfo)
     hr = IActivationFactory_ActivateInstance(Factory, &Instance);
     ok(hr == E_NOTIMPL, "ActivateInstance returned hr %#lx\n", hr);
 
-    Other = NULL;
-    hr = IActivationFactory_QueryInterface(Factory, &IID_IAnalyticsInfoStatics2_Win11, (void **)&Other);
-    trace("IAnalyticsInfoStatics2 query returned hr %#lx, Windows 11 returns S_OK\n", hr);
-    if (Other)
-        IInspectable_Release(Other);
+    Statics2 = NULL;
+    hr = IActivationFactory_QueryInterface(Factory, &IID_IAnalyticsInfoStatics2, (void **)&Statics2);
+    ok(hr == S_OK && Statics2 != NULL, "IAnalyticsInfoStatics2 query returned hr %#lx\n", hr);
+    if (SUCCEEDED(hr) && Statics2)
+    {
+        TestSystemProperties(Statics2);
+        IAnalyticsInfoStatics2_Release(Statics2);
+    }
 
     hr = IActivationFactory_QueryInterface(Factory, &IID_IAnalyticsInfoStatics, (void **)&Statics);
     ok(hr == S_OK, "IAnalyticsInfoStatics query failed, hr %#lx\n", hr);

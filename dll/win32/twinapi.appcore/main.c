@@ -5,22 +5,8 @@
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
-#include <stdarg.h>
-#include <stdio.h>
-
-#define COBJMACROS
-#include "windef.h"
-#include "winbase.h"
-#include "winreg.h"
-#include "winternl.h"
-#include "winstring.h"
 #include "initguid.h"
-#include "activation.h"
-
-#define WIDL_using_Windows_Foundation
-#include "windows.foundation.h"
-#define WIDL_using_Windows_System_Profile
-#include "windows.system.profile.h"
+#include "private.h"
 
 #include "wine/debug.h"
 
@@ -126,6 +112,7 @@ static IAnalyticsVersionInfo VersionInfo = { &VersionInfoVtbl };
 
 static IActivationFactory AnalyticsFactory;
 static IAnalyticsInfoStatics AnalyticsStatics;
+static IAnalyticsInfoStatics2 AnalyticsStatics2;
 
 static HRESULT
 AnalyticsQueryInterface(REFIID Iid, void **Out)
@@ -141,7 +128,11 @@ AnalyticsQueryInterface(REFIID Iid, void **Out)
         *Out = &AnalyticsStatics;
         return S_OK;
     }
-    /* TODO: IAnalyticsInfoStatics2 (GetSystemPropertiesAsync), answered on Windows 11 */
+    if (IsEqualGUID(Iid, &IID_IAnalyticsInfoStatics2))
+    {
+        *Out = &AnalyticsStatics2;
+        return S_OK;
+    }
     FIXME("AnalyticsInfo factory: no interface %s\n", debugstr_guid(Iid));
     *Out = NULL;
     return E_NOINTERFACE;
@@ -212,6 +203,102 @@ static const IAnalyticsInfoStaticsVtbl StaticsVtbl =
 };
 
 static HRESULT WINAPI
+Statics2_QueryInterface(IAnalyticsInfoStatics2 *Iface, REFIID Iid, void **Out)
+{
+    return AnalyticsQueryInterface(Iid, Out);
+}
+
+static ULONG WINAPI
+Statics2_AddRef(IAnalyticsInfoStatics2 *Iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI
+Statics2_Release(IAnalyticsInfoStatics2 *Iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI
+Statics2_GetIids(IAnalyticsInfoStatics2 *Iface, ULONG *Count, IID **Iids)
+{
+    return GetIidsNone(Count, Iids);
+}
+
+static HRESULT WINAPI
+Statics2_GetRuntimeClassName(IAnalyticsInfoStatics2 *Iface, HSTRING *Name)
+{
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI
+Statics2_GetTrustLevel(IAnalyticsInfoStatics2 *Iface, TrustLevel *Level)
+{
+    *Level = BaseTrust;
+    return S_OK;
+}
+
+static HRESULT
+GetSystemProperties(IUnknown *Invoker, IUnknown *Param, PROPVARIANT *Result, BOOL CalledAsync)
+{
+    IIterable_HSTRING *Names = (IIterable_HSTRING *)Param;
+    IIterator_HSTRING *Iterator;
+    IMapView_HSTRING_HSTRING *View;
+    boolean HasCurrent = FALSE;
+    HSTRING Name;
+    HRESULT hr;
+
+    if (Names)
+    {
+        if (FAILED(hr = IIterable_HSTRING_First(Names, &Iterator)))
+            return hr;
+        hr = IIterator_HSTRING_get_HasCurrent(Iterator, &HasCurrent);
+        while (SUCCEEDED(hr) && HasCurrent)
+        {
+            if (SUCCEEDED(hr = IIterator_HSTRING_get_Current(Iterator, &Name)))
+            {
+                /* TODO: system property values; unknown names are left out of the map */
+                FIXME("AnalyticsInfo system property %s\n", debugstr_hstring(Name));
+                WindowsDeleteString(Name);
+                hr = IIterator_HSTRING_MoveNext(Iterator, &HasCurrent);
+            }
+        }
+        IIterator_HSTRING_Release(Iterator);
+        if (FAILED(hr))
+            return hr;
+    }
+
+    if (FAILED(hr = string_view_create(NULL, 0, &View)))
+        return hr;
+    Result->vt = VT_UNKNOWN;
+    Result->punkVal = (IUnknown *)View;
+    return S_OK;
+}
+
+static HRESULT WINAPI
+Statics2_GetSystemPropertiesAsync(IAnalyticsInfoStatics2 *Iface, IIterable_HSTRING *Names,
+                                  IAsyncOperation_IMapView_HSTRING_HSTRING **Operation)
+{
+    if (!Operation)
+        return E_POINTER;
+    return async_operation_inspectable_create(&IID_IAsyncOperation_IMapView_HSTRING_HSTRING, (IUnknown *)Iface,
+                                              (IUnknown *)Names, GetSystemProperties,
+                                              (IAsyncOperation_IInspectable **)Operation);
+}
+
+static const IAnalyticsInfoStatics2Vtbl Statics2Vtbl =
+{
+    Statics2_QueryInterface,
+    Statics2_AddRef,
+    Statics2_Release,
+    Statics2_GetIids,
+    Statics2_GetRuntimeClassName,
+    Statics2_GetTrustLevel,
+    Statics2_GetSystemPropertiesAsync,
+};
+
+static HRESULT WINAPI
 Factory_QueryInterface(IActivationFactory *Iface, REFIID Iid, void **Out)
 {
     return AnalyticsQueryInterface(Iid, Out);
@@ -268,6 +355,7 @@ static const IActivationFactoryVtbl FactoryVtbl =
 
 static IActivationFactory AnalyticsFactory = { &FactoryVtbl };
 static IAnalyticsInfoStatics AnalyticsStatics = { &StaticsVtbl };
+static IAnalyticsInfoStatics2 AnalyticsStatics2 = { &Statics2Vtbl };
 
 HRESULT WINAPI
 DllGetClassObject(REFCLSID Clsid, REFIID Iid, void **Out)
