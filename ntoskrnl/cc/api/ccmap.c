@@ -216,7 +216,7 @@ CcNtZeroTailOfLastPage(
 
     Status = CcCopyRange(&NtMap->Map, NewFileSize, End - NewFileSize, TRUE, CcNtZeroMove, NULL, NULL);
     if (!NT_SUCCESS(Status))
-        DPRINT1("CcSetFileSizes: zeroing [%I64x, %I64x) beyond the new end failed 0x%lx\n", NewFileSize, End, Status);
+        DPRINT1("CcNtShrinkMap: zeroing [%I64x, %I64x) beyond the new end failed 0x%lx\n", NewFileSize, End, Status);
 }
 
 static
@@ -227,11 +227,22 @@ CcNtZeroResidentRuns(
     _In_ ULONG64 End)
 {
     ULONG64 Offset = Start;
+    ULONG64 ViewEnd;
     ULONG64 RunStart;
     NTSTATUS Status;
 
     while (Offset < End)
     {
+        ViewEnd = (Offset | CC_VIEW_MASK) + 1;
+        if (ViewEnd > End)
+            ViewEnd = End;
+
+        /* Only a view still attached can keep cache pages resident past the purge */
+        if (!CcMapViewAttached(&NtMap->Map, Offset))
+        {
+            Offset = ViewEnd;
+            continue;
+        }
         if (!NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
         {
             Offset += PAGE_SIZE;
@@ -239,12 +250,16 @@ CcNtZeroResidentRuns(
         }
 
         RunStart = Offset;
-        while (Offset < End && NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
+        while (Offset < ViewEnd && NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
             Offset += PAGE_SIZE;
 
+        /* A failed zeroing leaves the stale bytes; nothing better can be done here */
         Status = CcCopyRange(&NtMap->Map, RunStart, Offset - RunStart, TRUE, CcNtZeroMove, NULL, NULL);
-        DPRINT1("CcNtShrinkMap: zeroed resident [%I64x, %I64x) beyond the new end, Status 0x%lx\n",
-                RunStart, Offset, Status);
+        if (NT_SUCCESS(Status))
+            DPRINT("CcNtShrinkMap: zeroed resident [%I64x, %I64x) beyond the new end\n", RunStart, Offset);
+        else
+            DPRINT1("CcNtShrinkMap: zeroing resident [%I64x, %I64x) beyond the new end failed 0x%lx\n",
+                    RunStart, Offset, Status);
     }
 }
 

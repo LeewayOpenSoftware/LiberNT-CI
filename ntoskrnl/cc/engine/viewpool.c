@@ -730,3 +730,19 @@ CcCacheCheck(
 
     return Errors + (OnLru != 0);
 }
+
+BOOLEAN
+CcMapViewAttached(
+    _Inout_ PCC_MAP Map,
+    _In_ ULONG64 FileOffset)
+{
+    PCC_SLOT Slot;
+    BOOLEAN Attached;
+    KIRQL OldIrql;
+
+    CC_LOCK_ACQUIRE(&Map->IndexLock, &OldIrql);
+    Slot = CcMapSlot(Map, CcSlotNumber(FileOffset), FALSE);
+    Attached = (Slot != NULL && Slot->View != NULL);
+    CC_LOCK_RELEASE(&Map->IndexLock, OldIrql);
+    return Attached;
+}

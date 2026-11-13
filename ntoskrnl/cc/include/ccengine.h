@@ -209,6 +209,7 @@ VOID CcViewReference(_Inout_ PCC_VIEW View);
 VOID CcViewDereference(_Inout_ PCC_VIEW View);
 NTSTATUS CcViewMakeResident(_Inout_ PCC_MAP Map, _In_ PCC_VIEW_RANGE Range, _In_ BOOLEAN SkipRead);
 BOOLEAN CcMapDetachViews(_Inout_ PCC_MAP Map, _In_ ULONG64 FileOffset, _In_ ULONG64 Length);
+BOOLEAN CcMapViewAttached(_Inout_ PCC_MAP Map, _In_ ULONG64 FileOffset);
 
 typedef NTSTATUS (*CC_MOVE_ROUTINE)(_In_opt_ PVOID MoveContext, _In_ PVOID CacheAddress,
                                     _In_ ULONG64 FileOffset, _In_ ULONG Length);
