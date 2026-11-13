@@ -84,7 +84,11 @@ fn range_within(offset: u32, length: u32, cap: u32) -> bool {
 /// harness and the fuzz target exercise exactly the kernel logic with no `unsafe`.
 /// Returns `STATUS_SUCCESS` or `STATUS_IO_REPARSE_DATA_INVALID` only.
 pub fn validate_mount_point(buf: &[u8]) -> NtStatus {
-    let len = buf.len() as u32;
+    // A kernel buffer never exceeds u32, but fail cleanly rather than truncate (Dwight NIT).
+    let len = match u32::try_from(buf.len()) {
+        Ok(v) => v,
+        Err(_) => return STATUS_IO_REPARSE_DATA_INVALID,
+    };
     if len < FIXED_HEADER_SIZE + MOUNT_POINT_FIELD_HEADER {
         return STATUS_IO_REPARSE_DATA_INVALID; // V2: len >= 16
     }

@@ -57,7 +57,8 @@ int leeway_rs_poc_oom_probe(void);
  * tools/rust-poc/difftest/IO3-NAME-GRAFTING-INVARIANTS.md V1-V7), else
  * STATUS_IO_REPARSE_DATA_INVALID. MOUNT_POINT only; a NULL buffer or any other tag is
  * STATUS_IO_REPARSE_DATA_INVALID (a single failure code). `len` is 32-bit to match ULONG. */
-long leeway_rs_poc_validate_mount_point(const void *buf, unsigned int len);
+/* Returns NTSTATUS as a fixed 32-bit int (matches the Rust i32 / kernel LONG). */
+int leeway_rs_poc_validate_mount_point(const void *buf, unsigned int len);
 
 #define LNRSPOC_IO_REPARSE_TAG_MOUNT_POINT     0xA0000003UL
 #define LNRSPOC_STATUS_SUCCESS                  0x00000000L
