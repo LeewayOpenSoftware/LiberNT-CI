@@ -1130,8 +1130,8 @@ KiRemoveEntryTimer(IN PKTIMER Timer)
     ULONG Hand;
     PKTIMER_TABLE_ENTRY TableEntry;
 
-    /* Remove the timer from the timer list and check if it's empty */
-    Hand = Timer->Header.Hand;
+    /* Header.Hand keeps only the low byte of the bucket index, so take it from the due time */
+    Hand = KiComputeTimerTableIndex(Timer->DueTime.QuadPart);
     if (RemoveEntryList(&Timer->TimerListEntry))
     {
         /* Get the respective timer table entry */
