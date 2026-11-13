@@ -115,7 +115,8 @@ SepAclCopyParts(
     }
 }
 
-/* An ACL holding the named parts of one list, then the named parts of another, in their own order */
+/* An ACL holding the named parts of one list, then the named parts of another, in their own order; the
+ * revision is the higher of the two sources. NULL when the two do not fit one ACL or on no pool */
 static
 PACL
 SepBuildPartSacl(
@@ -129,6 +130,7 @@ SepBuildPartSacl(
 
     Length = sizeof(ACL) + SepAclPartsLength(First, FirstParts) + SepAclPartsLength(Second, SecondParts);
     Length = ROUND_UP(Length, 4);
+    if (Length > MAXUSHORT) return NULL;
     Acl = ExAllocatePoolWithTag(PagedPool, Length, TAG_ACL);
     if (!Acl) return NULL;
     RtlZeroMemory(Acl, Length);
@@ -1324,10 +1326,8 @@ SeSetSecurityDescriptorInfoEx(
             Sacl = NULL;
         else
         {
-            MergedSacl = SepBuildPartSacl(NewSacl,
-                                          (SaclInfo & SACL_SECURITY_INFORMATION) ? SEP_SACL_ALL : SaclInfo,
-                                          OldSacl,
-                                          Kept);
+            /* Only the parts named come from the caller's list; each has its own right and its own request */
+            MergedSacl = SepBuildPartSacl(NewSacl, SaclInfo, OldSacl, Kept);
             if (!MergedSacl)
                 return STATUS_INSUFFICIENT_RESOURCES;
             Sacl = MergedSacl;
