@@ -121,7 +121,7 @@ jobs:
     # LiberNT-CI SHA; the job fails if EITHER side (the Rust or the pinned C/harness) changes.
     runs-on: ubuntu-latest
     env:
-      IO3_SHA: 1d45eab8da4
+      IO3_SHA: 1d45eab8da4251cce466d3b2fc4b8e335507bc96
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
@@ -130,11 +130,10 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/ci" && cd "$RUNNER_TEMP/ci" && git init -q
           git remote add origin https://github.com/LeewayOpenSoftware/LiberNT-CI.git
-          git fetch --depth 1 origin fix/io3-name-grafting
-          SHA=$(git rev-parse FETCH_HEAD)
-          echo "fetched $SHA (pinned prefix $IO3_SHA)"
-          case "$SHA" in "$IO3_SHA"*) ;; *) echo "::error::io3 harness moved from $IO3_SHA to $SHA"; exit 1;; esac
-          git checkout -q FETCH_HEAD
+          # Fetch the exact immutable commit id, so a moved/merged/deleted branch cannot
+          # change what we test (the pin cannot drift).
+          git fetch --depth 1 origin "$IO3_SHA"
+          git checkout -q "$IO3_SHA"
       - name: Run the production-equivalence harness (C baseline + Rust)
         run: |
           chmod +x tools/rust-poc/difftest/run-io3-harness.sh

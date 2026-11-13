@@ -34,7 +34,7 @@ static void check(const unsigned char *buf, uint32_t len)
     {
         g_disagree++;
         if (g_disagree <= 20)
-            std::fprintf(stderr, "DISAGREE #%ld: len=%u rust=0x%08lx c=0x%08lx\n",
+            std::fprintf(stderr, "DISAGREE #%ld: len=%u rust=0x%08x c=0x%08x\n",
                          g_disagree, len, (unsigned)r, (unsigned)c);
     }
 }
