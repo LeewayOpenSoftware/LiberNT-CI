@@ -22,7 +22,7 @@ def slugs(app):
     d = os.path.join(MASTERS, app); s = set()
     if os.path.isdir(d):
         for f in os.listdir(d):
-            m = re.match(r'aur\.' + app + r'\.([a-z0-9-]+)@(?:16|32|mono)\.svg$', f)
+            m = re.match(r'aur\.' + app + r'\.([a-z0-9.-]+)@(?:16|32|mono)\.svg$', f)
             if m: s.add(m.group(1))
     return sorted(s)
 

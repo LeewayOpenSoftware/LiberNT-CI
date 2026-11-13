@@ -32,3 +32,4 @@ clang++ -static -mwindows -municode -Wl,--allow-multiple-definition -o "$OUT/pho
   -lgdiplus -lcomctl32 -lcomdlg32 -lshell32 -lgdi32 -ladvapi32 -luser32 -lole32 -loleaut32 \
   -lshlwapi -luuid -luxtheme -ldwmapi -lshcore -lmsimg32 -lwinmm -limm32 -lversion
 echo "built $OUT/photoviewer.exe"
+mkdir -p "$OUT/icons"; cp -r "$ROOT/sdk/lib/leewayui/icons/viewer" "$OUT/icons/"

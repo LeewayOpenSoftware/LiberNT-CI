@@ -56,6 +56,7 @@ struct VPILL
     int hotPill, downPill;
     BOOL tracking;
     POINT origin;           /* last pill position, screen */
+    GpBitmap *icon[PI_COUNT + 1];   /* Aureline art per slot, [PI_COUNT] = the 'actual size' state */
     HBITMAP hbmSnap;        /* the last rendered pill (premultiplied), for WM_PRINT */
 };
 
@@ -370,6 +371,63 @@ DrawGlyph(GpGraphics *g, int item, float cx, float cy, float s, BOOL enabled, BO
     }
 }
 
+/* ---- Aureline icons: icons/viewer/aur.viewer.<slug>.ico next to the module, 32 px frame ---- */
+
+static GpBitmap *
+LoadIcon32(VPILL *p, const WCHAR *slug)
+{
+    WCHAR path[MAX_PATH];
+    HICON hi;
+    GpBitmap *bmp = NULL;
+    WCHAR *slash;
+
+    if (!GetModuleFileNameW(p->inst, path, MAX_PATH))
+        return NULL;
+    slash = wcsrchr(path, L'\\');
+    if (!slash)
+        return NULL;
+    *slash = 0;
+    if (FAILED(StringCchCatW(path, MAX_PATH, L"\\icons\\viewer\\aur.viewer.")) ||
+        FAILED(StringCchCatW(path, MAX_PATH, slug)) || FAILED(StringCchCatW(path, MAX_PATH, L".ico")))
+        return NULL;
+    hi = (HICON)LoadImageW(NULL, path, IMAGE_ICON, 32, 32, LR_LOADFROMFILE);
+    if (!hi)
+        return NULL;
+    GdipCreateBitmapFromHICON(hi, &bmp);
+    DestroyIcon(hi);
+    return bmp;
+}
+
+static void
+LoadIcons(VPILL *p)
+{
+    static const WCHAR *slugs[PI_COUNT + 1] =
+        { L"zoom", L"fit", L"prev", L"slideshow", L"next", L"rotate.ccw", L"rotate.cw", L"delete", L"actual" };
+    int i;
+    for (i = 0; i < PI_COUNT + 1; i++)
+        p->icon[i] = LoadIcon32(p, slugs[i]);
+}
+
+static void
+DrawPillIcon(GpGraphics *g, GpBitmap *bmp, float cx, float cy, float size, BOOL enabled)
+{
+    GpImageAttributes *ia = NULL;
+    ColorMatrix cm;
+
+    GdipSetInterpolationMode(g, InterpolationModeHighQualityBicubic);
+    if (!enabled)
+    {
+        ZeroMemory(&cm, sizeof(cm));
+        cm.m[0][0] = cm.m[1][1] = cm.m[2][2] = cm.m[4][4] = 1.f;
+        cm.m[3][3] = 0.45f;
+        GdipCreateImageAttributes(&ia);
+        GdipSetImageAttributesColorMatrix(ia, ColorAdjustTypeBitmap, TRUE, &cm, NULL, ColorMatrixFlagsDefault);
+    }
+    GdipDrawImageRectRect(g, (GpImage *)bmp, cx - size / 2, cy - size / 2, size, size, 0, 0, 32, 32, UnitPixel, ia, NULL, NULL);
+    if (ia)
+        GdipDisposeImageAttributes(ia);
+}
+
 /* ---- pill geometry and painting ---- */
 
 static void
@@ -499,6 +557,21 @@ RenderPill(VPILL *p)
             BOOL hot = (i == p->hotPill) && en;
             BOOL down = hot && (i == p->downPill);
 
+            GpBitmap *ico = p->icon[(i == PI_FIT && fit) ? PI_COUNT : i];
+
+            if (ico)
+            {
+                if (hot)
+                {
+                    float rr = (d - 2) / 2;
+                    br = VGrad(cx, cy - rr, rr * 2, down ? ARGB(200, 0xB5, 0xCC, 0xE8) : ARGB(190, 0xFF, 0xFF, 0xFF),
+                               down ? ARGB(200, 0xD8, 0xE5, 0xF4) : ARGB(190, 0xC8, 0xDC, 0xF2));
+                    FillRRect(g, r->left + 1.f, r->top + 1.f, (float)(r->right - r->left - 2), (float)(r->bottom - r->top - 2), rr * 0.8f, br, NULL);
+                    GdipDeleteBrush(br);
+                }
+                DrawPillIcon(g, ico, cx - (i == PI_ZOOM ? d * 0.0f : 0.f), cy, d * (i == PI_PLAY ? 1.05f : 0.9f), en);
+                continue;
+            }
             if (i == PI_PLAY)
             {
                 /* the dominant, accent-filled centre button */
@@ -785,7 +858,7 @@ PillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             return -1;
         case WM_APP + 0x77:
         {
-            /* Test builds: dump the last rendering (premultiplied BGRA) to %TEMP%pill.raw
+            /* Test builds: dump the last rendering (premultiplied BGRA) to %TEMP%pill.raw
              * as w, h, then the pixels, for screenshot compositing. */
             WCHAR path[MAX_PATH];
             HANDLE hf;
@@ -1157,6 +1230,7 @@ VPill_Create(HWND main, HINSTANCE inst, const VPILL_HOST *host)
     p->tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
                              0, 0, 0, 0, p->pill, NULL, inst, NULL);
     StripLayout(p);
+    LoadIcons(p);
     PillMetrics(p);
     PillTipSync(p);
     s_active = p;
@@ -1182,6 +1256,12 @@ VPill_Destroy(VPILL *p)
         DeleteObject(p->font);
     if (p->hbmSnap)
         DeleteObject(p->hbmSnap);
+    {
+        int k;
+        for (k = 0; k < PI_COUNT + 1; k++)
+            if (p->icon[k])
+                GdipDisposeImage((GpImage *)p->icon[k]);
+    }
     LocalFree(p);
 }
 
