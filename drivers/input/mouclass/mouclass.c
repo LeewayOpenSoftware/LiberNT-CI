@@ -351,9 +351,13 @@ ReadRegistryEntries(
 	if (NT_SUCCESS(Status))
 	{
 		/* Check values */
-		if (DriverExtension->ConnectMultiplePorts != 0
-			&& DriverExtension->ConnectMultiplePorts != 1)
+		if (DriverExtension->ConnectMultiplePorts != 0)
 		{
+			/* win32k reads every mouse interface on its own and nothing reads the
+			 * grandmaster device, so a system that kept ConnectMultiplePorts=1 from
+			 * an older installation would have no working mouse at all. */
+			WARN_(CLASS_NAME, "ConnectMultiplePorts=%lu is not supported, using one class device per port\n",
+			      DriverExtension->ConnectMultiplePorts);
 			DriverExtension->ConnectMultiplePorts = DefaultConnectMultiplePorts;
 		}
 		if (DriverExtension->DataQueueSize == 0)
