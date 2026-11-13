@@ -1403,6 +1403,23 @@ IntCompositionEnsureSurface(_In_ PWND Wnd, _Inout_ PWND_REDIRECT r)
     if (ppdev != NULL && r->psurf != NULL)
     {
         IntEngBitBlt(&psurfNew->SurfObj, &r->psurf->SurfObj, NULL, NULL, NULL, &rcCopy, &ptZero, NULL, NULL, NULL, ROP4_SRCCOPY);
+
+        /* A grown ULW sprite shows its new strips until the next ULW: transparent, not device memory */
+        if (IntIsUpdateLayeredWindow(Wnd))
+        {
+            RECTL Strip;
+
+            if (cx > rcCopy.right)
+            {
+                Strip.left = rcCopy.right; Strip.top = 0; Strip.right = cx; Strip.bottom = cy;
+                IntEngBitBlt(&psurfNew->SurfObj, NULL, NULL, NULL, NULL, &Strip, NULL, NULL, NULL, NULL, ROP4_BLACKNESS);
+            }
+            if (cy > rcCopy.bottom)
+            {
+                Strip.left = 0; Strip.top = rcCopy.bottom; Strip.right = cx; Strip.bottom = cy;
+                IntEngBitBlt(&psurfNew->SurfObj, NULL, NULL, NULL, NULL, &Strip, NULL, NULL, NULL, NULL, ROP4_BLACKNESS);
+            }
+        }
     }
     IntCompositionUnlockDevice(ppdev);
 
@@ -5279,6 +5296,17 @@ IntCompositionRedirectDC(_In_opt_ PWND Wnd, _In_ HDC hDC, _In_ ULONG DcxFlags, _
                                            !(DcxFlags & DCX_WINDOW),
                                            (DcxFlags & DCX_CLIPCHILDREN) != 0,
                                            (DcxFlags & DCX_CLIPSIBLINGS) != 0);
+    }
+
+    /* A hidden top-level layered window still owns its whole surface:
+     * UpdateLayeredWindow paints it before ShowWindow (the usual pattern), and
+     * the classic VisRgn, empty while hidden, would clip that paint to nothing;
+     * the window then shows an empty backing. Nothing else draws into a
+     * layered window's surface, so the full own rectangle is the right clip. */
+    if (prgn == NULL && Wnd == ancestor &&
+        (Wnd->ExStyle & WS_EX_LAYERED) && !(Wnd->style & WS_VISIBLE))
+    {
+        prgn = IntSysCreateRectpRgnIndirect(&rcOwn);
     }
 
     if (prgn == NULL)

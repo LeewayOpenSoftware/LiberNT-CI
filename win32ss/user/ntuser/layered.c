@@ -99,6 +99,17 @@ IntCompositionGetLayered(PWND pWnd, BYTE *pAlpha, COLORREF *pKey, DWORD *pFlags)
    return TRUE;
 }
 
+/* A layered window painted by UpdateLayeredWindow: its surface is the sprite, USER never repaints it. */
+BOOL FASTCALL
+IntIsUpdateLayeredWindow(PWND pWnd)
+{
+   PLRD_PROP p;
+   if (!(pWnd->ExStyle & WS_EX_LAYERED))
+      return FALSE;
+   p = IntGetLayeredProp(pWnd, FALSE);
+   return p != NULL && p->UpdateLayered;
+}
+
 BOOL FASTCALL
 IntSetLayeredWindowAttributes(PWND pWnd,
                               COLORREF crKey,
