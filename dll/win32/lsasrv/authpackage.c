@@ -1269,6 +1269,147 @@ done:
 
 
 static
+BOOLEAN
+LsapIntegrityLabelsDisabled(VOID)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName = RTL_CONSTANT_STRING(L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Lsa");
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"LiberNtNoIntegrityLabels");
+    UCHAR Buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+    HANDLE KeyHandle;
+    ULONG Length;
+    NTSTATUS Status;
+
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+
+    Status = NtOpenKey(&KeyHandle, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = NtQueryValueKey(KeyHandle,
+                             &ValueName,
+                             KeyValuePartialInformation,
+                             Info,
+                             sizeof(Buffer),
+                             &Length);
+    NtClose(KeyHandle);
+
+    if (!NT_SUCCESS(Status) ||
+        Info->Type != REG_DWORD ||
+        Info->DataLength != sizeof(ULONG))
+    {
+        return FALSE;
+    }
+
+    return (*(PULONG)Info->Data != 0);
+}
+
+
+static
+ULONG
+LsapGetIntegrityRid(
+    IN PLSA_TOKEN_INFORMATION_V1 TokenInfo1)
+{
+    static SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
+    PSID UserSid = TokenInfo1->User.User.Sid;
+    ULONG i;
+
+    if (RtlIdentifierAuthoritySid(UserSid) != NULL &&
+        RtlEqualMemory(RtlIdentifierAuthoritySid(UserSid), &NtAuthority, sizeof(NtAuthority)) &&
+        *RtlSubAuthorityCountSid(UserSid) == 1)
+    {
+        switch (*RtlSubAuthoritySid(UserSid, 0))
+        {
+            case SECURITY_LOCAL_SYSTEM_RID:
+            case SECURITY_LOCAL_SERVICE_RID:
+            case SECURITY_NETWORK_SERVICE_RID:
+                return SECURITY_MANDATORY_SYSTEM_RID;
+        }
+    }
+
+    if (TokenInfo1->Groups != NULL)
+    {
+        for (i = 0; i < TokenInfo1->Groups->GroupCount; i++)
+        {
+            if (RtlEqualSid(TokenInfo1->Groups->Groups[i].Sid, LsapAdministratorsSid) &&
+                (TokenInfo1->Groups->Groups[i].Attributes & SE_GROUP_ENABLED) &&
+                !(TokenInfo1->Groups->Groups[i].Attributes & SE_GROUP_USE_FOR_DENY_ONLY))
+            {
+                return SECURITY_MANDATORY_HIGH_RID;
+            }
+        }
+    }
+
+    return SECURITY_MANDATORY_MEDIUM_RID;
+}
+
+
+static
+NTSTATUS
+LsapAddIntegrityGroup(
+    IN PVOID TokenInformation,
+    IN LSA_TOKEN_INFORMATION_TYPE TokenInformationType)
+{
+    static SID_IDENTIFIER_AUTHORITY MandatoryAuthority = {SECURITY_MANDATORY_LABEL_AUTHORITY};
+    PLSA_TOKEN_INFORMATION_V1 TokenInfo1;
+    PTOKEN_GROUPS Groups;
+    PSID IntegritySid;
+    ULONG Count, Length, i;
+    NTSTATUS Status;
+
+    if (TokenInformationType != LsaTokenInformationV1)
+        return STATUS_SUCCESS;
+
+    TokenInfo1 = (PLSA_TOKEN_INFORMATION_V1)TokenInformation;
+    Count = (TokenInfo1->Groups != NULL) ? TokenInfo1->Groups->GroupCount : 0;
+
+    for (i = 0; i < Count; i++)
+    {
+        if (TokenInfo1->Groups->Groups[i].Attributes & SE_GROUP_INTEGRITY)
+            return STATUS_SUCCESS;
+    }
+
+    if (LsapIntegrityLabelsDisabled())
+        return STATUS_SUCCESS;
+
+    Status = RtlAllocateAndInitializeSid(&MandatoryAuthority,
+                                         1,
+                                         LsapGetIntegrityRid(TokenInfo1),
+                                         0, 0, 0, 0, 0, 0, 0,
+                                         &IntegritySid);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Length = sizeof(TOKEN_GROUPS) + (Count + 1 - ANYSIZE_ARRAY) * sizeof(SID_AND_ATTRIBUTES);
+    Groups = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, Length);
+    if (Groups == NULL)
+    {
+        RtlFreeSid(IntegritySid);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+
+    for (i = 0; i < Count; i++)
+        Groups->Groups[i] = TokenInfo1->Groups->Groups[i];
+
+    Groups->Groups[Count].Sid = IntegritySid;
+    Groups->Groups[Count].Attributes = SE_GROUP_INTEGRITY | SE_GROUP_INTEGRITY_ENABLED;
+    Groups->GroupCount = Count + 1;
+
+    if (TokenInfo1->Groups != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, TokenInfo1->Groups);
+
+    TokenInfo1->Groups = Groups;
+
+    return STATUS_SUCCESS;
+}
+
+
+static
 NTSTATUS
 LsapAddIntegrityGroup(
     IN PVOID TokenInformation,
@@ -1771,6 +1912,14 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
     if (!NT_SUCCESS(Status))
     {
         ERR("LsapAddSamGroups() failed (Status 0x%08lx)\n", Status);
+        goto done;
+    }
+
+    Status = LsapAddIntegrityGroup(TokenInformation,
+                                   TokenInformationType);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("LsapAddIntegrityGroup() failed (Status 0x%08lx)\n", Status);
         goto done;
     }
 
