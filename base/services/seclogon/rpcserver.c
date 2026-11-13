@@ -64,6 +64,7 @@ SeclCreateProcessWithLogonW(
 
     PROFILEINFOW ProfileInfo;
     HANDLE hToken = NULL;
+    HANDLE hCallerToken = NULL;
     HANDLE hTargetProcessHandle = NULL;
     PVOID Environment = NULL;
     DWORD CreationFlags;
@@ -89,7 +90,7 @@ SeclCreateProcessWithLogonW(
         TRACE("ProcessId: %lu\n", pRequest->dwProcessId);
     }
 
-    hTargetProcessHandle = OpenProcess(PROCESS_DUP_HANDLE,
+    hTargetProcessHandle = OpenProcess(PROCESS_DUP_HANDLE | PROCESS_QUERY_LIMITED_INFORMATION,
                                        FALSE,
                                        pRequest->dwProcessId);
     if (hTargetProcessHandle == NULL)
@@ -99,17 +100,26 @@ SeclCreateProcessWithLogonW(
         goto done;
     }
 
-    /* Logon */
-    rc = LogonUser(pRequest->Username,
-                   pRequest->Domain,
-                   pRequest->Password,
-                   LOGON32_LOGON_INTERACTIVE,
-                   LOGON32_PROVIDER_DEFAULT,
-                   &hToken);
+    if (pRequest->dwLogonFlags & LOGON_NETCREDENTIALS_ONLY)
+    {
+        /* FIXME: the credentials are not attached to the new process for network access */
+        rc = OpenProcessToken(hTargetProcessHandle, TOKEN_DUPLICATE, &hCallerToken) &&
+             DuplicateTokenEx(hCallerToken, MAXIMUM_ALLOWED, NULL, SecurityImpersonation,
+                              TokenPrimary, &hToken);
+    }
+    else
+    {
+        rc = LogonUser(pRequest->Username,
+                       pRequest->Domain,
+                       pRequest->Password,
+                       LOGON32_LOGON_INTERACTIVE,
+                       LOGON32_PROVIDER_DEFAULT,
+                       &hToken);
+    }
     if (rc == FALSE)
     {
         dwError = GetLastError();
-        WARN("LogonUser() failed with Error %lu\n", dwError);
+        WARN("Getting the token failed with Error %lu\n", dwError);
         goto done;
     }
 
@@ -217,6 +227,9 @@ done:
 
     if (hToken != NULL)
         CloseHandle(hToken);
+
+    if (hCallerToken != NULL)
+        CloseHandle(hCallerToken);
 
     if (pResponse != NULL)
         pResponse->dwError = dwError;
