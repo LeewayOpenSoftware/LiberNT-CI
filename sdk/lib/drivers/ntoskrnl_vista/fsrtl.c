@@ -790,14 +790,6 @@ FailEmpty:
 }
 
 NTKRNLVISTAAPI
-BOOLEAN
-NTAPI
-FsRtlAreVolumeStartupApplicationsComplete(VOID)
-{
-    return TRUE;
-}
-
-NTKRNLVISTAAPI
 NTSTATUS
 NTAPI
 FsRtlCheckOplockEx(
@@ -841,15 +833,6 @@ FsRtlCurrentOplockH(
     _In_ POPLOCK Oplock)
 {
     return FALSE;
-}
-
-NTKRNLVISTAAPI
-BOOLEAN
-NTAPI
-FsRtlAreThereCurrentOrInProgressFileLocks(
-    _In_ PFILE_LOCK FileLock)
-{
-    return FsRtlAreThereCurrentFileLocks(FileLock);
 }
 
 /*
