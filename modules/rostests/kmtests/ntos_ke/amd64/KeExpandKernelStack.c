@@ -22,7 +22,8 @@ RtlPcToFileHeader(
 /* The deep part consumes more than a whole 24 KiB thread stack */
 #define DEEP_BYTES 0x7000
 #define FRAME_BYTES 1024
-#define NESTED_SIZE 0x4000
+/* More than is ever left on an expansion stack, so the nested call has to switch again */
+#define NESTED_SIZE EXPANSION_MAXIMUM
 
 typedef struct _EXPAND_CONTEXT
 {
@@ -45,6 +46,7 @@ typedef struct _EXPAND_CONTEXT
     BOOLEAN CalloutActive;
     BOOLEAN Switched;
     ULONG Depth;
+    BOOLEAN ReachedDeep;
     ULONG OutOfLimits;
     ULONG Corrupt;
     ULONG Caught;
@@ -110,6 +112,7 @@ Recurse(
     }
     if (Top - (ULONG_PTR)Frame >= DEEP_BYTES)
     {
+        Context->ReachedDeep = TRUE;
         if (RaiseAtBottom)
             ExRaiseStatus(STATUS_UNSUCCESSFUL);
         return Level;
@@ -164,11 +167,16 @@ UnwindAcrossSwitch(
             break;
         if (Ctx.Rsp >= Context->CallerLow && Ctx.Rsp < Context->CallerHigh)
         {
-            /* Back on the caller's stack: the frame we landed in must be this driver's again */
+            /* Back on the caller's stack, in the kernel API first: this driver's frame follows */
             Context->UnwindCrossed = TRUE;
             Entry = RtlLookupFunctionEntry(Ctx.Rip, &ImageBase, NULL);
-            Context->UnwindSameImage = (Entry != NULL && ImageBase == MyImageBase);
-            break;
+            if (Entry == NULL)
+                break;
+            if (ImageBase == MyImageBase)
+            {
+                Context->UnwindSameImage = TRUE;
+                break;
+            }
         }
     }
 
@@ -298,12 +306,12 @@ START_TEST(KeExpandKernelStack)
     ok(C.High - C.Low >= EXPANSION_MAXIMUM, "expansion stack has only %Iu bytes\n", (SIZE_T)(C.High - C.Low));
     ok(C.CalloutActive, "CalloutActive not set inside the callout\n");
     ok_eq_uint(C.Irql, PASSIVE_LEVEL);
-    ok((SIZE_T)C.Depth * FRAME_BYTES >= DEEP_BYTES, "recursion stopped at depth %lu\n", C.Depth);
+    ok(C.ReachedDeep, "recursion stopped at depth %lu\n", C.Depth);
     ok_eq_ulong(C.OutOfLimits, 0UL);
     ok_eq_ulong(C.Corrupt, 0UL);
     ok(C.UnwindCrossed, "RtlVirtualUnwind did not reach the caller's stack (%lu frames, %lu without unwind data)\n",
        C.UnwindFrames, C.UnwindNoEntry);
-    ok(C.UnwindSameImage, "the first frame back on the caller's stack is not this driver's\n");
+    ok(C.UnwindSameImage, "the unwind did not get back to this driver on the caller's stack\n");
     ok_eq_ulong(C.UnwindNoEntry, 0UL);
     /* A frame walk stops at the limits of the stack it runs on, so it may end at the switch */
     trace("RtlWalkFrameChain: %lu frames, crossed the switch: %d\n", C.WalkFrames, C.WalkCrossed);
@@ -362,7 +370,7 @@ START_TEST(KeExpandKernelStack)
         ok_eq_ulong(C.Calls, 1UL);
         ok_eq_uint(C.Irql, DISPATCH_LEVEL);
         ok(C.Switched, "DISPATCH_LEVEL case: callout ran on the caller's stack\n");
-        ok((SIZE_T)C.Depth * FRAME_BYTES >= DEEP_BYTES, "DISPATCH_LEVEL recursion stopped at depth %lu\n", C.Depth);
+        ok(C.ReachedDeep, "DISPATCH_LEVEL recursion stopped at depth %lu\n", C.Depth);
         ok_eq_ulong(C.OutOfLimits, 0UL);
         ok_eq_ulong(C.Corrupt, 0UL);
     }
