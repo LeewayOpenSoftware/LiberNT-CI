@@ -269,6 +269,17 @@ IopMountInitializeVpb(IN PDEVICE_OBJECT DeviceObject,
     IoAcquireVpbSpinLock(&OldIrql);
     Vpb = DeviceObject->Vpb;
 
+    /*
+     * A file system that reports a successful mount must have put its volume
+     * device object in the VPB of the mount request. One that mounted with
+     * some other VPB leaves this one empty: there is no volume to use here.
+     */
+    if ((Vpb == NULL) || (Vpb->DeviceObject == NULL))
+    {
+        IoReleaseVpbSpinLock(OldIrql);
+        return NULL;
+    }
+
     /* Set the VPB as mounted and possibly raw */
     Vpb->Flags |= VPB_MOUNTED | (Raw ? VPB_RAW_MOUNT : 0);
 
@@ -658,6 +669,22 @@ IopMountVolume(IN PDEVICE_OBJECT DeviceObject,
                                              AttachedDeviceObject,
                                              (DeviceObject->Vpb->Flags &
                                               VPB_RAW_MOUNT));
+                if (*Vpb == NULL)
+                {
+                    /*
+                     * The file system said that it mounted the volume, but
+                     * the VPB carries no volume device. Fail the mount, and
+                     * do not offer the volume to the remaining file systems:
+                     * this one already claimed it.
+                     */
+                    DPRINT1("File system %wZ returned success for the mount of "
+                            "device %p without setting up its VPB\n",
+                            &ParentFsDeviceObject->DriverObject->DriverName,
+                            DeviceObject);
+                    ASSERT(FALSE);
+                    Status = STATUS_UNRECOGNIZED_VOLUME;
+                    break;
+                }
             }
             else
             {
