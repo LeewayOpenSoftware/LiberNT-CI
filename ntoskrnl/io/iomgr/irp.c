@@ -468,11 +468,6 @@ IopCompleteRequest(IN PKAPC Apc,
             PREPARSE_DATA_BUFFER ReparseData;
 
             ReparseData = (PREPARSE_DATA_BUFFER)*SystemArgument2;
-
-            ASSERT(ReparseData->ReparseTag == Irp->IoStatus.Information);
-            ASSERT(ReparseData->ReparseDataLength < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-            ASSERT(ReparseData->Reserved < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-
             IopDoNameTransmogrify(Irp, FileObject, ReparseData);
         }
     }
@@ -2252,15 +2247,29 @@ IoIsOperationSynchronous(IN PIRP Irp)
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 BOOLEAN
 NTAPI
 IoIsValidNameGraftingBuffer(IN PIRP Irp,
                             IN PREPARSE_DATA_BUFFER ReparseBuffer)
 {
-    UNIMPLEMENTED;
-    return FALSE;
+    PIO_STACK_LOCATION Stack;
+    ULONG Length = MAXIMUM_REPARSE_DATA_BUFFER_SIZE;
+
+    PAGED_CODE();
+
+    if (Irp != NULL)
+    {
+        Stack = IoGetCurrentIrpStackLocation(Irp);
+        if (Stack->MajorFunction == IRP_MJ_FILE_SYSTEM_CONTROL &&
+            Stack->Parameters.FileSystemControl.InputBufferLength < Length)
+        {
+            Length = Stack->Parameters.FileSystemControl.InputBufferLength;
+        }
+    }
+
+    return NT_SUCCESS(IopValidateMountPointBuffer(ReparseBuffer, Length));
 }
 
 /*

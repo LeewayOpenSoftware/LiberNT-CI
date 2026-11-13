@@ -1686,6 +1686,13 @@ IopDoNameTransmogrify(
 
 NTSTATUS
 NTAPI
+IopValidateMountPointBuffer(
+    _In_reads_bytes_(BufferLength) PREPARSE_DATA_BUFFER Buffer,
+    _In_ ULONG BufferLength
+);
+
+NTSTATUS
+NTAPI
 IoComputeDesiredAccessFileObject(
     IN PFILE_OBJECT FileObject,
     IN PACCESS_MASK DesiredAccess
