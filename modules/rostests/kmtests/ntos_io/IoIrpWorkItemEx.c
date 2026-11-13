@@ -7,7 +7,7 @@
 
 #include <kmt_test.h>
 
-/* IoGetIoPriorityHint and IoSetIoPriorityHint come from wdm.h */
+/* IoGetIoPriorityHint, IoSetIoPriorityHint and IoAllocateIrpEx come from the WDK headers */
 BOOLEAN
 NTAPI
 IoTryQueueWorkItem(
@@ -15,13 +15,6 @@ IoTryQueueWorkItem(
     _In_ PIO_WORKITEM_ROUTINE_EX WorkerRoutine,
     _In_ WORK_QUEUE_TYPE QueueType,
     _In_opt_ PVOID Context);
-
-PIRP
-NTAPI
-IoAllocateIrpEx(
-    _In_opt_ PDEVICE_OBJECT DeviceObject,
-    _In_ CCHAR StackSize,
-    _In_ BOOLEAN ChargeQuota);
 
 PEPROCESS
 NTAPI
