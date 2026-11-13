@@ -241,6 +241,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoPciRom.c
     ntos_io/IoStackLimits.c
     ntos_io/IoVpb.c
+    ntos_io/IoShareAccessEx.c
     ntos_io/IoMdl.c
     ntos_io/IoModern.c
     ntos_io/IoNullDeviceKM.c

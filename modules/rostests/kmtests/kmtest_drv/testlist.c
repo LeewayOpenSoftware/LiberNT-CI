@@ -436,6 +436,7 @@ KMT_TESTFUNC Test_IoPciEnumeration;
 KMT_TESTFUNC Test_IoPciRom;
 KMT_TESTFUNC Test_IoStackLimits;
 KMT_TESTFUNC Test_IoVpb;
+KMT_TESTFUNC Test_IoShareAccessEx;
 KMT_TESTFUNC Test_SmcLib;
 KMT_TESTFUNC Test_SmcLibRemove;
 KMT_TESTFUNC Test_KeCriticalRegionKM;
@@ -670,6 +671,7 @@ const KMT_TEST TestList[] =
     { "IoPciMessageEnable",                 Test_IoPciMessageEnable },
     { "IoStackLimits",                      Test_IoStackLimits },
     { "IoVpb",                              Test_IoVpb },
+    { "IoShareAccessEx",                    Test_IoShareAccessEx },
     { "SmcLib",                             Test_SmcLib },
     { "SmcLibRemove",                       Test_SmcLibRemove },
     { "IoDeviceNumaNode",                    Test_IoDeviceNumaNode },

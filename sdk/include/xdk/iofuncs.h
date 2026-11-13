@@ -3510,6 +3510,73 @@ $endif (_NTDDK_)
 #endif /* (NTDDI_VERSION >= NTDDI_WINBLUE) */
 
 $if (_WDMDDK_)
+NTKERNELAPI
+PIRP
+NTAPI
+IoAllocateIrpEx(
+  _In_opt_ PDEVICE_OBJECT DeviceObject,
+  _In_ CCHAR StackSize,
+  _In_ BOOLEAN ChargeQuota);
+$endif (_WDMDDK_)
+$if (_NTIFS_)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoCheckLinkShareAccess(
+  _In_ ACCESS_MASK DesiredAccess,
+  _In_ ULONG DesiredShareAccess,
+  _Inout_opt_ PFILE_OBJECT FileObject,
+  _Inout_opt_ PSHARE_ACCESS ShareAccess,
+  _Inout_opt_ PLINK_SHARE_ACCESS LinkShareAccess,
+  _In_ ULONG IoShareAccessFlags);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoSetLinkShareAccess(
+  _In_ ACCESS_MASK DesiredAccess,
+  _In_ ULONG DesiredShareAccess,
+  _Inout_ PFILE_OBJECT FileObject,
+  _Inout_opt_ PSHARE_ACCESS ShareAccess,
+  _Inout_opt_ PLINK_SHARE_ACCESS LinkShareAccess,
+  _In_ ULONG IoShareAccessFlags);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoUpdateLinkShareAccess(
+  _In_ PFILE_OBJECT FileObject,
+  _Inout_opt_ PSHARE_ACCESS ShareAccess,
+  _Inout_opt_ PLINK_SHARE_ACCESS LinkShareAccess);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoUpdateLinkShareAccessEx(
+  _In_ PFILE_OBJECT FileObject,
+  _Inout_opt_ PSHARE_ACCESS ShareAccess,
+  _Inout_opt_ PLINK_SHARE_ACCESS LinkShareAccess,
+  _In_ ULONG IoShareAccessFlags);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoRemoveLinkShareAccess(
+  _In_ PFILE_OBJECT FileObject,
+  _Inout_opt_ PSHARE_ACCESS ShareAccess,
+  _Inout_opt_ PLINK_SHARE_ACCESS LinkShareAccess);
+
+NTKERNELAPI
+VOID
+NTAPI
+IoRemoveLinkShareAccessEx(
+  _In_ PFILE_OBJECT FileObject,
+  _Inout_opt_ PSHARE_ACCESS ShareAccess,
+  _Inout_opt_ PLINK_SHARE_ACCESS LinkShareAccess,
+  _In_ ULONG IoShareAccessFlags);
+$endif (_NTIFS_)
+
+$if (_WDMDDK_)
 #if defined(_WIN64)
 NTKERNELAPI
 ULONG

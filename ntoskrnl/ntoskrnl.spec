@@ -2424,7 +2424,7 @@
 @ stub -arch=win64 IoAcquireKsrPersistentMemoryEx
 @ stub -arch=win64 IoAddBugcheckTriageThread
 @ stub -arch=win64 IoAdjustStackSizeForRedirection
-@ stub -arch=win64 IoAllocateIrpEx
+@ stdcall IoAllocateIrpEx(ptr long long)
 @ stub -arch=win64 IoAllocateMiniCompletionPacket
 @ stub -arch=win64 IoAllocateSfioStreamIdentifier
 @ stub -arch=win64 IoApplyPriorityInfoThread
@@ -2432,9 +2432,9 @@
 @ stub -arch=win64 IoCancelMiniCompletionPacket
 @ stub -arch=win64 IoCheckFileObjectOpenedAsCopyDestination
 @ stub -arch=win64 IoCheckFileObjectOpenedAsCopySource
-@ stub -arch=win64 IoCheckLinkShareAccess
+@ stdcall IoCheckLinkShareAccess(long long ptr ptr ptr long)
 @ stub -arch=win64 IoCheckRedirectionTrustLevel
-@ stub -arch=win64 IoCheckShareAccessEx
+@ stdcall IoCheckShareAccessEx(long long ptr ptr long ptr)
 @ stdcall IoCleanupIrp(ptr)
 @ stdcall IoClearActivityIdThread(ptr)
 @ stub -arch=win64 IoClearAdapterCryptoEngineExtension
@@ -2491,7 +2491,7 @@
 @ stdcall IoInitializeWorkItem(ptr ptr)
 @ stub -arch=win64 IoIrpHasFsTrackOffsetExtensionType
 @ stub -arch=win64 IoIsActivityTracingEnabled
-@ stub -arch=win64 IoIsFileObjectIgnoringSharing
+@ stdcall IoIsFileObjectIgnoringSharing(ptr)
 @ stub -arch=win64 IoIsInitiator32bitProcess
 @ stub -arch=win64 IoIsValidIrpStatus
 @ stub -arch=win64 IoMakeAssociatedIrpEx
@@ -2514,8 +2514,8 @@
 @ stub -arch=win64 IoRegisterIoTracking
 @ stub -arch=win64 IoRegisterPriorityCallback
 @ stub -arch=win64 IoRemoveIoCompletion
-@ stub -arch=win64 IoRemoveLinkShareAccess
-@ stub -arch=win64 IoRemoveLinkShareAccessEx
+@ stdcall IoRemoveLinkShareAccess(ptr ptr ptr)
+@ stdcall IoRemoveLinkShareAccessEx(ptr ptr ptr long)
 @ stdcall IoReplaceFileObjectName(ptr ptr long)
 @ stub -arch=win64 IoReplacePartitionUnit
 @ stdcall IoReportInterruptActive(ptr)
@@ -2531,7 +2531,7 @@
 @ stdcall IoSetActivityIdThread(ptr)
 @ stub -arch=win64 IoSetAdapterCryptoEngineExtension
 @ stub -arch=win64 IoSetDependency
-@ stub -arch=win64 IoSetFileObjectIgnoreSharing
+@ stdcall IoSetFileObjectIgnoreSharing(ptr)
 @ stub -arch=win64 IoSetFsTrackOffsetState
 @ stub -arch=win64 IoSetFsZeroingOffset
 @ stub -arch=win64 IoSetFsZeroingOffsetRequired
@@ -2543,9 +2543,9 @@
 @ stub -arch=win64 IoSetIoPriorityHintIntoFileObject
 @ stub -arch=win64 IoSetIoPriorityHintIntoThread
 @ stdcall IoSetIrpExtraCreateParameter(ptr ptr)
-@ stub -arch=win64 IoSetLinkShareAccess
+@ stdcall IoSetLinkShareAccess(long long ptr ptr ptr long)
 @ stub -arch=win64 IoSetShadowFileInformation
-@ stub -arch=win64 IoSetShareAccessEx
+@ stdcall IoSetShareAccessEx(long long ptr ptr ptr)
 @ stub -arch=win64 IoSizeOfIrpEx
 @ stub -arch=win64 IoSizeofGenericIrpExtension
 @ stdcall IoSizeofWorkItem()
@@ -2559,8 +2559,8 @@
 @ stub -arch=win64 IoUnregisterIoTracking
 @ stdcall -arch=win64 IoUnregisterPlugPlayNotificationEx(ptr)
 @ stub -arch=win64 IoUnregisterPriorityCallback
-@ stub -arch=win64 IoUpdateLinkShareAccess
-@ stub -arch=win64 IoUpdateLinkShareAccessEx
+@ stdcall IoUpdateLinkShareAccess(ptr ptr ptr)
+@ stdcall IoUpdateLinkShareAccessEx(ptr ptr ptr long)
 @ stub -arch=win64 IoVolumeDeviceNameToGuid
 @ stub -arch=win64 IoVolumeDeviceNameToGuidPath
 @ stdcall IoWithinStackLimits(ptr ptr)

@@ -961,6 +961,20 @@ IoAllocateIrp(IN CCHAR StackSize,
  */
 PIRP
 NTAPI
+IoAllocateIrpEx(IN PDEVICE_OBJECT DeviceObject,
+                IN CCHAR StackSize,
+                IN BOOLEAN ChargeQuota)
+{
+    /* No IRP extension is kept, so the device object only names the target */
+    UNREFERENCED_PARAMETER(DeviceObject);
+    return IoAllocateIrp(StackSize, ChargeQuota);
+}
+
+/*
+ * @implemented
+ */
+PIRP
+NTAPI
 IopAllocateIrpMustSucceed(IN CCHAR StackSize)
 {
     LONG i;
