@@ -11,6 +11,7 @@
 //! owner asked for, including what would be the unwind path on an unwinding target.
 
 use core::cell::UnsafeCell;
+use core::marker::PhantomData;
 use core::ops::{Deref, DerefMut};
 
 use crate::ndk::{KIRQL, KSPIN_LOCK};
@@ -57,15 +58,22 @@ impl<T> SpinLock<T> {
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
         // SAFETY: valid KSPIN_LOCK; returns the caller's prior IRQL to restore on drop.
         let old_irql = unsafe { KeAcquireSpinLockRaiseToDpc(self.lock.get()) };
-        SpinLockGuard { parent: self, irql: old_irql }
+        SpinLockGuard { parent: self, irql: old_irql, _not_send: PhantomData }
     }
 }
 
 /// RAII guard. Deref gives access to the protected data; `Drop` releases the lock and
 /// restores the acquiring thread's IRQL.
+///
+/// The `*mut ()` marker makes the guard both `!Send` and `!Sync`. This is required for
+/// soundness: the lock must be released on the same thread (and at the IRQL) that acquired
+/// it, so the guard must not move to another thread (`!Send`); and `&guard` yields `&T` to
+/// another thread with no lock involved, so for a `T: Send + !Sync` (e.g. a `Cell`) the
+/// guard must not be `Sync`. Without this field the auto traits would make it both.
 pub struct SpinLockGuard<'a, T> {
     parent: &'a SpinLock<T>,
     irql: KIRQL,
+    _not_send: PhantomData<*mut ()>,
 }
 
 impl<T> Deref for SpinLockGuard<'_, T> {
