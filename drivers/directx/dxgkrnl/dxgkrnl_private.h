@@ -1117,6 +1117,11 @@ struct _DXGKRNL_ADAPTER
     /* Parent-owned interface for this adapter's PCI configuration space. */
     BUS_INTERFACE_STANDARD      PciBusInterface;
     BOOLEAN                     PciBusInterfaceValid;
+    BUS_INTERFACE_STANDARD      PciRestoreBus;
+    BOOLEAN                     PciRestoreBusHeld;
+    UCHAR                       PciHeaderSnapshot[0x40];
+    BOOLEAN                     PciHeaderSnapshotValid;
+    LONG                        PciRestorePending;
 
     /*
      * Power state tracking.
