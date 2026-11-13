@@ -6,12 +6,14 @@ list(APPEND SOURCE
     MulticastInterface.c
     ReuseDelivery.c
     addresslistsort.c
+    afunix.c
     bind.c
     broadcast.c
     close.c
     connect_any.c
     connect_select.c
     dualstack.c
+    dualstack_mapped.c
     getaddrinfo.c
     gethostname.c
     getnameinfo.c

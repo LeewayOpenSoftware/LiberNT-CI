@@ -26,6 +26,7 @@ KMT_TESTFUNC Test_SeSaclParts;
 KMT_TESTFUNC Test_FltMgrIo;
 KMT_TESTFUNC Test_FltMgrScan;
 KMT_TESTFUNC Test_FltMgrTx;
+KMT_TESTFUNC Test_CmFlushReaders;
 KMT_TESTFUNC Test_NtfsTxfRecovery;
 KMT_TESTFUNC Test_FltMgrLoad;
 KMT_TESTFUNC Test_FltMgrReg;
@@ -38,6 +39,7 @@ KMT_TESTFUNC Test_IoHandleAccess;
 KMT_TESTFUNC Test_IoCustomTargetEvent;
 KMT_TESTFUNC Test_IoDeviceTree;
 KMT_TESTFUNC Test_IoDriverKey;
+KMT_TESTFUNC Test_IoErrorLogRecord;
 KMT_TESTFUNC Test_IoInterfaceOrder;
 KMT_TESTFUNC Test_IoMessageRestart;
 KMT_TESTFUNC Test_IoRemovalPolicy;
@@ -72,6 +74,7 @@ KMT_TESTFUNC Test_PoInitiatePowerAction;
 KMT_TESTFUNC Test_BatteryClassNotify;
 KMT_TESTFUNC Test_XpdmVersion;
 KMT_TESTFUNC Test_PoIrp;
+KMT_TESTFUNC Test_PoBatteryState;
 KMT_TESTFUNC Test_PoFxState;
 KMT_TESTFUNC Test_NdisSgDma;
 KMT_TESTFUNC Test_IoDeviceNumaNode;
@@ -93,6 +96,7 @@ KMT_TESTFUNC Test_TcpIpTdi;
 KMT_TESTFUNC Test_TcpIpConnect;
 KMT_TESTFUNC Test_TcpIpCancelReceive;
 KMT_TESTFUNC Test_WfpListen;
+KMT_TESTFUNC Test_WskName;
 KMT_TESTFUNC Test_WfpTcp;
 KMT_TESTFUNC Test_WfpUdp;
 KMT_TESTFUNC Test_WfpUser;
@@ -120,6 +124,7 @@ const KMT_TEST TestList[] =
     { "FltMgrIo",                     Test_FltMgrIo },
     { "FltMgrScan",                   Test_FltMgrScan },
     { "FltMgrTx",                     Test_FltMgrTx },
+    { "CmFlushReaders",               Test_CmFlushReaders },
     { "NtfsTxfRecovery",              Test_NtfsTxfRecovery },
     { "-FltMgrLoad",                  Test_FltMgrLoad }, // TODO: WIP/untested/crashes.
     { "-FltMgrReg",                   Test_FltMgrReg }, // TODO: WIP/untested/crashes.
@@ -132,6 +137,7 @@ const KMT_TEST TestList[] =
     { "-IoCustomTargetEvent",         Test_IoCustomTargetEvent },
     { "-IoDeviceTree",                Test_IoDeviceTree },
     { "-IoDriverKey",                 Test_IoDriverKey },
+    { "IoErrorLogRecord",             Test_IoErrorLogRecord },
     { "-IoInterfaceOrder",            Test_IoInterfaceOrder },
     { "-IoMessageRestart",            Test_IoMessageRestart },
     { "-IoRemovalPolicy",             Test_IoRemovalPolicy },
@@ -162,6 +168,7 @@ const KMT_TEST TestList[] =
     { "-PoShutdownTime",              Test_PoShutdownTime },
     { "-PoInitiatePowerAction",       Test_PoInitiatePowerAction },
     { "ExWddmPoFx",                    Test_ExWddmPoFx },
+    { "PoBatteryState",                Test_PoBatteryState },
     { "PoFxState",                     Test_PoFxState },
     { "IoDeviceNumaNode",              Test_IoDeviceNumaNode },
     { "BatteryClassNotify",           Test_BatteryClassNotify },
@@ -182,6 +189,7 @@ const KMT_TEST TestList[] =
     { "TcpIpConnect",                 Test_TcpIpConnect },
     { "TcpIpCancelReceive",           Test_TcpIpCancelReceive },
     { "WfpListen",                    Test_WfpListen },
+    { "WskName",                      Test_WskName },
     { "WfpTcp",                       Test_WfpTcp },
     { "WfpUdp",                       Test_WfpUdp },
     { "WfpUser",                      Test_WfpUser },
