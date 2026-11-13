@@ -553,6 +553,11 @@ FUNC KiPageFault
     jnz SkipStackCheck
     test rcx, rcx
     jz SkipStackCheck
+    /* The previous frame is on another stack while a callout runs on an expansion stack */
+    cmp rcx, [rax + KTHREAD_StackLimit]
+    jb SkipStackCheck
+    cmp rcx, [rax + KTHREAD_StackBase]
+    jae SkipStackCheck
     cmp rcx, rbp
     jbe KernelStackOverflow
     sub rcx, rbp
