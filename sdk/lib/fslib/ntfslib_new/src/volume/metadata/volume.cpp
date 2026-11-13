@@ -332,6 +332,16 @@ Volume::NoteCorruption()
 }
 
 void
+Volume::NoteLostWrite(_In_ NTSTATUS Status)
+{
+    if (!CorruptionNoted)
+    {
+        DPRINT1("NTFS: a metadata write failed (status %lx); the volume stays dirty\n", Status);
+        CorruptionNoted = TRUE;
+    }
+}
+
+void
 Volume::RetainDirty(_In_ BOOLEAN Retain)
 {
     if (!DirtyTracking)
