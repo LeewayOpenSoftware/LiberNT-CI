@@ -575,6 +575,7 @@ MasterFileTable::WriteFileRecordToMFT(_In_ PFileRecord File)
         DPRINT1("Unable to write file record %lu! (Status: 0x%X)\n",
                 File->RecordNumber,
                 WriteStatus);
+        DiskVolume->NoteLostWrite(WriteStatus);
     }
 
     if (NT_SUCCESS(WriteStatus) &&

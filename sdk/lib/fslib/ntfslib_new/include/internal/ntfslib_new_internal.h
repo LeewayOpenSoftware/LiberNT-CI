@@ -931,6 +931,9 @@ public:
     void
     NoteCorruption();
 
+    void
+    NoteLostWrite(_In_ NTSTATUS Status);
+
     /* Writes and retains the dirty flag for a noted corruption (no-op when
      * none is noted, on a read-only mount, or without dirty tracking). The
      * caller holds the metadata lock. */
