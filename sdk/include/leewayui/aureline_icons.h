@@ -30,7 +30,7 @@ typedef struct {
 /* A LeewayUIIconResolver: resolver_context = LeewayAurelineConfig*. Returns an
  * HICON the ribbon owns (DestroyIcon on eviction), or NULL (placeholder glyph)
  * for an unknown id or a missing file. */
-HICON WINAPI LeewayRibbonAurelineResolver(UINT32 icon_id, UINT32 size_px,
+HICON LeewayRibbonAurelineResolver(UINT32 icon_id, UINT32 size_px,
                                           LeewayUIIconVariant variant,
                                           COLORREF fg, COLORREF bg,
                                           void *resolver_context);
