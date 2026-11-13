@@ -58,6 +58,7 @@ struct VPILL
     POINT origin;           /* last pill position, screen */
     GpBitmap *icon[PI_COUNT + 1];   /* Aureline art per slot, [PI_COUNT] = the 'actual size' state */
     int lastCx, lastCy;     /* last layout size, to re-place the pill after a switch */
+    BOOL overlay;           /* slideshow overlay: prev / end / next only, no strip */
     BOOL needPlain;         /* UpdateLayeredWindow failed: switch to the plain pill */
     BOOL plain;             /* no layered windows: opaque capsule-shaped popup, no shadow */
     int margin;             /* shadow margin around the capsule (0 when plain) */
@@ -443,6 +444,22 @@ PillMetrics(VPILL *p)
     int x, leftW, rightW, extra;
     int y = M + (H - small) / 2;
 
+    if (p->overlay)
+    {
+        ZeroMemory(p->itemRc, sizeof(p->itemRc));
+        x = M + pad;
+        y = M + (H - nav) / 2;
+        SetRect(&p->itemRc[PI_PREV], x, y, x + nav, y + nav); x += nav + gap;
+        y = M + (H - play) / 2;
+        SetRect(&p->itemRc[PI_PLAY], x, y, x + play, y + play); x += play + gap;
+        y = M + (H - nav) / 2;
+        SetRect(&p->itemRc[PI_NEXT], x, y, x + nav, y + nav); x += nav;
+        SetRect(&p->capsule, M, M, x + pad, M + H);
+        p->size.cx = p->capsule.right + M;
+        p->size.cy = p->capsule.bottom + M;
+        return;
+    }
+
     leftW = zoomW + gap + small;
     rightW = small * 3 + gap * 2;
     extra = rightW - leftW;
@@ -569,6 +586,7 @@ RenderPill(VPILL *p)
 
         /* separators */
         pen = MakePen(ARGB(120, 0x7F, 0x8C, 0x9C), 1.f);
+        if (!p->overlay)
         {
             float sy0 = M + ch * 0.26f, sy1 = M + ch * 0.74f;
             float sx1 = (p->itemRc[PI_FIT].right + p->itemRc[PI_PREV].left) / 2.f;
@@ -581,6 +599,8 @@ RenderPill(VPILL *p)
         for (i = 0; i < PI_COUNT; i++)
         {
             const RECT *r = &p->itemRc[i];
+            if (IsRectEmpty(r))
+                continue;
             float cx = (r->left + r->right) / 2.f, cy = (r->top + r->bottom) / 2.f;
             float d = (float)(r->bottom - r->top);
             BOOL en = ItemEnabled(p, i);
@@ -1298,6 +1318,63 @@ CreatePillWindow(VPILL *p)
 }
 
 VPILL *
+VPill_CreateOverlay(HWND owner, HINSTANCE inst, const VPILL_HOST *host)
+{
+    VPILL *p = (VPILL *)LocalAlloc(LPTR, sizeof(*p));
+
+    if (!p)
+        return NULL;
+    p->main = owner;
+    p->inst = inst;
+    p->host = *host;
+    p->dpi = GetDpiFor(owner);
+    p->hotStrip = p->openStrip = -1;
+    p->hotPill = p->downPill = -1;
+    p->overlay = TRUE;
+    p->plain = PillForcedPlain();
+    p->margin = p->plain ? 0 : Sc(p, 12);
+    RegisterClasses(inst);
+    MakeFont(p);
+    p->pill = CreatePillWindow(p);
+    if (!p->pill)
+    {
+        VPill_Destroy(p);
+        return NULL;
+    }
+    p->tip = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, NULL, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+                             0, 0, 0, 0, p->pill, NULL, inst, NULL);
+    LoadIcons(p);
+    PillMetrics(p);
+    PillTipSync(p);
+    return p;
+}
+
+BOOL
+VPill_IsCursorOver(VPILL *p)
+{
+    POINT pt;
+    RECT rc;
+    return p && p->pill && IsWindowVisible(p->pill) && GetCursorPos(&pt) && GetWindowRect(p->pill, &rc) &&
+           PtInRect(&rc, pt);
+}
+
+void
+VPill_ShowOverlay(VPILL *p, BOOL show, int cx, int cy)
+{
+    if (!p || !p->pill)
+        return;
+    if (!show)
+    {
+        ShowWindow(p->pill, SW_HIDE);
+        return;
+    }
+    if (!IsWindowVisible(p->pill) || cx != p->lastCx || cy != p->lastCy)
+        VPill_Layout(p, cx, cy);
+    if (!IsWindowVisible(p->pill))
+        ShowWindow(p->pill, SW_SHOWNOACTIVATE);
+}
+
+VPILL *
 VPill_Create(HWND main, HINSTANCE inst, const VPILL_HOST *host)
 {
     VPILL *p = (VPILL *)LocalAlloc(LPTR, sizeof(*p));
@@ -1398,9 +1475,14 @@ VPill_Layout(VPILL *p, int cx, int cy)
         return;
     p->lastCx = cx;
     p->lastCy = cy;
-    sh = (int)VPill_StripHeight(p);
-    MoveWindow(p->strip, 0, 0, cx, sh, TRUE);
-    StripLayout(p);
+    sh = p->overlay ? 0 : (int)VPill_StripHeight(p);
+    if (p->strip)
+    {
+        MoveWindow(p->strip, 0, 0, cx, sh, TRUE);
+        StripLayout(p);
+    }
+    if (p->overlay)
+        sh = 0;
 
     PillMetrics(p);
     /* bottom-centred over the image area, 14 px above its lower edge */
@@ -1412,7 +1494,7 @@ VPill_Layout(VPILL *p, int cx, int cy)
     pt.y = y;
     ClientToScreen(p->main, &pt);
     p->origin = pt;
-    if (!IsWindowVisible(p->pill) && IsWindowVisible(p->main) && !IsIconic(p->main))
+    if (!p->overlay && !IsWindowVisible(p->pill) && IsWindowVisible(p->main) && !IsIconic(p->main))
         flags |= SWP_SHOWWINDOW;
     SetWindowPos(p->pill, HWND_TOP, pt.x, pt.y, p->size.cx, p->size.cy, flags);
     PillTipSync(p);

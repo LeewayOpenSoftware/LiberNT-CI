@@ -128,6 +128,7 @@ typedef struct tagPREVIEW_DATA
      * ribbon chrome, m_pRibbon is NULL in pill chrome. */
     VRB_RIBBON *m_pRibbon;
     VPILL *m_pPill;              /* menu strip + floating pill (default chrome) */
+    VPILL *m_pOverlay;           /* slideshow window: prev / end / next, shown on mouse move */
     LeewayUIFrame *m_pFrame;     /* status bar, zoom slider, layout (ribbon chrome) */
     BOOL m_bFit;                 /* best-fit mode is active */
     /* Enabled state of the toolbar commands, as the toolbar had it. Both
@@ -1475,6 +1476,39 @@ GenerateSetCursor(HWND hwnd, UINT uMsg)
     SendMessage(hwnd, WM_SETCURSOR, (WPARAM)hwnd, MAKELONG(HTCLIENT, uMsg));
 }
 
+/* Slideshow overlay: the same pill, reduced to previous / end slideshow / next. */
+static UINT PillGetZoom(void *ctx);
+static BOOL PillIsFit(void *ctx);
+static BOOL PillIsEnabled(void *ctx, UINT cmd);
+static BOOL PillHasImage(void *ctx);
+static void PillSetZoom(void *ctx, UINT percent);
+static void PillExecute(void *ctx, UINT cmd);
+
+static VOID
+Preview_ShowOverlay(PPREVIEW_DATA pData, BOOL bShow)
+{
+    RECT rc;
+
+    if (!pData || Preview_IsMainWnd(pData->m_hwnd))
+        return;
+    if (bShow && !pData->m_pOverlay)
+    {
+        VPILL_HOST host;
+        host.ctx = pData;
+        host.GetZoom = PillGetZoom;
+        host.IsFit = PillIsFit;
+        host.IsEnabled = PillIsEnabled;
+        host.HasImage = PillHasImage;
+        host.SetZoom = PillSetZoom;
+        host.Execute = PillExecute;
+        pData->m_pOverlay = VPill_CreateOverlay(pData->m_hwnd, g_hInstance, &host);
+    }
+    if (!pData->m_pOverlay)
+        return;
+    GetClientRect(pData->m_hwnd, &rc);
+    VPill_ShowOverlay(pData->m_pOverlay, bShow, rc.right, rc.bottom);
+}
+
 static VOID
 ZoomWnd_StopHideCursor(PPREVIEW_DATA pData)
 {
@@ -1513,6 +1547,7 @@ ZoomWnd_OnMouseMove(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         ZoomWnd_StopHideCursor(pData);
         if (!pData->m_nMouseDownMsg)
             SetTimer(hwnd, HIDECURSOR_TIMER_ID, HIDECURSOR_TIMER_TIMEOUT, NULL);
+        Preview_ShowOverlay(pData, TRUE);
     }
 
     if (pData->m_nMouseDownMsg == WM_MBUTTONDOWN)
@@ -1715,8 +1750,14 @@ ZoomWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (wParam == HIDECURSOR_TIMER_ID)
             {
                 ZoomWnd_StopHideCursor(pData);
-                if (IsWindowVisible(hwnd))
+                if (IsWindowVisible(hwnd) && pData->m_pOverlay && VPill_IsCursorOver(pData->m_pOverlay))
                 {
+                    /* the pointer rests on the overlay: keep both until it leaves */
+                    SetTimer(hwnd, HIDECURSOR_TIMER_ID, HIDECURSOR_TIMER_TIMEOUT, NULL);
+                }
+                else if (IsWindowVisible(hwnd))
+                {
+                    Preview_ShowOverlay(pData, FALSE);
                     pData->m_bHideCursor = TRUE;
                     GenerateSetCursor(hwnd, uMsg);
                 }
@@ -2465,6 +2506,8 @@ Preview_OnDestroy(HWND hwnd)
 
     VPill_Destroy(pData->m_pPill);
     pData->m_pPill = NULL;
+    VPill_Destroy(pData->m_pOverlay);
+    pData->m_pOverlay = NULL;
     LeewayFrameDestroy(pData->m_pFrame);
     pData->m_pFrame = NULL;
     VRB_RibbonDestroy(pData->m_pRibbon);

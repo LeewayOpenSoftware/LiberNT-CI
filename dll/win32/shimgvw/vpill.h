@@ -30,6 +30,13 @@ typedef struct VPILL_HOST
 VPILL *VPill_Create(HWND main, HINSTANCE instance, const VPILL_HOST *host);
 void VPill_Destroy(VPILL *p);
 
+/* Slideshow overlay: only the pill, with previous / end slideshow / next, hidden until
+ * VPill_ShowOverlay(TRUE). 'owner' is the full-screen window. */
+VPILL *VPill_CreateOverlay(HWND owner, HINSTANCE instance, const VPILL_HOST *host);
+void VPill_ShowOverlay(VPILL *p, BOOL show, int cx, int cy);
+/* TRUE while the mouse pointer is over the visible pill window (overlay auto-hide holds off). */
+BOOL VPill_IsCursorOver(VPILL *p);
+
 /* Height of the menu strip in pixels at the current DPI. */
 UINT VPill_StripHeight(VPILL *p);
 /* Lays the strip out over the top of the client area and places the pill at the
