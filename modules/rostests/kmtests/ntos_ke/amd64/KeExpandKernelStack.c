@@ -17,7 +17,7 @@ RtlPcToFileHeader(
     _In_ PVOID PcValue,
     _Out_ PVOID *BaseOfImage);
 
-/* NT: an expansion may not exceed the large stack minus the normal one (0xC000 on amd64) */
+/* More than a thread stack holds, so a request of this size always switches */
 #define EXPANSION_MAXIMUM (KERNEL_LARGE_STACK_SIZE - KERNEL_STACK_SIZE)
 /* The deep part consumes more than a whole 24 KiB thread stack */
 #define DEEP_BYTES 0x7000
@@ -306,7 +306,7 @@ ExpandCallout(
         TouchPageable(Context);
 }
 
-START_TEST(KeExpandKernelStack)
+START_TEST(KeExpandKernelStackSwitch)
 {
     EXPAND_CONTEXT C;
     NTSTATUS Status;
@@ -396,8 +396,8 @@ START_TEST(KeExpandKernelStack)
     ok_irql(PASSIVE_LEVEL);
 
     /* 4. Size above the maximum is refused without calling out */
-    InitContext(&C, Low, High, EXPANSION_MAXIMUM + 1);
-    Status = KeExpandKernelStackAndCallout(ExpandCallout, &C, EXPANSION_MAXIMUM + 1);
+    InitContext(&C, Low, High, MAXIMUM_EXPANSION_SIZE + 1);
+    Status = KeExpandKernelStackAndCallout(ExpandCallout, &C, MAXIMUM_EXPANSION_SIZE + 1);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER_3);
     ok_eq_ulong(C.Calls, 0UL);
 

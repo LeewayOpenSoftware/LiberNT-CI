@@ -315,8 +315,8 @@ KeInitSystem(VOID)
 
 #ifdef _M_AMD64
 
-/* NT: an expansion may not exceed the large stack minus the normal one */
-#define KI_STACK_EXPANSION_MAXIMUM (KERNEL_LARGE_STACK_SIZE - KERNEL_STACK_SIZE)
+/* The documented limit of the API */
+#define KI_STACK_EXPANSION_MAXIMUM MAXIMUM_EXPANSION_SIZE
 /* Headroom kept beyond the requested size: the callout's own frames around the deep part */
 #define KI_STACK_EXPANSION_SLACK PAGE_SIZE
 
@@ -367,7 +367,8 @@ KeExpandKernelStackAndCalloutEx(
 
     /* Committed up front: the callout never grows it from a fault. The control block
      * that records where we came from sits at the top of the new stack. */
-    StackTop = MmCreateExpansionStack(Size + KI_STACK_EXPANSION_SLACK + sizeof(KSTACK_CONTROL),
+    StackTop = MmCreateExpansionStack(min(Size + KI_STACK_EXPANSION_SLACK + sizeof(KSTACK_CONTROL),
+                                          KERNEL_LARGE_STACK_SIZE),
                                       Wait && (Irql < DISPATCH_LEVEL),
                                       &StackLimit);
     if (StackTop == NULL)
