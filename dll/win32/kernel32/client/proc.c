@@ -3307,7 +3307,7 @@ BasepEnvironmentHasRunAsInvoker(
     {
         while (*Token == L' ') Token++;
         for (End = Token; *End && *End != L' '; End++);
-        if ((End - Token) == 11 && !_wcsnicmp(Token, L"RunAsInvoker", 11))
+        if ((End - Token) == 12 && !_wcsnicmp(Token, L"RunAsInvoker", 12))
             return TRUE;
     }
     return FALSE;
