@@ -571,7 +571,9 @@ FileRecord::GetAttributeData(_In_     AttributeType Type,
  * Decodes the mapping pairs of a nonresident attribute record. Reads only
  * [AttributeBytes, AttributeBytes + Attribute->Length), and Attribute->Length
  * must fit in AvailableLength. Allocates nothing; each run goes to Sink.
- * STATUS_FILE_CORRUPT_ERROR when the bytes cannot be a valid mapping.
+ * STATUS_FILE_CORRUPT_ERROR when the bytes cannot be a valid mapping,
+ * including AvailableLength < 0x40, which is checked before the resident
+ * flag. STATUS_INVALID_PARAMETER for a resident attribute.
  */
 extern "C"
 NTSTATUS

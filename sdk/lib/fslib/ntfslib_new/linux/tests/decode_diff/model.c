@@ -125,7 +125,9 @@ ModelApplyFixup(uint8_t *r, uint32_t size, uint32_t bps)
     uint32_t usa, count, i;
     uint16_t check;
 
-    if (bps < 2 || size < 8 || size < bps || size % bps != 0)
+    if (bps < 512 || (bps & (bps - 1)) != 0)
+        return NTFS_DIFF_INVALID_PARAMETER;
+    if (size < bps || size % bps != 0)
         return NTFS_DIFF_FILE_CORRUPT;
 
     usa = Le16(r + 4);

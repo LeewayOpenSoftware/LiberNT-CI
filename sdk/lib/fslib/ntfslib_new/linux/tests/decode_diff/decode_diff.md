@@ -12,6 +12,11 @@ implementation of three decoders and fails on any disagreement:
 Implementations: `ntfslib` (the code the driver runs), `model` (model.c,
 written from the on-disk format with byte reads only) and, optionally, `alt`.
 
+**The reference is `ntfslib`, the shipped C++.** `model` is a second
+transcription of the same rules. It catches a rig or generator that stops
+exercising a rule, but agreeing with it proves nothing beyond that. An `alt`,
+such as the Rust port, is held to `ntfslib`.
+
 ## Inputs
 
 - **Corpus:** three fresh volumes formatted in memory (512/8, 512/1, 4096/1).
@@ -44,8 +49,10 @@ alternative must keep them by construction.
 
 - **M1.** Reads only `[attr, attr + min(avail, Length))`, and nothing at all
   when `avail < 0x40`, which is then corrupt.
-- **M2.** If the nonresident byte (0x08) is 0, the result is
-  `STATUS_INVALID_PARAMETER` and nothing else is read.
+- **M2.** The `avail < 0x40` check of M1 comes first. After it, if the
+  nonresident byte (0x08) is 0, the result is `STATUS_INVALID_PARAMETER` and
+  nothing else is read. A caller in the library never passes a resident
+  attribute: `DecodeDataRuns` returns NULL before calling the decoder.
 - **M3.** The header is 0x48 when `Flags & 0x80FF` (compressed or sparse),
   0x40 otherwise. The following must hold:
   - `Length <= avail`;
@@ -72,17 +79,24 @@ alternative must keep them by construction.
 - **M11.** Allocation-free and lock-free, and it never panics or raises on any
   input. It also runs on paging I/O paths.
 
-### Fixup: `(record, size, bps)`, with bps 512 or 4096
+### Fixup: `(record, size, bps)`
 
+- **F0.** A `bps` below 512 or not a power of two returns
+  `STATUS_INVALID_PARAMETER`. The volume probe admits only 512 and 4096, but
+  the decoder no longer relies on that: 0 would divide by zero and, without
+  the F1 checks, 1 would write below the record.
 - **F1.** `size >= bps`, `size % bps == 0`, the USA count equals
   `size / bps + 1`, the USA offset is `<= size`, and `2 * count` fits after it.
 - **F2.** For sectors `i = 1 .. count-1`, the last two bytes of sector `i`
   must equal `USA[0]`, read again each time, and are replaced by `USA[i]`, in
   that order and in place.
 - **F3.** No access outside `[record, record + size)`. After a failure, the
-  buffer contents are unspecified. The caller passes only 512 or 4096
-  (`NtfsProbePartition`). The library divides by `bps` and does not check it
-  for 0.
+  buffer contents are unspecified.
+- **F4.** Defined, not refused: the update sequence array may overlap the
+  record header or a sector tail. F2's in-place order then decides the result,
+  and every implementation must follow that order. Refusing such records
+  would be stricter than anything known about Windows, so it would need
+  evidence first.
 
 ### Directory index entry: `(entry, remaining)`
 

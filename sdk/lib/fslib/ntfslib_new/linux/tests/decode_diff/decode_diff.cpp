@@ -563,6 +563,8 @@ GenerateFixup(const std::vector<Case> &seeds)
     }
     if (c.Bytes.size() < 8)
         c.Bytes.resize(8);
+    if (Below(32) == 0)
+        c.Parameter = Below(2) ? Below(4097) : 1ull << Below(14);
     return c;
 }
 
@@ -642,8 +644,6 @@ LoadCorpus(const std::string &directory, std::vector<Case> &out)
         Case c{ type, std::vector<uint8_t>(bytes.begin() + prefix, bytes.end()), 0, name };
         for (size_t i = 0; i < prefix; i++)
             c.Parameter |= (uint64_t)bytes[i] << (8 * i);
-        if (type == KindFixup && c.Parameter != 512 && c.Parameter != 4096)
-            continue;
         out.push_back(c);
     }
     closedir(dir);

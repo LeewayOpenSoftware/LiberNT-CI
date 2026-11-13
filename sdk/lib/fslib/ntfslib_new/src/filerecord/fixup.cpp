@@ -23,6 +23,10 @@ ValidateFixup(_In_ PNTFSRecordHeader Header,
 {
     ULONG UsaSize = Header->SizeOfUpdateSequence * sizeof(USHORT);
 
+    /* The volume probe admits only 512 and 4096; 0 would divide by zero below */
+    if (BytesPerSector < 512 || (BytesPerSector & (BytesPerSector - 1)) != 0)
+        return STATUS_INVALID_PARAMETER;
+
     if (RecordSize < BytesPerSector ||
         (RecordSize % BytesPerSector) != 0 ||
         Header->SizeOfUpdateSequence != RecordSize / BytesPerSector + 1 ||

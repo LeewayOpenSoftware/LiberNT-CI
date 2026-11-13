@@ -34,8 +34,9 @@ typedef struct ntfs_decode_impl
     int32_t (*decode_mapping_pairs)(const uint8_t *attr, uint32_t avail, uint64_t clusters_in_volume,
                                     ntfs_diff_run_sink sink, void *context);
 
-    /* Update sequence fixup of a FILE/INDX record, in place. bytes_per_sector
-     * is 512 or 4096. The buffer is unspecified after a failure. */
+    /* Update sequence fixup of a FILE/INDX record, in place. A bytes_per_sector
+     * below 512 or not a power of two is an invalid parameter. The buffer is
+     * unspecified after a failure. */
     int32_t (*apply_fixup)(uint8_t *record, uint32_t record_size, uint32_t bytes_per_sector);
 
     /* Directory ($I30) index entry at entry, with remaining bytes up to the end of
