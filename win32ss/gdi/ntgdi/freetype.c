@@ -5405,6 +5405,28 @@ IntNeedRequestFontSize(PFONTLINK_CHAIN pChain, FT_Face face, PLIST_ENTRY TargetE
     return TRUE;
 }
 
+/* A default-ignorable format character the font has no glyph for takes no room, as on Windows */
+static BOOL
+IntIsInvisibleFormatChar(
+    _In_ PFONTLINK_CHAIN pChain,
+    _In_ DWORD ch,
+    _In_ BOOL fCodeAsIndex)
+{
+    if (fCodeAsIndex)
+        return FALSE;
+
+    if (!((ch >= 0x200B && ch <= 0x200F) ||
+          (ch >= 0x202A && ch <= 0x202E) ||
+          (ch >= 0x2060 && ch <= 0x2064) ||
+          (ch >= 0x2066 && ch <= 0x206F) ||
+          ch == 0xFEFF))
+    {
+        return FALSE;
+    }
+
+    return get_glyph_index(pChain->pDefFace, ch) == 0;
+}
+
 /// Search the target glyph and update the current font info.
 /// @return The glyph index
 static UINT
@@ -6316,16 +6338,19 @@ TextIntGetTextExtentPoint(
                 ch0 = Utf32FromSurrogatePair(ch0, ch1);
         }
 
-        glyph_index = FontLink_Chain_FindGlyph(&Chain, &Cache, &Cache.Hashed.Face, ch0,
-                                               (fl & GTEF_INDICES));
-        Cache.Hashed.GlyphIndex = glyph_index;
+        if (!IntIsInvisibleFormatChar(&Chain, ch0, (fl & GTEF_INDICES)))
+        {
+            glyph_index = FontLink_Chain_FindGlyph(&Chain, &Cache, &Cache.Hashed.Face, ch0,
+                                                   (fl & GTEF_INDICES));
+            Cache.Hashed.GlyphIndex = glyph_index;
 
-        realglyph = IntGetRealGlyph(&Cache);
-        if (!realglyph)
-            break;
+            realglyph = IntGetRealGlyph(&Cache);
+            if (!realglyph)
+                break;
 
-        /* Retrieve kerning distance */
-        TotalWidth64 += realglyph->root.advance.x >> 10;
+            /* Retrieve kerning distance */
+            TotalWidth64 += realglyph->root.advance.x >> 10;
+        }
         if (!Scale.bScaled)
             TotalWidth64 += (ULONGLONG)((LONGLONG)dc->pdcattr->lTextExtra * 64);
 
@@ -8216,13 +8241,22 @@ IntGetTextDisposition(
                 ch0 = Utf32FromSurrogatePair(ch0, ch1);
         }
 
-        glyph_index = FontLink_Chain_FindGlyph(pChain, Cache, &face, ch0,
-                                               (fuOptions & ETO_GLYPH_INDEX));
-        Cache->Hashed.GlyphIndex = glyph_index;
+        if (IntIsInvisibleFormatChar(pChain, ch0, (fuOptions & ETO_GLYPH_INDEX)))
+        {
+            if (NULL == Dx)
+                continue;
+            realglyph = NULL;
+        }
+        else
+        {
+            glyph_index = FontLink_Chain_FindGlyph(pChain, Cache, &face, ch0,
+                                                   (fuOptions & ETO_GLYPH_INDEX));
+            Cache->Hashed.GlyphIndex = glyph_index;
 
-        realglyph = IntGetRealGlyph(Cache);
-        if (!realglyph)
-            return FALSE;
+            realglyph = IntGetRealGlyph(Cache);
+            if (!realglyph)
+                return FALSE;
+        }
 
         if (NULL == Dx)
         {
@@ -8570,6 +8604,20 @@ IntExtTextOutW(
             ch1 = *String++;
             if (IS_LOW_SURROGATE(ch1))
                 ch0 = Utf32FromSurrogatePair(ch0, ch1);
+        }
+
+        if (IntIsInvisibleFormatChar(&Chain, ch0, (fuOptions & ETO_GLYPH_INDEX)))
+        {
+            if (NULL != Dx)
+            {
+                vec.x = (fuOptions & ETO_PDY) ? (Dx[2 * i + 0] << 6) : (Dx[i] << 6);
+                vec.y = (fuOptions & ETO_PDY) ? (Dx[2 * i + 1] << 6) : 0;
+                if (!bNoTransform)
+                    FT_Vector_Transform(&vec, &Cache.Hashed.matTransform);
+                X64 += vec.x;
+                Y64 -= vec.y;
+            }
+            continue;
         }
 
         glyph_index = FontLink_Chain_FindGlyph(&Chain, &Cache, &face, ch0,
