@@ -913,6 +913,10 @@ PillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_MOUSEACTIVATE:
             return MA_NOACTIVATE;
 #ifdef VPILL_TESTHOOK
+        case WM_APP + 0x79: /* test builds: force the hot item (a real hover is cancelled by WM_MOUSELEAVE) */
+            p->hotPill = (int)wp;
+            RenderPill(p);
+            return 0;
         case WM_APP + 0x78:
             /* Test builds: centre of pill item wp, as MAKELONG(x, y) in pill client pixels */
             if ((UINT)wp < PI_COUNT)
