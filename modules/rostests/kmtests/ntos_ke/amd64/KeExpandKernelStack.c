@@ -35,6 +35,8 @@ typedef struct _EXPAND_CONTEXT
     BOOLEAN DoSeh;
     BOOLEAN DoUnwind;
     BOOLEAN Nest;
+    PUCHAR Pageable;
+    SIZE_T PageableSize;
 
     /* Filled by the callout */
     ULONG Calls;
@@ -61,6 +63,8 @@ typedef struct _EXPAND_CONTEXT
     ULONG NestCalls;
     BOOLEAN NestSwitched;
     BOOLEAN NestRestored;
+    ULONG PageableBad;
+    BOOLEAN PageableFaulted;
 } EXPAND_CONTEXT, *PEXPAND_CONTEXT;
 
 /* Where the stack is right now: the address of a local, handed out through a volatile so the
@@ -216,6 +220,35 @@ UnwindAcrossSwitch(
     }
 }
 
+/* Demand-zero user pages nobody touched yet: every first access is a page fault taken on the expansion stack */
+static
+VOID
+TouchPageable(
+    _In_ PEXPAND_CONTEXT Context)
+{
+    SIZE_T Offset;
+
+    _SEH2_TRY
+    {
+        for (Offset = 0; Offset < Context->PageableSize; Offset += PAGE_SIZE)
+        {
+            if (Context->Pageable[Offset] != 0)
+                Context->PageableBad++;
+            Context->Pageable[Offset] = (UCHAR)((Offset >> PAGE_SHIFT) + 1);
+        }
+        for (Offset = 0; Offset < Context->PageableSize; Offset += PAGE_SIZE)
+        {
+            if (Context->Pageable[Offset] != (UCHAR)((Offset >> PAGE_SHIFT) + 1))
+                Context->PageableBad++;
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Context->PageableFaulted = TRUE;
+    }
+    _SEH2_END;
+}
+
 static
 VOID
 NTAPI
@@ -268,6 +301,9 @@ ExpandCallout(
 
     if (Context->DoUnwind && Context->Switched)
         UnwindAcrossSwitch(Context);
+
+    if (Context->Pageable != NULL && Context->Switched)
+        TouchPageable(Context);
 }
 
 START_TEST(KeExpandKernelStack)
@@ -277,6 +313,8 @@ START_TEST(KeExpandKernelStack)
     ULONG_PTR Low, High, AfterLow, AfterHigh;
     KIRQL OldIrql;
     PKTHREAD Thread = KeGetCurrentThread();
+    PVOID PageableBase;
+    SIZE_T PageableSize;
 
     IoGetStackLimits(&Low, &High);
     ok_irql(PASSIVE_LEVEL);
@@ -304,7 +342,15 @@ START_TEST(KeExpandKernelStack)
     C.Deep = TRUE;
     C.DoUnwind = TRUE;
     C.Nest = TRUE;
+    C.PageableSize = 16 * PAGE_SIZE;
+    PageableBase = NULL;
+    PageableSize = C.PageableSize;
+    Status = ZwAllocateVirtualMemory(NtCurrentProcess(), &PageableBase, 0, &PageableSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    C.Pageable = NT_SUCCESS(Status) ? PageableBase : NULL;
     Status = KeExpandKernelStackAndCalloutEx(ExpandCallout, &C, EXPANSION_MAXIMUM, TRUE, NULL);
+    if (C.Pageable != NULL)
+        ZwFreeVirtualMemory(NtCurrentProcess(), &PageableBase, &PageableSize, MEM_RELEASE);
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok_eq_ulong(C.Calls, 1UL);
     ok_eq_pointer(C.Parameter, &C);
@@ -322,8 +368,9 @@ START_TEST(KeExpandKernelStack)
        C.UnwindFrames, C.UnwindNoEntry);
     ok(C.UnwindSameImage, "the unwind did not get back to this driver on the caller's stack\n");
     ok_eq_ulong(C.UnwindNoEntry, 0UL);
-    /* A frame walk stops at the limits of the stack it runs on, so it may end at the switch */
-    trace("RtlWalkFrameChain: %lu frames, crossed the switch: %d\n", C.WalkFrames, C.WalkCrossed);
+    ok(C.WalkCrossed, "RtlWalkFrameChain stopped at the switch (%lu frames)\n", C.WalkFrames);
+    ok(!C.PageableFaulted, "touching pageable memory in the callout raised\n");
+    ok_eq_ulong(C.PageableBad, 0UL);
     ok_eq_hex(C.NestStatus, STATUS_SUCCESS);
     ok_eq_ulong(C.NestCalls, 1UL);
     ok(C.NestSwitched, "nested callout ran on the outer expansion stack\n");
