@@ -9,8 +9,55 @@
 #include <ntifs.h>
 #include <pseh/pseh2.h>
 
-static DECLSPEC_ALIGN(8) volatile LONG64 EtwpNextRegistrationHandle;
 static volatile LONG EtwpTelemetryCoverageRound;
+
+/* A registration lives in a slot; its handle is the slot number (1-based) with the slot's generation above it,
+ * so a handle outlives its registration only as a refusal. Writes run at any IRQL and read the table without
+ * the lock: slots are only ever added, a freed registration's slot keeps its generation bumped. */
+typedef struct _ETWP_REGISTRATION
+{
+    GUID ProviderId;
+    PETWENABLECALLBACK EnableCallback;
+    PVOID CallbackContext;
+} ETWP_REGISTRATION, *PETWP_REGISTRATION;
+
+#define ETWP_SLOTS_PER_BLOCK 256
+#define ETWP_MAX_BLOCKS 256
+#define ETWP_TAG 'geTE'
+#define ETWP_MAX_EVENT_DATA_DESCRIPTORS 128
+
+typedef struct _ETWP_BLOCK
+{
+    PETWP_REGISTRATION Entry[ETWP_SLOTS_PER_BLOCK];
+    ULONG Generation[ETWP_SLOTS_PER_BLOCK];
+} ETWP_BLOCK, *PETWP_BLOCK;
+
+static PETWP_BLOCK EtwpBlocks[ETWP_MAX_BLOCKS];
+static KSPIN_LOCK EtwpRegistrationLock;
+
+static
+PETWP_REGISTRATION
+EtwpRegistrationFromHandle(
+    _In_ REGHANDLE RegHandle)
+{
+    ULONG Index = (ULONG)(RegHandle & 0xFFFFFFFF);
+    ULONG Generation = (ULONG)(RegHandle >> 32);
+    PETWP_BLOCK Block;
+    PETWP_REGISTRATION Registration;
+
+    if (Index == 0 || Index > ETWP_MAX_BLOCKS * ETWP_SLOTS_PER_BLOCK)
+        return NULL;
+    Index--;
+
+    Block = ReadPointerNoFence((PVOID volatile *)&EtwpBlocks[Index / ETWP_SLOTS_PER_BLOCK]);
+    if (Block == NULL)
+        return NULL;
+    Registration = ReadPointerNoFence((PVOID volatile *)&Block->Entry[Index % ETWP_SLOTS_PER_BLOCK]);
+    if (Registration == NULL || ReadULongNoFence(&Block->Generation[Index % ETWP_SLOTS_PER_BLOCK]) != Generation)
+        return NULL;
+
+    return Registration;
+}
 
 _IRQL_requires_max_(HIGH_LEVEL)
 BOOLEAN
@@ -81,12 +128,7 @@ EtwWrite(
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData)
 {
-    UNREFERENCED_PARAMETER(RegHandle);
-    UNREFERENCED_PARAMETER(ActivityId);
-    UNREFERENCED_PARAMETER(UserDataCount);
-    UNREFERENCED_PARAMETER(UserData);
-    UNREFERENCED_PARAMETER(EventDescriptor);
-    return STATUS_SUCCESS;
+    return EtwWriteTransfer(RegHandle, EventDescriptor, ActivityId, NULL, UserDataCount, UserData);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -99,18 +141,63 @@ EtwRegister(
     _In_opt_ PVOID CallbackContext,
     _Out_ PREGHANDLE RegHandle)
 {
-    UNREFERENCED_PARAMETER(ProviderId);
-    UNREFERENCED_PARAMETER(EnableCallback);
-    UNREFERENCED_PARAMETER(CallbackContext);
+    PETWP_REGISTRATION Registration;
+    PETWP_BLOCK NewBlock = NULL;
+    PETWP_BLOCK Block;
+    ULONG BlockIndex, Slot;
+    KIRQL OldIrql;
 
-    if (RegHandle == NULL)
+    if (ProviderId == NULL || RegHandle == NULL)
         return STATUS_INVALID_PARAMETER;
+    *RegHandle = 0;
 
-    /* Issue an opaque, process-local token until a provider backend exists. */
-    *RegHandle = (REGHANDLE)InterlockedIncrement64(&EtwpNextRegistrationHandle);
-    if (*RegHandle == 0)
-        *RegHandle = (REGHANDLE)InterlockedIncrement64(&EtwpNextRegistrationHandle);
-    return STATUS_SUCCESS;
+    Registration = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Registration), ETWP_TAG);
+    if (Registration == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Registration->ProviderId = *ProviderId;
+    Registration->EnableCallback = EnableCallback;
+    Registration->CallbackContext = CallbackContext;
+
+    for (;;)
+    {
+        KeAcquireSpinLock(&EtwpRegistrationLock, &OldIrql);
+        for (BlockIndex = 0; BlockIndex < ETWP_MAX_BLOCKS; BlockIndex++)
+        {
+            Block = EtwpBlocks[BlockIndex];
+            if (Block == NULL)
+            {
+                /* The table grows by a block, allocated outside the lock */
+                if (NewBlock == NULL)
+                    break;
+                Block = NewBlock;
+                NewBlock = NULL;
+                WritePointerRelease((PVOID volatile *)&EtwpBlocks[BlockIndex], Block);
+            }
+            for (Slot = 0; Slot < ETWP_SLOTS_PER_BLOCK; Slot++)
+            {
+                if (Block->Entry[Slot] == NULL)
+                {
+                    WritePointerRelease((PVOID volatile *)&Block->Entry[Slot], Registration);
+                    KeReleaseSpinLock(&EtwpRegistrationLock, OldIrql);
+                    if (NewBlock != NULL)
+                        ExFreePoolWithTag(NewBlock, ETWP_TAG);
+                    *RegHandle = ((REGHANDLE)Block->Generation[Slot] << 32) |
+                                 (BlockIndex * ETWP_SLOTS_PER_BLOCK + Slot + 1);
+                    return STATUS_SUCCESS;
+                }
+            }
+        }
+        KeReleaseSpinLock(&EtwpRegistrationLock, OldIrql);
+
+        if (BlockIndex == ETWP_MAX_BLOCKS)
+            break;
+        NewBlock = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*NewBlock), ETWP_TAG);
+        if (NewBlock == NULL)
+            break;
+    }
+
+    ExFreePoolWithTag(Registration, ETWP_TAG);
+    return STATUS_INSUFFICIENT_RESOURCES;
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
@@ -120,7 +207,24 @@ NTAPI
 EtwUnregister(
     _In_ REGHANDLE RegHandle)
 {
-    UNREFERENCED_PARAMETER(RegHandle);
+    ULONG Index = (ULONG)(RegHandle & 0xFFFFFFFF) - 1;
+    PETWP_REGISTRATION Registration;
+    PETWP_BLOCK Block;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&EtwpRegistrationLock, &OldIrql);
+    Registration = EtwpRegistrationFromHandle(RegHandle);
+    if (Registration == NULL)
+    {
+        KeReleaseSpinLock(&EtwpRegistrationLock, OldIrql);
+        return STATUS_INVALID_HANDLE;
+    }
+    Block = EtwpBlocks[Index / ETWP_SLOTS_PER_BLOCK];
+    Block->Generation[Index % ETWP_SLOTS_PER_BLOCK]++;
+    WritePointerRelease((PVOID volatile *)&Block->Entry[Index % ETWP_SLOTS_PER_BLOCK], NULL);
+    KeReleaseSpinLock(&EtwpRegistrationLock, OldIrql);
+
+    ExFreePoolWithTag(Registration, ETWP_TAG);
     return STATUS_SUCCESS;
 }
 
@@ -154,12 +258,58 @@ EtwWriteTransfer(
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData)
 {
-    UNREFERENCED_PARAMETER(RegHandle);
-    UNREFERENCED_PARAMETER(EventDescriptor);
     UNREFERENCED_PARAMETER(ActivityId);
     UNREFERENCED_PARAMETER(RelatedActivityId);
-    UNREFERENCED_PARAMETER(UserDataCount);
     UNREFERENCED_PARAMETER(UserData);
+
+    if (EventDescriptor == NULL || UserDataCount > ETWP_MAX_EVENT_DATA_DESCRIPTORS)
+        return STATUS_INVALID_PARAMETER;
+    if (EtwpRegistrationFromHandle(RegHandle) == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    /* No session is enabled for any provider yet, so the event is accepted and dropped */
+    return STATUS_SUCCESS;
+}
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTSTATUS
+NTKRNLVISTAAPI
+NTAPI
+EtwWriteEx(
+    _In_ REGHANDLE RegHandle,
+    _In_ PCEVENT_DESCRIPTOR EventDescriptor,
+    _In_ ULONG64 Filter,
+    _In_ ULONG Flags,
+    _In_opt_ LPCGUID ActivityId,
+    _In_opt_ LPCGUID RelatedActivityId,
+    _In_ ULONG UserDataCount,
+    _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData)
+{
+    UNREFERENCED_PARAMETER(Filter);
+    UNREFERENCED_PARAMETER(Flags);
+
+    return EtwWriteTransfer(RegHandle, EventDescriptor, ActivityId, RelatedActivityId, UserDataCount, UserData);
+}
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTSTATUS
+NTKRNLVISTAAPI
+NTAPI
+EtwWriteString(
+    _In_ REGHANDLE RegHandle,
+    _In_ UCHAR Level,
+    _In_ ULONGLONG Keyword,
+    _In_opt_ LPCGUID ActivityId,
+    _In_ PCWSTR String)
+{
+    UNREFERENCED_PARAMETER(Level);
+    UNREFERENCED_PARAMETER(Keyword);
+    UNREFERENCED_PARAMETER(ActivityId);
+
+    if (EtwpRegistrationFromHandle(RegHandle) == NULL)
+        return STATUS_INVALID_HANDLE;
+    if (String == NULL)
+        return STATUS_INVALID_PARAMETER;
 
     return STATUS_SUCCESS;
 }
