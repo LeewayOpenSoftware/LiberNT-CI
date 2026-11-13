@@ -247,7 +247,7 @@ CcSetFileSizes(
 
         CcNtZeroTailOfLastPage(NtMap, NewFileSize, Boundary);
         CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
-        CcMapDetachViews(&NtMap->Map, ROUND_UP(NewFileSize, CC_VIEW_SIZE), (ULONG64)-1);
+        CcMapDetachViews(&NtMap->Map, NewFileSize, (ULONG64)-1);
         MiSegmentPurge(NtMap->Control->Segment, Boundary, 0);
     }
 
