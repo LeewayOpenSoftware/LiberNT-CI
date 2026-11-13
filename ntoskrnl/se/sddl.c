@@ -52,6 +52,7 @@ typedef struct _SEP_SDDL_ACE_DESCRIPTION
     ULONG ObjectFlags;
     GUID ObjectType;
     GUID InheritedObjectType;
+    BOOLEAN ObjectEntry;
 } SEP_SDDL_ACE_DESCRIPTION, *PSEP_SDDL_ACE_DESCRIPTION;
 
 static const SEP_SDDL_ALIAS SepSddlAliases[] =
@@ -479,6 +480,7 @@ SepSddlDescribeAce(
     if (!NT_SUCCESS(Status))
         return Status;
     ObjectType = Description->Type;
+    Description->ObjectEntry = SepSddlIsObjectAce(ObjectType);
     SepSddlTrimRange(&FieldStart[3], &FieldEnd[3]);
     SepSddlTrimRange(&FieldStart[4], &FieldEnd[4]);
     if (FieldStart[3] != FieldEnd[3])
@@ -578,7 +580,8 @@ SepSddlParseAcl(
         if (!NT_SUCCESS(Status))
             return Status;
         AceLength = SepSddlAceLength(&Description);
-        if (SepSddlIsObjectAce(Description.Type))
+        /* The list is a directory-service list when an entry was written as an object entry, types or not */
+        if (Description.ObjectEntry)
             ObjectEntries = TRUE;
         if ((AceLength > MAXUSHORT) || (Length > MAXUSHORT - AceLength))
             return NTSTATUS_FROM_WIN32(ERROR_INVALID_ACL);
