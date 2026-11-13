@@ -263,6 +263,7 @@ coremessaging.dll
 cryptowinrt.dll
 installservice.dll
 threadpoolwinrt.dll
+twinapi.appcore.dll
 windows.applicationmodel.dll
 windows.devices.bluetooth.dll
 windows.devices.enumeration.dll
@@ -272,6 +273,7 @@ windows.gaming.input.dll
 windows.gaming.ui.gamebar.dll
 windows.globalization.dll
 windows.graphics.dll
+windows.management.deployment.dll
 windows.media.dll
 windows.media.devices.dll
 windows.media.mediacontrol.dll

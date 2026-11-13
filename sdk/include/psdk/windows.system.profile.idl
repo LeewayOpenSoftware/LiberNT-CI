@@ -45,6 +45,9 @@ namespace Windows.System.Profile {
 
     declare {
         interface Windows.Foundation.EventHandler<IInspectable *>;
+        interface Windows.Foundation.Collections.IMapView<HSTRING, HSTRING>;
+        interface Windows.Foundation.AsyncOperationCompletedHandler<Windows.Foundation.Collections.IMapView<HSTRING, HSTRING> *>;
+        interface Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IMapView<HSTRING, HSTRING> *>;
     }
 
     [
@@ -93,6 +96,17 @@ namespace Windows.System.Profile {
     }
 
     [
+        contract(Windows.Foundation.UniversalApiContract, 6.0),
+        exclusiveto(Windows.System.Profile.AnalyticsInfo),
+        uuid(101704ea-a7f9-46d2-ab94-016865afdb25)
+    ]
+    interface IAnalyticsInfoStatics2 : IInspectable
+    {
+        HRESULT GetSystemPropertiesAsync([in] Windows.Foundation.Collections.IIterable<HSTRING> *attribute_names,
+                [out, retval] Windows.Foundation.IAsyncOperation<Windows.Foundation.Collections.IMapView<HSTRING, HSTRING> *> **operation);
+    }
+
+    [
         contract(Windows.Foundation.UniversalApiContract, 1.0),
         exclusiveto(Windows.System.Profile.AnalyticsVersionInfo),
         uuid(926130b8-9955-4c74-bdc1-7cd0decf9b03)
@@ -101,6 +115,16 @@ namespace Windows.System.Profile {
     {
         [propget] HRESULT DeviceFamily([out, retval] HSTRING *value);
         [propget] HRESULT DeviceFamilyVersion([out, retval] HSTRING *value);
+    }
+
+    [
+        contract(Windows.Foundation.UniversalApiContract, 11.0),
+        exclusiveto(Windows.System.Profile.AnalyticsVersionInfo),
+        uuid(76e915b1-ff36-407c-9f57-160d3e540747)
+    ]
+    interface IAnalyticsVersionInfo2 : IInspectable
+    {
+        [propget] HRESULT ProductName([out, retval] HSTRING *value);
     }
 
     [
@@ -133,14 +157,14 @@ namespace Windows.System.Profile {
     runtimeclass AnalyticsVersionInfo
     {
         [default] interface Windows.System.Profile.IAnalyticsVersionInfo;
-        /* [contract(Windows.Foundation.UniversalApiContract, 11.0)] interface Windows.System.Profile.IAnalyticsVersionInfo2; */
+        [contract(Windows.Foundation.UniversalApiContract, 11.0)] interface Windows.System.Profile.IAnalyticsVersionInfo2;
     }
 
     [
         contract(Windows.Foundation.UniversalApiContract, 1.0),
         marshaling_behavior(agile),
         static(Windows.System.Profile.IAnalyticsInfoStatics, Windows.Foundation.UniversalApiContract, 1.0),
-        /* static(Windows.System.Profile.IAnalyticsInfoStatics2, Windows.Foundation.UniversalApiContract, 6.0), */
+        static(Windows.System.Profile.IAnalyticsInfoStatics2, Windows.Foundation.UniversalApiContract, 6.0),
         threading(both)
     ]
     runtimeclass AnalyticsInfo

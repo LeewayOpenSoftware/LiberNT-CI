@@ -300,6 +300,7 @@ set(COMPAT_RUNTIME_MODULES
     thumbcache
     traffic
     twinapi
+    twinapi_appcore
     tzres
     ucrtbase
     uiautomationcore
@@ -327,6 +328,9 @@ set(COMPAT_RUNTIME_MODULES
     winscard
     wintypes
     winusb
+    windows_management_deployment
+    windows_networking_connectivity
+    windows_security_authentication_onlineid
     windows_storage
     windows_ui
     windowscodecs

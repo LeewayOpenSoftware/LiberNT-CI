@@ -1,9 +1,11 @@
 
 list(APPEND SOURCE
+    AnalyticsInfo.c
     AppInstallManager.c
     DispatcherQueue.c
     guid.c
     NotificationData.c
+    PackageManager.c
     PenDevice.c
     shortcut.c
     ToastHistory.c
