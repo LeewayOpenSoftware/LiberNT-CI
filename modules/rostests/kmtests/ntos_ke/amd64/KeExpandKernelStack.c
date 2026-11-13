@@ -22,7 +22,7 @@ RtlPcToFileHeader(
 /* The deep part consumes more than a whole 24 KiB thread stack */
 #define DEEP_BYTES 0x7000
 #define FRAME_BYTES 1024
-/* More than is ever left on an expansion stack, so the nested call has to switch again */
+/* More than is left at the bottom of the deep part, so the nested call has to switch again */
 #define NESTED_SIZE EXPANSION_MAXIMUM
 
 typedef struct _EXPAND_CONTEXT
@@ -88,6 +88,25 @@ InitContext(
     Context->Size = Size;
 }
 
+static EXPAND_STACK_CALLOUT ExpandCallout;
+
+/* Called at the bottom of the deep part, where too little of the expansion stack is left */
+static
+VOID
+NestedExpand(
+    _In_ PEXPAND_CONTEXT Context)
+{
+    EXPAND_CONTEXT Inner;
+    ULONG_PTR Low, High;
+
+    InitContext(&Inner, Context->Low, Context->High, NESTED_SIZE);
+    Context->NestStatus = KeExpandKernelStackAndCallout(ExpandCallout, &Inner, NESTED_SIZE);
+    Context->NestCalls = Inner.Calls;
+    Context->NestSwitched = Inner.Switched;
+    IoGetStackLimits(&Low, &High);
+    Context->NestRestored = (Low == Context->Low && High == Context->High);
+}
+
 /* 1 KiB per level, every frame checked against the limits the kernel reports */
 static
 ULONG
@@ -113,6 +132,8 @@ Recurse(
     if (Top - (ULONG_PTR)Frame >= DEEP_BYTES)
     {
         Context->ReachedDeep = TRUE;
+        if (Context->Nest)
+            NestedExpand(Context);
         if (RaiseAtBottom)
             ExRaiseStatus(STATUS_UNSUCCESSFUL);
         return Level;
@@ -203,8 +224,6 @@ ExpandCallout(
 {
     PEXPAND_CONTEXT Context = Parameter;
     PKTHREAD Thread = KeGetCurrentThread();
-    EXPAND_CONTEXT Inner;
-    ULONG_PTR Low, High;
 
     Context->Calls++;
     Context->Parameter = Parameter;
@@ -249,16 +268,6 @@ ExpandCallout(
 
     if (Context->DoUnwind && Context->Switched)
         UnwindAcrossSwitch(Context);
-
-    if (Context->Nest)
-    {
-        InitContext(&Inner, Context->Low, Context->High, NESTED_SIZE);
-        Context->NestStatus = KeExpandKernelStackAndCallout(ExpandCallout, &Inner, NESTED_SIZE);
-        Context->NestCalls = Inner.Calls;
-        Context->NestSwitched = Inner.Switched;
-        IoGetStackLimits(&Low, &High);
-        Context->NestRestored = (Low == Context->Low && High == Context->High);
-    }
 }
 
 START_TEST(KeExpandKernelStack)
