@@ -1484,9 +1484,16 @@ NtfsDismountVolume(
         (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     KIRQL OldIrql;
     NTSTATUS Status;
+    PVPB Vpb;
+    PVPB SpareVpb;
 
     if (!FileCB || !FileCB->IsVolumeOpen)
         return STATUS_INVALID_PARAMETER;
+
+    /* The device gets a fresh VPB on success; allocate it before any change */
+    SpareVpb = ExAllocatePoolWithTag(NonPagedPool, sizeof(VPB), TAG_NTFS);
+    if (!SpareVpb)
+        return STATUS_INSUFFICIENT_RESOURCES;
 
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     if (VolCB->Dismounted)
@@ -1500,7 +1507,10 @@ NtfsDismountVolume(
     }
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
     if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(SpareVpb, TAG_NTFS);
         return Status;
+    }
 
     FsRtlNotifyVolumeEvent(FileObject,
                            FSRTL_VOLUME_DISMOUNT);
@@ -1538,13 +1548,42 @@ NtfsDismountVolume(
         VolCB->Dismounted = TRUE;
         FileCB->DismountedVolume = TRUE;
         IoAcquireVpbSpinLock(&OldIrql);
-        VolumeDeviceObject->Vpb->Flags &= ~VPB_MOUNTED;
-        VolumeDeviceObject->Vpb->Flags |=
-            VPB_DIRECT_WRITES_ALLOWED;
+        Vpb = VolumeDeviceObject->Vpb;
+        Vpb->Flags &= ~VPB_MOUNTED;
+        Vpb->Flags |= VPB_DIRECT_WRITES_ALLOWED;
+        /*
+         * NT semantics: the dismounted volume gives the device up. Handles to
+         * it (at least the caller's) keep the old VPB, which stays with this
+         * volume device and is never freed by the I/O manager (persistent);
+         * the device gets a clean VPB, so the next open mounts a new volume
+         * through the current top of the storage stack, and a lock held on
+         * the old volume no longer blocks it.
+         */
+        if (Vpb->RealDevice && Vpb->RealDevice->Vpb == Vpb)
+        {
+            RtlZeroMemory(SpareVpb, sizeof(VPB));
+            SpareVpb->Type = IO_TYPE_VPB;
+            SpareVpb->Size = sizeof(VPB);
+            SpareVpb->RealDevice = Vpb->RealDevice;
+            SpareVpb->Flags = Vpb->Flags & VPB_REMOVE_PENDING;
+            Vpb->RealDevice->Vpb = SpareVpb;
+            Vpb->Flags |= VPB_PERSISTENT;
+            SpareVpb = NULL;
+        }
         IoReleaseVpbSpinLock(OldIrql);
     }
     VolCB->Dismounting = FALSE;
     ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+
+    if (NT_SUCCESS(Status))
+    {
+        DPRINT1("NTFS: dismounted volume %p (storage %p), device VPB %s\n",
+                VolumeDeviceObject, VolCB->StorageDevice,
+                SpareVpb ? "not swapped" : "swapped for the next mount");
+    }
+
+    if (SpareVpb)
+        ExFreePoolWithTag(SpareVpb, TAG_NTFS);
 
     /* VD2: drop the shutdown-clean callback only after a SUCCESSFUL dismount.
      * A failed dismount leaves the volume mounted, so it must keep its callback
@@ -2363,7 +2402,8 @@ NtfsFlushFileMetadata(_In_ PVolumeContextBlock VolCB,
         Status = NtfsCommitFileRange(VolCB,
                                      FileCB,
                                      0,
-                                     (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart);
+                                     (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->AllocationSize.QuadPart,
+                                     FALSE); /* the device flush below covers it */
         if (!NT_SUCCESS(Status))
             return Status;
         Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, Offset, Length);
