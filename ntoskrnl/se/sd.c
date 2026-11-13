@@ -135,6 +135,8 @@ SepBuildPartSacl(
     if (!Acl) return NULL;
     RtlZeroMemory(Acl, Length);
     Acl->AclRevision = ACL_REVISION;
+    if (First && First->AclRevision > Acl->AclRevision) Acl->AclRevision = First->AclRevision;
+    if (Second && Second->AclRevision > Acl->AclRevision) Acl->AclRevision = Second->AclRevision;
     Acl->AclSize = sizeof(ACL);
     SepAclCopyParts(Acl, First, FirstParts);
     SepAclCopyParts(Acl, Second, SecondParts);
