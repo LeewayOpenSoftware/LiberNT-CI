@@ -317,7 +317,7 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NtfsBindVolumeDisk(VolCB);
                 Status = NtfsFlushVolume(VolCB, FALSE);
                 if (NT_SUCCESS(Status))
-                    Status = NtfsDiskFlushKm();
+                    Status = NtfsDiskFlushVolumeKm(VolCB->StorageDevice);
                 if (NT_SUCCESS(Status))
                 {
                     KeEnterCriticalRegion();
