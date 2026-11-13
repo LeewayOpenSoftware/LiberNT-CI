@@ -45,43 +45,23 @@ int leeway_rs_poc_lock_stress(unsigned long iters);
  * (>0), or a negative code. Reaching the caller at all is the proof. All blocks freed. */
 int leeway_rs_poc_oom_probe(void);
 
-/* ---- R1b: IO-3 name-grafting reparse validator (always present; never bugcheck) ----
- * Validate an untrusted REPARSE_DATA_BUFFER used for name grafting, exactly as the IO
- * manager's IoIsValidNameGraftingBuffer must before IopDoNameTransmogrify touches the
- * substitute/print name ranges. Pure logic over a borrowed buffer: no allocation, no
- * locking, no bugcheck on any input; safe at IRQL <= DISPATCH_LEVEL.
+/* ---- R1b: IO-3 mount-point reparse validator (always present; never bugcheck) ----
+ * Mirror of the shipped C IopValidateMountPointBuffer (fix/io3-name-grafting 1d45eab8da4):
+ * validate an untrusted REPARSE_DATA_BUFFER used for a mount point, before the IO manager
+ * touches the substitute/print name ranges. Pure logic over a borrowed buffer: no alloc, no
+ * lock, no bugcheck on any input; safe at IRQL <= DISPATCH_LEVEL for a captured kernel copy.
  *
- * Buffer layout (REPARSE_DATA_BUFFER, name-grafting variant):
- *   [0] ReparseTag (u32 LE) [4] ReparseDataLength (u16 LE) [6] Reserved (u16)
- *   [8] per-tag field header (MOUNT_POINT 8 bytes / SYMLINK 12 bytes) + PathBuffer[]
- * Name offsets/lengths are byte values relative to PathBuffer.
- *
- *   buf          readable for `len` bytes; caller-owned, not retained; may be NULL.
- *   len          size of buf, in bytes.
- *   reparse_tag  the tag the caller expects (must be MOUNT_POINT or SYMLINK and must
- *                equal the tag embedded in the buffer).
+ *   buf  the REPARSE_DATA_BUFFER bytes; caller-owned kernel copy, not retained; may be NULL.
+ *   len  size of buf in bytes (an UPPER BOUND; the declared ReparseDataLength may be smaller).
  * Returns STATUS_SUCCESS (0) iff every invariant holds (see src/reparse_graft.rs and
- * tools/rust-poc/difftest/IO3-NAME-GRAFTING-INVARIANTS.md), else one of the NTSTATUS codes below. */
-long leeway_rs_poc_validate_reparse_graft(const void *buf,
-                                          unsigned long len,
-                                          unsigned long reparse_tag);
+ * tools/rust-poc/difftest/IO3-NAME-GRAFTING-INVARIANTS.md V1-V7), else
+ * STATUS_IO_REPARSE_DATA_INVALID. MOUNT_POINT only; a NULL buffer or any other tag is
+ * STATUS_IO_REPARSE_DATA_INVALID (a single failure code). `len` is 32-bit to match ULONG. */
+long leeway_rs_poc_validate_mount_point(const void *buf, unsigned int len);
 
 #define LNRSPOC_IO_REPARSE_TAG_MOUNT_POINT     0xA0000003UL
-#define LNRSPOC_IO_REPARSE_TAG_SYMLINK         0xA000000CUL
 #define LNRSPOC_STATUS_SUCCESS                  0x00000000L
-#define LNRSPOC_STATUS_INVALID_PARAMETER       ((long)0xC000000D) /* buf NULL / misuse  */
-#define LNRSPOC_STATUS_IO_REPARSE_DATA_INVALID ((long)0xC0000278) /* malformed buffer   */
-#define LNRSPOC_STATUS_IO_REPARSE_TAG_NOT_HANDLED ((long)0xC0000279) /* non-graft tag   */
-
-/* R1a mirror: exact equivalent of the shipped C IopValidateMountPointBuffer(buf, len)
- * (fix/io3-name-grafting ff2e252ff4d). This is the swap-equivalent validated by the
- * differential. MOUNT_POINT only; returns STATUS_SUCCESS or STATUS_IO_REPARSE_DATA_INVALID
- * only (a NULL buffer is treated as malformed, not caller misuse). SUCCESS iff: len>=16;
- * tag==MOUNT_POINT; 8<=ReparseDataLength<=16384-8 and <=len-8; with path=ReparseDataLength-8
- * the substitute/print offsets and lengths are all even and off+len<=path (no wrap);
- * substitute length>=2; when print length!=0 the ranges do not overlap; and the first
- * WCHAR of the substitute name is L'\\'. No alloc/lock; safe at IRQL <= DISPATCH_LEVEL. */
-long leeway_rs_poc_validate_mount_point(const void *buf, unsigned long len);
+#define LNRSPOC_STATUS_IO_REPARSE_DATA_INVALID ((long)0xC0000278)
 
 /* TEST-ONLY. Present only when the staticlib is built with `--features test-ioctls`
  * (and the driver with -DLNRSPOC_TEST_IOCTLS). Triggers the controlled bugcheck
