@@ -38,6 +38,9 @@ typedef struct _IOP_ENABLED_INTERFACE
 static LIST_ENTRY IopEnabledInterfaces = { &IopEnabledInterfaces, &IopEnabledInterfaces };
 static EX_PUSH_LOCK IopEnabledInterfacesLock;
 
+/* Taken across the enabled-list change and the shared link object's creation or deletion of one state change */
+static EX_PUSH_LOCK IopInterfaceLinkLock;
+
 static
 PIOP_ENABLED_INTERFACE
 IopFindEnabledInterface(
@@ -146,6 +149,29 @@ IopIsInterfaceLinkShared(
     KeLeaveCriticalRegion();
 
     return Shared;
+}
+
+/* Writes the Linked value of an interface's Control key, for an enable that has to be undone */
+static
+VOID
+IopWriteInterfaceLinked(
+    _In_ PUNICODE_STRING SymbolicLinkName,
+    _In_ ULONG Value)
+{
+    UNICODE_STRING KeyName = RTL_CONSTANT_STRING(L"Control");
+    UNICODE_STRING ValueName = RTL_CONSTANT_STRING(L"Linked");
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    HANDLE InstanceHandle, ControlHandle;
+    NTSTATUS Status;
+
+    Status = OpenRegistryHandlesFromSymbolicLink(SymbolicLinkName, KEY_CREATE_SUB_KEY, NULL, NULL, &InstanceHandle);
+    if (!NT_SUCCESS(Status)) return;
+    InitializeObjectAttributes(&ObjectAttributes, &KeyName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, InstanceHandle, NULL);
+    Status = ZwCreateKey(&ControlHandle, KEY_SET_VALUE, &ObjectAttributes, 0, NULL, REG_OPTION_VOLATILE, NULL);
+    ZwClose(InstanceHandle);
+    if (!NT_SUCCESS(Status)) return;
+    ZwSetValueKey(ControlHandle, &ValueName, 0, REG_DWORD, &Value, sizeof(Value));
+    ZwClose(ControlHandle);
 }
 
 /* The link object of an enabled interface names its device; a stale one from an earlier device name is replaced */
@@ -2179,10 +2205,6 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
         DPRINT1("Failed to write the Linked value\n");
         return Status;
     }
-    if (Enable)
-        IopTrackEnabledInterface(SymbolicLinkName);
-    else
-        IopUntrackEnabledInterface(SymbolicLinkName);
 
     ASSERT(GuidString.Buffer >= LinkNameNoPrefix.Buffer + 1);
     DeviceInstance.Length = (USHORT)((GuidString.Buffer - LinkNameNoPrefix.Buffer - 1) * sizeof(WCHAR));
@@ -2236,22 +2258,38 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
     RtlCopyMemory(LinkObjectName.Buffer, SymbolicLinkName->Buffer, LinkObjectName.Length);
     LinkObjectName.Buffer[1] = L'?';
     LinkObjectName.Buffer[LinkObjectName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    /* The enabled list and the shared link change together: a sibling's enable or disable waits */
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&IopInterfaceLinkLock);
     if (Enable)
     {
         Status = IopLinkDeviceInterface(&LinkObjectName, PhysicalDeviceObject);
-        if (!NT_SUCCESS(Status))
+        if (NT_SUCCESS(Status))
         {
-            DPRINT1("IoSetDeviceInterfaceState() could not link %wZ: 0x%08lx\n", &LinkObjectName, Status);
-            ExFreePoolWithTag(LinkObjectName.Buffer, TAG_IO);
-            ObDereferenceObject(PhysicalDeviceObject);
-            return Status;
+            IopTrackEnabledInterface(SymbolicLinkName);
         }
     }
-    else if (!IopIsInterfaceLinkShared(&LinkNameNoPrefix, ReferenceStringOffset))
+    else
     {
-        IoDeleteSymbolicLink(&LinkObjectName);
+        IopUntrackEnabledInterface(SymbolicLinkName);
+        if (!IopIsInterfaceLinkShared(&LinkNameNoPrefix, ReferenceStringOffset))
+        {
+            IoDeleteSymbolicLink(&LinkObjectName);
+        }
     }
+    ExReleasePushLockExclusive(&IopInterfaceLinkLock);
+    KeLeaveCriticalRegion();
     ExFreePoolWithTag(LinkObjectName.Buffer, TAG_IO);
+
+    /* An enable without a link object is no enable: the Linked value goes back to 0 */
+    if (Enable && !NT_SUCCESS(Status))
+    {
+        DPRINT1("IoSetDeviceInterfaceState() could not link %wZ: 0x%08lx\n", SymbolicLinkName, Status);
+        IopWriteInterfaceLinked(SymbolicLinkName, 0);
+        ObDereferenceObject(PhysicalDeviceObject);
+        return Status;
+    }
 
     EventGuid = Enable ? &GUID_DEVICE_INTERFACE_ARRIVAL : &GUID_DEVICE_INTERFACE_REMOVAL;
 
