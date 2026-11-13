@@ -105,6 +105,16 @@
 #define IOP_CREATE_FILE_OBJECT_EXTENSION    0x02
 #define IOP_TRAVERSED_MOUNT_POINT           0x04
 
+//
+// IRP I/O priority hint (Vista+). Carried in Irp->Flags above the public
+// IRP_* bits, which occupy the low 16 bits. VALID marks an explicit
+// IoSetIoPriorityHint; without it the IRP inherits the issuing thread's
+// I/O priority (IoGetIoPriorityHint).
+//
+#define IRP_IO_PRIORITY_HINT_SHIFT          16
+#define IRP_IO_PRIORITY_HINT_MASK           0x00070000
+#define IRP_IO_PRIORITY_HINT_VALID          0x00080000
+
 
 typedef struct _FILE_OBJECT_EXTENSION
 {

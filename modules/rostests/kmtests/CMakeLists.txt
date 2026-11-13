@@ -185,11 +185,13 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExWddm.c
     ntos_fsrtl/FsRtlDissect.c
     ntos_fsrtl/FsRtlExpression.c
+    ntos_fsrtl/FsRtlFileLockState.c
     ntos_fsrtl/FsRtlLegal.c
     ntos_fsrtl/FsRtlMcb.c
     ntos_fsrtl/FsRtlPerFileObjectContext.c
     ntos_fsrtl/FsRtlQueryFileLock.c
     ntos_fsrtl/FsRtlTunnel.c
+    ntos_fsrtl/FsRtlVolumeStartup.c
     ntos_io/IoDevicePropertyData.c
     ntos_io/IoBuildIoctlKM.c
     ntos_io/IoLargeMemoryResource.c
@@ -242,6 +244,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoMdl.c
     ntos_io/IoModern.c
     ntos_io/IoNullDeviceKM.c
+    ntos_io/IoPriorityHint.c
     ntos_io/IoVolume.c
     ntos_io/IoWmiAcpi.c
     ntos_io/ZwWriteFileAppend.c
