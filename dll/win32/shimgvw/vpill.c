@@ -25,8 +25,6 @@
 #define STRIP_CLASS L"ShImgVw:CMenuStrip"
 #define PILL_CLASS  L"ShImgVw:CPillBar"
 #define PROBE_TIMER 0x7A11
-#define DIAG_TIMER 0x7A12
-
 #define SLIDER_CLASS L"ShImgVw:CPillZoom"
 
 /* Pill items, left to right */
@@ -72,38 +70,6 @@ struct VPILL
     BOOL probeArmed;
     int probeBad;
 };
-
-static void
-PDiag(const char *fmt, ...)
-{
-    char buf[400];
-    va_list ap;
-
-    va_start(ap, fmt);
-    wvsprintfA(buf, fmt, ap);
-    va_end(ap);
-    lstrcatA(buf, "\n");
-    OutputDebugStringA(buf);
-}
-
-static void
-PillDiagState(VPILL *p, const char *tag)
-{
-    RECT r = {0};
-    HWND prev;
-
-    if (!p || !p->pill)
-    {
-        PDiag("VPILL %s: no pill window", tag);
-        return;
-    }
-    GetWindowRect(p->pill, &r);
-    prev = GetWindow(p->pill, GW_HWNDPREV);
-    PDiag("VPILL %s: hwnd=%p plain=%d vis=%d style=%08lx ex=%08lx owner=%p main=%p rc=%ld,%ld,%ld,%ld prev=%p(main=%d) parentOfMainPrev=%p",
-          tag, p->pill, p->plain, IsWindowVisible(p->pill), (ULONG)GetWindowLongPtrW(p->pill, GWL_STYLE),
-          (ULONG)GetWindowLongPtrW(p->pill, GWL_EXSTYLE), GetWindow(p->pill, GW_OWNER), p->main, r.left, r.top, r.right,
-          r.bottom, prev, prev == p->main, GetWindow(p->main, GW_HWNDPREV));
-}
 
 static ATOM s_atoms[3];
 static VPILL *s_active;     /* single instance: used by the slider popup */
@@ -751,12 +717,7 @@ RenderPill(VPILL *p)
     ptDst.y = wr.top;
     if (!p->plain)
     {
-        BOOL ulw;
-
-        SetLastError(0);
-        ulw = UpdateLayeredWindow(p->pill, hdcScreen, &ptDst, &p->size, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA);
-        PDiag("VPILL ULW=%d err=%lu dst=%ld,%ld size=%ld,%ld", ulw, GetLastError(), ptDst.x, ptDst.y, p->size.cx, p->size.cy);
-        if (!ulw)
+        if (!UpdateLayeredWindow(p->pill, hdcScreen, &ptDst, &p->size, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA))
             p->needPlain = TRUE;
         else
         {
@@ -782,17 +743,11 @@ done:
     if (p->plain)
     {
         HRGN rgn = CreateRoundRectRgn(0, 0, p->size.cx + 1, p->size.cy + 1, p->size.cy, p->size.cy);
-        int rr;
-
-        SetLastError(0);
-        rr = SetWindowRgn(p->pill, rgn, TRUE);
-        PDiag("VPILL plain SetWindowRgn=%d err=%lu", rr, GetLastError());
+        SetWindowRgn(p->pill, rgn, TRUE);
         InvalidateRect(p->pill, NULL, FALSE);
     }
     else if (p->probeArmed && IsWindowVisible(p->pill))
         SetTimer(p->pill, PROBE_TIMER, 400, NULL);
-    PillDiagState(p, "render");
-    SetTimer(p->pill, DIAG_TIMER, 2000, NULL);
     if (p->needPlain)
     {
         p->needPlain = FALSE;
@@ -1019,12 +974,6 @@ PillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         case WM_TIMER:
             /* A layered pill that the system accepted but never put on screen (no layered
              * compositing): compare one capsule pixel with what we rendered, twice, then go plain. */
-            if (wp == DIAG_TIMER)
-            {
-                KillTimer(hwnd, DIAG_TIMER);
-                PillDiagState(p, "t+2s");
-                return 0;
-            }
             if (wp == PROBE_TIMER)
             {
                 HDC sdc;
@@ -1042,15 +991,12 @@ PillProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
                 dr = abs((int)GetRValue(c) - (int)GetRValue(p->probeRef));
                 dg = abs((int)GetGValue(c) - (int)GetGValue(p->probeRef));
                 db = abs((int)GetBValue(c) - (int)GetBValue(p->probeRef));
-                PDiag("VPILL probe screen=%06lx ref=%06lx bad=%d at %ld,%ld", (ULONG)c, (ULONG)p->probeRef, p->probeBad,
-                      p->probePt.x, p->probePt.y);
                 if (dr > 24 || dg > 24 || db > 24)
                 {
                     if (++p->probeBad >= 2)
                     {
                         KillTimer(hwnd, PROBE_TIMER);
                         p->probeArmed = FALSE;
-                        PDiag("VPILL probe fired: switching to plain");
                         SwitchToPlain(p);
                     }
                 }
