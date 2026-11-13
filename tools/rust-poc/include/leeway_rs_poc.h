@@ -45,6 +45,34 @@ int leeway_rs_poc_lock_stress(unsigned long iters);
  * (>0), or a negative code. Reaching the caller at all is the proof. All blocks freed. */
 int leeway_rs_poc_oom_probe(void);
 
+/* ---- R1b: IO-3 name-grafting reparse validator (always present; never bugcheck) ----
+ * Validate an untrusted REPARSE_DATA_BUFFER used for name grafting, exactly as the IO
+ * manager's IoIsValidNameGraftingBuffer must before IopDoNameTransmogrify touches the
+ * substitute/print name ranges. Pure logic over a borrowed buffer: no allocation, no
+ * locking, no bugcheck on any input; safe at IRQL <= DISPATCH_LEVEL.
+ *
+ * Buffer layout (REPARSE_DATA_BUFFER, name-grafting variant):
+ *   [0] ReparseTag (u32 LE) [4] ReparseDataLength (u16 LE) [6] Reserved (u16)
+ *   [8] per-tag field header (MOUNT_POINT 8 bytes / SYMLINK 12 bytes) + PathBuffer[]
+ * Name offsets/lengths are byte values relative to PathBuffer.
+ *
+ *   buf          readable for `len` bytes; caller-owned, not retained; may be NULL.
+ *   len          size of buf, in bytes.
+ *   reparse_tag  the tag the caller expects (must be MOUNT_POINT or SYMLINK and must
+ *                equal the tag embedded in the buffer).
+ * Returns STATUS_SUCCESS (0) iff every invariant holds (see src/reparse_graft.rs and
+ * tools/rust-poc/difftest/IO3-NAME-GRAFTING-INVARIANTS.md), else one of the NTSTATUS codes below. */
+long leeway_rs_poc_validate_reparse_graft(const void *buf,
+                                          unsigned long len,
+                                          unsigned long reparse_tag);
+
+#define LNRSPOC_IO_REPARSE_TAG_MOUNT_POINT     0xA0000003UL
+#define LNRSPOC_IO_REPARSE_TAG_SYMLINK         0xA000000CUL
+#define LNRSPOC_STATUS_SUCCESS                  0x00000000L
+#define LNRSPOC_STATUS_INVALID_PARAMETER       ((long)0xC000000D) /* buf NULL / misuse  */
+#define LNRSPOC_STATUS_IO_REPARSE_DATA_INVALID ((long)0xC0000278) /* malformed buffer   */
+#define LNRSPOC_STATUS_IO_REPARSE_TAG_NOT_HANDLED ((long)0xC0000279) /* non-graft tag   */
+
 /* TEST-ONLY. Present only when the staticlib is built with `--features test-ioctls`
  * (and the driver with -DLNRSPOC_TEST_IOCTLS). Triggers the controlled bugcheck
  * (KeBugCheckEx, code LEEWAY_RUST_PANIC 0x4C450001). Reachable solely via the

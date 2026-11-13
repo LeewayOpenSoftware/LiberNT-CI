@@ -25,6 +25,7 @@ use core::slice;
 pub mod alloc_pool;
 pub mod ndk;
 pub mod sync;
+pub mod reparse_graft;
 
 use alloc_pool::KBox;
 use sync::SpinLock;

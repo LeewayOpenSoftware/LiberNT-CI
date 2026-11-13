@@ -1,0 +1,25 @@
+# Host differential crate for the IO-3 name-grafting validator. It compiles the EXACT
+# same source file as the kernel build (src/reparse_graft.rs, via #[path]) into a small
+# no_std host staticlib with no kernel externs, so the C++ differential harness can link
+# it on the host. Not shipped; builds only for the differential test.
+[package]
+name = "leeway-rs-graft-diff"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+description = "Host differential wrapper around lnrspoc's IO-3 name-grafting validator. Test-only."
+
+[lib]
+name = "leeway_rs_graft_diff"
+crate-type = ["staticlib"]
+path = "src/lib.rs"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = 2
+lto = true
+codegen-units = 1

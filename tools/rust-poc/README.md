@@ -118,3 +118,25 @@ cd tools/rust-poc && cargo build --release --locked
 - All `unsafe` is the FFI slice reconstruction, documented with `// SAFETY:`.
 
 See `kernel/RUST-POC-RESULTS.md` for the eight acceptance tests and their status.
+
+## R1b — IO-3 name-grafting validator (first real lnrspoc payload)
+
+`src/reparse_graft.rs` exports `leeway_rs_poc_validate_reparse_graft(buf, len, reparse_tag)`
+(C ABI in `include/leeway_rs_poc.h`): an alloc-free, lock-free, panic-free validator over an
+untrusted name-grafting `REPARSE_DATA_BUFFER`, mirroring what `IoIsValidNameGraftingBuffer`
+must do before `IopDoNameTransmogrify` touches the substitute/print name ranges. The
+invariants are authoritative in `difftest/IO3-NAME-GRAFTING-INVARIANTS.md` (and in the
+module doc comment). Experimental; off by default; the C correction (R1a) stays the
+production path.
+
+- **D-1 host differential**: `sh difftest/run-differential.sh` builds the *same* validator
+  source as a host staticlib and compares it to an independent C reference
+  (`difftest/graft_ref.c`) over a corpus + a structured field sweep + a deterministic fuzz
+  (default 3,000,000 iterations). Passes iff 0 disagreements and every status class was
+  produced. A CI job (`io3-differential`) runs it on every push. Negative control: removing
+  an invariant from the Rust produces tens of thousands of disagreements.
+- **cargo-fuzz**: `fuzz/fuzz_targets/reparse_graft.rs` is a libFuzzer differential target
+  (seed corpus `fuzz/corpus/reparse_graft/`), run on the Linux private CI.
+- **D-2 in-kernel**: `IOCTL_LNRSPOC_VALIDATE_GRAFT` (0x806) drives the validator through
+  `lnrspoc.sys`; input `[ULONG reparse_tag][reparse buffer]`, output the `NTSTATUS`.
+  Exercised in a disposable VM under Driver Verifier (lab leg).
