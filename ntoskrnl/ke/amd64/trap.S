@@ -1726,7 +1726,7 @@ ENDFUNC
  *
  * Runs Callout(Parameter) on the new stack for KeExpandKernelStackAndCalloutEx. While the
  * callout runs the current thread's StackBase/StackLimit describe the new stack (that is
- * what RtlpGetStackLimits, IoGetStackLimits and MmGrowKernelStack read). Nothing else of
+ * what MmGrowKernelStack reads; RtlpGetStackLimits falls back to StackBase). Nothing else of
  * the thread moves: TrapFrame, InitialStack and the state save area stay on the original
  * stack, which stays mapped. rbp is the frame pointer of this frame, so the unwinder and
  * a stack walk cross the switch: unwinding it restores rsp from rbp and pops the saved
