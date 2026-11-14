@@ -1038,6 +1038,14 @@ VOID
 NTAPI
 VfInitializeIrpTracking(VOID);
 
+BOOLEAN
+NTAPI
+VfFindImage(
+    _In_ PVOID Address,
+    _Out_ PULONG_PTR ImageBase,
+    _Out_ PULONG ImageSize,
+    _Out_ PBOOLEAN InKernel);
+
 VOID
 NTAPI
 VfUntrackIrp(

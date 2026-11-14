@@ -223,6 +223,48 @@ VfpIrpReturned(
         ExFreePoolWithTag(Entry, VF_IRP_TAG);
 }
 
+/* Finds the loaded image that holds an address. The list of loaded images is
+ * walked with its lock held: a driver can be unloaded on another processor.
+ * The first two images are the kernel and the HAL. */
+BOOLEAN
+NTAPI
+VfFindImage(
+    _In_ PVOID Address,
+    _Out_ PULONG_PTR ImageBase,
+    _Out_ PULONG ImageSize,
+    _Out_ PBOOLEAN InKernel)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PLIST_ENTRY Entry;
+    BOOLEAN Found = FALSE;
+    ULONG Index = 0;
+    KIRQL OldIrql;
+
+    *ImageBase = 0;
+    *ImageSize = 0;
+    *InKernel = FALSE;
+
+    OldIrql = KeAcquireSpinLockRaiseToSynch(&PsLoadedModuleSpinLock);
+    for (Entry = PsLoadedModuleList.Flink; Entry != &PsLoadedModuleList; Entry = Entry->Flink)
+    {
+        LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        Index++;
+
+        if ((ULONG_PTR)Address >= (ULONG_PTR)LdrEntry->DllBase &&
+            (ULONG_PTR)Address < (ULONG_PTR)LdrEntry->DllBase + LdrEntry->SizeOfImage)
+        {
+            *ImageBase = (ULONG_PTR)LdrEntry->DllBase;
+            *ImageSize = LdrEntry->SizeOfImage;
+            *InKernel = (BOOLEAN)(Index <= 2);
+            Found = TRUE;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&PsLoadedModuleSpinLock, OldIrql);
+
+    return Found;
+}
+
 static
 BOOLEAN
 VfpCallerOwnsCurrentLocation(
@@ -255,17 +297,17 @@ VfpCallerOwnsCurrentLocation(
      * handles this request for the driver. */
     if (Stack->MajorFunction <= IRP_MJ_MAXIMUM_FUNCTION)
     {
-        PLDR_DATA_TABLE_ENTRY LdrEntry;
+        ULONG_PTR DispatchBase;
+        ULONG DispatchSize;
         BOOLEAN InKernel;
-        PVOID DispatchImage, CallerImage;
 
-        DispatchImage = KiPcToFileHeader((PVOID)(ULONG_PTR)Driver->MajorFunction[Stack->MajorFunction],
-                                         &LdrEntry, FALSE, &InKernel);
-        if (DispatchImage != NULL && !InKernel)
+        if (VfFindImage((PVOID)(ULONG_PTR)Driver->MajorFunction[Stack->MajorFunction],
+                        &DispatchBase, &DispatchSize, &InKernel) &&
+            !InKernel &&
+            (ULONG_PTR)Caller >= DispatchBase &&
+            (ULONG_PTR)Caller < DispatchBase + DispatchSize)
         {
-            CallerImage = KiPcToFileHeader(Caller, &LdrEntry, FALSE, &InKernel);
-            if (CallerImage == DispatchImage)
-                return TRUE;
+            return TRUE;
         }
     }
 
@@ -325,14 +367,14 @@ VfpReportIrpRule(
 
     if (Hits <= VF_IRP_LINES_PRINTED)
     {
-        PLDR_DATA_TABLE_ENTRY LdrEntry = NULL;
+        ULONG_PTR ImageBase;
+        ULONG ImageSize;
         BOOLEAN InKernel;
-        PVOID ImageBase = KiPcToFileHeader(Caller, &LdrEntry, FALSE, &InKernel);
 
-        if (ImageBase != NULL)
+        if (VfFindImage(Caller, &ImageBase, &ImageSize, &InKernel))
         {
             DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p (image %p+0x%lx)\n",
-                     Rule, Irp, Caller, ImageBase, (ULONG)((ULONG_PTR)Caller - (ULONG_PTR)ImageBase));
+                     Rule, Irp, Caller, (PVOID)ImageBase, (ULONG)((ULONG_PTR)Caller - ImageBase));
         }
         else
         {
