@@ -14,6 +14,8 @@ extern KMUTANT MmSystemLoadLock;
 extern UCHAR MmDisablePagingExecutive;
 PLDR_DATA_TABLE_ENTRY NTAPI MiLookupDataTableEntry(IN PVOID Address);
 
+#define MI_VERIFIER_KERNEL_AND_HAL_IMAGES 2
+
 MM_DRIVER_VERIFIER_DATA MmVerifierData;
 LIST_ENTRY MiVerifierDriverAddedThunkListHead;
 ULONG MiActiveVerifierThunks;
@@ -227,7 +229,8 @@ MiIsVerifierSeparator(
 static
 BOOLEAN
 MiIsVerifiedDriverName(
-    _In_ PCUNICODE_STRING BaseName)
+    _In_ PCUNICODE_STRING BaseName,
+    _In_ BOOLEAN AllowWildcard)
 {
     PWCHAR Cursor = MmVerifyDriverBuffer;
     UNICODE_STRING Name;
@@ -247,7 +250,12 @@ MiIsVerifiedDriverName(
         Name.Length = (USHORT)((Cursor - Name.Buffer) * sizeof(WCHAR));
         Name.MaximumLength = Name.Length;
         if (Name.Length == sizeof(WCHAR) && Name.Buffer[0] == L'*')
-            return TRUE;
+        {
+            if (AllowWildcard)
+                return TRUE;
+
+            continue;
+        }
 
         if (RtlEqualUnicodeString(&Name, BaseName, TRUE))
             return TRUE;
@@ -275,18 +283,15 @@ MiRedirectVerifierThunk(
     return FALSE;
 }
 
+static
 VOID
-NTAPI
-MiVerifyLoadedImage(
+MiVerifyImage(
     _In_ PLDR_DATA_TABLE_ENTRY LdrEntry)
 {
     PIMAGE_IMPORT_DESCRIPTOR Import;
     PIMAGE_THUNK_DATA Thunk;
     ULONG Redirected = 0;
     ULONG Size;
-
-    if (!MiVerifierActive || !MiIsVerifiedDriverName(&LdrEntry->BaseDllName))
-        return;
 
     Import = RtlImageDirectoryEntryToData(LdrEntry->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &Size);
     if (Import != NULL)
@@ -310,6 +315,17 @@ MiVerifyLoadedImage(
     LdrEntry->Flags |= LDRP_IMAGE_VERIFYING;
     InterlockedIncrement((PLONG)&MmVerifierData.Loads);
     DbgPrint("Driver Verifier: %wZ is verified, %lu imports redirected\n", &LdrEntry->BaseDllName, Redirected);
+}
+
+VOID
+NTAPI
+MiVerifyLoadedImage(
+    _In_ PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    if (!MiVerifierActive || !MiIsVerifiedDriverName(&LdrEntry->BaseDllName, TRUE))
+        return;
+
+    MiVerifyImage(LdrEntry);
 }
 
 static
@@ -340,6 +356,8 @@ MiVerifyBootLoadedImages(
 {
     PLDR_DATA_TABLE_ENTRY LdrEntry;
     PLIST_ENTRY Entry;
+    BOOLEAN IsBootDriver;
+    ULONG Position = 0;
 
     if (!MiVerifierActive)
         return;
@@ -347,12 +365,11 @@ MiVerifyBootLoadedImages(
     for (Entry = PsLoadedModuleList.Flink; Entry != &PsLoadedModuleList; Entry = Entry->Flink)
     {
         LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-        if ((ULONG_PTR)LdrEntry->DllBase == PsNtosImageBase)
+        if (Position++ < MI_VERIFIER_KERNEL_AND_HAL_IMAGES || (ULONG_PTR)LdrEntry->DllBase == PsNtosImageBase)
             continue;
 
-        if (!MiIsBootDriverImage(LoaderBlock, LdrEntry->DllBase))
-            continue;
-
-        MiVerifyLoadedImage(LdrEntry);
+        IsBootDriver = MiIsBootDriverImage(LoaderBlock, LdrEntry->DllBase);
+        if (MiIsVerifiedDriverName(&LdrEntry->BaseDllName, IsBootDriver))
+            MiVerifyImage(LdrEntry);
     }
 }
