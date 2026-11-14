@@ -91,8 +91,8 @@ USBPORT_MakeSplitTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     /* SgLength < MaxTransferSize */
 
-    DPRINT1("MakeSplitTransfer: SgRemainLen - %x\n", SgRemainLen);
-    DPRINT1("MakeSplitTransfer: SgIdx - %x\n", *SgIdx);
+    DPRINT("MakeSplitTransfer: SgRemainLen - %x\n", SgRemainLen);
+    DPRINT("MakeSplitTransfer: SgIdx - %x\n", *SgIdx);
     ++*SgIdx;
 
     *SgOffset = 0;
