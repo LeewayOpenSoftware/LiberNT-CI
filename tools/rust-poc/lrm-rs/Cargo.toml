@@ -1,0 +1,22 @@
+# LRM-RS: Leeway Rust Memory - Special Pool engine (clean-room; same NT contracts as the C
+# engine in nvs/pool/special/special.c). no_std staticlib, no heap, panic-free. Differential
+# reference is the C engine; production swap needs owner OK. Not shipped; off by default.
+[package]
+name = "lrm-rs"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+description = "Leeway experimental Rust Special Pool engine (LRM-RS). Differential vs the C engine; not production."
+
+[lib]
+name = "lrm_rs"
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
