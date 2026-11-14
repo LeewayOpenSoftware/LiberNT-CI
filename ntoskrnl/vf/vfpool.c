@@ -166,6 +166,7 @@ VfCheckPoolAtUnload(
 {
     ULONG_PTR Start = (ULONG_PTR)LdrEntry->DllBase;
     ULONG_PTR End = Start + LdrEntry->SizeOfImage;
+    VF_POOL_ENTRY Seen[VF_LEAKS_PRINTED];
     PVF_POOL_ENTRY Entry;
     PLIST_ENTRY Next;
     ULONG Leaked = 0;
@@ -184,14 +185,19 @@ VfCheckPoolAtUnload(
             if ((ULONG_PTR)Entry->Caller < Start || (ULONG_PTR)Entry->Caller >= End)
                 continue;
 
-            if (Leaked++ < VF_LEAKS_PRINTED)
-            {
-                DbgPrint("Driver Verifier: %wZ did not free %p, %Iu bytes, tag %.4s, allocated at %p\n",
-                         &LdrEntry->BaseDllName, Entry->Block, Entry->Size, (PCHAR)&Entry->Tag, Entry->Caller);
-            }
+            if (Leaked < VF_LEAKS_PRINTED)
+                Seen[Leaked] = *Entry;
+
+            Leaked++;
         }
     }
     KeReleaseSpinLock(&VfpTrackLock, OldIrql);
+
+    for (i = 0; i < Leaked && i < VF_LEAKS_PRINTED; i++)
+    {
+        DbgPrint("Driver Verifier: %wZ did not free %p, %Iu bytes, tag %.4s, allocated at %p\n",
+                 &LdrEntry->BaseDllName, Seen[i].Block, Seen[i].Size, (PCHAR)&Seen[i].Tag, Seen[i].Caller);
+    }
 
     if (Leaked != 0)
     {
