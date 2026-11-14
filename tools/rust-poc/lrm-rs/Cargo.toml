@@ -11,7 +11,14 @@ description = "Leeway experimental Rust Special Pool engine (LRM-RS). Differenti
 
 [lib]
 name = "lrm_rs"
-crate-type = ["staticlib"]
+# staticlib for the kernel link; rlib so the host differential/fuzz harnesses can depend on the
+# crate and call the engine directly (only materialised when something depends on it as a lib).
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# `std`: host build only - drops #![no_std] and the crate's panic handler so the engine can link
+# into a std harness (difftest-rs, cargo-fuzz). OFF by default: the kernel build is unchanged.
+std = []
 
 [profile.dev]
 panic = "abort"
