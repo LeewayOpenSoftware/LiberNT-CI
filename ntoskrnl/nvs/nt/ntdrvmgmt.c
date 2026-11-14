@@ -14,6 +14,8 @@ extern KMUTANT MmSystemLoadLock;
 extern UCHAR MmDisablePagingExecutive;
 PLDR_DATA_TABLE_ENTRY NTAPI MiLookupDataTableEntry(IN PVOID Address);
 
+#define MI_VERIFIER_BOOT_IMAGES_NEVER_VERIFIED 2
+
 MM_DRIVER_VERIFIER_DATA MmVerifierData;
 LIST_ENTRY MiVerifierDriverAddedThunkListHead;
 ULONG MiActiveVerifierThunks;
@@ -310,4 +312,23 @@ MiVerifyLoadedImage(
     LdrEntry->Flags |= LDRP_IMAGE_VERIFYING;
     InterlockedIncrement((PLONG)&MmVerifierData.Loads);
     DbgPrint("Driver Verifier: %wZ is verified, %lu imports redirected\n", &LdrEntry->BaseDllName, Redirected);
+}
+
+VOID
+NTAPI
+MiVerifyBootLoadedImages(VOID)
+{
+    PLIST_ENTRY Entry;
+    ULONG Position = 0;
+
+    if (!MiVerifierActive)
+        return;
+
+    for (Entry = PsLoadedModuleList.Flink; Entry != &PsLoadedModuleList; Entry = Entry->Flink)
+    {
+        if (Position++ < MI_VERIFIER_BOOT_IMAGES_NEVER_VERIFIED)
+            continue;
+
+        MiVerifyLoadedImage(CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks));
+    }
 }

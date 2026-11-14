@@ -1085,6 +1085,10 @@ NTAPI
 MiVerifyLoadedImage(
     IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
 
+VOID
+NTAPI
+MiVerifyBootLoadedImages(VOID);
+
 /* mm.c **********************************************************************/
 
 NTSTATUS
