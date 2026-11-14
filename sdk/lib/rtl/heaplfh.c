@@ -65,6 +65,12 @@ typedef struct _RTLP_LFH_HEAP
     RTLP_LFH_BUCKET Buckets[HEAP_LFH_BUCKETS];
 } RTLP_LFH_HEAP, *PRTLP_LFH_HEAP;
 
+C_ASSERT(sizeof(RTLP_LFH_HEAP) <= RTLP_LFH_RESERVE);
+C_ASSERT(HEAP_LFH_MAX_BLOCK + HEAP_ENTRY_SIZE <= 0xFFFF);
+C_ASSERT(HEAP_LFH_USAGE_SHIFT >= HEAP_ENTRY_SHIFT);
+C_ASSERT((((HEAP_LFH_BUCKETS - 1) << HEAP_ENTRY_SHIFT) >> HEAP_LFH_USAGE_SHIFT) < HEAP_LFH_USAGE_SLOTS);
+C_ASSERT(HEAP_LFH_USAGE_SLOTS <= MAXUSHORT);
+
 static
 SIZE_T
 RtlpLfhSlotSize(SIZE_T Size)
@@ -102,7 +108,20 @@ static
 BOOLEAN
 RtlpLfhBucketEnabled(PHEAP Heap, ULONG Bucket)
 {
+    ASSERT(Bucket < HEAP_LFH_BUCKETS);
     return (Heap->FrontEndHeapStatusBitmap[Bucket >> 3] & (1 << (Bucket & 7))) != 0;
+}
+
+static
+PUSHORT
+RtlpLfhUsageOfBucket(PHEAP Heap, ULONG Bucket)
+{
+    ULONG Index = (Bucket << HEAP_ENTRY_SHIFT) >> HEAP_LFH_USAGE_SHIFT;
+
+    ASSERT(Heap->FrontEndHeapUsageData != NULL);
+    ASSERT(Bucket != 0 && Bucket < HEAP_LFH_BUCKETS);
+    ASSERT(Index < Heap->FrontEndHeapMaximumIndex);
+    return &Heap->FrontEndHeapUsageData[Index];
 }
 
 static
@@ -274,7 +293,7 @@ RtlpLfhUsageDataSize(PHEAP Heap, ULONG Flags, PRTL_HEAP_PARAMETERS Parameters)
         return 0;
     if (Parameters->CommitRoutine)
         return 0;
-    return HEAP_LFH_BUCKETS * sizeof(USHORT);
+    return HEAP_LFH_USAGE_SLOTS * sizeof(USHORT);
 }
 
 VOID
@@ -287,11 +306,12 @@ RtlpLfhInitializeHeap(PHEAP Heap, ULONG Flags, PRTL_HEAP_PARAMETERS Parameters, 
     Heap->FrontHeapLockCount = 0;
     Heap->FrontEndHeapType = 0;
     Heap->RequestedFrontEndHeapType = 0;
+    ASSERT(!UsageData || (ULONG_PTR)UsageData + HEAP_LFH_USAGE_SLOTS * sizeof(USHORT) <= (ULONG_PTR)Heap + PAGE_SIZE);
     Heap->FrontEndHeapUsageData = UsageData;
-    Heap->FrontEndHeapMaximumIndex = UsageData ? HEAP_LFH_BUCKETS : 0;
+    Heap->FrontEndHeapMaximumIndex = UsageData ? HEAP_LFH_USAGE_SLOTS : 0;
     RtlZeroMemory(Heap->FrontEndHeapStatusBitmap, sizeof(Heap->FrontEndHeapStatusBitmap));
     if (UsageData)
-        RtlZeroMemory(UsageData, HEAP_LFH_BUCKETS * sizeof(USHORT));
+        RtlZeroMemory(UsageData, HEAP_LFH_USAGE_SLOTS * sizeof(USHORT));
 }
 
 VOID
@@ -332,6 +352,7 @@ VOID
 RtlpLfhNoteBackendAllocate(PHEAP Heap, ULONG Flags, SIZE_T Size)
 {
     ULONG Bucket;
+    PUSHORT UsageData;
     USHORT Usage;
 
     if (!RtlpLfhFlagsEligible(Heap, Flags))
@@ -341,9 +362,10 @@ RtlpLfhNoteBackendAllocate(PHEAP Heap, ULONG Flags, SIZE_T Size)
     if (!Bucket || RtlpLfhBucketEnabled(Heap, Bucket))
         return;
 
-    Usage = Heap->FrontEndHeapUsageData[Bucket];
+    UsageData = RtlpLfhUsageOfBucket(Heap, Bucket);
+    Usage = *UsageData;
     if (Usage <= RTLP_LFH_USAGE_MAX)
-        Heap->FrontEndHeapUsageData[Bucket] = Usage + RTLP_LFH_USAGE_ALLOC;
+        *UsageData = Usage + RTLP_LFH_USAGE_ALLOC;
 }
 
 VOID
@@ -351,6 +373,7 @@ RtlpLfhNoteBackendFree(PHEAP Heap, PHEAP_ENTRY HeapEntry)
 {
     SIZE_T Size;
     ULONG Bucket;
+    PUSHORT UsageData;
     USHORT Usage;
 
     if (!Heap->FrontEndHeapUsageData)
@@ -363,9 +386,10 @@ RtlpLfhNoteBackendFree(PHEAP Heap, PHEAP_ENTRY HeapEntry)
     if (!Bucket || RtlpLfhBucketEnabled(Heap, Bucket))
         return;
 
-    Usage = Heap->FrontEndHeapUsageData[Bucket];
+    UsageData = RtlpLfhUsageOfBucket(Heap, Bucket);
+    Usage = *UsageData;
     if (Usage)
-        Heap->FrontEndHeapUsageData[Bucket] = Usage - 1;
+        *UsageData = Usage - 1;
 }
 
 static
@@ -519,7 +543,7 @@ RtlpLfhAllocate(PHEAP Heap, ULONG Flags, SIZE_T Size)
 
     if (!RtlpLfhBucketEnabled(Heap, Bucket))
     {
-        if ((Heap->FrontEndHeapUsageData[Bucket] & RTLP_LFH_USAGE_MASK) <= RTLP_LFH_USAGE_LIMIT)
+        if ((*RtlpLfhUsageOfBucket(Heap, Bucket) & RTLP_LFH_USAGE_MASK) <= RTLP_LFH_USAGE_LIMIT)
             return NULL;
 
         RtlEnterHeapLock(Heap->LockVariable, TRUE);
