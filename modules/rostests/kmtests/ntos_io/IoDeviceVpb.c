@@ -21,24 +21,33 @@ QueryLiveVpbs(
     _Out_ PLONG Live)
 {
     PSYSTEM_POOLTAG_INFORMATION Info;
-    ULONG Length = 0;
+    ULONG Length = 64 * 1024;
+    ULONG Needed;
     NTSTATUS Status;
+    ULONG Tries;
     ULONG i;
 
     *Live = 0;
 
-    Status = ZwQuerySystemInformation(SystemPoolTagInformation, NULL, 0, &Length);
-    if (Status != STATUS_INFO_LENGTH_MISMATCH || Length == 0) return FALSE;
-
-    Length += 64 * sizeof(SYSTEM_POOLTAG);
-    Info = ExAllocatePoolWithTag(PagedPool, Length, 'tPmK');
-    if (Info == NULL) return FALSE;
-
-    Status = ZwQuerySystemInformation(SystemPoolTagInformation, Info, Length, NULL);
-    if (!NT_SUCCESS(Status))
+    /* A query with no buffer returns no length, so start with a real buffer
+     * and grow it to the length that a too small one reports */
+    for (Tries = 0; ; Tries++)
     {
+        Info = ExAllocatePoolWithTag(PagedPool, Length, 'tPmK');
+        if (Info == NULL) return FALSE;
+
+        Needed = 0;
+        Status = ZwQuerySystemInformation(SystemPoolTagInformation, Info, Length, &Needed);
+        if (NT_SUCCESS(Status)) break;
+
         ExFreePoolWithTag(Info, 'tPmK');
-        return FALSE;
+        if (Status != STATUS_INFO_LENGTH_MISMATCH || Needed <= Length || Tries == 4)
+        {
+            trace("Pool tag query failed: status 0x%08lx, buffer %lu, needed %lu\n", Status, Length, Needed);
+            return FALSE;
+        }
+
+        Length = Needed + 64 * sizeof(SYSTEM_POOLTAG);
     }
 
     for (i = 0; i < Info->Count; i++)
@@ -50,6 +59,7 @@ QueryLiveVpbs(
         return TRUE;
     }
 
+    trace("Pool tag query has no entry for the VPB tag (%lu tags)\n", Info->Count);
     ExFreePoolWithTag(Info, 'tPmK');
     return FALSE;
 }
