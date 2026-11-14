@@ -823,30 +823,11 @@ WmiQueryTraceInformation(IN TRACE_INFORMATION_CLASS TraceInformationClass,
 }
 
 /*
- * @unimplemented
- */
-NTSTATUS
-__cdecl
-WmiTraceMessage(IN TRACEHANDLE LoggerHandle,
-                IN ULONG MessageFlags,
-                IN LPGUID MessageGuid,
-                IN USHORT MessageNumber,
-                IN ...)
-{
-    UNREFERENCED_PARAMETER(LoggerHandle);
-    UNREFERENCED_PARAMETER(MessageFlags);
-    /*
-     * Diagnostic: surface classic-WPP DoTraceMessage output (the trace-point
-     * GUID + message number) so otherwise-silent WPP-instrumented drivers
-     * (e.g. viogpudo.sys) reveal their init progress in the serial log.
-     */
-    DbgPrint("WPPTRACE: guid=%08lX msg=%u\n",
-             MessageGuid ? MessageGuid->Data1 : 0, MessageNumber);
-    return STATUS_SUCCESS;
-}
-
-/*
- * @unimplemented
+ * @implemented
+ *
+ * Logs a WPP trace message to the session named by LoggerHandle: the message number leads the record and
+ * the caller's (pointer, length) argument pairs follow, ending at a NULL pointer. The event goes through
+ * the classic-event path, so it counts against the session like any other event (EventsLogged).
  */
 NTSTATUS
 NTAPI
@@ -856,8 +837,95 @@ WmiTraceMessageVa(IN TRACEHANDLE LoggerHandle,
                   IN USHORT MessageNumber,
                   IN va_list MessageArgList)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PUCHAR Record, Data, End;
+    PEVENT_TRACE_HEADER Header;
+    PVOID Source;
+    SIZE_T Length;
+    NTSTATUS Status;
+
+    /* WPP drivers log from DPCs; the logger lookup takes a push lock and the buffer a guarded mutex, both
+     * only safe at or below APC_LEVEL, so above it drop the message silently as IoWMIWriteEvent does. */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return STATUS_SUCCESS;
+
+    /* Every WPP driver calls this, most often with no session running; reject a handle that names none
+     * (zero, or out of the logger-id range) before allocating and copying the message. */
+    if (!LoggerHandle || EtwpLoggerIdFromTraceHandle(LoggerHandle) >= MAXLOGGERS)
+        return STATUS_INVALID_HANDLE;
+
+    /* Header, the leading message number, and the message data (WPP caps one message at 8 KB). */
+    Record = ExAllocatePoolWithTag(NonPagedPoolNx,
+                                   sizeof(EVENT_TRACE_HEADER) + sizeof(USHORT) + TRACE_MESSAGE_MAXIMUM_SIZE,
+                                   'mTwE');
+    if (!Record)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Header = (PEVENT_TRACE_HEADER)Record;
+    RtlZeroMemory(Header, sizeof(*Header));
+    Header->Flags = WNODE_FLAG_TRACED_GUID;
+    if ((MessageFlags & TRACE_MESSAGE_GUID) && MessageGuid)
+        Header->Guid = *MessageGuid;
+
+    Data = Record + sizeof(EVENT_TRACE_HEADER);
+    End = Record + sizeof(EVENT_TRACE_HEADER) + sizeof(USHORT) + TRACE_MESSAGE_MAXIMUM_SIZE;
+
+    *(PUSHORT)Data = MessageNumber;
+    Data += sizeof(USHORT);
+
+    for (;;)
+    {
+        Source = va_arg(MessageArgList, PVOID);
+        if (!Source)
+            break;
+        /* Fetch the SIZE_T slot (correct on both targets) but keep only the low 32 bits: a caller that
+         * passes a ULONG leaves the upper half of the amd64 slot undefined. */
+        Length = (ULONG)va_arg(MessageArgList, SIZE_T);
+        if (Length == 0)
+            continue;
+        if (Length > (SIZE_T)(End - Data))
+        {
+            ExFreePoolWithTag(Record, 'mTwE');
+            return STATUS_BUFFER_OVERFLOW;
+        }
+        RtlCopyMemory(Data, Source, Length);
+        Data += Length;
+    }
+
+    Header->Size = (USHORT)(Data - Record);
+    Status = EtwpTraceClassicEvent((HANDLE)(ULONG_PTR)LoggerHandle,
+                                   (ULONG)(Data - Record), Record, KernelMode);
+    ExFreePoolWithTag(Record, 'mTwE');
+    return Status;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+__cdecl
+WmiTraceMessage(IN TRACEHANDLE LoggerHandle,
+                IN ULONG MessageFlags,
+                IN LPGUID MessageGuid,
+                IN USHORT MessageNumber,
+                IN ...)
+{
+    va_list MessageArgList;
+    NTSTATUS Status;
+
+    /* The published ABI uses USHORT as the final named parameter. Clang warns about its default
+     * promotion even though the Windows ABI va-list builtin handles the promoted slot (see
+     * ntoskrnl/rtl/misc.c for the same case). */
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wvarargs"
+#endif
+    va_start(MessageArgList, MessageNumber);
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+    Status = WmiTraceMessageVa(LoggerHandle, MessageFlags, MessageGuid, MessageNumber, MessageArgList);
+    va_end(MessageArgList);
+    return Status;
 }
 
 NTSTATUS
