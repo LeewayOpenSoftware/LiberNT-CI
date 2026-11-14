@@ -848,6 +848,11 @@ WmiTraceMessageVa(IN TRACEHANDLE LoggerHandle,
     if (KeGetCurrentIrql() > APC_LEVEL)
         return STATUS_SUCCESS;
 
+    /* Every WPP driver calls this, most often with no session running; reject a handle that names none
+     * (zero, or out of the logger-id range) before allocating and copying the message. */
+    if (!LoggerHandle || EtwpLoggerIdFromTraceHandle(LoggerHandle) >= MAXLOGGERS)
+        return STATUS_INVALID_HANDLE;
+
     /* Header, the leading message number, and the message data (WPP caps one message at 8 KB). */
     Record = ExAllocatePoolWithTag(NonPagedPoolNx,
                                    sizeof(EVENT_TRACE_HEADER) + sizeof(USHORT) + TRACE_MESSAGE_MAXIMUM_SIZE,
@@ -872,7 +877,9 @@ WmiTraceMessageVa(IN TRACEHANDLE LoggerHandle,
         Source = va_arg(MessageArgList, PVOID);
         if (!Source)
             break;
-        Length = va_arg(MessageArgList, SIZE_T);
+        /* Fetch the SIZE_T slot (correct on both targets) but keep only the low 32 bits: a caller that
+         * passes a ULONG leaves the upper half of the amd64 slot undefined. */
+        Length = (ULONG)va_arg(MessageArgList, SIZE_T);
         if (Length == 0)
             continue;
         if (Length > (SIZE_T)(End - Data))
