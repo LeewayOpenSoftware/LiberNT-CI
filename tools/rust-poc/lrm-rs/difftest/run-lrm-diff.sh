@@ -41,4 +41,9 @@ cp "$SPECIAL_C" "$STAGE/b/special/special.c"
 # diff above already proves the engine against the live CI special.c; the full-stack targets the
 # orchestration glue and is pinned to the vendored C SHA.
 echo "[lrm] full-stack orchestration differential:"
-ITERS="$ITERS" CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/run-lrm-fullstack.sh"
+# Pin SPECIAL_C/NTSPECIAL_C to the VENDORED copies explicitly: the CI job exports SPECIAL_C as a
+# step-level env var (the branch-head engine source, whose relative include pulls in <ntoskrnl.h>),
+# which the child shell would otherwise inherit. The explicit assignment overrides that inherited
+# value so the full-stack always builds its own pinned, host-buildable sources.
+SPECIAL_C="$HERE/dw/special/special.c" NTSPECIAL_C="$HERE/dw/nt/ntspecial.c" \
+    ITERS="$ITERS" CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/run-lrm-fullstack.sh"
