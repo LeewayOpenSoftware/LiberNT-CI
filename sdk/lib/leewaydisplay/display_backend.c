@@ -7,10 +7,13 @@
 
 #include <leewayui/display_backend.h>
 
+BOOL LDispLayoutWorks(void);
+
 DWORD
 LDispCapabilities(void)
 {
-    return LDISP_CAP_RESOLUTION | LDISP_CAP_REFRESH | (LSaverIsAvailable() ? LDISP_CAP_SCREENSAVER : 0);
+    return LDISP_CAP_RESOLUTION | LDISP_CAP_REFRESH | (LSaverIsAvailable() ? LDISP_CAP_SCREENSAVER : 0) |
+           (LDispLayoutWorks() ? LDISP_CAP_MULTIMON_POSITION : 0);
 }
 
 int

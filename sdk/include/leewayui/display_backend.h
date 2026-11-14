@@ -44,8 +44,9 @@ typedef struct LDISP_MODE
 #define LDISP_CAP_RESOLUTION   0x0001
 #define LDISP_CAP_REFRESH      0x0002
 #define LDISP_CAP_ORIENTATION  0x0004  /* rotation can be applied: NOT implemented; LDISP_MODE.Orientation is read-only */
-#define LDISP_CAP_MULTIMONITOR 0x0008  /* attach, detach, position, primary: NOT implemented yet */
+#define LDISP_CAP_MULTIMONITOR 0x0008  /* attach and detach: NOT implemented, never set; see LDISP_CAP_MULTIMON_POSITION */
 #define LDISP_CAP_PERMON_DPI   0x0010  /* per-monitor scale: NOT supported by the stack yet */
+#define LDISP_CAP_MULTIMON_POSITION 0x0040 /* 2+ attached displays and a CDS_TEST of the current layout passes for each */
 #define LDISP_CAP_SCREENSAVER  0x0020  /* SPI_*SCREENSAVE* answers on this system */
 
 DWORD LDispCapabilities(void);
@@ -60,6 +61,27 @@ LONG LDispApplyMode(const WCHAR *device, const LDISP_MODE *mode);
 /* Persist the mode (CDS_UPDATEREGISTRY) after the user confirmed it. */
 LONG LDispCommitMode(const WCHAR *device, const LDISP_MODE *mode);
 UINT LDispGetSystemDpi(void);
+
+/* Multi-display position and primary. Modes are NOT changed here (use LDispApplyMode per display) and attach/detach is
+ * refused: a layout whose Attached flags differ from the current ones fails with DISP_CHANGE_BADPARAM. The set holds
+ * the attached displays only. X/Y are desktop coordinates; exactly one entry has Primary. */
+typedef struct LDISP_LAYOUT
+{
+    WCHAR Device[32];
+    LONG X;
+    LONG Y;
+    BOOL Primary;
+} LDISP_LAYOUT;
+
+/* Current arrangement of the attached displays, for showing and for reverting. */
+int LDispGetLayout(LDISP_LAYOUT *out, int max);
+/* CDS_TEST for every display; nothing changes. */
+LONG LDispTestLayout(const LDISP_LAYOUT *layout, int count);
+/* Dynamic change only (never written to the registry), primary first. Positions are normalised so the primary is at 0,0.
+ * Re-apply the LDispGetLayout snapshot to revert. */
+LONG LDispApplyLayout(const LDISP_LAYOUT *layout, int count);
+/* Persist the arrangement (CDS_UPDATEREGISTRY | CDS_NORESET, then one commit) after the user confirmed it. */
+LONG LDispCommitLayout(const LDISP_LAYOUT *layout, int count);
 
 /* Wallpaper: styles map to the WallpaperStyle/TileWallpaper values. Span is not offered (no multi-monitor span). */
 typedef enum LWALL_STYLE
