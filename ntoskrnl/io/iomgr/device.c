@@ -499,6 +499,9 @@ IopReleasePnpUnloadBarrier(IN PDRIVER_OBJECT DriverObject)
     ObDereferenceObject(DriverObject);
 }
 
+/* Private to this file: the device is being taken apart by IopUnloadDevice */
+#define DOE_DELETE_CLAIMED 0x80000000
+
 VOID
 NTAPI
 IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
@@ -528,6 +531,17 @@ IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
             {
                 FastIoDispatch->FastIoDetachDevice(AttachedDevice, DeviceObject);
             }
+            return;
+        }
+
+        /* Several threads can get here for the same device: the one that
+         * deletes it, one that drops its last reference, one that detaches
+         * the device above it. Each saw no reference and the delete flag
+         * without a lock. Only the first may take the device apart; the
+         * others would release the keep-alive reference a second time. */
+        if (InterlockedOr((PLONG)&ThisExtension->ExtensionFlags, DOE_DELETE_CLAIMED) &
+            DOE_DELETE_CLAIMED)
+        {
             return;
         }
 
