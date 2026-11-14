@@ -87,7 +87,7 @@ BEGIN
     END
     POPUP "&Pomoč"
     BEGIN
-        MENUITEM "&O LiberNT WordPadu",         ID_ABOUT
+        MENUITEM "&O WordPadu",         ID_ABOUT
     END
 END
 

@@ -89,7 +89,7 @@ BEGIN
     END
     POPUP "עזרה"
     BEGIN
-        MENUITEM "אודות LiberNT WordPad",       ID_ABOUT
+        MENUITEM "אודות WordPad",       ID_ABOUT
     END
 END
 

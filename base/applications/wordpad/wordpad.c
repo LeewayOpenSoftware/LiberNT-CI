@@ -217,13 +217,13 @@ static void set_caption(LPCWSTR wszNewFileName)
     else
         wszNewFileName = file_basename((LPWSTR)wszNewFileName);
 
-    wszCaption = calloc(1, lstrlenW(wszNewFileName)*sizeof(WCHAR)+sizeof(L" - LiberNT WordPad"));
+    wszCaption = calloc(1, lstrlenW(wszNewFileName)*sizeof(WCHAR)+sizeof(L" - WordPad"));
 
     if(!wszCaption)
         return;
 
     memcpy(wszCaption, wszNewFileName, lstrlenW(wszNewFileName)*sizeof(WCHAR));
-    wcscat(wszCaption, L" - LiberNT WordPad");
+    wcscat(wszCaption, L" - WordPad");
 
     SetWindowTextW(hMainWnd, wszCaption);
 
@@ -322,7 +322,7 @@ static void on_sizelist_modified(HWND hwndSizeList, LPWSTR wszNewFontSize)
         {
             SetWindowTextW(hwndSizeList, sizeBuffer);
             MessageBoxWithResStringW(hMainWnd, MAKEINTRESOURCEW(STRING_INVALID_NUMBER),
-                        L"LiberNT WordPad", MB_OK | MB_ICONINFORMATION);
+                        L"WordPad", MB_OK | MB_ICONINFORMATION);
         }
     }
 }
@@ -797,7 +797,7 @@ static void ShowOpenError(DWORD Code)
         default:
             Message = MAKEINTRESOURCEW(STRING_OPEN_FAILED);
     }
-    MessageBoxW(hMainWnd, Message, L"LiberNT WordPad", MB_ICONEXCLAMATION | MB_OK);
+    MessageBoxW(hMainWnd, Message, L"WordPad", MB_ICONEXCLAMATION | MB_OK);
 }
 
 static void DoOpenFile(LPCWSTR szOpenFileName)
@@ -834,7 +834,7 @@ static void DoOpenFile(LPCWSTR szOpenFileName)
         {
             CloseHandle(hFile);
             MessageBoxWithResStringW(hMainWnd, MAKEINTRESOURCEW(STRING_OLE_STORAGE_NOT_SUPPORTED),
-                    L"LiberNT WordPad", MB_OK | MB_ICONEXCLAMATION);
+                    L"WordPad", MB_OK | MB_ICONEXCLAMATION);
             return;
         }
     }
@@ -871,7 +871,7 @@ static void ShowWriteError(DWORD Code)
         default:
             Message = MAKEINTRESOURCEW(STRING_WRITE_FAILED);
     }
-    MessageBoxW(hMainWnd, Message, L"LiberNT WordPad", MB_ICONEXCLAMATION | MB_OK);
+    MessageBoxW(hMainWnd, Message, L"WordPad", MB_ICONEXCLAMATION | MB_OK);
 }
 
 static BOOL DoSaveFile(LPCWSTR wszSaveFileName, WPARAM format)
@@ -957,7 +957,7 @@ static BOOL DialogSaveFile(void)
         if(fileformat_flags(sfn.nFilterIndex-1) != SF_RTF)
         {
             if(MessageBoxWithResStringW(hMainWnd, MAKEINTRESOURCEW(STRING_SAVE_LOSEFORMATTING),
-                           L"LiberNT WordPad", MB_YESNO | MB_ICONEXCLAMATION) != IDYES)
+                           L"WordPad", MB_YESNO | MB_ICONEXCLAMATION) != IDYES)
                 continue;
         }
         return DoSaveFile(sfn.lpstrFile, fileformat_flags(sfn.nFilterIndex-1));
@@ -997,7 +997,7 @@ static BOOL prompt_save_changes(void)
 
         wsprintfW(text, wszSaveChanges, displayFileName);
 
-        ret = MessageBoxW(hMainWnd, text, L"LiberNT WordPad", MB_YESNOCANCEL | MB_ICONEXCLAMATION);
+        ret = MessageBoxW(hMainWnd, text, L"WordPad", MB_YESNOCANCEL | MB_ICONEXCLAMATION);
 
         free(text);
 
@@ -1044,7 +1044,7 @@ static void DialogOpenFile(void)
 static void dialog_about(void)
 {
     HICON icon = LoadImageW(GetModuleHandleW(0), MAKEINTRESOURCEW(IDI_WORDPAD), IMAGE_ICON, 48, 48, LR_SHARED);
-    ShellAboutW(hMainWnd, L"LiberNT WordPad", 0, icon);
+    ShellAboutW(hMainWnd, L"WordPad", 0, icon);
 }
 
 static INT_PTR CALLBACK formatopts_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
@@ -1241,7 +1241,7 @@ static void HandleCommandLine(LPWSTR cmdline)
     }
 
     if (opt_print)
-        MessageBoxWithResStringW(hMainWnd, MAKEINTRESOURCEW(STRING_PRINTING_NOT_IMPLEMENTED), L"LiberNT WordPad", MB_OK);
+        MessageBoxWithResStringW(hMainWnd, MAKEINTRESOURCEW(STRING_PRINTING_NOT_IMPLEMENTED), L"WordPad", MB_OK);
 }
 
 static LRESULT handle_findmsg(LPFINDREPLACEW pFr)
@@ -1323,7 +1323,7 @@ static LRESULT handle_findmsg(LPFINDREPLACEW pFr)
             custom_data->endPos = -1;
             EnableWindow(hMainWnd, FALSE);
             MessageBoxWithResStringW(hFindWnd, MAKEINTRESOURCEW(STRING_SEARCH_FINISHED),
-                                     L"LiberNT WordPad", MB_OK | MB_ICONASTERISK | MB_TASKMODAL);
+                                     L"WordPad", MB_OK | MB_ICONASTERISK | MB_TASKMODAL);
             EnableWindow(hMainWnd, TRUE);
         } else {
             SendMessageW(hEditorWnd, EM_SETSEL, ft.chrgText.cpMin, ft.chrgText.cpMax);
@@ -1638,7 +1638,7 @@ static INT_PTR CALLBACK paraformat_proc(HWND hWnd, UINT message, WPARAM wParam, 
                         if(ret != 3)
                         {
                             MessageBoxWithResStringW(hMainWnd, MAKEINTRESOURCEW(STRING_INVALID_NUMBER),
-                                        L"LiberNT WordPad", MB_OK | MB_ICONASTERISK);
+                                        L"WordPad", MB_OK | MB_ICONASTERISK);
                             return FALSE;
                         } else
                         {
@@ -1758,10 +1758,10 @@ static INT_PTR CALLBACK tabstops_proc(HWND hWnd, UINT message, WPARAM wParam, LP
                             if(!number_from_string(buffer, &number, &unit))
                             {
                                 MessageBoxWithResStringW(hWnd, MAKEINTRESOURCEW(STRING_INVALID_NUMBER),
-                                             L"LiberNT WordPad", MB_OK | MB_ICONINFORMATION);
+                                             L"WordPad", MB_OK | MB_ICONINFORMATION);
                             } else if (item_count >= MAX_TAB_STOPS) {
                                 MessageBoxWithResStringW(hWnd, MAKEINTRESOURCEW(STRING_MAX_TAB_STOPS),
-                                             L"LiberNT WordPad", MB_OK | MB_ICONINFORMATION);
+                                             L"WordPad", MB_OK | MB_ICONINFORMATION);
                             } else {
                                 int i;
                                 float next_number = -1;
@@ -1980,7 +1980,7 @@ static LRESULT OnCreate( HWND hWnd )
     hDLL = LoadLibraryW(L"riched20.dll");
     if(!hDLL)
     {
-        MessageBoxWithResStringW(hWnd, MAKEINTRESOURCEW(STRING_LOAD_RICHED_FAILED), L"LiberNT WordPad",
+        MessageBoxWithResStringW(hWnd, MAKEINTRESOURCEW(STRING_LOAD_RICHED_FAILED), L"WordPad",
                     MB_OK | MB_ICONEXCLAMATION);
         PostQuitMessage(1);
     }
@@ -2369,7 +2369,7 @@ static LRESULT OnCommand( HWND hWnd, WPARAM wParam, LPARAM lParam)
         TEXTRANGEW tr;
 
         GetWindowTextW(hwndEditor, data, nLen+1);
-        MessageBoxW(NULL, data, L"LiberNT WordPad", MB_OK);
+        MessageBoxW(NULL, data, L"WordPad", MB_OK);
 
         free(data);
         data = malloc((nLen+1)*sizeof(WCHAR));
@@ -2380,7 +2380,7 @@ static LRESULT OnCommand( HWND hWnd, WPARAM wParam, LPARAM lParam)
 #ifdef __REACTOS__
         data[tr.chrg.cpMax - tr.chrg.cpMin] = UNICODE_NULL;
 #endif
-        MessageBoxW(NULL, data, L"LiberNT WordPad", MB_OK);
+        MessageBoxW(NULL, data, L"WordPad", MB_OK);
         free(data);
 
         /* SendMessage(hwndEditor, EM_SETSEL, 0, -1); */
@@ -2420,7 +2420,7 @@ static LRESULT OnCommand( HWND hWnd, WPARAM wParam, LPARAM lParam)
         SendMessageW(hwndEditor, EM_GETSELTEXT, 0, (LPARAM)data);
         sprintf(buf, "Start = %ld, End = %ld", range.cpMin, range.cpMax);
         MessageBoxA(hWnd, buf, "Editor", MB_OK);
-        MessageBoxW(hWnd, data, L"LiberNT WordPad", MB_OK);
+        MessageBoxW(hWnd, data, L"WordPad", MB_OK);
         free(data);
         /* SendMessage(hwndEditor, EM_SETSEL, 0, -1); */
         return 0;
@@ -2820,7 +2820,7 @@ int CALLBACK WinMain(HINSTANCE hInstance, HINSTANCE hOldInstance, LPSTR szCmdPar
     registry_read_winrect(&rc);
     registry_read_maximized(&bMaximized);
 
-    hMainWnd = CreateWindowExW(0, L"WORDPADTOP", L"LiberNT WordPad", WS_CLIPCHILDREN|WS_OVERLAPPEDWINDOW,
+    hMainWnd = CreateWindowExW(0, L"WORDPADTOP", L"WordPad", WS_CLIPCHILDREN|WS_OVERLAPPEDWINDOW,
                                CW_USEDEFAULT, CW_USEDEFAULT, rc.right - rc.left, rc.bottom - rc.top,
                                NULL, NULL, hInstance, NULL);
     if ((nCmdShow == SW_SHOWNORMAL || nCmdShow == SW_SHOWDEFAULT)

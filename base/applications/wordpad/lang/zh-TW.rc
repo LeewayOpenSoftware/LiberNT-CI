@@ -91,7 +91,7 @@ BEGIN
     END
     POPUP "說明(&H)"
     BEGIN
-        MENUITEM "關於 LiberNT WordPad(&W)", ID_ABOUT
+        MENUITEM "關於 WordPad(&W)", ID_ABOUT
     END
 END
 

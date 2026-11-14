@@ -87,7 +87,7 @@ BEGIN
     END
     POPUP "&Žinynas"
     BEGIN
-        MENUITEM "&Apie LiberNT WordPad",              ID_ABOUT
+        MENUITEM "&Apie WordPad",              ID_ABOUT
     END
 END
 
