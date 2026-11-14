@@ -89,3 +89,70 @@ name-matcher unit-checked 10/10 (the C `MiIsVerifiedDriverName` is `static`, rea
 `MiVerifyLoadedImage`, so it is unit-checked here rather than differentially). **Negative control**
 (perturbed Rust level / flags / module range) -> 19 disagreements. Vendored `vf/dw/ntdrvmgmt.c`
 (provenance `feat/special-pool 5f5f92ed47a`). Chained from `run-lrm-diff.sh`.
+
+## Stage 3 — I/O-manager rules (DONE)
+`vf.rs` mirrors `ntoskrnl/vf/vfio.c`. Bug check: `DRIVER_VERIFIER_IOMANAGER_VIOLATION` (0xC9), the
+rule sub-code in **P1**. **Pinned at `feat/special-pool 93a4f23190e`** (merged into the kernel branch
+at `aa3269b2df8`). Hard rules bug-check `(0xC9, SubCode, A, B, C)` directly:
+
+| Call | Rule | Sub-code | A / B / C |
+|---|---|---|---|
+| `IoCallDriver` | `Irql > DISPATCH` | `0x10` | Irql / 0 / 0 |
+| `IoCallDriver` | `!Irp \|\| Type != IO_TYPE_IRP` | `0x03` | Irp / 0 / 0 |
+| `IoCallDriver` | `!Dev \|\| Type != IO_TYPE_DEVICE` | `0x04` | Dev / 0 / 0 |
+| `IoCallDriver` return | IRQL changed across the send | `0x05` | Dev / Before / After |
+| `IoCompleteRequest` | `Irql > DISPATCH` | `0x0E` | Irql / Irp / 0 |
+| `IoCompleteRequest` | status is `STATUS_PENDING` or `-1` | `0x06` | (ULONG_PTR)Status / Irp / 0 |
+| `IoCompleteRequest` | a cancel routine is still set | `0x07` | CancelRoutine / Irp / 0 |
+| `IoFreeIrp` | `Type != IO_TYPE_IRP` | `0x01` | Irp / 0 / 0 |
+| `IoFreeIrp` | queued to a thread (list non-empty) | `0x02` | Irp / 0 / 0 |
+
+Soft (table) rules go through `VfpReportIrpRule`, modelled by `vfio_report` / `vfio_soft_eval`:
+**count the hit; if the rule is fatal AND trusted -> `(0xC9, Rule, Caller, Irp, 0)` with NO log line;
+else print one log line (first `VF_IRP_LINES_PRINTED` = 64).** `vfio_rule_fatal`: `0x203`, `0x20B`
+fatal; `0x205`, `0x209`, `0x310` log-only. `vfio_table_trusted`: the IRP-table rules
+(`0x205/0x209/0x20B/0x310`) are trusted only while `VfIrpUntrackSkipped == 0` — so **`0x20B` is
+withheld to a log line once an IRP has left above DISPATCH**, even though it is otherwise fatal. The
+four IRP-table rules fire only for a **pended** entry (`VfpIsIrpBelow`: the entry exists and its send
+returned `STATUS_PENDING`); `0x205`/`0x209` additionally require the caller not to own the current
+stack location; `0x203` is cancel-gated with no pended gate. The `Caller` is a return address and MAY
+be a kernel address (driver tail-call), so no in-driver-range assumption is made.
+
+**Full-stack differential** (`vf/run-lrm-vfio.sh`, `vfio_diff.cpp`): compiles `vfio.c` UNMODIFIED
+against the host stub (`vf/iostub/`), reaches the static `Vf*` wrappers through the exported
+`VfIoThunks[]` table, primes a pended entry through a real `IoCallDriver` returning `STATUS_PENDING`,
+and compares each violation (bug check captured via `setjmp`/`longjmp`, log lines counted) against
+`lrm_vfio_*`. Latest: **17 checks + 70 cap checks, 0 disagreements** (all 10 hard rules raised; soft
+`0x203`/`0x20B` fatal with exact params incl. the sign-extended `-1` status; `0x205`/`0x209`/`0x310`
+and the withheld `0x20B` as log; the pended gate; the shared 64-line cap with the hit counter kept in
+lockstep). **Negative control** (perturb the determining gate fed to the Rust side) -> 13
+disagreements. Vendored `vf/dw/vfio.c` (provenance `feat/special-pool 93a4f23190e`). Chained from
+`run-lrm-diff.sh`.
+
+## Stage 4 — deadlock / lock-order rules (DONE)
+`vf.rs` mirrors the severity decision of `ntoskrnl/vf/vfdeadlock.c`. Bug check:
+`DRIVER_VERIFIER_DETECTED_VIOLATION` (0xC4), rule sub-code in **P1**. **Pinned at
+`feat/special-pool 93a4f23190e`.** The graph-walk / held-record bookkeeping stays in C (it owns the
+graph state); the Rust port is the observable `VfpReportDeadlockRule` decision, `vfdl_report`: count
+the hit; if fatal -> `(0xC4, Rule, Lock, Second, Third)` for `WRONG_THREAD`/`DELETED_OWNED`; else one
+log line (first `VF_LOCK_LINES_PRINTED` = 64). `vfdl_rule_fatal`: only `0x1004` WRONG_THREAD and
+`0x100B` DELETED_OWNED are fatal; `0x1000` SELF, `0x1001` HIERARCHY, `0x1007` UNACQUIRED are log-only.
+
+| Hook | Rule | Sub-code | Fatal | Lock / Second / Third |
+|---|---|---|---|---|
+| `VfLockAcquiring` (recursion) | SELF | `0x1000` | no | lock / recursive-caller / 0 |
+| `VfLockAcquiring` (inverted order) | HIERARCHY | `0x1001` | no | lock / inverted-lock / inverted-caller |
+| `VfLockReleasing` (held by another) | WRONG_THREAD | `0x1004` | **yes** | lock / owner-thread / current-thread |
+| `VfLockReleasing` (never acquired) | UNACQUIRED | `0x1007` | no | lock / 0 / 0 |
+| `VfForgetLocksInRange` (owned in range) | DELETED_OWNED | `0x100B` | **yes** | owned-lock / owner-thread / owned-count |
+
+**Full-stack differential** (`vf/run-lrm-vfdl.sh`, `vfdl_diff.cpp`): compiles `vfdeadlock.c`
+UNMODIFIED against the host stub (`vf/dlstub/`), drives the exported lock hooks
+(`VfLockAcquiring`/`Acquired`/`Releasing`, `VfForgetLocksInRange`) with a controllable current thread
+and stack limits to make each of the five rules fire, and compares per violation against
+`lrm_vfdl_report` — the two fatal rules on code 0xC4 and all four params, the three log rules on the
+Log outcome. Latest: **6 checks, 0 disagreements** (fatal 2, logged 3, silent 1; the shared hit
+counter matches C exactly, 5 == 5). **Negative control** (feed the Rust side the opposite-severity
+rule) -> 5 disagreements. Vendored `vf/dw/vfdeadlock.c` (provenance `feat/special-pool 93a4f23190e`).
+Chained from `run-lrm-diff.sh`. (The boot-driver verification walk `MiVerifyBootLoadedImages`
+`e2962b8329d`/`76a526b8011` is deferred — not ported here, pending a kd*.dll fix.)

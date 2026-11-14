@@ -832,3 +832,394 @@ pub unsafe extern "C" fn lrm_vf_is_verified_driver_name(buffer: *const u16, blen
     };
     is_verified_driver_name(b, n) as u8
 }
+
+// ======================================================================================
+// Stage 3 — I/O verification rules (mirror of `ntoskrnl/vf/vfio.c`), bug check 0xC9
+// ======================================================================================
+//
+// Clean-room Rust of the I/O-manager verification decisions the C enforces at a verified driver's
+// IRP calls (`VfIoThunks[]`). Hard rules always bug-check `DRIVER_VERIFIER_IOMANAGER_VIOLATION`
+// (0xC9) with the sub-code in P1. The soft (table) rules route through `VfpReportIrpRule`, whose
+// severity is: count the hit, then — if the rule is fatal AND trusted — bug-check with NO log line,
+// else print one log line (first `VF_IRP_LINES_PRINTED`). The IRP-table rules 0x205/0x209/0x20B/0x310
+// fire only for a *pended* IRP entry (`VfpIsIrpBelow`), and are *withheld* (never fatal, log only)
+// once `VfIrpUntrackSkipped != 0`, even when the rule is otherwise fatal. The `caller` parameter is a
+// return address and MAY be a kernel address (driver tail-call), so no in-driver-range assumption.
+
+/// `DRIVER_VERIFIER_IOMANAGER_VIOLATION` (public bug-check code).
+pub const BUGCHECK_DRIVER_VERIFIER_IOMANAGER: u32 = 0xC9;
+
+// Hard I/O sub-codes (param1 of 0xC9), exactly as vfio.c raises them.
+const VF_IO_FREE_NOT_AN_IRP: u32 = 0x01;
+const VF_IO_FREE_QUEUED_TO_THREAD: u32 = 0x02;
+const VF_IO_CALL_NOT_AN_IRP: u32 = 0x03;
+const VF_IO_CALL_BAD_DEVICE: u32 = 0x04;
+const VF_IO_CALL_IRQL_CHANGED: u32 = 0x05;
+const VF_IO_COMPLETE_PENDING_STATUS: u32 = 0x06;
+const VF_IO_COMPLETE_CANCEL_ROUTINE: u32 = 0x07;
+const VF_IO_COMPLETE_IRQL: u32 = 0x0E;
+const VF_IO_CALL_IRQL: u32 = 0x10;
+
+// Soft (table) I/O sub-codes.
+const VF_IO_CALL_CANCEL_ROUTINE: u32 = 0x203;
+const VF_IO_CALL_QUEUED_BELOW: u32 = 0x205;
+const VF_IO_COMPLETE_QUEUED_BELOW: u32 = 0x209;
+const VF_IO_FREE_IN_USE: u32 = 0x20B;
+const VF_IO_REINITIALIZE_IN_USE: u32 = 0x310;
+
+/// Max log-only lines printed by the I/O report path (the shared `VfIrpRuleHits` cap).
+const VF_IRP_LINES_PRINTED: u32 = 64;
+
+/// `STATUS_PENDING` — a completion with this (or -1) status is a hard 0x06 violation.
+const STATUS_PENDING: i32 = 0x0000_0103u32 as i32;
+
+/// The observable result of a verifier check that may be fatal, logged, or silent.
+///
+/// `Log` carries the rule sub-code (the line the C would print); `Fatal` carries the exact
+/// `BugCheck` the C would raise. Hard checks only ever produce `Ok`/`Fatal`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum IoOutcome {
+    /// No violation observed.
+    Ok,
+    /// Counted and logged (one "(log only)" line), not fatal.
+    Log(u32),
+    /// Fatal — the kernel shim raises this bug check.
+    Fatal(BugCheck),
+}
+
+/// `KeBugCheckEx(0xC9, SubCode, A, B, C)` — the I/O-manager parameter layout (sub-code in P1).
+#[inline]
+fn ioviol(sub: u32, a: usize, b: usize, c: usize) -> BugCheck {
+    BugCheck { code: BUGCHECK_DRIVER_VERIFIER_IOMANAGER, p1: sub as usize, p2: a, p3: b, p4: c }
+}
+
+/// `VfpCheckCall`: the hard pre-send checks on `IoCallDriver`.
+/// `irql > DISPATCH` -> 0x10; `!irp || Type != IO_TYPE_IRP` -> 0x03; `!dev || Type != IO_TYPE_DEVICE`
+/// -> 0x04 (first failing wins, matching the C order).
+pub fn vfio_check_call(irql: u8, irp: usize, irp_is_irp: bool, dev: usize, dev_is_dev: bool) -> Result<(), BugCheck> {
+    if irql > DISPATCH_LEVEL {
+        return Err(ioviol(VF_IO_CALL_IRQL, irql as usize, 0, 0));
+    }
+    if irp == 0 || !irp_is_irp {
+        return Err(ioviol(VF_IO_CALL_NOT_AN_IRP, irp, 0, 0));
+    }
+    if dev == 0 || !dev_is_dev {
+        return Err(ioviol(VF_IO_CALL_BAD_DEVICE, dev, 0, 0));
+    }
+    Ok(())
+}
+
+/// `VfpCheckCallReturn`: IRQL must be unchanged across the driver call. `after != before` -> 0x05
+/// `(dev, before, after)`.
+pub fn vfio_check_call_return(dev: usize, before: u8, after: u8) -> Result<(), BugCheck> {
+    if after != before {
+        return Err(ioviol(VF_IO_CALL_IRQL_CHANGED, dev, before as usize, after as usize));
+    }
+    Ok(())
+}
+
+/// `VfpCheckComplete`: the hard checks on `IoCompleteRequest`.
+/// `irql > DISPATCH` -> 0x0E `(irql, irp, 0)`; status is STATUS_PENDING or -1 -> 0x06
+/// `((ULONG_PTR)status, irp, 0)`; a cancel routine is set -> 0x07 `(cancel, irp, 0)`.
+pub fn vfio_check_complete(irql: u8, irp: usize, status: i32, cancel: usize) -> Result<(), BugCheck> {
+    if irql > DISPATCH_LEVEL {
+        return Err(ioviol(VF_IO_COMPLETE_IRQL, irql as usize, irp, 0));
+    }
+    if status == STATUS_PENDING || status == -1 {
+        // C passes (ULONG_PTR)Irp->IoStatus.Status: a signed 32-bit NTSTATUS widened to the pointer
+        // width (so -1 becomes all-ones). `as isize as usize` reproduces that sign-extension.
+        return Err(ioviol(VF_IO_COMPLETE_PENDING_STATUS, status as isize as usize, irp, 0));
+    }
+    if cancel != 0 {
+        return Err(ioviol(VF_IO_COMPLETE_CANCEL_ROUTINE, cancel, irp, 0));
+    }
+    Ok(())
+}
+
+/// `VfIoFreeIrp`: hard checks on `IoFreeIrp`.
+/// `Type != IO_TYPE_IRP` -> 0x01; its thread list is non-empty -> 0x02.
+pub fn vfio_free_irp(irp: usize, is_irp: bool, thread_list_empty: bool) -> Result<(), BugCheck> {
+    if !is_irp {
+        return Err(ioviol(VF_IO_FREE_NOT_AN_IRP, irp, 0, 0));
+    }
+    if !thread_list_empty {
+        return Err(ioviol(VF_IO_FREE_QUEUED_TO_THREAD, irp, 0, 0));
+    }
+    Ok(())
+}
+
+/// `VfpIsIrpRuleFatal`: only 0x203 and 0x20B are fatal among the soft rules.
+pub fn vfio_rule_fatal(rule: u32) -> bool {
+    matches!(rule, VF_IO_CALL_CANCEL_ROUTINE | VF_IO_FREE_IN_USE)
+}
+
+/// `VfpIsIrpTableTrusted`: the IRP-table rules (0x205/0x209/0x20B/0x310) are trusted only while
+/// `VfIrpUntrackSkipped == 0`; every other rule is always trusted. An untrusted rule is never fatal.
+pub fn vfio_table_trusted(rule: u32, untrack_skipped: u32) -> bool {
+    match rule {
+        VF_IO_CALL_QUEUED_BELOW | VF_IO_COMPLETE_QUEUED_BELOW | VF_IO_FREE_IN_USE | VF_IO_REINITIALIZE_IN_USE => {
+            untrack_skipped == 0
+        }
+        _ => true,
+    }
+}
+
+/// `VfpReportIrpRule`: count the hit, then decide. Order is exact: increment `*hits`; if the rule is
+/// fatal AND trusted -> `Fatal` (no log line); else if `*hits <= VF_IRP_LINES_PRINTED` -> `Log`; else
+/// `Ok` (counted but suppressed). `hits` mirrors the kernel's shared `VfIrpRuleHits`.
+pub fn vfio_report(rule: u32, caller: usize, irp: usize, untrack_skipped: u32, hits: &mut u32) -> IoOutcome {
+    *hits = hits.saturating_add(1);
+    if vfio_rule_fatal(rule) && vfio_table_trusted(rule, untrack_skipped) {
+        return IoOutcome::Fatal(ioviol(rule, caller, irp, 0));
+    }
+    if *hits <= VF_IRP_LINES_PRINTED {
+        IoOutcome::Log(rule)
+    } else {
+        IoOutcome::Ok
+    }
+}
+
+/// Whether a soft I/O rule's *call-site condition* holds (so `VfpReportIrpRule` is even invoked).
+/// 0x203 fires when a cancel routine is set (no pended gate). 0x205/0x209 fire when the IRP is pended
+/// AND the caller does not own the current stack location. 0x20B/0x310 fire when the IRP is pended.
+pub fn vfio_soft_condition(rule: u32, cancel_present: bool, pended: bool, caller_owns: bool) -> bool {
+    match rule {
+        VF_IO_CALL_CANCEL_ROUTINE => cancel_present,
+        VF_IO_CALL_QUEUED_BELOW | VF_IO_COMPLETE_QUEUED_BELOW => pended && !caller_owns,
+        VF_IO_FREE_IN_USE | VF_IO_REINITIALIZE_IN_USE => pended,
+        _ => false,
+    }
+}
+
+/// Full soft-rule decision at a call site: if the condition does not hold, `Ok` with NO hit counted
+/// (matching the C, which never calls the report path); otherwise the `vfio_report` outcome.
+#[allow(clippy::too_many_arguments)]
+pub fn vfio_soft_eval(
+    rule: u32,
+    cancel_present: bool,
+    pended: bool,
+    caller_owns: bool,
+    caller: usize,
+    irp: usize,
+    untrack_skipped: u32,
+    hits: &mut u32,
+) -> IoOutcome {
+    if !vfio_soft_condition(rule, cancel_present, pended, caller_owns) {
+        return IoOutcome::Ok;
+    }
+    vfio_report(rule, caller, irp, untrack_skipped, hits)
+}
+
+// ======================================================================================
+// Stage 4 — deadlock / lock-order rules (mirror of `ntoskrnl/vf/vfdeadlock.c`), bug check 0xC4
+// ======================================================================================
+//
+// Clean-room Rust of the lock-order verification severity the C enforces (`VfpReportDeadlockRule`).
+// Only WRONG_THREAD (0x1004) and DELETED_OWNED (0x100B) are fatal; both carry three extra params
+// `(lock, second, third)`. The remaining rules (SELF 0x1000, HIERARCHY 0x1001, UNACQUIRED 0x1007)
+// are log-only (first `VF_LOCK_LINES_PRINTED`). The graph-walk/held-record bookkeeping stays in C
+// (it owns the graph state); the Rust port is the observable severity decision the differential
+// drives through the exported lock hooks.
+
+const VF_DEADLOCK_SELF: u32 = 0x1000;
+const VF_DEADLOCK_HIERARCHY: u32 = 0x1001;
+const VF_DEADLOCK_WRONG_THREAD: u32 = 0x1004;
+const VF_DEADLOCK_UNACQUIRED: u32 = 0x1007;
+const VF_DEADLOCK_DELETED_OWNED: u32 = 0x100B;
+
+/// Max log-only lines printed by the deadlock report path (the shared `VfDeadlockRuleHits` cap).
+const VF_LOCK_LINES_PRINTED: u32 = 64;
+
+/// `VfpIsDeadlockRuleFatal`: only WRONG_THREAD and DELETED_OWNED are fatal (all five rules listed
+/// explicitly, mirroring the C switch).
+pub fn vfdl_rule_fatal(rule: u32) -> bool {
+    match rule {
+        VF_DEADLOCK_SELF => false,
+        VF_DEADLOCK_HIERARCHY => false,
+        VF_DEADLOCK_WRONG_THREAD => true,
+        VF_DEADLOCK_UNACQUIRED => false,
+        VF_DEADLOCK_DELETED_OWNED => true,
+        _ => false,
+    }
+}
+
+/// `VfpReportDeadlockRule`: count the hit, then decide. If fatal -> `0xC4 (rule, lock, second, third)`
+/// for WRONG_THREAD/DELETED_OWNED, else `0xC4 (rule, lock, 0, 0)` (the latter is a defensive branch:
+/// no other rule is fatal today). Non-fatal -> `Log` while `*hits <= VF_LOCK_LINES_PRINTED`, else `Ok`.
+pub fn vfdl_report(rule: u32, lock: usize, second: usize, third: usize, hits: &mut u32) -> IoOutcome {
+    *hits = hits.saturating_add(1);
+    if vfdl_rule_fatal(rule) {
+        if rule == VF_DEADLOCK_WRONG_THREAD || rule == VF_DEADLOCK_DELETED_OWNED {
+            return IoOutcome::Fatal(BugCheck {
+                code: BUGCHECK_DRIVER_VERIFIER,
+                p1: rule as usize,
+                p2: lock,
+                p3: second,
+                p4: third,
+            });
+        }
+        return IoOutcome::Fatal(BugCheck { code: BUGCHECK_DRIVER_VERIFIER, p1: rule as usize, p2: lock, p3: 0, p4: 0 });
+    }
+    if *hits <= VF_LOCK_LINES_PRINTED {
+        IoOutcome::Log(rule)
+    } else {
+        IoOutcome::Ok
+    }
+}
+
+// ----- C ABI for the stage 3/4 ports (host differential + in-kernel shim) -----
+
+/// Map an `IoOutcome` to the ABI discriminant (0 = Ok, 1 = Log, 2 = Fatal), writing the rule to
+/// `*out_rule` for `Log` and the bug check to `*out_bc` for `Fatal`.
+///
+/// # Safety
+/// `out_bc`/`out_rule` must be writable or null.
+#[inline]
+unsafe fn io_emit(o: IoOutcome, out_bc: *mut BugCheck, out_rule: *mut u32) -> u8 {
+    match o {
+        IoOutcome::Ok => 0,
+        IoOutcome::Log(r) => {
+            if !out_rule.is_null() {
+                unsafe { *out_rule = r };
+            }
+            1
+        }
+        IoOutcome::Fatal(bc) => {
+            if !out_bc.is_null() {
+                unsafe { *out_bc = bc };
+            }
+            2
+        }
+    }
+}
+
+/// `VfpCheckCall` -> 1 and writes `*out` when it bug-checks, else 0.
+/// # Safety
+/// `out` must be writable or null.
+#[no_mangle]
+pub unsafe extern "C" fn lrm_vfio_check_call(irql: u8, irp: usize, irp_is_irp: u8, dev: usize, dev_is_dev: u8, out: *mut BugCheck) -> u8 {
+    match vfio_check_call(irql, irp, irp_is_irp != 0, dev, dev_is_dev != 0) {
+        Err(bc) => {
+            if !out.is_null() {
+                unsafe { *out = bc };
+            }
+            1
+        }
+        Ok(()) => 0,
+    }
+}
+
+/// `VfpCheckCallReturn` -> 1 and writes `*out` when it bug-checks, else 0.
+/// # Safety
+/// `out` must be writable or null.
+#[no_mangle]
+pub unsafe extern "C" fn lrm_vfio_check_call_return(dev: usize, before: u8, after: u8, out: *mut BugCheck) -> u8 {
+    match vfio_check_call_return(dev, before, after) {
+        Err(bc) => {
+            if !out.is_null() {
+                unsafe { *out = bc };
+            }
+            1
+        }
+        Ok(()) => 0,
+    }
+}
+
+/// `VfpCheckComplete` hard checks -> 1 and writes `*out` when it bug-checks, else 0.
+/// # Safety
+/// `out` must be writable or null.
+#[no_mangle]
+pub unsafe extern "C" fn lrm_vfio_check_complete(irql: u8, irp: usize, status: i32, cancel: usize, out: *mut BugCheck) -> u8 {
+    match vfio_check_complete(irql, irp, status, cancel) {
+        Err(bc) => {
+            if !out.is_null() {
+                unsafe { *out = bc };
+            }
+            1
+        }
+        Ok(()) => 0,
+    }
+}
+
+/// `VfIoFreeIrp` hard checks -> 1 and writes `*out` when it bug-checks, else 0.
+/// # Safety
+/// `out` must be writable or null.
+#[no_mangle]
+pub unsafe extern "C" fn lrm_vfio_free_irp(irp: usize, is_irp: u8, thread_list_empty: u8, out: *mut BugCheck) -> u8 {
+    match vfio_free_irp(irp, is_irp != 0, thread_list_empty != 0) {
+        Err(bc) => {
+            if !out.is_null() {
+                unsafe { *out = bc };
+            }
+            1
+        }
+        Ok(()) => 0,
+    }
+}
+
+/// `VfpIsIrpRuleFatal`.
+#[no_mangle]
+pub extern "C" fn lrm_vfio_rule_fatal(rule: u32) -> u8 {
+    vfio_rule_fatal(rule) as u8
+}
+
+/// `VfpIsIrpTableTrusted`.
+#[no_mangle]
+pub extern "C" fn lrm_vfio_table_trusted(rule: u32, untrack_skipped: u32) -> u8 {
+    vfio_table_trusted(rule, untrack_skipped) as u8
+}
+
+/// Full soft I/O rule decision at a call site (`vfio_soft_eval`). Returns 0 = Ok, 1 = Log, 2 = Fatal;
+/// writes the rule to `*out_rule` for Log and the bug check to `*out_bc` for Fatal; advances `*hits`.
+/// # Safety
+/// `hits`/`out_bc`/`out_rule` must be writable or null.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn lrm_vfio_soft_eval(
+    rule: u32,
+    cancel_present: u8,
+    pended: u8,
+    caller_owns: u8,
+    caller: usize,
+    irp: usize,
+    untrack_skipped: u32,
+    hits: *mut u32,
+    out_bc: *mut BugCheck,
+    out_rule: *mut u32,
+) -> u8 {
+    let mut local = if hits.is_null() { 0 } else { unsafe { *hits } };
+    let o = vfio_soft_eval(rule, cancel_present != 0, pended != 0, caller_owns != 0, caller, irp, untrack_skipped, &mut local);
+    if !hits.is_null() {
+        unsafe { *hits = local };
+    }
+    unsafe { io_emit(o, out_bc, out_rule) }
+}
+
+/// `VfpIsDeadlockRuleFatal`.
+#[no_mangle]
+pub extern "C" fn lrm_vfdl_rule_fatal(rule: u32) -> u8 {
+    vfdl_rule_fatal(rule) as u8
+}
+
+/// `VfpReportDeadlockRule`. Returns 0 = Ok, 1 = Log, 2 = Fatal; writes the rule to `*out_rule` for
+/// Log and the bug check to `*out_bc` for Fatal; advances `*hits`.
+/// # Safety
+/// `hits`/`out_bc`/`out_rule` must be writable or null.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn lrm_vfdl_report(
+    rule: u32,
+    lock: usize,
+    second: usize,
+    third: usize,
+    hits: *mut u32,
+    out_bc: *mut BugCheck,
+    out_rule: *mut u32,
+) -> u8 {
+    let mut local = if hits.is_null() { 0 } else { unsafe { *hits } };
+    let o = vfdl_report(rule, lock, second, third, &mut local);
+    if !hits.is_null() {
+        unsafe { *hits = local };
+    }
+    unsafe { io_emit(o, out_bc, out_rule) }
+}
