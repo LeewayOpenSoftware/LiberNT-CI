@@ -245,7 +245,31 @@ VfpCallerOwnsCurrentLocation(
         return FALSE;
 
     Start = (ULONG_PTR)Driver->DriverStart;
-    return (BOOLEAN)((ULONG_PTR)Caller >= Start && (ULONG_PTR)Caller < Start + Driver->DriverSize);
+    if ((ULONG_PTR)Caller >= Start && (ULONG_PTR)Caller < Start + Driver->DriverSize)
+        return TRUE;
+
+    /* A framework or port driver handles the requests of its client drivers:
+     * the dispatch routine of the client's driver object is in the image of
+     * the framework, and so is the call that completes or forwards the
+     * request. The caller owns the location if it is in the image that
+     * handles this request for the driver. */
+    if (Stack->MajorFunction <= IRP_MJ_MAXIMUM_FUNCTION)
+    {
+        PLDR_DATA_TABLE_ENTRY LdrEntry;
+        BOOLEAN InKernel;
+        PVOID DispatchImage, CallerImage;
+
+        DispatchImage = KiPcToFileHeader((PVOID)(ULONG_PTR)Driver->MajorFunction[Stack->MajorFunction],
+                                         &LdrEntry, FALSE, &InKernel);
+        if (DispatchImage != NULL && !InKernel)
+        {
+            CallerImage = KiPcToFileHeader(Caller, &LdrEntry, FALSE, &InKernel);
+            if (CallerImage == DispatchImage)
+                return TRUE;
+        }
+    }
+
+    return FALSE;
 }
 
 static
