@@ -12,6 +12,14 @@ extern "C" {
 #include "poolspecial.h" /* C engine decls + POOL_SPECIAL_RECORD + constants (via -I dw/include) */
 }
 
+/* LRM-RS orchestration layer (mm.rs): MmUseSpecialPool predicate + free-time 0xC1 classifier.
+ * Tested against Ryan's OBSERVED-CONTRACTS spec (the C glue ntspecial.c needs expool.h/mint.h
+ * stand-ins to compile on host - a follow-up). */
+struct BugCheckC { uint32_t code; uintptr_t p1, p2, p3, p4; };
+extern "C" uint8_t lrm_mm_use_special_pool(uint8_t region_present, uint32_t special_pool_tag, size_t bytes, uint32_t tag);
+extern "C" uint8_t lrm_mm_free_classify(uintptr_t p, int32_t query, uint8_t owns, uint8_t irql, uint8_t paged,
+                                        uintptr_t flags, int32_t check_status, uintptr_t corrupt, BugCheckC *out);
+
 /* Rust engine (same contract, distinct symbols). */
 extern "C" uint8_t rust_pool_special_select(uint32_t selector, size_t bytes, uint32_t tag);
 extern "C" uint8_t rust_pool_special_place(size_t bytes, uint32_t alignment, uint8_t at_start, uint32_t *offset);
@@ -100,9 +108,43 @@ static void check_prepare_check(uint8_t *page, size_t bytes, uint32_t offset, ui
 static uint64_t st = 0x243F6A8885A308D3ULL;
 static uint64_t xr(){ uint64_t x=st; x^=x>>12; x^=x<<25; x^=x>>27; st=x; return x*0x2545F4914F6CDD1DULL; }
 
+/* Orchestration (mm.rs) vs Ryan's OBSERVED-CONTRACTS spec: exact 0xC1 sub-codes + params. */
+static long g_mm = 0, g_mm_fail = 0;
+static void expect_bc(const char *name, uint8_t raised, const BugCheckC &bc,
+                      uint8_t exp_raised, uint32_t code, uintptr_t p1, uintptr_t p2, uintptr_t p3, uintptr_t p4)
+{
+    g_mm++;
+    bool ok = (raised == exp_raised);
+    if (ok && raised)
+        ok = (bc.code == code && bc.p1 == p1 && bc.p2 == p2 && bc.p3 == p3 && bc.p4 == p4);
+    if (!ok) { g_mm_fail++; std::fprintf(stderr, "MM FAIL %s raised=%u code=0x%x p=(%zu,%zu,%zu,%zu)\n",
+                                         name, raised, bc.code, bc.p1, bc.p2, bc.p3, bc.p4); }
+}
+static void test_mm(void)
+{
+    const uintptr_t P = 0x7ffff000; const uintptr_t X = 0x7ffff123; const uintptr_t FL = 0x9;
+    BugCheckC bc;
+    /* use_special_pool: off when no region; else follows the selector. */
+    expect_bc("use.noregion", lrm_mm_use_special_pool(0, POOL_SPECIAL_SELECT_ALL, 32, 0) ? 0 : 0, bc, 0, 0,0,0,0,0);
+    g_mm++; if (lrm_mm_use_special_pool(0, POOL_SPECIAL_SELECT_ALL, 32, 0) != 0) g_mm_fail++;       /* no region -> false */
+    g_mm++; if (lrm_mm_use_special_pool(1, POOL_SPECIAL_SELECT_ALL, 32, 0) == 0) g_mm_fail++;       /* region + '*' -> true */
+    g_mm++; if (lrm_mm_use_special_pool(1, TAG('A','b','c','d'), 8, TAG('A','b','c','e')) != 0) g_mm_fail++; /* tag mismatch -> false */
+    /* free_classify spec table */
+    uint8_t r;
+    r = lrm_mm_free_classify(P, 0/*Outside*/, 1, 0, 0, FL, 0, 0, &bc); expect_bc("free.notalloc", r, bc, 1, 0xC1, P, 0, 0, 0x20);
+    r = lrm_mm_free_classify(P, 1/*Live*/, 0/*!owns*/, 0, 0, FL, 0, 0, &bc); expect_bc("free.notowns", r, bc, 1, 0xC1, P, 0, 0, 0x20);
+    r = lrm_mm_free_classify(P, 1, 1, 3/*>DISPATCH*/, 0, FL, 0, 0, &bc); expect_bc("free.irql.np", r, bc, 1, 0xC1, 3, FL, P, 0x31);
+    r = lrm_mm_free_classify(P, 1, 1, 2/*>APC*/, 1/*paged*/, FL, 0, 0, &bc); expect_bc("free.irql.paged", r, bc, 1, 0xC1, 2, FL, P, 0x31);
+    r = lrm_mm_free_classify(P, 1, 1, 0, 0, FL, 1/*CorruptBefore*/, X, &bc); expect_bc("free.before", r, bc, 1, 0xC1, P, X, 0, 0x23);
+    r = lrm_mm_free_classify(P, 1, 1, 0, 0, FL, 2/*CorruptAfter*/, X, &bc); expect_bc("free.after", r, bc, 1, 0xC1, P, X, 0, 0x24);
+    r = lrm_mm_free_classify(P, 1, 1, 0, 0, FL, 0/*Intact*/, 0, &bc); expect_bc("free.ok", r, bc, 0, 0,0,0,0,0);
+    r = lrm_mm_free_classify(P, 1, 1, 2/*DISPATCH, nonpaged ok*/, 0, FL, 0, 0, &bc); expect_bc("free.dispatch.np.ok", r, bc, 0, 0,0,0,0,0);
+}
+
 int main(int argc, char **argv)
 {
     long iters = argc > 1 ? std::atol(argv[1]) : 2000000;
+    test_mm();
 
     /* --- reused t_special.c selection cases --- */
     check_select(0, 32, TAG('A','b','c','d'));
@@ -161,7 +203,8 @@ int main(int argc, char **argv)
 
     std::printf("[special-pool] checks=%ld disagreements=%ld sel_true=%ld sel_false=%ld intact=%ld corrupt=%ld\n",
                 g_checks, g_dis, g_sel_true, g_sel_false, g_intact, g_corrupt);
-    if (g_dis) { std::printf("RESULT=FAIL\n"); return 1; }
+    std::printf("[mm-orchestration] checks=%ld failures=%ld (vs OBSERVED-CONTRACTS spec)\n", g_mm, g_mm_fail);
+    if (g_dis || g_mm_fail) { std::printf("RESULT=FAIL\n"); return 1; }
     if (!g_sel_true || !g_sel_false || !g_intact || !g_corrupt) { std::printf("RESULT=FAIL (coverage gap)\n"); return 2; }
     std::printf("RESULT=PASS\n");
     return 0;

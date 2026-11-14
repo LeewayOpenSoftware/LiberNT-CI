@@ -27,6 +27,8 @@ fn on_panic(_info: &PanicInfo) -> ! {
     }
 }
 
+pub mod mm;
+
 const PAGE_SIZE: usize = 4096;
 const PAGE_SHIFT: u32 = 12;
 const ALIGNMENT: u32 = 16; // POOL_SPECIAL_ALIGNMENT
