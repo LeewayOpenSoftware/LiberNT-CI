@@ -4426,8 +4426,12 @@ LxVfsOpenTmpfs(
                 break;
 
             case LX_S_IFDIR:
-                if ((Flags & LX_O_ACCMODE) != LX_O_RDONLY)
+                if (!(Flags & LX_O_PATH) &&
+                    (((Flags & LX_O_ACCMODE) != LX_O_RDONLY) || (Flags & LX_O_TRUNC) ||
+                     ((Flags & (LX_O_CREAT | LX_O_DIRECTORY)) == LX_O_CREAT)))
+                {
                     Error = -LX_EISDIR;
+                }
                 break;
 
             case LX_S_IFCHR:
@@ -4467,7 +4471,7 @@ LxVfsOpenTmpfs(
                     Error = -LX_ENOTDIR;
                 break;
         }
-        if ((Error == 0) && (Flags & LX_O_TRUNC) && ((Flags & LX_O_ACCMODE) != LX_O_RDONLY) && (Type == LX_S_IFREG))
+        if ((Error == 0) && (Flags & LX_O_TRUNC) && (Type == LX_S_IFREG))
             Error = LxTmpfsInodeTruncate(Inode, 0);
     }
     else if ((Flags & LX_O_DIRECTORY) && (Type != LX_S_IFDIR))
@@ -4547,8 +4551,12 @@ LxVfsOpenNode(
                 break;
 
             case LX_S_IFDIR:
-                if ((Flags & LX_O_ACCMODE) != LX_O_RDONLY)
+                if (!(Flags & LX_O_PATH) &&
+                    (((Flags & LX_O_ACCMODE) != LX_O_RDONLY) || (Flags & LX_O_TRUNC) ||
+                     ((Flags & (LX_O_CREAT | LX_O_DIRECTORY)) == LX_O_CREAT)))
+                {
                     return -LX_EISDIR;
+                }
                 break;
 
             case LX_S_IFCHR:
@@ -4636,8 +4644,11 @@ LxVfsOpenNode(
 
     if (!Node->Exists)
         Disposition = FILE_CREATE;
-    else if ((Flags & LX_O_TRUNC) && ((Flags & LX_O_ACCMODE) != LX_O_RDONLY) && (Node->Type == LX_S_IFREG))
+    else if ((Flags & LX_O_TRUNC) && (Node->Type == LX_S_IFREG))
+    {
         Disposition = FILE_OVERWRITE;
+        Access |= FILE_WRITE_DATA;
+    }
     else
         Disposition = FILE_OPEN;
 
@@ -4885,7 +4896,7 @@ LxVfsReopen(
             (*File)->Memfd = Source->Memfd;
             (*File)->Mode = Source->Mode;
         }
-        if ((Flags & LX_O_TRUNC) && (Access != LX_O_RDONLY) && ((*File)->Type == LX_S_IFREG))
+        if ((Flags & LX_O_TRUNC) && ((*File)->Type == LX_S_IFREG))
             Error = LxTmpfsInodeTruncate(Inode, 0);
         if (((*File)->Path == NULL) || (Error != 0))
         {
