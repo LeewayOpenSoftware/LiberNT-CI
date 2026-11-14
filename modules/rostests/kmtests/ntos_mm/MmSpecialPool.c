@@ -391,7 +391,8 @@ START_TEST(MmDriverVerifier)
 
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Flags & DRIVER_VERIFIER_SPECIAL_POOLING, "the driver is verified but the flags 0x%lx do not say special pool\n", Flags);
-    ok((Flags & ~(DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)) == 0,
+    ok((Flags & ~(DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS |
+                  DRIVER_VERIFIER_IO_CHECKING)) == 0,
        "the flags 0x%lx claim options that do not exist\n", Flags);
     ok(EndsAtPageEnd(OTHER_TAG), "blocks of a verified driver are not placed at a page end\n");
 
@@ -498,4 +499,26 @@ START_TEST(MmDriverVerifierWaitAtDispatch)
     KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
     KeLowerIrql(OldIrql);
     ok(FALSE, "the wait was not detected\n");
+}
+
+START_TEST(MmDriverVerifierCompletePending)
+{
+    ULONG Flags = 0;
+    PIRP Irp;
+
+    if (skip(EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & DRIVER_VERIFIER_IO_CHECKING),
+             "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+    {
+        return;
+    }
+
+    Irp = IoAllocateIrp(1, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp == NULL)
+        return;
+
+    Irp->IoStatus.Status = STATUS_PENDING;
+    trace("Completing IRP %p with STATUS_PENDING; expect bug check 0xC9 (0x06)\n", Irp);
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    ok(FALSE, "the completion was not detected\n");
 }

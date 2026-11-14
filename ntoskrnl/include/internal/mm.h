@@ -1006,6 +1006,8 @@ extern const VF_THUNK VfPoolThunks[];
 extern const ULONG VfPoolThunkCount;
 extern const VF_THUNK VfIrqlThunks[];
 extern const ULONG VfIrqlThunkCount;
+extern const VF_THUNK VfIoThunks[];
+extern const ULONG VfIoThunkCount;
 extern BOOLEAN VfPoolTrackingEnabled;
 
 VOID

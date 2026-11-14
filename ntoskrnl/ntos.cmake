@@ -297,6 +297,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/driver.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfio.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfirql.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfpool.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwlog.c
