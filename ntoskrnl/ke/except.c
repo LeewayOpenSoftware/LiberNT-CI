@@ -127,9 +127,9 @@ KiRaiseException(
                 _SEH2_YIELD(return STATUS_INVALID_PARAMETER);
             }
 
-            /* Probe the entire parameters now*/
+            /* Probe the record up to its last parameter: the parameters are pointer-sized */
             Size = (sizeof(EXCEPTION_RECORD) -
-                    ((EXCEPTION_MAXIMUM_PARAMETERS - ParameterCount) * sizeof(ULONG)));
+                    ((EXCEPTION_MAXIMUM_PARAMETERS - ParameterCount) * sizeof(ULONG_PTR)));
             ProbeForRead(ExceptionRecord, Size, sizeof(ULONG));
 
             /* Now make copies in the stack */
