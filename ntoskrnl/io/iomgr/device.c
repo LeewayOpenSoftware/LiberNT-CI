@@ -64,10 +64,14 @@ IopForgetDeviceLocks(
  * one made with the device or a spare one that a file system put there when
  * it dismounted, has no other owner and is freed here.
  *
- * It is left alone if a file system still holds it: a mounted volume, a
- * volume device, a reference, or a VPB the file system said it frees itself.
- * A volume device of a file system also points to the VPB of the real
- * device, and that one is not its own.
+ * Only the device types that IoCreateDevice gives a VPB are looked at. A
+ * volume device of a file system has another type; its Vpb field points to
+ * the VPB of the real device, which is not its own and may be freed
+ * already, so it is not even read.
+ *
+ * The VPB is left alone if a file system still holds it: a mounted volume,
+ * a volume device, a reference, or a VPB the file system said it frees
+ * itself.
  */
 static
 VOID
@@ -76,6 +80,14 @@ IopFreeDeviceVpb(IN PDEVICE_OBJECT DeviceObject)
     PVPB Vpb;
     KIRQL OldIrql;
     BOOLEAN Free = FALSE;
+
+    if ((DeviceObject->DeviceType != FILE_DEVICE_DISK) &&
+        (DeviceObject->DeviceType != FILE_DEVICE_VIRTUAL_DISK) &&
+        (DeviceObject->DeviceType != FILE_DEVICE_CD_ROM) &&
+        (DeviceObject->DeviceType != FILE_DEVICE_TAPE))
+    {
+        return;
+    }
 
     IoAcquireVpbSpinLock(&OldIrql);
     Vpb = DeviceObject->Vpb;
@@ -88,11 +100,11 @@ IopFreeDeviceVpb(IN PDEVICE_OBJECT DeviceObject)
             DeviceObject->Vpb = NULL;
             Free = TRUE;
         }
-        else
+        else if (Vpb->Flags & VPB_MOUNTED)
         {
-            DPRINT1("VPB %p of deleted device %p is still held (references %lu, flags 0x%x, volume device %p), "
-                    "not freed\n",
-                    Vpb, DeviceObject, Vpb->ReferenceCount, Vpb->Flags, Vpb->DeviceObject);
+            DPRINT1("Device %p is deleted with a volume still mounted on it (VPB %p, volume device %p, "
+                    "references %lu); the VPB is not freed\n",
+                    DeviceObject, Vpb, Vpb->DeviceObject, Vpb->ReferenceCount);
         }
     }
     IoReleaseVpbSpinLock(OldIrql);

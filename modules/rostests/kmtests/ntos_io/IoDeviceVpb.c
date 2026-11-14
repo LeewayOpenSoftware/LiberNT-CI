@@ -12,6 +12,7 @@
 
 #define VPB_TAG                 ' BPV'
 #define VPB_ROUNDS              256
+#define VPB_HELD                32
 #define VPB_TOLERANCE           8
 
 static
@@ -53,18 +54,20 @@ QueryLiveVpbs(
     return FALSE;
 }
 
-START_TEST(IoDeviceVpb)
+/* A disk device that nothing mounted: its VPB goes with it */
+static
+VOID
+TestUnusedVpb(VOID)
 {
     PDEVICE_OBJECT Device;
     LONG Before, After;
     NTSTATUS Status;
     ULONG Rounds;
-    KIRQL OldIrql;
-    PVPB Vpb;
 
-    if (skip(QueryLiveVpbs(&Before), "Pool tag information unavailable\n")) return;
+    /* The system disk has a VPB, so the tag is always known: no count means
+     * that the test cannot see anything, and that is a failure, not a skip */
+    ok(QueryLiveVpbs(&Before), "Pool tag information unavailable\n");
 
-    /* A disk device that nothing mounted: its VPB goes with it */
     for (Rounds = 0; Rounds < VPB_ROUNDS; Rounds++)
     {
         Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_DISK, 0, FALSE, &Device);
@@ -89,29 +92,104 @@ START_TEST(IoDeviceVpb)
     ok(After - Before <= VPB_TOLERANCE,
        "%lu disk devices were created and deleted and %ld VPBs stay (before %ld, after %ld)\n",
        Rounds, After - Before, Before, After);
+}
 
-    /* A VPB that is still referenced is not freed with the device */
-    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_DISK, 0, FALSE, &Device);
-    ok_eq_hex(Status, STATUS_SUCCESS);
-    if (skip(NT_SUCCESS(Status) && Device->Vpb != NULL, "No disk device with a VPB\n")) return;
+/* A VPB that is still referenced is not freed with the device */
+static
+VOID
+TestHeldVpb(VOID)
+{
+    PVPB Held[VPB_HELD];
+    PDEVICE_OBJECT Device;
+    LONG Before, After;
+    NTSTATUS Status;
+    ULONG Count, i;
+    KIRQL OldIrql;
 
-    if (!QueryLiveVpbs(&Before)) Before = 0;
+    ok(QueryLiveVpbs(&Before), "Pool tag information unavailable before the held VPBs\n");
 
-    Vpb = Device->Vpb;
-    IoAcquireVpbSpinLock(&OldIrql);
-    Vpb->ReferenceCount++;
-    IoReleaseVpbSpinLock(OldIrql);
+    for (Count = 0; Count < VPB_HELD; Count++)
+    {
+        Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_DISK, 0, FALSE, &Device);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        if (!NT_SUCCESS(Status)) break;
 
-    IoDeleteDevice(Device);
+        Held[Count] = Device->Vpb;
+        if (Held[Count] == NULL)
+        {
+            ok(FALSE, "A disk device has no VPB\n");
+            IoDeleteDevice(Device);
+            break;
+        }
 
-    ok(QueryLiveVpbs(&After), "Pool tag information unavailable after the held VPB\n");
-    ok(After == Before,
-       "A referenced VPB was freed with its device (before %ld, after %ld)\n", Before, After);
+        IoAcquireVpbSpinLock(&OldIrql);
+        Held[Count]->ReferenceCount++;
+        IoReleaseVpbSpinLock(OldIrql);
 
-    /* The device is gone and nothing else knows this VPB: it is ours to free */
-    ExFreePool(Vpb);
+        IoDeleteDevice(Device);
+    }
+
+    ok(QueryLiveVpbs(&After), "Pool tag information unavailable with the held VPBs\n");
+    ok(After - Before >= (LONG)Count - VPB_TOLERANCE,
+       "%lu referenced VPBs lost their devices and only %ld are left (before %ld, after %ld)\n",
+       Count, After - Before, Before, After);
+
+    /* The devices are gone and nothing else knows these VPBs: they are ours to free */
+    for (i = 0; i < Count; i++)
+    {
+        ok_eq_ulong(Held[i]->ReferenceCount, 1UL);
+        ExFreePool(Held[i]);
+    }
 
     ok(QueryLiveVpbs(&After), "Pool tag information unavailable at the end\n");
-    ok(After == Before - 1,
-       "The held VPB was not counted once (before %ld, after %ld)\n", Before, After);
+    ok(After - Before <= VPB_TOLERANCE,
+       "%lu held VPBs were freed by the test and %ld stay (before %ld, after %ld)\n",
+       Count, After - Before, Before, After);
+}
+
+/* A volume device of a file system points to the VPB of the disk. It is not
+ * its own: it stays when the volume device is deleted. */
+static
+VOID
+TestBorrowedVpb(VOID)
+{
+    PDEVICE_OBJECT Disk, Volume;
+    NTSTATUS Status;
+    PVPB Vpb;
+
+    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_DISK, 0, FALSE, &Disk);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status)) return;
+
+    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_DISK_FILE_SYSTEM, 0, FALSE, &Volume);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        IoDeleteDevice(Disk);
+        return;
+    }
+
+    Vpb = Disk->Vpb;
+    ok(Vpb != NULL, "A disk device has no VPB\n");
+    ok_eq_pointer(Volume->Vpb, NULL);
+
+    Volume->Vpb = Vpb;
+    IoDeleteDevice(Volume);
+
+    ok_eq_pointer(Disk->Vpb, Vpb);
+    if (Vpb != NULL)
+    {
+        ok_eq_int(Vpb->Type, IO_TYPE_VPB);
+        ok_eq_pointer(Vpb->RealDevice, Disk);
+        ok_eq_ulong(Vpb->ReferenceCount, 0UL);
+    }
+
+    IoDeleteDevice(Disk);
+}
+
+START_TEST(IoDeviceVpb)
+{
+    TestUnusedVpb();
+    TestHeldVpb();
+    TestBorrowedVpb();
 }
