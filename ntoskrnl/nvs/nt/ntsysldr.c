@@ -758,6 +758,10 @@ MmUnloadSystemImage(IN PVOID ImageHandle)
 
     if (LdrEntry->LoadCount) goto Done;
 
+    VfCheckIrpsAtUnload(LdrEntry);
+    if (LdrEntry->Flags & LDRP_IMAGE_VERIFYING)
+        VfForgetLocksInRange(LdrEntry->DllBase, LdrEntry->SizeOfImage);
+
     VfCheckPoolAtUnload(LdrEntry);
 
     if (LdrEntry->Flags & LDRP_DEBUG_SYMBOLS_LOADED)

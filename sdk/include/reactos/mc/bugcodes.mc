@@ -1416,6 +1416,14 @@ driver changing IRQL and not restoring it to its previous value when
 it has finished its task.
 .
 
+MessageId=0xC9
+Severity=Success
+Facility=System
+SymbolicName=DRIVER_VERIFIER_IOMANAGER_VIOLATION
+Language=English
+The I/O verification of Driver Verifier has detected a fatal error condition.
+.
+
 MessageId=0xCA
 Severity=Success
 Facility=System

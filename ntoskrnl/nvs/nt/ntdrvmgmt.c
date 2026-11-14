@@ -24,7 +24,9 @@ ULONG MmVerifyDriverLevel = -1;
 PVOID MmTriageActionTaken;
 PVOID KernelVerifier;
 
-#define MI_VERIFIER_IMPLEMENTED_LEVEL (DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)
+#define MI_VERIFIER_DEFAULT_LEVEL (DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)
+#define MI_VERIFIER_IMPLEMENTED_LEVEL \
+    (MI_VERIFIER_DEFAULT_LEVEL | DRIVER_VERIFIER_IO_CHECKING | DRIVER_VERIFIER_DEADLOCK_DETECTION)
 
 static BOOLEAN MiVerifierActive;
 
@@ -186,7 +188,7 @@ MiInitializeDriverVerifier(VOID)
     if (MmVerifyDriverBuffer[0] == UNICODE_NULL)
         return;
 
-    Level = (MmVerifyDriverLevel == (ULONG)-1) ? MI_VERIFIER_IMPLEMENTED_LEVEL : MmVerifyDriverLevel;
+    Level = (MmVerifyDriverLevel == (ULONG)-1) ? MI_VERIFIER_DEFAULT_LEVEL : MmVerifyDriverLevel;
     Level &= MI_VERIFIER_IMPLEMENTED_LEVEL;
     if (!MiIsSpecialPoolEnabled())
         Level &= ~DRIVER_VERIFIER_SPECIAL_POOLING;
@@ -197,8 +199,17 @@ MiInitializeDriverVerifier(VOID)
         return;
     }
 
+    if (Level & DRIVER_VERIFIER_DEADLOCK_DETECTION)
+        Level |= DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS;
+
     if (Level & DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)
         VfInitializePoolTracking();
+
+    if (Level & DRIVER_VERIFIER_IO_CHECKING)
+        VfInitializeIrpTracking();
+
+    if (Level & DRIVER_VERIFIER_DEADLOCK_DETECTION)
+        VfInitializeDeadlockDetection();
 
     MmVerifierData.Level = Level;
     MiVerifierActive = TRUE;
@@ -286,7 +297,9 @@ MiVerifyLoadedImage(
             for (; Thunk->u1.Function != 0; Thunk++)
             {
                 if (MiRedirectVerifierThunk(Thunk, VfPoolThunks, VfPoolThunkCount) ||
-                    MiRedirectVerifierThunk(Thunk, VfIrqlThunks, VfIrqlThunkCount))
+                    MiRedirectVerifierThunk(Thunk, VfIrqlThunks, VfIrqlThunkCount) ||
+                    ((MmVerifierData.Level & DRIVER_VERIFIER_IO_CHECKING) &&
+                     MiRedirectVerifierThunk(Thunk, VfIoThunks, VfIoThunkCount)))
                 {
                     Redirected++;
                 }
