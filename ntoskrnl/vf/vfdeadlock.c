@@ -44,7 +44,6 @@ BOOLEAN VfDeadlockDetectionEnabled;
 ULONG VfDeadlockRuleHits;
 ULONG VfDeadlockGraphResets;
 
-static const BOOLEAN VfpDeadlockRulesEnforced = FALSE;
 static KSPIN_LOCK VfpGraphLock;
 static VF_LOCK_NODE VfpNode[VF_LOCK_NODES];
 static VF_LOCK_EDGE VfpEdge[VF_LOCK_EDGES];
@@ -205,6 +204,28 @@ VfpRemoveNodeLocked(
 }
 
 static
+BOOLEAN
+VfpIsDeadlockRuleFatal(
+    _In_ ULONG Rule)
+{
+    switch (Rule)
+    {
+        case VF_DEADLOCK_SELF:
+            return FALSE;
+        case VF_DEADLOCK_HIERARCHY:
+            return FALSE;
+        case VF_DEADLOCK_WRONG_THREAD:
+            return FALSE;
+        case VF_DEADLOCK_UNACQUIRED:
+            return FALSE;
+        case VF_DEADLOCK_DELETED_OWNED:
+            return FALSE;
+        default:
+            return FALSE;
+    }
+}
+
+static
 VOID
 VfpReportDeadlockRule(
     _In_ ULONG Rule,
@@ -215,7 +236,7 @@ VfpReportDeadlockRule(
 {
     ULONG Hits = (ULONG)InterlockedIncrement((PLONG)&VfDeadlockRuleHits);
 
-    if (VfpDeadlockRulesEnforced)
+    if (VfpIsDeadlockRuleFatal(Rule))
     {
         if (Rule == VF_DEADLOCK_WRONG_THREAD || Rule == VF_DEADLOCK_DELETED_OWNED)
             KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, Rule, (ULONG_PTR)Lock, Second, Third);

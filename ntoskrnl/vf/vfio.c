@@ -48,7 +48,6 @@ BOOLEAN VfIrpTrackingEnabled;
 ULONG VfIrpRuleHits;
 ULONG VfIrpUntrackSkipped;
 
-static const BOOLEAN VfpIrpRulesEnforced = FALSE;
 static LIST_ENTRY VfpIrpBucket[VF_IRP_BUCKETS];
 static KSPIN_LOCK VfpIrpLock;
 static ULONG VfpIrpSequence;
@@ -240,6 +239,28 @@ VfpCallerOwnsCurrentLocation(
 }
 
 static
+BOOLEAN
+VfpIsIrpRuleFatal(
+    _In_ ULONG Rule)
+{
+    switch (Rule)
+    {
+        case VF_IO_CALL_CANCEL_ROUTINE:
+            return FALSE;
+        case VF_IO_CALL_QUEUED_BELOW:
+            return FALSE;
+        case VF_IO_COMPLETE_QUEUED_BELOW:
+            return FALSE;
+        case VF_IO_FREE_IN_USE:
+            return FALSE;
+        case VF_IO_REINITIALIZE_IN_USE:
+            return FALSE;
+        default:
+            return FALSE;
+    }
+}
+
+static
 VOID
 VfpReportIrpRule(
     _In_ ULONG Rule,
@@ -248,7 +269,7 @@ VfpReportIrpRule(
 {
     ULONG Hits = (ULONG)InterlockedIncrement((PLONG)&VfIrpRuleHits);
 
-    if (VfpIrpRulesEnforced)
+    if (VfpIsIrpRuleFatal(Rule))
         KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, Rule, (ULONG_PTR)Caller, (ULONG_PTR)Irp, 0);
 
     if (Hits <= VF_IRP_LINES_PRINTED)
