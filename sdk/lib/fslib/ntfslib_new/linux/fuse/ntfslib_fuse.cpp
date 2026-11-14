@@ -1780,9 +1780,9 @@ FormatImage(const char* Path,
             ULONGLONG SectorCount,
             ULONG HiddenSectors,
             ULONG SectorsPerCluster,
-            const char* Label)
+            const char* Label,
+            ULONG BytesPerSector)
 {
-    static const ULONGLONG BytesPerSector = 512;
     static const ULONGLONG NtEpochOffset = 11644473600ULL;
     NtfsFormatHostContext Host = {};
     NtfsFormatParameters Parameters = {};
@@ -1792,6 +1792,8 @@ FormatImage(const char* Path,
     int Result = 1;
 
     if (SectorCount > INT64_MAX / BytesPerSector ||
+        BytesPerSector < 512 || BytesPerSector > 4096 ||
+        (BytesPerSector & (BytesPerSector - 1)) != 0 ||
         !Utf8ToNtfsString(Label, false, true, LabelBuffer) ||
         LabelBuffer.size() > 33)
     {
@@ -1824,6 +1826,8 @@ FormatImage(const char* Path,
 
     Parameters.TotalSectors = SectorCount;
     Parameters.BytesPerSector = BytesPerSector;
+    if (BytesPerSector > NTFS_FORMAT_DEFAULT_MFT_RECORD_SIZE)
+        Parameters.MftRecordSize = BytesPerSector;
     Parameters.SectorsPerCluster = SectorsPerCluster;
     Parameters.SectorsPerTrack = 63;
     Parameters.NumberOfHeads = 255;
@@ -2530,7 +2534,8 @@ ApplySecurityFromPolicy(NtfsFuseState* State, const char* PolicyPath)
 
 static NTSTATUS
 EnsureImageDirectory(NtfsFuseState* State,
-                     const std::string& Directory)
+                     const std::string& Directory,
+                     BOOLEAN CaseSensitive)
 {
     std::string Path = NormalizeImagePath(Directory);
     size_t End = 0;
@@ -2575,6 +2580,8 @@ EnsureImageDirectory(NtfsFuseState* State,
                 TRUE,
                 0,
                 &File);
+            if (NT_SUCCESS(Status) && CaseSensitive)
+                Status = NtfsFileRecordSetCaseSensitiveDirectory(File, TRUE);
             NtfsFileRecordDestroy(File);
             if (!NT_SUCCESS(Status))
                 return Status;
@@ -2951,7 +2958,7 @@ AddLinuxTreeFromList(NtfsFuseState* State,
             std::vector<WCHAR> OldPath, NewPath;
             std::string Existing = NormalizeImagePath(EncodeLinuxName(Fields[8]));
 
-            Status = EnsureImageDirectory(State, Parent);
+            Status = EnsureImageDirectory(State, Parent, TRUE);
             if (NT_SUCCESS(Status) &&
                 (!Utf8ToNtfsPath(Existing.c_str(), OldPath) ||
                  !Utf8ToNtfsPath(Destination.c_str(), NewPath)))
@@ -2995,11 +3002,11 @@ AddLinuxTreeFromList(NtfsFuseState* State,
 
         if (Type == 'd')
         {
-            Status = EnsureImageDirectory(State, Destination);
+            Status = EnsureImageDirectory(State, Destination, TRUE);
         }
         else
         {
-            Status = EnsureImageDirectory(State, Parent);
+            Status = EnsureImageDirectory(State, Parent, TRUE);
             if (NT_SUCCESS(Status))
                 Status = PrepareImageFile(State, Destination);
         }
@@ -3118,7 +3125,7 @@ AddFilesFromList(NtfsFuseState* State,
 
         if (S_ISDIR(SourceStat.st_mode))
         {
-            Status = EnsureImageDirectory(State, Destination);
+            Status = EnsureImageDirectory(State, Destination, FALSE);
         }
         else if (S_ISREG(SourceStat.st_mode))
         {
@@ -3126,7 +3133,7 @@ AddFilesFromList(NtfsFuseState* State,
 
             if (Slash != std::string::npos)
                 Parent = Destination.substr(0, Slash);
-            Status = EnsureImageDirectory(State, Parent);
+            Status = EnsureImageDirectory(State, Parent, FALSE);
             if (NT_SUCCESS(Status))
                 Status = PrepareImageFile(State, Destination);
             if (NT_SUCCESS(Status))
@@ -5041,7 +5048,7 @@ PrintUsage(const char* Program)
 {
     fprintf(stderr,
             "Usage:\n"
-            "  %s --format IMAGE SECTORS HIDDEN_SECTORS SECTORS_PER_CLUSTER LABEL\n"
+            "  %s --format IMAGE SECTORS HIDDEN_SECTORS SECTORS_PER_CLUSTER LABEL [BYTES_PER_SECTOR]\n"
             "  %s [--show-metadata] --probe IMAGE\n"
             "  %s [--show-metadata] --list IMAGE [PATH]\n"
             "  %s [--show-metadata] --list-info IMAGE [PATH]\n"
@@ -5171,8 +5178,9 @@ main(int Argc, char** Argv)
         ULONGLONG SectorCount;
         ULONGLONG HiddenSectors;
         ULONGLONG SectorsPerCluster;
+        ULONGLONG BytesPerSector = 512;
 
-        if (First + 6 != Argc ||
+        if ((First + 6 != Argc && First + 7 != Argc) ||
             ShowMetadata ||
             !ParseUnsigned(Argv[First + 2],
                            INT64_MAX / 512,
@@ -5182,7 +5190,11 @@ main(int Argc, char** Argv)
                            &HiddenSectors) ||
             !ParseUnsigned(Argv[First + 4],
                            128,
-                           &SectorsPerCluster))
+                           &SectorsPerCluster) ||
+            (First + 7 == Argc &&
+             !ParseUnsigned(Argv[First + 6],
+                            4096,
+                            &BytesPerSector)))
         {
             PrintUsage(Argv[0]);
             return 2;
@@ -5191,7 +5203,8 @@ main(int Argc, char** Argv)
                            SectorCount,
                            static_cast<ULONG>(HiddenSectors),
                            static_cast<ULONG>(SectorsPerCluster),
-                           Argv[First + 5]);
+                           Argv[First + 5],
+                           static_cast<ULONG>(BytesPerSector));
     }
 
     if (strcmp(Argv[First], "--probe") == 0)

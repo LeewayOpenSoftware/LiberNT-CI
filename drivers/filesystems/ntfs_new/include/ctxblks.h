@@ -28,6 +28,10 @@ typedef struct _VolumeContextBlock
 {
     PNtfsVolume DiskVolume;
     PDEVICE_OBJECT StorageDevice;
+    /* The volume's VPB, as handed to the mount request. It belongs to the
+     * real volume device; StorageDevice may be a filter attached above it
+     * and then carries a VPB of its own (or none). */
+    PVPB Vpb;
     PFILE_OBJECT StreamFileObject;
     ERESOURCE MetadataResource;
     EX_PUSH_LOCK MetadataGate;
@@ -104,6 +108,15 @@ typedef struct _VolumeContextBlock
      * Protected by NtfsGlobalVolumeListResource, never by a per-volume lock. */
     LIST_ENTRY GlobalListEntry;
     BOOLEAN OnGlobalList;
+    FAST_MUTEX TxfMutex;
+    LIST_ENTRY TxfTransactions;
+    LONG TxfActiveCount;
+    ULONG TxfNextId;
+    EX_PUSH_LOCK TxfStagingLock;
+    BOOLEAN TxfStagingReady;
+    UNICODE_STRING TxfDeviceName;
+    LONG TxfRecoveryPending;
+    PETHREAD TxfRecoveryThread;
 } VolumeContextBlock, *PVolumeContextBlock;
 
 #define NTFS_MAX_MISSING_NAMES 256
@@ -342,6 +355,7 @@ typedef struct _SCB
     SHARE_ACCESS ShareAccess;
     SECTION_OBJECT_POINTERS SectionObjectPointers;
     BOOLEAN SizePending;
+    BOOLEAN ResidentSizeDeferred;
     BOOLEAN Deleted;
     BOOLEAN DeletePending;
     BOOLEAN Unlinked;
@@ -393,6 +407,7 @@ typedef struct _FCB
     BOOLEAN IsVolumeOpen;
     BOOLEAN CleanupComplete;
     BOOLEAN ManageVolumeAccess;
+    BOOLEAN RestoreAccess;
     BOOLEAN DismountedVolume;
     ULONG CreateOptions;
     ACCESS_MASK DesiredAccess;
@@ -458,6 +473,13 @@ typedef struct _FCB
 
     struct _NTFS_PAGING_FILE* PagingFile;
 
+    struct _NTFS_TXF_TRANSACTION* Txf;
+    UNICODE_STRING TxfLogicalName;
+    ULONGLONG TxfReaderReference;
+    PVOID TxfDeleteChange;
+    ULONG TxfInjectIndex;
+    BOOLEAN TxfPhysicalDone;
+
     /* Links this block into the volume's idle list while it is not in use. */
     LIST_ENTRY IdleLink;
 
@@ -503,8 +525,8 @@ NtfsIsBootExecuteWindow(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 }
 
 /*
- * The same window, for callers that hold only the VolCB (the mount set
- * StorageDevice->Vpb to the volume's VPB, vol.c). Without VolumeStateMutex
+ * The same window, for callers that hold only the VolCB (the mount stored
+ * the volume's VPB in VolCB->Vpb, vol.c). Without VolumeStateMutex
  * the answer may be stale by one paging-file creation; PagingFileSeen only
  * goes FALSE -> TRUE, so a racing caller at worst defers one more stamp.
  */
@@ -512,7 +534,7 @@ FORCEINLINE
 BOOLEAN
 NtfsIsVolumeInBootExecuteWindow(_In_ PVolumeContextBlock VolCB)
 {
-    PVPB Vpb = VolCB->StorageDevice ? VolCB->StorageDevice->Vpb : NULL;
+    PVPB Vpb = VolCB->Vpb;
 
     return !VolCB->PagingFileSeen &&
            Vpb && Vpb->RealDevice &&
@@ -733,3 +755,82 @@ NtfsReleaseMetadata(_In_ PVolumeContextBlock VolCB)
     if (Last)
         ExfReleasePushLockExclusive(&VolCB->MetadataGate);
 }
+
+typedef struct _NTFS_TXF_OPEN
+{
+    struct _NTFS_TXF_TRANSACTION* Txf;
+    UNICODE_STRING LogicalName;
+    BOOLEAN Reader;
+    BOOLEAN Staged;
+} NTFS_TXF_OPEN, *PNTFS_TXF_OPEN;
+
+VOID
+NtfsTxfInitializeVolume(_Inout_ PVolumeContextBlock VolCB);
+
+BOOLEAN
+NtfsTxfVolumeSupported(_In_ PVolumeContextBlock VolCB);
+
+NTSTATUS
+NtfsTxfPrepareCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                     _In_ PIRP Irp,
+                     _Inout_ PNTFS_TXF_OPEN Open);
+
+NTSTATUS
+NtfsTxfCheckOpen(_In_ PVolumeContextBlock VolCB,
+                 _Inout_ PFileContextBlock FileCB,
+                 _In_ PIO_STACK_LOCATION IrpSp,
+                 _Inout_ PNTFS_TXF_OPEN Open);
+
+VOID
+NtfsTxfReleaseOpen(_Inout_ PNTFS_TXF_OPEN Open);
+
+VOID
+NtfsTxfReleaseFileContext(_In_ PVolumeContextBlock VolCB,
+                          _Inout_ PFileContextBlock FileCB);
+
+VOID
+NtfsTxfCleanup(_In_ PVolumeContextBlock VolCB,
+               _Inout_ PFileContextBlock FileCB);
+
+NTSTATUS
+NtfsTxfSetDisposition(_In_ PVolumeContextBlock VolCB,
+                      _Inout_ PFileContextBlock FileCB,
+                      _In_ ULONG Flags,
+                      _Out_ PBOOLEAN Handled);
+
+NTSTATUS
+NtfsTxfRename(_In_ PVolumeContextBlock VolCB,
+              _Inout_ PFileContextBlock FileCB,
+              _In_opt_ PFileContextBlock TargetFileCB,
+              _In_ PCUNICODE_STRING LeafName,
+              _In_ BOOLEAN ReplaceIfExists,
+              _In_ BOOLEAN Link);
+
+NTSTATUS
+NtfsTxfCheckNewName(_In_ PVolumeContextBlock VolCB,
+                    _In_ PCUNICODE_STRING NewName);
+
+PCUNICODE_STRING
+NtfsTxfDisplayName(_In_ PFileContextBlock FileCB);
+
+NTSTATUS
+NtfsTxfNormalizedName(_In_ PVolumeContextBlock VolCB,
+                      _In_ PFileContextBlock FileCB,
+                      _Out_writes_(Capacity) PWCHAR Path,
+                      _In_ ULONG Capacity,
+                      _Out_ PULONG PathLength);
+
+BOOLEAN
+NtfsTxfKeepDirectoryEntry(_In_ PVolumeContextBlock VolCB,
+                          _In_ PFileContextBlock FileCB,
+                          _In_reads_(NameLength) PCWSTR Name,
+                          _In_ USHORT NameLength);
+
+NTSTATUS
+NtfsTxfNextDirectoryEntry(_In_ PVolumeContextBlock VolCB,
+                          _Inout_ PFileContextBlock FileCB,
+                          _In_opt_ PUNICODE_STRING FileNameFilter,
+                          _In_ FILE_INFORMATION_CLASS InformationClass,
+                          _Out_writes_bytes_(*Length) PVOID Buffer,
+                          _Inout_ PULONG Length,
+                          _Out_ PULONG EntrySize);

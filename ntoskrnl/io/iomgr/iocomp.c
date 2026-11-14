@@ -886,8 +886,8 @@ NTSTATUS
 NTAPI
 NtSetIoCompletionEx(IN HANDLE IoCompletionPortHandle,
                     IN HANDLE IoCompletionReserveHandle,
-                    IN ULONG_PTR CompletionKey,
-                    IN ULONG_PTR CompletionContext,
+                    IN PVOID CompletionKey,
+                    IN PVOID CompletionContext,
                     IN NTSTATUS CompletionStatus,
                     IN SIZE_T CompletionInformation)
 {
@@ -904,7 +904,7 @@ NtSetIoCompletionEx(IN HANDLE IoCompletionPortHandle,
     Status = ObReferenceObjectByHandle(IoCompletionReserveHandle, 0, ExIoCompletionReserveObjectType, PreviousMode, (PVOID *)&Reserve, NULL);
     if (NT_SUCCESS(Status))
     {
-        Status = IoSetIoCompletion(Queue, (PVOID)CompletionKey, (PVOID)CompletionContext, CompletionStatus, CompletionInformation, TRUE);
+        Status = IoSetIoCompletion(Queue, CompletionKey, CompletionContext, CompletionStatus, CompletionInformation, TRUE);
         ObDereferenceObject(Reserve);
     }
 

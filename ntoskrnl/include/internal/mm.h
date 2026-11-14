@@ -980,6 +980,57 @@ NTAPI
 MmFreeSpecialPool(
     IN PVOID P);
 
+SIZE_T
+NTAPI
+MmQuerySpecialPoolBlockSize(
+    IN PVOID P);
+
+VOID
+NTAPI
+MiCheckSpecialPoolFault(
+    IN PVOID Address,
+    IN BOOLEAN Write,
+    IN PVOID TrapInformation OPTIONAL);
+
+BOOLEAN
+NTAPI
+MiIsSpecialPoolEnabled(VOID);
+
+typedef struct _VF_THUNK
+{
+    ULONG_PTR Pristine;
+    ULONG_PTR Replacement;
+} VF_THUNK, *PVF_THUNK;
+
+extern const VF_THUNK VfPoolThunks[];
+extern const ULONG VfPoolThunkCount;
+extern const VF_THUNK VfIrqlThunks[];
+extern const ULONG VfIrqlThunkCount;
+extern BOOLEAN VfPoolTrackingEnabled;
+
+VOID
+NTAPI
+VfInitializePoolTracking(VOID);
+
+VOID
+NTAPI
+VfUntrackPool(
+    IN PVOID Block);
+
+VOID
+NTAPI
+VfCheckPoolAtUnload(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
+VOID
+NTAPI
+MiInitializeDriverVerifier(VOID);
+
+VOID
+NTAPI
+MiVerifyLoadedImage(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
 /* mm.c **********************************************************************/
 
 NTSTATUS
@@ -1011,6 +1062,18 @@ VOID
 NTAPI
 MmDeleteKernelStack(PVOID Stack,
                     BOOLEAN GuiStack);
+
+PVOID
+NTAPI
+MmCreateExpansionStack(
+    _In_ SIZE_T CommitSize,
+    _In_ BOOLEAN Wait,
+    _Out_ PULONG_PTR StackLimit);
+
+VOID
+NTAPI
+MmDeleteExpansionStack(
+    _In_ PVOID StackTop);
 
 /* balance.c / pagefile.c******************************************************/
 

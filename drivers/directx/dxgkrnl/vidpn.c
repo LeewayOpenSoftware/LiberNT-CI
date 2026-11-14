@@ -6690,6 +6690,7 @@ DxgkpEnsureSharedShadowSurfaceLocked(
             Status = STATUS_UNSUCCESSFUL;
             goto Cleanup;
         }
+        Allocation->PersistentCpuMapping = TRUE;
     }
 
     DxgkpBeginSharedSurfaceMutationLocked(Adapter);
@@ -7995,6 +7996,28 @@ DxgkpEnumerateDisplayModeCandidate(
     return Status;
 }
 
+static VOID
+DxgkpResetCloneTargetModeSets(
+    _Inout_ PDXGKP_VIDPN VidPn,
+    _In_ D3DDDI_VIDEO_PRESENT_SOURCE_ID SourceId)
+{
+    PDXGKP_VIDPN_TARGET_MODESET Targets;
+    ULONG TargetIndex;
+    SIZE_T Path;
+
+    for (Path = 1; Path < VidPn->NumPaths; Path++)
+    {
+        if (VidPn->Paths[Path].VidPnSourceId != SourceId)
+            continue;
+        TargetIndex = DxgkVidPnTargetIndexFromId(VidPn, VidPn->Paths[Path].VidPnTargetId);
+        if (TargetIndex == MAXULONG || (Targets = VidPn->TargetModeSets[TargetIndex]) == NULL)
+            continue;
+        Targets->NumModes = 0;
+        Targets->PinnedModeId = (UINT)-1;
+        Targets->NextModeId = 0;
+    }
+}
+
 /* SharedPrimaryMutex keeps the published mode indices stable across a normal
  * switch. A monitor change invalidates them rather than reusing an old index
  * for a different resolution. Enumeration never mutates the live VidPN. */
@@ -8099,7 +8122,7 @@ DxgkpEnsureDisplayModeCacheLocked(
         if (!NT_SUCCESS(Status))
             goto Cleanup;
     }
-    Cache->CanSetMode = Current->NumPaths == 1 && Adapter->MiniportContext != NULL &&
+    Cache->CanSetMode = Adapter->MiniportContext != NULL &&
                         (!Adapter->MiniportContext->IsBasicDisplayFallback ||
                          Adapter->MiniportContext->BasicDisplayNegotiatesModes) &&
                         DXGK_CB(Adapter, DxgkDdiEnumVidPnCofuncModality) != NULL;
@@ -8113,6 +8136,7 @@ DxgkpEnsureDisplayModeCacheLocked(
         Sources->NumModes = Targets->NumModes = 0;
         Sources->PinnedModeId = Targets->PinnedModeId = (UINT)-1;
         Sources->NextModeId = Targets->NextModeId = 0;
+        DxgkpResetCloneTargetModeSets(Candidate, SourceId);
         Status = DxgkpEnumerateDisplayModeCandidate(Adapter, Candidate, FALSE);
         if (!NT_SUCCESS(Status))
             goto Cleanup;
@@ -8141,6 +8165,7 @@ DxgkpEnsureDisplayModeCacheLocked(
             Targets->NumModes = 0;
             Targets->PinnedModeId = (UINT)-1;
             Targets->NextModeId = 0;
+            DxgkpResetCloneTargetModeSets(Candidate, SourceId);
             Status = DxgkpEnumerateDisplayModeCandidate(Adapter, Candidate, TRUE);
             if (!NT_SUCCESS(Status))
                 goto Cleanup;
@@ -8197,7 +8222,6 @@ DxgkpVideoModeFromDisplayMode(
     VideoMode->ModeIndex = ModeIndex;
     VideoMode->VisScreenWidth = Entry->Mode.Width;
     VideoMode->VisScreenHeight = Entry->Mode.Height;
-    /* The CDD maps dxgkrnl's packed CPU shadow, not the miniport's pitch. */
     VideoMode->ScreenStride = Entry->Mode.Width * 4;
     VideoMode->NumberOfPlanes = 1;
     VideoMode->BitsPerPlane = 32;
@@ -8312,8 +8336,16 @@ DxgkVidPnQueryVideoModes(
         if (DxgkpDisplayModeSupportsGdi(&Cache->Entries[Index]) &&
             (!CurrentOnly || DxgkpDisplayModesEqual(&Cache->Entries[Index].Mode, &Current.DisplayMode)))
         {
-            DxgkpVideoModeFromDisplayMode(&Modes[Output++], &Cache->Entries[Index],
+            DxgkpVideoModeFromDisplayMode(&Modes[Output], &Cache->Entries[Index],
                                           (Cache->Generation << DXGKP_DISPLAY_MODE_INDEX_BITS) | Index);
+            if (CurrentOnly && Adapter->ShadowFb != NULL && !Adapter->ShadowFbPoolOwned &&
+                Adapter->SharedShadowWidth == Modes[Output].VisScreenWidth &&
+                Adapter->SharedShadowHeight == Modes[Output].VisScreenHeight &&
+                Adapter->ShadowFbPitch >= Modes[Output].ScreenStride)
+            {
+                Modes[Output].ScreenStride = Adapter->ShadowFbPitch;
+            }
+            ++Output;
             if (!CurrentOnly && DxgkpDisplayModeGdiAlias(Cache, Index, &Alias))
             {
                 DxgkpVideoModeFromDisplayMode(&Modes[Output], &Cache->Entries[Index],
@@ -8523,6 +8555,7 @@ DxgkVidPnSetVideoMode(
     Targets->NumModes = 0;
     Targets->PinnedModeId = (UINT)-1;
     Targets->NextModeId = 0;
+    DxgkpResetCloneTargetModeSets(Candidate, Cache->SourceId);
     if (Cache->HotPlugGeneration != InterlockedCompareExchange64(&Adapter->HotPlugGeneration, 0, 0))
     {
         Status = STATUS_RETRY;
@@ -8881,6 +8914,39 @@ DxgkpIsAnyVidPnSourceExclusivelyOwned(VOID)
         }
     }
     ExReleaseFastMutex(&g_SourceOwnerMutex);
+    return Owned;
+}
+
+BOOLEAN
+NTAPI
+DxgkVidPnAnySourceExclusivelyOwned(VOID)
+{
+    PLIST_ENTRY Entry;
+    ULONG Index;
+    BOOLEAN Owned = FALSE;
+
+    PAGED_CODE();
+
+    DxgkpEnsureSourceOwnerMutex();
+
+    ExAcquireFastMutex(&g_SourceOwnerMutex);
+    for (Entry = g_SourceOwnerAdapterList.Flink; Entry != &g_SourceOwnerAdapterList && !Owned; Entry = Entry->Flink)
+    {
+        PDXGKP_SOURCE_OWNER_ADAPTER_STATE State = CONTAINING_RECORD(Entry, DXGKP_SOURCE_OWNER_ADAPTER_STATE, Entry);
+
+        for (Index = 0; Index < DXGKP_MAX_SOURCES; Index++)
+        {
+            if (State->Owners[Index].OwnerDevice != NULL &&
+                (State->Owners[Index].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVE ||
+                 State->Owners[Index].OwnerType == D3DKMT_VIDPNSOURCEOWNER_EXCLUSIVEGDI))
+            {
+                Owned = TRUE;
+                break;
+            }
+        }
+    }
+    ExReleaseFastMutex(&g_SourceOwnerMutex);
+
     return Owned;
 }
 

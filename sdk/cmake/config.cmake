@@ -59,7 +59,7 @@ endif()
 
 set(OPTIMIZE "4" CACHE STRING
 "What level of optimization to use.
- 0 = Off
+ 0 = Off (-O0)
  1 = Optimize for size (-Os) with some additional options
  2 = Optimize for size (-Os)
  3 = Optimize debugging experience (-Og)
@@ -213,6 +213,11 @@ cmake_dependent_option(MESA_LLVMPIPE_FROM_SOURCE
                        "Build LLVM and LLVMpipe into mesa_gallium.dll instead of using the LiberNT release payload." OFF
                        "ENABLE_MESA_LLVMPIPE" OFF)
 
+# TODO: build the Linux GPU renderer for riscv64
+cmake_dependent_option(ENABLE_LXGPU
+                       "Whether to build the Linux subsystem GPU renderer (virglrenderer on WGL)." ON
+                       "ARCH STREQUAL amd64 OR ARCH STREQUAL arm64" OFF)
+
 cmake_dependent_option(ENABLE_FEX_ARM64EC
                        "Whether to build the optional FEX ARM64EC emulator for running AMD64 binaries on ARM64." ON
                        "ARCH STREQUAL arm64" OFF)
@@ -344,6 +349,11 @@ endif()
 
 if(CMAKE_C_COMPILER_ID STREQUAL "GNU")
     option(STACK_PROTECTOR "Whether to enable the GCC stack checker while compiling" OFF)
+endif()
+
+if(CMAKE_C_COMPILER_ID STREQUAL "Clang")
+    cmake_dependent_option(ENABLE_KERNEL_UBSAN "Whether to report undefined behavior in kernel-mode modules at run time" OFF
+                           "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 endif()
 
 set(USE_DUMMY_PSEH FALSE CACHE BOOL

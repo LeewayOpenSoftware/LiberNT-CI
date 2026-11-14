@@ -48,6 +48,8 @@ list(APPEND SOURCES
     ${HAL_COMMON_DIR}/acpi/halacpi.c
     ${HAL_COMMON_DIR}/acpi/halpnpdd.c
     ${HAL_COMMON_DIR}/acpi/tables.c
+    ${HAL_COMMON_DIR}/acpi/acpival.c
+    ${HAL_COMMON_DIR}/acpi/acpifault.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/halpnpdd.c
     ${HAL_ARM64_SOURCE_DIR}/acpi/arm64.c
@@ -58,15 +60,22 @@ list(APPEND SOURCES
     ${HAL_ARM64_SOURCE_DIR}/sysinfo.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2711_pci.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2711_vc.c
+    ${HAL_ARM64_SOURCE_DIR}/bcm2712_pci.c
     ${HAL_ARM64_SOURCE_DIR}/bcm2837_intc.c
+    ${HAL_ARM64_SOURCE_DIR}/apple_aic.c
+    ${HAL_ARM64_SOURCE_DIR}/apple_wdt.c
+    ${HAL_ARM64_SOURCE_DIR}/apple_idle.c
+    ${HAL_ARM64_SOURCE_DIR}/apple_idle.S
+    ${HAL_ARM64_SOURCE_DIR}/devtree.c
     ${HAL_ARM64_SOURCE_DIR}/smp.c
     ${HAL_ARM64_SOURCE_DIR}/smp_trampoline.S
     ${HAL_ARM64_SOURCE_DIR}/kernstubs.c
     ${GIC_SOURCES})
 
 if(MSVC)
-    list(REMOVE_ITEM SOURCES ${HAL_ARM64_SOURCE_DIR}/smp_trampoline.S)
-    add_asm_files(hal_arm64_asm ${HAL_ARM64_SOURCE_DIR}/psci.S ${HAL_ARM64_SOURCE_DIR}/smp_trampoline.S)
+    list(REMOVE_ITEM SOURCES ${HAL_ARM64_SOURCE_DIR}/smp_trampoline.S ${HAL_ARM64_SOURCE_DIR}/apple_idle.S)
+    add_asm_files(hal_arm64_asm ${HAL_ARM64_SOURCE_DIR}/psci.S ${HAL_ARM64_SOURCE_DIR}/smp_trampoline.S
+                  ${HAL_ARM64_SOURCE_DIR}/apple_idle.S)
     list(APPEND SOURCES ${hal_arm64_asm})
 endif()
 
@@ -74,22 +83,6 @@ add_library(hal MODULE
     ${SOURCES}
     ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
 reactos_hal_setup(hal 0)
-
-# Ship the explicit HAL name used by the UP-kernel boot entries.
-add_library(halup MODULE
-    ${SOURCES}
-    ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
-reactos_hal_setup(halup 0)
-
-# Ship halmacpi.dll on ARM64 to match the livecd_wim.ini LiveCD_Wim_Macpi boot option
-add_library(halmacpi MODULE
-    ${SOURCES}
-    ${CMAKE_CURRENT_BINARY_DIR}/hal.def)
-reactos_hal_setup(halmacpi 0)
-
-if(MSVC)
-    set_property(GLOBAL APPEND PROPERTY _SPEC2DEF_FORWARD_USERS_hal halup halmacpi)
-endif()
 
 # halacpi.c names PCI devices from the shared tables
 set_source_files_properties(${HAL_ARM64_SOURCE_DIR}/acpi/halacpi.c PROPERTIES

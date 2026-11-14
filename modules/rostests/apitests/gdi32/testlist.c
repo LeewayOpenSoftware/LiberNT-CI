@@ -31,6 +31,7 @@ extern void func_ExtCreatePen(void);
 extern void func_ExtCreateRegion(void);
 extern void func_ExtTextOut(void);
 extern void func_FrameRgn(void);
+extern void func_GdiBatch(void);
 extern void func_GdiConvertBitmap(void);
 extern void func_GdiConvertBrush(void);
 extern void func_GdiConvertDC(void);
@@ -68,6 +69,7 @@ extern void func_PaintRgn(void);
 extern void func_PatBlt(void);
 extern void func_Rectangle(void);
 extern void func_RealizePalette(void);
+extern void func_ScreenRows(void);
 extern void func_ScriptGetFontTags(void);
 extern void func_ScriptGetLogicalWidths(void);
 extern void func_SelectObject(void);
@@ -117,6 +119,7 @@ const struct test winetest_testlist[] =
     { "ExtCreateRegion", func_ExtCreateRegion },
     { "ExtTextOut", func_ExtTextOut },
     { "FrameRgn", func_FrameRgn },
+    { "GdiBatch", func_GdiBatch },
     { "GdiConvertBitmap", func_GdiConvertBitmap },
     { "GdiConvertBrush", func_GdiConvertBrush },
     { "GdiConvertDC", func_GdiConvertDC },
@@ -154,6 +157,7 @@ const struct test winetest_testlist[] =
     { "PatBlt", func_PatBlt },
     { "Rectangle", func_Rectangle },
     { "RealizePalette", func_RealizePalette },
+    { "ScreenRows", func_ScreenRows },
     { "ScriptGetFontTags", func_ScriptGetFontTags },
     { "ScriptGetLogicalWidths", func_ScriptGetLogicalWidths },
     { "SelectObject", func_SelectObject },

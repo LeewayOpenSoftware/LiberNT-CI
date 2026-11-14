@@ -1,6 +1,7 @@
 add_executable(newdev_apitest
     DiRollbackDriver.c
     protocol.c
+    UpdateDriver.c
     testlist.c)
 
 set_module_type(newdev_apitest win32cui)

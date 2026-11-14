@@ -45,6 +45,7 @@
 typedef struct
 {
     LIST_ENTRY ListEntry;
+    BOOL Arrival;
     WCHAR DeviceIds[ANYSIZE_ARRAY];
 } DeviceInstallParams;
 
@@ -80,6 +81,19 @@ InitializeListeners(VOID);
 
 VOID
 BroadcastListenerEvent(
+    _In_ DWORD Code,
+    _In_ PCWSTR Path,
+    _In_reads_bytes_(Size) const BYTE *Data,
+    _In_ UINT Size);
+
+BOOL
+GetPhysicalDeviceObjectName(
+    _In_ PCWSTR DeviceInstance,
+    _Out_writes_bytes_(BufferSize) PWSTR Buffer,
+    _In_ ULONG BufferSize);
+
+BOOL
+QueryListeners(
     _In_ DWORD Code,
     _In_ PCWSTR Path,
     _In_reads_bytes_(Size) const BYTE *Data,
@@ -222,11 +236,7 @@ IsRootDeviceInstanceID(
 
 extern HKEY hEnumKey;
 extern HKEY hClassKey;
-extern BOOL g_IsUISuppressed;
 extern BOOL g_ShuttingDown;
 extern BOOL g_IsMiniNT;
-
-BOOL
-GetSuppressNewUIValue(VOID);
 
 #endif /* _UMPNPMGR_PCH_ */

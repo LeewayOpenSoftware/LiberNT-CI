@@ -155,6 +155,16 @@ static inline HTMLOuterWindow *HTMLOuterWindow_from_IHTMLWindow2(IHTMLWindow2 *i
     return CONTAINING_RECORD(iface, HTMLOuterWindow, base.IHTMLWindow2_iface);
 }
 
+static const IHTMLWindow2Vtbl HTMLWindow2Vtbl;
+static const IHTMLWindow2Vtbl outer_window_HTMLWindow2Vtbl;
+
+HTMLOuterWindow *unsafe_outer_window_from_IHTMLWindow2(IHTMLWindow2 *iface)
+{
+    if(!iface || (iface->lpVtbl != &HTMLWindow2Vtbl && iface->lpVtbl != &outer_window_HTMLWindow2Vtbl))
+        return NULL;
+    return impl_from_IHTMLWindow2(iface)->outer_window;
+}
+
 static void *base_query_interface(HTMLWindow *This, REFIID riid)
 {
     if(IsEqualGUID(&IID_IUnknown, riid))
@@ -2059,11 +2069,29 @@ static HRESULT WINAPI HTMLWindow6_get_maxConnectionsPerServer(IHTMLWindow6 *ifac
     return E_NOTIMPL;
 }
 
-static HRESULT check_target_origin(HTMLInnerWindow *window, const WCHAR *target_origin)
+static HRESULT create_source_origin_uri(IHTMLWindow2 *source, IUri **ret)
+{
+    IHTMLLocation *location;
+    HRESULT hres;
+    BSTR href;
+
+    hres = IHTMLWindow2_get_location(source, &location);
+    if(FAILED(hres))
+        return hres;
+    hres = IHTMLLocation_get_href(location, &href);
+    IHTMLLocation_Release(location);
+    if(FAILED(hres))
+        return hres;
+    hres = create_uri(href, Uri_CREATE_NOFRAG | Uri_CREATE_NO_DECODE_EXTRA_INFO, ret);
+    SysFreeString(href);
+    return hres;
+}
+
+static HRESULT check_target_origin(HTMLInnerWindow *window, const WCHAR *target_origin, IHTMLWindow2 *source)
 {
     BOOL no_port = FALSE;
     IUri *uri, *target;
-    DWORD port, port2;
+    DWORD port, port2, props;
     BSTR bstr, bstr2;
     HRESULT hres;
 
@@ -2073,9 +2101,22 @@ static HRESULT check_target_origin(HTMLInnerWindow *window, const WCHAR *target_
     if(!wcscmp(target_origin, L"*"))
         return S_OK;
 
-    hres = create_uri(target_origin, Uri_CREATE_NOFRAG | Uri_CREATE_NO_DECODE_EXTRA_INFO, &target);
-    if(FAILED(hres))
-        return hres;
+    if(!wcscmp(target_origin, L"/") && dispex_compat_mode(&window->event_target.dispex) >= COMPAT_MODE_IE9) {
+        hres = create_source_origin_uri(source, &target);
+        if(FAILED(hres))
+            return hres;
+    }else {
+        hres = CreateUri(target_origin, Uri_CREATE_NOFRAG | Uri_CREATE_NO_DECODE_EXTRA_INFO, 0, &target);
+        if(FAILED(hres))
+            return hres;
+        hres = IUri_GetProperties(target, &props);
+        if(SUCCEEDED(hres) && !(props & Uri_HAS_HOST))
+            hres = E_INVALIDARG;
+        if(FAILED(hres)) {
+            IUri_Release(target);
+            return hres;
+        }
+    }
 
     if(!(uri = window->base.outer_window->uri)) {
         FIXME("window with no URI\n");
@@ -2140,16 +2181,12 @@ done:
     return hres;
 }
 
-static IHTMLWindow2 *get_source_window(IServiceProvider *caller, compat_mode_t compat_mode)
+IDispatch *get_caller_security_window(IServiceProvider *caller)
 {
     IOleCommandTarget *cmdtarget, *parent_cmdtarget;
     IServiceProvider *parent;
-    IHTMLWindow2 *source;
     HRESULT hres;
     VARIANT var;
-
-    if(!caller)
-        return NULL;
 
     hres = IServiceProvider_QueryService(caller, &IID_IActiveScriptSite, &IID_IOleCommandTarget, (void**)&cmdtarget);
     if(hres != S_OK)
@@ -2176,8 +2213,20 @@ static IHTMLWindow2 *get_source_window(IServiceProvider *caller, compat_mode_t c
         return NULL;
 
     /* Native assumes it's VT_DISPATCH and doesn't check it */
-    hres = IDispatch_QueryInterface(V_DISPATCH(&var), &IID_IHTMLWindow2, (void**)&source);
-    IDispatch_Release(V_DISPATCH(&var));
+    return V_DISPATCH(&var);
+}
+
+static IHTMLWindow2 *get_source_window(IServiceProvider *caller, compat_mode_t compat_mode)
+{
+    IHTMLWindow2 *source;
+    IDispatch *disp;
+    HRESULT hres;
+
+    if(!caller || !(disp = get_caller_security_window(caller)))
+        return NULL;
+
+    hres = IDispatch_QueryInterface(disp, &IID_IHTMLWindow2, (void**)&source);
+    IDispatch_Release(disp);
     if(hres != S_OK)
         return NULL;
 
@@ -2219,15 +2268,19 @@ static HRESULT post_message(HTMLInnerWindow *window, VARIANT msg, BSTR targetOri
     if(V_VT(&transfer) != VT_EMPTY && V_VT(&transfer) != VT_ERROR)
         FIXME("transfer not implemented, ignoring\n");
 
-    hres = check_target_origin(window, targetOrigin);
-    if(hres != S_OK)
-        return SUCCEEDED(hres) ? S_OK : hres;
-
     source = get_source_window(caller, compat_mode);
     if(!source) {
         if(compat_mode < COMPAT_MODE_IE9)
             return E_ABORT;
         IHTMLWindow2_AddRef(source = &window->base.outer_window->base.IHTMLWindow2_iface);
+    }
+
+    hres = check_target_origin(window, targetOrigin, source);
+    if(hres == E_INVALIDARG && compat_mode >= COMPAT_MODE_IE10 && targetOrigin && *targetOrigin)
+        hres = MSHTML_E_DOM_SYNTAX;
+    if(hres != S_OK) {
+        IHTMLWindow2_Release(source);
+        return SUCCEEDED(hres) ? S_OK : hres;
     }
 
     switch(V_VT(&msg)) {
@@ -3551,6 +3604,13 @@ static HRESULT WINAPI WindowDispEx_ToString(IWineJSDispatchHost *iface, BSTR *st
     return IWineJSDispatchHost_ToString(&This->base.inner_window->event_target.dispex.IWineJSDispatchHost_iface, str);
 }
 
+static HRESULT WINAPI WindowDispEx_CreateErrorObject(IWineJSDispatchHost *iface, HRESULT error, IDispatch **ret)
+{
+    HTMLOuterWindow *This = impl_from_IWineJSDispatchHost(iface);
+
+    return IWineJSDispatchHost_CreateErrorObject(&This->base.inner_window->event_target.dispex.IWineJSDispatchHost_iface, error, ret);
+}
+
 static const IWineJSDispatchHostVtbl WindowDispExVtbl = {
     WindowDispEx_QueryInterface,
     WindowDispEx_AddRef,
@@ -3578,6 +3638,7 @@ static const IWineJSDispatchHostVtbl WindowDispExVtbl = {
     WindowDispEx_FillProperties,
     WindowDispEx_GetOuterDispatch,
     WindowDispEx_ToString,
+    WindowDispEx_CreateErrorObject,
 };
 
 static inline HTMLOuterWindow *impl_from_IEventTarget(IEventTarget *iface)

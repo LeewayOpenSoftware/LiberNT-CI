@@ -1,0 +1,13 @@
+Source: Microsoft Fluent UI System Icons
+Repository: https://github.com/microsoft/fluentui-system-icons
+Revision: 4d685f77b2cb8f3f412a74ec8d920c8c91149528
+License: MIT (see LICENSE)
+
+Files used, copied unmodified and rasterized by render-icons.py into the
+user32 IDI_SHIELD icon (win32ss/user/user32/resources/oic_shield.ico):
+- assets/Shield/SVG/ic_fluent_shield_16_filled.svg
+- assets/Shield/SVG/ic_fluent_shield_20_filled.svg
+- assets/Shield/SVG/ic_fluent_shield_24_filled.svg
+- assets/Shield/SVG/ic_fluent_shield_28_filled.svg
+- assets/Shield/SVG/ic_fluent_shield_32_filled.svg
+- assets/Shield/SVG/ic_fluent_shield_48_filled.svg

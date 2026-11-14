@@ -25,6 +25,7 @@
 #include "winbase.h"
 #include "winuser.h"
 #include "ole2.h"
+#include "shlwapi.h"
 #include "mshtmdid.h"
 
 #include "mshtml_private.h"
@@ -433,14 +434,37 @@ static HRESULT WINAPI HTMLAnchorElement_get_pathname(IHTMLAnchorElement *iface, 
 {
     HTMLAnchorElement *This = impl_from_IHTMLAnchorElement(iface);
     nsAString pathname_str;
+    const PRUnichar *pathname;
+    DWORD scheme;
     nsresult nsres;
+    HRESULT hres;
+    IUri *uri;
+    UINT len;
 
     TRACE("(%p)->(%p)\n", This, p);
 
-    /* FIXME: IE prepends a slash for some protocols */
     nsAString_Init(&pathname_str, NULL);
     nsres = nsIDOMHTMLAnchorElement_GetPathname(This->nsanchor, &pathname_str);
-    return return_nsstr(nsres, &pathname_str, p);
+    if(NS_FAILED(nsres))
+        return return_nsstr(nsres, &pathname_str, p);
+
+    nsAString_GetData(&pathname_str, &pathname);
+    if(*pathname == '/' || !(uri = get_anchor_uri(This)))
+        return return_nsstr(nsres, &pathname_str, p);
+
+    hres = IUri_GetScheme(uri, &scheme);
+    IUri_Release(uri);
+    if(FAILED(hres) || (scheme != URL_SCHEME_ABOUT && scheme != URL_SCHEME_FILE))
+        return return_nsstr(nsres, &pathname_str, p);
+
+    len = wcslen(pathname);
+    *p = SysAllocStringLen(NULL, len + 1);
+    if(*p) {
+        (*p)[0] = '/';
+        memcpy(*p + 1, pathname, len * sizeof(WCHAR));
+    }
+    nsAString_Finish(&pathname_str);
+    return *p ? S_OK : E_OUTOFMEMORY;
 }
 
 static HRESULT WINAPI HTMLAnchorElement_put_port(IHTMLAnchorElement *iface, BSTR v)
@@ -759,6 +783,8 @@ static void *HTMLAnchorElement_query_interface(DispatchEx *dispex, REFIID riid)
 
     if(IsEqualGUID(&IID_IHTMLAnchorElement, riid))
         return &This->IHTMLAnchorElement_iface;
+    if(IsEqualGUID(&IID_IHTMLDatabinding, riid))
+        return &This->element.IHTMLDatabinding_iface;
 
     return HTMLElement_query_interface(&This->element.node.event_target.dispex, riid);
 }
@@ -835,6 +861,8 @@ static void HTMLAnchorElement_init_dispex_info(dispex_data_t *info, compat_mode_
         DISPID_IHTMLELEMENT_TOSTRING,
         DISPID_UNKNOWN
     };
+    if(mode < COMPAT_MODE_IE11)
+        dispex_info_add_interface(info, IHTMLDatabinding_tid, NULL);
     HTMLElement_init_dispex_info(info, mode);
     if(mode >= COMPAT_MODE_IE9)
         dispex_info_add_dispids(info, IHTMLElement_tid, elem_dispids);

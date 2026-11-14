@@ -3665,7 +3665,7 @@ static struct PropertyMapEntry PropertyMap[] = {
     { REG_SZ, "Driver", REGSTR_VAL_DRIVER, DEVPROP_TYPE_STRING },
     { REG_DWORD, "ConfigFlags", REGSTR_VAL_CONFIGFLAGS, DEVPROP_TYPE_UINT32 },
     { REG_SZ, "Mfg", REGSTR_VAL_MFG, DEVPROP_TYPE_STRING },
-    { REG_SZ, "FriendlyName", REGSTR_VAL_FRIENDLYNAME },
+    { REG_SZ, "FriendlyName", REGSTR_VAL_FRIENDLYNAME, DEVPROP_TYPE_STRING },
     { REG_SZ, "LocationInformation", REGSTR_VAL_LOCATION_INFORMATION, DEVPROP_TYPE_STRING },
     { 0, NULL, NULL, DEVPROP_TYPE_STRING }, /* SPDRP_PHYSICAL_DEVICE_OBJECT_NAME */
     { REG_DWORD, "Capabilities", REGSTR_VAL_CAPABILITIES, DEVPROP_TYPE_INT32 },
@@ -4556,6 +4556,25 @@ BOOL WINAPI SetupDiSetDevicePropertyW(HDEVINFO devinfo, PSP_DEVINFO_DATA device_
 
     if (IsEqualGUID(&key->fmtid, &DEVPKEY_Device_DeviceDesc.fmtid) && key->pid >= 2 &&
         key->pid - 2 < ARRAY_SIZE(PropertyMap) && PropertyMap[key->pid - 2].devPropType &&
+        (type == DEVPROP_TYPE_EMPTY || type == DEVPROP_TYPE_NULL))
+    {
+        DEVPROPTYPE CurrentType;
+        DWORD CurrentSize = 0;
+
+        error = get_device_property(device, devinfo, device_data, key, &CurrentType, NULL, 0, &CurrentSize, 0);
+        if (error != ERROR_SUCCESS && error != ERROR_INSUFFICIENT_BUFFER)
+        {
+            SetLastError(error);
+            return FALSE;
+        }
+        if (!SetupDiSetDeviceRegistryPropertyW(devinfo, device_data, key->pid - 2, NULL, 0))
+            return FALSE;
+        SetLastError(ERROR_SUCCESS);
+        return TRUE;
+    }
+
+    if (IsEqualGUID(&key->fmtid, &DEVPKEY_Device_DeviceDesc.fmtid) && key->pid >= 2 &&
+        key->pid - 2 < ARRAY_SIZE(PropertyMap) && PropertyMap[key->pid - 2].devPropType &&
         PropertyMap[key->pid - 2].devPropType == type)
     {
         WCHAR guid_string[39];
@@ -4791,21 +4810,6 @@ BOOL WINAPI SetupDiGetDeviceRegistryPropertyW(
             default:
                 break;
         }
-    }
-    else if (Property == SPDRP_PHYSICAL_DEVICE_OBJECT_NAME)
-    {
-        size = (strlenW(devInfo->Data) + 1) * sizeof(WCHAR);
-
-        if (PropertyRegDataType)
-            *PropertyRegDataType = REG_SZ;
-        if (RequiredSize)
-            *RequiredSize = size;
-        if (PropertyBufferSize >= size)
-        {
-            strcpyW((LPWSTR)PropertyBuffer, devInfo->Data);
-        }
-        else
-            lError = ERROR_INSUFFICIENT_BUFFER;
     }
     else
     {

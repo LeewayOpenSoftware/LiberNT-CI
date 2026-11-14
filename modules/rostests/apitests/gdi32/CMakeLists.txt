@@ -31,6 +31,7 @@ list(APPEND SOURCE
     ExtCreatePen.c
     ExtCreateRegion.c
     ExtTextOut.c
+    GdiBatch.c
     FrameRgn.c
     GdiConvertBitmap.c
     GdiConvertBrush.c
@@ -69,6 +70,7 @@ list(APPEND SOURCE
     PatBlt.c
     Rectangle.c
     RealizePalette.c
+    ScreenRows.c
     SelectObject.c
     SetBoundsRect.c
     SetBrushOrgEx.c

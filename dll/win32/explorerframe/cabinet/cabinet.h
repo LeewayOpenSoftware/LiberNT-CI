@@ -123,7 +123,10 @@ private:
     void UpdateAddress();
     void NavigateToAddress(LPCWSTR text);
     void EditAddress();
-    void UpdateStatus();
+    void UpdateStatus(BOOL mouseIdle = FALSE);
+    BOOL DeferSelectionUpdate();
+    void CancelSelectionSize();
+    void UpdateSelectionSize();
     void UpdateCommands();
     IShellView *CurrentView();
     BOOL CommandEnabled(CabinetCommand command);
@@ -194,6 +197,16 @@ private:
     HWND m_DetailsBar;
     HWND m_ViewBar;
     HWND m_Status;
+    POINT m_SelectionMousePosition;
+    IShellItemArray *m_SelectionSizeView;
+    ULONG m_SelectionSizeGeneration;
+    int m_SelectionSizeIndex;
+    int m_SelectionSizeCount;
+    int m_SelectionSizeVisited;
+    DWORD m_SelectionSizeLimit;
+    ULONGLONG m_SelectionSize;
+    BOOL m_SelectionSizeReady;
+    BOOL m_SelectionSizeHaveSize;
     HWND m_DetailsIcon;
     HWND m_DetailsName;
     HWND m_DetailsList;

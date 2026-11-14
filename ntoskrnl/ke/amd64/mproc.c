@@ -13,6 +13,9 @@
 #define NDEBUG
 #include <debug.h>
 
+/* 5 s in 100ns units */
+#define AP_START_WAIT_TIME (5 * 10000000ULL)
+
 /* GLOBALS ****************************************************************/
 
 CODE_SEG("INIT")
@@ -49,6 +52,7 @@ KeStartAllProcessors(VOID)
 {
     PVOID KernelStack = NULL;
     PVOID DPCStack = NULL;
+    PVOID APInfoBase = NULL;
     PAPINFO APInfo = NULL;
     PKPROCESSOR_STATE ProcessorState;
     KDESCRIPTOR Gdtr, Idtr;
@@ -66,10 +70,16 @@ KeStartAllProcessors(VOID)
     {
         KernelStack = NULL;
         DPCStack = NULL;
+        APInfoBase = NULL;
 
-        APInfo = ExAllocatePoolZero(NonPagedPool, sizeof(*APInfo), TAG_KERNEL);
-        if (!APInfo)
+        /* APINFO holds a page aligned IDT and GDT; the pool only promises natural alignment */
+        APInfoBase = ExAllocatePoolZero(NonPagedPool,
+                                        sizeof(*APInfo) + PAGE_SIZE,
+                                        TAG_KERNEL);
+        if (!APInfoBase)
             break;
+
+        APInfo = (PAPINFO)ALIGN_UP_BY((ULONG_PTR)APInfoBase, PAGE_SIZE);
         ASSERT(ALIGN_DOWN_POINTER_BY(APInfo, PAGE_SIZE) == APInfo);
 
         KernelStack = MmCreateKernelStack(FALSE, 0);
@@ -83,6 +93,10 @@ KeStartAllProcessors(VOID)
         /* Clone the boot processor's descriptor tables */
         __sgdt(&Gdtr.Limit);
         __sidt(&Idtr.Limit);
+        ASSERT(Gdtr.Base != NULL);
+        ASSERT(Idtr.Base != NULL);
+        ASSERT(Gdtr.Limit < sizeof(APInfo->Gdt));
+        ASSERT(Idtr.Limit < sizeof(APInfo->Idt));
         RtlCopyMemory(APInfo->Gdt, Gdtr.Base, Gdtr.Limit + 1);
         RtlCopyMemory(APInfo->Idt, Idtr.Base, Idtr.Limit + 1);
 
@@ -97,6 +111,10 @@ KeStartAllProcessors(VOID)
                                             DPCStack,
                                             &APInfo->DoubleFaultStack[DOUBLE_FAULT_STACK_SIZE],
                                             &APInfo->NmiStack[DOUBLE_FAULT_STACK_SIZE]);
+
+        /* Without an ISR stack the processor keeps taking interrupts on the interrupted stack */
+        APInfo->Pcr.Prcb.IsrStack = MmCreateKernelStack(FALSE, 0);
+        if (!APInfo->Pcr.Prcb.IsrStack) DPRINT1("Processor %lu: no ISR stack\n", ProcessorCount);
 
         /* Build the processor state the trampoline restores in long mode */
         ProcessorState = &APInfo->Pcr.Prcb.ProcessorState;
@@ -125,6 +143,7 @@ KeStartAllProcessors(VOID)
         ProcessorState->ContextFrame.EFlags = __readeflags() & ~EFLAGS_INTERRUPT_MASK;
 
         /* Hand the new processor's data to the loader block */
+        ASSERT(KeLoaderBlock->Prcb == 0);
         KeLoaderBlock->KernelStack = (ULONG_PTR)KernelStack;
         KeLoaderBlock->Prcb = (ULONG_PTR)&APInfo->Pcr.Prcb;
         KeLoaderBlock->Thread = (ULONG_PTR)&APInfo->Thread;
@@ -133,14 +152,31 @@ KeStartAllProcessors(VOID)
         if (!HalStartNextProcessor(KeLoaderBlock, ProcessorState))
             break;
 
-        /* Wait for the AP to consume the loader block (KiInitializeKernel) */
-        while (KeLoaderBlock->Prcb != 0)
+        /* Bounded: an AP that never reports in used to hang the boot processor */
         {
-            KeMemoryBarrier();
-            YieldProcessor();
+            ULONGLONG StartTime = KeQueryInterruptTime();
+
+            while (KeLoaderBlock->Prcb != 0)
+            {
+                KeMemoryBarrier();
+                YieldProcessor();
+
+                if ((KeQueryInterruptTime() - StartTime) >= AP_START_WAIT_TIME)
+                    break;
+            }
+
+            if (KeLoaderBlock->Prcb != 0)
+            {
+                KeBugCheckEx(CLOCK_WATCHDOG_TIMEOUT,
+                             0,
+                             0,
+                             (ULONG_PTR)&APInfo->Pcr.Prcb,
+                             ProcessorCount);
+            }
         }
 
         APInfo = NULL;
+        APInfoBase = NULL;
         KernelStack = NULL;
         DPCStack = NULL;
     }
@@ -148,8 +184,49 @@ KeStartAllProcessors(VOID)
     /* The last allocation belongs to a CPU that did not start */
     ProcessorCount--;
 
-    if (APInfo)
-        ExFreePoolWithTag(APInfo, TAG_KERNEL);
+    /* Active publishing happens later: wait for the active set, bounded */
+    if (ProcessorCount != 0)
+    {
+        ULONGLONG StartTime = KeQueryInterruptTime();
+
+        for (;;)
+        {
+            ULONG Index, Pending = 0, FailedIndex = 0;
+            PKPRCB FailedPrcb = NULL;
+
+            for (Index = 1; Index <= ProcessorCount; Index++)
+            {
+                PKPRCB Prcb = KiProcessorBlock[Index];
+
+                if (Prcb == NULL || (KeActiveProcessors & Prcb->SetMember) == 0)
+                {
+                    if (Pending == 0)
+                    {
+                        FailedIndex = Index;
+                        FailedPrcb = Prcb;
+                    }
+                    Pending++;
+                }
+            }
+
+            if (Pending == 0)
+                break;
+
+            if ((KeQueryInterruptTime() - StartTime) >= AP_START_WAIT_TIME)
+            {
+                KeBugCheckEx(CLOCK_WATCHDOG_TIMEOUT,
+                             0,
+                             0,
+                             (ULONG_PTR)FailedPrcb,
+                             FailedIndex);
+            }
+
+            YieldProcessor();
+        }
+    }
+
+    if (APInfoBase)
+        ExFreePoolWithTag(APInfoBase, TAG_KERNEL);
     if (KernelStack)
         MmDeleteKernelStack(KernelStack, FALSE);
     if (DPCStack)

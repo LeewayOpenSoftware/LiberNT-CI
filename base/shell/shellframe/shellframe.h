@@ -213,6 +213,7 @@ protected:
 
     LRESULT DefaultProc(UINT msg, WPARAM wParam, LPARAM lParam);
     void Invalidate(const RECT *rc = NULL);
+    const RECT &PaintRect() const { return m_PaintRect; }
     void PaintCaptionButtons(Canvas &canvas, const RECT &client, COLORREF background);
     RECT CaptionButtonRect(CaptionButton button) const;
     int CaptionButtonsWidth() const;
@@ -242,6 +243,7 @@ private:
     BOOL m_TrackingLeave;
     int m_GlassWidth;
     int m_GlassTop;
+    RECT m_PaintRect;
     HFONT m_GlassFonts[(int)TextStyle::Count];
 };
 

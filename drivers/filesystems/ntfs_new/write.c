@@ -12,6 +12,14 @@
 
 #define NTFS_CACHED_GROWTH_LIMIT     (64 * 1024 * 1024)
 
+typedef struct _NTFS_CACHED_GROWTH
+{
+    LONGLONG FileSize;
+    LONGLONG AllocationSize;
+    ULONGLONG ResidentSize;
+    BOOLEAN ResidentSizeSet;
+} NTFS_CACHED_GROWTH, *PNTFS_CACHED_GROWTH;
+
 /* FUNCTIONS ****************************************************************/
 
 static
@@ -19,7 +27,8 @@ BOOLEAN
 NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
                        _In_ PFileContextBlock FileCB,
                        _In_ PFILE_OBJECT FileObj,
-                       _In_ LONGLONG EndOffset)
+                       _In_ LONGLONG EndOffset,
+                       _Out_ PNTFS_CACHED_GROWTH Growth)
 {
     PFSRTL_ADVANCED_FCB_HEADER Header = NtfsGetCommonFcbHeader(FileCB);
     LONGLONG Allocation = Header->AllocationSize.QuadPart;
@@ -28,6 +37,10 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     NTSTATUS Status;
     BOOLEAN SizePersisted = FALSE;
     BOOLEAN ResidentDeferred = FALSE;
+
+    RtlZeroMemory(Growth, sizeof(*Growth));
+    Growth->FileSize = Header->FileSize.QuadPart;
+    Growth->AllocationSize = Allocation;
 
     if (EndOffset > Allocation)
     {
@@ -63,9 +76,12 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
         }
         else if (EndOffset <= PAGE_SIZE && Allocation == 0)
         {
+            if (DataAttribute && !DataAttribute->IsNonResident)
+                Growth->ResidentSize = DataAttribute->Resident.DataLength;
             Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType,
                                                    FileCB->RequestedStream, EndOffset);
             SizePersisted = NT_SUCCESS(Status);
+            Growth->ResidentSizeSet = SizePersisted;
         }
         else
         {
@@ -102,6 +118,8 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     /* A deferred resident size is written by the paging write itself;
      * NtfsPersistPendingSize only handles non-resident streams. */
     FileCB->StreamCB->SizePending = !SizePersisted && !ResidentDeferred;
+    if (ResidentDeferred)
+        FileCB->StreamCB->ResidentSizeDeferred = TRUE;
     ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
 
     if (FileObj->PrivateCacheMap != NULL)
@@ -109,6 +127,57 @@ NtfsGrowForCachedWrite(_In_ PVolumeContextBlock VolCB,
     FileObj->Flags |= FO_FILE_SIZE_CHANGED;
     FileCB->NotifyFilter |= FILE_NOTIFY_CHANGE_SIZE;
     return TRUE;
+}
+
+static
+VOID
+NtfsUndoCachedGrowth(_In_ PVolumeContextBlock VolCB,
+                     _In_ PFileContextBlock FileCB,
+                     _In_ PFILE_OBJECT FileObj,
+                     _In_ PNTFS_CACHED_GROWTH Growth)
+{
+    PFSRTL_ADVANCED_FCB_HEADER Header = NtfsGetCommonFcbHeader(FileCB);
+    LONGLONG Allocation = Header->AllocationSize.QuadPart;
+    NTSTATUS Status;
+
+    if (Growth->ResidentSizeSet)
+    {
+        NtfsAcquireMetadata(VolCB);
+        Status = NtfsRefreshDirectoryRecord(VolCB, FileCB);
+        if (NT_SUCCESS(Status))
+        {
+            Status = NtfsFileRecordSetFileDataSize(FileCB->FileRec, FileCB->RequestedType,
+                                                   FileCB->RequestedStream, Growth->ResidentSize);
+            InterlockedIncrement(&VolCB->DirGeneration);
+        }
+        NtfsReleaseMetadata(VolCB);
+        if (NT_SUCCESS(Status))
+            Allocation = Growth->AllocationSize;
+    }
+
+    ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+    Header->FileSize.QuadPart = Growth->FileSize;
+    Header->AllocationSize.QuadPart = Allocation;
+    ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+
+    if (FileObj->PrivateCacheMap != NULL)
+        CcSetFileSizes(FileObj, (PCC_FILE_SIZES)&Header->AllocationSize);
+}
+
+static
+VOID
+NtfsSettleResidentSize(_In_ PFileContextBlock FileCB)
+{
+    PAttribute DataAttribute;
+    ULONGLONG RecordSize;
+
+    DataAttribute = NtfsFileRecordGetAttribute(FileCB->FileRec, FileCB->RequestedType, FileCB->RequestedStream);
+    if (!DataAttribute)
+        return;
+    RecordSize = DataAttribute->IsNonResident ? DataAttribute->NonResident.DataSize
+                                              : DataAttribute->Resident.DataLength;
+    if (RecordSize >= (ULONGLONG)NtfsGetCommonFcbHeader(FileCB)->FileSize.QuadPart)
+        FileCB->StreamCB->ResidentSizeDeferred = FALSE;
 }
 
 NTSTATUS
@@ -202,7 +271,8 @@ NTSTATUS
 NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
                     _In_ PFileContextBlock FileCB,
                     _In_ ULONGLONG FileOffset,
-                    _In_ ULONGLONG Length)
+                    _In_ ULONGLONG Length,
+                    _In_ BOOLEAN Durable)
 {
     NtfsRetrievalExtent Extent;
     ULONGLONG ReturnedStartingVcn;
@@ -260,7 +330,9 @@ NtfsCommitFileRange(_In_ PVolumeContextBlock VolCB,
             while (RunLength != 0)
             {
                 Chunk = (ULONG)min(RunLength, 0x40000000ULL);
-                Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Chunk);
+                Status = Durable
+                         ? NtfsDiskCommitRangeKm(VolCB->StorageDevice, DiskOffset, Chunk)
+                         : NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Chunk);
                 if (!NT_SUCCESS(Status))
                     return Status;
                 DiskOffset += Chunk;
@@ -286,6 +358,7 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
 {
     PFSRTL_ADVANCED_FCB_HEADER Header = NtfsGetCommonFcbHeader(FileCB);
     LONGLONG EndOffset = ByteOffset->QuadPart + Length;
+    NTFS_CACHED_GROWTH Growth;
     BOOLEAN Handled = FALSE;
     BOOLEAN Extending;
     NTSTATUS TimestampStatus;
@@ -308,7 +381,7 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
         ExAcquireResourceExclusiveLite(NtfsGetMainResource(FileCB), TRUE);
         if (!FileCB->StreamCB ||
             FileCB->StreamCB->Deleted ||
-            !NtfsGrowForCachedWrite(VolCB, FileCB, FileObj, EndOffset))
+            !NtfsGrowForCachedWrite(VolCB, FileCB, FileObj, EndOffset, &Growth))
         {
             ExReleaseResourceLite(NtfsGetMainResource(FileCB));
             KeLeaveCriticalRegion();
@@ -333,6 +406,8 @@ NtfsCachedWrite(_In_ PVolumeContextBlock VolCB,
         }
         _SEH2_END;
 
+        if (!NT_SUCCESS(*Status) && Extending)
+            NtfsUndoCachedGrowth(VolCB, FileCB, FileObj, &Growth);
         if (NT_SUCCESS(*Status))
         {
             if (EndOffset > Header->ValidDataLength.QuadPart)
@@ -427,6 +502,7 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     PWSTR RequestedStream;
     BOOLEAN ResourceAcquired = FALSE;
     BOOLEAN PagingIo = FALSE;
+    BOOLEAN PurgePagingHeld = FALSE;
     PVOID BounceBuffer = NULL;
     PMDL LockMdl = NULL;
     BOOLEAN LockFailed = FALSE;
@@ -555,12 +631,57 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
               FileObj->SectionObjectPointer->DataSectionObject != NULL))
     {
         IO_STATUS_BLOCK FlushStatus;
+        PLARGE_INTEGER PurgeOffset;
+        ULONG PurgeLength;
 
         CcFlushCache(FileObj->SectionObjectPointer, NULL, 0, &FlushStatus);
         if (!NT_SUCCESS(FlushStatus.Status))
         {
             Status = FlushStatus.Status;
             goto Complete;
+        }
+
+        /*
+         * This non-cached write is about to change the data on disk. Flushing
+         * is not enough: cached pages already present stay stale, and a page
+         * fault during the write could re-read the old bytes. Hold
+         * PagingIoResource exclusive across the purge and the write so no
+         * fault reads stale data in the window, and purge the cache so later
+         * cached and mapped reads re-read the new data. (Matches fastfat's
+         * non-cached write coherency; see AUDIT-R1-IO-CC-FS.md A-3.)
+         */
+        ExAcquireResourceExclusiveLite(NtfsGetPagingIoResource(FileCB), TRUE);
+        PurgePagingHeld = TRUE;
+
+        /*
+         * Purge only the range being written; a whole-file purge throws away
+         * unrelated cached data. An append-at-end-of-file write has no
+         * resolved offset here, so fall back to the whole file for it.
+         */
+        if (ByteOffset.HighPart < 0)
+        {
+            PurgeOffset = NULL;
+            PurgeLength = 0;
+        }
+        else
+        {
+            PurgeOffset = &ByteOffset;
+            PurgeLength = Length;
+        }
+
+        if (!CcPurgeCacheSection(FileObj->SectionObjectPointer, PurgeOffset, PurgeLength, FALSE))
+        {
+            /*
+             * A pinned or mapped view survived the purge, so a later read of
+             * that view can still return the old bytes. Holding
+             * PagingIoResource exclusive across the write blocks faults in the
+             * meantime, but a surviving mapped view is not refreshed. Record
+             * it rather than silently leave stale data; ntfs_new has no
+             * PurgeFailureMode to hard-fail on, as fastfat does.
+             */
+            DPRINT1("NTFS: non-cached write left a mapped/pinned view un-purged: "
+                    "offset %I64d length %lu\n",
+                    ByteOffset.QuadPart, Length);
         }
     }
 
@@ -661,6 +782,8 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                                  &ByteOffset);
         if (TimesSuppressed)
             (void)NtfsFileRecordSetAutomaticTimestampMask(FileRec, FileCB->AutomaticTimestampMask);
+        if (NT_SUCCESS(Status) && PagingIo && FileCB->StreamCB && FileCB->StreamCB->ResidentSizeDeferred)
+            NtfsSettleResidentSize(FileCB);
 
         /* The library updates duplicated $FILE_NAME information through a
          * separate parent record. Invalidate parsed directory snapshots
@@ -749,7 +872,11 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
              BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH)))
         {
-            NTSTATUS CommitStatus = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length);
+            /* Write-through promises the medium (Windows NTFS writes it with
+             * FUA); a paging or non-cached write only promises the device. */
+            NTSTATUS CommitStatus = NtfsCommitFileRange(VolCB, FileCB, (ULONGLONG)ByteOffset.QuadPart, Length,
+                                                        BooleanFlagOn(FileObj->Flags, FO_WRITE_THROUGH) ||
+                                                        BooleanFlagOn(IrpSp->Flags, SL_WRITE_THROUGH));
 
             if (!NT_SUCCESS(CommitStatus) &&
                 (CommitStatus != STATUS_INSUFFICIENT_RESOURCES ||
@@ -765,12 +892,22 @@ NtfsFsdWrite(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         Irp->IoStatus.Information = 0;
     }
 
+    if (PurgePagingHeld)
+    {
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        PurgePagingHeld = FALSE;
+    }
     ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)
                                    : NtfsGetMainResource(FileCB));
     KeLeaveCriticalRegion();
     ResourceAcquired = FALSE;
 
 Complete:
+    if (PurgePagingHeld)
+    {
+        ExReleaseResourceLite(NtfsGetPagingIoResource(FileCB));
+        PurgePagingHeld = FALSE;
+    }
     if (ResourceAcquired)
     {
         ExReleaseResourceLite(PagingIo ? NtfsGetPagingIoResource(FileCB)

@@ -5,6 +5,8 @@
 #include <kbdmou.h>
 #include <ntdd8042.h>
 
+#include "sync_core.h"
+
 /*-----------------------------------------------------
  * Structures
  * --------------------------------------------------*/
@@ -99,6 +101,8 @@ typedef struct _PORT_DEVICE_EXTENSION
 
 	PIRP CurrentIrp;
 	PDEVICE_OBJECT CurrentIrpDevice;
+	KTIMER PacketTimer;
+	KDPC PacketTimeoutDpc;
 } PORT_DEVICE_EXTENSION, *PPORT_DEVICE_EXTENSION;
 
 typedef struct _I8042_DRIVER_EXTENSION
@@ -223,6 +227,7 @@ typedef struct _I8042_HOOK_WORKITEM
 
 #define KBD_READ_MODE      0x20
 #define KBD_WRITE_MODE     0x60
+#define MOUSE_DISAB        0xA7
 #define MOUSE_ENAB         0xA8
 #define MOUSE_LINE_TEST    0xA9
 #define CTRL_SELF_TEST     0xAA
@@ -237,6 +242,9 @@ typedef struct _I8042_HOOK_WORKITEM
 #define KBD_CMD_SET_LEDS   0xED
 #define KBD_CMD_GET_ID     0xF2
 #define KBD_CMD_SET_TYPEMATIC 0xF3
+
+/* A PS/2 device answers a command byte within milliseconds; a packet that stays unacknowledged this long has lost its answer */
+#define I8042_PACKET_TIMEOUT_MS 1000
 
 /*-----------------------------------------------------
  * Keyboard responses
@@ -392,6 +400,23 @@ i8042MouHandlePs2pp(
 VOID
 i8042Flush(
 	IN PPORT_DEVICE_EXTENSION DeviceExtension);
+
+BOOLEAN
+i8042QuiesceMouse(
+	IN PPORT_DEVICE_EXTENSION DeviceExtension);
+
+VOID
+i8042FinishPacket(
+	IN PPORT_DEVICE_EXTENSION DeviceExtension,
+	IN NTSTATUS Result);
+
+VOID
+i8042FailPacket(
+	IN PDEVICE_OBJECT DeviceObject,
+	IN PIRP Irp,
+	IN NTSTATUS Result);
+
+KDEFERRED_ROUTINE i8042PacketTimeoutDpc;
 
 BOOLEAN
 i8042IsrWritePort(

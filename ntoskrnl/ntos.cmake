@@ -149,6 +149,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/dif.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devaction.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devnode.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/devprop.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/plugplay.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/pnpdma.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/pnpmgr/pnpinit.c
@@ -212,6 +213,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heaplarge.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heapdebug.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/track/tagtable.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/special/special.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exinit.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exalloc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exfree.c
@@ -295,6 +297,8 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tm.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/tm/tx.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/driver.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfirql.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfpool.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwlog.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwreg.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/guidobj.c

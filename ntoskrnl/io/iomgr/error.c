@@ -447,7 +447,7 @@ IopLogWorker(IN PVOID Parameter)
 
         /* Now update it again for the size of the actual LPC */
         MessageLength += (FIELD_OFFSET(ELF_API_MSG, IoErrorMessage) -
-                          FIELD_OFFSET(ELF_API_MSG, Unknown[0]));
+                          sizeof(PORT_MESSAGE));
 
         /* Set the total and data lengths */
         Message->Header.u1.s1.TotalLength =

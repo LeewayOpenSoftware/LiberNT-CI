@@ -1421,7 +1421,7 @@ MiDeleteSection(
     else
     {
         if (!Section->Control->Image && Section->Control->FileObject != NULL && !Section->DataScan)
-            MI_ATOMIC_ADD32(&Section->Control->Segment->SectionObjects, -1);
+            MiAdjustSegmentCount(&Section->Control->Segment->SectionObjects, -1);
         MiDereferenceControlArea(Section->Control);
     }
 }
@@ -1552,6 +1552,7 @@ MiCreateSectionWithMode(
     PMI_SECTION_OBJECT Section;
     PVOID BasedAddress = NULL;
     BOOLEAN FileReferenced = FALSE;
+    BOOLEAN FileLocked = FALSE;
     ULONG64 Size = 0;
     ULONG Protection;
     NTSTATUS Status;
@@ -1623,6 +1624,27 @@ MiCreateSectionWithMode(
             ObDereferenceObject(File);
 
         return STATUS_INVALID_FILE_FOR_SECTION;
+    }
+
+    /* B-1: for a file-backed section, acquire the file for section creation as NT's
+     * MmCreateSection does, before the size query and control-area setup, so
+     * FsRtlGetFileSize no longer runs unlocked (serialises against truncation) and the
+     * FS's AcquireForSectionSynchronization / section-sync filter callbacks fire. Held
+     * across the size query and MiCreate{Data,Image}ControlArea, released once the
+     * control area owns its own reference on the file. STATUS_FILE_LOCKED_WITH_WRITERS
+     * is success-severity and proceeds, as upstream does. */
+    if (File != NULL)
+    {
+        Status = FsRtlAcquireToCreateMappedSection(File, SectionPageProtection);
+        if (!NT_SUCCESS(Status))
+        {
+            if (FileReferenced)
+                ObDereferenceObject(File);
+
+            return Status;
+        }
+
+        FileLocked = TRUE;
     }
 
     if (File == NULL)
@@ -1726,6 +1748,11 @@ MiCreateSectionWithMode(
             Status = MiCreateDataControlArea(File, Size, &Control);
     }
 
+    /* B-1: release the create-section file lock now that the control area (which took
+     * its own reference on the file) is built; the remaining work does not touch the file. */
+    if (FileLocked)
+        FsRtlReleaseFile(File);
+
     if (FileReferenced)
         ObDereferenceObject(File);
 
@@ -1754,7 +1781,7 @@ MiCreateSectionWithMode(
     Section->Control = Control;
     Section->DataScan = DataScan;
     if (!Control->Image && Control->FileObject != NULL && !DataScan)
-        MI_ATOMIC_ADD32(&Control->Segment->SectionObjects, 1);
+        MiAdjustSegmentCount(&Control->Segment->SectionObjects, 1);
     Section->SizeOfSection.QuadPart = (LONGLONG)Size;
     Section->InitialProtection = SectionPageProtection;
     Section->Protection = Protection;

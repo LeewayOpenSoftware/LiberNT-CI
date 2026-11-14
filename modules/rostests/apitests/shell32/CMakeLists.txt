@@ -44,6 +44,7 @@ list(APPEND SOURCE
     SHGetFolderPathToken.cpp
     RealShellExecuteEx.cpp
     RecentDocs.cpp
+    RegItemDisplayName.cpp
     RegItemParse.cpp
     SearchFolder.cpp
     SHAppBarMessage.cpp
@@ -70,6 +71,7 @@ list(APPEND SOURCE
     ShellItemProperties.cpp
     Shell_NotifyIconGetRect.cpp
     ShellState.cpp
+    StockIconShield.cpp
     SHGetAttributesFromDataObject.cpp
     SHGetUserDisplayName.cpp
     SHLimitInputEdit.cpp

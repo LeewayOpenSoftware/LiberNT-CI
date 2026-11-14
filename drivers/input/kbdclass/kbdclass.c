@@ -393,9 +393,13 @@ ReadRegistryEntries(
 	if (NT_SUCCESS(Status))
 	{
 		/* Check values */
-		if (DriverExtension->ConnectMultiplePorts != 0
-			&& DriverExtension->ConnectMultiplePorts != 1)
+		if (DriverExtension->ConnectMultiplePorts != 0)
 		{
+			/* win32k reads every keyboard interface on its own and nothing reads the
+			 * grandmaster device, so a system that kept ConnectMultiplePorts=1 from
+			 * an older installation would have no working keyboard at all. */
+			WARN_(CLASS_NAME, "ConnectMultiplePorts=%lu is not supported, using one class device per port\n",
+			      DriverExtension->ConnectMultiplePorts);
 			DriverExtension->ConnectMultiplePorts = DefaultConnectMultiplePorts;
 		}
 		if (DriverExtension->DataQueueSize == 0)
@@ -1097,6 +1101,9 @@ ClassPnp(
 				Status = STATUS_UNSUCCESSFUL;
 			}
 
+			if (DeviceExtension->InterfaceName.Length != 0)
+				if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, TRUE)))
+				    DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
 			if (NT_SUCCESS(Status))
 			{
 				InitializeObjectAttributes(&ObjectAttributes,
@@ -1111,14 +1118,15 @@ ClassPnp(
 									&Iosb,
 									0,
 									0);
+				/* FIXME: creates fail until the start completes, so this open of the class's own interface cannot succeed here */
 				if (!NT_SUCCESS(Status))
+				{
 					DeviceExtension->FileHandle = NULL;
+					Status = STATUS_SUCCESS;
+				}
 			}
 			else
 				DeviceExtension->FileHandle = NULL;
-			if (DeviceExtension->InterfaceName.Length != 0)
-				if (!NT_SUCCESS(IoSetDeviceInterfaceState(&DeviceExtension->InterfaceName, TRUE)))
-				    DPRINT1("IoSetDeviceInterfaceState(%wZ) failed\n", &DeviceExtension->InterfaceName);
 			if (NT_SUCCESS(Status))
 				ClassStartWaitWake(DeviceExtension);
 			Irp->IoStatus.Status = Status;

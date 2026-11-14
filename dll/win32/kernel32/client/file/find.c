@@ -27,7 +27,7 @@ typedef enum _FIND_DATA_TYPE
 {
     FindFile   = 1,
     FindStream = 2,
-    FindName   = 3
+    FindFileName = 3
 } FIND_DATA_TYPE;
 
 /*
@@ -93,11 +93,12 @@ typedef struct _FIND_STREAM_DATA
     PFILE_STREAM_INFORMATION CurrentInfo;
 } FIND_STREAM_DATA, *PFIND_STREAM_DATA;
 
-typedef struct _FIND_NAME_DATA
+typedef struct _FIND_FILE_NAME_DATA
 {
-    PVOID Links;         /* FILE_LINKS_INFORMATION buffer */
-    PVOID CurrentEntry;  /* current FILE_LINK_ENTRY_INFORMATION */
-} FIND_NAME_DATA, *PFIND_NAME_DATA;
+    PWSTR Names;
+    PWSTR NextName;
+    PWSTR End;
+} FIND_FILE_NAME_DATA, *PFIND_FILE_NAME_DATA;
 
 typedef struct _FIND_DATA_HANDLE
 {
@@ -112,7 +113,7 @@ typedef struct _FIND_DATA_HANDLE
     {
         PFIND_FILE_DATA FindFileData;
         PFIND_STREAM_DATA FindStreamData;
-        PFIND_NAME_DATA FindNameData;
+        PFIND_FILE_NAME_DATA FindFileNameData;
     } u;
 
 } FIND_DATA_HANDLE, *PFIND_DATA_HANDLE;
@@ -547,14 +548,10 @@ FindClose(HANDLE hFindFile)
                 break;
             }
 
-            case FindName:
+            case FindFileName:
             {
                 RtlEnterCriticalSection(&FindDataHandle->Lock);
-                if (FindDataHandle->u.FindNameData->Links != NULL)
-                {
-                    RtlFreeHeap(RtlGetProcessHeap(), 0,
-                                FindDataHandle->u.FindNameData->Links);
-                }
+                RtlFreeHeap(RtlGetProcessHeap(), 0, FindDataHandle->u.FindFileNameData->Names);
                 RtlLeaveCriticalSection(&FindDataHandle->Lock);
                 RtlDeleteCriticalSection(&FindDataHandle->Lock);
                 break;
@@ -1087,7 +1084,7 @@ FindFirstStreamW(IN LPCWSTR lpFileName,
                                         BufferSize,
                                         FileStreamInformation);
 
-    } while (Status == STATUS_BUFFER_TOO_SMALL);
+    } while (Status == STATUS_BUFFER_TOO_SMALL || Status == STATUS_BUFFER_OVERFLOW);
 
     if (NT_SUCCESS(Status) && IoStatusBlock.Information == 0)
         Status = STATUS_END_OF_FILE;
@@ -1172,45 +1169,187 @@ FindNextStreamW(IN HANDLE hFindStream,
     }
 }
 
-/*
- * Hard-link name enumeration (FindFirstFileNameW / FindNextFileNameW).
- * The link list comes from FileHardLinkInformation; a file system that does
- * not answer that class fails the call with the mapped status.
- */
-typedef struct _BASEP_FILE_LINK_ENTRY
+static NTSTATUS
+QueryFileHardLinks(IN HANDLE FileHandle,
+                   OUT PFILE_LINKS_INFORMATION *Links)
 {
-    ULONG NextEntryOffset;
-    LONGLONG ParentFileId;
-    ULONG FileNameLength;
-    WCHAR FileName[1];
-} BASEP_FILE_LINK_ENTRY, *PBASEP_FILE_LINK_ENTRY;
+    PFILE_LINKS_INFORMATION Buffer;
+    IO_STATUS_BLOCK IoStatusBlock;
+    ULONG Size = 0x400;
+    ULONG NewSize;
+    NTSTATUS Status;
 
-typedef struct _BASEP_FILE_LINKS
-{
-    ULONG BytesNeeded;
-    ULONG EntriesReturned;
-    BASEP_FILE_LINK_ENTRY Entry;
-} BASEP_FILE_LINKS, *PBASEP_FILE_LINKS;
-
-/* Copies the current link name; ERROR_MORE_DATA reports the characters needed */
-static BOOL
-CopyCurrentLinkName(IN PFIND_NAME_DATA FindNameData,
-                    IN OUT LPDWORD StringLength,
-                    OUT PWSTR LinkName)
-{
-    PBASEP_FILE_LINK_ENTRY Entry = (PBASEP_FILE_LINK_ENTRY)FindNameData->CurrentEntry;
-    DWORD Chars = Entry->FileNameLength / sizeof(WCHAR) + 1;
-
-    if (*StringLength < Chars)
+    for (;;)
     {
-        *StringLength = Chars;
+        Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
+        if (!Buffer)
+            return STATUS_NO_MEMORY;
+
+        Status = NtQueryInformationFile(FileHandle, &IoStatusBlock, Buffer, Size, FileHardLinkInformation);
+        if (Status != STATUS_BUFFER_OVERFLOW)
+            break;
+
+        NewSize = (Buffer->BytesNeeded > Size) ? Buffer->BytesNeeded : Size * 2;
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        if (NewSize <= Size)
+            return STATUS_NO_MEMORY;
+        Size = NewSize;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        return Status;
+    }
+
+    *Links = Buffer;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+QueryLinkParentName(IN HANDLE FileHandle,
+                    IN LONGLONG ParentFileId,
+                    OUT PFILE_NAME_INFORMATION *ParentName)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    IO_STATUS_BLOCK IoStatusBlock;
+    PFILE_NAME_INFORMATION Buffer;
+    UNICODE_STRING FileId;
+    HANDLE ParentHandle;
+    ULONG Size = sizeof(FILE_NAME_INFORMATION) + MAX_PATH * sizeof(WCHAR);
+    ULONG NewSize;
+    NTSTATUS Status;
+
+    FileId.Length = FileId.MaximumLength = sizeof(ParentFileId);
+    FileId.Buffer = (PWSTR)&ParentFileId;
+    InitializeObjectAttributes(&ObjectAttributes, &FileId, 0, FileHandle, NULL);
+
+    Status = NtOpenFile(&ParentHandle,
+                        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                        &ObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_OPEN_BY_FILE_ID | FILE_SYNCHRONOUS_IO_NONALERT);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    for (;;)
+    {
+        Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
+        if (!Buffer)
+        {
+            Status = STATUS_NO_MEMORY;
+            break;
+        }
+
+        Status = NtQueryInformationFile(ParentHandle, &IoStatusBlock, Buffer, Size, FileNameInformation);
+        if (Status != STATUS_BUFFER_OVERFLOW)
+            break;
+
+        NewSize = FIELD_OFFSET(FILE_NAME_INFORMATION, FileName) + Buffer->FileNameLength;
+        if (NewSize <= Size)
+            NewSize = Size * 2;
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        Buffer = NULL;
+        if (NewSize <= Size)
+        {
+            Status = STATUS_NO_MEMORY;
+            break;
+        }
+        Size = NewSize;
+    }
+
+    NtClose(ParentHandle);
+
+    if (!NT_SUCCESS(Status))
+    {
+        if (Buffer)
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        return Status;
+    }
+
+    *ParentName = Buffer;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS
+BuildLinkNames(IN HANDLE FileHandle,
+               IN PFILE_LINKS_INFORMATION Links,
+               OUT PWSTR *Names,
+               OUT PWSTR *End)
+{
+    PFILE_LINK_ENTRY_INFORMATION Entry = &Links->Entry;
+    PFILE_NAME_INFORMATION ParentName;
+    PWSTR Buffer = NULL;
+    PWSTR NewBuffer;
+    SIZE_T Used = 0;
+    SIZE_T Needed;
+    SIZE_T ParentLength;
+    ULONG Index;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    for (Index = 0; Index < Links->EntriesReturned; Index++)
+    {
+        Status = QueryLinkParentName(FileHandle, Entry->ParentFileId, &ParentName);
+        if (!NT_SUCCESS(Status))
+            break;
+
+        ParentLength = ParentName->FileNameLength / sizeof(WCHAR);
+        if (ParentLength != 0 && ParentName->FileName[ParentLength - 1] == L'\\')
+            ParentLength--;
+
+        Needed = Used + ParentLength + 1 + Entry->FileNameLength + 1;
+        NewBuffer = Buffer ? RtlReAllocateHeap(RtlGetProcessHeap(), 0, Buffer, Needed * sizeof(WCHAR))
+                           : RtlAllocateHeap(RtlGetProcessHeap(), 0, Needed * sizeof(WCHAR));
+        if (!NewBuffer)
+        {
+            RtlFreeHeap(RtlGetProcessHeap(), 0, ParentName);
+            Status = STATUS_NO_MEMORY;
+            break;
+        }
+        Buffer = NewBuffer;
+
+        RtlCopyMemory(Buffer + Used, ParentName->FileName, ParentLength * sizeof(WCHAR));
+        Used += ParentLength;
+        Buffer[Used++] = L'\\';
+        RtlCopyMemory(Buffer + Used, Entry->FileName, Entry->FileNameLength * sizeof(WCHAR));
+        Used += Entry->FileNameLength;
+        Buffer[Used++] = UNICODE_NULL;
+        RtlFreeHeap(RtlGetProcessHeap(), 0, ParentName);
+
+        if (Entry->NextEntryOffset == 0)
+            break;
+        Entry = (PFILE_LINK_ENTRY_INFORMATION)((ULONG_PTR)Entry + Entry->NextEntryOffset);
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        if (Buffer)
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+        return Status;
+    }
+
+    *Names = Buffer;
+    *End = Buffer + Used;
+    return STATUS_SUCCESS;
+}
+
+static BOOL
+CopyLinkName(IN PCWSTR Name,
+             IN OUT LPDWORD StringLength,
+             OUT PWSTR LinkName)
+{
+    SIZE_T Length = wcslen(Name) + 1;
+
+    if (*StringLength < Length)
+    {
+        *StringLength = (DWORD)Length;
         SetLastError(ERROR_MORE_DATA);
         return FALSE;
     }
 
-    RtlCopyMemory(LinkName, Entry->FileName, Entry->FileNameLength);
-    LinkName[Entry->FileNameLength / sizeof(WCHAR)] = UNICODE_NULL;
-    *StringLength = Chars;
+    RtlCopyMemory(LinkName, Name, Length * sizeof(WCHAR));
+    *StringLength = (DWORD)Length;
     return TRUE;
 }
 
@@ -1224,17 +1363,18 @@ FindFirstFileNameW(IN LPCWSTR lpFileName,
                    IN OUT LPDWORD StringLength,
                    OUT PWSTR LinkName)
 {
-    PFIND_DATA_HANDLE FindDataHandle = NULL;
-    PFIND_NAME_DATA FindNameData = NULL;
+    PFIND_DATA_HANDLE FindDataHandle;
+    PFIND_FILE_NAME_DATA FindFileNameData;
+    PFILE_LINKS_INFORMATION Links;
     OBJECT_ATTRIBUTES ObjectAttributes;
     IO_STATUS_BLOCK IoStatusBlock;
     UNICODE_STRING NtFilePath;
-    HANDLE FileHandle = NULL;
+    HANDLE FileHandle;
+    PWSTR Names = NULL;
+    PWSTR End = NULL;
     NTSTATUS Status;
-    ULONG BufferSize = 0x1000;
-    BOOLEAN Locked = FALSE;
 
-    if (!lpFileName || dwFlags != 0 || !StringLength || !LinkName)
+    if (dwFlags != 0)
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return INVALID_HANDLE_VALUE;
@@ -1247,15 +1387,12 @@ FindFirstFileNameW(IN LPCWSTR lpFileName,
     }
 
     InitializeObjectAttributes(&ObjectAttributes, &NtFilePath, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    Status = NtCreateFile(&FileHandle,
-                          FILE_READ_ATTRIBUTES | SYNCHRONIZE,
-                          &ObjectAttributes,
-                          &IoStatusBlock,
-                          NULL, 0,
-                          FILE_SHARE_DELETE | FILE_SHARE_READ | FILE_SHARE_WRITE,
-                          FILE_OPEN,
-                          FILE_NON_DIRECTORY_FILE | FILE_SYNCHRONOUS_IO_NONALERT,
-                          NULL, 0);
+    Status = NtOpenFile(&FileHandle,
+                        FILE_READ_ATTRIBUTES | SYNCHRONIZE,
+                        &ObjectAttributes,
+                        &IoStatusBlock,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        FILE_SYNCHRONOUS_IO_NONALERT);
     RtlFreeHeap(RtlGetProcessHeap(), 0, NtFilePath.Buffer);
     if (!NT_SUCCESS(Status))
     {
@@ -1263,130 +1400,96 @@ FindFirstFileNameW(IN LPCWSTR lpFileName,
         return INVALID_HANDLE_VALUE;
     }
 
-    FindDataHandle = RtlAllocateHeap(RtlGetProcessHeap(),
-                                     HEAP_ZERO_MEMORY,
-                                     sizeof(FIND_DATA_HANDLE) + sizeof(FIND_NAME_DATA));
-    if (!FindDataHandle)
+    Status = QueryFileHardLinks(FileHandle, &Links);
+    if (NT_SUCCESS(Status))
     {
-        Status = STATUS_NO_MEMORY;
-        goto Cleanup;
+        Status = BuildLinkNames(FileHandle, Links, &Names, &End);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Links);
+    }
+    NtClose(FileHandle);
+
+    if (NT_SUCCESS(Status) && Names == End)
+        Status = STATUS_END_OF_FILE;
+    if (!NT_SUCCESS(Status))
+    {
+        if (Names)
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Names);
+        BaseSetLastNTError(Status);
+        return INVALID_HANDLE_VALUE;
     }
 
-    FindDataHandle->Type = FindName;
-    FindDataHandle->u.FindNameData = (PFIND_NAME_DATA)(FindDataHandle + 1);
-    FindNameData = FindDataHandle->u.FindNameData;
+    if (!CopyLinkName(Names, StringLength, LinkName))
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Names);
+        return INVALID_HANDLE_VALUE;
+    }
+
+    FindDataHandle = RtlAllocateHeap(RtlGetProcessHeap(),
+                                     HEAP_ZERO_MEMORY,
+                                     sizeof(FIND_DATA_HANDLE) + sizeof(FIND_FILE_NAME_DATA));
+    if (!FindDataHandle)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Names);
+        SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+        return INVALID_HANDLE_VALUE;
+    }
 
     Status = RtlInitializeCriticalSection(&FindDataHandle->Lock);
     if (!NT_SUCCESS(Status))
     {
         RtlFreeHeap(RtlGetProcessHeap(), 0, FindDataHandle);
-        FindDataHandle = NULL;
-        goto Cleanup;
-    }
-    Locked = TRUE;
-
-    /* Capture every link name, growing the buffer on demand */
-    for (;;)
-    {
-        PVOID Links = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, BufferSize);
-        if (!Links)
-        {
-            Status = STATUS_NO_MEMORY;
-            break;
-        }
-
-        Status = NtQueryInformationFile(FileHandle, &IoStatusBlock, Links, BufferSize, FileHardLinkInformation);
-        if (Status == STATUS_BUFFER_OVERFLOW || Status == STATUS_BUFFER_TOO_SMALL)
-        {
-            ULONG Needed = ((PBASEP_FILE_LINKS)Links)->BytesNeeded;
-            RtlFreeHeap(RtlGetProcessHeap(), 0, Links);
-            BufferSize = (Needed > BufferSize) ? Needed : BufferSize * 2;
-            if (BufferSize > 0x100000)
-            {
-                Status = STATUS_INSUFFICIENT_RESOURCES;
-                break;
-            }
-            continue;
-        }
-
-        FindNameData->Links = Links;
-        break;
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Names);
+        BaseSetLastNTError(Status);
+        return INVALID_HANDLE_VALUE;
     }
 
-    if (NT_SUCCESS(Status) && ((PBASEP_FILE_LINKS)FindNameData->Links)->EntriesReturned == 0)
-        Status = STATUS_END_OF_FILE;
+    FindDataHandle->Type = FindFileName;
+    FindDataHandle->u.FindFileNameData = (PFIND_FILE_NAME_DATA)(FindDataHandle + 1);
+    FindFileNameData = FindDataHandle->u.FindFileNameData;
+    FindFileNameData->Names = Names;
+    FindFileNameData->NextName = Names + wcslen(Names) + 1;
+    FindFileNameData->End = End;
 
-    if (NT_SUCCESS(Status))
-    {
-        FindNameData->CurrentEntry = &((PBASEP_FILE_LINKS)FindNameData->Links)->Entry;
-        if (!CopyCurrentLinkName(FindNameData, StringLength, LinkName))
-        {
-            /* ERROR_MORE_DATA: no handle is returned for the first call */
-            RtlFreeHeap(RtlGetProcessHeap(), 0, FindNameData->Links);
-            RtlDeleteCriticalSection(&FindDataHandle->Lock);
-            RtlFreeHeap(RtlGetProcessHeap(), 0, FindDataHandle);
-            NtClose(FileHandle);
-            return INVALID_HANDLE_VALUE;
-        }
-        NtClose(FileHandle);
-        return (HANDLE)FindDataHandle;
-    }
-
-Cleanup:
-    if (FindDataHandle)
-    {
-        if (FindNameData->Links)
-            RtlFreeHeap(RtlGetProcessHeap(), 0, FindNameData->Links);
-        if (Locked)
-            RtlDeleteCriticalSection(&FindDataHandle->Lock);
-        RtlFreeHeap(RtlGetProcessHeap(), 0, FindDataHandle);
-    }
-    if (FileHandle)
-        NtClose(FileHandle);
-    BaseSetLastNTError(Status);
-    return INVALID_HANDLE_VALUE;
+    return (HANDLE)FindDataHandle;
 }
 
 /*
  * @implemented
  */
 BOOL
-WINAPI
+APIENTRY
 FindNextFileNameW(IN HANDLE hFindStream,
                   IN OUT LPDWORD StringLength,
                   OUT PWSTR LinkName)
 {
     PFIND_DATA_HANDLE FindDataHandle = (PFIND_DATA_HANDLE)hFindStream;
-    PFIND_NAME_DATA FindNameData;
-    PBASEP_FILE_LINK_ENTRY Entry;
-    BOOL Ret;
+    PFIND_FILE_NAME_DATA FindFileNameData;
+    BOOL Result;
 
     if (hFindStream == NULL || hFindStream == INVALID_HANDLE_VALUE ||
-        FindDataHandle->Type != FindName || !StringLength || !LinkName)
+        hFindStream == FIND_DEVICE_HANDLE || FindDataHandle->Type != FindFileName)
     {
         SetLastError(ERROR_INVALID_HANDLE);
         return FALSE;
     }
 
     RtlEnterCriticalSection(&FindDataHandle->Lock);
-    FindNameData = FindDataHandle->u.FindNameData;
-    Entry = (PBASEP_FILE_LINK_ENTRY)FindNameData->CurrentEntry;
 
-    if (Entry->NextEntryOffset == 0)
+    FindFileNameData = FindDataHandle->u.FindFileNameData;
+    if (FindFileNameData->NextName >= FindFileNameData->End)
     {
-        RtlLeaveCriticalSection(&FindDataHandle->Lock);
         SetLastError(ERROR_HANDLE_EOF);
-        return FALSE;
+        Result = FALSE;
+    }
+    else
+    {
+        Result = CopyLinkName(FindFileNameData->NextName, StringLength, LinkName);
+        if (Result)
+            FindFileNameData->NextName += wcslen(FindFileNameData->NextName) + 1;
     }
 
-    /* Try the next name first; keep the position if the buffer is too short */
-    FindNameData->CurrentEntry = (PVOID)((ULONG_PTR)Entry + Entry->NextEntryOffset);
-    Ret = CopyCurrentLinkName(FindNameData, StringLength, LinkName);
-    if (!Ret)
-        FindNameData->CurrentEntry = Entry;
-
     RtlLeaveCriticalSection(&FindDataHandle->Lock);
-    return Ret;
+    return Result;
 }
 
 /* EOF */

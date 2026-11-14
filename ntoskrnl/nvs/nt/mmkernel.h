@@ -57,6 +57,7 @@ extern ULONG MmReadClusterSize;
 extern ULONG MmCritsectTimeoutSeconds;
 extern ULONG MmConsumedPoolPercentage;
 extern ULONG MmSpecialPoolTag;
+extern ULONG MmSpecialPoolCatchOverruns;
 extern ULONG MmProtectFreedNonPagedPool;
 extern ULONG MmVerifyDriverBufferLength;
 extern ULONG MmVerifyDriverBufferType;

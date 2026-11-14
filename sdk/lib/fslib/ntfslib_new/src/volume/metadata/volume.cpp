@@ -160,6 +160,14 @@ Volume::SetVolumeFlags(_In_ USHORT Set,
     if (IsReadOnly)
         return STATUS_MEDIA_WRITE_PROTECTED;
 
+    /* The record write below would mark the volume dirty under this stale copy */
+    if (DirtyTracking && !DirtyMarked)
+    {
+        Status = MarkDirtyBeforeWrite();
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     Status = MFT->GetFileAttributeFromFileRecordNumber(TypeVolumeInformation,
                                                        NULL,
                                                        _Volume,
@@ -243,7 +251,10 @@ Volume::MarkDirtyBeforeWrite()
     if (NT_SUCCESS(Status))
         Status = FlushVolume();
     if (!NT_SUCCESS(Status))
+    {
         DirtyMarked = FALSE;
+        NoteLostWrite(Status);
+    }
     return Status;
 }
 
@@ -329,6 +340,27 @@ Volume::NoteCorruption()
         DPRINT1("NTFS: corrupt on-disk structure found; the volume stays dirty\n");
         CorruptionNoted = TRUE;
     }
+}
+
+void
+Volume::NoteLostWrite(_In_ NTSTATUS Status)
+{
+    if (!CorruptionNoted)
+    {
+        DPRINT1("NTFS: a metadata write failed (status %lx); the volume stays dirty\n", Status);
+        CorruptionNoted = TRUE;
+    }
+}
+
+BOOLEAN
+Volume::ReportsDirty(_In_ USHORT Flags)
+{
+    if (CorruptionNoted)
+        return TRUE;
+    if (!(Flags & VOL_DIRTY))
+        return FALSE;
+    /* The flag a read-write mount sets for itself is not a check request */
+    return !DirtyTracking || DirtyRetained;
 }
 
 void

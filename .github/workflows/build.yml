@@ -3,6 +3,8 @@ on:
   push:
     branches-ignore: [main-nt10]
   pull_request:
+  # Manual restart for a branch whose push event was lost (GitHub incident of 2026-11-12).
+  workflow_dispatch:
 
 concurrency:
   group: build-${{ github.ref }}
@@ -67,7 +69,7 @@ jobs:
       run: |
         echo "CCACHE_BASEDIR=${{github.workspace}}" >> $GITHUB_ENV
         echo "CCACHE_DIR=${{github.workspace}}/ccache" >> $GITHUB_ENV
-        echo "CCACHE_MAXSIZE=1G" >> $GITHUB_ENV
+        echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
         echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
 
     - name: Allocate the Leeway Build Identity
@@ -197,6 +199,10 @@ jobs:
       timeout-minutes: 10
       run: python3 -u sdk/tools/check-forwarder-loops.py ${{steps.configure.outputs.outdir}}
 
+    - name: Check the FreeLoader size
+      # The PC loader stops itself at boot when its PE exceeds MAX_FREELDR_PE_SIZE.
+      run: python3 -u sdk/tools/check-freeldr-size.py ${{steps.configure.outputs.outdir}}
+
   build-rostests:
     # Compile the test suite (modules/rostests) with clang for amd64. A
     # separate build, because ENABLE_ROSTESTS also changes what goes into
@@ -272,6 +278,46 @@ jobs:
           ninja -C "$OUT" -k0
         fi
 
+    - name: Collect the kmtests binaries
+      # kmtest.exe + kmtest_drv.sys (and the standalone test drivers) for a lab
+      # run against the LiberNT.img of the same commit; the images themselves
+      # are built without ENABLE_ROSTESTS and carry no kmtest.
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p kmtests-out
+        find "$OUT/modules/rostests/kmtests" -type f \( -name '*.exe' -o -name '*.sys' -o -name '*.dll' -o -name '*.inf' \) -exec cp -v {} kmtests-out/ \;
+        ls -l kmtests-out
+
+    - name: Upload the kmtests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: kmtests-clang-amd64-${{github.sha}}
+        path: kmtests-out/
+        if-no-files-found: error
+
+    - name: Collect the apitests binaries
+      # Every *_apitest.exe, native amd64 and the WoW64 i386 build, for a lab run
+      # against the LiberNT.img of the same commit; the images carry no apitest.
+      run: |
+        OUT=${{steps.configure.outputs.outdir}}
+        mkdir -p apitests-out/amd64 apitests-out/wow64
+        find "$OUT/modules/rostests/apitests" -type f -name '*_apitest.exe' -exec cp -v {} apitests-out/amd64/ \;
+        if [ -d "$OUT/_wow64_i386/modules/rostests/apitests" ]; then
+          find "$OUT/_wow64_i386/modules/rostests/apitests" -type f -name '*_apitest.exe' -exec cp -v {} apitests-out/wow64/ \;
+        fi
+        find "$OUT/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/amd64/ \;
+        if [ -d "$OUT/_wow64_i386/modules/rostests/tests" ]; then
+          find "$OUT/_wow64_i386/modules/rostests/tests" -type f \( -name 'lowil.exe' -o -name 'elevadm.exe' \) -exec cp -v {} apitests-out/wow64/ \;
+        fi
+        ls -lR apitests-out | head -100
+
+    - name: Upload the apitests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: apitests-clang-amd64-${{github.sha}}
+        path: apitests-out/
+        if-no-files-found: error
+
     - name: Save ccache
       if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
       uses: actions/cache/save@v5
@@ -307,7 +353,7 @@ jobs:
 
     - name: Build
       run: |
-        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_lookup_index_cache_test ntfslib_mft_mirror_fallback_test ntfslib_corrupt_runlist_dirty_test ntfslib_fuse
+        cmake --build build/ntfslib-linux --target ntfslib_check_split_trim_test ntfslib_size_persist_times_test ntfslib_lookup_index_cache_test ntfslib_mft_mirror_fallback_test ntfslib_corrupt_runlist_dirty_test ntfslib_lost_write_dirty_test ntfslib_fuse
 
     - name: Run the host tests
       env:
@@ -315,7 +361,7 @@ jobs:
         UBSAN_OPTIONS: print_stacktrace=1
         NTFSLIB_KEEP_FAILED: ${{ runner.temp }}/ntfslib-failed
       run: |
-        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty|full_base_growth"
+        ctest --test-dir build/ntfslib-linux --output-on-failure -R "check_split_trim|check_claim|grow_fragmented_index|size_persist_times|verify_shape|check_attrlist|data_mapping_spill|check_shape|index_spill|crash_consistency|lookup_index_cache|mft_mirror_fallback|corrupt_runlist_dirty|lost_write_dirty|full_base_growth"
 
     - name: Upload the images of failed host tests
       if: ${{ failure() }}
@@ -360,6 +406,44 @@ jobs:
         UBSAN_OPTIONS: print_stacktrace=1
       run: |
         ctest --test-dir build/cmlib-host --output-on-failure -R "cmlib_mark_dirty|cmlib_dirty_arith"
+
+  mmcc-host-tests:
+    # Host tests of the NVS memory manager core on a simulated machine: page
+    # tables, faults, sections, the cache manager on top, system regions and
+    # the guarded special pool region, for amd64, arm64 and high memory, plus
+    # ASan/UBSan and TSan builds of the light test set.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+    - name: Source checkout
+      uses: actions/checkout@v6
+      with:
+        sparse-checkout: |
+          ntoskrnl
+          sdk/include
+          subsystems/linux/lxcore
+          submodules/host-tests
+
+    - name: Install host build tools
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc cmake ninja-build
+
+    - name: Configure
+      run: |
+        cmake -S submodules/host-tests/mmcc/nvs/core -B build/mmcc-host -G Ninja -DCMAKE_BUILD_TYPE=Debug
+
+    - name: Build
+      run: |
+        cmake --build build/mmcc-host
+
+    - name: Run the host tests
+      env:
+        ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+        UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        TSAN_OPTIONS: halt_on_error=1
+      run: |
+        ctest --test-dir build/mmcc-host --output-on-failure -j 4
 
   build-msvc:
     if: github.ref == 'refs/heads/leeway/main'

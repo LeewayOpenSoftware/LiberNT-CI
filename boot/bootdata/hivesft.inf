@@ -76,6 +76,7 @@ HKLM,"SOFTWARE\Classes\Applications\zipfldr.dll","NoOpenWith",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\explorer.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\icwconn1.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\inoculan.exe","NoStartPage",0x00000000,""
+HKLM,"SOFTWARE\Classes\Applications\libernt.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\mobsync.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\navwnt.exe","NoStartPage",0x00000000,""
 HKLM,"SOFTWARE\Classes\Applications\realmon.exe","NoStartPage",0x00000000,""
@@ -150,6 +151,20 @@ HKLM,"SOFTWARE\RegisteredApplications",,0x00000012
 HKLM,"SOFTWARE\Microsoft\CTF\SystemShared",,0x00000012
 HKLM,"SOFTWARE\Microsoft\CTF\SystemShared","CUAS",0x00010001,1
 HKLM,"SOFTWARE\Microsoft\CTF\TIP",,0x00000012
+
+; Cryptography SIP capabilities
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{9BA61D3F-E73A-11D0-8CD2-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{9BA61D3F-E73A-11D0-8CD2-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB8-8E78-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB8-8E78-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB9-8E78-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AAB9-8E78-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AABA-8E78-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{C689AABA-8E78-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A42-8E59-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A42-8E59-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A43-8E59-11D0-8C47-00C04FC295EE}","Dll",0x00000000,"WINTRUST.DLL"
+HKLM,"SOFTWARE\Microsoft\Cryptography\OID\EncodingType 0\CryptSIPDllGetCaps\{DE351A43-8E59-11D0-8C47-00C04FC295EE}","FuncName",0x00000000,"CryptSIPGetCaps"
 
 ; DirectX
 HKLM,"SOFTWARE\Microsoft\DirectX","InstalledVersion",0x00000001, 0x00,0x00,0x00,0x09,0x00,0x00,0x00,0x00
@@ -240,6 +255,15 @@ HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Applets",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer",,0x00000012
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\Explorer","NoSimpleStartMenu",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System",,0x00000012
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","EnableLUA",0x00010003,0
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","ConsentPromptBehaviorAdmin",0x00010003,5
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","ConsentPromptBehaviorUser",0x00010003,3
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","PromptOnSecureDesktop",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","EnableInstallerDetection",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","EnableVirtualization",0x00010003,1
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","FilterAdministratorToken",0x00010003,0
+HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System","ValidateAdminCodeSignatures",0x00010003,0
 
 ; Application compatibility
 HKLM,"SOFTWARE\Microsoft\Windows\CurrentVersion\ShellCompatibility",,0x00000012
