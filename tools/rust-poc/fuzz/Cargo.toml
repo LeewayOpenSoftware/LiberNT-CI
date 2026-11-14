@@ -36,5 +36,12 @@ test = false
 doc = false
 bench = false
 
+[[bin]]
+name = "lrm_mm_diff"
+path = "fuzz_targets/lrm_mm_diff.rs"
+test = false
+doc = false
+bench = false
+
 [profile.release]
 debug = 1
