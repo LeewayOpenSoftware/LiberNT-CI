@@ -47,6 +47,18 @@ IopReadyDeviceObjects(IN PDRIVER_OBJECT Driver)
     }
 }
 
+static
+VOID
+IopForgetDeviceLocks(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    ULONG_PTR Start = (ULONG_PTR)DeviceObject;
+    ULONG_PTR End = (ULONG_PTR)DeviceObject->DeviceObjectExtension;
+
+    if (VfDeadlockDetectionEnabled && End > Start)
+        VfForgetLocksInRange(DeviceObject, End - Start);
+}
+
 VOID
 NTAPI
 IopDeleteDevice(IN PVOID ObjectBody)
@@ -54,6 +66,8 @@ IopDeleteDevice(IN PVOID ObjectBody)
     PDEVICE_OBJECT DeviceObject = ObjectBody;
     PDEVICE_NODE DeviceNode = IopGetDeviceNode(DeviceObject);
     PAGED_CODE();
+
+    IopForgetDeviceLocks(DeviceObject);
 
     /* Cleanup and free the device node */
     if (DeviceNode)
@@ -1535,8 +1549,7 @@ IoDeleteDevice(IN PDEVICE_OBJECT DeviceObject)
 {
     PIO_TIMER Timer;
 
-    if (VfDeadlockDetectionEnabled)
-        VfForgetLocksInRange(DeviceObject, DeviceObject->Size);
+    IopForgetDeviceLocks(DeviceObject);
 
     /* Check if the device is registered for shutdown notifications */
     if (DeviceObject->Flags & DO_SHUTDOWN_REGISTERED)
