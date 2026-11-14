@@ -4,9 +4,7 @@ STRINGTABLE
 BEGIN
     IDS_APPNAME "Orosi Mines"
     IDS_NOBODY "Ei kukaan"
-    IDS_ABOUT "Based on WineMine (Wine) and ReactOS Mines
-Copyright 2000 Joshua Thielen
-Modified and maintained by: Leeway Open Software"
+    IDS_ABOUT "Based on WineMine (Wine) and ReactOS Mines\nCopyright 2000 Joshua Thielen\nModified and maintained by: Leeway Open Software"
 END
 
 IDM_WINEMINE MENU
