@@ -166,6 +166,17 @@ jobs:
         if [ "$FORCE_PANIC" = ON ]; then grep -q LrmRsForcePanic "$def" || { echo "::error::force-panic image does not export LrmRsForcePanic"; exit 1; }; fi
         (cd lrmrs-out && sha256sum * | tee SHA256SUMS)
 
+    - name: Assert flag-OFF ntoskrnl has no LRM-RS exports (default build)
+      if: ${{ env.LRM_RS == 'OFF' }}
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+        if [ -n "$def" ] && grep -qiE 'LrmRs' "$def"; then
+          echo "::error::flag-OFF ntoskrnl.def exports an LrmRs symbol; export table must match a no-flag build"; grep -iE "LrmRs" "$def"; exit 1
+        fi
+        echo "flag-OFF export-table parity OK: no LrmRs exports in ${def:-<no ntoskrnl.def>}"
+
     - name: Build stage-1 applier
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
