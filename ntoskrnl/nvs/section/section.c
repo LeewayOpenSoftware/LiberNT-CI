@@ -2822,7 +2822,10 @@ MiSegmentPurge(
         Last = (Offset + Length) >> PAGE_SHIFT;                  /* keep a partial trailing page */
     else
         Last = MI_PAGE_ALIGN_UP(Offset + Length) >> PAGE_SHIFT;  /* reach the partial last page */
-    WholeLast = (Length == 0) ? MiSegmentPages(Segment) : (Offset + Length) >> PAGE_SHIFT;
+    if (Length == 0 || Offset + Length >= (ULONG64)MI_ATOMIC_READ64(&Segment->SizeInBytes))
+        WholeLast = MiSegmentPages(Segment);
+    else
+        WholeLast = (Offset + Length) >> PAGE_SHIFT;
     if (Last > MiSegmentPages(Segment))
         Last = MiSegmentPages(Segment);
 
@@ -2849,8 +2852,8 @@ MiSegmentPurge(
         {
             /* Coherency purge: a MODIFIED (dirty) transition page is not written back by
              * MiSegmentDiscardPage, so refuse it (the caller must flush first) rather than
-             * drop unwritten data. Discard purge (truncate/teardown) deliberately throws
-             * dirty pages away - the bytes are being discarded on purpose. */
+             * drop unwritten data. Truncate, and discard for pages wholly inside the range,
+             * deliberately throw dirty pages away - the bytes are being discarded on purpose. */
             if (Mode == MiPurgeCoherency ||
                 (Mode == MiPurgeDiscard && (Page < WholeFirst || Page >= WholeLast)))
             {
