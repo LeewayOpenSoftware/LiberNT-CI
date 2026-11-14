@@ -14,8 +14,6 @@ extern KMUTANT MmSystemLoadLock;
 extern UCHAR MmDisablePagingExecutive;
 PLDR_DATA_TABLE_ENTRY NTAPI MiLookupDataTableEntry(IN PVOID Address);
 
-#define MI_VERIFIER_KERNEL_AND_HAL_IMAGES 2
-
 MM_DRIVER_VERIFIER_DATA MmVerifierData;
 LIST_ENTRY MiVerifierDriverAddedThunkListHead;
 ULONG MiActiveVerifierThunks;
@@ -356,8 +354,8 @@ MiVerifyBootLoadedImages(
 {
     PLDR_DATA_TABLE_ENTRY LdrEntry;
     PLIST_ENTRY Entry;
+    UNICODE_STRING HalName = RTL_CONSTANT_STRING(L"hal.dll");
     BOOLEAN IsBootDriver;
-    ULONG Position = 0;
 
     if (!MiVerifierActive)
         return;
@@ -365,7 +363,10 @@ MiVerifyBootLoadedImages(
     for (Entry = PsLoadedModuleList.Flink; Entry != &PsLoadedModuleList; Entry = Entry->Flink)
     {
         LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
-        if (Position++ < MI_VERIFIER_KERNEL_AND_HAL_IMAGES || (ULONG_PTR)LdrEntry->DllBase == PsNtosImageBase)
+        if ((ULONG_PTR)LdrEntry->DllBase == PsNtosImageBase)
+            continue;
+
+        if (RtlEqualUnicodeString(&LdrEntry->BaseDllName, &HalName, TRUE))
             continue;
 
         IsBootDriver = MiIsBootDriverImage(LoaderBlock, LdrEntry->DllBase);
