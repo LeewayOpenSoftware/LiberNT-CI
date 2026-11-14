@@ -36,6 +36,21 @@ static const APPLET Applets[] =
 
 static HINSTANCE hInst;
 
+static DWORD CapsValue;
+static BOOL CapsValid;
+
+/* One query per applet run; the backend probes the system on every call. */
+static DWORD
+Caps(void)
+{
+    if (!CapsValid)
+    {
+        CapsValue = LDispCapabilities();
+        CapsValid = TRUE;
+    }
+    return CapsValue;
+}
+
 typedef struct MAINDATA
 {
     HWND Tab;
@@ -400,8 +415,8 @@ SelectMonitor(HWND hwnd, DISPDATA *dd, int index)
     FillResolutions(hwnd, dd);
     FillFrequencies(hwnd, dd);
     ShowInfo(hwnd, dd, index);
-    EnableWindow(GetDlgItem(hwnd, IDC_DISP_RES), usable && (LDispCapabilities() & LDISP_CAP_RESOLUTION));
-    EnableWindow(GetDlgItem(hwnd, IDC_DISP_HZ), usable && (LDispCapabilities() & LDISP_CAP_REFRESH));
+    EnableWindow(GetDlgItem(hwnd, IDC_DISP_RES), usable && (Caps() & LDISP_CAP_RESOLUTION));
+    EnableWindow(GetDlgItem(hwnd, IDC_DISP_HZ), usable && (Caps() & LDISP_CAP_REFRESH));
     EnableWindow(GetDlgItem(hwnd, IDC_DISP_APPLY), usable);
 }
 
@@ -634,7 +649,7 @@ SaverFill(HWND hwnd, SAVERDATA *sd)
     col.cx = rc.right - GetSystemMetrics(SM_CXVSCROLL) - 4;
     SendMessageW(list, LVM_INSERTCOLUMNW, 0, (LPARAM)&col);
 
-    if (!(LDispCapabilities() & LDISP_CAP_SCREENSAVER) || !LSaverGet(path, ARRAYSIZE(path), &timeout, &active))
+    if (!(Caps() & LDISP_CAP_SCREENSAVER) || !LSaverGet(path, ARRAYSIZE(path), &timeout, &active))
     {
         WCHAR msg[160];
 
@@ -800,7 +815,7 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             SetWindowLongPtrW(hwnd, DWLP_USER, (LONG_PTR)md);
             md->Tab = GetDlgItem(hwnd, IDC_TAB);
             /* The screen saver tab is offered only when the system answers its settings calls. */
-            md->PageCount = (LDispCapabilities() & LDISP_CAP_SCREENSAVER) ? 3 : 2;
+            md->PageCount = (Caps() & LDISP_CAP_SCREENSAVER) ? 3 : 2;
             for (i = 0; i < md->PageCount; i++)
             {
                 LoadStr(tabIds[i], text, ARRAYSIZE(text));
@@ -849,6 +864,7 @@ RunApplet(HWND parent, int tab)
     INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES };
     struct GdiplusStartupInput gdipStartup;
 
+    CapsValid = FALSE;
     ZeroMemory(&md, sizeof(md));
     md.InitialTab = tab;
     InitCommonControlsEx(&icc);
