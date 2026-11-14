@@ -14,6 +14,11 @@
 #define VF_TRACK_TAG            'kTfV'
 #define VF_LEAKS_PRINTED        16
 #define VF_UNLOAD_WITH_POOL     0x62
+#define VF_ALLOCATE_ZERO_BYTES  0x00
+#define VF_ALLOCATE_PAGED_IRQL  0x01
+#define VF_ALLOCATE_IRQL        0x02
+#define VF_FREE_PAGED_IRQL      0x11
+#define VF_FREE_IRQL            0x12
 
 typedef struct _VF_POOL_ENTRY
 {
@@ -193,6 +198,69 @@ VfCheckPoolAtUnload(
 }
 
 static
+BOOLEAN
+VfpIsTrackedPaged(
+    _In_ PVOID Block)
+{
+    PLIST_ENTRY Head = VfpBucket(Block);
+    BOOLEAN Paged = FALSE;
+    PLIST_ENTRY Next;
+    KIRQL OldIrql;
+
+    if (!VfPoolTrackingEnabled)
+        return FALSE;
+
+    KeAcquireSpinLock(&VfpTrackLock, &OldIrql);
+    for (Next = Head->Flink; Next != Head; Next = Next->Flink)
+    {
+        PVF_POOL_ENTRY Entry = CONTAINING_RECORD(Next, VF_POOL_ENTRY, Link);
+
+        if (Entry->Block == Block)
+        {
+            Paged = Entry->Paged;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&VfpTrackLock, OldIrql);
+    return Paged;
+}
+
+static
+VOID
+VfpCheckAllocate(
+    _In_ POOL_TYPE PoolType,
+    _In_ SIZE_T NumberOfBytes)
+{
+    KIRQL Irql = KeGetCurrentIrql();
+    ULONG Code;
+
+    if (NumberOfBytes == 0)
+        Code = VF_ALLOCATE_ZERO_BYTES;
+    else if ((PoolType & 1) && Irql > APC_LEVEL)
+        Code = VF_ALLOCATE_PAGED_IRQL;
+    else if (Irql > DISPATCH_LEVEL)
+        Code = VF_ALLOCATE_IRQL;
+    else
+        return;
+
+    KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, Code, Irql, (ULONG_PTR)PoolType, NumberOfBytes);
+}
+
+static
+VOID
+VfpCheckFree(
+    _In_ PVOID Block)
+{
+    KIRQL Irql = KeGetCurrentIrql();
+
+    if (Irql > DISPATCH_LEVEL)
+        KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, VF_FREE_IRQL, Irql, NonPagedPool, (ULONG_PTR)Block);
+
+    if (Irql > APC_LEVEL && VfpIsTrackedPaged(Block))
+        KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, VF_FREE_PAGED_IRQL, Irql, PagedPool, (ULONG_PTR)Block);
+}
+
+static
 PVOID
 VfpFinish(
     _In_opt_ PVOID Block,
@@ -223,6 +291,7 @@ VfpAllocateSpecial(
 {
     PVOID Block;
 
+    VfpCheckAllocate(PoolType, NumberOfBytes);
     VfpCount(&MmVerifierData.AllocationsAttempted);
     if (Tag == 0 || Tag == TAG_NONE)
         VfpCount(&MmVerifierData.AllocationsWithNoTag);
@@ -410,6 +479,31 @@ VfExAllocatePool3(
     return VfpFinish(Block, NumberOfBytes, Tag, (BOOLEAN)((Flags & POOL_FLAG_PAGED) != 0), Caller);
 }
 
+static
+VOID
+NTAPI
+VfExFreePoolWithTag(
+    _In_ PVOID P,
+    _In_ ULONG Tag)
+{
+    if (P != NULL)
+        VfpCheckFree(P);
+
+    ExFreePoolWithTag(P, Tag);
+}
+
+static
+VOID
+NTAPI
+VfExFreePool(
+    _In_ PVOID P)
+{
+    if (P != NULL)
+        VfpCheckFree(P);
+
+    ExFreePool(P);
+}
+
 const VF_THUNK VfPoolThunks[] =
 {
     { (ULONG_PTR)ExAllocatePool, (ULONG_PTR)VfExAllocatePool },
@@ -419,6 +513,8 @@ const VF_THUNK VfPoolThunks[] =
     { (ULONG_PTR)ExAllocatePoolWithTagPriority, (ULONG_PTR)VfExAllocatePoolWithTagPriority },
     { (ULONG_PTR)ExAllocatePool2, (ULONG_PTR)VfExAllocatePool2 },
     { (ULONG_PTR)ExAllocatePool3, (ULONG_PTR)VfExAllocatePool3 },
+    { (ULONG_PTR)ExFreePoolWithTag, (ULONG_PTR)VfExFreePoolWithTag },
+    { (ULONG_PTR)ExFreePool, (ULONG_PTR)VfExFreePool },
 };
 
 const ULONG VfPoolThunkCount = RTL_NUMBER_OF(VfPoolThunks);

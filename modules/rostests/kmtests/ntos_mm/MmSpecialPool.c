@@ -415,6 +415,18 @@ START_TEST(MmDriverVerifier)
     if (Block != NULL)
         ExFreePoolWithTag(Block, OTHER_TAG);
 
+    {
+        LARGE_INTEGER NoWait = { { 0, 0 } };
+        KEVENT Event;
+        KIRQL OldIrql;
+
+        KeInitializeEvent(&Event, NotificationEvent, FALSE);
+        KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+        Status = KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, &NoWait);
+        KeLowerIrql(OldIrql);
+        ok_eq_hex(Status, STATUS_TIMEOUT);
+    }
+
     Block = ExAllocatePoolWithTag(NonPagedPoolNx, PAGE_SIZE * 2, OTHER_TAG);
     ok(Block != NULL, "a two page block was refused\n");
     if (Block != NULL)
@@ -439,4 +451,51 @@ START_TEST(MmDriverVerifierLeak)
     Block = ExAllocatePoolWithTag(NonPagedPoolNx, 64, 'kLpS');
     ok(Block != NULL, "no block\n");
     trace("Left %p allocated on purpose; unloading kmtest_drv.sys must now end in bug check 0xC4 (0x62)\n", Block);
+}
+
+START_TEST(MmDriverVerifierSpinLockAtPassive)
+{
+    KSPIN_LOCK Lock;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    KeInitializeSpinLock(&Lock);
+    trace("KeAcquireSpinLockAtDpcLevel below DISPATCH_LEVEL; expect bug check 0xC4 (0x40)\n");
+    KeAcquireSpinLockAtDpcLevel(&Lock);
+    ok(FALSE, "the call was not detected\n");
+    KeReleaseSpinLockFromDpcLevel(&Lock);
+}
+
+START_TEST(MmDriverVerifierPagedAtDispatch)
+{
+    KIRQL OldIrql;
+    PVOID Block;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    trace("Paged pool allocation at DISPATCH_LEVEL; expect bug check 0xC4 (0x01)\n");
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    Block = ExAllocatePoolWithTag(PagedPool, 64, OTHER_TAG);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the allocation was not detected\n");
+    if (Block != NULL)
+        ExFreePoolWithTag(Block, OTHER_TAG);
+}
+
+START_TEST(MmDriverVerifierWaitAtDispatch)
+{
+    KEVENT Event;
+    KIRQL OldIrql;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    KeInitializeEvent(&Event, NotificationEvent, TRUE);
+    trace("KeWaitForSingleObject without a zero timeout at DISPATCH_LEVEL; expect bug check 0xC4 (0x3B)\n");
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    KeWaitForSingleObject(&Event, Executive, KernelMode, FALSE, NULL);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the wait was not detected\n");
 }

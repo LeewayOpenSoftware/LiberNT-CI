@@ -243,6 +243,27 @@ MiIsVerifiedDriverName(
     }
 }
 
+static
+BOOLEAN
+MiRedirectVerifierThunk(
+    _Inout_ PIMAGE_THUNK_DATA Thunk,
+    _In_ const VF_THUNK *Table,
+    _In_ ULONG Count)
+{
+    ULONG i;
+
+    for (i = 0; i < Count; i++)
+    {
+        if (Thunk->u1.Function == Table[i].Pristine)
+        {
+            Thunk->u1.Function = Table[i].Replacement;
+            return TRUE;
+        }
+    }
+
+    return FALSE;
+}
+
 VOID
 NTAPI
 MiVerifyLoadedImage(
@@ -252,7 +273,6 @@ MiVerifyLoadedImage(
     PIMAGE_THUNK_DATA Thunk;
     ULONG Redirected = 0;
     ULONG Size;
-    ULONG i;
 
     if (!MiVerifierActive || !MiIsVerifiedDriverName(&LdrEntry->BaseDllName))
         return;
@@ -265,14 +285,10 @@ MiVerifyLoadedImage(
             Thunk = (PIMAGE_THUNK_DATA)((ULONG_PTR)LdrEntry->DllBase + Import->FirstThunk);
             for (; Thunk->u1.Function != 0; Thunk++)
             {
-                for (i = 0; i < VfPoolThunkCount; i++)
+                if (MiRedirectVerifierThunk(Thunk, VfPoolThunks, VfPoolThunkCount) ||
+                    MiRedirectVerifierThunk(Thunk, VfIrqlThunks, VfIrqlThunkCount))
                 {
-                    if (Thunk->u1.Function == VfPoolThunks[i].Pristine)
-                    {
-                        Thunk->u1.Function = VfPoolThunks[i].Replacement;
-                        Redirected++;
-                        break;
-                    }
+                    Redirected++;
                 }
             }
         }
@@ -280,5 +296,5 @@ MiVerifyLoadedImage(
 
     LdrEntry->Flags |= LDRP_IMAGE_VERIFYING;
     InterlockedIncrement((PLONG)&MmVerifierData.Loads);
-    DbgPrint("Driver Verifier: %wZ is verified, %lu pool imports redirected\n", &LdrEntry->BaseDllName, Redirected);
+    DbgPrint("Driver Verifier: %wZ is verified, %lu imports redirected\n", &LdrEntry->BaseDllName, Redirected);
 }

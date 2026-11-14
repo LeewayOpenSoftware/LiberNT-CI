@@ -1004,6 +1004,8 @@ typedef struct _VF_THUNK
 
 extern const VF_THUNK VfPoolThunks[];
 extern const ULONG VfPoolThunkCount;
+extern const VF_THUNK VfIrqlThunks[];
+extern const ULONG VfIrqlThunkCount;
 extern BOOLEAN VfPoolTrackingEnabled;
 
 VOID
