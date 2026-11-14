@@ -378,9 +378,13 @@ KiTryStealStandbyThreadLocked(
 
     /* A thread that was picked from the ready queue of the source by another
      * processor can still be on its way out of the source: its stack and its
-     * extended state are not saved until Running is cleared. Such a thread
-     * may run next on the source itself, but it must not move. The steal from
-     * the ready queue makes the same test. */
+     * extended state are not saved until Running is cleared. The context
+     * switch waits for that flag before it loads the stack of the thread it
+     * switches to, so such a thread is never run on two processors. But a
+     * processor that stole it would sit in that wait at SYNCH_LEVEL until
+     * the source is done, and the source would have lost its standby thread
+     * for nothing. So it is left where it is, to run next on the source. The
+     * steal from the ready queue makes the same test for the same reason. */
     if ((Source->NextThread != Thread) ||
 #if KI_THREAD_HANDOFF_USES_RUNNING
         Thread->Running ||
