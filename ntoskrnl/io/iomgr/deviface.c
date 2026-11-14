@@ -41,6 +41,16 @@ static EX_PUSH_LOCK IopEnabledInterfacesLock;
 /* Taken across the enabled-list change and the shared link object's creation or deletion of one state change */
 static EX_PUSH_LOCK IopInterfaceLinkLock;
 
+/* Defined later in this file; forward-declared for IopWriteInterfaceLinked's earlier use */
+static
+NTSTATUS
+OpenRegistryHandlesFromSymbolicLink(
+    _In_ PCUNICODE_STRING SymbolicLinkName,
+    _In_ ACCESS_MASK DesiredAccess,
+    _Out_opt_ PHANDLE GuidKey,
+    _Out_opt_ PHANDLE DeviceKey,
+    _Out_opt_ PHANDLE InstanceKey);
+
 static
 PIOP_ENABLED_INTERFACE
 IopFindEnabledInterface(
