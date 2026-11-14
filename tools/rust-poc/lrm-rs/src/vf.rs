@@ -148,7 +148,9 @@ pub fn check_allocate(pool_type: u32, bytes: usize, irql: u8) -> Result<(), BugC
     } else {
         return Ok(());
     };
-    Err(BugCheck { code: BUGCHECK_DRIVER_VERIFIER, p1: code as usize, p2: irql as usize, p3: pool_type as usize, p4: bytes })
+    // p3 = PoolType: C casts a signed POOL_TYPE enum into the 0xC4 parameter, so a value with bit 31
+    // set sign-extends; mirror that for exact parity (not `pool_type as usize`, which zero-extends).
+    Err(BugCheck { code: BUGCHECK_DRIVER_VERIFIER, p1: code as usize, p2: irql as usize, p3: pool_type as i32 as isize as usize, p4: bytes })
 }
 
 /// `VfpCheckFree`: IRQL > DISPATCH -> 0x12 (P3 = NonPagedPool); else IRQL > APC on a tracked paged
@@ -200,19 +202,40 @@ pub fn pool2_zero(flags: u32) -> bool {
 }
 
 /// One tracked allocation (mirror of the kernel's per-block verifier record).
+/// One tracked pool allocation. `#[repr(C)]` because the caller (host differential / in-kernel
+/// shim) owns and lays out the buffer; `paged`/`used` are `u8` (0/1), not Rust `bool`, so no Rust
+/// bool crosses the ABI. `tag` is the pool tag, kept so the leak report ("did not free") lines can
+/// name the tag; those lines are produced by the caller OUTSIDE the tracking lock (this module only
+/// returns the bug-check value).
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct TrackEntry {
     pub block: usize,
     pub caller: usize,
     pub size: u32,
-    pub paged: bool,
-    pub used: bool,
+    pub tag: u32,
+    pub paged: u8,
+    pub used: u8,
 }
 
-/// A fixed-capacity, no-heap mirror of the verifier pool-tracking table (`VfpTrack` /
-/// `VfUntrackPool` / `VfCheckPoolAtUnload`). The kernel uses a hashed list of heap entries; a
-/// clean-room Rust chooses its own storage, so we use a caller-provided slice. The counters mirror
-/// the per-paged accounting in `MmVerifierData`.
+/// A no-heap mirror of the verifier pool-tracking table (`VfpTrack` / `VfUntrackPool` /
+/// `VfCheckPoolAtUnload`). The kernel uses a hashed list of heap entries with no fixed limit; a
+/// clean-room Rust uses a caller-provided slice. The counters mirror the per-paged accounting in
+/// `MmVerifierData`.
+///
+/// Contract (the caller — host harness or in-kernel shim — must honour it):
+/// - LOCKING: this table is NOT internally synchronised. The caller holds the verifier pool spin
+///   lock across every call, exactly as the C does; there is no interior mutability or atomics.
+/// - CAPACITY / NEVER SILENTLY DROP: the C table is unbounded, so the caller MUST size `entries` to
+///   at least the maximum number of concurrently-tracked allocations. If the slice ever fills,
+///   `track` cannot record the block and bumps `untracked` instead of dropping it silently;
+///   `untracked != 0` is a fail-closed signal that the leak (`0x62`) and tracked-paged-free (`0x11`)
+///   results are no longer complete, and the caller must treat it as a tracking failure (size the
+///   buffer up) rather than trust an under-count. It is never silent: the count is observable.
+/// - LOOKUP: `track`/`untrack`/`is_tracked_paged` are hash-indexed (open addressing: start at the
+///   block's hash slot, then a bounded ring fallback), so the per-free path at DISPATCH_LEVEL does
+///   not linear-scan the whole table on a hit. The unload sweep (`leak_count`) is O(n) by nature,
+///   as it is in the C.
 pub struct PoolTracker<'a> {
     entries: &'a mut [TrackEntry],
     pub paged_bytes: u32,
@@ -245,21 +268,51 @@ impl<'a> PoolTracker<'a> {
         }
     }
 
-    /// Insert a tracked allocation; bumps per-paged counters and peaks. A full table counts as
-    /// untracked (mirrors the C's track-allocation-failure path).
-    pub fn track(&mut self, block: usize, size: u32, paged: bool, caller: usize) {
-        let free = self.entries.iter_mut().find(|e| !e.used);
-        let e = match free {
-            Some(e) => e,
+    // Home slot of a block (open addressing). 12 = PAGE_SHIFT; mixes page and sub-page bits like the
+    // C VfpTrack hash. 0 for an empty table (callers guard cap == 0).
+    #[inline]
+    fn home(&self, block: usize) -> usize {
+        let cap = self.entries.len();
+        if cap == 0 { 0 } else { ((block >> 12) ^ (block >> 4)) % cap }
+    }
+
+    // First free slot at/after the home slot (full ring); None if the table is full.
+    fn find_free(&self, block: usize) -> Option<usize> {
+        let cap = self.entries.len();
+        if cap == 0 {
+            return None;
+        }
+        let h = self.home(block);
+        (0..cap).map(|k| (h + k) % cap).find(|&i| self.entries[i].used == 0)
+    }
+
+    // The used slot holding `block`, searched from its home over the FULL ring (so a prior cleared
+    // slot cannot hide a later colliding entry); None if absent.
+    fn find_used(&self, block: usize) -> Option<usize> {
+        let cap = self.entries.len();
+        if cap == 0 {
+            return None;
+        }
+        let h = self.home(block);
+        (0..cap)
+            .map(|k| (h + k) % cap)
+            .find(|&i| self.entries[i].used != 0 && self.entries[i].block == block)
+    }
+
+    /// Insert a tracked allocation; bumps per-paged counters and peaks. A full table does NOT drop
+    /// silently: it bumps `untracked` (the fail-closed signal; see the struct contract).
+    pub fn track(&mut self, block: usize, size: u32, paged: bool, caller: usize, tag: u32) {
+        let i = match self.find_free(block) {
+            Some(i) => i,
             None => {
-                self.untracked = self.untracked.wrapping_add(1);
+                self.untracked = self.untracked.saturating_add(1);
                 return;
             }
         };
-        *e = TrackEntry { block, caller, size, paged, used: true };
+        self.entries[i] = TrackEntry { block, caller, size, tag, paged: paged as u8, used: 1 };
         if paged {
-            self.paged_bytes = self.paged_bytes.wrapping_add(size);
-            self.cur_paged += 1;
+            self.paged_bytes = self.paged_bytes.saturating_add(size);
+            self.cur_paged = self.cur_paged.saturating_add(1);
             if self.cur_paged > self.peak_paged {
                 self.peak_paged = self.cur_paged;
             }
@@ -267,8 +320,8 @@ impl<'a> PoolTracker<'a> {
                 self.peak_paged_bytes = self.paged_bytes;
             }
         } else {
-            self.nonpaged_bytes = self.nonpaged_bytes.wrapping_add(size);
-            self.cur_nonpaged += 1;
+            self.nonpaged_bytes = self.nonpaged_bytes.saturating_add(size);
+            self.cur_nonpaged = self.cur_nonpaged.saturating_add(1);
             if self.cur_nonpaged > self.peak_nonpaged {
                 self.peak_nonpaged = self.cur_nonpaged;
             }
@@ -280,33 +333,32 @@ impl<'a> PoolTracker<'a> {
 
     /// Remove a tracked block (no-op if absent); reverses the current counters (not the peaks).
     pub fn untrack(&mut self, block: usize) {
-        if let Some(e) = self.entries.iter_mut().find(|e| e.used && e.block == block) {
-            if e.paged {
-                self.cur_paged -= 1;
-                self.paged_bytes = self.paged_bytes.wrapping_sub(e.size);
+        if let Some(i) = self.find_used(block) {
+            let paged = self.entries[i].paged != 0;
+            let size = self.entries[i].size;
+            if paged {
+                self.cur_paged = self.cur_paged.saturating_sub(1);
+                self.paged_bytes = self.paged_bytes.saturating_sub(size);
             } else {
-                self.cur_nonpaged -= 1;
-                self.nonpaged_bytes = self.nonpaged_bytes.wrapping_sub(e.size);
+                self.cur_nonpaged = self.cur_nonpaged.saturating_sub(1);
+                self.nonpaged_bytes = self.nonpaged_bytes.saturating_sub(size);
             }
-            *e = TrackEntry::default();
+            self.entries[i] = TrackEntry::default();
         }
     }
 
     /// Is `block` a tracked paged allocation?
     pub fn is_tracked_paged(&self, block: usize) -> bool {
-        self.entries
-            .iter()
-            .find(|e| e.used && e.block == block)
-            .map(|e| e.paged)
-            .unwrap_or(false)
+        self.find_used(block).map(|i| self.entries[i].paged != 0).unwrap_or(false)
     }
 
-    /// `VfCheckPoolAtUnload`: count entries whose caller lies in `[start, end)`.
+    /// `VfCheckPoolAtUnload`: count entries whose caller lies in `[start, end)`. O(n) unload sweep,
+    /// as in the C.
     pub fn leak_count(&self, start: usize, end: usize) -> u32 {
         let mut n = 0u32;
         for e in self.entries.iter() {
-            if e.used && e.caller >= start && e.caller < end {
-                n += 1;
+            if e.used != 0 && e.caller >= start && e.caller < end {
+                n = n.saturating_add(1);
             }
         }
         n
@@ -449,7 +501,12 @@ unsafe fn with_tracker<R>(
     f: impl FnOnce(&mut PoolTracker) -> R,
 ) -> R {
     // SAFETY: caller guarantees `entries`/`st` valid for `cap` entries and the lifetime of the call.
-    let slice = unsafe { core::slice::from_raw_parts_mut(entries, cap) };
+    // from_raw_parts requires a non-null pointer even for len 0; use an empty slice when null/empty.
+    let slice: &mut [TrackEntry] = if entries.is_null() || cap == 0 {
+        &mut []
+    } else {
+        unsafe { core::slice::from_raw_parts_mut(entries, cap) }
+    };
     let s = unsafe { *st };
     let mut t = PoolTracker {
         entries: slice,
@@ -484,8 +541,11 @@ unsafe fn with_tracker<R>(
 /// # Safety
 /// `st` and `entries` (for `cap` entries) must be valid and writable.
 #[no_mangle]
-pub unsafe extern "C" fn lrm_vf_track(st: *mut VfTrackState, entries: *mut TrackEntry, cap: usize, block: usize, size: u32, paged: u8, caller: usize) {
-    unsafe { with_tracker(st, entries, cap, |t| t.track(block, size, paged != 0, caller)) }
+pub unsafe extern "C" fn lrm_vf_track(st: *mut VfTrackState, entries: *mut TrackEntry, cap: usize, block: usize, size: u32, paged: u8, caller: usize, tag: u32) {
+    if st.is_null() {
+        return;
+    }
+    unsafe { with_tracker(st, entries, cap, |t| t.track(block, size, paged != 0, caller, tag)) }
 }
 
 /// `VfUntrackPool` over the C ABI.
@@ -493,6 +553,9 @@ pub unsafe extern "C" fn lrm_vf_track(st: *mut VfTrackState, entries: *mut Track
 /// `st` and `entries` (for `cap` entries) must be valid and writable.
 #[no_mangle]
 pub unsafe extern "C" fn lrm_vf_untrack(st: *mut VfTrackState, entries: *mut TrackEntry, cap: usize, block: usize) {
+    if st.is_null() {
+        return;
+    }
     unsafe { with_tracker(st, entries, cap, |t| t.untrack(block)) }
 }
 
@@ -501,8 +564,20 @@ pub unsafe extern "C" fn lrm_vf_untrack(st: *mut VfTrackState, entries: *mut Tra
 /// `entries` must be valid for `cap` entries.
 #[no_mangle]
 pub unsafe extern "C" fn lrm_vf_is_tracked_paged(entries: *const TrackEntry, cap: usize, block: usize) -> u8 {
+    if entries.is_null() || cap == 0 {
+        return 0;
+    }
+    // SAFETY: non-null, cap entries (checked above).
     let slice = unsafe { core::slice::from_raw_parts(entries, cap) };
-    slice.iter().find(|e| e.used && e.block == block).map(|e| e.paged).unwrap_or(false) as u8
+    // Hash-indexed lookup (open addressing, full-ring fallback), matching PoolTracker::find_used.
+    let h = ((block >> 12) ^ (block >> 4)) % cap;
+    for k in 0..cap {
+        let e = &slice[(h + k) % cap];
+        if e.used != 0 && e.block == block {
+            return (e.paged != 0) as u8;
+        }
+    }
+    0
 }
 
 /// `VfCheckPoolAtUnload` over the C ABI: 1 and `*out` set if a leak bug check is due, else 0.
@@ -510,11 +585,15 @@ pub unsafe extern "C" fn lrm_vf_is_tracked_paged(entries: *const TrackEntry, cap
 /// `entries` (for `cap`) and `out` must be valid.
 #[no_mangle]
 pub unsafe extern "C" fn lrm_vf_check_at_unload(entries: *const TrackEntry, cap: usize, name: usize, start: usize, end: usize, out: *mut BugCheck) -> u8 {
+    if entries.is_null() || cap == 0 {
+        return 0;
+    }
+    // SAFETY: non-null, cap entries (checked above).
     let slice = unsafe { core::slice::from_raw_parts(entries, cap) };
     let mut leaked = 0u32;
     for e in slice.iter() {
-        if e.used && e.caller >= start && e.caller < end {
-            leaked += 1;
+        if e.used != 0 && e.caller >= start && e.caller < end {
+            leaked = leaked.saturating_add(1);
         }
     }
     if leaked != 0 {
@@ -630,6 +709,10 @@ fn is_name_sep(c: u16) -> bool {
     c == SEP_SPACE || c == SEP_TAB || c == SEP_COMMA || c == SEP_SEMI
 }
 
+/// Case fold for the name match. ASCII A-Z only. The C uses `RtlEqualUnicodeString(CaseInsensitive)`
+/// = `RtlUpcaseUnicodeChar` over the full BMP; for the ASCII driver names that `VerifyDrivers` carries
+/// in practice the two agree (A-Z vs a-z). Full Unicode case folding is deferred; if a non-ASCII name
+/// ever needs matching, replace this with the upcase-table equivalent.
 #[inline]
 fn ascii_fold(c: u16) -> u16 {
     if (UC_A..=UC_Z).contains(&c) {
@@ -734,8 +817,18 @@ pub unsafe extern "C" fn lrm_vf_init_level(verify_driver_level: u32, special_poo
 /// `buffer`/`name` must point to `blen`/`nlen` valid u16 values.
 #[no_mangle]
 pub unsafe extern "C" fn lrm_vf_is_verified_driver_name(buffer: *const u16, blen: usize, name: *const u16, nlen: usize) -> u8 {
-    // SAFETY: caller guarantees the slices.
-    let b = unsafe { core::slice::from_raw_parts(buffer, blen) };
-    let n = unsafe { core::slice::from_raw_parts(name, nlen) };
+    // from_raw_parts needs a non-null pointer even for len 0; treat null/empty as an empty slice.
+    let b: &[u16] = if buffer.is_null() || blen == 0 {
+        &[]
+    } else {
+        // SAFETY: non-null, blen u16 (checked above).
+        unsafe { core::slice::from_raw_parts(buffer, blen) }
+    };
+    let n: &[u16] = if name.is_null() || nlen == 0 {
+        &[]
+    } else {
+        // SAFETY: non-null, nlen u16 (checked above).
+        unsafe { core::slice::from_raw_parts(name, nlen) }
+    };
     is_verified_driver_name(b, n) as u8
 }
