@@ -38,7 +38,7 @@ include(ntos.cmake)
 # byte-identical to a no-LRM-RS kernel (the self-test export is appended only in a flag-ON build via a
 # generated spec). Decoupled from LIBERNT_ENABLE_RUST (the opt-in lnrspoc PoC umbrella, still OFF by
 # default): add_rust_staticlib is always available because sdk/cmake/rust.cmake is included uncondition-
-# ally. An explicit -DLIBERNT_ENABLE_LRM_RS=ON on a non-amd64 arch stays fatal (see the guard below).
+# ally. An explicit -DLIBERNT_ENABLE_LRM_RS=ON on an arch other than amd64/i386 stays fatal (see the guard below).
 if(ARCH STREQUAL "amd64")
     option(LIBERNT_ENABLE_LRM_RS "Route the special pool through the Rust LRM-RS path" ON)
 else()
@@ -84,20 +84,20 @@ set(NTOSKRNL_SOURCE ${SOURCE})
 set(NTOSKRNL_ASM_SOURCE ${ASM_SOURCE})
 
 
-# Default: the checked-in spec verbatim. Flag-ON (amd64): append the experimental self-test export
+# Default: the checked-in spec verbatim. Flag-ON (amd64/i386): append the experimental self-test export
 # to a generated copy in the binary dir so the DEFAULT export table stays byte-identical. spec2def()
 # reads ${CMAKE_CURRENT_SOURCE_DIR}/<arg>, so reference the generated file by a relative path.
 set(_NTOSKRNL_SPEC ntoskrnl.spec)
-if(LIBERNT_ENABLE_LRM_RS AND ARCH STREQUAL "amd64")
+if(LIBERNT_ENABLE_LRM_RS AND (ARCH STREQUAL "amd64" OR ARCH STREQUAL "i386"))
     set(_lrmrs_spec_abs ${CMAKE_CURRENT_BINARY_DIR}/ntoskrnl.lrmrs.spec)
     # Copy the checked-in spec verbatim, then append the one experimental export, so the default
     # build never sees it. configure_file(COPYONLY)+file(APPEND) avoids pulling the spec text through
     # a CMake variable (no ${}/;/\ mangling).
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ntoskrnl.spec ${_lrmrs_spec_abs} COPYONLY)
-    file(APPEND ${_lrmrs_spec_abs} "\n@ stdcall -arch=win64 LrmRsSelfTest(ptr)\n")
+    file(APPEND ${_lrmrs_spec_abs} "\n@ stdcall LrmRsSelfTest(ptr)\n")
     if(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
         # Lab-only panic-policy trigger, resolved by lnrspoc via MmGetSystemRoutineAddress.
-        file(APPEND ${_lrmrs_spec_abs} "@ stdcall -arch=win64 LrmRsForcePanic(long)\n")
+        file(APPEND ${_lrmrs_spec_abs} "@ stdcall LrmRsForcePanic(long)\n")
     endif()
     file(RELATIVE_PATH _NTOSKRNL_SPEC ${CMAKE_CURRENT_SOURCE_DIR} ${_lrmrs_spec_abs})
 endif()
