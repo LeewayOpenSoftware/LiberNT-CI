@@ -47,3 +47,9 @@ echo "[lrm] full-stack orchestration differential:"
 # value so the full-stack always builds its own pinned, host-buildable sources.
 SPECIAL_C="$HERE/dw/special/special.c" NTSPECIAL_C="$HERE/dw/nt/ntspecial.c" \
     ITERS="$ITERS" CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/run-lrm-fullstack.sh"
+
+# Driver-Verifier stage differentials (vendored, pinned C at feat/special-pool 5f5f92ed47a).
+echo "[lrm] Driver-Verifier Stage 2a differential:"
+CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/vf/run-lrm-vfirql.sh"
+echo "[lrm] Driver-Verifier Stage 5 differential:"
+CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/vf/run-lrm-vfpool.sh"
