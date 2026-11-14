@@ -380,6 +380,13 @@ IntUpdateLayeredWindowI( PWND pWnd,
          EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
          ret = FALSE;
       }
+      else if (ret)
+      {
+         /* Ensure window damage is marked and compositor is woken for recompose.
+          * On some systems, the GDI damage notification may not trigger; explicit
+          * damage guarantees the ULW sprite reaches FRONT buffer. */
+         IntCompositionDamageWindow(pWnd);
+      }
    }
    else
       ret = TRUE;
