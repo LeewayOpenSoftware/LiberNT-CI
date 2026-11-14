@@ -82,6 +82,9 @@ NdisReadBindingInformation (
     IN  NDIS_HANDLE     ConfigurationHandle)
 {
     UNIMPLEMENTED;
+
+    *Status = NDIS_STATUS_NOT_SUPPORTED;
+    *Binding = NULL;
 }
 
 /*
