@@ -22,9 +22,9 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
     COLORREF pixelColor;
     BOOL ulwResult;
 
-    // Create hidden WS_EX_LAYERED popup window
+    // Create hidden WS_EX_LAYERED popup window with TOPMOST to ensure visibility
     hwnd = CreateWindowExW(
-        WS_EX_LAYERED,              // Layered window
+        WS_EX_LAYERED | WS_EX_TOPMOST,
         L"STATIC",
         L"",
         WS_POPUP,                   // NO WS_VISIBLE
@@ -54,9 +54,9 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
         return;
     }
 
-    // Fill DIB with solid red color (ARGB: 0xFF0000FF)
+    // Fill DIB with solid red color (ARGB: 0xFFFF0000 = A=255, R=255, G=0, B=0)
     for (i = 0; i < (DWORD)(szWindow.cx * szWindow.cy); i++) {
-        pBits[i] = 0xFF0000FF;  // Red, fully opaque
+        pBits[i] = 0xFFFF0000;  // Red, fully opaque
     }
 
     // Create DC and select DIB
@@ -86,23 +86,28 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
 
     // Now make window visible
     ShowWindow(hwnd, SW_SHOW);
+    SetForegroundWindow(hwnd);
     UpdateWindow(hwnd);
     ok(IsWindowVisible(hwnd), "Window should be visible after ShowWindow\n");
 
-    // Give rendering time
-    Sleep(100);
+    // Give rendering time (DWM async composition on Windows 11)
+    Sleep(200);
 
     // Read pixel from screen to verify surface was painted
     hdcScreen = GetDC(NULL);
     ok(hdcScreen != NULL, "GetDC(NULL) failed\n");
 
     if (hdcScreen) {
-        // Read center pixel (50+50, 50+50) = (100, 100)
-        pixelColor = GetPixel(hdcScreen, 100, 100);
-        // Color should be red (0xFF0000) or close to it
-        // Allow some variance for color conversion
-        ok((pixelColor & 0xFF0000) == 0xFF0000 || pixelColor == 0xFF0000FF,
-           "Screen pixel should be red after ShowWindow; got 0x%lX\n", pixelColor);
+        // Get window center for sampling (not fixed coordinates)
+        RECT rcWnd;
+        GetWindowRect(hwnd, &rcWnd);
+        int sampleX = rcWnd.left + (rcWnd.right - rcWnd.left) / 2;
+        int sampleY = rcWnd.top + (rcWnd.bottom - rcWnd.top) / 2;
+
+        pixelColor = GetPixel(hdcScreen, sampleX, sampleY);
+        // COLORREF is 0x00BBGGRR; red (0xFFFF0000 in DIB) = 0x000000FF
+        ok(pixelColor == 0x000000FF,
+           "Screen pixel should be red (0x000000FF) after ShowWindow; got 0x%08lX\n", pixelColor);
 
         ReleaseDC(NULL, hdcScreen);
     }
@@ -112,9 +117,9 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
     DeleteDC(hdc);
     DeleteObject(hbm);
 
-    // Create visible layered window first
+    // Create visible layered window first with TOPMOST
     hwnd = CreateWindowExW(
-        WS_EX_LAYERED,
+        WS_EX_LAYERED | WS_EX_TOPMOST,
         L"STATIC",
         L"",
         WS_POPUP | WS_VISIBLE,  // Visible from start
@@ -135,7 +140,7 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
         return;
     }
 
-    // Fill with green
+    // Fill with green (ARGB: 0xFF00FF00 = A=255, R=0, G=255, B=0)
     for (i = 0; i < (DWORD)(szWindow.cx * szWindow.cy); i++) {
         pBits[i] = 0xFF00FF00;  // Green, fully opaque
     }
@@ -154,15 +159,22 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
     ulwResult = UpdateLayeredWindow(hwnd, NULL, &ptDst, &szWindow, hdc, &ptSrc, 0, &bf, ULW_ALPHA);
     ok(ulwResult, "UpdateLayeredWindow failed on visible window\n");
 
-    Sleep(100);
+    Sleep(200);
 
     hdcScreen = GetDC(NULL);
     ok(hdcScreen != NULL, "GetDC(NULL) failed for control\n");
 
     if (hdcScreen) {
-        pixelColor = GetPixel(hdcScreen, 100, 100);
-        ok((pixelColor & 0xFF00FF00) == 0xFF00FF00 || pixelColor == 0xFF00FF00,
-           "Control: Screen pixel should be green; got 0x%lX\n", pixelColor);
+        // Get window center for sampling
+        RECT rcWnd;
+        GetWindowRect(hwnd, &rcWnd);
+        int sampleX = rcWnd.left + (rcWnd.right - rcWnd.left) / 2;
+        int sampleY = rcWnd.top + (rcWnd.bottom - rcWnd.top) / 2;
+
+        pixelColor = GetPixel(hdcScreen, sampleX, sampleY);
+        // COLORREF is 0x00BBGGRR; green (0xFF00FF00 in DIB) = 0x0000FF00
+        ok(pixelColor == 0x0000FF00,
+           "Control: Screen pixel should be green (0x0000FF00); got 0x%08lX\n", pixelColor);
 
         ReleaseDC(NULL, hdcScreen);
     }
