@@ -286,7 +286,7 @@ jobs:
       run: python3 -u sdk/tools/check-freeldr-size.py ${{steps.configure.outputs.outdir}}
 
   build-rostests:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # Compile the test suite (modules/rostests) with clang for amd64. A
     # separate build, because ENABLE_ROSTESTS also changes what goes into
     # the images that build-linux produces. Compile only, no test run.
@@ -304,6 +304,12 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+
+    - name: Install pinned Rust toolchain (full-tree configure, LRM-RS default ON on amd64)
+      run: |
+        TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
+        rustup toolchain install "$TC" --profile minimal --component llvm-tools --target x86_64-pc-windows-gnu
+        rustc +"$TC" --version --verbose
 
     - name: Compute RosBE bootstrap SHA
       id: rosbe_spec
@@ -409,7 +415,7 @@ jobs:
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
 
   ntfslib-host-tests:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # The host tests of the NTFS library, outside the image build: the
     # volume check (index walk unit test, cluster claim smoke test), a
     # directory index that grows past its base record, a size change made
@@ -456,7 +462,7 @@ jobs:
         if-no-files-found: ignore
 
   cmlib-host-tests:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # Host test of the configuration-manager hive library: HvMarkCellDirty must
     # mark every block a cell occupies, including a block-aligned header and a
     # cell that spans several blocks. Regression for the dx2400 STOP 0x1E at
@@ -493,7 +499,7 @@ jobs:
         ctest --test-dir build/cmlib-host --output-on-failure -R "cmlib_mark_dirty|cmlib_dirty_arith"
 
   mmcc-host-tests:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') }}
     # Host tests of the NVS memory manager core on a simulated machine: page
     # tables, faults, sections, the cache manager on top, system regions and
     # the guarded special pool region, for amd64, arm64 and high memory, plus
@@ -578,7 +584,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ github.token }}
       run: |
-        call configure.cmd /arch=${{matrix.arch}} -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0
+        :: MSVC is a C-only compiler-coverage build; the shipping LRM-RS image is build-linux (clang/GNU).
+        call configure.cmd /arch=${{matrix.arch}} -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_ENABLE_LRM_RS=OFF
         echo outdir=output-VS-${{matrix.arch}}-debug>> "%GITHUB_OUTPUT%"
 
     - name: Build submodules
