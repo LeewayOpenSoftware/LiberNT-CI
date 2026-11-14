@@ -184,6 +184,70 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
     DeleteObject(hbm);
 }
 
+/* The Photo Viewer pill pattern: a small hidden popup that UpdateLayeredWindow
+ * grows and fills with a screen DC in hdcDst, then SetWindowPos shows it and a
+ * second update follows. hdcDst only names the screen: the bits must still
+ * land in the window. */
+static void Test_ScreenDcDestination(void)
+{
+    BITMAPINFOHEADER bih = {0};
+    BLENDFUNCTION bf = {AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
+    POINT ptSrc = {0, 0}, ptDst = {60, 60};
+    SIZE szWindow = {100, 100};
+    HDC hdcMem, hdcScreen;
+    HBITMAP hbm;
+    DWORD *pBits = NULL;
+    DWORD i;
+    HWND hwnd;
+    RECT rcWnd;
+    COLORREF pixelColor;
+
+    hwnd = CreateWindowExW(WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+                           L"STATIC", L"", WS_POPUP, 0, 0, 10, 10,
+                           NULL, NULL, GetModuleHandleW(NULL), NULL);
+    ok(hwnd != NULL, "CreateWindowEx failed\n");
+    if (!hwnd)
+        return;
+
+    bih.biSize = sizeof(bih);
+    bih.biWidth = szWindow.cx;
+    bih.biHeight = -szWindow.cy;
+    bih.biPlanes = 1;
+    bih.biBitCount = 32;
+    bih.biCompression = BI_RGB;
+    hbm = CreateDIBSection(NULL, (BITMAPINFO *)&bih, DIB_RGB_COLORS, (void **)&pBits, NULL, 0);
+    ok(hbm != NULL, "CreateDIBSection failed\n");
+    if (!hbm)
+    {
+        DestroyWindow(hwnd);
+        return;
+    }
+    for (i = 0; i < (DWORD)(szWindow.cx * szWindow.cy); i++)
+        pBits[i] = 0xFF0000FF; /* blue, opaque */
+
+    hdcScreen = GetDC(NULL);
+    hdcMem = CreateCompatibleDC(hdcScreen);
+    SelectObject(hdcMem, hbm);
+
+    ok(UpdateLayeredWindow(hwnd, hdcScreen, &ptDst, &szWindow, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA),
+       "UpdateLayeredWindow failed on the hidden window\n");
+    SetWindowPos(hwnd, HWND_TOP, ptDst.x, ptDst.y, szWindow.cx, szWindow.cy,
+                 SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    ok(UpdateLayeredWindow(hwnd, hdcScreen, &ptDst, &szWindow, hdcMem, &ptSrc, 0, &bf, ULW_ALPHA),
+       "UpdateLayeredWindow failed on the shown window\n");
+    Sleep(200);
+
+    GetWindowRect(hwnd, &rcWnd);
+    pixelColor = GetPixel(hdcScreen, (rcWnd.left + rcWnd.right) / 2, (rcWnd.top + rcWnd.bottom) / 2);
+    ok(pixelColor == 0x00FF0000,
+       "Screen DC as hdcDst: pixel should be blue (0x00FF0000); got 0x%08lX\n", pixelColor);
+
+    ReleaseDC(NULL, hdcScreen);
+    DestroyWindow(hwnd);
+    DeleteDC(hdcMem);
+    DeleteObject(hbm);
+}
+
 START_TEST(LayeredShowAfterUlw)
 {
     if (!IsWindowVisible(GetDesktopWindow()))
@@ -193,4 +257,5 @@ START_TEST(LayeredShowAfterUlw)
     }
 
     Test_HiddenLayeredWindowULWShowWindow();
+    Test_ScreenDcDestination();
 }
