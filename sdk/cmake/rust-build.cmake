@@ -73,7 +73,12 @@ if(NOT _rc EQUAL 0)
     message(FATAL_ERROR "rust-build: cargo failed for ${CRATE} (${_rc})")
 endif()
 
-set(_lib "${_target_dir}/${RUST_TARGET}/release/lib${CRATE}.a")
+# rustc names a staticlib after the target's convention: lib<crate>.a for *-gnu, <crate>.lib for *-msvc.
+if(RUST_TARGET MATCHES "-msvc$")
+    set(_lib "${_target_dir}/${RUST_TARGET}/release/${CRATE}.lib")
+else()
+    set(_lib "${_target_dir}/${RUST_TARGET}/release/lib${CRATE}.a")
+endif()
 if(NOT EXISTS "${_lib}")
     message(FATAL_ERROR "rust-build: ${_lib} was not produced")
 endif()
