@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <ntwmi.h>
+
 extern POBJECT_TYPE WmipGuidObjectType;
 extern GENERIC_MAPPING WmipGenericMapping;
 
@@ -183,3 +185,39 @@ EtwpGetTraceGuidInfo(
     _In_ ULONG OutBufferLen,
     _Out_opt_ PULONG ReturnSize,
     _In_ KPROCESSOR_MODE PreviousMode);
+
+NTSTATUS
+EtwpTraceClassicEvent(
+    _In_opt_ HANDLE TraceHandle,
+    _In_ ULONG FieldSize,
+    _In_ PVOID Fields,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+TRACEHANDLE
+EtwpTraceHandleFromLoggerId(
+    _In_ ULONG LoggerId);
+
+ULONG
+EtwpLoggerIdFromTraceHandle(
+    _In_ TRACEHANDLE TraceHandle);
+
+NTSTATUS
+EtwpTraceControlKernel(
+    _In_ ULONG FunctionCode,
+    _Inout_ PWMI_LOGGER_INFORMATION LoggerInfo);
+
+NTSTATUS
+EtwpQueryLoggerById(
+    _In_ ULONG LoggerId,
+    _Out_opt_ PWMI_LOGGER_INFORMATION Information,
+    _Out_opt_ PULONG EventsLogged);
+
+NTSTATUS
+EtwpFindLoggerByName(
+    _In_ PCUNICODE_STRING LoggerName,
+    _Out_ PULONG LoggerId);
+
+ULONG
+EtwpEnumerateLoggers(
+    _Out_writes_to_(Count, return) PULONG LoggerIds,
+    _In_ ULONG Count);
