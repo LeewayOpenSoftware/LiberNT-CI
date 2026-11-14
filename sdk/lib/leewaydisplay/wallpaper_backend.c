@@ -35,7 +35,7 @@ LWallEnum(LWALL_ITEM *out, int max)
     HANDLE find;
     int count = 0, i, j;
 
-    if (!GetWindowsDirectoryW(dir, ARRAYSIZE(dir)))
+    if (max <= 0 || !GetWindowsDirectoryW(dir, ARRAYSIZE(dir)))
         return 0;
     lstrcatW(dir, L"\\Web\\Wallpaper");
     lstrcpyW(pattern, dir);
@@ -124,9 +124,21 @@ LWallGetCurrent(WCHAR *path, DWORD cch, LWALL_STYLE *style)
 BOOL
 LWallSet(const WCHAR *path, LWALL_STYLE style)
 {
+    WCHAR oldStyle[16] = L"", oldTile[16] = L"";
+    BOOL hadStyle, hadTile;
+
     if ((int)style < 0 || style >= LWALL_STYLE_COUNT)
         return FALSE;
+    hadStyle = ReadString(L"WallpaperStyle", oldStyle, ARRAYSIZE(oldStyle));
+    hadTile = ReadString(L"TileWallpaper", oldTile, ARRAYSIZE(oldTile));
     if (!WriteString(L"WallpaperStyle", StyleValues[style].Style) || !WriteString(L"TileWallpaper", StyleValues[style].Tile))
         return FALSE;
-    return SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
+    if (SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
+        return TRUE;
+    /* Keep the old picture and the old position together when the new image is refused. */
+    if (hadStyle)
+        WriteString(L"WallpaperStyle", oldStyle);
+    if (hadTile)
+        WriteString(L"TileWallpaper", oldTile);
+    return FALSE;
 }

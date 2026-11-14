@@ -43,7 +43,7 @@ typedef struct LDISP_MODE
 
 #define LDISP_CAP_RESOLUTION   0x0001
 #define LDISP_CAP_REFRESH      0x0002
-#define LDISP_CAP_ORIENTATION  0x0004
+#define LDISP_CAP_ORIENTATION  0x0004  /* rotation can be applied: NOT implemented; LDISP_MODE.Orientation is read-only */
 #define LDISP_CAP_MULTIMONITOR 0x0008  /* attach, detach, position, primary: NOT implemented yet */
 #define LDISP_CAP_PERMON_DPI   0x0010  /* per-monitor scale: NOT supported by the stack yet */
 

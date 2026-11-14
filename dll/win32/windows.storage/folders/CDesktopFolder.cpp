@@ -1085,7 +1085,10 @@ HRESULT WINAPI CDesktopFolder::CallBack(IShellFolder *psf, HWND hwndOwner, IData
                 return SHELL32_ShowPropertiesDialog(pdtobj); // File selection
         }
         // Background: the Leeway Personalization applet, desk.cpl as the fallback
-        if (SHELL_ExecuteControlPanelCPL(hwndOwner, L"leewaydisp.cpl"))
+        WCHAR szCpl[MAX_PATH];
+        if (GetSystemDirectoryW(szCpl, _countof(szCpl)) && SUCCEEDED(StringCchCatW(szCpl, _countof(szCpl), L"\\leewaydisp.cpl")) &&
+            GetFileAttributesW(szCpl) != INVALID_FILE_ATTRIBUTES &&
+            SHELL_ExecuteControlPanelCPL(hwndOwner, L"\leewaydisp.cpl"))
             return S_OK;
         return SHELL_ExecuteControlPanelCPL(hwndOwner, L"desk.cpl") ? S_OK : E_FAIL;
     }
