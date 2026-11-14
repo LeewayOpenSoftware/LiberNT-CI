@@ -778,4 +778,11 @@ BEGIN
     IDS_DRIVER_STATUS_ROLLBACK_PROBLEM "Revertido, pero el dispositivo aún reporta un problema (código %lu)"
     IDS_DRIVER_HISTORY_EMPTY "No hay instalaciones recientes de controladores."
     IDS_DRIVER_STATUS_PENDING_START "Instalado, pendiente de inicio"
+    IDS_MULTIPLE_DISPLAYS "Multiple displays"
+    IDS_MULTIPLE_DISPLAYS_DESC "Extend the desktop to all connected displays, or show it on this display only"
+    IDS_EXTEND_DISPLAYS "Extend desktop to these displays"
+    IDS_SHOW_ONLY_THIS "Show only on this display"
+    IDS_MAIN_DISPLAY "Main display"
+    IDS_MAIN_DISPLAY_DESC "The taskbar and new windows appear on the main display"
+    IDS_MAKE_MAIN "Make this my main display"
 END

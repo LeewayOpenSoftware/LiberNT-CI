@@ -175,7 +175,9 @@ ApplyDisplayMode(HWND owner, const std::wstring &device, DEVMODEW mode)
     previous.dmSize = sizeof(previous);
     if (!EnumDisplaySettingsExW(device.c_str(), ENUM_CURRENT_SETTINGS, &previous, 0))
         return;
-    result = ChangeDisplaySettingsExW(device.c_str(), &mode, NULL, CDS_UPDATEREGISTRY, NULL);
+    result = ChangeDisplaySettingsExW(device.c_str(), &mode, NULL, CDS_TEST, NULL);
+    if (result == DISP_CHANGE_SUCCESSFUL)
+        result = ChangeDisplaySettingsExW(device.c_str(), &mode, NULL, CDS_UPDATEREGISTRY, NULL);
     if (result != DISP_CHANGE_SUCCESSFUL)
     {
         ShowError(owner, result == DISP_CHANGE_RESTART ? ERROR_SUCCESS_REBOOT_REQUIRED : ERROR_INVALID_PARAMETER);
@@ -187,6 +189,162 @@ ApplyDisplayMode(HWND owner, const std::wstring &device, DEVMODEW mode)
                             DM_DISPLAYORIENTATION;
         ChangeDisplaySettingsExW(device.c_str(), &previous, NULL, CDS_UPDATEREGISTRY, NULL);
     }
+}
+
+struct MonitorInfo
+{
+    std::wstring Name;
+    bool Attached;
+};
+
+static std::vector<MonitorInfo>
+AllMonitors()
+{
+    std::vector<MonitorInfo> list;
+    DISPLAY_DEVICEW device = { sizeof(device) };
+
+    for (DWORD i = 0; EnumDisplayDevicesW(NULL, i, &device, 0); i++, device.cb = sizeof(device))
+    {
+        if (device.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER)
+            continue;
+        list.push_back({ device.DeviceName, (device.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0 });
+    }
+    return list;
+}
+
+static bool
+MonitorMode(const std::wstring &name, DEVMODEW &mode)
+{
+    ZeroMemory(&mode, sizeof(mode));
+    mode.dmSize = sizeof(mode);
+    return EnumDisplaySettingsExW(name.c_str(), ENUM_CURRENT_SETTINGS, &mode, 0) ||
+           EnumDisplaySettingsExW(name.c_str(), ENUM_REGISTRY_SETTINGS, &mode, 0);
+}
+
+/* Queue a layout change per monitor, then commit once with a null call. */
+static LONG
+QueueMonitor(const std::wstring &name, DEVMODEW &mode, DWORD flags)
+{
+    return ChangeDisplaySettingsExW(name.c_str(), &mode, NULL, CDS_UPDATEREGISTRY | CDS_NORESET | flags, NULL);
+}
+
+static void
+CommitLayout(HWND owner, LONG queued)
+{
+    LONG result = DISP_CHANGE_FAILED;
+
+    if (queued == DISP_CHANGE_SUCCESSFUL)
+        result = ChangeDisplaySettingsExW(NULL, NULL, NULL, 0, NULL);
+    if (result != DISP_CHANGE_SUCCESSFUL)
+        ShowError(owner, result == DISP_CHANGE_RESTART ? ERROR_SUCCESS_REBOOT_REQUIRED : ERROR_INVALID_PARAMETER);
+}
+
+/* Extend: attach every detached monitor to the right of the current desktop. */
+static void
+ExtendDisplays(HWND owner)
+{
+    std::vector<MonitorInfo> all = AllMonitors();
+    LONG right = 0, queued = DISP_CHANGE_SUCCESSFUL;
+    DEVMODEW mode;
+
+    for (auto &m : all)
+    {
+        if (m.Attached && MonitorMode(m.Name, mode) && (mode.dmFields & DM_POSITION))
+            right = max(right, mode.dmPosition.x + (LONG)mode.dmPelsWidth);
+    }
+    for (auto &m : all)
+    {
+        if (m.Attached)
+            continue;
+        ZeroMemory(&mode, sizeof(mode));
+        mode.dmSize = sizeof(mode);
+        if ((!EnumDisplaySettingsExW(m.Name.c_str(), ENUM_REGISTRY_SETTINGS, &mode, 0) || !mode.dmPelsWidth) &&
+            !EnumDisplaySettingsExW(m.Name.c_str(), 0, &mode, 0))
+            continue;
+        mode.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+        mode.dmPosition.x = right;
+        mode.dmPosition.y = 0;
+        right += (LONG)mode.dmPelsWidth;
+        queued = QueueMonitor(m.Name, mode, 0);
+        if (queued != DISP_CHANGE_SUCCESSFUL)
+            break;
+    }
+    CommitLayout(owner, queued);
+}
+
+/* Show only on one display: it becomes primary at (0,0), every other attached monitor is detached. */
+static void
+ShowOnlyOn(HWND owner, const std::wstring &keep)
+{
+    std::vector<MonitorInfo> all = AllMonitors();
+    LONG queued;
+    DEVMODEW mode;
+
+    if (!MonitorMode(keep, mode))
+        return;
+    mode.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT | DM_BITSPERPEL;
+    mode.dmPosition.x = 0;
+    mode.dmPosition.y = 0;
+    queued = QueueMonitor(keep, mode, CDS_SET_PRIMARY);
+    for (auto &m : all)
+    {
+        DEVMODEW off = { };
+        if (queued != DISP_CHANGE_SUCCESSFUL)
+            break;
+        if (!m.Attached || m.Name == keep)
+            continue;
+        off.dmSize = sizeof(off);
+        off.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+        queued = QueueMonitor(m.Name, off, 0);
+    }
+    CommitLayout(owner, queued);
+}
+
+/* Make this the main display: it moves to (0,0), the others keep their relative layout. */
+static void
+MakeMainDisplay(HWND owner, const std::wstring &name)
+{
+    std::vector<MonitorInfo> all = AllMonitors();
+    LONG queued = DISP_CHANGE_SUCCESSFUL;
+    DEVMODEW mode;
+    POINT origin = { 0, 0 };
+
+    if (!MonitorMode(name, mode))
+        return;
+    if (mode.dmFields & DM_POSITION)
+    {
+        origin.x = mode.dmPosition.x;
+        origin.y = mode.dmPosition.y;
+    }
+    for (auto &m : all)
+    {
+        DEVMODEW other;
+        if (!m.Attached || m.Name == name || !MonitorMode(m.Name, other))
+            continue;
+        other.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+        other.dmPosition.x -= origin.x;
+        other.dmPosition.y -= origin.y;
+        queued = QueueMonitor(m.Name, other, 0);
+        if (queued != DISP_CHANGE_SUCCESSFUL)
+            break;
+    }
+    if (queued == DISP_CHANGE_SUCCESSFUL)
+    {
+        mode.dmFields = DM_POSITION | DM_PELSWIDTH | DM_PELSHEIGHT;
+        mode.dmPosition.x = 0;
+        mode.dmPosition.y = 0;
+        queued = QueueMonitor(name, mode, CDS_SET_PRIMARY);
+    }
+    CommitLayout(owner, queued);
+}
+
+static bool
+IsMainDisplay(const std::wstring &name)
+{
+    DEVMODEW mode;
+
+    return MonitorMode(name, mode) && (mode.dmFields & DM_POSITION) && mode.dmPosition.x == 0 &&
+           mode.dmPosition.y == 0;
 }
 
 static const UINT ScaleSteps[] = { 100, 125, 150, 175, 200, 225, 250 };
@@ -258,6 +416,42 @@ BuildDisplay(PageBuilder &page)
         page.Group();
         page.Choice(Str(IDS_SELECT_DISPLAY), Str(IDS_SELECT_DISPLAY_DESC), L"desktop_20_regular", labels, selected,
                     [host, names](int index) { host->Open(PageId::Display, names[index]); });
+    }
+
+    {
+        std::vector<MonitorInfo> monitors = AllMonitors();
+        bool allAttached = true;
+        std::wstring thisDevice = device;
+        for (auto &m : monitors)
+            allAttached = allAttached && m.Attached;
+        if (monitors.size() > 1)
+        {
+            std::vector<std::wstring> layout;
+            page.Group(Str(IDS_MULTIPLE_DISPLAYS));
+            layout.push_back(Str(IDS_EXTEND_DISPLAYS));
+            layout.push_back(Str(IDS_SHOW_ONLY_THIS));
+            page.Choice(Str(IDS_MULTIPLE_DISPLAYS), Str(IDS_MULTIPLE_DISPLAYS_DESC), L"desktop_20_regular", layout,
+                        allAttached ? 0 : 1,
+                        [host, thisDevice](int index)
+                        {
+                            if (index == 0)
+                                ExtendDisplays(host->Window());
+                            else
+                                ShowOnlyOn(host->Window(), thisDevice);
+                            host->Refresh();
+                        });
+            if (!IsMainDisplay(thisDevice))
+            {
+                std::vector<std::wstring> mainOptions;
+                mainOptions.push_back(Str(IDS_MAKE_MAIN));
+                page.Choice(Str(IDS_MAIN_DISPLAY), Str(IDS_MAIN_DISPLAY_DESC), L"desktop_20_regular", mainOptions, -1,
+                            [host, thisDevice](int)
+                            {
+                                MakeMainDisplay(host->Window(), thisDevice);
+                                host->Refresh();
+                            });
+            }
+        }
     }
 
     page.Group(Str(IDS_SCALE_LAYOUT));

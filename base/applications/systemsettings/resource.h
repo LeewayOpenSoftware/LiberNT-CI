@@ -777,3 +777,10 @@
 #define IDS_COMBINE_ALWAYS             866
 #define IDS_COMBINE_WHEN_FULL          867
 #define IDS_COMBINE_NEVER              868
+#define IDS_MULTIPLE_DISPLAYS          869
+#define IDS_MULTIPLE_DISPLAYS_DESC     870
+#define IDS_EXTEND_DISPLAYS            871
+#define IDS_SHOW_ONLY_THIS             872
+#define IDS_MAIN_DISPLAY               873
+#define IDS_MAIN_DISPLAY_DESC          874
+#define IDS_MAKE_MAIN                  875
