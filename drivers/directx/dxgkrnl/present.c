@@ -6655,6 +6655,8 @@ DxgkpProcessPresentQueueLocked(_In_ PVOID Context)
     NTSTATUS Status;
 
     /* Admission may have closed while this caller waited for the executor. */
+
+    ASSERT(Context != NULL);
     if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
         return STATUS_DELETE_PENDING;
 
@@ -6806,8 +6808,6 @@ DxgkpVsyncQueueIdle(
 {
     BOOLEAN Idle;
     KIRQL OldIrql;
-
-    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
     KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
     Idle = Queue->Count == 0;
     KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
