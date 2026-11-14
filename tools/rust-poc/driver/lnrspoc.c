@@ -45,6 +45,11 @@
  * (0 = all checks passed at DISPATCH). Never bugchecks. */
 #define IOCTL_LNRSPOC_DISPATCH_SELFTEST \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* R-1 item (2): in-kernel OOM assertion. Exhaust the nonpaged pool via the Rust fallible
+ * allocator and assert the failure was a RETURNED Err (a positive block count), not a crash.
+ * Output = LONG rc (0 = graceful OOM confirmed). Never bugchecks. Runs at PASSIVE. */
+#define IOCTL_LNRSPOC_OOM_ASSERT \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
@@ -226,6 +231,28 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         DbgPrint("lnrspoc: validate_mp len=%lu -> 0x%lx\n", (unsigned long)inLen, (unsigned long)nt);
         *(long *)Irp->AssociatedIrp.SystemBuffer = nt;
         info = sizeof(long);
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_LNRSPOC_OOM_ASSERT:
+    {
+        /* R-1 item (2): assert OOM is a returned Err, not a crash. leeway_rs_poc_oom_probe
+         * exhausts the nonpaged pool through the Rust fallible allocator until try_alloc
+         * returns Err, frees every block, and returns the count taken (>0) or a negative
+         * code. Reaching this handler at all proves no bugcheck; rc=0 iff the count is >0. */
+        int blocks, rc;
+        ULONG outLen = sp->Parameters.DeviceIoControl.OutputBufferLength;
+
+        if (Irp->AssociatedIrp.SystemBuffer == NULL || outLen < sizeof(int))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        blocks = leeway_rs_poc_oom_probe();
+        rc = (blocks > 0) ? 0 : -1;
+        DbgPrint("lnrspoc: oom_assert blocks=%d rc=%d\n", blocks, rc);
+        *(int *)Irp->AssociatedIrp.SystemBuffer = rc;
+        info = sizeof(int);
         status = STATUS_SUCCESS;
         break;
     }
