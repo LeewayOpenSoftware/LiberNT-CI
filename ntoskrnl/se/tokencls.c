@@ -2465,7 +2465,7 @@ NtSetInformationToken(
                     break;
 
                 if (!RtlValidSid(CapturedSid) ||
-                    *RtlSubAuthorityCountSid(CapturedSid) != 1 ||
+                    *RtlSubAuthorityCountSid(CapturedSid) > 1 ||
                     !RtlEqualMemory(RtlIdentifierAuthoritySid(CapturedSid),
                                     &SeMandatoryLabelAuthority,
                                     sizeof(SID_IDENTIFIER_AUTHORITY)))
@@ -2474,7 +2474,9 @@ NtSetInformationToken(
                     Status = STATUS_INVALID_SID;
                     break;
                 }
-                NewRid = *RtlSubAuthoritySid(CapturedSid, 0);
+                /* A label with no sub-authority names the untrusted level */
+                NewRid = (*RtlSubAuthorityCountSid(CapturedSid) != 0) ?
+                         *RtlSubAuthoritySid(CapturedSid, 0) : SECURITY_MANDATORY_UNTRUSTED_RID;
                 SepReleaseSid(CapturedSid, PreviousMode, FALSE);
 
                 switch (NewRid)
