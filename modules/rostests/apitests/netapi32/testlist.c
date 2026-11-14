@@ -10,11 +10,13 @@
 
 extern void func_DsRoleGetPrimaryDomainInformation(void);
 extern void func_NetUserDelete(void);
+extern void func_NetUserEnum(void);
 
 const struct test winetest_testlist[] =
 {
     { "DsRoleGetPrimaryDomainInformation", func_DsRoleGetPrimaryDomainInformation },
     { "NetUserDelete", func_NetUserDelete },
+    { "NetUserEnum", func_NetUserEnum },
 
     { 0, 0 }
 };
