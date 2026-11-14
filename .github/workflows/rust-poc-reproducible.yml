@@ -170,3 +170,32 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
           RIG="$RUNNER_TEMP/rig" ITERS=1000000 sh tools/rust-poc/ntfs-decode-rs/difftest/run-mp-rig.sh
+
+  lrm-equivalence:
+    # LRM-RS: the Rust special-pool engine vs Dwight's C engine (special.c), same contract.
+    # Fetches feat/special-pool at a pinned full commit id from the public LiberNT-CI, compiles
+    # special.c unmodified against the host poolenv.h stand-in, links the Rust staticlib, and
+    # runs the differential (Select/Place/Prepare/Owns/Check + exact corrupt address). Fails on
+    # any disagreement or a vacuous run.
+    runs-on: ubuntu-24.04
+    env:
+      SP_SHA: a42b006aab728aeb4d45997f876f873e3dda5fbe
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain + host build tools
+        run: |
+          rustup toolchain install nightly-2026-05-24 --profile minimal
+          sudo apt-get update && sudo apt-get install -y g++ gcc
+      - name: Fetch the C special-pool engine at the pinned SHA (public LiberNT-CI)
+        run: |
+          mkdir -p "$RUNNER_TEMP/sp" && cd "$RUNNER_TEMP/sp" && git init -q
+          git remote add origin https://github.com/LeewayOpenSoftware/LiberNT-CI.git
+          git fetch -q --depth 1 origin "$SP_SHA"
+          git checkout -q "$SP_SHA"
+          test "$(git rev-parse HEAD)" = "$SP_SHA"
+      - name: Run the LRM-RS differential against the real C engine
+        run: |
+          chmod +x tools/rust-poc/lrm-rs/difftest/run-lrm-diff.sh
+          SPECIAL_C="$RUNNER_TEMP/sp/ntoskrnl/nvs/pool/special/special.c" \
+          SPECIAL_H="$RUNNER_TEMP/sp/ntoskrnl/nvs/pool/include/poolspecial.h" \
+          ITERS=2000000 tools/rust-poc/lrm-rs/difftest/run-lrm-diff.sh
