@@ -762,6 +762,7 @@ NTSTATUS IPAddInterfaceAddress(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Address
     ExReleaseFastMutex(&NetTableMutex);
 
     TiSignalChange();
+    IPTdiAddressChanged();
     TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_UNICAST, TI_NSI_CHANGE_ADD);
     TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_FORWARD, TI_NSI_CHANGE_ADD);
     return STATUS_SUCCESS;
@@ -805,6 +806,7 @@ NTSTATUS IPDeleteInterfaceAddress(ULONG Context)
     if (!Nte)
         return STATUS_NOT_FOUND;
     TiSignalChange();
+    IPTdiAddressChanged();
     TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_UNICAST, TI_NSI_CHANGE_DELETE);
     TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_FORWARD, TI_NSI_CHANGE_DELETE);
     return STATUS_SUCCESS;
@@ -847,6 +849,7 @@ VOID IPDeleteInterfaceAddresses(PIP_INTERFACE Interface)
 
     ExReleaseFastMutex(&NetTableMutex);
     TiSignalChange();
+    IPTdiAddressChanged();
     TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_UNICAST, TI_NSI_CHANGE_DELETE);
     TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_FORWARD, TI_NSI_CHANGE_DELETE);
 }
@@ -1028,6 +1031,7 @@ VOID NteDadTimeout(VOID)
             NBSolicitIncomplete(Pending[i].Interface);
             RdiscStart(Pending[i].Interface);
             TiSignalChange();
+            IPTdiAddressChanged();
             TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_UNICAST, TI_NSI_CHANGE_PARAMETER);
         }
         IPDereferenceInterface(Pending[i].Interface);
@@ -1067,6 +1071,7 @@ VOID NteDadConflict(PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Sender, IPv4_RAW_A
     if (Changed)
     {
         TiSignalChange();
+        IPTdiAddressChanged();
         TiNsiNotifyIpTable(TI_NSI_FAMILY_IPV4, TI_NSI_TABLE_UNICAST, TI_NSI_CHANGE_PARAMETER);
     }
 }
@@ -1106,6 +1111,7 @@ NTSTATUS IPSetAddressV4(PIP4_ADDRESS_INFO Info)
     {
         RdiscStart(Promoted);
         TiSignalChange();
+        IPTdiAddressChanged();
         IPDereferenceInterface(Promoted);
     }
 
@@ -1134,4 +1140,197 @@ NTSTATUS IPQueryAddressV4(PIP4_ADDRESS_INFO Info)
     TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
 
     return Status;
+}
+
+/*
+ * The usable IPv4 addresses are registered with TDI, so that the TDI clients
+ * that asked for address notifications (AFD does, for the address list
+ * change request of sockets) hear of every address that comes or goes.
+ *
+ * TDI must be called at PASSIVE_LEVEL and the address table changes under a
+ * spin lock, so a change only queues a work item. The worker compares the
+ * table with what is registered and registers or deregisters the difference.
+ */
+
+typedef struct _IP_TDI_ADDRESS {
+    LIST_ENTRY ListEntry;
+    IPv4_RAW_ADDRESS Address;
+    HANDLE Handle;
+    BOOLEAN Present;
+} IP_TDI_ADDRESS, *PIP_TDI_ADDRESS;
+
+#define IP_TDI_ADDRESS_TAG 'aTpI'
+
+static LIST_ENTRY IPTdiAddressList;
+static KMUTEX IPTdiAddressMutex;
+static LONG IPTdiAddressSyncQueued;
+static BOOLEAN IPTdiAddressReady;
+
+static PIP_TDI_ADDRESS IPTdiFindAddress(IPv4_RAW_ADDRESS Address)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = IPTdiAddressList.Flink; Entry != &IPTdiAddressList; Entry = Entry->Flink)
+    {
+        PIP_TDI_ADDRESS Registered = CONTAINING_RECORD(Entry, IP_TDI_ADDRESS, ListEntry);
+
+        if (Registered->Address == Address)
+            return Registered;
+    }
+
+    return NULL;
+}
+
+static VOID IPTdiRegisterAddress(IPv4_RAW_ADDRESS Address)
+{
+    UCHAR Buffer[FIELD_OFFSET(TA_ADDRESS, Address) + TDI_ADDRESS_LENGTH_IP];
+    PTA_ADDRESS TaAddress = (PTA_ADDRESS)Buffer;
+    PTDI_ADDRESS_IP IpAddress = (PTDI_ADDRESS_IP)TaAddress->Address;
+    PIP_TDI_ADDRESS Registered;
+
+    Registered = ExAllocatePoolWithTag(PagedPool, sizeof(*Registered), IP_TDI_ADDRESS_TAG);
+    if (!Registered)
+        return;
+
+    RtlZeroMemory(Buffer, sizeof(Buffer));
+    TaAddress->AddressLength = TDI_ADDRESS_LENGTH_IP;
+    TaAddress->AddressType = TDI_ADDRESS_TYPE_IP;
+    IpAddress->in_addr = Address;
+
+    if (!NT_SUCCESS(TdiRegisterNetAddress(TaAddress, NULL, NULL, &Registered->Handle)))
+    {
+        ExFreePoolWithTag(Registered, IP_TDI_ADDRESS_TAG);
+        return;
+    }
+
+    Registered->Address = Address;
+    Registered->Present = TRUE;
+    InsertTailList(&IPTdiAddressList, &Registered->ListEntry);
+}
+
+/* Deregisters every address that is not marked as present */
+static VOID IPTdiDeregisterAbsent(VOID)
+{
+    PLIST_ENTRY Entry, Next;
+
+    for (Entry = IPTdiAddressList.Flink; Entry != &IPTdiAddressList; Entry = Next)
+    {
+        PIP_TDI_ADDRESS Registered = CONTAINING_RECORD(Entry, IP_TDI_ADDRESS, ListEntry);
+
+        Next = Entry->Flink;
+        if (Registered->Present)
+            continue;
+
+        RemoveEntryList(&Registered->ListEntry);
+        TdiDeregisterNetAddress(Registered->Handle);
+        ExFreePoolWithTag(Registered, IP_TDI_ADDRESS_TAG);
+    }
+}
+
+static VOID IPTdiAddressSyncWorker(PVOID Context)
+{
+    IPv4_RAW_ADDRESS *Addresses = NULL;
+    PLIST_ENTRY Entry;
+    ULONG Capacity = 0, Count = 0, i;
+    KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    /* A change from here on queues the next run */
+    InterlockedExchange(&IPTdiAddressSyncQueued, 0);
+
+    KeWaitForMutexObject(&IPTdiAddressMutex, Executive, KernelMode, FALSE, NULL);
+
+    TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+    for (Entry = NetTableListHead.Flink; Entry != &NetTableListHead; Entry = Entry->Flink)
+        Capacity++;
+    TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+
+    if (Capacity != 0)
+    {
+        Addresses = ExAllocatePoolWithTag(NonPagedPool, Capacity * sizeof(*Addresses), IP_TDI_ADDRESS_TAG);
+        if (!Addresses)
+        {
+            /* Nothing is changed; the next change of the table tries again */
+            KeReleaseMutex(&IPTdiAddressMutex, FALSE);
+            return;
+        }
+
+        TcpipAcquireSpinLock(&NetTableListLock, &OldIrql);
+        for (Entry = NetTableListHead.Flink; Entry != &NetTableListHead && Count < Capacity; Entry = Entry->Flink)
+        {
+            PIP_NTE Nte = CONTAINING_RECORD(Entry, IP_NTE, ListEntry);
+
+            if (Nte->DadState == IpDadStatePreferred && Nte->Interface != Loopback &&
+                Nte->Unicast.Address.IPv4Address != 0)
+            {
+                Addresses[Count++] = Nte->Unicast.Address.IPv4Address;
+            }
+        }
+        TcpipReleaseSpinLock(&NetTableListLock, OldIrql);
+    }
+
+    for (Entry = IPTdiAddressList.Flink; Entry != &IPTdiAddressList; Entry = Entry->Flink)
+        CONTAINING_RECORD(Entry, IP_TDI_ADDRESS, ListEntry)->Present = FALSE;
+
+    /* First what went away, then what is new: a client that looks at the
+     * table on each notification never sees more than is there */
+    for (i = 0; i < Count; i++)
+    {
+        PIP_TDI_ADDRESS Registered = IPTdiFindAddress(Addresses[i]);
+
+        if (Registered)
+            Registered->Present = TRUE;
+    }
+
+    IPTdiDeregisterAbsent();
+
+    for (i = 0; i < Count; i++)
+    {
+        if (!IPTdiFindAddress(Addresses[i]))
+            IPTdiRegisterAddress(Addresses[i]);
+    }
+
+    KeReleaseMutex(&IPTdiAddressMutex, FALSE);
+
+    if (Addresses)
+        ExFreePoolWithTag(Addresses, IP_TDI_ADDRESS_TAG);
+}
+
+/* The table of IPv4 addresses changed. May be called at DISPATCH_LEVEL. */
+VOID IPTdiAddressChanged(VOID)
+{
+    if (!IPTdiAddressReady)
+        return;
+
+    if (InterlockedCompareExchange(&IPTdiAddressSyncQueued, 1, 0) != 0)
+        return;
+
+    if (!ChewCreate(IPTdiAddressSyncWorker, NULL))
+        InterlockedExchange(&IPTdiAddressSyncQueued, 0);
+}
+
+VOID IPTdiAddressStartup(VOID)
+{
+    InitializeListHead(&IPTdiAddressList);
+    KeInitializeMutex(&IPTdiAddressMutex, 0);
+    IPTdiAddressSyncQueued = 0;
+    IPTdiAddressReady = TRUE;
+}
+
+/* Called when no work item can run any more */
+VOID IPTdiAddressShutdown(VOID)
+{
+    PLIST_ENTRY Entry;
+
+    if (!IPTdiAddressReady)
+        return;
+
+    IPTdiAddressReady = FALSE;
+
+    KeWaitForMutexObject(&IPTdiAddressMutex, Executive, KernelMode, FALSE, NULL);
+    for (Entry = IPTdiAddressList.Flink; Entry != &IPTdiAddressList; Entry = Entry->Flink)
+        CONTAINING_RECORD(Entry, IP_TDI_ADDRESS, ListEntry)->Present = FALSE;
+    IPTdiDeregisterAbsent();
+    KeReleaseMutex(&IPTdiAddressMutex, FALSE);
 }

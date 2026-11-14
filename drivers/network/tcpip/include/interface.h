@@ -20,6 +20,10 @@ NTSTATUS IPAddInterfaceAddress( PIP_INTERFACE Interface, IPv4_RAW_ADDRESS Addres
                                 IPv4_RAW_ADDRESS Netmask, PULONG Context, PULONG Instance );
 NTSTATUS IPDeleteInterfaceAddress( ULONG Context );
 VOID IPDeleteInterfaceAddresses( PIP_INTERFACE Interface );
+
+VOID IPTdiAddressChanged( VOID );
+VOID IPTdiAddressStartup( VOID );
+VOID IPTdiAddressShutdown( VOID );
 BOOLEAN IsInterfaceAddress( PIP_INTERFACE Interface, PIP_ADDRESS Address );
 BOOLEAN IsInterfaceBroadcast( PIP_INTERFACE Interface, PIP_ADDRESS Address );
 BOOLEAN IsInterfaceOnLink( PIP_INTERFACE Interface, PIP_ADDRESS Address );

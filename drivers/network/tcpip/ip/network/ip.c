@@ -479,6 +479,7 @@ NTSTATUS IPStartup(PUNICODE_STRING RegistryPath)
     InitializeListHead(&NetTableListHead);
     TcpipInitializeSpinLock(&NetTableListLock);
     ExInitializeFastMutex(&NetTableMutex);
+    IPTdiAddressStartup();
 
     /* Initialize reassembly list and protecting lock */
     InitializeListHead(&ReassemblyListHead);

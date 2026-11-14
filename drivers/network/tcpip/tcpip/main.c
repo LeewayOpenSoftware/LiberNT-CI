@@ -1252,6 +1252,7 @@ VOID NTAPI TiUnload(
 
     if (IPDeviceObject) {
         ChewShutdown();
+        IPTdiAddressShutdown();
         IoDeleteDevice(IPDeviceObject);
     }
 
