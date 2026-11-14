@@ -283,19 +283,32 @@ MmFreeSpecialPool(
  * pool so the region lock is genuinely contended when the trigger thread panics holding it. Never
  * returns meaningfully (the box bug-checks); no cleanup needed. */
 static VOID NTAPI
+static volatile LONG MiSpecialPoolPanicLoadCount;   /* bumped each iteration by the load thread */
+
+static VOID NTAPI
 MiSpecialPoolPanicLoad(_In_opt_ PVOID Context)
 {
-    UNREFERENCED_PARAMETER(Context);
+    /* Pin to a processor OTHER than the trigger's (passed as Context), so mode 3 is genuine cross-CPU
+     * contention rather than possibly co-scheduled on the trigger's CPU (Stanley SHOULD 1). On a
+     * single-processor box there is no other CPU, so we run wherever we are. */
+    ULONG TriggerCpu = (ULONG)(ULONG_PTR)Context;
+    KAFFINITY Active = KeQueryActiveProcessors();
+    KAFFINITY Other = Active & ~(((KAFFINITY)1) << TriggerCpu);
+    if (Other != 0)
+        KeSetSystemAffinityThreadEx(Other);
+
     for (;;)
     {
         PVOID P = MmAllocateSpecialPool(64, 'LPsT', NonPagedPool, 0);
         if (P != NULL)
             MmFreeSpecialPool(P);
+        InterlockedIncrement(&MiSpecialPoolPanicLoadCount);
     }
 }
 
-/* ConcurrentLoad != 0 -> first start the SMP2 workload above. Then acquire the real region lock and
- * trigger the Rust panic while holding it. Never returns. */
+/* ConcurrentLoad != 0 -> first start the SMP2 workload above, pinned to another CPU, and wait until it
+ * has actually allocated before taking the lock. Then acquire the real region lock and trigger the Rust
+ * panic while holding it. Never returns. */
 DECLSPEC_NORETURN VOID
 MiSpecialPoolForcePanic(_In_ ULONG ConcurrentLoad)
 {
@@ -305,20 +318,35 @@ MiSpecialPoolForcePanic(_In_ ULONG ConcurrentLoad)
     {
         HANDLE Thread = NULL;
         OBJECT_ATTRIBUTES Attr;
-        LARGE_INTEGER Delay;
+        ULONG TriggerCpu = KeGetCurrentProcessorNumber();
+        ULONG Spins;
 
+        MiSpecialPoolPanicLoadCount = 0;
         InitializeObjectAttributes(&Attr, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
         if (NT_SUCCESS(PsCreateSystemThread(&Thread, THREAD_ALL_ACCESS, &Attr, NULL, NULL,
-                                            MiSpecialPoolPanicLoad, NULL)) && Thread != NULL)
+                                            MiSpecialPoolPanicLoad, (PVOID)(ULONG_PTR)TriggerCpu)) && Thread != NULL)
             ZwClose(Thread);
 
-        /* Let the load thread reach the allocator (on the other CPU) before we take the lock. */
-        Delay.QuadPart = -10 * 1000 * 10;   /* 10 ms, relative */
-        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        /* Bounded wait until the load thread's allocation counter moves, so we take the lock with real
+         * concurrent contention and not before it has started (Stanley SHOULD 1). ~1 s cap. */
+        for (Spins = 0; MiSpecialPoolPanicLoadCount == 0 && Spins < 1000; Spins++)
+        {
+            LARGE_INTEGER Delay;
+            Delay.QuadPart = -1 * 1000 * 10;   /* 1 ms, relative */
+            KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+        }
     }
 
     if (MiSpecialPoolRegion != NULL)
+    {
         MI_SPIN_ACQUIRE(&MiSpecialPoolRegion->Lock, &OldIrql);   /* never released: we panic holding it */
+    }
+    else
+    {
+        /* Special pool is off: there is no region lock to hold, so modes 2/3 are NOT the lock-held
+         * case. Say so loudly so the lab cannot record a false PASS (Stanley SHOULD 2). */
+        DbgPrint("Driver Verifier: LRM-RS force-panic REGION LOCK NOT HELD (special pool is off)\n");
+    }
 
     (VOID)OldIrql;
     lrm_rs_force_panic();   /* never returns: LrmRsFatalStop -> KeBugCheckEx(0x4C524D00, 1, ...) */
