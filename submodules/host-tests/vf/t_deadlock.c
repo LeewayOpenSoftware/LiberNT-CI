@@ -151,8 +151,9 @@ int main(void)
 
     Take(0x40);
     CurrentThread = (PKTHREAD)0x2000;
-    Drop(0x40);
-    CHECK(VfDeadlockRuleHits == 5 && LastRule == 0x1004);
+    UNTIL_STOP(Drop(0x40));
+    CHECK(VfDeadlockRuleHits == 5 && Stops == 1 && StopCode == 0xC4 && StopParameter[0] == 0x1004);
+    CHECK(StopParameter[1] == 0x40 && StopParameter[2] == 0x1000 && StopParameter[3] == 0x2000);
     CurrentThread = (PKTHREAD)0x1000;
 
     VfForgetLocksInRange((PVOID)0x10, 0x10);
