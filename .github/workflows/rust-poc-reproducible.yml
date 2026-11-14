@@ -1,0 +1,207 @@
+# Reproducible-build + static-safety gate for the Rust kernel staticlibs, plus the host
+# differentials. Runs on push to leeway/exp-rust-poc and leeway/exp-lrm-rs-kernel (and manual
+# dispatch). Builds ONLY the Rust staticlibs (no kernel link): it never enables LIBERNT_ENABLE_RUST for the OS build
+# and never touches the ISO.
+name: rust-poc-reproducible
+
+on:
+  push:
+    branches: [leeway/exp-rust-poc, leeway/exp-lrm-rs-kernel]
+    paths:
+      - 'tools/rust-poc/**'
+      - 'sdk/cmake/rust.cmake'
+      - 'sdk/cmake/rust-build.cmake'
+      - '.github/workflows/rust-poc-reproducible.yml'
+      # The kernel side of LRM-RS: its wiring, C glue and the C reference it is diffed against.
+      - 'ntoskrnl/CMakeLists.txt'
+      - 'ntoskrnl/nvs/**/lrmrs*'
+      - 'ntoskrnl/nvs/nt/ntspecial.c'
+      - 'ntoskrnl/nvs/pool/special/**'
+      - 'ntoskrnl/nvs/pool/include/poolspecial.h'
+      - 'ntoskrnl/vf/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproducible-staticlib:
+    # The kernel Rust staticlibs, built by sdk/cmake/rust-build.cmake (the recipe the
+    # LiberNT build uses) with the pinned stable toolchain. Each crate is built twice,
+    # from two source locations into two work directories; the archives must be
+    # byte-identical. The recipe itself fails on a symbol outside the allowed list and on
+    # x87/MMX/AVX code. Two negative controls prove the extern gate is live.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain pin is consistent and stable
+        run: |
+          TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
+          CH=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' tools/rust-poc/rust-toolchain.toml)
+          echo "rust.cmake=$TC rust-toolchain.toml=$CH"
+          [ -n "$TC" ] && [ "$TC" = "$CH" ] || { echo "::error::toolchain pins differ"; exit 1; }
+          case "$TC" in *nightly*|*beta*) echo "::error::kernel toolchain must be a stable release"; exit 1;; esac
+          if grep -rnE 'build-std|cargo-features|json-target-spec' tools/rust-poc/Cargo.toml tools/rust-poc/.cargo tools/rust-poc/lrm-rs/Cargo.toml; then
+            echo "::error::nightly-only cargo settings in a kernel crate"; exit 1; fi
+          if grep -rn '#!\[feature' tools/rust-poc/src tools/rust-poc/lrm-rs/src; then
+            echo "::error::#![feature] in a kernel crate"; exit 1; fi
+          for L in tools/rust-poc/Cargo.lock tools/rust-poc/lrm-rs/Cargo.lock; do
+            if grep -n '^source = ' "$L"; then echo "::error::$L pulls a registry/git crate (offline build)"; exit 1; fi
+          done
+          echo "TC=$TC" >> "$GITHUB_ENV"
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install "$TC" --profile minimal \
+            --component llvm-tools --target x86_64-pc-windows-gnu
+          rustc +"$TC" --version --verbose
+          B="$(rustc +"$TC" --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin"
+          echo "LLVM_BIN=$B" >> "$GITHUB_ENV"
+
+      - name: Build every kernel crate twice and compare
+        run: |
+          set -eu
+          POC_EXTERNS="ExAllocatePoolWithTag,ExFreePoolWithTag,KeInitializeSpinLock,KeAcquireSpinLockRaiseToDpc,KeReleaseSpinLock"
+          build() { # <manifest dir> <crate> <work dir> <externs> [features] [forbid_panic]
+            cmake -DRUSTUP="$(command -v rustup)" -DTOOLCHAIN="$TC" -DRUST_TARGET=x86_64-pc-windows-gnu \
+              -DLLVM_AR="$LLVM_BIN/llvm-ar" -DLLVM_NM="$LLVM_BIN/llvm-nm" -DLLVM_OBJDUMP="$LLVM_BIN/llvm-objdump" \
+              -DMANIFEST_DIR="$1" -DCRATE="$2" -DWORK_DIR="$3" -DOUTPUT="$3/lib$2.a" \
+              -DALLOWED_EXTERNS="$4" -DFEATURES="${5:-}" -DFORBID_PANIC="${6:-}" -P sdk/cmake/rust-build.cmake
+          }
+          ELSE="$RUNNER_TEMP/elsewhere/a/b"
+          mkdir -p "$ELSE"
+          cp -r tools/rust-poc "$ELSE/rust-poc"
+          : > "$RUNNER_TEMP/hashes.txt"
+          check() { # <name> <work1> <work2> <file>
+            H1=$(sha256sum "$2/$4" | awk '{print $1}'); H2=$(sha256sum "$3/$4" | awk '{print $1}')
+            echo "$1 build1=$H1 build2=$H2"
+            [ "$H1" = "$H2" ] || { echo "::error::$1 is not reproducible"; exit 1; }
+            echo "$1 $H1" >> "$RUNNER_TEMP/hashes.txt"
+          }
+          # lrm_rs is routed in the kernel; it must be panic-free (FORBID_PANIC=1), unlike leeway_rs_poc
+          # whose test IOCTL deliberately bug-checks.
+          build tools/rust-poc/lrm-rs lrm_rs "$RUNNER_TEMP/w/lrm1" "LrmRsFatalStop" "" 1
+          build "$ELSE/rust-poc/lrm-rs" lrm_rs "$RUNNER_TEMP/w/lrm2" "LrmRsFatalStop" "" 1
+          check lrm_rs "$RUNNER_TEMP/w/lrm1" "$RUNNER_TEMP/w/lrm2" liblrm_rs.a
+          build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/poc1" "$POC_EXTERNS"
+          build "$ELSE/rust-poc" leeway_rs_poc "$RUNNER_TEMP/w/poc2" "$POC_EXTERNS"
+          check leeway_rs_poc "$RUNNER_TEMP/w/poc1" "$RUNNER_TEMP/w/poc2" libleeway_rs_poc.a
+          build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/pocT" "$POC_EXTERNS,KeBugCheckEx" test-ioctls
+          echo "leeway_rs_poc+test-ioctls $(sha256sum "$RUNNER_TEMP/w/pocT/libleeway_rs_poc.a" | awk '{print $1}')" >> "$RUNNER_TEMP/hashes.txt"
+          if build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/neg1" "ExAllocatePoolWithTag"; then
+            echo "::error::negative control: a short allowed list was accepted"; exit 1; fi
+          if build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/neg2" "$POC_EXTERNS" test-ioctls; then
+            echo "::error::negative control: KeBugCheckEx was accepted without being allowed"; exit 1; fi
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$RUNNER_TEMP/w/lrm1/liblrm_rs.a" "$RUNNER_TEMP/w/poc1/libleeway_rs_poc.a" "$RUNNER_TEMP/hashes.txt" "$RUNNER_TEMP/out/"
+          { echo "### Rust kernel staticlibs ($TC, x86_64-pc-windows-gnu)"; echo '```'; cat "$RUNNER_TEMP/hashes.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload staticlibs and hashes
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-kernel-staticlibs-${{ github.sha }}
+          path: ${{ runner.temp }}/out
+          if-no-files-found: error
+
+  io3-differential:
+    # D-1: the IO-3 name-grafting validator (same source) vs an independent C reference,
+    # over a corpus + a structured sweep + a deterministic fuzz. Exit 0 iff 0 disagreements
+    # and every status class was produced (non-vacuous). Host-side only; no kernel link.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustc +1.97.1 --version --verbose
+      - name: Run D-1 differential (2,000,000 fuzz iterations)
+        run: |
+          chmod +x tools/rust-poc/difftest/run-differential.sh
+          ITERS=2000000 tools/rust-poc/difftest/run-differential.sh
+
+  io3-equivalence:
+    # Production-equivalence: the SAME Rust source, linked into Stanley's shipped harness as
+    # IopValidateMountPointBuffer, agrees with his Oracle() + fixed cases + generator, and the
+    # C baseline (reparse.c == Oracle) also passes. The harness is pinned to the public
+    # LiberNT-CI SHA; the job fails if EITHER side (the Rust or the pinned C/harness) changes.
+    runs-on: ubuntu-latest
+    env:
+      IO3_SHA: 1d45eab8da4251cce466d3b2fc4b8e335507bc96
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal
+      - name: Fetch the io3 harness at the pinned SHA (public LiberNT-CI)
+        run: |
+          mkdir -p "$RUNNER_TEMP/ci" && cd "$RUNNER_TEMP/ci" && git init -q
+          git remote add origin https://github.com/LeewayOpenSoftware/LiberNT-CI.git
+          # Fetch the exact immutable commit id, so a moved/merged/deleted branch cannot
+          # change what we test (the pin cannot drift).
+          git fetch --depth 1 origin "$IO3_SHA"
+          git checkout -q "$IO3_SHA"
+      - name: Run the production-equivalence harness (C baseline + Rust)
+        run: |
+          chmod +x tools/rust-poc/difftest/run-io3-harness.sh
+          IOMGR="$RUNNER_TEMP/ci/submodules/host-tests/iomgr" ITERS=2000000 \
+            tools/rust-poc/difftest/run-io3-harness.sh
+
+  mp-equivalence:
+    # R1c: the Rust mapping-pairs decoder linked into the ntfslib decoder rig as its
+    # alternative implementation. The library (reference), the spec model and the Rust
+    # port must agree on status and on every run for the harvested corpus and for
+    # generated input over three seeds, under ASan and UBSan. The rig is pinned to a
+    # full SHA of the public LiberNT-CI; agreement on these inputs, not proof.
+    runs-on: ubuntu-24.04
+    env:
+      RIG_SHA: 7e3c6f3b27f1aa6872ebbb3b526ca273b119ffbc
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain and host build tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          sudo apt-get update
+          sudo apt-get install -y g++ cmake ninja-build pkg-config libfuse3-dev
+      - name: Fetch the decoder rig at the pinned SHA (public LiberNT-CI)
+        run: |
+          mkdir -p "$RUNNER_TEMP/rig" && cd "$RUNNER_TEMP/rig" && git init -q
+          git remote add origin https://github.com/LeewayOpenSoftware/LiberNT-CI.git
+          git sparse-checkout set sdk/lib/fslib/ntfslib_new base/applications/cmdutils/lntexpandstorage
+          git fetch -q --depth 1 --filter=blob:none origin "$RIG_SHA"
+          git checkout -q FETCH_HEAD
+          test "$(git rev-parse HEAD)" = "$RIG_SHA"
+      - name: Run the rig (ntfslib == model == rust)
+        env:
+          ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
+          UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+        run: |
+          RIG="$RUNNER_TEMP/rig" ITERS=1000000 sh tools/rust-poc/ntfs-decode-rs/difftest/run-mp-rig.sh
+
+  lrm-equivalence:
+    # LRM-RS: the Rust special-pool engine vs Dwight's C engine (special.c), same contract.
+    # Fetches feat/special-pool at a pinned full commit id from the public LiberNT-CI, compiles
+    # special.c unmodified against the host poolenv.h stand-in, links the Rust staticlib, and
+    # runs the differential (Select/Place/Prepare/Owns/Check + exact corrupt address). Fails on
+    # any disagreement or a vacuous run.
+    runs-on: ubuntu-24.04
+    env:
+      SP_SHA: 3feb1c4f6a20bcb35cd062ee8e37421f3a597c7f
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust toolchain + host build tools
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          sudo apt-get update && sudo apt-get install -y g++ gcc
+      - name: Fetch the C special-pool engine at the pinned SHA (public LiberNT-CI)
+        run: |
+          mkdir -p "$RUNNER_TEMP/sp" && cd "$RUNNER_TEMP/sp" && git init -q
+          git remote add origin https://github.com/LeewayOpenSoftware/LiberNT-CI.git
+          git fetch -q --depth 1 origin "$SP_SHA"
+          git checkout -q "$SP_SHA"
+          test "$(git rev-parse HEAD)" = "$SP_SHA"
+      - name: Run the LRM-RS differential against the real C engine
+        run: |
+          chmod +x tools/rust-poc/lrm-rs/difftest/run-lrm-diff.sh
+          SPECIAL_C="$RUNNER_TEMP/sp/ntoskrnl/nvs/pool/special/special.c" \
+          SPECIAL_H="$RUNNER_TEMP/sp/ntoskrnl/nvs/pool/include/poolspecial.h" \
+          ITERS=2000000 tools/rust-poc/lrm-rs/difftest/run-lrm-diff.sh

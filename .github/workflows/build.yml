@@ -4,10 +4,22 @@ on:
     branches-ignore: [main-nt10]
   pull_request:
   # Manual restart for a branch whose push event was lost (GitHub incident of 2026-11-12).
+  # lrm_rs=true builds instead an experimental image with LIBERNT_ENABLE_RUST and
+  # LIBERNT_ENABLE_LRM_RS ON (special pool routed through Rust) plus lnrspoc.sys, for VM
+  # tests only: build-linux only, artifact names carry -lrmrs, no LBI allocation, no ccache save.
   workflow_dispatch:
+    inputs:
+      lrm_rs:
+        description: 'Experimental LRM-RS image (Rust special pool in ntoskrnl + lnrspoc.sys); VM tests only'
+        type: boolean
+        default: false
+      force_panic:
+        description: 'LAB-ONLY LRM-RS force-panic image (implies lrm_rs; +FORCE_PANIC_TEST +LNRSPOC_TEST_IOCTLS, FORBID_PANIC off, lnrspoc 0x80B); disposable VM only, never ship'
+        type: boolean
+        default: false
 
 concurrency:
-  group: build-${{ github.ref }}
+  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs) && 'lrmrs' || 'std' }}
   cancel-in-progress: true
 
 permissions:
@@ -23,6 +35,9 @@ jobs:
             arch: amd64
       fail-fast: false
     runs-on: ubuntu-24.04
+    env:
+      LRM_RS: ${{ (github.event_name == 'workflow_dispatch' && (inputs.lrm_rs || inputs.force_panic)) && 'ON' || 'OFF' }}
+      FORCE_PANIC: ${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'ON' || 'OFF' }}
     steps:
     - name: Free disk space
       run: |
@@ -38,6 +53,13 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
+
+    - name: Install pinned Rust toolchain (LRM-RS image only)
+      if: ${{ env.LRM_RS == 'ON' }}
+      run: |
+        TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
+        rustup toolchain install "$TC" --profile minimal --component llvm-tools --target x86_64-pc-windows-gnu
+        rustc +"$TC" --version --verbose
 
     - name: Compute RosBE bootstrap SHA
       id: rosbe_spec
@@ -79,6 +101,11 @@ jobs:
       run: |
         ENV_NAME=$([ "${{matrix.compiler}}" = "clang" ] && echo Clang || echo GCC)
         OUTDIR="output-$ENV_NAME-${{matrix.arch}}-debug"
+        if [ "$LRM_RS" = ON ]; then
+          echo "::notice::LBI: experimental LRM-RS image, no build identity is allocated"
+          echo "require=OFF" >> "$GITHUB_OUTPUT"
+          exit 0
+        fi
         if [ -z "$LBI_LEDGER_DEPLOY_KEY" ]; then
           echo "::notice::LBI: no ledger key in this context; the build stays unallocated"
           echo "require=OFF" >> "$GITHUB_OUTPUT"
@@ -105,6 +132,8 @@ jobs:
         [ "${{matrix.compiler}}" = "gcc" ] && FLAGS="$FLAGS --gcc"
         [ -n "${{matrix.profile}}" ] && FLAGS="$FLAGS -DROSCONFIG_PROFILE=${{matrix.profile}}"
         [ "${{matrix.compiler}}" = "clang" ] && case "${{matrix.arch}}" in amd64) FLAGS="$FLAGS -DENABLE_MESA_LLVMPIPE=ON" ;; esac
+        [ "$LRM_RS" = ON ] && FLAGS="$FLAGS -DLIBERNT_ENABLE_RUST=ON -DLIBERNT_ENABLE_LRM_RS=ON"
+        [ "$FORCE_PANIC" = ON ] && FLAGS="$FLAGS -DLIBERNT_LRM_RS_FORCE_PANIC_TEST=ON -DLNRSPOC_TEST_IOCTLS=ON"
         ./configure.sh $FLAGS -a ${{matrix.arch}} \
           -DREACTOS_TARGET_NT=0xA00 \
           -DDIAGDATA_CHANNEL= \
@@ -124,6 +153,30 @@ jobs:
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
         ninja -C ${{steps.configure.outputs.outdir}} bootcd liberntimg liberntvhd -k0
 
+    - name: Build lnrspoc and check the LRM-RS kernel (LRM-RS image only)
+      if: ${{ env.LRM_RS == 'ON' }}
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        ninja -C "$OUT" lnrspoc
+        mkdir -p lrmrs-out
+        cp "$OUT/tools/rust-poc/lnrspoc.sys" "$OUT/tools/rust-poc/libleeway_rs_poc.a" "$OUT/ntoskrnl/liblrm_rs.a" lrmrs-out/
+        def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+        [ -n "$def" ] && grep -q LrmRsSelfTest "$def" || { echo "::error::ntoskrnl does not export LrmRsSelfTest"; exit 1; }
+        if [ "$FORCE_PANIC" = ON ]; then grep -q LrmRsForcePanic "$def" || { echo "::error::force-panic image does not export LrmRsForcePanic"; exit 1; }; fi
+        (cd lrmrs-out && sha256sum * | tee SHA256SUMS)
+
+    - name: Assert flag-OFF ntoskrnl has no LRM-RS exports (default build)
+      if: ${{ env.LRM_RS == 'OFF' }}
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+        if [ -n "$def" ] && grep -qiE 'LrmRs' "$def"; then
+          echo "::error::flag-OFF ntoskrnl.def exports an LrmRs symbol; export table must match a no-flag build"; grep -iE "LrmRs" "$def"; exit 1
+        fi
+        echo "flag-OFF export-table parity OK: no LrmRs exports in ${def:-<no ntoskrnl.def>}"
+
     - name: Build stage-1 applier
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
@@ -138,7 +191,7 @@ jobs:
 
     - name: Save ccache
       id: ccache_save
-      if: ${{ always() && steps.ccache_restore.outcome == 'success' }}
+      if: ${{ always() && steps.ccache_restore.outcome == 'success' && env.LRM_RS != 'ON' }}
       uses: actions/cache/save@v5
       with:
         path: ccache
@@ -160,7 +213,17 @@ jobs:
 
     - name: Name artifacts
       id: images
-      run: echo "tag=${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
+      run: |
+        V=""; [ "$LRM_RS" = ON ] && V="-lrmrs"; [ "$FORCE_PANIC" = ON ] && V="-lrmrs-fp"
+        echo "tag=${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}$V-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
+
+    - name: Upload lnrspoc.sys and the Rust archives (LRM-RS image only)
+      if: ${{ env.LRM_RS == 'ON' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: lnrspoc-lrmrs-${{steps.images.outputs.tag}}
+        path: lrmrs-out/
+        if-no-files-found: error
 
     - name: Upload stage-1 applier
       uses: actions/upload-artifact@v7
@@ -204,6 +267,7 @@ jobs:
       run: python3 -u sdk/tools/check-freeldr-size.py ${{steps.configure.outputs.outdir}}
 
   build-rostests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
     # Compile the test suite (modules/rostests) with clang for amd64. A
     # separate build, because ENABLE_ROSTESTS also changes what goes into
     # the images that build-linux produces. Compile only, no test run.
@@ -326,6 +390,7 @@ jobs:
         key: ${{ steps.ccache_restore.outputs.cache-primary-key }}
 
   ntfslib-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
     # The host tests of the NTFS library, outside the image build: the
     # volume check (index walk unit test, cluster claim smoke test), a
     # directory index that grows past its base record, a size change made
@@ -372,6 +437,7 @@ jobs:
         if-no-files-found: ignore
 
   cmlib-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
     # Host test of the configuration-manager hive library: HvMarkCellDirty must
     # mark every block a cell occupies, including a block-aligned header and a
     # cell that spans several blocks. Regression for the dx2400 STOP 0x1E at
@@ -408,6 +474,7 @@ jobs:
         ctest --test-dir build/cmlib-host --output-on-failure -R "cmlib_mark_dirty|cmlib_dirty_arith"
 
   mmcc-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.lrm_rs) }}
     # Host tests of the NVS memory manager core on a simulated machine: page
     # tables, faults, sections, the cache manager on top, system regions and
     # the guarded special pool region, for amd64, arm64 and high memory, plus

@@ -1,0 +1,28 @@
+[package]
+name = "leeway-rs-poc"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+publish = false
+description = "Leeway experimental no_std Rust kernel-mode PoC staticlib (lnrspoc). Not shipped; off by default."
+
+[features]
+# Destructive panic/bugcheck path is OFF by default; built only for the
+# disposable-VM failure test. Keeps the bugcheck unreachable in normal builds.
+default = []
+test-ioctls = []
+
+[lib]
+name = "leeway_rs_poc"
+crate-type = ["staticlib"]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
+debug = 1
+strip = false

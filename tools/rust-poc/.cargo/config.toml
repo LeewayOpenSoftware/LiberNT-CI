@@ -1,0 +1,6 @@
+# Plain `cargo build` here builds the kernel staticlib for the built-in Windows GNU target.
+# The CMake build does not use this file: sdk/cmake/rust-build.cmake passes every setting itself.
+[build]
+target = "x86_64-pc-windows-gnu"
+# v0 mangling so KD/WinDbg can demangle internal Rust frames.
+rustflags = ["-Csymbol-mangling-version=v0"]

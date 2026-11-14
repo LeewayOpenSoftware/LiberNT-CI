@@ -1,0 +1,65 @@
+# Coverage-guided (libFuzzer / cargo-fuzz) differential fuzzing of the LRM-RS special-pool engine
+# against Dwight's C engine. The counterpart to the fixed-RNG `lrm-equivalence` job in
+# rust-poc-reproducible.yml: libFuzzer's coverage search hunts for C-vs-Rust divergence and panics.
+# Bounded wall-clock per target so it fits a normal CI budget. Host-side only; no kernel link.
+name: lrm-rs-fuzz
+
+on:
+  push:
+    branches: [leeway/exp-lrm-rs-kernel]
+    paths:
+      - 'tools/rust-poc/lrm-rs/**'
+      - 'tools/rust-poc/fuzz/**'
+      - '.github/workflows/lrm-rs-fuzz.yml'
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: 'libFuzzer -max_total_time (seconds) per target'
+        default: '120'
+
+permissions:
+  contents: read
+
+jobs:
+  lrm-fuzz:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pinned Rust toolchain, cargo-fuzz and clang
+        run: |
+          rustup toolchain install nightly-2026-05-24 --profile minimal --component rust-src --component llvm-tools
+          cargo +nightly-2026-05-24 install cargo-fuzz --locked
+          sudo apt-get update && sudo apt-get install -y clang gcc
+
+      - name: Stage tools/rust-poc without the kernel .cargo config (host fuzz build)
+        # The kernel .cargo/config.toml forces the custom kernel target + build-std on everything
+        # under tools/rust-poc; drop it in a staged copy so cargo-fuzz builds for the host with its
+        # own sanitizer runtime. Relative paths (fuzz -> ../lrm-rs, build.rs -> ../lrm-rs/difftest)
+        # are preserved by copying the whole tree.
+        run: |
+          cp -r tools/rust-poc "$RUNNER_TEMP/rp"
+          rm -f "$RUNNER_TEMP/rp/.cargo/config.toml"
+
+      - name: Fuzz every LRM-RS differential target (bounded, per target)
+        working-directory: ${{ runner.temp }}/rp
+        env:
+          T: ${{ github.event.inputs.max_total_time || '120' }}
+        run: |
+          # Run each lrm_* target for the bounded wall-clock; auto-includes new ones.
+          TARGETS=$(cargo +nightly-2026-05-24 fuzz list | grep '^lrm_' || true)
+          test -n "$TARGETS" || { echo "::error::no lrm_* fuzz targets found"; exit 1; }
+          for t in $TARGETS; do
+            echo "::group::fuzz $t"
+            cargo +nightly-2026-05-24 fuzz run "$t" -- \
+              -max_total_time="$T" -rss_limit_mb=4096 -print_final_stats=1
+            echo "::endgroup::"
+          done
+
+      - name: Upload crash artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lrm-fuzz-artifacts
+          path: ${{ runner.temp }}/rp/fuzz/artifacts
+          if-no-files-found: ignore
