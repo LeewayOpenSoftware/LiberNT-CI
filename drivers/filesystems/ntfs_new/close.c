@@ -41,6 +41,7 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     /* Perform final teardown of the file object's context. */
+    BOOLEAN LastFileObject = FALSE;
     {
         PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
         PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
@@ -143,10 +144,19 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             }
             IrpSp->FileObject->FsContext = NULL;
             IrpSp->FileObject->FsContext2 = NULL;
+
+            /* The last file object of a dismounted volume releases it: the
+             * handles went long before (an image section outlives its handle). */
+            ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+            NtfsDropFileObject(VolCB);
+            LastFileObject = VolCB->Dismounted && VolCB->FileObjectCount == 0;
+            ExReleaseFastMutex(&VolCB->VolumeStateMutex);
         }
     }
 
     Irp->IoStatus.Information = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    if (LastFileObject)
+        NtfsReleaseDismountedVolumeFromClose(VolumeDeviceObject);
     return STATUS_SUCCESS;
 }

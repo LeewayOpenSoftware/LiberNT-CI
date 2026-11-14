@@ -38,6 +38,11 @@ typedef struct _VolumeContextBlock
     FAST_MUTEX VolumeStateMutex;
     SHARE_ACCESS VolumeShareAccess;
     LONG OpenHandleCount;
+    /* File objects that carry a context on this volume, with or without a
+     * handle: an image section keeps its file object after the handle
+     * closes. Counted under VolumeStateMutex; a dismounted volume is
+     * released when it reaches zero (NtfsReleaseDismountedVolume). */
+    LONG FileObjectCount;
     LONG VolumeHandleCount;
     /* Handles in OpenHandleCount that do not hold off a boot-time lock (see
      * NtfsIsBootExecuteWindow); counted under VolumeStateMutex. */
@@ -205,6 +210,9 @@ NtfsUnregisterVolumeForShutdown(_In_ PVolumeContextBlock VolCB);
 
 VOID
 NtfsReleaseDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);
+
+VOID
+NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject);
 
 PNtfsCachedRecord
 NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,
@@ -566,6 +574,15 @@ NtfsDropOpenHandle(_In_ PVolumeContextBlock VolCB,
         if (VolCB->BootLockNeutralHandleCount > 0)
             VolCB->BootLockNeutralHandleCount--;
     }
+}
+
+/* Drop one file object from FileObjectCount. Caller holds VolumeStateMutex. */
+FORCEINLINE
+VOID
+NtfsDropFileObject(_In_ PVolumeContextBlock VolCB)
+{
+    if (VolCB->FileObjectCount > 0)
+        VolCB->FileObjectCount--;
 }
 
 FORCEINLINE

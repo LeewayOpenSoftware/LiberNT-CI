@@ -106,7 +106,7 @@ NtfsReleaseDismountedVolume(
     KIRQL OldIrql;
 
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
-    if (VolCB->Dismounted && VolCB->OpenHandleCount == 0 && !VolCB->BootRepairDismount)
+    if (VolCB->Dismounted && VolCB->FileObjectCount == 0 && !VolCB->BootRepairDismount)
     {
         StreamFileObject = VolCB->StreamFileObject;
         VolCB->StreamFileObject = NULL;
@@ -132,6 +132,50 @@ NtfsReleaseDismountedVolume(
         ObDereferenceObject(StreamFileObject);
         /* FIXME: Delete the volume device and free the volume context once its last file object is closed. */
     }
+}
+
+typedef struct _NTFS_RELEASE_WORK
+{
+    WORK_QUEUE_ITEM Item;
+    PDEVICE_OBJECT VolumeDeviceObject;
+} NTFS_RELEASE_WORK, *PNTFS_RELEASE_WORK;
+
+static
+VOID
+NTAPI
+NtfsReleaseDismountedVolumeWorker(_In_ PVOID Context)
+{
+    PNTFS_RELEASE_WORK Work = Context;
+    PDEVICE_OBJECT VolumeDeviceObject = Work->VolumeDeviceObject;
+
+    ExFreePoolWithTag(Work, TAG_NTFS);
+    NtfsReleaseDismountedVolume(VolumeDeviceObject);
+    ObDereferenceObject(VolumeDeviceObject);
+}
+
+/* The last file object closed on a dismounted volume. IRP_MJ_CLOSE may arrive
+ * above PASSIVE_LEVEL (a deferred dereference from Cc or Mm); the release
+ * flushes and waits, so it runs on a worker then. */
+VOID
+NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject)
+{
+    PNTFS_RELEASE_WORK Work;
+
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+    {
+        NtfsReleaseDismountedVolume(VolumeDeviceObject);
+        return;
+    }
+
+    /* Out of pool: the volume stays as the dismount left it (no data at
+     * risk, everything was flushed on dismount); a PnP remove still releases it. */
+    Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), TAG_NTFS);
+    if (Work == NULL)
+        return;
+    ObReferenceObject(VolumeDeviceObject);
+    Work->VolumeDeviceObject = VolumeDeviceObject;
+    ExInitializeWorkItem(&Work->Item, NtfsReleaseDismountedVolumeWorker, Work);
+    ExQueueWorkItem(&Work->Item, DelayedWorkQueue);
 }
 
 _Function_class_(IRP_MJ_PNP)
