@@ -474,6 +474,72 @@ ScatterGatherSendPacket(
    ExFreePool(DmaContext);
 }
 
+static
+NDIS_STATUS
+proSendPacketScatterGather(
+    IN PLOGICAL_ADAPTER Adapter,
+    IN PNDIS_PACKET Packet)
+/*
+ * FUNCTION: Builds the scatter/gather list of a packet and sends the packet
+ *           to a legacy miniport that uses scatter/gather DMA
+ * ARGUMENTS:
+ *     Adapter = Pointer to the logical adapter
+ *     Packet  = Pointer to NDIS packet descriptor
+ * RETURNS:
+ *     NDIS_STATUS_PENDING if the list was requested; the packet is then
+ *     completed through MiniSendComplete. A failure status if not; the
+ *     packet was then not given to the miniport and has no list.
+ */
+{
+    PNDIS_BUFFER NdisBuffer;
+    PDMA_CONTEXT Context;
+    NDIS_STATUS NdisStatus;
+    UINT PacketLength;
+    KIRQL OldIrql;
+
+    NdisQueryPacket(Packet,
+                    NULL,
+                    NULL,
+                    &NdisBuffer,
+                    &PacketLength);
+
+    NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
+                                     ScatterGatherListPacketInfo) = NULL;
+
+    Context = ExAllocatePool(NonPagedPool, sizeof(DMA_CONTEXT));
+    if (!Context) {
+        NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+        return NDIS_STATUS_RESOURCES;
+    }
+
+    Context->Adapter = Adapter;
+    Context->Packet = Packet;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+
+    KeFlushIoBuffers(NdisBuffer, FALSE, TRUE);
+
+    NdisStatus = Adapter->NdisMiniportBlock.SystemAdapterObject->DmaOperations->GetScatterGatherList(
+                  Adapter->NdisMiniportBlock.SystemAdapterObject,
+                  Adapter->NdisMiniportBlock.PhysicalDeviceObject,
+                  NdisBuffer,
+                  MmGetMdlVirtualAddress(NdisBuffer),
+                  PacketLength,
+                  ScatterGatherSendPacket,
+                  Context,
+                  TRUE);
+
+    KeLowerIrql(OldIrql);
+
+    if (!NT_SUCCESS(NdisStatus)) {
+        NDIS_DbgPrint(MIN_TRACE, ("GetScatterGatherList failed! (%x)\n", NdisStatus));
+        ExFreePool(Context);
+        return NdisStatus;
+    }
+
+    return NDIS_STATUS_PENDING;
+}
+
 NDIS_STATUS
 proSendPacketToMiniport(PLOGICAL_ADAPTER Adapter, PNDIS_PACKET Packet)
 {
@@ -583,11 +649,7 @@ ProSend(
 {
   PADAPTER_BINDING AdapterBinding;
   PLOGICAL_ADAPTER Adapter;
-  PNDIS_BUFFER NdisBuffer;
-  PDMA_CONTEXT Context;
   NDIS_STATUS NdisStatus;
-  UINT PacketLength;
-  KIRQL OldIrql;
 
   NDIS_DbgPrint(MAX_TRACE, ("Called.\n"));
 
@@ -644,45 +706,10 @@ ProSend(
         {
             NDIS_DbgPrint(MID_TRACE, ("Using Scatter/Gather DMA\n"));
 
-            NdisQueryPacket(Packet,
-                            NULL,
-                            NULL,
-                            &NdisBuffer,
-                            &PacketLength);
-
-            Context = ExAllocatePool(NonPagedPool, sizeof(DMA_CONTEXT));
-            if (!Context) {
-                NDIS_DbgPrint(MIN_TRACE, ("Insufficient resources\n"));
+            NdisStatus = proSendPacketScatterGather(Adapter, Packet);
+            if (NdisStatus != NDIS_STATUS_PENDING)
                 NdisDereferenceAdapterBinding(AdapterBinding);
-                return NDIS_STATUS_RESOURCES;
-            }
-
-            Context->Adapter = Adapter;
-            Context->Packet = Packet;
-
-            KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-
-            KeFlushIoBuffers(NdisBuffer, FALSE, TRUE);
-
-            NdisStatus = Adapter->NdisMiniportBlock.SystemAdapterObject->DmaOperations->GetScatterGatherList(
-                          Adapter->NdisMiniportBlock.SystemAdapterObject,
-                          Adapter->NdisMiniportBlock.PhysicalDeviceObject,
-                          NdisBuffer,
-                          MmGetMdlVirtualAddress(NdisBuffer),
-                          PacketLength,
-                          ScatterGatherSendPacket,
-                          Context,
-                          TRUE);
-
-            KeLowerIrql(OldIrql);
-
-            if (!NT_SUCCESS(NdisStatus)) {
-                NDIS_DbgPrint(MIN_TRACE, ("GetScatterGatherList failed! (%x)\n", NdisStatus));
-                NdisDereferenceAdapterBinding(AdapterBinding);
-                return NdisStatus;
-            }
-
-            return NDIS_STATUS_PENDING;
+            return NdisStatus;
         }
 
         NdisStatus = proSendPacketToMiniport(Adapter, Packet);
@@ -742,6 +769,23 @@ ProSendPackets(
     {
         extern ULONG Ndis6TxSendPackets(PLOGICAL_ADAPTER, PPNDIS_PACKET, UINT);
         Ndis6TxSendPackets(Adapter, PacketArray, NumberOfPackets);
+        return;
+    }
+
+    /* A miniport that uses scatter/gather DMA reads the list of each packet
+     * and the completion releases it, so each packet gets its list first.
+     * The packet goes on to the miniport when its list is ready. */
+    if (Adapter->NdisMiniportBlock.ScatterGatherListSize != 0)
+    {
+        for (i = 0; i < NumberOfPackets; i++)
+        {
+            if (PacketArray[i] == NULL)
+                continue;
+
+            NdisStatus = proSendPacketScatterGather(Adapter, PacketArray[i]);
+            if (NdisStatus != NDIS_STATUS_PENDING)
+                MiniSendComplete(Adapter, PacketArray[i], NdisStatus);
+        }
         return;
     }
 
