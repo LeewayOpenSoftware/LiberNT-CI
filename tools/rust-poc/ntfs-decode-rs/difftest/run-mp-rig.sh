@@ -6,7 +6,7 @@
 #
 # RIG    a LiberNT checkout holding sdk/lib/fslib/ntfslib_new (and lntexpandstorage)
 # ITERS  generated cases per seed (default 1000000)
-# SEEDS  generator seeds (default "1 2 3")
+# SEEDS  generator seeds (default "1 0x1234 0xdeadbeef"; the rig makes each odd)
 # TC     Rust toolchain (default nightly-2026-05-24)
 #
 # The crate is built outside tools/rust-poc, whose .cargo config targets the kernel.
@@ -17,7 +17,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/.." && pwd)"
 RIG="${RIG:?set RIG to a LiberNT checkout with sdk/lib/fslib/ntfslib_new}"
 ITERS="${ITERS:-1000000}"
-SEEDS="${SEEDS:-1 2 3}"
+SEEDS="${SEEDS:-1 0x1234 0xdeadbeef}"
 TC="${TC:-nightly-2026-05-24}"
 
 STAGE="$(mktemp -d)"
@@ -37,8 +37,14 @@ BIN="$(find "$STAGE/build" -type f -name ntfslib_decode_diff_test | head -1)"
 rc=0
 for seed in $SEEDS; do
     echo "== seed $seed, $ITERS iterations"
-    "$BIN" --seed "$seed" "$ITERS" > "$STAGE/out.txt" 2>&1 || rc=1
+    status=0
+    stdbuf -oL "$BIN" --seed "$seed" "$ITERS" > "$STAGE/out.txt" 2>&1 || status=$?
     cat "$STAGE/out.txt"
+    if [ "$status" -ne 0 ]; then
+        echo "rig exited with status $status (a sanitizer report or a mismatch above)" >&2
+        rc=1
+        continue
+    fi
     grep -qx 'implementations: ntfslib model rust' "$STAGE/out.txt" || { echo "rust implementation not linked" >&2; rc=1; }
     grep -qx '0 mismatches' "$STAGE/out.txt" || rc=1
 done

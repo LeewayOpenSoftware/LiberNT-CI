@@ -148,7 +148,7 @@ jobs:
     # full SHA of the public LiberNT-CI; agreement on these inputs, not proof.
     runs-on: ubuntu-24.04
     env:
-      RIG_SHA: c88250993349cf13f6b2019547ed1170c1d37bb9
+      RIG_SHA: 6a77c230b234f2e9a2a762964439cf8a7e46b01f
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain and host build tools
@@ -169,4 +169,4 @@ jobs:
           ASAN_OPTIONS: detect_leaks=1:abort_on_error=1
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
         run: |
-          RIG="$RUNNER_TEMP/rig" ITERS=1000000 SEEDS="1 2 3"             sh tools/rust-poc/ntfs-decode-rs/difftest/run-mp-rig.sh
+          RIG="$RUNNER_TEMP/rig" ITERS=1000000 sh tools/rust-poc/ntfs-decode-rs/difftest/run-mp-rig.sh
