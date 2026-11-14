@@ -465,16 +465,22 @@ GetFileSystem(
     IN PUNICODE_STRING VolumePathU,
     IN OUT PWSTR FileSystemName,
     IN SIZE_T FileSystemNameSize,
-    OUT PULONG FileSystemAttributes)
+    OUT PULONG FileSystemAttributes,
+    OUT PULONG VolumeSerial OPTIONAL)
 {
     NTSTATUS Status;
     OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE FileHandle;
     IO_STATUS_BLOCK IoStatusBlock;
     PFILE_FS_ATTRIBUTE_INFORMATION FileFsAttribute;
+    PFILE_FS_VOLUME_INFORMATION FileFsVolume;
     UCHAR Buffer[sizeof(FILE_FS_ATTRIBUTE_INFORMATION) + MAX_PATH * sizeof(WCHAR)];
+    UCHAR VolumeBuffer[sizeof(FILE_FS_VOLUME_INFORMATION) + MAX_PATH * sizeof(WCHAR)];
 
     FileFsAttribute = (PFILE_FS_ATTRIBUTE_INFORMATION)Buffer;
+    FileFsVolume = (PFILE_FS_VOLUME_INFORMATION)VolumeBuffer;
+    if (VolumeSerial)
+        *VolumeSerial = 0;
 
     InitializeObjectAttributes(&ObjectAttributes,
                                VolumePathU,
@@ -505,6 +511,18 @@ GetFileSystem(
                                           FileFsAttribute,
                                           sizeof(Buffer),
                                           FileFsAttributeInformation);
+
+    /* The serial is wanted to tell the boot volume apart; a failure here
+     * only means the caller cannot tell, which it treats as 'boot volume'. */
+    if (VolumeSerial && NT_SUCCESS(Status) &&
+        NT_SUCCESS(NtQueryVolumeInformationFile(FileHandle,
+                                                &IoStatusBlock,
+                                                FileFsVolume,
+                                                sizeof(VolumeBuffer),
+                                                FileFsVolumeInformation)))
+    {
+        *VolumeSerial = FileFsVolume->VolumeSerialNumber;
+    }
     NtClose(FileHandle);
 
     if (!NT_SUCCESS(Status))
@@ -640,6 +658,15 @@ ChkdskCallback(
  */
 static BOOLEAN RestartAfterCheck = FALSE;
 
+/*
+ * The boot volume, by its serial number: the one \SystemRoot lives on. Only a
+ * repair there needs the restart; a repaired data volume is remounted on its
+ * next use, nothing running was started from it. When the boot volume cannot
+ * be identified every repaired volume restarts, as before.
+ */
+static ULONG SystemVolumeSerial = 0;
+static BOOLEAN SystemVolumeKnown = FALSE;
+
 static NTSTATUS
 CheckVolume(
     IN PCWSTR VolumePath,
@@ -651,6 +678,8 @@ CheckVolume(
     BOOLEAN FixAttempted = FALSE;
     PCWSTR DisplayName;
     ULONG FileSystemAttributes;
+    ULONG VolumeSerial = 0;
+    BOOLEAN BootVolume;
     UNICODE_STRING VolumePathU;
     ULONG Count;
     WCHAR FileSystem[128];
@@ -683,8 +712,12 @@ CheckVolume(
     Status = GetFileSystem(&VolumePathU,
                            FileSystem,
                            sizeof(FileSystem),
-                           &FileSystemAttributes);
+                           &FileSystemAttributes,
+                           &VolumeSerial);
     LogVolumeWritable = !(FileSystemAttributes & FILE_READ_ONLY_VOLUME);
+    /* Unknown identities err on the side of the restart */
+    BootVolume = !SystemVolumeKnown || VolumeSerial == 0 ||
+                 VolumeSerial == SystemVolumeSerial;
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("GetFileSystem() failed, Status 0x%08lx\n", Status);
@@ -756,8 +789,15 @@ CheckVolume(
                                                     (PULONG)&Status);
             if (Success && (ULONG)Status == NTFSLIB_CHKDSK_VOLUME_RELOADED)
             {
-                RestartAfterCheck = TRUE;
-                DPRINT1("AUTOCHK: %wZ was changed and dismounted, restart needed\n", &VolumePathU);
+                if (BootVolume)
+                {
+                    RestartAfterCheck = TRUE;
+                    DPRINT1("AUTOCHK: %wZ was changed and dismounted, restart needed\n", &VolumePathU);
+                }
+                else
+                {
+                    DPRINT1("AUTOCHK: %wZ was changed and dismounted, it is remounted on its next use\n", &VolumePathU);
+                }
             }
         }
         else
@@ -922,6 +962,22 @@ _main(
     else
     {
         DrainKeyboard(KeyboardHandle);
+    }
+
+    /* Learn which volume the system runs from before anything is checked */
+    {
+        UNICODE_STRING SystemRootU = RTL_CONSTANT_STRING(L"\\SystemRoot\\");
+        ULONG SystemRootAttributes;
+        WCHAR SystemRootFileSystem[128];
+
+        Status = GetFileSystem(&SystemRootU,
+                               SystemRootFileSystem,
+                               sizeof(SystemRootFileSystem),
+                               &SystemRootAttributes,
+                               &SystemVolumeSerial);
+        SystemVolumeKnown = NT_SUCCESS(Status) && SystemVolumeSerial != 0;
+        if (!SystemVolumeKnown)
+            DPRINT1("AUTOCHK: boot volume not identified (0x%08lx); any repaired volume restarts\n", Status);
     }
 
     if (CheckAllVolumes)
