@@ -40,6 +40,11 @@
  * output = the LONG NTSTATUS from leeway_rs_poc_validate_mount_point. Never bugchecks. */
 #define IOCTL_LNRSPOC_VALIDATE_MP \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x807, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* R-1 item (1): exercise the no-heap Rust validators + the SpinLock AT DISPATCH_LEVEL from a
+ * DPC, proving the IRQL-agnostic/no-heap claims on the real DISPATCH path. Output = LONG rc
+ * (0 = all checks passed at DISPATCH). Never bugchecks. */
+#define IOCTL_LNRSPOC_DISPATCH_SELFTEST \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x808, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
@@ -68,6 +73,56 @@ LnrspocCreateClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     Irp->IoStatus.Information = 0;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     return STATUS_SUCCESS;
+}
+
+/* R-1 item (1): DISPATCH_LEVEL self-test context + DPC. The context is nonpaged (touched at
+ * DISPATCH). The DPC runs the no-heap validators and the SpinLock exerciser at DISPATCH and
+ * records a result code; 0 means every check passed and we were genuinely at DISPATCH_LEVEL. */
+typedef struct _LNRSPOC_DISPATCH_CTX
+{
+    KEVENT Done;
+    KDPC Dpc;
+    int Result;        /* 0 = pass; negative = failing stage */
+    KIRQL IrqlSeen;    /* must be DISPATCH_LEVEL */
+    unsigned char good_mp[24];
+    unsigned char bad_mp[24];
+    unsigned char rec[8];
+} LNRSPOC_DISPATCH_CTX, *PLNRSPOC_DISPATCH_CTX;
+
+static VOID
+LnrspocDispatchDpc(PKDPC Dpc, PVOID Context, PVOID Arg1, PVOID Arg2)
+{
+    PLNRSPOC_DISPATCH_CTX c = (PLNRSPOC_DISPATCH_CTX)Context;
+    unsigned long crc = 0;
+    int rc = 0;
+
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(Arg1);
+    UNREFERENCED_PARAMETER(Arg2);
+
+    /* Prove we are genuinely at DISPATCH_LEVEL (a DPC runs there). */
+    c->IrqlSeen = KeGetCurrentIrql();
+    if (c->IrqlSeen != DISPATCH_LEVEL)
+        rc = -1;
+
+    /* No-heap mount-point validator at DISPATCH: good must pass, bad must be rejected. */
+    if (leeway_rs_poc_validate_mount_point(c->good_mp, (unsigned int)sizeof c->good_mp) != 0)
+        rc = rc ? rc : -2;
+    if (leeway_rs_poc_validate_mount_point(c->bad_mp, (unsigned int)sizeof c->bad_mp)
+        != (int)0xC0000278)
+        rc = rc ? rc : -3;
+
+    /* No-heap v1 CRC validator at DISPATCH. */
+    if (leeway_rs_poc_validate(c->rec, (unsigned long)sizeof c->rec, &crc) != 0)
+        rc = rc ? rc : -4;
+
+    /* SpinLock acquire/release at DISPATCH (the IRQL path; raise-to-DPC from DISPATCH is a
+     * no-op, release restores DISPATCH). lock_stress is no-heap (stack SpinLock). */
+    if (leeway_rs_poc_lock_stress(2000) != 0)
+        rc = rc ? rc : -5;
+
+    c->Result = rc;
+    KeSetEvent(&c->Done, IO_NO_INCREMENT, FALSE);
 }
 
 static NTSTATUS
@@ -171,6 +226,45 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         DbgPrint("lnrspoc: validate_mp len=%lu -> 0x%lx\n", (unsigned long)inLen, (unsigned long)nt);
         *(long *)Irp->AssociatedIrp.SystemBuffer = nt;
         info = sizeof(long);
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_LNRSPOC_DISPATCH_SELFTEST:
+    {
+        /* R-1 item (1): run the no-heap validators + SpinLock at DISPATCH via a DPC.
+         * Output = LONG rc (0 = pass). This handler runs at PASSIVE. The context lives on the
+         * kernel stack (nonpaged) and is alive for the whole synchronous wait, so no pool is
+         * needed; the DPC touches it at DISPATCH and signals Done before the wait returns. */
+        LNRSPOC_DISPATCH_CTX c;
+        ULONG outLen = sp->Parameters.DeviceIoControl.OutputBufferLength;
+
+        if (Irp->AssociatedIrp.SystemBuffer == NULL || outLen < sizeof(int))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+        RtlZeroMemory(&c, sizeof c);
+        KeInitializeEvent(&c.Done, NotificationEvent, FALSE);
+        KeInitializeDpc(&c.Dpc, LnrspocDispatchDpc, &c);
+
+        /* good mount point: tag MOUNT_POINT, ReparseDataLength 16 (8 field hdr + 8 path),
+         * SubstituteNameOffset 0, SubstituteNameLength 4, PrintName 0/0, first WCHAR '\'. */
+        c.good_mp[0] = 0x03; c.good_mp[1] = 0x00; c.good_mp[2] = 0x00; c.good_mp[3] = 0xA0;
+        c.good_mp[4] = 0x10; c.good_mp[5] = 0x00;           /* ReparseDataLength = 16 */
+        c.good_mp[10] = 0x04;                                /* SubstituteNameLength = 4 */
+        c.good_mp[16] = 0x5C; c.good_mp[17] = 0x00;          /* L'\\' */
+        /* bad: identical but the substitute's first WCHAR is '/', not '\' -> INVALID. */
+        RtlCopyMemory(c.bad_mp, c.good_mp, sizeof c.bad_mp);
+        c.bad_mp[16] = 0x2F;
+        /* v1 CRC record: [len=4][A B C D]. */
+        c.rec[0] = 0x04; c.rec[4] = 'A'; c.rec[5] = 'B'; c.rec[6] = 'C'; c.rec[7] = 'D';
+
+        KeInsertQueueDpc(&c.Dpc, NULL, NULL);
+        KeWaitForSingleObject(&c.Done, Executive, KernelMode, FALSE, NULL);
+        DbgPrint("lnrspoc: dispatch_selftest irql=%u rc=%d\n", c.IrqlSeen, c.Result);
+
+        *(int *)Irp->AssociatedIrp.SystemBuffer = c.Result;
+        info = sizeof(int);
         status = STATUS_SUCCESS;
         break;
     }
