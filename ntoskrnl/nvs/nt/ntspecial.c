@@ -246,9 +246,9 @@ MmFreeSpecialPool(
     LRM_GUARD_VTBL Vtbl;
     LRM_BUGCHECK Bc;
 
-    if (MiSpecialPoolRegion == NULL)
-        return;
-
+    /* No NULL-region early return here: with no special pool, MiGuardQuery(NULL, ...) returns
+     * MiGuardOutside, so the Rust path stops with 0xC1/0x20 - exactly as the C path does. (The
+     * allocate side returns NULL on a NULL region, which is its correct C behaviour.) */
     LrmRsBuildGuardVtbl(MiSpecialPoolRegion, &Vtbl);
     if (lrm_mm_free_special_pool(&Vtbl, (ULONG_PTR)P, (UCHAR)KeGetCurrentIrql(), &Bc) == 1)
         KeBugCheckEx(Bc.Code, Bc.P1, Bc.P2, Bc.P3, Bc.P4);
