@@ -81,8 +81,8 @@ jobs:
           }
           # lrm_rs is routed in the kernel; it must be panic-free (FORBID_PANIC=1), unlike leeway_rs_poc
           # whose test IOCTL deliberately bug-checks.
-          build tools/rust-poc/lrm-rs lrm_rs "$RUNNER_TEMP/w/lrm1" "" "" 1
-          build "$ELSE/rust-poc/lrm-rs" lrm_rs "$RUNNER_TEMP/w/lrm2" "" "" 1
+          build tools/rust-poc/lrm-rs lrm_rs "$RUNNER_TEMP/w/lrm1" "LrmRsFatalStop" "" 1
+          build "$ELSE/rust-poc/lrm-rs" lrm_rs "$RUNNER_TEMP/w/lrm2" "LrmRsFatalStop" "" 1
           check lrm_rs "$RUNNER_TEMP/w/lrm1" "$RUNNER_TEMP/w/lrm2" liblrm_rs.a
           build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/poc1" "$POC_EXTERNS"
           build "$ELSE/rust-poc" leeway_rs_poc "$RUNNER_TEMP/w/poc2" "$POC_EXTERNS"

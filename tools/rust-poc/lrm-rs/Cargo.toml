@@ -19,6 +19,11 @@ crate-type = ["staticlib", "rlib"]
 # `std`: host build only - drops #![no_std] and the crate's panic handler so the engine can link
 # into a std harness (difftest-rs, cargo-fuzz). OFF by default: the kernel build is unchanged.
 std = []
+# `panic-test`: kernel LAB build only - exposes lrm_rs_force_panic() to validate the panic policy
+# (handler -> LEEWAY_RUST_PANIC bug check) in a disposable VM. OFF by default and on shipping ISOs;
+# deliberately panics, so a build with this feature does NOT use the FORBID_PANIC gate (it is built
+# only into the lab/lnrspoc test kernel variant, never the shipped FORBID_PANIC archive).
+panic-test = []
 
 [profile.dev]
 panic = "abort"

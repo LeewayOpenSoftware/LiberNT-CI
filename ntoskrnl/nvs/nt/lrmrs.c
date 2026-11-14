@@ -292,4 +292,45 @@ LrmRsSelfTest(PULONG Detail)
     return STATUS_SUCCESS;
 }
 
+/*
+ * Set before the panic bug check; the ntspecial.c special-pool wrappers read it and fall back to the
+ * C oracle instead of re-entering Rust once the Rust side has fatally stopped (Dwight review P3: a
+ * panic may have left a lock held, so the bug check's own machinery must not re-take it).
+ */
+BOOLEAN LrmRsPanicked = FALSE;
+
+/*
+ * LRM-RS panic policy target. The Rust panic handler (lib.rs on_panic) and the lrm_fatal! forwarder
+ * reach here; we flag that Rust has stopped and raise the controlled LEEWAY_RUST_PANIC bug check with
+ * the source location. This is the one place that knows the numeric code + parameter layout. The code
+ * is FIXED (reason is carried in P1, never ORed into the code - Dwight review P2: triage and the
+ * bugcodes.mc registration key on the single value). It never returns (KeBugCheckEx does not), does
+ * not unwind (the Rust side is panic = "abort"), allocates nothing, and is safe at any IRQL: File,
+ * when non-NULL, is a &'static str in the image's read-only data. See LRM-RS-PANIC-POLICY.md.
+ *
+ * Parameters: P1 = Reason (0x01 a real panic got through; 0x02 Rust chose to stop), P2 = File ptr,
+ * P3 = Line, P4 = FileLen.
+ */
+DECLSPEC_NORETURN VOID
+LrmRsFatalStop(ULONG Reason, const UCHAR *File, SIZE_T FileLen, ULONG Line)
+{
+    LrmRsPanicked = TRUE;
+    KeBugCheckEx(LEEWAY_RUST_PANIC,
+                 (ULONG_PTR)Reason,
+                 (ULONG_PTR)File,
+                 (ULONG_PTR)Line,
+                 (ULONG_PTR)FileLen);
+}
+
+#if defined(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
+/* Rust (lib.rs, feature panic-test): deliberately panics -> reaches LrmRsFatalStop with reason 0x01. */
+DECLSPEC_NORETURN VOID lrm_rs_force_panic(VOID);
+
+DECLSPEC_NORETURN VOID NTAPI
+LrmRsForcePanic(VOID)
+{
+    lrm_rs_force_panic();
+}
+#endif
+
 #endif /* LIBERNT_LRM_RS */

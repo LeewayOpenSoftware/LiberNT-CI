@@ -89,4 +89,31 @@ VOID LrmRsBuildGuardVtbl(struct _MI_GUARD_REGION *Region, PLRM_GUARD_VTBL Vtbl);
  * lnrspoc resolves it with MmGetSystemRoutineAddress.
  */
 NTSTATUS NTAPI LrmRsSelfTest(PULONG Detail);
+
+/*
+ * Kernel panic policy (LRM-RS-PANIC-POLICY.md, owner-approved 2026-11-14). The Rust panic handler
+ * (lib.rs) forwards here on an unexpected panic — which the panic-free discipline and the FORBID_PANIC
+ * build gate are meant to make unreachable. This raises ONE controlled bug check with the FIXED code
+ * LEEWAY_RUST_PANIC (reason in P1, never ORed into the code) - a unique registered Leeway value with
+ * no Windows overlap, distinct from the Verifier (0xC4/0xC9) and Special Pool (0xC1/0xD6) codes. It
+ * never returns; it does not unwind (panic = "abort"); it does no allocation. Safe at any IRQL
+ * (including HIGH_LEVEL): File is a &'static str in the image's read-only data (never pageable;
+ * path-remapped to /rust/...). Parameters: P1 = Reason (0x01 real panic, 0x02 deliberate stop via
+ * lrm_fatal!), P2 = File ptr, P3 = Line, P4 = FileLen. The name has no "panic" substring.
+ */
+#define LEEWAY_RUST_PANIC 0x4C524D00UL   /* 'LRM'<<8; FIXED code. reason is P1, NOT ORed into the code. */
+
+DECLSPEC_NORETURN VOID LrmRsFatalStop(ULONG Reason, const UCHAR *File, SIZE_T FileLen, ULONG Line);
+
+/* Set TRUE by LrmRsFatalStop before KeBugCheckEx. Every C entry into the Rust special-pool path
+ * (ntspecial.c) checks it and falls back to the C oracle rather than re-entering Rust, so the bug
+ * check's own machinery never re-takes a lock the panicking thread still holds (Dwight review P3). */
+extern BOOLEAN LrmRsPanicked;
+
+#if defined(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
+/* LAB ONLY: drives a deliberate Rust panic (lrm_rs built with feature `panic-test`) to validate the
+ * panic policy in a disposable VM. Exported in this build only (conditional spec); lnrspoc resolves
+ * it with MmGetSystemRoutineAddress. Never returns (reaches LrmRsFatalStop with reason 0x01). */
+DECLSPEC_NORETURN VOID NTAPI LrmRsForcePanic(VOID);
+#endif
 #endif

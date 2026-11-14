@@ -10,6 +10,7 @@ FacilityNames=(System=0x0:FACILITY_SYSTEM
                Runtime=0x2:FACILITY_RUNTIME
                Stubs=0x3:FACILITY_STUBS
                Io=0x4:FACILITY_IO_ERROR_CODE
+               Leeway=0xC52:FACILITY_LEEWAY
               )
 
 LanguageNames=(English=0x409:MSG00409)
@@ -1822,4 +1823,12 @@ Facility=System
 SymbolicName=IPI_WATCHDOG_TIMEOUT
 Language=English
 A processor remained in an interprocessor interrupt loop beyond the permitted time.
+.
+
+MessageId=0x4D00
+Severity=Informational
+Facility=Leeway
+SymbolicName=LEEWAY_RUST_PANIC
+Language=English
+An LRM-RS Rust kernel component stopped the system. P1 reason (0x01 a panic reached the handler, 0x02 a deliberate stop), P2 source-file pointer, P3 line, P4 source-file length.
 .
