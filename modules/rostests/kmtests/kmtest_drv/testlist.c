@@ -368,9 +368,13 @@ KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
 KMT_TESTFUNC Test_MmDriverVerifier;
 KMT_TESTFUNC Test_MmDriverVerifierCompletePending;
+KMT_TESTFUNC Test_MmDriverVerifierIrpStress;
 KMT_TESTFUNC Test_MmDriverVerifierIrpTracking;
 KMT_TESTFUNC Test_MmDriverVerifierLeak;
+KMT_TESTFUNC Test_MmDriverVerifierLockFreed;
 KMT_TESTFUNC Test_MmDriverVerifierLockOrder;
+KMT_TESTFUNC Test_MmDriverVerifierLockOwner;
+KMT_TESTFUNC Test_MmDriverVerifierLockStress;
 KMT_TESTFUNC Test_MmDriverVerifierSpinLockAtPassive;
 KMT_TESTFUNC Test_MmDriverVerifierPagedAtDispatch;
 KMT_TESTFUNC Test_MmDriverVerifierWaitAtDispatch;
@@ -836,9 +840,13 @@ const KMT_TEST TestList[] =
     { "MmSelfMap",                          Test_MmSelfMap },
     { "MmDriverVerifier",                   Test_MmDriverVerifier },
     { "-MmDriverVerifierCompletePending",   Test_MmDriverVerifierCompletePending },
+    { "-MmDriverVerifierIrpStress",         Test_MmDriverVerifierIrpStress },
     { "-MmDriverVerifierIrpTracking",       Test_MmDriverVerifierIrpTracking },
     { "-MmDriverVerifierLeak",              Test_MmDriverVerifierLeak },
+    { "-MmDriverVerifierLockFreed",         Test_MmDriverVerifierLockFreed },
     { "-MmDriverVerifierLockOrder",         Test_MmDriverVerifierLockOrder },
+    { "-MmDriverVerifierLockOwner",         Test_MmDriverVerifierLockOwner },
+    { "-MmDriverVerifierLockStress",        Test_MmDriverVerifierLockStress },
     { "-MmDriverVerifierSpinLockAtPassive", Test_MmDriverVerifierSpinLockAtPassive },
     { "-MmDriverVerifierPagedAtDispatch",   Test_MmDriverVerifierPagedAtDispatch },
     { "-MmDriverVerifierWaitAtDispatch",    Test_MmDriverVerifierWaitAtDispatch },

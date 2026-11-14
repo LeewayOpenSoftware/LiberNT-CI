@@ -528,6 +528,7 @@ START_TEST(MmDriverVerifierCompletePending)
 static PDEVICE_OBJECT VfLowerDevice;
 static PDRIVER_DISPATCH VfSavedDispatch;
 static PIRP VfHeldIrp;
+static BOOLEAN VfLowerIsShared;
 
 static
 VOID
@@ -552,7 +553,9 @@ VfLowerDispatch(
 
     IoSetCancelRoutine(Irp, NULL);
     IoMarkIrpPending(Irp);
-    VfHeldIrp = Irp;
+    if (!VfLowerIsShared)
+        VfHeldIrp = Irp;
+
     return STATUS_PENDING;
 }
 
@@ -571,18 +574,13 @@ VfStopCompletion(
 }
 
 static
-PIRP
-VfSendHeldIrp(
+VOID
+VfSendIrpToHold(
+    _In_ PIRP Irp,
     _In_ BOOLEAN WithCancelRoutine)
 {
     PIO_STACK_LOCATION Stack;
     NTSTATUS Status;
-    PIRP Irp;
-
-    Irp = IoAllocateIrp(VfLowerDevice->StackSize, FALSE);
-    ok(Irp != NULL, "no IRP\n");
-    if (Irp == NULL)
-        return NULL;
 
     Stack = IoGetNextIrpStackLocation(Irp);
     Stack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
@@ -594,6 +592,21 @@ VfSendHeldIrp(
     Status = IoCallDriver(VfLowerDevice, Irp);
     ok_eq_hex(Status, STATUS_PENDING);
     ok(VfHeldIrp == Irp, "the lower device holds %p, sent %p\n", VfHeldIrp, Irp);
+}
+
+static
+PIRP
+VfSendHeldIrp(
+    _In_ BOOLEAN WithCancelRoutine)
+{
+    PIRP Irp;
+
+    Irp = IoAllocateIrp(VfLowerDevice->StackSize, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp == NULL)
+        return NULL;
+
+    VfSendIrpToHold(Irp, WithCancelRoutine);
     return Irp;
 }
 
@@ -651,10 +664,118 @@ START_TEST(MmDriverVerifierIrpTracking)
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
+    trace("Case 5: an IRP is completed, reused and sent again by its owner; expect NO verifier line\n");
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+    {
+        Irp->IoStatus.Status = STATUS_SUCCESS;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+        IoReuseIrp(Irp, STATUS_SUCCESS);
+        VfSendIrpToHold(Irp, FALSE);
+        VfCompleteHeldIrp(Irp);
+    }
+
     InterlockedExchangePointer(Slot, (PVOID)VfSavedDispatch);
     IoDeleteDevice(VfLowerDevice);
     VfLowerDevice = NULL;
     trace("Done: the debug log must hold exactly three log-only lines (0x20b, 0x310, 0x203) and no bug check\n");
+}
+
+#define VF_STRESS_THREADS 4
+#define VF_STRESS_ROUNDS 2000
+
+static LONG VfStressRounds;
+
+static
+NTSTATUS
+VfStressSendAndComplete(
+    _In_ PIRP Irp)
+{
+    PIO_STACK_LOCATION Stack;
+    NTSTATUS Status;
+
+    Stack = IoGetNextIrpStackLocation(Irp);
+    Stack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    IoSetCompletionRoutine(Irp, VfStopCompletion, NULL, TRUE, TRUE, TRUE);
+    Status = IoCallDriver(VfLowerDevice, Irp);
+    if (Status != STATUS_PENDING)
+        return STATUS_UNSUCCESSFUL;
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+NTAPI
+VfIrpStressThread(
+    _In_ PVOID Context)
+{
+    NTSTATUS Status;
+    PIRP Irp;
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    for (i = 0; i < VF_STRESS_ROUNDS; i++)
+    {
+        Irp = IoAllocateIrp(VfLowerDevice->StackSize, FALSE);
+        if (Irp == NULL)
+            break;
+
+        Status = VfStressSendAndComplete(Irp);
+        if (NT_SUCCESS(Status) && (i & 1) != 0)
+        {
+            IoReuseIrp(Irp, STATUS_SUCCESS);
+            Status = VfStressSendAndComplete(Irp);
+        }
+
+        IoFreeIrp(Irp);
+        if (!NT_SUCCESS(Status))
+            break;
+
+        InterlockedIncrement(&VfStressRounds);
+    }
+}
+
+START_TEST(MmDriverVerifierIrpStress)
+{
+    PVOID *Slot = (PVOID *)&KmtDriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL];
+    PKTHREAD Threads[VF_STRESS_THREADS];
+    ULONG Flags = 0;
+    NTSTATUS Status;
+    ULONG i;
+
+    if (skip(EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & DRIVER_VERIFIER_IO_CHECKING),
+             "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+    {
+        return;
+    }
+
+    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_UNKNOWN, 0, FALSE, &VfLowerDevice);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    VfLowerIsShared = TRUE;
+    VfStressRounds = 0;
+    VfSavedDispatch = InterlockedExchangePointer(Slot, (PVOID)VfLowerDispatch);
+
+    trace("%d threads send, complete, reuse and free IRPs correctly; expect NO verifier line\n", VF_STRESS_THREADS);
+    for (i = 0; i < VF_STRESS_THREADS; i++)
+        Threads[i] = KmtStartThread(VfIrpStressThread, NULL);
+
+    for (i = 0; i < VF_STRESS_THREADS; i++)
+        KmtFinishThread(Threads[i], NULL);
+
+    ok_eq_long(VfStressRounds, VF_STRESS_THREADS * VF_STRESS_ROUNDS);
+
+    InterlockedExchangePointer(Slot, (PVOID)VfSavedDispatch);
+    VfLowerIsShared = FALSE;
+    IoDeleteDevice(VfLowerDevice);
+    VfLowerDevice = NULL;
+    trace("Done: the debug log must hold no Driver Verifier line and no bug check\n");
 }
 
 static FAST_MUTEX VfFirstMutex;
@@ -693,4 +814,161 @@ START_TEST(MmDriverVerifierLockOrder)
 
     ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
     trace("Done: the debug log must hold exactly one log-only line (0x1001) and no bug check\n");
+}
+
+static
+BOOLEAN
+VfDeadlockDetectionIsOn(VOID)
+{
+    ULONG Flags = 0;
+
+    return EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & VF_TEST_DEADLOCK_DETECTION);
+}
+
+static
+VOID
+NTAPI
+VfTakeAndLeaveThread(
+    _In_ PVOID Context)
+{
+    PFAST_MUTEX Mutex = Context;
+
+    ExAcquireFastMutex(Mutex);
+    KeLowerIrql(PASSIVE_LEVEL);
+}
+
+START_TEST(MmDriverVerifierLockOwner)
+{
+    PKTHREAD Thread;
+    KIRQL OldIrql;
+
+    if (skip(VfDeadlockDetectionIsOn(),
+             "kmtest_drv.sys is not verified with deadlock detection (VerifyDriverLevel 0x29)\n"))
+    {
+        return;
+    }
+
+    ExInitializeFastMutex(&VfFirstMutex);
+
+    trace("Case 1: a thread takes and releases its own lock; expect NO verifier line\n");
+    ExAcquireFastMutex(&VfFirstMutex);
+    ExReleaseFastMutex(&VfFirstMutex);
+
+    trace("Case 2: another thread takes lock %p, this one releases it; expect one log-only line, deadlock rule "
+          "0x1004\n", &VfFirstMutex);
+    Thread = KmtStartThread(VfTakeAndLeaveThread, &VfFirstMutex);
+    if (Thread == NULL)
+        return;
+
+    KmtFinishThread(Thread, NULL);
+    KeRaiseIrql(APC_LEVEL, &OldIrql);
+    ExReleaseFastMutex(&VfFirstMutex);
+    KeLowerIrql(OldIrql);
+
+    trace("Case 3: the lock is taken and released again by one thread; expect NO verifier line\n");
+    ExAcquireFastMutex(&VfFirstMutex);
+    ExReleaseFastMutex(&VfFirstMutex);
+
+    ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
+    trace("Done: the debug log must hold exactly one log-only line (0x1004) and no bug check\n");
+}
+
+START_TEST(MmDriverVerifierLockFreed)
+{
+    PFAST_MUTEX Mutex;
+
+    if (skip(VfDeadlockDetectionIsOn(),
+             "kmtest_drv.sys is not verified with deadlock detection (VerifyDriverLevel 0x29)\n"))
+    {
+        return;
+    }
+
+    trace("Case 1: a block is freed after its lock was released; expect NO verifier line\n");
+    Mutex = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Mutex), 'kLpS');
+    ok(Mutex != NULL, "no block\n");
+    if (Mutex == NULL)
+        return;
+
+    ExInitializeFastMutex(Mutex);
+    ExAcquireFastMutex(Mutex);
+    ExReleaseFastMutex(Mutex);
+    ExFreePoolWithTag(Mutex, 'kLpS');
+
+    Mutex = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Mutex), 'kLpS');
+    ok(Mutex != NULL, "no block\n");
+    if (Mutex == NULL)
+        return;
+
+    trace("Case 2: block %p is freed while its lock is held; expect one log-only line, deadlock rule 0x100b\n",
+          Mutex);
+    ExInitializeFastMutex(Mutex);
+    ExAcquireFastMutex(Mutex);
+    ExFreePoolWithTag(Mutex, 'kLpS');
+    KeLowerIrql(PASSIVE_LEVEL);
+
+    ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
+    trace("Done: the debug log must hold exactly one log-only line (0x100b) and no bug check\n");
+}
+
+static
+VOID
+NTAPI
+VfLockStressThread(
+    _In_ PVOID Context)
+{
+    PFAST_MUTEX Pair;
+    ULONG First, i;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    for (i = 0; i < VF_STRESS_ROUNDS; i++)
+    {
+        Pair = ExAllocatePoolWithTag(NonPagedPool, 2 * sizeof(*Pair), 'kLpS');
+        if (Pair == NULL)
+            break;
+
+        ExInitializeFastMutex(&Pair[0]);
+        ExInitializeFastMutex(&Pair[1]);
+        First = i & 1;
+
+        ExAcquireFastMutex(&VfFirstMutex);
+        ExAcquireFastMutex(&VfSecondMutex);
+        ExAcquireFastMutex(&Pair[First]);
+        ExAcquireFastMutex(&Pair[First ^ 1]);
+        ExReleaseFastMutex(&Pair[First ^ 1]);
+        ExReleaseFastMutex(&Pair[First]);
+        ExReleaseFastMutex(&VfSecondMutex);
+        ExReleaseFastMutex(&VfFirstMutex);
+
+        ExFreePoolWithTag(Pair, 'kLpS');
+        InterlockedIncrement(&VfStressRounds);
+    }
+}
+
+START_TEST(MmDriverVerifierLockStress)
+{
+    PKTHREAD Threads[VF_STRESS_THREADS];
+    ULONG i;
+
+    if (skip(VfDeadlockDetectionIsOn(),
+             "kmtest_drv.sys is not verified with deadlock detection (VerifyDriverLevel 0x29)\n"))
+    {
+        return;
+    }
+
+    ExInitializeFastMutex(&VfFirstMutex);
+    ExInitializeFastMutex(&VfSecondMutex);
+    VfStressRounds = 0;
+
+    trace("%d threads take two fixed locks in one order, then two locks of a fresh block in alternating order, and "
+          "free the block; expect NO verifier line\n", VF_STRESS_THREADS);
+    for (i = 0; i < VF_STRESS_THREADS; i++)
+        Threads[i] = KmtStartThread(VfLockStressThread, NULL);
+
+    for (i = 0; i < VF_STRESS_THREADS; i++)
+        KmtFinishThread(Threads[i], NULL);
+
+    ok_eq_long(VfStressRounds, VF_STRESS_THREADS * VF_STRESS_ROUNDS);
+    ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
+    trace("Done: the debug log must hold no Driver Verifier line and no bug check\n");
 }
