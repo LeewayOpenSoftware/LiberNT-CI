@@ -2367,6 +2367,18 @@ MiniHaltAfterFailedStart(
   Adapter->NdisMiniportBlock.PnPDeviceState = NdisPnPDeviceStopped;
 
   (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler)(Adapter->NdisMiniportBlock.MiniportAdapterContext);
+
+  /* The same check as after a failed initialize: the device goes away, so
+   * an interrupt or a timer that the miniport left behind would fire into
+   * freed memory later. It is stopped here, where the cause is known. */
+  if (Adapter->NdisMiniportBlock.Interrupt || Adapter->NdisMiniportBlock.TimerQueue)
+    {
+      KeBugCheckEx(BUGCODE_ID_DRIVER,
+                   (ULONG_PTR)Adapter,
+                   (ULONG_PTR)Adapter->NdisMiniportBlock.Interrupt,
+                   (ULONG_PTR)Adapter->NdisMiniportBlock.TimerQueue,
+                   2);
+    }
 }
 
 NTSTATUS
