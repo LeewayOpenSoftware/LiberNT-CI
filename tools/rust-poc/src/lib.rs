@@ -31,10 +31,11 @@ use alloc_pool::KBox;
 use sync::SpinLock;
 
 /// Leeway provisional EXPERIMENTAL bugcheck code (0x4C450001, 'LE'+01) for an
-/// unrecoverable Rust-side panic. Owner-approved 2026-11-12; exclusive to lnrspoc tests.
-/// Documented in README.md "Bugcheck code registry". Not a Microsoft code; ours, for
-/// our kernel. Only ever reached via the panic handler, never on normal init/op.
-const LEEWAY_RUST_PANIC: c_ulong = 0x4C45_0001;
+/// unrecoverable Rust-side panic in the v1 PoC. Owner-approved 2026-11-12; exclusive to
+/// lnrspoc tests. Crate-internal and deliberately NOT named `LEEWAY_RUST_PANIC`: that name
+/// is the registered LRM-RS bug check 0x4C524D00 (bugcodes.h). Only ever reached via the
+/// panic handler, never on normal init/op.
+const LEEWAY_POC_RUST_PANIC: c_ulong = 0x4C45_0001;
 
 extern "C" {
     /// Supplied by ntoskrnl at driver link time. Never returns.
@@ -51,7 +52,7 @@ fn on_panic(info: &PanicInfo) -> ! {
     };
     // SAFETY: KeBugCheckEx is the standard NT bring-down-the-box routine; it never
     // returns and takes no locks we hold. Passing location in P1/P2 aids !analyze.
-    unsafe { KeBugCheckEx(LEEWAY_RUST_PANIC, line, col, 0, 0) }
+    unsafe { KeBugCheckEx(LEEWAY_POC_RUST_PANIC, line, col, 0, 0) }
 }
 
 /// CRC-32 (IEEE 802.3, poly 0xEDB88320), table-free to keep the module tiny.

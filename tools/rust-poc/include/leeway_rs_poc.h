@@ -66,11 +66,11 @@ int leeway_rs_poc_validate_mount_point(const void *buf, unsigned int len);
 
 /* TEST-ONLY. Present only when the staticlib is built with `--features test-ioctls`
  * (and the driver with -DLNRSPOC_TEST_IOCTLS). Triggers the controlled bugcheck
- * (KeBugCheckEx, code LEEWAY_RUST_PANIC 0x4C450001). Reachable solely via the
- * documented test IOCTL inside a disposable VM. Does not return. Never ship. */
+ * (KeBugCheckEx, the v1-PoC provisional code 0x4C450001, held crate-internally in
+ * the leeway_rs_poc staticlib - distinct from the registered LRM-RS bug check
+ * LEEWAY_RUST_PANIC 0x4C524D00 in bugcodes.h). Reachable solely via the documented
+ * test IOCTL inside a disposable VM. Does not return. Never ship. */
 void leeway_rs_poc_force_panic(void);
-
-#define LEEWAY_RUST_PANIC 0x4C450001UL /* Leeway provisional experimental bugcheck code (not public) */
 
 #ifdef __cplusplus
 }

@@ -71,7 +71,14 @@ tools/rust-poc/
 ## Bugcheck code registry (Leeway, experimental)
 | Symbol | Value | Meaning | Reachable from |
 |---|---|---|---|
-| `LEEWAY_RUST_PANIC` | `0x4C450001` | Unrecoverable Rust-side panic (controlled bring-down via `KeBugCheckEx`) | ONLY the gated test IOCTL `IOCTL_LNRSPOC_FORCE_PANIC` (`test-ioctls` build, disposable VM) |
+| `LEEWAY_POC_RUST_PANIC` | `0x4C450001` | Unrecoverable Rust-side panic in the v1 PoC (controlled bring-down via `KeBugCheckEx`) | ONLY the gated test IOCTL `IOCTL_LNRSPOC_FORCE_PANIC` (`test-ioctls` build, disposable VM) |
+
+> Not to be confused with the **registered LRM-RS** bug check `LEEWAY_RUST_PANIC` =
+> `0x4C524D00` (generated from `sdk/include/reactos/mc/bugcodes.mc`), used by the `lrm_rs`
+> special-pool panic policy. The v1 PoC code below was renamed from `LEEWAY_RUST_PANIC` to
+> `LEEWAY_POC_RUST_PANIC` (2026-11-14) so the registered name means exactly one value: when
+> both headers are in scope (e.g. `lnrspoc.c`) the old duplicate tripped
+> `-Werror,-Wmacro-redefined`.
 
 `0x4C450001` ("LE" = Leeway, experiment 01) is a **provisional, experimental** code for
 **our** kernel — not a Microsoft bugcheck code and **not a public or stable contract**. It
