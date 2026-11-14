@@ -1579,6 +1579,12 @@ NTAPI
 IoDetachDevice(IN PDEVICE_OBJECT TargetDevice)
 {
     PEXTENDED_DEVOBJ_EXTENSION DeviceExtension;
+    KIRQL OldIrql;
+
+    /* The attach links are walked under the database lock by code that holds
+     * no reference on the devices of the stack, so they change only with the
+     * lock held exclusive, as in the attach */
+    OldIrql = IopAcquireDatabaseLockExclusive();
 
     /* Sanity check */
     DeviceExtension = IoGetDevObjExtension(TargetDevice->AttachedDevice);
@@ -1587,6 +1593,8 @@ IoDetachDevice(IN PDEVICE_OBJECT TargetDevice)
     /* Remove the attachment */
     DeviceExtension->AttachedTo = NULL;
     TargetDevice->AttachedDevice = NULL;
+
+    IopReleaseDatabaseLockExclusive(OldIrql);
 
     /* Check if it's ok to delete this device */
     if ((IoGetDevObjExtension(TargetDevice)->ExtensionFlags & DOE_DELETE_PENDING) &&
