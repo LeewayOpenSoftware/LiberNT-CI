@@ -10,6 +10,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <setjmp.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +21,11 @@ static ULONG_PTR StackLow = 0xF0000000, StackHigh = 0xF0010000;
 static ULONG LastRule;
 static ULONG Lines;
 static int Failures;
+static jmp_buf StopJump;
+static int StopExpected;
+static int Stops;
+static ULONG StopCode;
+static ULONG_PTR StopParameter[4];
 
 PKTHREAD KeGetCurrentThread(void) { return CurrentThread; }
 KIRQL KeGetCurrentIrql(void) { return CurrentIrql; }
@@ -63,8 +69,19 @@ void IoGetStackLimits(PULONG_PTR Low, PULONG_PTR High)
 
 void KeBugCheckEx(ULONG Code, ULONG_PTR P1, ULONG_PTR P2, ULONG_PTR P3, ULONG_PTR P4)
 {
-    (void)Code; (void)P1; (void)P2; (void)P3; (void)P4;
-    abort();
+    if (!StopExpected)
+    {
+        printf("FAIL: unexpected bug check 0x%x (0x%llx)\n", Code, P1);
+        exit(1);
+    }
+
+    StopCode = Code;
+    StopParameter[0] = P1;
+    StopParameter[1] = P2;
+    StopParameter[2] = P3;
+    StopParameter[3] = P4;
+    Stops++;
+    longjmp(StopJump, 1);
 }
 
 ULONG DbgPrint(const char *Format, ...)
@@ -77,6 +94,9 @@ ULONG DbgPrint(const char *Format, ...)
     Lines++;
     return 0;
 }
+
+#define UNTIL_STOP(Statement) \
+    do { StopExpected = 1; if (setjmp(StopJump) == 0) { Statement; } StopExpected = 0; } while (0)
 
 #define CHECK(Condition) \
     do { if (!(Condition)) { printf("FAIL line %d: %s\n", __LINE__, #Condition); Failures++; } } while (0)
@@ -131,8 +151,9 @@ int main(void)
 
     Take(0x40);
     CurrentThread = (PKTHREAD)0x2000;
-    Drop(0x40);
-    CHECK(VfDeadlockRuleHits == 5 && LastRule == 0x1004);
+    UNTIL_STOP(Drop(0x40));
+    CHECK(VfDeadlockRuleHits == 5 && Stops == 1 && StopCode == 0xC4 && StopParameter[0] == 0x1004);
+    CHECK(StopParameter[1] == 0x40 && StopParameter[2] == 0x1000 && StopParameter[3] == 0x2000);
     CurrentThread = (PKTHREAD)0x1000;
 
     VfForgetLocksInRange((PVOID)0x10, 0x10);
@@ -144,8 +165,9 @@ int main(void)
     Drop(0x20); Drop(0x10);
 
     Take(0x50);
-    VfForgetLocksInRange((PVOID)0x50, 8);
-    CHECK(VfDeadlockRuleHits == 7 && LastRule == 0x100B);
+    UNTIL_STOP(VfForgetLocksInRange((PVOID)0x50, 8));
+    CHECK(VfDeadlockRuleHits == 7 && StopCode == 0xC4 && StopParameter[0] == 0x100B);
+    CHECK(StopParameter[1] == 0x50 && StopParameter[2] == 0x1000 && StopParameter[3] == 1);
 
     Try(0x60);
     Drop(0x60);
@@ -207,7 +229,7 @@ int main(void)
     Drop(0xA000);
     CHECK(VfDeadlockRuleHits == 10 && LastRule == 0x1007);
 
-    printf("hits %u, graph resets %u, lines %u, failures %d\n", VfDeadlockRuleHits, VfDeadlockGraphResets, Lines,
-           Failures);
+    printf("hits %u, graph resets %u, lines %u, stops %d, failures %d\n", VfDeadlockRuleHits,
+           VfDeadlockGraphResets, Lines, Stops, Failures);
     return Failures != 0;
 }

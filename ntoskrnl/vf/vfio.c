@@ -42,6 +42,7 @@ typedef struct _VF_IRP_ENTRY
     PVOID Sender;
     PDEVICE_OBJECT Target;
     ULONG Sequence;
+    BOOLEAN Pended;
 } VF_IRP_ENTRY, *PVF_IRP_ENTRY;
 
 BOOLEAN VfIrpTrackingEnabled;
@@ -132,6 +133,7 @@ BOOLEAN
 VfpIsIrpBelow(
     _In_ PIRP Irp)
 {
+    PVF_IRP_ENTRY Entry;
     BOOLEAN Below;
     KIRQL OldIrql;
 
@@ -139,7 +141,8 @@ VfpIsIrpBelow(
         return FALSE;
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
-    Below = (BOOLEAN)(VfpFindIrpLocked(Irp) != NULL);
+    Entry = VfpFindIrpLocked(Irp);
+    Below = (BOOLEAN)(Entry != NULL && Entry->Pended);
     KeReleaseSpinLock(&VfpIrpLock, OldIrql);
     return Below;
 }
@@ -178,6 +181,7 @@ VfpIrpSent(
         Entry->Sequence = Sequence;
         Entry->Sender = Sender;
         Entry->Target = Target;
+        Entry->Pended = FALSE;
     }
     KeReleaseSpinLock(&VfpIrpLock, OldIrql);
 
@@ -191,14 +195,20 @@ static
 VOID
 VfpIrpReturned(
     _In_ PIRP Irp,
-    _In_ ULONG Sequence)
+    _In_ ULONG Sequence,
+    _In_ NTSTATUS Status)
 {
     PVF_IRP_ENTRY Entry;
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
     Entry = VfpFindIrpLocked(Irp);
-    if (Entry != NULL && Entry->Sequence == Sequence)
+    if (Entry != NULL && Entry->Sequence == Sequence && Status == STATUS_PENDING)
+    {
+        Entry->Pended = TRUE;
+        Entry = NULL;
+    }
+    else if (Entry != NULL && Entry->Sequence == Sequence)
     {
         RemoveEntryList(&Entry->Link);
         InterlockedDecrement(&VfpIrpTracked);
@@ -246,17 +256,34 @@ VfpIsIrpRuleFatal(
     switch (Rule)
     {
         case VF_IO_CALL_CANCEL_ROUTINE:
-            return FALSE;
+            return TRUE;
         case VF_IO_CALL_QUEUED_BELOW:
             return FALSE;
         case VF_IO_COMPLETE_QUEUED_BELOW:
             return FALSE;
         case VF_IO_FREE_IN_USE:
-            return FALSE;
+            return TRUE;
         case VF_IO_REINITIALIZE_IN_USE:
             return FALSE;
         default:
             return FALSE;
+    }
+}
+
+static
+BOOLEAN
+VfpIsIrpTableTrusted(
+    _In_ ULONG Rule)
+{
+    switch (Rule)
+    {
+        case VF_IO_CALL_QUEUED_BELOW:
+        case VF_IO_COMPLETE_QUEUED_BELOW:
+        case VF_IO_FREE_IN_USE:
+        case VF_IO_REINITIALIZE_IN_USE:
+            return (BOOLEAN)(VfIrpUntrackSkipped == 0);
+        default:
+            return TRUE;
     }
 }
 
@@ -269,7 +296,7 @@ VfpReportIrpRule(
 {
     ULONG Hits = (ULONG)InterlockedIncrement((PLONG)&VfIrpRuleHits);
 
-    if (VfpIsIrpRuleFatal(Rule))
+    if (VfpIsIrpRuleFatal(Rule) && VfpIsIrpTableTrusted(Rule))
         KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, Rule, (ULONG_PTR)Caller, (ULONG_PTR)Irp, 0);
 
     if (Hits <= VF_IRP_LINES_PRINTED)
@@ -397,8 +424,8 @@ VfpCallDriver(
 
     Status = IofCallDriver(DeviceObject, Irp);
 
-    if (Sequence != 0 && Status != STATUS_PENDING)
-        VfpIrpReturned(Irp, Sequence);
+    if (Sequence != 0)
+        VfpIrpReturned(Irp, Sequence, Status);
 
     VfpCheckCallReturn(DeviceObject, Before);
     return Status;

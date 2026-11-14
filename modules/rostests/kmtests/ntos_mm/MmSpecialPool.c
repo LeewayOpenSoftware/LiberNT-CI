@@ -621,50 +621,58 @@ VfCompleteHeldIrp(
     IoFreeIrp(Irp);
 }
 
-START_TEST(MmDriverVerifierIrpTracking)
+static
+BOOLEAN
+VfIoCheckingIsOn(VOID)
+{
+    ULONG Flags = 0;
+
+    return EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & DRIVER_VERIFIER_IO_CHECKING);
+}
+
+static
+BOOLEAN
+VfCreateLowerDevice(VOID)
 {
     PVOID *Slot = (PVOID *)&KmtDriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL];
-    ULONG Flags = 0;
     NTSTATUS Status;
-    PIRP Irp;
-
-    if (skip(EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & DRIVER_VERIFIER_IO_CHECKING),
-             "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
-    {
-        return;
-    }
 
     Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_UNKNOWN, 0, FALSE, &VfLowerDevice);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (!NT_SUCCESS(Status))
-        return;
+        return FALSE;
 
     VfSavedDispatch = InterlockedExchangePointer(Slot, (PVOID)VfLowerDispatch);
+    return TRUE;
+}
+
+static
+VOID
+VfDeleteLowerDevice(VOID)
+{
+    PVOID *Slot = (PVOID *)&KmtDriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL];
+
+    InterlockedExchangePointer(Slot, (PVOID)VfSavedDispatch);
+    IoDeleteDevice(VfLowerDevice);
+    VfLowerDevice = NULL;
+}
+
+START_TEST(MmDriverVerifierIrpTracking)
+{
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    if (!VfCreateLowerDevice())
+        return;
 
     trace("Case 1: an IRP pends below and its owner completes it; expect NO verifier line\n");
     Irp = VfSendHeldIrp(FALSE);
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
-    trace("Case 2: an IRP is freed while it pends below; expect one log-only line, I/O rule 0x20b\n");
-    Irp = VfSendHeldIrp(FALSE);
-    if (Irp != NULL)
-        IoFreeIrp(Irp);
-
-    trace("Case 3: an IRP is reused while it pends below; expect one log-only line, I/O rule 0x310\n");
-    Irp = VfSendHeldIrp(FALSE);
-    if (Irp != NULL)
-    {
-        IoReuseIrp(Irp, STATUS_SUCCESS);
-        IoFreeIrp(Irp);
-    }
-
-    trace("Case 4: an IRP is sent with its cancel routine set; expect one log-only line, I/O rule 0x203\n");
-    Irp = VfSendHeldIrp(TRUE);
-    if (Irp != NULL)
-        VfCompleteHeldIrp(Irp);
-
-    trace("Case 5: an IRP is completed, reused and sent again by its owner; expect NO verifier line\n");
+    trace("Case 2: an IRP is completed, reused and sent again by its owner; expect NO verifier line\n");
     Irp = VfSendHeldIrp(FALSE);
     if (Irp != NULL)
     {
@@ -675,10 +683,73 @@ START_TEST(MmDriverVerifierIrpTracking)
         VfCompleteHeldIrp(Irp);
     }
 
-    InterlockedExchangePointer(Slot, (PVOID)VfSavedDispatch);
-    IoDeleteDevice(VfLowerDevice);
-    VfLowerDevice = NULL;
-    trace("Done: the debug log must hold exactly three log-only lines (0x20b, 0x310, 0x203) and no bug check\n");
+    VfDeleteLowerDevice();
+    trace("Done: the debug log must hold no Driver Verifier line and no bug check\n");
+}
+
+START_TEST(MmDriverVerifierIrpFreeInUse)
+{
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    if (!VfCreateLowerDevice())
+        return;
+
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+    {
+        trace("IRP %p is freed while it pends below; expect I/O rule 0x20b: one log-only line, or bug check 0xC9 "
+              "(0x20b, caller, IRP, 0) where the rule is fatal\n", Irp);
+        IoFreeIrp(Irp);
+    }
+
+    VfDeleteLowerDevice();
+    trace("Done: reached only where rule 0x20b is log-only\n");
+}
+
+START_TEST(MmDriverVerifierIrpReuseInUse)
+{
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    if (!VfCreateLowerDevice())
+        return;
+
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+    {
+        trace("IRP %p is reused while it pends below; expect I/O rule 0x310: one log-only line, or bug check 0xC9 "
+              "(0x310, caller, IRP, 0) where the rule is fatal\n", Irp);
+        IoReuseIrp(Irp, STATUS_SUCCESS);
+        IoFreeIrp(Irp);
+    }
+
+    VfDeleteLowerDevice();
+    trace("Done: reached only where rule 0x310 is log-only\n");
+}
+
+START_TEST(MmDriverVerifierIrpCancelRoutine)
+{
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    if (!VfCreateLowerDevice())
+        return;
+
+    trace("An IRP is sent with its cancel routine set; expect I/O rule 0x203: one log-only line, or bug check 0xC9 "
+          "(0x203, caller, IRP, 0) where the rule is fatal\n");
+    Irp = VfSendHeldIrp(TRUE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+
+    VfDeleteLowerDevice();
+    trace("Done: reached only where rule 0x203 is log-only\n");
 }
 
 static DRIVER_OBJECT VfOtherDriver;
@@ -944,8 +1015,13 @@ START_TEST(MmDriverVerifierLockOwner)
     ExAcquireFastMutex(&VfFirstMutex);
     ExReleaseFastMutex(&VfFirstMutex);
 
-    trace("Case 2: another thread takes lock %p, this one releases it; expect one log-only line, deadlock rule "
-          "0x1004\n", &VfFirstMutex);
+    trace("Case 2: the same again; expect NO verifier line\n");
+    ExAcquireFastMutex(&VfFirstMutex);
+    ExReleaseFastMutex(&VfFirstMutex);
+
+    trace("Case 3: another thread takes lock %p, this one releases it; expect deadlock rule 0x1004: one log-only "
+          "line, or bug check 0xC4 (0x1004, lock, owner thread, this thread) where the rule is fatal\n",
+          &VfFirstMutex);
     Thread = KmtStartThread(VfTakeAndLeaveThread, &VfFirstMutex);
     if (Thread == NULL)
         return;
@@ -956,12 +1032,8 @@ START_TEST(MmDriverVerifierLockOwner)
     ExReleaseFastMutex(&VfFirstMutex);
     KeLowerIrql(OldIrql);
 
-    trace("Case 3: the lock is taken and released again by one thread; expect NO verifier line\n");
-    ExAcquireFastMutex(&VfFirstMutex);
-    ExReleaseFastMutex(&VfFirstMutex);
-
     ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
-    trace("Done: the debug log must hold exactly one log-only line (0x1004) and no bug check\n");
+    trace("Done: reached only where rule 0x1004 is log-only\n");
 }
 
 START_TEST(MmDriverVerifierLockFreed)
@@ -990,15 +1062,15 @@ START_TEST(MmDriverVerifierLockFreed)
     if (Mutex == NULL)
         return;
 
-    trace("Case 2: block %p is freed while its lock is held; expect one log-only line, deadlock rule 0x100b\n",
-          Mutex);
+    trace("Case 2: block %p is freed while its lock is held; expect deadlock rule 0x100b: one log-only line, or "
+          "bug check 0xC4 (0x100b, lock, owner thread, locks held in the block) where the rule is fatal\n", Mutex);
     ExInitializeFastMutex(Mutex);
     ExAcquireFastMutex(Mutex);
     ExFreePoolWithTag(Mutex, 'kLpS');
     KeLowerIrql(PASSIVE_LEVEL);
 
     ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
-    trace("Done: the debug log must hold exactly one log-only line (0x100b) and no bug check\n");
+    trace("Done: reached only where rule 0x100b is log-only\n");
 }
 
 static
