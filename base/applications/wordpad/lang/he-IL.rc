@@ -89,7 +89,7 @@ BEGIN
     END
     POPUP "עזרה"
     BEGIN
-        MENUITEM "אודות הכתבן של Wine",       ID_ABOUT
+        MENUITEM "אודות LiberNT WordPad",       ID_ABOUT
     END
 END
 

@@ -87,7 +87,7 @@ BEGIN
     END
     POPUP "&Nápověda"
     BEGIN
-        MENUITEM "&O programu Wine Wordpad",      ID_ABOUT
+        MENUITEM "&O programu LiberNT WordPad",      ID_ABOUT
     END
 END
 
