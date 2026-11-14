@@ -36,7 +36,7 @@ add_importlibs(lnrspoc ntoskrnl hal)
 target_link_libraries(lnrspoc leeway_rs_poc)
 if(LNRSPOC_TEST_IOCTLS)
     target_compile_definitions(lnrspoc PRIVATE LNRSPOC_TEST_IOCTLS)
-    add_importlibs(lnrspoc wdmsec)   # IoCreateDeviceSecure for the privileged test device (Stanley SHOULD 3)
+    target_link_libraries(lnrspoc wdmsec)   # IoCreateDeviceSecure for the privileged test device (wdmsec is a static lib, linked directly like every other consumer; Stanley SHOULD 3)
 endif()
 
 # Intentionally NO add_cd_file(): lnrspoc.sys is an experiment and must never be
