@@ -10,6 +10,14 @@ project(mm_core_host_tests LANGUAGES C)
 include(CTest)
 
 set(CMAKE_C_STANDARD 11)
+
+# Standalone configure (-S submodules/host-tests/mmcc/nvs/core) sets what the parent would.
+if(NOT DEFINED MMCC_KERNEL_ROOT)
+    get_filename_component(REACTOS_HOST_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
+    set(MMCC_KERNEL_ROOT "${REACTOS_HOST_SOURCE_ROOT}/ntoskrnl")
+    include_directories(${MMCC_KERNEL_ROOT} ${CMAKE_CURRENT_LIST_DIR}/../../..)
+endif()
+
 set(NVS_ROOT ${MMCC_KERNEL_ROOT}/nvs)
 
 set(MM_CORE

@@ -451,7 +451,7 @@ SectionSharedDataFile(void)
     CHECK(NT_SUCCESS(UserRead(&World, 1, BaseB + 5, &Byte, 1)) && Byte == File.Data[5]);
 
     CHECK(MiFreeVirtualMemory(&A, &(ULONG64){BaseA}, &(ULONG64){0}, MI_MEM_RELEASE) == STATUS_UNABLE_TO_DELETE_SECTION);
-    CHECK(MiSegmentPurge(Segment, 0, 0) == FALSE);
+    CHECK(MiSegmentPurge(Segment, 0, 0, TRUE) == FALSE);
 
     CHECK(MiTrimAddressSpace(&A, 1000, TRUE) != 0);
     CHECK(MI_ATOMIC_READ64(&A.ResidentPages) == 0);
@@ -479,7 +479,7 @@ SectionSharedDataFile(void)
     CHECK(MI_ATOMIC_READ64(&A.PrototypeFaults) != 0);
     CHECK(NT_SUCCESS(MiUnmapView(&A, BaseA)));
 
-    CHECK(MiSegmentPurge(Segment, 0, 0) == TRUE);
+    CHECK(MiSegmentPurge(Segment, 0, 0, TRUE) == TRUE);
     CHECK(!MiSegmentIsResident(Segment, 0, 0x1000));
     CHECK(NT_SUCCESS(MiSegmentMakeResident(Segment, 0, 0x10000)));
     CHECK(File.Reads == 25);
@@ -1916,7 +1916,7 @@ SectionSparseDataFile(void)
     CHECK((ULONG64)Segment->PageCount == Size >> PAGE_SHIFT && Segment->ChunkIndex == NULL);
     CHECK(!MiSegmentIsResident(Segment, Size - PAGE_SIZE, PAGE_SIZE));
     CHECK(NT_SUCCESS(MiSegmentFlush(Segment, 0, Size)) && File.Writes == 0);
-    CHECK(MiSegmentPurge(Segment, 0, 0));
+    CHECK(MiSegmentPurge(Segment, 0, 0, TRUE));
     CHECK(NT_SUCCESS(MiSegmentExtend(Segment, Size + PAGE_SIZE)));
     CHECK(Segment->ChunkIndex == NULL);
 
@@ -1933,7 +1933,7 @@ SectionSparseDataFile(void)
 
     CHECK(NT_SUCCESS(MiSegmentFlush(Segment, 0, Size)));
     CHECK(File.Writes == 1 && File.Data[0x81005] == Byte);
-    CHECK(MiSegmentPurge(Segment, 0, 0));
+    CHECK(MiSegmentPurge(Segment, 0, 0, TRUE));
     CHECK(!MiSegmentIsResident(Segment, 0x81000, PAGE_SIZE));
 
     MiSegmentDereferenceAndClose(Segment);
@@ -1956,7 +1956,7 @@ SectionPurgeInFlightWorker(void *Context)
 
     MiHostCpu = 0;
     MachineCpu = 0;
-    MiSegmentPurge(State->Segment, 0, PAGE_SIZE);
+    MiSegmentPurge(State->Segment, 0, PAGE_SIZE, TRUE);
     __atomic_store_n(&State->Done, 1, __ATOMIC_RELEASE);
     return NULL;
 }

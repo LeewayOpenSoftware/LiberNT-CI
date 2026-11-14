@@ -495,7 +495,7 @@ TestWriteback(void)
         CHECK(File.File.Data[i] == (UCHAR)((i >> PAGE_SHIFT) * 31 + i));
 
     Calls = File.Calls;
-    CHECK(MiSegmentPurge(Segment, 2 * PAGE_SIZE, PAGE_SIZE));
+    CHECK(MiSegmentPurge(Segment, 2 * PAGE_SIZE, PAGE_SIZE, TRUE));
     CHECK(NT_SUCCESS(MiSegmentMarkDirty(Segment, PAGE_SIZE, 1)));
     CHECK(NT_SUCCESS(MiSegmentMarkDirty(Segment, 3 * PAGE_SIZE, 1)));
     CHECK(NT_SUCCESS(MiSegmentFlush(Segment, PAGE_SIZE, 3 * PAGE_SIZE)));
