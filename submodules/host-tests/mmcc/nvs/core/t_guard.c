@@ -81,8 +81,13 @@ GuardLayout(void)
     CHECK(MiGuardQuery(Region, Region->Base + 4096, NULL, NULL) == MiGuardFreed);
     CHECK(MiGuardQuery(Region, Region->Base + 3 * 4096, NULL, NULL) == MiGuardFreed);
     CHECK(MiGuardFree(Region, Region->Base + 4096) == STATUS_INVALID_ADDRESS);
+    GuardRead64(&World, 0, Region->Base + 4096, &Status);
+    CHECK(Status == STATUS_ACCESS_VIOLATION);
+    CHECK(GuardWrite64(&World, 1, Region->Base + 3 * 4096 + 8, 1) == STATUS_ACCESS_VIOLATION);
+    CHECK(MiGuardAllocate(Region, MI_PROT_NOACCESS, &Data, &Context) == STATUS_INVALID_PAGE_PROTECTION && Data == 0);
+    CHECK(MiGuardAllocate(Region, MI_PROT_READONLY, &Data, NULL) == STATUS_INVALID_PAGE_PROTECTION);
 
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &Data, &Context)));
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &Data, &Context)));
     CHECK((Data & 4095) == 0 && Context != NULL);
     for (i = 0; i < 32; i++)
         CHECK(((PUCHAR)Context)[i] == 0);
@@ -118,8 +123,13 @@ GuardLayout(void)
     CHECK(MiGuardFree(Region, Region->End - 4096) == STATUS_INVALID_ADDRESS);
 
     MiGuardQueryStats(Region, &Stats);
-    CHECK(Stats.LiveSlots == 0 && Stats.ReadySlots == 1 && Stats.Allocations == 1 && Stats.Frees == 1);
-    CHECK(MiGuardRefill(Region) == 1);
+    CHECK(Stats.LiveSlots == 0 && Stats.ReadySlots == 2 && Stats.Allocations == 1 && Stats.Frees == 1);
+    CHECK(MiGuardRefill(Region) == 0);
+
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_EXECUTE_READWRITE, &Data, NULL)));
+    CHECK(NT_SUCCESS(GuardWrite64(&World, 0, Data + 16, 0xC3)));
+    CHECK(GuardRead64(&World, 1, Data + 16, &Status) == 0xC3 && NT_SUCCESS(Status));
+    CHECK(NT_SUCCESS(MiGuardFree(Region, Data)));
 
     GuardWorldDestroy(&World, 1024, Region);
 }
@@ -137,23 +147,23 @@ GuardReuseDelay(void)
     CHECK(NT_SUCCESS(MiGuardRegionCreate(&World.System, 8, 1, 0, 3, 64, 0, &Region)));
 
     for (i = 0; i < 5; i++)
-        CHECK(NT_SUCCESS(MiGuardAllocate(Region, &Data[i], NULL)));
-    CHECK(MiGuardAllocate(Region, &Extra, NULL) == STATUS_INSUFFICIENT_RESOURCES);
+        CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &Data[i], NULL)));
+    CHECK(MiGuardAllocate(Region, MI_PROT_READWRITE, &Extra, NULL) == STATUS_INSUFFICIENT_RESOURCES);
 
     CHECK(NT_SUCCESS(MiGuardFree(Region, Data[0])));
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &Data[5], NULL)));
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &Data[5], NULL)));
     CHECK(Data[5] != Data[0]);
-    CHECK(MiGuardAllocate(Region, &Extra, NULL) == STATUS_INSUFFICIENT_RESOURCES);
+    CHECK(MiGuardAllocate(Region, MI_PROT_READWRITE, &Extra, NULL) == STATUS_INSUFFICIENT_RESOURCES);
 
     for (i = 1; i <= 3; i++)
         CHECK(NT_SUCCESS(MiGuardFree(Region, Data[i])));
 
     for (i = 0; i < 3; i++)
-        CHECK(NT_SUCCESS(MiGuardAllocate(Region, &Reused[i], NULL)));
+        CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &Reused[i], NULL)));
     CHECK(Reused[0] != Data[0] && Reused[1] != Data[0] && Reused[2] == Data[0]);
     for (i = 0; i < 3; i++)
         CHECK(Reused[i] != Data[1] && Reused[i] != Data[2] && Reused[i] != Data[3]);
-    CHECK(MiGuardAllocate(Region, &Extra, NULL) == STATUS_INSUFFICIENT_RESOURCES);
+    CHECK(MiGuardAllocate(Region, MI_PROT_READWRITE, &Extra, NULL) == STATUS_INSUFFICIENT_RESOURCES);
 
     CHECK(NT_SUCCESS(GuardWrite64(&World, 0, Reused[2], 7)));
     for (i = 0; i < 3; i++)
@@ -178,9 +188,9 @@ GuardBudgetAndReserve(void)
 
     GuardWorldCreate(&World, 1024, 1, TRUE);
     CHECK(NT_SUCCESS(MiGuardRegionCreate(&World.System, 16, 1, 1, 0, 2, 0, &Region)));
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &A, NULL)));
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &B, NULL)));
-    CHECK(MiGuardAllocate(Region, &C, NULL) == STATUS_INSUFFICIENT_RESOURCES);
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &A, NULL)));
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &B, NULL)));
+    CHECK(MiGuardAllocate(Region, MI_PROT_READWRITE, &C, NULL) == STATUS_INSUFFICIENT_RESOURCES);
     MiGuardQueryStats(Region, &Stats);
     CHECK(Stats.CommittedPages == 2 && Stats.PeakCommittedPages == 2 && Stats.Failures == 1);
     CHECK(NT_SUCCESS(MiGuardFree(Region, A)));
@@ -197,11 +207,12 @@ GuardBudgetAndReserve(void)
     }
     CHECK(Count > 0 && Count < RTL_NUMBER_OF(Held));
 
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &A, NULL)));
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &B, NULL)));
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &A, NULL)));
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_EXECUTE_READWRITE, &B, NULL)));
+    CHECK(NT_SUCCESS(GuardWrite64(&World, 0, B + 8, 2)));
     CHECK(NT_SUCCESS(GuardWrite64(&World, 0, A + 8, 1)));
     CHECK(GuardRead64(&World, 0, A + 8, &Status) == 1 && NT_SUCCESS(Status));
-    CHECK(MiGuardAllocate(Region, &C, NULL) == STATUS_INSUFFICIENT_RESOURCES);
+    CHECK(MiGuardAllocate(Region, MI_PROT_READWRITE, &C, NULL) == STATUS_INSUFFICIENT_RESOURCES);
     CHECK(MiGuardRefill(Region) == 0);
     MiGuardQueryStats(Region, &Stats);
     CHECK(Stats.CommittedPages == 2 && Stats.FreeSlots == 14);
@@ -226,8 +237,8 @@ GuardMultiPage(void)
 
     GuardWorldCreate(&World, 1024, 1, TRUE);
     CHECK(NT_SUCCESS(MiGuardRegionCreate(&World.System, 4, 3, 3, 0, 12, 0, &Region)));
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &Data, NULL)));
-    CHECK(NT_SUCCESS(MiGuardAllocate(Region, &Next, NULL)));
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &Data, NULL)));
+    CHECK(NT_SUCCESS(MiGuardAllocate(Region, MI_PROT_READWRITE, &Next, NULL)));
     CHECK(Next == Data + 4 * 4096ULL || Data == Next + 4 * 4096ULL);
     CHECK(NT_SUCCESS(GuardWrite64(&World, 0, Data, 1)));
     CHECK(NT_SUCCESS(GuardWrite64(&World, 0, Data + 3 * 4096 - 8, 2)));
@@ -273,7 +284,7 @@ GuardWorker(void *Argument)
             CHECK(NT_SUCCESS(MiGuardFree(Thread->Region, Held[j])));
             Held[j] = 0;
         }
-        else if (NT_SUCCESS(MiGuardAllocate(Thread->Region, &Held[j], NULL)))
+        else if (NT_SUCCESS(MiGuardAllocate(Thread->Region, MI_PROT_READWRITE, &Held[j], NULL)))
         {
             Thread->Allocated++;
             CHECK(NT_SUCCESS(GuardWrite64(Thread->World, Thread->Index, Held[j] + 4088, Held[j])));

@@ -84,10 +84,24 @@ static
 BOOLEAN
 MiGuardCommitSlot(
     _Inout_ PMI_GUARD_REGION Region,
-    _In_ ULONG Slot)
+    _In_ ULONG Slot,
+    _In_ ULONG Protection)
 {
     return NT_SUCCESS(MiSystemCommitPinned(Region->System, MiGuardDataVa(Region, Slot), Region->DataPages,
-                                           MI_PROT_READWRITE));
+                                           Protection));
+}
+
+static
+VOID
+MiGuardProtectSlot(
+    _Inout_ PMI_GUARD_REGION Region,
+    _In_ ULONG Slot,
+    _In_ ULONG Protection)
+{
+    NTSTATUS Status = MiSystemProtect(Region->System, MiGuardDataVa(Region, Slot), Region->DataPages, Protection);
+
+    MI_ASSERT(NT_SUCCESS(Status));
+    UNREFERENCED_PARAMETER(Status);
 }
 
 NTSTATUS
@@ -189,7 +203,10 @@ MiGuardRegionDelete(
     MI_ASSERT(Region->LiveCount == 0);
 
     for (i = 0; i < Region->ReadyCount; i++)
+    {
+        MiGuardProtectSlot(Region, Region->Ready[i], MI_PROT_READWRITE);
         MiSystemDecommitPinned(Region->System, MiGuardDataVa(Region, Region->Ready[i]), Region->DataPages);
+    }
 
     MiSystemRegionDelete(Region->System, Region->Vad, TRUE);
 
@@ -219,13 +236,14 @@ MiGuardRefill(
         }
         MI_SPIN_RELEASE(&Region->Lock, OldIrql);
 
-        if (!MiGuardCommitSlot(Region, Slot))
+        if (!MiGuardCommitSlot(Region, Slot, MI_PROT_READWRITE))
         {
             MI_SPIN_ACQUIRE(&Region->Lock, &OldIrql);
             MiGuardReturnFrontLocked(Region, Slot);
             MI_SPIN_RELEASE(&Region->Lock, OldIrql);
             return Added;
         }
+        MiGuardProtectSlot(Region, Slot, MI_PROT_NOACCESS);
 
         MI_SPIN_ACQUIRE(&Region->Lock, &OldIrql);
         if (Region->ReadyCount < Region->ReserveTarget)
@@ -238,6 +256,7 @@ MiGuardRefill(
         }
         MI_SPIN_RELEASE(&Region->Lock, OldIrql);
 
+        MiGuardProtectSlot(Region, Slot, MI_PROT_READWRITE);
         MiSystemDecommitPinned(Region->System, MiGuardDataVa(Region, Slot), Region->DataPages);
         MI_SPIN_ACQUIRE(&Region->Lock, &OldIrql);
         MiGuardReturnFrontLocked(Region, Slot);
@@ -249,6 +268,7 @@ MiGuardRefill(
 NTSTATUS
 MiGuardAllocate(
     _Inout_ PMI_GUARD_REGION Region,
+    _In_ ULONG Protection,
     _Out_ PULONG64 DataVa,
     _Out_opt_ PVOID *Context)
 {
@@ -260,28 +280,40 @@ MiGuardAllocate(
     if (Context != NULL)
         *Context = NULL;
 
+    if (Protection != MI_PROT_READWRITE && Protection != MI_PROT_EXECUTE_READWRITE)
+        return STATUS_INVALID_PAGE_PROTECTION;
+
     MI_SPIN_ACQUIRE(&Region->Lock, &OldIrql);
-    if (Region->ReadyCount != 0)
+    if (!MiGuardTakeQueuedLocked(Region, &Slot))
     {
+        if (Region->ReadyCount == 0)
+        {
+            Region->Failures++;
+            MI_SPIN_RELEASE(&Region->Lock, OldIrql);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
         Slot = Region->Ready[--Region->ReadyCount];
         FromReady = TRUE;
     }
-    else if (!MiGuardTakeQueuedLocked(Region, &Slot))
-    {
-        Region->Failures++;
-        MI_SPIN_RELEASE(&Region->Lock, OldIrql);
-        return STATUS_INSUFFICIENT_RESOURCES;
-    }
     MI_SPIN_RELEASE(&Region->Lock, OldIrql);
 
-    if (!FromReady && !MiGuardCommitSlot(Region, Slot))
+    if (!FromReady && !MiGuardCommitSlot(Region, Slot, Protection))
     {
         MI_SPIN_ACQUIRE(&Region->Lock, &OldIrql);
         MiGuardReturnFrontLocked(Region, Slot);
-        Region->Failures++;
+        if (Region->ReadyCount == 0)
+        {
+            Region->Failures++;
+            MI_SPIN_RELEASE(&Region->Lock, OldIrql);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        Slot = Region->Ready[--Region->ReadyCount];
+        FromReady = TRUE;
         MI_SPIN_RELEASE(&Region->Lock, OldIrql);
-        return STATUS_INSUFFICIENT_RESOURCES;
     }
+
+    if (FromReady)
+        MiGuardProtectSlot(Region, Slot, Protection);
 
     if (Region->ContextBytes != 0)
         RtlZeroMemory(Region->Context + (SIZE_T)Slot * Region->ContextBytes, Region->ContextBytes);
