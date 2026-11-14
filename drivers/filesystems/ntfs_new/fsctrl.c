@@ -1723,6 +1723,7 @@ NtfsDismountVolume(
     if (NT_SUCCESS(Status))
     {
         VolCB->Dismounted = TRUE;
+        VolCB->BootRepairDismount = NtfsIsBootExecuteWindow(VolumeDeviceObject, VolCB);
         FileCB->DismountedVolume = TRUE;
         IoAcquireVpbSpinLock(&OldIrql);
         Vpb = VolumeDeviceObject->Vpb;
