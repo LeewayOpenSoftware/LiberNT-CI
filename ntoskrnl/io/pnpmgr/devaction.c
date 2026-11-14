@@ -3005,6 +3005,10 @@ PipQueryAndRemoveDevice(
         for (Child = Node->Child; Child; Child = Child->Sibling)
         {
             Status = PipAddRemovalDevice(&Devices, Child->PhysicalDeviceObject);
+            /* A child that is already removed needs no removal and must not
+             * stop the removal of its parent */
+            if (Status == STATUS_NO_SUCH_DEVICE)
+                Status = STATUS_SUCCESS;
             if (!NT_SUCCESS(Status))
                 break;
         }
@@ -3028,7 +3032,11 @@ PipQueryAndRemoveDevice(
         for (i = 0; i < Relations->Count; ++i)
         {
             if (NT_SUCCESS(Status))
+            {
                 Status = PipAddRemovalDevice(&Devices, Relations->Objects[i]);
+                if (Status == STATUS_NO_SUCH_DEVICE)
+                    Status = STATUS_SUCCESS;
+            }
             ObDereferenceObject(Relations->Objects[i]);
         }
         ExFreePool(Relations);
