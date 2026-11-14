@@ -35,7 +35,7 @@
 
 static PVIDEO_WIN32K_CALLOUT Win32kCallout = NULL;
 static HANDLE InbvThreadHandle = NULL;
-static BOOLEAN InbvMonitoring = FALSE;
+static volatile BOOLEAN InbvMonitoring = FALSE;
 
 /* PRIVATE FUNCTIONS **********************************************************/
 
