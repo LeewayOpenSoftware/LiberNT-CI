@@ -232,6 +232,22 @@ VfpReportDeadlockRule(
 
 static
 BOOLEAN
+VfpConsumeDroppedAcquire(VOID)
+{
+    LONG Dropped;
+
+    do
+    {
+        Dropped = VfpHeldDropped;
+        if (Dropped <= 0)
+            return FALSE;
+    } while (InterlockedCompareExchange(&VfpHeldDropped, Dropped - 1, Dropped) != Dropped);
+
+    return TRUE;
+}
+
+static
+BOOLEAN
 VfpIsOnCurrentStack(
     _In_ PVOID Lock)
 {
@@ -365,7 +381,16 @@ VfLockReleasing(
     KIRQL OldIrql;
     ULONG i;
 
-    if (!VfDeadlockDetectionEnabled || KeGetCurrentIrql() > DISPATCH_LEVEL || VfpIsOnCurrentStack(Lock))
+    if (!VfDeadlockDetectionEnabled)
+        return;
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        VfpConsumeDroppedAcquire();
+        return;
+    }
+
+    if (VfpIsOnCurrentStack(Lock))
         return;
 
     KeAcquireSpinLock(&VfpGraphLock, &OldIrql);
@@ -379,12 +404,10 @@ VfLockReleasing(
         VfpHeld[i].Lock = NULL;
         break;
     }
-    if (!Found && VfpHeldDropped > 0)
-    {
-        InterlockedDecrement(&VfpHeldDropped);
-        Dropped = TRUE;
-    }
     KeReleaseSpinLock(&VfpGraphLock, OldIrql);
+
+    if (!Found)
+        Dropped = VfpConsumeDroppedAcquire();
 
     if (!Found)
     {

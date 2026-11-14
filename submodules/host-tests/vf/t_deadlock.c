@@ -27,6 +27,16 @@ void KeInitializeSpinLock(KSPIN_LOCK *Lock) { *Lock = 0; }
 LONG InterlockedIncrement(PLONG Value) { return ++*Value; }
 LONG InterlockedDecrement(PLONG Value) { return --*Value; }
 
+LONG InterlockedCompareExchange(PLONG Value, LONG Exchange, LONG Comparand)
+{
+    LONG Old = *Value;
+
+    if (Old == Comparand)
+        *Value = Exchange;
+
+    return Old;
+}
+
 void KeAcquireSpinLock(KSPIN_LOCK *Lock, KIRQL *OldIrql)
 {
     if (*Lock != 0)
@@ -159,6 +169,16 @@ int main(void)
     Drop(0x81);
     CHECK(VfDeadlockRuleHits == 8 && LastRule == 0x1007);
 
+    for (i = 0; i < 100; i++)
+    {
+        CurrentIrql = DISPATCH_LEVEL + 1;
+        Take(0x90);
+        Drop(0x90);
+        CurrentIrql = 0;
+    }
+    Drop(0x91);
+    CHECK(VfDeadlockRuleHits == 9 && LastRule == 0x1007);
+
     CurrentThread = (PKTHREAD)0x3000;
     for (i = 0; i < 3000; i++)
     {
@@ -167,7 +187,7 @@ int main(void)
         Drop(0x900000 + i * 16);
         Drop(0x100000 + i * 16);
     }
-    CHECK(VfDeadlockRuleHits == 8);
+    CHECK(VfDeadlockRuleHits == 9);
     CHECK(VfDeadlockGraphResets > 0);
 
     Take(0x7000);
@@ -177,15 +197,15 @@ int main(void)
         Drop(0x8000 + i * 8);
     }
     Drop(0x7000);
-    CHECK(VfDeadlockRuleHits == 8);
+    CHECK(VfDeadlockRuleHits == 9);
 
     for (i = 0; i < 300; i++)
         Take(0xA000 + i * 8);
     for (i = 0; i < 300; i++)
         Drop(0xA000 + i * 8);
-    CHECK(VfDeadlockRuleHits == 8);
+    CHECK(VfDeadlockRuleHits == 9);
     Drop(0xA000);
-    CHECK(VfDeadlockRuleHits == 9 && LastRule == 0x1007);
+    CHECK(VfDeadlockRuleHits == 10 && LastRule == 0x1007);
 
     printf("hits %u, graph resets %u, lines %u, failures %d\n", VfDeadlockRuleHits, VfDeadlockGraphResets, Lines,
            Failures);

@@ -27,6 +27,7 @@ void KeAcquireSpinLock(KSPIN_LOCK *Lock, KIRQL *OldIrql);
 void KeReleaseSpinLock(KSPIN_LOCK *Lock, KIRQL OldIrql);
 LONG InterlockedIncrement(PLONG Value);
 LONG InterlockedDecrement(PLONG Value);
+LONG InterlockedCompareExchange(PLONG Value, LONG Exchange, LONG Comparand);
 void IoGetStackLimits(PULONG_PTR Low, PULONG_PTR High);
 __attribute__((noreturn)) void KeBugCheckEx(ULONG Code, ULONG_PTR P1, ULONG_PTR P2, ULONG_PTR P3, ULONG_PTR P4);
 ULONG DbgPrint(const char *Format, ...);
