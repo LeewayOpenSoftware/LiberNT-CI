@@ -171,6 +171,117 @@ MiniIsBusy(
     return Busy;
 }
 
+PADAPTER_BINDING *
+MiniSnapshotBindings(
+    PLOGICAL_ADAPTER Adapter,
+    PADAPTER_BINDING *InlineSnapshot,
+    SIZE_T InlineCapacity,
+    PSIZE_T SnapshotCount)
+/*
+ * FUNCTION: Takes a referenced copy of the list of bindings of an adapter
+ * ARGUMENTS:
+ *     Adapter        = Pointer to logical adapter
+ *     InlineSnapshot = Array of the caller, used when the list fits in it
+ *     InlineCapacity = Number of entries of that array
+ *     SnapshotCount  = Receives the number of bindings in the copy
+ * RETURNS:
+ *     The copy, to be given to MiniReleaseBindingSnapshot
+ * NOTES:
+ *     A protocol handler can call back into NDIS, which takes the lock of the
+ *     adapter, and a binding can be closed while a handler runs. So handlers
+ *     are called from such a copy, with the lock released.
+ *     The list is counted and copied in one pass under the lock. If it does
+ *     not fit in the array of the caller, a larger one is allocated and the
+ *     pass is done once more. Bindings that still do not fit, or for which
+ *     there is no memory, are left out and that is traced.
+ */
+{
+    PADAPTER_BINDING *Snapshot = InlineSnapshot;
+    PADAPTER_BINDING *Larger;
+    PADAPTER_BINDING Binding;
+    PLIST_ENTRY Entry;
+    SIZE_T Capacity = InlineCapacity;
+    SIZE_T Total;
+    SIZE_T Count;
+    BOOLEAN Retried = FALSE;
+    KIRQL OldIrql;
+
+    for (;;)
+    {
+        Total = 0;
+        Count = 0;
+
+        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+        for (Entry = Adapter->ProtocolListHead.Flink;
+             Entry != &Adapter->ProtocolListHead;
+             Entry = Entry->Flink)
+        {
+            Total++;
+        }
+
+        if (Total <= Capacity || Retried)
+        {
+            for (Entry = Adapter->ProtocolListHead.Flink;
+                 Entry != &Adapter->ProtocolListHead && Count < Capacity;
+                 Entry = Entry->Flink)
+            {
+                Binding = CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+
+                if (Binding->ProtocolBinding == NULL ||
+                    !NdisReferenceAdapterBinding(Binding))
+                {
+                    continue;
+                }
+
+                Snapshot[Count++] = Binding;
+            }
+            KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+            break;
+        }
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+        /* Does not fit: get room for the list and two more, and look again */
+        Retried = TRUE;
+        Larger = NULL;
+        if (Total + 2 <= MAXULONG_PTR / sizeof(*Snapshot))
+        {
+            Larger = ExAllocatePoolWithTag(NonPagedPool,
+                                           (Total + 2) * sizeof(*Snapshot),
+                                           'sBNn');
+        }
+
+        if (Larger != NULL)
+        {
+            Snapshot = Larger;
+            Capacity = Total + 2;
+        }
+    }
+
+    if (Total > Capacity)
+    {
+        NDIS_DbgPrint(MIN_TRACE, ("Binding snapshot truncated (%lu of %lu)\n",
+                                  (ULONG)Capacity, (ULONG)Total));
+    }
+
+    *SnapshotCount = Count;
+    return Snapshot;
+}
+
+VOID
+MiniReleaseBindingSnapshot(
+    PADAPTER_BINDING *Snapshot,
+    PADAPTER_BINDING *InlineSnapshot,
+    SIZE_T SnapshotCount)
+{
+    SIZE_T i;
+
+    for (i = 0; i < SnapshotCount; i++)
+        NdisDereferenceAdapterBinding(Snapshot[i]);
+
+    if (Snapshot != InlineSnapshot)
+        ExFreePoolWithTag(Snapshot, 'sBNn');
+}
+
 VOID
 MiniIndicateData(
     PLOGICAL_ADAPTER    Adapter,
@@ -192,9 +303,12 @@ MiniIndicateData(
  *     PacketSize          = Total size of received packet
  */
 {
-  KIRQL OldIrql;
-  PLIST_ENTRY CurrentEntry;
+  PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+  PADAPTER_BINDING *Snapshot;
   PADAPTER_BINDING AdapterBinding;
+  SIZE_T SnapshotCount;
+  KIRQL HandlerIrql;
+  SIZE_T i;
 
   NDIS_DbgPrint(DEBUG_MINIPORT, ("Called. Adapter (0x%X)  HeaderBuffer (0x%X)  "
       "HeaderBufferSize (0x%X)  LookaheadBuffer (0x%X)  LookaheadBufferSize (0x%X).\n",
@@ -204,48 +318,38 @@ MiniIndicateData(
   MiniDisplayPacket2(HeaderBuffer, HeaderBufferSize, LookaheadBuffer, LookaheadBufferSize);
 #endif
 
-  NDIS_DbgPrint(MAX_TRACE, ("acquiring miniport block lock\n"));
-  KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+  Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
+
+  /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+   * The level is kept; only the lock is gone. */
+  KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
+
+  if (SnapshotCount == 0)
     {
-      CurrentEntry = Adapter->ProtocolListHead.Flink;
-      NDIS_DbgPrint(DEBUG_MINIPORT, ("CurrentEntry = %x\n", CurrentEntry));
-
-      if (CurrentEntry == &Adapter->ProtocolListHead)
-        {
-          NDIS_DbgPrint(MIN_TRACE, ("WARNING: No upper protocol layer.\n"));
-        }
-
-      while (CurrentEntry != &Adapter->ProtocolListHead)
-        {
-          AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
-	  NDIS_DbgPrint(DEBUG_MINIPORT, ("AdapterBinding = %x\n", AdapterBinding));
-
-	  NDIS_DbgPrint
-	      (MID_TRACE,
-	       ("XXX (%x) %x %x %x %x %x %x %x XXX\n",
-		*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler,
-		AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
-		MacReceiveContext,
-		HeaderBuffer,
-		HeaderBufferSize,
-		LookaheadBuffer,
-		LookaheadBufferSize,
-		PacketSize));
-
-          /* call the receive handler */
-          (*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler)(
-              AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
-              MacReceiveContext,
-              HeaderBuffer,
-              HeaderBufferSize,
-              LookaheadBuffer,
-              LookaheadBufferSize,
-              PacketSize);
-
-          CurrentEntry = CurrentEntry->Flink;
-        }
+      NDIS_DbgPrint(MIN_TRACE, ("WARNING: No upper protocol layer takes the data.\n"));
     }
-  KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+  for (i = 0; i < SnapshotCount; i++)
+    {
+      AdapterBinding = Snapshot[i];
+
+      if (AdapterBinding->ProtocolBinding->Chars.ReceiveHandler == NULL)
+        continue;
+
+      /* call the receive handler */
+      (*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler)(
+          AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
+          MacReceiveContext,
+          HeaderBuffer,
+          HeaderBufferSize,
+          LookaheadBuffer,
+          LookaheadBufferSize,
+          PacketSize);
+    }
+
+  KeLowerIrql(HandlerIrql);
+
+  MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 
   NDIS_DbgPrint(MAX_TRACE, ("Leaving.\n"));
 }
@@ -696,8 +800,12 @@ MiniResetComplete(
     IN  BOOLEAN     AddressingReset)
 {
     PLOGICAL_ADAPTER Adapter = MiniportAdapterHandle;
-    PLIST_ENTRY CurrentEntry;
+    PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+    PADAPTER_BINDING *Snapshot;
     PADAPTER_BINDING AdapterBinding;
+    SIZE_T SnapshotCount;
+    KIRQL HandlerIrql;
+    SIZE_T i;
     KIRQL OldIrql;
 
     if (AddressingReset)
@@ -719,20 +827,29 @@ MiniResetComplete(
 
     Adapter->NdisMiniportBlock.ResetStatus = Status;
 
-    CurrentEntry = Adapter->ProtocolListHead.Flink;
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
-    while (CurrentEntry != &Adapter->ProtocolListHead)
+    Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
+
+    /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+     * The level is kept; only the lock is gone. */
+    KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
+
+    for (i = 0; i < SnapshotCount; i++)
     {
-        AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+        AdapterBinding = Snapshot[i];
+
+        if (AdapterBinding->ProtocolBinding->Chars.ResetCompleteHandler == NULL)
+            continue;
 
         (*AdapterBinding->ProtocolBinding->Chars.ResetCompleteHandler)(
                AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
                Status);
-
-        CurrentEntry = CurrentEntry->Flink;
     }
 
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+    KeLowerIrql(HandlerIrql);
+
+    MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 }
 
 VOID NTAPI
@@ -822,14 +939,19 @@ MiniSendComplete(
         SGList = NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
                                                   ScatterGatherListPacketInfo);
 
-        Adapter->NdisMiniportBlock.SystemAdapterObject->
-            DmaOperations->PutScatterGatherList(
-                           Adapter->NdisMiniportBlock.SystemAdapterObject,
-                           SGList,
-                           TRUE);
+        /* A packet that is completed before it reached the miniport, or
+         * that was looped back, has no list */
+        if (SGList != NULL)
+        {
+            Adapter->NdisMiniportBlock.SystemAdapterObject->
+                DmaOperations->PutScatterGatherList(
+                               Adapter->NdisMiniportBlock.SystemAdapterObject,
+                               SGList,
+                               TRUE);
 
-        NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
-                                         ScatterGatherListPacketInfo) = NULL;
+            NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
+                                             ScatterGatherListPacketInfo) = NULL;
+        }
     }
 
     (*AdapterBinding->ProtocolBinding->Chars.SendCompleteHandler)(
@@ -1853,28 +1975,36 @@ MiniStatus(
     IN UINT  StatusBufferSize)
 {
     PLOGICAL_ADAPTER Adapter = MiniportHandle;
-    PLIST_ENTRY CurrentEntry;
+    PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+    PADAPTER_BINDING *Snapshot;
     PADAPTER_BINDING AdapterBinding;
-    KIRQL OldIrql;
+    SIZE_T SnapshotCount;
+    KIRQL HandlerIrql;
+    SIZE_T i;
 
-    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
 
-    CurrentEntry = Adapter->ProtocolListHead.Flink;
+    /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+     * The level is kept; only the lock is gone. */
+    KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
 
-    while (CurrentEntry != &Adapter->ProtocolListHead)
+    for (i = 0; i < SnapshotCount; i++)
     {
-       AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+       AdapterBinding = Snapshot[i];
+
+       if (AdapterBinding->ProtocolBinding->Chars.StatusHandler == NULL)
+           continue;
 
        (*AdapterBinding->ProtocolBinding->Chars.StatusHandler)(
            AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
            GeneralStatus,
            StatusBuffer,
            StatusBufferSize);
-
-       CurrentEntry = CurrentEntry->Flink;
     }
 
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+    KeLowerIrql(HandlerIrql);
+
+    MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 }
 
 VOID
@@ -1883,25 +2013,33 @@ MiniStatusComplete(
     IN NDIS_HANDLE  MiniportAdapterHandle)
 {
     PLOGICAL_ADAPTER Adapter = MiniportAdapterHandle;
-    PLIST_ENTRY CurrentEntry;
+    PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+    PADAPTER_BINDING *Snapshot;
     PADAPTER_BINDING AdapterBinding;
-    KIRQL OldIrql;
+    SIZE_T SnapshotCount;
+    KIRQL HandlerIrql;
+    SIZE_T i;
 
-    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
 
-    CurrentEntry = Adapter->ProtocolListHead.Flink;
+    /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+     * The level is kept; only the lock is gone. */
+    KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
 
-    while (CurrentEntry != &Adapter->ProtocolListHead)
+    for (i = 0; i < SnapshotCount; i++)
     {
-       AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+       AdapterBinding = Snapshot[i];
+
+       if (AdapterBinding->ProtocolBinding->Chars.StatusCompleteHandler == NULL)
+           continue;
 
        (*AdapterBinding->ProtocolBinding->Chars.StatusCompleteHandler)(
            AdapterBinding->NdisOpenBlock.ProtocolBindingContext);
-
-       CurrentEntry = CurrentEntry->Flink;
     }
 
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+    KeLowerIrql(HandlerIrql);
+
+    MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 }
 
 /*
@@ -2345,6 +2483,42 @@ NdisICreateClose(
   return STATUS_SUCCESS;
 }
 
+static
+VOID
+MiniHaltAfterFailedStart(
+    IN PLOGICAL_ADAPTER Adapter)
+/*
+ * FUNCTION: Undoes a start that failed after MiniportInitialize succeeded
+ * ARGUMENTS:
+ *     Adapter = Pointer to the logical adapter
+ * NOTES:
+ *     The miniport holds its interrupt, timers and memory from the moment
+ *     its initialize handler succeeds. The device is not marked as started,
+ *     so the remove path does not halt it. It is halted here.
+ */
+{
+  /* Remove adapter from global adapter list */
+  ExInterlockedRemoveEntryList(&Adapter->ListEntry, &AdapterListLock);
+
+  /* Set this here so MiniportISR will be forced to run for interrupts generated in MiniportHalt */
+  Adapter->NdisMiniportBlock.OldPnPDeviceState = Adapter->NdisMiniportBlock.PnPDeviceState;
+  Adapter->NdisMiniportBlock.PnPDeviceState = NdisPnPDeviceStopped;
+
+  (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler)(Adapter->NdisMiniportBlock.MiniportAdapterContext);
+
+  /* The same check as after a failed initialize: the device goes away, so
+   * an interrupt or a timer that the miniport left behind would fire into
+   * freed memory later. It is stopped here, where the cause is known. */
+  if (Adapter->NdisMiniportBlock.Interrupt || Adapter->NdisMiniportBlock.TimerQueue)
+    {
+      KeBugCheckEx(BUGCODE_ID_DRIVER,
+                   (ULONG_PTR)Adapter,
+                   (ULONG_PTR)Adapter->NdisMiniportBlock.Interrupt,
+                   (ULONG_PTR)Adapter->NdisMiniportBlock.TimerQueue,
+                   2);
+    }
+}
+
 NTSTATUS
 NTAPI
 NdisIPnPStartDevice(
@@ -2595,7 +2769,7 @@ NdisIPnPStartDevice(
   if (SelectedMediumIndex >= MEDIA_ARRAY_SIZE)
     {
       NDIS_DbgPrint(MIN_TRACE, ("MiniportInitialize() selected a bad index\n"));
-      ExInterlockedRemoveEntryList( &Adapter->ListEntry, &AdapterListLock );
+      MiniHaltAfterFailedStart(Adapter);
       return NDIS_STATUS_UNSUPPORTED_MEDIA;
     }
 
@@ -2615,8 +2789,8 @@ NdisIPnPStartDevice(
 
             if (NdisStatus != NDIS_STATUS_SUCCESS)
             {
-               ExInterlockedRemoveEntryList( &Adapter->ListEntry, &AdapterListLock );
                NDIS_DbgPrint(MIN_TRACE, ("MiniQueryInformation failed (%x)\n", NdisStatus));
+               MiniHaltAfterFailedStart(Adapter);
                return NdisStatus;
             }
 
@@ -2634,13 +2808,14 @@ NdisIPnPStartDevice(
         /* FIXME: Support other types of media */
         NDIS_DbgPrint(MIN_TRACE, ("error: unsupported media\n"));
         ASSERT(FALSE);
-	ExInterlockedRemoveEntryList( &Adapter->ListEntry, &AdapterListLock );
+        MiniHaltAfterFailedStart(Adapter);
         return STATUS_UNSUCCESSFUL;
     }
 
   if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
       NDIS_DbgPrint(MIN_TRACE, ("couldn't create filter (%x)\n", NdisStatus));
+      MiniHaltAfterFailedStart(Adapter);
       return NdisStatus;
     }
 
