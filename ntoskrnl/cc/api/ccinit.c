@@ -99,8 +99,8 @@ CcNtFlushMap(
 
     if (Flushed != 0)
     {
-        CcDataFlushes++;
-        CcDataPages += Flushed;
+        InterlockedIncrement((volatile LONG *)&CcDataFlushes);
+        InterlockedExchangeAdd((volatile LONG *)&CcDataPages, (LONG)Flushed);
     }
 
     if (PagesFlushed != NULL)
@@ -362,8 +362,8 @@ CcNtLazyFlushMap(
 
     if (CalledFromLazy && Flushed != 0)
     {
-        CcLazyWriteIos++;
-        CcLazyWritePages += Flushed;
+        InterlockedIncrement((volatile LONG *)&CcLazyWriteIos);
+        InterlockedExchangeAdd((volatile LONG *)&CcLazyWritePages, (LONG)Flushed);
     }
 
     return Flushed;
