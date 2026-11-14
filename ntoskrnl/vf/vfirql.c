@@ -13,11 +13,13 @@
 #undef KeReleaseSpinLockFromDpcLevel
 #undef ExAcquireFastMutex
 #undef ExReleaseFastMutex
+#undef ExTryToAcquireFastMutex
 
 VOID NTAPI KeAcquireSpinLockAtDpcLevel(IN PKSPIN_LOCK SpinLock);
 VOID NTAPI KeReleaseSpinLockFromDpcLevel(IN PKSPIN_LOCK SpinLock);
 VOID FASTCALL ExAcquireFastMutex(IN OUT PFAST_MUTEX FastMutex);
 VOID FASTCALL ExReleaseFastMutex(IN OUT PFAST_MUTEX FastMutex);
+BOOLEAN FASTCALL ExTryToAcquireFastMutex(IN OUT PFAST_MUTEX FastMutex);
 
 #define VF_RELEASE_SPIN_LOCK_IRQL       0x32
 #define VF_ACQUIRE_FAST_MUTEX_IRQL      0x33
@@ -38,7 +40,9 @@ VfKeAcquireSpinLockAtDpcLevel(
     if (Irql < DISPATCH_LEVEL)
         KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, VF_ACQUIRE_AT_DPC_BELOW, Irql, (ULONG_PTR)SpinLock, 0);
 
+    VfLockAcquiring(SpinLock, _ReturnAddress());
     KeAcquireSpinLockAtDpcLevel(SpinLock);
+    VfLockAcquired(SpinLock, _ReturnAddress());
 }
 
 static
@@ -52,6 +56,7 @@ VfKeReleaseSpinLockFromDpcLevel(
     if (Irql < DISPATCH_LEVEL)
         KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, VF_RELEASE_FROM_DPC_BELOW, Irql, (ULONG_PTR)SpinLock, 0);
 
+    VfLockReleasing(SpinLock, _ReturnAddress());
     KeReleaseSpinLockFromDpcLevel(SpinLock);
 }
 
@@ -68,7 +73,10 @@ VfKeAcquireSpinLockRaiseToDpc(
     if (Irql > DISPATCH_LEVEL)
         KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, VF_ACQUIRE_SPIN_LOCK_IRQL, Irql, (ULONG_PTR)SpinLock, 0);
 
-    return KeAcquireSpinLockRaiseToDpc(SpinLock);
+    VfLockAcquiring(SpinLock, _ReturnAddress());
+    Irql = KeAcquireSpinLockRaiseToDpc(SpinLock);
+    VfLockAcquired(SpinLock, _ReturnAddress());
+    return Irql;
 }
 
 static
@@ -83,6 +91,7 @@ VfKeReleaseSpinLock(
     if (Irql != DISPATCH_LEVEL)
         KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, VF_RELEASE_SPIN_LOCK_IRQL, Irql, (ULONG_PTR)SpinLock, 0);
 
+    VfLockReleasing(SpinLock, _ReturnAddress());
     KeReleaseSpinLock(SpinLock, OldIrql);
 }
 
@@ -99,7 +108,9 @@ VfExAcquireFastMutex(
     if (Irql > APC_LEVEL)
         KeBugCheckEx(DRIVER_VERIFIER_DETECTED_VIOLATION, VF_ACQUIRE_FAST_MUTEX_IRQL, Irql, (ULONG_PTR)FastMutex, 0);
 
+    VfLockAcquiring(FastMutex, _ReturnAddress());
     ExAcquireFastMutex(FastMutex);
+    VfLockAcquired(FastMutex, _ReturnAddress());
 }
 
 static
@@ -116,7 +127,36 @@ VfExReleaseFastMutex(
                      (ULONG_PTR)KeGetCurrentThread()->CombinedApcDisable, (ULONG_PTR)FastMutex);
     }
 
+    VfLockReleasing(FastMutex, _ReturnAddress());
     ExReleaseFastMutex(FastMutex);
+}
+
+static
+BOOLEAN
+FASTCALL
+VfExTryToAcquireFastMutex(
+    _Inout_ PFAST_MUTEX FastMutex)
+{
+    BOOLEAN Acquired = ExTryToAcquireFastMutex(FastMutex);
+
+    if (Acquired)
+        VfLockAcquired(FastMutex, _ReturnAddress());
+
+    return Acquired;
+}
+
+static
+BOOLEAN
+FASTCALL
+VfKeTryToAcquireSpinLockAtDpcLevel(
+    _Inout_ PKSPIN_LOCK SpinLock)
+{
+    BOOLEAN Acquired = KeTryToAcquireSpinLockAtDpcLevel(SpinLock);
+
+    if (Acquired)
+        VfLockAcquired(SpinLock, _ReturnAddress());
+
+    return Acquired;
 }
 
 static
@@ -177,6 +217,8 @@ const VF_THUNK VfIrqlThunks[] =
 #endif
     { (ULONG_PTR)ExAcquireFastMutex, (ULONG_PTR)VfExAcquireFastMutex },
     { (ULONG_PTR)ExReleaseFastMutex, (ULONG_PTR)VfExReleaseFastMutex },
+    { (ULONG_PTR)ExTryToAcquireFastMutex, (ULONG_PTR)VfExTryToAcquireFastMutex },
+    { (ULONG_PTR)KeTryToAcquireSpinLockAtDpcLevel, (ULONG_PTR)VfKeTryToAcquireSpinLockAtDpcLevel },
     { (ULONG_PTR)KeWaitForSingleObject, (ULONG_PTR)VfKeWaitForSingleObject },
     { (ULONG_PTR)KeWaitForMultipleObjects, (ULONG_PTR)VfKeWaitForMultipleObjects },
 };
