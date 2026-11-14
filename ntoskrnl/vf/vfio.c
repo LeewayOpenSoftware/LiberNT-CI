@@ -265,6 +265,60 @@ VfFindImage(
     return Found;
 }
 
+/* The image of a dispatch routine is looked up once and remembered, so that
+ * the ownership test does not walk the list of loaded modules for each
+ * request. An entry is keyed by the address of the routine. Every unload of an
+ * image empties the table: an address can belong to another image later. */
+#define VF_DISPATCH_IMAGES 32
+
+typedef struct _VF_DISPATCH_IMAGE
+{
+    PVOID Routine;
+    ULONG_PTR Base;
+    ULONG Size;
+    BOOLEAN InKernel;
+} VF_DISPATCH_IMAGE, *PVF_DISPATCH_IMAGE;
+
+static VF_DISPATCH_IMAGE VfpDispatchImages[VF_DISPATCH_IMAGES];
+
+static
+BOOLEAN
+VfpFindDispatchImage(
+    _In_ PVOID Routine,
+    _Out_ PULONG_PTR ImageBase,
+    _Out_ PULONG ImageSize,
+    _Out_ PBOOLEAN InKernel)
+{
+    PVF_DISPATCH_IMAGE Slot = &VfpDispatchImages[((ULONG_PTR)Routine >> 4) % VF_DISPATCH_IMAGES];
+    BOOLEAN Found = FALSE;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    if (Slot->Routine == Routine && Routine != NULL)
+    {
+        *ImageBase = Slot->Base;
+        *ImageSize = Slot->Size;
+        *InKernel = Slot->InKernel;
+        Found = TRUE;
+    }
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    if (Found)
+        return TRUE;
+
+    if (!VfFindImage(Routine, ImageBase, ImageSize, InKernel))
+        return FALSE;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    Slot->Routine = Routine;
+    Slot->Base = *ImageBase;
+    Slot->Size = *ImageSize;
+    Slot->InKernel = *InKernel;
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    return TRUE;
+}
+
 static
 BOOLEAN
 VfpCallerOwnsCurrentLocation(
@@ -301,8 +355,8 @@ VfpCallerOwnsCurrentLocation(
         ULONG DispatchSize;
         BOOLEAN InKernel;
 
-        if (VfFindImage((PVOID)(ULONG_PTR)Driver->MajorFunction[Stack->MajorFunction],
-                        &DispatchBase, &DispatchSize, &InKernel) &&
+        if (VfpFindDispatchImage((PVOID)(ULONG_PTR)Driver->MajorFunction[Stack->MajorFunction],
+                                 &DispatchBase, &DispatchSize, &InKernel) &&
             !InKernel &&
             (ULONG_PTR)Caller >= DispatchBase &&
             (ULONG_PTR)Caller < DispatchBase + DispatchSize)
@@ -396,7 +450,16 @@ VfCheckIrpsAtUnload(
     KIRQL OldIrql;
     ULONG i;
 
-    if (!VfIrpTrackingEnabled || !(LdrEntry->Flags & LDRP_IMAGE_VERIFYING))
+    if (!VfIrpTrackingEnabled)
+        return;
+
+    /* The remembered images of dispatch routines are for the modules that are
+     * loaded now */
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    RtlZeroMemory(VfpDispatchImages, sizeof(VfpDispatchImages));
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    if (!(LdrEntry->Flags & LDRP_IMAGE_VERIFYING))
         return;
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
