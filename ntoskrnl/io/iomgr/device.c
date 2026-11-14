@@ -59,6 +59,49 @@ IopForgetDeviceLocks(
         VfForgetLocksInRange(DeviceObject, End - Start);
 }
 
+/*
+ * The device object is going away for good. The VPB that hangs on it, the
+ * one made with the device or a spare one that a file system put there when
+ * it dismounted, has no other owner and is freed here.
+ *
+ * It is left alone if a file system still holds it: a mounted volume, a
+ * volume device, a reference, or a VPB the file system said it frees itself.
+ * A volume device of a file system also points to the VPB of the real
+ * device, and that one is not its own.
+ */
+static
+VOID
+IopFreeDeviceVpb(IN PDEVICE_OBJECT DeviceObject)
+{
+    PVPB Vpb;
+    KIRQL OldIrql;
+    BOOLEAN Free = FALSE;
+
+    IoAcquireVpbSpinLock(&OldIrql);
+    Vpb = DeviceObject->Vpb;
+    if (Vpb != NULL && Vpb->RealDevice == DeviceObject)
+    {
+        if (Vpb->ReferenceCount == 0 &&
+            Vpb->DeviceObject == NULL &&
+            !(Vpb->Flags & (VPB_MOUNTED | VPB_PERSISTENT)))
+        {
+            DeviceObject->Vpb = NULL;
+            Free = TRUE;
+        }
+        else
+        {
+            DPRINT1("VPB %p of deleted device %p is still held (references %lu, flags 0x%x, volume device %p), "
+                    "not freed\n",
+                    Vpb, DeviceObject, Vpb->ReferenceCount, Vpb->Flags, Vpb->DeviceObject);
+        }
+    }
+    IoReleaseVpbSpinLock(OldIrql);
+
+    /* A spare VPB was allocated by the file system, with its own tag */
+    if (Free)
+        ExFreePool(Vpb);
+}
+
 VOID
 NTAPI
 IopDeleteDevice(IN PVOID ObjectBody)
@@ -68,6 +111,7 @@ IopDeleteDevice(IN PVOID ObjectBody)
     PAGED_CODE();
 
     IopForgetDeviceLocks(DeviceObject);
+    IopFreeDeviceVpb(DeviceObject);
 
     /* Cleanup and free the device node */
     if (DeviceNode)
