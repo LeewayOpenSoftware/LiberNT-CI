@@ -148,7 +148,7 @@ class SettingsWindow : public FrameWindow, public SettingsHost
 {
 public:
     SettingsWindow() :
-        m_Page(APP_DEFAULT_PAGE),
+        m_Page(PageId::System),
         m_Scroll(0),
         m_ScrollTarget(0),
         m_ScrollShown(0),
@@ -2134,7 +2134,7 @@ private:
                     GoBack();
                 else
                 {
-                    m_Page = APP_DEFAULT_PAGE;
+                    m_Page = PageId::System;
                     Rebuild(TRUE);
                 }
             }
@@ -2214,18 +2214,7 @@ PageFromCommandLine(LPCWSTR commandLine, PageId *page, std::wstring *param)
     WCHAR name[96];
     size_t length = 0;
 
-#ifdef LEEWAY_DISPLAY_APP
-    *page = PageId::Personalization;
-    if (!uri && commandLine)
-    {
-        /* Leeway Display & Personalization: "/page:display", "/page:background", ... */
-        uri = StrStrIW(commandLine, L"/page:");
-        if (uri)
-            uri += lstrlenW(L"/page:") - lstrlenW(L"ms-settings:");
-    }
-#else
     *page = PageId::System;
-#endif
     param->clear();
     if (!uri)
         return;
@@ -2350,7 +2339,7 @@ wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, int showCmd
     if (argv)
         LocalFree(argv);
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-    existing = FindWindowW(APP_WINDOW_CLASS, NULL);
+    existing = FindWindowW(L"LiberNTSettingsWindow", NULL);
     if (existing)
     {
         COPYDATASTRUCT data = { 1, (DWORD)((lstrlenW(commandLine) + 1) * sizeof(WCHAR)), commandLine };
@@ -2366,7 +2355,7 @@ wWinMain(HINSTANCE instance, HINSTANCE previous, LPWSTR commandLine, int showCmd
     InitCommonControlsEx(&icc);
     if (!Startup())
         return 1;
-    if (!window.Create(APP_WINDOW_CLASS, Str(IDS_APP_TITLE).c_str(), NULL, 1100, 760, showCmd))
+    if (!window.Create(L"LiberNTSettingsWindow", Str(IDS_APP_TITLE).c_str(), NULL, 1100, 760, showCmd))
     {
         Shutdown();
         return 1;

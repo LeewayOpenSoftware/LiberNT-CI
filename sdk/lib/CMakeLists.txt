@@ -49,6 +49,7 @@ endif()
 
 add_subdirectory(ioevent)
 add_subdirectory(leewayui)
+add_subdirectory(leewaydisplay)
 if(ENABLE_KERNEL_UBSAN)
     add_subdirectory(kubsan)
 endif()

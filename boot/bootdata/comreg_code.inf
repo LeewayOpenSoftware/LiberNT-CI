@@ -2750,15 +2750,13 @@ HKCR,"DesktopBackground\Shell",,0x00000010
 HKCR,"DesktopBackground\Shell\Personalize",,0x00000010
 HKCR,"DesktopBackground\Shell\Personalize","",0x00000000,"Personalize"
 HKCR,"DesktopBackground\Shell\Personalize","Position",0x00000000,"Bottom"
-HKCR,"DesktopBackground\Shell\Personalize","Icon",0x00020000,"%SystemRoot%\system32\LeewayDisplay.exe,0"
 HKCR,"DesktopBackground\Shell\Personalize\command",,0x00000010
-HKCR,"DesktopBackground\Shell\Personalize\command","",0x00020000,"%SystemRoot%\system32\LeewayDisplay.exe /page:personalization"
+HKCR,"DesktopBackground\Shell\Personalize\command","",0x00020000,"%SystemRoot%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@0"
 HKCR,"DesktopBackground\Shell\Display",,0x00000010
 HKCR,"DesktopBackground\Shell\Display","",0x00000000,"Display settings"
 HKCR,"DesktopBackground\Shell\Display","Position",0x00000000,"Bottom"
-HKCR,"DesktopBackground\Shell\Display","Icon",0x00020000,"%SystemRoot%\system32\LeewayDisplay.exe,0"
 HKCR,"DesktopBackground\Shell\Display\command",,0x00000010
-HKCR,"DesktopBackground\Shell\Display\command","",0x00020000,"%SystemRoot%\system32\LeewayDisplay.exe /page:display"
+HKCR,"DesktopBackground\Shell\Display\command","",0x00020000,"%SystemRoot%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@1"
 HKCR,"Directory\Background\shellex",,0x00000010
 HKCR,"Directory\Background\shellex\ContextMenuHandlers",,0x00000010
 HKCR,"Directory\Background\shellex\ContextMenuHandlers\New",,0x00000010
