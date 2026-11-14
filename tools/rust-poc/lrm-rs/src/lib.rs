@@ -28,6 +28,7 @@ fn on_panic(_info: &PanicInfo) -> ! {
 }
 
 pub mod mm;
+pub mod vf;
 
 const PAGE_SIZE: usize = 4096;
 const PAGE_SHIFT: u32 = 12;
