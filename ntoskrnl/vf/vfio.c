@@ -262,7 +262,7 @@ VfpIsIrpRuleFatal(
         case VF_IO_COMPLETE_QUEUED_BELOW:
             return FALSE;
         case VF_IO_FREE_IN_USE:
-            return FALSE;
+            return TRUE;
         case VF_IO_REINITIALIZE_IN_USE:
             return FALSE;
         default:
