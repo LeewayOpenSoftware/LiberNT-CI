@@ -1004,6 +1004,21 @@ typedef struct _VF_THUNK
 
 extern const VF_THUNK VfPoolThunks[];
 extern const ULONG VfPoolThunkCount;
+extern BOOLEAN VfPoolTrackingEnabled;
+
+VOID
+NTAPI
+VfInitializePoolTracking(VOID);
+
+VOID
+NTAPI
+VfUntrackPool(
+    IN PVOID Block);
+
+VOID
+NTAPI
+VfCheckPoolAtUnload(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
 
 VOID
 NTAPI

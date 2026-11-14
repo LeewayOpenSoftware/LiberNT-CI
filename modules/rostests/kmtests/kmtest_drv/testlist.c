@@ -367,6 +367,7 @@ KMT_TESTFUNC Test_MmWddmRotateValid;
 KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
 KMT_TESTFUNC Test_MmDriverVerifier;
+KMT_TESTFUNC Test_MmDriverVerifierLeak;
 KMT_TESTFUNC Test_MmSpecialPool;
 KMT_TESTFUNC Test_MmSpecialPoolOverrunWrite;
 KMT_TESTFUNC Test_MmSpecialPoolOverrunRead;
@@ -828,6 +829,7 @@ const KMT_TEST TestList[] =
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },
     { "MmDriverVerifier",                   Test_MmDriverVerifier },
+    { "-MmDriverVerifierLeak",              Test_MmDriverVerifierLeak },
     { "MmSpecialPool",                      Test_MmSpecialPool },
     { "-MmSpecialPoolOverrunWrite",         Test_MmSpecialPoolOverrunWrite },
     { "-MmSpecialPoolOverrunRead",          Test_MmSpecialPoolOverrunRead },

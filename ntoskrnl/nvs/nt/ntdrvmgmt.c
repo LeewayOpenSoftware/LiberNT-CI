@@ -24,7 +24,7 @@ ULONG MmVerifyDriverLevel = -1;
 PVOID MmTriageActionTaken;
 PVOID KernelVerifier;
 
-#define MI_VERIFIER_IMPLEMENTED_LEVEL DRIVER_VERIFIER_SPECIAL_POOLING
+#define MI_VERIFIER_IMPLEMENTED_LEVEL (DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)
 
 static BOOLEAN MiVerifierActive;
 
@@ -186,7 +186,7 @@ MiInitializeDriverVerifier(VOID)
     if (MmVerifyDriverBuffer[0] == UNICODE_NULL)
         return;
 
-    Level = (MmVerifyDriverLevel == (ULONG)-1) ? DRIVER_VERIFIER_SPECIAL_POOLING : MmVerifyDriverLevel;
+    Level = (MmVerifyDriverLevel == (ULONG)-1) ? MI_VERIFIER_IMPLEMENTED_LEVEL : MmVerifyDriverLevel;
     Level &= MI_VERIFIER_IMPLEMENTED_LEVEL;
     if (!MiIsSpecialPoolEnabled())
         Level &= ~DRIVER_VERIFIER_SPECIAL_POOLING;
@@ -196,6 +196,9 @@ MiInitializeDriverVerifier(VOID)
         DbgPrint("Driver Verifier: not enabled, no requested option is available\n");
         return;
     }
+
+    if (Level & DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)
+        VfInitializePoolTracking();
 
     MmVerifierData.Level = Level;
     MiVerifierActive = TRUE;
@@ -255,7 +258,7 @@ MiVerifyLoadedImage(
         return;
 
     Import = RtlImageDirectoryEntryToData(LdrEntry->DllBase, TRUE, IMAGE_DIRECTORY_ENTRY_IMPORT, &Size);
-    if (Import != NULL && (MmVerifierData.Level & DRIVER_VERIFIER_SPECIAL_POOLING))
+    if (Import != NULL)
     {
         for (; Import->Name != 0 && Import->FirstThunk != 0; Import++)
         {

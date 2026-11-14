@@ -391,7 +391,8 @@ START_TEST(MmDriverVerifier)
 
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Flags & DRIVER_VERIFIER_SPECIAL_POOLING, "the driver is verified but the flags 0x%lx do not say special pool\n", Flags);
-    ok((Flags & ~DRIVER_VERIFIER_SPECIAL_POOLING) == 0, "the flags 0x%lx claim options that do not exist\n", Flags);
+    ok((Flags & ~(DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)) == 0,
+       "the flags 0x%lx claim options that do not exist\n", Flags);
     ok(EndsAtPageEnd(OTHER_TAG), "blocks of a verified driver are not placed at a page end\n");
 
     Block = ExAllocatePool(NonPagedPoolNx, 40);
@@ -421,4 +422,21 @@ START_TEST(MmDriverVerifier)
         RtlFillMemory(Block, PAGE_SIZE * 2, 0x44);
         ExFreePoolWithTag(Block, OTHER_TAG);
     }
+}
+
+START_TEST(MmDriverVerifierLeak)
+{
+    ULONG Flags = 0;
+    PVOID Block;
+
+    if (skip(EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) &&
+             (Flags & DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS),
+             "kmtest_drv.sys is not verified with pool tracking\n"))
+    {
+        return;
+    }
+
+    Block = ExAllocatePoolWithTag(NonPagedPoolNx, 64, 'kLpS');
+    ok(Block != NULL, "no block\n");
+    trace("Left %p allocated on purpose; unloading kmtest_drv.sys must now end in bug check 0xC4 (0x62)\n", Block);
 }
