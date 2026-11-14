@@ -51,6 +51,7 @@ typedef struct _ETWP_LOGGER
     ULONG NumberOfBuffers;
     ULONG FreeBuffers;
     ULONG EventsLost;
+    ULONG EventsLogged;
     ULONG BuffersWritten;
     ULONG LogBuffersLost;
     ULONG RealTimeBuffersLost;
@@ -122,6 +123,8 @@ EtwpQueryClock(
 
     if (Logger->ClockType == EVENT_TRACE_CLOCK_SYSTEMTIME)
         KeQuerySystemTime(&Time);
+    else if (Logger->ClockType == EVENT_TRACE_CLOCK_CPUCYCLE)
+        Time.QuadPart = (LONGLONG)ReadTimeStampCounter();
     else
         Time = KeQueryPerformanceCounter(NULL);
 
@@ -732,8 +735,12 @@ EtwpStartLogger(
     Logger->FlushTimer = Info->FlushTimer;
     if (!Logger->FlushTimer && (Mode & EVENT_TRACE_REAL_TIME_MODE))
         Logger->FlushTimer = 1;
-    Logger->ClockType = (Info->Wnode.ClientContext == EVENT_TRACE_CLOCK_SYSTEMTIME) ? EVENT_TRACE_CLOCK_SYSTEMTIME :
-                                                                                      EVENT_TRACE_CLOCK_PERFCOUNTER;
+    Logger->ClockType = EVENT_TRACE_CLOCK_PERFCOUNTER;
+    if (Info->Wnode.ClientContext == EVENT_TRACE_CLOCK_SYSTEMTIME ||
+        Info->Wnode.ClientContext == EVENT_TRACE_CLOCK_CPUCYCLE)
+    {
+        Logger->ClockType = Info->Wnode.ClientContext;
+    }
     Logger->InstanceGuid = Info->Wnode.Guid;
     KeQuerySystemTime(&Logger->StartTime);
 
@@ -1065,7 +1072,6 @@ EtwpReturnString(
     *(PWCHAR)((PUCHAR)UserBuffer + Source->Length) = UNICODE_NULL;
 }
 
-static
 NTSTATUS
 EtwpTraceClassicEvent(
     _In_opt_ HANDLE TraceHandle,
@@ -1220,12 +1226,119 @@ EtwpTraceClassicEvent(
             Record->UserTime = Thread->Tcb.UserTime;
             RtlZeroMemory((PUCHAR)Record + Total, Reserved - Total);
             Buffer->CurrentOffset += Reserved;
+            Logger->EventsLogged++;   /* under BufferLock, like the offset */
         }
     }
 
     KeReleaseGuardedMutex(&Logger->BufferLock);
     EtwpDereferenceLogger(Logger);
     return Status;
+}
+
+/* The handle a session's events are written through names it by its logger identifier */
+TRACEHANDLE
+EtwpTraceHandleFromLoggerId(
+    _In_ ULONG LoggerId)
+{
+    return (TRACEHANDLE)LoggerId;
+}
+
+/* A handle with anything above the logger id set names no session (MAXLOGGERS is past every id) */
+ULONG
+EtwpLoggerIdFromTraceHandle(
+    _In_ TRACEHANDLE TraceHandle)
+{
+    return (TraceHandle >> 16) ? MAXLOGGERS : (USHORT)TraceHandle;
+}
+
+/* A snapshot of a running session in the form WmiQueryTraceInformation hands out */
+NTSTATUS
+EtwpQueryLoggerById(
+    _In_ ULONG LoggerId,
+    _Out_opt_ PWMI_LOGGER_INFORMATION Information,
+    _Out_opt_ PULONG EventsLogged)
+{
+    PETWP_LOGGER Logger;
+
+    PAGED_CODE();
+
+    if (LoggerId >= MAXLOGGERS)
+        return STATUS_WMI_INSTANCE_NOT_FOUND;
+
+    Logger = EtwpReferenceLoggerById((USHORT)LoggerId);
+    if (!Logger)
+        return STATUS_WMI_INSTANCE_NOT_FOUND;
+
+    if (Information)
+    {
+        RtlZeroMemory(Information, sizeof(*Information));
+        Information->Wnode.BufferSize = sizeof(*Information);
+        Information->Wnode.Guid = Logger->InstanceGuid;
+        Information->Wnode.ClientContext = Logger->ClockType;
+        Information->Wnode.HistoricalContext = EtwpTraceHandleFromLoggerId(Logger->LoggerId);
+        Information->BufferSize = Logger->BufferSizeKb;
+        Information->MinimumBuffers = Logger->MinimumBuffers;
+        Information->MaximumBuffers = Logger->MaximumBuffers;
+        Information->MaximumFileSize = Logger->MaximumFileSize;
+        Information->LogFileMode = Logger->LogFileMode;
+        Information->FlushTimer = Logger->FlushTimer;
+        Information->NumberOfBuffers = Logger->NumberOfBuffers;
+        Information->FreeBuffers = Logger->FreeBuffers;
+        Information->EventsLost = Logger->EventsLost;
+        Information->BuffersWritten = Logger->BuffersWritten;
+        Information->LogBuffersLost = Logger->LogBuffersLost;
+        Information->RealTimeBuffersLost = Logger->RealTimeBuffersLost;
+        Information->LoggerThreadId = Logger->LoggerThreadId;
+    }
+    if (EventsLogged)
+        *EventsLogged = ReadULongNoFence(&Logger->EventsLogged);
+
+    EtwpDereferenceLogger(Logger);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+EtwpFindLoggerByName(
+    _In_ PCUNICODE_STRING LoggerName,
+    _Out_ PULONG LoggerId)
+{
+    PETWP_LOGGER Logger;
+
+    PAGED_CODE();
+
+    Logger = EtwpReferenceLoggerByName(LoggerName);
+    if (!Logger)
+        return STATUS_WMI_INSTANCE_NOT_FOUND;
+
+    *LoggerId = Logger->LoggerId;
+    EtwpDereferenceLogger(Logger);
+    return STATUS_SUCCESS;
+}
+
+/* Lists the running sessions, as many as fit, and says how many there are */
+ULONG
+EtwpEnumerateLoggers(
+    _Out_writes_to_(Count, return) PULONG LoggerIds,
+    _In_ ULONG Count)
+{
+    ULONG Found = 0, i;
+
+    PAGED_CODE();
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&EtwpLoggerRegistrationLock);
+    for (i = ETWP_FIRST_LOGGER_ID; i < MAXLOGGERS; i++)
+    {
+        if (!EtwpLoggers[i])
+            continue;
+        if (Found < Count)
+            LoggerIds[Found] = i;
+        Found++;
+    }
+    ExReleasePushLockShared(&EtwpLoggerRegistrationLock);
+    KeLeaveCriticalRegion();
+
+    return Found;
 }
 
 NTSTATUS
@@ -1243,17 +1356,17 @@ NtTraceEvent(
     return STATUS_NOT_IMPLEMENTED;
 }
 
+static
 NTSTATUS
-NTAPI
-NtTraceControl(
+EtwpTraceControl(
     _In_ ULONG FunctionCode,
     _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
     _In_ ULONG InBufferLen,
     _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,
     _In_ ULONG OutBufferLen,
-    _Out_ PULONG ReturnSize)
+    _Out_ PULONG ReturnSize,
+    _In_ KPROCESSOR_MODE PreviousMode)
 {
-    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     UNICODE_STRING LoggerName, LogFileName;
     WMI_LOGGER_INFORMATION Info;
     PETWP_LOGGER Logger = NULL;
@@ -1359,4 +1472,30 @@ NtTraceControl(
         ExFreePoolWithTag(LogFileName.Buffer, ETWP_TAG);
 
     return Status;
+}
+
+NTSTATUS
+NTAPI
+NtTraceControl(
+    _In_ ULONG FunctionCode,
+    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
+    _In_ ULONG InBufferLen,
+    _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,
+    _In_ ULONG OutBufferLen,
+    _Out_ PULONG ReturnSize)
+{
+    return EtwpTraceControl(FunctionCode, InBuffer, InBufferLen, OutBuffer, OutBufferLen, ReturnSize,
+                            ExGetPreviousMode());
+}
+
+/* Kernel entry for the WmiStartTrace/WmiStopTrace/WmiUpdateTrace exports: the logger info is a kernel buffer, so the
+ * control path must run as KernelMode whatever the caller's previous mode is. */
+NTSTATUS
+EtwpTraceControlKernel(
+    _In_ ULONG FunctionCode,
+    _Inout_ PWMI_LOGGER_INFORMATION LoggerInfo)
+{
+    ULONG Returned;
+    return EtwpTraceControl(FunctionCode, LoggerInfo, sizeof(*LoggerInfo),
+                            LoggerInfo, sizeof(*LoggerInfo), &Returned, KernelMode);
 }
