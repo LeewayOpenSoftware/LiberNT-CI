@@ -9,6 +9,9 @@
 
 #include <nvs/nt/mint.h>
 
+#define NDEBUG
+#include <debug.h>
+
 MI_SYSTEM MiSystem;
 MI_PROCESS_MANAGER MiProcessManager;
 ULONG MmProductType;
