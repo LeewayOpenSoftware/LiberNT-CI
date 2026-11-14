@@ -36,6 +36,8 @@ HCURSOR hWaitCursor;
 
 static WCHAR FormatOutput[256];
 
+static BOOLEAN InstallVolumeFormatted = FALSE;
+
 typedef struct _COPYCONTEXT
 {
     PSETUPDATA pSetupData;
@@ -216,6 +218,8 @@ FsVolCallback(
             FmtInfo->QuickFormat = VolCreate->QuickFormat;
             FmtInfo->ClusterSize = VolCreate->ClusterSize;
             FmtInfo->Callback = FormatCallback;
+            if (InstallPartition && FmtInfo->Volume == InstallVolume)
+                InstallVolumeFormatted = TRUE;
 
             SendMessageW(UiContext.hWndProgress, PBM_SETRANGE, 0, MAKELPARAM(0, 100));
             SendMessageW(UiContext.hWndProgress, PBM_SETPOS, 0, 0);
@@ -476,6 +480,96 @@ done:
     return ExitCode;
 }
 
+typedef struct _UPGRADE_SECURITY_ITEMS
+{
+    PCWSTR VolumeRoot;
+    SIZE_T RootLength;
+    PFILESEC_ITEM Items;
+    ULONG Count;
+    ULONG Capacity;
+    BOOLEAN Failed;
+} UPGRADE_SECURITY_ITEMS, *PUPGRADE_SECURITY_ITEMS;
+
+static VOID
+NTAPI
+CollectUpgradeTarget(
+    _In_opt_ PVOID Context,
+    _In_ PCWSTR Target,
+    _In_ BOOLEAN Directory)
+{
+    PUPGRADE_SECURITY_ITEMS Collect = Context;
+    PFILESEC_ITEM Grown;
+    PWSTR Copy;
+    SIZE_T Length;
+
+    ASSERT(Collect != NULL);
+    if (Collect->Failed || _wcsnicmp(Target, Collect->VolumeRoot, Collect->RootLength) != 0)
+        return;
+
+    if (Collect->Count == Collect->Capacity)
+    {
+        ULONG Capacity = Collect->Capacity ? Collect->Capacity * 2 : 1024;
+
+        Grown = Collect->Items ? HeapReAlloc(ProcessHeap, 0, Collect->Items, Capacity * sizeof(*Grown))
+                               : HeapAlloc(ProcessHeap, 0, Capacity * sizeof(*Grown));
+        if (!Grown)
+        {
+            Collect->Failed = TRUE;
+            return;
+        }
+        Collect->Items = Grown;
+        Collect->Capacity = Capacity;
+    }
+
+    Length = wcslen(Target + Collect->RootLength) + 1;
+    Copy = HeapAlloc(ProcessHeap, 0, Length * sizeof(WCHAR));
+    if (!Copy)
+    {
+        Collect->Failed = TRUE;
+        return;
+    }
+    StringCchCopyW(Copy, Length, Target + Collect->RootLength);
+
+    ASSERT(Collect->Count < Collect->Capacity);
+    Collect->Items[Collect->Count].Path = Copy;
+    Collect->Items[Collect->Count].Directory = Directory;
+    Collect->Count++;
+}
+
+/* The files the upgrade lays down get the image's security, as on a new installation */
+static NTSTATUS
+ApplyUpgradeFileSecurity(
+    _In_ PUSETUP_DATA pSetupData)
+{
+    UPGRADE_SECURITY_ITEMS Collect = { 0 };
+    NTSTATUS Status;
+    ULONG Index;
+
+    Collect.VolumeRoot = pSetupData->DestinationRootPath.Buffer;
+    Collect.RootLength = wcslen(Collect.VolumeRoot);
+    ASSERT(Collect.RootLength != 0 && Collect.VolumeRoot[Collect.RootLength - 1] == L'\\');
+
+    CollectUpgradeTarget(&Collect, pSetupData->DestinationPath.Buffer, TRUE);
+    Status = EnumerateUpgradeTargets(pSetupData, CollectUpgradeTarget, &Collect);
+    if (NT_SUCCESS(Status) && Collect.Failed)
+        Status = STATUS_NO_MEMORY;
+
+    /* TODO: files the new image does not ship keep the security an older image gave them */
+    if (NT_SUCCESS(Status))
+    {
+        Status = InstallApplyFileSecurityToItems(Collect.VolumeRoot,
+                                                 pSetupData->InstallationDirectory,
+                                                 Collect.Count,
+                                                 Collect.Items);
+    }
+
+    for (Index = 0; Index < Collect.Count; Index++)
+        HeapFree(ProcessHeap, 0, (PVOID)Collect.Items[Index].Path);
+    if (Collect.Items)
+        HeapFree(ProcessHeap, 0, Collect.Items);
+    return Status;
+}
+
 static DWORD
 ConfigureInstalledSystem(
     _In_ PSETUPDATA pSetupData)
@@ -541,6 +635,23 @@ ConfigureInstalledSystem(
     SecureZeroMemory(Settings, cchSettings * sizeof(WCHAR));
     HeapFree(ProcessHeap, 0, Settings);
     SecureZeroMemory(pSetupData->Password, sizeof(pSetupData->Password));
+
+    if (Error == ERROR_SUCCESS)
+    {
+        if (pSetupData->bUpgrade)
+        {
+            Status = ApplyUpgradeFileSecurity(&pSetupData->USetupData);
+        }
+        else
+        {
+            Status = InstallApplyFileSecurity(pSetupData->USetupData.DestinationRootPath.Buffer,
+                                              pSetupData->USetupData.InstallationDirectory,
+                                              InstallVolumeFormatted);
+        }
+        if (!NT_SUCCESS(Status))
+            Error = RtlNtStatusToDosError(Status);
+    }
+
 
     return Error;
 }
