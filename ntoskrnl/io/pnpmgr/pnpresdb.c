@@ -39,6 +39,9 @@ KMUTEX IopResourceAssignmentLock;
 
 static PI_RES_BUCKET IopResBuckets[PiResClassMax];
 static BOOLEAN IopResDbReady = FALSE;
+
+/* Entries owned by a device or driver object rather than a device node (IoReportResourceUsage) */
+static LONG IopResDbLegacyEntries;
 static volatile LONG IopResDbSeedState = 0;
 static KEVENT IopResDbSeededEvent;
 
@@ -219,6 +222,9 @@ IopResDbReserveListEx(_In_opt_ PVOID OwnerKey, _In_opt_ PDEVICE_NODE DeviceNode,
                 existing = CONTAINING_RECORD(le, PI_RES_ENTRY, ListEntry);
                 if (existing->OwnerKey == OwnerKey)
                     continue;
+                /* A device's own report does not conflict with what PnP assigned to that same device */
+                if (DeviceNode != NULL && existing->Owner == DeviceNode)
+                    continue;
                 if (IopResDbConflict(desc, DeviceNode, &existing->Desc, existing->Owner))
                 {
                     if (Conflict)
@@ -229,6 +235,8 @@ IopResDbReserveListEx(_In_opt_ PVOID OwnerKey, _In_opt_ PDEVICE_NODE DeviceNode,
                 }
             }
             InsertTailList(&IopResBuckets[cls].List, &entry->ListEntry);
+            if (OwnerKey != (PVOID)DeviceNode)
+                InterlockedIncrement(&IopResDbLegacyEntries);
             KeReleaseSpinLock(&IopResBuckets[cls].Lock, irql);
         }
 
@@ -338,6 +346,8 @@ IopResDbReleaseByKey(_In_ PVOID OwnerKey)
             if (entry->OwnerKey == OwnerKey)
             {
                 RemoveEntryList(&entry->ListEntry);
+                if (entry->OwnerKey != (PVOID)entry->Owner)
+                    InterlockedDecrement(&IopResDbLegacyEntries);
                 ExFreePoolWithTag(entry, TAG_IO);
             }
         }
@@ -349,6 +359,16 @@ VOID
 IopResDbRelease(_In_ PDEVICE_NODE DeviceNode)
 {
     IopResDbReleaseByKey((PVOID)DeviceNode);
+}
+
+/* A device or driver object is going away: whatever it reported through IoReportResourceUsage goes with it */
+VOID
+IopResDbReleaseObject(_In_ PVOID Object)
+{
+    if (IopResDbLegacyEntries == 0)
+        return;
+
+    IopResDbReleaseByKey(Object);
 }
 
 /* Scan the resource map once, recording every raw allocation under a NULL owner. */

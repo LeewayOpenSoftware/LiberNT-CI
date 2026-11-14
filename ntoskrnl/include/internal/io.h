@@ -858,6 +858,10 @@ IopResDbReleaseByKey(
     _In_ PVOID OwnerKey);
 
 VOID
+IopResDbReleaseObject(
+    _In_ PVOID Object);
+
+VOID
 IopReleaseNewMessageVectors(
     _In_opt_ PCM_RESOURCE_LIST ResourceList,
     _In_ ULONG OldCount);

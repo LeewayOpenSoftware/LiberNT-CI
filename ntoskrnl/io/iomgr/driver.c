@@ -456,6 +456,9 @@ IopDeleteDriver(IN PVOID ObjectBody)
     /* There must be no device objects remaining at this point */
     ASSERT(!DriverObject->DeviceObject);
 
+    /* Drop what the driver reported through IoReportResourceUsage */
+    IopResDbReleaseObject(DriverObject);
+
     /* Get the extension and loop them */
     DriverExtension = IoGetDrvObjExtension(DriverObject)->ClientDriverExtension;
     while (DriverExtension)

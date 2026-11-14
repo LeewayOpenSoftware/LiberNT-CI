@@ -1000,6 +1000,51 @@ IoGetConfigurationInformation(VOID)
     return &_SystemConfigurationInformation;
 }
 
+/* Records one list of a legacy resource report under its owner, a device or a driver object. Reporting
+ * again replaces what the owner reported before; a list without descriptors releases it. */
+static
+NTSTATUS
+IopReportLegacyResourceList(
+    _In_ PVOID OwnerKey,
+    _In_opt_ PDEVICE_NODE DeviceNode,
+    _In_ PCM_RESOURCE_LIST ResourceList,
+    _In_ BOOLEAN OverrideConflict,
+    _Inout_ PBOOLEAN ConflictDetected)
+{
+    BOOLEAN DbConflict = FALSE;
+    NTSTATUS Status;
+
+    if (ResourceList->Count == 0 ||
+        (ResourceList->Count == 1 && ResourceList->List[0].PartialResourceList.Count == 0))
+    {
+        IopResDbReleaseByKey(OwnerKey);
+        return STATUS_SUCCESS;
+    }
+
+    /* The registry resource map catches firmware and boot allocations */
+    Status = IopDetectResourceConflict(ResourceList, FALSE, NULL);
+    if (Status != STATUS_CONFLICTING_ADDRESSES && !NT_SUCCESS(Status))
+        return Status;
+
+    IopResDbReleaseByKey(OwnerKey);
+    IopResDbReserveOwned(OwnerKey, DeviceNode, ResourceList, &DbConflict);
+
+    if (Status == STATUS_CONFLICTING_ADDRESSES || DbConflict)
+    {
+        *ConflictDetected = TRUE;
+        if (!OverrideConflict)
+        {
+            DPRINT1("Denying an attempt to claim resources currently in use by another device!\n");
+            IopResDbReleaseByKey(OwnerKey);
+            return STATUS_CONFLICTING_ADDRESSES;
+        }
+
+        DPRINT1("Proceeding with conflicting resources\n");
+    }
+
+    return STATUS_SUCCESS;
+}
+
 /**
  * @halfplemented
  *
@@ -1050,57 +1095,36 @@ IoReportResourceUsage(
     _Out_ PBOOLEAN ConflictDetected)
 {
     NTSTATUS Status;
-    PCM_RESOURCE_LIST ResourceList;
-    PVOID OwnerKey;
-    PDEVICE_NODE DeviceNode;
-    BOOLEAN DbConflict = FALSE;
 
     if (!DriverList && !DeviceList)
         return STATUS_INVALID_PARAMETER;
 
-    if (DeviceList)
-        ResourceList = DeviceList;
-    else
-        ResourceList = DriverList;
-
-    /* A device-level report is owned by its device object, a driver-level one by its driver object: both are
-     * stable, distinct identities for recording and releasing the claim. */
-    OwnerKey = DeviceObject ? (PVOID)DeviceObject : (PVOID)DriverObject;
-    DeviceNode = DeviceObject ? IopGetDeviceNode(DeviceObject) : NULL;
-
-    /* A list that carries no resource descriptors releases this owner's recorded claims. */
-    if (ResourceList->Count == 0 ||
-        (ResourceList->Count == 1 && ResourceList->List[0].PartialResourceList.Count == 0))
-    {
-        IopResDbReleaseByKey(OwnerKey);
-        *ConflictDetected = FALSE;
-        return STATUS_SUCCESS;
-    }
-
-    /* The registry resource map catches firmware and boot allocations. */
-    Status = IopDetectResourceConflict(ResourceList, FALSE, NULL);
-    if (Status != STATUS_CONFLICTING_ADDRESSES && !NT_SUCCESS(Status))
-        return Status;
-
-    /* Re-reporting replaces this owner's prior claims; record the list and conflict-check it against every
-     * other owner's recorded claims. */
-    IopResDbReleaseByKey(OwnerKey);
-    IopResDbReserveOwned(OwnerKey, DeviceNode, ResourceList, &DbConflict);
-
-    if (Status == STATUS_CONFLICTING_ADDRESSES || DbConflict)
-    {
-        *ConflictDetected = TRUE;
-        if (!OverrideConflict)
-        {
-            DPRINT1("Denying an attempt to claim resources currently in use by another device!\n");
-            IopResDbReleaseByKey(OwnerKey);
-            return STATUS_CONFLICTING_ADDRESSES;
-        }
-        DPRINT1("Proceeding with conflicting resources\n");
-        return STATUS_SUCCESS;
-    }
+    /* Each list is recorded under its own owner. Two lists under one owner would replace each other. */
+    if (DriverList && !DriverObject)
+        return STATUS_INVALID_PARAMETER;
+    if (DeviceList && !DeviceObject && (DriverList || !DriverObject))
+        return STATUS_INVALID_PARAMETER;
 
     *ConflictDetected = FALSE;
+
+    if (DriverList)
+    {
+        Status = IopReportLegacyResourceList(DriverObject, NULL, DriverList, OverrideConflict, ConflictDetected);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    if (DeviceList)
+    {
+        Status = IopReportLegacyResourceList(DeviceObject ? (PVOID)DeviceObject : (PVOID)DriverObject,
+                                             DeviceObject ? IopGetDeviceNode(DeviceObject) : NULL,
+                                             DeviceList,
+                                             OverrideConflict,
+                                             ConflictDetected);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
     return STATUS_SUCCESS;
 }
 

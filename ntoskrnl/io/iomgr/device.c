@@ -1566,6 +1566,9 @@ IoDeleteDevice(IN PDEVICE_OBJECT DeviceObject)
         ObMakeTemporaryObject(DeviceObject);
     }
 
+    /* Drop what the device reported through IoReportResourceUsage */
+    IopResDbReleaseObject(DeviceObject);
+
     /* Set the pending delete flag */
     IoGetDevObjExtension(DeviceObject)->ExtensionFlags |= DOE_DELETE_PENDING;
 
