@@ -35,8 +35,10 @@ cp "$SPECIAL_C" "$STAGE/b/special/special.c"
 "$STAGE/sp_diff" "$ITERS"
 
 # Full-stack orchestration differential: the real ntspecial.c (MmAllocate/FreeSpecialPool over a
-# mock MiGuard provider + the real special.c) vs the Rust orchestration (lrm_mm_*), same provider.
-# NTSPECIAL_C defaults to the vendored copy; CI may set it to the SP_SHA-fetched ntoskrnl/nvs/nt
-# copy for full pinning, and SPECIAL_C is forwarded so both sides use the same engine source.
+# mock MiGuard provider + special.c) vs the Rust orchestration (lrm_mm_*), same provider.
+# Uses its own VENDORED, PINNED ntspecial.c + special.c (whose relative includes resolve to the
+# host stand-ins) rather than the CI-fetched engine source, which pulls in <ntoskrnl.h>. The engine
+# diff above already proves the engine against the live CI special.c; the full-stack targets the
+# orchestration glue and is pinned to the vendored C SHA.
 echo "[lrm] full-stack orchestration differential:"
-SPECIAL_C="$SPECIAL_C" ITERS="$ITERS" CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/run-lrm-fullstack.sh"
+ITERS="$ITERS" CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/run-lrm-fullstack.sh"
