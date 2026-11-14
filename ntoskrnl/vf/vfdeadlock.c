@@ -20,6 +20,7 @@
 #define VF_LOCK_HELD                    256
 #define VF_LOCK_NONE                    0xFFFF
 #define VF_LOCK_LINES_PRINTED           64
+#define VF_LOCK_RESET_LINES             16
 
 typedef struct _VF_LOCK_NODE
 {
@@ -227,6 +228,19 @@ VfpIsDeadlockRuleFatal(
 
 static
 VOID
+VfpGraphIsFullLocked(VOID)
+{
+    VfpResetGraphLocked();
+    VfDeadlockGraphResets++;
+    if (VfDeadlockGraphResets <= VF_LOCK_RESET_LINES)
+    {
+        DbgPrint("Driver Verifier: the lock order graph was full and was cleared (%lu so far), lock orders seen "
+                 "before are forgotten\n", VfDeadlockGraphResets);
+    }
+}
+
+static
+VOID
 VfpReportDeadlockRule(
     _In_ ULONG Rule,
     _In_ PVOID Lock,
@@ -311,8 +325,7 @@ VfLockAcquiring(
         To = VfpFindNodeLocked(Lock, TRUE);
         if (From == VF_LOCK_NONE || To == VF_LOCK_NONE)
         {
-            VfpResetGraphLocked();
-            VfDeadlockGraphResets++;
+            VfpGraphIsFullLocked();
             break;
         }
 
@@ -328,8 +341,7 @@ VfLockAcquiring(
 
         if (!VfpAddEdgeLocked(From, To))
         {
-            VfpResetGraphLocked();
-            VfDeadlockGraphResets++;
+            VfpGraphIsFullLocked();
             break;
         }
     }
