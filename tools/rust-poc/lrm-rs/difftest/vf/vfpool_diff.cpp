@@ -26,7 +26,7 @@ extern BOOLEAN VfPoolTrackingEnabled;
 
 /* Rust ABI (vf.rs) */
 struct BugCheckRs { uint32_t code; uintptr_t p1, p2, p3, p4; };
-struct TrackEntryRs { uintptr_t block, caller; uint32_t size; uint8_t paged, used; };
+struct TrackEntryRs { uintptr_t block, caller; uint32_t size, tag; uint8_t paged, used; };
 struct VfTrackStateRs {
     uint32_t paged_bytes, nonpaged_bytes, cur_paged, cur_nonpaged,
              peak_paged, peak_nonpaged, peak_paged_bytes, peak_nonpaged_bytes, untracked;
@@ -35,7 +35,7 @@ extern "C" uint8_t lrm_vf_check_allocate(uint32_t pool_type, size_t bytes, uint8
 extern "C" uint8_t lrm_vf_check_free(uint8_t irql, uint8_t tracked_paged, uintptr_t block, BugCheckRs *out);
 extern "C" uint32_t lrm_vf_special_type(uint32_t priority);
 extern "C" uint8_t lrm_vf_pool2_decode(uint32_t flags, uint32_t tag, uint32_t *out_type, uint8_t *out_zero);
-extern "C" void lrm_vf_track(VfTrackStateRs *st, TrackEntryRs *e, size_t cap, uintptr_t block, uint32_t size, uint8_t paged, uintptr_t caller);
+extern "C" void lrm_vf_track(VfTrackStateRs *st, TrackEntryRs *e, size_t cap, uintptr_t block, uint32_t size, uint8_t paged, uintptr_t caller, uint32_t tag);
 extern "C" void lrm_vf_untrack(VfTrackStateRs *st, TrackEntryRs *e, size_t cap, uintptr_t block);
 extern "C" uint8_t lrm_vf_is_tracked_paged(const TrackEntryRs *e, size_t cap, uintptr_t block);
 extern "C" uint8_t lrm_vf_check_at_unload(const TrackEntryRs *e, size_t cap, uintptr_t name, uintptr_t start, uintptr_t end, BugCheckRs *out);
@@ -243,7 +243,7 @@ static void test_tracking(void) {
         uint32_t size = 16 + (uint32_t)(i * 8);
         PVOID blk = c_alloc_block(al, paged ? PagedPool : NonPagedPoolNx, size, 0x4C45414B, 0);
         tracked[ntracked++] = blk;
-        lrm_vf_track(&g_rst, g_rentries, 256, (uintptr_t)blk, size, paged ? 1 : 0, window);
+        lrm_vf_track(&g_rst, g_rentries, 256, (uintptr_t)blk, size, paged ? 1 : 0, window, 0x4C45414B);
         g_checks++;
         if (!counters_eq()) { BugCheckRs z{}; dis("track.counters", z, 0, z, 0); }
     }
