@@ -2,7 +2,7 @@ LANGUAGE LANG_KOREAN, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Wine지뢰찾기"
+    IDS_APPNAME "LiberNT 지뢰찾기"
     IDS_NOBODY "아무개"
     IDS_ABOUT "Copyright 2000 Joshua Thielen"
 END
