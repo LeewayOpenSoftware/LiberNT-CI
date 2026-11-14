@@ -100,8 +100,8 @@ USBPORT_MakeSplitTransfer(IN PDEVICE_OBJECT FdoDevice,
 
     Element1 = &SplitSgList->SgElement[1];
 
-    Element1->SgOffset = SgRemainLen;
-    Element1->SgTransferLength = Element0->SgTransferLength;
+    Element1->SgOffset = Element0->SgTransferLength;
+    Element1->SgTransferLength = SgRemainLen;
     Element1->SgPhysicalAddress.LowPart = Transfer->SgList.SgElement[*SgIdx].SgPhysicalAddress.LowPart + *SgOffset;
 
     SplitTransfer->TransferParameters.TransferBufferLength += SgRemainLen;
