@@ -206,6 +206,20 @@ KiIdleLoop(VOID)
 #endif
             Prcb->CurrentThread = NewThread;
             NewThread->State = Running;
+
+#ifdef CONFIG_SMP
+            /* While this processor is marked idle and is not sleeping, another
+             * processor that queues a DPC here sends no interrupt and leaves
+             * the DPC to the poll at the top of this loop. That poll is
+             * behind us. The idle mark is cleared, with a full barrier, so a
+             * DPC queued from now on gets its interrupt; one queued before
+             * is found here and is run when the new thread lowers the IRQL.
+             * Only the normal queue is looked at: threaded DPCs are run by
+             * the DPC thread, which is woken in its own way. */
+            KeMemoryBarrier();
+            if (Prcb->DpcData[0].DpcQueueDepth != 0)
+                KiRequestDispatchInterrupt(Prcb);
+#endif
             KiReleasePrcbLock(Prcb);
 
             _enable();

@@ -842,6 +842,13 @@ KiRetireDpcList(IN PKPRCB Prcb)
         Prcb->DpcRoutineActive = FALSE;
         KiClearDpcRequestState(Prcb);
 
+        /* The queue depth is read again below. A processor that queues a DPC
+         * here stores the depth and then reads these flags, with a barrier in
+         * between. Without one on this side both could read the old value:
+         * it would see the flags still set and send no request, and this
+         * processor would see an empty queue and leave. */
+        KeMemoryBarrier();
+
 #ifdef CONFIG_SMP
         /* Check if we have deferred threads */
         if (Prcb->DeferredReadyListHead.Next)
