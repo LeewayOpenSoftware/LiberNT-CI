@@ -14,14 +14,16 @@
 //! all page access is bounds-limited to `PAGE_SIZE`). Exposed over a C ABI (`rust_pool_special_*`)
 //! so a host harness can link it beside the C engine and diff the two. The caller owns the page
 //! and the record; this engine reads/writes only the given page bytes and the record.
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 use core::ffi::c_void;
-use core::panic::PanicInfo;
 use core::slice;
 
+// The kernel staticlib is no_std and owns its panic handler; the host `std` build (differential and
+// fuzz harnesses) links against std's, so this one is compiled out under the `std` feature.
+#[cfg(not(feature = "std"))]
 #[panic_handler]
-fn on_panic(_info: &PanicInfo) -> ! {
+fn on_panic(_info: &core::panic::PanicInfo) -> ! {
     loop {
         core::hint::spin_loop();
     }
