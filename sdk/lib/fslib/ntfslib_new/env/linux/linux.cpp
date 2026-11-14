@@ -7,18 +7,26 @@
  */
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
-#include <sys/types.h>
 #include <time.h>
+#ifdef _WIN32
+#include <stdio.h>
+#else
+#include <fcntl.h>
+#include <sys/types.h>
 #include <unistd.h>
+#endif
 
 #include <ntfslib_new.h>
 #include <ntfslib_new_internal.h>
 #include "ntfs_linux.h"
 
+#ifdef _WIN32
+static FILE* NtfsImageFile = NULL;
+#else
 static int NtfsImageFd = -1;
+#endif
 static BOOLEAN NtfsImageWritable = FALSE;
 
 BOOLEAN
@@ -34,6 +42,47 @@ NtfsDiskInitializeLinuxInternal(
     _Out_opt_ PULONG BytesPerSector,
     _In_ BOOLEAN Writable)
 {
+#ifdef _WIN32
+    UCHAR BootSector[512];
+    FILE* NewFile;
+    ULONG SectorSize;
+
+    if (!Path)
+        return STATUS_INVALID_PARAMETER;
+
+    NewFile = fopen(Path, Writable ? "r+b" : "rb");
+    if (!NewFile)
+    {
+        if (errno == EACCES)
+            return Writable
+                ? STATUS_MEDIA_WRITE_PROTECTED
+                : STATUS_ACCESS_DENIED;
+        return STATUS_NOT_FOUND;
+    }
+
+    if (fread(BootSector, 1, sizeof(BootSector), NewFile) != sizeof(BootSector))
+    {
+        fclose(NewFile);
+        return STATUS_END_OF_FILE;
+    }
+
+    SectorSize = (ULONG)BootSector[0x0b] |
+                 ((ULONG)BootSector[0x0c] << 8);
+    if (SectorSize != 512 && SectorSize != 4096)
+    {
+        fclose(NewFile);
+        return STATUS_UNRECOGNIZED_VOLUME;
+    }
+
+    if (NtfsImageFile)
+        fclose(NtfsImageFile);
+    NtfsImageFile = NewFile;
+    NtfsImageWritable = Writable;
+
+    if (BytesPerSector)
+        *BytesPerSector = SectorSize;
+    return STATUS_SUCCESS;
+#else
     UCHAR BootSector[512];
     ssize_t BytesRead;
     ULONG SectorSize;
@@ -80,6 +129,7 @@ NtfsDiskInitializeLinuxInternal(
     if (BytesPerSector)
         *BytesPerSector = SectorSize;
     return STATUS_SUCCESS;
+#endif
 }
 
 extern "C" NTSTATUS
@@ -105,11 +155,19 @@ NtfsDiskInitializeLinuxWritable(
 extern "C" void
 NtfsDiskCloseLinux(void)
 {
+#ifdef _WIN32
+    if (NtfsImageFile)
+    {
+        fclose(NtfsImageFile);
+        NtfsImageFile = NULL;
+    }
+#else
     if (NtfsImageFd >= 0)
     {
         close(NtfsImageFd);
         NtfsImageFd = -1;
     }
+#endif
     NtfsImageWritable = FALSE;
 }
 
@@ -155,8 +213,13 @@ NtfsQuerySystemTime(_Out_ PULONGLONG NtfsTime)
 
     if (!NtfsTime)
         return STATUS_INVALID_PARAMETER;
+#ifdef _WIN32
+    if (timespec_get(&Current, TIME_UTC) != TIME_UTC)
+        return STATUS_INVALID_DEVICE_STATE;
+#else
     if (clock_gettime(CLOCK_REALTIME, &Current) != 0)
         return STATUS_INVALID_DEVICE_STATE;
+#endif
     if (Current.tv_nsec < 0 ||
         Current.tv_nsec >= INT64_C(1000000000))
     {
@@ -191,6 +254,40 @@ NtfsReadVolume(_In_ ULONGLONG Offset,
                _In_ ULONG Length,
                _Inout_ PUCHAR Buffer)
 {
+#ifdef _WIN32
+    ULONG Completed = 0;
+
+    if (!NtfsImageFile)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (!Buffer && Length != 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Offset > INT64_MAX ||
+        Length > (ULONGLONG)INT64_MAX - Offset)
+    {
+        return STATUS_FILE_CORRUPT_ERROR;
+    }
+
+    if (_fseeki64(NtfsImageFile, (long long)Offset, SEEK_SET) != 0)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    while (Completed < Length)
+    {
+        size_t Result = fread(Buffer + Completed,
+                              1,
+                              Length - Completed,
+                              NtfsImageFile);
+        if (Result > 0)
+        {
+            Completed += (ULONG)Result;
+            continue;
+        }
+        if (feof(NtfsImageFile))
+            return STATUS_END_OF_FILE;
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    return STATUS_SUCCESS;
+#else
     ULONG Completed = 0;
 
     if (NtfsImageFd < 0)
@@ -222,6 +319,7 @@ NtfsReadVolume(_In_ ULONGLONG Offset,
     }
 
     return STATUS_SUCCESS;
+#endif
 }
 
 extern "C" NTSTATUS
@@ -229,6 +327,42 @@ NtfsWriteVolume(_In_ ULONGLONG Offset,
                 _In_ ULONG Length,
                 _Inout_ PUCHAR Buffer)
 {
+#ifdef _WIN32
+    ULONG Completed = 0;
+
+    if (!NtfsImageFile)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (!NtfsImageWritable)
+        return STATUS_MEDIA_WRITE_PROTECTED;
+    if (!Buffer && Length != 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Offset > INT64_MAX ||
+        Length > (ULONGLONG)INT64_MAX - Offset)
+    {
+        return STATUS_FILE_TOO_LARGE;
+    }
+
+    if (_fseeki64(NtfsImageFile, (long long)Offset, SEEK_SET) != 0)
+        return STATUS_INVALID_DEVICE_STATE;
+
+    while (Completed < Length)
+    {
+        size_t Result = fwrite(Buffer + Completed,
+                               1,
+                               Length - Completed,
+                               NtfsImageFile);
+        if (Result > 0)
+        {
+            Completed += (ULONG)Result;
+            continue;
+        }
+        if (errno == ENOSPC)
+            return STATUS_DISK_FULL;
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    return STATUS_SUCCESS;
+#else
     ULONG Completed = 0;
 
     if (NtfsImageFd < 0)
@@ -266,6 +400,7 @@ NtfsWriteVolume(_In_ ULONGLONG Offset,
     }
 
     return STATUS_SUCCESS;
+#endif
 }
 
 extern "C" NTSTATUS
@@ -314,9 +449,15 @@ extern "C" NTSTATUS
 NtfsFlushVolumeContext(_In_opt_ void* Context)
 {
     UNREFERENCED_PARAMETER(Context);
+#ifdef _WIN32
+    if (!NtfsImageFile)
+        return STATUS_INVALID_DEVICE_STATE;
+    return fflush(NtfsImageFile) == 0 ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_STATE;
+#else
     if (NtfsImageFd < 0)
         return STATUS_INVALID_DEVICE_STATE;
     return fsync(NtfsImageFd) == 0 ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_STATE;
+#endif
 }
 
 extern "C" NTSTATUS

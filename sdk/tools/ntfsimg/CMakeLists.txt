@@ -54,9 +54,12 @@ target_compile_features(ntfslib_host PUBLIC cxx_std_17)
 target_compile_definitions(ntfslib_host PUBLIC
     NTFSLIB_PORTABLE=1
     _FILE_OFFSET_BITS=64)
-target_compile_options(ntfslib_host PUBLIC
-    -fshort-wchar
-    -Wno-multichar)
+if(NOT MSVC)
+    # MSVC's wchar_t is already 16-bit; these are GCC/Clang spellings.
+    target_compile_options(ntfslib_host PUBLIC
+        -fshort-wchar
+        -Wno-multichar)
+endif()
 target_include_directories(ntfslib_host
     PUBLIC
         ${NTFSLIB_ROOT}/include/public
@@ -74,9 +77,11 @@ target_compile_features(ntfslib_format_host PUBLIC cxx_std_17)
 target_compile_definitions(ntfslib_format_host PUBLIC
     NTFSLIB_PORTABLE=1
     _FILE_OFFSET_BITS=64)
-target_compile_options(ntfslib_format_host PUBLIC
-    -fshort-wchar
-    -Wno-multichar)
+if(NOT MSVC)
+    target_compile_options(ntfslib_format_host PUBLIC
+        -fshort-wchar
+        -Wno-multichar)
+endif()
 target_include_directories(ntfslib_format_host
     PUBLIC ${NTFSLIB_ROOT}/include/public
     PRIVATE ${NTFSLIB_ROOT}/src/format)

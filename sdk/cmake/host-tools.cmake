@@ -3,9 +3,9 @@ include(ExternalProject)
 
 function(setup_host_tools)
     list(APPEND HOST_TOOLS asmpp bin2c gas2armasm widl gendib cabman fatten hpp isohybrid mkdiskimg mkdrvdb mkhive mkisofs obj2bin spec2def geninc mkshelllink txt2nls utf16le xml2sdb windmc wimage)
-    if(NOT CMAKE_HOST_WIN32)
-        list(APPEND HOST_TOOLS ntfsimg)
-    endif()
+    # ntfsimg's backing-store env is portable (stdio), so it builds on Windows
+    # hosts too; the MSVC lab's liberntimg/liberntvhd need native-ntfsimg.
+    list(APPEND HOST_TOOLS ntfsimg)
     if(NOT MSVC)
         list(APPEND HOST_TOOLS pefixup symz)
     endif()
