@@ -96,6 +96,133 @@ NtfsMarkVolumeRemoved(
     IoReleaseVpbSpinLock(OldIrql);
 }
 
+/*
+ * The last file object of a dismounted volume is gone and the release ran:
+ * free what the mount built and delete the volume device. Anything that
+ * still refers to the volume keeps the device in place, as before this
+ * change, and says so once in the log.
+ */
+static
+VOID
+NtfsDeleteDismountedVolume(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PVolumeContextBlock VolCB)
+{
+    LIST_ENTRY IdleBlocks;
+    PLIST_ENTRY Entry;
+    PNtfsDirectory DoomedDir = NULL;
+    PNtfsFileRecord DoomedParent;
+    PVPB Vpb;
+    KIRQL OldIrql;
+    ULONG InUse;
+    BOOLEAN FreeVpb = FALSE;
+    PCSTR Blocker = NULL;
+
+    PAGED_CODE();
+
+    ExAcquireFastMutex(&VolCB->StreamListMutex);
+    if (!IsListEmpty(&VolCB->StreamList))
+        Blocker = "open streams";
+    ExReleaseFastMutex(&VolCB->StreamListMutex);
+    if (Blocker == NULL && VolCB->TxfActiveCount != 0)
+        Blocker = "active transactions";
+
+    /* The caches belong to this volume alone; they go whatever follows */
+    NtfsForgetAllMissingNames(VolCB);
+    InUse = NtfsPurgeRecordCache(VolCB);
+    if (Blocker == NULL && InUse != 0)
+        Blocker = "cached records in use";
+
+    InitializeListHead(&IdleBlocks);
+    ExAcquireFastMutex(&VolCB->IdleFcbMutex);
+    while (!IsListEmpty(&VolCB->IdleFcbList))
+    {
+        Entry = RemoveHeadList(&VolCB->IdleFcbList);
+        VolCB->IdleFcbCount--;
+        InsertTailList(&IdleBlocks, Entry);
+    }
+    ExReleaseFastMutex(&VolCB->IdleFcbMutex);
+    while (!IsListEmpty(&IdleBlocks))
+    {
+        PFileContextBlock FileCB = CONTAINING_RECORD(RemoveHeadList(&IdleBlocks), FileContextBlock, IdleLink);
+
+        ExDeleteResourceLite(&FileCB->MainResource);
+        ExDeleteResourceLite(&FileCB->PagingIoResource);
+        ExFreePool(FileCB);
+    }
+
+    ExAcquireFastMutex(&VolCB->DirCacheMutex);
+    if (VolCB->CachedDir != NULL)
+    {
+        if (VolCB->CachedDirBusy)
+            Blocker = Blocker ? Blocker : "borrowed directory";
+        else
+        {
+            DoomedDir = VolCB->CachedDir;
+            VolCB->CachedDir = NULL;
+        }
+    }
+    ExReleaseFastMutex(&VolCB->DirCacheMutex);
+    if (DoomedDir)
+        NtfsDirectoryDestroy(DoomedDir);
+
+    ExAcquireFastMutex(&VolCB->CachedLookupParentMutex);
+    DoomedParent = VolCB->CachedLookupParent;
+    VolCB->CachedLookupParent = NULL;
+    ExReleaseFastMutex(&VolCB->CachedLookupParentMutex);
+    if (DoomedParent)
+        NtfsFileRecordDestroy(DoomedParent);
+
+    /* The dismount swapped a spare VPB onto the real device and made this
+     * one persistent, so the I/O manager never frees it: that is this
+     * driver's job, once nothing refers to it. */
+    Vpb = VolCB->Vpb;
+    IoAcquireVpbSpinLock(&OldIrql);
+    if (Vpb != NULL &&
+        Vpb->ReferenceCount == 0 &&
+        (Vpb->Flags & VPB_PERSISTENT) &&
+        Vpb->RealDevice != NULL &&
+        Vpb->RealDevice->Vpb != Vpb)
+    {
+        FreeVpb = TRUE;
+    }
+    IoReleaseVpbSpinLock(OldIrql);
+    if (Blocker == NULL && Vpb != NULL && !FreeVpb)
+        Blocker = "referenced VPB";
+
+    if (Blocker != NULL)
+    {
+        DPRINT1("NTFS: dismounted volume %p kept (%s)\n", VolumeDeviceObject, Blocker);
+        return;
+    }
+
+    /* The dismount path unregistered already; the PnP remove path did not */
+    IoUnregisterShutdownNotification(VolumeDeviceObject);
+
+    FsRtlNotifyUninitializeSync(&VolCB->NotifySync);
+    FsRtlDeleteTunnelCache(&VolCB->Tunnel);
+    NtfsTxfReleaseVolumeName(VolCB);
+
+    NtfsVolumeDestroy(VolCB->DiskVolume);
+    VolCB->DiskVolume = NULL;
+    ExDeleteResourceLite(&VolCB->MetadataResource);
+
+    if (Vpb != NULL)
+    {
+        IoAcquireVpbSpinLock(&OldIrql);
+        Vpb->DeviceObject = NULL;
+        if (VolumeDeviceObject->Vpb == Vpb)
+            VolumeDeviceObject->Vpb = NULL;
+        IoReleaseVpbSpinLock(OldIrql);
+        VolCB->Vpb = NULL;
+        ExFreePool(Vpb);
+    }
+
+    DPRINT1("NTFS: dismounted volume %p released after its last file object, device deleted\n",
+            VolumeDeviceObject);
+    IoDeleteDevice(VolumeDeviceObject);
+}
+
 VOID
 NtfsReleaseDismountedVolume(
     _In_ PDEVICE_OBJECT VolumeDeviceObject)
@@ -130,7 +257,7 @@ NtfsReleaseDismountedVolume(
          * retried by the lazy writer, fail-closed). */
         NtfsDiskReleaseKm(VolCB->StorageDevice);
         ObDereferenceObject(StreamFileObject);
-        /* FIXME: Delete the volume device and free the volume context once its last file object is closed. */
+        NtfsDeleteDismountedVolume(VolumeDeviceObject, VolCB);
     }
 }
 
@@ -171,7 +298,11 @@ NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject)
      * risk, everything was flushed on dismount); a PnP remove still releases it. */
     Work = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Work), TAG_NTFS);
     if (Work == NULL)
+    {
+        DPRINT1("NTFS: no pool to release dismounted volume %p; it stays until a PnP remove\n",
+                VolumeDeviceObject);
         return;
+    }
     ObReferenceObject(VolumeDeviceObject);
     Work->VolumeDeviceObject = VolumeDeviceObject;
     ExInitializeWorkItem(&Work->Item, NtfsReleaseDismountedVolumeWorker, Work);

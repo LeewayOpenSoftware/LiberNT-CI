@@ -214,6 +214,13 @@ NtfsReleaseDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);
 VOID
 NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject);
 
+/* Frees every cached record not in use; returns how many were in use. */
+ULONG
+NtfsPurgeRecordCache(_In_ PVolumeContextBlock VolCB);
+
+VOID
+NtfsTxfReleaseVolumeName(_Inout_ PVolumeContextBlock VolCB);
+
 PNtfsCachedRecord
 NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,
                         _In_reads_(Length) PCWSTR Name,

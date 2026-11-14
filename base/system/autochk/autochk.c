@@ -715,15 +715,16 @@ CheckVolume(
                            &FileSystemAttributes,
                            &VolumeSerial);
     LogVolumeWritable = !(FileSystemAttributes & FILE_READ_ONLY_VOLUME);
-    /* Unknown identities err on the side of the restart */
-    BootVolume = !SystemVolumeKnown || VolumeSerial == 0 ||
-                 VolumeSerial == SystemVolumeSerial;
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("GetFileSystem() failed, Status 0x%08lx\n", Status);
         PrintString("  Unable to detect the file system of volume %S\r\n", DisplayName);
         goto Quit;
     }
+
+    /* Unknown identities err on the side of the restart */
+    BootVolume = !SystemVolumeKnown || VolumeSerial == 0 ||
+                 VolumeSerial == SystemVolumeSerial;
 
     /* Find a suitable file system provider */
     for (Count = 0; Count < RTL_NUMBER_OF(FileSystems); ++Count)

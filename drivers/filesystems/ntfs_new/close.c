@@ -24,6 +24,8 @@ NTAPI
 NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              _Inout_ PIRP Irp)
 {
+    BOOLEAN LastFileObject = FALSE;
+
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
     /* Overview:
@@ -41,7 +43,6 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     }
 
     /* Perform final teardown of the file object's context. */
-    BOOLEAN LastFileObject = FALSE;
     {
         PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
         PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
