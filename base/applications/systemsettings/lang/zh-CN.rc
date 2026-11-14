@@ -333,6 +333,7 @@ BEGIN
     IDS_FIT_STRETCH "拉伸"
     IDS_FIT_TILE "平铺"
     IDS_FIT_CENTER "居中"
+    IDS_WALLPAPER_FAILED "无法应用桌面背景。"
     IDS_SOLID_COLOR "纯色"
     IDS_NO_PICTURE "未使用图片作为背景"
     IDS_PICTURE "图片"

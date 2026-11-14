@@ -26,7 +26,7 @@ set_module_type(systemsettings win32gui UNICODE)
 if(MSVC)
     set_target_cpp_properties(systemsettings WITH_EXCEPTIONS)
 endif()
-target_link_libraries(systemsettings shellframe cppstl cpprt uuid)
+target_link_libraries(systemsettings shellframe cppstl cpprt uuid leewaydisplay_static)
 add_importlibs(systemsettings advapi32 user32 gdi32 gdiplus shell32 shlwapi comctl32 comdlg32 dwmapi uxtheme ole32
                oleaut32 secur32 netapi32 samlib powrprof wlanapi iphlpapi ws2_32 wininet bluetoothapis setupapi cfgmgr32 winspool winmm
                version msvcrt kernel32 ntdll)
