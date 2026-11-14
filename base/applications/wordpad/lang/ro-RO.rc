@@ -95,7 +95,7 @@ BEGIN
     END
     POPUP "&Ajutor"
     BEGIN
-        MENUITEM "&Despre Wine Wordpad…",           ID_ABOUT
+        MENUITEM "&Despre LiberNT WordPad…",           ID_ABOUT
     END
 END
 

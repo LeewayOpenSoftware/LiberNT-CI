@@ -165,7 +165,7 @@ END
 
 STRINGTABLE
 {
-STID_WINE_HELP, 	"Ajuda Wine"
+STID_WINE_HELP, 	"Ajuda LiberNT"
 STID_WHERROR, 		"ERRO"
 STID_WARNING,  		"AVISO"
 STID_INFO,  		"Informação"

@@ -202,7 +202,13 @@ static inline PVOID MiHostAllocate(SIZE_T Bytes)
 #define MI_ATOMIC_AND32(v, m)           __sync_fetch_and_and((v), (LONG)(m))
 static inline __attribute__((no_sanitize("thread"))) ULONG64 MiHostPeek(const void *Value, SIZE_T Size)
 {
-    return (Size == 8) ? *(const volatile ULONG64 *)Value : *(const volatile ULONG *)Value;
+    if (Size == 8)
+        return *(const volatile ULONG64 *)Value;
+    if (Size == 4)
+        return *(const volatile ULONG *)Value;
+    if (Size == 2)
+        return *(const volatile USHORT *)Value;
+    return *(const volatile UCHAR *)Value;
 }
 
 #define MI_PEEK(v)                      MiHostPeek(&(v), sizeof(v))

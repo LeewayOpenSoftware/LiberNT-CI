@@ -55,7 +55,7 @@ MAIN_MENU MENU
  }
  POPUP "&Help" {
    MENUITEM "&Help on help\tF1", MNID_HELP_HELPON
-   MENUITEM "&About Wine Help", MNID_HELP_ABOUT
+   MENUITEM "&About LiberNT Help", MNID_HELP_ABOUT
  }
 }
 
@@ -77,7 +77,7 @@ END
 
 STRINGTABLE
 {
-STID_WINE_HELP, 	"Wine Help"
+STID_WINE_HELP, 	"LiberNT Help"
 STID_WHERROR, 		"ERROR"
 STID_WARNING,  		"WARNING"
 STID_INFO,  		"Information"

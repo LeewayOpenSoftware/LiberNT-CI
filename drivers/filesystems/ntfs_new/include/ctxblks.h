@@ -49,6 +49,8 @@ typedef struct _VolumeContextBlock
     ULONGLONG ShrinkVolumeSectors;
     BOOLEAN Dismounting;
     BOOLEAN Dismounted;
+    /* Dismounted in the BootExecute window: autochk repaired the boot volume and restarts. */
+    BOOLEAN BootRepairDismount;
     FAST_MUTEX StreamListMutex;
     LIST_ENTRY StreamList;
     LIST_ENTRY StreamHash[256];
@@ -539,6 +541,15 @@ NtfsIsVolumeInBootExecuteWindow(_In_ PVolumeContextBlock VolCB)
     return !VolCB->PagingFileSeen &&
            Vpb && Vpb->RealDevice &&
            (Vpb->RealDevice->Flags & DO_SYSTEM_BOOT_PARTITION);
+}
+
+/* Running images page in from the boot volume autochk dismounted until it restarts */
+FORCEINLINE
+BOOLEAN
+NtfsServesPagingAfterDismount(_In_ PVolumeContextBlock VolCB,
+                              _In_ PIRP Irp)
+{
+    return VolCB->BootRepairDismount && (Irp->Flags & IRP_PAGING_IO);
 }
 
 /* Drop one handle from OpenHandleCount. Caller holds VolumeStateMutex. */

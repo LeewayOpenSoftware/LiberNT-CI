@@ -52,7 +52,7 @@ MAIN_MENU MENU
  }
  POPUP "Ndihmë" {
    MENUITEM "Ndihmë &per ndihmen", MNID_HELP_HELPON
-   MENUITEM "Rreth ndihmes Wine", MNID_HELP_ABOUT
+   MENUITEM "Rreth ndihmes LiberNT", MNID_HELP_ABOUT
  }
 }
 

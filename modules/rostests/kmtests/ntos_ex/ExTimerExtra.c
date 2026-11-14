@@ -279,6 +279,64 @@ TestDeleteWithoutWaiting(VOID)
     ok_eq_long(DeleteTestCalls, 2L);
 }
 
+/* From outside the callback: a deleted timer still awaiting its last expiry takes no setting, cancel or second
+ * delete; a periodic timer deleted without Cancel goes off exactly once more, then the delete callback runs */
+static
+VOID
+TestDeleteFromOutside(VOID)
+{
+    EXT_DELETE_PARAMETERS Parameters;
+    LARGE_INTEGER Timeout;
+    LARGE_INTEGER Interval;
+    PEX_TIMER Timer;
+    NTSTATUS Status;
+    BOOLEAN Result;
+    LONG Before, Final;
+
+    ExInitializeDeleteTimerParameters(&Parameters);
+    Parameters.DeleteCallback = TimerDeleted;
+    Timeout.QuadPart = -10LL * 1000 * 1000 * 3;
+
+    /* One-shot a second ahead, deleted without Cancel: alive until it goes off, refusing everything meanwhile */
+    Timer = StartDeleteTest(NULL);
+    if (skip(Timer != NULL, "ExAllocateTimer failed\n"))
+        return;
+    Result = ExSetTimer(Timer, -10LL * 1000 * 1000, 0, NULL);
+    ok_eq_bool(Result, FALSE);
+    Result = ExDeleteTimer(Timer, FALSE, FALSE, &Parameters);
+    ok_eq_bool(Result, FALSE);
+    Result = ExSetTimer(Timer, -10LL * 1000 * 10, 0, NULL);
+    ok_eq_bool(Result, FALSE);
+    Result = ExCancelTimer(Timer, NULL);
+    ok_eq_bool(Result, FALSE);
+    Result = ExDeleteTimer(Timer, TRUE, FALSE, NULL);
+    ok_eq_bool(Result, FALSE);
+    Status = KeWaitForSingleObject(&TimerDeletedEvent, Executive, KernelMode, FALSE, &Timeout);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok_eq_long(CallsBeforeDelete, 1L);
+    ok_eq_long(DeleteTestCalls, 1L);
+
+    /* Periodic every 10 ms, running, deleted without Cancel: one more expiry, then the delete callback, then nothing */
+    Timer = StartDeleteTest(NULL);
+    if (skip(Timer != NULL, "ExAllocateTimer failed\n"))
+        return;
+    Result = ExSetTimer(Timer, -10LL * 1000 * 10, 10LL * 1000 * 10, NULL);
+    ok_eq_bool(Result, FALSE);
+    Interval.QuadPart = -10LL * 1000 * 50;
+    KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    Before = DeleteTestCalls;
+    ok(Before >= 1, "periodic timer went off %ld times in 50 ms\n", Before);
+    Result = ExDeleteTimer(Timer, FALSE, FALSE, &Parameters);
+    ok_eq_bool(Result, FALSE);
+    Status = KeWaitForSingleObject(&TimerDeletedEvent, Executive, KernelMode, FALSE, &Timeout);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Final = DeleteTestCalls;
+    ok(Final - Before >= 1 && Final - Before <= 2, "deleted periodic timer went off %ld more times, expected once\n", Final - Before);
+    ok_eq_long(CallsBeforeDelete, Final);
+    KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    ok_eq_long(DeleteTestCalls, Final);
+}
+
 #define HIGH_RESOLUTION_EXPIRIES 4
 
 typedef VOID (NTAPI *PEX_QUERY_TIMER_RESOLUTION)(PULONG MaximumTime, PULONG MinimumTime, PULONG CurrentTime);
@@ -402,5 +460,6 @@ START_TEST(ExTimerExtra)
     TestCancelBeforeFire();
     TestExtendedTimer();
     TestDeleteWithoutWaiting();
+    TestDeleteFromOutside();
     TestHighResolutionTimer();
 }

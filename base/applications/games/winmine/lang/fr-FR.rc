@@ -2,7 +2,7 @@ LANGUAGE LANG_FRENCH, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Démineur de Wine"
+    IDS_APPNAME "Démineur LiberNT"
     IDS_NOBODY "Anonyme"
     IDS_ABOUT "Copyright 2000 Joshua Thielen"
 END
