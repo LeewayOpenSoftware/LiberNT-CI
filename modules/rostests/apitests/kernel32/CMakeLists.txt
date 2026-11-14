@@ -45,6 +45,7 @@ list(APPEND SOURCE
     DefaultActCtx.c
     ElevationRequired.c
     DeleteFileCase.c
+    DeleteFileOpenHandle.c
     DeviceIoControl.c
     EmulatedProcess.c
     dosdev.c
