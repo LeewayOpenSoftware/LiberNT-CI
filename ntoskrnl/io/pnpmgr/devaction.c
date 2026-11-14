@@ -2299,9 +2299,9 @@ PiSetDeviceStackRemovePending(
     for (Device = PhysicalDeviceObject; Device != NULL; Device = Device->AttachedDevice)
     {
         if (RemovePending)
-            IoGetDevObjExtension(Device)->ExtensionFlags |= DOE_REMOVE_PENDING;
+            InterlockedOr((PLONG)&IoGetDevObjExtension(Device)->ExtensionFlags, DOE_REMOVE_PENDING);
         else
-            IoGetDevObjExtension(Device)->ExtensionFlags &= ~DOE_REMOVE_PENDING;
+            InterlockedAnd((PLONG)&IoGetDevObjExtension(Device)->ExtensionFlags, ~DOE_REMOVE_PENDING);
     }
     IopReleaseDatabaseLockExclusive(OldIrql);
 }
