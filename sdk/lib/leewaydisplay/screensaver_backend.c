@@ -67,6 +67,7 @@ LSaverGet(WCHAR *path, DWORD cch, UINT *timeoutSeconds, BOOL *active)
     DWORD type, size = cch * sizeof(WCHAR);
     UINT timeout = 0;
     BOOL on = FALSE;
+    WCHAR raw[MAX_PATH];
 
     if (!SystemParametersInfoW(SPI_GETSCREENSAVETIMEOUT, 0, &timeout, 0) ||
         !SystemParametersInfoW(SPI_GETSCREENSAVEACTIVE, 0, &on, 0))
@@ -74,9 +75,20 @@ LSaverGet(WCHAR *path, DWORD cch, UINT *timeoutSeconds, BOOL *active)
     path[0] = 0;
     if (RegOpenKeyExW(HKEY_CURRENT_USER, DesktopKey, 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS)
     {
-        if (RegQueryValueExW(key, L"SCRNSAVE.EXE", NULL, &type, (BYTE *)path, &size) != ERROR_SUCCESS ||
-            (type != REG_SZ && type != REG_EXPAND_SZ))
-            path[0] = 0;
+        size = sizeof(raw) - sizeof(WCHAR);
+        raw[0] = 0;
+        if (RegQueryValueExW(key, L"SCRNSAVE.EXE", NULL, &type, (BYTE *)raw, &size) == ERROR_SUCCESS &&
+            (type == REG_SZ || type == REG_EXPAND_SZ))
+        {
+            raw[size / sizeof(WCHAR)] = 0;
+            if (type == REG_EXPAND_SZ)
+            {
+                if (!ExpandEnvironmentStringsW(raw, path, cch))
+                    path[0] = 0;
+            }
+            else
+                lstrcpynW(path, raw, cch);
+        }
         RegCloseKey(key);
     }
     *timeoutSeconds = timeout;
@@ -85,7 +97,7 @@ LSaverGet(WCHAR *path, DWORD cch, UINT *timeoutSeconds, BOOL *active)
 }
 
 static BOOL
-SetSaverPath(const WCHAR *path)
+SetSaverPath(const WCHAR *path, DWORD type)
 {
     HKEY key;
     LONG result = RegCreateKeyExW(HKEY_CURRENT_USER, DesktopKey, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL);
@@ -93,7 +105,7 @@ SetSaverPath(const WCHAR *path)
     if (result != ERROR_SUCCESS)
         return FALSE;
     if (path && path[0])
-        result = RegSetValueExW(key, L"SCRNSAVE.EXE", 0, REG_SZ, (const BYTE *)path, (lstrlenW(path) + 1) * sizeof(WCHAR));
+        result = RegSetValueExW(key, L"SCRNSAVE.EXE", 0, type, (const BYTE *)path, (lstrlenW(path) + 1) * sizeof(WCHAR));
     else
     {
         result = RegDeleteValueW(key, L"SCRNSAVE.EXE");
@@ -107,7 +119,10 @@ SetSaverPath(const WCHAR *path)
 BOOL
 LSaverSet(const WCHAR *path, UINT timeoutSeconds, BOOL active)
 {
-    WCHAR oldPath[MAX_PATH];
+    WCHAR oldPath[MAX_PATH], oldRaw[MAX_PATH];
+    DWORD oldType = REG_SZ, oldSize = sizeof(oldRaw) - sizeof(WCHAR);
+    BOOL hadOld = FALSE;
+    HKEY key;
     UINT oldTimeout;
     BOOL oldActive;
     BOOL on = (path && path[0]) ? active : FALSE;
@@ -116,12 +131,21 @@ LSaverSet(const WCHAR *path, UINT timeoutSeconds, BOOL active)
         return FALSE;
     if (!LSaverGet(oldPath, ARRAYSIZE(oldPath), &oldTimeout, &oldActive))
         return FALSE;
-    if (SetSaverPath(path) &&
+    oldRaw[0] = 0;
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, DesktopKey, 0, KEY_QUERY_VALUE, &key) == ERROR_SUCCESS)
+    {
+        hadOld = RegQueryValueExW(key, L"SCRNSAVE.EXE", NULL, &oldType, (BYTE *)oldRaw, &oldSize) == ERROR_SUCCESS &&
+                 (oldType == REG_SZ || oldType == REG_EXPAND_SZ);
+        if (hadOld)
+            oldRaw[oldSize / sizeof(WCHAR)] = 0;
+        RegCloseKey(key);
+    }
+    if (SetSaverPath(path, REG_SZ) &&
         SystemParametersInfoW(SPI_SETSCREENSAVETIMEOUT, timeoutSeconds, NULL, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE) &&
         SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, on, NULL, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
         return TRUE;
     /* Put all three values back so a failure never leaves a mixed configuration. */
-    SetSaverPath(oldPath);
+    SetSaverPath(hadOld ? oldRaw : NULL, oldType);
     SystemParametersInfoW(SPI_SETSCREENSAVETIMEOUT, oldTimeout, NULL, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
     SystemParametersInfoW(SPI_SETSCREENSAVEACTIVE, oldActive, NULL, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE);
     return FALSE;

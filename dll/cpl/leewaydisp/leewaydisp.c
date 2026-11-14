@@ -585,7 +585,21 @@ typedef struct SAVERDATA
 {
     LSAVER_ITEM Items[LSAVER_MAX_ITEMS];
     int Count;
+    UINT Waits[ARRAYSIZE(SaverMinutes) + 1];  /* seconds, one per combobox row */
+    int WaitCount;
 } SAVERDATA;
+
+static BOOL
+SamePath(const WCHAR *a, const WCHAR *b)
+{
+    WCHAR la[MAX_PATH], lb[MAX_PATH];
+
+    if (!GetLongPathNameW(a, la, ARRAYSIZE(la)))
+        lstrcpynW(la, a, ARRAYSIZE(la));
+    if (!GetLongPathNameW(b, lb, ARRAYSIZE(lb)))
+        lstrcpynW(lb, b, ARRAYSIZE(lb));
+    return !lstrcmpiW(la, lb);
+}
 
 static int
 SaverSelected(HWND hwnd)
@@ -632,7 +646,25 @@ SaverFill(HWND hwnd, SAVERDATA *sd)
         EnableWindow(GetDlgItem(hwnd, IDC_SAVER_TEST), FALSE);
         return;
     }
-    sd->Count = LSaverEnum(sd->Items, LSAVER_MAX_ITEMS);
+    sd->Count = LSaverEnum(sd->Items, LSAVER_MAX_ITEMS - 1);
+    /* A saver outside System32 (or spelled differently) is shown as an extra row, never as (None). */
+    if (path[0])
+    {
+        for (i = 0; i < sd->Count && !SamePath(path, sd->Items[i].Path); i++)
+            ;
+        if (i == sd->Count)
+        {
+            const WCHAR *base = wcsrchr(path, L'\\');
+            WCHAR *dot;
+
+            lstrcpynW(sd->Items[i].Path, path, ARRAYSIZE(sd->Items[i].Path));
+            lstrcpynW(sd->Items[i].Name, base ? base + 1 : path, ARRAYSIZE(sd->Items[i].Name));
+            dot = wcsrchr(sd->Items[i].Name, L'.');
+            if (dot)
+                *dot = 0;
+            sd->Count++;
+        }
+    }
     LoadStr(IDS_SAVER_NONE, text, ARRAYSIZE(text));
     ZeroMemory(&item, sizeof(item));
     item.mask = LVIF_TEXT;
@@ -643,17 +675,36 @@ SaverFill(HWND hwnd, SAVERDATA *sd)
         item.iItem = i + 1;
         item.pszText = sd->Items[i].Name;
         SendMessageW(list, LVM_INSERTITEMW, 0, (LPARAM)&item);
-        if (active && path[0] && !lstrcmpiW(path, sd->Items[i].Path))
+        if (path[0] && SamePath(path, sd->Items[i].Path))
             select = i + 1;
     }
+    /* The combobox holds the fixed steps plus the current value when it is none of them, so Apply
+     * never rewrites a timeout the user did not change. */
     for (i = 0; i < (int)ARRAYSIZE(SaverMinutes); i++)
+    {
+        sd->Waits[sd->WaitCount++] = SaverMinutes[i] * 60;
+    }
+    {
+        BOOL found = FALSE;
+
+        for (i = 0; i < sd->WaitCount; i++)
+            found |= sd->Waits[i] == timeout;
+        if (!found && timeout >= 60)
+        {
+            for (i = sd->WaitCount; i > 0 && sd->Waits[i - 1] > timeout; i--)
+                sd->Waits[i] = sd->Waits[i - 1];
+            sd->Waits[i] = timeout;
+            sd->WaitCount++;
+        }
+    }
+    for (i = 0; i < sd->WaitCount; i++)
     {
         WCHAR fmt[32];
 
         LoadStr(IDS_SAVER_MINUTES, fmt, ARRAYSIZE(fmt));
-        StringCchPrintfW(text, ARRAYSIZE(text), fmt, SaverMinutes[i]);
+        StringCchPrintfW(text, ARRAYSIZE(text), fmt, (sd->Waits[i] + 59) / 60);
         SendDlgItemMessageW(hwnd, IDC_SAVER_WAIT, CB_ADDSTRING, 0, (LPARAM)text);
-        if (SaverMinutes[i] * 60 <= timeout)
+        if (sd->Waits[i] == timeout)
             wait = i;
     }
     SendDlgItemMessageW(hwnd, IDC_SAVER_WAIT, CB_SETCURSEL, (WPARAM)wait, 0);
@@ -703,7 +754,7 @@ SaverProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             if (LOWORD(wParam) == IDC_SAVER_APPLY)
             {
                 int w = (int)SendDlgItemMessageW(hwnd, IDC_SAVER_WAIT, CB_GETCURSEL, 0, 0);
-                UINT secs = (w >= 0 && w < (int)ARRAYSIZE(SaverMinutes) ? SaverMinutes[w] : 10) * 60;
+                UINT secs = (w >= 0 && w < sd->WaitCount) ? sd->Waits[w] : 600;
                 const WCHAR *path = (sel > 0 && sel <= sd->Count) ? sd->Items[sel - 1].Path : NULL;
 
                 if (!LSaverSet(path, secs, path != NULL))
