@@ -1983,6 +1983,12 @@ IopGetSetSecurityObject(IN PVOID ObjectBody,
                 }
             }
 
+            /* ObAssignSecurity hands us the descriptor and frees it only when we fail; on success we
+             * own it. We cached a copy (or, for a stream file, kept nothing), so free the one we were
+             * given, as the default object-security path does after it logs. */
+            if (NT_SUCCESS(Status))
+                ExFreePoolWithTag(SecurityDescriptor, TAG_SD);
+
             /* Return status */
             return Status;
         }
