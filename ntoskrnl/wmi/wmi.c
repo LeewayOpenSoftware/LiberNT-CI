@@ -843,6 +843,11 @@ WmiTraceMessageVa(IN TRACEHANDLE LoggerHandle,
     SIZE_T Length;
     NTSTATUS Status;
 
+    /* WPP drivers log from DPCs; the logger lookup takes a push lock and the buffer a guarded mutex, both
+     * only safe at or below APC_LEVEL, so above it drop the message silently as IoWMIWriteEvent does. */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return STATUS_SUCCESS;
+
     /* Header, the leading message number, and the message data (WPP caps one message at 8 KB). */
     Record = ExAllocatePoolWithTag(NonPagedPoolNx,
                                    sizeof(EVENT_TRACE_HEADER) + sizeof(USHORT) + TRACE_MESSAGE_MAXIMUM_SIZE,
