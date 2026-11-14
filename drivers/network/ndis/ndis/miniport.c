@@ -2345,6 +2345,30 @@ NdisICreateClose(
   return STATUS_SUCCESS;
 }
 
+static
+VOID
+MiniHaltAfterFailedStart(
+    IN PLOGICAL_ADAPTER Adapter)
+/*
+ * FUNCTION: Undoes a start that failed after MiniportInitialize succeeded
+ * ARGUMENTS:
+ *     Adapter = Pointer to the logical adapter
+ * NOTES:
+ *     The miniport holds its interrupt, timers and memory from the moment
+ *     its initialize handler succeeds. The device is not marked as started,
+ *     so the remove path does not halt it. It is halted here.
+ */
+{
+  /* Remove adapter from global adapter list */
+  ExInterlockedRemoveEntryList(&Adapter->ListEntry, &AdapterListLock);
+
+  /* Set this here so MiniportISR will be forced to run for interrupts generated in MiniportHalt */
+  Adapter->NdisMiniportBlock.OldPnPDeviceState = Adapter->NdisMiniportBlock.PnPDeviceState;
+  Adapter->NdisMiniportBlock.PnPDeviceState = NdisPnPDeviceStopped;
+
+  (*Adapter->NdisMiniportBlock.DriverHandle->MiniportCharacteristics.HaltHandler)(Adapter->NdisMiniportBlock.MiniportAdapterContext);
+}
+
 NTSTATUS
 NTAPI
 NdisIPnPStartDevice(
@@ -2595,7 +2619,7 @@ NdisIPnPStartDevice(
   if (SelectedMediumIndex >= MEDIA_ARRAY_SIZE)
     {
       NDIS_DbgPrint(MIN_TRACE, ("MiniportInitialize() selected a bad index\n"));
-      ExInterlockedRemoveEntryList( &Adapter->ListEntry, &AdapterListLock );
+      MiniHaltAfterFailedStart(Adapter);
       return NDIS_STATUS_UNSUPPORTED_MEDIA;
     }
 
@@ -2615,8 +2639,8 @@ NdisIPnPStartDevice(
 
             if (NdisStatus != NDIS_STATUS_SUCCESS)
             {
-               ExInterlockedRemoveEntryList( &Adapter->ListEntry, &AdapterListLock );
                NDIS_DbgPrint(MIN_TRACE, ("MiniQueryInformation failed (%x)\n", NdisStatus));
+               MiniHaltAfterFailedStart(Adapter);
                return NdisStatus;
             }
 
@@ -2634,13 +2658,14 @@ NdisIPnPStartDevice(
         /* FIXME: Support other types of media */
         NDIS_DbgPrint(MIN_TRACE, ("error: unsupported media\n"));
         ASSERT(FALSE);
-	ExInterlockedRemoveEntryList( &Adapter->ListEntry, &AdapterListLock );
+        MiniHaltAfterFailedStart(Adapter);
         return STATUS_UNSUCCESSFUL;
     }
 
   if (NdisStatus != NDIS_STATUS_SUCCESS)
     {
       NDIS_DbgPrint(MIN_TRACE, ("couldn't create filter (%x)\n", NdisStatus));
+      MiniHaltAfterFailedStart(Adapter);
       return NdisStatus;
     }
 
