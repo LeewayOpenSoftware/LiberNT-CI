@@ -156,3 +156,29 @@ counter matches C exactly, 5 == 5). **Negative control** (feed the Rust side the
 rule) -> 5 disagreements. Vendored `vf/dw/vfdeadlock.c` (provenance `feat/special-pool 93a4f23190e`).
 Chained from `run-lrm-diff.sh`. (The boot-driver verification walk `MiVerifyBootLoadedImages`
 `e2962b8329d`/`76a526b8011` is deferred — not ported here, pending a kd*.dll fix.)
+
+## Stage 1b — boot-loaded driver verification walk (DONE)
+`vf.rs` mirrors the per-image decision of `MiVerifyBootLoadedImages` (ntdrvmgmt.c, merged at the
+current head). The list walk / bookkeeping stays in C; the Rust is the per-image include/exclude
+decision `boot_image_should_verify(verifier_active, dll_base, ntos_base, is_boot_driver, verify_list,
+name)` = `active && dll_base != ntos_base && !hal && is_verified_driver_name(list, name, is_boot_driver)`
+(kernel excluded by base, HAL `hal.dll` excluded by name).
+
+The merged C changed `MiIsVerifiedDriverName` to take an **AllowWildcard** flag: a lone `*` matches
+only when allowed — in the boot walk that is the image's boot-driver membership (`MiIsBootDriverImage`
+over `LoaderBlock->BootDriverListHead`); explicit names always match. `vf.rs`'s matcher gained the same
+`allow_wildcard` parameter. The implemented level also widened now those stages are merged:
+`MI_VERIFIER_DEFAULT_LEVEL = 0x9` (the default when VerifyDrivers asks for -1) is capped by
+`MI_VERIFIER_IMPLEMENTED_LEVEL = 0x39` (0x9 | IO_CHECKING 0x10 | DEADLOCK_DETECTION 0x20), and deadlock
+detection implies pool tracking — all mirrored in `init_level`.
+
+**Full-stack differential** (`vf/vf1b_diff.cpp`, `test_bootwalk`): compiles the real `ntdrvmgmt.c`
+UNMODIFIED against the host stub (`vf/nt1bstub/`, grown with the loader structs + `PsLoadedModuleList` /
+`PsNtosImageBase`), activates the verifier, builds a synthetic `PsLoadedModuleList` (kernel at
+`PsNtosImageBase`, `hal.dll`, a boot driver, a non-boot driver, an explicitly-named non-boot driver)
+plus a `BootDriverListHead`, runs `MiVerifyBootLoadedImages`, and compares — per image — whether C
+verified it (it sets `LDRP_IMAGE_VERIFYING`) against `lrm_vf_boot_image_should_verify`. Latest:
+**0 disagreements**, bootwalk coverage verified=2 / skipped=3 (kernel by base, HAL by name, `*`
+matching only the boot driver, the explicit name matching a non-boot image). **Negative control**
+(flip the boot-driver flag fed to the Rust side) bites. Vendored `vf/dw/ntdrvmgmt.c` re-pinned at the
+merged head (boot walk + AllowWildcard). Chained from `run-lrm-diff.sh` via the vf-1b job.

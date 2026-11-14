@@ -620,7 +620,16 @@ const STATUS_INVALID_PARAMETER_2: u32 = 0xC000_00F0;
 // Verifier level bits (public Driver Verifier flags) and the implemented set at the pinned SHA.
 const DRIVER_VERIFIER_SPECIAL_POOLING: u32 = 0x1;
 const DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS: u32 = 0x8;
-const MI_VERIFIER_IMPLEMENTED_LEVEL: u32 = DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS; // 0x9
+const DRIVER_VERIFIER_IO_CHECKING: u32 = 0x10;
+const DRIVER_VERIFIER_DEADLOCK_DETECTION: u32 = 0x20;
+// The DEFAULT level applied when VerifyDrivers asks for the sentinel (-1): special pool + pool
+// tracking (0x9). The IMPLEMENTED level only CAPS a requested level and now also covers the merged
+// I/O (0xC9) and deadlock (0xC4) stages (0x39) — a requested level may turn those on, but the default
+// does not. (Both were 0x9 while those stages were deferred.)
+const MI_VERIFIER_DEFAULT_LEVEL: u32 = DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS; // 0x9
+const MI_VERIFIER_IMPLEMENTED_LEVEL: u32 = MI_VERIFIER_DEFAULT_LEVEL
+    | DRIVER_VERIFIER_IO_CHECKING
+    | DRIVER_VERIFIER_DEADLOCK_DETECTION; // 0x39
 
 // Internal LDR flag (fed identically to both sides in the differential).
 const LDRP_IMAGE_VERIFYING: u32 = 0x0002_0000;
@@ -690,7 +699,7 @@ pub fn init_level(verify_driver_level: u32, special_pool_enabled: bool, buffer_e
         return None;
     }
     let mut level = if verify_driver_level == 0xFFFF_FFFF {
-        MI_VERIFIER_IMPLEMENTED_LEVEL
+        MI_VERIFIER_DEFAULT_LEVEL
     } else {
         verify_driver_level
     };
@@ -700,6 +709,10 @@ pub fn init_level(verify_driver_level: u32, special_pool_enabled: bool, buffer_e
     }
     if level == 0 {
         return None;
+    }
+    // Deadlock detection implies pool tracking (matches MiInitializeDriverVerifier).
+    if level & DRIVER_VERIFIER_DEADLOCK_DETECTION != 0 {
+        level |= DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS;
     }
     Some(level)
 }
@@ -725,7 +738,7 @@ fn ascii_fold(c: u16) -> u16 {
 /// `MiIsVerifiedDriverName`: is `name` in the space/tab/comma/semicolon-separated `buffer`
 /// (UTF-16), or does the buffer contain the single `*`? Name match is case-insensitive (ASCII).
 /// (The C is `static`, reached only via `MiVerifyLoadedImage`; host-unit-tested, not differential.)
-pub fn is_verified_driver_name(buffer: &[u16], name: &[u16]) -> bool {
+pub fn is_verified_driver_name(buffer: &[u16], name: &[u16], allow_wildcard: bool) -> bool {
     let mut i = 0usize;
     loop {
         while i < buffer.len() && buffer[i] != 0 && is_name_sep(buffer[i]) {
@@ -742,12 +755,45 @@ pub fn is_verified_driver_name(buffer: &[u16], name: &[u16]) -> bool {
             return false;
         };
         if tok.len() == 1 && tok[0] == WILDCARD {
-            return true;
+            // A lone '*' matches only when wildcards are allowed (boot walk: only for boot drivers);
+            // otherwise skip it and keep scanning. Mirrors MiIsVerifiedDriverName's AllowWildcard arm.
+            if allow_wildcard {
+                return true;
+            }
+            continue;
         }
         if tok.len() == name.len() && tok.iter().zip(name.iter()).all(|(&a, &b)| ascii_fold(a) == ascii_fold(b)) {
             return true;
         }
     }
+}
+
+/// Whether a name equals `hal.dll` (ASCII case-insensitive), the HAL-by-name exclusion in the boot
+/// walk. Mirrors the C `RtlEqualUnicodeString(&BaseDllName, L"hal.dll", TRUE)` for ASCII names.
+fn name_is_hal(name: &[u16]) -> bool {
+    const HAL: [u16; 7] = [
+        b'h' as u16, b'a' as u16, b'l' as u16, b'.' as u16, b'd' as u16, b'l' as u16, b'l' as u16,
+    ];
+    name.len() == HAL.len() && name.iter().zip(HAL.iter()).all(|(&a, &b)| ascii_fold(a) == ascii_fold(b))
+}
+
+/// `MiVerifyBootLoadedImages` per-image decision: should this loaded image be verified by the boot
+/// walk? Active, and not the kernel (by base), and not HAL (by name), and the VerifyDrivers list names
+/// it — with a lone `*` matching only boot drivers (`is_boot_driver`, from `LoaderBlock->
+/// BootDriverListHead`), explicit names always. Mirrors the C loop body in `MiVerifyBootLoadedImages`
+/// (the walk/iteration stays in C; this is the per-image include/exclude decision).
+pub fn boot_image_should_verify(
+    verifier_active: bool,
+    dll_base: usize,
+    ntos_base: usize,
+    is_boot_driver: bool,
+    verify_list: &[u16],
+    name: &[u16],
+) -> bool {
+    verifier_active
+        && dll_base != ntos_base
+        && !name_is_hal(name)
+        && is_verified_driver_name(verify_list, name, is_boot_driver)
 }
 
 // ---- C ABI for the Stage 1b differential ----
@@ -816,7 +862,7 @@ pub unsafe extern "C" fn lrm_vf_init_level(verify_driver_level: u32, special_poo
 /// # Safety
 /// `buffer`/`name` must point to `blen`/`nlen` valid u16 values.
 #[no_mangle]
-pub unsafe extern "C" fn lrm_vf_is_verified_driver_name(buffer: *const u16, blen: usize, name: *const u16, nlen: usize) -> u8 {
+pub unsafe extern "C" fn lrm_vf_is_verified_driver_name(buffer: *const u16, blen: usize, name: *const u16, nlen: usize, allow_wildcard: u8) -> u8 {
     // from_raw_parts needs a non-null pointer even for len 0; treat null/empty as an empty slice.
     let b: &[u16] = if buffer.is_null() || blen == 0 {
         &[]
@@ -830,7 +876,38 @@ pub unsafe extern "C" fn lrm_vf_is_verified_driver_name(buffer: *const u16, blen
         // SAFETY: non-null, nlen u16 (checked above).
         unsafe { core::slice::from_raw_parts(name, nlen) }
     };
-    is_verified_driver_name(b, n) as u8
+    is_verified_driver_name(b, n, allow_wildcard != 0) as u8
+}
+
+/// `MiVerifyBootLoadedImages` per-image decision (`boot_image_should_verify`). The walk stays in C;
+/// this is the include/exclude decision for one image.
+/// # Safety
+/// `verify_list`/`name` must point to `vlen`/`nlen` valid u16 values (or be null with len 0).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn lrm_vf_boot_image_should_verify(
+    verifier_active: u8,
+    dll_base: usize,
+    ntos_base: usize,
+    is_boot_driver: u8,
+    verify_list: *const u16,
+    vlen: usize,
+    name: *const u16,
+    nlen: usize,
+) -> u8 {
+    let v: &[u16] = if verify_list.is_null() || vlen == 0 {
+        &[]
+    } else {
+        // SAFETY: non-null, vlen u16 (checked above).
+        unsafe { core::slice::from_raw_parts(verify_list, vlen) }
+    };
+    let n: &[u16] = if name.is_null() || nlen == 0 {
+        &[]
+    } else {
+        // SAFETY: non-null, nlen u16 (checked above).
+        unsafe { core::slice::from_raw_parts(name, nlen) }
+    };
+    boot_image_should_verify(verifier_active != 0, dll_base, ntos_base, is_boot_driver != 0, v, n) as u8
 }
 
 // ======================================================================================

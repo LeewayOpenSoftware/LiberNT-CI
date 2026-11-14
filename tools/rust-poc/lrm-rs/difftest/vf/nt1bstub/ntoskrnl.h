@@ -58,6 +58,8 @@ typedef int           KWAIT_REASON, KPROCESSOR_MODE;
 
 #define DRIVER_VERIFIER_SPECIAL_POOLING       0x0001u
 #define DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS 0x0008u
+#define DRIVER_VERIFIER_IO_CHECKING           0x0010u
+#define DRIVER_VERIFIER_DEADLOCK_DETECTION    0x0020u
 #define LDRP_IMAGE_VERIFYING 0x00020000u
 
 #define PagedPool 1
@@ -75,6 +77,9 @@ typedef struct _LIST_ENTRY { struct _LIST_ENTRY *Flink, *Blink; } LIST_ENTRY, *P
 #define InitializeListHead(h) ((h)->Flink = (h)->Blink = (h))
 #define InsertTailList(h, e) do { PLIST_ENTRY h_ = (h), e_ = (e), b_ = h_->Blink; \
     e_->Flink = h_; e_->Blink = b_; b_->Flink = e_; h_->Blink = e_; } while (0)
+#define CONTAINING_RECORD(addr, type, field) \
+    ((type *)((char *)(addr) - (char *)(&((type *)0)->field)))
+#define RTL_CONSTANT_STRING(s) { (USHORT)(sizeof(s) - sizeof((s)[0])), (USHORT)sizeof(s), (PWSTR)(s) }
 
 typedef struct _UNICODE_STRING { USHORT Length, MaximumLength; PWSTR Buffer; } UNICODE_STRING, *PUNICODE_STRING;
 typedef const UNICODE_STRING *PCUNICODE_STRING;
@@ -82,12 +87,24 @@ typedef const UNICODE_STRING *PCUNICODE_STRING;
 typedef struct _KMUTANT { int Dummy; } KMUTANT;
 
 typedef struct _LDR_DATA_TABLE_ENTRY {
+    LIST_ENTRY InLoadOrderLinks;   /* PsLoadedModuleList link (boot walk iterates this) */
     PVOID DllBase;
     ULONG SizeOfImage;
     ULONG Flags;
     UNICODE_STRING BaseDllName;
     PVOID LoadedImports;
 } LDR_DATA_TABLE_ENTRY, *PLDR_DATA_TABLE_ENTRY;
+
+/* Boot-driver list (LoaderBlock->BootDriverListHead) entry. Minimal: the boot walk only reads Link
+ * (via CONTAINING_RECORD) and LdrEntry->DllBase. */
+typedef struct _BOOT_DRIVER_LIST_ENTRY {
+    LIST_ENTRY Link;
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+} BOOT_DRIVER_LIST_ENTRY, *PBOOT_DRIVER_LIST_ENTRY;
+
+typedef struct _LOADER_PARAMETER_BLOCK {
+    LIST_ENTRY BootDriverListHead;
+} LOADER_PARAMETER_BLOCK, *PLOADER_PARAMETER_BLOCK;
 
 typedef struct _DRIVER_OBJECT { PVOID DriverSection; } DRIVER_OBJECT, *PDRIVER_OBJECT;
 
@@ -126,3 +143,9 @@ extern const VF_THUNK VfPoolThunks[];
 extern const ULONG VfPoolThunkCount;
 extern const VF_THUNK VfIrqlThunks[];
 extern const ULONG VfIrqlThunkCount;
+extern const VF_THUNK VfIoThunks[];
+extern const ULONG VfIoThunkCount;
+
+/* Globals the boot walk reads; defined in the harness. */
+extern LIST_ENTRY PsLoadedModuleList;
+extern ULONG_PTR PsNtosImageBase;

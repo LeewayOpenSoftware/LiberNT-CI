@@ -32,7 +32,12 @@ extern "C" uint32_t lrm_vf_add_verifier_thunks(uint8_t list_init, size_t buf_siz
     uint8_t module_found, uintptr_t module_base, uintptr_t module_end, uint8_t loaded_imports_invalid,
     const uintptr_t *pristines, size_t n);
 extern "C" uint8_t lrm_vf_init_level(uint32_t verify_driver_level, uint8_t special_pool_enabled, uint8_t buffer_empty, uint32_t *out_level);
-extern "C" uint8_t lrm_vf_is_verified_driver_name(const uint16_t *buffer, size_t blen, const uint16_t *name, size_t nlen);
+extern "C" uint8_t lrm_vf_is_verified_driver_name(const uint16_t *buffer, size_t blen, const uint16_t *name, size_t nlen, uint8_t allow_wildcard);
+extern "C" uint8_t lrm_vf_boot_image_should_verify(uint8_t verifier_active, uintptr_t dll_base, uintptr_t ntos_base,
+    uint8_t is_boot_driver, const uint16_t *verify_list, size_t vlen, const uint16_t *name, size_t nlen);
+
+/* The boot walk itself (C). */
+extern "C" void NTAPI MiVerifyBootLoadedImages(PLOADER_PARAMETER_BLOCK LoaderBlock);
 
 /* ---- harness-controlled kernel stubs ---- */
 static PLDR_DATA_TABLE_ENTRY g_lookup;     /* MiLookupDataTableEntry result */
@@ -45,6 +50,10 @@ const VF_THUNK VfPoolThunks[] = { { 0, 0 } };
 const ULONG VfPoolThunkCount = 0;
 const VF_THUNK VfIrqlThunks[] = { { 0, 0 } };
 const ULONG VfIrqlThunkCount = 0;
+const VF_THUNK VfIoThunks[] = { { 0, 0 } };
+const ULONG VfIoThunkCount = 0;
+LIST_ENTRY PsLoadedModuleList;      /* the boot walk iterates this */
+ULONG_PTR PsNtosImageBase;          /* kernel image base (excluded by the walk) */
 
 unsigned long DbgPrint(const char *, ...) { return 0; }
 PVOID ExAllocatePoolWithTag(POOL_TYPE, SIZE_T b, ULONG) { return malloc(b ? b : 1); }
@@ -54,6 +63,8 @@ LONG KeReleaseMutant(KMUTANT *, LONG, BOOLEAN, BOOLEAN) { return 0; }
 PLDR_DATA_TABLE_ENTRY NTAPI MiLookupDataTableEntry(PVOID) { return g_lookup; }
 BOOLEAN MiIsSpecialPoolEnabled(void) { return g_special_pool; }
 void VfInitializePoolTracking(void) {}
+void NTAPI VfInitializeIrpTracking(void) {}          /* vfio.c; the boot walk doesn't need real tracking */
+void NTAPI VfInitializeDeadlockDetection(void) {}    /* vfdeadlock.c; ditto */
 PVOID NTAPI RtlImageDirectoryEntryToData(PVOID, BOOLEAN, USHORT, ULONG *Size) { if (Size) *Size = 0; return NULL; }
 BOOLEAN RtlEqualUnicodeString(PCUNICODE_STRING a, PCUNICODE_STRING b, BOOLEAN ci) {
     if (a->Length != b->Length) return FALSE;
@@ -186,25 +197,27 @@ static void test_verifier_enabled_active(void) {
 
 /* ---- MiIsVerifiedDriverName: Rust unit check (C is static) ---- */
 static int g_name_fail = 0, g_name_checks = 0;
-static void chk_name(const char *lbl, const char *buf, const char *nm, int expect) {
+static void chk_name(const char *lbl, const char *buf, const char *nm, int allow_wildcard, int expect) {
     uint16_t b[64], n[64]; size_t bl = 0, nl = 0;
     for (const char *p = buf; *p && bl < 63; p++) b[bl++] = (uint16_t)(unsigned char)*p;
     for (const char *p = nm; *p && nl < 63; p++) n[nl++] = (uint16_t)(unsigned char)*p;
-    int got = lrm_vf_is_verified_driver_name(b, bl, n, nl);
+    int got = lrm_vf_is_verified_driver_name(b, bl, n, nl, (uint8_t)allow_wildcard);
     g_name_checks++;
     if (got != expect) { g_name_fail++; std::fprintf(stderr, "NAME FAIL %s: buf='%s' nm='%s' got=%d want=%d\n", lbl, buf, nm, got, expect); }
 }
 static void test_name_unit(void) {
-    chk_name("exact", "ntfs.sys", "ntfs.sys", 1);
-    chk_name("ci", "NTFS.SYS", "ntfs.sys", 1);
-    chk_name("list-mid", "a.sys ntfs.sys b.sys", "ntfs.sys", 1);
-    chk_name("sep-comma", "a.sys,ntfs.sys", "ntfs.sys", 1);
-    chk_name("sep-semi", "a.sys;ntfs.sys", "ntfs.sys", 1);
-    chk_name("wildcard", "*", "anything.sys", 1);
-    chk_name("no-match", "a.sys b.sys", "ntfs.sys", 0);
-    chk_name("empty", "", "ntfs.sys", 0);
-    chk_name("prefix-not-match", "ntfs.sys", "ntfs", 0);
-    chk_name("star-not-lone", "a*b", "ntfs.sys", 0);
+    chk_name("exact", "ntfs.sys", "ntfs.sys", 1, 1);
+    chk_name("ci", "NTFS.SYS", "ntfs.sys", 1, 1);
+    chk_name("list-mid", "a.sys ntfs.sys b.sys", "ntfs.sys", 1, 1);
+    chk_name("sep-comma", "a.sys,ntfs.sys", "ntfs.sys", 1, 1);
+    chk_name("sep-semi", "a.sys;ntfs.sys", "ntfs.sys", 1, 1);
+    chk_name("wildcard-allowed", "*", "anything.sys", 1, 1);
+    chk_name("wildcard-denied", "*", "anything.sys", 0, 0);           /* AllowWildcard=0 -> lone * does not match */
+    chk_name("wildcard-denied-but-explicit", "* ntfs.sys", "ntfs.sys", 0, 1); /* explicit name still matches past a denied * */
+    chk_name("no-match", "a.sys b.sys", "ntfs.sys", 1, 0);
+    chk_name("empty", "", "ntfs.sys", 1, 0);
+    chk_name("prefix-not-match", "ntfs.sys", "ntfs", 1, 0);
+    chk_name("star-not-lone", "a*b", "ntfs.sys", 1, 0);
 }
 
 static void run(int neg) {
@@ -213,23 +226,93 @@ static void run(int neg) {
     test_init_level(neg);
 }
 
+/* ---- Stage 1b boot walk: MiVerifyBootLoadedImages per-image decision vs lrm_vf_boot_image_should_verify.
+ * The walk/iteration stays in C; we compare, per loaded image, whether C verified it (it sets
+ * LDRP_IMAGE_VERIFYING on the entry) against the Rust decision. Covers: kernel excluded by base, HAL
+ * excluded by name, a lone '*' matching only boot drivers, an explicit name matching a non-boot image. */
+static long g_bw_verified = 0, g_bw_skipped = 0;
+
+static void bw_setname(LDR_DATA_TABLE_ENTRY *e, uint16_t *buf, const char *nm) {
+    size_t n = 0;
+    for (const char *p = nm; *p && n < 63; p++) buf[n++] = (uint16_t)(unsigned char)*p;
+    buf[n] = 0;
+    e->BaseDllName.Buffer = (PWSTR)buf;
+    e->BaseDllName.Length = (USHORT)(n * sizeof(uint16_t));
+    e->BaseDllName.MaximumLength = (USHORT)((n + 1) * sizeof(uint16_t));
+}
+
+static void test_bootwalk(int neg) {
+    /* Activate the verifier with a VerifyDrivers list of "* explicit.sys". */
+    size_t vlen = 0;
+    const char *vlist = "* explicit.sys";
+    for (const char *p = vlist; *p; p++) MmVerifyDriverBuffer[vlen++] = (WCHAR)(unsigned char)*p;
+    MmVerifyDriverBuffer[vlen] = UNICODE_NULL;
+    MmVerifyDriverLevel = 0xFFFFFFFF; g_special_pool = TRUE; MmVerifierData.Level = 0;
+    MiInitializeDriverVerifier();   /* -> MiVerifierActive = TRUE */
+
+    static uint16_t nm_k[64], nm_h[64], nm_bd[64], nm_nb[64], nm_ex[64];
+    LDR_DATA_TABLE_ENTRY kern{}, hal{}, bootdrv{}, nonboot{}, expl{};
+    kern.DllBase = (PVOID)0x100000; PsNtosImageBase = (ULONG_PTR)kern.DllBase;
+    hal.DllBase = (PVOID)0x200000; bootdrv.DllBase = (PVOID)0x300000;
+    nonboot.DllBase = (PVOID)0x400000; expl.DllBase = (PVOID)0x500000;
+    kern.SizeOfImage = hal.SizeOfImage = bootdrv.SizeOfImage = nonboot.SizeOfImage = expl.SizeOfImage = 0x1000;
+    bw_setname(&kern, nm_k, "ntoskrnl.exe"); bw_setname(&hal, nm_h, "hal.dll");
+    bw_setname(&bootdrv, nm_bd, "bootdrv.sys"); bw_setname(&nonboot, nm_nb, "nonboot.sys");
+    bw_setname(&expl, nm_ex, "explicit.sys");
+
+    InitializeListHead(&PsLoadedModuleList);
+    InsertTailList(&PsLoadedModuleList, &kern.InLoadOrderLinks);
+    InsertTailList(&PsLoadedModuleList, &hal.InLoadOrderLinks);
+    InsertTailList(&PsLoadedModuleList, &bootdrv.InLoadOrderLinks);
+    InsertTailList(&PsLoadedModuleList, &nonboot.InLoadOrderLinks);
+    InsertTailList(&PsLoadedModuleList, &expl.InLoadOrderLinks);
+
+    LOADER_PARAMETER_BLOCK lpb;
+    InitializeListHead(&lpb.BootDriverListHead);
+    BOOT_DRIVER_LIST_ENTRY bde{};            /* only bootdrv.sys is a boot driver */
+    bde.LdrEntry = &bootdrv;
+    InsertTailList(&lpb.BootDriverListHead, &bde.Link);
+
+    MiVerifyBootLoadedImages(&lpb);
+
+    struct Img { LDR_DATA_TABLE_ENTRY *e; int is_boot; const char *nm; };
+    Img imgs[5] = { {&kern,0,"ntoskrnl.exe"}, {&hal,0,"hal.dll"}, {&bootdrv,1,"bootdrv.sys"},
+                    {&nonboot,0,"nonboot.sys"}, {&expl,0,"explicit.sys"} };
+    uint16_t vbuf[64]; size_t vb = 0;
+    for (WCHAR *p = MmVerifyDriverBuffer; *p && vb < 63; p++) vbuf[vb++] = (uint16_t)*p;
+    for (int i = 0; i < 5; i++) {
+        int c_verified = (imgs[i].e->Flags & LDRP_IMAGE_VERIFYING) ? 1 : 0;
+        uint16_t nb[64]; size_t nl = 0;
+        for (const char *p = imgs[i].nm; *p; p++) nb[nl++] = (uint16_t)(unsigned char)*p;
+        uint8_t ib = neg ? (uint8_t)(!imgs[i].is_boot) : (uint8_t)imgs[i].is_boot;
+        int r = lrm_vf_boot_image_should_verify(1, (uintptr_t)imgs[i].e->DllBase, PsNtosImageBase,
+                                                ib, vbuf, vb, nb, nl);
+        g_checks++;
+        if (!neg) { if (c_verified) g_bw_verified++; else g_bw_skipped++; }
+        if (c_verified != r) { g_dis++; if (g_dis <= 25) std::fprintf(stderr, "BW DISAGREE %s c=%d r=%d\n", imgs[i].nm, c_verified, r); }
+    }
+}
+
 int main(void) {
     test_verifier_enabled_inactive();   /* before any init: MiVerifierActive == FALSE */
     run(0);
     test_verifier_enabled_active();     /* after an enabling init */
     test_name_unit();
+    test_bootwalk(0);
 
-    std::printf("[vf-1b] checks=%ld disagreements=%ld (true=%ld false=%ld; status S=%ld NS=%ld IP1=%ld IP2=%ld) name=%ld/%ld\n",
+    std::printf("[vf-1b] checks=%ld disagreements=%ld (true=%ld false=%ld; status S=%ld NS=%ld IP1=%ld IP2=%ld) name=%ld/%ld bootwalk(verified=%ld skipped=%ld)\n",
                 g_checks, g_dis, g_cov_true, g_cov_false,
                 g_cov_status[0], g_cov_status[1], g_cov_status[2], g_cov_status[3],
-                g_name_checks - g_name_fail, g_name_checks);
+                g_name_checks - g_name_fail, g_name_checks, g_bw_verified, g_bw_skipped);
     long dis0 = g_dis;
     bool nonvacuous = (g_cov_true > 0 && g_cov_false > 0 &&
                        g_cov_status[0] > 0 && g_cov_status[1] > 0 && g_cov_status[2] > 0 && g_cov_status[3] > 0 &&
-                       g_name_fail == 0 && g_name_checks > 0);
+                       g_name_fail == 0 && g_name_checks > 0 &&
+                       g_bw_verified > 0 && g_bw_skipped > 0);
 
     g_dis = 0; long saved = g_checks; g_checks = 0;
     run(1);
+    test_bootwalk(1);
     long negdis = g_dis; g_checks = saved;
     std::printf("[vf-1b] negative-control disagreements=%ld (expect > 0)\n", negdis);
 
