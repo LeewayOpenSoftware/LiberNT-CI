@@ -449,6 +449,13 @@ DATA_SEG("INITDATA") CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
     },
     {
         L"Session Manager\\Memory Management",
+        L"VerifierFaultInjection",
+        &VfFaultInjection,
+        NULL,
+        NULL
+    },
+    {
+        L"Session Manager\\Memory Management",
         L"VerifyMode",
         &DummyData,
         NULL,

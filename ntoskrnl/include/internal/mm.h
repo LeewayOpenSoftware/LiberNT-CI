@@ -1060,6 +1060,16 @@ NTAPI
 VfCheckIrpsAtUnload(
     IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
 
+extern ULONG VfFaultInjection;
+
+BOOLEAN
+NTAPI
+VfFaultFailWrite(
+    _In_ struct _DEVICE_OBJECT *DeviceObject,
+    _Inout_ struct _IRP *Irp,
+    _In_ PVOID Caller,
+    _Out_ PNTSTATUS CallStatus);
+
 VOID
 NTAPI
 VfInitializeDeadlockDetection(VOID);

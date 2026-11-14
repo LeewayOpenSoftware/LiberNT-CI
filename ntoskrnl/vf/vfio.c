@@ -567,6 +567,9 @@ VfpCallDriver(
 
     VfpCheckCall(DeviceObject, Irp);
 
+    if (VfFaultInjection != 0 && VfFaultFailWrite(DeviceObject, Irp, Caller, &Status))
+        return Status;
+
     if (VfIrpTrackingEnabled)
     {
         if (Irp->CancelRoutine != NULL)
