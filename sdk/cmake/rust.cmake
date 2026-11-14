@@ -15,7 +15,20 @@
 option(LIBERNT_ENABLE_RUST "Build Rust components (experimental, not part of the ISO)" OFF)
 
 set(LIBERNT_RUST_TOOLCHAIN "1.97.1" CACHE STRING "Pinned Rust toolchain (rustup name)")
-set(LIBERNT_RUST_TARGET "x86_64-pc-windows-gnu" CACHE STRING "Rust target for kernel-mode staticlibs")
+# The kernel Rust target follows the C toolchain so the Rust objects match the kernel ABI and the
+# linker that consumes them. MSVC / clang-cl -> *-pc-windows-msvc (COFF, read by link.exe/lld-link);
+# the clang/RosBE GNU-driver build -> *-pc-windows-gnu. amd64 and (MSVC) i386 are supported; an
+# explicit -DLIBERNT_RUST_TARGET overrides this default.
+if(MSVC)
+    if(ARCH STREQUAL "i386")
+        set(_libernt_rust_default_target "i686-pc-windows-msvc")
+    else()
+        set(_libernt_rust_default_target "x86_64-pc-windows-msvc")
+    endif()
+else()
+    set(_libernt_rust_default_target "x86_64-pc-windows-gnu")
+endif()
+set(LIBERNT_RUST_TARGET "${_libernt_rust_default_target}" CACHE STRING "Rust target for kernel-mode staticlibs")
 
 set(_LIBERNT_RUST_BUILD_SCRIPT ${CMAKE_CURRENT_LIST_DIR}/rust-build.cmake)
 

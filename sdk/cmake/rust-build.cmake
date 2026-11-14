@@ -58,6 +58,18 @@ set(ENV{RUSTUP_TOOLCHAIN} "${TOOLCHAIN}")
 set(ENV{RUSTC} "${_rustc}")
 set(ENV{CARGO_HOME} "${_cargo_home}")
 set(ENV{CARGO_TARGET_DIR} "${_tgt_native}")
+# i686 kernel code: the x86 NT kernel does not preserve XMM (legal only inside
+# KeSaveFloatingPointState), and x86 stack walks need the EBP chain. Disable SSE/SSE2 and force
+# frame pointers. rustc 1.97.1 warns disabling sse2 on i686 will become a hard error
+# (rust-lang/rust#116344); the planned exit is a soft-float i686 target spec or
+# KeSaveFloatingPointState wrappers, decided when the warning turns hard (not a deferral).
+if(RUST_TARGET MATCHES "^i686-")
+    string(APPEND _rustflags " -Ctarget-feature=-sse,-sse2 -Cforce-frame-pointers=yes")
+endif()
+# MSVC leg: line tables so Rust frames symbolise in the PDB (paths already remapped -> reproducible).
+if(RUST_TARGET MATCHES "windows-msvc")
+    string(APPEND _rustflags " -Cdebuginfo=line-tables-only")
+endif()
 set(ENV{RUSTFLAGS} "${_rustflags}")
 set(ENV{CARGO_INCREMENTAL} "0")
 unset(ENV{CARGO_BUILD_RUSTFLAGS})

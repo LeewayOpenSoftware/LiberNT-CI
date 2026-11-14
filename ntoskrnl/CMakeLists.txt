@@ -179,8 +179,8 @@ add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
 # shim + self-test. Opt-in, amd64 only. lrm_rs imports at most one kernel symbol (LrmRsFatalStop, the
 # panic-policy target); its runtime helpers resolve from the kernel's own libraries at the ntoskrnl link.
 if(LIBERNT_ENABLE_LRM_RS)
-    if(NOT ARCH STREQUAL "amd64")
-        message(FATAL_ERROR "LIBERNT_ENABLE_LRM_RS is amd64 only (Leeway x64).")
+    if(NOT ARCH STREQUAL "amd64" AND NOT ARCH STREQUAL "i386")
+        message(FATAL_ERROR "LIBERNT_ENABLE_LRM_RS supports amd64 and i386 (MSVC) only; no LiberNT arm64 ntoskrnl exists.")
     endif()
     # Decoupled from LIBERNT_ENABLE_RUST (shape B): lrm_rs builds via add_rust_staticlib (always
     # defined by sdk/cmake/rust.cmake), so the production kernel gets the Rust special pool without
