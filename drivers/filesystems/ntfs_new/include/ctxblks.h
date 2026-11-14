@@ -56,6 +56,9 @@ typedef struct _VolumeContextBlock
     BOOLEAN Dismounted;
     /* Dismounted in the BootExecute window: autochk repaired the boot volume and restarts. */
     BOOLEAN BootRepairDismount;
+    /* The release ran but something still used the volume, so the volume
+     * device was kept: the next release tries again. Under VolumeStateMutex. */
+    BOOLEAN DeleteBlocked;
     FAST_MUTEX StreamListMutex;
     LIST_ENTRY StreamList;
     LIST_ENTRY StreamHash[256];
@@ -212,7 +215,8 @@ VOID
 NtfsReleaseDismountedVolume(_In_ PDEVICE_OBJECT VolumeDeviceObject);
 
 VOID
-NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject);
+NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                                     _In_opt_ PDEVICE_OBJECT RealDevice);
 
 /* Frees every cached record not in use; returns how many were in use. */
 ULONG

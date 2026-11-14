@@ -25,6 +25,7 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
              _Inout_ PIRP Irp)
 {
     BOOLEAN LastFileObject = FALSE;
+    PDEVICE_OBJECT RealDevice = NULL;
 
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject)
         NtfsBindVolumeDisk((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension);
@@ -151,6 +152,14 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
             NtfsDropFileObject(VolCB);
             LastFileObject = VolCB->Dismounted && VolCB->FileObjectCount == 0;
+            if (LastFileObject)
+            {
+                /* From here a PnP remove on another thread may release the
+                 * volume and delete its device. The reference keeps the
+                 * device object until this close is done with it. */
+                ObReferenceObject(VolumeDeviceObject);
+                RealDevice = IrpSp->FileObject->DeviceObject;
+            }
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
         }
     }
@@ -158,6 +167,9 @@ NtfsFsdClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     Irp->IoStatus.Information = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     if (LastFileObject)
-        NtfsReleaseDismountedVolumeFromClose(VolumeDeviceObject);
+    {
+        NtfsReleaseDismountedVolumeFromClose(VolumeDeviceObject, RealDevice);
+        ObDereferenceObject(VolumeDeviceObject);
+    }
     return STATUS_SUCCESS;
 }

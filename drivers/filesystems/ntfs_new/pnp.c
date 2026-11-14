@@ -99,11 +99,11 @@ NtfsMarkVolumeRemoved(
 /*
  * The last file object of a dismounted volume is gone and the release ran:
  * free what the mount built and delete the volume device. Anything that
- * still refers to the volume keeps the device in place, as before this
- * change, and says so once in the log.
+ * still refers to the volume keeps the device in place and says so in the
+ * log; FALSE is returned then, and the next release tries again.
  */
 static
-VOID
+BOOLEAN
 NtfsDeleteDismountedVolume(
     _In_ PDEVICE_OBJECT VolumeDeviceObject,
     _In_ PVolumeContextBlock VolCB)
@@ -176,19 +176,24 @@ NtfsDeleteDismountedVolume(
 
     /* A dismount swapped a spare VPB onto the real device and made this
      * one persistent, so the I/O manager never frees it: that is this
-     * driver's job, once nothing refers to it.
+     * driver's job, once nothing refers to it. Only that swap sets the
+     * persistent flag, so the flag tells the two cases apart and the real
+     * device, which may be gone by now, is not read.
      * A PnP remove of a volume that was never dismounted swapped nothing:
      * the VPB is still the one of the real device and it stays with it. It
-     * is only taken away from this volume device, in the same hold of the
-     * lock that found it unreferenced, so that no mount comes in between. */
+     * is only taken away from this volume device. The count and the volume
+     * device are read and cleared in one hold of the VPB lock, so a file
+     * object cannot take a reference in between. A new mount is not
+     * expected either: the I/O manager refuses to mount on a device that is
+     * being removed (VPB_REMOVE_PENDING), and a VPB that names another
+     * volume device is left as it is. */
     Vpb = VolCB->Vpb;
     IoAcquireVpbSpinLock(&OldIrql);
-    if (Vpb != NULL && Vpb->ReferenceCount == 0 && Vpb->RealDevice != NULL)
+    if (Vpb != NULL && Vpb->ReferenceCount == 0)
     {
-        if (Vpb->RealDevice->Vpb != Vpb)
+        if (Vpb->Flags & VPB_PERSISTENT)
         {
-            if (Vpb->Flags & VPB_PERSISTENT)
-                FreeVpb = TRUE;
+            FreeVpb = TRUE;
         }
         else if (Blocker == NULL)
         {
@@ -206,8 +211,9 @@ NtfsDeleteDismountedVolume(
 
     if (Blocker != NULL)
     {
-        DPRINT1("NTFS: dismounted volume %p kept (%s)\n", VolumeDeviceObject, Blocker);
-        return;
+        DPRINT1("NTFS: dismounted volume %p kept (%s); its device and memory stay until a later close or "
+                "PnP remove can release them\n", VolumeDeviceObject, Blocker);
+        return FALSE;
     }
 
     /* The dismount path unregistered already; the PnP remove path did not */
@@ -232,14 +238,16 @@ NtfsDeleteDismountedVolume(
         VolCB->Vpb = NULL;
         if (FreeVpb)
             ExFreePool(Vpb);
-        else
-            DPRINT1("NTFS: removed volume %p was never dismounted, its VPB stays with the real device\n",
-                    VolumeDeviceObject);
     }
 
-    DPRINT1("NTFS: dismounted volume %p released after its last file object, device deleted\n",
-            VolumeDeviceObject);
+    if (VpbStays)
+        DPRINT1("NTFS: removed volume %p released after its last file object, device deleted "
+                "(never dismounted, the VPB stays with the real device)\n", VolumeDeviceObject);
+    else
+        DPRINT1("NTFS: dismounted volume %p released after its last file object, device deleted\n",
+                VolumeDeviceObject);
     IoDeleteDevice(VolumeDeviceObject);
+    return TRUE;
 }
 
 VOID
@@ -249,11 +257,16 @@ NtfsReleaseDismountedVolume(
     PVolumeContextBlock VolCB =
         (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     PFILE_OBJECT StreamFileObject = NULL;
+    BOOLEAN Retry = FALSE;
     KIRQL OldIrql;
 
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
     if (VolCB->Dismounted && VolCB->FileObjectCount == 0 && !VolCB->BootRepairDismount)
     {
+        /* Whoever takes the stream file object or the blocked mark is the
+         * only one that deletes */
+        Retry = VolCB->DeleteBlocked;
+        VolCB->DeleteBlocked = FALSE;
         StreamFileObject = VolCB->StreamFileObject;
         VolCB->StreamFileObject = NULL;
         if (StreamFileObject && VolCB->VolumeLockOwner == StreamFileObject)
@@ -276,7 +289,14 @@ NtfsReleaseDismountedVolume(
          * retried by the lazy writer, fail-closed). */
         NtfsDiskReleaseKm(VolCB->StorageDevice);
         ObDereferenceObject(StreamFileObject);
-        NtfsDeleteDismountedVolume(VolumeDeviceObject, VolCB);
+        Retry = TRUE;
+    }
+
+    if (Retry && !NtfsDeleteDismountedVolume(VolumeDeviceObject, VolCB))
+    {
+        ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+        VolCB->DeleteBlocked = TRUE;
+        ExReleaseFastMutex(&VolCB->VolumeStateMutex);
     }
 }
 
@@ -307,9 +327,9 @@ NtfsReleaseDismountedVolumeWorker(_In_ PVOID Context)
  * above PASSIVE_LEVEL (a deferred dereference from Cc or Mm); the release
  * flushes and waits, so it runs on a worker then. */
 VOID
-NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject)
+NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                                     _In_opt_ PDEVICE_OBJECT RealDevice)
 {
-    PVolumeContextBlock VolCB = (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
     PNTFS_RELEASE_WORK Work;
 
     if (KeGetCurrentIrql() == PASSIVE_LEVEL)
@@ -329,9 +349,10 @@ NtfsReleaseDismountedVolumeFromClose(_In_ PDEVICE_OBJECT VolumeDeviceObject)
     }
     ObReferenceObject(VolumeDeviceObject);
     Work->VolumeDeviceObject = VolumeDeviceObject;
-    /* The release reads the real device through the VPB. The file object
-     * that is being closed keeps that device only until this close returns. */
-    Work->RealDevice = VolCB->Vpb ? VolCB->Vpb->RealDevice : NULL;
+    /* The file object that is being closed keeps the real device only until
+     * this close returns. The device must outlive the release, so that the
+     * I/O manager finds its VPB free of this volume when it deletes it. */
+    Work->RealDevice = RealDevice;
     if (Work->RealDevice)
         ObReferenceObject(Work->RealDevice);
     ExInitializeWorkItem(&Work->Item, NtfsReleaseDismountedVolumeWorker, Work);
