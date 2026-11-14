@@ -282,7 +282,6 @@ MmFreeSpecialPool(
 /* Concurrent special-pool workload for the SMP2 mode: on another CPU, keep allocating/freeing special
  * pool so the region lock is genuinely contended when the trigger thread panics holding it. Never
  * returns meaningfully (the box bug-checks); no cleanup needed. */
-static VOID NTAPI
 static volatile LONG MiSpecialPoolPanicLoadCount;   /* bumped each iteration by the load thread */
 
 static VOID NTAPI
