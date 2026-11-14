@@ -929,6 +929,11 @@ public:
     void
     RetainDirty(_In_ BOOLEAN Retain);
 
+    /* After a check that wrote nothing: clear the flag, retained or not, and
+     * the corruption note. Caller holds the metadata lock. */
+    NTSTATUS
+    MarkCleanAfterCheck();
+
     /* Records that a read met corrupt on-disk structure. No I/O: callable
      * from any read path. The next metadata write, or the clean dismount,
      * makes the dirty flag durable and keeps it (see CorruptionNoted). */

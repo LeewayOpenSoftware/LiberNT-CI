@@ -383,3 +383,32 @@ Volume::MarkCleanForShutdown()
         ShutdownCleaned = TRUE;
     return Status;
 }
+
+/*
+ * The checker locked the volume, read it whole and wrote nothing: the medium
+ * is consistent and this instance saw the same medium, so the flag the volume
+ * was mounted with (retained, so MarkClean leaves it) and a corruption note
+ * can go. The flag goes through this instance, so its own lifecycle agrees
+ * with the medium afterwards, which a raw clear under it would not give.
+ */
+NTSTATUS
+Volume::MarkCleanAfterCheck()
+{
+    NTSTATUS Status;
+
+    if (!DirtyTracking || IsReadOnly)
+        return STATUS_SUCCESS;
+    Status = FlushVolume();
+    if (NT_SUCCESS(Status))
+        Status = SetVolumeFlags(0, VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN);
+    if (NT_SUCCESS(Status))
+        Status = FlushVolume();
+    if (NT_SUCCESS(Status))
+    {
+        DirtyMarked = FALSE;
+        DirtyRetained = FALSE;
+        CorruptionNoted = FALSE;
+        CorruptionCommitTried = FALSE;
+    }
+    return Status;
+}
