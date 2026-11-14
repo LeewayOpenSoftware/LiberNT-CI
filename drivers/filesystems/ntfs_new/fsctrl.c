@@ -2033,8 +2033,11 @@ NtfsClearDirtyAfterCheck(
     NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
 
-    DPRINT1("NTFS: volume %p checked clean, dirty flag cleared, instance kept (0x%08lx)\n",
-            VolumeDeviceObject, Status);
+    if (NT_SUCCESS(Status))
+        DPRINT1("NTFS: volume %p checked clean, dirty flag cleared, instance kept\n", VolumeDeviceObject);
+    else
+        DPRINT1("NTFS: volume %p checked clean, but the instance cannot clear the flag (0x%08lx); the checker dismounts it\n",
+                VolumeDeviceObject, Status);
     return Status;
 }
 

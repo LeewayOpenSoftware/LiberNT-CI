@@ -681,6 +681,10 @@ public:
      * valid: the volume must stay dirty so the next boot checks it. Readers
      * may set it without the metadata lock, so it is only ever stored TRUE. */
     volatile BOOLEAN CorruptionNoted = FALSE;
+    /* Set (never cleared) when a metadata write of THIS instance failed: the
+     * instance then holds an update the medium never got, so a check of the
+     * medium says nothing about the instance (see MarkCleanAfterCheck). */
+    BOOLEAN LostWriteNoted = FALSE;
     /* Set once CommitCorruptionDirtyOnce has made its single attempt. */
     BOOLEAN CorruptionCommitTried = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
