@@ -38,10 +38,10 @@ rc=0
 for seed in $SEEDS; do
     echo "== seed $seed, $ITERS iterations"
     status=0
-    stdbuf -oL "$BIN" --seed "$seed" "$ITERS" > "$STAGE/out.txt" 2>&1 || status=$?
+    "$BIN" --seed "$seed" "$ITERS" > "$STAGE/out.txt" 2>&1 || status=$?
     cat "$STAGE/out.txt"
     if [ "$status" -ne 0 ]; then
-        echo "rig exited with status $status (a sanitizer report or a mismatch above)" >&2
+        echo "rig exited with status $status (a sanitizer report or a mismatch; output may be cut short)" >&2
         rc=1
         continue
     fi
