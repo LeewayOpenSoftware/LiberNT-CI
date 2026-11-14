@@ -326,17 +326,6 @@ MiVerifyLoadedImage(
     MiVerifyImage(LdrEntry);
 }
 
-VOID
-NTAPI
-MiVerifyLoadedImage(
-    _In_ PLDR_DATA_TABLE_ENTRY LdrEntry)
-{
-    if (!MiVerifierActive || !MiIsVerifiedDriverName(&LdrEntry->BaseDllName, TRUE))
-        return;
-
-    MiVerifyImage(LdrEntry);
-}
-
 static
 BOOLEAN
 MiIsBootDriverImage(
