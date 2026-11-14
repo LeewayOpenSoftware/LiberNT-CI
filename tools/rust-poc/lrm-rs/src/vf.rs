@@ -525,3 +525,215 @@ pub unsafe extern "C" fn lrm_vf_check_at_unload(entries: *const TrackEntry, cap:
     }
     0
 }
+
+// ======================================================================================
+// Stage 1b — Driver Verifier APIs (mirror of ntoskrnl/nvs/nt/ntdrvmgmt.c @ 5f5f92ed47a).
+// The four APIs below are byte-identical at the later head; the level mask broadened there
+// (adds IO/DEADLOCK), which is deferred with those unstable stages. Our code.
+// ======================================================================================
+
+// NTSTATUS values (public), as u32 bit patterns.
+pub const STATUS_SUCCESS: u32 = 0x0000_0000;
+const STATUS_NOT_SUPPORTED: u32 = 0xC000_00BB;
+const STATUS_INVALID_PARAMETER_1: u32 = 0xC000_00EF;
+const STATUS_INVALID_PARAMETER_2: u32 = 0xC000_00F0;
+
+// Verifier level bits (public Driver Verifier flags) and the implemented set at the pinned SHA.
+const DRIVER_VERIFIER_SPECIAL_POOLING: u32 = 0x1;
+const DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS: u32 = 0x8;
+const MI_VERIFIER_IMPLEMENTED_LEVEL: u32 = DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS; // 0x9
+
+// Internal LDR flag (fed identically to both sides in the differential).
+const LDRP_IMAGE_VERIFYING: u32 = 0x0002_0000;
+
+// ASCII separators / wildcard / case-fold, as UTF-16 code units.
+const SEP_SPACE: u16 = 0x20;
+const SEP_TAB: u16 = 0x09;
+const SEP_COMMA: u16 = 0x2C;
+const SEP_SEMI: u16 = 0x3B;
+const WILDCARD: u16 = 0x2A; // '*'
+const UC_A: u16 = 0x41; // 'A'
+const UC_Z: u16 = 0x5A; // 'Z'
+
+/// `MmIsVerifierEnabled`: active -> (level, STATUS_SUCCESS); else (0, STATUS_NOT_SUPPORTED).
+pub fn is_verifier_enabled(active: bool, level: u32) -> (u32, u32) {
+    if active {
+        (level, STATUS_SUCCESS)
+    } else {
+        (0, STATUS_NOT_SUPPORTED)
+    }
+}
+
+/// `MmIsDriverVerifying`: no LDR section -> false; else the `LDRP_IMAGE_VERIFYING` flag.
+pub fn is_driver_verifying(ldr_present: bool, flags: u32) -> bool {
+    ldr_present && (flags & LDRP_IMAGE_VERIFYING) != 0
+}
+
+/// `MmAddVerifierThunks` validation -> NTSTATUS. `sizeof_pair` is `sizeof(DRIVER_VERIFIER_THUNK_PAIRS)`;
+/// `module_found`/`module_base`/`module_end` describe the module `PristineRoutine` resolves to;
+/// `loaded_imports_invalid` is `LoadedImports == (PVOID)-1`; `pristines` are the thunk PristineRoutines.
+pub fn add_verifier_thunks(
+    list_init: bool,
+    buf_size: usize,
+    sizeof_pair: usize,
+    module_found: bool,
+    module_base: usize,
+    module_end: usize,
+    loaded_imports_invalid: bool,
+    pristines: &[usize],
+) -> u32 {
+    if !list_init {
+        return STATUS_NOT_SUPPORTED;
+    }
+    let count = if sizeof_pair == 0 { 0 } else { buf_size / sizeof_pair };
+    if count == 0 {
+        return STATUS_INVALID_PARAMETER_1;
+    }
+    if !module_found {
+        return STATUS_INVALID_PARAMETER_2;
+    }
+    if loaded_imports_invalid {
+        return STATUS_INVALID_PARAMETER_2;
+    }
+    for &p in pristines.iter().take(count) {
+        if p < module_base || p >= module_end {
+            return STATUS_INVALID_PARAMETER_2;
+        }
+    }
+    STATUS_SUCCESS
+}
+
+/// `MiInitializeDriverVerifier` level computation: `None` = verifier not enabled (no active state);
+/// `Some(level)` = the level recorded (and the verifier becomes active). `verify_driver_level` is
+/// `MmVerifyDriverLevel` (`0xFFFFFFFF` = unset -> the implemented default).
+pub fn init_level(verify_driver_level: u32, special_pool_enabled: bool, buffer_empty: bool) -> Option<u32> {
+    if buffer_empty {
+        return None;
+    }
+    let mut level = if verify_driver_level == 0xFFFF_FFFF {
+        MI_VERIFIER_IMPLEMENTED_LEVEL
+    } else {
+        verify_driver_level
+    };
+    level &= MI_VERIFIER_IMPLEMENTED_LEVEL;
+    if !special_pool_enabled {
+        level &= !DRIVER_VERIFIER_SPECIAL_POOLING;
+    }
+    if level == 0 {
+        return None;
+    }
+    Some(level)
+}
+
+#[inline]
+fn is_name_sep(c: u16) -> bool {
+    c == SEP_SPACE || c == SEP_TAB || c == SEP_COMMA || c == SEP_SEMI
+}
+
+#[inline]
+fn ascii_fold(c: u16) -> u16 {
+    if (UC_A..=UC_Z).contains(&c) {
+        c + 32
+    } else {
+        c
+    }
+}
+
+/// `MiIsVerifiedDriverName`: is `name` in the space/tab/comma/semicolon-separated `buffer`
+/// (UTF-16), or does the buffer contain the single `*`? Name match is case-insensitive (ASCII).
+/// (The C is `static`, reached only via `MiVerifyLoadedImage`; host-unit-tested, not differential.)
+pub fn is_verified_driver_name(buffer: &[u16], name: &[u16]) -> bool {
+    let mut i = 0usize;
+    loop {
+        while i < buffer.len() && buffer[i] != 0 && is_name_sep(buffer[i]) {
+            i += 1;
+        }
+        if i >= buffer.len() || buffer[i] == 0 {
+            return false;
+        }
+        let start = i;
+        while i < buffer.len() && buffer[i] != 0 && !is_name_sep(buffer[i]) {
+            i += 1;
+        }
+        let tok = &buffer[start..i];
+        if tok.len() == 1 && tok[0] == WILDCARD {
+            return true;
+        }
+        if tok.len() == name.len() && tok.iter().zip(name.iter()).all(|(&a, &b)| ascii_fold(a) == ascii_fold(b)) {
+            return true;
+        }
+    }
+}
+
+// ---- C ABI for the Stage 1b differential ----
+
+/// `MmIsVerifierEnabled` classifier: writes flags to `*out_flags`, returns the NTSTATUS (u32).
+/// # Safety
+/// `out_flags` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn lrm_vf_is_verifier_enabled(active: u8, level: u32, out_flags: *mut u32) -> u32 {
+    let (f, s) = is_verifier_enabled(active != 0, level);
+    if !out_flags.is_null() {
+        unsafe { *out_flags = f };
+    }
+    s
+}
+
+/// `MmIsDriverVerifying`.
+#[no_mangle]
+pub extern "C" fn lrm_vf_is_driver_verifying(ldr_present: u8, flags: u32) -> u8 {
+    is_driver_verifying(ldr_present != 0, flags) as u8
+}
+
+/// `MmAddVerifierThunks` validation -> NTSTATUS (u32).
+/// # Safety
+/// `pristines` must point to `n` valid `usize` values (may be null if `n == 0`).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn lrm_vf_add_verifier_thunks(
+    list_init: u8,
+    buf_size: usize,
+    sizeof_pair: usize,
+    module_found: u8,
+    module_base: usize,
+    module_end: usize,
+    loaded_imports_invalid: u8,
+    pristines: *const usize,
+    n: usize,
+) -> u32 {
+    let slice = if pristines.is_null() || n == 0 {
+        &[][..]
+    } else {
+        // SAFETY: caller guarantees `pristines` valid for `n`.
+        unsafe { core::slice::from_raw_parts(pristines, n) }
+    };
+    add_verifier_thunks(list_init != 0, buf_size, sizeof_pair, module_found != 0, module_base, module_end, loaded_imports_invalid != 0, slice)
+}
+
+/// `MiInitializeDriverVerifier` level computation: returns 1 and writes the level to `*out_level`
+/// when the verifier becomes active, else 0.
+/// # Safety
+/// `out_level` must be writable.
+#[no_mangle]
+pub unsafe extern "C" fn lrm_vf_init_level(verify_driver_level: u32, special_pool_enabled: u8, buffer_empty: u8, out_level: *mut u32) -> u8 {
+    match init_level(verify_driver_level, special_pool_enabled != 0, buffer_empty != 0) {
+        Some(l) => {
+            if !out_level.is_null() {
+                unsafe { *out_level = l };
+            }
+            1
+        }
+        None => 0,
+    }
+}
+
+/// `MiIsVerifiedDriverName` (host unit helper; C is static).
+/// # Safety
+/// `buffer`/`name` must point to `blen`/`nlen` valid u16 values.
+#[no_mangle]
+pub unsafe extern "C" fn lrm_vf_is_verified_driver_name(buffer: *const u16, blen: usize, name: *const u16, nlen: usize) -> u8 {
+    // SAFETY: caller guarantees the slices.
+    let b = unsafe { core::slice::from_raw_parts(buffer, blen) };
+    let n = unsafe { core::slice::from_raw_parts(name, nlen) };
+    is_verified_driver_name(b, n) as u8
+}
