@@ -3141,10 +3141,16 @@ PiEnumerateDevice(
     }
 
     // mark children nodes as non-present (those not returned in DR request will be removed)
+    // a removed child is unlinked and freed by whoever drops its last reference;
+    // the unlink takes the tree resource exclusive, so the walk holds it shared
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
     for (PDEVICE_NODE child = DeviceNode->Child; child != NULL; child = child->Sibling)
     {
         PiClearDevNodeFlag(child, DNF_ENUMERATED);
     }
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 
     DPRINT("PiEnumerateDevice: enumerating %u children\n", DeviceRelations->Count);
 
@@ -3201,18 +3207,27 @@ PiEnumerateDevice(
     ExFreePool(DeviceRelations);
 
     // time to remove non-reported devices
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
     for (PDEVICE_NODE child = DeviceNode->Child; child != NULL; child = child->Sibling)
     {
         if (!(child->Flags & (DNF_ENUMERATED|DNF_DEVICE_GONE)))
         {
-            if (child->State == DeviceNodeRemoved)
-                ObReferenceObject(child->PhysicalDeviceObject);
+            // a removed child whose device object is already being deleted
+            // cannot be referenced again; it goes away by itself
+            if (child->State == DeviceNodeRemoved &&
+                !ObReferenceObjectSafe(child->PhysicalDeviceObject))
+            {
+                continue;
+            }
 
             // this flag indicates that this is a surprise removal
             PiSetDevNodeFlag(child, DNF_DEVICE_GONE);
             PiSetDevNodeState(child, DeviceNodeAwaitingQueuedRemoval);
         }
     }
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 
     PiSetDevNodeState(DeviceNode, DeviceNodeStarted);
     return STATUS_SUCCESS;
