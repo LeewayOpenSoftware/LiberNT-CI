@@ -18,6 +18,21 @@
 #include <nvs/pool/include/poolspecial.h>
 #include <nvs/include/lrmrs.h>
 
+/* FFI layout invariants shared with the Rust side (mm.rs / lib.rs const asserts). Compile-time: a
+ * mismatch fails the build rather than corrupting a bug check, a vtable call, or a block record.
+ * Checked in both the flag-ON and flag-OFF builds (and the nvs_neutral standalone object). */
+C_ASSERT(sizeof(LRM_BUGCHECK) == 5 * sizeof(ULONG_PTR));
+C_ASSERT(FIELD_OFFSET(LRM_BUGCHECK, P1) == 1 * sizeof(ULONG_PTR));
+C_ASSERT(FIELD_OFFSET(LRM_BUGCHECK, P2) == 2 * sizeof(ULONG_PTR));
+C_ASSERT(FIELD_OFFSET(LRM_BUGCHECK, P3) == 3 * sizeof(ULONG_PTR));
+C_ASSERT(FIELD_OFFSET(LRM_BUGCHECK, P4) == 4 * sizeof(ULONG_PTR));
+C_ASSERT(sizeof(POOL_SPECIAL_RECORD) == 16);
+C_ASSERT(sizeof(LRM_GUARD_VTBL) == 5 * sizeof(PVOID));
+C_ASSERT(MiGuardOutside == 0);
+C_ASSERT(MiGuardGuardPage == 1);
+C_ASSERT(MiGuardLive == 2);
+C_ASSERT(MiGuardFreed == 3);
+
 #if defined(LIBERNT_LRM_RS)
 
 /* --- MiGuard provider exposed to the Rust orchestration (This = PMI_GUARD_REGION). --- */

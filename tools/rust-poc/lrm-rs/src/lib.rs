@@ -17,7 +17,6 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
 use core::ffi::c_void;
-use core::slice;
 
 // The kernel staticlib is no_std and owns its panic handler; the host `std` build (differential and
 // fuzz harnesses) links against std's, so this one is compiled out under the `std` feature.
@@ -51,6 +50,11 @@ pub struct PoolSpecialRecord {
     pub offset: u32,
     pub flags: u32,
 }
+
+// Mirrored by the C side's `C_ASSERT(sizeof(POOL_SPECIAL_RECORD) == 16)` (lrmrs.c). The MiGuard
+// region is created with ContextBytes = sizeof(POOL_SPECIAL_RECORD); a size mismatch would corrupt
+// the per-block record. Compile-time.
+const _: () = assert!(core::mem::size_of::<PoolSpecialRecord>() == 16);
 
 /// Page-address-derived fill byte, identical to `PoolSpecialPattern`:
 /// `(((addr >> PAGE_SHIFT) * 37 + 0x5B) | 1)` truncated to a byte (always odd/non-zero).
@@ -148,10 +152,13 @@ pub unsafe extern "C" fn rust_pool_special_prepare(
 ) -> *mut c_void {
     let p = page as *mut u8;
     let fill = pattern(p);
-    // SAFETY: caller guarantees `page` is a writable PAGE_SIZE page.
-    let page_bytes = unsafe { slice::from_raw_parts_mut(p, PAGE_SIZE) };
-    for b in page_bytes.iter_mut() {
-        *b = fill;
+    // SAFETY: caller guarantees `page` is a writable PAGE_SIZE page. Write through the raw pointer
+    // (no &mut slice over caller memory); volatile byte stores keep it a loop, never a `memset` call
+    // (which the kernel staticlib's extern gate forbids).
+    let mut k = 0usize;
+    while k < PAGE_SIZE {
+        unsafe { p.add(k).write_volatile(fill) };
+        k += 1;
     }
     // SAFETY: caller guarantees `record` is writable.
     unsafe {
@@ -207,12 +214,12 @@ pub unsafe extern "C" fn rust_pool_special_check(
         return CORRUPT_BEFORE;
     }
 
-    // SAFETY: page is readable for PAGE_SIZE.
-    let bytes = unsafe { slice::from_raw_parts(p, PAGE_SIZE) };
-
+    // SAFETY: page is readable for PAGE_SIZE. Read through the raw pointer with volatile loads - no
+    // shared &[u8] over a page another CPU may be writing concurrently (that race is exactly the
+    // corruption being detected, and a shared slice over it would be UB).
     let mut i = 0usize;
     while i < offset {
-        if bytes[i] != pat {
+        if unsafe { p.add(i).read_volatile() } != pat {
             if !corrupt.is_null() {
                 unsafe { *corrupt = p.add(i) as usize };
             }
@@ -222,7 +229,7 @@ pub unsafe extern "C" fn rust_pool_special_check(
     }
     let mut j = offset + size;
     while j < PAGE_SIZE {
-        if bytes[j] != pat {
+        if unsafe { p.add(j).read_volatile() } != pat {
             if !corrupt.is_null() {
                 unsafe { *corrupt = p.add(j) as usize };
             }

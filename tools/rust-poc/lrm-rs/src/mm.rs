@@ -46,6 +46,17 @@ const CACHE_ALIGNED_POOL_MASK: u32 = 4; // POOL_TYPE cache-aligned variants (Non
 const POOL_NX_ALLOCATION: u32 = 0x200; // WDM: request non-executable non-paged pool
 const MI_SPECIAL_POOL_CACHE_ALIGNMENT: u32 = 64;
 
+// FFI layout invariants, mirrored by the C side's C_ASSERTs in ntoskrnl/nvs/nt/lrmrs.c. These are
+// compile-time; a mismatch fails the build rather than corrupting a bug check or a vtable call.
+const _: () = {
+    assert!(core::mem::size_of::<BugCheck>() == 5 * core::mem::size_of::<usize>());
+    assert!(core::mem::size_of::<LrmGuardVtbl>() == 5 * core::mem::size_of::<usize>());
+    assert!(GuardState::Outside as i32 == 0);
+    assert!(GuardState::GuardPage as i32 == 1);
+    assert!(GuardState::Live as i32 == 2);
+    assert!(GuardState::Freed as i32 == 3);
+};
+
 // Engine POOL_SPECIAL_STATUS (mirror of lib.rs / poolspecial.h).
 const POOL_INTACT: i32 = 0;
 const POOL_CORRUPT_BEFORE: i32 = 1;
@@ -136,8 +147,15 @@ pub fn mm_allocate_special_pool<R: GuardRegion>(
 
     let paged = (pool_type & EX_POOL_BASE_TYPE_MASK) != 0;
     if irql > DISPATCH_LEVEL || (paged && irql > APC_LEVEL) {
-        // KeBugCheckEx(0xC1, Irql, PoolType, NumberOfBytes, 0x30)
-        return Err(BugCheck::special(irql as usize, pool_type as usize, bytes, SUB_ALLOCATE_IRQL));
+        // KeBugCheckEx(0xC1, Irql, PoolType, NumberOfBytes, 0x30). PoolType is a signed enum in C, so
+        // `(ULONG_PTR)PoolType` SIGN-extends a value with bit 31 set; mirror that for exact param-2
+        // parity (not `pool_type as usize`, which would zero-extend).
+        return Err(BugCheck::special(
+            irql as usize,
+            pool_type as i32 as isize as usize,
+            bytes,
+            SUB_ALLOCATE_IRQL,
+        ));
     }
 
     // AtStart: SpecialType 0 = page end, 1 = page start, else = global default (underruns).
@@ -197,14 +215,17 @@ fn exp_pool_heap_executable(pool_type: u32) -> bool {
 pub fn mm_free_special_pool<R: GuardRegion>(region: &mut R, p: usize, irql: u8) -> Result<(), BugCheck> {
     let (state, page, ctx) = region.query(p);
 
-    // owns check via the engine (only meaningful with a record context).
+    // Mirror the C short-circuit `Query != Live || !PoolSpecialOwns(...)`: test the state FIRST and
+    // read the record (owns) only when Live, so a Freed slot's record is never dereferenced.
+    if state != GuardState::Live {
+        return Err(BugCheck::special(p, 0, 0, SUB_NOT_ALLOCATED));
+    }
     let owns = !ctx.is_null()
-        // SAFETY: provider gives a readable POOL_SPECIAL_RECORD context for an in-region address.
+        // SAFETY: Live implies the provider gives a readable POOL_SPECIAL_RECORD context.
         && unsafe {
             rust_pool_special_owns(ctx as *const PoolSpecialRecord, page as *mut c_void, p as *mut c_void)
         } != 0;
-
-    if state != GuardState::Live || !owns {
+    if !owns {
         return Err(BugCheck::special(p, 0, 0, SUB_NOT_ALLOCATED));
     }
 

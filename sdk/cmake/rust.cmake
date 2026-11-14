@@ -74,7 +74,7 @@ endfunction()
 # its own libraries. The build fails if the crate's objects reference any
 # symbol outside ALLOWED_EXTERNS, or contain x87, MMX or AVX instructions.
 function(add_rust_staticlib _target)
-    cmake_parse_arguments(_R "" "MANIFEST_DIR;CRATE" "FEATURES;ALLOWED_EXTERNS" ${ARGN})
+    cmake_parse_arguments(_R "FORBID_PANIC" "MANIFEST_DIR;CRATE" "FEATURES;ALLOWED_EXTERNS" ${ARGN})
     if(NOT _R_MANIFEST_DIR OR NOT _R_CRATE)
         message(FATAL_ERROR "add_rust_staticlib(${_target}): MANIFEST_DIR and CRATE are required")
     endif()
@@ -107,6 +107,7 @@ function(add_rust_staticlib _target)
                 -DOUTPUT=${_out}
                 -DFEATURES=${_features}
                 -DALLOWED_EXTERNS=${_externs}
+                -DFORBID_PANIC=${_R_FORBID_PANIC}
                 -P ${_LIBERNT_RUST_BUILD_SCRIPT}
         DEPENDS ${_src} ${_LIBERNT_RUST_BUILD_SCRIPT}
         COMMENT "Rust: building ${_R_CRATE} with ${LIBERNT_RUST_TOOLCHAIN}"

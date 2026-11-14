@@ -172,7 +172,8 @@ if(LIBERNT_ENABLE_LRM_RS)
     endif()
     add_rust_staticlib(lrm_rs
         MANIFEST_DIR ${REACTOS_SOURCE_DIR}/tools/rust-poc/lrm-rs
-        CRATE lrm_rs)
+        CRATE lrm_rs
+        FORBID_PANIC)
     target_link_libraries(ntoskrnl lrm_rs)
     target_compile_definitions(ntoskrnl PRIVATE LIBERNT_LRM_RS=1)
     message(STATUS "LRM-RS: special pool routed through Rust (lrm_rs linked into ntoskrnl)")

@@ -10,6 +10,12 @@
  * LIBERNT_ENABLE_LRM_RS, default OFF). When OFF the special pool stays pure C and ntoskrnl is
  * unchanged. The C bodies (MiSpecialPool*C) are always compiled: the normal build runs them, and
  * the flag-ON build keeps them as the differential oracle and the fallback.
+ *
+ * Floating-point/SSE: lrm_rs targets x86_64-pc-windows-gnu (SSE2 permitted; x87/MMX/AVX rejected by
+ * the staticlib gate in sdk/cmake/rust-build.cmake), so the page fill/compare may use the volatile
+ * XMM registers. That is safe at any IRQL here, including DISPATCH_LEVEL on the routed
+ * MmAllocate/FreeSpecialPool: the trap entry preserves the volatile XMM0..Xmm5 in the trap frame
+ * (KTRAP_FRAME, sdk/include/ndk/amd64/ketypes.h:447; saved by ntoskrnl/ke/amd64/trap.S).
  */
 
 #pragma once
