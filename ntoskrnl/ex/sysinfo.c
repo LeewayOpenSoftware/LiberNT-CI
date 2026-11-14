@@ -1958,7 +1958,8 @@ SSI_DEF(SystemFileCacheInformation)
 /* Class 22 - Pool Tag Information */
 QSI_DEF(SystemPoolTagInformation)
 {
-    if (Size < sizeof(SYSTEM_POOLTAG_INFORMATION)) return STATUS_INFO_LENGTH_MISMATCH;
+    /* A short buffer, the zero-size probe included, still gets the needed
+     * length; the tag walker writes only what fits. */
     return ExGetPoolTagInfo(Buffer, Size, ReqSize);
 }
 

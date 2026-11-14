@@ -89,6 +89,50 @@ TestHandleCount(VOID)
     RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
 }
 
+/* The zero-size probe is how callers size the pool tag buffer */
+static
+VOID
+TestPoolTagCount(VOID)
+{
+    SYSTEM_POOLTAG_INFORMATION Header;
+    PSYSTEM_POOLTAG_INFORMATION Buffer;
+    ULONG Length = 0;
+    ULONG Count;
+    NTSTATUS Status;
+
+    Status = NtQuerySystemInformation(SystemPoolTagInformation, NULL, 0, &Length);
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok(Length >= FIELD_OFFSET(SYSTEM_POOLTAG_INFORMATION, TagInfo) + sizeof(SYSTEM_POOLTAG),
+       "Pool tag information length %lu on the zero-size probe\n", Length);
+    trace("Pool tag information length %lu\n", Length);
+
+    RtlFillMemory(&Header, sizeof(Header), 0xCC);
+    Status = NtQuerySystemInformation(SystemPoolTagInformation, &Header, FIELD_OFFSET(SYSTEM_POOLTAG_INFORMATION, TagInfo), &Length);
+    ok_hex(Status, STATUS_INFO_LENGTH_MISMATCH);
+    ok(Header.Count != 0xCCCCCCCC, "Tag count not written on a header-only buffer\n");
+    ok(Header.Count == 0, "Tag count %lu on a header-only buffer\n", Header.Count);
+    ok(Length >= FIELD_OFFSET(SYSTEM_POOLTAG_INFORMATION, TagInfo) + sizeof(SYSTEM_POOLTAG),
+       "Pool tag information length %lu on a header-only buffer\n", Length);
+
+    Length += 64 * sizeof(SYSTEM_POOLTAG);
+    Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length);
+    if (!Buffer)
+    {
+        skip("Could not allocate pool tag information\n");
+        return;
+    }
+    Status = NtQuerySystemInformation(SystemPoolTagInformation, Buffer, Length, &Length);
+    ok_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        Count = Buffer->Count;
+        ok(Count != 0, "No pool tags reported\n");
+        ok(Length == FIELD_OFFSET(SYSTEM_POOLTAG_INFORMATION, TagInfo) + Count * sizeof(SYSTEM_POOLTAG),
+           "Length %lu for %lu tags\n", Length, Count);
+    }
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Buffer);
+}
+
 START_TEST(NtQuerySystemInformation)
 {
     NTSTATUS Status;
@@ -117,6 +161,7 @@ START_TEST(NtQuerySystemInformation)
 
     TestProcessImageName();
     TestHandleCount();
+    TestPoolTagCount();
 
     /* Both loaded-image lists must be initialized even when no user images
      * have been registered with the kernel's module list. */
