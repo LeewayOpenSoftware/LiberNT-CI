@@ -96,6 +96,8 @@ CcNtFlushMap(
 
     if (NT_SUCCESS(Status) && MaximumPages == ~0u)
         CcBcbCompleteFlush(&NtMap->Map, Offset, End, Generation);
+    else if (Flushed != 0)
+        CcBcbRetireWritten(&NtMap->Map, Generation);
 
     if (Flushed != 0)
     {
