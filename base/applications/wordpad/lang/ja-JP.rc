@@ -87,7 +87,7 @@ BEGIN
     END
     POPUP "ヘルプ(&H)"
     BEGIN
-        MENUITEM "Wine Wordpadについて(&A)",     ID_ABOUT
+        MENUITEM "LiberNT WordPadについて(&A)",     ID_ABOUT
     END
 END
 

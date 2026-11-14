@@ -1964,16 +1964,30 @@ IopGetSetSecurityObject(IN PVOID ObjectBody,
                 Status = ObLogSecurityDescriptor(SecurityDescriptor, &CachedSecurityDescriptor, 1);
                 if (NT_SUCCESS(Status))
                 {
+                    PSECURITY_DESCRIPTOR OldSecurityDescriptor;
+
                     KeEnterCriticalRegion();
                     ExAcquireResourceExclusiveLite(&IopSecurityResource, TRUE);
 
-                    /* Assign the Security Descriptor */
+                    /* Assign the Security Descriptor; a device assigned twice drops the one it held */
+                    OldSecurityDescriptor = DeviceObject->SecurityDescriptor;
                     DeviceObject->SecurityDescriptor = CachedSecurityDescriptor;
 
                     ExReleaseResourceLite(&IopSecurityResource);
                     KeLeaveCriticalRegion();
+
+                    if (OldSecurityDescriptor)
+                    {
+                        ObDereferenceSecurityDescriptor(OldSecurityDescriptor, 1);
+                    }
                 }
             }
+
+            /* ObAssignSecurity hands us the descriptor and frees it only when we fail; on success we
+             * own it. We cached a copy (or, for a stream file, kept nothing), so free the one we were
+             * given, as the default object-security path does after it logs. */
+            if (NT_SUCCESS(Status))
+                ExFreePoolWithTag(SecurityDescriptor, TAG_SD);
 
             /* Return status */
             return Status;

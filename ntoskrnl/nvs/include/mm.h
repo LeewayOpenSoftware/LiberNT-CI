@@ -633,7 +633,14 @@ ULONG MiSegmentTrimUnused(_Inout_ PMI_SYSTEM System);
 VOID MiSegmentDereference(_Inout_ PMI_SEGMENT Segment);
 NTSTATUS MiSegmentExtend(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 NewSizeInBytes);
 NTSTATUS MiSegmentFlush(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
-BOOLEAN MiSegmentPurge(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length, _In_ BOOLEAN DiscardDirty);
+typedef enum _MI_PURGE_MODE
+{
+    MiPurgeCoherency = 0,
+    MiPurgeTruncate = 1,
+    MiPurgeDiscard = 2
+} MI_PURGE_MODE;
+
+BOOLEAN MiSegmentPurge(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length, _In_ MI_PURGE_MODE Mode);
 BOOLEAN MiSegmentIsResident(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
 NTSTATUS MiSegmentMakeResident(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Offset, _In_ ULONG64 Length);
 NTSTATUS MiSegmentFaultIn(_Inout_ PMI_SEGMENT Segment, _In_ ULONG64 Page, _In_ ULONG ReadAhead);

@@ -52,7 +52,7 @@ MAIN_MENU MENU
  }
  POPUP "&Yardım" {
    MENUITEM "&Yardım Hakkında", MNID_HELP_HELPON
-   MENUITEM "&Wine Yardım Hakkında...", MNID_HELP_ABOUT
+   MENUITEM "&LiberNT Yardım Hakkında...", MNID_HELP_ABOUT
  }
 }
 

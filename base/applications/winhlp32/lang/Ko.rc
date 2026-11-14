@@ -51,7 +51,7 @@ MAIN_MENU MENU
  }
  POPUP "도움말(&H)" {
    MENUITEM "도움말 사용법(&O)", MNID_HELP_HELPON
-   MENUITEM "Wine 도움말 정보(&I)...", MNID_HELP_ABOUT
+   MENUITEM "LiberNT 도움말 정보(&I)...", MNID_HELP_ABOUT
  }
 }
 

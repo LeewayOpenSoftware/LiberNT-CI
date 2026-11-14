@@ -106,7 +106,7 @@ NtfsReleaseDismountedVolume(
     KIRQL OldIrql;
 
     ExAcquireFastMutex(&VolCB->VolumeStateMutex);
-    if (VolCB->Dismounted && VolCB->OpenHandleCount == 0)
+    if (VolCB->Dismounted && VolCB->OpenHandleCount == 0 && !VolCB->BootRepairDismount)
     {
         StreamFileObject = VolCB->StreamFileObject;
         VolCB->StreamFileObject = NULL;

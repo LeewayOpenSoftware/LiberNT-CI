@@ -1738,10 +1738,10 @@ CmpInitializeHiveList(VOID)
     CmpLinkKeyToHive(L"\\Registry\\Machine\\Security\\SAM",
                      L"\\Registry\\Machine\\SAM\\SAM");
 
-    /* Link S-1-5-18 to .Default */
+    /* HKU\S-1-5-18 is the link to the .DEFAULT hive, as on Windows */
     CmpNoVolatileCreates = FALSE;
-    CmpLinkKeyToHive(L"\\Registry\\User\\.Default",
-                     L"\\Registry\\User\\S-1-5-18");
+    CmpLinkKeyToHive(L"\\Registry\\User\\S-1-5-18",
+                     L"\\Registry\\User\\.Default");
     if (sizeof(PVOID) == sizeof(ULONGLONG))
     {
         static const PCWSTR ParentNames[] =

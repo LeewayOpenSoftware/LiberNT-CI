@@ -91,7 +91,7 @@ BEGIN
     END
     POPUP "帮助(&H)"
     BEGIN
-        MENUITEM "关于 &Wine 写字板", ID_ABOUT
+        MENUITEM "关于 &LiberNT WordPad", ID_ABOUT
     END
 END
 

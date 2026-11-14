@@ -28,6 +28,7 @@ NTAPI
 FsRtlPTeardownPerFileObjectContexts(IN PFILE_OBJECT FileObject)
 {
     PFILE_OBJECT_FILTER_CONTEXTS FOContext = NULL;
+    NTSTATUS Status;
 
     ASSERT(FileObject);
 
@@ -36,8 +37,17 @@ FsRtlPTeardownPerFileObjectContexts(IN PFILE_OBJECT FileObject)
         return;
     }
 
-    ASSERT(IoChangeFileObjectFilterContext(FileObject, FOContext, FALSE) == STATUS_SUCCESS);
-    ASSERT(IsListEmpty(&(FOContext->FilterContexts)));
+    Status = IoChangeFileObjectFilterContext(FileObject, FOContext, FALSE);
+    ASSERT(NT_SUCCESS(Status));
+
+    /* A context a filter never removed belongs to the filter; only the links go, so a new file object at this address starts clean */
+    while (!IsListEmpty(&FOContext->FilterContexts))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&FOContext->FilterContexts);
+
+        /* The filter's own late RemoveEntryList then touches nothing of ours */
+        InitializeListHead(Entry);
+    }
 
     ExFreePoolWithTag(FOContext, 'FOCX');
 }

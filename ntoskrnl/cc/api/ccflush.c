@@ -83,9 +83,10 @@ CcPurgeCacheSection(
             return FALSE;
         }
 
-        CcDirtyDiscard(&NtMap->Map, Offset, (Bytes == 0) ? (ULONG64)-1 : Bytes);
         CcMapDetachViews(&NtMap->Map, Offset, (Bytes == 0) ? (ULONG64)-1 : Bytes);
-        Purged = MiSegmentPurge(NtMap->Control->Segment, Offset, Bytes, FALSE);
+        Purged = MiSegmentPurge(NtMap->Control->Segment, Offset, Bytes, MiPurgeDiscard);
+        if (Purged)
+            CcDirtyDiscard(&NtMap->Map, Offset, (Bytes == 0) ? (ULONG64)-1 : Bytes);
         if (Purged && Offset == 0 && Bytes == 0 && (Flags & UNINITIALIZE_CACHE_MAPS))
             NtMap->PurgeOnClose = TRUE;
         CcNtDereferenceMap(NtMap);
@@ -96,7 +97,7 @@ CcPurgeCacheSection(
 
         if (Control != NULL)
         {
-            Purged = MiSegmentPurge(Control->Segment, Offset, Bytes, FALSE);
+            Purged = MiSegmentPurge(Control->Segment, Offset, Bytes, MiPurgeDiscard);
             if (Purged && Offset == 0 && Bytes == 0)
                 MiSegmentDereferenceAndClose(Control->Segment);
             else
