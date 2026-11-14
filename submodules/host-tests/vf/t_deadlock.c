@@ -165,8 +165,9 @@ int main(void)
     Drop(0x20); Drop(0x10);
 
     Take(0x50);
-    VfForgetLocksInRange((PVOID)0x50, 8);
-    CHECK(VfDeadlockRuleHits == 7 && LastRule == 0x100B);
+    UNTIL_STOP(VfForgetLocksInRange((PVOID)0x50, 8));
+    CHECK(VfDeadlockRuleHits == 7 && StopCode == 0xC4 && StopParameter[0] == 0x100B);
+    CHECK(StopParameter[1] == 0x50 && StopParameter[2] == 0x1000 && StopParameter[3] == 1);
 
     Try(0x60);
     Drop(0x60);

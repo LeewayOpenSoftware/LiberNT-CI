@@ -220,7 +220,7 @@ VfpIsDeadlockRuleFatal(
         case VF_DEADLOCK_UNACQUIRED:
             return FALSE;
         case VF_DEADLOCK_DELETED_OWNED:
-            return FALSE;
+            return TRUE;
         default:
             return FALSE;
     }
