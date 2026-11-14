@@ -1356,17 +1356,17 @@ NtTraceEvent(
     return STATUS_NOT_IMPLEMENTED;
 }
 
+static
 NTSTATUS
-NTAPI
-NtTraceControl(
+EtwpTraceControl(
     _In_ ULONG FunctionCode,
     _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
     _In_ ULONG InBufferLen,
     _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,
     _In_ ULONG OutBufferLen,
-    _Out_ PULONG ReturnSize)
+    _Out_ PULONG ReturnSize,
+    _In_ KPROCESSOR_MODE PreviousMode)
 {
-    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
     UNICODE_STRING LoggerName, LogFileName;
     WMI_LOGGER_INFORMATION Info;
     PETWP_LOGGER Logger = NULL;
@@ -1472,4 +1472,30 @@ NtTraceControl(
         ExFreePoolWithTag(LogFileName.Buffer, ETWP_TAG);
 
     return Status;
+}
+
+NTSTATUS
+NTAPI
+NtTraceControl(
+    _In_ ULONG FunctionCode,
+    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
+    _In_ ULONG InBufferLen,
+    _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,
+    _In_ ULONG OutBufferLen,
+    _Out_ PULONG ReturnSize)
+{
+    return EtwpTraceControl(FunctionCode, InBuffer, InBufferLen, OutBuffer, OutBufferLen, ReturnSize,
+                            ExGetPreviousMode());
+}
+
+/* Kernel entry for the WmiStartTrace/WmiStopTrace/WmiUpdateTrace exports: the logger info is a kernel buffer, so the
+ * control path must run as KernelMode whatever the caller's previous mode is. */
+NTSTATUS
+EtwpTraceControlKernel(
+    _In_ ULONG FunctionCode,
+    _Inout_ PWMI_LOGGER_INFORMATION LoggerInfo)
+{
+    ULONG Returned;
+    return EtwpTraceControl(FunctionCode, LoggerInfo, sizeof(*LoggerInfo),
+                            LoggerInfo, sizeof(*LoggerInfo), &Returned, KernelMode);
 }

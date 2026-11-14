@@ -904,16 +904,14 @@ NTSTATUS
 NTAPI
 WmiStartTrace(IN OUT PWMI_LOGGER_INFORMATION LoggerInfo)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return EtwpTraceControlKernel(EtwStartLoggerCode, LoggerInfo);
 }
 
 NTSTATUS
 NTAPI
 WmiStopTrace(IN PWMI_LOGGER_INFORMATION LoggerInfo)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return EtwpTraceControlKernel(EtwStopLoggerCode, LoggerInfo);
 }
 
 NTSTATUS
@@ -928,8 +926,7 @@ NTSTATUS
 NTAPI
 WmiUpdateTrace(IN OUT PWMI_LOGGER_INFORMATION LoggerInfo)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return EtwpTraceControlKernel(EtwUpdateLoggerCode, LoggerInfo);
 }
 
 ULONG

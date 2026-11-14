@@ -202,6 +202,11 @@ EtwpLoggerIdFromTraceHandle(
     _In_ TRACEHANDLE TraceHandle);
 
 NTSTATUS
+EtwpTraceControlKernel(
+    _In_ ULONG FunctionCode,
+    _Inout_ PWMI_LOGGER_INFORMATION LoggerInfo);
+
+NTSTATUS
 EtwpQueryLoggerById(
     _In_ ULONG LoggerId,
     _Out_opt_ PWMI_LOGGER_INFORMATION Information,
