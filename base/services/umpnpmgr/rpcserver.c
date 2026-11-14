@@ -379,11 +379,20 @@ GetRelatedDevice(
 {
     PLUGPLAY_CONTROL_RELATED_DEVICE_DATA PlugPlayData;
 
+    if (Length == 0)
+        return FALSE;
+
+    /* The kernel takes and returns this length in bytes and does not
+     * terminate the name; room for the terminator is kept back */
     RtlInitUnicodeString(&PlugPlayData.TargetDeviceInstance, DeviceId);
     PlugPlayData.Relation = Relation;
     PlugPlayData.RelatedDeviceInstance = Related;
-    PlugPlayData.RelatedDeviceInstanceLength = Length;
-    return NT_SUCCESS(NtPlugPlayControl(PlugPlayControlGetRelatedDevice, &PlugPlayData, sizeof(PlugPlayData)));
+    PlugPlayData.RelatedDeviceInstanceLength = (Length - 1) * sizeof(WCHAR);
+    if (!NT_SUCCESS(NtPlugPlayControl(PlugPlayControlGetRelatedDevice, &PlugPlayData, sizeof(PlugPlayData))))
+        return FALSE;
+
+    Related[PlugPlayData.RelatedDeviceInstanceLength / sizeof(WCHAR)] = UNICODE_NULL;
+    return TRUE;
 }
 
 static
@@ -1237,7 +1246,12 @@ PNP_GetRelatedDeviceInstance(
 
     PlugPlayData.Relation = ulRelationship;
 
-    PlugPlayData.RelatedDeviceInstanceLength = *pulLength;
+    if (*pulLength == 0)
+        return CR_BUFFER_SMALL;
+
+    /* The kernel takes and returns this length in bytes and does not
+     * terminate the name; room for the terminator is kept back */
+    PlugPlayData.RelatedDeviceInstanceLength = (*pulLength - 1) * sizeof(WCHAR);
     PlugPlayData.RelatedDeviceInstance = pRelatedDeviceId;
 
     Status = NtPlugPlayControl(PlugPlayControlGetRelatedDevice,
@@ -1247,11 +1261,16 @@ PNP_GetRelatedDeviceInstance(
     {
         ret = NtStatusToCrError(Status);
     }
+    else
+    {
+        pRelatedDeviceId[PlugPlayData.RelatedDeviceInstanceLength / sizeof(WCHAR)] = UNICODE_NULL;
+        *pulLength = PlugPlayData.RelatedDeviceInstanceLength / sizeof(WCHAR) + 1;
+    }
 
     DPRINT("PNP_GetRelatedDeviceInstance() done (returns %lx)\n", ret);
     if (ret == CR_SUCCESS)
     {
-        DPRINT("RelatedDevice: %wZ\n", &PlugPlayData.RelatedDeviceInstance);
+        DPRINT("RelatedDevice: %S\n", pRelatedDeviceId);
     }
 
     return ret;
@@ -2951,14 +2970,16 @@ PNP_GetInterfaceDeviceAlias(
     RtlInitUnicodeString(&PlugPlayData.SymbolicLinkName, pszInterfaceDevice);
     PlugPlayData.AliasInterfaceClassGuid = AliasInterfaceGuid;
     PlugPlayData.AliasSymbolicLinkName = pszAliasInterfaceDevice;
-    PlugPlayData.AliasSymbolicLinkNameLength = *pulTransferLen;
+    /* The kernel takes this length in bytes and returns the bytes of the
+     * alias with its terminator */
+    PlugPlayData.AliasSymbolicLinkNameLength = *pulTransferLen * sizeof(WCHAR);
 
     Status = NtPlugPlayControl(PlugPlayControlGetInterfaceDeviceAlias,
                                &PlugPlayData,
                                sizeof(PLUGPLAY_CONTROL_INTERFACE_ALIAS_DATA));
     if (NT_SUCCESS(Status))
     {
-        *pulLength = PlugPlayData.AliasSymbolicLinkNameLength;
+        *pulLength = PlugPlayData.AliasSymbolicLinkNameLength / sizeof(WCHAR) - 1;
         *pulTransferLen = *pulLength + 1;
     }
     else
