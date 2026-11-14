@@ -424,18 +424,17 @@ Volume::MarkCleanAfterCheck()
     }
     /* A write lost on the way here keeps its note and the marks stay as they
      * are, so nothing of this instance is cleared. If the clear had reached
-     * the medium, the flag goes back on it now: DirtyMarked stays TRUE, so no
-     * later write would set it, and a dismount that fails after this would
-     * otherwise leave a clean medium under a lost write. */
-    if (NT_SUCCESS(Status) && LostWriteNoted)
+     * the medium, or may have (the flush after it failed), the flag goes
+     * back on it now, best effort: DirtyMarked stays TRUE, so no later write
+     * would set it, and a dismount that fails after this would otherwise
+     * leave a clean medium under a lost write. */
+    if (Cleared && (LostWriteNoted || !NT_SUCCESS(Status)))
     {
-        if (Cleared)
-        {
-            (void)SetVolumeFlags(VOL_DIRTY, 0);
-            (void)FlushVolume();
-        }
-        Status = STATUS_LOST_WRITEBEHIND_DATA;
+        (void)SetVolumeFlags(VOL_DIRTY, 0);
+        (void)FlushVolume();
     }
+    if (NT_SUCCESS(Status) && LostWriteNoted)
+        Status = STATUS_LOST_WRITEBEHIND_DATA;
     if (NT_SUCCESS(Status))
     {
         DirtyMarked = FALSE;
