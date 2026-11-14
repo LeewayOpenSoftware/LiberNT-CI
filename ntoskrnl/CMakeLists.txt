@@ -32,7 +32,8 @@ endif()
 include(ntos.cmake)
 
 # LRM-RS: route the special pool through the Rust orchestration and link lrm_rs into ntoskrnl.
-# DEFAULT ON on amd64 (owner order 2026-11-14, after validation gates G1-G9); amd64 only (Leeway x64).
+# DEFAULT ON on amd64 (owner order 2026-11-14, after validation gates G1-G9); also opt-in on i386
+# (MSVC or GNU driver). Other arches unsupported (no LiberNT arm64 ntoskrnl).
 # The C special pool stays compiled as oracle/fallback (ntspecial.c #else branch); a flag-OFF build is
 # byte-identical to a no-LRM-RS kernel (the self-test export is appended only in a flag-ON build via a
 # generated spec). Decoupled from LIBERNT_ENABLE_RUST (the opt-in lnrspoc PoC umbrella, still OFF by
@@ -176,7 +177,9 @@ add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
 
 # LRM-RS: build the Rust special-pool crate as a reproducible no_std staticlib and link it into
 # ntoskrnl, then define LIBERNT_LRM_RS so ntspecial.c routes through it and lrmrs.c compiles the
-# shim + self-test. Opt-in, amd64 only. lrm_rs imports at most one kernel symbol (LrmRsFatalStop, the
+# shim + self-test. Opt-in; amd64 (default ON) plus i386 (opt-in), under either the MSVC or the GNU
+# driver. lrm_rs imports at most one kernel symbol (LrmRsFatalStop on amd64, _LrmRsFatalStop on i386
+# cdecl, the
 # panic-policy target); its runtime helpers resolve from the kernel's own libraries at the ntoskrnl link.
 if(LIBERNT_ENABLE_LRM_RS)
     if(NOT ARCH STREQUAL "amd64" AND NOT ARCH STREQUAL "i386")
@@ -197,11 +200,18 @@ if(LIBERNT_ENABLE_LRM_RS)
         target_compile_definitions(ntoskrnl PRIVATE LIBERNT_LRM_RS_FORCE_PANIC_TEST=1)
         message(WARNING "LRM-RS: FORCE-PANIC TEST build - LrmRsForcePanic exposed, FORBID_PANIC disabled (lab only, never ship).")
     endif()
+    # The one possible import is the panic-policy target: undecorated LrmRsFatalStop on amd64, cdecl
+    # _LrmRsFatalStop on i386. (A shipped FORBID_PANIC build references neither; only a panic-keeping
+    # or force-panic build does.)
+    set(_lrm_rs_externs LrmRsFatalStop)
+    if(ARCH STREQUAL "i386")
+        set(_lrm_rs_externs _LrmRsFatalStop)
+    endif()
     add_rust_staticlib(lrm_rs
         MANIFEST_DIR ${REACTOS_SOURCE_DIR}/tools/rust-poc/lrm-rs
         CRATE lrm_rs
         ${_lrm_rs_features}
-        ALLOWED_EXTERNS LrmRsFatalStop
+        ALLOWED_EXTERNS ${_lrm_rs_externs}
         ${_lrm_rs_forbid})
     target_link_libraries(ntoskrnl lrm_rs)
     target_compile_definitions(ntoskrnl PRIVATE LIBERNT_LRM_RS=1)
