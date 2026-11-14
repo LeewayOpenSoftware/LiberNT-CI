@@ -328,7 +328,7 @@ HRESULT WINAPI ThemeDrawCaptionText(PDRAW_CONTEXT pcontext, RECT* pRect, int iPa
     COLORREF crKey;
     RECT rcText;
     int align = CA_LEFT;
-    int drawStyles = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS;
+    int drawStyles = DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
     BOOL drawn = FALSE;
 
     WCHAR buffer[50];
