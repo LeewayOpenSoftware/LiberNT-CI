@@ -776,19 +776,48 @@ VfLowerBelongsToThisDriver(
     }
 }
 
+static DRIVER_OBJECT VfSecondDriver;
+static PDEVICE_OBJECT VfSecondDevice;
+
+/* The verifier also takes a caller for the owner of a device when the caller
+ * is in the image that holds the dispatch routine of the device's driver, as
+ * a framework is for its client drivers. For a device of another driver the
+ * routine must therefore be elsewhere too: once the lower device holds an
+ * IRP, its table can name an address that is in no image. The routine is not
+ * called while the table names that address. */
+static
+VOID
+VfLowerIsHandledElsewhere(
+    _In_ BOOLEAN Elsewhere)
+{
+    if (Elsewhere)
+        VfOtherDriver.MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = (PDRIVER_DISPATCH)(ULONG_PTR)KmtDriverObject;
+    else
+        VfOtherDriver.MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = VfLowerDispatch;
+}
+
+/* Sends an IRP to the lower device, which holds it, and then to the second
+ * device, which holds it too */
 static
 PIRP
-VfSendHeldIrpTwice(VOID)
+VfSendHeldIrpTwice(
+    _In_ BOOLEAN FirstIsHandledElsewhere)
 {
+    PDEVICE_OBJECT First = VfLowerDevice;
     PIRP Irp;
 
-    Irp = IoAllocateIrp(VfLowerDevice->StackSize + 1, FALSE);
+    Irp = IoAllocateIrp(First->StackSize + VfSecondDevice->StackSize, FALSE);
     ok(Irp != NULL, "no IRP\n");
     if (Irp == NULL)
         return NULL;
 
     VfSendIrpToHold(Irp, FALSE);
+
+    VfLowerIsHandledElsewhere(FirstIsHandledElsewhere);
+    VfLowerDevice = VfSecondDevice;
     VfSendIrpToHold(Irp, FALSE);
+    VfLowerDevice = First;
+    VfLowerIsHandledElsewhere(FALSE);
     return Irp;
 }
 
@@ -816,13 +845,27 @@ START_TEST(MmDriverVerifierIrpQueuedBelow)
     VfLowerBelongsToThisDriver(TRUE);
     VfLowerDevice->DriverObject = &VfOtherDriver;
 
+    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_UNKNOWN, 0, FALSE, &VfSecondDevice);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        VfLowerDevice->DriverObject = KmtDriverObject;
+        IoDeleteDevice(VfLowerDevice);
+        VfLowerDevice = NULL;
+        return;
+    }
+
+    VfSecondDriver = *KmtDriverObject;
+    VfSecondDriver.MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = VfLowerDispatch;
+    VfSecondDevice->DriverObject = &VfSecondDriver;
+
     trace("Case 1: this driver completes an IRP that its own lower device holds; expect NO verifier line\n");
     Irp = VfSendHeldIrp(FALSE);
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
     trace("Case 2: this driver sends an IRP again that its own lower device holds; expect NO verifier line\n");
-    Irp = VfSendHeldIrpTwice();
+    Irp = VfSendHeldIrpTwice(FALSE);
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
@@ -831,15 +874,31 @@ START_TEST(MmDriverVerifierIrpQueuedBelow)
     VfLowerBelongsToThisDriver(FALSE);
     Irp = VfSendHeldIrp(FALSE);
     if (Irp != NULL)
+    {
+        VfLowerIsHandledElsewhere(TRUE);
         VfCompleteHeldIrp(Irp);
+        VfLowerIsHandledElsewhere(FALSE);
+    }
 
     trace("Case 4: this driver sends an IRP again that another driver holds; expect one log-only line, I/O rule "
           "0x205\n");
-    Irp = VfSendHeldIrpTwice();
+    Irp = VfSendHeldIrpTwice(TRUE);
     VfLowerBelongsToThisDriver(TRUE);
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
+    trace("Case 5: the lower device is of another driver object, but the image of this driver holds its dispatch "
+          "routine, as a framework does for its client; this driver completes an IRP that it holds; expect NO "
+          "verifier line\n");
+    VfLowerBelongsToThisDriver(FALSE);
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+    VfLowerBelongsToThisDriver(TRUE);
+
+    VfSecondDevice->DriverObject = KmtDriverObject;
+    IoDeleteDevice(VfSecondDevice);
+    VfSecondDevice = NULL;
     VfLowerDevice->DriverObject = KmtDriverObject;
     IoDeleteDevice(VfLowerDevice);
     VfLowerDevice = NULL;
