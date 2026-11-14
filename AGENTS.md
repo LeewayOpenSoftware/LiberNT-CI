@@ -56,7 +56,7 @@ Most of the tree is still shared with ReactOS, and the components synchronised w
 - Black-box study is the legal default. A lawful user may observe, study and test a program while running it to find the ideas and principles behind it (EU Software Directive 2009/24/EC, art. 5(3); in France, Code de la propriété intellectuelle L122-6-1 III).
 - Reading Windows binaries is decompilation and is allowed only within art. 6 of the same directive (L122-6-1 IV): by a lawful licensee, only when the information needed for interoperability is not otherwise readily available, and only for the parts needed for interoperability. Never use that information for another goal, never give it to others except for interoperability, and never use it to write a program substantially similar in its expression. The Windows licence forbids reverse engineering beyond what this law allows.
 - Never copy GPL code from Linux. Study the technique and reimplement it.
-- Never use legacy ReactOS code (the ARM3 memory manager, NT4 and NT5-era designs) as a reference.
+- Never copy or adapt legacy ReactOS code (the ARM3 memory manager, NT4 and NT5-era designs), or upstream ReactOS code for a component LiberNT has replaced, and never take its internal design as the model. You may read it for one purpose only: to learn the observable behavior and the contracts, that is prototypes, bug check codes and their parameters, registry values and semantics. Record the fact you needed and where you read it, then write LiberNT's own code. Where that code disagrees with the sources of truth above, the sources of truth win.
 
 ## Compatibility criteria
 
