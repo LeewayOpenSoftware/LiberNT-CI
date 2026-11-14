@@ -199,6 +199,9 @@ MiInitializeDriverVerifier(VOID)
         return;
     }
 
+    if (Level & DRIVER_VERIFIER_DEADLOCK_DETECTION)
+        Level |= DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS;
+
     if (Level & DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)
         VfInitializePoolTracking();
 

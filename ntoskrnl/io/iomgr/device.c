@@ -1535,6 +1535,9 @@ IoDeleteDevice(IN PDEVICE_OBJECT DeviceObject)
 {
     PIO_TIMER Timer;
 
+    if (VfDeadlockDetectionEnabled)
+        VfForgetLocksInRange(DeviceObject, DeviceObject->Size);
+
     /* Check if the device is registered for shutdown notifications */
     if (DeviceObject->Flags & DO_SHUTDOWN_REGISTERED)
     {

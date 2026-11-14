@@ -13,11 +13,13 @@
 #undef KeReleaseSpinLockFromDpcLevel
 #undef ExAcquireFastMutex
 #undef ExReleaseFastMutex
+#undef ExTryToAcquireFastMutex
 
 VOID NTAPI KeAcquireSpinLockAtDpcLevel(IN PKSPIN_LOCK SpinLock);
 VOID NTAPI KeReleaseSpinLockFromDpcLevel(IN PKSPIN_LOCK SpinLock);
 VOID FASTCALL ExAcquireFastMutex(IN OUT PFAST_MUTEX FastMutex);
 VOID FASTCALL ExReleaseFastMutex(IN OUT PFAST_MUTEX FastMutex);
+BOOLEAN FASTCALL ExTryToAcquireFastMutex(IN OUT PFAST_MUTEX FastMutex);
 
 #define VF_RELEASE_SPIN_LOCK_IRQL       0x32
 #define VF_ACQUIRE_FAST_MUTEX_IRQL      0x33
@@ -130,6 +132,34 @@ VfExReleaseFastMutex(
 }
 
 static
+BOOLEAN
+FASTCALL
+VfExTryToAcquireFastMutex(
+    _Inout_ PFAST_MUTEX FastMutex)
+{
+    BOOLEAN Acquired = ExTryToAcquireFastMutex(FastMutex);
+
+    if (Acquired)
+        VfLockAcquired(FastMutex, _ReturnAddress());
+
+    return Acquired;
+}
+
+static
+BOOLEAN
+FASTCALL
+VfKeTryToAcquireSpinLockAtDpcLevel(
+    _Inout_ PKSPIN_LOCK SpinLock)
+{
+    BOOLEAN Acquired = KeTryToAcquireSpinLockAtDpcLevel(SpinLock);
+
+    if (Acquired)
+        VfLockAcquired(SpinLock, _ReturnAddress());
+
+    return Acquired;
+}
+
+static
 VOID
 VfpCheckWait(
     _In_ PVOID Object,
@@ -187,6 +217,8 @@ const VF_THUNK VfIrqlThunks[] =
 #endif
     { (ULONG_PTR)ExAcquireFastMutex, (ULONG_PTR)VfExAcquireFastMutex },
     { (ULONG_PTR)ExReleaseFastMutex, (ULONG_PTR)VfExReleaseFastMutex },
+    { (ULONG_PTR)ExTryToAcquireFastMutex, (ULONG_PTR)VfExTryToAcquireFastMutex },
+    { (ULONG_PTR)KeTryToAcquireSpinLockAtDpcLevel, (ULONG_PTR)VfKeTryToAcquireSpinLockAtDpcLevel },
     { (ULONG_PTR)KeWaitForSingleObject, (ULONG_PTR)VfKeWaitForSingleObject },
     { (ULONG_PTR)KeWaitForMultipleObjects, (ULONG_PTR)VfKeWaitForMultipleObjects },
 };

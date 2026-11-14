@@ -52,7 +52,7 @@ static VF_LOCK_HELD_RECORD VfpHeld[VF_LOCK_HELD];
 static USHORT VfpFreeEdge;
 static USHORT VfpWalk[VF_LOCK_NODES];
 static UCHAR VfpSeen[VF_LOCK_NODES];
-static BOOLEAN VfpHeldOverflowed;
+static LONG VfpHeldDropped;
 
 static
 VOID
@@ -230,6 +230,17 @@ VfpReportDeadlockRule(
     }
 }
 
+static
+BOOLEAN
+VfpIsOnCurrentStack(
+    _In_ PVOID Lock)
+{
+    ULONG_PTR Low, High;
+
+    IoGetStackLimits(&Low, &High);
+    return (BOOLEAN)((ULONG_PTR)Lock >= Low && (ULONG_PTR)Lock < High);
+}
+
 VOID
 NTAPI
 VfLockAcquiring(
@@ -243,7 +254,7 @@ VfLockAcquiring(
     KIRQL OldIrql;
     ULONG i;
 
-    if (!VfDeadlockDetectionEnabled || KeGetCurrentIrql() > DISPATCH_LEVEL)
+    if (!VfDeadlockDetectionEnabled || KeGetCurrentIrql() > DISPATCH_LEVEL || VfpIsOnCurrentStack(Lock))
         return;
 
     KeAcquireSpinLock(&VfpGraphLock, &OldIrql);
@@ -304,7 +315,16 @@ VfLockAcquired(
     KIRQL OldIrql;
     ULONG i;
 
-    if (!VfDeadlockDetectionEnabled || KeGetCurrentIrql() > DISPATCH_LEVEL)
+    if (!VfDeadlockDetectionEnabled)
+        return;
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        InterlockedIncrement(&VfpHeldDropped);
+        return;
+    }
+
+    if (VfpIsOnCurrentStack(Lock))
         return;
 
     KeAcquireSpinLock(&VfpGraphLock, &OldIrql);
@@ -328,7 +348,7 @@ VfLockAcquired(
     }
     else
     {
-        VfpHeldOverflowed = TRUE;
+        InterlockedIncrement(&VfpHeldDropped);
     }
     KeReleaseSpinLock(&VfpGraphLock, OldIrql);
 }
@@ -341,11 +361,11 @@ VfLockReleasing(
 {
     PKTHREAD Thread = KeGetCurrentThread();
     PKTHREAD Owner = NULL;
-    BOOLEAN Found = FALSE, Overflowed;
+    BOOLEAN Found = FALSE, Dropped = FALSE;
     KIRQL OldIrql;
     ULONG i;
 
-    if (!VfDeadlockDetectionEnabled || KeGetCurrentIrql() > DISPATCH_LEVEL)
+    if (!VfDeadlockDetectionEnabled || KeGetCurrentIrql() > DISPATCH_LEVEL || VfpIsOnCurrentStack(Lock))
         return;
 
     KeAcquireSpinLock(&VfpGraphLock, &OldIrql);
@@ -359,12 +379,16 @@ VfLockReleasing(
         VfpHeld[i].Lock = NULL;
         break;
     }
-    Overflowed = VfpHeldOverflowed;
+    if (!Found && VfpHeldDropped > 0)
+    {
+        InterlockedDecrement(&VfpHeldDropped);
+        Dropped = TRUE;
+    }
     KeReleaseSpinLock(&VfpGraphLock, OldIrql);
 
     if (!Found)
     {
-        if (!Overflowed)
+        if (!Dropped)
             VfpReportDeadlockRule(VF_DEADLOCK_UNACQUIRED, Lock, 0, 0, Caller);
     }
     else if (Owner != Thread)
@@ -383,6 +407,7 @@ VfForgetLocksInRange(
     ULONG_PTR End = Start + Size;
     PVOID OwnedLock = NULL;
     PKTHREAD Owner = NULL;
+    ULONG Owned = 0;
     KIRQL OldIrql;
     USHORT n;
     ULONG i;
@@ -399,6 +424,7 @@ VfForgetLocksInRange(
         OwnedLock = VfpHeld[i].Lock;
         Owner = VfpHeld[i].Thread;
         VfpHeld[i].Lock = NULL;
+        Owned++;
     }
 
     for (n = 0; n < VF_LOCK_NODES; n++)
@@ -409,5 +435,5 @@ VfForgetLocksInRange(
     KeReleaseSpinLock(&VfpGraphLock, OldIrql);
 
     if (OwnedLock != NULL)
-        VfpReportDeadlockRule(VF_DEADLOCK_DELETED_OWNED, OwnedLock, (ULONG_PTR)Owner, 0, _ReturnAddress());
+        VfpReportDeadlockRule(VF_DEADLOCK_DELETED_OWNED, OwnedLock, (ULONG_PTR)Owner, Owned, _ReturnAddress());
 }
