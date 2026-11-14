@@ -57,6 +57,7 @@ set(ALPC_SOURCE
 list(APPEND SOURCE
     AppendOnlyWrite.c
     BootLog.c
+    DbgPrintEx.c
     DllLoadNotification.c
     DbgCommandString.c
     DpcBehaviorRegistry.c
