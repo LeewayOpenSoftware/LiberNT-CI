@@ -145,7 +145,7 @@ CcMmPurge(
 {
     PCC_NT_MAP NtMap = Context;
 
-    return MiSegmentPurge(NtMap->Control->Segment, Offset, Length, FALSE);
+    return MiSegmentPurge(NtMap->Control->Segment, Offset, Length, MiPurgeCoherency);
 }
 
 static
