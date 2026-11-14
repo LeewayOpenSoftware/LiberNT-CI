@@ -370,6 +370,7 @@ KMT_TESTFUNC Test_MmDriverVerifier;
 KMT_TESTFUNC Test_MmDriverVerifierCompletePending;
 KMT_TESTFUNC Test_MmDriverVerifierIrpTracking;
 KMT_TESTFUNC Test_MmDriverVerifierLeak;
+KMT_TESTFUNC Test_MmDriverVerifierLockOrder;
 KMT_TESTFUNC Test_MmDriverVerifierSpinLockAtPassive;
 KMT_TESTFUNC Test_MmDriverVerifierPagedAtDispatch;
 KMT_TESTFUNC Test_MmDriverVerifierWaitAtDispatch;
@@ -837,6 +838,7 @@ const KMT_TEST TestList[] =
     { "-MmDriverVerifierCompletePending",   Test_MmDriverVerifierCompletePending },
     { "-MmDriverVerifierIrpTracking",       Test_MmDriverVerifierIrpTracking },
     { "-MmDriverVerifierLeak",              Test_MmDriverVerifierLeak },
+    { "-MmDriverVerifierLockOrder",         Test_MmDriverVerifierLockOrder },
     { "-MmDriverVerifierSpinLockAtPassive", Test_MmDriverVerifierSpinLockAtPassive },
     { "-MmDriverVerifierPagedAtDispatch",   Test_MmDriverVerifierPagedAtDispatch },
     { "-MmDriverVerifierWaitAtDispatch",    Test_MmDriverVerifierWaitAtDispatch },

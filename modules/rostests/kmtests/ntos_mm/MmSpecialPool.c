@@ -7,6 +7,8 @@
 
 #include <kmt_test.h>
 
+#define VF_TEST_DEADLOCK_DETECTION 0x0020
+
 #define BAIT_TAG        'tBpS'
 #define OTHER_TAG       'tOpS'
 #define BAIT_ALIGNMENT  16
@@ -392,7 +394,7 @@ START_TEST(MmDriverVerifier)
     ok_eq_hex(Status, STATUS_SUCCESS);
     ok(Flags & DRIVER_VERIFIER_SPECIAL_POOLING, "the driver is verified but the flags 0x%lx do not say special pool\n", Flags);
     ok((Flags & ~(DRIVER_VERIFIER_SPECIAL_POOLING | DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS |
-                  DRIVER_VERIFIER_IO_CHECKING)) == 0,
+                  DRIVER_VERIFIER_IO_CHECKING | VF_TEST_DEADLOCK_DETECTION)) == 0,
        "the flags 0x%lx claim options that do not exist\n", Flags);
     ok(EndsAtPageEnd(OTHER_TAG), "blocks of a verified driver are not placed at a page end\n");
 
@@ -653,4 +655,42 @@ START_TEST(MmDriverVerifierIrpTracking)
     IoDeleteDevice(VfLowerDevice);
     VfLowerDevice = NULL;
     trace("Done: the debug log must hold exactly three log-only lines (0x20b, 0x310, 0x203) and no bug check\n");
+}
+
+static FAST_MUTEX VfFirstMutex;
+static FAST_MUTEX VfSecondMutex;
+
+START_TEST(MmDriverVerifierLockOrder)
+{
+    ULONG Flags = 0;
+
+    if (skip(EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & VF_TEST_DEADLOCK_DETECTION),
+             "kmtest_drv.sys is not verified with deadlock detection (VerifyDriverLevel 0x29)\n"))
+    {
+        return;
+    }
+
+    ExInitializeFastMutex(&VfFirstMutex);
+    ExInitializeFastMutex(&VfSecondMutex);
+
+    trace("Case 1: first, then second; expect NO verifier line\n");
+    ExAcquireFastMutex(&VfFirstMutex);
+    ExAcquireFastMutex(&VfSecondMutex);
+    ExReleaseFastMutex(&VfSecondMutex);
+    ExReleaseFastMutex(&VfFirstMutex);
+
+    trace("Case 2: the same order again; expect NO verifier line\n");
+    ExAcquireFastMutex(&VfFirstMutex);
+    ExAcquireFastMutex(&VfSecondMutex);
+    ExReleaseFastMutex(&VfSecondMutex);
+    ExReleaseFastMutex(&VfFirstMutex);
+
+    trace("Case 3: second, then first; expect one log-only line, deadlock rule 0x1001, lock %p\n", &VfFirstMutex);
+    ExAcquireFastMutex(&VfSecondMutex);
+    ExAcquireFastMutex(&VfFirstMutex);
+    ExReleaseFastMutex(&VfFirstMutex);
+    ExReleaseFastMutex(&VfSecondMutex);
+
+    ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
+    trace("Done: the debug log must hold exactly one log-only line (0x1001) and no bug check\n");
 }

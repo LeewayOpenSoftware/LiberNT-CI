@@ -153,7 +153,10 @@ VfUntrackPool(
     KeReleaseSpinLock(&VfpTrackLock, OldIrql);
 
     if (Found != NULL)
+    {
+        VfForgetLocksInRange(Found->Block, Found->Size);
         ExFreePoolWithTag(Found, VF_TRACK_TAG);
+    }
 }
 
 VOID

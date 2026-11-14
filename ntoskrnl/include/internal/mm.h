@@ -1010,6 +1010,14 @@ extern const VF_THUNK VfIoThunks[];
 extern const ULONG VfIoThunkCount;
 extern BOOLEAN VfPoolTrackingEnabled;
 extern BOOLEAN VfIrpTrackingEnabled;
+extern ULONG VfIrpRuleHits;
+extern BOOLEAN VfDeadlockDetectionEnabled;
+extern ULONG VfDeadlockRuleHits;
+extern ULONG VfDeadlockGraphResets;
+
+#ifndef DRIVER_VERIFIER_DEADLOCK_DETECTION
+#define DRIVER_VERIFIER_DEADLOCK_DETECTION 0x0020
+#endif
 
 VOID
 NTAPI
@@ -1038,6 +1046,34 @@ VOID
 NTAPI
 VfCheckIrpsAtUnload(
     IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
+VOID
+NTAPI
+VfInitializeDeadlockDetection(VOID);
+
+VOID
+NTAPI
+VfLockAcquiring(
+    IN PVOID Lock,
+    IN PVOID Caller);
+
+VOID
+NTAPI
+VfLockAcquired(
+    IN PVOID Lock,
+    IN PVOID Caller);
+
+VOID
+NTAPI
+VfLockReleasing(
+    IN PVOID Lock,
+    IN PVOID Caller);
+
+VOID
+NTAPI
+VfForgetLocksInRange(
+    IN PVOID Base,
+    IN SIZE_T Size);
 
 VOID
 NTAPI
