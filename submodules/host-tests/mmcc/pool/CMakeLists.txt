@@ -72,6 +72,14 @@ target_compile_options(pool_nt_asan PRIVATE -fsanitize=address,undefined -fno-om
 target_link_options(pool_nt_asan PRIVATE -fsanitize=address,undefined)
 
 find_package(Threads REQUIRED)
+foreach(SHIFT 12 14 16)
+    add_executable(pool_special_${SHIFT} host/t_special.c ${POOL_ROOT}/special/special.c)
+    target_compile_definitions(pool_special_${SHIFT} PRIVATE POOL_HOST_TEST POOL_HOST_PAGE_SHIFT=${SHIFT})
+    target_compile_options(pool_special_${SHIFT} PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-multichar -g -O1)
+    target_link_libraries(pool_special_${SHIFT} PRIVATE Threads::Threads)
+    add_test(NAME pool_special_${SHIFT} COMMAND pool_special_${SHIFT})
+endforeach()
+
 foreach(TARGET pool_nt_envelope pool_nt_envelope_asan pool_nt_envelope_tsan)
     add_executable(${TARGET} host/t_ntpool_envelope.c ${POOL_ENGINE}
         ${POOL_ROOT}/ex/exinit.c ${POOL_ROOT}/ex/exalloc.c

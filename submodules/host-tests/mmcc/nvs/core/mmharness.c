@@ -98,7 +98,7 @@ WorldCreateZoned(TEST_WORLD *World, ULONG Frames, ULONG DirectFrames, ULONG Cpus
     memset(World, 0, sizeof(*World));
     MachineCreate(&World->Machine, Frames, Cpus);
     World->PfnArray = calloc(Frames, sizeof(MI_PFN));
-    MiSystemInitialize(&World->System, World->PfnArray, 0, Frames, Cpus, CommitLimit);
+    MiSystemInitialize(&World->System, World->PfnArray, Frames, Cpus, CommitLimit);
     if (WorldRegionRotation)
         MiPfnDbSetRegionRotation(&World->System.Pfn, TRUE);
     if (DirectFrames != 0)
@@ -359,6 +359,7 @@ static const TEST_ENTRY Tests[] =
     { "ntpaging", TestNtPaging, 0 },
     { "async", TestAsync, 0 },
     { "sys", TestSys, 0 },
+    { "guard", TestGuard, 0 },
     { "process", TestProcess, 0 },
     { "highmem", TestHighMem, 0 },
     { "lxmm", TestLxMm, 0 },

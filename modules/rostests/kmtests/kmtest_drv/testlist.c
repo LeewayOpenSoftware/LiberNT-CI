@@ -367,6 +367,31 @@ KMT_TESTFUNC Test_MmWddmRotate;
 KMT_TESTFUNC Test_MmWddmRotateValid;
 KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
+KMT_TESTFUNC Test_MmDriverVerifier;
+KMT_TESTFUNC Test_MmDriverVerifierCompletePending;
+KMT_TESTFUNC Test_MmDriverVerifierIrpCancelRoutine;
+KMT_TESTFUNC Test_MmDriverVerifierIrpFreeInUse;
+KMT_TESTFUNC Test_MmDriverVerifierIrpQueuedBelow;
+KMT_TESTFUNC Test_MmDriverVerifierIrpReuseInUse;
+KMT_TESTFUNC Test_MmDriverVerifierIrpStress;
+KMT_TESTFUNC Test_MmDriverVerifierIrpTracking;
+KMT_TESTFUNC Test_MmDriverVerifierLeak;
+KMT_TESTFUNC Test_MmDriverVerifierLockFreed;
+KMT_TESTFUNC Test_MmDriverVerifierLockOrder;
+KMT_TESTFUNC Test_MmDriverVerifierLockOwner;
+KMT_TESTFUNC Test_MmDriverVerifierLockStress;
+KMT_TESTFUNC Test_MmDriverVerifierSpinLockAtPassive;
+KMT_TESTFUNC Test_MmDriverVerifierPagedAtDispatch;
+KMT_TESTFUNC Test_MmDriverVerifierWaitAtDispatch;
+KMT_TESTFUNC Test_MmSpecialPool;
+KMT_TESTFUNC Test_MmSpecialPoolOverrunWrite;
+KMT_TESTFUNC Test_MmSpecialPoolOverrunRead;
+KMT_TESTFUNC Test_MmSpecialPoolUnderrun;
+KMT_TESTFUNC Test_MmSpecialPoolSlackWrite;
+KMT_TESTFUNC Test_MmSpecialPoolReadAfterFree;
+KMT_TESTFUNC Test_MmSpecialPoolWriteAfterFree;
+KMT_TESTFUNC Test_MmSpecialPoolDoubleFree;
+KMT_TESTFUNC Test_MmSpecialPoolControl;
 KMT_TESTFUNC Test_MmUserLayout;
 KMT_TESTFUNC Test_MmLoaderBlock;
 KMT_TESTFUNC Test_NdisIfProvider;
@@ -819,6 +844,31 @@ const KMT_TEST TestList[] =
     { "MmPrivatePages",                     Test_MmPrivatePages },
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },
+    { "MmDriverVerifier",                   Test_MmDriverVerifier },
+    { "-MmDriverVerifierCompletePending",   Test_MmDriverVerifierCompletePending },
+    { "-MmDriverVerifierIrpCancelRoutine",  Test_MmDriverVerifierIrpCancelRoutine },
+    { "-MmDriverVerifierIrpFreeInUse",      Test_MmDriverVerifierIrpFreeInUse },
+    { "-MmDriverVerifierIrpQueuedBelow",    Test_MmDriverVerifierIrpQueuedBelow },
+    { "-MmDriverVerifierIrpReuseInUse",     Test_MmDriverVerifierIrpReuseInUse },
+    { "-MmDriverVerifierIrpStress",         Test_MmDriverVerifierIrpStress },
+    { "-MmDriverVerifierIrpTracking",       Test_MmDriverVerifierIrpTracking },
+    { "-MmDriverVerifierLeak",              Test_MmDriverVerifierLeak },
+    { "-MmDriverVerifierLockFreed",         Test_MmDriverVerifierLockFreed },
+    { "-MmDriverVerifierLockOrder",         Test_MmDriverVerifierLockOrder },
+    { "-MmDriverVerifierLockOwner",         Test_MmDriverVerifierLockOwner },
+    { "-MmDriverVerifierLockStress",        Test_MmDriverVerifierLockStress },
+    { "-MmDriverVerifierSpinLockAtPassive", Test_MmDriverVerifierSpinLockAtPassive },
+    { "-MmDriverVerifierPagedAtDispatch",   Test_MmDriverVerifierPagedAtDispatch },
+    { "-MmDriverVerifierWaitAtDispatch",    Test_MmDriverVerifierWaitAtDispatch },
+    { "MmSpecialPool",                      Test_MmSpecialPool },
+    { "-MmSpecialPoolOverrunWrite",         Test_MmSpecialPoolOverrunWrite },
+    { "-MmSpecialPoolOverrunRead",          Test_MmSpecialPoolOverrunRead },
+    { "-MmSpecialPoolUnderrun",             Test_MmSpecialPoolUnderrun },
+    { "-MmSpecialPoolSlackWrite",           Test_MmSpecialPoolSlackWrite },
+    { "-MmSpecialPoolReadAfterFree",        Test_MmSpecialPoolReadAfterFree },
+    { "-MmSpecialPoolWriteAfterFree",       Test_MmSpecialPoolWriteAfterFree },
+    { "-MmSpecialPoolDoubleFree",           Test_MmSpecialPoolDoubleFree },
+    { "-MmSpecialPoolControl",              Test_MmSpecialPoolControl },
     { "MmUserLayout",                       Test_MmUserLayout },
     { "MmLoaderBlock",                      Test_MmLoaderBlock },
     { "MonitorBrightnessKey",               Test_MonitorBrightnessKey },

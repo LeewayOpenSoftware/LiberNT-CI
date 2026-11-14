@@ -980,6 +980,116 @@ NTAPI
 MmFreeSpecialPool(
     IN PVOID P);
 
+SIZE_T
+NTAPI
+MmQuerySpecialPoolBlockSize(
+    IN PVOID P);
+
+VOID
+NTAPI
+MiCheckSpecialPoolFault(
+    IN PVOID Address,
+    IN BOOLEAN Write,
+    IN PVOID TrapInformation OPTIONAL);
+
+BOOLEAN
+NTAPI
+MiIsSpecialPoolEnabled(VOID);
+
+typedef struct _VF_THUNK
+{
+    ULONG_PTR Pristine;
+    ULONG_PTR Replacement;
+} VF_THUNK, *PVF_THUNK;
+
+extern const VF_THUNK VfPoolThunks[];
+extern const ULONG VfPoolThunkCount;
+extern const VF_THUNK VfIrqlThunks[];
+extern const ULONG VfIrqlThunkCount;
+extern const VF_THUNK VfIoThunks[];
+extern const ULONG VfIoThunkCount;
+extern BOOLEAN VfPoolTrackingEnabled;
+extern BOOLEAN VfIrpTrackingEnabled;
+extern ULONG VfIrpRuleHits;
+extern ULONG VfIrpUntrackSkipped;
+extern BOOLEAN VfDeadlockDetectionEnabled;
+extern ULONG VfDeadlockRuleHits;
+extern ULONG VfDeadlockGraphResets;
+
+#ifndef DRIVER_VERIFIER_DEADLOCK_DETECTION
+#define DRIVER_VERIFIER_DEADLOCK_DETECTION 0x0020
+#endif
+
+VOID
+NTAPI
+VfInitializePoolTracking(VOID);
+
+VOID
+NTAPI
+VfUntrackPool(
+    IN PVOID Block);
+
+VOID
+NTAPI
+VfCheckPoolAtUnload(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
+VOID
+NTAPI
+VfInitializeIrpTracking(VOID);
+
+VOID
+NTAPI
+VfUntrackIrp(
+    IN struct _IRP *Irp);
+
+VOID
+NTAPI
+VfCheckIrpsAtUnload(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
+VOID
+NTAPI
+VfInitializeDeadlockDetection(VOID);
+
+VOID
+NTAPI
+VfLockAcquiring(
+    IN PVOID Lock,
+    IN PVOID Caller);
+
+VOID
+NTAPI
+VfLockAcquired(
+    IN PVOID Lock,
+    IN PVOID Caller);
+
+VOID
+NTAPI
+VfLockReleasing(
+    IN PVOID Lock,
+    IN PVOID Caller);
+
+VOID
+NTAPI
+VfForgetLocksInRange(
+    IN PVOID Base,
+    IN SIZE_T Size);
+
+VOID
+NTAPI
+MiInitializeDriverVerifier(VOID);
+
+VOID
+NTAPI
+MiVerifyLoadedImage(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
+VOID
+NTAPI
+MiVerifyBootLoadedImages(
+    IN struct _LOADER_PARAMETER_BLOCK *LoaderBlock);
+
 /* mm.c **********************************************************************/
 
 NTSTATUS

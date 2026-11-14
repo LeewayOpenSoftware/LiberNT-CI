@@ -394,14 +394,14 @@ DATA_SEG("INITDATA") CM_SYSTEM_CONTROL_VECTOR CmControlVector[] =
     {
         L"Session Manager\\Memory Management",
         L"PoolTag",
-        &DummyData,
+        &MmSpecialPoolTag,
         NULL,
         NULL
     },
     {
         L"Session Manager\\Memory Management",
         L"PoolTagOverruns",
-        &DummyData,
+        &MmSpecialPoolCatchOverruns,
         NULL,
         NULL
     },

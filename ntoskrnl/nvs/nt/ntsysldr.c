@@ -758,6 +758,12 @@ MmUnloadSystemImage(IN PVOID ImageHandle)
 
     if (LdrEntry->LoadCount) goto Done;
 
+    VfCheckIrpsAtUnload(LdrEntry);
+    if (LdrEntry->Flags & LDRP_IMAGE_VERIFYING)
+        VfForgetLocksInRange(LdrEntry->DllBase, LdrEntry->SizeOfImage);
+
+    VfCheckPoolAtUnload(LdrEntry);
+
     if (LdrEntry->Flags & LDRP_DEBUG_SYMBOLS_LOADED)
     {
         Status = RtlUnicodeStringToAnsiString(&TempName,
@@ -2566,6 +2572,8 @@ LoaderScan:
                         LDRP_MM_LOADED);
     LdrEntry->Flags &= ~LDRP_LOAD_IN_PROGRESS;
     LdrEntry->LoadedImports = LoadedImports;
+
+    MiVerifyLoadedImage(LdrEntry);
 
     MiWriteProtectSystemImage(LdrEntry->DllBase);
 

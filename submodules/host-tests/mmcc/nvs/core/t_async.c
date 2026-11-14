@@ -203,7 +203,7 @@ AsyncStress(void *Context)
 
         CHECK(Status == STATUS_SUCCESS || Status == STATUS_CANT_WAIT);
         if (i % 16 == 0)
-            MiSegmentPurge(Thread->Segment, 4 * PAGE_SIZE, 28 * PAGE_SIZE);
+            MiSegmentPurge(Thread->Segment, 4 * PAGE_SIZE, 28 * PAGE_SIZE, TRUE);
     }
     return NULL;
 }
@@ -345,7 +345,7 @@ TestAsync(void)
     CHECK(Byte == 0xC7);
 
     CHECK(NT_SUCCESS(MiSegmentPrefetch(Segment, 4 * PAGE_SIZE, PAGE_SIZE)));
-    CHECK(MiSegmentPurge(Segment, 4 * PAGE_SIZE, PAGE_SIZE));
+    CHECK(MiSegmentPurge(Segment, 4 * PAGE_SIZE, PAGE_SIZE, TRUE));
     AsyncDrain(&File);
     CHECK(!MiSegmentIsResident(Segment, 4 * PAGE_SIZE, PAGE_SIZE));
     Calls = File.Calls;
@@ -416,7 +416,7 @@ TestAsync(void)
             CHECK(pthread_join(Threads[i], NULL) == 0);
         CHECK(Segment->PendingReadCount == 0 && Segment->ReferenceCount == 2);
         Segment->FileOps.ReadAsync = MiControlReadAsync;
-        CHECK(MiSegmentPurge(Segment, 24 * PAGE_SIZE, PAGE_SIZE));
+        CHECK(MiSegmentPurge(Segment, 24 * PAGE_SIZE, PAGE_SIZE, TRUE));
     }
     CHECK(NT_SUCCESS(MiSegmentPrefetch(Segment, 24 * PAGE_SIZE, PAGE_SIZE)));
     CHECK(NT_SUCCESS(MiUnmapView(&World.System.SystemSpace, Base)));
