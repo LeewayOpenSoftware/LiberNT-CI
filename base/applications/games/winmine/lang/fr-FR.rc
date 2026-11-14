@@ -2,9 +2,11 @@ LANGUAGE LANG_FRENCH, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "Démineur LiberNT"
+    IDS_APPNAME "Démineur Orosi"
     IDS_NOBODY "Anonyme"
-    IDS_ABOUT "Copyright 2000 Joshua Thielen"
+    IDS_ABOUT "Based on WineMine (Wine) and ReactOS Mines
+Copyright 2000 Joshua Thielen
+Modified and maintained by: Leeway Open Software"
 END
 
 IDM_WINEMINE MENU

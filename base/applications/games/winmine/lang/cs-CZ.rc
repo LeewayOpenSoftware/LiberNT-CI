@@ -2,9 +2,11 @@ LANGUAGE LANG_CZECH, SUBLANG_DEFAULT
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "LiberNT Mines"
+    IDS_APPNAME "Orosi Mines"
     IDS_NOBODY "Nikdo"
-    IDS_ABOUT "Copyright 2000 Joshua Thielen"
+    IDS_ABOUT "Based on WineMine (Wine) and ReactOS Mines
+Copyright 2000 Joshua Thielen
+Modified and maintained by: Leeway Open Software"
 END
 
 IDM_WINEMINE MENU

@@ -4,7 +4,9 @@ STRINGTABLE
 BEGIN
     IDS_APPNAME "Сапёр"
     IDS_NOBODY "Игрок"
-    IDS_ABOUT "Copyright 2000 Joshua Thielen"
+    IDS_ABOUT "Based on WineMine (Wine) and ReactOS Mines
+Copyright 2000 Joshua Thielen
+Modified and maintained by: Leeway Open Software"
 END
 
 IDM_WINEMINE MENU

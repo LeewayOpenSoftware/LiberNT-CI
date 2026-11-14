@@ -2,7 +2,7 @@ LANGUAGE LANG_LITHUANIAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "LiberNT Mines"
+    IDS_APPNAME "Orosi Mines"
     IDS_NOBODY "Niekas"
     IDS_ABOUT "Autoriaus teisės 2000 Joshua Thielen"
 END
