@@ -56,11 +56,11 @@ jobs:
         run: |
           set -eu
           POC_EXTERNS="ExAllocatePoolWithTag,ExFreePoolWithTag,KeInitializeSpinLock,KeAcquireSpinLockRaiseToDpc,KeReleaseSpinLock"
-          build() { # <manifest dir> <crate> <work dir> <externs> [features]
+          build() { # <manifest dir> <crate> <work dir> <externs> [features] [forbid_panic]
             cmake -DRUSTUP="$(command -v rustup)" -DTOOLCHAIN="$TC" -DRUST_TARGET=x86_64-pc-windows-gnu \
               -DLLVM_AR="$LLVM_BIN/llvm-ar" -DLLVM_NM="$LLVM_BIN/llvm-nm" -DLLVM_OBJDUMP="$LLVM_BIN/llvm-objdump" \
               -DMANIFEST_DIR="$1" -DCRATE="$2" -DWORK_DIR="$3" -DOUTPUT="$3/lib$2.a" \
-              -DALLOWED_EXTERNS="$4" -DFEATURES="${5:-}" -P sdk/cmake/rust-build.cmake
+              -DALLOWED_EXTERNS="$4" -DFEATURES="${5:-}" -DFORBID_PANIC="${6:-}" -P sdk/cmake/rust-build.cmake
           }
           ELSE="$RUNNER_TEMP/elsewhere/a/b"
           mkdir -p "$ELSE"
@@ -72,8 +72,10 @@ jobs:
             [ "$H1" = "$H2" ] || { echo "::error::$1 is not reproducible"; exit 1; }
             echo "$1 $H1" >> "$RUNNER_TEMP/hashes.txt"
           }
-          build tools/rust-poc/lrm-rs lrm_rs "$RUNNER_TEMP/w/lrm1" ""
-          build "$ELSE/rust-poc/lrm-rs" lrm_rs "$RUNNER_TEMP/w/lrm2" ""
+          # lrm_rs is routed in the kernel; it must be panic-free (FORBID_PANIC=1), unlike leeway_rs_poc
+          # whose test IOCTL deliberately bug-checks.
+          build tools/rust-poc/lrm-rs lrm_rs "$RUNNER_TEMP/w/lrm1" "" "" 1
+          build "$ELSE/rust-poc/lrm-rs" lrm_rs "$RUNNER_TEMP/w/lrm2" "" "" 1
           check lrm_rs "$RUNNER_TEMP/w/lrm1" "$RUNNER_TEMP/w/lrm2" liblrm_rs.a
           build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/poc1" "$POC_EXTERNS"
           build "$ELSE/rust-poc" leeway_rs_poc "$RUNNER_TEMP/w/poc2" "$POC_EXTERNS"

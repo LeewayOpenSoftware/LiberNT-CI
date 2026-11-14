@@ -228,6 +228,9 @@ static uint32_t rnd_pooltype() {
     if (rnd() & 1) t |= EX_POOL_BASE_TYPE_MASK;
     if (rnd() & 1) t |= CACHE_ALIGNED_POOL_MASK;
     if (rnd() & 1) t |= POOL_NX_ALLOCATION;
+    /* Sometimes set bit 31: C casts (ULONG_PTR)PoolType (signed enum) and sign-extends it into the
+     * 0xC1/0x30 bug check parameter 2; this exercises that sign-extension parity on the Rust side. */
+    if ((rnd() & 3) == 0) t |= 0x80000000u;
     return t;
 }
 

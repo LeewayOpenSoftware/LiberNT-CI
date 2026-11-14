@@ -132,6 +132,24 @@ if(_dis MATCHES "%[yz]mm|vzeroupper")
     message(FATAL_ERROR "rust-build: ${CRATE} contains AVX code")
 endif()
 
+# Optional (FORBID_PANIC): no reachable Rust panic. A panic in kernel code hangs a processor at its
+# IRQL on the spinning #[panic_handler]. The extern gate already rejects undefined core::panicking
+# references; this also catches an internal call, by failing on any relocation against the panic
+# machinery (core::panicking::*, panic_fmt/bounds/misaligned). A defined-but-uncalled handler is not
+# a relocation, so it does not trip this.
+if(FORBID_PANIC)
+    execute_process(COMMAND "${LLVM_OBJDUMP}" -r ${_own}
+                    WORKING_DIRECTORY "${_objs}" OUTPUT_VARIABLE _relocs RESULT_VARIABLE _rc)
+    if(NOT _rc EQUAL 0)
+        message(FATAL_ERROR "rust-build: llvm-objdump -r failed")
+    endif()
+    if(_relocs MATCHES "panic")
+        message(FATAL_ERROR "rust-build: ${CRATE} has a reachable panic (a relocation references the "
+                            "panic machinery); the kernel panic handler spins a processor. Keep the "
+                            "driven path panic-free (checked/wrapping arithmetic, bounded indexing).")
+    endif()
+endif()
+
 file(REMOVE "${OUTPUT}")
 execute_process(COMMAND "${LLVM_AR}" rcsD "${OUTPUT}" ${_own} WORKING_DIRECTORY "${_objs}" RESULT_VARIABLE _rc)
 if(NOT _rc EQUAL 0)
