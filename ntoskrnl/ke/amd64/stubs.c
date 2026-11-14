@@ -213,7 +213,9 @@ KiIdleLoop(VOID)
              * the DPC to the poll at the top of this loop. That poll is
              * behind us. The idle mark is cleared, with a full barrier, so a
              * DPC queued from now on gets its interrupt; one queued before
-             * is found here and is run when the new thread lowers the IRQL. */
+             * is found here and is run when the new thread lowers the IRQL.
+             * Only the normal queue is looked at: threaded DPCs are run by
+             * the DPC thread, which is woken in its own way. */
             KeMemoryBarrier();
             if (Prcb->DpcData[0].DpcQueueDepth != 0)
                 KiRequestDispatchInterrupt(Prcb);
