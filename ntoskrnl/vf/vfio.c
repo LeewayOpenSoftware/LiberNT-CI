@@ -281,6 +281,23 @@ typedef struct _VF_DISPATCH_IMAGE
 
 static VF_DISPATCH_IMAGE VfpDispatchImages[VF_DISPATCH_IMAGES];
 
+/* Counts the times the table was emptied. A lookup that walked the list of
+ * modules while an image was unloaded must not store what it found. */
+static ULONG VfpDispatchGeneration;
+
+/* Called when an image has left the list of loaded modules */
+VOID
+NTAPI
+VfForgetDispatchImages(VOID)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    RtlZeroMemory(VfpDispatchImages, sizeof(VfpDispatchImages));
+    VfpDispatchGeneration++;
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+}
+
 static
 BOOLEAN
 VfpFindDispatchImage(
@@ -291,9 +308,11 @@ VfpFindDispatchImage(
 {
     PVF_DISPATCH_IMAGE Slot = &VfpDispatchImages[((ULONG_PTR)Routine >> 4) % VF_DISPATCH_IMAGES];
     BOOLEAN Found = FALSE;
+    ULONG Generation;
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    Generation = VfpDispatchGeneration;
     if (Slot->Routine == Routine && Routine != NULL)
     {
         *ImageBase = Slot->Base;
@@ -310,10 +329,13 @@ VfpFindDispatchImage(
         return FALSE;
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
-    Slot->Routine = Routine;
-    Slot->Base = *ImageBase;
-    Slot->Size = *ImageSize;
-    Slot->InKernel = *InKernel;
+    if (Generation == VfpDispatchGeneration)
+    {
+        Slot->Routine = Routine;
+        Slot->Base = *ImageBase;
+        Slot->Size = *ImageSize;
+        Slot->InKernel = *InKernel;
+    }
     KeReleaseSpinLock(&VfpIrpLock, OldIrql);
 
     return TRUE;
@@ -450,16 +472,7 @@ VfCheckIrpsAtUnload(
     KIRQL OldIrql;
     ULONG i;
 
-    if (!VfIrpTrackingEnabled)
-        return;
-
-    /* The remembered images of dispatch routines are for the modules that are
-     * loaded now */
-    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
-    RtlZeroMemory(VfpDispatchImages, sizeof(VfpDispatchImages));
-    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
-
-    if (!(LdrEntry->Flags & LDRP_IMAGE_VERIFYING))
+    if (!VfIrpTrackingEnabled || !(LdrEntry->Flags & LDRP_IMAGE_VERIFYING))
         return;
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);

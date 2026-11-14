@@ -1038,6 +1038,10 @@ VOID
 NTAPI
 VfInitializeIrpTracking(VOID);
 
+VOID
+NTAPI
+VfForgetDispatchImages(VOID);
+
 BOOLEAN
 NTAPI
 VfFindImage(
