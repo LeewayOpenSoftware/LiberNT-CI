@@ -20,7 +20,7 @@ POC="$(cd "$HERE/.." && pwd)"
 IOMGR="${IOMGR:-$POC/../../submodules/host-tests/iomgr}"
 ITERS="${ITERS:-200000}"
 CC="${CC:-gcc}"
-TC="nightly-2026-05-24"
+TC="1.97.1"
 [ -f "$IOMGR/t_reparse.c" ] || { echo "no t_reparse.c under IOMGR=$IOMGR" >&2; exit 2; }
 
 # Production reparse.c: flattened drop keeps it next to t_reparse.c; the real repo keeps it at

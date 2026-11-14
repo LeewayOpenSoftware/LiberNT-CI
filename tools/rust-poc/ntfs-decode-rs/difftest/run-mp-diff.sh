@@ -5,7 +5,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/.." && pwd)"
-ITERS="${ITERS:-2000000}"; CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="nightly-2026-05-24"
+ITERS="${ITERS:-2000000}"; CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="1.97.1"
 STAGE="$(mktemp -d)"; mkdir -p "$STAGE/ntfs-decode-rs"
 cp -r "$CRATE/src" "$CRATE/Cargo.toml" "$STAGE/ntfs-decode-rs/"
 export CARGO_TARGET_DIR="$STAGE/cargotgt"

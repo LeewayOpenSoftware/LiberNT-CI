@@ -6,7 +6,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/../.." && pwd)"            # tools/rust-poc/lrm-rs
-CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-nightly-2026-05-24}"
+CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-1.97.1}"
 VFPOOL_C="${VFPOOL_C:-$HERE/dw/vfpool.c}"
 [ -f "$VFPOOL_C" ] || { echo "vfpool.c not found: $VFPOOL_C" >&2; exit 2; }
 

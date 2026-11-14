@@ -10,7 +10,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/.." && pwd)"
-ITERS="${ITERS:-2000000}"; CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-nightly-2026-05-24}"
+ITERS="${ITERS:-2000000}"; CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-1.97.1}"
 SPECIAL_C="${SPECIAL_C:-$HERE/dw/special/special.c}"
 SPECIAL_H="${SPECIAL_H:-$HERE/dw/include/poolspecial.h}"
 [ -f "$SPECIAL_C" ] || { echo "special.c not found: $SPECIAL_C" >&2; exit 2; }

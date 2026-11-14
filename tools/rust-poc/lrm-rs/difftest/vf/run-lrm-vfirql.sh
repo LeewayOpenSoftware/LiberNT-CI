@@ -6,7 +6,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/../.." && pwd)"            # tools/rust-poc/lrm-rs
-CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-nightly-2026-05-24}"
+CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-1.97.1}"
 VFIRQL_C="${VFIRQL_C:-$HERE/dw/vfirql.c}"
 [ -f "$VFIRQL_C" ] || { echo "vfirql.c not found: $VFIRQL_C" >&2; exit 2; }
 

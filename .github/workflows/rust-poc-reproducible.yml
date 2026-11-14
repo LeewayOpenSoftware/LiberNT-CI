@@ -1,14 +1,16 @@
-# Reproducible-build + static-safety gate for the experimental Rust kernel-driver PoC.
-# Runs on push to leeway/exp-rust-poc (and manual dispatch). Builds ONLY the Rust
-# staticlib (no kernel link): it never enables LIBERNT_ENABLE_RUST for the OS build
+# Reproducible-build + static-safety gate for the Rust kernel staticlibs, plus the host
+# differentials. Runs on push to leeway/exp-rust-poc and leeway/exp-lrm-rs-kernel (and manual
+# dispatch). Builds ONLY the Rust staticlibs (no kernel link): it never enables LIBERNT_ENABLE_RUST for the OS build
 # and never touches the ISO.
 name: rust-poc-reproducible
 
 on:
   push:
-    branches: [leeway/exp-rust-poc]
+    branches: [leeway/exp-rust-poc, leeway/exp-lrm-rs-kernel]
     paths:
       - 'tools/rust-poc/**'
+      - 'sdk/cmake/rust.cmake'
+      - 'sdk/cmake/rust-build.cmake'
       - '.github/workflows/rust-poc-reproducible.yml'
   workflow_dispatch:
 
@@ -17,85 +19,80 @@ permissions:
 
 jobs:
   reproducible-staticlib:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: tools/rust-poc
+    # The kernel Rust staticlibs, built by sdk/cmake/rust-build.cmake (the recipe the
+    # LiberNT build uses) with the pinned stable toolchain. Each crate is built twice,
+    # from two source locations into two work directories; the archives must be
+    # byte-identical. The recipe itself fails on a symbol outside the allowed list and on
+    # x87/MMX/AVX code. Two negative controls prove the extern gate is live.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
+      - name: Toolchain pin is consistent and stable
+        run: |
+          TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
+          CH=$(sed -n 's/^channel = "\([^"]*\)"/\1/p' tools/rust-poc/rust-toolchain.toml)
+          echo "rust.cmake=$TC rust-toolchain.toml=$CH"
+          [ -n "$TC" ] && [ "$TC" = "$CH" ] || { echo "::error::toolchain pins differ"; exit 1; }
+          case "$TC" in *nightly*|*beta*) echo "::error::kernel toolchain must be a stable release"; exit 1;; esac
+          if grep -rnE 'build-std|cargo-features|json-target-spec' tools/rust-poc/Cargo.toml tools/rust-poc/.cargo tools/rust-poc/lrm-rs/Cargo.toml; then
+            echo "::error::nightly-only cargo settings in a kernel crate"; exit 1; fi
+          if grep -rn '#!\[feature' tools/rust-poc/src tools/rust-poc/lrm-rs/src; then
+            echo "::error::#![feature] in a kernel crate"; exit 1; fi
+          for L in tools/rust-poc/Cargo.lock tools/rust-poc/lrm-rs/Cargo.lock; do
+            if grep -n '^source = ' "$L"; then echo "::error::$L pulls a registry/git crate (offline build)"; exit 1; fi
+          done
+          echo "TC=$TC" >> "$GITHUB_ENV"
+
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install nightly-2026-05-24 --profile minimal \
-            --component rust-src --component llvm-tools
-          rustup override set nightly-2026-05-24
-          rustc --version --verbose
+          rustup toolchain install "$TC" --profile minimal \
+            --component llvm-tools --target x86_64-pc-windows-gnu
+          rustc +"$TC" --version --verbose
+          B="$(rustc +"$TC" --print sysroot)/lib/rustlib/x86_64-unknown-linux-gnu/bin"
+          echo "LLVM_BIN=$B" >> "$GITHUB_ENV"
 
-      - name: Build twice (default config)
+      - name: Build every kernel crate twice and compare
         run: |
-          CARGO_TARGET_DIR="$RUNNER_TEMP/b1" cargo build --release --locked
-          CARGO_TARGET_DIR="$RUNNER_TEMP/b2" cargo build --release --locked
+          set -eu
+          POC_EXTERNS="ExAllocatePoolWithTag,ExFreePoolWithTag,KeInitializeSpinLock,KeAcquireSpinLockRaiseToDpc,KeReleaseSpinLock"
+          build() { # <manifest dir> <crate> <work dir> <externs> [features]
+            cmake -DRUSTUP="$(command -v rustup)" -DTOOLCHAIN="$TC" -DRUST_TARGET=x86_64-pc-windows-gnu \
+              -DLLVM_AR="$LLVM_BIN/llvm-ar" -DLLVM_NM="$LLVM_BIN/llvm-nm" -DLLVM_OBJDUMP="$LLVM_BIN/llvm-objdump" \
+              -DMANIFEST_DIR="$1" -DCRATE="$2" -DWORK_DIR="$3" -DOUTPUT="$3/lib$2.a" \
+              -DALLOWED_EXTERNS="$4" -DFEATURES="${5:-}" -P sdk/cmake/rust-build.cmake
+          }
+          ELSE="$RUNNER_TEMP/elsewhere/a/b"
+          mkdir -p "$ELSE"
+          cp -r tools/rust-poc "$ELSE/rust-poc"
+          : > "$RUNNER_TEMP/hashes.txt"
+          check() { # <name> <work1> <work2> <file>
+            H1=$(sha256sum "$2/$4" | awk '{print $1}'); H2=$(sha256sum "$3/$4" | awk '{print $1}')
+            echo "$1 build1=$H1 build2=$H2"
+            [ "$H1" = "$H2" ] || { echo "::error::$1 is not reproducible"; exit 1; }
+            echo "$1 $H1" >> "$RUNNER_TEMP/hashes.txt"
+          }
+          build tools/rust-poc/lrm-rs lrm_rs "$RUNNER_TEMP/w/lrm1" ""
+          build "$ELSE/rust-poc/lrm-rs" lrm_rs "$RUNNER_TEMP/w/lrm2" ""
+          check lrm_rs "$RUNNER_TEMP/w/lrm1" "$RUNNER_TEMP/w/lrm2" liblrm_rs.a
+          build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/poc1" "$POC_EXTERNS"
+          build "$ELSE/rust-poc" leeway_rs_poc "$RUNNER_TEMP/w/poc2" "$POC_EXTERNS"
+          check leeway_rs_poc "$RUNNER_TEMP/w/poc1" "$RUNNER_TEMP/w/poc2" libleeway_rs_poc.a
+          build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/pocT" "$POC_EXTERNS,KeBugCheckEx" test-ioctls
+          echo "leeway_rs_poc+test-ioctls $(sha256sum "$RUNNER_TEMP/w/pocT/libleeway_rs_poc.a" | awk '{print $1}')" >> "$RUNNER_TEMP/hashes.txt"
+          if build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/neg1" "ExAllocatePoolWithTag"; then
+            echo "::error::negative control: a short allowed list was accepted"; exit 1; fi
+          if build tools/rust-poc leeway_rs_poc "$RUNNER_TEMP/w/neg2" "$POC_EXTERNS" test-ioctls; then
+            echo "::error::negative control: KeBugCheckEx was accepted without being allowed"; exit 1; fi
+          mkdir -p "$RUNNER_TEMP/out"
+          cp "$RUNNER_TEMP/w/lrm1/liblrm_rs.a" "$RUNNER_TEMP/w/poc1/libleeway_rs_poc.a" "$RUNNER_TEMP/hashes.txt" "$RUNNER_TEMP/out/"
+          { echo "### Rust kernel staticlibs ($TC, x86_64-pc-windows-gnu)"; echo '```'; cat "$RUNNER_TEMP/hashes.txt"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Reproducibility gate (sha256 must match)
-        run: |
-          L=x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a
-          H1=$(sha256sum "$RUNNER_TEMP/b1/$L" | awk '{print $1}')
-          H2=$(sha256sum "$RUNNER_TEMP/b2/$L" | awk '{print $1}')
-          echo "build1 sha256 = $H1"
-          echo "build2 sha256 = $H2"
-          if [ "$H1" != "$H2" ]; then echo "::error::staticlib not reproducible"; exit 1; fi
-          echo "reproducible sha256 = $H1"
-          echo "RUST_POC_SHA256=$H1" >> "$GITHUB_ENV"
-
-      - name: Locate llvm tools
-        run: |
-          echo "LLVM_BIN=$(dirname $(find $(rustc --print sysroot) -name llvm-nm | head -1))" >> "$GITHUB_ENV"
-
-      - name: "Static safety checks (default build: sanctioned externs only, no bugcheck)"
-        run: |
-          # The v2 allocator + spin lock legitimately import ntoskrnl pool/spin-lock
-          # routines, so the default build is no longer extern-free. The real safety
-          # property is: externs are a subset of a sanctioned Ex*/Ke* allowlist, and
-          # KeBugCheckEx is ABSENT (LTO proves no panic is reachable on normal op).
-          L="$RUNNER_TEMP/b1/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a"
-          D="$RUNNER_TEMP/x1"; rm -rf "$D"; mkdir -p "$D"; ( cd "$D"
-            for OBJ in $("$LLVM_BIN/llvm-ar" t "$L" | grep -i leeway); do "$LLVM_BIN/llvm-ar" x "$L" "$OBJ"; done )
-          U=$("$LLVM_BIN/llvm-nm" "$D"/*.o 2>/dev/null | grep ' U ' | awk '{print $NF}' | sort -u)
-          echo "== undefined externs (default) =="; echo "${U:-<none>}"
-          ALLOW="ExAllocatePoolWithTag ExFreePoolWithTag KeInitializeSpinLock KeAcquireSpinLockRaiseToDpc KeReleaseSpinLock"
-          for s in $U; do
-            case " $ALLOW " in *" $s "*) ;; *) echo "::error::unexpected extern in default build: $s"; exit 1;; esac
-          done
-          if printf '%s\n' $U | grep -qx 'KeBugCheckEx'; then
-            echo "::error::KeBugCheckEx reachable in default build (bugcheck must be absent on normal op)"; exit 1; fi
-          echo "== opcode scan: forbidden x87/MMX/AVX =="
-          "$LLVM_BIN/llvm-objdump" -d "$D"/*.o > dis.txt
-          if grep -iwE 'fld|fstp|fadd|fmul|fdiv|emms|femms' dis.txt; then echo "::error::x87/MMX found"; exit 1; fi
-          if grep -iE '%ymm|%zmm|vzeroupper' dis.txt; then echo "::error::AVX found"; exit 1; fi
-          echo "default build clean (externs sanctioned, no bugcheck, no FP)"
-
-      - name: "Static checks (test-ioctls build: sanctioned externs + KeBugCheckEx)"
-        run: |
-          CARGO_TARGET_DIR="$RUNNER_TEMP/bp" cargo build --release --locked --features test-ioctls
-          L="$RUNNER_TEMP/bp/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a"
-          D="$RUNNER_TEMP/xp"; rm -rf "$D"; mkdir -p "$D"; ( cd "$D"
-            for OBJ in $("$LLVM_BIN/llvm-ar" t "$L" | grep -i leeway); do "$LLVM_BIN/llvm-ar" x "$L" "$OBJ"; done )
-          U=$("$LLVM_BIN/llvm-nm" "$D"/*.o 2>/dev/null | grep ' U ' | awk '{print $NF}' | sort -u)
-          echo "== undefined externs (test build) =="; echo "$U"
-          # test-ioctls adds exactly the gated bugcheck path on top of the sanctioned set.
-          ALLOW="ExAllocatePoolWithTag ExFreePoolWithTag KeInitializeSpinLock KeAcquireSpinLockRaiseToDpc KeReleaseSpinLock KeBugCheckEx"
-          for s in $U; do
-            case " $ALLOW " in *" $s "*) ;; *) echo "::error::unexpected extern in test build: $s"; exit 1;; esac
-          done
-          if ! printf '%s\n' $U | grep -qx 'KeBugCheckEx'; then
-            echo "::error::test build must reference KeBugCheckEx (the gated bugcheck path)"; exit 1; fi
-          echo "test build extern surface OK (sanctioned + KeBugCheckEx)"
-
-      - name: Upload staticlib
+      - name: Upload staticlibs and hashes
         uses: actions/upload-artifact@v4
         with:
-          name: lnrspoc-staticlib-${{ env.RUST_POC_SHA256 }}
-          path: ${{ runner.temp }}/b1/x86_64-unknown-libernt-kernel/release/libleeway_rs_poc.a
+          name: rust-kernel-staticlibs-${{ github.sha }}
+          path: ${{ runner.temp }}/out
           if-no-files-found: error
 
   io3-differential:
@@ -107,8 +104,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
         run: |
-          rustup toolchain install nightly-2026-05-24 --profile minimal --component rust-src
-          rustc +nightly-2026-05-24 --version --verbose
+          rustup toolchain install 1.97.1 --profile minimal
+          rustc +1.97.1 --version --verbose
       - name: Run D-1 differential (2,000,000 fuzz iterations)
         run: |
           chmod +x tools/rust-poc/difftest/run-differential.sh
@@ -125,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain
-        run: rustup toolchain install nightly-2026-05-24 --profile minimal --component rust-src
+        run: rustup toolchain install 1.97.1 --profile minimal
       - name: Fetch the io3 harness at the pinned SHA (public LiberNT-CI)
         run: |
           mkdir -p "$RUNNER_TEMP/ci" && cd "$RUNNER_TEMP/ci" && git init -q
@@ -153,7 +150,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain and host build tools
         run: |
-          rustup toolchain install nightly-2026-05-24 --profile minimal
+          rustup toolchain install 1.97.1 --profile minimal
           sudo apt-get update
           sudo apt-get install -y g++ cmake ninja-build pkg-config libfuse3-dev
       - name: Fetch the decoder rig at the pinned SHA (public LiberNT-CI)
@@ -184,7 +181,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain + host build tools
         run: |
-          rustup toolchain install nightly-2026-05-24 --profile minimal
+          rustup toolchain install 1.97.1 --profile minimal
           sudo apt-get update && sudo apt-get install -y g++ gcc
       - name: Fetch the C special-pool engine at the pinned SHA (public LiberNT-CI)
         run: |

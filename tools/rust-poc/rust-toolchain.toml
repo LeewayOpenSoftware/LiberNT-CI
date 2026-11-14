@@ -1,7 +1,10 @@
-# Pinned Rust toolchain for the lnrspoc kernel-driver PoC (reproducible builds).
-# Exact nightly: 1.98.0-nightly, commit 423e3d2529999d5e57fa0351783d1292b9219ad4, date 2026-05-24.
-# core/compiler_builtins are rebuilt for the custom kernel target via -Zbuild-std, which needs nightly + rust-src.
+# Pinned Rust toolchain for LiberNT Rust components (reproducible builds).
+# Stable release; kernel staticlibs use the built-in x86_64-pc-windows-gnu target and its
+# precompiled core/alloc, so neither nightly nor -Zbuild-std is needed. Keep this equal to
+# LIBERNT_RUST_TOOLCHAIN in sdk/cmake/rust.cmake. The fuzz/ crate is the one exception: cargo-fuzz
+# needs nightly and is host-only.
 [toolchain]
-channel = "nightly-2026-05-24"
-components = ["rust-src", "llvm-tools"]
+channel = "1.97.1"
+components = ["llvm-tools"]
+targets = ["x86_64-pc-windows-gnu"]
 profile = "minimal"

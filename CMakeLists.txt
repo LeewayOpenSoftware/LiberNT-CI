@@ -363,6 +363,7 @@ Enable this if the module uses typeid or dynamic_cast. You will probably need to
 
     # Generic macros
     include(sdk/cmake/CMakeMacros.cmake)
+    include(sdk/cmake/rust.cmake)
 
     # IDL macros for widl/midl
     # We're using widl now for both MSVC and GCC builds

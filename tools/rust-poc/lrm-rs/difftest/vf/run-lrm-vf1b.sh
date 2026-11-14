@@ -5,7 +5,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/../.." && pwd)"            # tools/rust-poc/lrm-rs
-CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-nightly-2026-05-24}"
+CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-1.97.1}"
 NTDRVMGMT_C="${NTDRVMGMT_C:-$HERE/dw/ntdrvmgmt.c}"
 [ -f "$NTDRVMGMT_C" ] || { echo "ntdrvmgmt.c not found: $NTDRVMGMT_C" >&2; exit 2; }
 
