@@ -684,7 +684,7 @@ public:
     /* Set (never cleared) when a metadata write of THIS instance failed: the
      * instance then holds an update the medium never got, so a check of the
      * medium says nothing about the instance (see MarkCleanAfterCheck). */
-    BOOLEAN LostWriteNoted = FALSE;
+    volatile BOOLEAN LostWriteNoted = FALSE;
     /* Set once CommitCorruptionDirtyOnce has made its single attempt. */
     BOOLEAN CorruptionCommitTried = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;

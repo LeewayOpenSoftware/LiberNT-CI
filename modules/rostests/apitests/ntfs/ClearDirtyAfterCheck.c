@@ -8,9 +8,14 @@
  * handle that holds the volume lock when its check wrote nothing: the mounted
  * instance then clears the dirty flag itself and stays mounted. Anyone else
  * must be refused: a handle on an unlocked volume, a handle that is not the
- * lock owner, and a dismounted volume. The lock owner's request must clear a
- * flag that was set by FSCTL_MARK_VOLUME_DIRTY (retained, so a plain clean
- * dismount would keep it).
+ * lock owner, a lock owner whose handle has no write access (the control code
+ * carries FILE_WRITE_DATA, which the I/O manager enforces before the driver
+ * sees the request), and a dismounted volume. The lock owner's request must
+ * clear a flag that was set by FSCTL_MARK_VOLUME_DIRTY (retained, so a plain
+ * clean dismount would keep it).
+ *
+ * LiberNT only: the control code is private to its NTFS. Another NTFS answers
+ * it with ERROR_INVALID_FUNCTION, and the test skips its owner legs then.
  */
 
 #include <apitest.h>
@@ -49,10 +54,80 @@ FindTestVolume(VOID)
 }
 
 static HANDLE
+OpenVolumeEx(DWORD Access)
+{
+    return CreateFileW(VolumeDevice, Access, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                       NULL, OPEN_EXISTING, 0, NULL);
+}
+
+static HANDLE
 OpenVolume(VOID)
 {
-    return CreateFileW(VolumeDevice, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                       NULL, OPEN_EXISTING, 0, NULL);
+    return OpenVolumeEx(GENERIC_READ | GENERIC_WRITE);
+}
+
+static VOID
+ExpectRefused(HANDLE Volume, PCSTR Why);
+
+/* A lock owner whose handle cannot write: the control code's FILE_WRITE_DATA
+ * bit refuses it before the driver sees the request */
+static VOID
+TestReadOnlyOwner(VOID)
+{
+    HANDLE Volume;
+    DWORD Bytes;
+    BOOL Ok;
+
+    Volume = OpenVolumeEx(GENERIC_READ);
+    ok(Volume != INVALID_HANDLE_VALUE, "Opening the volume read-only failed with %lu\n", GetLastError());
+    if (Volume == INVALID_HANDLE_VALUE)
+        return;
+
+    Ok = DeviceIoControl(Volume, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &Bytes, NULL);
+    ok(Ok, "FSCTL_LOCK_VOLUME on a read-only handle failed with %lu\n", GetLastError());
+    if (Ok)
+    {
+        ExpectRefused(Volume, "from a lock owner without write access");
+        ok(DeviceIoControl(Volume, FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &Bytes, NULL),
+           "FSCTL_UNLOCK_VOLUME on the read-only handle failed with %lu\n", GetLastError());
+    }
+    CloseHandle(Volume);
+}
+
+/* A dismounted volume refuses it too, lock or no lock */
+static VOID
+TestDismountedVolume(VOID)
+{
+    HANDLE Volume;
+    DWORD Bytes;
+    DWORD Error;
+    BOOL Ok;
+
+    Volume = OpenVolume();
+    ok(Volume != INVALID_HANDLE_VALUE, "Opening the volume failed with %lu\n", GetLastError());
+    if (Volume == INVALID_HANDLE_VALUE)
+        return;
+
+    Ok = DeviceIoControl(Volume, FSCTL_LOCK_VOLUME, NULL, 0, NULL, 0, &Bytes, NULL);
+    ok(Ok, "FSCTL_LOCK_VOLUME failed with %lu\n", GetLastError());
+    if (Ok)
+    {
+        Ok = DeviceIoControl(Volume, FSCTL_DISMOUNT_VOLUME, NULL, 0, NULL, 0, &Bytes, NULL);
+        ok(Ok, "FSCTL_DISMOUNT_VOLUME failed with %lu\n", GetLastError());
+        if (Ok)
+        {
+            SetLastError(0xdeadbeef);
+            Ok = DeviceIoControl(Volume, FSCTL_NTFS_CLEAR_DIRTY_AFTER_CHECK, NULL, 0, NULL, 0, &Bytes, NULL);
+            Error = GetLastError();
+            ok(!Ok, "The clear-after-check was accepted on a dismounted volume\n");
+            /* STATUS_VOLUME_DISMOUNTED, whatever the Win32 mapping of the build */
+            ok(Error == ERROR_NOT_READY || Error == ERROR_ACCESS_DENIED || Error == ERROR_INVALID_FUNCTION ||
+               Error == ERROR_GEN_FAILURE,
+               "The clear-after-check on a dismounted volume failed with %lu\n", Error);
+        }
+        DeviceIoControl(Volume, FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &Bytes, NULL);
+    }
+    CloseHandle(Volume);
 }
 
 static BOOL
@@ -125,7 +200,21 @@ START_TEST(ClearDirtyAfterCheck)
            GetLastError());
     }
 
-    /* The lock owner: the request clears a retained flag through the mounted instance */
+    /* The lock owner, on a clean volume: another NTFS does not know the code */
+    SetLastError(0xdeadbeef);
+    Ok = DeviceIoControl(Volume, FSCTL_NTFS_CLEAR_DIRTY_AFTER_CHECK, NULL, 0, NULL, 0, &Bytes, NULL);
+    if (!Ok && GetLastError() == ERROR_INVALID_FUNCTION)
+    {
+        skip("The file system does not know the clear-after-check request\n");
+        DeviceIoControl(Volume, FSCTL_UNLOCK_VOLUME, NULL, 0, NULL, 0, &Bytes, NULL);
+        CloseHandle(Volume);
+        return;
+    }
+    ok(Ok, "The clear-after-check from the lock owner on a clean volume failed with %lu\n", GetLastError());
+
+    /* The lock owner: the request clears a retained flag through the mounted
+     * instance. Should the clear fail, NTFSTEST stays dirty with the flag
+     * retained and the next boot checks it; that is the safe side. */
     Ok = DeviceIoControl(Volume, FSCTL_MARK_VOLUME_DIRTY, NULL, 0, NULL, 0, &Bytes, NULL);
     ok(Ok, "FSCTL_MARK_VOLUME_DIRTY failed with %lu\n", GetLastError());
     if (VolumeIsDirty(Volume, &Dirty))
@@ -149,4 +238,7 @@ START_TEST(ClearDirtyAfterCheck)
         ok(!Dirty, "The volume turned dirty after the unlock\n");
 
     CloseHandle(Volume);
+
+    TestReadOnlyOwner();
+    TestDismountedVolume();
 }

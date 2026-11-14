@@ -420,6 +420,11 @@ Volume::MarkCleanAfterCheck()
         if (NT_SUCCESS(Status))
             Status = FlushVolume();
     }
+    /* A write lost on the way here (the flushes above included) must keep
+     * its note: the flag may already be clear on the medium, but the next
+     * write of this instance marks it again, and the dismount keeps it. */
+    if (NT_SUCCESS(Status) && LostWriteNoted)
+        Status = STATUS_LOST_WRITEBEHIND_DATA;
     if (NT_SUCCESS(Status))
     {
         DirtyMarked = FALSE;
