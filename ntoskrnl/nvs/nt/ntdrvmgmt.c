@@ -14,8 +14,6 @@ extern KMUTANT MmSystemLoadLock;
 extern UCHAR MmDisablePagingExecutive;
 PLDR_DATA_TABLE_ENTRY NTAPI MiLookupDataTableEntry(IN PVOID Address);
 
-#define MI_VERIFIER_BOOT_IMAGES_NEVER_VERIFIED 2
-
 MM_DRIVER_VERIFIER_DATA MmVerifierData;
 LIST_ENTRY MiVerifierDriverAddedThunkListHead;
 ULONG MiActiveVerifierThunks;
@@ -314,21 +312,47 @@ MiVerifyLoadedImage(
     DbgPrint("Driver Verifier: %wZ is verified, %lu imports redirected\n", &LdrEntry->BaseDllName, Redirected);
 }
 
+static
+BOOLEAN
+MiIsBootDriverImage(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock,
+    _In_ PVOID DllBase)
+{
+    PBOOT_DRIVER_LIST_ENTRY BootDriver;
+    PLIST_ENTRY Entry;
+
+    for (Entry = LoaderBlock->BootDriverListHead.Flink;
+         Entry != &LoaderBlock->BootDriverListHead;
+         Entry = Entry->Flink)
+    {
+        BootDriver = CONTAINING_RECORD(Entry, BOOT_DRIVER_LIST_ENTRY, Link);
+        if (BootDriver->LdrEntry != NULL && BootDriver->LdrEntry->DllBase == DllBase)
+            return TRUE;
+    }
+
+    return FALSE;
+}
+
 VOID
 NTAPI
-MiVerifyBootLoadedImages(VOID)
+MiVerifyBootLoadedImages(
+    _In_ PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
     PLIST_ENTRY Entry;
-    ULONG Position = 0;
 
     if (!MiVerifierActive)
         return;
 
     for (Entry = PsLoadedModuleList.Flink; Entry != &PsLoadedModuleList; Entry = Entry->Flink)
     {
-        if (Position++ < MI_VERIFIER_BOOT_IMAGES_NEVER_VERIFIED)
+        LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        if ((ULONG_PTR)LdrEntry->DllBase == PsNtosImageBase)
             continue;
 
-        MiVerifyLoadedImage(CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks));
+        if (!MiIsBootDriverImage(LoaderBlock, LdrEntry->DllBase))
+            continue;
+
+        MiVerifyLoadedImage(LdrEntry);
     }
 }

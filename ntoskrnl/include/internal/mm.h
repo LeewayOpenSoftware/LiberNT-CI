@@ -1087,7 +1087,8 @@ MiVerifyLoadedImage(
 
 VOID
 NTAPI
-MiVerifyBootLoadedImages(VOID);
+MiVerifyBootLoadedImages(
+    IN struct _LOADER_PARAMETER_BLOCK *LoaderBlock);
 
 /* mm.c **********************************************************************/
 
