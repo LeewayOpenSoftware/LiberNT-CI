@@ -135,6 +135,16 @@ LrmRsSelfTest(PULONG Detail)
         return STATUS_INVALID_DEVICE_STATE;
     }
 
+    /* Every C entry into Rust is gated on LrmRsPanicked (Dwight review SHOULD 1): once the Rust side
+     * has fatally stopped, do not re-enter it, even on this test's own private region. No hang risk
+     * today (a panic bug-checks the box), but the invariant holds uniformly. */
+    if (LrmRsPanicked)
+    {
+        if (Detail != NULL)
+            *Detail = 0xE2;
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     Status = MiGuardRegionCreate(&MiSystem, LRM_ST_SLOTS, 1, LRM_ST_RESERVE, 0, LRM_ST_BUDGET,
                                  sizeof(POOL_SPECIAL_RECORD), &Region);
     if (!NT_SUCCESS(Status) || Region == NULL)
