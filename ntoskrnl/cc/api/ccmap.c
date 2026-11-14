@@ -9,6 +9,9 @@
 
 #include "ccnt.h"
 
+#define NDEBUG
+#include <debug.h>
+
 static
 ULONG64
 CcNtSectionSize(_In_ PCC_FILE_SIZES FileSizes)
@@ -107,6 +110,12 @@ CcInitializeCacheMap(
     CcNtDereferenceMap(NtMap);
 }
 
+static
+VOID
+CcNtShrinkMap(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 NewFileSize);
+
 BOOLEAN
 NTAPI
 CcUninitializeCacheMap(
@@ -131,7 +140,7 @@ CcUninitializeCacheMap(
 
         if (NewSize < NtMap->Map.FileSize)
         {
-            CcDirtyDiscard(&NtMap->Map, NewSize, (ULONG64)-1);
+            CcNtShrinkMap(NtMap, NewSize);
             CcMapSetSizes(&NtMap->Map, NtMap->Map.SectionSize, NewSize, min(NtMap->Map.ValidDataLength, NewSize));
         }
     }
@@ -164,6 +173,122 @@ CcUninitializeCacheMap(
     return TRUE;
 }
 
+static
+NTSTATUS
+CcNtZeroMove(
+    _In_opt_ PVOID Context,
+    _In_ PVOID CacheAddress,
+    _In_ ULONG64 FileOffset,
+    _In_ ULONG Length)
+{
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(FileOffset);
+
+    _SEH2_TRY
+    {
+        RtlZeroMemory(CacheAddress, Length);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    return Status;
+}
+
+static
+VOID
+CcNtZeroTailOfLastPage(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 NewFileSize,
+    _In_ ULONG64 End)
+{
+    ULONG64 PageStart = NewFileSize & ~((ULONG64)PAGE_SIZE - 1);
+    NTSTATUS Status;
+
+    if (NewFileSize >= End || PageStart == NewFileSize)
+        return;
+    if (!NtMap->Map.Ops.IsResident(NtMap->Map.Context, PageStart, PAGE_SIZE))
+        return;
+
+    Status = CcCopyRange(&NtMap->Map, NewFileSize, End - NewFileSize, TRUE, CcNtZeroMove, NULL, NULL);
+    if (!NT_SUCCESS(Status))
+        DPRINT1("CcNtShrinkMap: zeroing [%I64x, %I64x) beyond the new end failed 0x%lx\n", NewFileSize, End, Status);
+}
+
+static
+VOID
+CcNtZeroResidentRuns(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 Start,
+    _In_ ULONG64 End)
+{
+    ULONG64 Offset = Start;
+    ULONG64 ViewEnd;
+    ULONG64 NextOffset;
+    ULONG64 RunStart;
+    NTSTATUS Status;
+
+    while (Offset < End)
+    {
+        ViewEnd = (Offset | CC_VIEW_MASK) + 1;
+        if (ViewEnd > End)
+            ViewEnd = End;
+
+        /* Only a view still attached can keep cache pages resident past the purge */
+        if (!CcMapViewAttached(&NtMap->Map, Offset, &NextOffset))
+        {
+            Offset = NextOffset;
+            continue;
+        }
+        if (!NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
+        {
+            Offset += PAGE_SIZE;
+            continue;
+        }
+
+        RunStart = Offset;
+        while (Offset < ViewEnd && NtMap->Map.Ops.IsResident(NtMap->Map.Context, Offset, PAGE_SIZE))
+            Offset += PAGE_SIZE;
+
+        /* A failed zeroing leaves the stale bytes; nothing better can be done here */
+        Status = CcCopyRange(&NtMap->Map, RunStart, Offset - RunStart, TRUE, CcNtZeroMove, NULL, NULL);
+        if (NT_SUCCESS(Status))
+            DPRINT("CcNtShrinkMap: zeroed resident [%I64x, %I64x) beyond the new end\n", RunStart, Offset);
+        else
+            DPRINT1("CcNtShrinkMap: zeroing resident [%I64x, %I64x) beyond the new end failed 0x%lx\n",
+                    RunStart, Offset, Status);
+    }
+}
+
+/* Caller holds the file exclusively and has not lowered Map.FileSize yet */
+static
+VOID
+CcNtShrinkMap(
+    _Inout_ PCC_NT_MAP NtMap,
+    _In_ ULONG64 NewFileSize)
+{
+    ULONG64 Boundary = ROUND_TO_PAGES(NewFileSize);
+    ULONG64 OldEnd = ROUND_TO_PAGES(NtMap->Map.FileSize);
+    BOOLEAN Detached;
+    BOOLEAN Purged;
+
+    CcNtZeroTailOfLastPage(NtMap, NewFileSize, Boundary);
+    CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
+    Detached = CcMapDetachViews(&NtMap->Map, NewFileSize, (ULONG64)-1);
+    Purged = MiSegmentPurge(NtMap->Control->Segment, Boundary, 0, TRUE);
+
+    /* A view still referenced keeps its pages beyond the cut resident */
+    if (!Detached || !Purged)
+    {
+        CcNtZeroResidentRuns(NtMap, Boundary, OldEnd);
+        CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
+    }
+}
+
 VOID
 NTAPI
 CcSetFileSizes(
@@ -193,13 +318,7 @@ CcSetFileSizes(
     }
 
     if (NewFileSize < NtMap->Map.FileSize)
-    {
-        ULONG64 Boundary = ROUND_TO_PAGES(NewFileSize);
-
-        CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
-        CcMapDetachViews(&NtMap->Map, ROUND_UP(NewFileSize, CC_VIEW_SIZE), (ULONG64)-1);
-        MiSegmentPurge(NtMap->Control->Segment, Boundary, 0);
-    }
+        CcNtShrinkMap(NtMap, NewFileSize);
 
     NtMap->AllocationSize = FileSizes->AllocationSize;
     CcMapSetSizes(&NtMap->Map, SectionSize, NewFileSize, (ULONG64)FileSizes->ValidDataLength.QuadPart);

@@ -1100,6 +1100,17 @@ USBPORT_SoftInterrupt(IN PDEVICE_OBJECT FdoDevice)
                &FdoExtension->SoftInterruptDpc);
 }
 
+static
+BOOLEAN
+USBPORT_IsControllerPolled(IN PUSBPORT_DEVICE_EXTENSION FdoExtension)
+{
+    PUSBPORT_DUMP_CONTEXT DumpContext = FdoExtension->Aux.DumpContext;
+    PUSBPORT_DUMP_CONTEXT KeyboardContext = FdoExtension->Aux.KeyboardContext;
+
+    return ((DumpContext != NULL) && DumpContext->DumpMode) ||
+           ((KeyboardContext != NULL) && KeyboardContext->DumpMode);
+}
+
 VOID
 NTAPI
 USBPORT_InvalidateControllerHandler(IN PDEVICE_OBJECT FdoDevice,
@@ -1131,6 +1142,10 @@ USBPORT_InvalidateControllerHandler(IN PDEVICE_OBJECT FdoDevice,
             break;
 
         case USBPORT_INVALIDATE_CONTROLLER_SOFT_INTERRUPT:
+            /* The crash dump and the debugger poll the controller at HIGH_LEVEL, where no timer or DPC runs. */
+            if (USBPORT_IsControllerPolled(FdoExtension))
+                break;
+
             if (InterlockedIncrement(&FdoExtension->IsrDpcCounter))
             {
                 InterlockedDecrement(&FdoExtension->IsrDpcCounter);
@@ -3265,6 +3280,9 @@ USBPORT_AddDevice(IN PDRIVER_OBJECT DriverObject,
     FdoCommonExtension->LowerPdoDevice = PhysicalDeviceObject;
     FdoCommonExtension->IsPDO = FALSE;
 
+    /* Until the resources name the bus, a controller is taken for a PCI one */
+    FdoExtension->BusInterfaceType = PCIBus;
+
     LowerDevice = IoAttachDeviceToDeviceStack(DeviceObject,
                                               PhysicalDeviceObject);
 
@@ -4519,14 +4537,6 @@ USBPORT_SubmitMapTransfer(IN PDEVICE_OBJECT FdoDevice)
                                                        NumMapRegisters,
                                                        USBPORT_MapTransfer,
                                                        Transfer);
-
-        if (Transfer->Endpoint &&
-            (Transfer->Endpoint->EndpointProperties.TransferType == USBPORT_TRANSFER_TYPE_BULK ||
-             TransferBufferLength >= 64))
-        {
-            DPRINT("USBPORT_FlushMapTransfers: AllocateAdapterChannel Status=0x%lx\n",
-                   Status);
-        }
 
         if (!NT_SUCCESS(Status))
         {

@@ -10,6 +10,14 @@ project(mm_core_host_tests LANGUAGES C)
 include(CTest)
 
 set(CMAKE_C_STANDARD 11)
+
+# Standalone configure (-S submodules/host-tests/mmcc/nvs/core) sets what the parent would.
+if(NOT DEFINED MMCC_KERNEL_ROOT)
+    get_filename_component(REACTOS_HOST_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../../.." ABSOLUTE)
+    set(MMCC_KERNEL_ROOT "${REACTOS_HOST_SOURCE_ROOT}/ntoskrnl")
+    include_directories(${MMCC_KERNEL_ROOT} ${CMAKE_CURRENT_LIST_DIR}/../../..)
+endif()
+
 set(NVS_ROOT ${MMCC_KERNEL_ROOT}/nvs)
 
 set(MM_CORE
@@ -28,6 +36,7 @@ set(MM_CORE
     ${NVS_ROOT}/ws/trim.c
     ${NVS_ROOT}/section/section.c
     ${NVS_ROOT}/sys/sysregion.c
+    ${NVS_ROOT}/sys/sysguard.c
     ${NVS_ROOT}/sys/syspte.c
     ${NVS_ROOT}/sys/kstack.c
     ${NVS_ROOT}/sys/iospace.c
@@ -45,7 +54,7 @@ set(CC_ENGINE
     ${CC_ROOT}/engine/copy.c
     ${CC_ROOT}/engine/readahead.c)
 
-set(MM_TESTS mmharness.c t_core.c t_vm.c t_fault_smp.c t_section.c t_stress.c t_ccmm.c t_ntfile.c t_writeback.c t_ntpaging.c t_vad.c t_sys.c t_proc.c ../machine/machine.c ${CC_ENGINE} ${CC_ROOT}/api/ccclose.c ${CC_ROOT}/backing/mmbacking.c ${NVS_ROOT}/nt/ntfileio.c ${NVS_ROOT}/nt/ntpagingio.c)
+set(MM_TESTS mmharness.c t_core.c t_vm.c t_fault_smp.c t_section.c t_stress.c t_ccmm.c t_ntfile.c t_writeback.c t_ntpaging.c t_vad.c t_sys.c t_guard.c t_proc.c ../machine/machine.c ${CC_ENGINE} ${CC_ROOT}/api/ccclose.c ${CC_ROOT}/backing/mmbacking.c ${NVS_ROOT}/nt/ntfileio.c ${NVS_ROOT}/nt/ntpagingio.c)
 list(APPEND MM_TESTS t_async.c t_large.c t_awe.c t_clone.c t_session.c ${NVS_ROOT}/nt/ntsession.c ${CC_ROOT}/api/ccflush.c)
 list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntprotect.c)
 list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntmapping.c ${NVS_ROOT}/nt/nttruncate.c)
@@ -61,11 +70,12 @@ add_custom_command(OUTPUT ${LXCORE_COPY}/mm.c ${LXCORE_COPY}/lxcore.h
 set(LXCORE_TESTS ${LXCORE_HOST}/t_lxmm.c ${LXCORE_HOST}/lxshim.c ${LXCORE_COPY}/mm.c)
 set_source_files_properties(${LXCORE_TESTS} PROPERTIES
     INCLUDE_DIRECTORIES "${LXCORE_HOST};${CMAKE_CURRENT_SOURCE_DIR};${LXCORE_SOURCE};${LXCORE_SOURCE}/arm64")
+set_source_files_properties(${LXCORE_COPY}/mm.c PROPERTIES COMPILE_OPTIONS -Wno-clobbered)
 set_source_files_properties(${REACTOS_HOST_SOURCE_ROOT}/ntoskrnl/rtl/rbtree.c PROPERTIES
     INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../../rtl/include")
 list(APPEND MM_TESTS ${LXCORE_TESTS} ${REACTOS_HOST_SOURCE_ROOT}/ntoskrnl/rtl/rbtree.c)
 
-set(MM_AREAS pfn pagetable vad vm large awe clone session fault fault_smp paging section image stress ccmm ntfile writeback ntpaging async sys process highmem lxmm)
+set(MM_AREAS pfn pagetable vad vm large awe clone session fault fault_smp paging section image stress ccmm ntfile writeback ntpaging async sys guard process highmem lxmm)
 
 include(${NVS_ROOT}/check-standalone.cmake)
 nvs_assert_standalone(${MM_CORE} ${CC_ENGINE})
@@ -73,9 +83,9 @@ nvs_assert_standalone(${MM_CORE} ${CC_ENGINE})
 function(mm_test_variant NAME ARCH MACHINE)
     add_executable(${NAME} ${MM_TESTS} ${MM_CORE}
         ${NVS_ROOT}/arch/${ARCH}/pte.c ${NVS_ROOT}/arch/${ARCH}/descriptor.c)
-    target_compile_definitions(${NAME} PRIVATE MM_HOST_TEST CC_HOST_TEST ${MACHINE} ${ARGN})
+    target_compile_definitions(${NAME} PRIVATE MM_HOST_TEST MM_HOST_ALLOC_TEST CC_HOST_TEST ${MACHINE} ${ARGN})
     target_include_directories(${NAME} PRIVATE ${NVS_ROOT}/.. ${NVS_ROOT}/arch/${ARCH})
-    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Wno-unused-parameter -g)
+    target_compile_options(${NAME} PRIVATE -Wall -Wextra -Wno-unused-parameter -Wno-multichar -g)
     find_package(Threads REQUIRED)
     target_link_libraries(${NAME} PRIVATE Threads::Threads)
     foreach(AREA ${MM_AREAS})

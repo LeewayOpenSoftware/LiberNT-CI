@@ -45,6 +45,7 @@ extern void func_ProgramFilesDir(void);
 extern void func_SHGetFolderPathToken(void);
 extern void func_PIDL(void);
 extern void func_RealShellExecuteEx(void);
+extern void func_RegItemDisplayName(void);
 extern void func_RegItemParse(void);
 extern void func_SHAppBarMessage(void);
 extern void func_SHChangeNotify(void);
@@ -63,6 +64,7 @@ extern void func_ShellExecuteW(void);
 extern void func_ShellHook(void);
 extern void func_Shell_NotifyIconGetRect(void);
 extern void func_ShellState(void);
+extern void func_StockIconShield(void);
 extern void func_SHGetAttributesFromDataObject(void);
 extern void func_SHOpenFolderAndSelectItems(void);
 extern void func_SHGetComputerDisplayNameW(void);
@@ -140,6 +142,7 @@ const struct test winetest_testlist[] =
     { "SHGetFolderPathToken", func_SHGetFolderPathToken },
     { "PIDL", func_PIDL },
     { "RealShellExecuteEx", func_RealShellExecuteEx },
+    { "RegItemDisplayName", func_RegItemDisplayName },
     { "RegItemParse", func_RegItemParse },
     { "SHAppBarMessage", func_SHAppBarMessage },
     { "SHChangeNotify", func_SHChangeNotify },
@@ -158,6 +161,7 @@ const struct test winetest_testlist[] =
     { "ShellHook", func_ShellHook },
     { "Shell_NotifyIconGetRect", func_Shell_NotifyIconGetRect },
     { "ShellState", func_ShellState },
+    { "StockIconShield", func_StockIconShield },
     { "SHGetAttributesFromDataObject", func_SHGetAttributesFromDataObject },
     { "SHOpenFolderAndSelectItems", func_SHOpenFolderAndSelectItems },
     { "SHGetComputerDisplayNameW", func_SHGetComputerDisplayNameW },

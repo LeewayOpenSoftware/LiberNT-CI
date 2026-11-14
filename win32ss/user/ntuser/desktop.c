@@ -69,7 +69,7 @@ IntDesktopObjectParse(IN PVOID ParseObject,
                       IN PSECURITY_QUALITY_OF_SERVICE SecurityQos OPTIONAL,
                       OUT PVOID *Object)
 {
-    NTSTATUS Status;
+    NTSTATUS Status, AccessStatus;
     PDESKTOP Desktop;
     OBJECT_ATTRIBUTES ObjectAttributes;
     PLIST_ENTRY NextEntry, ListHead;
@@ -117,6 +117,10 @@ IntDesktopObjectParse(IN PVOID ParseObject,
                 /* This was a real open, so this is OK */
                 Status = STATUS_SUCCESS;
             }
+
+            AccessStatus = IntCheckParsedObjectAccess(Desktop, ExDesktopObjectType, AccessState, AccessMode);
+            if (!NT_SUCCESS(AccessStatus))
+                return AccessStatus;
 
             /* Reference the desktop and return it */
             ObReferenceObject(Desktop);
@@ -595,6 +599,73 @@ GetSystemVersionString(OUT PWSTR pwszzVersion,
  *    Status code.
  */
 
+static
+BOOLEAN
+IntIsServiceAccountProcess(
+    _In_ PEPROCESS Process)
+{
+    PACCESS_TOKEN Token;
+    PTOKEN_USER User = NULL;
+    BOOLEAN IsService = TRUE;
+
+    Token = PsReferencePrimaryToken(Process);
+    if (Token == NULL)
+        return TRUE;
+    if (NT_SUCCESS(SeQueryInformationToken(Token, TokenUser, (PVOID*)&User)))
+    {
+        IsService = RtlEqualSid(User->User.Sid, SeExports->SeNetworkServiceSid) ||
+                    RtlEqualSid(User->User.Sid, SeExports->SeLocalServiceSid);
+        ExFreePool(User);
+    }
+    PsDereferencePrimaryToken(Token);
+    return IsService;
+}
+
+/* Checked against the primary token: the open carries the caller's token (NtUserResolveDesktop) or an impersonated one */
+static
+BOOLEAN
+IntProcessHasWinStaAccess(
+    _In_ PEPROCESS Process,
+    _In_ HWINSTA hWinSta,
+    _In_ ACCESS_MASK Access)
+{
+    SECURITY_SUBJECT_CONTEXT Subject;
+    PSECURITY_DESCRIPTOR Descriptor;
+    PPRIVILEGE_SET Privileges = NULL;
+    ACCESS_MASK Granted = 0;
+    BOOLEAN MemoryAllocated;
+    BOOLEAN Allowed = FALSE;
+    PVOID WinSta;
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle(hWinSta, 0, ExWindowStationObjectType, KernelMode, &WinSta, NULL);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = ObGetObjectSecurity(WinSta, &Descriptor, &MemoryAllocated);
+    if (NT_SUCCESS(Status) && Descriptor != NULL)
+    {
+        RtlZeroMemory(&Subject, sizeof(Subject));
+        Subject.ImpersonationLevel = SecurityAnonymous;
+        Subject.PrimaryToken = PsReferencePrimaryToken(Process);
+        if (Subject.PrimaryToken != NULL)
+        {
+            SeLockSubjectContext(&Subject);
+            Allowed = SeAccessCheck(Descriptor, &Subject, TRUE, Access, 0, &Privileges,
+                                    &ExWindowStationObjectType->TypeInfo.GenericMapping,
+                                    UserMode, &Granted, &Status);
+            SeUnlockSubjectContext(&Subject);
+            if (Privileges != NULL)
+                SeFreePrivileges(Privileges);
+            PsDereferencePrimaryToken(Subject.PrimaryToken);
+        }
+        ObReleaseObjectSecurity(Descriptor, MemoryAllocated);
+    }
+
+    ObDereferenceObject(WinSta);
+    return Allowed;
+}
+
 NTSTATUS
 FASTCALL
 IntResolveDesktop(
@@ -1008,10 +1079,17 @@ IntResolveDesktop(
 
             // TODO: Check also that we compare wrt. window station WinSta0
             // which is the only one that can be interactive on the system.
-            if (((!bUseDefaultWinSta || bInherit) && RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
-                 RtlEqualLuid(&ProcessLuid, &WinStaObject->luidUser))
+            if ((bInherit && RtlEqualLuid(&ProcessLuid, &SystemLuid)) ||
+                RtlEqualLuid(&ProcessLuid, &WinStaObject->luidUser))
             {
                 /* We are interactive on this window station */
+                bAccessAllowed = TRUE;
+                Status = STATUS_SUCCESS;
+            }
+            /* A named WinSta0 from another logon needs a logon SID grant: admins and the user SID hold less */
+            else if (!bUseDefaultWinSta && !IntIsServiceAccountProcess(Process) &&
+                     IntProcessHasWinStaAccess(Process, hTempWinSta, WINSTA_CREATEDESKTOP))
+            {
                 bAccessAllowed = TRUE;
                 Status = STATUS_SUCCESS;
             }
@@ -2008,7 +2086,7 @@ IntDrawScaledWallpaper(
     PDC pdc;
     BOOL Ret;
 
-    if (!UserIsEnteredExclusive())
+    if (!UserIsEnteredExclusive() || cx <= 0 || cy <= 0)
         return NtGdiStretchBlt(hDC, x, y, cx, cy, hWallpaperDC, xSrc, ySrc, cxSrc, cySrc, SRCCOPY, CLR_INVALID);
 
     pdc = DC_LockDc(hDC);

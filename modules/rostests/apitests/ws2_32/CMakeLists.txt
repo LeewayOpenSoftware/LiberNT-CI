@@ -12,14 +12,17 @@ list(APPEND SOURCE
     broadcast.c
     cancel.c
     close.c
+    connect_any.c
     connect_select.c
     dualstack.c
+    dualstack_mapped.c
     getaddrinfo.c
     gethostname.c
     getnameinfo.c
     getservbyname.c
     getservbyport.c
     helpers.c
+    loopback_pingpong.c
     ioctlsocket.c
     nonblocking.c
     nostartup.c
@@ -31,6 +34,8 @@ list(APPEND SOURCE
     send.c
     shutdown_linger.c
     sockopt.c
+    sendto_neighbor.c
+    udp_queue.c
     udp_quic.c
     WSAAsync.c
     WSAIoctl.c

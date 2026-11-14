@@ -58,6 +58,8 @@ THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR I
 #include <tdi_proto.h>
 #include <tdiconn.h>
 
+#include "wskname.h"
+
 #define TAG_NETIO 'OIEN'
 #define NETIO_ACCEPT_BACKLOG 64
 
@@ -432,10 +434,16 @@ NsiInitialize(VOID);
 NTSTATUS NTAPI
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
 {
+    NTSTATUS Status;
+
     FUNCTION_TRACE;
 
     NsiInitialize();
-    return WfpCreateDevice(DriverObject);
+    Status = WfpCreateDevice(DriverObject);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return WskNameCreateDevice(DriverObject);
 }
 
 static NTSTATUS WSKAPI
@@ -1319,6 +1327,7 @@ WskBind(_In_ PWSK_SOCKET SocketParam, _In_ PSOCKADDR LocalAddress, _Reserved_ UL
     }
     if (Socket->LocalAddressHandle != NULL)
     {
+        ExFreePoolWithTag(ta, TAG_NETIO);
         status = STATUS_INVALID_PARAMETER;
         goto err_out;
     }
@@ -2051,7 +2060,10 @@ static WSK_PROVIDER_DISPATCH provider_dispatch = {
     .Reserved = 0,
     .WskSocket = WskSocket,
     .WskSocketConnect = WskSocketConnect,
-    .WskControlClient = WskControlClient
+    .WskControlClient = WskControlClient,
+    .WskGetAddressInfo = WskGetAddressInfo,
+    .WskFreeAddressInfo = WskFreeAddressInfo,
+    .WskGetNameInfo = WskGetNameInfo
 };
 
 NTSTATUS WSKAPI

@@ -2424,7 +2424,7 @@
 @ stub -arch=win64 IoAcquireKsrPersistentMemoryEx
 @ stub -arch=win64 IoAddBugcheckTriageThread
 @ stub -arch=win64 IoAdjustStackSizeForRedirection
-@ stub -arch=win64 IoAllocateIrpEx
+@ stdcall IoAllocateIrpEx(ptr long long)
 @ stub -arch=win64 IoAllocateMiniCompletionPacket
 @ stub -arch=win64 IoAllocateSfioStreamIdentifier
 @ stub -arch=win64 IoApplyPriorityInfoThread
@@ -2432,9 +2432,9 @@
 @ stub -arch=win64 IoCancelMiniCompletionPacket
 @ stub -arch=win64 IoCheckFileObjectOpenedAsCopyDestination
 @ stub -arch=win64 IoCheckFileObjectOpenedAsCopySource
-@ stub -arch=win64 IoCheckLinkShareAccess
+@ stdcall IoCheckLinkShareAccess(long long ptr ptr ptr long)
 @ stub -arch=win64 IoCheckRedirectionTrustLevel
-@ stub -arch=win64 IoCheckShareAccessEx
+@ stdcall IoCheckShareAccessEx(long long ptr ptr long ptr)
 @ stdcall IoCleanupIrp(ptr)
 @ stdcall IoClearActivityIdThread(ptr)
 @ stub -arch=win64 IoClearAdapterCryptoEngineExtension
@@ -2472,7 +2472,7 @@
 @ stub -arch=win64 IoGetFsTrackOffsetState
 @ stub -arch=win64 IoGetFsZeroingOffset
 @ stub -arch=win64 IoGetGenericIrpExtension
-@ stub -arch=win64 IoGetInitiatorProcess
+@ stdcall -arch=win64 IoGetInitiatorProcess(ptr)
 @ stub -arch=win64 IoGetIoAttributionHandle
 @ stdcall IoGetIommuInterface(long ptr)
 @ stdcall IoGetIommuInterfaceEx(long int64 ptr)
@@ -2491,7 +2491,7 @@
 @ stdcall IoInitializeWorkItem(ptr ptr)
 @ stub -arch=win64 IoIrpHasFsTrackOffsetExtensionType
 @ stub -arch=win64 IoIsActivityTracingEnabled
-@ stub -arch=win64 IoIsFileObjectIgnoringSharing
+@ stdcall IoIsFileObjectIgnoringSharing(ptr)
 @ stub -arch=win64 IoIsInitiator32bitProcess
 @ stub -arch=win64 IoIsValidIrpStatus
 @ stub -arch=win64 IoMakeAssociatedIrpEx
@@ -2514,8 +2514,8 @@
 @ stub -arch=win64 IoRegisterIoTracking
 @ stub -arch=win64 IoRegisterPriorityCallback
 @ stub -arch=win64 IoRemoveIoCompletion
-@ stub -arch=win64 IoRemoveLinkShareAccess
-@ stub -arch=win64 IoRemoveLinkShareAccessEx
+@ stdcall IoRemoveLinkShareAccess(ptr ptr ptr)
+@ stdcall IoRemoveLinkShareAccessEx(ptr ptr ptr long)
 @ stdcall IoReplaceFileObjectName(ptr ptr long)
 @ stub -arch=win64 IoReplacePartitionUnit
 @ stdcall IoReportInterruptActive(ptr)
@@ -2531,7 +2531,7 @@
 @ stdcall IoSetActivityIdThread(ptr)
 @ stub -arch=win64 IoSetAdapterCryptoEngineExtension
 @ stub -arch=win64 IoSetDependency
-@ stub -arch=win64 IoSetFileObjectIgnoreSharing
+@ stdcall IoSetFileObjectIgnoreSharing(ptr)
 @ stub -arch=win64 IoSetFsTrackOffsetState
 @ stub -arch=win64 IoSetFsZeroingOffset
 @ stub -arch=win64 IoSetFsZeroingOffsetRequired
@@ -2539,28 +2539,28 @@
 @ stub -arch=win64 IoSetIoAttributionIrp
 @ stub -arch=win64 IoSetIoCompletionEx
 @ stub -arch=win64 IoSetIoCompletionEx3
-@ stub -arch=win64 IoSetIoPriorityHint
+@ stdcall IoSetIoPriorityHint(ptr long)
 @ stub -arch=win64 IoSetIoPriorityHintIntoFileObject
 @ stub -arch=win64 IoSetIoPriorityHintIntoThread
 @ stdcall IoSetIrpExtraCreateParameter(ptr ptr)
-@ stub -arch=win64 IoSetLinkShareAccess
+@ stdcall IoSetLinkShareAccess(long long ptr ptr ptr long)
 @ stub -arch=win64 IoSetShadowFileInformation
-@ stub -arch=win64 IoSetShareAccessEx
+@ stdcall IoSetShareAccessEx(long long ptr ptr ptr)
 @ stub -arch=win64 IoSizeOfIrpEx
 @ stub -arch=win64 IoSizeofGenericIrpExtension
 @ stdcall IoSizeofWorkItem()
 @ stub -arch=win64 IoSteerInterrupt
 @ stub -arch=win64 IoTestDependency
 @ stub -arch=win64 IoTransferActivityId
-@ stub -arch=win64 IoTryQueueWorkItem
+@ stdcall -arch=win64 IoTryQueueWorkItem(ptr ptr long ptr)
 @ stdcall IoUninitializeWorkItem(ptr)
 @ stdcall IoUnregisterBootDriverCallback(ptr)
 @ stub -arch=win64 IoUnregisterContainerNotification
 @ stub -arch=win64 IoUnregisterIoTracking
 @ stdcall -arch=win64 IoUnregisterPlugPlayNotificationEx(ptr)
 @ stub -arch=win64 IoUnregisterPriorityCallback
-@ stub -arch=win64 IoUpdateLinkShareAccess
-@ stub -arch=win64 IoUpdateLinkShareAccessEx
+@ stdcall IoUpdateLinkShareAccess(ptr ptr ptr)
+@ stdcall IoUpdateLinkShareAccessEx(ptr ptr ptr long)
 @ stub -arch=win64 IoVolumeDeviceNameToGuid
 @ stub -arch=win64 IoVolumeDeviceNameToGuidPath
 @ stdcall IoWithinStackLimits(ptr ptr)
@@ -2804,7 +2804,7 @@
 @ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
 @ stub -arch=win64 ObDereferenceObjectDeferDeleteWithTag
 @ stdcall ObGetFilterVersion()
-@ stub -arch=win64 ObIsDosDeviceLocallyMapped
+@ stdcall -arch=win64 ObIsDosDeviceLocallyMapped(long ptr)
 @ stub -arch=win64 ObOpenObjectByNameEx
 @ stub -arch=win64 ObOpenObjectByPointerWithTag
 @ stdcall ObReferenceObjectByHandleWithTag(ptr long ptr long long ptr ptr)
@@ -3122,7 +3122,7 @@
 @ stub -arch=win64 RtlIsPartialPlaceholder
 @ stub -arch=win64 RtlIsPartialPlaceholderFileHandle
 @ stub -arch=win64 RtlIsPartialPlaceholderFileInfo
-@ stub -arch=win64 RtlIsProcessorFeaturePresent
+@ stdcall -arch=win64 RtlIsProcessorFeaturePresent(long) ExIsProcessorFeaturePresent
 @ stub -arch=win64 RtlIsSandboxedToken
 @ stdcall RtlIsServicePackVersionInstalled(long)
 @ stdcall RtlIsStateSeparationEnabled()

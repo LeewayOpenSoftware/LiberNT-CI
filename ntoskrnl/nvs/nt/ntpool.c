@@ -21,61 +21,8 @@ SIZE_T MmPagedPoolCommit;
 PFN_NUMBER MmAllocatedNonPagedPool;
 ULONG MmConsumedPoolPercentage;
 ULONG MmProtectFreedNonPagedPool;
-ULONG MmSpecialPoolTag;
 MM_PAGED_POOL_INFO MmPagedPoolInfo;
 BOOLEAN ExpArm64PoolBootstrapMode;
-
-BOOLEAN
-NTAPI
-MmUseSpecialPool(
-    _In_ SIZE_T NumberOfBytes,
-    _In_ ULONG Tag)
-{
-    UNREFERENCED_PARAMETER(NumberOfBytes);
-    UNREFERENCED_PARAMETER(Tag);
-    return FALSE;
-}
-
-BOOLEAN
-NTAPI
-MmIsSpecialPoolAddress(
-    _In_ PVOID P)
-{
-    UNREFERENCED_PARAMETER(P);
-    return FALSE;
-}
-
-BOOLEAN
-NTAPI
-MmIsSpecialPoolAddressFree(
-    _In_ PVOID P)
-{
-    UNREFERENCED_PARAMETER(P);
-    return FALSE;
-}
-
-PVOID
-NTAPI
-MmAllocateSpecialPool(
-    _In_ SIZE_T NumberOfBytes,
-    _In_ ULONG Tag,
-    _In_ POOL_TYPE PoolType,
-    _In_ ULONG SpecialType)
-{
-    UNREFERENCED_PARAMETER(NumberOfBytes);
-    UNREFERENCED_PARAMETER(Tag);
-    UNREFERENCED_PARAMETER(PoolType);
-    UNREFERENCED_PARAMETER(SpecialType);
-    return NULL;
-}
-
-VOID
-NTAPI
-MmFreeSpecialPool(
-    _In_ PVOID P)
-{
-    UNREFERENCED_PARAMETER(P);
-}
 
 BOOLEAN
 NTAPI

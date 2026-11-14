@@ -586,7 +586,10 @@ NtfsFlushVolumeRangeContext(_In_opt_ void* Context,
                             _In_ ULONG Length);
 
 /* Puts any write the environment still holds for [Offset, Offset + Length)
- * on the disk before returning, without flushing the device's own cache.
+ * on the disk before returning. In the kernel environment the bytes are on
+ * the medium: when the device reports a write cache, its cache is flushed
+ * past every write completed so far (one flush per edge that needs it), so
+ * a pointer written after this cannot overtake the range on power loss.
  * Environments that write through at once return STATUS_SUCCESS. */
 NTSTATUS
 NtfsCommitRangeContext(_In_opt_ void* Context,
@@ -594,7 +597,10 @@ NtfsCommitRangeContext(_In_opt_ void* Context,
                        _In_ ULONG Length);
 
 /* Write-ordering barrier: the Later range must not reach the device until the
- * Earlier range is durable. Called BEFORE the write that dirties the Later
+ * Earlier range is durable. In the kernel environment durable means on the
+ * medium: an Earlier range already on a device that holds writes stamps the
+ * Later block, whose write-back then flushes the device's cache first.
+ * Called BEFORE the write that dirties the Later
  * range. Success means the ordering is guaranteed (or the Earlier range is
  * already durable). Any failure (the Later block is not cached, the range is
  * not one the cache holds back, the constraint would close a dependency
@@ -693,6 +699,10 @@ public:
     ULONGLONG AllocationLimit = 0;
     ULONGLONG ReservedClusters = 0;
     BOOLEAN ReservedClustersKnown = FALSE;
+
+    /* Clear bits of $Bitmap, counted once and kept by every allocation and release */
+    ULONGLONG FreeClusterCount = 0;
+    BOOLEAN FreeClusterCountKnown = FALSE;
 
     /* Parsed $Bitmap record, built once: its layout never changes and its
      * data is served through the block cache, so re-parsing it for every
@@ -925,6 +935,12 @@ public:
     void
     NoteCorruption();
 
+    void
+    NoteLostWrite(_In_ NTSTATUS Status);
+
+    BOOLEAN
+    ReportsDirty(_In_ USHORT Flags);
+
     /* Writes and retains the dirty flag for a noted corruption (no-op when
      * none is noted, on a read-only mount, or without dirty tracking). The
      * caller holds the metadata lock. */
@@ -1146,6 +1162,11 @@ public:
             const UCHAR* Buffer,
         _In_ ULONG BufferLength);
     NTSTATUS DeleteExternalBacking();
+    NTSTATUS ReadObjectId(_Out_ PObjectIdEx ObjectId);
+    NTSTATUS SetObjectId(_In_ const ObjectIdEx* ObjectId);
+    NTSTATUS SetObjectIdExtended(_In_reads_bytes_(48) const UCHAR* ExtendedInfo);
+    NTSTATUS DeleteObjectId();
+    NTSTATUS RenameDataStream(_In_opt_ PWSTR OldName, _In_opt_ PWSTR NewName, _In_ BOOLEAN ReplaceIfExists);
     NTSTATUS ReadExtendedAttributes(
         _In_opt_ PUCHAR Buffer,
         _Inout_ PULONG BufferLength,
@@ -1679,6 +1700,15 @@ private:
         _In_ ULONG BufferLength,
         _In_ BOOLEAN Delete);
 
+    NTSTATUS
+    MakeObjectIdSpace(_In_ ULONG Required);
+
+    NTSTATUS
+    InsertObjectIdAttribute(_In_ const ObjectIdEx* ObjectId);
+
+    NTSTATUS
+    RemoveObjectIdAttribute();
+
     // ./write.cpp
     NTSTATUS
     UpdateNonResidentData(_In_ PAttribute TargetAttribute,
@@ -1741,6 +1771,17 @@ NtfsUpdateReparseIndex(
     _In_ BOOLEAN Remove);
 
 NTSTATUS
+NtfsCheckObjectIdSupport(
+    _In_ PVolume DiskVolume);
+
+NTSTATUS
+NtfsUpdateObjectIdIndex(
+    _In_ PVolume DiskVolume,
+    _In_ const ObjectIdEx* ObjectId,
+    _In_ ULONGLONG FileReference,
+    _In_ BOOLEAN Remove);
+
+NTSTATUS
 NtfsNextReparseIndexEntry(
     _In_ PVolume DiskVolume,
     _In_ ULONG StartTag,
@@ -1757,6 +1798,17 @@ typedef struct IndexSearchKey
     ULONG ValueLength;
     BOOLEAN CaseSensitive;
 } IndexSearchKey, *PIndexSearchKey;
+
+NTSTATUS
+NtfsFindIndexInsertionPoint(
+    _In_ PVolume DiskVolume,
+    _In_ PIndexNodeHeader Header,
+    _In_ ULONG HeaderBytes,
+    _In_ const IndexSearchKey* Key,
+    _Out_ PULONG InsertionOffset,
+    _Out_ PULONGLONG ChildVcn,
+    _Out_ PBOOLEAN Descend,
+    _Out_opt_ PBOOLEAN FoundExact = NULL);
 
 typedef class Directory : BTree
 {
@@ -2201,6 +2253,13 @@ public:
         _In_ ULONGLONG ParentReference,
         _In_ PUNICODE_STRING Name,
         _Out_ PUNICODE_STRING ShortName);
+
+    NTSTATUS
+    EnumerateLinks(
+        _In_ PFileRecord File,
+        _Inout_ PULONG Context,
+        _Out_ PULONGLONG ParentReference,
+        _Out_ PUNICODE_STRING LinkName);
 
     NTSTATUS
     IsDescendantDirectory(

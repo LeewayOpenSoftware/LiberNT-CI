@@ -134,7 +134,15 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     add_compile_options(-Wno-unused-variable)
     add_compile_options(-Wno-unused-but-set-variable)
 else()
-    if(OPTIMIZE STREQUAL "1")
+    if(OPTIMIZE STREQUAL "0")
+        add_compile_options(-O0)
+        # Unoptimized frames are several times larger, so kernel stacks are doubled.
+        add_compile_definitions(KERNEL_STACK_SCALE=2)
+        add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fno-builtin-memcpy>")
+        if(ARCH STREQUAL "i386")
+            add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:SHELL:-mllvm -fast-isel=false>")
+        endif()
+    elseif(OPTIMIZE STREQUAL "1")
         add_compile_options(-Os)
     elseif(OPTIMIZE STREQUAL "2")
         add_compile_options(-Os)
@@ -296,7 +304,9 @@ elseif(ARCH STREQUAL "arm64" OR ARCH STREQUAL "riscv64" OR ARCH STREQUAL "ppc")
     set(_rc_target_flag "--target=${CMAKE_C_COMPILER_TARGET}")
 endif()
 
-set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> ${_rc_target_flag} -O coff <INCLUDES> <FLAGS> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <DEFINES> <SOURCE> <OBJECT>")
+find_program(RCDEPS_PYTHON_EXECUTABLE NAMES python3 python REQUIRED NO_CMAKE_FIND_ROOT_PATH)
+set(CMAKE_RC_COMPILE_OBJECT "<CMAKE_RC_COMPILER> ${_rc_target_flag} -O coff <INCLUDES> <FLAGS> -DRC_INVOKED -D__WIN32__=1 -D__FLAT__=1 ${I18N_DEFS} <DEFINES> <SOURCE> <OBJECT>"
+    "\"${RCDEPS_PYTHON_EXECUTABLE}\" \"${REACTOS_SOURCE_DIR}/sdk/tools/rcdeps.py\" <OBJECT> <SOURCE> <INCLUDES>")
 
 # We have to pass args to windres. one... by... one...
 set(CMAKE_DEPFILE_FLAGS_RC "--preprocessor=\"${CMAKE_C_COMPILER}\" ${RC_PREPROCESSOR_TARGET} --preprocessor-arg=-E --preprocessor-arg=-nostdlibinc --preprocessor-arg=-xc-header --preprocessor-arg=-MMD --preprocessor-arg=-MF --preprocessor-arg=<OBJECT>.d --preprocessor-arg=-MT --preprocessor-arg=<OBJECT>")

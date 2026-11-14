@@ -1117,7 +1117,7 @@ WSPBind(SOCKET Handle,
     }
     if (!SocketAddress || SocketAddressLength < Socket->HelperData->MinWSAddressLength)
     {
-        if (lpErrno) *lpErrno = WSAEINVAL;
+        if (lpErrno) *lpErrno = WSAEFAULT;
         return SOCKET_ERROR;
     }
 
@@ -1161,7 +1161,9 @@ WSPBind(SOCKET Handle,
                    SocketAddressLength - sizeof(SocketAddress->sa_family));
 
     if (SocketAddress->sa_family == AF_INET6 &&
-        SocketInfo.AddressInfo == SockaddrAddressInfoWildcard &&
+        (SocketInfo.AddressInfo == SockaddrAddressInfoWildcard ||
+         (SocketAddressLength >= (int)sizeof(SOCKADDR_IN6) &&
+          IN6_IS_ADDR_V4MAPPED(&((const SOCKADDR_IN6 *)SocketAddress)->sin6_addr))) &&
         Socket->HelperData->WSHGetSocketInformation(Socket->HelperContext,
                                                     Handle,
                                                     Socket->TdiAddressHandle,
@@ -2790,6 +2792,13 @@ WSPGetSockName(IN SOCKET Handle,
                            SocketAddress->Address[0].Address,
                            SocketAddress->Address[0].AddressLength);
             *NameLength = Socket->SharedData->SizeOfLocalAddress;
+            if (Name->sa_family == AF_UNIX && SocketAddress->Address[0].Address[0] != '\0')
+            {
+                *NameLength = min(*NameLength,
+                                  (INT)(FIELD_OFFSET(SOCKADDR, sa_data) +
+                                        strnlen((PCSTR)SocketAddress->Address[0].Address,
+                                                SocketAddress->Address[0].AddressLength) + 1));
+            }
             TRACE("NameLength %d Address: %x Port %x\n",
                           *NameLength, ((struct sockaddr_in *)Name)->sin_addr.s_addr,
                           ((struct sockaddr_in *)Name)->sin_port);

@@ -279,6 +279,9 @@ CcCanIWrite(
         Allowed = CcDirtyCanWrite(&CcNtCache, (NtMap != NULL) ? &NtMap->Map : NULL, BytesToWrite);
         if (Allowed || !Wait || Round++ > 500)
             break;
+        /* Every dirty map is in failure backoff: waiting cannot free the budget. */
+        if (Round > CC_NT_STALLED_WAIT_ROUNDS && CcNtLazyIsStalled())
+            break;
 
         CcNtKickLazyWriter();
         KeDelayExecutionThread(KernelMode, FALSE, &Delay);

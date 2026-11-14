@@ -106,33 +106,6 @@ MapViewOfFileExNuma(
                            BaseAddress);
 }
 
-BOOL
-WINAPI
-SetStdHandleEx(
-    _In_ DWORD StdHandle,
-    _In_ HANDLE Handle,
-    _Out_opt_ PHANDLE PreviousHandle)
-{
-    HANDLE Previous;
-
-    if (StdHandle != STD_INPUT_HANDLE &&
-        StdHandle != STD_OUTPUT_HANDLE &&
-        StdHandle != STD_ERROR_HANDLE)
-    {
-        SetLastError(ERROR_INVALID_HANDLE);
-        return FALSE;
-    }
-
-    Previous = GetStdHandle(StdHandle);
-    if (!SetStdHandle(StdHandle, Handle))
-        return FALSE;
-
-    if (PreviousHandle)
-        *PreviousHandle = Previous;
-
-    return TRUE;
-}
-
 /* Processor-group affinity is not modelled: report it instead of pretending */
 BOOL
 WINAPI

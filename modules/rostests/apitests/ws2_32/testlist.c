@@ -14,8 +14,10 @@ extern void func_bind(void);
 extern void func_broadcast(void);
 extern void func_cancel(void);
 extern void func_close(void);
+extern void func_connect_any(void);
 extern void func_connect_select(void);
 extern void func_dualstack(void);
+extern void func_dualstack_mapped(void);
 extern void func_getaddrinfo(void);
 extern void func_gethostname(void);
 extern void func_getnameinfo(void);
@@ -27,11 +29,14 @@ extern void func_nostartup(void);
 extern void func_oob(void);
 extern void func_open_osfhandle(void);
 extern void func_pollable_event(void);
+extern void func_loopback_pingpong(void);
 extern void func_recv(void);
 extern void func_select_edge(void);
 extern void func_send(void);
 extern void func_shutdown_linger(void);
 extern void func_sockopt(void);
+extern void func_sendto_neighbor(void);
+extern void func_udp_queue(void);
 extern void func_udp_quic(void);
 extern void func_WSAAsync(void);
 extern void func_WSAIoctl(void);
@@ -53,8 +58,10 @@ const struct test winetest_testlist[] =
     { "broadcast", func_broadcast },
     { "cancel", func_cancel },
     { "close", func_close },
+    { "connect_any", func_connect_any },
     { "connect_select", func_connect_select },
     { "dualstack", func_dualstack },
+    { "dualstack_mapped", func_dualstack_mapped },
     { "getaddrinfo", func_getaddrinfo },
     { "gethostname", func_gethostname },
     { "getnameinfo", func_getnameinfo },
@@ -66,11 +73,14 @@ const struct test winetest_testlist[] =
     { "oob", func_oob },
     { "open_osfhandle", func_open_osfhandle },
     { "pollable_event", func_pollable_event },
+    { "loopback_pingpong", func_loopback_pingpong },
     { "recv", func_recv },
     { "select_edge", func_select_edge },
     { "send", func_send },
     { "shutdown_linger", func_shutdown_linger },
     { "sockopt", func_sockopt },
+    { "sendto_neighbor", func_sendto_neighbor },
+    { "udp_queue", func_udp_queue },
     { "udp_quic", func_udp_quic },
     { "WSAAsync", func_WSAAsync },
     { "WSAIoctl", func_WSAIoctl },

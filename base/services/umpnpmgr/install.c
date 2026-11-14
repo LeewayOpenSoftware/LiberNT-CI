@@ -186,7 +186,8 @@ GetDeviceInstallState(PCWSTR DeviceInstance)
             ((DeviceStatus & DN_STARTED) ||
              ((DeviceStatus & DN_HAS_PROBLEM) &&
               (DeviceProblem == CM_PROB_FAILED_START ||
-               DeviceProblem == CM_PROB_FAILED_POST_START))))
+               DeviceProblem == CM_PROB_FAILED_POST_START ||
+               DeviceProblem == CM_PROB_HELD_FOR_EJECT))))
         {
             State = DeviceInstallComplete;
         }
@@ -218,6 +219,27 @@ GetDeviceInstallState(PCWSTR DeviceInstance)
 
 done:
     RegCloseKey(DeviceKey);
+    return State;
+}
+
+/* A device's arrival only asks that the device be installed while it still runs: one that left since is not set up again */
+static DEVICE_INSTALL_STATE
+GetArrivalInstallState(PCWSTR DeviceInstance)
+{
+    DEVICE_INSTALL_STATE State = GetDeviceInstallState(DeviceInstance);
+    DWORD DeviceStatus = 0;
+    DWORD DeviceProblem = 0;
+
+    if (State == DeviceStartRequired)
+        return DeviceInstallComplete;
+
+    if (State == DeviceInstallRequired &&
+        (PNP_GetDeviceStatus(NULL, (PWSTR)DeviceInstance, &DeviceStatus, &DeviceProblem, 0) != CR_SUCCESS ||
+         !(DeviceStatus & DN_STARTED)))
+    {
+        return DeviceInstallComplete;
+    }
+
     return State;
 }
 
@@ -431,10 +453,11 @@ SetupInstalledDevice(
 
 
 static BOOL
-InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
+InstallDevice(PCWSTR DeviceInstance, BOOL Arrival)
 {
     DEVICE_INSTALL_STATE InstallState;
     BOOL DeviceInstalled = FALSE;
+    BOOL ShowWizard = FALSE;
     DWORD Value;
     DWORD ErrCode;
     HANDLE hInstallEvent;
@@ -452,11 +475,11 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
     WCHAR PipeName[74];
     WCHAR UuidString[39];
 
-    DPRINT("InstallDevice(%S, %d)\n", DeviceInstance, ShowWizard);
+    DPRINT("InstallDevice(%S)\n", DeviceInstance);
 
     ZeroMemory(&ProcessInfo, sizeof(ProcessInfo));
 
-    InstallState = GetDeviceInstallState(DeviceInstance);
+    InstallState = Arrival ? GetArrivalInstallState(DeviceInstance) : GetDeviceInstallState(DeviceInstance);
     if (InstallState == DeviceInstallComplete)
     {
         DPRINT("No need to install: %S\n", DeviceInstance);
@@ -551,10 +574,7 @@ InstallDevice(PCWSTR DeviceInstance, BOOL ShowWizard)
     {
         /* FIXME: This is probably not correct, I guess newdev should never be run with SYSTEM privileges.
 
-           Still, we currently do that in 2nd stage setup and probably Console mode as well, so allow it here.
-           (ShowWizard is only set to FALSE for these two modes) */
-        ASSERT(!ShowWizard);
-
+           Still, we currently do that in 2nd stage setup and probably Console mode as well, so allow it here. */
         if (!CreateProcessW(NULL, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL, &StartupInfo, &ProcessInfo))
         {
             DPRINT1("CreateProcessW failed with error %u\n", GetLastError());
@@ -1224,15 +1244,6 @@ cleanup:
 }
 
 
-FORCEINLINE
-BOOL
-IsUISuppressionAllowed(VOID)
-{
-    /* Display the newdev.dll wizard UI only if it's allowed */
-    return (g_IsUISuppressed || GetSuppressNewUIValue());
-}
-
-
 /* Loop to install all queued devices installations */
 typedef struct _BOOT_INSTALL_STATUS
 {
@@ -1497,8 +1508,6 @@ Step2:
 
     WaitForSingleObject(hInstallEvent, INFINITE);
 
-    BOOL showWizard = !SetupIsActive() && !IsConsoleBoot();
-
     while (TRUE)
     {
         /*
@@ -1534,86 +1543,81 @@ Step2:
         }
 
         /*
-         * If the burst contains more than one device AND we don't need the
-         * UI wizard, batch them through a single ClientSideInstallW
-         * rundll32 spawn. Otherwise fall back to the legacy per-device
-         * path (which still respects ShowWizard and drives the wizard UI
-         * for interactive installs).
+         * If the burst contains more than one device, batch them through a
+         * single ClientSideInstallW rundll32 spawn. Otherwise fall back to the
+         * per-device path.
          */
-        BOOL burstShowWizard = showWizard && !IsUISuppressionAllowed();
-        if (!burstShowWizard)
-        {
-            /* Count the burst and build a multi-sz list for the batch child. */
-            DWORD burstCount = 0;
-            SIZE_T burstBytes = sizeof(WCHAR); /* final multi-sz NUL */
+        /* Count the burst and build a multi-sz list for the batch child. */
+        DWORD burstCount = 0;
+        SIZE_T burstBytes = sizeof(WCHAR); /* final multi-sz NUL */
 
+        for (PLIST_ENTRY e = LocalBurst.Flink; e != &LocalBurst; e = e->Flink)
+        {
+            DeviceInstallParams* p = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
+            burstCount++;
+            burstBytes += (lstrlenW(p->DeviceIds) + 1) * sizeof(WCHAR);
+        }
+
+        PWSTR burstList = NULL;
+        if (burstCount > 1)
+        {
+            burstList = HeapAlloc(GetProcessHeap(), 0, burstBytes);
+        }
+
+        if (burstList != NULL)
+        {
+            /* Filter out devices that no longer need install. */
+            DWORD filteredBurstCount = 0;
+            BOOL setupFailed = FALSE;
+            PWSTR outCursor = burstList;
             for (PLIST_ENTRY e = LocalBurst.Flink; e != &LocalBurst; e = e->Flink)
             {
                 DeviceInstallParams* p = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
-                burstCount++;
-                burstBytes += (lstrlenW(p->DeviceIds) + 1) * sizeof(WCHAR);
-            }
+                DEVICE_INSTALL_STATE InstallState = p->Arrival ? GetArrivalInstallState(p->DeviceIds)
+                                                               : GetDeviceInstallState(p->DeviceIds);
 
-            PWSTR burstList = NULL;
-            if (burstCount > 1)
-            {
-                burstList = HeapAlloc(GetProcessHeap(), 0, burstBytes);
-            }
-
-            if (burstList != NULL)
-            {
-                /* Filter out devices that no longer need install. */
-                DWORD filteredBurstCount = 0;
-                BOOL setupFailed = FALSE;
-                PWSTR outCursor = burstList;
-                for (PLIST_ENTRY e = LocalBurst.Flink; e != &LocalBurst; e = e->Flink)
+                if (InstallState == DeviceInstallRequired)
                 {
-                    DeviceInstallParams* p = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
-                    DEVICE_INSTALL_STATE InstallState = GetDeviceInstallState(p->DeviceIds);
-
-                    if (InstallState == DeviceInstallRequired)
-                    {
-                        SIZE_T cch = lstrlenW(p->DeviceIds) + 1;
-                        memcpy(outCursor, p->DeviceIds, cch * sizeof(WCHAR));
-                        outCursor += cch;
-                        filteredBurstCount++;
-                    }
-                    else if (InstallState == DeviceStartRequired &&
-                             !SetupInstalledDevice(p->DeviceIds))
-                    {
-                        setupFailed = TRUE;
-                    }
+                    SIZE_T cch = lstrlenW(p->DeviceIds) + 1;
+                    memcpy(outCursor, p->DeviceIds, cch * sizeof(WCHAR));
+                    outCursor += cch;
+                    filteredBurstCount++;
                 }
-                *outCursor = UNICODE_NULL;
-
-                if (!setupFailed &&
-                    (filteredBurstCount == 0 ||
-                     InstallDevicesBatch(burstList, filteredBurstCount)))
+                else if (InstallState == DeviceStartRequired &&
+                         !SetupInstalledDevice(p->DeviceIds))
                 {
-                    /* Burst handled (batch succeeded or nothing to do). */
-                    HeapFree(GetProcessHeap(), 0, burstList);
-                    while (!IsListEmpty(&LocalBurst))
-                    {
-                        PLIST_ENTRY e = RemoveHeadList(&LocalBurst);
-                        Params = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
-                        HeapFree(GetProcessHeap(), 0, Params);
-                    }
-                    continue;
+                    setupFailed = TRUE;
                 }
+            }
+            *outCursor = UNICODE_NULL;
 
+            if (!setupFailed &&
+                (filteredBurstCount == 0 ||
+                 InstallDevicesBatch(burstList, filteredBurstCount)))
+            {
+                /* Burst handled (batch succeeded or nothing to do). */
                 HeapFree(GetProcessHeap(), 0, burstList);
-                /* Fall through to per-device loop on batch failure. */
-                DPRINT1("Step 2 batch failed, falling back to per-device loop\n");
+                while (!IsListEmpty(&LocalBurst))
+                {
+                    PLIST_ENTRY e = RemoveHeadList(&LocalBurst);
+                    Params = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
+                    HeapFree(GetProcessHeap(), 0, Params);
+                }
+                continue;
             }
+
+            HeapFree(GetProcessHeap(), 0, burstList);
+            /* Fall through to per-device loop on batch failure. */
+            DPRINT1("Step 2 batch failed, falling back to per-device loop\n");
         }
 
-        /* Per-device path: either a single-device burst, a wizard is wanted,
-         * or the batch attempt failed — process each entry individually. */
+        /* Per-device path: either a single-device burst or the batch
+         * attempt failed — process each entry individually. */
         while (!IsListEmpty(&LocalBurst))
         {
             PLIST_ENTRY e = RemoveHeadList(&LocalBurst);
             Params = CONTAINING_RECORD(e, DeviceInstallParams, ListEntry);
-            InstallDevice(Params->DeviceIds, burstShowWizard);
+            InstallDevice(Params->DeviceIds, Params->Arrival);
             HeapFree(GetProcessHeap(), 0, Params);
         }
     }

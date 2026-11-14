@@ -758,6 +758,8 @@ MmUnloadSystemImage(IN PVOID ImageHandle)
 
     if (LdrEntry->LoadCount) goto Done;
 
+    VfCheckPoolAtUnload(LdrEntry);
+
     if (LdrEntry->Flags & LDRP_DEBUG_SYMBOLS_LOADED)
     {
         Status = RtlUnicodeStringToAnsiString(&TempName,
@@ -2567,6 +2569,8 @@ LoaderScan:
     LdrEntry->Flags &= ~LDRP_LOAD_IN_PROGRESS;
     LdrEntry->LoadedImports = LoadedImports;
 
+    MiVerifyLoadedImage(LdrEntry);
+
     MiWriteProtectSystemImage(LdrEntry->DllBase);
 
     LdrpInitSecurityCookie(LdrEntry);
@@ -2837,7 +2841,11 @@ MmGetSystemRoutineAddress(IN PUNICODE_STRING SystemRoutineName)
             ProcAddress = RtlFindExportedRoutineByName(LdrEntry->DllBase,
                                                        AnsiRoutineName.Buffer);
             if (ProcAddress != NULL && MiIsUnimplementedExport(LdrEntry->DllBase, ProcAddress))
+            {
+                DPRINT1("MmGetSystemRoutineAddress: %wZ!%Z is not implemented (caller %p)\n",
+                        &LdrEntry->BaseDllName, &AnsiRoutineName, _ReturnAddress());
                 ProcAddress = NULL;
+            }
 
             if (ProcAddress) break;
             if (Modules == 2) break;

@@ -762,7 +762,7 @@ KDDEBUGGER_DATA64 KdDebuggerDataBlock =
 #if (NTDDI_VERSION >= NTDDI_WIN7)
     PtrToUL64(0),
 #if defined(_M_AMD64)
-    FIELD_OFFSET(KPRCB, CrashDumpContext),
+    FIELD_OFFSET(KPRCB, Context),
 #else
     0,
 #endif

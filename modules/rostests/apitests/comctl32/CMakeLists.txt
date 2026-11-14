@@ -2,12 +2,15 @@
 list(APPEND SOURCE
     ../include/msgtrace.c
     button.c
+    ButtonShield.c
     imagelist.c
     ListViewGroups.c
     LoadIconWithScaleDown.c
     propsheet.c
+    PropSheetRecalc.c
     TabControlKeys.c
     StatusBarResize.c
+    SysLinkIdealSize.c
     TaskDialogTitle.c
     testlist.c
     themestate.c

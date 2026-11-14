@@ -16,6 +16,11 @@
 
 PERESOURCE FsRtlPagingIoResources;
 ULONG FsRtlPagingIoResourceSelector;
+
+/* Set once smss has run the BootExecute list (autochk and friends); until
+ * then file systems must keep out of the way of the startup applications. */
+BOOLEAN FsRtlVolumeStartupApplicationsComplete = FALSE;
+
 CODE_SEG("INIT") NTSTATUS NTAPI FsRtlInitializeWorkerThread(VOID);
 extern KSEMAPHORE FsRtlpUncSemaphore;
 
@@ -215,3 +220,39 @@ FsRtlAllocateResource(VOID)
                                    FSRTL_MAX_RESOURCES];
 }
 
+/*++
+ * @name FsRtlSetVolumeStartupApplicationsComplete
+ *
+ * Records that the session manager has finished running the volume startup
+ * applications (the BootExecute list). Called from NtInitializeRegistry on
+ * the smss registry-init phase, which always follows BootExecute.
+ *
+ * @return None
+ *
+ *--*/
+VOID
+NTAPI
+FsRtlSetVolumeStartupApplicationsComplete(VOID)
+{
+    FsRtlVolumeStartupApplicationsComplete = TRUE;
+}
+
+/*++
+ * @name FsRtlAreVolumeStartupApplicationsComplete
+ * @implemented
+ *
+ * Reports whether smss has completed running all startup applications
+ * (autochk, autoconv, ...) for the system volumes. FALSE during boot until
+ * NtInitializeRegistry(CM_BOOT_FLAG_SMSS), TRUE from then on.
+ *
+ * @return TRUE once the startup applications have completed, FALSE before.
+ *
+ *--*/
+BOOLEAN
+NTAPI
+FsRtlAreVolumeStartupApplicationsComplete(VOID)
+{
+    PAGED_CODE();
+
+    return FsRtlVolumeStartupApplicationsComplete;
+}

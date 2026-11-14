@@ -104,7 +104,7 @@ static
 BOOLEAN
 CcmmPurge(PVOID Context, ULONG64 Offset, ULONG64 Length)
 {
-    return MiSegmentPurge(((CCMM_FILE *)Context)->Segment, Offset, Length);
+    return MiSegmentPurge(((CCMM_FILE *)Context)->Segment, Offset, Length, FALSE);
 }
 
 static
@@ -485,7 +485,7 @@ CcmmBasic(void)
     File.File.Data[0x200000] ^= 0x55;
     Shadow[0x200000] ^= 0x55;
     CHECK(CcMapDetachViews(&File.Map, 0, (ULONG64)-1));
-    CHECK(MiSegmentPurge(File.Segment, 0, 0));
+    CHECK(MiSegmentPurge(File.Segment, 0, 0, TRUE));
     CHECK(NT_SUCCESS(CachedRead(&File, 0, 0x200000, Buffer, 16)));
     CHECK(Buffer[0] == Shadow[0x200000]);
 

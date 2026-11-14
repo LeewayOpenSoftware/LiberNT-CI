@@ -355,6 +355,15 @@ kernel_mode_entry:
 
     if ((Flags) AND TF_DEBUG)
         SAVE_DEBUG_REGISTERS rbp, rax
+    else
+        /* Not saved on this path: a context must not report stack contents as debug registers */
+        xor eax, eax
+        mov [rbp + KTRAP_FRAME_Dr0], rax
+        mov [rbp + KTRAP_FRAME_Dr1], rax
+        mov [rbp + KTRAP_FRAME_Dr2], rax
+        mov [rbp + KTRAP_FRAME_Dr3], rax
+        mov [rbp + KTRAP_FRAME_Dr6], rax
+        mov [rbp + KTRAP_FRAME_Dr7], rax
     endif
 #ifdef _USE_ML
 debug_registers_saved:
@@ -471,6 +480,25 @@ debug_registers_restored:
 ENDM
 
 
+/* rsp = rbp = the trap frame, interrupts disabled: continue on the processor's ISR stack unless
+   already on it (nested interrupt) or it does not exist yet. Clobbers rax, rcx, rdx. */
+MACRO(SwitchToIsrStack)
+    mov rax, gs:[PcIsrStack]
+    mov rcx, rax
+    sub rcx, rsp
+    lea rdx, [rax - 32]
+    cmp rcx, ISR_STACK_SIZE
+    cmovbe rdx, rsp
+    test rax, rax
+    cmovz rdx, rsp
+    mov rsp, rdx
+ENDM
+
+/* Interrupts disabled: back to the trap frame */
+MACRO(SwitchFromIsrStack)
+    mov rsp, rbp
+ENDM
+
 #ifdef _USE_ML
 MACRO(TRAP_ENTRY, Trap, Flags)
     EXTERN Trap&Handler :PROC
@@ -479,9 +507,11 @@ MACRO(TRAP_ENTRY, Trap, Flags)
         /* Common code to create the trap frame */
         EnterTrap Flags
 
-        /* Call the C handler */
+        /* Call the C handler on the ISR stack */
+        SwitchToIsrStack
         mov rcx, rbp
         call Trap&Handler
+        SwitchFromIsrStack
 
         /* Leave */
         ExitTrap Flags
@@ -495,9 +525,11 @@ MACRO(TRAP_ENTRY, Trap, Flags)
         /* Common code to create the trap frame */
         EnterTrap Flags
 
-        /* Call the C handler */
+        /* Call the C handler on the ISR stack */
+        SwitchToIsrStack
         mov rcx, rbp
         call \Trap\()Handler
+        SwitchFromIsrStack
 
         /* Leave */
         ExitTrap Flags

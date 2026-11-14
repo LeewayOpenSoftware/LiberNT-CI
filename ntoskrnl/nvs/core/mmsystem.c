@@ -17,7 +17,9 @@ MiChargeSystemCommit(
 {
     LONG64 Committed;
     LONG64 Limit;
+    PMI_EXPAND_COMMIT ExpandCommit;
 
+    MI_ASSERT(Pages >= 0);
     for (;;)
     {
         Limit = MI_ATOMIC_READ64(&System->CommitLimit);
@@ -26,12 +28,14 @@ MiChargeSystemCommit(
             break;
 
         MI_ATOMIC_ADD64(&System->CommittedPages, -Pages);
-        if (Pages <= 0 || System->ExpandCommit == NULL || !System->ExpandCommit(System, Pages, Limit, Wait))
+        ExpandCommit = MiSystemGetExpandCommit(System);
+        if (Pages <= 0 || ExpandCommit == NULL || !ExpandCommit(System, Pages, Limit, Wait))
             return FALSE;
     }
 
-    if (Pages > 0 && System->ExpandCommit != NULL && Committed > Limit - Limit / 10)
-        System->ExpandCommit(System, 0, Limit, FALSE);
+    ExpandCommit = MiSystemGetExpandCommit(System);
+    if (Pages > 0 && ExpandCommit != NULL && Committed > Limit - Limit / 10)
+        ExpandCommit(System, 0, Limit, FALSE);
 
     return TRUE;
 }
@@ -43,6 +47,7 @@ MiChargeCommit(
 {
     PMI_SYSTEM System = Space->System;
 
+    MI_ASSERT(Pages >= 0);
     if (!MiChargeSystemCommit(System, Pages, (BOOLEAN)!Space->IsSystem))
         return FALSE;
 
@@ -62,11 +67,17 @@ MiReturnCommit(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ LONG64 Pages)
 {
+    LONG64 Previous;
+
+    MI_ASSERT(Pages >= 0);
     if (Pages == 0)
         return;
 
-    MI_ATOMIC_ADD64(&Space->System->CommittedPages, -Pages);
-    MI_ATOMIC_ADD64(&Space->CommittedPages, -Pages);
+    Previous = MI_ATOMIC_ADD64(&Space->System->CommittedPages, -Pages);
+    MI_ASSERT(Previous >= Pages);
+    Previous = MI_ATOMIC_ADD64(&Space->CommittedPages, -Pages);
+    MI_ASSERT(Previous >= Pages);
+    UNREFERENCED_PARAMETER(Previous);
 
     if (Space->CommitOwner != NULL && Space->System->ReturnOwnerCommit != NULL)
         Space->System->ReturnOwnerCommit(Space->CommitOwner, Pages);
@@ -217,17 +228,44 @@ MiAddressSpaceDestroy(
     Space->RootFrame = 0;
 }
 
+#if DBG || defined(MM_HOST_TEST)
+static
+VOID
+MiValidateVadCache(
+    _In_ PMI_ADDRESS_SPACE Space,
+    _In_opt_ PMI_VAD Exclude)
+{
+    PMI_VAD Vad = Space->FreeVads;
+    ULONG Count = 0;
+
+    MI_ASSERT(Space->FreeVadCount <= MI_VAD_CACHE_SIZE);
+    while (Vad != NULL && Count < MI_VAD_CACHE_SIZE)
+    {
+        MI_ASSERT(Vad != Exclude);
+        MI_ASSERT(MiVadFind(&Space->VadRoot, Vad->Node.StartingVpn) != &Vad->Node);
+        Vad = (PMI_VAD)Vad->Node.Left;
+        Count++;
+    }
+    MI_ASSERT(Vad == NULL);
+    MI_ASSERT(Count == Space->FreeVadCount);
+}
+#else
+#define MiValidateVadCache(Space, Exclude) ((VOID)0)
+#endif
+
 PMI_VAD
 MiVadPopFree(PMI_ADDRESS_SPACE Space)
 {
     PMI_VAD Vad = Space->FreeVads;
 
+    MiValidateVadCache(Space, NULL);
     if (Vad != NULL)
     {
         Space->FreeVads = (PMI_VAD)Vad->Node.Left;
         Space->FreeVadCount--;
         RtlZeroMemory(Vad, sizeof(*Vad));
     }
+    MiValidateVadCache(Space, Vad);
     return Vad;
 }
 
@@ -251,17 +289,21 @@ MiVadAllocateAndLock(PMI_ADDRESS_SPACE Space)
 BOOLEAN
 MiVadCacheFree(PMI_ADDRESS_SPACE Space, PMI_VAD Vad)
 {
+    MiValidateVadCache(Space, Vad);
+    MI_ASSERT(MiVadFind(&Space->VadRoot, Vad->Node.StartingVpn) != &Vad->Node);
     if (Space->FreeVadCount == MI_VAD_CACHE_SIZE)
         return FALSE;
     Vad->Node.Left = (PMI_VAD_NODE)Space->FreeVads;
     Space->FreeVads = Vad;
     Space->FreeVadCount++;
+    MiValidateVadCache(Space, NULL);
     return TRUE;
 }
 
 VOID
 MiVadFlushCache(PMI_ADDRESS_SPACE Space)
 {
+    MiValidateVadCache(Space, NULL);
     while (Space->FreeVads != NULL)
     {
         PMI_VAD Vad = Space->FreeVads;
@@ -271,4 +313,5 @@ MiVadFlushCache(PMI_ADDRESS_SPACE Space)
         MI_FREE(Vad);
     }
     MI_ASSERT(Space->FreeVadCount == 0);
+    MiValidateVadCache(Space, NULL);
 }

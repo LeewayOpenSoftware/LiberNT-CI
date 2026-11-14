@@ -11,7 +11,6 @@
 /* INCLUDES ****************************************************************/
 
 #include <k32.h>
-#include <reactos/emulation.h>
 #include <wow64shared.h>
 
 #define NDEBUG
@@ -1045,6 +1044,66 @@ SetProcessAffinityMask(IN HANDLE hProcess,
     return TRUE;
 }
 
+#define BASEP_AFFINITY_UPDATE_MODE_PERMANENT 0x00000002UL
+
+BOOL
+WINAPI
+SetProcessAffinityUpdateMode(IN HANDLE hProcess,
+                             IN DWORD dwFlags)
+{
+    ULONG UpdateMode;
+    NTSTATUS Status;
+
+    if (hProcess != NtCurrentProcess() ||
+        (dwFlags & ~PROCESS_AFFINITY_ENABLE_AUTO_UPDATE) != 0)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (dwFlags & PROCESS_AFFINITY_ENABLE_AUTO_UPDATE)
+        UpdateMode = PROCESS_AFFINITY_ENABLE_AUTO_UPDATE;
+    else
+        UpdateMode = BASEP_AFFINITY_UPDATE_MODE_PERMANENT;
+
+    Status = NtSetInformationProcess(hProcess,
+                                     ProcessAffinityUpdateMode,
+                                     &UpdateMode,
+                                     sizeof(UpdateMode));
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+BOOL
+WINAPI
+QueryProcessAffinityUpdateMode(IN HANDLE hProcess,
+                               OUT LPDWORD lpdwFlags OPTIONAL)
+{
+    ULONG UpdateMode;
+    NTSTATUS Status;
+
+    Status = NtQueryInformationProcess(hProcess,
+                                       ProcessAffinityUpdateMode,
+                                       &UpdateMode,
+                                       sizeof(UpdateMode),
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        BaseSetLastNTError(Status);
+        return FALSE;
+    }
+
+    if (lpdwFlags)
+        *lpdwFlags = UpdateMode & PROCESS_AFFINITY_ENABLE_AUTO_UPDATE;
+
+    return TRUE;
+}
+
 /*
  * @implemented
  */
@@ -2031,26 +2090,6 @@ IsWow64Process2(IN HANDLE hProcess,
 }
 
 static
-BOOLEAN
-BasepIsEmulatedMachine(IN USHORT Machine)
-{
-    WCHAR Buffer[MAX_PATH];
-    UNICODE_STRING Path;
-
-    if (Machine != IMAGE_FILE_MACHINE_AMD64) return FALSE;
-
-    RtlInitEmptyUnicodeString(&Path, Buffer, sizeof(Buffer) - sizeof(UNICODE_NULL));
-    if (!NT_SUCCESS(RtlAppendUnicodeToString(&Path, SharedUserData->NtSystemRoot)) ||
-        !NT_SUCCESS(RtlAppendUnicodeToString(&Path, L"\\System32\\" EMULATION_HOST_IMAGE_AMD64)))
-    {
-        return FALSE;
-    }
-
-    Buffer[Path.Length / sizeof(WCHAR)] = UNICODE_NULL;
-    return RtlDoesFileExists_U(Buffer);
-}
-
-static
 NTSTATUS
 BasepQuerySupportedMachines(OUT SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION *Machines,
                             IN ULONG Count)
@@ -2064,6 +2103,24 @@ BasepQuerySupportedMachines(OUT SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMA
                                       Machines,
                                       (Count - 1) * sizeof(*Machines),
                                       NULL);
+}
+
+static
+BOOLEAN
+BasepIsEmulatedMachine(IN USHORT Machine)
+{
+    SYSTEM_SUPPORTED_PROCESSOR_ARCHITECTURES_INFORMATION Machines[8];
+    ULONG Index;
+
+    if (!NT_SUCCESS(BasepQuerySupportedMachines(Machines, RTL_NUMBER_OF(Machines))))
+        return FALSE;
+
+    for (Index = 0; Machines[Index].Machine; Index++)
+    {
+        if (Machines[Index].Machine == Machine)
+            return Machines[Index].UserMode && !Machines[Index].WoW64Container;
+    }
+    return FALSE;
 }
 
 /*
@@ -3055,7 +3112,7 @@ BasepCreateUserProcess(IN HANDLE UserToken,
         AttributeList->Attributes[AttributeCount].Value = (ULONG_PTR)DebugHandle;
         AttributeCount++;
     }
-    EffectiveToken = UserToken ? UserToken : SaferToken;
+    EffectiveToken = SaferToken ? SaferToken : UserToken;
     if (Extended->SecurityCapabilities)
     {
         HANDLE BaseToken = EffectiveToken;
@@ -3209,11 +3266,6 @@ BasepCreateUserProcess(IN HANDLE UserToken,
         Status = NtSetInformationProcess(ProcessHandle, ProcessDefaultHardErrorMode, &HardErrorMode, sizeof(HardErrorMode));
         if (!NT_SUCCESS(Status)) goto Failure;
     }
-    if (SaferToken && !UserToken)
-    {
-        Status = BasepReplaceProcessThreadTokens(SaferToken, ProcessHandle, ThreadHandle);
-        if (!NT_SUCCESS(Status)) goto Failure;
-    }
     if (JobHandle)
     {
         Status = NtAssignProcessToJobObject(JobHandle, ProcessHandle);
@@ -3280,6 +3332,115 @@ BasepIsBlankImage(
     if (!NT_SUCCESS(NtReadFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock, &Header, sizeof(Header), &Offset, NULL)))
         return FALSE;
     return (Header == 0) || (Header == MAXULONG);
+}
+
+static
+BOOLEAN
+BasepEnvironmentHasRunAsInvoker(
+    _In_opt_ LPVOID lpEnvironment,
+    _In_ DWORD dwCreationFlags)
+{
+    UNICODE_STRING Name = RTL_CONSTANT_STRING(L"__COMPAT_LAYER");
+    UNICODE_STRING Value;
+    WCHAR Buffer[260];
+    PWCHAR Token, End;
+    NTSTATUS Status;
+
+    if (lpEnvironment && !(dwCreationFlags & CREATE_UNICODE_ENVIRONMENT))
+        lpEnvironment = NULL;
+
+    RtlInitEmptyUnicodeString(&Value, Buffer, sizeof(Buffer) - sizeof(WCHAR));
+    Status = RtlQueryEnvironmentVariable_U(lpEnvironment, &Name, &Value);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+    Buffer[Value.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    for (Token = Buffer; *Token; Token = End)
+    {
+        while (*Token == L' ') Token++;
+        for (End = Token; *End && *End != L' '; End++);
+        if ((End - Token) == 12 && !_wcsnicmp(Token, L"RunAsInvoker", 12))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static
+BOOLEAN
+BasepIsTokenElevated(
+    _In_opt_ HANDLE hUserToken)
+{
+    TOKEN_ELEVATION Elevation;
+    HANDLE TokenHandle = hUserToken;
+    ULONG Length;
+    NTSTATUS Status;
+
+    if (!TokenHandle)
+    {
+        Status = NtOpenProcessToken(NtCurrentProcess(), TOKEN_QUERY, &TokenHandle);
+        if (!NT_SUCCESS(Status))
+            return TRUE;
+    }
+
+    Status = NtQueryInformationToken(TokenHandle,
+                                     TokenElevation,
+                                     &Elevation,
+                                     sizeof(Elevation),
+                                     &Length);
+    if (TokenHandle != hUserToken)
+        NtClose(TokenHandle);
+
+    if (!NT_SUCCESS(Status))
+        return TRUE;
+    return Elevation.TokenIsElevated != 0;
+}
+
+static
+BOOLEAN
+BasepImageRequiresElevation(
+    _In_opt_ HANDLE hUserToken,
+    _In_ LPCWSTR lpApplicationName,
+    _In_opt_ LPVOID lpEnvironment,
+    _In_ DWORD dwCreationFlags)
+{
+    ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION RunLevel;
+    ACTCTXW ActCtx;
+    HANDLE ActCtxHandle;
+    DWORD LastError;
+    BOOL Queried;
+
+    if (!lpApplicationName || BasepIsTokenElevated(hUserToken))
+        return FALSE;
+
+    LastError = GetLastError();
+
+    RtlZeroMemory(&ActCtx, sizeof(ActCtx));
+    ActCtx.cbSize = sizeof(ActCtx);
+    ActCtx.dwFlags = ACTCTX_FLAG_RESOURCE_NAME_VALID;
+    ActCtx.lpSource = lpApplicationName;
+    ActCtx.lpResourceName = MAKEINTRESOURCEW(1);
+    ActCtxHandle = CreateActCtxW(&ActCtx);
+    if (ActCtxHandle == INVALID_HANDLE_VALUE)
+    {
+        SetLastError(LastError);
+        return FALSE;
+    }
+
+    RtlZeroMemory(&RunLevel, sizeof(RunLevel));
+    Queried = QueryActCtxW(0,
+                           ActCtxHandle,
+                           NULL,
+                           RunlevelInformationInActivationContext,
+                           &RunLevel,
+                           sizeof(RunLevel),
+                           NULL);
+    ReleaseActCtx(ActCtxHandle);
+    SetLastError(LastError);
+
+    if (!Queried || RunLevel.RunLevel != ACTCTX_RUN_LEVEL_REQUIRE_ADMIN)
+        return FALSE;
+
+    return !BasepEnvironmentHasRunAsInvoker(lpEnvironment, dwCreationFlags);
 }
 
 /*
@@ -4164,7 +4325,7 @@ StartScan:
 
     /* Have we already done, and do we need to do, SRP (WinSafer) checks? */
     if (!(SkipSaferAndAppCompat) &&
-        ~(dwCreationFlags & CREATE_PRESERVE_CODE_AUTHZ_LEVEL))
+        !(dwCreationFlags & CREATE_PRESERVE_CODE_AUTHZ_LEVEL))
     {
         /* Assume yes */
         SaferNeeded = TRUE;
@@ -4220,6 +4381,15 @@ StartScan:
                 goto Quickie;
             }
         }
+    }
+
+    if (NT_SUCCESS(Status) &&
+        BasepImageRequiresElevation(hUserToken, lpApplicationName, lpEnvironment, dwCreationFlags))
+    {
+        DPRINT1("Image %S requires elevation\n", lpApplicationName);
+        SetLastError(ERROR_ELEVATION_REQUIRED);
+        Result = FALSE;
+        goto Quickie;
     }
 
     ImageError = ERROR_BAD_EXE_FORMAT;
@@ -4902,6 +5072,7 @@ StartScan:
         || ExtendedAttributes.ComponentFilterPresent
         || ExtendedAttributes.PseudoConsole
         || hUserToken
+        || TokenHandle
        )
     {
         Result = BasepCreateUserProcess(hUserToken, TokenHandle, JobHandle, &PathName, lpApplicationName, lpCommandLine, lpEnvironment, lpCurrentDirectory, &StartupInfo, dwCreationFlags | NoWindow, bInheritHandles, lpProcessAttributes, lpThreadAttributes, ParameterFlags, Flags, ParentProcess, InheritHandleList, InheritHandleCount, &PriorityClass, &ExtendedAttributes, lpProcessInformation);
@@ -5691,7 +5862,7 @@ Quickie:
     if (TokenHandle)
     {
         /* And if the user asked for one */
-        if (hUserToken)
+        if ((hUserToken) && (hNewToken))
         {
             /* Then return it */
             *hNewToken = TokenHandle;

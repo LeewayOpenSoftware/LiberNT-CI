@@ -48,7 +48,9 @@ add_library(ntfslib_linux STATIC
     "${NTFSLIB_ROOT}/src/filerecord/write/filedata.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/write/filename.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/write/move.cpp"
+    "${NTFSLIB_ROOT}/src/filerecord/write/objectid.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/write/reparse.cpp"
+    "${NTFSLIB_ROOT}/src/filerecord/write/streamrename.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/filerecord.cpp"
     "${NTFSLIB_ROOT}/src/filerecord/fixup.cpp"
     "${NTFSLIB_ROOT}/src/lfs/lfs.cpp"
@@ -256,6 +258,20 @@ if(BUILD_TESTING)
         COMMAND ntfslib_corrupt_runlist_dirty_test
     )
 
+    add_executable(ntfslib_lost_write_dirty_test
+        tests/lost_write_dirty.cpp
+    )
+    target_compile_features(ntfslib_lost_write_dirty_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_lost_write_dirty_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_lost_write_dirty_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_lost_write_dirty
+        COMMAND ntfslib_lost_write_dirty_test
+    )
+
     add_executable(ntfslib_lookup_index_cache_test
         tests/lookup_index_cache.cpp
     )
@@ -304,6 +320,17 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
     find_program(FAKEROOT_EXECUTABLE NAMES fakeroot)
     find_program(XXD_EXECUTABLE NAMES xxd)
     find_library(WIM_LIBRARY NAMES wim libwim.so.15)
+    set(_ntfslib_format_4k_reference "")
+    if(NTFSFIX_EXECUTABLE)
+        set(_ntfslib_format_4k_reference "${NTFSFIX_EXECUTABLE}")
+    endif()
+    add_test(
+        NAME ntfslib_linux_format_4k
+        COMMAND /bin/sh
+            "${CMAKE_CURRENT_LIST_DIR}/tests/format_4k_smoke.sh"
+            "$<TARGET_FILE:ntfslib_fuse>"
+            ${_ntfslib_format_4k_reference}
+    )
     if(WIM_LIBRARY)
         add_executable(ntfslib_wof_fixture
             tests/wof_fixture.cpp
@@ -747,6 +774,15 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "$<TARGET_FILE:ntfslib_fuse>"
                 "${MKNTFS_EXECUTABLE}"
         )
+        add_test(
+            NAME ntfslib_linux_check_crosslink
+            COMMAND /bin/sh
+                "${CMAKE_CURRENT_LIST_DIR}/tests/check_crosslink_smoke.sh"
+                "$<TARGET_FILE:ntfslib_fuse>"
+                "${MKNTFS_EXECUTABLE}"
+                "${NTFSCP_EXECUTABLE}"
+                "${NTFSCAT_EXECUTABLE}"
+        )
     endif()
     if(MKNTFS_EXECUTABLE AND
        NTFSCP_EXECUTABLE AND
@@ -767,4 +803,10 @@ if(BUILD_TESTING AND NTFSLIB_BUILD_FUSE)
                 "${XXD_EXECUTABLE}"
         )
     endif()
+    add_test(
+        NAME ntfslib_linux_case_sensitive
+        COMMAND /bin/sh
+            "${CMAKE_CURRENT_LIST_DIR}/tests/case_sensitive_smoke.sh"
+            "$<TARGET_FILE:ntfslib_fuse>"
+    )
 endif()

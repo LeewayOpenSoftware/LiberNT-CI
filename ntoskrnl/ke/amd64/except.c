@@ -66,8 +66,13 @@ KeInitExceptions(VOID)
     {
         ULONG64 Offset;
 
+        ASSERT(j < (int)RTL_NUMBER_OF(KiInterruptInitTable));
+        ASSERT(KiInterruptInitTable[j].ServiceRoutine == NULL || KiInterruptInitTable[j].InterruptId >= i);
         if (KiInterruptInitTable[j].InterruptId == i)
         {
+            ASSERT(KiInterruptInitTable[j].ServiceRoutine != NULL);
+            ASSERT(KiInterruptInitTable[j].Dpl <= 3);
+            ASSERT(KiInterruptInitTable[j].IstIndex <= 7);
             Offset = (ULONG64)KiInterruptInitTable[j].ServiceRoutine;
             KiIdt[i].Dpl = KiInterruptInitTable[j].Dpl;
             KiIdt[i].IstIndex = KiInterruptInitTable[j].IstIndex;
@@ -89,6 +94,8 @@ KeInitExceptions(VOID)
         KiIdt[i].Reserved1 = 0;
     }
 
+    ASSERT(j == (int)RTL_NUMBER_OF(KiInterruptInitTable) - 1);
+    ASSERT(KiInterruptInitTable[j].ServiceRoutine == NULL);
     KeGetPcr()->IdtBase = KiIdt;
     __lidt(&KiIdtDescriptor.Limit);
 }
@@ -511,11 +518,13 @@ KiDispatchException(IN PEXCEPTION_RECORD ExceptionRecord,
         }
 
         /* 3rd strike, kill the process */
-        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p\n",
+        DPRINT1("Kill %.16s, ExceptionCode: %lx, ExceptionAddress: %p, BaseAddress: %p, P0: %Ix, P1: %Ix\n",
                 PsGetCurrentProcess()->ImageFileName,
                 ExceptionRecord->ExceptionCode,
                 ExceptionRecord->ExceptionAddress,
-                PsGetCurrentProcess()->SectionBaseAddress);
+                PsGetCurrentProcess()->SectionBaseAddress,
+                ExceptionRecord->ExceptionInformation[0],
+                ExceptionRecord->ExceptionInformation[1]);
 
         ZwTerminateProcess(NtCurrentProcess(), ExceptionRecord->ExceptionCode);
         KeBugCheckEx(KMODE_EXCEPTION_NOT_HANDLED,

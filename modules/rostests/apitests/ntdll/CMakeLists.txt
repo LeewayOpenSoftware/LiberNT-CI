@@ -19,6 +19,7 @@ list(APPEND SOURCE_CRT_TESTS
     ../crt/_vscwprintf.c
     ../crt/_vsnprintf.c
     ../crt/_vsnwprintf.c
+    ../crt/_vswprintf.c
     ../crt/_wcsicmp.c
     ../crt/_wcslwr.c
     ../crt/_wcsnicmp.c
@@ -53,7 +54,11 @@ set(ALPC_SOURCE
     TpAlpc.c)
 
 list(APPEND SOURCE
+    AppendOnlyWrite.c
+    BootLog.c
     DllLoadNotification.c
+    DbgCommandString.c
+    DpcBehaviorRegistry.c
     DebugRegisters.c
     FileStatInformation.c
     arm64_chpe.c
@@ -84,6 +89,7 @@ list(APPEND SOURCE
     NtCreateKeyCached.c
     NtCreateProfile.c
     NtCreateSection.c
+    NtCreateSection_CachedRead.c
     NtCreateSection_ConcurrentImage.c
     NtCreateThread.c
     NtDeleteKey.c
@@ -96,6 +102,13 @@ list(APPEND SOURCE
     NtLoadUnloadKey.c
     NtMapViewOfSection.c
     NtMapViewOfSection_ImageZeroBits.c
+    NtKeDispatcherTransitions.c
+    NtKeHandoff.c
+    NtKeyedEvent.c
+    NtProcessDeviceMap.c
+    NtQueryDirectoryObject.c
+    NtDuplicateTokenQos.c
+    NtWaitForObjects.c
     NtMutant.c
     NtNotifyChangeMultipleKeys.c
     NtOpenKey.c
@@ -103,6 +116,8 @@ list(APPEND SOURCE
     NtOpenProcessToken.c
     NtOpenThreadToken.c
     NtProtectVirtualMemory.c
+    NtOpenMaximumAllowed.c
+    ObTraverse.c
     NtQueryInformationFile.c
     NtQueryDirectoryFile.c
     NtQueryInformationProcess.c
@@ -110,12 +125,14 @@ list(APPEND SOURCE
     NtQueryInformationToken.c
     NtQueryKey.c
     NtQueryObject.c
+    NtQueryObjectName.c
     NtQueryOpenSubKeys.c
     NtQuerySection.c
     NtQuerySystemEnvironmentValue.c
     NtQuerySystemInformation.c
     NtQueryValueKey.c
     NtQueryVolumeInformationFile.c
+    NtRaiseException.c
     NtReadFile.c
     NtSaveKey.c
     NtSetDefaultLocale.c
@@ -126,23 +143,32 @@ list(APPEND SOURCE
     NtSetValueKey.c
     NtSetVolumeInformationFile.c
     NtStartProfile.c
+    NtTerminateThread.c
     NtUnloadDriver.c
     NtWnfState.c
     NtWriteFile.c
+    NtdllDefWindowProc.c
     probelib.c
     RtlAllocateHeap.c
     RtlCreateTagHeap.c
     RtlBitmap.c
+    RtlBarrier.c
     RtlSList.c
     RtlComputePrivatizedDllName_U.c
     RtlConditionVariable.c
     RtlCopyMappedMemory.c
+    RtlCreateServiceSid.c
     RtlCriticalSection.c
+    RtlCurrentTransaction.c
     RtlDebugInformation.c
     RtlDeleteAce.c
     RtlDetermineDosPathNameType.c
     ProcessPoolQuota.c
+    ProcessUserModeIopl.c
+    ObjectQuotaLimit.c
+    LinkReparseLimit.c
     RtlWnfAndSqm.c
+    WinSqmSession.c
     RtlCheckPortableOperatingSystem.c
     RtlDoesFileExists.c
     RtlDosApplyFileIsolationRedirection_Ustr.c
@@ -160,8 +186,11 @@ list(APPEND SOURCE
     RtlGetLongestNtPathLength.c
     RtlGetNtProductType.c
     RtlGetProcessHeaps.c
+    RtlHeapApis.c
     RtlGetProductInfo.c
+    RtlGetThreadErrorMode.c
     RtlGetUnloadEventTrace.c
+    RtlTryAcquirePebLock.c
     RtlHandle.c
     RtlHeapDecommit.c
     RtlHeapFreeCoalesce.c
@@ -171,6 +200,12 @@ list(APPEND SOURCE
     RtlIsNameLegalDOS8Dot3.c
     RtlLocale.c
     RtlMemoryStream.c
+    PfxPrefixTable.c
+    RtlAddressInSectionTable.c
+    RtlCompareAltitudes.c
+    RtlCopyMemoryNonTemporal.c
+    RtlEnumerateGenericTableLikeADirectory.c
+    RtlMemIoResource.c
     RtlMultipleAllocateHeap.c
     RtlNtPathNameToDosPathName.c
     RtlPortableOperatingSystem.c
@@ -190,14 +225,17 @@ list(APPEND SOURCE
     RtlUpcaseUnicodeStringToCountedOemString.c
     RtlValidateUnicodeString.c
     RtlWaitOnAddress.c
+    RtlWow64EnableFsRedirectionEx.c
     RtlxUnicodeStringToAnsiSize.c
     RtlxUnicodeStringToOemSize.c
     SatisfiedWait.c
     ScanfSecure.c
+    SharedUserData.c
     StackOverflow.c
     StackProbe.c
     SystemInfo.c
     Timer.c
+    UserHiveLinks.c
     precomp.h)
 
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
@@ -213,7 +251,7 @@ if(ARCH STREQUAL "i386")
         i386/NtCreateThread.S
     )
 elseif(ARCH STREQUAL "amd64")
-    list(APPEND SOURCE NullGsSelector.c RtlRestoreContextConsolidate.c RtlVirtualUnwindFragment.c SyscallStub.c x87Exception.c)
+    list(APPEND SOURCE NullGsSelector.c RtlRestoreContextConsolidate.c RtlVirtualUnwindFragment.c RtlVirtualUnwindTailJump.c SyscallStub.c x87Exception.c)
     add_asm_files(ntdll_apitest_asm
         ../crt/amd64/setjmp_helper.s
         amd64/NtContinue.S
@@ -258,7 +296,7 @@ add_rostests_file(TARGET ntdll_apitest SUBDIR testdata)
 # Keep the emulation regressions runnable independently of unrelated NTDLL
 # imports in the umbrella executable. Use the same test sources and assertions.
 add_executable(emulation_apitest EXCLUDE_FROM_ALL
-    arm64_chpe.c wow64_startup.c LdrFindResource_U.c LdrLoadDll.c emulation.rc emulation_testlist.c)
+    arm64_chpe.c wow64_startup.c Wow64AddressLimit.c LdrFindResource_U.c LdrLoadDll.c emulation.rc emulation_testlist.c)
 if(ARCH STREQUAL "i386" OR ARCH STREQUAL "amd64")
     add_asm_files(emulation_apitest_asm ${ARCH}/NtContinue.S)
     target_sources(emulation_apitest PRIVATE NtContinue.c UserModeException.c ${emulation_apitest_asm})

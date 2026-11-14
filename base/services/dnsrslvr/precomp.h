@@ -106,4 +106,8 @@ HostsWatchStop(VOID);
 VOID LlmnrStart(VOID);
 VOID LlmnrStop(VOID);
 
+/* wskname.c */
+VOID WskNameStart(VOID);
+VOID WskNameStop(VOID);
+
 #endif /* _DNSRSLVR_PCH_ */

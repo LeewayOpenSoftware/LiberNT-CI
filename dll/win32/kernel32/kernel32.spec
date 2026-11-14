@@ -6,17 +6,17 @@
 @ stdcall AddAtomW(wstr)
 @ stdcall AddConsoleAliasA(str str str) kernelbase.AddConsoleAliasA
 @ stdcall AddConsoleAliasW(wstr wstr wstr) kernelbase.AddConsoleAliasW
-@ stdcall AddLocalAlternateComputerNameA(str ptr)
-@ stdcall AddLocalAlternateComputerNameW(wstr ptr)
+@ stdcall AddLocalAlternateComputerNameA(str long)
+@ stdcall AddLocalAlternateComputerNameW(wstr long)
 @ stdcall -version=0xA00+ AddDependencyToProcessPackageGraph(wstr ptr ptr ptr) kernelbase.AddDependencyToProcessPackageGraph
 @ stdcall AddRefActCtx(ptr)
 @ stdcall -version=0x600+ AddSIDToBoundaryDescriptor(ptr ptr)
 @ stdcall -version=0x600+ BasepAdjustObjectAttributesForPrivateNamespace(ptr)
 @ stdcall -version=0x600+ AddIntegrityLabelToBoundaryDescriptor(ptr ptr)
-@ stdcall -stub -version=0x600+ AddSecureMemoryCacheCallback(ptr)
+@ stdcall AddSecureMemoryCacheCallback(ptr)
 @ stdcall AddVectoredContinueHandler(long ptr) ntdll.RtlAddVectoredContinueHandler
 @ stdcall AddVectoredExceptionHandler(long ptr) ntdll.RtlAddVectoredExceptionHandler
-@ stdcall -stub -version=0x600+ AdjustCalendarDate(ptr long long)
+@ stdcall -version=0x600+ AdjustCalendarDate(ptr long long)
 @ stdcall AllocConsole() kernelbase.AllocConsole
 @ stdcall AllocateUserPhysicalPages(long ptr ptr)
 @ stdcall -version=0x600+ AllocateUserPhysicalPagesNuma(ptr ptr ptr long)
@@ -107,13 +107,14 @@
 @ stdcall -version=0x502-0x600 -arch=win64 ConsoleIMERoutine(ptr) kernelbase.ConsoleIMERoutine
 @ stdcall ConsoleMenuControl(long long long) kernelbase.ConsoleMenuControl
 @ stdcall ContinueDebugEvent(long long long)
-@ stdcall -stub -version=0x600+ ConvertCalDateTimeToSystemTime(ptr ptr)
+@ stdcall -version=0x600+ ConvertCalDateTimeToSystemTime(ptr ptr)
 @ stdcall ConvertDefaultLocale(long)
 @ stdcall ConvertFiberToThread()
 @ stdcall -stub -version=0x600+ ConvertNLSDayOfWeekToWin32DayOfWeek(long)
-@ stdcall -stub -version=0x600+ ConvertSystemTimeToCalDateTime(ptr long ptr)
+@ stdcall -version=0x600+ ConvertSystemTimeToCalDateTime(ptr long ptr)
 @ stdcall ConvertThreadToFiber(ptr)
 @ stdcall ConvertThreadToFiberEx(ptr long)
+@ stdcall -version=0x601+ CopyContext(ptr long ptr) kernelbase.CopyContext
 @ stdcall CopyFileA(str str long)
 @ stdcall CopyFileExA(str str ptr ptr ptr long)
 @ stdcall CopyFileExW(wstr wstr ptr ptr ptr long)
@@ -223,6 +224,7 @@
 @ stdcall -version=0x600+ DeleteFileTransactedW(wstr ptr)
 @ stdcall DeleteFileW(wstr)
 @ stdcall -version=0x600+ DeleteProcThreadAttributeList(ptr)
+@ stdcall DeleteSynchronizationBarrier(ptr)
 @ stdcall DeleteTimerQueue(long)
 @ stdcall DeleteTimerQueueEx(long long)
 @ stdcall DeleteTimerQueueTimer(long long long)
@@ -248,6 +250,7 @@
 @ stdcall EndUpdateResourceA(long long)
 @ stdcall EndUpdateResourceW(long long)
 @ stdcall EnterCriticalSection(ptr) ntdll.RtlEnterCriticalSection
+@ stdcall EnterSynchronizationBarrier(ptr long)
 @ stdcall -arch=win64 EnterUmsSchedulingMode(ptr)
 @ stdcall EnumCalendarInfoA(ptr long long long)
 @ stdcall EnumCalendarInfoExA(ptr long long long)
@@ -256,9 +259,9 @@
 @ stdcall EnumCalendarInfoW(ptr long long long) kernelbase.EnumCalendarInfoW
 @ stdcall EnumDateFormatsA(ptr long long)
 @ stdcall EnumDateFormatsExA(ptr long long)
-@ stdcall -version=0x600+ EnumDateFormatsExEx(ptr wstr long long)
-@ stdcall EnumDateFormatsExW(ptr long long)
-@ stdcall EnumDateFormatsW(ptr long long)
+@ stdcall -version=0x600+ EnumDateFormatsExEx(ptr wstr long long) kernelbase.EnumDateFormatsExEx
+@ stdcall EnumDateFormatsExW(ptr long long) kernelbase.EnumDateFormatsExW
+@ stdcall EnumDateFormatsW(ptr long long) kernelbase.EnumDateFormatsW
 @ stdcall EnumLanguageGroupLocalesA(ptr long long ptr)
 @ stdcall EnumLanguageGroupLocalesW(ptr long long ptr)
 @ stdcall EnumResourceLanguagesA(long str str ptr long)
@@ -283,8 +286,8 @@
 @ stdcall -version=0x600+ EnumSystemLocalesEx(ptr long long ptr) kernelbase.EnumSystemLocalesEx
 @ stdcall EnumSystemLocalesW(ptr long) kernelbase.EnumSystemLocalesW
 @ stdcall EnumTimeFormatsA(ptr long long)
-@ stdcall -version=0x600+ EnumTimeFormatsEx(ptr wstr long long)
-@ stdcall EnumTimeFormatsW(ptr long long)
+@ stdcall -version=0x600+ EnumTimeFormatsEx(ptr wstr long long) kernelbase.EnumTimeFormatsEx
+@ stdcall EnumTimeFormatsW(ptr long long) kernelbase.EnumTimeFormatsW
 @ stdcall EnumUILanguagesA(ptr long long)
 @ stdcall EnumUILanguagesW(ptr long long)
 @ stdcall EnumerateLocalComputerNamesA(ptr long str ptr)
@@ -330,12 +333,12 @@
 @ stdcall FindFirstFileA(str ptr)
 @ stdcall FindFirstFileExA(str long ptr long ptr long)
 @ stdcall FindFirstFileExW(wstr long ptr long ptr long)
-@ stdcall -version=0x600+ FindFirstFileNameTransactedW(wstr long ptr ptr long)
+@ stdcall -version=0x600+ FindFirstFileNameTransactedW(wstr long ptr ptr ptr)
 @ stdcall -version=0x600+ FindFirstFileNameW(wstr long ptr ptr)
-@ stdcall -version=0x600+ FindFirstFileTransactedA(str long ptr long ptr long long)
-@ stdcall -version=0x600+ FindFirstFileTransactedW(wstr long ptr long ptr long long)
+@ stdcall -version=0x600+ FindFirstFileTransactedA(str long ptr long ptr long ptr)
+@ stdcall -version=0x600+ FindFirstFileTransactedW(wstr long ptr long ptr long ptr)
 @ stdcall FindFirstFileW(wstr ptr)
-@ stdcall -version=0x600+ FindFirstStreamTransactedW(wstr long ptr long long)
+@ stdcall -version=0x600+ FindFirstStreamTransactedW(wstr long ptr long ptr)
 @ stdcall FindFirstStreamW(wstr ptr ptr long)
 @ stdcall FindFirstVolumeA(ptr long)
 @ stdcall FindFirstVolumeMountPointA(str ptr long)
@@ -345,7 +348,7 @@
 @ stdcall -version=0x600+ FindNLSStringEx(wstr long wstr long wstr long ptr ptr ptr long) kernelbase.FindNLSStringEx
 @ stdcall FindNextChangeNotification(long)
 @ stdcall FindNextFileA(long ptr)
-@ stdcall -version=0x600+ FindNextFileNameW(long ptr wstr)
+@ stdcall -version=0x600+ FindNextFileNameW(ptr ptr ptr)
 @ stdcall FindNextFileW(long ptr)
 @ stdcall FindNextStreamW(ptr ptr)
 @ stdcall FindNextVolumeA(long ptr long)
@@ -398,14 +401,14 @@
 @ stdcall GetCPInfoExA(long long ptr)
 @ stdcall GetCPInfoExW(long long ptr)
 @ stub -version=0x600+ GetCalendarDateFormat
-@ stub -version=0x600+ GetCalendarDateFormatEx
+@ stdcall -version=0x600+ GetCalendarDateFormatEx(wstr long ptr wstr ptr long)
 @ stub -version=0x600+ GetCalendarDaysInMonth
 @ stub -version=0x600+ GetCalendarDifferenceInDays
 @ stdcall GetCalendarInfoA(long long long ptr long ptr)
 @ stdcall -version=0x600+ GetCalendarInfoEx(wstr long wstr long wstr long ptr) kernelbase.GetCalendarInfoEx
 @ stdcall GetCalendarInfoW(long long long ptr long ptr) kernelbase.GetCalendarInfoW
 @ stub -version=0x600+ GetCalendarMonthsInYear
-@ stub -version=0x600+ GetCalendarSupportedDateRange
+@ stdcall -version=0x600+ GetCalendarSupportedDateRange(long ptr ptr)
 @ stub -version=0x600+ GetCalendarWeekNumber
 @ stdcall GetComPlusPackageInstallStatus()
 @ stdcall GetCommConfig(long ptr long)
@@ -417,8 +420,8 @@
 @ stdcall GetCommandLineA()
 @ stdcall GetCommandLineW()
 @ stdcall GetCompressedFileSizeA(long ptr)
-@ stdcall -version=0x600+ GetCompressedFileSizeTransactedA(str ptr long)
-@ stdcall -version=0x600+ GetCompressedFileSizeTransactedW(wstr ptr long)
+@ stdcall -version=0x600+ GetCompressedFileSizeTransactedA(str ptr ptr)
+@ stdcall -version=0x600+ GetCompressedFileSizeTransactedW(wstr ptr ptr)
 @ stdcall GetCompressedFileSizeW(long ptr)
 @ stdcall GetComputerNameA(ptr ptr)
 @ stdcall GetComputerNameExA(long ptr ptr)
@@ -472,9 +475,12 @@
 @ stdcall -version=0x600+ GetCurrentConsoleFontEx(ptr long ptr) kernelbase.GetCurrentConsoleFontEx
 @ stdcall GetCurrentDirectoryA(long ptr)
 @ stdcall GetCurrentDirectoryW(long ptr)
-@ stdcall -version=0x602+ GetCurrentApplicationUserModelId(ptr ptr)
+@ stdcall -version=0x602+ GetCurrentApplicationUserModelId(ptr ptr) kernelbase.GetCurrentApplicationUserModelId
+@ stdcall -version=0x602+ GetCurrentPackageFamilyName(ptr ptr) kernelbase.GetCurrentPackageFamilyName
 @ stdcall -version=0x602+ GetCurrentPackageFullName(ptr ptr)
-@ stdcall -version=0x602+ GetCurrentPackageId(ptr ptr)
+@ stdcall -version=0x602+ GetCurrentPackageId(ptr ptr) kernelbase.GetCurrentPackageId
+@ stdcall -version=0x602+ GetCurrentPackageInfo(long ptr ptr ptr) kernelbase.GetCurrentPackageInfo
+@ stdcall -version=0x602+ GetCurrentPackagePath(ptr ptr) kernelbase.GetCurrentPackagePath
 @ stdcall -norelay GetCurrentProcess()
 @ stdcall -norelay GetCurrentProcessId()
 @ stdcall GetCurrentProcessorNumber() ntdll.RtlGetCurrentProcessorNumber
@@ -516,8 +522,8 @@
 @ stdcall GetFileAttributesA(str)
 @ stdcall GetFileAttributesExA(str long ptr)
 @ stdcall GetFileAttributesExW(wstr long ptr)
-@ stdcall -version=0x600+ GetFileAttributesTransactedA(str long ptr long)
-@ stdcall -version=0x600+ GetFileAttributesTransactedW(wstr long ptr long)
+@ stdcall -version=0x600+ GetFileAttributesTransactedA(str long ptr ptr)
+@ stdcall -version=0x600+ GetFileAttributesTransactedW(wstr long ptr ptr)
 @ stdcall GetFileAttributesW(wstr)
 @ stdcall -version=0x600+ GetFileBandwidthReservation(ptr ptr ptr ptr ptr ptr)
 @ stdcall GetFileInformationByHandle(long ptr)
@@ -536,8 +542,8 @@
 @ stdcall GetFirmwareEnvironmentVariableW(wstr wstr ptr long)
 @ stdcall -version=0x602+ GetFirmwareType(ptr)
 @ stdcall GetFullPathNameA(str long ptr ptr)
-@ stdcall -version=0x600+ GetFullPathNameTransactedA(str long ptr ptr long)
-@ stdcall -version=0x600+ GetFullPathNameTransactedW(wstr long ptr ptr long)
+@ stdcall -version=0x600+ GetFullPathNameTransactedA(str long ptr ptr ptr)
+@ stdcall -version=0x600+ GetFullPathNameTransactedW(wstr long ptr ptr ptr)
 @ stdcall GetFullPathNameW(wstr long ptr ptr)
 @ stdcall GetGeoInfoA(long long ptr long long)
 @ stdcall -version=0xA00+ GetGeoInfoEx(ptr long ptr long) kernelbase.GetGeoInfoEx
@@ -549,9 +555,9 @@
 @ stdcall GetLastError() ntdll.RtlGetLastWin32Error
 @ stdcall -version=0x500-0x502 GetLinguistLangSize(ptr)
 @ stdcall GetLocalTime(ptr)
-@ stdcall GetLocaleInfoA(long long ptr long)
-@ stdcall -version=0x600+ GetLocaleInfoEx(wstr long ptr long)
-@ stdcall GetLocaleInfoW(long long ptr long)
+@ stdcall GetLocaleInfoA(long long ptr long) kernelbase.GetLocaleInfoA
+@ stdcall -version=0x600+ GetLocaleInfoEx(wstr long ptr long) kernelbase.GetLocaleInfoEx
+@ stdcall GetLocaleInfoW(long long ptr long) kernelbase.GetLocaleInfoW
 @ stdcall -arch=win64 GetNextUmsListItem(ptr)
 @ stdcall -version=0x602+ GetOsSafeBootMode(ptr)
 @ stdcall -version=0x602+ GetPackageFullName(long ptr ptr) kernelbase.GetPackageFullName
@@ -564,8 +570,8 @@
 @ stdcall GetLogicalProcessorInformation(ptr ptr)
 @ stdcall -version=0x601+ GetLogicalProcessorInformationEx(long ptr ptr)
 @ stdcall GetLongPathNameA(str long long)
-@ stdcall -version=0x600+ GetLongPathNameTransactedA(str ptr long long)
-@ stdcall -version=0x600+ GetLongPathNameTransactedW(wstr ptr long long)
+@ stdcall -version=0x600+ GetLongPathNameTransactedA(str ptr long ptr)
+@ stdcall -version=0x600+ GetLongPathNameTransactedW(wstr ptr long ptr)
 @ stdcall GetLongPathNameW(wstr long long)
 @ stdcall -version=0xA00+ GetMachineTypeAttributes(long ptr)
 @ stdcall GetMailslotInfo(long ptr ptr ptr ptr)
@@ -580,8 +586,8 @@
 @ stdcall GetNLSVersion(long long ptr) kernelbase.GetNLSVersion
 @ stdcall GetNLSVersionEx(long wstr ptr) kernelbase.GetNLSVersionEx
 @ stub -version=0x600+ GetNamedPipeAttribute
-@ stdcall -version=0x600+ GetNamedPipeClientComputerNameA(ptr ptr long) kernelbase.GetNamedPipeClientComputerNameA
-@ stdcall -version=0x600+ GetNamedPipeClientComputerNameW(ptr ptr long) kernelbase.GetNamedPipeClientComputerNameW
+@ stdcall -version=0x600+ GetNamedPipeClientComputerNameA(ptr ptr long)
+@ stdcall -version=0x600+ GetNamedPipeClientComputerNameW(ptr ptr long)
 @ stdcall -version=0x600+ GetNamedPipeClientProcessId(ptr ptr)
 @ stdcall -version=0x600+ GetNamedPipeClientSessionId(ptr ptr)
 @ stdcall GetNamedPipeHandleStateA(long ptr ptr ptr ptr str long)
@@ -634,6 +640,7 @@
 @ stdcall GetProcessAffinityMask(long ptr ptr)
 @ stdcall -version=0x601+ GetProcessGroupAffinity(long ptr ptr)
 @ stdcall -version=0x600+ GetProcessDEPPolicy(ptr ptr ptr)
+@ stdcall -version=0xA00+ GetProcessDefaultCpuSets(ptr ptr long ptr) kernelbase.GetProcessDefaultCpuSets
 @ stdcall GetProcessHandleCount(long ptr)
 @ stdcall -norelay GetProcessHeap()
 @ stdcall GetProcessHeaps(long ptr)
@@ -664,7 +671,7 @@
 @ stdcall GetStartupInfoA(ptr)
 @ stdcall GetStartupInfoW(ptr)
 @ stdcall GetStdHandle(long) kernelbase.GetStdHandle
-@ stub -version=0x600+ GetStringScripts
+@ stdcall -version=0x600+ GetStringScripts(long wstr long ptr long) kernelbase.GetStringScripts
 @ stdcall GetStringTypeA(long long str long ptr) kernelbase.GetStringTypeA
 @ stdcall GetStringTypeExA(long long str long ptr)
 @ stdcall GetStringTypeExW(long long wstr long ptr) kernelbase.GetStringTypeExW
@@ -673,7 +680,7 @@
 @ stdcall -version=0x600+ GetSystemDEPPolicy()
 @ stdcall GetSystemDefaultLCID()
 @ stdcall GetSystemDefaultLangID()
-@ stdcall -version=0x600+ GetSystemDefaultLocaleName(ptr long)
+@ stdcall -version=0x600+ GetSystemDefaultLocaleName(ptr long) kernelbase.GetSystemDefaultLocaleName
 @ stdcall GetSystemDefaultUILanguage()
 @ stdcall GetSystemDirectoryA(ptr long)
 @ stdcall GetSystemDirectoryW(ptr long)
@@ -710,9 +717,10 @@
 @ stdcall GetThreadLocale()
 @ stdcall -version=0x600+ GetThreadPreferredUILanguages(long ptr wstr ptr) kernelbase.GetThreadPreferredUILanguages
 @ stdcall GetThreadPriority(long)
-@ stdcall GetThreadPriorityBoost(long ptr) kernelbase.GetThreadPriorityBoost
+@ stdcall GetThreadPriorityBoost(long ptr)
+@ stdcall -version=0xA00+ GetThreadSelectedCpuSets(ptr ptr long ptr) kernelbase.GetThreadSelectedCpuSets
 @ stdcall GetThreadSelectorEntry(long long ptr)
-@ stdcall GetThreadTimes(long ptr ptr ptr ptr) kernelbase.GetThreadTimes
+@ stdcall GetThreadTimes(long ptr ptr ptr ptr)
 @ stdcall -version=0x600+ GetThreadUILanguage()
 @ stdcall GetTickCount()
 @ stdcall -version=0x600+ -ret64 GetTickCount64()
@@ -725,7 +733,7 @@
 @ stdcall GetUserDefaultGeoName(ptr long) kernelbase.GetUserDefaultGeoName
 @ stdcall GetUserDefaultLCID()
 @ stdcall GetUserDefaultLangID()
-@ stdcall -version=0x600+ GetUserDefaultLocaleName(wstr long)
+@ stdcall -version=0x600+ GetUserDefaultLocaleName(wstr long) kernelbase.GetUserDefaultLocaleName
 @ stdcall GetUserDefaultUILanguage()
 @ stdcall GetUserGeoID(long) kernelbase.GetUserGeoID
 @ stdcall -version=0x600+ GetUserPreferredUILanguages(long ptr wstr ptr) kernelbase.GetUserPreferredUILanguages
@@ -807,6 +815,7 @@
 @ stdcall -version=0x600+ InitializeProcThreadAttributeList(ptr long long ptr)
 @ stdcall InitializeSListHead(ptr) ntdll.RtlInitializeSListHead
 @ stdcall -version=0x600+ InitializeSRWLock(ptr) ntdll.RtlInitializeSRWLock
+@ stdcall InitializeSynchronizationBarrier(ptr long long)
 @ stdcall -arch=i386 -ret64 InterlockedCompareExchange64(ptr double double) ntdll.RtlInterlockedCompareExchange64
 @ stdcall -arch=i386,ppc InterlockedCompareExchange(ptr long long)
 @ stdcall -arch=i386,ppc InterlockedDecrement(ptr)
@@ -828,7 +837,7 @@
 @ stdcall IsBadWritePtr(ptr long)
 @ stub -version=0x600+ IsCalendarLeapDay
 @ stub -version=0x600+ IsCalendarLeapMonth
-@ stub -version=0x600+ IsCalendarLeapYear
+@ stdcall -version=0x600+ IsCalendarLeapYear(long long long)
 @ stdcall IsDBCSLeadByte(long)
 @ stdcall IsDBCSLeadByteEx(long long)
 @ stdcall IsDebuggerPresent()
@@ -872,7 +881,7 @@
 @ stdcall -version=0x601+ K32GetProcessImageFileNameW(long ptr long) GetProcessImageFileNameW
 @ stdcall -version=0x601+ K32GetProcessMemoryInfo(long ptr long) GetProcessMemoryInfo
 @ stdcall -version=0x601+ K32GetWsChanges(long ptr long) GetWsChanges
-@ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) kernelbase.K32GetWsChangesEx
+@ stdcall -version=0x601+ K32GetWsChangesEx(long ptr ptr) GetWsChangesEx
 @ stdcall -version=0x601+ K32InitializeProcessForWsWatch(long) InitializeProcessForWsWatch
 @ stdcall -version=0x601+ K32QueryWorkingSet(long ptr long) QueryWorkingSet
 @ stdcall -version=0x601+ K32QueryWorkingSetEx(long ptr long) QueryWorkingSetEx
@@ -893,11 +902,13 @@
 @ stdcall LZStart()
 @ stdcall LeaveCriticalSection(ptr) ntdll.RtlLeaveCriticalSection
 @ stdcall -version=0x600+ LeaveCriticalSectionWhenCallbackReturns(ptr ptr) ntdll.TpCallbackLeaveCriticalSectionOnCompletion
+@ stdcall -version=0x601+ LoadAppInitDlls() kernelbase.LoadAppInitDlls
 @ stdcall LoadLibraryA(str)
 @ stdcall LoadLibraryExA(str long long)
 @ stdcall LoadLibraryExW(wstr long long)
 @ stdcall LoadLibraryW(wstr)
 @ stdcall LoadModule(str ptr)
+@ stdcall -version=0x602+ LoadPackagedLibrary(wstr long) kernelbase.LoadPackagedLibrary
 @ stdcall LoadResource(long long)
 @ stub -version=0x600+ LoadStringBaseExW
 @ stub -version=0x600+ LoadStringBaseW
@@ -1011,7 +1022,7 @@
 @ stdcall QueryMemoryResourceNotification(ptr ptr)
 @ stdcall QueryPerformanceCounter(ptr)
 @ stdcall QueryPerformanceFrequency(ptr)
-@ stdcall -version=0x600+ QueryProcessAffinityUpdateMode(ptr ptr) kernelbase.QueryProcessAffinityUpdateMode
+@ stdcall -version=0x600+ QueryProcessAffinityUpdateMode(ptr ptr)
 @ stdcall -version=0x600+ QueryProcessCycleTime(ptr ptr)
 @ stdcall -version=0x600+ QueryThreadCycleTime(ptr ptr)
 @ stdcall -version=0x600+ QueryThreadpoolStackInformation(ptr ptr) kernelbase.QueryThreadpoolStackInformation
@@ -1104,7 +1115,7 @@
 @ stdcall -version=0x601+ RemoveDllDirectory(ptr)
 @ stdcall RemoveLocalAlternateComputerNameA(str long)
 @ stdcall RemoveLocalAlternateComputerNameW(wstr long)
-@ stub -version=0x600+ RemoveSecureMemoryCacheCallback
+@ stdcall RemoveSecureMemoryCacheCallback(ptr)
 @ stdcall RemoveVectoredContinueHandler(ptr) ntdll.RtlRemoveVectoredContinueHandler
 @ stdcall RemoveVectoredExceptionHandler(ptr) ntdll.RtlRemoveVectoredExceptionHandler
 @ stdcall ReplaceFile(wstr wstr wstr long ptr ptr) ReplaceFileW
@@ -1148,7 +1159,7 @@
 @ stdcall SetCalendarInfoA(long long long str)
 @ stdcall SetCalendarInfoW(long long long wstr)
 @ stdcall SetClientTimeZoneInformation(ptr)
-@ stdcall SetComPlusPackageInstallStatus(ptr)
+@ stdcall SetComPlusPackageInstallStatus(long)
 @ stdcall SetCommBreak(long)
 @ stdcall SetCommConfig(long ptr long)
 @ stdcall SetCommMask(long ptr)
@@ -1211,13 +1222,13 @@
 @ stdcall SetFileApisToANSI()
 @ stdcall SetFileApisToOEM()
 @ stdcall SetFileAttributesA(str long)
-@ stdcall -version=0x600+ SetFileAttributesTransactedA(str long long)
-@ stdcall -version=0x600+ SetFileAttributesTransactedW(wstr long long)
+@ stdcall -version=0x600+ SetFileAttributesTransactedA(str long ptr)
+@ stdcall -version=0x600+ SetFileAttributesTransactedW(wstr long ptr)
 @ stdcall SetFileAttributesW(wstr long)
 @ stdcall -version=0x600+ SetFileBandwidthReservation(ptr long long long ptr ptr)
 @ stdcall SetFileCompletionNotificationModes(ptr long)
 @ stdcall -version=0x600+ SetFileInformationByHandle(ptr long ptr long)
-@ stub -version=0x600+ SetFileIoOverlappedRange
+@ stdcall -version=0x600+ SetFileIoOverlappedRange(ptr ptr long)
 @ stdcall SetFilePointer(long long ptr long)
 @ stdcall SetFilePointerEx(long double ptr long)
 @ stdcall SetFileShortNameA(long str)
@@ -1238,15 +1249,16 @@
 @ stdcall SetLocalPrimaryComputerNameW(long long) ; missing in XP SP3
 @ stdcall SetLocalTime(ptr)
 @ stdcall SetLocaleInfoA(long long str)
-@ stdcall SetLocaleInfoW(long long wstr)
+@ stdcall SetLocaleInfoW(long long wstr) kernelbase.SetLocaleInfoW
 @ stdcall SetMailslotInfo(long long)
 @ stdcall SetMessageWaitingIndicator(ptr long)
 @ stub -version=0x600+ SetNamedPipeAttribute
 @ stdcall SetNamedPipeHandleState(long ptr ptr ptr)
 @ stdcall SetPriorityClass(long long)
 @ stdcall SetProcessAffinityMask(long long)
-@ stdcall -version=0x600+ SetProcessAffinityUpdateMode(ptr long) kernelbase.SetProcessAffinityUpdateMode
+@ stdcall -version=0x600+ SetProcessAffinityUpdateMode(ptr long)
 @ stdcall -version=0x600+ SetProcessDEPPolicy(long)
+@ stdcall -version=0xA00+ SetProcessDefaultCpuSets(ptr ptr long) kernelbase.SetProcessDefaultCpuSets
 @ stdcall -version=0x602+ SetProcessInformation(long long ptr long)
 @ stdcall -version=0x602+ SetProcessMitigationPolicy(long ptr long)
 @ stdcall -version=0xA00+ SetProcessValidCallTargets(long ptr long long ptr)
@@ -1276,7 +1288,8 @@
 @ stdcall SetThreadLocale(long)
 @ stdcall -version=0x600+ SetThreadPreferredUILanguages(long wstr ptr) kernelbase.SetThreadPreferredUILanguages
 @ stdcall SetThreadPriority(long long)
-@ stdcall SetThreadPriorityBoost(long long) kernelbase.SetThreadPriorityBoost
+@ stdcall SetThreadPriorityBoost(long long)
+@ stdcall -version=0xA00+ SetThreadSelectedCpuSets(ptr ptr long) kernelbase.SetThreadSelectedCpuSets
 @ stdcall SetThreadStackGuarantee(ptr)
 @ stdcall SetThreadUILanguage(long)
 @ stdcall -version=0x600+ SetThreadpoolStackInformation(ptr ptr) kernelbase.SetThreadpoolStackInformation
@@ -1348,7 +1361,7 @@
 @ stdcall UnregisterConsoleIME() kernelbase.UnregisterConsoleIME
 @ stdcall UnregisterWait(long)
 @ stdcall UnregisterWaitEx(long long)
-@ stub -version=0x600+ UpdateCalendarDayOfWeek
+@ stdcall -version=0x600+ UpdateCalendarDayOfWeek(ptr)
 @ stdcall -version=0x600+ UpdateProcThreadAttribute(ptr long ptr ptr ptr ptr ptr)
 @ stdcall UpdateResourceA(long str str long ptr long)
 @ stdcall UpdateResourceW(long wstr wstr long ptr long)
@@ -1411,7 +1424,7 @@
 @ stdcall -version=0x600+ Wow64GetThreadContext(ptr ptr) kernelbase.Wow64GetThreadContext
 @ stdcall Wow64RevertWow64FsRedirection(ptr)
 @ stdcall -version=0x600+ Wow64SetThreadContext(ptr ptr) kernelbase.Wow64SetThreadContext
-@ stub -version=0x600+ Wow64SuspendThread
+@ stdcall -version=0x600+ Wow64SuspendThread(ptr)
 @ stdcall WriteConsoleA(long ptr long ptr ptr) kernelbase.WriteConsoleA
 @ stdcall WriteConsoleInputA(long ptr long ptr) kernelbase.WriteConsoleInputA
 @ stdcall WriteConsoleInputVDMA(long long long long) kernelbase.WriteConsoleInputVDMA

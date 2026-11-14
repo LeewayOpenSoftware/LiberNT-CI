@@ -243,6 +243,8 @@ NtfsGetAttributeInfo(PNtfsVolume DiskVolume,
 
     if (NtfsVolumeIsReadOnly(DiskVolume))
         Buffer->FileSystemAttributes |= FILE_READ_ONLY_VOLUME;
+    else
+        Buffer->FileSystemAttributes |= FILE_SUPPORTS_TRANSACTIONS;
 
     Buffer->MaximumComponentNameLength = 255;
 
@@ -482,6 +484,7 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     // Do not force buffered or direct I/O at FS level; leave to I/O manager/CC
     if (TargetDeviceObject->AlignmentRequirement > FSDeviceObject->AlignmentRequirement)
         FSDeviceObject->AlignmentRequirement = TargetDeviceObject->AlignmentRequirement;
+    FSDeviceObject->SectorSize = (USHORT)DiskGeometry.BytesPerSector;
 
     // Set up FastIo dispatch table for this volume
     FSDeviceObject->DriverObject->FastIoDispatch = &FastIoDispatch;
@@ -529,11 +532,16 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
     InitializeListHead(&VolCB->NotifyList);
     FsRtlNotifyInitializeSync(&VolCB->NotifySync);
     FsRtlInitializeTunnelCache(&VolCB->Tunnel);
-    FSDeviceObject->Vpb = TargetDeviceObject->Vpb;
+    /* The VPB of the mount request belongs to the real volume device;
+     * TargetDeviceObject is the top of its stack and may be a filter. */
+    FSDeviceObject->Vpb = Vpb;
 
     // Give VolCB access to Ntfs Partition object
     VolCB->DiskVolume = DiskVolume;
     VolCB->BytesPerSector = DiskGeometry.BytesPerSector;
+    NtfsTxfInitializeVolume(VolCB);
+    if (NtfsTxfVolumeSupported(VolCB))
+        FSDeviceObject->Flags |= DO_SUPPORTS_TRANSACTIONS;
 
     /* Start the volume-dirty lifecycle: the first metadata write marks the
      * volume dirty, a clean dismount clears it. No-op (success) on a read-only
@@ -550,9 +558,9 @@ NtfsMountVolume(IN PDEVICE_OBJECT TargetDeviceObject,
 
     // Set up storage device in VolCB.
     VolCB->StorageDevice = TargetDeviceObject;
-    VolCB->StorageDevice->Vpb->DeviceObject = FSDeviceObject;
-    VolCB->StorageDevice->Vpb->RealDevice = VolCB->StorageDevice;
-    VolCB->StorageDevice->Vpb->Flags |= VPB_MOUNTED;
+    VolCB->Vpb = Vpb;
+    Vpb->DeviceObject = FSDeviceObject;
+    Vpb->Flags |= VPB_MOUNTED;
     FSDeviceObject->StackSize = VolCB->StorageDevice->StackSize + 1;
 
     // Tell IO manager we are done initializing.

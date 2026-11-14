@@ -77,7 +77,11 @@ PoolCountTrailingZeros64(ULONG64 Value)
 #define POOL_ATOMIC_ADD32(v, d)         InterlockedExchangeAdd((v), (d))
 #define POOL_ATOMIC_CAS32(v, n, o)      InterlockedCompareExchange((v), (n), (o))
 #define POOL_ATOMIC_READ32(v)           (*(volatile LONG *)(v))
-#define POOL_ATOMIC_READ64(v)           (*(volatile LONG64 *)(v))
+#define POOL_LOAD_ACQUIRE32(v)          ReadULongAcquire((const volatile ULONG *)(v))
+#define POOL_STORE_RELEASE32(v, n)       WriteULongRelease((volatile ULONG *)(v), (ULONG)(n))
+#define POOL_ATOMIC_READ64(v)           ((sizeof(PVOID) == sizeof(LONG64)) ? \
+                                         ReadAcquire64((const volatile LONG64 *)(v)) : \
+                                         InterlockedCompareExchange64((volatile LONG64 *)(v), 0, 0))
 #define POOL_ATOMIC_CAS64(v, n, o)      InterlockedCompareExchange64((v), (n), (o))
 #define POOL_CTZ64(x)                   PoolCountTrailingZeros64(x)
 #define POOL_ASSERT(e)                  ASSERT(e)

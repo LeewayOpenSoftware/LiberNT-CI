@@ -313,6 +313,92 @@ KeInitSystem(VOID)
     return TRUE;
 }
 
+#ifdef _M_AMD64
+
+/* The documented limit of the API */
+#define KI_STACK_EXPANSION_MAXIMUM MAXIMUM_EXPANSION_SIZE
+/* Headroom kept beyond the requested size: the callout's own frames around the deep part */
+#define KI_STACK_EXPANSION_SLACK PAGE_SIZE
+
+/*
+ * @implemented (amd64)
+ *
+ * Runs Callout(Parameter) with at least Size bytes of stack: on the current stack when
+ * that much is left, otherwise on a freshly committed expansion stack (KiSwitchStackAndCallout
+ * in trap.S switches rsp and the thread's StackBase/StackLimit around the call; the trap
+ * frame, InitialStack and the state save area stay on the original stack). Expansions nest.
+ * Context is reserved (NT passes NULL).
+ */
+NTSTATUS
+NTAPI
+KeExpandKernelStackAndCalloutEx(
+    _In_ PEXPAND_STACK_CALLOUT Callout,
+    _In_opt_ PVOID Parameter,
+    _In_ SIZE_T Size,
+    _In_ BOOLEAN Wait,
+    _In_opt_ PVOID Context)
+{
+    PKTHREAD Thread = KeGetCurrentThread();
+    PKSTACK_CONTROL Control;
+    PVOID StackTop;
+    ULONG_PTR StackLimit, StackPointer;
+    KIRQL Irql;
+    UCHAR WasActive;
+    volatile UCHAR Here = 0;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    if (Size > KI_STACK_EXPANSION_MAXIMUM)
+        return STATUS_INVALID_PARAMETER_3;
+
+    /* Above DISPATCH_LEVEL no stack can be committed, and nothing may run on one */
+    Irql = KeGetCurrentIrql();
+    if (Irql > DISPATCH_LEVEL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Fast path: enough of the current stack is left */
+    StackPointer = (ULONG_PTR)&Here;
+    if (StackPointer > Thread->StackLimit &&
+        StackPointer - Thread->StackLimit >= Size + KI_STACK_EXPANSION_SLACK)
+    {
+        Callout(Parameter);
+        return STATUS_SUCCESS;
+    }
+
+    /* Committed up front: the callout never grows it from a fault. The control block
+     * that records where we came from sits at the top of the new stack. */
+    StackTop = MmCreateExpansionStack(min(Size + KI_STACK_EXPANSION_SLACK + sizeof(KSTACK_CONTROL),
+                                          KERNEL_LARGE_STACK_SIZE),
+                                      Wait && (Irql < DISPATCH_LEVEL),
+                                      &StackLimit);
+    if (StackTop == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Control = ALIGN_DOWN_POINTER_BY((PUCHAR)StackTop - sizeof(KSTACK_CONTROL), 16);
+    RtlZeroMemory(Control, sizeof(*Control));
+    Control->StackBase = (ULONG_PTR)StackTop;
+    Control->ActualLimit = StackLimit;
+    Control->Previous.StackBase = (ULONG_PTR)Thread->StackBase;
+    Control->Previous.StackLimit = Thread->StackLimit;
+    Control->Previous.InitialStack = (ULONG_PTR)Thread->InitialStack;
+    /* Previous.KernelStack: the rsp we leave, filled by the switch */
+
+    /* No stack swapping while a callout runs on a stack the swapper does not know */
+    WasActive = Thread->CalloutActive;
+    Thread->CalloutActive = TRUE;
+
+    KiSwitchStackAndCallout(Parameter, Callout, Control);
+
+    Thread->CalloutActive = WasActive;
+    ASSERT(Thread->StackBase == (PVOID)Control->Previous.StackBase);
+    ASSERT(Thread->StackLimit == Control->Previous.StackLimit);
+
+    MmDeleteExpansionStack(StackTop);
+    return STATUS_SUCCESS;
+}
+
+#else /* i386, arm, arm64, ...: the callout runs on the current stack (no expansion yet) */
+
 NTSTATUS
 NTAPI
 KeExpandKernelStackAndCalloutEx(
@@ -329,6 +415,8 @@ KeExpandKernelStackAndCalloutEx(
     Callout(Parameter);
     return STATUS_SUCCESS;
 }
+
+#endif
 
 NTSTATUS
 NTAPI

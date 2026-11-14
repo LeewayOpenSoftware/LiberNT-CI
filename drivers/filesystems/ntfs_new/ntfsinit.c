@@ -43,7 +43,24 @@ PDRIVER_OBJECT NtfsDriverObject;
  */
 LIST_ENTRY NtfsGlobalVolumeList;
 ERESOURCE NtfsGlobalVolumeListResource;
+static PDRIVER_DISPATCH NtfsFsdDispatchTable[IRP_MJ_MAXIMUM_FUNCTION + 1];
 /* FUNCTIONS ****************************************************************/
+static
+NTSTATUS
+NTAPI
+NtfsFsdDispatch(_In_ PDEVICE_OBJECT VolumeDeviceObject,
+                _Inout_ PIRP Irp)
+{
+    UCHAR MajorFunction = IoGetCurrentIrpStackLocation(Irp)->MajorFunction;
+    NTSTATUS Status;
+
+    FsRtlEnterFileSystem();
+    Status = NtfsFsdDispatchTable[MajorFunction](VolumeDeviceObject, Irp);
+    FsRtlExitFileSystem();
+
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
@@ -51,6 +68,7 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
 {
     NTSTATUS Status;
     UNICODE_STRING UnicodeString;
+    ULONG Index;
     NtfsDriverObject = DriverObject;
     UNREFERENCED_PARAMETER(RegistryPath);
     RtlInitUnicodeString(&UnicodeString, L"\\Ntfs");
@@ -87,6 +105,12 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject,
     DriverObject->MajorFunction[IRP_MJ_DEVICE_CONTROL]           = NtfsFsdDeviceControl;
     DriverObject->MajorFunction[IRP_MJ_SHUTDOWN]                 = NtfsFsdShutdown;
     DriverObject->MajorFunction[IRP_MJ_PNP]                      = NtfsFsdPnp;
+
+    for (Index = 0; Index <= IRP_MJ_MAXIMUM_FUNCTION; Index++)
+    {
+        NtfsFsdDispatchTable[Index] = DriverObject->MajorFunction[Index];
+        DriverObject->MajorFunction[Index] = NtfsFsdDispatch;
+    }
 
     // Do not set DO_DIRECT_IO/DO_BUFFERED_IO flags on the FS control device
     // The I/O manager and Cache Manager will decide buffering for file I/O
@@ -317,7 +341,7 @@ NtfsFsdShutdown (_In_ PDEVICE_OBJECT VolumeDeviceObject,
                 NtfsBindVolumeDisk(VolCB);
                 Status = NtfsFlushVolume(VolCB, FALSE);
                 if (NT_SUCCESS(Status))
-                    Status = NtfsDiskFlushKm();
+                    Status = NtfsDiskFlushVolumeKm(VolCB->StorageDevice);
                 if (NT_SUCCESS(Status))
                 {
                     KeEnterCriticalRegion();
@@ -659,6 +683,7 @@ NtfsFinalizePendingDelete(_In_ PVolumeContextBlock VolCB,
             NtfsDropPagingExtent(Stream);
             Stream->Deleted = TRUE;
             Stream->SizePending = FALSE;
+            Stream->ResidentSizeDeferred = FALSE;
             ExReleaseResourceLite(&Stream->PagingIoResource);
         }
         if (FileObject->SectionObjectPointer)
@@ -1014,6 +1039,7 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                                FileCB);
             KeLeaveCriticalRegion();
         }
+        NtfsTxfCleanup(VolCB, FileCB);
         LastHandle = TRUE;
         if (FileCB->StreamCB)
         {

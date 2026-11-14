@@ -1,6 +1,8 @@
 add_subdirectory(makeimg)
 
 list(APPEND SOURCE
+    AltTabHook.c
+    AnimatedCursor.c
     AttachThreadInput.c
     ../include/msgtrace.c
     CalculatePopupWindowPosition.c
@@ -19,6 +21,7 @@ list(APPEND SOURCE
     CreateIconFromResourceEx.c
     CoveredWindow.c
     CreateWindowEx.c
+    CrossThreadWindowPos.c
     DeferWindowPos.c
     DefFrameProc.c
     DeskWallpaper.c
@@ -29,12 +32,17 @@ list(APPEND SOURCE
     DialogDpiChangeBehavior.c
     DM_REPOSITION.c
     Dpi.c
+    DpiHostingBehavior.c
+    DpiAwareness.c
+    DpiScaling.c
+    DpiVirtualization.c
     DrawIconEx.c
     DrawText.c
     desktop.c
     EmptyClipboard.c
     EnableScrollBar.c
     EnumDisplaySettings.c
+    ForegroundAfterHide.c
     ForegroundRetake.c
     ForegroundRight.c
     ForegroundStartup.c
@@ -42,6 +50,7 @@ list(APPEND SOURCE
     GetDCEx.c
     GetProp.c
     WindowRegionDC.c
+    UpdateLayeredWindow.c
     GetIconInfo.c
     GetKeyState.c
     GetMessageTime.c
@@ -54,9 +63,11 @@ list(APPEND SOURCE
     GetWindowPlacement.c
     GhostWindow.c
     GW_ENABLEDPOPUP.c
+    HiddenChildWindowPos.c
     ImeWindow.c
     InitializeLpkHooks.c
     InputMessageSource.c
+    LoadImage_PngIcon.c
     InvalidHandles.c
     IsTopLevelWindow.c
     IsServerSideWindow.c
@@ -70,6 +81,7 @@ list(APPEND SOURCE
     MaximizedCaptionClick.c
     MenuUI.c
     MenuItemData.c
+    MenuBarBackground.c
     MessageStateAnalyzer.c
     MinimizedPosition.c
     ModernUser32.c
@@ -96,6 +108,7 @@ list(APPEND SOURCE
     ScrollWindowEx.c
     UnhookWinEvent.c
     SendMessageTimeout.c
+    ServiceAccountDesktop.c
     SendMessageTimeoutHung.c
     SetActiveWindow.c
     SetCursorPos.c
@@ -105,9 +118,11 @@ list(APPEND SOURCE
     SetScrollInfo.c
     SetScrollRange.c
     SetWindowPlacement.c
+    SetWindowPosZOrder.c
     WindowDisplayAffinity.c
     WindowRegionFrame.c
     ShellWindowQueries.c
+    ShellWindowZOrder.c
     ShowWindow.c
     SwitchToThisWindow.c
     SystemMenu.c
@@ -121,6 +136,9 @@ list(APPEND SOURCE
     VirtualKey.c
     WaitForInputIdle.c
     WindowBand.c
+    WindowStationErrors.c
+    WindowStationSecurity.c
+    WindowPosInsertAfter.c
     WndProc.c
     wsprintf.c)
 
@@ -145,6 +163,12 @@ set_module_type(user32_apitest_menuui win32gui UNICODE)
 add_importlibs(user32_apitest_menuui user32 msvcrt kernel32)
 add_rostests_file(TARGET user32_apitest_menuui)
 add_dependencies(user32_apitest user32_apitest_menuui)
+
+add_executable(user32_apitest_fghide user32_apitest_fghide.c)
+set_module_type(user32_apitest_fghide win32gui UNICODE)
+add_importlibs(user32_apitest_fghide user32 msvcrt kernel32)
+add_rostests_file(TARGET user32_apitest_fghide)
+add_dependencies(user32_apitest user32_apitest_fghide)
 
 add_rostests_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/verclasstest1.manifest")
 add_rostests_file(FILE "${CMAKE_CURRENT_SOURCE_DIR}/verclasstest2.manifest")

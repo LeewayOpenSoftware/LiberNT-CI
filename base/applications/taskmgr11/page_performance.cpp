@@ -6,11 +6,12 @@
  */
 
 #include "app.h"
+#include "performance_layout.h"
+#include "wheel_scroll.h"
 
 #define PGF_CLASS L"TM11PagePerf"
 
 enum { RES_CPU = 0, RES_MEM, RES_DISK, RES_NET, RES_GPU, RES_COUNT };
-enum { CPU_GRAPH_OVERALL = 0, CPU_GRAPH_LOGICAL = 1 };
 
 /* -1 shows every engine at once, which is what Windows opens with; any
  * other value names the single engine to fill the graph area with. */
@@ -23,6 +24,7 @@ struct PerformancePage : Page
     int  sel;
     int  hotTile;
     int  railScroll;
+    int  wheelRemainder;
     int  cpuGraphMode;
     int  gpuGraphMode;
     BOOL showKernelTimes;
@@ -32,8 +34,8 @@ struct PerformancePage : Page
     RECT railClip;
     RECT rcPane;
 
-    PerformancePage() : sel(0), hotTile(-1), railScroll(0),
-                        cpuGraphMode(CPU_GRAPH_LOGICAL),
+    PerformancePage() : sel(0), hotTile(-1), railScroll(0), wheelRemainder(0),
+                        cpuGraphMode(CPU_GRAPH_DEFAULT),
                         gpuGraphMode(GPU_GRAPH_ALL_ENGINES),
                         showKernelTimes(FALSE), trackingMouse(FALSE),
                         selectionRestored(FALSE)
@@ -786,6 +788,12 @@ struct PerformancePage : Page
         style.secondLine = secondLine;
         style.grid = TRUE;
         style.border = TRUE;
+        if (SelectedResource() == RES_CPU)
+        {
+            style.gridColumns = 20;
+            style.gridRows = 10;
+            style.neutralGrid = TRUE;
+        }
         style.yMax = maximum;
         style.second = second;
         DrawGraph(dc, graph, history, style);
@@ -903,31 +911,50 @@ struct PerformancePage : Page
         return BuildStats(stats, 12, title, _countof(title), rightStats, 12);
     }
 
+    int CpuMetricWidth(HDC dc, const Stat& stat)
+    {
+        SIZE labelSize = { 0, 0 }, valueSize = { 0, 0 };
+        HGDIOBJ old = SelectObject(dc, g_t.fSmall);
+        GetTextExtentPoint32W(dc, stat.label, lstrlenW(stat.label), &labelSize);
+        SelectObject(dc, g_t.fPerfValue);
+        GetTextExtentPoint32W(dc, stat.value, lstrlenW(stat.value), &valueSize);
+        SelectObject(dc, old);
+        return labelSize.cx > valueSize.cx ? labelSize.cx : valueSize.cx;
+    }
+
     void PaintCpuStats(HDC dc, const RECT& pane, int y)
     {
         Stat stats[12], rightStats[12];
         int packed = GetStats(stats, rightStats);
         int rightCount = packed >> 8;
-        int width = pane.right - pane.left;
-        int rightX = pane.left + width * 59 / 100;
-        int leftWidth = rightX - pane.left - S(18);
+        int columns[3];
+        columns[0] = CpuMetricWidth(dc, stats[0]);
+        int processesWidth = CpuMetricWidth(dc, stats[2]);
+        if (columns[0] < processesWidth) columns[0] = processesWidth;
+        columns[1] = CpuMetricWidth(dc, stats[3]);
+        columns[2] = CpuMetricWidth(dc, stats[4]);
+        int leftWidth = TmCpuStatsLayout(columns, CpuMetricWidth(dc, stats[1]),
+                                         CpuMetricWidth(dc, stats[5]),
+                                         S(72), S(12));
+        int rightX = pane.left + leftWidth + S(12);
 
-        int half = leftWidth / 2;
-        PaintMetric(dc, pane.left, y, half, stats[0], g_t.fBig);
-        PaintMetric(dc, pane.left + half, y, leftWidth - half, stats[1], g_t.fBig);
+        PaintMetric(dc, pane.left, y, columns[0], stats[0], g_t.fPerfValue);
+        PaintMetric(dc, pane.left + columns[0], y, leftWidth - columns[0],
+                    stats[1], g_t.fPerfValue);
 
-        int third = leftWidth / 3;
-        int row2 = y + S(49);
-        PaintMetric(dc, pane.left, row2, third, stats[2], g_t.fMed);
-        PaintMetric(dc, pane.left + third, row2, third, stats[3], g_t.fMed);
-        PaintMetric(dc, pane.left + third * 2, row2,
-                    leftWidth - third * 2, stats[4], g_t.fMed);
-        PaintMetric(dc, pane.left, y + S(94), leftWidth, stats[5], g_t.fMed);
+        int row2 = y + S(56);
+        PaintMetric(dc, pane.left, row2, columns[0], stats[2], g_t.fPerfValue);
+        PaintMetric(dc, pane.left + columns[0], row2, columns[1], stats[3], g_t.fPerfValue);
+        PaintMetric(dc, pane.left + columns[0] + columns[1], row2,
+                    columns[2], stats[4], g_t.fPerfValue);
+        PaintMetric(dc, pane.left, y + S(112), leftWidth, stats[5], g_t.fPerfValue);
 
         int rightWidth = pane.right - rightX;
-        int labelWidth = rightWidth * 57 / 100;
+        if (rightWidth <= 0) return;
+        int labelWidth = S(127);
+        if (labelWidth > rightWidth / 2) labelWidth = rightWidth / 2;
         for (int i = 0; i < rightCount; i++)
-            PaintPair(dc, rightX, y + i * S(19), rightWidth,
+            PaintPair(dc, rightX, y + i * S(20), rightWidth,
                       labelWidth, rightStats[i]);
     }
 
@@ -1163,8 +1190,8 @@ struct PerformancePage : Page
         DiskSnapshot* disk = SelectedDisk();
         WCHAR resource[160];
         ResourceName(sel, resource, _countof(resource));
-        RECT header = { pane.left, pane.top, pane.right, pane.top + S(34) };
-        DrawTextClip(dc, resource, header, g_t.fTitle, g_t.textMain,
+        RECT header = { pane.left, pane.top, pane.right, pane.top + S(40) };
+        DrawTextClip(dc, resource, header, g_t.fPerfTitle, g_t.textMain,
                      DT_LEFT | DT_SINGLELINE | DT_TOP);
 
         const WCHAR* hardware = L"";
@@ -1195,17 +1222,19 @@ struct PerformancePage : Page
             break;
         }
         }
-        DrawTextClip(dc, hardware, header, g_t.fBody, g_t.textSec,
-                     DT_RIGHT | DT_SINGLELINE | DT_BOTTOM);
+        RECT hardwareHeader = header;
+        hardwareHeader.left += S(110);
+        DrawTextClip(dc, hardware, hardwareHeader, g_t.fPerfHardware, g_t.textMain,
+                     DT_RIGHT | DT_SINGLELINE | DT_BOTTOM | DT_END_ELLIPSIS);
 
-        int graphTop = pane.top + S(52);
+        int graphTop = pane.top + S(62);
         if (resourceType == RES_CPU)
         {
-            int graphBottom = pane.bottom - S(170);
+            int graphBottom = pane.bottom - S(196);
             if (graphBottom < graphTop + S(90))
                 graphBottom = graphTop + S(90);
             RECT graph = { pane.left, graphTop, pane.right, graphBottom };
-            if (cpuGraphMode == CPU_GRAPH_LOGICAL && d.nCpu > 1)
+            if (TmCpuGraphShown(cpuGraphMode, d.nCpu) == CPU_GRAPH_LOGICAL)
                 PaintLogicalCpuGraphs(dc, graph);
             else
                 PaintHistoryGraph(dc, graph, L"% Utilization", L"100%",
@@ -1213,7 +1242,7 @@ struct PerformancePage : Page
                                   showKernelTimes ? &d.hCpuKernel : NULL,
                                   100.0, FALSE,
                                   showKernelTimes ? KernelLineColor() : 0);
-            PaintCpuStats(dc, pane, graph.bottom + S(24));
+            PaintCpuStats(dc, pane, graph.bottom + S(29));
         }
         else if (resourceType == RES_MEM)
         {
@@ -1651,8 +1680,7 @@ static LRESULT CALLBACK PgPerfProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         ScreenToClient(hwnd, &pt);
         if (pt.x >= pg->railClip.left && pt.x < pg->railClip.right)
         {
-            int delta = GET_WHEEL_DELTA_WPARAM(wp);
-            pg->ScrollRail(-delta * S(84) / WHEEL_DELTA);
+            pg->ScrollRail(TmWheelScroll(&pg->wheelRemainder, GET_WHEEL_DELTA_WPARAM(wp), S(84)));
         }
         return 0;
     }

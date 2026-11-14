@@ -23,6 +23,12 @@ endif()
 
 if(ARCH STREQUAL "arm64")
     add_registry_inf(hivesys_arm64.inf)
+    if(RPI3_SUPPORT OR RPI5_SUPPORT OR APPLE_SILICON_SUPPORT)
+        add_registry_inf(hivesys_cyw43455.inf)
+    endif()
+    if(APPLE_SILICON_SUPPORT)
+        add_registry_inf(hivesys_apple.inf)
+    endif()
     if(RPI3_SUPPORT)
         add_registry_inf(hivesys_rpi3.inf)
     endif()
@@ -168,6 +174,10 @@ add_cd_file(FILE "${CMAKE_CURRENT_BINARY_DIR}/Install LiberNT.lnk"
             TARGET livecd_links
             DESTINATION "${dir_startmenu_programs}"
             FOR preinstall)
+add_livecd_shortcut("Finish Setup"
+    "shell:system\\oobe\\oobe.exe" ICON_INDEX 0
+    DESTINATION "${dir_startmenu_programs}"
+    FOR preinstall)
 
 add_livecd_shortcut("Read Me"
     "shell:windows\\readme.txt"
