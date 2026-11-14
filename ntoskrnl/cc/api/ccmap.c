@@ -279,7 +279,7 @@ CcNtShrinkMap(
     CcNtZeroTailOfLastPage(NtMap, NewFileSize, Boundary);
     CcDirtyDiscard(&NtMap->Map, Boundary, (ULONG64)-1);
     Detached = CcMapDetachViews(&NtMap->Map, NewFileSize, (ULONG64)-1);
-    Purged = MiSegmentPurge(NtMap->Control->Segment, Boundary, 0, TRUE);
+    Purged = MiSegmentPurge(NtMap->Control->Segment, Boundary, 0, MiPurgeTruncate);
 
     /* A view still referenced keeps its pages beyond the cut resident */
     if (!Detached || !Purged)
