@@ -681,6 +681,95 @@ START_TEST(MmDriverVerifierIrpTracking)
     trace("Done: the debug log must hold exactly three log-only lines (0x20b, 0x310, 0x203) and no bug check\n");
 }
 
+static DRIVER_OBJECT VfOtherDriver;
+
+static
+VOID
+VfLowerBelongsToThisDriver(
+    _In_ BOOLEAN ThisDriver)
+{
+    if (ThisDriver)
+    {
+        VfOtherDriver.DriverStart = KmtDriverObject->DriverStart;
+        VfOtherDriver.DriverSize = KmtDriverObject->DriverSize;
+    }
+    else
+    {
+        VfOtherDriver.DriverStart = &VfOtherDriver;
+        VfOtherDriver.DriverSize = sizeof(VfOtherDriver);
+    }
+}
+
+static
+PIRP
+VfSendHeldIrpTwice(VOID)
+{
+    PIRP Irp;
+
+    Irp = IoAllocateIrp(VfLowerDevice->StackSize + 1, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp == NULL)
+        return NULL;
+
+    VfSendIrpToHold(Irp, FALSE);
+    VfSendIrpToHold(Irp, FALSE);
+    return Irp;
+}
+
+START_TEST(MmDriverVerifierIrpQueuedBelow)
+{
+    ULONG Flags = 0;
+    NTSTATUS Status;
+    PIRP Irp;
+
+    if (skip(EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & DRIVER_VERIFIER_IO_CHECKING),
+             "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+    {
+        return;
+    }
+
+    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_UNKNOWN, 0, FALSE, &VfLowerDevice);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    trace("The lower device gets a copy of the driver object whose image range the test can move away from this "
+          "driver, to stand for a device of another driver\n");
+    VfOtherDriver = *KmtDriverObject;
+    VfOtherDriver.MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = VfLowerDispatch;
+    VfLowerBelongsToThisDriver(TRUE);
+    VfLowerDevice->DriverObject = &VfOtherDriver;
+
+    trace("Case 1: this driver completes an IRP that its own lower device holds; expect NO verifier line\n");
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+
+    trace("Case 2: this driver sends an IRP again that its own lower device holds; expect NO verifier line\n");
+    Irp = VfSendHeldIrpTwice();
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+
+    trace("Case 3: this driver completes an IRP that another driver holds; expect one log-only line, I/O rule "
+          "0x209\n");
+    VfLowerBelongsToThisDriver(FALSE);
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+
+    trace("Case 4: this driver sends an IRP again that another driver holds; expect one log-only line, I/O rule "
+          "0x205\n");
+    Irp = VfSendHeldIrpTwice();
+    VfLowerBelongsToThisDriver(TRUE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+
+    VfLowerDevice->DriverObject = KmtDriverObject;
+    IoDeleteDevice(VfLowerDevice);
+    VfLowerDevice = NULL;
+    trace("Done: the debug log must hold exactly two log-only lines (0x209, then 0x205) and no bug check\n");
+}
+
 #define VF_STRESS_THREADS 4
 #define VF_STRESS_ROUNDS 2000
 
@@ -762,7 +851,8 @@ START_TEST(MmDriverVerifierIrpStress)
     VfStressRounds = 0;
     VfSavedDispatch = InterlockedExchangePointer(Slot, (PVOID)VfLowerDispatch);
 
-    trace("%d threads send, complete, reuse and free IRPs correctly; expect NO verifier line\n", VF_STRESS_THREADS);
+    trace("%d threads send, complete, reuse and free IRPs correctly; expect NO verifier line. The lower device "
+          "belongs to this driver, so the senders may complete what it holds\n", VF_STRESS_THREADS);
     for (i = 0; i < VF_STRESS_THREADS; i++)
         Threads[i] = KmtStartThread(VfIrpStressThread, NULL);
 
@@ -861,6 +951,7 @@ START_TEST(MmDriverVerifierLockOwner)
         return;
 
     KmtFinishThread(Thread, NULL);
+    ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
     KeRaiseIrql(APC_LEVEL, &OldIrql);
     ExReleaseFastMutex(&VfFirstMutex);
     KeLowerIrql(OldIrql);
