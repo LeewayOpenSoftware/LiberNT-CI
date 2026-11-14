@@ -256,7 +256,7 @@ VfpIsIrpRuleFatal(
     switch (Rule)
     {
         case VF_IO_CALL_CANCEL_ROUTINE:
-            return FALSE;
+            return TRUE;
         case VF_IO_CALL_QUEUED_BELOW:
             return FALSE;
         case VF_IO_COMPLETE_QUEUED_BELOW:
