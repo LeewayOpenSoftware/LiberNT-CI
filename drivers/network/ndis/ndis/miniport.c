@@ -189,59 +189,79 @@ MiniSnapshotBindings(
  * NOTES:
  *     A protocol handler can call back into NDIS, which takes the lock of the
  *     adapter, and a binding can be closed while a handler runs. So handlers
- *     are called from such a copy, with the lock released. If there are more
- *     bindings than fit and no memory, the first InlineCapacity are used.
+ *     are called from such a copy, with the lock released.
+ *     The list is counted and copied in one pass under the lock. If it does
+ *     not fit in the array of the caller, a larger one is allocated and the
+ *     pass is done once more. Bindings that still do not fit, or for which
+ *     there is no memory, are left out and that is traced.
  */
 {
     PADAPTER_BINDING *Snapshot = InlineSnapshot;
+    PADAPTER_BINDING *Larger;
     PADAPTER_BINDING Binding;
     PLIST_ENTRY Entry;
-    SIZE_T Capacity = 0;
-    SIZE_T Count = 0;
+    SIZE_T Capacity = InlineCapacity;
+    SIZE_T Total;
+    SIZE_T Count;
+    BOOLEAN Retried = FALSE;
     KIRQL OldIrql;
 
-    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
-    for (Entry = Adapter->ProtocolListHead.Flink;
-         Entry != &Adapter->ProtocolListHead;
-         Entry = Entry->Flink)
+    for (;;)
     {
-        Capacity++;
-    }
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+        Total = 0;
+        Count = 0;
 
-    if (Capacity > InlineCapacity)
-    {
-        Snapshot = NULL;
-        if (Capacity <= MAXULONG_PTR / sizeof(*Snapshot))
+        KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+        for (Entry = Adapter->ProtocolListHead.Flink;
+             Entry != &Adapter->ProtocolListHead;
+             Entry = Entry->Flink)
         {
-            Snapshot = ExAllocatePoolWithTag(NonPagedPool,
-                                             Capacity * sizeof(*Snapshot),
-                                             'sBNn');
+            Total++;
         }
 
-        if (Snapshot == NULL)
+        if (Total <= Capacity || Retried)
         {
-            Snapshot = InlineSnapshot;
-            Capacity = InlineCapacity;
+            for (Entry = Adapter->ProtocolListHead.Flink;
+                 Entry != &Adapter->ProtocolListHead && Count < Capacity;
+                 Entry = Entry->Flink)
+            {
+                Binding = CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+
+                if (Binding->ProtocolBinding == NULL ||
+                    !NdisReferenceAdapterBinding(Binding))
+                {
+                    continue;
+                }
+
+                Snapshot[Count++] = Binding;
+            }
+            KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+            break;
+        }
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+        /* Does not fit: get room for the list and two more, and look again */
+        Retried = TRUE;
+        Larger = NULL;
+        if (Total + 2 <= MAXULONG_PTR / sizeof(*Snapshot))
+        {
+            Larger = ExAllocatePoolWithTag(NonPagedPool,
+                                           (Total + 2) * sizeof(*Snapshot),
+                                           'sBNn');
+        }
+
+        if (Larger != NULL)
+        {
+            Snapshot = Larger;
+            Capacity = Total + 2;
         }
     }
 
-    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
-    for (Entry = Adapter->ProtocolListHead.Flink;
-         Entry != &Adapter->ProtocolListHead && Count < Capacity;
-         Entry = Entry->Flink)
+    if (Total > Capacity)
     {
-        Binding = CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
-
-        if (Binding->ProtocolBinding == NULL ||
-            !NdisReferenceAdapterBinding(Binding))
-        {
-            continue;
-        }
-
-        Snapshot[Count++] = Binding;
+        NDIS_DbgPrint(MIN_TRACE, ("Binding snapshot truncated (%lu of %lu)\n",
+                                  (ULONG)Capacity, (ULONG)Total));
     }
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
     *SnapshotCount = Count;
     return Snapshot;
@@ -306,7 +326,7 @@ MiniIndicateData(
 
   if (SnapshotCount == 0)
     {
-      NDIS_DbgPrint(MIN_TRACE, ("WARNING: No upper protocol layer.\n"));
+      NDIS_DbgPrint(MIN_TRACE, ("WARNING: No upper protocol layer takes the data.\n"));
     }
 
   for (i = 0; i < SnapshotCount; i++)

@@ -1069,7 +1069,11 @@ NdisOpenAdapter(
       RestartStatus = Ndis6RestartDriverStack(Adapter);
       if (!NT_SUCCESS(RestartStatus))
         {
+          /* The binding was on the list of the adapter, so an indication
+           * may hold a reference to it. Wait for those, as the close does. */
+          InterlockedExchange(&AdapterBinding->Closing, TRUE);
           ExInterlockedRemoveEntryList(&AdapterBinding->AdapterListEntry, &Adapter->NdisMiniportBlock.Lock);
+          ExWaitForRundownProtectionRelease(&AdapterBinding->RundownRef);
           ExInterlockedRemoveEntryList(&AdapterBinding->ProtocolListEntry, &Protocol->Lock);
           ExFreePool(AdapterBinding);
           *Status = RestartStatus;

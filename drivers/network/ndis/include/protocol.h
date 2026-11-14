@@ -57,7 +57,7 @@ NdisDereferenceAdapterBinding(
     ExReleaseRundownProtection(&AdapterBinding->RundownRef);
 }
 
-#define MINI_INLINE_BINDINGS 4
+#define MINI_INLINE_BINDINGS 8
 
 PADAPTER_BINDING *
 MiniSnapshotBindings(
