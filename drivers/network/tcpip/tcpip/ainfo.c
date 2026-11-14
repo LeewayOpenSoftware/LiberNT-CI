@@ -181,7 +181,33 @@ TDI_STATUS GetAddressFileInfo(TDIObjectID *ID,
                               PVOID Buffer,
                               PUINT BufferSize)
 {
-    UNIMPLEMENTED;
+    ULONG Value;
 
-    return TDI_INVALID_REQUEST;
+    /* The options that SetAddressFileInfo stores are read back from where
+     * it stored them. Each one is returned as a ULONG. */
+    LockObject(AddrFile);
+    switch (ID->toi_id)
+    {
+      case AO_OPTION_MCASTIF: Value = AddrFile->MulticastInterface; break;
+      case AO_OPTION_IP_UCASTIF: Value = AddrFile->UnicastInterface; break;
+      case AO_OPTION_XSUM: Value = !AddrFile->NoChecksum; break;
+      case AO_OPTION_UDP_SEND_MSG_SIZE: Value = AddrFile->SendMsgSize; break;
+      case AO_OPTION_IP_PKTINFO: Value = AddrFile->RecvPktInfo; break;
+      case AO_OPTION_IP_RECVTTL: Value = AddrFile->RecvTtl; break;
+      case AO_OPTION_IP_RECVTOS: Value = AddrFile->RecvTos; break;
+      case AO_OPTION_IP_RECVECN: Value = AddrFile->RecvEcn; break;
+      case AO_OPTION_IP_RECVDSTADDR: Value = AddrFile->RecvDstAddr; break;
+      case AO_OPTION_MCASTTTL: Value = AddrFile->MulticastTTL; break;
+      case AO_OPTION_TTL: Value = AddrFile->TTL; break;
+      case AO_OPTION_IP_DONTFRAGMENT: Value = AddrFile->DF; break;
+      case AO_OPTION_BROADCAST: Value = AddrFile->BCast; break;
+      case AO_OPTION_IP_HDRINCL: Value = AddrFile->HeaderIncl; break;
+
+      default:
+         UnlockObject(AddrFile);
+         return TDI_INVALID_REQUEST;
+    }
+    UnlockObject(AddrFile);
+
+    return InfoCopyOut((PCHAR)&Value, sizeof(Value), Buffer, BufferSize);
 }
