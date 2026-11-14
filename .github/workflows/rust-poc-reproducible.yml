@@ -12,6 +12,13 @@ on:
       - 'sdk/cmake/rust.cmake'
       - 'sdk/cmake/rust-build.cmake'
       - '.github/workflows/rust-poc-reproducible.yml'
+      # The kernel side of LRM-RS: its wiring, C glue and the C reference it is diffed against.
+      - 'ntoskrnl/CMakeLists.txt'
+      - 'ntoskrnl/nvs/**/lrmrs*'
+      - 'ntoskrnl/nvs/nt/ntspecial.c'
+      - 'ntoskrnl/nvs/pool/special/**'
+      - 'ntoskrnl/nvs/pool/include/poolspecial.h'
+      - 'ntoskrnl/vf/**'
   workflow_dispatch:
 
 permissions:
