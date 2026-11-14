@@ -210,6 +210,8 @@ NdisMWanIndicateReceive(
     IN  UINT            PacketSize)
 {
     UNIMPLEMENTED;
+
+    *Status = NDIS_STATUS_NOT_SUPPORTED;
 }
 
 
