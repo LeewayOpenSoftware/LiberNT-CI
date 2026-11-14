@@ -179,7 +179,7 @@ jobs:
     # any disagreement or a vacuous run.
     runs-on: ubuntu-24.04
     env:
-      SP_SHA: a42b006aab728aeb4d45997f876f873e3dda5fbe
+      SP_SHA: 3feb1c4f6a20bcb35cd062ee8e37421f3a597c7f
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain + host build tools
