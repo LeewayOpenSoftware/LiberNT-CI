@@ -370,7 +370,7 @@ LxInetParseAddress(
 
         if (Length < sizeof(LX_SOCKADDR_IN))
             return -LX_EINVAL;
-        if ((Family != LX_AF_INET) && !(Connect && (Family == LX_AF_UNSPEC)))
+        if ((Family != LX_AF_INET) && !((Family == LX_AF_UNSPEC) && (Connect || (In->Address == 0))))
             return -LX_EAFNOSUPPORT;
         *Address = In->Address;
         *Port = In->Port;
@@ -1193,8 +1193,11 @@ LxInetName(
 
     if (Peer)
     {
-        if ((Socket->Type == LX_SOCK_DGRAM) ? !Socket->PeerValid : (Socket->State != LX_INET_CONNECTED))
+        if ((Socket->Type == LX_SOCK_DGRAM) ? (!Socket->PeerValid || (Socket->PeerPort == 0)) :
+                                              (Socket->State != LX_INET_CONNECTED))
+        {
             return -LX_ENOTCONN;
+        }
         return LxInetCopyAddressOut(Socket, Socket->PeerAddress, Socket->PeerPort, Socket->PeerLoopbackV6,
                                     Call->Args[1], Call->Args[2]);
     }
@@ -1242,6 +1245,8 @@ LxInetSendmsg(
 
             if (Error != 0)
                 return Error;
+            if (Port == 0)
+                return -LX_EINVAL;
         }
         else if (Socket->PeerValid)
         {
@@ -1383,6 +1388,9 @@ LxInetRecvmsg(
         return -LX_ENOTCONN;
     if (Socket->ShutRead)
         return 0;
+    /* TODO: a blocking read on a datagram socket that was never bound fails instead of waiting */
+    if ((Socket->Type == LX_SOCK_DGRAM) && (Socket->State == LX_INET_CREATED) && LxInetNonBlocking(File, Flags))
+        return -LX_EAGAIN;
 
     Result = LxSocketGatherIov(Header, KernelIov, &Vectors, &Total);
     if (Result != 0)
