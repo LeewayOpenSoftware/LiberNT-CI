@@ -148,7 +148,7 @@ jobs:
     # full SHA of the public LiberNT-CI; agreement on these inputs, not proof.
     runs-on: ubuntu-24.04
     env:
-      RIG_SHA: 6a77c230b234f2e9a2a762964439cf8a7e46b01f
+      RIG_SHA: 7e3c6f3b27f1aa6872ebbb3b526ca273b119ffbc
     steps:
       - uses: actions/checkout@v4
       - name: Install pinned Rust toolchain and host build tools
