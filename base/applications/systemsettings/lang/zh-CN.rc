@@ -779,4 +779,5 @@ BEGIN
     IDS_DRIVER_STATUS_ROLLBACK_PROBLEM "Rolled back, but the device still reports a problem (code %lu)"
     IDS_DRIVER_HISTORY_EMPTY "No recent driver installations."
     IDS_DRIVER_STATUS_PENDING_START "Installed, waiting to start"
+    IDS_APP_TITLE_DISPLAY "显示和个性化"
 END

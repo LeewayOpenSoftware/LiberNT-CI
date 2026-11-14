@@ -31,3 +31,23 @@ add_importlibs(systemsettings advapi32 user32 gdi32 gdiplus shell32 shlwapi comc
                oleaut32 secur32 netapi32 samlib powrprof wlanapi iphlpapi ws2_32 wininet bluetoothapis setupapi cfgmgr32 winspool winmm
                version msvcrt kernel32 ntdll)
 add_cd_file(TARGET systemsettings DESTINATION reactos/ImmersiveControlPanel FOR all)
+
+# Leeway Display & Personalization: the Personalization and Display pages of the same page model and frame
+# (one UI architecture), built as its own executable with its own identity and entry points.
+add_rc_deps(leewaydisplay.rc ${systemsettings_rc_deps})
+add_executable(leewaydisplay ${SOURCE} leewaydisplay.rc)
+set_target_properties(leewaydisplay PROPERTIES OUTPUT_NAME "LeewayDisplay")
+set_property(TARGET leewaydisplay PROPERTY CXX_STANDARD 17)
+set_property(TARGET leewaydisplay PROPERTY CXX_STANDARD_REQUIRED ON)
+target_compile_definitions(leewaydisplay PRIVATE LEEWAY_DISPLAY_APP=1)
+target_include_directories(leewaydisplay PRIVATE ${REACTOS_SOURCE_DIR}/base/system/dwm)
+set_module_type(leewaydisplay win32gui UNICODE)
+if(MSVC)
+    set_target_cpp_properties(leewaydisplay WITH_EXCEPTIONS)
+endif()
+target_link_libraries(leewaydisplay shellframe cppstl cpprt uuid)
+add_importlibs(leewaydisplay advapi32 user32 gdi32 gdiplus shell32 shlwapi comctl32 comdlg32 dwmapi uxtheme ole32
+               oleaut32 secur32 netapi32 samlib powrprof wlanapi iphlpapi ws2_32 wininet bluetoothapis setupapi cfgmgr32 winspool winmm
+               version msvcrt kernel32 ntdll)
+add_dependencies(leewaydisplay systemsettings)
+add_cd_file(TARGET leewaydisplay DESTINATION reactos/system32 FOR all)

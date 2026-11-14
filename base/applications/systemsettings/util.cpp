@@ -76,20 +76,57 @@ static const PageInfo Pages[] =
       L"regionlanguage;regionformatting;keyboard" },
 };
 
+#ifdef LEEWAY_DISPLAY_APP
+/* Leeway Display & Personalization: the Personalization and Display pages of the Settings model. */
+static const PageInfo *
+ScopedPages(UINT *count)
+{
+    static std::vector<PageInfo> scoped;
+
+    if (scoped.empty())
+    {
+        static const PageId keep[] = { PageId::Personalization, PageId::Display, PageId::Background, PageId::Colors,
+                                       PageId::Taskbar, PageId::LockScreen, PageId::Fonts };
+        for (UINT i = 0; i < _countof(Pages); i++)
+        {
+            for (UINT j = 0; j < _countof(keep); j++)
+            {
+                if (Pages[i].Id == keep[j])
+                {
+                    PageInfo info = Pages[i];
+                    if (info.Id == PageId::Display)
+                        info.Parent = PageId::None;
+                    scoped.push_back(info);
+                }
+            }
+        }
+    }
+    *count = (UINT)scoped.size();
+    return scoped.data();
+}
+#endif
+
 const PageInfo *
 PageTable(UINT *count)
 {
+#ifdef LEEWAY_DISPLAY_APP
+    return ScopedPages(count);
+#else
     *count = _countof(Pages);
     return Pages;
+#endif
 }
 
 const PageInfo *
 FindPage(PageId id)
 {
-    for (UINT i = 0; i < _countof(Pages); i++)
+    UINT count, i;
+    const PageInfo *table = PageTable(&count);
+
+    for (i = 0; i < count; i++)
     {
-        if (Pages[i].Id == id)
-            return &Pages[i];
+        if (table[i].Id == id)
+            return &table[i];
     }
     return NULL;
 }

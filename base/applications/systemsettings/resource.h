@@ -777,3 +777,14 @@
 #define IDS_COMBINE_ALWAYS             866
 #define IDS_COMBINE_WHEN_FULL          867
 #define IDS_COMBINE_NEVER              868
+#define IDS_APP_TITLE_DISPLAY          880
+
+#if defined(LEEWAY_DISPLAY_APP) && !defined(RC_INVOKED)
+#undef IDS_APP_TITLE
+#define IDS_APP_TITLE IDS_APP_TITLE_DISPLAY
+#define APP_WINDOW_CLASS L"LeewayDisplayWindow"
+#define APP_DEFAULT_PAGE PageId::Personalization
+#else
+#define APP_WINDOW_CLASS L"LiberNTSettingsWindow"
+#define APP_DEFAULT_PAGE PageId::System
+#endif
