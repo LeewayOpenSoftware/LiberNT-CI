@@ -217,6 +217,12 @@ MmAllocateSpecialPool(
     PVOID Out = NULL;
     UCHAR Rc;
 
+    /* Once the Rust side has fatally stopped, never re-enter it (it may hold its lock): the C oracle
+     * serves any allocation the bug check's own machinery needs. */
+    if (LrmRsPanicked)
+        return MiSpecialPoolAllocateC(MiSpecialPoolRegion, MiSpecialPoolUnderruns, NumberOfBytes, Tag,
+                                      PoolType, SpecialType, KeGetCurrentIrql());
+
     if (MiSpecialPoolRegion == NULL)
         return NULL;
 
@@ -245,6 +251,14 @@ MmFreeSpecialPool(
 #if defined(LIBERNT_LRM_RS)
     LRM_GUARD_VTBL Vtbl;
     LRM_BUGCHECK Bc;
+
+    /* Once the Rust side has fatally stopped, never re-enter it (it may hold its lock): the C oracle
+     * frees via the real MiGuard region. */
+    if (LrmRsPanicked)
+    {
+        MiSpecialPoolFreeC(MiSpecialPoolRegion, P, KeGetCurrentIrql());
+        return;
+    }
 
     /* No NULL-region early return here: with no special pool, MiGuardQuery(NULL, ...) returns
      * MiGuardOutside, so the Rust path stops with 0xC1/0x20 - exactly as the C path does. (The

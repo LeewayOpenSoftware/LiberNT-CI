@@ -19,13 +19,60 @@
 use core::ffi::c_void;
 
 // The kernel staticlib is no_std and owns its panic handler; the host `std` build (differential and
-// fuzz harnesses) links against std's, so this one is compiled out under the `std` feature.
+// fuzz harnesses) links against std's, so the handler + its FFI are compiled out under `std`.
+//
+// Kernel panic policy (LRM-RS-PANIC-POLICY.md, owner-approved 2026-11-14): an unexpected Rust panic
+// — which the panic-free discipline and the FORBID_PANIC build gate are meant to make unreachable —
+// is turned into one controlled kernel bug check (LEEWAY_RUST_PANIC = 0x4C524D00 | reason), never a
+// hang, a recovery, or undefined behaviour. panic = "abort" (Cargo.toml) means no unwinding can
+// cross the `extern "C"` boundary. The handler does only field reads on `PanicInfo` and one
+// non-returning FFI call: no heap, no `core::fmt`, no allocation. It is safe at any IRQL (including
+// HIGH_LEVEL): the only memory it touches is the panic location's file string, which is a
+// `&'static str` in the image's read-only data (never pageable). The numeric bug-check code and
+// parameter assembly live in the kernel shim (ntoskrnl/nvs/nt/lrmrs.c), keeping one auditable site.
+#[cfg(not(feature = "std"))]
+extern "C" {
+    /// Provided by the kernel shim (lrmrs.c) when `lrm_rs` is linked into ntoskrnl. Sets the global
+    /// "Rust has stopped" flag and raises `KeBugCheckEx(LEEWAY_RUST_PANIC=0x4C524D00, reason, file,
+    /// line, file_len)` — the code is FIXED (reason is in P1, never ORed into the code); never
+    /// returns. Named without the substring "panic" so neither it nor a retained handler can mask or
+    /// trip the FORBID_PANIC relocation gate (which greps for `panic`).
+    fn LrmRsFatalStop(reason: u32, file: *const u8, file_len: usize, line: u32) -> !;
+}
+
 #[cfg(not(feature = "std"))]
 #[panic_handler]
-fn on_panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
+fn on_panic(info: &core::panic::PanicInfo) -> ! {
+    let (file, file_len, line) = match info.location() {
+        Some(loc) => (loc.file().as_ptr(), loc.file().len(), loc.line()),
+        None => (core::ptr::null(), 0usize, 0u32),
+    };
+    // SAFETY: the kernel shim defines LrmRsFatalStop for every build that links lrm_rs; it never
+    // returns. Reason 0x01 = a real Rust panic got through to the handler.
+    unsafe { LrmRsFatalStop(0x01, file, file_len, line) }
+}
+
+/// Deliberate fatal stop chosen by Rust code (reason 0x02) — a contract/invariant the crate decides
+/// must stop the machine. It forwards straight to `LrmRsFatalStop` and MUST NOT use `panic!` /
+/// `unreachable!` / `assert!`: those are `core::panicking` call sites that the FORBID_PANIC gate
+/// rejects (the same class as a slice-index panic). Reserved for future use; nothing invokes it yet.
+#[cfg(not(feature = "std"))]
+#[allow(unused_macros)]
+macro_rules! lrm_fatal {
+    () => {
+        // SAFETY: LrmRsFatalStop is the kernel shim; never returns.
+        unsafe { $crate::LrmRsFatalStop(0x02, ::core::file!().as_ptr(), ::core::file!().len(), ::core::line!()) }
+    };
+}
+
+/// Deliberately panics, to validate the kernel panic policy end to end (this handler → the
+/// `LEEWAY_RUST_PANIC` bug check) in a disposable VM on SMP1/SMP2. Feature-gated: absent from the
+/// shipped FORBID_PANIC archive (so it stays 0 panic relocations) and from shipping ISOs; the lab
+/// kernel enables the `panic-test` feature (FORBID_PANIC off) and drives it through an lnrspoc IOCTL.
+#[cfg(all(not(feature = "std"), feature = "panic-test"))]
+#[no_mangle]
+pub extern "C" fn lrm_rs_force_panic() -> ! {
+    panic!("LRM-RS forced panic self-test")
 }
 
 pub mod mm;

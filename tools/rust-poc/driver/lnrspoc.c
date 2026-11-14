@@ -58,6 +58,13 @@
 #define IOCTL_LNRSPOC_LRM_SELFTEST \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
+/* 0x80B: validate the LRM-RS kernel panic policy. Resolves ntoskrnl!LrmRsForcePanic (exported ONLY by
+ * a LIBERNT_LRM_RS_FORCE_PANIC_TEST lab kernel), which deliberately panics in Rust and must stop the
+ * machine with LEEWAY_RUST_PANIC (0x4C524D00). Returns STATUS_NOT_SUPPORTED on any other kernel.
+ * This NEVER returns on a force-panic kernel - it bug-checks. Disposable VM only. */
+#define IOCTL_LNRSPOC_LRM_FORCEPANIC \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
 static VOID
@@ -339,6 +346,29 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             info = 2 * sizeof(long);
         }
         status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_LNRSPOC_LRM_FORCEPANIC:
+    {
+        /* Validate the LRM-RS panic policy: call ntoskrnl!LrmRsForcePanic, which (on a force-panic
+         * lab kernel) deliberately panics in Rust and bug-checks LEEWAY_RUST_PANIC via LrmRsFatalStop.
+         * Absent on any normal kernel -> STATUS_NOT_SUPPORTED. On a lab kernel this does NOT return. */
+        typedef VOID (NTAPI *LRM_RS_FORCEPANIC)(VOID);
+        UNICODE_STRING name;
+        LRM_RS_FORCEPANIC fn;
+
+        RtlInitUnicodeString(&name, L"LrmRsForcePanic");
+        fn = (LRM_RS_FORCEPANIC)(PVOID)MmGetSystemRoutineAddress(&name);
+        if (fn == NULL)
+        {
+            DbgPrint("lnrspoc: lrm_forcepanic - LrmRsForcePanic not exported (not a force-panic kernel)\n");
+            status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+
+        DbgPrint("lnrspoc: lrm_forcepanic -> invoking LrmRsForcePanic (expect STOP 0x4C524D00)\n");
+        fn();   /* never returns: the machine bug-checks */
+        status = STATUS_UNSUCCESSFUL;   /* unreachable */
         break;
     }
 #ifdef LNRSPOC_TEST_IOCTLS
