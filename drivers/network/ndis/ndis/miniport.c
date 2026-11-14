@@ -822,14 +822,19 @@ MiniSendComplete(
         SGList = NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
                                                   ScatterGatherListPacketInfo);
 
-        Adapter->NdisMiniportBlock.SystemAdapterObject->
-            DmaOperations->PutScatterGatherList(
-                           Adapter->NdisMiniportBlock.SystemAdapterObject,
-                           SGList,
-                           TRUE);
+        /* A packet that is completed before it reached the miniport, or
+         * that was looped back, has no list */
+        if (SGList != NULL)
+        {
+            Adapter->NdisMiniportBlock.SystemAdapterObject->
+                DmaOperations->PutScatterGatherList(
+                               Adapter->NdisMiniportBlock.SystemAdapterObject,
+                               SGList,
+                               TRUE);
 
-        NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
-                                         ScatterGatherListPacketInfo) = NULL;
+            NDIS_PER_PACKET_INFO_FROM_PACKET(Packet,
+                                             ScatterGatherListPacketInfo) = NULL;
+        }
     }
 
     (*AdapterBinding->ProtocolBinding->Chars.SendCompleteHandler)(
