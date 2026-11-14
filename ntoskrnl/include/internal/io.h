@@ -846,6 +846,17 @@ VOID
 IopResDbRelease(
     _In_ PDEVICE_NODE DeviceNode);
 
+NTSTATUS
+IopResDbReserveOwned(
+    _In_ PVOID OwnerKey,
+    _In_opt_ PDEVICE_NODE DeviceNode,
+    _In_opt_ PCM_RESOURCE_LIST ResourceList,
+    _Out_opt_ PBOOLEAN Conflict);
+
+VOID
+IopResDbReleaseByKey(
+    _In_ PVOID OwnerKey);
+
 VOID
 IopReleaseNewMessageVectors(
     _In_opt_ PCM_RESOURCE_LIST ResourceList,
