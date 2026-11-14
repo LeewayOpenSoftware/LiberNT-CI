@@ -15,7 +15,7 @@ The UI never fakes these; `LDispCapabilities()` leaves the flag cleared.
 | Per-monitor scale | Per-monitor DPI in win32k and `GetDpiForMonitor` | win32k | Unsupported (`LDISP_CAP_PERMON_DPI`); system DPI is shown |
 | Theme / accent colour | UxTheme theme switch + DWM colorization values | uxtheme/dwm | Not done |
 | Pointer schemes | `SPI_SETCURSORS` + `HKCU\Control Panel\Cursors` | backend | Not done |
-| Screensaver | `SPI_SETSCREENSAVE*` and the screensaver launcher | backend | Not done |
+| Screensaver | `SPI_SETSCREENSAVE*` + `SCRNSAVE.EXE` read by winlogon | backend | Implemented (tab shown only when `LDISP_CAP_SCREENSAVER`); lab check pending. No password-on-resume, no preview pane |
 | Desktop icons | `CLSID` desktop-icon visibility values read by the desktop view | shell | Not done |
 | Localized strings, menu verbs | STRINGTABLE for other languages; MUIVerb support in the desktop-background menu | CPL / shell | Strings in en, es, ja, zh-CN; menu verbs are English literals, MUIVerb unverified |
 

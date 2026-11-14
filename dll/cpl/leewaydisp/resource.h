@@ -30,11 +30,17 @@
 #define IDS_KEEP_TEXT              230
 #define IDS_DPI_FORMAT             231
 #define IDS_CAPS_LIMITS            232
+#define IDS_TAB_SAVER              233
+#define IDS_SAVER_NONE             234
+#define IDS_SAVER_FAILED           235
+#define IDS_SAVER_UNAVAILABLE      236
+#define IDS_SAVER_MINUTES          237
 
 #define IDD_MAIN           300
 #define IDD_PERSONALIZE    301
 #define IDD_DISPLAY        302
 #define IDD_KEEP           303
+#define IDD_SAVER          304
 
 #define IDC_TAB            400
 #define IDC_WALL_LIST      410
@@ -49,4 +55,10 @@
 #define IDC_DISP_APPLY     424
 #define IDC_DISP_LIMITS    425
 #define IDC_KEEP_TEXT      430
+#define IDC_SAVER_LIST     440
+#define IDC_SAVER_WAIT     441
+#define IDC_SAVER_WAIT_LBL 442
+#define IDC_SAVER_TEST     443
+#define IDC_SAVER_APPLY    444
+#define IDC_SAVER_NOTE     445
 #define IDC_STATIC         -1

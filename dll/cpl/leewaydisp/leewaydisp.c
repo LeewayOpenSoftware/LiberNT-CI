@@ -39,7 +39,8 @@ static HINSTANCE hInst;
 typedef struct MAINDATA
 {
     HWND Tab;
-    HWND Pages[2];
+    HWND Pages[3];
+    int PageCount;
     ULONG_PTR GdipToken;
     int InitialTab;
 } MAINDATA;
@@ -576,6 +577,145 @@ DisplayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return FALSE;
 }
 
+/* SCREEN SAVER PAGE ********************************************************/
+
+static const UINT SaverMinutes[] = { 1, 2, 3, 5, 10, 15, 20, 30, 60 };
+
+typedef struct SAVERDATA
+{
+    LSAVER_ITEM Items[LSAVER_MAX_ITEMS];
+    int Count;
+} SAVERDATA;
+
+static int
+SaverSelected(HWND hwnd)
+{
+    return (int)SendDlgItemMessageW(hwnd, IDC_SAVER_LIST, LVM_GETNEXTITEM, (WPARAM)-1, LVNI_SELECTED);
+}
+
+static void
+SaverEnableButtons(HWND hwnd)
+{
+    BOOL hasSaver = SaverSelected(hwnd) > 0;
+
+    EnableWindow(GetDlgItem(hwnd, IDC_SAVER_TEST), hasSaver);
+    EnableWindow(GetDlgItem(hwnd, IDC_SAVER_WAIT), hasSaver);
+}
+
+static void
+SaverFill(HWND hwnd, SAVERDATA *sd)
+{
+    HWND list = GetDlgItem(hwnd, IDC_SAVER_LIST);
+    WCHAR path[MAX_PATH], text[64];
+    UINT timeout = 600;
+    BOOL active = FALSE;
+    LVITEMW item;
+    LVCOLUMNW col;
+    RECT rc;
+    int i, select = 0, wait = 0;
+
+    GetClientRect(list, &rc);
+    ZeroMemory(&col, sizeof(col));
+    col.mask = LVCF_WIDTH;
+    col.cx = rc.right - GetSystemMetrics(SM_CXVSCROLL) - 4;
+    SendMessageW(list, LVM_INSERTCOLUMNW, 0, (LPARAM)&col);
+
+    if (!(LDispCapabilities() & LDISP_CAP_SCREENSAVER) || !LSaverGet(path, ARRAYSIZE(path), &timeout, &active))
+    {
+        WCHAR msg[160];
+
+        LoadStr(IDS_SAVER_UNAVAILABLE, msg, ARRAYSIZE(msg));
+        SetDlgItemTextW(hwnd, IDC_SAVER_NOTE, msg);
+        EnableWindow(list, FALSE);
+        EnableWindow(GetDlgItem(hwnd, IDC_SAVER_APPLY), FALSE);
+        EnableWindow(GetDlgItem(hwnd, IDC_SAVER_WAIT), FALSE);
+        EnableWindow(GetDlgItem(hwnd, IDC_SAVER_TEST), FALSE);
+        return;
+    }
+    sd->Count = LSaverEnum(sd->Items, LSAVER_MAX_ITEMS);
+    LoadStr(IDS_SAVER_NONE, text, ARRAYSIZE(text));
+    ZeroMemory(&item, sizeof(item));
+    item.mask = LVIF_TEXT;
+    item.pszText = text;
+    SendMessageW(list, LVM_INSERTITEMW, 0, (LPARAM)&item);
+    for (i = 0; i < sd->Count; i++)
+    {
+        item.iItem = i + 1;
+        item.pszText = sd->Items[i].Name;
+        SendMessageW(list, LVM_INSERTITEMW, 0, (LPARAM)&item);
+        if (active && path[0] && !lstrcmpiW(path, sd->Items[i].Path))
+            select = i + 1;
+    }
+    for (i = 0; i < (int)ARRAYSIZE(SaverMinutes); i++)
+    {
+        WCHAR fmt[32];
+
+        LoadStr(IDS_SAVER_MINUTES, fmt, ARRAYSIZE(fmt));
+        StringCchPrintfW(text, ARRAYSIZE(text), fmt, SaverMinutes[i]);
+        SendDlgItemMessageW(hwnd, IDC_SAVER_WAIT, CB_ADDSTRING, 0, (LPARAM)text);
+        if (SaverMinutes[i] * 60 <= timeout)
+            wait = i;
+    }
+    SendDlgItemMessageW(hwnd, IDC_SAVER_WAIT, CB_SETCURSEL, (WPARAM)wait, 0);
+    item.mask = LVIF_STATE;
+    item.iItem = select;
+    item.state = item.stateMask = LVIS_SELECTED | LVIS_FOCUSED;
+    SendMessageW(list, LVM_SETITEMSTATE, (WPARAM)select, (LPARAM)&item);
+    SaverEnableButtons(hwnd);
+}
+
+static INT_PTR CALLBACK
+SaverProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    SAVERDATA *sd = (SAVERDATA *)GetWindowLongPtrW(hwnd, DWLP_USER);
+
+    switch (msg)
+    {
+        case WM_INITDIALOG:
+            sd = (SAVERDATA *)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*sd));
+            SetWindowLongPtrW(hwnd, DWLP_USER, (LONG_PTR)sd);
+            if (!sd)
+                return TRUE;
+            SendDlgItemMessageW(hwnd, IDC_SAVER_LIST, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT);
+            SaverFill(hwnd, sd);
+            return TRUE;
+        case WM_DESTROY:
+            if (sd)
+                HeapFree(GetProcessHeap(), 0, sd);
+            SetWindowLongPtrW(hwnd, DWLP_USER, 0);
+            break;
+        case WM_NOTIFY:
+            if (((NMHDR *)lParam)->idFrom == IDC_SAVER_LIST && ((NMHDR *)lParam)->code == LVN_ITEMCHANGED)
+                SaverEnableButtons(hwnd);
+            break;
+        case WM_COMMAND:
+        {
+            int sel = SaverSelected(hwnd);
+
+            if (!sd)
+                break;
+            if (LOWORD(wParam) == IDC_SAVER_TEST && sel > 0 && sel <= sd->Count)
+            {
+                if (!LSaverTest(sd->Items[sel - 1].Path))
+                    Msg(hwnd, IDS_SAVER_FAILED, MB_OK | MB_ICONERROR);
+                return TRUE;
+            }
+            if (LOWORD(wParam) == IDC_SAVER_APPLY)
+            {
+                int w = (int)SendDlgItemMessageW(hwnd, IDC_SAVER_WAIT, CB_GETCURSEL, 0, 0);
+                UINT secs = (w >= 0 && w < (int)ARRAYSIZE(SaverMinutes) ? SaverMinutes[w] : 10) * 60;
+                const WCHAR *path = (sel > 0 && sel <= sd->Count) ? sd->Items[sel - 1].Path : NULL;
+
+                if (!LSaverSet(path, secs, path != NULL))
+                    Msg(hwnd, IDS_SAVER_FAILED, MB_OK | MB_ICONERROR);
+                return TRUE;
+            }
+            break;
+        }
+    }
+    return FALSE;
+}
+
 /* MAIN WINDOW **************************************************************/
 
 static void
@@ -583,7 +723,7 @@ ShowTab(MAINDATA *md, int tab)
 {
     int i;
 
-    for (i = 0; i < 2; i++)
+    for (i = 0; i < md->PageCount; i++)
         ShowWindow(md->Pages[i], i == tab ? SW_SHOW : SW_HIDE);
     SendMessageW(md->Tab, TCM_SETCURSEL, (WPARAM)tab, 0);
 }
@@ -597,9 +737,9 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     {
         case WM_INITDIALOG:
         {
-            static const UINT tabIds[2] = { IDS_TAB_PERSONALIZE, IDS_TAB_DISPLAY };
-            static const UINT pageIds[2] = { IDD_PERSONALIZE, IDD_DISPLAY };
-            static DLGPROC procs[2] = { PersonalizeProc, DisplayProc };
+            static const UINT tabIds[3] = { IDS_TAB_PERSONALIZE, IDS_TAB_DISPLAY, IDS_TAB_SAVER };
+            static const UINT pageIds[3] = { IDD_PERSONALIZE, IDD_DISPLAY, IDD_SAVER };
+            static DLGPROC procs[3] = { PersonalizeProc, DisplayProc, SaverProc };
             WCHAR text[64];
             TCITEMW item;
             RECT rc;
@@ -608,7 +748,9 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             md = (MAINDATA *)lParam;
             SetWindowLongPtrW(hwnd, DWLP_USER, (LONG_PTR)md);
             md->Tab = GetDlgItem(hwnd, IDC_TAB);
-            for (i = 0; i < 2; i++)
+            /* The screen saver tab is offered only when the system answers its settings calls. */
+            md->PageCount = (LDispCapabilities() & LDISP_CAP_SCREENSAVER) ? 3 : 2;
+            for (i = 0; i < md->PageCount; i++)
             {
                 LoadStr(tabIds[i], text, ARRAYSIZE(text));
                 ZeroMemory(&item, sizeof(item));
@@ -619,7 +761,7 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             GetClientRect(md->Tab, &rc);
             SendMessageW(md->Tab, TCM_ADJUSTRECT, FALSE, (LPARAM)&rc);
             MapWindowPoints(md->Tab, hwnd, (POINT *)&rc, 2);
-            for (i = 0; i < 2; i++)
+            for (i = 0; i < md->PageCount; i++)
             {
                 md->Pages[i] = CreateDialogParamW(hInst, MAKEINTRESOURCEW(pageIds[i]), hwnd, procs[i], 0);
                 if (md->Pages[i])

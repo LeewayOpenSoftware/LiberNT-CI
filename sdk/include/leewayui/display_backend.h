@@ -46,6 +46,7 @@ typedef struct LDISP_MODE
 #define LDISP_CAP_ORIENTATION  0x0004  /* rotation can be applied: NOT implemented; LDISP_MODE.Orientation is read-only */
 #define LDISP_CAP_MULTIMONITOR 0x0008  /* attach, detach, position, primary: NOT implemented yet */
 #define LDISP_CAP_PERMON_DPI   0x0010  /* per-monitor scale: NOT supported by the stack yet */
+#define LDISP_CAP_SCREENSAVER  0x0020  /* SPI_*SCREENSAVE* answers on this system */
 
 DWORD LDispCapabilities(void);
 int LDispEnumMonitors(LDISP_MONITOR *out, int max);
@@ -81,6 +82,25 @@ typedef struct LWALL_ITEM
 int LWallEnum(LWALL_ITEM *out, int max);
 BOOL LWallGetCurrent(WCHAR *path, DWORD cch, LWALL_STYLE *style);
 BOOL LWallSet(const WCHAR *path, LWALL_STYLE style);
+
+/* Screen saver: SCRNSAVE.EXE (read by winlogon) plus SPI_SETSCREENSAVETIMEOUT/ACTIVE. Timeout is in seconds. */
+typedef struct LSAVER_ITEM
+{
+    WCHAR Path[MAX_PATH];
+    WCHAR Name[64];       /* file name without extension */
+} LSAVER_ITEM;
+
+#define LSAVER_MAX_ITEMS 64
+
+BOOL LSaverIsAvailable(void);
+/* Scans %SystemRoot%\System32\*.scr, sorted by name. */
+int LSaverEnum(LSAVER_ITEM *out, int max);
+/* path is empty when no saver is set. */
+BOOL LSaverGet(WCHAR *path, DWORD cch, UINT *timeoutSeconds, BOOL *active);
+/* path NULL or empty removes the saver (and turns it off). All values are restored if any step fails. */
+BOOL LSaverSet(const WCHAR *path, UINT timeoutSeconds, BOOL active);
+/* Starts the saver with /s as a separate process; any key or mouse movement ends it. */
+BOOL LSaverTest(const WCHAR *path);
 
 #ifdef __cplusplus
 }

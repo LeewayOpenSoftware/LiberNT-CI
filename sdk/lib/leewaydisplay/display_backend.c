@@ -10,7 +10,7 @@
 DWORD
 LDispCapabilities(void)
 {
-    return LDISP_CAP_RESOLUTION | LDISP_CAP_REFRESH;
+    return LDISP_CAP_RESOLUTION | LDISP_CAP_REFRESH | (LSaverIsAvailable() ? LDISP_CAP_SCREENSAVER : 0);
 }
 
 int
