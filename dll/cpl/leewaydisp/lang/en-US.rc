@@ -13,7 +13,7 @@ BEGIN
     IDS_CPL_PERSONALIZE_DESC "Change the desktop background and see how your display is set up."
     IDS_CPL_DISPLAY_NAME "Display"
     IDS_CPL_DISPLAY_DESC "Check your displays and change the screen resolution."
-    IDS_TITLE "Display & Personalization"
+    IDS_TITLE "Display and Personalization"
     IDS_TAB_PERSONALIZE "Personalization"
     IDS_TAB_DISPLAY "Display"
     IDS_STYLE_FILL "Fill"
@@ -46,7 +46,7 @@ END
 
 IDD_MAIN DIALOGEX 0, 0, 330, 250
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
-CAPTION "Display & Personalization"
+CAPTION "Display and Personalization"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_TAB, "SysTabControl32", WS_CLIPSIBLINGS | WS_TABSTOP, 6, 6, 318, 214
