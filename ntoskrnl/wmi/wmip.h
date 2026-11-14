@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <ntwmi.h>
+
 extern POBJECT_TYPE WmipGuidObjectType;
 extern GENERIC_MAPPING WmipGenericMapping;
 
