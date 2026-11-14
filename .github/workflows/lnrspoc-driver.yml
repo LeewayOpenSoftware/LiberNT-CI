@@ -1,11 +1,15 @@
-# Test-only build of the experimental Rust kernel driver lnrspoc.sys (+ symbols).
+# Test-only build of the experimental Rust kernel driver lnrspoc.sys (+ symbols) and, for the
+# LRM-RS flag-ON leg, of ntoskrnl with the Rust special pool linked in.
 #
-# Runs ONLY on leeway/exp-rust-poc and leeway/exp-lrm-rs-kernel (and manual dispatch). It does NOT touch the main
-# build matrix or any main workflow. It configures the OS build with the Rust PoC
-# enabled (-DLIBERNT_ENABLE_RUST=ON) and the destructive test IOCTL compiled in
-# (-DLNRSPOC_TEST_IOCTLS=ON), builds ONLY the lnrspoc target, and publishes the driver
-# and its debug symbols as a TEST-ONLY artifact for a disposable-VM run. The driver is
-# never placed on installation media (no add_cd_file).
+# Runs ONLY on leeway/exp-rust-poc and leeway/exp-lrm-rs-kernel (and manual dispatch). It does NOT
+# touch the main build matrix or any main workflow. Two legs:
+#   - lrmrs=off: LIBERNT_ENABLE_RUST=ON, LRM-RS OFF (default). Builds lnrspoc; proves the driver and
+#     the default (flag-OFF) special-pool path still build and the ntoskrnl export table is
+#     unchanged. Publishes the TEST-ONLY driver artifact for a disposable-VM run.
+#   - lrmrs=on: + LIBERNT_ENABLE_LRM_RS=ON. Builds ntoskrnl (lrm_rs linked, MmAllocate/FreeSpecialPool
+#     routed through Rust, lrmrs.c self-test compiled) AND lnrspoc, and checks the conditional
+#     LrmRsSelfTest export is present. This is the flag-ON compile+link gate.
+# The driver is never placed on installation media (no add_cd_file).
 name: lnrspoc-driver (test-only)
 
 on:
@@ -15,6 +19,10 @@ on:
       - 'tools/rust-poc/**'
       - 'sdk/cmake/rust.cmake'
       - 'sdk/cmake/rust-build.cmake'
+      - 'ntoskrnl/nvs/nt/ntspecial.c'
+      - 'ntoskrnl/nvs/nt/lrmrs.c'
+      - 'ntoskrnl/nvs/include/lrmrs.h'
+      - 'ntoskrnl/CMakeLists.txt'
       - '.github/workflows/lnrspoc-driver.yml'
   workflow_dispatch:
 
@@ -30,6 +38,11 @@ jobs:
     # Guard: never run on any other branch even if the file reaches one.
     if: ${{ github.ref == 'refs/heads/leeway/exp-rust-poc' || github.ref == 'refs/heads/leeway/exp-lrm-rs-kernel' }}
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        lrmrs: [off, on]
+    name: lnrspoc (lrmrs=${{ matrix.lrmrs }})
     steps:
       - name: Free disk space
         run: |
@@ -45,7 +58,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
 
-      - name: Install pinned Rust toolchain (for the lnrspoc staticlib)
+      - name: Install pinned Rust toolchain (for the Rust staticlibs)
         run: |
           TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
           rustup toolchain install "$TC" --profile minimal \
@@ -69,17 +82,20 @@ jobs:
         if: ${{ steps.cache_rosbe.outputs.cache-hit != 'true' }}
         run: sh /tmp/rosbe-bootstrap.sh
 
-      - name: Configure (Rust PoC enabled, test IOCTL on)
+      - name: Configure (Rust PoC enabled, test IOCTL on; LRM-RS per leg)
         id: configure
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+          EXTRA=
+          if [ "${{ matrix.lrmrs }}" = "on" ]; then EXTRA="-DLIBERNT_ENABLE_LRM_RS=ON"; fi
           ./configure.sh --clang -a amd64 \
             -DREACTOS_TARGET_NT=0xA00 \
             -DDIAGDATA_CHANNEL= \
             -DLIBERNT_ENABLE_RUST=ON \
-            -DLNRSPOC_TEST_IOCTLS=ON
+            -DLNRSPOC_TEST_IOCTLS=ON \
+            $EXTRA
           echo "outdir=output-Clang-amd64-debug" >> "$GITHUB_OUTPUT"
 
       - name: Build submodules (headers/import libs)
@@ -87,10 +103,33 @@ jobs:
           . "$HOME/.local/opt/rosbe/rosbe-env.sh"
           ninja -C ${{steps.configure.outputs.outdir}} submodules
 
-      - name: Build lnrspoc only
+      - name: Build (flag ON -> ntoskrnl + lnrspoc; flag OFF -> lnrspoc)
         run: |
           . "$HOME/.local/opt/rosbe/rosbe-env.sh"
-          ninja -C ${{steps.configure.outputs.outdir}} lnrspoc
+          if [ "${{ matrix.lrmrs }}" = "on" ]; then
+            ninja -C ${{steps.configure.outputs.outdir}} ntoskrnl lnrspoc
+          else
+            ninja -C ${{steps.configure.outputs.outdir}} lnrspoc
+          fi
+
+      - name: Verify conditional LrmRsSelfTest export (flag ON)
+        if: ${{ matrix.lrmrs == 'on' }}
+        run: |
+          OUT=${{steps.configure.outputs.outdir}}
+          def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+          [ -n "$def" ] || { echo "::error::ntoskrnl.def not found"; exit 1; }
+          grep -q "LrmRsSelfTest" "$def" || { echo "::error::LrmRsSelfTest missing from the flag-ON export def"; exit 1; }
+          echo "LrmRsSelfTest present in $def"
+
+      - name: Assert default export table unchanged (flag OFF)
+        if: ${{ matrix.lrmrs == 'off' }}
+        run: |
+          OUT=${{steps.configure.outputs.outdir}}
+          def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+          if [ -n "$def" ] && grep -q "LrmRsSelfTest" "$def"; then
+            echo "::error::LrmRsSelfTest leaked into the default (flag-OFF) export table"; exit 1
+          fi
+          echo "default export table clean"
 
       - name: Collect driver + symbols + sha256
         id: collect
@@ -102,13 +141,12 @@ jobs:
             f=$(find "$OUT" -name "$pat" -type f | head -n1)
             if [ -n "$f" ]; then cp "$f" lnrspoc-test-only/; found=1; fi
           done
-          # The Rust staticlib (for cross-reference / the differential leg).
           rlib=$(find "$OUT" -name 'libleeway_rs_poc.a' -type f | head -n1)
           [ -n "$rlib" ] && cp "$rlib" lnrspoc-test-only/
           if [ "$found" != 1 ]; then echo "::error::lnrspoc.sys not produced"; find "$OUT" -iname 'lnrspoc*'; exit 1; fi
           ( cd lnrspoc-test-only && for x in *; do sha256sum "$x" | tee "$x.sha256"; done )
           echo "=== collected ==="; ls -l lnrspoc-test-only
-          echo "tag=clang-amd64-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
+          echo "tag=clang-amd64-lrmrs-${{ matrix.lrmrs }}-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
 
       - name: Upload test-only artifact
         uses: actions/upload-artifact@v7
