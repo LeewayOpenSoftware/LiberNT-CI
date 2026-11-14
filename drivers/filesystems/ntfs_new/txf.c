@@ -2181,6 +2181,13 @@ NtfsTxfVolumeSupported(_In_ PVolumeContextBlock VolCB)
     return !NtfsVolumeIsReadOnly(VolCB->DiskVolume);
 }
 
+VOID
+NtfsTxfReleaseVolumeName(_Inout_ PVolumeContextBlock VolCB)
+{
+    if (VolCB->TxfDeviceName.Buffer)
+        NtfsTxfFreeString(&VolCB->TxfDeviceName);
+}
+
 static
 BOOLEAN
 NtfsTxfIsDefaultStream(_In_ PCUNICODE_STRING Stream)

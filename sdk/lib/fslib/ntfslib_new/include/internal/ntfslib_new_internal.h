@@ -681,6 +681,10 @@ public:
      * valid: the volume must stay dirty so the next boot checks it. Readers
      * may set it without the metadata lock, so it is only ever stored TRUE. */
     volatile BOOLEAN CorruptionNoted = FALSE;
+    /* Set (never cleared) when a metadata write of THIS instance failed: the
+     * instance then holds an update the medium never got, so a check of the
+     * medium says nothing about the instance (see MarkCleanAfterCheck). */
+    volatile BOOLEAN LostWriteNoted = FALSE;
     /* Set once CommitCorruptionDirtyOnce has made its single attempt. */
     BOOLEAN CorruptionCommitTried = FALSE;
     BOOLEAN ShowMetadataFiles = FALSE;
@@ -928,6 +932,11 @@ public:
      * FSCTL_MARK_VOLUME_DIRTY): MarkClean will not clear it. */
     void
     RetainDirty(_In_ BOOLEAN Retain);
+
+    /* After a check that wrote nothing: clear the flag, retained or not, and
+     * the corruption note. Caller holds the metadata lock. */
+    NTSTATUS
+    MarkCleanAfterCheck();
 
     /* Records that a read met corrupt on-disk structure. No I/O: callable
      * from any read path. The next metadata write, or the clean dismount,

@@ -6,6 +6,7 @@ list(APPEND SOURCE
     FreeClusters.c
     DismountRemount.c
     AppendAfterWrite.c
+    ClearDirtyAfterCheck.c
     testlist.c)
 
 add_executable(ntfs_apitest ${SOURCE})
