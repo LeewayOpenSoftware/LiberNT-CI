@@ -46,11 +46,13 @@ typedef struct _VF_IRP_ENTRY
 
 BOOLEAN VfIrpTrackingEnabled;
 ULONG VfIrpRuleHits;
+ULONG VfIrpUntrackSkipped;
 
 static const BOOLEAN VfpIrpRulesEnforced = FALSE;
 static LIST_ENTRY VfpIrpBucket[VF_IRP_BUCKETS];
 static KSPIN_LOCK VfpIrpLock;
 static ULONG VfpIrpSequence;
+static LONG VfpIrpTracked;
 
 static
 PLIST_ENTRY
@@ -102,13 +104,24 @@ VfUntrackIrp(
     PVF_IRP_ENTRY Entry;
     KIRQL OldIrql;
 
-    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    if (VfpIrpTracked == 0)
         return;
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+    {
+        if (InterlockedIncrement((PLONG)&VfIrpUntrackSkipped) == 1)
+            DbgPrint("Driver Verifier: IRP %p left above DISPATCH_LEVEL, its tracking entry may be stale\n", Irp);
+
+        return;
+    }
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
     Entry = VfpFindIrpLocked(Irp);
     if (Entry != NULL)
+    {
         RemoveEntryList(&Entry->Link);
+        InterlockedDecrement(&VfpIrpTracked);
+    }
     KeReleaseSpinLock(&VfpIrpLock, OldIrql);
 
     if (Entry != NULL)
@@ -123,7 +136,7 @@ VfpIsIrpBelow(
     BOOLEAN Below;
     KIRQL OldIrql;
 
-    if (!VfIrpTrackingEnabled)
+    if (!VfIrpTrackingEnabled || VfpIrpTracked == 0)
         return FALSE;
 
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
@@ -153,6 +166,7 @@ VfpIrpSent(
         Fresh = NULL;
         Entry->Irp = Irp;
         InsertHeadList(VfpIrpHead(Irp), &Entry->Link);
+        InterlockedIncrement(&VfpIrpTracked);
     }
 
     Sequence = 0;
@@ -186,9 +200,14 @@ VfpIrpReturned(
     KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
     Entry = VfpFindIrpLocked(Irp);
     if (Entry != NULL && Entry->Sequence == Sequence)
+    {
         RemoveEntryList(&Entry->Link);
+        InterlockedDecrement(&VfpIrpTracked);
+    }
     else
+    {
         Entry = NULL;
+    }
     KeReleaseSpinLock(&VfpIrpLock, OldIrql);
 
     if (Entry != NULL)

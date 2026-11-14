@@ -1011,6 +1011,7 @@ extern const ULONG VfIoThunkCount;
 extern BOOLEAN VfPoolTrackingEnabled;
 extern BOOLEAN VfIrpTrackingEnabled;
 extern ULONG VfIrpRuleHits;
+extern ULONG VfIrpUntrackSkipped;
 extern BOOLEAN VfDeadlockDetectionEnabled;
 extern ULONG VfDeadlockRuleHits;
 extern ULONG VfDeadlockGraphResets;
