@@ -655,7 +655,9 @@ pub fn is_verified_driver_name(buffer: &[u16], name: &[u16]) -> bool {
         while i < buffer.len() && buffer[i] != 0 && !is_name_sep(buffer[i]) {
             i += 1;
         }
-        let tok = &buffer[start..i];
+        let Some(tok) = buffer.get(start..i) else {
+            return false;
+        };
         if tok.len() == 1 && tok[0] == WILDCARD {
             return true;
         }
