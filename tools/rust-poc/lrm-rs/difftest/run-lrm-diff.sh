@@ -33,3 +33,10 @@ cp "$SPECIAL_C" "$STAGE/b/special/special.c"
 "$CXX" -std=c++17 -O2 -Wall -Wextra -I"$STAGE/b/include" -o "$STAGE/sp_diff" \
     "$HERE/sp_diff.cpp" "$STAGE/special.o" "$RUSTA"
 "$STAGE/sp_diff" "$ITERS"
+
+# Full-stack orchestration differential: the real ntspecial.c (MmAllocate/FreeSpecialPool over a
+# mock MiGuard provider + the real special.c) vs the Rust orchestration (lrm_mm_*), same provider.
+# NTSPECIAL_C defaults to the vendored copy; CI may set it to the SP_SHA-fetched ntoskrnl/nvs/nt
+# copy for full pinning, and SPECIAL_C is forwarded so both sides use the same engine source.
+echo "[lrm] full-stack orchestration differential:"
+SPECIAL_C="$SPECIAL_C" ITERS="$ITERS" CC="$CC" CXX="$CXX" TC="$TC" sh "$HERE/run-lrm-fullstack.sh"

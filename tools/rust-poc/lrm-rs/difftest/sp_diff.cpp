@@ -132,13 +132,13 @@ static void test_mm(void)
     /* free_classify spec table */
     uint8_t r;
     r = lrm_mm_free_classify(P, 0/*Outside*/, 1, 0, 0, FL, 0, 0, &bc); expect_bc("free.notalloc", r, bc, 1, 0xC1, P, 0, 0, 0x20);
-    r = lrm_mm_free_classify(P, 1/*Live*/, 0/*!owns*/, 0, 0, FL, 0, 0, &bc); expect_bc("free.notowns", r, bc, 1, 0xC1, P, 0, 0, 0x20);
-    r = lrm_mm_free_classify(P, 1, 1, 3/*>DISPATCH*/, 0, FL, 0, 0, &bc); expect_bc("free.irql.np", r, bc, 1, 0xC1, 3, FL, P, 0x31);
-    r = lrm_mm_free_classify(P, 1, 1, 2/*>APC*/, 1/*paged*/, FL, 0, 0, &bc); expect_bc("free.irql.paged", r, bc, 1, 0xC1, 2, FL, P, 0x31);
-    r = lrm_mm_free_classify(P, 1, 1, 0, 0, FL, 1/*CorruptBefore*/, X, &bc); expect_bc("free.before", r, bc, 1, 0xC1, P, X, 0, 0x23);
-    r = lrm_mm_free_classify(P, 1, 1, 0, 0, FL, 2/*CorruptAfter*/, X, &bc); expect_bc("free.after", r, bc, 1, 0xC1, P, X, 0, 0x24);
-    r = lrm_mm_free_classify(P, 1, 1, 0, 0, FL, 0/*Intact*/, 0, &bc); expect_bc("free.ok", r, bc, 0, 0,0,0,0,0);
-    r = lrm_mm_free_classify(P, 1, 1, 2/*DISPATCH, nonpaged ok*/, 0, FL, 0, 0, &bc); expect_bc("free.dispatch.np.ok", r, bc, 0, 0,0,0,0,0);
+    r = lrm_mm_free_classify(P, 2/*Live*/, 0/*!owns*/, 0, 0, FL, 0, 0, &bc); expect_bc("free.notowns", r, bc, 1, 0xC1, P, 0, 0, 0x20);
+    r = lrm_mm_free_classify(P, 2, 1, 3/*>DISPATCH*/, 0, FL, 0, 0, &bc); expect_bc("free.irql.np", r, bc, 1, 0xC1, 3, FL, P, 0x31);
+    r = lrm_mm_free_classify(P, 2, 1, 2/*>APC*/, 1/*paged*/, FL, 0, 0, &bc); expect_bc("free.irql.paged", r, bc, 1, 0xC1, 2, FL, P, 0x31);
+    r = lrm_mm_free_classify(P, 2, 1, 0, 0, FL, 1/*CorruptBefore*/, X, &bc); expect_bc("free.before", r, bc, 1, 0xC1, P, X, 0, 0x23);
+    r = lrm_mm_free_classify(P, 2, 1, 0, 0, FL, 2/*CorruptAfter*/, X, &bc); expect_bc("free.after", r, bc, 1, 0xC1, P, X, 0, 0x24);
+    r = lrm_mm_free_classify(P, 2, 1, 0, 0, FL, 0/*Intact*/, 0, &bc); expect_bc("free.ok", r, bc, 0, 0,0,0,0,0);
+    r = lrm_mm_free_classify(P, 2, 1, 2/*DISPATCH, nonpaged ok*/, 0, FL, 0, 0, &bc); expect_bc("free.dispatch.np.ok", r, bc, 0, 0,0,0,0,0);
 }
 
 int main(int argc, char **argv)
