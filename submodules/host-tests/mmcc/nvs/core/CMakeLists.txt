@@ -28,6 +28,7 @@ set(MM_CORE
     ${NVS_ROOT}/ws/trim.c
     ${NVS_ROOT}/section/section.c
     ${NVS_ROOT}/sys/sysregion.c
+    ${NVS_ROOT}/sys/sysguard.c
     ${NVS_ROOT}/sys/syspte.c
     ${NVS_ROOT}/sys/kstack.c
     ${NVS_ROOT}/sys/iospace.c
@@ -45,7 +46,7 @@ set(CC_ENGINE
     ${CC_ROOT}/engine/copy.c
     ${CC_ROOT}/engine/readahead.c)
 
-set(MM_TESTS mmharness.c t_core.c t_vm.c t_fault_smp.c t_section.c t_stress.c t_ccmm.c t_ntfile.c t_writeback.c t_ntpaging.c t_vad.c t_sys.c t_proc.c ../machine/machine.c ${CC_ENGINE} ${CC_ROOT}/api/ccclose.c ${CC_ROOT}/backing/mmbacking.c ${NVS_ROOT}/nt/ntfileio.c ${NVS_ROOT}/nt/ntpagingio.c)
+set(MM_TESTS mmharness.c t_core.c t_vm.c t_fault_smp.c t_section.c t_stress.c t_ccmm.c t_ntfile.c t_writeback.c t_ntpaging.c t_vad.c t_sys.c t_guard.c t_proc.c ../machine/machine.c ${CC_ENGINE} ${CC_ROOT}/api/ccclose.c ${CC_ROOT}/backing/mmbacking.c ${NVS_ROOT}/nt/ntfileio.c ${NVS_ROOT}/nt/ntpagingio.c)
 list(APPEND MM_TESTS t_async.c t_large.c t_awe.c t_clone.c t_session.c ${NVS_ROOT}/nt/ntsession.c ${CC_ROOT}/api/ccflush.c)
 list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntprotect.c)
 list(APPEND MM_TESTS ${NVS_ROOT}/nt/ntmapping.c ${NVS_ROOT}/nt/nttruncate.c)
@@ -66,7 +67,7 @@ set_source_files_properties(${REACTOS_HOST_SOURCE_ROOT}/ntoskrnl/rtl/rbtree.c PR
     INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/../../../rtl/include")
 list(APPEND MM_TESTS ${LXCORE_TESTS} ${REACTOS_HOST_SOURCE_ROOT}/ntoskrnl/rtl/rbtree.c)
 
-set(MM_AREAS pfn pagetable vad vm large awe clone session fault fault_smp paging section image stress ccmm ntfile writeback ntpaging async sys process highmem lxmm)
+set(MM_AREAS pfn pagetable vad vm large awe clone session fault fault_smp paging section image stress ccmm ntfile writeback ntpaging async sys guard process highmem lxmm)
 
 include(${NVS_ROOT}/check-standalone.cmake)
 nvs_assert_standalone(${MM_CORE} ${CC_ENGINE})

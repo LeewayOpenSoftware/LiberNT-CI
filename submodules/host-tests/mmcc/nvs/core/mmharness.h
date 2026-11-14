@@ -109,6 +109,7 @@ void TestWriteback(void);
 void TestNtPaging(void);
 void TestAsync(void);
 void TestSys(void);
+void TestGuard(void);
 void TestProcess(void);
 void TestHighMem(void);
 void TestLxMm(void);

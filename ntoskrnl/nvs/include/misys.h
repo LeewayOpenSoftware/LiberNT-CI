@@ -138,3 +138,65 @@ NTSTATUS MiMapLockedPages(_Inout_ PMI_MDL Mdl, _In_ MI_CACHE_TYPE CacheType, _Ou
 VOID MiUnmapLockedPages(_Inout_ PMI_MDL Mdl);
 VOID MiUnmapLockedPagesLocal(_Inout_ PMI_MDL Mdl);
 ULONG64 MiGetPhysicalAddress(_In_ PMI_ADDRESS_SPACE Space, _In_ ULONG64 VirtualAddress);
+
+/* Guarded region: each slot is a guard page then DataPages data pages, plus one trailing guard page */
+typedef enum _MI_GUARD_KIND
+{
+    MiGuardOutside = 0,
+    MiGuardGuardPage,
+    MiGuardLive,
+    MiGuardFreed
+} MI_GUARD_KIND;
+
+typedef struct _MI_GUARD_STATS
+{
+    ULONG SlotCount;
+    ULONG LiveSlots;
+    ULONG ReadySlots;
+    ULONG FreeSlots;
+    ULONG64 CommittedPages;
+    ULONG64 PeakCommittedPages;
+    ULONG64 Allocations;
+    ULONG64 Frees;
+    ULONG64 Failures;
+} MI_GUARD_STATS, *PMI_GUARD_STATS;
+
+typedef struct _MI_GUARD_REGION
+{
+    PMI_SYSTEM System;
+    PMI_VAD Vad;
+    ULONG64 Base;
+    ULONG64 End;
+    ULONG SlotCount;
+    ULONG DataPages;
+    ULONG SlotPages;
+    ULONG ReserveTarget;
+    ULONG ReuseDelay;
+    ULONG ContextBytes;
+    ULONG64 BudgetPages;
+    MI_SPINLOCK Lock;
+    LONG *State;
+    PULONG Queue;
+    ULONG QueueHead;
+    ULONG QueueCount;
+    PULONG Ready;
+    ULONG ReadyCount;
+    ULONG LiveCount;
+    PUCHAR Context;
+    ULONG64 CommittedPages;
+    ULONG64 PeakCommittedPages;
+    ULONG64 Allocations;
+    ULONG64 Frees;
+    ULONG64 Failures;
+} MI_GUARD_REGION, *PMI_GUARD_REGION;
+
+NTSTATUS MiGuardRegionCreate(_Inout_ PMI_SYSTEM System, _In_ ULONG SlotCount, _In_ ULONG DataPages,
+                             _In_ ULONG ReservePages, _In_ ULONG ReuseDelay, _In_ ULONG64 BudgetPages,
+                             _In_ ULONG ContextBytes, _Out_ PMI_GUARD_REGION *Region);
+VOID MiGuardRegionDelete(_Inout_ PMI_GUARD_REGION Region);
+NTSTATUS MiGuardAllocate(_Inout_ PMI_GUARD_REGION Region, _Out_ PULONG64 DataVa, _Out_opt_ PVOID *Context);
+NTSTATUS MiGuardFree(_Inout_ PMI_GUARD_REGION Region, _In_ ULONG64 DataVa);
+MI_GUARD_KIND MiGuardQuery(_In_ PMI_GUARD_REGION Region, _In_ ULONG64 VirtualAddress, _Out_opt_ PULONG64 DataVa,
+                           _Out_opt_ PVOID *Context);
+ULONG MiGuardRefill(_Inout_ PMI_GUARD_REGION Region);
+VOID MiGuardQueryStats(_Inout_ PMI_GUARD_REGION Region, _Out_ PMI_GUARD_STATS Stats);
