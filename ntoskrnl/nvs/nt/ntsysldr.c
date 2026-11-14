@@ -2567,6 +2567,8 @@ LoaderScan:
     LdrEntry->Flags &= ~LDRP_LOAD_IN_PROGRESS;
     LdrEntry->LoadedImports = LoadedImports;
 
+    MiVerifyLoadedImage(LdrEntry);
+
     MiWriteProtectSystemImage(LdrEntry->DllBase);
 
     LdrpInitSecurityCookie(LdrEntry);

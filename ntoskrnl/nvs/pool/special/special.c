@@ -4,7 +4,7 @@
  * PURPOSE:     Special pool: selection, placement in the guarded page, fill pattern
  *
  * SPDX-FileCopyrightText: 2026 Leeway Open Software
- * SPDX-License-Identifier: GPL-3.0-only
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include "../include/poolspecial.h"

@@ -4,7 +4,7 @@
  * PURPOSE:     Special pool on the guarded system region: selection, bug checks
  *
  * SPDX-FileCopyrightText: 2026 Leeway Open Software
- * SPDX-License-Identifier: GPL-3.0-only
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include <nvs/nt/mint.h>
@@ -39,7 +39,7 @@ MiInitializeSpecialPool(VOID)
     NTSTATUS Status;
     ULONG Slots;
 
-    if (MmSpecialPoolTag == 0)
+    if (MmSpecialPoolTag == 0 && MmVerifyDriverBuffer[0] == UNICODE_NULL)
         return;
 
     Budget = (ULONG64)MmNumberOfPhysicalPages / MI_SPECIAL_POOL_MEMORY_SHARE;
@@ -64,6 +64,13 @@ MiInitializeSpecialPool(VOID)
     DbgPrint("Special pool: selector 0x%08lx, %s, %lu slots at %p, at most %I64u pages in use\n",
              MmSpecialPoolTag, MiSpecialPoolUnderruns ? "underruns" : "overruns", Slots,
              (PVOID)(ULONG_PTR)Region->Base, Budget);
+}
+
+BOOLEAN
+NTAPI
+MiIsSpecialPoolEnabled(VOID)
+{
+    return (BOOLEAN)(MiSpecialPoolRegion != NULL);
 }
 
 BOOLEAN

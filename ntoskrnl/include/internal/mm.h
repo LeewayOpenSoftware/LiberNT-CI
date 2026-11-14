@@ -992,6 +992,28 @@ MiCheckSpecialPoolFault(
     IN BOOLEAN Write,
     IN PVOID TrapInformation OPTIONAL);
 
+BOOLEAN
+NTAPI
+MiIsSpecialPoolEnabled(VOID);
+
+typedef struct _VF_THUNK
+{
+    ULONG_PTR Pristine;
+    ULONG_PTR Replacement;
+} VF_THUNK, *PVF_THUNK;
+
+extern const VF_THUNK VfPoolThunks[];
+extern const ULONG VfPoolThunkCount;
+
+VOID
+NTAPI
+MiInitializeDriverVerifier(VOID);
+
+VOID
+NTAPI
+MiVerifyLoadedImage(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
 /* mm.c **********************************************************************/
 
 NTSTATUS

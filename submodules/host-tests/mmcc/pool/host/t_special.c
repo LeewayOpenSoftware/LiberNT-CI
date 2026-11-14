@@ -4,7 +4,7 @@
  * PURPOSE:     Special pool: selection rules, placement in the page, pattern checks
  *
  * SPDX-FileCopyrightText: 2026 Leeway Open Software
- * SPDX-License-Identifier: GPL-3.0-only
+ * SPDX-License-Identifier: GPL-3.0-or-later
  */
 
 #include <nvs/pool/include/poolspecial.h>
