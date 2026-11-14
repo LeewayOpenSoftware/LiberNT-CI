@@ -2207,6 +2207,9 @@ IoInitializeIrp(IN PIRP Irp,
                 IN USHORT PacketSize,
                 IN CCHAR StackSize)
 {
+    if (VfIrpTrackingEnabled)
+        VfUntrackIrp(Irp);
+
     /* Clear it */
     IOTRACE(IO_IRP_DEBUG,
             "%s - Initializing IRP %p\n",

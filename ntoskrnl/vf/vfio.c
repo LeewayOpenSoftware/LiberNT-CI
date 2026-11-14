@@ -271,6 +271,23 @@ VfpIsIrpRuleFatal(
 }
 
 static
+BOOLEAN
+VfpIsIrpTableTrusted(
+    _In_ ULONG Rule)
+{
+    switch (Rule)
+    {
+        case VF_IO_CALL_QUEUED_BELOW:
+        case VF_IO_COMPLETE_QUEUED_BELOW:
+        case VF_IO_FREE_IN_USE:
+        case VF_IO_REINITIALIZE_IN_USE:
+            return (BOOLEAN)(VfIrpUntrackSkipped == 0);
+        default:
+            return TRUE;
+    }
+}
+
+static
 VOID
 VfpReportIrpRule(
     _In_ ULONG Rule,
@@ -279,7 +296,7 @@ VfpReportIrpRule(
 {
     ULONG Hits = (ULONG)InterlockedIncrement((PLONG)&VfIrpRuleHits);
 
-    if (VfpIsIrpRuleFatal(Rule))
+    if (VfpIsIrpRuleFatal(Rule) && VfpIsIrpTableTrusted(Rule))
         KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, Rule, (ULONG_PTR)Caller, (ULONG_PTR)Irp, 0);
 
     if (Hits <= VF_IRP_LINES_PRINTED)
