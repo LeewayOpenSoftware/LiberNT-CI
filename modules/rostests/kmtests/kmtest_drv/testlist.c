@@ -366,6 +366,15 @@ KMT_TESTFUNC Test_MmWddmRotate;
 KMT_TESTFUNC Test_MmWddmRotateValid;
 KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
+KMT_TESTFUNC Test_MmSpecialPool;
+KMT_TESTFUNC Test_MmSpecialPoolOverrunWrite;
+KMT_TESTFUNC Test_MmSpecialPoolOverrunRead;
+KMT_TESTFUNC Test_MmSpecialPoolUnderrun;
+KMT_TESTFUNC Test_MmSpecialPoolSlackWrite;
+KMT_TESTFUNC Test_MmSpecialPoolReadAfterFree;
+KMT_TESTFUNC Test_MmSpecialPoolWriteAfterFree;
+KMT_TESTFUNC Test_MmSpecialPoolDoubleFree;
+KMT_TESTFUNC Test_MmSpecialPoolControl;
 KMT_TESTFUNC Test_MmUserLayout;
 KMT_TESTFUNC Test_MmLoaderBlock;
 KMT_TESTFUNC Test_NdisIfProvider;
@@ -817,6 +826,15 @@ const KMT_TEST TestList[] =
     { "MmPrivatePages",                     Test_MmPrivatePages },
     { "MmReservedMapping",                  Test_MmReservedMapping },
     { "MmSelfMap",                          Test_MmSelfMap },
+    { "MmSpecialPool",                      Test_MmSpecialPool },
+    { "-MmSpecialPoolOverrunWrite",         Test_MmSpecialPoolOverrunWrite },
+    { "-MmSpecialPoolOverrunRead",          Test_MmSpecialPoolOverrunRead },
+    { "-MmSpecialPoolUnderrun",             Test_MmSpecialPoolUnderrun },
+    { "-MmSpecialPoolSlackWrite",           Test_MmSpecialPoolSlackWrite },
+    { "-MmSpecialPoolReadAfterFree",        Test_MmSpecialPoolReadAfterFree },
+    { "-MmSpecialPoolWriteAfterFree",       Test_MmSpecialPoolWriteAfterFree },
+    { "-MmSpecialPoolDoubleFree",           Test_MmSpecialPoolDoubleFree },
+    { "-MmSpecialPoolControl",              Test_MmSpecialPoolControl },
     { "MmUserLayout",                       Test_MmUserLayout },
     { "MmLoaderBlock",                      Test_MmLoaderBlock },
     { "MonitorBrightnessKey",               Test_MonitorBrightnessKey },
