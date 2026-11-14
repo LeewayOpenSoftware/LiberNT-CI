@@ -16,6 +16,22 @@
  *     USN: Update Sequence Number
  */
 
+/* The update sequence array may start at an odd offset: access its entries byte-wise */
+static USHORT
+ReadUsa(_In_ const UCHAR *Usa, _In_ ULONG Index)
+{
+    USHORT Value;
+
+    RtlCopyMemory(&Value, Usa + Index * sizeof(USHORT), sizeof(Value));
+    return Value;
+}
+
+static void
+WriteUsa(_Inout_ PUCHAR Usa, _In_ ULONG Index, _In_ USHORT Value)
+{
+    RtlCopyMemory(Usa + Index * sizeof(USHORT), &Value, sizeof(Value));
+}
+
 static NTSTATUS
 ValidateFixup(_In_ PNTFSRecordHeader Header,
               _In_ ULONG RecordSize,
@@ -48,8 +64,7 @@ NtfsApplyFixup(_Inout_ PNTFSRecordHeader Header,
     if (!NT_SUCCESS(Status))
         return Status;
 
-    PUSHORT Usa = reinterpret_cast<PUSHORT>(
-        reinterpret_cast<PUCHAR>(Header) + Header->UpdateSequenceOffset);
+    PUCHAR Usa = reinterpret_cast<PUCHAR>(Header) + Header->UpdateSequenceOffset;
     PUSHORT SectorTail = reinterpret_cast<PUSHORT>(
         reinterpret_cast<PUCHAR>(Header) +
         BytesPerSector - sizeof(USHORT));
@@ -58,15 +73,15 @@ NtfsApplyFixup(_Inout_ PNTFSRecordHeader Header,
          Index < Header->SizeOfUpdateSequence;
          Index++)
     {
-        if (*SectorTail != Usa[0])
+        if (*SectorTail != ReadUsa(Usa, 0))
         {
             DPRINT1("Update-sequence mismatch: %u read, %u expected.\n",
                     *SectorTail,
-                    Usa[0]);
+                    ReadUsa(Usa, 0));
             return STATUS_FILE_CORRUPT_ERROR;
         }
 
-        *SectorTail = Usa[Index];
+        *SectorTail = ReadUsa(Usa, Index);
         SectorTail = reinterpret_cast<PUSHORT>(
             reinterpret_cast<PUCHAR>(SectorTail) + BytesPerSector);
     }
@@ -83,22 +98,22 @@ NtfsCommitFixup(_Inout_ PNTFSRecordHeader Header,
     if (!NT_SUCCESS(Status))
         return Status;
 
-    PUSHORT Usa = reinterpret_cast<PUSHORT>(
-        reinterpret_cast<PUCHAR>(Header) + Header->UpdateSequenceOffset);
+    PUCHAR Usa = reinterpret_cast<PUCHAR>(Header) + Header->UpdateSequenceOffset;
     PUSHORT SectorTail = reinterpret_cast<PUSHORT>(
         reinterpret_cast<PUCHAR>(Header) +
         BytesPerSector - sizeof(USHORT));
+    USHORT Sequence = (USHORT)(ReadUsa(Usa, 0) + 1);
 
-    Usa[0]++;
-    if (Usa[0] == 0)
-        Usa[0]++;
+    if (Sequence == 0)
+        Sequence = 1;
+    WriteUsa(Usa, 0, Sequence);
 
     for (ULONG Index = 1;
          Index < Header->SizeOfUpdateSequence;
          Index++)
     {
-        Usa[Index] = *SectorTail;
-        *SectorTail = Usa[0];
+        WriteUsa(Usa, Index, *SectorTail);
+        *SectorTail = ReadUsa(Usa, 0);
         SectorTail = reinterpret_cast<PUSHORT>(
             reinterpret_cast<PUCHAR>(SectorTail) + BytesPerSector);
     }
