@@ -1,5 +1,5 @@
 spec2def(leewaydisp.cpl leewaydisp.spec)
-file(GLOB leewaydisp_rc_deps res/*.*)
+file(GLOB leewaydisp_rc_deps res/*.* lang/*.rc)
 add_rc_deps(leewaydisp.rc ${leewaydisp_rc_deps})
 
 add_library(leewaydisp MODULE
