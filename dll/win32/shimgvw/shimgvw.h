@@ -32,6 +32,10 @@
 
 #define WM_UPDATECOMMANDSTATE (WM_APP + 0)
 
+#ifndef WM_DPICHANGED
+#define WM_DPICHANGED 0x02E0
+#endif
+
 extern HINSTANCE g_hInstance;
 extern GpImage *g_pImage;
 
@@ -116,7 +120,7 @@ static inline HRESULT SHIMGVW_HResultFromWin32(DWORD hr)
     return HRESULT_FROM_WIN32(hr);
 }
 
-static inline HRESULT HResultFromGdiplus(Status status)
+static inline HRESULT HResultFromGdiplus(GpStatus status)
 {
     switch ((UINT)status)
     {

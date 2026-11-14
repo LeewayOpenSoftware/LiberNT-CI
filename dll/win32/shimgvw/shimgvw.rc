@@ -17,6 +17,16 @@ IDI_APP_ICON ICON "res/main.ico"
 IDI_BMP_ICON ICON "res/bmp.ico"
 IDI_PNG_ICON ICON "res/png.ico"
 
+IDI_PILL_ZOOM    ICON "res/aureline/aur.viewer.zoom.ico"
+IDI_PILL_FIT     ICON "res/aureline/aur.viewer.fit.ico"
+IDI_PILL_PREV    ICON "res/aureline/aur.viewer.prev.ico"
+IDI_PILL_PLAY    ICON "res/aureline/aur.viewer.play.ico"
+IDI_PILL_NEXT    ICON "res/aureline/aur.viewer.next.ico"
+IDI_PILL_ROT_CCW ICON "res/aureline/aur.viewer.rotate-ccw.ico"
+IDI_PILL_ROT_CW  ICON "res/aureline/aur.viewer.rotate-cw.ico"
+IDI_PILL_DELETE  ICON "res/aureline/aur.viewer.delete.ico"
+IDI_PILL_ACTUAL  ICON "res/aureline/aur.viewer.actual.ico"
+
 IDC_HANDDRAG CURSOR "res/handdrag.cur"
 
 IDB_PREV_PIC   BITMAP "res/prev.bmp"

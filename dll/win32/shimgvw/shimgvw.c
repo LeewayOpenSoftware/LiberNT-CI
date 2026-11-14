@@ -13,6 +13,9 @@
 #include <commdlg.h>
 #include <shlobj.h>
 #include <shellapi.h>
+#include "vribbon.h"
+#include "vpill.h"
+#include <leewayui/frame.h>
 
 EXTERN_C PCWSTR GetExtraExtensionsGdipList(VOID);
 EXTERN_C HRESULT LoadImageFromPath(LPCWSTR Path, GpImage** ppImage);
@@ -120,6 +123,19 @@ typedef struct tagPREVIEW_DATA
     UINT m_nTimerInterval;
     BOOL m_bHideCursor;
     POINT m_ptOrigin;
+    /* Ribbon chrome (main window only). The pill toolbar and the ribbon are
+     * two surfaces over the same command table; m_hwndToolBar is NULL in
+     * ribbon chrome, m_pRibbon is NULL in pill chrome. */
+    VRB_RIBBON *m_pRibbon;
+    VPILL *m_pPill;              /* menu strip + floating pill (default chrome) */
+    VPILL *m_pOverlay;           /* slideshow window: prev / end / next, shown on mouse move */
+    LeewayUIFrame *m_pFrame;     /* status bar, zoom slider, layout (ribbon chrome) */
+    BOOL m_bFit;                 /* best-fit mode is active */
+    /* Enabled state of the toolbar commands, as the toolbar had it. Both
+     * surfaces read these; the verb checks and the file check set them. */
+    BOOL m_bEnBestFit, m_bEnRealSize, m_bEnZoomIn, m_bEnZoomOut;
+    BOOL m_bEnDelete, m_bEnSaveAs, m_bEnPrint, m_bEnModify;
+    INT m_nRotQuarter;           /* net clockwise quarter turns not yet saved */
 } PREVIEW_DATA, *PPREVIEW_DATA;
 
 static VOID Preview_ToggleSlideShowEx(PPREVIEW_DATA pData, BOOL StartTimer);
@@ -238,23 +254,108 @@ ZoomWnd_UpdateScroll(PPREVIEW_DATA pData, BOOL bResetPos)
     InvalidateRect(hwnd, NULL, TRUE);
 }
 
+/* ---- command state shared by the pill toolbar and the ribbon ---- */
+
+static VOID
+Preview_RibbonInvalidate(PPREVIEW_DATA pData, UINT CmdId)
+{
+    if (pData && pData->m_pRibbon)
+        VRB_RibbonInvalidate(pData->m_pRibbon, CmdId);
+    if (pData && pData->m_pPill)
+        VPill_Refresh(pData->m_pPill);
+}
+
+static VOID
+Preview_RibbonInvalidateAll(PPREVIEW_DATA pData)
+{
+    if (pData && pData->m_pRibbon)
+        VRB_RibbonInvalidateAll(pData->m_pRibbon);
+    if (pData && pData->m_pPill)
+        VPill_Refresh(pData->m_pPill);
+}
+
+static BOOL *
+Preview_EnabledFlag(PPREVIEW_DATA pData, UINT CmdId)
+{
+    switch (CmdId)
+    {
+        case IDC_BEST_FIT:  return &pData->m_bEnBestFit;
+        case IDC_REAL_SIZE: return &pData->m_bEnRealSize;
+        case IDC_ZOOM_IN:   return &pData->m_bEnZoomIn;
+        case IDC_ZOOM_OUT:  return &pData->m_bEnZoomOut;
+        case IDC_DELETE:    return &pData->m_bEnDelete;
+        case IDC_SAVEAS:    return &pData->m_bEnSaveAs;
+        case IDC_PRINT:     return &pData->m_bEnPrint;
+        case IDC_MODIFY:    return &pData->m_bEnModify;
+    }
+    return NULL;
+}
+
+static VOID
+Preview_SetEnabled(PPREVIEW_DATA pData, UINT CmdId, BOOL bEnable)
+{
+    BOOL *pFlag = Preview_EnabledFlag(pData, CmdId);
+    if (pFlag)
+        *pFlag = bEnable;
+    if (pData->m_hwndToolBar)
+        SendMessageW(pData->m_hwndToolBar, TB_ENABLEBUTTON, CmdId, bEnable);
+    Preview_RibbonInvalidate(pData, CmdId);
+}
+
+/* S_OK: on the toolbar and enabled. S_FALSE: on the toolbar and disabled.
+ * E_FAIL: not a toolbar command. The state is that of the main window, also
+ * when the command comes from the slide show window. */
+static HRESULT
+IsCommandEnabled(UINT nCmdId)
+{
+    PPREVIEW_DATA pMain = Preview_GetData(g_hMainWnd);
+    BOOL *pFlag = pMain ? Preview_EnabledFlag(pMain, nCmdId) : NULL;
+    if (pFlag)
+        return *pFlag ? S_OK : S_FALSE;
+    return (nCmdId >= IDC_PREV_PIC && nCmdId <= IDC_HELP_TOC) ? S_OK : E_FAIL;
+}
+
+/* Status bar text and slider follow the zoom; the ribbon re-reads its state. */
+static VOID
+Preview_SyncZoomUi(PPREVIEW_DATA pData)
+{
+    if (pData->m_pFrame && pData->m_nZoomPercents > 0)
+        LeewayFrameSetZoom(pData->m_pFrame, (UINT32)pData->m_nZoomPercents);
+    Preview_RibbonInvalidate(pData, IDC_BEST_FIT);
+    Preview_RibbonInvalidate(pData, IDC_REAL_SIZE);
+    Preview_RibbonInvalidate(pData, IDC_ZOOM_IN);
+    Preview_RibbonInvalidate(pData, IDC_ZOOM_OUT);
+    Preview_RibbonInvalidate(pData, VRB_CMD_ZOOMLEVEL);
+}
+
+/* Status bar segment 0: the size of the image in pixels. */
+static VOID
+Preview_UpdateStatusInfo(PPREVIEW_DATA pData)
+{
+    WCHAR szText[64];
+    UINT w = 0, h = 0;
+
+    if (!pData->m_pFrame)
+        return;
+    szText[0] = UNICODE_NULL;
+    if (g_pImage && GdipGetImageWidth(g_pImage, &w) == Ok && GdipGetImageHeight(g_pImage, &h) == Ok)
+        StringCchPrintfW(szText, _countof(szText), L"%u x %u", w, h);
+    LeewayFrameSetStatusText(pData->m_pFrame, 0, szText);
+}
+
 static VOID
 Preview_UpdateZoom(PPREVIEW_DATA pData, UINT NewZoom, BOOL bEnableBestFit, BOOL bEnableRealSize)
 {
-    BOOL bEnableZoomIn, bEnableZoomOut;
-    HWND hToolBar = pData->m_hwndToolBar;
-
     pData->m_nZoomPercents = NewZoom;
+    pData->m_bFit = !bEnableBestFit;
 
-    /* Check if a zoom button of the toolbar must be grayed */
-    bEnableZoomIn  = (NewZoom < MAX_ZOOM);
-    bEnableZoomOut = (NewZoom > MIN_ZOOM);
-
-    /* Update toolbar buttons */
-    SendMessageW(hToolBar, TB_ENABLEBUTTON, IDC_BEST_FIT, bEnableBestFit);
-    SendMessageW(hToolBar, TB_ENABLEBUTTON, IDC_REAL_SIZE, NewZoom != 100);
-    SendMessageW(hToolBar, TB_ENABLEBUTTON, IDC_ZOOM_IN,  bEnableZoomIn);
-    SendMessageW(hToolBar, TB_ENABLEBUTTON, IDC_ZOOM_OUT, bEnableZoomOut);
+    /* Zoom buttons are grayed at the ends of the zoom range, Fit while it
+     * is the active mode, Actual size while the zoom is 100 %. */
+    Preview_SetEnabled(pData, IDC_BEST_FIT, bEnableBestFit);
+    Preview_SetEnabled(pData, IDC_REAL_SIZE, NewZoom != 100);
+    Preview_SetEnabled(pData, IDC_ZOOM_IN,  NewZoom < MAX_ZOOM);
+    Preview_SetEnabled(pData, IDC_ZOOM_OUT, NewZoom > MIN_ZOOM);
+    Preview_SyncZoomUi(pData);
 
     /* Redraw the display window */
     InvalidateRect(pData->m_hwndZoom, NULL, TRUE);
@@ -357,8 +458,10 @@ Preview_UpdateTitle(PPREVIEW_DATA pData, LPCWSTR FileName)
     pchFileTitle = PathFindFileNameW(FileName);
     if (pchFileTitle && *pchFileTitle)
     {
-        StringCchCatW(szText, _countof(szText), L" - ");
-        StringCchCatW(szText, _countof(szText), pchFileTitle);
+        /* "<file> - <viewer name>", the order a Windows caption has */
+        WCHAR szName[MAX_PATH + 100];
+        StringCchCopyW(szName, _countof(szName), szText);
+        StringCchPrintfW(szText, _countof(szText), L"%s - %s", pchFileTitle, szName);
     }
 
     SetWindowTextW(pData->m_hwnd, szText);
@@ -376,18 +479,132 @@ Preview_pFreeImage(PPREVIEW_DATA pData)
     }
 }
 
+/* ---- rotation is kept in memory while browsing and written back when the picture is left ---- */
+
+static BOOL
+Preview_FindEncoder(const GUID *pFormat, CLSID *pClsid)
+{
+    UINT num = 0, size = 0, j;
+    ImageCodecInfo *info;
+    BOOL found = FALSE;
+
+    if (GdipGetImageEncodersSize(&num, &size) != Ok || !size)
+        return FALSE;
+    info = QuickAlloc(size, FALSE);
+    if (!info)
+        return FALSE;
+    GdipGetImageEncoders(num, size, info);
+    for (j = 0; j < num && !found; ++j)
+    {
+        if (IsEqualGUID(pFormat, &info[j].FormatID))
+        {
+            *pClsid = info[j].Clsid;
+            found = TRUE;
+        }
+    }
+    QuickFree(info);
+    return found;
+}
+
+/* Saves pImage to szFile through a temporary file so a failed encode never damages the original. */
+static BOOL
+Preview_SaveReplacing(GpImage *pImage, LPCWSTR pszFile, const CLSID *pClsid, const EncoderParameters *pParams)
+{
+    WCHAR szTmp[MAX_PATH + 16];
+    BOOL ok;
+
+    if (FAILED(StringCchPrintfW(szTmp, _countof(szTmp), L"%s.lwrot.tmp", pszFile)))
+        return FALSE;
+    ok = GdipSaveImageToFile(pImage, szTmp, pClsid, pParams) == Ok;
+    if (ok)
+        ok = MoveFileExW(szTmp, pszFile, MOVEFILE_REPLACE_EXISTING);
+    if (!ok)
+        DeleteFileW(szTmp);
+    return ok;
+}
+
+static GUID g_OrigFormat; /* raw format of the file as loaded: a rotated GpImage reports MemoryBMP */
+
+static VOID
+Preview_FlushRotation(PPREVIEW_DATA pData)
+{
+    /* JPEG lossless transform: EncoderTransformation, {8d0eb2d1-a58e-4ea8-aa14-108074b7b6f9} */
+    static const GUID s_EncTransform = { 0x8d0eb2d1, 0xa58e, 0x4ea8, { 0xaa, 0x14, 0x10, 0x80, 0x74, 0xb7, 0xb6, 0xf9 } };
+    /* EncoderQuality, {1d5be4b5-fa4a-452d-9cdd-5db35105e7eb} */
+    static const GUID s_EncQuality = { 0x1d5be4b5, 0xfa4a, 0x452d, { 0x9c, 0xdd, 0x5d, 0xb3, 0x51, 0x05, 0xe7, 0xeb } };
+    INT turns = pData->m_nRotQuarter & 3;
+    GUID rawFormat;
+    CLSID clsid;
+    EncoderParameters params;
+    ULONG value;
+    BOOL isJpeg;
+
+    pData->m_nRotQuarter = 0;
+    if (!turns || !g_pImage || !g_szFile[0] || GetFileAttributesW(g_szFile) == INVALID_FILE_ATTRIBUTES)
+        return;
+    if (pData->m_Anime.m_nFrameCount > 1)
+        return; /* animations are not re-encoded */
+    rawFormat = g_OrigFormat;
+    if (!Preview_FindEncoder(&rawFormat, &clsid))
+        return; /* no encoder for the format: the rotation stays a view setting */
+
+    isJpeg = IsEqualGUID(&rawFormat, &ImageFormatJPEG);
+    Anime_Pause(&pData->m_Anime);
+    if (isJpeg)
+    {
+        GpImage *pOrig = NULL;
+        BOOL done = FALSE;
+
+        /* lossless: transform the stored file, not the decoded pixels (needs 16 px aligned sides) */
+        if (SUCCEEDED(LoadImageFromPath(g_szFile, &pOrig)) && pOrig)
+        {
+            value = (turns == 1) ? 13 : (turns == 2) ? 14 : 15; /* EncoderValueTransformRotate90/180/270 */
+            params.Count = 1;
+            params.Parameter[0].Guid = s_EncTransform;
+            params.Parameter[0].NumberOfValues = 1;
+            params.Parameter[0].Type = EncoderParameterValueTypeLong;
+            params.Parameter[0].Value = &value;
+            done = Preview_SaveReplacing(pOrig, g_szFile, &clsid, &params);
+            GdipDisposeImage(pOrig);
+        }
+        if (!done)
+        {
+            WCHAR szText[256], szTitle[128];
+            if (!LoadStringW(g_hInstance, IDS_ROTATE_LOSSY, szText, _countof(szText)))
+                StringCchCopyW(szText, _countof(szText), L"This picture cannot be rotated without re-encoding it, which loses some quality. Save the rotation anyway?");
+            LoadStringW(g_hInstance, IDS_APPTITLE, szTitle, _countof(szTitle));
+            if (MessageBoxW(pData->m_hwnd, szText, szTitle, MB_ICONQUESTION | MB_YESNO) == IDYES)
+            {
+                value = 100;
+                params.Count = 1;
+                params.Parameter[0].Guid = s_EncQuality;
+                params.Parameter[0].NumberOfValues = 1;
+                params.Parameter[0].Type = EncoderParameterValueTypeLong;
+                params.Parameter[0].Value = &value;
+                Preview_SaveReplacing(g_pImage, g_szFile, &clsid, &params);
+            }
+        }
+    }
+    else
+    {
+        Preview_SaveReplacing(g_pImage, g_szFile, &clsid, NULL);
+    }
+    Anime_Start(&pData->m_Anime, 0);
+}
+
 static VOID
 Preview_pLoadImage(PPREVIEW_DATA pData, LPCWSTR szOpenFileName)
 {
     HRESULT hr;
     BOOL bCanDel;
+    Preview_FlushRotation(Preview_GetData(g_hMainWnd));
     Preview_pFreeImage(pData);
     InvalidateRect(pData->m_hwnd, NULL, FALSE); /* Schedule redraw in case we change to "No preview" */
 
     GetFullPathNameW(szOpenFileName, _countof(g_szFile), g_szFile, NULL);
     hr = LoadImageFromPath(szOpenFileName, &g_pImage);
     bCanDel = hr != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) && hr != HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
-    SendDlgItemMessageW(g_hMainWnd, IDC_TOOLBAR, TB_ENABLEBUTTON, IDC_DELETE, bCanDel);
+    Preview_SetEnabled(Preview_GetData(g_hMainWnd), IDC_DELETE, bCanDel);
     if (FAILED(hr))
     {
         DPRINT1("GdipLoadImageFromStream() failed, %d\n", hr);
@@ -396,6 +613,7 @@ Preview_pLoadImage(PPREVIEW_DATA pData, LPCWSTR szOpenFileName)
         return;
     }
 
+    GdipGetImageRawFormat(g_pImage, &g_OrigFormat);
     Anime_LoadInfo(&pData->m_Anime);
 
     /* Reset zoom and redraw display */
@@ -568,10 +786,12 @@ static VOID
 Preview_UpdateUI(PPREVIEW_DATA pData)
 {
     BOOL bEnable = (g_pImage != NULL);
-    SendMessageW(pData->m_hwndToolBar, TB_ENABLEBUTTON, IDC_SAVEAS, bEnable);
+    Preview_SetEnabled(pData, IDC_SAVEAS, bEnable);
     // These will be validated and enabled later by EnableCommandIfVerbExists
-    SendMessageW(pData->m_hwndToolBar, TB_ENABLEBUTTON, IDC_PRINT, FALSE);
-    SendMessageW(pData->m_hwndToolBar, TB_ENABLEBUTTON, IDC_MODIFY, FALSE);
+    Preview_SetEnabled(pData, IDC_PRINT, FALSE);
+    Preview_SetEnabled(pData, IDC_MODIFY, FALSE);
+    Preview_UpdateStatusInfo(pData);
+    Preview_RibbonInvalidateAll(pData);
 }
 
 static VOID
@@ -789,6 +1009,8 @@ ZoomWnd_OnDraw(
         color1 = RGB(255, 255, 255);
     }
 
+    if (pData->m_pPill && Preview_IsMainWnd(pData->m_hwnd))
+        color1 = RGB(0x3B, 0x46, 0x50);
     hBrush = CreateSolidBrush(color0);
     SetBkColor(hdcMem, color0);
 
@@ -797,7 +1019,25 @@ ZoomWnd_OnDraw(
 
     /* Fill background */
     SetRect(&rect, 0, 0, paintSize.cx, paintSize.cy);
-    FillRect(hdcMem, &rect, hBrush);
+    if (pData->m_pPill && Preview_IsMainWnd(pData->m_hwnd))
+    {
+        /* neutral backdrop: light grey at the top easing darker toward the bottom */
+        TRIVERTEX tv[2];
+        GRADIENT_RECT gr = { 0, 1 };
+        INT total = max(rcClient.bottom, 1);
+        INT y0 = prcPaint->top, y1 = prcPaint->bottom;
+        tv[0].x = 0; tv[0].y = 0; tv[1].x = paintSize.cx; tv[1].y = paintSize.cy;
+        tv[0].Alpha = tv[1].Alpha = 0;
+        tv[0].Red = (COLOR16)((0xF6 + (0xDC - 0xF6) * y0 / total) << 8);
+        tv[0].Green = (COLOR16)((0xF7 + (0xDF - 0xF7) * y0 / total) << 8);
+        tv[0].Blue = (COLOR16)((0xF9 + (0xE4 - 0xF9) * y0 / total) << 8);
+        tv[1].Red = (COLOR16)((0xF6 + (0xDC - 0xF6) * y1 / total) << 8);
+        tv[1].Green = (COLOR16)((0xF7 + (0xDF - 0xF7) * y1 / total) << 8);
+        tv[1].Blue = (COLOR16)((0xF9 + (0xE4 - 0xF9) * y1 / total) << 8);
+        GradientFill(hdcMem, tv, 2, &gr, 1, GRADIENT_FILL_RECT_V);
+    }
+    else
+        FillRect(hdcMem, &rect, hBrush);
 
     DeleteObject(hBrush);
 
@@ -807,6 +1047,8 @@ ZoomWnd_OnDraw(
         LoadStringW(g_hInstance, IDS_NOPREVIEW, szText, _countof(szText));
 
         SelectObject(hdcMem, GetStockFont(DEFAULT_GUI_FONT));
+        if (pData->m_pPill)
+            SetBkMode(hdcMem, TRANSPARENT);
         OffsetRect(&rcClient, -prcPaint->left, -prcPaint->top);
         DrawTextW(hdcMem, szText, -1, &rcClient, DT_SINGLELINE | DT_CENTER | DT_VCENTER |
                                                  DT_NOPREFIX);
@@ -857,7 +1099,8 @@ ZoomWnd_OnDraw(
         else
             hbrOld = SelectObject(hdcMem, GetStockBrush(NULL_BRUSH));
         hPenOld = SelectObject(hdcMem, hPen);
-        Rectangle(hdcMem, rect.left, rect.top, rect.right, rect.bottom);
+        if (!pData->m_pPill || (uFlags & (ImageFlagsHasAlpha | ImageFlagsHasTranslucent)))
+            Rectangle(hdcMem, rect.left, rect.top, rect.right, rect.bottom);
         DeleteObject(SelectObject(hdcMem, hbrOld));
         DeleteObject(SelectObject(hdcMem, hPenOld));
 
@@ -943,6 +1186,226 @@ ImageView_SaveSettings(VOID)
     RegCloseKey(hKey);
 }
 
+/* ---- ribbon chrome: host side of the command model ---- */
+
+
+static BOOL
+Preview_HasEncoders(VOID)
+{
+    static BOOL s_bKnown = FALSE, s_bHas = FALSE;
+    if (!s_bKnown)
+    {
+        UINT num = 0, size = 0;
+        s_bHas = (GdipGetImageEncodersSize(&num, &size) == Ok && num > 0);
+        s_bKnown = TRUE;
+    }
+    return s_bHas;
+}
+
+static BOOL
+RibbonPredicate(void *ctx, VRB_PRED pred)
+{
+    PPREVIEW_DATA pData = (PPREVIEW_DATA)ctx;
+    PPREVIEW_DATA pFull;
+
+    switch (pred)
+    {
+        case VRB_P_ALWAYS:          return TRUE;
+        case VRB_P_HAS_IMAGE:       return g_pImage != NULL;
+        case VRB_P_HAS_LIST:
+            return g_pCurrentFile && g_pCurrentFile->Next && g_pCurrentFile->Next != g_pCurrentFile;
+        case VRB_P_CAN_ZOOM_IN:     return pData->m_nZoomPercents < (INT)MAX_ZOOM;
+        case VRB_P_CAN_ZOOM_OUT:    return pData->m_nZoomPercents > (INT)MIN_ZOOM;
+        case VRB_P_IS_FIT:          return g_pImage && pData->m_bFit;
+        case VRB_P_IS_ACTUAL:       return g_pImage && pData->m_nZoomPercents == 100;
+        case VRB_P_IS_FULLSCREEN:   return IsWindowVisible(g_hwndFullscreen);
+        case VRB_P_SLIDESHOW_RUNNING:
+            pFull = IsWindowVisible(g_hwndFullscreen) ? Preview_GetData(g_hwndFullscreen) : NULL;
+            return pFull && pFull->m_nTimerInterval != 0;
+        case VRB_P_IS_ANIMATED:     return g_pImage && pData->m_Anime.m_nFrameCount > 1;
+        case VRB_P_CAN_SAVE:        return g_pImage && Preview_HasEncoders();
+        /* Same gates as the toolbar: the file is there, the shell verb exists. */
+        case VRB_P_CAN_DELETE:      return g_szFile[0] && pData->m_bEnDelete;
+        case VRB_P_CAN_PRINT:       return g_szFile[0] && pData->m_bEnPrint;
+        case VRB_P_CAN_EDIT:        return g_szFile[0] && pData->m_bEnModify;
+        case VRB_P_STATUSBAR_SHOWN: return LeewayFrameIsStatusBarShown(pData->m_pFrame);
+        case VRB_P_RIBBON_MINIMIZED:return FALSE; /* the framework owns it */
+        default:                    break;
+    }
+    return FALSE;
+}
+
+static HRESULT
+RibbonExecute(void *ctx, UINT CmdId)
+{
+    PPREVIEW_DATA pData = (PPREVIEW_DATA)ctx;
+    /* Every command goes through WM_COMMAND, as an accelerator does, so the
+     * ribbon, the accelerators and the toolbar share one handler. */
+    SendMessageW(pData->m_hwnd, WM_COMMAND, CmdId, 0);
+    return S_OK;
+}
+
+static UINT
+RibbonZoomPercent(void *ctx)
+{
+    return (UINT)((PPREVIEW_DATA)ctx)->m_nZoomPercents;
+}
+
+static VOID Preview_SetZoomLevel(PPREVIEW_DATA pData, UINT Percent);
+
+/* The frame reports a slider drag here. */
+static void
+FrameZoom(UINT32 Percent, void *ctx)
+{
+    Preview_SetZoomLevel((PPREVIEW_DATA)ctx, Percent);
+}
+
+/* The ribbon changed height (minimise, QAT below, DPI): the frame re-ran the layout. */
+static void
+FrameRelayout(const LeewayUIFrameRects *rects, void *ctx)
+{
+    PPREVIEW_DATA pData = (PPREVIEW_DATA)ctx;
+    MoveWindow(pData->m_hwndZoom, rects->work.left, rects->work.top,
+               rects->work.right - rects->work.left, rects->work.bottom - rects->work.top, TRUE);
+}
+
+static BOOL
+Preview_CreateRibbonChrome(PPREVIEW_DATA pData)
+{
+    VRB_HOST host;
+    LeewayUIFrameDesc desc;
+
+    host.ctx = pData;
+    host.Predicate = RibbonPredicate;
+    host.Execute = RibbonExecute;
+    host.GetZoomPercent = RibbonZoomPercent;
+
+    if (FAILED(VRB_RibbonCreate(pData->m_hwnd, g_hInstance, &host, &pData->m_pRibbon)))
+    {
+        pData->m_pRibbon = NULL;
+        return FALSE;
+    }
+
+    /* The frame owns the status bar, the zoom slider and the layout; the
+     * ribbon stays with the adapter and is lent to the frame. */
+    ZeroMemory(&desc, sizeof(desc));
+    desc.struct_size = sizeof(desc);
+    desc.owner = pData->m_hwnd;
+    desc.instance = g_hInstance;
+    desc.app_name = L"PhotoViewer";
+    desc.flags = LWUI_FRAME_STATUSBAR | LWUI_FRAME_ZOOM_SLIDER;
+    desc.default_chrome = LWUI_CHROME_RIBBON;
+    desc.ribbon = VRB_RibbonFramework(pData->m_pRibbon);
+    desc.zoom_levels = g_VrbZoomPercents;
+    desc.zoom_level_count = VRB_ZOOM_LEVELS;
+    desc.on_zoom = FrameZoom;
+    desc.on_layout = FrameRelayout;
+    desc.app_context = pData;
+    if (FAILED(LeewayFrameCreate(&desc, &pData->m_pFrame)) ||
+        LeewayFrameGetChrome(pData->m_pFrame) != LWUI_CHROME_RIBBON)
+    {
+        LeewayFrameDestroy(pData->m_pFrame);
+        pData->m_pFrame = NULL;
+        VRB_RibbonDestroy(pData->m_pRibbon);
+        pData->m_pRibbon = NULL;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+/* Places the ribbon on top, the status bar or the toolbar at the bottom and
+ * the image between them. */
+/* Ribbon chrome: the frame lays out ribbon, status bar and slider and says
+ * what is left. Pill chrome: the toolbar sits at the bottom. */
+static VOID
+Preview_LayoutMain(PPREVIEW_DATA pData, INT cx, INT cy)
+{
+    RECT rc;
+    INT bottom = 0;
+
+    if (pData->m_pFrame)
+    {
+        LeewayUIFrameRects fr;
+
+        SetRect(&rc, 0, 0, cx, cy);
+        LeewayFrameLayout(pData->m_pFrame, &rc, &fr);
+        MoveWindow(pData->m_hwndZoom, fr.work.left, fr.work.top,
+                   fr.work.right - fr.work.left, fr.work.bottom - fr.work.top, TRUE);
+        return;
+    }
+
+    if (pData->m_pPill)
+    {
+        INT top = (INT)VPill_StripHeight(pData->m_pPill);
+        MoveWindow(pData->m_hwndZoom, 0, top, cx, max(cy - top, 0), TRUE);
+        VPill_Layout(pData->m_pPill, cx, cy);
+        return;
+    }
+
+    if (pData->m_hwndToolBar)
+    {
+        SendMessageW(pData->m_hwndToolBar, TB_AUTOSIZE, 0, 0);
+        GetWindowRect(pData->m_hwndToolBar, &rc);
+        bottom += rc.bottom - rc.top;
+    }
+    MoveWindow(pData->m_hwndZoom, 0, 0, cx, max(cy - bottom, 0), TRUE);
+}
+
+/* ---- pill chrome: text menu strip on top, floating pill over the image ---- */
+
+static UINT
+PillGetZoom(void *ctx)
+{
+    return (UINT)((PPREVIEW_DATA)ctx)->m_nZoomPercents;
+}
+
+static BOOL
+PillIsFit(void *ctx)
+{
+    return g_pImage && ((PPREVIEW_DATA)ctx)->m_bFit;
+}
+
+static BOOL
+PillIsEnabled(void *ctx, UINT cmd)
+{
+    return IsCommandEnabled(cmd) != S_FALSE;
+}
+
+static BOOL
+PillHasImage(void *ctx)
+{
+    return g_pImage != NULL;
+}
+
+static void
+PillSetZoom(void *ctx, UINT percent)
+{
+    Preview_SetZoomLevel((PPREVIEW_DATA)ctx, percent);
+}
+
+static void
+PillExecute(void *ctx, UINT cmd)
+{
+    if (cmd)
+        SendMessageW(((PPREVIEW_DATA)ctx)->m_hwnd, WM_COMMAND, cmd, 0);
+}
+
+static BOOL
+Preview_CreatePillChrome(PPREVIEW_DATA pData)
+{
+    VPILL_HOST host;
+
+    host.ctx = pData;
+    host.GetZoom = PillGetZoom;
+    host.IsFit = PillIsFit;
+    host.IsEnabled = PillIsEnabled;
+    host.HasImage = PillHasImage;
+    host.SetZoom = PillSetZoom;
+    host.Execute = PillExecute;
+    pData->m_pPill = VPill_Create(pData->m_hwnd, g_hInstance, &host);
+    return pData->m_pPill != NULL;
+}
+
 static BOOL
 Preview_CreateToolBar(PPREVIEW_DATA pData)
 {
@@ -952,6 +1415,17 @@ Preview_CreateToolBar(PPREVIEW_DATA pData)
 
     if (!Preview_IsMainWnd(pData->m_hwnd))
         return TRUE; /* FIXME */
+
+    /* ChromeStyle ribbon: the ribbon and the status bar replace the toolbar.
+     * If the ribbon cannot be made the pill toolbar below is the fallback. */
+    if (VRB_RibbonIsDefaultChrome() && Preview_CreateRibbonChrome(pData))
+    {
+        Preview_SyncZoomUi(pData);
+        return TRUE;
+    }
+
+    if (!VRB_ReadChromeIsClassic() && Preview_CreatePillChrome(pData))
+        return TRUE;
 
     style |= CCS_BOTTOM;
     hwndToolBar = CreateWindowExW(0, TOOLBARCLASSNAMEW, NULL, style,
@@ -993,12 +1467,46 @@ Preview_EndSlideShow(HWND hwnd)
     ShowWindow(g_hMainWnd, SW_SHOW);
     ShowWindow(hwnd, SW_HIDE);
     Preview_ResetZoom(Preview_GetData(g_hMainWnd));
+    Preview_RibbonInvalidateAll(Preview_GetData(g_hMainWnd));
 }
 
 static VOID
 GenerateSetCursor(HWND hwnd, UINT uMsg)
 {
     SendMessage(hwnd, WM_SETCURSOR, (WPARAM)hwnd, MAKELONG(HTCLIENT, uMsg));
+}
+
+/* Slideshow overlay: the same pill, reduced to previous / end slideshow / next. */
+static UINT PillGetZoom(void *ctx);
+static BOOL PillIsFit(void *ctx);
+static BOOL PillIsEnabled(void *ctx, UINT cmd);
+static BOOL PillHasImage(void *ctx);
+static void PillSetZoom(void *ctx, UINT percent);
+static void PillExecute(void *ctx, UINT cmd);
+
+static VOID
+Preview_ShowOverlay(PPREVIEW_DATA pData, BOOL bShow)
+{
+    RECT rc;
+
+    if (!pData || Preview_IsMainWnd(pData->m_hwnd))
+        return;
+    if (bShow && !pData->m_pOverlay)
+    {
+        VPILL_HOST host;
+        host.ctx = pData;
+        host.GetZoom = PillGetZoom;
+        host.IsFit = PillIsFit;
+        host.IsEnabled = PillIsEnabled;
+        host.HasImage = PillHasImage;
+        host.SetZoom = PillSetZoom;
+        host.Execute = PillExecute;
+        pData->m_pOverlay = VPill_CreateOverlay(pData->m_hwnd, g_hInstance, &host);
+    }
+    if (!pData->m_pOverlay)
+        return;
+    GetClientRect(pData->m_hwnd, &rc);
+    VPill_ShowOverlay(pData->m_pOverlay, bShow, rc.right, rc.bottom);
 }
 
 static VOID
@@ -1039,6 +1547,7 @@ ZoomWnd_OnMouseMove(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         ZoomWnd_StopHideCursor(pData);
         if (!pData->m_nMouseDownMsg)
             SetTimer(hwnd, HIDECURSOR_TIMER_ID, HIDECURSOR_TIMER_TIMEOUT, NULL);
+        Preview_ShowOverlay(pData, TRUE);
     }
 
     if (pData->m_nMouseDownMsg == WM_MBUTTONDOWN)
@@ -1156,7 +1665,7 @@ ZoomWnd_OnMouseWheel(HWND hwnd, INT x, INT y, INT zDelta, UINT fwKeys)
     if (zDelta == 0)
         return;
 
-    if (GetKeyState(VK_CONTROL) < 0)
+    if (GetKeyState(VK_CONTROL) < 0 || (pData->m_pPill && GetKeyState(VK_SHIFT) >= 0))
     {
         Preview_ZoomInOrOut(pData, zDelta > 0);
     }
@@ -1209,7 +1718,12 @@ ZoomWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         case WM_LBUTTONDBLCLK:
         {
             if (Preview_IsMainWnd(pData->m_hwnd))
-                Preview_ToggleSlideShowEx(pData, FALSE);
+            {
+                if (pData->m_pPill)
+                    SendMessageW(pData->m_hwnd, WM_COMMAND, pData->m_bFit ? IDC_REAL_SIZE : IDC_BEST_FIT, 0);
+                else
+                    Preview_ToggleSlideShowEx(pData, FALSE);
+            }
             break;
         }
         case WM_PAINT:
@@ -1236,8 +1750,14 @@ ZoomWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             if (wParam == HIDECURSOR_TIMER_ID)
             {
                 ZoomWnd_StopHideCursor(pData);
-                if (IsWindowVisible(hwnd))
+                if (IsWindowVisible(hwnd) && pData->m_pOverlay && VPill_IsCursorOver(pData->m_pOverlay))
                 {
+                    /* the pointer rests on the overlay: keep both until it leaves */
+                    SetTimer(hwnd, HIDECURSOR_TIMER_ID, HIDECURSOR_TIMER_TIMEOUT, NULL);
+                }
+                else if (IsWindowVisible(hwnd))
+                {
+                    Preview_ShowOverlay(pData, FALSE);
                     pData->m_bHideCursor = TRUE;
                     GenerateSetCursor(hwnd, uMsg);
                 }
@@ -1263,6 +1783,9 @@ Preview_OnCreate(HWND hwnd, LPCREATESTRUCT pCS)
     HWND hwndZoom;
     PPREVIEW_DATA pData = QuickAlloc(sizeof(PREVIEW_DATA), TRUE);
     pData->m_hwnd = hwnd;
+    /* The toolbar starts with every button enabled. */
+    pData->m_bEnBestFit = pData->m_bEnRealSize = pData->m_bEnZoomIn = pData->m_bEnZoomOut = TRUE;
+    pData->m_bEnDelete = pData->m_bEnSaveAs = pData->m_bEnPrint = pData->m_bEnModify = TRUE;
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, (LONG_PTR)pData);
 
     DragAcceptFiles(hwnd, TRUE);
@@ -1270,7 +1793,8 @@ Preview_OnCreate(HWND hwnd, LPCREATESTRUCT pCS)
     if (g_hMainWnd == NULL)
     {
         g_hMainWnd = hwnd;
-        exstyle |= WS_EX_CLIENTEDGE;
+        if (VRB_ReadChromeIsClassic() || VRB_RibbonIsDefaultChrome())
+            exstyle |= WS_EX_CLIENTEDGE;
     }
     else if (g_hwndFullscreen == NULL)
     {
@@ -1339,9 +1863,8 @@ Preview_OnMoveSize(HWND hwnd)
 static VOID
 Preview_OnSize(HWND hwnd)
 {
-    RECT rc, rcClient;
+    RECT rcClient;
     PPREVIEW_DATA pData = Preview_GetData(hwnd);
-    HWND hToolBar = pData->m_hwndToolBar;
     INT cx, cy;
 
     /* We want 32-bit values. Don't use WM_SIZE lParam */
@@ -1351,10 +1874,7 @@ Preview_OnSize(HWND hwnd)
 
     if (Preview_IsMainWnd(pData->m_hwnd))
     {
-        SendMessageW(hToolBar, TB_AUTOSIZE, 0, 0);
-        GetWindowRect(hToolBar, &rc);
-
-        MoveWindow(pData->m_hwndZoom, 0, 0, cx, cy - (rc.bottom - rc.top), TRUE);
+        Preview_LayoutMain(pData, cx, cy);
 
         if (pData->m_nZoomPercents > 100)
             ZoomWnd_UpdateScroll(pData, FALSE);
@@ -1388,17 +1908,144 @@ Preview_Delete(PPREVIEW_DATA pData)
         szNextFile[_countof(szNextFile) - 1] = UNICODE_NULL; /* Avoid buffer overrun */
     }
 
-    /* Confirm file deletion and delete if allowed */
+    /* Ask first, as the shell does for the Recycle Bin: it says where the file goes */
+    {
+        BOOL bPermanent = GetKeyState(VK_SHIFT) < 0;
+        WCHAR szText[300], szTitle[128];
+        UINT ids = bPermanent ? IDS_DELETE_PERMANENT : IDS_DELETE_RECYCLE;
+        if (!LoadStringW(g_hInstance, ids, szText, _countof(szText)))
+            StringCchCopyW(szText, _countof(szText), bPermanent ?
+                           L"Are you sure you want to permanently delete this picture?" :
+                           L"Are you sure you want to move this picture to the Recycle Bin?");
+        LoadStringW(g_hInstance, IDS_APPTITLE, szTitle, _countof(szTitle));
+        if (MessageBoxW(pData->m_hwnd, szText, szTitle, MB_ICONQUESTION | MB_YESNO | MB_DEFBUTTON1) != IDYES)
+            return;
+    }
+
+    /* Delete: to the Recycle Bin unless Shift is held */
     FileOp.pFrom = szCurFile;
-    FileOp.fFlags = GetKeyState(VK_SHIFT) < 0 ? 0 : FOF_ALLOWUNDO;
+    FileOp.fFlags = FOF_NOCONFIRMATION | (GetKeyState(VK_SHIFT) < 0 ? 0 : FOF_ALLOWUNDO);
     error = g_szFile[0] ? SHFileOperationW(&FileOp) : ERROR_FILE_NOT_FOUND;
     if (error)
         return;
 
+    pData->m_nRotQuarter = 0; /* the file is gone: nothing to write back */
     /* Reload the file list and go next file */
     pFreeFileList(g_pCurrentFile);
     g_pCurrentFile = pBuildFileList(szNextFile);
     Preview_LoadImage(pData, g_pCurrentFile);
+}
+
+/* ---- File / E-mail / Burn / Open menu commands of the pill chrome ---- */
+
+static VOID
+Preview_CopyImage(PPREVIEW_DATA pData)
+{
+    HBITMAP hbm = NULL;
+    if (!g_pImage || GdipCreateHBITMAPFromBitmap((GpBitmap *)g_pImage, &hbm, 0xFFFFFFFF) != Ok || !hbm)
+        return;
+    if (OpenClipboard(pData->m_hwnd))
+    {
+        EmptyClipboard();
+        if (SetClipboardData(CF_BITMAP, hbm))
+            hbm = NULL; /* the clipboard owns it now */
+        CloseClipboard();
+    }
+    if (hbm)
+        DeleteObject(hbm);
+}
+
+static VOID
+Preview_CopyFilePath(PPREVIEW_DATA pData)
+{
+    WCHAR szFull[MAX_PATH];
+    HGLOBAL hMem;
+    SIZE_T cb;
+    PWSTR psz;
+
+    if (!g_szFile[0] || !GetFullPathNameW(g_szFile, _countof(szFull), szFull, NULL))
+        return;
+    cb = (lstrlenW(szFull) + 1) * sizeof(WCHAR);
+    hMem = GlobalAlloc(GMEM_MOVEABLE, cb);
+    if (!hMem)
+        return;
+    psz = GlobalLock(hMem);
+    if (!psz || !OpenClipboard(pData->m_hwnd))
+    {
+        if (psz)
+            GlobalUnlock(hMem);
+        GlobalFree(hMem);
+        return;
+    }
+    CopyMemory(psz, szFull, cb);
+    GlobalUnlock(hMem);
+    EmptyClipboard();
+    if (!SetClipboardData(CF_UNICODETEXT, hMem))
+        GlobalFree(hMem);
+    CloseClipboard();
+}
+
+static VOID
+Preview_Message(HWND hwnd, UINT ids, PCWSTR pszDefault)
+{
+    WCHAR szText[200], szTitle[128];
+    if (!LoadStringW(g_hInstance, ids, szText, _countof(szText)))
+        StringCchCopyW(szText, _countof(szText), pszDefault);
+    LoadStringW(g_hInstance, IDS_APPTITLE, szTitle, _countof(szTitle));
+    MessageBoxW(hwnd, szText, szTitle, MB_ICONINFORMATION | MB_OK);
+}
+
+/* E-mail: hands the picture to the default mail client as an attachment (MAPI). */
+static VOID
+Preview_Email(PPREVIEW_DATA pData)
+{
+    typedef ULONG (WINAPI *PFN_MAPISendMail)(ULONG_PTR, ULONG_PTR, void *, ULONG, ULONG);
+    typedef struct { ULONG ulReserved, flFlags, nPosition; PSTR lpszPathName, lpszFileName; PVOID lpFileType; } MFILE;
+    typedef struct { ULONG ulReserved; PSTR lpszSubject, lpszNoteText, lpszMessageType, lpszDateReceived, lpszConversationID;
+                     ULONG flFlags; PVOID lpOriginator; ULONG nRecipCount; PVOID lpRecips; ULONG nFileCount; MFILE *lpFiles; } MMSG;
+    WCHAR szFull[MAX_PATH];
+    CHAR szPath[MAX_PATH * 2], szName[MAX_PATH * 2];
+    HMODULE hMapi;
+    PFN_MAPISendMail pfn;
+    MFILE file;
+    MMSG msg;
+    BOOL ok = FALSE;
+
+    if (!g_szFile[0] || !GetFullPathNameW(g_szFile, _countof(szFull), szFull, NULL))
+        return;
+    hMapi = LoadLibraryW(L"mapi32.dll");
+    pfn = hMapi ? (PFN_MAPISendMail)GetProcAddress(hMapi, "MAPISendMail") : NULL;
+    if (pfn && WideCharToMultiByte(CP_ACP, 0, szFull, -1, szPath, sizeof(szPath), NULL, NULL) &&
+        WideCharToMultiByte(CP_ACP, 0, PathFindFileNameW(szFull), -1, szName, sizeof(szName), NULL, NULL))
+    {
+        ZeroMemory(&file, sizeof(file));
+        ZeroMemory(&msg, sizeof(msg));
+        file.lpszPathName = szPath;
+        file.lpszFileName = szName;
+        msg.nFileCount = 1;
+        msg.lpFiles = &file;
+        ok = (pfn((ULONG_PTR)0, (ULONG_PTR)pData->m_hwnd, &msg, 0x1 /* MAPI_LOGON_UI */ | 0x8 /* MAPI_DIALOG */, 0) == 0);
+    }
+    if (hMapi)
+        FreeLibrary(hMapi);
+    if (!ok)
+        Preview_Message(pData->m_hwnd, IDS_EMAIL_FAILED, L"The picture could not be sent. No e-mail program is available.");
+}
+
+/* Verbs of the file as the shell offers them (burn, openas, properties). */
+static BOOL
+Preview_InvokeVerb(PPREVIEW_DATA pData, PCWSTR pszVerb)
+{
+    SHELLEXECUTEINFOW sei = { sizeof(sei), SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI };
+    WCHAR szFull[MAX_PATH];
+
+    if (!g_szFile[0] || !GetFullPathNameW(g_szFile, _countof(szFull), szFull, NULL))
+        return FALSE;
+    sei.hwnd = pData->m_hwnd;
+    sei.lpVerb = pszVerb;
+    sei.lpFile = szFull;
+    sei.nShow = SW_SHOW;
+    return ShellExecuteExW(&sei);
 }
 
 static VOID
@@ -1433,6 +2080,7 @@ Preview_ToggleSlideShowEx(PPREVIEW_DATA pData, BOOL StartTimer)
         Preview_ResetZoom(pSlideData);
         Preview_RestartTimer(g_hwndFullscreen);
         PostMessage(pSlideData->m_hwndZoom, WM_MOUSEMOVE, 0, 0); /* Start hide cursor */
+        Preview_RibbonInvalidateAll(Preview_GetData(g_hMainWnd));
     }
 }
 
@@ -1456,12 +2104,175 @@ Preview_GoNextPic(PPREVIEW_DATA pData, BOOL bNext)
     }
 }
 
-static HRESULT
-IsCommandEnabled(UINT nCmdId)
+/* Absolute zoom, the setter behind the zoom gallery and the slider. */
+static VOID
+Preview_SetZoomLevel(PPREVIEW_DATA pData, UINT Percent)
 {
-    HWND hToolbar = GetDlgItem(g_hMainWnd, IDC_TOOLBAR);
-    LRESULT Ok = SendMessageW(hToolbar, TB_ISBUTTONENABLED, nCmdId, 0);
-    return Ok ? S_OK : SendMessageW(hToolbar, TB_COMMANDTOINDEX, nCmdId, 0) != -1 ? S_FALSE : E_FAIL;
+    if (g_pImage == NULL)
+        return;
+    Preview_UpdateZoom(pData, Percent, TRUE, TRUE);
+}
+
+/* Open...: the codec filter is the one of the folder list, plus "all". */
+static VOID
+Preview_Open(PPREVIEW_DATA pData)
+{
+    OPENFILENAMEW ofn;
+    ImageCodecInfo *codecInfo;
+    WCHAR szFile[MAX_PATH], szAll[64];
+    WCHAR *szFilter, *szAllExts, *c;
+    UINT num = 0, size = 0, j;
+    size_t cchFilter, cchAllExts; /* size_t: StringCchPrintfExW takes size_t* */
+    PCWSTR pszExtra = GetExtraExtensionsGdipList();
+
+    if (GdipGetImageDecodersSize(&num, &size) != Ok || !num)
+        return;
+    codecInfo = QuickAlloc(size, FALSE);
+    if (!codecInfo)
+        return;
+    GdipGetImageDecoders(num, size, codecInfo);
+
+    cchFilter = 128;
+    cchAllExts = wcslen(pszExtra) + 2;
+    for (j = 0; j < num; ++j)
+    {
+        cchFilter += wcslen(codecInfo[j].FormatDescription) + wcslen(codecInfo[j].FilenameExtension) * 2 + 8;
+        cchAllExts += wcslen(codecInfo[j].FilenameExtension) + 1;
+    }
+    cchFilter += cchAllExts;
+    szFilter = QuickAlloc(cchFilter * sizeof(WCHAR), TRUE);
+    szAllExts = QuickAlloc(cchAllExts * sizeof(WCHAR), TRUE);
+    if (!szFilter || !szAllExts)
+    {
+        QuickFree(szFilter);
+        QuickFree(szAllExts);
+        QuickFree(codecInfo);
+        return;
+    }
+
+    for (j = 0; j < num; ++j)
+    {
+        if (szAllExts[0])
+            StringCchCatW(szAllExts, cchAllExts, L";");
+        StringCchCatW(szAllExts, cchAllExts, codecInfo[j].FilenameExtension);
+    }
+    if (pszExtra[0])
+    {
+        if (szAllExts[0])
+            StringCchCatW(szAllExts, cchAllExts, L";");
+        StringCchCatW(szAllExts, cchAllExts, pszExtra);
+    }
+
+    szAll[0] = UNICODE_NULL;
+    LoadStringW(g_hInstance, IDS_OPEN_ALLPICTURES, szAll, _countof(szAll));
+
+    /* "All pictures", then one pair per decoder; each part ends in a NUL. */
+    c = szFilter;
+    StringCchPrintfExW(c, cchFilter, &c, &cchFilter, 0, L"%ls", szAll);
+    ++c; --cchFilter;
+    StringCchPrintfExW(c, cchFilter, &c, &cchFilter, 0, L"%ls", szAllExts);
+    ++c; --cchFilter;
+    for (j = 0; j < num; ++j)
+    {
+        StringCchPrintfExW(c, cchFilter, &c, &cchFilter, 0, L"%ls (%ls)",
+                           codecInfo[j].FormatDescription, codecInfo[j].FilenameExtension);
+        ++c; --cchFilter;
+        StringCchPrintfExW(c, cchFilter, &c, &cchFilter, 0, L"%ls", codecInfo[j].FilenameExtension);
+        ++c; --cchFilter;
+    }
+
+    ZeroMemory(szFile, sizeof(szFile));
+    ZeroMemory(&ofn, sizeof(ofn));
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner   = pData->m_hwnd;
+    ofn.lpstrFile   = szFile;
+    ofn.nMaxFile    = _countof(szFile);
+    ofn.lpstrFilter = szFilter;
+    ofn.nFilterIndex = 1;
+    ofn.Flags       = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY;
+
+    if (GetOpenFileNameW(&ofn))
+    {
+        pFreeFileList(g_pCurrentFile);
+        g_pCurrentFile = pBuildFileList(szFile);
+        Preview_LoadImage(pData, g_pCurrentFile);
+    }
+
+    QuickFree(szFilter);
+    QuickFree(szAllExts);
+    QuickFree(codecInfo);
+}
+
+/* Set as desktop background: the desktop takes a bitmap, so anything that is
+ * not one is written out as a BMP under %APPDATA%\Leeway\PhotoViewer. */
+static VOID
+Preview_SetWallpaper(PPREVIEW_DATA pData)
+{
+    WCHAR szPath[MAX_PATH];
+    PCWSTR pszSource = g_szFile;
+    PCWSTR pszExt = PathFindExtensionW(g_szFile);
+
+    if (g_pImage == NULL || !g_szFile[0])
+        return;
+
+    if (_wcsicmp(pszExt, L".bmp") != 0)
+    {
+        ImageCodecInfo *codecInfo;
+        UINT num = 0, size = 0, j;
+        BOOL bSaved = FALSE;
+
+        if (FAILED(SHGetFolderPathW(NULL, CSIDL_APPDATA | CSIDL_FLAG_CREATE, NULL,
+                                    SHGFP_TYPE_CURRENT, szPath)) ||
+            !PathAppendW(szPath, L"Leeway"))
+        {
+            ErrorBox(pData->m_hwnd, ERROR_PATH_NOT_FOUND);
+            return;
+        }
+        CreateDirectoryW(szPath, NULL);
+        if (!PathAppendW(szPath, L"PhotoViewer"))
+            return;
+        CreateDirectoryW(szPath, NULL);
+        if (!PathAppendW(szPath, L"wallpaper.bmp"))
+            return;
+
+        if (GdipGetImageEncodersSize(&num, &size) != Ok || !num)
+            return;
+        codecInfo = QuickAlloc(size, FALSE);
+        if (!codecInfo)
+            return;
+        GdipGetImageEncoders(num, size, codecInfo);
+        for (j = 0; j < num; ++j)
+        {
+            if (IsEqualGUID(&ImageFormatBMP, &codecInfo[j].FormatID))
+            {
+                Anime_Pause(&pData->m_Anime);
+                bSaved = (GdipSaveImageToFile(g_pImage, szPath, &codecInfo[j].Clsid, NULL) == Ok);
+                Anime_Start(&pData->m_Anime, 0);
+                break;
+            }
+        }
+        QuickFree(codecInfo);
+        if (!bSaved)
+        {
+            ErrorBox(pData->m_hwnd, ERROR_WRITE_FAULT);
+            return;
+        }
+        pszSource = szPath;
+    }
+
+    if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)pszSource,
+                               SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
+        ErrorBox(pData->m_hwnd, GetLastError());
+}
+
+static VOID
+Preview_SetStatusBarShown(PPREVIEW_DATA pData, BOOL bShow)
+{
+    if (!pData->m_pFrame)
+        return;
+    LeewayFrameShowStatusBar(pData->m_pFrame, bShow, TRUE);
+    Preview_OnSize(pData->m_hwnd);
+    Preview_RibbonInvalidate(pData, VRB_LWUI_STATUSBAR_TOGGLE);
 }
 
 static VOID
@@ -1539,34 +2350,46 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
         case IDC_ROT_CLOCKW:
             if (g_pImage)
             {
-                GdipImageRotateFlip(g_pImage, Rotate270FlipNone);
+                pData->m_nRotQuarter = (pData->m_nRotQuarter + 1) & 3;
+                GdipImageRotateFlip(g_pImage, Rotate90FlipNone);
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
         case IDC_ROT_COUNCW:
             if (g_pImage)
             {
-                GdipImageRotateFlip(g_pImage, Rotate90FlipNone);
+                pData->m_nRotQuarter = (pData->m_nRotQuarter + 3) & 3;
+                GdipImageRotateFlip(g_pImage, Rotate270FlipNone);
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
         case IDC_ROT_CWSAVE:
             if (g_pImage)
             {
-                GdipImageRotateFlip(g_pImage, Rotate270FlipNone);
+                GdipImageRotateFlip(g_pImage, Rotate90FlipNone);
                 Preview_pSaveImage(pData, g_szFile);
+                pData->m_nRotQuarter = 0;
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
         case IDC_ROT_CCWSAVE:
             if (g_pImage)
             {
-                GdipImageRotateFlip(g_pImage, Rotate90FlipNone);
+                GdipImageRotateFlip(g_pImage, Rotate270FlipNone);
                 Preview_pSaveImage(pData, g_szFile);
+                pData->m_nRotQuarter = 0;
                 Preview_UpdateImage(pData);
+                if (pData->m_bFit)
+                    Preview_ResetZoom(pData); /* the rotated picture has other proportions */
             }
             break;
 
@@ -1578,12 +2401,67 @@ Preview_OnCommand(HWND hwnd, WPARAM wParam, LPARAM lParam)
             Preview_Edit(hwnd);
             break;
 
+        case IDC_MENU_COPY:
+            Preview_CopyImage(pData);
+            break;
+
+        case IDC_MENU_COPYPATH:
+            Preview_CopyFilePath(pData);
+            break;
+
+        case IDC_MENU_EMAIL:
+            Preview_Email(pData);
+            break;
+
+        case IDC_MENU_BURN:
+            if (!Preview_InvokeVerb(pData, L"burn"))
+                Preview_Message(hwnd, IDS_BURN_FAILED, L"There is no disc burner available to burn this picture.");
+            break;
+
+        case IDC_MENU_OPENWITH:
+            Preview_InvokeVerb(pData, L"openas");
+            break;
+
+        case IDC_MENU_PROPS:
+            Preview_InvokeVerb(pData, L"properties");
+            break;
+
         case IDC_HELP_TOC:
+        case VRB_LWUI_HELP:
             DisplayHelp(hwnd);
             break;
 
-        default:
+        case VRB_CMD_OPEN:
+            Preview_Open(pData);
             break;
+
+        case VRB_CMD_WALLPAPER:
+            Preview_SetWallpaper(pData);
+            break;
+
+        case VRB_CMD_EXIT:
+            PostMessageW(hwnd, WM_CLOSE, 0, 0);
+            break;
+
+        case VRB_LWUI_STATUSBAR_TOGGLE:
+            Preview_SetStatusBarShown(pData, !LeewayFrameIsStatusBarShown(pData->m_pFrame));
+            break;
+
+        case VRB_CMD_ZOOM_FIT:
+            Preview_ResetZoom(pData);
+            break;
+
+        case VRB_CMD_ZOOM_ACTUAL:
+            Preview_UpdateZoom(pData, 100, TRUE, FALSE);
+            break;
+
+        default:
+        {
+            UINT Percent;
+            if (VRB_ZoomPercentOfCommand(nCommandID, &Percent))
+                Preview_SetZoomLevel(pData, Percent);
+            break;
+        }
     }
 }
 
@@ -1611,6 +2489,9 @@ Preview_OnDestroy(HWND hwnd)
     KillTimer(hwnd, SLIDESHOW_TIMER_ID);
     KillTimer(hwnd, HIDECURSOR_TIMER_ID);
 
+    if (Preview_IsMainWnd(hwnd))
+        Preview_FlushRotation(pData);
+
     pFreeFileList(g_pCurrentFile);
     g_pCurrentFile = NULL;
 
@@ -1622,6 +2503,15 @@ Preview_OnDestroy(HWND hwnd)
 
     DestroyWindow(pData->m_hwndToolBar);
     pData->m_hwndToolBar = NULL;
+
+    VPill_Destroy(pData->m_pPill);
+    pData->m_pPill = NULL;
+    VPill_Destroy(pData->m_pOverlay);
+    pData->m_pOverlay = NULL;
+    LeewayFrameDestroy(pData->m_pFrame);
+    pData->m_pFrame = NULL;
+    VRB_RibbonDestroy(pData->m_pRibbon);
+    pData->m_pRibbon = NULL;
 
     SetWindowLongPtrW(pData->m_hwnd, GWLP_USERDATA, 0);
     QuickFree(pData);
@@ -1662,7 +2552,24 @@ PreviewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         case WM_NOTIFY:
         {
+            /* The ribbon's height change goes to the frame first. */
+            PPREVIEW_DATA pData = Preview_GetData(hwnd);
+            LRESULT lr = 0;
+            if (pData && pData->m_pFrame &&
+                LeewayFrameHandleMessage(pData->m_pFrame, uMsg, wParam, lParam, &lr))
+                return lr;
             return Preview_OnNotify(hwnd, (LPNMHDR)lParam);
+        }
+        case WM_DRAWITEM:
+        case WM_CTLCOLORSTATIC:
+        {
+            /* Status bar parts and the zoom slider are drawn in the theme's colours. */
+            PPREVIEW_DATA pData = Preview_GetData(hwnd);
+            LRESULT lr = 0;
+            if (pData && pData->m_pFrame &&
+                LeewayFrameHandleMessage(pData->m_pFrame, uMsg, wParam, lParam, &lr))
+                return lr;
+            return DefWindowProcW(hwnd, uMsg, wParam, lParam);
         }
         case WM_GETMINMAXINFO:
         {
@@ -1673,7 +2580,14 @@ PreviewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         }
         case WM_MOVE:
         {
+            PPREVIEW_DATA pMv = Preview_GetData(hwnd);
             Preview_OnMoveSize(hwnd);
+            if (pMv && pMv->m_pPill)
+            {
+                RECT rcMv;
+                GetClientRect(hwnd, &rcMv);
+                VPill_Layout(pMv->m_pPill, rcMv.right, rcMv.bottom);
+            }
             break;
         }
         case WM_SIZE:
@@ -1691,6 +2605,28 @@ PreviewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
             PPREVIEW_DATA pData = Preview_GetData(hwnd);
             InvalidateRect(pData->m_hwnd, NULL, TRUE);
             InvalidateRect(pData->m_hwndZoom, NULL, TRUE);
+            VRB_RibbonOnThemeChanged(pData->m_pRibbon);
+            LeewayFrameHandleMessage(pData->m_pFrame, uMsg, wParam, lParam, NULL);
+            break;
+        }
+        case WM_DPICHANGED:
+        {
+            PPREVIEW_DATA pData = Preview_GetData(hwnd);
+            if (pData->m_pPill)
+                VPill_OnDpiChanged(pData->m_pPill, HIWORD(wParam));
+            if (!LeewayFrameHandleMessage(pData->m_pFrame, uMsg, wParam, lParam, NULL))
+                VRB_RibbonOnDpiChanged(pData->m_pRibbon, HIWORD(wParam));
+            Preview_OnSize(hwnd);
+            return DefWindowProcW(hwnd, uMsg, wParam, lParam);
+        }
+        case WM_HSCROLL:
+        {
+            /* The status bar zoom slider (the frame reports through FrameZoom);
+             * the zoom window has its own. */
+            PPREVIEW_DATA pData = Preview_GetData(hwnd);
+            LRESULT lr;
+            if (pData && pData->m_pFrame)
+                LeewayFrameHandleMessage(pData->m_pFrame, uMsg, wParam, lParam, &lr);
             break;
         }
         case WM_DESTROY:
@@ -1718,7 +2654,7 @@ PreviewWndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         {
             PPREVIEW_DATA pData = Preview_GetData(g_hMainWnd);
             if (g_ImageId == lParam)
-                SendMessage(pData->m_hwndToolBar, TB_ENABLEBUTTON, LOWORD(wParam), HIWORD(wParam));
+                Preview_SetEnabled(pData, LOWORD(wParam), HIWORD(wParam));
             break;
         }
         default:
@@ -1800,6 +2736,14 @@ ImageView_Main(HWND hwnd, LPCWSTR szFileName)
     while (GetMessageW(&msg, NULL, 0, 0) > 0)
     {
         const HWND hwndFull = g_hwndFullscreen;
+        /* Alt / F10 keytips and Ctrl+F1 of the ribbon, when there is one. */
+        if (IsWindow(hMainWnd))
+        {
+            PPREVIEW_DATA pMain = Preview_GetData(hMainWnd);
+            if (pMain && pMain->m_pRibbon &&
+                LeewayRibbonPreTranslateMessage(VRB_RibbonFramework(pMain->m_pRibbon), &msg))
+                continue;
+        }
         if (IsWindowVisible(hwndFull) && TranslateAcceleratorW(hwndFull, hAccel, &msg))
             continue;
         if (TranslateAcceleratorW(hMainWnd, hAccel, &msg))
