@@ -339,6 +339,7 @@ MiSpecialPoolForcePanic(_In_ ULONG ConcurrentLoad)
     if (MiSpecialPoolRegion != NULL)
     {
         MI_SPIN_ACQUIRE(&MiSpecialPoolRegion->Lock, &OldIrql);   /* never released: we panic holding it */
+        DbgPrint("Driver Verifier: LRM-RS force-panic REGION LOCK HELD\n");   /* Stanley N1: affirmative lock-held evidence */
     }
     else
     {
