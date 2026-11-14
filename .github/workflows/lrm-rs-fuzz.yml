@@ -41,13 +41,20 @@ jobs:
           cp -r tools/rust-poc "$RUNNER_TEMP/rp"
           rm -f "$RUNNER_TEMP/rp/.cargo/config.toml"
 
-      - name: Fuzz the LRM-RS special-pool engine differential (bounded)
+      - name: Fuzz every LRM-RS differential target (bounded, per target)
         working-directory: ${{ runner.temp }}/rp
         env:
           T: ${{ github.event.inputs.max_total_time || '120' }}
         run: |
-          cargo +nightly-2026-05-24 fuzz run lrm_engine_diff -- \
-            -max_total_time="$T" -rss_limit_mb=4096 -print_final_stats=1
+          # Run each lrm_* target for the bounded wall-clock; auto-includes new ones.
+          TARGETS=$(cargo +nightly-2026-05-24 fuzz list | grep '^lrm_' || true)
+          test -n "$TARGETS" || { echo "::error::no lrm_* fuzz targets found"; exit 1; }
+          for t in $TARGETS; do
+            echo "::group::fuzz $t"
+            cargo +nightly-2026-05-24 fuzz run "$t" -- \
+              -max_total_time="$T" -rss_limit_mb=4096 -print_final_stats=1
+            echo "::endgroup::"
+          done
 
       - name: Upload crash artifacts on failure
         if: failure()
