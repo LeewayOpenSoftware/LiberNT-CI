@@ -1415,7 +1415,7 @@ UhciAllocateTD(IN PUHCI_EXTENSION UhciExtension,
     return NULL;
 }
 
-VOID
+BOOLEAN
 NTAPI
 UhciMapAsyncTransferToTDs(IN PUHCI_EXTENSION UhciExtension,
                           IN PUHCI_ENDPOINT UhciEndpoint,
@@ -1526,6 +1526,23 @@ UhciMapAsyncTransferToTDs(IN PUHCI_EXTENSION UhciExtension,
 
             UhciTransfer->PendingTds++;
             TD = UhciAllocateTD(UhciExtension, UhciEndpoint);
+
+            if (!TD)
+            {
+                /* Pool exhausted: give back the TDs of this transfer built so far. */
+                UhciTransfer->PendingTds--;
+                for (TD = *OutFirstTD; TD; TD = LastTD)
+                {
+                    LastTD = TD->NextHcdTD;
+                    TD->Flags &= ~UHCI_HCD_TD_FLAG_ALLOCATED;
+                    UhciEndpoint->AllocatedTDs--;
+                    UhciTransfer->PendingTds--;
+                }
+                *OutFirstTD = NULL;
+                *OutLastTD = NULL;
+                return FALSE;
+            }
+
             TD->Flags |= UHCI_HCD_TD_FLAG_PROCESSED;
 
             TD->HwTD.NextElement = 0;
@@ -1574,6 +1591,7 @@ UhciMapAsyncTransferToTDs(IN PUHCI_EXTENSION UhciExtension,
     UhciEndpoint->DataToggle = DataToggle;
 
     *OutLastTD = LastTD;
+    return TRUE;
 }
 
 MPSTATUS
@@ -1617,6 +1635,12 @@ UhciControlTransfer(IN PUHCI_EXTENSION UhciExtension,
     /* Allocate and setup first TD */
     UhciTransfer->PendingTds++;
     FirstTD = UhciAllocateTD(UhciExtension, UhciEndpoint);
+    if (!FirstTD)
+    {
+        UhciTransfer->PendingTds--;
+        InterlockedDecrement(&UhciEndpoint->EndpointLock);
+        return MP_STATUS_FAILURE;
+    }
     FirstTD->Flags |= UHCI_HCD_TD_FLAG_PROCESSED;
     DPRINT_UHCI("UhciControlTransfer: FirstTD - %p\n", FirstTD);
 
@@ -1649,6 +1673,14 @@ UhciControlTransfer(IN PUHCI_EXTENSION UhciExtension,
     /* Allocate and setup last TD */
     UhciTransfer->PendingTds++;
     LastTD = UhciAllocateTD(UhciExtension, UhciEndpoint);
+    if (!LastTD)
+    {
+        UhciTransfer->PendingTds -= 2;
+        FirstTD->Flags &= ~UHCI_HCD_TD_FLAG_ALLOCATED;
+        UhciEndpoint->AllocatedTDs--;
+        InterlockedDecrement(&UhciEndpoint->EndpointLock);
+        return MP_STATUS_FAILURE;
+    }
     LastTD->Flags |= UHCI_HCD_TD_FLAG_PROCESSED;
     DPRINT_UHCI("UhciControlTransfer: LastTD - %p\n", LastTD);
 
@@ -1670,12 +1702,20 @@ UhciControlTransfer(IN PUHCI_EXTENSION UhciExtension,
     DataFirstTD = NULL;
     DataLastTD = NULL;
 
-    UhciMapAsyncTransferToTDs(UhciExtension,
-                              UhciEndpoint,
-                              UhciTransfer,
-                              &DataFirstTD,
-                              &DataLastTD,
-                              SgList);
+    if (!UhciMapAsyncTransferToTDs(UhciExtension,
+                                   UhciEndpoint,
+                                   UhciTransfer,
+                                   &DataFirstTD,
+                                   &DataLastTD,
+                                   SgList))
+    {
+        UhciTransfer->PendingTds -= 2;
+        FirstTD->Flags &= ~UHCI_HCD_TD_FLAG_ALLOCATED;
+        LastTD->Flags &= ~UHCI_HCD_TD_FLAG_ALLOCATED;
+        UhciEndpoint->AllocatedTDs -= 2;
+        InterlockedDecrement(&UhciEndpoint->EndpointLock);
+        return MP_STATUS_FAILURE;
+    }
 
     if (DataFirstTD)
     {
