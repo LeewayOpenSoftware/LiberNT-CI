@@ -1,0 +1,64 @@
+#pragma once
+
+#define IDI_CPLICON        100
+
+#define IDS_CPL_PERSONALIZE_NAME   200
+#define IDS_CPL_PERSONALIZE_DESC   201
+#define IDS_CPL_DISPLAY_NAME       202
+#define IDS_CPL_DISPLAY_DESC       203
+#define IDS_TITLE                  204
+#define IDS_TAB_PERSONALIZE        205
+#define IDS_TAB_DISPLAY            206
+#define IDS_STYLE_FILL             210
+#define IDS_STYLE_FIT              211
+#define IDS_STYLE_STRETCH          212
+#define IDS_STYLE_TILE             213
+#define IDS_STYLE_CENTER           214
+#define IDS_WALL_FAILED            215
+#define IDS_NO_WALLPAPERS          216
+#define IDS_CURRENT_WALLPAPER      217
+#define IDS_NO_MONITORS            220
+#define IDS_MONITOR_FORMAT         221
+#define IDS_MONITOR_DETACHED       222
+#define IDS_MODE_FORMAT            223
+#define IDS_HZ_FORMAT              224
+#define IDS_HZ_DEFAULT             225
+#define IDS_INFO_FORMAT            226
+#define IDS_APPLY_UNSUPPORTED      227
+#define IDS_APPLY_FAILED           228
+#define IDS_APPLY_RESTART          229
+#define IDS_KEEP_TEXT              230
+#define IDS_DPI_FORMAT             231
+#define IDS_CAPS_LIMITS            232
+#define IDS_TAB_SAVER              233
+#define IDS_SAVER_NONE             234
+#define IDS_SAVER_FAILED           235
+#define IDS_SAVER_UNAVAILABLE      236
+#define IDS_SAVER_MINUTES          237
+
+#define IDD_MAIN           300
+#define IDD_PERSONALIZE    301
+#define IDD_DISPLAY        302
+#define IDD_KEEP           303
+#define IDD_SAVER          304
+
+#define IDC_TAB            400
+#define IDC_WALL_LIST      410
+#define IDC_WALL_PREVIEW   411
+#define IDC_WALL_STYLE     412
+#define IDC_WALL_APPLY     413
+#define IDC_WALL_CURRENT   414
+#define IDC_DISP_MONITOR   420
+#define IDC_DISP_RES       421
+#define IDC_DISP_HZ        422
+#define IDC_DISP_INFO      423
+#define IDC_DISP_APPLY     424
+#define IDC_DISP_LIMITS    425
+#define IDC_KEEP_TEXT      430
+#define IDC_SAVER_LIST     440
+#define IDC_SAVER_WAIT     441
+#define IDC_SAVER_WAIT_LBL 442
+#define IDC_SAVER_TEST     443
+#define IDC_SAVER_APPLY    444
+#define IDC_SAVER_NOTE     445
+#define IDC_STATIC         -1

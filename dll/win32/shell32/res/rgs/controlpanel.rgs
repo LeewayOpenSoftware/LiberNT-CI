@@ -308,7 +308,7 @@ HKCR
 			{
 				Open
 				{
-					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl'
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@0'
 				}
 			}
 			ShellFolder
@@ -336,7 +336,7 @@ HKCR
 			{
 				Open
 				{
-					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,@Settings'
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@1'
 				}
 			}
 			ShellFolder

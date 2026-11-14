@@ -1,0 +1,106 @@
+/*
+ * PROJECT:     Leeway Display & Personalization
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Spanish resources
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_SPANISH, SUBLANG_SPANISH_MODERN
+
+STRINGTABLE
+BEGIN
+    IDS_CPL_PERSONALIZE_NAME "Personalización"
+    IDS_CPL_PERSONALIZE_DESC "Cambia el fondo del escritorio y consulta cómo está configurada la pantalla."
+    IDS_CPL_DISPLAY_NAME "Pantalla"
+    IDS_CPL_DISPLAY_DESC "Revisa las pantallas y cambia la resolución."
+    IDS_TITLE "Pantalla y personalización"
+    IDS_TAB_PERSONALIZE "Personalización"
+    IDS_TAB_DISPLAY "Pantalla"
+    IDS_STYLE_FILL "Rellenar"
+    IDS_STYLE_FIT "Ajustar"
+    IDS_STYLE_STRETCH "Expandir"
+    IDS_STYLE_TILE "Mosaico"
+    IDS_STYLE_CENTER "Centrar"
+    IDS_WALL_FAILED "No se pudo cambiar el fondo."
+    IDS_NO_WALLPAPERS "No se encontraron imágenes en la carpeta Web\\Wallpaper."
+    IDS_CURRENT_WALLPAPER "Fondo actual: %s"
+    IDS_NO_MONITORS "No se encontró ninguna pantalla."
+    IDS_MONITOR_FORMAT "%u. %s"
+    IDS_MONITOR_DETACHED "(no conectada al escritorio)"
+    IDS_MODE_FORMAT "%u x %u"
+    IDS_HZ_FORMAT "%u Hz"
+    IDS_HZ_DEFAULT "Predeterminado del hardware"
+    IDS_INFO_FORMAT "Adaptador: %s\nMonitor: %s\nModo actual: %u x %u, %u bits, %u Hz\nPosición en el escritorio: %d, %d\nEscala del sistema: %u%%"
+    IDS_APPLY_UNSUPPORTED "El controlador de pantalla no admite este modo."
+    IDS_APPLY_FAILED "No se pudo cambiar el modo de pantalla."
+    IDS_APPLY_RESTART "El cambio se aplicará al reiniciar el equipo."
+    IDS_KEEP_TEXT "¿Mantener esta configuración de pantalla? Se restaurará la anterior en %d segundos."
+    IDS_DPI_FORMAT "%u%%"
+    IDS_CAPS_LIMITS "Aún no disponible: disposición de varias pantallas, pantalla principal y escala por pantalla."
+    IDS_TAB_SAVER "Protector de pantalla"
+    IDS_SAVER_NONE "(Ninguno)"
+    IDS_SAVER_FAILED "No se pudo guardar la configuración del protector de pantalla."
+    IDS_SAVER_UNAVAILABLE "La configuración del protector de pantalla no está disponible en este sistema."
+    IDS_SAVER_MINUTES "%u minutos"
+END
+
+IDD_MAIN DIALOGEX 0, 0, 330, 250
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Pantalla y personalización"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    CONTROL "", IDC_TAB, "SysTabControl32", WS_CLIPSIBLINGS | WS_TABSTOP, 6, 6, 318, 214
+    DEFPUSHBUTTON "Cerrar", IDCANCEL, 274, 228, 50, 14
+END
+
+IDD_PERSONALIZE DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Elige una imagen para el fondo del escritorio:", IDC_STATIC, 6, 6, 298, 10
+    CONTROL "", IDC_WALL_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 6, 20, 120, 120
+    CONTROL "", IDC_WALL_PREVIEW, "Static", SS_OWNERDRAW, 134, 20, 170, 100
+    LTEXT "Posición de la imagen:", IDC_STATIC, 134, 128, 60, 10
+    COMBOBOX IDC_WALL_STYLE, 198, 126, 70, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "Establecer como fondo", IDC_WALL_APPLY, 134, 146, 80, 14, WS_TABSTOP
+    LTEXT "", IDC_WALL_CURRENT, 6, 166, 298, 20
+END
+
+IDD_DISPLAY DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Pantalla:", IDC_STATIC, 6, 8, 60, 10
+    COMBOBOX IDC_DISP_MONITOR, 70, 6, 234, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Resolución:", IDC_STATIC, 6, 26, 60, 10
+    COMBOBOX IDC_DISP_RES, 70, 24, 100, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Frecuencia de actualización:", IDC_STATIC, 6, 44, 60, 10
+    COMBOBOX IDC_DISP_HZ, 70, 42, 100, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "Aplicar", IDC_DISP_APPLY, 70, 62, 50, 14, WS_TABSTOP
+    GROUPBOX "Configuración actual", IDC_STATIC, 6, 84, 298, 70
+    LTEXT "", IDC_DISP_INFO, 12, 96, 286, 54
+    LTEXT "", IDC_DISP_LIMITS, 6, 160, 298, 24
+END
+
+IDD_KEEP DIALOGEX 0, 0, 220, 70
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Configuración de pantalla"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "", IDC_KEEP_TEXT, 10, 10, 200, 28
+    DEFPUSHBUTTON "Mantener cambios", IDOK, 50, 46, 60, 14
+    PUSHBUTTON "Revertir", IDCANCEL, 116, 46, 60, 14
+END
+
+IDD_SAVER DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Protector de pantalla:", IDC_STATIC, 6, 6, 298, 10
+    CONTROL "", IDC_SAVER_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 6, 20, 140, 120
+    LTEXT "Esperar:", IDC_SAVER_WAIT_LBL, 156, 22, 50, 10
+    COMBOBOX IDC_SAVER_WAIT, 208, 20, 90, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "Probar", IDC_SAVER_TEST, 156, 44, 50, 14, WS_TABSTOP
+    PUSHBUTTON "Aplicar", IDC_SAVER_APPLY, 210, 44, 50, 14, WS_TABSTOP
+    LTEXT "El protector de pantalla se inicia cuando el equipo permanece inactivo durante el tiempo elegido.", IDC_SAVER_NOTE, 156, 68, 148, 50
+END

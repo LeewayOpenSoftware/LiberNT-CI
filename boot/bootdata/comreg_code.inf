@@ -2746,6 +2746,17 @@ HKCR,"CLSID\{FEF10FA2-355E-4E06-9381-9B24D7F7CC88}\InprocServer32",,0x00000010
 HKCR,"CLSID\{FEF10FA2-355E-4E06-9381-9B24D7F7CC88}\InprocServer32","",0x00000000,"%MODULE%"
 HKCR,"CLSID\{FEF10FA2-355E-4E06-9381-9B24D7F7CC88}\InprocServer32","ThreadingModel",0x00000000,"Apartment"
 HKCR,"Directory\Background",,0x00000010
+HKCR,"DesktopBackground\Shell",,0x00000010
+HKCR,"DesktopBackground\Shell\Personalize",,0x00000010
+HKCR,"DesktopBackground\Shell\Personalize","",0x00000000,"Personalize"
+HKCR,"DesktopBackground\Shell\Personalize","Position",0x00000000,"Bottom"
+HKCR,"DesktopBackground\Shell\Personalize\command",,0x00000010
+HKCR,"DesktopBackground\Shell\Personalize\command","",0x00020000,"%SystemRoot%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@0"
+HKCR,"DesktopBackground\Shell\Display",,0x00000010
+HKCR,"DesktopBackground\Shell\Display","",0x00000000,"Display settings"
+HKCR,"DesktopBackground\Shell\Display","Position",0x00000000,"Bottom"
+HKCR,"DesktopBackground\Shell\Display\command",,0x00000010
+HKCR,"DesktopBackground\Shell\Display\command","",0x00020000,"%SystemRoot%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@1"
 HKCR,"Directory\Background\shellex",,0x00000010
 HKCR,"Directory\Background\shellex\ContextMenuHandlers",,0x00000010
 HKCR,"Directory\Background\shellex\ContextMenuHandlers\New",,0x00000010

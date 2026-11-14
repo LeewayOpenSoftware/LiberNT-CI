@@ -1,0 +1,106 @@
+/*
+ * PROJECT:     Leeway Display & Personalization
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     Japanese resources
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
+
+STRINGTABLE
+BEGIN
+    IDS_CPL_PERSONALIZE_NAME "個人用設定"
+    IDS_CPL_PERSONALIZE_DESC "デスクトップの背景を変更し、ディスプレイの設定を確認します。"
+    IDS_CPL_DISPLAY_NAME "ディスプレイ"
+    IDS_CPL_DISPLAY_DESC "ディスプレイを確認し、画面の解像度を変更します。"
+    IDS_TITLE "ディスプレイと個人用設定"
+    IDS_TAB_PERSONALIZE "個人用設定"
+    IDS_TAB_DISPLAY "ディスプレイ"
+    IDS_STYLE_FILL "全体に表示"
+    IDS_STYLE_FIT "調整"
+    IDS_STYLE_STRETCH "拉伸"
+    IDS_STYLE_TILE "並べて表示"
+    IDS_STYLE_CENTER "中央に表示"
+    IDS_WALL_FAILED "背景を変更できませんでした。"
+    IDS_NO_WALLPAPERS "Web\\Wallpaper フォルダーに画像が見つかりません。"
+    IDS_CURRENT_WALLPAPER "現在の背景: %s"
+    IDS_NO_MONITORS "ディスプレイが見つかりません。"
+    IDS_MONITOR_FORMAT "%u. %s"
+    IDS_MONITOR_DETACHED "(デスクトップに接続されていません)"
+    IDS_MODE_FORMAT "%u x %u"
+    IDS_HZ_FORMAT "%u Hz"
+    IDS_HZ_DEFAULT "ハードウェアの既定値"
+    IDS_INFO_FORMAT "アダプター: %s\nモニター: %s\n現在のモード: %u x %u、%u ビット、%u Hz\nデスクトップ上の位置: %d, %d\nシステムのスケール: %u%%"
+    IDS_APPLY_UNSUPPORTED "このモードはディスプレイ ドライバーでサポートされていません。"
+    IDS_APPLY_FAILED "ディスプレイ モードを変更できませんでした。"
+    IDS_APPLY_RESTART "変更はコンピューターを再起動すると有効になります。"
+    IDS_KEEP_TEXT "このディスプレイ設定を維持しますか? %d 秒後に以前の設定に戻ります。"
+    IDS_DPI_FORMAT "%u%%"
+    IDS_CAPS_LIMITS "未対応: 複数ディスプレイの配置、メイン ディスプレイ、ディスプレイごとのスケール。"
+    IDS_TAB_SAVER "スクリーン セーバー"
+    IDS_SAVER_NONE "(なし)"
+    IDS_SAVER_FAILED "スクリーン セーバーの設定を保存できませんでした。"
+    IDS_SAVER_UNAVAILABLE "このシステムではスクリーン セーバーの設定を利用できません。"
+    IDS_SAVER_MINUTES "%u 分"
+END
+
+IDD_MAIN DIALOGEX 0, 0, 330, 250
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "ディスプレイと個人用設定"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    CONTROL "", IDC_TAB, "SysTabControl32", WS_CLIPSIBLINGS | WS_TABSTOP, 6, 6, 318, 214
+    DEFPUSHBUTTON "閉じる", IDCANCEL, 274, 228, 50, 14
+END
+
+IDD_PERSONALIZE DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "デスクトップの背景にする画像を選択してください:", IDC_STATIC, 6, 6, 298, 10
+    CONTROL "", IDC_WALL_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 6, 20, 120, 120
+    CONTROL "", IDC_WALL_PREVIEW, "Static", SS_OWNERDRAW, 134, 20, 170, 100
+    LTEXT "画像の位置:", IDC_STATIC, 134, 128, 60, 10
+    COMBOBOX IDC_WALL_STYLE, 198, 126, 70, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "背景に設定", IDC_WALL_APPLY, 134, 146, 80, 14, WS_TABSTOP
+    LTEXT "", IDC_WALL_CURRENT, 6, 166, 298, 20
+END
+
+IDD_DISPLAY DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "ディスプレイ:", IDC_STATIC, 6, 8, 60, 10
+    COMBOBOX IDC_DISP_MONITOR, 70, 6, 234, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "解像度:", IDC_STATIC, 6, 26, 60, 10
+    COMBOBOX IDC_DISP_RES, 70, 24, 100, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "リフレッシュ レート:", IDC_STATIC, 6, 44, 60, 10
+    COMBOBOX IDC_DISP_HZ, 70, 42, 100, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "適用", IDC_DISP_APPLY, 70, 62, 50, 14, WS_TABSTOP
+    GROUPBOX "現在の構成", IDC_STATIC, 6, 84, 298, 70
+    LTEXT "", IDC_DISP_INFO, 12, 96, 286, 54
+    LTEXT "", IDC_DISP_LIMITS, 6, 160, 298, 24
+END
+
+IDD_KEEP DIALOGEX 0, 0, 220, 70
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "ディスプレイの設定"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "", IDC_KEEP_TEXT, 10, 10, 200, 28
+    DEFPUSHBUTTON "変更を維持", IDOK, 50, 46, 60, 14
+    PUSHBUTTON "元に戻す", IDCANCEL, 116, 46, 60, 14
+END
+
+IDD_SAVER DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "スクリーン セーバー:", IDC_STATIC, 6, 6, 298, 10
+    CONTROL "", IDC_SAVER_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 6, 20, 140, 120
+    LTEXT "待ち時間:", IDC_SAVER_WAIT_LBL, 156, 22, 50, 10
+    COMBOBOX IDC_SAVER_WAIT, 208, 20, 90, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "テスト", IDC_SAVER_TEST, 156, 44, 50, 14, WS_TABSTOP
+    PUSHBUTTON "適用", IDC_SAVER_APPLY, 210, 44, 50, 14, WS_TABSTOP
+    LTEXT "コンピューターが選択した時間操作されないと、スクリーン セーバーが開始されます。", IDC_SAVER_NOTE, 156, 68, 148, 50
+END

@@ -1,0 +1,106 @@
+/*
+ * PROJECT:     Leeway Display & Personalization
+ * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
+ * PURPOSE:     English resources
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+LANGUAGE LANG_ENGLISH, SUBLANG_DEFAULT
+
+STRINGTABLE
+BEGIN
+    IDS_CPL_PERSONALIZE_NAME "Personalization"
+    IDS_CPL_PERSONALIZE_DESC "Change the desktop background and see how your display is set up."
+    IDS_CPL_DISPLAY_NAME "Display"
+    IDS_CPL_DISPLAY_DESC "Check your displays and change the screen resolution."
+    IDS_TITLE "Display and Personalization"
+    IDS_TAB_PERSONALIZE "Personalization"
+    IDS_TAB_DISPLAY "Display"
+    IDS_STYLE_FILL "Fill"
+    IDS_STYLE_FIT "Fit"
+    IDS_STYLE_STRETCH "Stretch"
+    IDS_STYLE_TILE "Tile"
+    IDS_STYLE_CENTER "Center"
+    IDS_WALL_FAILED "The background could not be changed."
+    IDS_NO_WALLPAPERS "No pictures were found in the Web\\Wallpaper folder."
+    IDS_CURRENT_WALLPAPER "Current background: %s"
+    IDS_NO_MONITORS "No display was found."
+    IDS_MONITOR_FORMAT "%u. %s"
+    IDS_MONITOR_DETACHED "(not attached to the desktop)"
+    IDS_MODE_FORMAT "%u x %u"
+    IDS_HZ_FORMAT "%u Hz"
+    IDS_HZ_DEFAULT "Hardware default"
+    IDS_INFO_FORMAT "Adapter: %s\nMonitor: %s\nCurrent mode: %u x %u, %u-bit, %u Hz\nDesktop position: %d, %d\nSystem scale: %u%%"
+    IDS_APPLY_UNSUPPORTED "The display driver does not support this mode."
+    IDS_APPLY_FAILED "The display mode could not be changed."
+    IDS_APPLY_RESTART "The change takes effect after you restart the computer."
+    IDS_KEEP_TEXT "Keep these display settings? They go back to the previous ones in %d seconds."
+    IDS_DPI_FORMAT "%u%%"
+    IDS_CAPS_LIMITS "Not available yet: multiple-display layout, primary display and per-display scale."
+    IDS_TAB_SAVER "Screen saver"
+    IDS_SAVER_NONE "(None)"
+    IDS_SAVER_FAILED "The screen saver settings could not be saved."
+    IDS_SAVER_UNAVAILABLE "Screen saver settings are not available on this system."
+    IDS_SAVER_MINUTES "%u minutes"
+END
+
+IDD_MAIN DIALOGEX 0, 0, 330, 250
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Display and Personalization"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    CONTROL "", IDC_TAB, "SysTabControl32", WS_CLIPSIBLINGS | WS_TABSTOP, 6, 6, 318, 214
+    DEFPUSHBUTTON "Close", IDCANCEL, 274, 228, 50, 14
+END
+
+IDD_PERSONALIZE DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Choose a picture for your desktop background:", IDC_STATIC, 6, 6, 298, 10
+    CONTROL "", IDC_WALL_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 6, 20, 120, 120
+    CONTROL "", IDC_WALL_PREVIEW, "Static", SS_OWNERDRAW, 134, 20, 170, 100
+    LTEXT "Picture position:", IDC_STATIC, 134, 128, 60, 10
+    COMBOBOX IDC_WALL_STYLE, 198, 126, 70, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "Set as background", IDC_WALL_APPLY, 134, 146, 80, 14, WS_TABSTOP
+    LTEXT "", IDC_WALL_CURRENT, 6, 166, 298, 20
+END
+
+IDD_DISPLAY DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Display:", IDC_STATIC, 6, 8, 60, 10
+    COMBOBOX IDC_DISP_MONITOR, 70, 6, 234, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Resolution:", IDC_STATIC, 6, 26, 60, 10
+    COMBOBOX IDC_DISP_RES, 70, 24, 100, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Refresh rate:", IDC_STATIC, 6, 44, 60, 10
+    COMBOBOX IDC_DISP_HZ, 70, 42, 100, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "Apply", IDC_DISP_APPLY, 70, 62, 50, 14, WS_TABSTOP
+    GROUPBOX "Current configuration", IDC_STATIC, 6, 84, 298, 70
+    LTEXT "", IDC_DISP_INFO, 12, 96, 286, 54
+    LTEXT "", IDC_DISP_LIMITS, 6, 160, 298, 24
+END
+
+IDD_KEEP DIALOGEX 0, 0, 220, 70
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Display Settings"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "", IDC_KEEP_TEXT, 10, 10, 200, 28
+    DEFPUSHBUTTON "Keep changes", IDOK, 50, 46, 60, 14
+    PUSHBUTTON "Revert", IDCANCEL, 116, 46, 60, 14
+END
+
+IDD_SAVER DIALOGEX 0, 0, 310, 190
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    LTEXT "Screen saver:", IDC_STATIC, 6, 6, 298, 10
+    CONTROL "", IDC_SAVER_LIST, "SysListView32", LVS_REPORT | LVS_SINGLESEL | LVS_SHOWSELALWAYS | LVS_NOCOLUMNHEADER | WS_BORDER | WS_TABSTOP, 6, 20, 140, 120
+    LTEXT "Wait:", IDC_SAVER_WAIT_LBL, 156, 22, 50, 10
+    COMBOBOX IDC_SAVER_WAIT, 208, 20, 90, 100, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON "Test", IDC_SAVER_TEST, 156, 44, 50, 14, WS_TABSTOP
+    PUSHBUTTON "Apply", IDC_SAVER_APPLY, 210, 44, 50, 14, WS_TABSTOP
+    LTEXT "The screen saver starts after the computer has been idle for the chosen time.", IDC_SAVER_NOTE, 156, 68, 148, 50
+END
