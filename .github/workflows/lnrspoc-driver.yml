@@ -1,6 +1,6 @@
 # Test-only build of the experimental Rust kernel driver lnrspoc.sys (+ symbols).
 #
-# Runs ONLY on leeway/exp-rust-poc (and manual dispatch). It does NOT touch the main
+# Runs ONLY on leeway/exp-rust-poc and leeway/exp-lrm-rs-kernel (and manual dispatch). It does NOT touch the main
 # build matrix or any main workflow. It configures the OS build with the Rust PoC
 # enabled (-DLIBERNT_ENABLE_RUST=ON) and the destructive test IOCTL compiled in
 # (-DLNRSPOC_TEST_IOCTLS=ON), builds ONLY the lnrspoc target, and publishes the driver
@@ -10,9 +10,11 @@ name: lnrspoc-driver (test-only)
 
 on:
   push:
-    branches: [leeway/exp-rust-poc]
+    branches: [leeway/exp-rust-poc, leeway/exp-lrm-rs-kernel]
     paths:
       - 'tools/rust-poc/**'
+      - 'sdk/cmake/rust.cmake'
+      - 'sdk/cmake/rust-build.cmake'
       - '.github/workflows/lnrspoc-driver.yml'
   workflow_dispatch:
 
@@ -26,7 +28,7 @@ permissions:
 jobs:
   lnrspoc:
     # Guard: never run on any other branch even if the file reaches one.
-    if: ${{ github.ref == 'refs/heads/leeway/exp-rust-poc' }}
+    if: ${{ github.ref == 'refs/heads/leeway/exp-rust-poc' || github.ref == 'refs/heads/leeway/exp-lrm-rs-kernel' }}
     runs-on: ubuntu-24.04
     steps:
       - name: Free disk space
@@ -45,11 +47,10 @@ jobs:
 
       - name: Install pinned Rust toolchain (for the lnrspoc staticlib)
         run: |
-          rustup toolchain install nightly-2026-05-24 --profile minimal \
-            --component rust-src --component llvm-tools
-          rustup override set nightly-2026-05-24
-          rustc --version --verbose
-          cargo --version
+          TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
+          rustup toolchain install "$TC" --profile minimal \
+            --component llvm-tools --target x86_64-pc-windows-gnu
+          rustc +"$TC" --version --verbose
 
       - name: Compute RosBE bootstrap SHA
         id: rosbe_spec

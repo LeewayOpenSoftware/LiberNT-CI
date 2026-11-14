@@ -18,7 +18,7 @@ POC="$(cd "$HERE/.." && pwd)"               # tools/rust-poc
 ITERS="${ITERS:-3000000}"
 CXX="${CXX:-g++}"
 CC="${CC:-gcc}"
-TC="nightly-2026-05-24"
+TC="1.97.1"
 
 STAGE="$(mktemp -d 2>/dev/null || echo "${TMPDIR:-/tmp}/graft-diff-$$")"
 mkdir -p "$STAGE/tools/rust-poc/src" "$STAGE/tools/rust-poc/difftest"

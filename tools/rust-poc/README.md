@@ -25,10 +25,9 @@ an experiment: **off by default, never on the ISO, ntoskrnl untouched.**
 ## Layout
 ```
 tools/rust-poc/
-  Cargo.toml  Cargo.lock      crate manifest (+ trim-paths, panic=abort)
-  rust-toolchain.toml         pinned nightly (exact date + components)
-  .cargo/config.toml          build-std + custom target + v0 mangling
-  targets/x86_64-unknown-libernt-kernel.json   custom kernel target spec
+  Cargo.toml  Cargo.lock      crate manifest (panic=abort, no registry dependencies)
+  rust-toolchain.toml         pinned stable toolchain (= LIBERNT_RUST_TOOLCHAIN)
+  .cargo/config.toml          plain `cargo build`: x86_64-pc-windows-gnu + v0 mangling
   src/lib.rs                  crate root (validator, CRC-32, panic->bugcheck, v2 exercisers)
   src/alloc_pool.rs           pool #[global_allocator] + fallible try_*/KBox + OOM probe
   src/sync.rs                 SpinLock<T> RAII over KSPIN_LOCK (IRQL raise/restore)
@@ -36,20 +35,38 @@ tools/rust-poc/
   tools/gen-ndk.sh            regenerate src/ndk.rs with bindgen (output is authoritative)
   include/leeway_rs_poc.h      C ABI contract (authoritative; cbindgen can regen)
   driver/lnrspoc.c             WDM host driver
-  CMakeLists.txt               builds staticlib (custom cargo) + driver; NO add_cd_file
+  CMakeLists.txt               add_rust_staticlib() + driver; NO add_cd_file
   .github/workflows/rust-poc-reproducible.yml   build-twice sha256 gate + static audits
 ```
 
 ## Toolchain pin (reproducibility)
-- Channel: **nightly-2026-05-24** (`1.98.0-nightly`, commit
-  `423e3d2529999d5e57fa0351783d1292b9219ad4`), components `rust-src`, `llvm-tools`.
-- Nightly is required: `-Zbuild-std` rebuilds `core`/`alloc`/`compiler_builtins` for the
-  custom target, and `-Zjson-target-spec` loads the target file. Both are unstable as of
-  2026. `alloc` is built from v2 on for the pool `#[global_allocator]`.
-- `profile.release` uses `panic="abort"`, `lto=true`, `codegen-units=1`, `opt-level="z"`,
-  and `trim-paths="all"` so two clean builds are byte-identical (verified: see
-  `kernel/RUST-POC-RESULTS.md`). Offline/air-gapped hosts: `cargo vendor` + `--offline
-  --frozen --locked` and a cached toolchain tarball.
+- One pinned **stable** release, `LIBERNT_RUST_TOOLCHAIN` in `sdk/cmake/rust.cmake` (today
+  **1.97.1**), mirrored in `rust-toolchain.toml`; CI fails if the two differ or if either names a
+  nightly or beta. Components: `llvm-tools`; target: `x86_64-pc-windows-gnu`.
+- Kernel staticlibs use the **built-in** `x86_64-pc-windows-gnu` target with the toolchain's
+  precompiled `core`/`alloc`. No `-Zbuild-std`, no custom target JSON, no `#![feature]`. The old
+  JSON target only changed the code model and the red zone, and neither matters for a
+  Windows x64 PE image (the Win64 ABI has no red zone).
+- `sdk/cmake/rust.cmake` checks the toolchain, target and llvm-tools at configure time and
+  defines `add_rust_staticlib()`. The build recipe is `sdk/cmake/rust-build.cmake` (a `cmake -P`
+  script, also run by CI):
+  - cargo runs `--locked --offline` with a private `CARGO_HOME`, so the user's cargo config
+    and the network are never used. A crate that needs a registry or git dependency fails.
+  - Every absolute path is remapped (`--remap-path-prefix`) and incremental builds are off.
+  - Only the crate's own objects go into the archive the kernel links. The bundled
+    `compiler_builtins` members are dropped, so runtime helpers come from the kernel's libraries.
+  - The build fails if those objects reference a symbol outside the target's
+    `ALLOWED_EXTERNS`, or contain x87, MMX or AVX code.
+  - It writes `lib<target>.a.sha256`.
+- Reproducible: the same crate built from two source locations into two work directories
+  gives byte-identical archives. CI (`reproducible-staticlib` job) checks this on every
+  change and runs two negative controls on the extern gate.
+- Vendoring: the kernel crates have no third-party dependencies, so there is nothing to
+  vendor. If one is ever added, vendor it under `tools/rust-poc/vendor` with `cargo vendor`
+  and add a `[source]` replacement; the `--offline` build enforces this.
+- `fuzz/` is the exception: cargo-fuzz needs nightly. It is host-only and never linked into
+  the kernel.
+- To bump: change both pins, run the reproducible job, and record the new hashes.
 
 ## Bugcheck code registry (Leeway, experimental)
 | Symbol | Value | Meaning | Reachable from |

@@ -11,7 +11,7 @@
 set -eu
 HERE="$(cd "$(dirname "$0")" && pwd)"
 CRATE="$(cd "$HERE/.." && pwd)"
-ITERS="${ITERS:-2000000}"; CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-nightly-2026-05-24}"
+ITERS="${ITERS:-2000000}"; CXX="${CXX:-g++}"; CC="${CC:-gcc}"; TC="${TC:-1.97.1}"
 NTSPECIAL_C="${NTSPECIAL_C:-$HERE/dw/nt/ntspecial.c}"
 SPECIAL_C="${SPECIAL_C:-$HERE/dw/special/special.c}"
 [ -f "$NTSPECIAL_C" ] || { echo "ntspecial.c not found: $NTSPECIAL_C" >&2; exit 2; }

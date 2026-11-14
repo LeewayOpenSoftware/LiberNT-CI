@@ -7,7 +7,7 @@
 # RIG    a LiberNT checkout holding sdk/lib/fslib/ntfslib_new (and lntexpandstorage)
 # ITERS  generated cases per seed (default 1000000)
 # SEEDS  generator seeds (default "1 0x1234 0xdeadbeef"; the rig makes each odd)
-# TC     Rust toolchain (default nightly-2026-05-24)
+# TC     Rust toolchain (default 1.97.1)
 #
 # The crate is built outside tools/rust-poc, whose .cargo config targets the kernel.
 # Passes only when the rig reports ntfslib, model and rust and zero mismatches for
@@ -18,7 +18,7 @@ CRATE="$(cd "$HERE/.." && pwd)"
 RIG="${RIG:?set RIG to a LiberNT checkout with sdk/lib/fslib/ntfslib_new}"
 ITERS="${ITERS:-1000000}"
 SEEDS="${SEEDS:-1 0x1234 0xdeadbeef}"
-TC="${TC:-nightly-2026-05-24}"
+TC="${TC:-1.97.1}"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT

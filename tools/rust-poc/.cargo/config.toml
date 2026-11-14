@@ -1,12 +1,6 @@
-# no_std freestanding kernel-mode staticlib: rebuild core + alloc + compiler_builtins for
-# our custom target. `alloc` is needed from v2 on for the pool #[global_allocator]; the
-# crate uses only the fallible allocation surface, never an infallible alloc path.
-[unstable]
-build-std = ["core", "alloc", "compiler_builtins"]
-build-std-features = ["compiler-builtins-mem"]
-json-target-spec = true
-
+# Plain `cargo build` here builds the kernel staticlib for the built-in Windows GNU target.
+# The CMake build does not use this file: sdk/cmake/rust-build.cmake passes every setting itself.
 [build]
-target = "targets/x86_64-unknown-libernt-kernel.json"
+target = "x86_64-pc-windows-gnu"
 # v0 mangling so KD/WinDbg can demangle internal Rust frames.
 rustflags = ["-Csymbol-mangling-version=v0"]
