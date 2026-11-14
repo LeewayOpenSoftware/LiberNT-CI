@@ -216,11 +216,11 @@ VfpIsDeadlockRuleFatal(
         case VF_DEADLOCK_HIERARCHY:
             return FALSE;
         case VF_DEADLOCK_WRONG_THREAD:
-            return FALSE;
+            return TRUE;
         case VF_DEADLOCK_UNACQUIRED:
             return FALSE;
         case VF_DEADLOCK_DELETED_OWNED:
-            return FALSE;
+            return TRUE;
         default:
             return FALSE;
     }

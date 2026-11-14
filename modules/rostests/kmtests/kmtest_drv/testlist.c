@@ -368,7 +368,10 @@ KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
 KMT_TESTFUNC Test_MmDriverVerifier;
 KMT_TESTFUNC Test_MmDriverVerifierCompletePending;
+KMT_TESTFUNC Test_MmDriverVerifierIrpCancelRoutine;
+KMT_TESTFUNC Test_MmDriverVerifierIrpFreeInUse;
 KMT_TESTFUNC Test_MmDriverVerifierIrpQueuedBelow;
+KMT_TESTFUNC Test_MmDriverVerifierIrpReuseInUse;
 KMT_TESTFUNC Test_MmDriverVerifierIrpStress;
 KMT_TESTFUNC Test_MmDriverVerifierIrpTracking;
 KMT_TESTFUNC Test_MmDriverVerifierLeak;
@@ -841,7 +844,10 @@ const KMT_TEST TestList[] =
     { "MmSelfMap",                          Test_MmSelfMap },
     { "MmDriverVerifier",                   Test_MmDriverVerifier },
     { "-MmDriverVerifierCompletePending",   Test_MmDriverVerifierCompletePending },
+    { "-MmDriverVerifierIrpCancelRoutine",  Test_MmDriverVerifierIrpCancelRoutine },
+    { "-MmDriverVerifierIrpFreeInUse",      Test_MmDriverVerifierIrpFreeInUse },
     { "-MmDriverVerifierIrpQueuedBelow",    Test_MmDriverVerifierIrpQueuedBelow },
+    { "-MmDriverVerifierIrpReuseInUse",     Test_MmDriverVerifierIrpReuseInUse },
     { "-MmDriverVerifierIrpStress",         Test_MmDriverVerifierIrpStress },
     { "-MmDriverVerifierIrpTracking",       Test_MmDriverVerifierIrpTracking },
     { "-MmDriverVerifierLeak",              Test_MmDriverVerifierLeak },
