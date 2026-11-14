@@ -147,6 +147,7 @@ GetErrorCodeFromCrCode(const IN CONFIGRET cr)
     case CR_NO_SUCH_VALUE:        return ERROR_FILE_NOT_FOUND;
     case CR_OUT_OF_MEMORY:        return ERROR_NOT_ENOUGH_MEMORY;
     case CR_REGISTRY_ERROR:       return ERROR_GEN_FAILURE;
+    case CR_REMOVE_VETOED:        return ERROR_BUSY;
     case CR_ALREADY_SUCH_DEVINST: return ERROR_DEVINST_ALREADY_EXISTS;
     case CR_SUCCESS:              return ERROR_SUCCESS;
     default:                      return ERROR_GEN_FAILURE;

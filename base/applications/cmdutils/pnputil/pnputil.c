@@ -1188,7 +1188,15 @@ CommandDevice(
     if (!Result)
     {
         Error = GetLastError();
-        PrintError(Failure, Error);
+        if (Error == ERROR_BUSY)
+        {
+            ConPrintf(StdOut, L"%ls: the removal was vetoed; the device is in use or cannot be disabled.\n",
+                      Failure);
+        }
+        else
+        {
+            PrintError(Failure, Error);
+        }
     }
     else if (!NeedReboot)
     {
