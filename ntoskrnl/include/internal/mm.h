@@ -980,6 +980,18 @@ NTAPI
 MmFreeSpecialPool(
     IN PVOID P);
 
+SIZE_T
+NTAPI
+MmQuerySpecialPoolBlockSize(
+    IN PVOID P);
+
+VOID
+NTAPI
+MiCheckSpecialPoolFault(
+    IN PVOID Address,
+    IN BOOLEAN Write,
+    IN PVOID TrapInformation OPTIONAL);
+
 /* mm.c **********************************************************************/
 
 NTSTATUS

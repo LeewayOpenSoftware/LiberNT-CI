@@ -213,6 +213,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heaplarge.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/heap/heapdebug.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/track/tagtable.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/special/special.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exinit.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exalloc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/nvs/pool/ex/exfree.c

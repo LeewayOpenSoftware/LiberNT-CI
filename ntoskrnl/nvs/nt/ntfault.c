@@ -185,6 +185,9 @@ MmAccessFaultEx(
     if (MiArchIsSelfMapAddress((ULONG64)(ULONG_PTR)Address))
         return STATUS_ACCESS_VIOLATION;
 
+    if (Mode == KernelMode && MI_IS_SYSTEM_VA(Address))
+        MiCheckSpecialPoolFault(Address, (BOOLEAN)(Access == MiFaultWrite), TrapInformation);
+
     if (KeGetCurrentIrql() > APC_LEVEL)
     {
         ULONG64 Physical;

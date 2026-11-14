@@ -609,6 +609,7 @@ MiInitializePhase0(
     MiReportPhysicalRuns();
     MiInitializeLoadedModuleList(LoaderBlock);
     MiReportBootImages(LoaderBlock);
+    MiInitializeSpecialPool();
 }
 
 BOOLEAN
