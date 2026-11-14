@@ -15,6 +15,16 @@
 #undef UNIMPLEMENTED
 #define UNIMPLEMENTED KdpDprintf("%s is unimplemented\n", __FUNCTION__)
 
+/* HAL export (hal.spec, win64): PCI configuration read that never waits for the configuration lock */
+ULONG
+NTAPI
+HalpKdReadPciConfig(
+    _In_ ULONG BusNumber,
+    _In_ ULONG SlotNumber,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Offset,
+    _In_ ULONG Length);
+
 /* FUNCTIONS *****************************************************************/
 
 static
@@ -173,8 +183,31 @@ KdpSysReadBusData(
     _In_ ULONG Length,
     _Out_ PULONG ActualLength)
 {
-    UNIMPLEMENTED;
-    return STATUS_UNSUCCESSFUL;
+    ULONG Read;
+
+    /* A processor frozen by NMI may hold a HAL bus lock: a stopped machine only reads PCI, and never waits on its lock */
+    if (KdEnteredDebugger)
+    {
+        if (BusDataType != PCIConfiguration)
+        {
+            *ActualLength = 0;
+            return STATUS_DEVICE_BUSY;
+        }
+
+        Read = HalpKdReadPciConfig(BusNumber, SlotNumber, Buffer, Offset, Length);
+        if (Read == MAXULONG)
+        {
+            *ActualLength = 0;
+            return STATUS_DEVICE_BUSY;
+        }
+    }
+    else
+    {
+        Read = HalGetBusDataByOffset(BusDataType, BusNumber, SlotNumber, Buffer, Offset, Length);
+    }
+
+    *ActualLength = Read;
+    return (Read != 0) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
 
 NTSTATUS
@@ -188,8 +221,15 @@ KdpSysWriteBusData(
     _In_ ULONG Length,
     _Out_ PULONG ActualLength)
 {
-    UNIMPLEMENTED;
-    return STATUS_UNSUCCESSFUL;
+    /* A write takes a HAL bus lock a frozen processor may hold: a stopped machine refuses rather than hangs */
+    if (KdEnteredDebugger)
+    {
+        *ActualLength = 0;
+        return STATUS_DEVICE_BUSY;
+    }
+
+    *ActualLength = HalSetBusDataByOffset(BusDataType, BusNumber, SlotNumber, Buffer, Offset, Length);
+    return (*ActualLength != 0) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
 
 /* KdpSysReadControlSpace/KdpSysWriteControlSpace live in kd64/kdcontrol.c,
@@ -313,8 +353,10 @@ NTSTATUS
 NTAPI
 KdpSysCheckLowMemory(IN ULONG Flags)
 {
-    UNIMPLEMENTED;
-    return STATUS_UNSUCCESSFUL;
+    UNREFERENCED_PARAMETER(Flags);
+
+    /* /NOLOWMEM is not honoured, so no pattern below 4 GB can have been corrupted */
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
