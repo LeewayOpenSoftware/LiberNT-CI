@@ -63,7 +63,29 @@ pool2-decoded 4 / leak 1 / no-leak 1). **Negative control:** perturbing the Rust
 -> 49 disagreements. Vendored `vf/dw/vfpool.c` (provenance `feat/special-pool 5f5f92ed47a`). Both
 verifier differentials are chained from `run-lrm-diff.sh`, so the `lrm-equivalence` CI job runs them.
 
-## Stage 1b — VerifyDrivers / verifier APIs (NEXT)
-`ntdrvmgmt.c`: `MmIsVerifierEnabled`, `MmIsDriverVerifying`, `MmAddVerifierThunks` (buffer
-validation), `MiIsVerifiedDriverName` (name-list parse + `*`), the level computation in
-`MiInitializeDriverVerifier`.
+## Stage 1b — VerifyDrivers / verifier APIs (DONE)
+`vf.rs` mirrors `ntdrvmgmt.c`:
+- `MmIsVerifierEnabled`: active -> `(level, STATUS_SUCCESS)`; else `(0, STATUS_NOT_SUPPORTED)`.
+- `MmIsDriverVerifying`: no LDR section -> FALSE; else `Flags & LDRP_IMAGE_VERIFYING`.
+- `MmAddVerifierThunks` validation: list not initialised -> `STATUS_NOT_SUPPORTED`; zero thunk count
+  -> `STATUS_INVALID_PARAMETER_1`; module-lookup failure / `LoadedImports == -1` / a PristineRoutine
+  outside the module -> `STATUS_INVALID_PARAMETER_2`; else `STATUS_SUCCESS`.
+- `MiInitializeDriverVerifier` level: empty VerifyDrivers -> not enabled; else
+  `Level = (MmVerifyDriverLevel == -1 ? IMPLEMENTED : MmVerifyDriverLevel) & IMPLEMENTED`, clear
+  SPECIAL_POOLING if special pool is off; `Level == 0` -> not enabled, else enabled at that level.
+  **Pinned at `5f5f92ed47a`, where `MI_VERIFIER_IMPLEMENTED_LEVEL = 0x9`** (SPECIAL_POOLING |
+  TRACK_POOL_ALLOCATIONS). At the later head the mask broadened to add IO_CHECKING |
+  DEADLOCK_DETECTION — deferred with those unstable stages.
+- `MiIsVerifiedDriverName`: space/tab/comma/semicolon-separated list, lone `*` matches all, otherwise
+  case-insensitive (ASCII) name equality.
+
+**Full-stack differential** (`vf/run-lrm-vf1b.sh`): compiles `ntdrvmgmt.c` UNMODIFIED against the
+host stub (`vf/nt1bstub/`), with `MiLookupDataTableEntry` / `MiIsSpecialPoolEnabled` harness-
+controlled. Drives `MmIsDriverVerifying`, `MmAddVerifierThunks` (all five status outcomes),
+`MiInitializeDriverVerifier` (level read back via `MmVerifierData.Level` against a sentinel), and
+`MmIsVerifierEnabled` in both the inactive (pre-init) and active (post-init) states. Latest:
+**44 checks, 0 disagreements** (status S/NS/IP1/IP2 all hit, both booleans), plus the Rust
+name-matcher unit-checked 10/10 (the C `MiIsVerifiedDriverName` is `static`, reached only via
+`MiVerifyLoadedImage`, so it is unit-checked here rather than differentially). **Negative control**
+(perturbed Rust level / flags / module range) -> 19 disagreements. Vendored `vf/dw/ntdrvmgmt.c`
+(provenance `feat/special-pool 5f5f92ed47a`). Chained from `run-lrm-diff.sh`.
