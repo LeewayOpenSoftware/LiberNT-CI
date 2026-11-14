@@ -3009,40 +3009,48 @@ PipSetRemovalVeto(
 
 /* Takes the children that are already removed off a node that is about to be
  * removed. They are not part of the removal, so nothing else unlinks them, and
- * a child must not stay linked to a parent node that is freed. A child whose
- * device object is already being deleted unlinks itself. */
+ * a child must not stay linked to a parent node that is freed. The node of a
+ * removed child is freed only after it was unlinked, with the tree resource
+ * held exclusive; so with that resource held here every child still on the
+ * list exists, also one whose device object is already being deleted. When
+ * such a child unlinks itself later, it finds that it has no parent. */
 static
 VOID
 PipUnlinkRemovedChildren(
     _In_ PDEVICE_NODE Node)
 {
-    PDEVICE_NODE Child;
-    PDEVICE_OBJECT ChildObject;
+    PDEVICE_NODE Child, Next, Previous = NULL;
+    KIRQL OldIrql;
 
-    for (;;)
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&IopDeviceTreeResource, TRUE);
+    KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+
+    for (Child = Node->Child; Child != NULL; Child = Next)
     {
-        ChildObject = NULL;
+        Next = Child->Sibling;
 
-        KeEnterCriticalRegion();
-        ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
-        for (Child = Node->Child; Child != NULL; Child = Child->Sibling)
+        if (!PipIsRemovedChild(Child))
         {
-            if ((Child->State == DeviceNodeRemoved || Child->State == DeviceNodeDeleted) &&
-                ObReferenceObjectSafe(Child->PhysicalDeviceObject))
-            {
-                ChildObject = Child->PhysicalDeviceObject;
-                break;
-            }
+            Previous = Child;
+            continue;
         }
-        ExReleaseResourceLite(&IopDeviceTreeResource);
-        KeLeaveCriticalRegion();
 
-        if (ChildObject == NULL)
-            break;
+        if (Previous != NULL)
+            Previous->Sibling = Next;
+        else
+            Node->Child = Next;
 
-        PiUnlinkDevNode(Child);
-        ObDereferenceObject(ChildObject);
+        if (Node->LastChild == Child)
+            Node->LastChild = Previous;
+
+        Child->Parent = NULL;
+        Child->Sibling = NULL;
     }
+
+    KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 }
 
 static
