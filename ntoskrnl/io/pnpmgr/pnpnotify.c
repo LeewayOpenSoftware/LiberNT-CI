@@ -26,6 +26,13 @@ LIST_ENTRY PiNotifyHwProfileListHead;
 _Guarded_by_(PiNotifyDeviceInterfaceLock)
 LIST_ENTRY PiNotifyDeviceInterfaceListHead;
 
+/* Device-interface notifications raised from inside a callback wait here and are drained by the
+ * outermost delivery, so a callback is never entered while another is running. */
+_Guarded_by_(PiNotifyDeviceInterfaceLock)
+static LIST_ENTRY PiPendingDeviceInterfaceNotifications;
+_Guarded_by_(PiNotifyDeviceInterfaceLock)
+static BOOLEAN PiDeviceInterfaceNotifyActive = FALSE;
+
 /* TYPES *********************************************************************/
 
 typedef struct _PNP_NOTIFY_ENTRY
@@ -58,6 +65,14 @@ typedef struct _PNP_NOTIFY_ACTIVE_CALLBACK
     PKTHREAD Thread;
 } PNP_NOTIFY_ACTIVE_CALLBACK, *PPNP_NOTIFY_ACTIVE_CALLBACK;
 
+typedef struct _PI_PENDING_INTERFACE_NOTIFICATION
+{
+    LIST_ENTRY ListEntry;
+    GUID Event;
+    GUID InterfaceClassGuid;
+    UNICODE_STRING SymbolicLinkName;
+} PI_PENDING_INTERFACE_NOTIFICATION, *PPI_PENDING_INTERFACE_NOTIFICATION;
+
 /* FUNCTIONS *****************************************************************/
 
 CODE_SEG("INIT")
@@ -69,6 +84,7 @@ PiInitializeNotifications(VOID)
     KeInitializeGuardedMutex(&PiNotifyDeviceInterfaceLock);
     InitializeListHead(&PiNotifyHwProfileListHead);
     InitializeListHead(&PiNotifyDeviceInterfaceListHead);
+    InitializeListHead(&PiPendingDeviceInterfaceNotifications);
 }
 
 static
@@ -176,6 +192,39 @@ PiProcessSingleNotification(
     PiDereferencePnpNotifyEntry(Entry);
 }
 
+/* Delivers one device-interface notification to every matching registration. The caller holds
+ * PiNotifyDeviceInterfaceLock; PiProcessSingleNotification drops and retakes it around each callback. */
+CODE_SEG("PAGE")
+static
+VOID
+PiDeliverDeviceInterfaceNotification(
+    _In_ LPCGUID Event,
+    _In_ LPCGUID InterfaceClassGuid,
+    _In_ PUNICODE_STRING SymbolicLinkName)
+{
+    DEVICE_INTERFACE_CHANGE_NOTIFICATION notifyStruct = {
+        .Version = 1,
+        .Size = sizeof(DEVICE_INTERFACE_CHANGE_NOTIFICATION),
+        .Event = *Event,
+        .InterfaceClassGuid = *InterfaceClassGuid,
+        .SymbolicLinkName = SymbolicLinkName
+    };
+    PLIST_ENTRY entry = PiNotifyDeviceInterfaceListHead.Flink;
+
+    while (entry != &PiNotifyDeviceInterfaceListHead)
+    {
+        PPNP_NOTIFY_ENTRY nEntry = CONTAINING_RECORD(entry, PNP_NOTIFY_ENTRY, PnpNotifyList);
+
+        if (!IsEqualGUID(&notifyStruct.InterfaceClassGuid, &nEntry->Guid))
+        {
+            entry = entry->Flink;
+            continue;
+        }
+
+        PiProcessSingleNotification(nEntry, &notifyStruct, &PiNotifyDeviceInterfaceLock, &entry);
+    }
+}
+
 /**
  * @brief      Delivers the event to all drivers subscribed to
  *             EventCategoryDeviceInterfaceChange
@@ -193,41 +242,56 @@ PiNotifyDeviceInterfaceChange(
 {
     PAGED_CODE();
 
-    PDEVICE_INTERFACE_CHANGE_NOTIFICATION notifyStruct;
-    notifyStruct = ExAllocatePoolWithTag(PagedPool, sizeof(*notifyStruct), TAG_PNP_NOTIFY);
-    if (!notifyStruct)
+    KeAcquireGuardedMutex(&PiNotifyDeviceInterfaceLock);
+
+    /* A notification raised from inside a running callback is queued and delivered by the outermost
+     * call once that callback returns, so callbacks are serialized and never re-entered. */
+    if (PiDeviceInterfaceNotifyActive)
     {
+        PPI_PENDING_INTERFACE_NOTIFICATION pending =
+            ExAllocatePoolWithTag(PagedPool, sizeof(*pending), TAG_PNP_NOTIFY);
+        if (pending)
+        {
+            pending->Event = *Event;
+            pending->InterfaceClassGuid = *InterfaceClassGuid;
+            pending->SymbolicLinkName.Length = SymbolicLinkName->Length;
+            pending->SymbolicLinkName.MaximumLength = SymbolicLinkName->Length + sizeof(UNICODE_NULL);
+            pending->SymbolicLinkName.Buffer =
+                ExAllocatePoolWithTag(PagedPool, pending->SymbolicLinkName.MaximumLength, TAG_PNP_NOTIFY);
+            if (pending->SymbolicLinkName.Buffer)
+            {
+                RtlCopyMemory(pending->SymbolicLinkName.Buffer, SymbolicLinkName->Buffer, SymbolicLinkName->Length);
+                pending->SymbolicLinkName.Buffer[SymbolicLinkName->Length / sizeof(WCHAR)] = UNICODE_NULL;
+                InsertTailList(&PiPendingDeviceInterfaceNotifications, &pending->ListEntry);
+            }
+            else
+            {
+                ExFreePoolWithTag(pending, TAG_PNP_NOTIFY);
+            }
+        }
+        KeReleaseGuardedMutex(&PiNotifyDeviceInterfaceLock);
         return;
     }
 
-    *notifyStruct = (DEVICE_INTERFACE_CHANGE_NOTIFICATION) {
-        .Version = 1,
-        .Size = sizeof(DEVICE_INTERFACE_CHANGE_NOTIFICATION),
-        .Event = *Event,
-        .InterfaceClassGuid = *InterfaceClassGuid,
-        .SymbolicLinkName = SymbolicLinkName
-    };
-
     DPRINT("Delivering a DeviceInterfaceChange PnP event\n");
 
-    KeAcquireGuardedMutex(&PiNotifyDeviceInterfaceLock);
+    PiDeviceInterfaceNotifyActive = TRUE;
+    PiDeliverDeviceInterfaceNotification(Event, InterfaceClassGuid, SymbolicLinkName);
 
-    PLIST_ENTRY entry = PiNotifyDeviceInterfaceListHead.Flink;
-    while (entry != &PiNotifyDeviceInterfaceListHead)
+    while (!IsListEmpty(&PiPendingDeviceInterfaceNotifications))
     {
-        PPNP_NOTIFY_ENTRY nEntry = CONTAINING_RECORD(entry, PNP_NOTIFY_ENTRY, PnpNotifyList);
+        PLIST_ENTRY e = RemoveHeadList(&PiPendingDeviceInterfaceNotifications);
+        PPI_PENDING_INTERFACE_NOTIFICATION queued =
+            CONTAINING_RECORD(e, PI_PENDING_INTERFACE_NOTIFICATION, ListEntry);
 
-        if (!IsEqualGUID(&notifyStruct->InterfaceClassGuid, &nEntry->Guid))
-        {
-            entry = entry->Flink;
-            continue;
-        }
-
-        PiProcessSingleNotification(nEntry, notifyStruct, &PiNotifyDeviceInterfaceLock, &entry);
+        PiDeliverDeviceInterfaceNotification(&queued->Event, &queued->InterfaceClassGuid,
+                                             &queued->SymbolicLinkName);
+        ExFreePoolWithTag(queued->SymbolicLinkName.Buffer, TAG_PNP_NOTIFY);
+        ExFreePoolWithTag(queued, TAG_PNP_NOTIFY);
     }
 
+    PiDeviceInterfaceNotifyActive = FALSE;
     KeReleaseGuardedMutex(&PiNotifyDeviceInterfaceLock);
-    ExFreePoolWithTag(notifyStruct, TAG_PNP_NOTIFY);
 }
 
 

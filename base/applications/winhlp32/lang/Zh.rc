@@ -55,7 +55,7 @@ MAIN_MENU MENU
  }
  POPUP "帮助(&H)" {
    MENUITEM "如何使用帮助(&O)", MNID_HELP_HELPON
-   MENUITEM "关于 Wine 帮助(&I)...", MNID_HELP_ABOUT
+   MENUITEM "关于 LiberNT 帮助(&I)...", MNID_HELP_ABOUT
  }
 }
 
@@ -141,7 +141,7 @@ MAIN_MENU MENU
  }
  POPUP "說明(&H)" {
    MENUITEM "如何使用說明(&H)", MNID_HELP_HELPON
-   MENUITEM "關於 Wine 說明(&A)", MNID_HELP_ABOUT
+   MENUITEM "關於 LiberNT 說明(&A)", MNID_HELP_ABOUT
  }
 }
 

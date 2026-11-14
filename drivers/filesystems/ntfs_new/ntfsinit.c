@@ -1153,6 +1153,5 @@ NtfsFsdCleanup(_In_ PDEVICE_OBJECT VolumeDeviceObject,
 
     Irp->IoStatus.Information = STATUS_SUCCESS;
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
-    NtfsReleaseDismountedVolume(VolumeDeviceObject);
     return STATUS_SUCCESS;
 }

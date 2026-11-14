@@ -1691,14 +1691,12 @@ KeSetPriorityThread(IN PKTHREAD Thread,
         KPRIORITY OldFloor = Thread->RealtimePriorityFloor;
         KPRIORITY NewFloor;
 
-        Priority = max(Priority, Thread->BasePriority);
+        /* Only a realtime request sets a floor; a request below it is the run-time priority itself, base or not */
         NewFloor = (Priority >= LOW_REALTIME_PRIORITY) ? Priority : HIGH_PRIORITY + 1;
         KiUpdatePriorityFloor(Thread,
                              OldFloor <= HIGH_PRIORITY ? OldFloor : 0,
                              NewFloor <= HIGH_PRIORITY ? NewFloor : 0);
         Thread->RealtimePriorityFloor = NewFloor;
-        if (NewFloor <= HIGH_PRIORITY)
-            Priority = Thread->BasePriority;
     }
 #endif
 

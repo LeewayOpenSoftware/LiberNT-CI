@@ -84,7 +84,7 @@ BEGIN
     END
     POPUP "P&omoć"
     BEGIN
-        MENUITEM "&O Wine WordPad-u",      ID_ABOUT
+        MENUITEM "&O LiberNT WordPad-u",      ID_ABOUT
     END
 END
 

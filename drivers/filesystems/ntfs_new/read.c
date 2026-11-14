@@ -514,13 +514,17 @@ NtfsFsdRead(_In_ PDEVICE_OBJECT VolumeDeviceObject,
        VPB_MOUNTED; only the old VCB reaches this check.  The CCB that
        issued the dismount (a locked volume DASD handle) is exempt, exactly
        as in the block-I/O path, so format/chkdsk-style raw volume I/O on
-       that handle keeps working. */
+       that handle keeps working.  So are paging reads after autochk
+       dismounted the boot volume in the BootExecute window: the images
+       already running page in from it until autochk restarts. */
     if (VolumeDeviceObject != NtfsDiskFileSystemDeviceObject &&
         ((PVolumeContextBlock)VolumeDeviceObject->DeviceExtension)->Dismounted)
     {
         PFileContextBlock FileCB =
             NtfsGetFileContext(IoGetCurrentIrpStackLocation(Irp)->FileObject);
-        if (FileCB == NULL || !FileCB->DismountedVolume)
+        if ((FileCB == NULL || !FileCB->DismountedVolume) &&
+            !NtfsServesPagingAfterDismount(
+                (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension, Irp))
         {
             Irp->IoStatus.Status = STATUS_VOLUME_DISMOUNTED;
             Irp->IoStatus.Information = 0;

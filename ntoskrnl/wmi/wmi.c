@@ -9,6 +9,7 @@
 /* INCLUDES *****************************************************************/
 
 #include <ntoskrnl.h>
+#include <ntwmi.h>
 #define INITGUID
 #include <wmiguid.h>
 #include <wmidata.h>
@@ -18,8 +19,6 @@
 
 #define NDEBUG
 #include <debug.h>
-
-typedef PVOID PWMI_LOGGER_INFORMATION; // FIXME
 
 typedef struct _WMIP_EVENT_DELIVERY
 {
@@ -189,11 +188,17 @@ IoWMIWriteEvent(_Inout_ PVOID WnodeEventItem)
     DPRINT1("IoWMIWriteEvent() called for WnodeEventItem %p (Flags = 0x%08lx), returning success\n",
             WnodeEventItem, Header->Flags);
 
+    /* A traced event goes to the session its handle names and the buffer stays the caller's; the session lookup
+     * takes a push lock, so above APC_LEVEL (a DPC) the event is dropped until the loggers take events there */
     if (Header->Flags & WNODE_FLAG_TRACED_GUID)
     {
-        // Never free WnodeEventItem in this case.
-        DPRINT("IoWMIWriteEvent(): Flags has WNODE_FLAG_TRACED_GUID\n");
-        return STATUS_SUCCESS;
+        if (KeGetCurrentIrql() > APC_LEVEL)
+            return STATUS_SUCCESS;
+
+        return EtwpTraceClassicEvent((HANDLE)(ULONG_PTR)Header->HistoricalContext,
+                                     ((PEVENT_TRACE_HEADER)Header)->Size,
+                                     Header,
+                                     KernelMode);
     }
 
     Delivery = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*Delivery), 'eimW');
@@ -675,7 +680,7 @@ IoWMIDeviceObjectToInstanceName(IN PVOID DataBlockObject,
 }
 
 /*
- * @unimplemented
+ * @implemented
  */
 NTSTATUS
 NTAPI
@@ -685,35 +690,144 @@ WmiQueryTraceInformation(IN TRACE_INFORMATION_CLASS TraceInformationClass,
                          OUT PULONG RequiredLength OPTIONAL,
                          IN PVOID Buffer OPTIONAL)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    static const UNICODE_STRING GlobalLoggerName = RTL_CONSTANT_STRING(GLOBAL_LOGGER_NAMEW);
+    PETW_TRACE_SESSION_SETTINGS Settings;
+    WMI_LOGGER_INFORMATION Info;
+    ULONG LoggerIds[MAXLOGGERS];
+    PUNICODE_STRING Name;
+    PTRACEHANDLE Handles;
+    ULONG Needed, LoggerId, Logged, Count, i;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (TraceInformation == NULL) return STATUS_INVALID_PARAMETER;
+
+    switch (TraceInformationClass)
+    {
+        case TraceIdClass:
+        case TraceEnableFlagsClass:
+        case TraceEnableLevelClass:
+        case LoggerEventsLostClass:
+        case LoggerEventsLoggedClass:
+            Needed = sizeof(ULONG);
+            break;
+
+        case TraceHandleClass:
+        case GlobalLoggerHandleClass:
+        case AllLoggerHandlesClass:
+        case TraceHandleByNameClass:
+            Needed = sizeof(TRACEHANDLE);
+            break;
+
+        case TraceSessionSettingsClass:
+            Needed = sizeof(ETW_TRACE_SESSION_SETTINGS);
+            break;
+
+        default:
+            /* TODO: the event logger handle and the notify routines the system keeps for itself */
+            return STATUS_INVALID_INFO_CLASS;
+    }
+
+    if (RequiredLength != NULL) *RequiredLength = Needed;
+    if (TraceInformationLength < Needed) return STATUS_INFO_LENGTH_MISMATCH;
+
+    switch (TraceInformationClass)
+    {
+        case TraceIdClass:
+        case TraceEnableFlagsClass:
+        case TraceEnableLevelClass:
+            if (Buffer == NULL) return STATUS_INVALID_PARAMETER_MIX;
+
+            LoggerId = EtwpLoggerIdFromTraceHandle(((PWNODE_HEADER)Buffer)->HistoricalContext);
+            if (!NT_SUCCESS(EtwpQueryLoggerById(LoggerId, NULL, NULL))) return STATUS_INVALID_HANDLE;
+
+            if (TraceInformationClass == TraceIdClass)
+            {
+                *(PULONG)TraceInformation = LoggerId;
+            }
+            else
+            {
+                /* TODO: the enable flags and level a provider was turned on with */
+                *(PULONG)TraceInformation = 0;
+            }
+            return STATUS_SUCCESS;
+
+        case TraceHandleClass:
+            if (Buffer == NULL) return STATUS_INVALID_PARAMETER_MIX;
+
+            LoggerId = *(PULONG)Buffer;
+            if (!NT_SUCCESS(EtwpQueryLoggerById(LoggerId, NULL, NULL))) return STATUS_INVALID_HANDLE;
+
+            *(PTRACEHANDLE)TraceInformation = EtwpTraceHandleFromLoggerId(LoggerId);
+            return STATUS_SUCCESS;
+
+        case GlobalLoggerHandleClass:
+            if (!NT_SUCCESS(EtwpFindLoggerByName(&GlobalLoggerName, &LoggerId))) return STATUS_NOT_FOUND;
+
+            *(PTRACEHANDLE)TraceInformation = EtwpTraceHandleFromLoggerId(LoggerId);
+            return STATUS_SUCCESS;
+
+        case AllLoggerHandlesClass:
+            Count = EtwpEnumerateLoggers(LoggerIds, RTL_NUMBER_OF(LoggerIds));
+            if (RequiredLength != NULL) *RequiredLength = Count * sizeof(TRACEHANDLE);
+
+            Handles = TraceInformation;
+            for (i = 0; i < Count && i < TraceInformationLength / sizeof(TRACEHANDLE); i++)
+            {
+                Handles[i] = EtwpTraceHandleFromLoggerId(LoggerIds[i]);
+            }
+            return (i < Count) ? STATUS_MORE_ENTRIES : STATUS_SUCCESS;
+
+        case TraceHandleByNameClass:
+            if (Buffer == NULL) return STATUS_INVALID_PARAMETER_MIX;
+
+            Name = Buffer;
+            if (Name->Length == 0 || Name->Buffer == NULL) return STATUS_INVALID_PARAMETER;
+            if (!NT_SUCCESS(EtwpFindLoggerByName(Name, &LoggerId))) return STATUS_INVALID_PARAMETER;
+
+            *(PTRACEHANDLE)TraceInformation = EtwpTraceHandleFromLoggerId(LoggerId);
+            return STATUS_SUCCESS;
+
+        case LoggerEventsLostClass:
+        case LoggerEventsLoggedClass:
+            if (Buffer == NULL) return STATUS_INVALID_PARAMETER_MIX;
+
+            Status = EtwpQueryLoggerById(*(PULONG)Buffer, &Info, &Logged);
+            if (!NT_SUCCESS(Status)) return STATUS_INVALID_HANDLE;
+
+            *(PULONG)TraceInformation = (TraceInformationClass == LoggerEventsLostClass) ? Info.EventsLost : Logged;
+            return STATUS_SUCCESS;
+
+        case TraceSessionSettingsClass:
+            if (Buffer == NULL) return STATUS_INVALID_PARAMETER_MIX;
+
+            LoggerId = EtwpLoggerIdFromTraceHandle(*(PTRACEHANDLE)Buffer);
+            Status = EtwpQueryLoggerById(LoggerId, &Info, NULL);
+            if (!NT_SUCCESS(Status)) return STATUS_INVALID_HANDLE;
+
+            Settings = TraceInformation;
+            Settings->Version = 1;
+            Settings->BufferSize = Info.BufferSize;
+            Settings->MinimumBuffers = Info.MinimumBuffers;
+            Settings->MaximumBuffers = Info.MaximumBuffers;
+            Settings->LoggerMode = Info.LogFileMode;
+            Settings->FlushTimer = Info.FlushTimer;
+            Settings->FlushThreshold = (ULONG)Info.FlushThreshold;
+            Settings->ClockType = Info.Wnode.ClientContext;
+            return STATUS_SUCCESS;
+
+        default:
+            return STATUS_INVALID_INFO_CLASS;
+    }
 }
 
 /*
- * @unimplemented
- */
-NTSTATUS
-__cdecl
-WmiTraceMessage(IN TRACEHANDLE LoggerHandle,
-                IN ULONG MessageFlags,
-                IN LPGUID MessageGuid,
-                IN USHORT MessageNumber,
-                IN ...)
-{
-    UNREFERENCED_PARAMETER(LoggerHandle);
-    UNREFERENCED_PARAMETER(MessageFlags);
-    /*
-     * Diagnostic: surface classic-WPP DoTraceMessage output (the trace-point
-     * GUID + message number) so otherwise-silent WPP-instrumented drivers
-     * (e.g. viogpudo.sys) reveal their init progress in the serial log.
-     */
-    DbgPrint("WPPTRACE: guid=%08lX msg=%u\n",
-             MessageGuid ? MessageGuid->Data1 : 0, MessageNumber);
-    return STATUS_SUCCESS;
-}
-
-/*
- * @unimplemented
+ * @implemented
+ *
+ * Logs a WPP trace message to the session named by LoggerHandle: the message number leads the record and
+ * the caller's (pointer, length) argument pairs follow, ending at a NULL pointer. The event goes through
+ * the classic-event path, so it counts against the session like any other event (EventsLogged).
  */
 NTSTATUS
 NTAPI
@@ -723,8 +837,95 @@ WmiTraceMessageVa(IN TRACEHANDLE LoggerHandle,
                   IN USHORT MessageNumber,
                   IN va_list MessageArgList)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PUCHAR Record, Data, End;
+    PEVENT_TRACE_HEADER Header;
+    PVOID Source;
+    SIZE_T Length;
+    NTSTATUS Status;
+
+    /* WPP drivers log from DPCs; the logger lookup takes a push lock and the buffer a guarded mutex, both
+     * only safe at or below APC_LEVEL, so above it drop the message silently as IoWMIWriteEvent does. */
+    if (KeGetCurrentIrql() > APC_LEVEL)
+        return STATUS_SUCCESS;
+
+    /* Every WPP driver calls this, most often with no session running; reject a handle that names none
+     * (zero, or out of the logger-id range) before allocating and copying the message. */
+    if (!LoggerHandle || EtwpLoggerIdFromTraceHandle(LoggerHandle) >= MAXLOGGERS)
+        return STATUS_INVALID_HANDLE;
+
+    /* Header, the leading message number, and the message data (WPP caps one message at 8 KB). */
+    Record = ExAllocatePoolWithTag(NonPagedPoolNx,
+                                   sizeof(EVENT_TRACE_HEADER) + sizeof(USHORT) + TRACE_MESSAGE_MAXIMUM_SIZE,
+                                   'mTwE');
+    if (!Record)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Header = (PEVENT_TRACE_HEADER)Record;
+    RtlZeroMemory(Header, sizeof(*Header));
+    Header->Flags = WNODE_FLAG_TRACED_GUID;
+    if ((MessageFlags & TRACE_MESSAGE_GUID) && MessageGuid)
+        Header->Guid = *MessageGuid;
+
+    Data = Record + sizeof(EVENT_TRACE_HEADER);
+    End = Record + sizeof(EVENT_TRACE_HEADER) + sizeof(USHORT) + TRACE_MESSAGE_MAXIMUM_SIZE;
+
+    *(PUSHORT)Data = MessageNumber;
+    Data += sizeof(USHORT);
+
+    for (;;)
+    {
+        Source = va_arg(MessageArgList, PVOID);
+        if (!Source)
+            break;
+        /* Fetch the SIZE_T slot (correct on both targets) but keep only the low 32 bits: a caller that
+         * passes a ULONG leaves the upper half of the amd64 slot undefined. */
+        Length = (ULONG)va_arg(MessageArgList, SIZE_T);
+        if (Length == 0)
+            continue;
+        if (Length > (SIZE_T)(End - Data))
+        {
+            ExFreePoolWithTag(Record, 'mTwE');
+            return STATUS_BUFFER_OVERFLOW;
+        }
+        RtlCopyMemory(Data, Source, Length);
+        Data += Length;
+    }
+
+    Header->Size = (USHORT)(Data - Record);
+    Status = EtwpTraceClassicEvent((HANDLE)(ULONG_PTR)LoggerHandle,
+                                   (ULONG)(Data - Record), Record, KernelMode);
+    ExFreePoolWithTag(Record, 'mTwE');
+    return Status;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+__cdecl
+WmiTraceMessage(IN TRACEHANDLE LoggerHandle,
+                IN ULONG MessageFlags,
+                IN LPGUID MessageGuid,
+                IN USHORT MessageNumber,
+                IN ...)
+{
+    va_list MessageArgList;
+    NTSTATUS Status;
+
+    /* The published ABI uses USHORT as the final named parameter. Clang warns about its default
+     * promotion even though the Windows ABI va-list builtin handles the promoted slot (see
+     * ntoskrnl/rtl/misc.c for the same case). */
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wvarargs"
+#endif
+    va_start(MessageArgList, MessageNumber);
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+    Status = WmiTraceMessageVa(LoggerHandle, MessageFlags, MessageGuid, MessageNumber, MessageArgList);
+    va_end(MessageArgList);
+    return Status;
 }
 
 NTSTATUS
@@ -740,8 +941,23 @@ FASTCALL
 WmiGetClock(IN WMI_CLOCK_TYPE ClockType,
             IN PVOID Context)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    LARGE_INTEGER Time;
+
+    UNREFERENCED_PARAMETER(Context);
+
+    /* The trace clocks: system time, the processor's own cycle counter, else the performance counter */
+    switch (ClockType)
+    {
+        case EVENT_TRACE_CLOCK_SYSTEMTIME:
+            KeQuerySystemTime(&Time);
+            return Time.QuadPart;
+
+        case EVENT_TRACE_CLOCK_CPUCYCLE:
+            return (LONGLONG)ReadTimeStampCounter();
+
+        default:
+            return KeQueryPerformanceCounter(NULL).QuadPart;
+    }
 }
 
 NTSTATUS
@@ -756,16 +972,14 @@ NTSTATUS
 NTAPI
 WmiStartTrace(IN OUT PWMI_LOGGER_INFORMATION LoggerInfo)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return EtwpTraceControlKernel(EtwStartLoggerCode, LoggerInfo);
 }
 
 NTSTATUS
 NTAPI
 WmiStopTrace(IN PWMI_LOGGER_INFORMATION LoggerInfo)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return EtwpTraceControlKernel(EtwStopLoggerCode, LoggerInfo);
 }
 
 NTSTATUS
@@ -780,8 +994,7 @@ NTSTATUS
 NTAPI
 WmiUpdateTrace(IN OUT PWMI_LOGGER_INFORMATION LoggerInfo)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return EtwpTraceControlKernel(EtwUpdateLoggerCode, LoggerInfo);
 }
 
 ULONG

@@ -1723,6 +1723,7 @@ NtfsDismountVolume(
     if (NT_SUCCESS(Status))
     {
         VolCB->Dismounted = TRUE;
+        VolCB->BootRepairDismount = NtfsIsBootExecuteWindow(VolumeDeviceObject, VolCB);
         FileCB->DismountedVolume = TRUE;
         IoAcquireVpbSpinLock(&OldIrql);
         Vpb = VolumeDeviceObject->Vpb;
@@ -1991,6 +1992,52 @@ NtfsMarkVolumeDirty(
         NtfsVolumeRetainDirty(VolCB->DiskVolume, TRUE);
     NtfsReleaseMetadata(VolCB);
     KeLeaveCriticalRegion();
+    return Status;
+}
+
+/*
+ * The checker holds the volume lock and its check wrote nothing: this
+ * instance clears the dirty flag it was mounted with and stays mounted, so
+ * the programs started from the volume go on and nothing restarts. Only the
+ * lock owner may ask, so a check that did write (and dismounts) cannot race
+ * it, and a dismounting or dismounted volume refuses.
+ */
+static
+NTSTATUS
+NtfsClearDirtyAfterCheck(
+    _In_ PDEVICE_OBJECT VolumeDeviceObject,
+    _In_ PIO_STACK_LOCATION IrpSp)
+{
+    PFileContextBlock FileCB = NtfsGetFileContext(IrpSp->FileObject);
+    PVolumeContextBlock VolCB =
+        (PVolumeContextBlock)VolumeDeviceObject->DeviceExtension;
+    NTSTATUS Status;
+
+    if (!FileCB || !FileCB->IsVolumeOpen || !VolCB || !VolCB->DiskVolume)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&VolCB->VolumeStateMutex);
+    if (VolCB->Dismounted || VolCB->Dismounting)
+        Status = STATUS_VOLUME_DISMOUNTED;
+    else if (VolCB->VolumeLockOwner != IrpSp->FileObject)
+        Status = STATUS_ACCESS_DENIED;
+    else
+        Status = STATUS_SUCCESS;
+    ExReleaseFastMutex(&VolCB->VolumeStateMutex);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    KeEnterCriticalRegion();
+    NtfsAcquireMetadata(VolCB);
+    Status = NtfsVolumeMarkCleanAfterCheck(VolCB->DiskVolume);
+    NtfsReleaseMetadata(VolCB);
+    KeLeaveCriticalRegion();
+
+    if (NT_SUCCESS(Status))
+        DPRINT1("NTFS: volume %p checked clean, dirty flag cleared, instance kept\n", VolumeDeviceObject);
+    else
+        DPRINT1("NTFS: volume %p checked clean, but the instance cannot clear the flag (0x%08lx); the checker dismounts it\n",
+                VolumeDeviceObject, Status);
     return Status;
 }
 
@@ -2517,6 +2564,13 @@ NtfsFsdFileSystemControl(_In_ PDEVICE_OBJECT VolumeDeviceObject,
                     case FSCTL_MARK_VOLUME_DIRTY:
                         Irp->IoStatus.Status =
                             NtfsMarkVolumeDirty(
+                                VolumeDeviceObject,
+                                IrpSp);
+                        break;
+
+                    case FSCTL_NTFS_CLEAR_DIRTY_AFTER_CHECK:
+                        Irp->IoStatus.Status =
+                            NtfsClearDirtyAfterCheck(
                                 VolumeDeviceObject,
                                 IrpSp);
                         break;

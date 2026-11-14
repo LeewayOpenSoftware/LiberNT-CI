@@ -554,6 +554,20 @@ Expand:
     }
 }
 
+/* Clears an owner entry; the thread a referenced owner pointer named is dereferenced (deferred: lock held) */
+static
+VOID
+FASTCALL
+ExpClearOwnerEntry(IN POWNER_ENTRY Entry)
+{
+    if (Entry->OwnerReferenced)
+    {
+        ObDereferenceObjectDeferDelete((PVOID)(Entry->OwnerThread & ~(ERESOURCE_THREAD)0x3));
+        Entry->OwnerReferenced = 0;
+    }
+    Entry->OwnerThread = 0;
+}
+
 /*++
  * @name ExpBoostOwnerThread
  *
@@ -574,26 +588,35 @@ Expand:
 VOID
 FASTCALL
 ExpBoostOwnerThread(IN PKTHREAD Thread,
-                    IN PKTHREAD OwnerThread)
+                    IN POWNER_ENTRY Entry)
 {
-    /* Make sure the owner thread is a pointer, not an ID */
-    if (!((ULONG_PTR)OwnerThread & 0x3))
+    PKTHREAD OwnerThread = (PKTHREAD)Entry->OwnerThread;
+
+    /* An owner pointer is a thread only when ExSetResourceOwnerPointerEx said so */
+    if ((ULONG_PTR)OwnerThread & 0x3)
+    {
+        if (!Entry->OwnerReferenced) return;
+        OwnerThread = (PKTHREAD)((ULONG_PTR)OwnerThread & ~(ULONG_PTR)0x3);
+    }
+
+    /* Windows Internals: owners below the waiter go to 15 for the wait */
+    if (OwnerThread)
     {
         /* Check if we can actually boost it */
         if ((OwnerThread->Priority < Thread->Priority) &&
-            (OwnerThread->Priority < 14))
+            (OwnerThread->Priority < LOW_REALTIME_PRIORITY - 1))
         {
             /* Acquire the thread lock */
             KiAcquireThreadLock(OwnerThread);
 
             /* Set the new priority */
-            OwnerThread->PriorityDecrement += 14 - OwnerThread->Priority;
+            OwnerThread->PriorityDecrement += (LOW_REALTIME_PRIORITY - 1) - OwnerThread->Priority;
 
             /* Update quantum */
             KiSetThreadQuantum(OwnerThread, OwnerThread->QuantumReset);
 
             /* Update the kernel state */
-            KiSetPriorityThread(OwnerThread, 14);
+            KiSetPriorityThread(OwnerThread, LOW_REALTIME_PRIORITY - 1);
 
             /* Release the thread lock */
             KiReleaseThreadLock(OwnerThread);
@@ -628,10 +651,8 @@ ExpWaitForResource(IN PERESOURCE Resource,
     ULONG WaitCount = 0;
     NTSTATUS Status;
     LARGE_INTEGER Timeout;
-    PKTHREAD Thread, OwnerThread;
-#if DBG
+    PKTHREAD Thread;
     KLOCK_QUEUE_HANDLE LockHandle;
-#endif
 
     /* Increase contention count and use a 5 second timeout */
     Resource->ContentionCount++;
@@ -704,9 +725,11 @@ ExpWaitForResource(IN PERESOURCE Resource,
             Thread->WaitIrql = KeRaiseIrqlToSynchLevel();
             Thread->WaitNext = TRUE;
 
+            /* The entries are only stable under the resource lock (SYNCH_LEVEL: the DPC-level form) */
+            KeAcquireInStackQueuedSpinLockAtDpcLevel(&Resource->SpinLock, &LockHandle);
+
             /* Get the owner thread and boost it */
-            OwnerThread = (PKTHREAD)Resource->OwnerEntry.OwnerThread;
-            if (OwnerThread) ExpBoostOwnerThread(Thread, OwnerThread);
+            ExpBoostOwnerThread(Thread, &Resource->OwnerEntry);
 
             /* If it's a shared resource */
             if (!IsOwnedExclusive(Resource))
@@ -722,14 +745,13 @@ ExpWaitForResource(IN PERESOURCE Resource,
                         /* Move to next entry */
                         Owner++;
 
-                        /* Get the thread */
-                        OwnerThread = (PKTHREAD)Owner->OwnerThread;
-
                         /* Boost it */
-                        if (OwnerThread) ExpBoostOwnerThread(Thread, OwnerThread);
+                        ExpBoostOwnerThread(Thread, Owner);
                     }
                 }
             }
+
+            KeReleaseInStackQueuedSpinLockFromDpcLevel(&LockHandle);
         }
     }
 }
@@ -1477,6 +1499,18 @@ ExDeleteResourceLite(IN PERESOURCE Resource)
     /* Release the lock */
     KeReleaseInStackQueuedSpinLock(&LockHandle);
 
+    /* A referenced owner-pointer thread goes with its entry */
+    ExpClearOwnerEntry(&Resource->OwnerEntry);
+    if (Resource->OwnerTable)
+    {
+        ULONG i;
+
+        for (i = 1; i < Resource->OwnerTable->TableSize; i++)
+        {
+            ExpClearOwnerEntry(&Resource->OwnerTable[i]);
+        }
+    }
+
     /* Free every  structure */
     if (Resource->OwnerTable) ExFreePoolWithTag(Resource->OwnerTable, TAG_RESOURCE_TABLE);
     if (Resource->SharedWaiters) ExFreePoolWithTag(Resource->SharedWaiters, TAG_RESOURCE_SEMAPHORE);
@@ -1773,7 +1807,8 @@ ExReinitializeResourceLite(IN PERESOURCE Resource)
         Size = Owner->TableSize;
         for (i = 0; i < Size; i++)
         {
-            /* Zero the table */
+            /* Zero the table; entry 0 holds the size, the others may name a referenced thread */
+            if (i != 0) ExpClearOwnerEntry(&Owner[i]);
             Owner[i].OwnerThread = 0;
             Owner[i].OwnerCount = 0;
         }
@@ -1793,7 +1828,7 @@ ExReinitializeResourceLite(IN PERESOURCE Resource)
     if (Event) KeInitializeEvent(Event, SynchronizationEvent, FALSE);
 
     /* Clear the resource data */
-    Resource->OwnerEntry.OwnerThread = 0;
+    ExpClearOwnerEntry(&Resource->OwnerEntry);
     Resource->OwnerEntry.OwnerCount = 0;
     Resource->ContentionCount = 0;
     Resource->NumberOfSharedWaiters = 0;
@@ -1875,7 +1910,7 @@ ExReleaseResourceForThreadLite(IN PERESOURCE Resource,
         }
 
         /* Clear the owner */
-        Resource->OwnerEntry.OwnerThread = 0;
+        ExpClearOwnerEntry(&Resource->OwnerEntry);
 
         /* Decrement the number of active entries */
         ASSERT(Resource->ActiveEntries == 1);
@@ -1983,7 +2018,7 @@ ExReleaseResourceForThreadLite(IN PERESOURCE Resource,
         }
 
         /* Clear owner */
-        Owner->OwnerThread = 0;
+        ExpClearOwnerEntry(Owner);
 
         /* See if the resource isn't being owned anymore */
         ASSERT(Resource->ActiveEntries > 0);
@@ -2062,10 +2097,14 @@ ExSetResourceOwnerPointerEx(IN PERESOURCE Resource,
     ERESOURCE_THREAD Thread;
     KLOCK_QUEUE_HANDLE LockHandle;
     POWNER_ENTRY Owner, ThisOwner;
+    BOOLEAN Named = (Flags & FLAG_OWNER_POINTER_IS_THREAD) != 0;
 
     /* Sanity check */
     ASSERT(OwnerPointer != 0);
-    ASSERT((Flags & FLAG_OWNER_POINTER_IS_THREAD) || (((ULONG_PTR)OwnerPointer & 3) == 3));
+    ASSERT(Named || (((ULONG_PTR)OwnerPointer & 3) == 3));
+
+    /* The thread named by the pointer is kept until the entry goes */
+    if (Named) ObReferenceObject((PVOID)((ULONG_PTR)OwnerPointer & ~(ULONG_PTR)0x3));
 
     /* Get the thread */
     Thread = ExGetCurrentResourceThread();
@@ -2083,6 +2122,7 @@ ExSetResourceOwnerPointerEx(IN PERESOURCE Resource,
         ASSERT(Resource->OwnerEntry.OwnerThread == Thread);
         ASSERT(Resource->OwnerEntry.OwnerCount > 0);
         Resource->OwnerEntry.OwnerThread = (ULONG_PTR)OwnerPointer;
+        Resource->OwnerEntry.OwnerReferenced = Named;
     }
     else
     {
@@ -2108,7 +2148,16 @@ ExSetResourceOwnerPointerEx(IN PERESOURCE Resource,
             /* Update data */
             ThisOwner->OwnerCount += Owner->OwnerCount;
             Owner->OwnerCount = 0;
-            Owner->OwnerThread = 0;
+            ExpClearOwnerEntry(Owner);
+
+            /* The entry that keeps the owner takes the thread reference unless it holds one already */
+            if (Named)
+            {
+                if (ThisOwner->OwnerReferenced)
+                    ObDereferenceObjectDeferDelete((PVOID)((ULONG_PTR)OwnerPointer & ~(ULONG_PTR)0x3));
+                else
+                    ThisOwner->OwnerReferenced = 1;
+            }
             ASSERT(Resource->ActiveEntries >= 2);
             Resource->ActiveEntries--;
         }
@@ -2116,6 +2165,7 @@ ExSetResourceOwnerPointerEx(IN PERESOURCE Resource,
         {
             /* Update the owner entry instead */
             Owner->OwnerThread = (ERESOURCE_THREAD)OwnerPointer;
+            Owner->OwnerReferenced = Named;
         }
     }
 

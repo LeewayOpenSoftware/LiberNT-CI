@@ -344,6 +344,13 @@ NtfsVolumeMarkCleanForShutdown(
 }
 
 NTSTATUS
+NtfsVolumeMarkCleanAfterCheck(
+    _In_ PNtfsVolume DiskVolume)
+{
+    return reinterpret_cast<PVolume>(DiskVolume)->MarkCleanAfterCheck();
+}
+
+NTSTATUS
 NtfsVolumeCommitCorruptionDirty(
     _In_ PNtfsVolume DiskVolume)
 {
