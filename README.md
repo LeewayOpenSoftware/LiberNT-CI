@@ -83,7 +83,7 @@ The topic branches and their status are listed in [FORK.md](FORK.md). Leeway's p
 
 </p>
 
-<p align="center"><sub>The LiberNT desktop on arm64, from build nt10.0-043-2555 in QEMU</sub></p>
+<p align="center"><sub>The LiberNT desktop on amd64</sub></p>
 
 ---
 
