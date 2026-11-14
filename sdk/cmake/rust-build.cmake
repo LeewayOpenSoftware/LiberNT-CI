@@ -65,7 +65,7 @@ unset(ENV{CARGO_ENCODED_RUSTFLAGS})
 unset(ENV{RUSTC_WRAPPER})
 
 execute_process(
-    COMMAND "${_cargo}" build --release --locked --offline
+    COMMAND "${_cargo}" rustc --release --locked --offline --lib --crate-type staticlib
             --target "${RUST_TARGET}" --manifest-path "${MANIFEST_DIR}/Cargo.toml" ${_features_arg}
     WORKING_DIRECTORY "${WORK_DIR}"
     RESULT_VARIABLE _rc)
@@ -87,6 +87,9 @@ set(_own "")
 foreach(_m ${_members})
     if(_m MATCHES "^${CRATE}-")
         list(APPEND _own "${_m}")
+    elseif(_m MATCHES "^(core|alloc|std)-")
+        message(FATAL_ERROR "rust-build: ${_lib} carries ${_m}: link-time optimisation did not fold the "
+                            "standard library into ${CRATE}; the crate's release profile needs lto = true")
     endif()
 endforeach()
 if(NOT _own)
