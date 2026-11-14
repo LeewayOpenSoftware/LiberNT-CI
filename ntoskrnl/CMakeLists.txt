@@ -31,11 +31,18 @@ endif()
 
 include(ntos.cmake)
 
-# LRM-RS: route the special pool through the experimental Rust orchestration and link lrm_rs into
-# ntoskrnl. Opt-in, OFF by default; amd64 only (Leeway x64); requires LIBERNT_ENABLE_RUST. When OFF
-# ntoskrnl is unchanged and its export table is byte-identical (the self-test export is added only
-# in a flag-ON build, via a generated spec). The C special pool stays compiled as oracle/fallback.
-option(LIBERNT_ENABLE_LRM_RS "Route the special pool through the Rust LRM-RS path (experimental)" OFF)
+# LRM-RS: route the special pool through the Rust orchestration and link lrm_rs into ntoskrnl.
+# DEFAULT ON on amd64 (owner order 2026-11-14, after validation gates G1-G9); amd64 only (Leeway x64).
+# The C special pool stays compiled as oracle/fallback (ntspecial.c #else branch); a flag-OFF build is
+# byte-identical to a no-LRM-RS kernel (the self-test export is appended only in a flag-ON build via a
+# generated spec). Decoupled from LIBERNT_ENABLE_RUST (the opt-in lnrspoc PoC umbrella, still OFF by
+# default): add_rust_staticlib is always available because sdk/cmake/rust.cmake is included uncondition-
+# ally. An explicit -DLIBERNT_ENABLE_LRM_RS=ON on a non-amd64 arch stays fatal (see the guard below).
+if(ARCH STREQUAL "amd64")
+    option(LIBERNT_ENABLE_LRM_RS "Route the special pool through the Rust LRM-RS path" ON)
+else()
+    option(LIBERNT_ENABLE_LRM_RS "Route the special pool through the Rust LRM-RS path" OFF)
+endif()
 # LAB ONLY: validate the LRM-RS kernel panic policy (handler -> LEEWAY_RUST_PANIC bug check) in a
 # disposable VM. Exposes lrm_rs_force_panic()/LrmRsForcePanic(); since it deliberately panics, this
 # build enables the Rust `panic-test` feature AND drops the FORBID_PANIC gate. Never for ship.
@@ -175,9 +182,9 @@ if(LIBERNT_ENABLE_LRM_RS)
     if(NOT ARCH STREQUAL "amd64")
         message(FATAL_ERROR "LIBERNT_ENABLE_LRM_RS is amd64 only (Leeway x64).")
     endif()
-    if(NOT LIBERNT_ENABLE_RUST)
-        message(FATAL_ERROR "LIBERNT_ENABLE_LRM_RS needs LIBERNT_ENABLE_RUST=ON.")
-    endif()
+    # Decoupled from LIBERNT_ENABLE_RUST (shape B): lrm_rs builds via add_rust_staticlib (always
+    # defined by sdk/cmake/rust.cmake), so the production kernel gets the Rust special pool without
+    # the opt-in lnrspoc PoC. ENABLE_RUST remains a separate opt-in for tools/rust-poc.
     # lrm_rs imports exactly one kernel symbol: LrmRsFatalStop (the panic-policy target in lrmrs.c).
     # In the normal panic-free build the handler is dead-stripped and even that import vanishes; the
     # allow-list entry only matters if a panic path (or the force-panic test) keeps the handler.
