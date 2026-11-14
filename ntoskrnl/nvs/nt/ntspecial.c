@@ -10,6 +10,7 @@
 #include <nvs/nt/mint.h>
 #include <nvs/pool/ex/expool.h>
 #include <nvs/pool/include/poolspecial.h>
+#include <nvs/include/lrmrs.h>
 
 #define MI_SPECIAL_POOL_MINIMUM_PAGES   64
 #define MI_SPECIAL_POOL_MAXIMUM_PAGES   32768
@@ -98,18 +99,25 @@ MmIsSpecialPoolAddressFree(
     return (BOOLEAN)(MiGuardQuery(MiSpecialPoolRegion, (ULONG64)(ULONG_PTR)P, NULL, NULL) == MiGuardFreed);
 }
 
+/*
+ * The C special-pool allocate orchestration, parameterised by the guard region and the underruns
+ * mode so it can serve both the live path (MmAllocateSpecialPool) and the LRM-RS self-test oracle
+ * over a private region. Always compiled: the normal build runs it; the flag-ON build keeps it as
+ * the differential oracle and the fallback. Mirrors the contract exactly (0xC1 sub-codes/params).
+ */
 PVOID
 NTAPI
-MmAllocateSpecialPool(
+MiSpecialPoolAllocateC(
+    _Inout_ PMI_GUARD_REGION Region,
+    _In_ BOOLEAN Underruns,
     _In_ SIZE_T NumberOfBytes,
     _In_ ULONG Tag,
     _In_ POOL_TYPE PoolType,
-    _In_ ULONG SpecialType)
+    _In_ ULONG SpecialType,
+    _In_ KIRQL Irql)
 {
-    BOOLEAN AtStart = (SpecialType == 0) ? FALSE : (SpecialType == 1) ? TRUE : MiSpecialPoolUnderruns;
+    BOOLEAN AtStart = (SpecialType == 0) ? FALSE : (SpecialType == 1) ? TRUE : Underruns;
     BOOLEAN Paged = (BOOLEAN)(((ULONG)PoolType & EX_POOL_BASE_TYPE_MASK) != 0);
-    PMI_GUARD_REGION Region = MiSpecialPoolRegion;
-    KIRQL Irql = KeGetCurrentIrql();
     PVOID Record;
     ULONG64 Page;
     ULONG Offset;
@@ -141,13 +149,17 @@ MmAllocateSpecialPool(
     return PoolSpecialPrepare(Record, (PVOID)(ULONG_PTR)Page, NumberOfBytes, Offset, Tag, (ULONG)PoolType);
 }
 
+/*
+ * The C special-pool free orchestration, parameterised by the guard region (oracle/fallback;
+ * always compiled). Same order and 0xC1 sub-codes/params as the live path.
+ */
 VOID
 NTAPI
-MmFreeSpecialPool(
-    _In_ PVOID P)
+MiSpecialPoolFreeC(
+    _Inout_ PMI_GUARD_REGION Region,
+    _In_ PVOID P,
+    _In_ KIRQL Irql)
 {
-    PMI_GUARD_REGION Region = MiSpecialPoolRegion;
-    KIRQL Irql = KeGetCurrentIrql();
     PPOOL_SPECIAL_RECORD Record;
     ULONG_PTR Corrupt;
     PVOID Context;
@@ -184,6 +196,62 @@ MmFreeSpecialPool(
         KeBugCheckEx(SPECIAL_POOL_DETECTED_MEMORY_CORRUPTION, (ULONG_PTR)P, 0, 0, MI_SPECIAL_POOL_NOT_ALLOCATED);
 
     MiGuardRefill(Region);
+}
+
+/*
+ * Public special-pool allocate. With LIBERNT_LRM_RS the Rust orchestration (lrm_mm_*) runs over the
+ * real MiGuard region and we raise the returned controlled bug check; otherwise the C body runs.
+ * No default changes: the flag is opt-in and OFF by default.
+ */
+PVOID
+NTAPI
+MmAllocateSpecialPool(
+    _In_ SIZE_T NumberOfBytes,
+    _In_ ULONG Tag,
+    _In_ POOL_TYPE PoolType,
+    _In_ ULONG SpecialType)
+{
+#if defined(LIBERNT_LRM_RS)
+    LRM_GUARD_VTBL Vtbl;
+    LRM_BUGCHECK Bc;
+    PVOID Out = NULL;
+    UCHAR Rc;
+
+    if (MiSpecialPoolRegion == NULL)
+        return NULL;
+
+    LrmRsBuildGuardVtbl(MiSpecialPoolRegion, &Vtbl);
+    Rc = lrm_mm_allocate_special_pool(&Vtbl, 1, (UCHAR)MiSpecialPoolUnderruns, NumberOfBytes, Tag,
+                                      (ULONG)PoolType, SpecialType, (UCHAR)KeGetCurrentIrql(), &Out, &Bc);
+    if (Rc == 2)
+        KeBugCheckEx(Bc.Code, Bc.P1, Bc.P2, Bc.P3, Bc.P4);
+
+    return Out;
+#else
+    return MiSpecialPoolAllocateC(MiSpecialPoolRegion, MiSpecialPoolUnderruns, NumberOfBytes, Tag,
+                                  PoolType, SpecialType, KeGetCurrentIrql());
+#endif
+}
+
+/*
+ * Public special-pool free. With LIBERNT_LRM_RS the Rust orchestration runs over the real MiGuard
+ * and raises the returned controlled bug check; otherwise the C body runs.
+ */
+VOID
+NTAPI
+MmFreeSpecialPool(
+    _In_ PVOID P)
+{
+#if defined(LIBERNT_LRM_RS)
+    LRM_GUARD_VTBL Vtbl;
+    LRM_BUGCHECK Bc;
+
+    LrmRsBuildGuardVtbl(MiSpecialPoolRegion, &Vtbl);
+    if (lrm_mm_free_special_pool(&Vtbl, (ULONG_PTR)P, (UCHAR)KeGetCurrentIrql(), &Bc) == 1)
+        KeBugCheckEx(Bc.Code, Bc.P1, Bc.P2, Bc.P3, Bc.P4);
+#else
+    MiSpecialPoolFreeC(MiSpecialPoolRegion, P, KeGetCurrentIrql());
+#endif
 }
 
 SIZE_T
