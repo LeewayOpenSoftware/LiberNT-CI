@@ -10,16 +10,20 @@ on:
   workflow_dispatch:
     inputs:
       lrm_rs:
-        description: 'Experimental LRM-RS image (Rust special pool in ntoskrnl + lnrspoc.sys); VM tests only'
-        type: boolean
-        default: false
+        description: 'LRM-RS special pool: default (ON on amd64) | on (also build the lnrspoc PoC lab image) | off (flag-OFF control build)'
+        type: choice
+        options:
+          - default
+          - 'on'
+          - 'off'
+        default: default
       force_panic:
-        description: 'LAB-ONLY LRM-RS force-panic image (implies lrm_rs; +FORCE_PANIC_TEST +LNRSPOC_TEST_IOCTLS, FORBID_PANIC off, lnrspoc 0x80B); disposable VM only, never ship'
+        description: 'LAB-ONLY LRM-RS force-panic image (implies the lnrspoc PoC + FORCE_PANIC_TEST + LNRSPOC_TEST_IOCTLS, FORBID_PANIC off, lnrspoc 0x80B); disposable VM only, never ship'
         type: boolean
         default: false
 
 concurrency:
-  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs) && 'lrmrs' || 'std' }}
+  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') && 'lrmpoc' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off') && 'lrmoff' || 'std' }}
   cancel-in-progress: true
 
 permissions:
@@ -36,7 +40,10 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-24.04
     env:
-      LRM_RS: ${{ (github.event_name == 'workflow_dispatch' && (inputs.lrm_rs || inputs.force_panic)) && 'ON' || 'OFF' }}
+      # LRM-RS special pool is the amd64 default (owner order 2026-11-14). ON unless an explicit opt-out.
+      LRM_RS: ${{ (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off' && !inputs.force_panic) && 'OFF' || 'ON' }}
+      # The opt-in lnrspoc PoC (ENABLE_RUST umbrella) is built only for lab images that need the usermode driver.
+      LAB_POC: ${{ (github.event_name == 'workflow_dispatch' && (inputs.lrm_rs == 'on' || inputs.force_panic)) && 'ON' || 'OFF' }}
       FORCE_PANIC: ${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'ON' || 'OFF' }}
     steps:
     - name: Free disk space
@@ -54,7 +61,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y cmake ninja-build flex bison ccache wget xz-utils tar python3-mako python3-yaml python3-packaging glslang-tools msitools
 
-    - name: Install pinned Rust toolchain (LRM-RS image only)
+    - name: Install pinned Rust toolchain (amd64 LRM-RS default build)
       if: ${{ env.LRM_RS == 'ON' }}
       run: |
         TC=$(sed -n 's/^set(LIBERNT_RUST_TOOLCHAIN "\([^"]*\)".*/\1/p' sdk/cmake/rust.cmake)
@@ -132,7 +139,10 @@ jobs:
         [ "${{matrix.compiler}}" = "gcc" ] && FLAGS="$FLAGS --gcc"
         [ -n "${{matrix.profile}}" ] && FLAGS="$FLAGS -DROSCONFIG_PROFILE=${{matrix.profile}}"
         [ "${{matrix.compiler}}" = "clang" ] && case "${{matrix.arch}}" in amd64) FLAGS="$FLAGS -DENABLE_MESA_LLVMPIPE=ON" ;; esac
-        [ "$LRM_RS" = ON ] && FLAGS="$FLAGS -DLIBERNT_ENABLE_RUST=ON -DLIBERNT_ENABLE_LRM_RS=ON"
+        # LRM-RS special pool is the amd64 CMake default; only override it for an explicit flag-OFF control.
+        [ "$LRM_RS" = OFF ] && FLAGS="$FLAGS -DLIBERNT_ENABLE_LRM_RS=OFF"
+        # The lnrspoc PoC (ENABLE_RUST umbrella) is opt-in: build it for lab images only.
+        [ "$LAB_POC" = ON ] && FLAGS="$FLAGS -DLIBERNT_ENABLE_RUST=ON"
         [ "$FORCE_PANIC" = ON ] && FLAGS="$FLAGS -DLIBERNT_LRM_RS_FORCE_PANIC_TEST=ON -DLNRSPOC_TEST_IOCTLS=ON"
         ./configure.sh $FLAGS -a ${{matrix.arch}} \
           -DREACTOS_TARGET_NT=0xA00 \
@@ -153,17 +163,23 @@ jobs:
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
         ninja -C ${{steps.configure.outputs.outdir}} bootcd liberntimg liberntvhd -k0
 
-    - name: Build lnrspoc and check the LRM-RS kernel (LRM-RS image only)
+    - name: Check the LRM-RS kernel exports (special pool routed through Rust)
       if: ${{ env.LRM_RS == 'ON' }}
+      run: |
+        . "$HOME/.local/opt/rosbe/rosbe-env.sh"
+        OUT=${{steps.configure.outputs.outdir}}
+        def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
+        [ -n "$def" ] && grep -q LrmRsSelfTest "$def" || { echo "::error::ntoskrnl does not export LrmRsSelfTest"; exit 1; }
+        if [ "$FORCE_PANIC" = ON ]; then grep -q LrmRsForcePanic "$def" || { echo "::error::force-panic image does not export LrmRsForcePanic"; exit 1; }; fi
+
+    - name: Build lnrspoc PoC driver (lab image only)
+      if: ${{ env.LAB_POC == 'ON' }}
       run: |
         . "$HOME/.local/opt/rosbe/rosbe-env.sh"
         OUT=${{steps.configure.outputs.outdir}}
         ninja -C "$OUT" lnrspoc
         mkdir -p lrmrs-out
         cp "$OUT/tools/rust-poc/lnrspoc.sys" "$OUT/tools/rust-poc/libleeway_rs_poc.a" "$OUT/ntoskrnl/liblrm_rs.a" lrmrs-out/
-        def=$(find "$OUT" -name 'ntoskrnl.def' -type f | head -n1)
-        [ -n "$def" ] && grep -q LrmRsSelfTest "$def" || { echo "::error::ntoskrnl does not export LrmRsSelfTest"; exit 1; }
-        if [ "$FORCE_PANIC" = ON ]; then grep -q LrmRsForcePanic "$def" || { echo "::error::force-panic image does not export LrmRsForcePanic"; exit 1; }; fi
         (cd lrmrs-out && sha256sum * | tee SHA256SUMS)
 
     - name: Assert flag-OFF ntoskrnl has no LRM-RS exports (default build)
@@ -214,11 +230,14 @@ jobs:
     - name: Name artifacts
       id: images
       run: |
-        V=""; [ "$LRM_RS" = ON ] && V="-lrmrs"; [ "$FORCE_PANIC" = ON ] && V="-lrmrs-fp"
+        V=""
+        [ "$LAB_POC" = ON ] && V="-lrmrs"
+        [ "$LRM_RS" = OFF ] && V="-lrmoff"
+        [ "$FORCE_PANIC" = ON ] && V="-lrmrs-fp"
         echo "tag=${{matrix.compiler}}-${{matrix.arch}}${{matrix.variant}}$V-${GITHUB_SHA::11}" >> "$GITHUB_OUTPUT"
 
-    - name: Upload lnrspoc.sys and the Rust archives (LRM-RS image only)
-      if: ${{ env.LRM_RS == 'ON' }}
+    - name: Upload lnrspoc.sys and the Rust archives (lab image only)
+      if: ${{ env.LAB_POC == 'ON' }}
       uses: actions/upload-artifact@v7
       with:
         name: lnrspoc-lrmrs-${{steps.images.outputs.tag}}
