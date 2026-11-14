@@ -364,8 +364,9 @@ NtfsCompareExchangePublished(_Inout_ PVOID volatile* Slot,
   ((FileRecordNumber) < ((DiskVolume->SectorsPerCluster * DiskVolume->BytesPerSector) / FileRecordSize)) : \
   ((FileRecordNumber) < 4)))
 
+/* The left shift is done unsigned: shifting a negative or into the sign bit is undefined */
 #define LONGLONG_SIGN_EXTEND(Number, Bytes) \
-(((Number) << ((sizeof(LONGLONG) - (Bytes)) * 8)) >> ((sizeof(LONGLONG) - (Bytes)) * 8))
+((LONGLONG)((ULONGLONG)(Number) << ((sizeof(LONGLONG) - (Bytes)) * 8)) >> ((sizeof(LONGLONG) - (Bytes)) * 8))
 
 #define BytesPerIndexRecord(DiskVolume) \
 ((DiskVolume)->ClustersPerIndexRecord < 0 \

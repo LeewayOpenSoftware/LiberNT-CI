@@ -297,6 +297,9 @@ if(BUILD_TESTING)
         NAME ntfslib_linux_decode_diff
         COMMAND ntfslib_decode_diff_test 100000
     )
+    # The decoders run on untrusted bytes: undefined behaviour fails the test.
+    set_tests_properties(ntfslib_linux_decode_diff PROPERTIES
+        ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1:print_stacktrace=1")
 
     add_executable(ntfslib_lookup_index_cache_test
         tests/lookup_index_cache.cpp
