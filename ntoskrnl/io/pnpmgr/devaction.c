@@ -2973,6 +2973,44 @@ PipSetRemovalVeto(
     return STATUS_PLUGPLAY_QUERY_VETOED;
 }
 
+/* Takes the children that are already removed off a node that is about to be
+ * removed. They are not part of the removal, so nothing else unlinks them, and
+ * a child must not stay linked to a parent node that is freed. A child whose
+ * device object is already being deleted unlinks itself. */
+static
+VOID
+PipUnlinkRemovedChildren(
+    _In_ PDEVICE_NODE Node)
+{
+    PDEVICE_NODE Child;
+    PDEVICE_OBJECT ChildObject;
+
+    for (;;)
+    {
+        ChildObject = NULL;
+
+        KeEnterCriticalRegion();
+        ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
+        for (Child = Node->Child; Child != NULL; Child = Child->Sibling)
+        {
+            if ((Child->State == DeviceNodeRemoved || Child->State == DeviceNodeDeleted) &&
+                ObReferenceObjectSafe(Child->PhysicalDeviceObject))
+            {
+                ChildObject = Child->PhysicalDeviceObject;
+                break;
+            }
+        }
+        ExReleaseResourceLite(&IopDeviceTreeResource);
+        KeLeaveCriticalRegion();
+
+        if (ChildObject == NULL)
+            break;
+
+        PiUnlinkDevNode(Child);
+        ObDereferenceObject(ChildObject);
+    }
+}
+
 static
 NTSTATUS
 PipQueryAndRemoveDevice(
@@ -3005,6 +3043,10 @@ PipQueryAndRemoveDevice(
         for (Child = Node->Child; Child; Child = Child->Sibling)
         {
             Status = PipAddRemovalDevice(&Devices, Child->PhysicalDeviceObject);
+            /* A child that is already removed needs no removal and must not
+             * stop the removal of its parent */
+            if (Status == STATUS_NO_SUCH_DEVICE)
+                Status = STATUS_SUCCESS;
             if (!NT_SUCCESS(Status))
                 break;
         }
@@ -3028,7 +3070,11 @@ PipQueryAndRemoveDevice(
         for (i = 0; i < Relations->Count; ++i)
         {
             if (NT_SUCCESS(Status))
+            {
                 Status = PipAddRemovalDevice(&Devices, Relations->Objects[i]);
+                if (Status == STATUS_NO_SUCH_DEVICE)
+                    Status = STATUS_SUCCESS;
+            }
             ObDereferenceObject(Relations->Objects[i]);
         }
         ExFreePool(Relations);
@@ -3089,6 +3135,7 @@ PipQueryAndRemoveDevice(
         PiSetDevNodeState(Node, DeviceNodeAwaitingQueuedRemoval);
         if (Node->Parent && PipRemovalListContains(&Devices, Node->Parent->PhysicalDeviceObject))
             PiUnlinkDevNode(Node);
+        PipUnlinkRemovedChildren(Node);
         IopSendRemoveDevice(Entry->DeviceObject);
     }
     Status = STATUS_SUCCESS;
