@@ -53,7 +53,7 @@ MAIN_MENU MENU
  }
  POPUP "A&yuda" {
    MENUITEM "&Ayuda sobre la ayuda",          MNID_HELP_HELPON
-   MENUITEM "&Acerca de la Ayuda de Wine...", MNID_HELP_ABOUT
+   MENUITEM "&Acerca de la Ayuda de LiberNT...", MNID_HELP_ABOUT
  }
 }
 
