@@ -611,6 +611,7 @@ MiInitializePhase0(
     MiReportBootImages(LoaderBlock);
     MiInitializeSpecialPool();
     MiInitializeDriverVerifier();
+    MiVerifyBootLoadedImages(LoaderBlock);
 }
 
 BOOLEAN
