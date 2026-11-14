@@ -10,7 +10,7 @@ LANGUAGE LANG_ROMANIAN, SUBLANG_NEUTRAL
 
 STRINGTABLE
 BEGIN
-    IDS_APPNAME "WineMine"
+    IDS_APPNAME "LiberNT Mines"
     IDS_NOBODY "Nimeni"
     IDS_ABOUT "Drept de autor 2000 Joshua Thielen"
 END
