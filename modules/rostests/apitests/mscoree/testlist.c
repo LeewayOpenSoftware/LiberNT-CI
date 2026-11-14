@@ -9,6 +9,7 @@
 #include <apitest.h>
 
 extern void func_mscoree_malformed_installroot(void);
+extern void func_CorBindToRuntimeEx(void);
 extern void func_mscoree(void);
 
 const struct test winetest_testlist[] =
@@ -17,5 +18,6 @@ const struct test winetest_testlist[] =
      * forwarder's first (cached) probe. */
     { "mscoree_malformed_installroot", func_mscoree_malformed_installroot },
     { "mscoree", func_mscoree },
+    { "CorBindToRuntimeEx", func_CorBindToRuntimeEx },
     { 0, 0 }
 };
