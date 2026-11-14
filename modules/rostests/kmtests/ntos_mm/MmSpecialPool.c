@@ -529,6 +529,8 @@ static PDEVICE_OBJECT VfLowerDevice;
 static PDRIVER_DISPATCH VfSavedDispatch;
 static PIRP VfHeldIrp;
 static BOOLEAN VfLowerIsShared;
+static BOOLEAN VfLowerRaisesIrql;
+static KIRQL VfLowerOldIrql;
 
 static
 VOID
@@ -555,6 +557,9 @@ VfLowerDispatch(
     IoMarkIrpPending(Irp);
     if (!VfLowerIsShared)
         VfHeldIrp = Irp;
+
+    if (VfLowerRaisesIrql)
+        KeRaiseIrql(DISPATCH_LEVEL, &VfLowerOldIrql);
 
     return STATUS_PENDING;
 }
@@ -771,19 +776,48 @@ VfLowerBelongsToThisDriver(
     }
 }
 
+static DRIVER_OBJECT VfSecondDriver;
+static PDEVICE_OBJECT VfSecondDevice;
+
+/* The verifier also takes a caller for the owner of a device when the caller
+ * is in the image that holds the dispatch routine of the device's driver, as
+ * a framework is for its client drivers. For a device of another driver the
+ * routine must therefore be elsewhere too: once the lower device holds an
+ * IRP, its table can name an address that is in no image. The routine is not
+ * called while the table names that address. */
+static
+VOID
+VfLowerIsHandledElsewhere(
+    _In_ BOOLEAN Elsewhere)
+{
+    if (Elsewhere)
+        VfOtherDriver.MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = (PDRIVER_DISPATCH)(ULONG_PTR)KmtDriverObject;
+    else
+        VfOtherDriver.MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = VfLowerDispatch;
+}
+
+/* Sends an IRP to the lower device, which holds it, and then to the second
+ * device, which holds it too */
 static
 PIRP
-VfSendHeldIrpTwice(VOID)
+VfSendHeldIrpTwice(
+    _In_ BOOLEAN FirstIsHandledElsewhere)
 {
+    PDEVICE_OBJECT First = VfLowerDevice;
     PIRP Irp;
 
-    Irp = IoAllocateIrp(VfLowerDevice->StackSize + 1, FALSE);
+    Irp = IoAllocateIrp(First->StackSize + VfSecondDevice->StackSize, FALSE);
     ok(Irp != NULL, "no IRP\n");
     if (Irp == NULL)
         return NULL;
 
     VfSendIrpToHold(Irp, FALSE);
+
+    VfLowerIsHandledElsewhere(FirstIsHandledElsewhere);
+    VfLowerDevice = VfSecondDevice;
     VfSendIrpToHold(Irp, FALSE);
+    VfLowerDevice = First;
+    VfLowerIsHandledElsewhere(FALSE);
     return Irp;
 }
 
@@ -811,13 +845,27 @@ START_TEST(MmDriverVerifierIrpQueuedBelow)
     VfLowerBelongsToThisDriver(TRUE);
     VfLowerDevice->DriverObject = &VfOtherDriver;
 
+    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_UNKNOWN, 0, FALSE, &VfSecondDevice);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+    {
+        VfLowerDevice->DriverObject = KmtDriverObject;
+        IoDeleteDevice(VfLowerDevice);
+        VfLowerDevice = NULL;
+        return;
+    }
+
+    VfSecondDriver = *KmtDriverObject;
+    VfSecondDriver.MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL] = VfLowerDispatch;
+    VfSecondDevice->DriverObject = &VfSecondDriver;
+
     trace("Case 1: this driver completes an IRP that its own lower device holds; expect NO verifier line\n");
     Irp = VfSendHeldIrp(FALSE);
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
     trace("Case 2: this driver sends an IRP again that its own lower device holds; expect NO verifier line\n");
-    Irp = VfSendHeldIrpTwice();
+    Irp = VfSendHeldIrpTwice(FALSE);
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
@@ -826,15 +874,31 @@ START_TEST(MmDriverVerifierIrpQueuedBelow)
     VfLowerBelongsToThisDriver(FALSE);
     Irp = VfSendHeldIrp(FALSE);
     if (Irp != NULL)
+    {
+        VfLowerIsHandledElsewhere(TRUE);
         VfCompleteHeldIrp(Irp);
+        VfLowerIsHandledElsewhere(FALSE);
+    }
 
     trace("Case 4: this driver sends an IRP again that another driver holds; expect one log-only line, I/O rule "
           "0x205\n");
-    Irp = VfSendHeldIrpTwice();
+    Irp = VfSendHeldIrpTwice(TRUE);
     VfLowerBelongsToThisDriver(TRUE);
     if (Irp != NULL)
         VfCompleteHeldIrp(Irp);
 
+    trace("Case 5: the lower device is of another driver object, but the image of this driver holds its dispatch "
+          "routine, as a framework does for its client; this driver completes an IRP that it holds; expect NO "
+          "verifier line\n");
+    VfLowerBelongsToThisDriver(FALSE);
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+    VfLowerBelongsToThisDriver(TRUE);
+
+    VfSecondDevice->DriverObject = KmtDriverObject;
+    IoDeleteDevice(VfSecondDevice);
+    VfSecondDevice = NULL;
     VfLowerDevice->DriverObject = KmtDriverObject;
     IoDeleteDevice(VfLowerDevice);
     VfLowerDevice = NULL;
@@ -1134,4 +1198,334 @@ START_TEST(MmDriverVerifierLockStress)
     ok_eq_long(VfStressRounds, VF_STRESS_THREADS * VF_STRESS_ROUNDS);
     ok_eq_uint(KeGetCurrentIrql(), PASSIVE_LEVEL);
     trace("Done: the debug log must hold no Driver Verifier line and no bug check\n");
+}
+
+
+START_TEST(MmDriverVerifierZeroBytes)
+{
+    PVOID Block;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    trace("Allocation of zero bytes; expect bug check 0xC4 (0x00, IRQL 0, pool type, 0)\n");
+    Block = ExAllocatePoolWithTag(NonPagedPool, 0, OTHER_TAG);
+    ok(FALSE, "the allocation was not detected\n");
+    if (Block != NULL)
+        ExFreePoolWithTag(Block, OTHER_TAG);
+}
+
+START_TEST(MmDriverVerifierNonPagedAtHigh)
+{
+    KIRQL OldIrql;
+    PVOID Block;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    trace("Nonpaged pool allocation of 64 bytes at HIGH_LEVEL; expect bug check 0xC4 (0x02, IRQL, pool type, 64)\n");
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    Block = ExAllocatePoolWithTag(NonPagedPool, 64, OTHER_TAG);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the allocation was not detected\n");
+    if (Block != NULL)
+        ExFreePoolWithTag(Block, OTHER_TAG);
+}
+
+START_TEST(MmDriverVerifierFreePagedAtDispatch)
+{
+    KIRQL OldIrql;
+    PVOID Block;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    Block = ExAllocatePoolWithTag(PagedPool, 64, OTHER_TAG);
+    ok(Block != NULL, "no block\n");
+    if (Block == NULL)
+        return;
+
+    trace("Freeing paged block %p at DISPATCH_LEVEL; expect bug check 0xC4 (0x11, IRQL 2, pool type, block)\n", Block);
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    ExFreePoolWithTag(Block, OTHER_TAG);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the free was not detected\n");
+}
+
+START_TEST(MmDriverVerifierFreeAtHigh)
+{
+    KIRQL OldIrql;
+    PVOID Block;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    Block = ExAllocatePoolWithTag(NonPagedPool, 64, OTHER_TAG);
+    ok(Block != NULL, "no block\n");
+    if (Block == NULL)
+        return;
+
+    trace("Freeing nonpaged block %p at HIGH_LEVEL; expect bug check 0xC4 (0x12, IRQL, pool type, block)\n", Block);
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    ExFreePoolWithTag(Block, OTHER_TAG);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the free was not detected\n");
+}
+
+START_TEST(MmDriverVerifierReleaseSpinLockAtPassive)
+{
+#ifdef _WIN64
+    KSPIN_LOCK Lock;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    KeInitializeSpinLock(&Lock);
+    trace("KeReleaseSpinLock of %p at PASSIVE_LEVEL; expect bug check 0xC4 (0x32, IRQL 0, lock, 0)\n", &Lock);
+    KeReleaseSpinLock(&Lock, PASSIVE_LEVEL);
+    ok(FALSE, "the call was not detected\n");
+#else
+    skip(FALSE, "the rule is checked on 64-bit builds only\n");
+#endif
+}
+
+START_TEST(MmDriverVerifierFastMutexAtDispatch)
+{
+    FAST_MUTEX Mutex;
+    KIRQL OldIrql;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    ExInitializeFastMutex(&Mutex);
+    trace("ExAcquireFastMutex of %p at DISPATCH_LEVEL; expect bug check 0xC4 (0x33, IRQL 2, mutex, 0)\n", &Mutex);
+    KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
+    ExAcquireFastMutex(&Mutex);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the call was not detected\n");
+}
+
+START_TEST(MmDriverVerifierFastMutexReleaseAtPassive)
+{
+    FAST_MUTEX Mutex;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    ExInitializeFastMutex(&Mutex);
+    trace("ExReleaseFastMutex of %p at PASSIVE_LEVEL; expect bug check 0xC4 (0x34, IRQL 0, APC disable, mutex)\n",
+          &Mutex);
+    ExReleaseFastMutex(&Mutex);
+    ok(FALSE, "the call was not detected\n");
+}
+
+START_TEST(MmDriverVerifierReleaseFromDpcAtPassive)
+{
+    KSPIN_LOCK Lock;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    KeInitializeSpinLock(&Lock);
+    trace("KeReleaseSpinLockFromDpcLevel of %p at PASSIVE_LEVEL; expect bug check 0xC4 (0x41, IRQL 0, lock, 0)\n",
+          &Lock);
+    KeReleaseSpinLockFromDpcLevel(&Lock);
+    ok(FALSE, "the call was not detected\n");
+}
+
+START_TEST(MmDriverVerifierSpinLockAtHigh)
+{
+#ifdef _WIN64
+    KSPIN_LOCK Lock;
+    KIRQL HighIrql, OldIrql;
+
+    if (skip(EveryTagIsSpecial(), "kmtest_drv.sys is not verified\n"))
+        return;
+
+    KeInitializeSpinLock(&Lock);
+    trace("KeAcquireSpinLock of %p at HIGH_LEVEL; expect bug check 0xC4 (0x42, IRQL, lock, 0)\n", &Lock);
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    KeAcquireSpinLock(&Lock, &HighIrql);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the call was not detected\n");
+#else
+    skip(FALSE, "the rule is checked on 64-bit builds only\n");
+#endif
+}
+
+START_TEST(MmDriverVerifierIoFreeNotIrp)
+{
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    Irp = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Irp), OTHER_TAG);
+    ok(Irp != NULL, "no block\n");
+    if (Irp == NULL)
+        return;
+
+    RtlZeroMemory(Irp, sizeof(*Irp));
+    trace("IoFreeIrp of %p, which is not an IRP; expect bug check 0xC9 (0x01, block, 0, 0)\n", Irp);
+    IoFreeIrp(Irp);
+    ok(FALSE, "the call was not detected\n");
+}
+
+START_TEST(MmDriverVerifierIoFreeThreadIrp)
+{
+    LIST_ENTRY ListHead;
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    Irp = IoAllocateIrp(1, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp == NULL)
+        return;
+
+    InitializeListHead(&ListHead);
+    InsertHeadList(&ListHead, &Irp->ThreadListEntry);
+    trace("IoFreeIrp of %p, still on a thread list; expect bug check 0xC9 (0x02, IRP, 0, 0)\n", Irp);
+    IoFreeIrp(Irp);
+    ok(FALSE, "the call was not detected\n");
+}
+
+START_TEST(MmDriverVerifierIoCallNotIrp)
+{
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    if (!VfCreateLowerDevice())
+        return;
+
+    Irp = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Irp), OTHER_TAG);
+    ok(Irp != NULL, "no block\n");
+    if (Irp != NULL)
+    {
+        RtlZeroMemory(Irp, sizeof(*Irp));
+        trace("IoCallDriver with %p, which is not an IRP; expect bug check 0xC9 (0x03, block, 0, 0)\n", Irp);
+        IoCallDriver(VfLowerDevice, Irp);
+        ok(FALSE, "the call was not detected\n");
+    }
+
+    VfDeleteLowerDevice();
+}
+
+START_TEST(MmDriverVerifierIoCallBadDevice)
+{
+    PDEVICE_OBJECT Device;
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    Irp = IoAllocateIrp(1, FALSE);
+    Device = ExAllocatePoolWithTag(NonPagedPool, sizeof(*Device), OTHER_TAG);
+    ok(Irp != NULL && Device != NULL, "no IRP or no block\n");
+    if (Irp == NULL || Device == NULL)
+        return;
+
+    RtlZeroMemory(Device, sizeof(*Device));
+    trace("IoCallDriver to %p, which is not a device object; expect bug check 0xC9 (0x04, block, 0, 0)\n", Device);
+    IoCallDriver(Device, Irp);
+    ok(FALSE, "the call was not detected\n");
+}
+
+START_TEST(MmDriverVerifierIoCallIrqlChanged)
+{
+    PIO_STACK_LOCATION Stack;
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    if (!VfCreateLowerDevice())
+        return;
+
+    Irp = IoAllocateIrp(VfLowerDevice->StackSize, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp != NULL)
+    {
+        Stack = IoGetNextIrpStackLocation(Irp);
+        Stack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+        IoSetCompletionRoutine(Irp, VfStopCompletion, NULL, TRUE, TRUE, TRUE);
+        VfLowerRaisesIrql = TRUE;
+        trace("IoCallDriver to %p returns at DISPATCH_LEVEL; expect bug check 0xC9 (0x05, device, 0, 2)\n",
+              VfLowerDevice);
+        IoCallDriver(VfLowerDevice, Irp);
+        VfLowerRaisesIrql = FALSE;
+        KeLowerIrql(VfLowerOldIrql);
+        ok(FALSE, "the call was not detected\n");
+    }
+
+    VfDeleteLowerDevice();
+}
+
+START_TEST(MmDriverVerifierIoCompleteCancelRoutine)
+{
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    Irp = IoAllocateIrp(1, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp == NULL)
+        return;
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    IoSetCancelRoutine(Irp, VfNeverCancel);
+    trace("Completing IRP %p with its cancel routine set; expect bug check 0xC9 (0x07, routine, IRP, 0)\n", Irp);
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    ok(FALSE, "the completion was not detected\n");
+}
+
+START_TEST(MmDriverVerifierIoCompleteAtHigh)
+{
+    KIRQL OldIrql;
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    Irp = IoAllocateIrp(1, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp == NULL)
+        return;
+
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    trace("Completing IRP %p at HIGH_LEVEL; expect bug check 0xC9 (0x0E, IRQL, IRP, 0)\n", Irp);
+    KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    KeLowerIrql(OldIrql);
+    ok(FALSE, "the completion was not detected\n");
+}
+
+START_TEST(MmDriverVerifierIoCallAtHigh)
+{
+    KIRQL OldIrql;
+    PIRP Irp;
+
+    if (skip(VfIoCheckingIsOn(), "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+        return;
+
+    if (!VfCreateLowerDevice())
+        return;
+
+    Irp = IoAllocateIrp(VfLowerDevice->StackSize, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp != NULL)
+    {
+        trace("IoCallDriver with IRP %p at HIGH_LEVEL; expect bug check 0xC9 (0x10, IRQL, 0, 0)\n", Irp);
+        KeRaiseIrql(HIGH_LEVEL, &OldIrql);
+        IoCallDriver(VfLowerDevice, Irp);
+        KeLowerIrql(OldIrql);
+        ok(FALSE, "the call was not detected\n");
+        IoFreeIrp(Irp);
+    }
+
+    VfDeleteLowerDevice();
 }

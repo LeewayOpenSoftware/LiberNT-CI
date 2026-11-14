@@ -223,6 +223,124 @@ VfpIrpReturned(
         ExFreePoolWithTag(Entry, VF_IRP_TAG);
 }
 
+/* Finds the loaded image that holds an address. The list of loaded images is
+ * walked with its lock held: a driver can be unloaded on another processor.
+ * The first two images are the kernel and the HAL. */
+BOOLEAN
+NTAPI
+VfFindImage(
+    _In_ PVOID Address,
+    _Out_ PULONG_PTR ImageBase,
+    _Out_ PULONG ImageSize,
+    _Out_ PBOOLEAN InKernel)
+{
+    PLDR_DATA_TABLE_ENTRY LdrEntry;
+    PLIST_ENTRY Entry;
+    BOOLEAN Found = FALSE;
+    ULONG Index = 0;
+    KIRQL OldIrql;
+
+    *ImageBase = 0;
+    *ImageSize = 0;
+    *InKernel = FALSE;
+
+    OldIrql = KeAcquireSpinLockRaiseToSynch(&PsLoadedModuleSpinLock);
+    for (Entry = PsLoadedModuleList.Flink; Entry != &PsLoadedModuleList; Entry = Entry->Flink)
+    {
+        LdrEntry = CONTAINING_RECORD(Entry, LDR_DATA_TABLE_ENTRY, InLoadOrderLinks);
+        Index++;
+
+        if ((ULONG_PTR)Address >= (ULONG_PTR)LdrEntry->DllBase &&
+            (ULONG_PTR)Address < (ULONG_PTR)LdrEntry->DllBase + LdrEntry->SizeOfImage)
+        {
+            *ImageBase = (ULONG_PTR)LdrEntry->DllBase;
+            *ImageSize = LdrEntry->SizeOfImage;
+            *InKernel = (BOOLEAN)(Index <= 2);
+            Found = TRUE;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&PsLoadedModuleSpinLock, OldIrql);
+
+    return Found;
+}
+
+/* The image of a dispatch routine is looked up once and remembered, so that
+ * the ownership test does not walk the list of loaded modules for each
+ * request. An entry is keyed by the address of the routine. Every unload of an
+ * image empties the table: an address can belong to another image later. */
+#define VF_DISPATCH_IMAGES 32
+
+typedef struct _VF_DISPATCH_IMAGE
+{
+    PVOID Routine;
+    ULONG_PTR Base;
+    ULONG Size;
+    BOOLEAN InKernel;
+} VF_DISPATCH_IMAGE, *PVF_DISPATCH_IMAGE;
+
+static VF_DISPATCH_IMAGE VfpDispatchImages[VF_DISPATCH_IMAGES];
+
+/* Counts the times the table was emptied. A lookup that walked the list of
+ * modules while an image was unloaded must not store what it found. */
+static ULONG VfpDispatchGeneration;
+
+/* Called when an image has left the list of loaded modules */
+VOID
+NTAPI
+VfForgetDispatchImages(VOID)
+{
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    RtlZeroMemory(VfpDispatchImages, sizeof(VfpDispatchImages));
+    VfpDispatchGeneration++;
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+}
+
+static
+BOOLEAN
+VfpFindDispatchImage(
+    _In_ PVOID Routine,
+    _Out_ PULONG_PTR ImageBase,
+    _Out_ PULONG ImageSize,
+    _Out_ PBOOLEAN InKernel)
+{
+    PVF_DISPATCH_IMAGE Slot = &VfpDispatchImages[((ULONG_PTR)Routine >> 4) % VF_DISPATCH_IMAGES];
+    BOOLEAN Found = FALSE;
+    ULONG Generation;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    Generation = VfpDispatchGeneration;
+    if (Slot->Routine == Routine && Routine != NULL)
+    {
+        *ImageBase = Slot->Base;
+        *ImageSize = Slot->Size;
+        *InKernel = Slot->InKernel;
+        Found = TRUE;
+    }
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    if (Found)
+        return TRUE;
+
+    if (!VfFindImage(Routine, ImageBase, ImageSize, InKernel))
+        return FALSE;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    if (Generation == VfpDispatchGeneration)
+    {
+        Slot->Routine = Routine;
+        Slot->Base = *ImageBase;
+        Slot->Size = *ImageSize;
+        Slot->InKernel = *InKernel;
+    }
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    return TRUE;
+}
+
 static
 BOOLEAN
 VfpCallerOwnsCurrentLocation(
@@ -245,7 +363,31 @@ VfpCallerOwnsCurrentLocation(
         return FALSE;
 
     Start = (ULONG_PTR)Driver->DriverStart;
-    return (BOOLEAN)((ULONG_PTR)Caller >= Start && (ULONG_PTR)Caller < Start + Driver->DriverSize);
+    if ((ULONG_PTR)Caller >= Start && (ULONG_PTR)Caller < Start + Driver->DriverSize)
+        return TRUE;
+
+    /* A framework or port driver handles the requests of its client drivers:
+     * the dispatch routine of the client's driver object is in the image of
+     * the framework, and so is the call that completes or forwards the
+     * request. The caller owns the location if it is in the image that
+     * handles this request for the driver. */
+    if (Stack->MajorFunction <= IRP_MJ_MAXIMUM_FUNCTION)
+    {
+        ULONG_PTR DispatchBase;
+        ULONG DispatchSize;
+        BOOLEAN InKernel;
+
+        if (VfpFindDispatchImage((PVOID)(ULONG_PTR)Driver->MajorFunction[Stack->MajorFunction],
+                                 &DispatchBase, &DispatchSize, &InKernel) &&
+            !InKernel &&
+            (ULONG_PTR)Caller >= DispatchBase &&
+            (ULONG_PTR)Caller < DispatchBase + DispatchSize)
+        {
+            return TRUE;
+        }
+    }
+
+    return FALSE;
 }
 
 static
@@ -300,7 +442,21 @@ VfpReportIrpRule(
         KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, Rule, (ULONG_PTR)Caller, (ULONG_PTR)Irp, 0);
 
     if (Hits <= VF_IRP_LINES_PRINTED)
-        DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p\n", Rule, Irp, Caller);
+    {
+        ULONG_PTR ImageBase;
+        ULONG ImageSize;
+        BOOLEAN InKernel;
+
+        if (VfFindImage(Caller, &ImageBase, &ImageSize, &InKernel))
+        {
+            DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p (image %p+0x%lx)\n",
+                     Rule, Irp, Caller, (PVOID)ImageBase, (ULONG)((ULONG_PTR)Caller - ImageBase));
+        }
+        else
+        {
+            DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p\n", Rule, Irp, Caller);
+        }
+    }
 }
 
 VOID
