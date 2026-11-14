@@ -142,6 +142,7 @@ LrmRsSelfTest(PULONG Detail)
         LRM_BUGCHECK Bc;
         PVOID Rp = NULL;
         UCHAR Rc;
+        ULONG64 RpPage = 0;
         ULONG64 PageR = 0;
         PVOID CtxR = NULL;
         ULONG_PTR Corr = 0;
@@ -180,10 +181,14 @@ LrmRsSelfTest(PULONG Detail)
             Fail = Base + 3;
             break;
         }
+        /* The allocation is now LIVE; free it on every failure path below so the region has no live
+         * slot at MiGuardRegionDelete (sysguard.c MI_ASSERT(LiveCount == 0); leak on a free build). */
+        RpPage = (ULONG64)((ULONG_PTR)Rp & ~(ULONG_PTR)(PAGE_SIZE - 1));
 
         /* (4) placed at the C-computed in-page offset */
         if (((ULONG_PTR)Rp & (PAGE_SIZE - 1)) != COffset)
         {
+            MiGuardFree(Region, RpPage);
             Fail = Base + 4;
             break;
         }
@@ -191,6 +196,7 @@ LrmRsSelfTest(PULONG Detail)
         /* (5) the region sees it live, with a record context */
         if (MiGuardQuery(Region, (ULONG64)(ULONG_PTR)Rp, &PageR, &CtxR) != MiGuardLive || CtxR == NULL)
         {
+            MiGuardFree(Region, RpPage);
             Fail = Base + 5;
             break;
         }
@@ -199,6 +205,7 @@ LrmRsSelfTest(PULONG Detail)
         if ((rust_pool_special_owns(CtxR, (PVOID)(ULONG_PTR)PageR, Rp) != 0) !=
             (PoolSpecialOwns((const POOL_SPECIAL_RECORD *)CtxR, (PVOID)(ULONG_PTR)PageR, Rp) != FALSE))
         {
+            MiGuardFree(Region, RpPage);
             Fail = Base + 6;
             break;
         }
@@ -208,6 +215,7 @@ LrmRsSelfTest(PULONG Detail)
         CCheck = PoolSpecialCheck((const POOL_SPECIAL_RECORD *)CtxR, (PVOID)(ULONG_PTR)PageR, &CCorr);
         if (RustCheck != (ULONG)CCheck || Corr != CCorr || CCheck != PoolSpecialIntact)
         {
+            MiGuardFree(Region, RpPage);
             Fail = Base + 7;
             break;
         }
@@ -224,6 +232,7 @@ LrmRsSelfTest(PULONG Detail)
         Pg[Idx] = Good;                                    /* restore so the free is clean */
         if (RustCheck != (ULONG)CCheck || Corr != CCorr || CCheck == PoolSpecialIntact)
         {
+            MiGuardFree(Region, RpPage);                    /* byte restored above; slot still live */
             Fail = Base + 8;
             break;
         }
@@ -232,6 +241,7 @@ LrmRsSelfTest(PULONG Detail)
         RtlZeroMemory(&Bc, sizeof(Bc));
         if (lrm_mm_free_special_pool(&Vtbl, (ULONG_PTR)Rp, 0, &Bc) != 0)
         {
+            MiGuardFree(Region, RpPage);                    /* free did not complete; release the slot */
             Fail = Base + 9;
             break;
         }

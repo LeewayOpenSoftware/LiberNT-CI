@@ -246,6 +246,9 @@ MmFreeSpecialPool(
     LRM_GUARD_VTBL Vtbl;
     LRM_BUGCHECK Bc;
 
+    if (MiSpecialPoolRegion == NULL)
+        return;
+
     LrmRsBuildGuardVtbl(MiSpecialPoolRegion, &Vtbl);
     if (lrm_mm_free_special_pool(&Vtbl, (ULONG_PTR)P, (UCHAR)KeGetCurrentIrql(), &Bc) == 1)
         KeBugCheckEx(Bc.Code, Bc.P1, Bc.P2, Bc.P3, Bc.P4);
