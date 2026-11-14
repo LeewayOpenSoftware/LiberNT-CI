@@ -23,7 +23,8 @@ use core::ffi::c_void;
 //
 // Kernel panic policy (LRM-RS-PANIC-POLICY.md, owner-approved 2026-11-14): an unexpected Rust panic
 // — which the panic-free discipline and the FORBID_PANIC build gate are meant to make unreachable —
-// is turned into one controlled kernel bug check (LEEWAY_RUST_PANIC = 0x4C524D00 | reason), never a
+// is turned into one controlled kernel bug check (fixed code LEEWAY_RUST_PANIC = 0x4C524D00, reason in
+// P1 — never ORed into the code), never a
 // hang, a recovery, or undefined behaviour. panic = "abort" (Cargo.toml) means no unwinding can
 // cross the `extern "C"` boundary. The handler does only field reads on `PanicInfo` and one
 // non-returning FFI call: no heap, no `core::fmt`, no allocation. It is safe at any IRQL (including

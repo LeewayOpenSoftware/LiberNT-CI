@@ -293,11 +293,13 @@ LrmRsSelfTest(PULONG Detail)
 }
 
 /*
- * Set before the panic bug check; the ntspecial.c special-pool wrappers read it and fall back to the
- * C oracle instead of re-entering Rust once the Rust side has fatally stopped (Dwight review P3: a
- * panic may have left a lock held, so the bug check's own machinery must not re-take it).
+ * Set before the panic bug check; the ntspecial.c special-pool wrappers read it and, once set, fail
+ * the allocation (caller falls back to the normal pool) and ignore frees - no allocator runs on the
+ * Rust region again, so the bug check's own machinery never re-takes a lock the panicking thread may
+ * hold (Dwight review P3; god 2026-11-14). Written with InterlockedExchange8 and declared volatile so
+ * a CPU already inside a wrapper observes it with acquire ordering (acquire on x86/x64).
  */
-BOOLEAN LrmRsPanicked = FALSE;
+BOOLEAN volatile LrmRsPanicked = FALSE;
 
 /*
  * LRM-RS panic policy target. The Rust panic handler (lib.rs on_panic) and the lrm_fatal! forwarder
@@ -314,7 +316,7 @@ BOOLEAN LrmRsPanicked = FALSE;
 DECLSPEC_NORETURN VOID
 LrmRsFatalStop(ULONG Reason, const UCHAR *File, SIZE_T FileLen, ULONG Line)
 {
-    LrmRsPanicked = TRUE;
+    InterlockedExchange8((CHAR volatile *)&LrmRsPanicked, (CHAR)TRUE);
     KeBugCheckEx(LEEWAY_RUST_PANIC,
                  (ULONG_PTR)Reason,
                  (ULONG_PTR)File,
@@ -323,13 +325,19 @@ LrmRsFatalStop(ULONG Reason, const UCHAR *File, SIZE_T FileLen, ULONG Line)
 }
 
 #if defined(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
-/* Rust (lib.rs, feature panic-test): deliberately panics -> reaches LrmRsFatalStop with reason 0x01. */
-DECLSPEC_NORETURN VOID lrm_rs_force_panic(VOID);
-
+/* Exported LAB trigger (lnrspoc resolves it). Mode 0 = plain Rust panic; Mode 1 = panic while holding
+ * the real special-pool region lock; Mode 2 = that plus a concurrent SMP2 special-pool workload. The
+ * region-lock modes delegate to ntspecial.c, which owns the static region. Never returns. The lnrspoc
+ * driver supplies the DISPATCH_LEVEL and driver-spin-lock variants itself (Mode 0 under those). */
 DECLSPEC_NORETURN VOID NTAPI
-LrmRsForcePanic(VOID)
+LrmRsForcePanic(ULONG Mode)
 {
-    lrm_rs_force_panic();
+    if (Mode == 1)
+        MiSpecialPoolForcePanic(0);   /* hold the region lock, no concurrent load */
+    else if (Mode >= 2)
+        MiSpecialPoolForcePanic(1);   /* hold the region lock + concurrent SMP2 load */
+
+    lrm_rs_force_panic();             /* Mode 0, and the unreachable tail of the above */
 }
 #endif
 

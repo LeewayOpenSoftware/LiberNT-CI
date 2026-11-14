@@ -62,11 +62,13 @@
 /* 0x80B: validate the LRM-RS kernel panic policy. Destructive (brings the box down), so test-only.
  * Resolves ntoskrnl!LrmRsForcePanic (exported ONLY by a LIBERNT_LRM_RS_FORCE_PANIC_TEST lab kernel),
  * which deliberately panics in Rust and must stop the machine with LEEWAY_RUST_PANIC (0x4C524D00,
- * P1=0x01). Input: one ULONG mode (0 = PASSIVE/no lock, 1 = at DISPATCH_LEVEL, 2 = at DISPATCH with a
- * spin lock held - the lock-held + DISPATCH cases Dwight requires, run on SMP1 and SMP2). Returns
- * STATUS_NOT_SUPPORTED on any other kernel. NEVER returns on a force-panic kernel. Disposable VM only. */
+ * P1=0x01). Input: one ULONG mode - 0 = PASSIVE/no lock; 1 = at DISPATCH_LEVEL; 2 = holding the REAL
+ * special-pool region lock; 3 = region lock + a concurrent special-pool workload on another CPU (SMP2);
+ * 4 = holding a driver spin lock at DISPATCH (extra). Modes 2/3 are the exact lock-held cases (god A);
+ * run every mode on SMP1 and SMP2. Returns STATUS_NOT_SUPPORTED on any other kernel. NEVER returns on
+ * a force-panic kernel. Disposable VM only; FILE_WRITE_ACCESS. */
 #define IOCTL_LNRSPOC_LRM_FORCEPANIC \
-    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_BUFFERED, FILE_WRITE_ACCESS)
 #endif
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
@@ -355,14 +357,16 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 #ifdef LNRSPOC_TEST_IOCTLS
     case IOCTL_LNRSPOC_LRM_FORCEPANIC:
     {
-        /* Validate the LRM-RS panic policy: call ntoskrnl!LrmRsForcePanic, which (on a force-panic
+        /* Validate the LRM-RS panic policy: call ntoskrnl!LrmRsForcePanic(Mode), which (on a force-panic
          * lab kernel) deliberately panics in Rust and bug-checks LEEWAY_RUST_PANIC via LrmRsFatalStop.
          * Absent on any normal kernel -> STATUS_NOT_SUPPORTED. On a lab kernel this does NOT return.
-         * Mode (input ULONG): 0 = PASSIVE/no lock; 1 = at DISPATCH_LEVEL; 2 = at DISPATCH with a spin
-         * lock held - the lock-held + DISPATCH cases, run on SMP1 and SMP2. The re-entrancy guard
-         * (LrmRsPanicked -> C oracle in ntspecial.c) then keeps the bug check's own special-pool use
-         * off the Rust path. */
-        typedef VOID (NTAPI *LRM_RS_FORCEPANIC)(VOID);
+         * Input ULONG mode: 0 = PASSIVE/no lock; 1 = at DISPATCH_LEVEL (driver raises IRQL); 2 = holding
+         * the REAL special-pool region lock (shim side); 3 = region lock + concurrent SMP2 workload
+         * (shim side); 4 = holding a driver spin lock at DISPATCH (extra). The region-lock modes 2/3
+         * pass through to the shim (LrmRsForcePanic arg 1/2); the driver handles IRQL/driver-lock for
+         * modes 1/4. After the panic LrmRsPanicked makes the region fail allocs / ignore frees, so the
+         * bug check's own special-pool use never re-takes the held lock. */
+        typedef VOID (NTAPI *LRM_RS_FORCEPANIC)(ULONG);
         static KSPIN_LOCK forceLock;
         static LONG forceLockInit = 0;
         UNICODE_STRING name;
@@ -386,23 +390,28 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         if (InterlockedCompareExchange(&forceLockInit, 1, 0) == 0)
             KeInitializeSpinLock(&forceLock);
 
-        DbgPrint("lnrspoc: lrm_forcepanic mode=%lu -> invoking LrmRsForcePanic (expect STOP 0x4C524D00 P1=0x01)\n", mode);
-        if (mode >= 2)
+        DbgPrint("lnrspoc: lrm_forcepanic mode=%lu -> LrmRsForcePanic (expect STOP 0x4C524D00 P1=0x01)\n", mode);
+        switch (mode)
         {
-            /* panic WHILE a spin lock is held, at DISPATCH_LEVEL (KeAcquireSpinLock raises IRQL). */
-            KeAcquireSpinLock(&forceLock, &oldIrql);
-            fn();                       /* never returns */
-            KeReleaseSpinLock(&forceLock, oldIrql);   /* unreachable */
-        }
-        else if (mode == 1)
-        {
-            KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
-            fn();                       /* never returns */
-            KeLowerIrql(oldIrql);       /* unreachable */
-        }
-        else
-        {
-            fn();                       /* never returns */
+            case 2:   /* hold the real special-pool region lock (shim side) */
+                fn(1);
+                break;
+            case 3:   /* region lock + concurrent SMP2 special-pool workload (shim side) */
+                fn(2);
+                break;
+            case 1:   /* at DISPATCH_LEVEL */
+                KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
+                fn(0);
+                KeLowerIrql(oldIrql);                       /* unreachable */
+                break;
+            case 4:   /* holding a driver spin lock at DISPATCH (extra) */
+                KeAcquireSpinLock(&forceLock, &oldIrql);
+                fn(0);
+                KeReleaseSpinLock(&forceLock, oldIrql);     /* unreachable */
+                break;
+            default:  /* 0 = plain, PASSIVE */
+                fn(0);
+                break;
         }
         status = STATUS_UNSUCCESSFUL;   /* unreachable */
         break;

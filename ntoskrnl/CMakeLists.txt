@@ -89,7 +89,7 @@ if(LIBERNT_ENABLE_LRM_RS AND ARCH STREQUAL "amd64")
     file(APPEND ${_lrmrs_spec_abs} "\n@ stdcall -arch=win64 LrmRsSelfTest(ptr)\n")
     if(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
         # Lab-only panic-policy trigger, resolved by lnrspoc via MmGetSystemRoutineAddress.
-        file(APPEND ${_lrmrs_spec_abs} "@ stdcall -arch=win64 LrmRsForcePanic()\n")
+        file(APPEND ${_lrmrs_spec_abs} "@ stdcall -arch=win64 LrmRsForcePanic(long)\n")
     endif()
     file(RELATIVE_PATH _NTOSKRNL_SPEC ${CMAKE_CURRENT_SOURCE_DIR} ${_lrmrs_spec_abs})
 endif()

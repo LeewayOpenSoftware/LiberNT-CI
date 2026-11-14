@@ -107,15 +107,22 @@ NTSTATUS NTAPI LrmRsSelfTest(PULONG Detail);
  */
 DECLSPEC_NORETURN VOID LrmRsFatalStop(ULONG Reason, const UCHAR *File, SIZE_T FileLen, ULONG Line);
 
-/* Set TRUE by LrmRsFatalStop before KeBugCheckEx. Every C entry into the Rust special-pool path
- * (ntspecial.c) checks it and falls back to the C oracle rather than re-entering Rust, so the bug
- * check's own machinery never re-takes a lock the panicking thread still holds (Dwight review P3). */
-extern BOOLEAN LrmRsPanicked;
+/* Set TRUE (InterlockedExchange8) by LrmRsFatalStop before KeBugCheckEx. Once set, the ntspecial.c
+ * special-pool wrappers FAIL the allocation (caller falls back to the normal pool) and IGNORE frees -
+ * no allocator runs on the Rust region again, so the bug check's own machinery never re-takes a lock
+ * the panicking thread may hold (Dwight review P3; god 2026-11-14). Volatile: acquire-ordered reads on
+ * x86/x64, so a CPU already inside a wrapper observes it. */
+extern BOOLEAN volatile LrmRsPanicked;
 
 #if defined(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
-/* LAB ONLY: drives a deliberate Rust panic (lrm_rs built with feature `panic-test`) to validate the
- * panic policy in a disposable VM. Exported in this build only (conditional spec); lnrspoc resolves
- * it with MmGetSystemRoutineAddress. Never returns (reaches LrmRsFatalStop with reason 0x01). */
-DECLSPEC_NORETURN VOID NTAPI LrmRsForcePanic(VOID);
+/* LAB ONLY (feature `panic-test`): validate the panic policy in a disposable VM. All never return.
+ * lrm_rs_force_panic: the Rust deliberate panic (-> LrmRsFatalStop reason 0x01).
+ * MiSpecialPoolForcePanic(ConcurrentLoad): panic while holding the REAL special-pool region lock
+ *   (ntspecial.c owns the static region); ConcurrentLoad != 0 also runs an SMP2 special-pool workload.
+ * LrmRsForcePanic(Mode): exported trigger lnrspoc resolves via MmGetSystemRoutineAddress -
+ *   Mode 0 = plain; 1 = hold region lock; 2 = hold region lock + concurrent SMP2 load. */
+DECLSPEC_NORETURN VOID lrm_rs_force_panic(VOID);
+DECLSPEC_NORETURN VOID MiSpecialPoolForcePanic(ULONG ConcurrentLoad);
+DECLSPEC_NORETURN VOID NTAPI LrmRsForcePanic(ULONG Mode);
 #endif
 #endif
