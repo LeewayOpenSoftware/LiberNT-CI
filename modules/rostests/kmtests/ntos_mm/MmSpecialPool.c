@@ -522,3 +522,135 @@ START_TEST(MmDriverVerifierCompletePending)
     IoCompleteRequest(Irp, IO_NO_INCREMENT);
     ok(FALSE, "the completion was not detected\n");
 }
+
+static PDEVICE_OBJECT VfLowerDevice;
+static PDRIVER_DISPATCH VfSavedDispatch;
+static PIRP VfHeldIrp;
+
+static
+VOID
+NTAPI
+VfNeverCancel(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
+}
+
+static
+NTSTATUS
+NTAPI
+VfLowerDispatch(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp)
+{
+    if (DeviceObject != VfLowerDevice)
+        return VfSavedDispatch(DeviceObject, Irp);
+
+    IoSetCancelRoutine(Irp, NULL);
+    IoMarkIrpPending(Irp);
+    VfHeldIrp = Irp;
+    return STATUS_PENDING;
+}
+
+static
+NTSTATUS
+NTAPI
+VfStopCompletion(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ PIRP Irp,
+    _In_opt_ PVOID Context)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    UNREFERENCED_PARAMETER(Irp);
+    UNREFERENCED_PARAMETER(Context);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static
+PIRP
+VfSendHeldIrp(
+    _In_ BOOLEAN WithCancelRoutine)
+{
+    PIO_STACK_LOCATION Stack;
+    NTSTATUS Status;
+    PIRP Irp;
+
+    Irp = IoAllocateIrp(VfLowerDevice->StackSize, FALSE);
+    ok(Irp != NULL, "no IRP\n");
+    if (Irp == NULL)
+        return NULL;
+
+    Stack = IoGetNextIrpStackLocation(Irp);
+    Stack->MajorFunction = IRP_MJ_INTERNAL_DEVICE_CONTROL;
+    IoSetCompletionRoutine(Irp, VfStopCompletion, NULL, TRUE, TRUE, TRUE);
+    if (WithCancelRoutine)
+        IoSetCancelRoutine(Irp, VfNeverCancel);
+
+    VfHeldIrp = NULL;
+    Status = IoCallDriver(VfLowerDevice, Irp);
+    ok_eq_hex(Status, STATUS_PENDING);
+    ok(VfHeldIrp == Irp, "the lower device holds %p, sent %p\n", VfHeldIrp, Irp);
+    return Irp;
+}
+
+static
+VOID
+VfCompleteHeldIrp(
+    _In_ PIRP Irp)
+{
+    Irp->IoStatus.Status = STATUS_SUCCESS;
+    Irp->IoStatus.Information = 0;
+    IoCompleteRequest(Irp, IO_NO_INCREMENT);
+    IoFreeIrp(Irp);
+}
+
+START_TEST(MmDriverVerifierIrpTracking)
+{
+    PVOID *Slot = (PVOID *)&KmtDriverObject->MajorFunction[IRP_MJ_INTERNAL_DEVICE_CONTROL];
+    ULONG Flags = 0;
+    NTSTATUS Status;
+    PIRP Irp;
+
+    if (skip(EveryTagIsSpecial() && NT_SUCCESS(MmIsVerifierEnabled(&Flags)) && (Flags & DRIVER_VERIFIER_IO_CHECKING),
+             "kmtest_drv.sys is not verified with I/O verification (VerifyDriverLevel 0x19)\n"))
+    {
+        return;
+    }
+
+    Status = IoCreateDevice(KmtDriverObject, 0, NULL, FILE_DEVICE_UNKNOWN, 0, FALSE, &VfLowerDevice);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    VfSavedDispatch = InterlockedExchangePointer(Slot, (PVOID)VfLowerDispatch);
+
+    trace("Case 1: an IRP pends below and its owner completes it; expect NO verifier line\n");
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+
+    trace("Case 2: an IRP is freed while it pends below; expect one log-only line, I/O rule 0x20b\n");
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+        IoFreeIrp(Irp);
+
+    trace("Case 3: an IRP is reused while it pends below; expect one log-only line, I/O rule 0x310\n");
+    Irp = VfSendHeldIrp(FALSE);
+    if (Irp != NULL)
+    {
+        IoReuseIrp(Irp, STATUS_SUCCESS);
+        IoFreeIrp(Irp);
+    }
+
+    trace("Case 4: an IRP is sent with its cancel routine set; expect one log-only line, I/O rule 0x203\n");
+    Irp = VfSendHeldIrp(TRUE);
+    if (Irp != NULL)
+        VfCompleteHeldIrp(Irp);
+
+    InterlockedExchangePointer(Slot, (PVOID)VfSavedDispatch);
+    IoDeleteDevice(VfLowerDevice);
+    VfLowerDevice = NULL;
+    trace("Done: the debug log must hold exactly three log-only lines (0x20b, 0x310, 0x203) and no bug check\n");
+}

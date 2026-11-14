@@ -201,6 +201,9 @@ MiInitializeDriverVerifier(VOID)
     if (Level & DRIVER_VERIFIER_TRACK_POOL_ALLOCATIONS)
         VfInitializePoolTracking();
 
+    if (Level & DRIVER_VERIFIER_IO_CHECKING)
+        VfInitializeIrpTracking();
+
     MmVerifierData.Level = Level;
     MiVerifierActive = TRUE;
     DbgPrint("Driver Verifier: level 0x%lx for \"%ws\"\n", Level, MmVerifyDriverBuffer);

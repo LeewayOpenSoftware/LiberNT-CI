@@ -1612,6 +1612,9 @@ IofCompleteRequest(IN PIRP Irp,
             __FUNCTION__,
             Irp);
 
+    if (VfIrpTrackingEnabled)
+        VfUntrackIrp(Irp);
+
     /* Make sure this IRP isn't getting completed twice or is invalid */
     if ((Irp->CurrentLocation) > (Irp->StackCount + 1))
     {
@@ -2016,6 +2019,9 @@ IoFreeIrp(IN PIRP Irp)
             "%s - Freeing IRPs %p\n",
             __FUNCTION__,
             Irp);
+
+    if (VfIrpTrackingEnabled)
+        VfUntrackIrp(Irp);
 
     /* Make sure the Thread IRP list is empty and that it OK to free it */
     ASSERT(Irp->Type == IO_TYPE_IRP);

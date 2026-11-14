@@ -368,6 +368,7 @@ KMT_TESTFUNC Test_MmReservedMapping;
 KMT_TESTFUNC Test_MmSelfMap;
 KMT_TESTFUNC Test_MmDriverVerifier;
 KMT_TESTFUNC Test_MmDriverVerifierCompletePending;
+KMT_TESTFUNC Test_MmDriverVerifierIrpTracking;
 KMT_TESTFUNC Test_MmDriverVerifierLeak;
 KMT_TESTFUNC Test_MmDriverVerifierSpinLockAtPassive;
 KMT_TESTFUNC Test_MmDriverVerifierPagedAtDispatch;
@@ -834,6 +835,7 @@ const KMT_TEST TestList[] =
     { "MmSelfMap",                          Test_MmSelfMap },
     { "MmDriverVerifier",                   Test_MmDriverVerifier },
     { "-MmDriverVerifierCompletePending",   Test_MmDriverVerifierCompletePending },
+    { "-MmDriverVerifierIrpTracking",       Test_MmDriverVerifierIrpTracking },
     { "-MmDriverVerifierLeak",              Test_MmDriverVerifierLeak },
     { "-MmDriverVerifierSpinLockAtPassive", Test_MmDriverVerifierSpinLockAtPassive },
     { "-MmDriverVerifierPagedAtDispatch",   Test_MmDriverVerifierPagedAtDispatch },

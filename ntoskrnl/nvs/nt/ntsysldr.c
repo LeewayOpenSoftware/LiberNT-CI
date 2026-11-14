@@ -758,6 +758,7 @@ MmUnloadSystemImage(IN PVOID ImageHandle)
 
     if (LdrEntry->LoadCount) goto Done;
 
+    VfCheckIrpsAtUnload(LdrEntry);
     VfCheckPoolAtUnload(LdrEntry);
 
     if (LdrEntry->Flags & LDRP_DEBUG_SYMBOLS_LOADED)

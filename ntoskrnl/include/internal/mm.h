@@ -1009,6 +1009,7 @@ extern const ULONG VfIrqlThunkCount;
 extern const VF_THUNK VfIoThunks[];
 extern const ULONG VfIoThunkCount;
 extern BOOLEAN VfPoolTrackingEnabled;
+extern BOOLEAN VfIrpTrackingEnabled;
 
 VOID
 NTAPI
@@ -1022,6 +1023,20 @@ VfUntrackPool(
 VOID
 NTAPI
 VfCheckPoolAtUnload(
+    IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
+
+VOID
+NTAPI
+VfInitializeIrpTracking(VOID);
+
+VOID
+NTAPI
+VfUntrackIrp(
+    IN struct _IRP *Irp);
+
+VOID
+NTAPI
+VfCheckIrpsAtUnload(
     IN struct _LDR_DATA_TABLE_ENTRY *LdrEntry);
 
 VOID

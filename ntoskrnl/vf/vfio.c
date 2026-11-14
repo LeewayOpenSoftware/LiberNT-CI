@@ -25,6 +25,252 @@ VOID NTAPI IoCompleteRequest(IN PIRP Irp, IN CCHAR PriorityBoost);
 #define VF_IO_COMPLETE_IRQL             0x0E
 #define VF_IO_CALL_IRQL                 0x10
 
+#define VF_IO_CALL_CANCEL_ROUTINE       0x203
+#define VF_IO_CALL_QUEUED_BELOW         0x205
+#define VF_IO_COMPLETE_QUEUED_BELOW     0x209
+#define VF_IO_FREE_IN_USE               0x20B
+#define VF_IO_REINITIALIZE_IN_USE       0x310
+
+#define VF_IRP_BUCKETS                  256
+#define VF_IRP_TAG                      'iTfV'
+#define VF_IRP_LINES_PRINTED            64
+
+typedef struct _VF_IRP_ENTRY
+{
+    LIST_ENTRY Link;
+    PIRP Irp;
+    PVOID Sender;
+    PDEVICE_OBJECT Target;
+    ULONG Sequence;
+} VF_IRP_ENTRY, *PVF_IRP_ENTRY;
+
+BOOLEAN VfIrpTrackingEnabled;
+ULONG VfIrpRuleHits;
+
+static const BOOLEAN VfpIrpRulesEnforced = FALSE;
+static LIST_ENTRY VfpIrpBucket[VF_IRP_BUCKETS];
+static KSPIN_LOCK VfpIrpLock;
+static ULONG VfpIrpSequence;
+
+static
+PLIST_ENTRY
+VfpIrpHead(
+    _In_ PIRP Irp)
+{
+    ULONG_PTR Value = (ULONG_PTR)Irp;
+
+    return &VfpIrpBucket[((Value >> PAGE_SHIFT) ^ (Value >> 6)) & (VF_IRP_BUCKETS - 1)];
+}
+
+static
+PVF_IRP_ENTRY
+VfpFindIrpLocked(
+    _In_ PIRP Irp)
+{
+    PLIST_ENTRY Head = VfpIrpHead(Irp);
+    PLIST_ENTRY Next;
+    PVF_IRP_ENTRY Entry;
+
+    for (Next = Head->Flink; Next != Head; Next = Next->Flink)
+    {
+        Entry = CONTAINING_RECORD(Next, VF_IRP_ENTRY, Link);
+        if (Entry->Irp == Irp)
+            return Entry;
+    }
+
+    return NULL;
+}
+
+VOID
+NTAPI
+VfInitializeIrpTracking(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < VF_IRP_BUCKETS; i++)
+        InitializeListHead(&VfpIrpBucket[i]);
+
+    KeInitializeSpinLock(&VfpIrpLock);
+    VfIrpTrackingEnabled = TRUE;
+}
+
+VOID
+NTAPI
+VfUntrackIrp(
+    _In_ PIRP Irp)
+{
+    PVF_IRP_ENTRY Entry;
+    KIRQL OldIrql;
+
+    if (KeGetCurrentIrql() > DISPATCH_LEVEL)
+        return;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    Entry = VfpFindIrpLocked(Irp);
+    if (Entry != NULL)
+        RemoveEntryList(&Entry->Link);
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    if (Entry != NULL)
+        ExFreePoolWithTag(Entry, VF_IRP_TAG);
+}
+
+static
+BOOLEAN
+VfpIsIrpBelow(
+    _In_ PIRP Irp)
+{
+    BOOLEAN Below;
+    KIRQL OldIrql;
+
+    if (!VfIrpTrackingEnabled)
+        return FALSE;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    Below = (BOOLEAN)(VfpFindIrpLocked(Irp) != NULL);
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+    return Below;
+}
+
+static
+ULONG
+VfpIrpSent(
+    _In_ PIRP Irp,
+    _In_ PDEVICE_OBJECT Target,
+    _In_ PVOID Sender)
+{
+    PVF_IRP_ENTRY Entry, Fresh;
+    ULONG Sequence;
+    KIRQL OldIrql;
+
+    Fresh = ExAllocatePoolWithTag(NonPagedPoolNx, sizeof(*Fresh), VF_IRP_TAG);
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    Entry = VfpFindIrpLocked(Irp);
+    if (Entry == NULL && Fresh != NULL)
+    {
+        Entry = Fresh;
+        Fresh = NULL;
+        Entry->Irp = Irp;
+        InsertHeadList(VfpIrpHead(Irp), &Entry->Link);
+    }
+
+    Sequence = 0;
+    if (Entry != NULL)
+    {
+        if (++VfpIrpSequence == 0)
+            VfpIrpSequence = 1;
+
+        Sequence = VfpIrpSequence;
+        Entry->Sequence = Sequence;
+        Entry->Sender = Sender;
+        Entry->Target = Target;
+    }
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    if (Fresh != NULL)
+        ExFreePoolWithTag(Fresh, VF_IRP_TAG);
+
+    return Sequence;
+}
+
+static
+VOID
+VfpIrpReturned(
+    _In_ PIRP Irp,
+    _In_ ULONG Sequence)
+{
+    PVF_IRP_ENTRY Entry;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    Entry = VfpFindIrpLocked(Irp);
+    if (Entry != NULL && Entry->Sequence == Sequence)
+        RemoveEntryList(&Entry->Link);
+    else
+        Entry = NULL;
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    if (Entry != NULL)
+        ExFreePoolWithTag(Entry, VF_IRP_TAG);
+}
+
+static
+BOOLEAN
+VfpCallerOwnsCurrentLocation(
+    _In_ PIRP Irp,
+    _In_ PVOID Caller)
+{
+    PIO_STACK_LOCATION Stack;
+    PDRIVER_OBJECT Driver;
+    ULONG_PTR Start;
+
+    if (Irp->CurrentLocation > Irp->StackCount)
+        return FALSE;
+
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+    if (Stack->DeviceObject == NULL)
+        return FALSE;
+
+    Driver = Stack->DeviceObject->DriverObject;
+    if (Driver == NULL)
+        return FALSE;
+
+    Start = (ULONG_PTR)Driver->DriverStart;
+    return (BOOLEAN)((ULONG_PTR)Caller >= Start && (ULONG_PTR)Caller < Start + Driver->DriverSize);
+}
+
+static
+VOID
+VfpReportIrpRule(
+    _In_ ULONG Rule,
+    _In_ PVOID Caller,
+    _In_ PIRP Irp)
+{
+    ULONG Hits = (ULONG)InterlockedIncrement((PLONG)&VfIrpRuleHits);
+
+    if (VfpIrpRulesEnforced)
+        KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, Rule, (ULONG_PTR)Caller, (ULONG_PTR)Irp, 0);
+
+    if (Hits <= VF_IRP_LINES_PRINTED)
+        DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p\n", Rule, Irp, Caller);
+}
+
+VOID
+NTAPI
+VfCheckIrpsAtUnload(
+    _In_ PLDR_DATA_TABLE_ENTRY LdrEntry)
+{
+    ULONG_PTR Start = (ULONG_PTR)LdrEntry->DllBase;
+    ULONG_PTR End = Start + LdrEntry->SizeOfImage;
+    PVF_IRP_ENTRY Entry;
+    PLIST_ENTRY Next;
+    ULONG Outstanding = 0;
+    KIRQL OldIrql;
+    ULONG i;
+
+    if (!VfIrpTrackingEnabled || !(LdrEntry->Flags & LDRP_IMAGE_VERIFYING))
+        return;
+
+    KeAcquireSpinLock(&VfpIrpLock, &OldIrql);
+    for (i = 0; i < VF_IRP_BUCKETS; i++)
+    {
+        for (Next = VfpIrpBucket[i].Flink; Next != &VfpIrpBucket[i]; Next = Next->Flink)
+        {
+            Entry = CONTAINING_RECORD(Next, VF_IRP_ENTRY, Link);
+            if ((ULONG_PTR)Entry->Sender >= Start && (ULONG_PTR)Entry->Sender < End)
+                Outstanding++;
+        }
+    }
+    KeReleaseSpinLock(&VfpIrpLock, OldIrql);
+
+    if (Outstanding != 0)
+    {
+        DbgPrint("Driver Verifier (log only): %wZ unloads with %lu IRP(s) it sent still pending below it\n",
+                 &LdrEntry->BaseDllName, Outstanding);
+    }
+}
+
 static
 VOID
 VfpCheckCall(
@@ -61,7 +307,8 @@ VfpCheckCallReturn(
 static
 VOID
 VfpCheckComplete(
-    _In_ PIRP Irp)
+    _In_ PIRP Irp,
+    _In_ PVOID Caller)
 {
     KIRQL Irql = KeGetCurrentIrql();
 
@@ -79,6 +326,42 @@ VfpCheckComplete(
         KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, VF_IO_COMPLETE_CANCEL_ROUTINE,
                      (ULONG_PTR)Irp->CancelRoutine, (ULONG_PTR)Irp, 0);
     }
+
+    if (VfpIsIrpBelow(Irp) && !VfpCallerOwnsCurrentLocation(Irp, Caller))
+        VfpReportIrpRule(VF_IO_COMPLETE_QUEUED_BELOW, Caller, Irp);
+}
+
+static
+NTSTATUS
+VfpCallDriver(
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _Inout_ PIRP Irp,
+    _In_ PVOID Caller)
+{
+    KIRQL Before = KeGetCurrentIrql();
+    ULONG Sequence = 0;
+    NTSTATUS Status;
+
+    VfpCheckCall(DeviceObject, Irp);
+
+    if (VfIrpTrackingEnabled)
+    {
+        if (Irp->CancelRoutine != NULL)
+            VfpReportIrpRule(VF_IO_CALL_CANCEL_ROUTINE, Caller, Irp);
+
+        if (VfpIsIrpBelow(Irp) && !VfpCallerOwnsCurrentLocation(Irp, Caller))
+            VfpReportIrpRule(VF_IO_CALL_QUEUED_BELOW, Caller, Irp);
+
+        Sequence = VfpIrpSent(Irp, DeviceObject, Caller);
+    }
+
+    Status = IofCallDriver(DeviceObject, Irp);
+
+    if (Sequence != 0 && Status != STATUS_PENDING)
+        VfpIrpReturned(Irp, Sequence);
+
+    VfpCheckCallReturn(DeviceObject, Before);
+    return Status;
 }
 
 static
@@ -88,13 +371,7 @@ VfIofCallDriver(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp)
 {
-    KIRQL Before = KeGetCurrentIrql();
-    NTSTATUS Status;
-
-    VfpCheckCall(DeviceObject, Irp);
-    Status = IofCallDriver(DeviceObject, Irp);
-    VfpCheckCallReturn(DeviceObject, Before);
-    return Status;
+    return VfpCallDriver(DeviceObject, Irp, _ReturnAddress());
 }
 
 static
@@ -104,13 +381,7 @@ VfIoCallDriver(
     _In_ PDEVICE_OBJECT DeviceObject,
     _Inout_ PIRP Irp)
 {
-    KIRQL Before = KeGetCurrentIrql();
-    NTSTATUS Status;
-
-    VfpCheckCall(DeviceObject, Irp);
-    Status = IofCallDriver(DeviceObject, Irp);
-    VfpCheckCallReturn(DeviceObject, Before);
-    return Status;
+    return VfpCallDriver(DeviceObject, Irp, _ReturnAddress());
 }
 
 static
@@ -120,7 +391,7 @@ VfIofCompleteRequest(
     _In_ PIRP Irp,
     _In_ CCHAR PriorityBoost)
 {
-    VfpCheckComplete(Irp);
+    VfpCheckComplete(Irp, _ReturnAddress());
     IofCompleteRequest(Irp, PriorityBoost);
 }
 
@@ -131,7 +402,7 @@ VfIoCompleteRequest(
     _In_ PIRP Irp,
     _In_ CCHAR PriorityBoost)
 {
-    VfpCheckComplete(Irp);
+    VfpCheckComplete(Irp, _ReturnAddress());
     IofCompleteRequest(Irp, PriorityBoost);
 }
 
@@ -147,7 +418,43 @@ VfIoFreeIrp(
     if (!IsListEmpty(&Irp->ThreadListEntry))
         KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, VF_IO_FREE_QUEUED_TO_THREAD, (ULONG_PTR)Irp, 0, 0);
 
+    if (VfpIsIrpBelow(Irp))
+        VfpReportIrpRule(VF_IO_FREE_IN_USE, _ReturnAddress(), Irp);
+
     IoFreeIrp(Irp);
+}
+
+static
+VOID
+NTAPI
+VfIoReuseIrp(
+    _Inout_ PIRP Irp,
+    _In_ NTSTATUS Status)
+{
+    if (VfpIsIrpBelow(Irp))
+    {
+        VfpReportIrpRule(VF_IO_REINITIALIZE_IN_USE, _ReturnAddress(), Irp);
+        VfUntrackIrp(Irp);
+    }
+
+    IoReuseIrp(Irp, Status);
+}
+
+static
+VOID
+NTAPI
+VfIoInitializeIrp(
+    _Inout_ PIRP Irp,
+    _In_ USHORT PacketSize,
+    _In_ CCHAR StackSize)
+{
+    if (VfpIsIrpBelow(Irp))
+    {
+        VfpReportIrpRule(VF_IO_REINITIALIZE_IN_USE, _ReturnAddress(), Irp);
+        VfUntrackIrp(Irp);
+    }
+
+    IoInitializeIrp(Irp, PacketSize, StackSize);
 }
 
 const VF_THUNK VfIoThunks[] =
@@ -157,6 +464,8 @@ const VF_THUNK VfIoThunks[] =
     { (ULONG_PTR)IofCompleteRequest, (ULONG_PTR)VfIofCompleteRequest },
     { (ULONG_PTR)IoCompleteRequest, (ULONG_PTR)VfIoCompleteRequest },
     { (ULONG_PTR)IoFreeIrp, (ULONG_PTR)VfIoFreeIrp },
+    { (ULONG_PTR)IoReuseIrp, (ULONG_PTR)VfIoReuseIrp },
+    { (ULONG_PTR)IoInitializeIrp, (ULONG_PTR)VfIoInitializeIrp },
 };
 
 const ULONG VfIoThunkCount = RTL_NUMBER_OF(VfIoThunks);
