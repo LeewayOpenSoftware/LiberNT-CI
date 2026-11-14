@@ -14,6 +14,14 @@
  * intended for a disposable VM.
  */
 #include <ntddk.h>
+#ifdef LNRSPOC_TEST_IOCTLS
+#include <wdmsec.h>   /* IoCreateDeviceSecure */
+/* Test-only device is privileged (it can stop the box). Restrict it to SYSTEM + Builtin
+ * Administrators, full access (Stanley SHOULD 3). */
+DECLARE_CONST_UNICODE_STRING(LnrspocSddl, L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
+static const GUID LNRSPOC_DEVCLASS_GUID =
+    { 0x6c6e7273, 0x706f, 0x6301, { 0x8e, 0x72, 0x4c, 0x52, 0x4d, 0x52, 0x53, 0x00 } };
+#endif
 #include "leeway_rs_poc.h"
 
 #define LNRSPOC_DEVICE_NAME L"\\Device\\Lnrspoc"
@@ -454,8 +462,16 @@ DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     UNREFERENCED_PARAMETER(RegistryPath);
 
     RtlInitUnicodeString(&devName, LNRSPOC_DEVICE_NAME);
+#ifdef LNRSPOC_TEST_IOCTLS
+    /* Privileged test build: create the device with an explicit SYSTEM+Administrators-only ACL so a
+     * normal user cannot open it and drive the destructive IOCTLs (Stanley SHOULD 3). */
+    status = IoCreateDeviceSecure(DriverObject, 0, &devName, FILE_DEVICE_UNKNOWN,
+                                  FILE_DEVICE_SECURE_OPEN, FALSE, &LnrspocSddl,
+                                  (LPCGUID)&LNRSPOC_DEVCLASS_GUID, &g_DeviceObject);
+#else
     status = IoCreateDevice(DriverObject, 0, &devName, FILE_DEVICE_UNKNOWN,
                             FILE_DEVICE_SECURE_OPEN, FALSE, &g_DeviceObject);
+#endif
     if (!NT_SUCCESS(status))
         return status;
 
