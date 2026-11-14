@@ -59,6 +59,13 @@ IopDeleteDevice(IN PVOID ObjectBody)
     if (DeviceNode)
         IopFreeDeviceNode(DeviceNode);
 
+    /* The device's descriptor lives in the security descriptor cache; the header slot holds nothing for a device */
+    if (DeviceObject->SecurityDescriptor)
+    {
+        ObDereferenceSecurityDescriptor(DeviceObject->SecurityDescriptor, 1);
+        DeviceObject->SecurityDescriptor = NULL;
+    }
+
     /* Dereference the driver object, referenced in IoCreateDevice */
     if (DeviceObject->DriverObject)
         ObDereferenceObject(DeviceObject->DriverObject);
@@ -534,8 +541,9 @@ IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
         /* Check if we have a Security Descriptor */
         if (DeviceObject->SecurityDescriptor)
         {
-            /* Dereference it */
+            /* Dereference it; the delete procedure must not release it again */
             ObDereferenceSecurityDescriptor(DeviceObject->SecurityDescriptor, 1);
+            DeviceObject->SecurityDescriptor = NULL;
         }
 
         /* Remove the device from the list */
