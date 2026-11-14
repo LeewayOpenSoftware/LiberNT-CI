@@ -210,7 +210,7 @@ IntUpdateLayeredWindowI( PWND pWnd,
    RECT Window, Client;
    SIZE Offset;
    BOOL ret = FALSE;
-   DWORD flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW;
+   DWORD flags = SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE;
 
    Window = pWnd->rcWindow;
    Client = pWnd->rcClient;
