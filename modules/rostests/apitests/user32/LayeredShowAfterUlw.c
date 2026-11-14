@@ -186,5 +186,11 @@ static void Test_HiddenLayeredWindowULWShowWindow(void)
 
 START_TEST(LayeredShowAfterUlw)
 {
+    if (!IsWindowVisible(GetDesktopWindow()))
+    {
+        skip("Not on the interactive desktop\n");
+        return;
+    }
+
     Test_HiddenLayeredWindowULWShowWindow();
 }
