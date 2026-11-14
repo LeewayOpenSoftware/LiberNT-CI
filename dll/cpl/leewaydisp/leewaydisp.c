@@ -500,10 +500,15 @@ ApplyResolution(HWND hwnd, DISPDATA *dd)
         Msg(hwnd, IDS_APPLY_FAILED, MB_OK | MB_ICONERROR);
         return;
     }
-    if (DialogBoxParamW(hInst, MAKEINTRESOURCEW(IDD_KEEP), hwnd, KeepProc, (LPARAM)&kd) != IDOK)
+    if (DialogBoxParamW(hInst, MAKEINTRESOURCEW(IDD_KEEP), hwnd, KeepProc, (LPARAM)&kd) == IDOK)
     {
-        if (LDispApplyMode(device, &previous) != DISP_CHANGE_SUCCESSFUL)
+        /* only now is the mode written to the registry */
+        if (LDispCommitMode(device, &wanted) != DISP_CHANGE_SUCCESSFUL)
             Msg(hwnd, IDS_APPLY_FAILED, MB_OK | MB_ICONERROR);
+    }
+    else if (LDispApplyMode(device, &previous) != DISP_CHANGE_SUCCESSFUL)
+    {
+        Msg(hwnd, IDS_APPLY_FAILED, MB_OK | MB_ICONERROR);
     }
     SelectMonitor(hwnd, dd, mon);
 }

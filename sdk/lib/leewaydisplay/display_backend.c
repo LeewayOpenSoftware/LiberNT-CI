@@ -129,6 +129,12 @@ LDispTestMode(const WCHAR *device, const LDISP_MODE *mode)
 LONG
 LDispApplyMode(const WCHAR *device, const LDISP_MODE *mode)
 {
+    return Change(device, mode, 0);
+}
+
+LONG
+LDispCommitMode(const WCHAR *device, const LDISP_MODE *mode)
+{
     return Change(device, mode, CDS_UPDATEREGISTRY);
 }
 

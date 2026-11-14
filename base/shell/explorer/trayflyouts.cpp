@@ -11927,7 +11927,8 @@ public:
                 ShellExecuteW(NULL, NULL, L"control.exe", NULL, NULL, SW_SHOWNORMAL);
                 break;
             case 1:
-                ShellExecuteW(NULL, NULL, L"control.exe", L"desk.cpl", NULL, SW_SHOWNORMAL);
+                if ((INT_PTR)ShellExecuteW(NULL, NULL, L"control.exe", L"leewaydisp.cpl", NULL, SW_SHOWNORMAL) <= 32)
+                    ShellExecuteW(NULL, NULL, L"control.exe", L"desk.cpl", NULL, SW_SHOWNORMAL);
                 break;
             case 2:
                 ShellExecuteW(NULL, NULL, L"control.exe", L"sysdm.cpl", NULL, SW_SHOWNORMAL);

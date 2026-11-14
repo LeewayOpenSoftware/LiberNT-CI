@@ -53,7 +53,11 @@ int LDispEnumModes(const WCHAR *device, LDISP_MODE *out, int max);
 BOOL LDispGetCurrent(const WCHAR *device, LDISP_MODE *mode);
 /* DISP_CHANGE_* results; DISP_CHANGE_SUCCESSFUL == 0. */
 LONG LDispTestMode(const WCHAR *device, const LDISP_MODE *mode);          /* CDS_TEST, changes nothing */
-LONG LDispApplyMode(const WCHAR *device, const LDISP_MODE *mode);         /* CDS_UPDATEREGISTRY */
+/* Dynamic change only: the mode is NEVER written to the registry here, so a hang, crash or power cut before the
+ * user confirms comes back up in the previous mode. Use it to apply and to revert. */
+LONG LDispApplyMode(const WCHAR *device, const LDISP_MODE *mode);
+/* Persist the mode (CDS_UPDATEREGISTRY) after the user confirmed it. */
+LONG LDispCommitMode(const WCHAR *device, const LDISP_MODE *mode);
 UINT LDispGetSystemDpi(void);
 
 /* Wallpaper: styles map to the WallpaperStyle/TileWallpaper values. Span is not offered (no multi-monitor span). */
