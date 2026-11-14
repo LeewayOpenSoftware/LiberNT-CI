@@ -23,7 +23,7 @@
 @ stdcall NsiQueryTableSizesKm(ptr long ptr)
 @ stdcall NsiEnumerateAllParametersKm(ptr long ptr ptr)
 @ stdcall NsiGetAllParametersKm(ptr long ptr long ptr long ptr ptr ptr)
-@ stdcall NsiGetParameterKm(ptr long ptr long ptr long long long ptr long)
+@ stdcall NsiGetParameterKm(ptr long long ptr long long long ptr long)
 
 ; Windows Filtering Platform (WFP) kernel stubs — dev-nt6-1 branch
 @ stdcall FwpsCalloutRegister0(ptr ptr ptr)
