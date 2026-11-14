@@ -963,6 +963,50 @@ NtfsTrimRecordCache(_In_ PVolumeContextBlock VolCB)
     }
 }
 
+/* Everything idle goes; an entry still in use is left and counted, the
+ * caller decides what that means. Used when a dismounted volume is freed. */
+ULONG
+NtfsPurgeRecordCache(_In_ PVolumeContextBlock VolCB)
+{
+    LIST_ENTRY Doomed;
+    PLIST_ENTRY Entry;
+    PLIST_ENTRY Next;
+    ULONG InUse = 0;
+
+    InitializeListHead(&Doomed);
+    ExAcquireFastMutex(&VolCB->RecordCacheMutex);
+    for (Entry = VolCB->RecordCacheList.Flink;
+         Entry != &VolCB->RecordCacheList;
+         Entry = Next)
+    {
+        PNtfsCachedRecord Candidate = CONTAINING_RECORD(Entry, NtfsCachedRecord, Link);
+
+        Next = Entry->Flink;
+        if (Candidate->InUse != 0)
+        {
+            InUse++;
+            continue;
+        }
+        RemoveEntryList(&Candidate->Link);
+        RemoveEntryList(&Candidate->HashLink);
+        if (!IsListEmpty(&Candidate->IdentityLink))
+            RemoveEntryList(&Candidate->IdentityLink);
+        VolCB->RecordCacheCount--;
+        InsertTailList(&Doomed, &Candidate->Link);
+    }
+    ExReleaseFastMutex(&VolCB->RecordCacheMutex);
+
+    while (!IsListEmpty(&Doomed))
+    {
+        PNtfsCachedRecord Gone = CONTAINING_RECORD(RemoveHeadList(&Doomed), NtfsCachedRecord, Link);
+
+        if (Gone->Record)
+            NtfsFileRecordDestroy(Gone->Record);
+        ExFreePoolWithTag(Gone, TAG_NTFS);
+    }
+    return InUse;
+}
+
 PNtfsCachedRecord
 NtfsAcquireCachedRecord(_In_ PVolumeContextBlock VolCB,
                         _In_reads_(Length) PCWSTR Name,

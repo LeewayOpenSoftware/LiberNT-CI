@@ -1382,6 +1382,22 @@ NTSTATUS
 NtfsVolumeMarkCleanForShutdown(
     _In_ PNtfsVolume DiskVolume);
 
+/* A check that wrote nothing found the volume consistent: clear the dirty
+ * flag it was mounted with, retained or not, and forget a corruption note.
+ * The check is the authority on the medium. Caller holds the metadata lock. */
+NTSTATUS
+NtfsVolumeMarkCleanAfterCheck(
+    _In_ PNtfsVolume DiskVolume);
+
+/*
+ * Leeway control code, sent by the checker on the handle that holds the volume
+ * lock when its check wrote nothing: the mounted instance clears the dirty
+ * flag itself and stays mounted, so nothing has to restart. Vendor range of
+ * the file system device type; no input, no output.
+ */
+#define FSCTL_NTFS_CLEAR_DIRTY_AFTER_CHECK \
+    CTL_CODE(FILE_DEVICE_FILE_SYSTEM, 0x8E0, METHOD_BUFFERED, FILE_WRITE_DATA)
+
 BOOLEAN
 NtfsVolumeReportsDirty(
     _In_ PNtfsVolume DiskVolume,

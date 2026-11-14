@@ -85,6 +85,8 @@ NdisDeregisterMac(
  */
 {
     UNIMPLEMENTED;
+
+    *Status = NDIS_STATUS_NOT_SUPPORTED;
 }
 
 
@@ -194,6 +196,8 @@ NdisReadMcaPosInformation(
  */
 {
     UNIMPLEMENTED;
+
+    *Status = NDIS_STATUS_NOT_SUPPORTED;
 }
 
 
@@ -303,6 +307,10 @@ NdisReadEisaSlotInformationEx(
     OUT PUINT                           NumberOfFunctions)
 {
     UNIMPLEMENTED;
+
+    *Status = NDIS_STATUS_NOT_SUPPORTED;
+    *EisaData = NULL;
+    *NumberOfFunctions = 0;
 }
 
 /* EOF */

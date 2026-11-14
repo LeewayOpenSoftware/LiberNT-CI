@@ -1150,15 +1150,32 @@ WskControlSocket(
                             }
                             PWSK_EVENT_CALLBACK_CONTROL Control = (WSK_EVENT_CALLBACK_CONTROL *)InputBuffer;
 
-                            if (((Socket->CallbackMask & WSK_EVENT_ACCEPT) == 0) &&
-                                ((Control->EventMask & WSK_EVENT_ACCEPT) == WSK_EVENT_ACCEPT))
+                            /* Only the accept event is delivered. A caller that asks for
+                             * another one is told so, instead of waiting for an event
+                             * that never comes. */
+                            if (Control->EventMask & ~(WSK_EVENT_ACCEPT | WSK_EVENT_DISABLE))
                             {
-                                Socket->CallbackMask = Control->EventMask;
+                                DPRINT1("WskControlSocket: event mask 0x%lx has events that are not implemented\n",
+                                        Control->EventMask);
+                                status = STATUS_NOT_SUPPORTED;
+                                break;
+                            }
+
+                            /* With WSK_EVENT_DISABLE the events of the mask are turned
+                             * off; without it they are turned on */
+                            if (Control->EventMask & WSK_EVENT_DISABLE)
+                            {
+                                Socket->CallbackMask &= ~(Control->EventMask & ~WSK_EVENT_DISABLE);
+                            }
+                            else if (((Socket->CallbackMask & WSK_EVENT_ACCEPT) == 0) &&
+                                     ((Control->EventMask & WSK_EVENT_ACCEPT) == WSK_EVENT_ACCEPT))
+                            {
+                                Socket->CallbackMask |= Control->EventMask;
                                 StartListeningOnce(Socket);
                             }
                             else
                             {
-                                Socket->CallbackMask = Control->EventMask;
+                                Socket->CallbackMask |= Control->EventMask;
                             }
 
                             status = STATUS_SUCCESS;

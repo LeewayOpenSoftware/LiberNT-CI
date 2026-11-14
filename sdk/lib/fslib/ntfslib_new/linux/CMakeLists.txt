@@ -272,6 +272,20 @@ if(BUILD_TESTING)
         COMMAND ntfslib_lost_write_dirty_test
     )
 
+    add_executable(ntfslib_clean_check_after_lost_write_test
+        tests/clean_check_after_lost_write.cpp
+    )
+    target_compile_features(ntfslib_clean_check_after_lost_write_test PRIVATE cxx_std_17)
+    target_compile_options(ntfslib_clean_check_after_lost_write_test PRIVATE
+        -Wall
+        -Wextra
+    )
+    target_link_libraries(ntfslib_clean_check_after_lost_write_test PRIVATE ntfslib_linux ntfslib_format_host)
+    add_test(
+        NAME ntfslib_linux_clean_check_after_lost_write
+        COMMAND ntfslib_clean_check_after_lost_write_test
+    )
+
     add_executable(ntfslib_lookup_index_cache_test
         tests/lookup_index_cache.cpp
     )

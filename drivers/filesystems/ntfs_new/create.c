@@ -1984,6 +1984,7 @@ NtfsOpenVolume(
     {
         VolCB->VolumeHandleCount++;
         VolCB->OpenHandleCount++;
+        VolCB->FileObjectCount++;
         FileCB->BootLockNeutral = FALSE;
         FileObject->FsContext = FileCB;
         FileObject->Vpb = IrpSp->DeviceObject->Vpb;
@@ -3354,6 +3355,7 @@ NtfsCommonCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
     else
     {
         VolCB->OpenHandleCount++;
+        VolCB->FileObjectCount++;
         if (FileCB->PagingFileOpen)
             VolCB->PagingFileSeen = TRUE;
         /* A current-directory style open (a directory, traverse access only)
@@ -3415,6 +3417,7 @@ NtfsCommonCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         {
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
             NtfsDropOpenHandle(VolCB, FileCB);
+            NtfsDropFileObject(VolCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;
@@ -3446,6 +3449,7 @@ NtfsCommonCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         {
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
             NtfsDropOpenHandle(VolCB, FileCB);
+            NtfsDropFileObject(VolCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;
@@ -3531,6 +3535,7 @@ NtfsCommonCreate(_In_ PDEVICE_OBJECT VolumeDeviceObject,
         {
             ExAcquireFastMutex(&VolCB->VolumeStateMutex);
             NtfsDropOpenHandle(VolCB, FileCB);
+            NtfsDropFileObject(VolCB);
             ExReleaseFastMutex(&VolCB->VolumeStateMutex);
             FileObject->FsContext = NULL;
             FileObject->FsContext2 = NULL;

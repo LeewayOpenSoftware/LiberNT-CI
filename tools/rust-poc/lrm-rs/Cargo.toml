@@ -1,0 +1,34 @@
+# LRM-RS: Leeway Rust Memory - Special Pool engine (clean-room; same NT contracts as the C
+# engine in nvs/pool/special/special.c). no_std staticlib, no heap, panic-free. Differential
+# reference is the C engine; production swap needs owner OK. Not shipped; off by default.
+[package]
+name = "lrm-rs"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-3.0-only"
+publish = false
+description = "Leeway experimental Rust Special Pool engine (LRM-RS). Differential vs the C engine; not production."
+
+[lib]
+name = "lrm_rs"
+# staticlib for the kernel link; rlib so the host differential/fuzz harnesses can depend on the
+# crate and call the engine directly (only materialised when something depends on it as a lib).
+crate-type = ["staticlib", "rlib"]
+
+[features]
+# `std`: host build only - drops #![no_std] and the crate's panic handler so the engine can link
+# into a std harness (difftest-rs, cargo-fuzz). OFF by default: the kernel build is unchanged.
+std = []
+# `panic-test`: kernel LAB build only - exposes lrm_rs_force_panic() to validate the panic policy
+# (handler -> LEEWAY_RUST_PANIC bug check) in a disposable VM. OFF by default and on shipping ISOs;
+# deliberately panics, so a build with this feature does NOT use the FORBID_PANIC gate (it is built
+# only into the lab/lnrspoc test kernel variant, never the shipped FORBID_PANIC archive).
+panic-test = []
+
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1

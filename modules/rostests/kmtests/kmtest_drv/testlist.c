@@ -383,6 +383,23 @@ KMT_TESTFUNC Test_MmDriverVerifierLockStress;
 KMT_TESTFUNC Test_MmDriverVerifierSpinLockAtPassive;
 KMT_TESTFUNC Test_MmDriverVerifierPagedAtDispatch;
 KMT_TESTFUNC Test_MmDriverVerifierWaitAtDispatch;
+KMT_TESTFUNC Test_MmDriverVerifierZeroBytes;
+KMT_TESTFUNC Test_MmDriverVerifierNonPagedAtHigh;
+KMT_TESTFUNC Test_MmDriverVerifierFreePagedAtDispatch;
+KMT_TESTFUNC Test_MmDriverVerifierFreeAtHigh;
+KMT_TESTFUNC Test_MmDriverVerifierReleaseSpinLockAtPassive;
+KMT_TESTFUNC Test_MmDriverVerifierFastMutexAtDispatch;
+KMT_TESTFUNC Test_MmDriverVerifierFastMutexReleaseAtPassive;
+KMT_TESTFUNC Test_MmDriverVerifierReleaseFromDpcAtPassive;
+KMT_TESTFUNC Test_MmDriverVerifierSpinLockAtHigh;
+KMT_TESTFUNC Test_MmDriverVerifierIoFreeNotIrp;
+KMT_TESTFUNC Test_MmDriverVerifierIoFreeThreadIrp;
+KMT_TESTFUNC Test_MmDriverVerifierIoCallNotIrp;
+KMT_TESTFUNC Test_MmDriverVerifierIoCallBadDevice;
+KMT_TESTFUNC Test_MmDriverVerifierIoCallIrqlChanged;
+KMT_TESTFUNC Test_MmDriverVerifierIoCompleteCancelRoutine;
+KMT_TESTFUNC Test_MmDriverVerifierIoCompleteAtHigh;
+KMT_TESTFUNC Test_MmDriverVerifierIoCallAtHigh;
 KMT_TESTFUNC Test_MmSpecialPool;
 KMT_TESTFUNC Test_MmSpecialPoolOverrunWrite;
 KMT_TESTFUNC Test_MmSpecialPoolOverrunRead;
@@ -860,6 +877,23 @@ const KMT_TEST TestList[] =
     { "-MmDriverVerifierSpinLockAtPassive", Test_MmDriverVerifierSpinLockAtPassive },
     { "-MmDriverVerifierPagedAtDispatch",   Test_MmDriverVerifierPagedAtDispatch },
     { "-MmDriverVerifierWaitAtDispatch",    Test_MmDriverVerifierWaitAtDispatch },
+    { "-MmDriverVerifierZeroBytes", Test_MmDriverVerifierZeroBytes },
+    { "-MmDriverVerifierNonPagedAtHigh", Test_MmDriverVerifierNonPagedAtHigh },
+    { "-MmDriverVerifierFreePagedAtDispatch", Test_MmDriverVerifierFreePagedAtDispatch },
+    { "-MmDriverVerifierFreeAtHigh", Test_MmDriverVerifierFreeAtHigh },
+    { "-MmDriverVerifierReleaseSpinLockAtPassive", Test_MmDriverVerifierReleaseSpinLockAtPassive },
+    { "-MmDriverVerifierFastMutexAtDispatch", Test_MmDriverVerifierFastMutexAtDispatch },
+    { "-MmDriverVerifierFastMutexReleaseAtPassive", Test_MmDriverVerifierFastMutexReleaseAtPassive },
+    { "-MmDriverVerifierReleaseFromDpcAtPassive", Test_MmDriverVerifierReleaseFromDpcAtPassive },
+    { "-MmDriverVerifierSpinLockAtHigh", Test_MmDriverVerifierSpinLockAtHigh },
+    { "-MmDriverVerifierIoFreeNotIrp", Test_MmDriverVerifierIoFreeNotIrp },
+    { "-MmDriverVerifierIoFreeThreadIrp", Test_MmDriverVerifierIoFreeThreadIrp },
+    { "-MmDriverVerifierIoCallNotIrp", Test_MmDriverVerifierIoCallNotIrp },
+    { "-MmDriverVerifierIoCallBadDevice", Test_MmDriverVerifierIoCallBadDevice },
+    { "-MmDriverVerifierIoCallIrqlChanged", Test_MmDriverVerifierIoCallIrqlChanged },
+    { "-MmDriverVerifierIoCompleteCancelRoutine", Test_MmDriverVerifierIoCompleteCancelRoutine },
+    { "-MmDriverVerifierIoCompleteAtHigh", Test_MmDriverVerifierIoCompleteAtHigh },
+    { "-MmDriverVerifierIoCallAtHigh", Test_MmDriverVerifierIoCallAtHigh },
     { "MmSpecialPool",                      Test_MmSpecialPool },
     { "-MmSpecialPoolOverrunWrite",         Test_MmSpecialPoolOverrunWrite },
     { "-MmSpecialPoolOverrunRead",          Test_MmSpecialPoolOverrunRead },

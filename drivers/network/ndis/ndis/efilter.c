@@ -118,9 +118,12 @@ EthFilterDprIndicateReceiveComplete(
  *     Filter = Pointer to Ethernet filter
  */
 {
-  PLIST_ENTRY CurrentEntry;
+  PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+  PADAPTER_BINDING *Snapshot;
   PLOGICAL_ADAPTER Adapter;
   PADAPTER_BINDING AdapterBinding;
+  SIZE_T SnapshotCount;
+  SIZE_T i;
 
   NDIS_DbgPrint(DEBUG_MINIPORT, ("Called.\n"));
 
@@ -131,22 +134,20 @@ EthFilterDprIndicateReceiveComplete(
 
   Adapter = (PLOGICAL_ADAPTER)((PETHI_FILTER)Filter)->Miniport;
 
-  NDIS_DbgPrint(MAX_TRACE, ("acquiring miniport block lock\n"));
-  KeAcquireSpinLockAtDpcLevel(&Adapter->NdisMiniportBlock.Lock);
+  Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
+
+  for (i = 0; i < SnapshotCount; i++)
     {
-      CurrentEntry = Adapter->ProtocolListHead.Flink;
+      AdapterBinding = Snapshot[i];
 
-      while (CurrentEntry != &Adapter->ProtocolListHead)
-        {
-          AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+      if (AdapterBinding->ProtocolBinding->Chars.ReceiveCompleteHandler == NULL)
+        continue;
 
-          (*AdapterBinding->ProtocolBinding->Chars.ReceiveCompleteHandler)(
-              AdapterBinding->NdisOpenBlock.ProtocolBindingContext);
-
-          CurrentEntry = CurrentEntry->Flink;
-        }
+      (*AdapterBinding->ProtocolBinding->Chars.ReceiveCompleteHandler)(
+          AdapterBinding->NdisOpenBlock.ProtocolBindingContext);
     }
-  KeReleaseSpinLockFromDpcLevel(&Adapter->NdisMiniportBlock.Lock);
+
+  MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 }
 
 /* EOF */

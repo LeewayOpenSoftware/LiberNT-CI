@@ -2944,6 +2944,9 @@ IntCompositionTreeHasPendingPaint(_In_ PWND Root)
     PWND Stack[DWM_MAX_WINDOWS];
     ULONG Count = 0;
 
+    if (IntIsUpdateLayeredWindow(Root))
+        return FALSE;
+
     Stack[Count++] = Root;
     while (Count != 0)
     {

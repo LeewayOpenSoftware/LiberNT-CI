@@ -786,6 +786,8 @@ MmUnloadSystemImage(IN PVOID ImageHandle)
         HadEntry = TRUE;
     }
 
+    VfForgetDispatchImages();
+
     MiDereferenceImports(LdrEntry->LoadedImports);
     MiClearImports(LdrEntry);
 

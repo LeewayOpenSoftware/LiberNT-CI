@@ -260,8 +260,21 @@ VfpReportDeadlockRule(
 
     if (Hits <= VF_LOCK_LINES_PRINTED)
     {
-        DbgPrint("Driver Verifier (log only): deadlock rule 0x%lx, lock %p, %p, %p, caller %p\n",
-                 Rule, Lock, (PVOID)Second, (PVOID)Third, Caller);
+        ULONG_PTR ImageBase;
+        ULONG ImageSize;
+        BOOLEAN InKernel;
+
+        if (VfFindImage(Caller, &ImageBase, &ImageSize, &InKernel))
+        {
+            DbgPrint("Driver Verifier (log only): deadlock rule 0x%lx, lock %p, %p, %p, caller %p (image %p+0x%lx)\n",
+                     Rule, Lock, (PVOID)Second, (PVOID)Third, Caller, (PVOID)ImageBase,
+                     (ULONG)((ULONG_PTR)Caller - ImageBase));
+        }
+        else
+        {
+            DbgPrint("Driver Verifier (log only): deadlock rule 0x%lx, lock %p, %p, %p, caller %p\n",
+                     Rule, Lock, (PVOID)Second, (PVOID)Third, Caller);
+        }
     }
 }
 

@@ -520,6 +520,9 @@ IopReleasePnpUnloadBarrier(IN PDRIVER_OBJECT DriverObject)
     ObDereferenceObject(DriverObject);
 }
 
+/* Private to this file: the device is being taken apart by IopUnloadDevice */
+#define DOE_DELETE_CLAIMED 0x80000000
+
 VOID
 NTAPI
 IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
@@ -549,6 +552,17 @@ IopUnloadDevice(IN PDEVICE_OBJECT DeviceObject)
             {
                 FastIoDispatch->FastIoDetachDevice(AttachedDevice, DeviceObject);
             }
+            return;
+        }
+
+        /* Several threads can get here for the same device: the one that
+         * deletes it, one that drops its last reference, one that detaches
+         * the device above it. Each saw no reference and the delete flag
+         * without a lock. Only the first may take the device apart; the
+         * others would release the keep-alive reference a second time. */
+        if (InterlockedOr((PLONG)&ThisExtension->ExtensionFlags, DOE_DELETE_CLAIMED) &
+            DOE_DELETE_CLAIMED)
+        {
             return;
         }
 
@@ -1603,6 +1617,12 @@ NTAPI
 IoDetachDevice(IN PDEVICE_OBJECT TargetDevice)
 {
     PEXTENDED_DEVOBJ_EXTENSION DeviceExtension;
+    KIRQL OldIrql;
+
+    /* The attach links are walked under the database lock by code that holds
+     * no reference on the devices of the stack, so they change only with the
+     * lock held exclusive, as in the attach */
+    OldIrql = IopAcquireDatabaseLockExclusive();
 
     /* Sanity check */
     DeviceExtension = IoGetDevObjExtension(TargetDevice->AttachedDevice);
@@ -1611,6 +1631,8 @@ IoDetachDevice(IN PDEVICE_OBJECT TargetDevice)
     /* Remove the attachment */
     DeviceExtension->AttachedTo = NULL;
     TargetDevice->AttachedDevice = NULL;
+
+    IopReleaseDatabaseLockExclusive(OldIrql);
 
     /* Check if it's ok to delete this device */
     if ((IoGetDevObjExtension(TargetDevice)->ExtensionFlags & DOE_DELETE_PENDING) &&

@@ -14,6 +14,7 @@ extern void func_FullBaseGrowth(void);
 extern void func_FreeClusters(void);
 extern void func_DismountRemount(void);
 extern void func_AppendAfterWrite(void);
+extern void func_ClearDirtyAfterCheck(void);
 
 const struct test winetest_testlist[] =
 {
@@ -23,5 +24,6 @@ const struct test winetest_testlist[] =
     { "FreeClusters", func_FreeClusters },
     { "DismountRemount", func_DismountRemount },
     { "AppendAfterWrite", func_AppendAfterWrite },
+    { "ClearDirtyAfterCheck", func_ClearDirtyAfterCheck },
     { 0, 0 }
 };

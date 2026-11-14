@@ -164,6 +164,7 @@ extern POBJECT_TYPE NTSYSAPI IoDriverObjectType;
 #define DOE_REMOVE_PROCESSED                    0x8
 #define DOE_START_PENDING                       0x10
 #define DOE_DEFAULT_SD_PRESENT                  0x800
+// 0x80000000 is used by the I/O manager itself (ntoskrnl/io/iomgr/device.c)
 
 //
 // Device Object StartIo Flags

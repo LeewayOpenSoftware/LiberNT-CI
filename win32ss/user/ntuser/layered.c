@@ -280,8 +280,16 @@ IntUpdateLayeredWindowI( PWND pWnd,
 
       TRACE("H %d W %d\n",Rect.bottom - Rect.top,Rect.right - Rect.left);
 
-      if (!info->hdcDst) hdc = UserGetDCEx(pWnd, NULL, DCX_USESTYLE);
-      else hdc = info->hdcDst;
+      /* hdcDst names the screen the caller works for; it is not where the
+       * bits go. They always go to the window itself, as on Windows: with
+       * the caller's screen DC they were drawn on the screen and the window
+       * kept an empty surface. */
+      hdc = UserGetDCEx(pWnd, NULL, DCX_USESTYLE);
+      if (!hdc)
+      {
+         EngSetLastError(ERROR_INVALID_WINDOW_HANDLE);
+         return FALSE;
+      }
 
       bComposited = IntCompositionIsEnabled();
       bDirect = bComposited ||
@@ -374,7 +382,7 @@ IntUpdateLayeredWindowI( PWND pWnd,
       if (hdcBuffer) NtGdiSelectBitmap(hdcBuffer, hOldBitmap);
       if (hbmSrc) GreDeleteObject(hbmSrc);
       if (hdcBuffer) IntGdiDeleteDC(hdcBuffer, FALSE);
-      if (!info->hdcDst) UserReleaseDC(pWnd, hdc, FALSE);
+      UserReleaseDC(pWnd, hdc, FALSE);
       if (ret && !IntSetUpdateLayeredAttributes(pWnd, info))
       {
          EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);

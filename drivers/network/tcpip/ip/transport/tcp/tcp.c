@@ -301,7 +301,8 @@ NTSTATUS TCPTranslateError(const err_t err)
         case ERR_VAL: Status = STATUS_INVALID_PARAMETER; break; //-6
         case ERR_WOULDBLOCK: Status = STATUS_CANT_WAIT; break; //-7
         case ERR_USE: Status = STATUS_ADDRESS_ALREADY_EXISTS; break; //-8
-        case ERR_ISCONN: Status = STATUS_UNSUCCESSFUL; break; //-9 (FIXME)
+        case ERR_ALREADY: Status = STATUS_UNSUCCESSFUL; break;
+        case ERR_ISCONN: Status = STATUS_UNSUCCESSFUL; break; // (FIXME)
         case ERR_ABRT: Status = STATUS_LOCAL_DISCONNECT; break; //-10
         case ERR_RST: Status = STATUS_REMOTE_DISCONNECT; break; //-11
         case ERR_CLSD: Status = STATUS_FILE_CLOSED; break; //-12

@@ -820,6 +820,7 @@ NtfsChkdsk(
     ULONG DirtyMask = 0;
     USHORT Flags = 0;
     BOOLEAN Locked = FALSE;
+    BOOLEAN KeptMounted = FALSE;
     ULONG CheckWrites = 0;
     BOOLEAN Dirty;
     NTSTATUS Status;
@@ -903,10 +904,25 @@ NtfsChkdsk(
      * through the locked handle (VPB_DIRECT_WRITES_ALLOWED), as chkdsk /f does. */
     if (Locked)
     {
-        NTSTATUS DismountStatus =
-            NtfsCheckControl(Handle, FSCTL_DISMOUNT_VOLUME, NULL, 0);
+        NTSTATUS DismountStatus = STATUS_SUCCESS;
 
-        if (NT_SUCCESS(Status) && Dirty && Result.Errors == 0)
+        /* The check wrote nothing: the mounted instance saw the medium the
+         * check saw, so it is not stale and may stay. It clears the flag it
+         * was mounted with itself (its lifecycle then agrees with the medium,
+         * which a raw clear under it would not give), and nothing restarts.
+         * An instance that cannot do it takes the dismount path below. */
+        if (NT_SUCCESS(Status) && Result.Errors == 0 && CheckWrites == 0 &&
+            NT_SUCCESS(NtfsCheckControl(Handle, FSCTL_NTFS_CLEAR_DIRTY_AFTER_CHECK, NULL, 0)))
+        {
+            KeptMounted = TRUE;
+            NtfsVerdictReport(Callback, "The check wrote nothing; the volume stays mounted.\n");
+        }
+        else
+        {
+            DismountStatus = NtfsCheckControl(Handle, FSCTL_DISMOUNT_VOLUME, NULL, 0);
+        }
+
+        if (!KeptMounted && NT_SUCCESS(Status) && Dirty && Result.Errors == 0)
         {
             if (NT_SUCCESS(DismountStatus))
                 (void)NtfsVolumeSetFlags(Volume, 0, VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN);
@@ -956,8 +972,9 @@ NtfsChkdsk(
     }
 
     NtfsVerdictReport(Callback, "No problems were found on the volume.\n");
-    /* The repair went around the mounted file system, which was then
-     * dismounted: only a restart drops what was opened on it before. */
-    *ExitStatus = Locked ? NTFSLIB_CHKDSK_VOLUME_RELOADED : (ULONG)STATUS_SUCCESS;
+    /* A check that wrote went around the mounted file system, which was then
+     * dismounted: only a restart drops what was opened on it before. A check
+     * that wrote nothing left the instance mounted and nothing is stale. */
+    *ExitStatus = (Locked && !KeptMounted) ? NTFSLIB_CHKDSK_VOLUME_RELOADED : (ULONG)STATUS_SUCCESS;
     return TRUE;
 }
