@@ -1461,6 +1461,12 @@ IopCheckResourceDescriptor(IN PCM_PARTIAL_RESOURCE_DESCRIPTOR ResDesc, IN PCM_RE
                 }
                 case CmResourceTypeInterrupt:
                 {
+                    /* A message interrupt holds a vector the HAL handed out, not an interrupt line */
+                    if ((ResDesc->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) ||
+                        (ResDesc2->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                    {
+                        break;
+                    }
                     if (ResDesc->u.Interrupt.Vector == ResDesc2->u.Interrupt.Vector)
                     {
                         if (!Silent)
