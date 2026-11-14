@@ -50,6 +50,13 @@
  * Output = LONG rc (0 = graceful OOM confirmed). Never bugchecks. Runs at PASSIVE. */
 #define IOCTL_LNRSPOC_OOM_ASSERT \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x809, METHOD_BUFFERED, FILE_ANY_ACCESS)
+/* 0x80A: trigger the in-kernel LRM-RS Rust-vs-C special-pool self-test. The test lives in ntoskrnl
+ * (it needs the internal MiGuard/special-pool symbols) and is EXPORTED only in a flag-ON
+ * (LIBERNT_ENABLE_LRM_RS) build. Resolved dynamically with MmGetSystemRoutineAddress; absent (the
+ * default kernel) -> STATUS_NOT_SUPPORTED. Output = LONG NTSTATUS [+ LONG detail]. Never bugchecks:
+ * the self-test runs clean at PASSIVE. */
+#define IOCTL_LNRSPOC_LRM_SELFTEST \
+    CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
@@ -292,6 +299,45 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
         *(int *)Irp->AssociatedIrp.SystemBuffer = c.Result;
         info = sizeof(int);
+        status = STATUS_SUCCESS;
+        break;
+    }
+    case IOCTL_LNRSPOC_LRM_SELFTEST:
+    {
+        /* Resolve the ntoskrnl self-test export dynamically so this driver loads and works against
+         * the default (flag-OFF) kernel too; there the export is absent and we report
+         * STATUS_NOT_SUPPORTED. Output: LONG NTSTATUS, plus a LONG detail when the buffer holds it. */
+        typedef NTSTATUS (NTAPI *LRM_RS_SELFTEST)(PULONG);
+        UNICODE_STRING name;
+        LRM_RS_SELFTEST fn;
+        ULONG outLen = sp->Parameters.DeviceIoControl.OutputBufferLength;
+        ULONG detail = 0;
+        NTSTATUS st;
+
+        if (Irp->AssociatedIrp.SystemBuffer == NULL || outLen < sizeof(long))
+        {
+            status = STATUS_BUFFER_TOO_SMALL;
+            break;
+        }
+
+        RtlInitUnicodeString(&name, L"LrmRsSelfTest");
+        fn = (LRM_RS_SELFTEST)(PVOID)MmGetSystemRoutineAddress(&name);
+        if (fn == NULL)
+        {
+            DbgPrint("lnrspoc: lrm_selftest - LrmRsSelfTest not exported (flag-OFF kernel)\n");
+            status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+
+        st = fn(&detail);
+        DbgPrint("lnrspoc: lrm_selftest -> 0x%lx detail=%lu\n", (unsigned long)st, detail);
+        *(long *)Irp->AssociatedIrp.SystemBuffer = (long)st;
+        info = sizeof(long);
+        if (outLen >= 2 * sizeof(long))
+        {
+            ((long *)Irp->AssociatedIrp.SystemBuffer)[1] = (long)detail;
+            info = 2 * sizeof(long);
+        }
         status = STATUS_SUCCESS;
         break;
     }

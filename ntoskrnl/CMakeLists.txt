@@ -31,6 +31,12 @@ endif()
 
 include(ntos.cmake)
 
+# LRM-RS: route the special pool through the experimental Rust orchestration and link lrm_rs into
+# ntoskrnl. Opt-in, OFF by default; amd64 only (Leeway x64); requires LIBERNT_ENABLE_RUST. When OFF
+# ntoskrnl is unchanged and its export table is byte-identical (the self-test export is added only
+# in a flag-ON build, via a generated spec). The C special pool stays compiled as oracle/fallback.
+option(LIBERNT_ENABLE_LRM_RS "Route the special pool through the Rust LRM-RS path (experimental)" OFF)
+
 option(NVS "Build the kernel with the NT Virtual Memory Subsystem and cache manager" ON)
 
 if(NOT NVS)
@@ -66,7 +72,21 @@ set(NTOSKRNL_SOURCE ${SOURCE})
 set(NTOSKRNL_ASM_SOURCE ${ASM_SOURCE})
 
 
-spec2def(ntoskrnl.exe ntoskrnl.spec ADD_IMPORTLIB)
+# Default: the checked-in spec verbatim. Flag-ON (amd64): append the experimental self-test export
+# to a generated copy in the binary dir so the DEFAULT export table stays byte-identical. spec2def()
+# reads ${CMAKE_CURRENT_SOURCE_DIR}/<arg>, so reference the generated file by a relative path.
+set(_NTOSKRNL_SPEC ntoskrnl.spec)
+if(LIBERNT_ENABLE_LRM_RS AND ARCH STREQUAL "amd64")
+    set(_lrmrs_spec_abs ${CMAKE_CURRENT_BINARY_DIR}/ntoskrnl.lrmrs.spec)
+    # Copy the checked-in spec verbatim, then append the one experimental export, so the default
+    # build never sees it. configure_file(COPYONLY)+file(APPEND) avoids pulling the spec text through
+    # a CMake variable (no ${}/;/\ mangling).
+    configure_file(${CMAKE_CURRENT_SOURCE_DIR}/ntoskrnl.spec ${_lrmrs_spec_abs} COPYONLY)
+    file(APPEND ${_lrmrs_spec_abs} "\n@ stdcall -arch=win64 LrmRsSelfTest(ptr)\n")
+    file(RELATIVE_PATH _NTOSKRNL_SPEC ${CMAKE_CURRENT_SOURCE_DIR} ${_lrmrs_spec_abs})
+endif()
+
+spec2def(ntoskrnl.exe ${_NTOSKRNL_SPEC} ADD_IMPORTLIB)
 
 # Link GCC stack protector lib
 if (STACK_PROTECTOR)
@@ -138,6 +158,25 @@ if(NOT (CMAKE_C_COMPILER_ID STREQUAL "GNU" AND ARCH STREQUAL "i386"))
 endif()
 add_dependencies(ntoskrnl psdk asm)
 add_cd_file(TARGET ntoskrnl DESTINATION reactos/system32 NO_CAB FOR all)
+
+# LRM-RS: build the Rust special-pool crate as a reproducible no_std staticlib and link it into
+# ntoskrnl, then define LIBERNT_LRM_RS so ntspecial.c routes through it and lrmrs.c compiles the
+# shim + self-test. Opt-in, amd64 only. lrm_rs imports no kernel symbols (empty extern allow-list);
+# its runtime helpers resolve from the kernel's own libraries at the ntoskrnl link.
+if(LIBERNT_ENABLE_LRM_RS)
+    if(NOT ARCH STREQUAL "amd64")
+        message(FATAL_ERROR "LIBERNT_ENABLE_LRM_RS is amd64 only (Leeway x64).")
+    endif()
+    if(NOT LIBERNT_ENABLE_RUST)
+        message(FATAL_ERROR "LIBERNT_ENABLE_LRM_RS needs LIBERNT_ENABLE_RUST=ON.")
+    endif()
+    add_rust_staticlib(lrm_rs
+        MANIFEST_DIR ${REACTOS_SOURCE_DIR}/tools/rust-poc/lrm-rs
+        CRATE lrm_rs)
+    target_link_libraries(ntoskrnl lrm_rs)
+    target_compile_definitions(ntoskrnl PRIVATE LIBERNT_LRM_RS=1)
+    message(STATUS "LRM-RS: special pool routed through Rust (lrm_rs linked into ntoskrnl)")
+endif()
 
 add_subdirectory(nvs)
 add_subdirectory(cc)
