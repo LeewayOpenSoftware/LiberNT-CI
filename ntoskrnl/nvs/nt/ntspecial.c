@@ -217,11 +217,13 @@ MmAllocateSpecialPool(
     PVOID Out = NULL;
     UCHAR Rc;
 
-    /* Once the Rust side has fatally stopped, never re-enter it (it may hold its lock): the C oracle
-     * serves any allocation the bug check's own machinery needs. */
+    /* Once the Rust side has fatally stopped, NO allocator runs on its region again: fail the request
+     * so the caller falls back to the normal pool. The C oracle must NOT serve it - it has no record of
+     * the Rust-issued slots on this region (double hand-out / corrupt free / nested 0xC1), and it would
+     * re-take a lock the panicking thread may still hold. LrmRsPanicked is volatile (acquire-ordered on
+     * x86/x64), set with InterlockedExchange8 before the bug check (Dwight review P3; god 2026-11-14). */
     if (LrmRsPanicked)
-        return MiSpecialPoolAllocateC(MiSpecialPoolRegion, MiSpecialPoolUnderruns, NumberOfBytes, Tag,
-                                      PoolType, SpecialType, KeGetCurrentIrql());
+        return NULL;
 
     if (MiSpecialPoolRegion == NULL)
         return NULL;
@@ -252,13 +254,11 @@ MmFreeSpecialPool(
     LRM_GUARD_VTBL Vtbl;
     LRM_BUGCHECK Bc;
 
-    /* Once the Rust side has fatally stopped, never re-enter it (it may hold its lock): the C oracle
-     * frees via the real MiGuard region. */
+    /* Once the Rust side has fatally stopped, the free is IGNORED - no allocator runs on the Rust
+     * region again. The C oracle must NOT free a Rust-issued block (it would corrupt or raise a nested
+     * 0xC1, or hang on a held lock). Leaking the block is the safe choice inside a bug check. */
     if (LrmRsPanicked)
-    {
-        MiSpecialPoolFreeC(MiSpecialPoolRegion, P, KeGetCurrentIrql());
         return;
-    }
 
     /* No NULL-region early return here: with no special pool, MiGuardQuery(NULL, ...) returns
      * MiGuardOutside, so the Rust path stops with 0xC1/0x20 - exactly as the C path does. (The
@@ -270,6 +270,60 @@ MmFreeSpecialPool(
     MiSpecialPoolFreeC(MiSpecialPoolRegion, P, KeGetCurrentIrql());
 #endif
 }
+
+#if defined(LIBERNT_LRM_RS) && defined(LIBERNT_LRM_RS_FORCE_PANIC_TEST)
+/* LAB-ONLY force-panic orchestration. Lives here because it needs the file-static special-pool region
+ * (MiSpecialPoolRegion) and the same-file MmAllocate/FreeSpecialPool (neither is exported). It
+ * validates the panic policy end to end in a disposable VM: a Rust panic while the real special-pool
+ * region lock is held must still STOP (0x4C524D00, P1=1) without a hang - because LrmRsFatalStop sets
+ * LrmRsPanicked, after which this region never serves another allocation (allocate -> NULL, free
+ * ignored), so the bug check's own pool use can never re-take the held lock. */
+
+/* Concurrent special-pool workload for the SMP2 mode: on another CPU, keep allocating/freeing special
+ * pool so the region lock is genuinely contended when the trigger thread panics holding it. Never
+ * returns meaningfully (the box bug-checks); no cleanup needed. */
+static VOID NTAPI
+MiSpecialPoolPanicLoad(_In_opt_ PVOID Context)
+{
+    UNREFERENCED_PARAMETER(Context);
+    for (;;)
+    {
+        PVOID P = MmAllocateSpecialPool(64, 'LPsT', NonPagedPool, 0);
+        if (P != NULL)
+            MmFreeSpecialPool(P);
+    }
+}
+
+/* ConcurrentLoad != 0 -> first start the SMP2 workload above. Then acquire the real region lock and
+ * trigger the Rust panic while holding it. Never returns. */
+DECLSPEC_NORETURN VOID
+MiSpecialPoolForcePanic(_In_ ULONG ConcurrentLoad)
+{
+    KIRQL OldIrql = PASSIVE_LEVEL;
+
+    if (ConcurrentLoad != 0)
+    {
+        HANDLE Thread = NULL;
+        OBJECT_ATTRIBUTES Attr;
+        LARGE_INTEGER Delay;
+
+        InitializeObjectAttributes(&Attr, NULL, OBJ_KERNEL_HANDLE, NULL, NULL);
+        if (NT_SUCCESS(PsCreateSystemThread(&Thread, THREAD_ALL_ACCESS, &Attr, NULL, NULL,
+                                            MiSpecialPoolPanicLoad, NULL)) && Thread != NULL)
+            ZwClose(Thread);
+
+        /* Let the load thread reach the allocator (on the other CPU) before we take the lock. */
+        Delay.QuadPart = -10 * 1000 * 10;   /* 10 ms, relative */
+        KeDelayExecutionThread(KernelMode, FALSE, &Delay);
+    }
+
+    if (MiSpecialPoolRegion != NULL)
+        MI_SPIN_ACQUIRE(&MiSpecialPoolRegion->Lock, &OldIrql);   /* never released: we panic holding it */
+
+    (VOID)OldIrql;
+    lrm_rs_force_panic();   /* never returns: LrmRsFatalStop -> KeBugCheckEx(0x4C524D00, 1, ...) */
+}
+#endif
 
 SIZE_T
 NTAPI
