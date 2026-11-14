@@ -24,6 +24,7 @@ typedef struct _PI_RES_ENTRY
 {
     LIST_ENTRY ListEntry;
     PDEVICE_NODE Owner;
+    PVOID OwnerKey;
     CM_PARTIAL_RESOURCE_DESCRIPTOR Desc;
 } PI_RES_ENTRY, *PPI_RES_ENTRY;
 
@@ -146,6 +147,9 @@ IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_opt_ PDEVICE_NODE a
             return TRUE;
         }
         case CmResourceTypeInterrupt:
+            /* A message interrupt holds a vector the HAL handed out, not an interrupt line */
+            if ((a->Flags & CM_RESOURCE_INTERRUPT_MESSAGE) || (b->Flags & CM_RESOURCE_INTERRUPT_MESSAGE))
+                return FALSE;
             return (a->u.Interrupt.Vector == b->u.Interrupt.Vector);
         case CmResourceTypeBusNumber:
         {
@@ -169,10 +173,11 @@ IopResDbConflict(_In_ PCM_PARTIAL_RESOURCE_DESCRIPTOR a, _In_opt_ PDEVICE_NODE a
     }
 }
 
-/* Conflicts are logged but still recorded (non-enforcing). */
+/* Conflicts are logged but still recorded (non-enforcing). OwnerKey identifies the claimant for the same-owner
+ * skip and the release: a device node, or a device/driver object for a legacy IoReportResourceUsage report. */
 static
 NTSTATUS
-IopResDbReserveList(_In_opt_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST ResourceList, _In_ BOOLEAN SkipInternalInterrupts, _Out_opt_ PBOOLEAN Conflict)
+IopResDbReserveListEx(_In_opt_ PVOID OwnerKey, _In_opt_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST ResourceList, _In_ BOOLEAN SkipInternalInterrupts, _Out_opt_ PBOOLEAN Conflict)
 {
     PCM_FULL_RESOURCE_DESCRIPTOR full;
     ULONG i, j;
@@ -205,13 +210,14 @@ IopResDbReserveList(_In_opt_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST
             if (entry == NULL)
                 continue;
             entry->Owner = DeviceNode;
+            entry->OwnerKey = OwnerKey;
             entry->Desc = *desc;
 
             KeAcquireSpinLock(&IopResBuckets[cls].Lock, &irql);
             for (le = IopResBuckets[cls].List.Flink; le != &IopResBuckets[cls].List; le = le->Flink)
             {
                 existing = CONTAINING_RECORD(le, PI_RES_ENTRY, ListEntry);
-                if (existing->Owner == DeviceNode)
+                if (existing->OwnerKey == OwnerKey)
                     continue;
                 if (IopResDbConflict(desc, DeviceNode, &existing->Desc, existing->Owner))
                 {
@@ -231,6 +237,19 @@ IopResDbReserveList(_In_opt_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST
 
     KeReleaseMutex(&IopResourceAssignmentLock, FALSE);
     return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+IopResDbReserveList(_In_opt_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST ResourceList, _In_ BOOLEAN SkipInternalInterrupts, _Out_opt_ PBOOLEAN Conflict)
+{
+    return IopResDbReserveListEx((PVOID)DeviceNode, DeviceNode, ResourceList, SkipInternalInterrupts, Conflict);
+}
+
+NTSTATUS
+IopResDbReserveOwned(_In_ PVOID OwnerKey, _In_opt_ PDEVICE_NODE DeviceNode, _In_opt_ PCM_RESOURCE_LIST ResourceList, _Out_opt_ PBOOLEAN Conflict)
+{
+    return IopResDbReserveListEx(OwnerKey, DeviceNode, ResourceList, FALSE, Conflict);
 }
 
 NTSTATUS
@@ -298,7 +317,7 @@ IopResDbCheckList(_In_opt_ PCM_RESOURCE_LIST ResourceList)
 }
 
 VOID
-IopResDbRelease(_In_ PDEVICE_NODE DeviceNode)
+IopResDbReleaseByKey(_In_ PVOID OwnerKey)
 {
     ULONG cls;
 
@@ -316,7 +335,7 @@ IopResDbRelease(_In_ PDEVICE_NODE DeviceNode)
         {
             PPI_RES_ENTRY entry = CONTAINING_RECORD(le, PI_RES_ENTRY, ListEntry);
             le = le->Flink;
-            if (entry->Owner == DeviceNode)
+            if (entry->OwnerKey == OwnerKey)
             {
                 RemoveEntryList(&entry->ListEntry);
                 ExFreePoolWithTag(entry, TAG_IO);
@@ -324,6 +343,12 @@ IopResDbRelease(_In_ PDEVICE_NODE DeviceNode)
         }
         KeReleaseSpinLock(&IopResBuckets[cls].Lock, irql);
     }
+}
+
+VOID
+IopResDbRelease(_In_ PDEVICE_NODE DeviceNode)
+{
+    IopResDbReleaseByKey((PVOID)DeviceNode);
 }
 
 /* Scan the resource map once, recording every raw allocation under a NULL owner. */
