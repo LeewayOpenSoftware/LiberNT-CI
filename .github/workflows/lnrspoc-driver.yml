@@ -141,8 +141,13 @@ jobs:
             f=$(find "$OUT" -name "$pat" -type f | head -n1)
             if [ -n "$f" ]; then cp "$f" lnrspoc-test-only/; found=1; fi
           done
-          rlib=$(find "$OUT" -name 'libleeway_rs_poc.a' -type f | head -n1)
-          [ -n "$rlib" ] && cp "$rlib" lnrspoc-test-only/
+          # The Rust archives the build linked (add_rust_staticlib outputs, fixed paths).
+          rlib="$OUT/tools/rust-poc/libleeway_rs_poc.a"
+          cp "$rlib" lnrspoc-test-only/ || { echo "::error::$rlib (linked into lnrspoc) is missing"; exit 1; }
+          if [ "${{ matrix.lrmrs }}" = "on" ]; then
+            klib="$OUT/ntoskrnl/liblrm_rs.a"
+            cp "$klib" lnrspoc-test-only/ || { echo "::error::$klib (linked into ntoskrnl) is missing"; exit 1; }
+          fi
           if [ "$found" != 1 ]; then echo "::error::lnrspoc.sys not produced"; find "$OUT" -iname 'lnrspoc*'; exit 1; fi
           ( cd lnrspoc-test-only && for x in *; do sha256sum "$x" | tee "$x.sha256"; done )
           echo "=== collected ==="; ls -l lnrspoc-test-only
