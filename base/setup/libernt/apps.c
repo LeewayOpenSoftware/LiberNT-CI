@@ -257,13 +257,15 @@ FillAppList(
     {
         ZeroMemory(&Item, sizeof(Item));
         Item.mask = LVIF_TEXT | LVIF_PARAM;
-        Item.iItem = (INT)OobeAppCount;
+        /* First, so the row the note below the list talks about is in view without scrolling */
+        Item.iItem = 0;
         Item.pszText = Name;
         Item.lParam = OOBE_DRIVERS_ROW;
         Item.iItem = ListView_InsertItem(hList, &Item);
         ListView_SetItemText(hList, Item.iItem, 1, (PWSTR)L"www.catalog.update.microsoft.com");
         ListView_SetCheckState(hList, Item.iItem, OobeInstallDrivers);
     }
+
 }
 
 static ULONG
