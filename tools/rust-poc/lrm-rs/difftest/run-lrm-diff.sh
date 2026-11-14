@@ -19,7 +19,7 @@ SPECIAL_H="${SPECIAL_H:-$HERE/dw/include/poolspecial.h}"
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
 # Rust staticlib (host), outside the kernel .cargo config.
 mkdir "$STAGE/crate"; cp -r "$CRATE/src" "$CRATE/Cargo.toml" "$STAGE/crate/"
-( cd "$STAGE/crate" && CARGO_TARGET_DIR="$STAGE/t" rustup run "$TC" cargo build --release )
+( cd "$STAGE/crate" && CARGO_TARGET_DIR="$STAGE/t" rustup run "$TC" cargo rustc --release --lib --crate-type staticlib )
 RUSTA="$(find "$STAGE/t" \( -name 'liblrm_rs*.a' -o -name 'lrm_rs*.lib' \) | head -1)"
 [ -n "$RUSTA" ] || { echo "rust staticlib not found" >&2; exit 2; }
 
