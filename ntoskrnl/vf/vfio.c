@@ -300,7 +300,21 @@ VfpReportIrpRule(
         KeBugCheckEx(DRIVER_VERIFIER_IOMANAGER_VIOLATION, Rule, (ULONG_PTR)Caller, (ULONG_PTR)Irp, 0);
 
     if (Hits <= VF_IRP_LINES_PRINTED)
-        DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p\n", Rule, Irp, Caller);
+    {
+        PLDR_DATA_TABLE_ENTRY LdrEntry = NULL;
+        BOOLEAN InKernel;
+        PVOID ImageBase = KiPcToFileHeader(Caller, &LdrEntry, FALSE, &InKernel);
+
+        if (ImageBase != NULL)
+        {
+            DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p (image %p+0x%lx)\n",
+                     Rule, Irp, Caller, ImageBase, (ULONG)((ULONG_PTR)Caller - (ULONG_PTR)ImageBase));
+        }
+        else
+        {
+            DbgPrint("Driver Verifier (log only): I/O rule 0x%lx, IRP %p, caller %p\n", Rule, Irp, Caller);
+        }
+    }
 }
 
 VOID

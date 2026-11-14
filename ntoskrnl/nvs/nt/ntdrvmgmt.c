@@ -312,7 +312,7 @@ MiVerifyImage(
 
     LdrEntry->Flags |= LDRP_IMAGE_VERIFYING;
     InterlockedIncrement((PLONG)&MmVerifierData.Loads);
-    DbgPrint("Driver Verifier: %wZ is verified, %lu imports redirected\n", &LdrEntry->BaseDllName, Redirected);
+    DbgPrint("Driver Verifier: %wZ is verified at %p, %lu imports redirected\n", &LdrEntry->BaseDllName, LdrEntry->DllBase, Redirected);
 }
 
 VOID
