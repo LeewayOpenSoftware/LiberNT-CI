@@ -36,11 +36,48 @@ SepAclHasMandatoryLabel(
     return FALSE;
 }
 
+/* The parts of a SACL that are read and set on their own: the label, the resource attributes, the scoped policies */
+#define SEP_SACL_PARTS (LABEL_SECURITY_INFORMATION | ATTRIBUTE_SECURITY_INFORMATION | SCOPE_SECURITY_INFORMATION)
+#define SEP_SACL_ALL (SACL_SECURITY_INFORMATION | SEP_SACL_PARTS)
+
+/* Which part of a SACL an entry belongs to; the audit entries are the SACL proper */
+static
+SECURITY_INFORMATION
+SepSaclPartOf(
+    _In_ PACE_HEADER Ace)
+{
+    switch (Ace->AceType)
+    {
+        case SYSTEM_MANDATORY_LABEL_ACE_TYPE: return LABEL_SECURITY_INFORMATION;
+        case SYSTEM_RESOURCE_ATTRIBUTE_ACE_TYPE: return ATTRIBUTE_SECURITY_INFORMATION;
+        case SYSTEM_SCOPED_POLICY_ID_ACE_TYPE: return SCOPE_SECURITY_INFORMATION;
+        default: return SACL_SECURITY_INFORMATION;
+    }
+}
+
+static
+BOOLEAN
+SepAclHasParts(
+    _In_opt_ PACL Acl,
+    _In_ SECURITY_INFORMATION Parts)
+{
+    ULONG Index;
+    PACE_HEADER Ace;
+
+    if (!Acl) return FALSE;
+    for (Index = 0; Index < Acl->AceCount; Index++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Acl, Index, (PVOID*)&Ace))) break;
+        if (SepSaclPartOf(Ace) & Parts) return TRUE;
+    }
+    return FALSE;
+}
+
 static
 ULONG
-SepAclSelectedLength(
+SepAclPartsLength(
     _In_opt_ PACL Acl,
-    _In_ BOOLEAN Labels)
+    _In_ SECURITY_INFORMATION Parts)
 {
     ULONG Index, Length = 0;
     PACE_HEADER Ace;
@@ -49,17 +86,17 @@ SepAclSelectedLength(
     for (Index = 0; Index < Acl->AceCount; Index++)
     {
         if (!NT_SUCCESS(RtlGetAce(Acl, Index, (PVOID*)&Ace))) break;
-        if (SepAceIsMandatoryLabel(Ace) == Labels) Length += Ace->AceSize;
+        if (SepSaclPartOf(Ace) & Parts) Length += Ace->AceSize;
     }
     return Length;
 }
 
 static
 VOID
-SepAclCopySelected(
+SepAclCopyParts(
     _Inout_ PACL Dest,
     _In_opt_ PACL Source,
-    _In_ BOOLEAN Labels)
+    _In_ SECURITY_INFORMATION Parts)
 {
     ULONG Index;
     PACE_HEADER Ace;
@@ -70,7 +107,7 @@ SepAclCopySelected(
     for (Index = 0; Index < Source->AceCount; Index++)
     {
         if (!NT_SUCCESS(RtlGetAce(Source, Index, (PVOID*)&Ace))) break;
-        if (SepAceIsMandatoryLabel(Ace) != Labels) continue;
+        if (!(SepSaclPartOf(Ace) & Parts)) continue;
         Current = (PUCHAR)Dest + Dest->AclSize;
         RtlCopyMemory(Current, Ace, Ace->AceSize);
         Dest->AclSize += Ace->AceSize;
@@ -78,24 +115,31 @@ SepAclCopySelected(
     }
 }
 
+/* An ACL holding the named parts of one list, then the named parts of another, in their own order; the
+ * revision is the higher of the two sources. NULL when the two do not fit one ACL or on no pool */
 static
 PACL
-SepBuildMergedSacl(
-    _In_opt_ PACL LabelSource,
-    _In_opt_ PACL AuditSource)
+SepBuildPartSacl(
+    _In_opt_ PACL First,
+    _In_ SECURITY_INFORMATION FirstParts,
+    _In_opt_ PACL Second,
+    _In_ SECURITY_INFORMATION SecondParts)
 {
     ULONG Length;
     PACL Acl;
 
-    Length = sizeof(ACL) + SepAclSelectedLength(LabelSource, TRUE) + SepAclSelectedLength(AuditSource, FALSE);
+    Length = sizeof(ACL) + SepAclPartsLength(First, FirstParts) + SepAclPartsLength(Second, SecondParts);
     Length = ROUND_UP(Length, 4);
+    if (Length > MAXUSHORT) return NULL;
     Acl = ExAllocatePoolWithTag(PagedPool, Length, TAG_ACL);
     if (!Acl) return NULL;
     RtlZeroMemory(Acl, Length);
     Acl->AclRevision = ACL_REVISION;
+    if (First && First->AclRevision > Acl->AclRevision) Acl->AclRevision = First->AclRevision;
+    if (Second && Second->AclRevision > Acl->AclRevision) Acl->AclRevision = Second->AclRevision;
     Acl->AclSize = sizeof(ACL);
-    SepAclCopySelected(Acl, AuditSource, FALSE);
-    SepAclCopySelected(Acl, LabelSource, TRUE);
+    SepAclCopyParts(Acl, First, FirstParts);
+    SepAclCopyParts(Acl, Second, SecondParts);
     Acl->AclSize = (USHORT)Length;
     return Acl;
 }
@@ -957,14 +1001,13 @@ SeQuerySecurityDescriptorInfo(
                                          SE_DACL_PROTECTED));
     }
 
-    SaclInfo = *SecurityInformation & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
+    SaclInfo = *SecurityInformation & SEP_SACL_ALL;
     if (SaclInfo && (ObjectSd->Control & SE_SACL_PRESENT))
     {
         Sacl = SepGetSaclFromDescriptor(ObjectSd);
-        if (Sacl != NULL && SaclInfo != (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION))
+        if (Sacl != NULL && !(SaclInfo & SACL_SECURITY_INFORMATION))
         {
-            FilteredSacl = SepBuildMergedSacl((SaclInfo & LABEL_SECURITY_INFORMATION) ? Sacl : NULL,
-                                              (SaclInfo & SACL_SECURITY_INFORMATION) ? Sacl : NULL);
+            FilteredSacl = SepBuildPartSacl(Sacl, SaclInfo, NULL, 0);
             Sacl = FilteredSacl;
         }
         if (Sacl != NULL)
@@ -1259,8 +1302,8 @@ SeSetSecurityDescriptorInfoEx(
     DaclLength = Dacl ? ROUND_UP((ULONG)Dacl->AclSize, 4) : 0;
 
     /* Get SACL and SACL size */
-    SaclInfo = SecurityInformation & (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION);
-    if (SaclInfo == (SACL_SECURITY_INFORMATION | LABEL_SECURITY_INFORMATION))
+    SaclInfo = SecurityInformation & SEP_SACL_ALL;
+    if (SaclInfo == SEP_SACL_ALL)
     {
         Sacl = SepGetSaclFromDescriptor(SecurityDescriptor);
         Control |= (SecurityDescriptor->Control & (SE_SACL_DEFAULTED | SE_SACL_PRESENT |
@@ -1279,14 +1322,14 @@ SeSetSecurityDescriptorInfoEx(
         PACL OldSacl = SepGetSaclFromDescriptor(ObjectSd);
         PACL NewSacl = SepGetSaclFromDescriptor(SecurityDescriptor);
 
-        if (SaclInfo == SACL_SECURITY_INFORMATION && !NewSacl && !SepAclHasMandatoryLabel(OldSacl))
+        SECURITY_INFORMATION Kept = SEP_SACL_ALL & ~SaclInfo;
+
+        if ((SaclInfo & SACL_SECURITY_INFORMATION) && !NewSacl && !SepAclHasParts(OldSacl, Kept))
             Sacl = NULL;
         else
         {
-            if (SaclInfo & LABEL_SECURITY_INFORMATION)
-                MergedSacl = SepBuildMergedSacl(NewSacl, OldSacl);
-            else
-                MergedSacl = SepBuildMergedSacl(OldSacl, NewSacl);
+            /* Only the parts named come from the caller's list; each has its own right and its own request */
+            MergedSacl = SepBuildPartSacl(NewSacl, SaclInfo, OldSacl, Kept);
             if (!MergedSacl)
                 return STATUS_INSUFFICIENT_RESOURCES;
             Sacl = MergedSacl;
