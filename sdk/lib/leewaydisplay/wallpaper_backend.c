@@ -86,6 +86,18 @@ ReadString(LPCWSTR name, WCHAR *value, DWORD cch)
     return ok;
 }
 
+static void
+DeleteValue(LPCWSTR name)
+{
+    HKEY key;
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, DesktopKey, 0, KEY_SET_VALUE, &key) == ERROR_SUCCESS)
+    {
+        RegDeleteValueW(key, name);
+        RegCloseKey(key);
+    }
+}
+
 static BOOL
 WriteString(LPCWSTR name, LPCWSTR value)
 {
@@ -131,14 +143,18 @@ LWallSet(const WCHAR *path, LWALL_STYLE style)
         return FALSE;
     hadStyle = ReadString(L"WallpaperStyle", oldStyle, ARRAYSIZE(oldStyle));
     hadTile = ReadString(L"TileWallpaper", oldTile, ARRAYSIZE(oldTile));
-    if (!WriteString(L"WallpaperStyle", StyleValues[style].Style) || !WriteString(L"TileWallpaper", StyleValues[style].Tile))
-        return FALSE;
-    if (SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
+    if (WriteString(L"WallpaperStyle", StyleValues[style].Style) &&
+        WriteString(L"TileWallpaper", StyleValues[style].Tile) &&
+        SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)path, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
         return TRUE;
-    /* Keep the old picture and the old position together when the new image is refused. */
+    /* Keep the old picture and the old position together: restore both values exactly. */
     if (hadStyle)
         WriteString(L"WallpaperStyle", oldStyle);
+    else
+        DeleteValue(L"WallpaperStyle");
     if (hadTile)
         WriteString(L"TileWallpaper", oldTile);
+    else
+        DeleteValue(L"TileWallpaper");
     return FALSE;
 }
