@@ -1044,7 +1044,14 @@ static void DialogOpenFile(void)
 static void dialog_about(void)
 {
     HICON icon = LoadImageW(GetModuleHandleW(0), MAKEINTRESOURCEW(IDI_WORDPAD), IMAGE_ICON, 48, 48, LR_SHARED);
-    ShellAboutW(hMainWnd, L"WordPad", 0, icon);
+    /* Where the program comes from: see the copyright lines at the top of this file */
+    static const WCHAR provenance[] =
+        L"Based on Wine WordPad\n"
+        L"Copyright 2004 Krzysztof Foltman\n"
+        L"Copyright 2007-2008 Alexander N. S\x00F8rnes\n"
+        L"Modified and maintained by: Leeway Open Software";
+
+    ShellAboutW(hMainWnd, L"WordPad", provenance, icon);
 }
 
 static INT_PTR CALLBACK formatopts_proc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
