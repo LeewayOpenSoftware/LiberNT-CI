@@ -4087,6 +4087,9 @@ NtSetInformationThread(
             }
             _SEH2_END;
 
+            /* Bits naming processors the machine lacks are dropped: an all-ones mask means every processor */
+            Affinity &= KeActiveProcessors;
+
             /* Validate it */
             if (!Affinity)
             {
