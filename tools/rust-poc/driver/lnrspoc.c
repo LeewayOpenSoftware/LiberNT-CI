@@ -58,12 +58,16 @@
 #define IOCTL_LNRSPOC_LRM_SELFTEST \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80A, METHOD_BUFFERED, FILE_ANY_ACCESS)
 
-/* 0x80B: validate the LRM-RS kernel panic policy. Resolves ntoskrnl!LrmRsForcePanic (exported ONLY by
- * a LIBERNT_LRM_RS_FORCE_PANIC_TEST lab kernel), which deliberately panics in Rust and must stop the
- * machine with LEEWAY_RUST_PANIC (0x4C524D00). Returns STATUS_NOT_SUPPORTED on any other kernel.
- * This NEVER returns on a force-panic kernel - it bug-checks. Disposable VM only. */
+#ifdef LNRSPOC_TEST_IOCTLS
+/* 0x80B: validate the LRM-RS kernel panic policy. Destructive (brings the box down), so test-only.
+ * Resolves ntoskrnl!LrmRsForcePanic (exported ONLY by a LIBERNT_LRM_RS_FORCE_PANIC_TEST lab kernel),
+ * which deliberately panics in Rust and must stop the machine with LEEWAY_RUST_PANIC (0x4C524D00,
+ * P1=0x01). Input: one ULONG mode (0 = PASSIVE/no lock, 1 = at DISPATCH_LEVEL, 2 = at DISPATCH with a
+ * spin lock held - the lock-held + DISPATCH cases Dwight requires, run on SMP1 and SMP2). Returns
+ * STATUS_NOT_SUPPORTED on any other kernel. NEVER returns on a force-panic kernel. Disposable VM only. */
 #define IOCTL_LNRSPOC_LRM_FORCEPANIC \
     CTL_CODE(FILE_DEVICE_UNKNOWN, 0x80B, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#endif
 
 static PDEVICE_OBJECT g_DeviceObject = NULL;
 
@@ -348,14 +352,27 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         status = STATUS_SUCCESS;
         break;
     }
+#ifdef LNRSPOC_TEST_IOCTLS
     case IOCTL_LNRSPOC_LRM_FORCEPANIC:
     {
         /* Validate the LRM-RS panic policy: call ntoskrnl!LrmRsForcePanic, which (on a force-panic
          * lab kernel) deliberately panics in Rust and bug-checks LEEWAY_RUST_PANIC via LrmRsFatalStop.
-         * Absent on any normal kernel -> STATUS_NOT_SUPPORTED. On a lab kernel this does NOT return. */
+         * Absent on any normal kernel -> STATUS_NOT_SUPPORTED. On a lab kernel this does NOT return.
+         * Mode (input ULONG): 0 = PASSIVE/no lock; 1 = at DISPATCH_LEVEL; 2 = at DISPATCH with a spin
+         * lock held - the lock-held + DISPATCH cases, run on SMP1 and SMP2. The re-entrancy guard
+         * (LrmRsPanicked -> C oracle in ntspecial.c) then keeps the bug check's own special-pool use
+         * off the Rust path. */
         typedef VOID (NTAPI *LRM_RS_FORCEPANIC)(VOID);
+        static KSPIN_LOCK forceLock;
+        static LONG forceLockInit = 0;
         UNICODE_STRING name;
         LRM_RS_FORCEPANIC fn;
+        ULONG mode = 0;
+        KIRQL oldIrql;
+        ULONG inLen = sp->Parameters.DeviceIoControl.InputBufferLength;
+
+        if (Irp->AssociatedIrp.SystemBuffer != NULL && inLen >= sizeof(ULONG))
+            mode = *(ULONG *)Irp->AssociatedIrp.SystemBuffer;
 
         RtlInitUnicodeString(&name, L"LrmRsForcePanic");
         fn = (LRM_RS_FORCEPANIC)(PVOID)MmGetSystemRoutineAddress(&name);
@@ -366,12 +383,30 @@ LnrspocDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             break;
         }
 
-        DbgPrint("lnrspoc: lrm_forcepanic -> invoking LrmRsForcePanic (expect STOP 0x4C524D00)\n");
-        fn();   /* never returns: the machine bug-checks */
+        if (InterlockedCompareExchange(&forceLockInit, 1, 0) == 0)
+            KeInitializeSpinLock(&forceLock);
+
+        DbgPrint("lnrspoc: lrm_forcepanic mode=%lu -> invoking LrmRsForcePanic (expect STOP 0x4C524D00 P1=0x01)\n", mode);
+        if (mode >= 2)
+        {
+            /* panic WHILE a spin lock is held, at DISPATCH_LEVEL (KeAcquireSpinLock raises IRQL). */
+            KeAcquireSpinLock(&forceLock, &oldIrql);
+            fn();                       /* never returns */
+            KeReleaseSpinLock(&forceLock, oldIrql);   /* unreachable */
+        }
+        else if (mode == 1)
+        {
+            KeRaiseIrql(DISPATCH_LEVEL, &oldIrql);
+            fn();                       /* never returns */
+            KeLowerIrql(oldIrql);       /* unreachable */
+        }
+        else
+        {
+            fn();                       /* never returns */
+        }
         status = STATUS_UNSUCCESSFUL;   /* unreachable */
         break;
     }
-#ifdef LNRSPOC_TEST_IOCTLS
     case IOCTL_LNRSPOC_FORCE_PANIC:
         /* Destructive test ONLY: brings down the box via the controlled bugcheck.
          * Reachable solely here, only in a test build, only in a disposable VM. */

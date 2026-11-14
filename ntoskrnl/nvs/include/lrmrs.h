@@ -100,9 +100,11 @@ NTSTATUS NTAPI LrmRsSelfTest(PULONG Detail);
  * (including HIGH_LEVEL): File is a &'static str in the image's read-only data (never pageable;
  * path-remapped to /rust/...). Parameters: P1 = Reason (0x01 real panic, 0x02 deliberate stop via
  * lrm_fatal!), P2 = File ptr, P3 = Line, P4 = FileLen. The name has no "panic" substring.
+ *
+ * The code value LEEWAY_RUST_PANIC (0x4C524D00) is the single generated symbol from
+ * sdk/include/reactos/mc/bugcodes.mc (reachable here via <ntoskrnl.h>); it is NOT re-#defined to
+ * avoid a duplicate, divergent definition (Dwight review).
  */
-#define LEEWAY_RUST_PANIC 0x4C524D00UL   /* 'LRM'<<8; FIXED code. reason is P1, NOT ORed into the code. */
-
 DECLSPEC_NORETURN VOID LrmRsFatalStop(ULONG Reason, const UCHAR *File, SIZE_T FileLen, ULONG Line);
 
 /* Set TRUE by LrmRsFatalStop before KeBugCheckEx. Every C entry into the Rust special-pool path
