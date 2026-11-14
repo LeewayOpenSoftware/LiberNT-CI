@@ -57,6 +57,21 @@ NdisDereferenceAdapterBinding(
     ExReleaseRundownProtection(&AdapterBinding->RundownRef);
 }
 
+#define MINI_INLINE_BINDINGS 4
+
+PADAPTER_BINDING *
+MiniSnapshotBindings(
+    PLOGICAL_ADAPTER Adapter,
+    PADAPTER_BINDING *InlineSnapshot,
+    SIZE_T InlineCapacity,
+    PSIZE_T SnapshotCount);
+
+VOID
+MiniReleaseBindingSnapshot(
+    PADAPTER_BINDING *Snapshot,
+    PADAPTER_BINDING *InlineSnapshot,
+    SIZE_T SnapshotCount);
+
 typedef struct _NDIS_REQUEST_MAC_BLOCK {
     PVOID Unknown1;
     PNDIS_OPEN_BLOCK Binding;

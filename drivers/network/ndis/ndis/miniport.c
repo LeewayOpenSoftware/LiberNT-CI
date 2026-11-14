@@ -171,6 +171,97 @@ MiniIsBusy(
     return Busy;
 }
 
+PADAPTER_BINDING *
+MiniSnapshotBindings(
+    PLOGICAL_ADAPTER Adapter,
+    PADAPTER_BINDING *InlineSnapshot,
+    SIZE_T InlineCapacity,
+    PSIZE_T SnapshotCount)
+/*
+ * FUNCTION: Takes a referenced copy of the list of bindings of an adapter
+ * ARGUMENTS:
+ *     Adapter        = Pointer to logical adapter
+ *     InlineSnapshot = Array of the caller, used when the list fits in it
+ *     InlineCapacity = Number of entries of that array
+ *     SnapshotCount  = Receives the number of bindings in the copy
+ * RETURNS:
+ *     The copy, to be given to MiniReleaseBindingSnapshot
+ * NOTES:
+ *     A protocol handler can call back into NDIS, which takes the lock of the
+ *     adapter, and a binding can be closed while a handler runs. So handlers
+ *     are called from such a copy, with the lock released. If there are more
+ *     bindings than fit and no memory, the first InlineCapacity are used.
+ */
+{
+    PADAPTER_BINDING *Snapshot = InlineSnapshot;
+    PADAPTER_BINDING Binding;
+    PLIST_ENTRY Entry;
+    SIZE_T Capacity = 0;
+    SIZE_T Count = 0;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead;
+         Entry = Entry->Flink)
+    {
+        Capacity++;
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+    if (Capacity > InlineCapacity)
+    {
+        Snapshot = NULL;
+        if (Capacity <= MAXULONG_PTR / sizeof(*Snapshot))
+        {
+            Snapshot = ExAllocatePoolWithTag(NonPagedPool,
+                                             Capacity * sizeof(*Snapshot),
+                                             'sBNn');
+        }
+
+        if (Snapshot == NULL)
+        {
+            Snapshot = InlineSnapshot;
+            Capacity = InlineCapacity;
+        }
+    }
+
+    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    for (Entry = Adapter->ProtocolListHead.Flink;
+         Entry != &Adapter->ProtocolListHead && Count < Capacity;
+         Entry = Entry->Flink)
+    {
+        Binding = CONTAINING_RECORD(Entry, ADAPTER_BINDING, AdapterListEntry);
+
+        if (Binding->ProtocolBinding == NULL ||
+            !NdisReferenceAdapterBinding(Binding))
+        {
+            continue;
+        }
+
+        Snapshot[Count++] = Binding;
+    }
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+    *SnapshotCount = Count;
+    return Snapshot;
+}
+
+VOID
+MiniReleaseBindingSnapshot(
+    PADAPTER_BINDING *Snapshot,
+    PADAPTER_BINDING *InlineSnapshot,
+    SIZE_T SnapshotCount)
+{
+    SIZE_T i;
+
+    for (i = 0; i < SnapshotCount; i++)
+        NdisDereferenceAdapterBinding(Snapshot[i]);
+
+    if (Snapshot != InlineSnapshot)
+        ExFreePoolWithTag(Snapshot, 'sBNn');
+}
+
 VOID
 MiniIndicateData(
     PLOGICAL_ADAPTER    Adapter,
@@ -192,9 +283,12 @@ MiniIndicateData(
  *     PacketSize          = Total size of received packet
  */
 {
-  KIRQL OldIrql;
-  PLIST_ENTRY CurrentEntry;
+  PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+  PADAPTER_BINDING *Snapshot;
   PADAPTER_BINDING AdapterBinding;
+  SIZE_T SnapshotCount;
+  KIRQL HandlerIrql;
+  SIZE_T i;
 
   NDIS_DbgPrint(DEBUG_MINIPORT, ("Called. Adapter (0x%X)  HeaderBuffer (0x%X)  "
       "HeaderBufferSize (0x%X)  LookaheadBuffer (0x%X)  LookaheadBufferSize (0x%X).\n",
@@ -204,48 +298,38 @@ MiniIndicateData(
   MiniDisplayPacket2(HeaderBuffer, HeaderBufferSize, LookaheadBuffer, LookaheadBufferSize);
 #endif
 
-  NDIS_DbgPrint(MAX_TRACE, ("acquiring miniport block lock\n"));
-  KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+  Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
+
+  /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+   * The level is kept; only the lock is gone. */
+  KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
+
+  if (SnapshotCount == 0)
     {
-      CurrentEntry = Adapter->ProtocolListHead.Flink;
-      NDIS_DbgPrint(DEBUG_MINIPORT, ("CurrentEntry = %x\n", CurrentEntry));
-
-      if (CurrentEntry == &Adapter->ProtocolListHead)
-        {
-          NDIS_DbgPrint(MIN_TRACE, ("WARNING: No upper protocol layer.\n"));
-        }
-
-      while (CurrentEntry != &Adapter->ProtocolListHead)
-        {
-          AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
-	  NDIS_DbgPrint(DEBUG_MINIPORT, ("AdapterBinding = %x\n", AdapterBinding));
-
-	  NDIS_DbgPrint
-	      (MID_TRACE,
-	       ("XXX (%x) %x %x %x %x %x %x %x XXX\n",
-		*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler,
-		AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
-		MacReceiveContext,
-		HeaderBuffer,
-		HeaderBufferSize,
-		LookaheadBuffer,
-		LookaheadBufferSize,
-		PacketSize));
-
-          /* call the receive handler */
-          (*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler)(
-              AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
-              MacReceiveContext,
-              HeaderBuffer,
-              HeaderBufferSize,
-              LookaheadBuffer,
-              LookaheadBufferSize,
-              PacketSize);
-
-          CurrentEntry = CurrentEntry->Flink;
-        }
+      NDIS_DbgPrint(MIN_TRACE, ("WARNING: No upper protocol layer.\n"));
     }
-  KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+
+  for (i = 0; i < SnapshotCount; i++)
+    {
+      AdapterBinding = Snapshot[i];
+
+      if (AdapterBinding->ProtocolBinding->Chars.ReceiveHandler == NULL)
+        continue;
+
+      /* call the receive handler */
+      (*AdapterBinding->ProtocolBinding->Chars.ReceiveHandler)(
+          AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
+          MacReceiveContext,
+          HeaderBuffer,
+          HeaderBufferSize,
+          LookaheadBuffer,
+          LookaheadBufferSize,
+          PacketSize);
+    }
+
+  KeLowerIrql(HandlerIrql);
+
+  MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 
   NDIS_DbgPrint(MAX_TRACE, ("Leaving.\n"));
 }
@@ -696,8 +780,12 @@ MiniResetComplete(
     IN  BOOLEAN     AddressingReset)
 {
     PLOGICAL_ADAPTER Adapter = MiniportAdapterHandle;
-    PLIST_ENTRY CurrentEntry;
+    PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+    PADAPTER_BINDING *Snapshot;
     PADAPTER_BINDING AdapterBinding;
+    SIZE_T SnapshotCount;
+    KIRQL HandlerIrql;
+    SIZE_T i;
     KIRQL OldIrql;
 
     if (AddressingReset)
@@ -719,20 +807,29 @@ MiniResetComplete(
 
     Adapter->NdisMiniportBlock.ResetStatus = Status;
 
-    CurrentEntry = Adapter->ProtocolListHead.Flink;
+    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
 
-    while (CurrentEntry != &Adapter->ProtocolListHead)
+    Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
+
+    /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+     * The level is kept; only the lock is gone. */
+    KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
+
+    for (i = 0; i < SnapshotCount; i++)
     {
-        AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+        AdapterBinding = Snapshot[i];
+
+        if (AdapterBinding->ProtocolBinding->Chars.ResetCompleteHandler == NULL)
+            continue;
 
         (*AdapterBinding->ProtocolBinding->Chars.ResetCompleteHandler)(
                AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
                Status);
-
-        CurrentEntry = CurrentEntry->Flink;
     }
 
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+    KeLowerIrql(HandlerIrql);
+
+    MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 }
 
 VOID NTAPI
@@ -1853,28 +1950,36 @@ MiniStatus(
     IN UINT  StatusBufferSize)
 {
     PLOGICAL_ADAPTER Adapter = MiniportHandle;
-    PLIST_ENTRY CurrentEntry;
+    PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+    PADAPTER_BINDING *Snapshot;
     PADAPTER_BINDING AdapterBinding;
-    KIRQL OldIrql;
+    SIZE_T SnapshotCount;
+    KIRQL HandlerIrql;
+    SIZE_T i;
 
-    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
 
-    CurrentEntry = Adapter->ProtocolListHead.Flink;
+    /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+     * The level is kept; only the lock is gone. */
+    KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
 
-    while (CurrentEntry != &Adapter->ProtocolListHead)
+    for (i = 0; i < SnapshotCount; i++)
     {
-       AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+       AdapterBinding = Snapshot[i];
+
+       if (AdapterBinding->ProtocolBinding->Chars.StatusHandler == NULL)
+           continue;
 
        (*AdapterBinding->ProtocolBinding->Chars.StatusHandler)(
            AdapterBinding->NdisOpenBlock.ProtocolBindingContext,
            GeneralStatus,
            StatusBuffer,
            StatusBufferSize);
-
-       CurrentEntry = CurrentEntry->Flink;
     }
 
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+    KeLowerIrql(HandlerIrql);
+
+    MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 }
 
 VOID
@@ -1883,25 +1988,33 @@ MiniStatusComplete(
     IN NDIS_HANDLE  MiniportAdapterHandle)
 {
     PLOGICAL_ADAPTER Adapter = MiniportAdapterHandle;
-    PLIST_ENTRY CurrentEntry;
+    PADAPTER_BINDING InlineSnapshot[MINI_INLINE_BINDINGS];
+    PADAPTER_BINDING *Snapshot;
     PADAPTER_BINDING AdapterBinding;
-    KIRQL OldIrql;
+    SIZE_T SnapshotCount;
+    KIRQL HandlerIrql;
+    SIZE_T i;
 
-    KeAcquireSpinLock(&Adapter->NdisMiniportBlock.Lock, &OldIrql);
+    Snapshot = MiniSnapshotBindings(Adapter, InlineSnapshot, MINI_INLINE_BINDINGS, &SnapshotCount);
 
-    CurrentEntry = Adapter->ProtocolListHead.Flink;
+    /* The handlers were called with the lock held, so at DISPATCH_LEVEL.
+     * The level is kept; only the lock is gone. */
+    KeRaiseIrql(DISPATCH_LEVEL, &HandlerIrql);
 
-    while (CurrentEntry != &Adapter->ProtocolListHead)
+    for (i = 0; i < SnapshotCount; i++)
     {
-       AdapterBinding = CONTAINING_RECORD(CurrentEntry, ADAPTER_BINDING, AdapterListEntry);
+       AdapterBinding = Snapshot[i];
+
+       if (AdapterBinding->ProtocolBinding->Chars.StatusCompleteHandler == NULL)
+           continue;
 
        (*AdapterBinding->ProtocolBinding->Chars.StatusCompleteHandler)(
            AdapterBinding->NdisOpenBlock.ProtocolBindingContext);
-
-       CurrentEntry = CurrentEntry->Flink;
     }
 
-    KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
+    KeLowerIrql(HandlerIrql);
+
+    MiniReleaseBindingSnapshot(Snapshot, InlineSnapshot, SnapshotCount);
 }
 
 /*
