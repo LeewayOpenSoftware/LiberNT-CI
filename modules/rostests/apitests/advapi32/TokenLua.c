@@ -412,7 +412,8 @@ START_TEST(TokenLua)
         ok(!(Groups->Groups[i].Attributes & SE_GROUP_ENABLED),
            "Administrators is still enabled: 0x%lx\n", Groups->Groups[i].Attributes);
     }
-    ok(Found == IsAdmin, "Administrators present in the LUA token: %d, in the process token: %d\n", Found, IsAdmin);
+    /* An already limited runner carries the group deny-only; the LUA copy keeps it that way */
+    ok(!IsAdmin || Found, "Administrators enabled in the process token but missing from the LUA token\n");
 
     Value = 0xdead;
     ok(IsMemberViaImpersonation(Lua, AdminsSid, (PBOOL)&Value), "CheckTokenMembership(LUA) failed: %lu\n", GetLastError());
@@ -446,12 +447,21 @@ START_TEST(TokenLua)
     else
         skip("The test process is not High: the Medium child checks need an elevated runner\n");
 
-    /* No pair yet */
+    /* No pair yet, unless the runner's own logon already is one (a limited console session) */
     Linked.LinkedToken = (HANDLE)0xdeadbeef;
     Ret = GetTokenInformation(Lua, TokenLinkedToken, &Linked, sizeof(Linked), &Size);
     Error = GetLastError();
-    ok(!Ret && Error == ERROR_NO_SUCH_LOGON_SESSION, "Unpaired query: ret %d, error %lu\n", Ret, Error);
-    ok(Linked.LinkedToken == (HANDLE)0xdeadbeef, "Unpaired query wrote %p\n", Linked.LinkedToken);
+    if (GetTokenDword(Process, TokenElevationType, &Value) && Value == TokenElevationTypeLimited)
+    {
+        ok(Ret, "Query in a split logon: ret %d, error %lu\n", Ret, Error);
+        if (Ret && Linked.LinkedToken != (HANDLE)0xdeadbeef)
+            CloseHandle(Linked.LinkedToken);
+    }
+    else
+    {
+        ok(!Ret && Error == ERROR_NO_SUCH_LOGON_SESSION, "Unpaired query: ret %d, error %lu\n", Ret, Error);
+        ok(Linked.LinkedToken == (HANDLE)0xdeadbeef, "Unpaired query wrote %p\n", Linked.LinkedToken);
+    }
 
     /* Linking needs SeTcbPrivilege */
     Enable.PrivilegeCount = 1;
