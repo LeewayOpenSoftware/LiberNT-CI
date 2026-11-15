@@ -379,7 +379,7 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
     if((style & WS_CAPTION)!=WS_CAPTION)
     {
         /* Drop the theme region once the caption is gone, e.g. when going fullscreen */
-        pwndData = (PWND_DATA)GetPropW(hWnd, (LPCWSTR)MAKEINTATOM(atWndContext));
+        pwndData = ThemeFindWndData(hWnd);
         if (pwndData && pwndData->HasThemeRgn && !pwndData->UpdatingRgn)
         {
             pwndData->HasThemeRgn = FALSE;
