@@ -1,21 +1,22 @@
+; LiberNT theme (LiberNT Blue)
 [Theme]
 DisplayName=LiberNT Blue
 
 [Control Panel\Desktop]
-Wallpaper=
-WallpaperStyle=2
+Wallpaper=%SystemRoot%\Web\Wallpaper\BlueHorizon.png
+WallpaperStyle=10
 TileWallpaper=0
+ScreenSaveTimeOut=600
+ScreenSaveActive=0
 
 [Control Panel\Colors]
 ActiveTitle=0 102 204
-Window=255 255 255
 
 [Sounds]
+SchemeName=.Default
 
-[Screen Saver]
+[boot]
 SCRNSAVE.EXE=
-ScreenSaveTimeOut=600
-ScreenSaveActive=0
 
 [MasterThemeSelector]
 MTSM=DABJDKT

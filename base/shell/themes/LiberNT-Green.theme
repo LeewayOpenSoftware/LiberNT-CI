@@ -1,21 +1,22 @@
+; LiberNT theme (LiberNT Green)
 [Theme]
 DisplayName=LiberNT Green
 
 [Control Panel\Desktop]
-Wallpaper=
-WallpaperStyle=2
+Wallpaper=%SystemRoot%\Web\Wallpaper\Forest Canopy.jpg
+WallpaperStyle=10
 TileWallpaper=0
-
-[Control Panel\Colors]
-ActiveTitle=0 153 76
-Window=255 255 255
-
-[Sounds]
-
-[Screen Saver]
-SCRNSAVE.EXE=
 ScreenSaveTimeOut=600
 ScreenSaveActive=0
+
+[Control Panel\Colors]
+ActiveTitle=46 125 50
+
+[Sounds]
+SchemeName=.Default
+
+[boot]
+SCRNSAVE.EXE=
 
 [MasterThemeSelector]
 MTSM=DABJDKT
