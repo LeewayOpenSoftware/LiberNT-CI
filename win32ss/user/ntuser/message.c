@@ -1403,6 +1403,8 @@ co_IntPeekMessage( PMSG Msg,
 
     pti = PsGetCurrentThreadWin32Thread();
 
+    co_IntSyncForegroundKeyboardLayout(pti);
+
     RemoveMessages = RemoveMsg & PM_REMOVE;
     ProcessMask = HIWORD(RemoveMsg);
 

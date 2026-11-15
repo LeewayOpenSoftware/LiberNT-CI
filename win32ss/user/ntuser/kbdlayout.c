@@ -20,6 +20,8 @@
 DBG_DEFAULT_CHANNEL(UserKbdLayout);
 
 PKL gspklBaseLayout = NULL; /* FIXME: Please move this to pWinSta->spklList */
+static HKL ghklForeground = NULL;
+static PTHREADINFO gptiSyncingLayout = NULL;
 PKBDFILE gpkfList = NULL;
 DWORD gSystemFS = 0;
 UINT gSystemCPCharSet = 0;
@@ -721,6 +723,9 @@ co_UserActivateKeyboardLayout(
         ClientInfo->CodePage = pKL->CodePage;
         ClientInfo->hKL = pKL->hkl;
     }
+
+    if (pti->MessageQueue && pti->MessageQueue == gpqForeground && !(pti->TIF_flags & TIF_CSRSSTHREAD))
+        ghklForeground = pKL->hkl;
 
     /* Send shell message if necessary */
     if (gptiForeground && (gptiForeground->ppi == pti->ppi) && ISITHOOKED(WH_SHELL))
