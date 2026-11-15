@@ -175,8 +175,7 @@ HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T
     v4->hMui = hMui; v4->hMuiSection = hMuiSection; v4->muiBase = muiBase; v4->muiSize = muiSize;
     v4->psSentinel.iPartId = -1;
     v4->psSentinel.iStateId = -1;
-    v4->budget.limit = V4_PIXEL_BUDGET;
-    v4->budget.used = 0;
+    tl4_pixel_budget_init(&v4->budget, TL4_PNG_MAX_BUDGET);
 
     /* 1-3. readers, validator, model, strings, VMAP: on the views, under SEH */
     _SEH2_TRY

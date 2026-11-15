@@ -46,9 +46,6 @@ typedef struct _V4_FILE {
     THEME_PARTSTATE psSentinel;   /* what FindPart / FindPartState return for an existing v4 part-state: never dereferenced */
 } V4_FILE, *PV4_FILE;
 
-/* R-RES-4 / section 6: the per-style pixel budget for the life of the process (the image loader takes from it) */
-#define V4_PIXEL_BUDGET (64ull * 1024ull * 1024ull)
-
 /* Build a THEME_FILE from the checked mapping(s). On success the handles, sections and views belong to the new
  * THEME_FILE; on failure nothing of them is touched or closed, nothing allocated here stays, and *ptf is NULL. */
 HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T size,

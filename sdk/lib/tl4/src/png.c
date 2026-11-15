@@ -220,10 +220,19 @@ tl4_status tl4_png_idat_enum(const uint8_t *data, uint32_t size, tl4_png_idat_cb
     return TL4_OK;
 }
 
+tl4_status tl4_pixel_budget_init(tl4_pixel_budget *budget, uint64_t limit)
+{
+    if (!budget) return TL4_E_ARG;
+    budget->limit = limit < TL4_PNG_MAX_BUDGET ? limit : TL4_PNG_MAX_BUDGET;
+    budget->used = 0;
+    return TL4_OK;
+}
+
 tl4_status tl4_pixel_budget_take(tl4_pixel_budget *budget, uint64_t pixels)
 {
     if (!budget) return TL4_E_ARG;
-    if (budget->used > budget->limit) return TL4_E_LIMIT;                 /* an inconsistent instance never grants */
+    if (budget->limit > TL4_PNG_MAX_BUDGET || budget->used > budget->limit)
+        return TL4_E_LIMIT;                                                /* an inconsistent instance never grants */
     if (pixels > budget->limit - budget->used) return TL4_E_LIMIT;
     budget->used += pixels;
     return TL4_OK;

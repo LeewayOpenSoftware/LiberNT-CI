@@ -35,7 +35,7 @@
 #define TL4_PNG_MAX_CHUNKS       64u
 #define TL4_PNG_MAX_IDAT_CHUNKS  64u
 #define TL4_PNG_MAX_TEXT         256u
-#define TL4_PNG_DEFAULT_BUDGET   (16u * 1024u * 1024u)         /* decoded pixels per style per process (R-RES-4) */
+#define TL4_PNG_MAX_BUDGET       (16u * 1024u * 1024u)         /* decoded pixels per style per process (R-RES-4) */
 
 typedef struct tl4_png_info {
     uint32_t width, height;            /* 1..TL4_PNG_MAX_SIDE */
@@ -59,8 +59,11 @@ typedef int (*tl4_png_idat_cb)(uint32_t offset, uint32_t size, void *context);
 tl4_status tl4_png_idat_enum(const uint8_t *data, uint32_t size, tl4_png_idat_cb cb, void *context, int *stopped);
 
 /* R-RES-4: decoded pixels per style, per process. The consumer owns the instance (one per style); the core only does
- * the checked sum. TL4_E_LIMIT when the request would pass the limit; `used` is unchanged then. */
+ * the checked sum. init sets the limit: a caller may lower TL4_PNG_MAX_BUDGET, never raise it (a larger value is
+ * clamped). take returns TL4_E_LIMIT when the request would pass the limit, and for an instance whose limit is above
+ * TL4_PNG_MAX_BUDGET; `used` is unchanged then. */
 typedef struct tl4_pixel_budget { uint64_t limit, used; } tl4_pixel_budget;
+tl4_status tl4_pixel_budget_init(tl4_pixel_budget *budget, uint64_t limit);
 tl4_status tl4_pixel_budget_take(tl4_pixel_budget *budget, uint64_t pixels);
 
 #endif

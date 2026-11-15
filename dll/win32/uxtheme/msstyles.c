@@ -1724,8 +1724,9 @@ static HBITMAP MSSTYLES_V4_LoadImage(PTHEME_FILE tf, LPCWSTR name)
         copied = FALSE;
     }
     _SEH2_END;
-    /* TODO: the per-style pixel budget of TL4 R-RES-4 (tl4_pixel_budget_take on info.pixels) */
-    if (copied && tl4_png_check(copy, size, &info) == TL4_OK)
+    /* R-RES-4: a style past its pixel budget gets 'not found' for the image, before any decode */
+    if (copied && tl4_png_check(copy, size, &info) == TL4_OK &&
+        tl4_pixel_budget_take(&((PV4_FILE)tf->v4)->budget, info.pixels) == TL4_OK)
     {
         if (!MSSTYLES_TryLoadPngFromMemory(copy, size, &bmp))
             bmp = NULL;
