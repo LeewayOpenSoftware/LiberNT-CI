@@ -624,7 +624,7 @@ set_dhcp_router_discovery(PDHCP_ADAPTER Adapter, BOOLEAN Enable)
     HANDLE File;
 
     InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    if (!NT_SUCCESS(NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    if (!NT_SUCCESS(NtOpenFile(&File, FILE_WRITE_DATA | SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                FILE_SYNCHRONOUS_IO_NONALERT)))
         return;
 
@@ -650,7 +650,7 @@ mark_dhcp_address(PDHCP_ADAPTER Adapter, ULONG Address)
     HANDLE File;
 
     InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    if (!NT_SUCCESS(NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    if (!NT_SUCCESS(NtOpenFile(&File, FILE_WRITE_DATA | SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                FILE_SYNCHRONOUS_IO_NONALERT)))
         return;
 
@@ -672,7 +672,7 @@ set_route_lifetime(const MIB_IPFORWARDROW *Route, ULONG Lifetime)
     HANDLE File;
 
     InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    if (!NT_SUCCESS(NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    if (!NT_SUCCESS(NtOpenFile(&File, FILE_WRITE_DATA | SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                FILE_SYNCHRONOUS_IO_NONALERT)))
         return;
 

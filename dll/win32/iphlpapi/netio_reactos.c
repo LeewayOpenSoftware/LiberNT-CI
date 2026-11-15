@@ -68,7 +68,8 @@ static NTSTATUS ip6_ioctl(ULONG Code, PVOID Input, ULONG InputLength)
     HANDLE File;
 
     InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    Status = NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    /* Every code sent here changes the stack: the handle needs write access */
+    Status = NtOpenFile(&File, FILE_WRITE_DATA | SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         FILE_SYNCHRONOUS_IO_NONALERT);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -86,7 +87,7 @@ static VOID ip4_route_set_lifetime(const MIB_IPFORWARDROW *Route, ULONG Lifetime
     HANDLE File;
 
     InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    if (!NT_SUCCESS(NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    if (!NT_SUCCESS(NtOpenFile(&File, FILE_WRITE_DATA | SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
                                FILE_SYNCHRONOUS_IO_NONALERT)))
         return;
     memset(&Info, 0, sizeof(Info));
@@ -108,7 +109,7 @@ static DWORD ip4_interface_set(IP4_INTERFACE_INFO *Info)
     HANDLE File;
 
     InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    Status = NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
+    Status = NtOpenFile(&File, FILE_WRITE_DATA | SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
                         FILE_SYNCHRONOUS_IO_NONALERT);
     if (!NT_SUCCESS(Status))
         return RtlNtStatusToDosError(Status);
@@ -887,8 +888,9 @@ static NTSTATUS path_device_ioctl(ADDRESS_FAMILY Family, ULONG Code, PVOID Outpu
 
     RtlInitUnicodeString(&Name, Family == AF_INET6 ? L"\\Device\\Ip6" : L"\\Device\\Ip");
     InitializeObjectAttributes(&Attributes, &Name, OBJ_CASE_INSENSITIVE, NULL, NULL);
-    Status = NtOpenFile(&File, SYNCHRONIZE, &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                        FILE_SYNCHRONOUS_IO_NONALERT);
+    /* Flushing the paths changes the stack and needs write access; a query does not */
+    Status = NtOpenFile(&File, (Code == IOCTL_IP_FLUSH_PATHS ? FILE_WRITE_DATA : 0) | SYNCHRONIZE,
+                        &Attributes, &Iosb, FILE_SHARE_READ | FILE_SHARE_WRITE, FILE_SYNCHRONOUS_IO_NONALERT);
     if (!NT_SUCCESS(Status))
         return Status;
     Status = NtDeviceIoControlFile(File, NULL, NULL, NULL, &Iosb, Code, NULL, 0, Output, OutputLength);
