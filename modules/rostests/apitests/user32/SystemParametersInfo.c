@@ -337,6 +337,71 @@ static void Test_NonClientMetricsSize(void)
     ok(!ret, "SPI_GETNONCLIENTMETRICS (%u) succeeded\n", Legacy.cbSize);
 }
 
+static void Test_DeskWallpaper(void)
+{
+    WCHAR full[MAX_PATH], small[8];
+    size_t len, i;
+
+    for (i = 0; i < ARRAYSIZE(full); i++)
+        full[i] = 0xCCCC;
+    ok(SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(full), full, 0), "SPI_GETDESKWALLPAPER failed\n");
+    len = wcsnlen(full, ARRAYSIZE(full));
+    ok(len < ARRAYSIZE(full), "the wallpaper path has no terminating NUL\n");
+    if (len + 1 < ARRAYSIZE(full))
+        ok(full[len + 1] == 0xCCCC, "written past the NUL: 0x%04x\n", full[len + 1]);
+
+    for (i = 0; i < ARRAYSIZE(small); i++)
+        small[i] = 0xCCCC;
+    ok(SystemParametersInfoW(SPI_GETDESKWALLPAPER, 5, small, 0), "SPI_GETDESKWALLPAPER (5) failed\n");
+    if (len >= 4)
+    {
+        ok(!memcmp(small, full, 4 * sizeof(WCHAR)), "truncated copy differs\n");
+        ok(small[4] == UNICODE_NULL, "a truncated copy must end with a NUL, got 0x%04x\n", small[4]);
+    }
+    else
+    {
+        ok(!wcscmp(small, full), "short copy differs\n");
+    }
+    ok(small[5] == 0xCCCC, "written past the given size: 0x%04x\n", small[5]);
+
+    small[0] = 0xCCCC;
+    ok(SystemParametersInfoW(SPI_GETDESKWALLPAPER, 1, small, 0), "SPI_GETDESKWALLPAPER (1) failed\n");
+    ok(small[0] == UNICODE_NULL, "a one-character buffer gets an empty string, got 0x%04x\n", small[0]);
+
+    /* Windows 11: uiParam 0 or a NULL buffer fail without setting a last error */
+    small[0] = 0xCCCC;
+    SetLastError(0xdeadbeef);
+    ok(!SystemParametersInfoW(SPI_GETDESKWALLPAPER, 0, small, 0), "uiParam 0 must fail\n");
+    ok(GetLastError() == 0xdeadbeef, "uiParam 0 set the last error to %lu\n", GetLastError());
+    ok(small[0] == 0xCCCC, "uiParam 0 wrote 0x%04x\n", small[0]);
+    SetLastError(0xdeadbeef);
+    ok(!SystemParametersInfoW(SPI_GETDESKWALLPAPER, MAX_PATH, NULL, 0), "a NULL buffer must fail\n");
+    ok(GetLastError() == 0xdeadbeef, "a NULL buffer set the last error to %lu\n", GetLastError());
+}
+
+static void Test_DeskWallpaperA(void)
+{
+    char full[MAX_PATH], small[8];
+    size_t len;
+
+    memset(full, 0xCC, sizeof(full));
+    ok(SystemParametersInfoA(SPI_GETDESKWALLPAPER, sizeof(full), full, 0), "SPI_GETDESKWALLPAPER A failed\n");
+    len = strnlen(full, sizeof(full));
+    ok(len < sizeof(full), "the A path has no terminating NUL\n");
+    memset(small, 0xCC, sizeof(small));
+    ok(SystemParametersInfoA(SPI_GETDESKWALLPAPER, 5, small, 0), "SPI_GETDESKWALLPAPER A (5) failed\n");
+    if (len >= 4)
+    {
+        ok(!memcmp(small, full, 4), "truncated A copy differs\n");
+        ok(small[4] == 0, "a truncated A copy must end with a NUL\n");
+    }
+    ok((unsigned char)small[5] == 0xCC, "A written past the given size\n");
+    SetLastError(0xdeadbeef);
+    ok(!SystemParametersInfoA(SPI_GETDESKWALLPAPER, 0, small, 0), "A uiParam 0 must fail\n");
+    ok(!SystemParametersInfoA(SPI_GETDESKWALLPAPER, MAX_PATH, NULL, 0), "A NULL buffer must fail\n");
+    ok(GetLastError() == 0xdeadbeef, "A degenerate calls set the last error to %lu\n", GetLastError());
+}
+
 START_TEST(SystemParametersInfo)
 {
     test_modern_queries();
@@ -352,6 +417,8 @@ START_TEST(SystemParametersInfo)
     Test_NonClientMetrics();
     Test_MouseSpeed();
     Test_GradientCaptions();
+    Test_DeskWallpaper();
+    Test_DeskWallpaperA();
 
     DestroyWindow(hWnd1);
     DestroyWindow(hWnd2);
