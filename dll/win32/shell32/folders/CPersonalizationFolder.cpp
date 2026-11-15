@@ -684,10 +684,15 @@ HRESULT WINAPI CPersonalizationFolder::BindToObject(PCUIDLIST_RELATIVE pidl, LPB
     }
     else if (m_page != LWPAGE_MAIN || page >= LWPAGE_COUNT)
         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
-    if (!ILIsEmpty(ILGetNext(pidl)))
+    PCUIDLIST_RELATIVE pidlNext = ILGetNext(pidl);
+    if (!ILIsEmpty(pidlNext) && m_page != LWPAGE_CATEGORY)
         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 
-    PIDLIST_ABSOLUTE abs = ILCombine(m_pidlRoot, pidl);
+    PITEMID_CHILD pidlFirst = ILCloneFirst(pidl);
+    if (!pidlFirst)
+        return E_OUTOFMEMORY;
+    PIDLIST_ABSOLUTE abs = ILCombine(m_pidlRoot, pidlFirst);
+    ILFree(pidlFirst);
     if (!abs)
         return E_OUTOFMEMORY;
     CComPtr<CPersonalizationFolder> pChild;
@@ -697,6 +702,8 @@ HRESULT WINAPI CPersonalizationFolder::BindToObject(PCUIDLIST_RELATIVE pidl, LPB
     ILFree(abs);
     if (FAILED(hr))
         return hr;
+    if (!ILIsEmpty(pidlNext))
+        return pChild->BindToObject(pidlNext, pbcReserved, riid, ppvOut);
     return pChild->QueryInterface(riid, ppvOut);
 }
 
