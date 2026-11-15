@@ -80,6 +80,10 @@ sid_trusted(const uint8_t *sid, size_t len, unsigned flags)
 #define FILE_WRITE_EA_         0x00000010u
 #define FILE_DELETE_CHILD_     0x00000040u
 #define FILE_WRITE_ATTRIBUTES_ 0x00000100u
+#define KEY_SET_VALUE_         0x00000002u
+#define KEY_CREATE_SUB_KEY_    0x00000004u
+#define KEY_CREATE_LINK_       0x00000020u  /* KEY_NOTIFY 0x10, KEY_ENUMERATE_SUB_KEYS 0x8, KEY_QUERY_VALUE 0x1 and the
+                                             * KEY_WOW64_* flags 0x100/0x200 are not write rights (T-DEF-1) */
 #define DELETE_                0x00010000u
 #define WRITE_DAC_             0x00040000u
 #define WRITE_OWNER_           0x00080000u
@@ -102,6 +106,10 @@ tl4_trust_write_mask(enum tl4_trust_object object)
         case TL4_TRUST_DIR_ABOVE_ROOT:
             /* T-DEF-2: the rights that let a principal replace or re-point the path below */
             return DELETE_ | WRITE_DAC_ | WRITE_OWNER_ | FILE_DELETE_CHILD_ | MAXIMUM_ALLOWED_ | GENERIC_ALL_;
+        case TL4_TRUST_KEY:
+            /* T-DEF-1 (policy v6): the write rights of a key; KEY_READ (query, enumerate, notify) is not one */
+            return KEY_SET_VALUE_ | KEY_CREATE_SUB_KEY_ | KEY_CREATE_LINK_ | DELETE_ | WRITE_DAC_ | WRITE_OWNER_ |
+                   MAXIMUM_ALLOWED_ | GENERIC_ALL_ | GENERIC_WRITE_;
     }
     return 0xFFFFFFFFu;  /* unknown object kind: every right counts */
 }

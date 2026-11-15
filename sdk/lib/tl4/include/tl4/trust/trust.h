@@ -20,9 +20,10 @@
 /* ---- the user-writable test (T-DEF-1, T-DEF-2) ------------------------------------------------------------------ */
 
 enum tl4_trust_object {
-    TL4_TRUST_FILE = 0,          /* the style file itself (T-DEF-1, file rights) */
-    TL4_TRUST_DIR = 1,           /* a directory from the file up to and including the store root (T-DEF-1) */
-    TL4_TRUST_DIR_ABOVE_ROOT = 2 /* a directory above the store root, up to the volume root (T-DEF-2, narrow set) */
+    TL4_TRUST_FILE = 0,           /* the style file itself (T-DEF-1, file rights) */
+    TL4_TRUST_DIR = 1,            /* a directory from the file up to and including the store root (T-DEF-1) */
+    TL4_TRUST_DIR_ABOVE_ROOT = 2, /* a directory above the store root, up to the volume root (T-DEF-2, narrow set) */
+    TL4_TRUST_KEY = 3             /* a registry key (T-DEF-1, policy v6: key rights; notify is not a write right) */
 };
 
 /* Flags for tl4_trust_sd_writable. */
@@ -49,7 +50,9 @@ typedef enum tl4_trust_reason {
  * (T-DEF-1). Trusted principals: SYSTEM, Administrators, and the component owner when the flag says so (T-DEF-5). */
 tl4_trust_reason tl4_trust_sd_writable(const uint8_t *sd, size_t size, enum tl4_trust_object object, unsigned flags);
 
-/* The write-class access mask for `object` (exported for the tests and the documentation of the integration). */
+/* The write-class access mask for `object` (exported for the tests and the documentation of the integration). The
+ * low 16 bits are object-specific: a key's KEY_NOTIFY (0x10) is the same bit as a file's FILE_WRITE_EA, so a key
+ * checked with the file or directory mask would count KEY_READ as a write grant (I1a-T review, MUST 1). */
 uint32_t tl4_trust_write_mask(enum tl4_trust_object object);
 
 /* ---- the privileged-process classifier (T-DEF-3, T-DEF-4) ------------------------------------------------------ */

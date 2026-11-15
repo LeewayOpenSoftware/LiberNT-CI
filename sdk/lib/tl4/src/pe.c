@@ -60,6 +60,7 @@ const char *tl4_status_name(tl4_status status)
         case TL4_E_PNG_CHUNK: return "png-chunk";
         case TL4_E_PNG_CRC: return "png-crc";
         case TL4_E_PNG_IHDR: return "png-ihdr";
+        case TL4_E_STR_BLOCK: return "string-block";
         case TL4_E_LIMIT: return "limit";
     }
     return "unknown";
@@ -160,6 +161,7 @@ struct walk_counts {
     uint32_t directories;
     uint32_t entries;
     uint32_t resources;
+    uint32_t multi_pairs;
 };
 
 static tl4_status walk(const tl4_pe *pe, tl4_res_callback callback, void *context, int *stopped,
@@ -176,7 +178,7 @@ static void clear_handle(tl4_pe *pe)
     pe->section_table_off = pe->rsrc_rva = pe->rsrc_dir_size = 0;
     pe->rsrc_section_va = pe->rsrc_section_raw = pe->rsrc_section_raw_size = 0;
     pe->rsrc_off = pe->rsrc_limit = 0;
-    pe->ndirectories = pe->nentries = pe->nresources = 0;
+    pe->ndirectories = pe->nentries = pe->nresources = pe->nmulti_pairs = 0;
 }
 
 static tl4_status open_checked(const uint8_t *base, size_t size, tl4_pe *pe)
@@ -185,7 +187,7 @@ static tl4_status open_checked(const uint8_t *base, size_t size, tl4_pe *pe)
     uint32_t rsrc_rva = 0, rsrc_size = 0;
     uint32_t i;
     int found = 0;
-    struct walk_counts counts = {0, 0, 0};
+    struct walk_counts counts = {0, 0, 0, 0};
     tl4_status st;
 
     pe->base = base;
@@ -270,6 +272,16 @@ static tl4_status open_checked(const uint8_t *base, size_t size, tl4_pe *pe)
     pe->ndirectories = counts.directories;
     pe->nentries = counts.entries;
     pe->nresources = counts.resources;
+    pe->nmulti_pairs = counts.multi_pairs;
+
+    /* R-PE-8: the resource that routes a file to a loader has exactly one language entry, or no loader gets the file */
+    {
+        tl4_res_name t = tl4_res_ascii("PACKTHEM_VERSION"), n = tl4_res_id(1);
+        tl4_resource res;
+        st = tl4_pe_find(pe, &t, &n, &res);
+        if (st == TL4_OK && res.nlanguages != 1) return TL4_E_RSRC_LANGUAGES;
+        if (st != TL4_OK && st != TL4_E_NOT_FOUND) return st;
+    }
     return TL4_OK;
 }
 
@@ -394,17 +406,22 @@ static tl4_status count_entries(struct walk_counts *c, uint32_t n)
     return TL4_OK;
 }
 
-/* The language level under a name entry: exactly one entry, an id, pointing at a data entry (R-PE-6, R-PE-8).
- * Shared by the validating walk and the lookups, so a lookup re-checks exactly what the validation checked. */
-static tl4_status read_leaf(const tl4_pe *pe, uint32_t noff, struct walk_counts *counts, tl4_resource *res)
+/* The language level under a name entry: 1 to TL4_PE_MAX_LANGUAGES entries, all ids in strictly ascending order, each
+ * pointing at a data entry (R-PE-6, R-PE-8). leaf_header() checks the directory, read_language() one entry; both are
+ * shared by the validating walk and the lookups, so a lookup re-checks exactly what the validation checked. */
+static tl4_status leaf_header(const tl4_pe *pe, uint32_t noff, uint32_t *nlangs)
 {
-    uint32_t nlangs, named, lname, loff;
+    uint32_t named;
     tl4_status st;
-    if ((st = read_directory(pe, noff, &nlangs, &named)) != TL4_OK) return st;
-    if (nlangs != 1 || named != 0) return TL4_E_RSRC_LANGUAGES;     /* exactly one language, an id (R-PE-8) */
-    if (counts && (st = count_entries(counts, nlangs)) != TL4_OK) return st;
-    if (!rsrc_rd32(pe, noff + RSRC_DIR_HEADER_SIZE, &lname) ||
-        !rsrc_rd32(pe, noff + RSRC_DIR_HEADER_SIZE + 4, &loff)) return TL4_E_RSRC_ENTRY;
+    if ((st = read_directory(pe, noff, nlangs, &named)) != TL4_OK) return st;
+    if (*nlangs > TL4_PE_MAX_LANGUAGES || named != 0) return TL4_E_RSRC_LANGUAGES;   /* ids only, bounded (R-PE-8) */
+    return TL4_OK;
+}
+
+static tl4_status read_language(const tl4_pe *pe, uint32_t noff, uint32_t index, tl4_resource *res)
+{
+    uint32_t le = noff + RSRC_DIR_HEADER_SIZE + index * RSRC_ENTRY_SIZE, lname, loff;
+    if (!rsrc_rd32(pe, le, &lname) || !rsrc_rd32(pe, le + 4, &loff)) return TL4_E_RSRC_ENTRY;
     if (loff & RSRC_HIGH_BIT) return TL4_E_RSRC_DIRECTORY;        /* a language entry must be data (R-PE-6) */
     if (lname & RSRC_HIGH_BIT) return TL4_E_RSRC_NAME;            /* languages are ids */
     if (lname > 0xFFFFu) return TL4_E_RSRC_NAME;
@@ -456,17 +473,29 @@ static tl4_status walk(const tl4_pe *pe, tl4_res_callback callback, void *contex
             noff &= ~RSRC_HIGH_BIT;
             if (noff == 0 || noff == toff) return TL4_E_RSRC_ENTRY;
 
-            if ((st = read_leaf(pe, noff, counts, &res)) != TL4_OK) return st;
-            if (counts->resources >= TL4_PE_MAX_RESOURCES) return TL4_E_RSRC_DIRECTORY; /* R-PE-7 */
-            counts->resources++;
-
-            if (callback)
             {
-                int r = callback(&res, context);
-                if (r)
+                uint32_t nlangs, l, prev_lang = 0;
+                if ((st = leaf_header(pe, noff, &nlangs)) != TL4_OK) return st;
+                if ((st = count_entries(counts, nlangs)) != TL4_OK) return st;
+                if (nlangs > 1) counts->multi_pairs++;
+                res.nlanguages = nlangs;
+                for (l = 0; l < nlangs; l++)
                 {
-                    if (stopped) *stopped = r;
-                    return TL4_OK;
+                    if ((st = read_language(pe, noff, l, &res)) != TL4_OK) return st;
+                    if (l > 0 && res.language <= prev_lang) return TL4_E_RSRC_ORDER;  /* strictly ascending ids (R-PE-8) */
+                    prev_lang = res.language;
+                    if (counts->resources >= TL4_PE_MAX_RESOURCES) return TL4_E_RSRC_DIRECTORY; /* R-PE-7 */
+                    counts->resources++;
+
+                    if (callback)
+                    {
+                        int r = callback(&res, context);
+                        if (r)
+                        {
+                            if (stopped) *stopped = r;
+                            return TL4_OK;
+                        }
+                    }
                 }
             }
         }
@@ -476,7 +505,7 @@ static tl4_status walk(const tl4_pe *pe, tl4_res_callback callback, void *contex
 
 tl4_status tl4_pe_enum(const tl4_pe *pe, tl4_res_callback callback, void *context, int *stopped)
 {
-    struct walk_counts counts = {0, 0, 0};
+    struct walk_counts counts = {0, 0, 0, 0};
     tl4_status st;
     if (!pe || !pe->base || !callback) return TL4_E_ARG;
     if (stopped) *stopped = 0;
@@ -562,9 +591,32 @@ tl4_status tl4_pe_find(const tl4_pe *pe, const tl4_res_name *type, const tl4_res
     if ((st = find_type(pe, type, &toff, &nnames, &named, &res.type)) != TL4_OK) return st;
     if ((st = find_entry(pe, toff, nnames, named, name, &ne, &res.name)) != TL4_OK) return st;
     if ((st = subdir_of(pe, ne, toff, &noff)) != TL4_OK) return st;
-    if ((st = read_leaf(pe, noff, 0, &res)) != TL4_OK) return st;
+    if ((st = leaf_header(pe, noff, &res.nlanguages)) != TL4_OK) return st;
+    if ((st = read_language(pe, noff, 0, &res)) != TL4_OK) return st;   /* entry 0 is the lowest id: the walk checked the order */
     *out = res;
     return TL4_OK;
+}
+
+tl4_status tl4_pe_find_language(const tl4_pe *pe, const tl4_res_name *type, const tl4_res_name *name, uint32_t language,
+                                tl4_resource *out)
+{
+    uint32_t toff, nnames, named, ne, noff, nlangs, l;
+    tl4_resource res;
+    tl4_status st;
+    if (!pe || !pe->base || !type || !name || !out) return TL4_E_ARG;
+    if (language > 0xFFFFu) return TL4_E_ARG;
+    if ((st = find_type(pe, type, &toff, &nnames, &named, &res.type)) != TL4_OK) return st;
+    if ((st = find_entry(pe, toff, nnames, named, name, &ne, &res.name)) != TL4_OK) return st;
+    if ((st = subdir_of(pe, ne, toff, &noff)) != TL4_OK) return st;
+    if ((st = leaf_header(pe, noff, &nlangs)) != TL4_OK) return st;
+    res.nlanguages = nlangs;
+    for (l = 0; l < nlangs; l++)                                      /* at most TL4_PE_MAX_LANGUAGES reads (R-V4-14) */
+    {
+        if ((st = read_language(pe, noff, l, &res)) != TL4_OK) return st;
+        if (res.language == language) { *out = res; return TL4_OK; }
+        if (res.language > language) break;                           /* ascending ids (R-PE-8): nothing after can match */
+    }
+    return TL4_E_NOT_FOUND;
 }
 
 tl4_status tl4_pe_count_type(const tl4_pe *pe, const tl4_res_name *type, uint32_t *count)
@@ -577,6 +629,6 @@ tl4_status tl4_pe_count_type(const tl4_pe *pe, const tl4_res_name *type, uint32_
     st = find_type(pe, type, &toff, &nnames, &named, &found);
     if (st == TL4_E_NOT_FOUND) return TL4_OK;                         /* no such type: zero resources */
     if (st != TL4_OK) return st;                                      /* R-GEN-5: a failed call reports no partial count */
-    *count = nnames;                                                  /* one language per name (R-PE-8): the names are the resources */
+    *count = nnames;                                                  /* one lookup result per name, whatever its language count */
     return TL4_OK;
 }

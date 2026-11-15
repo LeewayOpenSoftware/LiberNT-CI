@@ -38,8 +38,7 @@
 #define UXT_MAX_STYLE_SIZE  (32u * 1024u * 1024u)
 #define UXT_RELOAD_MS       5000
 #define UXT_EVENT_MAX       16
-/* FIXME: the key object kind of TL4 trust/ (review I1a-T MUST 1) replaces the directory kind here */
-#define UXT_KEY_KIND        TL4_TRUST_DIR
+#define UXT_KEY_KIND        TL4_TRUST_KEY
 
 static LONG g_classState;
 static BOOL g_privileged = TRUE;    /* safe defaults until computed (T-DEF-4) */

@@ -9,7 +9,8 @@
  * (R-POL-2). The reader never allocates (R-GEN-7), reads input only through bounded little-endian helpers (R-GEN-2),
  * computes every offset in 64 bits (R-GEN-3) and validates the whole resource tree in tl4_pe_open() before any
  * lookup is answered. It accepts only the shape a style needs: a tree of exactly three levels (type, name,
- * language) with strictly ordered entries and one language per (type, name) (R-PE-6, R-PE-8), whose directories,
+ * language) with strictly ordered entries and 1 to TL4_PE_MAX_LANGUAGES language entries per (type, name), all ids in
+ * ascending order (R-PE-6, R-PE-8 as amended 2026-11-15 for localised version-3 styles), whose directories,
  * entries, names and data all lie inside the raw data of the section that holds the resource directory (R-PE-5,
  * R-PE-9). Anything else is rejected, never skipped, and a failed tl4_pe_open() leaves the handle cleared so that
  * no later call can use it (R-GEN-5). Nothing else in the file is parsed (R-PE-10). The input may change under the
@@ -31,6 +32,7 @@
 #define TL4_PE_MAX_ENTRIES       65536u  /* directory entries visited per file (R-PE-7) */
 #define TL4_PE_MAX_RESOURCES     16384u  /* data entries per file (R-PE-7) */
 #define TL4_PE_MAX_NAME_CHARS    64u     /* UTF-16 code units of a string name (R-PE-7) */
+#define TL4_PE_MAX_LANGUAGES     64u     /* language entries of one (type, name) pair (R-PE-8) */
 #define TL4_PE_DEPTH             3u      /* type / name / language (R-PE-6) */
 
 typedef struct tl4_pe {
@@ -51,7 +53,8 @@ typedef struct tl4_pe {
     /* statistics from the validating walk (R-GEN-7: counts only, nothing kept) */
     uint32_t ndirectories;
     uint32_t nentries;
-    uint32_t nresources;
+    uint32_t nresources;            /* data entries: one per language entry */
+    uint32_t nmulti_pairs;          /* (type, name) pairs with more than one language entry (R-PE-8) */
 } tl4_pe;
 
 enum tl4_name_kind {
@@ -73,6 +76,7 @@ typedef struct tl4_resource {
     tl4_res_name type;
     tl4_res_name name;
     uint32_t language;
+    uint32_t nlanguages;         /* language entries of this (type, name) pair, 1..TL4_PE_MAX_LANGUAGES (R-PE-8) */
     uint32_t rva;                /* of the data */
     uint32_t offset;             /* file offset of the data (R-PE-9): [offset, offset + size) lies inside the
                                   * raw data of the resource section, hence inside the file */
@@ -93,15 +97,24 @@ int tl4_res_name_equal(const tl4_res_name *a, const tl4_res_name *b);
  * walks it again, find and count_type binary-search the directories on the order of R-PE-8 (R-V4-14). */
 tl4_status tl4_pe_open(const uint8_t *base, size_t size, tl4_pe *pe);
 
-/* Enumerate every resource. The callback returns 0 to continue, nonzero to stop; the nonzero value is reported
- * through `stopped` when it is not NULL. */
+/* Enumerate every resource: one call per language entry, in directory order (ascending ids inside a pair). The
+ * callback returns 0 to continue, nonzero to stop; the nonzero value is reported through `stopped` when it is not
+ * NULL. */
 typedef int (*tl4_res_callback)(const tl4_resource *res, void *context);
 tl4_status tl4_pe_enum(const tl4_pe *pe, tl4_res_callback callback, void *context, int *stopped);
 
-/* Find the resource (type, name); there is exactly one language entry (R-PE-8). */
+/* Find the resource (type, name): the entry with the lowest language id; out->nlanguages tells how many entries the
+ * pair has (R-PE-8). PACKTHEM_VERSION has exactly one in any file this reader opens (tl4_pe_open rejects the rest). */
 tl4_status tl4_pe_find(const tl4_pe *pe, const tl4_res_name *type, const tl4_res_name *name, tl4_resource *out);
 
-/* Count the name entries under a type: TL4_OK with *count (0 when the type is absent), or the lookup's error. Like
+/* Find the entry of (type, name) with exactly the language id `language` (0..65,535; anything else is TL4_E_ARG): the
+ * leaf check of tl4_pe_find, then a scan of at most TL4_PE_MAX_LANGUAGES ascending entries that stops at the first id
+ * above the wanted one. TL4_E_NOT_FOUND when the pair or the language is absent. */
+tl4_status tl4_pe_find_language(const tl4_pe *pe, const tl4_res_name *type, const tl4_res_name *name, uint32_t language,
+                                tl4_resource *out);
+
+/* Count the name entries under a type (pairs, whatever their language count): TL4_OK with *count (0 when the type is
+ * absent), or the lookup's error. Like
  * every lookup it is meaningful only on a handle a successful tl4_pe_open() filled: a failed open clears the handle
  * and the call then returns TL4_E_ARG with *count 0. */
 tl4_status tl4_pe_count_type(const tl4_pe *pe, const tl4_res_name *type, uint32_t *count);
