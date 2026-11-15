@@ -34,8 +34,15 @@ if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
         pngsup.cpp)
 endif()
 
-# I1b: version-4 styles through the TL4 core, behind the trust gate values EnableV4Ordinary / EnableV4Privileged
-option(UXTHEME_V4 "Load version-4 visual styles in uxtheme (needs the PNG support of NT 6.0+ exports)" OFF)
+# I1b: version-4 styles through the TL4 core. The code is built wherever the PNG support exists (NT 6.0+ exports);
+# whether a process loads a version-4 style is decided at run time by the trust gate values EnableV4Ordinary /
+# EnableV4Privileged, which are off until they are set.
+if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
+    set(_uxtheme_v4_default ON)
+else()
+    set(_uxtheme_v4_default OFF)
+endif()
+option(UXTHEME_V4 "Build the version-4 visual style path of uxtheme (needs the PNG support of NT 6.0+ exports)" ${_uxtheme_v4_default})
 if(UXTHEME_V4)
     if(DLL_EXPORT_VERSION LESS 0x600)
         message(FATAL_ERROR "UXTHEME_V4 needs DLL_EXPORT_VERSION 0x600 or later (PNG images)")
