@@ -7,6 +7,7 @@
 
 #include "precomp.h"
 
+#include <lm.h>
 #include <ndk/setypes.h>
 
 #ifndef TokenElevationTypeLimited
@@ -40,15 +41,59 @@ IsLuaPrivilege(const LUID *Luid)
 /* Child side: runs with the LUA token. Bit mask of failures in the exit code. */
 static
 DWORD
-RunChild(DWORD ParentPid, HANDLE InheritedImpersonation)
+RunChild(DWORD ParentPid, HANDLE InheritedImpersonation, BOOL ExpectLink)
 {
     HANDLE Parent, Token = NULL, ThreadToken = NULL;
     SECURITY_IMPERSONATION_LEVEL Level = SecurityAnonymous;
-    DWORD Size, Failures = 0;
+    DWORD Size, Value, Failures = 0;
+
+    /* Our own pair, seen without SeTcbPrivilege */
+    if (ExpectLink && OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token))
+    {
+        TOKEN_LINKED_TOKEN Link = { NULL };
+        TOKEN_TYPE Type = TokenPrimary;
+        HANDLE Copy = NULL;
+
+        if (!GetTokenDword(Token, TokenElevationType, &Value) || Value != TokenElevationTypeLimited)
+            Failures |= 0x2000;
+        if (!GetTokenInformation(Token, TokenLinkedToken, &Link, sizeof(Link), &Size) || !Link.LinkedToken)
+            Failures |= 0x80;
+        else
+        {
+            if (!GetTokenInformation(Link.LinkedToken, TokenType, &Type, sizeof(Type), &Size) || Type != TokenImpersonation)
+                Failures |= 0x200;
+            if (!GetTokenInformation(Link.LinkedToken, TokenImpersonationLevel, &Level, sizeof(Level), &Size) ||
+                Level != SecurityIdentification)
+                Failures |= 0x400;
+            if (DuplicateTokenEx(Link.LinkedToken, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &Copy))
+            {
+                Failures |= 0x800;
+                CloseHandle(Copy);
+            }
+            if (SetThreadToken(NULL, Link.LinkedToken))
+            {
+                if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &ThreadToken))
+                {
+                    if (!GetTokenInformation(ThreadToken, TokenImpersonationLevel, &Level, sizeof(Level), &Size) ||
+                        Level > SecurityIdentification)
+                        Failures |= 0x1000;
+                    CloseHandle(ThreadToken);
+                    ThreadToken = NULL;
+                }
+                RevertToSelf();
+            }
+            CloseHandle(Link.LinkedToken);
+        }
+        CloseHandle(Token);
+        Token = NULL;
+    }
+
+    if (ParentPid == 0)
+        return Failures;
 
     Parent = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ParentPid);
     if (!Parent)
-        return 0x100;
+        return Failures | 0x100;
 
     /* Looking at the elevated token is fine, taking it is not */
     if (!OpenProcessToken(Parent, TOKEN_QUERY, &Token))
@@ -70,6 +115,8 @@ RunChild(DWORD ParentPid, HANDLE InheritedImpersonation)
     CloseHandle(Parent);
 
     /* An elevated impersonation token handed to us only gives identification */
+    if (InheritedImpersonation == NULL)
+        return Failures;
     if (!SetThreadToken(NULL, InheritedImpersonation))
         return Failures | 0x10;
     if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &ThreadToken))
@@ -111,7 +158,7 @@ TestMediumChild(HANDLE Process, HANDLE Lua)
     if (!Ret)
         return;
 
-    swprintf(CommandLine, L"\"%ls\" TokenLua child %lu %p", Exe, GetCurrentProcessId(), Impersonation);
+    swprintf(CommandLine, L"\"%ls\" TokenLua child %lu %p 0", Exe, GetCurrentProcessId(), Impersonation);
     Ret = CreateProcessAsUserW(Lua, Exe, CommandLine, NULL, NULL, TRUE, 0, NULL, NULL,
                                &StartupInfo, &ProcessInfo);
     ok(Ret, "CreateProcessAsUserW(LUA token) failed: %lu\n", GetLastError());
@@ -126,6 +173,161 @@ TestMediumChild(HANDLE Process, HANDLE Lua)
         CloseHandle(ProcessInfo.hProcess);
     }
     CloseHandle(Impersonation);
+}
+
+#define PAIR_TEST_USER     L"LntLuaPairTest"
+#define PAIR_TEST_PASSWORD L"Lnt!LuaPair#2026q"
+
+static
+LUID
+GetLogonId(HANDLE Token)
+{
+    BYTE Buffer[sizeof(TOKEN_STATISTICS)];
+    LUID Zero = {0, 0};
+    DWORD Size;
+
+    if (!GetTokenInformation(Token, TokenStatistics, Buffer, sizeof(Buffer), &Size))
+        return Zero;
+    return ((PTOKEN_STATISTICS)Buffer)->AuthenticationId;
+}
+
+/* Two logon sessions of one user: the LUA token of the second is paired with the
+ * full token of the first, as LSA does it, then the pair is broken with a NULL link.
+ * Needs SeTcbPrivilege and the right to create a local user. */
+static
+void
+TestTwoSessions(void)
+{
+    USER_INFO_1 User = {0};
+    HANDLE T1 = NULL, T2 = NULL, Lua2 = NULL, Linked = NULL;
+    TOKEN_LINKED_TOKEN Link;
+    LUID SessionA, SessionB, Id;
+    DWORD Value, Size, Error;
+    NET_API_STATUS NetStatus;
+    BOOL Ret;
+
+    NetUserDel(NULL, PAIR_TEST_USER);
+    User.usri1_name = PAIR_TEST_USER;
+    User.usri1_password = PAIR_TEST_PASSWORD;
+    User.usri1_priv = USER_PRIV_USER;
+    User.usri1_flags = UF_SCRIPT | UF_DONT_EXPIRE_PASSWD;
+    NetStatus = NetUserAdd(NULL, 1, (LPBYTE)&User, NULL);
+    if (NetStatus != NERR_Success)
+    {
+        skip("NetUserAdd failed %lu; the two-session checks need a local user\n", NetStatus);
+        return;
+    }
+
+    Ret = LogonUserW(PAIR_TEST_USER, L".", PAIR_TEST_PASSWORD, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &T1) &&
+          LogonUserW(PAIR_TEST_USER, L".", PAIR_TEST_PASSWORD, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &T2);
+    ok(Ret, "LogonUserW failed: %lu\n", GetLastError());
+    if (!Ret)
+        goto Cleanup;
+
+    SessionA = GetLogonId(T1);
+    SessionB = GetLogonId(T2);
+    ok(SessionA.LowPart != SessionB.LowPart || SessionA.HighPart != SessionB.HighPart,
+       "Two logons share logon id %08lx:%08lx\n", SessionA.HighPart, SessionA.LowPart);
+
+    Ret = CreateRestrictedToken(T2, LUA_TOKEN, 0, NULL, 0, NULL, 0, NULL, &Lua2);
+    ok(Ret, "CreateRestrictedToken(T2, LUA_TOKEN) failed: %lu\n", GetLastError());
+    if (!Ret)
+        goto Cleanup;
+
+    /* Link across the two sessions */
+    Link.LinkedToken = T1;
+    Ret = SetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link));
+    ok(Ret, "Linking across two sessions failed: %lu\n", GetLastError());
+    if (!Ret)
+        goto Cleanup;
+
+    ok(GetTokenDword(Lua2, TokenElevationType, &Value) && Value == TokenElevationTypeLimited,
+       "Limited side after the two-session link: %lu\n", Value);
+    ok(GetTokenDword(T1, TokenElevationType, &Value) && Value == TokenElevationTypeFull,
+       "Full side after the two-session link: %lu\n", Value);
+
+    Ret = GetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link), &Size);
+    ok(Ret, "Limited -> full across sessions failed: %lu\n", GetLastError());
+    if (Ret)
+    {
+        Linked = Link.LinkedToken;
+        Id = GetLogonId(Linked);
+        ok(Id.LowPart == SessionA.LowPart && Id.HighPart == SessionA.HighPart,
+           "The elevated side is in session %08lx:%08lx, expected %08lx:%08lx\n",
+           Id.HighPart, Id.LowPart, SessionA.HighPart, SessionA.LowPart);
+        ok(GetTokenDword(Linked, TokenElevation, &Value) && Value == 1, "The elevated side is not elevated\n");
+        CloseHandle(Linked);
+        Linked = NULL;
+    }
+
+    Ret = GetTokenInformation(T1, TokenLinkedToken, &Link, sizeof(Link), &Size);
+    ok(Ret, "Full -> limited across sessions failed: %lu\n", GetLastError());
+    if (Ret)
+    {
+        Linked = Link.LinkedToken;
+        Id = GetLogonId(Linked);
+        ok(Id.LowPart == SessionB.LowPart && Id.HighPart == SessionB.HighPart,
+           "The limited side is in session %08lx:%08lx, expected %08lx:%08lx\n",
+           Id.HighPart, Id.LowPart, SessionB.HighPart, SessionB.LowPart);
+        ok(GetTokenDword(Linked, TokenElevationType, &Value) && Value == TokenElevationTypeLimited,
+           "The limited side reports %lu\n", Value);
+        CloseHandle(Linked);
+        Linked = NULL;
+    }
+
+    /* A child of the limited token sees its own pair without SeTcbPrivilege */
+    {
+        STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
+        PROCESS_INFORMATION ProcessInfo;
+        WCHAR Exe[MAX_PATH], CommandLine[MAX_PATH + 64];
+        DWORD ExitCode = 0xffffffff;
+
+        if (GetModuleFileNameW(NULL, Exe, _countof(Exe)))
+        {
+            swprintf(CommandLine, L"\"%ls\" TokenLua child 0 0 1", Exe);
+            Ret = CreateProcessAsUserW(Lua2, Exe, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL,
+                                       &StartupInfo, &ProcessInfo);
+            ok(Ret, "CreateProcessAsUserW(two-session LUA token) failed: %lu\n", GetLastError());
+            if (Ret)
+            {
+                ok(WaitForSingleObject(ProcessInfo.hProcess, 30000) == WAIT_OBJECT_0, "The linked child did not finish\n");
+                ok(GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode), "GetExitCodeProcess failed: %lu\n", GetLastError());
+                ok(ExitCode == 0, "Linked child failures: 0x%lx (80 no link, 200 not impersonation, 400 level, "
+                   "800 primary copy granted, 1000 thread level above identification, 2000 type not limited)\n", ExitCode);
+                CloseHandle(ProcessInfo.hThread);
+                CloseHandle(ProcessInfo.hProcess);
+            }
+        }
+    }
+
+    /* A NULL link breaks the pair in both sessions */
+    Link.LinkedToken = NULL;
+    Ret = SetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link));
+    ok(Ret, "Unlinking with a NULL handle failed: %lu\n", GetLastError());
+    Ret = GetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link), &Size);
+    Error = GetLastError();
+    ok(!Ret && Error == ERROR_NO_SUCH_LOGON_SESSION, "Limited side still linked: ret %d, error %lu\n", Ret, Error);
+    Ret = GetTokenInformation(T1, TokenLinkedToken, &Link, sizeof(Link), &Size);
+    Error = GetLastError();
+    ok(!Ret && Error == ERROR_NO_SUCH_LOGON_SESSION, "Full side still linked: ret %d, error %lu\n", Ret, Error);
+    ok(GetTokenDword(T1, TokenElevationType, &Value) && Value == TokenElevationTypeDefault,
+       "Full side after the unlink: %lu\n", Value);
+    ok(GetTokenDword(Lua2, TokenElevationType, &Value) && Value == TokenElevationTypeLimited,
+       "LUA token after the unlink: %lu\n", Value);
+
+    /* And the sessions take a new pair afterwards */
+    Link.LinkedToken = T1;
+    Ret = SetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link));
+    ok(Ret, "Relinking after the unlink failed: %lu\n", GetLastError());
+
+Cleanup:
+    if (Lua2)
+        CloseHandle(Lua2);
+    if (T2)
+        CloseHandle(T2);
+    if (T1)
+        CloseHandle(T1);
+    NetUserDel(NULL, PAIR_TEST_USER);
 }
 
 START_TEST(TokenLua)
@@ -146,9 +348,11 @@ START_TEST(TokenLua)
     DWORD Size, Value, i, Error;
     BOOL Ret, IsAdmin = FALSE, Found = FALSE;
 
-    if (Argc >= 5 && !strcmp(Argv[2], "child"))
+    if (Argc >= 6 && !strcmp(Argv[2], "child"))
     {
-        ExitProcess(RunChild(strtoul(Argv[3], NULL, 10), (HANDLE)(ULONG_PTR)strtoull(Argv[4], NULL, 16)));
+        ExitProcess(RunChild(strtoul(Argv[3], NULL, 10),
+                             (HANDLE)(ULONG_PTR)strtoull(Argv[4], NULL, 16),
+                             Argv[5][0] == '1'));
     }
 
     ok(AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
@@ -244,7 +448,8 @@ START_TEST(TokenLua)
         Ret = SetTokenInformation(Lua, TokenLinkedToken, &Linked, sizeof(Linked));
         Error = GetLastError();
         ok(!Ret && Error == ERROR_INVALID_PARAMETER, "Pair on a well-known session: ret %d, error %lu\n", Ret, Error);
-        skip("The runner is in a well-known logon session; the pairing checks need a LogonUser session\n");
+        skip("The runner is in a well-known logon session; the same-session pairing checks need a LogonUser session\n");
+        TestTwoSessions();
         goto Cleanup;
     }
 
@@ -304,6 +509,8 @@ START_TEST(TokenLua)
     Linked.LinkedToken = Process;
     Ret = SetTokenInformation(Lua, TokenLinkedToken, &Linked, sizeof(Linked));
     ok(!Ret, "A second link on the same session succeeded\n");
+
+    TestTwoSessions();
 
 Cleanup:
     if (Lua)
