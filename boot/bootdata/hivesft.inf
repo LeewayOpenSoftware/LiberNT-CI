@@ -5959,6 +5959,9 @@ HKLM,"SOFTWARE\ReactOS\ReactOS\CurrentVersion\IFS","NTFS",0x00000000,"untfs.dll"
 ; Global Winlogon settings
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","ConsoleShell",0x00020000,"%SystemRoot%\system32\cmd.exe"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","Shell",0x00020000,"%SystemRoot%\explorer.exe"
+
+; uxtheme trust gate key (ThemeLoader4 I1a-T): created here so that it inherits the protected SOFTWARE descriptor
+HKLM,"SOFTWARE\Leeway\UxTheme",,0x00000010
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","Userinit",0x00020000,"%SystemRoot%\system32\userinit.exe"
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoRestartShell",0x00010001,1
 HKLM,"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon","AutoAdminLogon",0x00000000,"1"
