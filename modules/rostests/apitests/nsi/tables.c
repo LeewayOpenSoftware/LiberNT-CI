@@ -104,7 +104,7 @@ static void test_shapes(void)
         else
         {
             UINT cmpt = 1;
-            USHORT family = 0;
+            USHORT family = AF_INET; /* the TCP and UDP statistics have one row for each address family */
             const void *keyptr = NULL;
 
             if (s->Table == NSI_IP_COMPARTMENT_TABLE)
