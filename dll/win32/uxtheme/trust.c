@@ -1002,6 +1002,9 @@ TrustOpenMui(LPCWSTR name, LPCWSTR storeRoot, UXT_VIEW *v)
                 TrustViewRelease(v);
             return hr;
         }
+        /* only an absent module falls back to en-US; a module that fails the checks is a refusal */
+        if (hr != HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) && hr != HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND))
+            return hr;
     }
     return hr;
 }
@@ -1228,7 +1231,7 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
         hr = TrustOpenMui(name, storeRoot, &mui);
         if (SUCCEEDED(hr))
             hr = MSSTYLES_V4_Open(style.hFile, style.hSection, style.base, style.size, mui.hFile, mui.hSection,
-                                  mui.base, mui.size, pszColorName, pszSizeName, tf);
+                                  mui.base, mui.size, built, pszColorName, pszSizeName, tf);
         if (SUCCEEDED(hr))
         {
             ZeroMemory(&style, sizeof(style));

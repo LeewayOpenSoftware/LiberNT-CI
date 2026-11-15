@@ -34,6 +34,18 @@ if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
         pngsup.cpp)
 endif()
 
+# I1b: version-4 styles through the TL4 core, behind the trust gate values EnableV4Ordinary / EnableV4Privileged
+option(UXTHEME_V4 "Load version-4 visual styles in uxtheme (needs the PNG support of NT 6.0+ exports)" OFF)
+if(UXTHEME_V4)
+    if(DLL_EXPORT_VERSION LESS 0x600)
+        message(FATAL_ERROR "UXTHEME_V4 needs DLL_EXPORT_VERSION 0x600 or later (PNG images)")
+    endif()
+    add_definitions(-DUXTHEME_V4)
+    list(APPEND SOURCE
+        msstyles_v4.c
+        msstyles_v4.h)
+endif()
+
 file(GLOB uxtheme_rc_deps ${CMAKE_CURRENT_SOURCE_DIR}/lang/*.rc)
 add_rc_deps(uxtheme.rc ${uxtheme_rc_deps})
 

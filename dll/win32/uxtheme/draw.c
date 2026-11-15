@@ -265,6 +265,9 @@ static PTHEME_PROPERTY UXTHEME_SelectImage(HTHEME hTheme, int iPartId, int iStat
                 HBITMAP hBmp;
                 BOOL hasAlpha;
 
+#ifdef UXTHEME_V4
+                if (MSSTYLES_IS_V4_PROP(fileProp)) MSSTYLES_V4_GetImageName(fileProp, szPath, ARRAY_SIZE(szPath)); else
+#endif
                 lstrcpynW(szPath, fileProp->lpValue, min(fileProp->dwValueLen+1, ARRAY_SIZE(szPath)));
                 hBmp = MSSTYLES_LoadBitmap(hTheme, szPath, &hasAlpha, NULL);
                 if(!hBmp) continue;
@@ -323,6 +326,9 @@ static HRESULT UXTHEME_LoadImage(HTHEME hTheme, int iPartId, int iStateId, const
         FIXME("Couldn't determine image for part/state %d/%d, invalid theme?\n", iPartId, iStateId);
         return E_PROP_ID_UNSUPPORTED;
     }
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) MSSTYLES_V4_GetImageName(tp, szPath, ARRAY_SIZE(szPath)); else
+#endif
     lstrcpynW(szPath, tp->lpValue, min(tp->dwValueLen+1, ARRAY_SIZE(szPath)));
     *hBmp = MSSTYLES_LoadBitmap(hTheme, szPath, hasImageAlpha, hasDefaultTransparentColour);
     if(!*hBmp) {

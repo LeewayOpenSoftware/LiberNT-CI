@@ -38,6 +38,10 @@ typedef struct _THEME_PROPERTY {
     DWORD dwValueLen;
 
     struct _THEME_PROPERTY *next;
+#ifdef UXTHEME_V4
+    const void *v4;              /* the TL4 model property (const tl4_prop *) for a version-4 style; NULL for v3 */
+    struct _V4_FILE *v4file;     /* its file */
+#endif
 } THEME_PROPERTY, *PTHEME_PROPERTY;
 
 typedef struct _THEME_PARTSTATE {
@@ -62,6 +66,9 @@ typedef struct _THEME_CLASS {
     struct _THEME_CLASS *overrides;
 
     struct _THEME_CLASS *next;
+#ifdef UXTHEME_V4
+    UINT v4Ordinal;              /* TL4 class ordinal for a version-4 style */
+#endif
 } THEME_CLASS, *PTHEME_CLASS;
 
 typedef struct _THEME_IMAGE {
@@ -90,19 +97,15 @@ typedef struct _THEME_FILE {
     /* trust gate (trust.c): the crash-guard subkey of this style, cleared by ApplyTheme */
     WCHAR szTrustGuard[80];
     BOOL bTrustGuardMachine;
+#ifdef UXTHEME_V4
+    struct _V4_FILE *v4;         /* NULL for a version-3 style; else the mapping, the model and the shadow array */
+#endif
 } THEME_FILE, *PTHEME_FILE;
 
 typedef struct _UXINI_FILE *PUXINI_FILE;
 
 HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
 HRESULT MSSTYLES_OpenThemeFileV3(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
-#ifdef UXTHEME_V4
-/* msstyles_v4.c: on success the THEME_FILE owns both files, sections and views until MSSTYLES_CloseThemeFile; on
- * failure nothing is kept and the caller still owns them */
-HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T size, HANDLE hMui, HANDLE hMuiSection,
-                         const BYTE *muiBase, SIZE_T muiSize, LPCWSTR pszColorName, LPCWSTR pszSizeName,
-                         PTHEME_FILE *tf);
-#endif
 void MSSTYLES_CloseThemeFile(PTHEME_FILE tf);
 HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics);
 BOOL MSSTYLES_ReapplyActiveThemeMetrics(void);
@@ -133,6 +136,7 @@ extern CRITICAL_SECTION MSSTYLES_ImageLock;
 EXTERN_C BOOL MSSTYLES_TryLoadPng(HINSTANCE theme, LPCWSTR file, LPCWSTR type,
                                   HBITMAP *bitmap);
 EXTERN_C BOOL prepare_png_alpha(HBITMAP bitmap, BOOL *has_alpha);
+EXTERN_C BOOL MSSTYLES_TryLoadPngFromMemory(const BYTE *data, UINT size, HBITMAP *bitmap);
 #endif
 
 HRESULT MSSTYLES_GetPropertyBool(PTHEME_PROPERTY tp, BOOL *pfVal);
@@ -144,6 +148,14 @@ HRESULT MSSTYLES_GetPropertyPosition(PTHEME_PROPERTY tp, POINT *pPoint);
 HRESULT MSSTYLES_GetPropertyString(PTHEME_PROPERTY tp, LPWSTR pszBuff, int cchMaxBuffChars);
 HRESULT MSSTYLES_GetPropertyRect(PTHEME_PROPERTY tp, RECT *pRect);
 HRESULT MSSTYLES_GetPropertyMargins(PTHEME_PROPERTY tp, RECT *prc, MARGINS *pMargins);
+#ifdef UXTHEME_V4
+#include "msstyles_v4.h"
+#define MSSTYLES_IS_V4_PROP(tp) ((tp)->v4 != NULL)
+#define MSSTYLES_IS_V4_CLASS(tc) ((tc)->tf != NULL && (tc)->tf->v4 != NULL)
+#else
+#define MSSTYLES_IS_V4_PROP(tp) 0
+#define MSSTYLES_IS_V4_CLASS(tc) 0
+#endif
 
 void UXINI_CloseINI(PUXINI_FILE uf);
 PUXINI_FILE UXINI_LoadINI(HMODULE hTheme, const WCHAR *name) __WINE_DEALLOC(UXINI_CloseINI);

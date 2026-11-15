@@ -55,6 +55,30 @@ MSSTYLES_TryLoadPng(
     return ret;
 }
 
+/* data is the caller's private copy that tl4_png_check accepted (TL4 R-RES-6: the decoder sees the checked bytes) */
+BOOL
+MSSTYLES_TryLoadPngFromMemory(
+    _In_reads_bytes_(size) const BYTE *data,
+    _In_ UINT size,
+    _Out_ HBITMAP *phBitmap)
+{
+    BOOL ret = FALSE;
+
+    *phBitmap = NULL;
+    IStream* stream = SHCreateMemStream(data, size);
+    if (stream)
+    {
+        Gdiplus::Bitmap* gdipBitmap = Gdiplus::Bitmap::FromStream(stream, FALSE);
+        stream->Release();
+        if (gdipBitmap)
+        {
+            ret = gdipBitmap->GetHBITMAP(Gdiplus::Color(0, 0, 0, 0), phBitmap) == Gdiplus::Ok;
+            delete gdipBitmap;
+        }
+    }
+    return ret;
+}
+
 BOOL
 prepare_png_alpha(
     _In_ HBITMAP png,
