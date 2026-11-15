@@ -13,8 +13,6 @@
 #include <precomp.h>
 #include "CPersonalizationFolder.h"
 
-WINE_DEFAULT_DEBUG_CHANNEL(shell);
-
 EXTERN_C const CLSID CLSID_PersonalizationFolder =
     { 0xED834ED6, 0x4B5A, 0x4bfe, { 0x8F, 0x11, 0xA6, 0x26, 0xDC, 0xB6, 0xA9, 0x21 } };
 
