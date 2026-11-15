@@ -344,6 +344,8 @@ typedef struct _DXGKP_PROCESS_PRIORITY_REQUEST
 #define D3DKMT_BRIDGE_MAX_ALLOCATIONS 4096U
 #define D3DKMT_BRIDGE_MAX_PRIVATE_BYTES RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA
 #define D3DKMT_BRIDGE_MAX_FIXED_BYTES 65536U
+/* dxgkrnl keeps at most this much private data with a keyed mutex */
+#define D3DKMT_BRIDGE_MAX_KEYED_MUTEX_DATA 1024U
 #define D3DKMT_BRIDGE_MAX_ENUM_ADAPTERS 256U
 #define D3DKMT_BRIDGE_MAX_PRESENT_SUBRECTS 64U
 
@@ -362,22 +364,36 @@ WddmBridgeRejectBadBuffer(
 }
 
 /*
- * A pointer this bridge receives is either a user-mode buffer (the caller came
- * straight from a thunk that has not captured yet) or win32k's own kernel copy
- * (the thunk already probed the user buffer and captured it). ExGetPreviousMode
- * still reports UserMode for the latter, because it describes who entered the
- * syscall, not where this pointer lives -- probing a kernel address on that
- * basis fails the whole call with STATUS_ACCESS_VIOLATION. Probe on the
- * pointer's own range instead. This is safe: a user-supplied pointer is always
- * a user address here (the thunk rejected anything else before copying).
+ * A buffer this bridge reads or writes for a call from user mode is either the
+ * kernel copy win32k's thunk made of the call's top-level structure, or memory
+ * named by a pointer inside that structure. The second is the caller's choice
+ * and is probed as a caller pointer whatever its address.
+ * The thunk says which memory its copy is (D3dkmtGetUserCallCapture).
+ * Outside such a call (a kernel caller on a thread that entered from user
+ * mode), the address range decides as before.
  */
 FORCEINLINE
 BOOLEAN
 WddmBridgeNeedsProbe(
-    _In_opt_ CONST VOID *Address)
+    _In_opt_ CONST VOID *Address,
+    _In_ SIZE_T Size)
 {
-    return (ExGetPreviousMode() != KernelMode) &&
-           (Address == NULL || (PVOID)Address <= MmHighestUserAddress);
+    PVOID CaptureBase;
+    SIZE_T CaptureSize;
+    ULONG_PTR Offset;
+
+    if (ExGetPreviousMode() == KernelMode)
+        return FALSE;
+
+    if (D3dkmtGetUserCallCapture(&CaptureBase, &CaptureSize))
+    {
+        Offset = (ULONG_PTR)Address - (ULONG_PTR)CaptureBase;
+        return !((ULONG_PTR)Address >= (ULONG_PTR)CaptureBase &&
+                 Size <= CaptureSize &&
+                 Offset <= CaptureSize - Size);
+    }
+
+    return (Address == NULL || (PVOID)Address <= MmHighestUserAddress);
 }
 
 static NTSTATUS
@@ -396,7 +412,7 @@ WddmBridgeSafeCopyFrom(
 
     _SEH2_TRY
     {
-        if (WddmBridgeNeedsProbe(Source))
+        if (WddmBridgeNeedsProbe(Source, Size))
             ProbeForRead(Source, Size, 1);
         RtlCopyMemory(Destination, Source, Size);
     }
@@ -425,7 +441,7 @@ WddmBridgeSafeCopyTo(
 
     _SEH2_TRY
     {
-        if (WddmBridgeNeedsProbe(Destination))
+        if (WddmBridgeNeedsProbe(Destination, Size))
             ProbeForWrite(Destination, Size, 1);
         RtlCopyMemory(Destination, Source, Size);
     }
@@ -451,7 +467,7 @@ WddmBridgeSafeProbeForWrite(
     if (Destination == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (!WddmBridgeNeedsProbe(Destination))
+    if (!WddmBridgeNeedsProbe(Destination, Size))
         return STATUS_SUCCESS;
 
     _SEH2_TRY
@@ -557,6 +573,100 @@ WddmBridgeCaptureFixedIoctl(
         Status = WddmBridgeSafeCopyTo(UserData, Captured, Size);
 
 Cleanup:
+    ExFreePoolWithTag(Captured, TAG_WDDM_BRIDGE);
+    return Status;
+}
+
+/*
+ * Like WddmBridgeCaptureFixedIoctl, for a structure with one buffer named by
+ * a pointer inside it. dxgkrnl reads the buffers of an internal request as
+ * kernel memory, so that buffer is captured here (probed as a caller buffer)
+ * and the request carries the kernel copy. The caller gets its own pointer
+ * back in the structure.
+ */
+static NTSTATUS
+WddmBridgeCaptureFixedIoctlWithBuffer(
+    _In_ ULONG IoControlCode,
+    _Inout_updates_bytes_(Size) PVOID UserData,
+    _In_ ULONG Size,
+    _In_ BOOLEAN CopyBack,
+    _In_ SIZE_T PointerOffset,
+    _In_ SIZE_T SizeOffset,
+    _In_ ULONG MaximumBytes)
+{
+    PUCHAR Captured;
+    PVOID UserBuffer;
+    PVOID Buffer = NULL;
+    UINT Bytes;
+    ULONG_PTR Information = 0;
+    NTSTATUS Status;
+
+    if (UserData == NULL || Size == 0 || Size > D3DKMT_BRIDGE_MAX_FIXED_BYTES ||
+        PointerOffset + sizeof(PVOID) > Size || SizeOffset + sizeof(UINT) > Size)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Captured = ExAllocatePoolWithTag(NonPagedPool, Size, TAG_WDDM_BRIDGE);
+    if (Captured == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = WddmBridgeSafeCopyFrom(Captured, UserData, Size);
+    if (!NT_SUCCESS(Status))
+        goto Cleanup;
+
+    RtlCopyMemory(&UserBuffer, Captured + PointerOffset, sizeof(UserBuffer));
+    RtlCopyMemory(&Bytes, Captured + SizeOffset, sizeof(Bytes));
+    if (UserBuffer == NULL && Bytes != 0)
+    {
+        /* A size without a buffer */
+        Status = STATUS_INVALID_PARAMETER;
+        goto Cleanup;
+    }
+    if (UserBuffer != NULL && Bytes == 0)
+    {
+        /* Nothing to copy: dxgkrnl never sees the caller's address */
+        RtlZeroMemory(Captured + PointerOffset, sizeof(PVOID));
+    }
+    if (UserBuffer != NULL && Bytes != 0)
+    {
+        if (Bytes > MaximumBytes)
+        {
+            Status = STATUS_INVALID_PARAMETER;
+            goto Cleanup;
+        }
+        Buffer = ExAllocatePoolWithTag(NonPagedPool, Bytes, TAG_WDDM_BRIDGE);
+        if (Buffer == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Cleanup;
+        }
+        Status = WddmBridgeSafeCopyFrom(Buffer, UserBuffer, Bytes);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        RtlCopyMemory(Captured + PointerOffset, &Buffer, sizeof(Buffer));
+    }
+
+    if (CopyBack)
+    {
+        Status = WddmBridgeSafeProbeForWrite(UserData, Size);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+    }
+
+    Status = WddmBridgeSendIoctlWithInformation(IoControlCode, Captured, Size, CopyBack ? Captured : NULL, CopyBack ? Size : 0, &Information);
+    if (NT_SUCCESS(Status) && CopyBack && Information != Size)
+        Status = STATUS_INFO_LENGTH_MISMATCH;
+    if (NT_SUCCESS(Status) && CopyBack)
+    {
+        /* The caller's own pointer, never the kernel copy */
+        RtlCopyMemory(Captured + PointerOffset, &UserBuffer, sizeof(UserBuffer));
+        Status = WddmBridgeSafeCopyTo(UserData, Captured, Size);
+    }
+
+Cleanup:
+    if (Buffer != NULL)
+        ExFreePoolWithTag(Buffer, TAG_WDDM_BRIDGE);
     ExFreePoolWithTag(Captured, TAG_WDDM_BRIDGE);
     return Status;
 }
@@ -2692,7 +2802,8 @@ APIENTRY
 D3DKMTCreateOverlay(
     _Inout_ D3DKMT_CREATEOVERLAY *pData)
 {
-    return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_CREATEOVERLAY, pData, sizeof(*pData), TRUE);
+    return WddmBridgeCaptureFixedIoctlWithBuffer(IOCTL_D3DKMT_CREATEOVERLAY, pData, sizeof(*pData), TRUE,
+                                                 FIELD_OFFSET(D3DKMT_CREATEOVERLAY, OverlayInfo.pPrivateDriverData), FIELD_OFFSET(D3DKMT_CREATEOVERLAY, OverlayInfo.PrivateDriverDataSize), RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA);
 }
 
 NTSTATUS
@@ -2708,7 +2819,10 @@ APIENTRY
 D3DKMTFlipOverlay(
     _In_ CONST D3DKMT_FLIPOVERLAY *pData)
 {
-    return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_FLIPOVERLAY, (PVOID)pData, sizeof(*pData), FALSE);
+    return WddmBridgeCaptureFixedIoctlWithBuffer(IOCTL_D3DKMT_FLIPOVERLAY, (PVOID)pData, sizeof(*pData), FALSE,
+                                                 FIELD_OFFSET(D3DKMT_FLIPOVERLAY, pPrivateDriverData),
+                                                 FIELD_OFFSET(D3DKMT_FLIPOVERLAY, PrivateDriverDataSize),
+                                                 RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA);
 }
 
 NTSTATUS
@@ -2716,7 +2830,8 @@ APIENTRY
 D3DKMTUpdateOverlay(
     _In_ CONST D3DKMT_UPDATEOVERLAY *pData)
 {
-    return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_UPDATEOVERLAY, (PVOID)pData, sizeof(*pData), FALSE);
+    return WddmBridgeCaptureFixedIoctlWithBuffer(IOCTL_D3DKMT_UPDATEOVERLAY, (PVOID)pData, sizeof(*pData), FALSE,
+                                                 FIELD_OFFSET(D3DKMT_UPDATEOVERLAY, OverlayInfo.pPrivateDriverData), FIELD_OFFSET(D3DKMT_UPDATEOVERLAY, OverlayInfo.PrivateDriverDataSize), RXGK_WDDM_MAX_PRIVATE_DRIVER_DATA);
 }
 
 NTSTATUS
@@ -3043,7 +3158,41 @@ APIENTRY
 D3DKMTSetGammaRamp(
     _In_ CONST D3DKMT_SETGAMMARAMP *pData)
 {
-    return WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_SETGAMMARAMP, (PVOID)pData, sizeof(*pData), FALSE);
+    D3DKMT_SETGAMMARAMP Captured;
+    PVOID Ramp = NULL;
+    NTSTATUS Status;
+
+    if (pData == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = WddmBridgeSafeCopyFrom(&Captured, pData, sizeof(Captured));
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* The ramp is named by a caller pointer, and dxgkrnl reads the buffers
+     * of an internal request as kernel memory: hand it a kernel copy. Its
+     * size against the ramp type is checked by dxgkrnl. */
+    if (Captured.pGammaRampRgb256x3x16 != NULL)
+    {
+        if (Captured.Size == 0 || Captured.Size > D3DKMT_BRIDGE_MAX_FIXED_BYTES)
+            return STATUS_INVALID_PARAMETER;
+
+        Ramp = ExAllocatePoolWithTag(NonPagedPool, Captured.Size, TAG_WDDM_BRIDGE);
+        if (Ramp == NULL)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Status = WddmBridgeSafeCopyFrom(Ramp, Captured.pGammaRampRgb256x3x16, Captured.Size);
+        if (!NT_SUCCESS(Status))
+            goto Cleanup;
+        Captured.pGammaRampRgb256x3x16 = Ramp;
+    }
+
+    Status = WddmBridgeSendIoctl(IOCTL_D3DKMT_SETGAMMARAMP, &Captured, sizeof(Captured), NULL, 0);
+
+Cleanup:
+    if (Ramp != NULL)
+        ExFreePoolWithTag(Ramp, TAG_WDDM_BRIDGE);
+    return Status;
 }
 
 NTSTATUS
@@ -5098,7 +5247,10 @@ APIENTRY
 D3DKMTCreateKeyedMutex2(
     _Inout_ D3DKMT_CREATEKEYEDMUTEX2 *pData)
 {
-    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_CREATEKEYEDMUTEX2, pData, sizeof(*pData), TRUE));
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctlWithBuffer(IOCTL_D3DKMT_CREATEKEYEDMUTEX2, pData, sizeof(*pData), TRUE,
+                                                                           FIELD_OFFSET(D3DKMT_CREATEKEYEDMUTEX2, pPrivateRuntimeData),
+                                                                           FIELD_OFFSET(D3DKMT_CREATEKEYEDMUTEX2, PrivateRuntimeDataSize),
+                                                                           D3DKMT_BRIDGE_MAX_KEYED_MUTEX_DATA));
 }
 
 NTSTATUS
@@ -5114,7 +5266,10 @@ APIENTRY
 D3DKMTOpenKeyedMutex2(
     _Inout_ D3DKMT_OPENKEYEDMUTEX2 *pData)
 {
-    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_OPENKEYEDMUTEX2, pData, sizeof(*pData), TRUE));
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctlWithBuffer(IOCTL_D3DKMT_OPENKEYEDMUTEX2, pData, sizeof(*pData), TRUE,
+                                                                           FIELD_OFFSET(D3DKMT_OPENKEYEDMUTEX2, pPrivateRuntimeData),
+                                                                           FIELD_OFFSET(D3DKMT_OPENKEYEDMUTEX2, PrivateRuntimeDataSize),
+                                                                           D3DKMT_BRIDGE_MAX_KEYED_MUTEX_DATA));
 }
 
 NTSTATUS
@@ -5225,7 +5380,10 @@ D3DKMTReleaseKeyedMutex2(
 {
     if (pData == NULL)
         return STATUS_INVALID_PARAMETER;
-    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctl(IOCTL_D3DKMT_RELEASEKEYEDMUTEX2, pData, sizeof(*pData), FALSE));
+    return WddmBridgeRejectBadBuffer(WddmBridgeCaptureFixedIoctlWithBuffer(IOCTL_D3DKMT_RELEASEKEYEDMUTEX2, pData, sizeof(*pData), FALSE,
+                                                                           FIELD_OFFSET(D3DKMT_RELEASEKEYEDMUTEX2, pPrivateRuntimeData),
+                                                                           FIELD_OFFSET(D3DKMT_RELEASEKEYEDMUTEX2, PrivateRuntimeDataSize),
+                                                                           D3DKMT_BRIDGE_MAX_KEYED_MUTEX_DATA));
 }
 
 

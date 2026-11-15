@@ -28,6 +28,18 @@ DxgkEngDispatchNtGdiDdDDI(
     _In_ ULONG_PTR Argument3,
     _In_ ULONG_PTR Argument4);
 
+/*
+ * While this thread runs a D3DKMT call that came from user mode through the
+ * win32k thunk, returns the kernel copy the thunk made of the call's top-level
+ * structure. Every other pointer the bridge is handed during that call came
+ * from the caller's structure and is a caller pointer, whatever its address.
+ */
+BOOLEAN
+NTAPI
+D3dkmtGetUserCallCapture(
+    _Out_ PVOID *Base,
+    _Out_ SIZE_T *Size);
+
 /* Kernel-to-kernel IOCTL helper */
 NTSTATUS
 WddmBridgeSendIoctl(
