@@ -304,16 +304,9 @@ HKCR
 			val InfoTip = s 'Change the visuals and sounds on your computer.'
 			val LocalizedString = s 'Personalization'
 			DefaultIcon = e '%%SystemRoot%%\system32\desk.cpl,-100'
-			Shell
-			{
-				Open
-				{
-					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl'
-				}
-			}
 			ShellFolder
 			{
-				val Attributes = d '0'
+				val Attributes = d '671088644'
 			}
 		}
 	}
@@ -336,7 +329,7 @@ HKCR
 			{
 				Open
 				{
-					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl,,@Settings'
+					Command = e '%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@1'
 				}
 			}
 			ShellFolder

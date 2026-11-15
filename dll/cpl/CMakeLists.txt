@@ -9,6 +9,7 @@ add_subdirectory(inetcpl)
 add_subdirectory(input)
 add_subdirectory(intl)
 add_subdirectory(joy)
+add_subdirectory(leewaydisp)
 #add_subdirectory(liccpa)#disabled in trunk
 add_subdirectory(main)
 add_subdirectory(mmsys)

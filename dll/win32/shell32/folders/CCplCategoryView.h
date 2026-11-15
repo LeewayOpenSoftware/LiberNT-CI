@@ -30,4 +30,7 @@ VOID CplSetViewChoice(UINT startupPage, BOOL smallIcons);
 /* Wraps the classic list view (pInner) with the category pages and the "View by" selector */
 HRESULT CplCreateCategoryView(IShellFolder *psf, IShellView *pInner, IShellView **ppView);
 
+/* The next view created by CplCreateCategoryView opens on this category page (a System.ControlPanel.Category id), 0 for the saved choice */
+VOID CplSetNextViewCategory(UINT categoryId);
+
 #endif /* _SHFLDR_CPLCATEGORYVIEW_H_ */

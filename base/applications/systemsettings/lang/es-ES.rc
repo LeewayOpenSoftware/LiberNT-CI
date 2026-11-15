@@ -332,6 +332,7 @@ BEGIN
     IDS_FIT_STRETCH "Stretch"
     IDS_FIT_TILE "Tile"
     IDS_FIT_CENTER "Center"
+    IDS_WALLPAPER_FAILED "No se pudo aplicar el fondo de escritorio."
     IDS_SOLID_COLOR "Solid color"
     IDS_NO_PICTURE "No picture is used as background"
     IDS_PICTURE "Picture"

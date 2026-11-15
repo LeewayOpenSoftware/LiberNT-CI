@@ -12,6 +12,7 @@ extern "C"
 }
 #include <commdlg.h>
 #include <shobjidl.h>
+#include <leewayui/display_backend.h>
 #include <algorithm>
 
 #define PERSONALIZE_KEY L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
@@ -86,36 +87,52 @@ BuildPersonalization(PageBuilder &page)
     page.Navigate(Str(IDS_PAGE_FONTS), Str(IDS_FONTS_DESC), L"text_font_20_regular", PageId::Fonts);
 }
 
-struct WallpaperStyle
+static const UINT FitNames[LWALL_STYLE_COUNT] =
 {
-    UINT Name;
-    LPCWSTR Style;
-    LPCWSTR Tile;
-};
-
-static const WallpaperStyle WallpaperStyles[] =
-{
-    { IDS_FIT_FILL, L"10", L"0" },
-    { IDS_FIT_FIT, L"6", L"0" },
-    { IDS_FIT_STRETCH, L"2", L"0" },
-    { IDS_FIT_TILE, L"0", L"1" },
-    { IDS_FIT_CENTER, L"0", L"0" },
+    IDS_FIT_FILL, IDS_FIT_FIT, IDS_FIT_STRETCH, IDS_FIT_TILE, IDS_FIT_CENTER
 };
 
 static std::wstring
-CurrentWallpaper()
+CurrentWallpaper(LWALL_STYLE *style)
 {
     WCHAR path[MAX_PATH] = L"";
 
-    SystemParametersInfoW(SPI_GETDESKWALLPAPER, _countof(path), path, 0);
+    LWallGetCurrent(path, _countof(path), style);
     return path;
+}
+
+static void
+ShowWallpaperFailed(HWND owner)
+{
+    TASKDIALOGCONFIG config = { sizeof(config) };
+    std::wstring title = Str(IDS_APP_TITLE), heading = Str(IDS_ERROR_HEADING), text = Str(IDS_WALLPAPER_FAILED);
+
+    config.hwndParent = owner;
+    config.dwFlags = TDF_POSITION_RELATIVE_TO_WINDOW;
+    config.dwCommonButtons = TDCBF_OK_BUTTON;
+    config.pszWindowTitle = title.c_str();
+    config.pszMainIcon = TD_ERROR_ICON;
+    config.pszMainInstruction = heading.c_str();
+    config.pszContent = text.c_str();
+    TaskDialogIndirect(&config, NULL, NULL, NULL);
+}
+
+static void
+SetWallpaper(HWND owner, const std::wstring &path, LWALL_STYLE style)
+{
+    if (!LWallSet(path.c_str(), style))
+        ShowWallpaperFailed(owner);
 }
 
 static void
 SetWallpaper(HWND owner, const std::wstring &path)
 {
-    if (!SystemParametersInfoW(SPI_SETDESKWALLPAPER, 0, (PVOID)path.c_str(), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE))
-        ShowError(owner, GetLastError());
+    LWALL_STYLE style = LWALL_FILL;
+    WCHAR current[MAX_PATH];
+
+    if (!LWallGetCurrent(current, _countof(current), &style))
+        style = LWALL_FILL;
+    SetWallpaper(owner, path, style);
 }
 
 static HICON
@@ -219,10 +236,11 @@ void
 BuildBackground(PageBuilder &page)
 {
     SettingsHost *host = page.Host;
-    std::wstring wallpaper = page.Indexing ? std::wstring() : CurrentWallpaper(), style, tile;
+    LWALL_STYLE style = LWALL_FILL;
+    std::wstring wallpaper = page.Indexing ? std::wstring() : CurrentWallpaper(&style);
     std::vector<std::wstring> kinds, fits, colors, images;
     bool picture = !wallpaper.empty();
-    int fit = -1, colorIndex = -1;
+    int fit = page.Indexing ? -1 : (int)style, colorIndex = -1;
     WCHAR windows[MAX_PATH];
 
     if (!page.Indexing)
@@ -249,20 +267,12 @@ BuildBackground(PageBuilder &page)
                 });
     if (picture || page.Indexing)
     {
-        style = ReadString(HKEY_CURRENT_USER, DESKTOP_KEY, L"WallpaperStyle");
-        tile = ReadString(HKEY_CURRENT_USER, DESKTOP_KEY, L"TileWallpaper");
-        for (UINT i = 0; i < _countof(WallpaperStyles); i++)
-        {
-            fits.push_back(Str(WallpaperStyles[i].Name));
-            if (style == WallpaperStyles[i].Style && (tile.empty() ? L"0" : tile) == WallpaperStyles[i].Tile)
-                fit = (int)i;
-        }
+        for (UINT i = 0; i < LWALL_STYLE_COUNT; i++)
+            fits.push_back(Str(FitNames[i]));
         page.Choice(Str(IDS_FIT), Str(IDS_FIT_DESC), L"image_edit_20_regular", fits, fit,
                     [host, wallpaper](int index)
                     {
-                        WriteString(HKEY_CURRENT_USER, DESKTOP_KEY, L"WallpaperStyle", WallpaperStyles[index].Style);
-                        WriteString(HKEY_CURRENT_USER, DESKTOP_KEY, L"TileWallpaper", WallpaperStyles[index].Tile);
-                        SetWallpaper(host->Window(), wallpaper);
+                        SetWallpaper(host->Window(), wallpaper, (LWALL_STYLE)index);
                     });
         page.Button(Str(IDS_BROWSE_PHOTOS), Str(IDS_BROWSE_PHOTOS_DESC), L"folder_open_20_regular", Str(IDS_BROWSE),
                     [host](int)

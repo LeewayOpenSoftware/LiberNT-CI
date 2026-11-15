@@ -333,6 +333,7 @@ BEGIN
     IDS_FIT_STRETCH "拡大して表示"
     IDS_FIT_TILE "並べて表示"
     IDS_FIT_CENTER "中央に表示"
+    IDS_WALLPAPER_FAILED "デスクトップの背景を適用できませんでした。"
     IDS_SOLID_COLOR "単色"
     IDS_NO_PICTURE "背景に画像は使用されていません"
     IDS_PICTURE "画像"

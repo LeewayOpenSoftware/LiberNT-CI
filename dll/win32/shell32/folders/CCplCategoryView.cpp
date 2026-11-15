@@ -175,7 +175,7 @@ static UINT CplParseCategories(PCWSTR text)
 }
 
 /* Opens a Control Panel item the way a double click does */
-static VOID CplLaunchItem(HWND hwnd, PCWSTR clsid)
+static VOID CplLaunchItem(HWND hwnd, IShellBrowser *psb, PCWSTR clsid)
 {
     WCHAR path[200];
     PIDLIST_ABSOLUTE pidl = NULL;
@@ -184,6 +184,20 @@ static VOID CplLaunchItem(HWND hwnd, PCWSTR clsid)
     StringCchPrintfW(path, _countof(path), L"%s\\::%s", CPL_ROOT_PATH, clsid);
     if (FAILED(SHParseDisplayName(path, NULL, &pidl, 0, NULL)) || !pidl)
         return;
+    /* An item that is itself a shell folder (Personalization) is entered in this Explorer window,
+     * so that the address bar, Back and Forward keep working */
+    if (psb)
+    {
+        WCHAR key[160];
+        DWORD attr = 0, cb = sizeof(attr);
+        StringCchPrintfW(key, _countof(key), L"CLSID\\%s\\ShellFolder", clsid);
+        if (RegGetValueW(HKEY_CLASSES_ROOT, key, L"Attributes", RRF_RT_REG_DWORD, NULL, &attr, &cb) == ERROR_SUCCESS &&
+            (attr & SFGAO_FOLDER) && SUCCEEDED(psb->BrowseObject(pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE)))
+        {
+            ILFree(pidl);
+            return;
+        }
+    }
     sei.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI;
     sei.hwnd = hwnd;
     sei.lpIDList = pidl;
@@ -255,6 +269,7 @@ private:
     FOLDERSETTINGS m_fs;
     Mode m_mode;
     int m_page;             /* index in g_Categories while in MODE_PAGE */
+    UINT m_initialCat;      /* category id to open on, 0 for the saved view */
     BOOL m_smallIcons;
     BOOL m_dark;
     int m_dpi;
@@ -328,6 +343,7 @@ public:
     ~CCplCategoryView();
 
     HRESULT Initialize(IShellFolder *psf, IShellView *pInner);
+    void SetInitialCategory(UINT id) { m_initialCat = id; }
 
     // IOleWindow
     STDMETHOD(GetWindow)(HWND *lphwnd) override;
@@ -393,6 +409,7 @@ CCplCategoryView::CCplCategoryView() :
     m_hwndInner(NULL),
     m_mode(MODE_HOME),
     m_page(0),
+    m_initialCat(0),
     m_smallIcons(FALSE),
     m_dark(FALSE),
     m_dpi(96),
@@ -946,7 +963,7 @@ VOID CCplCategoryView::Activate(int hit)
             SetView(CPL_STARTUP_ICONS, m_smallIcons);
             break;
         case HK_ITEM:
-            CplLaunchItem(m_hWnd, m_items[m_hits[hit].Arg].Clsid);
+            CplLaunchItem(m_hWnd, m_psb, m_items[m_hits[hit].Arg].Clsid);
             break;
     }
 }
@@ -1361,6 +1378,17 @@ STDMETHODIMP CCplCategoryView::CreateViewWindow(IShellView *lpPrevView, LPCFOLDE
     m_psb = psb;
     m_smallIcons = CplGetSmallIcons();
     m_mode = CplGetStartupPage() == CPL_STARTUP_CLASSIC ? MODE_CLASSIC : (CplGetStartupPage() == CPL_STARTUP_ICONS ? MODE_ICONS : MODE_HOME);
+    if (m_initialCat)
+    {
+        for (UINT i = 0; i < _countof(g_Categories); i++)
+        {
+            if (g_Categories[i].Id == m_initialCat)
+            {
+                m_mode = MODE_PAGE;
+                m_page = (int)i;
+            }
+        }
+    }
     LoadCatalog();
     Create(hParent, rc, NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_TABSTOP);
     if (!m_hWnd)
@@ -1422,6 +1450,13 @@ STDMETHODIMP CCplCategoryView::GetItemObject(UINT uItem, REFIID riid, LPVOID *pp
     return E_NOINTERFACE;
 }
 
+static UINT g_nextViewCategory = 0;
+
+VOID CplSetNextViewCategory(UINT categoryId)
+{
+    g_nextViewCategory = categoryId;
+}
+
 HRESULT CplCreateCategoryView(IShellFolder *psf, IShellView *pInner, IShellView **ppView)
 {
     CComPtr<CCplCategoryView> pView;
@@ -1433,5 +1468,7 @@ HRESULT CplCreateCategoryView(IShellFolder *psf, IShellView *pInner, IShellView 
     hr = pView->Initialize(psf, pInner);
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
+    pView->SetInitialCategory(g_nextViewCategory);
+    g_nextViewCategory = 0;
     return pView->QueryInterface(IID_PPV_ARG(IShellView, ppView));
 }
