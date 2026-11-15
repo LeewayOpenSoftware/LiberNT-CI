@@ -247,6 +247,50 @@ RunLauncher(PCWSTR Drive)
     return ExitCode;
 }
 
+/* [DIAG] temporary: run "cmd.exe /c ver" (a pure cmd builtin, no external
+ * tool, no launcher.cmd) and trace its exit code. This splits H1 (cmd.exe /
+ * CRT / a DLL it loads int3s at startup) from H2 (a tool the launcher invokes
+ * int3s and cmd /c propagates the errorlevel). Revert with the rest of the diag. */
+static VOID
+ProbeCmd(VOID)
+{
+    WCHAR Shell[MAX_PATH];
+    WCHAR CommandLine[2 * MAX_PATH];
+    STARTUPINFOW StartupInfo;
+    PROCESS_INFORMATION ProcessInfo;
+    DWORD ExitCode;
+    UINT Length;
+    CHAR Line[128];
+
+    Length = GetSystemDirectoryW(Shell, ARRAYSIZE(Shell));
+    if (!Length || Length >= ARRAYSIZE(Shell) ||
+        FAILED(StringCchCatW(Shell, ARRAYSIZE(Shell), L"\\cmd.exe")) ||
+        FAILED(StringCchPrintfW(CommandLine, ARRAYSIZE(CommandLine), L"\"%s\" /c ver", Shell)))
+    {
+        Trace("APPLAUNCH_DIAG VER_SETUP_FAIL\r\n");
+        return;
+    }
+
+    ZeroMemory(&StartupInfo, sizeof(StartupInfo));
+    StartupInfo.cb = sizeof(StartupInfo);
+    if (!CreateProcessW(Shell, CommandLine, NULL, NULL, FALSE, CREATE_NEW_CONSOLE, NULL,
+                        NULL, &StartupInfo, &ProcessInfo))
+    {
+        StringCchPrintfA(Line, ARRAYSIZE(Line), "APPLAUNCH_DIAG VER_CREATE_FAIL=%lu\r\n", GetLastError());
+        Trace(Line);
+        return;
+    }
+
+    CloseHandle(ProcessInfo.hThread);
+    WaitForSingleObject(ProcessInfo.hProcess, INFINITE);
+    if (!GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode))
+        ExitCode = GetLastError();
+    CloseHandle(ProcessInfo.hProcess);
+
+    StringCchPrintfA(Line, ARRAYSIZE(Line), "APPLAUNCH_DIAG VER_EXIT=%lu\r\n", ExitCode);
+    Trace(Line);
+}
+
 int WINAPI
 wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
@@ -266,6 +310,8 @@ wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCm
         return 0;
 
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
+
+    ProbeCmd(); /* [DIAG] cmd.exe /c ver probe */
 
     if (FindAppDrive(Drive))
     {
