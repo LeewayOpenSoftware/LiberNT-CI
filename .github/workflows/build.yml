@@ -693,7 +693,7 @@ jobs:
       shell: pwsh
       run: |
         $out = "${{steps.configure.outputs.outdir}}"
-        ninja -C $out liberntimg -k0 -v
+        ninja -C $out liberntimg liberntvhd -k0 -v
         $code = $LASTEXITCODE
         if ($code -ne 0) {
           Write-Host '=== DIAG: preinstall_partition batch files ==='
@@ -705,7 +705,7 @@ jobs:
           foreach ($t in 'fatten.exe','ntfsimg.exe','mkdiskimg.exe') {
             Get-ChildItem -Recurse "$out" -Filter $t -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}  {1} bytes' -f $_.FullName, $_.Length) }
           }
-          throw "ninja liberntimg failed (code $code); diagnostics above"
+          throw "ninja liberntimg/liberntvhd failed (code $code); diagnostics above"
         }
 
     - name: Build the lnrspoc PoC driver and archives (MSVC lab image only)
@@ -753,6 +753,22 @@ jobs:
       with:
         name: LiberNT-img-${{steps.images.outputs.tag}}
         path: ${{steps.configure.outputs.outdir}}/LiberNT.img
+        if-no-files-found: error
+
+    - name: Upload LiberNT.vhd
+      if: ${{ !cancelled() && steps.sysimg.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: LiberNT-vhd-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/LiberNT.vhd
+        if-no-files-found: error
+
+    - name: Upload LiberNT.vhdx
+      if: ${{ !cancelled() && steps.sysimg.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: LiberNT-vhdx-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/LiberNT.vhdx
         if-no-files-found: error
 
     - name: Upload lnrspoc.sys and the Rust archives (MSVC lab image only)
