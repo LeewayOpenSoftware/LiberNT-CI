@@ -816,6 +816,13 @@ SepDuplicateToken(
              * group (that is, the group has SE_GROUP_MANDATORY attribute)
              * by standards it's always enabled and no one can disable it.
              */
+            /* The integrity label and a deny-only group are no groups that could be
+             * enabled; both stay as they are */
+            if (AccessToken->UserAndGroups[GroupsIndex].Attributes &
+                (SE_GROUP_INTEGRITY | SE_GROUP_USE_FOR_DENY_ONLY))
+            {
+                continue;
+            }
             if (AccessToken->UserAndGroups[GroupsIndex].Attributes == 0 ||
                 (AccessToken->UserAndGroups[GroupsIndex].Attributes & SE_GROUP_ENABLED) == 0)
             {
@@ -853,6 +860,9 @@ SepDuplicateToken(
                 PrivilegesIndex--;
             }
         }
+
+        /* Removed groups shift the ones after them */
+        AccessToken->IntegrityLevelIndex = SepFindIntegrityGroupIndex(AccessToken);
     }
 
     /* Return the token to the caller */
