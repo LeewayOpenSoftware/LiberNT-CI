@@ -18,6 +18,7 @@
 #include <tl4/loader/strings.h>
 #include <tl4/loader/v4.h>
 #include <tl4/loader/model.h>
+#include <tl4/loader/png.h>
 #include <tl4/loader/range.h>
 
 #define V4_MODEL_BUFFER_CAP (2u * 1024u * 1024u)   /* above the 1,581,080 bytes of a style at the section-6 limits */
@@ -39,9 +40,14 @@ typedef struct _V4_FILE {
     SIZE_T modelBytes;
     THEME_PROPERTY *shadow;       /* one per model property, lpValue NULL, v4 set */
     UINT nshadow;
-    WCHAR *names;                 /* the colour and size lists as v3 keeps them: name NUL NUL */
+    WCHAR *names;                 /* the colour and size lists as v3 keeps them: name NUL NUL; the size list at namesSizeOff */
+    UINT namesSizeOff;
+    tl4_pixel_budget budget;      /* R-RES-4: decoded pixels of this style, taken by the image loader before each decode */
     THEME_PARTSTATE psSentinel;   /* what FindPart / FindPartState return for an existing v4 part-state: never dereferenced */
 } V4_FILE, *PV4_FILE;
+
+/* R-RES-4 / section 6: the per-style pixel budget for the life of the process (the image loader takes from it) */
+#define V4_PIXEL_BUDGET (64ull * 1024ull * 1024ull)
 
 /* Build a THEME_FILE from the checked mapping(s). On success the handles, sections and views belong to the new
  * THEME_FILE; on failure nothing of them is touched or closed, nothing allocated here stays, and *ptf is NULL. */

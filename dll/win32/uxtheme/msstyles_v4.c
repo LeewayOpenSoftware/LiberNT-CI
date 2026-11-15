@@ -19,11 +19,13 @@
 #include "msstyles.h"
 #include "msstyles_v4.h"
 
+#include <pseh/pseh2.h>
 #include "wine/debug.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 #define E_V4_BAD_FORMAT HRESULT_FROM_WIN32(ERROR_BAD_FORMAT)
+#define E_V4_IN_PAGE    HRESULT_FROM_WIN32(ERROR_FILE_INVALID)   /* an exception while reading the view (in-page error) */
 
 static PV4_FILE v4_of(PTHEME_PROPERTY tp) { return tp ? (PV4_FILE)tp->v4file : NULL; }
 static const tl4_prop *prop_of(PTHEME_PROPERTY tp) { return tp ? (const tl4_prop *)tp->v4 : NULL; }
@@ -91,19 +93,75 @@ static UINT put_name(WCHAR *dst, const uint8_t *utf16, uint32_t chars)
     return chars + 2;
 }
 
+/* Steps 1 to 3 of the open: every byte they read comes from the views, so the caller runs them under SEH (the
+ * deny-write share keeps the content, an in-page error can still fault). No goto, no allocation that outlives a
+ * failure beyond what v4_release frees. */
+static HRESULT v4_parse(PV4_FILE v4, tl4_v4_vmap *vmap)
+{
+    tl4_v4_stats stats;
+    tl4_res_name t, n;
+    tl4_resource res;
+    size_t need;
+
+    if (tl4_pe_open(v4->base, v4->size, &v4->pe) != TL4_OK) return E_V4_BAD_FORMAT;
+    if (v4->muiBase)
+    {
+        if (tl4_pe_open(v4->muiBase, v4->muiSize, &v4->peMui) != TL4_OK) return E_V4_BAD_FORMAT;
+        v4->hasMui = TRUE;
+    }
+    if (tl4_v4_validate(&v4->pe, v4->hasMui ? &v4->peMui : NULL, &stats) != TL4_OK) return E_V4_BAD_FORMAT;
+
+    need = tl4_model_size(&stats);
+    if (need == 0 || need > V4_MODEL_BUFFER_CAP) return E_V4_BAD_FORMAT;
+    v4->modelBuffer = HeapAlloc(GetProcessHeap(), 0, need);
+    if (!v4->modelBuffer) return E_OUTOFMEMORY;
+    v4->modelBytes = need;
+    if (tl4_model_build(&v4->pe, v4->hasMui ? &v4->peMui : NULL, v4->modelBuffer, need, &v4->model) != TL4_OK) return E_V4_BAD_FORMAT;
+    if (tl4_strings_open(&v4->pe, v4->hasMui ? &v4->peMui : NULL, &v4->strings) != TL4_OK) return E_V4_BAD_FORMAT;
+
+    t = tl4_res_ascii("VMAP"); n = tl4_res_ascii("VMAP");
+    if (tl4_pe_find(&v4->pe, &t, &n, &res) != TL4_OK || tl4_v4_check_vmap(res.data, res.size, vmap) != TL4_OK) return E_V4_BAD_FORMAT;
+    v4->names = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (vmap->color_chars + vmap->size_chars + 4) * sizeof(WCHAR));
+    if (!v4->names) return E_OUTOFMEMORY;
+    v4->namesSizeOff = put_name(v4->names, vmap->color, vmap->color_chars);
+    put_name(v4->names + v4->namesSizeOff, vmap->size_name, vmap->size_chars);
+    return S_OK;
+}
+
+/* Step 4: one THEME_CLASS per CMAP class (the descriptors before the first class are not classes). The names are
+ * read from the CMAP in the view, so this runs under SEH too. */
+static HRESULT v4_make_classes(PV4_FILE v4, PTHEME_FILE tf)
+{
+    uint32_t ordinal;
+    for (ordinal = v4->model.counts.descriptors; ordinal < v4->model.nclasses; ordinal++)
+    {
+        const uint8_t *name;
+        uint32_t chars;
+        PTHEME_CLASS c;
+        if (tl4_model_class_name(&v4->model, ordinal, &name, &chars) != TL4_OK) return E_V4_BAD_FORMAT;
+        c = malloc(sizeof(*c));
+        if (!c) return E_OUTOFMEMORY;
+        memset(c, 0, sizeof(*c));
+        if (!split_class_name(name, chars, c->szAppName, c->szClassName)) { free(c); return E_V4_BAD_FORMAT; }
+        c->signature = 0x12bc6d83;      /* THEME_CLASS_SIGNATURE of msstyles.c */
+        c->refcount = 0;
+        c->hTheme = NULL;
+        c->tf = tf;
+        c->v4Ordinal = ordinal;
+        c->next = tf->classes;
+        tf->classes = c;
+    }
+    return S_OK;
+}
+
 HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T size,
                          HANDLE hMui, HANDLE hMuiSection, const BYTE *muiBase, SIZE_T muiSize,
                          LPCWSTR pszPath, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *ptf)
 {
     PV4_FILE v4;
     PTHEME_FILE tf = NULL;
-    tl4_v4_stats stats;
-    tl4_res_name t, n;
-    tl4_resource res;
     tl4_v4_vmap vmap;
-    size_t need;
-    uint32_t i, ordinal;
-    UINT off;
+    uint32_t i;
     HRESULT hr = E_V4_BAD_FORMAT;
 
     TRACE("(%p, %Iu bytes, mui %p, %Iu bytes, %s, %s)\n", base, size, muiBase, muiSize, debugstr_w(pszColorName), debugstr_w(pszSizeName));
@@ -117,32 +175,20 @@ HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T
     v4->hMui = hMui; v4->hMuiSection = hMuiSection; v4->muiBase = muiBase; v4->muiSize = muiSize;
     v4->psSentinel.iPartId = -1;
     v4->psSentinel.iStateId = -1;
+    v4->budget.limit = V4_PIXEL_BUDGET;
+    v4->budget.used = 0;
 
-    /* 1. the bounded readers on both views, the validator on the whole container (R-GEN-10, R-RES-8) */
-    if (tl4_pe_open(base, size, &v4->pe) != TL4_OK) goto fail;
-    if (muiBase)
+    /* 1-3. readers, validator, model, strings, VMAP: on the views, under SEH */
+    _SEH2_TRY
     {
-        if (tl4_pe_open(muiBase, muiSize, &v4->peMui) != TL4_OK) goto fail;
-        v4->hasMui = TRUE;
+        hr = v4_parse(v4, &vmap);
     }
-    if (tl4_v4_validate(&v4->pe, v4->hasMui ? &v4->peMui : NULL, &stats) != TL4_OK) goto fail;
-
-    /* 2. one buffer from the validated statistics, then the model with its second pass (R-GEN-11) */
-    need = tl4_model_size(&stats);
-    if (need == 0 || need > V4_MODEL_BUFFER_CAP) goto fail;
-    v4->modelBuffer = HeapAlloc(GetProcessHeap(), 0, need);
-    if (!v4->modelBuffer) { hr = E_OUTOFMEMORY; goto fail; }
-    v4->modelBytes = need;
-    if (tl4_model_build(&v4->pe, v4->hasMui ? &v4->peMui : NULL, v4->modelBuffer, need, &v4->model) != TL4_OK) goto fail;
-    if (tl4_strings_open(&v4->pe, v4->hasMui ? &v4->peMui : NULL, &v4->strings) != TL4_OK) goto fail;
-
-    /* 3. the colour and size lists from VMAP; a requested name must be the one the style lists (as v3) */
-    t = tl4_res_ascii("VMAP"); n = tl4_res_ascii("VMAP");
-    if (tl4_pe_find(&v4->pe, &t, &n, &res) != TL4_OK || tl4_v4_check_vmap(res.data, res.size, &vmap) != TL4_OK) goto fail;
-    v4->names = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (vmap.color_chars + vmap.size_chars + 4) * sizeof(WCHAR));
-    if (!v4->names) { hr = E_OUTOFMEMORY; goto fail; }
-    off = put_name(v4->names, vmap.color, vmap.color_chars);
-    put_name(v4->names + off, vmap.size_name, vmap.size_chars);
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hr = E_V4_IN_PAGE;
+    }
+    _SEH2_END;
+    if (FAILED(hr)) goto fail;
 
     tf = calloc(1, sizeof(THEME_FILE));
     if (!tf) { hr = E_OUTOFMEMORY; goto fail; }
@@ -150,31 +196,23 @@ HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T
     tf->hTheme = NULL;
     if (pszPath) lstrcpynW(tf->szThemeFile, pszPath, MAX_PATH);   /* the built store path, from the gate */
     tf->pszAvailColors = v4->names;
-    tf->pszAvailSizes = v4->names + off;
+    tf->pszAvailSizes = v4->names + v4->namesSizeOff;
     tf->pszSelectedColor = (pszColorName && lstrcmpiW(pszColorName, tf->pszAvailColors)) ? NULL : tf->pszAvailColors;
     tf->pszSelectedSize = (pszSizeName && lstrcmpiW(pszSizeName, tf->pszAvailSizes)) ? NULL : tf->pszAvailSizes;
     if (!tf->pszSelectedColor || !tf->pszSelectedSize) { hr = E_PROP_ID_UNSUPPORTED; goto fail; }
     tf->v4 = v4;
 
-    /* 4. one THEME_CLASS per CMAP class (the descriptors before the first class are not classes) */
-    for (ordinal = v4->model.counts.descriptors; ordinal < v4->model.nclasses; ordinal++)
+    /* 4. the class list: names from the CMAP in the view, under SEH */
+    _SEH2_TRY
     {
-        const uint8_t *name;
-        uint32_t chars;
-        PTHEME_CLASS c;
-        if (tl4_model_class_name(&v4->model, ordinal, &name, &chars) != TL4_OK) goto fail;
-        c = malloc(sizeof(*c));
-        if (!c) { hr = E_OUTOFMEMORY; goto fail; }
-        memset(c, 0, sizeof(*c));
-        if (!split_class_name(name, chars, c->szAppName, c->szClassName)) { free(c); goto fail; }
-        c->signature = 0x12bc6d83;      /* THEME_CLASS_SIGNATURE of msstyles.c */
-        c->refcount = 0;
-        c->hTheme = NULL;
-        c->tf = tf;
-        c->v4Ordinal = ordinal;
-        c->next = tf->classes;
-        tf->classes = c;
+        hr = v4_make_classes(v4, tf);
     }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hr = E_V4_IN_PAGE;
+    }
+    _SEH2_END;
+    if (FAILED(hr)) goto fail;
 
     /* 5. the shadow array: stable THEME_PROPERTY pointers into it, one per model property */
     v4->nshadow = v4->model.nprops;
