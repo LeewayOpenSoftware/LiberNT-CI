@@ -175,7 +175,7 @@ static UINT CplParseCategories(PCWSTR text)
 }
 
 /* Opens a Control Panel item the way a double click does */
-static VOID CplLaunchItem(HWND hwnd, PCWSTR clsid)
+static VOID CplLaunchItem(HWND hwnd, IShellBrowser *psb, PCWSTR clsid)
 {
     WCHAR path[200];
     PIDLIST_ABSOLUTE pidl = NULL;
@@ -184,6 +184,20 @@ static VOID CplLaunchItem(HWND hwnd, PCWSTR clsid)
     StringCchPrintfW(path, _countof(path), L"%s\\::%s", CPL_ROOT_PATH, clsid);
     if (FAILED(SHParseDisplayName(path, NULL, &pidl, 0, NULL)) || !pidl)
         return;
+    /* An item that is itself a shell folder (Personalization) is entered in this Explorer window,
+     * so that the address bar, Back and Forward keep working */
+    if (psb)
+    {
+        WCHAR key[160];
+        DWORD attr = 0, cb = sizeof(attr);
+        StringCchPrintfW(key, _countof(key), L"CLSID\\%s\\ShellFolder", clsid);
+        if (RegGetValueW(HKEY_CLASSES_ROOT, key, L"Attributes", RRF_RT_REG_DWORD, NULL, &attr, &cb) == ERROR_SUCCESS &&
+            (attr & SFGAO_FOLDER) && SUCCEEDED(psb->BrowseObject(pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE)))
+        {
+            ILFree(pidl);
+            return;
+        }
+    }
     sei.fMask = SEE_MASK_INVOKEIDLIST | SEE_MASK_FLAG_NO_UI;
     sei.hwnd = hwnd;
     sei.lpIDList = pidl;
@@ -946,7 +960,7 @@ VOID CCplCategoryView::Activate(int hit)
             SetView(CPL_STARTUP_ICONS, m_smallIcons);
             break;
         case HK_ITEM:
-            CplLaunchItem(m_hWnd, m_items[m_hits[hit].Arg].Clsid);
+            CplLaunchItem(m_hWnd, m_psb, m_items[m_hits[hit].Arg].Clsid);
             break;
     }
 }

@@ -2698,12 +2698,11 @@ HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}","InfoTip",0x00000000,"Change
 HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}","LocalizedString",0x00000000,"Personalization"
 HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\DefaultIcon",,0x00000010
 HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\DefaultIcon","",0x00020000,"%%SystemRoot%%\system32\desk.cpl,-100"
-HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\Shell",,0x00000010
-HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\Shell\Open",,0x00000010
-HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\Shell\Open\Command",,0x00000010
-HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\Shell\Open\Command","",0x00020000,"%%SystemRoot%%\system32\rundll32.exe shell32.dll,Control_RunDLL desk.cpl"
+HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\InprocServer32",,0x00000010
+HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\InprocServer32","",0x00000000,"%MODULE%"
+HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\InprocServer32","ThreadingModel",0x00000000,"Apartment"
 HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\ShellFolder",,0x00000010
-HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\ShellFolder","Attributes",0x00010001,0x00000000
+HKCR,"CLSID\{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}\ShellFolder","Attributes",0x00010001,0x28000004
 HKCR,"CLSID\{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}",,0x00000010
 HKCR,"CLSID\{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}","",0x00000000,"Sound"
 HKCR,"CLSID\{F2DDFC82-8F12-4CDD-B7DC-D4FE1425AA4D}","System.ApplicationName",0x00000000,"Microsoft.Sound"
@@ -2751,7 +2750,7 @@ HKCR,"DesktopBackground\Shell\Personalize",,0x00000010
 HKCR,"DesktopBackground\Shell\Personalize","",0x00000000,"Personalize"
 HKCR,"DesktopBackground\Shell\Personalize","Position",0x00000000,"Bottom"
 HKCR,"DesktopBackground\Shell\Personalize\command",,0x00000010
-HKCR,"DesktopBackground\Shell\Personalize\command","",0x00020000,"%SystemRoot%\system32\rundll32.exe shell32.dll,Control_RunDLL leewaydisp.cpl,@0"
+HKCR,"DesktopBackground\Shell\Personalize\command","",0x00020000,"%SystemRoot%\explorer.exe ::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\::{21EC2020-3AEA-1069-A2DD-08002B30309D}\::{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}"
 HKCR,"DesktopBackground\Shell\Display",,0x00000010
 HKCR,"DesktopBackground\Shell\Display","",0x00000000,"Display settings"
 HKCR,"DesktopBackground\Shell\Display","Position",0x00000000,"Bottom"

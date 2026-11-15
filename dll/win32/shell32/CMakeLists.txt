@@ -48,6 +48,7 @@ list(APPEND SOURCE
     folders/CFontsFolder.cpp
     folders/CControlPanelFolder.cpp
     folders/CCplCategoryView.cpp
+    folders/CPersonalizationFolder.cpp
     folders/CRecycleBin.cpp
     folders/CRecycleBinFolderViewCB.cpp
     droptargets/CexeDropHandler.cpp

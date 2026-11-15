@@ -1317,8 +1317,16 @@ HRESULT WINAPI COpenControlPanel::Open(LPCWSTR pszName, LPCWSTR pszPage, IUnknow
             {
                 // NT6 will execute "::{26EE0668-A00A-44D7-9371-BEB064C98683}\0\::{clsid}[\pszPage]"
                 // but we don't support parsing that so we force the class instead.
-                sei.fMask |= SEE_MASK_CLASSNAME;
-                sei.lpClass = clspath;
+                /* A class that is a browsable shell folder (Personalization) opens in Explorer through its parsing path */
+                WCHAR szAttr[MAX_PATH];
+                DWORD dwAttr = 0, cbAttr = sizeof(dwAttr);
+                StringCchPrintfW(szAttr, _countof(szAttr), L"%s\\ShellFolder", clspath);
+                if (SHGetValueW(HKEY_CLASSES_ROOT, szAttr, L"Attributes", NULL, &dwAttr, &cbAttr) != ERROR_SUCCESS ||
+                    !(dwAttr & SFGAO_FOLDER))
+                {
+                    sei.fMask |= SEE_MASK_CLASSNAME;
+                    sei.lpClass = clspath;
+                }
             }
         }
     }
