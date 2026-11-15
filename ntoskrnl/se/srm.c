@@ -1931,6 +1931,13 @@ SepRmLinkLogonSessionTokens(
 
     SameSession = RtlEqualLuid(&FullToken->AuthenticationId, &LimitedToken->AuthenticationId);
 
+    /* The well-known sessions (System, services, anonymous) never carry a pair */
+    if (SepIsWellKnownLogonId(&FullToken->AuthenticationId) ||
+        SepIsWellKnownLogonId(&LimitedToken->AuthenticationId))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     /* The limited token's session owns the reference on the elevated token */
     KeAcquireGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
 
@@ -1942,6 +1949,16 @@ SepRmLinkLogonSessionTokens(
     }
 
     if (LimitedSession->FullToken != NULL || LimitedSession->LimitedToken != NULL)
+    {
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* One session for both: the elevated token stops counting, so something
+     * else must keep the session alive or the pair would end it at once */
+    if (SameSession &&
+        !(FullToken->TokenFlags & TOKEN_SESSION_NOT_REFERENCED) &&
+        LimitedSession->ReferenceCount <= 1)
     {
         KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
         return STATUS_INVALID_PARAMETER;
@@ -1959,7 +1976,6 @@ SepRmLinkLogonSessionTokens(
         if (!(FullToken->TokenFlags & TOKEN_SESSION_NOT_REFERENCED))
         {
             FullToken->TokenFlags |= TOKEN_SESSION_NOT_REFERENCED;
-            ASSERT(LimitedSession->ReferenceCount > 1);
             LimitedSession->ReferenceCount--;
         }
         KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));

@@ -140,6 +140,7 @@ START_TEST(TokenLua)
     PTOKEN_GROUPS Groups = (PTOKEN_GROUPS)Buffer;
     PTOKEN_PRIVILEGES Privileges = (PTOKEN_PRIVILEGES)Buffer;
     PTOKEN_MANDATORY_LABEL Label = (PTOKEN_MANDATORY_LABEL)Buffer;
+    PTOKEN_STATISTICS Statistics = (PTOKEN_STATISTICS)Buffer;
     TOKEN_LINKED_TOKEN Linked;
     TOKEN_PRIVILEGES Enable;
     DWORD Size, Value, i, Error;
@@ -234,6 +235,19 @@ START_TEST(TokenLua)
         goto Cleanup;
     }
 
+    /* The System session never carries a pair; the pairing checks need a logon session */
+    Ret = GetTokenInformation(Process, TokenStatistics, Statistics, sizeof(Buffer), &Size);
+    ok(Ret, "TokenStatistics failed: %lu\n", GetLastError());
+    if (Ret && Statistics->AuthenticationId.HighPart == 0 && Statistics->AuthenticationId.LowPart <= 999)
+    {
+        Linked.LinkedToken = Process;
+        Ret = SetTokenInformation(Lua, TokenLinkedToken, &Linked, sizeof(Linked));
+        Error = GetLastError();
+        ok(!Ret && Error == ERROR_INVALID_PARAMETER, "Pair on a well-known session: ret %d, error %lu\n", Ret, Error);
+        skip("The runner is in a well-known logon session; the pairing checks need a LogonUser session\n");
+        goto Cleanup;
+    }
+
     Linked.LinkedToken = Process;
     Ret = SetTokenInformation(Lua, TokenLinkedToken, &Linked, sizeof(Linked));
     ok(Ret, "Linking the pair failed: %lu\n", GetLastError());
@@ -253,6 +267,37 @@ START_TEST(TokenLua)
         ok(GetTokenDword(Linked.LinkedToken, TokenElevation, &Value) && Value == 1,
            "The linked token is not elevated: %lu\n", Value);
         CloseHandle(Linked.LinkedToken);
+    }
+
+    /* Without SeTcbPrivilege (impersonating the LUA token) the query only looks */
+    Ret = ImpersonateLoggedOnUser(Lua);
+    ok(Ret, "ImpersonateLoggedOnUser(LUA) failed: %lu\n", GetLastError());
+    if (Ret)
+    {
+        HANDLE Weak = NULL, Copy = NULL;
+        TOKEN_TYPE Type = TokenPrimary;
+        SECURITY_IMPERSONATION_LEVEL Level = SecurityAnonymous;
+
+        Linked.LinkedToken = NULL;
+        Ret = GetTokenInformation(Lua, TokenLinkedToken, &Linked, sizeof(Linked), &Size);
+        ok(Ret && Linked.LinkedToken != NULL, "Query without SeTcb: ret %d, error %lu\n", Ret, GetLastError());
+        Weak = Ret ? Linked.LinkedToken : NULL;
+        if (Weak)
+        {
+            ok(GetTokenInformation(Weak, TokenType, &Type, sizeof(Type), &Size) && Type == TokenImpersonation,
+               "Without SeTcb the linked token is not an impersonation token: %d\n", Type);
+            ok(GetTokenInformation(Weak, TokenImpersonationLevel, &Level, sizeof(Level), &Size) &&
+               Level == SecurityIdentification, "Without SeTcb the level is %d, expected identification\n", Level);
+            ok(!DuplicateTokenEx(Weak, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &Copy),
+               "A primary copy of the identification token was granted\n");
+            if (Copy) CloseHandle(Copy);
+            Copy = NULL;
+            ok(!DuplicateToken(Weak, SecurityIdentification, &Copy),
+               "The identification token handle allows TOKEN_DUPLICATE\n");
+            if (Copy) CloseHandle(Copy);
+            CloseHandle(Weak);
+        }
+        RevertToSelf();
     }
 
     /* A second pair on the same session is refused */
