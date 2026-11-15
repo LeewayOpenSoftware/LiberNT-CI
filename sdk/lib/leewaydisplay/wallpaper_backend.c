@@ -117,8 +117,13 @@ LWallGetCurrent(WCHAR *path, DWORD cch, LWALL_STYLE *style)
     WCHAR s[16] = L"", t[16] = L"0";
     int i;
 
+    if (!cch)
+        return FALSE;
+    ZeroMemory(path, cch * sizeof(WCHAR));
     if (!SystemParametersInfoW(SPI_GETDESKWALLPAPER, cch, path, 0))
         return FALSE;
+    /* FIXME: user32 returns the picture path without its terminating NUL, so the caller saw garbage after the name */
+    path[cch - 1] = 0;
     ReadString(L"WallpaperStyle", s, ARRAYSIZE(s));
     ReadString(L"TileWallpaper", t, ARRAYSIZE(t));
     *style = LWALL_FILL;
