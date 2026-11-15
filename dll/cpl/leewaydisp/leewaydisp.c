@@ -22,6 +22,8 @@
 
 #define KEEP_SECONDS 15
 #define TIMER_KEEP   1
+/* posted by the main dialog to itself: show and activate it before the modal loop does */
+#define WM_LDISP_ACTIVATE (WM_APP + 1)
 
 typedef struct APPLET
 {
@@ -1049,8 +1051,16 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             LoadStr(IDS_TITLE, text, ARRAYSIZE(text));
             SetWindowTextW(hwnd, text);
             ShowTab(md, md->InitialTab);
+            /* DialogBox shows the window from its modal loop and user32 ignores DS_SETFOREGROUND, so the
+             * dialog came up inactive (Alt+F4 went elsewhere). The property sheet of desk.cpl is created
+             * visible and does not have the problem. */
+            PostMessageW(hwnd, WM_LDISP_ACTIVATE, 0, 0);
             return TRUE;
         }
+        case WM_LDISP_ACTIVATE:
+            ShowWindow(hwnd, SW_SHOWNORMAL);
+            SetForegroundWindow(hwnd);
+            return TRUE;
         case WM_NOTIFY:
             if (md && ((NMHDR *)lParam)->idFrom == IDC_TAB && ((NMHDR *)lParam)->code == TCN_SELCHANGE)
             {
