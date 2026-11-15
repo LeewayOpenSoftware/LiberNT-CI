@@ -24,6 +24,15 @@ EXTERN_C const CLSID CLSID_PersonalizationFolder;
 #define LWPAGE_COUNT        5
 #define LWNAV_CPHOME        0xFFFF
 
+/* The "Appearance and Personalization" category: the Control Panel folder holds one id for it, and
+ * binding it gives a folder whose only child is Personalization */
+PCWSTR PersCategoryName(VOID);
+PITEMID_CHILD CplCategoryCreatePidl(VOID);
+BOOL CplIsCategoryPidl(PCUIDLIST_RELATIVE pidl);
+BOOL CplIsCategoryName(PCWSTR name);
+BOOL CplIsPersonalizationParseName(PCWSTR name);
+HRESULT CplCategoryBind(PCIDLIST_ABSOLUTE pidlAbsCategory, REFIID riid, LPVOID *ppvOut);
+
 class CPersonalizationFolder :
     public CComCoClass<CPersonalizationFolder, &CLSID_PersonalizationFolder>,
     public CComObjectRootEx<CComMultiThreadModelNoCS>,

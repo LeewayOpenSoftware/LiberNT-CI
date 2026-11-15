@@ -342,6 +342,7 @@ public:
     ~CCplCategoryView();
 
     HRESULT Initialize(IShellFolder *psf, IShellView *pInner);
+    UINT m_initialCat;      /* category id to open on, 0 for the saved view */
 
     // IOleWindow
     STDMETHOD(GetWindow)(HWND *lphwnd) override;
@@ -407,6 +408,7 @@ CCplCategoryView::CCplCategoryView() :
     m_hwndInner(NULL),
     m_mode(MODE_HOME),
     m_page(0),
+    m_initialCat(0),
     m_smallIcons(FALSE),
     m_dark(FALSE),
     m_dpi(96),
@@ -1375,6 +1377,17 @@ STDMETHODIMP CCplCategoryView::CreateViewWindow(IShellView *lpPrevView, LPCFOLDE
     m_psb = psb;
     m_smallIcons = CplGetSmallIcons();
     m_mode = CplGetStartupPage() == CPL_STARTUP_CLASSIC ? MODE_CLASSIC : (CplGetStartupPage() == CPL_STARTUP_ICONS ? MODE_ICONS : MODE_HOME);
+    if (m_initialCat)
+    {
+        for (UINT i = 0; i < _countof(g_Categories); i++)
+        {
+            if (g_Categories[i].Id == m_initialCat)
+            {
+                m_mode = MODE_PAGE;
+                m_page = (int)i;
+            }
+        }
+    }
     LoadCatalog();
     Create(hParent, rc, NULL, WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | WS_TABSTOP);
     if (!m_hWnd)
@@ -1436,6 +1449,13 @@ STDMETHODIMP CCplCategoryView::GetItemObject(UINT uItem, REFIID riid, LPVOID *pp
     return E_NOINTERFACE;
 }
 
+static UINT g_nextViewCategory = 0;
+
+VOID CplSetNextViewCategory(UINT categoryId)
+{
+    g_nextViewCategory = categoryId;
+}
+
 HRESULT CplCreateCategoryView(IShellFolder *psf, IShellView *pInner, IShellView **ppView)
 {
     CComPtr<CCplCategoryView> pView;
@@ -1447,5 +1467,7 @@ HRESULT CplCreateCategoryView(IShellFolder *psf, IShellView *pInner, IShellView 
     hr = pView->Initialize(psf, pInner);
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
+    pView->m_initialCat = g_nextViewCategory;
+    g_nextViewCategory = 0;
     return pView->QueryInterface(IID_PPV_ARG(IShellView, ppView));
 }

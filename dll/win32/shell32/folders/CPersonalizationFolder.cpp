@@ -12,12 +12,18 @@
 
 #include <precomp.h>
 #include "CPersonalizationFolder.h"
+#include "CCplCategoryView.h"
 
 EXTERN_C const CLSID CLSID_PersonalizationFolder =
     { 0xED834ED6, 0x4B5A, 0x4bfe, { 0x8F, 0x11, 0xA6, 0x26, 0xDC, 0xB6, 0xA9, 0x21 } };
 
+#define PERS_CLSID_TEXT L"{ED834ED6-4B5A-4bfe-8F11-A626DCB6A921}"
 #define PERS_ROOT_PARSE L"::{20D04FE0-3AEA-1069-A2D8-08002B30309D}\\::{21EC2020-3AEA-1069-A2DD-08002B30309D}"
 #define PERS_PIDL_SIG   0x5043
+
+/* The "Appearance and Personalization" category between the Control Panel and Personalization */
+#define LWPAGE_CATEGORY 0x200
+#define LWPAGE_NONE     0xFFFF
 
 /* Actions of the host callback that are not pages */
 #define LWNAV_SOUNDS        0x100
@@ -72,6 +78,15 @@ static PITEMID_CHILD PersCreatePidl(UINT page)
     return (PITEMID_CHILD)p;
 }
 
+/* The page value of one of our ids (a page, LWPAGE_MAIN or LWPAGE_CATEGORY), LWPAGE_NONE otherwise */
+static UINT PersRawPage(PCUIDLIST_RELATIVE pidl)
+{
+    const PersPidl *p = (const PersPidl *)pidl;
+    if (!pidl || p->cb != sizeof(PersPidl) || p->sig != PERS_PIDL_SIG)
+        return LWPAGE_NONE;
+    return p->page;
+}
+
 /* LWPAGE_COUNT if the id is not one of ours */
 static UINT PersPidlPage(PCUIDLIST_RELATIVE pidl)
 {
@@ -91,6 +106,46 @@ static PIDLIST_ABSOLUTE PersPageAbsolute(PCIDLIST_ABSOLUTE root, UINT page)
     PIDLIST_ABSOLUTE abs = ILCombine(root, child);
     ILFree(child);
     return abs;
+}
+
+/* ---------------------------------------------------------------------------------------------- */
+
+/* The category, as seen by the Control Panel folder that holds it */
+PCWSTR PersCategoryName(VOID)
+{
+    return PersIsSpanish() ? L"Apariencia y personalizaci\x00F3n" : L"Appearance and Personalization";
+}
+
+PITEMID_CHILD CplCategoryCreatePidl(VOID)
+{
+    return PersCreatePidl(LWPAGE_CATEGORY);
+}
+
+BOOL CplIsCategoryPidl(PCUIDLIST_RELATIVE pidl)
+{
+    return PersRawPage(pidl) == LWPAGE_CATEGORY;
+}
+
+BOOL CplIsCategoryName(PCWSTR name)
+{
+    return !lstrcmpiW(name, L"Appearance and Personalization") || !lstrcmpiW(name, PersCategoryName());
+}
+
+BOOL CplIsPersonalizationParseName(PCWSTR name)
+{
+    return !lstrcmpiW(name, L"::" PERS_CLSID_TEXT);
+}
+
+/* pidlAbsCategory: the Control Panel's pidl plus the category id */
+HRESULT CplCategoryBind(PCIDLIST_ABSOLUTE pidlAbsCategory, REFIID riid, LPVOID *ppvOut)
+{
+    CComPtr<CPersonalizationFolder> pFolder;
+    HRESULT hr = ShellObjectCreator(pFolder);
+    if (SUCCEEDED(hr))
+        hr = pFolder->Initialize(pidlAbsCategory);
+    if (FAILED(hr))
+        return hr;
+    return pFolder->QueryInterface(riid, ppvOut);
 }
 
 /* ---------------------------------------------------------------------------------------------- */
@@ -554,8 +609,9 @@ HRESULT WINAPI CPersonalizationFolder::Initialize(PCIDLIST_ABSOLUTE pidl)
     m_pidlRoot = ILClone(pidl);
     if (!m_pidlRoot)
         return E_OUTOFMEMORY;
+    UINT raw = PersRawPage(ILFindLastID(m_pidlRoot));
     UINT page = PersPidlPage(ILFindLastID(m_pidlRoot));
-    m_page = page < LWPAGE_COUNT ? page : LWPAGE_MAIN;
+    m_page = raw == LWPAGE_CATEGORY ? LWPAGE_CATEGORY : (page < LWPAGE_COUNT ? page : LWPAGE_MAIN);
     return S_OK;
 }
 
@@ -573,6 +629,21 @@ HRESULT WINAPI CPersonalizationFolder::ParseDisplayName(HWND hwndOwner, LPBC pbc
     if (!lpszDisplayName || !ppidl)
         return E_INVALIDARG;
     *ppidl = NULL;
+    if (m_page == LWPAGE_CATEGORY)
+    {
+        /* the category holds Personalization, by its name or by its class id */
+        if (lstrcmpiW(lpszDisplayName, L"::" PERS_CLSID_TEXT) && lstrcmpiW(lpszDisplayName, L"Personalization") &&
+            lstrcmpiW(lpszDisplayName, PersPageName(LWPAGE_MAIN)))
+            return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+        *ppidl = (PIDLIST_RELATIVE)PersCreatePidl(LWPAGE_MAIN);
+        if (!*ppidl)
+            return E_OUTOFMEMORY;
+        if (pchEaten)
+            *pchEaten = lstrlenW(lpszDisplayName);
+        if (pdwAttributes)
+            *pdwAttributes &= SFGAO_FOLDER | SFGAO_BROWSABLE;
+        return S_OK;
+    }
     if (m_page != LWPAGE_MAIN)
         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 
@@ -606,7 +677,14 @@ HRESULT WINAPI CPersonalizationFolder::BindToObject(PCUIDLIST_RELATIVE pidl, LPB
         return E_INVALIDARG;
     *ppvOut = NULL;
     UINT page = PersPidlPage(pidl);
-    if (m_page != LWPAGE_MAIN || page >= LWPAGE_COUNT || !ILIsEmpty(ILGetNext(pidl)))
+    if (m_page == LWPAGE_CATEGORY)
+    {
+        if (PersRawPage(pidl) != LWPAGE_MAIN)
+            return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    }
+    else if (m_page != LWPAGE_MAIN || page >= LWPAGE_COUNT)
+        return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    if (!ILIsEmpty(ILGetNext(pidl)))
         return HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
 
     PIDLIST_ABSOLUTE abs = ILCombine(m_pidlRoot, pidl);
@@ -629,7 +707,7 @@ HRESULT WINAPI CPersonalizationFolder::BindToStorage(PCUIDLIST_RELATIVE pidl, LP
 
 HRESULT WINAPI CPersonalizationFolder::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2)
 {
-    UINT a = PersPidlPage(pidl1), b = PersPidlPage(pidl2);
+    UINT a = PersRawPage(pidl1), b = PersRawPage(pidl2);
     return MAKE_COMPARE_HRESULT((int)a - (int)b);
 }
 
@@ -645,6 +723,22 @@ HRESULT WINAPI CPersonalizationFolder::CreateViewObject(HWND hwndOwner, REFIID r
     PIDLIST_ABSOLUTE pidlRoot = ILClone(m_pidlRoot);
     if (!pidlRoot)
         return E_OUTOFMEMORY;
+    if (m_page == LWPAGE_CATEGORY)
+    {
+        /* the category page of the Control Panel, in the Control Panel's own view */
+        CComPtr<IShellFolder> psfDesktop, psfCpl;
+        ILRemoveLastID(pidlRoot);
+        HRESULT hrCat = SHGetDesktopFolder(&psfDesktop);
+        if (SUCCEEDED(hrCat))
+            hrCat = psfDesktop->BindToObject(pidlRoot, NULL, IID_PPV_ARG(IShellFolder, &psfCpl));
+        ILFree(pidlRoot);
+        if (FAILED_UNEXPECTEDLY(hrCat))
+            return hrCat;
+        CplSetNextViewCategory(1);
+        hrCat = psfCpl->CreateViewObject(hwndOwner, riid, ppvOut);
+        CplSetNextViewCategory(0);
+        return hrCat;
+    }
     if (m_page != LWPAGE_MAIN)
         ILRemoveLastID(pidlRoot);
 
@@ -676,10 +770,10 @@ HRESULT WINAPI CPersonalizationFolder::GetUIObjectOf(HWND hwndOwner, UINT cidl, 
 
 HRESULT WINAPI CPersonalizationFolder::GetDisplayNameOf(PCUITEMID_CHILD pidl, DWORD dwFlags, LPSTRRET strRet)
 {
-    UINT page = PersPidlPage(pidl);
-    if (page >= LWPAGE_COUNT || !strRet)
+    UINT page = PersRawPage(pidl);
+    if (!strRet || (page >= LWPAGE_COUNT && page != LWPAGE_CATEGORY))
         return E_INVALIDARG;
-    return SHSetStrRet(strRet, PersPageName(page));
+    return SHSetStrRet(strRet, page == LWPAGE_CATEGORY ? PersCategoryName() : PersPageName(page));
 }
 
 HRESULT WINAPI CPersonalizationFolder::SetNameOf(HWND hwndOwner, PCUITEMID_CHILD pidl, LPCOLESTR lpName,
