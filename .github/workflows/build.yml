@@ -690,8 +690,23 @@ jobs:
       # registry and state persist across runs, unlike the bootcd live image.
       id: sysimg
       if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
-      shell: cmd
-      run: ninja -C ${{steps.configure.outputs.outdir}} liberntimg liberntvhd -k0
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        ninja -C $out liberntimg liberntvhd -k0 -v
+        $code = $LASTEXITCODE
+        if ($code -ne 0) {
+          Write-Host '=== DIAG: preinstall_partition batch files ==='
+          Get-ChildItem -Recurse "$out/boot/CMakeFiles" -Filter 'preinstall_partition*.bat' -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "----- $($_.FullName) -----"
+            Get-Content $_.FullName | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host '=== DIAG: host-tool exe presence/size ==='
+          foreach ($t in 'fatten.exe','ntfsimg.exe','mkdiskimg.exe') {
+            Get-ChildItem -Recurse "$out" -Filter $t -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}  {1} bytes' -f $_.FullName, $_.Length) }
+          }
+          throw "ninja liberntimg/liberntvhd failed (code $code); diagnostics above"
+        }
 
     - name: Build the lnrspoc PoC driver and archives (MSVC lab image only)
       if: ${{ !cancelled() && steps.configure.outcome == 'success' && env.LAB_POC == 'ON' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
