@@ -1631,8 +1631,7 @@ SharedRelease(void)
     DeleteObject(G->Font);
     DeleteObject(G->LinkFont);
     DeleteObject(G->HeadFont);
-    if (G->GdipToken)
-        GdiplusShutdown(G->GdipToken);
+    /* GDI+ stays started: shutting it down between two pages made the next page's thumbnails fail to load */
     CoUninitialize();
     LocalFree(G);
     G = NULL;
