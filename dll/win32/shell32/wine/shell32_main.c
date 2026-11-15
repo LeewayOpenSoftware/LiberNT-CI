@@ -2589,6 +2589,8 @@ BOOL WINAPI ShellAboutW( HWND hWnd, LPCWSTR szApp, LPCWSTR szOtherStuff,
     /* Output the version OS kernel strings */
     LoadStringW(shell32_hInstance, IDS_ABOUT_VERSION_STRING, szFormat, _countof(szFormat));
     StringCchPrintfW(szVersionString, _countof(szVersionString), szFormat, KERNEL_VERSION_STR, KERNEL_VERSION_BUILD_STR);
+    /* Leeway cut number next to the version text */
+    StringCchCatW(szVersionString, _countof(szVersionString), L"  LBI " LIBERNT_LBI_BUILD_WSTR);
 #endif
 
     info.szApp        = szApp;
