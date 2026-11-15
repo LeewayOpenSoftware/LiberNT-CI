@@ -290,7 +290,9 @@ typedef struct _FILE_ID_BOTH_DIR_INFORMATION
 #define UNREFERENCED_PARAMETER(Parameter) ((void)(Parameter))
 
 #define EXTERN_C extern "C"
+#ifndef _MSC_VER
 #define __cdecl
+#endif
 
 #define _In_
 #define _In_opt_
