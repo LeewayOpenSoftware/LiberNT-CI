@@ -139,3 +139,67 @@ typedef struct _ENDPOINT_ROW {
 } ENDPOINT_ROW, *PENDPOINT_ROW;
 
 NTSTATUS IfInfoEndpoints(ULONG Family, ULONG Protocol, PENDPOINT_ROW Rows, ULONG Capacity, PULONG Count);
+
+/* The protocol statistics, as plain rows for the network store producer. The ICMP type counters
+ * follow IfInfoIcmpTypes. */
+#define IFINFO_ICMP_TYPES 11
+extern const UCHAR IfInfoIcmpTypes[IFINFO_ICMP_TYPES];
+
+typedef struct _IP_STATS_ROW {
+    ULONG64 InReceives;
+    ULONG64 InOctets;
+    ULONG64 ForwDatagrams;
+    ULONG64 InDelivers;
+    ULONG64 OutRequests;
+    ULONG64 OutOctets;
+    ULONG64 InHdrErrors;
+    ULONG InAddrErrors;
+    ULONG InUnknownProtos;
+    ULONG ReasmReqds;
+    ULONG ReasmOks;
+    ULONG ReasmFails;
+    ULONG InDiscards;
+    ULONG OutNoRoutes;
+    ULONG OutDiscards;
+    ULONG FragOks;
+    ULONG FragFails;
+    ULONG FragCreates;
+    ULONG ReasmTimeout;
+    ULONG IcmpInMsgs;
+    ULONG IcmpInErrors;
+    ULONG IcmpOutMsgs;
+    ULONG IcmpOutErrors;
+    ULONG IcmpInTypes[IFINFO_ICMP_TYPES];
+    ULONG IcmpOutTypes[IFINFO_ICMP_TYPES];
+    ULONG DefaultTtl;
+    ULONG NumInterfaces;
+    ULONG NumAddresses;
+    ULONG NumRoutes;
+} IP_STATS_ROW, *PIP_STATS_ROW;
+
+typedef struct _TCP_STATS_ROW {
+    ULONG ActiveOpens;
+    ULONG PassiveOpens;
+    ULONG AttemptFails;
+    ULONG EstabResets;
+    ULONG CurrEstab;
+    ULONG64 InSegs;
+    ULONG64 OutSegs;
+    ULONG RetransSegs;
+    ULONG OutRsts;
+    ULONG InErrs;
+    ULONG NumConns;
+    ULONG MaxConn;
+} TCP_STATS_ROW, *PTCP_STATS_ROW;
+
+typedef struct _UDP_STATS_ROW {
+    ULONG64 InDatagrams;
+    ULONG64 OutDatagrams;
+    ULONG NoPorts;
+    ULONG InErrors;
+    ULONG NumAddrs;
+} UDP_STATS_ROW, *PUDP_STATS_ROW;
+
+NTSTATUS IfInfoIpStats(ULONG Family, PIP_STATS_ROW Row);
+NTSTATUS IfInfoTcpStats(ULONG Family, PTCP_STATS_ROW Row);
+NTSTATUS IfInfoUdpStats(ULONG Family, PUDP_STATS_ROW Row);
