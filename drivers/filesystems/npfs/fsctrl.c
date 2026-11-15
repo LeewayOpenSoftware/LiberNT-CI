@@ -80,6 +80,16 @@ NpQueryClientProcess(IN PDEVICE_OBJECT DeviceObject,
 
     QueryBuffer = Irp->AssociatedIrp.SystemBuffer;
 
+    /* Zero everything reported: the output is fully defined, the tail past the data included. */
+    if (Length >= sizeof(NP_CLIENT_PROCESS))
+    {
+        RtlZeroMemory(QueryBuffer, sizeof(NP_CLIENT_PROCESS));
+    }
+    else
+    {
+        RtlZeroMemory(QueryBuffer, FIELD_OFFSET(NP_CLIENT_PROCESS, DataLength));
+    }
+
     /* Lock the Ccb */
     ExAcquireResourceExclusiveLite(&Ccb->NonPagedCcb->Lock, TRUE);
 
@@ -87,15 +97,15 @@ NpQueryClientProcess(IN PDEVICE_OBJECT DeviceObject,
     ClientSession = Ccb->ClientSession;
     if (ClientSession != NULL)
     {
-        /* Copy first 2 fields */
+        /* Return the values stored by the kernel-mode FSCTL_PIPE_SET_CLIENT_PROCESS */
         QueryBuffer->Unknown = ClientSession->Unknown;
         QueryBuffer->Process = ClientSession->Process;
     }
     else
     {
-        /* Copy the process from the CCB */
+        /* Return the client process id, never the kernel process object */
         QueryBuffer->Unknown = NULL;
-        QueryBuffer->Process = Ccb->Process;
+        QueryBuffer->Process = (PVOID)(ULONG_PTR)Ccb->ClientProcessId;
     }
 
     /* Does the caller provide a large enough buffer for the full data? */
