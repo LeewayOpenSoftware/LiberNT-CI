@@ -151,6 +151,7 @@ HRESULT CplCategoryBind(PCIDLIST_ABSOLUTE pidlAbsCategory, REFIID riid, LPVOID *
 /* ---------------------------------------------------------------------------------------------- */
 
 #define PERS_MAX_LINKS 8
+#define WM_PERSNAV (WM_APP + 1)
 
 class CPersonalizationView :
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
@@ -424,7 +425,13 @@ private:
         POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
         int hit = HitTest(pt);
         if (hit >= 0)
-            NavigateTo(m_links[hit].action);
+            ::PostMessageW(m_hWnd, WM_PERSNAV, (WPARAM)m_links[hit].action, 0);
+        return 0;
+    }
+
+    LRESULT OnNavigateLater(UINT, WPARAM wParam, LPARAM, BOOL &)
+    {
+        NavigateTo((UINT)wParam);
         return 0;
     }
 
@@ -463,6 +470,7 @@ private:
     MESSAGE_HANDLER(WM_PAINT, OnPaint)
     MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
     MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
+    MESSAGE_HANDLER(WM_PERSNAV, OnNavigateLater)
     MESSAGE_HANDLER(WM_SETCURSOR, OnSetCursor)
     MESSAGE_HANDLER(WM_SETFOCUS, OnSetFocus)
     END_MSG_MAP()
