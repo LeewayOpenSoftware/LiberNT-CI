@@ -1229,6 +1229,14 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
     if (SUCCEEDED(hr) && version == 4 && TrustV4Enabled())
     {
         hr = TrustOpenMui(name, storeRoot, &mui);
+        /* No module in the store is the core's case, not a refusal: it resolves a reference inside the style
+         * first and rejects a style whose fonts stay unresolved (R-V4-12). A module that exists but fails the
+         * checks is a refusal (TrustOpenMui). */
+        if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND) || hr == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND))
+        {
+            ZeroMemory(&mui, sizeof(mui));
+            hr = S_OK;
+        }
         if (SUCCEEDED(hr))
             hr = MSSTYLES_V4_Open(style.hFile, style.hSection, style.base, style.size, mui.hFile, mui.hSection,
                                   mui.base, mui.size, built, pszColorName, pszSizeName, tf);
