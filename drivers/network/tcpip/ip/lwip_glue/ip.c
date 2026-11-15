@@ -950,6 +950,12 @@ LibIPGetStats(struct lib_ip_stats *Stats)
     Stats->TcpInSegs = lwip_stats.tcp.recv;
     Stats->TcpOutSegs = lwip_stats.tcp.xmit;
     Stats->TcpInErrs = lwip_stats.tcp.chkerr + lwip_stats.tcp.lenerr + lwip_stats.tcp.proterr;
+    Stats->TcpActiveOpens = lwip_stats.mib2.tcpactiveopens;
+    Stats->TcpPassiveOpens = lwip_stats.mib2.tcppassiveopens;
+    Stats->TcpOutRsts = lwip_stats.mib2.tcpoutrsts;
+    Stats->TcpRetransSegs = lwip_stats.mib2.tcpretranssegs;
+    Stats->TcpMaxConn = MEMP_NUM_TCP_PCB;
+    LibTCPGetFailureStats(&Stats->TcpAttemptFails, &Stats->TcpEstabResets);
 
     /* The IPv4 IP, UDP and ICMP counters are native (IPStats, UDPStats, ICMPStats): those
      * datagrams do not pass lwIP, and its IP counters would count the TCP segments twice. */

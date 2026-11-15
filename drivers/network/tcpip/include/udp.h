@@ -76,6 +76,8 @@ NTSTATUS LibIP6QueryTable(
 struct lib_ip_stats
 {
     ULONG TcpInSegs, TcpOutSegs, TcpInErrs;
+    ULONG TcpActiveOpens, TcpPassiveOpens, TcpAttemptFails, TcpEstabResets;
+    ULONG TcpOutRsts, TcpRetransSegs, TcpMaxConn;
 };
 VOID LibIPGetStats(struct lib_ip_stats *Stats);
 

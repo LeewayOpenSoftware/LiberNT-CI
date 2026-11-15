@@ -249,6 +249,14 @@ TDI_STATUS InfoTdiQueryGetTcpStats( PNDIS_BUFFER Buffer, PUINT BufferSize )
     TcpStats.dwInSegs = LibStats.TcpInSegs;
     TcpStats.dwOutSegs = LibStats.TcpOutSegs;
     TcpStats.dwInErrs = LibStats.TcpInErrs;
+    TcpStats.dwRtoAlgorithm = MIB_TCP_RTO_VANJ;
+    TcpStats.dwMaxConn = LibStats.TcpMaxConn;
+    TcpStats.dwActiveOpens = LibStats.TcpActiveOpens;
+    TcpStats.dwPassiveOpens = LibStats.TcpPassiveOpens;
+    TcpStats.dwAttemptFails = LibStats.TcpAttemptFails;
+    TcpStats.dwEstabResets = LibStats.TcpEstabResets;
+    TcpStats.dwRetransSegs = LibStats.TcpRetransSegs;
+    TcpStats.dwOutRsts = LibStats.TcpOutRsts;
 
     return InfoCopyOut( (PCHAR)&TcpStats, sizeof(TcpStats), Buffer, BufferSize );
 }

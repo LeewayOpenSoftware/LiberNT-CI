@@ -148,6 +148,9 @@ unsigned int Random(void);
 
 #define TCP_STATS                       1
 
+/* The MIB-II counters: TCP opens, resets sent and retransmitted segments come from here */
+#define MIB2_STATS                      1
+
 #define SYS_STATS                       0
 
 #define ICMP_STATS                      1
