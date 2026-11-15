@@ -11,7 +11,12 @@
  * unchanged. The C bodies (MiSpecialPool*C) are always compiled: the normal build runs them, and
  * the flag-ON build keeps them as the differential oracle and the fallback.
  *
- * Floating-point/SSE: lrm_rs targets x86_64-pc-windows-gnu (SSE2 permitted; x87/MMX/AVX rejected by
+ * ABI: every Rust export and every callback type is extern "C", so on x64 and ARM64 the names are
+ * undecorated and on i386 they are cdecl with a leading underscore - the C prototypes here must stay
+ * plain (no NTAPI/FASTCALL). Only LrmRsSelfTest/LrmRsForcePanic are NTAPI, and those are C.
+ *
+ * Floating-point/SSE: lrm_rs targets x86_64-pc-windows-gnu for GCC/Clang builds and
+ * x86_64-pc-windows-msvc for MSVC builds (SSE2 permitted; x87/MMX/AVX rejected by
  * the staticlib gate in sdk/cmake/rust-build.cmake), so the page fill/compare may use the volatile
  * XMM registers. That is safe at any IRQL here, including DISPATCH_LEVEL on the routed
  * MmAllocate/FreeSpecialPool: the trap entry preserves the volatile XMM0..Xmm5 in the trap frame

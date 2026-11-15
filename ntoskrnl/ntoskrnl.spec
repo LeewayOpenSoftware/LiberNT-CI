@@ -1952,7 +1952,7 @@
 @ stdcall -arch=win64 RtlOpenCurrentUser()
 @ stdcall -arch=win64 RtlQueryInformationAcl()
 @ stdcall -arch=win64 RtlRaiseStatus()
-@ stdcall -arch=win64 RtlSetControlSecurityDescriptor()
+@ stdcall RtlSetControlSecurityDescriptor(ptr long long)
 @ stdcall -arch=win64 RtlSystemTimeToLocalTime()
 @ stdcall RtlUTF8ToUnicodeN(ptr long ptr str long)
 @ stdcall -arch=win64 RtlValidAcl()
@@ -2557,7 +2557,7 @@
 @ stdcall IoUnregisterBootDriverCallback(ptr)
 @ stub -arch=win64 IoUnregisterContainerNotification
 @ stub -arch=win64 IoUnregisterIoTracking
-@ stdcall -arch=win64 IoUnregisterPlugPlayNotificationEx(ptr)
+@ stdcall IoUnregisterPlugPlayNotificationEx(ptr)
 @ stub -arch=win64 IoUnregisterPriorityCallback
 @ stdcall IoUpdateLinkShareAccess(ptr ptr ptr)
 @ stdcall IoUpdateLinkShareAccessEx(ptr ptr ptr long)
