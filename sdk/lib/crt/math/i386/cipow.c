@@ -1,5 +1,9 @@
 #include <precomp.h>
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma function(pow)
+#endif
+
 /*
  * @implemented
  */

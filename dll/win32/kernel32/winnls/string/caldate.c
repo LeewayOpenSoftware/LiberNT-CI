@@ -9,6 +9,11 @@
 #include <math.h>
 #include "japanese.h"
 
+/* tan() must stay a call into ntdll: the x87 intrinsic helper is not available here. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma function(tan)
+#endif
+
 #define NDEBUG
 #include <debug.h>
 
