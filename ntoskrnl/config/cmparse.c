@@ -322,10 +322,12 @@ CmpDoCreateChild(IN PHHIVE Hive,
     KeyBody = (PCM_KEY_BODY)(*Object);
     KeyBody->Type = CM_KEY_BODY_TYPE;
     KeyBody->NotifyClosed = FALSE;
+    KeyBody->NotifyBlock = NULL;
     KeyBody->KeyControlBlock = NULL;
     KeyBody->KcbLocked = FALSE;
     KeyBody->Trans.TransPtr = NULL;
     KeyBody->KtmUow = NULL;
+    KeyBody->ProcessID = PsGetCurrentProcessId();
     InitializeListHead(&KeyBody->ContextListHead);
 
     /* Check if we had a class */
@@ -392,8 +394,6 @@ CmpDoCreateChild(IN PHHIVE Hive,
     ASSERT(Kcb->RefCount == 1);
 
     /* Now fill out the Cm object */
-    KeyBody->NotifyBlock = NULL;
-    KeyBody->ProcessID = PsGetCurrentProcessId();
     KeyBody->KeyControlBlock = Kcb;
 
     /* Link it with the KCB */
