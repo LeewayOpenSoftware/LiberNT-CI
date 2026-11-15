@@ -405,6 +405,7 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
                         BOOLEAN Write, BOOLEAN LockAddress,
                         KPROCESSOR_MODE LockMode, BOOLEAN Is32Bit );
 VOID UnlockBuffers( PAFD_WSABUF Buf, UINT Count, BOOL Address );
+BOOLEAN AfdTransportAddressFits(PTRANSPORT_ADDRESS Address, ULONG Available);
 BOOLEAN AfdIsRecvMsgRequest(PIRP Irp, PIO_STACK_LOCATION IrpSp);
 BOOLEAN AfdLockMessageBuffers(PAFD_WSABUF Buf, UINT Count, PAFD_RECV_MSG_INFO Message, KPROCESSOR_MODE LockMode);
 BOOLEAN SocketAcquireStateLock( PAFD_FCB FCB );
@@ -414,10 +415,13 @@ NTSTATUS NTAPI UnlockAndMaybeComplete
 VOID SocketStateUnlock( PAFD_FCB FCB );
 VOID AfdSignalTdiRundown(PAFD_FCB FCB);
 NTSTATUS LostSocket( PIRP Irp );
-PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount, PDEVICE_OBJECT DeviceObject );
+PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount, PDEVICE_OBJECT DeviceObject, KPROCESSOR_MODE RequestorMode );
 VOID UnlockHandles( PAFD_HANDLE HandleArray, UINT HandleCount );
 PVOID LockRequest( PIRP Irp, PIO_STACK_LOCATION IrpSp, BOOLEAN Output, KPROCESSOR_MODE *LockMode );
 VOID UnlockRequest( PIRP Irp, PIO_STACK_LOCATION IrpSp );
+NTSTATUS AfdCopyToCaller( PIRP Irp, const VOID *Source, ULONG Length );
+NTSTATUS AfdCopyFromCaller( PIRP Irp, PVOID Destination, ULONG Length );
+NTSTATUS AfdCopyToCallerAndComplete( PAFD_FCB FCB, PIRP Irp, const VOID *Source, ULONG Length );
 PVOID GetLockedData( PIRP Irp, PIO_STACK_LOCATION IrpSp );
 BOOLEAN AfdCaptureRecvRequest(PVOID InputBuffer, ULONG InputBufferLength, KPROCESSOR_MODE Mode, BOOLEAN Is32Bit, PAFD_RECV_INFO Request);
 VOID AfdReadUserWsaBuf(PAFD_WSABUF Array, UINT Index, KPROCESSOR_MODE Mode, BOOLEAN Is32Bit, PAFD_WSABUF Buffer);

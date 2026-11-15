@@ -94,6 +94,14 @@ AfdBindSocket(PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return UnlockAndMaybeComplete( FCB, STATUS_NO_MEMORY,
                                        Irp, 0 );
 
+    if (IrpSp->Parameters.DeviceIoControl.InputBufferLength <
+        FIELD_OFFSET(AFD_BIND_DATA, Address) ||
+        !AfdTransportAddressFits(&BindReq->Address,
+                                 IrpSp->Parameters.DeviceIoControl.InputBufferLength -
+                                 FIELD_OFFSET(AFD_BIND_DATA, Address)))
+        return UnlockAndMaybeComplete( FCB, STATUS_INVALID_PARAMETER,
+                                       Irp, 0 );
+
     if (FCB->LocalAddress)
     {
         ExFreePoolWithTag(FCB->LocalAddress, TAG_AFD_TRANSPORT_ADDRESS);

@@ -65,6 +65,10 @@ AfdGetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if (!InfoReq)
         return UnlockAndMaybeComplete(FCB, STATUS_NO_MEMORY, Irp, 0);
 
+    if (IrpSp->Parameters.DeviceIoControl.InputBufferLength <
+        FIELD_OFFSET(AFD_INFO, Information) + sizeof(InfoReq->Information))
+        return UnlockAndMaybeComplete(FCB, STATUS_INVALID_PARAMETER, Irp, 0);
+
     _SEH2_TRY {
         switch( InfoReq->InformationClass ) {
         case AFD_INFO_RECEIVE_WINDOW_SIZE:
@@ -150,6 +154,10 @@ AfdSetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if (!InfoReq)
         return UnlockAndMaybeComplete(FCB, STATUS_NO_MEMORY, Irp, 0);
 
+    if (IrpSp->Parameters.DeviceIoControl.InputBufferLength <
+        FIELD_OFFSET(AFD_INFO, Information) + sizeof(InfoReq->Information))
+        return UnlockAndMaybeComplete(FCB, STATUS_INVALID_PARAMETER, Irp, 0);
+
     _SEH2_TRY {
         switch (InfoReq->InformationClass) {
             case AFD_INFO_BLOCKING_MODE:
@@ -227,6 +235,14 @@ AfdSetInfo( PDEVICE_OBJECT DeviceObject, PIRP Irp,
                     if (InfoReq->Information.Ulong > 0 && InfoReq->Information.Ulong < 0xFFFF &&
                         InfoReq->Information.Ulong != FCB->Send.Size)
                     {
+                        if (FCB->SendIrp.InFlightRequest)
+                        {
+                            /* The in-flight buffered send holds an MDL over
+                             * the current window; it must not be freed yet. */
+                            Status = STATUS_DEVICE_BUSY;
+                            break;
+                        }
+
                         NewBuffer = ExAllocatePoolWithTag(PagedPool,
                                                           InfoReq->Information.Ulong * 2,
                                                           TAG_AFD_DATA_BUFFER);
@@ -412,8 +428,7 @@ AfdGetPeerName( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     if (IrpSp->Parameters.DeviceIoControl.OutputBufferLength >= TaLengthOfTransportAddress(FCB->RemoteAddress))
     {
-        RtlCopyMemory(Irp->UserBuffer, FCB->RemoteAddress, TaLengthOfTransportAddress(FCB->RemoteAddress));
-        Status = STATUS_SUCCESS;
+        Status = AfdCopyToCaller(Irp, FCB->RemoteAddress, TaLengthOfTransportAddress(FCB->RemoteAddress));
     }
     else
     {

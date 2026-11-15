@@ -106,6 +106,40 @@ AfdTransferRequestSize(ULONG Code, BOOLEAN Is32Bit)
     }
 }
 
+
+/* TRUE when the transport address entries of Available bytes all fit inside
+ * the buffer: one or two entries, each header and address inside the buffer,
+ * and the first entry a real address of its type, since the connection-info
+ * helpers copy it by the canonical type size. Callers such as msafd pad the
+ * request past the address, so trailing bytes are not an error. */
+BOOLEAN
+AfdTransportAddressFits(PTRANSPORT_ADDRESS Address, ULONG Available)
+{
+    ULONG i, Offset, TypeSize;
+
+    if (Available < FIELD_OFFSET(TRANSPORT_ADDRESS, Address) + FIELD_OFFSET(TA_ADDRESS, Address))
+        return FALSE;
+
+    if (Address->TAAddressCount < 1 || Address->TAAddressCount > 2)
+        return FALSE;
+
+    Offset = FIELD_OFFSET(TRANSPORT_ADDRESS, Address);
+    for (i = 0; i < (ULONG)Address->TAAddressCount; i++)
+    {
+        PTA_ADDRESS Entry = (PTA_ADDRESS)((PUCHAR)Address + Offset);
+
+        if (Available - Offset < FIELD_OFFSET(TA_ADDRESS, Address))
+            return FALSE;
+        TypeSize = TdiAddressSizeFromType(Entry->AddressType);
+        if (i == 0 && (!TypeSize || Entry->AddressLength < TypeSize))
+            return FALSE;
+        if (Available - Offset - FIELD_OFFSET(TA_ADDRESS, Address) < Entry->AddressLength)
+            return FALSE;
+        Offset += FIELD_OFFSET(TA_ADDRESS, Address) + Entry->AddressLength;
+    }
+    return TRUE;
+}
+
 BOOLEAN
 AfdIsRecvMsgRequest(PIRP Irp, PIO_STACK_LOCATION IrpSp)
 {
@@ -497,6 +531,7 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
     UINT i;
     /* Copy the buffer array so we don't lose it */
     UINT Lock = LockAddress ? EXTRA_LOCK_BUFFERS : 0;
+    UINT BufCount = Count;
     SIZE_T Size;
     PAFD_WSABUF NewBuf;
     BOOLEAN LockFailed = FALSE;
@@ -538,6 +573,8 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
             }
             if( LockAddress ) {
                 if (AddressBuf && AddressLen) {
+                    if (LockMode != KernelMode)
+                        ProbeForWrite(AddressLen, sizeof(*AddressLen), sizeof(ULONG));
                     NewBuf[Count].buf = AddressBuf;
                     NewBuf[Count].len = *AddressLen;
                     NewBuf[Count + 1].buf = (PVOID)AddressLen;
@@ -556,6 +593,14 @@ PAFD_WSABUF LockBuffers( PAFD_WSABUF Buf, UINT Count,
         for( i = 0; i < Count; i++ ) {
             AFD_DbgPrint(MID_TRACE,("Locking buffer %u (%p:%u)\n",
                                     i, NewBuf[i].buf, NewBuf[i].len));
+
+            /* The buffers the caller gave must not claim data at NULL; the
+             * address entries appended for LockAddress exempt a NULL address. */
+            if( i < BufCount && !NewBuf[i].buf && NewBuf[i].len ) {
+                AfdUnlockMdlArray( MapBuf, i );
+                ExFreePoolWithTag(NewBuf, TAG_AFD_WSA_BUFFER);
+                return NULL;
+            }
 
             if( NewBuf[i].buf && NewBuf[i].len ) {
                 MapBuf[i].Mdl = IoAllocateMdl( NewBuf[i].buf,
@@ -661,7 +706,7 @@ VOID UnlockBuffers( PAFD_WSABUF Buf, UINT Count, BOOL Address ) {
 
 /* Produce a kernel-land handle array with handles replaced by object
  * pointers.  This will allow the system to do proper alerting */
-PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount, PDEVICE_OBJECT DeviceObject ) {
+PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount, PDEVICE_OBJECT DeviceObject, KPROCESSOR_MODE RequestorMode ) {
     UINT i;
     NTSTATUS Status = STATUS_SUCCESS;
 
@@ -677,9 +722,9 @@ PAFD_HANDLE LockHandles( PAFD_HANDLE HandleArray, UINT HandleCount, PDEVICE_OBJE
         if( NT_SUCCESS(Status) ) {
                 Status = ObReferenceObjectByHandle
                     ( (PVOID)HandleArray[i].Handle,
-                      FILE_ALL_ACCESS,
+                      0,
                       *IoFileObjectType,
-                       KernelMode,
+                       RequestorMode,
                        (PVOID*)&FileObjects[i].Handle,
                        NULL );
                 if( NT_SUCCESS(Status) &&
@@ -802,6 +847,47 @@ NTSTATUS QueueUserModeIrp(PAFD_FCB FCB, PIRP Irp, UINT Function)
     }
 
     return Status;
+}
+
+/* The control requests of this driver pass their output by address and the
+ * I/O manager checks nothing for them. These two copy to or from that address
+ * after checking it against the mode of the caller. */
+NTSTATUS AfdCopyToCaller( PIRP Irp, const VOID *Source, ULONG Length ) {
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    _SEH2_TRY {
+        if (Irp->RequestorMode != KernelMode)
+            ProbeForWrite(Irp->UserBuffer, Length, sizeof(UCHAR));
+
+        RtlCopyMemory(Irp->UserBuffer, Source, Length);
+    } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        Status = _SEH2_GetExceptionCode();
+    } _SEH2_END;
+
+    return Status;
+}
+
+NTSTATUS AfdCopyFromCaller( PIRP Irp, PVOID Destination, ULONG Length ) {
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    _SEH2_TRY {
+        if (Irp->RequestorMode != KernelMode)
+            ProbeForRead(Irp->UserBuffer, Length, sizeof(UCHAR));
+
+        RtlCopyMemory(Destination, Irp->UserBuffer, Length);
+    } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        Status = _SEH2_GetExceptionCode();
+    } _SEH2_END;
+
+    return Status;
+}
+
+/* Copies to the caller and completes the request. The request reports the
+ * copied length only when the copy was done. */
+NTSTATUS AfdCopyToCallerAndComplete( PAFD_FCB FCB, PIRP Irp, const VOID *Source, ULONG Length ) {
+    NTSTATUS Status = AfdCopyToCaller(Irp, Source, Length);
+
+    return UnlockAndMaybeComplete(FCB, Status, Irp, NT_SUCCESS(Status) ? Length : 0);
 }
 
 NTSTATUS LeaveIrpUntilLater( PAFD_FCB FCB, PIRP Irp, UINT Function ) {

@@ -811,6 +811,7 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     PAFD_FCB FCB = FileObject->FsContext;
     PAFD_SEND_INFO_UDP SendReq;
     KPROCESSOR_MODE LockMode;
+    PVOID CapturedAddress = NULL;
     UINT SendLength;
 
     UNREFERENCED_PARAMETER(DeviceObject);
@@ -838,6 +839,52 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
     if( !(SendReq = LockRequest( Irp, IrpSp, FALSE, &LockMode )) )
         return UnlockAndMaybeComplete(FCB, STATUS_NO_MEMORY, Irp, 0);
 
+    /* Capture the remote address before it is read in kernel mode: both the
+     * pointer and its length come from the caller's request. The length is
+     * capped, and the content is validated below before any field of the
+     * address is used. */
+    if( !SendReq->TdiConnection.RemoteAddress ||
+        SendReq->TdiConnection.RemoteAddressLength <= 0 ||
+        SendReq->TdiConnection.RemoteAddressLength > 0x10000 ) {
+        UnlockRequest( Irp, IrpSp );
+        return UnlockAndMaybeComplete( FCB, STATUS_INVALID_PARAMETER, Irp, 0 );
+    }
+
+    CapturedAddress = ExAllocatePoolWithTag( NonPagedPool,
+                                             SendReq->TdiConnection.RemoteAddressLength,
+                                             TAG_AFD_TRANSPORT_ADDRESS );
+    if( !CapturedAddress ) {
+        UnlockRequest( Irp, IrpSp );
+        return UnlockAndMaybeComplete( FCB, STATUS_NO_MEMORY, Irp, 0 );
+    }
+
+    _SEH2_TRY {
+        if( LockMode != KernelMode )
+            ProbeForRead( SendReq->TdiConnection.RemoteAddress,
+                          SendReq->TdiConnection.RemoteAddressLength,
+                          sizeof(UCHAR) );
+        RtlCopyMemory( CapturedAddress,
+                       SendReq->TdiConnection.RemoteAddress,
+                       SendReq->TdiConnection.RemoteAddressLength );
+    } _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) {
+        Status = _SEH2_GetExceptionCode();
+    } _SEH2_END;
+
+    if( !NT_SUCCESS(Status) ) {
+        ExFreePoolWithTag( CapturedAddress, TAG_AFD_TRANSPORT_ADDRESS );
+        UnlockRequest( Irp, IrpSp );
+        return UnlockAndMaybeComplete( FCB, Status, Irp, 0 );
+    }
+
+    if( !AfdTransportAddressFits( (PTRANSPORT_ADDRESS)CapturedAddress,
+                                  SendReq->TdiConnection.RemoteAddressLength ) ) {
+        ExFreePoolWithTag( CapturedAddress, TAG_AFD_TRANSPORT_ADDRESS );
+        UnlockRequest( Irp, IrpSp );
+        return UnlockAndMaybeComplete( FCB, STATUS_INVALID_PARAMETER, Irp, 0 );
+    }
+
+    SendReq->TdiConnection.RemoteAddress = CapturedAddress;
+
     if (FCB->SharedData.State == SOCKET_STATE_CREATED)
     {
         if (FCB->LocalAddress)
@@ -854,18 +901,27 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
             if( NT_SUCCESS(Status) )
                 FCB->SharedData.State = SOCKET_STATE_BOUND;
-            else
+            else {
+                ExFreePoolWithTag( CapturedAddress, TAG_AFD_TRANSPORT_ADDRESS );
+                SendReq->TdiConnection.RemoteAddress = NULL;
                 return UnlockAndMaybeComplete( FCB, Status, Irp, 0 );
-        } else
+            }
+        } else {
+            ExFreePoolWithTag( CapturedAddress, TAG_AFD_TRANSPORT_ADDRESS );
+            SendReq->TdiConnection.RemoteAddress = NULL;
             return UnlockAndMaybeComplete
             ( FCB, STATUS_NO_MEMORY, Irp, 0 );
+        }
     }
 
     SendReq->BufferArray = LockBuffers(SendReq->BufferArray, SendReq->BufferCount, NULL, NULL, FALSE, FALSE, LockMode, AfdIs32bitIoctl(Irp));
 
-    if( !SendReq->BufferArray )
+    if( !SendReq->BufferArray ) {
+        ExFreePoolWithTag( CapturedAddress, TAG_AFD_TRANSPORT_ADDRESS );
+        SendReq->TdiConnection.RemoteAddress = NULL;
         return UnlockAndMaybeComplete( FCB, STATUS_ACCESS_VIOLATION,
                                        Irp, 0 );
+    }
 
     AFD_DbgPrint
         (MID_TRACE,("RemoteAddress #%d Type %u\n",
@@ -876,6 +932,9 @@ AfdPacketSocketWriteData(PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     Status = TdiBuildConnectionInfo( &TargetAddress,
                             ((PTRANSPORT_ADDRESS)SendReq->TdiConnection.RemoteAddress) );
+
+    ExFreePoolWithTag( CapturedAddress, TAG_AFD_TRANSPORT_ADDRESS );
+    SendReq->TdiConnection.RemoteAddress = NULL;
 
     /* Check the size of the Address given ... */
 

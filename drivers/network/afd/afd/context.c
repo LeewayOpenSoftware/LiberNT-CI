@@ -24,23 +24,17 @@ AfdGetContext( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
     if (ContextSize == sizeof(FCB->SharedData))
     {
-        RtlCopyMemory(Irp->UserBuffer,
-                      &FCB->SharedData,
-                      ContextSize);
-        Status = STATUS_SUCCESS;
+        Status = AfdCopyToCaller(Irp, &FCB->SharedData, ContextSize);
     }
     else if (FCB->Context)
     {
         ContextSize = min(ContextSize, FCB->ContextSize);
-        RtlCopyMemory( Irp->UserBuffer,
-                       FCB->Context,
-                       ContextSize );
-        Status = STATUS_SUCCESS;
+        Status = AfdCopyToCaller(Irp, FCB->Context, ContextSize);
     }
 
     AFD_DbgPrint(MID_TRACE,("Returning %x\n", Status));
 
-    return UnlockAndMaybeComplete( FCB, Status, Irp, ContextSize );
+    return UnlockAndMaybeComplete( FCB, Status, Irp, NT_SUCCESS(Status) ? ContextSize : 0 );
 }
 
 NTSTATUS NTAPI
@@ -60,11 +54,7 @@ AfdGetContextSize( PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return UnlockAndMaybeComplete(FCB, STATUS_BUFFER_TOO_SMALL, Irp, sizeof(ULONG));
     }
 
-    RtlCopyMemory(Irp->UserBuffer,
-                  &FCB->ContextSize,
-                  sizeof(ULONG));
-
-    return UnlockAndMaybeComplete(FCB, STATUS_SUCCESS, Irp, sizeof(ULONG));
+    return AfdCopyToCallerAndComplete(FCB, Irp, &FCB->ContextSize, sizeof(ULONG));
 }
 
 NTSTATUS NTAPI

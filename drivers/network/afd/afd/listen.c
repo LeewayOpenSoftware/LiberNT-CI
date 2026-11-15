@@ -390,6 +390,9 @@ NTSTATUS AfdListenSocket( PDEVICE_OBJECT DeviceObject, PIRP Irp,
         return UnlockAndMaybeComplete( FCB, STATUS_NO_MEMORY, Irp,
                                        0 );
 
+    if (IrpSp->Parameters.DeviceIoControl.InputBufferLength < sizeof(AFD_LISTEN_DATA))
+        return UnlockAndMaybeComplete( FCB, STATUS_INVALID_PARAMETER, Irp, 0 );
+
     if( FCB->SharedData.State != SOCKET_STATE_BOUND ) {
         Status = STATUS_INVALID_PARAMETER;
         AFD_DbgPrint(MIN_TRACE,("Could not listen an unbound socket\n"));
@@ -550,8 +553,9 @@ NTSTATUS AfdSuperAccept( PDEVICE_OBJECT DeviceObject, PIRP Irp,
     } _SEH2_END;
 
     if( NT_SUCCESS(Status) &&
-        IrpSp->Parameters.DeviceIoControl.InputBufferLength <
-        Info->ReceiveDataLength + Info->LocalAddressLength + Info->RemoteAddressLength ) {
+        (ULONG64)Info->ReceiveDataLength + Info->LocalAddressLength +
+        Info->RemoteAddressLength >
+        IrpSp->Parameters.DeviceIoControl.InputBufferLength ) {
         Status = STATUS_INVALID_PARAMETER;
     }
 
@@ -655,16 +659,24 @@ NTSTATUS AfdAccept( PDEVICE_OBJECT DeviceObject, PIRP Irp,
 
             Status = ObReferenceObjectByHandle
                 ( ListenHandle,
-                  FILE_ALL_ACCESS,
-                  NULL,
-                  KernelMode,
+                  FILE_READ_DATA | FILE_WRITE_DATA,
+                  *IoFileObjectType,
+                  Irp->RequestorMode,
                   (PVOID *)&NewFileObject,
                   NULL );
 
-            if( !NT_SUCCESS(Status) ) return UnlockAndMaybeComplete( FCB, Status, Irp, 0 );
-
-            ASSERT(NewFileObject != FileObject);
-            ASSERT(NewFileObject->FsContext != FCB);
+            if( !NT_SUCCESS(Status) ||
+                NewFileObject->DeviceObject != DeviceObject ||
+                NewFileObject == FileObject ||
+                !NewFileObject->FsContext ||
+                NewFileObject->FsContext == FCB ) {
+                if( NT_SUCCESS(Status) ) ObDereferenceObject( NewFileObject );
+                ExFreePoolWithTag(PendingConnObj, TAG_AFD_ACCEPT_QUEUE);
+                return UnlockAndMaybeComplete
+                    ( FCB,
+                      NT_SUCCESS(Status) ? STATUS_INVALID_PARAMETER : Status,
+                      Irp, 0 );
+            }
 
             /* We have a pending connection ... complete this irp right away */
             Status = SatisfyAccept( DeviceExt, Irp, NewFileObject, PendingConnObj );

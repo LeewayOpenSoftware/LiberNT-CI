@@ -394,7 +394,7 @@ AfdSelect( PDEVICE_OBJECT DeviceObject, PIRP Irp,
                             (INT)(PollReq->Timeout.QuadPart)));
 
     SET_AFD_HANDLES(Irp,
-                    LockHandles( PollReq->Handles, PollReq->HandleCount, DeviceObject ));
+                    LockHandles( PollReq->Handles, PollReq->HandleCount, DeviceObject, Irp->RequestorMode ));
 
     if( !AFD_HANDLES(Irp) ) {
         Irp->IoStatus.Status = STATUS_NO_MEMORY;
