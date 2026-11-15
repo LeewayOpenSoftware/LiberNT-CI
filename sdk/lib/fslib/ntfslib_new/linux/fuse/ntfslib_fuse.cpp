@@ -21,10 +21,14 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/statvfs.h>
 #include <sys/types.h>
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <sys/statvfs.h>
 #include <sys/xattr.h>
 #include <unistd.h>
+#endif
 
 #include <memory>
 #include <string>
@@ -40,6 +44,95 @@
 extern "C" {
 #include <expandcore.h>
 }
+
+#ifdef _WIN32
+/*
+ * Host build on Windows (MSVC). open/read/write/close/fstat/stat are available
+ * as NONSTDC aliases (sdk/tools defines _CRT_NONSTDC_NO_DEPRECATE); only the
+ * handful below need shimming for the non-FUSE direct-image commands.
+ */
+#ifndef _SSIZE_T_DEFINED
+typedef long long ssize_t;
+#define _SSIZE_T_DEFINED
+#endif
+#ifndef O_CLOEXEC
+#define O_CLOEXEC 0
+#endif
+#ifndef STDOUT_FILENO
+#define STDOUT_FILENO 1
+#endif
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & _S_IFMT) == _S_IFDIR)
+#endif
+#ifndef S_ISREG
+#define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
+#endif
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+static inline uid_t getuid(void) { return 0; }
+static inline gid_t getgid(void) { return 0; }
+#define off_t long long
+#define fsync _commit
+static inline ssize_t pread(int Fd, void* Buffer, size_t Length, long long Offset)
+{
+    if (_lseeki64(Fd, Offset, SEEK_SET) < 0)
+        return -1;
+    return _read(Fd, Buffer, (unsigned int)Length);
+}
+static inline ssize_t pwrite(int Fd, const void* Buffer, size_t Length, long long Offset)
+{
+    if (_lseeki64(Fd, Offset, SEEK_SET) < 0)
+        return -1;
+    return _write(Fd, Buffer, (unsigned int)Length);
+}
+static inline int ftruncate(int Fd, long long Length)
+{
+    return _chsize_s(Fd, Length);
+}
+static inline ssize_t getline(char** LinePtr, size_t* Capacity, FILE* Stream)
+{
+    size_t Length = 0;
+    int Ch;
+
+    if (!LinePtr || !Capacity || !Stream)
+    {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!*LinePtr || *Capacity == 0)
+    {
+        *Capacity = 128;
+        *LinePtr = (char*)realloc(*LinePtr, *Capacity);
+        if (!*LinePtr)
+            return -1;
+    }
+    while ((Ch = fgetc(Stream)) != EOF)
+    {
+        if (Length + 2 > *Capacity)
+        {
+            size_t NewCap = *Capacity * 2;
+            char* New = (char*)realloc(*LinePtr, NewCap);
+            if (!New)
+                return -1;
+            *LinePtr = New;
+            *Capacity = NewCap;
+        }
+        if (Ch == '\n')
+        {
+            /* normalize CRLF list/policy files to a single LF */
+            if (Length > 0 && (*LinePtr)[Length - 1] == '\r')
+                Length--;
+            (*LinePtr)[Length++] = '\n';
+            break;
+        }
+        (*LinePtr)[Length++] = (char)Ch;
+    }
+    if (Length == 0 && Ch == EOF)
+        return -1;
+    (*LinePtr)[Length] = '\0';
+    return (ssize_t)Length;
+}
+#endif /* _WIN32 */
 
 typedef std::vector<std::string> NtfsDirectoryListing;
 
@@ -5150,6 +5243,9 @@ PrintUsage(const char* Program)
 int
 main(int Argc, char** Argv)
 {
+#ifdef _WIN32
+    _set_fmode(_O_BINARY);
+#endif
     NtfsFuseState State = {};
     bool ShowMetadata = false;
     int First = 1;

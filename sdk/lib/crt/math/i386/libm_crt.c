@@ -10,6 +10,11 @@
 #include <errno.h>
 #include <stdint.h>
 
+/* These are the library definitions of functions MSVC treats as intrinsics under /Oi. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma function(acos,cos,exp,log,log10,pow,sin,sqrt,tan)
+#endif
+
 double __cdecl __acrt_report_math_error(int type, char const* name, double arg1, double arg2, double retval, int error);
 double __cdecl __libm_sse2_core_acos(double x);
 double __cdecl __libm_sse2_core_cos(double x);

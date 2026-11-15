@@ -92,6 +92,11 @@ typedef struct _EXTENDED_GEOMETRY
 
 #pragma pack(pop)
 
+/* The Int386() path copies exactly REGS_SIZE bytes; keep REGS and the Int13
+ * AH=48h buffer at their fixed BIOS-defined sizes. */
+C_ASSERT(sizeof(REGS) == REGS_SIZE);
+C_ASSERT(sizeof(EXTENDED_GEOMETRY) == 0x1E);
+
 typedef struct _PC_DISK_DRIVE
 {
     /* Disk geometry (legacy BIOS and INT13 extended) */
@@ -173,7 +178,8 @@ DiskGetErrorCodeString(
 
 BOOLEAN DiskResetController(UCHAR DriveNumber)
 {
-    REGS RegsIn, RegsOut;
+    /* Zero-init: Int386() copies the whole REGS (incl EFLAGS/DF) to the real-mode set. */
+    REGS RegsIn = { 0 }, RegsOut;
 
     WARN("DiskResetController(0x%x) DISK OPERATION FAILED -- RESETTING CONTROLLER\n", DriveNumber);
 
@@ -213,7 +219,8 @@ DiskIsDriveRemovable(UCHAR DriveNumber)
 static BOOLEAN
 DiskInt13ExtensionsSupported(IN UCHAR DriveNumber)
 {
-    REGS RegsIn, RegsOut;
+    /* Zero-init: Int386() copies the whole REGS (incl EFLAGS/DF) to the real-mode set. */
+    REGS RegsIn = { 0 }, RegsOut;
 
     /*
      * Some BIOSes report that extended disk access functions are not supported
@@ -296,7 +303,8 @@ DiskGetExtendedDriveParameters(
     _In_ USHORT BufferSize)
 {
     PEXTENDED_GEOMETRY Ptr = (PEXTENDED_GEOMETRY)BIOSCALLBUFFER;
-    REGS RegsIn, RegsOut;
+    /* Zero-init: Int386() copies the whole REGS (incl EFLAGS/DF) to the real-mode set. */
+    REGS RegsIn = { 0 }, RegsOut;
 
     TRACE("DiskGetExtendedDriveParameters(0x%x)\n", DriveNumber);
 
@@ -395,7 +403,8 @@ InitDriveGeometry(
     IN PPC_DISK_DRIVE DiskDrive)
 {
     BOOLEAN Success;
-    REGS RegsIn, RegsOut;
+    /* Zero-init: Int386() copies the whole REGS (incl EFLAGS/DF) to the real-mode set. */
+    REGS RegsIn = { 0 }, RegsOut;
     ULONG Cylinders;
 
     /* Get the extended geometry first */
@@ -587,7 +596,8 @@ PcDiskReadLogicalSectorsLBA(
     OUT PVOID Buffer)
 {
     PI386_DISK_ADDRESS_PACKET Packet = (PI386_DISK_ADDRESS_PACKET)BIOSCALLBUFFER;
-    REGS RegsIn, RegsOut;
+    /* Zero-init: Int386() copies the whole REGS (incl EFLAGS/DF) to the real-mode set. */
+    REGS RegsIn = { 0 }, RegsOut;
     ULONG RetryCount;
 
     /* Setup disk address packet */
@@ -656,7 +666,8 @@ PcDiskReadLogicalSectorsCHS(
     ULONG PhysicalTrack;
     GEOMETRY DriveGeometry;
     ULONG NumberOfSectorsToRead;
-    REGS RegsIn, RegsOut;
+    /* Zero-init: Int386() copies the whole REGS (incl EFLAGS/DF) to the real-mode set. */
+    REGS RegsIn = { 0 }, RegsOut;
     ULONG RetryCount;
 
     DriveGeometry = DiskDrive->Geometry;

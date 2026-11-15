@@ -100,7 +100,7 @@ if(STACK_PROTECTOR)
 endif()
 
 if(RUNTIME_CHECKS)
-    target_link_libraries(rosload runtmchk)
+    target_link_libraries(rosload runtmchk_boot)
 endif()
 
 add_dependencies(rosload bugcodes asm xdk)

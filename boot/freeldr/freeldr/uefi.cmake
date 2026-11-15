@@ -269,7 +269,7 @@ if(STACK_PROTECTOR)
 endif()
 
 if(RUNTIME_CHECKS)
-    target_link_libraries(uefildr runtmchk)
+    target_link_libraries(uefildr runtmchk_boot)
 endif()
 
 add_dependencies(uefildr xdk)

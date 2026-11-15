@@ -25,9 +25,17 @@ on:
         description: 'Also run build-msvc (MSVC + Rust leg and C-only leg, with bootcd.iso artifacts)'
         type: boolean
         default: false
+      msvc_lab:
+        description: 'MSVC amd64 lrmrs lab image: LAB_POC (lnrspoc.sys + lnrspoc_lrmtest.exe when the tree ships it + Rust archives); disposable VM only'
+        type: boolean
+        default: false
+      msvc_force_panic:
+        description: 'MSVC LAB-ONLY force-panic image (implies msvc_lab + FORCE_PANIC_TEST + LNRSPOC_TEST_IOCTLS, FORBID_PANIC off, lnrspoc 0x80B); disposable VM only, never ship'
+        type: boolean
+        default: false
 
 concurrency:
-  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') && 'lrmpoc' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off') && 'lrmoff' || 'std' }}
+  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_force_panic) && 'msvclabfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_lab) && 'msvclab' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') && 'lrmpoc' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off') && 'lrmoff' || 'std' }}
   cancel-in-progress: true
 
 permissions:
@@ -554,6 +562,11 @@ jobs:
             variant: lrmrs
             rust_target: x86_64-pc-windows-msvc
           - arch: amd64
+            lrm_rs: 'ON'
+            variant: lrmrs
+            rust_target: x86_64-pc-windows-msvc
+            build_type: release
+          - arch: amd64
             lrm_rs: 'OFF'
             variant: conly
           - arch: i386
@@ -565,6 +578,12 @@ jobs:
             variant: conly
       fail-fast: false
     runs-on: windows-2025
+    env:
+      # The MSVC lab variants ride on the amd64 lrmrs leg only, mirroring how
+      # build-linux drives LAB_POC/FORCE_PANIC from the dispatch inputs. The
+      # conly legs never see the Rust umbrella flags.
+      LAB_POC: ${{ (github.event_name == 'workflow_dispatch' && (inputs.msvc_lab || inputs.msvc_force_panic)) && 'ON' || 'OFF' }}
+      FORCE_PANIC: ${{ (github.event_name == 'workflow_dispatch' && inputs.msvc_force_panic) && 'ON' || 'OFF' }}
     steps:
     - name: Source checkout
       uses: actions/checkout@v6
@@ -628,8 +647,14 @@ jobs:
         :: LRM-RS is set explicitly in both legs, so a leg can never fall back to the other configuration.
         set RUST_ARGS=
         if "${{matrix.lrm_rs}}"=="ON" set RUST_ARGS=-DLIBERNT_RUST_TARGET=${{matrix.rust_target}}
-        call configure.cmd /arch=${{matrix.arch}} -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_ENABLE_LRM_RS=${{matrix.lrm_rs}} %RUST_ARGS%
-        echo outdir=output-VS-${{matrix.arch}}-debug>> "%GITHUB_OUTPUT%"
+        if "${{matrix.arch}}-${{matrix.variant}}"=="amd64-lrmrs" if "%LAB_POC%"=="ON" set RUST_ARGS=%RUST_ARGS% -DLIBERNT_ENABLE_RUST=ON
+        if "${{matrix.arch}}-${{matrix.variant}}"=="amd64-lrmrs" if "%FORCE_PANIC%"=="ON" set RUST_ARGS=%RUST_ARGS% -DLIBERNT_LRM_RS_FORCE_PANIC_TEST=ON -DLNRSPOC_TEST_IOCTLS=ON
+        set BT_ARGS=
+        set BT_SUFFIX=debug
+        if "${{matrix.build_type}}"=="release" set BT_ARGS=/r
+        if "${{matrix.build_type}}"=="release" set BT_SUFFIX=release
+        call configure.cmd /arch=${{matrix.arch}} %BT_ARGS% -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_ENABLE_LRM_RS=${{matrix.lrm_rs}} %RUST_ARGS%
+        echo outdir=output-VS-${{matrix.arch}}-%BT_SUFFIX%>> "%GITHUB_OUTPUT%"
 
     - name: Build submodules
       shell: cmd
@@ -652,6 +677,9 @@ jobs:
             if (-not ($exports | Select-String -SimpleMatch 'LrmRsSelfTest')) {
                 throw "ntoskrnl.exe was built with LRM-RS ON but does not export LrmRsSelfTest"
             }
+            if ($env:FORCE_PANIC -eq 'ON' -and '${{matrix.arch}}-${{matrix.variant}}' -eq 'amd64-lrmrs' -and -not ($exports | Select-String -SimpleMatch 'LrmRsForcePanic')) {
+                throw "force-panic ntoskrnl.exe does not export LrmRsForcePanic"
+            }
             $hits
         } elseif ($hits) {
             $hits
@@ -666,12 +694,61 @@ jobs:
       shell: cmd
       run: ninja -C ${{steps.configure.outputs.outdir}} bootcd -k0
 
+    - name: Build the persistent system disk images
+      # The lab boots LiberNT.img/.vhd/.vhdx: a read-write system disk whose
+      # registry and state persist across runs, unlike the bootcd live image.
+      id: sysimg
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        ninja -C $out liberntimg -k0 -v
+        $code = $LASTEXITCODE
+        if ($code -ne 0) {
+          Write-Host '=== DIAG: preinstall_partition batch files ==='
+          Get-ChildItem -Recurse "$out/boot/CMakeFiles" -Filter 'preinstall_partition*.bat' -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "----- $($_.FullName) -----"
+            Get-Content $_.FullName | ForEach-Object { Write-Host $_ }
+          }
+          Write-Host '=== DIAG: host-tool exe presence/size ==='
+          foreach ($t in 'fatten.exe','ntfsimg.exe','mkdiskimg.exe') {
+            Get-ChildItem -Recurse "$out" -Filter $t -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}  {1} bytes' -f $_.FullName, $_.Length) }
+          }
+          throw "ninja liberntimg failed (code $code); diagnostics above"
+        }
+
+    - name: Build the lnrspoc PoC driver and archives (MSVC lab image only)
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' && env.LAB_POC == 'ON' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        ninja -C $out lnrspoc
+        if ($LASTEXITCODE -ne 0) { throw "ninja lnrspoc failed" }
+        New-Item -ItemType Directory -Force lrmrs-out | Out-Null
+        Copy-Item "$out/tools/rust-poc/lnrspoc.sys" lrmrs-out/
+        Get-ChildItem "$out/tools/rust-poc" -File | Where-Object { $_.Name -match 'leeway_rs_poc' } | ForEach-Object { Copy-Item $_.FullName lrmrs-out/ }
+        Get-ChildItem "$out/ntoskrnl" -Recurse -File | Where-Object { $_.Name -match 'lrm_rs' -and $_.Extension -in '.a', '.lib' } | ForEach-Object { Copy-Item $_.FullName lrmrs-out/ }
+        $lrmtest = Get-ChildItem -Recurse -Filter lnrspoc_lrmtest.exe $out -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($lrmtest) {
+            Copy-Item $lrmtest.FullName lrmrs-out/
+        } else {
+            "lnrspoc_lrmtest.exe is not produced by this tree; skipping it"
+        }
+        $sums = Get-ChildItem lrmrs-out -File | ForEach-Object { "{0}  {1}" -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower(), $_.Name }
+        $sums | Set-Content lrmrs-out/SHA256SUMS
+        $sums
+
     - name: Name artifacts
       id: images
       if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
       shell: pwsh
       run: |
-        "tag=msvc-${{matrix.arch}}-${{matrix.variant}}-$($env:GITHUB_SHA.Substring(0, 11))" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        $V = ""
+        if ($env:LAB_POC -eq 'ON') { $V = "-lrmrs" }
+        if ($env:FORCE_PANIC -eq 'ON') { $V = "-lrmrs-fp" }
+        $BT = ""
+        if ('${{matrix.build_type}}' -eq 'release') { $BT = "-release" }
+        "tag=msvc-${{matrix.arch}}-${{matrix.variant}}$BT$V-$($env:GITHUB_SHA.Substring(0, 11))" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
     - name: Upload bootcd.iso
       if: ${{ !cancelled() && steps.bootcd.outcome == 'success' }}
@@ -679,6 +756,22 @@ jobs:
       with:
         name: bootcd-iso-${{steps.images.outputs.tag}}
         path: ${{steps.configure.outputs.outdir}}/bootcd.iso
+        if-no-files-found: error
+
+    - name: Upload LiberNT.img
+      if: ${{ !cancelled() && steps.sysimg.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: LiberNT-img-${{steps.images.outputs.tag}}
+        path: ${{steps.configure.outputs.outdir}}/LiberNT.img
+        if-no-files-found: error
+
+    - name: Upload lnrspoc.sys and the Rust archives (MSVC lab image only)
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' && env.LAB_POC == 'ON' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: lnrspoc-${{steps.images.outputs.tag}}
+        path: lrmrs-out/
         if-no-files-found: error
 
     - name: Upload the kernel and the Rust library (for the ABI review)
@@ -693,3 +786,144 @@ jobs:
           ${{steps.configure.outputs.outdir}}/ntoskrnl/**/lrm_rs*.lib
           ${{steps.configure.outputs.outdir}}/ntoskrnl/**/liblrm_rs*.a
         if-no-files-found: warn
+
+    - name: Collect kernel-mode symbols for crash symbolication
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: pwsh
+      run: |
+        $out = (Resolve-Path "${{steps.configure.outputs.outdir}}").Path
+        New-Item -ItemType Directory -Force symbols | Out-Null
+        # Kernel-mode binaries (.sys), the kernel/HAL, their .pdb, and any .map.
+        # Excludes user-mode .dll/.exe .pdb to keep the artifact bounded.
+        $keep = Get-ChildItem $out -Recurse -File -Include *.sys,*.map | ForEach-Object { $_.FullName }
+        $keep += Get-ChildItem $out -Recurse -File -Include *.pdb | Where-Object {
+            (Test-Path (($_.FullName) -replace '\.pdb$','.sys')) -or
+            $_.Name -in @('ntoskrnl.pdb','hal.pdb','kdcom.pdb','bootvid.pdb')
+        } | ForEach-Object { $_.FullName }
+        foreach ($f in ($keep | Sort-Object -Unique)) {
+            $rel = $f.Substring($out.Length + 1)
+            $dest = Join-Path symbols $rel
+            New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+            Copy-Item $f $dest
+        }
+        "collected $((Get-ChildItem symbols -Recurse -File).Count) symbol files"
+
+    - name: Upload kernel-mode symbols
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: symbols-${{steps.images.outputs.tag}}
+        path: symbols/
+        if-no-files-found: warn
+
+  build-rostests-msvc:
+    # Compile the test suite (modules/rostests) with MSVC for amd64, a separate
+    # build because ENABLE_ROSTESTS changes what goes into the images, exactly
+    # like build-rostests does for clang. The kmtests/apitests artifacts let the
+    # lab run the MSVC-built tree of the same commit. Compile only, no test run.
+    if: ${{ (github.ref == 'refs/heads/leeway/main' || startsWith(github.ref, 'refs/heads/ci/msvc-rust') || (github.event_name == 'workflow_dispatch' && inputs.msvc)) && !(github.event_name == 'workflow_dispatch' && (inputs.msvc_lab || inputs.msvc_force_panic)) }}
+    runs-on: windows-2025
+    steps:
+    - name: Source checkout
+      uses: actions/checkout@v6
+
+    - name: Install host build tools
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        # Same pinned winflexbison as build-msvc; gh downloads with the job token.
+        $zip = "$env:RUNNER_TEMP\win_flex_bison-2.5.24.zip"
+        foreach ($attempt in 1..4) {
+            gh release download v2.5.24 --repo lexxmark/winflexbison --pattern win_flex_bison-2.5.24.zip --output $zip --clobber
+            if ($LASTEXITCODE -eq 0) { break }
+            if ($attempt -eq 4) { throw "Downloading winflexbison failed" }
+            Start-Sleep -Seconds (15 * $attempt)
+        }
+        if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne "39C6086CE211D5415500ACC5ED2D8939861CA1696AEE48909C7F6DAF5122B505") {
+            throw "win_flex_bison-2.5.24.zip does not have the expected SHA256"
+        }
+        $tools = "$env:RUNNER_TEMP\winflexbison"
+        Expand-Archive $zip -DestinationPath $tools -Force
+        python -m pip install --upgrade mako pyyaml packaging
+        Copy-Item "$tools\win_flex.exe" "$tools\flex.exe" -Force
+        Copy-Item "$tools\win_bison.exe" "$tools\bison.exe" -Force
+        echo "$tools" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+    - name: Install pinned Rust toolchain (MSVC target; LRM-RS defaults ON on amd64)
+      shell: pwsh
+      run: |
+        $m = Select-String -Path sdk/cmake/rust.cmake -Pattern '^set\(LIBERNT_RUST_TOOLCHAIN "([^"]+)"'
+        if (-not $m) { throw "sdk/cmake/rust.cmake has no LIBERNT_RUST_TOOLCHAIN pin" }
+        $tc = $m.Matches[0].Groups[1].Value
+        rustup toolchain install $tc --profile minimal --component llvm-tools --target x86_64-pc-windows-msvc
+        if ($LASTEXITCODE -ne 0) { throw "rustup could not install Rust $tc" }
+        $vv = rustup run $tc rustc --version --verbose
+        if ($LASTEXITCODE -ne 0) { throw "Rust $tc does not run" }
+        $vv
+
+    - name: Set up the MSVC build environment
+      uses: ilammy/msvc-dev-cmd@v1
+      with:
+        arch: amd64
+
+    - name: Configure
+      id: configure
+      shell: cmd
+      env:
+        GITHUB_TOKEN: ${{ github.token }}
+      run: |
+        call configure.cmd /arch=amd64 -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_RUST_TARGET=x86_64-pc-windows-msvc -DENABLE_ROSTESTS=1
+        echo outdir=output-VS-amd64-debug>> "%GITHUB_OUTPUT%"
+
+    - name: Build the test suite
+      shell: cmd
+      run: |
+        :: The per-directory target of the Ninja generator; without it, build everything.
+        ninja -C ${{steps.configure.outputs.outdir}} -t targets all | findstr /B /C:"modules/rostests/all:" >nul
+        if %ERRORLEVEL% EQU 0 (ninja -C ${{steps.configure.outputs.outdir}} -k0 modules/rostests/all) else (ninja -C ${{steps.configure.outputs.outdir}} -k0)
+
+    - name: Collect the kmtests binaries
+      # kmtest.exe + kmtest_drv.sys (and the standalone test drivers) for a lab
+      # run against the LiberNT.img of the same commit; the images themselves
+      # are built without ENABLE_ROSTESTS and carry no kmtest.
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        New-Item -ItemType Directory -Force kmtests-out | Out-Null
+        Get-ChildItem -Recurse "$out/modules/rostests/kmtests" -File |
+            Where-Object { $_.Extension -in '.exe', '.sys', '.dll', '.inf' } |
+            ForEach-Object { Copy-Item -Verbose $_.FullName kmtests-out/ }
+        Get-ChildItem kmtests-out
+
+    - name: Upload the kmtests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: kmtests-msvc-amd64-${{github.sha}}
+        path: kmtests-out/
+        if-no-files-found: error
+
+    - name: Collect the apitests binaries
+      # Every *_apitest.exe, native amd64 and the WoW64 i386 build, for a lab run
+      # against the LiberNT.img of the same commit; the images carry no apitest.
+      shell: pwsh
+      run: |
+        $out = "${{steps.configure.outputs.outdir}}"
+        New-Item -ItemType Directory -Force apitests-out/amd64 apitests-out/wow64 | Out-Null
+        Get-ChildItem -Recurse "$out/modules/rostests/apitests" -Filter '*_apitest.exe' -File |
+            ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+        if (Test-Path "$out/_wow64_i386/modules/rostests/apitests") {
+            Get-ChildItem -Recurse "$out/_wow64_i386/modules/rostests/apitests" -Filter '*_apitest.exe' -File |
+                ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/wow64/ }
+        }
+        Get-ChildItem -Recurse "$out/modules/rostests/tests" -File |
+            Where-Object { $_.Name -in 'lowil.exe', 'elevadm.exe' } |
+            ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
+        Get-ChildItem -Recurse apitests-out | Select-Object -First 100
+
+    - name: Upload the apitests binaries
+      uses: actions/upload-artifact@v7
+      with:
+        name: apitests-msvc-amd64-${{github.sha}}
+        path: apitests-out/
+        if-no-files-found: error

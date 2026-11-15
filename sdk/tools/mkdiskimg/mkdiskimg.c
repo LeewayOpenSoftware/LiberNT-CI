@@ -17,6 +17,21 @@
 #include <time.h>
 #include <limits.h>
 
+/* 64-bit file offsets: Windows 'long' is 32-bit (LLP64) and fseek/ftell cannot
+ * address images or partitions past 2 GB (e.g. a dynamic VHD/VHDX). Use 64-bit
+ * seeks and a 64-bit offset type on Windows; POSIX keeps long (64-bit on LP64)
+ * with plain fseek/ftell, so its behaviour is byte-for-byte unchanged. */
+#ifdef _WIN32
+#  define MKD_FSEEK(f, off, whence) _fseeki64((f), (off), (whence))
+#  define MKD_FTELL(f)              _ftelli64(f)
+typedef long long mkd_off_t;
+#else
+#  define MKD_FSEEK(f, off, whence) fseek((f), (off), (whence))
+#  define MKD_FTELL(f)              ftell(f)
+typedef long mkd_off_t;
+#endif
+typedef char mkd_off_t_is_at_least_64bit[sizeof(mkd_off_t) >= 8 ? 1 : -1];
+
 #define SECTOR_SIZE 512
 #define MBR_BOOT_CODE_SIZE 440
 #define MBR_PARTITION_TABLE_OFFSET 446
@@ -111,7 +126,7 @@ typedef struct _PARTITION_INPUT
     int HasUniqueGuid;
     int Bootable;
     FILE* File;
-    long Size;
+    mkd_off_t Size;
     unsigned int SectorCount;
     unsigned char BootSector[SECTOR_SIZE];
 } PARTITION_INPUT;
@@ -121,7 +136,7 @@ typedef struct _RAW_BLOB
     const char* Path;
     unsigned int StartSector;
     unsigned char* Data;
-    long Size;
+    mkd_off_t Size;
 } RAW_BLOB;
 
 #pragma pack(push, 1)
@@ -164,7 +179,7 @@ static void print_usage(const char* name)
 
 static int buffer_is_zero(const unsigned char* data, size_t size);
 
-static long next_data_offset(FILE* file, long offset, long end)
+static mkd_off_t next_data_offset(FILE* file, mkd_off_t offset, mkd_off_t end)
 {
 #ifdef SEEK_DATA
     int fd = fileno(file);
@@ -180,7 +195,7 @@ static long next_data_offset(FILE* file, long offset, long end)
         return offset;
     if (found < 0)
         return error == ENXIO ? end : offset;
-    return found < (off_t)end ? (long)found : end;
+    return found < (off_t)end ? (mkd_off_t)found : end;
 #else
     (void)file;
     (void)end;
@@ -188,24 +203,24 @@ static long next_data_offset(FILE* file, long offset, long end)
 #endif
 }
 
-static int copy_file_data(FILE* dst, FILE* src, long size)
+static int copy_file_data(FILE* dst, FILE* src, mkd_off_t size)
 {
     unsigned char buf[32768];
-    long base = ftell(dst);
-    long position = 0;
+    mkd_off_t base = MKD_FTELL(dst);
+    mkd_off_t position = 0;
 
     if (base < 0)
         return -1;
     while ((position = next_data_offset(src, position, size)) < size)
     {
-        size_t chunk = size - position < (long)sizeof(buf) ? (size_t)(size - position) : sizeof(buf);
+        size_t chunk = size - position < (mkd_off_t)sizeof(buf) ? (size_t)(size - position) : sizeof(buf);
 
-        if (fseek(src, position, SEEK_SET) != 0 || fread(buf, 1, chunk, src) != chunk)
+        if (MKD_FSEEK(src, position, SEEK_SET) != 0 || fread(buf, 1, chunk, src) != chunk)
             return -1;
         if (!buffer_is_zero(buf, chunk) &&
-            (fseek(dst, base + position, SEEK_SET) != 0 || fwrite(buf, 1, chunk, dst) != chunk))
+            (MKD_FSEEK(dst, base + position, SEEK_SET) != 0 || fwrite(buf, 1, chunk, dst) != chunk))
             return -1;
-        position += (long)chunk;
+        position += (mkd_off_t)chunk;
     }
     return 0;
 }
@@ -225,11 +240,11 @@ static int write_zero_bytes(FILE* file, unsigned long long size)
     return 0;
 }
 
-static int initialize_zeroed_file(FILE* file, long size)
+static int initialize_zeroed_file(FILE* file, mkd_off_t size)
 {
     /* Extending a new file with one trailing zero preserves zero-filled byte
      * semantics while allowing filesystems that support holes to keep it sparse. */
-    if (size <= 0 || fseek(file, size - 1, SEEK_SET) != 0 || fputc(0, file) == EOF)
+    if (size <= 0 || MKD_FSEEK(file, size - 1, SEEK_SET) != 0 || fputc(0, file) == EOF)
         return -1;
     return 0;
 }
@@ -249,16 +264,16 @@ static unsigned int crc32_update(unsigned int crc, const unsigned char* data, si
     return ~crc;
 }
 
-static int read_whole_file(const char* path, unsigned char** data, long* size)
+static int read_whole_file(const char* path, unsigned char** data, mkd_off_t* size)
 {
     FILE* file = fopen(path, "rb");
-    long length;
+    mkd_off_t length;
 
     *data = NULL;
     *size = 0;
     if (!file)
         return -1;
-    if (fseek(file, 0, SEEK_END) != 0 || (length = ftell(file)) < 0 || fseek(file, 0, SEEK_SET) != 0)
+    if (MKD_FSEEK(file, 0, SEEK_END) != 0 || (length = MKD_FTELL(file)) < 0 || MKD_FSEEK(file, 0, SEEK_SET) != 0)
     {
         fclose(file);
         return -1;
@@ -311,26 +326,26 @@ static void write_chs(unsigned int lba, unsigned char chs[3])
     chs[2] = (unsigned char)(cylinders & 0xFF);
 }
 
-static int write_byte_at(FILE* file, long offset, unsigned char value)
+static int write_byte_at(FILE* file, mkd_off_t offset, unsigned char value)
 {
-    if (fseek(file, offset, SEEK_SET) != 0)
+    if (MKD_FSEEK(file, offset, SEEK_SET) != 0)
         return -1;
     return fwrite(&value, 1, 1, file) == 1 ? 0 : -1;
 }
 
-static int write_le16_at(FILE* file, long offset, unsigned short value)
+static int write_le16_at(FILE* file, mkd_off_t offset, unsigned short value)
 {
     unsigned char data[2];
 
     data[0] = (unsigned char)(value & 0xFF);
     data[1] = (unsigned char)((value >> 8) & 0xFF);
 
-    if (fseek(file, offset, SEEK_SET) != 0)
+    if (MKD_FSEEK(file, offset, SEEK_SET) != 0)
         return -1;
     return fwrite(data, sizeof(data), 1, file) == 1 ? 0 : -1;
 }
 
-static int write_le32_at(FILE* file, long offset, unsigned int value)
+static int write_le32_at(FILE* file, mkd_off_t offset, unsigned int value)
 {
     unsigned char data[4];
 
@@ -339,14 +354,14 @@ static int write_le32_at(FILE* file, long offset, unsigned int value)
     data[2] = (unsigned char)((value >> 16) & 0xFF);
     data[3] = (unsigned char)((value >> 24) & 0xFF);
 
-    if (fseek(file, offset, SEEK_SET) != 0)
+    if (MKD_FSEEK(file, offset, SEEK_SET) != 0)
         return -1;
     return fwrite(data, sizeof(data), 1, file) == 1 ? 0 : -1;
 }
 
-static int write_data_at(FILE* file, long offset, const void* data, size_t size)
+static int write_data_at(FILE* file, mkd_off_t offset, const void* data, size_t size)
 {
-    if (fseek(file, offset, SEEK_SET) != 0)
+    if (MKD_FSEEK(file, offset, SEEK_SET) != 0)
         return -1;
     return fwrite(data, 1, size, file) == size ? 0 : -1;
 }
@@ -470,9 +485,9 @@ static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
     unsigned char number_of_fats;
     unsigned int sectors_per_fat;
     unsigned int boot_drive_offset;
-    long vbr_offset;
-    long fat_offset;
-    long fat_size;
+    mkd_off_t vbr_offset;
+    mkd_off_t fat_offset;
+    mkd_off_t fat_size;
     unsigned int fat_index;
     int is_fat32;
 
@@ -500,7 +515,7 @@ static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
         return -1;
     }
 
-    vbr_offset = (long)partition->StartSector * SECTOR_SIZE;
+    vbr_offset = (mkd_off_t)partition->StartSector * SECTOR_SIZE;
 
     if (write_le32_at(output,
                       vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET,
@@ -512,7 +527,7 @@ static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
 
     if (is_fat32 && backup_boot_sector != 0 && backup_boot_sector != 0xFFFF)
     {
-        long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
+        mkd_off_t backup_vbr_offset = vbr_offset + (mkd_off_t)backup_boot_sector * bytes_per_sector;
 
         if (backup_vbr_offset + FAT32_HIDDEN_SECTORS_OFFSET + 4 > vbr_offset + partition->Size ||
             write_le32_at(output,
@@ -536,7 +551,7 @@ static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
 
     if (is_fat32 && backup_boot_sector != 0 && backup_boot_sector != 0xFFFF)
     {
-        long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
+        mkd_off_t backup_vbr_offset = vbr_offset + (mkd_off_t)backup_boot_sector * bytes_per_sector;
 
         if (write_byte_at(output,
                           backup_vbr_offset + FAT32_MEDIA_DESCRIPTOR_OFFSET,
@@ -548,11 +563,11 @@ static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
         }
     }
 
-    fat_offset = vbr_offset + (long)reserved_sectors * bytes_per_sector;
-    fat_size = (long)sectors_per_fat * bytes_per_sector;
+    fat_offset = vbr_offset + (mkd_off_t)reserved_sectors * bytes_per_sector;
+    fat_size = (mkd_off_t)sectors_per_fat * bytes_per_sector;
     for (fat_index = 0; fat_index < number_of_fats; fat_index++)
     {
-        long current_fat_offset = fat_offset + (long)fat_index * fat_size;
+        mkd_off_t current_fat_offset = fat_offset + (mkd_off_t)fat_index * fat_size;
 
         if (current_fat_offset + 1 > vbr_offset + partition->Size ||
             write_byte_at(output, current_fat_offset, MEDIA_DESCRIPTOR_FIXED) != 0)
@@ -564,7 +579,7 @@ static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
         }
 
         if (is_fat32 &&
-            (fat_size < (long)sizeof(fat32_reserved_entries) ||
+            (fat_size < (mkd_off_t)sizeof(fat32_reserved_entries) ||
              write_data_at(output,
                            current_fat_offset,
                            fat32_reserved_entries,
@@ -587,7 +602,7 @@ static int patch_fat_partition(FILE* output, const PARTITION_INPUT* partition)
 
     if (is_fat32 && backup_boot_sector != 0 && backup_boot_sector != 0xFFFF)
     {
-        long backup_vbr_offset = vbr_offset + (long)backup_boot_sector * bytes_per_sector;
+        mkd_off_t backup_vbr_offset = vbr_offset + (mkd_off_t)backup_boot_sector * bytes_per_sector;
 
         if (write_byte_at(output,
                           backup_vbr_offset + boot_drive_offset,
@@ -627,7 +642,7 @@ static int patch_exfat_partition(FILE* output, const PARTITION_INPUT* partition)
     unsigned int index;
     unsigned int region_size;
     unsigned long long partition_offset;
-    long output_offset;
+    mkd_off_t output_offset;
 
     if (partition->BootSector[EXFAT_SECTOR_SHIFT_OFFSET] < 9 ||
         partition->BootSector[EXFAT_SECTOR_SHIFT_OFFSET] > 12)
@@ -647,7 +662,7 @@ static int patch_exfat_partition(FILE* output, const PARTITION_INPUT* partition)
     }
 
     region_size = EXFAT_BOOT_REGION_SECTORS * bytes_per_sector;
-    if ((unsigned long)partition->Size < region_size)
+    if ((unsigned long long)partition->Size < region_size)
     {
         fprintf(stderr, "Error: exFAT partition image '%s' is too small.\n", partition->Path);
         return -1;
@@ -660,8 +675,8 @@ static int patch_exfat_partition(FILE* output, const PARTITION_INPUT* partition)
         return -1;
     }
 
-    output_offset = (long)partition->StartSector * SECTOR_SIZE;
-    if (fseek(output, output_offset, SEEK_SET) != 0 ||
+    output_offset = (mkd_off_t)partition->StartSector * SECTOR_SIZE;
+    if (MKD_FSEEK(output, output_offset, SEEK_SET) != 0 ||
         fread(boot_region, 1, region_size, output) != region_size)
     {
         fprintf(stderr, "Error: Cannot read the exFAT boot regions from '%s'.\n",
@@ -714,8 +729,8 @@ static int patch_exfat_partition(FILE* output, const PARTITION_INPUT* partition)
 
 static int patch_ntfs_partition(FILE* output, const PARTITION_INPUT* partition)
 {
-    long backup_offset;
-    long output_offset;
+    mkd_off_t backup_offset;
+    mkd_off_t output_offset;
 
     if (read_le16(partition->BootSector + FAT_BPB_BYTES_PER_SECTOR_OFFSET) !=
             SECTOR_SIZE ||
@@ -727,7 +742,7 @@ static int patch_ntfs_partition(FILE* output, const PARTITION_INPUT* partition)
         return -1;
     }
 
-    output_offset = (long)partition->StartSector * SECTOR_SIZE;
+    output_offset = (mkd_off_t)partition->StartSector * SECTOR_SIZE;
     backup_offset = output_offset + partition->Size - SECTOR_SIZE;
     if (write_le16_at(output,
                       output_offset + NTFS_SECTORS_PER_TRACK_OFFSET,
@@ -993,7 +1008,7 @@ static int write_dynamic_vhd(FILE* dst, FILE* src, unsigned long long virtual_si
     if (write_zero_bytes(dst, bat_size) != 0)
         goto cleanup;
 
-    if (fseek(src, 0, SEEK_SET) != 0)
+    if (MKD_FSEEK(src, 0, SEEK_SET) != 0)
         goto cleanup;
 
     for (block_index = 0; block_index < block_count; block_index++)
@@ -1001,24 +1016,24 @@ static int write_dynamic_vhd(FILE* dst, FILE* src, unsigned long long virtual_si
         unsigned long long remaining = virtual_size - block_index * (unsigned long long)VHD_BLOCK_SIZE;
         unsigned int block_bytes = remaining > VHD_BLOCK_SIZE ? VHD_BLOCK_SIZE : (unsigned int)remaining;
         unsigned int data_sectors = (block_bytes + SECTOR_SIZE - 1) / SECTOR_SIZE;
-        long block_file_offset;
+        mkd_off_t block_file_offset;
         unsigned int sector_index;
-        long block_start = (long)(block_index * VHD_BLOCK_SIZE);
+        mkd_off_t block_start = (mkd_off_t)(block_index * VHD_BLOCK_SIZE);
 
-        if (next_data_offset(src, block_start, block_start + (long)block_bytes) >= block_start + (long)block_bytes)
+        if (next_data_offset(src, block_start, block_start + (mkd_off_t)block_bytes) >= block_start + (mkd_off_t)block_bytes)
             continue;
 
         memset(block_buffer, 0, VHD_BLOCK_SIZE);
         memset(bitmap_buffer, 0, bitmap_size);
 
-        if (fseek(src, block_start, SEEK_SET) != 0 ||
+        if (MKD_FSEEK(src, block_start, SEEK_SET) != 0 ||
             fread(block_buffer, 1, block_bytes, src) != block_bytes)
             goto cleanup;
 
         if (buffer_is_zero(block_buffer, block_bytes))
             continue;
 
-        block_file_offset = ftell(dst);
+        block_file_offset = MKD_FTELL(dst);
         if (block_file_offset < 0 || (block_file_offset % SECTOR_SIZE) != 0)
             goto cleanup;
         bat[block_index] = (unsigned int)(block_file_offset / SECTOR_SIZE);
@@ -1038,7 +1053,7 @@ static int write_dynamic_vhd(FILE* dst, FILE* src, unsigned long long virtual_si
     if (fwrite(footer, 1, sizeof(footer), dst) != sizeof(footer))
         goto cleanup;
 
-    if (fseek(dst, (long)table_offset, SEEK_SET) != 0)
+    if (MKD_FSEEK(dst, (mkd_off_t)table_offset, SEEK_SET) != 0)
         goto cleanup;
 
     for (block_index = 0; block_index < block_count; block_index++)
@@ -1155,7 +1170,7 @@ static int write_dynamic_vhdx(FILE* dst, FILE* src, unsigned long long virtual_s
     memcpy(buffer, "vhdxfile", 8);
     for (i = 0; creator[i] != '\0'; i++)
         buffer[8 + i * 2] = (unsigned char)creator[i];
-    if (fseek(dst, 0, SEEK_SET) != 0 || fwrite(buffer, 1, 64 * 1024, dst) != 64 * 1024)
+    if (MKD_FSEEK(dst, 0, SEEK_SET) != 0 || fwrite(buffer, 1, 64 * 1024, dst) != 64 * 1024)
         goto cleanup;
 
     for (i = 0; i < 2; i++)
@@ -1214,19 +1229,19 @@ static int write_dynamic_vhdx(FILE* dst, FILE* src, unsigned long long virtual_s
         write_zero_bytes(dst, VHDX_METADATA_SIZE - 2 * 64 * 1024) != 0)
         goto cleanup;
 
-    if (fseek(src, 0, SEEK_SET) != 0 || fseek(dst, (long)next_offset, SEEK_SET) != 0)
+    if (MKD_FSEEK(src, 0, SEEK_SET) != 0 || MKD_FSEEK(dst, (mkd_off_t)next_offset, SEEK_SET) != 0)
         goto cleanup;
     for (block_index = 0; block_index < block_count; block_index++)
     {
         unsigned long long remaining = virtual_size - block_index * (unsigned long long)VHDX_BLOCK_SIZE;
         size_t block_bytes = remaining > VHDX_BLOCK_SIZE ? VHDX_BLOCK_SIZE : (size_t)remaining;
-        long block_start = (long)(block_index * VHDX_BLOCK_SIZE);
+        mkd_off_t block_start = (mkd_off_t)(block_index * VHDX_BLOCK_SIZE);
 
-        if (next_data_offset(src, block_start, block_start + (long)block_bytes) >= block_start + (long)block_bytes)
+        if (next_data_offset(src, block_start, block_start + (mkd_off_t)block_bytes) >= block_start + (mkd_off_t)block_bytes)
             continue;
 
         memset(block, 0, VHDX_BLOCK_SIZE);
-        if (fseek(src, block_start, SEEK_SET) != 0 ||
+        if (MKD_FSEEK(src, block_start, SEEK_SET) != 0 ||
             fread(block, 1, block_bytes, src) != block_bytes)
             goto cleanup;
         if (buffer_is_zero(block, block_bytes))
@@ -1238,7 +1253,7 @@ static int write_dynamic_vhdx(FILE* dst, FILE* src, unsigned long long virtual_s
         next_offset += VHDX_BLOCK_SIZE;
     }
 
-    if (fseek(dst, (long)VHDX_BAT_OFFSET, SEEK_SET) != 0)
+    if (MKD_FSEEK(dst, (mkd_off_t)VHDX_BAT_OFFSET, SEEK_SET) != 0)
         goto cleanup;
     for (block_index = 0; block_index < bat_entries; block_index++)
     {
@@ -1277,7 +1292,7 @@ int main(int argc, char* argv[])
     FILE* f_mbr = NULL;
     unsigned char mbr_sector[SECTOR_SIZE];
     unsigned long long total_sectors = 0;
-    long total_size;
+    mkd_off_t total_size;
     unsigned int index;
     int i;
     int ret = 1;
@@ -1533,7 +1548,7 @@ int main(int argc, char* argv[])
                 fprintf(stderr, "Error: Blank partition %u is too large for this host.\n", index + 1);
                 goto cleanup;
             }
-            partition->Size = (long)partition_size;
+            partition->Size = (mkd_off_t)partition_size;
         }
         else
         {
@@ -1543,13 +1558,13 @@ int main(int argc, char* argv[])
                 fprintf(stderr, "Error: Cannot open partition image '%s'.\n", partition->Path);
                 goto cleanup;
             }
-            if (fseek(partition->File, 0, SEEK_END) != 0 || (partition->Size = ftell(partition->File)) <= 0 ||
-                (!partition->Data && partition->Size % SECTOR_SIZE != 0) || fseek(partition->File, 0, SEEK_SET) != 0)
+            if (MKD_FSEEK(partition->File, 0, SEEK_END) != 0 || (partition->Size = MKD_FTELL(partition->File)) <= 0 ||
+                (!partition->Data && partition->Size % SECTOR_SIZE != 0) || MKD_FSEEK(partition->File, 0, SEEK_SET) != 0)
             {
                 fprintf(stderr, "Error: Partition image '%s' has an invalid size.\n", partition->Path);
                 goto cleanup;
             }
-            if (fread(partition->BootSector, 1, sizeof(partition->BootSector), partition->File) != sizeof(partition->BootSector) || fseek(partition->File, 0, SEEK_SET) != 0)
+            if (fread(partition->BootSector, 1, sizeof(partition->BootSector), partition->File) != sizeof(partition->BootSector) || MKD_FSEEK(partition->File, 0, SEEK_SET) != 0)
             {
                 fprintf(stderr, "Error: Cannot read partition boot sector from '%s'.\n", partition->Path);
                 goto cleanup;
@@ -1673,12 +1688,12 @@ int main(int argc, char* argv[])
         entry->LBASize = total_sectors - 1 > 0xFFFFFFFFULL ? 0xFFFFFFFFU : (unsigned int)(total_sectors - 1);
     }
 
-    if (total_sectors > (unsigned long long)LONG_MAX / SECTOR_SIZE)
+    if (total_sectors > (unsigned long long)LLONG_MAX / SECTOR_SIZE)
     {
         fprintf(stderr, "Error: Output image is too large for this host.\n");
         goto cleanup;
     }
-    total_size = (long)(total_sectors * SECTOR_SIZE);
+    total_size = (mkd_off_t)(total_sectors * SECTOR_SIZE);
     write_le32(mbr_sector + MBR_BOOT_CODE_SIZE, disk_signature);
     mbr_sector[MBR_SIGNATURE_OFFSET] = 0x55;
     mbr_sector[MBR_SIGNATURE_OFFSET + 1] = 0xAA;
@@ -1703,7 +1718,7 @@ int main(int argc, char* argv[])
     }
 
     if (initialize_zeroed_file(f_output, total_size) != 0 ||
-        fseek(f_output, 0, SEEK_SET) != 0 ||
+        MKD_FSEEK(f_output, 0, SEEK_SET) != 0 ||
         fwrite(mbr_sector, 1, sizeof(mbr_sector), f_output) != sizeof(mbr_sector))
     {
         fprintf(stderr, "Error: Cannot initialize the output disk image.\n");
@@ -1713,13 +1728,13 @@ int main(int argc, char* argv[])
     for (index = 0; index < partition_count; index++)
     {
         PARTITION_INPUT* partition = &partitions[index];
-        long output_offset = (long)partition->StartSector * SECTOR_SIZE;
+        mkd_off_t output_offset = (mkd_off_t)partition->StartSector * SECTOR_SIZE;
 
         if (partition->Blank)
             continue;
 
-        if (fseek(f_output, output_offset, SEEK_SET) != 0 ||
-            fseek(partition->File, 0, SEEK_SET) != 0 ||
+        if (MKD_FSEEK(f_output, output_offset, SEEK_SET) != 0 ||
+            MKD_FSEEK(partition->File, 0, SEEK_SET) != 0 ||
             copy_file_data(f_output, partition->File, partition->Size) != 0 ||
             fflush(f_output) != 0)
         {
@@ -1747,8 +1762,8 @@ int main(int argc, char* argv[])
             goto cleanup;
         }
         build_gpt_header(header, last_lba, 1, last_lba - GPT_ENTRY_SECTORS, last_lba, gpt_entries);
-        if (write_data_at(f_output, (long)(last_lba - GPT_ENTRY_SECTORS) * SECTOR_SIZE, gpt_entries, GPT_ENTRY_COUNT * GPT_ENTRY_SIZE) != 0 ||
-            write_data_at(f_output, (long)last_lba * SECTOR_SIZE, header, sizeof(header)) != 0)
+        if (write_data_at(f_output, (mkd_off_t)(last_lba - GPT_ENTRY_SECTORS) * SECTOR_SIZE, gpt_entries, GPT_ENTRY_COUNT * GPT_ENTRY_SIZE) != 0 ||
+            write_data_at(f_output, (mkd_off_t)last_lba * SECTOR_SIZE, header, sizeof(header)) != 0)
         {
             fprintf(stderr, "Error: Cannot write the backup GPT.\n");
             goto cleanup;
@@ -1757,7 +1772,7 @@ int main(int argc, char* argv[])
 
     for (index = 0; index < blob_count; index++)
     {
-        if (write_data_at(f_output, (long)blobs[index].StartSector * SECTOR_SIZE,
+        if (write_data_at(f_output, (mkd_off_t)blobs[index].StartSector * SECTOR_SIZE,
                           blobs[index].Data, (size_t)blobs[index].Size) != 0 ||
             fflush(f_output) != 0)
         {
@@ -1768,7 +1783,7 @@ int main(int argc, char* argv[])
 
     if (output_format == OUTPUT_FORMAT_VHD || output_format == OUTPUT_FORMAT_VHDX)
     {
-        if (fflush(f_output) != 0 || fseek(f_output, 0, SEEK_SET) != 0)
+        if (fflush(f_output) != 0 || MKD_FSEEK(f_output, 0, SEEK_SET) != 0)
         {
             fprintf(stderr, "Error: Cannot rewind staged raw image for VHD output.\n");
             goto cleanup;
@@ -1789,11 +1804,11 @@ int main(int argc, char* argv[])
         }
     }
 
-    printf("Created %s '%s' (%ld bytes virtual disk, %u partition%s)\n",
+    printf("Created %s '%s' (%lld bytes virtual disk, %u partition%s)\n",
            output_format == OUTPUT_FORMAT_VHDX ? "dynamic VHDX image" :
            output_format == OUTPUT_FORMAT_VHD ? "dynamic VHD image" : "disk image",
            output_path,
-           total_size,
+           (long long)total_size,
            partition_count,
            partition_count == 1 ? "" : "s");
     ret = 0;
