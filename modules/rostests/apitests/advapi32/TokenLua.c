@@ -437,7 +437,7 @@ START_TEST(TokenLua)
     /* Linking needs SeTcbPrivilege */
     Enable.PrivilegeCount = 1;
     Enable.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-    LookupPrivilegeValueW(NULL, SE_TCB_NAME, &Enable.Privileges[0].Luid);
+    LookupPrivilegeValueW(NULL, L"SeTcbPrivilege", &Enable.Privileges[0].Luid);
     AdjustTokenPrivileges(Process, FALSE, &Enable, 0, NULL, NULL);
     if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
     {

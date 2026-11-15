@@ -1005,11 +1005,13 @@ CheckElevationCallerToken(
         return ERROR_ACCESS_DENIED;
     if (GetTokenIntegrityRid(hToken) < SECURITY_MANDATORY_MEDIUM_RID)
         return ERROR_ACCESS_DENIED;
-    if (GetTokenDword(hToken, TokenIsAppContainer, &Value) && Value != 0)
+    /* A sandbox question the kernel cannot answer is a refusal, not a pass */
+    if (!GetTokenDword(hToken, TokenIsAppContainer, &Value) || Value != 0)
         return ERROR_ACCESS_DENIED;
-    if (IsTokenRestricted(hToken))
+    SetLastError(ERROR_SUCCESS);
+    if (IsTokenRestricted(hToken) || GetLastError() != ERROR_SUCCESS)
         return ERROR_ACCESS_DENIED;
-    if (GetTokenDword(hToken, TokenSandBoxInert, &Value) && Value != 0)
+    if (!GetTokenDword(hToken, TokenSandBoxInert, &Value) || Value != 0)
         return ERROR_ACCESS_DENIED;
     if (RequireLimited &&
         (!GetTokenDword(hToken, TokenElevationType, &Value) || Value != TokenElevationTypeLimited))
@@ -1208,7 +1210,8 @@ fail:
 }
 
 /* consent.exe runs as SYSTEM in the caller's session on the caller's desktop and
- * answers with its exit code. */
+ * answers with its exit code. A prompt nobody answers ends as a refusal. */
+#define CONSENT_TIMEOUT_MS  (2 * 60 * 1000)
 static
 DWORD
 AskConsent(
@@ -1257,9 +1260,15 @@ AskConsent(
         dwError = GetLastError();
         goto done;
     }
-    WaitForSingleObject(ProcessInfo.hProcess, INFINITE);
-    if (GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode))
+    if (WaitForSingleObject(ProcessInfo.hProcess, CONSENT_TIMEOUT_MS) != WAIT_OBJECT_0)
+    {
+        TerminateProcess(ProcessInfo.hProcess, IDNO);
+        WaitForSingleObject(ProcessInfo.hProcess, 5000);
+    }
+    else if (GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode))
+    {
         *Allowed = (ExitCode == IDYES);
+    }
     CloseHandle(ProcessInfo.hThread);
     CloseHandle(ProcessInfo.hProcess);
 

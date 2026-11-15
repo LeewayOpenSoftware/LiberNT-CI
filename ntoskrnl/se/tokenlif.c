@@ -963,7 +963,7 @@ SepIsAdminClassSid(
     {
         for (i = 0; i < RTL_NUMBER_OF(DomainAdminRids); i++)
         {
-            if (Isid->SubAuthority[4] == DomainAdminRids[i])
+            if (*RtlSubAuthoritySid(Sid, 4) == DomainAdminRids[i])
                 return TRUE;
         }
     }

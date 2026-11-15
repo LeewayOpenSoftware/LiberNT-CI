@@ -9,6 +9,7 @@
 
 #include <winuser.h>
 #include <lm.h>
+#include <sddl.h>
 #include <seclogon_c.h>
 
 #ifndef TokenElevationTypeLimited
@@ -18,6 +19,8 @@
 #define ELEV_TEST_USER     L"LntElevationTest"
 #define ELEV_TEST_PASSWORD L"Lnt!Elevation#2026q"
 #define ELEV_POLICY_KEY    L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
+#define ELEV_CONSENT_TITLE L"User Account Control"
+#define ELEV_IMAGE_DIR     L"\\Temp\\LntElevation"
 
 /* Child exit codes: the broker's error for the 'call' modes, a bit mask for 'elev' */
 #define ELEV_CHILD_UNEXPECTED   0x10000000
@@ -78,12 +81,33 @@ GetTokenDword(HANDLE Token, TOKEN_INFORMATION_CLASS Class, DWORD *Value)
     return GetTokenInformation(Token, Class, Value, sizeof(*Value), &Size);
 }
 
+/* Runs a command with our own environment and returns its exit code (control run) */
+static
+DWORD
+RunPlain(PWSTR Cmd)
+{
+    STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
+    PROCESS_INFORMATION ProcessInfo;
+    DWORD ExitCode = 0xffffffff;
+
+    if (!CreateProcessW(NULL, Cmd, NULL, NULL, FALSE, CREATE_NO_WINDOW, NULL, NULL, &StartupInfo, &ProcessInfo))
+        return ExitCode;
+    if (WaitForSingleObject(ProcessInfo.hProcess, 30000) == WAIT_OBJECT_0)
+        GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode);
+    else
+        TerminateProcess(ProcessInfo.hProcess, 0);
+    CloseHandle(ProcessInfo.hThread);
+    CloseHandle(ProcessInfo.hProcess);
+    return ExitCode;
+}
+
 /* 'call': return the broker's answer for a harmless command.
+ * 'callapp': the same for the image named by Extra (the prompt, when the policy asks for one).
  * 'elev': expect an elevated start and check what came back (bit mask).
  * 'imp': call while impersonating the inherited token of another logon. */
 static
 DWORD
-RunChild(PCSTR Mode, HANDLE Inherited)
+RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
 {
     SECL_RESPONSE Response;
     WCHAR SystemDir[MAX_PATH], Cmd[MAX_PATH + 64], Subst[MAX_PATH + 16];
@@ -98,6 +122,12 @@ RunChild(PCSTR Mode, HANDLE Inherited)
     if (!strcmp(Mode, "call"))
         return CallBroker(Cmd, NULL, &Response);
 
+    if (!strcmp(Mode, "callapp"))
+    {
+        StringCchPrintfW(Cmd, _countof(Cmd), L"\"%ls\" /c exit 0", Extra);
+        return CallBroker(Cmd, Extra, &Response);
+    }
+
     if (!strcmp(Mode, "imp"))
     {
         if (!SetThreadToken(NULL, Inherited))
@@ -107,14 +137,17 @@ RunChild(PCSTR Mode, HANDLE Inherited)
         return dwError;
     }
 
-    /* elev: a variable of ours must not reach the elevated side (cmd's 'set X' exits 1 when X is undefined) */
+    /* elev: a variable of ours must not reach the elevated side (cmd's 'set X' exits 1 when X is
+     * undefined). The control run with our own environment must see it, or the check is void. */
     SetEnvironmentVariableW(L"LNT_ELEVATION_TEST", L"1");
+    if (RunPlain(Cmd) != 0)
+        Failures |= 0x100;
     dwError = CallBroker(Cmd, NULL, &Response);
     if (dwError != ERROR_SUCCESS)
         return ELEV_CHILD_UNEXPECTED | dwError;
     hProcess = (HANDLE)Response.hProcess;
     if (hProcess == NULL)
-        return 0x1;
+        return Failures | 0x1;
     if (Response.hThread != 0)
         Failures |= 0x2;
 
@@ -151,37 +184,57 @@ RunChild(PCSTR Mode, HANDLE Inherited)
 
 static
 BOOL
-StartChild(HANDLE Token, PCSTR Mode, HANDLE Inherited, DWORD *ExitCode)
+StartChildAsync(HANDLE Token, PCSTR Mode, HANDLE Inherited, PCWSTR Extra, HANDLE *phChild)
 {
-    SECURITY_ATTRIBUTES Inheritable = { sizeof(Inheritable), NULL, TRUE };
     STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
     PROCESS_INFORMATION ProcessInfo;
-    WCHAR Exe[MAX_PATH], CommandLine[MAX_PATH + 64];
+    WCHAR Exe[MAX_PATH], CommandLine[2 * MAX_PATH + 64];
     HANDLE Dup = NULL;
     BOOL Ret;
 
-    *ExitCode = 0xffffffff;
+    *phChild = NULL;
     if (!GetModuleFileNameW(NULL, Exe, _countof(Exe)))
         return FALSE;
     if (Inherited != NULL &&
         !DuplicateHandle(GetCurrentProcess(), Inherited, GetCurrentProcess(), &Dup, 0, TRUE, DUPLICATE_SAME_ACCESS))
         return FALSE;
-    StringCchPrintfW(CommandLine, _countof(CommandLine), L"\"%ls\" Elevation child %hs %p", Exe, Mode, Dup);
+    StringCchPrintfW(CommandLine, _countof(CommandLine), L"\"%ls\" Elevation child %hs %p \"%ls\"", Exe, Mode, Dup,
+                     Extra ? Extra : L"");
     Ret = CreateProcessAsUserW(Token, Exe, CommandLine, NULL, NULL, Dup != NULL, CREATE_NO_WINDOW, NULL, NULL,
                                &StartupInfo, &ProcessInfo);
     if (Ret)
     {
-        if (WaitForSingleObject(ProcessInfo.hProcess, 60000) == WAIT_OBJECT_0)
-            GetExitCodeProcess(ProcessInfo.hProcess, ExitCode);
-        else
-            TerminateProcess(ProcessInfo.hProcess, 0);
         CloseHandle(ProcessInfo.hThread);
-        CloseHandle(ProcessInfo.hProcess);
+        *phChild = ProcessInfo.hProcess;
     }
     if (Dup != NULL)
         CloseHandle(Dup);
-    if (Inheritable.bInheritHandle) {}
     return Ret;
+}
+
+static
+void
+WaitChild(HANDLE hChild, DWORD Timeout, DWORD *ExitCode)
+{
+    *ExitCode = 0xffffffff;
+    if (WaitForSingleObject(hChild, Timeout) == WAIT_OBJECT_0)
+        GetExitCodeProcess(hChild, ExitCode);
+    else
+        TerminateProcess(hChild, 0);
+    CloseHandle(hChild);
+}
+
+static
+BOOL
+StartChild(HANDLE Token, PCSTR Mode, HANDLE Inherited, DWORD *ExitCode)
+{
+    HANDLE hChild;
+
+    *ExitCode = 0xffffffff;
+    if (!StartChildAsync(Token, Mode, Inherited, NULL, &hChild))
+        return FALSE;
+    WaitChild(hChild, 60000, ExitCode);
+    return TRUE;
 }
 
 /* Lowers a copy of our token to Low integrity */
@@ -243,6 +296,95 @@ RestorePolicyDword(PCWSTR Name, DWORD Previous, BOOL HadValue)
     RegCloseKey(hKey);
 }
 
+/* A prompt that is open: the image stays open underneath it (its directory cannot be
+ * renamed), a second request of the logon is busy, and closing the prompt is a refusal. */
+static
+void
+TestOpenPrompt(HANDLE Lua)
+{
+    WCHAR Dir[MAX_PATH], Moved[MAX_PATH], Image[MAX_PATH], Source[MAX_PATH];
+    SECURITY_ATTRIBUTES Readable = { sizeof(Readable), NULL, FALSE };
+    HANDLE hChild = NULL;
+    HWND hwndPrompt = NULL;
+    DWORD ExitCode, Previous = 0, Tick;
+    BOOL HadValue = FALSE, Ret;
+
+    if (!GetWindowsDirectoryW(Dir, _countof(Dir)) || !GetSystemDirectoryW(Source, _countof(Source)))
+        return;
+    StringCchCatW(Dir, _countof(Dir), ELEV_IMAGE_DIR);
+    StringCchPrintfW(Moved, _countof(Moved), L"%ls.moved", Dir);
+    StringCchPrintfW(Image, _countof(Image), L"%ls\\cmd.exe", Dir);
+    StringCchCatW(Source, _countof(Source), L"\\cmd.exe");
+    /* Everyone reads and runs, so the limited caller can name the copy */
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:(A;OICI;GRGX;;;WD)(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)",
+                                                              SDDL_REVISION_1, &Readable.lpSecurityDescriptor, NULL))
+    {
+        skip("Cannot build the image directory's descriptor: %lu\n", GetLastError());
+        return;
+    }
+    RemoveDirectoryW(Moved);
+    if (!CreateDirectoryW(Dir, &Readable) && GetLastError() != ERROR_ALREADY_EXISTS)
+    {
+        skip("Cannot create the image directory: %lu\n", GetLastError());
+        goto Cleanup;
+    }
+    if (!CopyFileW(Source, Image, FALSE))
+    {
+        skip("Cannot copy the image: %lu\n", GetLastError());
+        goto Cleanup;
+    }
+    if (!SetPolicyDword(L"ConsentPromptBehaviorAdmin", 2, &Previous, &HadValue))
+    {
+        skip("Cannot set the consent policy\n");
+        goto Cleanup;
+    }
+
+    Ret = StartChildAsync(Lua, "callapp", NULL, Image, &hChild);
+    ok(Ret, "Starting the prompting child failed: %lu\n", GetLastError());
+    if (!Ret)
+        goto Restore;
+    for (Tick = 0; Tick < 300 && hwndPrompt == NULL; Tick++)
+    {
+        hwndPrompt = FindWindowW(NULL, ELEV_CONSENT_TITLE);
+        if (hwndPrompt == NULL)
+        {
+            if (WaitForSingleObject(hChild, 0) == WAIT_OBJECT_0)
+                break;
+            Sleep(100);
+        }
+    }
+    if (hwndPrompt == NULL)
+    {
+        WaitChild(hChild, 1000, &ExitCode);
+        ok(FALSE, "No consent prompt appeared (child exit %lu)\n", ExitCode);
+        goto Restore;
+    }
+
+    Ret = MoveFileW(Dir, Moved);
+    ok(!Ret, "The image directory could be renamed while the prompt is open\n");
+    if (Ret)
+        MoveFileW(Moved, Dir);
+
+    Ret = StartChild(Lua, "call", NULL, &ExitCode);
+    ok(Ret && ExitCode == ERROR_BUSY, "Second request during the prompt: ret %d, error %lu\n", Ret, ExitCode);
+
+    PostMessageW(hwndPrompt, WM_CLOSE, 0, 0);
+    WaitChild(hChild, 30000, &ExitCode);
+    ok(ExitCode == ERROR_CANCELLED, "Closed prompt: expected ERROR_CANCELLED, got %lu\n", ExitCode);
+
+    Ret = MoveFileW(Dir, Moved);
+    ok(Ret, "The image directory cannot be renamed after the prompt: %lu\n", GetLastError());
+    if (Ret)
+        MoveFileW(Moved, Dir);
+
+Restore:
+    RestorePolicyDword(L"ConsentPromptBehaviorAdmin", Previous, HadValue);
+Cleanup:
+    DeleteFileW(Image);
+    RemoveDirectoryW(Dir);
+    LocalFree(Readable.lpSecurityDescriptor);
+}
+
 /* SeTcb + a local user: a real pair (LUA token of one logon linked to the full token of
  * another), policy 0 so no dialog is needed, and the elevated start itself. */
 static
@@ -299,7 +441,7 @@ TestPairedCaller(void)
     ok(Ret, "Starting the limited child failed: %lu\n", GetLastError());
     ok(Ret && ExitCode == 0, "Elevated start failures: 0x%lx (1 no handle, 2 thread handle, 4 WriteProcessMemory allowed, "
        "8 not elevated, 10 token not readable, 20 no exit, 40 caller environment visible, 80 subst image accepted, "
-       "10000000+err broker error)\n", ExitCode);
+       "100 control run blind to the variable, 10000000+err broker error)\n", ExitCode);
 
     /* A thread impersonating the other logon of the same user is refused */
     if (DuplicateTokenEx(T1, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenImpersonation, &Imp))
@@ -309,6 +451,8 @@ TestPairedCaller(void)
     }
 
     RestorePolicyDword(L"ConsentPromptBehaviorAdmin", Previous, HadValue);
+
+    TestOpenPrompt(Lua2);
 
 Cleanup:
     if (Imp) CloseHandle(Imp);
@@ -329,7 +473,13 @@ START_TEST(Elevation)
     BOOL Ret;
 
     if (Argc >= 5 && !strcmp(Argv[2], "child"))
-        ExitProcess(RunChild(Argv[3], (HANDLE)(ULONG_PTR)strtoull(Argv[4], NULL, 16)));
+    {
+        WCHAR Extra[MAX_PATH] = L"";
+
+        if (Argc >= 6)
+            MultiByteToWideChar(CP_ACP, 0, Argv[5], -1, Extra, _countof(Extra));
+        ExitProcess(RunChild(Argv[3], (HANDLE)(ULONG_PTR)strtoull(Argv[4], NULL, 16), Extra));
+    }
 
     /* Our own call: a non-limited caller is sent to the credentials path */
     dwError = CallBroker(L"cmd.exe /c exit 0", NULL, &Response);
@@ -369,7 +519,7 @@ START_TEST(Elevation)
     /* The elevated start itself needs SeTcbPrivilege and a local user */
     Enable.PrivilegeCount = 1;
     Enable.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
-    LookupPrivilegeValueW(NULL, SE_TCB_NAME, &Enable.Privileges[0].Luid);
+    LookupPrivilegeValueW(NULL, L"SeTcbPrivilege", &Enable.Privileges[0].Luid);
     AdjustTokenPrivileges(Process, FALSE, &Enable, 0, NULL, NULL);
     if (GetLastError() == ERROR_NOT_ALL_ASSIGNED)
         skip("SeTcbPrivilege is not held; the paired-caller checks need to run as SYSTEM\n");
