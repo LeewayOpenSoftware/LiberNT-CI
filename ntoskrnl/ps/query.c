@@ -3881,6 +3881,51 @@ NtSetInformationProcess(
     return Status;
 }
 
+/* Copies the ideal processor of a thread to its TEB. The TEB is memory of the
+ * thread's process: it is written in that process, and it may be gone or
+ * read-only, in which case the copy is skipped. */
+static
+VOID
+PspSaveIdealProcessorInTeb(
+    _In_ PETHREAD Thread)
+{
+    PEPROCESS Process = (PEPROCESS)Thread->ThreadsProcess;
+    KAPC_STATE ApcState;
+    BOOLEAN Attached = FALSE;
+    PTEB Teb;
+
+    PAGED_CODE();
+
+    /* The TEB stays the thread's until the thread is run down */
+    if (!ExAcquireRundownProtection(&Thread->RundownProtect))
+        return;
+
+    Teb = Thread->Tcb.Teb;
+    if (Teb != NULL)
+    {
+        if (Process != PsGetCurrentProcess())
+        {
+            KeStackAttachProcess(&Process->Pcb, &ApcState);
+            Attached = TRUE;
+        }
+
+        _SEH2_TRY
+        {
+            Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            /* The scheduler has the value; only the copy is lost */
+        }
+        _SEH2_END;
+
+        if (Attached)
+            KeUnstackDetachProcess(&ApcState);
+    }
+
+    ExReleaseRundownProtection(&Thread->RundownProtect);
+}
+
 /*
  * @implemented
  */
@@ -4343,16 +4388,8 @@ NtSetInformationThread(
             Status = KeSetIdealProcessorThread(&Thread->Tcb,
                                                (CCHAR)IdealProcessor);
 
-            /* Get the TEB and protect the thread */
-            Teb = Thread->Tcb.Teb;
-            if (Teb && ExAcquireRundownProtection(&Thread->RundownProtect))
-            {
-                /* Save the ideal processor */
-                Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
-
-                /* Release rundown protection */
-                ExReleaseRundownProtection(&Thread->RundownProtect);
-            }
+            /* Save the ideal processor in the TEB */
+            PspSaveIdealProcessorInTeb(Thread);
 
             /* Dereference the thread */
             ObDereferenceObject(Thread);
@@ -4534,26 +4571,40 @@ NtSetInformationThread(
 #endif
                     if (Teb)
                     {
-                        /* Check if we're in the expansion range */
-                        if (TlsIndex > TLS_MINIMUM_AVAILABLE - 1)
+                        /* The TEB is the thread's own memory: it can be gone,
+                         * and the address of the expansion slots in it is
+                         * whatever the process put there */
+                        _SEH2_TRY
                         {
-                            if (TlsIndex < (TLS_MINIMUM_AVAILABLE +
-                                            TLS_EXPANSION_SLOTS) - 1)
+                            /* Check if we're in the expansion range */
+                            if (TlsIndex > TLS_MINIMUM_AVAILABLE - 1)
                             {
-                                /* Check if we have expansion slots */
-                                PVOID* ExpansionSlots = Teb->TlsExpansionSlots;
-                                if (ExpansionSlots)
+                                if (TlsIndex < (TLS_MINIMUM_AVAILABLE +
+                                                TLS_EXPANSION_SLOTS) - 1)
                                 {
-                                    /* Clear the index */
-                                    ExpansionSlots[TlsIndex - TLS_MINIMUM_AVAILABLE] = 0;
+                                    /* Check if we have expansion slots */
+                                    PVOID* ExpansionSlots = Teb->TlsExpansionSlots;
+                                    if (ExpansionSlots)
+                                    {
+                                        PVOID* Slot = &ExpansionSlots[TlsIndex - TLS_MINIMUM_AVAILABLE];
+
+                                        /* Clear the index, in user memory only */
+                                        ProbeForWrite(Slot, sizeof(PVOID), sizeof(PVOID));
+                                        *Slot = NULL;
+                                    }
                                 }
                             }
+                            else
+                            {
+                                /* Clear the index */
+                                Teb->TlsSlots[TlsIndex] = NULL;
+                            }
                         }
-                        else
+                        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                         {
-                            /* Clear the index */
-                            Teb->TlsSlots[TlsIndex] = NULL;
+                            /* This thread keeps its slot: go on with the next */
                         }
+                        _SEH2_END;
                     }
 
                     /* Release rundown */
@@ -4944,16 +4995,8 @@ NtSetInformationThread(
             PreviousIdealProcessor = KeSetIdealProcessorThread(&Thread->Tcb,
                                                                ProcessorNumber.Number);
 
-            /* Get the TEB and protect the thread */
-            Teb = Thread->Tcb.Teb;
-            if (Teb && ExAcquireRundownProtection(&Thread->RundownProtect))
-            {
-                /* Save the ideal processor */
-                Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
-
-                /* Release rundown protection */
-                ExReleaseRundownProtection(&Thread->RundownProtect);
-            }
+            /* Save the ideal processor in the TEB */
+            PspSaveIdealProcessorInTeb(Thread);
 
             /* On success Windows returns the previous ideal processor
              * through the same buffer */
@@ -5150,7 +5193,14 @@ NtSetInformationThread(
 
             if (NT_SUCCESS(Status))
             {
-                OldThread = InterlockedExchangePointer(&Thread->WorkOnBehalfThread, TicketThread);
+                /* The query reads this field and references the thread it
+                 * names with the lock held shared, so the thread it found
+                 * can lose its reference only after the lock is released */
+                PspLockThreadSecurityExclusive(Thread);
+                OldThread = Thread->WorkOnBehalfThread;
+                Thread->WorkOnBehalfThread = TicketThread;
+                PspUnlockThreadSecurityExclusive(Thread);
+
                 if (OldThread != NULL)
                     ObDereferenceObject(OldThread);
             }

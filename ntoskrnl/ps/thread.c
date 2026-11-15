@@ -52,10 +52,20 @@ PspUserThreadStartup(IN PKSTART_ROUTINE StartRoutine,
     }
     else
     {
-        /* Get the Locale ID and save Preferred Proc */
+        /* Get the Locale ID and save Preferred Proc. The TEB is memory of the
+         * process, which another thread can already have taken away or made
+         * read-only. */
         Teb =  NtCurrentTeb();
-        Teb->CurrentLocale = MmGetSessionLocaleId();
-        Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
+        _SEH2_TRY
+        {
+            Teb->CurrentLocale = MmGetSessionLocaleId();
+            Teb->IdealProcessor = Thread->Tcb.IdealProcessor;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            /* The thread starts without them */
+        }
+        _SEH2_END;
     }
 
     /* Check if this is a dead thread, or if we're hiding */

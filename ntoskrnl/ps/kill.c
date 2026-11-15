@@ -901,6 +901,9 @@ PspExitThread(IN NTSTATUS ExitStatus)
         /* Exit the process */
         PspExitProcess(TRUE, CurrentProcess);
 
+        /* Free any temporary WNF state names the process created */
+        ExpWnfCleanupProcess(CurrentProcess);
+
         /* Get the process token and check if we need to audit */
         PrimaryToken = PsReferencePrimaryToken(CurrentProcess);
         if (SeDetailedAuditingWithToken(PrimaryToken))
