@@ -162,6 +162,79 @@ LThemeCreateThumbnail(const WCHAR *wallpaper_path, COLORREF window_color)
     FillRect(hdc_mem, &rc_bg, white_brush);
     DeleteObject(white_brush);
 
+    if (wallpaper_path && wcslen(wallpaper_path) > 0)
+    {
+        HBITMAP hbm_wall = (HBITMAP)LoadImageW(NULL, wallpaper_path, IMAGE_BITMAP, 0, 0,
+                                               LR_LOADFROMFILE | LR_CREATEDIBSECTION);
+        if (hbm_wall)
+        {
+            BITMAP bmp_orig;
+            if (GetObjectW(hbm_wall, sizeof(bmp_orig), &bmp_orig))
+            {
+                float aspect = (float)bmp_orig.bmWidth / bmp_orig.bmHeight;
+                int scaled_w = WALL_WIDTH;
+                int scaled_h = (int)(WALL_WIDTH / aspect);
+
+                if (scaled_h > WALL_HEIGHT)
+                {
+                    scaled_h = WALL_HEIGHT;
+                    scaled_w = (int)(WALL_HEIGHT * aspect);
+                }
+
+                HDC hdc_wall = CreateCompatibleDC(hdc_mem);
+                HBITMAP old_wall = (HBITMAP)SelectObject(hdc_wall, hbm_wall);
+
+                HDC hdc_scaled = CreateCompatibleDC(hdc_mem);
+                HBITMAP hbm_scaled = CreateCompatibleBitmap(hdc_mem, scaled_w, scaled_h);
+                HBITMAP old_scaled = (HBITMAP)SelectObject(hdc_scaled, hbm_scaled);
+
+                StretchBlt(hdc_scaled, 0, 0, scaled_w, scaled_h,
+                          hdc_wall, 0, 0, bmp_orig.bmWidth, bmp_orig.bmHeight, SRCCOPY);
+
+                int x_offset = (WALL_WIDTH - scaled_w) / 2;
+                int y_offset = (WALL_HEIGHT - scaled_h) / 2;
+
+                BitBlt(hdc_mem, x_offset, y_offset, scaled_w, scaled_h,
+                       hdc_scaled, 0, 0, SRCCOPY);
+
+                SelectObject(hdc_scaled, old_scaled);
+                SelectObject(hdc_wall, old_wall);
+                DeleteDC(hdc_scaled);
+                DeleteDC(hdc_wall);
+                DeleteObject(hbm_scaled);
+            }
+            DeleteObject(hbm_wall);
+        }
+    }
+
+    HBRUSH color_brush = CreateSolidBrush(window_color);
+    RECT rc_swatch = {THUMB_WIDTH - SWATCH_SIZE, THUMB_HEIGHT - SWATCH_SIZE,
+                      THUMB_WIDTH, THUMB_HEIGHT};
+    FillRect(hdc_mem, &rc_swatch, color_brush);
+    DeleteObject(color_brush);
+
+    SelectObject(hdc_mem, old_bm);
+    DeleteDC(hdc_mem);
+    ReleaseDC(NULL, hdc);
+
+    return hbm;
+}
+
+    HBITMAP hbm = CreateCompatibleBitmap(hdc, THUMB_WIDTH, THUMB_HEIGHT);
+    if (!hbm)
+    {
+        DeleteDC(hdc_mem);
+        ReleaseDC(NULL, hdc);
+        return NULL;
+    }
+
+    HBITMAP old_bm = (HBITMAP)SelectObject(hdc_mem, hbm);
+
+    HBRUSH white_brush = CreateSolidBrush(RGB(255, 255, 255));
+    RECT rc_bg = {0, 0, THUMB_WIDTH, THUMB_HEIGHT};
+    FillRect(hdc_mem, &rc_bg, white_brush);
+    DeleteObject(white_brush);
+
     HBRUSH wall_brush = CreateSolidBrush(RGB(192, 192, 192));
     RECT rc_wall = {0, 0, WALL_WIDTH, WALL_HEIGHT};
     FillRect(hdc_mem, &rc_wall, wall_brush);
