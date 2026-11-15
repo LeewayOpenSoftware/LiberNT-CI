@@ -130,7 +130,7 @@ DisplayCharacter(
     const UCHAR* FontChar;
     PUCHAR PixelPtr;
     ULONG Height;
-    UCHAR Shift;
+    ULONG Shift;
 
     PrepareForSetPixel();
 
@@ -185,7 +185,7 @@ DisplayCharacter(
     /* Loop all pixel rows */
     for (Height = BOOTCHAR_HEIGHT; Height > 0; --Height)
     {
-        SET_PIXELS(PixelPtr, ~*FontChar >> Shift, BackColor);
+        SET_PIXELS(PixelPtr, (UCHAR)~*FontChar >> Shift, BackColor);
         PixelPtr += (SCREEN_WIDTH / 8);
         FontChar += FONT_PTR_DELTA;
     }
@@ -203,7 +203,7 @@ DisplayCharacter(
         /* Loop all pixel rows */
         for (Height = BOOTCHAR_HEIGHT; Height > 0; --Height)
         {
-            SET_PIXELS(PixelPtr, ~*FontChar << Shift, BackColor);
+            SET_PIXELS(PixelPtr, (UCHAR)~*FontChar << Shift, BackColor);
             PixelPtr += (SCREEN_WIDTH / 8);
             FontChar += FONT_PTR_DELTA;
         }
