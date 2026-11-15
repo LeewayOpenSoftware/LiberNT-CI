@@ -174,7 +174,7 @@ BEGIN
     IDS_CP_BG_EMPTY "No se encontraron imágenes en esta ubicación."
     IDS_CP_BROWSE_TITLE "Elija una carpeta que contenga imágenes."
     IDS_CP_COLOR_HEAD "Cambiar el color de las ventanas"
-    IDS_CP_COLOR_DESC "Los colores de las ventanas siguen el esquema de apariencia. Abra la configuración avanzada de apariencia para cambiarlos."
+    IDS_CP_COLOR_DESC "Elija un color para las barras de título de las ventanas."
     IDS_CP_COLOR_ADV "Configuración avanzada de apariencia..."
     IDS_CP_DISP_HEAD "Facilite la lectura de lo que aparece en la pantalla"
     IDS_CP_DISP_DESC "Puede cambiar el tamaño del texto y de otros elementos de la pantalla."
@@ -204,5 +204,6 @@ BEGIN
     IDS_CP_ORIENT_0 "Horizontal"
     IDS_CP_ORIENT_1 "Vertical"
     IDS_CP_ORIENT_2 "Horizontal (invertida)"
+    IDS_CP_COLOR_FAILED "No se pudo cambiar el color de las ventanas."
     IDS_CP_ORIENT_3 "Vertical (invertida)"
 END

@@ -124,6 +124,12 @@ BOOL LSaverSet(const WCHAR *path, UINT timeoutSeconds, BOOL active);
 /* Starts the saver with /s as a separate process; any key or mouse movement ends it. */
 BOOL LSaverTest(const WCHAR *path);
 
+/* Window colour: the active title bar colour (COLOR_ACTIVECAPTION), applied live and stored in
+ * HKCU\Control Panel\Colors\ActiveTitle. Same value the theme backend applies. LWinColorSet restores the live colour
+ * and returns FALSE when it cannot store it. */
+COLORREF LWinColorGet(void);
+BOOL LWinColorSet(COLORREF color);
+
 #ifdef __cplusplus
 }
 #endif

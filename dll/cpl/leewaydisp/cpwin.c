@@ -108,6 +108,8 @@ typedef struct PAGEDATA
     int LocCount;
     HBITMAP BgThumb;
     int PaneWidth;
+    COLORREF ColorSel;
+    RECT Swatch[16];
 } PAGEDATA;
 
 struct SHELLDATA
@@ -1102,32 +1104,63 @@ BackgroundBrowse(HWND hwnd, PAGEDATA *pd)
 
 /* WINDOW COLOR / DISPLAY / RESOLUTION *************************************/
 
+static const COLORREF Palette[16] =
+{
+    RGB(0, 102, 204), RGB(0, 120, 215), RGB(0, 153, 188), RGB(0, 153, 120),
+    RGB(16, 124, 16), RGB(107, 142, 35), RGB(255, 140, 0), RGB(209, 52, 56),
+    RGB(194, 57, 179), RGB(136, 23, 152), RGB(91, 83, 180), RGB(72, 104, 145),
+    RGB(100, 100, 100), RGB(68, 68, 68), RGB(30, 30, 30), RGB(185, 185, 185)
+};
+
 static void
-ColorSetup(PAGEDATA *pd)
+ColorSetup(HWND hwnd, PAGEDATA *pd)
 {
     AddLink(pd, ACT_ADVANCED, LK_TEXT, TRUE, IDS_CP_COLOR_ADV);
+    pd->ColorSel = LWinColorGet();
+    pd->Save = Ctl(pd, hwnd, L"BUTTON", Str(IDS_CP_BG_SAVE), BS_DEFPUSHBUTTON | WS_TABSTOP, ID_SAVE);
+    pd->Cancel = Ctl(pd, hwnd, L"BUTTON", Str(IDS_CP_CANCEL), BS_PUSHBUTTON | WS_TABSTOP, ID_CANCEL);
 }
 
 static void
 ColorLayout(PAGEDATA *pd, int w, int h)
 {
-    LINK *l = &pd->Links[0];
+    int pad = S(18), barH = S(48), i, sz = S(44), gap = S(10);
 
-    SetRect(&l->Rect, S(18), S(150), S(18) + S(300), S(172));
-    UNREFERENCED_PARAMETER(w);
-    UNREFERENCED_PARAMETER(h);
+    for (i = 0; i < 16; i++)
+    {
+        int col = i % 8, row = i / 8;
+
+        SetRect(&pd->Swatch[i], pad + col * (sz + gap), S(150) + row * (sz + gap),
+                pad + col * (sz + gap) + sz, S(150) + row * (sz + gap) + sz);
+    }
+    SetRect(&pd->Links[0].Rect, pad, S(150) + 2 * (sz + gap) + S(14), pad + S(300), S(150) + 2 * (sz + gap) + S(36));
+    MoveWindow(pd->Save, w - 2 * pad - S(180), h - barH + S(12), S(100), S(26), TRUE);
+    MoveWindow(pd->Cancel, w - pad - S(76), h - barH + S(12), S(76), S(26), TRUE);
+}
+
+static void
+ColorSave(HWND hwnd, PAGEDATA *pd)
+{
+    if (pd->ColorSel != LWinColorGet() && !LWinColorSet(pd->ColorSel))
+    {
+        Msg(hwnd, IDS_CP_COLOR_FAILED, MB_OK | MB_ICONERROR);
+        return;
+    }
+    Navigate(pd, LWPAGE_MAIN);
 }
 
 static void
 ColorPaint(HDC hdc, PAGEDATA *pd, int w, int h)
 {
-    RECT rc = { 0, 0, w, h }, t;
-    HBRUSH white = CreateSolidBrush(RGB(255, 255, 255));
-    int pad = S(18);
-    RECT sw = { pad, S(84), pad + S(64), S(84) + S(48) };
+    RECT rc = { 0, 0, w, h }, t, bar, sw = { 0, 0, 0, 0 };
+    HBRUSH white = CreateSolidBrush(RGB(255, 255, 255)), grey = CreateSolidBrush(RGB(240, 240, 240));
+    int pad = S(18), barH = S(48), i;
 
     FillRect(hdc, &rc, white);
     DeleteObject(white);
+    SetRect(&bar, 0, h - barH, w, h);
+    FillRect(hdc, &bar, grey);
+    DeleteObject(grey);
     SetBkMode(hdc, TRANSPARENT);
     SelectObject(hdc, G->HeadFont);
     SetTextColor(hdc, ColHead);
@@ -1137,10 +1170,42 @@ ColorPaint(HDC hdc, PAGEDATA *pd, int w, int h)
     SetTextColor(hdc, RGB(30, 30, 30));
     SetRect(&t, pad, S(50), w - pad, S(76));
     DrawTextW(hdc, Str(IDS_CP_COLOR_DESC), -1, &t, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
-    RoundBox(hdc, &sw, GetSysColor(COLOR_ACTIVECAPTION), RGB(120, 130, 150));
-    SetRect(&t, pad + S(76), S(94), w - pad, S(124));
-    SetTextColor(hdc, RGB(90, 90, 90));
-    DrawTextW(hdc, Str(IDS_CP_COLOR_CURRENT), -1, &t, DT_LEFT | DT_WORDBREAK | DT_NOPREFIX);
+    /* preview of the chosen colour as a title bar */
+    SetRect(&sw, pad, S(84), pad + S(260), S(84) + S(48));
+    {
+        HBRUSH frame = CreateSolidBrush(RGB(120, 130, 150)), cap = CreateSolidBrush(pd->ColorSel);
+        RECT c = sw;
+
+        FillRect(hdc, &sw, white = CreateSolidBrush(RGB(250, 250, 250)));
+        DeleteObject(white);
+        c.bottom = c.top + S(22);
+        FillRect(hdc, &c, cap);
+        FrameRect(hdc, &sw, frame);
+        DeleteObject(frame);
+        DeleteObject(cap);
+        SetTextColor(hdc, (GetRValue(pd->ColorSel) * 299 + GetGValue(pd->ColorSel) * 587 + GetBValue(pd->ColorSel) * 114) > 128000
+                          ? RGB(0, 0, 0) : RGB(255, 255, 255));
+        c.left += S(8);
+        DrawTextW(hdc, Str(IDS_CP_COLOR_CURRENT), -1, &c, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    }
+    for (i = 0; i < 16; i++)
+    {
+        HBRUSH fill = CreateSolidBrush(Palette[i]);
+        HBRUSH edge = CreateSolidBrush(pd->ColorSel == Palette[i] ? RGB(0, 70, 170) : RGB(150, 155, 165));
+        RECT r = pd->Swatch[i];
+
+        FillRect(hdc, &r, fill);
+        FrameRect(hdc, &r, edge);
+        if (pd->ColorSel == Palette[i])
+        {
+            InflateRect(&r, 2, 2);
+            FrameRect(hdc, &r, edge);
+            InflateRect(&r, 1, 1);
+            FrameRect(hdc, &r, edge);
+        }
+        DeleteObject(fill);
+        DeleteObject(edge);
+    }
     DrawTextLink(hdc, pd, &pd->Links[0], pd->Hot == 0);
 }
 
@@ -1305,7 +1370,7 @@ PageProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                     PersonalizeSetup(pd);
                     break;
                 case PG_BACKGROUND: BackgroundCreate(hwnd, pd); break;
-                case PG_COLOR: ColorSetup(pd); break;
+                case PG_COLOR: ColorSetup(hwnd, pd); break;
                 case PG_DISPLAY: DisplaySetup(pd); break;
                 case PG_RESOLUTION: ResolutionCreate(hwnd, pd); break;
             }
@@ -1399,6 +1464,21 @@ PageProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             break;
         case WM_LBUTTONUP:
+            if (pd && pd->Id == PG_COLOR)
+            {
+                POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
+                int k;
+
+                for (k = 0; k < 16; k++)
+                {
+                    if (PtInRect(&pd->Swatch[k], pt))
+                    {
+                        pd->ColorSel = Palette[k];
+                        InvalidateRect(hwnd, NULL, FALSE);
+                        return 0;
+                    }
+                }
+            }
             if (pd)
             {
                 int i = HitLink(pd, (short)LOWORD(lParam), (short)HIWORD(lParam));
@@ -1432,7 +1512,12 @@ PageProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 case ID_BROWSE: BackgroundBrowse(hwnd, pd); InvalidateRect(hwnd, NULL, FALSE); return 0;
                 case ID_POS: InvalidateRect(hwnd, NULL, FALSE); return 0;
                 case IDC_DISP_DONE: Navigate(pd, LWPAGE_DISPLAY); return 0;
-                case ID_SAVE: BackgroundSave(hwnd, pd); return 0;
+                case ID_SAVE:
+                    if (pd->Id == PG_COLOR)
+                        ColorSave(hwnd, pd);
+                    else
+                        BackgroundSave(hwnd, pd);
+                    return 0;
                 case ID_CANCEL: Navigate(pd, LWPAGE_MAIN); return 0;
                 case ID_GRID:
                     if (pd->Id == PG_BACKGROUND)

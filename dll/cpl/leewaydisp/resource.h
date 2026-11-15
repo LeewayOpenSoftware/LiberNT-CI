@@ -135,5 +135,6 @@
 #define IDS_CP_ORIENT_1          311
 #define IDS_CP_ORIENT_2          312
 #define IDS_CP_ORIENT_3          313
+#define IDS_CP_COLOR_FAILED      314
 
 #define IDC_STATIC         -1

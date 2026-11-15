@@ -174,7 +174,7 @@ BEGIN
     IDS_CP_BG_EMPTY "No pictures were found in this location."
     IDS_CP_BROWSE_TITLE "Choose a folder that contains pictures."
     IDS_CP_COLOR_HEAD "Change the color of your windows"
-    IDS_CP_COLOR_DESC "Window colors follow the appearance scheme. Open the advanced appearance settings to change them."
+    IDS_CP_COLOR_DESC "Pick a color for the title bars of your windows."
     IDS_CP_COLOR_ADV "Advanced appearance settings..."
     IDS_CP_DISP_HEAD "Make it easier to read what's on your screen"
     IDS_CP_DISP_DESC "You can change the size of text and other items on your screen."
@@ -204,5 +204,6 @@ BEGIN
     IDS_CP_ORIENT_0 "Landscape"
     IDS_CP_ORIENT_1 "Portrait"
     IDS_CP_ORIENT_2 "Landscape (flipped)"
+    IDS_CP_COLOR_FAILED "The window color could not be changed."
     IDS_CP_ORIENT_3 "Portrait (flipped)"
 END
