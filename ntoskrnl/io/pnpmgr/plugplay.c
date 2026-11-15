@@ -358,12 +358,15 @@ IopCaptureUnicodeString(PUNICODE_STRING DstName, PUNICODE_STRING SrcName)
 {
     NTSTATUS Status = STATUS_SUCCESS;
     volatile UNICODE_STRING Name;
+    PWCHAR SrcBuffer;
 
     Name.Buffer = NULL;
     _SEH2_TRY
     {
+        /* Each field is read once */
         Name.Length = SrcName->Length;
         Name.MaximumLength = SrcName->MaximumLength;
+        SrcBuffer = SrcName->Buffer;
         if (Name.Length > Name.MaximumLength)
         {
             Status = STATUS_INVALID_PARAMETER;
@@ -372,7 +375,7 @@ IopCaptureUnicodeString(PUNICODE_STRING DstName, PUNICODE_STRING SrcName)
 
         if (Name.MaximumLength)
         {
-            ProbeForRead(SrcName->Buffer,
+            ProbeForRead(SrcBuffer,
                          Name.MaximumLength,
                          sizeof(WCHAR));
             Name.Buffer = ExAllocatePool(NonPagedPool, Name.MaximumLength);
@@ -382,7 +385,7 @@ IopCaptureUnicodeString(PUNICODE_STRING DstName, PUNICODE_STRING SrcName)
                 _SEH2_LEAVE;
             }
 
-            memcpy(Name.Buffer, SrcName->Buffer, Name.MaximumLength);
+            memcpy(Name.Buffer, SrcBuffer, Name.MaximumLength);
         }
 
         *DstName = Name;
@@ -495,7 +498,8 @@ PiControlInitializeDevice(
 
     ZwClose(InstanceKey);
 done:
-    ExFreePool(DeviceInstance.Buffer);
+    if (DeviceInstance.Buffer != NULL)
+        ExFreePool(DeviceInstance.Buffer);
 
     return Status;
 }
@@ -756,10 +760,10 @@ IopGetDeviceProperty(PPLUGPLAY_CONTROL_PROPERTY_DATA PropertyData)
     ULONG Property = 0;
     DEVICE_REGISTRY_PROPERTY DeviceProperty;
     PVOID Buffer;
+    PVOID UserBuffer = NULL;
     NTSTATUS Status;
 
     DPRINT("IopGetDeviceProperty() called\n");
-    DPRINT("Device name: %wZ\n", &PropertyData->DeviceInstance);
 
     Status = IopCaptureUnicodeString(&DeviceInstance, &PropertyData->DeviceInstance);
     if (!NT_SUCCESS(Status))
@@ -771,7 +775,8 @@ IopGetDeviceProperty(PPLUGPLAY_CONTROL_PROPERTY_DATA PropertyData)
     {
         Property = PropertyData->Property;
         BufferSize = PropertyData->BufferSize;
-        ProbeForWrite(PropertyData->Buffer,
+        UserBuffer = PropertyData->Buffer;
+        ProbeForWrite(UserBuffer,
                       BufferSize,
                       sizeof(UCHAR));
     }
@@ -971,7 +976,7 @@ IopGetDeviceProperty(PPLUGPLAY_CONTROL_PROPERTY_DATA PropertyData)
     {
         _SEH2_TRY
         {
-            RtlCopyMemory(PropertyData->Buffer, Buffer, BufferSize);
+            RtlCopyMemory(UserBuffer, Buffer, BufferSize);
             PropertyData->BufferSize = BufferSize;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -994,12 +999,13 @@ IopGetRelatedDevice(PPLUGPLAY_CONTROL_RELATED_DEVICE_DATA RelatedDeviceData)
     PDEVICE_NODE DeviceNode = NULL;
     PDEVICE_NODE RelatedDeviceNode;
     UNICODE_STRING TargetDeviceInstance;
+    UNICODE_STRING RelatedPath;
+    PWCHAR UserBuffer = NULL;
     NTSTATUS Status = STATUS_SUCCESS;
     ULONG Relation = 0;
     ULONG MaximumLength = 0;
 
     DPRINT("IopGetRelatedDevice() called\n");
-    DPRINT("Device name: %wZ\n", &RelatedDeviceData->TargetDeviceInstance);
 
     Status = IopCaptureUnicodeString(&TargetDeviceInstance, &RelatedDeviceData->TargetDeviceInstance);
     if (!NT_SUCCESS(Status))
@@ -1011,7 +1017,8 @@ IopGetRelatedDevice(PPLUGPLAY_CONTROL_RELATED_DEVICE_DATA RelatedDeviceData)
     {
         Relation = RelatedDeviceData->Relation;
         MaximumLength = RelatedDeviceData->RelatedDeviceInstanceLength;
-        ProbeForWrite(RelatedDeviceData->RelatedDeviceInstance,
+        UserBuffer = RelatedDeviceData->RelatedDeviceInstance;
+        ProbeForWrite(UserBuffer,
                       MaximumLength,
                       sizeof(WCHAR));
     }
@@ -1051,28 +1058,33 @@ IopGetRelatedDevice(PPLUGPLAY_CONTROL_RELATED_DEVICE_DATA RelatedDeviceData)
         DeviceNode = IoGetDevObjExtension(DeviceObject)->DeviceNode;
     }
 
-    switch (Relation)
+    if (Relation != PNP_GET_PARENT_DEVICE &&
+        Relation != PNP_GET_CHILD_DEVICE &&
+        Relation != PNP_GET_SIBLING_DEVICE)
     {
-        case PNP_GET_PARENT_DEVICE:
-            RelatedDeviceNode = DeviceNode->Parent;
-            break;
+        if (DeviceObject != NULL)
+        {
+            ObDereferenceObject(DeviceObject);
+        }
 
-        case PNP_GET_CHILD_DEVICE:
-            RelatedDeviceNode = DeviceNode->Child;
-            break;
-
-        case PNP_GET_SIBLING_DEVICE:
-            RelatedDeviceNode = DeviceNode->Sibling;
-            break;
-
-        default:
-            if (DeviceObject != NULL)
-            {
-                ObDereferenceObject(DeviceObject);
-            }
-
-            return STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
     }
+
+    RelatedPath.Length = 0;
+    RelatedPath.Buffer = NULL;
+
+    /* The related node is not referenced. The tree resource keeps it, its
+     * links and its name in place, so the name is copied before the resource
+     * is released and the copy is what goes to the caller. */
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
+
+    if (Relation == PNP_GET_PARENT_DEVICE)
+        RelatedDeviceNode = DeviceNode->Parent;
+    else if (Relation == PNP_GET_CHILD_DEVICE)
+        RelatedDeviceNode = DeviceNode->Child;
+    else
+        RelatedDeviceNode = DeviceNode->Sibling;
 
     while (Relation != PNP_GET_PARENT_DEVICE &&
            RelatedDeviceNode != NULL &&
@@ -1083,37 +1095,54 @@ IopGetRelatedDevice(PPLUGPLAY_CONTROL_RELATED_DEVICE_DATA RelatedDeviceData)
 
     if (RelatedDeviceNode == NULL)
     {
-        if (DeviceObject)
-        {
-            ObDereferenceObject(DeviceObject);
-        }
-
-        return STATUS_NO_SUCH_DEVICE;
+        Status = STATUS_NO_SUCH_DEVICE;
     }
-
-    if (RelatedDeviceNode->InstancePath.Length > MaximumLength)
+    else if (RelatedDeviceNode->InstancePath.Length > MaximumLength)
     {
-        if (DeviceObject)
-        {
-            ObDereferenceObject(DeviceObject);
-        }
-
-        return STATUS_BUFFER_TOO_SMALL;
+        Status = STATUS_BUFFER_TOO_SMALL;
     }
+    else if (RelatedDeviceNode->InstancePath.Length != 0)
+    {
+        RelatedPath.Buffer = ExAllocatePoolWithTag(PagedPool,
+                                                   RelatedDeviceNode->InstancePath.Length,
+                                                   TAG_IO);
+        if (RelatedPath.Buffer == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            RelatedPath.Length = RelatedDeviceNode->InstancePath.Length;
+            RtlCopyMemory(RelatedPath.Buffer,
+                          RelatedDeviceNode->InstancePath.Buffer,
+                          RelatedPath.Length);
+        }
+    }
+
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 
     /* Copy related device instance name */
-    _SEH2_TRY
+    if (NT_SUCCESS(Status))
     {
-        RtlCopyMemory(RelatedDeviceData->RelatedDeviceInstance,
-                      RelatedDeviceNode->InstancePath.Buffer,
-                      RelatedDeviceNode->InstancePath.Length);
-        RelatedDeviceData->RelatedDeviceInstanceLength = RelatedDeviceNode->InstancePath.Length;
+        _SEH2_TRY
+        {
+            RtlCopyMemory(UserBuffer,
+                          RelatedPath.Buffer,
+                          RelatedPath.Length);
+            RelatedDeviceData->RelatedDeviceInstanceLength = RelatedPath.Length;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
     }
-    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+
+    if (RelatedPath.Buffer != NULL)
     {
-        Status = _SEH2_GetExceptionCode();
+        ExFreePoolWithTag(RelatedPath.Buffer, TAG_IO);
     }
-    _SEH2_END;
 
     if (DeviceObject != NULL)
     {
@@ -1334,8 +1363,7 @@ IopGetDeviceRelations(PPLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA RelationsData)
     PWCHAR Buffer = NULL, Ptr;
     NTSTATUS Status = STATUS_SUCCESS;
 
-    DPRINT1("IopGetDeviceRelations() called\n");
-    DPRINT1("Device name: %wZ\n", &RelationsData->DeviceInstance);
+    DPRINT("IopGetDeviceRelations() called\n");
     DPRINT("Relations: %lu\n", RelationsData->Relations);
     DPRINT("BufferSize: %lu\n", RelationsData->BufferSize);
     DPRINT("Buffer: %p\n", RelationsData->Buffer);
@@ -1360,6 +1388,9 @@ IopGetDeviceRelations(PPLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA RelationsData)
         DPRINT1("IopCaptureUnicodeString() failed (Status 0x%08lx)\n", Status);
         return Status;
     }
+
+    /* Log the captured copy */
+    DPRINT1("Device name: %wZ\n", &DeviceInstance);
 
     /* Get the device object */
     DeviceObject = IopGetDeviceObjectFromDeviceInstance(&DeviceInstance);
@@ -1405,7 +1436,23 @@ IopGetDeviceRelations(PPLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA RelationsData)
 
     DeviceRelations = (PDEVICE_RELATIONS)IoStatusBlock.Information;
 
-    DPRINT1("Found %d device relations\n", DeviceRelations->Count);
+    /* A driver may succeed the query and report nothing */
+    if (DeviceRelations == NULL)
+    {
+        _SEH2_TRY
+        {
+            RelationsData->BufferSize = 0;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
+
+        goto done;
+    }
+
+    DPRINT("Found %d device relations\n", DeviceRelations->Count);
 
     _SEH2_TRY
     {
@@ -1463,7 +1510,13 @@ IopGetDeviceRelations(PPLUGPLAY_CONTROL_DEVICE_RELATIONS_DATA RelationsData)
 
 done:
     if (DeviceRelations != NULL)
+    {
+        /* The driver referenced each object it reported */
+        for (i = 0; i < DeviceRelations->Count; i++)
+            ObDereferenceObject(DeviceRelations->Objects[i]);
+
         ExFreePool(DeviceRelations);
+    }
 
     if (DeviceObject != NULL)
         ObDereferenceObject(DeviceObject);
@@ -1483,7 +1536,6 @@ IopGetDeviceDepth(PPLUGPLAY_CONTROL_DEPTH_DATA DepthData)
     NTSTATUS Status = STATUS_SUCCESS;
 
     DPRINT("IopGetDeviceDepth() called\n");
-    DPRINT("Device name: %wZ\n", &DepthData->DeviceInstance);
 
     Status = IopCaptureUnicodeString(&DeviceInstance, &DepthData->DeviceInstance);
     if (!NT_SUCCESS(Status))
@@ -1694,20 +1746,75 @@ NTSTATUS
 PiControlGetInterfaceDeviceAlias(
     _In_ PPLUGPLAY_CONTROL_INTERFACE_ALIAS_DATA ControlData)
 {
+    UNICODE_STRING SymbolicLinkName;
     UNICODE_STRING AliasSymbolicLinkName;
+    GUID AliasGuid;
+    GUID *UserGuid;
+    PWSTR UserBuffer = NULL;
+    ULONG UserLength = 0;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     DPRINT("PiControlGetInterfaceDeviceAlias()\n");
-    DPRINT("SymbolicLinkName: %wZ\n", &ControlData->SymbolicLinkName);
-    DPRINT("AliasInterfaceClassGuid: %p\n", ControlData->AliasInterfaceClassGuid);
-    DPRINT("AliasSymbolicLinkName: %p\n", ControlData->AliasSymbolicLinkName);
-    DPRINT("AliasSymbolicLinkNameLength: %lu\n", ControlData->AliasSymbolicLinkNameLength);
 
-    AliasSymbolicLinkName.Length = 0;
-    AliasSymbolicLinkName.MaximumLength = ControlData->AliasSymbolicLinkNameLength;
-    AliasSymbolicLinkName.Buffer = ControlData->AliasSymbolicLinkName;
-    return IoGetDeviceInterfaceAlias(&ControlData->SymbolicLinkName,
-                                     ControlData->AliasInterfaceClassGuid,
-                                     &AliasSymbolicLinkName);
+    /* Everything in the request is the caller's memory: it is read once, into
+     * locals, and the addresses in it are checked before they are used */
+    _SEH2_TRY
+    {
+        UserGuid = ControlData->AliasInterfaceClassGuid;
+        ProbeForRead(UserGuid, sizeof(GUID), sizeof(UCHAR));
+        AliasGuid = *UserGuid;
+
+        UserBuffer = ControlData->AliasSymbolicLinkName;
+        UserLength = ControlData->AliasSymbolicLinkNameLength;
+        ProbeForWrite(UserBuffer, UserLength, sizeof(WCHAR));
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = IopCaptureUnicodeString(&SymbolicLinkName, &ControlData->SymbolicLinkName);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlInitEmptyUnicodeString(&AliasSymbolicLinkName, NULL, 0);
+    Status = IoGetDeviceInterfaceAlias(&SymbolicLinkName,
+                                       &AliasGuid,
+                                       &AliasSymbolicLinkName);
+
+    if (SymbolicLinkName.Buffer != NULL)
+        ExFreePool(SymbolicLinkName.Buffer);
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    _SEH2_TRY
+    {
+        if (AliasSymbolicLinkName.Length + sizeof(WCHAR) <= UserLength)
+        {
+            RtlCopyMemory(UserBuffer, AliasSymbolicLinkName.Buffer, AliasSymbolicLinkName.Length);
+            UserBuffer[AliasSymbolicLinkName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+        }
+        else
+        {
+            Status = STATUS_BUFFER_TOO_SMALL;
+        }
+
+        ControlData->AliasSymbolicLinkNameLength = AliasSymbolicLinkName.Length + sizeof(WCHAR);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    RtlFreeUnicodeString(&AliasSymbolicLinkName);
+
+    return Status;
 }
 
 static
@@ -1716,53 +1823,117 @@ PiControlDeviceClassAssociation(
     _In_ PPLUGPLAY_CONTROL_CLASS_ASSOCIATION_DATA ControlData)
 {
     PDEVICE_OBJECT DeviceObject = NULL;
+    UNICODE_STRING DeviceInstance;
+    UNICODE_STRING Reference;
     UNICODE_STRING SymbolicLink;
-    NTSTATUS Status;
+    GUID InterfaceGuid;
+    GUID *UserGuid;
+    PWSTR UserBuffer = NULL;
+    ULONG UserLength = 0;
+    BOOLEAN Register = FALSE;
+    NTSTATUS Status = STATUS_SUCCESS;
 
     DPRINT("PiControlDeviceClassAssociation()\n");
-    DPRINT("DeviceInstance: %wZ\n", &ControlData->DeviceInstance);
 
-    if (ControlData->Register)
+    /* Everything in the request is the caller's memory: it is read once, into
+     * locals, and the addresses in it are checked before they are used */
+    _SEH2_TRY
     {
-        if ((ControlData->DeviceInstance.Buffer == NULL) ||
-            (ControlData->DeviceInstance.Length == 0))
-            return STATUS_INVALID_PARAMETER;
-
-        if (ControlData->InterfaceGuid == NULL)
-            return STATUS_INVALID_PARAMETER;
-
-        DeviceObject = IopGetDeviceObjectFromDeviceInstance(&ControlData->DeviceInstance);
-        if (DeviceObject == NULL)
-            return STATUS_NO_SUCH_DEVICE;
-
-        Status = IoRegisterDeviceInterface(DeviceObject,
-                                           ControlData->InterfaceGuid,
-                                           &ControlData->Reference,
-                                           &SymbolicLink);
-        if (NT_SUCCESS(Status))
+        Register = (BOOLEAN)(ControlData->Register != FALSE);
+        if (Register)
         {
-            if (SymbolicLink.Length + sizeof(WCHAR) <= ControlData->SymbolicLinkNameLength)
+            UserGuid = ControlData->InterfaceGuid;
+            if (UserGuid == NULL)
             {
-                RtlCopyMemory(ControlData->SymbolicLinkName, SymbolicLink.Buffer, SymbolicLink.Length);
-                ControlData->SymbolicLinkName[SymbolicLink.Length / sizeof(WCHAR)] = UNICODE_NULL;
-                ControlData->SymbolicLinkNameLength = SymbolicLink.Length + sizeof(WCHAR);
+                Status = STATUS_INVALID_PARAMETER;
+                _SEH2_LEAVE;
+            }
+
+            ProbeForRead(UserGuid, sizeof(GUID), sizeof(UCHAR));
+            InterfaceGuid = *UserGuid;
+
+            UserBuffer = ControlData->SymbolicLinkName;
+            UserLength = ControlData->SymbolicLinkNameLength;
+            ProbeForWrite(UserBuffer, UserLength, sizeof(WCHAR));
+        }
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        Status = _SEH2_GetExceptionCode();
+    }
+    _SEH2_END;
+
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (!Register)
+    {
+        UNIMPLEMENTED;
+        return STATUS_NOT_IMPLEMENTED;
+    }
+
+    Status = IopCaptureUnicodeString(&DeviceInstance, &ControlData->DeviceInstance);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (DeviceInstance.Buffer == NULL || DeviceInstance.Length == 0)
+    {
+        if (DeviceInstance.Buffer != NULL)
+            ExFreePool(DeviceInstance.Buffer);
+
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = IopCaptureUnicodeString(&Reference, &ControlData->Reference);
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePool(DeviceInstance.Buffer);
+        return Status;
+    }
+
+    DeviceObject = IopGetDeviceObjectFromDeviceInstance(&DeviceInstance);
+    ExFreePool(DeviceInstance.Buffer);
+    if (DeviceObject == NULL)
+    {
+        if (Reference.Buffer != NULL)
+            ExFreePool(Reference.Buffer);
+
+        return STATUS_NO_SUCH_DEVICE;
+    }
+
+    Status = IoRegisterDeviceInterface(DeviceObject,
+                                       &InterfaceGuid,
+                                       &Reference,
+                                       &SymbolicLink);
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            if (SymbolicLink.Length + sizeof(WCHAR) <= UserLength)
+            {
+                RtlCopyMemory(UserBuffer, SymbolicLink.Buffer, SymbolicLink.Length);
+                UserBuffer[SymbolicLink.Length / sizeof(WCHAR)] = UNICODE_NULL;
             }
             else
             {
-                ControlData->SymbolicLinkNameLength = SymbolicLink.Length + sizeof(WCHAR);
                 Status = STATUS_BUFFER_TOO_SMALL;
             }
 
-            ExFreePool(SymbolicLink.Buffer);
+            ControlData->SymbolicLinkNameLength = SymbolicLink.Length + sizeof(WCHAR);
         }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+        }
+        _SEH2_END;
 
-        ObDereferenceObject(DeviceObject);
+        ExFreePool(SymbolicLink.Buffer);
     }
-    else
-    {
-        UNIMPLEMENTED;
-        Status = STATUS_NOT_IMPLEMENTED;
-    }
+
+    if (Reference.Buffer != NULL)
+        ExFreePool(Reference.Buffer);
+
+    ObDereferenceObject(DeviceObject);
 
     return Status;
 }

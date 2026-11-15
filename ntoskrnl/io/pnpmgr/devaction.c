@@ -3676,9 +3676,15 @@ PipRunDeviceActionRequest(
         case PiActionResetDevice:
             // TODO: the operation is a no-op for everything except removed nodes
             // for removed nodes, it returns them back to DeviceNodeUninitialized
-            if (deviceNode->State == DeviceNodeRemoved)
+            // A removed node gave up the reference that keeps its device object;
+            // a node that comes back takes it again, as in PiActionStartDevice
+            if (deviceNode->State == DeviceNodeRemoved &&
+                deviceNode->Parent != NULL &&
+                !(deviceNode->Flags & DNF_DEVICE_GONE))
             {
-                deviceNode->State = DeviceNodeUninitialized;
+                ObReferenceObject(Request->DeviceObject);
+                PiResetRemovedDevNode(deviceNode);
+                PiSetDevNodeState(deviceNode, DeviceNodeUninitialized);
             }
             status = STATUS_SUCCESS;
             break;
