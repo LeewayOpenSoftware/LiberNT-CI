@@ -778,6 +778,38 @@ co_UserActivateKeyboardLayout(
     return hOldKL;
 }
 
+VOID FASTCALL
+IntSetForegroundKeyboardLayout(_In_ HKL hKL)
+{
+    ghklForeground = hKL;
+}
+
+VOID FASTCALL
+co_IntSyncForegroundKeyboardLayout(_Inout_ PTHREADINFO pti)
+{
+    PTHREADINFO ptiPrev;
+    PKL pKL;
+
+    ASSERT(pti == PsGetCurrentThreadWin32Thread());
+
+    if (!ghklForeground || !pti->MessageQueue || pti->MessageQueue != gpqForeground || !pti->KeyboardLayout ||
+        pti->KeyboardLayout->hkl == ghklForeground || gptiSyncingLayout == pti ||
+        (pti->TIF_flags & (TIF_CSRSSTHREAD | TIF_SYSTEMTHREAD | TIF_INCLEANUP)))
+    {
+        return;
+    }
+
+    pKL = IntHKLtoPKL(pti, ghklForeground);
+    if (!pKL || (pKL->dwKL_Flags & KL_UNLOAD))
+        return;
+
+    ptiPrev = gptiSyncingLayout;
+    gptiSyncingLayout = pti;
+    co_UserActivateKeyboardLayout(pKL, 0, NULL);
+    gptiSyncingLayout = ptiPrev;
+    ASSERT(pti->KeyboardLayout == pKL || pti->MessageQueue != gpqForeground);
+}
+
 HKL APIENTRY
 co_IntActivateKeyboardLayout(
     _Inout_ PWINSTATION_OBJECT pWinSta,

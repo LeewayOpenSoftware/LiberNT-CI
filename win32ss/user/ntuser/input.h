@@ -77,6 +77,8 @@ VOID NTAPI UserProcessKeyboardInput(PKEYBOARD_INPUT_DATA pKeyInput);
 BOOL NTAPI UserSendKeyboardInput(KEYBDINPUT *pKbdInput, BOOL bInjected);
 PKL NTAPI UserHklToKbl(HKL hKl);
 BOOL NTAPI UserSetDefaultInputLang(HKL hKl);
+VOID FASTCALL co_IntSyncForegroundKeyboardLayout(_Inout_ PTHREADINFO pti);
+VOID FASTCALL IntSetForegroundKeyboardLayout(_In_ HKL hKL);
 extern DWORD gdwLanguageToggleKey;
 extern DWORD gdwLayoutToggleKey;
 extern BOOL gbEnableHexNumpad;
