@@ -1286,6 +1286,7 @@ QSI_DEF(SystemPathInformation)
 }
 
 /* Class 5 - Process Information / 57 - SystemExtendedProcessInformation  */
+#define TAG_EXP_PROCESS_INFO 'PIxE'
 static
 NTSTATUS
 ExpQuerySystemProcessInformation(
@@ -1313,6 +1314,13 @@ ExpQuerySystemProcessInformation(
     _SEH2_VOLATILE PUNICODE_STRING ProcessImageName = NULL;
     PWCHAR szSrc;
     BOOLEAN Overflow = FALSE;
+    /* The record of one process is built here under its lock and copied to the caller only
+       after the lock is released: the caller's buffer is never touched with a lock held, and
+       nothing is ever read back from it. */
+    PUCHAR _SEH2_VOLATILE Record = NULL;
+    BOOLEAN _SEH2_VOLATILE Locked = FALSE;
+    UNICODE_STRING RecordName;
+    ULONG RecordSize;
 
     _SEH2_TRY
     {
@@ -1343,6 +1351,7 @@ ExpQuerySystemProcessInformation(
             /* Lock the Process */
             KeEnterCriticalRegion();
             ExAcquirePushLockShared(&Process->ProcessLock);
+            Locked = TRUE;
 
             if ((Process->ProcessExiting) &&
                 (Process->Pcb.Header.SignalState) &&
@@ -1353,6 +1362,7 @@ ExpQuerySystemProcessInformation(
                 ImageNameMaximumLength = 0;
 
                 /* Unlock the Process */
+                Locked = FALSE;
                 ExReleasePushLockShared(&Process->ProcessLock);
                 KeLeaveCriticalRegion();
                 goto Skip;
@@ -1411,38 +1421,50 @@ ExpQuerySystemProcessInformation(
             }
 
             /* Fill system information */
+            RecordSize = CurrentSize + ImageNameMaximumLength;
             if (!Overflow)
             {
-                SpiCurrent->NextEntryOffset = CurrentSize + ImageNameMaximumLength; // relative offset to the beginning of the next structure
+                Record = ExAllocatePoolZero(PagedPool, RecordSize, TAG_EXP_PROCESS_INFO);
+                if (!Record)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    _SEH2_LEAVE;
+                }
+
+                /* SpiCurrent is the kernel record from here on; the caller gets it at Current */
+                SpiCurrent = (PSYSTEM_PROCESS_INFORMATION)Record;
+                SpiCurrent->NextEntryOffset = RecordSize; // relative offset to the beginning of the next structure
                 SpiCurrent->NumberOfThreads = ThreadsCount;
                 SpiCurrent->CreateTime = Process->CreateTime;
-                SpiCurrent->ImageName.Length = ImageNameLength;
-                SpiCurrent->ImageName.MaximumLength = ImageNameMaximumLength;
-                SpiCurrent->ImageName.Buffer = (void*)(Current + CurrentSize);
 
-                /* Copy name to the end of the struct */
-                if(Process != PsIdleProcess)
+                /* Build the name in the record; the caller sees it right after its own struct */
+                RecordName.Buffer = (PWCH)(Record + CurrentSize);
+                RecordName.Length = ImageNameLength;
+                RecordName.MaximumLength = ImageNameMaximumLength;
+                if (Process != PsIdleProcess)
                 {
                     if (szSrc)
                     {
-                        RtlCopyMemory(SpiCurrent->ImageName.Buffer, szSrc, SpiCurrent->ImageName.Length);
+                        RtlCopyMemory(RecordName.Buffer, szSrc, ImageNameLength);
                     }
                     else
                     {
                         RtlInitAnsiString(&ImageName, (PCSZ)Process->ImageFileName);
-                        Status = RtlAnsiStringToUnicodeString(&SpiCurrent->ImageName, &ImageName, FALSE);
+                        Status = RtlAnsiStringToUnicodeString(&RecordName, &ImageName, FALSE);
                         if (!NT_SUCCESS(Status))
                         {
-                            SpiCurrent->ImageName.Length = 0;
+                            RecordName.Length = 0;
                         }
                     }
+                    SpiCurrent->ImageName.Length = RecordName.Length;
+                    SpiCurrent->ImageName.MaximumLength = ImageNameMaximumLength;
+                    SpiCurrent->ImageName.Buffer = (PWCH)(Current + CurrentSize);
                 }
                 else
                 {
                     RtlInitUnicodeString(&SpiCurrent->ImageName, NULL);
                 }
 
-                SpiLast = SpiCurrent;
                 SpiCurrent->BasePriority = Process->Pcb.BasePriority;
                 SpiCurrent->SessionId = MmGetSessionId(Process);
                 SpiCurrent->UniqueProcessId = Process->UniqueProcessId;
@@ -1516,8 +1538,18 @@ ExpQuerySystemProcessInformation(
             }
 
             /* Unlock the Process */
+            Locked = FALSE;
             ExReleasePushLockShared(&Process->ProcessLock);
             KeLeaveCriticalRegion();
+
+            /* Now the caller's buffer, with no lock held */
+            if (Record)
+            {
+                RtlCopyMemory(Current, Record, RecordSize);
+                SpiLast = (PSYSTEM_PROCESS_INFORMATION)Current;
+                ExFreePoolWithTag(Record, TAG_EXP_PROCESS_INFO);
+                Record = NULL;
+            }
 
             /* Handle idle process entry */
 Skip:
@@ -1541,17 +1573,26 @@ Skip:
     }
     _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        if(Process != NULL)
-            ObDereferenceObject(Process);
-        if (ProcessImageName)
-        {
-            /* Release the memory allocated by SeLocateProcessImageName */
-            ExFreePoolWithTag(ProcessImageName, TAG_SEPA);
-        }
-
         Status = _SEH2_GetExceptionCode();
     }
     _SEH2_END
+
+    /* Common cleanup, for a fault on the caller's buffer and for _SEH2_LEAVE alike */
+    if (Locked)
+    {
+        ExReleasePushLockShared(&Process->ProcessLock);
+        KeLeaveCriticalRegion();
+    }
+    if (Record) ExFreePoolWithTag(Record, TAG_EXP_PROCESS_INFO);
+    if (ProcessImageName)
+    {
+        /* Release the memory allocated by SeLocateProcessImageName */
+        ExFreePoolWithTag(ProcessImageName, TAG_SEPA);
+    }
+    /* On failure the walk still holds its reference on the current process, except on the
+       idle process, which the walk starts from without referencing it */
+    if (!NT_SUCCESS(Status) && Process != NULL && Process != PsIdleProcess)
+        ObDereferenceObject(Process);
 
     if (Overflow)
         Status = STATUS_INFO_LENGTH_MISMATCH;
@@ -1690,24 +1731,65 @@ QSI_DEF(SystemCallTimeInformation)
 }
 
 /* Class 11 - Module Information */
+#define TAG_EXP_MODULE_INFO 'MIxE'
 QSI_DEF(SystemModuleInformation)
 {
     NTSTATUS Status;
+    PRTL_PROCESS_MODULES Modules = NULL;
+    ULONG Needed = 0, Capacity = 0, Tries;
 
-    /* Acquire system module list lock */
-    KeEnterCriticalRegion();
-    ExAcquireResourceExclusiveLite(&PsLoadedModuleResource, TRUE);
+    /*
+     * The list is walked under the module list resource into a kernel buffer, and the result
+     * is copied to the caller only after the resource is released: the caller's buffer is
+     * never touched with the resource held.
+     * The kernel buffer is sized from the list, never from the caller's length.
+     */
+    for (Tries = 0; ; Tries++)
+    {
+        KeEnterCriticalRegion();
+        ExAcquireResourceExclusiveLite(&PsLoadedModuleResource, TRUE);
+        Status = ExpQueryModuleInformation(&PsLoadedModuleList,
+                                           &MmLoadedUserImageList,
+                                           Modules,
+                                           Capacity,
+                                           &Needed);
+        ExReleaseResourceLite(&PsLoadedModuleResource);
+        KeLeaveCriticalRegion();
 
-    /* Call the generic handler with the system module list */
-    Status = ExpQueryModuleInformation(&PsLoadedModuleList,
-                                       &MmLoadedUserImageList,
-                                       (PRTL_PROCESS_MODULES)Buffer,
-                                       Size,
-                                       ReqSize);
+        /* Done when the caller's length is reached or everything fit; retry if the list grew.
+           A caller buffer smaller than the header gets nothing written, as before. */
+        if (Capacity >= min(Size, Needed) ||
+            min(Size, Needed) < FIELD_OFFSET(RTL_PROCESS_MODULES, Modules) ||
+            Tries >= 4)
+        {
+            break;
+        }
 
-    /* Release list lock and return status */
-    ExReleaseResourceLite(&PsLoadedModuleResource);
-    KeLeaveCriticalRegion();
+        if (Modules) ExFreePoolWithTag(Modules, TAG_EXP_MODULE_INFO);
+        Capacity = min(Size, Needed);
+        /* Zeroed: the whole buffer is defined, also for a partial result */
+        Modules = ExAllocatePoolZero(PagedPool, Capacity, TAG_EXP_MODULE_INFO);
+        if (!Modules)
+        {
+            *ReqSize = Needed;
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
+
+    *ReqSize = Needed;
+    if (Size < Needed && NT_SUCCESS(Status)) Status = STATUS_INFO_LENGTH_MISMATCH;
+
+    /* Copy out with no lock held; the dispatcher's handler turns a fault into a status */
+    _SEH2_TRY
+    {
+        if (Modules && Capacity) RtlCopyMemory(Buffer, Modules, Capacity);
+    }
+    _SEH2_FINALLY
+    {
+        if (Modules) ExFreePoolWithTag(Modules, TAG_EXP_MODULE_INFO);
+    }
+    _SEH2_END;
+
     return Status;
 }
 
@@ -1878,6 +1960,7 @@ QSI_DEF(SystemPageFileInformation)
     SYSTEM_PAGEFILE_INFORMATION *Spfi = (SYSTEM_PAGEFILE_INFORMATION *) Buffer;
     ULONG64 TotalPages, PagesInUse, PeakPages;
     UNICODE_STRING FileName;
+    PWSTR NameDest;
 
     *ReqSize = 0;
     if (!MmQueryPagingFileUsage(&TotalPages, &PagesInUse, &PeakPages, &FileName))
@@ -1891,11 +1974,14 @@ QSI_DEF(SystemPageFileInformation)
     Spfi->TotalSize = (ULONG)TotalPages;
     Spfi->TotalInUse = (ULONG)PagesInUse;
     Spfi->PeakUsage = (ULONG)PeakPages;
-    Spfi->PageFileName.Buffer = (PWSTR)(Spfi + 1);
+    /* The name goes right after the record. The destination comes from the kernel's own
+       pointer, never from the record in the caller's buffer. */
+    NameDest = (PWSTR)(Spfi + 1);
+    Spfi->PageFileName.Buffer = NameDest;
     Spfi->PageFileName.Length = FileName.Length;
     Spfi->PageFileName.MaximumLength = FileName.Length + sizeof(WCHAR);
-    RtlCopyMemory(Spfi->PageFileName.Buffer, FileName.Buffer, FileName.Length);
-    Spfi->PageFileName.Buffer[FileName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+    RtlCopyMemory(NameDest, FileName.Buffer, FileName.Length);
+    NameDest[FileName.Length / sizeof(WCHAR)] = UNICODE_NULL;
     return STATUS_SUCCESS;
 }
 
@@ -2559,13 +2645,23 @@ QSI_DEF(SystemDynamicTimeZoneInformation)
 
 SSI_DEF(SystemCurrentTimeZoneInformation)
 {
+    RTL_TIME_ZONE_INFORMATION TimeZone;
+
     /* Check user buffer's size */
     if (Size < sizeof(RTL_TIME_ZONE_INFORMATION))
     {
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
-    return ExpSetTimeZoneInformation((PRTL_TIME_ZONE_INFORMATION)Buffer);
+    /* Changing the time zone, which re-sets the system time, takes SeTimeZonePrivilege */
+    if (!SeSinglePrivilegeCheck(SeTimeZonePrivilege, ExGetPreviousMode()))
+    {
+        return STATUS_PRIVILEGE_NOT_HELD;
+    }
+
+    /* Read the caller's values once (the dispatcher's handler covers a fault here) */
+    RtlCopyMemory(&TimeZone, Buffer, sizeof(TimeZone));
+    return ExpSetTimeZoneInformation(&TimeZone);
 }
 
 static
@@ -3357,13 +3453,25 @@ QSI_DEF(SystemLogicalProcessorInformation)
 }
 
 /* Class 76 - System firmware table information */
+/*
+ * The request is read from the caller's buffer once, the table is built in kernel memory, and
+ * the caller's buffer is written once at the end, in a try whose finally frees what was
+ * allocated on every path. The caller's buffer is not read again.
+ */
+#define TAG_EXP_FIRMWARE_TABLE 'TFxE'
 QSI_DEF(SystemFirmwareTableInformation)
 {
     PSYSTEM_FIRMWARE_TABLE_INFORMATION SysFirmwareInfo = (PSYSTEM_FIRMWARE_TABLE_INFORMATION)Buffer;
     NTSTATUS Status = STATUS_SUCCESS;
+    ULONG ProviderSignature, TableID;
+    SYSTEM_FIRMWARE_TABLE_ACTION Action;
     ULONG DataBufSize;
     ULONG DataSize = 0;
     ULONG TableCount = 0;
+    ULONG TableLength = 0;
+    ULONG SmallTable[2];
+    PVOID Data = NULL;
+    PVOID Source = NULL;
 
     DPRINT("NtQuerySystemInformation - SystemFirmwareTableInformation\n");
 
@@ -3376,8 +3484,13 @@ QSI_DEF(SystemFirmwareTableInformation)
         return STATUS_INFO_LENGTH_MISMATCH;
     }
 
+    /* Read the request once */
+    ProviderSignature = SysFirmwareInfo->ProviderSignature;
+    Action = SysFirmwareInfo->Action;
+    TableID = SysFirmwareInfo->TableID;
+
     DataBufSize = Size - *ReqSize;
-    switch (SysFirmwareInfo->ProviderSignature)
+    switch (ProviderSignature)
     {
         /*
          * ExpFirmwareTableResource and ExpFirmwareTableProviderListHead
@@ -3385,7 +3498,7 @@ QSI_DEF(SystemFirmwareTableInformation)
          */
         case SIG_ACPI:
         {
-            if (SysFirmwareInfo->Action == SystemFirmwareTable_Enumerate)
+            if (Action == SystemFirmwareTable_Enumerate)
             {
                 PACPI_ENUM_SYSTEM_TABLES_ENTRY Entries;
                 ULONG_PTR Information = 0;
@@ -3446,22 +3559,31 @@ QSI_DEF(SystemFirmwareTableInformation)
 
                 TableCount = (ULONG)(Information / sizeof(*Entries));
                 DataSize = TableCount * sizeof(ULONG);
-                if (DataSize <= DataBufSize)
+                if (DataSize != 0 && DataSize <= DataBufSize)
                 {
+                    Data = ExAllocatePoolWithTag(PagedPool, DataSize, TAG_EXP_FIRMWARE_TABLE);
+                    if (Data == NULL)
+                    {
+                        ExFreePoolWithTag(Entries, 'tfwA');
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                        break;
+                    }
+
                     /* A table is identified by its signature, as a ULONG */
                     for (Index = 0; Index < TableCount; Index++)
                     {
-                        RtlCopyMemory(&((PULONG)SysFirmwareInfo->TableBuffer)[Index],
+                        RtlCopyMemory(&((PULONG)Data)[Index],
                                       Entries[Index].Signature,
                                       sizeof(ULONG));
                     }
+                    Source = Data;
                 }
 
                 ExFreePoolWithTag(Entries, 'tfwA');
-                SysFirmwareInfo->TableBufferLength = DataSize;
+                TableLength = DataSize;
                 *ReqSize += DataSize;
             }
-            else if (SysFirmwareInfo->Action == SystemFirmwareTable_Get)
+            else if (Action == SystemFirmwareTable_Get)
             {
                 ACPI_GET_SYSTEM_TABLE_INPUT Input;
                 DESCRIPTION_HEADER Header;
@@ -3469,7 +3591,7 @@ QSI_DEF(SystemFirmwareTableInformation)
 
                 RtlZeroMemory(&Input, sizeof(Input));
                 RtlCopyMemory(Input.Signature,
-                              &SysFirmwareInfo->TableID,
+                              &TableID,
                               sizeof(Input.Signature));
                 Input.Instance = 1;
 
@@ -3493,14 +3615,22 @@ QSI_DEF(SystemFirmwareTableInformation)
                     Status = STATUS_SUCCESS;
                     if (DataSize <= DataBufSize)
                     {
+                        /* The driver writes into kernel memory, never into the caller's buffer */
+                        Data = ExAllocatePoolWithTag(PagedPool, DataSize, TAG_EXP_FIRMWARE_TABLE);
+                        if (Data == NULL)
+                        {
+                            Status = STATUS_INSUFFICIENT_RESOURCES;
+                            break;
+                        }
                         Status = ExpSendAcpiTableIoctl(IOCTL_ACPI_GET_SYSTEM_TABLE,
                                                        &Input,
                                                        sizeof(Input),
-                                                       SysFirmwareInfo->TableBuffer,
-                                                       DataBufSize,
+                                                       Data,
+                                                       DataSize,
                                                        &Information);
                         if (NT_SUCCESS(Status) && Information != DataSize)
                             Status = STATUS_ACPI_INVALID_DATA;
+                        Source = Data;
                     }
                 }
                 else if (NT_SUCCESS(Status))
@@ -3513,13 +3643,22 @@ QSI_DEF(SystemFirmwareTableInformation)
 
                     DataSize = sizeof(Header);
                     if (DataSize <= DataBufSize)
-                        RtlCopyMemory(SysFirmwareInfo->TableBuffer, &Header, DataSize);
+                    {
+                        Data = ExAllocatePoolWithTag(PagedPool, DataSize, TAG_EXP_FIRMWARE_TABLE);
+                        if (Data == NULL)
+                        {
+                            Status = STATUS_INSUFFICIENT_RESOURCES;
+                            break;
+                        }
+                        RtlCopyMemory(Data, &Header, DataSize);
+                        Source = Data;
+                    }
                 }
 
                 if (!NT_SUCCESS(Status))
                     break;
 
-                SysFirmwareInfo->TableBufferLength = DataSize;
+                TableLength = DataSize;
                 *ReqSize += DataSize;
             }
             else
@@ -3541,19 +3680,18 @@ QSI_DEF(SystemFirmwareTableInformation)
                 break;
             }
 
-            if (SysFirmwareInfo->Action == SystemFirmwareTable_Enumerate)
+            if (Action == SystemFirmwareTable_Enumerate)
             {
-                SysFirmwareInfo->TableBufferLength = sizeof(ULONG) * RTL_NUMBER_OF(FirmTables);
-                *ReqSize += SysFirmwareInfo->TableBufferLength;
-                if (SysFirmwareInfo->TableBufferLength <= DataBufSize)
-                {
-                    for (Index = 0; Index < RTL_NUMBER_OF(FirmTables); Index++)
-                        ((PULONG)SysFirmwareInfo->TableBuffer)[Index] = FirmTables[Index][0];
-                }
+                TableLength = sizeof(ULONG) * RTL_NUMBER_OF(FirmTables);
+                *ReqSize += TableLength;
+                for (Index = 0; Index < RTL_NUMBER_OF(FirmTables); Index++)
+                    SmallTable[Index] = FirmTables[Index][0];
+                if (TableLength <= DataBufSize)
+                    Source = SmallTable;
                 break;
             }
 
-            if (SysFirmwareInfo->Action != SystemFirmwareTable_Get)
+            if (Action != SystemFirmwareTable_Get)
             {
                 Status = STATUS_INVALID_PARAMETER_1;
                 break;
@@ -3561,7 +3699,7 @@ QSI_DEF(SystemFirmwareTableInformation)
 
             for (Index = 0; Index < RTL_NUMBER_OF(FirmTables); Index++)
             {
-                if (FirmTables[Index][0] == SysFirmwareInfo->TableID)
+                if (FirmTables[Index][0] == TableID)
                     break;
             }
             if (Index == RTL_NUMBER_OF(FirmTables))
@@ -3570,11 +3708,18 @@ QSI_DEF(SystemFirmwareTableInformation)
                 break;
             }
 
-            SysFirmwareInfo->TableBufferLength = FirmTables[Index][1];
+            TableLength = FirmTables[Index][1];
             *ReqSize += FirmTables[Index][1];
             if (FirmTables[Index][1] > DataBufSize)
                 break;
 
+            /* Copy the region out of the mapping before the caller's buffer is touched */
+            Data = ExAllocatePoolWithTag(PagedPool, FirmTables[Index][1], TAG_EXP_FIRMWARE_TABLE);
+            if (Data == NULL)
+            {
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+                break;
+            }
             Physical.QuadPart = FirmTables[Index][0];
             Mapping = MmMapIoSpaceEx(Physical, FirmTables[Index][1], PAGE_READWRITE | PAGE_NOCACHE);
             if (Mapping == NULL)
@@ -3582,8 +3727,9 @@ QSI_DEF(SystemFirmwareTableInformation)
                 Status = STATUS_NOT_FOUND;
                 break;
             }
-            RtlCopyMemory(SysFirmwareInfo->TableBuffer, Mapping, FirmTables[Index][1]);
+            RtlCopyMemory(Data, Mapping, FirmTables[Index][1]);
             MmUnmapIoSpace(Mapping, FirmTables[Index][1]);
+            Source = Data;
             break;
         }
         case SIG_RSMB:
@@ -3592,20 +3738,30 @@ QSI_DEF(SystemFirmwareTableInformation)
             if (DataSize > 0)
             {
                 TableCount = 1;
-                if (SysFirmwareInfo->Action == SystemFirmwareTable_Enumerate)
+                if (Action == SystemFirmwareTable_Enumerate)
                 {
                     DataSize = TableCount * sizeof(ULONG);
                     if (DataSize <= DataBufSize)
                     {
-                        *(ULONG *)SysFirmwareInfo->TableBuffer = 0;
+                        SmallTable[0] = 0;
+                        Source = SmallTable;
                     }
                 }
-                else if (SysFirmwareInfo->Action == SystemFirmwareTable_Get
+                else if (Action == SystemFirmwareTable_Get
                          && DataSize <= DataBufSize)
                 {
-                    Status = ExpGetRawSMBiosTable(SysFirmwareInfo->TableBuffer, &DataSize, DataBufSize);
+                    Data = ExAllocatePoolWithTag(PagedPool, DataSize, TAG_EXP_FIRMWARE_TABLE);
+                    if (Data == NULL)
+                    {
+                        Status = STATUS_INSUFFICIENT_RESOURCES;
+                        break;
+                    }
+                    /* The table may have changed size since; the call reports the new size
+                       and writes no more than the buffer holds */
+                    Status = ExpGetRawSMBiosTable(Data, &DataSize, DataSize);
+                    Source = Data;
                 }
-                SysFirmwareInfo->TableBufferLength = DataSize;
+                TableLength = DataSize;
                 *ReqSize += DataSize;
             }
             break;
@@ -3613,7 +3769,7 @@ QSI_DEF(SystemFirmwareTableInformation)
         default:
         {
             DPRINT1("SystemFirmwareTableInformation: Unsupported provider (0x%x)\n",
-                    SysFirmwareInfo->ProviderSignature);
+                    ProviderSignature);
             *ReqSize = 0;
             Status = STATUS_NOT_IMPLEMENTED;
         }
@@ -3621,12 +3777,12 @@ QSI_DEF(SystemFirmwareTableInformation)
 
     if (NT_SUCCESS(Status))
     {
-        switch (SysFirmwareInfo->Action)
+        switch (Action)
         {
             case SystemFirmwareTable_Enumerate:
             case SystemFirmwareTable_Get:
             {
-                if (SysFirmwareInfo->TableBufferLength > DataBufSize)
+                if (TableLength > DataBufSize)
                 {
                     Status = STATUS_BUFFER_TOO_SMALL;
                 }
@@ -3635,15 +3791,30 @@ QSI_DEF(SystemFirmwareTableInformation)
             default:
             {
                 DPRINT1("SystemFirmwareTableInformation: Unsupported action (0x%x)\n",
-                        SysFirmwareInfo->Action);
+                        Action);
                 Status = STATUS_ILLEGAL_FUNCTION;
             }
         }
     }
     else
     {
-        SysFirmwareInfo->TableBufferLength = 0;
+        TableLength = 0;
     }
+
+    /* The only writes to the caller's buffer */
+    _SEH2_TRY
+    {
+        SysFirmwareInfo->TableBufferLength = TableLength;
+        if (NT_SUCCESS(Status) && Source != NULL && TableLength != 0)
+            RtlCopyMemory(SysFirmwareInfo->TableBuffer, Source, TableLength);
+    }
+    _SEH2_FINALLY
+    {
+        if (Data != NULL)
+            ExFreePoolWithTag(Data, TAG_EXP_FIRMWARE_TABLE);
+    }
+    _SEH2_END;
+
     return Status;
 }
 
@@ -3792,7 +3963,7 @@ ExpQueryProcessIdInformation(
     UNICODE_STRING Name;
     HANDLE ProcessId;
     PEPROCESS Process;
-    USHORT Required;
+    ULONG Required;
     NTSTATUS Status;
 
     if (Size != sizeof(*IdInfo))
@@ -3806,9 +3977,6 @@ ExpQueryProcessIdInformation(
     Name = IdInfo->ImageName;
     if ((Name.Length != 0) || (Name.MaximumLength & 1))
         return STATUS_INVALID_PARAMETER;
-
-    if (ExGetPreviousMode() != KernelMode)
-        ProbeForRead(Name.Buffer, Name.MaximumLength, sizeof(WCHAR));
 
     Status = PsLookupProcessByProcessId(ProcessId, &Process);
     if (!NT_SUCCESS(Status))
@@ -3833,16 +4001,25 @@ ExpQueryProcessIdInformation(
         }
         else
         {
-            Required = ImageName->Length + sizeof(WCHAR);
-            if (Name.MaximumLength < Required)
+            /* Computed in a ULONG: name plus terminator can exceed what a USHORT holds */
+            Required = (ULONG)ImageName->Length + sizeof(WCHAR);
+            if (Required > MAXUSHORT)
             {
-                IdInfo->ImageName.MaximumLength = Required;
+                /* No caller buffer can hold it, so a retry with a bigger one cannot help */
+                Status = STATUS_NAME_TOO_LONG;
+            }
+            else if (Name.MaximumLength < Required)
+            {
+                IdInfo->ImageName.MaximumLength = (USHORT)Required;
                 Status = STATUS_INFO_LENGTH_MISMATCH;
             }
             else
             {
+                /* Probe exactly what is written */
+                if (ExGetPreviousMode() != KernelMode)
+                    ProbeForWrite(Name.Buffer, Required, sizeof(WCHAR));
                 IdInfo->ImageName.Length = ImageName->Length;
-                IdInfo->ImageName.MaximumLength = Required;
+                IdInfo->ImageName.MaximumLength = (USHORT)Required;
                 RtlCopyMemory(Name.Buffer, ImageName->Buffer, ImageName->Length);
                 Name.Buffer[ImageName->Length / sizeof(WCHAR)] = UNICODE_NULL;
             }
