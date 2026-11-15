@@ -815,6 +815,7 @@ jobs:
         name: symbols-${{steps.images.outputs.tag}}
         path: symbols/
         if-no-files-found: warn
+        retention-days: 14
 
   build-rostests-msvc:
     # Compile the test suite (modules/rostests) with MSVC for amd64, a separate
