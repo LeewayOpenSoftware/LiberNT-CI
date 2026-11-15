@@ -1394,7 +1394,7 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             static const WCHAR Nul = UNICODE_NULL;
 
             if (!cch)
-                return TRUE;
+                return FALSE;
             if (cch > 1 && !SpiGet(pvParam, gspv.awcWallpaper, (cch - 1) * sizeof(WCHAR), fl))
                 return 0;
             return SpiGet((PWCHAR)pvParam + cch - 1, (PVOID)&Nul, sizeof(WCHAR), fl);
@@ -2752,6 +2752,10 @@ UserSystemParametersInfo(
         //ASSERT(FALSE);
         //return FALSE;
     }
+
+    /* Windows 11 fails these without setting a last error (SPI-DESKWALLPAPER-WIN11-REF) */
+    if (uiAction == SPI_GETDESKWALLPAPER && (!pvParam || !uiParam))
+        return FALSE;
 
     if ((fWinIni & SPIF_PROTECT) && !SpiGetSetProbeBuffer(uiAction, uiParam, pvParam))
     {

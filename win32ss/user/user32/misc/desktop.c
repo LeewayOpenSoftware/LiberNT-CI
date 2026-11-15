@@ -590,16 +590,20 @@ RealSystemParametersInfoA(UINT uiAction,
           }
       case SPI_GETDESKWALLPAPER:
       {
-        BOOL Ret;
         WCHAR awc[MAX_PATH];
-        UNICODE_STRING ustrWallpaper;
-        ANSI_STRING astrWallpaper;
+        CHAR ac[MAX_PATH * 2];
+        int len;
 
-        Ret = NtUserSystemParametersInfo(SPI_GETDESKWALLPAPER, MAX_PATH, awc, fWinIni);
-        RtlInitUnicodeString(&ustrWallpaper, awc);
-        RtlInitEmptyAnsiString(&astrWallpaper, pvParam, uiParam);
-        RtlUnicodeStringToAnsiString(&astrWallpaper, &ustrWallpaper, FALSE);
-        return Ret;
+        if (!pvParam || !uiParam ||
+            !NtUserSystemParametersInfo(SPI_GETDESKWALLPAPER, MAX_PATH, awc, fWinIni))
+            return FALSE;
+        len = WideCharToMultiByte(CP_ACP, 0, awc, -1, ac, sizeof(ac), NULL, NULL);
+        if (len <= 0)
+            return FALSE;
+        len = min((UINT)len - 1, uiParam - 1);
+        RtlCopyMemory(pvParam, ac, len);
+        ((PCHAR)pvParam)[len] = ANSI_NULL;
+        return TRUE;
       }
 
       case SPI_GETHIGHCONTRAST:
