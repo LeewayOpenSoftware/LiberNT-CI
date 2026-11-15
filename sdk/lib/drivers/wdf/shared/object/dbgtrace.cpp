@@ -106,12 +106,12 @@ Return Value:
 #if DBG
     UNREFERENCED_PARAMETER(FxDriverGlobals);
 
-#define     TEMP_BUFFER_SIZE        1024
+#define     TEMP_BUFFER_SIZE        512
     va_list    list;
     CHAR       debugMessageBuffer[TEMP_BUFFER_SIZE];
     NTSTATUS   status;
 #if FX_CORE_MODE==FX_CORE_KERNEL_MODE
-    CHAR       format[TEMP_BUFFER_SIZE];
+    CHAR       format[256];
 
     if (DebugPrintLevel > DebugLevel ||
         ((DebugPrintFlag & DebugFlag) != DebugPrintFlag)) {
