@@ -489,6 +489,7 @@ KMT_TESTFUNC Test_IoPciD3Cold;
 KMT_TESTFUNC Test_IoPciDeviceReset;
 KMT_TESTFUNC Test_IoPciExpressInterfaces;
 KMT_TESTFUNC Test_IoPciEnumeration;
+KMT_TESTFUNC Test_IoPciBridgeWindow;
 KMT_TESTFUNC Test_IoPciRom;
 KMT_TESTFUNC Test_IoStackLimits;
 KMT_TESTFUNC Test_IoVpb;
@@ -726,6 +727,7 @@ const KMT_TEST TestList[] =
     { "IoPciDeviceReset",                   Test_IoPciDeviceReset },
     { "IoPciExpressInterfaces",             Test_IoPciExpressInterfaces },
     { "IoPciEnumeration",                   Test_IoPciEnumeration },
+    { "IoPciBridgeWindow",                  Test_IoPciBridgeWindow },
     { "IoPciRom",                           Test_IoPciRom },
     { "IoPciMessageEnable",                 Test_IoPciMessageEnable },
     { "IoPagingIrpRetire",                  Test_IoPagingIrpRetire },
