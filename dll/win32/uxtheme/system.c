@@ -171,8 +171,41 @@ static void UXTHEME_LoadTheme(void)
         buffsize = sizeof(szCurrentSize);
         if (RegQueryValueExW(hKey, L"SizeName", NULL, NULL, (BYTE*)szCurrentSize, &buffsize))
             szCurrentSize[0] = '\0';
-        if (query_reg_path (hKey, L"DllName", szCurrentTheme))
+        if (UXTHEME_TrustV3AnyPathOrdinary())
+        {
+            /* T-GATE-4 rollback, ordinary processes only: the old any-path behaviour */
+            if (query_reg_path (hKey, L"DllName", szCurrentTheme))
+                szCurrentTheme[0] = '\0';
+        }
+        else
+        {
+            WCHAR stored[MAX_PATH], name[40];
+            DWORD type;
+
+            /* T-LOAD-1: the stored text selects a name only, never a path; it is not expanded */
             szCurrentTheme[0] = '\0';
+            if (UXTHEME_TrustUsesMachineDefault())
+            {
+                /* T-PRIV-2 / T-PRIV-6: no user setting, the machine default */
+                UXTHEME_TrustMachineDefault(name, ARRAY_SIZE(name));
+                szCurrentColor[0] = '\0';
+                szCurrentSize[0] = '\0';
+                if (!UXTHEME_TrustBuildV3Path(name, szCurrentTheme, ARRAY_SIZE(szCurrentTheme)))
+                    szCurrentTheme[0] = '\0';
+            }
+            else
+            {
+                buffsize = sizeof(stored) - sizeof(WCHAR);
+                ZeroMemory(stored, sizeof(stored));
+                if (!RegQueryValueExW(hKey, L"DllName", NULL, &type, (BYTE*)stored, &buffsize) &&
+                    (type == REG_SZ || type == REG_EXPAND_SZ) &&
+                    UXTHEME_TrustNameFromStoredPath(stored, name, ARRAY_SIZE(name)) &&
+                    !UXTHEME_TrustBuildV3Path(name, szCurrentTheme, ARRAY_SIZE(szCurrentTheme)))
+                    szCurrentTheme[0] = '\0';
+            }
+            if (!szCurrentTheme[0])
+                bThemeActive = FALSE;   /* nothing selected: the built-in look (T-FAIL-1) */
+        }
         RegCloseKey(hKey);
     }
     else
@@ -569,6 +602,8 @@ void UXTHEME_UninitSystem(void)
 #ifdef __REACTOS__
 void UXTHEME_ReloadTheme(BOOL load)
 {
+    if (load && !UXTHEME_TrustReloadAllowed())
+        return;   /* T-PRIV-5: the process keeps its current look */
     if (load)
         UXTHEME_LoadTheme();
     else
@@ -1279,6 +1314,8 @@ HRESULT WINAPI ApplyTheme(HTHEMEFILE hThemeFile, char *unknown, HWND hWnd)
 #else
     TRACE("(%p,%s,%p)\n", hThemeFile, unknown, hWnd);
 #endif
+    /* a deliberate apply clears the crash-guard marks of this style (T-GUARD-2); it passed the gate when it was opened */
+    UXTHEME_TrustClearGuard(hThemeFile);
     hr = UXTHEME_SetActiveTheme(hThemeFile);
 #ifdef __REACTOS__
     UXTHEME_broadcast_theme_changed(NULL, hThemeFile != NULL);

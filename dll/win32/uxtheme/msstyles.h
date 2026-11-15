@@ -86,11 +86,16 @@ typedef struct _THEME_FILE {
     PTHEME_CLASS classes;
     PTHEME_PROPERTY metrics;
     PTHEME_IMAGE images;
+
+    /* trust gate (trust.c): the crash-guard subkey of this style, cleared by ApplyTheme */
+    WCHAR szTrustGuard[80];
+    BOOL bTrustGuardMachine;
 } THEME_FILE, *PTHEME_FILE;
 
 typedef struct _UXINI_FILE *PUXINI_FILE;
 
 HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
+HRESULT MSSTYLES_OpenThemeFileV3(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
 void MSSTYLES_CloseThemeFile(PTHEME_FILE tf);
 HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics);
 BOOL MSSTYLES_ReapplyActiveThemeMetrics(void);
@@ -143,5 +148,7 @@ LPCWSTR UXINI_GetNextSection(PUXINI_FILE uf, DWORD *dwLen);
 BOOL UXINI_FindSection(PUXINI_FILE uf, LPCWSTR lpName);
 LPCWSTR UXINI_GetNextValue(PUXINI_FILE uf, DWORD *dwNameLen, LPCWSTR *lpValue, DWORD *dwValueLen);
 BOOL UXINI_FindValue(PUXINI_FILE uf, LPCWSTR lpName, LPCWSTR *lpValue, DWORD *dwValueLen);
+
+#include "trust.h"
 
 #endif

@@ -98,6 +98,14 @@ static PTHEME_FILE MSSTYLES_ReferenceActiveTheme(void)
  */
 HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf)
 {
+    /* every style load goes through the trust gate (trust.c, THEME-TRUST-POLICY T-FAIL-4) */
+    return UXTHEME_TrustOpenThemeFile(lpThemeFile, pszColorName, pszSizeName, tf);
+}
+
+/* The version-3 loader. Called only by the trust gate, after the checks on the handle (or under the T-GATE-4 rollback
+ * of an ordinary process). */
+HRESULT MSSTYLES_OpenThemeFileV3(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf)
+{
     HMODULE hTheme;
     HRSRC hrsc;
     HRESULT hr = S_OK;

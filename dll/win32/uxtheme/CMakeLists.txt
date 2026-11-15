@@ -21,6 +21,7 @@ list(APPEND SOURCE
     stylemap.c
     system.c
     themehooks.c
+    trust.c
     uxini.c
     uxthemep.h
     window.c
@@ -43,7 +44,7 @@ add_library(uxtheme MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/uxtheme.def)
 
 set_module_type(uxtheme win32dll)
-target_link_libraries(uxtheme wine win32ksys ${PSEH_LIB})
+target_link_libraries(uxtheme wine win32ksys tl4 ${PSEH_LIB})
 add_delay_importlibs(uxtheme msimg32 dwmapi)
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     add_importlibs(uxtheme user32_vista user32 advapi32 gdiplus gdi32 shlwapi msvcrt kernel32 ntdll)
