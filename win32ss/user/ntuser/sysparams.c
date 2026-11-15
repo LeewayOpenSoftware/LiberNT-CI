@@ -1388,8 +1388,17 @@ SpiGetSet(UINT uiAction, UINT uiParam, PVOID pvParam, FLONG fl)
             return SpiSetInt(&gspv.uiGridGranularity, uiParam, KEY_DESKTOP, VAL_GRID, fl);
 
         case SPI_GETDESKWALLPAPER:
-            uiParam = min(uiParam, gspv.ustrWallpaper.Length + 1UL);
-            return SpiGet(pvParam, gspv.awcWallpaper, uiParam, fl);
+        {
+            /* uiParam is the buffer size in characters; the copy always ends with a NUL, as lstrcpynW does */
+            ULONG cch = min(uiParam, gspv.ustrWallpaper.Length / sizeof(WCHAR) + 1UL);
+            static const WCHAR Nul = UNICODE_NULL;
+
+            if (!cch)
+                return TRUE;
+            if (cch > 1 && !SpiGet(pvParam, gspv.awcWallpaper, (cch - 1) * sizeof(WCHAR), fl))
+                return 0;
+            return SpiGet((PWCHAR)pvParam + cch - 1, (PVOID)&Nul, sizeof(WCHAR), fl);
+        }
 
         case SPI_SETDESKWALLPAPER:
             return SpiSetWallpaper(pvParam, fl, NULL);
@@ -2517,7 +2526,7 @@ SpiGetSetProbeBuffer(UINT uiAction, UINT uiParam, PVOID pvParam)
             break;
 
         case SPI_GETDESKWALLPAPER:
-            cbSize = min(uiParam, gspv.ustrWallpaper.Length + 1UL);
+            cbSize = min(uiParam, gspv.ustrWallpaper.Length / sizeof(WCHAR) + 1UL) * sizeof(WCHAR);
             break;
 
         case SPI_GETICONTITLELOGFONT:

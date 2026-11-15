@@ -337,6 +337,34 @@ static void Test_NonClientMetricsSize(void)
     ok(!ret, "SPI_GETNONCLIENTMETRICS (%u) succeeded\n", Legacy.cbSize);
 }
 
+static void Test_DeskWallpaper(void)
+{
+    WCHAR full[MAX_PATH], small[8];
+    size_t len, i;
+
+    for (i = 0; i < ARRAYSIZE(full); i++)
+        full[i] = 0xCCCC;
+    ok(SystemParametersInfoW(SPI_GETDESKWALLPAPER, ARRAYSIZE(full), full, 0), "SPI_GETDESKWALLPAPER failed\n");
+    len = wcsnlen(full, ARRAYSIZE(full));
+    ok(len < ARRAYSIZE(full), "the wallpaper path has no terminating NUL\n");
+    if (len + 1 < ARRAYSIZE(full))
+        ok(full[len + 1] == 0xCCCC, "written past the NUL: 0x%04x\n", full[len + 1]);
+
+    for (i = 0; i < ARRAYSIZE(small); i++)
+        small[i] = 0xCCCC;
+    ok(SystemParametersInfoW(SPI_GETDESKWALLPAPER, 5, small, 0), "SPI_GETDESKWALLPAPER (5) failed\n");
+    if (len >= 4)
+    {
+        ok(!memcmp(small, full, 4 * sizeof(WCHAR)), "truncated copy differs\n");
+        ok(small[4] == UNICODE_NULL, "a truncated copy must end with a NUL, got 0x%04x\n", small[4]);
+    }
+    else
+    {
+        ok(!wcscmp(small, full), "short copy differs\n");
+    }
+    ok(small[5] == 0xCCCC, "written past the given size: 0x%04x\n", small[5]);
+}
+
 START_TEST(SystemParametersInfo)
 {
     test_modern_queries();
@@ -352,6 +380,7 @@ START_TEST(SystemParametersInfo)
     Test_NonClientMetrics();
     Test_MouseSpeed();
     Test_GradientCaptions();
+    Test_DeskWallpaper();
 
     DestroyWindow(hWnd1);
     DestroyWindow(hWnd2);
