@@ -19,7 +19,6 @@ typedef struct _NSI_PROVIDER
     NSI_PROVIDER_DISPATCH Dispatch;
     PVOID Context;
     volatile LONG References;
-    volatile LONG Sequence;
     BOOLEAN Deregistering;
     KEVENT Released;
     IO_CSQ Csq;
@@ -29,6 +28,8 @@ typedef struct _NSI_PROVIDER
 
 static LIST_ENTRY NsiProviderList;
 static KSPIN_LOCK NsiProviderLock;
+/* Deregistered providers are kept here for the life of the system: see NsiDeregisterProvider. */
+static LIST_ENTRY NsiZombieList;
 static BOOLEAN NsiReady;
 
 static IO_CSQ_INSERT_IRP NsiCsqInsertIrp;
@@ -42,6 +43,7 @@ VOID
 NsiInitialize(VOID)
 {
     InitializeListHead(&NsiProviderList);
+    InitializeListHead(&NsiZombieList);
     KeInitializeSpinLock(&NsiProviderLock);
     NsiReady = TRUE;
 }
@@ -183,8 +185,12 @@ NsiCsqPeekNextIrp(
     {
         PIRP Candidate = CONTAINING_RECORD(Entry, IRP, Tail.Overlay.ListEntry);
 
+        /* PeekContext is a provider-owner key: a PFILE_OBJECT (handle cleanup) or a
+         * PDEVICE_OBJECT (driver unload). A file-object pointer and a device-object
+         * pointer never alias, so matching either serves both callers without a tag. */
         if (PeekContext == NULL ||
-            IoGetCurrentIrpStackLocation(Candidate)->FileObject == (PFILE_OBJECT)PeekContext)
+            IoGetCurrentIrpStackLocation(Candidate)->FileObject == (PFILE_OBJECT)PeekContext ||
+            IoGetCurrentIrpStackLocation(Candidate)->DeviceObject == (PDEVICE_OBJECT)PeekContext)
         {
             return Candidate;
         }
@@ -313,7 +319,16 @@ NsiDeregisterProvider(
     NsiDereferenceProvider(Provider);
     KeWaitForSingleObject(&Provider->Released, Executive, KernelMode, FALSE, NULL);
     NsiDrainPendingIrps(Provider, NULL, STATUS_CANCELLED, 0);
-    ExFreePoolWithTag(Provider, TAG_NSI);
+
+    /* Do not free the provider. The CSQ library contract is that the queue object
+     * outlives every IRP ever queued on it: a cancel routine reaches the embedded Csq
+     * through the IRP and calls our lock and completion callbacks after it released
+     * the cancel spin lock, and it holds no reference on the provider. So the provider
+     * must stay valid until the last such call returns. It is kept on a list for the
+     * life of the system; providers register their tables once per boot. */
+    KeAcquireSpinLock(&NsiProviderLock, &OldIrql);
+    InsertTailList(&NsiZombieList, &Provider->ListEntry);
+    KeReleaseSpinLock(&NsiProviderLock, OldIrql);
 }
 
 VOID
@@ -324,16 +339,14 @@ NsiNotifyChange(
     _In_reads_bytes_opt_(KeySize) const VOID *Key,
     _In_ ULONG KeySize)
 {
-    LONG Sequence;
-
     UNREFERENCED_PARAMETER(Type);
     UNREFERENCED_PARAMETER(Key);
     UNREFERENCED_PARAMETER(KeySize);
 
     if (!NsiReferenceRegisteredProvider(Provider))
         return;
-    Sequence = InterlockedIncrement(&Provider->Sequence);
-    NsiDrainPendingIrps(Provider, NULL, STATUS_SUCCESS, (ULONG_PTR)(ULONG)Sequence);
+    /* The request has no output: the completion itself is the news */
+    NsiDrainPendingIrps(Provider, NULL, STATUS_SUCCESS, 0);
     NsiDereferenceProvider(Provider);
 }
 
@@ -354,10 +367,14 @@ NsiRequestChangeNotificationKm(
     return STATUS_PENDING;
 }
 
-VOID
-NTAPI
-NsiCancelChangeNotificationsKm(
-    _In_ PFILE_OBJECT FileObject)
+/* Cancel every queued change-notification IRP whose owner matches Owner: a
+ * PFILE_OBJECT (handle cleanup) or a PDEVICE_OBJECT (driver unload). Removal is
+ * cancel-safe via IoCsqRemoveNextIrp; the IRPs are completed only after both the
+ * provider and the queue locks are dropped, so a caller completion routine cannot
+ * re-enter NSI under NsiProviderLock. */
+static VOID
+NsiCancelChangeNotificationsByOwner(
+    _In_opt_ PVOID Owner)
 {
     LIST_ENTRY Cancelled;
     PLIST_ENTRY Entry;
@@ -372,7 +389,7 @@ NsiCancelChangeNotificationsKm(
     {
         PNSI_PROVIDER Provider = CONTAINING_RECORD(Entry, NSI_PROVIDER, ListEntry);
 
-        while ((Irp = IoCsqRemoveNextIrp(&Provider->Csq, FileObject)) != NULL)
+        while ((Irp = IoCsqRemoveNextIrp(&Provider->Csq, Owner)) != NULL)
             InsertTailList(&Cancelled, &Irp->Tail.Overlay.ListEntry);
     }
     KeReleaseSpinLock(&NsiProviderLock, OldIrql);
@@ -385,6 +402,25 @@ NsiCancelChangeNotificationsKm(
         Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
     }
+}
+
+VOID
+NTAPI
+NsiCancelChangeNotificationsKm(
+    _In_ PFILE_OBJECT FileObject)
+{
+    NsiCancelChangeNotificationsByOwner(FileObject);
+}
+
+/* Lets nsiproxy drain its own queued notification IRPs by device object on unload,
+ * before IoDeleteDevice, without a per-IRP completion routine (a top-level pended IRP
+ * has no stack location for one). The store owns and completes these IRPs. */
+VOID
+NTAPI
+NsiCancelChangeNotificationsByDeviceKm(
+    _In_ PDEVICE_OBJECT DeviceObject)
+{
+    NsiCancelChangeNotificationsByOwner(DeviceObject);
 }
 
 NTSTATUS
