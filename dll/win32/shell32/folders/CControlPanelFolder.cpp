@@ -472,7 +472,11 @@ HRESULT WINAPI CControlPanelFolder::BindToObject(
 {
     if (pidl && CplIsCategoryPidl(pidl))
     {
-        PIDLIST_ABSOLUTE pidlAbs = ILCombine(pidlRoot, pidl);
+        PITEMID_CHILD pidlFirst = ILCloneFirst(pidl);
+        if (!pidlFirst)
+            return E_OUTOFMEMORY;
+        PIDLIST_ABSOLUTE pidlAbs = ILCombine(pidlRoot, pidlFirst);
+        ILFree(pidlFirst);
         if (!pidlAbs)
             return E_OUTOFMEMORY;
         CComPtr<IShellFolder> psfCat;
