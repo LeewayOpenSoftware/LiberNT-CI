@@ -328,6 +328,7 @@ RamDiskWritableAllocationLimit(VOID)
 {
     ULONGLONG AddressLimit;
     ULONGLONG FreeBytes;
+    ULONGLONG OsReserve;
     PFN_NUMBER EligiblePages;
     PFN_NUMBER RunPages;
 
@@ -340,10 +341,18 @@ RamDiskWritableAllocationLimit(VOID)
     FreeBytes = (ULONGLONG)MmCountFreePagesInLookupTable(PageLookupTableAddress,
                                                         EligiblePages) << MM_PAGE_SHIFT;
 
-    if (FreeBytes <= RAMDISK_SAFETY_SLACK)
+    /* Leave the OS at least max(256MB, half of RAM) once the ramdisk is placed. */
+    OsReserve = (ULONGLONG)TotalPagesInLookupTable << (MM_PAGE_SHIFT - 1);
+    if (OsReserve < (256ULL * 1024ULL * 1024ULL))
+        OsReserve = 256ULL * 1024ULL * 1024ULL;
+
+    TRACE("RamDiskWritableAllocationLimit: free %llu bytes, OS reserve %llu bytes\n",
+          FreeBytes, OsReserve);
+
+    if (FreeBytes <= OsReserve)
         return 0;
 
-    FreeBytes -= RAMDISK_SAFETY_SLACK;
+    FreeBytes -= OsReserve;
     FreeBytes = min(AddressLimit, FreeBytes);
 
     /*
