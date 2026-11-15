@@ -30,6 +30,7 @@ TDIEntityInfo *EntityList        = NULL;
 ULONG EntityCount                = 0;
 ULONG EntityMax                  = 0;
 UDP_STATISTICS UDPStats;
+IP_STATISTICS IPStats;
 
 /* Network timers */
 KTIMER IPTimer;
