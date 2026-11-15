@@ -430,7 +430,22 @@ TestDeviceIpTables(
         ok(LuidKnown(luids, ifcount, luid), "family %u route %lu: luid %I64x unknown\n", Family, i, luid.Value);
         ok(prefix_len <= bits, "family %u route %lu: prefix length %u\n", Family, i, prefix_len);
         ok(stat->if_index != 0, "family %u route %lu: interface index 0\n", Family, i);
-        ok(rw->metric != 0 || rw->loopback, "family %u route %lu: metric 0 on a non-loopback route\n", Family, i);
+        {
+            /* The row carries the metric of the route itself, which may be 0: Windows 11 (build 26100) shows a
+             * default route from DHCP as RouteMetric 0, InterfaceMetric 45. The sum is never 0 off the loopback. */
+            MIB_IPINTERFACE_ROW ifrow;
+            DWORD if_err;
+
+            memset(&ifrow, 0, sizeof(ifrow));
+            ifrow.Family = Family;
+            ifrow.InterfaceLuid = luid;
+            if_err = GetIpInterfaceEntry(&ifrow);
+            ok(if_err == NO_ERROR, "family %u route %lu: no interface row: %lu\n", Family, i, if_err);
+            if (if_err == NO_ERROR)
+                ok(rw->metric + ifrow.Metric != 0 || rw->loopback,
+                   "family %u route %lu: route metric %u and interface metric %lu are both 0 on a non-loopback route\n",
+                   Family, i, rw->metric, ifrow.Metric);
+        }
     }
     if (GetIpForwardTable2(Family, &forward) == NO_ERROR)
     {
