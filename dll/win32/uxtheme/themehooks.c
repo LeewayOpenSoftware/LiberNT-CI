@@ -376,6 +376,21 @@ int OnPostWinPosChanged(HWND hWnd, WINDOWPOS* pWinPos)
     BOOL Ret, Clear, Force;
 
     style = GetWindowLongW(hWnd, GWL_STYLE);
+    if((style & WS_CAPTION)!=WS_CAPTION)
+    {
+        /* Drop the theme region once the caption is gone, e.g. when going fullscreen */
+        pwndData = ThemeFindWndData(hWnd);
+        if (pwndData && pwndData->HasThemeRgn && !pwndData->UpdatingRgn)
+        {
+            pwndData->HasThemeRgn = FALSE;
+            /* Rebuild it once the caption returns, even without a size change */
+            pwndData->DirtyThemeRegion = TRUE;
+            pwndData->UpdatingRgn = TRUE;
+            g_user32ApiHook.SetWindowRgn(hWnd, 0, TRUE);
+            pwndData->UpdatingRgn = FALSE;
+        }
+        return 0;
+    }
 
     /* Get theme data for this window */
     Entry = ThemeReferenceWndData(hWnd);
