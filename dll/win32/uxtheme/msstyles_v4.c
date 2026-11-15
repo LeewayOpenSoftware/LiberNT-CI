@@ -19,6 +19,10 @@
 #include "msstyles.h"
 #include "msstyles_v4.h"
 
+#include "wine/debug.h"
+
+WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
+
 #define E_V4_BAD_FORMAT HRESULT_FROM_WIN32(ERROR_BAD_FORMAT)
 
 static PV4_FILE v4_of(PTHEME_PROPERTY tp) { return tp ? (PV4_FILE)tp->v4file : NULL; }
@@ -102,6 +106,7 @@ HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T
     UINT off;
     HRESULT hr = E_V4_BAD_FORMAT;
 
+    TRACE("(%p, %Iu bytes, mui %p, %Iu bytes, %s, %s)\n", base, size, muiBase, muiSize, debugstr_w(pszColorName), debugstr_w(pszSizeName));
     if (!ptf) return E_INVALIDARG;
     *ptf = NULL;
     if (!base || !size || (muiBase && !muiSize)) return E_INVALIDARG;
@@ -143,7 +148,7 @@ HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T
     if (!tf) { hr = E_OUTOFMEMORY; goto fail; }
     tf->refcount = 1;
     tf->hTheme = NULL;
-    if (pszPath) lstrcpynW(tf->szThemeFile, pszPath, MAX_PATH);
+    if (pszPath) lstrcpynW(tf->szThemeFile, pszPath, MAX_PATH);   /* the built store path, from the gate */
     tf->pszAvailColors = v4->names;
     tf->pszAvailSizes = v4->names + off;
     tf->pszSelectedColor = (pszColorName && lstrcmpiW(pszColorName, tf->pszAvailColors)) ? NULL : tf->pszAvailColors;
@@ -189,9 +194,12 @@ HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T
         s->v4file = v4;
     }
     *ptf = tf;
+    TRACE("version-4 style: %u classes, %u properties, model %Iu bytes, %s module\n",
+          v4->model.nclasses - v4->model.counts.descriptors, v4->nshadow, v4->modelBytes, v4->hasMui ? "with" : "no");
     return S_OK;
 
 fail:
+    TRACE("refused: 0x%08lx\n", hr);
     if (tf) { free_classes(tf); free(tf); }
     v4_release(v4, FALSE);
     return hr;
@@ -199,6 +207,7 @@ fail:
 
 void MSSTYLES_V4_Close(PTHEME_FILE tf)
 {
+    TRACE("(%p)\n", tf);
     if (!tf || !tf->v4) return;
     v4_release((PV4_FILE)tf->v4, TRUE);
     tf->v4 = NULL;
