@@ -30,7 +30,7 @@ TIMEINFO*
 PcGetTime(VOID)
 {
     static TIMEINFO TimeInfo;
-    REGS Regs;
+    REGS Regs = { 0 };
 
     for (;;)
     {

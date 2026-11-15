@@ -1111,7 +1111,7 @@ PcVideoGetBufferSize(VOID)
 VOID
 PcVideoGetFontsFromFirmware(PULONG RomFontPointers)
 {
-    REGS BiosRegs;
+    REGS BiosRegs = { 0 };
 
     /* Get the address of the BIOS ROM fonts.
      * Int 10h, AX=1130h, BH = pointer specifier

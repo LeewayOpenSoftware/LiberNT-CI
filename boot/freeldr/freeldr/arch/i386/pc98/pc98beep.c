@@ -9,7 +9,7 @@
 
 VOID Pc98Beep(VOID)
 {
-    REGS Regs;
+    REGS Regs = { 0 };
 
     /* Int 18h AH=17h
      * CRT BIOS - Beep on

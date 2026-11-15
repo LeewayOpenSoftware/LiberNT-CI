@@ -65,7 +65,7 @@ static const PALETTE_ENTRY CgaPalette[] =
 VOID
 Pc98VideoInit(VOID)
 {
-    REGS Regs;
+    REGS Regs = { 0 };
     USHORT i;
 
     if (HiResoMachine)
@@ -442,7 +442,7 @@ Pc98VideoSync(VOID)
 VOID
 Pc98VideoPrepareForReactOS(VOID)
 {
-    REGS Regs;
+    REGS Regs = { 0 };
 
     /* Int 18h AH=41h
      * CRT BIOS - Stop displaying graphics
