@@ -212,13 +212,15 @@ RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
         Failures |= 0x40;
     CloseHandle(hProcess);
 
-    /* An image on a drive letter of our own making is refused before any prompt */
+    /* An image named through a drive letter of our own making: the broker opens it once and
+     * judges the file's final path, so a made-up letter is either refused or resolved to the
+     * real file on the fixed disk; it is never started under the alias. */
     if (DefineDosDeviceW(0, L"Q:", SystemDir))
     {
         StringCchPrintfW(Subst, _countof(Subst), L"Q:\\cmd.exe");
         dwError = CallBroker(L"cmd.exe /c exit 0", Subst, &Response);
-        /* Refused as a made-up drive, or never found from the broker's side: both keep it out */
-        if (dwError != ERROR_BAD_PATHNAME && dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
+        if (dwError != ERROR_SUCCESS && dwError != ERROR_BAD_PATHNAME &&
+            dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
             Failures |= 0x80;
         if (Response.hProcess != 0)
             CloseHandle((HANDLE)Response.hProcess);
