@@ -119,6 +119,9 @@ KsecDeviceControl(
     {
         case IOCTL_KSEC_REGISTER_LSA_PROCESS:
 
+            /* Nothing is written for this request, so nothing is returned */
+            if (OutputLength != NULL)
+                *OutputLength = 0;
             Status = STATUS_SUCCESS;
             break;
 
@@ -170,9 +173,12 @@ KsecDeviceControl(
             break;
 
         default:
-            DPRINT1("Unhandled control code 0x%lx\n", IoControlCode);
-            __debugbreak();
-            return STATUS_INVALID_PARAMETER;
+            /* A code that is not handled is refused, and nothing is returned
+             * for it */
+            DPRINT("Unhandled control code 0x%lx\n", IoControlCode);
+            if (OutputLength != NULL)
+                *OutputLength = 0;
+            return STATUS_INVALID_DEVICE_REQUEST;
     }
 
     return Status;
