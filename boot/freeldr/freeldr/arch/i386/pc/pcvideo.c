@@ -1361,6 +1361,9 @@ PcVideoGetEdidPreferredResolution(
     return TRUE;
 }
 
+/* SOFTGPU_ROOT_WORKING_SURFACE_COUNT in drivers/directx/softgpu/platform_root.c; keep in sync */
+#define BOOTFB_SOFTGPU_SURFACE_COUNT 12UL
+
 static ULONGLONG
 PcVideoGetUsableMemorySize(VOID)
 {
@@ -1396,14 +1399,14 @@ PcVideoInitializeBootFramebuffer(
 
     RtlZeroMemory(FrameBuffer, sizeof(*FrameBuffer));
 
-    /* The 2560-wide pick at 512 MB RAM died in SOFTGPU with STOP 0xB4; budget the framebuffer at 1/8 of usable RAM */
+    /* SOFTGPU reserves 12x the page-aligned framebuffer (MinimumAllocationSlabSize); the 2560-wide pick at 512 MB RAM died with STOP 0xB4, so budget that slab at 1/8 of usable RAM */
     FrameBufferBudget = PcVideoGetUsableMemorySize() / 8;
     HaveEdid = PcVideoGetEdidPreferredResolution(&EdidWidth, &EdidHeight);
 
     for (Mode = 0x100; Mode < 0x200; ++Mode)
     {
         ULONG Pixels, ScanLine;
-        ULONGLONG CandidateFbSize;
+        ULONGLONG CandidateFbSize, CandidateSlabSize;
         UCHAR RedSize, RedPosition, GreenSize, GreenPosition;
         UCHAR BlueSize, BluePosition;
 
@@ -1441,11 +1444,14 @@ PcVideoInitializeBootFramebuffer(
 
         Pixels = (ULONG)Candidate.WidthInPixels * Candidate.HeightInPixels;
         CandidateFbSize = (ULONGLONG)ScanLine * Candidate.HeightInPixels;
+        CandidateSlabSize = ((CandidateFbSize + MM_PAGE_SIZE - 1) &
+                             ~((ULONGLONG)MM_PAGE_SIZE - 1)) *
+                            BOOTFB_SOFTGPU_SURFACE_COUNT;
 
         if (HaveEdid &&
             Candidate.WidthInPixels == EdidWidth &&
             Candidate.HeightInPixels == EdidHeight &&
-            CandidateFbSize <= FrameBufferBudget &&
+            CandidateSlabSize <= FrameBufferBudget &&
             Pixels > BestEdidPixels)
         {
             BestEdid = Candidate;
@@ -1456,7 +1462,7 @@ PcVideoInitializeBootFramebuffer(
         if (Candidate.WidthInPixels > 1920 || Candidate.HeightInPixels > 1200)
             continue;
 
-        if (CandidateFbSize <= FrameBufferBudget &&
+        if (CandidateSlabSize <= FrameBufferBudget &&
             Pixels > BestBudgetPixels)
         {
             BestBudget = Candidate;
@@ -1491,7 +1497,7 @@ PcVideoInitializeBootFramebuffer(
     if (BestMode == 0 || !PcVideoSetBiosVesaMode(BestMode | 0x4000))
         return FALSE;
 
-    TRACE("Boot framebuffer: EDID %lux%lu, budget %lu bytes, picked mode 0x%lx\n",
+    TRACE("Boot framebuffer: EDID %lux%lu, slab budget %lu bytes, picked mode 0x%lx\n",
           (ULONG)EdidWidth, (ULONG)EdidHeight,
           (ULONG)FrameBufferBudget, (ULONG)BestMode);
 
