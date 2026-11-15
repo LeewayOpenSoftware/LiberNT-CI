@@ -479,5 +479,46 @@ LThemeApply(const LTHEME_ITEM *theme)
 HRESULT WINAPI
 LThemeSave(const WCHAR *theme_name, WCHAR out_path[MAX_PATH])
 {
-    return E_NOTIMPL;
+    if (!theme_name || !out_path)
+        return E_INVALIDARG;
+
+    WCHAR user_themes_dir[MAX_PATH];
+    if (!ExpandThemePath(L"%APPDATA%\Microsoft\Windows\Themes", user_themes_dir, MAX_PATH))
+        return E_FAIL;
+
+    CreateDirectoryW(user_themes_dir, NULL);
+
+    WCHAR theme_path[MAX_PATH];
+    swprintf(theme_path, ARRAYSIZE(theme_path), L"%s\%s.theme", user_themes_dir, theme_name);
+
+    LTHEME_ITEM current;
+    if (FAILED(LThemeGetUnsaved(&current)))
+        return E_FAIL;
+
+    /* Write .theme file in Windows format */
+    WriteThemeString(theme_path, L"Theme", L"DisplayName", theme_name);
+
+    WCHAR color_str[32];
+    int r = GetRValue(current.WindowColor);
+    int g = GetGValue(current.WindowColor);
+    int b = GetBValue(current.WindowColor);
+    swprintf(color_str, ARRAYSIZE(color_str), L"%d %d %d", r, g, b);
+
+    WriteThemeString(theme_path, L"Control Panel\Desktop", L"Wallpaper", current.Wallpaper);
+    WriteThemeString(theme_path, L"Control Panel\Desktop", L"WallpaperStyle", L"2");
+    WriteThemeString(theme_path, L"Control Panel\Desktop", L"TileWallpaper", L"0");
+    WriteThemeString(theme_path, L"Control Panel\Colors", L"ActiveTitle", color_str);
+    WriteThemeString(theme_path, L"Control Panel\Sounds", L".Current", current.SoundsScheme);
+    WriteThemeString(theme_path, L"Screen Saver", L"SCRNSAVE.EXE", current.Screensaver);
+
+    WCHAR timeout_str[16];
+    swprintf(timeout_str, ARRAYSIZE(timeout_str), L"%u", current.ScreensaverTimeout);
+    WriteThemeString(theme_path, L"Screen Saver", L"ScreenSaveTimeOut", timeout_str);
+    WriteThemeString(theme_path, L"Screen Saver", L"ScreenSaveActive", current.ScreensaverActive ? L"1" : L"0");
+
+    if (current.Thumbnail)
+        DeleteObject(current.Thumbnail);
+
+    lstrcpyW(out_path, theme_path);
+    return S_OK;
 }
