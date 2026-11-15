@@ -507,6 +507,13 @@ NtOpenProcessTokenEx(IN HANDLE ProcessHandle,
     Status = PsOpenTokenOfProcess(ProcessHandle, &Token);
     if (NT_SUCCESS(Status))
     {
+        /* A caller below the token's integrity level may only query it */
+        if (!SeTokenOpenAccessAllowed(Token, DesiredAccess, PreviousMode))
+        {
+            ObDereferenceObject(Token);
+            return STATUS_ACCESS_DENIED;
+        }
+
         /* Reference it by handle and dereference the pointer */
         Status = ObOpenObjectByPointer(Token,
                                        HandleAttributes,

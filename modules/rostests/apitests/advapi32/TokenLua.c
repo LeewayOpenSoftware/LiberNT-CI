@@ -37,8 +37,102 @@ IsLuaPrivilege(const LUID *Luid)
            Luid->LowPart == SE_TIME_ZONE_PRIVILEGE;
 }
 
+/* Child side: runs with the LUA token. Bit mask of failures in the exit code. */
+static
+DWORD
+RunChild(DWORD ParentPid, HANDLE InheritedImpersonation)
+{
+    HANDLE Parent, Token = NULL, ThreadToken = NULL;
+    SECURITY_IMPERSONATION_LEVEL Level = SecurityAnonymous;
+    DWORD Size, Failures = 0;
+
+    Parent = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ParentPid);
+    if (!Parent)
+        return 0x100;
+
+    /* Looking at the elevated token is fine, taking it is not */
+    if (!OpenProcessToken(Parent, TOKEN_QUERY, &Token))
+        Failures |= 0x1;
+    else
+        CloseHandle(Token);
+    if (OpenProcessToken(Parent, TOKEN_DUPLICATE, &Token))
+    {
+        Failures |= 0x2;
+        CloseHandle(Token);
+    }
+    else if (GetLastError() != ERROR_ACCESS_DENIED)
+        Failures |= 0x4;
+    if (OpenProcessToken(Parent, TOKEN_IMPERSONATE, &Token))
+    {
+        Failures |= 0x8;
+        CloseHandle(Token);
+    }
+    CloseHandle(Parent);
+
+    /* An elevated impersonation token handed to us only gives identification */
+    if (!SetThreadToken(NULL, InheritedImpersonation))
+        return Failures | 0x10;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &ThreadToken))
+        Failures |= 0x20;
+    else
+    {
+        if (!GetTokenInformation(ThreadToken, TokenImpersonationLevel, &Level, sizeof(Level), &Size) ||
+            Level != SecurityIdentification)
+        {
+            Failures |= 0x40;
+        }
+        CloseHandle(ThreadToken);
+    }
+    RevertToSelf();
+    return Failures;
+}
+
+static
+void
+TestMediumChild(HANDLE Process, HANDLE Lua)
+{
+    SECURITY_ATTRIBUTES Inheritable = { sizeof(Inheritable), NULL, TRUE };
+    STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
+    PROCESS_INFORMATION ProcessInfo;
+    WCHAR Exe[MAX_PATH], CommandLine[MAX_PATH + 64];
+    HANDLE Impersonation = NULL;
+    DWORD ExitCode = 0xffffffff;
+    BOOL Ret;
+
+    if (!GetModuleFileNameW(NULL, Exe, _countof(Exe)))
+    {
+        skip("GetModuleFileNameW failed: %lu\n", GetLastError());
+        return;
+    }
+
+    Ret = DuplicateTokenEx(Process, TOKEN_ALL_ACCESS, &Inheritable, SecurityImpersonation,
+                           TokenImpersonation, &Impersonation);
+    ok(Ret, "DuplicateTokenEx failed: %lu\n", GetLastError());
+    if (!Ret)
+        return;
+
+    swprintf(CommandLine, L"\"%ls\" TokenLua child %lu %p", Exe, GetCurrentProcessId(), Impersonation);
+    Ret = CreateProcessAsUserW(Lua, Exe, CommandLine, NULL, NULL, TRUE, 0, NULL, NULL,
+                               &StartupInfo, &ProcessInfo);
+    ok(Ret, "CreateProcessAsUserW(LUA token) failed: %lu\n", GetLastError());
+    if (Ret)
+    {
+        ok(WaitForSingleObject(ProcessInfo.hProcess, 30000) == WAIT_OBJECT_0, "The child did not finish\n");
+        ok(GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode), "GetExitCodeProcess failed: %lu\n", GetLastError());
+        ok(ExitCode == 0, "Medium child failures: 0x%lx (1 query denied, 2 duplicate granted, 4 wrong error, "
+           "8 impersonate granted, 10 SetThreadToken, 20 OpenThreadToken, 40 level not identification, 100 OpenProcess)\n",
+           ExitCode);
+        CloseHandle(ProcessInfo.hThread);
+        CloseHandle(ProcessInfo.hProcess);
+    }
+    CloseHandle(Impersonation);
+}
+
 START_TEST(TokenLua)
 {
+    char **Argv;
+    int Argc = winetest_get_mainargs(&Argv);
+
     SID_IDENTIFIER_AUTHORITY NtAuthority = {SECURITY_NT_AUTHORITY};
     HANDLE Process = NULL, Lua = NULL;
     PSID AdminsSid = NULL;
@@ -51,10 +145,15 @@ START_TEST(TokenLua)
     DWORD Size, Value, i, Error;
     BOOL Ret, IsAdmin = FALSE, Found = FALSE;
 
+    if (Argc >= 5 && !strcmp(Argv[2], "child"))
+    {
+        ExitProcess(RunChild(strtoul(Argv[3], NULL, 10), (HANDLE)(ULONG_PTR)strtoull(Argv[4], NULL, 16)));
+    }
+
     ok(AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS,
                                 0, 0, 0, 0, 0, 0, &AdminsSid), "AllocateAndInitializeSid failed: %lu\n", GetLastError());
-    ok(OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_PRIVILEGES,
-                        &Process), "OpenProcessToken failed: %lu\n", GetLastError());
+    ok(OpenProcessToken(GetCurrentProcess(), TOKEN_ALL_ACCESS, &Process),
+       "OpenProcessToken failed: %lu\n", GetLastError());
     if (!AdminsSid || !Process)
         goto Cleanup;
 
@@ -105,6 +204,13 @@ START_TEST(TokenLua)
     ok(GetTokenDword(Lua, TokenElevation, &Value) && Value == 0, "TokenElevation = %lu\n", Value);
     ok(GetTokenDword(Lua, TokenElevationType, &Value) && Value == TokenElevationTypeLimited,
        "TokenElevationType = %lu, expected %u\n", Value, TokenElevationTypeLimited);
+
+    /* What a Medium process of the same user can do with our elevated token */
+    Ret = GetTokenInformation(Process, TokenIntegrityLevel, Label, sizeof(Buffer), &Size);
+    if (Ret && *GetSidSubAuthority(Label->Label.Sid, *GetSidSubAuthorityCount(Label->Label.Sid) - 1) >= SECURITY_MANDATORY_HIGH_RID)
+        TestMediumChild(Process, Lua);
+    else
+        skip("The test process is not High: the Medium child checks need an elevated runner\n");
 
     /* No pair yet */
     Linked.LinkedToken = (HANDLE)0xdeadbeef;

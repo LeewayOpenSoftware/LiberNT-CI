@@ -852,6 +852,18 @@ NTAPI
 SepRmUnlinkLogonSessionToken(
     _In_ PTOKEN Token);
 
+NTSTATUS
+NTAPI
+SepRmUnlinkLogonSessionPair(
+    _In_ PTOKEN Token);
+
+BOOLEAN
+NTAPI
+SeTokenOpenAccessAllowed(
+    _In_ PACCESS_TOKEN Token,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
 BOOLEAN
 NTAPI
 SepRmLogonSessionHasFullToken(

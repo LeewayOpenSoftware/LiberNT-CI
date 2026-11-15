@@ -1923,11 +1923,9 @@ SepLinkTokens(
     if (First->TokenType != TokenPrimary || Second->TokenType != TokenPrimary)
         return STATUS_BAD_TOKEN_TYPE;
 
-    if (!RtlEqualLuid(&First->AuthenticationId, &Second->AuthenticationId) ||
-        !RtlEqualSid(First->UserAndGroups[0].Sid, Second->UserAndGroups[0].Sid))
-    {
+    /* The two tokens may live in different logon sessions, but they are one user */
+    if (!RtlEqualSid(First->UserAndGroups[0].Sid, Second->UserAndGroups[0].Sid))
         return STATUS_INVALID_PARAMETER;
-    }
 
     if ((First->TokenFlags & TOKEN_LUA) == (Second->TokenFlags & TOKEN_LUA))
         return STATUS_INVALID_PARAMETER;
@@ -2573,6 +2571,13 @@ NtSetInformationToken(
                 if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
                 {
                     Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
+
+                /* A null handle breaks the pair the token belongs to */
+                if (Linked.LinkedToken == NULL)
+                {
+                    Status = SepRmUnlinkLogonSessionPair(Token);
                     break;
                 }
 

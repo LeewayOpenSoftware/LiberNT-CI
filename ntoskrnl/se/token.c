@@ -2344,6 +2344,14 @@ SeTokenCanImpersonate(
         goto Quit;
     }
 
+    /* A process never impersonates a client above its own integrity level */
+    if (SepGetTokenIntegrityRid(TokenToImpersonate) > SepGetTokenIntegrityRid(ProcessToken))
+    {
+        DPRINT1("Cannot impersonate a client above the process integrity level!\n");
+        CanImpersonate = FALSE;
+        goto Quit;
+    }
+
     /*
      * Deny impersonation for the server if it wants to impersonate a client
      * beyond what the impersonation level originally permits.
@@ -2424,6 +2432,38 @@ Quit:
  * as impersonation level and we cannot open it. A failure NTSTATUS code is returned
  * otherwise.
  */
+/**
+ * @brief
+ * Decides whether a caller may open a token for the given access. A caller
+ * below the token's integrity level only gets to look at it.
+ */
+BOOLEAN
+NTAPI
+SeTokenOpenAccessAllowed(
+    _In_ PACCESS_TOKEN Token,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ KPROCESSOR_MODE PreviousMode)
+{
+    SECURITY_SUBJECT_CONTEXT SubjectContext;
+    PACCESS_TOKEN CallerToken;
+    BOOLEAN Allowed;
+
+    PAGED_CODE();
+
+    if (PreviousMode == KernelMode ||
+        (DesiredAccess & ~(TOKEN_QUERY | TOKEN_QUERY_SOURCE | READ_CONTROL | SYNCHRONIZE)) == 0)
+    {
+        return TRUE;
+    }
+
+    SeCaptureSubjectContext(&SubjectContext);
+    CallerToken = SeQuerySubjectContextToken(&SubjectContext);
+    Allowed = (SepGetTokenIntegrityRid(CallerToken) >= SepGetTokenIntegrityRid(Token));
+    SeReleaseSubjectContext(&SubjectContext);
+
+    return Allowed;
+}
+
 NTSTATUS
 NTAPI
 NtOpenThreadTokenEx(
@@ -2495,6 +2535,15 @@ NtOpenThreadTokenEx(
         PsDereferenceImpersonationToken(Token);
         ObDereferenceObject(Thread);
         return STATUS_CANT_OPEN_ANONYMOUS;
+    }
+
+    /* A caller below the token's integrity level may only query it */
+    if (!SeTokenOpenAccessAllowed(Token, DesiredAccess, PreviousMode))
+    {
+        DPRINT1("The caller is below the thread token's integrity level\n");
+        PsDereferenceImpersonationToken(Token);
+        ObDereferenceObject(Thread);
+        return STATUS_ACCESS_DENIED;
     }
 
     /* Revert to self if OpenAsSelf is specified */
