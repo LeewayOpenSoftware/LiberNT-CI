@@ -30,6 +30,7 @@ list(APPEND SOURCE
     MachineGuid.c
     OpenTrace.c
     PrivilegeNames.c
+    QueryServiceConfig.c
     QueryServiceConfig2.c
     RegCreateKeyEx.c
     RegCreateKeyTransacted.c
