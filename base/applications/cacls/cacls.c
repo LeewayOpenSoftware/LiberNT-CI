@@ -377,12 +377,22 @@ GetPathOfFile(LPTSTR FilePath, LPCTSTR pszFiles)
     if (pch != NULL)
     {
         *pch = 0;
-        if (!GetFullPathName(FilePath, MAX_PATH, FullPath, NULL))
+        if (pch == FilePath + 2 && FilePath[1] == _T(':'))
         {
-            PrintError(GetLastError());
-            return FALSE;
+            /* a bare drive letter names the volume root; asking
+             * GetFullPathName for it would return the drive's current
+             * directory instead */
+            _tcscat(FilePath, _T("\\"));
         }
-        _tcsncpy(FilePath, FullPath, MAX_PATH);
+        else
+        {
+            if (!GetFullPathName(FilePath, MAX_PATH, FullPath, NULL))
+            {
+                PrintError(GetLastError());
+                return FALSE;
+            }
+            _tcsncpy(FilePath, FullPath, MAX_PATH);
+        }
 
         attrs = GetFileAttributes(FilePath);
         if (attrs == 0xFFFFFFFF || !(attrs & FILE_ATTRIBUTE_DIRECTORY))
@@ -391,8 +401,11 @@ GetPathOfFile(LPTSTR FilePath, LPCTSTR pszFiles)
             return FALSE;
         }
     }
-    else
-        GetCurrentDirectory(MAX_PATH, FilePath);
+    else if (!GetCurrentDirectory(MAX_PATH, FilePath))
+    {
+        PrintError(GetLastError());
+        return FALSE;
+    }
 
     AddBackslash(FilePath);
     return TRUE;
@@ -417,7 +430,10 @@ PrintDaclsOfFiles(LPCTSTR pszFiles)
      */
     hFind = FindFirstFile(pszFiles, &FindData);
     if (hFind == INVALID_HANDLE_VALUE)
+    {
+        PrintError(GetLastError());
         return FALSE;
+    }
     do
     {
         if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -600,7 +616,10 @@ ChangeACLsOfFiles(LPCTSTR pszFiles)
      */
     hFind = FindFirstFile(pszFiles, &FindData);
     if (hFind == INVALID_HANDLE_VALUE)
+    {
+        PrintError(GetLastError());
         return FALSE;
+    }
     do
     {
         if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -653,7 +672,10 @@ ChangeACLsOfFilesInCurDir(LPCTSTR pszFiles)
      */
     hFind = FindFirstFile(pszFiles, &FindData);
     if (hFind == INVALID_HANDLE_VALUE)
+    {
+        PrintError(GetLastError());
         return FALSE;
+    }
     do
     {
         if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
@@ -689,7 +711,10 @@ ChangeACLsOfFilesInCurDir(LPCTSTR pszFiles)
      */
     hFind = FindFirstFile(_T("*"), &FindData);
     if (hFind == INVALID_HANDLE_VALUE)
+    {
+        PrintError(GetLastError());
         return FALSE;
+    }
     do
     {
         if (_tcscmp(FindData.cFileName, _T(".")) == 0 ||
