@@ -4,6 +4,7 @@ add_library(leewaydisplay_static STATIC
     screensaver_backend.c
     layout_backend.c
     color_backend.c
+    theme_backend.c
 )
 
 target_include_directories(leewaydisplay_static PUBLIC
