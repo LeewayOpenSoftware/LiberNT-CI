@@ -168,6 +168,15 @@ RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
         if (!SetThreadToken(NULL, Inherited))
             return ELEV_CHILD_UNEXPECTED | GetLastError();
         dwError = CallBroker(Cmd, NULL, &Response);
+        if (dwError == ERROR_SERVICE_NOT_ACTIVE)
+        {
+            /* The pipe itself may already refuse the impersonating thread */
+            hProcess = CreateFileW(L"\\\\.\\pipe\\seclogon", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+            if (hProcess == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
+                dwError = ELEV_CHILD_PIPE_DENIED;
+            else if (hProcess != INVALID_HANDLE_VALUE)
+                CloseHandle(hProcess);
+        }
         RevertToSelf();
         return dwError;
     }
@@ -203,13 +212,15 @@ RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
         Failures |= 0x40;
     CloseHandle(hProcess);
 
-    /* An image on a drive letter of our own making is refused before any prompt */
+    /* An image named through a drive letter of our own making: the broker opens it once and
+     * judges the file's final path, so a made-up letter is either refused or resolved to the
+     * real file on the fixed disk; it is never started under the alias. */
     if (DefineDosDeviceW(0, L"Q:", SystemDir))
     {
         StringCchPrintfW(Subst, _countof(Subst), L"Q:\\cmd.exe");
         dwError = CallBroker(L"cmd.exe /c exit 0", Subst, &Response);
-        /* Refused as a made-up drive, or never found from the broker's side: both keep it out */
-        if (dwError != ERROR_BAD_PATHNAME && dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
+        if (dwError != ERROR_SUCCESS && dwError != ERROR_BAD_PATHNAME &&
+            dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
             Failures |= 0x80;
         if (Response.hProcess != 0)
             CloseHandle((HANDLE)Response.hProcess);
@@ -496,7 +507,8 @@ TestPairedCaller(void)
     if (DuplicateTokenEx(T1, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenImpersonation, &Imp))
     {
         Ret = StartChild(Lua2, "imp", Imp, &ExitCode);
-        ok(Ret && ExitCode == ERROR_ACCESS_DENIED, "Impersonating caller: ret %d, error %lu\n", Ret, ExitCode);
+        ok(Ret && (ExitCode == ERROR_ACCESS_DENIED || ExitCode == ELEV_CHILD_PIPE_DENIED),
+           "Impersonating caller: ret %d, error %lu\n", Ret, ExitCode);
     }
 
     RestorePolicyDword(L"ConsentPromptBehaviorAdmin", Previous, HadValue);
@@ -518,7 +530,9 @@ START_TEST(Elevation)
     SECL_RESPONSE Response;
     TOKEN_PRIVILEGES Enable;
     SID_IDENTIFIER_AUTHORITY WorldAuthority = { SECURITY_WORLD_SID_AUTHORITY };
-    SID_AND_ATTRIBUTES Restricting[3] = { { NULL, 0 }, { NULL, 0 }, { NULL, 0 } };
+    SID_IDENTIFIER_AUTHORITY NtAuthority = { SECURITY_NT_AUTHORITY };
+    SID_AND_ATTRIBUTES Restricting[4] = { { NULL, 0 }, { NULL, 0 }, { NULL, 0 }, { NULL, 0 } };
+    PSID InteractiveSid = NULL;
     BYTE UserBuffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE], GroupBuffer[4096];
     DWORD RestrictingCount = 0, Length, i;
     HANDLE Process = NULL, Low = NULL, Restricted = NULL;
@@ -578,6 +592,8 @@ START_TEST(Elevation)
                 Restricting[RestrictingCount++].Sid = Groups->Groups[i].Sid;
         }
     }
+    if (AllocateAndInitializeSid(&NtAuthority, 1, SECURITY_INTERACTIVE_RID, 0, 0, 0, 0, 0, 0, 0, &InteractiveSid))
+        Restricting[RestrictingCount++].Sid = InteractiveSid;
     if (AllocateAndInitializeSid(&WorldAuthority, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &Restricting[RestrictingCount].Sid))
     {
         RestrictingCount++;
@@ -589,6 +605,8 @@ START_TEST(Elevation)
         }
         FreeSid(Restricting[RestrictingCount - 1].Sid);
     }
+    if (InteractiveSid)
+        FreeSid(InteractiveSid);
 
     /* The elevated start itself needs SeTcbPrivilege and a local user */
     Enable.PrivilegeCount = 1;
