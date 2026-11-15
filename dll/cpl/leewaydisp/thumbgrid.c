@@ -11,6 +11,7 @@
 #include <wingdi.h>
 #include <winuser.h>
 #include <commctrl.h>
+#include <shlobj.h>
 #include <strsafe.h>
 #include <gdiplus.h>
 #include "thumbgrid.h"
