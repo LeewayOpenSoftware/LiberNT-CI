@@ -22,6 +22,20 @@
 #define ELEV_CONSENT_TITLE L"User Account Control"
 #define ELEV_IMAGE_DIR     L"\\Temp\\LntElevation"
 
+/* "WinSta0\\Default" style name of the window station and desktop this thread uses */
+static
+BOOL
+GetCurrentDesktopName(PWSTR Buffer, DWORD Chars)
+{
+    WCHAR Station[128], Desk[128];
+    DWORD Needed;
+
+    if (!GetUserObjectInformationW(GetProcessWindowStation(), UOI_NAME, Station, sizeof(Station), &Needed) ||
+        !GetUserObjectInformationW(GetThreadDesktop(GetCurrentThreadId()), UOI_NAME, Desk, sizeof(Desk), &Needed))
+        return FALSE;
+    return SUCCEEDED(StringCchPrintfW(Buffer, Chars, L"%ls\\%ls", Station, Desk));
+}
+
 /* Child exit codes: the broker's error for the 'call' modes, a bit mask for 'elev' */
 #define ELEV_CHILD_UNEXPECTED   0x10000000
 #define ELEV_CHILD_PIPE_DENIED  0x20000000   /* 'call': the pipe itself refused the open */
@@ -38,12 +52,20 @@ CallBroker(
     handle_t hBinding = NULL;
     DWORD dwError;
 
+    WCHAR Desktop[256];
+
     ZeroMemory(Response, sizeof(*Response));
     Request.ApplicationName = (WCHAR *)ApplicationName;
     Request.CommandLine = (WCHAR *)CommandLine;
     Request.dwShowCmd = SW_HIDE;
     Request.dwCreationFlags = CREATE_NO_WINDOW;
     Request.dwDesktopInherited = TRUE;
+    /* A service runner lives on its own window station; the prompt must come there */
+    if (GetCurrentDesktopName(Desktop, _countof(Desktop)) && _wcsnicmp(Desktop, L"WinSta0\\", 8) != 0)
+    {
+        Request.Desktop = Desktop;
+        Request.dwDesktopInherited = FALSE;
+    }
 
     if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL, (RPC_WSTR)L"\\pipe\\seclogon", NULL,
                                  &StringBinding) != RPC_S_OK)
@@ -186,7 +208,8 @@ RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
     {
         StringCchPrintfW(Subst, _countof(Subst), L"Q:\\cmd.exe");
         dwError = CallBroker(L"cmd.exe /c exit 0", Subst, &Response);
-        if (dwError != ERROR_BAD_PATHNAME)
+        /* Refused as a made-up drive, or never found from the broker's side: both keep it out */
+        if (dwError != ERROR_BAD_PATHNAME && dwError != ERROR_FILE_NOT_FOUND && dwError != ERROR_PATH_NOT_FOUND)
             Failures |= 0x80;
         if (Response.hProcess != 0)
             CloseHandle((HANDLE)Response.hProcess);
@@ -405,12 +428,11 @@ void
 TestPairedCaller(void)
 {
     USER_INFO_1 User = { 0 };
-    LOCALGROUP_MEMBERS_INFO_0 Member;
-    SID_IDENTIFIER_AUTHORITY NtAuthority = { SECURITY_NT_AUTHORITY };
+    LOCALGROUP_MEMBERS_INFO_3 Member;
+    NET_API_STATUS NetStatus;
     HANDLE T1 = NULL, T2 = NULL, Lua2 = NULL, Imp = NULL;
     TOKEN_LINKED_TOKEN Link;
-    PSID AdminsSid = NULL;
-    DWORD ExitCode, Previous = 0;
+    DWORD ExitCode, Previous = 0, Value;
     BOOL HadValue = FALSE, Ret;
 
     NetUserDel(NULL, ELEV_TEST_USER);
@@ -424,24 +446,38 @@ TestPairedCaller(void)
         return;
     }
     /* The elevated side must really be an administrator */
-    if (AllocateAndInitializeSid(&NtAuthority, 2, SECURITY_BUILTIN_DOMAIN_RID, DOMAIN_ALIAS_RID_ADMINS, 0, 0, 0, 0, 0, 0, &AdminsSid))
+    Member.lgrmi3_domainandname = ELEV_TEST_USER;
+    NetStatus = NetLocalGroupAddMembers(NULL, L"Administrators", 3, (LPBYTE)&Member, 1);
+    if (NetStatus != NERR_Success)
     {
-        Member.lgrmi0_sid = AdminsSid;
-        NetLocalGroupAddMembers(NULL, L"Administrators", 0, (LPBYTE)&Member, 1);
-        FreeSid(AdminsSid);
+        skip("Cannot make the test user an administrator: %lu\n", NetStatus);
+        goto Cleanup;
     }
 
     Ret = LogonUserW(ELEV_TEST_USER, L".", ELEV_TEST_PASSWORD, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &T1) &&
-          LogonUserW(ELEV_TEST_USER, L".", ELEV_TEST_PASSWORD, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &T2) &&
-          CreateRestrictedToken(T2, LUA_TOKEN, 0, NULL, 0, NULL, 0, NULL, &Lua2);
-    ok(Ret, "Building the pair's tokens failed: %lu\n", GetLastError());
+          LogonUserW(ELEV_TEST_USER, L".", ELEV_TEST_PASSWORD, LOGON32_LOGON_INTERACTIVE, LOGON32_PROVIDER_DEFAULT, &T2);
+    ok(Ret, "Logging the test user on failed: %lu\n", GetLastError());
     if (!Ret)
         goto Cleanup;
-    Link.LinkedToken = T1;
-    Ret = SetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link));
-    ok(Ret, "Linking the pair failed: %lu\n", GetLastError());
-    if (!Ret)
-        goto Cleanup;
+    if (GetTokenDword(T2, TokenElevationType, &Value) && Value == TokenElevationTypeLimited)
+    {
+        /* EnableLUA=1: the logon already came as a pair; its limited side is the caller */
+        trace("The logon is split already; using the pair LSA built\n");
+        Lua2 = T2;
+        T2 = NULL;
+    }
+    else
+    {
+        Ret = CreateRestrictedToken(T2, LUA_TOKEN, 0, NULL, 0, NULL, 0, NULL, &Lua2);
+        ok(Ret, "CreateRestrictedToken(LUA_TOKEN) failed: %lu\n", GetLastError());
+        if (!Ret)
+            goto Cleanup;
+        Link.LinkedToken = T1;
+        Ret = SetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link));
+        ok(Ret, "Linking the pair failed: %lu\n", GetLastError());
+        if (!Ret)
+            goto Cleanup;
+    }
 
     if (!SetPolicyDword(L"ConsentPromptBehaviorAdmin", 0, &Previous, &HadValue))
     {
@@ -482,7 +518,9 @@ START_TEST(Elevation)
     SECL_RESPONSE Response;
     TOKEN_PRIVILEGES Enable;
     SID_IDENTIFIER_AUTHORITY WorldAuthority = { SECURITY_WORLD_SID_AUTHORITY };
-    SID_AND_ATTRIBUTES Restricting = { NULL, 0 };
+    SID_AND_ATTRIBUTES Restricting[3] = { { NULL, 0 }, { NULL, 0 }, { NULL, 0 } };
+    BYTE UserBuffer[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE], GroupBuffer[4096];
+    DWORD RestrictingCount = 0, Length, i;
     HANDLE Process = NULL, Low = NULL, Restricted = NULL;
     DWORD dwError, Value, ExitCode;
     BOOL Ret;
@@ -527,17 +565,29 @@ START_TEST(Elevation)
     }
     else
         skip("Cannot build a Low token: %lu\n", GetLastError());
-    /* A restricted token has restricting SIDs; WRITE_RESTRICTED alone is not one */
-    if (AllocateAndInitializeSid(&WorldAuthority, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &Restricting.Sid))
+    /* A restricted token has restricting SIDs; WRITE_RESTRICTED alone is not one. The user,
+     * the logon SID and Everyone stay so the restricted child can still start at all. */
+    if (GetTokenInformation(Process, TokenUser, UserBuffer, sizeof(UserBuffer), &Length))
+        Restricting[RestrictingCount++].Sid = ((PTOKEN_USER)UserBuffer)->User.Sid;
+    if (GetTokenInformation(Process, TokenGroups, GroupBuffer, sizeof(GroupBuffer), &Length))
     {
-        Restricting.Attributes = 0;
-        if (CreateRestrictedToken(Process, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 1, &Restricting, &Restricted))
+        PTOKEN_GROUPS Groups = (PTOKEN_GROUPS)GroupBuffer;
+        for (i = 0; i < Groups->GroupCount; i++)
+        {
+            if ((Groups->Groups[i].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID)
+                Restricting[RestrictingCount++].Sid = Groups->Groups[i].Sid;
+        }
+    }
+    if (AllocateAndInitializeSid(&WorldAuthority, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &Restricting[RestrictingCount].Sid))
+    {
+        RestrictingCount++;
+        if (CreateRestrictedToken(Process, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, RestrictingCount, Restricting, &Restricted))
         {
             Ret = StartChild(Restricted, "call", NULL, &ExitCode);
             ok(Ret && ExitCode == ERROR_ACCESS_DENIED, "Restricted caller: ret %d, error %lu\n", Ret, ExitCode);
             CloseHandle(Restricted);
         }
-        FreeSid(Restricting.Sid);
+        FreeSid(Restricting[RestrictingCount - 1].Sid);
     }
 
     /* The elevated start itself needs SeTcbPrivilege and a local user */

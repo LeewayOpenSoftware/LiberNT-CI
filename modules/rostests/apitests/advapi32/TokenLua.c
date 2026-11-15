@@ -255,7 +255,9 @@ TestTwoSessions(void)
         ok(Id.LowPart == SessionA.LowPart && Id.HighPart == SessionA.HighPart,
            "The elevated side is in session %08lx:%08lx, expected %08lx:%08lx\n",
            Id.HighPart, Id.LowPart, SessionA.HighPart, SessionA.LowPart);
-        ok(GetTokenDword(Linked, TokenElevation, &Value) && Value == 1, "The elevated side is not elevated\n");
+        /* The pair's full side belongs to a standard user here: linked, not elevated */
+        ok(GetTokenDword(Linked, TokenElevation, &Value) && Value == 0,
+           "A standard user's full side reports elevation %lu\n", Value);
         CloseHandle(Linked);
         Linked = NULL;
     }
