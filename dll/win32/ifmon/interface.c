@@ -44,7 +44,51 @@ InterfaceShowInterface(
     LPCVOID pvData,
     BOOL *pbDone)
 {
-    PrintMessage(L"InterfaceShowInterface(): Not implemented yet!\n");
+    PIP_ADAPTER_ADDRESSES pList = NULL, pAdapter;
+    ULONG Size = 16384, Error;
+    WCHAR Line[512];
+
+    for (;;)
+    {
+        pList = HeapAlloc(GetProcessHeap(), 0, Size);
+        if (pList == NULL)
+            return ERROR_NOT_ENOUGH_MEMORY;
+
+        Error = GetAdaptersAddresses(AF_UNSPEC,
+                                     GAA_FLAG_SKIP_UNICAST | GAA_FLAG_SKIP_ANYCAST |
+                                     GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER,
+                                     NULL, pList, &Size);
+        if (Error == ERROR_SUCCESS)
+            break;
+
+        HeapFree(GetProcessHeap(), 0, pList);
+        pList = NULL;
+        if (Error == ERROR_NO_DATA)
+            break;
+        if (Error != ERROR_BUFFER_OVERFLOW)
+            return Error;
+    }
+
+    PrintMessageFromModule(hDllInstance, IDS_INTERFACE_HEADER);
+
+    for (pAdapter = pList; pAdapter; pAdapter = pAdapter->Next)
+    {
+        /* Windows lists the network connections here, not the loopback or the tunnels */
+        if (pAdapter->IfType == IF_TYPE_SOFTWARE_LOOPBACK || pAdapter->IfType == IF_TYPE_TUNNEL)
+            continue;
+
+        /* A disabled connection has no adapter in this list, so every row is an enabled one */
+        StringCchPrintfW(Line, ARRAYSIZE(Line), L"%-15s%-15s%-17s%s\n",
+                         L"Enabled",
+                         (pAdapter->OperStatus == IfOperStatusUp) ? L"Connected" : L"Disconnected",
+                         L"Dedicated",
+                         pAdapter->FriendlyName ? pAdapter->FriendlyName : L"");
+        PrintMessage(L"%s", Line);
+    }
+    PrintMessage(L"\n");
+
+    if (pList)
+        HeapFree(GetProcessHeap(), 0, pList);
 
     return ERROR_SUCCESS;
 }

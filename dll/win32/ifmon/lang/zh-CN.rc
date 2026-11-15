@@ -12,6 +12,7 @@ BEGIN
     IDS_HLP_INTERFACE_SHOW "显示信息。\n"
     IDS_HLP_INTERFACE_SHOW_INTERFACE "显示接口。\n"
     IDS_HLP_INTERFACE_SHOW_INTERFACE_EX "\n用法:\n"
+    IDS_INTERFACE_HEADER "\nAdmin State    State          Type             Interface Name\n-------------------------------------------------------------------------\n"
 
     IDS_HLP_IP_ADD "将配置项添加到表中。\n"
     IDS_HLP_IP_ADD_ADDRESS     "将 IP 地址添加到指定的接口。\n"
