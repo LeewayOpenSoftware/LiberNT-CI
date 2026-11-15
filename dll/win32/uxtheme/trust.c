@@ -712,13 +712,37 @@ ThemeTrustPublishBootFact(void)
     DWORD v;
     BOOL ok = FALSE;
 
+    TOKEN_PRIVILEGES previous;
+    DWORD previousSize = sizeof(previous);
+    HANDLE adjusted = NULL;
+
     TrustEnsureClassified();
     if (g_classState != 2 || !g_userIsSystem)
         return FALSE;
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_CREATE_SUB_KEY, &gate) != ERROR_SUCCESS)
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(UXT_GATE_SDDL, SDDL_REVISION_1, &sd, NULL))
         return FALSE;
-    if (TrustKeyProtected(gate) &&
-        ConvertStringSecurityDescriptorToSecurityDescriptorW(UXT_GATE_SDDL, SDDL_REVISION_1, &sd, NULL))
+    TrustEnablePrivilege(L"SeTakeOwnershipPrivilege", &previous, &previousSize, &adjusted);
+    /* the hive gives the key an inherited descriptor (CREATOR OWNER full control): every boot sets the fixed one */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_CREATE_SUB_KEY | WRITE_DAC | WRITE_OWNER,
+                      &gate) != ERROR_SUCCESS ||
+        RegSetKeySecurity(gate, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
+                          sd) != ERROR_SUCCESS)
+    {
+        if (gate)
+            RegCloseKey(gate);
+        gate = NULL;
+    }
+    if (adjusted)
+    {
+        AdjustTokenPrivileges(adjusted, FALSE, &previous, 0, NULL, NULL);
+        CloseHandle(adjusted);
+    }
+    if (!gate)
+    {
+        LocalFree(sd);
+        return FALSE;
+    }
+    if (TrustKeyProtected(gate))
     {
         sa.lpSecurityDescriptor = sd;
         v = TrustComputeOwnerFact() ? 1 : 0;
@@ -728,8 +752,8 @@ ThemeTrustPublishBootFact(void)
             ok = RegSetValueExW(fact, L"Trusted", 0, REG_DWORD, (const BYTE *)&v, sizeof(v)) == ERROR_SUCCESS;
             RegCloseKey(fact);
         }
-        LocalFree(sd);
     }
+    LocalFree(sd);
     RegCloseKey(gate);
     return ok;
 }
@@ -1003,10 +1027,13 @@ TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g, BOOL honourStale)
     HeapFree(GetProcessHeap(), 0, snap);
     if (FAILED(hr))
     {
-        TrustEvent(L"style skipped after a failed load (crash guard)", name);
         /* T-GUARD-2 v6: the skip binds the process's own loads; a load the user asked for writes its own mark */
         if (honourStale)
+        {
+            TrustEvent(L"style skipped after a failed load (crash guard)", name);
             return hr;
+        }
+        TrustEvent(L"style opened on request despite a crash-guard mark", name);
         hr = S_OK;
     }
 

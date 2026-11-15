@@ -599,7 +599,7 @@ void UXTHEME_UninitSystem(void)
 
 #ifdef __REACTOS__
 void UXTHEME_ReloadTheme(BOOL load);
-static UINT_PTR g_reloadTimer;
+static LONG g_reloadPending;
 
 static BOOL CALLBACK UXTHEME_RedrawProcessWindow(HWND hwnd, LPARAM lParam)
 {
@@ -614,7 +614,7 @@ static BOOL CALLBACK UXTHEME_RedrawProcessWindow(HWND hwnd, LPARAM lParam)
 static VOID CALLBACK UXTHEME_DeferredReload(HWND hwnd, UINT msg, UINT_PTR id, DWORD time)
 {
     KillTimer(NULL, id);
-    g_reloadTimer = 0;
+    InterlockedExchange(&g_reloadPending, 0);
     UXTHEME_ReloadTheme(TRUE);
     EnumWindows(UXTHEME_RedrawProcessWindow, (LPARAM)GetCurrentProcessId());
 }
@@ -624,8 +624,10 @@ void UXTHEME_ReloadTheme(BOOL load)
     if (load && !UXTHEME_TrustReloadAllowed())
     {
         /* T-PRIV-5: one deferred reload at the end of the window */
-        if (!g_reloadTimer)
-            g_reloadTimer = SetTimer(NULL, 0, UXTHEME_TrustReloadDelay(), UXTHEME_DeferredReload);
+        /* several threads can get here; the first one arms a timer on its own message loop */
+        if (!InterlockedCompareExchange(&g_reloadPending, 1, 0) &&
+            !SetTimer(NULL, 0, UXTHEME_TrustReloadDelay(), UXTHEME_DeferredReload))
+            InterlockedExchange(&g_reloadPending, 0);
         return;
     }
     if (load)
