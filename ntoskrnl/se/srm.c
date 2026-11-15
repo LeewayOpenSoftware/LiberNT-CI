@@ -1323,7 +1323,8 @@ SepRmDereferenceLogonSession(
                     KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
                     Partner = SepRmFindLogonSessionLocked(&LinkedLogonId);
                     if (Partner != NULL &&
-                        (Partner->FullToken == PairFull || Partner->LimitedToken == PairLimited))
+                        ((PairFull != NULL && Partner->FullToken == PairFull) ||
+                         (PairLimited != NULL && Partner->LimitedToken == PairLimited)))
                     {
                         Partner->FullToken = NULL;
                         Partner->LimitedToken = NULL;
@@ -2101,16 +2102,22 @@ SepRmClearPairLocked(
  * Breaks the UAC pair a token belongs to, in both sessions. Used by the
  * TokenLinkedToken set with a null handle (SeTcbPrivilege callers).
  */
+/* The references found are handed back, never dropped here: the caller holds the
+ * pair lock and a token's delete procedure takes it again. */
 static
 NTSTATUS
 SepRmUnlinkLogonSessionPairLocked(
-    _In_ PTOKEN Token)
+    _In_ PTOKEN Token,
+    _Out_ PTOKEN *Referenced,
+    _Out_ PTOKEN *Other)
 {
     PSEP_LOGON_SESSION_REFERENCES Session;
-    PTOKEN Referenced = NULL, Other = NULL;
     LUID LinkedLogonId;
     BOOLEAN Linked = FALSE;
     PAGED_CODE();
+
+    *Referenced = NULL;
+    *Other = NULL;
 
     KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
     Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
@@ -2118,7 +2125,7 @@ SepRmUnlinkLogonSessionPairLocked(
     {
         Linked = TRUE;
         LinkedLogonId = Session->LinkedLogonId;
-        Referenced = SepRmClearPairLocked(Session, NULL);
+        *Referenced = SepRmClearPairLocked(Session, NULL);
     }
     KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
 
@@ -2130,14 +2137,10 @@ SepRmUnlinkLogonSessionPairLocked(
         KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
         Session = SepRmFindLogonSessionLocked(&LinkedLogonId);
         if (Session != NULL)
-            Other = SepRmClearPairLocked(Session, Token);
+            *Other = SepRmClearPairLocked(Session, Token);
         KeReleaseGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
     }
 
-    if (Referenced != NULL)
-        ObDereferenceObject(Referenced);
-    if (Other != NULL)
-        ObDereferenceObject(Other);
     return STATUS_SUCCESS;
 }
 
@@ -2146,12 +2149,19 @@ NTAPI
 SepRmUnlinkLogonSessionPair(
     _In_ PTOKEN Token)
 {
+    PTOKEN Referenced, Other;
     NTSTATUS Status;
     PAGED_CODE();
 
     KeAcquireGuardedMutex(&SepRmPairLock);
-    Status = SepRmUnlinkLogonSessionPairLocked(Token);
+    Status = SepRmUnlinkLogonSessionPairLocked(Token, &Referenced, &Other);
     KeReleaseGuardedMutex(&SepRmPairLock);
+
+    /* Dropping a reference may delete the token, whose delete procedure takes the lock */
+    if (Referenced != NULL)
+        ObDereferenceObject(Referenced);
+    if (Other != NULL)
+        ObDereferenceObject(Other);
     return Status;
 }
 

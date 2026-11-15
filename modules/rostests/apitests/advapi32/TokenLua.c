@@ -320,6 +320,16 @@ TestTwoSessions(void)
     Ret = SetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link));
     ok(Ret, "Relinking after the unlink failed: %lu\n", GetLastError());
 
+    /* The unlink may drop the last reference on the elevated token */
+    CloseHandle(T1);
+    T1 = NULL;
+    Link.LinkedToken = NULL;
+    Ret = SetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link));
+    ok(Ret, "Unlinking after the elevated handle is closed failed: %lu\n", GetLastError());
+    Ret = GetTokenInformation(Lua2, TokenLinkedToken, &Link, sizeof(Link), &Size);
+    Error = GetLastError();
+    ok(!Ret && Error == ERROR_NO_SUCH_LOGON_SESSION, "Still linked after the last unlink: ret %d, error %lu\n", Ret, Error);
+
 Cleanup:
     if (Lua2)
         CloseHandle(Lua2);
