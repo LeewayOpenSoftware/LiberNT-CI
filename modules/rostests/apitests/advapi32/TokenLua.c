@@ -340,6 +340,22 @@ Cleanup:
     NetUserDel(NULL, PAIR_TEST_USER);
 }
 
+/* CheckTokenMembership takes an impersonation token; duplicate a primary one for it */
+static
+BOOL
+IsMemberViaImpersonation(HANDLE Token, PSID Sid, PBOOL IsMember)
+{
+    HANDLE Imp;
+    BOOL Ret;
+
+    *IsMember = FALSE;
+    if (!DuplicateTokenEx(Token, TOKEN_QUERY, NULL, SecurityIdentification, TokenImpersonation, &Imp))
+        return FALSE;
+    Ret = CheckTokenMembership(Imp, Sid, IsMember);
+    CloseHandle(Imp);
+    return Ret;
+}
+
 START_TEST(TokenLua)
 {
     char **Argv;
@@ -372,7 +388,8 @@ START_TEST(TokenLua)
     if (!AdminsSid || !Process)
         goto Cleanup;
 
-    ok(CheckTokenMembership(Process, AdminsSid, &IsAdmin), "CheckTokenMembership failed: %lu\n", GetLastError());
+    /* CheckTokenMembership wants an impersonation token, as on Windows */
+    ok(IsMemberViaImpersonation(Process, AdminsSid, &IsAdmin), "CheckTokenMembership failed: %lu\n", GetLastError());
     trace("The process token %s a member of Administrators\n", IsAdmin ? "is" : "is not");
 
     /* The LUA transform itself */
@@ -396,7 +413,7 @@ START_TEST(TokenLua)
     ok(Found == IsAdmin, "Administrators present in the LUA token: %d, in the process token: %d\n", Found, IsAdmin);
 
     Value = 0xdead;
-    ok(CheckTokenMembership(Lua, AdminsSid, (PBOOL)&Value), "CheckTokenMembership(LUA) failed: %lu\n", GetLastError());
+    ok(IsMemberViaImpersonation(Lua, AdminsSid, (PBOOL)&Value), "CheckTokenMembership(LUA) failed: %lu\n", GetLastError());
     ok(Value == FALSE, "The LUA token still passes an Administrators membership check\n");
 
     Ret = GetTokenInformation(Lua, TokenPrivileges, Privileges, sizeof(Buffer), &Size);

@@ -24,6 +24,7 @@
 
 /* Child exit codes: the broker's error for the 'call' modes, a bit mask for 'elev' */
 #define ELEV_CHILD_UNEXPECTED   0x10000000
+#define ELEV_CHILD_PIPE_DENIED  0x20000000   /* 'call': the pipe itself refused the open */
 
 static
 DWORD
@@ -120,7 +121,19 @@ RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
     StringCchPrintfW(Cmd, _countof(Cmd), L"\"%ls\\cmd.exe\" /c set LNT_ELEVATION_TEST", SystemDir);
 
     if (!strcmp(Mode, "call"))
-        return CallBroker(Cmd, NULL, &Response);
+    {
+        dwError = CallBroker(Cmd, NULL, &Response);
+        if (dwError == ERROR_SERVICE_NOT_ACTIVE)
+        {
+            /* Not reachable: a service that is gone, or a pipe we may not open */
+            hProcess = CreateFileW(L"\\\\.\\pipe\\seclogon", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+            if (hProcess == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
+                return ELEV_CHILD_PIPE_DENIED;
+            if (hProcess != INVALID_HANDLE_VALUE)
+                CloseHandle(hProcess);
+        }
+        return dwError;
+    }
 
     if (!strcmp(Mode, "callapp"))
     {
@@ -468,6 +481,8 @@ START_TEST(Elevation)
     int Argc = winetest_get_mainargs(&Argv);
     SECL_RESPONSE Response;
     TOKEN_PRIVILEGES Enable;
+    SID_IDENTIFIER_AUTHORITY WorldAuthority = { SECURITY_WORLD_SID_AUTHORITY };
+    SID_AND_ATTRIBUTES Restricting = { NULL, 0 };
     HANDLE Process = NULL, Low = NULL, Restricted = NULL;
     DWORD dwError, Value, ExitCode;
     BOOL Ret;
@@ -499,21 +514,30 @@ START_TEST(Elevation)
         ok(dwError == ERROR_ELEVATION_REQUIRED || dwError == ERROR_ACCESS_DENIED,
            "Unpaired caller: expected ERROR_ELEVATION_REQUIRED, got %lu\n", dwError);
 
-    /* Low integrity and restricted callers never reach a prompt */
+    /* Low integrity and restricted callers never reach a prompt. A Low caller may already be
+     * refused at the pipe (mandatory policy); the child then reports where it was stopped. */
     Low = MakeLowToken(Process);
     if (Low)
     {
         Ret = StartChild(Low, "call", NULL, &ExitCode);
-        ok(Ret && ExitCode == ERROR_ACCESS_DENIED, "Low caller: ret %d, error %lu\n", Ret, ExitCode);
+        ok(Ret && (ExitCode == ERROR_ACCESS_DENIED || ExitCode == ELEV_CHILD_PIPE_DENIED),
+           "Low caller: ret %d, error %lu\n", Ret, ExitCode);
+        trace("Low caller refused %s\n", ExitCode == ELEV_CHILD_PIPE_DENIED ? "at the pipe" : "by the broker");
         CloseHandle(Low);
     }
     else
         skip("Cannot build a Low token: %lu\n", GetLastError());
-    if (CreateRestrictedToken(Process, DISABLE_MAX_PRIVILEGE | WRITE_RESTRICTED, 0, NULL, 0, NULL, 0, NULL, &Restricted))
+    /* A restricted token has restricting SIDs; WRITE_RESTRICTED alone is not one */
+    if (AllocateAndInitializeSid(&WorldAuthority, 1, SECURITY_WORLD_RID, 0, 0, 0, 0, 0, 0, 0, &Restricting.Sid))
     {
-        Ret = StartChild(Restricted, "call", NULL, &ExitCode);
-        ok(Ret && ExitCode == ERROR_ACCESS_DENIED, "Restricted caller: ret %d, error %lu\n", Ret, ExitCode);
-        CloseHandle(Restricted);
+        Restricting.Attributes = 0;
+        if (CreateRestrictedToken(Process, DISABLE_MAX_PRIVILEGE, 0, NULL, 0, NULL, 1, &Restricting, &Restricted))
+        {
+            Ret = StartChild(Restricted, "call", NULL, &ExitCode);
+            ok(Ret && ExitCode == ERROR_ACCESS_DENIED, "Restricted caller: ret %d, error %lu\n", Ret, ExitCode);
+            CloseHandle(Restricted);
+        }
+        FreeSid(Restricting.Sid);
     }
 
     /* The elevated start itself needs SeTcbPrivilege and a local user */
