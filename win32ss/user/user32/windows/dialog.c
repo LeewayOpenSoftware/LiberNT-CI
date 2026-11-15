@@ -566,6 +566,17 @@ static HWND DIALOG_FindMsgDestination( HWND hwndDlg )
     return hwndDlg;
 }
 
+/***********************************************************************
+ *           DIALOG_SetForeground
+ *
+ * DS_SETFOREGROUND: bring a dialog that has just been shown to the foreground.
+ */
+static void DIALOG_SetForeground( HWND hwnd )
+{
+    if (GetWindowLongPtrW( hwnd, GWL_STYLE ) & DS_SETFOREGROUND)
+        SetForegroundWindow( hwnd );
+}
+
  /***********************************************************************
  *           DIALOG_DoDialogBox
  */
@@ -598,6 +609,7 @@ INT DIALOG_DoDialogBox( HWND hwnd, HWND owner )
                     /* ShowWindow the first time the queue goes empty */
                     if (!ShowWindow( hwnd, SW_SHOWNORMAL ))
                         IntNotifyWinEvent(EVENT_SYSTEM_DIALOGSTART, hwnd, OBJID_WINDOW, CHILDID_SELF, 0);
+                    DIALOG_SetForeground( hwnd );
                     bFirstEmpty = FALSE;
                 }
                 if (!(GetWindowLongPtrW( hwnd, GWL_STYLE ) & DS_NOIDLEMSG))
@@ -643,6 +655,7 @@ INT DIALOG_DoDialogBox( HWND hwnd, HWND owner )
             if (bFirstEmpty && msg.message == WM_TIMER)
             {
                 ShowWindow( hwnd, SW_SHOWNORMAL );
+                DIALOG_SetForeground( hwnd );
                 bFirstEmpty = FALSE;
             }
         }
@@ -1144,6 +1157,7 @@ static HWND DIALOG_CreateIndirect( HINSTANCE hInst, LPCVOID dlgTemplate,
             !(GetWindowLongPtrW( hwnd, GWL_STYLE ) & WS_VISIBLE))
         {
            ShowWindow( hwnd, SW_SHOWNORMAL );   /* SW_SHOW doesn't always work */
+           DIALOG_SetForeground( hwnd );
            UpdateWindow( hwnd );
         }
         return hwnd;
