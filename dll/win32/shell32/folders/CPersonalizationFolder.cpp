@@ -757,10 +757,23 @@ HRESULT WINAPI CPersonalizationFolder::BindToStorage(PCUIDLIST_RELATIVE pidl, LP
     return E_NOTIMPL;
 }
 
+/* Compares two chains of our ids one by one: a shorter chain sorts first */
+int PersCompareChain(PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2)
+{
+    while (!ILIsEmpty(pidl1) && !ILIsEmpty(pidl2))
+    {
+        int diff = (int)PersRawPage(pidl1) - (int)PersRawPage(pidl2);
+        if (diff)
+            return diff;
+        pidl1 = ILGetNext(pidl1);
+        pidl2 = ILGetNext(pidl2);
+    }
+    return (int)!ILIsEmpty(pidl1) - (int)!ILIsEmpty(pidl2);
+}
+
 HRESULT WINAPI CPersonalizationFolder::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2)
 {
-    UINT a = PersRawPage(pidl1), b = PersRawPage(pidl2);
-    return MAKE_COMPARE_HRESULT((int)a - (int)b);
+    return MAKE_COMPARE_HRESULT(PersCompareChain(pidl1, pidl2));
 }
 
 HRESULT WINAPI CPersonalizationFolder::CreateViewObject(HWND hwndOwner, REFIID riid, LPVOID *ppvOut)

@@ -512,6 +512,8 @@ HRESULT WINAPI CControlPanelFolder::BindToStorage(
 */
 HRESULT WINAPI CControlPanelFolder::CompareIDs(LPARAM lParam, PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2)
 {
+    if (CplIsCategoryPidl(pidl1) && CplIsCategoryPidl(pidl2))
+        return MAKE_COMPARE_HRESULT(PersCompareChain(pidl1, pidl2));
     if (CplIsCategoryPidl(pidl1) || CplIsCategoryPidl(pidl2))
         return MAKE_COMPARE_HRESULT((int)CplIsCategoryPidl(pidl1) - (int)CplIsCategoryPidl(pidl2));
     /* Dont use SHELL32_CompareGuidItems because it would cause guid items to come first */

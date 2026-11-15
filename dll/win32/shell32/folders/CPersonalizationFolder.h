@@ -29,6 +29,7 @@ EXTERN_C const CLSID CLSID_PersonalizationFolder;
 PCWSTR PersCategoryName(VOID);
 PITEMID_CHILD CplCategoryCreatePidl(VOID);
 BOOL CplIsCategoryPidl(PCUIDLIST_RELATIVE pidl);
+int PersCompareChain(PCUIDLIST_RELATIVE pidl1, PCUIDLIST_RELATIVE pidl2);
 BOOL CplIsCategoryName(PCWSTR name);
 BOOL CplIsPersonalizationParseName(PCWSTR name);
 HRESULT CplCategoryBind(PCIDLIST_ABSOLUTE pidlAbsCategory, REFIID riid, LPVOID *ppvOut);
