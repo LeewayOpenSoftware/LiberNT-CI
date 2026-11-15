@@ -88,13 +88,29 @@ FileRecord::SetReparsePoint(
     _In_reads_bytes_(BufferLength) const UCHAR* Buffer,
     _In_ ULONG BufferLength)
 {
+    ReparsePointEx Header;
     NTSTATUS Status;
 
     Status = NtfsValidateReparseBuffer(Buffer,
                                        BufferLength,
-                                       NULL);
+                                       &Header);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    /* A junction or symbolic link is followed by the I/O manager, which
+     * uses its name offsets: both names must lie inside the data. */
+    if (Header.ReparseType == NTFS_IO_REPARSE_TAG_MOUNT_POINT ||
+        Header.ReparseType == NTFS_IO_REPARSE_TAG_SYMLINK)
+    {
+        NtfsReparseNameView View;
+
+        Status = NtfsParseNameSurrogateReparsePoint(Buffer,
+                                                    BufferLength,
+                                                    &View);
+        if (!NT_SUCCESS(Status))
+            return STATUS_IO_REPARSE_DATA_INVALID;
+    }
+
     return UpdateReparsePoint(Buffer,
                               BufferLength,
                               FALSE);

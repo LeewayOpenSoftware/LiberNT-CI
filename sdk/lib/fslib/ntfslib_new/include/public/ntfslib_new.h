@@ -514,6 +514,18 @@ NtfsParseNameSurrogateReparsePoint(
     _Out_ PNtfsReparseNameView View);
 
 /*
+ * Same layout checks as NtfsParseNameSurrogateReparsePoint (both names inside
+ * the data, even offsets and lengths, a substitute name), without judging the
+ * characters: for data that is already on the volume, possibly written by
+ * another system, where only the bounds are checked.
+ */
+NTSTATUS
+NtfsCheckNameSurrogateReparseBounds(
+    _In_ const UCHAR* Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PNtfsReparseNameView View);
+
+/*
  * Returns the complete, validated on-disk $EA value and its matching
  * $EA_INFORMATION record. BufferLength is a byte capacity on input and the
  * required/returned raw byte count on output.
