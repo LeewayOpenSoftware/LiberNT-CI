@@ -49,6 +49,7 @@ extern void func_RtlEncryptMemory(void);
 extern void func_SaferIdentifyLevel(void);
 extern void func_SaferLevels(void);
 extern void func_SaferRules(void);
+extern void func_Elevation(void);
 extern void func_SeclogonCaller(void);
 extern void func_ServiceArgs(void);
 extern void func_ServiceCrash(void);
@@ -117,6 +118,7 @@ const struct test winetest_testlist[] =
     { "SaferIdentifyLevel", func_SaferIdentifyLevel },
     { "SaferLevels", func_SaferLevels },
     { "SaferRules", func_SaferRules },
+    { "Elevation", func_Elevation },
     { "SeclogonCaller", func_SeclogonCaller },
     { "ServiceArgs", func_ServiceArgs },
     { "ServiceCrash", func_ServiceCrash },

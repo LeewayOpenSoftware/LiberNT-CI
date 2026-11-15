@@ -48,6 +48,7 @@ list(APPEND SOURCE
     SaferIdentifyLevel.c
     SaferLevels.c
     SaferRules.c
+    Elevation.c
     SeclogonCaller.c
     ServiceArgs.c
     ServiceCrash.c

@@ -158,7 +158,7 @@ TestMediumChild(HANDLE Process, HANDLE Lua)
     if (!Ret)
         return;
 
-    swprintf(CommandLine, L"\"%ls\" TokenLua child %lu %p 0", Exe, GetCurrentProcessId(), Impersonation);
+    StringCchPrintfW(CommandLine, _countof(CommandLine), L"\"%ls\" TokenLua child %lu %p 0", Exe, GetCurrentProcessId(), Impersonation);
     Ret = CreateProcessAsUserW(Lua, Exe, CommandLine, NULL, NULL, TRUE, 0, NULL, NULL,
                                &StartupInfo, &ProcessInfo);
     ok(Ret, "CreateProcessAsUserW(LUA token) failed: %lu\n", GetLastError());
@@ -284,7 +284,7 @@ TestTwoSessions(void)
 
         if (GetModuleFileNameW(NULL, Exe, _countof(Exe)))
         {
-            swprintf(CommandLine, L"\"%ls\" TokenLua child 0 0 1", Exe);
+            StringCchPrintfW(CommandLine, _countof(CommandLine), L"\"%ls\" TokenLua child 0 0 1", Exe);
             Ret = CreateProcessAsUserW(Lua2, Exe, CommandLine, NULL, NULL, FALSE, 0, NULL, NULL,
                                        &StartupInfo, &ProcessInfo);
             ok(Ret, "CreateProcessAsUserW(two-session LUA token) failed: %lu\n", GetLastError());
