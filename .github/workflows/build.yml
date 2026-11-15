@@ -262,22 +262,6 @@ jobs:
         name: libernt-update-pending-${{steps.images.outputs.tag}}
         path: applier-out/
 
-    - name: Stage clang freeldr for the MSVC hybrid lab image
-      if: ${{ matrix.arch == 'amd64' }}
-      run: |
-        mkdir -p freeldr-clang
-        cp ${{steps.configure.outputs.outdir}}/boot/freeldr/freeldr/freeldr.sys freeldr-clang/
-        cp ${{steps.configure.outputs.outdir}}/boot/freeldr/bootsect/fat32.bin freeldr-clang/
-        cp ${{steps.configure.outputs.outdir}}/boot/freeldr/bootsect/dosmbr.bin freeldr-clang/
-
-    - name: Upload clang freeldr (for the MSVC hybrid image)
-      if: ${{ matrix.arch == 'amd64' }}
-      uses: actions/upload-artifact@v7
-      with:
-        name: freeldr-clang-amd64-${{github.sha}}
-        path: freeldr-clang/
-        if-no-files-found: error
-
     - name: Upload bootcd.iso
       uses: actions/upload-artifact@v7
       with:
@@ -570,7 +554,6 @@ jobs:
     # the conly leg (LRM-RS OFF, no Rust toolchain installed) only shows that the C-only build still works.
     # Runs on leeway/main, on the ci/msvc-rust* work branches and on a manual run with msvc=true.
     if: ${{ github.ref == 'refs/heads/leeway/main' || startsWith(github.ref, 'refs/heads/ci/msvc-rust') || (github.event_name == 'workflow_dispatch' && inputs.msvc) }}
-    needs: build-linux
     strategy:
       matrix:
         include:
@@ -702,13 +685,6 @@ jobs:
       shell: cmd
       run: ninja -C ${{steps.configure.outputs.outdir}} bootcd -k0
 
-    - name: Download clang freeldr for the hybrid lab image
-      if: ${{ !cancelled() && steps.configure.outcome == 'success' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
-      uses: actions/download-artifact@v7
-      with:
-        name: freeldr-clang-amd64-${{github.sha}}
-        path: freeldr-clang
-
     - name: Build the persistent system disk images
       # The lab boots LiberNT.img/.vhd/.vhdx: a read-write system disk whose
       # registry and state persist across runs, unlike the bootcd live image.
@@ -730,19 +706,6 @@ jobs:
             Get-ChildItem -Recurse "$out" -Filter $t -ErrorAction SilentlyContinue | ForEach-Object { Write-Host ('{0}  {1} bytes' -f $_.FullName, $_.Length) }
           }
           throw "ninja liberntimg failed (code $code); diagnostics above"
-        }
-        if ("${{matrix.arch}}" -eq "amd64" -and "${{matrix.variant}}" -eq "lrmrs" -and (Test-Path "freeldr-clang/freeldr.sys")) {
-          Write-Host 'HYBRID: swapping in clang freeldr.sys + bootsectors (clang freeldr + MSVC kernel/drivers); MSVC freeldr HDD path is a separate B-track fix'
-          Copy-Item "$out/LiberNT.img" "$out/LiberNT-msvcfreeldr.img" -Force
-          Write-Host 'B-TEST: preserved pre-swap pure-MSVC (cl freeldr) LiberNT.img -> LiberNT-msvcfreeldr.img (tests the pcdisk REGS zero-init HDD-boot fix)'
-          Copy-Item "freeldr-clang/freeldr.sys" "$out/boot/freeldr/freeldr/freeldr.sys" -Force
-          Copy-Item "freeldr-clang/fat32.bin"  "$out/boot/freeldr/bootsect/fat32.bin"  -Force
-          Copy-Item "freeldr-clang/dosmbr.bin" "$out/boot/freeldr/bootsect/dosmbr.bin" -Force
-          $future = (Get-Date).AddMinutes(10)
-          foreach ($f in "$out/boot/freeldr/freeldr/freeldr.sys","$out/boot/freeldr/bootsect/fat32.bin","$out/boot/freeldr/bootsect/dosmbr.bin") { (Get-Item $f).LastWriteTime = $future }
-          ninja -C $out liberntimg -k0 -v
-          if ($LASTEXITCODE -ne 0) { throw 'hybrid re-assemble (clang freeldr) failed' }
-          Write-Host 'HYBRID: LiberNT.img re-assembled with clang freeldr + MSVC kernel/drivers'
         }
 
     - name: Build the lnrspoc PoC driver and archives (MSVC lab image only)
@@ -774,9 +737,7 @@ jobs:
         $V = ""
         if ($env:LAB_POC -eq 'ON') { $V = "-lrmrs" }
         if ($env:FORCE_PANIC -eq 'ON') { $V = "-lrmrs-fp" }
-        $H = ""
-        if ("${{matrix.arch}}" -eq "amd64" -and "${{matrix.variant}}" -eq "lrmrs") { $H = "-hybrid-clangfreeldr" }
-        "tag=msvc-${{matrix.arch}}-${{matrix.variant}}$V$H-$($env:GITHUB_SHA.Substring(0, 11))" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        "tag=msvc-${{matrix.arch}}-${{matrix.variant}}$V-$($env:GITHUB_SHA.Substring(0, 11))" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
     - name: Upload bootcd.iso
       if: ${{ !cancelled() && steps.bootcd.outcome == 'success' }}
@@ -792,14 +753,6 @@ jobs:
       with:
         name: LiberNT-img-${{steps.images.outputs.tag}}
         path: ${{steps.configure.outputs.outdir}}/LiberNT.img
-        if-no-files-found: error
-
-    - name: Upload the pure-MSVC (cl freeldr) test image (B HDD-boot fix)
-      if: ${{ !cancelled() && steps.sysimg.outcome == 'success' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
-      uses: actions/upload-artifact@v7
-      with:
-        name: LiberNT-img-msvc-amd64-lrmrs-MSVCfreeldr-test-${{github.sha}}
-        path: ${{steps.configure.outputs.outdir}}/LiberNT-msvcfreeldr.img
         if-no-files-found: error
 
     - name: Upload lnrspoc.sys and the Rust archives (MSVC lab image only)
