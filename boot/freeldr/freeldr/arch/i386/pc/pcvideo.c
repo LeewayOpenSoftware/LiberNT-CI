@@ -1364,25 +1364,6 @@ PcVideoGetEdidPreferredResolution(
 /* SOFTGPU_ROOT_WORKING_SURFACE_COUNT in drivers/directx/softgpu/platform_root.c; keep in sync */
 #define BOOTFB_SOFTGPU_SURFACE_COUNT 12UL
 
-static ULONGLONG
-PcVideoGetUsableMemorySize(VOID)
-{
-    PFREELDR_MEMORY_DESCRIPTOR MemoryMap;
-    ULONG EntryCount, i;
-    ULONGLONG Bytes = 0;
-
-    MemoryMap = MachVtbl.GetMemoryMap(&EntryCount);
-    if (MemoryMap == NULL)
-        return 0;
-
-    for (i = 0; i < EntryCount; i++)
-    {
-        if (MemoryMap[i].MemoryType == LoaderFree)
-            Bytes += (ULONGLONG)MemoryMap[i].PageCount * MM_PAGE_SIZE;
-    }
-    return Bytes;
-}
-
 BOOLEAN
 PcVideoInitializeBootFramebuffer(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBuffer)
@@ -1400,7 +1381,7 @@ PcVideoInitializeBootFramebuffer(
     RtlZeroMemory(FrameBuffer, sizeof(*FrameBuffer));
 
     /* SOFTGPU reserves 12x the page-aligned framebuffer (MinimumAllocationSlabSize); the 2560-wide pick at 512 MB RAM died with STOP 0xB4, so budget that slab at 1/8 of usable RAM */
-    FrameBufferBudget = PcVideoGetUsableMemorySize() / 8;
+    FrameBufferBudget = PcMemGetUsableMemorySize() / 8;
     HaveEdid = PcVideoGetEdidPreferredResolution(&EdidWidth, &EdidHeight);
 
     for (Mode = 0x100; Mode < 0x200; ++Mode)

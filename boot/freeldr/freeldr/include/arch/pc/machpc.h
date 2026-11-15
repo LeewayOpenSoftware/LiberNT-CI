@@ -51,6 +51,7 @@ PcVideoInitializeBootFramebuffer(
 VOID PcPrepareForReactOS(VOID);
 
 PFREELDR_MEMORY_DESCRIPTOR PcMemGetMemoryMap(ULONG *MemoryMapSize);
+ULONGLONG PcMemGetUsableMemorySize(VOID);
 BOOLEAN PcFindPciBios(PPCI_REGISTRY_INFO BusData);
 
 /*

@@ -671,6 +671,20 @@ PcMemGetMemoryMap(ULONG *MemoryMapSize)
     return PcMemoryMap;
 }
 
+ULONGLONG
+PcMemGetUsableMemorySize(VOID)
+{
+    ULONG i;
+    ULONGLONG Bytes = 0;
+
+    for (i = 0; i < PcMapCount; i++)
+    {
+        if (PcMemoryMap[i].MemoryType == LoaderFree)
+            Bytes += (ULONGLONG)PcMemoryMap[i].PageCount * MM_PAGE_SIZE;
+    }
+    return Bytes;
+}
+
 #endif // !SARCH_XBOX && !SARCH_PC98
 
 /* EOF */
