@@ -343,6 +343,7 @@ public:
     ~CCplCategoryView();
 
     HRESULT Initialize(IShellFolder *psf, IShellView *pInner);
+    void SetInitialCategory(UINT id) { m_initialCat = id; }
 
     // IOleWindow
     STDMETHOD(GetWindow)(HWND *lphwnd) override;
@@ -1467,7 +1468,7 @@ HRESULT CplCreateCategoryView(IShellFolder *psf, IShellView *pInner, IShellView 
     hr = pView->Initialize(psf, pInner);
     if (FAILED_UNEXPECTEDLY(hr))
         return hr;
-    pView->m_initialCat = g_nextViewCategory;
+    pView->SetInitialCategory(g_nextViewCategory);
     g_nextViewCategory = 0;
     return pView->QueryInterface(IID_PPV_ARG(IShellView, ppView));
 }
