@@ -58,6 +58,7 @@ list(APPEND SOURCE
     TriggerInfo.c
     TokenBnoIsolation.c
     TokenLinkedToken.c
+    TokenLua.c
     TraceEvents.c
     TokenDefaultPrivileges.c
     TokenIntegrity.c

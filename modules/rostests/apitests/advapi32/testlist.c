@@ -59,6 +59,7 @@ extern void func_ServicePowerSetting(void);
 extern void func_StartServiceCtrlDispatcher(void);
 extern void func_TokenBnoIsolation(void);
 extern void func_TokenLinkedToken(void);
+extern void func_TokenLua(void);
 extern void func_TraceEvents(void);
 extern void func_TokenDefaultPrivileges(void);
 extern void func_TokenIntegrity(void);
@@ -126,6 +127,7 @@ const struct test winetest_testlist[] =
     { "StartServiceCtrlDispatcher", func_StartServiceCtrlDispatcher },
     { "TokenBnoIsolation", func_TokenBnoIsolation },
     { "TokenLinkedToken", func_TokenLinkedToken },
+    { "TokenLua", func_TokenLua },
     { "TraceEvents", func_TraceEvents },
     { "TokenDefaultPrivileges", func_TokenDefaultPrivileges },
     { "TokenIntegrity", func_TokenIntegrity },

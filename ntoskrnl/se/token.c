@@ -1692,6 +1692,9 @@ SepDeleteToken(
 
     DPRINT("SepDeleteToken()\n");
 
+    /* Leave the UAC pair of the logon session, if the token is part of one */
+    SepRmUnlinkLogonSessionToken(AccessToken);
+
     /* Remove the referenced logon session from token */
     if (AccessToken->LogonSession)
     {
