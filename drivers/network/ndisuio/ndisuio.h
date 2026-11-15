@@ -10,6 +10,7 @@
 
 #include <ndis.h>
 #include <nuiouser.h>
+#include <wdmsec.h>
 
 extern PDEVICE_OBJECT GlobalDeviceObject;
 extern NDIS_HANDLE GlobalProtocolHandle;
@@ -29,11 +30,18 @@ typedef struct _NDISUIO_ADAPTER_CONTEXT
     ULONG OpenCount;
     LIST_ENTRY OpenEntryList;
 
+    /* Requests that use this context now. The unbind waits for them.
+     * Both fields are protected by the global adapter list lock. */
+    LONG IoCount;
+    BOOLEAN Unbinding;
+    KEVENT IoDoneEvent;
+
     /* NDIS pools */
     NDIS_HANDLE NblPoolHandle;
 
-    /* Receive packet list */
+    /* Receive packet list. PacketCount is protected by Spinlock. */
     LIST_ENTRY PacketList;
+    ULONG PacketCount;
     KEVENT PacketReadEvent;
 
     BOOLEAN Paused;
@@ -81,6 +89,9 @@ typedef struct _NDISUIO_REQUEST
     NDIS_STATUS Status;
 } NDISUIO_REQUEST, *PNDISUIO_REQUEST;
 
+/* Received packets that may wait for a read. More are dropped. */
+#define NDISUIO_MAX_QUEUED_PACKETS 256
+
 /* NDIS version info */
 #define NDIS_MAJOR_VERSION 6
 #define NDIS_MINOR_VERSION 0
@@ -108,14 +119,14 @@ NduDoRequest(PNDISUIO_ADAPTER_CONTEXT AdapterContext,
              PNDISUIO_REQUEST Request);
 
 PNDISUIO_ADAPTER_CONTEXT
-FindAdapterContextByName(PNDIS_STRING DeviceName);
+NduBeginIo(PFILE_OBJECT FileObject,
+           PBOOLEAN WriteOnly);
+
+VOID
+NduEndIo(PNDISUIO_ADAPTER_CONTEXT AdapterContext);
 
 VOID
 ReferenceAdapterContext(PNDISUIO_ADAPTER_CONTEXT AdapterContext);
-
-VOID
-DereferenceAdapterContextWithOpenEntry(PNDISUIO_ADAPTER_CONTEXT AdapterContext,
-                                       PNDISUIO_OPEN_ENTRY OpenEntry);
 
 /* protocol.c */
 PROTOCOL_OPEN_ADAPTER_COMPLETE_EX NduOpenAdapterComplete;

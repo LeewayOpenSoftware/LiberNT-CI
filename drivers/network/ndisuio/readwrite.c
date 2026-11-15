@@ -16,12 +16,12 @@ VOID
 NTAPI
 ReadIrpCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
-    PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
-    PNDISUIO_ADAPTER_CONTEXT AdapterContext = IrpSp->FileObject->FsContext;
+    PNDISUIO_ADAPTER_CONTEXT AdapterContext = Irp->Tail.Overlay.DriverContext[0];
     PNDISUIO_PACKET_ENTRY PacketEntry;
 
-    /* Release the cancel spin lock */
-    IoReleaseCancelSpinLock(Irp->CancelIrql);
+    /* The reader keeps the adapter alive, and it cannot remove this routine
+     * and leave while the cancel spin lock is held. So the lock is released
+     * last. The file object is not used: an unbind clears its context. */
 
     /* Indicate a 0-byte packet on the queue to cancel the read */
     PacketEntry = ExAllocatePool(NonPagedPool, sizeof(NDISUIO_PACKET_ENTRY));
@@ -35,6 +35,8 @@ ReadIrpCancel(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
         KeSetEvent(&AdapterContext->PacketReadEvent, IO_NO_INCREMENT, FALSE);
     }
+
+    IoReleaseCancelSpinLock(Irp->CancelIrql);
 }
 
 NTSTATUS
@@ -43,8 +45,8 @@ NduDispatchRead(PDEVICE_OBJECT DeviceObject,
                 PIRP Irp)
 {
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
-    PNDISUIO_ADAPTER_CONTEXT AdapterContext = IrpSp->FileObject->FsContext;
-    PNDISUIO_OPEN_ENTRY OpenEntry = IrpSp->FileObject->FsContext2;
+    PNDISUIO_ADAPTER_CONTEXT AdapterContext;
+    BOOLEAN WriteOnly = FALSE;
     KIRQL OldIrql, OldCancelIrql;
     NTSTATUS Status;
     PLIST_ENTRY ListEntry;
@@ -53,8 +55,14 @@ NduDispatchRead(PDEVICE_OBJECT DeviceObject,
 
     ASSERT(DeviceObject == GlobalDeviceObject);
 
-    if (OpenEntry->WriteOnly)
+    /* The file object must be opened on an adapter, for reading. The adapter
+     * stays until NduEndIo. */
+    AdapterContext = NduBeginIo(IrpSp->FileObject, &WriteOnly);
+    if (AdapterContext == NULL || WriteOnly)
     {
+        if (AdapterContext != NULL)
+            NduEndIo(AdapterContext);
+
         Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
         Irp->IoStatus.Information = 0;
         IoCompleteRequest(Irp, IO_NO_INCREMENT);
@@ -63,11 +71,12 @@ NduDispatchRead(PDEVICE_OBJECT DeviceObject,
     }
 
     /* Make the read cancellable */
+    Irp->Tail.Overlay.DriverContext[0] = AdapterContext;
     IoAcquireCancelSpinLock(&OldCancelIrql);
-    IoSetCancelRoutine(Irp, ReadIrpCancel);
     if (Irp->Cancel)
     {
         IoReleaseCancelSpinLock(OldCancelIrql);
+        NduEndIo(AdapterContext);
 
         /* Indicate a 0 byte read */
         Irp->IoStatus.Status = STATUS_SUCCESS;
@@ -76,11 +85,27 @@ NduDispatchRead(PDEVICE_OBJECT DeviceObject,
 
         return STATUS_SUCCESS;
     }
+    IoSetCancelRoutine(Irp, ReadIrpCancel);
     IoReleaseCancelSpinLock(OldCancelIrql);
 
     while (TRUE)
     {
         KeAcquireSpinLock(&AdapterContext->Spinlock, &OldIrql);
+
+        /* The adapter is being unbound: leave, and wake the next reader */
+        if (AdapterContext->Unbinding)
+        {
+            KeReleaseSpinLock(&AdapterContext->Spinlock, OldIrql);
+
+            /* Remove the cancel routine */
+            IoAcquireCancelSpinLock(&OldCancelIrql);
+            IoSetCancelRoutine(Irp, NULL);
+            IoReleaseCancelSpinLock(OldCancelIrql);
+
+            KeSetEvent(&AdapterContext->PacketReadEvent, IO_NO_INCREMENT, FALSE);
+            Status = STATUS_CANCELLED;
+            break;
+        }
 
         /* Check if we have a packet */
         if (IsListEmpty(&AdapterContext->PacketList))
@@ -105,17 +130,23 @@ NduDispatchRead(PDEVICE_OBJECT DeviceObject,
         }
         else
         {
-            /* Remove the cancel routine */
-            IoAcquireCancelSpinLock(&OldCancelIrql);
-            IoSetCancelRoutine(Irp, NULL);
-            IoReleaseCancelSpinLock(OldCancelIrql);
-
             /* Remove the first packet in the list */
             ListEntry = RemoveHeadList(&AdapterContext->PacketList);
             PacketEntry = CONTAINING_RECORD(ListEntry, NDISUIO_PACKET_ENTRY, ListEntry);
 
+            /* The empty entry of a cancelled read is not counted */
+            if (PacketEntry->PacketLength != 0)
+                AdapterContext->PacketCount--;
+
             /* Release the adapter lock */
             KeReleaseSpinLock(&AdapterContext->Spinlock, OldIrql);
+
+            /* Remove the cancel routine. The cancel routine takes the adapter
+             * lock with the cancel spin lock held, so the cancel spin lock
+             * is never taken with the adapter lock held. */
+            IoAcquireCancelSpinLock(&OldCancelIrql);
+            IoSetCancelRoutine(Irp, NULL);
+            IoReleaseCancelSpinLock(OldCancelIrql);
 
             /* And we're done with this loop */
             Status = STATUS_SUCCESS;
@@ -145,6 +176,8 @@ NduDispatchRead(PDEVICE_OBJECT DeviceObject,
         BytesCopied = 0;
     }
 
+    NduEndIo(AdapterContext);
+
     /* Complete the IRP */
     Irp->IoStatus.Status = Status;
     Irp->IoStatus.Information = BytesCopied;
@@ -159,7 +192,7 @@ NduDispatchWrite(PDEVICE_OBJECT DeviceObject,
                  PIRP Irp)
 {
     PIO_STACK_LOCATION IrpSp = IoGetCurrentIrpStackLocation(Irp);
-    PNDISUIO_ADAPTER_CONTEXT AdapterContext = IrpSp->FileObject->FsContext;
+    PNDISUIO_ADAPTER_CONTEXT AdapterContext;
     PNET_BUFFER_LIST Nbl = NULL;
     PMDL Mdl;
     KEVENT SendEvent;
@@ -169,10 +202,23 @@ NduDispatchWrite(PDEVICE_OBJECT DeviceObject,
 
     ASSERT(DeviceObject == GlobalDeviceObject);
 
+    /* The file object must be opened on an adapter; both kinds of open may
+     * write. The adapter stays until NduEndIo. */
+    AdapterContext = NduBeginIo(IrpSp->FileObject, NULL);
+    if (AdapterContext == NULL)
+    {
+        Irp->IoStatus.Status = STATUS_INVALID_PARAMETER;
+        Irp->IoStatus.Information = 0;
+        IoCompleteRequest(Irp, IO_NO_INCREMENT);
+
+        return STATUS_INVALID_PARAMETER;
+    }
+
     KeAcquireSpinLock(&AdapterContext->Spinlock, &OldIrql);
     if (AdapterContext->Paused)
     {
         KeReleaseSpinLock(&AdapterContext->Spinlock, OldIrql);
+        NduEndIo(AdapterContext);
 
         Irp->IoStatus.Status = NDIS_STATUS_PAUSED;
         Irp->IoStatus.Information = 0;
@@ -235,6 +281,8 @@ NduDispatchWrite(PDEVICE_OBJECT DeviceObject,
     if (--AdapterContext->PendingSends == 0 && AdapterContext->Paused)
         KeSetEvent(&AdapterContext->SendsDoneEvent, IO_NO_INCREMENT, FALSE);
     KeReleaseSpinLock(&AdapterContext->Spinlock, OldIrql);
+
+    NduEndIo(AdapterContext);
 
     /* Complete the IRP */
     Irp->IoStatus.Status = Status;

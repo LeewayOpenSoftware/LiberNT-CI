@@ -18,6 +18,12 @@ LIST_ENTRY GlobalAdapterList;
 
 NDIS_STRING ProtocolName = RTL_CONSTANT_STRING(L"NDISUIO");
 
+/* Device security descriptor: SYSTEM and Administrators only */
+static const UNICODE_STRING NduDeviceSecurity = RTL_CONSTANT_STRING(L"D:P(A;;GA;;;SY)(A;;GA;;;BA)");
+
+/* Device class GUID for IoCreateDeviceSecure: private to ndisuio (7fa9c30e-a01c-487f-b589-0fe25ec23518) */
+static const GUID NduDeviceClassGuid = {0x7fa9c30e, 0xa01c, 0x487f, {0xb5, 0x89, 0x0f, 0xe2, 0x5e, 0xc2, 0x35, 0x18}};
+
 VOID NTAPI NduUnload(PDRIVER_OBJECT DriverObject)
 {
     DPRINT("NDISUIO: Unloaded\n");
@@ -45,14 +51,16 @@ DriverEntry(PDRIVER_OBJECT DriverObject,
     InitializeListHead(&GlobalAdapterList);
     KeInitializeSpinLock(&GlobalAdapterListLock);
 
-    /* Create the NDISUIO device object */
-    Status = IoCreateDevice(DriverObject,
-                            0,
-                            &NtDeviceName,
-                            FILE_DEVICE_SECURE_OPEN,
-                            0,
-                            FALSE,
-                            &GlobalDeviceObject);
+    /* Create the NDISUIO device object with restricted access */
+    Status = IoCreateDeviceSecure(DriverObject,
+                                  0,
+                                  &NtDeviceName,
+                                  FILE_DEVICE_NETWORK,
+                                  FILE_DEVICE_SECURE_OPEN,
+                                  FALSE,
+                                  &NduDeviceSecurity,
+                                  (LPCGUID)&NduDeviceClassGuid,
+                                  &GlobalDeviceObject);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("Failed to create device object with status 0x%x\n", Status);
