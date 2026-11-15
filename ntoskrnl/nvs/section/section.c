@@ -1913,6 +1913,7 @@ MiCopyOnWrite(
     if (Vad->Type == MiVadPrivate || !(MI_PFN_FLAGS(&System->Pfn.Pfn[OldFrame]) & MI_PFN_FLAG_PROTOTYPE))
         return STATUS_ACCESS_VIOLATION;
 
+    /* The caller holds the commit charge for the copy and returns it on failure. */
     Frame = MiPfnAllocatePage(&System->Pfn, Space->IsSystem ? 0 : MI_ALLOCATE_HIGH);
     if (Frame == MI_FRAME_INVALID)
         return STATUS_NO_MEMORY;

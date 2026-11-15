@@ -291,14 +291,13 @@ MiMakePageValid(
 
 static
 NTSTATUS
-MiFaultResolve(
+MiFaultWorker(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 VirtualAddress,
     _In_ MI_FAULT_ACCESS Access,
     _In_ BOOLEAN UserMode,
     _In_ BOOLEAN AllowExecutableWrite,
-    _In_ BOOLEAN ConsumeGuard,
-    _Inout_ PBOOLEAN CopyCharged)
+    _In_ BOOLEAN ConsumeGuard)
 {
     PMI_SYSTEM System = Space->System;
     ULONG64 PageVa = VirtualAddress & ~((ULONG64)PAGE_SIZE - 1);
@@ -316,6 +315,7 @@ MiFaultResolve(
     KIRQL OldIrql;
     BOOLEAN ManagedWrite;
     BOOLEAN WasValid = FALSE;
+    BOOLEAN CopyCharged = FALSE;
 
     if (VirtualAddress < Space->LowestVa || VirtualAddress > Space->HighestVa ||
         MiArchIsSelfMapAddress(VirtualAddress))
@@ -395,26 +395,38 @@ RetryPage:
 
         Status = MiResolveValidFault(Space, PageVa, Slot, Pte, Access, UserMode,
                                      ManagedWrite, AllowExecutableWrite);
-        if (Status == STATUS_PENDING_COPY && !*CopyCharged)
-        {
-            MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
-            if (!MiChargeCommit(Space, 1))
-            {
-                MI_RW_RELEASE_SHARED(&Space->Lock);
-                Status = STATUS_COMMITMENT_LIMIT;
-                goto Failed;
-            }
-            *CopyCharged = TRUE;
-            WasValid = FALSE;
-            OldIrql = MiPfnLock(&System->Pfn, TableFrame);
-            goto RetryPage;
-        }
         if (Status == STATUS_PENDING_COPY)
         {
             WasValid = FALSE;
+            if (Vad->Type == MiVadPrivate)
+            {
+                Status = STATUS_ACCESS_VIOLATION;
+                goto Complete;
+            }
+
+            /* The owner-commit callback runs at the caller's IRQL, so charge the
+             * private copy with the PFN lock dropped and re-validate the PTE. A
+             * concurrent accessed-bit update costs one extra return and retry. */
+            MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
+            CopyCharged = MiChargeCommit(Space, 1);
+            OldIrql = MiPfnLock(&System->Pfn, TableFrame);
+            if (!CopyCharged)
+            {
+                Status = STATUS_COMMITMENT_LIMIT;
+                goto Complete;
+            }
+            if (MiArchPteRead(Slot) != RawPte)
+            {
+                MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
+                MiReturnCommit(Space, 1);
+                OldIrql = MiPfnLock(&System->Pfn, TableFrame);
+                CopyCharged = FALSE;
+                goto RetryPage;
+            }
+
             Status = MiCopyOnWrite(Space, Vad, PageVa, Slot, TableFrame, Pte);
             if (NT_SUCCESS(Status))
-                *CopyCharged = FALSE;
+                CopyCharged = FALSE;
         }
         goto Complete;
     }
@@ -670,6 +682,8 @@ Complete:
         }
     }
     MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
+    if (CopyCharged)
+        MiReturnCommit(Space, 1);
     MI_RW_RELEASE_SHARED(&Space->Lock);
     if (NT_SUCCESS(Status) || Status == STATUS_GUARD_PAGE_VIOLATION ||
         Status == STATUS_EXECUTABLE_MEMORY_WRITE)
@@ -679,25 +693,6 @@ Failed:
     MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
     MiPtPruneEmpty(Space, PageVa);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
-    return Status;
-}
-
-static
-NTSTATUS
-MiFaultWorker(
-    _Inout_ PMI_ADDRESS_SPACE Space,
-    _In_ ULONG64 VirtualAddress,
-    _In_ MI_FAULT_ACCESS Access,
-    _In_ BOOLEAN UserMode,
-    _In_ BOOLEAN AllowExecutableWrite,
-    _In_ BOOLEAN ConsumeGuard)
-{
-    BOOLEAN CopyCharged = FALSE;
-    NTSTATUS Status = MiFaultResolve(Space, VirtualAddress, Access, UserMode, AllowExecutableWrite, ConsumeGuard,
-                                     &CopyCharged);
-
-    if (CopyCharged)
-        MiReturnCommit(Space, 1);
     return Status;
 }
 
