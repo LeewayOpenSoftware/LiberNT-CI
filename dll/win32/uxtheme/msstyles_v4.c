@@ -289,7 +289,13 @@ PTHEME_PARTSTATE MSSTYLES_V4_FindPartState(PTHEME_CLASS tc, int iPartId, int iSt
     return NULL;
 }
 
-/* ---- getters: one TL4 call, one range check, one result --------------------------------------------------- */
+/* ---- getters: one TL4 call under SEH, one range check, one result ----------------------------------------- */
+
+/* A getter reads a few bytes of the view through one TL4 call; an in-page error there must not kill the process. */
+#define V4_GUARDED(status_var, call) \
+    _SEH2_TRY { status_var = (call); } \
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER) { status_var = TL4_E_TRUNCATED; } \
+    _SEH2_END
 
 static HRESULT range_ok(const tl4_prop *p, const int32_t *values, uint32_t count)
 {
@@ -298,20 +304,22 @@ static HRESULT range_ok(const tl4_prop *p, const int32_t *values, uint32_t count
 
 HRESULT MSSTYLES_V4_GetBool(PTHEME_PROPERTY tp, BOOL *pfVal)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t v = 0;
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t v = 0; tl4_status st;
     if (!v4 || !p || !pfVal) return E_INVALIDARG;
     *pfVal = FALSE;
-    if (tl4_get_bool(&v4->model, p, &v) != TL4_OK || FAILED(range_ok(p, &v, 1))) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_bool(&v4->model, p, &v));
+    if (st != TL4_OK || FAILED(range_ok(p, &v, 1))) return E_PROP_ID_UNSUPPORTED;
     *pfVal = v != 0;
     return S_OK;
 }
 
 HRESULT MSSTYLES_V4_GetColor(PTHEME_PROPERTY tp, COLORREF *pColor)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); uint32_t c = 0; int32_t v;
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); uint32_t c = 0; int32_t v; tl4_status st;
     if (!v4 || !p || !pColor) return E_INVALIDARG;
     *pColor = 0;
-    if (tl4_get_color(&v4->model, p, &c) != TL4_OK) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_color(&v4->model, p, &c));
+    if (st != TL4_OK) return E_PROP_ID_UNSUPPORTED;
     v = (int32_t)c;
     if (FAILED(range_ok(p, &v, 1))) return E_PROP_ID_UNSUPPORTED;
     *pColor = c;
@@ -320,18 +328,20 @@ HRESULT MSSTYLES_V4_GetColor(PTHEME_PROPERTY tp, COLORREF *pColor)
 
 HRESULT MSSTYLES_V4_GetEnum(PTHEME_PROPERTY tp, int *piVal)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t v = 0;
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t v = 0; tl4_status st;
     if (!v4 || !p || !piVal) return E_INVALIDARG;
-    if (tl4_get_enum(&v4->model, p, &v) != TL4_OK || FAILED(range_ok(p, &v, 1))) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_enum(&v4->model, p, &v));
+    if (st != TL4_OK || FAILED(range_ok(p, &v, 1))) return E_PROP_ID_UNSUPPORTED;
     *piVal = v;
     return S_OK;
 }
 
 HRESULT MSSTYLES_V4_GetInt(PTHEME_PROPERTY tp, int *piVal)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t v = 0;
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t v = 0; tl4_status st;
     if (!v4 || !p || !piVal) return E_INVALIDARG;
-    if (tl4_get_int(&v4->model, p, &v) != TL4_OK || FAILED(range_ok(p, &v, 1))) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_int(&v4->model, p, &v));
+    if (st != TL4_OK || FAILED(range_ok(p, &v, 1))) return E_PROP_ID_UNSUPPORTED;
     *piVal = v;
     return S_OK;
 }
@@ -339,10 +349,11 @@ HRESULT MSSTYLES_V4_GetInt(PTHEME_PROPERTY tp, int *piVal)
 HRESULT MSSTYLES_V4_GetIntList(PTHEME_PROPERTY tp, INTLIST *pIntList)
 {
     PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp);
-    int32_t values[TL4_V4_MAX_INTLIST]; uint32_t count = 0, i;
+    int32_t values[TL4_V4_MAX_INTLIST]; uint32_t count = 0, i; tl4_status st;
     if (!v4 || !p || !pIntList) return E_INVALIDARG;
     pIntList->iValueCount = 0;
-    if (tl4_get_intlist(&v4->model, p, values, TL4_V4_MAX_INTLIST, &count) != TL4_OK || FAILED(range_ok(p, values, count))) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_intlist(&v4->model, p, values, TL4_V4_MAX_INTLIST, &count));
+    if (st != TL4_OK || FAILED(range_ok(p, values, count))) return E_PROP_ID_UNSUPPORTED;
     if (count > MAX_INTLIST_COUNT) return E_PROP_ID_UNSUPPORTED;
     for (i = 0; i < count; i++) pIntList->iValues[i] = values[i];
     pIntList->iValueCount = (int)count;
@@ -351,28 +362,31 @@ HRESULT MSSTYLES_V4_GetIntList(PTHEME_PROPERTY tp, INTLIST *pIntList)
 
 HRESULT MSSTYLES_V4_GetPosition(PTHEME_PROPERTY tp, POINT *pPoint)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t xy[2] = { 0, 0 };
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t xy[2] = { 0, 0 }; tl4_status st;
     if (!v4 || !p || !pPoint) return E_INVALIDARG;
-    if (tl4_get_position(&v4->model, p, xy) != TL4_OK || FAILED(range_ok(p, xy, 2))) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_position(&v4->model, p, xy));
+    if (st != TL4_OK || FAILED(range_ok(p, xy, 2))) return E_PROP_ID_UNSUPPORTED;
     pPoint->x = xy[0]; pPoint->y = xy[1];
     return S_OK;
 }
 
 HRESULT MSSTYLES_V4_GetRect(PTHEME_PROPERTY tp, RECT *pRect)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t r[4] = { 0, 0, 0, 0 };
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t r[4] = { 0, 0, 0, 0 }; tl4_status st;
     if (!v4 || !p || !pRect) return E_INVALIDARG;
-    if (tl4_get_rect(&v4->model, p, r) != TL4_OK || FAILED(range_ok(p, r, 4))) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_rect(&v4->model, p, r));
+    if (st != TL4_OK || FAILED(range_ok(p, r, 4))) return E_PROP_ID_UNSUPPORTED;
     pRect->left = r[0]; pRect->top = r[1]; pRect->right = r[2]; pRect->bottom = r[3];
     return S_OK;
 }
 
 HRESULT MSSTYLES_V4_GetMargins(PTHEME_PROPERTY tp, MARGINS *pMargins)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t m[4] = { 0, 0, 0, 0 };
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); int32_t m[4] = { 0, 0, 0, 0 }; tl4_status st;
     if (!v4 || !p || !pMargins) return E_INVALIDARG;
     memset(pMargins, 0, sizeof(*pMargins));
-    if (tl4_get_margins(&v4->model, p, m) != TL4_OK || FAILED(range_ok(p, m, 4))) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_margins(&v4->model, p, m));
+    if (st != TL4_OK || FAILED(range_ok(p, m, 4))) return E_PROP_ID_UNSUPPORTED;
     pMargins->cxLeftWidth = m[0]; pMargins->cxRightWidth = m[1]; pMargins->cyTopHeight = m[2]; pMargins->cyBottomHeight = m[3];
     return S_OK;
 }
@@ -382,7 +396,7 @@ HRESULT MSSTYLES_V4_GetString(PTHEME_PROPERTY tp, LPWSTR pszBuff, int cchMaxBuff
     PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); uint32_t chars = 0; tl4_status st;
     if (!v4 || !p || !pszBuff || cchMaxBuffChars < 1) return E_INVALIDARG;
     pszBuff[0] = 0;
-    st = tl4_get_string(&v4->model, p, (uint16_t *)pszBuff, (uint32_t)cchMaxBuffChars, &chars);
+    V4_GUARDED(st, tl4_get_string(&v4->model, p, (uint16_t *)pszBuff, (uint32_t)cchMaxBuffChars, &chars));
     if (st == TL4_E_BUFFER) return HRESULT_FROM_WIN32(ERROR_INSUFFICIENT_BUFFER);   /* never truncated (R-GEN-5) */
     if (st != TL4_OK || tl4_range_check_string(chars) != TL4_OK) { pszBuff[0] = 0; return E_PROP_ID_UNSUPPORTED; }
     return S_OK;
@@ -390,10 +404,11 @@ HRESULT MSSTYLES_V4_GetString(PTHEME_PROPERTY tp, LPWSTR pszBuff, int cchMaxBuff
 
 HRESULT MSSTYLES_V4_GetFont(PTHEME_PROPERTY tp, HDC hdc, LOGFONTW *pFont)
 {
-    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); tl4_font f; uint32_t i;
+    PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); tl4_font f; uint32_t i; tl4_status st;
     if (!v4 || !p || !pFont) return E_INVALIDARG;
     ZeroMemory(pFont, sizeof(*pFont));
-    if (tl4_get_font(&v4->model, p, &f) != TL4_OK || tl4_range_check_font(&f) != TL4_OK) return E_PROP_ID_UNSUPPORTED;
+    V4_GUARDED(st, tl4_get_font(&v4->model, p, &f));
+    if (st != TL4_OK || tl4_range_check_font(&f) != TL4_OK) return E_PROP_ID_UNSUPPORTED;
     for (i = 0; i < f.face_chars && i < LF_FACESIZE - 1; i++) pFont->lfFaceName[i] = f.face[i];
     pFont->lfFaceName[i] = 0;
     pFont->lfHeight = -MulDiv(f.points, hdc ? GetDeviceCaps(hdc, LOGPIXELSY) : 96, 72);
@@ -411,8 +426,8 @@ HRESULT MSSTYLES_V4_GetImageName(PTHEME_PROPERTY tp, LPWSTR pszBuff, int cchMaxB
     PV4_FILE v4 = v4_of(tp); const tl4_prop *p = prop_of(tp); uint32_t id = 0, off = 0, size = 0; tl4_status st;
     if (!v4 || !p || !pszBuff || cchMaxBuffChars < 12) return E_INVALIDARG;
     pszBuff[0] = 0;
-    if (p->type == TL4_V4_FILENAME) st = tl4_get_filename(&v4->model, p, &id, &off, &size);
-    else if (p->type == TL4_V4_DISKSTREAM) st = tl4_get_diskstream(&v4->model, p, &id, &off, &size);
+    if (p->type == TL4_V4_FILENAME) { V4_GUARDED(st, tl4_get_filename(&v4->model, p, &id, &off, &size)); }
+    else if (p->type == TL4_V4_DISKSTREAM) { V4_GUARDED(st, tl4_get_diskstream(&v4->model, p, &id, &off, &size)); }
     else return E_PROP_ID_UNSUPPORTED;
     if (st != TL4_OK || id > 0xFFFF) return E_PROP_ID_UNSUPPORTED;
     swprintf(pszBuff, (size_t)cchMaxBuffChars, L"#%u", id);
@@ -429,7 +444,11 @@ BOOL MSSTYLES_V4_ImageData(PTHEME_FILE tf, UINT id, const BYTE **ppData, UINT *p
     if (!tf || !tf->v4 || !ppData || !pcbData || id > 0xFFFF) return FALSE;
     v4 = (PV4_FILE)tf->v4;
     t = tl4_res_ascii("IMAGE"); n = tl4_res_id(id);
-    if (tl4_pe_find(&v4->pe, &t, &n, &res) != TL4_OK) return FALSE;
+    {
+        tl4_status st;
+        V4_GUARDED(st, tl4_pe_find(&v4->pe, &t, &n, &res));
+        if (st != TL4_OK) return FALSE;
+    }
     *ppData = res.data;         /* inside the view: the reader re-checked the range (R-PE-9) */
     *pcbData = res.size;
     return TRUE;
