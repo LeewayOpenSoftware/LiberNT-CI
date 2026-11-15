@@ -17,6 +17,38 @@
 
 static const CHAR TestRunString[] = "libernt.applaunch";
 
+/* [DIAG] temporary: trace applaunch progress to COM2 (the lab captures it) and
+ * to <SystemDrive>\applaunch-trace.log, to localize why launcher.cmd does not
+ * run on the MSVC image. Revert once diagnosed. */
+static VOID
+Trace(PCSTR Msg)
+{
+    DWORD Written;
+    HANDLE Com;
+    HANDLE File;
+    WCHAR Path[MAX_PATH];
+
+    Com = CreateFileW(L"\\\\.\\COM2", GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    if (Com != INVALID_HANDLE_VALUE)
+    {
+        WriteFile(Com, Msg, (DWORD)strlen(Msg), &Written, NULL);
+        CloseHandle(Com);
+    }
+
+    if (!GetEnvironmentVariableW(L"SystemDrive", Path, ARRAYSIZE(Path)))
+        StringCchCopyW(Path, ARRAYSIZE(Path), L"C:");
+    if (SUCCEEDED(StringCchCatW(Path, ARRAYSIZE(Path), L"\\applaunch-trace.log")))
+    {
+        File = CreateFileW(Path, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                           NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (File != INVALID_HANDLE_VALUE)
+        {
+            WriteFile(File, Msg, (DWORD)strlen(Msg), &Written, NULL);
+            CloseHandle(File);
+        }
+    }
+}
+
 static BOOL
 IsTestRun(VOID)
 {
@@ -219,28 +251,42 @@ int WINAPI
 wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPWSTR lpCmdLine, int nCmdShow)
 {
     WCHAR Drive[3];
+    BOOL IsTest;
+    CHAR Line[128];
 
     UNREFERENCED_PARAMETER(hInstance);
     UNREFERENCED_PARAMETER(hPrevInstance);
     UNREFERENCED_PARAMETER(lpCmdLine);
     UNREFERENCED_PARAMETER(nCmdShow);
 
-    if (!IsTestRun())
+    Trace("APPLAUNCH_DIAG ENTER\r\n");
+    IsTest = IsTestRun();
+    Trace(IsTest ? "APPLAUNCH_DIAG ISTESTRUN=1\r\n" : "APPLAUNCH_DIAG ISTESTRUN=0\r\n");
+    if (!IsTest)
         return 0;
 
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX);
 
     if (FindAppDrive(Drive))
     {
+        StringCchPrintfA(Line, ARRAYSIZE(Line), "APPLAUNCH_DIAG DRIVE=%c\r\n", (CHAR)Drive[0]);
+        Trace(Line);
         Say(L"APPLAUNCH_BEGIN %s", Drive);
         CopyShortcuts(Drive);
-        Say(L"APPLAUNCH_EXIT %ld", (LONG)RunLauncher(Drive));
+        {
+            DWORD Rc = RunLauncher(Drive);
+            StringCchPrintfA(Line, ARRAYSIZE(Line), "APPLAUNCH_DIAG EXIT=%lu\r\n", Rc);
+            Trace(Line);
+            Say(L"APPLAUNCH_EXIT %ld", (LONG)Rc);
+        }
     }
     else
     {
+        Trace("APPLAUNCH_DIAG NODISK\r\n");
         Say(L"APPLAUNCH_NO_DISK");
     }
 
+    Trace("APPLAUNCH_DIAG DONE\r\n");
     Say(L"APPLAUNCH_DONE");
     return 0;
 }
