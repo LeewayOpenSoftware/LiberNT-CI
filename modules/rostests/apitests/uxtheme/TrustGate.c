@@ -11,9 +11,11 @@
 
 typedef HRESULT (WINAPI *FN_OpenThemeFile)(LPCWSTR, LPCWSTR, LPCWSTR, HANDLE *, DWORD);
 typedef HRESULT (WINAPI *FN_CloseThemeFile)(HANDLE);
+typedef HRESULT (WINAPI *FN_ApplyTheme)(HANDLE, UINT, HWND);
 
 static FN_OpenThemeFile pOpenThemeFile;
 static FN_CloseThemeFile pCloseThemeFile;
+static FN_ApplyTheme pApplyTheme;
 static WCHAR g_store[MAX_PATH];
 
 #define GUARD_KEY L"Software\\Leeway\\UxTheme\\Guard\\Themes-Aero"
@@ -27,6 +29,25 @@ OpenClose(LPCWSTR path)
     if (SUCCEEDED(hr) && tf)
         pCloseThemeFile(tf);
     return hr;
+}
+
+static int
+ChildThemeActive(void)
+{
+    WCHAR self[MAX_PATH], cmd[MAX_PATH + 32];
+    STARTUPINFOW si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    DWORD code = 2;
+
+    GetModuleFileNameW(NULL, self, ARRAY_SIZE(self));
+    StringCchPrintfW(cmd, ARRAY_SIZE(cmd), L"\"%s\" TrustGate child", self);
+    if (!CreateProcessW(self, cmd, NULL, NULL, FALSE, 0, NULL, NULL, &si, &pi))
+        return -1;
+    WaitForSingleObject(pi.hProcess, 30000);
+    GetExitCodeProcess(pi.hProcess, &code);
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    return (int)code;
 }
 
 static DWORD
@@ -117,25 +138,40 @@ Test_Guard(void)
 
     ClearGuard();
     SetGuardValue(L"FFFFFFF0-0000000000000001", REG_BINARY, &data, sizeof(data));
+    ok(ChildThemeActive() == 0, "a process's own load must skip a style with a stale mark\n");
     hr = OpenClose(g_store);
-    ok(hr == HRESULT_FROM_WIN32(ERROR_CANCELLED), "stale mark: hr 0x%lx\n", hr);
+    ok(hr == S_OK, "a load the user asks for does not skip: hr 0x%lx\n", hr);
     ok(GuardValueCount() == 1, "the stale mark must stay, count %lu\n", GuardValueCount());
+    if (pApplyTheme)
+    {
+        HANDLE tf = NULL;
+
+        hr = pOpenThemeFile(g_store, NULL, NULL, &tf, 0);
+        ok(hr == S_OK, "open for apply: hr 0x%lx\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            hr = pApplyTheme(tf, 0, NULL);
+            ok(hr == S_OK, "ApplyTheme: hr 0x%lx\n", hr);
+            ok(GuardValueCount() == 0, "ApplyTheme must clear the marks, count %lu\n", GuardValueCount());
+            pCloseThemeFile(tf);
+        }
+        ok(ChildThemeActive() == 1, "after ApplyTheme the own load succeeds\n");
+    }
 
     ClearGuard();
     SetGuardValue(L"00000001-0000000000000001", REG_SZ, L"x", 4);
-    hr = OpenClose(g_store);
-    ok(hr == HRESULT_FROM_WIN32(ERROR_CANCELLED), "wrong type: hr 0x%lx\n", hr);
+    ok(ChildThemeActive() == 0, "wrong type must skip the own load\n");
 
     ClearGuard();
     data.version = 2;
     SetGuardValue(L"00000001-0000000000000001", REG_BINARY, &data, sizeof(data));
-    hr = OpenClose(g_store);
-    ok(hr == HRESULT_FROM_WIN32(ERROR_CANCELLED), "wrong version: hr 0x%lx\n", hr);
+    ok(ChildThemeActive() == 0, "wrong version must skip the own load\n");
 
     ClearGuard();
     SetGuardValue(L"not-a-mark", REG_BINARY, &data, sizeof(data));
-    hr = OpenClose(g_store);
-    ok(hr == HRESULT_FROM_WIN32(ERROR_CANCELLED), "malformed name: hr 0x%lx\n", hr);
+    ok(ChildThemeActive() == 0, "malformed name must skip the own load\n");
+    SetGuardValue(L" 0000001-0000000000000001", REG_BINARY, &data, sizeof(data));
+    ok(ChildThemeActive() == 0, "a name with a leading space is malformed\n");
 
     ClearGuard();
     hr = OpenClose(g_store);
@@ -165,11 +201,24 @@ Test_SharingViolation(void)
 
 START_TEST(TrustGate)
 {
-    HMODULE mod = LoadLibraryW(L"uxtheme.dll");
+    HMODULE mod;
     WCHAR windir[MAX_PATH];
+    char **argv;
+
+    if (winetest_get_mainargs(&argv) >= 3 && !strcmp(argv[2], "child"))
+    {
+        typedef BOOL (WINAPI *FN_IsThemeActive)(void);
+        FN_IsThemeActive pIsThemeActive;
+
+        mod = LoadLibraryW(L"uxtheme.dll");
+        pIsThemeActive = (FN_IsThemeActive)GetProcAddress(mod, "IsThemeActive");
+        ExitProcess(pIsThemeActive && pIsThemeActive() ? 1 : 0);
+    }
+    mod = LoadLibraryW(L"uxtheme.dll");
 
     pOpenThemeFile = (FN_OpenThemeFile)GetProcAddress(mod, MAKEINTRESOURCEA(2));
     pCloseThemeFile = (FN_CloseThemeFile)GetProcAddress(mod, MAKEINTRESOURCEA(3));
+    pApplyTheme = (FN_ApplyTheme)GetProcAddress(mod, MAKEINTRESOURCEA(4));
     if (!pOpenThemeFile || !pCloseThemeFile)
     {
         skip("OpenThemeFile / CloseThemeFile not exported\n");
