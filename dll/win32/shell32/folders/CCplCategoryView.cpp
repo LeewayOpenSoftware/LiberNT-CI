@@ -269,6 +269,7 @@ private:
     FOLDERSETTINGS m_fs;
     Mode m_mode;
     int m_page;             /* index in g_Categories while in MODE_PAGE */
+    UINT m_initialCat;      /* category id to open on, 0 for the saved view */
     BOOL m_smallIcons;
     BOOL m_dark;
     int m_dpi;
@@ -342,7 +343,6 @@ public:
     ~CCplCategoryView();
 
     HRESULT Initialize(IShellFolder *psf, IShellView *pInner);
-    UINT m_initialCat;      /* category id to open on, 0 for the saved view */
 
     // IOleWindow
     STDMETHOD(GetWindow)(HWND *lphwnd) override;
