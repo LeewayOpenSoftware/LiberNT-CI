@@ -1365,7 +1365,6 @@ PcVideoInitializeBootFramebuffer(
             Candidate.MemoryModel != 6 || Candidate.BitsPerPixel != 32 ||
             Candidate.LinearVideoBufferAddress == 0 ||
             Candidate.WidthInPixels == 0 || Candidate.HeightInPixels == 0 ||
-            Candidate.WidthInPixels > 1024 || Candidate.HeightInPixels > 768 ||
             RedSize != 8 || RedPosition != 16 ||
             GreenSize != 8 || GreenPosition != 8 ||
             BlueSize != 8 || BluePosition != 0)
