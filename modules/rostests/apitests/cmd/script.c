@@ -450,6 +450,7 @@ static void test_start_passes_arguments_verbatim(void)
 }
 
 
+
 START_TEST(script)
 {
     char temp[MAX_PATH];
@@ -476,6 +477,7 @@ START_TEST(script)
     test_for_f_code_page();
     test_dir_double_backslash();
     test_start_passes_arguments_verbatim();
+
 
 
     RemoveDirectoryA(s_dir);
