@@ -12,6 +12,7 @@
 #include <tl4/trust/trust.h>
 #include <tl4/loader/pe.h>
 #include "trust.h"
+#include <pseh/pseh2.h>
 
 #ifndef PROCESS_QUERY_LIMITED_INFORMATION
 #define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
@@ -36,6 +37,9 @@
 #define UXT_GUARD_MAX       64
 #define UXT_MAX_STYLE_SIZE  (32u * 1024u * 1024u)
 #define UXT_RELOAD_MS       5000
+#define UXT_EVENT_MAX       16
+/* FIXME: the key object kind of TL4 trust/ (review I1a-T MUST 1) replaces the directory kind here */
+#define UXT_KEY_KIND        TL4_TRUST_DIR
 
 static LONG g_classState;
 static BOOL g_privileged = TRUE;    /* safe defaults until computed (T-DEF-4) */
@@ -384,18 +388,52 @@ UXTHEME_TrustUsesMachineDefault(void)
     return g_classState != 2 || g_machineDefault;
 }
 
+static WCHAR g_eventNames[UXT_EVENT_MAX][UXT_NAME_MAX + 1];
+static LONG g_eventCount;
+static LONG g_eventLock;
+
+static DWORD WINAPI
+TrustEventWorker(PVOID ctx)
+{
+    LPWSTR msg = ctx;
+    LPCWSTR strings[1] = { msg };
+    HANDLE src = RegisterEventSourceW(NULL, L"UxTheme");
+
+    if (src)
+    {
+        ReportEventW(src, EVENTLOG_WARNING_TYPE, 0, 0x1000, NULL, 1, 0, strings, NULL);
+        DeregisterEventSource(src);
+    }
+    HeapFree(GetProcessHeap(), 0, msg);
+    return 0;
+}
+
+/* T-PRIV-7: at most one event per style per process, written by a worker so that a missing event log never blocks */
 static void
 TrustEvent(LPCWSTR text, LPCWSTR name)
 {
-    HANDLE src = RegisterEventSourceW(NULL, L"UxTheme");
-    WCHAR msg[160];
-    LPCWSTR strings[1] = { msg };
+    LPCWSTR key = name ? name : L"";
+    LPWSTR msg;
+    LONG i;
+    BOOL seen = FALSE;
 
-    if (!src)
+    while (InterlockedCompareExchange(&g_eventLock, 1, 0))
+        YieldProcessor();
+    for (i = 0; i < g_eventCount && !seen; i++)
+        seen = !_wcsicmp(g_eventNames[i], key);
+    if (!seen && g_eventCount < UXT_EVENT_MAX)
+        StringCchCopyW(g_eventNames[g_eventCount++], UXT_NAME_MAX + 1, key);
+    else
+        seen = TRUE;
+    InterlockedExchange(&g_eventLock, 0);
+    if (seen)
         return;
-    StringCchPrintfW(msg, ARRAY_SIZE(msg), L"%s: %s", text, name ? name : L"-");
-    ReportEventW(src, EVENTLOG_WARNING_TYPE, 0, 0x1000, NULL, 1, 0, strings, NULL);
-    DeregisterEventSource(src);
+    msg = HeapAlloc(GetProcessHeap(), 0, 160 * sizeof(WCHAR));
+    if (!msg)
+        return;
+    StringCchPrintfW(msg, 160, L"%s: %s", text, name ? name : L"-");
+    if (!QueueUserWorkItem(TrustEventWorker, msg, WT_EXECUTEDEFAULT))
+        HeapFree(GetProcessHeap(), 0, msg);
 }
 
 static BOOL
@@ -406,7 +444,7 @@ TrustKeyProtected(HKEY key)
 
     if (RegGetKeySecurity(key, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, sd, &len) != ERROR_SUCCESS)
         return FALSE;
-    return tl4_trust_sd_writable(sd, len, TL4_TRUST_DIR, 0) == TL4_TRUST_SAFE;
+    return tl4_trust_sd_writable(sd, len, UXT_KEY_KIND, 0) == TL4_TRUST_SAFE;
 }
 
 static BOOL
@@ -446,6 +484,14 @@ UXTHEME_TrustV3AnyPathOrdinary(void)
 {
     /* T-GATE-4: never read by a privileged process */
     return !UXTHEME_TrustIsPrivileged() && TrustGateDword(L"V3AnyPathOrdinary");
+}
+
+UINT
+UXTHEME_TrustReloadDelay(void)
+{
+    DWORD elapsed = GetTickCount() - g_lastReload;
+
+    return elapsed >= UXT_RELOAD_MS ? 1 : UXT_RELOAD_MS - elapsed;
 }
 
 BOOL
@@ -558,9 +604,34 @@ TrustTokenHasSid(HANDLE tok, PSID sid)
 }
 
 static BOOL
+TrustEnablePrivilege(LPCWSTR name, PTOKEN_PRIVILEGES previous, PDWORD previousSize, HANDLE *tokOut)
+{
+    TOKEN_PRIVILEGES tp;
+    HANDLE tok;
+
+    *tokOut = NULL;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &tok))
+        return FALSE;
+    tp.PrivilegeCount = 1;
+    tp.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+    if (!LookupPrivilegeValueW(NULL, name, &tp.Privileges[0].Luid) ||
+        !AdjustTokenPrivileges(tok, FALSE, &tp, sizeof(*previous), previous, previousSize) ||
+        GetLastError() == ERROR_NOT_ALL_ASSIGNED)
+    {
+        CloseHandle(tok);
+        return FALSE;
+    }
+    *tokOut = tok;
+    return TRUE;
+}
+
+static BOOL
 TrustComputeOwnerFact(void)
 {
     SID_IDENTIFIER_AUTHORITY nt = SECURITY_NT_AUTHORITY;
+    TOKEN_PRIVILEGES previous;
+    DWORD previousSize = sizeof(previous);
+    HANDLE adjusted = NULL;
     PSID ti = NULL;
     PSYSTEM_PROCESS_INFORMATION snap, p;
     HKEY svc;
@@ -568,14 +639,14 @@ TrustComputeOwnerFact(void)
 
     if (!AllocateAndInitializeSid(&nt, 6, 80, 956008885, 3418522649UL, 1831038044, 1853292631, 2271478464UL, 0, 0, &ti))
         return FALSE;
-    /* any service that would run under the SID is defined where ordinary principals cannot write */
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Services\\TrustedInstaller", 0, KEY_READ, &svc) ==
         ERROR_SUCCESS)
     {
         ok = TrustKeyProtected(svc);
         RegCloseKey(svc);
     }
-    /* no process token on the system carries it */
+    if (ok && !TrustEnablePrivilege(L"SeDebugPrivilege", &previous, &previousSize, &adjusted))
+        ok = FALSE;
     snap = ok ? TrustProcessSnapshot() : NULL;
     if (!snap)
         ok = FALSE;
@@ -584,12 +655,13 @@ TrustComputeOwnerFact(void)
         ULONG_PTR pid = (ULONG_PTR)p->UniqueProcessId;
         HANDLE h, tok;
 
-        if (pid == 0 || pid == 4)   /* idle and System: kernel, no user token to inspect */
+        /* the idle process has no token; every other process, System included, must be read (T-FAIL-3) */
+        if (pid == 0)
             continue;
         h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, (DWORD)pid);
         if (!h)
         {
-            ok = FALSE;             /* cannot check a process: the fact is not shown */
+            ok = FALSE;
             break;
         }
         if (!OpenProcessToken(h, TOKEN_QUERY, &tok))
@@ -602,49 +674,64 @@ TrustComputeOwnerFact(void)
         }
         CloseHandle(h);
     }
+    if (adjusted)
+    {
+        AdjustTokenPrivileges(adjusted, FALSE, &previous, 0, NULL, NULL);
+        CloseHandle(adjusted);
+    }
     if (snap)
         HeapFree(GetProcessHeap(), 0, snap);
     FreeSid(ti);
     return ok;
 }
 
+static LONG g_ownerState;
+
 static BOOL
 TrustOwnerTrusted(void)
 {
-    static LONG state;
     DWORD v = 0;
 
-    if (state)
-        return state == 1;
-    if (!TrustReadMachineValue(L"ComponentOwner", L"Trusted", REG_DWORD, &v, sizeof(v)) && g_userIsSystem)
-    {
-        /* first SYSTEM process of the boot: compute and publish the fact (volatile, SYSTEM-only) */
-        PSECURITY_DESCRIPTOR sd = NULL;
-        SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, FALSE };
-        HKEY gate, fact;
-
-        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(UXT_GATE_SDDL, SDDL_REVISION_1, &sd, NULL))
-        {
-            sa.lpSecurityDescriptor = sd;
-            if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, NULL, 0, KEY_ALL_ACCESS, &sa, &gate, NULL) ==
-                ERROR_SUCCESS)
-            {
-                v = TrustComputeOwnerFact() ? 1 : 0;
-                if (RegCreateKeyExW(gate, L"ComponentOwner", 0, NULL, REG_OPTION_VOLATILE, KEY_ALL_ACCESS, &sa, &fact,
-                                    NULL) == ERROR_SUCCESS)
-                {
-                    RegSetValueExW(fact, L"Trusted", 0, REG_DWORD, (const BYTE *)&v, sizeof(v));
-                    RegCloseKey(fact);
-                }
-                RegCloseKey(gate);
-            }
-            LocalFree(sd);
-        }
-        if (!TrustReadMachineValue(L"ComponentOwner", L"Trusted", REG_DWORD, &v, sizeof(v)))
-            v = 0;
-    }
-    state = v == 1 ? 1 : 2;
+    if (g_ownerState)
+        return g_ownerState == 1;
+    /* T-DEF-5: only a published fact is cached; an absent one is read again on the next load */
+    if (!TrustReadMachineValue(L"ComponentOwner", L"Trusted", REG_DWORD, &v, sizeof(v)))
+        return FALSE;
+    g_ownerState = v == 1 ? 1 : 2;
     return v == 1;
+}
+
+/* Called by winlogon at start, as SYSTEM, before the shell: publishes the T-DEF-5 fact in a volatile subkey of the
+ * gate key that setup created. */
+BOOL WINAPI
+ThemeTrustPublishBootFact(void)
+{
+    PSECURITY_DESCRIPTOR sd = NULL;
+    SECURITY_ATTRIBUTES sa = { sizeof(sa), NULL, FALSE };
+    HKEY gate = NULL, fact = NULL;
+    DWORD v;
+    BOOL ok = FALSE;
+
+    TrustEnsureClassified();
+    if (g_classState != 2 || !g_userIsSystem)
+        return FALSE;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ | KEY_CREATE_SUB_KEY, &gate) != ERROR_SUCCESS)
+        return FALSE;
+    if (TrustKeyProtected(gate) &&
+        ConvertStringSecurityDescriptorToSecurityDescriptorW(UXT_GATE_SDDL, SDDL_REVISION_1, &sd, NULL))
+    {
+        sa.lpSecurityDescriptor = sd;
+        v = TrustComputeOwnerFact() ? 1 : 0;
+        if (RegCreateKeyExW(gate, L"ComponentOwner", 0, NULL, REG_OPTION_VOLATILE, KEY_SET_VALUE, &sa, &fact, NULL) ==
+            ERROR_SUCCESS)
+        {
+            ok = RegSetValueExW(fact, L"Trusted", 0, REG_DWORD, (const BYTE *)&v, sizeof(v)) == ERROR_SUCCESS;
+            RegCloseKey(fact);
+        }
+        LocalFree(sd);
+    }
+    RegCloseKey(gate);
+    return ok;
 }
 
 static BOOL
@@ -715,36 +802,36 @@ TrustExpectedNt(LPCWSTR dos, LPWSTR out, DWORD cch)
 static HRESULT
 TrustOpenChecked(LPCWSTR path, LPCWSTR storeRoot, HANDLE *phFile)
 {
-    WCHAR nt[MAX_PATH], want[MAX_PATH], dir[MAX_PATH];
+    WCHAR nt[MAX_PATH], want[MAX_PATH], dir[MAX_PATH], wantDir[MAX_PATH];
     unsigned flags = TrustOwnerTrusted() ? TL4_TRUST_COMPONENT_OWNER_TRUSTED : 0;
     size_t rootLen = wcslen(storeRoot);
     HANDLE h;
-    HRESULT hr = E_ACCESSDENIED;
-    LPWSTR cut;
+    LPWSTR cut, ntCut;
 
     *phFile = INVALID_HANDLE_VALUE;
     h = CreateFileW(path, GENERIC_READ | READ_CONTROL, FILE_SHARE_READ, NULL, OPEN_EXISTING,
                     FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     if (h == INVALID_HANDLE_VALUE)
-        return HRESULT_FROM_WIN32(GetLastError());   /* a sharing violation is a clean refusal: no mark yet */
+        return HRESULT_FROM_WIN32(GetLastError());
     if (!TrustNotReparse(h, FALSE) || GetFileType(h) != FILE_TYPE_DISK || !TrustVolumeOk(h) ||
         !TrustHandleName(h, nt, ARRAY_SIZE(nt)) || !TrustExpectedNt(path, want, ARRAY_SIZE(want)) ||
         _wcsicmp(nt, want) || !TrustSdOk(h, TL4_TRUST_FILE, flags))
         goto fail;
-
-    if (FAILED(StringCchCopyW(dir, ARRAY_SIZE(dir), path)))
+    if (FAILED(StringCchCopyW(dir, ARRAY_SIZE(dir), path)) || FAILED(StringCchCopyW(wantDir, ARRAY_SIZE(wantDir), want)))
         goto fail;
-    while ((cut = wcsrchr(dir, L'\\')) != NULL)
+    while ((cut = wcsrchr(dir, L'\\')) != NULL && (ntCut = wcsrchr(wantDir, L'\\')) != NULL)
     {
         HANDLE hd;
         BOOL ok, isRoot = FALSE;
         enum tl4_trust_object kind;
 
         *cut = 0;
+        *ntCut = 0;
         if (wcslen(dir) == 2 && dir[1] == L':')
         {
-            dir[2] = L'\\';
-            dir[3] = 0;
+            /* the volume root: "C:\" and "\Device\HarddiskVolumeN\" */
+            StringCchCatW(dir, ARRAY_SIZE(dir), L"\\");
+            StringCchCatW(wantDir, ARRAY_SIZE(wantDir), L"\\");
             isRoot = TRUE;
         }
         kind = (wcslen(dir) >= rootLen && !_wcsnicmp(dir, storeRoot, rootLen)) ? TL4_TRUST_DIR : TL4_TRUST_DIR_ABOVE_ROOT;
@@ -752,24 +839,21 @@ TrustOpenChecked(LPCWSTR path, LPCWSTR storeRoot, HANDLE *phFile)
                          NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
         if (hd == INVALID_HANDLE_VALUE)
             goto fail;
-        ok = TrustNotReparse(hd, TRUE) && TrustSdOk(hd, kind, flags) && TrustHandleName(hd, nt, ARRAY_SIZE(nt));
-        if (ok)
-        {
-            size_t n = wcslen(nt);
-            ok = !_wcsnicmp(nt, want, n) && (want[n] == L'\\' || (n && nt[n - 1] == L'\\'));
-        }
+        ok = TrustNotReparse(hd, TRUE) && TrustSdOk(hd, kind, flags) && TrustHandleName(hd, nt, ARRAY_SIZE(nt)) &&
+             !_wcsicmp(nt, wantDir);
         CloseHandle(hd);
         if (!ok)
             goto fail;
         if (isRoot)
-            break;
+        {
+            *phFile = h;
+            return S_OK;
+        }
     }
-    *phFile = h;
-    return S_OK;
 
 fail:
     CloseHandle(h);
-    return hr;
+    return E_ACCESSDENIED;
 }
 
 static HRESULT
@@ -795,12 +879,20 @@ TrustPeekVersion(HANDLE hFile, WORD *version)
         return hr;
     if (NT_SUCCESS(NtMapViewOfSection(hs, NtCurrentProcess(), &base, 0, 0, NULL, &view, ViewUnmap, 0, PAGE_READONLY)))
     {
-        if (tl4_pe_open(base, (size_t)std.EndOfFile.QuadPart, &pe) == TL4_OK &&
-            tl4_pe_find(&pe, &type, &name, &res) == TL4_OK && res.size == 2)
+        _SEH2_TRY
         {
-            *version = (WORD)(res.data[0] | (res.data[1] << 8));
-            hr = S_OK;
+            if (tl4_pe_open(base, (size_t)std.EndOfFile.QuadPart, &pe) == TL4_OK &&
+                tl4_pe_find(&pe, &type, &name, &res) == TL4_OK && res.size == 2)
+            {
+                *version = (WORD)(res.data[0] | (res.data[1] << 8));
+                hr = S_OK;
+            }
         }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            hr = HRESULT_FROM_WIN32(ERROR_READ_FAULT);
+        }
+        _SEH2_END;
         NtUnmapViewOfSection(NtCurrentProcess(), base);
     }
     NtClose(hs);
@@ -823,27 +915,41 @@ typedef struct _UXT_GUARD_DATA
 } UXT_GUARD_DATA;
 
 static BOOL
+TrustParseHex(LPCWSTR s, unsigned digits, ULONGLONG *out)
+{
+    ULONGLONG v = 0;
+    unsigned i;
+
+    for (i = 0; i < digits; i++)
+    {
+        WCHAR c = s[i];
+        unsigned d;
+
+        if (c >= L'0' && c <= L'9')
+            d = c - L'0';
+        else if (c >= L'A' && c <= L'F')
+            d = c - L'A' + 10;
+        else
+            return FALSE;
+        v = (v << 4) | d;
+    }
+    *out = v;
+    return TRUE;
+}
+
+static BOOL
 TrustParseGuardName(LPCWSTR s, ULONG_PTR *pid, ULONGLONG *ctime)
 {
-    WCHAR *end;
-    unsigned long p;
-    unsigned long long t;
+    ULONGLONG p;
 
-    if (wcslen(s) != 25 || s[8] != L'-')
+    if (wcslen(s) != 25 || s[8] != L'-' || !TrustParseHex(s, 8, &p) || !TrustParseHex(s + 9, 16, ctime))
         return FALSE;
-    p = wcstoul(s, &end, 16);
-    if (end != s + 8)
-        return FALSE;
-    t = _wcstoui64(s + 9, &end, 16);
-    if (end != s + 25)
-        return FALSE;
-    *pid = p;
-    *ctime = t;
+    *pid = (ULONG_PTR)p;
     return TRUE;
 }
 
 static HRESULT
-TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g)
+TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g, BOOL honourStale)
 {
     PSYSTEM_PROCESS_INFORMATION snap, self;
     HKEY key;
@@ -898,7 +1004,10 @@ TrustGuardEnter(LPCWSTR part, LPCWSTR name, UXT_GUARD *g)
     if (FAILED(hr))
     {
         TrustEvent(L"style skipped after a failed load (crash guard)", name);
-        return hr;
+        /* T-GUARD-2 v6: the skip binds the process's own loads; a load the user asked for writes its own mark */
+        if (honourStale)
+            return hr;
+        hr = S_OK;
     }
 
     GetSystemTimeAsFileTime(&now);
@@ -954,7 +1063,7 @@ TrustImpersonating(void)
 }
 
 HRESULT
-UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf)
+UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf, BOOL selfLoad)
 {
     WCHAR name[UXT_NAME_MAX + 1], built[MAX_PATH], storeRoot[MAX_PATH];
     HANDLE hFile;
@@ -966,8 +1075,8 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
     if (!path)
         return E_POINTER;
     TrustEnsureClassified();
-
-    /* outside the store (5.9): v3 only in an ordinary process with the T-GATE-4 rollback on */
+    if (TrustImpersonating())
+        return E_ACCESSDENIED;
     if (!UXTHEME_TrustNameFromStoredPath(path, name, ARRAY_SIZE(name)) ||
         !UXTHEME_TrustBuildV3Path(name, built, ARRAY_SIZE(built)))
     {
@@ -979,8 +1088,6 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
         TrustEvent(L"style refused: outside the store", NULL);
         return E_ACCESSDENIED;
     }
-    if (TrustImpersonating())                               /* T-PRIV-4 */
-        return E_ACCESSDENIED;
     if (FAILED(StringCchPrintfW(storeRoot, ARRAY_SIZE(storeRoot), L"%s\\Resources\\Themes", g_windir)))
         return E_FAIL;
 
@@ -990,7 +1097,7 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
         TrustEvent(L"style refused: location check", name);
         return hr;
     }
-    hr = TrustGuardEnter(UXT_PART_THEMES, name, &guard);
+    hr = TrustGuardEnter(UXT_PART_THEMES, name, &guard, selfLoad);
     if (FAILED(hr))
     {
         CloseHandle(hFile);
@@ -998,14 +1105,11 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
     }
     hr = TrustPeekVersion(hFile, &version);
     if (SUCCEEDED(hr) && version == 3)
-    {
-        /* T-LOAD-2 exception: the v3 loader opens the checked path once more; our handle keeps writers out */
         hr = MSSTYLES_OpenThemeFileV3(built, pszColorName, pszSizeName, tf);
-    }
     else if (SUCCEEDED(hr))
-        hr = HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);          /* version 4 comes with I1a-V */
+        hr = HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
     CloseHandle(hFile);
-    TrustGuardLeave(&guard);                                /* a clean finish, success or refusal */
+    TrustGuardLeave(&guard);
     if (SUCCEEDED(hr) && *tf)
     {
         StringCchCopyW((*tf)->szTrustGuard, ARRAY_SIZE((*tf)->szTrustGuard), guard.subkey);

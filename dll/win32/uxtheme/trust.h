@@ -21,8 +21,9 @@ void UXTHEME_TrustMachineDefault(LPWSTR name, DWORD cchName);
 
 BOOL UXTHEME_TrustBuildV3Path(LPCWSTR name, LPWSTR path, DWORD cchPath);
 
-HRESULT UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
+HRESULT UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf, BOOL selfLoad);
 
 void UXTHEME_TrustClearGuard(PTHEME_FILE tf);
 
 BOOL UXTHEME_TrustReloadAllowed(void);
+UINT UXTHEME_TrustReloadDelay(void);
