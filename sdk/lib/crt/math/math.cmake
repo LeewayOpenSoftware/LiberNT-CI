@@ -35,7 +35,17 @@ if(ARCH STREQUAL "i386")
     list(APPEND LIBCNTPR_MATH_SOURCE
         math/fabs.c
         math/fabsf.c
-        math/i386/ci.c
+        math/i386/ciacos.c
+        math/i386/ciasin.c
+        math/i386/ciatan.c
+        math/i386/ciatan2.c
+        math/i386/cicosh.c
+        math/i386/ciexp.c
+        math/i386/cifmod.c
+        math/i386/cilog10.c
+        math/i386/cisinh.c
+        math/i386/citan.c
+        math/i386/citanh.c
         math/i386/cicos.c
         math/i386/cilog.c
         math/i386/cipow.c
