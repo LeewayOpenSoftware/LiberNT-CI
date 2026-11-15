@@ -2014,7 +2014,7 @@ NtSetInformationToken(
                                 {
                                     RtlMoveMemory(Token->DynamicPart,
                                                   Token->DefaultDacl,
-                                                  RtlLengthSid(Token->PrimaryGroup));
+                                                  Token->DefaultDacl->AclSize);
                                     Token->DefaultDacl = (PACL)(Token->DynamicPart);
                                 }
 
@@ -2286,56 +2286,88 @@ NtSetInformationToken(
             {
                 PTOKEN_AUDIT_POLICY_INFORMATION PolicyInformation =
                     (PTOKEN_AUDIT_POLICY_INFORMATION)TokenInformation;
-                SEP_AUDIT_POLICY AuditPolicy;
+                SEP_AUDIT_POLICY Values, Named;
+                ULONG PolicyCount;
                 ULONG i;
+
+                /* Windows: TCB holders only, decided before anything of the buffer is used */
+                if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+                {
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
+
+                /* The elements must lie inside the given (and probed) length */
+                if (TokenInformationLength < FIELD_OFFSET(TOKEN_AUDIT_POLICY_INFORMATION, Policies))
+                {
+                    Status = STATUS_INFO_LENGTH_MISMATCH;
+                    break;
+                }
+
+                /* Values holds what the caller names, Named marks which categories those are */
+                Values.Overlay = 0;
+                Named.Overlay = 0;
 
                 _SEH2_TRY
                 {
-                    ProbeForRead(PolicyInformation,
-                                 FIELD_OFFSET(TOKEN_AUDIT_POLICY_INFORMATION,
-                                              Policies[PolicyInformation->PolicyCount]),
-                                 sizeof(ULONG));
+                    /* Read the count once; the bound and the loop use this copy */
+                    PolicyCount = PolicyInformation->PolicyCount;
+                    if (PolicyCount > (TokenInformationLength - FIELD_OFFSET(TOKEN_AUDIT_POLICY_INFORMATION, Policies)) /
+                                      sizeof(PolicyInformation->Policies[0]))
+                    {
+                        Status = STATUS_INFO_LENGTH_MISMATCH;
+                        _SEH2_YIELD(goto Cleanup);
+                    }
 
                     /* Loop all policies in the structure */
-                    for (i = 0; i < PolicyInformation->PolicyCount; i++)
+                    for (i = 0; i < PolicyCount; i++)
                     {
                         /* Set the corresponding bits in the packed structure */
                         switch (PolicyInformation->Policies[i].Category)
                         {
                             case AuditCategorySystem:
-                                AuditPolicy.PolicyElements.System = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.System = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.System = 0xF;
                                 break;
 
                             case AuditCategoryLogon:
-                                AuditPolicy.PolicyElements.Logon = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.Logon = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.Logon = 0xF;
                                 break;
 
                             case AuditCategoryObjectAccess:
-                                AuditPolicy.PolicyElements.ObjectAccess = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.ObjectAccess = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.ObjectAccess = 0xF;
                                 break;
 
                             case AuditCategoryPrivilegeUse:
-                                AuditPolicy.PolicyElements.PrivilegeUse = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.PrivilegeUse = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.PrivilegeUse = 0xF;
                                 break;
 
                             case AuditCategoryDetailedTracking:
-                                AuditPolicy.PolicyElements.DetailedTracking = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.DetailedTracking = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.DetailedTracking = 0xF;
                                 break;
 
                             case AuditCategoryPolicyChange:
-                                AuditPolicy.PolicyElements.PolicyChange = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.PolicyChange = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.PolicyChange = 0xF;
                                 break;
 
                             case AuditCategoryAccountManagement:
-                                AuditPolicy.PolicyElements.AccountManagement = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.AccountManagement = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.AccountManagement = 0xF;
                                 break;
 
                             case AuditCategoryDirectoryServiceAccess:
-                                AuditPolicy.PolicyElements.DirectoryServiceAccess = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.DirectoryServiceAccess = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.DirectoryServiceAccess = 0xF;
                                 break;
 
                             case AuditCategoryAccountLogon:
-                                AuditPolicy.PolicyElements.AccountLogon = PolicyInformation->Policies[i].Value;
+                                Values.PolicyElements.AccountLogon = PolicyInformation->Policies[i].Value;
+                                Named.PolicyElements.AccountLogon = 0xF;
                                 break;
                         }
                     }
@@ -2347,18 +2379,12 @@ NtSetInformationToken(
                 }
                 _SEH2_END;
 
-                /* Check for TCB privilege */
-                if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
-                {
-                    Status = STATUS_PRIVILEGE_NOT_HELD;
-                    break;
-                }
-
                 /* Lock the token */
                 SepAcquireTokenLockExclusive(Token);
 
-                /* Set the new audit policy */
-                Token->AuditPolicy = AuditPolicy;
+                /* Named categories take their new value, the others keep the token's */
+                Token->AuditPolicy.Overlay = (Token->AuditPolicy.Overlay & ~Named.Overlay) |
+                                             (Values.Overlay & Named.Overlay);
                 ExAllocateLocallyUniqueId(&Token->ModifiedId);
 
                 /* Unlock the token */
@@ -2413,23 +2439,13 @@ NtSetInformationToken(
             {
                 TOKEN_MANDATORY_LABEL CapturedLabel;
                 PSID_AND_ATTRIBUTES Integrity;
-                PSID NewSid = NULL;
+                PSID NewSid = NULL, CapturedSid;
                 ULONG NewRid = 0, OldRid;
                 BOOLEAN HasTcbPrivilege;
 
                 _SEH2_TRY
                 {
                     CapturedLabel = *(PTOKEN_MANDATORY_LABEL)TokenInformation;
-                    if (!RtlValidSid(CapturedLabel.Label.Sid) ||
-                        *RtlSubAuthorityCountSid(CapturedLabel.Label.Sid) != 1 ||
-                        !RtlEqualMemory(RtlIdentifierAuthoritySid(CapturedLabel.Label.Sid),
-                                        &SeMandatoryLabelAuthority,
-                                        sizeof(SID_IDENTIFIER_AUTHORITY)))
-                    {
-                        Status = STATUS_INVALID_SID;
-                        _SEH2_YIELD(goto Cleanup);
-                    }
-                    NewRid = *RtlSubAuthoritySid(CapturedLabel.Label.Sid, 0);
                 }
                 _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
                 {
@@ -2437,6 +2453,28 @@ NtSetInformationToken(
                     _SEH2_YIELD(goto Cleanup);
                 }
                 _SEH2_END;
+
+                /* The SID pointer is the caller's: probe and copy it before reading it */
+                Status = SepCaptureSid(CapturedLabel.Label.Sid,
+                                       PreviousMode,
+                                       PagedPool,
+                                       FALSE,
+                                       &CapturedSid);
+                if (!NT_SUCCESS(Status))
+                    break;
+
+                if (!RtlValidSid(CapturedSid) ||
+                    *RtlSubAuthorityCountSid(CapturedSid) != 1 ||
+                    !RtlEqualMemory(RtlIdentifierAuthoritySid(CapturedSid),
+                                    &SeMandatoryLabelAuthority,
+                                    sizeof(SID_IDENTIFIER_AUTHORITY)))
+                {
+                    SepReleaseSid(CapturedSid, PreviousMode, FALSE);
+                    Status = STATUS_INVALID_SID;
+                    break;
+                }
+                NewRid = *RtlSubAuthoritySid(CapturedSid, 0);
+                SepReleaseSid(CapturedSid, PreviousMode, FALSE);
 
                 switch (NewRid)
                 {
@@ -2495,6 +2533,13 @@ NtSetInformationToken(
                     _SEH2_YIELD(goto Cleanup);
                 }
                 _SEH2_END;
+
+                /* Windows sets the policy for TCB holders only */
+                if (!SeSinglePrivilegeCheck(SeTcbPrivilege, PreviousMode))
+                {
+                    Status = STATUS_PRIVILEGE_NOT_HELD;
+                    break;
+                }
 
                 if (Policy & ~TOKEN_MANDATORY_POLICY_VALID_MASK)
                 {

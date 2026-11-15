@@ -930,6 +930,22 @@ SepObjectTypeGuidInList(
     _Out_ PULONG ObjectIndex);
 
 NTSTATUS
+NTAPI
+SepAccessCheckClientToken(
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_ PTOKEN Token,
+    _In_ PTOKEN PrimaryToken,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_TYPE_LIST_INTERNAL ObjectTypeList,
+    _In_ ULONG ObjectTypeListLength,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ BOOLEAN UseResultList,
+    _Out_writes_(UseResultList ? ObjectTypeListLength : 1) PACCESS_MASK GrantedAccessList,
+    _Out_writes_(UseResultList ? ObjectTypeListLength : 1) PNTSTATUS AccessStatusList);
+
+NTSTATUS
 SeCaptureObjectTypeList(
     _In_reads_opt_(ObjectTypeListLength) POBJECT_TYPE_LIST ObjectTypeList,
     _In_ ULONG ObjectTypeListLength,

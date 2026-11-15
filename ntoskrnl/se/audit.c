@@ -505,24 +505,36 @@ SepAccessCheckAndAuditAlarmWorker(
     _Out_ PBOOLEAN GenerateOnClose,
     _In_ BOOLEAN UseResultList)
 {
-    ULONG ResultListLength, i;
+    PTOKEN Token = (PTOKEN)SubjectContext->ClientToken;
+    NTSTATUS Status;
 
-    /* Get the length of the result list */
-    ResultListLength = UseResultList ? ObjectTypeListLength : 1;
-
-    /// FIXME: we should do some real work here...
-    UNIMPLEMENTED;
-
-    /// HACK: we just pretend all access is granted!
-    for (i = 0; i < ResultListLength; i++)
-    {
-        GrantedAccessList[i] = DesiredAccess;
-        AccessStatusList[i] = STATUS_SUCCESS;
-    }
+    UNREFERENCED_PARAMETER(SubsystemName);
+    UNREFERENCED_PARAMETER(HandleId);
+    UNREFERENCED_PARAMETER(ObjectTypeName);
+    UNREFERENCED_PARAMETER(ObjectName);
+    UNREFERENCED_PARAMETER(AuditType);
+    UNREFERENCED_PARAMETER(HaveAuditPrivilege);
 
     *GenerateOnClose = FALSE;
 
-    return STATUS_SUCCESS;
+    if (Token == NULL)
+        return STATUS_NO_IMPERSONATION_TOKEN;
+
+    Status = SepAccessCheckClientToken(SecurityDescriptor,
+                                       Token,
+                                       (PTOKEN)SubjectContext->PrimaryToken,
+                                       PrincipalSelfSid,
+                                       DesiredAccess,
+                                       ObjectTypeList,
+                                       ObjectTypeListLength,
+                                       GenericMapping,
+                                       UserMode,
+                                       UseResultList,
+                                       GrantedAccessList,
+                                       AccessStatusList);
+
+    /* Audit record generation is not implemented yet: GenerateOnClose stays FALSE */
+    return Status;
 }
 
 /**

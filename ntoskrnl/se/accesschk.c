@@ -1126,6 +1126,11 @@ SepMandatoryIntegrityCheck(
                 continue;
             if (Ace->Header.AceFlags & INHERIT_ONLY_ACE)
                 continue;
+            if (Ace->Header.AceSize < FIELD_OFFSET(SYSTEM_MANDATORY_LABEL_ACE, SidStart) + FIELD_OFFSET(SID, SubAuthority))
+                continue;
+            if (((PISID)&((PSYSTEM_MANDATORY_LABEL_ACE)Ace)->SidStart)->SubAuthorityCount == 0 ||
+                Ace->Header.AceSize < FIELD_OFFSET(SYSTEM_MANDATORY_LABEL_ACE, SidStart) + RtlLengthSid((PSID)&((PSYSTEM_MANDATORY_LABEL_ACE)Ace)->SidStart))
+                continue;
             ObjectRid = *RtlSubAuthoritySid(&((PSYSTEM_MANDATORY_LABEL_ACE)Ace)->SidStart, 0);
             Policy = Ace->AccessMask & SYSTEM_MANDATORY_LABEL_VALID_MASK;
             break;
@@ -1768,6 +1773,107 @@ ReturnCommonStatus:
 #endif
 
     return NT_SUCCESS(Status);
+}
+
+NTSTATUS
+NTAPI
+SepAccessCheckClientToken(
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_ PTOKEN Token,
+    _In_ PTOKEN PrimaryToken,
+    _In_opt_ PSID PrincipalSelfSid,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_opt_ POBJECT_TYPE_LIST_INTERNAL ObjectTypeList,
+    _In_ ULONG ObjectTypeListLength,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _In_ BOOLEAN UseResultList,
+    _Out_writes_(UseResultList ? ObjectTypeListLength : 1) PACCESS_MASK GrantedAccessList,
+    _Out_writes_(UseResultList ? ObjectTypeListLength : 1) PNTSTATUS AccessStatusList)
+{
+    ACCESS_MASK PreviouslyGrantedAccess = 0;
+    PPRIVILEGE_SET Privileges = NULL;
+    ULONG ResultListLength = UseResultList ? ObjectTypeListLength : 1;
+    ULONG Index;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (Token->TokenType != TokenImpersonation)
+        return STATUS_NO_IMPERSONATION_TOKEN;
+
+    if (Token->ImpersonationLevel < SecurityIdentification)
+        return STATUS_BAD_IMPERSONATION_LEVEL;
+
+    Status = SePrivilegePolicyCheck(&DesiredAccess,
+                                    &PreviouslyGrantedAccess,
+                                    NULL,
+                                    Token,
+                                    &Privileges,
+                                    AccessMode);
+    if (!NT_SUCCESS(Status))
+    {
+        for (Index = 0; Index < ResultListLength; Index++)
+        {
+            AccessStatusList[Index] = Status;
+            GrantedAccessList[Index] = 0;
+        }
+        return STATUS_SUCCESS;
+    }
+
+    if (Privileges != NULL)
+        SeFreePrivileges(Privileges);
+
+    SepAcquireTokenLockShared(PrimaryToken);
+    SepAcquireTokenLockShared(Token);
+
+    if (DesiredAccess & (WRITE_DAC | READ_CONTROL | MAXIMUM_ALLOWED))
+    {
+        if (SepTokenIsOwner(Token, SecurityDescriptor, FALSE) &&
+            !SepDaclContainsOwnerRightsAce(SecurityDescriptor))
+        {
+            ACCESS_MASK OwnerRights = (WRITE_DAC | READ_CONTROL) &
+                ~SepMandatoryIntegrityCheck(Token, SecurityDescriptor, GenericMapping);
+
+            if (DesiredAccess & MAXIMUM_ALLOWED)
+                PreviouslyGrantedAccess |= OwnerRights;
+            else
+                PreviouslyGrantedAccess |= (DesiredAccess & OwnerRights);
+
+            DesiredAccess &= ~OwnerRights;
+        }
+    }
+
+    if (DesiredAccess == 0)
+    {
+        for (Index = 0; Index < ResultListLength; Index++)
+        {
+            AccessStatusList[Index] = PreviouslyGrantedAccess ? STATUS_SUCCESS : STATUS_ACCESS_DENIED;
+            GrantedAccessList[Index] = PreviouslyGrantedAccess;
+        }
+    }
+    else
+    {
+        SepAccessCheckWorker(SecurityDescriptor,
+                             Token,
+                             PrimaryToken,
+                             PrincipalSelfSid,
+                             DesiredAccess,
+                             ObjectTypeList,
+                             ObjectTypeListLength,
+                             PreviouslyGrantedAccess,
+                             GenericMapping,
+                             AccessMode,
+                             UseResultList,
+                             NULL,
+                             GrantedAccessList,
+                             AccessStatusList);
+    }
+
+    SepReleaseTokenLock(Token);
+    SepReleaseTokenLock(PrimaryToken);
+
+    return STATUS_SUCCESS;
 }
 
 /**

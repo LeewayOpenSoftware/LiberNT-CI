@@ -836,41 +836,51 @@ SeCaptureSecurityDescriptor(
 
         if (DescriptorCopy.Owner)
         {
-            if (!RtlValidSid(DescriptorCopy.Owner)) RtlRaiseStatus(STATUS_INVALID_SID);
             NewDescriptor->Owner = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Owner,
                           OwnerSize);
+            if (!RtlValidSid((PUCHAR)NewDescriptor + Offset) ||
+                RtlLengthRequiredSid(((PISID)((PUCHAR)NewDescriptor + Offset))->SubAuthorityCount) != OwnerSize)
+                RtlRaiseStatus(STATUS_INVALID_SID);
             Offset += ROUND_UP(OwnerSize, sizeof(ULONG));
         }
 
         if (DescriptorCopy.Group)
         {
-            if (!RtlValidSid(DescriptorCopy.Group)) RtlRaiseStatus(STATUS_INVALID_SID);
             NewDescriptor->Group = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Group,
                           GroupSize);
+            if (!RtlValidSid((PUCHAR)NewDescriptor + Offset) ||
+                RtlLengthRequiredSid(((PISID)((PUCHAR)NewDescriptor + Offset))->SubAuthorityCount) != GroupSize)
+                RtlRaiseStatus(STATUS_INVALID_SID);
             Offset += ROUND_UP(GroupSize, sizeof(ULONG));
         }
 
         if (DescriptorCopy.Sacl)
         {
-            if (!RtlValidAcl(DescriptorCopy.Sacl)) RtlRaiseStatus(STATUS_INVALID_ACL);
             NewDescriptor->Sacl = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Sacl,
                           SaclSize);
+            if (SaclSize < sizeof(ACL) ||
+                ((PACL)((PUCHAR)NewDescriptor + Offset))->AclSize != SaclSize ||
+                !RtlValidAcl((PACL)((PUCHAR)NewDescriptor + Offset)))
+                RtlRaiseStatus(STATUS_INVALID_ACL);
             Offset += ROUND_UP(SaclSize, sizeof(ULONG));
         }
 
         if (DescriptorCopy.Dacl)
         {
-            if (!RtlValidAcl(DescriptorCopy.Dacl)) RtlRaiseStatus(STATUS_INVALID_ACL);
             NewDescriptor->Dacl = Offset;
             RtlCopyMemory((PUCHAR)NewDescriptor + Offset,
                           DescriptorCopy.Dacl,
                           DaclSize);
+            if (DaclSize < sizeof(ACL) ||
+                ((PACL)((PUCHAR)NewDescriptor + Offset))->AclSize != DaclSize ||
+                !RtlValidAcl((PACL)((PUCHAR)NewDescriptor + Offset)))
+                RtlRaiseStatus(STATUS_INVALID_ACL);
             Offset += ROUND_UP(DaclSize, sizeof(ULONG));
         }
 
@@ -1473,15 +1483,16 @@ SeValidSecurityDescriptor(
 
     /* Reference it */
     Sid = (PISID)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Owner);
-    if (Sid->Revision != SID_REVISION)
+    if (Sid->Revision != SID_REVISION || Sid->SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)
     {
-        DPRINT1("Invalid Owner SID revision\n");
+        DPRINT1("Invalid Owner SID revision or sub-authority count\n");
         return FALSE;
     }
 
     // NOTE: Same as SeLengthSid(Sid); but doesn't use hardcoded values.
     SdLength += (sizeof(SID) + (Sid->SubAuthorityCount - 1) * sizeof(ULONG));
-    if (Length < SdLength)
+    if ((Length < SdLength) ||
+        (Length - SecurityDescriptor->Owner < RtlLengthRequiredSid(Sid->SubAuthorityCount)))
     {
         DPRINT1("Invalid Owner SID size\n");
         return FALSE;
@@ -1506,15 +1517,16 @@ SeValidSecurityDescriptor(
 
         /* Reference it */
         Sid = (PSID)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Group);
-        if (Sid->Revision != SID_REVISION)
+        if (Sid->Revision != SID_REVISION || Sid->SubAuthorityCount > SID_MAX_SUB_AUTHORITIES)
         {
-            DPRINT1("Invalid Group SID revision\n");
+            DPRINT1("Invalid Group SID revision or sub-authority count\n");
             return FALSE;
         }
 
         // NOTE: Same as SeLengthSid(Sid); but doesn't use hardcoded values.
         SdLength += (sizeof(SID) + (Sid->SubAuthorityCount - 1) * sizeof(ULONG));
-        if (Length < SdLength)
+        if ((Length < SdLength) ||
+            (Length - SecurityDescriptor->Group < RtlLengthRequiredSid(Sid->SubAuthorityCount)))
         {
             DPRINT1("Invalid Group SID size\n");
             return FALSE;
@@ -1542,7 +1554,8 @@ SeValidSecurityDescriptor(
         Acl = (PACL)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Dacl);
 
         SdLength += Acl->AclSize;
-        if (Length < SdLength)
+        if ((Length < SdLength) ||
+            (Length - SecurityDescriptor->Dacl < Acl->AclSize))
         {
             DPRINT1("Invalid DACL size\n");
             return FALSE;
@@ -1576,7 +1589,8 @@ SeValidSecurityDescriptor(
         Acl = (PACL)((ULONG_PTR)SecurityDescriptor + SecurityDescriptor->Sacl);
 
         SdLength += Acl->AclSize;
-        if (Length < SdLength)
+        if ((Length < SdLength) ||
+            (Length - SecurityDescriptor->Sacl < Acl->AclSize))
         {
             DPRINT1("Invalid SACL size\n");
             return FALSE;

@@ -408,6 +408,7 @@ SepCaptureSid(
     _Out_ PSID *CapturedSid)
 {
     ULONG SidSize = 0;
+    UCHAR SubAuthorityCount = 0;
     PISID NewSid, Sid = (PISID)InputSid;
 
     PAGED_CODE();
@@ -417,7 +418,8 @@ SepCaptureSid(
         _SEH2_TRY
         {
             ProbeForRead(Sid, FIELD_OFFSET(SID, SubAuthority), sizeof(UCHAR));
-            SidSize = RtlLengthRequiredSid(Sid->SubAuthorityCount);
+            SubAuthorityCount = Sid->SubAuthorityCount;
+            SidSize = RtlLengthRequiredSid(SubAuthorityCount);
             ProbeForRead(Sid, SidSize, sizeof(UCHAR));
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
@@ -435,8 +437,6 @@ SepCaptureSid(
         _SEH2_TRY
         {
             RtlCopyMemory(NewSid, Sid, SidSize);
-
-            *CapturedSid = NewSid;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
@@ -445,6 +445,15 @@ SepCaptureSid(
             _SEH2_YIELD(return _SEH2_GetExceptionCode());
         }
         _SEH2_END;
+
+        /* Validate the private copy */
+        if (!RtlValidSid(NewSid) || NewSid->SubAuthorityCount != SubAuthorityCount)
+        {
+            ExFreePoolWithTag(NewSid, TAG_SID);
+            return STATUS_INVALID_SID;
+        }
+
+        *CapturedSid = NewSid;
     }
     else if (!CaptureIfKernel)
     {
