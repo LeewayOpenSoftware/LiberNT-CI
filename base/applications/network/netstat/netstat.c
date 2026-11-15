@@ -227,6 +227,7 @@ BOOL DisplayOutput(VOID)
     {
         ShowIpStatistics();
         ShowIcmpStatistics();
+        ShowIcmp6Statistics();
         ShowTcpStatistics();
         ShowUdpStatistics();
         return TRUE;
@@ -313,6 +314,20 @@ VOID ShowIcmpStatistics(VOID)
     {
         DoFormatMessage(dwRetVal);
     }
+}
+
+/* The IPv6 stack counts its ICMP messages and errors, not each message type */
+VOID ShowIcmp6Statistics(VOID)
+{
+    MIB_ICMP_EX IcmpStats;
+
+    if (GetIcmpStatisticsEx(&IcmpStats, AF_INET6) != NO_ERROR)
+        return;
+
+    ConResPuts(StdOut, IDS_ICMP6_STAT_HEADER);
+    ConResPuts(StdOut, IDS_ICMP_THEADER);
+    ConResPrintf(StdOut, IDS_ICMP_MSG, IcmpStats.icmpInStats.dwMsgs, IcmpStats.icmpOutStats.dwMsgs);
+    ConResPrintf(StdOut, IDS_ICMP_ERROR, IcmpStats.icmpInStats.dwErrors, IcmpStats.icmpOutStats.dwErrors);
 }
 
 VOID ShowTcpStatistics(VOID)

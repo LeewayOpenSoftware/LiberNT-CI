@@ -490,3 +490,224 @@ NTSTATUS IfInfoEndpoints(ULONG Family, ULONG Protocol, PENDPOINT_ROW Rows, ULONG
     *Count = Emitted;
     return Emitted > Capacity ? STATUS_BUFFER_OVERFLOW : STATUS_SUCCESS;
 }
+
+/* The ICMP types the IPv4 counters know, in the order of ICMP_MIB_STATS after dwErrors */
+const UCHAR IfInfoIcmpTypes[IFINFO_ICMP_TYPES] = { 3, 11, 12, 4, 5, 8, 0, 13, 14, 17, 18 };
+
+static VOID IfInfoIcmpTypeCounts(const ICMP_MIB_STATS *Stats, PULONG Counts)
+{
+    Counts[0] = Stats->dwDestUnreachs;
+    Counts[1] = Stats->dwTimeExcds;
+    Counts[2] = Stats->dwParmProbs;
+    Counts[3] = Stats->dwSrcQuenchs;
+    Counts[4] = Stats->dwRedirects;
+    Counts[5] = Stats->dwEchos;
+    Counts[6] = Stats->dwEchoReps;
+    Counts[7] = Stats->dwTimestamps;
+    Counts[8] = Stats->dwTimestampReps;
+    Counts[9] = Stats->dwAddrMasks;
+    Counts[10] = Stats->dwAddrMaskReps;
+}
+
+static NTSTATUS IfInfoIp6Statistics(PIP6_STATISTICS Stats)
+{
+    ULONG Ignored, IgnoredNeeded;
+
+    RtlZeroMemory(Stats, sizeof(*Stats));
+    return LibIP6QueryTable(Ip6TableStatistics, NULL, 0, &Ignored, &IgnoredNeeded, Stats);
+}
+
+/* The interfaces and addresses of the whole IPv4 stack. The routes are counted by the producer of the
+ * forward table, which adds the routes it derives from the addresses. */
+static NTSTATUS IfInfoIp4Counts(PIP_STATS_ROW Row)
+{
+    PIF_INFO_KEY Keys = NULL;
+    ULONG Capacity = 0, Total = 0, Count, i;
+    NTSTATUS Status;
+
+    Status = IfInfoInterfaceKeys(NULL, 0, &Total);
+    if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW)
+        return Status;
+    if (Total != 0)
+    {
+        Capacity = Total;
+        Keys = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(IF_INFO_KEY), SNAPSHOT_TAG);
+        if (!Keys)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        Status = IfInfoInterfaceKeys(Keys, Capacity, &Total);
+        if (!NT_SUCCESS(Status) && Status != STATUS_BUFFER_OVERFLOW)
+        {
+            ExFreePoolWithTag(Keys, SNAPSHOT_TAG);
+            return Status;
+        }
+    }
+    Row->NumInterfaces = Total;
+    for (i = 0; i < Total && i < Capacity; i++)
+    {
+        /* An interface that went away meanwhile has no rows */
+        Count = 0;
+        Status = IfInfoIp4Addresses(Keys[i].Index, NULL, 0, &Count);
+        if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
+            Row->NumAddresses += Count;
+    }
+    if (Keys)
+        ExFreePoolWithTag(Keys, SNAPSHOT_TAG);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS IfInfoIpStats(ULONG Family, PIP_STATS_ROW Row)
+{
+    IP6_STATISTICS Stats;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(Row, sizeof(*Row));
+    if (Family == TI_NSI_FAMILY_IPV4)
+    {
+        Row->InReceives = IPStats.InReceives;
+        Row->InOctets = IPStats.InOctets;
+        Row->ForwDatagrams = IPStats.ForwDatagrams;
+        Row->InDelivers = IPStats.InDelivers;
+        Row->OutRequests = IPStats.OutRequests;
+        Row->OutOctets = IPStats.OutOctets;
+        Row->InHdrErrors = IPStats.InHdrErrors;
+        Row->InAddrErrors = IPStats.InAddrErrors;
+        Row->InUnknownProtos = IPStats.InUnknownProtos;
+        Row->ReasmReqds = IPStats.ReasmReqds;
+        Row->ReasmOks = IPStats.ReasmOks;
+        Row->ReasmFails = IPStats.ReasmFails;
+        Row->InDiscards = IPStats.InDiscards;
+        Row->OutNoRoutes = IPStats.OutNoRoutes;
+        Row->OutDiscards = IPStats.OutDiscards;
+        Row->FragOks = IPStats.FragOks;
+        Row->FragFails = IPStats.FragFails;
+        Row->FragCreates = IPStats.FragCreates;
+        Row->IcmpInMsgs = ICMPStats.In.dwMsgs;
+        Row->IcmpInErrors = ICMPStats.In.dwErrors;
+        Row->IcmpOutMsgs = ICMPStats.Out.dwMsgs;
+        Row->IcmpOutErrors = ICMPStats.Out.dwErrors;
+        IfInfoIcmpTypeCounts(&ICMPStats.In, Row->IcmpInTypes);
+        IfInfoIcmpTypeCounts(&ICMPStats.Out, Row->IcmpOutTypes);
+        Row->DefaultTtl = IP_DEFAULT_TTL;
+        return IfInfoIp4Counts(Row);
+    }
+
+    Status = IfInfoIp6Statistics(&Stats);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Row->InReceives = Stats.InReceives;
+    Row->ForwDatagrams = Stats.ForwardedDatagrams;
+    Row->InDelivers = Stats.InDelivers;
+    Row->OutRequests = Stats.OutRequests;
+    Row->InHdrErrors = Stats.InHeaderErrors;
+    Row->InAddrErrors = Stats.InAddressErrors;
+    Row->InUnknownProtos = Stats.InUnknownProtocols;
+    Row->ReasmReqds = Stats.ReassemblyRequired;
+    Row->ReasmOks = Stats.ReassemblyOk;
+    Row->ReasmFails = Stats.ReassemblyFailures;
+    Row->InDiscards = Stats.InDiscards;
+    Row->OutNoRoutes = Stats.OutNoRoutes;
+    Row->OutDiscards = Stats.OutDiscards;
+    Row->FragOks = Stats.FragmentOk;
+    Row->FragFails = Stats.FragmentFailures;
+    Row->FragCreates = Stats.FragmentsCreated;
+    Row->ReasmTimeout = Stats.ReassemblyTimeout;
+    Row->IcmpInMsgs = Stats.IcmpInMessages;
+    Row->IcmpInErrors = Stats.IcmpInErrors;
+    Row->IcmpOutMsgs = Stats.IcmpOutMessages;
+    Row->IcmpOutErrors = Stats.IcmpOutErrors;
+    Row->DefaultTtl = Stats.DefaultHopLimit;
+    Row->NumInterfaces = Stats.NumInterfaces;
+    Row->NumAddresses = Stats.NumAddresses;
+    Row->NumRoutes = Stats.NumRoutes;
+    return STATUS_SUCCESS;
+}
+
+/* The rows of the endpoint tables, counted: the tables and the statistics cannot disagree */
+static NTSTATUS IfInfoCountEndpoints(ULONG Family, ULONG Protocol, PULONG Total, PULONG Established)
+{
+    PENDPOINT_ROW Rows = NULL;
+    ULONG Capacity = 0, Count = 0, Attempt, i;
+    NTSTATUS Status;
+
+    *Total = 0;
+    *Established = 0;
+    for (Attempt = 0; Attempt < 4; Attempt++)
+    {
+        Status = IfInfoEndpoints(Family, Protocol, Rows, Capacity, &Count);
+        if (Status != STATUS_BUFFER_OVERFLOW || Protocol != IFINFO_PROTOCOL_TCP)
+            break;
+        /* The connections came and went between the two walks: try again with more room */
+        if (Rows)
+            ExFreePoolWithTag(Rows, SNAPSHOT_TAG);
+        Capacity = Count + 16;
+        Rows = ExAllocatePoolWithTag(PagedPool, Capacity * sizeof(ENDPOINT_ROW), SNAPSHOT_TAG);
+        if (!Rows)
+            return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
+    {
+        *Total = Count;
+        for (i = 0; Rows && i < Count && i < Capacity; i++)
+        {
+            if (Rows[i].State == MIB_TCP_STATE_ESTAB || Rows[i].State == MIB_TCP_STATE_CLOSE_WAIT)
+                (*Established)++;
+        }
+        Status = STATUS_SUCCESS;
+    }
+    if (Rows)
+        ExFreePoolWithTag(Rows, SNAPSHOT_TAG);
+    return Status;
+}
+
+NTSTATUS IfInfoTcpStats(ULONG Family, PTCP_STATS_ROW Row)
+{
+    struct lib_ip_stats Stats;
+
+    PAGED_CODE();
+
+    /* lwIP carries the TCP of both families and counts them together: each family reports the sum */
+    RtlZeroMemory(Row, sizeof(*Row));
+    LibIPGetStats(&Stats);
+    Row->ActiveOpens = Stats.TcpActiveOpens;
+    Row->PassiveOpens = Stats.TcpPassiveOpens;
+    Row->AttemptFails = Stats.TcpAttemptFails;
+    Row->EstabResets = Stats.TcpEstabResets;
+    Row->InSegs = Stats.TcpInSegs;
+    Row->OutSegs = Stats.TcpOutSegs;
+    Row->RetransSegs = Stats.TcpRetransSegs;
+    Row->OutRsts = Stats.TcpOutRsts;
+    Row->InErrs = Stats.TcpInErrs;
+    Row->MaxConn = Stats.TcpMaxConn;
+    return IfInfoCountEndpoints(Family, IFINFO_PROTOCOL_TCP, &Row->NumConns, &Row->CurrEstab);
+}
+
+NTSTATUS IfInfoUdpStats(ULONG Family, PUDP_STATS_ROW Row)
+{
+    IP6_STATISTICS Stats;
+    ULONG Ignored;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    RtlZeroMemory(Row, sizeof(*Row));
+    if (Family == TI_NSI_FAMILY_IPV4)
+    {
+        Row->InDatagrams = UDPStats.InputDatagrams;
+        Row->OutDatagrams = UDPStats.OutputDatagrams;
+        Row->NoPorts = UDPStats.NumPorts;
+        Row->InErrors = UDPStats.InputErrors;
+    }
+    else
+    {
+        Status = IfInfoIp6Statistics(&Stats);
+        if (!NT_SUCCESS(Status))
+            return Status;
+        Row->InDatagrams = Stats.UdpInDatagrams;
+        Row->OutDatagrams = Stats.UdpOutDatagrams;
+        Row->NoPorts = Stats.UdpNoPorts;
+        Row->InErrors = Stats.UdpInErrors;
+    }
+    return IfInfoCountEndpoints(Family, IFINFO_PROTOCOL_UDP, &Row->NumAddrs, &Ignored);
+}

@@ -264,8 +264,9 @@ NsiRegisterProvider(
     if (!NsiReady)
         return STATUS_DEVICE_NOT_READY;
     if (Module == NULL || Dispatch == NULL || Dispatch->Size < sizeof(*Dispatch) ||
-        Dispatch->GetAll == NULL || Dispatch->RowSizes.Key == 0)
+        Dispatch->GetAll == NULL || (Dispatch->RowSizes.Key == 0 && Dispatch->Enumerate != NULL))
     {
+        /* A table without a key has one row: it can be read, not enumerated */
         return STATUS_INVALID_PARAMETER;
     }
     New = ExAllocatePoolWithTag(NonPagedPool, sizeof(*New), TAG_NSI);

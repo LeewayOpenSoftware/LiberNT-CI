@@ -290,6 +290,10 @@ typedef struct _CONNECTION_ENDPOINT {
     NTSTATUS ReceiveShutdownStatus;
     BOOLEAN Closing;
 
+    /* For the TCP statistics; both are written on the lwIP thread only */
+    BOOLEAN StatConnecting;     /* An active open is under way */
+    BOOLEAN StatEstablished;    /* The connection reached the established state */
+
     volatile LONG PendingRecvCredit;
     volatile LONG CreditFlushQueued;
     ULONG64 WfpEndpointId;

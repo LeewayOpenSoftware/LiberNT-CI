@@ -29,11 +29,12 @@ typedef struct UDP_PSEUDO_HEADER {
 } UDP_PSEUDO_HEADER, *PUDP_PSEUDO_HEADER;
 #pragma pack(pop)
 
+/* IPv4 UDP counters, counted in UDPReceive and UDPSendToAddress. IPv6 UDP runs in lwIP. */
 typedef struct UDP_STATISTICS {
-  ULONG InputDatagrams;
+  LONG64 InputDatagrams;
+  LONG64 OutputDatagrams;
   ULONG NumPorts;
   ULONG InputErrors;
-  ULONG OutputDatagrams;
   ULONG NumAddresses;
 } UDP_STATISTICS, *PUDP_STATISTICS;
 
@@ -70,14 +71,13 @@ NTSTATUS LibIP6QueryTable(
     PULONG Needed,
     PVOID Statistics);
 
-/* IPv4 protocol counters copied out of lwip_stats; the MIB mapping lives in ninfo.c. */
+/* TCP counters copied out of lwip_stats (IPv4 and IPv6 together); the MIB mapping lives in ninfo.c.
+ * The IPv4 IP and UDP counters are native: IPStats (ip.h) and UDPStats. */
 struct lib_ip_stats
 {
-    ULONG InReceives, InDelivers, OutRequests, ForwardedDatagrams;
-    ULONG InHeaderErrors, InUnknownProtocols, InDiscards, OutNoRoutes, OutDiscards;
-    ULONG ReasmReqds, ReasmOks, ReasmFails, FragCreates;
     ULONG TcpInSegs, TcpOutSegs, TcpInErrs;
-    ULONG UdpInDatagrams, UdpOutDatagrams, UdpNoPorts, UdpInErrors;
+    ULONG TcpActiveOpens, TcpPassiveOpens, TcpAttemptFails, TcpEstabResets;
+    ULONG TcpOutRsts, TcpRetransSegs, TcpMaxConn;
 };
 VOID LibIPGetStats(struct lib_ip_stats *Stats);
 

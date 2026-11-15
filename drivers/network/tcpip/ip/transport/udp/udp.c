@@ -262,6 +262,7 @@ static NTSTATUS UDPSendToAddress(
         if (!NCE)
         {
             UnlockObject(AddrFile);
+            IP_STAT_INC(OutNoRoutes);
             return STATUS_NETWORK_UNREACHABLE;
         }
         if (AddrIsUnspecified(&LocalAddress)) GetInterfaceSourceAddress(NCE->Interface, &RemoteAddress, &NCE->Address, &LocalAddress);
@@ -288,6 +289,7 @@ static NTSTATUS UDPSendToAddress(
          */
         if(!(NCE = RouteGetRouteToDestination( &RemoteAddress ))) {
             UnlockObject(AddrFile);
+            IP_STAT_INC(OutNoRoutes);
             return STATUS_NETWORK_UNREACHABLE;
         }
 
@@ -306,6 +308,7 @@ static NTSTATUS UDPSendToAddress(
         IPDereferenceInterface(Interface);
         if (!NCE) {
             UnlockObject(AddrFile);
+            IP_STAT_INC(OutNoRoutes);
             return STATUS_NETWORK_UNREACHABLE;
         }
     }
@@ -369,9 +372,13 @@ static NTSTATUS UDPSendToAddress(
     Packet.WfpTag = *Tag;
     Status = IPSendDatagram(&Packet, NCE);
     NBDereferenceNeighbor(NCE);
+    if (NT_SUCCESS(Status))
+        InterlockedIncrement64(&UDPStats.OutputDatagrams);
 
     if (LoopNCE != NULL)
     {
+        /* The copy for the local listeners is the same request */
+        LoopPacket.Flags |= IP_PACKET_FLAG_NOREQUEST;
         LoopPacket.WfpTag = *Tag;
         IPSendDatagram(&LoopPacket, LoopNCE);
         NBDereferenceNeighbor(LoopNCE);
@@ -612,7 +619,7 @@ static NTSTATUS NTAPI UDPWfpInjectReceive(
 
 
 static
-VOID
+BOOLEAN
 UDPDeliverToAddrFile(
     _In_ PADDRESS_FILE AddrFile,
     _In_ PIP_INTERFACE Interface,
@@ -634,7 +641,7 @@ UDPDeliverToAddrFile(
                      DataSize,
                      &IPPacket->WfpTag))
     {
-        return;
+        return FALSE;
     }
 
     IPPacket->WfpAccepted = TRUE;
@@ -646,6 +653,7 @@ UDPDeliverToAddrFile(
                   IPPacket,
                   DataSize,
                   Interface);
+    return TRUE;
 }
 
 VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
@@ -666,6 +674,7 @@ VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
   PIP_ADDRESS DstAddress, SrcAddress;
   UINT DataSize, i;
   BOOLEAN IsMulticast, DeliverToAll, ChosenSpecific = FALSE;
+  BOOLEAN Matched = FALSE, Delivered = FALSE;
   ULONG MemberIndex;
   PIP_INTERFACE SourceInterface;
 
@@ -699,6 +708,7 @@ VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
   if (i != DH2N(0x0000FFFF) && UDPHeader->Checksum != 0)
   {
       TI_DbgPrint(MIN_TRACE, ("Bad checksum on packet received.\n"));
+      InterlockedIncrement((PLONG)&UDPStats.InputErrors);
       return;
   }
 
@@ -707,6 +717,7 @@ VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
   if ((i < sizeof(UDP_HEADER)) || (i > IPPacket->TotalSize - IPPacket->Position)) {
     /* Incorrect or damaged packet received, discard it */
     TI_DbgPrint(MIN_TRACE, ("Incorrect or damaged UDP packet received.\n"));
+    InterlockedIncrement((PLONG)&UDPStats.InputErrors);
     return;
   }
 
@@ -738,7 +749,11 @@ VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
   while (AddrFile != NULL) {
     if (DeliverToAll) {
       if (!IsMulticast || IGMPIsMember(AddrFile, MemberIndex, DstAddress->Address.IPv4Address))
-          UDPDeliverToAddrFile(AddrFile, Interface, IPPacket, IPv4Header, UDPHeader, DataSize);
+      {
+          Matched = TRUE;
+          if (UDPDeliverToAddrFile(AddrFile, Interface, IPPacket, IPv4Header, UDPHeader, DataSize))
+              Delivered = TRUE;
+      }
       DereferenceObject(AddrFile);
     } else if (Chosen == NULL || (!ChosenSpecific && !AddrIsUnspecified(&AddrFile->Address))) {
       if (Chosen != NULL)
@@ -752,9 +767,18 @@ VOID UDPReceive(PIP_INTERFACE Interface, PIP_PACKET IPPacket)
   }
 
   if (Chosen != NULL) {
-    UDPDeliverToAddrFile(Chosen, Interface, IPPacket, IPv4Header, UDPHeader, DataSize);
+    Matched = TRUE;
+    if (UDPDeliverToAddrFile(Chosen, Interface, IPPacket, IPv4Header, UDPHeader, DataSize))
+        Delivered = TRUE;
     DereferenceObject(Chosen);
   }
+
+  /* One datagram counts once, however many sockets took it. A datagram the filter engine
+     refused is neither delivered nor without a port. */
+  if (Delivered)
+      InterlockedIncrement64(&UDPStats.InputDatagrams);
+  else if (!Matched)
+      InterlockedIncrement((PLONG)&UDPStats.NumPorts);
   TI_DbgPrint(MAX_TRACE, ("Leaving.\n"));
 }
 

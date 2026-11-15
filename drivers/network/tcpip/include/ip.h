@@ -94,6 +94,40 @@ typedef struct _IP_PACKET {
 } IP_PACKET, *PIP_PACKET;
 
 #define IP_PACKET_FLAG_RAW      0x01    /* Raw IP packet */
+#define IP_PACKET_FLAG_NOREQUEST 0x02   /* Not a request of a local user: forwarded, or the loopback copy of a datagram */
+
+/* IPv4 counters of the IP MIB. Each one is counted at one place in the native path:
+ * IPv4Receive, IPDispatchProtocol, ProcessFragment, IPSendDatagram and SendFragments.
+ * The lwIP counters are not added: lwIP sees the IPv4 TCP segments only, after this path.
+ * The widths follow the network store row (nsi_ip_ipstats_dynamic). */
+typedef struct _IP_STATISTICS {
+    LONG64 InReceives;
+    LONG64 InOctets;
+    LONG64 ForwDatagrams;
+    LONG64 InDelivers;
+    LONG64 OutRequests;
+    LONG64 OutOctets;
+    LONG64 InHdrErrors;
+    ULONG InAddrErrors;
+    ULONG InUnknownProtos;
+    ULONG ReasmReqds;
+    ULONG ReasmOks;
+    ULONG ReasmFails;
+    ULONG InDiscards;
+    ULONG OutNoRoutes;
+    ULONG OutDiscards;
+    ULONG FragOks;
+    ULONG FragFails;
+    ULONG FragCreates;
+} IP_STATISTICS, *PIP_STATISTICS;
+
+extern IP_STATISTICS IPStats;
+
+/* The receive and send paths run on several processors at once */
+#define IP_STAT_INC(Field)          InterlockedIncrement((PLONG)&IPStats.Field)
+#define IP_STAT_ADD(Field, Value)   InterlockedExchangeAdd((PLONG)&IPStats.Field, (LONG)(Value))
+#define IP_STAT_INC64(Field)        InterlockedIncrement64(&IPStats.Field)
+#define IP_STAT_ADD64(Field, Value) InterlockedExchangeAdd64(&IPStats.Field, (LONG64)(Value))
 
 
 /* Packet context */

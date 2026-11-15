@@ -159,6 +159,10 @@ VOID NTAPI NeighborTimeoutDpcFn(PKDPC Dpc,
 }
 
 
+VOID DefaultProtocolHandler(
+    PIP_INTERFACE Interface,
+    PIP_PACKET IPPacket);
+
 VOID IPDispatchProtocol(
     PIP_INTERFACE Interface,
     PIP_PACKET IPPacket)
@@ -193,6 +197,10 @@ VOID IPDispatchProtocol(
 
     if (Protocol < IP_PROTOCOL_TABLE_SIZE)
     {
+       /* The default handler counts for itself: it delivers only when a raw socket takes the datagram */
+       if (ProtocolTable[Protocol] != DefaultProtocolHandler)
+           IP_STAT_INC64(InDelivers);
+
        /* Call the appropriate protocol handler */
        (*ProtocolTable[Protocol])(Interface, IPPacket);
     }
@@ -393,12 +401,16 @@ VOID DefaultProtocolHandler(
  */
 {
     if (RawIpReceive(Interface, IPPacket))
+    {
+        IP_STAT_INC64(InDelivers);
         return;
+    }
 
     TI_DbgPrint(MID_TRACE, ("[IF %x] Packet of unknown Internet protocol "
 			    "discarded.\n", Interface));
 
     Interface->Stats.InDiscardedUnknownProto++;
+    IP_STAT_INC(InUnknownProtos);
 }
 
 
