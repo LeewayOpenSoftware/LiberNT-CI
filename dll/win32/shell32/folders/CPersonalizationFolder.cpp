@@ -760,11 +760,32 @@ HRESULT WINAPI CPersonalizationFolder::GetAttributesOf(UINT cidl, PCUITEMID_CHIL
     return S_OK;
 }
 
+static HRESULT CALLBACK PersMenuCallback(IShellFolder *psf, HWND hwnd, IDataObject *pdtobj, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    return SHELL32_DefaultContextMenuCallBack(psf, pdtobj, uMsg);
+}
+
 HRESULT WINAPI CPersonalizationFolder::GetUIObjectOf(HWND hwndOwner, UINT cidl, PCUITEMID_CHILD_ARRAY apidl,
     REFIID riid, UINT *prgfInOut, LPVOID *ppvOut)
 {
-    if (ppvOut)
-        *ppvOut = NULL;
+    if (!ppvOut)
+        return E_INVALIDARG;
+    *ppvOut = NULL;
+    if (cidl < 1 || !apidl)
+        return E_NOINTERFACE;
+    if (IsEqualIID(riid, IID_IContextMenu))
+    {
+        CRegKeyHandleArray keys;
+        CComPtr<IContextMenu> pCm;
+        AddClsidKeyToArray(CLSID_PersonalizationFolder, keys, keys);
+        AddClassKeyToArray(L"Folder", keys, keys);
+        HRESULT hr = CDefFolderMenu_Create2(m_pidlRoot, hwndOwner, cidl, apidl, this, PersMenuCallback, keys, keys, &pCm);
+        if (SUCCEEDED(hr))
+            *ppvOut = pCm.Detach();
+        return hr;
+    }
+    if (IsEqualIID(riid, IID_IDataObject))
+        return IDataObject_Constructor(hwndOwner, m_pidlRoot, apidl, cidl, TRUE, (IDataObject **)ppvOut);
     return E_NOINTERFACE;
 }
 
