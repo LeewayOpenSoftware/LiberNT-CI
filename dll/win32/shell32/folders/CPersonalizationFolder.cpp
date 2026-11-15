@@ -153,6 +153,52 @@ HRESULT CplCategoryBind(PCIDLIST_ABSOLUTE pidlAbsCategory, REFIID riid, LPVOID *
 #define PERS_MAX_LINKS 8
 #define WM_PERSNAV (WM_APP + 1)
 
+struct PERSNAVREQ
+{
+    IShellBrowser *psb;
+    PIDLIST_ABSOLUTE pidl;
+};
+
+static LRESULT CALLBACK PersNavProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (msg == WM_PERSNAV)
+    {
+        PERSNAVREQ *req = (PERSNAVREQ *)lParam;
+        req->psb->BrowseObject(req->pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE);
+        req->psb->Release();
+        ILFree(req->pidl);
+        delete req;
+        DestroyWindow(hwnd);
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* The view cannot navigate from its own window procedure: the browser releases the last reference to it there. */
+static HRESULT PersNavigateOutside(IShellBrowser *psb, PIDLIST_ABSOLUTE pidl)
+{
+    static const WCHAR cls[] = L"PersonalizationNavHelper";
+    WNDCLASSW wc = {};
+    wc.lpfnWndProc = PersNavProc;
+    wc.hInstance = shell32_hInstance;
+    wc.lpszClassName = cls;
+    RegisterClassW(&wc);
+    HWND hwnd = CreateWindowExW(0, cls, L"", 0, 0, 0, 0, 0, HWND_MESSAGE, NULL, shell32_hInstance, NULL);
+    PERSNAVREQ *req = hwnd ? new PERSNAVREQ : NULL;
+    if (!req)
+    {
+        if (hwnd)
+            DestroyWindow(hwnd);
+        ILFree(pidl);
+        return E_OUTOFMEMORY;
+    }
+    req->psb = psb;
+    psb->AddRef();
+    req->pidl = pidl;
+    PostMessageW(hwnd, WM_PERSNAV, 0, (LPARAM)req);
+    return S_OK;
+}
+
 class CPersonalizationView :
     public CComObjectRootEx<CComMultiThreadModelNoCS>,
     public CWindowImpl<CPersonalizationView, CWindow, CControlWinTraits>,
@@ -207,9 +253,7 @@ private:
             pidl = PersPageAbsolute(m_pidlRoot, action);
         if (!pidl)
             return E_FAIL;
-        HRESULT hr = m_psb->BrowseObject(pidl, SBSP_SAMEBROWSER | SBSP_ABSOLUTE);
-        ILFree(pidl);
-        return hr;
+        return PersNavigateOutside(m_psb, pidl);
     }
 
     HRESULT RunCpl(PCWSTR params)
@@ -425,13 +469,7 @@ private:
         POINT pt = { (short)LOWORD(lParam), (short)HIWORD(lParam) };
         int hit = HitTest(pt);
         if (hit >= 0)
-            ::PostMessageW(m_hWnd, WM_PERSNAV, (WPARAM)m_links[hit].action, 0);
-        return 0;
-    }
-
-    LRESULT OnNavigateLater(UINT, WPARAM wParam, LPARAM, BOOL &)
-    {
-        NavigateTo((UINT)wParam);
+            NavigateTo(m_links[hit].action);
         return 0;
     }
 
@@ -470,7 +508,6 @@ private:
     MESSAGE_HANDLER(WM_PAINT, OnPaint)
     MESSAGE_HANDLER(WM_MOUSEMOVE, OnMouseMove)
     MESSAGE_HANDLER(WM_LBUTTONUP, OnLButtonUp)
-    MESSAGE_HANDLER(WM_PERSNAV, OnNavigateLater)
     MESSAGE_HANDLER(WM_SETCURSOR, OnSetCursor)
     MESSAGE_HANDLER(WM_SETFOCUS, OnSetFocus)
     END_MSG_MAP()
