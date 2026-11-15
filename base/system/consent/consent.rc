@@ -1,0 +1,28 @@
+#include <windef.h>
+#include <winuser.h>
+#include "resource.h"
+
+#define REACTOS_STR_FILE_DESCRIPTION  "LiberNT Consent UI for administrative applications"
+#define REACTOS_STR_INTERNAL_NAME     "consent"
+#define REACTOS_STR_ORIGINAL_FILENAME "consent.exe"
+#include <reactos/version.rc>
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+IDD_CONSENT DIALOGEX 0, 0, 320, 132
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION
+EXSTYLE WS_EX_TOPMOST
+CAPTION "User Account Control"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    ICON            "", IDC_SHIELD, 10, 10, 20, 20
+    LTEXT           "Do you want to allow this program to make changes to this computer?", IDC_HEADER, 40, 10, 270, 18
+    LTEXT           "Program:", -1, 40, 34, 40, 8
+    LTEXT           "", IDC_IMAGE, 84, 34, 226, 18
+    LTEXT           "Command:", -1, 40, 56, 40, 8
+    LTEXT           "", IDC_COMMAND, 84, 56, 226, 26
+    LTEXT           "Publisher:", -1, 40, 86, 40, 8
+    LTEXT           "Unknown", IDC_PUBLISHER, 84, 86, 226, 8
+    DEFPUSHBUTTON   "&No", IDNO, 206, 108, 50, 14
+    PUSHBUTTON      "&Yes", IDYES, 260, 108, 50, 14
+END

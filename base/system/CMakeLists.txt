@@ -1,5 +1,6 @@
 
 add_subdirectory(applaunch)
+add_subdirectory(consent)
 add_subdirectory(autochk)
 add_subdirectory(bootok)
 add_subdirectory(chkdsk)
