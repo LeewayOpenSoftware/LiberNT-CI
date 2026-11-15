@@ -434,6 +434,38 @@ LThemeApply(const LTHEME_ITEM *theme)
             return HRESULT_FROM_WIN32(GetLastError());
     }
 
+    /* Apply window color */
+    {
+        WCHAR color_str[32];
+        int r = GetRValue(theme->WindowColor);
+        int g = GetGValue(theme->WindowColor);
+        int b = GetBValue(theme->WindowColor);
+        swprintf(color_str, ARRAYSIZE(color_str), L"%d %d %d", r, g, b);
+
+        HKEY key;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\Colors", 0, KEY_WRITE, &key) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(key, L"ActiveTitle", 0, REG_SZ, (PBYTE)color_str, (wcslen(color_str) + 1) * sizeof(WCHAR));
+            RegCloseKey(key);
+        }
+
+        int colors[1] = {theme->WindowColor};
+        int elements[1] = {COLOR_ACTIVECAPTION};
+        SetSysColors(1, elements, colors);
+    }
+
+    /* Apply sound scheme */
+    if (wcslen(theme->SoundsScheme) > 0)
+    {
+        HKEY key;
+        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"AppEvents\Schemes", 0, KEY_WRITE, &key) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(key, NULL, 0, REG_SZ, (PBYTE)theme->SoundsScheme, (wcslen(theme->SoundsScheme) + 1) * sizeof(WCHAR));
+            RegCloseKey(key);
+        }
+    }
+
+
     if (wcslen(theme->Screensaver) > 0)
     {
         if (!LSaverSet(theme->Screensaver, theme->ScreensaverTimeout, theme->ScreensaverActive))
