@@ -316,7 +316,8 @@ WINAPI
 SetTimeZoneInformation(CONST TIME_ZONE_INFORMATION *lpTimeZoneInformation)
 {
     RTL_TIME_ZONE_INFORMATION TimeZoneInformation;
-    NTSTATUS Status;
+    NTSTATUS Status, PrivilegeStatus;
+    BOOLEAN WasEnabled = FALSE;
 
     DPRINT("SetTimeZoneInformation()\n");
 
@@ -356,9 +357,14 @@ SetTimeZoneInformation(CONST TIME_ZONE_INFORMATION *lpTimeZoneInformation)
         return FALSE;
     }
 
+    /* The kernel requires SeTimeZonePrivilege. Enable it for this call if the caller holds it,
+       and leave it as it was; a caller without it gets STATUS_PRIVILEGE_NOT_HELD. */
+    PrivilegeStatus = RtlAdjustPrivilege(SE_TIME_ZONE_PRIVILEGE, TRUE, FALSE, &WasEnabled);
     Status = NtSetSystemInformation(SystemCurrentTimeZoneInformation,
                                     (PVOID)&TimeZoneInformation,
                                     sizeof(RTL_TIME_ZONE_INFORMATION));
+    if (NT_SUCCESS(PrivilegeStatus) && !WasEnabled)
+        RtlAdjustPrivilege(SE_TIME_ZONE_PRIVILEGE, FALSE, FALSE, &WasEnabled);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("NtSetSystemInformation() failed (Status %lx)\n", Status);
