@@ -29,6 +29,13 @@ static VOID XHCI_ReleaseSpinLock(_Inout_ PKSPIN_LOCK SpinLock, _In_ KIRQL OldIrq
         KeReleaseSpinLock(SpinLock, OldIrql);
 }
 
+static inline BOOLEAN XHCI_IsLockIrql(VOID)
+{
+    KIRQL Irql = KeGetCurrentIrql();
+
+    return Irql == DISPATCH_LEVEL || Irql == HIGH_LEVEL;
+}
+
 #undef KeAcquireSpinLock
 #undef KeReleaseSpinLock
 #define KeAcquireSpinLock XHCI_AcquireSpinLock
@@ -2264,6 +2271,8 @@ BOOLEAN
 XHCI_HasActiveTransfersLocked(
     _In_ PXHCI_ENDPOINT Endpoint)
 {
+    ASSERT(XHCI_IsLockIrql());
+
     if (!Endpoint)
         return FALSE;
 
@@ -2279,6 +2288,8 @@ XHCI_GetActiveTransferHeadLocked(
     _In_ PXHCI_ENDPOINT Endpoint)
 {
     PLIST_ENTRY Entry;
+
+    ASSERT(XHCI_IsLockIrql());
 
     if (!Endpoint)
         return NULL;
@@ -2300,6 +2311,8 @@ VOID
 XHCI_UpdateActiveTransferHeadLocked(
     _Inout_ PXHCI_ENDPOINT Endpoint)
 {
+    ASSERT(XHCI_IsLockIrql());
+
     if (!Endpoint)
         return;
 
@@ -2313,6 +2326,8 @@ XHCI_IsTransferActiveLocked(
     _In_opt_ PXHCI_TRANSFER Transfer)
 {
     PLIST_ENTRY Entry;
+
+    ASSERT(XHCI_IsLockIrql());
 
     if (!Endpoint || !Transfer)
         return FALSE;
@@ -2339,6 +2354,8 @@ XHCI_InsertActiveTransferLocked(
     _Inout_ PXHCI_ENDPOINT Endpoint,
     _Inout_ PXHCI_TRANSFER Transfer)
 {
+    ASSERT(XHCI_IsLockIrql());
+
     if (!Endpoint || !Transfer)
         return;
 
@@ -2359,6 +2376,8 @@ XHCI_RemoveActiveTransferLocked(
     _Inout_ PXHCI_TRANSFER Transfer)
 {
     PLIST_ENTRY Entry;
+
+    ASSERT(XHCI_IsLockIrql());
 
     if (!Endpoint || !Transfer)
         return;
@@ -2416,6 +2435,8 @@ VOID
 XHCI_ClearActiveTransfersLocked(
     _Inout_ PXHCI_ENDPOINT Endpoint)
 {
+    ASSERT(XHCI_IsLockIrql());
+
     if (!Endpoint)
         return;
 
@@ -2453,6 +2474,8 @@ XHCI_FindActiveTransferByEventLocked(
     PXHCI_TRANSFER RangeMatch = NULL;
 
     UNREFERENCED_PARAMETER(CompletionCode);
+
+    ASSERT(XHCI_IsLockIrql());
 
     if (!Endpoint)
         return NULL;
@@ -7782,10 +7805,17 @@ XHCI_CompleteDeferredTransferLocked(
     ULONG BytesTransferred;
     BOOLEAN IsIsochronous;
 
+    ASSERT(Extension != NULL);
+    ASSERT(Transfer != NULL);
+    ASSERT(XHCI_IsLockIrql());
+
     Endpoint = Transfer->Endpoint;
     TransferParameters = Transfer->TransferParameters;
     BytesTransferred = Transfer->BytesTransferred;
     IsIsochronous = Transfer->IsIsochronous;
+
+    ASSERT(XHCI_IsLockIrql());
+
     if (!Endpoint || !TransferParameters)
         return;
 
