@@ -3,6 +3,7 @@ list(APPEND SOURCE
     DsRoleGetPrimaryDomainInformation.c
     NetUserDelete.c
     NetUserEnum.c
+    NetUserGetLocalGroups.c
     testlist.c)
 
 add_executable(netapi32_apitest ${SOURCE})
