@@ -67,6 +67,10 @@ typedef long long ssize_t;
 #ifndef S_ISREG
 #define S_ISREG(m) (((m) & _S_IFMT) == _S_IFREG)
 #endif
+typedef unsigned int uid_t;
+typedef unsigned int gid_t;
+static inline uid_t getuid(void) { return 0; }
+static inline gid_t getgid(void) { return 0; }
 #define off_t long long
 #define fsync _commit
 static inline ssize_t pread(int Fd, void* Buffer, size_t Length, long long Offset)
