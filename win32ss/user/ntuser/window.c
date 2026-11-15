@@ -4667,7 +4667,10 @@ NtUserSetWindowWord(HWND hWnd, INT Index, WORD NewValue)
       goto Exit; // Return 0
    }
 
-   if ((ULONG)Index > (Window->cbwndExtra - sizeof(WORD)))
+   /* The count of extra bytes is unsigned: a window with fewer than two has
+    * no word at any index */
+   if ((Window->cbwndExtra < sizeof(WORD)) ||
+       ((ULONG)Index > (Window->cbwndExtra - sizeof(WORD))))
    {
       EngSetLastError(ERROR_INVALID_INDEX);
       goto Exit; // Return 0

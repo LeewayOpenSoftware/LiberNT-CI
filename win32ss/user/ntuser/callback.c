@@ -354,30 +354,57 @@ co_IntCallWindowProc(WNDPROC Proc,
          return -1;
       }
       CallbackLParam = (PCHAR)Arguments + sizeof(WINDOWPROC_CALLBACK_ARGUMENTS);
-      if ((MemoryFlags & LPARAM_MEMORY_WRITE) && !(MemoryFlags & LPARAM_MEMORY_READ))
+      Status = STATUS_SUCCESS;
+      _SEH2_TRY
       {
-         RtlZeroMemory(CallbackLParam, lParamBufferSize);
-      }
-      else if (Message == WM_COPYDATA)
-      {
-         COPYDATASTRUCT *Source = (COPYDATASTRUCT *)lParam;
-         COPYDATASTRUCT *Captured = CallbackLParam;
+         if ((MemoryFlags & LPARAM_MEMORY_WRITE) && !(MemoryFlags & LPARAM_MEMORY_READ))
+         {
+            RtlZeroMemory(CallbackLParam, lParamBufferSize);
+         }
+         else if (Message == WM_COPYDATA)
+         {
+            COPYDATASTRUCT *Source = (COPYDATASTRUCT *)lParam;
+            COPYDATASTRUCT *Captured = CallbackLParam;
 
-         *Captured = *Source;
+            *Captured = *Source;
+            if (CopyDataUser)
+            {
+               Captured->lpData = CopyDataUser;
+            }
+            else if (Source->lpData)
+            {
+               Captured->lpData = (PVOID)(ULONG_PTR)sizeof(COPYDATASTRUCT);
+               if ((ULONG)lParamBufferSize < sizeof(COPYDATASTRUCT) ||
+                   Source->cbData > (ULONG)lParamBufferSize - sizeof(COPYDATASTRUCT))
+               {
+                  Status = STATUS_INVALID_PARAMETER;
+               }
+               else if (Source->cbData)
+               {
+                  RtlMoveMemory(Captured + 1, Source->lpData, Source->cbData);
+               }
+            }
+         }
+         else
+         {
+            RtlMoveMemory(CallbackLParam, (PVOID)lParam, lParamBufferSize);
+         }
+      }
+      _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+      {
+         Status = _SEH2_GetExceptionCode();
+      }
+      _SEH2_END;
+      if (!NT_SUCCESS(Status))
+      {
+         ERR("Failed to read the lParam buffer of message %u: 0x%lx\n", Message, Status);
+         IntCbFreeMemory(Arguments);
          if (CopyDataUser)
          {
-            Captured->lpData = CopyDataUser;
+            CopyDataUserSize = 0;
+            ZwFreeVirtualMemory(NtCurrentProcess(), &CopyDataUser, &CopyDataUserSize, MEM_RELEASE);
          }
-         else if (Source->lpData)
-         {
-            Captured->lpData = (PVOID)(ULONG_PTR)sizeof(COPYDATASTRUCT);
-            if (Source->cbData)
-               RtlMoveMemory(Captured + 1, Source->lpData, Source->cbData);
-         }
-      }
-      else
-      {
-         RtlMoveMemory(CallbackLParam, (PVOID)lParam, lParamBufferSize);
+         return 0;
       }
    }
    else
@@ -445,12 +472,9 @@ co_IntCallWindowProc(WNDPROC Proc,
 
    if (lParamBufferSize != -1)
    {
-      PTHREADINFO pti = PsGetCurrentThreadWin32Thread();
       PVOID CallbackLParam = (PCHAR)Arguments + sizeof(WINDOWPROC_CALLBACK_ARGUMENTS);
       SIZE_T CopySize = lParamBufferSize;
       INT MemoryFlags = lParamMemoryFlags(Message);
-      // Is this message being processed from inside kernel space?
-      BOOL InSendMessage = (pti->pcti->CTI_flags & CTI_INSENDMESSAGE);
 
       if (MemoryFlags & LPARAM_MEMORY_WRITE)
       {
@@ -478,22 +502,15 @@ co_IntCallWindowProc(WNDPROC Proc,
 
          TRACE("Copy lParam Message %u Size %Iu lParam %p!\n",
                Message, CopySize, (PVOID)lParam);
-         if (InSendMessage)
+         _SEH2_TRY
          {
             RtlMoveMemory((PVOID)lParam, CallbackLParam, CopySize);
          }
-         else
+         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
          {
-            _SEH2_TRY
-            {
-               RtlMoveMemory((PVOID)lParam, CallbackLParam, CopySize);
-            }
-            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-            {
-               ERR("Failed to copy lParam to user space, Message %u!\n", Message);
-            }
-            _SEH2_END;
+            ERR("Failed to copy lParam back, Message %u!\n", Message);
          }
+         _SEH2_END;
       }
       IntCbFreeMemory(Arguments);
    }
@@ -738,7 +755,9 @@ co_IntCallHookProc(INT HookId,
    Common->lParamSize = lParamSize;
    if (ModuleName->Buffer && ModuleName->Length)
    {
-      RtlCopyMemory(&Common->ModuleName, ModuleName->Buffer, ModuleName->Length);
+      RtlCopyMemory(&Common->ModuleName,
+                    ModuleName->Buffer,
+                    min(ModuleName->Length, sizeof(Common->ModuleName) - sizeof(WCHAR)));
       // If ModuleName->Buffer NULL while in destroy,
       //    this will make User32:Hook.c complain about not loading the library module.
       // Fix symptom for CORE-10549.

@@ -15,6 +15,8 @@ typedef struct _USER_SESSION
     PVOID CsrApiPort;
     DWORD PendingSystemThreads;
     HANDLE LogonPid;
+    /* A logon process registered in this session; it is never accepted twice */
+    BOOLEAN LogonRegistered;
     UNICODE_STRING WinStaDirName;
     HANDLE WinStaDir;
     struct _WINSTATION_OBJECT *InputWindowStation;

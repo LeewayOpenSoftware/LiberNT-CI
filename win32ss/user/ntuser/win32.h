@@ -187,6 +187,10 @@ typedef struct _THREADINFO
     ULONG cCritDispositionDepth;
     SINGLE_LIST_ENTRY DeferredFreeList;
     ULONG cSharedCrit;
+    /* The kernel copy of the top-level structure of the D3DKMT call from user
+     * mode that this thread is running (see D3dkmtCallCaptured) */
+    PVOID pvD3dkmtCapture;
+    SIZE_T cbD3dkmtCapture;
 #if DBG
     USHORT acExclusiveLockCount[GDIObjTypeTotal + 1];
     UINT cRefObjectCo;

@@ -1960,6 +1960,15 @@ UserSetClassLongPtr(IN PCLS Class,
     switch (Index)
     {
         case GCL_CBWNDEXTRA:
+            /* The size is added to sizeof(WND) when a window is made and is the
+             * bound of every index into its extra bytes: refuse a negative one,
+             * as the registration does */
+            if ((INT)NewLong < 0)
+            {
+                EngSetLastError(ERROR_INVALID_PARAMETER);
+                break;
+            }
+
             Ret = (ULONG_PTR)Class->cbwndExtra;
             Class->cbwndExtra = (INT)NewLong;
 

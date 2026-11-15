@@ -6800,6 +6800,7 @@ NtUserGetMenuItemRect(
 
    _SEH2_TRY
    {
+      ProbeForWrite(lprcItem, sizeof(RECTL), sizeof(UCHAR));
       RtlCopyMemory(lprcItem, &Rect, sizeof(RECTL));
    }
    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)

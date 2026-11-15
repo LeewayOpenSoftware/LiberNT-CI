@@ -27,38 +27,43 @@ C_ASSERT(DWM_ROUTINE_PRESENTED == ONEPARAM_ROUTINE_DWMPRESENTED);
 BOOL FASTCALL
 co_IntRegisterLogonProcess(HANDLE ProcessId, BOOL Register)
 {
-    NTSTATUS Status;
-    PEPROCESS Process;
     PUSER_SESSION Session;
+    HANDLE CurrentProcessId = PsGetCurrentProcessId();
 
-    Status = PsLookupProcessByProcessId(ProcessId, &Process);
-    if (!NT_SUCCESS(Status))
+    /* A process registers and deregisters only itself */
+    if (ProcessId != CurrentProcessId)
     {
-        EngSetLastError(RtlNtStatusToDosError(Status));
+        EngSetLastError(ERROR_ACCESS_DENIED);
         return FALSE;
     }
 
-    ProcessId = PsGetProcessId(Process);
-    Session = UserGetProcessSession(Process);
-
-    ObDereferenceObject(Process);
-
+    Session = UserGetProcessSession(PsGetCurrentProcess());
     if (!Session)
         return FALSE;
 
     if (Register)
     {
-        /* Register the logon process */
-        if (Session->LogonPid != 0)
+        /* The first registrant of the session (winlogon, or wininit in
+         * session 0, at boot) is the logon process for the life of the
+         * session: no other process takes the role, also not after it
+         * deregistered or exited */
+        if (Session->LogonRegistered)
+        {
+            EngSetLastError(ERROR_ACCESS_DENIED);
             return FALSE;
+        }
 
-        Session->LogonPid = ProcessId;
+        Session->LogonRegistered = TRUE;
+        Session->LogonPid = CurrentProcessId;
     }
     else
     {
-        /* Deregister the logon process */
-        if (Session->LogonPid != ProcessId)
+        /* Only the registered logon process deregisters */
+        if (Session->LogonPid != CurrentProcessId)
+        {
+            EngSetLastError(ERROR_ACCESS_DENIED);
             return FALSE;
+        }
 
         Session->LogonPid = 0;
     }
@@ -664,6 +669,8 @@ NtUserCallOneParam(
             _SEH2_TRY
             {
                pdwLayout = (PDWORD)Param;
+               if (ExGetPreviousMode() != KernelMode)
+                   ProbeForWrite(pdwLayout, sizeof(*pdwLayout), sizeof(UCHAR));
                *pdwLayout = ppi->dwLayout;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)

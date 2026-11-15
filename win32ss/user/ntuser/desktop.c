@@ -3418,7 +3418,8 @@ NtUserSwitchDesktop(HDESK hdesk)
         return FALSE;
     }
 
-    Status = IntValidateDesktopHandle(hdesk, UserMode, 0, &pdesk);
+    /* Switching takes the switch right on the desktop, as on Windows */
+    Status = IntValidateDesktopHandle(hdesk, UserMode, DESKTOP_SWITCHDESKTOP, &pdesk);
     if (!NT_SUCCESS(Status))
     {
         ERR("Validation of desktop handle 0x%p failed\n", hdesk);
