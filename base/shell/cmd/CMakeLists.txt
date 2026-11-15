@@ -2,6 +2,12 @@
 include_directories(BEFORE ${REACTOS_SOURCE_DIR}/sdk/include/wine)
 add_definitions(-D__WINESRC__)
 
+if(MSVC)
+    # Surface maybe-uninitialized locals (C4701/C4703) at /W3; /RTC1 caught one in cmd.
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/w34701>)
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/w34703>)
+endif()
+
 list(APPEND SOURCE
     batch.c
     builtins.c

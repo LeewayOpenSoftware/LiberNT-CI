@@ -1,4 +1,10 @@
 
+if(MSVC)
+    # Surface maybe-uninitialized locals (C4701/C4703) at /W3; /RTC1 caught one in cmd.
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/w34701>)
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/w34703>)
+endif()
+
 add_subdirectory(arp)
 add_subdirectory(dwnl)
 add_subdirectory(finger)
