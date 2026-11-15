@@ -940,8 +940,8 @@ ParseLogonHours(
     WCHAR szBuffer[32];
     PWSTR ptr1, ptr2;
     WCHAR prevSep, nextSep;
-    DWORD dwStartDay, dwEndDay, i, j;
-    LONG lStartHour, lEndHour, lBias;
+    DWORD dwStartDay = 0, dwEndDay, i, j;
+    LONG lStartHour = 0, lEndHour, lBias;
     BYTE DayBitmap;
     BYTE HourBitmap[6];
     LPWSTR ShortDays[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
