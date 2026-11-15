@@ -27,11 +27,14 @@ typedef struct _DXGKRNL_TRIM_REGISTRATION
     D3DKMT_HANDLE hDevice;
     PFND3DKMT_TRIMNOTIFICATIONCALLBACK Callback;
     PVOID Context;
+    /* What the caller holds as the handle: a number, not this record's address */
+    ULONG_PTR Cookie;
 } DXGKRNL_TRIM_REGISTRATION, *PDXGKRNL_TRIM_REGISTRATION;
 
 static LIST_ENTRY DxgkTrimRegistrationList;
 static FAST_MUTEX DxgkTrimRegistrationLock;
 static BOOLEAN DxgkTrimRegistrationReady;
+static LONG DxgkTrimRegistrationCookie;
 
 NTSTATUS
 DxgkTrimNotificationInitialize(VOID)
@@ -95,6 +98,11 @@ DxgkRegisterTrimNotification(
     Registration->hDevice = pData->hDevice;
     Registration->Callback = pData->Callback;
     Registration->Context = pData->Context;
+    /* Never zero: a zero handle means "by callback" to the unregistration */
+    do
+    {
+        Registration->Cookie = (ULONG)InterlockedIncrement(&DxgkTrimRegistrationCookie);
+    } while (Registration->Cookie == 0);
 
     ExAcquireFastMutex(&DxgkTrimRegistrationLock);
     InsertTailList(&DxgkTrimRegistrationList, &Registration->Link);
@@ -102,9 +110,8 @@ DxgkRegisterTrimNotification(
 
     DxgkDereferenceDevice(Device);
 
-    /* The registration record itself is the handle; it is only ever handed
-     * back to us, never dereferenced by the caller. */
-    pData->Handle = Registration;
+    /* The handle is the registration's number, not an address. */
+    pData->Handle = (PVOID)Registration->Cookie;
     return STATUS_SUCCESS;
 }
 
@@ -141,7 +148,7 @@ DxgkUnregisterTrimNotification(
             continue;
         if (pData->Handle != NULL)
         {
-            if ((PVOID)Registration != pData->Handle)
+            if ((PVOID)Registration->Cookie != pData->Handle)
                 continue;
         }
         else if (Registration->Callback != pData->Callback)
