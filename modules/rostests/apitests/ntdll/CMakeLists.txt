@@ -128,6 +128,7 @@ list(APPEND SOURCE
     NtQueryObjectName.c
     NtQueryOpenSubKeys.c
     NtQuerySection.c
+    NtQuerySecurityObject.c
     NtQuerySystemEnvironmentValue.c
     NtQuerySystemInformation.c
     NtQueryValueKey.c
