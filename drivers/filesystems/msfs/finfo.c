@@ -58,12 +58,33 @@ MsfsQueryMailslotInformation(PMSFS_FCB Fcb,
 static NTSTATUS
 MsfsSetMailslotInformation(PMSFS_FCB Fcb,
                            PFILE_MAILSLOT_SET_INFORMATION Buffer,
-                           PULONG BufferLength)
+                           PULONG BufferLength,
+                           KPROCESSOR_MODE RequestorMode)
 {
+    LARGE_INTEGER ReadTimeout;
+
     if (*BufferLength < sizeof(FILE_MAILSLOT_SET_INFORMATION))
         return STATUS_BUFFER_OVERFLOW;
 
-    Fcb->TimeOut = *Buffer->ReadTimeout;
+    if (RequestorMode != KernelMode)
+    {
+        _SEH2_TRY
+        {
+            ProbeForRead(Buffer->ReadTimeout, sizeof(LARGE_INTEGER), sizeof(ULONG));
+            ReadTimeout = *Buffer->ReadTimeout;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+    else
+    {
+        ReadTimeout = *Buffer->ReadTimeout;
+    }
+
+    Fcb->TimeOut = ReadTimeout;
 
     return STATUS_SUCCESS;
 }
@@ -209,7 +230,8 @@ MsfsSetInformation(PDEVICE_OBJECT DeviceObject,
     case FileMailslotSetInformation:
         Status = MsfsSetMailslotInformation(Fcb,
                                             SystemBuffer,
-                                            &BufferLength);
+                                            &BufferLength,
+                                            Irp->RequestorMode);
         break;
 
      default:
