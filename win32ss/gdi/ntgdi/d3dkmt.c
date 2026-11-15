@@ -145,6 +145,8 @@ C_ASSERT(FIELD_OFFSET(RXGK_RESOLVESHAREDRESOURCENTHANDLE_PACKET, GlobalShareHand
 #define TAG_D3DKMT_PRESENT_SUBRECTS 'rPmD'
 #define TAG_D3DKMT_CAPTURE 'aCmD'
 
+/* Same convention as the NTAPI DXGADAPTER_* function types: on i386 a mismatch
+ * shifts ESP by the argument size at every call through the table. */
 typedef NTSTATUS (APIENTRY *PD3DKMT_ARGUMENT_CALLBACK)(PVOID Argument);
 
 NTSTATUS

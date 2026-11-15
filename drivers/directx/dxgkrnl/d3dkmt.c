@@ -269,34 +269,42 @@ DxgkUnInitialize(
 
 #if (REACTOS_WDDM_TARGET_LEVEL >= 2000)
 static NTSTATUS
+NTAPI
 DxgkpDirectMakeResident(
     _Inout_ D3DDDI_MAKERESIDENT *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectEvict(
     _Inout_ D3DKMT_EVICT *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectReserveGpuVirtualAddress(
     _Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectMapGpuVirtualAddress(
     _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectFreeGpuVirtualAddress(
     _In_ const D3DKMT_FREEGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectUpdateGpuVirtualAddress(
     _In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectWaitForSynchronizationObjectFromCpu(
     _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *Data);
 
 static NTSTATUS
+NTAPI
 DxgkpDirectSignalSynchronizationObjectFromCpu(
     _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *Data);
 #endif
@@ -15069,6 +15077,7 @@ DxgkpInvokeDirectBufferedThunk(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectMakeResident(
     _Inout_ D3DDDI_MAKERESIDENT *Data)
 {
@@ -15098,6 +15107,7 @@ DxgkpDirectMakeResident(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectEvict(
     _Inout_ D3DKMT_EVICT *Data)
 {
@@ -15119,6 +15129,7 @@ DxgkpDirectEvict(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectReserveGpuVirtualAddress(
     _Inout_ D3DDDI_RESERVEGPUVIRTUALADDRESS *Data)
 {
@@ -15159,6 +15170,7 @@ DxgkpDirectReserveGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectMapGpuVirtualAddress(
     _Inout_ D3DDDI_MAPGPUVIRTUALADDRESS *Data)
 {
@@ -15184,6 +15196,7 @@ DxgkpDirectMapGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectFreeGpuVirtualAddress(
     _In_ const D3DKMT_FREEGPUVIRTUALADDRESS *Data)
 {
@@ -15201,6 +15214,7 @@ DxgkpDirectFreeGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectUpdateGpuVirtualAddress(
     _In_ const D3DKMT_UPDATEGPUVIRTUALADDRESS *Data)
 {
@@ -15218,6 +15232,7 @@ DxgkpDirectUpdateGpuVirtualAddress(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectWaitForSynchronizationObjectFromCpu(
     _In_ const D3DKMT_WAITFORSYNCHRONIZATIONOBJECTFROMCPU *Data)
 {
@@ -15235,6 +15250,7 @@ DxgkpDirectWaitForSynchronizationObjectFromCpu(
 }
 
 static NTSTATUS
+NTAPI
 DxgkpDirectSignalSynchronizationObjectFromCpu(
     _In_ const D3DKMT_SIGNALSYNCHRONIZATIONOBJECTFROMCPU *Data)
 {
