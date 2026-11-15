@@ -562,6 +562,11 @@ jobs:
             variant: lrmrs
             rust_target: x86_64-pc-windows-msvc
           - arch: amd64
+            lrm_rs: 'ON'
+            variant: lrmrs
+            rust_target: x86_64-pc-windows-msvc
+            build_type: release
+          - arch: amd64
             lrm_rs: 'OFF'
             variant: conly
           - arch: i386
@@ -644,8 +649,12 @@ jobs:
         if "${{matrix.lrm_rs}}"=="ON" set RUST_ARGS=-DLIBERNT_RUST_TARGET=${{matrix.rust_target}}
         if "${{matrix.arch}}-${{matrix.variant}}"=="amd64-lrmrs" if "%LAB_POC%"=="ON" set RUST_ARGS=%RUST_ARGS% -DLIBERNT_ENABLE_RUST=ON
         if "${{matrix.arch}}-${{matrix.variant}}"=="amd64-lrmrs" if "%FORCE_PANIC%"=="ON" set RUST_ARGS=%RUST_ARGS% -DLIBERNT_LRM_RS_FORCE_PANIC_TEST=ON -DLNRSPOC_TEST_IOCTLS=ON
-        call configure.cmd /arch=${{matrix.arch}} -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_ENABLE_LRM_RS=${{matrix.lrm_rs}} %RUST_ARGS%
-        echo outdir=output-VS-${{matrix.arch}}-debug>> "%GITHUB_OUTPUT%"
+        set BT_ARGS=
+        set BT_SUFFIX=debug
+        if "${{matrix.build_type}}"=="release" set BT_ARGS=/r
+        if "${{matrix.build_type}}"=="release" set BT_SUFFIX=release
+        call configure.cmd /arch=${{matrix.arch}} %BT_ARGS% -DREACTOS_TARGET_NT=0xA00 -DDIAGDATA_CHANNEL= -DENABLE_CCACHE=0 -DLIBERNT_ENABLE_LRM_RS=${{matrix.lrm_rs}} %RUST_ARGS%
+        echo outdir=output-VS-${{matrix.arch}}-%BT_SUFFIX%>> "%GITHUB_OUTPUT%"
 
     - name: Build submodules
       shell: cmd
@@ -737,7 +746,9 @@ jobs:
         $V = ""
         if ($env:LAB_POC -eq 'ON') { $V = "-lrmrs" }
         if ($env:FORCE_PANIC -eq 'ON') { $V = "-lrmrs-fp" }
-        "tag=msvc-${{matrix.arch}}-${{matrix.variant}}$V-$($env:GITHUB_SHA.Substring(0, 11))" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
+        $BT = ""
+        if ('${{matrix.build_type}}' -eq 'release') { $BT = "-release" }
+        "tag=msvc-${{matrix.arch}}-${{matrix.variant}}$BT$V-$($env:GITHUB_SHA.Substring(0, 11))" | Out-File -FilePath $env:GITHUB_OUTPUT -Encoding utf8 -Append
 
     - name: Upload bootcd.iso
       if: ${{ !cancelled() && steps.bootcd.outcome == 'success' }}
