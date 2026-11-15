@@ -1,5 +1,9 @@
 #include <precomp.h>
 
+#if defined(_MSC_VER) && !defined(__clang__)
+#pragma function(tan,sinh,cosh,tanh,asin,acos,atan,atan2,exp,log10,fmod)
+#endif
+
 /*
  * @implemented
  */
