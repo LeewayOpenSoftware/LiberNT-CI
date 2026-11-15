@@ -2537,20 +2537,23 @@ NtOpenThreadTokenEx(
         return STATUS_CANT_OPEN_ANONYMOUS;
     }
 
-    /* A caller below the token's integrity level may only query it */
-    if (!SeTokenOpenAccessAllowed(Token, DesiredAccess, PreviousMode))
-    {
-        DPRINT1("The caller is below the thread token's integrity level\n");
-        PsDereferenceImpersonationToken(Token);
-        ObDereferenceObject(Thread);
-        return STATUS_ACCESS_DENIED;
-    }
-
     /* Revert to self if OpenAsSelf is specified */
     if (OpenAsSelf)
     {
         RestoreImpersonation = PsDisableImpersonation(PsGetCurrentThread(),
                                                       &ImpersonationState);
+    }
+
+    /* A caller below the token's integrity level may only query it; with
+     * OpenAsSelf the caller is the process, so this comes after the revert */
+    if (!SeTokenOpenAccessAllowed(Token, DesiredAccess, PreviousMode))
+    {
+        DPRINT1("The caller is below the thread token's integrity level\n");
+        if (RestoreImpersonation)
+            PsRestoreImpersonation(PsGetCurrentThread(), &ImpersonationState);
+        PsDereferenceImpersonationToken(Token);
+        ObDereferenceObject(Thread);
+        return STATUS_ACCESS_DENIED;
     }
 
     /* Call the private function to do the job */
