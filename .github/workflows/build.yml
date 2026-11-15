@@ -777,6 +777,35 @@ jobs:
           ${{steps.configure.outputs.outdir}}/ntoskrnl/**/liblrm_rs*.a
         if-no-files-found: warn
 
+    - name: Collect kernel-mode symbols for crash symbolication
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      shell: pwsh
+      run: |
+        $out = (Resolve-Path "${{steps.configure.outputs.outdir}}").Path
+        New-Item -ItemType Directory -Force symbols | Out-Null
+        # Kernel-mode binaries (.sys), the kernel/HAL, their .pdb, and any .map.
+        # Excludes user-mode .dll/.exe .pdb to keep the artifact bounded.
+        $keep = Get-ChildItem $out -Recurse -File -Include *.sys,*.map | ForEach-Object { $_.FullName }
+        $keep += Get-ChildItem $out -Recurse -File -Include *.pdb | Where-Object {
+            (Test-Path (($_.FullName) -replace '\.pdb$','.sys')) -or
+            $_.Name -in @('ntoskrnl.pdb','hal.pdb','kdcom.pdb','bootvid.pdb')
+        } | ForEach-Object { $_.FullName }
+        foreach ($f in ($keep | Sort-Object -Unique)) {
+            $rel = $f.Substring($out.Length + 1)
+            $dest = Join-Path symbols $rel
+            New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
+            Copy-Item $f $dest
+        }
+        "collected $((Get-ChildItem symbols -Recurse -File).Count) symbol files"
+
+    - name: Upload kernel-mode symbols
+      if: ${{ !cancelled() && steps.configure.outcome == 'success' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: symbols-${{steps.images.outputs.tag}}
+        path: symbols/
+        if-no-files-found: warn
+
   build-rostests-msvc:
     # Compile the test suite (modules/rostests) with MSVC for amd64, a separate
     # build because ENABLE_ROSTESTS changes what goes into the images, exactly
