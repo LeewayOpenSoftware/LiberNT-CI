@@ -265,6 +265,25 @@ PTHEME_PROPERTY MSSTYLES_V4_FindProperty(PTHEME_CLASS tc, int iPartId, int iStat
     return &v4->shadow[p - v4->model.props];
 }
 
+/* The system metrics of a version-4 style are the class-level properties of `sysmetrics` (part 0, state 0); the
+ * model walks that class, its base chain and `globals` once (R-MOD-6). Without a `sysmetrics` class the globals
+ * are asked directly. The result is the same shadow property the other lookups return. */
+PTHEME_PROPERTY MSSTYLES_V4_FindMetric(PTHEME_FILE tf, int iPropertyPrimitive, int iPropertyId)
+{
+    PV4_FILE v4;
+    const tl4_prop *p = NULL;
+    uint32_t ordinal;
+    if (!tf || !tf->v4 || iPropertyId <= 0 || iPropertyId > 0xFFFF) return NULL;
+    v4 = (PV4_FILE)tf->v4;
+    ordinal = v4->model.counts.sysmetrics;
+    if (ordinal == TL4_NO_BASE) ordinal = v4->model.counts.globals;
+    if (ordinal == TL4_NO_BASE) return NULL;
+    if (tl4_model_find(&v4->model, ordinal, 0, 0, (uint32_t)iPropertyId, &p) != TL4_OK) return NULL;
+    if (iPropertyPrimitive && (int)p->type != iPropertyPrimitive) return NULL;
+    if (p < v4->model.props || p >= v4->model.props + v4->model.nprops) return NULL;
+    return &v4->shadow[p - v4->model.props];
+}
+
 /* a VARIANT part-state (part, state) in the class or its base chain (bounded by TL4_V4_MAX_CHAIN as the model is) */
 PTHEME_PARTSTATE MSSTYLES_V4_FindPartState(PTHEME_CLASS tc, int iPartId, int iStateId)
 {

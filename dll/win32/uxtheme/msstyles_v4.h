@@ -57,6 +57,8 @@ void MSSTYLES_V4_Close(PTHEME_FILE tf);
 
 PTHEME_PROPERTY MSSTYLES_V4_FindProperty(PTHEME_CLASS tc, int iPartId, int iStateId, int iPropertyPrimitive, int iPropertyId);
 PTHEME_PARTSTATE MSSTYLES_V4_FindPartState(PTHEME_CLASS tc, int iPartId, int iStateId);   /* iStateId 0: the part */
+/* A system metric: a class-level property of `sysmetrics`, with the model's fall-back to `globals` (R-MOD-6). */
+PTHEME_PROPERTY MSSTYLES_V4_FindMetric(PTHEME_FILE tf, int iPropertyPrimitive, int iPropertyId);
 
 HRESULT MSSTYLES_V4_GetBool(PTHEME_PROPERTY tp, BOOL *pfVal);
 HRESULT MSSTYLES_V4_GetColor(PTHEME_PROPERTY tp, COLORREF *pColor);

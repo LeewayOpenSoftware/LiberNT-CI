@@ -698,6 +698,9 @@ static inline PTHEME_PROPERTY MSSTYLES_PSFindProperty(PTHEME_PARTSTATE ps, int i
  */
 static inline PTHEME_PROPERTY MSSTYLES_FFindMetric(PTHEME_FILE tf, int iPropertyPrimitive, int iPropertyId)
 {
+#ifdef UXTHEME_V4
+    if (tf->v4) return MSSTYLES_V4_FindMetric(tf, iPropertyPrimitive, iPropertyId);
+#endif
     return MSSTYLES_LFindProperty(tf->metrics, iPropertyPrimitive, iPropertyId);
 }
 
@@ -774,9 +777,6 @@ PTHEME_PROPERTY MSSTYLES_FindMetric(PTHEME_CLASS tc, int iPropertyPrimitive, int
     PTHEME_FILE tf = (tc && tc->tf) ? tc->tf : tfActiveTheme;
 
     if(!tf) return NULL;
-#ifdef UXTHEME_V4
-    if (tf->v4) return NULL;                /* I1b: no sysmetrics from a version-4 style yet */
-#endif
     return MSSTYLES_FFindMetric(tf, iPropertyPrimitive, iPropertyId);
 }
 
