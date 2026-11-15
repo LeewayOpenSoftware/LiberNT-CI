@@ -3,6 +3,7 @@ list(APPEND SOURCE
     ClassInstallParams.c
     devclass.c
     DeviceDescription.c
+    DriverPackageSignerScore.c
     DevicePdoName.c
     DevicePowerOnDisable.c
     DeviceRemoveVeto.c

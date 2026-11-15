@@ -2869,6 +2869,22 @@ BOOL WINAPI SetupCopyOEMInfW(
             goto cleanup;
         }
 
+        /* Windows 11 refuses a third-party INF that names no catalog */
+        if (HasSourcePath)
+        {
+            HINF hSourceInf = SetupOpenInfFileW(SourceInfFileName, NULL, INF_STYLE_WIN4, NULL);
+            if (hSourceInf != INVALID_HANDLE_VALUE)
+            {
+                if (!SETUPAPI_GetInfCatalogFile(hSourceInf, NULL, 0))
+                {
+                    SetupCloseInfFile(hSourceInf);
+                    SetLastError(ERROR_NO_CATALOG_FOR_OEM_INF);
+                    goto cleanup;
+                }
+                SetupCloseInfFile(hSourceInf);
+            }
+        }
+
         /* Prepare .inf file specification */
         len = MAX_PATH + 1 + strlenW(InfDirectory) + 13;
         pFullFileName = MyMalloc(len * sizeof(WCHAR));
