@@ -61,6 +61,7 @@ const char *tl4_status_name(tl4_status status)
         case TL4_E_PNG_CRC: return "png-crc";
         case TL4_E_PNG_IHDR: return "png-ihdr";
         case TL4_E_STR_BLOCK: return "string-block";
+        case TL4_E_RANGE: return "range";
         case TL4_E_LIMIT: return "limit";
     }
     return "unknown";

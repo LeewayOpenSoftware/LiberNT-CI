@@ -46,6 +46,8 @@ typedef enum tl4_status {
     TL4_E_FONT_SYNTAX,     /* a font string outside the known syntax */
     TL4_E_STR_BLOCK,       /* a string-table block fails the shape check of R-RES-8: name not an id 1..4096, over 32,800
                             * bytes, not exactly 16 strings ending on its size, a count over 1,024, or a code unit 0 */
+    TL4_E_RANGE,           /* a value outside its row of REQUIREMENTS section 6.1 (R-MOD-3, R-MOD-7); the consumer treats
+                            * the property as unsupported */
 
     /* PNG chunk walker (REQUIREMENTS R-RES-3/4/5, milestone L3) */
     TL4_E_PNG_SIGNATURE,   /* not a PNG, or too short for one */
