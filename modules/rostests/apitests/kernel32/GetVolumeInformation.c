@@ -17,6 +17,7 @@ TestGetVolumeInformationA(VOID)
     memset(Outbuf, 0xAA, MAX_PATH);
     Ret = GetVolumeInformationA("C:\\", NULL, 0, NULL, &MCL, &Flags, Outbuf, MAX_PATH);
     ok(Ret != FALSE, "GetVolumeInformationA failed: %ld\n", GetLastError());
+    ok(Flags & FILE_PERSISTENT_ACLS, "C: does not report FILE_PERSISTENT_ACLS (flags 0x%lx)\n", Flags);
     for (i = 0; i < MAX_PATH; ++i)
     {
         if (Outbuf[i] == 0)
@@ -75,6 +76,7 @@ TestGetVolumeInformationW(VOID)
     memset(Outbuf, 0xAA, sizeof(Outbuf));
     Ret = GetVolumeInformationW(L"C:\\", NULL, 0, NULL, &MCL, &Flags, Outbuf, MAX_PATH);
     ok(Ret != FALSE, "GetVolumeInformationW failed: %ld\n", GetLastError());
+    ok(Flags & FILE_PERSISTENT_ACLS, "C: does not report FILE_PERSISTENT_ACLS (flags 0x%lx)\n", Flags);
     for (i = 0; i < MAX_PATH; ++i)
     {
         if (Outbuf[i] == 0)
