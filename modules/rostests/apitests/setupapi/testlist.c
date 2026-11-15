@@ -12,6 +12,7 @@ extern void func_ClassInstallParams(void);
 extern void func_devclass(void);
 extern void func_DeviceDescription(void);
 extern void func_DriverFeatureScore(void);
+extern void func_DriverPackageSignerScore(void);
 extern void func_DevicePdoName(void);
 extern void func_DevicePowerOnDisable(void);
 extern void func_DeviceRemoveVeto(void);
@@ -46,6 +47,7 @@ const struct test winetest_testlist[] =
     { "devclass", func_devclass },
     { "DeviceDescription", func_DeviceDescription },
     { "DriverFeatureScore", func_DriverFeatureScore },
+    { "DriverPackageSignerScore", func_DriverPackageSignerScore },
     { "DevicePdoName", func_DevicePdoName },
     { "DevicePowerOnDisable", func_DevicePowerOnDisable },
     { "DeviceRemoveVeto", func_DeviceRemoveVeto },
