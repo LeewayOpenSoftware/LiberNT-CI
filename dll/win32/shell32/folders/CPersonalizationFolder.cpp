@@ -26,14 +26,14 @@ EXTERN_C const CLSID CLSID_PersonalizationFolder =
 #define LWNAV_SCREENSAVER   0x101
 #define LWNAV_CLASSIC       0x102
 
-#include <pshpack1.h>
+#pragma pack(push, 1)
 struct PersPidl
 {
     WORD cb;
     WORD sig;
     WORD page;
 };
-#include <poppack.h>
+#pragma pack(pop)
 
 /* ABI of the page component, see shared/libernt/shell/personalization-cp-namespace/DESIGN.md */
 struct LWPAGE_HOST
