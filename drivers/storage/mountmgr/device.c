@@ -1737,6 +1737,31 @@ MountMgrQueryPoints(IN PDEVICE_EXTENSION DeviceExtension,
         return STATUS_INVALID_PARAMETER;
     }
 
+    /* Every supplied name must lie entirely inside the input buffer */
+    if ((MountPoint->SymbolicLinkNameLength != 0) &&
+        ((MountPoint->SymbolicLinkNameOffset > Stack->Parameters.DeviceIoControl.InputBufferLength) ||
+         (MountPoint->SymbolicLinkNameLength >
+          Stack->Parameters.DeviceIoControl.InputBufferLength - MountPoint->SymbolicLinkNameOffset)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((MountPoint->UniqueIdLength != 0) &&
+        ((MountPoint->UniqueIdOffset > Stack->Parameters.DeviceIoControl.InputBufferLength) ||
+         (MountPoint->UniqueIdLength >
+          Stack->Parameters.DeviceIoControl.InputBufferLength - MountPoint->UniqueIdOffset)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if ((MountPoint->DeviceNameLength != 0) &&
+        ((MountPoint->DeviceNameOffset > Stack->Parameters.DeviceIoControl.InputBufferLength) ||
+         (MountPoint->DeviceNameLength >
+          Stack->Parameters.DeviceIoControl.InputBufferLength - MountPoint->DeviceNameOffset)))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     if (Stack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(MOUNTMGR_MOUNT_POINTS))
     {
         return STATUS_INVALID_PARAMETER;
