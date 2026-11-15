@@ -879,48 +879,133 @@ fail:
     return E_ACCESSDENIED;
 }
 
+typedef struct _UXT_VIEW
+{
+    HANDLE hFile;
+    HANDLE hSection;
+    PVOID base;
+    SIZE_T size;
+} UXT_VIEW;
+
+/* maps the whole checked file read-only; the view takes over hFile, released by TrustViewRelease */
 static HRESULT
-TrustPeekVersion(HANDLE hFile, WORD *version)
+TrustViewMap(HANDLE hFile, UXT_VIEW *v)
 {
     IO_STATUS_BLOCK iosb;
     FILE_STANDARD_INFORMATION std;
-    HANDLE hs = NULL;
-    PVOID base = NULL;
-    SIZE_T view = 0;
     LARGE_INTEGER max;
+    SIZE_T view = 0;
+
+    v->hFile = hFile;
+    v->hSection = NULL;
+    v->base = NULL;
+    v->size = 0;
+    if (!NT_SUCCESS(NtQueryInformationFile(hFile, &iosb, &std, sizeof(std), FileStandardInformation)) ||
+        std.EndOfFile.QuadPart <= 0 || std.EndOfFile.QuadPart > UXT_MAX_STYLE_SIZE)
+        return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
+    max = std.EndOfFile;
+    if (!NT_SUCCESS(NtCreateSection(&v->hSection, SECTION_MAP_READ | SECTION_QUERY, NULL, &max, PAGE_READONLY,
+                                    SEC_COMMIT, hFile)))
+    {
+        v->hSection = NULL;
+        return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
+    }
+    if (!NT_SUCCESS(NtMapViewOfSection(v->hSection, NtCurrentProcess(), &v->base, 0, 0, NULL, &view, ViewUnmap, 0,
+                                       PAGE_READONLY)))
+    {
+        v->base = NULL;
+        return HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
+    }
+    v->size = (SIZE_T)std.EndOfFile.QuadPart;
+    return S_OK;
+}
+
+static void
+TrustViewUnmap(UXT_VIEW *v)
+{
+    if (v->base)
+        NtUnmapViewOfSection(NtCurrentProcess(), v->base);
+    if (v->hSection)
+        NtClose(v->hSection);
+    v->base = NULL;
+    v->hSection = NULL;
+}
+
+static void
+TrustViewRelease(UXT_VIEW *v)
+{
+    TrustViewUnmap(v);
+    if (v->hFile && v->hFile != INVALID_HANDLE_VALUE)
+        CloseHandle(v->hFile);
+    v->hFile = NULL;
+}
+
+static HRESULT
+TrustPeekVersion(const UXT_VIEW *v, WORD *version)
+{
     tl4_pe pe;
     tl4_res_name type = tl4_res_ascii("PACKTHEM_VERSION"), name = tl4_res_id(1);
     tl4_resource res;
     HRESULT hr = HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
 
-    if (!NT_SUCCESS(NtQueryInformationFile(hFile, &iosb, &std, sizeof(std), FileStandardInformation)) ||
-        std.EndOfFile.QuadPart <= 0 || std.EndOfFile.QuadPart > UXT_MAX_STYLE_SIZE)
-        return hr;
-    max = std.EndOfFile;
-    if (!NT_SUCCESS(NtCreateSection(&hs, SECTION_MAP_READ | SECTION_QUERY, NULL, &max, PAGE_READONLY, SEC_COMMIT,
-                                    hFile)))
-        return hr;
-    if (NT_SUCCESS(NtMapViewOfSection(hs, NtCurrentProcess(), &base, 0, 0, NULL, &view, ViewUnmap, 0, PAGE_READONLY)))
+    _SEH2_TRY
     {
-        _SEH2_TRY
+        if (tl4_pe_open(v->base, v->size, &pe) == TL4_OK && tl4_pe_find(&pe, &type, &name, &res) == TL4_OK &&
+            res.size == 2)
         {
-            if (tl4_pe_open(base, (size_t)std.EndOfFile.QuadPart, &pe) == TL4_OK &&
-                tl4_pe_find(&pe, &type, &name, &res) == TL4_OK && res.size == 2)
-            {
-                *version = (WORD)(res.data[0] | (res.data[1] << 8));
-                hr = S_OK;
-            }
+            *version = (WORD)(res.data[0] | (res.data[1] << 8));
+            hr = S_OK;
         }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
-        {
-            hr = HRESULT_FROM_WIN32(ERROR_READ_FAULT);
-        }
-        _SEH2_END;
-        NtUnmapViewOfSection(NtCurrentProcess(), base);
     }
-    NtClose(hs);
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        hr = HRESULT_FROM_WIN32(ERROR_READ_FAULT);
+    }
+    _SEH2_END;
     return hr;
 }
+
+#ifdef UXTHEME_V4
+static BOOL
+TrustV4Enabled(void)
+{
+    return TrustGateDword(UXTHEME_TrustIsPrivileged() ? L"EnableV4Privileged" : L"EnableV4Ordinary");
+}
+
+/* the language module beside the style: <store>\<name>\<locale>\<name>.msstyles.mui, opened with the same checks;
+ * a privileged process uses the system UI language, never the user's (T-LOAD), then en-US */
+static HRESULT
+TrustOpenMui(LPCWSTR name, LPCWSTR storeRoot, UXT_VIEW *v)
+{
+    WCHAR locale[LOCALE_NAME_MAX_LENGTH], path[MAX_PATH];
+    LANGID lang = UXTHEME_TrustIsPrivileged() ? GetSystemDefaultUILanguage() : GetUserDefaultUILanguage();
+    LPCWSTR tries[2];
+    HANDLE h;
+    HRESULT hr = HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND);
+    int i;
+
+    tries[0] = LCIDToLocaleName(MAKELCID(lang, SORT_DEFAULT), locale, ARRAY_SIZE(locale), 0) ? locale : L"en-US";
+    tries[1] = L"en-US";
+    for (i = 0; i < 2; i++)
+    {
+        if (i == 1 && !_wcsicmp(tries[0], tries[1]))
+            break;
+        if (!TrustNameValid(tries[i], wcslen(tries[i])) ||
+            FAILED(StringCchPrintfW(path, ARRAY_SIZE(path), L"%s\\%s\\%s\\%s.msstyles.mui", storeRoot, name,
+                                    tries[i], name)))
+            continue;
+        hr = TrustOpenChecked(path, storeRoot, &h);
+        if (SUCCEEDED(hr))
+        {
+            hr = TrustViewMap(h, v);
+            if (FAILED(hr))
+                TrustViewRelease(v);
+            return hr;
+        }
+    }
+    return hr;
+}
+#endif
 
 typedef struct _UXT_GUARD
 {
@@ -1094,6 +1179,10 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
     WCHAR name[UXT_NAME_MAX + 1], built[MAX_PATH], storeRoot[MAX_PATH];
     HANDLE hFile;
     UXT_GUARD guard;
+    UXT_VIEW style;
+#ifdef UXTHEME_V4
+    UXT_VIEW mui = { NULL, NULL, NULL, 0 };
+#endif
     WORD version = 0;
     HRESULT hr;
 
@@ -1129,12 +1218,38 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
         CloseHandle(hFile);
         return hr;
     }
-    hr = TrustPeekVersion(hFile, &version);
+    hr = TrustViewMap(hFile, &style);
+    if (SUCCEEDED(hr))
+        hr = TrustPeekVersion(&style, &version);
+#ifdef UXTHEME_V4
+    /* I1b: a version-4 style goes to the TL4 core on the checked views, which it keeps on success */
+    if (SUCCEEDED(hr) && version == 4 && TrustV4Enabled())
+    {
+        hr = TrustOpenMui(name, storeRoot, &mui);
+        if (SUCCEEDED(hr))
+            hr = MSSTYLES_V4_Open(style.hFile, style.hSection, style.base, style.size, mui.hFile, mui.hSection,
+                                  mui.base, mui.size, pszColorName, pszSizeName, tf);
+        if (SUCCEEDED(hr))
+        {
+            ZeroMemory(&style, sizeof(style));
+            ZeroMemory(&mui, sizeof(mui));
+        }
+        else
+        {
+            TrustEvent(L"version-4 style refused", name);
+            TrustViewRelease(&mui);
+        }
+    }
+    else
+#endif
     if (SUCCEEDED(hr) && version == 3)
+    {
+        TrustViewUnmap(&style);
         hr = MSSTYLES_OpenThemeFileV3(built, pszColorName, pszSizeName, tf);
+    }
     else if (SUCCEEDED(hr))
         hr = HRESULT_FROM_WIN32(ERROR_BAD_FORMAT);
-    CloseHandle(hFile);
+    TrustViewRelease(&style);
     TrustGuardLeave(&guard);
     if (SUCCEEDED(hr) && *tf)
     {

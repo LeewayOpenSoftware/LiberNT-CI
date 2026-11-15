@@ -96,6 +96,13 @@ typedef struct _UXINI_FILE *PUXINI_FILE;
 
 HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
 HRESULT MSSTYLES_OpenThemeFileV3(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf);
+#ifdef UXTHEME_V4
+/* msstyles_v4.c: on success the THEME_FILE owns both files, sections and views until MSSTYLES_CloseThemeFile; on
+ * failure nothing is kept and the caller still owns them */
+HRESULT MSSTYLES_V4_Open(HANDLE hFile, HANDLE hSection, const BYTE *base, SIZE_T size, HANDLE hMui, HANDLE hMuiSection,
+                         const BYTE *muiBase, SIZE_T muiSize, LPCWSTR pszColorName, LPCWSTR pszSizeName,
+                         PTHEME_FILE *tf);
+#endif
 void MSSTYLES_CloseThemeFile(PTHEME_FILE tf);
 HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics);
 BOOL MSSTYLES_ReapplyActiveThemeMetrics(void);
