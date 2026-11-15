@@ -733,6 +733,8 @@ jobs:
         }
         if ("${{matrix.arch}}" -eq "amd64" -and "${{matrix.variant}}" -eq "lrmrs" -and (Test-Path "freeldr-clang/freeldr.sys")) {
           Write-Host 'HYBRID: swapping in clang freeldr.sys + bootsectors (clang freeldr + MSVC kernel/drivers); MSVC freeldr HDD path is a separate B-track fix'
+          Copy-Item "$out/LiberNT.img" "$out/LiberNT-msvcfreeldr.img" -Force
+          Write-Host 'B-TEST: preserved pre-swap pure-MSVC (cl freeldr) LiberNT.img -> LiberNT-msvcfreeldr.img (tests the pcdisk REGS zero-init HDD-boot fix)'
           Copy-Item "freeldr-clang/freeldr.sys" "$out/boot/freeldr/freeldr/freeldr.sys" -Force
           Copy-Item "freeldr-clang/fat32.bin"  "$out/boot/freeldr/bootsect/fat32.bin"  -Force
           Copy-Item "freeldr-clang/dosmbr.bin" "$out/boot/freeldr/bootsect/dosmbr.bin" -Force
@@ -790,6 +792,14 @@ jobs:
       with:
         name: LiberNT-img-${{steps.images.outputs.tag}}
         path: ${{steps.configure.outputs.outdir}}/LiberNT.img
+        if-no-files-found: error
+
+    - name: Upload the pure-MSVC (cl freeldr) test image (B HDD-boot fix)
+      if: ${{ !cancelled() && steps.sysimg.outcome == 'success' && matrix.arch == 'amd64' && matrix.variant == 'lrmrs' }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: LiberNT-img-msvc-amd64-lrmrs-MSVCfreeldr-test-${{github.sha}}
+        path: ${{steps.configure.outputs.outdir}}/LiberNT-msvcfreeldr.img
         if-no-files-found: error
 
     - name: Upload lnrspoc.sys and the Rust archives (MSVC lab image only)
