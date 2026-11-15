@@ -530,14 +530,18 @@ AppCompat_RunDLLW(HWND hwnd, HINSTANCE hInstance, LPWSTR pszCmdLine, int nCmdSho
     FIXME("AppCompat_RunDLLW() stub\n");
 }
 
+EXTERN_C VOID WINAPI Control_RunDLLW(HWND hWnd, HINSTANCE hInst, LPCWSTR cmd, DWORD nCmdShow);
+
 /*
- * Unimplemented
+ * The cplfile runas verb starts rundll32 with this entry point after the
+ * credential prompt, so it already runs as the chosen user and only has to
+ * open the item, exactly like Control_RunDLLW.
  */
 EXTERN_C VOID
 WINAPI
 Control_RunDLLAsUserW(HWND hwnd, HINSTANCE hInstance, LPWSTR pszCmdLine, int nCmdShow)
 {
-    FIXME("Control_RunDLLAsUserW() stub\n");
+    Control_RunDLLW(hwnd, hInstance, pszCmdLine, (DWORD)nCmdShow);
 }
 
 /*
