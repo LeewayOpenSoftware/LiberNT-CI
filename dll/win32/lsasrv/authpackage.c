@@ -1745,6 +1745,60 @@ LsapShouldSplitToken(
     return TRUE;
 }
 
+/* The filtered token must not inherit a default DACL that rests on Administrators,
+ * which only denies inside it: the user and the system own what it creates, the
+ * logon session may read and execute. */
+static
+NTSTATUS
+LsapSetLimitedDefaultDacl(
+    _In_ HANDLE TokenHandle,
+    _In_ PLSA_TOKEN_INFORMATION_V1 TokenInfo1)
+{
+    PSID UserSid = TokenInfo1->User.User.Sid;
+    PSID LogonSid = NULL;
+    TOKEN_DEFAULT_DACL DefaultDacl;
+    PACL Dacl;
+    ULONG Size, i;
+    NTSTATUS Status;
+
+    if (TokenInfo1->Groups != NULL)
+    {
+        for (i = 0; i < TokenInfo1->Groups->GroupCount; i++)
+        {
+            if ((TokenInfo1->Groups->Groups[i].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID)
+            {
+                LogonSid = TokenInfo1->Groups->Groups[i].Sid;
+                break;
+            }
+        }
+    }
+
+    Size = sizeof(ACL) +
+           2 * sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(UserSid) + RtlLengthSid(LsapLocalSystemSid);
+    if (LogonSid != NULL)
+        Size += sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(LogonSid);
+
+    Dacl = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
+    if (Dacl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = RtlCreateAcl(Dacl, Size, ACL_REVISION);
+    if (NT_SUCCESS(Status))
+        Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_ALL, UserSid);
+    if (NT_SUCCESS(Status))
+        Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_ALL, LsapLocalSystemSid);
+    if (NT_SUCCESS(Status) && LogonSid != NULL)
+        Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_READ | GENERIC_EXECUTE, LogonSid);
+    if (NT_SUCCESS(Status))
+    {
+        DefaultDacl.DefaultDacl = Dacl;
+        Status = NtSetInformationToken(TokenHandle, TokenDefaultDacl, &DefaultDacl, sizeof(DefaultDacl));
+    }
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
+    return Status;
+}
+
 /* Builds the UAC pair of a logon: the filtered token takes the full one's place in
  * the logon session, the elevated token gets a logon session of its own and is
  * reachable only through the link. LSA keeps no handle on it afterwards. */
@@ -1773,6 +1827,13 @@ LsapCreateLinkedTokens(
     {
         ERR("NtFilterToken(LUA_TOKEN) failed (Status 0x%08lx)\n", Status);
         return Status;
+    }
+
+    Status = LsapSetLimitedDefaultDacl(LimitedToken, TokenInfo1);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("Setting the limited token's default DACL failed (Status 0x%08lx)\n", Status);
+        goto done;
     }
 
     /* The elevated token lives in a logon session of its own */
