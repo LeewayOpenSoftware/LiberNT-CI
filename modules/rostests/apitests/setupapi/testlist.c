@@ -8,6 +8,7 @@ extern void func_DeviceDescription(void);
 extern void func_DevicePdoName(void);
 extern void func_DevicePowerOnDisable(void);
 extern void func_DeviceRemoveVeto(void);
+extern void func_HostBridgeStart(void);
 extern void func_InboxClasses(void);
 extern void func_InterruptAffinityPolicy(void);
 extern void func_SetupDiGetActualModelsSection(void);
@@ -31,6 +32,7 @@ const struct test winetest_testlist[] =
     { "DevicePdoName", func_DevicePdoName },
     { "DevicePowerOnDisable", func_DevicePowerOnDisable },
     { "DeviceRemoveVeto", func_DeviceRemoveVeto },
+    { "HostBridgeStart", func_HostBridgeStart },
     { "InboxClasses", func_InboxClasses },
     { "InterruptAffinityPolicy", func_InterruptAffinityPolicy },
     { "SetupDiGetActualModelsSection", func_SetupDiGetActualModelsSection },
