@@ -1327,21 +1327,83 @@ PcVideoMaskFromField(
     return ((1UL << Size) - 1) << Position;
 }
 
+BOOLEAN BiosIsVesaDdcSupported(VOID);
+BOOLEAN BiosVesaReadEdid(VOID);
+
+static BOOLEAN
+PcVideoGetEdidPreferredResolution(
+    _Out_ PUSHORT Width,
+    _Out_ PUSHORT Height)
+{
+    PUCHAR Edid;
+    USHORT Horizontal, Vertical;
+
+    if (!BiosIsVesaDdcSupported() || !BiosVesaReadEdid())
+        return FALSE;
+
+    Edid = (PUCHAR)BIOSCALLBUFFER;
+    if (Edid[0x00] != 0x00 || Edid[0x01] != 0xFF || Edid[0x02] != 0xFF ||
+        Edid[0x03] != 0xFF || Edid[0x04] != 0xFF || Edid[0x05] != 0xFF ||
+        Edid[0x06] != 0xFF || Edid[0x07] != 0x00 || Edid[0x12] != 0x01)
+        return FALSE;
+
+    /* The first detailed timing descriptor (bytes 0x36..) is the preferred mode */
+    if (Edid[0x36] == 0x00 && Edid[0x37] == 0x00)
+        return FALSE;
+
+    Horizontal = (USHORT)Edid[0x38] | ((Edid[0x3A] & 0xF0) << 4);
+    Vertical = (USHORT)Edid[0x3B] | ((Edid[0x3D] & 0xF0) << 4);
+    if (Horizontal == 0 || Horizontal > 4096 || Vertical == 0 || Vertical > 4096)
+        return FALSE;
+
+    *Width = Horizontal;
+    *Height = Vertical;
+    return TRUE;
+}
+
+static ULONGLONG
+PcVideoGetUsableMemorySize(VOID)
+{
+    PFREELDR_MEMORY_DESCRIPTOR MemoryMap;
+    ULONG EntryCount, i;
+    ULONGLONG Bytes = 0;
+
+    MemoryMap = MachVtbl.GetMemoryMap(&EntryCount);
+    if (MemoryMap == NULL)
+        return 0;
+
+    for (i = 0; i < EntryCount; i++)
+    {
+        if (MemoryMap[i].MemoryType == LoaderFree)
+            Bytes += (ULONGLONG)MemoryMap[i].PageCount * MM_PAGE_SIZE;
+    }
+    return Bytes;
+}
+
 BOOLEAN
 PcVideoInitializeBootFramebuffer(
     _Out_ PLOADER_PARAMETER_FRAMEBUFFER FrameBuffer)
 {
     SVGA_MODE_INFORMATION Candidate;
     SVGA_MODE_INFORMATION Best = {0};
+    SVGA_MODE_INFORMATION BestEdid = {0}, BestBudget = {0}, BestWithinMax = {0};
     USHORT Mode, BestMode = 0;
-    ULONG BestPixels = 0, Pitch;
-    ULONGLONG Size;
+    USHORT BestEdidMode = 0, BestBudgetMode = 0, BestWithinMaxMode = 0;
+    USHORT EdidWidth = 0, EdidHeight = 0;
+    ULONG BestEdidPixels = 0, BestBudgetPixels = 0, BestWithinMaxPixels = 0, Pitch;
+    ULONGLONG Size, FrameBufferBudget;
+    BOOLEAN HaveEdid;
 
     RtlZeroMemory(FrameBuffer, sizeof(*FrameBuffer));
 
+    /* The 2560-wide pick at 512 MB RAM died in SOFTGPU with STOP 0xB4; budget the framebuffer at 1/8 of usable RAM */
+    FrameBufferBudget = PcVideoGetUsableMemorySize() / 8;
+    HaveEdid = PcVideoGetEdidPreferredResolution(&EdidWidth, &EdidHeight);
+
     for (Mode = 0x100; Mode < 0x200; ++Mode)
     {
-        ULONG Pixels;
+        ULONG Pixels, ScanLine;
+        ULONGLONG CandidateFbSize;
         UCHAR RedSize, RedPosition, GreenSize, GreenPosition;
         UCHAR BlueSize, BluePosition;
 
@@ -1365,7 +1427,6 @@ PcVideoInitializeBootFramebuffer(
             Candidate.MemoryModel != 6 || Candidate.BitsPerPixel != 32 ||
             Candidate.LinearVideoBufferAddress == 0 ||
             Candidate.WidthInPixels == 0 || Candidate.HeightInPixels == 0 ||
-            Candidate.WidthInPixels > 1024 || Candidate.HeightInPixels > 768 ||
             RedSize != 8 || RedPosition != 16 ||
             GreenSize != 8 || GreenPosition != 8 ||
             BlueSize != 8 || BluePosition != 0)
@@ -1373,17 +1434,66 @@ PcVideoInitializeBootFramebuffer(
             continue;
         }
 
+        ScanLine = Candidate.LinearBytesPerScanLine ?
+                       Candidate.LinearBytesPerScanLine : Candidate.BytesPerScanLine;
+        if (ScanLine < (ULONG)Candidate.WidthInPixels * sizeof(ULONG))
+            continue;
+
         Pixels = (ULONG)Candidate.WidthInPixels * Candidate.HeightInPixels;
-        if (Pixels > BestPixels)
+        CandidateFbSize = (ULONGLONG)ScanLine * Candidate.HeightInPixels;
+
+        if (HaveEdid &&
+            Candidate.WidthInPixels == EdidWidth &&
+            Candidate.HeightInPixels == EdidHeight &&
+            CandidateFbSize <= FrameBufferBudget &&
+            Pixels > BestEdidPixels)
         {
-            Best = Candidate;
-            BestMode = Mode;
-            BestPixels = Pixels;
+            BestEdid = Candidate;
+            BestEdidMode = Mode;
+            BestEdidPixels = Pixels;
         }
+
+        if (Candidate.WidthInPixels > 1920 || Candidate.HeightInPixels > 1200)
+            continue;
+
+        if (CandidateFbSize <= FrameBufferBudget &&
+            Pixels > BestBudgetPixels)
+        {
+            BestBudget = Candidate;
+            BestBudgetMode = Mode;
+            BestBudgetPixels = Pixels;
+        }
+
+        if (Pixels > BestWithinMaxPixels)
+        {
+            BestWithinMax = Candidate;
+            BestWithinMaxMode = Mode;
+            BestWithinMaxPixels = Pixels;
+        }
+    }
+
+    if (BestEdidMode != 0)
+    {
+        Best = BestEdid;
+        BestMode = BestEdidMode;
+    }
+    else if (BestBudgetMode != 0)
+    {
+        Best = BestBudget;
+        BestMode = BestBudgetMode;
+    }
+    else
+    {
+        Best = BestWithinMax;
+        BestMode = BestWithinMaxMode;
     }
 
     if (BestMode == 0 || !PcVideoSetBiosVesaMode(BestMode | 0x4000))
         return FALSE;
+
+    TRACE("Boot framebuffer: EDID %lux%lu, budget %lu bytes, picked mode 0x%lx\n",
+          (ULONG)EdidWidth, (ULONG)EdidHeight,
+          (ULONG)FrameBufferBudget, (ULONG)BestMode);
 
     Pitch = Best.LinearBytesPerScanLine ?
                 Best.LinearBytesPerScanLine : Best.BytesPerScanLine;
