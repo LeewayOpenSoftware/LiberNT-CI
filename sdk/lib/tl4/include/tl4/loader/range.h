@@ -29,6 +29,9 @@ enum tl4_range_row {
     TL4_RANGE_METRIC,     /* system metric sizes taken from a style: 0..512 */
     TL4_RANGE_BOOL,       /* 0 or 1 */
     TL4_RANGE_ENUM,       /* 0..255; the consumer accepts only the values it knows for that property */
+    TL4_RANGE_GLYPH,      /* TMT_GLYPHINDEX: one UTF-16 code unit of the glyph font, 0..65,535 (ruling 33bfd74) */
+    TL4_RANGE_COLOR_INT,  /* colours a style carries as INT (TMT_COLORIZATIONCOLOR): any 32-bit value (ruling 33bfd74) */
+    TL4_RANGE_GLOW,       /* TMT_GLOWINTENSITY: 0..1,024, not an 8-bit level in real styles (ruling 33bfd74) */
     TL4_RANGE_NEVER       /* always out of range: HBITMAP, FLOAT, FLOATLIST, and any type the table does not name */
 };
 
@@ -41,6 +44,8 @@ enum tl4_range_row {
 #define TL4_RANGE_DPI_MAX     8192
 #define TL4_RANGE_METRIC_MAX  512
 #define TL4_RANGE_ENUM_MAX    255
+#define TL4_RANGE_GLYPH_MAX   65535
+#define TL4_RANGE_GLOW_MAX    1024
 #define TL4_RANGE_INTLIST_MAX 402     /* entries of an INTLIST (R-V4-6) */
 #define TL4_RANGE_STRING_MAX  255     /* characters of a referenced string (R-RES-2) */
 #define TL4_RANGE_FACE_MAX    31      /* characters of a font face (LF_FACESIZE) */

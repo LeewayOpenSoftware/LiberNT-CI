@@ -14,11 +14,19 @@
 
 /* 1..256: TMT_IMAGECOUNT (the image strip is divided by it), TMT_FRAMESPERSECOND (1000 / fps) */
 static const uint32_t divisor_ids[] = { 2401, 2426 };
-/* 0..255: TMT_GLYPHINDEX */
-static const uint32_t index_ids[] = { 2418 };
-/* 0..255: TMT_ALPHALEVEL, TMT_GRADIENTRATIO1..5, TMT_SATURATION, TMT_ALPHATHRESHOLD, TMT_GLOWINTENSITY, TMT_OPACITY,
- * TMT_COLORIZATIONOPACITY */
-static const uint32_t level_ids[] = { 2402, 2406, 2407, 2408, 2409, 2410, 2413, 2415, 2429, 2430, 2432 };
+/* 0..255, "every value that the consumer uses as an index into an object": no named member today (TMT_GLYPHINDEX is
+ * a glyph, below); the row stays for the next one */
+static const uint32_t index_ids[1];   /* unused: the row has no member; a sized array keeps the table shape */
+#define N_INDEX 0u
+/* 0..65,535: TMT_GLYPHINDEX, one UTF-16 code unit of the glyph font */
+static const uint32_t glyph_ids[] = { 2418 };
+/* any 32-bit value: TMT_COLORIZATIONCOLOR, a colour carried as INT */
+static const uint32_t color_int_ids[] = { 2431 };
+/* 0..1,024: TMT_GLOWINTENSITY */
+static const uint32_t glow_ids[] = { 2429 };
+/* 0..255: TMT_ALPHALEVEL, TMT_GRADIENTRATIO1..5, TMT_SATURATION, TMT_ALPHATHRESHOLD, TMT_OPACITY, TMT_COLORIZATIONOPACITY
+ * (not TMT_GLOWINTENSITY) */
+static const uint32_t level_ids[] = { 2402, 2406, 2407, 2408, 2409, 2410, 2413, 2415, 2430, 2432 };
 /* 0..65,535: TMT_ANIMATIONDELAY, TMT_ANIMATIONDURATION, the entries of TMT_TRANSITIONDURATIONS */
 static const uint32_t time_ids[] = { 2428, 5006, 6000 };
 /* 1..8,192: TMT_MINDPI1..5, TMT_MINDPI6, TMT_MINDPI7 */
@@ -42,7 +50,10 @@ uint32_t tl4_range_members(enum tl4_range_row row, const uint32_t **ids)
     switch (row)
     {
         case TL4_RANGE_DIVISOR: list = divisor_ids; n = N(divisor_ids); break;
-        case TL4_RANGE_INDEX:   list = index_ids;   n = N(index_ids);   break;
+        case TL4_RANGE_INDEX:   list = N_INDEX ? index_ids : 0; n = N_INDEX; break;
+        case TL4_RANGE_GLYPH:   list = glyph_ids;   n = N(glyph_ids);   break;
+        case TL4_RANGE_COLOR_INT: list = color_int_ids; n = N(color_int_ids); break;
+        case TL4_RANGE_GLOW:    list = glow_ids;    n = N(glow_ids);    break;
         case TL4_RANGE_LEVEL:   list = level_ids;   n = N(level_ids);   break;
         case TL4_RANGE_TIME:    list = time_ids;    n = N(time_ids);    break;
         case TL4_RANGE_DPI:     list = dpi_ids;     n = N(dpi_ids);     break;
@@ -66,7 +77,10 @@ enum tl4_range_row tl4_range_row(uint32_t type, uint32_t name_id)
     }
     /* a property row wins over the type row; the lists are disjoint, so the narrower-row rule needs no second step */
     if (in_list(divisor_ids, N(divisor_ids), name_id)) return TL4_RANGE_DIVISOR;
-    if (in_list(index_ids, N(index_ids), name_id)) return TL4_RANGE_INDEX;
+    if (in_list(index_ids, N_INDEX, name_id)) return TL4_RANGE_INDEX;
+    if (in_list(glyph_ids, N(glyph_ids), name_id)) return TL4_RANGE_GLYPH;
+    if (in_list(color_int_ids, N(color_int_ids), name_id)) return TL4_RANGE_COLOR_INT;
+    if (in_list(glow_ids, N(glow_ids), name_id)) return TL4_RANGE_GLOW;
     if (in_list(level_ids, N(level_ids), name_id)) return TL4_RANGE_LEVEL;
     if (in_list(time_ids, N(time_ids), name_id)) return TL4_RANGE_TIME;
     if (in_list(dpi_ids, N(dpi_ids), name_id)) return TL4_RANGE_DPI;
@@ -107,7 +121,9 @@ static int bounds(enum tl4_range_row row, int32_t *lo, int32_t *hi)
         case TL4_RANGE_METRIC:  *lo = 0; *hi = TL4_RANGE_METRIC_MAX; return 1;
         case TL4_RANGE_BOOL:    *lo = 0; *hi = 1; return 1;
         case TL4_RANGE_ENUM:    *lo = 0; *hi = TL4_RANGE_ENUM_MAX; return 1;
-        default: return 0;                                /* NONE and NEVER have no bounds */
+        case TL4_RANGE_GLYPH:   *lo = 0; *hi = TL4_RANGE_GLYPH_MAX; return 1;
+        case TL4_RANGE_GLOW:    *lo = 0; *hi = TL4_RANGE_GLOW_MAX; return 1;
+        default: return 0;                                /* NONE, COLOR_INT and NEVER have no bounds */
     }
 }
 
