@@ -398,6 +398,9 @@ IsSignatureInUse(ULONG DriveNumber, ULONG Signature)
             continue;
 
         _snwprintf(DevicePath, sizeof(DevicePath) / sizeof(DevicePath[0]), L"\\\\.\\PhysicalDrive%lu", Number);
+        /* No access, so a standard user can scan too; the size comes from the
+         * any-access geometry codes, the length fallback is for drivers that
+         * answer only that one on a handle with read access */
         Handle = CreateFileW(DevicePath, 0, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
         if (Handle == INVALID_HANDLE_VALUE)
             continue;

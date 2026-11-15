@@ -3879,7 +3879,7 @@ static struct wbemprox_drive_layout_ex *get_drive_layout( HANDLE handle )
 static UINT get_wmi_partitions( UINT disk, struct wmi_partition *parts, UINT capacity )
 {
     struct wbemprox_drive_layout_ex *layout;
-    LARGE_INTEGER length;
+    DISK_GEOMETRY_EX geometry;
     WCHAR path[32];
     HANDLE handle;
     DWORD bytes, i, entries;
@@ -3944,12 +3944,12 @@ static UINT get_wmi_partitions( UINT disk, struct wmi_partition *parts, UINT cap
             count++;
         }
     }
-    else if (capacity && DeviceIoControl( handle, IOCTL_DISK_GET_LENGTH_INFO, NULL, 0, &length, sizeof(length), &bytes, NULL ) &&
-             length.QuadPart)
+    else if (capacity && DeviceIoControl( handle, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, NULL, 0, &geometry, sizeof(geometry), &bytes, NULL ) &&
+             geometry.DiskSize.QuadPart)
     {
         parts[0].number   = 0;
         parts[0].offset   = 0;
-        parts[0].size     = length.QuadPart;
+        parts[0].size     = geometry.DiskSize.QuadPart;
         parts[0].type     = L"Unknown";
         parts[0].bootable = TRUE;
         parts[0].primary  = TRUE;
@@ -8219,25 +8219,29 @@ static WCHAR *get_storage_descriptor_string( const STORAGE_DEVICE_DESCRIPTOR *de
 
 static WCHAR *get_disk_layout_id( HANDLE handle )
 {
-    union
-    {
-        DRIVE_LAYOUT_INFORMATION layout;
-        BYTE buffer[4096];
-    } info;
+    struct wbemprox_drive_layout_ex *layout;
     STORAGE_DEVICE_NUMBER number;
     GUID id = {0};
     WCHAR *ret;
-    DWORD returned;
+    DWORD returned = 0;
 
-    if (DeviceIoControl( handle, IOCTL_DISK_GET_DRIVE_LAYOUT, NULL, 0, &info, sizeof(info), &returned, NULL ) &&
-        info.layout.Signature)
-        id.Data1 = info.layout.Signature;
+    /* The extended layout code is any-access, so a handle opened with no access serves */
+    layout = get_drive_layout( handle );
+    if (layout && layout->PartitionStyle == WBEMPROX_PARTITION_STYLE_MBR && layout->Mbr.Signature)
+        id.Data1 = layout->Mbr.Signature;
+    else if (layout && layout->PartitionStyle == WBEMPROX_PARTITION_STYLE_GPT)
+        id = layout->Gpt.DiskId;
     else if (DeviceIoControl( handle, IOCTL_STORAGE_GET_DEVICE_NUMBER, NULL, 0, &number, sizeof(number), &returned, NULL ))
     {
         id.Data1 = number.DeviceNumber;
         id.Data2 = (USHORT)number.DeviceType;
     }
-    else return NULL;
+    else
+    {
+        free( layout );
+        return NULL;
+    }
+    free( layout );
     if (!(ret = malloc( 39 * sizeof(WCHAR) ))) return NULL;
     swprintf( ret, 39, L"{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}", id.Data1, id.Data2, id.Data3,
               id.Data4[0], id.Data4[1], id.Data4[2], id.Data4[3], id.Data4[4], id.Data4[5], id.Data4[6], id.Data4[7] );

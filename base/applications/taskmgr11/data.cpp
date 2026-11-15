@@ -2289,6 +2289,8 @@ static void DetectDiskDetails(int index)
     WCHAR path[64];
     StringCchPrintfW(path, _countof(path),
                      L"\\\\.\\PhysicalDrive%lu", disk->number);
+    /* No access: a standard user can open the disk that way, and every code
+     * sent below is any-access */
     sampler->handle = CreateFileW(path, 0,
                                   FILE_SHARE_READ | FILE_SHARE_WRITE,
                                   NULL, OPEN_EXISTING, 0, NULL);
@@ -2296,12 +2298,12 @@ static void DetectDiskDetails(int index)
     {
         disk->present = TRUE;
         DWORD returned = 0;
-        GET_LENGTH_INFORMATION length;
-        if (DeviceIoControl(sampler->handle, IOCTL_DISK_GET_LENGTH_INFO,
-                            NULL, 0, &length, sizeof(length),
+        DISK_GEOMETRY_EX geometry;
+        if (DeviceIoControl(sampler->handle, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
+                            NULL, 0, &geometry, sizeof(geometry),
                             &returned, NULL))
         {
-            disk->capacity = (ULONGLONG)length.Length.QuadPart;
+            disk->capacity = (ULONGLONG)geometry.DiskSize.QuadPart;
         }
 
         BYTE descriptorBuffer[1024];
