@@ -837,3 +837,617 @@ done:
     if (pResponse != NULL)
         pResponse->dwError = dwError;
 }
+
+/* ELEVATION BROKER *********************************************************/
+
+#define SECL_UAC_POLICY_KEY L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
+#define SECL_ELEVATED_PROCESS_ACCESS (SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION)
+#define SECL_ALLOWED_CREATION_FLAGS (CREATE_NEW_CONSOLE | CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | \
+                                     DETACHED_PROCESS | CREATE_DEFAULT_ERROR_MODE | CREATE_BREAKAWAY_FROM_JOB)
+
+#ifndef TokenElevationTypeLimited
+#define TokenElevationTypeLimited 3
+#endif
+
+typedef struct _PENDING_PROMPT
+{
+    LIST_ENTRY ListEntry;
+    LUID LogonId;
+} PENDING_PROMPT, *PPENDING_PROMPT;
+
+static LIST_ENTRY PendingPromptList = { &PendingPromptList, &PendingPromptList };
+static INIT_ONCE PendingPromptInit = INIT_ONCE_STATIC_INIT;
+static CRITICAL_SECTION PendingPromptLock;
+
+static
+BOOL
+CALLBACK
+InitPendingPromptLock(PINIT_ONCE InitOnce, PVOID Parameter, PVOID *Context)
+{
+    InitializeCriticalSection(&PendingPromptLock);
+    return TRUE;
+}
+
+/* One prompt per logon session at a time */
+static
+PPENDING_PROMPT
+BeginPrompt(
+    _In_ PLUID LogonId)
+{
+    PLIST_ENTRY Entry;
+    PPENDING_PROMPT Prompt;
+
+    InitOnceExecuteOnce(&PendingPromptInit, InitPendingPromptLock, NULL, NULL);
+    EnterCriticalSection(&PendingPromptLock);
+    for (Entry = PendingPromptList.Flink; Entry != &PendingPromptList; Entry = Entry->Flink)
+    {
+        Prompt = CONTAINING_RECORD(Entry, PENDING_PROMPT, ListEntry);
+        if (RtlEqualLuid(&Prompt->LogonId, LogonId))
+        {
+            LeaveCriticalSection(&PendingPromptLock);
+            return NULL;
+        }
+    }
+    Prompt = HeapAlloc(GetProcessHeap(), 0, sizeof(*Prompt));
+    if (Prompt != NULL)
+    {
+        Prompt->LogonId = *LogonId;
+        InsertTailList(&PendingPromptList, &Prompt->ListEntry);
+    }
+    LeaveCriticalSection(&PendingPromptLock);
+    return Prompt;
+}
+
+static
+VOID
+EndPrompt(
+    _In_ PPENDING_PROMPT Prompt)
+{
+    EnterCriticalSection(&PendingPromptLock);
+    RemoveEntryList(&Prompt->ListEntry);
+    LeaveCriticalSection(&PendingPromptLock);
+    HeapFree(GetProcessHeap(), 0, Prompt);
+}
+
+static
+DWORD
+ReadPolicyDword(
+    _In_ PCWSTR ValueName,
+    _In_ DWORD Default)
+{
+    HKEY hKey;
+    DWORD Value, Size = sizeof(Value), Type;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, SECL_UAC_POLICY_KEY, 0, KEY_QUERY_VALUE, &hKey) != ERROR_SUCCESS)
+        return Default;
+    if (RegQueryValueExW(hKey, ValueName, NULL, &Type, (LPBYTE)&Value, &Size) != ERROR_SUCCESS ||
+        Type != REG_DWORD || Size != sizeof(Value))
+    {
+        Value = Default;
+    }
+    RegCloseKey(hKey);
+    return Value;
+}
+
+static
+BOOL
+GetTokenDword(
+    _In_ HANDLE hToken,
+    _In_ TOKEN_INFORMATION_CLASS Class,
+    _Out_ PDWORD Value)
+{
+    DWORD Length;
+
+    *Value = 0;
+    return GetTokenInformation(hToken, Class, Value, sizeof(*Value), &Length);
+}
+
+static
+BOOL
+GetTokenLogonId(
+    _In_ HANDLE hToken,
+    _Out_ PLUID LogonId)
+{
+    TOKEN_STATISTICS Statistics;
+    DWORD Length;
+
+    if (!GetTokenInformation(hToken, TokenStatistics, &Statistics, sizeof(Statistics), &Length))
+        return FALSE;
+    *LogonId = Statistics.AuthenticationId;
+    return TRUE;
+}
+
+static
+DWORD
+GetTokenIntegrityRid(
+    _In_ HANDLE hToken)
+{
+    BYTE Buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE];
+    PTOKEN_MANDATORY_LABEL Label = (PTOKEN_MANDATORY_LABEL)Buffer;
+    DWORD Length;
+
+    if (!GetTokenInformation(hToken, TokenIntegrityLevel, Label, sizeof(Buffer), &Length))
+        return 0;
+    return *GetSidSubAuthority(Label->Label.Sid, *GetSidSubAuthorityCount(Label->Label.Sid) - 1);
+}
+
+static
+BOOL
+SameTokenUser(
+    _In_ HANDLE hToken1,
+    _In_ HANDLE hToken2)
+{
+    BYTE Buffer1[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE], Buffer2[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE];
+    DWORD Length;
+
+    if (!GetTokenInformation(hToken1, TokenUser, Buffer1, sizeof(Buffer1), &Length) ||
+        !GetTokenInformation(hToken2, TokenUser, Buffer2, sizeof(Buffer2), &Length))
+    {
+        return FALSE;
+    }
+    return EqualSid(((PTOKEN_USER)Buffer1)->User.Sid, ((PTOKEN_USER)Buffer2)->User.Sid);
+}
+
+/* The table of callers the broker serves: an interactive logon, Medium or above, not
+ * sandboxed or restricted, and (for the process token) the limited side of a pair. */
+static
+DWORD
+CheckElevationCallerToken(
+    _In_ HANDLE hToken,
+    _In_ BOOL RequireLimited)
+{
+    LUID LogonId;
+    DWORD Value;
+
+    if (IsServiceAccountToken(hToken))
+        return ERROR_ACCESS_DENIED;
+    if (!GetTokenLogonId(hToken, &LogonId) || (LogonId.HighPart == 0 && LogonId.LowPart <= 999))
+        return ERROR_ACCESS_DENIED;
+    if (GetTokenIntegrityRid(hToken) < SECURITY_MANDATORY_MEDIUM_RID)
+        return ERROR_ACCESS_DENIED;
+    /* A sandbox question the kernel cannot answer is a refusal, not a pass */
+    if (!GetTokenDword(hToken, TokenIsAppContainer, &Value) || Value != 0)
+        return ERROR_ACCESS_DENIED;
+    SetLastError(ERROR_SUCCESS);
+    if (IsTokenRestricted(hToken) || GetLastError() != ERROR_SUCCESS)
+        return ERROR_ACCESS_DENIED;
+    if (!GetTokenDword(hToken, TokenSandBoxInert, &Value) || Value != 0)
+        return ERROR_ACCESS_DENIED;
+    if (RequireLimited &&
+        (!GetTokenDword(hToken, TokenElevationType, &Value) || Value != TokenElevationTypeLimited))
+    {
+        return ERROR_ELEVATION_REQUIRED;
+    }
+    return ERROR_SUCCESS;
+}
+
+/* The caller is the local process behind the pipe: its primary token decides, and the
+ * thread that called must belong to the same logon and user at impersonation level. */
+static
+DWORD
+OpenElevationCaller(
+    _In_ handle_t hBinding,
+    _Out_ PHANDLE phProcess,
+    _Out_ PHANDLE phToken,
+    _Out_ PLUID LogonId,
+    _Out_ PDWORD pdwSessionId,
+    _Out_ PDWORD pdwProcessId)
+{
+    HANDLE hProcess = NULL, hToken = NULL, hThreadToken = NULL;
+    ULONG ClientPid;
+    LUID ThreadLogonId;
+    DWORD Level, Length, dwError = ERROR_ACCESS_DENIED;
+
+    *phProcess = NULL;
+    *phToken = NULL;
+
+    if (I_RpcBindingInqLocalClientPID(hBinding, &ClientPid) != RPC_S_OK)
+        return ERROR_ACCESS_DENIED;
+
+    hProcess = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_DUP_HANDLE, FALSE, ClientPid);
+    if (hProcess == NULL)
+        return ERROR_ACCESS_DENIED;
+
+    if (!OpenProcessToken(hProcess, TOKEN_QUERY | TOKEN_DUPLICATE, &hToken))
+        goto done;
+
+    dwError = CheckElevationCallerToken(hToken, TRUE);
+    if (dwError != ERROR_SUCCESS)
+        goto done;
+
+    dwError = ERROR_ACCESS_DENIED;
+    if (!GetTokenLogonId(hToken, LogonId) ||
+        !GetTokenInformation(hToken, TokenSessionId, pdwSessionId, sizeof(*pdwSessionId), &Length))
+    {
+        goto done;
+    }
+
+    if (RpcImpersonateClient(hBinding) != RPC_S_OK)
+        goto done;
+    if (OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &hThreadToken) &&
+        GetTokenInformation(hThreadToken, TokenImpersonationLevel, &Level, sizeof(Level), &Length) &&
+        Level >= SecurityImpersonation &&
+        CheckElevationCallerToken(hThreadToken, FALSE) == ERROR_SUCCESS &&
+        GetTokenLogonId(hThreadToken, &ThreadLogonId) &&
+        RtlEqualLuid(&ThreadLogonId, LogonId) &&
+        SameTokenUser(hThreadToken, hToken))
+    {
+        dwError = ERROR_SUCCESS;
+    }
+    RpcRevertToSelf();
+
+done:
+    if (hThreadToken != NULL)
+        CloseHandle(hThreadToken);
+    if (dwError == ERROR_SUCCESS)
+    {
+        *phProcess = hProcess;
+        *phToken = hToken;
+        *pdwProcessId = ClientPid;
+    }
+    else
+    {
+        if (hToken != NULL)
+            CloseHandle(hToken);
+        CloseHandle(hProcess);
+    }
+    return dwError;
+}
+
+/* The image is resolved and opened once, as the caller, with no write or delete sharing;
+ * the final path of that handle is what is shown and what runs. User-defined drive
+ * letters (subst, network) and removable media are refused. */
+static
+DWORD
+OpenElevationImage(
+    _In_ handle_t hBinding,
+    _In_opt_ PCWSTR ApplicationName,
+    _In_opt_ PCWSTR CommandLine,
+    _In_opt_ PCWSTR CurrentDirectory,
+    _Out_ PHANDLE phFile,
+    _Out_writes_(FinalPathChars) PWSTR FinalPath,
+    _In_ DWORD FinalPathChars)
+{
+    WCHAR Candidate[MAX_PATH], Found[MAX_PATH], Drive[3] = L"?:", Target[MAX_PATH];
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    DWORD dwError = ERROR_SUCCESS, Length;
+    PCWSTR Source, End;
+
+    *phFile = NULL;
+    FinalPath[0] = UNICODE_NULL;
+
+    if (ApplicationName != NULL && ApplicationName[0] != UNICODE_NULL)
+    {
+        if (FAILED(StringCchCopyW(Candidate, _countof(Candidate), ApplicationName)))
+            return ERROR_FILENAME_EXCED_RANGE;
+    }
+    else if (CommandLine != NULL && CommandLine[0] != UNICODE_NULL)
+    {
+        Source = CommandLine;
+        while (*Source == L' ' || *Source == L'\t')
+            Source++;
+        if (*Source == L'"')
+        {
+            Source++;
+            End = wcschr(Source, L'"');
+        }
+        else
+        {
+            End = Source;
+            while (*End != UNICODE_NULL && *End != L' ' && *End != L'\t')
+                End++;
+        }
+        if (End == NULL || End == Source || (SIZE_T)(End - Source) >= _countof(Candidate))
+            return ERROR_INVALID_PARAMETER;
+        CopyMemory(Candidate, Source, (End - Source) * sizeof(WCHAR));
+        Candidate[End - Source] = UNICODE_NULL;
+    }
+    else
+    {
+        return ERROR_INVALID_PARAMETER;
+    }
+
+    if (RpcImpersonateClient(hBinding) != RPC_S_OK)
+        return ERROR_ACCESS_DENIED;
+
+    if (!SearchPathW(CurrentDirectory, Candidate, L".exe", _countof(Found), Found, NULL))
+    {
+        dwError = GetLastError();
+    }
+    else
+    {
+        hFile = CreateFileW(Found, GENERIC_READ | GENERIC_EXECUTE, FILE_SHARE_READ, NULL,
+                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE)
+            dwError = GetLastError();
+    }
+    RpcRevertToSelf();
+
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+
+    Length = GetFinalPathNameByHandleW(hFile, FinalPath, FinalPathChars, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+    if (Length == 0 || Length >= FinalPathChars)
+    {
+        dwError = ERROR_BAD_PATHNAME;
+        goto fail;
+    }
+    if (wcsncmp(FinalPath, L"\\\\?\\", 4) == 0)
+        MoveMemory(FinalPath, FinalPath + 4, (Length - 4 + 1) * sizeof(WCHAR));
+
+    /* Only a path on a fixed, system-defined drive letter is run elevated */
+    if (FinalPath[1] != L':' || FinalPath[2] != L'\\')
+    {
+        dwError = ERROR_BAD_PATHNAME;
+        goto fail;
+    }
+    Drive[0] = FinalPath[0];
+    if (QueryDosDeviceW(Drive, Target, _countof(Target)) == 0 ||
+        wcsncmp(Target, L"\\??\\", 4) == 0 ||
+        wcsstr(Target, L"LanmanRedirector") != NULL ||
+        wcsstr(Target, L"\\Device\\Mup") != NULL)
+    {
+        dwError = ERROR_BAD_PATHNAME;
+        goto fail;
+    }
+    Target[0] = FinalPath[0];
+    Target[1] = L':';
+    Target[2] = L'\\';
+    Target[3] = UNICODE_NULL;
+    if (GetDriveTypeW(Target) != DRIVE_FIXED)
+    {
+        dwError = ERROR_BAD_PATHNAME;
+        goto fail;
+    }
+
+    *phFile = hFile;
+    return ERROR_SUCCESS;
+
+fail:
+    CloseHandle(hFile);
+    FinalPath[0] = UNICODE_NULL;
+    return dwError;
+}
+
+/* consent.exe runs as SYSTEM in the caller's session on the caller's desktop and
+ * answers with its exit code. A prompt nobody answers ends as a refusal. */
+#define CONSENT_TIMEOUT_MS  (2 * 60 * 1000)
+static
+DWORD
+AskConsent(
+    _In_ DWORD SessionId,
+    _In_ PCWSTR DesktopPath,
+    _In_ PCWSTR FinalPath,
+    _In_ PCWSTR CommandLine,
+    _In_ DWORD_PTR hwndOwner,
+    _Out_ PBOOL Allowed)
+{
+    HANDLE hSelf = NULL, hSystem = NULL;
+    STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
+    PROCESS_INFORMATION ProcessInfo = { 0 };
+    WCHAR Exe[MAX_PATH];
+    PWSTR Cmd = NULL;
+    SIZE_T CmdChars;
+    DWORD ExitCode = IDNO, dwError = ERROR_SUCCESS;
+
+    *Allowed = FALSE;
+
+    if (!GetSystemDirectoryW(Exe, _countof(Exe)) ||
+        FAILED(StringCchCatW(Exe, _countof(Exe), L"\\consent.exe")))
+    {
+        return ERROR_BAD_PATHNAME;
+    }
+
+    CmdChars = wcslen(Exe) + wcslen(FinalPath) + (CommandLine ? wcslen(CommandLine) : 0) + 64;
+    Cmd = HeapAlloc(GetProcessHeap(), 0, CmdChars * sizeof(WCHAR));
+    if (Cmd == NULL)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    StringCchPrintfW(Cmd, CmdChars, L"\"%ls\" %Ix \"%ls\" %ls", Exe, hwndOwner, FinalPath,
+                     CommandLine ? CommandLine : L"");
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY | TOKEN_DUPLICATE, &hSelf) ||
+        !DuplicateTokenEx(hSelf, TOKEN_ALL_ACCESS, NULL, SecurityImpersonation, TokenPrimary, &hSystem) ||
+        !SetTokenInformation(hSystem, TokenSessionId, &SessionId, sizeof(SessionId)))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+
+    StartupInfo.lpDesktop = (LPWSTR)DesktopPath;
+    if (!CreateProcessAsUserW(hSystem, Exe, Cmd, NULL, NULL, FALSE, CREATE_UNICODE_ENVIRONMENT,
+                              NULL, NULL, &StartupInfo, &ProcessInfo))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+    if (WaitForSingleObject(ProcessInfo.hProcess, CONSENT_TIMEOUT_MS) != WAIT_OBJECT_0)
+    {
+        TerminateProcess(ProcessInfo.hProcess, IDNO);
+        WaitForSingleObject(ProcessInfo.hProcess, 5000);
+    }
+    else if (GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode))
+    {
+        *Allowed = (ExitCode == IDYES);
+    }
+    CloseHandle(ProcessInfo.hThread);
+    CloseHandle(ProcessInfo.hProcess);
+
+done:
+    if (hSystem != NULL)
+        CloseHandle(hSystem);
+    if (hSelf != NULL)
+        CloseHandle(hSelf);
+    HeapFree(GetProcessHeap(), 0, Cmd);
+    return dwError;
+}
+
+void
+__stdcall
+SeclCreateProcessElevatedW(
+    handle_t hBinding,
+    SECL_ELEVATE_REQUEST *pRequest,
+    SECL_RESPONSE *pResponse)
+{
+    HANDLE hCallerProcess = NULL, hCallerToken = NULL, hImage = NULL;
+    TOKEN_LINKED_TOKEN Linked = { NULL };
+    PPENDING_PROMPT Prompt = NULL;
+    PDESKTOP_GRANT Grant = NULL;
+    PVOID Environment = NULL;
+    STARTUPINFOW StartupInfo = { sizeof(StartupInfo) };
+    PROCESS_INFORMATION ProcessInfo = { 0 };
+    WCHAR FinalPath[MAX_PATH];
+    PWSTR CommandLine = NULL;
+    PCWSTR Desktop;
+    LUID LogonId;
+    DWORD SessionId = 0, CallerPid = 0, Policy, Length, dwError;
+    DWORD_PTR hwndOwner = 0;
+    BOOL Allowed = FALSE;
+
+    TRACE("SeclCreateProcessElevatedW(%p %p %p)\n", hBinding, pRequest, pResponse);
+
+    ZeroMemory(pResponse, sizeof(*pResponse));
+
+    dwError = OpenElevationCaller(hBinding, &hCallerProcess, &hCallerToken, &LogonId, &SessionId, &CallerPid);
+    if (dwError != ERROR_SUCCESS)
+        goto done;
+
+    /* The credential modes of the policy are the shell's credentials dialog, not ours */
+    Policy = ReadPolicyDword(L"ConsentPromptBehaviorAdmin", 5);
+    if (Policy == 1 || Policy == 3 || Policy == 4)
+    {
+        dwError = ERROR_ELEVATION_REQUIRED;
+        goto done;
+    }
+
+    Desktop = (pRequest->Desktop && pRequest->Desktop[0]) ? pRequest->Desktop : L"WinSta0\\Default";
+    EnterCriticalSection(&DesktopAccessLock);
+    dwError = CheckClientDesktopAccess(hBinding, Desktop);
+    LeaveCriticalSection(&DesktopAccessLock);
+    if (dwError != ERROR_SUCCESS)
+    {
+        dwError = ERROR_ACCESS_DENIED;
+        goto done;
+    }
+
+    dwError = OpenElevationImage(hBinding, pRequest->ApplicationName, pRequest->CommandLine,
+                                 pRequest->CurrentDirectory, &hImage, FinalPath, _countof(FinalPath));
+    if (dwError != ERROR_SUCCESS)
+        goto done;
+
+    /* The broker holds SeTcbPrivilege, so this is the primary elevated token */
+    if (!GetTokenInformation(hCallerToken, TokenLinkedToken, &Linked, sizeof(Linked), &Length) ||
+        Linked.LinkedToken == NULL)
+    {
+        dwError = ERROR_ELEVATION_REQUIRED;
+        goto done;
+    }
+
+    if (Policy != 0)
+    {
+        DWORD OwnerPid = 0;
+
+        Prompt = BeginPrompt(&LogonId);
+        if (Prompt == NULL)
+        {
+            dwError = ERROR_BUSY;
+            goto done;
+        }
+        if (pRequest->hwndOwner != 0 && IsWindow((HWND)pRequest->hwndOwner) &&
+            GetWindowThreadProcessId((HWND)pRequest->hwndOwner, &OwnerPid) && OwnerPid == CallerPid)
+        {
+            hwndOwner = pRequest->hwndOwner;
+        }
+        dwError = AskConsent(SessionId, Desktop, FinalPath, pRequest->CommandLine, hwndOwner, &Allowed);
+        if (dwError != ERROR_SUCCESS)
+            goto done;
+        if (!Allowed)
+        {
+            dwError = ERROR_CANCELLED;
+            goto done;
+        }
+    }
+
+    if (!SetTokenInformation(Linked.LinkedToken, TokenSessionId, &SessionId, sizeof(SessionId)))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+
+    if (pRequest->dwDesktopInherited)
+    {
+        Grant = GrantDesktopAccess(hBinding, Linked.LinkedToken, Desktop, &dwError);
+        dwError = ERROR_SUCCESS;
+    }
+
+    if (!CreateEnvironmentBlock(&Environment, Linked.LinkedToken, FALSE))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+
+    if (pRequest->CommandLine != NULL)
+    {
+        Length = (DWORD)wcslen(pRequest->CommandLine) + 1;
+        CommandLine = HeapAlloc(GetProcessHeap(), 0, Length * sizeof(WCHAR));
+        if (CommandLine == NULL)
+        {
+            dwError = ERROR_NOT_ENOUGH_MEMORY;
+            goto done;
+        }
+        CopyMemory(CommandLine, pRequest->CommandLine, Length * sizeof(WCHAR));
+    }
+
+    StartupInfo.lpDesktop = (LPWSTR)Desktop;
+    StartupInfo.dwFlags = STARTF_USESHOWWINDOW;
+    StartupInfo.wShowWindow = (WORD)pRequest->dwShowCmd;
+    if (!CreateProcessAsUserW(Linked.LinkedToken,
+                              FinalPath,
+                              CommandLine,
+                              NULL,
+                              NULL,
+                              FALSE,
+                              (pRequest->dwCreationFlags & SECL_ALLOWED_CREATION_FLAGS) | CREATE_UNICODE_ENVIRONMENT,
+                              Environment,
+                              pRequest->CurrentDirectory,
+                              &StartupInfo,
+                              &ProcessInfo))
+    {
+        dwError = GetLastError();
+        WARN("CreateProcessAsUser(elevated) failed with Error %lu\n", dwError);
+        goto done;
+    }
+
+    if (Grant && WatchDesktopGrant(Grant, ProcessInfo.hProcess))
+        Grant = NULL;
+
+    /* The caller may wait for and query the process, nothing more */
+    if (!DuplicateHandle(GetCurrentProcess(), ProcessInfo.hProcess, hCallerProcess,
+                         (PHANDLE)&pResponse->hProcess, SECL_ELEVATED_PROCESS_ACCESS, FALSE, 0))
+    {
+        pResponse->hProcess = 0;
+    }
+    pResponse->hThread = 0;
+    pResponse->dwProcessId = ProcessInfo.dwProcessId;
+    pResponse->dwThreadId = ProcessInfo.dwThreadId;
+    CloseHandle(ProcessInfo.hThread);
+    CloseHandle(ProcessInfo.hProcess);
+
+done:
+    if (hImage != NULL)
+        CloseHandle(hImage);
+    if (CommandLine != NULL)
+        HeapFree(GetProcessHeap(), 0, CommandLine);
+    if (Environment != NULL)
+        DestroyEnvironmentBlock(Environment);
+    if (Grant != NULL)
+        ReleaseDesktopGrant(Grant);
+    if (Prompt != NULL)
+        EndPrompt(Prompt);
+    if (Linked.LinkedToken != NULL)
+        CloseHandle(Linked.LinkedToken);
+    if (hCallerToken != NULL)
+        CloseHandle(hCallerToken);
+    if (hCallerProcess != NULL)
+        CloseHandle(hCallerProcess);
+    pResponse->dwError = dwError;
+}

@@ -48,6 +48,7 @@ list(APPEND SOURCE
     SaferIdentifyLevel.c
     SaferLevels.c
     SaferRules.c
+    Elevation.c
     SeclogonCaller.c
     ServiceArgs.c
     ServiceCrash.c
@@ -58,6 +59,7 @@ list(APPEND SOURCE
     TriggerInfo.c
     TokenBnoIsolation.c
     TokenLinkedToken.c
+    TokenLua.c
     TraceEvents.c
     TokenDefaultPrivileges.c
     TokenIntegrity.c

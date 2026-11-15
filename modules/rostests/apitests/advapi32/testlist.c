@@ -49,6 +49,7 @@ extern void func_RtlEncryptMemory(void);
 extern void func_SaferIdentifyLevel(void);
 extern void func_SaferLevels(void);
 extern void func_SaferRules(void);
+extern void func_Elevation(void);
 extern void func_SeclogonCaller(void);
 extern void func_ServiceArgs(void);
 extern void func_ServiceCrash(void);
@@ -59,6 +60,7 @@ extern void func_ServicePowerSetting(void);
 extern void func_StartServiceCtrlDispatcher(void);
 extern void func_TokenBnoIsolation(void);
 extern void func_TokenLinkedToken(void);
+extern void func_TokenLua(void);
 extern void func_TraceEvents(void);
 extern void func_TokenDefaultPrivileges(void);
 extern void func_TokenIntegrity(void);
@@ -116,6 +118,7 @@ const struct test winetest_testlist[] =
     { "SaferIdentifyLevel", func_SaferIdentifyLevel },
     { "SaferLevels", func_SaferLevels },
     { "SaferRules", func_SaferRules },
+    { "Elevation", func_Elevation },
     { "SeclogonCaller", func_SeclogonCaller },
     { "ServiceArgs", func_ServiceArgs },
     { "ServiceCrash", func_ServiceCrash },
@@ -126,6 +129,7 @@ const struct test winetest_testlist[] =
     { "StartServiceCtrlDispatcher", func_StartServiceCtrlDispatcher },
     { "TokenBnoIsolation", func_TokenBnoIsolation },
     { "TokenLinkedToken", func_TokenLinkedToken },
+    { "TokenLua", func_TokenLua },
     { "TraceEvents", func_TraceEvents },
     { "TokenDefaultPrivileges", func_TokenDefaultPrivileges },
     { "TokenIntegrity", func_TokenIntegrity },

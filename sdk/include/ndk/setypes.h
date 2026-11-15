@@ -162,6 +162,10 @@ typedef struct _SEP_LOGON_SESSION_REFERENCES
     ULONG Flags;
     PDEVICE_MAP pDeviceMap;
     LIST_ENTRY TokenList;
+    PVOID FullToken;
+    PVOID LimitedToken;
+    LUID LinkedLogonId;
+    BOOLEAN FullTokenReferenced;
 } SEP_LOGON_SESSION_REFERENCES, *PSEP_LOGON_SESSION_REFERENCES;
 
 typedef struct _SE_AUDIT_PROCESS_CREATION_INFO

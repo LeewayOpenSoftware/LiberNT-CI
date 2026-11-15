@@ -23,6 +23,7 @@
 #include <userenv.h>
 #include <winuser.h>
 #include <aclapi.h>
+#include <strsafe.h>
 
 #define NTOS_MODE_USER
 #include <ndk/rtlfuncs.h>

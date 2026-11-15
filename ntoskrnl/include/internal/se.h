@@ -82,6 +82,11 @@ typedef struct _TOKEN_AUDIT_POLICY_INFORMATION
 #define TOKEN_FILTER_METHOD    0xFUL
 
 //
+// Token flags private to the kernel, above the public TOKEN_* bits
+//
+#define TOKEN_LUA              0x00400000UL
+
+//
 // Security descriptor internal helpers
 //
 FORCEINLINE
@@ -835,6 +840,40 @@ SepRmReferenceLogonSession(
 NTSTATUS
 SepRmDereferenceLogonSession(
     _Inout_ PLUID LogonLuid);
+
+NTSTATUS
+NTAPI
+SepRmLinkLogonSessionTokens(
+    _In_ PTOKEN FullToken,
+    _In_ PTOKEN LimitedToken);
+
+VOID
+NTAPI
+SepRmUnlinkLogonSessionToken(
+    _In_ PTOKEN Token);
+
+NTSTATUS
+NTAPI
+SepRmUnlinkLogonSessionPair(
+    _In_ PTOKEN Token);
+
+BOOLEAN
+NTAPI
+SeTokenOpenAccessAllowed(
+    _In_ PACCESS_TOKEN Token,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+BOOLEAN
+NTAPI
+SepRmLogonSessionHasFullToken(
+    _In_ PTOKEN Token);
+
+NTSTATUS
+NTAPI
+SepRmReferenceLinkedToken(
+    _In_ PTOKEN Token,
+    _Out_ PTOKEN *LinkedToken);
 
 NTSTATUS
 NTAPI

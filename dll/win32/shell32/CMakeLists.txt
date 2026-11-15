@@ -7,6 +7,13 @@ add_subdirectory(shellrecyclebin)
 
 spec2def(shell32.dll shell32.spec ADD_IMPORTLIB)
 
+include_directories(
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl
+    ${CMAKE_CURRENT_BINARY_DIR})
+
+add_rpc_files(client
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/seclogon.idl)
+
 add_definitions(
     -D_SHELL32_
     -D_WINE)
@@ -112,8 +119,10 @@ list(APPEND WINE_SOURCE
 
 list(APPEND PCH_SKIP_SOURCE
     ${WINE_SOURCE}
+    elevate.c
     network_address.c
     vista.c
+    ${CMAKE_CURRENT_BINARY_DIR}/seclogon_c.c
     ${CMAKE_CURRENT_BINARY_DIR}/shell32_stubs.c)
 
 file(GLOB_RECURSE shell32_rc_deps res/*.*)
@@ -182,7 +191,7 @@ if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     target_link_libraries(shell32 evalcmd)
 endif()
 add_delay_importlibs(shell32 powrprof shdocvw devmgr winspool.drv winmm mpr uxtheme ole32 oleaut32 userenv explorerframe version fmifs netapi32 secur32 gdiplus iphlpapi propsys oleacc)
-add_importlibs(shell32 windows.storage advapi32 gdi32 user32 comctl32 comdlg32 shlwapi shcore msvcrt kernel32 ntdll)
+add_importlibs(shell32 windows.storage advapi32 rpcrt4 gdi32 user32 comctl32 comdlg32 shlwapi shcore msvcrt kernel32 ntdll)
 add_dependencies(shell32 stdole2) # shell32_shldisp.tlb needs stdole2.tlb
 add_pch(shell32 precomp.h "${PCH_SKIP_SOURCE}")
 add_cd_file(TARGET shell32 DESTINATION reactos/system32 FOR all)
