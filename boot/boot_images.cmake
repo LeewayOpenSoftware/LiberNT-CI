@@ -892,6 +892,41 @@ if(DEFINED EFI_PLATFORM_ID)
     endif()
 endif()
 
+# Windows cmd.exe caps a command line near 8191 chars. The boot file list can be
+# tens of KB (RPi firmware/overlays and friends), overflowing that limit so the
+# generated batch cannot even launch native-fatten ("The system cannot execute
+# the specified program"). On Windows hosts, hand the list to fatten through its
+# -addfiles list file instead of inline -add arguments. POSIX hosts (large
+# ARG_MAX) keep the inline form, so their validated behaviour is unchanged.
+set(_preinstall_boot_fatten_fileargs ${_preinstall_boot_partition_files})
+if(CMAKE_HOST_WIN32)
+    set(_fatten_boot_list "")
+    list(LENGTH _preinstall_boot_partition_files _fbp_count)
+    set(_fbp_i 0)
+    while(_fbp_i LESS _fbp_count)
+        list(GET _preinstall_boot_partition_files ${_fbp_i} _fbp_flag)
+        if(_fbp_flag STREQUAL "-add")
+            math(EXPR _fbp_src_i "${_fbp_i} + 1")
+            math(EXPR _fbp_dst_i "${_fbp_i} + 2")
+            list(GET _preinstall_boot_partition_files ${_fbp_src_i} _fbp_src)
+            list(GET _preinstall_boot_partition_files ${_fbp_dst_i} _fbp_dst)
+            string(APPEND _fatten_boot_list "${_fbp_dst} = ${_fbp_src}
+")
+            math(EXPR _fbp_i "${_fbp_i} + 3")
+        elseif(_fbp_flag STREQUAL "-mkdir")
+            math(EXPR _fbp_dir_i "${_fbp_i} + 1")
+            list(GET _preinstall_boot_partition_files ${_fbp_dir_i} _fbp_dir)
+            string(APPEND _fatten_boot_list "${_fbp_dir}
+")
+            math(EXPR _fbp_i "${_fbp_i} + 2")
+        else()
+            message(FATAL_ERROR "preinstall boot file list: unexpected token '${_fbp_flag}'")
+        endif()
+    endwhile()
+    set(_preinstall_boot_list_file ${CMAKE_CURRENT_BINARY_DIR}/preinstall.boot.files.lst)
+    file(GENERATE OUTPUT ${_preinstall_boot_list_file} CONTENT "${_fatten_boot_list}")
+    set(_preinstall_boot_fatten_fileargs -addfiles ${_preinstall_boot_list_file})
+endif()
 image_list_command(preinstall _preinstall_list_command)
 add_custom_target(preinstall_partition
     COMMAND ${_preinstall_list_command}
@@ -911,7 +946,7 @@ add_custom_target(preinstall_partition
     COMMAND native-fatten ${_preinstall_boot_partition_file}
         -format ${_preinstall_boot_partition_sectors} ${_preinstall_boot_partition_fs} LIBERNTBOOT
         ${_preinstall_boot_partition_options}
-        ${_preinstall_boot_partition_files}
+        ${_preinstall_boot_fatten_fileargs}
     COMMAND native-ntfsimg
         --format
         ${_preinstall_system_partition_file}
