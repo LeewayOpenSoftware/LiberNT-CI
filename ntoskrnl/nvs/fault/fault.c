@@ -291,13 +291,14 @@ MiMakePageValid(
 
 static
 NTSTATUS
-MiFaultWorker(
+MiFaultResolve(
     _Inout_ PMI_ADDRESS_SPACE Space,
     _In_ ULONG64 VirtualAddress,
     _In_ MI_FAULT_ACCESS Access,
     _In_ BOOLEAN UserMode,
     _In_ BOOLEAN AllowExecutableWrite,
-    _In_ BOOLEAN ConsumeGuard)
+    _In_ BOOLEAN ConsumeGuard,
+    _Inout_ PBOOLEAN CopyCharged)
 {
     PMI_SYSTEM System = Space->System;
     ULONG64 PageVa = VirtualAddress & ~((ULONG64)PAGE_SIZE - 1);
@@ -394,10 +395,26 @@ RetryPage:
 
         Status = MiResolveValidFault(Space, PageVa, Slot, Pte, Access, UserMode,
                                      ManagedWrite, AllowExecutableWrite);
+        if (Status == STATUS_PENDING_COPY && !*CopyCharged)
+        {
+            MiPfnUnlock(&System->Pfn, TableFrame, OldIrql);
+            if (!MiChargeCommit(Space, 1))
+            {
+                MI_RW_RELEASE_SHARED(&Space->Lock);
+                Status = STATUS_COMMITMENT_LIMIT;
+                goto Failed;
+            }
+            *CopyCharged = TRUE;
+            WasValid = FALSE;
+            OldIrql = MiPfnLock(&System->Pfn, TableFrame);
+            goto RetryPage;
+        }
         if (Status == STATUS_PENDING_COPY)
         {
             WasValid = FALSE;
             Status = MiCopyOnWrite(Space, Vad, PageVa, Slot, TableFrame, Pte);
+            if (NT_SUCCESS(Status))
+                *CopyCharged = FALSE;
         }
         goto Complete;
     }
@@ -662,6 +679,25 @@ Failed:
     MI_RW_ACQUIRE_EXCLUSIVE(&Space->Lock);
     MiPtPruneEmpty(Space, PageVa);
     MI_RW_RELEASE_EXCLUSIVE(&Space->Lock);
+    return Status;
+}
+
+static
+NTSTATUS
+MiFaultWorker(
+    _Inout_ PMI_ADDRESS_SPACE Space,
+    _In_ ULONG64 VirtualAddress,
+    _In_ MI_FAULT_ACCESS Access,
+    _In_ BOOLEAN UserMode,
+    _In_ BOOLEAN AllowExecutableWrite,
+    _In_ BOOLEAN ConsumeGuard)
+{
+    BOOLEAN CopyCharged = FALSE;
+    NTSTATUS Status = MiFaultResolve(Space, VirtualAddress, Access, UserMode, AllowExecutableWrite, ConsumeGuard,
+                                     &CopyCharged);
+
+    if (CopyCharged)
+        MiReturnCommit(Space, 1);
     return Status;
 }
 

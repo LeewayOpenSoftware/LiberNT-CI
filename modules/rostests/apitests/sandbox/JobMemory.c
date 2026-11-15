@@ -5,12 +5,15 @@
  */
 
 #include "precomp.h"
+#include <pseh/pseh2.h>
 
 #define CHILD_FIRST_COMMIT_FAILED 0x1
 #define CHILD_OVERCOMMIT_ALLOWED 0x2
 #define CHILD_WRONG_ERROR 0x4
 #define CHILD_RESERVE_FAILED 0x8
 #define CHILD_RELEASE_NOT_REUSABLE 0x10
+#define CHILD_COPY_SETUP_FAILED 0x20
+#define CHILD_COPY_NOT_REFUSED 0x40
 
 #define MB (1024 * 1024)
 
@@ -55,8 +58,61 @@ RunChild(SIZE_T FirstCommit, SIZE_T SecondCommit)
     return Failures;
 }
 
+static DWORD
+RunCopyChild(void)
+{
+    const ULONG Pages = 4096, PageBytes = 4096;
+    DWORD Failures = 0;
+    HANDLE Mapping;
+    volatile UCHAR *View = NULL;
+    PVOID Fill[256];
+    ULONG Filled = 0, Page, Index;
+    BOOL Refused = FALSE;
+
+    Mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, Pages * PageBytes, NULL);
+    if (Mapping)
+        View = MapViewOfFile(Mapping, FILE_MAP_COPY, 0, 0, 0);
+    if (!View)
+    {
+        SbxChildFail(&Failures, CHILD_COPY_SETUP_FAILED, "copy-on-write view", GetLastError());
+        if (Mapping)
+            CloseHandle(Mapping);
+        return Failures;
+    }
+
+    for (Page = 0; Page < Pages; Page++)
+        (void)View[Page * PageBytes];
+
+    while (Filled < ARRAYSIZE(Fill) &&
+           (Fill[Filled] = VirtualAlloc(NULL, MB, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)) != NULL)
+    {
+        Filled++;
+    }
+
+    for (Page = 0; Page < Pages && !Refused; Page++)
+    {
+        _SEH2_TRY
+        {
+            View[Page * PageBytes] = 1;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Refused = TRUE;
+        }
+        _SEH2_END;
+    }
+    if (!Refused)
+        SbxChildFail(&Failures, CHILD_COPY_NOT_REFUSED, "copy-on-write writes above the job limit all succeeded", 0);
+
+    for (Index = 0; Index < Filled; Index++)
+        VirtualFree(Fill[Index], 0, MEM_RELEASE);
+    UnmapViewOfFile((PVOID)View);
+    CloseHandle(Mapping);
+    return Failures;
+}
+
 static void
-RunLimitCase(DWORD LimitFlag, SIZE_T Limit, DWORD ExpectedMessage, PCSTR Tag, BOOL Nested)
+RunLimitCase(DWORD LimitFlag, SIZE_T Limit, DWORD ExpectedMessage, PCSTR Tag, BOOL Nested, PCSTR Mode)
 {
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION Limits;
     JOBOBJECT_ASSOCIATE_COMPLETION_PORT Port;
@@ -110,8 +166,7 @@ RunLimitCase(DWORD LimitFlag, SIZE_T Limit, DWORD ExpectedMessage, PCSTR Tag, BO
                                  (Nested ? 2 : 1) * sizeof(HANDLE), NULL, NULL),
        "%s: JOB_LIST failed %lu\n", Tag, GetLastError());
 
-    ok(SbxSpawnChild("JobMemory", LimitFlag == JOB_OBJECT_LIMIT_PROCESS_MEMORY ? "process" : "job",
-                     NULL, NULL, Attributes, CREATE_NO_WINDOW, &Info),
+    ok(SbxSpawnChild("JobMemory", Mode, NULL, NULL, Attributes, CREATE_NO_WINDOW, &Info),
        "%s: child spawn failed %lu\n", Tag, GetLastError());
     if (Info.hProcess)
     {
@@ -249,11 +304,13 @@ START_TEST(JobMemory)
 
     if (SbxIsChild(Arguments, Count, "process")) ExitProcess(RunChild(32 * MB, 96 * MB));
     if (SbxIsChild(Arguments, Count, "job")) ExitProcess(RunChild(32 * MB, 72 * MB));
+    if (SbxIsChild(Arguments, Count, "copy")) ExitProcess(RunCopyChild());
 
-    RunLimitCase(JOB_OBJECT_LIMIT_PROCESS_MEMORY, 96 * MB, JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT, "process limit", FALSE);
-    RunLimitCase(JOB_OBJECT_LIMIT_JOB_MEMORY, 96 * MB, JOB_OBJECT_MSG_JOB_MEMORY_LIMIT, "job limit", FALSE);
-    RunLimitCase(JOB_OBJECT_LIMIT_PROCESS_MEMORY, 96 * MB, JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT, "nested process limit", TRUE);
-    RunLimitCase(JOB_OBJECT_LIMIT_JOB_MEMORY, 96 * MB, JOB_OBJECT_MSG_JOB_MEMORY_LIMIT, "nested job limit", TRUE);
+    RunLimitCase(JOB_OBJECT_LIMIT_PROCESS_MEMORY, 96 * MB, JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT, "process limit", FALSE, "process");
+    RunLimitCase(JOB_OBJECT_LIMIT_JOB_MEMORY, 96 * MB, JOB_OBJECT_MSG_JOB_MEMORY_LIMIT, "job limit", FALSE, "job");
+    RunLimitCase(JOB_OBJECT_LIMIT_PROCESS_MEMORY, 96 * MB, JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT, "nested process limit", TRUE, "process");
+    RunLimitCase(JOB_OBJECT_LIMIT_JOB_MEMORY, 96 * MB, JOB_OBJECT_MSG_JOB_MEMORY_LIMIT, "nested job limit", TRUE, "job");
+    RunLimitCase(JOB_OBJECT_LIMIT_PROCESS_MEMORY, 96 * MB, JOB_OBJECT_MSG_PROCESS_MEMORY_LIMIT, "copy process limit", FALSE, "copy");
     TestBreakaway(TRUE);
     TestBreakaway(FALSE);
 }
