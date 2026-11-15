@@ -1011,8 +1011,8 @@ KiRecalculateDueTime(IN PLARGE_INTEGER OriginalDueTime,
     if (OriginalDueTime->QuadPart >= 0) return OriginalDueTime;
 
     /* Otherwise, query the interrupt time and recalculate */
-    NewDueTime->QuadPart = KiQueryInterruptTimePrecise(NULL, FALSE);
-    NewDueTime->QuadPart -= DueTime->QuadPart;
+    NewDueTime->QuadPart = (LONGLONG)((ULONGLONG)KiQueryInterruptTimePrecise(NULL, FALSE) -
+                                      (ULONGLONG)DueTime->QuadPart);
     return NewDueTime;
 }
 
@@ -1263,7 +1263,7 @@ KiComputeDueTime(IN PKTIMER Timer,
     InterruptTime.QuadPart = KiQueryInterruptTimePrecise(NULL, FALSE);
 
     /* Recalculate due time */
-    Timer->DueTime.QuadPart = InterruptTime.QuadPart - DueTime.QuadPart;
+    Timer->DueTime.QuadPart = (ULONGLONG)InterruptTime.QuadPart - (ULONGLONG)DueTime.QuadPart;
 
     /* Get the handle */
     *Hand = KiComputeTimerTableIndex(Timer->DueTime.QuadPart);
@@ -1384,7 +1384,7 @@ KxSetTimerForThreadWait(IN PKTIMER Timer,
 
     /* Calculate the due time */
     InterruptTime.QuadPart = KiQueryInterruptTimePrecise(NULL, FALSE);
-    DueTime = InterruptTime.QuadPart - Interval.QuadPart;
+    DueTime = (ULONGLONG)InterruptTime.QuadPart - (ULONGLONG)Interval.QuadPart;
     if ((WaitMode == UserMode) &&
         !((PEPROCESS)KeGetCurrentThread()->ApcState.Process)->SetTimerResolution)
     {
@@ -1435,13 +1435,16 @@ FORCEINLINE
 VOID
 KxActivateWaiterQueue(IN PKTHREAD Thread)
 {
-    PKQUEUE Queue = Thread->Queue;
+    PKQUEUE Queue = KiPinThreadQueue(Thread);
 
     if (Queue)
     {
+        /* The queue counts this thread only while the association lasts */
         KiAcquireDispatcherObject(&Queue->Header);
-        KiActivateWaiterQueue(Queue);
+        if (Thread->Queue == Queue)
+            KiActivateWaiterQueue(Queue);
         KiReleaseDispatcherObject(&Queue->Header);
+        KiUnpinThreadQueue();
     }
 }
 
@@ -1753,107 +1756,6 @@ KxCommitThreadWait(IN PKTHREAD Thread,
                                                                             \
     /* Set the wait time */                                                 \
     Thread->WaitTime = KeTickCount.LowPart;
-
-//
-// Unwaits a Thread
-//
-FORCEINLINE
-VOID
-KxUnwaitThread(IN DISPATCHER_HEADER *Object,
-               IN KPRIORITY Increment)
-{
-    PLIST_ENTRY WaitEntry, WaitList;
-    PKWAIT_BLOCK WaitBlock;
-    PKTHREAD WaitThread;
-    ULONG WaitKey;
-
-    /* Loop the Wait Entries */
-    WaitList = &Object->WaitListHead;
-    ASSERT(IsListEmpty(&Object->WaitListHead) == FALSE);
-    WaitEntry = WaitList->Flink;
-    do
-    {
-        /* Get the current wait block */
-        WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
-
-        if (WaitBlock->WaitType == WaitDpc)
-        {
-            IopSignalWaitCompletionPacket(WaitBlock);
-            WaitEntry = WaitList->Flink;
-            continue;
-        }
-
-        /* Get the waiting thread */
-        WaitThread = WaitBlock->Thread;
-
-        /* Check the current Wait Mode */
-        if (WaitBlock->WaitType == WaitAny)
-        {
-            /* Use the actual wait key */
-            WaitKey = WaitBlock->WaitKey;
-        }
-        else
-        {
-            /* Otherwise, use STATUS_KERNEL_APC */
-            WaitKey = STATUS_KERNEL_APC;
-        }
-
-        /* Unwait the thread */
-        KiUnwaitThread(WaitThread, WaitKey, Increment);
-
-        /* Next entry */
-        WaitEntry = WaitList->Flink;
-    } while (WaitEntry != WaitList);
-}
-
-//
-// Unwaits a Thread waiting on an event
-//
-FORCEINLINE
-VOID
-KxUnwaitThreadForEvent(IN PKEVENT Event,
-                       IN KPRIORITY Increment)
-{
-    PLIST_ENTRY WaitEntry, WaitList;
-    PKWAIT_BLOCK WaitBlock;
-    PKTHREAD WaitThread;
-
-    /* Loop the Wait Entries */
-    WaitList = &Event->Header.WaitListHead;
-    ASSERT(IsListEmpty(&Event->Header.WaitListHead) == FALSE);
-    WaitEntry = WaitList->Flink;
-    do
-    {
-        /* Get the current wait block */
-        WaitBlock = CONTAINING_RECORD(WaitEntry, KWAIT_BLOCK, WaitListEntry);
-
-        if (WaitBlock->WaitType == WaitDpc)
-        {
-            IopSignalWaitCompletionPacket(WaitBlock);
-            break;
-        }
-
-        /* Get the waiting thread */
-        WaitThread = WaitBlock->Thread;
-
-        /* Check the current Wait Mode */
-        if (WaitBlock->WaitType == WaitAny)
-        {
-            /* Un-signal it */
-            Event->Header.SignalState = 0;
-
-            /* Un-signal the event and unwait the thread */
-            KiUnwaitThread(WaitThread, WaitBlock->WaitKey, Increment);
-            break;
-        }
-
-        /* Unwait the thread with STATUS_KERNEL_APC */
-        KiUnwaitThread(WaitThread, STATUS_KERNEL_APC, Increment);
-
-        /* Next entry */
-        WaitEntry = WaitList->Flink;
-    } while (WaitEntry != WaitList);
-}
 
 //
 // Consume a stale placement of the currently running thread. Call with the

@@ -60,9 +60,21 @@ KeWaitForGate(IN PKGATE Gate,
         }
         else
         {
-            /* Check if we have a queue and lock it if so */
-            Queue = Thread->Queue;
-            if (Queue) KiAcquireDispatcherObject(&Queue->Header);
+            /* Check if we have a queue and lock it if so. The queue can be
+             * run down at any time: it is used only while this processor says
+             * so, and only if the association is still there once the queue
+             * is locked. */
+            Queue = KiPinThreadQueue(Thread);
+            if (Queue)
+            {
+                KiAcquireDispatcherObject(&Queue->Header);
+                if (Thread->Queue != Queue)
+                {
+                    KiReleaseDispatcherObject(&Queue->Header);
+                    KiUnpinThreadQueue();
+                    Queue = NULL;
+                }
+            }
 
             /* Lock the thread */
             KiAcquireThreadLock(Thread);
@@ -83,7 +95,11 @@ KeWaitForGate(IN PKGATE Gate,
                 KiReleaseThreadLock(Thread);
 
                 /* Release the queue lock */
-                if (Queue) KiReleaseDispatcherObject(&Queue->Header);
+                if (Queue)
+                {
+                    KiReleaseDispatcherObject(&Queue->Header);
+                    KiUnpinThreadQueue();
+                }
 
                 /* Release the APC lock and return */
                 KiReleaseApcLock(&ApcLock);
@@ -128,6 +144,7 @@ KeWaitForGate(IN PKGATE Gate,
 
                 /* Release the queue lock */
                 KiReleaseDispatcherObject(&Queue->Header);
+                KiUnpinThreadQueue();
             }
 
             /* Release the APC lock but stay at DPC level */
@@ -217,22 +234,25 @@ KeSignalGateBoostPriority(IN PKGATE Gate)
             /* FIXME: Boosting */
 
             /* Check if we have a queue */
-            if (WaitThread->Queue)
             {
-                PKQUEUE WaitQueue = WaitThread->Queue;
+                PKQUEUE WaitQueue = KiPinThreadQueue(WaitThread);
 
-                /* Lock the queue */
-                KiAcquireDispatcherObject(&WaitQueue->Header);
-
-                /* Check if we still have one */
-                if (WaitThread->Queue)
+                if (WaitQueue)
                 {
-                    /* Increment active threads */
-                    KiIncrementQueueCurrentCount(WaitThread->Queue);
-                }
+                    /* Lock the queue */
+                    KiAcquireDispatcherObject(&WaitQueue->Header);
 
-                /* Release lock */
-                KiReleaseDispatcherObject(&WaitQueue->Header);
+                    /* Check if it is still the queue of the thread */
+                    if (WaitThread->Queue == WaitQueue)
+                    {
+                        /* Increment active threads */
+                        KiIncrementQueueCurrentCount(WaitQueue);
+                    }
+
+                    /* Release lock */
+                    KiReleaseDispatcherObject(&WaitQueue->Header);
+                    KiUnpinThreadQueue();
+                }
             }
 
             /* Make the thread ready */

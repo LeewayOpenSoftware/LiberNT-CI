@@ -955,6 +955,14 @@ VOID
 FASTCALL
 KiActivateWaiterQueue(IN PKQUEUE Queue);
 
+PKQUEUE
+FASTCALL
+KiPinThreadQueue(IN PKTHREAD Thread);
+
+VOID
+FASTCALL
+KiUnpinThreadQueue(VOID);
+
 ULONG
 NTAPI
 KeQueryRuntimeProcess(IN PKPROCESS Process,

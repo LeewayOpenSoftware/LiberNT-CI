@@ -139,6 +139,84 @@ KiRundownQueueWaitersLocked(
 /*
  * Called when a thread which has a queue entry is entering a wait state
  */
+/*
+ * A thread holds no reference on the queue it is associated with, and the
+ * owner of a queue may free it as soon as KeRundownQueue returns. Code that
+ * reads the queue of a thread and then locks that queue must therefore not
+ * overlap the rundown. So such code first says which queue
+ * it is about to use, in the entry of its processor below, and the rundown
+ * waits until no entry names its queue.
+ *
+ * The user:   reads the queue of the thread; writes it to the entry; full
+ *             barrier; reads the queue of the thread again. If it changed,
+ *             the entry is cleared and the read is done again. If not, the
+ *             association existed after the entry was visible, so a rundown
+ *             that ends it afterwards will see the entry and wait.
+ * The rundown: ends all associations with the queue locked; releases the
+ *             lock; full barrier; waits while any entry names the queue.
+ *
+ * A user runs at DISPATCH_LEVEL or above from the first read until it clears
+ * the entry, so it stays on its processor, and nothing that runs on that
+ * processor meanwhile uses the entry: one entry for each processor is enough.
+ * It does not wait while the entry is set, so the rundown waits only briefly.
+ */
+static PKQUEUE volatile KiQueueInUse[MAXIMUM_PROCESSORS];
+
+PKQUEUE
+FASTCALL
+KiPinThreadQueue(IN PKTHREAD Thread)
+{
+    PKQUEUE volatile *Entry;
+    PKQUEUE Queue;
+
+    ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
+    Entry = &KiQueueInUse[KeGetCurrentProcessorNumber()];
+    ASSERT(*Entry == NULL);
+
+    for (;;)
+    {
+        Queue = *(PKQUEUE volatile *)&Thread->Queue;
+        if (Queue == NULL)
+            return NULL;
+
+        /* The interlocked exchange is the store and the full barrier */
+        InterlockedExchangePointer((PVOID volatile *)Entry, Queue);
+
+        if (*(PKQUEUE volatile *)&Thread->Queue == Queue)
+            return Queue;
+
+        *Entry = NULL;
+    }
+}
+
+VOID
+FASTCALL
+KiUnpinThreadQueue(VOID)
+{
+    ASSERT(KeGetCurrentIrql() >= DISPATCH_LEVEL);
+
+    /* Everything this processor did to the queue must be visible before the
+     * entry reads as free, because the owner of the queue may free it then.
+     * The exchange makes that sure by itself, whatever was done just before. */
+    InterlockedExchangePointer((PVOID volatile *)&KiQueueInUse[KeGetCurrentProcessorNumber()], NULL);
+}
+
+/* Waits until no processor is still using a queue that was just run down */
+static
+VOID
+KiWaitForQueueUsers(IN PKQUEUE Queue)
+{
+    ULONG i;
+
+    KeMemoryBarrier();
+
+    for (i = 0; i < MAXIMUM_PROCESSORS; i++)
+    {
+        while (KiQueueInUse[i] == Queue)
+            YieldProcessor();
+    }
+}
+
 VOID
 FASTCALL
 KiActivateWaiterQueue(IN PKQUEUE Queue)
@@ -401,10 +479,23 @@ KiRemoveQueueExInternal(
 
     if ((Queue != PreviousQueue) && (PreviousQueue != NULL))
     {
-        KiAcquireDispatcherObject(&PreviousQueue->Header);
-        RemoveEntryList(QueueEntry);
-        KiActivateWaiterQueue(PreviousQueue);
-        KiReleaseDispatcherObject(&PreviousQueue->Header);
+        /* The previous queue can be run down and freed at any time: it is
+         * used only while this processor says so. The rundown also ends the
+         * association, with that queue locked; it is ours to end only if it
+         * is still there once we hold that lock. */
+        PKQUEUE Pinned = KiPinThreadQueue(Thread);
+
+        if (Pinned != NULL)
+        {
+            KiAcquireDispatcherObject(&Pinned->Header);
+            if (Thread->Queue == Pinned)
+            {
+                RemoveEntryList(QueueEntry);
+                KiActivateWaiterQueue(Pinned);
+            }
+            KiReleaseDispatcherObject(&Pinned->Header);
+            KiUnpinThreadQueue();
+        }
     }
 
     Thread->Queue = Queue;
@@ -701,6 +792,10 @@ KeRundownQueue(IN PKQUEUE Queue)
 
     /* Release the queue object */
     KiReleaseDispatcherObject(&Queue->Header);
+
+    /* The caller may free the queue when we return: let the processors that
+     * read it from a thread just before finish with it */
+    KiWaitForQueueUsers(Queue);
 
     /* Exit the dispatcher and return the first entry (if any) */
     KiExitDispatcher(OldIrql);

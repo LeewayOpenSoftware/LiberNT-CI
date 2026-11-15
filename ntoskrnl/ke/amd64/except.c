@@ -158,10 +158,11 @@ KiDispatchExceptionToUser(
     /* Make sure we have a valid SS */
     if (TrapFrame->SegSs != (KGDT64_R3_DATA | RPL_MASK))
     {
-        /* Raise an access violation instead */
+        /* Raise an access violation instead. The record goes whole to the
+         * user stack, so the fields that are not set here are zero. */
+        RtlZeroMemory(&LocalExceptRecord, sizeof(LocalExceptRecord));
         LocalExceptRecord.ExceptionCode = STATUS_ACCESS_VIOLATION;
-        LocalExceptRecord.ExceptionFlags = 0;
-        LocalExceptRecord.NumberParameters = 0;
+        LocalExceptRecord.ExceptionAddress = ExceptionRecord->ExceptionAddress;
         ExceptionRecord = &LocalExceptRecord;
     }
 
@@ -817,14 +818,6 @@ KiGeneralProtectionFaultHandler(
 
     /* Get Instruction Pointer */
     Instructions = (PUCHAR)TrapFrame->Rip;
-
-    /* Check for IRET */
-    if (Instructions[0] == 0x48 && Instructions[1] == 0xCF)
-    {
-        /* Not implemented */
-        UNIMPLEMENTED;
-        ASSERT(FALSE);
-    }
 
     /* Check for RDMSR/WRMSR */
     if ((Instructions[0] == 0xF) &&            // 2-byte opcode

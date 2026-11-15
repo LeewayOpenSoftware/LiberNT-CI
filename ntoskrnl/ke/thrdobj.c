@@ -1754,6 +1754,7 @@ KeTerminateThread(IN KPRIORITY Increment)
     KLOCK_QUEUE_HANDLE LockHandle;
     PKTHREAD Thread = KeGetCurrentThread();
     PKPROCESS Process = Thread->ApcState.Process;
+    PKQUEUE Queue;
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
 
     /* Lock the process */
@@ -1771,13 +1772,21 @@ KeTerminateThread(IN KPRIORITY Increment)
 #endif
 
     /* Check the thread has an associated queue */
-    if (Thread->Queue)
+    Queue = KiPinThreadQueue(Thread);
+    if (Queue)
     {
-        /* Remove it from the list, and handle the queue */
-        KiAcquireDispatcherObject(&Thread->Queue->Header);
-        RemoveEntryList(&Thread->QueueListEntry);
-        KiActivateWaiterQueue(Thread->Queue);
-        KiReleaseDispatcherObject(&Thread->Queue->Header);
+        /* The rundown of the queue ends the association from another
+         * processor, with the queue locked. It is ours to end only if it is
+         * still there once we hold that lock. */
+        KiAcquireDispatcherObject(&Queue->Header);
+        if (Thread->Queue == Queue)
+        {
+            /* Remove it from the list, and handle the queue */
+            RemoveEntryList(&Thread->QueueListEntry);
+            KiActivateWaiterQueue(Queue);
+        }
+        KiReleaseDispatcherObject(&Queue->Header);
+        KiUnpinThreadQueue();
     }
 
     /* Signal the thread */

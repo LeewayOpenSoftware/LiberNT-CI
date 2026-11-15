@@ -107,6 +107,9 @@ KiRaiseException(
     /* Check if we need to probe */
     if (PreviousMode != KernelMode)
     {
+        /* The record copied in is shorter than the local; the rest of the local is defined too */
+        RtlZeroMemory(&LocalExceptionRecord, sizeof(LocalExceptionRecord));
+
         /* Set up SEH */
         _SEH2_TRY
         {

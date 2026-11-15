@@ -155,6 +155,16 @@ FUNC InternalDispatchException
 
     /* Set up EXCEPTION_RECORD */
     lea rcx, [rsp + KEXCEPTION_FRAME_LENGTH]
+
+    /* The record goes whole to the user stack and to a debugger: start from zeroes.
+       rdi was saved above and is restored on the way out. */
+    lea rdi, [rcx + EXCEPTION_RECORD_LENGTH]
+InternalDispatchExceptionZero:
+    sub rdi, 8
+    mov qword ptr [rdi], 0
+    cmp rdi, rcx
+    ja InternalDispatchExceptionZero
+
     mov [rcx + EXCEPTION_RECORD_ExceptionCode], eax
     mov [rcx + EXCEPTION_RECORD_ExceptionFlags], r8d
     xor rax, rax
@@ -166,9 +176,18 @@ FUNC InternalDispatchException
 InternalDispatchExceptionAddress:
     mov [rcx + EXCEPTION_RECORD_ExceptionAddress], rax
     mov [rcx + EXCEPTION_RECORD_NumberParameters], edx
+
+    /* Only the parameters the caller counted are copied; the others stay zero */
+    cmp edx, 1
+    jb InternalDispatchExceptionParametersDone
     mov [rcx + EXCEPTION_RECORD_ExceptionInformation + HEX(00)], r9
+    cmp edx, 2
+    jb InternalDispatchExceptionParametersDone
     mov [rcx + EXCEPTION_RECORD_ExceptionInformation + HEX(08)], r10
+    cmp edx, 3
+    jb InternalDispatchExceptionParametersDone
     mov [rcx + EXCEPTION_RECORD_ExceptionInformation + HEX(10)], r11
+InternalDispatchExceptionParametersDone:
 
     /* Set up KEXCEPTION_FRAME */
     mov rax, [rbp + KTRAP_FRAME_Rbp]
@@ -498,6 +517,35 @@ ENDFUNC
 
 PUBLIC KiGeneralProtectionFault
 FUNC KiGeneralProtectionFault
+    .pushframe code
+    .endprolog
+
+    /* An IRETQ that faults on its way to user mode does so after SWAPGS */
+    test byte ptr [rsp + 8 + MfSegCs], 1
+    jnz KiGeneralProtectionFaultTrap
+    push rax
+    mov rax, [rsp + 16 + MfRip]
+    cmp word ptr [rax], HEX(0CF48)
+    jne KiGpfKernelFault
+    mov rax, [rsp + 16 + MfRsp]
+    test byte ptr [rax + MfSegCs], 1
+    jz KiGpfKernelFault
+    push rcx
+    mov rcx, [rsp + 8]
+    mov [rax - 16], rcx
+    mov rcx, [rsp + 16]
+    mov [rax - 8], rcx
+    pop rcx
+    lea rsp, [rax - 16]
+    pop rax
+    jmp KiUserIretqFault
+
+KiGpfKernelFault:
+    pop rax
+    jmp KiGeneralProtectionFaultTrap
+ENDFUNC
+
+FUNC KiGeneralProtectionFaultTrap
     /* We have an error code */
     EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
 
@@ -529,6 +577,18 @@ DispatchAccessViolation:
 
 KiGpfExit:
     /* Return */
+    ExitTrap (TF_SAVE_ALL OR TF_CHECKUSERAPC)
+ENDFUNC
+
+FUNC KiUserIretqFault
+    EnterTrap (TF_HAS_ERROR_CODE OR TF_SAVE_ALL)
+
+    test dword ptr [rbp + KTRAP_FRAME_EFlags], EFLAGS_IF_MASK
+    jz KiUserIretqFaultDispatch
+    sti
+
+KiUserIretqFaultDispatch:
+    DispatchException STATUS_ACCESS_VIOLATION, 2, 0, -1, 0
     ExitTrap (TF_SAVE_ALL OR TF_CHECKUSERAPC)
 ENDFUNC
 
@@ -1242,6 +1302,11 @@ NoUserApcPending:
     jnz SystemServiceInstrumented
 
 SystemServiceInstrumentationDone:
+    /* SYSRET is used only for a return address inside the user range */
+    mov rdx, rcx
+    shr rdx, 47
+    jnz SystemServiceIretq
+
     /* Load user mode stack (It was copied to the trap frame) */
     mov rsp, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp]
 
@@ -1265,6 +1330,22 @@ SystemServiceInstrumentationDone:
 
     /* return to user mode */
     sysretq
+
+SystemServiceIretq:
+    mov [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip], rcx
+    mov word ptr [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_SegCs], (KGDT64_R3_CODE OR RPL_MASK)
+    mov r8, [rsp + MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rsp]
+    mov r9, rbp
+    add rsp, MAX_SYSCALL_PARAM_SIZE + KTRAP_FRAME_Rip
+    swapgs
+    pxor xmm0, xmm0
+    pxor xmm1, xmm1
+    pxor xmm2, xmm2
+    pxor xmm3, xmm3
+    pxor xmm4, xmm4
+    pxor xmm5, xmm5
+    xor edx, edx
+    iretq
 
 SystemServiceInstrumented:
     mov rdx, [rdx + ThApcState + AsProcess]
@@ -1429,9 +1510,10 @@ FUNC KiZwSystemService
     mov dil, byte ptr [r11 + KTHREAD_PreviousMode]
     mov byte ptr [rbp + KTRAP_FRAME_PreviousMode], dil
 
-    /* Save the old trap frame in TrapFrame.Rdx */
+    /* Link the old trap frame and mark this one as a kernel-mode frame */
     mov rdi, [r11 + KTHREAD_TrapFrame]
-    mov [rbp + KTRAP_FRAME_Rdx], rdi
+    mov [rbp + KTRAP_FRAME_TrapFrame], rdi
+    mov word ptr [rbp + KTRAP_FRAME_SegCs], KGDT64_R0_CODE
 
     /* Set the new trap frame and previous mode */
     mov [r11 + ThTrapFrame], rbp
@@ -1459,7 +1541,7 @@ FUNC KiZwSystemService
 
     /* Restore the old trap frame */
     mov r11, gs:[PcCurrentThread]
-    mov rsi, [rbp + KTRAP_FRAME_Rdx]
+    mov rsi, [rbp + KTRAP_FRAME_TrapFrame]
     mov [r11 + KTHREAD_TrapFrame], rsi
 
     /* Restore PreviousMode from the trap frame */
