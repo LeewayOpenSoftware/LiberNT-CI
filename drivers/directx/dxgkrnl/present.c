@@ -1621,7 +1621,8 @@ DxgkpProgramSharedPrimaryScanout(
     _In_ D3DDDI_FLIPINTERVAL_TYPE FlipInterval,
     _In_opt_ PDXGKRNL_DEVICE Device,
     _In_ ULONG_PTR Window,
-    _In_ ULONG64 CompositorGeneration)
+    _In_ ULONG64 CompositorGeneration,
+    _In_ BOOLEAN RetiredFlip)
 {
     PDXGKARG_SETVIDPNSOURCEADDRESS SetSourceAddress = NULL;
     LARGE_INTEGER PrimaryAddress;
@@ -1629,6 +1630,7 @@ DxgkpProgramSharedPrimaryScanout(
     NTSTATUS Status;
     BOOLEAN KmdTransaction = FALSE;
     BOOLEAN Program;
+    BOOLEAN ProgramSource;
 
     if (Adapter == NULL ||
         Allocation == NULL ||
@@ -1692,6 +1694,16 @@ DxgkpProgramSharedPrimaryScanout(
     if (Status != STATUS_NOT_SUPPORTED || DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL)
         goto Cleanup;
 
+    ProgramSource = !RetiredFlip ||
+                    DxgkPresentCoreRetiredFlipProgramsSource((BOOLEAN)Adapter->FlipCaps.FlipOnVSyncMmIo,
+                                                             (BOOLEAN)Adapter->FlipCaps.FlipImmediateMmIo,
+                                                             Adapter->DriverCapsWddmVersion);
+    if (!ProgramSource)
+    {
+        Status = STATUS_SUCCESS;
+        goto MakeVisible;
+    }
+
     SetSourceAddress = ExAllocatePoolWithTag(NonPagedPool, sizeof(*SetSourceAddress), TAG_DXGK_PRESENT);
     if (SetSourceAddress == NULL)
     {
@@ -1751,6 +1763,7 @@ DxgkpProgramSharedPrimaryScanout(
     DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     DxgkReleaseKmdCall(Adapter);
 
+MakeVisible:
     if (NT_SUCCESS(Status) &&
         DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
     {
@@ -2863,7 +2876,7 @@ DxgkpRefreshSharedPrimaryScanout(
     }
 
     Status = DxgkpProgramSharedPrimaryScanout(Adapter, Allocation, Entry->SharedSurface.VidPnSourceId, Entry->hSource, Entry->PresentId, Entry->FlipInterval,
-                 Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration);
+                 Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration, FALSE);
 
     return Status;
 }
@@ -3581,7 +3594,7 @@ DxgkpExecuteCpuPresent(
         if (Entry->DestinationIsSharedPrimary)
         {
             Status = DxgkpProgramSharedPrimaryScanout(Adapter, DestinationAllocation, Entry->SharedSurface.VidPnSourceId, Entry->hDestination, Entry->PresentId, Entry->FlipInterval,
-                         Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration);
+                         Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration, FALSE);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_WARN("DxgkpExecuteCpuPresent: shared-primary scanout "
