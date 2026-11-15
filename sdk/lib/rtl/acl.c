@@ -13,6 +13,11 @@
 #define NDEBUG
 #include <debug.h>
 
+/* The user-mode headers stop at the mandatory label type */
+#ifndef SYSTEM_PROCESS_TRUST_LABEL_ACE_TYPE
+#define SYSTEM_PROCESS_TRUST_LABEL_ACE_TYPE 0x14
+#endif
+
 /* PRIVATE FUNCTIONS **********************************************************/
 
 BOOLEAN
@@ -917,7 +922,12 @@ RtlValidAcl(IN PACL Acl)
             }
 
             /* Check what kind of ACE this is */
-            if (Ace->AceType <= ACCESS_MAX_MS_V2_ACE_TYPE)
+            if (Ace->AceType <= ACCESS_MAX_MS_V2_ACE_TYPE ||
+                Ace->AceType == ACCESS_ALLOWED_CALLBACK_ACE_TYPE ||
+                Ace->AceType == ACCESS_DENIED_CALLBACK_ACE_TYPE ||
+                Ace->AceType == SYSTEM_AUDIT_CALLBACK_ACE_TYPE ||
+                Ace->AceType == SYSTEM_ALARM_CALLBACK_ACE_TYPE ||
+                (Ace->AceType >= SYSTEM_MANDATORY_LABEL_ACE_TYPE && Ace->AceType <= SYSTEM_PROCESS_TRUST_LABEL_ACE_TYPE))
             {
                 /* Validate the length of this ACE */
                 if (ROUND_DOWN(Ace->AceSize, sizeof(ULONG)) != Ace->AceSize)
@@ -930,6 +940,13 @@ RtlValidAcl(IN PACL Acl)
                 if (Ace->AceSize < sizeof(ACE_HEADER))
                 {
                     DPRINT1("Invalid ACE size: %lx %lx\n", Ace->AceSize, sizeof(ACE_HEADER));
+                    _SEH2_YIELD(return FALSE);
+                }
+
+                /* The ACE must hold at least the header, the mask and a SID header before the SID is read */
+                if (Ace->AceSize < FIELD_OFFSET(KNOWN_ACE, SidStart) + FIELD_OFFSET(SID, SubAuthority))
+                {
+                    DPRINT1("Too small ACE size to hold a SID header: %lx\n", Ace->AceSize);
                     _SEH2_YIELD(return FALSE);
                 }
 
@@ -948,8 +965,8 @@ RtlValidAcl(IN PACL Acl)
                     _SEH2_YIELD(return FALSE);
                 }
 
-                /* The ACE size should at least have enough for the header and SID */
-                if (Ace->AceSize < (sizeof(ACE_HEADER) + RtlLengthSid(Sid)))
+                /* The SID follows the header and the access mask, and must end inside the ACE */
+                if (Ace->AceSize < (FIELD_OFFSET(KNOWN_ACE, SidStart) + RtlLengthSid(Sid)))
                 {
                     DPRINT1("Invalid ACE size\n");
                     _SEH2_YIELD(return FALSE);
@@ -958,7 +975,11 @@ RtlValidAcl(IN PACL Acl)
             else if (Ace->AceType == ACCESS_ALLOWED_OBJECT_ACE_TYPE ||
                      Ace->AceType == ACCESS_DENIED_OBJECT_ACE_TYPE ||
                      Ace->AceType == SYSTEM_AUDIT_OBJECT_ACE_TYPE ||
-                     Ace->AceType == SYSTEM_ALARM_OBJECT_ACE_TYPE)
+                     Ace->AceType == SYSTEM_ALARM_OBJECT_ACE_TYPE ||
+                     Ace->AceType == ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE ||
+                     Ace->AceType == ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE ||
+                     Ace->AceType == SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE ||
+                     Ace->AceType == SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE)
             {
                 /* Object ACEs are supported starting with Revision 4 */
                 if (Acl->AclRevision < ACL_REVISION4)
