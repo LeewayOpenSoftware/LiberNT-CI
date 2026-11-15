@@ -1804,11 +1804,11 @@ int main(int argc, char* argv[])
         }
     }
 
-    printf("Created %s '%s' (%ld bytes virtual disk, %u partition%s)\n",
+    printf("Created %s '%s' (%lld bytes virtual disk, %u partition%s)\n",
            output_format == OUTPUT_FORMAT_VHDX ? "dynamic VHDX image" :
            output_format == OUTPUT_FORMAT_VHD ? "dynamic VHD image" : "disk image",
            output_path,
-           total_size,
+           (long long)total_size,
            partition_count,
            partition_count == 1 ? "" : "s");
     ret = 0;
