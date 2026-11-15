@@ -5259,7 +5259,8 @@ ScmIsSupportedConfigLevel(DWORD dwInfoLevel)
     return dwInfoLevel == SERVICE_CONFIG_DESCRIPTION ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS_FLAG ||
-           dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO;
+           dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO ||
+           dwInfoLevel == SERVICE_CONFIG_SERVICE_SID_INFO;
 }
 
 static DWORD
@@ -5992,6 +5993,32 @@ RQueryServiceConfig2A(
     {
         dwError = ScmQueryFailureActionsFlag(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
     }
+    else if (dwInfoLevel == SERVICE_CONFIG_SERVICE_SID_INFO)
+    {
+        PSERVICE_SID_INFO pSidInfo = (PSERVICE_SID_INFO)lpBuffer;
+        DWORD dwSidType = SERVICE_SID_TYPE_NONE;
+        DWORD dwValueType, dwValueSize = sizeof(dwSidType);
+
+        *pcbBytesNeeded = sizeof(SERVICE_SID_INFO);
+        if (cbBufSize < sizeof(SERVICE_SID_INFO))
+        {
+            dwError = ERROR_INSUFFICIENT_BUFFER;
+            goto done;
+        }
+
+        if (RegQueryValueExW(hServiceKey,
+                             L"ServiceSidType",
+                             NULL,
+                             &dwValueType,
+                             (LPBYTE)&dwSidType,
+                             &dwValueSize) != ERROR_SUCCESS)
+        {
+            dwSidType = SERVICE_SID_TYPE_NONE;
+        }
+
+        pSidInfo->dwServiceSidType = dwSidType;
+        dwError = ERROR_SUCCESS;
+    }
     else if (dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
     {
         dwError = ScmQueryServiceTriggers(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
@@ -6198,6 +6225,32 @@ RQueryServiceConfig2W(
     else if (dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS_FLAG)
     {
         dwError = ScmQueryFailureActionsFlag(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_SERVICE_SID_INFO)
+    {
+        PSERVICE_SID_INFO pSidInfo = (PSERVICE_SID_INFO)lpBuffer;
+        DWORD dwSidType = SERVICE_SID_TYPE_NONE;
+        DWORD dwValueType, dwValueSize = sizeof(dwSidType);
+
+        *pcbBytesNeeded = sizeof(SERVICE_SID_INFO);
+        if (cbBufSize < sizeof(SERVICE_SID_INFO))
+        {
+            dwError = ERROR_INSUFFICIENT_BUFFER;
+            goto done;
+        }
+
+        if (RegQueryValueExW(hServiceKey,
+                             L"ServiceSidType",
+                             NULL,
+                             &dwValueType,
+                             (LPBYTE)&dwSidType,
+                             &dwValueSize) != ERROR_SUCCESS)
+        {
+            dwSidType = SERVICE_SID_TYPE_NONE;
+        }
+
+        pSidInfo->dwServiceSidType = dwSidType;
+        dwError = ERROR_SUCCESS;
     }
     else if (dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
     {

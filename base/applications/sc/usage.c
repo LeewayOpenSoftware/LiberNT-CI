@@ -346,3 +346,11 @@ VOID EnumDependUsage(VOID)
              _T("USAGE:\n")
              _T("        sc <server> EnumDepend <service display name> <bufsize>\n"));
 }
+
+VOID QSidTypeUsage(VOID)
+{
+    _tprintf(_T("DESCRIPTION:\n")
+             _T("        Queries the service security identifier (SID) type of a service.\n")
+             _T("USAGE:\n")
+             _T("        sc <server> qsidtype [service name]\n"));
+}

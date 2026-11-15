@@ -310,6 +310,13 @@ ScControl(LPCTSTR Server,       // remote machine name
         else
             QueryTriggerInfoUsage();
     }
+    else if (!lstrcmpi(Command, _T("qsidtype")))
+    {
+        if (ArgCount > 0)
+            QuerySidType(*ServiceArgs);
+        else
+            QSidTypeUsage();
+    }
     else if (!lstrcmpi(Command, _T("GetDisplayName")))
     {
         if (ArgCount > 0)

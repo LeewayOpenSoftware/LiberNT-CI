@@ -104,5 +104,8 @@ VOID SetTriggerInfoUsage(VOID);
 VOID GetDisplayNameUsage(VOID);
 VOID GetKeyNameUsage(VOID);
 VOID EnumDependUsage(VOID);
+BOOL QuerySidType(LPCTSTR ServiceName);
+VOID QSidTypeUsage(VOID);
 
 #endif /* _SC_PCH_ */
+

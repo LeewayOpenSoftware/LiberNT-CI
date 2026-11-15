@@ -2563,6 +2563,7 @@ QueryServiceConfig2A(SC_HANDLE hService,
     SERVICE_DESCRIPTIONA ServiceDescription;
     SERVICE_FAILURE_ACTIONSA ServiceFailureActions;
     SERVICE_FAILURE_ACTIONS_FLAG FailureActionsFlag;
+    SERVICE_SID_INFO ServiceSidInfo;
     SERVICE_TRIGGER_INFO TriggerInfo;
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
@@ -2600,6 +2601,15 @@ QueryServiceConfig2A(SC_HANDLE hService,
             {
                 lpTempBuffer = (LPBYTE)&FailureActionsFlag;
                 dwBufferSize = sizeof(SERVICE_FAILURE_ACTIONS_FLAG);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_SERVICE_SID_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_SID_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&ServiceSidInfo;
+                dwBufferSize = sizeof(SERVICE_SID_INFO);
                 bUseTempBuffer = TRUE;
             }
             break;
@@ -2704,6 +2714,7 @@ QueryServiceConfig2W(SC_HANDLE hService,
     SERVICE_DESCRIPTIONW ServiceDescription;
     SERVICE_FAILURE_ACTIONSW ServiceFailureActions;
     SERVICE_FAILURE_ACTIONS_FLAG FailureActionsFlag;
+    SERVICE_SID_INFO ServiceSidInfo;
     SERVICE_TRIGGER_INFO TriggerInfo;
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
@@ -2741,6 +2752,15 @@ QueryServiceConfig2W(SC_HANDLE hService,
             {
                 lpTempBuffer = (LPBYTE)&FailureActionsFlag;
                 dwBufferSize = sizeof(SERVICE_FAILURE_ACTIONS_FLAG);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_SERVICE_SID_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_SID_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&ServiceSidInfo;
+                dwBufferSize = sizeof(SERVICE_SID_INFO);
                 bUseTempBuffer = TRUE;
             }
             break;
