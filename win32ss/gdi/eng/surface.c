@@ -170,7 +170,7 @@ SURFACE_AllocSurface(
     if (pvBits && cjWidth)
     {
         /* Align the width (Windows compatibility, drivers expect that) */
-        cjWidth = WIDTH_BYTES_ALIGN32((cjWidth << 3) / cBitsPixel, cBitsPixel);
+        cjWidth = WIDTH_BYTES_ALIGN32(((ULONGLONG)cjWidth << 3) / cBitsPixel, cBitsPixel);
     }
     else
     {

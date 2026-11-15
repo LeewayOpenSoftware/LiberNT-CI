@@ -450,6 +450,12 @@ NtGdiTransformPoints(
         return FALSE;
     }
 
+    if ((ULONG)Count > MAXULONG / sizeof(POINT))
+    {
+        EngSetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
     pdc = DC_LockDc(hDC);
     if (!pdc)
     {

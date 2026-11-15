@@ -624,7 +624,7 @@ NtGdiSetDIBitsToDeviceInternal(
     LONGLONG llHeight, llSrcY;
     LONG lHeight, lBandHeight;
 
-    if (!Bits) return 0;
+    if (!Bits || !cjMaxBits || !cjMaxInfo) return 0;
 
     pbmiSafe = ExAllocatePoolWithTag(PagedPool, cjMaxInfo, 'pmTG');
     if (!pbmiSafe) return 0;
@@ -1351,7 +1351,12 @@ GreGetDIBitsInternal(
             ScanLines = 0;
         else
         {
-            RtlCopyMemory(Bits, pDIBits, DIB_GetDIBImageBytes (width, ScanLines, bpp));
+            /* Never copy more than the caller's buffer holds */
+            ULONGLONG cjImage = (ULONGLONG)WIDTH_BYTES_ALIGN32(width, bpp) * (ULONGLONG)ScanLines;
+            if (cjImage > MaxBits)
+                ScanLines = 0;
+            else
+                RtlCopyMemory(Bits, pDIBits, (SIZE_T)cjImage);
         }
         /* Update if line count has changed */
         if (newLines != -1)
@@ -2002,6 +2007,7 @@ NtGdiCreateDIBitmapInternal(
 {
     NTSTATUS Status = STATUS_SUCCESS;
     PBYTE safeBits = NULL;
+    PBITMAPINFO safeInfo = NULL;
     HBITMAP hbmResult = NULL;
 
     if (pjInit == NULL)
@@ -2021,9 +2027,34 @@ NtGdiCreateDIBitmapInternal(
         }
     }
 
+    if (pbmi)
+    {
+        /* The header is read below and by the palette code, so capture the
+         * full structure. */
+        if (cjMaxInitInfo == 0)
+        {
+            ExFreePoolWithTag(safeBits, TAG_DIB);
+            return NULL;
+        }
+        cjMaxInitInfo = min(cjMaxInitInfo, sizeof(BITMAPV5HEADER) + 256 * sizeof(RGBQUAD));
+        safeInfo = ExAllocatePoolWithTag(PagedPool, sizeof(BITMAPV5HEADER) + 256 * sizeof(RGBQUAD), TAG_DIB);
+        if (!safeInfo)
+        {
+            DPRINT1("Failed to allocate the bitmap info\n");
+            ExFreePoolWithTag(safeBits, TAG_DIB);
+            EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return NULL;
+        }
+        RtlZeroMemory(safeInfo, sizeof(BITMAPV5HEADER) + 256 * sizeof(RGBQUAD));
+    }
+
     _SEH2_TRY
     {
-        if(pbmi) ProbeForRead(pbmi, cjMaxInitInfo, 1);
+        if(pbmi)
+        {
+            ProbeForRead(pbmi, cjMaxInitInfo, 1);
+            RtlCopyMemory(safeInfo, pbmi, cjMaxInitInfo);
+        }
         if(pjInit && (fInit & CBM_INIT))
         {
             ProbeForRead(pjInit, cjMaxBits, 1);
@@ -2048,7 +2079,7 @@ NtGdiCreateDIBitmapInternal(
                                            cy,
                                            fInit,
                                            safeBits,
-                                           pbmi,
+                                           safeInfo,
                                            iUsage,
                                            fl,
                                            cjMaxBits,
@@ -2056,6 +2087,7 @@ NtGdiCreateDIBitmapInternal(
 
 cleanup:
     if (safeBits) ExFreePoolWithTag(safeBits, TAG_DIB);
+    if (safeInfo) ExFreePoolWithTag(safeInfo, TAG_DIB);
     return hbmResult;
 }
 
@@ -2205,6 +2237,10 @@ GreCreateDIBitmapFromPackedDIB(
     return hbm;
 }
 
+/* Largest header NtGdiCreateDIBSection takes: any header size in use, the
+   three masks and a full colour table fit many times over */
+#define DIBSECTION_MAX_HEADER 0x10000
+
 HBITMAP
 APIENTRY
 NtGdiCreateDIBSection(
@@ -2223,73 +2259,112 @@ NtGdiCreateDIBSection(
     BOOL bTemporaryDC = FALSE;
     UINT cjExpected, cjMax = 0;
     ULONG ulError = EngGetLastError();
+    PBITMAPINFO pbmiSafe;
+    PVOID pvBits = NULL;
+    DWORD biSize;
 
     if (!bmi) return hbitmap; // Make sure.
 
-    if (!Bits)
+    /* The header and the place for the address of the bits are the caller's
+     * memory. The header is read once into a kernel copy that everything
+     * below works on. */
+    _SEH2_TRY
     {
-        /* Header-size validation precedes output-pointer validation. */
-        if (!MmIsAddressValid(bmi))
-            return NULL;
+        ProbeForRead(bmi, sizeof(DWORD), 1);
+        biSize = bmi->bmiHeader.biSize;
     }
-
-    if (!MmIsAddressValid(bmi) ||
-        !MmIsAddressValid((PBYTE)bmi + sizeof(DWORD) - 1))
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
     {
-        EngSetLastError(ERROR_INVALID_PARAMETER);
+        _SEH2_YIELD(goto BadParameter);
+    }
+    _SEH2_END;
+
+    if ((biSize < sizeof(BITMAPINFOHEADER)) ||
+        (biSize & (sizeof(DWORD) - 1)) ||
+        (cjHeader < biSize) ||
+        (cjHeader > DIBSECTION_MAX_HEADER))
+    {
         return NULL;
     }
 
-    if ((bmi->bmiHeader.biSize < sizeof(BITMAPINFOHEADER)) ||
-        (bmi->bmiHeader.biSize & (sizeof(DWORD) - 1)) ||
-        !MmIsAddressValid((PBYTE)bmi + bmi->bmiHeader.biSize - 1))
+    pbmiSafe = ExAllocatePoolWithTag(PagedPool, cjHeader, 'pmTG');
+    if (!pbmiSafe)
     {
+        EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
         return NULL;
     }
 
-    cjExpected = bmi->bmiHeader.biSize;
-    if (bmi->bmiHeader.biBitCount <= 8)
+    _SEH2_TRY
     {
-        UINT cColors = bmi->bmiHeader.biClrUsed;
+        ProbeForRead(bmi, cjHeader, 1);
+        RtlCopyMemory(pbmiSafe, bmi, cjHeader);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ExFreePoolWithTag(pbmiSafe, 'pmTG');
+        _SEH2_YIELD(goto BadParameter);
+    }
+    _SEH2_END;
+
+    /* The size checked above is the size used below */
+    pbmiSafe->bmiHeader.biSize = biSize;
+
+    cjExpected = biSize;
+    if (pbmiSafe->bmiHeader.biBitCount <= 8)
+    {
+        UINT cColors = pbmiSafe->bmiHeader.biClrUsed;
         if (!cColors)
-            cColors = 1U << bmi->bmiHeader.biBitCount;
+            cColors = 1U << pbmiSafe->bmiHeader.biBitCount;
         cjExpected += min(cColors, 256U) *
                       ((Usage == DIB_PAL_COLORS) ? sizeof(WORD) : sizeof(RGBQUAD));
     }
     else
     {
-        if ((bmi->bmiHeader.biCompression == BI_BITFIELDS) &&
-            (bmi->bmiHeader.biSize < sizeof(BITMAPV4HEADER)))
+        if ((pbmiSafe->bmiHeader.biCompression == BI_BITFIELDS) &&
+            (biSize < sizeof(BITMAPV4HEADER)))
         {
             cjExpected += 3 * sizeof(DWORD);
         }
-        cjMax = cjExpected + min(bmi->bmiHeader.biClrUsed, 256U) * sizeof(RGBQUAD);
+        cjMax = cjExpected + min(pbmiSafe->bmiHeader.biClrUsed, 256U) * sizeof(RGBQUAD);
     }
 
     if (cjMax < cjExpected)
         cjMax = cjExpected;
 
-    if ((cjHeader < cjExpected) || (cjHeader > cjMax) ||
-        !MmIsAddressValid((PBYTE)bmi + cjHeader - 1))
+    if ((cjHeader < cjExpected) || (cjHeader > cjMax))
     {
+        ExFreePoolWithTag(pbmiSafe, 'pmTG');
         return NULL;
     }
 
     if (Usage > 2)
     {
-        EngSetLastError(ERROR_INVALID_PARAMETER);
-        return NULL;
+        ExFreePoolWithTag(pbmiSafe, 'pmTG');
+        goto BadParameter;
     }
 
     if (Usage == DIB_PAL_INDICES)
-        return NULL;
-
-    if (!Bits || !MmIsAddressValid(Bits) ||
-        !MmIsAddressValid((PBYTE)Bits + sizeof(*Bits) - 1))
     {
-        EngSetLastError(ERROR_INVALID_PARAMETER);
+        ExFreePoolWithTag(pbmiSafe, 'pmTG');
         return NULL;
     }
+
+    if (!Bits)
+    {
+        ExFreePoolWithTag(pbmiSafe, 'pmTG');
+        goto BadParameter;
+    }
+
+    _SEH2_TRY
+    {
+        ProbeForWrite(Bits, sizeof(*Bits), 1);
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ExFreePoolWithTag(pbmiSafe, 'pmTG');
+        _SEH2_YIELD(goto BadParameter);
+    }
+    _SEH2_END;
 
     dc = DC_LockDc(hDC);
     if (!dc)
@@ -2302,13 +2377,32 @@ NtGdiCreateDIBSection(
     if (dc)
     {
         hbitmap = DIB_CreateDIBSection(dc,
-                                       bmi,
+                                       pbmiSafe,
                                        Usage,
-                                       Bits,
+                                       &pvBits,
                                        hSection,
                                        dwOffset,
                                        0);
         DC_UnlockDc(dc);
+    }
+
+    ExFreePoolWithTag(pbmiSafe, 'pmTG');
+
+    /* Tell the caller where the bits are. A bitmap whose address cannot be
+     * given back is of no use to the caller and is not kept. */
+    if (hbitmap)
+    {
+        _SEH2_TRY
+        {
+            *Bits = pvBits;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            GreDeleteObject(hbitmap);
+            hbitmap = NULL;
+            EngSetLastError(ERROR_INVALID_PARAMETER);
+        }
+        _SEH2_END;
     }
 
     if (bTemporaryDC && hDC)
@@ -2318,6 +2412,10 @@ NtGdiCreateDIBSection(
         EngSetLastError(ulError);
 
     return hbitmap;
+
+BadParameter:
+    EngSetLastError(ERROR_INVALID_PARAMETER);
+    return NULL;
 }
 
 HBITMAP

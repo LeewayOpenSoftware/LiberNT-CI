@@ -108,7 +108,19 @@ SURFACE_ShareLockByPointer(PSURFACE psurf)
 extern UCHAR gajBitsPerFormat[];
 #define BitsPerFormat(Format) gajBitsPerFormat[Format]
 
-#define WIDTH_BYTES_ALIGN32(cx, bpp) ((((cx) * (bpp) + 31) & ~31) >> 3)
+/* Scan-line width in bytes: a width that does not fit a ULONG saturates, so
+ * callers' size checks reject the surface. */
+FORCEINLINE
+ULONG
+WIDTH_BYTES_ALIGN32(ULONGLONG cx, ULONG bpp)
+{
+    ULONGLONG Bytes;
+
+    Bytes = ((cx * bpp) + 31) & ~(ULONGLONG)31;
+    if ((Bytes >> 3) > MAXULONG) return MAXULONG;
+    return (ULONG)(Bytes >> 3);
+}
+
 #define WIDTH_BYTES_ALIGN16(cx, bpp) ((((cx) * (bpp) + 15) & ~15) >> 3)
 
 ULONG
