@@ -174,7 +174,8 @@ AlpcpReplyToMessage(
             (Message->PortMessage.ClientId.UniqueProcess == Header->ClientId.UniqueProcess) &&
             (Message->PortMessage.ClientId.UniqueThread == Header->ClientId.UniqueThread))
         {
-            if (!Message->WaitingThread && !Message->SenderProcess && AlpcpReclaimCanceledMessage(Message))
+            if (!Message->WaitingThread && !Message->SenderProcess &&
+                !(Message->State & ALPC_MSG_STATE_ACCEPT_IN_PROGRESS) && AlpcpReclaimCanceledMessage(Message))
             {
                 AlpcpFreeMessage(Message);
             }
@@ -345,6 +346,7 @@ AlpcpQueueNewMessage(
     BOOLEAN CallbackRequest;
     BOOLEAN LegacySpecialMessage = FALSE;
     USHORT LegacyType = Header->u2.s2.Type & ~LPC_KERNELMODE_MESSAGE;
+    USHORT KernelModeType = (PreviousMode == KernelMode) ? LPC_KERNELMODE_MESSAGE : 0;
 
     CallbackRequest = Synchronous && Header->MessageId;
 
@@ -380,13 +382,15 @@ AlpcpQueueNewMessage(
     }
     else if ((Flags & ALPC_MSGFLG_REPLY_MESSAGE) && !Header->MessageId)
     {
-        MessageType = LPC_DATAGRAM | (Header->u2.s2.Type & (LPC_NO_IMPERSONATE | LPC_KERNELMODE_MESSAGE));
+        MessageType = LPC_DATAGRAM | (Header->u2.s2.Type & LPC_NO_IMPERSONATE) | KernelModeType;
     }
     else
     {
-        MessageType = LPC_REQUEST | LPC_CONTINUATION_REQUIRED | (Header->u2.s2.Type & (LPC_NO_IMPERSONATE | LPC_KERNELMODE_MESSAGE));
+        MessageType = LPC_REQUEST | LPC_CONTINUATION_REQUIRED | (Header->u2.s2.Type & LPC_NO_IMPERSONATE) | KernelModeType;
         AsyncRequest = !Synchronous;
     }
+
+    ASSERT(PreviousMode == KernelMode || !(MessageType & LPC_KERNELMODE_MESSAGE));
 
     if (Capacity < (USHORT)Header->u1.s1.TotalLength) Capacity = (USHORT)Header->u1.s1.TotalLength;
     Message = AlpcpAllocateMessage(Capacity, Port);
