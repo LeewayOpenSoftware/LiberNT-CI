@@ -12,7 +12,10 @@
  * - Save current settings as a new user theme
  *
  * Implementation: sdk/lib/leewaydisplay/theme_backend.c
- * .theme file format: INI with [Control Panel\Desktop], [Control Panel\Appearance], [Control Panel\Sounds], [Screen Saver]
+ * .theme file format (Windows): INI with [Theme] DisplayName, [Control Panel\Desktop] Wallpaper/
+ * WallpaperStyle/TileWallpaper/ScreenSaveTimeOut/ScreenSaveActive, [Control Panel\Colors] ActiveTitle,
+ * [Sounds] SchemeName, [boot] SCRNSAVE.EXE. Paths may use environment variables (%SystemRoot%).
+ * An older [Screen Saver] section is still read, never written.
  */
 
 #pragma once
@@ -67,8 +70,8 @@ void WINAPI LThemeListFree(LTHEME_LIST *list);
 
 /*
  * Create a thumbnail HBITMAP for a theme:
- * - Loads wallpaper from path, scales to fit 180x135 canvas
- * - Overlays a small color swatch (40x40) in bottom-right corner
+ * - Loads the wallpaper with GDI+ (BMP, JPEG, PNG, GIF, TIFF) and covers the 200x150 canvas
+ * - Overlays a framed window color swatch (40x40) in the bottom-right corner
  * - Returns HBITMAP 200x150 (caller must DeleteObject when done)
  * - If wallpaper cannot be loaded, returns a placeholder with color swatch only
  * Used internally by LThemeEnumerate, but also exposed for custom theme creation
@@ -78,9 +81,10 @@ HBITMAP WINAPI LThemeCreateThumbnail(const WCHAR *wallpaper_path, COLORREF windo
 /*
  * Apply a theme to the system:
  * - Sets wallpaper via LWallSet()
- * - Sets window color via SPI_SETDESKCOLOR (or through theme INI [Control Panel\Colors])
- * - Applies sounds scheme (via .msstyles or registry [Control Panel\Sounds])
- * - Sets screensaver via LSaverSet()
+ * - Sets the window color (COLOR_ACTIVECAPTION, stored in HKCU\Control Panel\Colors ActiveTitle)
+ * - Makes the sound scheme current as the Sounds control panel does (HKCU\AppEvents\Schemes and
+ *   each event's .Current value); SoundsScheme is a scheme key (".Default") or display name
+ * - Sets the screensaver via LSaverSet(); a theme without one turns the screen saver off
  * Returns S_OK on success, or HRESULT error (partial failure returns the first error)
  * All changes are immediate; use LDispApplyLayout/LDispCommitLayout for display changes
  */
@@ -89,19 +93,20 @@ HRESULT WINAPI LThemeApply(const LTHEME_ITEM *theme);
 /*
  * Get the current system settings as an "Unsaved Theme":
  * - Reads current wallpaper via LWallGetCurrent()
- * - Reads current window color (SPI_GETDESKCOLOR or Colors scheme)
- * - Reads current sounds scheme
+ * - Reads current window color (COLOR_ACTIVECAPTION)
+ * - Reads current sounds scheme key (HKCU\AppEvents\Schemes)
  * - Reads current screensaver via LSaverGet()
  * - Generates a thumbnail from current wallpaper + color
  * - Returns LTHEME_ITEM with Name="Unsaved Theme", ThemePath empty
- * Caller must free thumbnail and any allocated strings via LocalFree() when done
+ * Caller must DeleteObject() the thumbnail when done
  */
 HRESULT WINAPI LThemeGetUnsaved(LTHEME_ITEM *out);
 
 /*
  * Save the current system settings as a new user .theme file:
  * - Queries current wallpaper, window color, sounds, screensaver
- * - Writes %APPDATA%\Microsoft\Windows\Themes\<name>.theme in INI format
+ * - Writes %APPDATA%\Microsoft\Windows\Themes\<name>.theme in the Windows format above
+ * - theme_name must be a valid file name (no path separators or reserved characters)
  * - Returns the full path to the saved theme in out_path
  * - On success, you can load this theme again via LThemeEnumerate()
  */

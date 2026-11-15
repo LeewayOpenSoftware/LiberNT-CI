@@ -7,388 +7,360 @@
 
 #include <leewayui/display_backend.h>
 #include <leewayui/theme_backend.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
-#include <shlwapi.h>
-
-#pragma comment(lib, "shlwapi.lib")
-#pragma comment(lib, "gdi32.lib")
-#pragma comment(lib, "user32.lib")
+#include <wchar.h>
+#include <objbase.h>
+#include <gdiplus.h>
+#include <strsafe.h>
 
 static const WCHAR UnsavedThemeName[] = L"Unsaved Theme";
+static const WCHAR DesktopSection[] = L"Control Panel\\Desktop";
+static const WCHAR ColorsSection[] = L"Control Panel\\Colors";
+static const WCHAR SoundsSection[] = L"Sounds";
+static const WCHAR BootSection[] = L"boot";
+/* Read for tolerance only: earlier LiberNT theme files used it */
+static const WCHAR LegacySaverSection[] = L"Screen Saver";
+static const WCHAR SchemesKey[] = L"AppEvents\\Schemes";
 
-/* Read an INI string value from a .theme file */
+#define THEME_DEFAULT_COLOR RGB(0, 102, 204)
+#define THEME_DEFAULT_TIMEOUT 600
+
+/* .theme reading **********************************************************/
+
 static BOOL
 ReadThemeString(const WCHAR *theme_path, const WCHAR *section, const WCHAR *key,
                 WCHAR *out_value, DWORD out_cch)
 {
-    return GetPrivateProfileStringW(section, key, L"", out_value, out_cch, theme_path) > 0;
+    out_value[0] = L'\0';
+    GetPrivateProfileStringW(section, key, L"", out_value, out_cch, theme_path);
+    return out_value[0] != L'\0';
 }
 
-/* Get the display name from a .theme file */
+/* Read a path value and expand %SystemRoot% and the like */
 static BOOL
-GetThemeDisplayName(const WCHAR *theme_path, WCHAR *out_name, DWORD out_cch)
+ReadThemePath(const WCHAR *theme_path, const WCHAR *section, const WCHAR *key,
+              WCHAR *out_path, DWORD out_cch)
 {
-    WCHAR name[128];
-    if (!ReadThemeString(theme_path, L"Theme", L"DisplayName", name, ARRAYSIZE(name)))
+    WCHAR raw[MAX_PATH];
+    DWORD len;
+
+    out_path[0] = L'\0';
+    if (!ReadThemeString(theme_path, section, key, raw, ARRAYSIZE(raw)))
         return FALSE;
-    lstrcpynW(out_name, name, out_cch);
+
+    len = ExpandEnvironmentStringsW(raw, out_path, out_cch);
+    if (len == 0 || len > out_cch)
+    {
+        out_path[0] = L'\0';
+        return FALSE;
+    }
     return TRUE;
 }
 
-/* Get wallpaper path from .theme file */
 static BOOL
-GetThemeWallpaper(const WCHAR *theme_path, WCHAR *out_path, DWORD out_cch, LWALL_STYLE *out_style)
+ReadThemeUInt(const WCHAR *theme_path, const WCHAR *section, const WCHAR *key, UINT *out_value)
 {
-    WCHAR wallpaper[MAX_PATH];
-    WCHAR style_str[16];
-    WCHAR tile_str[16];
+    WCHAR value[16];
 
-    if (!ReadThemeString(theme_path, L"Control Panel\\Desktop", L"Wallpaper",
-                         wallpaper, ARRAYSIZE(wallpaper)))
+    if (!ReadThemeString(theme_path, section, key, value, ARRAYSIZE(value)))
         return FALSE;
+    *out_value = (UINT)wcstoul(value, NULL, 10);
+    return TRUE;
+}
 
-    if (wcslen(wallpaper) == 0)
-        return FALSE;
+static void
+ReadThemeWallpaper(const WCHAR *theme_path, LTHEME_ITEM *item)
+{
+    UINT style = 2, tile = 0;
 
-    lstrcpynW(out_path, wallpaper, out_cch);
-
-    ReadThemeString(theme_path, L"Control Panel\\Desktop", L"WallpaperStyle", style_str, ARRAYSIZE(style_str));
-    ReadThemeString(theme_path, L"Control Panel\\Desktop", L"TileWallpaper", tile_str, ARRAYSIZE(tile_str));
-
-    int style = 0;
-    int tile = 0;
-    if (wcslen(style_str) > 0) style = _wtoi(style_str);
-    if (wcslen(tile_str) > 0) tile = _wtoi(tile_str);
+    ReadThemePath(theme_path, DesktopSection, L"Wallpaper", item->Wallpaper, ARRAYSIZE(item->Wallpaper));
+    ReadThemeUInt(theme_path, DesktopSection, L"WallpaperStyle", &style);
+    ReadThemeUInt(theme_path, DesktopSection, L"TileWallpaper", &tile);
 
     if (tile)
-        *out_style = LWALL_TILE;
+        item->WallpaperStyle = LWALL_TILE;
     else if (style == 10)
-        *out_style = LWALL_FILL;
+        item->WallpaperStyle = LWALL_FILL;
     else if (style == 6)
-        *out_style = LWALL_FIT;
+        item->WallpaperStyle = LWALL_FIT;
     else if (style == 2)
-        *out_style = LWALL_STRETCH;
+        item->WallpaperStyle = LWALL_STRETCH;
     else
-        *out_style = LWALL_CENTER;
+        item->WallpaperStyle = LWALL_CENTER;
+}
 
+static BOOL
+ParseColor(const WCHAR *text, COLORREF *out_color)
+{
+    unsigned int r, g, b;
+
+    if (swscanf(text, L"%u %u %u", &r, &g, &b) != 3 || r > 255 || g > 255 || b > 255)
+        return FALSE;
+    *out_color = RGB(r, g, b);
     return TRUE;
 }
 
-/* Get window color from theme */
-static BOOL
-GetThemeWindowColor(const WCHAR *theme_path, COLORREF *out_color)
+static void
+ReadThemeWindowColor(const WCHAR *theme_path, LTHEME_ITEM *item)
 {
-    WCHAR color_str[32];
-    if (ReadThemeString(theme_path, L"Control Panel\\Desktop", L"ActiveTitle", color_str, ARRAYSIZE(color_str)))
+    WCHAR value[32];
+
+    item->WindowColor = THEME_DEFAULT_COLOR;
+    if (ReadThemeString(theme_path, ColorsSection, L"ActiveTitle", value, ARRAYSIZE(value)))
+        ParseColor(value, &item->WindowColor);
+}
+
+static void
+ReadThemeScreensaver(const WCHAR *theme_path, LTHEME_ITEM *item)
+{
+    UINT timeout = THEME_DEFAULT_TIMEOUT, active = 0;
+
+    /* Windows form: [boot] SCRNSAVE.EXE, the timing in [Control Panel\Desktop] */
+    if (!ReadThemePath(theme_path, BootSection, L"SCRNSAVE.EXE", item->Screensaver, ARRAYSIZE(item->Screensaver)))
+        ReadThemePath(theme_path, LegacySaverSection, L"SCRNSAVE.EXE", item->Screensaver, ARRAYSIZE(item->Screensaver));
+
+    if (!ReadThemeUInt(theme_path, DesktopSection, L"ScreenSaveTimeOut", &timeout))
+        ReadThemeUInt(theme_path, LegacySaverSection, L"ScreenSaveTimeOut", &timeout);
+    if (!ReadThemeUInt(theme_path, DesktopSection, L"ScreenSaveActive", &active))
+        ReadThemeUInt(theme_path, LegacySaverSection, L"ScreenSaveActive", &active);
+
+    item->ScreensaverTimeout = timeout;
+    item->ScreensaverActive = (item->Screensaver[0] != L'\0') && (active != 0);
+}
+
+/* Fill a theme item from a .theme file; the thumbnail is made by the caller */
+static void
+ReadThemeFile(const WCHAR *theme_path, const WCHAR *file_name, LTHEME_ITEM *item)
+{
+    WCHAR *dot;
+
+    ZeroMemory(item, sizeof(*item));
+    StringCchCopyW(item->ThemePath, ARRAYSIZE(item->ThemePath), theme_path);
+
+    if (!ReadThemeString(theme_path, L"Theme", L"DisplayName", item->Name, ARRAYSIZE(item->Name)))
     {
-        if (wcslen(color_str) > 0)
-        {
-            int r, g, b;
-            if (swscanf(color_str, L"%d %d %d", &r, &g, &b) == 3)
-            {
-                *out_color = RGB(r, g, b);
-                return TRUE;
-            }
-        }
+        StringCchCopyW(item->Name, ARRAYSIZE(item->Name), file_name);
+        dot = wcsrchr(item->Name, L'.');
+        if (dot)
+            *dot = L'\0';
     }
 
-    *out_color = RGB(0, 102, 204);
-    return TRUE;
+    ReadThemeWallpaper(theme_path, item);
+    ReadThemeWindowColor(theme_path, item);
+    ReadThemeString(theme_path, SoundsSection, L"SchemeName", item->SoundsScheme, ARRAYSIZE(item->SoundsScheme));
+    ReadThemeScreensaver(theme_path, item);
 }
 
-/* Get screensaver from theme */
-static BOOL
-GetThemeScreensaver(const WCHAR *theme_path, WCHAR *out_path, DWORD out_cch, UINT *out_timeout, BOOL *out_active)
+/* Thumbnail **************************************************************/
+
+/* Draw the image so that it covers the rectangle, cropping what overhangs */
+static void
+DrawImageCover(GpGraphics *graphics, GpImage *image, INT x, INT y, INT width, INT height)
 {
-    WCHAR saver_path[MAX_PATH];
-    WCHAR timeout_str[16];
-    WCHAR active_str[16];
+    UINT image_width = 0, image_height = 0;
+    INT src_x = 0, src_y = 0, src_w, src_h;
 
-    if (!ReadThemeString(theme_path, L"Screen Saver", L"SCRNSAVE.EXE", saver_path, ARRAYSIZE(saver_path)))
-        return FALSE;
+    if (GdipGetImageWidth(image, &image_width) != Ok || GdipGetImageHeight(image, &image_height) != Ok ||
+        image_width == 0 || image_height == 0)
+    {
+        return;
+    }
 
-    if (wcslen(saver_path) == 0)
-        return FALSE;
-
-    lstrcpynW(out_path, saver_path, out_cch);
-
-    if (ReadThemeString(theme_path, L"Screen Saver", L"ScreenSaveTimeOut", timeout_str, ARRAYSIZE(timeout_str)))
-        *out_timeout = _wtoi(timeout_str);
+    src_w = (INT)image_width;
+    src_h = (INT)image_height;
+    if ((ULONGLONG)image_width * height > (ULONGLONG)image_height * width)
+    {
+        src_w = (INT)(((ULONGLONG)image_height * width) / height);
+        src_x = ((INT)image_width - src_w) / 2;
+    }
     else
-        *out_timeout = 600;
+    {
+        src_h = (INT)(((ULONGLONG)image_width * height) / width);
+        src_y = ((INT)image_height - src_h) / 2;
+    }
 
-    if (ReadThemeString(theme_path, L"Screen Saver", L"ScreenSaveActive", active_str, ARRAYSIZE(active_str)))
-        *out_active = (_wtoi(active_str) != 0);
-    else
-        *out_active = FALSE;
-
-    return TRUE;
+    GdipSetInterpolationMode(graphics, InterpolationModeHighQualityBicubic);
+    GdipDrawImageRectRectI(graphics, image, x, y, width, height, src_x, src_y, src_w, src_h,
+                           UnitPixel, NULL, NULL, NULL);
 }
 
-/* Create thumbnail: wallpaper preview (180x135) + color swatch (40x40) */
+/* Wallpaper preview (any format GDI+ decodes: BMP, JPEG, PNG, GIF, TIFF) + window color swatch */
 HBITMAP WINAPI
 LThemeCreateThumbnail(const WCHAR *wallpaper_path, COLORREF window_color)
 {
-    const int THUMB_WIDTH = 200;
-    const int THUMB_HEIGHT = 150;
-    const int WALL_WIDTH = 180;
-    const int WALL_HEIGHT = 135;
-    const int SWATCH_SIZE = 40;
+    enum { THUMB_WIDTH = 200, THUMB_HEIGHT = 150, SWATCH_SIZE = 40, SWATCH_MARGIN = 8 };
+    BITMAPINFO bmi;
+    PVOID bits = NULL;
+    HBITMAP hbm, old_bm;
+    HDC hdc_mem;
+    HBRUSH brush;
+    RECT rc;
 
-    HDC hdc = GetDC(NULL);
-    if (!hdc) return NULL;
+    ZeroMemory(&bmi, sizeof(bmi));
+    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
+    bmi.bmiHeader.biWidth = THUMB_WIDTH;
+    bmi.bmiHeader.biHeight = -THUMB_HEIGHT;
+    bmi.bmiHeader.biPlanes = 1;
+    bmi.bmiHeader.biBitCount = 32;
+    bmi.bmiHeader.biCompression = BI_RGB;
 
-    HDC hdc_mem = CreateCompatibleDC(hdc);
+    hdc_mem = CreateCompatibleDC(NULL);
     if (!hdc_mem)
-    {
-        ReleaseDC(NULL, hdc);
         return NULL;
-    }
 
-    HBITMAP hbm = CreateCompatibleBitmap(hdc, THUMB_WIDTH, THUMB_HEIGHT);
+    hbm = CreateDIBSection(hdc_mem, &bmi, DIB_RGB_COLORS, &bits, NULL, 0);
     if (!hbm)
     {
         DeleteDC(hdc_mem);
-        ReleaseDC(NULL, hdc);
         return NULL;
     }
+    old_bm = (HBITMAP)SelectObject(hdc_mem, hbm);
 
-    HBITMAP old_bm = (HBITMAP)SelectObject(hdc_mem, hbm);
-
-    HBRUSH white_brush = CreateSolidBrush(RGB(255, 255, 255));
-    RECT rc_bg = {0, 0, THUMB_WIDTH, THUMB_HEIGHT};
-    FillRect(hdc_mem, &rc_bg, white_brush);
-    DeleteObject(white_brush);
-
-    if (wallpaper_path && wcslen(wallpaper_path) > 0)
+    /* Placeholder when there is no picture: a neutral desktop */
+    SetRect(&rc, 0, 0, THUMB_WIDTH, THUMB_HEIGHT);
+    brush = CreateSolidBrush(RGB(58, 110, 165));
+    if (brush)
     {
-        HBITMAP hbm_wall = (HBITMAP)LoadImageW(NULL, wallpaper_path, IMAGE_BITMAP, 0, 0,
-                                               LR_LOADFROMFILE | LR_CREATEDIBSECTION);
-        if (hbm_wall)
+        FillRect(hdc_mem, &rc, brush);
+        DeleteObject(brush);
+    }
+
+    if (wallpaper_path && wallpaper_path[0])
+    {
+        struct GdiplusStartupInput input;
+        ULONG_PTR token = 0;
+
+        ZeroMemory(&input, sizeof(input));
+        input.GdiplusVersion = 1;
+        if (GdiplusStartup(&token, &input, NULL) == Ok)
         {
-            BITMAP bmp_orig;
-            if (GetObjectW(hbm_wall, sizeof(bmp_orig), &bmp_orig))
+            GpImage *image = NULL;
+            GpGraphics *graphics = NULL;
+
+            if (GdipLoadImageFromFile(wallpaper_path, &image) == Ok &&
+                GdipCreateFromHDC(hdc_mem, &graphics) == Ok)
             {
-                float aspect = (float)bmp_orig.bmWidth / bmp_orig.bmHeight;
-                int scaled_w = WALL_WIDTH;
-                int scaled_h = (int)(WALL_WIDTH / aspect);
-
-                if (scaled_h > WALL_HEIGHT)
-                {
-                    scaled_h = WALL_HEIGHT;
-                    scaled_w = (int)(WALL_HEIGHT * aspect);
-                }
-
-                HDC hdc_wall = CreateCompatibleDC(hdc_mem);
-                HBITMAP old_wall = (HBITMAP)SelectObject(hdc_wall, hbm_wall);
-
-                HDC hdc_scaled = CreateCompatibleDC(hdc_mem);
-                HBITMAP hbm_scaled = CreateCompatibleBitmap(hdc_mem, scaled_w, scaled_h);
-                HBITMAP old_scaled = (HBITMAP)SelectObject(hdc_scaled, hbm_scaled);
-
-                StretchBlt(hdc_scaled, 0, 0, scaled_w, scaled_h,
-                          hdc_wall, 0, 0, bmp_orig.bmWidth, bmp_orig.bmHeight, SRCCOPY);
-
-                int x_offset = (WALL_WIDTH - scaled_w) / 2;
-                int y_offset = (WALL_HEIGHT - scaled_h) / 2;
-
-                BitBlt(hdc_mem, x_offset, y_offset, scaled_w, scaled_h,
-                       hdc_scaled, 0, 0, SRCCOPY);
-
-                SelectObject(hdc_scaled, old_scaled);
-                SelectObject(hdc_wall, old_wall);
-                DeleteDC(hdc_scaled);
-                DeleteDC(hdc_wall);
-                DeleteObject(hbm_scaled);
+                DrawImageCover(graphics, image, 0, 0, THUMB_WIDTH, THUMB_HEIGHT);
             }
-            DeleteObject(hbm_wall);
+            if (graphics)
+                GdipDeleteGraphics(graphics);
+            if (image)
+                GdipDisposeImage(image);
+            GdiplusShutdown(token);
         }
     }
 
-    HBRUSH color_brush = CreateSolidBrush(window_color);
-    RECT rc_swatch = {THUMB_WIDTH - SWATCH_SIZE, THUMB_HEIGHT - SWATCH_SIZE,
-                      THUMB_WIDTH, THUMB_HEIGHT};
-    FillRect(hdc_mem, &rc_swatch, color_brush);
-    DeleteObject(color_brush);
-
-    SelectObject(hdc_mem, old_bm);
-    DeleteDC(hdc_mem);
-    ReleaseDC(NULL, hdc);
-
-    return hbm;
-}
-
-    HBITMAP hbm = CreateCompatibleBitmap(hdc, THUMB_WIDTH, THUMB_HEIGHT);
-    if (!hbm)
+    /* Window color swatch, framed so it stays visible on any picture */
+    SetRect(&rc, THUMB_WIDTH - SWATCH_SIZE - SWATCH_MARGIN, THUMB_HEIGHT - SWATCH_SIZE - SWATCH_MARGIN,
+            THUMB_WIDTH - SWATCH_MARGIN, THUMB_HEIGHT - SWATCH_MARGIN);
+    brush = CreateSolidBrush(RGB(255, 255, 255));
+    if (brush)
     {
-        DeleteDC(hdc_mem);
-        ReleaseDC(NULL, hdc);
-        return NULL;
+        FillRect(hdc_mem, &rc, brush);
+        DeleteObject(brush);
+    }
+    InflateRect(&rc, -2, -2);
+    brush = CreateSolidBrush(window_color);
+    if (brush)
+    {
+        FillRect(hdc_mem, &rc, brush);
+        DeleteObject(brush);
     }
 
-    HBITMAP old_bm = (HBITMAP)SelectObject(hdc_mem, hbm);
-
-    HBRUSH white_brush = CreateSolidBrush(RGB(255, 255, 255));
-    RECT rc_bg = {0, 0, THUMB_WIDTH, THUMB_HEIGHT};
-    FillRect(hdc_mem, &rc_bg, white_brush);
-    DeleteObject(white_brush);
-
-    HBRUSH wall_brush = CreateSolidBrush(RGB(192, 192, 192));
-    RECT rc_wall = {0, 0, WALL_WIDTH, WALL_HEIGHT};
-    FillRect(hdc_mem, &rc_wall, wall_brush);
-    DeleteObject(wall_brush);
-
-    HBRUSH color_brush = CreateSolidBrush(window_color);
-    RECT rc_swatch = {THUMB_WIDTH - SWATCH_SIZE, THUMB_HEIGHT - SWATCH_SIZE,
-                      THUMB_WIDTH, THUMB_HEIGHT};
-    FillRect(hdc_mem, &rc_swatch, color_brush);
-    DeleteObject(color_brush);
-
+    GdiFlush();
     SelectObject(hdc_mem, old_bm);
     DeleteDC(hdc_mem);
-    ReleaseDC(NULL, hdc);
-
     return hbm;
 }
 
-/* Helper to expand environment variables */
+/* Enumeration ************************************************************/
+
 static BOOL
 ExpandThemePath(const WCHAR *template_path, WCHAR *out_expanded, DWORD out_cch)
 {
     DWORD expanded = ExpandEnvironmentStringsW(template_path, out_expanded, out_cch);
-    return expanded > 0 && expanded <= out_cch;
+    return expanded > 0 && expanded <= out_cch && !wcschr(out_expanded, L'%');
 }
 
-/* Scan a directory for *.theme files and add to list */
 static UINT
-ScanThemesInDirectory(const WCHAR *dir_path, LTHEME_ITEM *items, UINT max_items, UINT start_idx)
+ScanThemesInDirectory(const WCHAR *dir_path, LTHEME_LIST *list)
 {
     WIN32_FIND_DATAW find_data;
     HANDLE find_handle;
     WCHAR pattern[MAX_PATH];
-    UINT count = start_idx;
+    WCHAR theme_path[MAX_PATH];
 
-    if (!dir_path || wcslen(dir_path) == 0)
-        return count;
+    if (!dir_path || !dir_path[0])
+        return list->count;
 
-    lstrcpyW(pattern, dir_path);
-    if (pattern[wcslen(pattern) - 1] != L'\\')
-        lstrcatW(pattern, L"\\");
-    lstrcatW(pattern, L"*.theme");
+    if (FAILED(StringCchPrintfW(pattern, ARRAYSIZE(pattern), L"%s\\*.theme", dir_path)))
+        return list->count;
 
     find_handle = FindFirstFileW(pattern, &find_data);
     if (find_handle == INVALID_HANDLE_VALUE)
-        return count;
+        return list->count;
 
     do
     {
-        WCHAR theme_path[MAX_PATH];
-        WCHAR theme_name[128];
+        LTHEME_ITEM *item;
 
-        if (count >= max_items)
+        if (list->count >= list->capacity)
             break;
-
         if (find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
             continue;
+        if (FAILED(StringCchPrintfW(theme_path, ARRAYSIZE(theme_path), L"%s\\%s", dir_path, find_data.cFileName)))
+            continue;
 
-        lstrcpyW(theme_path, dir_path);
-        if (theme_path[wcslen(theme_path) - 1] != L'\\')
-            lstrcatW(theme_path, L"\\");
-        lstrcatW(theme_path, find_data.cFileName);
-
-        if (!GetThemeDisplayName(theme_path, theme_name, ARRAYSIZE(theme_name)))
-        {
-            lstrcpyW(theme_name, find_data.cFileName);
-            WCHAR *dot = wcsrchr(theme_name, L'.');
-            if (dot) *dot = L'\0';
-        }
-
-        LTHEME_ITEM *item = &items[count];
-        lstrcpyW(item->Name, theme_name);
-        lstrcpyW(item->ThemePath, theme_path);
-        ZeroMemory(&item->Wallpaper, sizeof(item->Wallpaper));
-        ZeroMemory(&item->Screensaver, sizeof(item->Screensaver));
-        item->ScreensaverTimeout = 600;
-        item->ScreensaverActive = FALSE;
-        item->WindowColor = RGB(0, 102, 204);
-
-        WCHAR wallpaper_path[MAX_PATH];
-        if (GetThemeWallpaper(theme_path, wallpaper_path, MAX_PATH, &item->WallpaperStyle))
-        {
-            lstrcpyW(item->Wallpaper, wallpaper_path);
-        }
-
-        GetThemeWindowColor(theme_path, &item->WindowColor);
-
-        UINT timeout;
-        BOOL active;
-        if (GetThemeScreensaver(theme_path, item->Screensaver, MAX_PATH, &timeout, &active))
-        {
-            item->ScreensaverTimeout = timeout;
-            item->ScreensaverActive = active;
-        }
-
+        item = &list->items[list->count];
+        ReadThemeFile(theme_path, find_data.cFileName, item);
         item->Thumbnail = LThemeCreateThumbnail(item->Wallpaper, item->WindowColor);
-
-        count++;
-
+        list->count++;
     } while (FindNextFileW(find_handle, &find_data));
 
     FindClose(find_handle);
-    return count;
+    return list->count;
 }
 
-/* Enumerate themes from both system and user directories */
 HRESULT WINAPI
 LThemeEnumerate(LTHEME_LIST *out)
 {
-    if (!out)
-        return E_INVALIDARG;
-
-    out->items = (LTHEME_ITEM *)malloc(LTHEME_MAX_ITEMS * sizeof(LTHEME_ITEM));
-    if (!out->items)
-        return E_OUTOFMEMORY;
-
-    out->capacity = LTHEME_MAX_ITEMS;
-    out->count = 0;
-
-    LTHEME_ITEM *unsaved = &out->items[0];
-    if (SUCCEEDED(LThemeGetUnsaved(unsaved)))
-    {
-        out->count++;
-    }
-
     WCHAR system_themes_dir[MAX_PATH];
     WCHAR user_themes_dir[MAX_PATH];
 
-    if (!ExpandThemePath(L"%WINDIR%\\Resources\\Themes", system_themes_dir, MAX_PATH))
-        lstrcpyW(system_themes_dir, L"C:\\Windows\\Resources\\Themes");
+    if (!out)
+        return E_INVALIDARG;
 
-    if (!ExpandThemePath(L"%APPDATA%\\Microsoft\\Windows\\Themes", user_themes_dir, MAX_PATH))
-        lstrcpyW(user_themes_dir, L"");
+    out->count = 0;
+    out->capacity = 0;
+    out->items = (LTHEME_ITEM *)calloc(LTHEME_MAX_ITEMS, sizeof(LTHEME_ITEM));
+    if (!out->items)
+        return E_OUTOFMEMORY;
+    out->capacity = LTHEME_MAX_ITEMS;
 
-    UINT count = ScanThemesInDirectory(system_themes_dir, out->items, out->capacity, out->count);
-    out->count = count;
+    if (SUCCEEDED(LThemeGetUnsaved(&out->items[0])))
+        out->count++;
 
-    if (user_themes_dir[0] != L'\0' && lstrcmpiW(user_themes_dir, system_themes_dir) != 0)
-    {
-        count = ScanThemesInDirectory(user_themes_dir, out->items, out->capacity, out->count);
-        out->count = count;
-    }
+    if (!ExpandThemePath(L"%SystemRoot%\\Resources\\Themes", system_themes_dir, ARRAYSIZE(system_themes_dir)))
+        system_themes_dir[0] = L'\0';
+    if (!ExpandThemePath(L"%APPDATA%\\Microsoft\\Windows\\Themes", user_themes_dir, ARRAYSIZE(user_themes_dir)))
+        user_themes_dir[0] = L'\0';
+
+    ScanThemesInDirectory(system_themes_dir, out);
+    if (user_themes_dir[0] && lstrcmpiW(user_themes_dir, system_themes_dir) != 0)
+        ScanThemesInDirectory(user_themes_dir, out);
 
     return S_OK;
 }
 
-/* Free theme list */
 void WINAPI
 LThemeListFree(LTHEME_LIST *list)
 {
+    UINT i;
+
     if (!list || !list->items)
         return;
 
-    for (UINT i = 0; i < list->count; i++)
+    for (i = 0; i < list->count; i++)
     {
         if (list->items[i].Thumbnail)
             DeleteObject(list->items[i].Thumbnail);
@@ -400,125 +372,347 @@ LThemeListFree(LTHEME_LIST *list)
     list->capacity = 0;
 }
 
-/* Get current system settings as "Unsaved Theme" */
+/* Sound schemes **********************************************************/
+
+/* The key name of the current scheme (HKCU\AppEvents\Schemes default value), e.g. ".Default" */
+static void
+GetCurrentSoundScheme(WCHAR *out_name, DWORD out_cch)
+{
+    DWORD size = out_cch * sizeof(WCHAR);
+    DWORD type;
+    HKEY key;
+
+    out_name[0] = L'\0';
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, SchemesKey, 0, KEY_QUERY_VALUE, &key) != ERROR_SUCCESS)
+        return;
+    if (RegQueryValueExW(key, NULL, NULL, &type, (BYTE *)out_name, &size) != ERROR_SUCCESS ||
+        type != REG_SZ)
+    {
+        out_name[0] = L'\0';
+    }
+    out_name[out_cch - 1] = L'\0';
+    RegCloseKey(key);
+}
+
+/* A theme names a scheme by its key (".Default") or by its display name: find the key */
+static BOOL
+FindSoundSchemeKey(const WCHAR *scheme, WCHAR *out_key, DWORD out_cch)
+{
+    WCHAR name[128], display[256];
+    DWORD index, name_cch, size, type;
+    HKEY names, sub;
+    BOOL found = FALSE;
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"AppEvents\\Schemes\\Names", 0, KEY_READ, &names) != ERROR_SUCCESS)
+        return FALSE;
+
+    for (index = 0; !found; index++)
+    {
+        name_cch = ARRAYSIZE(name);
+        if (RegEnumKeyExW(names, index, name, &name_cch, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+
+        if (!lstrcmpiW(name, scheme))
+        {
+            found = TRUE;
+        }
+        else if (RegOpenKeyExW(names, name, 0, KEY_QUERY_VALUE, &sub) == ERROR_SUCCESS)
+        {
+            size = sizeof(display) - sizeof(WCHAR);
+            ZeroMemory(display, sizeof(display));
+            if (RegQueryValueExW(sub, NULL, NULL, &type, (BYTE *)display, &size) == ERROR_SUCCESS &&
+                type == REG_SZ && !lstrcmpiW(display, scheme))
+            {
+                found = TRUE;
+            }
+            RegCloseKey(sub);
+        }
+
+        if (found)
+            StringCchCopyW(out_key, out_cch, name);
+    }
+
+    RegCloseKey(names);
+    return found;
+}
+
+/* Make a scheme current, as the Sounds control panel does: record its name and copy each
+ * event's sound of that scheme into the event's .Current value */
+static BOOL
+ApplySoundScheme(const WCHAR *scheme)
+{
+    WCHAR scheme_key[128], app[128], event[128], subkey[MAX_PATH], sound[MAX_PATH];
+    DWORD app_index, event_index, cch, size, type;
+    HKEY schemes, apps, app_key, event_key, source, current;
+
+    if (!FindSoundSchemeKey(scheme, scheme_key, ARRAYSIZE(scheme_key)))
+        return FALSE;
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, SchemesKey, 0, KEY_SET_VALUE, &schemes) != ERROR_SUCCESS)
+        return FALSE;
+    RegSetValueExW(schemes, NULL, 0, REG_SZ, (const BYTE *)scheme_key,
+                   (lstrlenW(scheme_key) + 1) * sizeof(WCHAR));
+    RegCloseKey(schemes);
+
+    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"AppEvents\\Schemes\\Apps", 0, KEY_READ, &apps) != ERROR_SUCCESS)
+        return TRUE;
+
+    for (app_index = 0; ; app_index++)
+    {
+        cch = ARRAYSIZE(app);
+        if (RegEnumKeyExW(apps, app_index, app, &cch, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        if (RegOpenKeyExW(apps, app, 0, KEY_READ, &app_key) != ERROR_SUCCESS)
+            continue;
+
+        for (event_index = 0; ; event_index++)
+        {
+            cch = ARRAYSIZE(event);
+            if (RegEnumKeyExW(app_key, event_index, event, &cch, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+                break;
+            if (RegOpenKeyExW(app_key, event, 0, KEY_READ, &event_key) != ERROR_SUCCESS)
+                continue;
+
+            /* An event the scheme does not name keeps no sound */
+            sound[0] = L'\0';
+            type = REG_SZ;
+            if (RegOpenKeyExW(event_key, scheme_key, 0, KEY_QUERY_VALUE, &source) == ERROR_SUCCESS)
+            {
+                size = sizeof(sound) - sizeof(WCHAR);
+                if (RegQueryValueExW(source, NULL, NULL, &type, (BYTE *)sound, &size) != ERROR_SUCCESS ||
+                    (type != REG_SZ && type != REG_EXPAND_SZ))
+                {
+                    sound[0] = L'\0';
+                    type = REG_SZ;
+                }
+                sound[ARRAYSIZE(sound) - 1] = L'\0';
+                RegCloseKey(source);
+            }
+
+            if (SUCCEEDED(StringCchPrintfW(subkey, ARRAYSIZE(subkey), L"%s\\.Current", event)) &&
+                RegCreateKeyExW(app_key, subkey, 0, NULL, 0, KEY_SET_VALUE, NULL, &current, NULL) == ERROR_SUCCESS)
+            {
+                RegSetValueExW(current, NULL, 0, type, (const BYTE *)sound, (lstrlenW(sound) + 1) * sizeof(WCHAR));
+                RegCloseKey(current);
+            }
+            RegCloseKey(event_key);
+        }
+        RegCloseKey(app_key);
+    }
+
+    RegCloseKey(apps);
+    return TRUE;
+}
+
+/* Current settings and apply *********************************************/
+
 HRESULT WINAPI
 LThemeGetUnsaved(LTHEME_ITEM *out)
 {
+    WCHAR saver[MAX_PATH];
+    UINT timeout = THEME_DEFAULT_TIMEOUT;
+    BOOL active = FALSE;
+
     if (!out)
         return E_INVALIDARG;
 
     ZeroMemory(out, sizeof(*out));
-    lstrcpyW(out->Name, UnsavedThemeName);
-    out->ThemePath[0] = L'\0';
+    StringCchCopyW(out->Name, ARRAYSIZE(out->Name), UnsavedThemeName);
 
-    BOOL ok = LWallGetCurrent(out->Wallpaper, MAX_PATH, &out->WallpaperStyle);
-    if (!ok)
-        return HRESULT_FROM_WIN32(GetLastError());
+    /* No wallpaper is a valid current setting, not a failure */
+    if (!LWallGetCurrent(out->Wallpaper, ARRAYSIZE(out->Wallpaper), &out->WallpaperStyle))
+    {
+        out->Wallpaper[0] = L'\0';
+        out->WallpaperStyle = LWALL_CENTER;
+    }
 
-    out->WindowColor = RGB(0, 102, 204);
+    out->WindowColor = GetSysColor(COLOR_ACTIVECAPTION);
+    GetCurrentSoundScheme(out->SoundsScheme, ARRAYSIZE(out->SoundsScheme));
+
+    if (LSaverGet(saver, ARRAYSIZE(saver), &timeout, &active))
+    {
+        StringCchCopyW(out->Screensaver, ARRAYSIZE(out->Screensaver), saver);
+        out->ScreensaverTimeout = timeout;
+        out->ScreensaverActive = active;
+    }
+    else
+    {
+        out->ScreensaverTimeout = THEME_DEFAULT_TIMEOUT;
+    }
+
     out->Thumbnail = LThemeCreateThumbnail(out->Wallpaper, out->WindowColor);
-
     return S_OK;
 }
 
-/* Apply a theme */
 HRESULT WINAPI
 LThemeApply(const LTHEME_ITEM *theme)
 {
+    HRESULT hr = S_OK;
+    WCHAR color_str[32];
+    INT element = COLOR_ACTIVECAPTION;
+    COLORREF color;
+    HKEY key;
+
     if (!theme)
         return E_INVALIDARG;
 
-    if (wcslen(theme->Wallpaper) > 0)
-    {
-        if (!LWallSet(theme->Wallpaper, theme->WallpaperStyle))
-            return HRESULT_FROM_WIN32(GetLastError());
-    }
+    if (theme->Wallpaper[0] && !LWallSet(theme->Wallpaper, theme->WallpaperStyle))
+        hr = HRESULT_FROM_WIN32(GetLastError());
 
-    /* Apply window color */
+    /* Window color: the live system color and the stored one */
+    color = theme->WindowColor;
+    if (SetSysColors(1, &element, &color))
     {
-        WCHAR color_str[32];
-        int r = GetRValue(theme->WindowColor);
-        int g = GetGValue(theme->WindowColor);
-        int b = GetBValue(theme->WindowColor);
-        swprintf(color_str, ARRAYSIZE(color_str), L"%d %d %d", r, g, b);
-
-        HKEY key;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Control Panel\Colors", 0, KEY_WRITE, &key) == ERROR_SUCCESS)
+        StringCchPrintfW(color_str, ARRAYSIZE(color_str), L"%u %u %u",
+                         GetRValue(color), GetGValue(color), GetBValue(color));
+        if (RegCreateKeyExW(HKEY_CURRENT_USER, ColorsSection, 0, NULL, 0, KEY_SET_VALUE, NULL, &key, NULL) == ERROR_SUCCESS)
         {
-            RegSetValueExW(key, L"ActiveTitle", 0, REG_SZ, (PBYTE)color_str, (wcslen(color_str) + 1) * sizeof(WCHAR));
-            RegCloseKey(key);
-        }
-
-        int colors[1] = {theme->WindowColor};
-        int elements[1] = {COLOR_ACTIVECAPTION};
-        SetSysColors(1, elements, colors);
-    }
-
-    /* Apply sound scheme */
-    if (wcslen(theme->SoundsScheme) > 0)
-    {
-        HKEY key;
-        if (RegOpenKeyExW(HKEY_CURRENT_USER, L"AppEvents\Schemes", 0, KEY_WRITE, &key) == ERROR_SUCCESS)
-        {
-            RegSetValueExW(key, NULL, 0, REG_SZ, (PBYTE)theme->SoundsScheme, (wcslen(theme->SoundsScheme) + 1) * sizeof(WCHAR));
+            RegSetValueExW(key, L"ActiveTitle", 0, REG_SZ, (const BYTE *)color_str,
+                           (lstrlenW(color_str) + 1) * sizeof(WCHAR));
             RegCloseKey(key);
         }
     }
-
-
-    if (wcslen(theme->Screensaver) > 0)
+    else if (SUCCEEDED(hr))
     {
-        if (!LSaverSet(theme->Screensaver, theme->ScreensaverTimeout, theme->ScreensaverActive))
-            return HRESULT_FROM_WIN32(GetLastError());
+        hr = HRESULT_FROM_WIN32(GetLastError());
     }
 
-    return S_OK;
+    if (theme->SoundsScheme[0] && !ApplySoundScheme(theme->SoundsScheme) && SUCCEEDED(hr))
+        hr = HRESULT_FROM_WIN32(ERROR_NOT_FOUND);
+
+    /* A theme without a screen saver turns it off, as on Windows */
+    if (!LSaverSet(theme->Screensaver[0] ? theme->Screensaver : NULL,
+                   theme->ScreensaverTimeout ? theme->ScreensaverTimeout : THEME_DEFAULT_TIMEOUT,
+                   theme->Screensaver[0] ? theme->ScreensaverActive : FALSE) &&
+        SUCCEEDED(hr))
+    {
+        hr = HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    return hr;
 }
 
-/* Save current system settings as a new theme file */
+/* Saving *****************************************************************/
+
+static BOOL
+WriteThemeString(const WCHAR *theme_path, const WCHAR *section, const WCHAR *key, const WCHAR *value)
+{
+    return WritePrivateProfileStringW(section, key, value ? value : L"", theme_path);
+}
+
+static const WCHAR *
+WallpaperStyleValue(LWALL_STYLE style)
+{
+    switch (style)
+    {
+        case LWALL_FILL:    return L"10";
+        case LWALL_FIT:     return L"6";
+        case LWALL_STRETCH: return L"2";
+        default:            return L"0";
+    }
+}
+
+/* Create a directory and the missing directories above it */
+static BOOL
+CreateDirectoryPath(const WCHAR *path)
+{
+    WCHAR partial[MAX_PATH];
+    WCHAR *p;
+
+    if (FAILED(StringCchCopyW(partial, ARRAYSIZE(partial), path)))
+        return FALSE;
+
+    /* Skip the drive, or the server and share of a UNC path */
+    p = partial;
+    if (p[0] == L'\\' && p[1] == L'\\')
+    {
+        p = wcschr(p + 2, L'\\');
+        if (p)
+            p = wcschr(p + 1, L'\\');
+    }
+    else
+    {
+        p = wcschr(p, L'\\');
+    }
+
+    while (p)
+    {
+        *p = L'\0';
+        if (partial[0] && !CreateDirectoryW(partial, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+            return FALSE;
+        *p = L'\\';
+        p = wcschr(p + 1, L'\\');
+    }
+
+    return CreateDirectoryW(partial, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+/* A theme name becomes a file name: refuse what would leave the themes directory */
+static BOOL
+IsValidThemeName(const WCHAR *name)
+{
+    if (!name[0] || !lstrcmpW(name, L".") || !lstrcmpW(name, L".."))
+        return FALSE;
+    return wcspbrk(name, L"\\/:*?\"<>|") == NULL;
+}
+
 HRESULT WINAPI
 LThemeSave(const WCHAR *theme_name, WCHAR out_path[MAX_PATH])
 {
-    if (!theme_name || !out_path)
+    WCHAR user_themes_dir[MAX_PATH];
+    WCHAR theme_path[MAX_PATH];
+    WCHAR value[32];
+    LTHEME_ITEM current;
+    HRESULT hr;
+
+    if (!theme_name || !out_path || !IsValidThemeName(theme_name))
         return E_INVALIDARG;
 
-    WCHAR user_themes_dir[MAX_PATH];
-    if (!ExpandThemePath(L"%APPDATA%\Microsoft\Windows\Themes", user_themes_dir, MAX_PATH))
+    if (!ExpandThemePath(L"%APPDATA%\\Microsoft\\Windows\\Themes", user_themes_dir, ARRAYSIZE(user_themes_dir)))
         return E_FAIL;
+    if (!CreateDirectoryPath(user_themes_dir))
+        return HRESULT_FROM_WIN32(GetLastError());
 
-    CreateDirectoryW(user_themes_dir, NULL);
+    hr = StringCchPrintfW(theme_path, ARRAYSIZE(theme_path), L"%s\\%s.theme", user_themes_dir, theme_name);
+    if (FAILED(hr))
+        return hr;
 
-    WCHAR theme_path[MAX_PATH];
-    swprintf(theme_path, ARRAYSIZE(theme_path), L"%s\%s.theme", user_themes_dir, theme_name);
-
-    LTHEME_ITEM current;
-    if (FAILED(LThemeGetUnsaved(&current)))
-        return E_FAIL;
-
-    /* Write .theme file in Windows format */
-    WriteThemeString(theme_path, L"Theme", L"DisplayName", theme_name);
-
-    WCHAR color_str[32];
-    int r = GetRValue(current.WindowColor);
-    int g = GetGValue(current.WindowColor);
-    int b = GetBValue(current.WindowColor);
-    swprintf(color_str, ARRAYSIZE(color_str), L"%d %d %d", r, g, b);
-
-    WriteThemeString(theme_path, L"Control Panel\Desktop", L"Wallpaper", current.Wallpaper);
-    WriteThemeString(theme_path, L"Control Panel\Desktop", L"WallpaperStyle", L"2");
-    WriteThemeString(theme_path, L"Control Panel\Desktop", L"TileWallpaper", L"0");
-    WriteThemeString(theme_path, L"Control Panel\Colors", L"ActiveTitle", color_str);
-    WriteThemeString(theme_path, L"Control Panel\Sounds", L".Current", current.SoundsScheme);
-    WriteThemeString(theme_path, L"Screen Saver", L"SCRNSAVE.EXE", current.Screensaver);
-
-    WCHAR timeout_str[16];
-    swprintf(timeout_str, ARRAYSIZE(timeout_str), L"%u", current.ScreensaverTimeout);
-    WriteThemeString(theme_path, L"Screen Saver", L"ScreenSaveTimeOut", timeout_str);
-    WriteThemeString(theme_path, L"Screen Saver", L"ScreenSaveActive", current.ScreensaverActive ? L"1" : L"0");
-
+    hr = LThemeGetUnsaved(&current);
+    if (FAILED(hr))
+        return hr;
     if (current.Thumbnail)
+    {
         DeleteObject(current.Thumbnail);
+        current.Thumbnail = NULL;
+    }
 
-    lstrcpyW(out_path, theme_path);
+    /* Start from an empty file so no stale key of an older theme survives */
+    DeleteFileW(theme_path);
+
+    if (!WriteThemeString(theme_path, L"Theme", L"DisplayName", theme_name))
+        return HRESULT_FROM_WIN32(GetLastError());
+
+    WriteThemeString(theme_path, DesktopSection, L"Wallpaper", current.Wallpaper);
+    WriteThemeString(theme_path, DesktopSection, L"WallpaperStyle", WallpaperStyleValue(current.WallpaperStyle));
+    WriteThemeString(theme_path, DesktopSection, L"TileWallpaper", current.WallpaperStyle == LWALL_TILE ? L"1" : L"0");
+
+    StringCchPrintfW(value, ARRAYSIZE(value), L"%u %u %u",
+                     GetRValue(current.WindowColor), GetGValue(current.WindowColor), GetBValue(current.WindowColor));
+    WriteThemeString(theme_path, ColorsSection, L"ActiveTitle", value);
+
+    WriteThemeString(theme_path, SoundsSection, L"SchemeName", current.SoundsScheme);
+
+    /* Windows form of the screen saver */
+    WriteThemeString(theme_path, BootSection, L"SCRNSAVE.EXE", current.Screensaver);
+    StringCchPrintfW(value, ARRAYSIZE(value), L"%u", current.ScreensaverTimeout);
+    WriteThemeString(theme_path, DesktopSection, L"ScreenSaveTimeOut", value);
+    WriteThemeString(theme_path, DesktopSection, L"ScreenSaveActive", current.ScreensaverActive ? L"1" : L"0");
+
+    WriteThemeString(theme_path, L"MasterThemeSelector", L"MTSM", L"DABJDKT");
+
+    /* Flush the profile cache to disk */
+    WritePrivateProfileStringW(NULL, NULL, NULL, theme_path);
+
+    StringCchCopyW(out_path, MAX_PATH, theme_path);
     return S_OK;
 }
