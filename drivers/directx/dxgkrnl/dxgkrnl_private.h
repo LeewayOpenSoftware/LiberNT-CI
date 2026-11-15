@@ -2951,14 +2951,17 @@ DxgkVidMmGetAllocationPrimaryAddress(
     _In_ PDXGKVMM_ALLOCATION Allocation);
 
 NTSTATUS
+NTAPI
 DxgkCreateAllocation(
     _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation);
 
 NTSTATUS
+NTAPI
 DxgkCreateAllocation2(
     _Inout_ D3DKMT_CREATEALLOCATION *pCreateAllocation);
 
 NTSTATUS
+NTAPI
 DxgkDestroyAllocation(
     _In_ CONST D3DKMT_DESTROYALLOCATION *pDestroyAllocation);
 
@@ -3423,7 +3426,7 @@ DxgkPresentWithOverlays(
     _In_ ULONG InputLength);
 
 NTSTATUS
-__cdecl
+NTAPI
 DxgkPresentCallback(
     _Inout_ D3DKMT_PRESENT *pPresent);
 

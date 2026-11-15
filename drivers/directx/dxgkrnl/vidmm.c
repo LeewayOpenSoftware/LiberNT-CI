@@ -10101,6 +10101,7 @@ DxgkpCreateAllocation2WithAccessMode(
 }
 
 NTSTATUS
+NTAPI
 DxgkCreateAllocation(
     _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation)
 {
@@ -10108,6 +10109,7 @@ DxgkCreateAllocation(
 }
 
 NTSTATUS
+NTAPI
 DxgkCreateAllocation2(
     _Inout_ D3DKMT_CREATEALLOCATION *CreateAllocation)
 {
@@ -10144,6 +10146,7 @@ DxgkpVidMmWaitForQueuedWorkBeforeDestroy(
 }
 
 NTSTATUS
+NTAPI
 DxgkDestroyAllocation(
     _In_ CONST D3DKMT_DESTROYALLOCATION *pDestroyAllocation)
 {

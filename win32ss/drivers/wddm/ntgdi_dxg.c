@@ -64,6 +64,7 @@
 
 #define DEFINE_DXG_BRIDGE_FORWARDER(Name, Target, Annotation, Type) \
 NTSTATUS                                                            \
+NTAPI                                                               \
 Name(                                                               \
     Annotation Type *pData)                                         \
 {                                                                   \
@@ -650,6 +651,7 @@ DEFINE_DXG_BRIDGE_FORWARDER(DxgBridgeSubmitCommand, D3DKMTSubmitCommand, _In_, C
  * Special case: takes HANDLE, not a struct pointer.
  */
 NTSTATUS
+NTAPI
 DxgBridgeReleaseProcessVidPnSourceOwners(
     _In_ HANDLE hProcess)
 {
