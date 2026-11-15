@@ -8,26 +8,12 @@
 #include <ntifs.h>
 #include <pseh/pseh2.h>
 #include <drivers/condrv/condrvhost.h>
+#include <drivers/condrv/condrvcodes.h>
 
 #define NDEBUG
 #include <debug.h>
 
 #define CD_TAG 'vDdC'
-
-#define IOCTL_CONDRV_READ_CONSOLE          CTL_CODE(FILE_DEVICE_CONSOLE, 10, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_READ_FILE             CTL_CODE(FILE_DEVICE_CONSOLE, 11, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_READ_INPUT            CTL_CODE(FILE_DEVICE_CONSOLE, 12, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_CTRL_EVENT            CTL_CODE(FILE_DEVICE_CONSOLE, 19, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_FLUSH                 CTL_CODE(FILE_DEVICE_CONSOLE, 21, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_GET_PROCESS_LIST      CTL_CODE(FILE_DEVICE_CONSOLE, 23, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_READ_CONSOLE_CONTROL  CTL_CODE(FILE_DEVICE_CONSOLE, 24, METHOD_BUFFERED, FILE_READ_ACCESS)
-#define IOCTL_CONDRV_WRITE_CONSOLE         CTL_CODE(FILE_DEVICE_CONSOLE, 30, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_CONDRV_WRITE_FILE            CTL_CODE(FILE_DEVICE_CONSOLE, 31, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_CONDRV_ACTIVATE              CTL_CODE(FILE_DEVICE_CONSOLE, 36, METHOD_BUFFERED, FILE_WRITE_ACCESS)
-#define IOCTL_CONDRV_BIND_PID              CTL_CODE(FILE_DEVICE_CONSOLE, 51, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_SETUP_INPUT           CTL_CODE(FILE_DEVICE_CONSOLE, 60, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_CONDRV_INIT_OUTPUT           CTL_CODE(FILE_DEVICE_CONSOLE, 90, METHOD_BUFFERED, 0)
-#define IOCTL_CONDRV_CLOSE_OUTPUT          CTL_CODE(FILE_DEVICE_CONSOLE, 91, METHOD_BUFFERED, 0)
 
 #define CD_ATTACH_PARENT_PROCESS ((ULONG)-1)
 #define CD_WRITE_BEHIND_LIMIT    (1024 * 1024)
@@ -1400,6 +1386,55 @@ CdServerIoctl(
     }
 }
 
+#ifndef PROCESS_DUP_HANDLE
+#define PROCESS_DUP_HANDLE 0x0040
+#endif
+
+/* Decides whether the current process may attach to the console of Target.
+ * The refusal is the status a process without a console gives. */
+static
+NTSTATUS
+CdCheckAttachAccess(
+    _In_ PEPROCESS Target,
+    _In_ BOOLEAN Parent,
+    _In_ KPROCESSOR_MODE RequestorMode)
+{
+    HANDLE ProcessHandle;
+    NTSTATUS Status;
+
+    if (RequestorMode == KernelMode || Target == PsGetCurrentProcess())
+        return STATUS_SUCCESS;
+
+    if (Parent)
+    {
+        /* The parent is named by its process id, which can have passed to a
+         * younger process since: only a process older than this one made it */
+        if (PsGetProcessCreateTimeQuadPart(Target) <
+            PsGetProcessCreateTimeQuadPart(PsGetCurrentProcess()))
+        {
+            return STATUS_SUCCESS;
+        }
+
+        return STATUS_ACCESS_DENIED;
+    }
+
+    /* The security of the target process decides, for the caller's own token.
+     * The right asked for is a write-class one: an attached process writes to
+     * that console. */
+    Status = ObOpenObjectByPointer(Target,
+                                   OBJ_KERNEL_HANDLE,
+                                   NULL,
+                                   PROCESS_DUP_HANDLE,
+                                   *PsProcessType,
+                                   UserMode,
+                                   &ProcessHandle);
+    if (!NT_SUCCESS(Status))
+        return STATUS_ACCESS_DENIED;
+
+    ZwClose(ProcessHandle);
+    return STATUS_SUCCESS;
+}
+
 static
 NTSTATUS
 CdConnectionIoctl(
@@ -1419,15 +1454,29 @@ CdConnectionIoctl(
         case IOCTL_CONDRV_BIND_PID:
         {
             ULONG Pid;
+            BOOLEAN Parent = FALSE;
 
             if (InLength != sizeof(ULONG))
                 return STATUS_INVALID_PARAMETER;
             Pid = *(PULONG)Irp->AssociatedIrp.SystemBuffer;
             if (Pid == CD_ATTACH_PARENT_PROCESS)
+            {
                 Pid = HandleToULong(PsGetProcessInheritedFromUniqueProcessId(PsGetCurrentProcess()));
+                Parent = TRUE;
+            }
             Status = PsLookupProcessByProcessId(ULongToHandle(Pid), &Process);
             if (!NT_SUCCESS(Status))
                 return STATUS_INVALID_PARAMETER;
+
+            /* A console carries what its processes read and write. A process
+             * may attach to the console of the process that created it, or of
+             * a process that it is allowed to open. */
+            Status = CdCheckAttachAccess(Process, Parent, Irp->RequestorMode);
+            if (!NT_SUCCESS(Status))
+            {
+                ObDereferenceObject(Process);
+                return Status;
+            }
 
             OldIrql = ExAcquireSpinLockExclusive(&CdLock);
             if (CdFindProcess(PsGetCurrentProcess()))
