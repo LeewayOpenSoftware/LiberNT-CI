@@ -15,6 +15,10 @@
 #define NDEBUG
 #include <debug.h>
 
+/* The reparses one lookup may follow. Windows 11 resolves a chain of 63 registry links
+   or object symbolic links and fails the 64th with STATUS_OBJECT_NAME_NOT_FOUND */
+#define OBP_MAX_REPARSE 63
+
 ULONG ObpCaseInsensitive = TRUE;
 POBJECT_DIRECTORY ObpRootDirectoryObject;
 POBJECT_DIRECTORY ObpTypeDirectoryObject;
@@ -483,7 +487,7 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
     KPROCESSOR_MODE AccessCheckMode;
     PWCHAR NewName;
     POBJECT_HEADER_NAME_INFO ObjectNameInfo;
-    ULONG MaxReparse = 30;
+    ULONG MaxReparse = OBP_MAX_REPARSE + 1;
     PDEVICE_MAP DeviceMap = NULL;
     UNICODE_STRING LocalName;
     PAGED_CODE();
@@ -552,9 +556,6 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
                 return STATUS_OBJECT_TYPE_MISMATCH;
             }
 
-            /* Set default parse count */
-            MaxReparse = 30;
-
             /* Now parse */
             while (TRUE)
             {
@@ -587,6 +588,17 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
                     ObDereferenceObject(RootDirectory);
                     return Status;
                 }
+                else if (--MaxReparse == 0)
+                {
+                    /* Reparsed too many times: a restart at the root counts too */
+                    ObDereferenceObject(RootDirectory);
+
+                    /* Return the object and normalized status */
+                    *FoundObject = Object;
+                    if (!Object)
+                        Status = STATUS_OBJECT_NAME_NOT_FOUND;
+                    return Status;
+                }
                 else if ((!ObjectName->Length) ||
                          (!ObjectName->Buffer) ||
                          (ObjectName->Buffer[0] == OBJ_NAME_PATH_SEPARATOR))
@@ -599,22 +611,10 @@ ObpLookupObjectName(IN HANDLE RootHandle OPTIONAL,
                     RootHandle = NULL;
                     goto ParseFromRoot;
                 }
-                else if (--MaxReparse)
+                else
                 {
                     /* Try reparsing again */
                     continue;
-                }
-                else
-                {
-                    /* Reparsed too many times */
-                    ObDereferenceObject(RootDirectory);
-
-                    /* Return the object and normalized status */
-                    *FoundObject = Object;
-                    if (!Object)
-                        Status = ParseObjectType == CmpKeyObjectType ?
-                                 STATUS_INVALID_PARAMETER : STATUS_OBJECT_NAME_NOT_FOUND;
-                    return Status;
                 }
             }
         }
@@ -756,9 +756,9 @@ ParseFromRoot:
     /* Check if we were reparsing a symbolic link */
     if (!SymLink)
     {
-        /* Allow reparse */
+        /* Allow reparse. The count is not started again: a lookup sent back
+           to the root keeps the reparses it has used */
         Reparse = TRUE;
-        MaxReparse = 30;
     }
 
     /* Reparse */
@@ -1027,8 +1027,6 @@ ReparseObject:
                     --MaxReparse;
                     if (MaxReparse == 0)
                     {
-                        if (ParseObjectType == CmpKeyObjectType)
-                            Status = STATUS_INVALID_PARAMETER;
                         Object = NULL;
                         break;
                     }

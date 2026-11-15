@@ -972,7 +972,7 @@ CmpCreateKeyControlBlock(IN PHHIVE Hive,
         if (Parent)
         {
             /* Reference the parent */
-            if (((Parent->TotalLevels + 1) < 512) &&
+            if (((Parent->TotalLevels + 1) <= CMP_KEY_DEPTH_MAX) &&
                 CmpReferenceKeyControlBlock(Parent))
             {
                 /* Link it */
