@@ -67,6 +67,21 @@ VOID RemoveEntityByContext(PVOID Context)
     TcpipReleaseSpinLock(&EntityListLock, OldIrql);
 }
 
+/* Like ReferenceObject, but an address file whose count is already zero is
+ * being freed (its entity entry goes last) and is left alone */
+static BOOLEAN ReferenceAddressFileIfLive(PADDRESS_FILE AddrFile)
+{
+    LONG Count;
+
+    do {
+        Count = AddrFile->RefCount;
+        if (Count <= 0)
+            return FALSE;
+    } while (InterlockedCompareExchange(&AddrFile->RefCount, Count + 1, Count) != Count);
+
+    return TRUE;
+}
+
 PVOID GetContext(TDIEntityID ID)
 {
     UINT i;
@@ -91,10 +106,18 @@ PVOID GetContext(TDIEntityID ID)
 
     Context = EntityList[i].context;
 
+    /* The caller keeps the context after the lock is dropped, so it leaves
+     * with a reference of its own, taken for the type the entity really is */
     if (ID.tei_entity == IF_ENTITY || ID.tei_entity == AT_ENTITY || ID.tei_entity == CL_NL_ENTITY) {
         if (!IPReferenceInterface((PIP_INTERFACE)Context)) {
             Context = NULL;
         }
+    } else if (ID.tei_entity == CL_TL_ENTITY || ID.tei_entity == CO_TL_ENTITY || ID.tei_entity == ER_ENTITY) {
+        if (!ReferenceAddressFileIfLive((PADDRESS_FILE)Context)) {
+            Context = NULL;
+        }
+    } else {
+        Context = NULL;
     }
 
     TcpipReleaseSpinLock(&EntityListLock, OldIrql);
@@ -104,9 +127,13 @@ PVOID GetContext(TDIEntityID ID)
 
 static VOID PutContext(TDIEntityID ID, PVOID Context)
 {
-    if (Context &&
-        (ID.tei_entity == IF_ENTITY || ID.tei_entity == AT_ENTITY || ID.tei_entity == CL_NL_ENTITY))
+    if (!Context)
+        return;
+
+    if (ID.tei_entity == IF_ENTITY || ID.tei_entity == AT_ENTITY || ID.tei_entity == CL_NL_ENTITY)
         IPDereferenceInterface((PIP_INTERFACE)Context);
+    else if (ID.tei_entity == CL_TL_ENTITY || ID.tei_entity == CO_TL_ENTITY || ID.tei_entity == ER_ENTITY)
+        DereferenceObject((PADDRESS_FILE)Context);
 }
 
 TDI_STATUS InfoCopyOut( PCHAR DataOut, UINT SizeOut,
@@ -279,9 +306,10 @@ TDI_STATUS InfoTdiQueryInformationEx(
         case INFO_CLASS_PROTOCOL:
            if (ID->toi_type == INFO_TYPE_ADDRESS_OBJECT)
            {
-               if (ID->toi_entity.tei_entity == IF_ENTITY ||
-                   ID->toi_entity.tei_entity == AT_ENTITY ||
-                   ID->toi_entity.tei_entity == CL_NL_ENTITY)
+               /* Only a transport entity has an address file behind it */
+               if (ID->toi_entity.tei_entity != CL_TL_ENTITY &&
+                   ID->toi_entity.tei_entity != CO_TL_ENTITY &&
+                   ID->toi_entity.tei_entity != ER_ENTITY)
                    return TDI_INVALID_PARAMETER;
 
                if ((EntityListContext = GetContext(ID->toi_entity))) {
@@ -474,9 +502,10 @@ TDI_STATUS InfoTdiSetInformationEx
             {
                 case INFO_TYPE_ADDRESS_OBJECT:
                 {
-                    if (ID->toi_entity.tei_entity == IF_ENTITY ||
-                        ID->toi_entity.tei_entity == AT_ENTITY ||
-                        ID->toi_entity.tei_entity == CL_NL_ENTITY)
+                    /* Only a transport entity has an address file behind it */
+                    if (ID->toi_entity.tei_entity != CL_TL_ENTITY &&
+                        ID->toi_entity.tei_entity != CO_TL_ENTITY &&
+                        ID->toi_entity.tei_entity != ER_ENTITY)
                         return TDI_INVALID_PARAMETER;
 
                     if ((EntityListContext = GetContext(ID->toi_entity))) {
@@ -489,7 +518,13 @@ TDI_STATUS InfoTdiSetInformationEx
                 }
                 case INFO_TYPE_CONNECTION:
                 {
-                    PADDRESS_FILE AddressFile = GetContext(ID->toi_entity);
+                    PADDRESS_FILE AddressFile;
+
+                    /* Only a TCP entity has a connection behind it */
+                    if (ID->toi_entity.tei_entity != CO_TL_ENTITY)
+                        return TDI_INVALID_PARAMETER;
+
+                    AddressFile = GetContext(ID->toi_entity);
                     if (AddressFile == NULL)
                         return TDI_INVALID_PARAMETER;
                     Status = SetConnectionInfo(ID, AddressFile, Buffer, BufferSize);

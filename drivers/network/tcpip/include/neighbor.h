@@ -37,6 +37,7 @@ typedef struct NEIGHBOR_CACHE_ENTRY {
     PVOID LinkAddress;                  /* Pointer to link address */
     IP_ADDRESS Address;                 /* IP address of neighbor */
     LIST_ENTRY PacketQueue;             /* Packet queue */
+    LONG QueuedPackets;                 /* Number of packets in the queue */
     ULONGLONG NextSolicit;
 } NEIGHBOR_CACHE_ENTRY, *PNEIGHBOR_CACHE_ENTRY;
 
@@ -44,6 +45,9 @@ typedef struct NEIGHBOR_CACHE_ENTRY {
 #define NUD_INCOMPLETE 0x01
 #define NUD_PERMANENT  0x02
 #define NUD_STALE      0x04
+
+/* Packets that may wait on an NCE whose link address is not known yet */
+#define NB_MAX_QUEUED_PACKETS 32
 
 /* Timeout for incomplete NCE ARP requests */
 #define ARP_INCOMPLETE_TIMEOUT 3

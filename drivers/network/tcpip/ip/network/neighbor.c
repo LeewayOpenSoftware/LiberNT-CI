@@ -66,6 +66,7 @@ VOID NBSendPackets( PNEIGHBOR_CACHE_ENTRY NCE ) {
     while ((PacketEntry = ExInterlockedRemoveHeadList(&NCE->PacketQueue,
                                               &NeighborCache[HashValue].Lock)) != NULL)
     {
+	InterlockedDecrement(&NCE->QueuedPackets);
 	Packet = CONTAINING_RECORD( PacketEntry, NEIGHBOR_PACKET, Next );
 
 	TI_DbgPrint
@@ -93,6 +94,7 @@ VOID NBFlushPacketQueue( PNEIGHBOR_CACHE_ENTRY NCE,
 
     while( !IsListEmpty(&NCE->PacketQueue) ) {
         PacketEntry = RemoveHeadList(&NCE->PacketQueue);
+        InterlockedDecrement(&NCE->QueuedPackets);
 	Packet = CONTAINING_RECORD
 	    ( PacketEntry, NEIGHBOR_PACKET, Next );
 
@@ -465,6 +467,7 @@ PNEIGHBOR_CACHE_ENTRY NBAddNeighbor(
   NCE->EventCount = 0;
   NCE->NextSolicit = KeQueryInterruptTime() + (ULONGLONG)Interface->RetransmitTime * 10000;
   InitializeListHead( &NCE->PacketQueue );
+  NCE->QueuedPackets = 0;
 
   TI_DbgPrint(MID_TRACE,("NCE: %x\n", NCE));
 
@@ -719,7 +722,6 @@ BOOLEAN NBQueuePacket(
                                   NEIGHBOR_PACKET_TAG );
   if( !Packet ) return FALSE;
 
-  /* FIXME: Should we limit the number of queued packets? */
 
   HashValue  = *(PULONG)(&NCE->Address.Address);
   HashValue ^= HashValue >> 16;
@@ -741,7 +743,18 @@ BOOLEAN NBQueuePacket(
       return TRUE;
     }
 
+  /* While the link address is unknown nothing leaves the queue, so the queue
+   * has a fixed bound. The packet is refused; the caller treats that like a
+   * failed allocation. */
+  if ((NCE->State & NUD_INCOMPLETE) && NCE->QueuedPackets >= NB_MAX_QUEUED_PACKETS)
+    {
+      TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
+      ExFreePoolWithTag(Packet, NEIGHBOR_PACKET_TAG);
+      return FALSE;
+    }
+
   InsertTailList( &NCE->PacketQueue, &Packet->Next );
+  InterlockedIncrement(&NCE->QueuedPackets);
 
   TcpipReleaseSpinLock(&NeighborCache[HashValue].Lock, OldIrql);
 
