@@ -1693,6 +1693,10 @@ CDefaultContextMenu::InvokeRegVerb(
         InvokePidl(lpcmi, m_apidl[i], pEntry);
     }
 
+    /* A background menu has no selection: the verb applies to the folder itself */
+    if (!m_cidl && m_pidlFolder)
+        InvokePidl(lpcmi, NULL, pEntry);
+
     return S_OK;
 }
 
