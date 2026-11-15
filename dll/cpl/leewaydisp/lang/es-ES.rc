@@ -82,6 +82,29 @@ BEGIN
     LTEXT "", IDC_DISP_LIMITS, 6, 160, 298, 24
 END
 
+IDD_RESPAGE DIALOGEX 0, 0, 310, 256
+STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD | WS_CLIPCHILDREN
+FONT 8, "MS Shell Dlg"
+BEGIN
+    CONTROL "", IDC_DISP_PICTURE, "Static", SS_OWNERDRAW | SS_NOTIFY, 6, 4, 298, 70
+    PUSHBUTTON "Detectar", IDC_DISP_DETECT, 6, 78, 50, 14, WS_DISABLED
+    PUSHBUTTON "Identificar", IDC_DISP_IDENTIFY, 60, 78, 50, 14, WS_TABSTOP
+    LTEXT "Pantalla:", IDC_STATIC, 6, 102, 60, 10
+    COMBOBOX IDC_DISP_MONITOR, 70, 100, 234, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Resolución:", IDC_STATIC, 6, 120, 60, 10
+    COMBOBOX IDC_DISP_RES, 70, 118, 100, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "Orientación:", IDC_STATIC, 6, 138, 60, 10
+    COMBOBOX IDC_DISP_ORIENT, 70, 136, 100, 60, CBS_DROPDOWNLIST | WS_DISABLED
+    LTEXT "Frecuencia:", IDC_STATIC, 6, 156, 62, 10
+    COMBOBOX IDC_DISP_HZ, 70, 154, 100, 80, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    LTEXT "", IDC_DISP_INFO, 6, 178, 298, 46
+    PUSHBUTTON "Configuración avanzada", IDC_DISP_ADV, 180, 118, 90, 14, WS_TABSTOP
+    LTEXT "", IDC_DISP_LIMITS, 6, 226, 298, 12
+    DEFPUSHBUTTON "Aceptar", IDOK, 150, 238, 50, 14, WS_TABSTOP
+    PUSHBUTTON "Cancelar", IDCANCEL, 204, 238, 50, 14, WS_TABSTOP
+    PUSHBUTTON "Aplicar", IDC_DISP_APPLY, 258, 238, 46, 14, WS_TABSTOP
+END
+
 IDD_KEEP DIALOGEX 0, 0, 220, 70
 STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Configuración de pantalla"
@@ -103,4 +126,83 @@ BEGIN
     PUSHBUTTON "Probar", IDC_SAVER_TEST, 156, 44, 50, 14, WS_TABSTOP
     PUSHBUTTON "Aplicar", IDC_SAVER_APPLY, 210, 44, 50, 14, WS_TABSTOP
     LTEXT "El protector de pantalla se inicia cuando el equipo permanece inactivo durante el tiempo elegido.", IDC_SAVER_NOTE, 156, 68, 148, 50
+END
+
+STRINGTABLE
+BEGIN
+    IDS_CP_HOME "Ventana principal del Panel de control"
+    IDS_CP_CHANGE_ICONS "Cambiar iconos del escritorio"
+    IDS_CP_CHANGE_POINTERS "Cambiar punteros del mouse"
+    IDS_CP_CHANGE_ACCOUNT "Cambiar la imagen de la cuenta"
+    IDS_CP_SEE_ALSO "Vea también"
+    IDS_CP_LINK_DISPLAY "Pantalla"
+    IDS_CP_LINK_TASKBAR "Barra de tareas y menú Inicio"
+    IDS_CP_LINK_EASE "Centro de accesibilidad"
+    IDS_CP_PERS_HEAD "Cambiar los efectos visuales y los sonidos del equipo"
+    IDS_CP_PERS_DESC "Haga clic en un tema para cambiar el fondo del escritorio, el color de las ventanas, los sonidos y el protector de pantalla al mismo tiempo."
+    IDS_CP_GROUP_MY "Mis temas"
+    IDS_CP_THEME_UNSAVED "Tema sin guardar"
+    IDS_CP_SAVE_THEME "Guardar tema"
+    IDS_CP_MORE_THEMES "Obtener más temas en línea"
+    IDS_CP_TILE_BG "Fondo de escritorio"
+    IDS_CP_TILE_COLOR "Color de ventana"
+    IDS_CP_TILE_SOUNDS "Sonidos"
+    IDS_CP_TILE_SAVER "Protector de pantalla"
+    IDS_CP_VALUE_NONE "Ninguno"
+    IDS_CP_VALUE_SOLID "Color sólido"
+    IDS_CP_VALUE_CUSTOM "Personalizado"
+    IDS_CP_VALUE_DEFAULT "Predeterminado"
+    IDS_CP_ROOT "Panel de control"
+    IDS_CP_CATEGORY "Apariencia y personalización"
+    IDS_CP_PAGE_RESOLUTION "Resolución de pantalla"
+    IDS_CP_SEARCH_CUE "Buscar en el Panel de control"
+    IDS_CP_NO_MATCH "Ningún elemento del Panel de control coincide con la búsqueda."
+    IDS_CP_BG_HEAD "Elegir el fondo de escritorio"
+    IDS_CP_BG_DESC "Haga clic en una imagen para convertirla en el fondo del escritorio."
+    IDS_CP_BG_LOCATION "Ubicación de la imagen:"
+    IDS_CP_BG_BROWSE "Examinar..."
+    IDS_CP_BG_SELALL "Seleccionar todo"
+    IDS_CP_BG_CLEARALL "Borrar todo"
+    IDS_CP_BG_POSITION "Posición de la imagen:"
+    IDS_CP_BG_INTERVAL "Cambiar imagen cada:"
+    IDS_CP_BG_SHUFFLE "Orden aleatorio"
+    IDS_CP_BG_SLIDE_NA "Las presentaciones aún no están disponibles; el escritorio usa una sola imagen."
+    IDS_CP_BG_SAVE "Guardar cambios"
+    IDS_CP_CANCEL "Cancelar"
+    IDS_CP_LOC_DESKTOP "Fondos de escritorio"
+    IDS_CP_LOC_PICTURES "Imágenes"
+    IDS_CP_BG_EMPTY "No se encontraron imágenes en esta ubicación."
+    IDS_CP_BROWSE_TITLE "Elija una carpeta que contenga imágenes."
+    IDS_CP_COLOR_HEAD "Cambiar el color de las ventanas"
+    IDS_CP_COLOR_DESC "Los colores de las ventanas siguen el esquema de apariencia. Abra la configuración avanzada de apariencia para cambiarlos."
+    IDS_CP_COLOR_ADV "Configuración avanzada de apariencia..."
+    IDS_CP_DISP_HEAD "Facilite la lectura de lo que aparece en la pantalla"
+    IDS_CP_DISP_DESC "Puede cambiar el tamaño del texto y de otros elementos de la pantalla."
+    IDS_CP_DISP_SCALE "Escala actual: %u%%"
+    IDS_CP_DISP_SCALE_NA "Cambiar la escala aún no es posible en este sistema."
+    IDS_CP_LINK_RESOLUTION "Ajustar resolución"
+    IDS_CP_LINK_DISPSET "Cambiar configuración de pantalla"
+    IDS_CP_RES_HEAD "Cambiar la apariencia de las pantallas"
+    IDS_CP_OPEN_FAILED "No se pudo abrir el elemento."
+    IDS_CP_SAVER_TITLE "Configuración del protector de pantalla"
+    IDS_CP_INTERVAL_30 "30 minutos"
+    IDS_CP_COLOR_CURRENT "Color de ventana actual"
+END
+
+IDD_SAVER_DLG DIALOGEX 0, 0, 322, 226
+STYLE DS_SHELLFONT | DS_MODALFRAME | DS_CENTER | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Configuración del protector de pantalla"
+FONT 8, "MS Shell Dlg"
+BEGIN
+    DEFPUSHBUTTON "Aceptar", IDOK, 162, 205, 50, 14
+    PUSHBUTTON "Cancelar", IDCANCEL, 216, 205, 50, 14
+    PUSHBUTTON "Aplicar", IDC_SAVER_HOSTAPPLY, 270, 205, 46, 14
+END
+
+STRINGTABLE
+BEGIN
+    IDS_CP_ORIENT_0 "Horizontal"
+    IDS_CP_ORIENT_1 "Vertical"
+    IDS_CP_ORIENT_2 "Horizontal (invertida)"
+    IDS_CP_ORIENT_3 "Vertical (invertida)"
 END

@@ -1,1 +1,5 @@
 @ stdcall CPlApplet(ptr long ptr ptr)
+@ stdcall LeewayPageCreate(long ptr ptr ptr ptr)
+@ stdcall LeewayPageResize(ptr ptr)
+@ stdcall LeewayPageTranslateKey(ptr ptr)
+@ stdcall LeewayPageDestroy(ptr)

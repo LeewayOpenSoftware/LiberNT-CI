@@ -13,10 +13,12 @@
 #include <commctrl.h>
 #include <cpl.h>
 #include <shlobj.h>
-#include <strsafe.h>
+#include <shellapi.h>
 #include <gdiplus.h>
+#include <strsafe.h>
 #include <leewayui/display_backend.h>
 #include "resource.h"
+#include "internal.h"
 
 #define KEEP_SECONDS 15
 #define TIMER_KEEP   1
@@ -34,13 +36,19 @@ static const APPLET Applets[] =
     { IDS_CPL_DISPLAY_NAME, IDS_CPL_DISPLAY_DESC, 1 },
 };
 
-static HINSTANCE hInst;
+HINSTANCE hInst;
 
 static DWORD CapsValue;
 static BOOL CapsValid;
 
+void
+CapsReset(void)
+{
+    CapsValid = FALSE;
+}
+
 /* One query per applet run; the backend probes the system on every call. */
-static DWORD
+DWORD
 Caps(void)
 {
     if (!CapsValid)
@@ -79,18 +87,19 @@ typedef struct DISPDATA
     int FreqCount;
     LDISP_MODE Current;
     BOOL HaveCurrent;
+    RECT MonRect[LDISP_MAX_MONITORS];  /* picture hit areas, filled when drawn */
 } DISPDATA;
 
 /* HELPERS ******************************************************************/
 
-static void
+void
 LoadStr(UINT id, WCHAR *buf, int cch)
 {
     if (!LoadStringW(hInst, id, buf, cch))
         buf[0] = 0;
 }
 
-static void
+void
 Msg(HWND hwnd, UINT textId, UINT flags)
 {
     WCHAR text[256], title[64];
@@ -401,6 +410,153 @@ ShowInfo(HWND hwnd, DISPDATA *dd, int index)
 }
 
 static void
+FillOrientation(HWND hwnd, DISPDATA *dd)
+{
+    static const UINT ids[4] = { IDS_CP_ORIENT_0, IDS_CP_ORIENT_1, IDS_CP_ORIENT_2, IDS_CP_ORIENT_3 };
+    WCHAR text[64];
+    DWORD o = dd->HaveCurrent ? dd->Current.Orientation : 0;
+
+    SendDlgItemMessageW(hwnd, IDC_DISP_ORIENT, CB_RESETCONTENT, 0, 0);
+    if (!dd->HaveCurrent)
+        return;
+    LoadStr(ids[o < 4 ? o : 0], text, ARRAYSIZE(text));
+    SendDlgItemMessageW(hwnd, IDC_DISP_ORIENT, CB_ADDSTRING, 0, (LPARAM)text);
+    SendDlgItemMessageW(hwnd, IDC_DISP_ORIENT, CB_SETCURSEL, 0, 0);
+}
+
+static void
+PaintMonitors(HWND hwnd, DRAWITEMSTRUCT *dis, DISPDATA *dd)
+{
+    HDC hdc = dis->hDC;
+    RECT rc = dis->rcItem, bounds = { 0, 0, 0, 0 };
+    HBRUSH bg = CreateSolidBrush(RGB(255, 255, 255));
+    HFONT font = (HFONT)SendMessageW(hwnd, WM_GETFONT, 0, 0);
+    HGDIOBJ oldFont = SelectObject(hdc, font ? font : GetStockObject(DEFAULT_GUI_FONT));
+    int i, sel = (int)SendDlgItemMessageW(hwnd, IDC_DISP_MONITOR, CB_GETCURSEL, 0, 0), n = 0;
+    LONG bw, bh, aw = rc.right - rc.left - 24, ah = rc.bottom - rc.top - 16, scale1000;
+
+    FillRect(hdc, &rc, bg);
+    DeleteObject(bg);
+    ZeroMemory(dd->MonRect, sizeof(dd->MonRect));
+    for (i = 0; i < dd->MonitorCount; i++)
+    {
+        if (!dd->Monitors[i].Attached)
+            continue;
+        if (!n++)
+            bounds = dd->Monitors[i].Bounds;
+        else
+            UnionRect(&bounds, &bounds, &dd->Monitors[i].Bounds);
+    }
+    bw = bounds.right - bounds.left;
+    bh = bounds.bottom - bounds.top;
+    if (n && bw > 0 && bh > 0)
+    {
+        scale1000 = min(aw * 1000 / bw, ah * 1000 / bh);
+        if (scale1000 < 1)
+            scale1000 = 1;
+        for (i = 0; i < dd->MonitorCount; i++)
+        {
+            RECT m, t;
+            WCHAR num[8];
+            HBRUSH fill = CreateSolidBrush(i == sel ? RGB(52, 104, 168) : RGB(120, 140, 170));
+            HBRUSH edge = CreateSolidBrush(i == sel ? RGB(20, 60, 120) : RGB(70, 85, 110));
+
+            if (!dd->Monitors[i].Attached)
+            {
+                DeleteObject(fill);
+                DeleteObject(edge);
+                continue;
+            }
+            m.left = rc.left + 12 + (dd->Monitors[i].Bounds.left - bounds.left) * scale1000 / 1000;
+            m.top = rc.top + 8 + (dd->Monitors[i].Bounds.top - bounds.top) * scale1000 / 1000;
+            m.right = m.left + (dd->Monitors[i].Bounds.right - dd->Monitors[i].Bounds.left) * scale1000 / 1000;
+            m.bottom = m.top + (dd->Monitors[i].Bounds.bottom - dd->Monitors[i].Bounds.top) * scale1000 / 1000;
+            dd->MonRect[i] = m;
+            FillRect(hdc, &m, fill);
+            FrameRect(hdc, &m, edge);
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", (UINT)(i + 1));
+            t = m;
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(255, 255, 255));
+            DrawTextW(hdc, num, -1, &t, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            DeleteObject(fill);
+            DeleteObject(edge);
+        }
+    }
+    SelectObject(hdc, oldFont);
+}
+
+static LRESULT CALLBACK
+IdentifyProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    switch (msg)
+    {
+        case WM_PAINT:
+        {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc;
+            WCHAR num[8];
+            HFONT font;
+            HGDIOBJ old;
+
+            GetClientRect(hwnd, &rc);
+            FillRect(hdc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+            font = CreateFontW(-(rc.bottom - 40), 0, 0, 0, FW_BOLD, 0, 0, 0, DEFAULT_CHARSET, 0, 0, 0, 0, L"Tahoma");
+            old = SelectObject(hdc, font);
+            StringCchPrintfW(num, ARRAYSIZE(num), L"%u", (UINT)(UINT_PTR)GetPropW(hwnd, L"num"));
+            SetBkMode(hdc, TRANSPARENT);
+            SetTextColor(hdc, RGB(255, 255, 255));
+            DrawTextW(hdc, num, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+            SelectObject(hdc, old);
+            DeleteObject(font);
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_TIMER:
+            KillTimer(hwnd, 1);
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_NCDESTROY:
+            RemovePropW(hwnd, L"num");
+            break;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+/* A numbered window on every attached display for two seconds, like the Identify button of the system pages. */
+static void
+IdentifyDisplays(DISPDATA *dd)
+{
+    WNDCLASSW wc;
+    int i;
+
+    ZeroMemory(&wc, sizeof(wc));
+    wc.lpfnWndProc = IdentifyProc;
+    wc.hInstance = hInst;
+    wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    wc.lpszClassName = L"LeewayDisplayIdentify";
+    RegisterClassW(&wc);
+    for (i = 0; i < dd->MonitorCount; i++)
+    {
+        const RECT *b = &dd->Monitors[i].Bounds;
+        int size = 160;
+        HWND w;
+
+        if (!dd->Monitors[i].Attached)
+            continue;
+        w = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, wc.lpszClassName, L"", WS_POPUP,
+                            (b->left + b->right - size) / 2, (b->top + b->bottom - size) / 2, size, size,
+                            NULL, NULL, hInst, NULL);
+        if (!w)
+            continue;
+        SetPropW(w, L"num", (HANDLE)(UINT_PTR)(i + 1));
+        ShowWindow(w, SW_SHOWNOACTIVATE);
+        SetTimer(w, 1, 2000, NULL);
+    }
+}
+
+static void
 SelectMonitor(HWND hwnd, DISPDATA *dd, int index)
 {
     BOOL usable = index >= 0 && index < dd->MonitorCount && dd->Monitors[index].Attached;
@@ -415,6 +571,8 @@ SelectMonitor(HWND hwnd, DISPDATA *dd, int index)
     FillResolutions(hwnd, dd);
     FillFrequencies(hwnd, dd);
     ShowInfo(hwnd, dd, index);
+    FillOrientation(hwnd, dd);
+    InvalidateRect(GetDlgItem(hwnd, IDC_DISP_PICTURE), NULL, TRUE);
     EnableWindow(GetDlgItem(hwnd, IDC_DISP_RES), usable && (Caps() & LDISP_CAP_RESOLUTION));
     EnableWindow(GetDlgItem(hwnd, IDC_DISP_HZ), usable && (Caps() & LDISP_CAP_REFRESH));
     EnableWindow(GetDlgItem(hwnd, IDC_DISP_APPLY), usable);
@@ -529,7 +687,7 @@ ApplyResolution(HWND hwnd, DISPDATA *dd)
     SelectMonitor(hwnd, dd, mon);
 }
 
-static INT_PTR CALLBACK
+INT_PTR CALLBACK
 DisplayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     DISPDATA *dd = (DISPDATA *)GetWindowLongPtrW(hwnd, DWLP_USER);
@@ -582,6 +740,60 @@ DisplayProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 case IDC_DISP_APPLY:
                     ApplyResolution(hwnd, dd);
                     return TRUE;
+                case IDOK:
+                    ApplyResolution(hwnd, dd);
+                    SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(IDC_DISP_DONE, 0), 0);
+                    return TRUE;
+                case IDCANCEL:
+                    SendMessageW(GetParent(hwnd), WM_COMMAND, MAKEWPARAM(IDC_DISP_DONE, 0), 0);
+                    return TRUE;
+                case IDC_DISP_IDENTIFY:
+                    IdentifyDisplays(dd);
+                    return TRUE;
+                case IDC_DISP_ADV:
+                {
+                    HINSTANCE r = ShellExecuteW(hwnd, L"open", L"rundll32.exe",
+                                                L"shell32.dll,Control_RunDLL desk.cpl,,3", NULL, SW_SHOWNORMAL);
+
+                    if ((UINT_PTR)r <= 32)
+                        Msg(hwnd, IDS_CP_OPEN_FAILED, MB_OK | MB_ICONWARNING);
+                    return TRUE;
+                }
+                case IDC_DISP_PICTURE:
+                    if (HIWORD(wParam) == STN_CLICKED)
+                    {
+                        POINT pt;
+                        int i;
+
+                        GetCursorPos(&pt);
+                        ScreenToClient(GetDlgItem(hwnd, IDC_DISP_PICTURE), &pt);
+                        for (i = 0; i < dd->MonitorCount; i++)
+                        {
+                            if (PtInRect(&dd->MonRect[i], pt))
+                            {
+                                SendDlgItemMessageW(hwnd, IDC_DISP_MONITOR, CB_SETCURSEL, (WPARAM)i, 0);
+                                SelectMonitor(hwnd, dd, i);
+                                break;
+                            }
+                        }
+                    }
+                    return TRUE;
+            }
+            break;
+        case WM_DRAWITEM:
+            if (dd && wParam == IDC_DISP_PICTURE)
+            {
+                PaintMonitors(hwnd, (DRAWITEMSTRUCT *)lParam, dd);
+                return TRUE;
+            }
+            break;
+        case WM_CTLCOLORDLG:
+        case WM_CTLCOLORSTATIC:
+            /* only the Control Panel page is white; the tab of the classic dialog keeps the tab colour */
+            if (GetDlgItem(hwnd, IDC_DISP_PICTURE))
+            {
+                SetBkMode((HDC)wParam, TRANSPARENT);
+                return (INT_PTR)GetStockObject(WHITE_BRUSH);
             }
             break;
         case WM_DESTROY:
@@ -730,7 +942,7 @@ SaverFill(HWND hwnd, SAVERDATA *sd)
     SaverEnableButtons(hwnd);
 }
 
-static INT_PTR CALLBACK
+INT_PTR CALLBACK
 SaverProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     SAVERDATA *sd = (SAVERDATA *)GetWindowLongPtrW(hwnd, DWLP_USER);
@@ -847,6 +1059,11 @@ MainProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
             }
             break;
         case WM_COMMAND:
+            if (LOWORD(wParam) == IDC_DISP_DONE)
+            {
+                EndDialog(hwnd, 0);   /* OK or Cancel on the display tab */
+                return TRUE;
+            }
             if (LOWORD(wParam) == IDCANCEL)
             {
                 EndDialog(hwnd, 0);

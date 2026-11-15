@@ -21,3 +21,18 @@ The UI never fakes these; `LDispCapabilities()` leaves the flag cleared.
 | Localized strings, menu verbs | STRINGTABLE for other languages; MUIVerb support in the desktop-background menu | CPL / shell | Strings in en, es, ja, zh-CN; menu verbs are English literals, MUIVerb unverified |
 
 Shared UI helpers: the CPL is plain Win32/commctrl for now. The leewayui DPI and theme helpers come in with the landing redesign.
+
+## Control Panel window (2026-11-15 redesign)
+
+One window (`cpwin.c`): back/forward, clickable breadcrumb, search over the page names, Win7-style task pane, theme
+gallery and bottom strip on Personalization, a dedicated Desktop Background page, Window Color, Display and Screen
+Resolution pages, Screen Saver as a dialog. Honest states, nothing faked:
+
+| Item | State |
+|---|---|
+| Theme gallery | Shows the live "Unsaved Theme" only; installed themes come with the `.theme` model |
+| Save theme, Get more themes online | Disabled (no theme writer, no online service) |
+| Change desktop icons, Change your account picture | Disabled (no backend) |
+| Slide show interval, Shuffle, Select all, Clear all | Disabled; the desktop holds one picture |
+| Window Color swatches | Page links to the advanced appearance settings; swatches wait for a verified colour backend |
+| Taskbar and Start Menu | Launches the shell option page; failure is reported |
