@@ -543,6 +543,7 @@ SepDuplicateToken(
     ULONG VariableLength;
     ULONG DynamicPartSize, TotalSize;
     ULONG PrivilegesIndex, GroupsIndex;
+    UCHAR OwnerSid[SECURITY_MAX_SID_SIZE];
 
     PAGED_CODE();
 
@@ -799,6 +800,10 @@ SepDuplicateToken(
      */
     if (EffectiveOnly)
     {
+        /* The owner is found again by value once the groups have moved */
+        RtlCopySid(sizeof(OwnerSid), (PSID)OwnerSid,
+                   AccessToken->UserAndGroups[AccessToken->DefaultOwnerIndex].Sid);
+
         /*
          * Begin querying the groups and search for disabled ones. Do not touch the
          * user which is at the first position because it cannot be disabled, no
@@ -861,8 +866,17 @@ SepDuplicateToken(
             }
         }
 
-        /* Removed groups shift the ones after them */
+        /* Removed groups shift the ones after them; a removed owner group leaves the user as owner */
         AccessToken->IntegrityLevelIndex = SepFindIntegrityGroupIndex(AccessToken);
+        AccessToken->DefaultOwnerIndex = 0;
+        for (GroupsIndex = 1; GroupsIndex < AccessToken->UserAndGroupCount; GroupsIndex++)
+        {
+            if (RtlEqualSid(AccessToken->UserAndGroups[GroupsIndex].Sid, (PSID)OwnerSid))
+            {
+                AccessToken->DefaultOwnerIndex = GroupsIndex;
+                break;
+            }
+        }
     }
 
     /* Return the token to the caller */
