@@ -12,6 +12,7 @@
 
 #ifdef _M_AMD64
 static volatile LONG spin_stop;
+static volatile LONG spin_running;
 static volatile ULONG_PTR spin_frame;
 static HANDLE spin_entered, window_ready;
 static HWND spin_window;
@@ -25,6 +26,8 @@ static LRESULT CALLBACK spin_proc(HWND hwnd, UINT msg, WPARAM wparam, LPARAM lpa
 
     spin_frame = (ULONG_PTR)&marker;
     SetEvent(spin_entered);
+    /* From here on the thread makes no call: every instruction it runs is in this image */
+    InterlockedExchange(&spin_running, 1);
     while (!InterlockedCompareExchange(&spin_stop, 0, 0))
         marker++;
     return 0;
@@ -57,6 +60,7 @@ START_TEST(ThreadContextInCallback)
     CONTEXT ctx;
     HANDLE thread;
     DWORD tid, code = 0;
+    ULONG tries;
 
     wc.lpfnWndProc = spin_proc;
     wc.hInstance = GetModuleHandleW(NULL);
@@ -85,6 +89,12 @@ START_TEST(ThreadContextInCallback)
     /* A message sent from another thread runs as a kernel callback inside GetMessageW */
     ok(SendNotifyMessageW(spin_window, WM_APP, 0, 0), "SendNotifyMessageW failed: %lu\n", GetLastError());
     ok(WaitForSingleObject(spin_entered, 5000) == WAIT_OBJECT_0, "window procedure was not called\n");
+
+    /* The event is set from inside the window procedure, so the thread may still be returning from SetEvent.
+     * Wait until it has reached its loop before it is suspended. */
+    for (tries = 0; tries < 5000 && !InterlockedCompareExchange(&spin_running, 0, 0); tries++)
+        Sleep(1);
+    ok(InterlockedCompareExchange(&spin_running, 0, 0) != 0, "window procedure did not reach its loop\n");
 
     ok(SuspendThread(thread) == 0, "SuspendThread failed: %lu\n", GetLastError());
     memset(&ctx, 0, sizeof(ctx));
