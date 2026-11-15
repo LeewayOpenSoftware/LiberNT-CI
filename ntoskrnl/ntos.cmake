@@ -142,6 +142,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/ramdisk.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/rawfs.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/remlock.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/reparse.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/symlink.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/util.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/io/iomgr/volume.c

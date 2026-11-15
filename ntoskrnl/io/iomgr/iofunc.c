@@ -358,9 +358,17 @@ IopDeviceFsIoControl(IN HANDLE DeviceHandle,
         _SEH2_END;
     }
 
-    /* Don't check for access rights right now, KernelMode can do anything */
+    /* The access class of the control code decides what the handle must
+     * have been opened with: read codes need FILE_READ_DATA, write codes
+     * FILE_WRITE_DATA, both need both; kernel-mode callers are not checked */
+    DesiredAccess = 0;
+    if (IoControlCode & (FILE_READ_ACCESS << 14))
+        DesiredAccess |= FILE_READ_DATA;
+    if (IoControlCode & (FILE_WRITE_ACCESS << 14))
+        DesiredAccess |= FILE_WRITE_DATA;
+
     Status = ObReferenceObjectByHandle(DeviceHandle,
-                                       0,
+                                       DesiredAccess,
                                        IoFileObjectType,
                                        PreviousMode,
                                        (PVOID*)&FileObject,

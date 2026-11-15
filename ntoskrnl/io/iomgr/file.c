@@ -179,10 +179,16 @@ IopDoSymbolicLinkTransmogrify(IN PIRP Irp,
 
     PAGED_CODE();
 
+    /* The name fields are there only if the data is at least as long as they are */
+    if (DataBuffer->ReparseDataLength < HeaderLength)
+    {
+        Status = STATUS_IO_REPARSE_DATA_INVALID;
+        goto Done;
+    }
+
     SubstituteLength = DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameLength;
     UnparsedLength = DataBuffer->Reserved;
-    if (DataBuffer->ReparseDataLength < HeaderLength ||
-        DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameOffset + SubstituteLength >
+    if (DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameOffset + SubstituteLength >
             DataBuffer->ReparseDataLength - HeaderLength ||
         SubstituteLength == 0 ||
         (SubstituteLength & 1) ||
@@ -339,7 +345,19 @@ IopDoNameTransmogrify(IN PIRP Irp,
     PAGED_CODE();
 
     ASSERT(Irp->IoStatus.Status == STATUS_REPARSE);
-    ASSERT(DataBuffer != NULL);
+
+    /* The buffer comes from the file system, possibly from disk: check it before any use.
+       Still trusted: the file system allocated at least header + ReparseDataLength bytes. */
+    if (DataBuffer == NULL ||
+        DataBuffer->ReparseTag != Irp->IoStatus.Information ||
+        DataBuffer->ReparseDataLength > MAXIMUM_REPARSE_DATA_BUFFER_SIZE - REPARSE_DATA_BUFFER_HEADER_SIZE)
+    {
+        /* The buffer is ours to free on every way out, as below */
+        if (DataBuffer != NULL)
+            ExFreePool(DataBuffer);
+        Irp->IoStatus.Status = STATUS_IO_REPARSE_DATA_INVALID;
+        return;
+    }
 
     if (DataBuffer->ReparseTag == IO_REPARSE_TAG_SYMLINK)
     {
@@ -347,17 +365,9 @@ IopDoNameTransmogrify(IN PIRP Irp,
         return;
     }
 
-    ASSERT(Irp->IoStatus.Information == IO_REPARSE_TAG_MOUNT_POINT);
-    ASSERT(Irp->Tail.Overlay.AuxiliaryBuffer != NULL);
-    ASSERT(DataBuffer->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT);
-    ASSERT(DataBuffer->ReparseDataLength < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-    ASSERT(DataBuffer->Reserved < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-
-    /* First of all, validate data */
-    if (DataBuffer->ReparseDataLength < REPARSE_DATA_BUFFER_HEADER_SIZE ||
-        (DataBuffer->SymbolicLinkReparseBuffer.PrintNameLength +
-         DataBuffer->SymbolicLinkReparseBuffer.SubstituteNameLength +
-         FIELD_OFFSET(REPARSE_DATA_BUFFER, MountPointReparseBuffer.PathBuffer[0])) > MAXIMUM_REPARSE_DATA_BUFFER_SIZE)
+    if (!NT_SUCCESS(IopValidateMountPointBuffer(DataBuffer, MAXIMUM_REPARSE_DATA_BUFFER_SIZE)) ||
+        (DataBuffer->Reserved & 1) ||
+        DataBuffer->Reserved > FileObject->FileName.Length)
     {
         Irp->IoStatus.Status = STATUS_IO_REPARSE_DATA_INVALID;
     }
@@ -1209,13 +1219,7 @@ IopParseDevice(IN PVOID ParseObject,
                     PREPARSE_DATA_BUFFER ReparseData;
 
                     /* Reparse point attributes were passed by the driver in the auxiliary buffer */
-                    ASSERT(Irp->Tail.Overlay.AuxiliaryBuffer != NULL);
                     ReparseData = (PREPARSE_DATA_BUFFER)Irp->Tail.Overlay.AuxiliaryBuffer;
-
-                    ASSERT(ReparseData->ReparseTag == Irp->IoStatus.Information);
-                    ASSERT(ReparseData->ReparseDataLength < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-                    ASSERT(ReparseData->Reserved < MAXIMUM_REPARSE_DATA_BUFFER_SIZE);
-
                     IopDoNameTransmogrify(Irp, FileObject, ReparseData);
                 }
             }
