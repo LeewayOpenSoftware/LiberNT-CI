@@ -121,6 +121,10 @@ BOOLEAN
 NTAPI
 ExpWnfInitialization(VOID);
 
+VOID
+NTAPI
+ExpWnfCleanupProcess(IN PEPROCESS Process);
+
 NTSTATUS
 NTAPI
 NtCreateWnfStateName(
