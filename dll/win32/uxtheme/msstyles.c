@@ -323,7 +323,7 @@ HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics)
 PUXINI_FILE MSSTYLES_GetThemeIni(PTHEME_FILE tf)
 {
 #ifdef UXTHEME_V4
-    if (tf && tf->v4) return NULL;          /* a version-4 style has no themes.ini */
+    if (tf->v4) return NULL;                /* a version-4 style has no themes.ini */
 #endif
     return UXINI_LoadINI(tf->hTheme, L"themes_ini");
 }
