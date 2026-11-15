@@ -1911,10 +1911,13 @@ LRESULT WINAPI ComboWndProc_common( HWND hwnd, UINT message, WPARAM wParam, LPAR
 		SendMessageW(lphc->hWndLBox, message, wParam, lParam);
 		return  0;
 	case WM_SYSKEYDOWN:
-		if( KF_ALTDOWN & HIWORD(lParam) )
-		    if( wParam == VK_UP || wParam == VK_DOWN )
+		if( (KF_ALTDOWN & HIWORD(lParam)) &&
+		    (wParam == VK_UP || wParam == VK_DOWN) )
+		{
 			COMBO_FlipListbox( lphc, FALSE, FALSE );
-                return  0;
+			return  0;
+		}
+		break; /* -> DefWindowProc: Alt+F4, Alt+mnemonic, F10 */
 
 	case WM_KEYDOWN:
 		if ((wParam == VK_RETURN || wParam == VK_ESCAPE) &&
