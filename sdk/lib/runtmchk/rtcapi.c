@@ -33,6 +33,12 @@ void* __cdecl memset_fallback(void* src, int val, size_t count)
 #pragma comment(linker, "/alternatename:__RTC_memset=memset_fallback")
 #endif
 
+/* Boot-time consumers (FreeLdr, the EFI boot applications) link the
+ * runtmchk_boot flavour, built with RTC_NO_DBGPRINT: their support libraries
+ * define DbgPrint themselves, and letting the linker satisfy this reference
+ * from those libraries drags the generic firmware entry object (with its
+ * unresolved BlMain) into applications that have their own entry point. */
+#ifndef RTC_NO_DBGPRINT
 /* DbgPrint is provided by ntdll in user mode, the kernel, and FreeLdr, but a
  * few ultra-minimal modules link runtmchk without importing it (keyboard
  * layout DLLs import nothing). Provide a no-op fallback via /alternatename,
@@ -51,6 +57,7 @@ unsigned long __cdecl DbgPrint_fallback(const char *Format, ...)
 #else
 #pragma comment(linker, "/alternatename:DbgPrint=DbgPrint_fallback")
 #endif
+#endif /* RTC_NO_DBGPRINT */
 
 int
 __cdecl
@@ -74,6 +81,7 @@ _RTC_DefaultErrorFuncW(
      * in the debug log instead of a bare int3 (STATUS_BREAKPOINT). For a use
      * of an uninitialized local, the caller's wide format carries the variable
      * name as a narrow string (%S), so pull it and name it. */
+#ifndef RTC_NO_DBGPRINT
     if (errType == _RTC_UNINIT_LOCAL_USE)
     {
         va_list args;
@@ -88,6 +96,9 @@ _RTC_DefaultErrorFuncW(
     {
         DbgPrint("RTC failure %d (%s)\n", errType, name);
     }
+#else
+    (void)name;
+#endif
 
     __debugbreak();
     return 0;

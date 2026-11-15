@@ -248,7 +248,7 @@ if(STACK_PROTECTOR)
 endif()
 
 if(RUNTIME_CHECKS)
-    target_link_libraries(freeldr_pe runtmchk)
+    target_link_libraries(freeldr_pe runtmchk_boot)
     target_link_options(freeldr_pe PRIVATE "/MERGE:.rtc=.text")
 endif()
 
