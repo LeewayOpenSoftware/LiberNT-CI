@@ -6,6 +6,7 @@
  */
 
 #include <rtcapi.h>
+#include <stdarg.h>
 
 #if defined(_M_IX86)
 #pragma comment(linker, "/alternatename:__CRT_RTC_INITW=__CRT_RTC_INITW0")
@@ -32,6 +33,11 @@ void* __cdecl memset_fallback(void* src, int val, size_t count)
 #pragma comment(linker, "/alternatename:__RTC_memset=memset_fallback")
 #endif
 
+/* DbgPrint is provided in every context that links this library: ntdll in
+ * user mode, the kernel, and FreeLdr. Declared here to avoid pulling a
+ * debug header into this low-level support file. */
+unsigned long __cdecl DbgPrint(const char *Format, ...);
+
 int
 __cdecl
 _RTC_DefaultErrorFuncW(
@@ -42,7 +48,33 @@ _RTC_DefaultErrorFuncW(
     const wchar_t *format,
     ...)
 {
-    /* Simple fallback function */
+    static const char *const _RtcErrNames[] =
+    {
+        "stack check", "value truncation", "stack corruption",
+        "uninitialized local use", "corrupted alloca", "illegal"
+    };
+    const char *name = ((errType >= 0) && (errType <= _RTC_ILLEGAL)) ?
+                       _RtcErrNames[errType] : "unknown";
+
+    /* Report the failure before breaking, so a /RTC trip is self-describing
+     * in the debug log instead of a bare int3 (STATUS_BREAKPOINT). For a use
+     * of an uninitialized local, the caller's wide format carries the variable
+     * name as a narrow string (%S), so pull it and name it. */
+    if (errType == _RTC_UNINIT_LOCAL_USE)
+    {
+        va_list args;
+        const char *var;
+        va_start(args, format);
+        var = va_arg(args, const char *);
+        va_end(args);
+        DbgPrint("RTC failure %d (%s): uninitialized local '%s' used\n",
+                 errType, name, var ? var : "?");
+    }
+    else
+    {
+        DbgPrint("RTC failure %d (%s)\n", errType, name);
+    }
+
     __debugbreak();
     return 0;
 }
