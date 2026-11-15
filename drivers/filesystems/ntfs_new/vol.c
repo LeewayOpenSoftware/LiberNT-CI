@@ -236,6 +236,7 @@ NtfsGetAttributeInfo(PNtfsVolume DiskVolume,
     Buffer->FileSystemAttributes = FILE_CASE_SENSITIVE_SEARCH
                                    | FILE_CASE_PRESERVED_NAMES
                                    | FILE_UNICODE_ON_DISK
+                                   | FILE_PERSISTENT_ACLS
                                    | FILE_NAMED_STREAMS
                                    | FILE_SUPPORTS_REPARSE_POINTS
                                    | FILE_SUPPORTS_EXTENDED_ATTRIBUTES
