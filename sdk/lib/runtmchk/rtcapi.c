@@ -33,10 +33,24 @@ void* __cdecl memset_fallback(void* src, int val, size_t count)
 #pragma comment(linker, "/alternatename:__RTC_memset=memset_fallback")
 #endif
 
-/* DbgPrint is provided in every context that links this library: ntdll in
- * user mode, the kernel, and FreeLdr. Declared here to avoid pulling a
- * debug header into this low-level support file. */
+/* DbgPrint is provided by ntdll in user mode, the kernel, and FreeLdr, but a
+ * few ultra-minimal modules link runtmchk without importing it (keyboard
+ * layout DLLs import nothing). Provide a no-op fallback via /alternatename,
+ * the same mechanism used for memset above, so those modules stay linkable
+ * while everything else gets the real DbgPrint. Declared here to avoid
+ * pulling a debug header into this low-level support file. */
 unsigned long __cdecl DbgPrint(const char *Format, ...);
+
+unsigned long __cdecl DbgPrint_fallback(const char *Format, ...)
+{
+    (void)Format;
+    return 0;
+}
+#if defined(_M_IX86)
+#pragma comment(linker, "/alternatename:_DbgPrint=_DbgPrint_fallback")
+#else
+#pragma comment(linker, "/alternatename:DbgPrint=DbgPrint_fallback")
+#endif
 
 int
 __cdecl
