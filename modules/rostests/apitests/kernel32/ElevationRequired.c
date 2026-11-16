@@ -242,7 +242,6 @@ AreInstallerDetectionPoliciesEnabled(void)
     DWORD EnableInstaller = 0;
     DWORD Size;
     LONG Result;
-    BOOL Ret = FALSE;
 
     Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
                           L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
@@ -301,7 +300,7 @@ START_TEST(InstallerDetection)
         Error = Launch(Restricted, SetupExe, PlainEnv);
         if (Is32BitX86Image(SetupExe))
             ok(Error == ERROR_ELEVATION_REQUIRED, "unmanifested setup.exe: got %lu (expected %lu)\n",
-               Error, ERROR_ELEVATION_REQUIRED);
+               Error, (DWORD)ERROR_ELEVATION_REQUIRED);
         else
             ok(Error != ERROR_ELEVATION_REQUIRED,
                "non-x86-32 target: installer detection does not apply, got %lu\n", Error);
@@ -314,7 +313,7 @@ START_TEST(InstallerDetection)
         if (Is32BitX86Image(SetupNoLevel))
             ok(Error == ERROR_ELEVATION_REQUIRED,
                "manifest without requestedExecutionLevel setup.exe: got %lu (expected %lu)\n",
-               Error, ERROR_ELEVATION_REQUIRED);
+               Error, (DWORD)ERROR_ELEVATION_REQUIRED);
         else
             ok(Error != ERROR_ELEVATION_REQUIRED,
                "non-x86-32 target: installer detection does not apply, got %lu\n", Error);
