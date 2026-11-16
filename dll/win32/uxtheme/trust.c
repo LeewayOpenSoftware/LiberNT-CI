@@ -407,6 +407,63 @@ TrustEventWorker(PVOID ctx)
     return 0;
 }
 
+/* A work item queued under the loader lock never runs: starting the pool's first thread waits, without a timeout,
+ * until that thread has run its loader initialisation, which takes the same lock (sdk/lib/rtl/workitem.c,
+ * RtlpStartWorkerThread). The theme load inside DllMain is such a caller, so an event raised there is parked and
+ * written by the next call made outside the lock. */
+#define UXT_PENDING_MAX 8
+static LPWSTR g_pendingEvents[UXT_PENDING_MAX];
+static LONG g_pendingCount;
+
+static BOOL
+TrustUnderLoaderLock(void)
+{
+    return RtlIsCriticalSectionLockedByThread(NtCurrentPeb()->LoaderLock);
+}
+
+static void
+TrustQueueEvent(LPWSTR msg)
+{
+    if (!QueueUserWorkItem(TrustEventWorker, msg, WT_EXECUTEDEFAULT))
+        HeapFree(GetProcessHeap(), 0, msg);
+}
+
+static void
+TrustDeferEvent(LPWSTR msg)
+{
+    BOOL kept = FALSE;
+
+    while (InterlockedCompareExchange(&g_eventLock, 1, 0))
+        YieldProcessor();
+    if (g_pendingCount < UXT_PENDING_MAX)
+    {
+        g_pendingEvents[g_pendingCount++] = msg;
+        kept = TRUE;
+    }
+    InterlockedExchange(&g_eventLock, 0);
+    if (!kept)
+        HeapFree(GetProcessHeap(), 0, msg);
+}
+
+static void
+TrustFlushEvents(void)
+{
+    LPWSTR msgs[UXT_PENDING_MAX];
+    LONG i, n;
+
+    if (!g_pendingCount || TrustUnderLoaderLock())
+        return;
+    while (InterlockedCompareExchange(&g_eventLock, 1, 0))
+        YieldProcessor();
+    n = g_pendingCount;
+    for (i = 0; i < n; i++)
+        msgs[i] = g_pendingEvents[i];
+    g_pendingCount = 0;
+    InterlockedExchange(&g_eventLock, 0);
+    for (i = 0; i < n; i++)
+        TrustQueueEvent(msgs[i]);
+}
+
 /* T-PRIV-7: at most one event per style per process, written by a worker so that a missing event log never blocks */
 static void
 TrustEvent(LPCWSTR text, LPCWSTR name)
@@ -431,8 +488,13 @@ TrustEvent(LPCWSTR text, LPCWSTR name)
     if (!msg)
         return;
     StringCchPrintfW(msg, 160, L"%s: %s", text, name ? name : L"-");
-    if (!QueueUserWorkItem(TrustEventWorker, msg, WT_EXECUTEDEFAULT))
-        HeapFree(GetProcessHeap(), 0, msg);
+    if (TrustUnderLoaderLock())
+        TrustDeferEvent(msg);
+    else
+    {
+        TrustFlushEvents();
+        TrustQueueEvent(msg);
+    }
 }
 
 static BOOL
@@ -716,6 +778,8 @@ ThemeTrustPublishBootFact(void)
     HANDLE adjusted = NULL;
 
     TrustEnsureClassified();
+    /* winlogon calls this right after the LoadLibrary that parked the boot-time events */
+    TrustFlushEvents();
     if (g_classState != 2 || !g_userIsSystem)
         return FALSE;
     if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(UXT_GATE_SDDL, SDDL_REVISION_1, &sd, NULL))
