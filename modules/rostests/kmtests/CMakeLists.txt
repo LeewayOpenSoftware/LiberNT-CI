@@ -102,6 +102,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkVidPnTopology.c
     directx/DxgkVidPnModeSet.c
     directx/DxgkFlipQueue.c
+    directx/DxgkPointerShape.c
     directx/DxgkHandleTable.c
     directx/DxgkAdapterCaps.c
     directx/DxgkNodeAffinity.c
