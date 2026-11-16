@@ -7,6 +7,7 @@ list(APPEND SOURCE
     GetThemeParseErrorInfo.c
     MenuTheme.c
     NonClientBorder.c
+    PartSize.c
     NonClientCaption.c
     NonClientHitTest.c
     SetWindowTheme.c
