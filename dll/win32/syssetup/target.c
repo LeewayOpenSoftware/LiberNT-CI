@@ -916,6 +916,139 @@ done:
         LsaFreeMemory(AccountDomain);
     return ERROR_SUCCESS;
 }
+#define SETUP_PROVOKE_FILE L"LiberNT.SetupProvokePause"
+
+/* Test-only provocation gate: the acceptance harness may leave SETUP_PROVOKE_FILE
+ * at the root of the target volume, holding the name of the account-domain account
+ * to disable before the F4 post-check; the installer applies it and deletes the file. */
+static VOID
+ApplySetupProvocation(
+    _In_ PCWSTR SystemDrive)
+{
+    WCHAR FileName[MAX_PATH + 40];
+    WCHAR AccountName[UNLEN + 1];
+    WCHAR Line[160];
+    BYTE Buffer[UNLEN + 2];
+    HANDLE hFile;
+    DWORD cbRead = 0, i;
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    SAM_HANDLE ServerHandle = NULL;
+    SAM_HANDLE DomainHandle = NULL;
+    SAM_HANDLE UserHandle = NULL;
+    PULONG RelativeIds = NULL;
+    PSID_NAME_USE Use = NULL;
+    PUSER_CONTROL_INFORMATION ControlInfo = NULL;
+    UNICODE_STRING Name;
+    NTSTATUS Status;
+
+    if (FAILED(StringCchPrintfW(FileName, ARRAYSIZE(FileName),
+                                L"%s\\" SETUP_PROVOKE_FILE, SystemDrive)))
+        return;
+
+    hFile = CreateFileW(FileName, GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return;
+
+    if (ReadFile(hFile, Buffer, UNLEN + 1, &cbRead, NULL))
+    {
+        while (cbRead > 0 && (Buffer[cbRead - 1] == '\n' || Buffer[cbRead - 1] == '\r'))
+            cbRead--;
+    }
+    CloseHandle(hFile);
+
+    if (cbRead == 0)
+    {
+        DeleteFileW(FileName);
+        return;
+    }
+
+    for (i = 0; i < cbRead && i < UNLEN; i++)
+        AccountName[i] = (WCHAR)Buffer[i];
+    AccountName[i] = UNICODE_NULL;
+
+    StringCchPrintfW(Line, ARRAYSIZE(Line), L"#8P provocation: disabling '%s'", AccountName);
+    ReportTargetProgress(Line);
+
+    ZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
+    Status = LsaOpenPolicy(NULL, &ObjectAttributes,
+                           POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (NT_SUCCESS(Status))
+        Status = LsaQueryInformationPolicy(PolicyHandle,
+                                           PolicyAccountDomainInformation,
+                                           (PVOID *)&AccountDomain);
+    if (NT_SUCCESS(Status) && AccountDomain == NULL)
+        Status = STATUS_UNSUCCESSFUL;
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamConnect(NULL, &ServerHandle,
+                        SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN, NULL);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamOpenDomain(ServerHandle, DOMAIN_LOOKUP,
+                           AccountDomain->DomainSid, &DomainHandle);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    RtlInitUnicodeString(&Name, AccountName);
+    Status = SamLookupNamesInDomain(DomainHandle, 1, &Name, &RelativeIds, &Use);
+    if (!NT_SUCCESS(Status) || Use[0] != SidTypeUser)
+        goto Failed;
+
+    Status = SamOpenUser(DomainHandle,
+                         USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                         RelativeIds[0], &UserHandle);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamQueryInformationUser(UserHandle,
+                                     UserControlInformation,
+                                     (PVOID *)&ControlInfo);
+    if (NT_SUCCESS(Status))
+    {
+        ControlInfo->UserAccountControl |= USER_ACCOUNT_DISABLED;
+        Status = SamSetInformationUser(UserHandle, UserControlInformation, ControlInfo);
+    }
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    StringCchPrintfW(Line, ARRAYSIZE(Line),
+                     L"#8P provocation: '%s' (rid %lu) disabled", AccountName,
+                     RelativeIds[0]);
+    ReportTargetProgress(Line);
+    goto Cleanup;
+
+Failed:
+    StringCchPrintfW(Line, ARRAYSIZE(Line),
+                     L"#8P provocation: disabling '%s' failed (Status 0x%08lx)",
+                     AccountName, Status);
+    ReportTargetProgress(Line);
+
+Cleanup:
+    if (ControlInfo != NULL)
+        SamFreeMemory(ControlInfo);
+    if (Use != NULL)
+        SamFreeMemory(Use);
+    if (RelativeIds != NULL)
+        SamFreeMemory(RelativeIds);
+    if (UserHandle != NULL)
+        SamCloseHandle(UserHandle);
+    if (DomainHandle != NULL)
+        SamCloseHandle(DomainHandle);
+    if (ServerHandle != NULL)
+        SamCloseHandle(ServerHandle);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    DeleteFileW(FileName);
+}
+
 static DWORD
 ScheduleFirstBootComponents(
     _In_ PTARGET_SETTINGS Settings)
@@ -1491,6 +1624,7 @@ ConfigureTargetSystem(
         SecureZeroMemory(Settings->Password, sizeof(Settings->Password));
         if (Error != ERROR_SUCCESS)
             return Error;
+        ApplySetupProvocation(Settings->SystemDrive);
         EnsureTargetAdministrator();
     }
 
