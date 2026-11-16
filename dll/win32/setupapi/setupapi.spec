@@ -348,10 +348,10 @@
 @ stdcall SetupDiGetClassImageListExW(ptr wstr ptr)
 @ stdcall SetupDiGetClassInstallParamsA(ptr ptr ptr long ptr)
 @ stdcall SetupDiGetClassInstallParamsW(ptr ptr ptr long ptr)
-@ stub -version=0x600+ SetupDiGetClassPropertyExW
+@ stdcall -version=0x600+ SetupDiGetClassPropertyExW(ptr ptr ptr ptr long ptr long wstr ptr)
 @ stub -version=0x600+ SetupDiGetClassPropertyKeys
 @ stub -version=0x600+ SetupDiGetClassPropertyKeysExW
-@ stub -version=0x600+ SetupDiGetClassPropertyW
+@ stdcall -version=0x600+ SetupDiGetClassPropertyW(ptr ptr ptr ptr long ptr long)
 @ stdcall SetupDiGetClassRegistryPropertyA(ptr long ptr ptr long ptr str ptr)
 @ stdcall SetupDiGetClassRegistryPropertyW(ptr long ptr ptr long ptr wstr ptr)
 @ stdcall SetupDiGetCustomDevicePropertyA(ptr ptr str long ptr ptr long ptr)
@@ -423,8 +423,8 @@
 @ stub SetupDiSelectOEMDrv
 @ stdcall SetupDiSetClassInstallParamsA(ptr ptr ptr long)
 @ stdcall SetupDiSetClassInstallParamsW(ptr ptr ptr long)
-@ stub -version=0x600+ SetupDiSetClassPropertyExW
-@ stub -version=0x600+ SetupDiSetClassPropertyW
+@ stdcall -version=0x600+ SetupDiSetClassPropertyExW(ptr ptr long ptr long long wstr ptr)
+@ stdcall -version=0x600+ SetupDiSetClassPropertyW(ptr ptr long ptr long long)
 @ stdcall SetupDiSetClassRegistryPropertyA(ptr long ptr long str ptr)
 @ stdcall SetupDiSetClassRegistryPropertyW(ptr long ptr long wstr ptr)
 @ stdcall SetupDiSetDeviceInstallParamsA(ptr ptr ptr)

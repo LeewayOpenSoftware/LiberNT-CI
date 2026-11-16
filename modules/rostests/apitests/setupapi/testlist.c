@@ -16,6 +16,7 @@ extern void func_LegacyDeviceParent(void);
 extern void func_NewDeviceInstall(void);
 extern void func_SetupInstallServicesFromInfSectionEx(void);
 extern void func_SetupCommitFileQueue(void);
+extern void func_SetupDiClassProperty(void);
 extern void func_SetupDiInstallClassExA(void);
 extern void func_SetupDiOpenDeviceInterface(void);
 extern void func_SetupInstallFile(void);
@@ -39,6 +40,7 @@ const struct test winetest_testlist[] =
     { "NewDeviceInstall", func_NewDeviceInstall },
     { "SetupInstallServicesFromInfSectionEx", func_SetupInstallServicesFromInfSectionEx},
     { "SetupCommitFileQueue", func_SetupCommitFileQueue },
+    { "SetupDiClassProperty", func_SetupDiClassProperty },
     { "SetupDiInstallClassExA", func_SetupDiInstallClassExA},
     { "SetupDiOpenDeviceInterface", func_SetupDiOpenDeviceInterface },
     { "SetupInstallFile", func_SetupInstallFile },

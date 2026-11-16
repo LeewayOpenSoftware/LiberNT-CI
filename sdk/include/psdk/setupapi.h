@@ -179,6 +179,8 @@ extern "C" {
 #define DIGCF_INTERFACEDEVICE	0x00000010
 #define DIOCR_INSTALLER	0x00000001
 #define DIOCR_INTERFACE	0x00000002
+#define DICLASSPROP_INSTALLER	0x00000001
+#define DICLASSPROP_INTERFACE	0x00000002
 #define DIODI_NO_ADD	0x00000001
 #define DIOD_INHERIT_CLASSDRVS	0x00000002
 #define DIOD_CANCEL_REMOVE	0x00000004
@@ -1971,6 +1973,11 @@ SetupDiSetDevicePropertyW(
   _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE *PropertyBuffer,
   _In_ DWORD PropertyBufferSize,
   _In_ DWORD Flags);
+
+WINSETUPAPI BOOL WINAPI SetupDiGetClassPropertyW(_In_ CONST GUID*, _In_ CONST DEVPROPKEY*, _Out_ DEVPROPTYPE*, _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize) PBYTE, _In_ DWORD PropertyBufferSize, _Out_opt_ PDWORD RequiredSize, _In_ DWORD Flags);
+WINSETUPAPI BOOL WINAPI SetupDiGetClassPropertyExW(_In_ CONST GUID*, _In_ CONST DEVPROPKEY*, _Out_ DEVPROPTYPE*, _Out_writes_bytes_to_opt_(PropertyBufferSize, *RequiredSize) PBYTE, _In_ DWORD PropertyBufferSize, _Out_opt_ PDWORD RequiredSize, _In_ DWORD Flags, _In_opt_ PCWSTR MachineName, _Reserved_ PVOID Reserved);
+WINSETUPAPI BOOL WINAPI SetupDiSetClassPropertyW(_In_ CONST GUID*, _In_ CONST DEVPROPKEY*, _In_ DEVPROPTYPE, _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE*, _In_ DWORD PropertyBufferSize, _In_ DWORD Flags);
+WINSETUPAPI BOOL WINAPI SetupDiSetClassPropertyExW(_In_ CONST GUID*, _In_ CONST DEVPROPKEY*, _In_ DEVPROPTYPE, _In_reads_bytes_opt_(PropertyBufferSize) CONST BYTE*, _In_ DWORD PropertyBufferSize, _In_ DWORD Flags, _In_opt_ PCWSTR MachineName, _Reserved_ PVOID Reserved);
 
 WINSETUPAPI BOOL WINAPI SetupDiSetDeviceInstallParamsA(_In_ HDEVINFO, _In_opt_ PSP_DEVINFO_DATA, _In_ PSP_DEVINSTALL_PARAMS_A);
 WINSETUPAPI BOOL WINAPI SetupDiSetDeviceInstallParamsW(_In_ HDEVINFO, _In_opt_ PSP_DEVINFO_DATA, _In_ PSP_DEVINSTALL_PARAMS_W);
