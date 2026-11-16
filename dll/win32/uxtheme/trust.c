@@ -410,10 +410,12 @@ TrustEventWorker(PVOID ctx)
 /* A work item queued under the loader lock never runs: starting the pool's first thread waits, without a timeout,
  * until that thread has run its loader initialisation, which takes the same lock (sdk/lib/rtl/workitem.c,
  * RtlpStartWorkerThread). The theme load inside DllMain is such a caller, so an event raised there is parked and
- * written by the next call made outside the lock. */
+ * written by the next call made outside the lock: winlogon makes it through the boot publish, a themed process at its
+ * first event outside the lock; a process that only ever raises events under the lock keeps them parked for its life. */
 #define UXT_PENDING_MAX 8
 static LPWSTR g_pendingEvents[UXT_PENDING_MAX];
 static LONG g_pendingCount;
+static LONG g_droppedEvents;
 
 static BOOL
 TrustUnderLoaderLock(void)
@@ -440,6 +442,8 @@ TrustDeferEvent(LPWSTR msg)
         g_pendingEvents[g_pendingCount++] = msg;
         kept = TRUE;
     }
+    else
+        g_droppedEvents++;
     InterlockedExchange(&g_eventLock, 0);
     if (!kept)
         HeapFree(GetProcessHeap(), 0, msg);
@@ -448,8 +452,8 @@ TrustDeferEvent(LPWSTR msg)
 static void
 TrustFlushEvents(void)
 {
-    LPWSTR msgs[UXT_PENDING_MAX];
-    LONG i, n;
+    LPWSTR msgs[UXT_PENDING_MAX], note;
+    LONG i, n, dropped;
 
     if (!g_pendingCount || TrustUnderLoaderLock())
         return;
@@ -459,9 +463,17 @@ TrustFlushEvents(void)
     for (i = 0; i < n; i++)
         msgs[i] = g_pendingEvents[i];
     g_pendingCount = 0;
+    dropped = g_droppedEvents;
+    g_droppedEvents = 0;
     InterlockedExchange(&g_eventLock, 0);
     for (i = 0; i < n; i++)
         TrustQueueEvent(msgs[i]);
+    /* the log must say that something is missing */
+    if (dropped > 0 && (note = HeapAlloc(GetProcessHeap(), 0, 80 * sizeof(WCHAR))) != NULL)
+    {
+        StringCchPrintfW(note, 80, L"%ld trust events dropped under the loader lock", dropped);
+        TrustQueueEvent(note);
+    }
 }
 
 /* T-PRIV-7: at most one event per style per process, written by a worker so that a missing event log never blocks */
