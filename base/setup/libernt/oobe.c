@@ -579,7 +579,7 @@ DisableSetupAccount(
     DWORD cbAdminSid = sizeof(AdminSidBuffer);
     WCHAR SetupName[UNLEN + 1], AdminGroup[GNLEN + 1], Domain[DNLEN + 1];
     WCHAR DefaultName[UNLEN + 1];
-    DWORD cchName, cchAdmin, cchDomain, cchDefaultName;
+    DWORD cchName, cchAdmin, cchDomain;
     DWORD Rid = 0, cbData = sizeof(Rid), dwType, Entries = 0, Total = 0, i;
     DWORD Resume = 0, Error = ERROR_SUCCESS;
     HKEY hKey = NULL;
@@ -592,7 +592,7 @@ DisableSetupAccount(
     NTSTATUS NtStatus;
     ULONG DomainSubAuthorityCount;
 
-    RegError = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\Setup", 0,
+    RegError = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0,
                              KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey);
     if (RegError != ERROR_SUCCESS)
         return (DWORD)RegError;
@@ -741,14 +741,15 @@ DisableSetupAccount(
 
     /* Clear autologon state that still points at the setup account. */
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                      L"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                      L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
                       0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
     {
-        cchDefaultName = ARRAYSIZE(DefaultName);
+        DWORD cbDefaultName = sizeof(DefaultName);
+
         cchDomain = ARRAYSIZE(Domain);
         cbUserSid = sizeof(UserSidBuffer);
         if (RegQueryValueExW(hKey, L"DefaultUserName", NULL, &dwType,
-                             (PBYTE)DefaultName, &cchDefaultName) == ERROR_SUCCESS &&
+                             (PBYTE)DefaultName, &cbDefaultName) == ERROR_SUCCESS &&
             dwType == REG_SZ &&
             LookupAccountNameW(NULL, DefaultName, (PSID)UserSidBuffer,
                                &cbUserSid, Domain, &cchDomain, &Use) &&
@@ -763,7 +764,7 @@ DisableSetupAccount(
     }
 
     /* The marker goes last: only a fully retired account drops it. */
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\Setup", 0,
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0,
                         KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
     {
         RegDeleteValueW(hKey, L"SetupAccountRid");

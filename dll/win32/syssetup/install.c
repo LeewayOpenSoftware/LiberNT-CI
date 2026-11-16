@@ -1181,7 +1181,7 @@ IsPreinstallSetup(VOID)
     LONG Error;
 
     Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                          L"SYSTEM\Setup",
+                          L"SYSTEM\\Setup",
                           0,
                           KEY_QUERY_VALUE,
                           &hKey);
@@ -1255,7 +1255,7 @@ PrepareSetupAccount(VOID)
     }
 
     Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                          L"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                          L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
                           0,
                           KEY_SET_VALUE,
                           &hKey);
@@ -1277,7 +1277,7 @@ PrepareSetupAccount(VOID)
 
     Status = SamConnect(NULL, &ServerHandle,
                           SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN,
-                          TRUE);
+                          NULL);
     if (!NT_SUCCESS(Status))
         goto done;
 
@@ -1636,7 +1636,8 @@ InstallLiveCD(VOID)
 
     if (bPreinstall)
     {
-        /* F2: the setup session runs as RID 500 itself, enabled by RID;         * it is retired after the OOBE by F3. */
+        /* F2: the setup session runs as RID 500 itself, enabled by RID;
+         * it is retired after the OOBE by F3. */
         Status = PrepareSetupAccount();
         if (!NT_SUCCESS(Status))
             goto error;

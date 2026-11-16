@@ -698,7 +698,7 @@ EnsureTargetAdministrator(VOID)
     SAM_HANDLE UserHandle = NULL;
     PUSER_CONTROL_INFORMATION ControlInfo = NULL;
     PSID BuiltinSid = NULL, MemberSid, AccountSid;
-    PULONG MemberCount = NULL;
+    ULONG MemberCount = 0;
     PSID *MemberSids = NULL;
     ULONG i, Rid;
     UCHAR DomainSubAuthorityCount;
@@ -724,7 +724,7 @@ EnsureTargetAdministrator(VOID)
 
     Status = SamConnect(NULL, &ServerHandle,
                           SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN,
-                          TRUE);
+                          NULL);
     if (!NT_SUCCESS(Status))
     {
         Result = RtlNtStatusToDosError(Status);
@@ -773,15 +773,23 @@ EnsureTargetAdministrator(VOID)
     }
 
     DomainSubAuthorityCount = *RtlSubAuthorityCountSid(AccountDomain->DomainSid);
-    for (i = 0; i < *MemberCount; i++)
+    for (i = 0; i < MemberCount; i++)
     {
+        BYTE ExpectedSidBuffer[SECURITY_MAX_SID_SIZE];
+        PSID ExpectedSid = (PSID)ExpectedSidBuffer;
+
         MemberSid = MemberSids[i];
 
+        /* Match only members that are exactly this domain SID with one
+         * more sub-authority; the count check alone is not enough. */
         if (*RtlSubAuthorityCountSid(MemberSid) != DomainSubAuthorityCount + 1)
             continue;
-        if (RtlCompareMemory(MemberSid, AccountDomain->DomainSid,
-                             RtlLengthSid(AccountDomain->DomainSid) - sizeof(ULONG)) !=
-            RtlLengthSid(AccountDomain->DomainSid) - sizeof(ULONG))
+        RtlCopyMemory(ExpectedSid, AccountDomain->DomainSid,
+                      RtlLengthSid(AccountDomain->DomainSid));
+        *RtlSubAuthorityCountSid(ExpectedSid) = DomainSubAuthorityCount + 1;
+        *RtlSubAuthoritySid(ExpectedSid, DomainSubAuthorityCount) =
+            *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (!RtlEqualSid(MemberSid, ExpectedSid))
             continue;
 
         Rid = *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);

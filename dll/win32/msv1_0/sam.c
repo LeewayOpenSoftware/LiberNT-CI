@@ -396,13 +396,20 @@ MsvpSafeModeRid500Recovery(
     for (i = 0; i < Members.Count; i++)
     {
         PSID MemberSid = (PSID)Members.Sids[i].SidPointer;
+        BYTE ExpectedSidBuffer[SECURITY_MAX_SID_SIZE];
+        PSID ExpectedSid = (PSID)ExpectedSidBuffer;
         ULONG Rid;
 
+        /* Match only members that are exactly this domain SID with one
+         * more sub-authority; the count check alone is not enough. */
         if (*RtlSubAuthorityCountSid(MemberSid) != DomainSubAuthorityCount + 1)
             continue;
-        if (RtlCompareMemory(MemberSid, AccountDomainSid,
-                             RtlLengthSid(AccountDomainSid) - sizeof(ULONG)) !=
-            RtlLengthSid(AccountDomainSid) - sizeof(ULONG))
+        RtlCopyMemory(ExpectedSid, AccountDomainSid,
+                      RtlLengthSid(AccountDomainSid));
+        *RtlSubAuthorityCountSid(ExpectedSid) = DomainSubAuthorityCount + 1;
+        *RtlSubAuthoritySid(ExpectedSid, DomainSubAuthorityCount) =
+            *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (!RtlEqualSid(MemberSid, ExpectedSid))
             continue;
 
         Rid = *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
@@ -587,7 +594,7 @@ SamValidateNormalUser(
         }
         else
         {
-        ERR("Account disabled!\n");
+            ERR("Account disabled!\n");
             *SubStatus = STATUS_ACCOUNT_DISABLED;
             Status = STATUS_ACCOUNT_RESTRICTION;
             goto done;
