@@ -9,7 +9,8 @@
  *
  * Usage: themetest [--class NAME] [--part N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]
  *                  [--list] [--style FILE.msstyles] [--all-styles DIR]
- *   --class  only the rows of that theme class (Button, Edit, Combobox, Scrollbar, Progress, Tab, Header, Window)
+ *   --class  only the rows of that theme class (Button, Edit, Combobox, Scrollbar, Progress, Tab, Header, Window,
+ *            Toolbar, Rebar, Status, Menu, Spin, Trackbar, Tooltip, ListView, TreeView)
  *   --part   only that part id of the class
  *   --out    write a screenshot of the client area after the first paint, then exit (default: stay open)
  *   --csv    write "class,part,state,TS_MIN w,h,TS_TRUE w,h,TS_DRAW w,h,hr" per cell
@@ -73,6 +74,28 @@ static const struct row ROWS[] = {
     { L"Window", WP_MAXBUTTON, L"MaxBtn", MAXBS_NORMAL, MAXBS_DISABLED, 28, 20, 0 },
     { L"Window", WP_FRAMELEFT, L"FrameLeft", FS_ACTIVE, FS_INACTIVE, 12, 48, 0 },
     { L"Window", WP_FRAMEBOTTOM, L"FrameBottom", FS_ACTIVE, FS_INACTIVE, 96, 12, 0 },
+    /* second wave (owner, 2026-11-16): the rest of the common controls */
+    { L"Toolbar", TP_BUTTON, L"Button", TS_NORMAL, TS_HOTCHECKED, 48, 24, 0 },
+    { L"Toolbar", TP_SEPARATOR, L"Separator", TS_NORMAL, TS_NORMAL, 12, 24, 0 },
+    { L"Rebar", RP_BAND, L"Band", 1, 1, 96, 24, 0 },
+    { L"Rebar", RP_GRIPPER, L"Gripper", 1, 1, 12, 24, 0 },
+    { L"Rebar", RP_CHEVRON, L"Chevron", CHEVS_NORMAL, CHEVS_PRESSED, 24, 24, 0 },
+    { L"Status", SP_PANE, L"Pane", 1, 1, 96, 22, 1 },
+    { L"Status", SP_GRIPPER, L"Gripper", 1, 1, 20, 20, 0 },
+    { L"Menu", MENU_BARBACKGROUND, L"BarBackground", MB_ACTIVE, MB_INACTIVE, 96, 22, 0 },
+    { L"Menu", MENU_BARITEM, L"BarItem", MBI_NORMAL, MBI_DISABLEDPUSHED, 48, 22, 1 },
+    { L"Menu", MENU_POPUPITEM, L"PopupItem", MPI_NORMAL, MPI_DISABLEDHOT, 96, 22, 1 },
+    { L"Menu", MENU_POPUPCHECK, L"PopupCheck", MC_CHECKMARKNORMAL, MC_BULLETDISABLED, 24, 22, 0 },
+    { L"Menu", MENU_POPUPSEPARATOR, L"PopupSeparator", 1, 1, 96, 8, 0 },
+    { L"Spin", SPNP_UP, L"Up", UPS_NORMAL, UPS_DISABLED, 20, 14, 0 },
+    { L"Spin", SPNP_DOWN, L"Down", DNS_NORMAL, DNS_DISABLED, 20, 14, 0 },
+    { L"Trackbar", TKP_TRACK, L"Track", TKS_NORMAL, TKS_NORMAL, 96, 8, 0 },
+    { L"Trackbar", TKP_THUMB, L"Thumb", TUS_NORMAL, TUS_DISABLED, 16, 24, 0 },
+    { L"Trackbar", TKP_THUMBBOTTOM, L"ThumbBottom", TUBS_NORMAL, TUBS_DISABLED, 16, 24, 0 },
+    { L"Tooltip", TTP_STANDARD, L"Standard", TTSS_NORMAL, TTSS_LINK, 96, 24, 1 },
+    { L"ListView", LVP_LISTITEM, L"ListItem", LISS_NORMAL, LISS_HOTSELECTED, 96, 22, 1 },
+    { L"TreeView", TVP_TREEITEM, L"TreeItem", TREIS_NORMAL, TREIS_HOTSELECTED, 96, 22, 1 },
+    { L"TreeView", TVP_GLYPH, L"Glyph", GLPS_CLOSED, GLPS_OPENED, 16, 16, 0 },
 };
 #define NROWS ((int)(sizeof(ROWS) / sizeof(ROWS[0])))
 
