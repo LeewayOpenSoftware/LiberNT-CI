@@ -61,6 +61,12 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
     BOOLEAN DoNextCheck;
     NTSTATUS Status;
     UCHAR Condition;
+    static const ULONG CheckFields[] =
+    {
+        VER_MINORVERSION, VER_MAJORVERSION, VER_BUILDNUMBER, VER_PLATFORMID,
+        VER_SERVICEPACKMINOR, VER_SERVICEPACKMAJOR, VER_SUITENAME, VER_PRODUCT_TYPE
+    };
+    ULONG i;
 
     /* FIXME:
         - Check the following special case on Windows (various versions):
@@ -82,14 +88,32 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
         return STATUS_INVALID_PARAMETER;
     }
 
+    if ((ConditionMask & (1ULL << 63)) == 0)
+    {
+        /* Without the marker bit VerSetConditionMask sets, a listed field
+           whose condition is zero fails the call (ERROR_OLD_WIN_VERSION). */
+        for (i = 0; i < RTL_NUMBER_OF(CheckFields); i++)
+        {
+            if ((TypeMask & CheckFields[i]) &&
+                RtlpVerGetCondition(ConditionMask, CheckFields[i]) == 0)
+            {
+                return STATUS_REVISION_MISMATCH;
+            }
+        }
+    }
+
     if (TypeMask & VER_PRODUCT_TYPE)
     {
-        Comparison = RtlpVerCompare(Version.wProductType,
-                                    VersionInfo->wProductType,
-                                    RtlpVerGetCondition(ConditionMask, VER_PRODUCT_TYPE));
-        if (!Comparison)
+        Condition = RtlpVerGetCondition(ConditionMask, VER_PRODUCT_TYPE);
+        if (Condition != 0)
         {
-            return STATUS_REVISION_MISMATCH;
+            Comparison = RtlpVerCompare(Version.wProductType,
+                                        VersionInfo->wProductType,
+                                        Condition);
+            if (!Comparison)
+            {
+                return STATUS_REVISION_MISMATCH;
+            }
         }
     }
 
@@ -97,6 +121,10 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
     {
         switch (RtlpVerGetCondition(ConditionMask, VER_SUITENAME))
         {
+            case 0:
+                /* Unconditioned field under the VerSetConditionMask bit: pass. */
+                break;
+
             case VER_AND:
             {
                 if ((VersionInfo->wSuiteMask & Version.wSuiteMask) != VersionInfo->wSuiteMask)
@@ -124,23 +152,31 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
 
     if (TypeMask & VER_PLATFORMID)
     {
-        Comparison = RtlpVerCompare(Version.dwPlatformId,
-                                    VersionInfo->dwPlatformId,
-                                    RtlpVerGetCondition(ConditionMask, VER_PLATFORMID));
-        if (!Comparison)
+        Condition = RtlpVerGetCondition(ConditionMask, VER_PLATFORMID);
+        if (Condition != 0)
         {
-            return STATUS_REVISION_MISMATCH;
+            Comparison = RtlpVerCompare(Version.dwPlatformId,
+                                        VersionInfo->dwPlatformId,
+                                        Condition);
+            if (!Comparison)
+            {
+                return STATUS_REVISION_MISMATCH;
+            }
         }
     }
 
     if (TypeMask & VER_BUILDNUMBER)
     {
-        Comparison = RtlpVerCompare(Version.dwBuildNumber,
-                                    VersionInfo->dwBuildNumber,
-                                    RtlpVerGetCondition(ConditionMask, VER_BUILDNUMBER));
-        if (!Comparison)
+        Condition = RtlpVerGetCondition(ConditionMask, VER_BUILDNUMBER);
+        if (Condition != 0)
         {
-            return STATUS_REVISION_MISMATCH;
+            Comparison = RtlpVerCompare(Version.dwBuildNumber,
+                                        VersionInfo->dwBuildNumber,
+                                        Condition);
+            if (!Comparison)
+            {
+                return STATUS_REVISION_MISMATCH;
+            }
         }
     }
 
@@ -150,14 +186,18 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
     if (TypeMask & VER_MAJORVERSION)
     {
         Condition = RtlpVerGetCondition(ConditionMask, VER_MAJORVERSION);
-        DoNextCheck = (VersionInfo->dwMajorVersion == Version.dwMajorVersion);
-        Comparison = RtlpVerCompare(Version.dwMajorVersion,
-                                    VersionInfo->dwMajorVersion,
-                                    Condition);
-
-        if (!Comparison && !DoNextCheck)
+        DoNextCheck = TRUE;
+        if (Condition != 0)
         {
-            return STATUS_REVISION_MISMATCH;
+            DoNextCheck = (VersionInfo->dwMajorVersion == Version.dwMajorVersion);
+            Comparison = RtlpVerCompare(Version.dwMajorVersion,
+                                        VersionInfo->dwMajorVersion,
+                                        Condition);
+
+            if (!Comparison && !DoNextCheck)
+            {
+                return STATUS_REVISION_MISMATCH;
+            }
         }
     }
 
@@ -170,14 +210,18 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
                 Condition = RtlpVerGetCondition(ConditionMask, VER_MINORVERSION);
             }
 
-            DoNextCheck = (VersionInfo->dwMinorVersion == Version.dwMinorVersion);
-            Comparison = RtlpVerCompare(Version.dwMinorVersion,
-                                        VersionInfo->dwMinorVersion,
-                                        Condition);
-
-            if (!Comparison && !DoNextCheck)
+            DoNextCheck = TRUE;
+            if (Condition != 0)
             {
-                return STATUS_REVISION_MISMATCH;
+                DoNextCheck = (VersionInfo->dwMinorVersion == Version.dwMinorVersion);
+                Comparison = RtlpVerCompare(Version.dwMinorVersion,
+                                            VersionInfo->dwMinorVersion,
+                                            Condition);
+
+                if (!Comparison && !DoNextCheck)
+                {
+                    return STATUS_REVISION_MISMATCH;
+                }
             }
         }
 
@@ -188,14 +232,18 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
                 Condition = RtlpVerGetCondition(ConditionMask, VER_SERVICEPACKMAJOR);
             }
 
-            DoNextCheck = (VersionInfo->wServicePackMajor == Version.wServicePackMajor);
-            Comparison = RtlpVerCompare(Version.wServicePackMajor,
-                                        VersionInfo->wServicePackMajor,
-                                        Condition);
-
-            if (!Comparison && !DoNextCheck)
+            DoNextCheck = TRUE;
+            if (Condition != 0)
             {
-                return STATUS_REVISION_MISMATCH;
+                DoNextCheck = (VersionInfo->wServicePackMajor == Version.wServicePackMajor);
+                Comparison = RtlpVerCompare(Version.wServicePackMajor,
+                                            VersionInfo->wServicePackMajor,
+                                            Condition);
+
+                if (!Comparison && !DoNextCheck)
+                {
+                    return STATUS_REVISION_MISMATCH;
+                }
             }
 
             if (DoNextCheck && (TypeMask & VER_SERVICEPACKMINOR))
@@ -205,13 +253,17 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
                     Condition = RtlpVerGetCondition(ConditionMask, VER_SERVICEPACKMINOR);
                 }
 
-                Comparison = RtlpVerCompare(Version.wServicePackMinor,
-                                            VersionInfo->wServicePackMinor,
-                                            Condition);
-
-                if (!Comparison)
+                DoNextCheck = TRUE;
+                if (Condition != 0)
                 {
-                    return STATUS_REVISION_MISMATCH;
+                    Comparison = RtlpVerCompare(Version.wServicePackMinor,
+                                                VersionInfo->wServicePackMinor,
+                                                Condition);
+
+                    if (!Comparison)
+                    {
+                        return STATUS_REVISION_MISMATCH;
+                    }
                 }
             }
         }
