@@ -1241,12 +1241,12 @@ struct test
   #pragma section(".test$B",long,read)
   #pragma section(".test$C",long,read)
   #define _TESTALLOC(x) __declspec(allocate(x))
-  #define _TESTALLOC_ENTRY __declspec(allocate(".test$B"))
+  #define _TESTALLOC_ENTRY(name) __declspec(allocate(".test$B"))
   #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x) const void* keep_##x = &x;
 #elif defined(__GNUC__)
   #define _TESTALLOC(x) __attribute__((used, section(x)))
-  #define _TESTALLOC_ENTRY _TESTALLOC(_CRT_STRINGIZE(.test$B##name))
+  #define _TESTALLOC_ENTRY(name) _TESTALLOC(_CRT_STRINGIZE(.test$B##name))
   #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x)
 #else
@@ -1257,7 +1257,7 @@ struct test
 #define START_TEST(name) \
   EXTERN_C void func_##name(void); \
   _PRAGMA_SECTION(_CRT_STRINGIZE(.test$B##name), long, read); \
-  _TESTALLOC_ENTRY const struct test winetest_testentry_##name = { #name, func_##name }; \
+  _TESTALLOC_ENTRY(name) const struct test winetest_testentry_##name = { #name, func_##name }; \
   _TESTKEEP(winetest_testentry_##name) \
   EXTERN_C void func_##name(void)
 
