@@ -1,5 +1,6 @@
 
 list(APPEND SOURCE
+    BuildDriverInfoBadInf.c
     ClassInstallParams.c
     devclass.c
     DeviceDescription.c

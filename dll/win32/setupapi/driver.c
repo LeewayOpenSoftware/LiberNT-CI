@@ -516,7 +516,7 @@ GetVersionInformationFromInfFile(
         NULL, /* Context */
         hInf,
         Version, ClassGUID,
-        guidW, sizeof(guidW),
+        guidW, ARRAYSIZE(guidW),
         NULL /* Required size */))
     {
         goto cleanup;
