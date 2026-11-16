@@ -22,7 +22,8 @@
  *   --scale  cell scale factor 1..4 (default 1)
  *   --list   print the visual styles of the store (%windir%\Resources\Themes\<name>\*.msstyles) and exit
  *   --style  apply that style file first (SetSystemVisualStyle, the same call the Personalization page makes)
- *   --all-styles  for every style of the store (DIR is created): apply it, repaint, write DIR\<name>.bmp and DIR\<name>.csv, then put the
+ *   --all-styles  for every style of the store (DIR is created first, exit code 6 when that fails): apply it, repaint,
+ *                 write DIR\<name>.bmp and DIR\<name>.csv, then put the
  *                 (a style that stalls for longer than 15 s + 4 x wait ends the run with DIR\<name>.stall.txt naming the
  *                 stage and the cell, exit code 7)
  *            style that was active back and exit
@@ -545,13 +546,13 @@ int wmain(int argc, wchar_t **argv)
         wprintf(L"themetest: %d style(s) in the store\n", g_nstyles);
         return 0;
     }
-    if (style && FAILED(apply_style(style))) return 4;
-
+    /* before any style change: a failure here must leave the active style as it was */
     if (g_batch_dir && !CreateDirectoryW(g_batch_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
     {
         wprintf(L"themetest: cannot create %ls (error %lu)\n", g_batch_dir, GetLastError());
-        return 3;
+        return 6;
     }
+    if (style && FAILED(apply_style(style))) return 4;
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = wndproc;
