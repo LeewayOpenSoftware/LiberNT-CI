@@ -216,6 +216,34 @@ SamrOpenUser(IN SAMPR_HANDLE DomainHandle,
              IN ULONG UserId,
              OUT SAMPR_HANDLE *UserHandle);
 
+typedef struct _SAMPR_SID_INFORMATION
+{
+    PRPC_SID SidPointer;
+} SAMPR_SID_INFORMATION, *PSAMPR_SID_INFORMATION;
+
+typedef struct _SAMPR_PSID_ARRAY
+{
+    unsigned long Count;
+    PSAMPR_SID_INFORMATION Sids;
+} SAMPR_PSID_ARRAY, *PSAMPR_PSID_ARRAY;
+
+VOID
+NTAPI
+SamIFreeVoid(IN PVOID Ptr);
+
+NTSTATUS
+NTAPI
+SamrOpenAlias(IN SAMPR_HANDLE DomainHandle,
+              IN ACCESS_MASK DesiredAccess,
+              IN ULONG AliasId,
+              OUT SAMPR_HANDLE *AliasHandle);
+
+NTSTATUS
+NTAPI
+SamrGetMembersInAlias(IN SAMPR_HANDLE AliasHandle,
+                      OUT PSAMPR_PSID_ARRAY Members);
+
+
 NTSTATUS
 NTAPI
 SamrQueryInformationUser(IN SAMPR_HANDLE UserHandle,
