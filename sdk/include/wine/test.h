@@ -662,9 +662,12 @@ struct test
 
 #ifdef __REACTOS__
 extern const struct test winetest_testlist_start[];
+extern const struct test winetest_testlist_end[];
 const struct test* winetest_testlist = &winetest_testlist_start[1];
+#define winetest_testlist_at_end(t) ((t) >= winetest_testlist_end)
 #else
 extern const struct test winetest_testlist[];
+#define winetest_testlist_at_end(t) (!(t)->name)
 #endif
 
 /* debug level */
@@ -851,11 +854,11 @@ static const struct test *find_test( const char *name )
     len = strlen(name);
     if (len > 2 && !strcmp( name + len - 2, ".c" )) len -= 2;
 
-    for (test = winetest_testlist; test->name; test++)
+    for (test = winetest_testlist; !winetest_testlist_at_end(test); test++)
     {
-        if (!strncmp( test->name, name, len ) && !test->name[len]) break;
+        if (test->name && !strncmp( test->name, name, len ) && !test->name[len]) break;
     }
-    return test->name ? test : NULL;
+    return (!winetest_testlist_at_end(test) && test->name) ? test : NULL;
 }
 
 
@@ -865,7 +868,8 @@ static void list_tests(void)
     const struct test *test;
 
     fprintf( stdout, "Valid test names:\n" );
-    for (test = winetest_testlist; test->name; test++) fprintf( stdout, "    %s\n", test->name );
+    for (test = winetest_testlist; !winetest_testlist_at_end(test); test++)
+        if (test->name) fprintf( stdout, "    %s\n", test->name );
 }
 
 /* Disable false-positive claiming "test" would be NULL-dereferenced */
@@ -995,8 +999,10 @@ int main( int argc, char **argv )
 
     if (!argv[1])
     {
-        if (winetest_testlist[0].name && !winetest_testlist[1].name)  /* only one test */
-            return run_test( winetest_testlist[0].name );
+        const struct test *first = winetest_testlist;
+        while (!winetest_testlist_at_end(first) && !first->name) first++;
+        if (first->name && (winetest_testlist_at_end(first + 1) || !first[1].name))  /* only one test */
+            return run_test( first->name );
         usage( argv[0] );
     }
     if (!strcmp( argv[1], "--list" ))
@@ -1233,11 +1239,14 @@ struct test
 #if defined(_MSC_VER)
   #pragma section(".test$A",long,read)
   #pragma section(".test$B",long,read)
-  #define _TESTALLOC(x) __declspec(allocate(".test$B"))
+  #pragma section(".test$C",long,read)
+  #define _TESTALLOC(x) __declspec(allocate(x))
+  #define _TESTALLOC_ENTRY __declspec(allocate(".test$B"))
   #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x) const void* keep_##x = &x;
 #elif defined(__GNUC__)
   #define _TESTALLOC(x) __attribute__((used, section(x)))
+  #define _TESTALLOC_ENTRY _TESTALLOC(_CRT_STRINGIZE(.test$B##name))
   #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x)
 #else
@@ -1248,13 +1257,14 @@ struct test
 #define START_TEST(name) \
   EXTERN_C void func_##name(void); \
   _PRAGMA_SECTION(_CRT_STRINGIZE(.test$B##name), long, read); \
-  _TESTALLOC(_CRT_STRINGIZE(.test$B##name)) const struct test winetest_testentry_##name = { #name, func_##name }; \
+  _TESTALLOC_ENTRY const struct test winetest_testentry_##name = { #name, func_##name }; \
   _TESTKEEP(winetest_testentry_##name) \
   EXTERN_C void func_##name(void)
 
 #ifdef STANDALONE
 
 _TESTALLOC(".test$A") const struct test winetest_testlist_start[] = { { "", 0 } };
+_TESTALLOC(".test$C") const struct test winetest_testlist_end[] = { { 0, 0 } };
 #define winetest_testlist winetest_testlist_dummy
 
 LONG winetest_get_successes(void)
