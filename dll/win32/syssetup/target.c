@@ -558,8 +558,12 @@ CreateTargetAccount(
         if (NT_SUCCESS(Status))
         {
             RelativeId = RelativeIds[0];
-            Status = (Use[0] == SidTypeUser) ? SamOpenUser(DomainHandle, USER_ALL_ACCESS, RelativeId, &UserHandle)
-                                             : STATUS_USER_EXISTS;
+            /* The built-in Administrator is never reused as the target
+             * account; ask the user for another name. */
+            if (Use[0] == SidTypeUser && RelativeId != DOMAIN_USER_RID_ADMIN)
+                Status = SamOpenUser(DomainHandle, USER_ALL_ACCESS, RelativeId, &UserHandle);
+            else
+                Status = STATUS_USER_EXISTS;
             SamFreeMemory(RelativeIds);
             SamFreeMemory(Use);
         }
