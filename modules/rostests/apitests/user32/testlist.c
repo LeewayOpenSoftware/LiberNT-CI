@@ -120,6 +120,9 @@ extern void func_SetProp(void);
 extern void func_SetScrollInfo(void);
 extern void func_SetScrollRange(void);
 extern void func_SetWindowPlacement(void);
+extern void func_SharedInputLanguage(void);
+extern void func_ShellHookShowActive(void);
+extern void func_SetWindowPosOwnerTree(void);
 extern void func_SetWindowPosZOrder(void);
 extern void func_WindowDisplayAffinity(void);
 extern void func_WindowRegionFrame(void);
@@ -265,6 +268,9 @@ const struct test winetest_testlist[] =
     { "SetScrollInfo", func_SetScrollInfo },
     { "SetScrollRange", func_SetScrollRange },
     { "SetWindowPlacement", func_SetWindowPlacement },
+    { "SharedInputLanguage", func_SharedInputLanguage },
+    { "ShellHookShowActive", func_ShellHookShowActive },
+    { "SetWindowPosOwnerTree", func_SetWindowPosOwnerTree },
     { "SetWindowPosZOrder", func_SetWindowPosZOrder },
     { "WindowDisplayAffinity", func_WindowDisplayAffinity },
     { "WindowRegionFrame", func_WindowRegionFrame },
