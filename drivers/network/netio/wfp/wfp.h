@@ -14,6 +14,7 @@
 #include <fwpmk.h>
 #include <ntstrsafe.h>
 #include <drivers/wfp/wfpshim.h>
+#include <drivers/wfp/wfpioctl.h>
 
 #define WFP_TAG 'pfWN'
 
@@ -88,6 +89,7 @@ typedef struct _WFP_FILTER
     UINT64 Weight;
     UINT32 Flags;
     NTSTATUS NotifyStatus;
+    LONG Hits;                 /* classify hits; M3 stage 0 telemetry */
     struct _WFP_FILTER *Next;
     FWPS_FILTER0 Runtime;
 } WFP_FILTER, *PWFP_FILTER;
@@ -205,5 +207,57 @@ WfpDereferencePacket(
 NTSTATUS
 WfpCreateDevice(
     _In_ PDRIVER_OBJECT DriverObject);
+
+
+/* ---------------- M3 stage 0: enforcement mode (mode.c) ---------------- */
+extern volatile LONG g_WfpEnforcementMode;
+
+VOID
+WfpInitializeMode(VOID);
+
+BOOLEAN
+WfpModeEnforcing(VOID);
+
+ULONG
+WfpCurrentMode(VOID);
+
+NTSTATUS
+WfpSetEnforcementMode(
+    _In_reads_bytes_(InputLength) PVOID Buffer,
+    _In_ ULONG InputLength);
+
+/* ---------------- M3 stage 0: event ring (events.c) ---------------- */
+VOID
+WfpInitializeEvents(VOID);
+
+VOID
+WfpEmitModeEvent(
+    _In_ ULONG OldMode,
+    _In_ ULONG NewMode,
+    _In_ HANDLE ProcessId,
+    _In_ NTSTATUS Result);
+
+VOID
+WfpEmitClassifyEvent(
+    _In_ ULONG Type,
+    _In_ UINT16 LayerId,
+    _In_ UINT64 FilterId,
+    _In_ ULONG LocalAddress,
+    _In_ ULONG RemoteAddress,
+    _In_ USHORT LocalPort,
+    _In_ USHORT RemotePort,
+    _In_ UCHAR Protocol,
+    _In_ UCHAR Direction);
+
+NTSTATUS
+WfpEnumEvents(
+    _Out_writes_bytes_(OutputLength) PVOID Buffer,
+    _In_ ULONG OutputLength,
+    _Out_ PULONG_PTR Information);
+
+NTSTATUS
+WfpQueryFilterStats(
+    _In_ UINT64 FilterId,
+    _Out_ PWFP_IOCTL_FILTER_STATS Stats);
 
 #endif

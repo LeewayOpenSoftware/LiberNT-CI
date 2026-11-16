@@ -429,6 +429,12 @@ WfpCreateDevice(
     _In_ PDRIVER_OBJECT DriverObject);
 
 VOID
+WfpInitializeEvents(VOID);
+
+VOID
+WfpInitializeMode(VOID);
+
+VOID
 NsiInitialize(VOID);
 
 NTSTATUS NTAPI
@@ -442,6 +448,9 @@ DriverEntry(_In_ PDRIVER_OBJECT DriverObject, _In_ PUNICODE_STRING RegistryPath)
     Status = WfpCreateDevice(DriverObject);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    WfpInitializeEvents();
+    WfpInitializeMode();
 
     return WskNameCreateDevice(DriverObject);
 }

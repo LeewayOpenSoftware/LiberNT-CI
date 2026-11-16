@@ -270,6 +270,30 @@ WfpDeviceControl(
         return FwpmEngineOpen0(NULL, 0, NULL, &Session, &File->Session);
     }
 
+    /* Device-level controls that need no WFP session. The mode switch is the
+     * enforcement master control (LocalSystem only, checked in WfpSetEnforcementMode);
+     * the event enum is read-gated by the device ACL (SYSTEM + Administrators). */
+    if (ControlCode == IOCTL_WFP_SET_MODE)
+    {
+        return WfpSetEnforcementMode(Buffer, InputLength);
+    }
+
+    if (ControlCode == IOCTL_WFP_EVENT_ENUM)
+    {
+        return WfpEnumEvents(Buffer, OutputLength, Information);
+    }
+
+    if (ControlCode == IOCTL_WFP_GET_MODE)
+    {
+        if (OutputLength < sizeof(ULONG))
+        {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+        *(PULONG)Buffer = WfpCurrentMode();
+        *Information = sizeof(ULONG);
+        return STATUS_SUCCESS;
+    }
+
     if (File->Session == NULL)
     {
         return STATUS_INVALID_HANDLE;
@@ -312,6 +336,22 @@ WfpDeviceControl(
                 return STATUS_INVALID_PARAMETER;
             }
             return FwpmCalloutDeleteById0(File->Session, *(PUINT32)Buffer);
+
+        case IOCTL_WFP_FILTER_GET_STATS:
+            if (InputLength < sizeof(UINT64) || OutputLength < sizeof(WFP_IOCTL_FILTER_STATS))
+            {
+                return STATUS_BUFFER_TOO_SMALL;
+            }
+            {
+                WFP_IOCTL_FILTER_STATS Stats;
+                Status = WfpQueryFilterStats(*(PUINT64)Buffer, &Stats);
+                if (NT_SUCCESS(Status))
+                {
+                    RtlCopyMemory(Buffer, &Stats, sizeof(Stats));
+                    *Information = sizeof(Stats);
+                }
+                return Status;
+            }
 
         default:
             break;

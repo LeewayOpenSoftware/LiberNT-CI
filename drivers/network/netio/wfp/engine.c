@@ -6,8 +6,17 @@
  */
 
 #include "wfp.h"
+#include <drivers/wfp/wfpioctl.h>
 
-#define WFP_MAX_MATCHES 16
+/* M3 stage 0 classify telemetry, produced in both modes for the Off/On A/B. */
+LONG64 g_WfpClassifyAtDispatch = 0;
+LONG64 g_WfpClassifyAtPassive = 0;
+LONG g_WfpMatchHighWater = 0;
+
+#define WFP_MATCH_STACK 64   /* per-classify match window: 64 filter POINTERS =
+                              * 512B x64 / 256B i386. Overflow is an OBSERVABLE error
+                              * (fail-closed at ALE auth layers in On), never a silent
+                              * drop (the old 16 was a silent correctness bug). */
 
 typedef struct _WFP_MATCH
 {
@@ -1742,6 +1751,30 @@ FwpmFilterDeleteById0(
     return WfpDeleteFilter(engineHandle, NULL, id);
 }
 
+NTSTATUS
+WfpQueryFilterStats(
+    _In_ UINT64 FilterId,
+    _Out_ PWFP_IOCTL_FILTER_STATS Stats)
+{
+    PWFP_FILTER Filter;
+    KIRQL OldIrql;
+
+    RtlZeroMemory(Stats, sizeof(*Stats));
+    WfpInitialize();
+
+    KeAcquireSpinLock(&WfpLock, &OldIrql);
+    Filter = WfpFindFilterLocked(NULL, FilterId);
+    if (Filter != NULL)
+    {
+        Stats->FilterId = FilterId;
+        Stats->LayerId = Filter->LayerId;
+        Stats->Hits = (ULONG64)(ULONG)Filter->Hits;
+    }
+    KeReleaseSpinLock(&WfpLock, OldIrql);
+
+    return (Filter != NULL) ? STATUS_SUCCESS : STATUS_FWP_FILTER_NOT_FOUND;
+}
+
 static
 NTSTATUS
 WfpGetFilter(
@@ -2320,21 +2353,18 @@ WfpMatchFilter(
     return TRUE;
 }
 
+/* Release the per-call pins taken for a callout invocation (the filter reference is
+ * dropped separately, in the classify cleanup, for every collected filter). */
 static
 VOID
-WfpFinishMatch(
-    _In_ PWFP_MATCH Match)
+WfpReleaseCalloutContext(
+    _In_ PWFP_CALLOUT Callout,
+    _In_opt_ PWFP_FLOW_CONTEXT FlowContext)
 {
-    PWFP_FLOW_CONTEXT FlowContext = Match->FlowContext;
-    PWFP_CALLOUT Callout = Match->Filter->Callout;
     BOOLEAN Delete = FALSE;
     KIRQL OldIrql;
 
-    if (Match->Call)
-    {
-        InterlockedDecrement(&Callout->Active);
-    }
-
+    InterlockedDecrement(&Callout->Active);
     if (FlowContext != NULL)
     {
         KeAcquireSpinLock(&WfpLock, &OldIrql);
@@ -2345,7 +2375,34 @@ WfpFinishMatch(
             WfpDeleteFlowContext(FlowContext);
         }
     }
-    WfpDereferenceFilter(Match->Filter);
+}
+
+/* ALE authorization layers: a classification failure here (e.g. match overflow) fails
+ * closed in mode On (D-FAIL). The UDP first-packet path classifies at AUTH_CONNECT /
+ * AUTH_RECV_ACCEPT, so it is covered. Inspection layers (STREAM, DATAGRAM_DATA, packet)
+ * are not listed: a failure there is permit + event. FLOW_ESTABLISHED authorizes the
+ * flow (D-FLOWBLOCK), so it is treated as an authorization layer too. */
+static
+BOOLEAN
+WfpLayerIsAuthorizing(
+    _In_ UINT16 LayerId)
+{
+    switch (LayerId)
+    {
+        case FWPS_LAYER_ALE_RESOURCE_ASSIGNMENT_V4:
+        case FWPS_LAYER_ALE_RESOURCE_ASSIGNMENT_V6:
+        case FWPS_LAYER_ALE_AUTH_LISTEN_V4:
+        case FWPS_LAYER_ALE_AUTH_LISTEN_V6:
+        case FWPS_LAYER_ALE_AUTH_CONNECT_V4:
+        case FWPS_LAYER_ALE_AUTH_CONNECT_V6:
+        case FWPS_LAYER_ALE_AUTH_RECV_ACCEPT_V4:
+        case FWPS_LAYER_ALE_AUTH_RECV_ACCEPT_V6:
+        case FWPS_LAYER_ALE_FLOW_ESTABLISHED_V4:
+        case FWPS_LAYER_ALE_FLOW_ESTABLISHED_V6:
+            return TRUE;
+        default:
+            return FALSE;
+    }
 }
 
 VOID
@@ -2359,19 +2416,20 @@ WfpClassify(
     _In_opt_ PVOID LayerDataContext,
     _Out_ FWPS_CLASSIFY_OUT0 *ClassifyOut)
 {
-    WFP_MATCH Matches[WFP_MAX_MATCHES];
+    PWFP_FILTER Matches[WFP_MATCH_STACK];   /* filter pointers only: 64 * sizeof(ptr) = 512B x64 / 256B i386 */
     FWPS_INCOMING_VALUES0 Incoming;
     PWFP_SUBLAYER SubLayer = NULL;
     PWFP_CALLOUT Callout;
     PWFP_FILTER Filter;
-    PWFP_MATCH Match;
+    PWFP_FLOW_CONTEXT FlowContext;
     PLIST_ENTRY Entry;
     PVOID LayerData = NULL;
-    BOOLEAN Decided = FALSE, HaveData = FALSE;
+    BOOLEAN Decided = FALSE, HaveData = FALSE, Overflow = FALSE;
     FWP_ACTION_TYPE Action = FWP_ACTION_PERMIT, Before;
     UINT32 Rights = FWPS_RIGHT_ACTION_WRITE, RightsBefore;
-    ULONG Count = 0, Index;
-    KIRQL OldIrql;
+    UINT64 Context;
+    ULONG Count = 0, Index, Dropped = 0;
+    KIRQL OldIrql, EntryIrql = KeGetCurrentIrql();
 
     RtlZeroMemory(ClassifyOut, sizeof(*ClassifyOut));
     ClassifyOut->actionType = FWP_ACTION_PERMIT;
@@ -2381,8 +2439,11 @@ WfpClassify(
         return;
     }
 
+    /* Phase 1 (lock held): collect matching filter pointers, reference each so it
+     * survives into phase 2, and count hits. The scan is NOT capped; a filter beyond the
+     * stack window is counted and flagged (Overflow), never silently skipped. */
     KeAcquireSpinLock(&WfpLock, &OldIrql);
-    for (Entry = WfpFilters.Flink; Entry != &WfpFilters && Count < WFP_MAX_MATCHES; Entry = Entry->Flink)
+    for (Entry = WfpFilters.Flink; Entry != &WfpFilters; Entry = Entry->Flink)
     {
         Filter = CONTAINING_RECORD(Entry, WFP_FILTER, Link);
         if (Filter->LayerId != LayerId || (Filter->State & WFP_STATE_UNCOMMITTED) ||
@@ -2391,29 +2452,15 @@ WfpClassify(
             continue;
         }
 
-        Match = &Matches[Count];
-        Match->Filter = Filter;
-        Match->FlowContext = NULL;
-        Match->Context = 0;
-        Match->Call = FALSE;
-        Callout = Filter->Callout;
-        if (Callout != NULL && Callout->Registered && Callout->ClassifyFn != NULL)
+        InterlockedIncrement(&Filter->Hits);   /* per-filter hit counter */
+        if (Count >= WFP_MATCH_STACK)
         {
-            Match->FlowContext = WfpFindFlowContextLocked(FlowId, LayerId, Callout);
-            if (Match->FlowContext == NULL && (Callout->Flags & FWP_CALLOUT_FLAG_CONDITIONAL_ON_FLOW))
-            {
-                continue;
-            }
-            if (Match->FlowContext != NULL)
-            {
-                Match->FlowContext->Active++;
-                Match->Context = Match->FlowContext->Context;
-            }
-            Match->Call = TRUE;
-            InterlockedIncrement(&Callout->Active);
+            Overflow = TRUE;
+            Dropped++;
+            continue;
         }
         InterlockedIncrement(&Filter->References);
-        Count++;
+        Matches[Count++] = Filter;
     }
     KeReleaseSpinLock(&WfpLock, OldIrql);
 
@@ -2421,10 +2468,13 @@ WfpClassify(
     Incoming.valueCount = ValueCount;
     Incoming.incomingValue = Values;
 
+    /* Phase 2 (lock released): decide per sublayer, stopping at the first decisive filter.
+     * A callout filter needs its flow context looked up and pinned under the lock, so we
+     * re-acquire briefly for that one filter, then call the callout with the lock released
+     * (unchanged callout semantics). */
     for (Index = 0; Index < Count; Index++)
     {
-        Match = &Matches[Index];
-        Filter = Match->Filter;
+        Filter = Matches[Index];
         if (Filter->SubLayer != SubLayer)
         {
             SubLayer = Filter->SubLayer;
@@ -2435,10 +2485,11 @@ WfpClassify(
             continue;
         }
 
-        if (Filter->Callout == NULL || !Match->Call)
+        Callout = Filter->Callout;
+        if (Callout == NULL || !Callout->Registered || Callout->ClassifyFn == NULL)
         {
             Before = Filter->Runtime.action.type;
-            if (Filter->Callout != NULL)
+            if (Callout != NULL)
             {
                 if (Before == FWP_ACTION_CALLOUT_INSPECTION)
                 {
@@ -2466,13 +2517,28 @@ WfpClassify(
             continue;
         }
 
+        KeAcquireSpinLock(&WfpLock, &OldIrql);
+        FlowContext = WfpFindFlowContextLocked(FlowId, LayerId, Callout);
+        if (FlowContext == NULL && (Callout->Flags & FWP_CALLOUT_FLAG_CONDITIONAL_ON_FLOW))
+        {
+            KeReleaseSpinLock(&WfpLock, OldIrql);
+            continue;
+        }
+        Context = 0;
+        if (FlowContext != NULL)
+        {
+            FlowContext->Active++;
+            Context = FlowContext->Context;
+        }
+        InterlockedIncrement(&Callout->Active);
+        KeReleaseSpinLock(&WfpLock, OldIrql);
+
         if (!HaveData && LayerDataRoutine != NULL)
         {
             LayerData = LayerDataRoutine(LayerDataContext);
             HaveData = TRUE;
         }
 
-        Callout = Filter->Callout;
         Before = Action;
         RightsBefore = Rights;
         ClassifyOut->actionType = 0;
@@ -2483,7 +2549,7 @@ WfpClassify(
                                                              Metadata,
                                                              LayerData,
                                                              &Filter->Runtime,
-                                                             Match->Context,
+                                                             Context,
                                                              ClassifyOut);
         }
         else
@@ -2493,9 +2559,11 @@ WfpClassify(
                                                              LayerData,
                                                              NULL,
                                                              (const FWPS_FILTER3 *)&Filter->Runtime,
-                                                             Match->Context,
+                                                             Context,
                                                              ClassifyOut);
         }
+
+        WfpReleaseCalloutContext(Callout, FlowContext);
 
         if (Filter->Runtime.action.type == FWP_ACTION_CALLOUT_INSPECTION)
         {
@@ -2525,11 +2593,64 @@ WfpClassify(
         }
     }
 
+    /* Overflow fail-closed (D-FAIL): classification could not see every matching filter.
+     * At an ALE authorization layer this becomes block, enforced only in mode On (the
+     * shim permits in Off); at inspection layers the verdict stands (permit) plus the
+     * error event emitted below. */
+    if (Overflow && WfpLayerIsAuthorizing(LayerId))
+    {
+        Action = FWP_ACTION_BLOCK;
+        Rights &= ~FWPS_RIGHT_ACTION_WRITE;
+    }
+
     ClassifyOut->actionType = Action;
     ClassifyOut->rights = Rights;
 
     for (Index = 0; Index < Count; Index++)
     {
-        WfpFinishMatch(&Matches[Index]);
+        WfpDereferenceFilter(Matches[Index]);
+    }
+
+    if (EntryIrql >= DISPATCH_LEVEL)
+    {
+        InterlockedIncrement64(&g_WfpClassifyAtDispatch);
+    }
+    else
+    {
+        InterlockedIncrement64(&g_WfpClassifyAtPassive);
+    }
+    {
+        /* Best-effort high-water, kept consistent under concurrency via an interlocked max. */
+        LONG Observed = (LONG)(Count + Dropped);
+        LONG Prev = g_WfpMatchHighWater;
+        while (Observed > Prev)
+        {
+            LONG Old = InterlockedCompareExchange(&g_WfpMatchHighWater, Observed, Prev);
+            if (Old == Prev)
+                break;
+            Prev = Old;
+        }
+    }
+
+    /* Events fire only when a filter matched (no match = permit, no event). Overflow is
+     * a distinct classification ERROR, never a no-match; a would-block records that mode
+     * Off let a real block verdict through (the Off/On A/B on one image). */
+    if (Overflow)
+    {
+        WfpEmitClassifyEvent(WfpEventClassifyError, LayerId, ClassifyOut->filterId,
+                             0, 0, 0, 0, 0, 0);
+    }
+    else if (Count > 0)
+    {
+        if (Action == FWP_ACTION_BLOCK)
+        {
+            WfpEmitClassifyEvent(WfpModeEnforcing() ? WfpEventClassifyBlock : WfpEventWouldBlock,
+                                 LayerId, ClassifyOut->filterId, 0, 0, 0, 0, 0, 0);
+        }
+        else if (ClassifyOut->filterId != 0)
+        {
+            WfpEmitClassifyEvent(WfpEventClassifyPermit, LayerId, ClassifyOut->filterId,
+                                 0, 0, 0, 0, 0, 0);
+        }
     }
 }

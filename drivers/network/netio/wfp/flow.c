@@ -535,7 +535,7 @@ WfpClassifyFlowEstablished(
     {
         ExFreePoolWithTag(ProcessPath.data, WFP_TAG);
     }
-    return ClassifyOut.actionType != FWP_ACTION_BLOCK;
+    return !WfpModeEnforcing() || ClassifyOut.actionType != FWP_ACTION_BLOCK;
 }
 
 static
@@ -575,7 +575,7 @@ WfpAuthorize(
     {
         ExFreePoolWithTag(ProcessPath.data, WFP_TAG);
     }
-    return ClassifyOut.actionType != FWP_ACTION_BLOCK;
+    return !WfpModeEnforcing() || ClassifyOut.actionType != FWP_ACTION_BLOCK;
 }
 
 BOOLEAN
@@ -880,8 +880,9 @@ WfpShimClassifyStream(
     {
         WfpDereferencePacket(Stream.Packet);
     }
-    return ClassifyOut.actionType != FWP_ACTION_BLOCK &&
-           Stream.IoPacket.streamAction != FWPS_STREAM_ACTION_DROP_CONNECTION;
+    return !WfpModeEnforcing() ||
+           (ClassifyOut.actionType != FWP_ACTION_BLOCK &&
+            Stream.IoPacket.streamAction != FWPS_STREAM_ACTION_DROP_CONNECTION);
 }
 
 BOOLEAN
@@ -984,5 +985,5 @@ WfpShimClassifyDatagram(
     {
         WfpDereferencePacket(Data.Packet);
     }
-    return ClassifyOut.actionType != FWP_ACTION_BLOCK;
+    return !WfpModeEnforcing() || ClassifyOut.actionType != FWP_ACTION_BLOCK;
 }

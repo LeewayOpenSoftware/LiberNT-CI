@@ -15,6 +15,8 @@ list(APPEND SOURCE
     nmr_stubs.c
     nsi.c
     wfp/device.c
+    wfp/mode.c
+    wfp/events.c
     wfp/engine.c
     wfp/flow.c
     wfp/packet.c

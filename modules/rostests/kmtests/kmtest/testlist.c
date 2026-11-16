@@ -102,6 +102,7 @@ KMT_TESTFUNC Test_WskName;
 KMT_TESTFUNC Test_WfpTcp;
 KMT_TESTFUNC Test_WfpUdp;
 KMT_TESTFUNC Test_WfpUser;
+KMT_TESTFUNC Test_WfpMode;
 KMT_TESTFUNC Test_WskEcho;
 
 /* tests with a leading '-' will not be listed */
@@ -198,6 +199,7 @@ const KMT_TEST TestList[] =
     { "WfpTcp",                       Test_WfpTcp },
     { "WfpUdp",                       Test_WfpUdp },
     { "WfpUser",                      Test_WfpUser },
+    { "WfpMode",                      Test_WfpMode },
     { "WskEcho",                      Test_WskEcho },
 #ifdef _M_AMD64
     { "KeContextSegments",            Test_KeContextSegments },

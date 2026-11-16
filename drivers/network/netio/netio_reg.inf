@@ -5,3 +5,4 @@ HKLM,"SYSTEM\CurrentControlSet\Services\Netio","Group",0x00000000,"NDIS Wrapper"
 HKLM,"SYSTEM\CurrentControlSet\Services\Netio","ImagePath",0x00020000,"system32\drivers\netio.sys"
 HKLM,"SYSTEM\CurrentControlSet\Services\Netio","Start",0x00010001,0x00000001
 HKLM,"SYSTEM\CurrentControlSet\Services\Netio","Type",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\Netio\Parameters","WfpEnforcement",0x00010001,0x00000000
