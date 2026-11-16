@@ -50,6 +50,23 @@
 
 #include "d3d11_4.h"
 
+#ifdef _MSC_VER
+/* rc.exe keeps the quotes of a quoted resource name, see resource.rc */
+static HRSRC find_rcdata_resource(const WCHAR *name)
+{
+    HRSRC res = FindResourceW(NULL, name, (const WCHAR *)RT_RCDATA);
+    WCHAR quoted[MAX_PATH];
+
+    if (res || IS_INTRESOURCE(name) || lstrlenW(name) > MAX_PATH - 3)
+        return res;
+    quoted[0] = '"';
+    lstrcpyW(quoted + 1, name);
+    lstrcatW(quoted, L"\"");
+    return FindResourceW(NULL, quoted, (const WCHAR *)RT_RCDATA);
+}
+#define FindResourceW(module, name, type) find_rcdata_resource(name)
+#endif
+
 DEFINE_GUID(DMOVideoFormat_RGB24,D3DFMT_R8G8B8,0x524f,0x11ce,0x9f,0x53,0x00,0x20,0xaf,0x0b,0xa7,0x70);
 DEFINE_GUID(DMOVideoFormat_RGB32,D3DFMT_X8R8G8B8,0x524f,0x11ce,0x9f,0x53,0x00,0x20,0xaf,0x0b,0xa7,0x70);
 DEFINE_GUID(DMOVideoFormat_RGB555,D3DFMT_X1R5G5B5,0x524f,0x11ce,0x9f,0x53,0x00,0x20,0xaf,0x0b,0xa7,0x70);

@@ -22,28 +22,64 @@
 test.mp4 RCDATA test.mp4
 
 /* @makedep: test-eng.mp4 */
+#ifdef __GNUC__
+test-eng.mp4 RCDATA test-eng.mp4
+#else
 "TEST-ENG.MP4" RCDATA "test-eng.mp4"
+#endif
 
 /* @makedep: test-ang.mp4 */
+#ifdef __GNUC__
+test-ang.mp4 RCDATA test-ang.mp4
+#else
 "TEST-ANG.MP4" RCDATA "test-ang.mp4"
+#endif
 
 /* @makedep: test-und.mp4 */
+#ifdef __GNUC__
+test-und.mp4 RCDATA test-und.mp4
+#else
 "TEST-UND.MP4" RCDATA "test-und.mp4"
+#endif
 
 /* @makedep: test-en-US.mp4 */
+#ifdef __GNUC__
+test-en-US.mp4 RCDATA test-en-US.mp4
+#else
 "TEST-EN-US.MP4" RCDATA "test-en-US.mp4"
+#endif
 
 /* @makedep: test-en.wma */
+#ifdef __GNUC__
+test-en.wma RCDATA test-en.wma
+#else
 "TEST-EN.WMA" RCDATA "test-en.wma"
+#endif
 
 /* @makedep: test-eng.wma */
+#ifdef __GNUC__
+test-eng.wma RCDATA test-eng.wma
+#else
 "TEST-ENG.WMA" RCDATA "test-eng.wma"
+#endif
 
 /* @makedep: test-ang.wma */
+#ifdef __GNUC__
+test-ang.wma RCDATA test-ang.wma
+#else
 "TEST-ANG.WMA" RCDATA "test-ang.wma"
+#endif
 
 /* @makedep: test-und.wma */
+#ifdef __GNUC__
+test-und.wma RCDATA test-und.wma
+#else
 "TEST-UND.WMA" RCDATA "test-und.wma"
+#endif
 
 /* @makedep: test-en-US.wma */
+#ifdef __GNUC__
+test-en-US.wma RCDATA test-en-US.wma
+#else
 "TEST-EN-US.WMA" RCDATA "test-en-US.wma"
+#endif

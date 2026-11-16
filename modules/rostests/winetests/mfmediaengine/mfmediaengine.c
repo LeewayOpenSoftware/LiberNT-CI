@@ -39,6 +39,23 @@
 
 #include "wine/test.h"
 
+#ifdef _MSC_VER
+/* rc.exe keeps the quotes of a quoted resource name, see resource.rc */
+static HRSRC find_rcdata_resource(const WCHAR *name)
+{
+    HRSRC res = FindResourceW(NULL, name, (const WCHAR *)RT_RCDATA);
+    WCHAR quoted[MAX_PATH];
+
+    if (res || IS_INTRESOURCE(name) || lstrlenW(name) > MAX_PATH - 3)
+        return res;
+    quoted[0] = '"';
+    lstrcpyW(quoted + 1, name);
+    lstrcatW(quoted, L"\"");
+    return FindResourceW(NULL, quoted, (const WCHAR *)RT_RCDATA);
+}
+#define FindResourceW(module, name, type) find_rcdata_resource(name)
+#endif
+
 static HRESULT (WINAPI *pMFCreateDXGIDeviceManager)(UINT *token, IMFDXGIDeviceManager **manager);
 static HRESULT (WINAPI *pD3D11CreateDevice)(IDXGIAdapter *adapter, D3D_DRIVER_TYPE driver_type, HMODULE swrast, UINT flags,
         const D3D_FEATURE_LEVEL *feature_levels, UINT levels, UINT sdk_version, ID3D11Device **device_out,

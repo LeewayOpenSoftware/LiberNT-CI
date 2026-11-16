@@ -62,6 +62,23 @@
 #include "wmcodecdsp.h"
 #include "dvdmedia.h"
 
+#ifdef _MSC_VER
+/* rc.exe keeps the quotes of a quoted resource name, see resource.rc */
+static HRSRC find_rcdata_resource(const WCHAR *name)
+{
+    HRSRC res = FindResourceW(NULL, name, (const WCHAR *)RT_RCDATA);
+    WCHAR quoted[MAX_PATH];
+
+    if (res || IS_INTRESOURCE(name) || lstrlenW(name) > MAX_PATH - 3)
+        return res;
+    quoted[0] = '"';
+    lstrcpyW(quoted + 1, name);
+    lstrcatW(quoted, L"\"");
+    return FindResourceW(NULL, quoted, (const WCHAR *)RT_RCDATA);
+}
+#define FindResourceW(module, name, type) find_rcdata_resource(name)
+#endif
+
 static void run_child_test(const char *name)
 {
     char path_name[MAX_PATH];

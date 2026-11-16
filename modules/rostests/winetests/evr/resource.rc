@@ -26,11 +26,19 @@ rgb32frame.bmp RCDATA rgb32frame.bmp
 
 /* Generated from running the evr:evr tests on Windows */
 /* @makedep: rgb32frame-flip.bmp */
+#ifdef __GNUC__
+rgb32frame-flip.bmp RCDATA rgb32frame-flip.bmp
+#else
 "RGB32FRAME-FLIP.BMP" RCDATA "rgb32frame-flip.bmp"
+#endif
 
 /* Generated from running the evr:evr tests on Windows */
 /* @makedep: rgb32frame-crop.bmp */
+#ifdef __GNUC__
+rgb32frame-crop.bmp RCDATA rgb32frame-crop.bmp
+#else
 "RGB32FRAME-CROP.BMP" RCDATA "rgb32frame-crop.bmp"
+#endif
 
 /* Generated from running the evr:evr tests on Windows */
 /* @makedep: nv12frame.bmp */

@@ -265,15 +265,15 @@ static ios* (__thiscall *p_ios_sb_ctor)(ios*, streambuf*);
 static ios* (__thiscall *p_ios_assign)(ios*, const ios*);
 static void (__thiscall *p_ios_init)(ios*, streambuf*);
 static void (__thiscall *p_ios_dtor)(ios*);
-static void (*__cdecl p_ios_clrlock)(ios*);
-static void (*__cdecl p_ios_setlock)(ios*);
-static void (*__cdecl p_ios_lock)(ios*);
-static void (*__cdecl p_ios_unlock)(ios*);
-static void (*__cdecl p_ios_lockbuf)(ios*);
-static void (*__cdecl p_ios_unlockbuf)(ios*);
+static void (__cdecl *p_ios_clrlock)(ios*);
+static void (__cdecl *p_ios_setlock)(ios*);
+static void (__cdecl *p_ios_lock)(ios*);
+static void (__cdecl *p_ios_unlock)(ios*);
+static void (__cdecl *p_ios_lockbuf)(ios*);
+static void (__cdecl *p_ios_unlockbuf)(ios*);
 static CRITICAL_SECTION *p_ios_static_lock;
-static void (*__cdecl p_ios_lockc)(void);
-static void (*__cdecl p_ios_unlockc)(void);
+static void (__cdecl *p_ios_lockc)(void);
+static void (__cdecl *p_ios_unlockc)(void);
 static LONG (__thiscall *p_ios_flags_set)(ios*, LONG);
 static LONG (__thiscall *p_ios_flags_get)(const ios*);
 static LONG (__thiscall *p_ios_setf)(ios*, LONG);
@@ -285,13 +285,13 @@ static int (__thiscall *p_ios_eof)(const ios*);
 static int (__thiscall *p_ios_fail)(const ios*);
 static void (__thiscall *p_ios_clear)(ios*, int);
 static LONG *p_ios_maxbit;
-static LONG (*__cdecl p_ios_bitalloc)(void);
+static LONG (__cdecl *p_ios_bitalloc)(void);
 static int *p_ios_curindex;
 static LONG *p_ios_statebuf;
 static LONG* (__thiscall *p_ios_iword)(const ios*, int);
 static void** (__thiscall *p_ios_pword)(const ios*, int);
-static int (*__cdecl p_ios_xalloc)(void);
-static void (*__cdecl p_ios_sync_with_stdio)(void);
+static int (__cdecl *p_ios_xalloc)(void);
+static void (__cdecl *p_ios_sync_with_stdio)(void);
 static int *p_ios_sunk_with_stdio;
 static int *p_ios_fLockcInit;
 
@@ -483,8 +483,8 @@ static logic_error* (__thiscall *p_logic_error_ctor)(logic_error*, const char**)
 static void (__thiscall *p_logic_error_dtor)(logic_error*);
 
 /* locking */
-static void (*__cdecl p__mtlock)(CRITICAL_SECTION *);
-static void (*__cdecl p__mtunlock)(CRITICAL_SECTION *);
+static void (__cdecl *p__mtlock)(CRITICAL_SECTION *);
+static void (__cdecl *p__mtunlock)(CRITICAL_SECTION *);
 
 /* Predefined streams */
 static istream *p_cin;
