@@ -12,8 +12,9 @@
  *   --class  only the rows of that theme class (Button, Edit, Combobox, Scrollbar, Progress, Tab, Header, Window,
  *            Toolbar, Rebar, Status, Menu, Spin, Trackbar, Tooltip, ListView, TreeView)
  *   --part   only that part id of the class
- *   --wave   only one screen-sized group of rows: 1 = the first table (Button .. Window), 2 = Toolbar .. Spin,
- *            3 = Trackbar .. TreeView (every row at once is taller than a 1280x800 screen)
+ *   --wave   only one group of rows: 1 = the whole first table (Button .. Window, 1166 px: taller than a 1280x800
+ *            screen, the capture is cut at the screen), 2 = Toolbar .. Spin, 3 = Trackbar .. TreeView, and the first
+ *            table in screen-sized pieces: 4 = Button .. Combobox, 5 = Scrollbar .. Header, 6 = Window
  *   --out    write a screenshot of the client area after the first paint, then exit (default: stay open)
  *   --csv    write "class,part,state,TS_MIN w,h,TS_TRUE w,h,TS_DRAW w,h,hr" per cell
  *   --wait   milliseconds to wait before the screenshot (default 500)
@@ -146,9 +147,18 @@ static int row_wave(const struct row *r)
     return wave;
 }
 
+/* the first table in screen-sized pieces: 4 Button..Combobox, 5 Scrollbar..Header, 6 Window; 0 for the other tables */
+static int row_subwave(const struct row *r)
+{
+    if (row_wave(r) != 1) return 0;
+    if (!wcscmp(r->cls, L"Window")) return 6;
+    if (!wcscmp(r->cls, L"Scrollbar") || !wcscmp(r->cls, L"Progress") || !wcscmp(r->cls, L"Tab") || !wcscmp(r->cls, L"Header")) return 5;
+    return 4;
+}
+
 static int row_selected(const struct row *r)
 {
-    if (g_wave && row_wave(r) != g_wave) return 0;
+    if (g_wave && row_wave(r) != g_wave && row_subwave(r) != g_wave) return 0;
     if (g_class && _wcsicmp(g_class, r->cls) != 0) return 0;
     if (g_part >= 0 && r->part != g_part) return 0;
     return 1;
