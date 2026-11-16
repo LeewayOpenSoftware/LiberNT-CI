@@ -403,7 +403,7 @@ Volume::MarkCleanAfterCheck()
 {
     NTSTATUS Status;
     USHORT Flags = 0;
-    BOOLEAN Cleared = FALSE;
+    BOOLEAN ClearTried = FALSE;
 
     if (IsReadOnly)
         return STATUS_MEDIA_WRITE_PROTECTED;
@@ -417,18 +417,19 @@ Volume::MarkCleanAfterCheck()
         Status = QueryVolumeFlags(&Flags);
     if (NT_SUCCESS(Status) && (Flags & (VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN)))
     {
+        /* SetVolumeFlags flushes inside: a failure may come after the clear reached the medium */
+        ClearTried = TRUE;
         Status = SetVolumeFlags(0, VOL_DIRTY | VOL_FULL_CHKDSK | VOL_ONLINE_SCAN);
-        Cleared = NT_SUCCESS(Status);
         if (NT_SUCCESS(Status))
             Status = FlushVolume();
     }
     /* A write lost on the way here keeps its note and the marks stay as they
-     * are, so nothing of this instance is cleared. If the clear had reached
-     * the medium, or may have (the flush after it failed), the flag goes
-     * back on it now, best effort: DirtyMarked stays TRUE, so no later write
-     * would set it, and a dismount that fails after this would otherwise
-     * leave a clean medium under a lost write. */
-    if (Cleared && (LostWriteNoted || !NT_SUCCESS(Status)))
+     * are, so nothing of this instance is cleared. If the clear was tried,
+     * it may have reached the medium whatever failed after it, so the flag
+     * goes back on it now, best effort: DirtyMarked stays TRUE, so no later
+     * write would set it, and a dismount that fails after this would
+     * otherwise leave a clean medium under a lost write. */
+    if (ClearTried && (LostWriteNoted || !NT_SUCCESS(Status)))
     {
         (void)SetVolumeFlags(VOL_DIRTY, 0);
         (void)FlushVolume();

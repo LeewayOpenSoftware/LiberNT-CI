@@ -28,6 +28,11 @@ NtfsDiskInitializeLinuxWritable(
 void
 NtfsDiskCloseLinux(void);
 
+/* Test hook: after Successes more volume flushes, the next one fails */
+void
+NtfsDiskFailFlushLinux(
+    _In_ ULONG Successes);
+
 #ifdef __cplusplus
 }
 #endif

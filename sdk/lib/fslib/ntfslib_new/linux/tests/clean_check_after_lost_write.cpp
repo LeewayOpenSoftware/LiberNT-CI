@@ -9,7 +9,8 @@
  * volume was mounted with is retained, so this is the one call that clears
  * it. An instance whose own metadata write failed holds an update the medium
  * never got: a clean medium says nothing about it, and the call must refuse,
- * leaving the flag on the medium for the next boot.
+ * leaving the flag on the medium for the next boot. So must a clear whose
+ * own flush failed: the clear may be on the medium, so the flag goes back.
  */
 
 #include <cstdio>
@@ -173,9 +174,10 @@ IsImageDescriptor(const char* Path, int Descriptor)
 }
 
 /* One read-write session on the image. Lose: fail one metadata write first.
- * Returns the status of the clear after the check. */
+ * FailClearFlush: fail the flush inside the clear (the second flush of the
+ * call, after the clear was written). Returns the status of the clear. */
 bool
-Session(const char* Path, bool Lose, NTSTATUS* ClearStatus)
+Session(const char* Path, bool Lose, bool FailClearFlush, NTSTATUS* ClearStatus)
 {
     PNtfsVolume Volume = NULL;
     ULONG BytesPerSector = 0;
@@ -216,8 +218,13 @@ Session(const char* Path, bool Lose, NTSTATUS* ClearStatus)
             goto Out;
     }
 
+    if (FailClearFlush)
+        NtfsDiskFailFlushLinux(1);
     *ClearStatus = NtfsVolumeMarkCleanAfterCheck(Volume);
-    std::printf("clear after the check%s: 0x%08x\n", Lose ? " after a lost write" : "", (unsigned)*ClearStatus);
+    NtfsDiskFailFlushLinux((ULONG)-1);
+    std::printf("clear after the check%s: 0x%08x\n",
+                Lose ? " after a lost write" : (FailClearFlush ? " with its flush failing" : ""),
+                (unsigned)*ClearStatus);
     Ok = true;
 
 Out:
@@ -293,7 +300,7 @@ main()
         goto Out;
 
     /* A retained flag, no lost write: the clear takes it */
-    if (!DirtyTheMedium(Path) || !Session(Path, false, &ClearStatus) || !FlagsOnMedium(Path, &Flags))
+    if (!DirtyTheMedium(Path) || !Session(Path, false, false, &ClearStatus) || !FlagsOnMedium(Path, &Flags))
         goto Out;
     std::printf("control: clear 0x%08x, flags 0x%04x\n", (unsigned)ClearStatus, Flags);
     if (!Check(NT_SUCCESS(ClearStatus), "the clear after a clean check failed") ||
@@ -303,11 +310,22 @@ main()
     }
 
     /* A retained flag and a lost write: the clear refuses and the flag stays */
-    if (!DirtyTheMedium(Path) || !Session(Path, true, &ClearStatus) || !FlagsOnMedium(Path, &Flags))
+    if (!DirtyTheMedium(Path) || !Session(Path, true, false, &ClearStatus) || !FlagsOnMedium(Path, &Flags))
         goto Out;
     std::printf("after a lost write: clear 0x%08x, flags 0x%04x\n", (unsigned)ClearStatus, Flags);
     if (!Check(ClearStatus == HOST_STATUS_LOST_WRITEBEHIND_DATA, "the clear was not refused after a lost write") ||
         !Check((Flags & VOL_DIRTY) != 0, "the flag went although a write was lost"))
+    {
+        goto Out;
+    }
+
+    /* A retained flag and the flush inside the clear failing: the clear
+     * reached the image, so the flag must be back on it */
+    if (!DirtyTheMedium(Path) || !Session(Path, false, true, &ClearStatus) || !FlagsOnMedium(Path, &Flags))
+        goto Out;
+    std::printf("after a failed flush in the clear: clear 0x%08x, flags 0x%04x\n", (unsigned)ClearStatus, Flags);
+    if (!Check(!NT_SUCCESS(ClearStatus), "the clear succeeded although its flush failed") ||
+        !Check((Flags & VOL_DIRTY) != 0, "the flag went although the flush of the clear failed"))
     {
         goto Out;
     }

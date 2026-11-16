@@ -20,6 +20,7 @@
 
 static int NtfsImageFd = -1;
 static BOOLEAN NtfsImageWritable = FALSE;
+static LONG NtfsFlushesBeforeFailure = -1;
 
 BOOLEAN
 NtfsIsNameInExpressionFallback(
@@ -316,7 +317,20 @@ NtfsFlushVolumeContext(_In_opt_ void* Context)
     UNREFERENCED_PARAMETER(Context);
     if (NtfsImageFd < 0)
         return STATUS_INVALID_DEVICE_STATE;
+    if (NtfsFlushesBeforeFailure == 0)
+    {
+        NtfsFlushesBeforeFailure = -1;
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (NtfsFlushesBeforeFailure > 0)
+        NtfsFlushesBeforeFailure--;
     return fsync(NtfsImageFd) == 0 ? STATUS_SUCCESS : STATUS_INVALID_DEVICE_STATE;
+}
+
+extern "C" void
+NtfsDiskFailFlushLinux(_In_ ULONG Successes)
+{
+    NtfsFlushesBeforeFailure = (LONG)Successes;
 }
 
 extern "C" NTSTATUS
