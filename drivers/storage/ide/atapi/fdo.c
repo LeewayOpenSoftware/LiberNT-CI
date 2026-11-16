@@ -290,6 +290,7 @@ AtaFdoStartDevice(
     PortData->PreparePrdTable = ChannelInterface.PreparePrdTable;
     PortData->PrepareIo = ChannelInterface.PrepareIo;
     PortData->StartIo = ChannelInterface.StartIo;
+    PortData->GetDumpInterface = ChannelInterface.GetDumpInterface;
     PortData->MaxTargetId = ChannelInterface.MaxTargetId;
     PortData->MaximumTransferLength = ChannelInterface.MaximumTransferLength;
     PortData->MaximumPhysicalPages = ChannelInterface.MaximumPhysicalPages;

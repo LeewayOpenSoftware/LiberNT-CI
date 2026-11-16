@@ -314,6 +314,7 @@ typedef struct _CHANNEL_DATA_PATA
     PCHANNEL_WRITE_SCR ScrWrite;
     IDE_ACPI_TIMING_MODE_BLOCK CurrentTimingMode;
     ULONG HwFlags;
+    PVOID DumpContexts[2];
     PUCHAR HwExt[ANYSIZE_ARRAY];
 } CHANNEL_DATA_PATA, *PCHANNEL_DATA_PATA;
 
@@ -709,6 +710,16 @@ CHANNEL_LOAD_TASK_FILE PataLoadTaskFile;
 CHANNEL_SAVE_TASK_FILE PataSaveTaskFile;
 CHANNEL_READ_STATUS PataReadStatus;
 KDEFERRED_ROUTINE PataPollingTimerDpc;
+
+/* pata_dump.c *****************************************************************/
+
+NTSTATUS
+PataChannelGetDumpInterface(
+    _In_ PVOID ChannelContext,
+    _In_ UCHAR DeviceSelect,
+    _In_ BOOLEAN Lba48,
+    _In_ ULONG SectorSize,
+    _Inout_ struct _ROS_STORAGE_DUMP_INTERFACE *Interface);
 
 VOID
 AtaWriteBlock16(

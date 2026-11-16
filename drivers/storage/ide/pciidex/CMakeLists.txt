@@ -10,6 +10,7 @@ list(APPEND SOURCE
     chipset/cmd.c
     chipset/intel.c
     chipset/pata_generic.c
+    chipset/pata_dump.c
     chipset/pata_hw.c
     chipset/pata_io.c
     chipset/pctech.c

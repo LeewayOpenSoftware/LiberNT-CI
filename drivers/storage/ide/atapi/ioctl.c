@@ -9,6 +9,9 @@
 
 #include "atapi.h"
 
+#include <reactos/drivers/dumpstor.h>
+#include <reactos/drivers/dumpscsi.h>
+
 /* GLOBALS ********************************************************************/
 
 #define AtaVerifyInBuffer(IoStack, Length) \
@@ -503,6 +506,46 @@ AtaPdoHandleScsiPassthrough(
 }
 
 static
+CODE_SEG("PAGE")
+NTSTATUS
+AtaPdoHandleGetDumpInterface(
+    _In_ PATAPORT_DEVICE_EXTENSION DevExt,
+    _Inout_ PIRP Irp,
+    _In_ PIO_STACK_LOCATION IoStack)
+{
+    PATAPORT_PORT_DATA PortData = DevExt->Device.PortData;
+    PROS_STORAGE_DUMP_INTERFACE Interface;
+    ULONG SectorSize;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Interface))
+        return STATUS_BUFFER_TOO_SMALL;
+
+    Interface = Irp->AssociatedIrp.SystemBuffer;
+    SectorSize = Interface->BytesPerSector;
+    if (!RosDumpIsValidSectorSize(SectorSize))
+        return STATUS_INVALID_PARAMETER;
+
+    if ((DevExt->Device.DeviceFlags & DEVICE_LBA_MODE) == 0)
+        return STATUS_NOT_SUPPORTED;
+
+    if ((PortData == NULL) || (PortData->GetDumpInterface == NULL))
+        return STATUS_NOT_SUPPORTED;
+
+    Status = PortData->GetDumpInterface(PortData->ChannelContext,
+                                        DevExt->Device.DeviceSelect,
+                                        (DevExt->Device.DeviceFlags & DEVICE_LBA48) != 0,
+                                        SectorSize,
+                                        Interface);
+    if (NT_SUCCESS(Status))
+        Irp->IoStatus.Information = sizeof(*Interface);
+
+    return Status;
+}
+
+static
 NTSTATUS
 AtaPdoDeviceControl(
     _In_ PATAPORT_DEVICE_EXTENSION DevExt,
@@ -554,6 +597,10 @@ AtaPdoDeviceControl(
         case IOCTL_SCSI_GET_CAPABILITIES:
         case IOCTL_SCSI_GET_INQUIRY_DATA:
             ForwardToFdo = TRUE;
+            break;
+
+        case IOCTL_REACTOS_STORAGE_GET_DUMP_INTERFACE:
+            Status = AtaPdoHandleGetDumpInterface(DevExt, Irp, IoStack);
             break;
 
         default:

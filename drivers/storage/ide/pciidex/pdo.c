@@ -918,6 +918,7 @@ PciIdeXQueryPciIdeInterface(
         ChannelInterface->EnumerateChannel = PataEnumerateChannel;
         ChannelInterface->IdentifyDevice = PataIdentifyDevice;
         ChannelInterface->MaxTargetId = PataChannelGetMaximumDeviceCount(ChanData);
+        ChannelInterface->GetDumpInterface = PataChannelGetDumpInterface;
     }
 
     ChannelInterface->PortContext = &ChanData->PortContext;

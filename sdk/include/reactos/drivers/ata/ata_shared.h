@@ -494,6 +494,23 @@ typedef struct _PCIIDEX_LEGACY_CONTROLLER_INTERFACE
 } PCIIDEX_LEGACY_CONTROLLER_INTERFACE, *PPCIIDEX_LEGACY_CONTROLLER_INTERFACE;
 
 /**
+ * @brief Crash-dump interface provider callback (ROS-specific).
+ *
+ * Implemented by the channel driver that owns the task-file registers. The
+ * returned callbacks run at bugcheck time with interrupts disabled and must
+ * only poll; see <reactos/drivers/dumpstor.h>.
+ */
+struct _ROS_STORAGE_DUMP_INTERFACE;
+typedef NTSTATUS
+(CHANNEL_GET_DUMP_INTERFACE)(
+    _In_ PVOID ChannelContext,
+    _In_ UCHAR DeviceSelect,
+    _In_ BOOLEAN Lba48,
+    _In_ ULONG SectorSize,
+    _Inout_ struct _ROS_STORAGE_DUMP_INTERFACE *Interface);
+typedef CHANNEL_GET_DUMP_INTERFACE *PCHANNEL_GET_DUMP_INTERFACE;
+
+/**
  * @brief Channel interface with the PCIIDEX driver.
  *
  * This interface is ROS-specific.
@@ -541,6 +558,7 @@ typedef struct _PCIIDEX_CHANNEL_INTERFACE
     PVOID* PortContext;
     PPORT_NOTIFICATION* PortNotification;
     PATA_DEVICE_REQUEST** Slots;
+    PCHANNEL_GET_DUMP_INTERFACE GetDumpInterface;
 } PCIIDEX_CHANNEL_INTERFACE, *PPCIIDEX_CHANNEL_INTERFACE;
 
 DEFINE_GUID(GUID_PCIIDE_INTERFACE_ROS,

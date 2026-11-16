@@ -392,6 +392,7 @@ typedef struct _ATAPORT_PORT_DATA
     PCONTROLLER_ATTACH_CHANNEL AttachChannel;
     KEVENT QueueStoppedEvent;
     ULONG MaximumTransferLength;
+    PCHANNEL_GET_DUMP_INTERFACE GetDumpInterface;
     ULONG MaximumPhysicalPages;
     ULONG MaxTargetId;
     ULONG QueueDepth;
