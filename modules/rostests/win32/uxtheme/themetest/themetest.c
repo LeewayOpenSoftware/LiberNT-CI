@@ -3,18 +3,26 @@
  * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
  * PURPOSE:     themetest: one window, every part and state of the common controls drawn through the public uxtheme API
  *              (DrawThemeBackground, DrawThemeText, GetThemePartSize), a label per cell, a screenshot to a BMP file and
- *              a CSV of the part sizes, for the side-by-side comparison LiberNT vs Windows (owner order 2026-11-15)
+ *              a CSV of the part sizes, for the side-by-side comparison LiberNT vs Windows (owner order 2026-11-15);
+ *              a Style menu and a batch mode switch between the visual styles installed in the store (owner demo 2026-11-16)
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
  * Usage: themetest [--class NAME] [--part N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]
+ *                  [--list] [--style FILE.msstyles] [--all-styles DIR]
  *   --class  only the rows of that theme class (Button, Edit, Combobox, Scrollbar, Progress, Tab, Header, Window)
  *   --part   only that part id of the class
  *   --out    write a screenshot of the client area after the first paint, then exit (default: stay open)
  *   --csv    write "class,part,state,TS_MIN w,h,TS_TRUE w,h,TS_DRAW w,h,hr" per cell
  *   --wait   milliseconds to wait before the screenshot (default 500)
  *   --scale  cell scale factor 1..4 (default 1)
- * It reads no file and changes no setting; it uses only what uxtheme serves to any application. The same source
- * builds with mingw (gcc -municode themetest.c -luxtheme -lgdi32 -luser32) for the Windows reference capture.
+ *   --list   print the visual styles of the store (%windir%\Resources\Themes\<name>\*.msstyles) and exit
+ *   --style  apply that style file first (SetSystemVisualStyle, the same call the Personalization page makes)
+ *   --all-styles  for every style of the store: apply it, repaint, write DIR\<name>.bmp and DIR\<name>.csv, then put the
+ *            style that was active back and exit
+ * The window has a Style menu with the same list. The tool reads no file itself; the style switch is the public
+ * uxtheme call and the system decides whether the style is trusted (a refused style leaves the current one active, which
+ * the title bar and the stdout line show). The same source builds with mingw (gcc -municode themetest.c -luxtheme
+ * -lgdi32 -luser32) for the Windows reference capture.
  */
 #include <windows.h>
 #include <uxtheme.h>
@@ -71,6 +79,17 @@ static int g_part = -1, g_scale = 1, g_wait = 500;
 static const wchar_t *g_out, *g_csv;
 static int g_painted;
 static int g_hr_count[2];           /* DrawThemeBackground succeeded / failed cells */
+
+/* the visual styles of the store, one per directory of %windir%\Resources\Themes */
+#define MAX_STYLES 64
+#define IDM_STYLE_FIRST 1000
+struct style { wchar_t name[64]; wchar_t path[MAX_PATH]; };
+static struct style g_styles[MAX_STYLES];
+static int g_nstyles;
+static const wchar_t *g_batch_dir;  /* --all-styles */
+static int g_batch_index = -1;      /* style being shot in batch mode */
+static wchar_t g_batch_out[MAX_PATH], g_batch_csv[MAX_PATH];
+static wchar_t g_initial_style[MAX_PATH];
 
 #define LABEL_H 16
 #define GAP 8
@@ -220,10 +239,101 @@ static int screenshot(HWND hwnd, const wchar_t *path)
     return rc_ok;
 }
 
+/* ---- visual styles of the store ---- */
+
+/* %windir%\Resources\Themes\<name>\*.msstyles, the first style file of each directory, in directory order */
+static void enum_styles(void)
+{
+    wchar_t root[MAX_PATH], pattern[MAX_PATH];
+    WIN32_FIND_DATAW d, f;
+    HANDLE hd, hf;
+
+    g_nstyles = 0;
+    if (!GetWindowsDirectoryW(root, MAX_PATH)) return;
+    if (swprintf(pattern, MAX_PATH, L"%ls\\Resources\\Themes\\*", root) < 0) return;
+    hd = FindFirstFileW(pattern, &d);
+    if (hd == INVALID_HANDLE_VALUE) return;
+    do
+    {
+        if (!(d.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || d.cFileName[0] == L'.') continue;
+        if (swprintf(pattern, MAX_PATH, L"%ls\\Resources\\Themes\\%ls\\*.msstyles", root, d.cFileName) < 0) continue;
+        hf = FindFirstFileW(pattern, &f);
+        if (hf == INVALID_HANDLE_VALUE) continue;
+        if (g_nstyles < MAX_STYLES &&
+            swprintf(g_styles[g_nstyles].path, MAX_PATH, L"%ls\\Resources\\Themes\\%ls\\%ls", root, d.cFileName, f.cFileName) > 0)
+        {
+            wcsncpy(g_styles[g_nstyles].name, d.cFileName, 63);
+            g_styles[g_nstyles].name[63] = 0;
+            g_nstyles++;
+        }
+        FindClose(hf);
+    } while (FindNextFileW(hd, &d));
+    FindClose(hd);
+}
+
+/* the style file in use, "" when no style is active */
+static void current_style(wchar_t *buf, int cch)
+{
+    buf[0] = 0;
+    if (FAILED(GetCurrentThemeName(buf, cch, NULL, 0, NULL, 0))) buf[0] = 0;
+}
+
+/* SetSystemVisualStyle is exported by ordinal only (65), here and on Windows */
+typedef HRESULT (WINAPI *PFN_SETSYSTEMVISUALSTYLE)(LPCWSTR pszFile, LPCWSTR pszColor, LPCWSTR pszSize, UINT uFlags);
+
+static HRESULT apply_style(const wchar_t *path)
+{
+    HMODULE ux = GetModuleHandleW(L"uxtheme.dll");
+    PFN_SETSYSTEMVISUALSTYLE fn = ux ? (PFN_SETSYSTEMVISUALSTYLE)GetProcAddress(ux, (LPCSTR)(ULONG_PTR)65) : NULL;
+    HRESULT hr = fn ? fn(path, NULL, NULL, 0) : HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+    wchar_t now[MAX_PATH];
+    current_style(now, MAX_PATH);
+    wprintf(L"themetest: style %ls -> hr=0x%08lx, active now: %ls\n", path, (unsigned long)hr, now[0] ? now : L"(none)");
+    return hr;
+}
+
+static void set_title(HWND hwnd)
+{
+    wchar_t now[MAX_PATH], title[MAX_PATH + 64];
+    current_style(now, MAX_PATH);
+    swprintf(title, MAX_PATH + 64, L"themetest: %ls", now[0] ? now : L"no visual style active");
+    SetWindowTextW(hwnd, title);
+}
+
+static HMENU build_menu(void)
+{
+    HMENU bar = CreateMenu(), styles = CreatePopupMenu();
+    int i;
+    if (!bar || !styles) return NULL;
+    for (i = 0; i < g_nstyles; i++)
+        AppendMenuW(styles, MF_STRING, IDM_STYLE_FIRST + i, g_styles[i].name);
+    if (!g_nstyles) AppendMenuW(styles, MF_STRING | MF_GRAYED, IDM_STYLE_FIRST, L"(no style in the store)");
+    AppendMenuW(bar, MF_POPUP, (UINT_PTR)styles, L"&Style");
+    return bar;
+}
+
+/* batch: apply style i and let the next paint arm the screenshot timer; returns 0 when the list is done */
+static int batch_start(HWND hwnd, int i)
+{
+    if (i >= g_nstyles) return 0;
+    g_batch_index = i;
+    swprintf(g_batch_out, MAX_PATH, L"%ls\\%ls.bmp", g_batch_dir, g_styles[i].name);
+    swprintf(g_batch_csv, MAX_PATH, L"%ls\\%ls.csv", g_batch_dir, g_styles[i].name);
+    g_out = g_batch_out;
+    g_csv = g_batch_csv;
+    apply_style(g_styles[i].path);
+    g_painted = 0;
+    InvalidateRect(hwnd, NULL, TRUE);
+    return 1;
+}
+
 static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     switch (msg)
     {
+        case WM_CREATE:
+            set_title(hwnd);
+            return 0;
         case WM_PAINT:
         {
             PAINTSTRUCT ps;
@@ -243,10 +353,26 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             KillTimer(hwnd, 1);
             ok = screenshot(hwnd, g_out);
             wprintf(L"themetest: %d cells drawn, %d failed; screenshot %ls: %ls\n", g_hr_count[0], g_hr_count[1], g_out, ok ? L"written" : L"FAILED");
+            if (g_batch_index >= 0 && batch_start(hwnd, g_batch_index + 1))
+                return 0;
+            if (g_batch_index >= 0 && g_initial_style[0])
+                apply_style(g_initial_style);
             PostQuitMessage(ok ? 0 : 3);
             return 0;
         }
+        case WM_COMMAND:
+            if (LOWORD(wp) >= IDM_STYLE_FIRST && LOWORD(wp) < IDM_STYLE_FIRST + g_nstyles)
+            {
+                apply_style(g_styles[LOWORD(wp) - IDM_STYLE_FIRST].path);
+                set_title(hwnd);
+                InvalidateRect(hwnd, NULL, TRUE);
+                return 0;
+            }
+            break;
         case WM_THEMECHANGED:
+            /* a switch lands after our own repaint: paint again and, when a shot is pending, arm the timer again */
+            set_title(hwnd);
+            if (g_out) g_painted = 0;
             InvalidateRect(hwnd, NULL, TRUE);
             return 0;
         case WM_DESTROY:
@@ -263,7 +389,8 @@ int wmain(int argc, wchar_t **argv)
     MSG m;
     SIZE need;
     RECT wr;
-    int i;
+    int i, list = 0;
+    const wchar_t *style = NULL;
 
     for (i = 1; i < argc; i++)
     {
@@ -273,9 +400,27 @@ int wmain(int argc, wchar_t **argv)
         else if (!wcscmp(argv[i], L"--csv") && i + 1 < argc) g_csv = argv[++i];
         else if (!wcscmp(argv[i], L"--wait") && i + 1 < argc) g_wait = _wtoi(argv[++i]);
         else if (!wcscmp(argv[i], L"--scale") && i + 1 < argc) { g_scale = _wtoi(argv[++i]); if (g_scale < 1) g_scale = 1; if (g_scale > 4) g_scale = 4; }
-        else { wprintf(L"usage: themetest [--class NAME] [--part N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]\n"); return 2; }
+        else if (!wcscmp(argv[i], L"--list")) list = 1;
+        else if (!wcscmp(argv[i], L"--style") && i + 1 < argc) style = argv[++i];
+        else if (!wcscmp(argv[i], L"--all-styles") && i + 1 < argc) g_batch_dir = argv[++i];
+        else
+        {
+            wprintf(L"usage: themetest [--class NAME] [--part N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]\n"
+                    L"                 [--list] [--style FILE.msstyles] [--all-styles DIR]\n");
+            return 2;
+        }
     }
     wprintf(L"themetest: IsAppThemed %d, IsThemeActive %d\n", IsAppThemed(), IsThemeActive());
+    current_style(g_initial_style, MAX_PATH);
+    wprintf(L"themetest: active style: %ls\n", g_initial_style[0] ? g_initial_style : L"(none)");
+    enum_styles();
+    if (list)
+    {
+        for (i = 0; i < g_nstyles; i++) wprintf(L"%ls\t%ls\n", g_styles[i].name, g_styles[i].path);
+        wprintf(L"themetest: %d style(s) in the store\n", g_nstyles);
+        return 0;
+    }
+    if (style && FAILED(apply_style(style))) return 4;
 
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = wndproc;
@@ -287,12 +432,17 @@ int wmain(int argc, wchar_t **argv)
 
     need = layout_size();
     SetRect(&wr, 0, 0, need.cx, need.cy);
-    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, FALSE);
-    hwnd = CreateWindowExW(0, wc.lpszClassName, L"themetest: parts and states through uxtheme", WS_OVERLAPPEDWINDOW,
-                           CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, NULL, NULL, wc.hInstance, NULL);
+    AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, TRUE);
+    hwnd = CreateWindowExW(0, wc.lpszClassName, L"themetest", WS_OVERLAPPEDWINDOW,
+                           CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, NULL, build_menu(), wc.hInstance, NULL);
     if (!hwnd) return 2;
     ShowWindow(hwnd, SW_SHOWNORMAL);
     UpdateWindow(hwnd);
+    if (g_batch_dir)
+    {
+        if (!g_nstyles) { wprintf(L"themetest: no style in the store, nothing to shoot\n"); return 5; }
+        batch_start(hwnd, 0);
+    }
     while (GetMessageW(&m, NULL, 0, 0) > 0) { TranslateMessage(&m); DispatchMessageW(&m); }
     return (int)m.wParam;
 }
