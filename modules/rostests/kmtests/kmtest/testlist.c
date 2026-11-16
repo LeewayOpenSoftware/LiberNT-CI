@@ -61,6 +61,7 @@ KMT_TESTFUNC Test_KeSystemCallInt2E;
 KMT_TESTFUNC Test_IoRemoveChild;
 KMT_TESTFUNC Test_MmMapLockedPagesSpecifyCache;
 KMT_TESTFUNC Test_NsiStore;
+KMT_TESTFUNC Test_AtaDump;
 KMT_TESTFUNC Test_NtCreateSection;
 KMT_TESTFUNC Test_NtSystemDebugControl;
 KMT_TESTFUNC Test_NtUserPhysicalPages;
@@ -159,6 +160,7 @@ const KMT_TEST TestList[] =
     { "IoRemoveChild",                Test_IoRemoveChild },
     { "MmMapLockedPagesSpecifyCache", Test_MmMapLockedPagesSpecifyCache },
     { "NsiStore",                     Test_NsiStore },
+    { "AtaDump",                      Test_AtaDump },
     { "NtCreateSection",              Test_NtCreateSection },
     { "NdisSgDma",                    Test_NdisSgDma },
     { "NtSystemDebugControl",         Test_NtSystemDebugControl },

@@ -7,6 +7,7 @@ include_directories(
 # subdirectories containing special-purpose drivers
 #
 add_subdirectory(example)
+add_subdirectory(atadump)
 add_subdirectory(fltmgr)
 add_subdirectory(hidparse)
 add_subdirectory(kernel32)
@@ -649,6 +650,7 @@ list(APPEND KMTEST_SOURCE
 
     hidparse/HidP_user.c
     nsi/nsi_store_user.c
+    atadump/atadump_user.c
     kernel32/FileAttributes_user.c
     kernel32/FindFile_user.c
     kernel32/PipeClientComputerName_user.c
