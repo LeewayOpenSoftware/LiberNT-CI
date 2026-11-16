@@ -1578,7 +1578,10 @@ LogonUserExW(
                           &SubStatus);
     if (!NT_SUCCESS(Status))
     {
-        ERR("LsaLogonUser failed (Status 0x%08lx)\n", Status);
+        ERR("LsaLogonUser failed (Status 0x%08lx, SubStatus 0x%08lx)\n", Status, SubStatus);
+        /* Like Windows, report the specific restriction (disabled, expired, logon hours, workstation) */
+        if (Status == STATUS_ACCOUNT_RESTRICTION && SubStatus != STATUS_SUCCESS)
+            Status = SubStatus;
         goto done;
     }
 
