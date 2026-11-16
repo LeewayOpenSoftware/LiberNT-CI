@@ -34,7 +34,8 @@ IntTMWFixUp(
     HFONT hCurrentFont;
 
     hCurrentFont = NtGdiGetDCObject(hDC, GDI_OBJECT_TYPE_FONT);
-    GreGetObject(hCurrentFont, sizeof(LOGFONTW), &lf);
+    if (!hCurrentFont || !GreGetObject(hCurrentFont, sizeof(LOGFONTW), &lf))
+        return;
 
     /* To compensate for the GetTextMetricsW call changing the PitchAndFamily
      * to a TrueType one when we have a 'Raster' font as our input we filter
