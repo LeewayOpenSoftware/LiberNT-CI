@@ -64,7 +64,9 @@ extern void func_RtlRestoreContextConsolidate(void);
 extern void func_RtlVirtualUnwindFragment(void);
 extern void func_RtlVirtualUnwindTailJump(void);
 extern void func_SyscallStub(void);
+#ifndef _MSC_VER
 extern void func_x87Exception(void);
+#endif
 #endif
 #ifdef _M_RISCV64
 extern void func_InstructionCacheMigration(void);
@@ -296,7 +298,9 @@ const struct test winetest_testlist[] =
     { "RtlVirtualUnwindFragment",       func_RtlVirtualUnwindFragment },
     { "RtlVirtualUnwindTailJump",       func_RtlVirtualUnwindTailJump },
     { "SyscallStub",                    func_SyscallStub },
+#ifndef _MSC_VER
     { "x87Exception",                   func_x87Exception },
+#endif
 #endif
 #ifdef _M_RISCV64
     { "InstructionCacheMigration",      func_InstructionCacheMigration },
