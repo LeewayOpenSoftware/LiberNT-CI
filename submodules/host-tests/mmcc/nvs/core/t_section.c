@@ -952,6 +952,102 @@ SectionCopyOnWriteOwnerCharge(void)
     WorldDestroy(&World);
 }
 
+typedef struct _COW_CHARGE_MUTATOR
+{
+    LONG64 Used;
+    ULONG Charges;
+    ULONG Returns;
+    BOOLEAN Mutate;
+    PMI_ADDRESS_SPACE Space;
+    ULONG64 Address;
+} COW_CHARGE_MUTATOR;
+
+static BOOLEAN
+CowChargeMutateCharge(_In_ PVOID Owner, _In_ LONG64 Pages)
+{
+    COW_CHARGE_MUTATOR *Ctx = Owner;
+    PMI_PTE Slot;
+    ULONG TableFrame;
+    MI_PTE Pte;
+
+    Ctx->Charges++;
+    Ctx->Used += Pages;
+    if (Ctx->Mutate)
+    {
+        Ctx->Mutate = FALSE;
+        Slot = MiPtLookup(Ctx->Space, Ctx->Address, &TableFrame);
+        Pte = MiArchPteRead(Slot);
+        MiArchPteWrite(Slot, MiArchPteMakeLeaf((ULONG64)MiArchPteFrame(Pte),
+                                               MI_PROT_READONLY,
+                                               MiArchPteLeafFlags(Pte)));
+    }
+    return TRUE;
+}
+
+static VOID
+CowChargeMutateReturn(_In_ PVOID Owner, _In_ LONG64 Pages)
+{
+    COW_CHARGE_MUTATOR *Ctx = Owner;
+
+    Ctx->Returns++;
+    Ctx->Used -= Pages;
+}
+
+static
+void
+SectionCopyOnWriteChargePteChange(void)
+{
+    TEST_WORLD World;
+    TEST_FILE File;
+    MI_ADDRESS_SPACE A;
+    PMI_SEGMENT Segment;
+    COW_CHARGE_MUTATOR Ctx = { 0 };
+    ULONG64 BaseA = 0;
+    NTSTATUS Status;
+
+    WorldCreate(&World, 1024, 1, 100000);
+    WorldAttachPageFile(&World, 256);
+    FileCreate(&File, 0x10000);
+    SpaceCreate(&World, 0, &A);
+    World.System.ChargeOwnerCommit = CowChargeMutateCharge;
+    World.System.ReturnOwnerCommit = CowChargeMutateReturn;
+    A.CommitOwner = &Ctx;
+    Ctx.Space = &A;
+
+    CHECK(NT_SUCCESS(MiSegmentCreate(&World.System, MiSegmentDataFile, 0x10000, MI_PROT_READONLY, &TestFileOps,
+                                     &File, NULL, 0, &Segment)));
+    CHECK(NT_SUCCESS(Map(&A, Segment, &BaseA, 0, 0, MI_PROT_WRITECOPY)));
+    MiSegmentDereference(Segment);
+
+    CHECK(UserRead64(&World, 0, BaseA + 0x2000, &Status) == *(ULONG64 *)(File.Data + 0x2000));
+
+    Ctx.Address = BaseA + 0x2000;
+    Ctx.Mutate = TRUE;
+    CHECK(UserWrite64(&World, 0, Ctx.Address, 0x5151) == STATUS_ACCESS_VIOLATION);
+    CHECK(Ctx.Charges == 1);
+    CHECK(Ctx.Returns == 1);
+    CHECK(Ctx.Used == 0);
+    CHECK(MI_ATOMIC_READ64(&A.CopyOnWriteFaults) == 0);
+
+    CHECK(UserRead64(&World, 0, BaseA + 0x4000, &Status) == *(ULONG64 *)(File.Data + 0x4000));
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, BaseA + 0x4000, 0x5252)));
+    CHECK(Ctx.Charges == 2);
+    CHECK(Ctx.Returns == 1);
+    CHECK(Ctx.Used == 1);
+    CHECK(MI_ATOMIC_READ64(&A.CopyOnWriteFaults) == 1);
+
+    CHECK(NT_SUCCESS(MiUnmapView(&A, BaseA)));
+    CHECK(Ctx.Used == 0);
+    CHECK(Ctx.Returns == 2);
+    World.System.ChargeOwnerCommit = NULL;
+    World.System.ReturnOwnerCommit = NULL;
+    SpaceDestroy(&World, 0, &A);
+
+    WorldExpectClean(&World, 1024);
+    FileDestroy(&File);
+    WorldDestroy(&World);
+}
+
 static
 void
 SectionSystemSpaceView(void)
@@ -2109,6 +2205,7 @@ TestSection(void)
     SectionReservedPageFile();
     SectionCopyOnWrite();
     SectionCopyOnWriteOwnerCharge();
+    SectionCopyOnWriteChargePteChange();
     SectionSystemSpaceView();
     SectionViewOutlivesOwner();
     SectionUnusedCache();
