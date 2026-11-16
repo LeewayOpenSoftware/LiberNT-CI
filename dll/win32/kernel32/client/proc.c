@@ -3468,7 +3468,8 @@ BasepImageRequiresElevation(
     _In_opt_ HANDLE hUserToken,
     _In_ LPCWSTR lpApplicationName,
     _In_opt_ LPVOID lpEnvironment,
-    _In_ DWORD dwCreationFlags)
+    _In_ DWORD dwCreationFlags,
+    _In_ USHORT ImageMachine)
 {
     ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION RunLevel;
     ACTCTXW ActCtx;
@@ -3516,7 +3517,9 @@ BasepImageRequiresElevation(
 
     SetLastError(LastError);
 
+    /* Windows applies installer detection to 32-bit x86 targets only. */
     if (BasepIsInstallerImage(lpApplicationName) &&
+        ImageMachine == IMAGE_FILE_MACHINE_I386 &&
         BasepIsInstallerDetectionEnabled())
         return TRUE;
 
@@ -4464,7 +4467,7 @@ StartScan:
     }
 
     if (NT_SUCCESS(Status) &&
-        BasepImageRequiresElevation(hUserToken, lpApplicationName, lpEnvironment, dwCreationFlags))
+        BasepImageRequiresElevation(hUserToken, lpApplicationName, lpEnvironment, dwCreationFlags, ImageMachine))
     {
         DPRINT1("Image %S requires elevation\n", lpApplicationName);
         SetLastError(ERROR_ELEVATION_REQUIRED);

@@ -102,6 +102,32 @@ IsElevated(HANDLE Token)
     return !Ret || Elevation.TokenIsElevated;
 }
 
+static BOOL
+Is32BitX86Image(PCWSTR Path)
+{
+    HANDLE File;
+    IMAGE_DOS_HEADER DosHeader;
+    IMAGE_FILE_HEADER FileHeader;
+    DWORD Signature, Read;
+    DWORD Machine = 0;
+
+    File = CreateFileW(Path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (File == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    if (ReadFile(File, &DosHeader, sizeof(DosHeader), &Read, NULL) &&
+        Read == sizeof(DosHeader) && DosHeader.e_magic == IMAGE_DOS_SIGNATURE &&
+        SetFilePointer(File, DosHeader.e_lfanew, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+        ReadFile(File, &Signature, sizeof(Signature), &Read, NULL) &&
+        Read == sizeof(Signature) && Signature == IMAGE_NT_SIGNATURE &&
+        ReadFile(File, &FileHeader, sizeof(FileHeader), &Read, NULL) &&
+        Read == sizeof(FileHeader))
+        Machine = FileHeader.Machine;
+
+    CloseHandle(File);
+    return Machine == IMAGE_FILE_MACHINE_I386;
+}
+
 static DWORD
 Launch(HANDLE Token, PCWSTR Path, PWSTR Environment)
 {
@@ -273,17 +299,25 @@ START_TEST(InstallerDetection)
     else
     {
         Error = Launch(Restricted, SetupExe, PlainEnv);
-        ok(Error == ERROR_ELEVATION_REQUIRED, "unmanifested setup.exe: got %lu (expected %lu)\n",
-           Error, ERROR_ELEVATION_REQUIRED);
+        if (Is32BitX86Image(SetupExe))
+            ok(Error == ERROR_ELEVATION_REQUIRED, "unmanifested setup.exe: got %lu (expected %lu)\n",
+               Error, ERROR_ELEVATION_REQUIRED);
+        else
+            ok(Error != ERROR_ELEVATION_REQUIRED,
+               "non-x86-32 target: installer detection does not apply, got %lu\n", Error);
 
         Error = Launch(Restricted, SetupInvoker, PlainEnv);
         ok(Error != ERROR_ELEVATION_REQUIRED,
            "manifested asInvoker setup.exe: got %lu (should not be elevation required)\n", Error);
 
         Error = Launch(Restricted, SetupNoLevel, PlainEnv);
-        ok(Error == ERROR_ELEVATION_REQUIRED,
-           "manifest without requestedExecutionLevel setup.exe: got %lu (expected %lu)\n",
-           Error, ERROR_ELEVATION_REQUIRED);
+        if (Is32BitX86Image(SetupNoLevel))
+            ok(Error == ERROR_ELEVATION_REQUIRED,
+               "manifest without requestedExecutionLevel setup.exe: got %lu (expected %lu)\n",
+               Error, ERROR_ELEVATION_REQUIRED);
+        else
+            ok(Error != ERROR_ELEVATION_REQUIRED,
+               "non-x86-32 target: installer detection does not apply, got %lu\n", Error);
     }
     if (Restricted)
         CloseHandle(Restricted);
