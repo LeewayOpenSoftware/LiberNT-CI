@@ -898,7 +898,7 @@ FinishThread(
     {
         Error = DisableSetupAccount(pSetupData);
         DPRINT1("Setup account disabled with result %lu\n", Error);
-        ReportBuiltinAdministratorFallback(Context->hwndDlg);
+        ReportBuiltinAdministratorFallback(GetParent(Context->hwndDlg));
     }
 
 Components:

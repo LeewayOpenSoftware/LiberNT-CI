@@ -705,6 +705,7 @@ EnsureTargetAdministrator(VOID)
     NTSTATUS Status;
     DWORD Result = ERROR_SUCCESS;
     BOOLEAN FoundAdmin = FALSE;
+    BOOLEAN ReEnabled = FALSE;
     SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
 
     memset(&ObjectAttributes, 0, sizeof(ObjectAttributes));
@@ -868,6 +869,8 @@ ReEnable:
                 ControlInfo->UserAccountControl &= ~USER_ACCOUNT_DISABLED;
                 Status = SamSetInformationUser(UserHandle, UserControlInformation,
                                                ControlInfo);
+                if (NT_SUCCESS(Status))
+                    ReEnabled = TRUE;
                 SamFreeMemory(ControlInfo);
                 ControlInfo = NULL;
             }
@@ -878,7 +881,7 @@ ReEnable:
 
     /* Once the account really is enabled again, leave the reason under
      * SYSTEM\Setup for the first-boot path to surface to the user. */
-    if (NT_SUCCESS(Status))
+    if (ReEnabled)
     {
         HKEY hKey;
 
