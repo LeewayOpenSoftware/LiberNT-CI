@@ -1236,22 +1236,23 @@ struct test
 #endif
 
 /* Section allocation helper for automatic test registration */
-/* # and ## do not act inside another macro's argument; use two-stage helpers. */
-#define _WINE_TEST_PASTE_(a, b) a##b
-#define _WINE_TEST_PASTE(a, b) _WINE_TEST_PASTE_(a, b)
-#define _WINE_TEST_STR_(x) #x
-#define _WINE_TEST_STR(x) _WINE_TEST_STR_(x)
+/* A test name can be an object-like macro itself (HKEY_CLASSES_ROOT,
+ * DM_REPOSITION, SharedUserData, environ), so it must never be macro-expanded
+ * while the section name is built. The name is ##-adjacent in the START_TEST
+ * replacement list, where the paste runs before any expansion; the stringize
+ * operand is not expanded either. */
+#define _WINE_TEST_STRINGIZE_(x) #x
 #if defined(_MSC_VER)
   #pragma section(".test$A",long,read)
   #pragma section(".test$B",long,read)
   #pragma section(".test$C",long,read)
   #define _TESTALLOC(x) __declspec(allocate(x))
-  #define _TESTALLOC_ENTRY(name) __declspec(allocate(".test$B"))
+  #define _TESTALLOC_ENTRY(section_name) __declspec(allocate(".test$B"))
   #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x) const void* keep_##x = &x;
 #elif defined(__GNUC__)
   #define _TESTALLOC(x) __attribute__((used, section(x)))
-  #define _TESTALLOC_ENTRY(name) _TESTALLOC(_WINE_TEST_STR(_WINE_TEST_PASTE(.test$B, name)))
+  #define _TESTALLOC_ENTRY(section_name) _TESTALLOC(section_name)
   #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x)
 #else
@@ -1262,7 +1263,7 @@ struct test
 #define START_TEST(name) \
   EXTERN_C void func_##name(void); \
   _PRAGMA_SECTION(_CRT_STRINGIZE(.test$B##name), long, read); \
-  _TESTALLOC_ENTRY(name) const struct test winetest_testentry_##name = { #name, func_##name }; \
+  _TESTALLOC_ENTRY(_WINE_TEST_STRINGIZE_(.test$B##name)) const struct test winetest_testentry_##name = { #name, func_##name }; \
   _TESTKEEP(winetest_testentry_##name) \
   EXTERN_C void func_##name(void)
 
