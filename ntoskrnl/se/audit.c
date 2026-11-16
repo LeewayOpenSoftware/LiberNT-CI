@@ -166,6 +166,97 @@ SeInitializeProcessAuditName(
         }
     }
 
+    /* Match Windows: report the on-disk spelling of the final component,
+       not the casing the caller happened to open the image with. Any
+       failure here keeps the name we already built. */
+    if ((ObjectNameInfo) &&
+        (ObjectNameInfo->Name.Length != 0) &&
+        (ObjectNameInfo->Name.Buffer != NULL))
+    {
+        PFILE_NAME_INFORMATION FileNameInfo;
+        ULONG QueryLength, FsComponentLength = 0, DirectoryLength, NewLength;
+        PWCHAR FsLastBackslash, LastBackslash = NULL;
+        PWCHAR NameBuffer;
+        USHORT Index, FsNameChars;
+
+        QueryLength = sizeof(*FileNameInfo) + 1024 * sizeof(WCHAR);
+        FileNameInfo = ExAllocatePoolWithTag(NonPagedPool, QueryLength, TAG_SEPA);
+        if (FileNameInfo)
+        {
+            if (NT_SUCCESS(IoQueryFileInformation(FileObject,
+                                                  FileNameInformation,
+                                                  QueryLength,
+                                                  FileNameInfo,
+                                                  &QueryLength)))
+            {
+                /* Locate the final backslash in each name; the file system
+                   reports the full name length, so clamp to what fits the
+                   buffer that was handed to it */
+                FsNameChars = (USHORT)((QueryLength - FIELD_OFFSET(FILE_NAME_INFORMATION, FileName)) / sizeof(WCHAR));
+                if (FsNameChars > FileNameInfo->FileNameLength / sizeof(WCHAR))
+                    FsNameChars = FileNameInfo->FileNameLength / sizeof(WCHAR);
+                FsLastBackslash = NULL;
+                for (Index = FsNameChars; Index > 0; Index--)
+                {
+                    if (FileNameInfo->FileName[Index - 1] == L'\\')
+                    {
+                        FsLastBackslash = &FileNameInfo->FileName[Index - 1];
+                        break;
+                    }
+                }
+                for (Index = ObjectNameInfo->Name.Length / sizeof(WCHAR); Index > 0; Index--)
+                {
+                    if (ObjectNameInfo->Name.Buffer[Index - 1] == L'\\')
+                    {
+                        LastBackslash = &ObjectNameInfo->Name.Buffer[Index - 1];
+                        break;
+                    }
+                }
+
+                if ((FsLastBackslash != NULL) && (LastBackslash != NULL))
+                {
+                    FsComponentLength = FileNameInfo->FileNameLength -
+                                        (ULONG)((FsLastBackslash + 1 - FileNameInfo->FileName) * sizeof(WCHAR));
+                    DirectoryLength = (ULONG)((LastBackslash + 1 - ObjectNameInfo->Name.Buffer) * sizeof(WCHAR));
+                    NewLength = DirectoryLength + FsComponentLength;
+
+                    /* The substituted name must fit a UNICODE_STRING and keep
+                       the buffer the caller expects: length plus terminator */
+                    if ((FsComponentLength >= sizeof(WCHAR)) &&
+                        (NewLength >= DirectoryLength) &&
+                        (NewLength + sizeof(WCHAR) <= UNICODE_STRING_MAX_BYTES))
+                    {
+                        POBJECT_NAME_INFORMATION SubstitutedInfo;
+
+                        SubstitutedInfo = ExAllocatePoolWithTag(NonPagedPool,
+                                                                sizeof(*SubstitutedInfo) + NewLength + sizeof(WCHAR),
+                                                                TAG_SEPA);
+                        if (SubstitutedInfo)
+                        {
+                            NameBuffer = (PWCHAR)(SubstitutedInfo + 1);
+                            RtlCopyMemory(NameBuffer,
+                                          ObjectNameInfo->Name.Buffer,
+                                          DirectoryLength);
+                            RtlCopyMemory((PCHAR)NameBuffer + DirectoryLength,
+                                          FsLastBackslash + 1,
+                                          FsComponentLength);
+                            NameBuffer[NewLength / sizeof(WCHAR)] = UNICODE_NULL;
+
+                            SubstitutedInfo->Name.Length = (USHORT)NewLength;
+                            SubstitutedInfo->Name.MaximumLength = (USHORT)(NewLength + sizeof(WCHAR));
+                            SubstitutedInfo->Name.Buffer = NameBuffer;
+
+                            ExFreePool(ObjectNameInfo);
+                            ObjectNameInfo = SubstitutedInfo;
+                        }
+                    }
+                }
+            }
+
+            ExFreePool(FileNameInfo);
+        }
+    }
+
     /* Check if memory allocation failed */
     if (!ObjectNameInfo) Status = STATUS_NO_MEMORY;
 
