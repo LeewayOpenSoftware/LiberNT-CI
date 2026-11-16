@@ -3063,7 +3063,9 @@ ChangePos:
             }
             else
             {
-                DrawThemeBackground(m_Theme, hdc, iSBkgndPart[m_Position], 0, &rect, 0);
+                /* No taskbar part in the style: paint what the class background would */
+                if (FAILED(DrawThemeBackground(m_Theme, hdc, iSBkgndPart[m_Position], 0, &rect, 0)))
+                    FillRect(hdc, &rect, GetSysColorBrush(COLOR_3DFACE));
             }
         }
 
