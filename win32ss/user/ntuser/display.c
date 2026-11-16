@@ -243,6 +243,48 @@ UserRefreshDisplay(IN PPDEVOBJ ppdev)
     PDEVOBJ_vRelease(ppdev);
 }
 
+/* GUID_DEVINTERFACE_MONITOR (ntddvdeo.h) */
+static const GUID UserMonitorInterfaceGuid =
+    { 0xe6f07b5f, 0xee97, 0x4a90, { 0xb0, 0x76, 0x33, 0xf5, 0x7b, 0xf4, 0xea, 0xa7 } };
+
+/* The monitor's device interface path in its user-mode form (\\?\...). */
+static VOID
+UserMonitorInterfaceName(
+    _In_ PDEVICE_OBJECT Pdo,
+    _Out_writes_(Capacity) PWCHAR Buffer,
+    _In_ ULONG Capacity)
+{
+    PWSTR List;
+
+    Buffer[0] = UNICODE_NULL;
+    if (!NT_SUCCESS(IoGetDeviceInterfaces(&UserMonitorInterfaceGuid, Pdo, 0, &List)))
+        return;
+    if (List[0] == L'\\' && List[1] == L'?' && List[2] == L'?' && List[3] == L'\\')
+    {
+        RtlStringCchCopyW(Buffer, Capacity, List);
+        Buffer[1] = L'\\';
+    }
+    ExFreePool(List);
+}
+
+/* A monitor's DeviceKey is its driver key under the device class keys. */
+static VOID
+UserMonitorDeviceKey(
+    _In_ PDEVICE_OBJECT Pdo,
+    _Out_writes_(Capacity) PWCHAR Buffer,
+    _In_ ULONG Capacity)
+{
+    static const WCHAR ClassRoot[] = L"\\Registry\\Machine\\System\\CurrentControlSet\\Control\\Class\\";
+    WCHAR DriverKey[64];
+    ULONG Length;
+
+    Buffer[0] = UNICODE_NULL;
+    if (!NT_SUCCESS(IoGetDeviceProperty(Pdo, DevicePropertyDriverKeyName, sizeof(DriverKey), DriverKey, &Length)))
+        return;
+    RtlStringCchCopyW(Buffer, Capacity, ClassRoot);
+    RtlStringCchCatW(Buffer, Capacity, DriverKey);
+}
+
 NTSTATUS
 NTAPI
 UserEnumDisplayDevices(
@@ -253,6 +295,7 @@ UserEnumDisplayDevices(
 {
     PGRAPHICS_DEVICE pGraphicsDevice;
     PDEVICE_OBJECT pdo;
+    VIDEO_MONITOR_DEVICE Monitor = { 0 };
     PWCHAR pHardwareId;
     ULONG cbSize, dwLength;
     HKEY hkey;
@@ -283,12 +326,12 @@ UserEnumDisplayDevices(
     else
     {
         EngpUpdateMonitorDevices(pGraphicsDevice);
-        if (iDevNum >= pGraphicsDevice->dwMonCnt)
+        if (!EngpReferenceMonitorDevice(pGraphicsDevice, iDevNum, &Monitor))
         {
             TRACE("No monitor #%u for '%wZ'\n", iDevNum + 1, pustrDevice);
             return STATUS_UNSUCCESSFUL;
         }
-        pdo = pGraphicsDevice->pvMonDev[iDevNum].pdo;
+        pdo = Monitor.pdo;
     }
 
 
@@ -298,6 +341,8 @@ UserEnumDisplayDevices(
     {
         /* No device found */
         ERR("Could not open reg key\n");
+        if (Monitor.pdo)
+            ObDereferenceObject(Monitor.pdo);
         return STATUS_UNSUCCESSFUL;
     }
 
@@ -331,13 +376,18 @@ UserEnumDisplayDevices(
                                          &dwLength);
             if (!NT_SUCCESS(Status))
                 pdispdev->DeviceString[0] = UNICODE_NULL;
+            UserMonitorDeviceKey(pdo, pdispdev->DeviceKey, ARRAYSIZE(pdispdev->DeviceKey));
         }
-        pdispdev->StateFlags = pGraphicsDevice->pvMonDev[iDevNum].flag;
+        pdispdev->StateFlags = Monitor.flag;
     }
     pdispdev->DeviceID[0] = UNICODE_NULL;
 
     /* Fill in DeviceID */
-    if (pdo != NULL && (pustrDevice || !(dwFlags & EDD_GET_DEVICE_INTERFACE_NAME)))
+    if (pdo != NULL && pustrDevice && (dwFlags & EDD_GET_DEVICE_INTERFACE_NAME))
+    {
+        UserMonitorInterfaceName(pdo, pdispdev->DeviceID, ARRAYSIZE(pdispdev->DeviceID));
+    }
+    else if (pdo != NULL && (pustrDevice || !(dwFlags & EDD_GET_DEVICE_INTERFACE_NAME)))
     {
         Status = IoGetDeviceProperty(pdo,
                                      DevicePropertyHardwareID,
@@ -353,6 +403,8 @@ UserEnumDisplayDevices(
             if (!pHardwareId)
             {
                 EngSetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                if (Monitor.pdo)
+                    ObDereferenceObject(Monitor.pdo);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
 
@@ -399,6 +451,8 @@ UserEnumDisplayDevices(
         }
     }
 
+    if (Monitor.pdo)
+        ObDereferenceObject(Monitor.pdo);
     return STATUS_SUCCESS;
 }
 

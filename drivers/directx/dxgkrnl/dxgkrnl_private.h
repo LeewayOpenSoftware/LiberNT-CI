@@ -2636,6 +2636,12 @@ DxgkAdvancedColorEscape(
     _In_ ULONG Size);
 
 NTSTATUS
+DxgkTargetInfoEscape(
+    _In_ PDXGKRNL_ADAPTER Adapter,
+    _Inout_updates_bytes_(Size) PVOID Packet,
+    _In_ ULONG Size);
+
+NTSTATUS
 DxgkCollectAdapterDiagnosticInfo(
     _In_ PDXGKRNL_ADAPTER Adapter,
     _In_ DXGK_DIAGNOSTICINFO_TYPE Type);
