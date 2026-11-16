@@ -354,18 +354,23 @@ static DWORD WINAPI watchdog(LPVOID arg)
         DWORD now, limit = 15000 + 4 * (DWORD)g_wait;
         wchar_t line[256], path[MAX_PATH];
         FILE *f;
+        LONG row, stage, idx;
 
         Sleep(500);
-        if (g_batch_index < 0 || g_stage == 0) continue;
+        /* one read of each shared value: the main thread moves them while this runs */
+        idx = g_batch_index;
+        stage = g_stage;
+        row = g_cell_row;
+        if (idx < 0 || idx >= g_nstyles || stage == 0) continue;
         now = GetTickCount();
         if (now - g_stage_tick <= limit && now - g_style_tick <= 60000 + 10 * (DWORD)g_wait) continue;
         swprintf(line, 256, L"themetest: STALL style %ls stage %ld cell %ls/%d/%ld after %lu ms (stage %lu ms)\n",
-                 g_styles[g_batch_index].name, (long)g_stage, g_cell_row >= 0 ? ROWS[g_cell_row].cls : L"-",
-                 g_cell_row >= 0 ? ROWS[g_cell_row].part : 0, (long)g_cell_state,
+                 g_styles[idx].name, (long)stage, row >= 0 && row < NROWS ? ROWS[row].cls : L"-",
+                 row >= 0 && row < NROWS ? ROWS[row].part : 0, (long)g_cell_state,
                  (unsigned long)(now - g_style_tick), (unsigned long)(now - g_stage_tick));
         wprintf(L"%ls", line);
         OutputDebugStringW(line);
-        swprintf(path, MAX_PATH, L"%ls\\%ls.stall.txt", g_batch_dir, g_styles[g_batch_index].name);
+        swprintf(path, MAX_PATH, L"%ls\\%ls.stall.txt", g_batch_dir, g_styles[idx].name);
         if ((f = _wfopen(path, L"w")) != NULL) { fputws(line, f); fclose(f); }
         TerminateProcess(GetCurrentProcess(), 7);
     }
