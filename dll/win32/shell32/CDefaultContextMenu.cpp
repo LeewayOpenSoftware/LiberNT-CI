@@ -313,7 +313,9 @@ class CDefaultContextMenu :
         UINT m_iIdDfltLast; /* last default part id */
         HWND m_hwnd; /* window passed to callback */
         WCHAR m_DefVerbs[MAX_PATH];
+        HBITMAP m_hShieldBitmap;
 
+        HBITMAP GetShieldBitmap();
         HRESULT _DoCallback(UINT uMsg, WPARAM wParam, LPVOID lParam);
         HRESULT _DoInvokeCommandCallback(LPCMINVOKECOMMANDINFOEX lpcmi, WPARAM CmdId);
         void AddStaticEntry(const HKEY hkeyClass, const WCHAR *szVerb, UINT uFlags);
@@ -404,7 +406,8 @@ CDefaultContextMenu::CDefaultContextMenu() :
     m_iIdCBLast(0),
     m_iIdDfltFirst(0),
     m_iIdDfltLast(0),
-    m_hwnd(NULL)
+    m_hwnd(NULL),
+    m_hShieldBitmap(NULL)
 {
     *m_DefVerbs = UNICODE_NULL;
 }
@@ -425,6 +428,54 @@ CDefaultContextMenu::~CDefaultContextMenu()
     if (m_pidlFolder)
         CoTaskMemFree(m_pidlFolder);
     _ILFreeaPidl(const_cast<PITEMID_CHILD *>(m_apidl), m_cidl);
+
+    if (m_hShieldBitmap)
+        DeleteObject(m_hShieldBitmap);
+}
+
+HBITMAP CDefaultContextMenu::GetShieldBitmap()
+{
+    if (m_hShieldBitmap)
+        return m_hShieldBitmap;
+
+    const int cx = 16, cy = 16;
+    HDC hdcScreen = GetDC(NULL);
+    if (!hdcScreen)
+        return NULL;
+
+    HDC hdcMem = CreateCompatibleDC(hdcScreen);
+    if (!hdcMem)
+    {
+        ReleaseDC(NULL, hdcScreen);
+        return NULL;
+    }
+
+    BITMAPINFOHEADER bih = { sizeof(bih) };
+    bih.biWidth = cx;
+    bih.biHeight = cy;
+    bih.biPlanes = 1;
+    bih.biBitCount = 32;
+    bih.biCompression = BI_RGB;
+
+    HBITMAP hbmp = CreateDIBSection(hdcMem, (BITMAPINFO*)&bih, DIB_RGB_COLORS, NULL, NULL, 0);
+    if (hbmp)
+    {
+        HBITMAP hbmpOld = (HBITMAP)SelectObject(hdcMem, hbmp);
+
+        HICON hShield = (HICON)LoadImageW(NULL, (LPCWSTR)IDI_SHIELD, IMAGE_ICON, cx, cy, LR_SHARED);
+        if (hShield)
+        {
+            DrawIconEx(hdcMem, 0, 0, hShield, cx, cy, 0, NULL, DI_NORMAL);
+        }
+
+        SelectObject(hdcMem, hbmpOld);
+        m_hShieldBitmap = hbmp;
+    }
+
+    DeleteDC(hdcMem);
+    ReleaseDC(NULL, hdcScreen);
+
+    return m_hShieldBitmap;
 }
 
 HRESULT WINAPI CDefaultContextMenu::Initialize(const DEFCONTEXTMENU *pdcm, LPFNDFMCALLBACK lpfn)
@@ -761,6 +812,7 @@ CDefaultContextMenu::AddStaticContextMenusToMenu(
         StaticShellEntry& info = m_StaticEntries.GetNext(it);
         BOOL forceFirstPos = FALSE;
         bool hide = false;
+        HBITMAP hShieldBitmap = NULL;
 
         fState = MFS_ENABLED;
 
@@ -788,6 +840,8 @@ CDefaultContextMenu::AddStaticContextMenusToMenu(
         }
         else if (info.Verb.CompareNoCase(L"printto") == 0)
             hide = true;
+        else if (info.Verb.CompareNoCase(L"runas") == 0)
+            hShieldBitmap = GetShieldBitmap();
         else
             idVerbRes = 0;
 
@@ -898,6 +952,11 @@ CDefaultContextMenu::AddStaticContextMenusToMenu(
                 forceFirstPos = FALSE;
             }
 
+            if (hShieldBitmap)
+            {
+                mii.fMask |= MIIM_BITMAP;
+                mii.hbmpItem = hShieldBitmap;
+            }
             mii.fState = fState;
             mii.wID = iIdCmdFirst + cIds;
             if (InsertMenuItemW(hMenu, forceFirstPos ? indexFirst : pos, TRUE, &mii))
