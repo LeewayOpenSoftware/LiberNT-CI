@@ -178,12 +178,49 @@ Cleanup:
     DeleteFileW(Highest);
 }
 
+static BOOL
+AreInstallerDetectionPoliciesEnabled(void)
+{
+    HKEY PolicyKey;
+    DWORD EnableLUA = 0;
+    DWORD EnableInstaller = 0;
+    DWORD Size;
+    LONG Result;
+    BOOL Ret = FALSE;
+
+    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                          0,
+                          KEY_READ,
+                          &PolicyKey);
+    if (Result != ERROR_SUCCESS)
+        return FALSE;
+
+    Size = sizeof(EnableLUA);
+    RegQueryValueExW(PolicyKey, L"EnableLUA", NULL, NULL, (LPBYTE)&EnableLUA, &Size);
+
+    Size = sizeof(EnableInstaller);
+    Result = RegQueryValueExW(PolicyKey, L"EnableInstallerDetection", NULL, NULL,
+                              (LPBYTE)&EnableInstaller, &Size);
+    RegCloseKey(PolicyKey);
+
+    return EnableLUA == 1 && Result == ERROR_SUCCESS && EnableInstaller == 1;
+}
+
 START_TEST(InstallerDetection)
 {
     WCHAR Dir[MAX_PATH], SetupExe[MAX_PATH], SetupInvoker[MAX_PATH];
     WCHAR PlainEnv[] = L"SystemRoot=C:\\Windows\0";
     HANDLE Restricted;
     DWORD Error;
+
+    /* kernel32_apitest.exe has no manifest (version.rc and UI language .rc only),
+       so the copied image is truly unmanifested */
+    if (!AreInstallerDetectionPoliciesEnabled())
+    {
+        skip("EnableLUA or EnableInstallerDetection not both set to 1\n");
+        return;
+    }
 
     GetTempPathW(ARRAYSIZE(Dir), Dir);
     StringCchPrintfW(SetupExe, ARRAYSIZE(SetupExe), L"%ssetup_d1_test.exe", Dir);

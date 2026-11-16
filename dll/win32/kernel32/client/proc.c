@@ -3402,7 +3402,8 @@ BasepIsInstallerImage(
 {
     LPCWSTR FileName;
     WCHAR LowerName[MAX_PATH];
-    SIZE_T i;
+    PWCHAR DotPos;
+    SIZE_T i, NameLen;
 
     if (!lpApplicationName)
         return FALSE;
@@ -3417,13 +3418,15 @@ BasepIsInstallerImage(
         LowerName[i] = towlower(FileName[i]);
     LowerName[i] = UNICODE_NULL;
 
-    if (!wcscmp(LowerName, L"setup.exe") ||
-        !wcscmp(LowerName, L"install.exe") ||
-        !wcscmp(LowerName, L"uninst.exe") ||
-        !wcscmp(LowerName, L"uninstall.exe"))
-        return TRUE;
+    DotPos = wcsrchr(LowerName, L'.');
+    if (DotPos)
+        NameLen = DotPos - LowerName;
+    else
+        NameLen = wcslen(LowerName);
 
-    return FALSE;
+    return wcsstr(LowerName, L"setup") != NULL ||
+           wcsstr(LowerName, L"install") != NULL ||
+           wcsstr(LowerName, L"update") != NULL;
 }
 
 static
