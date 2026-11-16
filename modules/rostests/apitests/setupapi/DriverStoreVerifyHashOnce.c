@@ -2,8 +2,8 @@
  * PROJECT:     LiberNT API tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
  * PURPOSE:     DriverStore package verification matches each file against the catalog by
- *              hashing the file once (not once per catalog member) and still fails a
- *              tampered file and passes an intact one.
+ *              hashing the file once (not once per catalog member), fails a tampered file,
+ *              and reports a catalog with no trusted publisher as untrusted (not valid).
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -20,6 +20,7 @@
 #define PKG_SIG_SIGNED_VALID    1
 #define PKG_SIG_HASH_MISMATCH   2
 #define PKG_SIG_CATALOG_INVALID 3
+#define PKG_SIG_UNTRUSTED       4
 
 DWORD WINAPI LnSetupVerifyDriverPackage(PCWSTR InfPath, PDWORD SigState,
                                         PWSTR MismatchFile, DWORD MismatchFileCch);
@@ -179,17 +180,23 @@ START_TEST(DriverStoreVerifyHashOnce)
         goto cleanup;
     }
 
-    /* Baseline: the intact payload must verify. If it does not, the catalog round-trip is
-       not usable in this environment - skip rather than report a false result. */
+    /* Baseline: the intact payload's hashes must be found in the catalog (so the hash-once
+       match path runs). If instead we get a hash mismatch or an unreadable catalog, the
+       synthetic round-trip is not usable here - skip rather than report a false result. */
     SigState = 0xffffffff;
     err = LnSetupVerifyDriverPackage(InfPath, &SigState, Mismatch, ARRAYSIZE(Mismatch));
-    if (err != ERROR_SUCCESS || SigState != PKG_SIG_SIGNED_VALID)
+    if (err != ERROR_SUCCESS || SigState == PKG_SIG_HASH_MISMATCH ||
+        SigState == PKG_SIG_CATALOG_INVALID)
     {
-        skip("Baseline did not verify (err %lu, state %lu); needs a real signed catalog in the lab\n",
+        skip("Synthetic catalog not usable (err %lu, state %lu); verify with a real .cat in the lab\n",
              err, SigState);
         goto cleanup;
     }
-    ok(SigState == PKG_SIG_SIGNED_VALID, "intact payload verifies (state %lu)\n", SigState);
+    /* The catalog is self-made (no trusted publisher), so hashes match but the package must
+       be reported UNTRUSTED, never SIGNED_VALID. */
+    ok(SigState == PKG_SIG_UNTRUSTED,
+       "self-made catalog must be UNTRUSTED (hashes match, publisher not trusted), got %lu\n",
+       SigState);
 
     /* Tamper one byte in the middle of the payload: the Authenticode hash changes and the
        package must now fail verification, naming the mismatched file. */

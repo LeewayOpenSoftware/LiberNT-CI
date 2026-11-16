@@ -878,7 +878,8 @@ SETUPAPI_StageDriverPackage(
             TRACE("staged package %s signature state %lu\n", debugstr_w(Target), SigState);
 
             if (SetupapiGetVerifyPolicy() == 2 &&
-                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID))
+                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID ||
+                 SigState == PACKAGE_SIG_UNTRUSTED))
             {
                 SetLastError(ERROR_INVALID_IMAGE_HASH);
                 return FALSE;
@@ -892,7 +893,7 @@ SETUPAPI_StageDriverPackage(
 /* Política de verificación de firma de paquetes (M6).
  * HKLM\SYSTEM\CurrentControlSet\Control\DrvInst\VerifyPackageSignature:
  * 0 = off, 1 = audit (default, verifica y registra pero no bloquea),
- * 2 = enforce (rechaza paquetes con hash que no coincide o catálogo inválido).
+ * 2 = enforce (rechaza paquetes con hash que no coincide, catálogo inválido o sin editor de confianza).
  * Los paquetes sin catálogo siguen permitidos en ambos modos. */
 DWORD
 SetupapiGetVerifyPolicy(VOID)
@@ -928,6 +929,52 @@ OpenInfCatalog(
     OUT PWSTR CatalogPath,
     IN DWORD CatalogPathCch,
     OUT PDWORD Error);
+
+/* A hash match only proves a file is listed in the catalog; it does not prove the
+ * catalog is signed by a trusted publisher. Verify that trust chain here. */
+static LONG
+VerifyCatalogWithAction(
+    IN PCWSTR CatalogPath,
+    IN GUID *Action)
+{
+    WINTRUST_FILE_INFO FileInfo;
+    WINTRUST_DATA WintrustData;
+    LONG Status;
+
+    ZeroMemory(&FileInfo, sizeof(FileInfo));
+    FileInfo.cbStruct = sizeof(FileInfo);
+    FileInfo.pcwszFilePath = CatalogPath;
+
+    ZeroMemory(&WintrustData, sizeof(WintrustData));
+    WintrustData.cbStruct = sizeof(WintrustData);
+    WintrustData.dwUIChoice = WTD_UI_NONE;
+    WintrustData.fdwRevocationChecks = WTD_REVOKE_NONE;
+    WintrustData.dwUnionChoice = WTD_CHOICE_FILE;
+    WintrustData.pFile = &FileInfo;
+    WintrustData.dwStateAction = WTD_STATEACTION_VERIFY;
+
+    Status = WinVerifyTrust(INVALID_HANDLE_VALUE, Action, &WintrustData);
+
+    WintrustData.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(INVALID_HANDLE_VALUE, Action, &WintrustData);
+
+    return Status;
+}
+
+static BOOL
+IsCatalogTrusted(
+    IN PCWSTR CatalogPath)
+{
+    GUID DriverAction = DRIVER_ACTION_VERIFY;
+    GUID GenericAction = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+
+    /* The driver action also demands the WHQL code-signing usage; a catalog validly signed to
+     * a trusted root without it still passes Authenticode, as Windows and difxapi do. Generic
+     * verify checks the whole chain, signature and usage, so a bad catalog fails under both. */
+    if (VerifyCatalogWithAction(CatalogPath, &DriverAction) == ERROR_SUCCESS)
+        return TRUE;
+    return VerifyCatalogWithAction(CatalogPath, &GenericAction) == ERROR_SUCCESS;
+}
 
 DWORD
 WINAPI
@@ -989,6 +1036,10 @@ LnSetupVerifyDriverPackage(
     StageCopyFiles(hInf, &Package);
     FreeNameList(&Package.Sections);
     FreeNameList(&Package.Files);
+
+    /* Hashes match: the catalog must also be from a trusted publisher, as Windows requires. */
+    if (Package.SigState == PACKAGE_SIG_SIGNED_VALID && !IsCatalogTrusted(CatalogPath))
+        Package.SigState = PACKAGE_SIG_UNTRUSTED;
 
     *SigState = Package.SigState;
     if (MismatchFile && MismatchFileCch && Package.MismatchFile[0])
