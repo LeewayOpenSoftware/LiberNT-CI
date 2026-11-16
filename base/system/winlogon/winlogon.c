@@ -466,7 +466,7 @@ PublishThemeTrustFact(VOID)
     Publish = (BOOL (WINAPI *)(VOID))GetProcAddress(UxTheme, "ThemeTrustPublishBootFact");
     if (!Publish || !Publish())
         WARN("WL: the theme trust fact was not published\n");
-    FreeLibrary(UxTheme);
+    /* uxtheme stays loaded: the theme load inside LoadLibrary can queue a work item and arm a timer that run its code later */
 }
 
 int
