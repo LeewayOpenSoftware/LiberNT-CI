@@ -446,7 +446,16 @@ done:
     if (MemberHandle != NULL)
         SamrCloseHandle(&MemberHandle);
     if (Members.Sids != NULL)
+    {
+        ULONG j;
+
+        for (j = 0; j < Members.Count; j++)
+        {
+            if (Members.Sids[j].SidPointer != NULL)
+                SamIFreeVoid(Members.Sids[j].SidPointer);
+        }
         SamIFreeVoid(Members.Sids);
+    }
     if (AliasHandle != NULL)
         SamrCloseHandle(&AliasHandle);
     if (BuiltinHandle != NULL)
