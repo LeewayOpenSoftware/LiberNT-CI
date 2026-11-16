@@ -11,6 +11,7 @@
 #include <objbase.h>
 #include <lm.h>
 #include <ntsam.h>
+#include <ntsecapi.h>
 #include <userenv.h>
 
 #include "oobe.h"
@@ -581,7 +582,8 @@ DisableSetupAccount(
     WCHAR DefaultName[UNLEN + 1];
     DWORD cchName, cchAdmin, cchDomain;
     DWORD Rid = 0, cbData = sizeof(Rid), dwType, Entries = 0, Total = 0, i;
-    DWORD Resume = 0, Error = ERROR_SUCCESS;
+    DWORD_PTR Resume = 0;
+    DWORD Error = ERROR_SUCCESS;
     HKEY hKey = NULL;
     LONG RegError;
     SID_NAME_USE Use;
