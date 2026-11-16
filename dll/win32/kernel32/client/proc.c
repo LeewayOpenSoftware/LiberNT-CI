@@ -3433,8 +3433,8 @@ BasepIsInstallerDetectionEnabled(void)
 {
     HKEY PolicyKey;
     DWORD EnableLUA = 0;
-    DWORD EnableInstaller = 0;
-    DWORD Size;
+    DWORD EnableInstaller = 1;
+    DWORD Value, Size, Type;
     LONG Result;
 
     Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
@@ -3445,15 +3445,21 @@ BasepIsInstallerDetectionEnabled(void)
     if (Result != ERROR_SUCCESS)
         return FALSE;
 
-    Size = sizeof(EnableLUA);
-    RegQueryValueExW(PolicyKey, L"EnableLUA", NULL, NULL, (LPBYTE)&EnableLUA, &Size);
+    Size = sizeof(Value);
+    if (RegQueryValueExW(PolicyKey, L"EnableLUA", NULL, &Type, (LPBYTE)&Value, &Size) == ERROR_SUCCESS &&
+        Type == REG_DWORD && Size == sizeof(DWORD))
+        EnableLUA = Value;
 
-    Size = sizeof(EnableInstaller);
-    Result = RegQueryValueExW(PolicyKey, L"EnableInstallerDetection", NULL, NULL,
-                              (LPBYTE)&EnableInstaller, &Size);
+    Size = sizeof(Value);
+    Result = RegQueryValueExW(PolicyKey, L"EnableInstallerDetection", NULL, &Type,
+                              (LPBYTE)&Value, &Size);
+    if (Result == ERROR_SUCCESS && Type == REG_DWORD && Size == sizeof(DWORD))
+        EnableInstaller = Value;
+    /* An absent EnableInstallerDetection defaults to 1 on Windows client. */
+
     RegCloseKey(PolicyKey);
 
-    return Result == ERROR_SUCCESS && EnableLUA == 1 && EnableInstaller == 1;
+    return EnableLUA == 1 && EnableInstaller == 1;
 }
 
 static
