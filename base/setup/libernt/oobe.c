@@ -559,25 +559,204 @@ CreateAccount(
     return NERR_Success;
 }
 
+/* Retire the preinstall setup account (the account-domain RID 500, named
+ * by the SetupAccountRid marker written at install time). The account is
+ * disabled only when the just-created user is an enabled member of the
+ * Administrators alias; every check failure leaves RID 500 enabled and
+ * keeps the marker, so a later boot retries instead of locking out. */
 static DWORD
-DisableSetupAccount(VOID)
+DisableSetupAccount(
+    _In_ PSETUPDATA pSetupData)
 {
-    WCHAR Name[UNLEN + 1];
-    DWORD cchName = ARRAYSIZE(Name);
-    PUSER_INFO_1 Info;
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    PSID SetupSid = NULL, UserSid = NULL;
+    BYTE SetupSidBuffer[SECURITY_MAX_SID_SIZE];
+    BYTE UserSidBuffer[SECURITY_MAX_SID_SIZE];
+    DWORD cbSetupSid = sizeof(SetupSidBuffer), cbUserSid = sizeof(UserSidBuffer);
+    BYTE AdminSidBuffer[SECURITY_MAX_SID_SIZE];
+    DWORD cbAdminSid = sizeof(AdminSidBuffer);
+    WCHAR SetupName[UNLEN + 1], AdminGroup[GNLEN + 1], Domain[DNLEN + 1];
+    WCHAR DefaultName[UNLEN + 1];
+    DWORD cchName, cchAdmin, cchDomain, cchDefaultName;
+    DWORD Rid = 0, cbData = sizeof(Rid), dwType, Entries = 0, Total = 0, i;
+    DWORD Resume = 0, Error = ERROR_SUCCESS;
+    HKEY hKey = NULL;
+    LONG RegError;
+    SID_NAME_USE Use;
+    PLOCALGROUP_MEMBERS_INFO_0 Members = NULL;
+    PUSER_INFO_1 Info = NULL;
     USER_INFO_1008 Flags;
     NET_API_STATUS Status;
+    NTSTATUS NtStatus;
+    ULONG DomainSubAuthorityCount;
 
-    if (!GetUserNameW(Name, &cchName))
-        return GetLastError();
+    RegError = RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\Setup", 0,
+                             KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey);
+    if (RegError != ERROR_SUCCESS)
+        return (DWORD)RegError;
 
-    Status = NetUserGetInfo(NULL, Name, 1, (LPBYTE *)&Info);
+    RegError = RegQueryValueExW(hKey, L"SetupAccountRid", NULL, &dwType,
+                                (PBYTE)&Rid, &cbData);
+    RegCloseKey(hKey);
+    hKey = NULL;
+    if (RegError != ERROR_SUCCESS || dwType != REG_DWORD ||
+        Rid != DOMAIN_USER_RID_ADMIN)
+    {
+        /* Not a preinstall session: nothing to retire. */
+        return ERROR_SUCCESS;
+    }
+
+    /* Identify the setup account by SID, never by a hardcoded name. */
+    memset(&ObjectAttributes, 0, sizeof(ObjectAttributes));
+    NtStatus = LsaOpenPolicy(NULL, &ObjectAttributes,
+                             POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (NT_SUCCESS(NtStatus))
+        NtStatus = LsaQueryInformationPolicy(PolicyHandle,
+                                             PolicyAccountDomainInformation,
+                                             (PVOID *)&AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    if (!NT_SUCCESS(NtStatus) || AccountDomain == NULL)
+    {
+        DPRINT1("DisableSetupAccount: account domain unavailable, setup account left enabled (Status 0x%08lx)\n", NtStatus);
+        return RtlNtStatusToDosError(NtStatus);
+    }
+
+    DomainSubAuthorityCount = *RtlSubAuthorityCountSid(AccountDomain->DomainSid);
+    if (cbSetupSid < RtlLengthRequiredSid(DomainSubAuthorityCount + 1))
+    {
+        Error = ERROR_INSUFFICIENT_BUFFER;
+        goto done;
+    }
+    SetupSid = (PSID)SetupSidBuffer;
+    RtlCopySid(cbSetupSid, SetupSid, AccountDomain->DomainSid);
+    *RtlSubAuthorityCountSid(SetupSid) = DomainSubAuthorityCount + 1;
+    *RtlSubAuthoritySid(SetupSid, DomainSubAuthorityCount) = DOMAIN_USER_RID_ADMIN;
+
+    cchName = ARRAYSIZE(SetupName);
+    cchDomain = ARRAYSIZE(Domain);
+    if (!LookupAccountSidW(NULL, SetupSid, SetupName, &cchName,
+                           Domain, &cchDomain, &Use))
+    {
+        Error = GetLastError();
+        DPRINT1("DisableSetupAccount: setup account name unresolved (%lu), left enabled\n", Error);
+        goto done;
+    }
+
+    cbUserSid = sizeof(UserSidBuffer);
+    cchDomain = ARRAYSIZE(Domain);
+    if (!LookupAccountNameW(NULL, pSetupData->UserName, (PSID)UserSidBuffer,
+                            &cbUserSid, Domain, &cchDomain, &Use))
+    {
+        Error = GetLastError();
+        DPRINT1("DisableSetupAccount: new user SID unresolved (%lu), setup account left enabled\n", Error);
+        goto done;
+    }
+    UserSid = (PSID)UserSidBuffer;
+
+    /* Check (b): the new user must be a member of Administrators. */
+    if (!CreateWellKnownSid(WinBuiltinAdministratorsSid, NULL,
+                            (PSID)AdminSidBuffer, &cbAdminSid))
+    {
+        Error = GetLastError();
+        goto done;
+    }
+    cchAdmin = ARRAYSIZE(AdminGroup);
+    cchDomain = ARRAYSIZE(Domain);
+    if (!LookupAccountSidW(NULL, (PSID)AdminSidBuffer, AdminGroup, &cchAdmin,
+                           Domain, &cchDomain, &Use))
+    {
+        Error = GetLastError();
+        goto done;
+    }
+    Status = NetLocalGroupGetMembers(NULL, AdminGroup, 0, (LPBYTE *)&Members,
+                                     MAX_PREFERRED_LENGTH, &Entries, &Total,
+                                     &Resume);
     if (Status != NERR_Success)
-        return Status;
-    Flags.usri1008_flags = Info->usri1_flags | UF_ACCOUNTDISABLE;
-    NetApiBufferFree(Info);
+    {
+        Error = (DWORD)Status;
+        DPRINT1("DisableSetupAccount: Administrators members unreadable (%lu), setup account left enabled\n", Error);
+        goto done;
+    }
+    for (i = 0; i < Entries; i++)
+    {
+        if (RtlEqualSid(Members[i].lgrmi0_sid, UserSid))
+            break;
+    }
+    NetApiBufferFree(Members);
+    Members = NULL;
+    if (i == Entries)
+    {
+        DPRINT1("DisableSetupAccount: %S is not an administrator, setup account left enabled\n", pSetupData->UserName);
+        return ERROR_NONE_MAPPED;
+    }
 
-    return NetUserSetInfo(NULL, Name, 1008, (LPBYTE)&Flags, NULL);
+    /* Check (c): the new user must be enabled. */
+    Status = NetUserGetInfo(NULL, pSetupData->UserName, 1, (LPBYTE *)&Info);
+    if (Status != NERR_Success || (Info->usri1_flags & UF_ACCOUNTDISABLE))
+    {
+        if (Status == NERR_Success)
+            NetApiBufferFree(Info);
+        DPRINT1("DisableSetupAccount: %S is not an enabled user, setup account left enabled\n", pSetupData->UserName);
+        return ERROR_NONE_MAPPED;
+    }
+    NetApiBufferFree(Info);
+    Info = NULL;
+
+    /* All checks hold: disable the setup account by its resolved name. */
+    Flags.usri1008_flags = UF_ACCOUNTDISABLE;
+    Status = NetUserSetInfo(NULL, SetupName, 1008, (LPBYTE)&Flags, NULL);
+    if (Status != NERR_Success)
+    {
+        Error = (DWORD)Status;
+        DPRINT1("DisableSetupAccount: disabling %S failed (%lu), left enabled\n", SetupName, Error);
+        goto done;
+    }
+
+    /* Clear autologon state that still points at the setup account. */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                      L"SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon",
+                      0, KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        cchDefaultName = ARRAYSIZE(DefaultName);
+        cchDomain = ARRAYSIZE(Domain);
+        cbUserSid = sizeof(UserSidBuffer);
+        if (RegQueryValueExW(hKey, L"DefaultUserName", NULL, &dwType,
+                             (PBYTE)DefaultName, &cchDefaultName) == ERROR_SUCCESS &&
+            dwType == REG_SZ &&
+            LookupAccountNameW(NULL, DefaultName, (PSID)UserSidBuffer,
+                               &cbUserSid, Domain, &cchDomain, &Use) &&
+            RtlEqualSid((PSID)UserSidBuffer, SetupSid))
+        {
+            RegSetValueExW(hKey, L"AutoAdminLogon", 0, REG_SZ,
+                           (PBYTE)L"0", 2 * sizeof(WCHAR));
+            RegDeleteValueW(hKey, L"DefaultPassword");
+        }
+        RegCloseKey(hKey);
+        hKey = NULL;
+    }
+
+    /* The marker goes last: only a fully retired account drops it. */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\Setup", 0,
+                        KEY_SET_VALUE, &hKey) == ERROR_SUCCESS)
+    {
+        RegDeleteValueW(hKey, L"SetupAccountRid");
+        RegCloseKey(hKey);
+        hKey = NULL;
+    }
+
+done:
+    if (Members != NULL)
+        NetApiBufferFree(Members);
+    if (Info != NULL)
+        NetApiBufferFree(Info);
+    if (hKey != NULL)
+        RegCloseKey(hKey);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    return Error;
 }
 
 static VOID
@@ -662,7 +841,7 @@ FinishThread(
     }
     if (FirstBootRun)
     {
-        Error = DisableSetupAccount();
+        Error = DisableSetupAccount(pSetupData);
         DPRINT1("Setup account disabled with result %lu\n", Error);
     }
 
