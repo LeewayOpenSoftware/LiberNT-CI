@@ -654,7 +654,19 @@ DisableSetupAccount(
         DPRINT1("DisableSetupAccount: new user SID unresolved (%lu), setup account left enabled\n", Error);
         goto done;
     }
+    if (Use != SidTypeUser)
+    {
+        DPRINT1("DisableSetupAccount: %S is not a user, setup account left enabled\n", pSetupData->UserName);
+        Error = ERROR_NONE_MAPPED;
+        goto done;
+    }
     UserSid = (PSID)UserSidBuffer;
+    if (RtlEqualSid(UserSid, SetupSid))
+    {
+        DPRINT1("DisableSetupAccount: setup account cannot retire itself, left enabled\n");
+        Error = ERROR_NONE_MAPPED;
+        goto done;
+    }
 
     /* Check (b): the new user must be a member of Administrators. */
     if (!CreateWellKnownSid(WinBuiltinAdministratorsSid, NULL,
@@ -705,8 +717,20 @@ DisableSetupAccount(
     NetApiBufferFree(Info);
     Info = NULL;
 
-    /* All checks hold: disable the setup account by its resolved name. */
-    Flags.usri1008_flags = UF_ACCOUNTDISABLE;
+    /* All checks hold: disable the setup account by its resolved name.
+     * Level 1008 replaces the whole flags word, so OR the disable bit
+     * into the account's current flags; a bare UF_ACCOUNTDISABLE would
+     * also drop the account type and the password-expiry flags. */
+    Status = NetUserGetInfo(NULL, SetupName, 1, (LPBYTE *)&Info);
+    if (Status != NERR_Success)
+    {
+        Error = (DWORD)Status;
+        DPRINT1("DisableSetupAccount: %S flags unreadable (%lu), left enabled\n", SetupName, Error);
+        goto done;
+    }
+    Flags.usri1008_flags = Info->usri1_flags | UF_ACCOUNTDISABLE;
+    NetApiBufferFree(Info);
+    Info = NULL;
     Status = NetUserSetInfo(NULL, SetupName, 1008, (LPBYTE)&Flags, NULL);
     if (Status != NERR_Success)
     {
