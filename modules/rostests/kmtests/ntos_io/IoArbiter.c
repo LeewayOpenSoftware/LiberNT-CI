@@ -230,7 +230,7 @@ WriteOrderingValues(
     static const WCHAR OrderKey[] = L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Arbiters\\AllocationOrder";
     static const WCHAR ReservedKey[] = L"\\Registry\\Machine\\SYSTEM\\CurrentControlSet\\Control\\Arbiters\\ReservedResources";
     static const WCHAR Redirect[] = L"KmtestReserved";
-    UCHAR Buffer[FIELD_OFFSET(IO_RESOURCE_REQUIREMENTS_LIST, List[0].Descriptors) + 2 * sizeof(IO_RESOURCE_DESCRIPTOR)];
+    UCHAR Buffer[sizeof(IO_RESOURCE_REQUIREMENTS_LIST) + sizeof(IO_RESOURCE_DESCRIPTOR)];
     PIO_RESOURCE_REQUIREMENTS_LIST Requirements = (PIO_RESOURCE_REQUIREMENTS_LIST)Buffer;
     UNICODE_STRING KeyName, ValueName;
     OBJECT_ATTRIBUTES ObjectAttributes;

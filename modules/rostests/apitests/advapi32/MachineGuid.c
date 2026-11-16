@@ -68,15 +68,18 @@ static
 VOID
 TestWow64View(VOID)
 {
-    BOOL IsWow64 = FALSE;
     DWORD Size;
     HKEY hKey;
     LONG Error;
 
-    if (sizeof(PVOID) == sizeof(ULONG) && (!IsWow64Process(GetCurrentProcess(), &IsWow64) || !IsWow64))
+    if (sizeof(PVOID) == sizeof(ULONG))
     {
-        skip("No 32-bit registry view on a 32-bit system\n");
-        return;
+        BOOL IsWow64 = FALSE;
+        if (!IsWow64Process(GetCurrentProcess(), &IsWow64) || !IsWow64)
+        {
+            skip("No 32-bit registry view on a 32-bit system\n");
+            return;
+        }
     }
 
     Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE, CRYPTOGRAPHY_KEY, 0, KEY_QUERY_VALUE | KEY_WOW64_32KEY, &hKey);
