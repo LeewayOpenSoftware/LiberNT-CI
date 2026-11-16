@@ -364,7 +364,7 @@ MsvpSafeModeRid500Recovery(
     SAMPR_HANDLE MemberHandle = NULL;
     PSAMPR_USER_INFO_BUFFER MemberInfo = NULL;
     PSID BuiltinSid = NULL;
-    SAMPR_PSID_ARRAY Members;
+    SAMPR_PSID_ARRAY_OUT Members;
     ULONG i;
     UCHAR DomainSubAuthorityCount;
     BOOLEAN Allowed = FALSE;
