@@ -2466,6 +2466,14 @@ DxgkpCaptureDesktop(
         Entry.SourceAllocation = NULL;
         Entry.SourceOpenBindingReference = PrimaryBinding;
         Entry.SourceOpenBindingHandle = PrimaryBindingHandle;
+        if (Status == STATUS_INVALID_PARAMETER)
+        {
+            /* FIXME: some miniports refuse a copy of the compositor's flip buffer into the capture surface; the compositor serves screen reads instead */
+            DXGKRNL_WARN("DxgkpCaptureDesktop: the miniport refused the scanout copy; screen reads go to the compositor\n");
+            Adapter->CddCaptureUnsupported = TRUE;
+            Capture->Flags = DXGK_DESKTOP_CAPTURE_NEEDS_COMPOSITOR;
+            Status = STATUS_SUCCESS;
+        }
     }
     else
     {
@@ -2474,7 +2482,7 @@ DxgkpCaptureDesktop(
         Entry.SourceIsSharedPrimary = TRUE;
         Status = DxgkpCaptureBlit(Adapter, &Entry);
     }
-    if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status) || (Capture->Flags & DXGK_DESKTOP_CAPTURE_NEEDS_COMPOSITOR))
         goto Cleanup;
     RequiredBytes = (ULONGLONG)(Capture->Height - 1) * Cached->Surface.Pitch +
                     (ULONGLONG)Capture->Width * sizeof(ULONG);
