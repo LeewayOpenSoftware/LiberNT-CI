@@ -697,7 +697,7 @@ EnsureTargetAdministrator(VOID)
     SAM_HANDLE AliasHandle = NULL;
     SAM_HANDLE UserHandle = NULL;
     PUSER_CONTROL_INFORMATION ControlInfo = NULL;
-    PSID BuiltinSid = NULL, MemberSid, AccountSid;
+    PSID BuiltinSid = NULL, MemberSid;
     ULONG MemberCount = 0;
     PSID *MemberSids = NULL;
     ULONG i, Rid;
