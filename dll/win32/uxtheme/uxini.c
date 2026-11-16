@@ -210,9 +210,9 @@ static inline BOOL UXINI_eof(PUXINI_FILE uf)
  */
 static inline BOOL UXINI_isspace(WCHAR c)
 {
-    if (isspace(c)) return TRUE;
-    if (c=='\r') return TRUE;
-    return FALSE;
+    /* The INI text is UTF-16: only the ASCII blanks and control spaces count, a wide
+       character is never handed to the locale dependent isspace(). */
+    return c == ' ' || (c >= '\t' && c <= '\r');
 }
 
 /**********************************************************************
@@ -241,14 +241,14 @@ static LPCWSTR UXINI_GetNextLine(PUXINI_FILE uf, DWORD *dwLen)
         lpLineEnd = uf->lpCurLoc;
         while(!UXINI_eof(uf) && *uf->lpCurLoc != '\n' && *uf->lpCurLoc != ';') lpLineEnd = ++uf->lpCurLoc;
         /* If comment was found, skip the rest of the line */
-        if(*uf->lpCurLoc == ';')
+        if(!UXINI_eof(uf) && *uf->lpCurLoc == ';')
             while(!UXINI_eof(uf) && *uf->lpCurLoc != '\n') uf->lpCurLoc++;
         len = (lpLineEnd - lpLineStart);
-        if(*lpLineStart != ';' && len == 0)
+        if(len == 0 && (lpLineStart >= uf->lpEnd || *lpLineStart != ';'))
             return NULL;
-    } while(*lpLineStart == ';');
-    /* Remove whitespace from end of line */
-    while(UXINI_isspace(lpLineStart[len-1])) len--;
+    } while(lpLineStart < uf->lpEnd && *lpLineStart == ';');
+    /* Remove whitespace from end of line, never past the start of the line */
+    while(len > 0 && UXINI_isspace(lpLineStart[len-1])) len--;
     *dwLen = len;
 
     return lpLineStart;
@@ -278,8 +278,12 @@ LPCWSTR UXINI_GetNextSection(PUXINI_FILE uf, DWORD *dwLen)
     while((lpLine = UXINI_GetNextLine(uf, dwLen))) {
         /* Assuming a ']' ending to the section name */
         if(lpLine[0] == '[') {
+            /* Skip the '[' and drop the closing ']' when there is one */
+            DWORD len = *dwLen - 1;
+
+            if(len > 0 && lpLine[*dwLen - 1] == ']') len--;
             lpLine++;
-            *dwLen -= 2;
+            *dwLen = len;
             break;
         }
     }
@@ -334,27 +338,32 @@ LPCWSTR UXINI_GetNextValue(PUXINI_FILE uf, DWORD *dwNameLen, LPCWSTR *lpValue, D
     DWORD vallen = 0;
     DWORD namelen = 0;
     DWORD dwLen;
-    lpLine = UXINI_GetNextLine(uf, &dwLen);
-    if(!lpLine)
-        return NULL;
-    if(lpLine[0] == '[') {
-        UXINI_UnGetToLine(uf, lpLine);
-        return NULL;
-    }
-    lpLineEnd = lpLine + dwLen;
+    for(;;) {
+        lpLine = UXINI_GetNextLine(uf, &dwLen);
+        if(!lpLine)
+            return NULL;
+        if(lpLine[0] == '[') {
+            UXINI_UnGetToLine(uf, lpLine);
+            return NULL;
+        }
+        lpLineEnd = lpLine + dwLen;
 
-    name = lpLine;
-    while(namelen < dwLen && *lpLine != '=') {
+        name = lpLine;
+        namelen = 0;
+        while(namelen < dwLen && *lpLine != '=') {
+            lpLine++;
+            namelen++;
+        }
+        if(namelen >= dwLen || *lpLine != '=') return NULL;
         lpLine++;
-        namelen++;
-    }
-    if(*lpLine != '=') return NULL;
-    lpLine++;
 
-    /* Remove whitespace from end of name */
-    while(UXINI_isspace(name[namelen-1])) namelen--;
-    /* Remove whitespace from beginning of value */
-    while(UXINI_isspace(*lpLine) && lpLine < lpLineEnd) lpLine++;
+        /* Remove whitespace from end of name, never before its start */
+        while(namelen > 0 && UXINI_isspace(name[namelen-1])) namelen--;
+        /* A line without a name carries no value: skip it */
+        if(namelen > 0) break;
+    }
+    /* Remove whitespace from beginning of value, never past the line end */
+    while(lpLine < lpLineEnd && UXINI_isspace(*lpLine)) lpLine++;
     value = lpLine;
     vallen = dwLen-(value-name);
 
