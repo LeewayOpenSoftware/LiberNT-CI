@@ -368,6 +368,7 @@ SamValidateNormalUser(
     SAMPR_ULONG_ARRAY Use = {0, NULL};
     PSAMPR_USER_INFO_BUFFER UserInfo = NULL;
     LARGE_INTEGER LogonTime;
+    BOOLEAN BlankRefused;
 
     /* Get the logon time */
     NtQuerySystemTime(&LogonTime);
@@ -447,7 +448,16 @@ SamValidateNormalUser(
     }
 
     Status = MsvpCheckPassword(PwdData, UserInfo);
-    if (!NT_SUCCESS(Status))
+
+    /* A correct blank password refused by policy is reported after the disabled check, as Windows does */
+    BlankRefused = (Status == STATUS_ACCOUNT_RESTRICTION) ||
+                   (NT_SUCCESS(Status) &&
+                    !PwdData->IsNetwork &&
+                    !PwdData->TrustedClient &&
+                    !UserInfo->All.NtPasswordPresent &&
+                    MsvpLimitBlankPasswordUse());
+
+    if (!NT_SUCCESS(Status) && !BlankRefused)
     {
         ERR("MsvpCheckPassword failed (Status %08lx)\n", Status);
         if (Status == STATUS_WRONG_PASSWORD)
@@ -458,21 +468,18 @@ SamValidateNormalUser(
         goto done;
     }
 
-    if (!PwdData->IsNetwork &&
-        !PwdData->TrustedClient &&
-        !UserInfo->All.NtPasswordPresent &&
-        MsvpLimitBlankPasswordUse())
-    {
-        ERR("Blank password not allowed for this caller!\n");
-        *SubStatus = STATUS_ACCOUNT_RESTRICTION;
-        Status = STATUS_ACCOUNT_RESTRICTION;
-        goto done;
-    }
-
     if (UserInfo->All.UserAccountControl & USER_ACCOUNT_DISABLED)
     {
         ERR("Account disabled!\n");
         *SubStatus = STATUS_ACCOUNT_DISABLED;
+        Status = STATUS_ACCOUNT_RESTRICTION;
+        goto done;
+    }
+
+    if (BlankRefused)
+    {
+        ERR("Blank password not allowed for this caller!\n");
+        *SubStatus = STATUS_ACCOUNT_RESTRICTION;
         Status = STATUS_ACCOUNT_RESTRICTION;
         goto done;
     }
