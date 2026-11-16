@@ -70,7 +70,7 @@ RunCopyChild(void)
     PVOID Fill[256];
     ULONG Filled = 0, Page, Index, Succeeded = 0;
     DWORD Exception = 0;
-    BOOL Refused = FALSE;
+    BOOL Refused = FALSE, WrongAv = FALSE;
 
     Mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, Pages * PageBytes, NULL);
     if (Mapping)
@@ -91,8 +91,10 @@ RunCopyChild(void)
     {
         Filled++;
     }
+    if (Filled > 0)
+        VirtualFree(Fill[--Filled], 0, MEM_RELEASE);
 
-    for (Page = 0; Page < Pages && !Refused; Page++)
+    for (Page = 0; Page < Pages && !Refused && !WrongAv; Page++)
     {
         _SEH2_TRY
         {
@@ -101,17 +103,29 @@ RunCopyChild(void)
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
-            Exception = (DWORD)_SEH2_GetExceptionCode();
-            Refused = TRUE;
+            PEXCEPTION_RECORD Record = _SEH2_GetExceptionInformation()->ExceptionRecord;
+            Exception = (DWORD)Record->ExceptionCode;
+            if (Record->NumberParameters >= 2 &&
+                Record->ExceptionInformation[0] == 1 &&
+                Record->ExceptionInformation[1] == (ULONG_PTR)&View[Page * PageBytes])
+            {
+                Refused = TRUE;
+            }
+            else
+            {
+                WrongAv = TRUE;
+            }
         }
         _SEH2_END;
     }
-    if (!Refused)
+    if (WrongAv)
+        SbxChildFail(&Failures, CHILD_COPY_WRONG_EXCEPTION, "copy-on-write loop raised an exception not tied to the write", Exception);
+    else if (!Refused)
         SbxChildFail(&Failures, CHILD_COPY_NOT_REFUSED, "copy-on-write writes above the job limit all succeeded", 0);
     else if (Exception != STATUS_ACCESS_VIOLATION)
-        SbxChildFail(&Failures, CHILD_COPY_WRONG_EXCEPTION, "copy-on-write refusal raised an unexpected exception", Exception);
-    else if (!Succeeded)
-        SbxChildFail(&Failures, CHILD_COPY_NO_SUCCESS, "no copy-on-write write succeeded before the refusal", 0);
+        SbxChildFail(&Failures, CHILD_COPY_WRONG_EXCEPTION, "the write refusal raised an unexpected exception code", Exception);
+    else if (Succeeded < 256)
+        SbxChildFail(&Failures, CHILD_COPY_NO_SUCCESS, "fewer than 256 copy-on-write writes succeeded before the refusal", Succeeded);
 
     for (Index = 0; Index < Filled; Index++)
         VirtualFree(Fill[Index], 0, MEM_RELEASE);

@@ -957,7 +957,7 @@ typedef struct _COW_CHARGE_MUTATOR
     LONG64 Used;
     ULONG Charges;
     ULONG Returns;
-    BOOLEAN Mutate;
+    ULONG Mutate;
     PMI_ADDRESS_SPACE Space;
     ULONG64 Address;
 } COW_CHARGE_MUTATOR;
@@ -969,17 +969,26 @@ CowChargeMutateCharge(_In_ PVOID Owner, _In_ LONG64 Pages)
     PMI_PTE Slot;
     ULONG TableFrame;
     MI_PTE Pte;
+    ULONG Protection;
 
     Ctx->Charges++;
     Ctx->Used += Pages;
     if (Ctx->Mutate)
     {
-        Ctx->Mutate = FALSE;
+        Protection = (Ctx->Mutate & 2) ? MI_PROT_WRITECOPY : MI_PROT_READONLY;
+        Ctx->Mutate = 0;
         Slot = MiPtLookup(Ctx->Space, Ctx->Address, &TableFrame);
         Pte = MiArchPteRead(Slot);
-        MiArchPteWrite(Slot, MiArchPteMakeLeaf((ULONG64)MiArchPteFrame(Pte),
-                                               MI_PROT_READONLY,
-                                               MiArchPteLeafFlags(Pte)));
+        if (Protection == MI_PROT_READONLY)
+        {
+            MiArchPteWrite(Slot, MiArchPteMakeLeaf((ULONG64)MiArchPteFrame(Pte),
+                                                   MI_PROT_READONLY,
+                                                   MiArchPteLeafFlags(Pte)));
+        }
+        else
+        {
+            MiArchPteWrite(Slot, MiArchPteSetDirty(Pte, TRUE));
+        }
     }
     return TRUE;
 }
@@ -1036,9 +1045,19 @@ SectionCopyOnWriteChargePteChange(void)
     CHECK(Ctx.Used == 1);
     CHECK(MI_ATOMIC_READ64(&A.CopyOnWriteFaults) == 1);
 
+    CHECK(UserRead64(&World, 0, BaseA + 0x6000, &Status) == *(ULONG64 *)(File.Data + 0x6000));
+    Ctx.Address = BaseA + 0x6000;
+    Ctx.Mutate = 2;
+    CHECK(NT_SUCCESS(UserWrite64(&World, 0, Ctx.Address, 0x5353)));
+    CHECK(Ctx.Charges == 3);
+    CHECK(Ctx.Returns == 1);
+    CHECK(Ctx.Used == 2);
+    CHECK(MI_ATOMIC_READ64(&A.CopyOnWriteFaults) == 2);
+    CHECK(UserRead64(&World, 0, BaseA + 0x6000, &Status) == 0x5353);
+
     CHECK(NT_SUCCESS(MiUnmapView(&A, BaseA)));
     CHECK(Ctx.Used == 0);
-    CHECK(Ctx.Returns == 2);
+    CHECK(Ctx.Returns >= 2);
     World.System.ChargeOwnerCommit = NULL;
     World.System.ReturnOwnerCommit = NULL;
     SpaceDestroy(&World, 0, &A);
