@@ -276,6 +276,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "Certains composants n'ont pas été installés"
     IDS_OOBE_ACCOUNT_FAILED "LiberNT n'a pas pu créer votre compte (erreur %lu). LiberNT ouvre une session sur le compte Utilisateur intégré à la place."
+    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "Erreur inconnue"
     IDS_OOBE_STORAGETITLE "Utiliser tout votre espace de stockage"
     IDS_OOBE_STORAGESUBTITLE "LiberNT peut agrandir le lecteur C: jusqu'à remplir le périphérique de stockage d'où il s'exécute."

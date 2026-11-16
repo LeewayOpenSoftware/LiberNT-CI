@@ -858,13 +858,29 @@ ReEnable:
             if (NT_SUCCESS(Status))
             {
                 ControlInfo->UserAccountControl &= ~USER_ACCOUNT_DISABLED;
-                SamSetInformationUser(UserHandle, UserControlInformation,
-                                      ControlInfo);
+                Status = SamSetInformationUser(UserHandle, UserControlInformation,
+                                               ControlInfo);
                 SamFreeMemory(ControlInfo);
                 ControlInfo = NULL;
             }
             SamCloseHandle(UserHandle);
             UserHandle = NULL;
+        }
+    }
+
+    /* Once the account really is enabled again, leave the reason under
+     * SYSTEM\Setup for the first-boot path to surface to the user. */
+    if (NT_SUCCESS(Status))
+    {
+        HKEY hKey;
+
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0, NULL,
+                            REG_OPTION_NON_VOLATILE, KEY_SET_VALUE,
+                            NULL, &hKey, NULL) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(hKey, L"BuiltinAdministratorEnabled", 0, REG_DWORD,
+                           (const BYTE *)&Result, sizeof(Result));
+            RegCloseKey(hKey);
         }
     }
 

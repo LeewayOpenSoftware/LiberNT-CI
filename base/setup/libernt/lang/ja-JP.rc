@@ -276,6 +276,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "一部のコンポーネントがインストールされませんでした"
     IDS_OOBE_ACCOUNT_FAILED "アカウントを作成できませんでした (エラー %lu)。代わりに組み込みの User アカウントにサインインします。"
+    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "不明なエラー"
     IDS_OOBE_STORAGETITLE "ストレージ全体を使う"
     IDS_OOBE_STORAGESUBTITLE "LiberNT は、ドライブ C: を実行中のストレージ デバイス全体に広げることができます。"

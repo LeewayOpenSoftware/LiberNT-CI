@@ -276,6 +276,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "Alcuni componenti non sono stati installati"
     IDS_OOBE_ACCOUNT_FAILED "LiberNT non è riuscito a creare l'account (errore %lu). LiberNT accede invece all'account predefinito Utente."
+    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "Errore sconosciuto"
     IDS_OOBE_STORAGETITLE "Usa tutto lo spazio di archiviazione"
     IDS_OOBE_STORAGESUBTITLE "LiberNT può espandere l'unità C: fino a occupare il dispositivo di archiviazione da cui viene eseguito."

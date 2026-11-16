@@ -824,6 +824,36 @@ typedef struct _FINISH_CONTEXT
     OOBE_PROGRESS Progress;
 } FINISH_CONTEXT, *PFINISH_CONTEXT;
 
+/* The target installer's post-check re-enables the built-in Administrator
+ * when no other enabled administrator exists and records the reason under
+ * SYSTEM\Setup; surface it once and drop the marker. */
+static VOID
+ReportBuiltinAdministratorFallback(
+    _In_ HWND hwndOwner)
+{
+    HKEY hKey;
+    DWORD Reason, cbReason = sizeof(Reason), dwType;
+    WCHAR Text[1024];
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0,
+                      KEY_QUERY_VALUE | KEY_SET_VALUE, &hKey) != ERROR_SUCCESS)
+        return;
+
+    if (RegQueryValueExW(hKey, L"BuiltinAdministratorEnabled", NULL, &dwType,
+                         (PBYTE)&Reason, &cbReason) != ERROR_SUCCESS ||
+        dwType != REG_DWORD)
+    {
+        RegCloseKey(hKey);
+        return;
+    }
+
+    RegDeleteValueW(hKey, L"BuiltinAdministratorEnabled");
+    RegCloseKey(hKey);
+
+    LoadPrintfW(Text, ARRAYSIZE(Text), IDS_OOBE_ADMIN_FALLBACK, Reason);
+    SetupMessage(hwndOwner, TD_WARNING_ICON, TDCBF_OK_BUTTON, IDOK, NULL, Text);
+}
+
 static DWORD
 WINAPI
 FinishThread(
@@ -867,6 +897,7 @@ FinishThread(
     {
         Error = DisableSetupAccount(pSetupData);
         DPRINT1("Setup account disabled with result %lu\n", Error);
+        ReportBuiltinAdministratorFallback(Context->hwndDlg);
     }
 
 Components:

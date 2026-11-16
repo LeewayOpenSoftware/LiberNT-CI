@@ -276,6 +276,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "لم يتم تثبيت بعض المكونات"
     IDS_OOBE_ACCOUNT_FAILED "تعذّر على LiberNT إنشاء حسابك (الخطأ %lu). يسجّل LiberNT الدخول إلى حساب User المضمّن بدلاً من ذلك."
+    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "خطأ غير معروف"
     IDS_OOBE_STORAGETITLE "استخدم كل مساحة التخزين"
     IDS_OOBE_STORAGESUBTITLE "يمكن لـ LiberNT توسيع محرك الأقراص C: ليملأ جهاز التخزين الذي يعمل منه."

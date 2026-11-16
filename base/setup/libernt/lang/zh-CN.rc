@@ -276,6 +276,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "部分组件未安装"
     IDS_OOBE_ACCOUNT_FAILED "LiberNT 无法创建你的帐户(错误 %lu)。LiberNT 将改为登录内置的 User 帐户。"
+    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "未知错误"
     IDS_OOBE_STORAGETITLE "使用全部存储空间"
     IDS_OOBE_STORAGESUBTITLE "LiberNT 可以扩大驱动器 C:，使其占满运行 LiberNT 的存储设备。"

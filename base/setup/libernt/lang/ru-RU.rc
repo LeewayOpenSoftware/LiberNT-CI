@@ -276,6 +276,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "Некоторые компоненты не установлены"
     IDS_OOBE_ACCOUNT_FAILED "LiberNT не удалось создать учетную запись (ошибка %lu). Вместо нее LiberNT входит во встроенную учетную запись «Пользователь»."
+    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "Неизвестная ошибка"
     IDS_OOBE_STORAGETITLE "Используйте все хранилище"
     IDS_OOBE_STORAGESUBTITLE "LiberNT может увеличить диск C: на все устройство хранения, с которого он работает."

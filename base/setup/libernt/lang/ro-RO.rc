@@ -285,6 +285,7 @@ BEGIN
     IDS_OOBE_APP_FAILED "%s: %s (%s)"
     IDS_OOBE_APPS_FAILED "Some components were not installed"
     IDS_OOBE_ACCOUNT_FAILED "LiberNT could not create your account (error %lu). LiberNT signs in to the built-in User account instead."
+    IDS_OOBE_ADMIN_FALLBACK "LiberNT could not confirm an active administrator account (reason %lu), so it enabled the built-in Administrator. Sign in to that account and set a password for it."
     IDS_OOBE_UNKNOWN_ERROR "Unknown error"
     IDS_OOBE_STORAGETITLE "Use all of your storage"
     IDS_OOBE_STORAGESUBTITLE "LiberNT can grow drive C: to fill the storage device it runs from."
