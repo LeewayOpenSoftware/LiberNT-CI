@@ -60,6 +60,30 @@ RunChild(SIZE_T FirstCommit, SIZE_T SecondCommit)
     return Failures;
 }
 
+static LONG
+CopyOnWriteExceptionFilter(
+    _In_ PEXCEPTION_POINTERS ExceptionInfo,
+    _Out_ PDWORD ExceptionCode,
+    _Out_ PBOOL Refused,
+    _Out_ PBOOL WrongAv,
+    _In_ ULONG_PTR FaultAddress)
+{
+    PEXCEPTION_RECORD Record = ExceptionInfo->ExceptionRecord;
+
+    *ExceptionCode = (DWORD)Record->ExceptionCode;
+    if (Record->NumberParameters >= 2 &&
+        Record->ExceptionInformation[0] == 1 &&
+        Record->ExceptionInformation[1] == FaultAddress)
+    {
+        *Refused = TRUE;
+    }
+    else
+    {
+        *WrongAv = TRUE;
+    }
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+
 static DWORD
 RunCopyChild(void)
 {
@@ -101,20 +125,12 @@ RunCopyChild(void)
             View[Page * PageBytes] = 1;
             Succeeded++;
         }
-        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        _SEH2_EXCEPT(CopyOnWriteExceptionFilter(_SEH2_GetExceptionInformation(),
+                                                &Exception,
+                                                &Refused,
+                                                &WrongAv,
+                                                (ULONG_PTR)&View[Page * PageBytes]))
         {
-            PEXCEPTION_RECORD Record = _SEH2_GetExceptionInformation()->ExceptionRecord;
-            Exception = (DWORD)Record->ExceptionCode;
-            if (Record->NumberParameters >= 2 &&
-                Record->ExceptionInformation[0] == 1 &&
-                Record->ExceptionInformation[1] == (ULONG_PTR)&View[Page * PageBytes])
-            {
-                Refused = TRUE;
-            }
-            else
-            {
-                WrongAv = TRUE;
-            }
         }
         _SEH2_END;
     }
