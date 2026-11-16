@@ -702,17 +702,17 @@ DisableSetupAccount(
     if (i == Entries)
     {
         DPRINT1("DisableSetupAccount: %S is not an administrator, setup account left enabled\n", pSetupData->UserName);
-        return ERROR_NONE_MAPPED;
+        Error = ERROR_NONE_MAPPED;
+        goto done;
     }
 
     /* Check (c): the new user must be enabled. */
     Status = NetUserGetInfo(NULL, pSetupData->UserName, 1, (LPBYTE *)&Info);
     if (Status != NERR_Success || (Info->usri1_flags & UF_ACCOUNTDISABLE))
     {
-        if (Status == NERR_Success)
-            NetApiBufferFree(Info);
         DPRINT1("DisableSetupAccount: %S is not an enabled user, setup account left enabled\n", pSetupData->UserName);
-        return ERROR_NONE_MAPPED;
+        Error = ERROR_NONE_MAPPED;
+        goto done;
     }
     NetApiBufferFree(Info);
     Info = NULL;
