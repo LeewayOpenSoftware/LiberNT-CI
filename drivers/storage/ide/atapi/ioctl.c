@@ -520,6 +520,9 @@ AtaPdoHandleGetDumpInterface(
 
     PAGED_CODE();
 
+    if (Irp->RequestorMode != KernelMode)
+        return STATUS_ACCESS_DENIED;
+
     if (IoStack->Parameters.DeviceIoControl.OutputBufferLength < sizeof(*Interface))
         return STATUS_BUFFER_TOO_SMALL;
 
