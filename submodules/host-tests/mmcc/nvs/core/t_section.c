@@ -989,6 +989,7 @@ CowChargeMutateCharge(_In_ PVOID Owner, _In_ LONG64 Pages)
         {
             MiArchPteWrite(Slot, MiArchPteSetAccessed(Pte, FALSE));
         }
+        CHECK(MiArchPteRead(Slot) != Pte);
     }
     return TRUE;
 }
