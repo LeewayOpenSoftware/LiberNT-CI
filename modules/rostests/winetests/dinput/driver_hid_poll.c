@@ -40,6 +40,11 @@
 #include "initguid.h"
 #include "driver_hid.h"
 
+#ifdef _MSC_VER
+/* The CRT floating-point marker; a kernel driver links no CRT that would provide it */
+int _fltused = 0x9875;
+#endif
+
 static DRIVER_OBJECT *expect_driver;
 
 struct hid_device

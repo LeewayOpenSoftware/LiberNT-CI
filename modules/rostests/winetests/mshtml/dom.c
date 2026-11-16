@@ -827,7 +827,7 @@ static void _test_disp2(unsigned line, IUnknown *unk, const IID *diid, const IID
 #define test_disp(a,b,c,d) _test_disp(__LINE__,a,b,c,d)
 static void _test_disp(unsigned line, IUnknown *unk, const IID *diid, const CLSID *clsid, const WCHAR *val)
 {
-    return _test_disp2(line, unk, diid, NULL, clsid, val);
+    _test_disp2(line, unk, diid, NULL, clsid, val);
 }
 
 #define set_dispex_value(a,b,c) _set_dispex_value(__LINE__,a,b,c)
@@ -15452,7 +15452,7 @@ static void test_docfrag(IHTMLDocument2 *doc)
         ET_BR
     };
 
-    static const elem_type_t empty_types[] = {};
+    static const elem_type_t empty_types[1] = {0};
 
     static const elem_type_t frag_types[] = {
             ET_HTML,
@@ -15482,7 +15482,7 @@ static void test_docfrag(IHTMLDocument2 *doc)
     ok(hres == S_OK, "get_all failed: %08lx\n", hres);
     ok(col != NULL, "got null elements collection\n");
     if (col) {
-        test_elem_collection((IUnknown *) col, empty_types, ARRAY_SIZE(empty_types));
+        test_elem_collection((IUnknown *) col, empty_types, 0);
         IHTMLElementCollection_Release(col);
     }
 

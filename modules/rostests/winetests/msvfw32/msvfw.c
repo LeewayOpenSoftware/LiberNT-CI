@@ -685,7 +685,7 @@ static void check_bitmap_header_(int line, BITMAPINFOHEADER *header, LONG width,
 static void test_ICGetDisplayFormat(void)
 {
     static const DWORD testcc = mmioFOURCC('t','e','s','t');
-    char outbuf[FIELD_OFFSET(BITMAPINFO, bmiColors[256])];
+    char outbuf[sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD)];
     BITMAPINFO *out_bmi;
     LRESULT lres;
     BOOL ret;

@@ -41,6 +41,11 @@
 #include "initguid.h"
 #include "driver_hid.h"
 
+#ifdef _MSC_VER
+/* The CRT floating-point marker; a kernel driver links no CRT that would provide it */
+int _fltused = 0x9875;
+#endif
+
 typedef ULONG PNP_DEVICE_STATE;
 #define PNP_DEVICE_REMOVED 8
 

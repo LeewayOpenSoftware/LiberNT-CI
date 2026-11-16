@@ -2284,7 +2284,7 @@ static void check_color_table(const char *name, HDC hdc, HIMAGELIST himl, UINT i
 {
     IMAGEINFO info;
     INT ret;
-    char bmi_buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    char bmi_buffer[sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD)];
     BITMAPINFO *bmi = (BITMAPINFO *)bmi_buffer;
     int i, depth = ilc & 0xfe;
 
@@ -2316,7 +2316,7 @@ static void check_color_table(const char *name, HDC hdc, HIMAGELIST himl, UINT i
 
 static void get_default_color_table(HDC hdc, int bpp, RGBQUAD *table)
 {
-    char bmi_buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    char bmi_buffer[sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD)];
     BITMAPINFO *bmi = (BITMAPINFO *)bmi_buffer;
     HBITMAP tmp;
     int i;
@@ -2364,7 +2364,7 @@ static void test_color_table(UINT ilc)
 {
     HIMAGELIST himl;
     INT ret;
-    char bmi_buffer[FIELD_OFFSET( BITMAPINFO, bmiColors[256] )];
+    char bmi_buffer[sizeof(BITMAPINFOHEADER) + 256 * sizeof(RGBQUAD)];
     BITMAPINFO *bmi = (BITMAPINFO *)bmi_buffer;
     HDC hdc = CreateCompatibleDC(0);
     HBITMAP dib4, dib8, dib32;

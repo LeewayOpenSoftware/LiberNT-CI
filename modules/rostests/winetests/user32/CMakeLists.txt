@@ -34,8 +34,6 @@ list(APPEND PCH_SKIP_SOURCE
     win.c
     winstation.c)
 
-set_property(SOURCE win.c APPEND PROPERTY COMPILE_OPTIONS -iquote ${REACTOS_SOURCE_DIR}/sdk/include/wine)
-
 add_executable(user32_winetest
     ${SOURCE}
     ${PCH_SKIP_SOURCE}

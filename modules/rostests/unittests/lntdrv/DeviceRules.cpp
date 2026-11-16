@@ -9,35 +9,52 @@
 
 #include "devices.hpp"
 
-#include <initializer_list>
-
 using namespace lntdrv;
 
-static DeviceInfo Device(const wchar_t *instance, std::initializer_list<const wchar_t *> hardware,
-                         std::initializer_list<const wchar_t *> compatible)
+/* NULL-terminated ID lists: the MSVC leg compiles against STLport, which
+ * predates C++11 and has no <initializer_list>. */
+#define LNT_IDS(name, ...) static const wchar_t *const name[] = { __VA_ARGS__, NULL }
+
+static size_t
+IdsCount(const wchar_t *const *ids)
+{
+    size_t count = 0;
+
+    if (ids != NULL)
+    {
+        while (ids[count] != NULL)
+            count++;
+    }
+    return count;
+}
+
+static DeviceInfo Device(const wchar_t *instance, const wchar_t *const *hardware,
+                         const wchar_t *const *compatible)
 {
     DeviceInfo device;
 
     device.InstanceId = instance;
-    for (const wchar_t *id : hardware)
-        device.HardwareIds.push_back(id);
-    for (const wchar_t *id : compatible)
-        device.CompatibleIds.push_back(id);
+    while (hardware != NULL && *hardware != NULL)
+        device.HardwareIds.push_back(*hardware++);
+    while (compatible != NULL && *compatible != NULL)
+        device.CompatibleIds.push_back(*compatible++);
     return device;
 }
 
-static void CheckQueries(const DeviceInfo &device, std::initializer_list<const wchar_t *> expected, bool missing)
+static void CheckQueries(const DeviceInfo &device, const wchar_t *const *expected, bool missing)
 {
     std::vector<std::wstring> queries = CatalogQueries(device);
+    size_t count = IdsCount(expected);
     size_t i = 0;
 
-    ok(queries.size() == expected.size(), "%ls: %u queries, expected %u\n", device.InstanceId.c_str(),
-       (unsigned)queries.size(), (unsigned)expected.size());
-    for (const wchar_t *id : expected)
+    ok(queries.size() == count, "%ls: %u queries, expected %u\n", device.InstanceId.c_str(),
+       (unsigned)queries.size(), (unsigned)count);
+    while (expected != NULL && *expected != NULL)
     {
-        ok(i < queries.size() && queries[i] == id, "%ls: query %u is '%ls', expected '%ls'\n", device.InstanceId.c_str(),
-           (unsigned)i, i < queries.size() ? queries[i].c_str() : L"", id);
+        ok(i < queries.size() && queries[i] == *expected, "%ls: query %u is '%ls', expected '%ls'\n",
+           device.InstanceId.c_str(), (unsigned)i, i < queries.size() ? queries[i].c_str() : L"", *expected);
         i++;
+        expected++;
     }
     ok(NeedsDriver(device) == missing, "%ls: NeedsDriver %d, expected %d\n", device.InstanceId.c_str(),
        NeedsDriver(device), missing);
@@ -45,8 +62,9 @@ static void CheckQueries(const DeviceInfo &device, std::initializer_list<const w
 
 static void CheckVersion(const wchar_t *installed, const wchar_t *offered, DriverOrder expected)
 {
+    LNT_IDS(kVersionHw, L"PCI\\VEN_8086&DEV_31D4&SUBSYS_20758086&REV_03", L"PCI\\VEN_8086&DEV_31D4");
     DeviceInfo device = Device(L"PCI\\VEN_8086&DEV_31D4&SUBSYS_20758086&REV_03\\3&11583659&0&12",
-                               { L"PCI\\VEN_8086&DEV_31D4&SUBSYS_20758086&REV_03", L"PCI\\VEN_8086&DEV_31D4" }, {});
+                               kVersionHw, NULL);
 
     device.Inf = L"oem12.inf";
     device.Service = L"null";
@@ -58,11 +76,11 @@ static void CheckVersion(const wchar_t *installed, const wchar_t *offered, Drive
 
 static void CheckCatalogSource()
 {
-    const wchar_t *nicIds[] = { L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086&REV_03", L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086" };
-    DeviceInfo first = Device(L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086&REV_03\\3&1D0E7AB&0&1", { nicIds[0], nicIds[1] }, {});
-    DeviceInfo second = Device(L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086&REV_03\\3&1D0E7AB&0&2", { nicIds[0], nicIds[1] }, {});
-    DeviceInfo other = Device(L"PCI\\VEN_10EC&DEV_8168&SUBSYS_86771043&REV_15\\3&1D0E7AB&0&3",
-                              { L"PCI\\VEN_10EC&DEV_8168&SUBSYS_86771043&REV_15" }, {});
+    LNT_IDS(kNicIds, L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086&REV_03", L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086");
+    DeviceInfo first = Device(L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086&REV_03\\3&1D0E7AB&0&1", kNicIds, NULL);
+    DeviceInfo second = Device(L"PCI\\VEN_8086&DEV_15F3&SUBSYS_00008086&REV_03\\3&1D0E7AB&0&2", kNicIds, NULL);
+    LNT_IDS(kOtherHw, L"PCI\\VEN_10EC&DEV_8168&SUBSYS_86771043&REV_15");
+    DeviceInfo other = Device(L"PCI\\VEN_10EC&DEV_8168&SUBSYS_86771043&REV_15\\3&1D0E7AB&0&3", kOtherHw, NULL);
     std::vector<HistoryEntry> history(1);
 
     history[0].Action = L"install";
@@ -110,45 +128,52 @@ static void CheckInfClass(const char *klass, const char *guid, bool function)
 
 START_TEST(DeviceRules)
 {
+    LNT_IDS(kAcpi0c14Hw, L"ACPI\\VEN_PNP&DEV_0C14", L"ACPI\\PNP0C14", L"*PNP0C14");
+    LNT_IDS(kAcpi0010Hw, L"ACPI\\VEN_ACPI&DEV_0010", L"ACPI\\ACPI0010", L"*ACPI0010");
+    LNT_IDS(kQemu0002Hw, L"ACPI\\VEN_QEMU&DEV_0002", L"ACPI\\QEMU0002", L"*QEMU0002");
+    LNT_IDS(kQemu0002Expected, L"ACPI\\VEN_QEMU&DEV_0002", L"ACPI\\QEMU0002");
+    LNT_IDS(kBcm2849Hw, L"ACPI\\VEN_BCM&DEV_2849", L"ACPI\\BCM2849", L"*BCM2849");
+    LNT_IDS(kBcm2849Expected, L"ACPI\\VEN_BCM&DEV_2849", L"ACPI\\BCM2849");
+    LNT_IDS(kPci3185Hw, L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086&REV_03", L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086",
+            L"PCI\\VEN_8086&DEV_3185&CC_030000", L"PCI\\VEN_8086&DEV_3185&CC_0300");
+    LNT_IDS(kPci3185Compatible, L"PCI\\VEN_8086&DEV_3185&REV_03", L"PCI\\VEN_8086&DEV_3185",
+            L"PCI\\VEN_8086&CC_030000", L"PCI\\VEN_8086&CC_0300", L"PCI\\VEN_8086", L"PCI\\CC_030000",
+            L"PCI\\CC_0300");
+    LNT_IDS(kPci3185Expected, L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086&REV_03",
+            L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086", L"PCI\\VEN_8086&DEV_3185&CC_030000",
+            L"PCI\\VEN_8086&DEV_3185&CC_0300", L"PCI\\VEN_8086&DEV_3185&REV_03", L"PCI\\VEN_8086&DEV_3185",
+            L"PCI\\VEN_8086&CC_030000", L"PCI\\VEN_8086&CC_0300");
+    LNT_IDS(kRootSwenum, L"ROOT\\SWENUM");
+    LNT_IDS(kInboxHw, L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4&REV_00",
+            L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4", L"PCI\\VEN_1AF4&DEV_1000&CC_020000",
+            L"PCI\\VEN_1AF4&DEV_1000&CC_0200");
+    LNT_IDS(kInboxCompatible, L"PCI\\VEN_1AF4&DEV_1000&REV_00", L"PCI\\VEN_1AF4&DEV_1000",
+            L"PCI\\VEN_1AF4&CC_020000", L"PCI\\VEN_1AF4&CC_0200", L"PCI\\VEN_1AF4", L"PCI\\CC_020000",
+            L"PCI\\CC_0200");
+    LNT_IDS(kInboxExpected, L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4&REV_00",
+            L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4", L"PCI\\VEN_1AF4&DEV_1000&CC_020000",
+            L"PCI\\VEN_1AF4&DEV_1000&CC_0200");
+
     CheckInfClass("System", "{4d36e97d-e325-11ce-bfc1-08002be10318}", true);
     CheckInfClass("Extension", "{e2f84ce7-8efa-411c-aa69-97454ca4cb57}", false);
     CheckInfClass("SoftwareComponent", "{5c4c3332-344d-483c-8739-259e934c9cc8}", false);
 
-    CheckQueries(Device(L"ACPI\\VEN_PNP&DEV_0C14\\0", { L"ACPI\\VEN_PNP&DEV_0C14", L"ACPI\\PNP0C14", L"*PNP0C14" }, {}),
-                 {}, false);
-    CheckQueries(Device(L"ACPI\\ACPI0010\\2&CCB86D17&0", { L"ACPI\\VEN_ACPI&DEV_0010", L"ACPI\\ACPI0010", L"*ACPI0010" },
-                        {}),
-                 {}, false);
-    CheckQueries(Device(L"ACPI\\QEMU0002\\2&CCB86D17&0", { L"ACPI\\VEN_QEMU&DEV_0002", L"ACPI\\QEMU0002", L"*QEMU0002" },
-                        {}),
-                 { L"ACPI\\VEN_QEMU&DEV_0002", L"ACPI\\QEMU0002" }, true);
-    CheckQueries(Device(L"ACPI\\BCM2849\\0", { L"ACPI\\VEN_BCM&DEV_2849", L"ACPI\\BCM2849", L"*BCM2849" }, {}),
-                 { L"ACPI\\VEN_BCM&DEV_2849", L"ACPI\\BCM2849" }, true);
+    CheckQueries(Device(L"ACPI\\VEN_PNP&DEV_0C14\\0", kAcpi0c14Hw, NULL), NULL, false);
+    CheckQueries(Device(L"ACPI\\ACPI0010\\2&CCB86D17&0", kAcpi0010Hw, NULL), NULL, false);
+    CheckQueries(Device(L"ACPI\\QEMU0002\\2&CCB86D17&0", kQemu0002Hw, NULL), kQemu0002Expected, true);
+    CheckQueries(Device(L"ACPI\\BCM2849\\0", kBcm2849Hw, NULL), kBcm2849Expected, true);
     CheckQueries(Device(L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086&REV_03\\3&11583659&0&10",
-                        { L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086&REV_03", L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086",
-                          L"PCI\\VEN_8086&DEV_3185&CC_030000", L"PCI\\VEN_8086&DEV_3185&CC_0300" },
-                        { L"PCI\\VEN_8086&DEV_3185&REV_03", L"PCI\\VEN_8086&DEV_3185", L"PCI\\VEN_8086&CC_030000",
-                          L"PCI\\VEN_8086&CC_0300", L"PCI\\VEN_8086", L"PCI\\CC_030000", L"PCI\\CC_0300" }),
-                 { L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086&REV_03", L"PCI\\VEN_8086&DEV_3185&SUBSYS_20758086",
-                   L"PCI\\VEN_8086&DEV_3185&CC_030000", L"PCI\\VEN_8086&DEV_3185&CC_0300",
-                   L"PCI\\VEN_8086&DEV_3185&REV_03", L"PCI\\VEN_8086&DEV_3185", L"PCI\\VEN_8086&CC_030000",
-                   L"PCI\\VEN_8086&CC_0300" },
-                 true);
-    CheckQueries(Device(L"ROOT\\SYSTEM\\0000", { L"ROOT\\SWENUM" }, {}), {}, false);
+                        kPci3185Hw, kPci3185Compatible),
+                 kPci3185Expected, true);
+    CheckQueries(Device(L"ROOT\\SYSTEM\\0000", kRootSwenum, NULL), NULL, false);
     {
         DeviceInfo inbox = Device(L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4&REV_00\\3&11583659&0&38",
-                                  { L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4&REV_00", L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4",
-                                    L"PCI\\VEN_1AF4&DEV_1000&CC_020000", L"PCI\\VEN_1AF4&DEV_1000&CC_0200" },
-                                  { L"PCI\\VEN_1AF4&DEV_1000&REV_00", L"PCI\\VEN_1AF4&DEV_1000", L"PCI\\VEN_1AF4&CC_020000",
-                                    L"PCI\\VEN_1AF4&CC_0200", L"PCI\\VEN_1AF4", L"PCI\\CC_020000", L"PCI\\CC_0200" });
+                                  kInboxHw, kInboxCompatible);
 
         inbox.Inf = L"netkvm.inf";
         inbox.Service = L"netkvm";
         inbox.MatchingId = L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4&REV_00";
-        CheckQueries(inbox,
-                     { L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4&REV_00", L"PCI\\VEN_1AF4&DEV_1000&SUBSYS_00011AF4",
-                       L"PCI\\VEN_1AF4&DEV_1000&CC_020000", L"PCI\\VEN_1AF4&DEV_1000&CC_0200" },
-                     false);
+        CheckQueries(inbox, kInboxExpected, false);
     }
 
     CheckVersion(L"10.1.13.2", L"10.1.13.3", DriverOrder::Newer);

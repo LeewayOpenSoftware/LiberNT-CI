@@ -559,7 +559,7 @@ void bus_device_stop(void)
 
 BOOL find_hid_device_path( WCHAR *device_path )
 {
-    char buffer[FIELD_OFFSET( SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath[MAX_PATH] )] = {0};
+    char buffer[sizeof(DWORD) + MAX_PATH * sizeof(WCHAR)] = {0};
     SP_DEVICE_INTERFACE_DATA iface = {sizeof(SP_DEVICE_INTERFACE_DATA)};
     SP_DEVICE_INTERFACE_DETAIL_DATA_W *iface_detail = (void *)buffer;
     SP_DEVINFO_DATA device = {sizeof(SP_DEVINFO_DATA)};
@@ -3748,10 +3748,11 @@ void dinput_test_init_( const char *file, int line )
     GetWindowsDirectoryW( okfile_path, ARRAY_SIZE(okfile_path) );
     lstrcatW( okfile_path, L"\\winetest_dinput_okfile" );
     okfile = CreateFileW( okfile_path, GENERIC_READ | GENERIC_WRITE,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, 0, NULL );
 #else
     okfile = CreateFileW( L"C:\\windows\\winetest_dinput_okfile", GENERIC_READ | GENERIC_WRITE,
-#endif
                           FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, CREATE_ALWAYS, 0, NULL );
+#endif
     ok_(file, line)( okfile != INVALID_HANDLE_VALUE, "failed to create file, error %lu\n", GetLastError() );
 
     subtest_(file, line)( "hid" );

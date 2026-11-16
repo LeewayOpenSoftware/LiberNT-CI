@@ -26,7 +26,7 @@
  *       avimux name=mux ! filesink location=dlls/mfmediaengine/tests/i420-64x64.avi
  */
 /* @makedep: i420-64x64.avi */
-i420-64x64.avi RCDATA i420-64x64.avi
+"I420-64X64.AVI" RCDATA "i420-64x64.avi"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame.bmp */

@@ -4578,10 +4578,11 @@ static void test_console_as_root_directory(void)
                            FILE_OPEN, 0, NULL, 0 );
 #ifdef __REACTOS__
     ok( status == STATUS_NOT_FOUND || broken( status == STATUS_OBJECT_TYPE_MISMATCH ) /* Win7 */ || broken( status == STATUS_INVALID_HANDLE ) /* WS03 */,
+        "NtCreateFile returned %#lx\n", status );
 #else
     ok( status == STATUS_NOT_FOUND || broken( status == STATUS_OBJECT_TYPE_MISMATCH ) /* Win7 */,
-#endif
         "NtCreateFile returned %#lx\n", status );
+#endif
 
     CloseHandle( handle );
 }

@@ -104,7 +104,7 @@ static void dump_rgb(const BYTE *data, DWORD length, const SIZE *size, HANDLE ou
 
 static void dump_rgb32(const BYTE *data, DWORD length, const SIZE *size, HANDLE output)
 {
-    return dump_rgb(data, length, size, output, 32);
+    dump_rgb(data, length, size, output, 32);
 }
 
 #define check_rgb32_data(a, b, c, d) check_rgb32_data_(__LINE__, a, b, c, d)

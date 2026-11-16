@@ -99,7 +99,7 @@ static void get_surface_readback(IDirect3DDevice9 *device, IDirect3DSurface9 *sr
 static void get_surface_decompressed_readback(IDirect3DDevice9 *device, IDirect3DSurface9 *compressed_surface,
         struct surface_readback *rb)
 {
-    return get_surface_readback(device, compressed_surface, D3DFMT_A8R8G8B8, rb);
+    get_surface_readback(device, compressed_surface, D3DFMT_A8R8G8B8, rb);
 }
 
 static HRESULT create_file(const char *filename, const unsigned char *data, const unsigned int size)

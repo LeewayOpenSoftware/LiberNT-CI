@@ -74,7 +74,7 @@ h264encdata.bin RCDATA h264encdata.bin
       x264enc ! filesink location=dlls/mf/tests/h264data-1.bin
  */
 /* @makedep: h264data-1.bin */
-h264data-1.bin RCDATA h264data-1.bin
+"H264DATA-1.BIN" RCDATA "h264data-1.bin"
 
 /* Generated with:
   gst-launch-1.0 videotestsrc num-buffers=30 pattern=smpte100 ! \
@@ -83,7 +83,7 @@ h264data-1.bin RCDATA h264data-1.bin
       x264enc ! filesink location=dlls/mf/tests/h264data-2.bin
  */
 /* @makedep: h264data-2.bin */
-h264data-2.bin RCDATA h264data-2.bin
+"H264DATA-2.BIN" RCDATA "h264data-2.bin"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame.bmp */
@@ -91,31 +91,31 @@ nv12frame.bmp RCDATA nv12frame.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-2d.bmp */
-nv12frame-2d.bmp RCDATA nv12frame-2d.bmp
+"NV12FRAME-2D.BMP" RCDATA "nv12frame-2d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-crop.bmp */
-nv12frame-crop.bmp RCDATA nv12frame-crop.bmp
+"NV12FRAME-CROP.BMP" RCDATA "nv12frame-crop.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-crop-1d.bmp */
-nv12frame-crop-1d.bmp RCDATA nv12frame-crop-1d.bmp
+"NV12FRAME-CROP-1D.BMP" RCDATA "nv12frame-crop-1d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-crop-2d.bmp */
-nv12frame-crop-2d.bmp RCDATA nv12frame-crop-2d.bmp
+"NV12FRAME-CROP-2D.BMP" RCDATA "nv12frame-crop-2d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-grabber.bmp */
-nv12frame-grabber.bmp RCDATA nv12frame-grabber.bmp
+"NV12FRAME-GRABBER.BMP" RCDATA "nv12frame-grabber.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-flip.bmp */
-nv12frame-flip.bmp RCDATA nv12frame-flip.bmp
+"NV12FRAME-FLIP.BMP" RCDATA "nv12frame-flip.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-flip-2d.bmp */
-nv12frame-flip-2d.bmp RCDATA nv12frame-flip-2d.bmp
+"NV12FRAME-FLIP-2D.BMP" RCDATA "nv12frame-flip-2d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: i420frame.bmp */
@@ -123,7 +123,7 @@ i420frame.bmp RCDATA i420frame.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: i420frame.bmp */
-i420frame-2d.bmp RCDATA i420frame-2d.bmp
+"I420FRAME-2D.BMP" RCDATA "i420frame-2d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame.bmp */
@@ -131,43 +131,43 @@ rgb32frame.bmp RCDATA rgb32frame.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-flip.bmp */
-rgb32frame-flip.bmp RCDATA rgb32frame-flip.bmp
+"RGB32FRAME-FLIP.BMP" RCDATA "rgb32frame-flip.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-flip-2d.bmp */
-rgb32frame-flip-2d.bmp RCDATA rgb32frame-flip-2d.bmp
+"RGB32FRAME-FLIP-2D.BMP" RCDATA "rgb32frame-flip-2d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-crop.bmp */
-rgb32frame-crop.bmp RCDATA rgb32frame-crop.bmp
+"RGB32FRAME-CROP.BMP" RCDATA "rgb32frame-crop.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-crop-flip.bmp */
-rgb32frame-crop-flip.bmp RCDATA rgb32frame-crop-flip.bmp
+"RGB32FRAME-CROP-FLIP.BMP" RCDATA "rgb32frame-crop-flip.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-crop-flip-2d.bmp */
-rgb32frame-crop-flip-2d.bmp RCDATA rgb32frame-crop-flip-2d.bmp
+"RGB32FRAME-CROP-FLIP-2D.BMP" RCDATA "rgb32frame-crop-flip-2d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: abgr32frame-crop.bmp */
-abgr32frame-crop.bmp RCDATA abgr32frame-crop.bmp
+"ABGR32FRAME-CROP.BMP" RCDATA "abgr32frame-crop.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-grabber.bmp */
-rgb32frame-grabber.bmp RCDATA rgb32frame-grabber.bmp
+"RGB32FRAME-GRABBER.BMP" RCDATA "rgb32frame-grabber.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb32frame-extra-width.bmp */
-rgb32frame-extra-width.bmp RCDATA rgb32frame-extra-width.bmp
+"RGB32FRAME-EXTRA-WIDTH.BMP" RCDATA "rgb32frame-extra-width.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-extra-width.bmp */
-nv12frame-extra-width.bmp RCDATA nv12frame-extra-width.bmp
+"NV12FRAME-EXTRA-WIDTH.BMP" RCDATA "nv12frame-extra-width.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: nv12frame-extra-width-2d.bmp */
-nv12frame-extra-width-2d.bmp RCDATA nv12frame-extra-width-2d.bmp
+"NV12FRAME-EXTRA-WIDTH-2D.BMP" RCDATA "nv12frame-extra-width-2d.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb555frame.bmp */
@@ -175,7 +175,7 @@ rgb555frame.bmp RCDATA rgb555frame.bmp
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb555frame-flip.bmp */
-rgb555frame-flip.bmp RCDATA rgb555frame-flip.bmp
+"RGB555FRAME-FLIP.BMP" RCDATA "rgb555frame-flip.bmp"
 
 /* Generated from running the tests on Windows */
 /* @makedep: rgb24frame.bmp */
@@ -197,4 +197,4 @@ test.mp4 RCDATA test.mp4
  *      x264enc ! mp4mux ! filesink location=dlls/mf/tests/test-unaligned.mp4
  */
 /* @makedep: test-unaligned.mp4 */
-test-unaligned.mp4 RCDATA test-unaligned.mp4
+"TEST-UNALIGNED.MP4" RCDATA "test-unaligned.mp4"
