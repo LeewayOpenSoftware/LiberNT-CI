@@ -17,7 +17,7 @@
 
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 IDI_LNTDRV ICON "../mscutils/devmgmt/devmgmt.ico"
-IDB_WATERMARK BITMAP "../../setup/libernt/res/watermark.bmp"
+IDB_WATERMARK BITMAP "res/watermark.bmp"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "lntdrv.exe.manifest"
 
