@@ -4,7 +4,7 @@ LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
 
 IDD_SETUPFRAME DIALOGEX 0, 0, 310, 240
 STYLE DS_SHELLFONT | WS_MINIMIZEBOX | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "LiberNT セットアップ"
+CAPTION "Orosi セットアップ"
 FONT 8, "MS Shell Dlg"
 BEGIN
     CONTROL "", IDC_FRAME_BACK, "Button", BS_OWNERDRAW | WS_TABSTOP, 8, 8, 16, 16
@@ -70,7 +70,7 @@ BEGIN
     LTEXT "", IDC_STORAGEINFO, 0, 2, 290, 18, SS_NOPREFIX
     AUTORADIOBUTTON "今すぐドライブ C: を拡張して再起動する(&E)", IDC_EXPANDNOW, 0, 28, 290, 10, WS_GROUP | WS_TABSTOP
     AUTORADIOBUTTON "後で行う(&N)", IDC_EXPANDLATER, 0, 42, 290, 10
-    LTEXT "LiberNT は拡張を完了するために一度再起動し、その後このセットアップがもう一度開きます。", IDC_STATIC, 0, 60, 290, 18
+    LTEXT "Orosi は拡張を完了するために一度再起動し、その後このセットアップがもう一度開きます。", IDC_STATIC, 0, 60, 290, 18
     LTEXT "後で行うこともできます。管理者としてコマンド プロンプトで lntexpandstorage を実行してください。次に表示されるコンポーネントには、1 GB を超える空き領域が必要です。", IDC_STATIC, 0, 124, 290, 34
 END
 
@@ -91,7 +91,7 @@ BEGIN
     LTEXT "タイム ゾーン(&T):", IDC_STATIC, 0, 96, 95, 9
     COMBOBOX IDC_TIMEZONELIST, 100, 94, 190, 120, CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
     AUTOCHECKBOX "夏時間に合わせて自動的に調整する(&D)", IDC_AUTODAYLIGHT, 100, 111, 190, 10, WS_TABSTOP
-    LTEXT "このアカウントは Administrators グループのメンバーです。パスワードを空にすると、LiberNT はこのアカウントに自動的にサインインします。", IDC_STATIC, 0, 130, 290, 26
+    LTEXT "このアカウントは Administrators グループのメンバーです。パスワードを空にすると、Orosi はこのアカウントに自動的にサインインします。", IDC_STATIC, 0, 130, 290, 26
 END
 
 IDD_READYPAGE DIALOGEX 0, 0, 290, 160
@@ -99,7 +99,7 @@ STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD
 FONT 8, "MS Shell Dlg"
 BEGIN
     EDITTEXT IDC_READY_SUMMARY, 0, 0, 290, 90, ES_MULTILINE | ES_READONLY | WS_VSCROLL | NOT WS_TABSTOP
-    LTEXT "LiberNT は開発中です。評価とテストに使い、普段使いのオペレーティング システムとしては使わないでください。データが壊れたり、ハードウェアが損傷したりするおそれがあります。", IDC_READY_WARNING, 0, 97, 290, 28
+    LTEXT "Orosi は開発中です。評価とテストに使い、普段使いのオペレーティング システムとしては使わないでください。データが壊れたり、ハードウェアが損傷したりするおそれがあります。", IDC_READY_WARNING, 0, 97, 290, 28
     AUTOCHECKBOX "内容を理解し、残したいデータはバックアップした(&U)", IDC_CONFIRM_INSTALL, 0, 132, 290, 20, BS_MULTILINE | BS_TOP | WS_TABSTOP
 END
 
@@ -159,11 +159,11 @@ BEGIN
     IDS_EXTEND_BUTTON "拡張(&X)"
     IDS_RESIZE_PENDING "まだ適用されていないパーティションの変更があります。縮小と拡張はすぐに実行されるため、パーティションの作成、削除、フォーマットより先に行ってください。"
     IDS_RESIZE_FAILED "パーティションのサイズを変更できませんでした。"
-    IDS_CAPTION "LiberNT セットアップ"
-    IDS_DRIVETITLE "LiberNT のインストール場所の選択"
-    IDS_PROCESSTITLE "LiberNT をインストールしています"
-    IDS_PROCESSSUBTITLE "ディスクを準備し、ファイルをコピーして LiberNT を構成し、ブートローダーをインストールします。数分かかることがあります。"
-    IDS_ABORTSETUP "LiberNT のインストールは完了していません。ここでセットアップを終了すると、LiberNT をインストールするにはセットアップをもう一度実行する必要があります。終了しますか?"
+    IDS_CAPTION "Orosi セットアップ"
+    IDS_DRIVETITLE "Orosi のインストール場所の選択"
+    IDS_PROCESSTITLE "Orosi をインストールしています"
+    IDS_PROCESSSUBTITLE "ディスクを準備し、ファイルをコピーして Orosi を構成し、ブートローダーをインストールします。数分かかることがあります。"
+    IDS_ABORTSETUP "Orosi のインストールは完了していません。ここでセットアップを終了すると、Orosi をインストールするにはセットアップをもう一度実行する必要があります。終了しますか?"
     IDS_ABORTSETUP2 "インストールを中断しますか?"
     IDS_NO_TXTSETUP_SIF "'txtsetup.sif'が見つかりません。\nセットアップは続行できません。"
     IDS_FINISH_NO_REBOOT "インストールの 2 番目の段階に進むには、コンピューターを再起動する必要があります。\n\n[再起動] をクリックすると、すぐに再起動します。\n[後で] をクリックすると、再起動せずにセットアップを終了します。"
@@ -178,12 +178,12 @@ END
 STRINGTABLE
 BEGIN
     IDS_DISKSUBTITLE "パーティションか未割り当て領域を選んでください。縮小と拡張以外の変更は、[インストール] をクリックしたときに行われます。"
-    IDS_ACCOUNTZONESUBTITLE "このアカウントで LiberNT にサインインします。時刻は選んだタイム ゾーンで表示されます。"
+    IDS_ACCOUNTZONESUBTITLE "このアカウントで Orosi にサインインします。時刻は選んだタイム ゾーンで表示されます。"
     IDS_READYTITLE "インストールの準備ができました"
     IDS_READYSUBTITLE "選んだ内容を確認してください。[インストール] をクリックすると、ディスクの変更が始まります。"
-    IDS_DONETITLE "LiberNT がインストールされました"
-    IDS_ABORTTITLE "LiberNT はインストールされませんでした"
-    IDS_DONE_REBOOT "LiberNT を起動するため、数秒後にコンピューターが再起動します。インストール メディアからはもう起動しないでください。\n\n今すぐ再起動するには [再起動] をクリックしてください。"
+    IDS_DONETITLE "Orosi がインストールされました"
+    IDS_ABORTTITLE "Orosi はインストールされませんでした"
+    IDS_DONE_REBOOT "Orosi を起動するため、数秒後にコンピューターが再起動します。インストール メディアからはもう起動しないでください。\n\n今すぐ再起動するには [再起動] をクリックしてください。"
     IDS_ABORT_REBOOT "セットアップは完了しませんでした。数秒後にコンピューターが再起動します。\n\n今すぐ再起動するには [再起動] をクリックしてください。"
     IDS_BACKBTN "戻る(&B)"
     IDS_NEXTBTN "次へ(&N)"
@@ -214,24 +214,24 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_DISK_SELECT "LiberNT のインストール場所を選んでください。"
+    IDS_DISK_SELECT "Orosi のインストール場所を選んでください。"
     IDS_DISK_NO_REGION "この領域は小さすぎるため、新しいパーティションを作成できません。"
-    IDS_DISK_NOT_BASIC "このパーティションには LiberNT をインストールできません。プライマリ パーティションか未割り当て領域を選んでください。"
-    IDS_DISK_TOO_SMALL "このパーティションは小さすぎるため、LiberNT をインストールできません。"
-    IDS_DISK_MBR_ON_UEFI "このディスクには MBR パーティション テーブルがあるため、LiberNT をインストールできません。EFI システムでは GPT ディスクにのみインストールできます。"
-    IDS_DISK_GPT_ON_BIOS "このディスクは GPT パーティション形式のため、LiberNT をインストールできません。"
-    IDS_DISK_NOT_FIRMWARE "このコンピューターのファームウェアからは選んだドライブが見えないため、LiberNT がこのドライブから起動しない可能性があります。\n\nそれでも使う場合は [OK] をクリックしてください。"
-    IDS_DISK_NEW_SYSTEM "LiberNT のすべての機能が正しく動作するよう、システム ファイル用のパーティションも作成されます。"
+    IDS_DISK_NOT_BASIC "このパーティションには Orosi をインストールできません。プライマリ パーティションか未割り当て領域を選んでください。"
+    IDS_DISK_TOO_SMALL "このパーティションは小さすぎるため、Orosi をインストールできません。"
+    IDS_DISK_MBR_ON_UEFI "このディスクには MBR パーティション テーブルがあるため、Orosi をインストールできません。EFI システムでは GPT ディスクにのみインストールできます。"
+    IDS_DISK_GPT_ON_BIOS "このディスクは GPT パーティション形式のため、Orosi をインストールできません。"
+    IDS_DISK_NOT_FIRMWARE "このコンピューターのファームウェアからは選んだドライブが見えないため、Orosi がこのドライブから起動しない可能性があります。\n\nそれでも使う場合は [OK] をクリックしてください。"
+    IDS_DISK_NEW_SYSTEM "Orosi のすべての機能が正しく動作するよう、システム ファイル用のパーティションも作成されます。"
     IDS_DISK_FORMAT_WARN "このパーティションをフォーマットすると、保存されているデータはすべて失われます。残したいファイルは先にバックアップしてください。"
-    IDS_DISK_FORMAT_NTFS "LiberNT は NTFS にインストールされます。このパーティションはフォーマットされ、保存されているデータはすべて失われます。"
-    IDS_DISK_FORMAT_EXISTING "このパーティションには Windows か LiberNT がインストールされています。フォーマットするとデータはすべて失われます。残す場合は別のパーティションを選んでください。"
+    IDS_DISK_FORMAT_NTFS "Orosi は NTFS にインストールされます。このパーティションはフォーマットされ、保存されているデータはすべて失われます。"
+    IDS_DISK_FORMAT_EXISTING "このパーティションには Windows か Orosi がインストールされています。フォーマットするとデータはすべて失われます。残す場合は別のパーティションを選んでください。"
     IDS_DISK_ERASE_WARN "インストールが始まると、ドライブ %lu のすべてのパーティションと、そこに保存されているすべてのデータが削除されます。"
     IDS_NEWPART_RANGE "サイズ (MB、最大 %I64u)(&S):"
 END
 
 STRINGTABLE
 BEGIN
-    IDS_READY_TARGET "LiberNT を %s (%s) にインストールします。"
+    IDS_READY_TARGET "Orosi を %s (%s) にインストールします。"
     IDS_READY_ERASE "ドライブ %lu を消去します。"
     IDS_READY_DELETE "%s を削除します。"
     IDS_READY_CREATE "%s (%s) を作成し、%s でフォーマットします。"
@@ -243,12 +243,12 @@ BEGIN
     IDS_READY_LANGUAGE "言語と地域: %s"
     IDS_READY_KEYBOARD "キーボード: %s"
     IDS_LANGUAGETITLE "言語とキーボードの選択"
-    IDS_LANGUAGESUBTITLE "セットアップと LiberNT はこの言語と、その言語の日付、時刻、数値、通貨の形式を使います。"
+    IDS_LANGUAGESUBTITLE "セットアップと Orosi はこの言語と、その言語の日付、時刻、数値、通貨の形式を使います。"
 END
 
 STRINGTABLE
 BEGIN
-    IDS_INSTALL_FAILED "LiberNT をインストールできませんでした"
+    IDS_INSTALL_FAILED "Orosi をインストールできませんでした"
     IDS_INSTALL_STEP_FAILED "%s\nこの手順はステータス 0x%08lx で失敗しました。"
     IDS_FORMAT_FAILED "%s を %s でフォーマットできませんでした。\n%s"
     IDS_CHECK_FAILED "%s に修復できないエラーが見つかりました (ステータス 0x%08lx)。セットアップは続行します。"
@@ -258,13 +258,13 @@ END
 STRINGTABLE
 BEGIN
     IDS_OOBE_REGIONTITLE "言語とキーボードの選択"
-    IDS_OOBE_REGIONSUBTITLE "LiberNT はこの言語と、その言語の日付、時刻、数値、通貨の形式を使い、このキーボードで入力します。"
+    IDS_OOBE_REGIONSUBTITLE "Orosi はこの言語と、その言語の日付、時刻、数値、通貨の形式を使い、このキーボードで入力します。"
     IDS_APPSTITLE "多くのプログラムに必要なコンポーネントの入手"
-    IDS_APPSSUBTITLE "LiberNT はこれらを発行元からダウンロードし、すべてのアカウント用にインストールします。"
+    IDS_APPSSUBTITLE "Orosi はこれらを発行元からダウンロードし、すべてのアカウント用にインストールします。"
     IDS_APPS_COL_NAME "コンポーネント"
     IDS_APPS_COL_SOURCE "ダウンロード元"
     IDS_APPS_INSTALLED "%s (インストール済み)"
-    IDS_OOBE_FINISHTITLE "LiberNT の準備をしています"
+    IDS_OOBE_FINISHTITLE "Orosi の準備をしています"
     IDS_OOBE_FINISHSUBTITLE "数分かかることがあります。コンピューターの電源を切らないでください。"
     IDS_OOBE_APPLY_REGION "言語とキーボードを適用しています..."
     IDS_OOBE_APPLY_TIMEZONE "タイム ゾーンを設定しています..."
@@ -277,10 +277,10 @@ BEGIN
     IDS_OOBE_ACCOUNT_FAILED "アカウントを作成できませんでした (エラー %lu)。代わりに組み込みの User アカウントにサインインします。"
     IDS_OOBE_UNKNOWN_ERROR "不明なエラー"
     IDS_OOBE_STORAGETITLE "ストレージ全体を使う"
-    IDS_OOBE_STORAGESUBTITLE "LiberNT は、ドライブ C: を実行中のストレージ デバイス全体に広げることができます。"
+    IDS_OOBE_STORAGESUBTITLE "Orosi は、ドライブ C: を実行中のストレージ デバイス全体に広げることができます。"
     IDS_OOBE_STORAGE_INFO "ドライブ C: は %I64u MB で、空きは %I64u MB です。ストレージ デバイスの残りの部分はまだ使われていません。"
-    IDS_OOBE_EXPAND_RESTART "ドライブ C: を拡張するため LiberNT を再起動します"
-    IDS_OOBE_EXPAND_RESTART_TEXT "ドライブ C: をストレージ デバイス全体に広げた後、LiberNT が再起動します。再起動後、このセットアップがもう一度開きます。"
+    IDS_OOBE_EXPAND_RESTART "ドライブ C: を拡張するため Orosi を再起動します"
+    IDS_OOBE_EXPAND_RESTART_TEXT "ドライブ C: をストレージ デバイス全体に広げた後、Orosi が再起動します。再起動後、このセットアップがもう一度開きます。"
     IDS_OOBE_EXPAND_FAILED "ドライブ C: を拡張できませんでした (lntexpandstorage の終了コード %lu)。セットアップは続行します。後でコマンド プロンプトから lntexpandstorage を実行して、もう一度試すことができます。"
     IDS_OOBE_APPS_SPACE "選んだコンポーネントには約 %lu MB 必要です。ドライブ C: の空きは %I64u MB です。"
     IDS_OOBE_APPS_NOSPACE "選んだコンポーネントに必要な空き領域が足りません"
@@ -330,7 +330,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_ACCOUNTTITLE "コンピューター名の設定とアカウントの作成"
-    IDS_CONFIGURE_SYSTEM "LiberNT を構成しています..."
+    IDS_CONFIGURE_SYSTEM "Orosi を構成しています..."
     IDS_CONFIG_FOLDERS "システム フォルダーとプロファイル フォルダーを作成しています"
     IDS_CONFIG_DEVICES "デバイス クラスをインストールしています"
     IDS_CONFIG_NETWORK "ネットワーク プロトコルをインストールしています"
@@ -371,7 +371,7 @@ BEGIN
     LTEXT "", IDC_TYPE_WINSIZE, 12, 57, 136, 9, SS_NOPREFIX
     RTEXT "", IDC_TYPE_LNTSIZE, 148, 57, 136, 9, SS_NOPREFIX
     LTEXT "既定で起動:", IDC_TYPE_DEFAULT_LABEL, 12, 73, 62, 9
-    AUTORADIOBUTTON "&LiberNT", IDC_TYPE_DEFAULT_LIBERNT, 76, 72, 70, 10, WS_GROUP | WS_TABSTOP
+    AUTORADIOBUTTON "&Orosi", IDC_TYPE_DEFAULT_LIBERNT, 76, 72, 70, 10, WS_GROUP | WS_TABSTOP
     AUTORADIOBUTTON "", IDC_TYPE_DEFAULT_WINDOWS, 150, 72, 120, 10
     ICON "", IDC_TYPE_WARNICON, 12, 87, 10, 10, SS_ICON | SS_REALSIZEIMAGE
     LTEXT "", IDC_TYPE_WARNING, 28, 87, 262, 36, SS_NOPREFIX
@@ -381,23 +381,23 @@ END
 STRINGTABLE
 BEGIN
     IDS_TYPETITLE "インストールの種類"
-    IDS_TYPESUBTITLE "このコンピューターで LiberNT をどのように使うか選んでください。"
+    IDS_TYPESUBTITLE "このコンピューターで Orosi をどのように使うか選んでください。"
     IDS_TYPE_FOUND "このコンピューターには %s が %s にインストールされています。"
-    IDS_TYPE_ALONGSIDE "%s と並べて LiberNT をインストールする(&A)"
+    IDS_TYPE_ALONGSIDE "%s と並べて Orosi をインストールする(&A)"
     IDS_TYPE_SPLITSIZE "%s: %s"
     IDS_TYPE_SHRINKNOTE "スライダーをドラッグして領域を分けてください。%s のプログラムとファイルはそのまま残ります。パーティションは [次へ] を選ぶとすぐに縮小されます。"
     IDS_TYPE_HIBERNATED "%s は休止状態か高速スタートアップで終了しているため、パーティションのサイズを安全に変更できません。%s を起動してスタート メニューから [再起動] を選び、もう一度セットアップを起動してください。高速スタートアップは [コントロール パネル] > [電源オプション] で無効にすることもできます。"
-    IDS_TYPE_NOSPACE "%s には、LiberNT に必要な %I64u GB 以上の領域を空けるだけの空き領域がありません。空き領域を増やすか、[その他] を選んでください。"
-    IDS_TYPE_NORESIZE "%s のパーティションはサイズを変更できません。LiberNT の別のインストール先を選ぶには、[その他] を選んでください。"
-    IDS_TYPE_PLANNED "%s を %s に縮小しました。LiberNT は新しい %s のパーティションにインストールされます。"
-    IDS_TYPE_WARNING "既定では %s が起動します。LiberNT を起動するには、コンピューターの起動中にブート メニューを開き (通常は F12、F11、F9、Esc のいずれか)、LiberNT Boot Manager を選んでください。Windows の [設定] > [システム] > [回復] > [PC の起動をカスタマイズする] > [デバイスの使用] も使えます。"
+    IDS_TYPE_NOSPACE "%s には、Orosi に必要な %I64u GB 以上の領域を空けるだけの空き領域がありません。空き領域を増やすか、[その他] を選んでください。"
+    IDS_TYPE_NORESIZE "%s のパーティションはサイズを変更できません。Orosi の別のインストール先を選ぶには、[その他] を選んでください。"
+    IDS_TYPE_PLANNED "%s を %s に縮小しました。Orosi は新しい %s のパーティションにインストールされます。"
+    IDS_TYPE_WARNING "既定では %s が起動します。Orosi を起動するには、コンピューターの起動中にブート メニューを開き (通常は F12、F11、F9、Esc のいずれか)、Orosi Boot Manager を選んでください。Windows の [設定] > [システム] > [回復] > [PC の起動をカスタマイズする] > [デバイスの使用] も使えます。"
     IDS_TYPE_CONFIRM_TITLE "今すぐ %s のサイズを変更しますか?"
-    IDS_TYPE_CONFIRM "インストールの残りの処理より先に、%s をすぐに %s から %s に縮小し、LiberNT に %s を割り当てます。残したいファイルがバックアップされていることを確認してください。"
+    IDS_TYPE_CONFIRM "インストールの残りの処理より先に、%s をすぐに %s から %s に縮小し、Orosi に %s を割り当てます。残したいファイルがバックアップされていることを確認してください。"
     IDS_TYPE_WINDOWS11 "Windows 11"
     IDS_TYPE_WINDOWS10 "Windows 10"
     IDS_TYPE_WINDOWS "Windows"
     IDS_READY_DEFAULTOS "既定で起動: %s"
-    IDS_TYPE_LIBERNT "LiberNT"
+    IDS_TYPE_LIBERNT "Orosi"
 END
 
 IDD_UPGRADEPAGE DIALOGEX 0, 0, 290, 160
@@ -412,20 +412,20 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_UPGRADETITLE "LiberNT のアップグレード"
-    IDS_UPGRADESUBTITLE "このコンピューターには LiberNT がすでにインストールされています。"
-    IDS_UPGRADE_NEW_INSTALL "カスタム: LiberNT を新しくインストールする (上級者向け)(&C)"
-    IDS_UPGRADE_NEW_COPY "アップグレードしない: 代わりにこの LiberNT をセットアップする(&D)"
+    IDS_UPGRADETITLE "Orosi のアップグレード"
+    IDS_UPGRADESUBTITLE "このコンピューターには Orosi がすでにインストールされています。"
+    IDS_UPGRADE_NEW_INSTALL "カスタム: Orosi を新しくインストールする (上級者向け)(&C)"
+    IDS_UPGRADE_NEW_COPY "アップグレードしない: 代わりにこの Orosi をセットアップする(&D)"
     IDS_UPGRADE_ENTRY "%s - %s"
-    IDS_UPGRADE_EARLIER "以前の LiberNT ビルド"
-    IDS_UPGRADE_NOTE "アップグレードでは、LiberNT のシステム ファイルをこのバージョンに置き換えます。ファイル、インストールしたアプリ、ユーザー アカウント、設定はそのまま残ります。\n\nこのバージョン: %s"
-    IDS_UPGRADE_HIBERNATED "%s の LiberNT は休止状態のため、安全にアップグレードできません。いったん起動して完全にシャットダウンしてから、もう一度セットアップを開始してください。"
+    IDS_UPGRADE_EARLIER "以前の Orosi ビルド"
+    IDS_UPGRADE_NOTE "アップグレードでは、Orosi のシステム ファイルをこのバージョンに置き換えます。ファイル、インストールしたアプリ、ユーザー アカウント、設定はそのまま残ります。\n\nこのバージョン: %s"
+    IDS_UPGRADE_HIBERNATED "%s の Orosi は休止状態のため、安全にアップグレードできません。いったん起動して完全にシャットダウンしてから、もう一度セットアップを開始してください。"
     IDS_UPGRADE_READYTITLE "アップグレードの準備ができました"
-    IDS_UPGRADE_READYSUBTITLE "選んだ内容を確認してください。[アップグレード] をクリックすると、LiberNT のアップグレードを開始します。"
+    IDS_UPGRADE_READYSUBTITLE "選んだ内容を確認してください。[アップグレード] をクリックすると、Orosi のアップグレードを開始します。"
     IDS_UPGRADEBTN "アップグレード(&U)"
-    IDS_READY_UPGRADE "%s の LiberNT を %s から %s にアップグレードします。"
-    IDS_READY_UPGRADE_KEEP "ファイル、アプリ、ユーザー アカウント、設定はそのまま残ります。LiberNT のシステム ファイル、システムのレジストリ エントリ、ブートローダーを置き換えます。パーティションの作成、削除、フォーマットは行いません。"
-    IDS_UPGRADE_PROCESSTITLE "LiberNT をアップグレードしています"
+    IDS_READY_UPGRADE "%s の Orosi を %s から %s にアップグレードします。"
+    IDS_READY_UPGRADE_KEEP "ファイル、アプリ、ユーザー アカウント、設定はそのまま残ります。Orosi のシステム ファイル、システムのレジストリ エントリ、ブートローダーを置き換えます。パーティションの作成、削除、フォーマットは行いません。"
+    IDS_UPGRADE_PROCESSTITLE "Orosi をアップグレードしています"
     IDS_UPGRADE_PROCESSSUBTITLE "システム ファイルを置き換え、レジストリを更新し、ブートローダーをインストールしています。ファイル、アプリ、設定はそのまま残ります。数分かかることがあります。"
-    IDS_UPGRADE_DONETITLE "LiberNT のアップグレードが完了しました"
+    IDS_UPGRADE_DONETITLE "Orosi のアップグレードが完了しました"
 END
