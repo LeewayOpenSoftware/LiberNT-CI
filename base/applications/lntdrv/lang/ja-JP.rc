@@ -9,7 +9,7 @@ LANGUAGE LANG_JAPANESE, SUBLANG_DEFAULT
 
 IDD_FRAME DIALOGEX 0, 0, 420, 240
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_MINIMIZEBOX | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "LiberNT ドライバー インストーラー"
+CAPTION "ドライバー インストーラー"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "", IDC_FRAME_TITLE, 120, 10, 290, 14, SS_NOPREFIX
@@ -76,7 +76,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_CAPTION "LiberNT ドライバー インストーラー"
+    IDS_CAPTION "ドライバー インストーラー"
     IDS_BACK "戻る(&B)"
     IDS_NEXT "次へ(&N)"
     IDS_CANCEL "キャンセル"
@@ -84,14 +84,14 @@ BEGIN
     IDS_FINISH "完了(&F)"
     IDS_DEVICES_TITLE "この PC のドライバー"
     IDS_DEVICES_SUBTITLE "ドライバーがないか、サードパーティ製ドライバーを使用していて、Microsoft Update カタログに新しいドライバーがあるデバイスです。インストールするデバイスにチェックを付けてください。"
-    IDS_ABOUT_MENU "LiberNT ドライバー インストーラーのバージョン情報(&A)..."
-    IDS_ABOUT_TEXT "LiberNT ドライバー インストーラー\nCopyright (C) 2026 Ahmed ARIF\nGNU 一般公衆利用許諾書バージョン 3 以降の条件で配布されています。\n\nドライバーは、Microsoft Corporation のサービスである Microsoft Update カタログからダウンロードされます。\nMicrosoft Update カタログ: Copyright (c) Microsoft Corporation. All rights reserved.\n各ドライバー パッケージは発行元に帰属し、発行元のライセンス条項が適用されます。"
+    IDS_ABOUT_MENU "ドライバー インストーラーのバージョン情報(&A)..."
+    IDS_ABOUT_TEXT "ドライバー インストーラー\nCopyright (C) 2026 Ahmed ARIF\nGNU 一般公衆利用許諾書バージョン 3 以降の条件で配布されています。\n\nドライバーは、Microsoft Corporation のサービスである Microsoft Update カタログからダウンロードされます。\nMicrosoft Update カタログ: Copyright (c) Microsoft Corporation. All rights reserved.\n各ドライバー パッケージは発行元に帰属し、発行元のライセンス条項が適用されます。"
     IDS_INSTALL_TITLE "ドライバーをインストールしています"
     IDS_INSTALL_SUBTITLE "ドライバーのインストールが完了するまでお待ちください。"
     IDS_DONE_TITLE "完了しました"
     IDS_DONE_SUBTITLE "各デバイスの結果です。"
     IDS_HISTORY_TITLE "カタログからインストールされたドライバー"
-    IDS_HISTORY_SUBTITLE "LiberNT ドライバー インストーラーがこの PC に加えたすべての変更 (新しい順)。"
+    IDS_HISTORY_SUBTITLE "ドライバー インストーラーがこの PC に加えたすべての変更 (新しい順)。"
     IDS_COL_DEVICE "デバイス"
     IDS_COL_VERSION "バージョン"
     IDS_COL_DRIVER "ドライバー"
@@ -120,20 +120,20 @@ BEGIN
     IDS_ACTION_ROLLBACK "ロールバック"
     IDS_ACTION_REMOVE "削除"
     IDS_ROLLBACK_CONFIRM "%1 が以前に使用していたドライバー (バージョン %2) に戻しますか?"
-    IDS_REMOVE_CONFIRM "%1 からカタログのドライバーを削除しますか? その後、LiberNT はこのデバイス用に残っている最適なドライバーをインストールします。"
+    IDS_REMOVE_CONFIRM "%1 からカタログのドライバーを削除しますか? その後、Orosi はこのデバイス用に残っている最適なドライバーをインストールします。"
     IDS_ACTION_DONE "完了しました。"
     IDS_ACTION_DONE_REBOOT "完了しました。完了するには PC を再起動してください。"
     IDS_ACTION_FAILED "変更に失敗しました: %1"
     IDS_HISTORY_WORKING "処理中..."
     IDS_ADMIN_REQUIRED "ドライバーのインストールと削除には管理者権限が必要です。"
-    IDS_ADMIN_RESTART "LiberNT ドライバー インストーラーを管理者として再起動しますか?"
+    IDS_ADMIN_RESTART "ドライバー インストーラーを管理者として再起動しますか?"
     IDS_WORKER_FAILED "ワーカー スレッドを開始できません: %1"
     IDS_ERROR_CHECKSUM "ダウンロードした内容が、カタログで公開されているチェックサムと一致しません。"
     IDS_ERROR_SERVER "Microsoft Update カタログから予期しない応答が返されました。"
     IDS_ERROR_CANCELLED "キャンセルされました。"
     IDS_ERROR_NOT_BETTER "既にインストールされているドライバーの方がこのデバイスに適合しています。"
     IDS_ERROR_NO_COMPAT "このパッケージには、この PC 上のこのデバイス用のドライバーがありません。"
-    IDS_ERROR_FORMAT "Microsoft Update カタログのページが変更されたため読み取れません。LiberNT ドライバー インストーラーの更新が必要です。"
+    IDS_ERROR_FORMAT "Microsoft Update カタログのページが変更されたため読み取れません。ドライバー インストーラーの更新が必要です。"
     IDS_ERROR_PROGRAM "このカタログ パッケージはドライバー パッケージではなくプログラムです。信頼できる場合はご自身で実行してください。"
     IDS_ERROR_ALREADY "このドライバーは既にインストールされています。"
     IDS_ERROR_NOT_NEWER "インストールされているドライバーの方が新しいです。"
@@ -191,7 +191,7 @@ BEGIN
     IDS_RESULT_UNSIGNED "署名は検証されていません"
     IDS_SCAN_THROTTLED "検索は %1 に再開します。Microsoft Update カタログがこの PC からの検索を制限しています。"
     IDS_CATALOG_LINK "<a>法的情報</a>"
-    IDS_CATALOG_NOTICE "ドライバーは Microsoft Corporation のサービスである Microsoft Update カタログからダウンロードされます。\nMicrosoft Update カタログ: Copyright (c) Microsoft Corporation. All rights reserved.\nMicrosoft および Windows は、Microsoft グループ各社の商標です。LiberNT は Microsoft Corporation と提携していません。\n\n各ドライバー パッケージは発行元に帰属し、発行元のライセンス条項が適用されます。"
+    IDS_CATALOG_NOTICE "ドライバーは Microsoft Corporation のサービスである Microsoft Update カタログからダウンロードされます。\nMicrosoft Update カタログ: Copyright (c) Microsoft Corporation. All rights reserved.\nMicrosoft および Windows は、Microsoft グループ各社の商標です。Orosi は Microsoft Corporation と提携していません。\n\n各ドライバー パッケージは発行元に帰属し、発行元のライセンス条項が適用されます。"
     IDS_PROGRESS_DOWNLOADING "ダウンロードしています"
     IDS_SPEED_KB "%1 KB/秒"
     IDS_SPEED_MB "%1 MB/秒"

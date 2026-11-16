@@ -183,7 +183,7 @@ add_livecd_shortcut("Read Me"
     "shell:windows\\readme.txt"
     ICON "${envvar_systemroot}\\system32\\shell32.dll" ICON_INDEX -152
     DESTINATION "${dir_allusers_desktop}")
-add_livecd_shortcut("LiberNT Explorer"
+add_livecd_shortcut("Orosi Explorer"
     "shell:windows\\explorer.exe" ICON_INDEX 1
     WORKDIR "${envvar_homedrive}${envvar_homepath}"
     DESTINATION "${dir_startmenu_programs}" "${dir_quicklaunch}")
@@ -255,7 +255,7 @@ add_livecd_shortcut("Task Manager 11"
 add_livecd_shortcut("LntGet"
     "shell:system\\lntget.exe" ICON_INDEX 0 CMDLINE_ARGS "gui"
     DESTINATION "${dir_startmenu_systemtools}")
-add_livecd_shortcut("LiberNT Driver Installer"
+add_livecd_shortcut("Driver Installer"
     "shell:system\\lntdrv.exe" ICON_INDEX 0
     DESTINATION "${dir_startmenu_systemtools}")
 add_livecd_shortcut("Optional Components"
