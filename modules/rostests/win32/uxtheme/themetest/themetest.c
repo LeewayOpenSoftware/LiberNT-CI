@@ -7,11 +7,13 @@
  *              a Style menu and a batch mode switch between the visual styles installed in the store (owner demo 2026-11-16)
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Usage: themetest [--class NAME] [--part N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]
+ * Usage: themetest [--class NAME] [--part N] [--wave N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]
  *                  [--list] [--style FILE.msstyles] [--all-styles DIR]
  *   --class  only the rows of that theme class (Button, Edit, Combobox, Scrollbar, Progress, Tab, Header, Window,
  *            Toolbar, Rebar, Status, Menu, Spin, Trackbar, Tooltip, ListView, TreeView)
  *   --part   only that part id of the class
+ *   --wave   only one screen-sized group of rows: 1 = the first table (Button .. Window), 2 = Toolbar .. Spin,
+ *            3 = Trackbar .. TreeView (every row at once is taller than a 1280x800 screen)
  *   --out    write a screenshot of the client area after the first paint, then exit (default: stay open)
  *   --csv    write "class,part,state,TS_MIN w,h,TS_TRUE w,h,TS_DRAW w,h,hr" per cell
  *   --wait   milliseconds to wait before the screenshot (default 500)
@@ -100,7 +102,7 @@ static const struct row ROWS[] = {
 #define NROWS ((int)(sizeof(ROWS) / sizeof(ROWS[0])))
 
 static const wchar_t *g_class;
-static int g_part = -1, g_scale = 1, g_wait = 500;
+static int g_part = -1, g_scale = 1, g_wait = 500, g_wave;
 static const wchar_t *g_out, *g_csv;
 static int g_painted;
 static int g_hr_count[2];           /* DrawThemeBackground succeeded / failed cells */
@@ -131,8 +133,22 @@ static void mark(LONG stage)
 #define GAP 8
 #define MARGIN 12
 
+/* the wave of a row: 2 from the first Toolbar row, 3 from the first Trackbar row, 1 before */
+static int row_wave(const struct row *r)
+{
+    const struct row *p;
+    int wave = 1;
+    for (p = ROWS; p <= r; p++)
+    {
+        if (!wcscmp(p->cls, L"Toolbar") && wave < 2) wave = 2;
+        if (!wcscmp(p->cls, L"Trackbar") && wave < 3) wave = 3;
+    }
+    return wave;
+}
+
 static int row_selected(const struct row *r)
 {
+    if (g_wave && row_wave(r) != g_wave) return 0;
     if (g_class && _wcsicmp(g_class, r->cls) != 0) return 0;
     if (g_part >= 0 && r->part != g_part) return 0;
     return 1;
@@ -473,6 +489,7 @@ int wmain(int argc, wchar_t **argv)
     {
         if (!wcscmp(argv[i], L"--class") && i + 1 < argc) g_class = argv[++i];
         else if (!wcscmp(argv[i], L"--part") && i + 1 < argc) g_part = _wtoi(argv[++i]);
+        else if (!wcscmp(argv[i], L"--wave") && i + 1 < argc) g_wave = _wtoi(argv[++i]);
         else if (!wcscmp(argv[i], L"--out") && i + 1 < argc) g_out = argv[++i];
         else if (!wcscmp(argv[i], L"--csv") && i + 1 < argc) g_csv = argv[++i];
         else if (!wcscmp(argv[i], L"--wait") && i + 1 < argc) g_wait = _wtoi(argv[++i]);
@@ -482,7 +499,7 @@ int wmain(int argc, wchar_t **argv)
         else if (!wcscmp(argv[i], L"--all-styles") && i + 1 < argc) g_batch_dir = argv[++i];
         else
         {
-            wprintf(L"usage: themetest [--class NAME] [--part N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]\n"
+            wprintf(L"usage: themetest [--class NAME] [--part N] [--wave N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]\n"
                     L"                 [--list] [--style FILE.msstyles] [--all-styles DIR]\n");
             return 2;
         }
