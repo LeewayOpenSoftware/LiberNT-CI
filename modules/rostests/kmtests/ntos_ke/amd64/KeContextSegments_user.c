@@ -8,6 +8,8 @@
 #include <kmt_test.h>
 #include <ndk/kefuncs.h>
 
+#ifdef __GNUC__
+
 #define SEGMENT_EXIT_CODE 0x5A5A0002
 #define SEGMENT_INVALID_SELECTOR 0xFFF8
 
@@ -96,3 +98,11 @@ START_TEST(KeContextSegments)
 
     CloseHandle(Thread);
 }
+#else
+
+START_TEST(KeContextSegments)
+{
+    skip(TRUE, "reads segment selectors through GNU inline assembly, which MSVC does not support\n");
+}
+
+#endif /* __GNUC__ */

@@ -7,6 +7,8 @@
 
 #include <kmt_test.h>
 
+#ifdef __GNUC__
+
 #ifndef SYSTEM_CALL_SYSCALL
 #define SYSTEM_CALL_SYSCALL 0
 #endif
@@ -81,3 +83,11 @@ START_TEST(KeSystemCallInt2E)
     ok_eq_ulongptr(Int2eFault.Information[1], (ULONG_PTR)-1);
     ok_eq_pointer(Int2eFault.ExceptionAddress, Int2eFault.Address);
 }
+#else
+
+START_TEST(KeSystemCallInt2E)
+{
+    skip(TRUE, "raises int 0x2e through GNU inline assembly, which MSVC does not support on amd64\n");
+}
+
+#endif /* __GNUC__ */

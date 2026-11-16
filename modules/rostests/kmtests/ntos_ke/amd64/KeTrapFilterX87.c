@@ -7,6 +7,8 @@
 
 #include <kmt_test.h>
 
+#ifdef __GNUC__
+
 #define X87_ZERO_DIVIDE 0x0004
 
 static LONG FilterCalls;
@@ -79,3 +81,11 @@ START_TEST(KeTrapFilterX87)
     Status = ZwFreeVirtualMemory(ZwCurrentProcess(), &Base, &Size, MEM_RELEASE);
     ok_eq_hex(Status, STATUS_SUCCESS);
 }
+#else
+
+START_TEST(KeTrapFilterX87)
+{
+    skip(TRUE, "drives x87 control words through GNU inline assembly, which MSVC does not support\n");
+}
+
+#endif /* __GNUC__ */

@@ -148,9 +148,14 @@ static
 void
 Test_NoManifestVersion(void)
 {
+    typedef struct _PROBE_COMPATIBILITY_INFORMATION
+    {
+        DWORD ElementCount;
+        COMPATIBILITY_CONTEXT_ELEMENT Elements[1];
+    } PROBE_COMPATIBILITY_INFORMATION;
     OSVERSIONINFOEXW Version = { sizeof(Version) };
     RTL_OSVERSIONINFOEXW Real = { sizeof(Real) };
-    ACTIVATION_CONTEXT_COMPATIBILITY_INFORMATION Probe[8] = {{0}};
+    PROBE_COMPATIBILITY_INFORMATION Probe[8] = {{0}};
     SIZE_T Needed = 0;
 
     if (RtlGetVersion((PRTL_OSVERSIONINFOW)&Real) != 0)
