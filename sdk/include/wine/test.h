@@ -1236,6 +1236,11 @@ struct test
 #endif
 
 /* Section allocation helper for automatic test registration */
+/* # and ## do not act inside another macro's argument; use two-stage helpers. */
+#define _WINE_TEST_PASTE_(a, b) a##b
+#define _WINE_TEST_PASTE(a, b) _WINE_TEST_PASTE_(a, b)
+#define _WINE_TEST_STR_(x) #x
+#define _WINE_TEST_STR(x) _WINE_TEST_STR_(x)
 #if defined(_MSC_VER)
   #pragma section(".test$A",long,read)
   #pragma section(".test$B",long,read)
@@ -1246,7 +1251,7 @@ struct test
   #define _TESTKEEP(x) const void* keep_##x = &x;
 #elif defined(__GNUC__)
   #define _TESTALLOC(x) __attribute__((used, section(x)))
-  #define _TESTALLOC_ENTRY(name) _TESTALLOC(_CRT_STRINGIZE(.test$B##name))
+  #define _TESTALLOC_ENTRY(name) _TESTALLOC(_WINE_TEST_STR(_WINE_TEST_PASTE(.test$B, name)))
   #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x)
 #else
