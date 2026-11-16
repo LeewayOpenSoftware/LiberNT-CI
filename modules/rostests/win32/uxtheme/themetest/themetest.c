@@ -18,6 +18,8 @@
  *   --list   print the visual styles of the store (%windir%\Resources\Themes\<name>\*.msstyles) and exit
  *   --style  apply that style file first (SetSystemVisualStyle, the same call the Personalization page makes)
  *   --all-styles  for every style of the store: apply it, repaint, write DIR\<name>.bmp and DIR\<name>.csv, then put the
+ *                 (a style that stalls for longer than 15 s + 4 x wait ends the run with DIR\<name>.stall.txt naming the
+ *                 stage and the cell, exit code 7)
  *            style that was active back and exit
  * The window has a Style menu with the same list. The tool reads no file itself; the style switch is the public
  * uxtheme call and the system decides whether the style is trusted (a refused style leaves the current one active, which
@@ -91,6 +93,17 @@ static int g_batch_index = -1;      /* style being shot in batch mode */
 static wchar_t g_batch_out[MAX_PATH], g_batch_csv[MAX_PATH];
 static wchar_t g_initial_style[MAX_PATH];
 
+/* batch watchdog: the stage and the cell being drawn, so a stall names them instead of hanging the leg */
+static volatile LONG g_stage;                    /* 0 idle, 1 apply, 2 paint, 3 wait for the shot, 4 shot */
+static volatile LONG g_cell_row = -1, g_cell_state;
+static volatile DWORD g_stage_tick, g_style_tick;
+
+static void mark(LONG stage)
+{
+    g_stage = stage;
+    g_stage_tick = GetTickCount();
+}
+
 #define LABEL_H 16
 #define GAP 8
 #define MARGIN 12
@@ -135,6 +148,7 @@ static void csv_sizes(FILE *f, HTHEME h, HDC hdc, const struct row *r, int state
         if (SUCCEEDED(hr)) fwprintf(f, L",%ld,%ld", sz.cx, sz.cy); else fwprintf(f, L",err%08lx,", (unsigned long)hr);
     }
     fwprintf(f, L"\n");
+    fflush(f);
 }
 
 static void paint(HWND hwnd, HDC hdc)
@@ -169,6 +183,8 @@ static void paint(HWND hwnd, HDC hdc)
             HRESULT hr = E_HANDLE;
             if (h)
             {
+                g_cell_row = i;
+                g_cell_state = state;
                 hr = DrawThemeBackground(h, hdc, r->part, state, &rc, NULL);
                 if (SUCCEEDED(hr) && r->text)
                     DrawThemeText(h, hdc, r->part, state, L"Sample", -1, DT_CENTER | DT_VCENTER | DT_SINGLELINE, 0, &rc);
@@ -192,6 +208,7 @@ static void paint(HWND hwnd, HDC hdc)
         y += r->ch * g_scale + LABEL_H + GAP;
     }
     if (csv) fclose(csv);
+    g_cell_row = -1;
     SelectObject(hdc, old);
 }
 
@@ -317,14 +334,42 @@ static int batch_start(HWND hwnd, int i)
 {
     if (i >= g_nstyles) return 0;
     g_batch_index = i;
+    g_style_tick = GetTickCount();
+    mark(1);
     swprintf(g_batch_out, MAX_PATH, L"%ls\\%ls.bmp", g_batch_dir, g_styles[i].name);
     swprintf(g_batch_csv, MAX_PATH, L"%ls\\%ls.csv", g_batch_dir, g_styles[i].name);
     g_out = g_batch_out;
     g_csv = g_batch_csv;
     apply_style(g_styles[i].path);
     g_painted = 0;
+    mark(2);
     InvalidateRect(hwnd, NULL, TRUE);
     return 1;
+}
+
+static DWORD WINAPI watchdog(LPVOID arg)
+{
+    for (;;)
+    {
+        DWORD now, limit = 15000 + 4 * (DWORD)g_wait;
+        wchar_t line[256], path[MAX_PATH];
+        FILE *f;
+
+        Sleep(500);
+        if (g_batch_index < 0 || g_stage == 0) continue;
+        now = GetTickCount();
+        if (now - g_stage_tick <= limit && now - g_style_tick <= 60000 + 10 * (DWORD)g_wait) continue;
+        swprintf(line, 256, L"themetest: STALL style %ls stage %ld cell %ls/%d/%ld after %lu ms (stage %lu ms)\n",
+                 g_styles[g_batch_index].name, (long)g_stage, g_cell_row >= 0 ? ROWS[g_cell_row].cls : L"-",
+                 g_cell_row >= 0 ? ROWS[g_cell_row].part : 0, (long)g_cell_state,
+                 (unsigned long)(now - g_style_tick), (unsigned long)(now - g_stage_tick));
+        wprintf(L"%ls", line);
+        OutputDebugStringW(line);
+        swprintf(path, MAX_PATH, L"%ls\\%ls.stall.txt", g_batch_dir, g_styles[g_batch_index].name);
+        if ((f = _wfopen(path, L"w")) != NULL) { fputws(line, f); fclose(f); }
+        TerminateProcess(GetCurrentProcess(), 7);
+    }
+    return 0;
 }
 
 static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
@@ -344,6 +389,7 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
             {
                 g_painted = 1;
                 if (g_out) SetTimer(hwnd, 1, (UINT)g_wait, NULL);
+                mark(3);
             }
             return 0;
         }
@@ -351,10 +397,12 @@ static LRESULT CALLBACK wndproc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         {
             int ok;
             KillTimer(hwnd, 1);
+            mark(4);
             ok = screenshot(hwnd, g_out);
             wprintf(L"themetest: %d cells drawn, %d failed; screenshot %ls: %ls\n", g_hr_count[0], g_hr_count[1], g_out, ok ? L"written" : L"FAILED");
             if (g_batch_index >= 0 && batch_start(hwnd, g_batch_index + 1))
                 return 0;
+            mark(0);
             if (g_batch_index >= 0 && g_initial_style[0])
                 apply_style(g_initial_style);
             PostQuitMessage(ok ? 0 : 3);
@@ -392,6 +440,7 @@ int wmain(int argc, wchar_t **argv)
     int i, list = 0;
     const wchar_t *style = NULL;
 
+    setvbuf(stdout, NULL, _IONBF, 0);   /* a redirected run shows its progress up to a stop */
     for (i = 1; i < argc; i++)
     {
         if (!wcscmp(argv[i], L"--class") && i + 1 < argc) g_class = argv[++i];
@@ -440,7 +489,9 @@ int wmain(int argc, wchar_t **argv)
     UpdateWindow(hwnd);
     if (g_batch_dir)
     {
+        HANDLE wd;
         if (!g_nstyles) { wprintf(L"themetest: no style in the store, nothing to shoot\n"); return 5; }
+        if ((wd = CreateThread(NULL, 0, watchdog, NULL, 0, NULL)) != NULL) CloseHandle(wd);
         batch_start(hwnd, 0);
     }
     while (GetMessageW(&m, NULL, 0, 0) > 0) { TranslateMessage(&m); DispatchMessageW(&m); }
