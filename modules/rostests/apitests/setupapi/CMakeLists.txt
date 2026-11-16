@@ -10,6 +10,7 @@ list(APPEND SOURCE
     InterruptAffinityPolicy.c
     InvalidDeviceInfoSet.c
     LegacyDeviceParent.c
+    NetInterfaceNames.c
     NewDeviceInstall.c
     SetupCommitFileQueue.c
     SetupDiInstallClassExA.c
