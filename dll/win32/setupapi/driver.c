@@ -953,7 +953,7 @@ SetupDiBuildDriverInfoList(
             }
         }
 
-         if (InstallParams.FlagsEx & DI_FLAGSEX_INSTALLEDDRIVER)
+         if (DeviceInfoData && (InstallParams.FlagsEx & DI_FLAGSEX_INSTALLEDDRIVER))
         {
             HKEY hDriverKey;
             WCHAR InfFileName[MAX_PATH];

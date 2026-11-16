@@ -3,6 +3,7 @@
 #include <apitest.h>
 
 extern void func_BuildDriverInfoBadInf(void);
+extern void func_BuildDriverInfoInstalledFlag(void);
 extern void func_ClassInstallParams(void);
 extern void func_devclass(void);
 extern void func_DeviceDescription(void);
@@ -27,6 +28,7 @@ extern void func_UsbInterfaceIds(void);
 const struct test winetest_testlist[] =
 {
     { "BuildDriverInfoBadInf", func_BuildDriverInfoBadInf },
+    { "BuildDriverInfoInstalledFlag", func_BuildDriverInfoInstalledFlag },
     { "ClassInstallParams", func_ClassInstallParams },
     { "devclass", func_devclass },
     { "DeviceDescription", func_DeviceDescription },
