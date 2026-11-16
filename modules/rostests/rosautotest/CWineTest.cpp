@@ -386,7 +386,7 @@ CWineTest::GetNextTestInfo()
                     continue;
 
                 {
-                    unique_ptr<CTestInfo> TestInfo(new CTestInfo());
+                    auto_ptr<CTestInfo> TestInfo(new CTestInfo());
                     size_t UnderscorePosition;
 
                     /* Build the command line */
@@ -550,8 +550,8 @@ CWineTest::RunTest(CTestInfo* TestInfo)
 void
 CWineTest::Run()
 {
-    unique_ptr<CTestList> TestList;
-    unique_ptr<CWebService> WebService;
+    auto_ptr<CTestList> TestList;
+    auto_ptr<CWebService> WebService;
     CTestInfo* TestInfo;
     DWORD ErrorMode = 0;
 
@@ -594,7 +594,7 @@ CWineTest::Run()
     /* Get information for each test to run */
     while((TestInfo = TestList->GetNextTestInfo()) != 0)
     {
-        unique_ptr<CTestInfo> TestInfoPtr(TestInfo);
+        auto_ptr<CTestInfo> TestInfoPtr(TestInfo);
 
         RunTest(TestInfo);
 
