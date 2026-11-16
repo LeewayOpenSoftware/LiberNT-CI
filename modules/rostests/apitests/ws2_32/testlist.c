@@ -35,6 +35,7 @@ extern void func_select_edge(void);
 extern void func_send(void);
 extern void func_shutdown_linger(void);
 extern void func_sockopt(void);
+extern void func_catalog_write(void);
 extern void func_sendto_neighbor(void);
 extern void func_udp_queue(void);
 extern void func_udp_quic(void);
@@ -79,6 +80,7 @@ const struct test winetest_testlist[] =
     { "send", func_send },
     { "shutdown_linger", func_shutdown_linger },
     { "sockopt", func_sockopt },
+    { "catalog_write", func_catalog_write },
     { "sendto_neighbor", func_sendto_neighbor },
     { "udp_queue", func_udp_queue },
     { "udp_quic", func_udp_quic },

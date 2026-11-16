@@ -10,6 +10,7 @@ list(APPEND SOURCE
     afunix.c
     bind.c
     broadcast.c
+    catalog_write.c
     cancel.c
     close.c
     connect_any.c
