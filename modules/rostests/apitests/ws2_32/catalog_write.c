@@ -8,10 +8,8 @@
 #include "ws2_32.h"
 #include <winreg.h>
 #include <ws2spi.h>
+#include <sporder.h>
 #include <strsafe.h>
-
-/* From sporder.h, which the SDK of this tree does not have */
-INT WSPAPI WSCWriteProviderOrder(LPDWORD lpwdCatalogEntryId, DWORD dwNumberOfEntries);
 
 /* The test provider: never loaded, an address family nobody asks for */
 static GUID TestProviderId = { 0x5f6b4c1e, 0x7a0d, 0x4d53, { 0x9e, 0x21, 0x4c, 0x45, 0x45, 0x57, 0x41, 0x59 } };
