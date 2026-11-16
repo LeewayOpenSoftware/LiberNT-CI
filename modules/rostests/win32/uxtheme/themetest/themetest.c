@@ -14,7 +14,8 @@
  *   --part   only that part id of the class
  *   --wave   only one group of rows: 1 = the whole first table (Button .. Window, 1166 px: taller than a 1280x800
  *            screen, the capture is cut at the screen), 2 = Toolbar .. Spin, 3 = Trackbar .. TreeView, and the first
- *            table in screen-sized pieces: 4 = Button .. Combobox, 5 = Scrollbar .. Header, 6 = Window
+ *            table in screen-sized pieces: 4 = Button .. Combobox, 5 = Scrollbar .. Header, 6 = Window;
+ *            7 = the Windows 10 taskbar classes TaskBar, TaskBand, TrayNotify; 8 = StartPanel
  *   --out    write a screenshot of the client area after the first paint, then exit (default: stay open)
  *   --csv    write "class,part,state,TS_MIN w,h,TS_TRUE w,h,TS_DRAW w,h,hr" per cell
  *   --wait   milliseconds to wait before the screenshot (default 500)
@@ -99,6 +100,24 @@ static const struct row ROWS[] = {
     { L"ListView", LVP_LISTITEM, L"ListItem", LISS_NORMAL, LISS_HOTSELECTED, 96, 22, 1 },
     { L"TreeView", TVP_TREEITEM, L"TreeItem", TREIS_NORMAL, TREIS_HOTSELECTED, 96, 22, 1 },
     { L"TreeView", TVP_GLYPH, L"Glyph", GLPS_CLOSED, GLPS_OPENED, 16, 16, 0 },
+    /* waves 7 and 8 (owner, 2026-11-16): the classes of the Windows 10 taskbar, drawn from the style like any other part */
+    { L"TaskBar", TBP_BACKGROUNDBOTTOM, L"BackgroundBottom", 1, 1, 160, 30, 0 },
+    { L"TaskBar", TBP_BACKGROUNDTOP, L"BackgroundTop", 1, 1, 160, 30, 0 },
+    { L"TaskBar", TBP_BACKGROUNDLEFT, L"BackgroundLeft", 1, 1, 30, 60, 0 },
+    { L"TaskBar", TBP_SIZINGBARBOTTOM, L"SizingBarBottom", 1, 1, 160, 8, 0 },
+    { L"TaskBand", TDP_GROUPCOUNT, L"GroupCount", 1, 1, 24, 24, 0 },
+    { L"TaskBand", TDP_FLASHBUTTON, L"FlashButton", 1, 1, 96, 30, 1 },
+    { L"TaskBand", TDP_FLASHBUTTONGROUPMENU, L"FlashGroupMenu", 1, 1, 96, 30, 1 },
+    { L"TrayNotify", TNP_BACKGROUND, L"Background", 1, 1, 96, 30, 0 },
+    { L"TrayNotify", TNP_ANIMBACKGROUND, L"AnimBackground", 1, 1, 96, 30, 0 },
+    { L"StartPanel", SPP_USERPANE, L"UserPane", 1, 1, 96, 30, 0 },
+    { L"StartPanel", SPP_MOREPROGRAMS, L"MorePrograms", 1, 1, 96, 30, 1 },
+    { L"StartPanel", SPP_MOREPROGRAMSARROW, L"MoreProgramsArrow", 1, 3, 24, 24, 0 },
+    { L"StartPanel", SPP_PROGLIST, L"ProgList", 1, 1, 96, 30, 0 },
+    { L"StartPanel", SPP_PLACESLIST, L"PlacesList", 1, 1, 96, 30, 0 },
+    { L"StartPanel", SPP_LOGOFF, L"Logoff", 1, 1, 96, 30, 0 },
+    { L"StartPanel", SPP_LOGOFFBUTTONS, L"LogoffButtons", 1, 3, 48, 24, 0 },
+    { L"StartPanel", SPP_USERPICTURE, L"UserPicture", 1, 1, 48, 48, 0 },
 };
 #define NROWS ((int)(sizeof(ROWS) / sizeof(ROWS[0])))
 
@@ -143,6 +162,8 @@ static int row_wave(const struct row *r)
     {
         if (!wcscmp(p->cls, L"Toolbar") && wave < 2) wave = 2;
         if (!wcscmp(p->cls, L"Trackbar") && wave < 3) wave = 3;
+        if (!wcscmp(p->cls, L"TaskBar") && wave < 7) wave = 7;
+        if (!wcscmp(p->cls, L"StartPanel") && wave < 8) wave = 8;
     }
     return wave;
 }
