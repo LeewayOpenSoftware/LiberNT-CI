@@ -9127,7 +9127,12 @@ static HIMAGELIST LISTVIEW_CreateThemedCheckBoxImageList(const LISTVIEW_INFO *in
         return NULL;
 
     hdc = GetDC(info->hwndSelf);
-    GetThemePartSize(theme, hdc, BP_CHECKBOX, 0, NULL, TS_DRAW, &size);
+    if (FAILED(GetThemePartSize(theme, hdc, BP_CHECKBOX, 0, NULL, TS_DRAW, &size)))
+    {
+        ReleaseDC(info->hwndSelf, hdc);
+        CloseThemeData(theme);
+        return NULL;
+    }
     SetRect(&rect, 0, 0, size.cx, size.cy);
     image_list = ImageList_Create(size.cx, size.cy, ILC_COLOR32, 2, 2);
     mem_hdc = CreateCompatibleDC(hdc);
