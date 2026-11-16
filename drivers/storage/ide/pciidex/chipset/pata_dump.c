@@ -106,7 +106,7 @@ PataDumpWrite(
     PPATA_DUMP_CONTEXT DumpContext = Context;
     PCHANNEL_DATA_PATA ChanData = DumpContext->ChanData;
     ULONG64 BlockAddress;
-    ULONG Remaining, ChunkSectors, ThisLength, Done, InPage;
+    ULONG Remaining, ChunkSectors, ThisLength, Done;
     PHYSICAL_ADDRESS Pa;
     UCHAR DeviceValue;
 
@@ -154,22 +154,19 @@ PataDumpWrite(
                   MRES_TF);
 
         ThisLength = ChunkSectors * DumpContext->SectorSize;
-        for (Done = 0; Done < ThisLength; )
+        for (Done = 0; Done < ThisLength; Done += DumpContext->SectorSize)
         {
+            /* WRITE / WRITE_EXT assert DRQ once per sector; the physical
+               address stays sector-aligned, so one mapping covers it. */
             if (!PataDumpWaitSet(ChanData, IDE_STATUS_DRQ))
                 return STATUS_IO_TIMEOUT;
 
-            InPage = PAGE_SIZE - (Pa.LowPart & (PAGE_SIZE - 1));
-            if (InPage > (ThisLength - Done))
-                InPage = ThisLength - Done;
-
             AtaWriteBlock16((PUSHORT)ChanData->Regs.Data,
                             (PUSHORT)MmGetVirtualForPhysical(Pa),
-                            InPage / sizeof(USHORT),
+                            DumpContext->SectorSize / sizeof(USHORT),
                             ChanData->ChanInfo & CHANNEL_FLAG_MRES_TF);
 
-            Done += InPage;
-            Pa.QuadPart += InPage;
+            Pa.QuadPart += DumpContext->SectorSize;
         }
 
         if (!PataDumpWaitClear(ChanData, IDE_STATUS_BUSY))
