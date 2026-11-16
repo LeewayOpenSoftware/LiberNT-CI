@@ -72,7 +72,7 @@ START_TEST(shared_fence)
     SECURITY_ATTRIBUTES Inherit = { sizeof(Inherit), NULL, TRUE };
     FenceDevice First, Second;
     ID3D11Fence *Fence = NULL, *Plain = NULL, *Opened = NULL, *Marker = NULL;
-    HANDLE Handle = NULL, Inheritable = NULL, Bogus = (HANDLE)0xdeadbeef;
+    HANDLE Handle = NULL, Inheritable = NULL, Bogus = (HANDLE)(ULONG_PTR)0xdeadbeef;
     DWORD HandleFlags = 0;
     HRESULT Hr;
 
@@ -99,7 +99,7 @@ START_TEST(shared_fence)
     {
         Hr = Plain->CreateSharedHandle(NULL, GENERIC_ALL, NULL, &Bogus);
         ok(Hr == E_INVALIDARG, "CreateSharedHandle(unshared fence): %#lx\n", Hr);
-        ok(Bogus == (HANDLE)0xdeadbeef, "unshared fence wrote handle %p\n", Bogus);
+        ok(Bogus == (HANDLE)(ULONG_PTR)0xdeadbeef, "unshared fence wrote handle %p\n", Bogus);
         Plain->Release();
     }
 

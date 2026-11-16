@@ -596,9 +596,9 @@ TestLocalQuery(HANDLE Provider, PERF_COUNTERSET_INSTANCE *First, PERF_COUNTERSET
     ULONG Ret, Status, i;
 
     ok_long(Perf.OpenQueryHandle(NULL, NULL), ERROR_INVALID_PARAMETER);
-    Query = (HANDLE)0xdeadbeef;
+    Query = (HANDLE)(ULONG_PTR)0xdeadbeef;
     ok_long(Perf.OpenQueryHandle(NULL, &Query), ERROR_SUCCESS);
-    ok(Query != NULL && Query != (HANDLE)0xdeadbeef, "Query %p\n", Query);
+    ok(Query != NULL && Query != (HANDLE)(ULONG_PTR)0xdeadbeef, "Query %p\n", Query);
     Query2 = NULL;
     ok_long(Perf.OpenQueryHandle(ComputerName, &Query2), ERROR_SUCCESS);
     ok(Query2 != NULL && Query2 != Query, "Query2 %p\n", Query2);

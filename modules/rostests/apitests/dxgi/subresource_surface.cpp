@@ -89,7 +89,7 @@ static void CheckWholeSurface(const SUBRESOURCE_CASE *Case, IDXGIResource1 *Reso
        Case->Type, Case->Mips, Case->Layers, Hr);
     if (FAILED(Hr))
         return;
-    Parent = reinterpret_cast<IDXGIResource1 *>(0xdeadbeef);
+    Parent = reinterpret_cast<IDXGIResource1 *>(static_cast<UINT_PTR>(0xdeadbeef));
     Index = 1234;
     Hr = Surface->GetResource(IID_IDXGIFactory, reinterpret_cast<void **>(&Parent), &Index);
     ok(Hr == E_NOINTERFACE && Parent == NULL && Index == 1234, "GetResource(IDXGIFactory): %#lx %p %u\n", Hr, Parent, Index);
@@ -214,7 +214,7 @@ START_TEST(subresource_surface)
     {
         const SUBRESOURCE_CASE *Case = &Cases[Item];
         IDXGIResource1 *Resource = CreateResource(Device, Case);
-        IDXGISurface2 *Surface = reinterpret_cast<IDXGISurface2 *>(0xdeadbeef);
+        IDXGISurface2 *Surface = reinterpret_cast<IDXGISurface2 *>(static_cast<UINT_PTR>(0xdeadbeef));
         UINT Count = Case->Mips * Case->Layers, Index;
         HRESULT Hr;
 
@@ -223,7 +223,7 @@ START_TEST(subresource_surface)
         for (Index = 0; Index < Count; ++Index)
             CheckSubresource(Case, Resource, Index);
         Hr = Resource->CreateSubresourceSurface(Index, &Surface);
-        ok(Hr == E_INVALIDARG && Surface == reinterpret_cast<IDXGISurface2 *>(0xdeadbeef),
+        ok(Hr == E_INVALIDARG && Surface == reinterpret_cast<IDXGISurface2 *>(static_cast<UINT_PTR>(0xdeadbeef)),
            "type %u subresource %u out of range: %#lx %p\n", Case->Type, Index, Hr, Surface);
         Resource->Release();
     }
