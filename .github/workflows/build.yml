@@ -33,9 +33,13 @@ on:
         description: 'MSVC LAB-ONLY force-panic image (implies msvc_lab + FORCE_PANIC_TEST + LNRSPOC_TEST_IOCTLS, FORBID_PANIC off, lnrspoc 0x80B); disposable VM only, never ship'
         type: boolean
         default: false
+      cold_cache:
+        description: 'Cold-cache check: build with ccache disabled and without restoring or saving it, so every translation unit is compiled from source'
+        type: boolean
+        default: false
 
 concurrency:
-  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_force_panic) && 'msvclabfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_lab) && 'msvclab' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') && 'lrmpoc' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off') && 'lrmoff' || 'std' }}
+  group: build-${{ github.ref }}-${{ (github.event_name == 'workflow_dispatch' && inputs.cold_cache) && 'cold' || (github.event_name == 'workflow_dispatch' && inputs.force_panic) && 'lrmrsfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_force_panic) && 'msvclabfp' || (github.event_name == 'workflow_dispatch' && inputs.msvc_lab) && 'msvclab' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'on') && 'lrmpoc' || (github.event_name == 'workflow_dispatch' && inputs.lrm_rs == 'off') && 'lrmoff' || 'std' }}
   cancel-in-progress: true
 
 permissions:
@@ -99,6 +103,7 @@ jobs:
 
     - name: Restore ccache
       id: ccache_restore
+      if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.cold_cache) }}
       uses: actions/cache/restore@v5
       with:
         path: ccache
@@ -112,6 +117,7 @@ jobs:
         echo "CCACHE_DIR=${{github.workspace}}/ccache" >> $GITHUB_ENV
         echo "CCACHE_MAXSIZE=2G" >> $GITHUB_ENV
         echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
+        [ "${{ github.event_name == 'workflow_dispatch' && inputs.cold_cache }}" = true ] && echo "CCACHE_DISABLE=1" >> $GITHUB_ENV || true
 
     - name: Allocate the Leeway Build Identity
       id: lbi
@@ -342,6 +348,7 @@ jobs:
 
     - name: Restore ccache
       id: ccache_restore
+      if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.cold_cache) }}
       uses: actions/cache/restore@v5
       with:
         path: ccache
@@ -356,6 +363,7 @@ jobs:
         echo "CCACHE_DIR=${{github.workspace}}/ccache" >> $GITHUB_ENV
         echo "CCACHE_MAXSIZE=1G" >> $GITHUB_ENV
         echo "CCACHE_SLOPPINESS=time_macros" >> $GITHUB_ENV
+        [ "${{ github.event_name == 'workflow_dispatch' && inputs.cold_cache }}" = true ] && echo "CCACHE_DISABLE=1" >> $GITHUB_ENV || true
 
     - name: Configure
       id: configure
