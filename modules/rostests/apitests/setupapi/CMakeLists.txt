@@ -3,6 +3,7 @@ list(APPEND SOURCE
     BuildDriverInfoBadInf.c
     BuildDriverInfoInstalledFlag.c
     DelRegRootGuard.c
+    QueueHandleGuard.c
     ClassInstallParams.c
     devclass.c
     DeviceDescription.c
