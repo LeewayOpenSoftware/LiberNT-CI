@@ -914,7 +914,7 @@ jobs:
       shell: pwsh
       run: |
         $out = "${{steps.configure.outputs.outdir}}"
-        New-Item -ItemType Directory -Force apitests-out/amd64 apitests-out/wow64 | Out-Null
+        New-Item -ItemType Directory -Force -Path apitests-out/amd64, apitests-out/wow64 | Out-Null
         Get-ChildItem -Recurse "$out/modules/rostests/apitests" -Filter '*_apitest.exe' -File |
             ForEach-Object { Copy-Item -Verbose $_.FullName apitests-out/amd64/ }
         if (Test-Path "$out/_wow64_i386/modules/rostests/apitests") {
