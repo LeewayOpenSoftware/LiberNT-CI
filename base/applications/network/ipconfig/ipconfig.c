@@ -455,7 +455,7 @@ PrintAdapterDescription(PSTR lpClass)
                                          (PBYTE)lpConDesc,
                                          &dwDataSize) == ERROR_SUCCESS)
                     {
-                        printf("%s", lpConDesc);
+                        ConPrintf(StdOut, L"%hs", lpConDesc);
                     }
 
                     HeapFree(ProcessHeap, 0, lpConDesc);
@@ -904,7 +904,7 @@ ShowInfo(
         {
             ConResPrintf(StdOut, IDS_DESCRIPTION);
             PrintAdapterDescription(pAdapter->AdapterName);
-            printf("\n");
+            ConPuts(StdOut, L"\n");
 
             ConResPrintf(StdOut, IDS_PHYSICALADDRESS, PrintMacAddr(pAdapter->Address));
 
@@ -1376,7 +1376,7 @@ VOID
 RegisterDns(VOID)
 {
     /* FIXME */
-    printf("\nSorry /registerdns is not implemented yet\n");
+    ConPuts(StdOut, L"\nSorry /registerdns is not implemented yet\n");
 }
 
 static
@@ -1547,7 +1547,7 @@ VOID
 ShowClassId(
     PWSTR pszAdapterName)
 {
-    printf("\nSorry /showclassid adapter is not implemented yet\n");
+    ConPuts(StdOut, L"\nSorry /showclassid adapter is not implemented yet\n");
 }
 
 VOID

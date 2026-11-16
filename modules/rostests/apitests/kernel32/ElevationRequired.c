@@ -43,6 +43,16 @@ MakeImage(PCWSTR Path, PCSTR Level)
 }
 
 static BOOL
+MakeUnmanifestedImage(PCWSTR Path)
+{
+    WCHAR Self[MAX_PATH];
+
+    if (!GetModuleFileNameW(NULL, Self, ARRAYSIZE(Self)))
+        return FALSE;
+    return CopyFileW(Self, Path, FALSE);
+}
+
+static BOOL
 IsElevated(HANDLE Token)
 {
     TOKEN_ELEVATION Elevation;
@@ -166,4 +176,45 @@ Cleanup:
     DeleteFileW(Admin);
     DeleteFileW(Invoker);
     DeleteFileW(Highest);
+}
+
+START_TEST(InstallerDetection)
+{
+    WCHAR Dir[MAX_PATH], SetupExe[MAX_PATH], SetupInvoker[MAX_PATH];
+    WCHAR PlainEnv[] = L"SystemRoot=C:\\Windows\0";
+    HANDLE Restricted;
+    DWORD Error;
+
+    GetTempPathW(ARRAYSIZE(Dir), Dir);
+    StringCchPrintfW(SetupExe, ARRAYSIZE(SetupExe), L"%ssetup_d1_test.exe", Dir);
+    StringCchPrintfW(SetupInvoker, ARRAYSIZE(SetupInvoker), L"%ssetup_d1_asInvoker.exe", Dir);
+
+    if (!MakeUnmanifestedImage(SetupExe) ||
+        !MakeImage(SetupInvoker, "asInvoker"))
+    {
+        skip("Cannot build the test images (error %lu)\n", GetLastError());
+        goto Cleanup;
+    }
+
+    Restricted = MakeNonAdminToken();
+    if (!Restricted || IsElevated(Restricted))
+    {
+        skip("No non-elevated token available\n");
+    }
+    else
+    {
+        Error = Launch(Restricted, SetupExe, PlainEnv);
+        ok(Error == ERROR_ELEVATION_REQUIRED, "unmanifested setup.exe: got %lu (expected %lu)\n",
+           Error, ERROR_ELEVATION_REQUIRED);
+
+        Error = Launch(Restricted, SetupInvoker, PlainEnv);
+        ok(Error != ERROR_ELEVATION_REQUIRED,
+           "manifested asInvoker setup.exe: got %lu (should not be elevation required)\n", Error);
+    }
+    if (Restricted)
+        CloseHandle(Restricted);
+
+Cleanup:
+    DeleteFileW(SetupExe);
+    DeleteFileW(SetupInvoker);
 }

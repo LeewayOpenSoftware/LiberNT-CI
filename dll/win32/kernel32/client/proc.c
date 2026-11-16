@@ -3397,6 +3397,66 @@ BasepIsTokenElevated(
 
 static
 BOOLEAN
+BasepIsInstallerImage(
+    _In_ LPCWSTR lpApplicationName)
+{
+    LPCWSTR FileName;
+    WCHAR LowerName[MAX_PATH];
+    SIZE_T i;
+
+    if (!lpApplicationName)
+        return FALSE;
+
+    FileName = wcsrchr(lpApplicationName, L'\\');
+    if (!FileName)
+        FileName = lpApplicationName;
+    else
+        FileName++;
+
+    for (i = 0; i < MAX_PATH - 1 && FileName[i]; i++)
+        LowerName[i] = towlower(FileName[i]);
+    LowerName[i] = UNICODE_NULL;
+
+    if (!wcscmp(LowerName, L"setup.exe") ||
+        !wcscmp(LowerName, L"install.exe") ||
+        !wcscmp(LowerName, L"uninst.exe") ||
+        !wcscmp(LowerName, L"uninstall.exe"))
+        return TRUE;
+
+    return FALSE;
+}
+
+static
+BOOLEAN
+BasepIsInstallerDetectionEnabled(void)
+{
+    HKEY PolicyKey;
+    DWORD EnableLUA = 0;
+    DWORD EnableInstaller = 0;
+    DWORD Size;
+    LONG Result;
+
+    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                          0,
+                          KEY_READ,
+                          &PolicyKey);
+    if (Result != ERROR_SUCCESS)
+        return FALSE;
+
+    Size = sizeof(EnableLUA);
+    RegQueryValueExW(PolicyKey, L"EnableLUA", NULL, NULL, (LPBYTE)&EnableLUA, &Size);
+
+    Size = sizeof(EnableInstaller);
+    Result = RegQueryValueExW(PolicyKey, L"EnableInstallerDetection", NULL, NULL,
+                              (LPBYTE)&EnableInstaller, &Size);
+    RegCloseKey(PolicyKey);
+
+    return Result == ERROR_SUCCESS && EnableLUA == 1 && EnableInstaller == 1;
+}
+
+static
+BOOLEAN
 BasepImageRequiresElevation(
     _In_opt_ HANDLE hUserToken,
     _In_ LPCWSTR lpApplicationName,
@@ -3408,6 +3468,7 @@ BasepImageRequiresElevation(
     HANDLE ActCtxHandle;
     DWORD LastError;
     BOOL Queried;
+    BOOLEAN HasManifest;
 
     if (!lpApplicationName || BasepIsTokenElevated(hUserToken))
         return FALSE;
@@ -3422,25 +3483,35 @@ BasepImageRequiresElevation(
     ActCtxHandle = CreateActCtxW(&ActCtx);
     if (ActCtxHandle == INVALID_HANDLE_VALUE)
     {
-        SetLastError(LastError);
-        return FALSE;
+        HasManifest = FALSE;
+    }
+    else
+    {
+        HasManifest = TRUE;
+        RtlZeroMemory(&RunLevel, sizeof(RunLevel));
+        Queried = QueryActCtxW(0,
+                               ActCtxHandle,
+                               NULL,
+                               RunlevelInformationInActivationContext,
+                               &RunLevel,
+                               sizeof(RunLevel),
+                               NULL);
+        ReleaseActCtx(ActCtxHandle);
+
+        if (Queried && RunLevel.RunLevel == ACTCTX_RUN_LEVEL_REQUIRE_ADMIN)
+        {
+            SetLastError(LastError);
+            return !BasepEnvironmentHasRunAsInvoker(lpEnvironment, dwCreationFlags);
+        }
     }
 
-    RtlZeroMemory(&RunLevel, sizeof(RunLevel));
-    Queried = QueryActCtxW(0,
-                           ActCtxHandle,
-                           NULL,
-                           RunlevelInformationInActivationContext,
-                           &RunLevel,
-                           sizeof(RunLevel),
-                           NULL);
-    ReleaseActCtx(ActCtxHandle);
     SetLastError(LastError);
 
-    if (!Queried || RunLevel.RunLevel != ACTCTX_RUN_LEVEL_REQUIRE_ADMIN)
-        return FALSE;
+    if (!HasManifest && BasepIsInstallerImage(lpApplicationName) &&
+        BasepIsInstallerDetectionEnabled())
+        return TRUE;
 
-    return !BasepEnvironmentHasRunAsInvoker(lpEnvironment, dwCreationFlags);
+    return FALSE;
 }
 
 /*
