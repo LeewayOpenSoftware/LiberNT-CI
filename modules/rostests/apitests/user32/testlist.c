@@ -71,6 +71,7 @@ extern void func_GW_ENABLEDPOPUP(void);
 extern void func_HiddenChildWindowPos(void);
 extern void func_ImeWindow(void);
 extern void func_InitializeLpkHooks(void);
+extern void func_InjectTouchInput(void);
 extern void func_InputMessageSource(void);
 extern void func_InvalidHandles(void);
 extern void func_IsTopLevelWindow(void);
@@ -221,6 +222,7 @@ const struct test winetest_testlist[] =
     { "HiddenChildWindowPos", func_HiddenChildWindowPos },
     { "ImeWindow", func_ImeWindow },
     { "InitializeLpkHooks", func_InitializeLpkHooks },
+    { "InjectTouchInput", func_InjectTouchInput },
     { "InputMessageSource", func_InputMessageSource },
     { "InvalidHandles", func_InvalidHandles },
     { "IsTopLevelWindow", func_IsTopLevelWindow },
