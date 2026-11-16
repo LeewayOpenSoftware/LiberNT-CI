@@ -21,6 +21,9 @@
 #include <kmt_test.h>
 #include "../ntos_po/PoFxState_pnp.h"
 
+/* The CRT floating-point marker; RtlModern exercises ntoskrnl's sqrt export under KeSaveFloatingPointState. */
+int _fltused = 0x9875;
+
 /* Usermode callback definitions */
 typedef struct _KMT_USER_WORK_ENTRY
 {
