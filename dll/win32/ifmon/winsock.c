@@ -9,6 +9,7 @@
 
 #include <guiddef.h>
 #include <ws2spi.h>
+#include <sporder.h>
 
 #define NDEBUG
 #include <debug.h>
@@ -38,6 +39,102 @@ CMD_GROUP_ENTRY g_WinsockGroupCmds[] =
 };
 
 
+/* The providers that the installation of TCP/IP puts into the catalog
+   (media/inf/nettcpip.inf). Everything else is removed by a reset. The name
+   space catalog is not touched */
+static const GUID g_DefaultProviders[] =
+{
+    /* MSAFD Tcpip: TCP, UDP and raw, IPv4 and IPv6 */
+    {0xE70F1AA0, 0xAB8B, 0x11CF, {0x8C, 0xA3, 0x00, 0x80, 0x5F, 0x48, 0xA1, 0x92}},
+    /* AF_UNIX */
+    {0xA00943D9, 0x9C2E, 0x4633, {0x9B, 0x59, 0x00, 0x57, 0xA3, 0x16, 0x09, 0x94}},
+    /* MSAFD RfComm [Bluetooth] */
+    {0x9FC48064, 0x7298, 0x43E4, {0xB7, 0xBD, 0x18, 0x1F, 0x20, 0x89, 0x79, 0x2A}}
+};
+
+static
+BOOL
+WinsockIsDefaultProvider(
+    _In_ const GUID *pProviderId)
+{
+    DWORD i;
+
+    for (i = 0; i < ARRAYSIZE(g_DefaultProviders); i++)
+    {
+        if (IsEqualGUID(pProviderId, &g_DefaultProviders[i]))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static
+VOID
+WinsockFormatGuid(
+    _In_ const GUID *pGuid,
+    _Out_writes_(cchGuid) PWSTR pszGuid,
+    _In_ SIZE_T cchGuid)
+{
+    StringCchPrintfW(pszGuid, cchGuid,
+                     L"{%08lX-%04X-%04X-%02X%02X-%02X%02X%02X%02X%02X%02X}",
+                     pGuid->Data1, pGuid->Data2, pGuid->Data3,
+                     pGuid->Data4[0], pGuid->Data4[1], pGuid->Data4[2], pGuid->Data4[3],
+                     pGuid->Data4[4], pGuid->Data4[5], pGuid->Data4[6], pGuid->Data4[7]);
+}
+
+/* The protocol entries of the catalog, to be freed with HeapFree. NULL on failure */
+static
+LPWSAPROTOCOL_INFOW
+WinsockEnumCatalog(
+    _Out_ PDWORD pdwCount,
+    _Out_ PDWORD pdwError)
+{
+    LPWSAPROTOCOL_INFOW pProtocols = NULL;
+    DWORD dwSize = 0;
+    INT nCount, nError = 0;
+
+    *pdwCount = 0;
+    *pdwError = ERROR_SUCCESS;
+
+    /* The first call tells the size, the list can grow before the second one */
+    for (;;)
+    {
+        nCount = WSCEnumProtocols(NULL, pProtocols, &dwSize, &nError);
+        if (nCount != SOCKET_ERROR)
+            break;
+
+        if (pProtocols)
+            HeapFree(GetProcessHeap(), 0, pProtocols);
+        pProtocols = NULL;
+        if (nError != WSAENOBUFS || dwSize == 0)
+        {
+            *pdwError = nError ? (DWORD)nError : ERROR_GEN_FAILURE;
+            return NULL;
+        }
+
+        pProtocols = HeapAlloc(GetProcessHeap(), 0, dwSize);
+        if (pProtocols == NULL)
+        {
+            *pdwError = ERROR_NOT_ENOUGH_MEMORY;
+            return NULL;
+        }
+    }
+
+    if (pProtocols == NULL)
+    {
+        /* An empty catalog: give the caller something to free */
+        pProtocols = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(WSAPROTOCOL_INFOW));
+        if (pProtocols == NULL)
+        {
+            *pdwError = ERROR_NOT_ENOUGH_MEMORY;
+            return NULL;
+        }
+        nCount = 0;
+    }
+
+    *pdwCount = (DWORD)nCount;
+    return pProtocols;
+}
+
 static
 DWORD
 WINAPI
@@ -50,7 +147,105 @@ ResetCommand(
     LPCVOID pvData,
     BOOL *pbDone)
 {
-    PrintMessage(L"ResetCommand(): Not implemented yet!\n");
+    LPWSAPROTOCOL_INFOW pProtocols;
+    DWORD dwCount, dwIds, i, j, dwError = ERROR_SUCCESS;
+    LPDWORD pIds;
+    GUID Foreign;
+    INT nError;
+    WCHAR szGuid[40], szLine[512];
+    BOOL bMissing = FALSE;
+
+    /* Remove every provider the system did not install. The catalog is read
+       again after each removal: one provider can have several entries */
+    for (;;)
+    {
+        pProtocols = WinsockEnumCatalog(&dwCount, &dwError);
+        if (pProtocols == NULL)
+        {
+            PrintMessage(L"The Winsock Catalog could not be read (error %lu).\n", dwError);
+            return dwError;
+        }
+
+        for (i = 0; i < dwCount; i++)
+        {
+            if (!WinsockIsDefaultProvider(&pProtocols[i].ProviderId))
+                break;
+        }
+        if (i == dwCount)
+            break;
+
+        Foreign = pProtocols[i].ProviderId;
+        WinsockFormatGuid(&Foreign, szGuid, ARRAYSIZE(szGuid));
+        StringCchPrintfW(szLine, ARRAYSIZE(szLine), L"Removing provider %s (%s)\n",
+                         szGuid, pProtocols[i].szProtocol);
+        HeapFree(GetProcessHeap(), 0, pProtocols);
+        PrintMessage(L"%s", szLine);
+
+        nError = 0;
+        if (WSCDeinstallProvider(&Foreign, &nError) == SOCKET_ERROR)
+        {
+            PrintMessage(L"The provider could not be removed (error %d).\n", nError);
+            return nError ? (DWORD)nError : ERROR_GEN_FAILURE;
+        }
+    }
+
+    /* What is left are the entries of the system. Their ids were given in the
+       order of their installation, and that is the order to search them in */
+    pIds = HeapAlloc(GetProcessHeap(), 0, (dwCount + 1) * sizeof(DWORD));
+    if (pIds == NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, pProtocols);
+        return ERROR_NOT_ENOUGH_MEMORY;
+    }
+
+    dwIds = 0;
+    for (i = 0; i < dwCount; i++)
+    {
+        DWORD dwId = pProtocols[i].dwCatalogEntryId;
+
+        for (j = dwIds; j > 0 && pIds[j - 1] > dwId; j--)
+            pIds[j] = pIds[j - 1];
+        pIds[j] = dwId;
+        dwIds++;
+    }
+
+    for (i = 0; i < ARRAYSIZE(g_DefaultProviders); i++)
+    {
+        for (j = 0; j < dwCount; j++)
+        {
+            if (IsEqualGUID(&pProtocols[j].ProviderId, &g_DefaultProviders[i]))
+                break;
+        }
+        if (j == dwCount)
+        {
+            /* Only the installation of TCP/IP has the data of these entries */
+            WinsockFormatGuid(&g_DefaultProviders[i], szGuid, ARRAYSIZE(szGuid));
+            PrintMessage(L"A provider of the system is missing from the catalog: %s\n", szGuid);
+            bMissing = TRUE;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, pProtocols);
+
+    if (dwIds != 0)
+    {
+        nError = WSCWriteProviderOrder(pIds, dwIds);
+        if (nError != ERROR_SUCCESS)
+        {
+            HeapFree(GetProcessHeap(), 0, pIds);
+            PrintMessage(L"The order of the catalog could not be written (error %d).\n", nError);
+            return (DWORD)nError;
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, pIds);
+
+    if (bMissing)
+    {
+        PrintMessage(L"The Winsock Catalog was not restored completely. Install TCP/IP again to restore the missing entries.\n");
+        return ERROR_NOT_FOUND;
+    }
+
+    PrintMessage(L"\nSuccessfully reset the Winsock Catalog.\n");
+    PrintMessage(L"You must restart the computer in order to complete the reset.\n\n");
     return ERROR_SUCCESS;
 }
 
