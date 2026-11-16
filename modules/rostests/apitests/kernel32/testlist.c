@@ -69,6 +69,7 @@ extern void func_Utf8ActiveCodePage(void);
 extern void func_TramoE(void);
 extern void func_TramoE2(void);
 extern void func_VerifyScripts(void);
+extern void func_VerifyVersionInfo(void);
 extern void func_GetDurationFormat(void);
 extern void func_TimeZoneEx(void);
 extern void func_IsValidLocaleName(void);
@@ -296,6 +297,7 @@ const struct test winetest_testlist[] =
     { "TramoE", func_TramoE },
     { "TramoE2", func_TramoE2 },
     { "VerifyScripts", func_VerifyScripts },
+    { "VerifyVersionInfo", func_VerifyVersionInfo },
     { "GetDurationFormat", func_GetDurationFormat },
     { "TimeZoneEx", func_TimeZoneEx },
     { "IsValidLocaleName", func_IsValidLocaleName },
