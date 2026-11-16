@@ -795,9 +795,14 @@ jobs:
         New-Item -ItemType Directory -Force symbols | Out-Null
         # Kernel-mode binaries (.sys), the kernel/HAL, their .pdb, and any .map.
         # Excludes user-mode .dll/.exe .pdb to keep the artifact bounded.
+        # MSVC centralizes every .pdb in msvc_pdb/, so match a .pdb by its
+        # basename against every .sys in the tree instead of expecting the
+        # pair to sit in the same directory.
+        $sysNames = @{}
+        Get-ChildItem $out -Recurse -File -Include *.sys | ForEach-Object { $sysNames[$_.BaseName] = $true }
         $keep = Get-ChildItem $out -Recurse -File -Include *.sys,*.map | ForEach-Object { $_.FullName }
         $keep += Get-ChildItem $out -Recurse -File -Include *.pdb | Where-Object {
-            (Test-Path (($_.FullName) -replace '\.pdb$','.sys')) -or
+            $sysNames.ContainsKey($_.BaseName) -or
             $_.Name -in @('ntoskrnl.pdb','hal.pdb','kdcom.pdb','bootvid.pdb')
         } | ForEach-Object { $_.FullName }
         foreach ($f in ($keep | Sort-Object -Unique)) {
