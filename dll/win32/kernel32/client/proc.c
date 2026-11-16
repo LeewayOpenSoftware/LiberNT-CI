@@ -3403,7 +3403,7 @@ BasepIsInstallerImage(
     LPCWSTR FileName;
     WCHAR LowerName[MAX_PATH];
     PWCHAR DotPos;
-    SIZE_T i, NameLen;
+    SIZE_T i;
 
     if (!lpApplicationName)
         return FALSE;
@@ -3420,9 +3420,7 @@ BasepIsInstallerImage(
 
     DotPos = wcsrchr(LowerName, L'.');
     if (DotPos)
-        NameLen = DotPos - LowerName;
-    else
-        NameLen = wcslen(LowerName);
+        *DotPos = UNICODE_NULL;
 
     return wcsstr(LowerName, L"setup") != NULL ||
            wcsstr(LowerName, L"install") != NULL ||
