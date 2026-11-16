@@ -2750,7 +2750,7 @@ HRESULT STDMETHODCALLTYPE CShellLink::InvokeCommand(LPCMINVOKECOMMANDINFO lpici)
     switch (idCmd)
     {
     case IDCMD_OPEN:
-        return DoOpen(lpici);
+        return DoOpen(lpici, m_bRunAs ? L"runas" : NULL);
     case IDCMD_OPENFILELOCATION:
         return DoOpenFileLocation();
     case IDCMD_RUNAS:
