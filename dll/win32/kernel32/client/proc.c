@@ -3469,7 +3469,6 @@ BasepImageRequiresElevation(
     HANDLE ActCtxHandle;
     DWORD LastError;
     BOOL Queried;
-    BOOLEAN HasManifest;
 
     if (!lpApplicationName || BasepIsTokenElevated(hUserToken))
         return FALSE;
@@ -3482,13 +3481,8 @@ BasepImageRequiresElevation(
     ActCtx.lpSource = lpApplicationName;
     ActCtx.lpResourceName = MAKEINTRESOURCEW(1);
     ActCtxHandle = CreateActCtxW(&ActCtx);
-    if (ActCtxHandle == INVALID_HANDLE_VALUE)
+    if (ActCtxHandle != INVALID_HANDLE_VALUE)
     {
-        HasManifest = FALSE;
-    }
-    else
-    {
-        HasManifest = TRUE;
         RtlZeroMemory(&RunLevel, sizeof(RunLevel));
         Queried = QueryActCtxW(0,
                                ActCtxHandle,
@@ -3504,11 +3498,19 @@ BasepImageRequiresElevation(
             SetLastError(LastError);
             return !BasepEnvironmentHasRunAsInvoker(lpEnvironment, dwCreationFlags);
         }
+
+        if (Queried && RunLevel.RunLevel != ACTCTX_RUN_LEVEL_UNSPECIFIED)
+        {
+            SetLastError(LastError);
+            return FALSE;
+        }
+
+        /* A manifest without requestedExecutionLevel counts as unmanifested. */
     }
 
     SetLastError(LastError);
 
-    if (!HasManifest && BasepIsInstallerImage(lpApplicationName) &&
+    if (BasepIsInstallerImage(lpApplicationName) &&
         BasepIsInstallerDetectionEnabled())
         return TRUE;
 

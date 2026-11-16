@@ -53,6 +53,36 @@ MakeUnmanifestedImage(PCWSTR Path)
 }
 
 static BOOL
+MakeNoRunLevelImage(PCWSTR Path)
+{
+    WCHAR Self[MAX_PATH];
+    CHAR Manifest[1024];
+    HANDLE Update;
+
+    if (!GetModuleFileNameW(NULL, Self, ARRAYSIZE(Self)))
+        return FALSE;
+    if (!CopyFileW(Self, Path, FALSE))
+        return FALSE;
+
+    StringCbCopyA(Manifest, sizeof(Manifest),
+                  "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+                  "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">"
+                  "<assemblyIdentity name=\"NoRunLevel\" version=\"1.0.0.0\" "
+                  "processorArchitecture=\"*\" type=\"win32\"/></assembly>");
+    Update = BeginUpdateResourceW(Path, TRUE);
+    if (!Update)
+        return FALSE;
+    if (!UpdateResourceW(Update, (LPCWSTR)RT_MANIFEST, MAKEINTRESOURCEW(1),
+                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                         Manifest, (DWORD)strlen(Manifest)))
+    {
+        EndUpdateResourceW(Update, TRUE);
+        return FALSE;
+    }
+    return EndUpdateResourceW(Update, FALSE);
+}
+
+static BOOL
 IsElevated(HANDLE Token)
 {
     TOKEN_ELEVATION Elevation;
@@ -209,7 +239,7 @@ AreInstallerDetectionPoliciesEnabled(void)
 
 START_TEST(InstallerDetection)
 {
-    WCHAR Dir[MAX_PATH], SetupExe[MAX_PATH], SetupInvoker[MAX_PATH];
+    WCHAR Dir[MAX_PATH], SetupExe[MAX_PATH], SetupInvoker[MAX_PATH], SetupNoLevel[MAX_PATH];
     WCHAR PlainEnv[] = L"SystemRoot=C:\\Windows\0";
     HANDLE Restricted;
     DWORD Error;
@@ -225,9 +255,11 @@ START_TEST(InstallerDetection)
     GetTempPathW(ARRAYSIZE(Dir), Dir);
     StringCchPrintfW(SetupExe, ARRAYSIZE(SetupExe), L"%ssetup_d1_test.exe", Dir);
     StringCchPrintfW(SetupInvoker, ARRAYSIZE(SetupInvoker), L"%ssetup_d1_asInvoker.exe", Dir);
+    StringCchPrintfW(SetupNoLevel, ARRAYSIZE(SetupNoLevel), L"%ssetup_d1_noLevel.exe", Dir);
 
     if (!MakeUnmanifestedImage(SetupExe) ||
-        !MakeImage(SetupInvoker, "asInvoker"))
+        !MakeImage(SetupInvoker, "asInvoker") ||
+        !MakeNoRunLevelImage(SetupNoLevel))
     {
         skip("Cannot build the test images (error %lu)\n", GetLastError());
         goto Cleanup;
@@ -247,6 +279,11 @@ START_TEST(InstallerDetection)
         Error = Launch(Restricted, SetupInvoker, PlainEnv);
         ok(Error != ERROR_ELEVATION_REQUIRED,
            "manifested asInvoker setup.exe: got %lu (should not be elevation required)\n", Error);
+
+        Error = Launch(Restricted, SetupNoLevel, PlainEnv);
+        ok(Error == ERROR_ELEVATION_REQUIRED,
+           "manifest without requestedExecutionLevel setup.exe: got %lu (expected %lu)\n",
+           Error, ERROR_ELEVATION_REQUIRED);
     }
     if (Restricted)
         CloseHandle(Restricted);
@@ -254,4 +291,5 @@ START_TEST(InstallerDetection)
 Cleanup:
     DeleteFileW(SetupExe);
     DeleteFileW(SetupInvoker);
+    DeleteFileW(SetupNoLevel);
 }
