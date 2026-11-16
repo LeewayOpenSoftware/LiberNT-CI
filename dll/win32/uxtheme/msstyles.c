@@ -237,6 +237,25 @@ void MSSTYLES_CloseThemeFile(PTHEME_FILE tf)
         refcount = InterlockedDecrement(&tf->refcount);
         if (!refcount)
         {
+            PTHEME_CLASS *link;
+
+            /* Closed handles stay in open_handles for reuse and are matched by the file's address: the next file can
+             * land on that address and revive a handle that names a class of the old file (a v4 class is only its
+             * ordinal in its own model). Drop them with the file. */
+            EnterCriticalSection(&handles_cs);
+            for (link = &open_handles; *link;)
+            {
+                PTHEME_CLASS h = *link;
+
+                if (h->tf == tf && h->refcount == 0)
+                {
+                    *link = h->next;
+                    free(h);
+                }
+                else
+                    link = &h->next;
+            }
+            LeaveCriticalSection(&handles_cs);
 #ifdef UXTHEME_V4
             if (tf->v4) MSSTYLES_V4_Close(tf);
 #endif
@@ -1317,6 +1336,9 @@ static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
         for (handle = open_handles; handle; handle = handle->next)
         {
             if (handle->tf == theme && handle->dpi == dpi && handle->partstate == cls->partstate &&
+#ifdef UXTHEME_V4
+                handle->v4Ordinal == cls->v4Ordinal &&
+#endif
                 !wcscmp(handle->szAppName, cls->szAppName) && !wcscmp(handle->szClassName, cls->szClassName))
                 break;
         }
