@@ -208,6 +208,8 @@ set(GENERATE_DEPENDENCY_GRAPH FALSE CACHE BOOL
 cmake_dependent_option(ENABLE_ROSTESTS "Whether to build the ReactOS test suite." OFF
                        "CMAKE_BUILD_TYPE STREQUAL Debug" OFF)
 
+option(LIBERNT_ACCEPTANCE_HOOKS "Compile the acceptance-test provocation hooks into system setup (acceptance image builds only)." OFF)
+
 option(ENABLE_MESA_LLVMPIPE "Package the LLVMpipe OpenGL and Lavapipe Vulkan software ICDs." OFF)
 cmake_dependent_option(MESA_LLVMPIPE_FROM_SOURCE
                        "Build LLVM and LLVMpipe into mesa_gallium.dll instead of using the LiberNT release payload." OFF

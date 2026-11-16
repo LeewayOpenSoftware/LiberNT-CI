@@ -916,6 +916,7 @@ done:
         LsaFreeMemory(AccountDomain);
     return ERROR_SUCCESS;
 }
+#ifdef LIBERNT_ACCEPTANCE_HOOKS
 #define SETUP_PROVOKE_FILE L"LiberNT.SetupProvokePause"
 
 /* Test-only provocation gate: the acceptance harness may leave SETUP_PROVOKE_FILE
@@ -1048,6 +1049,7 @@ Cleanup:
         LsaClose(PolicyHandle);
     DeleteFileW(FileName);
 }
+#endif
 
 static DWORD
 ScheduleFirstBootComponents(
@@ -1624,7 +1626,9 @@ ConfigureTargetSystem(
         SecureZeroMemory(Settings->Password, sizeof(Settings->Password));
         if (Error != ERROR_SUCCESS)
             return Error;
+#ifdef LIBERNT_ACCEPTANCE_HOOKS
         ApplySetupProvocation(Settings->SystemDrive);
+#endif
         EnsureTargetAdministrator();
     }
 
