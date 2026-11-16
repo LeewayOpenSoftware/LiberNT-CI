@@ -680,8 +680,11 @@ WriteTargetLogon(
 
 /* F4 post-check: a fresh target install must leave at least one enabled
  * account-domain administrator that is not the built-in Administrator.
- * When none exists, re-enable RID 500 and report instead of leaving an
- * unrecoverable machine. Everything is identified by SID or RID. */
+ * When one exists, RID 500 - which a fresh install carries enabled with
+ * a blank password and which the target path otherwise never retires -
+ * is disabled; when none exists, re-enable RID 500 and report instead
+ * of leaving an unrecoverable machine. Everything is identified by SID
+ * or RID. */
 static DWORD
 EnsureTargetAdministrator(VOID)
 {
@@ -812,7 +815,32 @@ EnsureTargetAdministrator(VOID)
     }
 
     if (FoundAdmin)
+    {
+        /* The replacement administrator is verified in place, so retire
+         * the built-in Administrator exactly here and only here. */
+        Status = SamOpenUser(AccountDomainHandle,
+                             USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                             DOMAIN_USER_RID_ADMIN, &UserHandle);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SamQueryInformationUser(UserHandle,
+                                             UserControlInformation,
+                                             (PVOID *)&ControlInfo);
+            if (NT_SUCCESS(Status))
+            {
+                ControlInfo->UserAccountControl |= USER_ACCOUNT_DISABLED;
+                Status = SamSetInformationUser(UserHandle, UserControlInformation,
+                                               ControlInfo);
+                SamFreeMemory(ControlInfo);
+                ControlInfo = NULL;
+            }
+            SamCloseHandle(UserHandle);
+            UserHandle = NULL;
+        }
+        if (!NT_SUCCESS(Status))
+            DPRINT1("EnsureTargetAdministrator: retiring RID 500 failed (Status 0x%08lx); it stays enabled\n", Status);
         goto done;
+    }
 
 ReEnable:
     /* No enabled non-500 administrator: re-enable RID 500 and report. */
