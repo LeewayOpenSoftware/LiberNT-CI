@@ -534,7 +534,7 @@ struct func_device
     struct device base;
     DEVICE_OBJECT *pdo; /* lower PDO */
     UNICODE_STRING control_iface;
-    char devices_buffer[offsetof( DEVICE_RELATIONS, Objects[128] )];
+    char devices_buffer[sizeof(DEVICE_RELATIONS) + 127 * sizeof(DEVICE_OBJECT *)];
     DEVICE_RELATIONS *devices;
 };
 

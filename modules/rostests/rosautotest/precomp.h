@@ -18,6 +18,13 @@
 
 using namespace std;
 
+/* STLport (MSVC) predates C++11 and has no unique_ptr; other STLs deprecate auto_ptr */
+#ifdef _STLPORT_VERSION
+#define OWNER_PTR auto_ptr
+#else
+#define OWNER_PTR unique_ptr
+#endif
+
 #define WIN32_NO_STATUS
 #define _INC_WINDOWS
 #define COM_NO_WINDOWS_H
