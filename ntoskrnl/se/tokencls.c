@@ -2207,7 +2207,8 @@ NtSetInformationToken(
                 /* Lock the token */
                 SepAcquireTokenLockExclusive(Token);
 
-                if (Token->TokenInUse && Token->SessionId != SessionId)
+                /* A token a process uses keeps its session, the same session ID included */
+                if (Token->TokenInUse)
                 {
                     Status = STATUS_TOKEN_ALREADY_IN_USE;
                 }
