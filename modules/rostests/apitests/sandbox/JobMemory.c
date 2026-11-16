@@ -14,6 +14,8 @@
 #define CHILD_RELEASE_NOT_REUSABLE 0x10
 #define CHILD_COPY_SETUP_FAILED 0x20
 #define CHILD_COPY_NOT_REFUSED 0x40
+#define CHILD_COPY_WRONG_EXCEPTION 0x80
+#define CHILD_COPY_NO_SUCCESS 0x100
 
 #define MB (1024 * 1024)
 
@@ -66,7 +68,8 @@ RunCopyChild(void)
     HANDLE Mapping;
     volatile UCHAR *View = NULL;
     PVOID Fill[256];
-    ULONG Filled = 0, Page, Index;
+    ULONG Filled = 0, Page, Index, Succeeded = 0;
+    DWORD Exception = 0;
     BOOL Refused = FALSE;
 
     Mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, Pages * PageBytes, NULL);
@@ -94,15 +97,21 @@ RunCopyChild(void)
         _SEH2_TRY
         {
             View[Page * PageBytes] = 1;
+            Succeeded++;
         }
         _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
         {
+            Exception = (DWORD)_SEH2_GetExceptionCode();
             Refused = TRUE;
         }
         _SEH2_END;
     }
     if (!Refused)
         SbxChildFail(&Failures, CHILD_COPY_NOT_REFUSED, "copy-on-write writes above the job limit all succeeded", 0);
+    else if (Exception != STATUS_ACCESS_VIOLATION)
+        SbxChildFail(&Failures, CHILD_COPY_WRONG_EXCEPTION, "copy-on-write refusal raised an unexpected exception", Exception);
+    else if (!Succeeded)
+        SbxChildFail(&Failures, CHILD_COPY_NO_SUCCESS, "no copy-on-write write succeeded before the refusal", 0);
 
     for (Index = 0; Index < Filled; Index++)
         VirtualFree(Fill[Index], 0, MEM_RELEASE);
