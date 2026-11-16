@@ -91,4 +91,19 @@ START_TEST(SetupDiClassProperty)
     Ret = SetupDiGetClassPropertyW(&SystemClass, &TestProp, &Type, (PBYTE)&Read, sizeof(Read), &Required, DICLASSPROP_INSTALLER);
     ok(!Ret, "expected failure after the property was deleted\n");
     ok(GetLastError() == ERROR_NOT_FOUND, "got %lu, expected %u\n", GetLastError(), ERROR_NOT_FOUND);
+
+    /* Deleting the property removes only its value key; drop the now-empty {fmtid}
+       container too so the test leaves the class's Properties as it found them. */
+    Check = SetupDiOpenClassRegKeyExW(&SystemClass, KEY_ALL_ACCESS, DIOCR_INSTALLER, NULL, NULL);
+    if (Check != INVALID_HANDLE_VALUE)
+    {
+        HKEY Props;
+
+        if (RegOpenKeyExW(Check, L"Properties", 0, KEY_ALL_ACCESS, &Props) == ERROR_SUCCESS)
+        {
+            RegDeleteKeyW(Props, L"{6D9B1F27-4A3C-4E21-9B7E-112233445566}");
+            RegCloseKey(Props);
+        }
+        RegCloseKey(Check);
+    }
 }
