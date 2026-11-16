@@ -1232,8 +1232,9 @@ struct test
 /* Section allocation helper for automatic test registration */
 #if defined(_MSC_VER)
   #pragma section(".test$A",long,read)
-  #define _TESTALLOC(x) __declspec(allocate(x))
-  #define _PRAGMA_SECTION(x, y, z) __pragma(section(x, z))
+  #pragma section(".test$B",long,read)
+  #define _TESTALLOC(x) __declspec(allocate(".test$B"))
+  #define _PRAGMA_SECTION(x, y, z)
   #define _TESTKEEP(x) const void* keep_##x = &x;
 #elif defined(__GNUC__)
   #define _TESTALLOC(x) __attribute__((used, section(x)))
