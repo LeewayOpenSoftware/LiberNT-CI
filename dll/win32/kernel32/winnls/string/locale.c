@@ -204,6 +204,7 @@ static const union cptable *get_codepage_table( unsigned int codepage )
 
 #if (WINVER >= 0x0600)
 #if 0 // See kernel32_vista
+#if 0
 /* Charset to codepage map, sorted by name. */
 static const struct charset_entry
 {
@@ -296,6 +297,7 @@ static UINT find_charset( const WCHAR *name )
 }
 #endif // 0 See kernel32_vista
 #endif // (WINVER >= 0x0600)
+#endif
 
 static LANGID get_default_sublang( LANGID lang )
 {
@@ -319,6 +321,7 @@ static LANGID get_default_sublang( LANGID lang )
 
 #if (WINVER >= 0x0600)
 #if 0 // See kernel32_vista
+#if 0
 /***********************************************************************
  *           find_locale_id_callback
  */
@@ -515,6 +518,7 @@ done:
 }
 #endif // 0 See kernel32_vista
 #endif // (WINVER >= 0x0600)
+#endif
 
 
 /***********************************************************************
@@ -1091,7 +1095,6 @@ BOOL WINAPI GetThreadPreferredUILanguages( DWORD flags, ULONG *count, WCHAR *buf
     return get_dummy_preferred_ui_language( flags, count, buf, size );
 }
 
-#if (WINVER >= 0x0600)
 /******************************************************************************
  *             GetUserPreferredUILanguages (KERNEL32.@)
  */
@@ -1117,7 +1120,6 @@ BOOL WINAPI GetUserPreferredUILanguages( DWORD flags, ULONG *count, WCHAR *buffe
 
     return get_dummy_preferred_ui_language( flags, count, buffer, size );
 }
-#endif // (WINVER >= 0x0600)
 #endif // !__REACTOS__
 
 /***********************************************************************

@@ -1668,11 +1668,7 @@ HKEY WINAPI SetupDiCreateDevRegKeyW(
 
         if (KeyType == DIREG_DEV)
         {
-#if _WIN32_WINNT >= 0x502
             hKey = SETUPDI_CreateDevKey(RootKey, deviceInfo, KEY_READ | KEY_WRITE);
-#else
-            hKey = SETUPDI_CreateDevKey(RootKey, deviceInfo, KEY_ALL_ACCESS);
-#endif
             if (hKey == INVALID_HANDLE_VALUE)
                 goto cleanup;
 
@@ -1685,11 +1681,7 @@ HKEY WINAPI SetupDiCreateDevRegKeyW(
                                      0,
                                      NULL,
                                      REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
                                      KEY_READ | KEY_WRITE,
-#else
-                                     KEY_ALL_ACCESS,
-#endif
                                      NULL,
                                      &hKey,
                                      NULL);
@@ -1699,11 +1691,7 @@ HKEY WINAPI SetupDiCreateDevRegKeyW(
         }
         else /* KeyType == DIREG_DRV */
         {
-#if _WIN32_WINNT >= 0x502
             hKey = SETUPDI_CreateDrvKey(RootKey, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_READ | KEY_WRITE);
-#else
-            hKey = SETUPDI_CreateDrvKey(RootKey, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_ALL_ACCESS);
-#endif
             if (hKey == INVALID_HANDLE_VALUE)
                 goto cleanup;
         }
@@ -7040,17 +7028,9 @@ SetupDiRegisterCoDeviceInstallers(
         deviceInfo = (struct DeviceInfo *)DeviceInfoData->Reserved;
 
         /* Open/Create driver key information */
-#if _WIN32_WINNT >= 0x502
         hKey = SETUPDI_OpenDrvKey(set->HKLM, deviceInfo, KEY_READ | KEY_WRITE);
-#else
-        hKey = SETUPDI_OpenDrvKey(set->HKLM, deviceInfo, KEY_ALL_ACCESS);
-#endif
         if (hKey == INVALID_HANDLE_VALUE && GetLastError() == ERROR_FILE_NOT_FOUND)
-#if _WIN32_WINNT >= 0x502
             hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_READ | KEY_WRITE);
-#else
-            hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&DeviceInfoData->ClassGuid, KEY_ALL_ACCESS);
-#endif
         if (hKey == INVALID_HANDLE_VALUE)
             goto cleanup;
 
@@ -7468,11 +7448,7 @@ SetupDiInstallDevice(
     }
 
     /* Open/Create driver key information */
-#if _WIN32_WINNT >= 0x502
     hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&ClassGuid, KEY_READ | KEY_WRITE);
-#else
-    hKey = SETUPDI_CreateDrvKey(set->HKLM, deviceInfo, (UUID*)&ClassGuid, KEY_ALL_ACCESS);
-#endif
     if (hKey == INVALID_HANDLE_VALUE)
         goto cleanup;
     memcpy(&deviceInfo->ClassGuid, &ClassGuid, sizeof(GUID));
@@ -7567,15 +7543,9 @@ SetupDiInstallDevice(
     /* Open device registry key. DDInstall.HW AddReg commonly creates
      * nested subkeys such as "Interrupt Management\\..."; KEY_SET_VALUE
      * alone cannot do that. */
-#if _WIN32_WINNT >= 0x502
     hKey = SETUPDI_OpenDevKey(((struct DeviceInfoSet *)DeviceInfoSet)->HKLM,
                               (struct DeviceInfo *)DeviceInfoData->Reserved,
                               KEY_READ | KEY_WRITE);
-#else
-    hKey = SETUPDI_OpenDevKey(((struct DeviceInfoSet *)DeviceInfoSet)->HKLM,
-                              (struct DeviceInfo *)DeviceInfoData->Reserved,
-                              KEY_ALL_ACCESS);
-#endif
     if (hKey == INVALID_HANDLE_VALUE)
         goto cleanup;
 
@@ -7584,11 +7554,7 @@ SetupDiInstallDevice(
                          0,
                          NULL,
                          REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
                          KEY_READ | KEY_WRITE,
-#else
-                         KEY_ALL_ACCESS,
-#endif
                          NULL,
                          &hHwKey,
                          NULL);
@@ -7788,11 +7754,7 @@ HKEY SETUPDI_CreateDrvKey(HKEY RootKey, struct DeviceInfo *devInfo, UUID *ClassG
                 0,
                 NULL,
                 REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
                 KEY_READ | KEY_WRITE,
-#else
-                KEY_ALL_ACCESS,
-#endif
                 NULL,
                 &hKey,
                 &Disposition);
@@ -7846,11 +7808,7 @@ HKEY SETUPDI_CreateDrvKey(HKEY RootKey, struct DeviceInfo *devInfo, UUID *ClassG
             0,
             NULL,
             REG_OPTION_NON_VOLATILE,
-#if _WIN32_WINNT >= 0x502
             KEY_READ | KEY_WRITE,
-#else
-            KEY_ALL_ACCESS,
-#endif
             NULL,
             &hKey,
             &Disposition);
