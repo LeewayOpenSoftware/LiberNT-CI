@@ -22,7 +22,7 @@
  *   --scale  cell scale factor 1..4 (default 1)
  *   --list   print the visual styles of the store (%windir%\Resources\Themes\<name>\*.msstyles) and exit
  *   --style  apply that style file first (SetSystemVisualStyle, the same call the Personalization page makes)
- *   --all-styles  for every style of the store: apply it, repaint, write DIR\<name>.bmp and DIR\<name>.csv, then put the
+ *   --all-styles  for every style of the store (DIR is created): apply it, repaint, write DIR\<name>.bmp and DIR\<name>.csv, then put the
  *                 (a style that stalls for longer than 15 s + 4 x wait ends the run with DIR\<name>.stall.txt naming the
  *                 stage and the cell, exit code 7)
  *            style that was active back and exit
@@ -547,6 +547,12 @@ int wmain(int argc, wchar_t **argv)
     }
     if (style && FAILED(apply_style(style))) return 4;
 
+    if (g_batch_dir && !CreateDirectoryW(g_batch_dir, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+    {
+        wprintf(L"themetest: cannot create %ls (error %lu)\n", g_batch_dir, GetLastError());
+        return 3;
+    }
+
     memset(&wc, 0, sizeof(wc));
     wc.lpfnWndProc = wndproc;
     wc.hInstance = GetModuleHandleW(NULL);
@@ -558,8 +564,9 @@ int wmain(int argc, wchar_t **argv)
     need = layout_size();
     SetRect(&wr, 0, 0, need.cx, need.cy);
     AdjustWindowRect(&wr, WS_OVERLAPPEDWINDOW, TRUE);
+    /* top left: a tall window placed by the system can end under the taskbar, which the screen copy then shows */
     hwnd = CreateWindowExW(0, wc.lpszClassName, L"themetest", WS_OVERLAPPEDWINDOW,
-                           CW_USEDEFAULT, CW_USEDEFAULT, wr.right - wr.left, wr.bottom - wr.top, NULL, build_menu(), wc.hInstance, NULL);
+                           0, 0, wr.right - wr.left, wr.bottom - wr.top, NULL, build_menu(), wc.hInstance, NULL);
     if (!hwnd) return 2;
     ShowWindow(hwnd, SW_SHOWNORMAL);
     UpdateWindow(hwnd);
