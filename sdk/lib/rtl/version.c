@@ -199,6 +199,11 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
                 return STATUS_REVISION_MISMATCH;
             }
         }
+        else
+        {
+            /* Unconditioned field: neutral, so the next level re-fetches its own. */
+            Condition = VER_EQUAL;
+        }
     }
 
     if (DoNextCheck)
@@ -223,6 +228,10 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
                     return STATUS_REVISION_MISMATCH;
                 }
             }
+            else
+            {
+                Condition = VER_EQUAL;
+            }
         }
 
         if (DoNextCheck && (TypeMask & VER_SERVICEPACKMAJOR))
@@ -244,6 +253,10 @@ RtlVerifyVersionInfo(IN PRTL_OSVERSIONINFOEXW VersionInfo,
                 {
                     return STATUS_REVISION_MISMATCH;
                 }
+            }
+            else
+            {
+                Condition = VER_EQUAL;
             }
 
             if (DoNextCheck && (TypeMask & VER_SERVICEPACKMINOR))

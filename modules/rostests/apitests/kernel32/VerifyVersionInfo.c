@@ -109,4 +109,19 @@ START_TEST(VerifyVersionInfo)
     Result = VerifyVersionInfoW(&TestVersion, VER_MAJORVERSION, CondMask);
     ok(Result == TRUE, "Table row: major >= current: got %d (expected TRUE)\n", Result);
     ok(GetLastError() == ERROR_SUCCESS, "Table row: gle %lu (expected 0)\n", GetLastError());
+
+    /* Windows compares a lower listed field with its own condition even when a
+     * higher listed field carries condition 0 (bit 63 set): host probe A'/B'
+     * (2026-11-16) - minor >= current+1 must fail. */
+    CopyMemory(&TestVersion, &CurrentVersion, sizeof(TestVersion));
+    TestVersion.dwMinorVersion = CurrentVersion.dwMinorVersion + 1;
+    SetLastError(ERROR_SUCCESS);
+    CondMask = VerSetConditionMask(0, VER_MINORVERSION, VER_GREATER_EQUAL);
+    Result = VerifyVersionInfoW(&TestVersion,
+                                VER_MAJORVERSION | VER_MINORVERSION,
+                                CondMask);
+    ok(Result == FALSE, "Unconditioned major, minor >= current+1: got %d (expected FALSE)\n", Result);
+    ok(GetLastError() == ERROR_OLD_WIN_VERSION,
+       "Unconditioned major, minor >= current+1: gle %lu (expected %u)\n",
+       GetLastError(), ERROR_OLD_WIN_VERSION);
 }
