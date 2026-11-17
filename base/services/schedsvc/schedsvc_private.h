@@ -31,4 +31,26 @@ void check_task_time(void);
 void load_at_tasks(void);
 void check_missed_task_time(void);
 
+/* Task Scheduler 2.0 engine (engine.c) */
+void engine_start(void);
+void engine_stop(void);
+void engine_notify_logon(void);
+void engine_notify_changed(void);
+BOOL engine_valid_path(const WCHAR *path);
+HRESULT engine_check_register(const WCHAR *path, const WCHAR *xml, DWORD flags, WCHAR **registrant);
+void engine_task_registered(const WCHAR *path, WCHAR *registrant);
+HRESULT engine_check_task_access(const WCHAR *path);
+void engine_task_deleted(const WCHAR *path);
+HRESULT engine_run(const WCHAR *path, DWORD n_args, const WCHAR **args, DWORD flags, DWORD session_id,
+                   const WCHAR *user, GUID *guid);
+HRESULT engine_stop_task(const WCHAR *path);
+HRESULT engine_stop_instance(const GUID *guid);
+HRESULT engine_enum_instances(const WCHAR *path, DWORD *n_guids, GUID **guids);
+HRESULT engine_instance_info(const GUID *guid, WCHAR **path, DWORD *state, WCHAR **action, DWORD *pid);
+HRESULT engine_last_run(const WCHAR *path, SYSTEMTIME *last, DWORD *code);
+HRESULT engine_missed_runs(const WCHAR *path, DWORD *runs);
+DWORD engine_task_state(const WCHAR *path, BOOL enabled);
+HRESULT engine_runtimes(const WCHAR *path, const SYSTEMTIME *start, const SYSTEMTIME *end, DWORD n_requested,
+                        DWORD *n_runtimes, SYSTEMTIME **runtimes);
+
 #endif /* __WINE_SCHEDSVC_PRIVATE_H__ */
