@@ -122,6 +122,7 @@ static const struct
 static const WCHAR UsageText[] =
     L"PNPUTIL [/add-driver <...> | /delete-driver <...> |\n"
     L"         /export-driver <...> | /enum-drivers | /enum-devices [<...>] |\n"
+    L"         /enum-classes [<...>] |\n"
     L"         /disable-device <...> | /enable-device <...> |\n"
     L"         /restart-device <...> | /remove-device <...> |\n"
     L"         /rollback-device <...> | /scan-devices | /?]\n"
@@ -159,6 +160,13 @@ static const WCHAR UsageText[] =
     L"      /class <name | GUID> - filter by device class name or GUID.\n"
     L"      /problem [<code>] - filter by devices with problems or specific problem code.\n"
     L"      /ids - display hardware IDs and compatible IDs.\n"
+    L"\n"
+    L"  /enum-classes [/class <name | GUID>] [/services] [/format <txt | xml | csv>]\n"
+    L"                [/output-file [<filename>]]\n"
+    L"\n"
+    L"    Enumerate all device setup classes on the system.\n"
+    L"      /class <name | GUID> - filter by class name or GUID.\n"
+    L"      /services - display the class default service and filter drivers.\n"
     L"\n"
     L"  /disable-device <instance ID> [/reboot]\n"
     L"  /enable-device <instance ID> [/reboot]\n"
@@ -2751,6 +2759,360 @@ CommandExportDriver(
     return (INT)Result;
 }
 
+/* /enum-classes ************************************************************/
+
+typedef struct _CLASS_ROW
+{
+    GUID Guid;
+    WCHAR Name[MAX_CLASS_NAME_LEN];
+    WCHAR Description[LINE_LEN];
+    WCHAR Service[256];
+    WCHAR Upper[1024];
+    WCHAR Lower[1024];
+} CLASS_ROW;
+
+/* Read a class registry value as a REG_SZ / REG_MULTI_SZ into Buffer as a double-NUL list. */
+static VOID
+ReadClassValue(
+    _In_ HKEY hKey,
+    _In_ PCWSTR Name,
+    _Out_writes_(Cch) PWCHAR Buffer,
+    _In_ DWORD Cch)
+{
+    DWORD Type, Size = (Cch - 2) * sizeof(WCHAR);
+
+    Buffer[0] = Buffer[1] = UNICODE_NULL;
+    if (RegQueryValueExW(hKey, Name, NULL, &Type, (PBYTE)Buffer, &Size) != ERROR_SUCCESS ||
+        (Type != REG_SZ && Type != REG_MULTI_SZ))
+    {
+        Buffer[0] = Buffer[1] = UNICODE_NULL;
+        return;
+    }
+    Buffer[Size / sizeof(WCHAR)] = UNICODE_NULL;
+    Buffer[Size / sizeof(WCHAR) + 1] = UNICODE_NULL;
+}
+
+/* One "Label<pad>Value" text line, value starting at column 28. */
+static VOID
+ClassTxtOne(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Label,
+    _In_ PCWSTR Value)
+{
+    WCHAR Line[2048];
+
+    _snwprintf(Line, _countof(Line) - 1, L"%-28ls%ls%ls", Label, Value,
+               Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
+    Line[_countof(Line) - 1] = UNICODE_NULL;
+    OutputPutsRaw(Output, Line);
+}
+
+/* A double-NUL list as text lines; extra values get blank-label lines. */
+static VOID
+ClassTxtList(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Label,
+    _In_ PCWSTR List)
+{
+    WCHAR Line[2048];
+    PCWSTR Eol = Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n";
+
+    for (; *List; List += wcslen(List) + 1)
+    {
+        _snwprintf(Line, _countof(Line) - 1, L"%-28ls%ls%ls", Label, List, Eol);
+        Line[_countof(Line) - 1] = UNICODE_NULL;
+        OutputPutsRaw(Output, Line);
+        Label = L"";
+    }
+}
+
+static VOID
+ClassCsvList(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR List,
+    _In_ BOOL Last)
+{
+    WCHAR Joined[2048] = L"";
+    PCWSTR p;
+
+    for (p = List; *p; p += wcslen(p) + 1)
+    {
+        if (Joined[0] && wcslen(Joined) + 1 < _countof(Joined))
+            wcscat(Joined, L";");
+        if (wcslen(Joined) + wcslen(p) + 1 < _countof(Joined))
+            wcscat(Joined, p);
+    }
+    OutputCsvField(Output, Joined, Last);
+}
+
+static VOID
+ClassXmlList(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Element,
+    _In_ PCWSTR List)
+{
+    PCWSTR p;
+
+    if (!*List)
+        return;
+    OutputPutsRaw(Output, L"        <");
+    OutputPutsRaw(Output, Element);
+    OutputPutsRaw(Output, L">\r\n");
+    for (p = List; *p; p += wcslen(p) + 1)
+    {
+        OutputPutsRaw(Output, L"            <Service>");
+        OutputXmlText(Output, p);
+        OutputPutsRaw(Output, L"</Service>\r\n");
+    }
+    OutputPutsRaw(Output, L"        </");
+    OutputPutsRaw(Output, Element);
+    OutputPutsRaw(Output, L">\r\n");
+}
+
+static INT
+CommandEnumClasses(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    OUTPUT_CONTEXT Output = { OutputText, INVALID_HANDLE_VALUE };
+    WCHAR DefaultName[MAX_PATH], GuidText[64], XmlVersion[64], XmlCommand[512];
+    WCHAR Failure[256] = L"";
+    PCWSTR OutputFile = NULL, ClassFilter = NULL;
+    BOOL OutputFileGiven = FALSE, Services = FALSE;
+    GUID FilterGuid, *Guids = NULL;
+    BOOL FilterIsGuid = FALSE;
+    CLASS_ROW *Row = NULL;
+    DWORD Capacity = 64, Required = 0, Index, Count = 0, Error = ERROR_SUCCESS;
+    PCWSTR Eol;
+    INT i;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (IsOption(argv[i], L"class") && i + 1 < argc)
+        {
+            ClassFilter = argv[++i];
+        }
+        else if (IsOption(argv[i], L"services"))
+        {
+            Services = TRUE;
+        }
+        else if (IsOption(argv[i], L"format") && i + 1 < argc)
+        {
+            i++;
+            if (_wcsicmp(argv[i], L"txt") == 0)
+                Output.Format = OutputText;
+            else if (_wcsicmp(argv[i], L"xml") == 0)
+                Output.Format = OutputXml;
+            else if (_wcsicmp(argv[i], L"csv") == 0)
+                Output.Format = OutputCsv;
+            else
+                return ERROR_INVALID_PARAMETER;
+        }
+        else if (IsOption(argv[i], L"output-file"))
+        {
+            OutputFileGiven = TRUE;
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                OutputFile = argv[++i];
+        }
+        else
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+
+    if (OutputFileGiven)
+    {
+        if (!OutputFile)
+        {
+            BuildDefaultOutputName(Output.Format, DefaultName, _countof(DefaultName));
+            OutputFile = DefaultName;
+        }
+        Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (Output.File == INVALID_HANDLE_VALUE)
+            return ReportOutputOpenFailure(GetLastError());
+    }
+    Eol = Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n";
+
+    if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
+        PrintHeader();
+
+    if (ClassFilter && ClassFilter[0] == L'{' && CLSIDFromString(ClassFilter, &FilterGuid) == S_OK)
+        FilterIsGuid = TRUE;
+
+    if (Output.Format == OutputCsv)
+    {
+        OutputPutsRaw(&Output, L"ClassName,ClassGuid,ClassDescription");
+        if (Services)
+            OutputPutsRaw(&Output, L",DefaultService,UpperFilters,LowerFilters");
+        OutputPutsRaw(&Output, L"\r\n");
+    }
+    else if (Output.Format == OutputXml)
+    {
+        GetOutputVersion(XmlVersion, _countof(XmlVersion));
+        lstrcpynW(XmlCommand, L"/enum-classes", _countof(XmlCommand));
+        for (i = 0; i < argc; i++)
+        {
+            if (lstrlenW(XmlCommand) + lstrlenW(argv[i]) + 2 >= (INT)_countof(XmlCommand))
+                break;
+            lstrcatW(XmlCommand, L" ");
+            lstrcatW(XmlCommand, argv[i]);
+        }
+        OutputPutsRaw(&Output, L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+        OutputPutsRaw(&Output, L"<PnpUtil Version=\"");
+        OutputXmlText(&Output, XmlVersion);
+        OutputPutsRaw(&Output, L"\" Command=\"");
+        OutputXmlText(&Output, XmlCommand);
+        OutputPutsRaw(&Output, L"\">\r\n");
+    }
+
+    Row = HeapAlloc(GetProcessHeap(), 0, sizeof(*Row));
+    for (;;)
+    {
+        Guids = HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(GUID));
+        if (!Guids || !Row)
+        {
+            Error = ERROR_NOT_ENOUGH_MEMORY;
+            break;
+        }
+        if (SetupDiBuildClassInfoList(0, Guids, Capacity, &Required))
+            break;
+        Error = GetLastError();
+        HeapFree(GetProcessHeap(), 0, Guids);
+        Guids = NULL;
+        if (Error != ERROR_INSUFFICIENT_BUFFER || Required <= Capacity)
+            break;
+        Capacity = Required;
+        Error = ERROR_SUCCESS;
+    }
+
+    if (Error == ERROR_SUCCESS)
+    {
+        for (Index = 0; Index < Required; Index++)
+        {
+            HKEY hKey;
+
+            if (!SetupDiClassNameFromGuidW(&Guids[Index], Row->Name, _countof(Row->Name), NULL))
+                continue;
+            if (ClassFilter)
+            {
+                if (FilterIsGuid ? !IsEqualGUID(&Guids[Index], &FilterGuid) : _wcsicmp(ClassFilter, Row->Name) != 0)
+                    continue;
+            }
+            Row->Guid = Guids[Index];
+            Row->Description[0] = UNICODE_NULL;
+            SetupDiGetClassDescriptionW(&Guids[Index], Row->Description, _countof(Row->Description), NULL);
+            Row->Service[0] = Row->Service[1] = UNICODE_NULL;
+            Row->Upper[0] = Row->Upper[1] = UNICODE_NULL;
+            Row->Lower[0] = Row->Lower[1] = UNICODE_NULL;
+            if (Services)
+            {
+                hKey = SetupDiOpenClassRegKey(&Guids[Index], KEY_READ);
+                if (hKey != INVALID_HANDLE_VALUE)
+                {
+                    ReadClassValue(hKey, L"Service", Row->Service, _countof(Row->Service));
+                    ReadClassValue(hKey, L"UpperFilters", Row->Upper, _countof(Row->Upper));
+                    ReadClassValue(hKey, L"LowerFilters", Row->Lower, _countof(Row->Lower));
+                    RegCloseKey(hKey);
+                }
+            }
+
+            StringFromGUID2(&Row->Guid, GuidText, _countof(GuidText));
+            CharLowerW(GuidText);
+
+            if (Output.Format == OutputCsv)
+            {
+                OutputCsvField(&Output, Row->Name, FALSE);
+                OutputCsvField(&Output, GuidText, FALSE);
+                OutputCsvField(&Output, Row->Description, !Services);
+                if (Services)
+                {
+                    OutputCsvField(&Output, Row->Service, FALSE);
+                    ClassCsvList(&Output, Row->Upper, FALSE);
+                    ClassCsvList(&Output, Row->Lower, TRUE);
+                }
+            }
+            else if (Output.Format == OutputXml)
+            {
+                OutputPutsRaw(&Output, L"    <SetupClass ClassName=\"");
+                OutputXmlText(&Output, Row->Name);
+                OutputPutsRaw(&Output, L"\" ClassGuid=\"");
+                OutputXmlText(&Output, GuidText);
+                OutputPutsRaw(&Output, L"\">\r\n");
+                if (Row->Description[0])
+                {
+                    OutputPutsRaw(&Output, L"        <Description>");
+                    OutputXmlText(&Output, Row->Description);
+                    OutputPutsRaw(&Output, L"</Description>\r\n");
+                }
+                if (Row->Service[0])
+                {
+                    OutputPutsRaw(&Output, L"        <DefaultService>");
+                    OutputXmlText(&Output, Row->Service);
+                    OutputPutsRaw(&Output, L"</DefaultService>\r\n");
+                }
+                ClassXmlList(&Output, L"UpperFilters", Row->Upper);
+                ClassXmlList(&Output, L"LowerFilters", Row->Lower);
+                OutputPutsRaw(&Output, L"    </SetupClass>\r\n");
+            }
+            else
+            {
+                ClassTxtOne(&Output, L"Class Name:", Row->Name);
+                ClassTxtOne(&Output, L"Class GUID:", GuidText);
+                if (Row->Description[0])
+                    ClassTxtOne(&Output, L"Class Description:", Row->Description);
+                if (Services)
+                {
+                    ClassTxtList(&Output, L"Default Service:", Row->Service);
+                    ClassTxtList(&Output, L"Upper Filters:", Row->Upper);
+                    ClassTxtList(&Output, L"Lower Filters:", Row->Lower);
+                }
+                OutputPutsRaw(&Output, Eol);
+            }
+            Count++;
+        }
+        if (Count == 0)
+            Error = ERROR_FILE_NOT_FOUND;
+    }
+
+    if (Error != ERROR_SUCCESS)
+    {
+        FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, Error, 0,
+                       Failure, _countof(Failure) - 1, NULL);
+        {
+            WCHAR Text[512];
+
+            _snwprintf(Text, _countof(Text) - 1, L"Failed to enumerate classes: %ls", Failure);
+            Text[_countof(Text) - 1] = UNICODE_NULL;
+            if (Output.Format == OutputXml)
+                OutputXmlText(&Output, Text);
+            else
+                OutputPutsRaw(&Output, Text);
+            if (!Failure[0])
+                OutputPutsRaw(&Output, Eol);
+            OutputPutsRaw(&Output, Eol);
+        }
+    }
+
+    if (Output.Format == OutputXml)
+        OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
+
+    if (Guids)
+        HeapFree(GetProcessHeap(), 0, Guids);
+    if (Row)
+        HeapFree(GetProcessHeap(), 0, Row);
+
+    if (Output.File != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(Output.File);
+        Output.File = INVALID_HANDLE_VALUE;
+        ConResPrintf(StdOut, IDS_OUTPUT_WRITTEN, OutputFile);
+        ConPuts(StdOut, L"\n");
+    }
+
+    return (INT)Error;
+}
+
 int
 wmain(
     int argc,
@@ -2786,6 +3148,10 @@ wmain(
     else if (IsOption(Command, L"f") && argc >= 1 && IsOption(argv[0], L"d"))
     {
         Result = CommandDeleteDriver(argc - 1, argv + 1, TRUE);
+    }
+    else if (IsOption(Command, L"enum-classes"))
+    {
+        Result = CommandEnumClasses(argc, argv);
     }
     else if (IsOption(Command, L"export-driver"))
     {
