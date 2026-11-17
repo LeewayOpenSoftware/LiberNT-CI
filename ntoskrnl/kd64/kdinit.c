@@ -112,7 +112,7 @@ KdUpdateDataBlock(VOID)
 {
     /* Update the KeUserCallbackDispatcher pointer */
     KdDebuggerDataBlock.KeUserCallbackDispatcher =
-        (ULONG_PTR)KeUserCallbackDispatcher;
+        (ULPTR64)(ULONG_PTR)KeUserCallbackDispatcher;
 }
 
 BOOLEAN
