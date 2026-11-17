@@ -2083,6 +2083,7 @@ NdisMCreateLog(
 
     if (Adapter->NdisMiniportBlock.Log)
     {
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
         *LogHandle = NULL;
         return NDIS_STATUS_FAILURE;
     }
@@ -2090,6 +2091,7 @@ NdisMCreateLog(
     Log = ExAllocatePool(NonPagedPool, Size + sizeof(NDIS_LOG));
     if (!Log)
     {
+        KeReleaseSpinLock(&Adapter->NdisMiniportBlock.Lock, OldIrql);
         *LogHandle = NULL;
         return NDIS_STATUS_RESOURCES;
     }
