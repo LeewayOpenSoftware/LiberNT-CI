@@ -4,6 +4,7 @@ list(APPEND SOURCE
     BuildDriverInfoInstalledFlag.c
     DelRegRootGuard.c
     QueueHandleGuard.c
+    DriverStoreVerifyHashOnce.c
     ClassInstallParams.c
     devclass.c
     DeviceDescription.c
@@ -28,5 +29,5 @@ list(APPEND SOURCE
 
 add_executable(setupapi_apitest ${SOURCE})
 set_module_type(setupapi_apitest win32cui)
-add_importlibs(setupapi_apitest advapi32 cfgmgr32 setupapi user32 ole32 msvcrt kernel32)
+add_importlibs(setupapi_apitest advapi32 cfgmgr32 setupapi user32 ole32 wintrust crypt32 msvcrt kernel32)
 add_rostests_file(TARGET setupapi_apitest)

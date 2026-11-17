@@ -6,6 +6,7 @@ extern void func_BuildDriverInfoBadInf(void);
 extern void func_BuildDriverInfoInstalledFlag(void);
 extern void func_DelRegRootGuard(void);
 extern void func_QueueHandleGuard(void);
+extern void func_DriverStoreVerifyHashOnce(void);
 extern void func_ClassInstallParams(void);
 extern void func_devclass(void);
 extern void func_DeviceDescription(void);
@@ -33,6 +34,7 @@ const struct test winetest_testlist[] =
     { "BuildDriverInfoInstalledFlag", func_BuildDriverInfoInstalledFlag },
     { "DelRegRootGuard", func_DelRegRootGuard },
     { "QueueHandleGuard", func_QueueHandleGuard },
+    { "DriverStoreVerifyHashOnce", func_DriverStoreVerifyHashOnce },
     { "ClassInstallParams", func_ClassInstallParams },
     { "devclass", func_devclass },
     { "DeviceDescription", func_DeviceDescription },
