@@ -81,8 +81,10 @@
 #define XHCI_UCX_SLOT_EP0_RING_OFFSET  (2 * PAGE_SIZE)
 #define XHCI_UCX_SLOT_DESC_OFFSET      (2 * PAGE_SIZE + XHCI_UCX_EP0_RING_TRBS * sizeof(XHCI_TRB))
 #define XHCI_UCX_DESC_BUFFER_SIZE      512
-#define XHCI_UCX_COMMAND_TIMEOUT_MS    500
+#define XHCI_UCX_COMMAND_TIMEOUT_MS    5000   /* Address Device on real hardware can take seconds */
+#define XHCI_UCX_COMMAND_ABORT_TIMEOUT_MS 5000
 #define XHCI_UCX_TRANSFER_TIMEOUT_MS   1000
+#define XHCI_UCX_CRCR_CA               0x00000004   /* Command Abort (hardware.h has CS and CRR only) */
 #define XHCI_UCX_PORT_RESET_TIMEOUT_MS 500
 #define XHCI_UCX_WAIT_SLICE_MS         10
 #define XHCI_UCX_INPUT_CTX_ADD_SLOT    (1u << 0)
@@ -150,7 +152,8 @@ typedef struct _XHCI_UCX_SLOT
     BOOLEAN Addressed;
     UCHAR SlotId;                 /* assigned by Enable Slot, 1..MaxSlots */
     UCHAR PortId;                 /* root port, 1..NumberOfPorts */
-    UCHAR Speed;                  /* PORTSC speed id */
+    UCHAR Speed;                  /* PORTSC speed id, as programmed into the slot context */
+    UCHAR SpeedClass;             /* speed id used for packet-size rules: SUPER for any USB3 port (SSP, PSI ids) */
     UCHAR UsbAddress;             /* from the output slot context after Address Device */
     ULONG Ep0MaxPacket;
     ULONG Ep0Enqueue;
@@ -261,6 +264,7 @@ typedef struct _XHCI_UCX_DEVICE
      * completions by TRB pointer and signals the events.
      */
     WDFWORKITEM EnumWorkItem;
+    volatile LONG EnumStopped;    /* set under EventRingLock by D0Exit/SurpriseRemoval: no enqueue, work item exits */
     XHCI_UCX_SLOT Slots[XHCI_UCX_MAX_ENUM_SLOTS];
     UCHAR PortEnumState[XHCI_MAX_PORTS + 1];
     KEVENT CommandEvent;
@@ -1169,6 +1173,12 @@ XhciUcxDrainEventRing(
                 ULONG CompletionCode = XHCI_GET_COMPLETION_CODE(*(volatile ULONG *)&EventTrb->Status);
                 ULONG SlotId = XHCI_TRB_TO_SLOT_ID(Control);
 
+                if (CompletionCode == XHCI_COMPLETION_COMMAND_RING_STOPPED)
+                {
+                    /* Result of our own CRCR.CA after a command timeout; the abort path polls CRR */
+                    XHCI_UCX_TRACE("command ring stopped");
+                    break;
+                }
                 if (!XhciUcxPointerInCommandRing(Dev, CommandPointer))
                 {
                     XHCI_UCX_LOG("ignoring command completion outside our command ring (code=%lu slot=%lu)",
@@ -1425,7 +1435,7 @@ XhciUcxWaitForCompletion(
     _In_ ULONG TimeoutMs)
 {
     LARGE_INTEGER Slice;
-    ULONG Elapsed = 0;
+    ULONGLONG Deadline = KeQueryInterruptTime() + (ULONGLONG)TimeoutMs * 10000;
 
     Slice.QuadPart = -(LONGLONG)XHCI_UCX_WAIT_SLICE_MS * 10000;
 
@@ -1438,11 +1448,17 @@ XhciUcxWaitForCompletion(
         if (Dev->FatalError || !Dev->ControllerRunning)
             return FALSE;
 
+        /* Manual drain (emulator poll quirk): a port change seen here is reported
+         * like the DPC does, and the work item rescans after this transfer */
         if (XhciUcxDrainEventRing(Dev, FALSE))
+        {
             InterlockedExchange(&Dev->PortRescanNeeded, 1);
+            if (Dev->RootHub != NULL)
+                UcxRootHubPortChanged(Dev->RootHub);
+        }
 
-        Elapsed += XHCI_UCX_WAIT_SLICE_MS;
-        if (InterlockedCompareExchange(Done, 0, 0) == 0 && Elapsed >= TimeoutMs)
+        /* Deadline in interrupt time: a timed wait rounds up to clock ticks */
+        if (InterlockedCompareExchange(Done, 0, 0) == 0 && KeQueryInterruptTime() >= Deadline)
             return FALSE;
     }
 
@@ -1486,6 +1502,52 @@ XhciUcxQueueCommandTrb(
     return TrbPa;
 }
 
+/*
+ * Command timed out: xHCI 4.6.1.2. Set CRCR.CA, wait for CRR = 0 (the Command
+ * Ring Stopped event is drained meanwhile), then point CRCR at the producer
+ * position so the stuck TRB is abandoned and the next doorbell restarts the
+ * ring. If the controller does not stop, it is treated as fatal.
+ */
+static
+VOID
+XhciUcxAbortCommandRing(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    PXHCI_OPERATIONAL_REGISTERS Op = Dev->OperationalRegisters;
+    ULONGLONG Restart;
+    ULONGLONG Deadline = KeQueryInterruptTime() + (ULONGLONG)XHCI_UCX_COMMAND_ABORT_TIMEOUT_MS * 10000;
+    LARGE_INTEGER Slice;
+
+    Slice.QuadPart = -(LONGLONG)1 * 10000;   /* 1 ms */
+
+    /* CA is honoured only while CRR = 1; while CRR = 1 the pointer bits of a write are ignored */
+    if (XHCI_UCX_READ_REG(&Op->CrCrLow) & XHCI_CRCR_CRR)
+    {
+        XHCI_UCX_WRITE_REG(&Op->CrCrLow, XHCI_UCX_CRCR_CA);
+        XHCI_UCX_WRITE_REG(&Op->CrCrHigh, 0);
+
+        while (XHCI_UCX_READ_REG(&Op->CrCrLow) & XHCI_CRCR_CRR)
+        {
+            if (Dev->FatalError || KeQueryInterruptTime() >= Deadline)
+            {
+                XHCI_UCX_LOG("command ring did not stop after CRCR.CA within %u ms: controller marked fatal",
+                             XHCI_UCX_COMMAND_ABORT_TIMEOUT_MS);
+                Dev->FatalError = TRUE;
+                return;
+            }
+            KeDelayExecutionThread(KernelMode, FALSE, &Slice);
+            (VOID)XhciUcxDrainEventRing(Dev, FALSE);
+        }
+    }
+
+    /* Ring stopped: restart at the producer position with the producer cycle (RCS) */
+    Restart = (ULONGLONG)XhciUcxHcPhysical(Dev, Dev->CmdRingOffset).QuadPart +
+              (ULONGLONG)Dev->CmdRingEnqueue * sizeof(XHCI_TRB);
+    XHCI_UCX_WRITE_REG(&Op->CrCrLow, (ULONG)(Restart & 0xFFFFFFFF) | (Dev->CmdRingCycle & XHCI_TRB_CYCLE));
+    XHCI_UCX_WRITE_REG(&Op->CrCrHigh, (ULONG)(Restart >> 32));
+    XHCI_UCX_LOG("command ring aborted and restarted at index %lu", Dev->CmdRingEnqueue);
+}
+
 /* Issue one command and wait for its completion event (PASSIVE_LEVEL). */
 static
 NTSTATUS
@@ -1523,8 +1585,10 @@ XhciUcxSendCommand(
 
     if (!XhciUcxWaitForCompletion(Dev, &Dev->CommandEvent, &Dev->PendingCommandDone, XHCI_UCX_COMMAND_TIMEOUT_MS))
     {
-        Dev->PendingCommandTrb = 0;
         XHCI_UCX_LOG("command type %lu timed out after %u ms", TrbType, XHCI_UCX_COMMAND_TIMEOUT_MS);
+        if (Dev->ControllerRunning && !Dev->FatalError)
+            XhciUcxAbortCommandRing(Dev);
+        Dev->PendingCommandTrb = 0;
         return STATUS_IO_TIMEOUT;
     }
     Dev->PendingCommandTrb = 0;
@@ -1751,7 +1815,7 @@ XhciUcxResetPort(
     volatile ULONG *PortSc = &Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl;
     LARGE_INTEGER Slice;
     ULONG Value = XHCI_UCX_READ_REG(PortSc);
-    ULONG Elapsed = 0;
+    ULONGLONG Deadline = KeQueryInterruptTime() + (ULONGLONG)XHCI_UCX_PORT_RESET_TIMEOUT_MS * 10000;
 
     *SpeedOut = 0;
 
@@ -1761,16 +1825,17 @@ XhciUcxResetPort(
     if (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] != 3)
         XhciUcxWritePortSc(Dev, PortId, XHCI_PORTSC_PR);
 
-    Slice.QuadPart = -(LONGLONG)1 * 10000;   /* 1 ms */
-    while (Elapsed < XHCI_UCX_PORT_RESET_TIMEOUT_MS)
+    Slice.QuadPart = -(LONGLONG)1 * 10000;   /* 1 ms (rounds up to a clock tick; the deadline is real time) */
+    for (;;)
     {
         Value = XHCI_UCX_READ_REG(PortSc);
         if ((Value & XHCI_PORTSC_CCS) == 0)
             return FALSE;
         if ((Value & XHCI_PORTSC_PED) && (Value & XHCI_PORTSC_PR) == 0)
             break;
+        if (KeQueryInterruptTime() >= Deadline)
+            break;
         KeDelayExecutionThread(KernelMode, FALSE, &Slice);
-        Elapsed++;
     }
 
     if ((Value & XHCI_PORTSC_PED) == 0 || (Value & XHCI_PORTSC_PR) != 0)
@@ -1780,9 +1845,15 @@ XhciUcxResetPort(
         return FALSE;
     }
 
-    /* Acknowledge the change bits this reset produced (W1C), keeping PP and the other RW bits */
-    if (Value & XHCI_PORTSC_CHANGE_MASK)
-        XHCI_UCX_WRITE_REG(PortSc, Value & ~(XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_WPR | XHCI_PORTSC_LWS));
+    /* Acknowledge only the change bits this reset produced (PRC, PEC, WRC), keeping PP and
+     * the other RW bits; CSC/OCC/PLC/CEC stay for the port-change path to see and report */
+    if (Value & (XHCI_PORTSC_PRC | XHCI_PORTSC_PEC | XHCI_PORTSC_WRC))
+    {
+        XHCI_UCX_WRITE_REG(PortSc,
+                           (Value & ~(XHCI_PORTSC_CHANGE_MASK | XHCI_PORTSC_PED | XHCI_PORTSC_PR |
+                                      XHCI_PORTSC_WPR | XHCI_PORTSC_LWS)) |
+                           (Value & (XHCI_PORTSC_PRC | XHCI_PORTSC_PEC | XHCI_PORTSC_WRC)));
+    }
 
     /* USB 2.0 9.2.6.2: 10 ms reset recovery before the first request */
     Slice.QuadPart = -(LONGLONG)10 * 10000;
@@ -1964,9 +2035,32 @@ XhciUcxBulkTransfer(
 
     if (!XhciUcxWaitForCompletion(Dev, &Dev->TransferEvent, &Dev->PendingTransferDone, XHCI_UCX_BULK_TIMEOUT_MS))
     {
+        ULONG StopCode = 0;
+        ULONG DeqCode = 0;
+        NTSTATUS StopStatus;
+
         Dev->PendingStatusTrb = 0;
         XHCI_UCX_LOG("STEP4 slot %u: bulk %s transfer (%lu bytes) timed out after %u ms",
                      Slot->SlotId, DataIn ? "IN" : "OUT", Length, XHCI_UCX_BULK_TIMEOUT_MS);
+
+        /* Take the TD off the endpoint: Stop Endpoint, then dequeue = producer position */
+        if (Dev->ControllerRunning && !Dev->FatalError)
+        {
+            ULONG Fields = XHCI_COMMAND_SLOT_FIELD(Slot->SlotId) | XHCI_UCX_COMMAND_EP_FIELD(Dci);
+
+            StopStatus = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_STOP_EP, 0, Fields, &StopCode, NULL);
+            if (NT_SUCCESS(StopStatus))
+            {
+                ULONGLONG Dequeue = (ULONGLONG)XhciUcxHcPhysical(Dev, RingOffset).QuadPart +
+                                    (ULONGLONG)*Enqueue * sizeof(XHCI_TRB);
+
+                StopStatus = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_SET_DEQ, Dequeue | (*RingCycle & XHCI_TRB_CYCLE),
+                                                Fields, &DeqCode, NULL);
+            }
+            XHCI_UCX_LOG("STEP4 slot %u: endpoint 0x%02x stopped after timeout rc=0x%08lX (stop code=%lu, dequeue code=%lu)",
+                         Slot->SlotId, DataIn ? Slot->BulkInAddress : Slot->BulkOutAddress,
+                         (ULONG)StopStatus, StopCode, DeqCode);
+        }
         return STATUS_IO_TIMEOUT;
     }
     Dev->PendingStatusTrb = 0;
@@ -2408,12 +2502,18 @@ XhciUcxProbeStorage(
         return;
     }
 
-    InMps = XhciUcxBulkMaxPacketLegal(Slot->Speed, Bot.BulkInMaxPacket);
-    OutMps = XhciUcxBulkMaxPacketLegal(Slot->Speed, Bot.BulkOutMaxPacket);
+    if (Bot.ConfigurationValue == 0)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: SEC-1 reject, bConfigurationValue=0", Slot->SlotId);
+        return;
+    }
+
+    InMps = XhciUcxBulkMaxPacketLegal(Slot->SpeedClass, Bot.BulkInMaxPacket);
+    OutMps = XhciUcxBulkMaxPacketLegal(Slot->SpeedClass, Bot.BulkOutMaxPacket);
     if (InMps == 0 || OutMps == 0)
     {
-        XHCI_UCX_LOG("STEP4 slot %u: SEC-1 reject, bulk wMaxPacketSize IN=%u OUT=%u illegal for speed id %u",
-                     Slot->SlotId, Bot.BulkInMaxPacket, Bot.BulkOutMaxPacket, Slot->Speed);
+        XHCI_UCX_LOG("STEP4 slot %u: SEC-1 reject, bulk wMaxPacketSize IN=%u OUT=%u illegal for speed id %u (class %u)",
+                     Slot->SlotId, Bot.BulkInMaxPacket, Bot.BulkOutMaxPacket, Slot->Speed, Slot->SpeedClass);
         return;
     }
 
@@ -2577,15 +2677,29 @@ XhciUcxEnumeratePort(
     }
     Slot->PortId = (UCHAR)PortId;
     Slot->Speed = (UCHAR)Speed;
-    Slot->Ep0MaxPacket = (Speed == XHCI_PORTSC_SPEED_SUPER) ? 512 :
-                         (Speed == XHCI_PORTSC_SPEED_HIGH) ? 64 : 8;
-    XHCI_UCX_LOG("STEP3 port %lu enabled: speed id %lu, initial EP0 MPS %lu", PortId, Speed, Slot->Ep0MaxPacket);
+    /* Packet-size rules follow the port's protocol: any USB3 port (SuperSpeed,
+     * SuperSpeedPlus, vendor PSI ids above 4) uses the SuperSpeed rules */
+    Slot->SpeedClass = (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] == 3) ? XHCI_PORTSC_SPEED_SUPER : (UCHAR)Speed;
+    Slot->Ep0MaxPacket = (Slot->SpeedClass == XHCI_PORTSC_SPEED_SUPER) ? 512 :
+                         (Slot->SpeedClass == XHCI_PORTSC_SPEED_HIGH) ? 64 : 8;
+    XHCI_UCX_LOG("STEP3 port %lu enabled: speed id %lu (class %u), initial EP0 MPS %lu",
+                 PortId, Speed, Slot->SpeedClass, Slot->Ep0MaxPacket);
 
     /* Enable Slot */
     Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0, &Code, &SlotId);
     if (!NT_SUCCESS(Status) || SlotId == 0 || SlotId > Dev->MaxSlots || XhciUcxFindSlotById(Dev, SlotId) != NULL)
     {
         XHCI_UCX_LOG("STEP3 port %lu: Enable Slot failed rc=0x%08lX code=%lu slot=%u", PortId, (ULONG)Status, Code, SlotId);
+        if (NT_SUCCESS(Status) && SlotId != 0 && SlotId <= Dev->MaxSlots && XhciUcxFindSlotById(Dev, SlotId) != NULL)
+        {
+            /* The controller handed out an id we already own: give the new one back, keep the owner */
+            ULONG DisableCode = 0;
+            NTSTATUS DisableStatus = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_DISABLE_SLOT, 0,
+                                                        XHCI_COMMAND_SLOT_FIELD(SlotId), &DisableCode, NULL);
+
+            XHCI_UCX_LOG("STEP3 port %lu: duplicate slot id %u returned, Disable Slot rc=0x%08lX code=%lu",
+                         PortId, SlotId, (ULONG)DisableStatus, DisableCode);
+        }
         Slot->SlotId = 0;
         XhciUcxReleaseSlot(Dev, Slot, FALSE);
         Dev->PortEnumState[PortId] = XHCI_UCX_PORT_FAILED;
@@ -2644,11 +2758,11 @@ XhciUcxEnumeratePort(
         Dev->PortEnumState[PortId] = XHCI_UCX_PORT_FAILED;
         return;
     }
-    DescriptorMps = XhciUcxEp0MaxPacketFromDescriptor(Speed, DevDesc->bMaxPacketSize0);
+    DescriptorMps = XhciUcxEp0MaxPacketFromDescriptor(Slot->SpeedClass, DevDesc->bMaxPacketSize0);
     if (DescriptorMps == 0)
     {
-        XHCI_UCX_LOG("STEP3 slot %u: SEC-1 reject, bMaxPacketSize0=%u illegal for speed id %lu",
-                     SlotId, DevDesc->bMaxPacketSize0, Speed);
+        XHCI_UCX_LOG("STEP3 slot %u: SEC-1 reject, bMaxPacketSize0=%u illegal for speed id %lu (class %u)",
+                     SlotId, DevDesc->bMaxPacketSize0, Speed, Slot->SpeedClass);
         XhciUcxReleaseSlot(Dev, Slot, TRUE);
         Dev->PortEnumState[PortId] = XHCI_UCX_PORT_FAILED;
         return;
@@ -2735,7 +2849,8 @@ XhciUcxEvtEnumWorkItem(
 
         InterlockedExchange(&Dev->PortRescanNeeded, 0);
 
-        if (!Dev->ControllerRunning || Dev->FatalError || Dev->OperationalRegisters == NULL || Dev->HcVa == NULL)
+        if (InterlockedCompareExchange(&Dev->EnumStopped, 0, 0) != 0 ||
+            !Dev->ControllerRunning || Dev->FatalError || Dev->OperationalRegisters == NULL || Dev->HcVa == NULL)
             return;
 
         for (Port = 1; Port <= Dev->NumberOfPorts && Port <= XHCI_MAX_PORTS; Port++)
@@ -2759,6 +2874,27 @@ XhciUcxEvtEnumWorkItem(
                 XhciUcxEnumeratePort(Dev, Port);
         }
     } while (InterlockedCompareExchange(&Dev->PortRescanNeeded, 0, 0) != 0 && ++Pass < 4);
+}
+
+/*
+ * Queue the enumeration work item unless enumeration has been stopped. The
+ * check and the enqueue happen under EventRingLock, the same lock under which
+ * D0Exit/SurpriseRemoval set EnumStopped before flushing the work item: an
+ * enqueue either precedes the flag (and the flush waits for it) or is refused.
+ */
+static
+VOID
+XhciUcxRequestPortRescan(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    KIRQL OldIrql;
+
+    InterlockedExchange(&Dev->PortRescanNeeded, 1);
+
+    KeAcquireSpinLock(&Dev->EventRingLock, &OldIrql);
+    if (Dev->EnumWorkItem != NULL && InterlockedCompareExchange(&Dev->EnumStopped, 0, 0) == 0)
+        WdfWorkItemEnqueue(Dev->EnumWorkItem);
+    KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
 }
 
 /* --------------------------------------------------------------------------
@@ -2913,9 +3049,7 @@ XhciUcxEvtInterruptDpc(
                 UcxRootHubPortChanged(Dev->RootHub);
             }
             /* Step 3: reconcile ports with device slots at PASSIVE_LEVEL */
-            InterlockedExchange(&Dev->PortRescanNeeded, 1);
-            if (Dev->EnumWorkItem != NULL)
-                WdfWorkItemEnqueue(Dev->EnumWorkItem);
+            XhciUcxRequestPortRescan(Dev);
         }
     }
 }
@@ -3260,6 +3394,7 @@ XhciUcxEvtDeviceD0Entry(
     /* The reset below wipes every slot in hardware: drop the software view too */
     XhciUcxForgetAllSlots(Dev, FALSE);
 
+    InterlockedExchange(&Dev->EnumStopped, 0);
     Dev->FatalError = FALSE;
     Dev->PendingUsbSts = 0;
 
@@ -3324,9 +3459,7 @@ XhciUcxEvtDeviceD0EntryPostInterruptsEnabled(
             XHCI_UCX_LOG("initial root hub port change -> UcxRootHubPortChanged");
             UcxRootHubPortChanged(Dev->RootHub);
         }
-        InterlockedExchange(&Dev->PortRescanNeeded, 1);
-        if (Dev->EnumWorkItem != NULL)
-            WdfWorkItemEnqueue(Dev->EnumWorkItem);
+        XhciUcxRequestPortRescan(Dev);
     }
 
     XHCI_UCX_LOG("STEP2 DONE: interrupter 0 armed (IMAN=%08lx), event ring live",
@@ -3352,7 +3485,12 @@ XhciUcxEvtDeviceD0ExitPreInterruptsDisabled(
     if (Dev->OperationalRegisters == NULL || Dev->RuntimeRegisters == NULL)
         return STATUS_SUCCESS;
 
-    /* Let an in-flight enumeration finish (its waits are bounded), then release the slots */
+    /* Stop enumeration first (no further enqueue, a running pass exits at its next
+     * check), let the in-flight pass finish (bounded waits), then release the slots.
+     * The interrupter stays armed meanwhile; a port change now only sets PortRescanNeeded. */
+    KeAcquireSpinLock(&Dev->EventRingLock, &OldIrql);
+    InterlockedExchange(&Dev->EnumStopped, 1);
+    KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
     if (Dev->EnumWorkItem != NULL)
         WdfWorkItemFlush(Dev->EnumWorkItem);
     XhciUcxForgetAllSlots(Dev, TRUE);
@@ -3396,6 +3534,7 @@ XhciUcxEvtDeviceSurpriseRemoval(
     KeAcquireSpinLock(&Dev->EventRingLock, &OldIrql);
     Dev->FatalError = TRUE;
     Dev->ControllerRunning = FALSE;
+    InterlockedExchange(&Dev->EnumStopped, 1);
     KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
     XHCI_UCX_LOG("SurpriseRemoval");
 }
