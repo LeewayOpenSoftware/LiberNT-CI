@@ -6,7 +6,7 @@
 #
 
 add_library(ucxclient_test MODULE ucxclient_test.c)
-set_module_type(ucxclient_test kmdfdriver)
+set_module_type(ucxclient_test kmdfdriver KMDF_VERSION 1.33)
 target_include_directories(ucxclient_test PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/ucx/1.0)
 target_link_libraries(ucxclient_test ucxstub ntoskrnl_vista libcntpr ${PSEH_LIB})
 add_importlibs(ucxclient_test ntoskrnl hal)
