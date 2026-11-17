@@ -123,4 +123,12 @@ START_TEST(PsSilo)
     ok_eq_hex(Status, STATUS_SUCCESS);
 
     PsUnregisterSiloMonitor(Monitor);
+
+    /* Silo queries: with no server silos every query resolves to the host */
+    ok(PsGetCurrentSilo() == PsGetHostSilo(), "current silo is not the host\n");
+    ok(PsGetEffectiveServerSilo(PsGetHostSilo()) == PsGetHostSilo(),
+       "effective server silo is not the host\n");
+    ok(PsGetParentSilo(NULL) == PsGetHostSilo(), "host parent is not the host\n");
+    ok(PsGetThreadServerSilo(PsGetCurrentThread()) == NULL,
+       "current thread reports a server silo\n");
 }

@@ -2892,14 +2892,14 @@
 @ stdcall -arch=win64 PsFreeSiloContextSlot(long)
 @ stdcall PsGetCurrentServerSilo()
 @ stub -arch=win64 PsGetCurrentServerSiloName
-@ stub -arch=win64 PsGetCurrentSilo
+@ stdcall -arch=win64 PsGetCurrentSilo()
 @ stub -arch=win64 PsGetEffectiveContainerId
-@ stub -arch=win64 PsGetEffectiveServerSilo
+@ stdcall -arch=win64 PsGetEffectiveServerSilo(ptr)
 @ stdcall PsGetHostSilo()
 @ stdcall PsGetJobProperty(ptr ptr)
 @ stub -arch=win64 PsGetJobServerSilo
 @ stub -arch=win64 PsGetJobSilo
-@ stub -arch=win64 PsGetParentSilo
+@ stdcall -arch=win64 PsGetParentSilo(ptr)
 @ stdcall -arch=win64 PsGetPermanentSiloContext(ptr long ptr)
 @ stub -arch=win64 PsGetProcessActiveThreadCount
 @ stdcall PsGetProcessCommonJob(ptr ptr)
@@ -2919,7 +2919,7 @@
 @ stub -arch=win64 PsGetThreadCreateTime
 @ stub -arch=win64 PsGetThreadExitStatus
 @ stdcall PsGetThreadProperty(ptr ptr long)
-@ stub -arch=win64 PsGetThreadServerSilo
+@ stdcall -arch=win64 PsGetThreadServerSilo(ptr)
 @ stdcall PsGetWin32KFilterSet()
 @ stdcall -arch=win64 PsInsertPermanentSiloContext(ptr long ptr)
 @ stdcall -arch=win64 PsInsertSiloContext(ptr long ptr)

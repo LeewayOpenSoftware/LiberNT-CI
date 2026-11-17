@@ -165,7 +165,35 @@ NTAPI
 PsUnregisterSiloMonitor(
   IN PSILO_MONITOR SiloMonitor);
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetCurrentSilo(
+  VOID);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetParentSilo(
+  IN PEJOB Job OPTIONAL);
+
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetEffectiveServerSilo(
+  IN PESILO Silo);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+PESILO
+NTAPI
+PsGetThreadServerSilo(
+  IN PETHREAD Thread);
+
 $endif (_NTDDK_)
+
 $if (_NTIFS_)
 #if (NTDDI_VERSION >= NTDDI_WIN8)
 NTKERNELAPI

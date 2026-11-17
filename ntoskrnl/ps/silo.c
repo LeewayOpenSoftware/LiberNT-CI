@@ -515,6 +515,41 @@ PsGetSiloMonitorContextSlot(
     return SiloMonitor->ContextSlot;
 }
 
+PESILO
+NTAPI
+PsGetCurrentSilo(VOID)
+{
+    return NULL;
+}
+
+PESILO
+NTAPI
+PsGetParentSilo(
+    _In_opt_ PEJOB Job)
+{
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Job);
+    return NULL;
+}
+
+PESILO
+NTAPI
+PsGetEffectiveServerSilo(
+    _In_ PESILO Silo)
+{
+    UNREFERENCED_PARAMETER(Silo);
+    return NULL;
+}
+
+PESILO
+NTAPI
+PsGetThreadServerSilo(
+    _In_ PETHREAD Thread)
+{
+    UNREFERENCED_PARAMETER(Thread);
+    return NULL;
+}
+
 /* INITIALIZATION ************************************************************/
 
 VOID
