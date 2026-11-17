@@ -4055,6 +4055,7 @@ CommandEnumContainers(
     CONT_DEVICE *Devices = NULL;
     CONT_ENTRY *Entries = NULL;
     DWORD DeviceCount = 0, DeviceCapacity = 0, EntryCount = 0, Index, Shown = 0, k;
+    BOOL NoMemory = FALSE;
     HDEVINFO Set;
     INT i;
 
@@ -4170,7 +4171,10 @@ CommandEnumContainers(
                                              : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Grown));
 
                 if (!Grown)
+                {
+                    NoMemory = TRUE;
                     break;
+                }
                 Devices = Grown;
                 DeviceCapacity = Capacity;
             }
@@ -4179,9 +4183,11 @@ CommandEnumContainers(
             Dev->Id[0] = UNICODE_NULL;
             SetupDiGetDeviceInstanceIdW(Set, &Info, Dev->Id, _countof(Dev->Id), NULL);
             Dev->Description[0] = UNICODE_NULL;
+            ZeroMemory(Buffer, sizeof(Buffer));
             if (!SetupDiGetDeviceRegistryPropertyW(Set, &Info, SPDRP_FRIENDLYNAME, NULL, (PBYTE)Buffer,
                                                    sizeof(Buffer) - sizeof(WCHAR), NULL) || !Buffer[0])
             {
+                ZeroMemory(Buffer, sizeof(Buffer));
                 if (!SetupDiGetDeviceRegistryPropertyW(Set, &Info, SPDRP_DEVICEDESC, NULL, (PBYTE)Buffer,
                                                        sizeof(Buffer) - sizeof(WCHAR), NULL))
                 {
@@ -4207,7 +4213,11 @@ CommandEnumContainers(
 
     /* Group by container, in order of first appearance. */
     if (DeviceCount)
+    {
         Entries = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DeviceCount * sizeof(*Entries));
+        if (!Entries)
+            NoMemory = TRUE;
+    }
     for (Index = 0; Entries && Index < DeviceCount; Index++)
     {
         for (k = 0; k < EntryCount; k++)
@@ -4245,7 +4255,11 @@ CommandEnumContainers(
             Shown++;
         }
 
-        if (Shown == 0 && IdFilter && !IdMatched)
+        if (NoMemory)
+        {
+            /* Out of memory is an error, not an empty system. */
+        }
+        else if (Shown == 0 && IdFilter && !IdMatched)
         {
             /* Windows prints nothing for an unknown container id and returns the not-found error. */
         }
@@ -4267,6 +4281,8 @@ CommandEnumContainers(
             HeapFree(GetProcessHeap(), 0, Entries);
         if (Devices)
             HeapFree(GetProcessHeap(), 0, Devices);
+        if (NoMemory)
+            return ERROR_NOT_ENOUGH_MEMORY;
         return (Shown == 0 && IdFilter && !IdMatched) ? ERROR_FILE_NOT_FOUND : ERROR_SUCCESS;
     }
 }
