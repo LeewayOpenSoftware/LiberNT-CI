@@ -787,3 +787,40 @@ ScmReadDelayedAutoStart(
 
     return (dwValue != 0);
 }
+
+
+/* Read the REG_MULTI_SZ RequiredPrivileges value. ERROR_FILE_NOT_FOUND when the service does not define it. */
+DWORD
+ScmReadRequiredPrivileges(
+    _In_ HKEY hServiceKey,
+    _Out_ LPWSTR *ppmszPrivileges,
+    _Out_ LPDWORD pcbPrivileges)
+{
+    DWORD dwError, dwSize = 0, dwType = REG_NONE;
+    LPWSTR pmsz;
+
+    *ppmszPrivileges = NULL;
+    *pcbPrivileges = 0;
+
+    dwError = RegQueryValueExW(hServiceKey, L"RequiredPrivileges", NULL, &dwType, NULL, &dwSize);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+    if (dwType != REG_MULTI_SZ)
+        return ERROR_FILE_NOT_FOUND;
+
+    /* room for two extra terminators: the stored value is trusted no further than that */
+    pmsz = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, dwSize + 2 * sizeof(WCHAR));
+    if (pmsz == NULL)
+        return ERROR_NOT_ENOUGH_MEMORY;
+
+    dwError = RegQueryValueExW(hServiceKey, L"RequiredPrivileges", NULL, &dwType, (LPBYTE)pmsz, &dwSize);
+    if (dwError != ERROR_SUCCESS)
+    {
+        HeapFree(GetProcessHeap(), 0, pmsz);
+        return dwError;
+    }
+
+    *ppmszPrivileges = pmsz;
+    *pcbPrivileges = dwSize + 2 * sizeof(WCHAR);
+    return ERROR_SUCCESS;
+}

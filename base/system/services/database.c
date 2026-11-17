@@ -765,6 +765,25 @@ ScmCreateOrReferenceServiceImage(PSERVICE pService)
             goto done;
         }
 
+        /* Fail closed: a service with RequiredPrivileges never starts with the unfiltered token */
+        dwError = ScmApplyRequiredPrivileges(pService, pServiceImage);
+        if (dwError != ERROR_SUCCESS)
+        {
+            DPRINT1("ScmApplyRequiredPrivileges() failed (Error %lu)\n", dwError);
+            if (pServiceImage->hProfile != NULL)
+            {
+                ScmEnableBackupRestorePrivileges(pServiceImage->hToken, TRUE);
+                UnloadUserProfile(pServiceImage->hToken, pServiceImage->hProfile);
+                ScmEnableBackupRestorePrivileges(pServiceImage->hToken, FALSE);
+            }
+            if (pServiceImage->hToken != NULL)
+                CloseHandle(pServiceImage->hToken);
+            if (pServiceImage->hProcessToken != NULL)
+                CloseHandle(pServiceImage->hProcessToken);
+            HeapFree(GetProcessHeap(), 0, pServiceImage);
+            goto done;
+        }
+
         bSecurityService = ScmIsSecurityService(pServiceImage);
 
         /* Create the control pipe */
@@ -785,6 +804,8 @@ ScmCreateOrReferenceServiceImage(PSERVICE pService)
             /* Close the logon token */
             if (pServiceImage->hToken != NULL)
                 CloseHandle(pServiceImage->hToken);
+            if (pServiceImage->hProcessToken != NULL)
+                CloseHandle(pServiceImage->hProcessToken);
 
             /* Release the service image */
             HeapFree(GetProcessHeap(), 0, pServiceImage);
@@ -865,6 +886,8 @@ ScmRemoveServiceImage(PSERVICE_IMAGE pServiceImage)
     /* Close the logon token */
     if (pServiceImage->hToken != NULL)
         CloseHandle(pServiceImage->hToken);
+    if (pServiceImage->hProcessToken != NULL)
+        CloseHandle(pServiceImage->hProcessToken);
 
     /* Release the service image */
     HeapFree(GetProcessHeap(), 0, pServiceImage);
@@ -2302,6 +2325,225 @@ ScmWaitForServiceConnect(PSERVICE Service)
 }
 
 
+
+static
+BOOL
+ScmMultiSzContains(
+    _In_ LPCWSTR pmsz,
+    _In_ LPCWSTR pszName)
+{
+    while (*pmsz != L'\0')
+    {
+        if (_wcsicmp(pmsz, pszName) == 0)
+            return TRUE;
+        pmsz += wcslen(pmsz) + 1;
+    }
+    return FALSE;
+}
+
+/*
+ * Collect the RequiredPrivileges of every service of the image into one MULTI_SZ.
+ * Returns FALSE when ANY service of the image does not define the value: Windows keeps every
+ * privilege of the token then (a share-process image hosts all its services with one token).
+ */
+static
+BOOL
+ScmCollectRequiredPrivileges(
+    _In_ PSERVICE pService,
+    _In_ PSERVICE_IMAGE pImage,
+    _Out_ LPWSTR *ppmszUnion,
+    _Out_ LPDWORD pcchUnion)
+{
+    PLIST_ENTRY ServiceEntry;
+    PSERVICE pMember;
+    LPWSTR pmszAll = NULL, pmszOne, pszImagePath, pNew;
+    DWORD cchAll = 1, cbOne, cchOne;
+    HKEY hKey;
+    BOOL bShare = (pService->Status.dwServiceType & SERVICE_WIN32_SHARE_PROCESS) != 0;
+    BOOL bAll = TRUE;
+
+    *ppmszUnion = NULL;
+    *pcchUnion = 0;
+
+    pmszAll = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 2 * sizeof(WCHAR));
+    if (pmszAll == NULL)
+        return FALSE;
+
+    ServiceEntry = ServiceListHead.Flink;
+    while (ServiceEntry != &ServiceListHead)
+    {
+        pMember = CONTAINING_RECORD(ServiceEntry, SERVICE, ServiceListEntry);
+        ServiceEntry = ServiceEntry->Flink;
+
+        if (pMember != pService)
+        {
+            if (!bShare || !(pMember->Status.dwServiceType & SERVICE_WIN32_SHARE_PROCESS))
+                continue;
+        }
+
+        if (ScmOpenServiceKey(pMember->lpServiceName, KEY_READ, &hKey) != ERROR_SUCCESS)
+        {
+            bAll = FALSE;
+            break;
+        }
+
+        if (pMember != pService)
+        {
+            /* only the services that run in this very image count */
+            pszImagePath = NULL;
+            if (ScmReadString(hKey, L"ImagePath", &pszImagePath) != ERROR_SUCCESS ||
+                _wcsicmp(pszImagePath, pImage->pszImagePath) != 0)
+            {
+                if (pszImagePath != NULL)
+                    HeapFree(GetProcessHeap(), 0, pszImagePath);
+                RegCloseKey(hKey);
+                continue;
+            }
+            HeapFree(GetProcessHeap(), 0, pszImagePath);
+        }
+
+        pmszOne = NULL;
+        if (ScmReadRequiredPrivileges(hKey, &pmszOne, &cbOne) != ERROR_SUCCESS)
+        {
+            RegCloseKey(hKey);
+            bAll = FALSE;
+            break;
+        }
+        RegCloseKey(hKey);
+
+        cchOne = cbOne / sizeof(WCHAR);
+        pNew = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (cchAll + cchOne + 1) * sizeof(WCHAR));
+        if (pNew == NULL)
+        {
+            HeapFree(GetProcessHeap(), 0, pmszOne);
+            bAll = FALSE;
+            break;
+        }
+        RtlCopyMemory(pNew, pmszAll, (cchAll - 1) * sizeof(WCHAR));
+        RtlCopyMemory(pNew + (cchAll - 1), pmszOne, cchOne * sizeof(WCHAR));
+        cchAll = (cchAll - 1) + cchOne;
+        /* the copied value ended with extra terminators: normalise to exactly one terminating empty string */
+        while (cchAll >= 2 && pNew[cchAll - 1] == L'\0' && pNew[cchAll - 2] == L'\0')
+            cchAll--;
+        pNew[cchAll] = L'\0';
+        cchAll++;
+        HeapFree(GetProcessHeap(), 0, pmszAll);
+        HeapFree(GetProcessHeap(), 0, pmszOne);
+        pmszAll = pNew;
+    }
+
+    if (!bAll)
+    {
+        HeapFree(GetProcessHeap(), 0, pmszAll);
+        return FALSE;
+    }
+
+    *ppmszUnion = pmszAll;
+    *pcchUnion = cchAll;
+    return TRUE;
+}
+
+/*
+ * SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO: build the token the service process runs with.
+ * The base token is the logon token of the account (user, LocalService, NetworkService) or, for
+ * LocalSystem, a primary duplicate of the SCM token. Every privilege that is not required is deleted;
+ * SeChangeNotifyPrivilege is always kept (Windows keeps it for every service). The original image
+ * token stays untouched because the user profile load/unload needs its backup/restore privileges.
+ * Nothing changes (and no token is created) when the service does not define RequiredPrivileges.
+ * On any error the caller must NOT start the service.
+ */
+DWORD
+ScmApplyRequiredPrivileges(
+    _In_ PSERVICE pService,
+    _Inout_ PSERVICE_IMAGE pImage)
+{
+    LPWSTR pmszUnion = NULL;
+    DWORD cchUnion = 0, cb = 0, i, nDelete = 0, cchName;
+    HANDLE hSelf = NULL, hBase = NULL, hNew = NULL;
+    BOOL bOwnBase = FALSE;
+    PTOKEN_PRIVILEGES pTokPriv = NULL;
+    PLUID_AND_ATTRIBUTES pDelete = NULL;
+    WCHAR szName[128];
+    DWORD dwError = ERROR_SUCCESS;
+
+    if (!ScmCollectRequiredPrivileges(pService, pImage, &pmszUnion, &cchUnion))
+        return ERROR_SUCCESS;
+
+    if (pImage->hToken != NULL)
+    {
+        hBase = pImage->hToken;
+    }
+    else
+    {
+        /* LocalSystem: duplicate the SCM token as a primary token */
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &hSelf) ||
+            !DuplicateTokenEx(hSelf, MAXIMUM_ALLOWED, NULL, SecurityImpersonation, TokenPrimary, &hBase))
+        {
+            dwError = GetLastError();
+            goto done;
+        }
+        bOwnBase = TRUE;
+    }
+
+    GetTokenInformation(hBase, TokenPrivileges, NULL, 0, &cb);
+    pTokPriv = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cb);
+    if (pTokPriv == NULL)
+    {
+        dwError = ERROR_NOT_ENOUGH_MEMORY;
+        goto done;
+    }
+    if (!GetTokenInformation(hBase, TokenPrivileges, pTokPriv, cb, &cb))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+
+    pDelete = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (pTokPriv->PrivilegeCount + 1) * sizeof(LUID_AND_ATTRIBUTES));
+    if (pDelete == NULL)
+    {
+        dwError = ERROR_NOT_ENOUGH_MEMORY;
+        goto done;
+    }
+
+    for (i = 0; i < pTokPriv->PrivilegeCount; i++)
+    {
+        cchName = ARRAYSIZE(szName);
+        if (!LookupPrivilegeNameW(NULL, &pTokPriv->Privileges[i].Luid, szName, &cchName))
+        {
+            /* an unnamed privilege cannot be required: remove it */
+            pDelete[nDelete++] = pTokPriv->Privileges[i];
+            continue;
+        }
+        if (_wcsicmp(szName, L"SeChangeNotifyPrivilege") == 0 || ScmMultiSzContains(pmszUnion, szName))
+            continue;
+        pDelete[nDelete++] = pTokPriv->Privileges[i];
+    }
+
+    if (nDelete == 0)
+        goto done;
+
+    if (!CreateRestrictedToken(hBase, 0, 0, NULL, nDelete, pDelete, 0, NULL, &hNew))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+
+    pImage->hProcessToken = hNew;
+
+done:
+    if (pDelete != NULL)
+        HeapFree(GetProcessHeap(), 0, pDelete);
+    if (pTokPriv != NULL)
+        HeapFree(GetProcessHeap(), 0, pTokPriv);
+    if (bOwnBase && hBase != NULL)
+        CloseHandle(hBase);
+    if (hSelf != NULL)
+        CloseHandle(hSelf);
+    if (pmszUnion != NULL)
+        HeapFree(GetProcessHeap(), 0, pmszUnion);
+    return dwError;
+}
+
 static DWORD
 ScmStartUserModeService(PSERVICE Service,
                         DWORD argc,
@@ -2324,11 +2566,12 @@ ScmStartUserModeService(PSERVICE Service,
     StartupInfo.cb = sizeof(StartupInfo);
     ZeroMemory(&ProcessInformation, sizeof(ProcessInformation));
 
-    if (Service->lpImage->hToken)
+    if (Service->lpImage->hToken || Service->lpImage->hProcessToken)
     {
-        /* User token: Run the service under the user account */
+        /* User token (or the privilege-filtered token): Run the service under it */
+        HANDLE hRunToken = Service->lpImage->hProcessToken ? Service->lpImage->hProcessToken : Service->lpImage->hToken;
 
-        if (!CreateEnvironmentBlock(&lpEnvironment, Service->lpImage->hToken, FALSE))
+        if (!CreateEnvironmentBlock(&lpEnvironment, hRunToken, FALSE))
         {
             /* We failed, run the service with the current environment */
             DPRINT1("CreateEnvironmentBlock() failed with error %d; service '%S' will run with current environment\n",
@@ -2337,11 +2580,11 @@ ScmStartUserModeService(PSERVICE Service,
         }
 
         /* Impersonate the new user */
-        Result = ImpersonateLoggedOnUser(Service->lpImage->hToken);
+        Result = ImpersonateLoggedOnUser(hRunToken);
         if (Result)
         {
             /* Launch the process in the user's logon session */
-            Result = CreateProcessAsUserW(Service->lpImage->hToken,
+            Result = CreateProcessAsUserW(hRunToken,
                                           NULL,
                                           Service->lpImage->pszImagePath,
                                           NULL,

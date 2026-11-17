@@ -54,6 +54,7 @@ typedef struct _SERVICE_IMAGE
     HANDLE hProcess;
     DWORD dwProcessId;
     HANDLE hToken;
+    HANDLE hProcessToken; /* privilege-filtered token used to create the process, or NULL */
     HANDLE hProfile;
     ULONG ImageSerial;
     BOOL bProcessWatched;
@@ -283,6 +284,8 @@ VOID ScmStartTriggers(VOID);
 
 VOID ScmPreshutdownServices(VOID);
 BOOLEAN ScmReadDelayedAutoStart(_In_ HKEY hServiceKey);
+DWORD ScmReadRequiredPrivileges(_In_ HKEY hServiceKey, _Out_ LPWSTR *ppmszPrivileges, _Out_ LPDWORD pcbPrivileges);
+DWORD ScmApplyRequiredPrivileges(_In_ PSERVICE pService, _Inout_ PSERVICE_IMAGE pImage);
 VOID ScmStartDelayedAutoStartServices(HANDLE hShutdownEvent);
 VOID ScmTriggersChanged(VOID);
 
