@@ -2432,6 +2432,7 @@ typedef struct _EPROCESS
     struct _PROCESS_NETWORK_COUNTERS *NetworkCounters;
     PROCESS_EXECUTION Execution;
     PVOID ThreadIndexTable;
+    volatile LONG KeepAliveCount;
 #if defined(_M_IX86)
     PVOID LdtInformation;
     PVOID VdmObjects;

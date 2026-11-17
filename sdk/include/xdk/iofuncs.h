@@ -3283,6 +3283,22 @@ NTAPI
 IoGetTransactionParameterBlock(
   _In_ PFILE_OBJECT FileObject);
 
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoDecrementKeepAliveCount(
+  _Inout_ struct _FILE_OBJECT *FileObject,
+  _Inout_ struct _EPROCESS *Process);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoIncrementKeepAliveCount(
+  _Inout_ struct _FILE_OBJECT *FileObject,
+  _Inout_ struct _EPROCESS *Process);
+
 NTKERNELAPI
 NTSTATUS
 NTAPI
