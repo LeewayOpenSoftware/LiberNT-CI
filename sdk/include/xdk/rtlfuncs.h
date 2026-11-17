@@ -1362,6 +1362,34 @@ RtlWalkFrameChain(
   _In_ ULONG Flags);
 
 $endif (_NTDDK_)
+#define FLUSH_NV_MEMORY_IN_FLAG_NO_DRAIN 0x00000001
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetNonVolatileToken(
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _Out_ PVOID *NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFreeNonVolatileToken(
+  _In_ PVOID NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlushNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
+
 $if (_NTIFS_)
 
 _Must_inspect_result_
@@ -2279,6 +2307,18 @@ RtlDecompressBuffer(
   _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
   _In_ ULONG CompressedBufferSize,
   _Out_ PULONG FinalUncompressedSize);
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressBufferEx(
+  _In_ USHORT CompressionFormat,
+  _Out_writes_bytes_to_(UncompressedBufferSize, *FinalUncompressedSize) PUCHAR UncompressedBuffer,
+  _In_ ULONG UncompressedBufferSize,
+  _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
+  _In_ ULONG CompressedBufferSize,
+  _Out_ PULONG FinalUncompressedSize,
+  _In_ PVOID WorkSpace);
 
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI

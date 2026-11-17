@@ -3031,7 +3031,7 @@
 @ stdcall RtlCrc64(ptr long int64)
 @ stdcall RtlCreateAtomTableEx(long long ptr)
 @ stub -arch=win64 RtlCreateHashTableEx
-@ stub -arch=win64 RtlDecompressBufferEx
+@ stdcall -arch=win64 RtlDecompressBufferEx(long ptr long ptr long ptr ptr)
 @ stub -arch=win64 RtlDecompressBufferEx2
 @ stub -arch=win64 RtlDecompressFragmentEx
 @ stub -arch=win64 RtlDeleteElementGenericTableAvlEx
@@ -3059,9 +3059,9 @@
 @ stdcall -arch=win64 RtlFindSetBitsEx(ptr int64 int64) RtlFindSetBits64
 @ stdcall RtlFindUnicodeSubstring(ptr ptr long)
 @ stub -arch=win64 RtlFlushFeatureUsage
-@ stub -arch=win64 RtlFlushNonVolatileMemory
+@ stdcall -arch=win64 RtlFlushNonVolatileMemory(ptr ptr long long)
 @ stub -arch=win64 RtlFlushNonVolatileMemoryRanges
-@ stub -arch=win64 RtlFreeNonVolatileToken
+@ stdcall -arch=win64 RtlFreeNonVolatileToken(ptr)
 @ stub -arch=win64 RtlFreeUTF8String
 @ stdcall RtlGenerateClass5Guid(ptr ptr long ptr)
 @ stdcall RtlGetAcesBufferSize(ptr ptr)
@@ -3077,7 +3077,7 @@
 @ stdcall RtlGetIntegerAtom(wstr ptr)
 @ stub -arch=win64 RtlGetLastRange
 @ stdcall -version=0xA00+ RtlGetMultiTimePrecise(ptr long ptr)
-@ stub -arch=win64 RtlGetNonVolatileToken
+@ stdcall -arch=win64 RtlGetNonVolatileToken(ptr long ptr)
 @ stdcall RtlGetNtSystemRoot()
 @ stub -arch=win64 RtlGetPersistedStateLocation
 @ stdcall RtlGetProductInfo(long long long long ptr)
