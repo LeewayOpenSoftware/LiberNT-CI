@@ -636,6 +636,7 @@ struct device_container
     WCHAR *name;
     WCHAR *manufacturer;
     WCHAR *model;
+    WCHAR *model_number;
     WCHAR categories[128];
     ULONG categories_len;
     BOOL connected;
@@ -648,6 +649,7 @@ struct device_container_list
     ULONG len;
 };
 
+/* Windows takes categories from device metadata; this class mapping is only a heuristic. */
 static const struct
 {
     GUID class_guid;
@@ -708,6 +710,7 @@ static void device_container_list_free( struct device_container_list *list )
         free( list->items[i].name );
         free( list->items[i].manufacturer );
         free( list->items[i].model );
+        free( list->items[i].model_number );
     }
     free( list->items );
     list->items = NULL;
@@ -728,19 +731,64 @@ static struct device_container *device_container_find_or_add( struct device_cont
     return tmp;
 }
 
+static WCHAR *container_bios_string( HKEY key, const WCHAR *name )
+{
+    DWORD type, size = 0;
+    WCHAR *str;
+
+    if (RegQueryValueExW( key, name, NULL, &type, NULL, &size ) || type != REG_SZ || size < sizeof(WCHAR)) return NULL;
+    if (!(str = calloc( 1, size + sizeof(WCHAR) ))) return NULL;
+    if (RegQueryValueExW( key, name, NULL, &type, (BYTE *)str, &size ) || !str[0])
+    {
+        free( str );
+        return NULL;
+    }
+    return str;
+}
+
+/* The container of the machine itself carries the computer name and the SMBIOS identity. */
+static void container_describe_machine( struct device_container *container )
+{
+    WCHAR name[MAX_COMPUTERNAME_LENGTH + 1];
+    DWORD len = ARRAY_SIZE(name);
+    HKEY key;
+
+    if (GetComputerNameW( name, &len ) && name[0])
+    {
+        WCHAR *dup = wcsdup( name );
+
+        if (dup)
+        {
+            free( container->name );
+            container->name = dup;
+        }
+    }
+    if (RegOpenKeyExW( HKEY_LOCAL_MACHINE, L"HARDWARE\\DESCRIPTION\\System\\BIOS", 0, KEY_QUERY_VALUE, &key )) return;
+    free( container->manufacturer );
+    free( container->model );
+    free( container->model_number );
+    container->manufacturer = container_bios_string( key, L"SystemManufacturer" );
+    container->model = container_bios_string( key, L"SystemProductName" );
+    container->model_number = container_bios_string( key, L"SystemSKU" );
+    RegCloseKey( key );
+}
+
 static LSTATUS device_container_list_build( struct device_container_list *list )
 {
     ULONG ids_len = 0;
     WCHAR *ids, *id;
 
+    CONFIGRET ret = CR_BUFFER_SMALL;
+
     memset( list, 0, sizeof(*list) );
-    if (CM_Get_Device_ID_List_SizeW( &ids_len, NULL, 0 ) != CR_SUCCESS) return ERROR_SUCCESS;
-    if (!(ids = calloc( ids_len + 2, sizeof(WCHAR) ))) return ERROR_OUTOFMEMORY;
-    if (CM_Get_Device_ID_ListW( NULL, ids, ids_len + 1, 0 ) != CR_SUCCESS)
+    /* A device can arrive between the size and the list call; ask again. */
+    for (UINT attempt = 0; attempt < 8 && ret == CR_BUFFER_SMALL; attempt++)
     {
-        free( ids );
-        return ERROR_SUCCESS;
+        if (CM_Get_Device_ID_List_SizeW( &ids_len, NULL, 0 ) != CR_SUCCESS) return ERROR_SUCCESS;
+        if (!(ids = calloc( ids_len + 2, sizeof(WCHAR) ))) return ERROR_OUTOFMEMORY;
+        if ((ret = CM_Get_Device_ID_ListW( NULL, ids, ids_len + 1, 0 )) != CR_SUCCESS) free( ids );
     }
+    if (ret != CR_SUCCESS) return ERROR_SUCCESS;
 
     /* Present devices first, so the name and manufacturer come from a device that is really there. */
     for (UINT pass = 0; pass < 2; pass++)
@@ -788,11 +836,7 @@ static LSTATUS device_container_list_build( struct device_container_list *list )
                 container->name = container_node_string( node, &DEVPKEY_Device_FriendlyName );
                 if (!container->name) container->name = container_node_string( node, &DEVPKEY_Device_DeviceDesc );
             }
-            if (!container->model)
-            {
-                container->model = container_node_string( node, &DEVPKEY_Device_Model );
-                if (!container->model) container->model = container_node_string( node, &DEVPKEY_Device_DeviceDesc );
-            }
+            if (!container->model) container->model = container_node_string( node, &DEVPKEY_Device_Model );
             if (!container->manufacturer
                 && (text = container_node_string( node, &DEVPKEY_Device_Manufacturer )))
             {
@@ -804,6 +848,9 @@ static LSTATUS device_container_list_build( struct device_container_list *list )
     }
 
     free( ids );
+
+    for (ULONG i = 0; i < list->len; i++)
+        if (IsEqualGUID( &list->items[i].id, &machine_container_id )) container_describe_machine( list->items + i );
     return ERROR_SUCCESS;
 }
 
@@ -859,6 +906,10 @@ static LSTATUS device_container_get_properties( const struct device_container *c
         err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_ModelName,
                                              DEVPROP_TYPE_STRING, container->model,
                                              (wcslen( container->model ) + 1) * sizeof(WCHAR) );
+    if (!err && container->model_number)
+        err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_ModelNumber,
+                                             DEVPROP_TYPE_STRING, container->model_number,
+                                             (wcslen( container->model_number ) + 1) * sizeof(WCHAR) );
     if (!err && container->categories_len)
         err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_Category,
                                              DEVPROP_TYPE_STRING_LIST, container->categories,
