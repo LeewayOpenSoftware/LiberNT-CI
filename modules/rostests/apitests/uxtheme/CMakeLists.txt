@@ -17,6 +17,7 @@ list(APPEND SOURCE
     ThemeRendering.c
     ThemeShellTransition.c
     ThemeSysSize.c
+    TrustDefer.c
     TrustGate.c
     ../include/msgtrace.c
     testlist.c)

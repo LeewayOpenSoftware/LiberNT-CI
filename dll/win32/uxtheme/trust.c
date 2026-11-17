@@ -455,7 +455,7 @@ TrustFlushEvents(void)
     LPWSTR msgs[UXT_PENDING_MAX], note;
     LONG i, n, dropped;
 
-    if (!g_pendingCount || TrustUnderLoaderLock())
+    if (!g_pendingCount || UXTHEME_TrustInProcessInitAttach() || TrustUnderLoaderLock())
         return;
     while (InterlockedCompareExchange(&g_eventLock, 1, 0))
         YieldProcessor();
@@ -500,7 +500,7 @@ TrustEvent(LPCWSTR text, LPCWSTR name)
     if (!msg)
         return;
     StringCchPrintfW(msg, 160, L"%s: %s", text, name ? name : L"-");
-    if (TrustUnderLoaderLock())
+    if (UXTHEME_TrustInProcessInitAttach() || TrustUnderLoaderLock())
         TrustDeferEvent(msg);
     else
     {

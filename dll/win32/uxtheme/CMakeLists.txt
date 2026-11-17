@@ -22,6 +22,7 @@ list(APPEND SOURCE
     system.c
     themehooks.c
     trust.c
+    trustdefer.c
     uxini.c
     uxthemep.h
     window.c

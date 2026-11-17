@@ -37,7 +37,9 @@ BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, void *reserved)
     switch(fdwReason) {
         case DLL_PROCESS_ATTACH:
             DisableThreadLibraryCalls(hInstDLL);
+            UXTHEME_TrustBeginAttachDefer();
             UXTHEME_InitSystem(hInstDLL);
+            UXTHEME_TrustEndAttachDefer();
             break;
         case DLL_PROCESS_DETACH:
             if (reserved) break;
