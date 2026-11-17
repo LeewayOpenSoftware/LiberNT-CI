@@ -5252,13 +5252,15 @@ Done:
 }
 
 
-/* TODO: SERVICE_CONFIG_DELAYED_AUTO_START_INFO, SERVICE_SID_INFO, REQUIRED_PRIVILEGES_INFO and PRESHUTDOWN_INFO */
+/* TODO: SERVICE_SID_INFO and REQUIRED_PRIVILEGES_INFO */
 static BOOL
 ScmIsSupportedConfigLevel(DWORD dwInfoLevel)
 {
     return dwInfoLevel == SERVICE_CONFIG_DESCRIPTION ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS ||
+           dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS_FLAG ||
+           dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO ||
            dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO;
 }
 
@@ -5291,6 +5293,56 @@ ScmQueryFailureActionsFlag(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, L
 }
 
 
+static DWORD
+ScmSetDelayedAutoStart(HKEY hServiceKey, const SERVICE_DELAYED_AUTO_START_INFO *lpInfo)
+{
+    DWORD dwValue;
+
+    if (lpInfo == NULL)
+        return ERROR_INVALID_PARAMETER;
+    dwValue = lpInfo->fDelayedAutostart ? 1 : 0;
+    return RegSetValueExW(hServiceKey, L"DelayedAutostart", 0, REG_DWORD,
+                          (LPBYTE)&dwValue, sizeof(dwValue));
+}
+
+static DWORD
+ScmQueryDelayedAutoStart(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_DELAYED_AUTO_START_INFO lpInfo = (LPSERVICE_DELAYED_AUTO_START_INFO)lpBuffer;
+
+    *pcbBytesNeeded = sizeof(SERVICE_DELAYED_AUTO_START_INFO);
+    if (cbBufSize < sizeof(SERVICE_DELAYED_AUTO_START_INFO))
+        return ERROR_INSUFFICIENT_BUFFER;
+    lpInfo->fDelayedAutostart = ScmReadDelayedAutoStart(hServiceKey) ? TRUE : FALSE;
+    return ERROR_SUCCESS;
+}
+
+static DWORD
+ScmSetPreshutdownTimeout(HKEY hServiceKey, const SERVICE_PRESHUTDOWN_INFO *lpInfo)
+{
+    if (lpInfo == NULL)
+        return ERROR_INVALID_PARAMETER;
+    return RegSetValueExW(hServiceKey, L"PreshutdownTimeout", 0, REG_DWORD,
+                          (LPBYTE)&lpInfo->dwPreshutdownTimeout, sizeof(DWORD));
+}
+
+static DWORD
+ScmQueryPreshutdownTimeout(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_PRESHUTDOWN_INFO lpInfo = (LPSERVICE_PRESHUTDOWN_INFO)lpBuffer;
+    DWORD dwValue = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT, dwSize = sizeof(dwValue), dwType = REG_NONE;
+
+    *pcbBytesNeeded = sizeof(SERVICE_PRESHUTDOWN_INFO);
+    if (cbBufSize < sizeof(SERVICE_PRESHUTDOWN_INFO))
+        return ERROR_INSUFFICIENT_BUFFER;
+    if (RegQueryValueExW(hServiceKey, L"PreshutdownTimeout", NULL, &dwType,
+                         (LPBYTE)&dwValue, &dwSize) != ERROR_SUCCESS || dwType != REG_DWORD)
+        dwValue = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT;
+    lpInfo->dwPreshutdownTimeout = dwValue;
+    return ERROR_SUCCESS;
+}
+
+
 /* Function 36 */
 DWORD
 WINAPI
@@ -5315,6 +5367,10 @@ RChangeServiceConfig2A(
         InfoW.psfaf = Info.psfaf;
     else if (Info.dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
         InfoW.psti = Info.psti;
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+        InfoW.psda = Info.psda;
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+        InfoW.psps = Info.psps;
 
     if (InfoW.dwInfoLevel == SERVICE_CONFIG_DESCRIPTION)
     {
@@ -5775,6 +5831,16 @@ RChangeServiceConfig2W(
         if (dwError == ERROR_SUCCESS)
             ScmTriggersChanged();
     }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmSetDelayedAutoStart(hServiceKey, Info.psda);
+        if (dwError == ERROR_SUCCESS)
+            lpService->bDelayedAutoStart = Info.psda->fDelayedAutostart ? TRUE : FALSE;
+    }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmSetPreshutdownTimeout(hServiceKey, Info.psps);
+    }
 
 done:
     if (hServiceKey != NULL)
@@ -5996,6 +6062,14 @@ RQueryServiceConfig2A(
     {
         dwError = ScmQueryServiceTriggers(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
     }
+    else if (dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmQueryDelayedAutoStart(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmQueryPreshutdownTimeout(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
 
 done:
     /* Unlock the service database */
@@ -6202,6 +6276,14 @@ RQueryServiceConfig2W(
     else if (dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
     {
         dwError = ScmQueryServiceTriggers(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmQueryDelayedAutoStart(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmQueryPreshutdownTimeout(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
     }
 
 done:

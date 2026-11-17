@@ -1509,6 +1509,7 @@ CreateServiceListEntry(LPCWSTR lpServiceName,
 
     lpService->dwErrorControl = dwErrorControl;
     lpService->dwTag = dwTagId;
+    lpService->bDelayedAutoStart = ScmReadDelayedAutoStart(hServiceKey);
 
     if (lpGroup != NULL)
     {
@@ -2790,6 +2791,19 @@ ScmAutoStartServices(VOID)
              !ScmIsSafeBootServiceAllowed(CurrentService, hSafeBootKey)) ||
             ScmIsDeferredDuringSetup(CurrentService);
 
+        /*
+         * A delayed service that the checks above allow is not started now: remember it,
+         * so that the delayed pass starts only those (Safe Mode / setup rules already applied).
+         */
+        CurrentService->bDelayedStartPending = FALSE;
+        if (!CurrentService->ServiceVisited &&
+            CurrentService->dwStartType == SERVICE_AUTO_START &&
+            CurrentService->bDelayedAutoStart)
+        {
+            CurrentService->bDelayedStartPending = TRUE;
+            CurrentService->ServiceVisited = TRUE;
+        }
+
         ServiceEntry = ServiceEntry->Flink;
     }
 
@@ -2891,6 +2905,278 @@ ScmAutoStartServices(VOID)
 
     /* Release the critical section */
     LeaveCriticalSection(&ControlServiceCriticalSection);
+}
+
+
+#define SCM_DELAYED_AUTOSTART_DELAY     120000
+#define SCM_PRESHUTDOWN_POLL_MS         100
+
+static
+DWORD
+ScmGetPreshutdownTimeout(
+    _In_ PSERVICE lpService)
+{
+    HKEY hServiceKey = NULL;
+    DWORD dwTimeout = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT;
+    DWORD dwSize = sizeof(dwTimeout);
+    DWORD dwType = REG_NONE;
+
+    if (ScmOpenServiceKey(lpService->lpServiceName, KEY_READ, &hServiceKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hServiceKey, L"PreshutdownTimeout", NULL, &dwType,
+                             (LPBYTE)&dwTimeout, &dwSize) != ERROR_SUCCESS ||
+            dwType != REG_DWORD)
+        {
+            dwTimeout = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT;
+        }
+        RegCloseKey(hServiceKey);
+    }
+
+    return dwTimeout;
+}
+
+/*
+ * Upper bound of the whole preshutdown phase. The services process is stopped by winsrv after
+ * WaitToKillServiceTimeout (default 20 s, like winsrv), so waiting longer for a PreshutdownTimeout of 180 s
+ * would only get the SCM killed in the middle of the wait. All timeouts are therefore capped to this budget.
+ * FOLLOW-UP (not implemented): Windows lets winlogon start the preshutdown phase early, before the
+ * user-session logoff, which is what makes the full PreshutdownTimeout usable there.
+ */
+#define SCM_DEFAULT_SHUTDOWN_BUDGET 20000
+
+static
+DWORD
+ScmGetShutdownBudget(VOID)
+{
+    HKEY hKey;
+    DWORD dwBudget = SCM_DEFAULT_SHUTDOWN_BUDGET;
+    WCHAR szValue[16];
+    DWORD dwSize, dwType;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        dwSize = sizeof(szValue) - sizeof(WCHAR);
+        ZeroMemory(szValue, sizeof(szValue));
+        if (RegQueryValueExW(hKey, L"WaitToKillServiceTimeout", NULL, &dwType,
+                             (LPBYTE)szValue, &dwSize) == ERROR_SUCCESS)
+        {
+            if (dwType == REG_SZ)
+                dwBudget = wcstoul(szValue, NULL, 10);
+            else if (dwType == REG_DWORD && dwSize == sizeof(DWORD))
+                dwBudget = *(LPDWORD)szValue;
+            if (dwBudget == 0)
+                dwBudget = SCM_DEFAULT_SHUTDOWN_BUDGET;
+        }
+        RegCloseKey(hKey);
+    }
+
+    return dwBudget;
+}
+
+/* Wait until the service reports SERVICE_STOPPED, or the deadline (GetTickCount64 value) passes */
+static
+VOID
+ScmWaitForPreshutdown(
+    _In_ PSERVICE lpService,
+    _In_ ULONGLONG ullDeadline)
+{
+    while (lpService->Status.dwCurrentState != SERVICE_STOPPED)
+    {
+        if (GetTickCount64() >= ullDeadline)
+        {
+            DPRINT1("Service '%S' did not finish its preshutdown in time\n", lpService->lpServiceName);
+            break;
+        }
+        Sleep(SCM_PRESHUTDOWN_POLL_MS);
+    }
+}
+
+VOID
+ScmPreshutdownServices(VOID)
+{
+    PLIST_ENTRY ServiceEntry;
+    PSERVICE CurrentService;
+    HANDLE hControlPipe;
+    DWORD dwResumeCount;
+    PSERVICE *ppServices = NULL;
+    ULONGLONG *pDeadlines = NULL;
+    ULONG Count = 0, Max = 0, i;
+    ULONGLONG ullBudgetEnd;
+
+    DPRINT("ScmPreshutdownServices() called\n");
+
+    ullBudgetEnd = GetTickCount64() + ScmGetShutdownBudget();
+
+    ScmLockDatabaseExclusive();
+
+    ServiceEntry = ServiceListHead.Flink;
+    while (ServiceEntry != &ServiceListHead)
+    {
+        CurrentService = CONTAINING_RECORD(ServiceEntry, SERVICE, ServiceListEntry);
+
+        if ((CurrentService->Status.dwControlsAccepted & SERVICE_ACCEPT_PRESHUTDOWN) &&
+            (CurrentService->Status.dwCurrentState == SERVICE_RUNNING ||
+             CurrentService->Status.dwCurrentState == SERVICE_START_PENDING))
+        {
+            /* Grow the arrays: the services to wait for, and the time at which each one is given up */
+            if (Count == Max)
+            {
+                PSERVICE *ppNew;
+                ULONGLONG *pNewDeadlines;
+                ULONG NewMax = (Max == 0) ? 16 : Max * 2;
+
+                ppNew = HeapAlloc(GetProcessHeap(), 0, NewMax * sizeof(PSERVICE));
+                pNewDeadlines = HeapAlloc(GetProcessHeap(), 0, NewMax * sizeof(ULONGLONG));
+                if (ppNew == NULL || pNewDeadlines == NULL)
+                {
+                    if (ppNew != NULL)
+                        HeapFree(GetProcessHeap(), 0, ppNew);
+                    if (pNewDeadlines != NULL)
+                        HeapFree(GetProcessHeap(), 0, pNewDeadlines);
+                    break;
+                }
+                if (ppServices != NULL)
+                {
+                    RtlCopyMemory(ppNew, ppServices, Count * sizeof(PSERVICE));
+                    RtlCopyMemory(pNewDeadlines, pDeadlines, Count * sizeof(ULONGLONG));
+                    HeapFree(GetProcessHeap(), 0, ppServices);
+                    HeapFree(GetProcessHeap(), 0, pDeadlines);
+                }
+                ppServices = ppNew;
+                pDeadlines = pNewDeadlines;
+                Max = NewMax;
+            }
+
+            DPRINT("Preshutdown service: %S\n", CurrentService->lpServiceName);
+            hControlPipe = CurrentService->lpImage->hControlPipe;
+            dwResumeCount = CurrentService->dwResumeCount;
+            pDeadlines[Count] = GetTickCount64() + ScmGetPreshutdownTimeout(CurrentService);
+            if (pDeadlines[Count] > ullBudgetEnd)
+                pDeadlines[Count] = ullBudgetEnd;
+            ScmReferenceService(CurrentService);
+            ScmUnlockDatabase();
+            if (ScmControlService(hControlPipe,
+                                  CurrentService->lpServiceName,
+                                  SERVICE_CONTROL_PRESHUTDOWN,
+                                  dwResumeCount) == ERROR_SUCCESS)
+            {
+                ppServices[Count++] = CurrentService;
+            }
+            else
+            {
+                ScmDereferenceService(CurrentService);
+            }
+            ScmLockDatabaseExclusive();
+            ServiceEntry = ServiceEntry->Flink;
+            continue;
+        }
+
+        ServiceEntry = ServiceEntry->Flink;
+    }
+
+    ScmUnlockDatabase();
+
+    /* All notifications are out: the services work in parallel, wait for each one (bounded by its own timeout) */
+    for (i = 0; i < Count; i++)
+    {
+        ScmWaitForPreshutdown(ppServices[i], pDeadlines[i]);
+        ScmDereferenceService(ppServices[i]);
+    }
+
+    if (ppServices != NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, ppServices);
+        HeapFree(GetProcessHeap(), 0, pDeadlines);
+    }
+
+    DPRINT("ScmPreshutdownServices() done\n");
+}
+
+static
+DWORD
+WINAPI
+ScmDelayedAutoStartThread(
+    _In_ LPVOID lpParameter)
+{
+    HANDLE hShutdownEvent = (HANDLE)lpParameter;
+    PLIST_ENTRY ServiceEntry;
+    PSERVICE CurrentService;
+    PSERVICE *ppServices = NULL;
+    ULONG Count = 0, Max = 0, i;
+
+    /* Do not slow the boot down: wait, but give up if the system shuts down meanwhile */
+    if (WaitForSingleObject(hShutdownEvent, SCM_DELAYED_AUTOSTART_DELAY) != WAIT_TIMEOUT)
+        return 0;
+
+    ScmLockDatabaseShared();
+
+    ServiceEntry = ServiceListHead.Flink;
+    while (ServiceEntry != &ServiceListHead)
+    {
+        CurrentService = CONTAINING_RECORD(ServiceEntry, SERVICE, ServiceListEntry);
+        if (CurrentService->dwStartType == SERVICE_AUTO_START &&
+            CurrentService->bDelayedAutoStart &&
+            CurrentService->bDelayedStartPending &&
+            !CurrentService->bDeleted &&
+            CurrentService->Status.dwCurrentState == SERVICE_STOPPED)
+        {
+            if (Count == Max)
+            {
+                PSERVICE *ppNew;
+                ULONG NewMax = (Max == 0) ? 16 : Max * 2;
+
+                ppNew = HeapAlloc(GetProcessHeap(), 0, NewMax * sizeof(PSERVICE));
+                if (ppNew == NULL)
+                    break;
+                if (ppServices != NULL)
+                {
+                    RtlCopyMemory(ppNew, ppServices, Count * sizeof(PSERVICE));
+                    HeapFree(GetProcessHeap(), 0, ppServices);
+                }
+                ppServices = ppNew;
+                Max = NewMax;
+            }
+            CurrentService->bDelayedStartPending = FALSE;
+            ScmReferenceService(CurrentService);
+            ppServices[Count++] = CurrentService;
+        }
+        ServiceEntry = ServiceEntry->Flink;
+    }
+
+    ScmUnlockDatabase();
+
+    for (i = 0; i < Count; i++)
+    {
+        if (!ScmShutdown && ppServices[i]->Status.dwCurrentState == SERVICE_STOPPED)
+        {
+            DPRINT("Delayed auto-start: %S\n", ppServices[i]->lpServiceName);
+            ScmStartService(ppServices[i], 0, NULL);
+        }
+        ScmDereferenceService(ppServices[i]);
+    }
+
+    if (ppServices != NULL)
+        HeapFree(GetProcessHeap(), 0, ppServices);
+
+    return 0;
+}
+
+VOID
+ScmStartDelayedAutoStartServices(
+    _In_ HANDLE hShutdownEvent)
+{
+    HANDLE hThread;
+
+    hThread = CreateThread(NULL, 0, ScmDelayedAutoStartThread, hShutdownEvent, 0, NULL);
+    if (hThread != NULL)
+    {
+        SetThreadPriority(hThread, THREAD_PRIORITY_BELOW_NORMAL);
+        CloseHandle(hThread);
+    }
+    else
+    {
+        DPRINT1("Failed to create the delayed auto-start thread (Error %lu)\n", GetLastError());
+    }
 }
 
 

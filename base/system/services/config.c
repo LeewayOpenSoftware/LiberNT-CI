@@ -772,3 +772,18 @@ ScmDecryptPassword(
 }
 
 /* EOF */
+
+
+BOOLEAN
+ScmReadDelayedAutoStart(
+    _In_ HKEY hServiceKey)
+{
+    DWORD dwValue = 0, dwSize = sizeof(dwValue), dwType = REG_NONE;
+
+    if (RegQueryValueExW(hServiceKey, L"DelayedAutostart", NULL, &dwType,
+                         (LPBYTE)&dwValue, &dwSize) != ERROR_SUCCESS ||
+        dwType != REG_DWORD)
+        return FALSE;
+
+    return (dwValue != 0);
+}
