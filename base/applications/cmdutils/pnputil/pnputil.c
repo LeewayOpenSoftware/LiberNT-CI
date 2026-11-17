@@ -2677,8 +2677,7 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, FALSE);
-            --Remaining;
+            OutputCsvField(Output, Cell2, --Remaining == 0);
         }
         if (Filter->Services)
         {
