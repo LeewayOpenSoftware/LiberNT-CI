@@ -37,6 +37,8 @@ typedef struct _CONNECTION
 {
     struct _CONNECTION *Next;
     WCHAR Host[257];
+    WCHAR User[256];
+    WCHAR Domain[256];
     SMB2_CONN *Conn;
     unsigned Trees;
 } CONNECTION;
@@ -112,22 +114,30 @@ static OPENFILE *FindFile(unsigned long long h)
     return NULL;
 }
 
-static CONNECTION *GetConnection(const WCHAR *host, LONG *status)
+static CONNECTION *GetConnection(const WCHAR *host, const WCHAR *user, const WCHAR *domain,
+                                 const WCHAR *password, LONG *status)
 {
     CONNECTION *c;
     SMB2_CONN *sc = NULL;
     uint32_t st;
 
+    /* One connection per server and identity */
     for (c = g_Connections; c; c = c->Next)
-        if (!_wcsicmp(c->Host, host))
+        if (!_wcsicmp(c->Host, host) && !_wcsicmp(c->User, user ? user : L"") &&
+            !_wcsicmp(c->Domain, domain ? domain : L""))
             return c;
 
     st = Smb2Connect(host, 445, &sc);
     if (st == SMB2_STATUS_SUCCESS)
         st = Smb2Negotiate(sc);
     if (st == SMB2_STATUS_SUCCESS)
-        st = Smb2SessionSetup(sc, host, g_HaveUser ? g_User : NULL, g_HaveUser ? g_Domain : NULL,
-                              g_HaveUser ? g_Password : NULL);
+    {
+        if (user && user[0])
+            st = Smb2SessionSetup(sc, host, user, domain, password);
+        else
+            st = Smb2SessionSetup(sc, host, g_HaveUser ? g_User : NULL, g_HaveUser ? g_Domain : NULL,
+                                  g_HaveUser ? g_Password : NULL);
+    }
     if (st != SMB2_STATUS_SUCCESS)
     {
         if (sc)
@@ -143,6 +153,8 @@ static CONNECTION *GetConnection(const WCHAR *host, LONG *status)
         return NULL;
     }
     wcsncpy(c->Host, host, 256);
+    wcsncpy(c->User, user ? user : L"", 255);
+    wcsncpy(c->Domain, domain ? domain : L"", 255);
     c->Conn = sc;
     c->Next = g_Connections;
     g_Connections = c;
@@ -171,37 +183,57 @@ static void DropConnectionIfIdle(CONNECTION *c)
 static LONG DoTreeConnect(const BYTE *payload, DWORD length, BYTE *reply, DWORD *replyLen)
 {
     const SMB2RDR_TREE_CONNECT_REQ *req = (const SMB2RDR_TREE_CONNECT_REQ *)payload;
-    WCHAR name[600], *share;
+    WCHAR name[600], user[257], domain[257], password[257], *share;
+    const BYTE *cursor;
     CONNECTION *c;
     TREE *t;
     LONG status = 0;
     uint32_t tid = 0, st;
 
-    if (length < sizeof(*req) || req->NameLength > length - sizeof(*req) || req->NameLength < 2 * sizeof(WCHAR) ||
-        req->NameLength > sizeof(name) - sizeof(WCHAR))
+    if (length < sizeof(*req) || req->NameLength < 2 * sizeof(WCHAR) || req->NameLength > sizeof(name) - sizeof(WCHAR) ||
+        req->UserLength > 256 * sizeof(WCHAR) || req->DomainLength > 256 * sizeof(WCHAR) ||
+        req->PasswordLength > 256 * sizeof(WCHAR) || ((req->NameLength | req->UserLength | req->DomainLength |
+        req->PasswordLength) & 1) ||
+        (ULONGLONG)req->NameLength + req->UserLength + req->DomainLength + req->PasswordLength != length - sizeof(*req))
         return (LONG)SMB2_STATUS_INVALID_PARAMETER;
-    memcpy(name, payload + sizeof(*req), req->NameLength);
+    cursor = payload + sizeof(*req);
+    memcpy(name, cursor, req->NameLength);
     name[req->NameLength / sizeof(WCHAR)] = 0;
+    cursor += req->NameLength;
+    memcpy(user, cursor, req->UserLength);
+    user[req->UserLength / sizeof(WCHAR)] = 0;
+    cursor += req->UserLength;
+    memcpy(domain, cursor, req->DomainLength);
+    domain[req->DomainLength / sizeof(WCHAR)] = 0;
+    cursor += req->DomainLength;
+    memcpy(password, cursor, req->PasswordLength);
+    password[req->PasswordLength / sizeof(WCHAR)] = 0;
+
     share = wcschr(name, L'\\');
     if (!share || share == name || !share[1])
-        return (LONG)SMB2_STATUS_BAD_NETWORK_NAME;
+    {
+        status = (LONG)SMB2_STATUS_BAD_NETWORK_NAME;
+        goto out;
+    }
     *share++ = 0;
 
-    c = GetConnection(name, &status);
+    c = GetConnection(name, user, domain, password, &status);
     if (!c)
-        return status;
+        goto out;
     st = Smb2TreeConnect(c->Conn, name, share, &tid);
     if (st != SMB2_STATUS_SUCCESS)
     {
         DropConnectionIfIdle(c);
-        return (LONG)st;
+        status = (LONG)st;
+        goto out;
     }
     t = (TREE *)calloc(1, sizeof(*t));
     if (!t)
     {
         Smb2TreeDisconnect(c->Conn, tid);
         DropConnectionIfIdle(c);
-        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+        status = (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+        goto out;
     }
     t->Handle = g_NextHandle++;
     t->Connection = c;
@@ -211,7 +243,11 @@ static LONG DoTreeConnect(const BYTE *payload, DWORD length, BYTE *reply, DWORD 
     c->Trees++;
     ((SMB2RDR_TREE_CONNECT_REPLY *)reply)->TreeHandle = t->Handle;
     *replyLen = sizeof(SMB2RDR_TREE_CONNECT_REPLY);
-    return ST_SUCCESS;
+    status = ST_SUCCESS;
+
+out:
+    SecureZeroMemory(password, sizeof(password));
+    return status;
 }
 
 static LONG DoTreeDisconnect(const BYTE *payload, DWORD length)

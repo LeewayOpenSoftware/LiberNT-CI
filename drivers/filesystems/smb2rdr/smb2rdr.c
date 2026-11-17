@@ -96,6 +96,12 @@ static NTSTATUS NTAPI Smb2RdrDevFcbXXXControlFile(IN OUT PRX_CONTEXT RxContext)
             return status;
         }
 
+        case IOCTL_SMB2RDR_ADDCONN:
+            return Smb2CreateConnection(RxContext, &RxContext->PostRequest);
+
+        case IOCTL_SMB2RDR_DELCONN:
+            return Smb2DeleteConnection(RxContext, &RxContext->PostRequest);
+
         case IOCTL_SMB2RDR_GETSTATE:
             if (!out || outLen < sizeof(ULONG))
                 return STATUS_BUFFER_TOO_SMALL;
@@ -123,6 +129,167 @@ static NTSTATUS NTAPI Smb2RdrDevFcbXXXControlFile(IN OUT PRX_CONTEXT RxContext)
         default:
             return STATUS_INVALID_DEVICE_REQUEST;
     }
+}
+
+/* ---------------- credentials and explicit connections ---------------- */
+
+typedef struct _SMB2_CREDS
+{
+    PUCHAR User;
+    ULONG UserLength;
+    PUCHAR Domain;
+    ULONG DomainLength;
+    PUCHAR Password;
+    ULONG PasswordLength;
+} SMB2_CREDS;
+
+static BOOLEAN Smb2EaNameIs(const CHAR *Name, ULONG NameLength, const CHAR *Expected)
+{
+    ULONG i;
+
+    for (i = 0; i < NameLength; i++)
+    {
+        CHAR a = Name[i], b = Expected[i];
+
+        if (b == '\0')
+            return FALSE;
+        if (a >= 'A' && a <= 'Z')
+            a += 'a' - 'A';
+        if (b >= 'A' && b <= 'Z')
+            b += 'a' - 'A';
+        if (a != b)
+            return FALSE;
+    }
+    return Expected[NameLength] == '\0';
+}
+
+/* Pull UserName / Domain / Password out of an EA chain; every length is checked against the buffer. */
+static VOID Smb2ParseCredentials(PVOID EaBuffer, ULONG EaLength, SMB2_CREDS *Creds)
+{
+    PUCHAR base = EaBuffer, end = base + EaLength, p = base;
+
+    RtlZeroMemory(Creds, sizeof(*Creds));
+    while (EaBuffer && p + FIELD_OFFSET(FILE_FULL_EA_INFORMATION, EaName) <= end)
+    {
+        PFILE_FULL_EA_INFORMATION ea = (PFILE_FULL_EA_INFORMATION)p;
+        ULONG nameLen = ea->EaNameLength, valLen = ea->EaValueLength;
+        PUCHAR value;
+
+        if ((ULONG)(end - p) < FIELD_OFFSET(FILE_FULL_EA_INFORMATION, EaName) + nameLen + 1 + valLen)
+            break;
+        value = (PUCHAR)ea->EaName + nameLen + 1;
+        if (!(valLen & 1) && valLen <= 256 * sizeof(WCHAR))
+        {
+            if (Smb2EaNameIs(ea->EaName, nameLen, SMB2RDR_EA_USER))
+            {
+                Creds->User = value;
+                Creds->UserLength = valLen;
+            }
+            else if (Smb2EaNameIs(ea->EaName, nameLen, SMB2RDR_EA_DOMAIN))
+            {
+                Creds->Domain = value;
+                Creds->DomainLength = valLen;
+            }
+            else if (Smb2EaNameIs(ea->EaName, nameLen, SMB2RDR_EA_PASSWORD))
+            {
+                Creds->Password = value;
+                Creds->PasswordLength = valLen;
+            }
+        }
+        if (!ea->NextEntryOffset || ea->NextEntryOffset > (ULONG)(end - p))
+            break;
+        p += ea->NextEntryOffset;
+    }
+}
+
+/* Open (or, with FILE_CREATE_TREE_CONNECTION, create) the connection name as a kernel handle */
+static NTSTATUS Smb2GetConnectionHandle(PUNICODE_STRING ConnectionName, PVOID EaBuffer, ULONG EaLength, PHANDLE Handle)
+{
+    IO_STATUS_BLOCK iosb;
+    OBJECT_ATTRIBUTES attrs;
+
+    InitializeObjectAttributes(&attrs, ConnectionName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    return ZwCreateFile(Handle, SYNCHRONIZE, &attrs, &iosb, NULL, FILE_ATTRIBUTE_NORMAL,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN_IF,
+                        FILE_CREATE_TREE_CONNECTION | FILE_SYNCHRONOUS_IO_NONALERT, EaBuffer, EaLength);
+}
+
+/* IOCTL_SMB2RDR_ADDCONN: validate the layout exactly, then connect through the normal create path */
+static NTSTATUS Smb2CreateConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
+{
+    PLOWIO_CONTEXT low = &RxContext->LowIoContext;
+    PUCHAR buffer = low->ParamsFor.IoCtl.pInputBuffer;
+    ULONG length = low->ParamsFor.IoCtl.InputBufferLength;
+    const SMB2RDR_CONN_REQ *req = (const SMB2RDR_CONN_REQ *)buffer;
+    UNICODE_STRING name;
+    HANDLE handle = NULL;
+    PVOID ea = NULL;
+    NTSTATUS status;
+
+    if (!BooleanFlagOn(RxContext->Flags, RX_CONTEXT_FLAG_WAIT))
+    {
+        *PostToFsp = TRUE;
+        return STATUS_PENDING;
+    }
+    if (!buffer || length < sizeof(*req))
+        return STATUS_BAD_NETWORK_NAME;
+    if (req->NameLength < 2 * sizeof(WCHAR) || (req->NameLength & 1) ||
+        length != sizeof(*req) + (ULONG)req->NameLength + req->EaPadding + req->EaLength)
+        return STATUS_BAD_NETWORK_NAME;
+    name.Buffer = (PWCH)(buffer + sizeof(*req));
+    if (name.Buffer[req->NameLength / sizeof(WCHAR) - 1] != L'\0')
+        return STATUS_BAD_NETWORK_NAME;
+    name.Length = req->NameLength - sizeof(WCHAR);
+    name.MaximumLength = req->NameLength;
+    if (req->EaLength)
+        ea = buffer + sizeof(*req) + req->NameLength + req->EaPadding;
+
+    status = Smb2GetConnectionHandle(&name, ea, req->EaLength, &handle);
+    if (NT_SUCCESS(status) && handle)
+        ZwClose(handle);
+    return status;
+}
+
+/* IOCTL_SMB2RDR_DELCONN */
+static NTSTATUS Smb2DeleteConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
+{
+    PLOWIO_CONTEXT low = &RxContext->LowIoContext;
+    PWCHAR connectName = low->ParamsFor.IoCtl.pInputBuffer;
+    ULONG length = low->ParamsFor.IoCtl.InputBufferLength;
+    UNICODE_STRING name;
+    HANDLE handle = NULL;
+    PFILE_OBJECT fileObject;
+    NTSTATUS status;
+
+    if (!BooleanFlagOn(RxContext->Flags, RX_CONTEXT_FLAG_WAIT))
+    {
+        *PostToFsp = TRUE;
+        return STATUS_PENDING;
+    }
+    if (!connectName || length < 2 * sizeof(WCHAR) || (length & 1) ||
+        connectName[length / sizeof(WCHAR) - 1] != L'\0')
+        return STATUS_INVALID_PARAMETER;
+    name.Buffer = connectName;
+    name.Length = (USHORT)(length - sizeof(WCHAR));
+    name.MaximumLength = (USHORT)length;
+
+    status = Smb2GetConnectionHandle(&name, NULL, 0, &handle);
+    if (!NT_SUCCESS(status))
+        return status;
+    status = ObReferenceObjectByHandle(handle, 0, NULL, KernelMode, (PVOID *)&fileObject, NULL);
+    if (NT_SUCCESS(status))
+    {
+        PV_NET_ROOT vnetroot = (PV_NET_ROOT)fileObject->FsContext2;
+
+        /* The V_NET_ROOT of a connection open lives in FsContext2 */
+        if (vnetroot && NodeType(vnetroot) == RDBSS_NTC_V_NETROOT)
+            status = RxFinalizeConnection(vnetroot->NetRoot, vnetroot, TRUE);
+        else
+            status = STATUS_BAD_NETWORK_NAME;
+        ObDereferenceObject(fileObject);
+    }
+    ZwClose(handle);
+    return status;
 }
 
 /* ---------------- name resolution ---------------- */
@@ -279,9 +446,12 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
     PMRX_NET_ROOT netroot = vnetroot->pNetRoot;
     PMRX_SRV_CALL srvcall = netroot->pSrvCall;
     PSMB2RDR_VNETROOT_EXT ext = Smb2GetVNetRootExt(vnetroot);
+    PRX_CONTEXT rxContext = Context->RxContext;
     SMB2RDR_TREE_CONNECT_REPLY reply;
+    SMB2_CREDS creds;
     PSMB2RDR_TREE_CONNECT_REQ req = NULL;
-    ULONG serverBytes, shareBytes, total, replyLen = 0;
+    PUCHAR cursor;
+    ULONG serverBytes, shareBytes, total = 0, replyLen = 0;
     NTSTATUS status;
 
     if (netroot->Type != NET_ROOT_DISK && netroot->Type != NET_ROOT_WILD)
@@ -298,17 +468,33 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
         status = STATUS_BAD_NETWORK_PATH;
         goto done;
     }
-    total = sizeof(*req) + serverBytes + shareBytes;
+    /* Credentials, when the connection was made with them (net use /user:) */
+    Smb2ParseCredentials(rxContext->Create.EaBuffer, rxContext->Create.EaLength, &creds);
+
+    total = sizeof(*req) + serverBytes + shareBytes + creds.UserLength + creds.DomainLength + creds.PasswordLength;
     req = RxAllocatePoolWithTag(PagedPool, total, SMB2RDR_TAG);
     if (!req)
     {
         status = STATUS_INSUFFICIENT_RESOURCES;
         goto done;
     }
-    RtlZeroMemory(req, sizeof(*req));
     req->NameLength = serverBytes + shareBytes;
-    RtlCopyMemory(req + 1, srvcall->pSrvCallName->Buffer + 1, serverBytes);
-    RtlCopyMemory((PUCHAR)(req + 1) + serverBytes, netroot->pNetRootName->Buffer, shareBytes);
+    req->UserLength = creds.UserLength;
+    req->DomainLength = creds.DomainLength;
+    req->PasswordLength = creds.PasswordLength;
+    cursor = (PUCHAR)(req + 1);
+    RtlCopyMemory(cursor, srvcall->pSrvCallName->Buffer + 1, serverBytes);
+    cursor += serverBytes;
+    RtlCopyMemory(cursor, netroot->pNetRootName->Buffer, shareBytes);
+    cursor += shareBytes;
+    if (creds.UserLength)
+        RtlCopyMemory(cursor, creds.User, creds.UserLength);
+    cursor += creds.UserLength;
+    if (creds.DomainLength)
+        RtlCopyMemory(cursor, creds.Domain, creds.DomainLength);
+    cursor += creds.DomainLength;
+    if (creds.PasswordLength)
+        RtlCopyMemory(cursor, creds.Password, creds.PasswordLength);
 
     status = Smb2Upcall(SMB2RDR_UP_TREE_CONNECT, req, total, &reply, sizeof(reply), &replyLen);
     if (NT_SUCCESS(status) && replyLen != sizeof(reply))
@@ -322,7 +508,10 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
 
 done:
     if (req)
+    {
+        RtlSecureZeroMemory(req, total);        /* the payload may carry a password */
         RxFreePool(req);
+    }
     Context->VirtualNetRootStatus = status;
     Context->NetRootStatus = status;
     Context->Callback(Context);

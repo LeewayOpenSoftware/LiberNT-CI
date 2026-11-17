@@ -23,9 +23,28 @@
 
 #define IOCTL_SMB2RDR_START     _SMB2RDR_CTL_CODE(0, METHOD_BUFFERED)   /* in: ULONG protocol version */
 #define IOCTL_SMB2RDR_STOP      _SMB2RDR_CTL_CODE(1, METHOD_BUFFERED)   /* in: optional ULONG force (1 = stop even with open files) */
+#define IOCTL_SMB2RDR_ADDCONN   _SMB2RDR_CTL_CODE(4, METHOD_BUFFERED)   /* in: SMB2RDR_CONN_REQ + name + EA */
+#define IOCTL_SMB2RDR_DELCONN   _SMB2RDR_CTL_CODE(5, METHOD_BUFFERED)   /* in: connection name, NUL terminated */
 #define IOCTL_SMB2RDR_GETSTATE  _SMB2RDR_CTL_CODE(3, METHOD_BUFFERED)   /* out: ULONG SMB2RDR_STATE_* */
 #define IOCTL_SMB2RDR_GETREQ    _SMB2RDR_CTL_CODE(6, METHOD_BUFFERED)   /* blocks; out: SMB2RDR_UPCALL */
 #define IOCTL_SMB2RDR_PUTREPLY  _SMB2RDR_CTL_CODE(7, METHOD_BUFFERED)   /* in: SMB2RDR_DOWNCALL */
+
+/*
+ * Explicit connection (net use): the network provider asks the redirector to connect. The buffer is
+ *   SMB2RDR_CONN_REQ, WCHAR Name[NameLength / 2] (NUL included), EaPadding bytes, EaLength bytes of
+ *   FILE_FULL_EA_INFORMATION entries. Name is \Device\smb2rdr\;X:\server\share or \Device\smb2rdr\server\share.
+ * Credentials travel as extended attributes with these names; the value is UTF-16 without terminator.
+ */
+typedef struct _SMB2RDR_CONN_REQ
+{
+    unsigned short NameLength;
+    unsigned short EaPadding;
+    unsigned long EaLength;
+} SMB2RDR_CONN_REQ;
+
+#define SMB2RDR_EA_USER         "UserName"
+#define SMB2RDR_EA_DOMAIN       "Domain"
+#define SMB2RDR_EA_PASSWORD     "Password"
 
 #define SMB2RDR_STATE_STOPPED   0
 #define SMB2RDR_STATE_STARTING  1
@@ -58,12 +77,17 @@ typedef struct _SMB2RDR_HANDLE_REQ
     unsigned long long Handle;
 } SMB2RDR_HANDLE_REQ;
 
-/* Server and share as "server\share", UTF-16, no terminator, no leading backslash */
+/*
+ * Server and share as "server\share", then the optional credentials, all UTF-16 without terminators,
+ * laid out one after the other after this header: Name, User, Domain, Password. An empty User means
+ * the daemon's own identity.
+ */
 typedef struct _SMB2RDR_TREE_CONNECT_REQ
 {
-    unsigned long NameLength;   /* bytes of Name */
-    unsigned long Reserved;
-    /* WCHAR Name[] follows */
+    unsigned long NameLength;       /* bytes */
+    unsigned long UserLength;       /* bytes */
+    unsigned long DomainLength;     /* bytes */
+    unsigned long PasswordLength;   /* bytes */
 } SMB2RDR_TREE_CONNECT_REQ;
 
 typedef struct _SMB2RDR_TREE_CONNECT_REPLY

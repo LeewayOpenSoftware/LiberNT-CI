@@ -7,14 +7,15 @@
  * Stateless: a connection X: -> \\server\share is a DOS device whose target is
  *   \Device\smb2rdr\;X:\server\share
  * and every query is answered from that device definition, so there is no shared memory to keep in sync.
- * The actual SMB session, tree connect and authentication happen in the redirector and the daemon the
- * first time the path is opened; AddConnection opens the root once so a bad name or password fails here.
+ * AddConnection asks the redirector to connect first (IOCTL_SMB2RDR_ADDCONN, credentials as EAs), so a bad
+ * name or password fails before any drive letter is defined; Cancel undoes both.
  */
 
 #include <windows.h>
 #include <winnetwk.h>
 #include <npapi.h>
 #include <wchar.h>
+#include <winioctl.h>
 
 #include "smb2rdr_ioctl.h"
 
@@ -132,58 +133,178 @@ DWORD WINAPI NPPasswordChangeNotify(LPCWSTR AuthInfoType, LPVOID AuthInfo, LPCWS
     return WN_NOT_SUPPORTED;
 }
 
+/* FILE_FULL_EA_INFORMATION without the DDK header */
+typedef struct _NP_EA
+{
+    ULONG NextEntryOffset;
+    UCHAR Flags;
+    UCHAR EaNameLength;
+    USHORT EaValueLength;
+    CHAR EaName[1];
+} NP_EA;
+
+/* Append one EA (name + UTF-16 value) at Used; returns the new used size, or 0 when it does not fit */
+static ULONG AppendEa(BYTE *buf, ULONG cap, ULONG used, const char *name, LPCWSTR value)
+{
+    ULONG nameLen = (ULONG)strlen(name), valLen = (ULONG)(wcslen(value) * sizeof(WCHAR));
+    ULONG size = (ULONG)(FIELD_OFFSET(NP_EA, EaName) + nameLen + 1 + valLen), aligned = (size + 3) & ~3u;
+    NP_EA *ea;
+
+    if (used + aligned > cap)
+        return 0;
+    ea = (NP_EA *)(buf + used);
+    memset(ea, 0, aligned);
+    ea->EaNameLength = (UCHAR)nameLen;
+    ea->EaValueLength = (USHORT)valLen;
+    memcpy(ea->EaName, name, nameLen + 1);
+    memcpy(ea->EaName + nameLen + 1, value, valLen);
+    return used + aligned;
+}
+
+/* Build "UserName/Domain/Password" EAs; returns the EA length (0: none). Domain comes from "DOMAIN\user". */
+static ULONG BuildCredentialEa(BYTE *buf, ULONG cap, LPCWSTR userName, LPCWSTR password)
+{
+    WCHAR user[257], domain[257];
+    ULONG used = 0, prev = 0, next;
+    const WCHAR *slash;
+
+    if (!userName || !userName[0])
+        return 0;
+    domain[0] = L'\0';
+    slash = wcschr(userName, L'\\');
+    if (slash)
+    {
+        size_t dl = (size_t)(slash - userName);
+
+        if (dl > 256 || wcslen(slash + 1) > 256)
+            return 0;
+        wcsncpy(domain, userName, dl);
+        domain[dl] = L'\0';
+        wcscpy(user, slash + 1);
+    }
+    else
+    {
+        if (wcslen(userName) > 256)
+            return 0;
+        wcscpy(user, userName);
+    }
+
+    /* each entry chains to the next through NextEntryOffset */
+    next = AppendEa(buf, cap, used, SMB2RDR_EA_USER, user);
+    if (!next)
+        return 0;
+    prev = used;
+    used = next;
+    if (domain[0])
+    {
+        next = AppendEa(buf, cap, used, SMB2RDR_EA_DOMAIN, domain);
+        if (!next)
+            return 0;
+        ((NP_EA *)(buf + prev))->NextEntryOffset = used - prev;
+        prev = used;
+        used = next;
+    }
+    next = AppendEa(buf, cap, used, SMB2RDR_EA_PASSWORD, password ? password : L"");
+    if (!next)
+        return 0;
+    ((NP_EA *)(buf + prev))->NextEntryOffset = used - prev;
+    return next;
+}
+
+/* Ask the redirector to connect (IOCTL_SMB2RDR_ADDCONN); the credentials ride along as EAs */
+static DWORD RdrAddConnection(LPCWSTR target, LPCWSTR userName, LPCWSTR password)
+{
+    BYTE ea[2048], *msg;
+    ULONG eaLen = BuildCredentialEa(ea, sizeof(ea), userName, password);
+    SMB2RDR_CONN_REQ hdr;
+    DWORD nameBytes = (DWORD)((wcslen(target) + 1) * sizeof(WCHAR)), pad, total, got;
+    HANDLE dev;
+    DWORD err = WN_SUCCESS;
+
+    if (userName && userName[0] && !eaLen)
+        return WN_BAD_USER;
+    pad = (4 - ((sizeof(hdr) + nameBytes) & 3)) & 3;
+    hdr.NameLength = (USHORT)nameBytes;
+    hdr.EaPadding = (USHORT)(eaLen ? pad : 0);
+    hdr.EaLength = eaLen;
+    total = sizeof(hdr) + nameBytes + hdr.EaPadding + eaLen;
+    msg = (BYTE *)LocalAlloc(LPTR, total);
+    if (!msg)
+        return ERROR_NOT_ENOUGH_MEMORY;
+    memcpy(msg, &hdr, sizeof(hdr));
+    memcpy(msg + sizeof(hdr), target, nameBytes);
+    if (eaLen)
+        memcpy(msg + sizeof(hdr) + nameBytes + hdr.EaPadding, ea, eaLen);
+
+    dev = CreateFileW(SMB2RDR_USER_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                      NULL, OPEN_EXISTING, 0, NULL);
+    if (dev == INVALID_HANDLE_VALUE)
+    {
+        err = GetLastError();
+    }
+    else
+    {
+        if (!DeviceIoControl(dev, IOCTL_SMB2RDR_ADDCONN, msg, total, NULL, 0, &got, NULL))
+            err = GetLastError();
+        CloseHandle(dev);
+    }
+    SecureZeroMemory(ea, sizeof(ea));
+    SecureZeroMemory(msg, total);
+    LocalFree(msg);
+    return err;
+}
+
+static DWORD RdrDeleteConnection(LPCWSTR target)
+{
+    DWORD bytes = (DWORD)((wcslen(target) + 1) * sizeof(WCHAR)), got, err = WN_SUCCESS;
+    HANDLE dev = CreateFileW(SMB2RDR_USER_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+
+    if (dev == INVALID_HANDLE_VALUE)
+        return GetLastError();
+    if (!DeviceIoControl(dev, IOCTL_SMB2RDR_DELCONN, (LPVOID)target, bytes, NULL, 0, &got, NULL))
+        err = GetLastError();
+    CloseHandle(dev);
+    return err;
+}
+
 DWORD WINAPI NPAddConnection3(HWND hwndOwner, LPNETRESOURCEW Resource, LPWSTR Password, LPWSTR UserName,
                               DWORD Flags)
 {
-    WCHAR drive[3], serverShare[MAX_PATH], target[MAX_PATH], probe[8], existing[MAX_PATH];
-    HANDLE h;
+    WCHAR drive[3], serverShare[MAX_PATH], target[MAX_PATH], existing[MAX_PATH];
     DWORD err;
 
-    (void)hwndOwner; (void)Password; (void)UserName; (void)Flags;
-    /* TODO(identity): Password/UserName are not forwarded yet; the daemon uses its own identity. */
+    (void)hwndOwner; (void)Flags;
 
     if (!Resource || !BuildServerShare(Resource->lpRemoteName, serverShare, MAX_PATH))
         return WN_BAD_NETNAME;
+
     if (!Resource->lpLocalName || !Resource->lpLocalName[0])
     {
-        /* Deviceless connection: just prove the share can be opened through the redirector. */
-        WCHAR unc[MAX_PATH + 8];
-
-        wcscpy(unc, L"\\\\?\\UNC");
-        wcscat(unc, serverShare + 0 /* "\server\share" */);
-        h = CreateFileW(unc, FILE_LIST_DIRECTORY | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                        NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-        if (h == INVALID_HANDLE_VALUE)
-            return GetLastError();
-        CloseHandle(h);
-        return WN_SUCCESS;
+        /* Deviceless connection: \Device\smb2rdr\server\share */
+        if (wcslen(SMB2RDR_DEVICE_NAME) + wcslen(serverShare) + 1 > MAX_PATH)
+            return WN_BAD_NETNAME;
+        wcscpy(target, SMB2RDR_DEVICE_NAME);
+        wcscat(target, serverShare);
+        return RdrAddConnection(target, UserName, Password);
     }
     if (!ParseLocalName(Resource->lpLocalName, drive))
         return WN_BAD_LOCALNAME;
     if (!BuildTarget(drive, serverShare, target, MAX_PATH))
         return WN_BAD_NETNAME;
-
     if (QueryDosDeviceW(drive, existing, MAX_PATH) || GetLastError() != ERROR_FILE_NOT_FOUND)
         return WN_ALREADY_CONNECTED;
 
+    /* Connect first: a bad name or password fails here, before any drive letter exists */
+    err = RdrAddConnection(target, UserName, Password);
+    if (err != WN_SUCCESS)
+        return err;
     if (!DefineDosDeviceW(DDD_RAW_TARGET_PATH | DDD_NO_BROADCAST_SYSTEM, drive, target))
-        return GetLastError();
-
-    /* Prove the connection: open the root of the new drive */
-    probe[0] = drive[0];
-    probe[1] = L':';
-    probe[2] = L'\\';
-    probe[3] = L'\0';
-    h = CreateFileW(probe, FILE_LIST_DIRECTORY | SYNCHRONIZE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                    NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
-    if (h == INVALID_HANDLE_VALUE)
     {
         err = GetLastError();
-        DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_RAW_TARGET_PATH | DDD_EXACT_MATCH_ON_REMOVE |
-                         DDD_NO_BROADCAST_SYSTEM, drive, target);
-        return err ? err : WN_BAD_NETNAME;
+        RdrDeleteConnection(target);
+        return err;
     }
-    CloseHandle(h);
     return WN_SUCCESS;
 }
 
@@ -194,13 +315,27 @@ DWORD WINAPI NPAddConnection(LPNETRESOURCEW Resource, LPWSTR Password, LPWSTR Us
 
 DWORD WINAPI NPCancelConnection(LPWSTR Name, BOOL Force)
 {
-    WCHAR drive[3], target[MAX_PATH];
+    WCHAR drive[3], target[MAX_PATH], serverShare[MAX_PATH];
+    DWORD err;
 
     (void)Force;
-    if (!Name || !ParseLocalName(Name, drive))
-        return WN_SUCCESS;              /* deviceless connections hold no state here */
+    if (!Name)
+        return WN_BAD_NETNAME;
+    if (!ParseLocalName(Name, drive))
+    {
+        /* \\server\share: drop the deviceless connection */
+        if (!BuildServerShare(Name, serverShare, MAX_PATH) ||
+            wcslen(SMB2RDR_DEVICE_NAME) + wcslen(serverShare) + 1 > MAX_PATH)
+            return WN_NOT_CONNECTED;
+        wcscpy(target, SMB2RDR_DEVICE_NAME);
+        wcscat(target, serverShare);
+        return RdrDeleteConnection(target);
+    }
     if (!QueryOurTarget(drive, target, MAX_PATH))
         return WN_NOT_CONNECTED;
+    err = RdrDeleteConnection(target);
+    if (err != WN_SUCCESS)
+        return err;
     if (!DefineDosDeviceW(DDD_REMOVE_DEFINITION | DDD_RAW_TARGET_PATH | DDD_EXACT_MATCH_ON_REMOVE |
                           DDD_NO_BROADCAST_SYSTEM, drive, target))
         return GetLastError();
