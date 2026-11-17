@@ -5,9 +5,10 @@
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
  * The driver holds no protocol code: every network operation is an upcall to smb2d (see upcall.c).
- * This file is the skeleton: it registers with Mup through RDBSS, takes the control IOCTLs from the
- * daemon and resolves server names (SrvCall) through the daemon. File operations follow in later steps;
- * until then every file callback fails with STATUS_NOT_IMPLEMENTED.
+ * It registers with Mup through RDBSS, takes the control IOCTLs from the daemon, resolves server names
+ * (SrvCall) and shares (VNetRoot) through the daemon, and serves open, close, read, directory listing and
+ * basic file/volume information. The mount is read-only: everything that writes fails with
+ * STATUS_ACCESS_DENIED or STATUS_NOT_IMPLEMENTED until the write path step.
  */
 
 #include "smb2rdr.h"
@@ -225,8 +226,17 @@ static NTSTATUS NTAPI Smb2FinalizeNetRoot(IN OUT PMRX_NET_ROOT NetRoot, IN PBOOL
 
 static NTSTATUS NTAPI Smb2FinalizeVNetRoot(IN OUT PMRX_V_NET_ROOT VNetRoot, IN PBOOLEAN ForceDisconnect)
 {
-    UNREFERENCED_PARAMETER(VNetRoot);
+    PSMB2RDR_VNETROOT_EXT ext = Smb2GetVNetRootExt(VNetRoot);
+
     UNREFERENCED_PARAMETER(ForceDisconnect);
+    if (ext && ext->TreeHandle)
+    {
+        SMB2RDR_HANDLE_REQ req;
+
+        req.Handle = ext->TreeHandle;
+        ext->TreeHandle = 0;
+        Smb2Upcall(SMB2RDR_UP_TREE_DISCONNECT, &req, sizeof(req), NULL, 0, NULL);
+    }
     return STATUS_SUCCESS;
 }
 
@@ -253,11 +263,396 @@ static VOID NTAPI Smb2ExtractNetRootName(IN PUNICODE_STRING FilePathName, IN PMR
     }
 }
 
+/*
+ * MRxCreateVNetRoot: connect to the share. The net root name is "\share"; the server comes from the
+ * srv call ("\server"). The daemon returns an opaque tree handle. Completion goes through the callback
+ * and the routine must return STATUS_PENDING.
+ */
 static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Context)
 {
-    /* Tree connect arrives with the file operations step. */
-    UNREFERENCED_PARAMETER(Context);
-    return STATUS_NOT_IMPLEMENTED;
+    PMRX_V_NET_ROOT vnetroot = (PMRX_V_NET_ROOT)Context->pVNetRoot;
+    PMRX_NET_ROOT netroot = vnetroot->pNetRoot;
+    PMRX_SRV_CALL srvcall = netroot->pSrvCall;
+    PSMB2RDR_VNETROOT_EXT ext = Smb2GetVNetRootExt(vnetroot);
+    SMB2RDR_TREE_CONNECT_REPLY reply;
+    PSMB2RDR_TREE_CONNECT_REQ req = NULL;
+    ULONG serverBytes, shareBytes, total, replyLen = 0;
+    NTSTATUS status;
+
+    if (netroot->Type != NET_ROOT_DISK && netroot->Type != NET_ROOT_WILD)
+    {
+        status = STATUS_NOT_SUPPORTED;
+        goto done;
+    }
+    /* "\server" + "\share" -> "server\share" */
+    serverBytes = srvcall->pSrvCallName->Length - sizeof(WCHAR);
+    shareBytes = netroot->pNetRootName->Length;
+    if (srvcall->pSrvCallName->Length < 2 * sizeof(WCHAR) || shareBytes < 2 * sizeof(WCHAR) ||
+        serverBytes + shareBytes > 2 * SMB2RDR_MAX_SERVER_NAME * sizeof(WCHAR))
+    {
+        status = STATUS_BAD_NETWORK_PATH;
+        goto done;
+    }
+    total = sizeof(*req) + serverBytes + shareBytes;
+    req = RxAllocatePoolWithTag(PagedPool, total, SMB2RDR_TAG);
+    if (!req)
+    {
+        status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+    RtlZeroMemory(req, sizeof(*req));
+    req->NameLength = serverBytes + shareBytes;
+    RtlCopyMemory(req + 1, srvcall->pSrvCallName->Buffer + 1, serverBytes);
+    RtlCopyMemory((PUCHAR)(req + 1) + serverBytes, netroot->pNetRootName->Buffer, shareBytes);
+
+    status = Smb2Upcall(SMB2RDR_UP_TREE_CONNECT, req, total, &reply, sizeof(reply), &replyLen);
+    if (NT_SUCCESS(status) && replyLen != sizeof(reply))
+        status = STATUS_INVALID_NETWORK_RESPONSE;
+    if (NT_SUCCESS(status))
+    {
+        ext->TreeHandle = reply.TreeHandle;
+        netroot->MRxNetRootState = MRX_NET_ROOT_STATE_GOOD;
+        netroot->DeviceType = FILE_DEVICE_DISK;
+    }
+
+done:
+    if (req)
+        RxFreePool(req);
+    Context->VirtualNetRootStatus = status;
+    Context->NetRootStatus = status;
+    Context->Callback(Context);
+    /* RDBSS expects STATUS_PENDING on success and failure alike */
+    return STATUS_PENDING;
+}
+
+/* ---------------- opens ---------------- */
+
+#define SMB2_WRITE_ACCESS_MASK \
+    (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES | DELETE | \
+     WRITE_DAC | WRITE_OWNER)
+
+/* Close the daemon's file handle of an open that RDBSS will never see */
+static VOID Smb2CloseRemote(ULONGLONG FileHandle)
+{
+    SMB2RDR_HANDLE_REQ req;
+
+    req.Handle = FileHandle;
+    Smb2Upcall(SMB2RDR_UP_CLOSE, &req, sizeof(req), NULL, 0, NULL);
+}
+
+/*
+ * MRxCreate. Read-only for now: any write, delete or security-write access, or a disposition other
+ * than FILE_OPEN, is refused with STATUS_ACCESS_DENIED (as a read-only share would).
+ */
+static NTSTATUS NTAPI Smb2Create(IN OUT PRX_CONTEXT RxContext)
+{
+    PNT_CREATE_PARAMETERS params = &RxContext->Create.NtCreateParameters;
+    PMRX_SRV_OPEN srvOpen = RxContext->pRelevantSrvOpen;
+    PSMB2RDR_VNETROOT_EXT vroot = Smb2GetVNetRootExt(srvOpen->pVNetRoot);
+    PMRX_FCB fcb = RxContext->pFcb;
+    PUNICODE_STRING name = srvOpen->pAlreadyPrefixedName;
+    PSMB2RDR_OPEN_REQ req;
+    SMB2RDR_OPEN_REPLY reply;
+    PSMB2RDR_FOBX_EXT fobx;
+    ULONG replyLen = 0, reqLen, pathBytes;
+    PWCHAR path;
+    NTSTATUS status;
+
+    if (!vroot || !vroot->TreeHandle)
+        return STATUS_CONNECTION_DISCONNECTED;
+    if ((params->DesiredAccess & SMB2_WRITE_ACCESS_MASK) || params->Disposition != FILE_OPEN ||
+        (params->CreateOptions & (FILE_DELETE_ON_CLOSE | FILE_OPEN_BY_FILE_ID)))
+        return STATUS_ACCESS_DENIED;
+
+    /* The name is relative to the net root with a leading backslash; SMB2 wants none ("" is the root). */
+    path = name->Buffer;
+    pathBytes = name->Length;
+    if (pathBytes >= sizeof(WCHAR) && path[0] == L'\\')
+    {
+        path++;
+        pathBytes -= sizeof(WCHAR);
+    }
+    if (pathBytes > 1024 * sizeof(WCHAR))
+        return STATUS_OBJECT_NAME_INVALID;
+
+    reqLen = sizeof(*req) + pathBytes;
+    req = RxAllocatePoolWithTag(PagedPool, reqLen, SMB2RDR_TAG);
+    if (!req)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(req, sizeof(*req));
+    req->TreeHandle = vroot->TreeHandle;
+    req->DesiredAccess = params->DesiredAccess;
+    req->ShareAccess = params->ShareAccess;
+    req->FileAttributes = params->FileAttributes;
+    req->Disposition = params->Disposition;
+    req->CreateOptions = params->CreateOptions & 0x00FFFFFF;
+    req->PathLength = pathBytes;
+    RtlCopyMemory(req + 1, path, pathBytes);
+
+    status = Smb2Upcall(SMB2RDR_UP_OPEN, req, reqLen, &reply, sizeof(reply), &replyLen);
+    RxFreePool(req);
+    if (!NT_SUCCESS(status))
+        return status;
+    if (replyLen != sizeof(reply))
+        return STATUS_INVALID_NETWORK_RESPONSE;
+
+    if (!RxIsFcbAcquiredExclusive(fcb))
+        RxAcquireExclusiveFcbResourceInMRx(fcb);
+
+    RxContext->pFobx = RxCreateNetFobx(RxContext, srvOpen);
+    if (!RxContext->pFobx)
+    {
+        Smb2CloseRemote(reply.FileHandle);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    fobx = Smb2GetFobxExt(RxContext->pFobx);
+    fobx->FileHandle = reply.FileHandle;
+    fobx->IsDirectory = (reply.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+
+    if (fcb->OpenCount == 0)
+    {
+        FCB_INIT_PACKET initPacket;
+        ULONG links = 1;
+        ULONG attributes = reply.FileAttributes;
+        LARGE_INTEGER creation, access, write, change, alloc, eof;
+        RX_FILE_TYPE type = fobx->IsDirectory ? FileTypeDirectory : FileTypeFile;
+
+        creation.QuadPart = reply.CreationTime;
+        access.QuadPart = reply.LastAccessTime;
+        write.QuadPart = reply.LastWriteTime;
+        change.QuadPart = reply.ChangeTime;
+        alloc.QuadPart = reply.AllocationSize;
+        eof.QuadPart = reply.EndOfFile;
+        RxFormInitPacket(initPacket, &attributes, &links, &creation, &access, &write, &change, &alloc, &eof, &eof);
+        RxFinishFcbInitialization(fcb, RDBSS_STORAGE_NTC(type), &initPacket);
+    }
+
+    /* No client-side caching yet: every read goes to the server */
+    srvOpen->BufferingFlags = FCB_STATE_DISABLE_LOCAL_BUFFERING;
+
+    RxContext->Create.ReturnedCreateInformation = reply.CreateAction;
+    RxContext->pFobx->OffsetOfNextEaToReturn = 1;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI Smb2CloseSrvOpen(IN OUT PRX_CONTEXT RxContext)
+{
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+
+    if (fobx && fobx->FileHandle)
+    {
+        Smb2CloseRemote(fobx->FileHandle);
+        fobx->FileHandle = 0;
+    }
+    /* The handle is gone from the user's point of view whatever the network says */
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI Smb2CollapseOpen(IN OUT PRX_CONTEXT RxContext)
+{
+    UNREFERENCED_PARAMETER(RxContext);
+    return STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+static NTSTATUS NTAPI Smb2ShouldTryToCollapseThisOpen(IN OUT PRX_CONTEXT RxContext)
+{
+    return RxContext->pRelevantSrvOpen == NULL ? STATUS_SUCCESS : STATUS_MORE_PROCESSING_REQUIRED;
+}
+
+/* ---------------- directory, file and volume information ---------------- */
+
+static NTSTATUS NTAPI Smb2QueryDirectory(IN OUT PRX_CONTEXT RxContext)
+{
+    FILE_INFORMATION_CLASS infoClass = RxContext->Info.FileInformationClass;
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+    PUNICODE_STRING filter = &RxContext->pFobx->UnicodeQueryTemplate;
+    PSMB2RDR_QUERYDIR_REQ req;
+    ULONG reqLen, patternBytes, got = 0, length;
+    NTSTATUS status;
+
+    if (!fobx || !fobx->FileHandle || !fobx->IsDirectory)
+        return STATUS_INVALID_PARAMETER;
+    if (!RxContext->Info.Buffer)
+        return STATUS_INVALID_USER_BUFFER;
+    switch (infoClass)
+    {
+        case FileNamesInformation:
+        case FileDirectoryInformation:
+        case FileFullDirectoryInformation:
+        case FileIdFullDirectoryInformation:
+        case FileBothDirectoryInformation:
+        case FileIdBothDirectoryInformation:
+            break;
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
+
+    length = RxContext->Info.LengthRemaining;
+    if (length > SMB2RDR_MAX_IO)
+        length = SMB2RDR_MAX_IO;
+    patternBytes = (filter && filter->Buffer) ? filter->Length : 0;
+    if (patternBytes > 255 * sizeof(WCHAR))
+        return STATUS_OBJECT_NAME_INVALID;
+    reqLen = sizeof(*req) + patternBytes;
+    req = RxAllocatePoolWithTag(PagedPool, reqLen, SMB2RDR_TAG);
+    if (!req)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(req, sizeof(*req));
+    req->FileHandle = fobx->FileHandle;
+    req->InfoClass = (ULONG)infoClass;
+    req->OutputLength = length;
+    req->PatternLength = patternBytes;
+    if (RxContext->QueryDirectory.InitialQuery || RxContext->QueryDirectory.RestartScan)
+        req->Flags |= SMB2RDR_QD_RESTART;
+    if (RxContext->QueryDirectory.ReturnSingleEntry)
+        req->Flags |= SMB2RDR_QD_SINGLE;
+    if (patternBytes)
+        RtlCopyMemory(req + 1, filter->Buffer, patternBytes);
+
+    status = Smb2Upcall(SMB2RDR_UP_QUERYDIR, req, reqLen, RxContext->Info.Buffer, length, &got);
+    RxFreePool(req);
+    if (NT_SUCCESS(status))
+    {
+        RxContext->Info.LengthRemaining -= got;
+        return STATUS_SUCCESS;
+    }
+    return status;
+}
+
+static NTSTATUS NTAPI Smb2Read(IN OUT PRX_CONTEXT RxContext)
+{
+    PLOWIO_CONTEXT low = &RxContext->LowIoContext;
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+    PMDL mdl = low->ParamsFor.ReadWrite.Buffer;
+    ULONG count = low->ParamsFor.ReadWrite.ByteCount, total = 0;
+    ULONGLONG offset = low->ParamsFor.ReadWrite.ByteOffset;
+    PUCHAR system;
+    NTSTATUS status = STATUS_SUCCESS;
+
+    RxContext->IoStatusBlock.Information = 0;
+    if (!fobx || !fobx->FileHandle || fobx->IsDirectory)
+        return STATUS_INVALID_DEVICE_REQUEST;
+    if (!count)
+        return STATUS_SUCCESS;
+    if (!mdl)
+        return STATUS_INVALID_USER_BUFFER;
+    system = MmGetSystemAddressForMdlSafe(mdl, NormalPagePriority);
+    if (!system)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    while (total < count)
+    {
+        SMB2RDR_READ_REQ req;
+        ULONG chunk = count - total, got = 0;
+
+        if (chunk > SMB2RDR_MAX_IO)
+            chunk = SMB2RDR_MAX_IO;
+        RtlZeroMemory(&req, sizeof(req));
+        req.FileHandle = fobx->FileHandle;
+        req.Offset = offset + total;
+        req.Length = chunk;
+        status = Smb2Upcall(SMB2RDR_UP_READ, &req, sizeof(req), system + total, chunk, &got);
+        if (!NT_SUCCESS(status))
+            break;
+        total += got;
+        if (got < chunk)
+            break;                      /* short read: end of file */
+    }
+    if (total)
+        status = STATUS_SUCCESS;        /* data already delivered; a later error or EOF shows on the next read */
+    else if (status == STATUS_SUCCESS)
+        status = STATUS_END_OF_FILE;
+    RxContext->IoStatusBlock.Information = total;
+    return status;
+}
+
+/* Basic and standard information come from what the open reported and RDBSS cached in the FCB. */
+static NTSTATUS NTAPI Smb2QueryFileInfo(IN OUT PRX_CONTEXT RxContext)
+{
+    PFCB fcb = (PFCB)RxContext->pFcb;
+    PVOID buffer = RxContext->Info.Buffer;
+    LONG remaining = RxContext->Info.LengthRemaining;
+
+    if (!buffer)
+        return STATUS_INVALID_USER_BUFFER;
+    switch (RxContext->Info.FileInformationClass)
+    {
+        case FileBasicInformation:
+        {
+            PFILE_BASIC_INFORMATION info = buffer;
+
+            if (remaining < (LONG)sizeof(*info))
+                return STATUS_BUFFER_OVERFLOW;
+            info->CreationTime = fcb->CreationTime;
+            info->LastAccessTime = fcb->LastAccessTime;
+            info->LastWriteTime = fcb->LastWriteTime;
+            info->ChangeTime = fcb->LastChangeTime;
+            info->FileAttributes = fcb->Attributes;
+            RxContext->Info.LengthRemaining -= sizeof(*info);
+            return STATUS_SUCCESS;
+        }
+        case FileStandardInformation:
+        {
+            PFILE_STANDARD_INFORMATION info = buffer;
+
+            if (remaining < (LONG)sizeof(*info))
+                return STATUS_BUFFER_OVERFLOW;
+            info->AllocationSize = fcb->Header.AllocationSize;
+            info->EndOfFile = fcb->Header.FileSize;
+            info->NumberOfLinks = fcb->NumberOfLinks;
+            info->DeletePending = FALSE;
+            info->Directory = (fcb->Attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            RxContext->Info.LengthRemaining -= sizeof(*info);
+            return STATUS_SUCCESS;
+        }
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
+}
+
+/* Volume identity is synthetic for now (a later step queries the server). */
+static NTSTATUS NTAPI Smb2QueryVolumeInfo(IN OUT PRX_CONTEXT RxContext)
+{
+    static const WCHAR label[] = L"SMB2";
+    PVOID buffer = RxContext->Info.Buffer;
+    LONG remaining = RxContext->Info.LengthRemaining;
+
+    if (!buffer)
+        return STATUS_INVALID_USER_BUFFER;
+    switch (RxContext->Info.FsInformationClass)
+    {
+        case FileFsVolumeInformation:
+        {
+            PFILE_FS_VOLUME_INFORMATION info = buffer;
+            ULONG need = FIELD_OFFSET(FILE_FS_VOLUME_INFORMATION, VolumeLabel) + sizeof(label) - sizeof(WCHAR);
+
+            if (remaining < (LONG)need)
+                return STATUS_BUFFER_OVERFLOW;
+            RtlZeroMemory(info, need);
+            info->VolumeSerialNumber = 0x534D4232;
+            info->VolumeLabelLength = sizeof(label) - sizeof(WCHAR);
+            RtlCopyMemory(info->VolumeLabel, label, sizeof(label) - sizeof(WCHAR));
+            RxContext->Info.LengthRemaining -= need;
+            return STATUS_SUCCESS;
+        }
+        case FileFsAttributeInformation:
+        {
+            PFILE_FS_ATTRIBUTE_INFORMATION info = buffer;
+            ULONG need = FIELD_OFFSET(FILE_FS_ATTRIBUTE_INFORMATION, FileSystemName) + sizeof(label) - sizeof(WCHAR);
+
+            if (remaining < (LONG)need)
+                return STATUS_BUFFER_OVERFLOW;
+            RtlZeroMemory(info, need);
+            info->FileSystemAttributes = FILE_CASE_PRESERVED_NAMES | FILE_UNICODE_ON_DISK | FILE_READ_ONLY_VOLUME;
+            info->MaximumComponentNameLength = 255;
+            info->FileSystemNameLength = sizeof(label) - sizeof(WCHAR);
+            RtlCopyMemory(info->FileSystemName, label, sizeof(label) - sizeof(WCHAR));
+            RxContext->Info.LengthRemaining -= need;
+            return STATUS_SUCCESS;
+        }
+        default:
+            return STATUS_NOT_SUPPORTED;
+    }
 }
 
 /* ---------------- everything else: not yet ---------------- */
@@ -280,6 +675,13 @@ static NTSTATUS NTAPI Smb2IsValidDirectory(IN OUT PRX_CONTEXT RxContext, IN PUNI
     UNREFERENCED_PARAMETER(RxContext);
     UNREFERENCED_PARAMETER(DirectoryName);
     return STATUS_NOT_IMPLEMENTED;
+}
+
+/* Nothing is cached client-side, so there is nothing to flush */
+static NTSTATUS NTAPI Smb2Flush(IN OUT PRX_CONTEXT RxContext)
+{
+    UNREFERENCED_PARAMETER(RxContext);
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS NTAPI Smb2DeallocateForFcb(IN OUT PMRX_FCB Fcb)
@@ -335,12 +737,12 @@ static NTSTATUS Smb2InitOps(VOID)
 {
     ZeroAndInitializeNodeType(&Smb2RdrOps, RDBSS_NTC_MINIRDR_DISPATCH, sizeof(MINIRDR_DISPATCH));
 
-    Smb2RdrOps.MRxFlags = 0;
+    Smb2RdrOps.MRxFlags = RDBSS_MANAGE_V_NET_ROOT_EXTENSION | RDBSS_MANAGE_FOBX_EXTENSION;
     Smb2RdrOps.MRxSrvCallSize = 0;
     Smb2RdrOps.MRxNetRootSize = 0;
-    Smb2RdrOps.MRxVNetRootSize = 0;
+    Smb2RdrOps.MRxVNetRootSize = sizeof(SMB2RDR_VNETROOT_EXT);
     Smb2RdrOps.MRxFcbSize = 0;
-    Smb2RdrOps.MRxFobxSize = 0;
+    Smb2RdrOps.MRxFobxSize = sizeof(SMB2RDR_FOBX_EXT);
     Smb2RdrOps.MRxCancel = NULL;
 
     Smb2RdrOps.MRxStart = Smb2RdrStart;
@@ -355,26 +757,26 @@ static NTSTATUS Smb2InitOps(VOID)
     Smb2RdrOps.MRxFinalizeNetRoot = Smb2FinalizeNetRoot;
     Smb2RdrOps.MRxFinalizeVNetRoot = Smb2FinalizeVNetRoot;
 
-    Smb2RdrOps.MRxCreate = Smb2NotImplemented;
-    Smb2RdrOps.MRxCollapseOpen = Smb2NotImplemented;
-    Smb2RdrOps.MRxShouldTryToCollapseThisOpen = Smb2NotImplemented;
+    Smb2RdrOps.MRxCreate = Smb2Create;
+    Smb2RdrOps.MRxCollapseOpen = Smb2CollapseOpen;
+    Smb2RdrOps.MRxShouldTryToCollapseThisOpen = Smb2ShouldTryToCollapseThisOpen;
     Smb2RdrOps.MRxExtendForCache = Smb2ExtendFile;
     Smb2RdrOps.MRxExtendForNonCache = Smb2ExtendFile;
-    Smb2RdrOps.MRxCloseSrvOpen = Smb2NotImplemented;
-    Smb2RdrOps.MRxFlush = Smb2NotImplemented;
+    Smb2RdrOps.MRxCloseSrvOpen = Smb2CloseSrvOpen;
+    Smb2RdrOps.MRxFlush = Smb2Flush;
     Smb2RdrOps.MRxDeallocateForFcb = Smb2DeallocateForFcb;
     Smb2RdrOps.MRxDeallocateForFobx = Smb2DeallocateForFobx;
     Smb2RdrOps.MRxIsLockRealizable = Smb2IsLockRealizable;
-    Smb2RdrOps.MRxQueryDirectory = Smb2NotImplemented;
-    Smb2RdrOps.MRxQueryVolumeInfo = Smb2NotImplemented;
+    Smb2RdrOps.MRxQueryDirectory = Smb2QueryDirectory;
+    Smb2RdrOps.MRxQueryVolumeInfo = Smb2QueryVolumeInfo;
     Smb2RdrOps.MRxQueryEaInfo = Smb2NotImplemented;
     Smb2RdrOps.MRxSetEaInfo = Smb2NotImplemented;
     Smb2RdrOps.MRxQuerySdInfo = Smb2NotImplemented;
     Smb2RdrOps.MRxSetSdInfo = Smb2NotImplemented;
-    Smb2RdrOps.MRxQueryFileInfo = Smb2NotImplemented;
+    Smb2RdrOps.MRxQueryFileInfo = Smb2QueryFileInfo;
     Smb2RdrOps.MRxSetFileInfo = Smb2NotImplemented;
     Smb2RdrOps.MRxComputeNewBufferingState = Smb2ComputeNewBufferingState;
-    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_READ] = Smb2NotImplemented;
+    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_READ] = Smb2Read;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_WRITE] = Smb2NotImplemented;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_SHAREDLOCK] = Smb2NotImplemented;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_EXCLUSIVELOCK] = Smb2NotImplemented;

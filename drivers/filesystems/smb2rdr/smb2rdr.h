@@ -34,6 +34,29 @@ typedef struct _SMB2RDR_DEVICE_EXTENSION
 
 #define NTC_SMB2RDR_DEVICE_EXTENSION    ((NODE_TYPE_CODE)0xFC10)
 
+/* Per-VNetRoot (per user and share) state: the daemon's tree handle */
+typedef struct _SMB2RDR_VNETROOT_EXT
+{
+    NODE_TYPE_CODE NodeTypeCode;
+    NODE_BYTE_SIZE NodeByteSize;
+    ULONGLONG TreeHandle;
+} SMB2RDR_VNETROOT_EXT, *PSMB2RDR_VNETROOT_EXT;
+
+#define Smb2GetVNetRootExt(VNetRoot) \
+    (((VNetRoot) == NULL) ? NULL : (PSMB2RDR_VNETROOT_EXT)((VNetRoot)->Context))
+
+/* Per-open state: the daemon's file handle */
+typedef struct _SMB2RDR_FOBX_EXT
+{
+    NODE_TYPE_CODE NodeTypeCode;
+    NODE_BYTE_SIZE NodeByteSize;
+    ULONGLONG FileHandle;
+    BOOLEAN IsDirectory;
+} SMB2RDR_FOBX_EXT, *PSMB2RDR_FOBX_EXT;
+
+#define Smb2GetFobxExt(Fobx) \
+    (((Fobx) == NULL) ? NULL : (PSMB2RDR_FOBX_EXT)((Fobx)->Context))
+
 extern PRDBSS_DEVICE_OBJECT Smb2RdrDevice;
 
 /* upcall.c: kernel -> daemon transport */

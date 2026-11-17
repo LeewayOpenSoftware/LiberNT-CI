@@ -38,6 +38,84 @@
 #define SMB2RDR_UP_PING         1   /* no payload; reply payload is echoed (transport self-test) */
 #define SMB2RDR_UP_CONNECT      2   /* payload: server name, UTF-16, no terminator */
 
+#define SMB2RDR_UP_TREE_CONNECT     3   /* payload: SMB2RDR_TREE_CONNECT_REQ; reply: SMB2RDR_TREE_CONNECT_REPLY */
+#define SMB2RDR_UP_TREE_DISCONNECT  4   /* payload: SMB2RDR_HANDLE_REQ (tree handle) */
+#define SMB2RDR_UP_OPEN             5   /* payload: SMB2RDR_OPEN_REQ; reply: SMB2RDR_OPEN_REPLY */
+#define SMB2RDR_UP_CLOSE            6   /* payload: SMB2RDR_HANDLE_REQ (file handle) */
+#define SMB2RDR_UP_READ             7   /* payload: SMB2RDR_READ_REQ; reply: the data */
+#define SMB2RDR_UP_QUERYDIR         8   /* payload: SMB2RDR_QUERYDIR_REQ; reply: raw FILE_*_INFORMATION entries */
+
+/*
+ * Handles are opaque 64-bit values owned by the daemon (it maps them to connection, tree and file ids).
+ * 0 is never a valid handle.
+ */
+typedef struct _SMB2RDR_HANDLE_REQ
+{
+    unsigned long long Handle;
+} SMB2RDR_HANDLE_REQ;
+
+/* Server and share as "server\share", UTF-16, no terminator, no leading backslash */
+typedef struct _SMB2RDR_TREE_CONNECT_REQ
+{
+    unsigned long NameLength;   /* bytes of Name */
+    unsigned long Reserved;
+    /* WCHAR Name[] follows */
+} SMB2RDR_TREE_CONNECT_REQ;
+
+typedef struct _SMB2RDR_TREE_CONNECT_REPLY
+{
+    unsigned long long TreeHandle;
+} SMB2RDR_TREE_CONNECT_REPLY;
+
+typedef struct _SMB2RDR_OPEN_REQ
+{
+    unsigned long long TreeHandle;
+    unsigned long DesiredAccess;
+    unsigned long ShareAccess;
+    unsigned long FileAttributes;
+    unsigned long Disposition;      /* FILE_OPEN .. FILE_OVERWRITE_IF, same values as SMB2 */
+    unsigned long CreateOptions;
+    unsigned long PathLength;       /* bytes of Path */
+    /* WCHAR Path[] follows: relative to the share, no leading backslash */
+} SMB2RDR_OPEN_REQ;
+
+typedef struct _SMB2RDR_OPEN_REPLY
+{
+    unsigned long long FileHandle;
+    long long CreationTime;
+    long long LastAccessTime;
+    long long LastWriteTime;
+    long long ChangeTime;
+    long long AllocationSize;
+    long long EndOfFile;
+    unsigned long FileAttributes;
+    unsigned long CreateAction;     /* FILE_OPENED, FILE_CREATED, ... */
+} SMB2RDR_OPEN_REPLY;
+
+typedef struct _SMB2RDR_READ_REQ
+{
+    unsigned long long FileHandle;
+    unsigned long long Offset;
+    unsigned long Length;           /* at most SMB2RDR_MAX_IO */
+    unsigned long Reserved;
+} SMB2RDR_READ_REQ;
+
+#define SMB2RDR_QD_RESTART  0x1
+#define SMB2RDR_QD_SINGLE   0x2
+
+typedef struct _SMB2RDR_QUERYDIR_REQ
+{
+    unsigned long long FileHandle;
+    unsigned long InfoClass;        /* FILE_INFORMATION_CLASS value, passed through */
+    unsigned long Flags;            /* SMB2RDR_QD_* */
+    unsigned long OutputLength;     /* at most SMB2RDR_MAX_IO */
+    unsigned long PatternLength;    /* bytes of Pattern, 0 means "*" */
+    /* WCHAR Pattern[] follows */
+} SMB2RDR_QUERYDIR_REQ;
+
+/* One request moves at most this many bytes of file or directory data */
+#define SMB2RDR_MAX_IO          (60 * 1024)
+
 /* Daemon <- kernel (output of IOCTL_SMB2RDR_GETREQ): header followed by Length payload bytes */
 typedef struct _SMB2RDR_UPCALL
 {

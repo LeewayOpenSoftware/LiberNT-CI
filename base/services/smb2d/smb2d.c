@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 #include "smb2client.h"
 #include "smb2rdr_ioctl.h"
@@ -25,6 +26,41 @@
 #define ST_BAD_NETWORK_PATH     ((LONG)0xC00000BEL)
 
 static volatile LONG g_Stop;
+
+/* Credentials: the daemon's own identity unless SMB2D_USER / SMB2D_DOMAIN / SMB2D_PASSWORD are set.
+ * Per-caller identity (impersonating the requesting token) is a later step. */
+static WCHAR g_User[256], g_Domain[256], g_Password[256];
+static int g_HaveUser;
+
+/* Handle tables. The daemon serves one request at a time, so no locking is needed yet. */
+typedef struct _CONNECTION
+{
+    struct _CONNECTION *Next;
+    WCHAR Host[257];
+    SMB2_CONN *Conn;
+    unsigned Trees;
+} CONNECTION;
+
+typedef struct _TREE
+{
+    struct _TREE *Next;
+    unsigned long long Handle;
+    CONNECTION *Connection;
+    uint32_t TreeId;
+} TREE;
+
+typedef struct _OPENFILE
+{
+    struct _OPENFILE *Next;
+    unsigned long long Handle;
+    TREE *Tree;
+    SMB2_FILE_ID FileId;
+} OPENFILE;
+
+static CONNECTION *g_Connections;
+static TREE *g_Trees;
+static OPENFILE *g_Files;
+static unsigned long long g_NextHandle = 1;
 
 static BOOL WINAPI CtrlHandler(DWORD type)
 {
@@ -63,6 +99,268 @@ static LONG DoConnect(const BYTE *payload, DWORD length)
     return (LONG)st;
 }
 
+static TREE *FindTree(unsigned long long h)
+{
+    TREE *t;
+
+    for (t = g_Trees; t; t = t->Next)
+        if (t->Handle == h)
+            return t;
+    return NULL;
+}
+
+static OPENFILE *FindFile(unsigned long long h)
+{
+    OPENFILE *f;
+
+    for (f = g_Files; f; f = f->Next)
+        if (f->Handle == h)
+            return f;
+    return NULL;
+}
+
+static CONNECTION *GetConnection(const WCHAR *host, LONG *status)
+{
+    CONNECTION *c;
+    SMB2_CONN *sc = NULL;
+    uint32_t st;
+
+    for (c = g_Connections; c; c = c->Next)
+        if (!_wcsicmp(c->Host, host))
+            return c;
+
+    st = Smb2Connect(host, 445, &sc);
+    if (st == SMB2_STATUS_SUCCESS)
+        st = Smb2Negotiate(sc);
+    if (st == SMB2_STATUS_SUCCESS)
+        st = Smb2SessionSetup(sc, host, g_HaveUser ? g_User : NULL, g_HaveUser ? g_Domain : NULL,
+                              g_HaveUser ? g_Password : NULL);
+    if (st != SMB2_STATUS_SUCCESS)
+    {
+        if (sc)
+            Smb2Disconnect(sc);
+        *status = (LONG)st;
+        return NULL;
+    }
+    c = (CONNECTION *)calloc(1, sizeof(*c));
+    if (!c)
+    {
+        Smb2Disconnect(sc);
+        *status = (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+        return NULL;
+    }
+    wcsncpy(c->Host, host, 256);
+    c->Conn = sc;
+    c->Next = g_Connections;
+    g_Connections = c;
+    return c;
+}
+
+static void DropConnectionIfIdle(CONNECTION *c)
+{
+    CONNECTION **pp;
+
+    if (c->Trees)
+        return;
+    Smb2Logoff(c->Conn);
+    Smb2Disconnect(c->Conn);
+    for (pp = &g_Connections; *pp; pp = &(*pp)->Next)
+    {
+        if (*pp == c)
+        {
+            *pp = c->Next;
+            break;
+        }
+    }
+    free(c);
+}
+
+static LONG DoTreeConnect(const BYTE *payload, DWORD length, BYTE *reply, DWORD *replyLen)
+{
+    const SMB2RDR_TREE_CONNECT_REQ *req = (const SMB2RDR_TREE_CONNECT_REQ *)payload;
+    WCHAR name[600], *share;
+    CONNECTION *c;
+    TREE *t;
+    LONG status = 0;
+    uint32_t tid = 0, st;
+
+    if (length < sizeof(*req) || req->NameLength > length - sizeof(*req) || req->NameLength < 2 * sizeof(WCHAR) ||
+        req->NameLength > sizeof(name) - sizeof(WCHAR))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    memcpy(name, payload + sizeof(*req), req->NameLength);
+    name[req->NameLength / sizeof(WCHAR)] = 0;
+    share = wcschr(name, L'\\');
+    if (!share || share == name || !share[1])
+        return (LONG)SMB2_STATUS_BAD_NETWORK_NAME;
+    *share++ = 0;
+
+    c = GetConnection(name, &status);
+    if (!c)
+        return status;
+    st = Smb2TreeConnect(c->Conn, name, share, &tid);
+    if (st != SMB2_STATUS_SUCCESS)
+    {
+        DropConnectionIfIdle(c);
+        return (LONG)st;
+    }
+    t = (TREE *)calloc(1, sizeof(*t));
+    if (!t)
+    {
+        Smb2TreeDisconnect(c->Conn, tid);
+        DropConnectionIfIdle(c);
+        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    }
+    t->Handle = g_NextHandle++;
+    t->Connection = c;
+    t->TreeId = tid;
+    t->Next = g_Trees;
+    g_Trees = t;
+    c->Trees++;
+    ((SMB2RDR_TREE_CONNECT_REPLY *)reply)->TreeHandle = t->Handle;
+    *replyLen = sizeof(SMB2RDR_TREE_CONNECT_REPLY);
+    return ST_SUCCESS;
+}
+
+static LONG DoTreeDisconnect(const BYTE *payload, DWORD length)
+{
+    const SMB2RDR_HANDLE_REQ *req = (const SMB2RDR_HANDLE_REQ *)payload;
+    TREE *t, **pp;
+
+    if (length < sizeof(*req))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    t = FindTree(req->Handle);
+    if (!t)
+        return ST_SUCCESS;
+    Smb2TreeDisconnect(t->Connection->Conn, t->TreeId);
+    for (pp = &g_Trees; *pp; pp = &(*pp)->Next)
+    {
+        if (*pp == t)
+        {
+            *pp = t->Next;
+            break;
+        }
+    }
+    t->Connection->Trees--;
+    DropConnectionIfIdle(t->Connection);
+    free(t);
+    return ST_SUCCESS;
+}
+
+static LONG DoOpen(const BYTE *payload, DWORD length, BYTE *reply, DWORD *replyLen)
+{
+    const SMB2RDR_OPEN_REQ *req = (const SMB2RDR_OPEN_REQ *)payload;
+    SMB2RDR_OPEN_REPLY *rep = (SMB2RDR_OPEN_REPLY *)reply;
+    WCHAR path[1024];
+    SMB2_CREATE_RESULT res;
+    OPENFILE *f;
+    TREE *t;
+    uint32_t st;
+
+    if (length < sizeof(*req) || req->PathLength > length - sizeof(*req) || (req->PathLength & 1) ||
+        req->PathLength > sizeof(path) - sizeof(WCHAR))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    t = FindTree(req->TreeHandle);
+    if (!t)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    memcpy(path, payload + sizeof(*req), req->PathLength);
+    path[req->PathLength / sizeof(WCHAR)] = 0;
+
+    st = Smb2CreateEx(t->Connection->Conn, t->TreeId, path, req->DesiredAccess, req->ShareAccess,
+                      req->FileAttributes, req->Disposition, req->CreateOptions, &res);
+    if (st != SMB2_STATUS_SUCCESS)
+        return (LONG)st;
+    f = (OPENFILE *)calloc(1, sizeof(*f));
+    if (!f)
+    {
+        Smb2Close(t->Connection->Conn, t->TreeId, &res.FileId);
+        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    }
+    f->Handle = g_NextHandle++;
+    f->Tree = t;
+    f->FileId = res.FileId;
+    f->Next = g_Files;
+    g_Files = f;
+
+    rep->FileHandle = f->Handle;
+    rep->CreationTime = (long long)res.CreationTime;
+    rep->LastAccessTime = (long long)res.LastAccessTime;
+    rep->LastWriteTime = (long long)res.LastWriteTime;
+    rep->ChangeTime = (long long)res.ChangeTime;
+    rep->AllocationSize = (long long)res.AllocationSize;
+    rep->EndOfFile = (long long)res.EndOfFile;
+    rep->FileAttributes = res.Attributes;
+    rep->CreateAction = res.CreateAction;
+    *replyLen = sizeof(*rep);
+    return ST_SUCCESS;
+}
+
+static LONG DoClose(const BYTE *payload, DWORD length)
+{
+    const SMB2RDR_HANDLE_REQ *req = (const SMB2RDR_HANDLE_REQ *)payload;
+    OPENFILE *f, **pp;
+    uint32_t st;
+
+    if (length < sizeof(*req))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    f = FindFile(req->Handle);
+    if (!f)
+        return ST_SUCCESS;
+    st = Smb2Close(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId);
+    for (pp = &g_Files; *pp; pp = &(*pp)->Next)
+    {
+        if (*pp == f)
+        {
+            *pp = f->Next;
+            break;
+        }
+    }
+    free(f);
+    return (LONG)st;
+}
+
+static LONG DoRead(const BYTE *payload, DWORD length, BYTE *reply, DWORD *replyLen)
+{
+    const SMB2RDR_READ_REQ *req = (const SMB2RDR_READ_REQ *)payload;
+    OPENFILE *f;
+    uint32_t n = 0, st;
+
+    if (length < sizeof(*req) || req->Length > SMB2RDR_MAX_IO)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    f = FindFile(req->FileHandle);
+    if (!f)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    st = Smb2Read(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId, req->Offset, req->Length, reply, &n);
+    *replyLen = n;
+    return (LONG)st;
+}
+
+static LONG DoQueryDir(const BYTE *payload, DWORD length, BYTE *reply, DWORD *replyLen)
+{
+    const SMB2RDR_QUERYDIR_REQ *req = (const SMB2RDR_QUERYDIR_REQ *)payload;
+    WCHAR pattern[260];
+    OPENFILE *f;
+    uint32_t n = 0, st;
+    uint8_t flags = 0;
+
+    if (length < sizeof(*req) || req->PatternLength > length - sizeof(*req) || (req->PatternLength & 1) ||
+        req->PatternLength > sizeof(pattern) - sizeof(WCHAR) || req->OutputLength > SMB2RDR_MAX_IO ||
+        req->InfoClass > 0xFF)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    f = FindFile(req->FileHandle);
+    if (!f)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    memcpy(pattern, payload + sizeof(*req), req->PatternLength);
+    pattern[req->PatternLength / sizeof(WCHAR)] = 0;
+    if (req->Flags & SMB2RDR_QD_RESTART)
+        flags |= SMB2_RESTART_SCANS;
+    if (req->Flags & SMB2RDR_QD_SINGLE)
+        flags |= SMB2_RETURN_SINGLE_ENTRY;
+    st = Smb2QueryDirectoryRaw(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId, (uint8_t)req->InfoClass,
+                               flags, req->PatternLength ? pattern : NULL, req->OutputLength, reply, &n);
+    *replyLen = n;
+    return (LONG)st;
+}
+
 static void Serve(HANDLE dev)
 {
     static BYTE reqbuf[sizeof(SMB2RDR_UPCALL) + SMB2RDR_MAX_PAYLOAD];
@@ -96,6 +394,24 @@ static void Serve(HANDLE dev)
             case SMB2RDR_UP_CONNECT:
                 status = DoConnect(reqbuf + sizeof(*up), up->Length);
                 break;
+            case SMB2RDR_UP_TREE_CONNECT:
+                status = DoTreeConnect(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
+                break;
+            case SMB2RDR_UP_TREE_DISCONNECT:
+                status = DoTreeDisconnect(reqbuf + sizeof(*up), up->Length);
+                break;
+            case SMB2RDR_UP_OPEN:
+                status = DoOpen(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
+                break;
+            case SMB2RDR_UP_CLOSE:
+                status = DoClose(reqbuf + sizeof(*up), up->Length);
+                break;
+            case SMB2RDR_UP_READ:
+                status = DoRead(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
+                break;
+            case SMB2RDR_UP_QUERYDIR:
+                status = DoQueryDir(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
+                break;
             default:
                 status = ST_NOT_SUPPORTED;
                 break;
@@ -114,6 +430,12 @@ int main(void)
     HANDLE dev;
     ULONG version = SMB2RDR_PROTOCOL_VERSION;
 
+    if (GetEnvironmentVariableW(L"SMB2D_USER", g_User, 256) > 0)
+    {
+        g_HaveUser = 1;
+        GetEnvironmentVariableW(L"SMB2D_DOMAIN", g_Domain, 256);
+        GetEnvironmentVariableW(L"SMB2D_PASSWORD", g_Password, 256);
+    }
     SetConsoleCtrlHandler(CtrlHandler, TRUE);
     dev = CreateFileW(SMB2RDR_USER_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
                       NULL, OPEN_EXISTING, 0, NULL);

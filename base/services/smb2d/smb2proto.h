@@ -79,6 +79,7 @@
 /* Query directory */
 #define SMB2_FILE_DIRECTORY_INFORMATION  0x01
 #define SMB2_RESTART_SCANS               0x01
+#define SMB2_RETURN_SINGLE_ENTRY         0x02
 
 /* NTSTATUS values the client logic cares about */
 #define SMB2_STATUS_SUCCESS                  0x00000000u

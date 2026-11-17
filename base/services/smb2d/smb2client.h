@@ -39,6 +39,31 @@ uint32_t Smb2TreeConnect(SMB2_CONN *Conn, const WCHAR *Host, const WCHAR *Share,
 uint32_t Smb2TreeDisconnect(SMB2_CONN *Conn, uint32_t TreeId);
 uint32_t Smb2Logoff(SMB2_CONN *Conn);
 
+typedef struct _SMB2_CREATE_RESULT
+{
+    SMB2_FILE_ID FileId;
+    uint64_t CreationTime;
+    uint64_t LastAccessTime;
+    uint64_t LastWriteTime;
+    uint64_t ChangeTime;
+    uint64_t AllocationSize;
+    uint64_t EndOfFile;
+    uint32_t Attributes;
+    uint32_t CreateAction;
+} SMB2_CREATE_RESULT;
+
+uint32_t Smb2CreateEx(SMB2_CONN *Conn, uint32_t TreeId, const WCHAR *Path, uint32_t DesiredAccess,
+                      uint32_t ShareAccess, uint32_t FileAttributes, uint32_t CreateDisposition,
+                      uint32_t CreateOptions, SMB2_CREATE_RESULT *Result);
+
+/*
+ * One QUERY_DIRECTORY round with a caller-chosen information class. Flags: SMB2_RESTART_SCANS,
+ * SMB2_RETURN_SINGLE_ENTRY. Pattern NULL means "*". Returns SMB2_STATUS_NO_MORE_FILES at the end.
+ */
+uint32_t Smb2QueryDirectoryRaw(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint8_t InfoClass,
+                               uint8_t Flags, const WCHAR *Pattern, uint32_t OutputLength, void *Buffer,
+                               uint32_t *Returned);
+
 /* Path is relative to the share, backslash separated, no leading separator ("" is the share root). */
 uint32_t Smb2Create(SMB2_CONN *Conn, uint32_t TreeId, const WCHAR *Path, uint32_t DesiredAccess,
                     uint32_t CreateDisposition, uint32_t CreateOptions, SMB2_FILE_ID *FileId,

@@ -505,27 +505,25 @@ uint32_t Smb2Logoff(SMB2_CONN *c)
 }
 
 /* 2.2.13 CREATE, 2.2.14 response */
-uint32_t Smb2Create(SMB2_CONN *c, uint32_t TreeId, const WCHAR *Path, uint32_t DesiredAccess,
-                    uint32_t CreateDisposition, uint32_t CreateOptions, SMB2_FILE_ID *FileId,
-                    uint64_t *EndOfFile, uint32_t *Attributes)
+uint32_t Smb2CreateEx(SMB2_CONN *c, uint32_t TreeId, const WCHAR *Path, uint32_t DesiredAccess,
+                      uint32_t ShareAccess, uint32_t FileAttributes, uint32_t CreateDisposition,
+                      uint32_t CreateOptions, SMB2_CREATE_RESULT *Res)
 {
     size_t namebytes = wcslen(Path) * sizeof(WCHAR), bodylen = 56 + (namebytes ? namebytes : 1), rlen;
-    uint8_t *body = (uint8_t *)calloc(1, bodylen), *r;
+    uint8_t *body, *r;
     uint32_t st;
 
+    if (namebytes > 0xFFFF)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    body = (uint8_t *)calloc(1, bodylen);
     if (!body)
         return SMB2_STATUS_INSUFFICIENT_RESOURCES;
-    if (namebytes > 0xFFFF)
-    {
-        free(body);
-        return SMB2_STATUS_INVALID_PARAMETER;
-    }
     Smb2Put16(body, 0, 57);
     body[3] = SMB2_OPLOCK_NONE;
     Smb2Put32(body, 4, SMB2_IMPERSONATION);
     Smb2Put32(body, 24, DesiredAccess);
-    Smb2Put32(body, 28, 0);                             /* FileAttributes */
-    Smb2Put32(body, 32, 7);                             /* ShareAccess: read | write | delete */
+    Smb2Put32(body, 28, FileAttributes);
+    Smb2Put32(body, 32, ShareAccess);
     Smb2Put32(body, 36, CreateDisposition);
     Smb2Put32(body, 40, CreateOptions);
     Smb2Put16(body, 44, SMB2_HEADER_SIZE + 56);
@@ -544,13 +542,34 @@ uint32_t Smb2Create(SMB2_CONN *c, uint32_t TreeId, const WCHAR *Path, uint32_t D
         free(r);
         return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
     }
-    FileId->Persistent = Smb2Get64(r, SMB2_HEADER_SIZE + 64);
-    FileId->Volatile = Smb2Get64(r, SMB2_HEADER_SIZE + 72);
-    if (EndOfFile)
-        *EndOfFile = Smb2Get64(r, SMB2_HEADER_SIZE + 48);
-    if (Attributes)
-        *Attributes = Smb2Get32(r, SMB2_HEADER_SIZE + 56);
+    Res->CreateAction = Smb2Get32(r, SMB2_HEADER_SIZE + 4);
+    Res->CreationTime = Smb2Get64(r, SMB2_HEADER_SIZE + 8);
+    Res->LastAccessTime = Smb2Get64(r, SMB2_HEADER_SIZE + 16);
+    Res->LastWriteTime = Smb2Get64(r, SMB2_HEADER_SIZE + 24);
+    Res->ChangeTime = Smb2Get64(r, SMB2_HEADER_SIZE + 32);
+    Res->AllocationSize = Smb2Get64(r, SMB2_HEADER_SIZE + 40);
+    Res->EndOfFile = Smb2Get64(r, SMB2_HEADER_SIZE + 48);
+    Res->Attributes = Smb2Get32(r, SMB2_HEADER_SIZE + 56);
+    Res->FileId.Persistent = Smb2Get64(r, SMB2_HEADER_SIZE + 64);
+    Res->FileId.Volatile = Smb2Get64(r, SMB2_HEADER_SIZE + 72);
     free(r);
+    return SMB2_STATUS_SUCCESS;
+}
+
+uint32_t Smb2Create(SMB2_CONN *c, uint32_t TreeId, const WCHAR *Path, uint32_t DesiredAccess,
+                    uint32_t CreateDisposition, uint32_t CreateOptions, SMB2_FILE_ID *FileId,
+                    uint64_t *EndOfFile, uint32_t *Attributes)
+{
+    SMB2_CREATE_RESULT res;
+    uint32_t st = Smb2CreateEx(c, TreeId, Path, DesiredAccess, 7, 0, CreateDisposition, CreateOptions, &res);
+
+    if (st != SMB2_STATUS_SUCCESS)
+        return st;
+    *FileId = res.FileId;
+    if (EndOfFile)
+        *EndOfFile = res.EndOfFile;
+    if (Attributes)
+        *Attributes = res.Attributes;
     return SMB2_STATUS_SUCCESS;
 }
 
@@ -690,4 +709,60 @@ uint32_t Smb2QueryDirectory(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *F
         }
         free(r);
     }
+}
+
+/* 2.2.33 QUERY_DIRECTORY: one round, the response entries are returned unparsed (MS-FSCC layouts) */
+uint32_t Smb2QueryDirectoryRaw(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint8_t InfoClass,
+                               uint8_t Flags, const WCHAR *Pattern, uint32_t OutputLength, void *Buffer,
+                               uint32_t *Returned)
+{
+    static const WCHAR star[] = L"*";
+    size_t patbytes, bodylen;
+    uint8_t *body, *r;
+    size_t rlen;
+    uint32_t st, len;
+    uint16_t off;
+
+    *Returned = 0;
+    if (!Pattern)
+        Pattern = star;
+    patbytes = wcslen(Pattern) * sizeof(WCHAR);
+    if (patbytes > 0xFFFF || OutputLength > SMB2_MAX_IO)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    bodylen = 32 + (patbytes ? patbytes : 1);
+    body = (uint8_t *)calloc(1, bodylen);
+    if (!body)
+        return SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    Smb2Put16(body, 0, 33);
+    body[2] = InfoClass;
+    body[3] = Flags;
+    Smb2Put64(body, 8, FileId->Persistent);
+    Smb2Put64(body, 16, FileId->Volatile);
+    Smb2Put16(body, 24, SMB2_HEADER_SIZE + 32);
+    Smb2Put16(body, 26, (uint16_t)patbytes);
+    Smb2Put32(body, 28, OutputLength);
+    memcpy(body + 32, Pattern, patbytes);
+    st = Transact(c, SMB2_QUERY_DIRECTORY, TreeId, body, bodylen, &r, &rlen);
+    free(body);
+    if (st != SMB2_STATUS_SUCCESS)
+    {
+        free(r);
+        return st;
+    }
+    if (rlen < SMB2_HEADER_SIZE + 8 || Smb2Get16(r, SMB2_HEADER_SIZE) != 9)
+    {
+        free(r);
+        return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+    }
+    off = Smb2Get16(r, SMB2_HEADER_SIZE + 2);
+    len = Smb2Get32(r, SMB2_HEADER_SIZE + 4);
+    if (off < SMB2_HEADER_SIZE + 8 || (size_t)off + len > rlen || len > OutputLength)
+    {
+        free(r);
+        return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+    }
+    memcpy(Buffer, r + off, len);
+    *Returned = len;
+    free(r);
+    return SMB2_STATUS_SUCCESS;
 }
