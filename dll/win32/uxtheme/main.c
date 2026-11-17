@@ -23,6 +23,7 @@
 #include "windef.h"
 #include "winbase.h"
 #include "uxthemedll.h"
+#include <pseh/pseh2.h>
 
 #include "wine/debug.h"
 
@@ -36,11 +37,22 @@ BOOL WINAPI DllMain(HINSTANCE hInstDLL, DWORD fdwReason, void *reserved)
     TRACE("%p 0x%lx %p\n", hInstDLL, fdwReason, reserved);
     switch(fdwReason) {
         case DLL_PROCESS_ATTACH:
+        {
             DisableThreadLibraryCalls(hInstDLL);
+            /* Park trust events across attach so no worker is queued before process init finishes;
+               the finally clears the gate on every exit from InitSystem, an exception included. */
             UXTHEME_TrustBeginAttachDefer();
-            UXTHEME_InitSystem(hInstDLL);
-            UXTHEME_TrustEndAttachDefer();
+            _SEH2_TRY
+            {
+                UXTHEME_InitSystem(hInstDLL);
+            }
+            _SEH2_FINALLY
+            {
+                UXTHEME_TrustEndAttachDefer();
+            }
+            _SEH2_END;
             break;
+        }
         case DLL_PROCESS_DETACH:
             if (reserved) break;
             UXTHEME_UninitSystem();

@@ -1269,6 +1269,8 @@ UXTHEME_TrustOpenThemeFile(LPCWSTR path, LPCWSTR pszColorName, LPCWSTR pszSizeNa
     if (!path)
         return E_POINTER;
     TrustEnsureClassified();
+    /* Write any trust events parked during process-init attach, now that queuing a worker is safe */
+    TrustFlushEvents();
     if (TrustImpersonating())
         return E_ACCESSDENIED;
     if (!UXTHEME_TrustNameFromStoredPath(path, name, ARRAY_SIZE(name)) ||
