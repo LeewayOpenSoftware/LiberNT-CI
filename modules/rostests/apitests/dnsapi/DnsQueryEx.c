@@ -14,6 +14,7 @@
 #define QUERY_CONTEXT_TAG ((PVOID)(ULONG_PTR)0x517cc1b9)
 
 static HANDLE g_Done;
+static PDNS_QUERY_RESULT g_CallbackResults;
 static volatile DNS_STATUS g_CallbackStatus;
 static volatile LONG g_ContextSeen;
 static volatile LONG g_CallbackCalls;
@@ -23,6 +24,7 @@ QueryComplete(PVOID Context, PDNS_QUERY_RESULT Results)
 {
     if (Context == QUERY_CONTEXT_TAG)
         InterlockedExchange(&g_ContextSeen, 1);
+    g_CallbackResults = Results;
     g_CallbackStatus = Results->QueryStatus;
     InterlockedIncrement(&g_CallbackCalls);
     if (Results->pQueryRecords)
@@ -36,6 +38,7 @@ ResetCompletion(VOID)
     if (g_Done)
         CloseHandle(g_Done);
     g_Done = CreateEventW(NULL, FALSE, FALSE, NULL);
+    g_CallbackResults = NULL;
     g_CallbackStatus = ERROR_SUCCESS;
     InterlockedExchange(&g_ContextSeen, 0);
     InterlockedExchange(&g_CallbackCalls, 0);
@@ -76,40 +79,58 @@ void func_DnsQueryEx(void)
     Status = DnsQueryEx(&Request, &Results, NULL);
     ok(Status == ERROR_INVALID_PARAMETER, "NULL name: %lu\n", Status);
     Request.QueryName = L"localhost";
-    Request.pDnsExtraQueryInfo = (PDNS_EXTRA_QUERY_INFO)&Results;
+    Request.pDnsExtraQueryInfo = &Results;
     Status = DnsQueryEx(&Request, &Results, NULL);
     ok(Status == ERROR_INVALID_PARAMETER, "Reserved info: %lu\n", Status);
     Request.pDnsExtraQueryInfo = NULL;
 
-    /* A query with a completion routine is delivered asynchronously */
+    /* A query with a completion routine is pending and delivers asynchronously
+     * into the caller's result structure */
     ResetCompletion();
     Request.QueryName = L"localhost";
     Request.QueryType = DNS_TYPE_AAAA;
     Request.pQueryCompletionCallback = QueryComplete;
     Request.QueryContext = QUERY_CONTEXT_TAG;
     ZeroMemory(&Cancel, sizeof(Cancel));
+    ZeroMemory(&Results, sizeof(Results));
     Status = DnsQueryEx(&Request, &Results, &Cancel);
-    ok(Status == ERROR_SUCCESS, "Async submit failed: %lu\n", Status);
+    ok(Status == DNS_REQUEST_PENDING, "Async submit returned %lu, expected DNS_REQUEST_PENDING\n", Status);
     Wait = WaitForSingleObject(g_Done, 10000);
     ok(Wait == WAIT_OBJECT_0, "Completion never delivered\n");
     ok(g_CallbackCalls == 1, "Callback calls %ld\n", g_CallbackCalls);
     ok(g_ContextSeen == 1, "Query context not passed through\n");
     ok(g_CallbackStatus == ERROR_SUCCESS, "Callback status %lu\n", g_CallbackStatus);
+    ok(g_CallbackResults == &Results, "Callback did not receive the caller's result pointer\n");
+    ok(Results.QueryStatus == ERROR_SUCCESS, "Caller result not filled: %lu\n", Results.QueryStatus);
 
-    /* Cancelling a finished query is a harmless no-op */
+    /* A finished query's cancel handle is inert */
     DnsCancelQuery(&Cancel);
+    ok(g_CallbackCalls == 1, "Cancel after completion redelivered\n");
 
-    /* Cancelling an in-flight query must not deliver a completion */
+    /* Cancelling a pending query still delivers one completion with ERROR_CANCELLED */
     ResetCompletion();
     Request.QueryName = L"localhost";
     Request.QueryType = DNS_TYPE_A;
     ZeroMemory(&Cancel, sizeof(Cancel));
+    ZeroMemory(&Results, sizeof(Results));
     Status = DnsQueryEx(&Request, &Results, &Cancel);
-    ok(Status == ERROR_SUCCESS, "Second async submit failed: %lu\n", Status);
+    ok(Status == DNS_REQUEST_PENDING, "Second async submit returned %lu\n", Status);
     DnsCancelQuery(&Cancel);
-    Wait = WaitForSingleObject(g_Done, 3000);
-    ok(Wait == WAIT_TIMEOUT || g_CallbackCalls == 1,
-       "Cancelled query delivered a completion\n");
+    Wait = WaitForSingleObject(g_Done, 10000);
+    ok(Wait == WAIT_OBJECT_0, "Cancelled query never delivered its completion\n");
+    ok(g_CallbackCalls == 1, "Cancelled query delivered %ld completions\n", g_CallbackCalls);
+    ok(g_CallbackStatus == ERROR_CANCELLED, "Cancelled status %lu\n", g_CallbackStatus);
+    ok(Results.QueryStatus == ERROR_CANCELLED, "Caller result status %lu\n", Results.QueryStatus);
+
+    /* A cleared handle cancels nothing and touches no memory */
+    ResetCompletion();
+    Status = DnsQueryEx(&Request, &Results, &Cancel);
+    ok(Status == DNS_REQUEST_PENDING, "Third async submit returned %lu\n", Status);
+    DnsCancelQuery(&Cancel);
+    DnsCancelQuery(&Cancel);
+    Wait = WaitForSingleObject(g_Done, 10000);
+    ok(Wait == WAIT_OBJECT_0, "Completion after double cancel never delivered\n");
+    ok(g_CallbackCalls == 1, "Double cancel delivered %ld completions\n", g_CallbackCalls);
 
     ResetCompletion();
 }

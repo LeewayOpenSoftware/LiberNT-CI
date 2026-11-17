@@ -1173,6 +1173,13 @@ ResolverSkipQuestions(const UCHAR *Packet, INT Length, WORD Questions)
     return Offset;
 }
 
+static
+WORD
+ResolverWordHost(const UCHAR *P)
+{
+    return (WORD)(P[0] | (P[1] << 8));
+}
+
 DNS_STATUS
 DnsIntExtractRecordsFromMessage(PDNS_MESSAGE_BUFFER Message, WORD Length, PDNS_RECORDW *Records)
 {
@@ -1186,15 +1193,15 @@ DnsIntExtractRecordsFromMessage(PDNS_MESSAGE_BUFFER Message, WORD Length, PDNS_R
     if (Message == NULL)
         return ERROR_INVALID_PARAMETER;
     if (Length < sizeof(DNS_HEADER))
-        return ERROR_INVALID_DATA;
+        return DNS_ERROR_BAD_PACKET;
 
-    Counts[0] = ResolverWord(Packet + 6);
-    Counts[1] = ResolverWord(Packet + 8);
-    Counts[2] = ResolverWord(Packet + 10);
+    Counts[0] = ResolverWordHost(Packet + 6);
+    Counts[1] = ResolverWordHost(Packet + 8);
+    Counts[2] = ResolverWordHost(Packet + 10);
 
-    Offset = ResolverSkipQuestions(Packet, Length, ResolverWord(Packet + 4));
+    Offset = ResolverSkipQuestions(Packet, Length, ResolverWordHost(Packet + 4));
     if (Offset < 0)
-        return ERROR_INVALID_DATA;
+        return DNS_ERROR_BAD_PACKET;
 
     for (Section = DnsSectionAnswer; Section <= DnsSectionAdditional; Section++)
     {
@@ -1235,7 +1242,7 @@ DnsIntExtractRecordsFromMessage(PDNS_MESSAGE_BUFFER Message, WORD Length, PDNS_R
 
 Invalid:
     DnsIntFreeRecordList((PDNS_RECORD)List);
-    return ERROR_INVALID_DATA;
+    return DNS_ERROR_BAD_PACKET;
 }
 
 DNS_STATUS WINAPI

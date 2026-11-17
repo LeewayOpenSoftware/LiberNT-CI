@@ -403,7 +403,8 @@ typedef struct _DNSAPI_ASYNC_QUERY
     ULONG64 Options;
     PVOID QueryContext;
     PDNS_QUERY_COMPLETION_ROUTINE Callback;
-    DNS_QUERY_RESULT Result;
+    PDNS_QUERY_RESULT CallerResults;
+    PDNS_QUERY_CANCEL Slot;
 } DNSAPI_ASYNC_QUERY, *PDNSAPI_ASYNC_QUERY;
 
 static DWORD WINAPI
@@ -412,7 +413,7 @@ DnsQueryExWorker(PVOID Parameter)
     PDNSAPI_ASYNC_QUERY Op = Parameter;
     PDNS_RECORD Records = NULL;
     DNS_STATUS Status;
-    BOOL Deliver;
+    BOOL Cancelled;
 
     Status = DnsQuery_W(Op->Name,
                         Op->Type,
@@ -425,23 +426,28 @@ DnsQueryExWorker(PVOID Parameter)
     Op->Name = NULL;
 
     EnterCriticalSection(&Op->Lock);
-    Op->Result.Version = DNS_QUERY_RESULTS_VERSION1;
-    Op->Result.QueryStatus = Status;
-    Op->Result.QueryOptions = Op->Options;
-    Op->Result.pQueryRecords = Records;
-    Op->Result.Reserved = NULL;
     Op->Finished = TRUE;
-    Deliver = !Op->Cancelled;
+    Cancelled = Op->Cancelled;
     LeaveCriticalSection(&Op->Lock);
 
-    if (Deliver)
+    if (Cancelled)
     {
-        Op->Callback(Op->QueryContext, &Op->Result);
+        if (Records != NULL)
+            DnsRecordListFree(Records, DnsFreeRecordList);
+        Records = NULL;
+        Status = ERROR_CANCELLED;
     }
-    else if (Op->Result.pQueryRecords)
-    {
-        DnsRecordListFree(Op->Result.pQueryRecords, DnsFreeRecordList);
-    }
+
+    Op->CallerResults->Version = DNS_QUERY_RESULTS_VERSION1;
+    Op->CallerResults->QueryStatus = Status;
+    Op->CallerResults->QueryOptions = Op->Options;
+    Op->CallerResults->pQueryRecords = Records;
+    Op->CallerResults->Reserved = NULL;
+
+    Op->Callback(Op->QueryContext, Op->CallerResults);
+
+    if (Op->Slot != NULL)
+        InterlockedCompareExchangePointer((PVOID *)Op->Slot, NULL, Op);
 
     if (InterlockedDecrement(&Op->Refs) == 0)
     {
@@ -459,7 +465,7 @@ DnsCancelQuery(PDNS_QUERY_CANCEL pCancelHandle)
     if (pCancelHandle == NULL)
         return;
 
-    Op = *(PDNSAPI_ASYNC_QUERY *)pCancelHandle->Reserved;
+    Op = InterlockedExchangePointer((PVOID *)pCancelHandle->Reserved, NULL);
     if (Op == NULL)
         return;
 
@@ -467,8 +473,6 @@ DnsCancelQuery(PDNS_QUERY_CANCEL pCancelHandle)
     if (!Op->Finished)
         Op->Cancelled = TRUE;
     LeaveCriticalSection(&Op->Lock);
-
-    *(PDNSAPI_ASYNC_QUERY *)pCancelHandle->Reserved = NULL;
 
     if (InterlockedDecrement(&Op->Refs) == 0)
     {
@@ -534,6 +538,8 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
     Op->Options = pQueryRequest->QueryOptions;
     Op->QueryContext = pQueryRequest->QueryContext;
     Op->Callback = pQueryRequest->pQueryCompletionCallback;
+    Op->CallerResults = pQueryResults;
+    Op->Slot = pCancelHandle;
     Op->Refs = pCancelHandle ? 2 : 1;
     InitializeCriticalSection(&Op->Lock);
 
@@ -552,12 +558,7 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
     }
     CloseHandle(Thread);
 
-    pQueryResults->Version = DNS_QUERY_RESULTS_VERSION1;
-    pQueryResults->QueryStatus = ERROR_SUCCESS;
-    pQueryResults->QueryOptions = pQueryRequest->QueryOptions;
-    pQueryResults->pQueryRecords = NULL;
-    pQueryResults->Reserved = NULL;
-    return ERROR_SUCCESS;
+    return DNS_REQUEST_PENDING;
 }
 
 WCHAR
