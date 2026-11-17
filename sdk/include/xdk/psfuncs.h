@@ -68,7 +68,7 @@ PsCreateSiloContext(
   IN PESILO Silo,
   IN ULONG Size,
   IN POOL_TYPE PoolType,
-  IN PSILO_CONTEXT_CLEANUP_CALLBACK ContextCleanupCallback OPTIONAL,
+  IN SILO_CONTEXT_CLEANUP_CALLBACK ContextCleanupCallback OPTIONAL,
   OUT PVOID *ReturnedSiloContext);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

@@ -445,9 +445,6 @@ BOOLEAN
 NTAPI
 PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
-    
-    PsSiloInitialize();
-
     NTSTATUS Status;
     OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE SysThreadHandle;
@@ -456,6 +453,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     OBP_EXTENDED_OBJECT_TYPE_INITIALIZER ObjectTypeInitializerEx;
     POBJECT_TYPE_INITIALIZER ObjectTypeInitializer = &ObjectTypeInitializerEx.TypeInfo;
     ULONG i;
+
+    PsSiloInitialize();
 
 
     /* Setup some memory options */
