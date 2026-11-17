@@ -87,8 +87,8 @@ TestEntryPoint(
         Found = FindPage(Buffer, WATCH_BUFFER_SIZE, (ULONG_PTR)Page, PageMask, &Terminated, &ThreadId);
         ok(Terminated, "%s: no terminating record\n", Name);
         ok(Found, "%s: the fault on %p was not reported\n", Name, Page);
-        ok(!Found || ThreadId == GetCurrentThreadId(), "%s: faulting thread %Iu, expected %lu\n",
-           Name, ThreadId, GetCurrentThreadId());
+        ok(!Found || ThreadId == GetCurrentThreadId(), "%s: faulting thread %lu, expected %lu\n",
+           Name, (unsigned long)ThreadId, GetCurrentThreadId());
     }
 
     memset(Buffer, 0xcc, WATCH_BUFFER_SIZE);
