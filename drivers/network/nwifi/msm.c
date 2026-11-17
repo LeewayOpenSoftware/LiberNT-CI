@@ -1075,6 +1075,7 @@ NwifiMsmIndicateStatus(
                         }
 
                         NwifiMsmStartHandshake(Msm);
+                        NwifiSupplicantReplayEapol(Msm);
                         NwifiQueueNotification(Adapter->InterfaceIndex, NwifiNotifyAuthenticating, NDIS_STATUS_SUCCESS);
                         DPRINT1("NWIFI: associated, awaiting 4-way handshake\n");
                     }
