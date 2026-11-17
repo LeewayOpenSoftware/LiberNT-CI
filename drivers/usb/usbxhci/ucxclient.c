@@ -107,6 +107,7 @@
 #define XHCI_UCX_SLOT_DATA_OFFSET          (4 * PAGE_SIZE)
 #define XHCI_UCX_DATA_BUFFER_SIZE          PAGE_SIZE
 #define XHCI_UCX_BULK_TIMEOUT_MS           2000
+#define XHCI_UCX_DMA_MAX_TRANSFER          (64 * 1024)   /* WDF DMA enabler maximum length (one page is used today) */
 
 /* USB Mass Storage Class, Bulk-Only Transport (BOT), SCSI transparent command set */
 #define XHCI_UCX_MSC_SUBCLASS_SCSI     0x06
@@ -291,6 +292,13 @@ typedef struct _XHCI_UCX_DEVICE
 } XHCI_UCX_DEVICE, *PXHCI_UCX_DEVICE;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_DEVICE, XhciUcxGetDevice)
+
+/* Used by the event-ring drain before its definition */
+static
+PXHCI_UCX_SLOT
+XhciUcxFindSlotById(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG SlotId);
 
 /* -1 = not read yet, 0 = legacy usbport, 1 = UCX client path */
 static LONG g_XhciUcxSwitch = -1;
@@ -821,7 +829,7 @@ XhciUcxAllocateHcMemory(
         WDF_DMA_ENABLER_CONFIG_INIT(&DmaConfig,
                                     Dev->Supports64Bit ? WdfDmaProfileScatterGather64
                                                        : WdfDmaProfileScatterGather,
-                                    XHCI_BULK_MAX_TRANSFER_SIZE);
+                                    XHCI_UCX_DMA_MAX_TRANSFER);
         Status = WdfDmaEnablerCreate(Dev->Device, &DmaConfig, WDF_NO_OBJECT_ATTRIBUTES, &Dev->DmaEnabler);
         if (!NT_SUCCESS(Status))
         {
