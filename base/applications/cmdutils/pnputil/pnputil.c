@@ -2384,7 +2384,7 @@ ExportCreateChild(
     }
     else
     {
-        Access = FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+        Access = FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE;
         Status = CreateFn(Handle, Access, &Oa, &Iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
                           EXPORT_FILE_CREATE,
                           EXPORT_FILE_NON_DIRECTORY_FILE | EXPORT_FILE_SYNC_IO | EXPORT_FILE_OPEN_REPARSE_POINT,
@@ -2416,6 +2416,20 @@ ExportCreateChild(
     return ERROR_SUCCESS;
 }
 
+/* Mark the file behind Handle for deletion on close (used to drop a partial copy). */
+static VOID
+ExportDeleteOnClose(
+    _In_ HANDLE Handle)
+{
+    typedef LONG (NTAPI *PSETINFO)(HANDLE, EXPORT_IOSB *, PVOID, ULONG, ULONG);
+    PSETINFO SetInfo = (PSETINFO)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile");
+    EXPORT_IOSB Iosb;
+    BOOLEAN DeleteFlag = TRUE;
+
+    if (SetInfo)
+        SetInfo(Handle, &Iosb, &DeleteFlag, sizeof(DeleteFlag), 13 /* FileDispositionInformation */);
+}
+
 /* Copy one regular file into Parent. An existing destination entry is left as it is. */
 static DWORD
 ExportCopyFile(
@@ -2442,8 +2456,17 @@ ExportCopyFile(
         return Error;
     }
 
-    while (ReadFile(hSource, Buffer, sizeof(Buffer), &Read, NULL) && Read != 0)
+    for (;;)
     {
+        if (!ReadFile(hSource, Buffer, sizeof(Buffer), &Read, NULL))
+        {
+            Error = GetLastError();
+            if (Error == ERROR_SUCCESS)
+                Error = ERROR_READ_FAULT;
+            break;
+        }
+        if (Read == 0)
+            break;
         if (!WriteFile(hDestination, Buffer, Read, &Written2, NULL) || Written2 != Read)
         {
             Error = GetLastError();
@@ -2454,6 +2477,9 @@ ExportCopyFile(
     }
     if (Error == ERROR_SUCCESS && GetFileTime(hSource, &Created, &Accessed, &Written))
         SetFileTime(hDestination, &Created, &Accessed, &Written);
+
+    if (Error != ERROR_SUCCESS)
+        ExportDeleteOnClose(hDestination);
 
     CloseHandle(hSource);
     CloseHandle(hDestination);
@@ -2626,7 +2652,21 @@ CommandExportDriver(
                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
                             FILE_FLAG_BACKUP_SEMANTICS, NULL);
         if (hRoot == INVALID_HANDLE_VALUE)
+        {
             Error = GetLastError();
+        }
+        else
+        {
+            BY_HANDLE_FILE_INFORMATION RootInfo;
+
+            if (!GetFileInformationByHandle(hRoot, &RootInfo) ||
+                !(RootInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                CloseHandle(hRoot);
+                hRoot = INVALID_HANDLE_VALUE;
+                Error = ERROR_BAD_PATHNAME;
+            }
+        }
     }
     if (Error != ERROR_SUCCESS)
     {
