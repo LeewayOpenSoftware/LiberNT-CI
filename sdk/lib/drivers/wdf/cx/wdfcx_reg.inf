@@ -49,3 +49,8 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\Ufx\Versions\1\1","Service",0x00
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\HwNClx\Versions\1\1","Service",0x00000000,"HwNClx0101"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\SPBCx\Versions\1\1","Service",0x00000000,"spbcx"
 HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\SerCx\Versions\2\1","Service",0x00000000,"sercx2"
+HKLM,"SYSTEM\CurrentControlSet\Services\Ucx01000","ErrorControl",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Services\Ucx01000","ImagePath",0x00020000,"system32\drivers\ucx01000.sys"
+HKLM,"SYSTEM\CurrentControlSet\Services\Ucx01000","Start",0x00010001,3
+HKLM,"SYSTEM\CurrentControlSet\Services\Ucx01000","Type",0x00010001,1
+HKLM,"SYSTEM\CurrentControlSet\Control\Wdf\Kmdf\Ucx\Versions\1\0","Service",0x00000000,"Ucx01000"
