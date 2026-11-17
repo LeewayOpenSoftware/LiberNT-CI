@@ -1,0 +1,11 @@
+spec2def(ldrlock_dll.dll ldrlock_dll.spec ADD_IMPORTLIB)
+add_library(ldrlock_dll MODULE ldrlock_dll.c ${CMAKE_CURRENT_BINARY_DIR}/ldrlock_dll.def)
+set_module_type(ldrlock_dll win32dll ENTRYPOINT DllMain 12)
+add_importlibs(ldrlock_dll kernel32 ntdll)
+add_dependencies(ldrlock_dll psdk)
+add_rostests_file(TARGET ldrlock_dll)
+
+add_executable(ldrlock_child ldrlock_child.c)
+set_module_type(ldrlock_child win32cui)
+add_importlibs(ldrlock_child ldrlock_dll msvcrt kernel32 ntdll)
+add_rostests_file(TARGET ldrlock_child)

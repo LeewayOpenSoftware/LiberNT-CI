@@ -2,6 +2,7 @@
 add_subdirectory(load_notifications)
 add_subdirectory(empty_dll)
 add_subdirectory(ldrfwd)
+add_subdirectory(ldrlock)
 
 include_directories($<TARGET_FILE_DIR:load_notifications>)
 include_directories($<TARGET_FILE_DIR:empty_dll>)
@@ -68,6 +69,7 @@ list(APPEND SOURCE
     LdrFindResource_U.c
     LdrForwarderPath.c
     LdrGetDllHandleByName.c
+    LdrInitLoaderLock.c
     LdrLoadDll.c
     LdrQueryProcessModuleInformation.c
     load_notifications.c
@@ -288,7 +290,7 @@ target_link_libraries(ntdll_apitest ntdll_crt_test_lib rtl_test_lib wine uuid ${
 set_module_type(ntdll_apitest win32cui)
 add_importlibs(ntdll_apitest msvcrt advapi32 kernel32 ntdll)
 add_pch(ntdll_apitest precomp.h "${PCH_SKIP_SOURCE}")
-add_dependencies(ntdll_apitest load_notifications empty_dll ldrfwd_a ldrfwd_b ldrfwd_c)
+add_dependencies(ntdll_apitest load_notifications empty_dll ldrfwd_a ldrfwd_b ldrfwd_c ldrlock_dll ldrlock_child)
 
 add_rostests_file(TARGET ntdll_apitest)
 add_rostests_file(TARGET ntdll_apitest SUBDIR testdata)
