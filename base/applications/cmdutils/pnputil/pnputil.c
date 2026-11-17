@@ -30,6 +30,10 @@
 
 #include "resource.h"
 
+/* Returned by a command whose arguments are wrong: wmain prints the usage and exits with 1. A real
+   ERROR_INVALID_PARAMETER (87) from the system is a different result and is passed through. */
+#define RC_USAGE ((INT)0x70000001)
+
 #define PROBLEM_NAME(x) { x, L"" #x }
 
 typedef struct _ADD_CONTEXT
@@ -779,19 +783,29 @@ CommandAddDriver(
         else if (!Specification)
             Specification = argv[i];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     if (!Specification)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
     AddDriverPackages(Specification, 0, &Context);
 
     if (Context.Total == 0)
     {
-        Context.Error = ERROR_FILE_NOT_FOUND;
-        ConPuts(StdOut, L"Failed to add driver package: Missing or invalid driver package specified.\n\n");
+        DWORD Attributes = GetFileAttributesW(Specification);
+
+        if (Attributes != INVALID_FILE_ATTRIBUTES && (Attributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            /* A folder without a wildcard is an empty set, not a failure. */
+            ConPuts(StdOut, L"\n");
+        }
+        else
+        {
+            Context.Error = ERROR_FILE_NOT_FOUND;
+            ConPuts(StdOut, L"Failed to add driver package: Missing or invalid driver package specified.\n\n");
+        }
     }
 
     ConPrintf(StdOut, L"Total driver packages:  %lu\n", Context.Total);
@@ -824,11 +838,11 @@ CommandDeleteDriver(
         else if (!Name)
             Name = argv[i];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     if (!Name)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
 
@@ -851,8 +865,16 @@ CommandDeleteDriver(
     else
     {
         Error = GetLastError();
-        if (Error == ERROR_FILE_NOT_FOUND)
-            Error = ERROR_NOT_AN_INSTALLED_OEM_INF;
+        if (Error == ERROR_FILE_NOT_FOUND || Error == ERROR_NOT_AN_INSTALLED_OEM_INF)
+        {
+            SIZE_T Length = wcslen(Name);
+
+            /* Windows reports a name without the .inf extension as a missing path. */
+            if (Length < 4 || _wcsicmp(Name + Length - 4, L".inf") != 0)
+                Error = ERROR_PATH_NOT_FOUND;
+            else
+                Error = ERROR_NOT_AN_INSTALLED_OEM_INF;
+        }
 
         if (Error == ERROR_INF_IN_USE_BY_DEVICES)
             ConPuts(StdOut, L"Failed to delete driver package: One or more devices are presently installed using the specified INF.\n");
@@ -3079,7 +3101,7 @@ CommandEnumDrivers(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -3089,7 +3111,7 @@ CommandEnumDrivers(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -3326,9 +3348,11 @@ CommandEnumDevices(
         {
             Filter.Resources = TRUE;
         }
-        else if (IsOption(argv[i], L"instanceid") && i + 1 < argc)
+        else if (IsOption(argv[i], L"instanceid"))
         {
-            Filter.InstanceId = argv[++i];
+            /* Without a value (end of line or a following switch) Windows lists every device. */
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                Filter.InstanceId = argv[++i];
         }
         else if (IsOption(argv[i], L"class") && i + 1 < argc)
         {
@@ -3353,7 +3377,7 @@ CommandEnumDevices(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -3363,7 +3387,7 @@ CommandEnumDevices(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -3635,11 +3659,11 @@ CommandDevice(
         else if (!InstanceId)
             InstanceId = argv[i];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     if (!InstanceId)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
 
@@ -3734,11 +3758,11 @@ CommandRollbackDevice(_In_ INT argc, _In_ WCHAR **argv)
         else if (!InstanceId)
             InstanceId = argv[i];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     if (!InstanceId)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
     ConPrintf(StdOut, L"Rolling back device:       %s\n", InstanceId);
@@ -4122,7 +4146,7 @@ CommandExportDriver(
     BOOL All;
 
     if (argc != 2)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
     All = wcscmp(argv[0], L"*") == 0;
@@ -4417,7 +4441,7 @@ CommandEnumClasses(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -4427,7 +4451,7 @@ CommandEnumClasses(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -4908,7 +4932,7 @@ CommandEnumInterfaces(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -4918,7 +4942,7 @@ CommandEnumInterfaces(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -5264,7 +5288,7 @@ CommandEnumDeviceTree(
         else if (!RootId && argv[a][0] != L'/' && argv[a][0] != L'-')
             RootId = argv[a];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     PrintHeader();
@@ -5462,7 +5486,7 @@ CommandEnumContainers(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -5472,7 +5496,7 @@ CommandEnumContainers(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -5668,6 +5692,56 @@ CommandEnumContainers(
     }
 }
 
+/* The switch name in lower case without its prefix, "ids" folded into "deviceids"; false for a value. */
+static BOOL
+CanonicalSwitch(
+    _In_ PCWSTR Arg,
+    _Out_writes_(Cch) PWSTR Name,
+    _In_ DWORD Cch)
+{
+    if (Arg[0] != L'/' && Arg[0] != L'-')
+        return FALSE;
+    lstrcpynW(Name, Arg + 1, Cch);
+    CharLowerW(Name);
+    if (!wcscmp(Name, L"ids"))
+        wcscpy(Name, L"deviceids");
+    return TRUE;
+}
+
+/* Windows rejects a switch that appears twice and the pairs that cannot be combined. */
+static BOOL
+HasConflictingSwitches(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    static const PCWSTR Exclusive[][2] = { { L"connected", L"disconnected" }, { L"enabled", L"disabled" } };
+    WCHAR A[64], B[64];
+    INT i, j;
+    UINT k;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (!CanonicalSwitch(argv[i], A, _countof(A)))
+            continue;
+        for (j = i + 1; j < argc; j++)
+        {
+            if (!CanonicalSwitch(argv[j], B, _countof(B)))
+                continue;
+            if (!wcscmp(A, B))
+                return TRUE;
+            for (k = 0; k < _countof(Exclusive); k++)
+            {
+                if ((!wcscmp(A, Exclusive[k][0]) && !wcscmp(B, Exclusive[k][1])) ||
+                    (!wcscmp(A, Exclusive[k][1]) && !wcscmp(B, Exclusive[k][0])))
+                {
+                    return TRUE;
+                }
+            }
+        }
+    }
+    return FALSE;
+}
+
 int
 wmain(
     int argc,
@@ -5687,6 +5761,12 @@ wmain(
     Command = argv[1];
     argc -= 2;
     argv += 2;
+
+    if (HasConflictingSwitches(argc, argv))
+    {
+        ConPuts(StdOut, UsageText);
+        return 1;
+    }
 
     if (IsOption(Command, L"add-driver") || IsOption(Command, L"a"))
     {
@@ -5766,10 +5846,10 @@ wmain(
     }
     else
     {
-        Result = ERROR_INVALID_PARAMETER;
+        Result = RC_USAGE;
     }
 
-    if (Result == ERROR_INVALID_PARAMETER)
+    if (Result == RC_USAGE)
     {
         ConPuts(StdOut, UsageText);
         Result = 1;
