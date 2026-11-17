@@ -393,6 +393,12 @@ ScmQueryRequiredPrivileges(SC_HANDLE hService, LPBYTE lpBuffer, DWORD cbBufSize,
         LPSERVICE_REQUIRED_PRIVILEGES_INFOW pInfo = (LPSERVICE_REQUIRED_PRIVILEGES_INFOW)pRpcBuf;
 
         *pcbBytesNeeded = dwNeeded;
+        if (pRpcBuf == Dummy)
+        {
+            /* the caller's buffer was too small: report the size, never success into the scratch buffer */
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
         if (pInfo->pmszRequiredPrivileges != NULL)
             pInfo->pmszRequiredPrivileges = (LPWSTR)((ULONG_PTR)pInfo + (ULONG_PTR)pInfo->pmszRequiredPrivileges);
         return TRUE;

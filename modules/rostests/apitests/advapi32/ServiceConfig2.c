@@ -128,6 +128,13 @@ TestRequiredPrivileges(SC_HANDLE hSvc)
     DWORD needed;
     BOOL ret;
 
+    /* Not set: a size probe with no buffer reports the needed size, never success */
+    needed = 0;
+    SetLastError(0xdeadbeef);
+    ret = QueryServiceConfig2W(hSvc, SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO, NULL, 0, &needed);
+    ok(!ret && GetLastError() == ERROR_INSUFFICIENT_BUFFER, "size probe: ret %d error %lu\n", ret, GetLastError());
+    ok(needed >= sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW), "size probe needed = %lu\n", needed);
+
     /* Not set: success with a NULL list */
     needed = 0;
     ret = QueryServiceConfig2W(hSvc, SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO, buf, sizeof(buf), &needed);

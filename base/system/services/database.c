@@ -2343,31 +2343,34 @@ ScmMultiSzContains(
 
 /*
  * Collect the RequiredPrivileges of every service of the image into one MULTI_SZ.
- * Returns FALSE when ANY service of the image does not define the value: Windows keeps every
+ * *pbDefined is FALSE when ANY service of the image does not define the value: Windows keeps every
  * privilege of the token then (a share-process image hosts all its services with one token).
+ * Any other failure is an error and the caller must refuse the start (fail closed).
+ * The service list is walked under the shared database lock (records are inserted/removed under it).
  */
 static
-BOOL
+DWORD
 ScmCollectRequiredPrivileges(
     _In_ PSERVICE pService,
     _In_ PSERVICE_IMAGE pImage,
     _Out_ LPWSTR *ppmszUnion,
-    _Out_ LPDWORD pcchUnion)
+    _Out_ PBOOL pbDefined)
 {
     PLIST_ENTRY ServiceEntry;
     PSERVICE pMember;
-    LPWSTR pmszAll = NULL, pmszOne, pszImagePath, pNew;
-    DWORD cchAll = 1, cbOne, cchOne;
+    LPWSTR pmszAll = NULL, pmszOne, pszImagePath, pNew, p;
+    DWORD cchContent = 0, cbOne, cchStr, dwError = ERROR_SUCCESS;
     HKEY hKey;
     BOOL bShare = (pService->Status.dwServiceType & SERVICE_WIN32_SHARE_PROCESS) != 0;
-    BOOL bAll = TRUE;
 
     *ppmszUnion = NULL;
-    *pcchUnion = 0;
+    *pbDefined = FALSE;
 
     pmszAll = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 2 * sizeof(WCHAR));
     if (pmszAll == NULL)
-        return FALSE;
+        return ERROR_NOT_ENOUGH_MEMORY;
+
+    ScmLockDatabaseShared();
 
     ServiceEntry = ServiceListHead.Flink;
     while (ServiceEntry != &ServiceListHead)
@@ -2381,21 +2384,23 @@ ScmCollectRequiredPrivileges(
                 continue;
         }
 
-        if (ScmOpenServiceKey(pMember->lpServiceName, KEY_READ, &hKey) != ERROR_SUCCESS)
-        {
-            bAll = FALSE;
-            break;
-        }
+        dwError = ScmOpenServiceKey(pMember->lpServiceName, KEY_READ, &hKey);
+        if (dwError != ERROR_SUCCESS)
+            goto fail;
 
         if (pMember != pService)
         {
             /* only the services that run in this very image count */
             pszImagePath = NULL;
-            if (ScmReadString(hKey, L"ImagePath", &pszImagePath) != ERROR_SUCCESS ||
-                _wcsicmp(pszImagePath, pImage->pszImagePath) != 0)
+            dwError = ScmReadString(hKey, L"ImagePath", &pszImagePath);
+            if (dwError != ERROR_SUCCESS)
             {
-                if (pszImagePath != NULL)
-                    HeapFree(GetProcessHeap(), 0, pszImagePath);
+                RegCloseKey(hKey);
+                goto fail;
+            }
+            if (_wcsicmp(pszImagePath, pImage->pszImagePath) != 0)
+            {
+                HeapFree(GetProcessHeap(), 0, pszImagePath);
                 RegCloseKey(hKey);
                 continue;
             }
@@ -2403,44 +2408,48 @@ ScmCollectRequiredPrivileges(
         }
 
         pmszOne = NULL;
-        if (ScmReadRequiredPrivileges(hKey, &pmszOne, &cbOne) != ERROR_SUCCESS)
-        {
-            RegCloseKey(hKey);
-            bAll = FALSE;
-            break;
-        }
+        dwError = ScmReadRequiredPrivileges(hKey, &pmszOne, &cbOne);
         RegCloseKey(hKey);
+        if (dwError == ERROR_FILE_NOT_FOUND)
+        {
+            /* a member without the value: the whole image keeps its token */
+            dwError = ERROR_SUCCESS;
+            goto out;
+        }
+        if (dwError != ERROR_SUCCESS)
+            goto fail;
 
-        cchOne = cbOne / sizeof(WCHAR);
-        pNew = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (cchAll + cchOne + 1) * sizeof(WCHAR));
+        /* append every non-empty string of this list; the final terminator is added at the end */
+        pNew = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (cchContent + cbOne / sizeof(WCHAR) + 2) * sizeof(WCHAR));
         if (pNew == NULL)
         {
             HeapFree(GetProcessHeap(), 0, pmszOne);
-            bAll = FALSE;
-            break;
+            dwError = ERROR_NOT_ENOUGH_MEMORY;
+            goto fail;
         }
-        RtlCopyMemory(pNew, pmszAll, (cchAll - 1) * sizeof(WCHAR));
-        RtlCopyMemory(pNew + (cchAll - 1), pmszOne, cchOne * sizeof(WCHAR));
-        cchAll = (cchAll - 1) + cchOne;
-        /* the copied value ended with extra terminators: normalise to exactly one terminating empty string */
-        while (cchAll >= 2 && pNew[cchAll - 1] == L'\0' && pNew[cchAll - 2] == L'\0')
-            cchAll--;
-        pNew[cchAll] = L'\0';
-        cchAll++;
+        RtlCopyMemory(pNew, pmszAll, cchContent * sizeof(WCHAR));
+        for (p = pmszOne; *p != L'\0'; p += cchStr)
+        {
+            cchStr = (DWORD)wcslen(p) + 1;
+            RtlCopyMemory(pNew + cchContent, p, cchStr * sizeof(WCHAR));
+            cchContent += cchStr;
+        }
         HeapFree(GetProcessHeap(), 0, pmszAll);
         HeapFree(GetProcessHeap(), 0, pmszOne);
         pmszAll = pNew;
     }
 
-    if (!bAll)
-    {
-        HeapFree(GetProcessHeap(), 0, pmszAll);
-        return FALSE;
-    }
-
+    /* every member defines the value (possibly empty = no privileges besides SeChangeNotify) */
+    *pbDefined = TRUE;
     *ppmszUnion = pmszAll;
-    *pcchUnion = cchAll;
-    return TRUE;
+    ScmUnlockDatabase();
+    return ERROR_SUCCESS;
+
+fail:
+out:
+    ScmUnlockDatabase();
+    HeapFree(GetProcessHeap(), 0, pmszAll);
+    return dwError;
 }
 
 /*
@@ -2458,7 +2467,8 @@ ScmApplyRequiredPrivileges(
     _Inout_ PSERVICE_IMAGE pImage)
 {
     LPWSTR pmszUnion = NULL;
-    DWORD cchUnion = 0, cb = 0, i, nDelete = 0, cchName;
+    DWORD cb = 0, i, nDelete = 0, cchName;
+    BOOL bDefined = FALSE;
     HANDLE hSelf = NULL, hBase = NULL, hNew = NULL;
     BOOL bOwnBase = FALSE;
     PTOKEN_PRIVILEGES pTokPriv = NULL;
@@ -2466,7 +2476,10 @@ ScmApplyRequiredPrivileges(
     WCHAR szName[128];
     DWORD dwError = ERROR_SUCCESS;
 
-    if (!ScmCollectRequiredPrivileges(pService, pImage, &pmszUnion, &cchUnion))
+    dwError = ScmCollectRequiredPrivileges(pService, pImage, &pmszUnion, &bDefined);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+    if (!bDefined)
         return ERROR_SUCCESS;
 
     if (pImage->hToken != NULL)
