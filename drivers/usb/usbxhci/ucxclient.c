@@ -390,12 +390,14 @@ XhciUcxFindExtendedCapability(
         ULONG CapHeader;
         ULONG Next;
 
-        if (!XhciUcxRangeInBar(Dev, Offset, CapabilityLength))
+        /* Only the 4-byte header must fit for the walk to continue; the
+         * requested capability must fit entirely before it is handed back. */
+        if (!XhciUcxRangeInBar(Dev, Offset, sizeof(ULONG)))
             return 0;
 
         CapHeader = XhciUcxReadMmio(Dev, Offset);
         if (XHCI_EXT_CAP_ID(CapHeader) == CapabilityId)
-            return Offset;
+            return XhciUcxRangeInBar(Dev, Offset, CapabilityLength) ? Offset : 0;
 
         Next = XHCI_EXT_CAP_NEXT(CapHeader);
         if (Next == 0)
@@ -426,12 +428,13 @@ XhciUcxBuildProtocolPortMap(
         ULONG CapHeader;
         ULONG Next;
 
-        if (!XhciUcxRangeInBar(Dev, Offset, sizeof(XHCI_PROTOCOL_CAPABILITY)))
+        if (!XhciUcxRangeInBar(Dev, Offset, sizeof(ULONG)))
             break;
 
         CapHeader = XhciUcxReadMmio(Dev, Offset);
 
-        if (XHCI_EXT_CAP_ID(CapHeader) == XHCI_EXT_CAP_ID_PROTOCOL)
+        if (XHCI_EXT_CAP_ID(CapHeader) == XHCI_EXT_CAP_ID_PROTOCOL &&
+            XhciUcxRangeInBar(Dev, Offset, sizeof(XHCI_PROTOCOL_CAPABILITY)))
         {
             ULONG PortInfo = XhciUcxReadMmio(Dev, Offset + FIELD_OFFSET(XHCI_PROTOCOL_CAPABILITY, PortInfo));
             UCHAR Major = (UCHAR)XHCI_EXT_PORT_MAJOR(CapHeader);
@@ -1025,9 +1028,13 @@ XhciUcxHandlePortChange(
 
     if (Changes != 0)
     {
-        /* W1C: write only the change bits; RW bits written as 0 are untouched
-         * except PED/PR/WPR which are write-1 only, so writing 0 is safe. */
-        XHCI_UCX_WRITE_REG(PortScReg, Changes);
+        /* Acknowledge (W1C) the change bits while preserving every plain RW bit
+         * (PP, PIC, WCE/WDE/WOE): a bare write of the change mask writes PP=0
+         * and powers the port off on a PPC controller. PED/PR/WPR/LWS are
+         * write-1-to-act bits and are always written as 0 here. */
+        XHCI_UCX_WRITE_REG(PortScReg,
+                           (PortSc & ~(XHCI_PORTSC_CHANGE_MASK | XHCI_PORTSC_PED | XHCI_PORTSC_PR |
+                                       XHCI_PORTSC_WPR | XHCI_PORTSC_LWS)) | Changes);
     }
 
     return (Changes != 0);
@@ -1658,9 +1665,9 @@ XhciUcxResetPort(
         return FALSE;
     }
 
-    /* Acknowledge the change bits this reset produced (W1C) */
+    /* Acknowledge the change bits this reset produced (W1C), keeping PP and the other RW bits */
     if (Value & XHCI_PORTSC_CHANGE_MASK)
-        XHCI_UCX_WRITE_REG(PortSc, Value & XHCI_PORTSC_CHANGE_MASK);
+        XHCI_UCX_WRITE_REG(PortSc, Value & ~(XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_WPR | XHCI_PORTSC_LWS));
 
     /* USB 2.0 9.2.6.2: 10 ms reset recovery before the first request */
     Slice.QuadPart = -(LONGLONG)10 * 10000;
@@ -2087,6 +2094,11 @@ XhciUcxEvtInterruptIsr(
     if (Iman & XHCI_IMAN_IP)
         XHCI_UCX_WRITE_REG(&Dev->RuntimeRegisters->Interrupter[0].Iman, Iman);
 
+    /* An IMAN.IP-only interrupt (EINT already acknowledged by a racing path)
+     * still means events may be queued: make the DPC drain in that case too. */
+    if (Iman & XHCI_IMAN_IP)
+        AckMask |= XHCI_USBSTS_EINT;
+
     InterlockedOr(&Dev->PendingUsbSts, (LONG)AckMask);
     WdfInterruptQueueDpcForIsr(Interrupt);
     return TRUE;
@@ -2347,9 +2359,16 @@ XhciUcxCreateUcxObjects(
     NTSTATUS Status;
 
     /* Objects persist across a stop/start rebalance; only the device's own
-     * teardown (WDF parent deletion) ends their life (contract 7.1). */
+     * teardown (WDF parent deletion) ends their life (contract 7.1). A
+     * controller left without its root hub by an earlier failure is rebuilt. */
     if (Dev->Controller != NULL)
-        return STATUS_SUCCESS;
+    {
+        if (Dev->RootHub != NULL)
+            return STATUS_SUCCESS;
+
+        WdfObjectDelete((WDFOBJECT)Dev->Controller);
+        Dev->Controller = NULL;
+    }
 
     UCX_CONTROLLER_CONFIG_INIT(&ControllerConfig);
     ControllerConfig.NumberOfRootHubs = 1;
@@ -2376,7 +2395,10 @@ XhciUcxCreateUcxObjects(
                  (ULONG)Status, Dev->NumberOf20Ports, Dev->NumberOf30Ports);
     if (!NT_SUCCESS(Status))
     {
+        /* Never leave a controller without its root hub behind */
         Dev->RootHub = NULL;
+        WdfObjectDelete((WDFOBJECT)Dev->Controller);
+        Dev->Controller = NULL;
         return Status;
     }
     XHCI_UCX_TRACE("root hub object %p", Dev->RootHub);
@@ -2600,10 +2622,14 @@ XhciUcxEvtDeviceSurpriseRemoval(
     _In_ WDFDEVICE Device)
 {
     PXHCI_UCX_DEVICE Dev = XhciUcxGetDevice(Device);
+    KIRQL OldIrql;
 
-    /* MMIO may already be gone: stop touching the controller from the DPC */
+    /* MMIO may already be gone: stop touching the controller from the DPC.
+     * Taken under the ring lock so a drain in progress sees it on its next check. */
+    KeAcquireSpinLock(&Dev->EventRingLock, &OldIrql);
     Dev->FatalError = TRUE;
     Dev->ControllerRunning = FALSE;
+    KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
     XHCI_UCX_LOG("SurpriseRemoval");
 }
 
