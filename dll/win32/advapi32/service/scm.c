@@ -272,6 +272,14 @@ ChangeServiceConfig2A(SC_HANDLE hService,
             Info.psfaf = lpInfo;
             break;
 
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            Info.psda = lpInfo;
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            Info.psps = lpInfo;
+            break;
+
         case SERVICE_CONFIG_TRIGGER_INFO:
             Info.psti = lpInfo;
             break;
@@ -336,6 +344,14 @@ ChangeServiceConfig2W(SC_HANDLE hService,
 
         case SERVICE_CONFIG_FAILURE_ACTIONS_FLAG:
             Info.psfaf = lpInfo;
+            break;
+
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            Info.psda = lpInfo;
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            Info.psps = lpInfo;
             break;
 
         case SERVICE_CONFIG_TRIGGER_INFO:
@@ -2563,6 +2579,8 @@ QueryServiceConfig2A(SC_HANDLE hService,
     SERVICE_DESCRIPTIONA ServiceDescription;
     SERVICE_FAILURE_ACTIONSA ServiceFailureActions;
     SERVICE_FAILURE_ACTIONS_FLAG FailureActionsFlag;
+    SERVICE_DELAYED_AUTO_START_INFO DelayedAutoStartInfo;
+    SERVICE_PRESHUTDOWN_INFO PreshutdownInfo;
     SERVICE_TRIGGER_INFO TriggerInfo;
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
@@ -2600,6 +2618,24 @@ QueryServiceConfig2A(SC_HANDLE hService,
             {
                 lpTempBuffer = (LPBYTE)&FailureActionsFlag;
                 dwBufferSize = sizeof(SERVICE_FAILURE_ACTIONS_FLAG);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_DELAYED_AUTO_START_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&DelayedAutoStartInfo;
+                dwBufferSize = sizeof(SERVICE_DELAYED_AUTO_START_INFO);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_PRESHUTDOWN_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&PreshutdownInfo;
+                dwBufferSize = sizeof(SERVICE_PRESHUTDOWN_INFO);
                 bUseTempBuffer = TRUE;
             }
             break;
@@ -2704,6 +2740,8 @@ QueryServiceConfig2W(SC_HANDLE hService,
     SERVICE_DESCRIPTIONW ServiceDescription;
     SERVICE_FAILURE_ACTIONSW ServiceFailureActions;
     SERVICE_FAILURE_ACTIONS_FLAG FailureActionsFlag;
+    SERVICE_DELAYED_AUTO_START_INFO DelayedAutoStartInfo;
+    SERVICE_PRESHUTDOWN_INFO PreshutdownInfo;
     SERVICE_TRIGGER_INFO TriggerInfo;
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
@@ -2741,6 +2779,24 @@ QueryServiceConfig2W(SC_HANDLE hService,
             {
                 lpTempBuffer = (LPBYTE)&FailureActionsFlag;
                 dwBufferSize = sizeof(SERVICE_FAILURE_ACTIONS_FLAG);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_DELAYED_AUTO_START_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&DelayedAutoStartInfo;
+                dwBufferSize = sizeof(SERVICE_DELAYED_AUTO_START_INFO);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_PRESHUTDOWN_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&PreshutdownInfo;
+                dwBufferSize = sizeof(SERVICE_PRESHUTDOWN_INFO);
                 bUseTempBuffer = TRUE;
             }
             break;
