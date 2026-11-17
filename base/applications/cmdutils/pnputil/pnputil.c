@@ -1511,9 +1511,9 @@ ReportOutputOpenFailure(
     FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, Error, 0,
                    Text, _countof(Text) - 1, NULL);
     PrintHeader();
-    ConPrintf(StdErr, L"Failed to open output file: %ls", Text);
+    ConPrintf(StdOut, L"Failed to open output file: %ls", Text);
     if (!Text[0])
-        ConPuts(StdErr, L"\n");
+        ConPuts(StdOut, L"\n");
     return (INT)Error;
 }
 
