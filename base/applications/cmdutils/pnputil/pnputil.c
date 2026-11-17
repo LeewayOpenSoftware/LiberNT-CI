@@ -4017,57 +4017,26 @@ CommandEnumDevices(
     return ERROR_SUCCESS;
 }
 
-static INT
-CommandDevice(
+/* Run one device operation on an opened device: prints the progress and result lines and returns the
+   Win32 error (0 on success); a pending reboot is reported through NeedReboot. */
+static DWORD
+DeviceOperation(
     _In_ DI_FUNCTION Function,
     _In_ DWORD StateChange,
     _In_ PCWSTR Progress,
     _In_ PCWSTR Success,
     _In_ PCWSTR Failure,
-    _In_ INT argc,
-    _In_ WCHAR **argv)
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ PCWSTR InstanceId,
+    _Inout_ PBOOL NeedReboot)
 {
-    SP_DEVINFO_DATA DeviceInfoData;
     SP_DEVINSTALL_PARAMS_W InstallParams;
-    HDEVINFO DeviceInfoSet;
-    PCWSTR InstanceId = NULL;
-    BOOL Reboot = FALSE;
-    BOOL NeedReboot = FALSE;
+    BOOL Result = TRUE, Reboot = FALSE;
     DWORD Error = ERROR_SUCCESS;
-    BOOL Result;
-    INT i;
-
-    for (i = 0; i < argc; i++)
-    {
-        if (IsOption(argv[i], L"reboot"))
-            Reboot = TRUE;
-        else if (IsOption(argv[i], L"subtree"))
-            continue;
-        else if (!InstanceId)
-            InstanceId = argv[i];
-        else
-            return RC_USAGE;
-    }
-
-    if (!InstanceId)
-        return RC_USAGE;
-
-    PrintHeader();
-
-    DeviceInfoSet = SetupDiCreateDeviceInfoList(NULL, NULL);
-    if (DeviceInfoSet == INVALID_HANDLE_VALUE)
-        return (INT)GetLastError();
-
-    DeviceInfoData.cbSize = sizeof(DeviceInfoData);
-    if (!SetupDiOpenDeviceInfoW(DeviceInfoSet, InstanceId, NULL, 0, &DeviceInfoData))
-    {
-        SetupDiDestroyDeviceInfoList(DeviceInfoSet);
-        return ERROR_SUCCESS;
-    }
 
     ConPrintf(StdOut, L"%ls%ls\n", Progress, InstanceId);
 
-    Result = TRUE;
     if (Function == DIF_PROPERTYCHANGE)
     {
         SP_PROPCHANGE_PARAMS PropChange;
@@ -4078,26 +4047,26 @@ CommandDevice(
         PropChange.Scope = StateChange == DICS_PROPCHANGE ? DICS_FLAG_CONFIGSPECIFIC : DICS_FLAG_GLOBAL;
         PropChange.HwProfile = 0;
         Result = SetupDiSetClassInstallParamsW(DeviceInfoSet,
-                                               &DeviceInfoData,
+                                               DeviceInfoData,
                                                &PropChange.ClassInstallHeader,
                                                sizeof(PropChange));
     }
     if (Result)
-        Result = SetupDiCallClassInstaller(Function, DeviceInfoSet, &DeviceInfoData);
+        Result = SetupDiCallClassInstaller(Function, DeviceInfoSet, DeviceInfoData);
 
     if (Result)
     {
         InstallParams.cbSize = sizeof(InstallParams);
         if (Function != DIF_REMOVE &&
-            SetupDiGetDeviceInstallParamsW(DeviceInfoSet, &DeviceInfoData, &InstallParams))
+            SetupDiGetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams))
         {
-            NeedReboot = (InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT)) != 0;
+            Reboot = (InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT)) != 0;
         }
-        if (!NeedReboot && Function == DIF_PROPERTYCHANGE && StateChange != DICS_DISABLE)
+        if (!Reboot && Function == DIF_PROPERTYCHANGE && StateChange != DICS_DISABLE)
         {
             ULONG Status = 0, Problem = 0;
 
-            if (CM_Get_DevNode_Status(&Status, &Problem, DeviceInfoData.DevInst, 0) != CR_SUCCESS ||
+            if (CM_Get_DevNode_Status(&Status, &Problem, DeviceInfoData->DevInst, 0) != CR_SUCCESS ||
                 !(Status & DN_STARTED))
             {
                 Result = FALSE;
@@ -4111,11 +4080,261 @@ CommandDevice(
         Error = GetLastError();
         PrintError(Failure, Error);
     }
-    else if (!NeedReboot)
+    else if (!Reboot)
     {
         ConPrintf(StdOut, L"%ls\n", Success);
     }
     ConPuts(StdOut, L"\n");
+
+    if (Reboot)
+        *NeedReboot = TRUE;
+    return Error;
+}
+
+typedef struct _DEVICE_SELECTION
+{
+    PCWSTR InstanceId;
+    PCWSTR DeviceId;
+    PCWSTR Class;
+    PCWSTR Bus;
+} DEVICE_SELECTION;
+
+static BOOL
+IsSwitchArgument(
+    _In_ PCWSTR Argument)
+{
+    return Argument[0] == L'/' || Argument[0] == L'-';
+}
+
+/* A device id given to /deviceid matches when it equals one of the device's hardware or compatible ids. */
+static BOOL
+DeviceHasId(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ PCWSTR Id)
+{
+    static const DWORD Properties[] = { SPDRP_HARDWAREID, SPDRP_COMPATIBLEIDS };
+    WCHAR List[2048];
+    PCWSTR Value;
+    UINT n;
+
+    for (n = 0; n < _countof(Properties); n++)
+    {
+        ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, Properties[n], List, _countof(List));
+        for (Value = List; *Value; Value += wcslen(Value) + 1)
+        {
+            if (_wcsicmp(Value, Id) == 0)
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* /bus takes a bus enumerator name (the first part of the instance id) or a bus type GUID. */
+static BOOL
+DeviceOnBus(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ PCWSTR Instance,
+    _In_ PCWSTR Bus)
+{
+    WCHAR Enumerator[MAX_DEVICE_ID_LEN];
+    GUID Wanted, Actual;
+    PCWSTR Slash = wcschr(Instance, L'\\');
+    SIZE_T Length = Slash ? (SIZE_T)(Slash - Instance) : wcslen(Instance);
+    DEVPROPTYPE Type;
+
+    if (Length < _countof(Enumerator))
+    {
+        memcpy(Enumerator, Instance, Length * sizeof(WCHAR));
+        Enumerator[Length] = UNICODE_NULL;
+        if (_wcsicmp(Enumerator, Bus) == 0)
+            return TRUE;
+    }
+    return Bus[0] == L'{' && CLSIDFromString(Bus, &Wanted) == S_OK &&
+           SetupDiGetDevicePropertyW(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_BusTypeGuid, &Type,
+                                     (PBYTE)&Actual, sizeof(Actual), NULL, 0) &&
+           Type == DEVPROP_TYPE_GUID && IsEqualGUID(&Wanted, &Actual);
+}
+
+/* /remove-device /subtree: the children go first, deepest ones before their parents. */
+static VOID
+RemoveSubtreeChildren(
+    _In_ DEVINST Parent,
+    _In_ DWORD Depth,
+    _In_ PCWSTR Progress,
+    _In_ PCWSTR Success,
+    _In_ PCWSTR Failure,
+    _Inout_ PBOOL NeedReboot,
+    _Inout_ PDWORD FirstError)
+{
+    DEVINST Child, Next;
+    WCHAR (*Ids)[MAX_DEVICE_ID_LEN];
+    DWORD Count = 0, Capacity = 16, i;
+
+    if (Depth > 32 || CM_Get_Child(&Child, Parent, 0) != CR_SUCCESS)
+        return;
+
+    Ids = HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Ids));
+    if (!Ids)
+        return;
+    for (;;)
+    {
+        RemoveSubtreeChildren(Child, Depth + 1, Progress, Success, Failure, NeedReboot, FirstError);
+        if (Count == Capacity)
+        {
+            WCHAR (*Grown)[MAX_DEVICE_ID_LEN] = HeapReAlloc(GetProcessHeap(), 0, Ids, Capacity * 2 * sizeof(*Ids));
+
+            if (!Grown)
+                break;
+            Ids = Grown;
+            Capacity *= 2;
+        }
+        if (CM_Get_Device_IDW(Child, Ids[Count], MAX_DEVICE_ID_LEN, 0) == CR_SUCCESS)
+            Count++;
+        if (CM_Get_Sibling(&Next, Child, 0) != CR_SUCCESS)
+            break;
+        Child = Next;
+    }
+
+    for (i = 0; i < Count; i++)
+    {
+        HDEVINFO Set = SetupDiCreateDeviceInfoList(NULL, NULL);
+        SP_DEVINFO_DATA Info;
+
+        if (Set == INVALID_HANDLE_VALUE)
+            continue;
+        Info.cbSize = sizeof(Info);
+        if (SetupDiOpenDeviceInfoW(Set, Ids[i], NULL, 0, &Info))
+        {
+            DWORD Error = DeviceOperation(DIF_REMOVE, 0, Progress, Success, Failure, Set, &Info, Ids[i], NeedReboot);
+
+            if (Error != ERROR_SUCCESS && *FirstError == ERROR_SUCCESS)
+                *FirstError = Error;
+        }
+        SetupDiDestroyDeviceInfoList(Set);
+    }
+    HeapFree(GetProcessHeap(), 0, Ids);
+}
+
+static INT
+CommandDevice(
+    _In_ DI_FUNCTION Function,
+    _In_ DWORD StateChange,
+    _In_ PCWSTR Progress,
+    _In_ PCWSTR Success,
+    _In_ PCWSTR Failure,
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    DEVICE_SELECTION Selection = { NULL, NULL, NULL, NULL };
+    SP_DEVINFO_DATA DeviceInfoData;
+    HDEVINFO DeviceInfoSet;
+    BOOL Reboot = FALSE, Subtree = FALSE, NeedReboot = FALSE;
+    DWORD Error = ERROR_SUCCESS, Index;
+    INT i;
+
+    /* The instance id, when given, comes first; the filters and flags follow. /force is accepted
+       everywhere, /subtree only by /remove-device. */
+    for (i = 0; i < argc; i++)
+    {
+        if (i == 0 && !IsSwitchArgument(argv[0]))
+        {
+            Selection.InstanceId = argv[0];
+        }
+        else if (IsOption(argv[i], L"reboot"))
+        {
+            Reboot = TRUE;
+        }
+        else if (IsOption(argv[i], L"force"))
+        {
+            continue;
+        }
+        else if (IsOption(argv[i], L"subtree") && Function == DIF_REMOVE)
+        {
+            Subtree = TRUE;
+        }
+        else if (IsOption(argv[i], L"deviceid") || IsOption(argv[i], L"class") || IsOption(argv[i], L"bus"))
+        {
+            PCWSTR Value = NULL;
+
+            if (i + 1 < argc && !IsSwitchArgument(argv[i + 1]))
+                Value = argv[++i];
+            if (IsOption(argv[i - (Value ? 1 : 0)], L"deviceid"))
+                Selection.DeviceId = Value;
+            else if (IsOption(argv[i - (Value ? 1 : 0)], L"class"))
+                Selection.Class = Value;
+            else
+                Selection.Bus = Value;
+        }
+        else
+        {
+            return RC_USAGE;
+        }
+    }
+
+    if ((!Selection.InstanceId && !Selection.DeviceId && !Selection.Class && !Selection.Bus) ||
+        (Selection.InstanceId && Selection.DeviceId))
+    {
+        return RC_USAGE;
+    }
+
+    PrintHeader();
+
+    /* A lone instance id opens that device directly, present or not. */
+    if (Selection.InstanceId && !Selection.Class && !Selection.Bus)
+    {
+        DeviceInfoSet = SetupDiCreateDeviceInfoList(NULL, NULL);
+        if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+            return (INT)GetLastError();
+
+        DeviceInfoData.cbSize = sizeof(DeviceInfoData);
+        if (!SetupDiOpenDeviceInfoW(DeviceInfoSet, Selection.InstanceId, NULL, 0, &DeviceInfoData))
+        {
+            SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+            return ERROR_SUCCESS;
+        }
+        if (Subtree)
+            RemoveSubtreeChildren(DeviceInfoData.DevInst, 0, Progress, Success, Failure, &NeedReboot, &Error);
+        {
+            DWORD Own = DeviceOperation(Function, StateChange, Progress, Success, Failure, DeviceInfoSet,
+                                        &DeviceInfoData, Selection.InstanceId, &NeedReboot);
+
+            if (Error == ERROR_SUCCESS)
+                Error = Own;
+        }
+        SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+        return FinishOperation(Error, NeedReboot, Reboot);
+    }
+
+    /* Filters: every device present that matches all of them. */
+    DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+        return (INT)GetLastError();
+
+    DeviceInfoData.cbSize = sizeof(DeviceInfoData);
+    for (Index = 0; SetupDiEnumDeviceInfo(DeviceInfoSet, Index, &DeviceInfoData); Index++)
+    {
+        WCHAR Id[MAX_DEVICE_ID_LEN + 1];
+        DWORD Own;
+
+        if (!SetupDiGetDeviceInstanceIdW(DeviceInfoSet, &DeviceInfoData, Id, _countof(Id), NULL))
+            continue;
+        if ((Selection.InstanceId && _wcsicmp(Selection.InstanceId, Id) != 0) ||
+            (Selection.DeviceId && !DeviceHasId(DeviceInfoSet, &DeviceInfoData, Selection.DeviceId)) ||
+            (Selection.Class && !MatchesClass(DeviceInfoSet, &DeviceInfoData, Selection.Class)) ||
+            (Selection.Bus && !DeviceOnBus(DeviceInfoSet, &DeviceInfoData, Id, Selection.Bus)))
+        {
+            continue;
+        }
+
+        if (Subtree)
+            RemoveSubtreeChildren(DeviceInfoData.DevInst, 0, Progress, Success, Failure, &NeedReboot, &Error);
+        Own = DeviceOperation(Function, StateChange, Progress, Success, Failure, DeviceInfoSet, &DeviceInfoData,
+                              Id, &NeedReboot);
+        if (Own != ERROR_SUCCESS && Error == ERROR_SUCCESS)
+            Error = Own;
+    }
 
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
     return FinishOperation(Error, NeedReboot, Reboot);
