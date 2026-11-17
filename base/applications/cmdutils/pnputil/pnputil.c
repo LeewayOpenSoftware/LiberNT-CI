@@ -3672,6 +3672,48 @@ TreeProperty(
     return Buffer;
 }
 
+/* With /connected a node that is not present is not shown, so the tree columns are drawn
+   against the visible siblings and children only. */
+static BOOL
+TreeVisible(
+    _In_ const TREE_CONTEXT *Ctx,
+    _In_ DEVINST Node)
+{
+    ULONG Status, Problem;
+
+    return !Ctx->Connected || CM_Get_DevNode_Status(&Status, &Problem, Node, 0) == CR_SUCCESS;
+}
+
+static BOOL
+TreeNextVisible(
+    _In_ const TREE_CONTEXT *Ctx,
+    _In_ DEVINST Node,
+    _Out_ DEVINST *Next)
+{
+    DEVINST Sibling = Node;
+
+    while (CM_Get_Sibling(&Sibling, Sibling, 0) == CR_SUCCESS)
+    {
+        if (TreeVisible(Ctx, Sibling))
+        {
+            *Next = Sibling;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+static BOOL
+TreeFirstVisibleChild(
+    _In_ const TREE_CONTEXT *Ctx,
+    _In_ DEVINST Node,
+    _Out_ DEVINST *Child)
+{
+    if (CM_Get_Child(Child, Node, 0) != CR_SUCCESS)
+        return FALSE;
+    return TreeVisible(Ctx, *Child) || TreeNextVisible(Ctx, *Child, Child);
+}
+
 static VOID
 TreeDetail(
     _In_ PCWSTR Prefix,
@@ -3692,7 +3734,7 @@ TreeNode(
     WCHAR Id[MAX_DEVICE_ID_LEN], ChildPrefix[2 * TREE_MAX_DEPTH + 4], DetailPrefix[2 * TREE_MAX_DEPTH + 8];
     WCHAR Line[2048];
     ULONG Status = 0, Problem = 0;
-    PWSTR Description, Friendly;
+    PWSTR Description;
     DEVINST Child, Next;
     PCWSTR State;
     BOOL Present, HasChild;
@@ -3705,8 +3747,13 @@ TreeNode(
 
     Id[0] = UNICODE_NULL;
     CM_Get_Device_IDW(Node, Id, _countof(Id), 0);
-    Friendly = TreeProperty(Node, CM_DRP_FRIENDLYNAME);
-    Description = Friendly ? Friendly : TreeProperty(Node, CM_DRP_DEVICEDESC);
+    Description = TreeProperty(Node, CM_DRP_FRIENDLYNAME);
+    if (!Description || !Description[0])
+    {
+        if (Description)
+            HeapFree(GetProcessHeap(), 0, Description);
+        Description = TreeProperty(Node, CM_DRP_DEVICEDESC);
+    }
     State = !Present ? L"Disconnected" : (Status & DN_STARTED) ? L"Started" : L"Stopped";
 
     _snwprintf(Line, _countof(Line) - 1, L"%ls+-%ls (%ls) [%ls]", Prefix, Id,
@@ -3716,7 +3763,7 @@ TreeNode(
     if (Description)
         HeapFree(GetProcessHeap(), 0, Description);
 
-    HasChild = CM_Get_Child(&Child, Node, 0) == CR_SUCCESS;
+    HasChild = TreeFirstVisibleChild(Ctx, Node, &Child);
 
     if (Ctx->Services || Ctx->Interfaces)
     {
@@ -3774,6 +3821,7 @@ TreeNode(
             DWORD i;
             BOOL Header = FALSE;
 
+            /* Win11 orders a node's interfaces by no rule found (not class key, GUID or key write time); ours follow the class key order. */
             for (i = 0; i < Ctx->IfaceCount; i++)
             {
                 if (_wcsicmp(Ctx->Ifaces[i].InstanceId, Id) != 0)
@@ -3795,7 +3843,7 @@ TreeNode(
         wcscat(ChildPrefix, HasNext ? L"| " : L"  ");
         for (;;)
         {
-            HasNext = CM_Get_Sibling(&Next, Child, 0) == CR_SUCCESS;
+            HasNext = TreeNextVisible(Ctx, Child, &Next);
             TreeNode(Ctx, Child, ChildPrefix, HasNext, Depth + 1);
             if (!HasNext)
                 break;
