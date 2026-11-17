@@ -4435,6 +4435,42 @@ IoIsFileObjectIgnoringSharing(IN PFILE_OBJECT FileObject)
 /*
  * @implemented
  */
+
+NTSTATUS
+NTAPI
+IoIncrementKeepAliveCount(IN OUT PFILE_OBJECT FileObject,
+                            IN OUT PEPROCESS Process)
+{
+    PAGED_CODE();
+
+    if ((FileObject == NULL) || (Process == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    InterlockedIncrement(&Process->KeepAliveCount);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+IoDecrementKeepAliveCount(IN OUT PFILE_OBJECT FileObject,
+                            IN OUT PEPROCESS Process)
+{
+    LONG Count;
+
+    PAGED_CODE();
+
+    if ((FileObject == NULL) || (Process == NULL))
+        return STATUS_INVALID_PARAMETER;
+
+    Count = InterlockedDecrement(&Process->KeepAliveCount);
+    if (Count < 0)
+    {
+        InterlockedIncrement(&Process->KeepAliveCount);
+        return STATUS_INVALID_PARAMETER;
+    }
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 NTAPI
 IoSetFileObjectIgnoreSharing(IN PFILE_OBJECT FileObject)

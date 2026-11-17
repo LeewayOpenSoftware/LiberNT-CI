@@ -2449,7 +2449,7 @@
 @ stub -arch=win64 IoCreateStreamFileObjectEx2
 @ stub -arch=win64 IoCreateSymbolicLink2
 @ stdcall IoCreateSystemThread(ptr ptr long ptr ptr ptr ptr ptr)
-@ stub -arch=win64 IoDecrementKeepAliveCount
+@ stdcall -arch=win64 IoDecrementKeepAliveCount(ptr ptr)
 @ stub -arch=win64 IoDriverProxyCreateHotSwappableWorkerThread
 @ stub -arch=win64 IoDuplicateDependency
 @ stub -arch=win64 IoEnumerateKsrPersistentMemoryEx
@@ -2485,7 +2485,7 @@
 @ stub -arch=win64 IoGetSiloParameters
 @ stub -arch=win64 IoGetSymlinkSupportInformation
 @ stdcall IoGetTransactionParameterBlock(ptr)
-@ stub -arch=win64 IoIncrementKeepAliveCount
+@ stdcall -arch=win64 IoIncrementKeepAliveCount(ptr ptr)
 @ stub -arch=win64 IoInitializeIrpEx
 @ stub -arch=win64 IoInitializeMiniCompletionPacket
 @ stdcall IoInitializeWorkItem(ptr ptr)
