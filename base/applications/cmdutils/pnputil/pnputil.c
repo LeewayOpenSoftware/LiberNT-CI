@@ -22,6 +22,8 @@
 #include <newdev.h>
 #include <regstr.h>
 #include <umpnpmgr/drvinst.h>
+#include <initguid.h>
+#include <devpkey.h>
 
 #include <conutils.h>
 
@@ -47,6 +49,12 @@ typedef struct _ENUM_FILTER
     BOOL HasProblemCode;
     ULONG ProblemCode;
     BOOL Ids;
+    BOOL Relations;
+    BOOL Services;
+    BOOL Stack;
+    BOOL Location;
+    BOOL Interfaces;
+    BOOL Resources;
     PCWSTR InstanceId;
     PCWSTR Class;
 } ENUM_FILTER, *PENUM_FILTER;
@@ -1209,6 +1217,216 @@ GetDevicePropertyString(
     return Buffer;
 }
 
+/* Read a REG_MULTI_SZ device property into Buffer as a double-null-terminated
+   list; on absence or wrong type Buffer is an empty list. */
+static VOID
+ReadSpdrpMultiSz(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ DWORD Property,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DWORD Type;
+
+    if (Cch < 2)
+    {
+        if (Cch)
+            Buffer[0] = UNICODE_NULL;
+        return;
+    }
+    ZeroMemory(Buffer, Cch * sizeof(WCHAR));
+    if (!SetupDiGetDeviceRegistryPropertyW(DeviceInfoSet, DeviceInfoData, Property, &Type,
+                                           (PBYTE)Buffer, Cch * sizeof(WCHAR) - 2 * sizeof(WCHAR), NULL) ||
+        Type != REG_MULTI_SZ)
+    {
+        Buffer[0] = UNICODE_NULL;
+        Buffer[1] = UNICODE_NULL;
+    }
+}
+
+/* Read a DEVPROP_TYPE_STRING_LIST device property into Buffer as a double-null
+   list (same shape as REG_MULTI_SZ); empty list on absence or wrong type. */
+static VOID
+ReadDevpropStringList(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ const DEVPROPKEY *Key,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DEVPROPTYPE PropType = 0;
+
+    if (Cch < 2)
+    {
+        if (Cch)
+            Buffer[0] = UNICODE_NULL;
+        return;
+    }
+    ZeroMemory(Buffer, Cch * sizeof(WCHAR));
+    if (!SetupDiGetDevicePropertyW(DeviceInfoSet, DeviceInfoData, Key, &PropType,
+                                   (PBYTE)Buffer, Cch * sizeof(WCHAR) - 2 * sizeof(WCHAR), NULL, 0) ||
+        PropType != DEVPROP_TYPE_STRING_LIST)
+    {
+        Buffer[0] = UNICODE_NULL;
+        Buffer[1] = UNICODE_NULL;
+    }
+}
+
+/* Reduce one list entry to the text after its last backslash when Leaf is set;
+   DEVPKEY_Device_Stack holds driver object names (\Driver\partmgr) that Windows 11
+   pnputil prints as the bare leaf (partmgr). */
+static PCWSTR
+ListEntryText(
+    _In_ PCWSTR Entry,
+    _In_ BOOL Leaf)
+{
+    PCWSTR Slash;
+
+    if (!Leaf)
+        return Entry;
+    Slash = wcsrchr(Entry, L'\\');
+    return (Slash && Slash[1]) ? Slash + 1 : Entry;
+}
+
+/* Join a double-null list into Dest with ';' separators (the in-cell separator
+   Windows 11 pnputil uses for multi-value csv fields). */
+static VOID
+JoinMultiSz(
+    _In_ PCWSTR MultiSz,
+    _Out_writes_(Cch) PWSTR Dest,
+    _In_ DWORD Cch,
+    _In_ BOOL Leaf)
+{
+    PCWSTR Value;
+    SIZE_T Used = 0;
+
+    if (Cch == 0)
+        return;
+    Dest[0] = UNICODE_NULL;
+    for (Value = MultiSz; *Value; Value += wcslen(Value) + 1)
+    {
+        PCWSTR Emit = ListEntryText(Value, Leaf);
+
+        if (Used && Used + 1 < Cch)
+            Dest[Used++] = L';';
+        while (*Emit && Used + 1 < Cch)
+            Dest[Used++] = *Emit++;
+        Dest[Used] = UNICODE_NULL;
+        if (Used + 1 >= Cch)
+            break;
+    }
+}
+
+/* Parent instance id via the configuration manager; empty when the node has no
+   reachable parent. */
+static VOID
+GetParentInstanceId(
+    _In_ DEVINST DevInst,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DEVINST Parent = 0;
+
+    if (Cch == 0)
+        return;
+    Buffer[0] = UNICODE_NULL;
+    if (CM_Get_Parent(&Parent, DevInst, 0) != CR_SUCCESS)
+        return;
+    if (CM_Get_Device_IDW(Parent, Buffer, Cch, 0) != CR_SUCCESS)
+        Buffer[0] = UNICODE_NULL;
+}
+
+/* Child instance ids (first child then its siblings) as a double-null list, so
+   csv can ';'-join them and xml can emit one <Child> per entry. */
+static VOID
+GetChildrenMultiSz(
+    _In_ DEVINST DevInst,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DEVINST Child = 0;
+    SIZE_T Used = 0;
+    WCHAR Id[MAX_DEVICE_ID_LEN + 1];
+
+    if (Cch < 2)
+    {
+        if (Cch)
+            Buffer[0] = UNICODE_NULL;
+        return;
+    }
+    Buffer[0] = UNICODE_NULL;
+    Buffer[1] = UNICODE_NULL;
+    if (CM_Get_Child(&Child, DevInst, 0) != CR_SUCCESS)
+        return;
+    do
+    {
+        PCWSTR p;
+        SIZE_T Len;
+
+        if (CM_Get_Device_IDW(Child, Id, _countof(Id), 0) != CR_SUCCESS)
+            continue;
+        Len = wcslen(Id);
+        if (Used + Len + 2 > Cch)
+            break;
+        for (p = Id; *p; p++)
+            Buffer[Used++] = *p;
+        Buffer[Used++] = UNICODE_NULL;
+        Buffer[Used] = UNICODE_NULL;
+    } while (CM_Get_Sibling(&Child, Child, 0) == CR_SUCCESS);
+}
+
+/* Emit a double-null list as a nested XML block: <Outer> with one <Inner> child
+   per entry, 8/12-space indent. Nothing is emitted when the list is empty. */
+static VOID
+EmitXmlList(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR OuterTag,
+    _In_ PCWSTR InnerTag,
+    _In_ PCWSTR MultiSz,
+    _In_ BOOL Leaf)
+{
+    PCWSTR Value;
+
+    if (!*MultiSz)
+        return;
+    OutputPutsRaw(Output, L"        <");
+    OutputPutsRaw(Output, OuterTag);
+    OutputPutsRaw(Output, L">\r\n");
+    for (Value = MultiSz; *Value; Value += wcslen(Value) + 1)
+    {
+        OutputPutsRaw(Output, L"            <");
+        OutputPutsRaw(Output, InnerTag);
+        OutputPutsRaw(Output, L">");
+        OutputXmlText(Output, ListEntryText(Value, Leaf));
+        OutputPutsRaw(Output, L"</");
+        OutputPutsRaw(Output, InnerTag);
+        OutputPutsRaw(Output, L">\r\n");
+    }
+    OutputPutsRaw(Output, L"        </");
+    OutputPutsRaw(Output, OuterTag);
+    OutputPutsRaw(Output, L">\r\n");
+}
+
+/* Emit one XML child element <Tag>text</Tag> at 8-space indent, only when text
+   is non-empty. */
+static VOID
+EmitXmlElement(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Tag,
+    _In_ PCWSTR Text)
+{
+    if (!*Text)
+        return;
+    OutputPutsRaw(Output, L"        <");
+    OutputPutsRaw(Output, Tag);
+    OutputPutsRaw(Output, L">");
+    OutputXmlText(Output, Text);
+    OutputPutsRaw(Output, L"</");
+    OutputPutsRaw(Output, Tag);
+    OutputPutsRaw(Output, L">\r\n");
+}
+
 /* Emit one device as a CSV row or an XML <Device> element (txt uses its own path).
    Column/element order matches Windows 11 pnputil exactly. */
 static VOID
@@ -1221,10 +1439,20 @@ EmitDeviceRecord(
     _In_ PCWSTR Manufacturer,
     _In_ PCWSTR Status,
     _In_ PCWSTR ProblemCode,
-    _In_ PCWSTR DriverName)
+    _In_ PCWSTR DriverName,
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ const ENUM_FILTER *Filter)
 {
+    BOOL AnyView = Filter->Ids || Filter->Relations || Filter->Stack || Filter->Location;
+
     if (Output->Format == OutputCsv)
     {
+        WCHAR List[2048], Cell[2048], Cell2[2048];
+        BOOL LastIds = Filter->Ids && !Filter->Relations && !Filter->Stack && !Filter->Location;
+        BOOL LastRel = Filter->Relations && !Filter->Stack && !Filter->Location;
+        BOOL LastStk = Filter->Stack && !Filter->Location;
+
         OutputCsvField(Output, InstanceId, FALSE);
         OutputCsvField(Output, Description, FALSE);
         OutputCsvField(Output, ClassName, FALSE);
@@ -1234,10 +1462,45 @@ EmitDeviceRecord(
         OutputCsvField(Output, ProblemCode, FALSE);
         OutputCsvField(Output, L"", FALSE);          /* ProblemStatus */
         OutputCsvField(Output, DriverName, FALSE);
-        OutputCsvField(Output, L"", TRUE);           /* ExtensionDriverNames */
+        OutputCsvField(Output, L"", !AnyView);       /* ExtensionDriverNames */
+
+        if (Filter->Ids)
+        {
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_HARDWAREID, List, _countof(List));
+            JoinMultiSz(List, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_COMPATIBLEIDS, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, LastIds);
+        }
+        if (Filter->Relations)
+        {
+            GetParentInstanceId(DeviceInfoData->DevInst, Cell, _countof(Cell));
+            OutputCsvField(Output, Cell, FALSE);
+            GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, LastRel);
+        }
+        if (Filter->Stack)
+        {
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
+            JoinMultiSz(List, Cell, _countof(Cell), TRUE);
+            OutputCsvField(Output, Cell, LastStk);
+        }
+        if (Filter->Location)
+        {
+            OutputCsvField(Output,
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_LOCATION_INFORMATION, Cell, _countof(Cell), NULL),
+                           FALSE);
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, TRUE);
+        }
     }
     else /* OutputXml */
     {
+        WCHAR List[2048], Elem[2048];
+
         OutputPutsRaw(Output, L"    <Device InstanceId=\"");
         OutputXmlText(Output, InstanceId);
         OutputPutsRaw(Output, L"\">\r\n");
@@ -1280,6 +1543,34 @@ EmitDeviceRecord(
             OutputXmlText(Output, DriverName);
             OutputPutsRaw(Output, L"</DriverName>\r\n");
         }
+
+        if (Filter->Ids)
+        {
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_HARDWAREID, List, _countof(List));
+            EmitXmlList(Output, L"HardwareIds", L"HardwareId", List, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_COMPATIBLEIDS, List, _countof(List));
+            EmitXmlList(Output, L"CompatibleIds", L"CompatibleId", List, FALSE);
+        }
+        if (Filter->Relations)
+        {
+            GetParentInstanceId(DeviceInfoData->DevInst, Elem, _countof(Elem));
+            EmitXmlElement(Output, L"Parent", Elem);
+            GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
+            EmitXmlList(Output, L"Children", L"Child", List, FALSE);
+        }
+        if (Filter->Stack)
+        {
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
+            EmitXmlList(Output, L"Stack", L"Service", List, TRUE);
+        }
+        if (Filter->Location)
+        {
+            EmitXmlElement(Output, L"LocationInfo",
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_LOCATION_INFORMATION, Elem, _countof(Elem), NULL));
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
+            EmitXmlList(Output, L"LocationPaths", L"LocationPath", List, FALSE);
+        }
+
         OutputPutsRaw(Output, L"    </Device>\r\n");
     }
 }
@@ -1295,8 +1586,8 @@ CommandEnumDevices(
     WCHAR DefaultName[MAX_PATH];
     BOOL OutputFileGiven = FALSE;
     HMODULE hInst = GetModuleHandleW(NULL);
-    WCHAR LblInstance[64], LblDesc[64], LblClass[64], LblGuid[64], LblMfg[64];
-    WCHAR LblStatus[64], LblProblem[64], LblDriver[64], LblHwIds[64], LblCompat[64];
+    WCHAR LblInstance[64] = {0}, LblDesc[64] = {0}, LblClass[64] = {0}, LblGuid[64] = {0}, LblMfg[64] = {0};
+    WCHAR LblStatus[64] = {0}, LblProblem[64] = {0}, LblDriver[64] = {0}, LblHwIds[64] = {0}, LblCompat[64] = {0};
     SP_DEVINFO_DATA DeviceInfoData;
     HDEVINFO DeviceInfoSet;
     DWORD Index, Count = 0;
@@ -1315,6 +1606,30 @@ CommandEnumDevices(
         else if (IsOption(argv[i], L"ids") || IsOption(argv[i], L"deviceids"))
         {
             Filter.Ids = TRUE;
+        }
+        else if (IsOption(argv[i], L"relations"))
+        {
+            Filter.Relations = TRUE;
+        }
+        else if (IsOption(argv[i], L"services"))
+        {
+            Filter.Services = TRUE;
+        }
+        else if (IsOption(argv[i], L"stack"))
+        {
+            Filter.Stack = TRUE;
+        }
+        else if (IsOption(argv[i], L"location"))
+        {
+            Filter.Location = TRUE;
+        }
+        else if (IsOption(argv[i], L"interfaces"))
+        {
+            Filter.Interfaces = TRUE;
+        }
+        else if (IsOption(argv[i], L"resources"))
+        {
+            Filter.Resources = TRUE;
         }
         else if (IsOption(argv[i], L"instanceid") && i + 1 < argc)
         {
@@ -1379,7 +1694,19 @@ CommandEnumDevices(
     {
         OutputPutsRaw(&Output, L"InstanceId,DeviceDescription,ClassName,ClassGuid,"
                                L"ManufacturerName,Status,ProblemCode,ProblemStatus,"
-                               L"DriverName,ExtensionDriverNames\r\n");
+                               L"DriverName,ExtensionDriverNames");
+        if (Filter.Ids)
+            OutputPutsRaw(&Output, L",HardwareIds,CompatibleIds");
+        if (Filter.Relations)
+            OutputPutsRaw(&Output, L",Parent,Children");
+        if (Filter.Stack)
+            OutputPutsRaw(&Output, L",Stack");
+        if (Filter.Location)
+            OutputPutsRaw(&Output, L",LocationInfo,LocationPaths");
+        /* TODO: /services (Service,UpperFilters,LowerFilters -- xml filter element
+           shape not yet captured), /interfaces (Interface,InterfaceStatus) and
+           /resources columns land with their emission in the #2a continuation. */
+        OutputPutsRaw(&Output, L"\r\n");
     }
     else if (Output.Format == OutputXml)
     {
@@ -1546,7 +1873,10 @@ CommandEnumDevices(
                              GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, Mfg, _countof(Mfg), L"Unknown"),
                              State,
                              ProblemText,
-                             InfPath);
+                             InfPath,
+                             DeviceInfoSet,
+                             &DeviceInfoData,
+                             &Filter);
         }
         Count++;
     }
