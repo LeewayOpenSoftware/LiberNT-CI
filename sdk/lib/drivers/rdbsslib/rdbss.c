@@ -8864,8 +8864,53 @@ NTSTATUS
 RxSetAllocationInfo(
     PRX_CONTEXT RxContext)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFCB Fcb;
+    PFILE_ALLOCATION_INFORMATION AllocInfo;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Fcb = (PFCB)RxContext->pFcb;
+    AllocInfo = RxContext->CurrentIrp->AssociatedIrp.SystemBuffer;
+    if (AllocInfo == NULL || RxContext->CurrentIrpSp->Parameters.SetFile.Length < sizeof(FILE_ALLOCATION_INFORMATION))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if (AllocInfo->AllocationSize.QuadPart < 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (NodeType(Fcb) == RDBSS_NTC_STORAGE_TYPE_DIRECTORY)
+    {
+        return STATUS_FILE_IS_A_DIRECTORY;
+    }
+
+    /* Shrinking the allocation below the file size truncates the file: a mapped file cannot be truncated */
+    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.FileSize.QuadPart &&
+        !MmCanFileBeTruncated(&Fcb->NonPaged->SectionObjectPointers, &AllocInfo->AllocationSize))
+    {
+        return STATUS_USER_MAPPED_FILE;
+    }
+
+    /* The mini-rdr does the real work */
+    Status = RxpSetInfoMiniRdr(RxContext, FileAllocationInformation);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    /* Keep the FCB in line with what the server now has (the caller holds the FCB exclusive) */
+    Fcb->Header.AllocationSize = AllocInfo->AllocationSize;
+    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.FileSize.QuadPart)
+    {
+        Fcb->Header.FileSize = AllocInfo->AllocationSize;
+    }
+    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
+    {
+        Fcb->Header.ValidDataLength = AllocInfo->AllocationSize;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -9018,8 +9063,71 @@ NTSTATUS
 RxSetEndOfFileInfo(
     PRX_CONTEXT RxContext)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFCB Fcb;
+    PFILE_OBJECT FileObject;
+    PFILE_END_OF_FILE_INFORMATION EofInfo;
+    LARGE_INTEGER NewSize;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Fcb = (PFCB)RxContext->pFcb;
+    FileObject = RxContext->CurrentIrpSp->FileObject;
+    EofInfo = RxContext->CurrentIrp->AssociatedIrp.SystemBuffer;
+    if (EofInfo == NULL || RxContext->CurrentIrpSp->Parameters.SetFile.Length < sizeof(FILE_END_OF_FILE_INFORMATION))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    NewSize = EofInfo->EndOfFile;
+    if (NewSize.QuadPart < 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (NodeType(Fcb) == RDBSS_NTC_STORAGE_TYPE_DIRECTORY)
+    {
+        return STATUS_FILE_IS_A_DIRECTORY;
+    }
+
+    /* A mapped file cannot be truncated */
+    if (NewSize.QuadPart < Fcb->Header.FileSize.QuadPart &&
+        !MmCanFileBeTruncated(&Fcb->NonPaged->SectionObjectPointers, &NewSize))
+    {
+        return STATUS_USER_MAPPED_FILE;
+    }
+
+    /* The mini-rdr does the real work */
+    Status = RxpSetInfoMiniRdr(RxContext, FileEndOfFileInformation);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    /* Keep the FCB in line with what the server now has (the caller holds the FCB exclusive) */
+    if (NewSize.QuadPart < Fcb->Header.FileSize.QuadPart &&
+        Fcb->NonPaged->SectionObjectPointers.DataSectionObject != NULL)
+    {
+        CcPurgeCacheSection(&Fcb->NonPaged->SectionObjectPointers, &NewSize, 0, FALSE);
+    }
+    Fcb->Header.FileSize = NewSize;
+    if (NewSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
+    {
+        Fcb->Header.ValidDataLength = NewSize;
+    }
+    if (NewSize.QuadPart > Fcb->Header.AllocationSize.QuadPart)
+    {
+        Fcb->Header.AllocationSize = NewSize;
+    }
+    if (FileObject != NULL && FileObject->PrivateCacheMap != NULL)
+    {
+        CC_FILE_SIZES Sizes;
+
+        Sizes.AllocationSize = Fcb->Header.AllocationSize;
+        Sizes.FileSize = Fcb->Header.FileSize;
+        Sizes.ValidDataLength = Fcb->Header.ValidDataLength;
+        CcSetFileSizes(FileObject, &Sizes);
+    }
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
