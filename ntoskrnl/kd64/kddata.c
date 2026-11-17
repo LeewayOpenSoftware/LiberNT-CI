@@ -559,17 +559,11 @@ DBGKD_GET_VERSION64 KdVersionBlock =
 C_ASSERT(sizeof(KDDEBUGGER_DATA64) >= 0x318);
 #endif
 
-#if !defined(_WIN64) && (defined(__GNUC__) || defined(__clang__))
-/* Minimal hackery for GCC/Clang, see commit b9cd3f2d9 (r25845) and de81021ba */
-#define PtrToUL64(x)    ((ULPTR64)(ULONG_PTR)(x))
-#else
-#define PtrToUL64(x)    ((ULPTR64)(x))
-#endif
 KDDEBUGGER_DATA64 KdDebuggerDataBlock =
 {
     {{0}},
     0,
-    PtrToUL64(RtlpBreakWithStatusInstruction),
+    ULPTR64_INITIALIZER(RtlpBreakWithStatusInstruction),
     0,
     FIELD_OFFSET(KTHREAD, CallbackStack),
 #if defined(_M_IX86) || (defined(_M_ARM64) && (NTDDI_VERSION < NTDDI_WIN8))
