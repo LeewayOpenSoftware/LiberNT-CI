@@ -76,7 +76,7 @@
  * page 1 = input context, page 2 = EP0 transfer ring (1 KB) + descriptor buffer.
  */
 #define XHCI_UCX_MAX_ENUM_SLOTS        8
-#define XHCI_UCX_SLOT_PAGES            3
+#define XHCI_UCX_SLOT_PAGES            5
 #define XHCI_UCX_EP0_RING_TRBS         64
 #define XHCI_UCX_SLOT_EP0_RING_OFFSET  (2 * PAGE_SIZE)
 #define XHCI_UCX_SLOT_DESC_OFFSET      (2 * PAGE_SIZE + XHCI_UCX_EP0_RING_TRBS * sizeof(XHCI_TRB))
@@ -87,7 +87,44 @@
 #define XHCI_UCX_WAIT_SLICE_MS         10
 #define XHCI_UCX_INPUT_CTX_ADD_SLOT    (1u << 0)
 #define XHCI_UCX_INPUT_CTX_ADD_EP0     (1u << 1)
+#define XHCI_UCX_INPUT_CTX_ADD(_dci)   (1u << (_dci))
+#define XHCI_UCX_COMMAND_EP_FIELD(_dci) ((ULONG)(_dci) << 16)
 #define XHCI_UCX_SLOT_STATE_ADDRESS(_devstate) ((_devstate) & 0xFF)
+
+/*
+ * Step 4 bulk path (one bulk IN + one bulk OUT endpoint per slot). Per slot:
+ * page 3 = bulk OUT ring (1 KB) | bulk IN ring (1 KB) | CBW (64 B) | CSW (64 B),
+ * page 4 = data buffer (one page: INQUIRY / capacity / one logical block).
+ * Device Context Index: DCI = 2 * endpoint number + (IN ? 1 : 0); EP0 = 1.
+ */
+#define XHCI_UCX_BULK_RING_TRBS            64
+#define XHCI_UCX_SLOT_BULK_OUT_RING_OFFSET (3 * PAGE_SIZE)
+#define XHCI_UCX_SLOT_BULK_IN_RING_OFFSET  (3 * PAGE_SIZE + XHCI_UCX_BULK_RING_TRBS * sizeof(XHCI_TRB))
+#define XHCI_UCX_SLOT_CBW_OFFSET           (3 * PAGE_SIZE + 2 * XHCI_UCX_BULK_RING_TRBS * sizeof(XHCI_TRB))
+#define XHCI_UCX_SLOT_CSW_OFFSET           (XHCI_UCX_SLOT_CBW_OFFSET + 64)
+#define XHCI_UCX_SLOT_DATA_OFFSET          (4 * PAGE_SIZE)
+#define XHCI_UCX_DATA_BUFFER_SIZE          PAGE_SIZE
+#define XHCI_UCX_BULK_TIMEOUT_MS           2000
+
+/* USB Mass Storage Class, Bulk-Only Transport (BOT), SCSI transparent command set */
+#define XHCI_UCX_MSC_SUBCLASS_SCSI     0x06
+#define XHCI_UCX_MSC_PROTOCOL_BOT      0x50
+#define XHCI_UCX_CBW_SIGNATURE         0x43425355u   /* 'USBC' */
+#define XHCI_UCX_CSW_SIGNATURE         0x53425355u   /* 'USBS' */
+#define XHCI_UCX_CBW_LENGTH            31
+#define XHCI_UCX_CSW_LENGTH            13
+#define XHCI_UCX_CBW_FLAG_DATA_IN      0x80
+#define XHCI_UCX_CSW_STATUS_GOOD       0
+#define XHCI_UCX_CSW_STATUS_FAILED     1
+#define XHCI_UCX_CSW_STATUS_PHASE      2
+#define XHCI_UCX_SCSI_TEST_UNIT_READY  0x00
+#define XHCI_UCX_SCSI_REQUEST_SENSE    0x03
+#define XHCI_UCX_SCSI_INQUIRY          0x12
+#define XHCI_UCX_SCSI_READ_CAPACITY10  0x25
+#define XHCI_UCX_SCSI_READ10           0x28
+#define XHCI_UCX_INQUIRY_LENGTH        36
+#define XHCI_UCX_SENSE_LENGTH          18
+#define XHCI_UCX_TUR_RETRIES           3
 
 /*
  * Setup Stage TRB Transfer Type (xHCI 1.2 table 6-26): 0 = no data stage,
@@ -124,6 +161,29 @@ typedef struct _XHCI_UCX_SLOT
     SIZE_T DescriptorOffset;
     UCXUSBDEVICE UsbDevice;
     UCXENDPOINT Ep0;
+
+    /* Step 4: configured BOT mass-storage interface (bulk IN + bulk OUT) */
+    BOOLEAN Configured;
+    UCHAR ConfigurationValue;
+    UCHAR InterfaceNumber;
+    UCHAR BulkInAddress;          /* bEndpointAddress, 0x81.. */
+    UCHAR BulkOutAddress;         /* bEndpointAddress, 0x01.. */
+    UCHAR BulkInDci;
+    UCHAR BulkOutDci;
+    ULONG BulkInMaxPacket;
+    ULONG BulkOutMaxPacket;
+    ULONG BulkInEnqueue;
+    ULONG BulkInCycle;
+    ULONG BulkOutEnqueue;
+    ULONG BulkOutCycle;
+    SIZE_T BulkInRingOffset;
+    SIZE_T BulkOutRingOffset;
+    SIZE_T CbwOffset;
+    SIZE_T CswOffset;
+    SIZE_T DataOffset;
+    ULONG BotTag;
+    UCXENDPOINT BulkIn;
+    UCXENDPOINT BulkOut;
 } XHCI_UCX_SLOT, *PXHCI_UCX_SLOT;
 
 /* Port enumeration state (indexed by root port) */
@@ -170,8 +230,9 @@ typedef struct _XHCI_UCX_DEVICE
     /*
      * Host-controller DMA memory (one WDF common buffer, page-aligned blocks):
      * DCBAA | scratchpad pointer array | scratchpad pages | command ring |
-     * event ring (single segment) | ERST. The hardware writes only the event
-     * ring and the scratchpads; everything read back from it is validated.
+     * event ring (single segment) | ERST | device slot areas. The hardware
+     * writes only the event ring, the scratchpads, the output contexts and
+     * the slots' IN buffers; everything read back from it is validated.
      */
     WDFDMAENABLER DmaEnabler;
     WDFCOMMONBUFFER HcBuffer;
@@ -208,8 +269,10 @@ typedef struct _XHCI_UCX_DEVICE
     ULONG PendingCommandCode;
     UCHAR PendingCommandSlot;
     KEVENT TransferEvent;
-    ULONGLONG PendingDataTrb;
-    ULONGLONG PendingStatusTrb;
+    UCHAR PendingTransferSlot;                 /* slot id and DCI the pending TD belongs to */
+    UCHAR PendingTransferEpId;
+    ULONGLONG PendingDataTrb;                  /* 0 for a single-TRB TD */
+    ULONGLONG PendingStatusTrb;                /* the TRB whose event completes the TD */
     volatile LONG PendingTransferDone;
     ULONG PendingTransferCode;
     ULONG PendingTransferResidual;
@@ -1149,12 +1212,18 @@ XhciUcxDrainEventRing(
                                  SlotId, EndpointId, CompletionCode);
                     break;
                 }
-                /* Step 3: only EP0 TDs issued by the enumeration work item exist */
-                if (EndpointId == 1 && TrbPointer != 0 &&
+                /*
+                 * Steps 3/4: the only TDs are the ones the enumeration work item
+                 * issued, one at a time, on EP0 or on the slot's two bulk endpoints.
+                 * The event must name the pending slot, the pending DCI and one of
+                 * the pending TRB pointers; anything else is device-written noise.
+                 */
+                if (SlotId == Dev->PendingTransferSlot && EndpointId == Dev->PendingTransferEpId &&
+                    TrbPointer != 0 &&
                     InterlockedCompareExchange(&Dev->PendingTransferDone, 0, 0) == 0 &&
                     (TrbPointer == Dev->PendingDataTrb || TrbPointer == Dev->PendingStatusTrb))
                 {
-                    if (TrbPointer == Dev->PendingDataTrb)
+                    if (TrbPointer == Dev->PendingDataTrb || Dev->PendingDataTrb == 0)
                         Dev->PendingTransferResidual = Residual;
 
                     if (TrbPointer == Dev->PendingStatusTrb ||
@@ -1283,6 +1352,11 @@ XhciUcxAllocateSlot(
         Slot->InputContextOffset = Base + PAGE_SIZE;
         Slot->Ep0RingOffset = Base + XHCI_UCX_SLOT_EP0_RING_OFFSET;
         Slot->DescriptorOffset = Base + XHCI_UCX_SLOT_DESC_OFFSET;
+        Slot->BulkOutRingOffset = Base + XHCI_UCX_SLOT_BULK_OUT_RING_OFFSET;
+        Slot->BulkInRingOffset = Base + XHCI_UCX_SLOT_BULK_IN_RING_OFFSET;
+        Slot->CbwOffset = Base + XHCI_UCX_SLOT_CBW_OFFSET;
+        Slot->CswOffset = Base + XHCI_UCX_SLOT_CSW_OFFSET;
+        Slot->DataOffset = Base + XHCI_UCX_SLOT_DATA_OFFSET;
         Slot->InUse = TRUE;
         return Slot;
     }
@@ -1315,6 +1389,17 @@ XhciUcxInputEp0Context(
     _In_ PXHCI_UCX_SLOT Slot)
 {
     return (PXHCI_ENDPOINT_CONTEXT)(Dev->HcVa + Slot->InputContextOffset + 2 * (SIZE_T)Dev->ContextSize);
+}
+
+/* Input endpoint context for any DCI (slot context is entry 1, EP DCI d is entry d + 1) */
+static
+PXHCI_ENDPOINT_CONTEXT
+XhciUcxInputEndpointContext(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ PXHCI_UCX_SLOT Slot,
+    _In_ ULONG Dci)
+{
+    return (PXHCI_ENDPOINT_CONTEXT)(Dev->HcVa + Slot->InputContextOffset + ((SIZE_T)Dci + 1) * Dev->ContextSize);
 }
 
 static
@@ -1451,23 +1536,68 @@ XhciUcxSendCommand(
     return (Dev->PendingCommandCode == XHCI_COMPLETION_SUCCESS) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
 }
 
-/* EP0 transfer ring: zero, link TRB back to the base, producer cycle 1 */
+/* Transfer ring: zero, link TRB back to the base (toggle cycle), producer cycle 1 */
+static
+VOID
+XhciUcxInitTransferRing(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _In_ SIZE_T RingOffset,
+    _In_ ULONG Trbs,
+    _Out_ PULONG Enqueue,
+    _Out_ PULONG Cycle)
+{
+    PXHCI_TRB Ring = (PXHCI_TRB)(Dev->HcVa + RingOffset);
+    ULONGLONG RingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, RingOffset).QuadPart;
+
+    RtlZeroMemory(Ring, (SIZE_T)Trbs * sizeof(XHCI_TRB));
+    Ring[Trbs - 1].Parameter1 = (ULONG)(RingPa & 0xFFFFFFFF);
+    Ring[Trbs - 1].Parameter2 = (ULONG)(RingPa >> 32);
+    Ring[Trbs - 1].Control =
+        (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
+    KeMemoryBarrier();
+    *Enqueue = 0;
+    *Cycle = 1;
+}
+
+/* Next producer TRB of a transfer ring; advances over the link TRB (refreshing its cycle bit) */
+static
+PXHCI_TRB
+XhciUcxRingNextTrb(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _In_ SIZE_T RingOffset,
+    _In_ ULONG Trbs,
+    _Inout_ PULONG Enqueue,
+    _Inout_ PULONG Cycle,
+    _Out_ PULONGLONG TrbPa,
+    _Out_ PULONG CycleOut)
+{
+    PXHCI_TRB Ring = (PXHCI_TRB)(Dev->HcVa + RingOffset);
+    PXHCI_TRB Trb = &Ring[*Enqueue];
+
+    *TrbPa = (ULONGLONG)XhciUcxHcPhysical(Dev, RingOffset).QuadPart + (ULONGLONG)*Enqueue * sizeof(XHCI_TRB);
+    *CycleOut = *Cycle & XHCI_TRB_CYCLE;
+
+    (*Enqueue)++;
+    if (*Enqueue >= Trbs - 1)
+    {
+        PXHCI_TRB Link = &Ring[Trbs - 1];
+
+        Link->Control = (Link->Control & ~XHCI_TRB_CYCLE) | (*Cycle & XHCI_TRB_CYCLE);
+        KeMemoryBarrier();
+        *Enqueue = 0;
+        *Cycle ^= 1;
+    }
+
+    return Trb;
+}
+
 static
 VOID
 XhciUcxInitEp0Ring(
     _Inout_ PXHCI_UCX_DEVICE Dev,
     _Inout_ PXHCI_UCX_SLOT Slot)
 {
-    PXHCI_TRB Ring = (PXHCI_TRB)(Dev->HcVa + Slot->Ep0RingOffset);
-    ULONGLONG RingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->Ep0RingOffset).QuadPart;
-
-    RtlZeroMemory(Ring, XHCI_UCX_EP0_RING_TRBS * sizeof(XHCI_TRB));
-    Ring[XHCI_UCX_EP0_RING_TRBS - 1].Parameter1 = (ULONG)(RingPa & 0xFFFFFFFF);
-    Ring[XHCI_UCX_EP0_RING_TRBS - 1].Parameter2 = (ULONG)(RingPa >> 32);
-    Ring[XHCI_UCX_EP0_RING_TRBS - 1].Control =
-        (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
-    Slot->Ep0Enqueue = 0;
-    Slot->Ep0Cycle = 1;
+    XhciUcxInitTransferRing(Dev, Slot->Ep0RingOffset, XHCI_UCX_EP0_RING_TRBS, &Slot->Ep0Enqueue, &Slot->Ep0Cycle);
     KeMemoryBarrier();
 }
 
@@ -1480,25 +1610,8 @@ XhciUcxEp0NextTrb(
     _Out_ PULONGLONG TrbPa,
     _Out_ PULONG Cycle)
 {
-    PXHCI_TRB Ring = (PXHCI_TRB)(Dev->HcVa + Slot->Ep0RingOffset);
-    PXHCI_TRB Trb = &Ring[Slot->Ep0Enqueue];
-
-    *TrbPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->Ep0RingOffset).QuadPart +
-             (ULONGLONG)Slot->Ep0Enqueue * sizeof(XHCI_TRB);
-    *Cycle = Slot->Ep0Cycle & XHCI_TRB_CYCLE;
-
-    Slot->Ep0Enqueue++;
-    if (Slot->Ep0Enqueue >= XHCI_UCX_EP0_RING_TRBS - 1)
-    {
-        PXHCI_TRB Link = &Ring[XHCI_UCX_EP0_RING_TRBS - 1];
-
-        Link->Control = (Link->Control & ~XHCI_TRB_CYCLE) | (Slot->Ep0Cycle & XHCI_TRB_CYCLE);
-        KeMemoryBarrier();
-        Slot->Ep0Enqueue = 0;
-        Slot->Ep0Cycle ^= 1;
-    }
-
-    return Trb;
+    return XhciUcxRingNextTrb(Dev, Slot->Ep0RingOffset, XHCI_UCX_EP0_RING_TRBS,
+                              &Slot->Ep0Enqueue, &Slot->Ep0Cycle, TrbPa, Cycle);
 }
 
 /*
@@ -1571,6 +1684,8 @@ XhciUcxEp0Control(
     StageTrb->Control = (XHCI_TRB_TYPE_STATUS_STAGE << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC |
                         ((Length == 0 || !DataIn) ? XHCI_TRB_DIR_IN : 0) | Cycle;
 
+    Dev->PendingTransferSlot = Slot->SlotId;
+    Dev->PendingTransferEpId = 1;
     Dev->PendingDataTrb = DataPa;
     Dev->PendingStatusTrb = StatusPa;
     KeMemoryBarrier();
@@ -1778,6 +1893,655 @@ XhciUcxBuildEp0InputContext(
     KeMemoryBarrier();
 }
 
+
+/* --------------------------------------------------------------------------
+ * Step 4: client-driven bulk path. For a device whose first configuration
+ * carries a Mass Storage / SCSI transparent / Bulk-Only Transport interface,
+ * the controller driver configures its bulk IN and bulk OUT endpoints
+ * (Configure Endpoint + SET_CONFIGURATION) and runs INQUIRY, TEST UNIT READY,
+ * READ CAPACITY(10) and READ(10) of logical block 0 over CBW / data / CSW.
+ * Same serialization as step 3 (one TD outstanding, the DPC matches it by
+ * slot, DCI and TRB pointer). Every device-written byte is validated:
+ * descriptor walk bounds (SEC-1), endpoint sizes per speed, CSW signature /
+ * tag / residue, capacity block size. Only counts and status reach COM1.
+ * -------------------------------------------------------------------------- */
+
+/* One bulk TD = one Normal TRB (IOC; ISP on IN); the data lives in the HC buffer */
+static
+NTSTATUS
+XhciUcxBulkTransfer(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _Inout_ PXHCI_UCX_SLOT Slot,
+    _In_ BOOLEAN DataIn,
+    _In_ SIZE_T BufferOffset,
+    _In_ ULONG Length,
+    _Out_ PULONG Transferred,
+    _Out_ PULONG CompletionCode)
+{
+    SIZE_T RingOffset = DataIn ? Slot->BulkInRingOffset : Slot->BulkOutRingOffset;
+    PULONG Enqueue = DataIn ? &Slot->BulkInEnqueue : &Slot->BulkOutEnqueue;
+    PULONG RingCycle = DataIn ? &Slot->BulkInCycle : &Slot->BulkOutCycle;
+    UCHAR Dci = DataIn ? Slot->BulkInDci : Slot->BulkOutDci;
+    PXHCI_TRB Trb;
+    ULONGLONG TrbPa;
+    ULONGLONG BufferPa;
+    ULONG Cycle;
+    ULONG Control;
+    ULONG Residual;
+
+    *Transferred = 0;
+    *CompletionCode = XHCI_COMPLETION_INVALID;
+
+    if (Length == 0 || Length > XHCI_UCX_DATA_BUFFER_SIZE || BufferOffset + Length > Dev->HcLength)
+        return STATUS_INVALID_PARAMETER;
+    if (Dci == 0 || !Slot->Configured)
+        return STATUS_INVALID_DEVICE_STATE;
+    if (!Dev->ControllerRunning || Dev->FatalError)
+        return STATUS_DEVICE_NOT_READY;
+
+    KeClearEvent(&Dev->TransferEvent);
+    Dev->PendingTransferCode = XHCI_COMPLETION_INVALID;
+    Dev->PendingTransferResidual = Length;
+    InterlockedExchange(&Dev->PendingTransferDone, 0);
+
+    BufferPa = (ULONGLONG)XhciUcxHcPhysical(Dev, BufferOffset).QuadPart;
+    Trb = XhciUcxRingNextTrb(Dev, RingOffset, XHCI_UCX_BULK_RING_TRBS, Enqueue, RingCycle, &TrbPa, &Cycle);
+    Trb->Parameter1 = (ULONG)(BufferPa & 0xFFFFFFFF);
+    Trb->Parameter2 = (ULONG)(BufferPa >> 32);
+    Trb->Status = Length & XHCI_TRB_LEN_MASK;          /* TD size 0: last TRB of the TD */
+    Control = (XHCI_TRB_TYPE_NORMAL << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_IOC | (DataIn ? XHCI_TRB_ISP : 0);
+
+    Dev->PendingTransferSlot = Slot->SlotId;
+    Dev->PendingTransferEpId = Dci;
+    Dev->PendingDataTrb = 0;
+    Dev->PendingStatusTrb = TrbPa;
+    KeMemoryBarrier();
+
+    /* Cycle bit last, then the doorbell for this DCI */
+    Trb->Control = Control | Cycle;
+    KeMemoryBarrier();
+    XHCI_UCX_WRITE_REG(&Dev->DoorbellArray->Doorbell[Slot->SlotId], Dci);
+
+    if (!XhciUcxWaitForCompletion(Dev, &Dev->TransferEvent, &Dev->PendingTransferDone, XHCI_UCX_BULK_TIMEOUT_MS))
+    {
+        Dev->PendingStatusTrb = 0;
+        XHCI_UCX_LOG("STEP4 slot %u: bulk %s transfer (%lu bytes) timed out after %u ms",
+                     Slot->SlotId, DataIn ? "IN" : "OUT", Length, XHCI_UCX_BULK_TIMEOUT_MS);
+        return STATUS_IO_TIMEOUT;
+    }
+    Dev->PendingStatusTrb = 0;
+
+    *CompletionCode = Dev->PendingTransferCode;
+    if (*CompletionCode != XHCI_COMPLETION_SUCCESS && *CompletionCode != XHCI_COMPLETION_SHORT_PACKET)
+    {
+        if (*CompletionCode != XHCI_COMPLETION_STALL_ERROR)
+        {
+            XHCI_UCX_LOG("STEP4 slot %u: bulk %s transfer (%lu bytes) failed, completion code %lu",
+                         Slot->SlotId, DataIn ? "IN" : "OUT", Length, *CompletionCode);
+        }
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    Residual = Dev->PendingTransferResidual;
+    if (Residual > Length)
+        Residual = Length;   /* device-written field: clamp */
+    *Transferred = Length - Residual;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Halted bulk endpoint (STALL): Reset Endpoint, Set TR Dequeue Pointer to the
+ * producer position, CLEAR_FEATURE(ENDPOINT_HALT) so the device resets its
+ * data toggle / sequence number.
+ */
+static
+NTSTATUS
+XhciUcxRecoverHaltedEndpoint(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _Inout_ PXHCI_UCX_SLOT Slot,
+    _In_ BOOLEAN DataIn)
+{
+    SIZE_T RingOffset = DataIn ? Slot->BulkInRingOffset : Slot->BulkOutRingOffset;
+    ULONG Enqueue = DataIn ? Slot->BulkInEnqueue : Slot->BulkOutEnqueue;
+    ULONG Cycle = DataIn ? Slot->BulkInCycle : Slot->BulkOutCycle;
+    UCHAR Dci = DataIn ? Slot->BulkInDci : Slot->BulkOutDci;
+    UCHAR Address = DataIn ? Slot->BulkInAddress : Slot->BulkOutAddress;
+    ULONG Fields = XHCI_COMMAND_SLOT_FIELD(Slot->SlotId) | XHCI_UCX_COMMAND_EP_FIELD(Dci);
+    USB_DEFAULT_PIPE_SETUP_PACKET Setup;
+    ULONGLONG Dequeue;
+    ULONG Code = 0;
+    ULONG Transferred = 0;
+    NTSTATUS Status;
+
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_RESET_EP, 0, Fields, &Code, NULL);
+    XHCI_UCX_LOG("STEP4 slot %u: endpoint 0x%02x halted; Reset Endpoint rc=0x%08lX code=%lu",
+                 Slot->SlotId, Address, (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Dequeue = (ULONGLONG)XhciUcxHcPhysical(Dev, RingOffset).QuadPart + (ULONGLONG)Enqueue * sizeof(XHCI_TRB);
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_SET_DEQ, Dequeue | (Cycle & XHCI_TRB_CYCLE), Fields, &Code, NULL);
+    XHCI_UCX_LOG("STEP4 slot %u: Set TR Dequeue Pointer rc=0x%08lX code=%lu", Slot->SlotId, (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    RtlZeroMemory(&Setup, sizeof(Setup));
+    Setup.bmRequestType.B = 0x02;                      /* host-to-device, standard, endpoint */
+    Setup.bRequest = USB_REQUEST_CLEAR_FEATURE;
+    Setup.wValue.W = USB_FEATURE_ENDPOINT_STALL;
+    Setup.wIndex.W = Address;
+    Setup.wLength = 0;
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, 0, FALSE, &Transferred);
+    XHCI_UCX_LOG("STEP4 slot %u: CLEAR_FEATURE(ENDPOINT_HALT) rc=0x%08lX", Slot->SlotId, (ULONG)Status);
+    return Status;
+}
+
+static
+ULONG
+XhciUcxReadLe32(
+    _In_reads_bytes_(4) const UCHAR *Bytes)
+{
+    return (ULONG)Bytes[0] | ((ULONG)Bytes[1] << 8) | ((ULONG)Bytes[2] << 16) | ((ULONG)Bytes[3] << 24);
+}
+
+static
+ULONG
+XhciUcxReadBe32(
+    _In_reads_bytes_(4) const UCHAR *Bytes)
+{
+    return ((ULONG)Bytes[0] << 24) | ((ULONG)Bytes[1] << 16) | ((ULONG)Bytes[2] << 8) | (ULONG)Bytes[3];
+}
+
+static
+VOID
+XhciUcxWriteLe32(
+    _Out_writes_bytes_(4) PUCHAR Bytes,
+    _In_ ULONG Value)
+{
+    Bytes[0] = (UCHAR)Value;
+    Bytes[1] = (UCHAR)(Value >> 8);
+    Bytes[2] = (UCHAR)(Value >> 16);
+    Bytes[3] = (UCHAR)(Value >> 24);
+}
+
+/*
+ * One BOT command: CBW on bulk OUT, optional data phase in the slot's data
+ * page, CSW on bulk IN. A STALL in the data phase is recovered and the CSW
+ * is still read (BOT 6.7.2/6.7.3). Returns success when a valid CSW arrived;
+ * *CswStatus carries the command status (0 good, 1 failed, 2 phase error).
+ */
+static
+NTSTATUS
+XhciUcxBotCommand(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _Inout_ PXHCI_UCX_SLOT Slot,
+    _In_reads_bytes_(CdbLength) const UCHAR *Cdb,
+    _In_ UCHAR CdbLength,
+    _In_ BOOLEAN DataIn,
+    _In_ ULONG DataLength,
+    _Out_ PULONG DataTransferred,
+    _Out_ PUCHAR CswStatus)
+{
+    PUCHAR Cbw = Dev->HcVa + Slot->CbwOffset;
+    PUCHAR Csw = Dev->HcVa + Slot->CswOffset;
+    ULONG Tag = ++Slot->BotTag;
+    ULONG Transferred = 0;
+    ULONG Code = 0;
+    ULONG CswResidue;
+    NTSTATUS Status;
+
+    *DataTransferred = 0;
+    *CswStatus = 0xFF;
+
+    if (CdbLength == 0 || CdbLength > 16 || DataLength > XHCI_UCX_DATA_BUFFER_SIZE)
+        return STATUS_INVALID_PARAMETER;
+
+    /* Command Block Wrapper (31 bytes, little-endian fields) */
+    RtlZeroMemory(Cbw, 64);
+    XhciUcxWriteLe32(&Cbw[0], XHCI_UCX_CBW_SIGNATURE);
+    XhciUcxWriteLe32(&Cbw[4], Tag);
+    XhciUcxWriteLe32(&Cbw[8], DataLength);
+    Cbw[12] = (DataLength != 0 && DataIn) ? XHCI_UCX_CBW_FLAG_DATA_IN : 0;
+    Cbw[13] = 0;                                       /* LUN 0 */
+    Cbw[14] = CdbLength;
+    RtlCopyMemory(&Cbw[15], Cdb, CdbLength);
+    if (DataIn && DataLength != 0)
+        RtlZeroMemory(Dev->HcVa + Slot->DataOffset, DataLength);
+    KeMemoryBarrier();
+
+    Status = XhciUcxBulkTransfer(Dev, Slot, FALSE, Slot->CbwOffset, XHCI_UCX_CBW_LENGTH, &Transferred, &Code);
+    if (!NT_SUCCESS(Status) || Transferred != XHCI_UCX_CBW_LENGTH)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: CBW phase failed rc=0x%08lX code=%lu sent=%lu (opcode %02x)",
+                     Slot->SlotId, (ULONG)Status, Code, Transferred, Cdb[0]);
+        return NT_SUCCESS(Status) ? STATUS_DEVICE_PROTOCOL_ERROR : Status;
+    }
+
+    if (DataLength != 0)
+    {
+        Status = XhciUcxBulkTransfer(Dev, Slot, DataIn, Slot->DataOffset, DataLength, DataTransferred, &Code);
+        if (!NT_SUCCESS(Status))
+        {
+            if (Code != XHCI_COMPLETION_STALL_ERROR)
+                return Status;
+            Status = XhciUcxRecoverHaltedEndpoint(Dev, Slot, DataIn);
+            if (!NT_SUCCESS(Status))
+                return Status;
+            *DataTransferred = 0;                      /* unknown after a stall: trust the CSW residue */
+        }
+    }
+
+    /* Command Status Wrapper (13 bytes); one retry after a STALL on bulk IN */
+    RtlZeroMemory(Csw, 64);
+    KeMemoryBarrier();
+    Status = XhciUcxBulkTransfer(Dev, Slot, TRUE, Slot->CswOffset, XHCI_UCX_CSW_LENGTH, &Transferred, &Code);
+    if (!NT_SUCCESS(Status) && Code == XHCI_COMPLETION_STALL_ERROR)
+    {
+        Status = XhciUcxRecoverHaltedEndpoint(Dev, Slot, TRUE);
+        if (NT_SUCCESS(Status))
+            Status = XhciUcxBulkTransfer(Dev, Slot, TRUE, Slot->CswOffset, XHCI_UCX_CSW_LENGTH, &Transferred, &Code);
+    }
+    if (!NT_SUCCESS(Status) || Transferred != XHCI_UCX_CSW_LENGTH)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: CSW phase failed rc=0x%08lX code=%lu got=%lu (opcode %02x)",
+                     Slot->SlotId, (ULONG)Status, Code, Transferred, Cdb[0]);
+        return NT_SUCCESS(Status) ? STATUS_DEVICE_PROTOCOL_ERROR : Status;
+    }
+
+    KeMemoryBarrier();
+    CswResidue = XhciUcxReadLe32(&Csw[8]);
+    if (XhciUcxReadLe32(&Csw[0]) != XHCI_UCX_CSW_SIGNATURE || XhciUcxReadLe32(&Csw[4]) != Tag ||
+        CswResidue > DataLength)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: SEC-1 reject, CSW invalid (signature ok=%u tag ok=%u residue=%lu of %lu)",
+                     Slot->SlotId,
+                     (XhciUcxReadLe32(&Csw[0]) == XHCI_UCX_CSW_SIGNATURE) ? 1 : 0,
+                     (XhciUcxReadLe32(&Csw[4]) == Tag) ? 1 : 0, CswResidue, DataLength);
+        return STATUS_DEVICE_PROTOCOL_ERROR;
+    }
+
+    if (*DataTransferred > DataLength - CswResidue)
+        *DataTransferred = DataLength - CswResidue;    /* the smaller of controller count and device residue */
+    *CswStatus = Csw[12];
+
+    if (*CswStatus == XHCI_UCX_CSW_STATUS_PHASE)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: CSW phase error (opcode %02x)", Slot->SlotId, Cdb[0]);
+        return STATUS_DEVICE_PROTOCOL_ERROR;
+    }
+    return STATUS_SUCCESS;
+}
+
+/* Legal bulk wMaxPacketSize for the negotiated speed (USB 2.0 5.8.3, USB 3.2 9.6.6); 0 = illegal */
+static
+ULONG
+XhciUcxBulkMaxPacketLegal(
+    _In_ ULONG Speed,
+    _In_ USHORT wMaxPacketSize)
+{
+    ULONG Mps = wMaxPacketSize & 0x7FF;
+
+    switch (Speed)
+    {
+        case XHCI_PORTSC_SPEED_SUPER:
+            return (Mps == 1024) ? Mps : 0;
+        case XHCI_PORTSC_SPEED_HIGH:
+            return (Mps == 512) ? Mps : 0;
+        case XHCI_PORTSC_SPEED_FULL:
+            return (Mps == 8 || Mps == 16 || Mps == 32 || Mps == 64) ? Mps : 0;
+        default:
+            return 0;                                  /* low speed has no bulk endpoints */
+    }
+}
+
+typedef struct _XHCI_UCX_BOT_INTERFACE
+{
+    UCHAR ConfigurationValue;
+    UCHAR InterfaceNumber;
+    UCHAR InterfaceCount;
+    UCHAR FirstClass[3];          /* class/subclass/protocol of the first interface, for the skip line */
+    UCHAR BulkInAddress;
+    UCHAR BulkOutAddress;
+    USHORT BulkInMaxPacket;
+    USHORT BulkOutMaxPacket;
+} XHCI_UCX_BOT_INTERFACE, *PXHCI_UCX_BOT_INTERFACE;
+
+/*
+ * Walk a configuration descriptor set (SEC-1: every descriptor header is
+ * bounds-checked against the bytes actually received) and find the first
+ * Mass Storage / SCSI / BOT interface with one bulk IN and one bulk OUT endpoint.
+ */
+static
+BOOLEAN
+XhciUcxFindBotInterface(
+    _In_reads_bytes_(Length) const UCHAR *Buffer,
+    _In_ ULONG Length,
+    _Out_ PXHCI_UCX_BOT_INTERFACE Out)
+{
+    ULONG Offset = 0;
+    BOOLEAN InBotInterface = FALSE;
+
+    RtlZeroMemory(Out, sizeof(*Out));
+    if (Length < sizeof(USB_CONFIGURATION_DESCRIPTOR))
+        return FALSE;
+    Out->ConfigurationValue = ((const USB_CONFIGURATION_DESCRIPTOR *)Buffer)->bConfigurationValue;
+
+    while (Offset + 2 <= Length)
+    {
+        UCHAR bLength = Buffer[Offset];
+        UCHAR bType = Buffer[Offset + 1];
+
+        if (bLength < 2 || Offset + bLength > Length)
+            break;                                     /* truncated or malformed: stop, never read past Length */
+
+        if (bType == USB_INTERFACE_DESCRIPTOR_TYPE && bLength >= sizeof(USB_INTERFACE_DESCRIPTOR))
+        {
+            const USB_INTERFACE_DESCRIPTOR *Iface = (const USB_INTERFACE_DESCRIPTOR *)&Buffer[Offset];
+
+            if (InBotInterface && Out->BulkInAddress != 0 && Out->BulkOutAddress != 0)
+                return TRUE;                           /* complete interface found before the next one */
+            if (Out->InterfaceCount == 0)
+            {
+                Out->FirstClass[0] = Iface->bInterfaceClass;
+                Out->FirstClass[1] = Iface->bInterfaceSubClass;
+                Out->FirstClass[2] = Iface->bInterfaceProtocol;
+            }
+            if (Out->InterfaceCount < 0xFF)
+                Out->InterfaceCount++;
+
+            InBotInterface = (Iface->bInterfaceClass == USB_DEVICE_CLASS_STORAGE &&
+                              Iface->bInterfaceSubClass == XHCI_UCX_MSC_SUBCLASS_SCSI &&
+                              Iface->bInterfaceProtocol == XHCI_UCX_MSC_PROTOCOL_BOT &&
+                              Iface->bAlternateSetting == 0);
+            Out->BulkInAddress = 0;
+            Out->BulkOutAddress = 0;
+            if (InBotInterface)
+                Out->InterfaceNumber = Iface->bInterfaceNumber;
+        }
+        else if (bType == USB_ENDPOINT_DESCRIPTOR_TYPE && bLength >= sizeof(USB_ENDPOINT_DESCRIPTOR) && InBotInterface)
+        {
+            const USB_ENDPOINT_DESCRIPTOR *Ep = (const USB_ENDPOINT_DESCRIPTOR *)&Buffer[Offset];
+
+            if ((Ep->bmAttributes & USB_ENDPOINT_TYPE_MASK) == USB_ENDPOINT_TYPE_BULK &&
+                (Ep->bEndpointAddress & 0x0F) != 0)
+            {
+                if (USB_ENDPOINT_DIRECTION_IN(Ep->bEndpointAddress) && Out->BulkInAddress == 0)
+                {
+                    Out->BulkInAddress = Ep->bEndpointAddress;
+                    Out->BulkInMaxPacket = Ep->wMaxPacketSize;
+                }
+                else if (USB_ENDPOINT_DIRECTION_OUT(Ep->bEndpointAddress) && Out->BulkOutAddress == 0)
+                {
+                    Out->BulkOutAddress = Ep->bEndpointAddress;
+                    Out->BulkOutMaxPacket = Ep->wMaxPacketSize;
+                }
+            }
+        }
+
+        Offset += bLength;
+    }
+
+    return InBotInterface && Out->BulkInAddress != 0 && Out->BulkOutAddress != 0;
+}
+
+/* Configure Endpoint: add the two bulk endpoints to the slot's device context */
+static
+NTSTATUS
+XhciUcxConfigureBulkEndpoints(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _Inout_ PXHCI_UCX_SLOT Slot)
+{
+    PXHCI_INPUT_CONTROL_CONTEXT Icc = XhciUcxInputControlContext(Dev, Slot);
+    PXHCI_SLOT_CONTEXT InSlot = XhciUcxInputSlotContext(Dev, Slot);
+    PXHCI_SLOT_CONTEXT OutSlot = XhciUcxOutputSlotContext(Dev, Slot);
+    PXHCI_ENDPOINT_CONTEXT EpIn = XhciUcxInputEndpointContext(Dev, Slot, Slot->BulkInDci);
+    PXHCI_ENDPOINT_CONTEXT EpOut = XhciUcxInputEndpointContext(Dev, Slot, Slot->BulkOutDci);
+    ULONG LastCtx = (Slot->BulkInDci > Slot->BulkOutDci) ? Slot->BulkInDci : Slot->BulkOutDci;
+    ULONGLONG InRingPa;
+    ULONGLONG OutRingPa;
+    ULONG Code = 0;
+    NTSTATUS Status;
+
+    XhciUcxInitTransferRing(Dev, Slot->BulkInRingOffset, XHCI_UCX_BULK_RING_TRBS, &Slot->BulkInEnqueue, &Slot->BulkInCycle);
+    XhciUcxInitTransferRing(Dev, Slot->BulkOutRingOffset, XHCI_UCX_BULK_RING_TRBS, &Slot->BulkOutEnqueue, &Slot->BulkOutCycle);
+    InRingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->BulkInRingOffset).QuadPart;
+    OutRingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->BulkOutRingOffset).QuadPart;
+
+    RtlZeroMemory(Dev->HcVa + Slot->InputContextOffset, PAGE_SIZE);
+    Icc->AddContextFlags = XHCI_UCX_INPUT_CTX_ADD_SLOT |
+                           XHCI_UCX_INPUT_CTX_ADD(Slot->BulkInDci) | XHCI_UCX_INPUT_CTX_ADD(Slot->BulkOutDci);
+    Icc->DropContextFlags = 0;
+
+    /* Input slot context mirrors the controller's output copy, with the new Context Entries */
+    RtlCopyMemory(InSlot, OutSlot, Dev->ContextSize);
+    XhciSlotContextSetLastCtx(InSlot, LastCtx);
+
+    XhciEndpointContextInit(EpIn, XHCI_ENDPOINT_TYPE_BULK_IN, Slot->BulkInMaxPacket,
+                            0, 0, 0, 0, Slot->BulkInMaxPacket, InRingPa | XHCI_TRB_CYCLE);
+    XhciEndpointContextInit(EpOut, XHCI_ENDPOINT_TYPE_BULK_OUT, Slot->BulkOutMaxPacket,
+                            0, 0, 0, 0, Slot->BulkOutMaxPacket, OutRingPa | XHCI_TRB_CYCLE);
+    KeMemoryBarrier();
+
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_CONFIG_EP,
+                                (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->InputContextOffset).QuadPart,
+                                XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), &Code, NULL);
+    XHCI_UCX_LOG("STEP4 slot %u: Configure Endpoint rc=0x%08lX code=%lu (bulk IN 0x%02x DCI %u MPS %lu, bulk OUT 0x%02x DCI %u MPS %lu, context entries %lu)",
+                 Slot->SlotId, (ULONG)Status, Code,
+                 Slot->BulkInAddress, Slot->BulkInDci, Slot->BulkInMaxPacket,
+                 Slot->BulkOutAddress, Slot->BulkOutDci, Slot->BulkOutMaxPacket, LastCtx);
+    return Status;
+}
+
+/* Is BlockSize a power of two we can hold in the data page? */
+static
+BOOLEAN
+XhciUcxBlockSizeLegal(
+    _In_ ULONG BlockSize)
+{
+    return BlockSize >= 512 && BlockSize <= XHCI_UCX_DATA_BUFFER_SIZE && (BlockSize & (BlockSize - 1)) == 0;
+}
+
+/* Runs after STEP3 DONE on an addressed, identified slot. Failures leave the slot addressed. */
+static
+VOID
+XhciUcxProbeStorage(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _Inout_ PXHCI_UCX_SLOT Slot)
+{
+    PUCHAR Buffer = Dev->HcVa + Slot->DescriptorOffset;
+    PUCHAR Data = Dev->HcVa + Slot->DataOffset;
+    USB_DEFAULT_PIPE_SETUP_PACKET Setup;
+    XHCI_UCX_BOT_INTERFACE Bot;
+    UCHAR Cdb[16];
+    ULONG Transferred = 0;
+    ULONG TotalLength;
+    ULONG InMps;
+    ULONG OutMps;
+    ULONG LastLba;
+    ULONG BlockSize;
+    ULONG Attempt;
+    UCHAR CswStatus = 0xFF;
+    NTSTATUS Status;
+
+    /* Configuration descriptor header, then the whole set (clamped to the descriptor buffer) */
+    RtlZeroMemory(Buffer, XHCI_UCX_DESC_BUFFER_SIZE);
+    RtlZeroMemory(&Setup, sizeof(Setup));
+    Setup.bmRequestType.B = 0x80;
+    Setup.bRequest = USB_REQUEST_GET_DESCRIPTOR;
+    Setup.wValue.W = (USHORT)(USB_CONFIGURATION_DESCRIPTOR_TYPE << 8);
+    Setup.wIndex.W = 0;
+    Setup.wLength = sizeof(USB_CONFIGURATION_DESCRIPTOR);
+
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, sizeof(USB_CONFIGURATION_DESCRIPTOR), TRUE, &Transferred);
+    if (!NT_SUCCESS(Status) || Transferred < sizeof(USB_CONFIGURATION_DESCRIPTOR) ||
+        Buffer[0] != sizeof(USB_CONFIGURATION_DESCRIPTOR) || Buffer[1] != USB_CONFIGURATION_DESCRIPTOR_TYPE)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: GET_DESCRIPTOR(configuration, 9) failed rc=0x%08lX got %lu bytes bLength=%u type=%u",
+                     Slot->SlotId, (ULONG)Status, Transferred, Buffer[0], Buffer[1]);
+        return;
+    }
+    TotalLength = ((const USB_CONFIGURATION_DESCRIPTOR *)Buffer)->wTotalLength;
+    if (TotalLength < sizeof(USB_CONFIGURATION_DESCRIPTOR))
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: SEC-1 reject, wTotalLength=%lu", Slot->SlotId, TotalLength);
+        return;
+    }
+    if (TotalLength > XHCI_UCX_DESC_BUFFER_SIZE)
+        TotalLength = XHCI_UCX_DESC_BUFFER_SIZE;
+
+    RtlZeroMemory(Buffer, XHCI_UCX_DESC_BUFFER_SIZE);
+    Setup.wLength = (USHORT)TotalLength;
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, TotalLength, TRUE, &Transferred);
+    if (!NT_SUCCESS(Status) || Transferred < sizeof(USB_CONFIGURATION_DESCRIPTOR) ||
+        Buffer[0] != sizeof(USB_CONFIGURATION_DESCRIPTOR) || Buffer[1] != USB_CONFIGURATION_DESCRIPTOR_TYPE)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: GET_DESCRIPTOR(configuration, %lu) failed rc=0x%08lX got %lu bytes",
+                     Slot->SlotId, TotalLength, (ULONG)Status, Transferred);
+        return;
+    }
+
+    /* Only the bytes that arrived are parsed */
+    if (!XhciUcxFindBotInterface(Buffer, Transferred, &Bot))
+    {
+        XHCI_UCX_LOG("STEP4 skipped: slot %u has no Mass Storage/SCSI/BOT interface with bulk IN+OUT (%u interface(s), first class %02x/%02x/%02x, %lu descriptor bytes)",
+                     Slot->SlotId, Bot.InterfaceCount, Bot.FirstClass[0], Bot.FirstClass[1], Bot.FirstClass[2], Transferred);
+        return;
+    }
+
+    InMps = XhciUcxBulkMaxPacketLegal(Slot->Speed, Bot.BulkInMaxPacket);
+    OutMps = XhciUcxBulkMaxPacketLegal(Slot->Speed, Bot.BulkOutMaxPacket);
+    if (InMps == 0 || OutMps == 0)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: SEC-1 reject, bulk wMaxPacketSize IN=%u OUT=%u illegal for speed id %u",
+                     Slot->SlotId, Bot.BulkInMaxPacket, Bot.BulkOutMaxPacket, Slot->Speed);
+        return;
+    }
+
+    Slot->ConfigurationValue = Bot.ConfigurationValue;
+    Slot->InterfaceNumber = Bot.InterfaceNumber;
+    Slot->BulkInAddress = Bot.BulkInAddress;
+    Slot->BulkOutAddress = Bot.BulkOutAddress;
+    Slot->BulkInMaxPacket = InMps;
+    Slot->BulkOutMaxPacket = OutMps;
+    Slot->BulkInDci = (UCHAR)(2 * (Bot.BulkInAddress & 0x0F) + 1);
+    Slot->BulkOutDci = (UCHAR)(2 * (Bot.BulkOutAddress & 0x0F));
+    XHCI_UCX_LOG("STEP4 slot %u: BOT interface %u in configuration %u (bulk IN 0x%02x, bulk OUT 0x%02x)",
+                 Slot->SlotId, Slot->InterfaceNumber, Slot->ConfigurationValue, Slot->BulkInAddress, Slot->BulkOutAddress);
+
+    Status = XhciUcxConfigureBulkEndpoints(Dev, Slot);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    /* SET_CONFIGURATION: the device enables its endpoints */
+    RtlZeroMemory(&Setup, sizeof(Setup));
+    Setup.bmRequestType.B = 0x00;                      /* host-to-device, standard, device */
+    Setup.bRequest = USB_REQUEST_SET_CONFIGURATION;
+    Setup.wValue.W = Slot->ConfigurationValue;
+    Setup.wIndex.W = 0;
+    Setup.wLength = 0;
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, 0, FALSE, &Transferred);
+    XHCI_UCX_LOG("STEP4 slot %u: SET_CONFIGURATION(%u) rc=0x%08lX", Slot->SlotId, Slot->ConfigurationValue, (ULONG)Status);
+    if (!NT_SUCCESS(Status))
+        return;
+    Slot->Configured = TRUE;
+
+    /* UCX endpoint objects for the two bulk pipes (ucx01000 M1 skeleton: lifecycle only) */
+    if (Slot->UsbDevice != NULL)
+    {
+        PUCXENDPOINT_INIT EndpointInit = NULL;
+
+        Status = UcxEndpointCreate(Slot->UsbDevice, &EndpointInit, WDF_NO_OBJECT_ATTRIBUTES, &Slot->BulkIn);
+        XHCI_UCX_LOG("UcxEndpointCreate (bulk IN) rc=0x%08lX", (ULONG)Status);
+        if (!NT_SUCCESS(Status))
+            Slot->BulkIn = NULL;
+        EndpointInit = NULL;
+        Status = UcxEndpointCreate(Slot->UsbDevice, &EndpointInit, WDF_NO_OBJECT_ATTRIBUTES, &Slot->BulkOut);
+        XHCI_UCX_LOG("UcxEndpointCreate (bulk OUT) rc=0x%08lX", (ULONG)Status);
+        if (!NT_SUCCESS(Status))
+            Slot->BulkOut = NULL;
+    }
+
+    /* INQUIRY (36 bytes): peripheral type and removable bit only, no strings */
+    RtlZeroMemory(Cdb, sizeof(Cdb));
+    Cdb[0] = XHCI_UCX_SCSI_INQUIRY;
+    Cdb[4] = XHCI_UCX_INQUIRY_LENGTH;
+    Status = XhciUcxBotCommand(Dev, Slot, Cdb, 6, TRUE, XHCI_UCX_INQUIRY_LENGTH, &Transferred, &CswStatus);
+    if (!NT_SUCCESS(Status) || CswStatus != XHCI_UCX_CSW_STATUS_GOOD || Transferred < 5)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: INQUIRY failed rc=0x%08lX csw=%u bytes=%lu", Slot->SlotId, (ULONG)Status, CswStatus, Transferred);
+        return;
+    }
+    XHCI_UCX_LOG("STEP4 slot %u INQUIRY: peripheral type %u qualifier %u removable=%u version %u (%lu bytes)",
+                 Slot->SlotId, Data[0] & 0x1F, (Data[0] >> 5) & 0x7, (Data[1] & 0x80) ? 1 : 0, Data[2], Transferred);
+
+    /* TEST UNIT READY; a CHECK CONDITION (e.g. unit attention after power-on) is cleared with REQUEST SENSE */
+    for (Attempt = 0; Attempt < XHCI_UCX_TUR_RETRIES; Attempt++)
+    {
+        RtlZeroMemory(Cdb, sizeof(Cdb));
+        Cdb[0] = XHCI_UCX_SCSI_TEST_UNIT_READY;
+        Status = XhciUcxBotCommand(Dev, Slot, Cdb, 6, FALSE, 0, &Transferred, &CswStatus);
+        if (!NT_SUCCESS(Status))
+        {
+            XHCI_UCX_LOG("STEP4 slot %u: TEST UNIT READY failed rc=0x%08lX", Slot->SlotId, (ULONG)Status);
+            return;
+        }
+        if (CswStatus == XHCI_UCX_CSW_STATUS_GOOD)
+            break;
+
+        RtlZeroMemory(Cdb, sizeof(Cdb));
+        Cdb[0] = XHCI_UCX_SCSI_REQUEST_SENSE;
+        Cdb[4] = XHCI_UCX_SENSE_LENGTH;
+        Status = XhciUcxBotCommand(Dev, Slot, Cdb, 6, TRUE, XHCI_UCX_SENSE_LENGTH, &Transferred, &CswStatus);
+        XHCI_UCX_LOG("STEP4 slot %u: unit not ready, REQUEST SENSE rc=0x%08lX csw=%u key=%u asc=%02x ascq=%02x (%lu bytes)",
+                     Slot->SlotId, (ULONG)Status, CswStatus,
+                     (Transferred > 2) ? (Data[2] & 0x0F) : 0,
+                     (Transferred > 12) ? Data[12] : 0,
+                     (Transferred > 13) ? Data[13] : 0, Transferred);
+        if (!NT_SUCCESS(Status))
+            return;
+        CswStatus = XHCI_UCX_CSW_STATUS_FAILED;
+    }
+    if (CswStatus != XHCI_UCX_CSW_STATUS_GOOD)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: unit still not ready after %u attempts", Slot->SlotId, XHCI_UCX_TUR_RETRIES);
+        return;
+    }
+
+    /* READ CAPACITY(10): big-endian last LBA and block size, validated before use */
+    RtlZeroMemory(Cdb, sizeof(Cdb));
+    Cdb[0] = XHCI_UCX_SCSI_READ_CAPACITY10;
+    Status = XhciUcxBotCommand(Dev, Slot, Cdb, 10, TRUE, 8, &Transferred, &CswStatus);
+    if (!NT_SUCCESS(Status) || CswStatus != XHCI_UCX_CSW_STATUS_GOOD || Transferred != 8)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: READ CAPACITY(10) failed rc=0x%08lX csw=%u bytes=%lu", Slot->SlotId, (ULONG)Status, CswStatus, Transferred);
+        return;
+    }
+    LastLba = XhciUcxReadBe32(&Data[0]);
+    BlockSize = XhciUcxReadBe32(&Data[4]);
+    if (!XhciUcxBlockSizeLegal(BlockSize))
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: SEC-1 reject, block size %lu (last LBA %lu)", Slot->SlotId, BlockSize, LastLba);
+        return;
+    }
+    XHCI_UCX_LOG("STEP4 slot %u capacity: last LBA %lu, block size %lu", Slot->SlotId, LastLba, BlockSize);
+
+    /* READ(10) logical block 0, one block */
+    RtlZeroMemory(Cdb, sizeof(Cdb));
+    Cdb[0] = XHCI_UCX_SCSI_READ10;
+    Cdb[8] = 1;                                        /* transfer length (blocks), big-endian in [7..8] */
+    Status = XhciUcxBotCommand(Dev, Slot, Cdb, 10, TRUE, BlockSize, &Transferred, &CswStatus);
+    if (!NT_SUCCESS(Status) || CswStatus != XHCI_UCX_CSW_STATUS_GOOD || Transferred != BlockSize)
+    {
+        XHCI_UCX_LOG("STEP4 slot %u: READ(10) LBA 0 failed rc=0x%08lX csw=%u bytes=%lu of %lu",
+                     Slot->SlotId, (ULONG)Status, CswStatus, Transferred, BlockSize);
+        return;
+    }
+
+    XHCI_UCX_LOG("STEP4 DONE: slot %u read LBA 0 (%lu bytes, block size %lu, last LBA %lu, boot signature %s)",
+                 Slot->SlotId, Transferred, BlockSize, LastLba,
+                 (Data[510] == 0x55 && Data[511] == 0xAA) ? "55AA" : "absent");
+}
+
 static
 VOID
 XhciUcxEnumeratePort(
@@ -1950,6 +2714,9 @@ XhciUcxEnumeratePort(
 
     Dev->PortEnumState[PortId] = XHCI_UCX_PORT_ENUMERATED;
     XHCI_UCX_LOG("STEP3 DONE: port %lu slot %u addressed and identified", PortId, SlotId);
+
+    /* Step 4: bulk path for a BOT mass-storage device; a failure leaves the device addressed */
+    XhciUcxProbeStorage(Dev, Slot);
 }
 
 /* The enumeration work item: reconcile every root port with its slot state */
