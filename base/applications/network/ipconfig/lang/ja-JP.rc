@@ -88,7 +88,7 @@ BEGIN
     IDS_DNSTYPEAAAA          "\tAAAA レコード . . . . : %ls\n"
     IDS_DNSTYPEATMA          "\tATMA レコード . . . . : \n"
     IDS_DNSTYPESRV           "\tSRV レコード. . . . . : %ls\n\t                        %hu\n\t                        %hu\n\t                        %hu\n"
-    IDS_DNSTYPETXT           "\tTXT Record . . . . . : \"%ls\"\n"
+    IDS_DNSTYPETXT           "\tTXT Record . . . . . : ""%ls""\n"
 END
 
 STRINGTABLE

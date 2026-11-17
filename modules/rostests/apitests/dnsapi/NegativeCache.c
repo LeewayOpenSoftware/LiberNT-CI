@@ -168,7 +168,8 @@ void func_NegativeCache(void)
     Found = FALSE;
     for (Entry = Table; Entry; Entry = Entry->pNext)
     {
-        if (Entry->pszName && !_wcsicmp(Entry->pszName, TEST_NAME))
+        /* the service stores the name with the spelling of the query that cached it */
+        if (Entry->pszName && !wcscmp(Entry->pszName, TEST_NAME))
             Found = TRUE;
     }
     for (Entry = Table; Entry; Entry = Next)

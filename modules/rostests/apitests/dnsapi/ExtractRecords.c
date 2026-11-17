@@ -46,64 +46,66 @@ static const UCHAR EmptyMessage[] =
 
 void func_ExtractRecords(void)
 {
-    PDNS_RECORD Records, Record;
+    PDNS_RECORDW RecordsW, RecordW;
+    PDNS_RECORDA RecordsA, RecordA;
     DNS_STATUS Status;
 
-    Status = DnsExtractRecordsFromMessage_W(NULL, sizeof(TestMessage), &Records);
+    Status = DnsExtractRecordsFromMessage_W(NULL, sizeof(TestMessage), (PDNS_RECORD *)&RecordsW);
     ok(Status == ERROR_INVALID_PARAMETER, "NULL buffer: %lu\n", Status);
     Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)TestMessage, sizeof(TestMessage), NULL);
     ok(Status == ERROR_INVALID_PARAMETER, "NULL out param: %lu\n", Status);
-    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)TestMessage, 10, &Records);
+    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)TestMessage, 10, (PDNS_RECORD *)&RecordsW);
     ok(Status == ERROR_INVALID_DATA, "Short message: %lu\n", Status);
-    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)TestMessage, sizeof(TestMessage) - 1, &Records);
+    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)TestMessage, sizeof(TestMessage) - 1, (PDNS_RECORD *)&RecordsW);
     ok(Status == ERROR_INVALID_DATA, "Truncated message: %lu\n", Status);
 
-    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)EmptyMessage, sizeof(EmptyMessage), &Records);
+    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)EmptyMessage, sizeof(EmptyMessage), (PDNS_RECORD *)&RecordsW);
     ok(Status == DNS_INFO_NO_RECORDS, "Empty message: %lu\n", Status);
 
-    Records = NULL;
-    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)TestMessage, sizeof(TestMessage), &Records);
+    RecordsW = NULL;
+    Status = DnsExtractRecordsFromMessage_W((PDNS_MESSAGE_BUFFER)TestMessage, sizeof(TestMessage), (PDNS_RECORD *)&RecordsW);
     ok(Status == ERROR_SUCCESS, "Extract failed: %lu\n", Status);
-    ok(Records != NULL, "No records extracted\n");
-    if (!Records)
+    ok(RecordsW != NULL, "No records extracted\n");
+    if (!RecordsW)
         return;
 
-    Record = Records;
-    ok(Record->wType == DNS_TYPE_CNAME, "First type %u\n", Record->wType);
-    ok(Record->Flags.S.Section == DnsSectionAnswer, "First section %lu\n", Record->Flags.S.Section);
-    ok(Record->dwTtl == 300, "First TTL %lu\n", Record->dwTtl);
-    ok(Record->pName && !wcscmp(Record->pName, L"www.example.com"), "First name %S\n",
-       Record->pName ? Record->pName : L"(null)");
-    ok(Record->Data.CNAME.pNameHost && !wcscmp(Record->Data.CNAME.pNameHost, L"example.com"),
-       "CNAME target %S\n", Record->Data.CNAME.pNameHost ? Record->Data.CNAME.pNameHost : L"(null)");
+    RecordW = RecordsW;
+    ok(RecordW->wType == DNS_TYPE_CNAME, "First type %u\n", RecordW->wType);
+    ok(RecordW->Flags.S.Section == DnsSectionAnswer, "First section %lu\n",
+       (unsigned long)RecordW->Flags.S.Section);
+    ok(RecordW->dwTtl == 300, "First TTL %lu\n", RecordW->dwTtl);
+    ok(RecordW->pName && !wcscmp(RecordW->pName, L"www.example.com"), "First name %S\n",
+       RecordW->pName ? RecordW->pName : L"(null)");
+    ok(RecordW->Data.CNAME.pNameHost && !wcscmp(RecordW->Data.CNAME.pNameHost, L"example.com"),
+       "CNAME target %S\n", RecordW->Data.CNAME.pNameHost ? RecordW->Data.CNAME.pNameHost : L"(null)");
 
-    Record = Records->pNext;
-    ok(Record != NULL, "Second record missing\n");
-    if (Record)
+    RecordW = RecordsW->pNext;
+    ok(RecordW != NULL, "Second record missing\n");
+    if (RecordW)
     {
-        ok(Record->wType == DNS_TYPE_A, "Second type %u\n", Record->wType);
-        ok(Record->pName && !wcscmp(Record->pName, L"example.com"), "Second name %S\n",
-           Record->pName ? Record->pName : L"(null)");
-        ok(!memcmp(&Record->Data.A.IpAddress, "\x01\x02\x03\x04", 4), "A data mismatch\n");
-        ok(Record->pNext == NULL, "Unexpected third record\n");
+        ok(RecordW->wType == DNS_TYPE_A, "Second type %u\n", RecordW->wType);
+        ok(RecordW->pName && !wcscmp(RecordW->pName, L"example.com"), "Second name %S\n",
+           RecordW->pName ? RecordW->pName : L"(null)");
+        ok(!memcmp(&RecordW->Data.A.IpAddress, "\x01\x02\x03\x04", 4), "A data mismatch\n");
+        ok(RecordW->pNext == NULL, "Unexpected third record\n");
     }
-    DnsRecordListFree(Records, DnsFreeRecordList);
+    DnsRecordListFree((PDNS_RECORD)RecordsW, DnsFreeRecordList);
 
-    Records = NULL;
-    Status = DnsExtractRecordsFromMessage_UTF8((PDNS_MESSAGE_BUFFER)TestMessage, sizeof(TestMessage), &Records);
+    RecordsA = NULL;
+    Status = DnsExtractRecordsFromMessage_UTF8((PDNS_MESSAGE_BUFFER)TestMessage, sizeof(TestMessage), (PDNS_RECORD *)&RecordsA);
     ok(Status == ERROR_SUCCESS, "UTF8 extract failed: %lu\n", Status);
-    ok(Records != NULL, "No UTF8 records\n");
-    if (Records)
+    ok(RecordsA != NULL, "No UTF8 records\n");
+    if (RecordsA)
     {
-        Record = Records;
-        ok(Record->pName && !strcmp(Record->pName, "www.example.com"), "UTF8 name %s\n",
-           Record->pName ? Record->pName : "(null)");
-        ok(Record->Data.CNAME.pNameHost && !strcmp(Record->Data.CNAME.pNameHost, "example.com"),
-           "UTF8 CNAME target %s\n", Record->Data.CNAME.pNameHost ? Record->Data.CNAME.pNameHost : "(null)");
-        Record = Records->pNext;
-        ok(Record != NULL && Record->wType == DNS_TYPE_A, "UTF8 A record missing\n");
-        if (Record)
-            ok(!memcmp(&Record->Data.A.IpAddress, "\x01\x02\x03\x04", 4), "UTF8 A data mismatch\n");
+        RecordA = RecordsA;
+        ok(RecordA->pName && !strcmp(RecordA->pName, "www.example.com"), "UTF8 name %s\n",
+           RecordA->pName ? RecordA->pName : "(null)");
+        ok(RecordA->Data.CNAME.pNameHost && !strcmp(RecordA->Data.CNAME.pNameHost, "example.com"),
+           "UTF8 CNAME target %s\n", RecordA->Data.CNAME.pNameHost ? RecordA->Data.CNAME.pNameHost : "(null)");
+        RecordA = RecordsA->pNext;
+        ok(RecordA != NULL && RecordA->wType == DNS_TYPE_A, "UTF8 A record missing\n");
+        if (RecordA)
+            ok(!memcmp(&RecordA->Data.A.IpAddress, "\x01\x02\x03\x04", 4), "UTF8 A data mismatch\n");
     }
-    DnsRecordListFree(Records, DnsFreeRecordList);
+    DnsRecordListFree((PDNS_RECORD)RecordsA, DnsFreeRecordList);
 }

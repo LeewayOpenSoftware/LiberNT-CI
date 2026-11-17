@@ -91,7 +91,7 @@ BEGIN
     IDS_DNSTYPEAAAA          "\tEnregistrement AAAA . . : %ls\n"
     IDS_DNSTYPEATMA          "\tEnregistrement ATMA . . : \n"
     IDS_DNSTYPESRV           "\tEnregistrement SRV. . . : %ls\n\t                          %hu\n\t                          %hu\n\t                          %hu\n"
-    IDS_DNSTYPETXT           "\tTXT Record . . . . . : \"%ls\"\n"
+    IDS_DNSTYPETXT           "\tTXT Record . . . . . : ""%ls""\n"
 END
 
 STRINGTABLE
