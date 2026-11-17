@@ -1431,7 +1431,8 @@ custom_end:
     DrvSetCallbackProcs = (void*)GetProcAddress(data->hModule, "DrvSetCallbackProcs");
     if(DrvSetCallbackProcs)
     {
-        PROC callbacks[] = {
+        /* Drivers keep this pointer and call through it later, from their own threads */
+        static PROC callbacks[] = {
             (PROC)wglSetCurrentValue,
             (PROC)wglGetCurrentValue,
             (PROC)wglGetDHGLRC,
