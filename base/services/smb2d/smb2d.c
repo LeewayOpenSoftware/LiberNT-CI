@@ -534,7 +534,6 @@ static void Serve(HANDLE dev)
 
 static SERVICE_STATUS_HANDLE g_StatusHandle;
 static SERVICE_STATUS g_ServiceStatus;
-static HANDLE g_Device = INVALID_HANDLE_VALUE;
 
 static void LoadIdentity(void)
 {
@@ -614,10 +613,8 @@ static int RunDaemon(void)
         CloseHandle(dev);
         return 1;
     }
-    g_Device = dev;
     printf("smb2d: redirector started, serving requests\n");
     Serve(dev);
-    g_Device = INVALID_HANDLE_VALUE;
     CloseHandle(dev);
     return 0;
 }
