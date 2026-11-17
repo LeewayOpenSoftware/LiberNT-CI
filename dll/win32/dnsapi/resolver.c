@@ -455,7 +455,8 @@ ResolverDword(const UCHAR *P)
 
 static
 PDNS_RECORDW
-ResolverParseRecord(const UCHAR *Packet, INT Length, PCWSTR Owner, WORD Type, DWORD Ttl, INT Data, WORD DataLength)
+ResolverParseRecord(const UCHAR *Packet, INT Length, PCWSTR Owner, WORD Type, DWORD Ttl, INT Data, WORD DataLength,
+                    DWORD Section)
 {
     PDNS_RECORDW Record;
     SIZE_T Size = sizeof(DNS_RECORDW);
@@ -481,7 +482,7 @@ ResolverParseRecord(const UCHAR *Packet, INT Length, PCWSTR Owner, WORD Type, DW
         return NULL;
     Record->pName = ResolverDupName(Owner);
     Record->wType = Type;
-    Record->Flags.S.Section = DnsSectionAnswer;
+    Record->Flags.S.Section = Section;
     Record->Flags.S.CharSet = DnsCharSetUnicode;
     Record->dwTtl = Ttl;
     if (!Record->pName)
@@ -658,7 +659,7 @@ ResolverParseReply(const UCHAR *Packet, INT Length, WORD Id, PCWSTR Name, WORD T
 
         if (Class == 1 && (RecordType == Type || RecordType == DNS_TYPE_CNAME))
         {
-            Record = ResolverParseRecord(Packet, Length, Owner, RecordType, Ttl, Offset, DataLength);
+            Record = ResolverParseRecord(Packet, Length, Owner, RecordType, Ttl, Offset, DataLength, DnsSectionAnswer);
             if (Record)
             {
                 *Tail = Record;
@@ -1152,4 +1153,121 @@ DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
 
     RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
     return Status == ERROR_SUCCESS ? Status : First;
+}
+
+static
+INT
+ResolverSkipQuestions(const UCHAR *Packet, INT Length, WORD Questions)
+{
+    WCHAR Name[DNS_MAX_NAME_BUFFER_LENGTH];
+    INT Offset = 12;
+    WORD i;
+
+    for (i = 0; i < Questions; i++)
+    {
+        Offset = ResolverReadName(Packet, Length, Offset, Name, ARRAYSIZE(Name));
+        if (Offset < 0 || Offset + 4 > Length)
+            return -1;
+        Offset += 4;
+    }
+    return Offset;
+}
+
+DNS_STATUS
+DnsIntExtractRecordsFromMessage(PDNS_MESSAGE_BUFFER Message, WORD Length, PDNS_RECORDW *Records)
+{
+    const UCHAR *Packet = (const UCHAR *)Message;
+    PDNS_RECORDW List = NULL, *Tail = &List;
+    DWORD Counts[3], Section;
+    WORD i;
+    INT Offset;
+
+    *Records = NULL;
+    if (Message == NULL)
+        return ERROR_INVALID_PARAMETER;
+    if (Length < sizeof(DNS_HEADER))
+        return ERROR_INVALID_DATA;
+
+    Counts[0] = ResolverWord(Packet + 6);
+    Counts[1] = ResolverWord(Packet + 8);
+    Counts[2] = ResolverWord(Packet + 10);
+
+    Offset = ResolverSkipQuestions(Packet, Length, ResolverWord(Packet + 4));
+    if (Offset < 0)
+        return ERROR_INVALID_DATA;
+
+    for (Section = DnsSectionAnswer; Section <= DnsSectionAdditional; Section++)
+    {
+        for (i = 0; i < Counts[Section - DnsSectionAnswer]; i++)
+        {
+            WCHAR Owner[DNS_MAX_NAME_BUFFER_LENGTH];
+            WORD RecordType, Class, DataLength;
+            DWORD Ttl;
+            PDNS_RECORDW Record;
+
+            Offset = ResolverReadName(Packet, Length, Offset, Owner, ARRAYSIZE(Owner));
+            if (Offset < 0 || Offset + 10 > Length)
+                goto Invalid;
+            RecordType = ResolverWord(Packet + Offset);
+            Class = ResolverWord(Packet + Offset + 2);
+            Ttl = ResolverDword(Packet + Offset + 4);
+            DataLength = ResolverWord(Packet + Offset + 8);
+            Offset += 10;
+            if (Offset + DataLength > Length)
+                goto Invalid;
+            if (Class == 1)
+            {
+                Record = ResolverParseRecord(Packet, Length, Owner, RecordType, Ttl, Offset, DataLength, Section);
+                if (Record)
+                {
+                    *Tail = Record;
+                    Tail = &Record->pNext;
+                }
+            }
+            Offset += DataLength;
+        }
+    }
+
+    if (!List)
+        return DNS_INFO_NO_RECORDS;
+    *Records = List;
+    return ERROR_SUCCESS;
+
+Invalid:
+    DnsIntFreeRecordList((PDNS_RECORD)List);
+    return ERROR_INVALID_DATA;
+}
+
+DNS_STATUS WINAPI
+DnsExtractRecordsFromMessage_W(PDNS_MESSAGE_BUFFER pDnsBuffer,
+                               WORD wMessageLength,
+                               PDNS_RECORD *ppRecord)
+{
+    if (ppRecord == NULL)
+        return ERROR_INVALID_PARAMETER;
+
+    return DnsIntExtractRecordsFromMessage(pDnsBuffer, wMessageLength, (PDNS_RECORDW *)ppRecord);
+}
+
+DNS_STATUS WINAPI
+DnsExtractRecordsFromMessage_UTF8(PDNS_MESSAGE_BUFFER pDnsBuffer,
+                                  WORD wMessageLength,
+                                  PDNS_RECORD *ppRecord)
+{
+    DNS_STATUS Status;
+    PDNS_RECORDW Wide = NULL;
+
+    if (ppRecord == NULL)
+        return ERROR_INVALID_PARAMETER;
+    *ppRecord = NULL;
+
+    Status = DnsIntExtractRecordsFromMessage(pDnsBuffer, wMessageLength, &Wide);
+    if (Status == ERROR_SUCCESS)
+    {
+        *ppRecord = DnsRecordSetCopyEx((PDNS_RECORD)Wide, DnsCharSetUnicode, DnsCharSetUtf8);
+        DnsRecordListFree((PDNS_RECORD)Wide, DnsFreeRecordList);
+        if (*ppRecord == NULL)
+            Status = ERROR_OUTOFMEMORY;
+    }
+    return Status;
 }

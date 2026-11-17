@@ -201,24 +201,6 @@ DnsEnableDynamicRegistration()
 }
 
 DNS_STATUS WINAPI
-DnsExtractRecordsFromMessage_UTF8(PDNS_MESSAGE_BUFFER pDnsBuffer,
-                                  WORD wMessageLength,
-                                  PDNS_RECORD* ppRecord)
-{
-    UNIMPLEMENTED;
-    return ERROR_OUTOFMEMORY;
-}
-
-DNS_STATUS WINAPI
-DnsExtractRecordsFromMessage_W(PDNS_MESSAGE_BUFFER pDnsBuffer,
-                               WORD wMessageLength,
-                               PDNS_RECORD* ppRecord)
-{
-    UNIMPLEMENTED;
-    return ERROR_OUTOFMEMORY;
-}
-
-DNS_STATUS WINAPI
 DnsFindAuthoritativeZone()
 {
     UNIMPLEMENTED;
