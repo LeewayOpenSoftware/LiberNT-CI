@@ -2822,12 +2822,12 @@
 @ stdcall -arch=win64 PcwRegister(ptr ptr)
 @ stdcall -arch=win64 PcwUnregister(ptr)
 @ stub -arch=win64 PfFileInfoNotify
-@ stub -arch=win64 PoClearPowerRequest
+@ stdcall -arch=win64 PoClearPowerRequest(ptr long)
 @ stub -arch=win64 PoCpuIdledSinceLastCallImprecise
 @ stdcall PoCreatePowerLimitRequest(ptr ptr ptr ptr)
-@ stub -arch=win64 PoCreatePowerRequest
+@ stdcall -arch=win64 PoCreatePowerRequest(ptr ptr ptr)
 @ stdcall PoDeletePowerLimitRequest(ptr)
-@ stub -arch=win64 PoDeletePowerRequest
+@ stdcall -arch=win64 PoDeletePowerRequest(ptr)
 @ stub -arch=arm64 PoDirectedDripsClearDeviceFlags
 @ stub -arch=arm64 PoDirectedDripsSetDeviceFlags
 @ stdcall PoDisableSleepStates(long long ptr)
@@ -2865,7 +2865,7 @@
 @ stub -arch=win64 PoSetFixedWakeSource
 @ stub -arch=win64 PoSetPowerButtonHoldState
 @ stdcall PoSetPowerLimitValue(ptr ptr long ptr)
-@ stub -arch=win64 PoSetPowerRequest
+@ stdcall -arch=win64 PoSetPowerRequest(ptr long)
 @ stub -arch=win64 PoSetSystemWakeDevice
 @ stdcall PoSetUserPresent(long)
 @ stub -arch=win64 PoStartDeviceBusy

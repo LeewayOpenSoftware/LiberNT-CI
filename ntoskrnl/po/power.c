@@ -53,6 +53,7 @@ typedef struct _POP_POWER_REQUEST_ACTION
 
 static POBJECT_TYPE PopPowerRequestObjectType;
 static volatile LONG PopDisplayRequiredCount;
+static volatile LONG PopSystemRequiredCount;
 static GENERIC_MAPPING PopPowerRequestMapping =
 {
     STANDARD_RIGHTS_READ,
@@ -142,6 +143,18 @@ PopTrackDisplayRequired(
         InterlockedDecrement(&PopDisplayRequiredCount);
 }
 
+static
+VOID
+PopTrackSystemRequired(
+    _In_ LONG OldCount,
+    _In_ LONG NewCount)
+{
+    if (OldCount <= 0 && NewCount > 0)
+        InterlockedIncrement(&PopSystemRequiredCount);
+    else if (OldCount > 0 && NewCount <= 0)
+        InterlockedDecrement(&PopSystemRequiredCount);
+}
+
 BOOLEAN
 NTAPI
 PopIsDisplayRequired(VOID)
@@ -158,6 +171,7 @@ PopPowerRequestDelete(
     PPOP_POWER_REQUEST PowerRequest = ObjectBody;
 
     PopTrackDisplayRequired(PowerRequest->RequestCount[PowerRequestDisplayRequired], 0);
+    PopTrackSystemRequired(PowerRequest->RequestCount[PowerRequestSystemRequired], 0);
 }
 
 static
@@ -190,6 +204,7 @@ PopValidatePowerRequestReason(
 {
     ULONG i;
 
+    if (Context == NULL) return STATUS_SUCCESS;
     if (Context->Version != POWER_REQUEST_CONTEXT_VERSION) return STATUS_INVALID_PARAMETER;
     if (Context->Flags == DIAGNOSTIC_REASON_NOT_SPECIFIED) return STATUS_SUCCESS;
 
@@ -1352,6 +1367,99 @@ PoRequestPowerIrp(
 /*
  * @implemented
  */
+NTSTATUS
+NTAPI
+PoCreatePowerRequest(OUT PVOID *PowerRequest,
+                     IN PDEVICE_OBJECT DeviceObject,
+                     IN PCOUNTED_REASON_CONTEXT Context OPTIONAL)
+{
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    if (PowerRequest == NULL)
+        return STATUS_INVALID_PARAMETER;
+    *PowerRequest = NULL;
+    if (DeviceObject == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Status = PopValidatePowerRequestReason(Context, KernelMode);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return PopCreateThreadPowerObject((PPOP_POWER_REQUEST *)PowerRequest);
+}
+
+NTSTATUS
+NTAPI
+PoSetPowerRequest(IN OUT PVOID PowerRequest,
+                  IN POWER_REQUEST_TYPE Type)
+{
+    PPOP_POWER_REQUEST Request = PowerRequest;
+    LONG Count;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Request == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Type != PowerRequestSystemRequired)
+        return STATUS_NOT_SUPPORTED;
+
+    do
+    {
+        Count = Request->RequestCount[Type];
+        if (Count == MAXLONG)
+        {
+            Status = STATUS_INTEGER_OVERFLOW;
+            break;
+        }
+    } while (InterlockedCompareExchange((PLONG)&Request->RequestCount[Type], Count + 1, Count) != Count);
+
+    if (NT_SUCCESS(Status))
+        PopTrackSystemRequired(Count, Count + 1);
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+PoClearPowerRequest(IN OUT PVOID PowerRequest,
+                    IN POWER_REQUEST_TYPE Type)
+{
+    PPOP_POWER_REQUEST Request = PowerRequest;
+    LONG Count;
+    NTSTATUS Status = STATUS_SUCCESS;
+
+    if (Request == NULL)
+        return STATUS_INVALID_PARAMETER;
+    if (Type != PowerRequestSystemRequired)
+        return STATUS_NOT_SUPPORTED;
+
+    do
+    {
+        Count = Request->RequestCount[Type];
+        if (Count <= 0)
+        {
+            Status = STATUS_NOT_SUPPORTED;
+            break;
+        }
+    } while (InterlockedCompareExchange((PLONG)&Request->RequestCount[Type], Count - 1, Count) != Count);
+
+    if (NT_SUCCESS(Status))
+        PopTrackSystemRequired(Count, Count - 1);
+
+    return Status;
+}
+
+VOID
+NTAPI
+PoDeletePowerRequest(IN OUT PVOID PowerRequest)
+{
+    PAGED_CODE();
+
+    if (PowerRequest != NULL)
+        ObDereferenceObject(PowerRequest);
+}
+
 POWER_STATE
 NTAPI
 PoSetPowerState(IN PDEVICE_OBJECT DeviceObject,
@@ -1780,6 +1888,31 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
             _SEH2_TRY
             {
                 RtlCopyMemory(OutputBuffer, &Information, sizeof(Information));
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
+        case SystemExecutionState:
+        {
+            EXECUTION_STATE State = ES_CONTINUOUS;
+
+            if (InputBuffer || InputBufferLength || !OutputBuffer || OutputBufferLength < sizeof(ULONG))
+                return STATUS_INVALID_PARAMETER;
+
+            if (InterlockedCompareExchange(&PopSystemRequiredCount, 0, 0) > 0)
+                State |= ES_SYSTEM_REQUIRED;
+            if (InterlockedCompareExchange(&PopDisplayRequiredCount, 0, 0) > 0)
+                State |= ES_DISPLAY_REQUIRED;
+
+            _SEH2_TRY
+            {
+                *(PULONG)OutputBuffer = State;
                 Status = STATUS_SUCCESS;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
