@@ -557,8 +557,8 @@ interface IWeeklyTrigger : ITrigger
 ]
 interface IMonthlyTrigger : ITrigger
 {
-    [propget] HRESULT DaysOfMonth([out, retval] short *pDays);
-    [propput] HRESULT DaysOfMonth([in] short days);
+    [propget] HRESULT DaysOfMonth([out, retval] long *pDays);
+    [propput] HRESULT DaysOfMonth([in] long days);
     [propget] HRESULT MonthsOfYear([out, retval] short *pMonths);
     [propput] HRESULT MonthsOfYear([in] short months);
     [propget] HRESULT RunOnLastDayOfMonth([out, retval] VARIANT_BOOL *pLastDay);
