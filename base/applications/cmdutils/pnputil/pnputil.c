@@ -3225,6 +3225,14 @@ EmitInterface(
     }
 }
 
+/* Classes tried, classes that could not be opened and the last such error. */
+typedef struct _INTERFACE_STATS
+{
+    DWORD Tried;
+    DWORD Failed;
+    DWORD LastError;
+} INTERFACE_STATS;
+
 /* Enumerate the interfaces of one interface class; returns the number emitted. */
 static DWORD
 EnumInterfaceClass(
@@ -3232,23 +3240,22 @@ EnumInterfaceClass(
     _In_ const GUID *ClassGuid,
     _In_ INT State,
     _In_opt_ PCWSTR InstanceFilter,
-    _Inout_ INTERFACE_ROW *Row)
+    _Inout_ INTERFACE_ROW *Row,
+    _Inout_ INTERFACE_STATS *Stats)
 {
     SP_DEVICE_INTERFACE_DATA Interface;
     SP_DEVINFO_DATA DeviceInfo;
     PSP_DEVICE_INTERFACE_DETAIL_DATA_W Detail;
     HDEVINFO Set;
     DWORD Index, Size, Count = 0, Type;
-    PWSTR Ref;
+    PWSTR Ref, Guid;
 
+    Stats->Tried++;
     Set = SetupDiGetClassDevsW(ClassGuid, NULL, NULL, DIGCF_DEVICEINTERFACE);
     if (Set == INVALID_HANDLE_VALUE)
-        return 0;
-
-    Detail = HeapAlloc(GetProcessHeap(), 0, sizeof(*Detail) + MAX_PATH * 2 * sizeof(WCHAR));
-    if (!Detail)
     {
-        SetupDiDestroyDeviceInfoList(Set);
+        Stats->Failed++;
+        Stats->LastError = GetLastError();
         return 0;
     }
 
@@ -3262,29 +3269,44 @@ EnumInterfaceClass(
         if ((State > 0 && !Row->Enabled) || (State < 0 && Row->Enabled))
             continue;
 
+        Size = 0;
+        SetupDiGetDeviceInterfaceDetailW(Set, &Interface, NULL, 0, &Size, NULL);
+        if (Size < sizeof(*Detail))
+            continue;
+        Detail = HeapAlloc(GetProcessHeap(), 0, Size);
+        if (!Detail)
+            break;
         Detail->cbSize = sizeof(*Detail);
         DeviceInfo.cbSize = sizeof(DeviceInfo);
-        Size = (DWORD)(sizeof(*Detail) + MAX_PATH * 2 * sizeof(WCHAR));
         if (!SetupDiGetDeviceInterfaceDetailW(Set, &Interface, Detail, Size, NULL, &DeviceInfo))
+        {
+            HeapFree(GetProcessHeap(), 0, Detail);
             continue;
+        }
 
         Row->InstanceId[0] = UNICODE_NULL;
         SetupDiGetDeviceInstanceIdW(Set, &DeviceInfo, Row->InstanceId, _countof(Row->InstanceId), NULL);
         if (InstanceFilter && _wcsicmp(InstanceFilter, Row->InstanceId) != 0)
+        {
+            HeapFree(GetProcessHeap(), 0, Detail);
             continue;
+        }
 
         lstrcpynW(Row->Path, Detail->DevicePath, _countof(Row->Path));
+        HeapFree(GetProcessHeap(), 0, Detail);
         StringFromGUID2(ClassGuid, Row->ClassGuid, _countof(Row->ClassGuid));
         CharLowerW(Row->ClassGuid);
 
         /* The reference string follows the closing brace of the class GUID in the path. */
         Row->Reference[0] = UNICODE_NULL;
-        Ref = wcsrchr(Row->Path, L'}');
+        Ref = NULL;
+        for (Guid = wcsstr(Row->Path, L"#{"); Guid; Guid = wcsstr(Guid + 2, L"#{"))
+            Ref = Guid;
+        Ref = Ref ? wcschr(Ref, L'}') : NULL;
         if (Ref && Ref[1] == L'\\')
             lstrcpynW(Row->Reference, Ref + 2, _countof(Row->Reference));
 
         lstrcpynW(Row->Description, L"Unknown", _countof(Row->Description));
-        Size = sizeof(Row->Description) - sizeof(WCHAR);
         {
             WCHAR Friendly[LINE_LEN];
 
@@ -3302,7 +3324,6 @@ EnumInterfaceClass(
         Count++;
     }
 
-    HeapFree(GetProcessHeap(), 0, Detail);
     SetupDiDestroyDeviceInfoList(Set);
     return Count;
 }
@@ -3319,6 +3340,7 @@ CommandEnumInterfaces(
     INT State = 0;
     GUID FilterGuid;
     INTERFACE_ROW *Row;
+    INTERFACE_STATS Stats = { 0, 0, ERROR_SUCCESS };
     DWORD Count = 0, Error = ERROR_SUCCESS, Index;
     HKEY hClasses;
     INT i;
@@ -3421,7 +3443,7 @@ CommandEnumInterfaces(
         if (ClassFilter[0] != L'{' || CLSIDFromString(ClassFilter, &FilterGuid) != S_OK)
             Error = ERROR_INVALID_PARAMETER;
         else
-            Count = EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row);
+            Count = EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row, &Stats);
     }
     else if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\DeviceClasses", 0,
                            KEY_READ, &hClasses) == ERROR_SUCCESS)
@@ -3435,10 +3457,13 @@ CommandEnumInterfaces(
             if (RegEnumKeyExW(hClasses, Index, KeyName, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
                 break;
             if (CLSIDFromString(KeyName, &FilterGuid) == S_OK)
-                Count += EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row);
+                Count += EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row, &Stats);
         }
         RegCloseKey(hClasses);
     }
+
+    if (Error == ERROR_SUCCESS && Count == 0 && Stats.Tried != 0 && Stats.Failed == Stats.Tried)
+        Error = Stats.LastError ? Stats.LastError : ERROR_GEN_FAILURE;
 
     if (Error != ERROR_SUCCESS)
     {
