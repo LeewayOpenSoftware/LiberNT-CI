@@ -3470,10 +3470,10 @@
 @ stub -arch=win64 _wcsset_s
 @ stub -arch=win64 _wmakepath_s
 @ cdecl _wsplitpath_s()
-@ stub -arch=win64 bsearch_s
+@ stdcall -arch=win64 bsearch_s(ptr ptr long long ptr ptr ptr)
 @ cdecl memcpy_s()
 @ cdecl memmove_s()
-@ stub -arch=win64 qsort_s
+@ stdcall -arch=win64 qsort_s(ptr long long ptr ptr)
 @ cdecl sprintf_s()
 @ cdecl sscanf_s()
 @ cdecl strcat_s()
