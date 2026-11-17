@@ -122,7 +122,7 @@ static const struct
 static const WCHAR UsageText[] =
     L"PNPUTIL [/add-driver <...> | /delete-driver <...> |\n"
     L"         /export-driver <...> | /enum-drivers | /enum-devices [<...>] |\n"
-    L"         /enum-classes [<...>] |\n"
+    L"         /enum-classes [<...>] | /enum-interfaces [<...>] |\n"
     L"         /disable-device <...> | /enable-device <...> |\n"
     L"         /restart-device <...> | /remove-device <...> |\n"
     L"         /rollback-device <...> | /scan-devices | /?]\n"
@@ -160,6 +160,14 @@ static const WCHAR UsageText[] =
     L"      /class <name | GUID> - filter by device class name or GUID.\n"
     L"      /problem [<code>] - filter by devices with problems or specific problem code.\n"
     L"      /ids - display hardware IDs and compatible IDs.\n"
+    L"\n"
+    L"  /enum-interfaces [/enabled | /disabled] [/class <GUID>] [/instanceid <instance ID>]\n"
+    L"                    [/format <txt | xml | csv>] [/output-file [<filename>]]\n"
+    L"\n"
+    L"    Enumerate all device interfaces on the system.\n"
+    L"      /enabled | /disabled - filter by enabled or disabled interfaces.\n"
+    L"      /class <GUID> - filter by interface class GUID.\n"
+    L"      /instanceid <instance ID> - filter by device instance ID.\n"
     L"\n"
     L"  /enum-classes [/class <name | GUID>] [/services] [/format <txt | xml | csv>]\n"
     L"                [/output-file [<filename>]]\n"
@@ -3135,6 +3143,342 @@ CommandEnumClasses(
     return (INT)Error;
 }
 
+/* /enum-interfaces *********************************************************/
+
+typedef struct _INTERFACE_ROW
+{
+    WCHAR Path[MAX_PATH * 2];
+    WCHAR Description[LINE_LEN];
+    WCHAR ClassGuid[64];
+    WCHAR Reference[MAX_PATH];
+    WCHAR InstanceId[MAX_DEVICE_ID_LEN];
+    BOOL Enabled;
+} INTERFACE_ROW;
+
+static VOID
+EmitInterface(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const INTERFACE_ROW *Row)
+{
+    PCWSTR Status = Row->Enabled ? L"Enabled" : L"Disabled";
+
+    if (Output->Format == OutputCsv)
+    {
+        OutputCsvField(Output, Row->Path, FALSE);
+        OutputCsvField(Output, Row->Description, FALSE);
+        OutputCsvField(Output, Row->ClassGuid, FALSE);
+        OutputCsvField(Output, Row->Reference, FALSE);
+        OutputCsvField(Output, Row->InstanceId, FALSE);
+        OutputCsvField(Output, Status, TRUE);
+    }
+    else if (Output->Format == OutputXml)
+    {
+        OutputPutsRaw(Output, L"    <Interface Path=\"");
+        OutputXmlText(Output, Row->Path);
+        OutputPutsRaw(Output, L"\">\r\n        <Description>");
+        OutputXmlText(Output, Row->Description);
+        OutputPutsRaw(Output, L"</Description>\r\n        <ClassGuid>");
+        OutputXmlText(Output, Row->ClassGuid);
+        OutputPutsRaw(Output, L"</ClassGuid>\r\n");
+        if (Row->Reference[0])
+        {
+            OutputPutsRaw(Output, L"        <ReferenceString>");
+            OutputXmlText(Output, Row->Reference);
+            OutputPutsRaw(Output, L"</ReferenceString>\r\n");
+        }
+        OutputPutsRaw(Output, L"        <DeviceInstanceId>");
+        OutputXmlText(Output, Row->InstanceId);
+        OutputPutsRaw(Output, L"</DeviceInstanceId>\r\n        <Status>");
+        OutputXmlText(Output, Status);
+        OutputPutsRaw(Output, L"</Status>\r\n    </Interface>\r\n");
+    }
+    else
+    {
+        WCHAR Line[2048];
+        PCWSTR Eol = Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n";
+        PCWSTR Labels[6], Values[6];
+        INT k, n = 0;
+
+        Labels[n] = L"Interface Path:";
+        Values[n++] = Row->Path;
+        Labels[n] = L"Interface Description:";
+        Values[n++] = Row->Description;
+        Labels[n] = L"Interface Class GUID:";
+        Values[n++] = Row->ClassGuid;
+        if (Row->Reference[0])
+        {
+            Labels[n] = L"Reference String:";
+            Values[n++] = Row->Reference;
+        }
+        Labels[n] = L"Device Instance ID:";
+        Values[n++] = Row->InstanceId;
+        Labels[n] = L"Interface Status:";
+        Values[n++] = Status;
+
+        for (k = 0; k < n; k++)
+        {
+            _snwprintf(Line, _countof(Line) - 1, L"%-24ls%ls%ls", Labels[k], Values[k], Eol);
+            Line[_countof(Line) - 1] = UNICODE_NULL;
+            OutputPutsRaw(Output, Line);
+        }
+        OutputPutsRaw(Output, Eol);
+    }
+}
+
+/* Enumerate the interfaces of one interface class; returns the number emitted. */
+static DWORD
+EnumInterfaceClass(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const GUID *ClassGuid,
+    _In_ INT State,
+    _In_opt_ PCWSTR InstanceFilter,
+    _Inout_ INTERFACE_ROW *Row)
+{
+    SP_DEVICE_INTERFACE_DATA Interface;
+    SP_DEVINFO_DATA DeviceInfo;
+    PSP_DEVICE_INTERFACE_DETAIL_DATA_W Detail;
+    HDEVINFO Set;
+    DWORD Index, Size, Count = 0, Type;
+    PWSTR Ref;
+
+    Set = SetupDiGetClassDevsW(ClassGuid, NULL, NULL, DIGCF_DEVICEINTERFACE);
+    if (Set == INVALID_HANDLE_VALUE)
+        return 0;
+
+    Detail = HeapAlloc(GetProcessHeap(), 0, sizeof(*Detail) + MAX_PATH * 2 * sizeof(WCHAR));
+    if (!Detail)
+    {
+        SetupDiDestroyDeviceInfoList(Set);
+        return 0;
+    }
+
+    for (Index = 0; ; Index++)
+    {
+        Interface.cbSize = sizeof(Interface);
+        if (!SetupDiEnumDeviceInterfaces(Set, NULL, ClassGuid, Index, &Interface))
+            break;
+
+        Row->Enabled = (Interface.Flags & SPINT_ACTIVE) && !(Interface.Flags & SPINT_REMOVED);
+        if ((State > 0 && !Row->Enabled) || (State < 0 && Row->Enabled))
+            continue;
+
+        Detail->cbSize = sizeof(*Detail);
+        DeviceInfo.cbSize = sizeof(DeviceInfo);
+        Size = (DWORD)(sizeof(*Detail) + MAX_PATH * 2 * sizeof(WCHAR));
+        if (!SetupDiGetDeviceInterfaceDetailW(Set, &Interface, Detail, Size, NULL, &DeviceInfo))
+            continue;
+
+        Row->InstanceId[0] = UNICODE_NULL;
+        SetupDiGetDeviceInstanceIdW(Set, &DeviceInfo, Row->InstanceId, _countof(Row->InstanceId), NULL);
+        if (InstanceFilter && _wcsicmp(InstanceFilter, Row->InstanceId) != 0)
+            continue;
+
+        lstrcpynW(Row->Path, Detail->DevicePath, _countof(Row->Path));
+        StringFromGUID2(ClassGuid, Row->ClassGuid, _countof(Row->ClassGuid));
+        CharLowerW(Row->ClassGuid);
+
+        /* The reference string follows the closing brace of the class GUID in the path. */
+        Row->Reference[0] = UNICODE_NULL;
+        Ref = wcsrchr(Row->Path, L'}');
+        if (Ref && Ref[1] == L'\\')
+            lstrcpynW(Row->Reference, Ref + 2, _countof(Row->Reference));
+
+        lstrcpynW(Row->Description, L"Unknown", _countof(Row->Description));
+        Size = sizeof(Row->Description) - sizeof(WCHAR);
+        {
+            WCHAR Friendly[LINE_LEN];
+
+            Size = sizeof(Friendly) - sizeof(WCHAR);
+            Type = 0;
+            if (SetupDiGetDeviceInterfacePropertyW(Set, &Interface, &DEVPKEY_DeviceInterface_FriendlyName,
+                                                   &Type, (PBYTE)Friendly, Size, NULL, 0) &&
+                Type == DEVPROP_TYPE_STRING && Friendly[0])
+            {
+                lstrcpynW(Row->Description, Friendly, _countof(Row->Description));
+            }
+        }
+
+        EmitInterface(Output, Row);
+        Count++;
+    }
+
+    HeapFree(GetProcessHeap(), 0, Detail);
+    SetupDiDestroyDeviceInfoList(Set);
+    return Count;
+}
+
+static INT
+CommandEnumInterfaces(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    OUTPUT_CONTEXT Output = { OutputText, INVALID_HANDLE_VALUE };
+    WCHAR DefaultName[MAX_PATH], XmlVersion[64], XmlCommand[512], Failure[256] = L"";
+    PCWSTR OutputFile = NULL, ClassFilter = NULL, InstanceFilter = NULL;
+    BOOL OutputFileGiven = FALSE, WantProperties = FALSE;
+    INT State = 0;
+    GUID FilterGuid;
+    INTERFACE_ROW *Row;
+    DWORD Count = 0, Error = ERROR_SUCCESS, Index;
+    HKEY hClasses;
+    INT i;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (IsOption(argv[i], L"enabled"))
+        {
+            State = 1;
+        }
+        else if (IsOption(argv[i], L"disabled"))
+        {
+            State = -1;
+        }
+        else if (IsOption(argv[i], L"properties"))
+        {
+            WantProperties = TRUE;
+        }
+        else if (IsOption(argv[i], L"class") && i + 1 < argc)
+        {
+            ClassFilter = argv[++i];
+        }
+        else if (IsOption(argv[i], L"instanceid") && i + 1 < argc)
+        {
+            InstanceFilter = argv[++i];
+        }
+        else if (IsOption(argv[i], L"format") && i + 1 < argc)
+        {
+            i++;
+            if (_wcsicmp(argv[i], L"txt") == 0)
+                Output.Format = OutputText;
+            else if (_wcsicmp(argv[i], L"xml") == 0)
+                Output.Format = OutputXml;
+            else if (_wcsicmp(argv[i], L"csv") == 0)
+                Output.Format = OutputCsv;
+            else
+                return ERROR_INVALID_PARAMETER;
+        }
+        else if (IsOption(argv[i], L"output-file"))
+        {
+            OutputFileGiven = TRUE;
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                OutputFile = argv[++i];
+        }
+        else
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+
+    if (OutputFileGiven)
+    {
+        if (!OutputFile)
+        {
+            BuildDefaultOutputName(Output.Format, DefaultName, _countof(DefaultName));
+            OutputFile = DefaultName;
+        }
+        Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (Output.File == INVALID_HANDLE_VALUE)
+            return ReportOutputOpenFailure(GetLastError());
+    }
+
+    if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
+        PrintHeader();
+
+    if (Output.Format == OutputCsv)
+    {
+        OutputPutsRaw(&Output, L"Path,Description,ClassGuid,ReferenceString,InstanceId,InterfaceStatus\r\n");
+    }
+    else if (Output.Format == OutputXml)
+    {
+        GetOutputVersion(XmlVersion, _countof(XmlVersion));
+        lstrcpynW(XmlCommand, L"/enum-interfaces", _countof(XmlCommand));
+        for (i = 0; i < argc; i++)
+        {
+            if (lstrlenW(XmlCommand) + lstrlenW(argv[i]) + 2 >= (INT)_countof(XmlCommand))
+                break;
+            lstrcatW(XmlCommand, L" ");
+            lstrcatW(XmlCommand, argv[i]);
+        }
+        OutputPutsRaw(&Output, L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+        OutputPutsRaw(&Output, L"<PnpUtil Version=\"");
+        OutputXmlText(&Output, XmlVersion);
+        OutputPutsRaw(&Output, L"\" Command=\"");
+        OutputXmlText(&Output, XmlCommand);
+        OutputPutsRaw(&Output, L"\">\r\n");
+    }
+
+    Row = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Row));
+    if (!Row)
+        Error = ERROR_NOT_ENOUGH_MEMORY;
+    else if (WantProperties)
+    {
+        /* TODO: /properties needs the shared property emitter (Jim2 #2b); interim error. */
+        Error = ERROR_NOT_SUPPORTED;
+    }
+    else if (ClassFilter)
+    {
+        if (ClassFilter[0] != L'{' || CLSIDFromString(ClassFilter, &FilterGuid) != S_OK)
+            Error = ERROR_INVALID_PARAMETER;
+        else
+            Count = EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row);
+    }
+    else if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\DeviceClasses", 0,
+                           KEY_READ, &hClasses) == ERROR_SUCCESS)
+    {
+        WCHAR KeyName[64];
+
+        for (Index = 0; ; Index++)
+        {
+            DWORD Length = _countof(KeyName);
+
+            if (RegEnumKeyExW(hClasses, Index, KeyName, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+                break;
+            if (CLSIDFromString(KeyName, &FilterGuid) == S_OK)
+                Count += EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row);
+        }
+        RegCloseKey(hClasses);
+    }
+
+    if (Error != ERROR_SUCCESS)
+    {
+        WCHAR Text[512];
+        PCWSTR Eol = Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n";
+
+        FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, Error, 0,
+                       Failure, _countof(Failure) - 1, NULL);
+        _snwprintf(Text, _countof(Text) - 1, L"Failed to enumerate interfaces: %ls", Failure);
+        Text[_countof(Text) - 1] = UNICODE_NULL;
+        if (Output.Format == OutputXml)
+            OutputXmlText(&Output, Text);
+        else
+            OutputPutsRaw(&Output, Text);
+        if (!Failure[0])
+            OutputPutsRaw(&Output, Eol);
+        OutputPutsRaw(&Output, Eol);
+    }
+    else if (Count == 0)
+    {
+        OutputEmptyMessage(&Output, IDS_NO_INTERFACES);
+    }
+
+    if (Output.Format == OutputXml)
+        OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
+
+    if (Row)
+        HeapFree(GetProcessHeap(), 0, Row);
+
+    if (Output.File != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(Output.File);
+        Output.File = INVALID_HANDLE_VALUE;
+        ConResPrintf(StdOut, IDS_OUTPUT_WRITTEN, OutputFile);
+        ConPuts(StdOut, L"\n");
+    }
+
+    return (INT)Error;
+}
+
 int
 wmain(
     int argc,
@@ -3170,6 +3514,10 @@ wmain(
     else if (IsOption(Command, L"f") && argc >= 1 && IsOption(argv[0], L"d"))
     {
         Result = CommandDeleteDriver(argc - 1, argv + 1, TRUE);
+    }
+    else if (IsOption(Command, L"enum-interfaces"))
+    {
+        Result = CommandEnumInterfaces(argc, argv);
     }
     else if (IsOption(Command, L"enum-classes"))
     {

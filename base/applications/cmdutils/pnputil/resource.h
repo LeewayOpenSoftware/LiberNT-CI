@@ -13,3 +13,4 @@
 #define IDS_NO_DEVICES      110
 #define IDS_OUTPUT_WRITTEN  111
 #define IDS_NO_DRIVERS      112
+#define IDS_NO_INTERFACES   113
