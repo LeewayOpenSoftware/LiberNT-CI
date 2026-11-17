@@ -5,7 +5,7 @@
  * COPYRIGHT:   Copyright 2026 Ahmed ARIF <arif.ing@outlook.com>
  */
 
-#define REACTOS_STR_FILE_DESCRIPTION   "LiberNT Driver Installer"
+#define REACTOS_STR_FILE_DESCRIPTION   "Driver Installer"
 #define REACTOS_STR_INTERNAL_NAME      "lntdrv"
 #define REACTOS_STR_ORIGINAL_FILENAME  "lntdrv.exe"
 #include <reactos/version.rc>
@@ -17,7 +17,7 @@
 
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
 IDI_LNTDRV ICON "../mscutils/devmgmt/devmgmt.ico"
-IDB_WATERMARK BITMAP "../../setup/libernt/res/watermark.bmp"
+IDB_WATERMARK BITMAP "res/watermark.bmp"
 
 CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "lntdrv.exe.manifest"
 

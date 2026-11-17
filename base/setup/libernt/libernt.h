@@ -25,9 +25,11 @@
 
 #include <strsafe.h>
 
+#include <stringapiset.h>
+#include <winnls.h>
+
 #include <commctrl.h>
 #include <windowsx.h>
-#include <dwmapi.h>
 #include <lmcons.h>
 
 #define EnableDlgItem(hDlg, nID, bEnable)   \

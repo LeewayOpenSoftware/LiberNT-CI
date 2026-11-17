@@ -23,12 +23,20 @@ typedef struct _SETUP_FRAME
     INT Current;
     INT First;
     INT Restart;
-    HBITMAP hWatermark;
-    SIZE Watermark;
-    INT Corner;
+    COLORREF TitleColor;
+    COLORREF SubtitleColor;
 } SETUP_FRAME;
 
 static SETUP_FRAME Frame;
+
+static const WCHAR szSetupFramePageProc[] = L"SetupFramePageProc";
+
+static LRESULT CALLBACK
+FramePageWndProc(
+    _In_ HWND hwnd,
+    _In_ UINT uMsg,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam);
 
 VOID
 LoadPrintfW(
@@ -300,111 +308,6 @@ FrameCancel(VOID)
 }
 
 static VOID
-FramePaintPanelEdge(
-    _In_ HDC hdc,
-    _In_ INT x,
-    _In_ INT y,
-    _In_ INT cx,
-    _In_ INT cy,
-    _In_ INT Radius,
-    _In_ COLORREF Color)
-{
-    BITMAPINFO bmi;
-    PULONG Bits = NULL;
-    HBITMAP hbm;
-    HDC hdcMem;
-    LONG Limit = (LONG)Radius * 8 * (LONG)Radius * 8;
-    INT i, j, sx, sy;
-
-    if (cx <= 0 || cy <= 0)
-        return;
-    ZeroMemory(&bmi, sizeof(bmi));
-    bmi.bmiHeader.biSize = sizeof(bmi.bmiHeader);
-    bmi.bmiHeader.biWidth = cx;
-    bmi.bmiHeader.biHeight = -cy;
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-    hbm = CreateDIBSection(hdc, &bmi, DIB_RGB_COLORS, (PVOID*)&Bits, NULL, 0);
-    if (!hbm)
-        return;
-    for (j = 0; j < cy; j++)
-    {
-        for (i = 0; i < cx; i++)
-        {
-            ULONG Alpha = 255;
-
-            if (i < Radius && j < Radius)
-            {
-                ULONG Inside = 0;
-
-                for (sy = 0; sy < 4; sy++)
-                {
-                    for (sx = 0; sx < 4; sx++)
-                    {
-                        LONG dx = Radius * 8 - (i * 8 + sx * 2 + 1);
-                        LONG dy = Radius * 8 - (j * 8 + sy * 2 + 1);
-
-                        if (dx * dx + dy * dy <= Limit)
-                            Inside++;
-                    }
-                }
-                Alpha = Inside * 255 / 16;
-            }
-            Bits[(SIZE_T)j * cx + i] = (Alpha << 24) |
-                                       ((GetRValue(Color) * Alpha / 255) << 16) |
-                                       ((GetGValue(Color) * Alpha / 255) << 8) |
-                                       (GetBValue(Color) * Alpha / 255);
-        }
-    }
-    hdcMem = CreateCompatibleDC(hdc);
-    if (hdcMem)
-    {
-        HGDIOBJ hOld = SelectObject(hdcMem, hbm);
-
-        BitBlt(hdc, x, y, cx, cy, hdcMem, 0, 0, SRCCOPY);
-        SelectObject(hdcMem, hOld);
-        DeleteDC(hdcMem);
-    }
-    DeleteObject(hbm);
-}
-
-static VOID
-FramePaintColumn(
-    _In_ HWND hwnd)
-{
-    PAINTSTRUCT ps;
-    RECT rc;
-    HDC hdc = BeginPaint(hwnd, &ps);
-
-    GetClientRect(hwnd, &rc);
-    rc.right = Frame.Watermark.cx;
-    FillRect(hdc, &rc, GetStockObject(BLACK_BRUSH));
-
-    if (Frame.hWatermark)
-    {
-        HDC hdcMem = CreateCompatibleDC(hdc);
-
-        if (hdcMem)
-        {
-            HGDIOBJ hOld = SelectObject(hdcMem, Frame.hWatermark);
-
-            BitBlt(hdc, 0, 0, Frame.Watermark.cx, min(Frame.Watermark.cy, rc.bottom), hdcMem, 0, 0, SRCCOPY);
-            SelectObject(hdcMem, hOld);
-            DeleteDC(hdcMem);
-        }
-    }
-
-    GetClientRect(hwnd, &rc);
-    FramePaintPanelEdge(hdc, Frame.Watermark.cx, 0, rc.right - Frame.Watermark.cx, Frame.Corner, Frame.Corner,
-                        GetSysColor(COLOR_3DFACE));
-    FramePaintPanelEdge(hdc, Frame.Watermark.cx, Frame.Corner, Frame.Corner, rc.bottom - Frame.Corner, 0,
-                        GetSysColor(COLOR_3DFACE));
-
-    EndPaint(hwnd, &ps);
-}
-
-static VOID
 FrameCenter(
     _In_ HWND hwnd)
 {
@@ -416,6 +319,92 @@ FrameCenter(
                  rcWork.left + ((rcWork.right - rcWork.left) - (rcWindow.right - rcWindow.left)) / 2,
                  rcWork.top + ((rcWork.bottom - rcWork.top) - (rcWindow.bottom - rcWindow.top)) / 2,
                  0, 0, SWP_NOSIZE);
+}
+
+/* White content painting for a page window; the frame applies this to every
+   page it creates so the setup looks the same with and without themes. */
+static LRESULT CALLBACK
+FramePageWndProc(
+    _In_ HWND hwnd,
+    _In_ UINT uMsg,
+    _In_ WPARAM wParam,
+    _In_ LPARAM lParam)
+{
+    WNDPROC OldProc = (WNDPROC)GetPropW(hwnd, szSetupFramePageProc);
+
+    switch (uMsg)
+    {
+        case WM_ERASEBKGND:
+        {
+            RECT rc;
+            HDC hdc = (HDC)wParam;
+
+            GetClientRect(hwnd, &rc);
+            FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
+            return 1;
+        }
+
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORLISTBOX:
+        case WM_CTLCOLORBTN:
+        {
+            HDC hdc = (HDC)wParam;
+
+            SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+            SetTextColor(hdc, GetSysColor(COLOR_WINDOWTEXT));
+            return (LRESULT)GetSysColorBrush(COLOR_WINDOW);
+        }
+    }
+
+    if (OldProc)
+        return CallWindowProcW(OldProc, hwnd, uMsg, wParam, lParam);
+    return 0;
+}
+
+/* Flat back arrow for the title area, per the Aero wizard chrome. */
+static VOID
+FrameDrawBackButton(
+    _In_ LPDRAWITEMSTRUCT lpDrawItem)
+{
+    HDC hdc = lpDrawItem->hDC;
+    RECT rc = lpDrawItem->rcItem;
+    INT cx = (rc.left + rc.right) / 2;
+    INT cy = (rc.top + rc.bottom) / 2;
+    HBRUSH hbrArrow;
+    POINT Arrow[3];
+    HGDIOBJ hOld, hOldPen;
+
+    FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
+
+    if (lpDrawItem->itemState & ODS_SELECTED)
+    {
+        HBRUSH hbrHover = CreateSolidBrush(RGB(0xE5, 0xE5, 0xE5));
+
+        if (hbrHover)
+        {
+            FillRect(hdc, &rc, hbrHover);
+            DeleteObject(hbrHover);
+        }
+    }
+
+    if (lpDrawItem->itemState & ODS_DISABLED)
+        hbrArrow = GetSysColorBrush(COLOR_GRAYTEXT);
+    else
+        hbrArrow = GetSysColorBrush(COLOR_WINDOWTEXT);
+
+    Arrow[0].x = cx - 1;
+    Arrow[0].y = cy - 5;
+    Arrow[1].x = cx - 7;
+    Arrow[1].y = cy;
+    Arrow[2].x = cx - 1;
+    Arrow[2].y = cy + 5;
+    hOld = SelectObject(hdc, hbrArrow);
+    hOldPen = SelectObject(hdc, GetStockObject(NULL_PEN));
+    SetPolyFillMode(hdc, WINDING);
+    Polygon(hdc, Arrow, ARRAYSIZE(Arrow));
+    SelectObject(hdc, hOldPen);
+    SelectObject(hdc, hOld);
 }
 
 static INT_PTR CALLBACK
@@ -430,15 +419,16 @@ SetupFrameProc(
         case WM_INITDIALOG:
         {
             PSETUPDATA pSetupData = (PSETUPDATA)lParam;
-            MARGINS Margins = {0, 0, 0, 0};
             HICON hIcon;
-            BITMAP bm;
             RECT rc;
             INT Page;
 
             Frame.SetupData = pSetupData;
             Frame.hwnd = hwnd;
             Frame.Current = -1;
+
+            Frame.TitleColor = GetSysColor(COLOR_WINDOWTEXT);
+            Frame.SubtitleColor = GetSysColor(COLOR_GRAYTEXT);
 
             hIcon = LoadIconW(pSetupData->hInstance, MAKEINTRESOURCEW(IDI_MAIN));
             SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon);
@@ -449,25 +439,8 @@ SetupFrameProc(
                 pSetupData->hBoldFont = CreateFrameFont(0);
             SetDlgItemFont(hwnd, IDC_FRAME_TITLE, pSetupData->hTitleFont, FALSE);
 
-            Frame.hWatermark = LoadImageW(pSetupData->hInstance, MAKEINTRESOURCEW(IDB_WATERMARK),
-                                          IMAGE_BITMAP, 0, 0, LR_CREATEDIBSECTION);
-            if (Frame.hWatermark && GetObjectW(Frame.hWatermark, sizeof(bm), &bm))
-            {
-                Frame.Watermark.cx = bm.bmWidth;
-                Frame.Watermark.cy = bm.bmHeight;
-            }
-            {
-                HDC hdc = GetDC(hwnd);
-                Frame.Corner = MulDiv(8, hdc ? GetDeviceCaps(hdc, LOGPIXELSX) : 96, 96);
-                if (hdc)
-                    ReleaseDC(hwnd, hdc);
-            }
-            Margins.cxLeftWidth = Frame.Watermark.cx + Frame.Corner;
-            Margins.cyTopHeight = Frame.Corner;
-            DwmExtendFrameIntoClientArea(hwnd, &Margins);
-
             GetWindowRect(GetDlgItem(hwnd, IDC_FRAME_PAGE), &rc);
-            MapWindowPoints(HWND_DESKTOP, hwnd, (LPPOINT)&rc, 2);
+            MapWindowPoints(HWND_DESKTOP, hwnd, (PPOINT)&rc, 2);
             for (Page = 0; Page < Frame.PageCount; Page++)
             {
                 Frame.Pages[Page] = CreateDialogParamW(pSetupData->hInstance,
@@ -482,6 +455,10 @@ SetupFrameProc(
                 }
                 SetWindowPos(Frame.Pages[Page], HWND_TOP, rc.left, rc.top,
                              rc.right - rc.left, rc.bottom - rc.top, SWP_NOACTIVATE);
+                SetPropW(Frame.Pages[Page], szSetupFramePageProc,
+                         (HANDLE)SetWindowLongPtrW(Frame.Pages[Page],
+                                                   GWLP_WNDPROC,
+                                                   (LONG_PTR)FramePageWndProc));
             }
 
             FrameCenter(hwnd);
@@ -492,13 +469,50 @@ SetupFrameProc(
             return FALSE;
         }
 
-        case WM_PAINT:
-            FramePaintColumn(hwnd);
+        case WM_ERASEBKGND:
+        {
+            RECT rc;
+            HDC hdc = (HDC)wParam;
+
+            GetClientRect(hwnd, &rc);
+            FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
             return TRUE;
+        }
+
+        case WM_DRAWITEM:
+        {
+            LPDRAWITEMSTRUCT lpDrawItem = (LPDRAWITEMSTRUCT)lParam;
+
+            if (lpDrawItem->CtlID == IDC_FRAME_BACK)
+            {
+                FrameDrawBackButton(lpDrawItem);
+                return TRUE;
+            }
+            break;
+        }
+
+        case WM_CTLCOLORSTATIC:
+        {
+            HDC hdc = (HDC)wParam;
+            HWND hwndControl = (HWND)lParam;
+
+            SetBkColor(hdc, GetSysColor(COLOR_WINDOW));
+            if (GetDlgCtrlID(hwndControl) == IDC_FRAME_TITLE)
+                SetTextColor(hdc, Frame.TitleColor);
+            else if (GetDlgCtrlID(hwndControl) == IDC_FRAME_SUBTITLE)
+                SetTextColor(hdc, Frame.SubtitleColor);
+            return (INT_PTR)GetSysColorBrush(COLOR_WINDOW);
+        }
 
         case WM_ACTIVATE:
             if (Frame.Current >= 0)
                 SendMessageW(Frame.Pages[Frame.Current], WM_ACTIVATE, wParam, lParam);
+            break;
+
+        case WM_SYSCOLORCHANGE:
+            Frame.TitleColor = GetSysColor(COLOR_WINDOWTEXT);
+            Frame.SubtitleColor = GetSysColor(COLOR_GRAYTEXT);
+            InvalidateRect(hwnd, NULL, TRUE);
             break;
 
         case WM_COMMAND:
@@ -524,9 +538,6 @@ SetupFrameProc(
                 DeleteObject(Frame.SetupData->hBoldFont);
             Frame.SetupData->hTitleFont = NULL;
             Frame.SetupData->hBoldFont = NULL;
-            if (Frame.hWatermark)
-                DeleteObject(Frame.hWatermark);
-            Frame.hWatermark = NULL;
             break;
     }
 

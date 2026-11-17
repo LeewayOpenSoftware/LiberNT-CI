@@ -2,7 +2,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 
 IDD_FRAME DIALOGEX 0, 0, 420, 240
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_MINIMIZEBOX | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "LiberNT Driver Installer"
+CAPTION "Driver Installer"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "", IDC_FRAME_TITLE, 120, 10, 290, 14, SS_NOPREFIX
@@ -69,7 +69,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_CAPTION "LiberNT Driver Installer"
+    IDS_CAPTION "Driver Installer"
     IDS_BACK "&Back"
     IDS_NEXT "&Next"
     IDS_CANCEL "Cancel"
@@ -77,14 +77,14 @@ BEGIN
     IDS_FINISH "&Finish"
     IDS_DEVICES_TITLE "Drivers for this PC"
     IDS_DEVICES_SUBTITLE "Devices without a driver or with a third-party driver that have a newer driver in the Microsoft Update Catalog. Tick the ones to install."
-    IDS_ABOUT_MENU "&About LiberNT Driver Installer..."
-    IDS_ABOUT_TEXT "LiberNT Driver Installer\nCopyright (C) 2026 Ahmed ARIF\nLicensed under the GNU General Public License, version 3 or later.\n\nDrivers are downloaded from the Microsoft Update Catalog, a service of Microsoft Corporation.\nMicrosoft Update Catalog: Copyright (c) Microsoft Corporation. All rights reserved.\nEach driver package belongs to its publisher and is covered by the publisher's license terms."
+    IDS_ABOUT_MENU "&About Driver Installer..."
+    IDS_ABOUT_TEXT "Driver Installer\nCopyright (C) 2026 Ahmed ARIF\nLicensed under the GNU General Public License, version 3 or later.\n\nDrivers are downloaded from the Microsoft Update Catalog, a service of Microsoft Corporation.\nMicrosoft Update Catalog: Copyright (c) Microsoft Corporation. All rights reserved.\nEach driver package belongs to its publisher and is covered by the publisher's license terms."
     IDS_INSTALL_TITLE "Installing drivers"
     IDS_INSTALL_SUBTITLE "Wait until the drivers are installed."
     IDS_DONE_TITLE "Finished"
     IDS_DONE_SUBTITLE "The result for each device."
     IDS_HISTORY_TITLE "Drivers installed from the catalog"
-    IDS_HISTORY_SUBTITLE "Every change LiberNT Driver Installer made on this PC, newest first."
+    IDS_HISTORY_SUBTITLE "Every change Driver Installer made on this PC, newest first."
     IDS_COL_DEVICE "Device"
     IDS_COL_VERSION "Version"
     IDS_COL_DRIVER "Driver"
@@ -113,20 +113,20 @@ BEGIN
     IDS_ACTION_ROLLBACK "Roll back"
     IDS_ACTION_REMOVE "Remove"
     IDS_ROLLBACK_CONFIRM "Put back the driver %1 used before (version %2)?"
-    IDS_REMOVE_CONFIRM "Remove the catalog driver from %1? LiberNT then installs the best driver it still has for the device."
+    IDS_REMOVE_CONFIRM "Remove the catalog driver from %1? Orosi then installs the best driver it still has for the device."
     IDS_ACTION_DONE "Done."
     IDS_ACTION_DONE_REBOOT "Done. Restart the PC to finish."
     IDS_ACTION_FAILED "The change failed: %1"
     IDS_HISTORY_WORKING "Working..."
     IDS_ADMIN_REQUIRED "Installing and removing drivers needs administrator rights."
-    IDS_ADMIN_RESTART "Restart LiberNT Driver Installer as an administrator?"
+    IDS_ADMIN_RESTART "Restart Driver Installer as an administrator?"
     IDS_WORKER_FAILED "Cannot start the worker thread: %1"
     IDS_ERROR_CHECKSUM "The download does not match the checksum published by the catalog."
     IDS_ERROR_SERVER "The Microsoft Update Catalog returned an unexpected answer."
     IDS_ERROR_CANCELLED "Cancelled."
     IDS_ERROR_NOT_BETTER "The driver already installed is a better match for this device."
     IDS_ERROR_NO_COMPAT "The package has no driver for this device on this PC."
-    IDS_ERROR_FORMAT "The Microsoft Update Catalog page has changed and cannot be read. LiberNT Driver Installer needs an update."
+    IDS_ERROR_FORMAT "The Microsoft Update Catalog page has changed and cannot be read. Driver Installer needs an update."
     IDS_ERROR_PROGRAM "The catalog package is a program, not a driver package. Run it yourself if you trust it."
     IDS_ERROR_ALREADY "This driver is already installed."
     IDS_ERROR_NOT_NEWER "The installed driver is newer than this one."
@@ -184,7 +184,7 @@ BEGIN
     IDS_RESULT_UNSIGNED "signature not verified"
     IDS_SCAN_THROTTLED "Searching resumes at %1. The Microsoft Update Catalog is limiting searches from this PC."
     IDS_CATALOG_LINK "<a>Legal notices</a>"
-    IDS_CATALOG_NOTICE "Drivers are downloaded from the Microsoft Update Catalog, a service of Microsoft Corporation.\nMicrosoft Update Catalog: Copyright (c) Microsoft Corporation. All rights reserved.\nMicrosoft and Windows are trademarks of the Microsoft group of companies. LiberNT is not affiliated with Microsoft Corporation.\n\nEach driver package belongs to its publisher and is covered by the publisher's own license terms."
+    IDS_CATALOG_NOTICE "Drivers are downloaded from the Microsoft Update Catalog, a service of Microsoft Corporation.\nMicrosoft Update Catalog: Copyright (c) Microsoft Corporation. All rights reserved.\nMicrosoft and Windows are trademarks of the Microsoft group of companies. Orosi is not affiliated with Microsoft Corporation.\n\nEach driver package belongs to its publisher and is covered by the publisher's own license terms."
     IDS_PROGRESS_DOWNLOADING "Downloading"
     IDS_SPEED_KB "%1 KB/s"
     IDS_SPEED_MB "%1 MB/s"

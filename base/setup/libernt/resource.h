@@ -10,7 +10,6 @@
 #pragma once
 
 /* Bitmaps */
-#define IDB_WATERMARK       100
 #define IDB_LOGO            102
 #define IDB_LOGOMASK        103
 
