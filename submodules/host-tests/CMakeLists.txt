@@ -18,6 +18,7 @@ option(HOST_TEST_I8042 "Build native PS/2 controller tests" ON)
 option(HOST_TEST_ACPI "Build native firmware table tests" ON)
 option(HOST_TEST_HALTIME "Build native HAL time arithmetic tests" ON)
 option(HOST_TEST_NDIS "Build native NDIS WDI tests" ON)
+option(HOST_TEST_TCPIP "Build native TCP/IP driver tests" ON)
 option(HOST_TEST_DHCPCSVC "Build native DHCP client tests" ON)
 
 if(BUILD_TESTING AND HOST_TEST_DHCPCSVC)
@@ -26,6 +27,10 @@ endif()
 
 if(BUILD_TESTING AND HOST_TEST_NDIS)
     add_subdirectory(ndis)
+endif()
+
+if(BUILD_TESTING AND HOST_TEST_TCPIP)
+    add_subdirectory(tcpip)
 endif()
 
 if(BUILD_TESTING AND HOST_TEST_ACPI)
