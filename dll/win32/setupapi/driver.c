@@ -516,7 +516,7 @@ GetVersionInformationFromInfFile(
         NULL, /* Context */
         hInf,
         Version, ClassGUID,
-        guidW, sizeof(guidW),
+        guidW, ARRAYSIZE(guidW),
         NULL /* Required size */))
     {
         goto cleanup;
@@ -953,7 +953,7 @@ SetupDiBuildDriverInfoList(
             }
         }
 
-         if (InstallParams.FlagsEx & DI_FLAGSEX_INSTALLEDDRIVER)
+         if (DeviceInfoData && (InstallParams.FlagsEx & DI_FLAGSEX_INSTALLEDDRIVER))
         {
             HKEY hDriverKey;
             WCHAR InfFileName[MAX_PATH];

@@ -229,6 +229,21 @@ static HKEY get_root_key( const WCHAR *name, HKEY def_root )
     return 0;
 }
 
+static BOOL is_predefined_root( HKEY key )
+{
+    return key == HKEY_CLASSES_ROOT || key == HKEY_CURRENT_USER ||
+           key == HKEY_LOCAL_MACHINE || key == HKEY_USERS ||
+           key == HKEY_CURRENT_CONFIG;
+}
+
+static BOOL subkey_targets_root( const WCHAR *subkey )
+{
+    /* An empty subkey, or one made only of backslashes, resolves to the root itself. */
+    while (*subkey)
+        if (*subkey++ != '\\') return FALSE;
+    return TRUE;
+}
+
 
 /***********************************************************************
  *            append_multi_sz_value
@@ -340,7 +355,7 @@ static void delete_multi_sz_value( HKEY hkey, const WCHAR *value, const WCHAR *s
  *
  * Perform an add/delete registry operation depending on the flags.
  */
-static BOOL do_reg_operation( HKEY hkey, const WCHAR *value, INFCONTEXT *context, INT flags )
+static BOOL do_reg_operation( HKEY hkey, const WCHAR *value, INFCONTEXT *context, INT flags, BOOL is_root )
 {
     DWORD type, size;
 
@@ -360,8 +375,9 @@ static BOOL do_reg_operation( HKEY hkey, const WCHAR *value, INFCONTEXT *context
             }
             else RegDeleteValueW( hkey, value );
         }
-        else
+        else if (!is_root)
         {
+            /* is_root marks a DelReg that targets a predefined root; deleting it wipes the hive. */
             RegDeleteTreeW( hkey, NULL );
             NtDeleteKey( hkey );
         }
@@ -513,6 +529,7 @@ static BOOL registry_callback( HINF hinf, PCWSTR field, void *arg )
     {
         WCHAR buffer[MAX_INF_STRING_LENGTH];
         INT flags;
+        BOOL root_delete;
 
         /* get root */
         if (!SetupGetStringFieldW( &context, 1, buffer, sizeof(buffer)/sizeof(WCHAR), NULL ))
@@ -526,6 +543,9 @@ static BOOL registry_callback( HINF hinf, PCWSTR field, void *arg )
         if (!SetupGetStringFieldW( &context, 2, buffer, sizeof(buffer)/sizeof(WCHAR), NULL ))
             *buffer = 0;
         device_value = info->device_key && root_key == info->default_root && !*buffer;
+
+        /* A DelReg whose subkey resolves to a predefined root would wipe the hive; skip it. */
+        root_delete = is_predefined_root( root_key ) && subkey_targets_root( buffer );
 
         /* get flags */
         if (!SetupGetIntField( &context, 4, &flags )) flags = 0;
@@ -562,7 +582,7 @@ static BOOL registry_callback( HINF hinf, PCWSTR field, void *arg )
             target_key = info->device_key;
 
         /* and now do it */
-        if (!do_reg_operation( target_key, buffer, &context, flags ))
+        if (!do_reg_operation( target_key, buffer, &context, flags, root_delete ))
         {
             if (hkey != root_key) RegCloseKey( hkey );
             if (sd) LocalFree( sd );
