@@ -627,6 +627,320 @@ static void get_device_interface_filter_hints( const DEVPROP_FILTER_EXPRESSION *
 }
 
 #endif
+#ifdef __REACTOS__
+/* Device containers are not stored anywhere: like PnP manager does without device metadata,
+   they are aggregated from the devices that share a ContainerId. */
+struct device_container
+{
+    GUID id;
+    WCHAR *name;
+    WCHAR *manufacturer;
+    WCHAR *model;
+    WCHAR categories[128];
+    ULONG categories_len;
+    BOOL connected;
+    BOOL problem;
+};
+
+struct device_container_list
+{
+    struct device_container *items;
+    ULONG len;
+};
+
+static const struct
+{
+    GUID class_guid;
+    const WCHAR *category;
+} container_categories[] =
+{
+    { {0x4d36e967,0xe325,0x11ce,{0xbf,0xc1,0x08,0x00,0x2b,0xe1,0x03,0x18}}, L"Storage" },
+    { {0x4d36e965,0xe325,0x11ce,{0xbf,0xc1,0x08,0x00,0x2b,0xe1,0x03,0x18}}, L"Storage.Optical" },
+    { {0x4d36e972,0xe325,0x11ce,{0xbf,0xc1,0x08,0x00,0x2b,0xe1,0x03,0x18}}, L"Network" },
+    { {0x4d36e96f,0xe325,0x11ce,{0xbf,0xc1,0x08,0x00,0x2b,0xe1,0x03,0x18}}, L"Input.Mouse" },
+    { {0x4d36e96b,0xe325,0x11ce,{0xbf,0xc1,0x08,0x00,0x2b,0xe1,0x03,0x18}}, L"Input.Keyboard" },
+    { {0x4d36e96c,0xe325,0x11ce,{0xbf,0xc1,0x08,0x00,0x2b,0xe1,0x03,0x18}}, L"Audio" },
+    { {0x4d36e979,0xe325,0x11ce,{0xbf,0xc1,0x08,0x00,0x2b,0xe1,0x03,0x18}}, L"PrintFax.Printer" },
+    { {0x36fc9e60,0xc465,0x11cf,{0x80,0x56,0x44,0x45,0x53,0x54,0x00,0x00}}, L"Component.Hub.USB" },
+    { {0x745a17a0,0x74d3,0x11d0,{0xb6,0xfe,0x00,0xa0,0xc9,0x0f,0x57,0xda}}, L"Input" },
+};
+
+/* The container of every device that is built into the machine. */
+static const GUID machine_container_id = {0x00000000,0x0000,0x0000,{0x00,0x00,0xff,0xff,0xff,0xff,0xff,0xff}};
+
+static WCHAR *container_node_string( DEVINST node, const DEVPROPKEY *key )
+{
+    DEVPROPTYPE type;
+    ULONG size = 0;
+    WCHAR *str;
+
+    if (CM_Get_DevNode_PropertyW( node, key, &type, NULL, &size, 0 ) != CR_BUFFER_SMALL || type != DEVPROP_TYPE_STRING
+        || size < sizeof(WCHAR))
+        return NULL;
+    if (!(str = calloc( 1, size + sizeof(WCHAR) ))) return NULL;
+    if (CM_Get_DevNode_PropertyW( node, key, &type, (BYTE *)str, &size, 0 ) != CR_SUCCESS || !str[0])
+    {
+        free( str );
+        return NULL;
+    }
+    return str;
+}
+
+static void container_add_category( struct device_container *container, const WCHAR *category )
+{
+    ULONG len = wcslen( category ), pos = 0;
+
+    while (container->categories[pos])
+    {
+        if (!wcscmp( container->categories + pos, category )) return;
+        pos += wcslen( container->categories + pos ) + 1;
+    }
+    if (pos + len + 2 > ARRAY_SIZE(container->categories)) return;
+    memcpy( container->categories + pos, category, (len + 1) * sizeof(WCHAR) );
+    container->categories[pos + len + 1] = 0;
+    container->categories_len = pos + len + 1;
+}
+
+static void device_container_list_free( struct device_container_list *list )
+{
+    for (ULONG i = 0; i < list->len; i++)
+    {
+        free( list->items[i].name );
+        free( list->items[i].manufacturer );
+        free( list->items[i].model );
+    }
+    free( list->items );
+    list->items = NULL;
+    list->len = 0;
+}
+
+static struct device_container *device_container_find_or_add( struct device_container_list *list, const GUID *id )
+{
+    struct device_container *tmp;
+
+    for (ULONG i = 0; i < list->len; i++)
+        if (IsEqualGUID( &list->items[i].id, id )) return list->items + i;
+    if (!(tmp = realloc( list->items, (list->len + 1) * sizeof(*tmp) ))) return NULL;
+    list->items = tmp;
+    tmp += list->len++;
+    memset( tmp, 0, sizeof(*tmp) );
+    tmp->id = *id;
+    return tmp;
+}
+
+static LSTATUS device_container_list_build( struct device_container_list *list )
+{
+    ULONG ids_len = 0;
+    WCHAR *ids, *id;
+
+    memset( list, 0, sizeof(*list) );
+    if (CM_Get_Device_ID_List_SizeW( &ids_len, NULL, 0 ) != CR_SUCCESS) return ERROR_SUCCESS;
+    if (!(ids = calloc( ids_len + 2, sizeof(WCHAR) ))) return ERROR_OUTOFMEMORY;
+    if (CM_Get_Device_ID_ListW( NULL, ids, ids_len + 1, 0 ) != CR_SUCCESS)
+    {
+        free( ids );
+        return ERROR_SUCCESS;
+    }
+
+    /* Present devices first, so the name and manufacturer come from a device that is really there. */
+    for (UINT pass = 0; pass < 2; pass++)
+    {
+        for (id = ids; *id; id += wcslen( id ) + 1)
+        {
+            struct device_container *container;
+            ULONG status = 0, problem = 0, size = sizeof(GUID);
+            BOOL present;
+            DEVPROPTYPE type;
+            DEVINST node;
+            GUID guid, class_guid;
+            WCHAR *text;
+
+            if (!(node = CfgmgrDevInstFromId( id ))) continue;
+            present = CM_Get_DevNode_Status( &status, &problem, node, 0 ) == CR_SUCCESS;
+            if (pass == 0 && !present) continue;
+            if (CM_Get_DevNode_PropertyW( node, &DEVPKEY_Device_ContainerId, &type, (BYTE *)&guid, &size, 0 ) != CR_SUCCESS
+                || type != DEVPROP_TYPE_GUID || size != sizeof(guid))
+                continue;
+            if (!(container = device_container_find_or_add( list, &guid )))
+            {
+                device_container_list_free( list );
+                free( ids );
+                return ERROR_OUTOFMEMORY;
+            }
+
+            if (pass == 0)
+            {
+                container->connected = TRUE;
+                if (problem) container->problem = TRUE;
+                size = sizeof(class_guid);
+                if (IsEqualGUID( &guid, &machine_container_id ))
+                    container_add_category( container, L"Computer" );
+                else if (!CM_Get_DevNode_PropertyW( node, &DEVPKEY_Device_ClassGuid, &type, (BYTE *)&class_guid, &size, 0 )
+                         && type == DEVPROP_TYPE_GUID)
+                {
+                    for (UINT i = 0; i < ARRAY_SIZE(container_categories); i++)
+                        if (IsEqualGUID( &class_guid, &container_categories[i].class_guid ))
+                            container_add_category( container, container_categories[i].category );
+                }
+            }
+            if (!container->name)
+            {
+                container->name = container_node_string( node, &DEVPKEY_Device_FriendlyName );
+                if (!container->name) container->name = container_node_string( node, &DEVPKEY_Device_DeviceDesc );
+            }
+            if (!container->model)
+            {
+                container->model = container_node_string( node, &DEVPKEY_Device_Model );
+                if (!container->model) container->model = container_node_string( node, &DEVPKEY_Device_DeviceDesc );
+            }
+            if (!container->manufacturer
+                && (text = container_node_string( node, &DEVPKEY_Device_Manufacturer )))
+            {
+                /* "(Standard system devices)" style strings name an INF vendor, not a maker. */
+                if (text[0] == L'(') free( text );
+                else container->manufacturer = text;
+            }
+        }
+    }
+
+    free( ids );
+    return ERROR_SUCCESS;
+}
+
+static void device_container_id_string( const GUID *id, WCHAR *buf )
+{
+    swprintf( buf, 39, L"{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}", id->Data1, id->Data2, id->Data3,
+              id->Data4[0], id->Data4[1], id->Data4[2], id->Data4[3], id->Data4[4], id->Data4[5], id->Data4[6],
+              id->Data4[7] );
+}
+
+static LSTATUS device_container_add_property( DEVPROPERTY **props, ULONG *props_len, const DEVPROPKEY *key,
+                                              DEVPROPTYPE type, const void *data, ULONG size )
+{
+    DEVPROPERTY *tmp, *prop;
+    void *copy;
+
+    if (!(copy = malloc( size ))) return ERROR_OUTOFMEMORY;
+    if (!(tmp = realloc( *props, (*props_len + 1) * sizeof(**props) )))
+    {
+        free( copy );
+        return ERROR_OUTOFMEMORY;
+    }
+    *props = tmp;
+    prop = tmp + (*props_len)++;
+    memcpy( copy, data, size );
+    memset( prop, 0, sizeof(*prop) );
+    prop->CompKey.Key = *key;
+    prop->CompKey.Store = DEVPROP_STORE_SYSTEM;
+    prop->Type = type;
+    prop->BufferSize = size;
+    prop->Buffer = copy;
+    return ERROR_SUCCESS;
+}
+
+static LSTATUS device_container_get_properties( const struct device_container *container, DEVPROPERTY **props,
+                                                ULONG *props_len )
+{
+    DEVPROP_BOOLEAN flag;
+    LSTATUS err = ERROR_SUCCESS;
+
+    *props = NULL;
+    *props_len = 0;
+
+    if (container->name)
+        err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_FriendlyName,
+                                             DEVPROP_TYPE_STRING, container->name,
+                                             (wcslen( container->name ) + 1) * sizeof(WCHAR) );
+    if (!err && container->manufacturer)
+        err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_Manufacturer,
+                                             DEVPROP_TYPE_STRING, container->manufacturer,
+                                             (wcslen( container->manufacturer ) + 1) * sizeof(WCHAR) );
+    if (!err && container->model)
+        err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_ModelName,
+                                             DEVPROP_TYPE_STRING, container->model,
+                                             (wcslen( container->model ) + 1) * sizeof(WCHAR) );
+    if (!err && container->categories_len)
+        err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_Category,
+                                             DEVPROP_TYPE_STRING_LIST, container->categories,
+                                             (container->categories_len + 1) * sizeof(WCHAR) );
+    flag = container->connected ? DEVPROP_TRUE : DEVPROP_FALSE;
+    if (!err)
+        err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_IsConnected,
+                                             DEVPROP_TYPE_BOOLEAN, &flag, sizeof(flag) );
+    flag = container->problem ? DEVPROP_TRUE : DEVPROP_FALSE;
+    if (!err)
+        err = device_container_add_property( props, props_len, &DEVPKEY_DeviceContainer_HasProblem,
+                                             DEVPROP_TYPE_BOOLEAN, &flag, sizeof(flag) );
+    if (err)
+    {
+        DevFreeObjectProperties( *props_len, *props );
+        *props = NULL;
+        *props_len = 0;
+    }
+    return err;
+}
+
+static LSTATUS enum_dev_objects_device_container( struct enum_dev_object_params *params )
+{
+    struct device_container_list list;
+    LSTATUS err;
+
+    if ((err = device_container_list_build( &list ))) return err;
+
+    for (ULONG i = 0; !err && i < list.len; i++)
+    {
+        DEVPROPERTY *properties;
+        ULONG properties_len;
+        WCHAR id[39];
+        BOOL matches;
+
+        if ((err = device_container_get_properties( list.items + i, &properties, &properties_len ))) break;
+
+        if (params->filters) qsort( properties, properties_len, sizeof(*properties), devproperty_compare );
+        matches = devprop_filter_matches_properties( properties, properties_len, DEVPROP_OPERATOR_AND_OPEN,
+                                                     params->filters, params->filters_end );
+        if (!params->all_props) select_properties( params->props, params->props_len, &properties, &properties_len );
+
+        device_container_id_string( &list.items[i].id, id );
+        if (matches) err = params->callback( params->type, id, &properties_len, &properties, params->context );
+        DevFreeObjectProperties( properties_len, properties );
+    }
+
+    device_container_list_free( &list );
+    return err;
+}
+
+static LSTATUS get_device_container_object_properties( const WCHAR *id, BOOL all_props, ULONG props_len,
+                                                       const DEVPROPCOMPKEY *keys, ULONG *buf_len,
+                                                       const DEVPROPERTY **buf )
+{
+    struct device_container_list list;
+    LSTATUS err;
+
+    if ((err = device_container_list_build( &list ))) return err;
+    err = ERROR_FILE_NOT_FOUND;
+
+    for (ULONG i = 0; i < list.len; i++)
+    {
+        DEVPROPERTY *properties;
+        ULONG properties_len;
+        WCHAR name[39];
+
+        device_container_id_string( &list.items[i].id, name );
+        if (wcsicmp( id, name )) continue;
+
+        if ((err = device_container_get_properties( list.items + i, &properties, &properties_len ))) break;
+        if (!all_props) select_properties( keys, props_len, &properties, &properties_len );
+        *buf = properties;
+        *buf_len = properties_len;
+        break;
+    }
+
+    device_container_list_free( &list );
+    return err;
+}
+
+#endif
 static LSTATUS enum_dev_objects( DEV_OBJECT_TYPE type, const DEVPROPCOMPKEY *props, ULONG props_len, BOOL all_props,
                                  const DEVPROP_FILTER_EXPRESSION *filters, const DEVPROP_FILTER_EXPRESSION *filters_end,
                                  enum_device_object_cb callback, void *context )
@@ -661,7 +975,12 @@ static LSTATUS enum_dev_objects( DEV_OBJECT_TYPE type, const DEVPROPCOMPKEY *pro
         return enum_device_interfaces( TRUE, enum_dev_objects_device_interface, &params );
 #endif
 
+#ifdef __REACTOS__
     case DevObjectTypeDeviceContainer:
+        return enum_dev_objects_device_container( &params );
+#else
+    case DevObjectTypeDeviceContainer:
+#endif
     case DevObjectTypeDevice:
     case DevObjectTypeDeviceInterfaceClass:
     case DevObjectTypeAEP:
@@ -1427,6 +1746,13 @@ HRESULT WINAPI DevGetObjectPropertiesEx( DEV_OBJECT_TYPE type, const WCHAR *id, 
         RegCloseKey( hkey );
         break;
     }
+#ifdef __REACTOS__
+    case DevObjectTypeDeviceContainer:
+        *buf = NULL;
+        *buf_len = 0;
+        err = get_device_container_object_properties( id, all_props, props_len, props, buf_len, buf );
+        break;
+#endif
     default:
         FIXME( "Unsupported DEV_OBJECT_TYPE: %d\n", type );
         err = ERROR_FILE_NOT_FOUND;
