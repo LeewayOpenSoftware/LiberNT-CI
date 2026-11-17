@@ -480,6 +480,33 @@ RtlDecompressBuffer(IN USHORT CompressionFormat,
 }
 
 /*
+ * @implemented
+ */
+NTSTATUS NTAPI
+RtlDecompressBufferEx(IN USHORT CompressionFormat,
+                      OUT PUCHAR UncompressedBuffer,
+                      IN ULONG UncompressedBufferSize,
+                      IN PUCHAR CompressedBuffer,
+                      IN ULONG CompressedBufferSize,
+                      OUT PULONG FinalUncompressedSize,
+                      IN PVOID WorkSpace)
+{
+    switch (CompressionFormat & ~COMPRESSION_ENGINE_MAXIMUM)
+    {
+        case COMPRESSION_FORMAT_LZNT1:
+            return lznt1_decompress(UncompressedBuffer, UncompressedBufferSize, CompressedBuffer,
+                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE);
+
+        case COMPRESSION_FORMAT_NONE:
+        case COMPRESSION_FORMAT_DEFAULT:
+            return STATUS_INVALID_PARAMETER;
+
+        default:
+            return STATUS_UNSUPPORTED_COMPRESSION;
+    }
+}
+
+/*
  * @unimplemented
  */
 NTSTATUS NTAPI
