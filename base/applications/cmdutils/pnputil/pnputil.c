@@ -21,6 +21,7 @@
 #include <cfg.h>
 #include <newdev.h>
 #include <regstr.h>
+#include <wincrypt.h>
 #include <umpnpmgr/drvinst.h>
 #include <initguid.h>
 #include <devpkey.h>
@@ -2021,6 +2022,7 @@ typedef struct _DRV_ITEM
     WCHAR ClassGuid[64];
     WCHAR Version[96];
     WCHAR MatchingId[LINE_LEN];
+    WCHAR Signer[128];
     DWORD Rank;
     FILETIME Date;
     DWORDLONG Ver;
@@ -2035,6 +2037,124 @@ typedef struct _DRV_LIST
     DRV_ITEM *Items;
     DWORD Count;
 } DRV_LIST;
+
+/* The signer of a driver package: the subject of the certificate that signed its catalog. The catalog is
+   found next to the INF, or in the system catalog root for an in-box package. crypt32 is loaded on demand. */
+static VOID
+DriverSignerName(
+    _In_ PCWSTR InfPath,
+    _In_ HINF hInf,
+    _Out_writes_(Cch) PWSTR Signer,
+    _In_ DWORD Cch)
+{
+    typedef BOOL (WINAPI *PQUERY)(DWORD, const void *, DWORD, DWORD, DWORD, DWORD *, DWORD *, DWORD *, HCERTSTORE *, HCRYPTMSG *, const void **);
+    typedef BOOL (WINAPI *PMSGPARAM)(HCRYPTMSG, DWORD, DWORD, void *, DWORD *);
+    typedef PCCERT_CONTEXT (WINAPI *PFIND)(HCERTSTORE, DWORD, DWORD, DWORD, const void *, PCCERT_CONTEXT);
+    typedef DWORD (WINAPI *PNAME)(PCCERT_CONTEXT, DWORD, DWORD, void *, LPWSTR, DWORD);
+    typedef BOOL (WINAPI *PFREECERT)(PCCERT_CONTEXT);
+    typedef BOOL (WINAPI *PCLOSESTORE)(HCERTSTORE, DWORD);
+    typedef BOOL (WINAPI *PCLOSEMSG)(HCRYPTMSG);
+#ifdef _WIN64
+    static const PCWSTR Keys[] = { L"CatalogFile.ntamd64", L"CatalogFile.nt", L"CatalogFile" };
+#else
+    static const PCWSTR Keys[] = { L"CatalogFile.ntx86", L"CatalogFile.nt", L"CatalogFile" };
+#endif
+    WCHAR Catalog[MAX_PATH], Path[MAX_PATH], Windir[MAX_PATH];
+    HMODULE hCrypt;
+    PQUERY Query;
+    PMSGPARAM MsgParam;
+    PFIND Find;
+    PNAME Name;
+    PFREECERT FreeCert;
+    PCLOSESTORE CloseStore;
+    PCLOSEMSG CloseMsg;
+    HCERTSTORE Store = NULL;
+    HCRYPTMSG Msg = NULL;
+    CMSG_SIGNER_INFO *Info = NULL;
+    PCCERT_CONTEXT Cert;
+    CERT_INFO Wanted;
+    PWSTR Slash;
+    DWORD Size = 0, i, Pass;
+
+    Signer[0] = UNICODE_NULL;
+    Catalog[0] = UNICODE_NULL;
+    for (i = 0; i < _countof(Keys) && !Catalog[0]; i++)
+        GetInfVersionValue(hInf, Keys[i], Catalog, _countof(Catalog));
+    if (!Catalog[0])
+        return;
+
+    hCrypt = LoadLibraryW(L"crypt32.dll");
+    if (!hCrypt)
+        return;
+    Query = (PQUERY)GetProcAddress(hCrypt, "CryptQueryObject");
+    MsgParam = (PMSGPARAM)GetProcAddress(hCrypt, "CryptMsgGetParam");
+    Find = (PFIND)GetProcAddress(hCrypt, "CertFindCertificateInStore");
+    Name = (PNAME)GetProcAddress(hCrypt, "CertGetNameStringW");
+    FreeCert = (PFREECERT)GetProcAddress(hCrypt, "CertFreeCertificateContext");
+    CloseStore = (PCLOSESTORE)GetProcAddress(hCrypt, "CertCloseStore");
+    CloseMsg = (PCLOSEMSG)GetProcAddress(hCrypt, "CryptMsgClose");
+    if (!Query || !MsgParam || !Find || !Name || !FreeCert || !CloseStore || !CloseMsg)
+    {
+        FreeLibrary(hCrypt);
+        return;
+    }
+
+    for (Pass = 0; Pass < 2 && !Store; Pass++)
+    {
+        if (Pass == 0)
+        {
+            lstrcpynW(Path, InfPath, _countof(Path));
+            Slash = wcsrchr(Path, L'\\');
+            if (!Slash || (SIZE_T)(Slash + 1 - Path) + wcslen(Catalog) >= _countof(Path))
+                continue;
+            wcscpy(Slash + 1, Catalog);
+        }
+        else
+        {
+            if (!GetSystemWindowsDirectoryW(Windir, _countof(Windir)) ||
+                wcslen(Windir) + wcslen(Catalog) + 64 >= _countof(Path))
+            {
+                continue;
+            }
+            _snwprintf(Path, _countof(Path) - 1, L"%ls\\System32\\CatRoot\\{F750E6C3-38EE-11D1-85E5-00C04FC295EE}\\%ls",
+                       Windir, Catalog);
+            Path[_countof(Path) - 1] = UNICODE_NULL;
+        }
+        if (GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES)
+            continue;
+        if (!Query(CERT_QUERY_OBJECT_FILE, Path,
+                   CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED | CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                   CERT_QUERY_FORMAT_FLAG_ALL, 0, NULL, NULL, NULL, &Store, &Msg, NULL))
+        {
+            Store = NULL;
+            Msg = NULL;
+        }
+    }
+
+    if (Store && Msg && MsgParam(Msg, CMSG_SIGNER_INFO_PARAM, 0, NULL, &Size) && Size)
+    {
+        Info = HeapAlloc(GetProcessHeap(), 0, Size);
+        if (Info && MsgParam(Msg, CMSG_SIGNER_INFO_PARAM, 0, Info, &Size))
+        {
+            ZeroMemory(&Wanted, sizeof(Wanted));
+            Wanted.Issuer = Info->Issuer;
+            Wanted.SerialNumber = Info->SerialNumber;
+            Cert = Find(Store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_SUBJECT_CERT, &Wanted, NULL);
+            if (Cert)
+            {
+                Name(Cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL, Signer, Cch);
+                FreeCert(Cert);
+            }
+        }
+        if (Info)
+            HeapFree(GetProcessHeap(), 0, Info);
+    }
+    if (Msg)
+        CloseMsg(Msg);
+    if (Store)
+        CloseStore(Store, 0);
+    FreeLibrary(hCrypt);
+}
 
 static VOID
 DriverListFree(
@@ -2144,6 +2264,7 @@ DriverListCollect(
             if (!Item->ClassName[0] && CLSIDFromString(Item->ClassGuid, &Guid) == S_OK)
                 SetupDiClassNameFromGuidW(&Guid, Item->ClassName, _countof(Item->ClassName), NULL);
             CharLowerW(Item->ClassGuid);
+            DriverSignerName(Detail->InfFileName, hInf, Item->Signer, _countof(Item->Signer));
             SetupCloseInfFile(hInf);
         }
 
@@ -2225,7 +2346,7 @@ DriversEmitTxt(
         Values[2] = Item->ClassName;
         Values[3] = Item->ClassGuid;
         Values[4] = Item->Version;
-        Values[5] = L"";
+        Values[5] = Item->Signer;
         Values[6] = Item->MatchingId;
         Values[7] = Rank;
         Values[8] = Status;
@@ -2237,8 +2358,8 @@ DriversEmitTxt(
         }
         for (k = 0; k < 9; k++)
         {
-            if (k == 5)
-                continue; /* the signer comes from the catalog and is not read yet */
+            if (k == 5 && !Item->Signer[0])
+                continue;
             _snwprintf(Line, _countof(Line) - 1, L"    %-24ls%ls%ls", Labels[k], Values[k], Eol);
             Line[_countof(Line) - 1] = UNICODE_NULL;
             OutputPutsRaw(Output, Line);
@@ -2277,6 +2398,7 @@ DriversEmitXml(
         DRV_XML(L"ClassName", Item->ClassName)
         DRV_XML(L"ClassGuid", Item->ClassGuid)
         DRV_XML(L"DriverVersion", Item->Version)
+        DRV_XML(L"SignerName", Item->Signer)
         DRV_XML(L"MatchingDeviceId", Item->MatchingId)
         DRV_XML(L"Rank", Rank)
         DRV_XML(L"Status", Status)
