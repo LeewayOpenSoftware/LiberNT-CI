@@ -2026,6 +2026,8 @@ typedef struct _DRV_ITEM
     DWORDLONG Ver;
     BOOL Best;
     BOOL Installed;
+    BOOL NameMatch;
+    BOOL Exact;
 } DRV_ITEM;
 
 typedef struct _DRV_LIST
@@ -2051,10 +2053,11 @@ DriverListCollect(
     _In_ HDEVINFO Set,
     _In_ PSP_DEVINFO_DATA Info)
 {
-    WCHAR Installed[MAX_PATH];
+    WCHAR Installed[MAX_PATH], InstalledSection[LINE_LEN], InstalledMatch[LINE_LEN];
     SP_DRVINFO_DATA_W Drv;
     DWORD Index, Capacity = 0, BestIndex = 0;
-    BOOL HaveInstalled;
+    BOOL HaveInstalled, HaveSection, HaveMatch;
+    DWORD ExactCount = 0;
 
     List->Items = NULL;
     List->Count = 0;
@@ -2062,6 +2065,8 @@ DriverListCollect(
     if (!SetupDiBuildDriverInfoList(Set, Info, SPDIT_COMPATDRIVER))
         return;
     HaveInstalled = GetDriverKeyString(Set, Info, REGSTR_VAL_INFPATH, Installed, _countof(Installed));
+    HaveSection = GetDriverKeyString(Set, Info, L"InfSection", InstalledSection, _countof(InstalledSection));
+    HaveMatch = GetDriverKeyString(Set, Info, L"MatchingDeviceId", InstalledMatch, _countof(InstalledMatch));
 
     for (Index = 0; ; Index++)
     {
@@ -2142,10 +2147,19 @@ DriverListCollect(
             SetupCloseInfFile(hInf);
         }
 
-        Item->Installed = HaveInstalled && _wcsicmp(Installed, Item->Name) == 0;
+        /* One INF can offer several driver nodes; the installed one also has the INF section and matched id. */
+        Item->NameMatch = HaveInstalled && _wcsicmp(Installed, Item->Name) == 0;
+        Item->Exact = Item->NameMatch && (!HaveSection || _wcsicmp(InstalledSection, Detail->SectionName) == 0) &&
+                      (!HaveMatch || _wcsicmp(InstalledMatch, Detail->HardwareID) == 0);
+        if (Item->Exact)
+            ExactCount++;
         List->Count++;
         HeapFree(GetProcessHeap(), 0, Detail);
     }
+
+    /* Only the exact node is installed; without one (an INF that no longer lists the section) the INF name decides. */
+    for (Index = 0; Index < List->Count; Index++)
+        List->Items[Index].Installed = ExactCount ? List->Items[Index].Exact : List->Items[Index].NameMatch;
 
     for (Index = 1; Index < List->Count; Index++)
     {
