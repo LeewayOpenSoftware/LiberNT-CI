@@ -2883,9 +2883,6 @@ typedef struct _EJOB
     JOBOBJECT_ENERGY_TRACKING_STATE EnergyTrackingState;
     ULONGLONG KernelWaitTime;
     ULONGLONG UserWaitTime;
-    PVOID *SiloContextTable;
-    ULONG SiloContextSlotCount;
-    ULONG SiloContextPermanent[4];
 } EJOB, *PEJOB;
 
 #if defined(_M_ARM64) && !defined(__ASSEMBLER__)

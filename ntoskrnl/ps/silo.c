@@ -17,6 +17,10 @@
 #define PS_SILO_CONTEXT_SLOTS_MAX 128
 #define PS_SILO_CONTEXT_WORDS (PS_SILO_CONTEXT_SLOTS_MAX / (sizeof(ULONG) * 8))
 
+#define PS_SILO_HEADER_SIZE ((sizeof(PS_SILO_CONTEXT_HEADER) + \
+                              MEMORY_ALLOCATION_ALIGNMENT - 1) & \
+                             ~(MEMORY_ALLOCATION_ALIGNMENT - 1))
+
 #define TAG_SILO_CONTEXT 'OLIS'
 #define TAG_SILO_MONITOR 'MLIS'
 #define TAG_SILO_NAME    'NLIS'
@@ -28,7 +32,7 @@ typedef struct _PS_SILO_CONTEXT_HEADER
     POOL_TYPE PoolType;
     ULONG Size;
     volatile LONG RefCount;
-    PSILO_CONTEXT_CLEANUP_CALLBACK CleanupCallback;
+    SILO_CONTEXT_CLEANUP_CALLBACK CleanupCallback;
 } PS_SILO_CONTEXT_HEADER, *PPS_SILO_CONTEXT_HEADER;
 
 struct _SILO_MONITOR
@@ -38,6 +42,7 @@ struct _SILO_MONITOR
     SILO_MONITOR_TERMINATE_CALLBACK TerminateCallback;
     BOOLEAN MonitorHost;
     BOOLEAN Started;
+    BOOLEAN HostCreated;
     ULONG ContextSlot;
     LIST_ENTRY Link;
 };
@@ -53,61 +58,16 @@ static LIST_ENTRY PsSiloMonitorList;
 
 /* PRIVATE HELPERS ***********************************************************/
 
-static PVOID *
-PsSiloContextStorage(
-    _In_ PESILO Silo,
-    _Out_ PULONG *SlotCount,
-    _Out_ ULONG **PermanentMap)
+static PPS_SILO_CONTEXT_HEADER
+PsSiloContextHeader(_In_ PVOID SiloContext)
 {
-    if (Silo == NULL)
-    {
-        *SlotCount = &PsHostSiloContextSlotCount;
-        *PermanentMap = PsHostSiloContextPermanent;
-        return PsHostSiloContextTable;
-    }
-
-    *SlotCount = &((PEJOB)Silo)->SiloContextSlotCount;
-    *PermanentMap = ((PEJOB)Silo)->SiloContextPermanent;
-    return ((PEJOB)Silo)->SiloContextTable;
+    return (PPS_SILO_CONTEXT_HEADER)((PUCHAR)SiloContext - PS_SILO_HEADER_SIZE);
 }
 
 static BOOLEAN
 PsSiloContextSlotAllocated(_In_ ULONG ContextSlot)
 {
     return ((PsSiloContextSlotBitmap[ContextSlot / 32] >> (ContextSlot % 32)) & 1) != 0;
-}
-
-static NTSTATUS
-PsSiloContextGrowTable(
-    _In_ PESILO Silo,
-    _Inout_ PVOID **Table,
-    _Inout_ PULONG *SlotCount,
-    _In_ ULONG NewCount)
-{
-    PVOID *NewTable;
-    ULONG OldCount, CopyCount;
-
-    if (*Table == PsHostSiloContextTable)
-    {
-        **SlotCount = NewCount;
-        return STATUS_SUCCESS;
-    }
-
-    OldCount = **SlotCount;
-    NewTable = ExAllocatePoolZero(PagedPool, NewCount * sizeof(PVOID), TAG_SILO_CONTEXT);
-    if (NewTable == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    CopyCount = min(OldCount, NewCount);
-    RtlCopyMemory(NewTable, **Table, CopyCount * sizeof(PVOID));
-    if (**Table != NULL)
-        ExFreePoolWithTag(**Table, TAG_SILO_CONTEXT);
-
-    ((PEJOB)Silo)->SiloContextTable = NewTable;
-    ((PEJOB)Silo)->SiloContextSlotCount = NewCount;
-    *Table = NewTable;
-    *SlotCount = &((PEJOB)Silo)->SiloContextSlotCount;
-    return STATUS_SUCCESS;
 }
 
 /* PUBLIC API ****************************************************************/
@@ -146,6 +106,8 @@ NTAPI
 PsFreeSiloContextSlot(
     _In_ ULONG ContextSlot)
 {
+    PVOID StaleContext = NULL;
+
     PAGED_CODE();
 
     if (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX)
@@ -153,7 +115,16 @@ PsFreeSiloContextSlot(
 
     ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
     PsSiloContextSlotBitmap[ContextSlot / 32] &= ~(1UL << (ContextSlot % 32));
+    if (ContextSlot < PsHostSiloContextSlotCount)
+    {
+        StaleContext = PsHostSiloContextTable[ContextSlot];
+        PsHostSiloContextTable[ContextSlot] = NULL;
+        PsHostSiloContextPermanent[ContextSlot / 32] &= ~(1UL << (ContextSlot % 32));
+    }
     ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+
+    if (StaleContext != NULL)
+        PsDereferenceSiloContext(StaleContext);
 }
 
 NTSTATUS
@@ -162,21 +133,21 @@ PsCreateSiloContext(
     _In_ PESILO Silo,
     _In_ ULONG Size,
     _In_ POOL_TYPE PoolType,
-    _In_opt_ PSILO_CONTEXT_CLEANUP_CALLBACK ContextCleanupCallback,
+    _In_opt_ SILO_CONTEXT_CLEANUP_CALLBACK ContextCleanupCallback,
     _Out_ PVOID *ReturnedSiloContext)
 {
     PPS_SILO_CONTEXT_HEADER Header;
 
     PAGED_CODE();
 
+    if (Silo != NULL)
+        return STATUS_NOT_SUPPORTED;
     if (ReturnedSiloContext == NULL)
         return STATUS_INVALID_PARAMETER;
     if ((PoolType != NonPagedPoolNx) && (PoolType != PagedPool))
         return STATUS_INVALID_PARAMETER;
 
-    Header = ExAllocatePoolZero(PoolType,
-                                sizeof(PS_SILO_CONTEXT_HEADER) + Size,
-                                TAG_SILO_CONTEXT);
+    Header = ExAllocatePoolZero(PoolType, PS_SILO_HEADER_SIZE + Size, TAG_SILO_CONTEXT);
     if (Header == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -185,7 +156,7 @@ PsCreateSiloContext(
     Header->RefCount = 1;
     Header->CleanupCallback = ContextCleanupCallback;
 
-    *ReturnedSiloContext = Header + 1;
+    *ReturnedSiloContext = (PUCHAR)Header + PS_SILO_HEADER_SIZE;
     return STATUS_SUCCESS;
 }
 
@@ -194,9 +165,7 @@ NTAPI
 PsReferenceSiloContext(
     _In_ PVOID SiloContext)
 {
-    PPS_SILO_CONTEXT_HEADER Header = ((PPS_SILO_CONTEXT_HEADER)SiloContext) - 1;
-
-    InterlockedIncrement(&Header->RefCount);
+    InterlockedIncrement(&PsSiloContextHeader(SiloContext)->RefCount);
 }
 
 VOID
@@ -204,7 +173,7 @@ NTAPI
 PsDereferenceSiloContext(
     _In_ PVOID SiloContext)
 {
-    PPS_SILO_CONTEXT_HEADER Header = ((PPS_SILO_CONTEXT_HEADER)SiloContext) - 1;
+    PPS_SILO_CONTEXT_HEADER Header = PsSiloContextHeader(SiloContext);
 
     if (InterlockedDecrement(&Header->RefCount) == 0)
     {
@@ -221,37 +190,27 @@ PsInsertSiloContext(
     _In_ ULONG ContextSlot,
     _In_ PVOID SiloContext)
 {
-    PVOID *Table;
-    PULONG SlotCount;
-    ULONG *PermanentMap;
-    NTSTATUS Status;
-
     PAGED_CODE();
 
-    if ((SiloContext == NULL) || (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX))
+    if (Silo != NULL)
+        return STATUS_NOT_SUPPORTED;
+    if ((SiloContext == NULL) || (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX) ||
+        !PsSiloContextSlotAllocated(ContextSlot))
         return STATUS_INVALID_PARAMETER;
 
     ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
 
-    Table = PsSiloContextStorage(Silo, &SlotCount, &PermanentMap);
-    if (ContextSlot >= *SlotCount)
-    {
-        Status = PsSiloContextGrowTable(Silo, &Table, &SlotCount, ContextSlot + 1);
-        if (!NT_SUCCESS(Status))
-        {
-            ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
-            return Status;
-        }
-    }
+    if (ContextSlot >= PsHostSiloContextSlotCount)
+        PsHostSiloContextSlotCount = ContextSlot + 1;
 
-    if (Table[ContextSlot] != NULL)
+    if (PsHostSiloContextTable[ContextSlot] != NULL)
     {
         ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
         return STATUS_NOT_SUPPORTED;
     }
 
-    Table[ContextSlot] = SiloContext;
-    InterlockedIncrement(&((PPS_SILO_CONTEXT_HEADER)SiloContext - 1)->RefCount);
+    PsHostSiloContextTable[ContextSlot] = SiloContext;
+    InterlockedIncrement(&PsSiloContextHeader(SiloContext)->RefCount);
 
     ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
     return STATUS_SUCCESS;
@@ -264,13 +223,12 @@ PsGetSiloContext(
     _In_ ULONG ContextSlot,
     _Out_ PVOID *ReturnedSiloContext)
 {
-    PVOID *Table;
-    PULONG SlotCount;
-    ULONG *PermanentMap;
     PVOID Context;
 
     PAGED_CODE();
 
+    if (Silo != NULL)
+        return STATUS_NOT_SUPPORTED;
     if ((ReturnedSiloContext == NULL) ||
         (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX) ||
         !PsSiloContextSlotAllocated(ContextSlot))
@@ -278,15 +236,15 @@ PsGetSiloContext(
 
     ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
 
-    Table = PsSiloContextStorage(Silo, &SlotCount, &PermanentMap);
-    if ((ContextSlot >= *SlotCount) || ((Context = Table[ContextSlot]) == NULL))
+    if ((ContextSlot >= PsHostSiloContextSlotCount) ||
+        ((Context = PsHostSiloContextTable[ContextSlot]) == NULL))
     {
         ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
         *ReturnedSiloContext = NULL;
         return STATUS_NOT_FOUND;
     }
 
-    InterlockedIncrement(&((PPS_SILO_CONTEXT_HEADER)Context - 1)->RefCount);
+    InterlockedIncrement(&PsSiloContextHeader(Context)->RefCount);
     *ReturnedSiloContext = Context;
 
     ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
@@ -299,26 +257,24 @@ PsMakeSiloContextPermanent(
     _In_ PESILO Silo,
     _In_ ULONG ContextSlot)
 {
-    PVOID *Table;
-    PULONG SlotCount;
-    ULONG *PermanentMap;
-
     PAGED_CODE();
 
-    if (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX ||
+    if (Silo != NULL)
+        return STATUS_NOT_SUPPORTED;
+    if ((ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX) ||
         !PsSiloContextSlotAllocated(ContextSlot))
         return STATUS_INVALID_PARAMETER;
 
     ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
 
-    Table = PsSiloContextStorage(Silo, &SlotCount, &PermanentMap);
-    if ((ContextSlot >= *SlotCount) || (Table[ContextSlot] == NULL))
+    if ((ContextSlot >= PsHostSiloContextSlotCount) ||
+        (PsHostSiloContextTable[ContextSlot] == NULL))
     {
         ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
         return STATUS_NOT_FOUND;
     }
 
-    PermanentMap[ContextSlot / 32] |= (1UL << (ContextSlot % 32));
+    PsHostSiloContextPermanent[ContextSlot / 32] |= (1UL << (ContextSlot % 32));
 
     ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
     return STATUS_SUCCESS;
@@ -349,13 +305,12 @@ PsGetPermanentSiloContext(
     _In_ ULONG ContextSlot,
     _Out_ PVOID *ReturnedSiloContext)
 {
-    PVOID *Table;
-    PULONG SlotCount;
-    ULONG *PermanentMap;
     PVOID Context;
 
     PAGED_CODE();
 
+    if (Silo != NULL)
+        return STATUS_NOT_SUPPORTED;
     if ((ReturnedSiloContext == NULL) ||
         (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX) ||
         !PsSiloContextSlotAllocated(ContextSlot))
@@ -363,15 +318,15 @@ PsGetPermanentSiloContext(
 
     ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
 
-    Table = PsSiloContextStorage(Silo, &SlotCount, &PermanentMap);
-    if ((ContextSlot >= *SlotCount) || ((Context = Table[ContextSlot]) == NULL))
+    if ((ContextSlot >= PsHostSiloContextSlotCount) ||
+        ((Context = PsHostSiloContextTable[ContextSlot]) == NULL))
     {
         ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
         *ReturnedSiloContext = NULL;
         return STATUS_NOT_FOUND;
     }
 
-    if (((PermanentMap[ContextSlot / 32] >> (ContextSlot % 32)) & 1) == 0)
+    if (((PsHostSiloContextPermanent[ContextSlot / 32] >> (ContextSlot % 32)) & 1) == 0)
     {
         ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
         *ReturnedSiloContext = NULL;
@@ -400,7 +355,9 @@ PsRegisterSiloMonitor(
         return STATUS_INVALID_PARAMETER;
     if ((Registration->Version != SILO_MONITOR_REGISTRATION_VERSION) ||
         (Registration->ComponentName == NULL) ||
+        (Registration->ComponentName->Buffer == NULL) ||
         (Registration->ComponentName->Length == 0) ||
+        (Registration->ComponentName->Length > Registration->ComponentName->MaximumLength) ||
         (Registration->TerminateCallback == NULL))
         return STATUS_INVALID_PARAMETER;
     if (PsGetCurrentServerSilo() != NULL)
@@ -417,9 +374,10 @@ PsRegisterSiloMonitor(
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
-    Monitor->ComponentName = *Registration->ComponentName;
+    Monitor->ComponentName.Length = Registration->ComponentName->Length;
+    Monitor->ComponentName.MaximumLength = Registration->ComponentName->Length;
     Monitor->ComponentName.Buffer = ExAllocatePoolZero(PagedPool,
-                                                       Registration->ComponentName->MaximumLength,
+                                                       Registration->ComponentName->Length,
                                                        TAG_SILO_NAME);
     if (Monitor->ComponentName.Buffer == NULL)
     {
@@ -429,7 +387,7 @@ PsRegisterSiloMonitor(
     }
     RtlCopyMemory(Monitor->ComponentName.Buffer,
                   Registration->ComponentName->Buffer,
-                  Registration->ComponentName->MaximumLength);
+                  Registration->ComponentName->Length);
 
     Monitor->CreateCallback = Registration->CreateCallback;
     Monitor->TerminateCallback = Registration->TerminateCallback;
@@ -468,7 +426,15 @@ PsStartSiloMonitor(
     ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
 
     if (NotifyHost)
+    {
         Status = SiloMonitor->CreateCallback(NULL);
+        if (NT_SUCCESS(Status))
+        {
+            ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+            SiloMonitor->HostCreated = TRUE;
+            ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+        }
+    }
 
     return Status;
 }
@@ -486,11 +452,8 @@ PsUnregisterSiloMonitor(
         return;
 
     ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
-    if (SiloMonitor->Started && SiloMonitor->MonitorHost &&
-        (SiloMonitor->TerminateCallback != NULL))
-        NotifyHost = TRUE;
-    else
-        NotifyHost = FALSE;
+    NotifyHost = SiloMonitor->HostCreated;
+    SiloMonitor->HostCreated = FALSE;
     RemoveEntryList(&SiloMonitor->Link);
     ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
 

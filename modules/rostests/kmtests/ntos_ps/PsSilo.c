@@ -8,6 +8,7 @@
 #include <kmt_test.h>
 
 static LONG g_CleanupCalls;
+static LONG g_TerminateCalls;
 
 static VOID
 NTAPI
@@ -27,11 +28,21 @@ SiloTestCreate(
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS
+NTAPI
+SiloTestCreateFails(
+    _In_ PESILO Silo)
+{
+    UNREFERENCED_PARAMETER(Silo);
+    return STATUS_UNSUCCESSFUL;
+}
+
 static VOID
 NTAPI
 SiloTestTerminate(
     _In_ PESILO Silo)
 {
+    InterlockedIncrement(&g_TerminateCalls);
     ok(Silo == PsGetHostSilo(), "host terminate notification for %p\n", Silo);
 }
 
@@ -123,6 +134,34 @@ START_TEST(PsSilo)
     ok_eq_hex(Status, STATUS_SUCCESS);
 
     PsUnregisterSiloMonitor(Monitor);
+    ok_eq_long(g_TerminateCalls, 1);
+
+    /* A failing host create at Start must not deliver a terminate */
+    g_TerminateCalls = 0;
+    Registration.CreateCallback = SiloTestCreateFails;
+    Status = PsRegisterSiloMonitor(&Registration, &Monitor);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = PsStartSiloMonitor(Monitor);
+    ok_eq_hex(Status, STATUS_UNSUCCESSFUL);
+    PsUnregisterSiloMonitor(Monitor);
+    ok_eq_long(g_TerminateCalls, 0);
+
+    /* A freed slot must not hand its stale context to the next owner */
+    Status = PsCreateSiloContext(PsGetHostSilo(), 16, NonPagedPoolNx, NULL, &Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = PsAllocSiloContextSlot(0, &Slot);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = PsInsertSiloContext(PsGetHostSilo(), Slot, Context);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    Status = PsGetSiloContext(PsGetHostSilo(), Slot, &Retrieved);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    PsDereferenceSiloContext(Retrieved);
+    PsFreeSiloContextSlot(Slot);
+    Status = PsAllocSiloContextSlot(0, &SecondSlot);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    ok(SecondSlot == Slot, "slot bitmap did not recycle slot %lu (got %lu)\n", Slot, SecondSlot);
+    Status = PsGetSiloContext(PsGetHostSilo(), SecondSlot, &Retrieved);
+    ok_eq_hex(Status, STATUS_NOT_FOUND);
 
     /* Silo queries: with no server silos every query resolves to the host */
     ok(PsGetCurrentSilo() == PsGetHostSilo(), "current silo is not the host\n");
