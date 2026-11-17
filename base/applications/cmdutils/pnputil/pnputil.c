@@ -2766,30 +2766,51 @@ typedef struct _CLASS_ROW
     GUID Guid;
     WCHAR Name[MAX_CLASS_NAME_LEN];
     WCHAR Description[LINE_LEN];
-    WCHAR Service[256];
-    WCHAR Upper[1024];
-    WCHAR Lower[1024];
+    PWSTR Service;
+    PWSTR Upper;
+    PWSTR Lower;
 } CLASS_ROW;
 
-/* Read a class registry value as a REG_SZ / REG_MULTI_SZ into Buffer as a double-NUL list. */
-static VOID
+/* Shared empty double-NUL list used when a class value is absent. */
+static WCHAR ClassEmpty[2];
+
+/* Read a class registry value (REG_SZ / REG_MULTI_SZ) into a heap buffer of the size the
+   registry reports, as a double-NUL list. Absent or unreadable values give ClassEmpty. */
+static PWSTR
 ReadClassValue(
     _In_ HKEY hKey,
-    _In_ PCWSTR Name,
-    _Out_writes_(Cch) PWCHAR Buffer,
-    _In_ DWORD Cch)
+    _In_ PCWSTR Name)
 {
-    DWORD Type, Size = (Cch - 2) * sizeof(WCHAR);
+    DWORD Type, Size = 0, Error;
+    PWSTR Buffer;
 
-    Buffer[0] = Buffer[1] = UNICODE_NULL;
-    if (RegQueryValueExW(hKey, Name, NULL, &Type, (PBYTE)Buffer, &Size) != ERROR_SUCCESS ||
+    if (RegQueryValueExW(hKey, Name, NULL, &Type, NULL, &Size) != ERROR_SUCCESS ||
         (Type != REG_SZ && Type != REG_MULTI_SZ))
     {
-        Buffer[0] = Buffer[1] = UNICODE_NULL;
-        return;
+        return ClassEmpty;
     }
-    Buffer[Size / sizeof(WCHAR)] = UNICODE_NULL;
-    Buffer[Size / sizeof(WCHAR) + 1] = UNICODE_NULL;
+
+    for (;;)
+    {
+        Buffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + 2 * sizeof(WCHAR));
+        if (!Buffer)
+            return ClassEmpty;
+        Error = RegQueryValueExW(hKey, Name, NULL, &Type, (PBYTE)Buffer, &Size);
+        if (Error == ERROR_SUCCESS)
+            return Buffer;
+        HeapFree(GetProcessHeap(), 0, Buffer);
+        /* The value grew between the two calls: retry with the new size. */
+        if (Error != ERROR_MORE_DATA)
+            return ClassEmpty;
+    }
+}
+
+static VOID
+FreeClassValue(
+    _In_ PWSTR Value)
+{
+    if (Value != ClassEmpty)
+        HeapFree(GetProcessHeap(), 0, Value);
 }
 
 /* One "Label<pad>Value" text line, value starting at column 28. */
@@ -3002,17 +3023,15 @@ CommandEnumClasses(
             Row->Guid = Guids[Index];
             Row->Description[0] = UNICODE_NULL;
             SetupDiGetClassDescriptionW(&Guids[Index], Row->Description, _countof(Row->Description), NULL);
-            Row->Service[0] = Row->Service[1] = UNICODE_NULL;
-            Row->Upper[0] = Row->Upper[1] = UNICODE_NULL;
-            Row->Lower[0] = Row->Lower[1] = UNICODE_NULL;
+            Row->Service = Row->Upper = Row->Lower = ClassEmpty;
             if (Services)
             {
                 hKey = SetupDiOpenClassRegKey(&Guids[Index], KEY_READ);
                 if (hKey != INVALID_HANDLE_VALUE)
                 {
-                    ReadClassValue(hKey, L"Service", Row->Service, _countof(Row->Service));
-                    ReadClassValue(hKey, L"UpperFilters", Row->Upper, _countof(Row->Upper));
-                    ReadClassValue(hKey, L"LowerFilters", Row->Lower, _countof(Row->Lower));
+                    Row->Service = ReadClassValue(hKey, L"Service");
+                    Row->Upper = ReadClassValue(hKey, L"UpperFilters");
+                    Row->Lower = ReadClassValue(hKey, L"LowerFilters");
                     RegCloseKey(hKey);
                 }
             }
@@ -3069,6 +3088,9 @@ CommandEnumClasses(
                 }
                 OutputPutsRaw(&Output, Eol);
             }
+            FreeClassValue(Row->Service);
+            FreeClassValue(Row->Upper);
+            FreeClassValue(Row->Lower);
             Count++;
         }
         if (Count == 0)
