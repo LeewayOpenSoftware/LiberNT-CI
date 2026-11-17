@@ -233,6 +233,7 @@ static BOOL logon_check_needed;
 static BOOL idle_fired;
 static ULONGLONG cpu_idle_prev, cpu_total_prev;
 static WCHAR tasks_dir[MAX_PATH];
+static BOOL tasks_dir_has_acls = TRUE;
 
 /* ---------------------------------------------------------------- time */
 
@@ -1052,6 +1053,9 @@ static BOOL is_trusted_task_file(const WCHAR *file)
     PSID owner = NULL, ti;
     DWORD size = 0;
     BOOL defaulted, ok = FALSE;
+
+    /* FAT has no owners; whoever can write system32 there can write anything */
+    if (!tasks_dir_has_acls) return TRUE;
 
     GetFileSecurityW(file, OWNER_SECURITY_INFORMATION, NULL, 0, &size);
     if (!size || !(sd = malloc(size))) return FALSE;
@@ -2359,6 +2363,18 @@ void engine_start(void)
 
     GetSystemDirectoryW(tasks_dir, ARRAYSIZE(tasks_dir) - 8);
     wcscat(tasks_dir, L"\\Tasks");
+
+    {
+        WCHAR root[4] = { tasks_dir[0], ':', '\\', 0 };
+        DWORD fs_flags = 0;
+
+        if (GetVolumeInformationW(root, NULL, 0, NULL, NULL, &fs_flags, NULL, 0) &&
+            !(fs_flags & FS_PERSISTENT_ACLS))
+        {
+            WARN("%s has no ACLs: task file owners are not checked\n", debugstr_w(root));
+            tasks_dir_has_acls = FALSE;
+        }
+    }
 
     wake_event = CreateEventW(NULL, FALSE, FALSE, NULL);
     stop_event = CreateEventW(NULL, TRUE, FALSE, NULL);
