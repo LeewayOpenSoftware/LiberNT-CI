@@ -21,8 +21,18 @@
 
 #define UCX_TAG 'xCcU'
 
+/*
+ * UCX trace is debugger/COM-only (DbgPrintEx IHVDRIVER/INFO) AND compiled out of
+ * free builds. Standing rule: UCX trace must never route to a user-readable sink
+ * and must not persist on retail. It logs opaque WDFOBJECT pointers only under
+ * DBG; this becomes load-bearing at M2 when device-influenced values are traced.
+ */
+#if DBG
 #define UcxLog(_fmt, ...) \
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ucx01000: " _fmt "\n", ##__VA_ARGS__)
+#else
+#define UcxLog(_fmt, ...) ((void)0)
+#endif
 
 /* --------------------------------------------------------------------------
  * DDI implementations (M1: object lifecycle + logging; no hardware I/O yet).
@@ -92,7 +102,7 @@ UcxRootHubCreateInternal(
     NTSTATUS status;
 
     *RootHub = NULL;
-    if (Config == NULL || Config->Size != sizeof(UCX_ROOTHUB_CONFIG))
+    if (Controller == NULL || Config == NULL || Config->Size != sizeof(UCX_ROOTHUB_CONFIG))
         return STATUS_INVALID_PARAMETER;
 
     if (Attributes != NULL)
@@ -131,6 +141,8 @@ UcxUsbDeviceCreateInternal(
     NTSTATUS status;
 
     *UsbDevice = NULL;
+    if (Controller == NULL)
+        return STATUS_INVALID_PARAMETER;
 
     if (Attributes != NULL)
         attribs = *Attributes;
@@ -174,6 +186,8 @@ UcxEndpointCreateInternal(
     NTSTATUS status;
 
     *Endpoint = NULL;
+    if (UsbDevice == NULL)
+        return STATUS_INVALID_PARAMETER;
 
     if (Attributes != NULL)
         attribs = *Attributes;
