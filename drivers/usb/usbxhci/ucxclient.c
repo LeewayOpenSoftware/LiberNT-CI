@@ -10,12 +10,20 @@
  *
  *              M2 step 1: KMDF bind on the real FDO, BAR map, HCSPARAMS/HCCPARAMS,
  *              supported-protocol port map, UCX controller + root hub created in
- *              EvtDevicePrepareHardware. No controller run, no enumeration yet.
+ *              EvtDevicePrepareHardware.
+ *              M2 step 2: controller run in EvtDeviceD0Entry (PCI bus master,
+ *              BIOS handoff, HCRST, DCBAA/command ring/event ring/ERST/scratchpads
+ *              in a WDF common buffer, CONFIG/CRCR/DCBAAP), interrupter 0 armed
+ *              once WDF has connected the WDFINTERRUPT, ISR/DPC event-ring drain
+ *              with every device-written field validated before use, Port Status
+ *              Change -> UcxRootHubPortChanged, quiesce before interrupts are
+ *              disconnected. No device slots / transfers yet (steps 3-4).
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
  */
 
 #include "usbxhci.h"
 #include <wdf.h>
+#include <wdmguid.h>
 #include <ucxclass.h>
 
 #define NDEBUG
@@ -37,10 +45,30 @@
 
 #define XHCI_UCX_MAX_EXT_CAPS 64
 #define XHCI_UCX_RT_INTERRUPTER0_END (0x20 + sizeof(XHCI_INTERRUPTER_REGISTER_SET))
+#define XHCI_UCX_STALL_US 10
+#define XHCI_UCX_BIOS_HANDOFF_US (1000 * 1000)
+
+/* Step 2 ring geometry: one command ring, one single-segment event ring */
+#define XHCI_UCX_CMD_RING_TRBS 256
+#define XHCI_UCX_EVT_RING_TRBS 256
+#define XHCI_UCX_ERST_ENTRIES  1
+
+#ifndef PCI_COMMAND_OFFSET
+#define PCI_COMMAND_OFFSET 0x04
+#endif
+#define XHCI_UCX_PCI_STATUS_OFFSET      0x06
+#define XHCI_UCX_PCI_STATUS_CAP_LIST    0x0010
+#define XHCI_UCX_PCI_CAP_PTR_OFFSET     0x34
+#define XHCI_UCX_PCI_CAP_ID_MSI         0x05
+#define XHCI_UCX_PCI_CAP_ID_MSIX        0x11
+#define XHCI_UCX_PCI_MSI_ENABLE         0x0001
+#define XHCI_UCX_PCI_MSIX_ENABLE        0x8000
 
 /* Same MMIO accessor shape as usbxhci.c (volatile register -> PULONG) */
 #define XHCI_UCX_READ_REG(_reg)        READ_REGISTER_ULONG((PULONG)(ULONG_PTR)(_reg))
 #define XHCI_UCX_WRITE_REG(_reg, _val) WRITE_REGISTER_ULONG((PULONG)(ULONG_PTR)(_reg), (_val))
+
+#define XHCI_UCX_ROUND_PAGE(_x) XHCI_ALIGN_UP((SIZE_T)(_x), PAGE_SIZE)
 
 /* Supplied by the KMDF client stub library (wdfdriverentry_1_33). */
 NTSTATUS
@@ -55,6 +83,10 @@ typedef struct _XHCI_UCX_DEVICE
     WDFINTERRUPT Interrupt;
     UCXCONTROLLER Controller;
     UCXROOTHUB RootHub;
+
+    /* PCI config access (absent on ACPI-enumerated controllers) */
+    BUS_INTERFACE_STANDARD BusInterface;
+    BOOLEAN HaveBusInterface;
 
     /* BAR0 mapping (EvtDevicePrepareHardware .. EvtDeviceReleaseHardware) */
     PUCHAR MmioBase;
@@ -74,13 +106,43 @@ typedef struct _XHCI_UCX_DEVICE
     ULONG MaxSlots;
     ULONG MaxInterrupters;
     ULONG NumberOfPorts;
+    ULONG ScratchpadCount;
     USHORT NumberOf20Ports;
     USHORT NumberOf30Ports;
     UCHAR PortProtocol[XHCI_MAX_PORTS + 1];   /* 1-based; 0 = unknown, 2 = USB2, 3 = USB3 */
+    BOOLEAN Supports64Bit;
+    BOOLEAN PortPowerControl;
+
+    /*
+     * Host-controller DMA memory (one WDF common buffer, page-aligned blocks):
+     * DCBAA | scratchpad pointer array | scratchpad pages | command ring |
+     * event ring (single segment) | ERST. The hardware writes only the event
+     * ring and the scratchpads; everything read back from it is validated.
+     */
+    WDFDMAENABLER DmaEnabler;
+    WDFCOMMONBUFFER HcBuffer;
+    PUCHAR HcVa;
+    PHYSICAL_ADDRESS HcPa;
+    SIZE_T HcLength;
+    SIZE_T DcbaaOffset;
+    SIZE_T ScratchArrayOffset;
+    SIZE_T ScratchBufferOffset;
+    SIZE_T CmdRingOffset;
+    SIZE_T EvtRingOffset;
+    SIZE_T ErstOffset;
+
+    /* Ring software state */
+    ULONG CmdRingEnqueue;
+    ULONG CmdRingCycle;
+    ULONG EvtRingDequeue;
+    ULONG EvtRingCycle;
+    KSPIN_LOCK EventRingLock;
 
     BOOLEAN MessageInterrupt;
     BOOLEAN HardwarePrepared;
-    BOOLEAN ControllerRunning;                 /* set by step 2 (EvtDeviceD0Entry) */
+    BOOLEAN ControllerRunning;
+    BOOLEAN InterruptsArmed;
+    BOOLEAN FatalError;
     volatile LONG PendingUsbSts;               /* USBSTS bits latched by the ISR for the DPC */
 } XHCI_UCX_DEVICE, *PXHCI_UCX_DEVICE;
 
@@ -206,12 +268,68 @@ XhciUcxReadMmio(
     return XHCI_UCX_READ_REG(Dev->MmioBase + Offset);
 }
 
+/* Poll a register until (Mask set) / (Mask clear); bounded by TimeoutUs. */
+static
+BOOLEAN
+XhciUcxWaitRegisterBits(
+    _In_ volatile ULONG *Reg,
+    _In_ ULONG Mask,
+    _In_ BOOLEAN WaitSet,
+    _In_ ULONG TimeoutUs)
+{
+    ULONG Loops = (TimeoutUs + (XHCI_UCX_STALL_US - 1)) / XHCI_UCX_STALL_US;
+
+    while (Loops--)
+    {
+        ULONG Value = XHCI_UCX_READ_REG(Reg);
+
+        if (WaitSet ? ((Value & Mask) == Mask) : ((Value & Mask) == 0))
+            return TRUE;
+
+        KeStallExecutionProcessor(XHCI_UCX_STALL_US);
+    }
+
+    return FALSE;
+}
+
 /*
- * Walk the xHCI extended-capability list and build the per-port protocol map
- * (Supported Protocol capability, id 2). Every hop is bounds-checked against
+ * Find an xHCI extended capability by id. Every hop is bounds-checked against
  * the BAR length and the walk is capped, so a malformed capability chain
  * cannot take the driver outside the mapping or into an infinite loop.
+ * Returns the byte offset of the capability header, or 0.
  */
+static
+ULONG
+XhciUcxFindExtendedCapability(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ UCHAR CapabilityId,
+    _In_ SIZE_T CapabilityLength)
+{
+    ULONG Offset = XHCI_HCC_EXT_CAP_PTR(Dev->HccParams) << 2;   /* dword units -> bytes */
+    ULONG Hops = 0;
+
+    while (Offset != 0 && Hops++ < XHCI_UCX_MAX_EXT_CAPS)
+    {
+        ULONG CapHeader;
+        ULONG Next;
+
+        if (!XhciUcxRangeInBar(Dev, Offset, CapabilityLength))
+            return 0;
+
+        CapHeader = XhciUcxReadMmio(Dev, Offset);
+        if (XHCI_EXT_CAP_ID(CapHeader) == CapabilityId)
+            return Offset;
+
+        Next = XHCI_EXT_CAP_NEXT(CapHeader);
+        if (Next == 0)
+            break;
+        Offset += Next << 2;
+    }
+
+    return 0;
+}
+
+/* Build the per-port protocol map from every Supported Protocol capability. */
 static
 VOID
 XhciUcxBuildProtocolPortMap(
@@ -224,7 +342,7 @@ XhciUcxBuildProtocolPortMap(
     Dev->NumberOf20Ports = 0;
     Dev->NumberOf30Ports = 0;
 
-    Offset = XHCI_HCC_EXT_CAP_PTR(Dev->HccParams) << 2;   /* dword units -> bytes */
+    Offset = XHCI_HCC_EXT_CAP_PTR(Dev->HccParams) << 2;
 
     while (Offset != 0 && Hops++ < XHCI_UCX_MAX_EXT_CAPS)
     {
@@ -278,7 +396,700 @@ XhciUcxBuildProtocolPortMap(
 }
 
 /* --------------------------------------------------------------------------
- * UCX controller / root-hub callbacks (step 1: minimal, no hardware action)
+ * PCI config space through BUS_INTERFACE_STANDARD (step 2)
+ * -------------------------------------------------------------------------- */
+
+static
+BOOLEAN
+XhciUcxPciRead(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG Offset,
+    _Out_writes_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length)
+{
+    if (!Dev->HaveBusInterface || Dev->BusInterface.GetBusData == NULL)
+        return FALSE;
+
+    return (Dev->BusInterface.GetBusData(Dev->BusInterface.Context,
+                                         PCI_WHICHSPACE_CONFIG,
+                                         Buffer, Offset, Length) == Length);
+}
+
+static
+BOOLEAN
+XhciUcxPciWrite(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG Offset,
+    _In_reads_bytes_(Length) PVOID Buffer,
+    _In_ ULONG Length)
+{
+    if (!Dev->HaveBusInterface || Dev->BusInterface.SetBusData == NULL)
+        return FALSE;
+
+    return (Dev->BusInterface.SetBusData(Dev->BusInterface.Context,
+                                         PCI_WHICHSPACE_CONFIG,
+                                         Buffer, Offset, Length) == Length);
+}
+
+/*
+ * TRUE when the device's MSI or MSI-X capability is enabled in config space,
+ * i.e. the bus driver really switched the function to message interrupts.
+ * Walks the PCI capability list with a hop cap.
+ */
+static
+BOOLEAN
+XhciUcxPciMessageInterruptsEnabled(
+    _In_ PXHCI_UCX_DEVICE Dev)
+{
+    USHORT Status = 0;
+    UCHAR CapPtr = 0;
+    ULONG Hops = 0;
+
+    if (!XhciUcxPciRead(Dev, XHCI_UCX_PCI_STATUS_OFFSET, &Status, sizeof(Status)) ||
+        (Status & XHCI_UCX_PCI_STATUS_CAP_LIST) == 0 ||
+        !XhciUcxPciRead(Dev, XHCI_UCX_PCI_CAP_PTR_OFFSET, &CapPtr, sizeof(CapPtr)))
+    {
+        return FALSE;
+    }
+
+    CapPtr &= 0xFC;
+    while (CapPtr >= 0x40 && Hops++ < 48)
+    {
+        UCHAR Header[2];
+        USHORT Control = 0;
+
+        if (!XhciUcxPciRead(Dev, CapPtr, Header, sizeof(Header)))
+            return FALSE;
+
+        if (Header[0] == XHCI_UCX_PCI_CAP_ID_MSI &&
+            XhciUcxPciRead(Dev, (ULONG)CapPtr + 2, &Control, sizeof(Control)) &&
+            (Control & XHCI_UCX_PCI_MSI_ENABLE))
+        {
+            return TRUE;
+        }
+        if (Header[0] == XHCI_UCX_PCI_CAP_ID_MSIX &&
+            XhciUcxPciRead(Dev, (ULONG)CapPtr + 2, &Control, sizeof(Control)) &&
+            (Control & XHCI_UCX_PCI_MSIX_ENABLE))
+        {
+            return TRUE;
+        }
+
+        CapPtr = Header[1] & 0xFC;
+    }
+
+    return FALSE;
+}
+
+/*
+ * Enable memory decode + bus mastering; when the function really runs on
+ * MSI/MSI-X also set Interrupt Disable so an emulator that asserts INTx
+ * alongside MSI (QEMU xhci-pci) cannot storm the shared line. A controller
+ * without config space (ACPI-enumerated) is left as firmware set it up.
+ */
+static
+NTSTATUS
+XhciUcxEnableBusMaster(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    USHORT Command = 0;
+    USHORT NewCommand;
+
+    if (!Dev->HaveBusInterface)
+    {
+        XHCI_UCX_LOG("no PCI config space (ACPI-enumerated controller), keeping firmware MEM/bus-master setup");
+        return STATUS_SUCCESS;
+    }
+
+    if (!XhciUcxPciRead(Dev, PCI_COMMAND_OFFSET, &Command, sizeof(Command)))
+    {
+        XHCI_UCX_LOG("PCI command register read failed");
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    NewCommand = Command | PCI_ENABLE_MEMORY_SPACE | PCI_ENABLE_BUS_MASTER;
+    if (Dev->MessageInterrupt && XhciUcxPciMessageInterruptsEnabled(Dev))
+        NewCommand |= PCI_DISABLE_LEVEL_INTERRUPT;
+
+    if (NewCommand != Command &&
+        !XhciUcxPciWrite(Dev, PCI_COMMAND_OFFSET, &NewCommand, sizeof(NewCommand)))
+    {
+        XHCI_UCX_LOG("PCI command register write failed (cmd %04x -> %04x)", Command, NewCommand);
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+
+    XHCI_UCX_LOG("PCI command %04x -> %04x (MEM+BusMaster%s)", Command, NewCommand,
+                 (NewCommand & PCI_DISABLE_LEVEL_INTERRUPT) ? ", INTx disabled for MSI" : "");
+    return STATUS_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Controller bring-up primitives (step 2) -- all MMIO offsets were validated
+ * against the BAR in PrepareHardware; waits are bounded.
+ * -------------------------------------------------------------------------- */
+
+/* xHCI USB Legacy Support capability: take ownership from the BIOS, mute SMIs. */
+static
+VOID
+XhciUcxBiosHandoff(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    ULONG Offset = XhciUcxFindExtendedCapability(Dev, XHCI_EXT_CAP_ID_LEGACY, 2 * sizeof(ULONG));
+    ULONG Value;
+    ULONG Retry;
+
+    if (Offset == 0)
+        return;
+
+    Value = XhciUcxReadMmio(Dev, Offset + XHCI_LEGACY_SUPPORT_OFFSET);
+    if ((Value & XHCI_HC_BIOS_OWNED) == 0)
+        return;
+
+    XHCI_UCX_WRITE_REG(Dev->MmioBase + Offset + XHCI_LEGACY_SUPPORT_OFFSET, Value | XHCI_HC_OS_OWNED);
+
+    for (Retry = 0; Retry < XHCI_UCX_BIOS_HANDOFF_US / 100; Retry++)
+    {
+        Value = XhciUcxReadMmio(Dev, Offset + XHCI_LEGACY_SUPPORT_OFFSET);
+        if ((Value & XHCI_HC_BIOS_OWNED) == 0)
+            break;
+        KeStallExecutionProcessor(100);
+    }
+
+    if (Value & XHCI_HC_BIOS_OWNED)
+    {
+        /* Tolerant like the legacy path and Windows: continue with shared control */
+        XHCI_UCX_LOG("BIOS kept legacy ownership for %lu us, continuing with shared control",
+                     (ULONG)XHCI_UCX_BIOS_HANDOFF_US);
+        return;
+    }
+
+    Value = XhciUcxReadMmio(Dev, Offset + XHCI_LEGACY_CONTROL_OFFSET);
+    Value &= ~(XHCI_LEGACY_DISABLE_SMI | XHCI_LEGACY_SMI_EVENTS);
+    XHCI_UCX_WRITE_REG(Dev->MmioBase + Offset + XHCI_LEGACY_CONTROL_OFFSET, Value);
+    XHCI_UCX_LOG("BIOS handoff done");
+}
+
+/* Halt (if running) + HCRST + wait CNR clear; clears latched status bits. */
+static
+NTSTATUS
+XhciUcxResetController(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    volatile ULONG *UsbCmd = &Dev->OperationalRegisters->UsbCmd;
+    volatile ULONG *UsbSts = &Dev->OperationalRegisters->UsbSts;
+    ULONG Command = XHCI_UCX_READ_REG(UsbCmd);
+
+    if (Command & XHCI_USBCMD_RS)
+    {
+        XHCI_UCX_WRITE_REG(UsbCmd, Command & ~XHCI_USBCMD_RS);
+        if (!XhciUcxWaitRegisterBits(UsbSts, XHCI_USBSTS_HCH, TRUE, XHCI_WAIT_HALT_US))
+        {
+            XHCI_UCX_LOG("controller failed to halt before reset");
+            return STATUS_DEVICE_HARDWARE_ERROR;
+        }
+    }
+
+    XHCI_UCX_WRITE_REG(UsbCmd, XHCI_USBCMD_HCRST);
+    if (!XhciUcxWaitRegisterBits(UsbCmd, XHCI_USBCMD_HCRST, FALSE, XHCI_WAIT_RESET_US))
+    {
+        XHCI_UCX_LOG("controller reset timed out");
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    }
+    if (!XhciUcxWaitRegisterBits(UsbSts, XHCI_USBSTS_CNR, FALSE, XHCI_WAIT_CNR_US))
+    {
+        XHCI_UCX_LOG("controller not ready after reset");
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    }
+
+    XHCI_UCX_WRITE_REG(UsbSts, XHCI_USBSTS_HCE | XHCI_USBSTS_HSE | XHCI_USBSTS_PCD | XHCI_USBSTS_EINT);
+    return STATUS_SUCCESS;
+}
+
+/* Clear Run/Stop and wait for HCHalted (bounded). PASSIVE_LEVEL callers only. */
+static
+NTSTATUS
+XhciUcxHaltController(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    volatile ULONG *UsbCmd = &Dev->OperationalRegisters->UsbCmd;
+    volatile ULONG *UsbSts = &Dev->OperationalRegisters->UsbSts;
+    ULONG Command = XHCI_UCX_READ_REG(UsbCmd);
+
+    if (Command & XHCI_USBCMD_RS)
+        XHCI_UCX_WRITE_REG(UsbCmd, Command & ~XHCI_USBCMD_RS);
+
+    Dev->ControllerRunning = FALSE;
+
+    if (!XhciUcxWaitRegisterBits(UsbSts, XHCI_USBSTS_HCH, TRUE, XHCI_WAIT_HALT_US))
+    {
+        XHCI_UCX_LOG("halt timed out");
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Allocate (once) the host-controller DMA memory as a WDF common buffer and
+ * lay out the page-aligned blocks. Re-used across stop/start cycles.
+ */
+static
+NTSTATUS
+XhciUcxAllocateHcMemory(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    WDF_DMA_ENABLER_CONFIG DmaConfig;
+    SIZE_T Offset = 0;
+    NTSTATUS Status;
+
+    Dev->DcbaaOffset = Offset;
+    Offset += XHCI_UCX_ROUND_PAGE(((SIZE_T)Dev->MaxSlots + 1) * sizeof(ULONGLONG));
+    Dev->ScratchArrayOffset = Offset;
+    if (Dev->ScratchpadCount != 0)
+        Offset += XHCI_UCX_ROUND_PAGE((SIZE_T)Dev->ScratchpadCount * sizeof(ULONGLONG));
+    Dev->ScratchBufferOffset = Offset;
+    Offset += (SIZE_T)Dev->ScratchpadCount * PAGE_SIZE;
+    Dev->CmdRingOffset = Offset;
+    Offset += XHCI_UCX_ROUND_PAGE(XHCI_UCX_CMD_RING_TRBS * sizeof(XHCI_TRB));
+    Dev->EvtRingOffset = Offset;
+    Offset += XHCI_UCX_ROUND_PAGE(XHCI_UCX_EVT_RING_TRBS * sizeof(XHCI_TRB));
+    Dev->ErstOffset = Offset;
+    Offset += XHCI_UCX_ROUND_PAGE(XHCI_UCX_ERST_ENTRIES * sizeof(XHCI_ERST_ENTRY));
+
+    if (Dev->HcBuffer != NULL)
+    {
+        if (Dev->HcLength >= Offset)
+            return STATUS_SUCCESS;
+
+        /* Geometry grew across a re-prepare: replace the buffer */
+        WdfObjectDelete((WDFOBJECT)Dev->HcBuffer);
+        Dev->HcBuffer = NULL;
+        Dev->HcVa = NULL;
+        Dev->HcLength = 0;
+    }
+
+    if (Dev->DmaEnabler == NULL)
+    {
+        WDF_DMA_ENABLER_CONFIG_INIT(&DmaConfig,
+                                    Dev->Supports64Bit ? WdfDmaProfileScatterGather64
+                                                       : WdfDmaProfileScatterGather,
+                                    XHCI_BULK_MAX_TRANSFER_SIZE);
+        Status = WdfDmaEnablerCreate(Dev->Device, &DmaConfig, WDF_NO_OBJECT_ATTRIBUTES, &Dev->DmaEnabler);
+        if (!NT_SUCCESS(Status))
+        {
+            XHCI_UCX_LOG("WdfDmaEnablerCreate failed 0x%08lX", (ULONG)Status);
+            Dev->DmaEnabler = NULL;
+            return Status;
+        }
+    }
+
+    Status = WdfCommonBufferCreate(Dev->DmaEnabler, Offset, WDF_NO_OBJECT_ATTRIBUTES, &Dev->HcBuffer);
+    if (!NT_SUCCESS(Status))
+    {
+        XHCI_UCX_LOG("WdfCommonBufferCreate(%lu bytes) failed 0x%08lX", (ULONG)Offset, (ULONG)Status);
+        Dev->HcBuffer = NULL;
+        return Status;
+    }
+
+    Dev->HcVa = WdfCommonBufferGetAlignedVirtualAddress(Dev->HcBuffer);
+    Dev->HcPa = WdfCommonBufferGetAlignedLogicalAddress(Dev->HcBuffer);
+    Dev->HcLength = Offset;
+
+    if (Dev->HcVa == NULL || (Dev->HcPa.QuadPart & (PAGE_SIZE - 1)) != 0 ||
+        (!Dev->Supports64Bit && ((ULONGLONG)Dev->HcPa.QuadPart + Offset) > 0x100000000ULL))
+    {
+        XHCI_UCX_LOG("common buffer unusable (page-aligned=%u, 32-bit-reachable=%u)",
+                     ((Dev->HcPa.QuadPart & (PAGE_SIZE - 1)) == 0) ? 1 : 0,
+                     (((ULONGLONG)Dev->HcPa.QuadPart + Offset) <= 0x100000000ULL) ? 1 : 0);
+        WdfObjectDelete((WDFOBJECT)Dev->HcBuffer);
+        Dev->HcBuffer = NULL;
+        Dev->HcVa = NULL;
+        Dev->HcLength = 0;
+        return STATUS_NOT_SUPPORTED;
+    }
+
+    XHCI_UCX_LOG("HC memory %lu bytes (DCBAA %lu entries, %lu scratchpads, cmd ring %u, event ring %u)",
+                 (ULONG)Offset, Dev->MaxSlots + 1, Dev->ScratchpadCount,
+                 XHCI_UCX_CMD_RING_TRBS, XHCI_UCX_EVT_RING_TRBS);
+    return STATUS_SUCCESS;
+}
+
+static
+PHYSICAL_ADDRESS
+XhciUcxHcPhysical(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ SIZE_T Offset)
+{
+    PHYSICAL_ADDRESS Pa;
+
+    Pa.QuadPart = Dev->HcPa.QuadPart + (LONGLONG)Offset;
+    return Pa;
+}
+
+/*
+ * Program the halted, reset controller: page size, DCBAA (+scratchpads),
+ * command ring, CONFIG, interrupter 0 ERST/ERDP/IMOD. Interrupts stay masked.
+ */
+static
+NTSTATUS
+XhciUcxProgramController(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    PXHCI_OPERATIONAL_REGISTERS Op = Dev->OperationalRegisters;
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter = &Dev->RuntimeRegisters->Interrupter[0];
+    PULONGLONG Dcbaa = (PULONGLONG)(Dev->HcVa + Dev->DcbaaOffset);
+    PXHCI_TRB CmdRing = (PXHCI_TRB)(Dev->HcVa + Dev->CmdRingOffset);
+    PXHCI_ERST_ENTRY Erst = (PXHCI_ERST_ENTRY)(Dev->HcVa + Dev->ErstOffset);
+    PHYSICAL_ADDRESS DcbaaPa = XhciUcxHcPhysical(Dev, Dev->DcbaaOffset);
+    PHYSICAL_ADDRESS CmdRingPa = XhciUcxHcPhysical(Dev, Dev->CmdRingOffset);
+    PHYSICAL_ADDRESS EvtRingPa = XhciUcxHcPhysical(Dev, Dev->EvtRingOffset);
+    PHYSICAL_ADDRESS ErstPa = XhciUcxHcPhysical(Dev, Dev->ErstOffset);
+    ULONG PageSizeSupported;
+    ULONGLONG Crcr;
+
+    PageSizeSupported = XHCI_UCX_READ_REG(&Op->PageSize);
+    if ((PageSizeSupported & XHCI_PAGE_SIZE_4K) == 0)
+    {
+        XHCI_UCX_LOG("controller lacks 4K page-size support (PAGESIZE=%08lx)", PageSizeSupported);
+        return STATUS_NOT_SUPPORTED;
+    }
+    XHCI_UCX_WRITE_REG(&Op->PageSize, XHCI_PAGE_SIZE_4K);
+
+    RtlZeroMemory(Dev->HcVa, Dev->HcLength);
+
+    /* DCBAA[0] = scratchpad pointer array (or 0 when the controller needs none) */
+    if (Dev->ScratchpadCount != 0)
+    {
+        PULONGLONG ScratchArray = (PULONGLONG)(Dev->HcVa + Dev->ScratchArrayOffset);
+        ULONGLONG ScratchBase = (ULONGLONG)XhciUcxHcPhysical(Dev, Dev->ScratchBufferOffset).QuadPart;
+        ULONG Index;
+
+        for (Index = 0; Index < Dev->ScratchpadCount; Index++)
+            ScratchArray[Index] = ScratchBase + ((ULONGLONG)Index * PAGE_SIZE);
+
+        Dcbaa[0] = (ULONGLONG)XhciUcxHcPhysical(Dev, Dev->ScratchArrayOffset).QuadPart;
+    }
+
+    /* Command ring: empty, producer cycle 1, link TRB back to the base with Toggle Cycle */
+    Dev->CmdRingEnqueue = 0;
+    Dev->CmdRingCycle = 1;
+    CmdRing[XHCI_UCX_CMD_RING_TRBS - 1].Parameter1 = (ULONG)(CmdRingPa.QuadPart & 0xFFFFFFFF);
+    CmdRing[XHCI_UCX_CMD_RING_TRBS - 1].Parameter2 = (ULONG)(CmdRingPa.QuadPart >> 32);
+    CmdRing[XHCI_UCX_CMD_RING_TRBS - 1].Status = 0;
+    CmdRing[XHCI_UCX_CMD_RING_TRBS - 1].Control =
+        (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
+
+    /* Event ring: one segment, consumer cycle 1 */
+    Dev->EvtRingDequeue = 0;
+    Dev->EvtRingCycle = 1;
+    Erst[0].RingSegmentBaseAddress = (ULONGLONG)EvtRingPa.QuadPart;
+    Erst[0].RingSegmentSize = XHCI_UCX_EVT_RING_TRBS;
+    Erst[0].Reserved = 0;
+
+    KeMemoryBarrier();
+
+    XHCI_UCX_WRITE_REG(&Op->DcbaapLow, (ULONG)(DcbaaPa.QuadPart & 0xFFFFFFFF));
+    XHCI_UCX_WRITE_REG(&Op->DcbaapHigh, (ULONG)(DcbaaPa.QuadPart >> 32));
+
+    Crcr = (ULONGLONG)CmdRingPa.QuadPart | XHCI_TRB_CYCLE;   /* RCS = 1 */
+    XHCI_UCX_WRITE_REG(&Op->CrCrLow, (ULONG)(Crcr & 0xFFFFFFFF));
+    XHCI_UCX_WRITE_REG(&Op->CrCrHigh, (ULONG)(Crcr >> 32));
+
+    XHCI_UCX_WRITE_REG(&Op->Config, Dev->MaxSlots);
+
+    XHCI_UCX_WRITE_REG(&Interrupter->Imod, XHCI_IMOD_DEFAULT);
+    XHCI_UCX_WRITE_REG(&Interrupter->ErstSize, XHCI_UCX_ERST_ENTRIES);
+    XHCI_UCX_WRITE_REG(&Interrupter->ErstBaseLow, (ULONG)(ErstPa.QuadPart & 0xFFFFFFFF));
+    XHCI_UCX_WRITE_REG(&Interrupter->ErstBaseHigh, (ULONG)(ErstPa.QuadPart >> 32));
+    XHCI_UCX_WRITE_REG(&Interrupter->ErdpLow, ((ULONG)(EvtRingPa.QuadPart & 0xFFFFFFFF)) | XHCI_ERDP_BUSY);
+    XHCI_UCX_WRITE_REG(&Interrupter->ErdpHigh, (ULONG)(EvtRingPa.QuadPart >> 32));
+
+    return STATUS_SUCCESS;
+}
+
+/* Set Run/Stop, wait for HCHalted to clear, refuse a controller that latches HCE. */
+static
+NTSTATUS
+XhciUcxRunController(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    volatile ULONG *UsbCmd = &Dev->OperationalRegisters->UsbCmd;
+    volatile ULONG *UsbSts = &Dev->OperationalRegisters->UsbSts;
+    ULONG Command = XHCI_UCX_READ_REG(UsbCmd);
+    ULONG Status;
+
+    XHCI_UCX_WRITE_REG(UsbCmd, Command | XHCI_USBCMD_RS);
+
+    if (!XhciUcxWaitRegisterBits(UsbSts, XHCI_USBSTS_HCH, FALSE, XHCI_WAIT_HALT_US))
+    {
+        XHCI_UCX_LOG("controller failed to leave the halted state");
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    }
+
+    Status = XHCI_UCX_READ_REG(UsbSts);
+    if (Status & XHCI_USBSTS_HCE)
+    {
+        XHCI_UCX_LOG("host controller error latched after run (USBSTS=%08lx)", Status);
+        (VOID)XhciUcxHaltController(Dev);
+        return STATUS_DEVICE_HARDWARE_ERROR;
+    }
+
+    Dev->ControllerRunning = TRUE;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Port power (PPC controllers). PORTSC mixes RW, RW1C and write-1-to-trigger
+ * bits: mask out every change bit, PED (1 = disable!), PR/WPR (reset triggers)
+ * and LWS before OR-ing PP back in.
+ */
+static
+VOID
+XhciUcxPowerOnPorts(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    ULONG Port;
+
+    if (!Dev->PortPowerControl)
+        return;
+
+    for (Port = 1; Port <= Dev->NumberOfPorts; Port++)
+    {
+        volatile ULONG *PortSc = &Dev->OperationalRegisters->PortRegister[Port - 1].PortStatusAndControl;
+        ULONG Value = XHCI_UCX_READ_REG(PortSc);
+
+        if (Value & XHCI_PORTSC_PP)
+            continue;
+
+        Value &= ~(XHCI_PORTSC_CHANGE_MASK | XHCI_PORTSC_PED | XHCI_PORTSC_PR |
+                   XHCI_PORTSC_WPR | XHCI_PORTSC_LWS);
+        XHCI_UCX_WRITE_REG(PortSc, Value | XHCI_PORTSC_PP);
+    }
+}
+
+/* IMAN.IE + USBCMD.INTE. IMAN.IP is RW1C; writing IE alone (bit 0 clear) leaves IP untouched. */
+static
+VOID
+XhciUcxArmInterrupts(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _In_ BOOLEAN Arm)
+{
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter = &Dev->RuntimeRegisters->Interrupter[0];
+    volatile ULONG *UsbCmd = &Dev->OperationalRegisters->UsbCmd;
+    ULONG Command = XHCI_UCX_READ_REG(UsbCmd);
+
+    if (Arm)
+    {
+        Dev->InterruptsArmed = TRUE;
+        KeMemoryBarrier();
+        XHCI_UCX_WRITE_REG(&Interrupter->Iman, XHCI_IMAN_IE);
+        XHCI_UCX_WRITE_REG(UsbCmd, Command | XHCI_USBCMD_INTE);
+    }
+    else
+    {
+        XHCI_UCX_WRITE_REG(UsbCmd, Command & ~XHCI_USBCMD_INTE);
+        XHCI_UCX_WRITE_REG(&Interrupter->Iman, 0);
+        (VOID)XHCI_UCX_READ_REG(&Interrupter->Iman);
+        Dev->InterruptsArmed = FALSE;
+    }
+}
+
+/* --------------------------------------------------------------------------
+ * Event ring (step 2). The ring is device-written: every field is validated
+ * on read before it indexes anything (SEC-3 validate-on-read).
+ * -------------------------------------------------------------------------- */
+
+static
+BOOLEAN
+XhciUcxPointerInCommandRing(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONGLONG Pointer)
+{
+    ULONGLONG Base = (ULONGLONG)XhciUcxHcPhysical(Dev, Dev->CmdRingOffset).QuadPart;
+
+    return (Pointer >= Base &&
+            Pointer < Base + (ULONGLONG)XHCI_UCX_CMD_RING_TRBS * sizeof(XHCI_TRB) &&
+            (Pointer & 0xF) == 0);
+}
+
+/*
+ * Read PORTSC for a validated port, report it to UCX and acknowledge the
+ * change bits. Step 2 note: the controller driver acknowledges the W1C change
+ * bits itself; from step 3 that moves to the root hub's ClearPortFeature path
+ * so the hub driver sees them. Returns TRUE when a change was present.
+ */
+static
+BOOLEAN
+XhciUcxHandlePortChange(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG PortId,
+    _In_ BOOLEAN FromEvent)
+{
+    volatile ULONG *PortScReg;
+    ULONG PortSc;
+    ULONG Changes;
+
+    if (PortId == 0 || PortId > Dev->NumberOfPorts)
+        return FALSE;
+
+    PortScReg = &Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl;
+    PortSc = XHCI_UCX_READ_REG(PortScReg);
+    Changes = PortSc & XHCI_PORTSC_CHANGE_MASK;
+
+    XHCI_UCX_LOG("port %lu %s PORTSC=%08lx connected=%lu enabled=%lu speed=%lu changes=%08lx usb%u",
+                 PortId, FromEvent ? "status change event" : "scan",
+                 PortSc,
+                 (PortSc & XHCI_PORTSC_CCS) ? 1UL : 0UL,
+                 (PortSc & XHCI_PORTSC_PED) ? 1UL : 0UL,
+                 (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT,
+                 Changes,
+                 (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] == 3) ? 3 : 2);
+
+    if (Changes != 0)
+    {
+        /* W1C: write only the change bits; RW bits written as 0 are untouched
+         * except PED/PR/WPR which are write-1 only, so writing 0 is safe. */
+        XHCI_UCX_WRITE_REG(PortScReg, Changes);
+    }
+
+    return (Changes != 0);
+}
+
+/*
+ * Drain interrupter 0's event ring. Called at DISPATCH_LEVEL from the DPC and
+ * once from D0EntryPostInterruptsEnabled. Returns TRUE when a root-hub port
+ * change was seen (the caller notifies UCX outside the lock).
+ */
+static
+BOOLEAN
+XhciUcxDrainEventRing(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _In_ BOOLEAN ScanPorts)
+{
+    PXHCI_TRB EventRing = (PXHCI_TRB)(Dev->HcVa + Dev->EvtRingOffset);
+    PXHCI_INTERRUPTER_REGISTER_SET Interrupter = &Dev->RuntimeRegisters->Interrupter[0];
+    ULONGLONG EvtRingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Dev->EvtRingOffset).QuadPart;
+    BOOLEAN PortChanged = FALSE;
+    ULONG Processed = 0;
+    ULONGLONG Dequeue;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&Dev->EventRingLock, &OldIrql);
+
+    if (!Dev->ControllerRunning || Dev->FatalError || Dev->HcVa == NULL)
+    {
+        KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
+        return FALSE;
+    }
+
+    while (Processed < XHCI_UCX_EVT_RING_TRBS)
+    {
+        PXHCI_TRB EventTrb = &EventRing[Dev->EvtRingDequeue];
+        ULONG Control;
+        ULONG TrbType;
+
+        /* DMA memory, not MMIO: volatile read behind a barrier */
+        KeMemoryBarrier();
+        Control = *(volatile ULONG *)&EventTrb->Control;
+        KeMemoryBarrier();
+
+        if ((Control & XHCI_TRB_CYCLE) != Dev->EvtRingCycle)
+            break;
+
+        TrbType = (Control & XHCI_TRB_TYPE_MASK) >> XHCI_TRB_TYPE_SHIFT;
+
+        switch (TrbType)
+        {
+            case XHCI_TRB_TYPE_PORT_STATUS_CHANGE:
+            {
+                ULONG PortId = (*(volatile ULONG *)&EventTrb->Parameter1 >> 24) & 0xFF;
+
+                if (PortId == 0 || PortId > Dev->NumberOfPorts)
+                {
+                    XHCI_UCX_LOG("ignoring port status change for out-of-range port %lu", PortId);
+                    break;
+                }
+                if (XhciUcxHandlePortChange(Dev, PortId, TRUE))
+                    PortChanged = TRUE;
+                break;
+            }
+
+            case XHCI_TRB_TYPE_COMMAND_COMPLETION:
+            {
+                ULONGLONG CommandPointer = ((ULONGLONG)(*(volatile ULONG *)&EventTrb->Parameter2) << 32) |
+                                           *(volatile ULONG *)&EventTrb->Parameter1;
+                ULONG CompletionCode = XHCI_GET_COMPLETION_CODE(*(volatile ULONG *)&EventTrb->Status);
+                ULONG SlotId = XHCI_TRB_TO_SLOT_ID(Control);
+
+                if (!XhciUcxPointerInCommandRing(Dev, CommandPointer))
+                {
+                    XHCI_UCX_LOG("ignoring command completion outside our command ring (code=%lu slot=%lu)",
+                                 CompletionCode, SlotId);
+                    break;
+                }
+                /* No commands are issued before step 3 */
+                XHCI_UCX_LOG("unexpected command completion code=%lu slot=%lu", CompletionCode, SlotId);
+                break;
+            }
+
+            case XHCI_TRB_TYPE_TRANSFER_EVENT:
+            {
+                ULONG SlotId = XHCI_TRB_TO_SLOT_ID(Control);
+                ULONG EndpointId = XHCI_TRB_TO_EP_ID(Control);
+
+                if (SlotId == 0 || SlotId > Dev->MaxSlots || EndpointId == 0 || EndpointId > 31)
+                {
+                    XHCI_UCX_LOG("ignoring transfer event with out-of-range slot %lu / endpoint %lu",
+                                 SlotId, EndpointId);
+                    break;
+                }
+                /* No endpoints / transfer rings exist before step 4 */
+                XHCI_UCX_LOG("unexpected transfer event slot=%lu endpoint=%lu", SlotId, EndpointId);
+                break;
+            }
+
+            default:
+                XHCI_UCX_TRACE("event type %lu ignored", TrbType);
+                break;
+        }
+
+        Processed++;
+        if (++Dev->EvtRingDequeue >= XHCI_UCX_EVT_RING_TRBS)
+        {
+            Dev->EvtRingDequeue = 0;
+            Dev->EvtRingCycle ^= 1;
+        }
+    }
+
+    if (ScanPorts)
+    {
+        ULONG Port;
+
+        for (Port = 1; Port <= Dev->NumberOfPorts; Port++)
+        {
+            volatile ULONG *PortSc = &Dev->OperationalRegisters->PortRegister[Port - 1].PortStatusAndControl;
+
+            if ((XHCI_UCX_READ_REG(PortSc) & XHCI_PORTSC_CHANGE_MASK) == 0)
+                continue;
+            if (XhciUcxHandlePortChange(Dev, Port, FALSE))
+                PortChanged = TRUE;
+        }
+    }
+
+    /* Publish the dequeue pointer and clear Event Handler Busy */
+    Dequeue = EvtRingPa + ((ULONGLONG)Dev->EvtRingDequeue * sizeof(XHCI_TRB));
+    XHCI_UCX_WRITE_REG(&Interrupter->ErdpLow, ((ULONG)(Dequeue & 0xFFFFFFFF)) | XHCI_ERDP_BUSY);
+    XHCI_UCX_WRITE_REG(&Interrupter->ErdpHigh, (ULONG)(Dequeue >> 32));
+
+    KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
+
+    if (Processed != 0)
+        XHCI_UCX_TRACE("drained %lu event(s)", Processed);
+
+    return PortChanged;
+}
+
+/* --------------------------------------------------------------------------
+ * UCX controller / root-hub callbacks (minimal until steps 3-4)
  * -------------------------------------------------------------------------- */
 
 static
@@ -288,7 +1099,7 @@ XhciUcxEvtControllerReset(
     _In_ UCXCONTROLLER Controller)
 {
     UNREFERENCED_PARAMETER(Controller);
-    XHCI_UCX_LOG("EvtControllerReset (no-op in step 1)");
+    XHCI_UCX_LOG("EvtControllerReset (no-op until step 3)");
     return STATUS_SUCCESS;
 }
 
@@ -319,7 +1130,7 @@ XhciUcxEvtRootHubControlUrb(
     _In_ WDFREQUEST Request)
 {
     UNREFERENCED_PARAMETER(RootHub);
-    /* Root-hub class requests arrive with step 2 (port status) */
+    /* Root-hub class requests (port status / features) arrive with step 3 */
     WdfRequestComplete(Request, STATUS_NOT_IMPLEMENTED);
 }
 
@@ -335,7 +1146,7 @@ XhciUcxEvtRootHubGetInfo(
 }
 
 /* --------------------------------------------------------------------------
- * WDFINTERRUPT: shared-line-safe ISR + DPC skeleton (event ring drain = step 2)
+ * WDFINTERRUPT: shared-line-safe ISR + DPC event-ring drain
  * -------------------------------------------------------------------------- */
 
 static
@@ -360,6 +1171,9 @@ XhciUcxEvtInterruptIsr(
      * line-based INTx may be shared. MSI makes this check always-true-for-us.
      */
     UsbSts = XHCI_UCX_READ_REG(&Dev->OperationalRegisters->UsbSts);
+    if (UsbSts == 0xFFFFFFFF)
+        return FALSE;   /* MMIO gone (surprise removal) */
+
     AckMask = UsbSts & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD | XHCI_USBSTS_HSE | XHCI_USBSTS_HCE);
     Iman = XHCI_UCX_READ_REG(&Dev->RuntimeRegisters->Interrupter[0].Iman);
 
@@ -392,7 +1206,33 @@ XhciUcxEvtInterruptDpc(
     UNREFERENCED_PARAMETER(AssociatedObject);
 
     Pending = (ULONG)InterlockedExchange(&Dev->PendingUsbSts, 0);
-    XHCI_UCX_TRACE("DPC pending USBSTS=%08lx (event ring drain arrives with step 2)", Pending);
+
+    if (Pending & (XHCI_USBSTS_HSE | XHCI_USBSTS_HCE))
+    {
+        /* Fatal from this driver's point of view: stop the controller so a
+         * permanently asserted error bit cannot storm the DPC. */
+        if (!Dev->FatalError && Dev->OperationalRegisters != NULL)
+        {
+            ULONG Command;
+
+            Dev->FatalError = TRUE;
+            XhciUcxArmInterrupts(Dev, FALSE);
+            Command = XHCI_UCX_READ_REG(&Dev->OperationalRegisters->UsbCmd);
+            XHCI_UCX_WRITE_REG(&Dev->OperationalRegisters->UsbCmd, Command & ~XHCI_USBCMD_RS);
+            Dev->ControllerRunning = FALSE;
+            XHCI_UCX_LOG("FATAL host controller error (USBSTS bits %08lx), controller stopped", Pending);
+        }
+        return;
+    }
+
+    if (Pending & (XHCI_USBSTS_EINT | XHCI_USBSTS_PCD))
+    {
+        if (XhciUcxDrainEventRing(Dev, (Pending & XHCI_USBSTS_PCD) != 0) && Dev->RootHub != NULL)
+        {
+            XHCI_UCX_LOG("root hub port change -> UcxRootHubPortChanged");
+            UcxRootHubPortChanged(Dev->RootHub);
+        }
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -435,6 +1275,20 @@ XhciUcxUnmapHardware(
     Dev->RuntimeRegisters = NULL;
     Dev->DoorbellArray = NULL;
     Dev->HardwarePrepared = FALSE;
+}
+
+static
+VOID
+XhciUcxReleaseBusInterface(
+    _Inout_ PXHCI_UCX_DEVICE Dev)
+{
+    if (Dev->HaveBusInterface)
+    {
+        if (Dev->BusInterface.InterfaceDereference != NULL)
+            Dev->BusInterface.InterfaceDereference(Dev->BusInterface.Context);
+        RtlZeroMemory(&Dev->BusInterface, sizeof(Dev->BusInterface));
+        Dev->HaveBusInterface = FALSE;
+    }
 }
 
 /*
@@ -520,11 +1374,20 @@ XhciUcxMapHardware(
     Dev->MaxSlots = XHCI_HCS1_MAX_SLOTS(Dev->HcsParams1);
     Dev->MaxInterrupters = XHCI_HCS1_MAX_INTERRUPTS(Dev->HcsParams1);
     Dev->NumberOfPorts = XHCI_HCS1_MAX_PORTS(Dev->HcsParams1);
+    Dev->ScratchpadCount = XHCI_HCS2_MAX_SCRATCH(Dev->HcsParams2);
+    Dev->Supports64Bit = (BOOLEAN)XHCI_HCC_64BIT_ADDR(Dev->HccParams);
+    Dev->PortPowerControl = (BOOLEAN)XHCI_HCC_PORT_POWER_CONTROL(Dev->HccParams);
 
     if (Dev->MaxSlots == 0 || Dev->NumberOfPorts == 0 || Dev->MaxInterrupters == 0)
     {
         XHCI_UCX_LOG("unsupported controller geometry (MaxSlots=%lu MaxPorts=%lu MaxIntrs=%lu)",
                      Dev->MaxSlots, Dev->NumberOfPorts, Dev->MaxInterrupters);
+        XhciUcxUnmapHardware(Dev);
+        return STATUS_NOT_SUPPORTED;
+    }
+    if (Dev->ScratchpadCount > XHCI_MAX_SCRATCHPADS)
+    {
+        XHCI_UCX_LOG("controller wants %lu scratchpads, max supported %u", Dev->ScratchpadCount, XHCI_MAX_SCRATCHPADS);
         XhciUcxUnmapHardware(Dev);
         return STATUS_NOT_SUPPORTED;
     }
@@ -555,12 +1418,12 @@ XhciUcxMapHardware(
 
     XhciUcxBuildProtocolPortMap(Dev);
 
-    XHCI_UCX_LOG("xHCI %u.%02u BAR len=%lu CAPLENGTH=%lu MaxSlots=%lu MaxIntrs=%lu ports=%lu (USB2=%u USB3=%u) AC64=%lu CSZ=%lu %s interrupt",
+    XHCI_UCX_LOG("xHCI %u.%02u BAR len=%lu CAPLENGTH=%lu MaxSlots=%lu MaxIntrs=%lu ports=%lu (USB2=%u USB3=%u) scratchpads=%lu AC64=%u PPC=%u %s interrupt",
                  (Dev->HciVersion >> 8) & 0xFF, Dev->HciVersion & 0xFF,
                  (ULONG)Dev->MmioLength, Dev->CapabilityLength,
                  Dev->MaxSlots, Dev->MaxInterrupters, Dev->NumberOfPorts,
-                 Dev->NumberOf20Ports, Dev->NumberOf30Ports,
-                 XHCI_HCC_64BIT_ADDR(Dev->HccParams), XHCI_HCC_64B_CONTEXT(Dev->HccParams),
+                 Dev->NumberOf20Ports, Dev->NumberOf30Ports, Dev->ScratchpadCount,
+                 Dev->Supports64Bit ? 1 : 0, Dev->PortPowerControl ? 1 : 0,
                  Dev->MessageInterrupt ? "message" : "line");
 
     Dev->HardwarePrepared = TRUE;
@@ -576,8 +1439,8 @@ XhciUcxCreateUcxObjects(
     UCX_ROOTHUB_CONFIG RootHubConfig;
     NTSTATUS Status;
 
-    /* Objects persist across a stop/start rebalance; only ReleaseHardware's
-     * device teardown (WDF parent deletion) ends their life (contract 7.1). */
+    /* Objects persist across a stop/start rebalance; only the device's own
+     * teardown (WDF parent deletion) ends their life (contract 7.1). */
     if (Dev->Controller != NULL)
         return STATUS_SUCCESS;
 
@@ -627,9 +1490,27 @@ XhciUcxEvtDevicePrepareHardware(
 
     UNREFERENCED_PARAMETER(ResourcesRaw);
 
+    /* PCI config access; absent (ACPI-enumerated) is not an error */
+    if (!Dev->HaveBusInterface)
+    {
+        Status = WdfFdoQueryForInterface(Device, &GUID_BUS_INTERFACE_STANDARD,
+                                         (PINTERFACE)&Dev->BusInterface,
+                                         sizeof(Dev->BusInterface), 1, NULL);
+        Dev->HaveBusInterface = NT_SUCCESS(Status);
+        if (!Dev->HaveBusInterface)
+            RtlZeroMemory(&Dev->BusInterface, sizeof(Dev->BusInterface));
+    }
+
     Status = XhciUcxMapHardware(Dev, ResourcesTranslated);
     if (!NT_SUCCESS(Status))
         return Status;
+
+    Status = XhciUcxAllocateHcMemory(Dev);
+    if (!NT_SUCCESS(Status))
+    {
+        XhciUcxUnmapHardware(Dev);
+        return Status;
+    }
 
     /* Contract 7.1: CREATE the UCX objects here; the controller RUNS in D0Entry */
     Status = XhciUcxCreateUcxObjects(Dev);
@@ -654,11 +1535,19 @@ XhciUcxEvtDeviceReleaseHardware(
 
     UNREFERENCED_PARAMETER(ResourcesTranslated);
 
+    /* The common buffer / DMA enabler stay with the device (reused on re-prepare) */
     XhciUcxUnmapHardware(Dev);
+    XhciUcxReleaseBusInterface(Dev);
     XHCI_UCX_LOG("ReleaseHardware: BAR unmapped");
     return STATUS_SUCCESS;
 }
 
+/*
+ * Contract 7.1 step 2: the controller RUNS here. Interrupts are not connected
+ * yet (WDF connects them after this callback), so interrupter 0 stays masked
+ * until D0EntryPostInterruptsEnabled; any event generated meanwhile sits in
+ * the event ring and is drained there.
+ */
 static
 NTSTATUS
 NTAPI
@@ -667,11 +1556,106 @@ XhciUcxEvtDeviceD0Entry(
     _In_ WDF_POWER_DEVICE_STATE PreviousState)
 {
     PXHCI_UCX_DEVICE Dev = XhciUcxGetDevice(Device);
+    NTSTATUS Status;
 
-    UNREFERENCED_PARAMETER(Dev);
+    if (!Dev->HardwarePrepared || Dev->HcVa == NULL)
+        return STATUS_DEVICE_NOT_READY;
 
-    /* Step 2 sets USBCMD.R/S and arms interrupter 0 here (contract 7.1 step 2) */
-    XHCI_UCX_LOG("D0Entry from state %u (controller run deferred to step 2)", (ULONG)PreviousState);
+    Dev->FatalError = FALSE;
+    Dev->PendingUsbSts = 0;
+
+    Status = XhciUcxEnableBusMaster(Dev);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    XhciUcxBiosHandoff(Dev);
+
+    Status = XhciUcxResetController(Dev);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = XhciUcxProgramController(Dev);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = XhciUcxRunController(Dev);
+    if (!NT_SUCCESS(Status))
+    {
+        /* One retry after a fresh reset, like the legacy path */
+        if (!NT_SUCCESS(XhciUcxResetController(Dev)) ||
+            !NT_SUCCESS(XhciUcxProgramController(Dev)) ||
+            !NT_SUCCESS(XhciUcxRunController(Dev)))
+        {
+            XHCI_UCX_LOG("D0Entry: controller did not start");
+            return STATUS_DEVICE_HARDWARE_ERROR;
+        }
+    }
+
+    XhciUcxPowerOnPorts(Dev);
+
+    XHCI_UCX_LOG("STEP2 controller running (from state %u): USBCMD=%08lx USBSTS=%08lx",
+                 (ULONG)PreviousState,
+                 XHCI_UCX_READ_REG(&Dev->OperationalRegisters->UsbCmd),
+                 XHCI_UCX_READ_REG(&Dev->OperationalRegisters->UsbSts));
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtDeviceD0EntryPostInterruptsEnabled(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE PreviousState)
+{
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetDevice(Device);
+
+    UNREFERENCED_PARAMETER(PreviousState);
+
+    if (!Dev->ControllerRunning)
+        return STATUS_SUCCESS;
+
+    XhciUcxArmInterrupts(Dev, TRUE);
+
+    /* Pick up anything the controller queued before the interrupter was armed
+     * (boot-time connects) and report the current port picture once. */
+    if (XhciUcxDrainEventRing(Dev, TRUE) && Dev->RootHub != NULL)
+    {
+        XHCI_UCX_LOG("initial root hub port change -> UcxRootHubPortChanged");
+        UcxRootHubPortChanged(Dev->RootHub);
+    }
+
+    XHCI_UCX_LOG("STEP2 DONE: interrupter 0 armed (IMAN=%08lx), event ring live",
+                 XHCI_UCX_READ_REG(&Dev->RuntimeRegisters->Interrupter[0].Iman));
+    return STATUS_SUCCESS;
+}
+
+/*
+ * Quiesce while the WDFINTERRUPT is still connected (WDF disconnects it right
+ * after this callback): mask the interrupter, clear Run/Stop, wait HCHalted.
+ * TargetState is recorded for the selective-suspend branch (M4).
+ */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtDeviceD0ExitPreInterruptsDisabled(
+    _In_ WDFDEVICE Device,
+    _In_ WDF_POWER_DEVICE_STATE TargetState)
+{
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetDevice(Device);
+    KIRQL OldIrql;
+
+    if (Dev->OperationalRegisters == NULL || Dev->RuntimeRegisters == NULL)
+        return STATUS_SUCCESS;
+
+    XhciUcxArmInterrupts(Dev, FALSE);
+
+    KeAcquireSpinLock(&Dev->EventRingLock, &OldIrql);
+    Dev->ControllerRunning = FALSE;   /* a racing DPC drain now exits early */
+    KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
+
+    (VOID)XhciUcxHaltController(Dev);
+
+    XHCI_UCX_LOG("D0Exit to state %u: controller halted, interrupter masked", (ULONG)TargetState);
     return STATUS_SUCCESS;
 }
 
@@ -682,12 +1666,9 @@ XhciUcxEvtDeviceD0Exit(
     _In_ WDFDEVICE Device,
     _In_ WDF_POWER_DEVICE_STATE TargetState)
 {
-    PXHCI_UCX_DEVICE Dev = XhciUcxGetDevice(Device);
-
-    UNREFERENCED_PARAMETER(Dev);
-
-    /* Step 5 quiesces (clear R/S, wait HCHalted) and branches on TargetState */
-    XHCI_UCX_LOG("D0Exit to state %u", (ULONG)TargetState);
+    UNREFERENCED_PARAMETER(Device);
+    UNREFERENCED_PARAMETER(TargetState);
+    /* Quiesce happened in D0ExitPreInterruptsDisabled (interrupt still connected there) */
     return STATUS_SUCCESS;
 }
 
@@ -697,7 +1678,11 @@ NTAPI
 XhciUcxEvtDeviceSurpriseRemoval(
     _In_ WDFDEVICE Device)
 {
-    UNREFERENCED_PARAMETER(Device);
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetDevice(Device);
+
+    /* MMIO may already be gone: stop touching the controller from the DPC */
+    Dev->FatalError = TRUE;
+    Dev->ControllerRunning = FALSE;
     XHCI_UCX_LOG("SurpriseRemoval");
 }
 
@@ -721,6 +1706,8 @@ XhciUcxEvtDeviceAdd(
     PnpPowerCallbacks.EvtDevicePrepareHardware = XhciUcxEvtDevicePrepareHardware;
     PnpPowerCallbacks.EvtDeviceReleaseHardware = XhciUcxEvtDeviceReleaseHardware;
     PnpPowerCallbacks.EvtDeviceD0Entry = XhciUcxEvtDeviceD0Entry;
+    PnpPowerCallbacks.EvtDeviceD0EntryPostInterruptsEnabled = XhciUcxEvtDeviceD0EntryPostInterruptsEnabled;
+    PnpPowerCallbacks.EvtDeviceD0ExitPreInterruptsDisabled = XhciUcxEvtDeviceD0ExitPreInterruptsDisabled;
     PnpPowerCallbacks.EvtDeviceD0Exit = XhciUcxEvtDeviceD0Exit;
     PnpPowerCallbacks.EvtDeviceSurpriseRemoval = XhciUcxEvtDeviceSurpriseRemoval;
     WdfDeviceInitSetPnpPowerEventCallbacks(DeviceInit, &PnpPowerCallbacks);
@@ -736,6 +1723,10 @@ XhciUcxEvtDeviceAdd(
     Dev = XhciUcxGetDevice(Device);
     RtlZeroMemory(Dev, sizeof(*Dev));
     Dev->Device = Device;
+    KeInitializeSpinLock(&Dev->EventRingLock);
+
+    /* xHCI contexts/rings want 64-byte alignment; the common buffer is page-aligned anyway */
+    WdfDeviceSetAlignmentRequirement(Device, FILE_64_BYTE_ALIGNMENT);
 
     /* One WDFINTERRUPT over interrupter 0, allocation-agnostic (contract 7.3) */
     WDF_INTERRUPT_CONFIG_INIT(&InterruptConfig, XhciUcxEvtInterruptIsr, XhciUcxEvtInterruptDpc);
