@@ -23,6 +23,9 @@ static volatile LONG Smb2State = SMB2RDR_STATE_STOPPED;
 
 /* ---------------- start / stop ---------------- */
 
+static NTSTATUS Smb2CreateConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp);
+static NTSTATUS Smb2DeleteConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp);
+
 static NTSTATUS NTAPI Smb2RdrStart(IN OUT PRX_CONTEXT RxContext, IN OUT PRDBSS_DEVICE_OBJECT Dev)
 {
     UNREFERENCED_PARAMETER(RxContext);
@@ -1166,7 +1169,8 @@ NTSTATUS NTAPI DriverEntry(IN PDRIVER_OBJECT DriverObject, IN PUNICODE_STRING Re
     }
 
     ext = (PSMB2RDR_DEVICE_EXTENSION)((PUCHAR)Smb2RdrDevice + sizeof(RDBSS_DEVICE_OBJECT));
-    RxDefineNode(ext, SMB2RDR_DEVICE_EXTENSION);
+    ext->NodeTypeCode = NTC_SMB2RDR_DEVICE_EXTENSION;
+    ext->NodeByteSize = sizeof(SMB2RDR_DEVICE_EXTENSION);
     ext->DeviceObject = Smb2RdrDevice;
 
     RtlInitUnicodeString(&linkName, SMB2RDR_SHADOW_DEVICE_NAME);
