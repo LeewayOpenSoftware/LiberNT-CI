@@ -1,0 +1,60 @@
+/*
+ * PROJECT:     LiberNT SMB2 client
+ * LICENSE:     MIT (https://spdx.org/licenses/MIT)
+ * PURPOSE:     SMB2 client engine: connect, negotiate, NTLM session setup (SSPI), tree connect, file operations
+ * COPYRIGHT:   Copyright 2026 Leeway Open Software
+ */
+
+#ifndef _SMB2CLIENT_H
+#define _SMB2CLIENT_H
+
+#include <windows.h>
+#include <stdint.h>
+#include <stddef.h>
+#include "smb2proto.h"
+
+#define SMB2_MAX_IO     65536
+
+/* Directory entry decoded from FileDirectoryInformation */
+typedef struct _SMB2_DIRENT
+{
+    uint64_t EndOfFile;
+    uint64_t AllocationSize;
+    uint64_t LastWriteTime;     /* FILETIME units */
+    uint32_t Attributes;
+    WCHAR Name[260];
+} SMB2_DIRENT;
+
+typedef int (*SMB2_DIR_CALLBACK)(const SMB2_DIRENT *Entry, void *Context);
+
+typedef struct _SMB2_CONN SMB2_CONN;
+
+/* All functions return an NTSTATUS-style value (SMB2_STATUS_SUCCESS on success). */
+uint32_t Smb2Connect(const WCHAR *Host, unsigned short Port, SMB2_CONN **Conn);
+void Smb2Disconnect(SMB2_CONN *Conn);
+uint32_t Smb2Negotiate(SMB2_CONN *Conn);
+/* User == NULL: use the caller's default credentials. */
+uint32_t Smb2SessionSetup(SMB2_CONN *Conn, const WCHAR *Host, const WCHAR *User, const WCHAR *Domain, const WCHAR *Password);
+uint32_t Smb2TreeConnect(SMB2_CONN *Conn, const WCHAR *Host, const WCHAR *Share, uint32_t *TreeId);
+uint32_t Smb2TreeDisconnect(SMB2_CONN *Conn, uint32_t TreeId);
+uint32_t Smb2Logoff(SMB2_CONN *Conn);
+
+/* Path is relative to the share, backslash separated, no leading separator ("" is the share root). */
+uint32_t Smb2Create(SMB2_CONN *Conn, uint32_t TreeId, const WCHAR *Path, uint32_t DesiredAccess,
+                    uint32_t CreateDisposition, uint32_t CreateOptions, SMB2_FILE_ID *FileId,
+                    uint64_t *EndOfFile, uint32_t *Attributes);
+uint32_t Smb2Close(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId);
+uint32_t Smb2Read(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset,
+                  uint32_t Length, void *Buffer, uint32_t *BytesRead);
+uint32_t Smb2QueryDirectory(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId,
+                            SMB2_DIR_CALLBACK Callback, void *Context);
+
+uint16_t Smb2ConnDialect(const SMB2_CONN *Conn);
+int Smb2ConnSigned(const SMB2_CONN *Conn);
+
+/* Signing primitives (smb2sign.c) */
+void Smb2HmacSha256(const uint8_t *Key, size_t KeyLen, const uint8_t *Msg, size_t MsgLen, uint8_t Out[32]);
+void Smb2SignMessage(const uint8_t *Key16, uint8_t *Msg, size_t Len);
+int Smb2VerifyMessage(const uint8_t *Key16, const uint8_t *Msg, size_t Len);
+
+#endif /* _SMB2CLIENT_H */
