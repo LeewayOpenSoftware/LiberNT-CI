@@ -15,6 +15,7 @@ option(HOST_TEST_KE "Build native kernel executive tests" ON)
 option(HOST_TEST_NTDLL "Build native NT loader and runtime tests" ON)
 option(HOST_TEST_RTL "Build native kernel runtime library tests" ON)
 option(HOST_TEST_I8042 "Build native PS/2 controller tests" ON)
+option(HOST_TEST_SAC "Build native Special Administration Console driver tests" ON)
 option(HOST_TEST_ACPI "Build native firmware table tests" ON)
 option(HOST_TEST_HALTIME "Build native HAL time arithmetic tests" ON)
 option(HOST_TEST_NDIS "Build native NDIS WDI tests" ON)
@@ -43,6 +44,10 @@ endif()
 
 if(BUILD_TESTING AND HOST_TEST_I8042)
     add_subdirectory(i8042)
+endif()
+
+if(BUILD_TESTING AND HOST_TEST_SAC)
+    add_subdirectory(sac)
 endif()
 
 if(BUILD_TESTING AND HOST_TEST_KE)
