@@ -675,6 +675,9 @@ typedef struct _DnsRRSet {
 
 #define DNS_QUERY_RESULTS_VERSION1 0x1
 
+#ifndef __WIDL__
+// HACK
+
 typedef struct _DNS_QUERY_RESULT {
   ULONG Version;
   DNS_STATUS QueryStatus;
@@ -684,7 +687,7 @@ typedef struct _DNS_QUERY_RESULT {
 } DNS_QUERY_RESULT, *PDNS_QUERY_RESULT;
 
 typedef VOID
-(CALLBACK *DNS_QUERY_COMPLETION_ROUTINE)(
+(CALLBACK DNS_QUERY_COMPLETION_ROUTINE)(
   _In_ PVOID pQueryContext,
   _In_ PDNS_QUERY_RESULT pQueryResults);
 typedef DNS_QUERY_COMPLETION_ROUTINE *PDNS_QUERY_COMPLETION_ROUTINE;
@@ -706,9 +709,6 @@ typedef struct _DNS_QUERY_REQUEST {
 typedef struct _DNS_QUERY_CANCEL {
   CHAR Reserved[32];
 } DNS_QUERY_CANCEL, *PDNS_QUERY_CANCEL;
-
-#ifndef __WIDL__
-// HACK
 
 DNS_STATUS
 WINAPI

@@ -76,7 +76,7 @@ void func_DnsQueryEx(void)
     Status = DnsQueryEx(&Request, &Results, NULL);
     ok(Status == ERROR_INVALID_PARAMETER, "NULL name: %lu\n", Status);
     Request.QueryName = L"localhost";
-    Request.pDnsExtraQueryInfo = &Results;
+    Request.pDnsExtraQueryInfo = (PDNS_EXTRA_QUERY_INFO)&Results;
     Status = DnsQueryEx(&Request, &Results, NULL);
     ok(Status == ERROR_INVALID_PARAMETER, "Reserved info: %lu\n", Status);
     Request.pDnsExtraQueryInfo = NULL;
