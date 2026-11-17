@@ -766,3 +766,87 @@ uint32_t Smb2QueryDirectoryRaw(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID
     free(r);
     return SMB2_STATUS_SUCCESS;
 }
+
+/* 2.2.21 WRITE, 2.2.22 response */
+uint32_t Smb2Write(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset,
+                   const void *Data, uint32_t Length, uint32_t *Written)
+{
+    size_t bodylen = 48 + (Length ? Length : 1), rlen;
+    uint8_t *body, *r;
+    uint32_t st;
+
+    *Written = 0;
+    if (Length > SMB2_MAX_IO)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    body = (uint8_t *)calloc(1, bodylen);
+    if (!body)
+        return SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    Smb2Put16(body, 0, 49);
+    Smb2Put16(body, 2, SMB2_HEADER_SIZE + 48);          /* DataOffset */
+    Smb2Put32(body, 4, Length);
+    Smb2Put64(body, 8, Offset);
+    Smb2Put64(body, 16, FileId->Persistent);
+    Smb2Put64(body, 24, FileId->Volatile);
+    if (Length)
+        memcpy(body + 48, Data, Length);
+    st = Transact(c, SMB2_WRITE, TreeId, body, bodylen, &r, &rlen);
+    free(body);
+    if (st != SMB2_STATUS_SUCCESS)
+    {
+        free(r);
+        return st;
+    }
+    if (rlen < SMB2_HEADER_SIZE + 16 || Smb2Get16(r, SMB2_HEADER_SIZE) != 17 ||
+        Smb2Get32(r, SMB2_HEADER_SIZE + 4) > Length)
+    {
+        free(r);
+        return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+    }
+    *Written = Smb2Get32(r, SMB2_HEADER_SIZE + 4);
+    free(r);
+    return SMB2_STATUS_SUCCESS;
+}
+
+/* 2.2.17 FLUSH */
+uint32_t Smb2Flush(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId)
+{
+    uint8_t body[24], *r;
+    size_t rlen;
+    uint32_t st;
+
+    memset(body, 0, sizeof(body));
+    Smb2Put16(body, 0, 24);
+    Smb2Put64(body, 8, FileId->Persistent);
+    Smb2Put64(body, 16, FileId->Volatile);
+    st = Transact(c, SMB2_FLUSH, TreeId, body, sizeof(body), &r, &rlen);
+    free(r);
+    return st;
+}
+
+/* 2.2.39 SET_INFO (file information) */
+uint32_t Smb2SetInfo(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint8_t InfoClass,
+                     const void *Buffer, uint32_t BufferLength)
+{
+    size_t bodylen = 32 + (BufferLength ? BufferLength : 1), rlen;
+    uint8_t *body, *r;
+    uint32_t st;
+
+    if (BufferLength > SMB2_MAX_IO)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    body = (uint8_t *)calloc(1, bodylen);
+    if (!body)
+        return SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    Smb2Put16(body, 0, 33);
+    body[2] = SMB2_0_INFO_FILE;
+    body[3] = InfoClass;
+    Smb2Put32(body, 4, BufferLength);
+    Smb2Put16(body, 8, SMB2_HEADER_SIZE + 32);          /* BufferOffset */
+    Smb2Put64(body, 16, FileId->Persistent);
+    Smb2Put64(body, 24, FileId->Volatile);
+    if (BufferLength)
+        memcpy(body + 32, Buffer, BufferLength);
+    st = Transact(c, SMB2_SET_INFO, TreeId, body, bodylen, &r, &rlen);
+    free(body);
+    free(r);
+    return st;
+}

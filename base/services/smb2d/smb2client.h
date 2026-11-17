@@ -74,6 +74,14 @@ uint32_t Smb2Read(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, 
 uint32_t Smb2QueryDirectory(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId,
                             SMB2_DIR_CALLBACK Callback, void *Context);
 
+/* Write at most SMB2_MAX_IO bytes; Written is what the server accepted */
+uint32_t Smb2Write(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset,
+                   const void *Data, uint32_t Length, uint32_t *Written);
+uint32_t Smb2Flush(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId);
+/* InfoType SMB2_0_INFO_FILE with a FILE_*_INFORMATION class and its MS-FSCC buffer */
+uint32_t Smb2SetInfo(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint8_t InfoClass,
+                     const void *Buffer, uint32_t BufferLength);
+
 uint16_t Smb2ConnDialect(const SMB2_CONN *Conn);
 int Smb2ConnSigned(const SMB2_CONN *Conn);
 

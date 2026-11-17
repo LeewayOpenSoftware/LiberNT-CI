@@ -354,6 +354,70 @@ static LONG DoQueryDir(const BYTE *payload, DWORD length, BYTE *reply, DWORD *re
     return (LONG)st;
 }
 
+static LONG DoWrite(const BYTE *payload, DWORD length, BYTE *reply, DWORD *replyLen)
+{
+    const SMB2RDR_WRITE_REQ *req = (const SMB2RDR_WRITE_REQ *)payload;
+    OPENFILE *f;
+    uint32_t n = 0, st;
+
+    if (length < sizeof(*req) || req->Length > SMB2RDR_MAX_IO || req->Length > length - sizeof(*req))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    f = FindFile(req->FileHandle);
+    if (!f)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    st = Smb2Write(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId, req->Offset, payload + sizeof(*req),
+                   req->Length, &n);
+    *(ULONG *)reply = n;
+    *replyLen = sizeof(ULONG);
+    return (LONG)st;
+}
+
+static LONG DoSetInfo(const BYTE *payload, DWORD length)
+{
+    const SMB2RDR_SETINFO_REQ *req = (const SMB2RDR_SETINFO_REQ *)payload;
+    OPENFILE *f;
+    DWORD want;
+
+    if (length < sizeof(*req) || req->BufferLength > length - sizeof(*req))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    /* Only the classes the redirector sends, each with its exact MS-FSCC size */
+    switch (req->InfoClass)
+    {
+        case SMB2_FILE_BASIC_INFORMATION:
+            want = 40;
+            break;
+        case SMB2_FILE_DISPOSITION_INFORMATION:
+            want = 1;
+            break;
+        case SMB2_FILE_ALLOCATION_INFORMATION:
+        case SMB2_FILE_END_OF_FILE_INFORMATION:
+            want = 8;
+            break;
+        default:
+            return ST_NOT_SUPPORTED;
+    }
+    if (req->BufferLength != want)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    f = FindFile(req->FileHandle);
+    if (!f)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    return (LONG)Smb2SetInfo(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId, (uint8_t)req->InfoClass,
+                             payload + sizeof(*req), req->BufferLength);
+}
+
+static LONG DoFlush(const BYTE *payload, DWORD length)
+{
+    const SMB2RDR_HANDLE_REQ *req = (const SMB2RDR_HANDLE_REQ *)payload;
+    OPENFILE *f;
+
+    if (length < sizeof(*req))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    f = FindFile(req->Handle);
+    if (!f)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    return (LONG)Smb2Flush(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId);
+}
+
 static void Serve(HANDLE dev)
 {
     static BYTE reqbuf[sizeof(SMB2RDR_UPCALL) + SMB2RDR_MAX_PAYLOAD];
@@ -401,6 +465,15 @@ static void Serve(HANDLE dev)
                 break;
             case SMB2RDR_UP_READ:
                 status = DoRead(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
+                break;
+            case SMB2RDR_UP_WRITE:
+                status = DoWrite(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
+                break;
+            case SMB2RDR_UP_SETINFO:
+                status = DoSetInfo(reqbuf + sizeof(*up), up->Length);
+                break;
+            case SMB2RDR_UP_FLUSH:
+                status = DoFlush(reqbuf + sizeof(*up), up->Length);
                 break;
             case SMB2RDR_UP_QUERYDIR:
                 status = DoQueryDir(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);

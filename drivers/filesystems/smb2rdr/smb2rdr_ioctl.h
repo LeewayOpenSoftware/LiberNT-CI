@@ -45,6 +45,10 @@
 #define SMB2RDR_UP_READ             7   /* payload: SMB2RDR_READ_REQ; reply: the data */
 #define SMB2RDR_UP_QUERYDIR         8   /* payload: SMB2RDR_QUERYDIR_REQ; reply: raw FILE_*_INFORMATION entries */
 
+#define SMB2RDR_UP_WRITE            9   /* payload: SMB2RDR_WRITE_REQ + data; reply: ULONG bytes written */
+#define SMB2RDR_UP_SETINFO          10  /* payload: SMB2RDR_SETINFO_REQ + buffer */
+#define SMB2RDR_UP_FLUSH            11  /* payload: SMB2RDR_HANDLE_REQ (file handle) */
+
 /*
  * Handles are opaque 64-bit values owned by the daemon (it maps them to connection, tree and file ids).
  * 0 is never a valid handle.
@@ -112,6 +116,24 @@ typedef struct _SMB2RDR_QUERYDIR_REQ
     unsigned long PatternLength;    /* bytes of Pattern, 0 means "*" */
     /* WCHAR Pattern[] follows */
 } SMB2RDR_QUERYDIR_REQ;
+
+typedef struct _SMB2RDR_WRITE_REQ
+{
+    unsigned long long FileHandle;
+    unsigned long long Offset;
+    unsigned long Length;           /* bytes of data following, at most SMB2RDR_MAX_IO */
+    unsigned long Reserved;
+    /* data follows */
+} SMB2RDR_WRITE_REQ;
+
+/* Classes the daemon accepts: 4 basic, 13 disposition, 19 allocation, 20 end of file (MS-FSCC layouts) */
+typedef struct _SMB2RDR_SETINFO_REQ
+{
+    unsigned long long FileHandle;
+    unsigned long InfoClass;        /* FILE_INFORMATION_CLASS value */
+    unsigned long BufferLength;     /* bytes of buffer following */
+    /* buffer follows */
+} SMB2RDR_SETINFO_REQ;
 
 /* One request moves at most this many bytes of file or directory data */
 #define SMB2RDR_MAX_IO          (60 * 1024)

@@ -6,9 +6,9 @@
  *
  * The driver holds no protocol code: every network operation is an upcall to smb2d (see upcall.c).
  * It registers with Mup through RDBSS, takes the control IOCTLs from the daemon, resolves server names
- * (SrvCall) and shares (VNetRoot) through the daemon, and serves open, close, read, directory listing and
- * basic file/volume information. The mount is read-only: everything that writes fails with
- * STATUS_ACCESS_DENIED or STATUS_NOT_IMPLEMENTED until the write path step.
+ * (SrvCall) and shares (VNetRoot) through the daemon, and serves create, close, read, write, directory
+ * listing, basic/standard file information and the set-information classes basic, disposition,
+ * end-of-file and allocation. Rename, links, locks, EAs and security descriptors are not implemented.
  */
 
 #include "smb2rdr.h"
@@ -332,10 +332,6 @@ done:
 
 /* ---------------- opens ---------------- */
 
-#define SMB2_WRITE_ACCESS_MASK \
-    (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_DELETE_CHILD | FILE_WRITE_ATTRIBUTES | DELETE | \
-     WRITE_DAC | WRITE_OWNER)
-
 /* Close the daemon's file handle of an open that RDBSS will never see */
 static VOID Smb2CloseRemote(ULONGLONG FileHandle)
 {
@@ -345,10 +341,7 @@ static VOID Smb2CloseRemote(ULONGLONG FileHandle)
     Smb2Upcall(SMB2RDR_UP_CLOSE, &req, sizeof(req), NULL, 0, NULL);
 }
 
-/*
- * MRxCreate. Read-only for now: any write, delete or security-write access, or a disposition other
- * than FILE_OPEN, is refused with STATUS_ACCESS_DENIED (as a read-only share would).
- */
+/* MRxCreate: the access, disposition and options go to the server, which decides. */
 static NTSTATUS NTAPI Smb2Create(IN OUT PRX_CONTEXT RxContext)
 {
     PNT_CREATE_PARAMETERS params = &RxContext->Create.NtCreateParameters;
@@ -365,9 +358,8 @@ static NTSTATUS NTAPI Smb2Create(IN OUT PRX_CONTEXT RxContext)
 
     if (!vroot || !vroot->TreeHandle)
         return STATUS_CONNECTION_DISCONNECTED;
-    if ((params->DesiredAccess & SMB2_WRITE_ACCESS_MASK) || params->Disposition != FILE_OPEN ||
-        (params->CreateOptions & (FILE_DELETE_ON_CLOSE | FILE_OPEN_BY_FILE_ID)))
-        return STATUS_ACCESS_DENIED;
+    if (params->CreateOptions & FILE_OPEN_BY_FILE_ID)
+        return STATUS_NOT_SUPPORTED;
 
     /* The name is relative to the net root with a leading backslash; SMB2 wants none ("" is the root). */
     path = name->Buffer;
@@ -660,6 +652,129 @@ static NTSTATUS NTAPI Smb2QueryVolumeInfo(IN OUT PRX_CONTEXT RxContext)
     }
 }
 
+/* ---------------- write and set information ---------------- */
+
+static NTSTATUS NTAPI Smb2Write(IN OUT PRX_CONTEXT RxContext)
+{
+    PLOWIO_CONTEXT low = &RxContext->LowIoContext;
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+    PMDL mdl = low->ParamsFor.ReadWrite.Buffer;
+    ULONG count = low->ParamsFor.ReadWrite.ByteCount, total = 0;
+    ULONGLONG offset = low->ParamsFor.ReadWrite.ByteOffset;
+    PUCHAR system;
+    PSMB2RDR_WRITE_REQ req;
+    NTSTATUS status = STATUS_SUCCESS;
+
+    RxContext->IoStatusBlock.Information = 0;
+    if (!fobx || !fobx->FileHandle || fobx->IsDirectory)
+        return STATUS_INVALID_DEVICE_REQUEST;
+    if (!count)
+        return STATUS_SUCCESS;
+    if (!mdl)
+        return STATUS_INVALID_USER_BUFFER;
+    system = MmGetSystemAddressForMdlSafe(mdl, NormalPagePriority);
+    if (!system)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    req = RxAllocatePoolWithTag(PagedPool, sizeof(*req) + SMB2RDR_MAX_IO, SMB2RDR_TAG);
+    if (!req)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    while (total < count)
+    {
+        ULONG chunk = count - total, written = 0, replyLen = 0;
+
+        if (chunk > SMB2RDR_MAX_IO)
+            chunk = SMB2RDR_MAX_IO;
+        RtlZeroMemory(req, sizeof(*req));
+        req->FileHandle = fobx->FileHandle;
+        req->Offset = offset + total;
+        req->Length = chunk;
+        RtlCopyMemory(req + 1, system + total, chunk);
+        status = Smb2Upcall(SMB2RDR_UP_WRITE, req, sizeof(*req) + chunk, &written, sizeof(written), &replyLen);
+        if (!NT_SUCCESS(status))
+            break;
+        if (replyLen != sizeof(written) || written > chunk)
+        {
+            status = STATUS_INVALID_NETWORK_RESPONSE;
+            break;
+        }
+        total += written;
+        if (written < chunk)
+            break;                      /* the server took less: report what was written */
+    }
+    RxFreePool(req);
+    if (total)
+        status = STATUS_SUCCESS;        /* partial progress is reported through the byte count */
+    RxContext->IoStatusBlock.Information = total;
+    return status;
+}
+
+/* Send one set-information buffer to the daemon */
+static NTSTATUS Smb2SetInfoUpcall(ULONGLONG FileHandle, ULONG InfoClass, const VOID *Buffer, ULONG Length)
+{
+    PSMB2RDR_SETINFO_REQ req;
+    NTSTATUS status;
+    ULONG total = sizeof(*req) + Length;
+
+    req = RxAllocatePoolWithTag(PagedPool, total, SMB2RDR_TAG);
+    if (!req)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(req, sizeof(*req));
+    req->FileHandle = FileHandle;
+    req->InfoClass = InfoClass;
+    req->BufferLength = Length;
+    RtlCopyMemory(req + 1, Buffer, Length);
+    status = Smb2Upcall(SMB2RDR_UP_SETINFO, req, total, NULL, 0, NULL);
+    RxFreePool(req);
+    return status;
+}
+
+static NTSTATUS NTAPI Smb2SetFileInfo(IN OUT PRX_CONTEXT RxContext)
+{
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+    PVOID buffer = RxContext->Info.Buffer;
+    LONG length = RxContext->Info.Length;
+
+    if (!fobx || !fobx->FileHandle)
+        return STATUS_INVALID_PARAMETER;
+    if (!buffer)
+        return STATUS_INVALID_USER_BUFFER;
+
+    switch (RxContext->Info.FileInformationClass)
+    {
+        case FileBasicInformation:
+            if (length < (LONG)sizeof(FILE_BASIC_INFORMATION))
+                return STATUS_INFO_LENGTH_MISMATCH;
+            return Smb2SetInfoUpcall(fobx->FileHandle, FileBasicInformation, buffer, sizeof(FILE_BASIC_INFORMATION));
+
+        case FileDispositionInformation:
+        {
+            BOOLEAN deleteFile;
+
+            if (length < (LONG)sizeof(FILE_DISPOSITION_INFORMATION))
+                return STATUS_INFO_LENGTH_MISMATCH;
+            deleteFile = ((PFILE_DISPOSITION_INFORMATION)buffer)->DeleteFile ? TRUE : FALSE;
+            return Smb2SetInfoUpcall(fobx->FileHandle, FileDispositionInformation, &deleteFile, sizeof(deleteFile));
+        }
+
+        case FileEndOfFileInformation:
+            if (length < (LONG)sizeof(FILE_END_OF_FILE_INFORMATION))
+                return STATUS_INFO_LENGTH_MISMATCH;
+            return Smb2SetInfoUpcall(fobx->FileHandle, FileEndOfFileInformation, buffer,
+                                     sizeof(FILE_END_OF_FILE_INFORMATION));
+
+        case FileAllocationInformation:
+            if (length < (LONG)sizeof(FILE_ALLOCATION_INFORMATION))
+                return STATUS_INFO_LENGTH_MISMATCH;
+            return Smb2SetInfoUpcall(fobx->FileHandle, FileAllocationInformation, buffer,
+                                     sizeof(FILE_ALLOCATION_INFORMATION));
+
+        default:
+            /* rename, link, position ... */
+            return STATUS_NOT_SUPPORTED;
+    }
+}
+
 /* ---------------- everything else: not yet ---------------- */
 
 static NTSTATUS NTAPI Smb2NotImplemented(PRX_CONTEXT RxContext)
@@ -711,13 +826,13 @@ static NTSTATUS NTAPI Smb2IsLockRealizable(IN OUT PMRX_FCB Fcb, IN PLARGE_INTEGE
     return STATUS_NOT_IMPLEMENTED;
 }
 
+/* The server allocates on demand: the new allocation is simply the new size */
 static ULONG NTAPI Smb2ExtendFile(IN OUT PRX_CONTEXT RxContext, IN OUT PLARGE_INTEGER NewFileSize,
                                   OUT PLARGE_INTEGER NewAllocationSize)
 {
     UNREFERENCED_PARAMETER(RxContext);
-    UNREFERENCED_PARAMETER(NewFileSize);
-    UNREFERENCED_PARAMETER(NewAllocationSize);
-    return (ULONG)STATUS_NOT_IMPLEMENTED;
+    *NewAllocationSize = *NewFileSize;
+    return STATUS_SUCCESS;
 }
 
 static NTSTATUS NTAPI Smb2CompleteBufferingStateChange(IN OUT PRX_CONTEXT RxContext, IN OUT PMRX_SRV_OPEN SrvOpen,
@@ -779,10 +894,10 @@ static NTSTATUS Smb2InitOps(VOID)
     Smb2RdrOps.MRxQuerySdInfo = Smb2NotImplemented;
     Smb2RdrOps.MRxSetSdInfo = Smb2NotImplemented;
     Smb2RdrOps.MRxQueryFileInfo = Smb2QueryFileInfo;
-    Smb2RdrOps.MRxSetFileInfo = Smb2NotImplemented;
+    Smb2RdrOps.MRxSetFileInfo = Smb2SetFileInfo;
     Smb2RdrOps.MRxComputeNewBufferingState = Smb2ComputeNewBufferingState;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_READ] = Smb2Read;
-    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_WRITE] = Smb2NotImplemented;
+    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_WRITE] = Smb2Write;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_SHAREDLOCK] = Smb2NotImplemented;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_EXCLUSIVELOCK] = Smb2NotImplemented;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_UNLOCK] = Smb2NotImplemented;

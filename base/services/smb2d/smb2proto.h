@@ -81,6 +81,14 @@
 #define SMB2_RESTART_SCANS               0x01
 #define SMB2_RETURN_SINGLE_ENTRY         0x02
 
+/* Set info (2.2.39) */
+#define SMB2_0_INFO_FILE                 0x01
+#define SMB2_FILE_BASIC_INFORMATION      4
+#define SMB2_FILE_RENAME_INFORMATION     10
+#define SMB2_FILE_DISPOSITION_INFORMATION 13
+#define SMB2_FILE_ALLOCATION_INFORMATION 19
+#define SMB2_FILE_END_OF_FILE_INFORMATION 20
+
 /* NTSTATUS values the client logic cares about */
 #define SMB2_STATUS_SUCCESS                  0x00000000u
 #define SMB2_STATUS_PENDING                  0x00000103u
