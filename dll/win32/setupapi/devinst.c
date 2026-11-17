@@ -7459,7 +7459,8 @@ SetupDiInstallDevice(
                   debugstr_w(SelectedDriver->InfFileDetails->FileName), SigState);
 
             if (SetupapiGetVerifyPolicy() == 2 &&
-                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID))
+                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID ||
+                 SigState == PACKAGE_SIG_UNTRUSTED))
             {
                 SetLastError(ERROR_INVALID_IMAGE_HASH);
                 goto cleanup;

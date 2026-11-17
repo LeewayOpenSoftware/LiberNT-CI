@@ -384,6 +384,7 @@ SETUPAPI_StageDriverPackage(
 #define PACKAGE_SIG_SIGNED_VALID    1
 #define PACKAGE_SIG_HASH_MISMATCH   2
 #define PACKAGE_SIG_CATALOG_INVALID 3
+#define PACKAGE_SIG_UNTRUSTED       4
 
 DWORD
 SetupapiGetVerifyPolicy(VOID);
