@@ -3318,12 +3318,16 @@ EnumInterfaceClass(
                 Needle[0] = L'#';
                 lstrcpynW(Needle + 1, Row->ClassGuid, _countof(Needle) - 1);
                 CharLowerW(Needle);
-                Found = wcsstr(Lower, Needle);
-                if (Found)
+                /* An instance id may embed the same GUID; take the hit that ends the interface id. */
+                for (Found = wcsstr(Lower, Needle); Found; Found = wcsstr(Found + 1, Needle))
                 {
                     Ref = Row->Path + (Found - Lower) + wcslen(Needle);
-                    if (Ref[0] == L'\\')
-                        Row->Reference = Ref + 1;
+                    if (Ref[0] == L'\\' || Ref[0] == UNICODE_NULL)
+                    {
+                        if (Ref[0] == L'\\')
+                            Row->Reference = Ref + 1;
+                        break;
+                    }
                 }
                 HeapFree(GetProcessHeap(), 0, Lower);
             }
