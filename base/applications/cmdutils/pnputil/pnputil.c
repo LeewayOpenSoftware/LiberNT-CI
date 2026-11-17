@@ -2288,6 +2288,8 @@ IsInsideDirectory(
 {
     SIZE_T Length = wcslen(Root);
 
+    if (Length != 0 && Root[Length - 1] == L'\\')
+        Length--;
     return _wcsnicmp(Path, Root, Length) == 0 && Path[Length] == L'\\' && Path[Length + 1] != UNICODE_NULL;
 }
 
@@ -2356,13 +2358,10 @@ ExportCopyTree(
         }
         else
         {
-            Attributes = GetFileAttributesW(DestinationChild);
-            if (Attributes != INVALID_FILE_ATTRIBUTES &&
-                (Attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
-            {
-                Error = ERROR_ACCESS_DENIED;
-            }
-            else if (!CopyFileW(SourceChild, DestinationChild, FALSE))
+            /* Windows leaves an existing destination entry (file, read-only file, directory)
+               untouched and still reports success. */
+            if (GetFileAttributesW(DestinationChild) == INVALID_FILE_ATTRIBUTES &&
+                !CopyFileW(SourceChild, DestinationChild, TRUE))
             {
                 Error = GetLastError();
             }
@@ -2382,7 +2381,7 @@ ExportCopyTreeFlat(
     WCHAR Pattern[MAX_PATH], SourceChild[MAX_PATH], DestinationChild[MAX_PATH];
     WIN32_FIND_DATAW FindData;
     HANDLE hFind;
-    DWORD Attributes, Error = ERROR_SUCCESS;
+    DWORD Error = ERROR_SUCCESS;
 
     if (wcslen(Source) + 3 >= _countof(Pattern))
         return ERROR_FILENAME_EXCED_RANGE;
@@ -2422,13 +2421,10 @@ ExportCopyTreeFlat(
         }
         else
         {
-            Attributes = GetFileAttributesW(DestinationChild);
-            if (Attributes != INVALID_FILE_ATTRIBUTES &&
-                (Attributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
-            {
-                Error = ERROR_ACCESS_DENIED;
-            }
-            else if (!CopyFileW(SourceChild, DestinationChild, FALSE))
+            /* Windows leaves an existing destination entry (file, read-only file, directory)
+               untouched and still reports success. */
+            if (GetFileAttributesW(DestinationChild) == INVALID_FILE_ATTRIBUTES &&
+                !CopyFileW(SourceChild, DestinationChild, TRUE))
             {
                 Error = GetLastError();
             }
@@ -2454,6 +2450,9 @@ ExportOnePackage(
     UINT Length;
 
     Original[0] = UNICODE_NULL;
+
+    if (!IsPublishedInfName(Published))
+        return ERROR_NOT_AN_INSTALLED_OEM_INF;
 
     Length = GetSystemWindowsDirectoryW(InfPath, _countof(InfPath));
     if (Length == 0 || Length + 64 + wcslen(Published) >= _countof(InfPath))
@@ -2483,6 +2482,8 @@ ExportOnePackage(
     if (!Leaf || wcslen(Target) + wcslen(Leaf) + 1 >= _countof(Destination))
         return ERROR_FILENAME_EXCED_RANGE;
     wcscpy(Destination, Target);
+    if (Destination[wcslen(Destination) - 1] == L'\\')
+        Leaf++;
     wcscat(Destination, Leaf);
     return ExportCopyTree(Store, Destination, Target, 0);
 }
@@ -2492,7 +2493,9 @@ CommandExportDriver(
     _In_ INT argc,
     _In_ WCHAR **argv)
 {
-    WCHAR Target[MAX_PATH], Pattern[MAX_PATH], Original[MAX_PATH], Names[512][32];
+    WCHAR Target[MAX_PATH], Pattern[MAX_PATH], Original[MAX_PATH];
+    WCHAR (*Names)[32] = NULL, (*Grown)[32];
+    DWORD Capacity = 0;
     WIN32_FIND_DATAW FindData;
     HANDLE hFind;
     DWORD Attributes, Error, Total = 0, Exported = 0, Result = ERROR_SUCCESS, Count = 0, k;
@@ -2560,8 +2563,18 @@ CommandExportDriver(
         {
             do
             {
-                if (IsPublishedInfName(FindData.cFileName) && Count < _countof(Names))
-                    lstrcpynW(Names[Count++], FindData.cFileName, _countof(Names[0]));
+                if (!IsPublishedInfName(FindData.cFileName))
+                    continue;
+                if (Count == Capacity)
+                {
+                    Capacity = Capacity ? Capacity * 2 : 256;
+                    Grown = Names ? HeapReAlloc(GetProcessHeap(), 0, Names, Capacity * sizeof(*Names))
+                                  : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Names));
+                    if (!Grown)
+                        break;
+                    Names = Grown;
+                }
+                lstrcpynW(Names[Count++], FindData.cFileName, _countof(Names[0]));
             } while (FindNextFileW(hFind, &FindData));
             FindClose(hFind);
         }
@@ -2584,6 +2597,8 @@ CommandExportDriver(
         }
     }
 
+    if (Names)
+        HeapFree(GetProcessHeap(), 0, Names);
     ConPrintf(StdOut, L"Total driver packages:      %lu\n", Total);
     ConPrintf(StdOut, L"Exported driver packages:   %lu\n", Exported);
     return (INT)Result;
