@@ -1,6 +1,7 @@
 
 list(APPEND SOURCE
     DnsQuery.c
+    DnsQueryEx.c
     HostsFile.c
     HostsCache.c
     testlist.c)

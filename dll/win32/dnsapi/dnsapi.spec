@@ -34,6 +34,7 @@
 @ stdcall DnsEnableAdapterDomainNameRegistration()
 @ stdcall DnsEnableBNodeResolverThread()
 @ stdcall DnsEnableDynamicRegistration()
+@ stdcall DnsCancelQuery(ptr)
 @ stdcall DnsExtractRecordsFromMessage_UTF8(ptr long ptr)
 @ stdcall DnsExtractRecordsFromMessage_W(ptr long ptr)
 @ stdcall DnsFindAuthoritativeZone()
@@ -88,7 +89,7 @@
 @ stub DnsNotifyResolverClusterIp
 @ stub DnsNotifyResolverEx
 @ stdcall DnsQueryConfig(long long wstr ptr ptr ptr)
-@ stdcall DnsQueryEx()
+@ stdcall DnsQueryEx(ptr ptr ptr)
 @ stdcall DnsQuery_A(str long long ptr ptr ptr)
 @ stdcall DnsQuery_UTF8(str long long ptr ptr ptr)
 @ stdcall DnsQuery_W(wstr long long ptr ptr ptr)

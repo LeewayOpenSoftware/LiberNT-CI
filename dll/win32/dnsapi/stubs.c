@@ -1094,13 +1094,6 @@ DnsQueryConfig(DNS_CONFIG_TYPE Config,
 }
 
 DNS_STATUS WINAPI
-DnsQueryEx()
-{
-    UNIMPLEMENTED;
-    return ERROR_OUTOFMEMORY;
-}
-
-DNS_STATUS WINAPI
 DnsRecordBuild_UTF8()
 {
     UNIMPLEMENTED;
