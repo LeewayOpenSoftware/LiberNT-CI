@@ -30,6 +30,7 @@ typedef struct _RESOLVER_CACHE_ENTRY
     BOOL bHostsFileEntry;
     PDNS_RECORDW Record;
     WORD Type;
+    DNS_STATUS Status;
     ULONGLONG Expires;
     WCHAR Name[ANYSIZE_ARRAY];
 } RESOLVER_CACHE_ENTRY, *PRESOLVER_CACHE_ENTRY;
@@ -71,7 +72,8 @@ VOID
 DnsIntCacheAddEntry(
     _In_ LPCWSTR Name,
     _In_ WORD Type,
-    _In_ PDNS_RECORDW Record,
+    _In_opt_ PDNS_RECORDW Record,
+    _In_ DNS_STATUS Status,
     _In_ BOOL bHostsFileEntry);
 
 BOOL

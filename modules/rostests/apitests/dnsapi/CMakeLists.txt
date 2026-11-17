@@ -5,6 +5,7 @@ list(APPEND SOURCE
     ExtractRecords.c
     HostsFile.c
     HostsCache.c
+    NegativeCache.c
     testlist.c)
 
 add_executable(dnsapi_apitest ${SOURCE})
