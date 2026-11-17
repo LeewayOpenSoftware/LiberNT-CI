@@ -2060,6 +2060,25 @@ typedef struct _DRV_LIST
     DWORD Count;
 } DRV_LIST;
 
+/* The catalog file name an INF declares, the architecture decorated key first; empty when there is none. */
+static VOID
+DriverCatalogName(
+    _In_ HINF hInf,
+    _Out_writes_(Cch) PWSTR Catalog,
+    _In_ DWORD Cch)
+{
+#ifdef _WIN64
+    static const PCWSTR Keys[] = { L"CatalogFile.ntamd64", L"CatalogFile.nt", L"CatalogFile" };
+#else
+    static const PCWSTR Keys[] = { L"CatalogFile.ntx86", L"CatalogFile.nt", L"CatalogFile" };
+#endif
+    DWORD i;
+
+    Catalog[0] = UNICODE_NULL;
+    for (i = 0; i < _countof(Keys) && !Catalog[0]; i++)
+        GetInfVersionValue(hInf, Keys[i], Catalog, Cch);
+}
+
 /* The signer of a driver package: the subject of the certificate that signed its catalog. The catalog is
    found next to the INF, or in the system catalog root for an in-box package. crypt32 is loaded on demand. */
 static VOID
@@ -2076,11 +2095,6 @@ DriverSignerName(
     typedef BOOL (WINAPI *PFREECERT)(PCCERT_CONTEXT);
     typedef BOOL (WINAPI *PCLOSESTORE)(HCERTSTORE, DWORD);
     typedef BOOL (WINAPI *PCLOSEMSG)(HCRYPTMSG);
-#ifdef _WIN64
-    static const PCWSTR Keys[] = { L"CatalogFile.ntamd64", L"CatalogFile.nt", L"CatalogFile" };
-#else
-    static const PCWSTR Keys[] = { L"CatalogFile.ntx86", L"CatalogFile.nt", L"CatalogFile" };
-#endif
     WCHAR Catalog[MAX_PATH], Path[MAX_PATH], Windir[MAX_PATH];
     HMODULE hCrypt;
     PQUERY Query;
@@ -2096,12 +2110,10 @@ DriverSignerName(
     PCCERT_CONTEXT Cert;
     CERT_INFO Wanted;
     PWSTR Slash;
-    DWORD Size = 0, i, Pass;
+    DWORD Size = 0, Pass;
 
     Signer[0] = UNICODE_NULL;
-    Catalog[0] = UNICODE_NULL;
-    for (i = 0; i < _countof(Keys) && !Catalog[0]; i++)
-        GetInfVersionValue(hInf, Keys[i], Catalog, _countof(Catalog));
+    DriverCatalogName(hInf, Catalog, _countof(Catalog));
     /* A catalog is named by a bare file name; anything with a path in it is not looked up. */
     if (!Catalog[0] || wcslen(Catalog) > 200 || wcspbrk(Catalog, L"\\/:") || wcsstr(Catalog, L".."))
         return;
@@ -3068,6 +3080,154 @@ OutputEmptyMessage(
     OutputPutsRaw(Output, Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
 }
 
+/* /enum-drivers /files /ids /devices ***************************************/
+
+/* Append one string to a growing double-NUL list. */
+static BOOL
+MultiSzAppend(
+    _Inout_ PWSTR *List,
+    _Inout_ SIZE_T *Used,
+    _Inout_ SIZE_T *Size,
+    _In_ PCWSTR Text)
+{
+    SIZE_T Length = wcslen(Text) + 1;
+
+    if (*Used + Length + 1 > *Size)
+    {
+        SIZE_T NewSize = (*Used + Length + 1) * 2;
+        PWSTR Grown = *List ? realloc(*List, NewSize * sizeof(WCHAR)) : malloc(NewSize * sizeof(WCHAR));
+
+        if (!Grown)
+            return FALSE;
+        *List = Grown;
+        *Size = NewSize;
+    }
+    wcscpy(*List + *Used, Text);
+    *Used += Length;
+    (*List)[*Used] = UNICODE_NULL;
+    return TRUE;
+}
+
+/* The files of a package folder, relative to it, without the INF and the catalog. */
+static VOID
+PackageFilesScan(
+    _In_ PCWSTR Folder,
+    _In_ PCWSTR Relative,
+    _In_ DWORD Depth,
+    _In_ PCWSTR InfName,
+    _In_ PCWSTR CatalogName,
+    _Inout_ PWSTR *List,
+    _Inout_ SIZE_T *Used,
+    _Inout_ SIZE_T *Size)
+{
+    WCHAR Pattern[MAX_PATH], Name[MAX_PATH];
+    WIN32_FIND_DATAW Find;
+    HANDLE hFind;
+
+    if (wcslen(Folder) + 3 >= _countof(Pattern))
+        return;
+    _snwprintf(Pattern, _countof(Pattern) - 1, L"%ls\\*", Folder);
+    Pattern[_countof(Pattern) - 1] = UNICODE_NULL;
+    hFind = FindFirstFileW(Pattern, &Find);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return;
+    do
+    {
+        if (!wcscmp(Find.cFileName, L".") || !wcscmp(Find.cFileName, L".."))
+            continue;
+        if (wcslen(Relative) + wcslen(Find.cFileName) + 2 >= _countof(Name))
+            continue;
+        if (Relative[0])
+            _snwprintf(Name, _countof(Name) - 1, L"%ls\\%ls", Relative, Find.cFileName);
+        else
+            lstrcpynW(Name, Find.cFileName, _countof(Name));
+        Name[_countof(Name) - 1] = UNICODE_NULL;
+
+        if (Find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            WCHAR Sub[MAX_PATH];
+
+            if (Depth < 6 && wcslen(Folder) + wcslen(Find.cFileName) + 2 < _countof(Sub))
+            {
+                _snwprintf(Sub, _countof(Sub) - 1, L"%ls\\%ls", Folder, Find.cFileName);
+                Sub[_countof(Sub) - 1] = UNICODE_NULL;
+                PackageFilesScan(Sub, Name, Depth + 1, InfName, CatalogName, List, Used, Size);
+            }
+            continue;
+        }
+        if (!Relative[0] && (_wcsicmp(Find.cFileName, InfName) == 0 ||
+                             (CatalogName[0] && _wcsicmp(Find.cFileName, CatalogName) == 0)))
+        {
+            continue;
+        }
+        MultiSzAppend(List, Used, Size, Name);
+    } while (FindNextFileW(hFind, &Find));
+    FindClose(hFind);
+}
+
+/* Description and state of a device by instance id, as /enum-devices shows them. */
+static VOID
+DriverDeviceBrief(
+    _In_ PCWSTR InstanceId,
+    _Out_writes_(Cch) PWSTR Description,
+    _In_ DWORD Cch,
+    _Out_ PCWSTR *State)
+{
+    HDEVINFO Set = SetupDiCreateDeviceInfoList(NULL, NULL);
+    SP_DEVINFO_DATA Info;
+
+    Description[0] = UNICODE_NULL;
+    *State = L"Disconnected";
+    if (Set == INVALID_HANDLE_VALUE)
+        return;
+    Info.cbSize = sizeof(Info);
+    if (SetupDiOpenDeviceInfoW(Set, InstanceId, NULL, 0, &Info))
+    {
+        ULONG Status = 0, Problem = 0;
+        DWORD Type;
+        WCHAR Buffer[512];
+
+        ZeroMemory(Buffer, sizeof(Buffer));
+        if (SetupDiGetDeviceRegistryPropertyW(Set, &Info, SPDRP_DEVICEDESC, &Type, (PBYTE)Buffer,
+                                              sizeof(Buffer) - sizeof(WCHAR), NULL) && Type == REG_SZ)
+        {
+            lstrcpynW(Description, Buffer, Cch);
+        }
+        if (CM_Get_DevNode_Status(&Status, &Problem, Info.DevInst, 0) == CR_SUCCESS)
+        {
+            if (Status & DN_HAS_PROBLEM)
+                *State = Problem == CM_PROB_DISABLED ? L"Disabled" : L"Problem";
+            else
+                *State = (Status & DN_STARTED) ? L"Started" : L"Stopped";
+        }
+    }
+    SetupDiDestroyDeviceInfoList(Set);
+}
+
+/* The per-package data the optional switches ask for. */
+typedef struct _DRVPKG_EXTRA
+{
+    WCHAR PackageId[MAX_PATH];
+    WCHAR FamilyId[MAX_PATH];
+    WCHAR Catalog[MAX_PATH];
+    PWSTR Devices;
+    PWSTR Files;
+} DRVPKG_EXTRA;
+
+static VOID
+DrvTxtLine(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Indent,
+    _In_ PCWSTR Label,
+    _In_ PCWSTR Value)
+{
+    WCHAR Line[MAX_PATH * 2];
+
+    _snwprintf(Line, _countof(Line) - 1, L"%ls%-20ls%ls%ls", Indent, Label, Value, OutEol(Output));
+    Line[_countof(Line) - 1] = UNICODE_NULL;
+    OutputPutsRaw(Output, Line);
+}
+
 static INT
 CommandEnumDrivers(
     _In_ INT argc,
@@ -3078,7 +3238,9 @@ CommandEnumDrivers(
     WCHAR Version[MAX_PATH], ClassName[MAX_CLASS_NAME_LEN], DefaultName[MAX_PATH], Line[MAX_PATH + 32];
     WCHAR XmlVersion[64], XmlCommand[512];
     PCWSTR OutputFile = NULL, ClassFilter = NULL;
-    BOOL OutputFileGiven = FALSE;
+    BOOL OutputFileGiven = FALSE, WantFiles = FALSE, WantIds = FALSE, WantDevices = FALSE;
+    WCHAR Signer[128];
+    DWORD IdxCatalog, IdxFile, IdxDevice;
     WIN32_FIND_DATAW FindData;
     HANDLE hFind;
     UINT Length;
@@ -3087,7 +3249,19 @@ CommandEnumDrivers(
 
     for (i = 0; i < argc; i++)
     {
-        if (IsOption(argv[i], L"class") && i + 1 < argc)
+        if (IsOption(argv[i], L"files"))
+        {
+            WantFiles = TRUE;
+        }
+        else if (IsOption(argv[i], L"ids"))
+        {
+            WantIds = TRUE;
+        }
+        else if (IsOption(argv[i], L"devices"))
+        {
+            WantDevices = TRUE;
+        }
+        else if (IsOption(argv[i], L"class") && i + 1 < argc)
         {
             ClassFilter = argv[++i];
         }
@@ -3131,10 +3305,22 @@ CommandEnumDrivers(
     if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
         PrintHeader();
 
+    /* Column positions of the optional csv fields (the eleven base columns come first). */
+    IdxCatalog = 11 + (WantIds ? 2 : 0);
+    IdxFile = IdxCatalog + 1;
+    IdxDevice = IdxCatalog + (WantFiles ? 2 : 0);
+
     if (Output.Format == OutputCsv)
     {
         OutputPutsRaw(&Output, L"DriverName,OriginalName,ProviderName,ClassName,ClassGuid,ClassVersion,"
-                               L"ExtensionId,DriverVersion,SignerName,CatalogAttributes,WhcpVersion\r\n");
+                               L"ExtensionId,DriverVersion,SignerName,CatalogAttributes,WhcpVersion");
+        if (WantIds)
+            OutputPutsRaw(&Output, L",DriverPackageId,FamilyId");
+        if (WantFiles)
+            OutputPutsRaw(&Output, L",CatalogFile,File");
+        if (WantDevices)
+            OutputPutsRaw(&Output, L",Device,DeviceDescription,DeviceStatus,ProblemCode,ProblemStatus");
+        OutputPutsRaw(&Output, L"\r\n");
     }
     else if (Output.Format == OutputXml)
     {
@@ -3172,6 +3358,7 @@ CommandEnumDrivers(
         do
         {
             PCWSTR Original = FindData.cFileName;
+            DRVPKG_EXTRA Extra;
             GUID ClassGuid;
             HINF hInf;
 
@@ -3186,10 +3373,15 @@ CommandEnumDrivers(
             if (hInf == INVALID_HANDLE_VALUE)
                 continue;
 
+            Store[0] = UNICODE_NULL;
             if (SetupGetInfDriverStoreLocationW(Path, NULL, NULL, Store, _countof(Store), NULL) &&
                 wcsrchr(Store, L'\\'))
             {
                 Original = wcsrchr(Store, L'\\') + 1;
+            }
+            else
+            {
+                Store[0] = UNICODE_NULL;
             }
 
             GetInfVersionValue(hInf, L"Provider", Provider, _countof(Provider));
@@ -3202,13 +3394,71 @@ CommandEnumDrivers(
             if (wcschr(Version, L','))
                 *wcschr(Version, L',') = L' ';
             PadDriverVersionDate(Version, _countof(Version));
+            Extra.Catalog[0] = UNICODE_NULL;
+            Signer[0] = UNICODE_NULL;
+            if (Store[0])
+            {
+                DriverSignerName(Store, hInf, Signer, _countof(Signer));
+                DriverCatalogName(hInf, Extra.Catalog, _countof(Extra.Catalog));
+            }
             SetupCloseInfFile(hInf);
 
             if (ClassFilter && _wcsicmp(ClassFilter, ClassName) != 0 && _wcsicmp(ClassFilter, GuidText) != 0)
                 continue;
 
+            Extra.PackageId[0] = Extra.FamilyId[0] = UNICODE_NULL;
+            Extra.Devices = NULL;
+            Extra.Files = NULL;
+            if (WantIds && Store[0])
+            {
+                WCHAR Folder[MAX_PATH];
+                PWSTR Slash;
+                PCWSTR Name = Original;
+                SIZE_T n;
+
+                lstrcpynW(Folder, Store, _countof(Folder));
+                Slash = wcsrchr(Folder, L'\\');
+                if (Slash)
+                {
+                    *Slash = UNICODE_NULL;
+                    Slash = wcsrchr(Folder, L'\\');
+                    lstrcpynW(Extra.PackageId, Slash ? Slash + 1 : Folder, _countof(Extra.PackageId));
+                }
+                /* Provider with spaces as underscores, a dash, then the package's own INF name. */
+                lstrcpynW(Extra.FamilyId, Provider, _countof(Extra.FamilyId));
+                for (n = 0; Extra.FamilyId[n]; n++)
+                {
+                    if (Extra.FamilyId[n] == L' ')
+                        Extra.FamilyId[n] = L'_';
+                }
+                if (wcslen(Extra.FamilyId) + wcslen(Name) + 2 < _countof(Extra.FamilyId))
+                {
+                    wcscat(Extra.FamilyId, L"-");
+                    wcscat(Extra.FamilyId, Name);
+                }
+            }
+            if (WantDevices)
+                Extra.Devices = GetDevicesUsingInf(FindData.cFileName);
+            if (WantFiles && Store[0])
+            {
+                WCHAR Folder[MAX_PATH];
+                PWSTR Slash;
+                SIZE_T Used = 0, Size = 0;
+
+                lstrcpynW(Folder, Store, _countof(Folder));
+                Slash = wcsrchr(Folder, L'\\');
+                if (Slash)
+                {
+                    *Slash = UNICODE_NULL;
+                    PackageFilesScan(Folder, L"", 0, Original, Extra.Catalog, &Extra.Files, &Used, &Size);
+                }
+            }
+
             if (Output.Format == OutputCsv)
             {
+                /* The catalog name rides on the last row before the file rows. */
+                BOOL DevicesFirst = WantDevices && Extra.Devices && *Extra.Devices;
+                BOOL CatalogInBase = WantFiles && !DevicesFirst;
                 OutputCsvField(&Output, FindData.cFileName, FALSE);
                 OutputCsvField(&Output, Original, FALSE);
                 OutputCsvField(&Output, Provider, FALSE);
@@ -3217,9 +3467,53 @@ CommandEnumDrivers(
                 OutputCsvField(&Output, L"", FALSE);
                 OutputCsvField(&Output, L"", FALSE);
                 OutputCsvField(&Output, Version, FALSE);
+                OutputCsvField(&Output, Signer, FALSE);
                 OutputCsvField(&Output, L"", FALSE);
-                OutputCsvField(&Output, L"", FALSE);
-                OutputCsvField(&Output, L"", TRUE);
+                OutputCsvField(&Output, L"Unknown", !WantIds && !CatalogInBase);
+                if (WantIds)
+                {
+                    OutputCsvField(&Output, Extra.PackageId, FALSE);
+                    OutputCsvField(&Output, Extra.FamilyId, !CatalogInBase);
+                }
+                if (CatalogInBase)
+                    OutputCsvField(&Output, Extra.Catalog, TRUE);
+                if (DevicesFirst)
+                {
+                    PCWSTR Device;
+                    DWORD n;
+
+                    for (Device = Extra.Devices; *Device; Device += wcslen(Device) + 1)
+                    {
+                        WCHAR Description[256];
+                        PCWSTR State;
+                        BOOL LastRow = WantFiles && !*(Device + wcslen(Device) + 1);
+
+                        DriverDeviceBrief(Device, Description, _countof(Description), &State);
+                        OutputCsvField(&Output, FindData.cFileName, FALSE);
+                        for (n = 0; n + 1 < IdxDevice; n++)
+                            OutputCsvField(&Output, L"", FALSE);
+                        OutputCsvField(&Output, Device, FALSE);
+                        OutputCsvField(&Output, Description, FALSE);
+                        OutputCsvField(&Output, State, FALSE);
+                        OutputCsvField(&Output, L"", FALSE);
+                        OutputCsvField(&Output, L"", !LastRow);
+                        if (LastRow)
+                            OutputCsvField(&Output, Extra.Catalog, TRUE);
+                    }
+                }
+                if (WantFiles && Extra.Files)
+                {
+                    PCWSTR File;
+                    DWORD n;
+
+                    for (File = Extra.Files; *File; File += wcslen(File) + 1)
+                    {
+                        OutputCsvField(&Output, FindData.cFileName, FALSE);
+                        for (n = 0; n + 1 < IdxFile; n++)
+                            OutputCsvField(&Output, L"", FALSE);
+                        OutputCsvField(&Output, File, TRUE);
+                    }
+                }
             }
             else if (Output.Format == OutputXml)
             {
@@ -3235,9 +3529,55 @@ CommandEnumDrivers(
                 OutputXmlText(&Output, GuidText);
                 OutputPutsRaw(&Output, L"</ClassGuid>\r\n        <DriverVersion>");
                 OutputXmlText(&Output, Version);
-                OutputPutsRaw(&Output, L"</DriverVersion>\r\n        <SignerName></SignerName>\r\n"
+                OutputPutsRaw(&Output, L"</DriverVersion>\r\n        <SignerName>");
+                OutputXmlText(&Output, Signer);
+                OutputPutsRaw(&Output, L"</SignerName>\r\n"
                                        L"        <CatalogAttributes></CatalogAttributes>\r\n"
-                                       L"        <WhcpVersion></WhcpVersion>\r\n    </Driver>\r\n");
+                                       L"        <WhcpVersion>Unknown</WhcpVersion>\r\n");
+                if (WantIds)
+                {
+                    EmitXmlElement(&Output, L"DriverPackageId", Extra.PackageId);
+                    EmitXmlElement(&Output, L"FamilyId", Extra.FamilyId);
+                }
+                if (WantDevices && Extra.Devices && *Extra.Devices)
+                {
+                    PCWSTR Device;
+
+                    OutputPutsRaw(&Output, L"        <Devices>\r\n");
+                    for (Device = Extra.Devices; *Device; Device += wcslen(Device) + 1)
+                    {
+                        WCHAR Description[256];
+                        PCWSTR State;
+
+                        DriverDeviceBrief(Device, Description, _countof(Description), &State);
+                        OutputPutsRaw(&Output, L"            <Device InstanceId=\"");
+                        OutputXmlText(&Output, Device);
+                        OutputPutsRaw(&Output, L"\">\r\n                <DeviceDescription>");
+                        OutputXmlText(&Output, Description);
+                        OutputPutsRaw(&Output, L"</DeviceDescription>\r\n                <Status>");
+                        OutputXmlText(&Output, State);
+                        OutputPutsRaw(&Output, L"</Status>\r\n            </Device>\r\n");
+                    }
+                    OutputPutsRaw(&Output, L"        </Devices>\r\n");
+                }
+                if (WantFiles)
+                {
+                    EmitXmlElement(&Output, L"CatalogFile", Extra.Catalog);
+                    if (Extra.Files && *Extra.Files)
+                    {
+                        PCWSTR File;
+
+                        OutputPutsRaw(&Output, L"        <Files>\r\n");
+                        for (File = Extra.Files; *File; File += wcslen(File) + 1)
+                        {
+                            OutputPutsRaw(&Output, L"            <File Name=\"");
+                            OutputXmlText(&Output, File);
+                            OutputPutsRaw(&Output, L"\"></File>\r\n");
+                        }
+                        OutputPutsRaw(&Output, L"        </Files>\r\n");
+                    }
+                }
+                OutputPutsRaw(&Output, L"    </Driver>\r\n");
             }
             else
             {
@@ -3260,8 +3600,55 @@ CommandEnumDrivers(
                     OutputPutsRaw(&Output, Line);
                     OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
                 }
+                if (Signer[0])
+                    DrvTxtLine(&Output, L"", L"Signer Name:", Signer);
+                DrvTxtLine(&Output, L"", L"WHCP Version:", L"Unknown");
+                if (WantIds)
+                {
+                    DrvTxtLine(&Output, L"", L"Driver Package ID:", Extra.PackageId);
+                    DrvTxtLine(&Output, L"", L"Family ID:", Extra.FamilyId);
+                }
+                if (WantDevices && Extra.Devices && *Extra.Devices)
+                {
+                    PCWSTR Device;
+
+                    OutputPutsRaw(&Output, L"Devices:");
+                    OutputPutsRaw(&Output, OutEol(&Output));
+                    for (Device = Extra.Devices; *Device; Device += wcslen(Device) + 1)
+                    {
+                        WCHAR Description[256];
+                        PCWSTR State;
+
+                        DriverDeviceBrief(Device, Description, _countof(Description), &State);
+                        DrvTxtLine(&Output, L"    ", L"Instance ID:", Device);
+                        DrvTxtLine(&Output, L"    ", L"Device Description:", Description);
+                        DrvTxtLine(&Output, L"    ", L"Status:", State);
+                    }
+                }
+                if (WantFiles)
+                {
+                    PCWSTR File;
+
+                    if (Extra.Catalog[0])
+                        DrvTxtLine(&Output, L"", L"Catalog File:", Extra.Catalog);
+                    if (Extra.Files && *Extra.Files)
+                    {
+                        OutputPutsRaw(&Output, L"Driver Files:");
+                        OutputPutsRaw(&Output, OutEol(&Output));
+                        for (File = Extra.Files; *File; File += wcslen(File) + 1)
+                        {
+                            OutputPutsRaw(&Output, L"    ");
+                            OutputPutsRaw(&Output, File);
+                            OutputPutsRaw(&Output, OutEol(&Output));
+                        }
+                    }
+                }
                 OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
             }
+            if (Extra.Devices)
+                free(Extra.Devices);
+            if (Extra.Files)
+                free(Extra.Files);
             Count++;
         } while (FindNextFileW(hFind, &FindData));
         FindClose(hFind);
