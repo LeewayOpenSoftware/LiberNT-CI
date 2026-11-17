@@ -438,6 +438,22 @@ HKCR
             Version = s '3.0'
             VersionIndependentProgId = s 'Msxml2.FreeThreadedDOMDocument'
         }
+        '{2933BF90-7B36-11D2-B20E-00C04F983E60}' = s 'XML DOM Document'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+            ProgId = s 'Microsoft.XMLDOM.1.0'
+            TypeLib = s '{F5078F18-C551-11D3-89B9-0000F81FE221}'
+            Version = s '3.0'
+            VersionIndependentProgId = s 'Microsoft.XMLDOM'
+        }
+        '{2933BF91-7B36-11D2-B20E-00C04F983E60}' = s 'Free Threaded XML DOM Document'
+        {
+            InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Both' }
+            ProgId = s 'Microsoft.FreeThreadedXMLDOM.1.0'
+            TypeLib = s '{F5078F18-C551-11D3-89B9-0000F81FE221}'
+            Version = s '3.0'
+            VersionIndependentProgId = s 'Microsoft.FreeThreadedXMLDOM'
+        }
         '{F5078F35-C551-11D3-89B9-0000F81FE221}' = s 'XML HTTP 3.0'
         {
             InprocServer32 = s '%MODULE%' { val ThreadingModel = s 'Apartment' }
@@ -550,6 +566,24 @@ HKCR
             Version = s '3.0'
             VersionIndependentProgId = s 'Msxml2.SAXAttributes'
         }
+    }
+    'Microsoft.XMLDOM.1.0' = s 'XML DOM Document'
+    {
+        CLSID = s '{2933BF90-7B36-11D2-B20E-00C04F983E60}'
+    }
+    'Microsoft.XMLDOM' = s 'XML DOM Document'
+    {
+        CLSID = s '{2933BF90-7B36-11D2-B20E-00C04F983E60}'
+        CurVer = s 'Microsoft.XMLDOM.1.0'
+    }
+    'Microsoft.FreeThreadedXMLDOM.1.0' = s 'Free Threaded XML DOM Document'
+    {
+        CLSID = s '{2933BF91-7B36-11D2-B20E-00C04F983E60}'
+    }
+    'Microsoft.FreeThreadedXMLDOM' = s 'Free Threaded XML DOM Document'
+    {
+        CLSID = s '{2933BF91-7B36-11D2-B20E-00C04F983E60}'
+        CurVer = s 'Microsoft.FreeThreadedXMLDOM.1.0'
     }
     'Msxml2.DOMDocument.3.0' = s 'XML DOM Document 3.0'
     {
