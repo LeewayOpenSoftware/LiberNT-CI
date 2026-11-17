@@ -1500,6 +1500,50 @@ EmitDeviceRecord(
     }
 }
 
+/* Windows prints the banner, "Failed to open output file: <system text>" and exits with
+   the Win32 error code. */
+static INT
+ReportOutputOpenFailure(
+    _In_ DWORD Error)
+{
+    WCHAR Text[256] = L"";
+
+    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, Error, 0,
+                   Text, _countof(Text) - 1, NULL);
+    PrintHeader();
+    ConPrintf(StdErr, L"Failed to open output file: %ls", Text);
+    if (!Text[0])
+        ConPuts(StdErr, L"\n");
+    return (INT)Error;
+}
+
+/* DriverVer comes as written in the INF (m/d/yyyy); print it zero padded as MM/DD/YYYY. */
+static VOID
+PadDriverVersionDate(
+    _Inout_updates_(Cch) PWSTR Version,
+    _In_ DWORD Cch)
+{
+    WCHAR Rest[MAX_PATH];
+    PWSTR Start = Version, End;
+    ULONG Month, Day, Year;
+
+    Month = wcstoul(Start, &End, 10);
+    if (End == Start || *End != L'/')
+        return;
+    Start = End + 1;
+    Day = wcstoul(Start, &End, 10);
+    if (End == Start || *End != L'/')
+        return;
+    Start = End + 1;
+    Year = wcstoul(Start, &End, 10);
+    if (End == Start)
+        return;
+
+    lstrcpynW(Rest, End, _countof(Rest));
+    _snwprintf(Version, Cch, L"%02lu/%02lu/%04lu%ls", Month, Day, Year, Rest);
+    Version[Cch - 1] = UNICODE_NULL;
+}
+
 /* The "nothing found" line Windows writes in every format: it goes to the file too,
    after the csv header or inside the xml root (xml-escaped), with CRLF in a file. */
 static VOID
@@ -1576,7 +1620,7 @@ CommandEnumDrivers(
         Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (Output.File == INVALID_HANDLE_VALUE)
-            return (INT)GetLastError();
+            return ReportOutputOpenFailure(GetLastError());
     }
 
     if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
@@ -1652,6 +1696,7 @@ CommandEnumDrivers(
             GetInfVersionValue(hInf, L"DriverVer", Version, _countof(Version));
             if (wcschr(Version, L','))
                 *wcschr(Version, L',') = L' ';
+            PadDriverVersionDate(Version, _countof(Version));
             SetupCloseInfFile(hInf);
 
             if (ClassFilter && _wcsicmp(ClassFilter, ClassName) != 0 && _wcsicmp(ClassFilter, GuidText) != 0)
@@ -1685,7 +1730,9 @@ CommandEnumDrivers(
                 OutputXmlText(&Output, GuidText);
                 OutputPutsRaw(&Output, L"</ClassGuid>\r\n        <DriverVersion>");
                 OutputXmlText(&Output, Version);
-                OutputPutsRaw(&Output, L"</DriverVersion>\r\n    </Driver>\r\n");
+                OutputPutsRaw(&Output, L"</DriverVersion>\r\n        <SignerName></SignerName>\r\n"
+                                       L"        <CatalogAttributes></CatalogAttributes>\r\n"
+                                       L"        <WhcpVersion></WhcpVersion>\r\n    </Driver>\r\n");
             }
             else
             {
@@ -1839,7 +1886,7 @@ CommandEnumDevices(
         Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (Output.File == INVALID_HANDLE_VALUE)
-            return (INT)GetLastError();
+            return ReportOutputOpenFailure(GetLastError());
     }
 
     /* The banner goes to stdout for the text format and whenever a file is written;
