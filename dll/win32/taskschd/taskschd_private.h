@@ -26,6 +26,8 @@ HRESULT TaskFolderCollection_create(const WCHAR *path, ITaskFolderCollection **o
 HRESULT RegisteredTask_create(const WCHAR *path, const WCHAR *name, ITaskDefinition *definition, LONG flags,
                               TASK_LOGON_TYPE logon, IRegisteredTask **obj, BOOL create);
 HRESULT RegisteredTaskCollection_create(const WCHAR *path, IRegisteredTaskCollection **obj);
+HRESULT RunningTask_create(const GUID *guid, const WCHAR *path, IRunningTask **obj);
+HRESULT RunningTaskCollection_create(const WCHAR *path, LONG flags, IRunningTaskCollection **obj);
 
 WCHAR *get_full_path(const WCHAR *parent, const WCHAR *path);
 

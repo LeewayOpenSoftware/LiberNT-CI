@@ -8,6 +8,7 @@ list(APPEND SOURCE
     folder.c
     folder_collection.c
     regtask.c
+    running.c
     task.c
     taskschd.c)
 

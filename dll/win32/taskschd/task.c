@@ -7023,8 +7023,16 @@ static HRESULT WINAPI TaskService_GetFolder(ITaskService *iface, BSTR path, ITas
 
 static HRESULT WINAPI TaskService_GetRunningTasks(ITaskService *iface, LONG flags, IRunningTaskCollection **tasks)
 {
-    FIXME("%p,%lx,%p: stub\n", iface, flags, tasks);
-    return E_NOTIMPL;
+    TaskService *task_svc = impl_from_ITaskService(iface);
+
+    TRACE("%p,%lx,%p\n", iface, flags, tasks);
+
+    if (!tasks) return E_POINTER;
+
+    if (!task_svc->connected)
+        return HRESULT_FROM_WIN32(ERROR_ONLY_IF_CONNECTED);
+
+    return RunningTaskCollection_create(NULL, flags, tasks);
 }
 
 static HRESULT WINAPI TaskService_NewTask(ITaskService *iface, DWORD flags, ITaskDefinition **definition)
