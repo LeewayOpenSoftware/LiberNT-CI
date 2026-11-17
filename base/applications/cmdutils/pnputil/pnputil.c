@@ -121,7 +121,7 @@ static const struct
 
 static const WCHAR UsageText[] =
     L"PNPUTIL [/add-driver <...> | /delete-driver <...> |\n"
-    L"         /enum-drivers | /enum-devices [<...>] |\n"
+    L"         /export-driver <...> | /enum-drivers | /enum-devices [<...>] |\n"
     L"         /disable-device <...> | /enable-device <...> |\n"
     L"         /restart-device <...> | /remove-device <...> |\n"
     L"         /rollback-device <...> | /scan-devices | /?]\n"
@@ -141,6 +141,10 @@ static const WCHAR UsageText[] =
     L"      /uninstall - uninstall driver package from any devices using it.\n"
     L"      /force - delete driver package even when it is in use by devices.\n"
     L"      /reboot - reboot system if needed to complete the operation.\n"
+    L"\n"
+    L"  /export-driver <oem#.inf | *> <target directory>\n"
+    L"\n"
+    L"    Export driver package(s) from the driver store into a target directory.\n"
     L"\n"
     L"  /enum-drivers\n"
     L"\n"
@@ -2252,6 +2256,501 @@ CommandRollbackDevice(_In_ INT argc, _In_ WCHAR **argv)
     return ERROR_SUCCESS;
 }
 
+/* /export-driver ***********************************************************/
+
+#define EXPORT_MAX_DEPTH 8
+#ifndef ERROR_NOT_AN_INSTALLED_OEM_INF
+#define ERROR_NOT_AN_INSTALLED_OEM_INF ((DWORD)0xE000023C)
+#endif
+
+/* Case-insensitive "oem<digits>.inf" check, the only names the store publishes. */
+static BOOL
+IsPublishedInfName(
+    _In_ PCWSTR Name)
+{
+    PCWSTR p = Name;
+
+    if (_wcsnicmp(Name, L"oem", 3) != 0)
+        return FALSE;
+    p += 3;
+    if (*p < L'0' || *p > L'9')
+        return FALSE;
+    while (*p >= L'0' && *p <= L'9')
+        p++;
+    return _wcsicmp(p, L".inf") == 0;
+}
+
+/* True when Path is Root followed by a separator (so Path is strictly inside Root). */
+static BOOL
+IsInsideDirectory(
+    _In_ PCWSTR Path,
+    _In_ PCWSTR Root)
+{
+    SIZE_T Length = wcslen(Root);
+
+    if (Length != 0 && Root[Length - 1] == L'\\')
+        Length--;
+    return _wcsnicmp(Path, Root, Length) == 0 && Path[Length] == L'\\' && Path[Length + 1] != UNICODE_NULL;
+}
+
+/* Every create below is relative to an already open parent directory handle, so no path
+   component is resolved a second time: a junction or symlink swapped into the target
+   after the first open cannot redirect the export. */
+typedef struct _EXPORT_USTR
+{
+    USHORT Length;
+    USHORT MaximumLength;
+    PWSTR Buffer;
+} EXPORT_USTR;
+
+typedef struct _EXPORT_OA
+{
+    ULONG Length;
+    HANDLE RootDirectory;
+    EXPORT_USTR *ObjectName;
+    ULONG Attributes;
+    PVOID SecurityDescriptor;
+    PVOID SecurityQualityOfService;
+} EXPORT_OA;
+
+typedef struct _EXPORT_IOSB
+{
+    LONG Status;
+    ULONG_PTR Information;
+} EXPORT_IOSB;
+
+typedef LONG (NTAPI *PEXPORT_NTCREATEFILE)(PHANDLE, ACCESS_MASK, EXPORT_OA *, EXPORT_IOSB *, PLARGE_INTEGER,
+                                           ULONG, ULONG, ULONG, ULONG, PVOID, ULONG);
+typedef ULONG (NTAPI *PEXPORT_STATUSTODOS)(LONG);
+
+#define EXPORT_FILE_CREATE              0x00000002
+#define EXPORT_FILE_OPEN_IF             0x00000003
+#define EXPORT_FILE_DIRECTORY_FILE      0x00000001
+#define EXPORT_FILE_NON_DIRECTORY_FILE  0x00000040
+#define EXPORT_FILE_SYNC_IO             0x00000020
+#define EXPORT_FILE_OPEN_REPARSE_POINT  0x00200000
+#define EXPORT_OBJ_CASE_INSENSITIVE     0x00000040
+#define EXPORT_NAME_COLLISION           ((LONG)0xC0000035)
+
+/* Create (or open, for a directory) Name inside Parent without following a reparse point.
+   *Existed is set when a file was already there; such a file is left alone. */
+static DWORD
+ExportCreateChild(
+    _In_ HANDLE Parent,
+    _In_ PCWSTR Name,
+    _In_ BOOL Directory,
+    _Out_ PHANDLE Handle,
+    _Out_ PBOOL Existed)
+{
+    static PEXPORT_NTCREATEFILE CreateFn;
+    static PEXPORT_STATUSTODOS ToDos;
+    EXPORT_USTR UName;
+    EXPORT_OA Oa;
+    EXPORT_IOSB Iosb;
+    BY_HANDLE_FILE_INFORMATION Info;
+    ACCESS_MASK Access;
+    LONG Status;
+
+    *Handle = NULL;
+    *Existed = FALSE;
+
+    if (!CreateFn)
+    {
+        HMODULE hNtdll = GetModuleHandleW(L"ntdll.dll");
+
+        CreateFn = (PEXPORT_NTCREATEFILE)GetProcAddress(hNtdll, "NtCreateFile");
+        ToDos = (PEXPORT_STATUSTODOS)GetProcAddress(hNtdll, "RtlNtStatusToDosError");
+    }
+    if (!CreateFn || !ToDos)
+        return ERROR_PROC_NOT_FOUND;
+
+    UName.Buffer = (PWSTR)Name;
+    UName.Length = (USHORT)(wcslen(Name) * sizeof(WCHAR));
+    UName.MaximumLength = UName.Length;
+    Oa.Length = sizeof(Oa);
+    Oa.RootDirectory = Parent;
+    Oa.ObjectName = &UName;
+    Oa.Attributes = EXPORT_OBJ_CASE_INSENSITIVE;
+    Oa.SecurityDescriptor = NULL;
+    Oa.SecurityQualityOfService = NULL;
+
+    if (Directory)
+    {
+        Access = FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE;
+        Status = CreateFn(Handle, Access, &Oa, &Iosb, NULL, FILE_ATTRIBUTE_NORMAL,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, EXPORT_FILE_OPEN_IF,
+                          EXPORT_FILE_DIRECTORY_FILE | EXPORT_FILE_SYNC_IO | EXPORT_FILE_OPEN_REPARSE_POINT,
+                          NULL, 0);
+    }
+    else
+    {
+        Access = FILE_WRITE_DATA | FILE_WRITE_ATTRIBUTES | FILE_READ_ATTRIBUTES | DELETE | SYNCHRONIZE;
+        Status = CreateFn(Handle, Access, &Oa, &Iosb, NULL, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ,
+                          EXPORT_FILE_CREATE,
+                          EXPORT_FILE_NON_DIRECTORY_FILE | EXPORT_FILE_SYNC_IO | EXPORT_FILE_OPEN_REPARSE_POINT,
+                          NULL, 0);
+    }
+
+    if (Status == EXPORT_NAME_COLLISION)
+    {
+        *Existed = TRUE;
+        return ERROR_SUCCESS;
+    }
+    if (Status < 0)
+    {
+        *Handle = NULL;
+        return ToDos(Status);
+    }
+
+    if (Directory)
+    {
+        if (!GetFileInformationByHandle(*Handle, &Info) ||
+            !(Info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) ||
+            (Info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+        {
+            CloseHandle(*Handle);
+            *Handle = NULL;
+            return ERROR_ACCESS_DENIED;
+        }
+    }
+    return ERROR_SUCCESS;
+}
+
+/* Mark the file behind Handle for deletion on close (used to drop a partial copy). */
+static VOID
+ExportDeleteOnClose(
+    _In_ HANDLE Handle)
+{
+    typedef LONG (NTAPI *PSETINFO)(HANDLE, EXPORT_IOSB *, PVOID, ULONG, ULONG);
+    PSETINFO SetInfo = (PSETINFO)GetProcAddress(GetModuleHandleW(L"ntdll.dll"), "NtSetInformationFile");
+    EXPORT_IOSB Iosb;
+    BOOLEAN DeleteFlag = TRUE;
+
+    if (SetInfo)
+        SetInfo(Handle, &Iosb, &DeleteFlag, sizeof(DeleteFlag), 13 /* FileDispositionInformation */);
+}
+
+/* Copy one regular file into Parent. An existing destination entry is left as it is. */
+static DWORD
+ExportCopyFile(
+    _In_ PCWSTR SourcePath,
+    _In_ HANDLE Parent,
+    _In_ PCWSTR Name)
+{
+    BYTE Buffer[16384];
+    FILETIME Created, Accessed, Written;
+    HANDLE hSource, hDestination;
+    DWORD Read, Written2, Error;
+    BOOL Existed;
+
+    Error = ExportCreateChild(Parent, Name, FALSE, &hDestination, &Existed);
+    if (Error != ERROR_SUCCESS || Existed)
+        return Error;
+
+    hSource = CreateFileW(SourcePath, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                          OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    if (hSource == INVALID_HANDLE_VALUE)
+    {
+        Error = GetLastError();
+        CloseHandle(hDestination);
+        return Error;
+    }
+
+    for (;;)
+    {
+        if (!ReadFile(hSource, Buffer, sizeof(Buffer), &Read, NULL))
+        {
+            Error = GetLastError();
+            if (Error == ERROR_SUCCESS)
+                Error = ERROR_READ_FAULT;
+            break;
+        }
+        if (Read == 0)
+            break;
+        if (!WriteFile(hDestination, Buffer, Read, &Written2, NULL) || Written2 != Read)
+        {
+            Error = GetLastError();
+            if (Error == ERROR_SUCCESS)
+                Error = ERROR_WRITE_FAULT;
+            break;
+        }
+    }
+    if (Error == ERROR_SUCCESS && GetFileTime(hSource, &Created, &Accessed, &Written))
+        SetFileTime(hDestination, &Created, &Accessed, &Written);
+
+    if (Error != ERROR_SUCCESS)
+        ExportDeleteOnClose(hDestination);
+
+    CloseHandle(hSource);
+    CloseHandle(hDestination);
+    return Error;
+}
+
+/* Copy a package directory tree into the open directory handle Destination. Reparse points
+   in the source are skipped and names that carry a separator or colon are refused. */
+static DWORD
+ExportCopyTree(
+    _In_ PCWSTR Source,
+    _In_ HANDLE Destination,
+    _In_ DWORD Depth)
+{
+    WCHAR Pattern[MAX_PATH], SourceChild[MAX_PATH];
+    WIN32_FIND_DATAW FindData;
+    HANDLE hFind, hChild;
+    DWORD Error = ERROR_SUCCESS;
+    BOOL Existed;
+
+    if (Depth > EXPORT_MAX_DEPTH)
+        return ERROR_BAD_PATHNAME;
+    if (wcslen(Source) + 3 >= _countof(Pattern))
+        return ERROR_FILENAME_EXCED_RANGE;
+    wcscpy(Pattern, Source);
+    wcscat(Pattern, L"\\*");
+
+    hFind = FindFirstFileW(Pattern, &FindData);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return GetLastError();
+
+    do
+    {
+        PCWSTR Name = FindData.cFileName;
+
+        if (wcscmp(Name, L".") == 0 || wcscmp(Name, L"..") == 0)
+            continue;
+        if (wcspbrk(Name, L"\\/:") != NULL)
+            continue;
+        if (FindData.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+            continue;
+        if (wcslen(Source) + wcslen(Name) + 2 >= _countof(SourceChild))
+        {
+            Error = ERROR_FILENAME_EXCED_RANGE;
+            break;
+        }
+
+        wcscpy(SourceChild, Source);
+        wcscat(SourceChild, L"\\");
+        wcscat(SourceChild, Name);
+
+        if (FindData.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            Error = ExportCreateChild(Destination, Name, TRUE, &hChild, &Existed);
+            if (Error == ERROR_SUCCESS && hChild)
+            {
+                Error = ExportCopyTree(SourceChild, hChild, Depth + 1);
+                CloseHandle(hChild);
+            }
+        }
+        else
+        {
+            Error = ExportCopyFile(SourceChild, Destination, Name);
+        }
+    } while (Error == ERROR_SUCCESS && FindNextFileW(hFind, &FindData));
+
+    FindClose(hFind);
+    return Error;
+}
+
+/* Export one published package into the open Root directory. Returns a Win32/setupapi error;
+   Flat copies the package files straight into Root, otherwise into Root\<store directory name>. */
+static DWORD
+ExportOnePackage(
+    _In_ PCWSTR Published,
+    _In_ HANDLE Root,
+    _In_ BOOL Flat,
+    _Out_writes_(OriginalCch) PWSTR Original,
+    _In_ DWORD OriginalCch)
+{
+    WCHAR InfPath[MAX_PATH], Store[MAX_PATH], Repository[MAX_PATH];
+    HANDLE hPackage;
+    PWSTR Leaf;
+    UINT Length;
+    DWORD Error;
+    BOOL Existed;
+
+    Original[0] = UNICODE_NULL;
+
+    if (!IsPublishedInfName(Published))
+        return ERROR_NOT_AN_INSTALLED_OEM_INF;
+
+    Length = GetSystemWindowsDirectoryW(InfPath, _countof(InfPath));
+    if (Length == 0 || Length + 64 + wcslen(Published) >= _countof(InfPath))
+        return ERROR_BAD_PATHNAME;
+    wcscpy(Repository, InfPath);
+    wcscat(Repository, L"\\System32\\DriverStore\\FileRepository");
+    wcscat(InfPath, L"\\inf\\");
+    wcscat(InfPath, Published);
+
+    if (GetFileAttributesW(InfPath) == INVALID_FILE_ATTRIBUTES ||
+        !SetupGetInfDriverStoreLocationW(InfPath, NULL, NULL, Store, _countof(Store), NULL))
+    {
+        return ERROR_NOT_AN_INSTALLED_OEM_INF;
+    }
+
+    /* Store is <Repository>\<package dir>\<original>.inf; refuse anything else. */
+    Leaf = wcsrchr(Store, L'\\');
+    if (!Leaf || !IsInsideDirectory(Store, Repository))
+        return ERROR_NOT_AN_INSTALLED_OEM_INF;
+    lstrcpynW(Original, Leaf + 1, OriginalCch);
+    *Leaf = UNICODE_NULL;
+
+    if (Flat)
+        return ExportCopyTree(Store, Root, 0);
+
+    Leaf = wcsrchr(Store, L'\\');
+    if (!Leaf || Leaf[1] == UNICODE_NULL)
+        return ERROR_BAD_PATHNAME;
+    Error = ExportCreateChild(Root, Leaf + 1, TRUE, &hPackage, &Existed);
+    if (Error != ERROR_SUCCESS || !hPackage)
+        return Error;
+    Error = ExportCopyTree(Store, hPackage, 1);
+    CloseHandle(hPackage);
+    return Error;
+}
+
+static INT
+CommandExportDriver(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    WCHAR Target[MAX_PATH], Pattern[MAX_PATH], Original[MAX_PATH];
+    WCHAR (*Names)[32] = NULL, (*Grown)[32];
+    DWORD Capacity = 0;
+    HANDLE hRoot = INVALID_HANDLE_VALUE;
+    WIN32_FIND_DATAW FindData;
+    HANDLE hFind;
+    DWORD Attributes, Error, Total = 0, Exported = 0, Result = ERROR_SUCCESS, Count = 0, k;
+    UINT Length;
+    SIZE_T TargetLength;
+    BOOL All;
+
+    if (argc != 2)
+        return ERROR_INVALID_PARAMETER;
+
+    PrintHeader();
+    All = wcscmp(argv[0], L"*") == 0;
+
+    if (!GetFullPathNameW(argv[1], _countof(Target), Target, NULL))
+        Error = GetLastError();
+    else
+        Error = ERROR_SUCCESS;
+
+    if (Error == ERROR_SUCCESS)
+    {
+        TargetLength = wcslen(Target);
+        while (TargetLength > 3 && Target[TargetLength - 1] == L'\\')
+            Target[--TargetLength] = UNICODE_NULL;
+        Attributes = GetFileAttributesW(Target);
+        if (Attributes == INVALID_FILE_ATTRIBUTES)
+            Error = GetLastError();
+        else if (!(Attributes & FILE_ATTRIBUTE_DIRECTORY))
+            Error = ERROR_BAD_PATHNAME;
+    }
+    if (Error == ERROR_SUCCESS)
+    {
+        /* One open of the target; everything below is created relative to this handle. */
+        hRoot = CreateFileW(Target, FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | SYNCHRONIZE,
+                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
+                            FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        if (hRoot == INVALID_HANDLE_VALUE)
+        {
+            Error = GetLastError();
+        }
+        else
+        {
+            BY_HANDLE_FILE_INFORMATION RootInfo;
+
+            if (!GetFileInformationByHandle(hRoot, &RootInfo) ||
+                !(RootInfo.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY))
+            {
+                CloseHandle(hRoot);
+                hRoot = INVALID_HANDLE_VALUE;
+                Error = ERROR_BAD_PATHNAME;
+            }
+        }
+    }
+    if (Error != ERROR_SUCCESS)
+    {
+        ConPuts(StdOut, L"Failed to export driver package: The destination directory is missing or invalid.\n");
+        ConPrintf(StdOut, L"Total driver packages:      0\nExported driver packages:   0\n");
+        return (INT)Error;
+    }
+
+    if (!All)
+    {
+        Total = 1;
+        Error = ExportOnePackage(argv[0], hRoot, TRUE, Original, _countof(Original));
+        if (Error == ERROR_SUCCESS)
+        {
+            ConPrintf(StdOut, L"Exporting driver package:   %ls (%ls)\n", argv[0], Original);
+            ConPuts(StdOut, L"Driver package exported successfully.\n\n");
+            Exported = 1;
+        }
+        else
+        {
+            if (Error == ERROR_NOT_AN_INSTALLED_OEM_INF)
+                ConPuts(StdOut, L"Failed to export driver package: The specified file is not an installed OEM INF.\n\n");
+            else
+                ConPrintf(StdOut, L"Failed to export driver package: error %lu.\n\n", Error);
+            Total = 0;
+            Result = Error;
+        }
+    }
+    else
+    {
+        Length = GetSystemWindowsDirectoryW(Pattern, _countof(Pattern));
+        if (Length == 0 || Length + 16 >= _countof(Pattern))
+        {
+            CloseHandle(hRoot);
+            return ERROR_GEN_FAILURE;
+        }
+        wcscat(Pattern, L"\\inf\\oem*.inf");
+        hFind = FindFirstFileW(Pattern, &FindData);
+        if (hFind != INVALID_HANDLE_VALUE)
+        {
+            do
+            {
+                if (!IsPublishedInfName(FindData.cFileName))
+                    continue;
+                if (Count == Capacity)
+                {
+                    Capacity = Capacity ? Capacity * 2 : 256;
+                    Grown = Names ? HeapReAlloc(GetProcessHeap(), 0, Names, Capacity * sizeof(*Names))
+                                  : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Names));
+                    if (!Grown)
+                        break;
+                    Names = Grown;
+                }
+                lstrcpynW(Names[Count++], FindData.cFileName, _countof(Names[0]));
+            } while (FindNextFileW(hFind, &FindData));
+            FindClose(hFind);
+        }
+
+        for (k = 0; k < Count; k++)
+        {
+            Total++;
+            Error = ExportOnePackage(Names[k], hRoot, FALSE, Original, _countof(Original));
+            if (Error == ERROR_SUCCESS)
+            {
+                ConPrintf(StdOut, L"Exporting driver package:   %ls (%ls)\n", Names[k], Original);
+                ConPuts(StdOut, L"Driver package exported successfully.\n\n");
+                Exported++;
+            }
+            else
+            {
+                ConPrintf(StdOut, L"Failed to export driver package: %ls: error %lu.\n\n", Names[k], Error);
+                Result = Error;
+            }
+        }
+    }
+
+    CloseHandle(hRoot);
+    if (Names)
+        HeapFree(GetProcessHeap(), 0, Names);
+    ConPrintf(StdOut, L"Total driver packages:      %lu\n", Total);
+    ConPrintf(StdOut, L"Exported driver packages:   %lu\n", Exported);
+    return (INT)Result;
+}
+
 int
 wmain(
     int argc,
@@ -2287,6 +2786,10 @@ wmain(
     else if (IsOption(Command, L"f") && argc >= 1 && IsOption(argv[0], L"d"))
     {
         Result = CommandDeleteDriver(argc - 1, argv + 1, TRUE);
+    }
+    else if (IsOption(Command, L"export-driver"))
+    {
+        Result = CommandExportDriver(argc, argv);
     }
     else if (IsOption(Command, L"enum-drivers") || IsOption(Command, L"e"))
     {
