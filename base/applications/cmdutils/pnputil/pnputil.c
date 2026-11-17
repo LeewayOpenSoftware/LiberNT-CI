@@ -25,6 +25,8 @@
 
 #include <conutils.h>
 
+#include "resource.h"
+
 #define PROBLEM_NAME(x) { x, L"" #x }
 
 typedef struct _ADD_CONTEXT
@@ -969,12 +971,332 @@ MatchesClass(
            _wcsicmp(Buffer, Class) == 0;
 }
 
+typedef enum _OUTPUT_FORMAT
+{
+    OutputText = 0,
+    OutputXml,
+    OutputCsv
+} OUTPUT_FORMAT;
+
+typedef struct _OUTPUT_CONTEXT
+{
+    OUTPUT_FORMAT Format;
+    HANDLE File;        /* INVALID_HANDLE_VALUE => standard output */
+} OUTPUT_CONTEXT;
+
+static VOID OutputPutsRaw(_In_ OUTPUT_CONTEXT *Output, _In_ PCWSTR Text);
+
+static VOID
+GetOutputVersion(
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    OSVERSIONINFOW Info = { sizeof(Info) };
+
+    if (GetVersionExW(&Info))
+        _snwprintf(Buffer, Cch, L"%lu.%lu.%lu", Info.dwMajorVersion, Info.dwMinorVersion, Info.dwBuildNumber);
+    else
+        lstrcpynW(Buffer, L"0.0.0", Cch);
+    Buffer[Cch - 1] = UNICODE_NULL;
+}
+
+/* Default /output-file name: pnputil_YYYYMMDD_HHMMSSmmm.<ext> in the current
+   directory, from the UTC time (GetSystemTime), as Windows does. */
+static VOID
+BuildDefaultOutputName(
+    _In_ OUTPUT_FORMAT Format,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    SYSTEMTIME Time;
+    PCWSTR Extension = (Format == OutputXml) ? L"xml" : (Format == OutputCsv) ? L"csv" : L"txt";
+
+    GetSystemTime(&Time);
+    _snwprintf(Buffer, Cch, L"pnputil_%04u%02u%02u_%02u%02u%02u%03u.%ls",
+               Time.wYear, Time.wMonth, Time.wDay,
+               Time.wHour, Time.wMinute, Time.wSecond, Time.wMilliseconds, Extension);
+    Buffer[Cch - 1] = UNICODE_NULL;
+}
+
+/* One "Label<pad>Value" text line to the sink (CRLF; the console path keeps "\n"). */
+static VOID
+OutputTxtLine(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Label,
+    _In_ PCWSTR Value)
+{
+    WCHAR Line[2048];
+
+    _snwprintf(Line, _countof(Line) - 1, L"%-28ls%ls\r\n", Label, Value);
+    Line[_countof(Line) - 1] = UNICODE_NULL;
+    OutputPutsRaw(Output, Line);
+}
+
+/* Emit a REG_MULTI_SZ property as one text line per value (label blank after the
+   first), matching the console PrintDeviceProperty; absent property emits nothing. */
+static VOID
+OutputTxtMultiSz(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ DWORD Property,
+    _In_ PCWSTR Label)
+{
+    WCHAR Buffer[1024];
+    DWORD Type;
+    PCWSTR Value;
+
+    if (!SetupDiGetDeviceRegistryPropertyW(DeviceInfoSet, DeviceInfoData, Property, &Type,
+                                           (PBYTE)Buffer, sizeof(Buffer) - 2 * sizeof(WCHAR), NULL) ||
+        Type != REG_MULTI_SZ)
+    {
+        return;
+    }
+    Buffer[_countof(Buffer) - 1] = UNICODE_NULL;
+    Buffer[_countof(Buffer) - 2] = UNICODE_NULL;
+    for (Value = Buffer; *Value; Value += wcslen(Value) + 1)
+    {
+        OutputTxtLine(Output, Label, Value);
+        Label = L"";
+    }
+}
+
+/* Write one string to the active sink. For /output-file this uses the encoding
+   Windows writes for the format -- ANSI for txt, UTF-16LE for csv, UTF-8 for xml,
+   all without a BOM -- converting the whole string at once; otherwise stdout. */
+static VOID
+OutputPutsRaw(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Text)
+{
+    INT Bytes, Length;
+    PSTR Buffer;
+    DWORD Written;
+    UINT CodePage;
+
+    if (Output->File == INVALID_HANDLE_VALUE)
+    {
+        ConPuts(StdOut, Text);
+        return;
+    }
+
+    if (Output->Format == OutputCsv)
+    {
+        Length = lstrlenW(Text);
+        if (Length > 0)
+            WriteFile(Output->File, Text, Length * sizeof(WCHAR), &Written, NULL);
+        return;
+    }
+
+    CodePage = (Output->Format == OutputText) ? CP_ACP : CP_UTF8;
+    Bytes = WideCharToMultiByte(CodePage, 0, Text, -1, NULL, 0, NULL, NULL);
+    if (Bytes <= 1)
+        return;
+    Buffer = HeapAlloc(GetProcessHeap(), 0, Bytes);
+    if (!Buffer)
+        return;
+    WideCharToMultiByte(CodePage, 0, Text, -1, Buffer, Bytes, NULL, NULL);
+    WriteFile(Output->File, Buffer, Bytes - 1, &Written, NULL);
+    HeapFree(GetProcessHeap(), 0, Buffer);
+}
+
+/* XML element/attribute text escaping, built once. Control characters below 0x20
+   (except tab, CR, LF) are dropped: they are not legal in XML 1.0. */
+static VOID
+OutputXmlText(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Text)
+{
+    PCWSTR p, Rep;
+    PWSTR Buffer;
+    SIZE_T Used = 0;
+
+    Buffer = HeapAlloc(GetProcessHeap(), 0, (wcslen(Text) * 6 + 1) * sizeof(WCHAR));
+    if (!Buffer)
+        return;
+
+    for (p = Text; *p; p++)
+    {
+        switch (*p)
+        {
+            case L'&': Rep = L"&amp;"; break;
+            case L'<': Rep = L"&lt;"; break;
+            case L'>': Rep = L"&gt;"; break;
+            case L'"': Rep = L"&quot;"; break;
+            case L'\'': Rep = L"&apos;"; break;
+            default:
+                if (*p < 0x20 && *p != L'\t' && *p != L'\n' && *p != L'\r')
+                    continue;
+                Buffer[Used++] = *p;
+                continue;
+        }
+        while (*Rep)
+            Buffer[Used++] = *Rep++;
+    }
+    Buffer[Used] = UNICODE_NULL;
+    OutputPutsRaw(Output, Buffer);
+    HeapFree(GetProcessHeap(), 0, Buffer);
+}
+
+/* One RFC-4180 CSV field, built once: always quoted, embedded quotes doubled. */
+static VOID
+OutputCsvField(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Text,
+    _In_ BOOL Last)
+{
+    PCWSTR p;
+    PWSTR Buffer;
+    SIZE_T Used = 0;
+
+    /* Worst case: open-quote + 2n (every char a doubled quote) + close-quote + CRLF + NUL. */
+    Buffer = HeapAlloc(GetProcessHeap(), 0, (wcslen(Text) * 2 + 5) * sizeof(WCHAR));
+    if (!Buffer)
+        return;
+
+    Buffer[Used++] = L'"';
+    for (p = Text; *p; p++)
+    {
+        Buffer[Used++] = *p;
+        if (*p == L'"')
+            Buffer[Used++] = L'"';
+    }
+    Buffer[Used++] = L'"';
+    if (Last)
+    {
+        Buffer[Used++] = L'\r';
+        Buffer[Used++] = L'\n';
+    }
+    else
+    {
+        Buffer[Used++] = L',';
+    }
+    Buffer[Used] = UNICODE_NULL;
+    OutputPutsRaw(Output, Buffer);
+    HeapFree(GetProcessHeap(), 0, Buffer);
+}
+
+/* Read a device registry property as a string; returns Default (or empty) when
+   absent. For the class GUID, lower-case it and map the default class as the txt
+   path does. */
+static PCWSTR
+GetDevicePropertyString(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ DWORD Property,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch,
+    _In_opt_ PCWSTR Default)
+{
+    DWORD Type;
+
+    if (Cch == 0)
+        return L"";
+    Buffer[0] = UNICODE_NULL;
+    if (!SetupDiGetDeviceRegistryPropertyW(DeviceInfoSet, DeviceInfoData, Property, &Type,
+                                           (PBYTE)Buffer, Cch * sizeof(WCHAR) - sizeof(WCHAR), NULL) ||
+        Type != REG_SZ)
+    {
+        return Default ? Default : L"";
+    }
+    Buffer[Cch - 1] = UNICODE_NULL;
+    if (Property == SPDRP_CLASSGUID)
+    {
+        CharLowerW(Buffer);
+        if (Default && wcscmp(Buffer, L"{4d36e97e-e325-11ce-bfc1-08002be10318}") == 0)
+            return Default;
+    }
+    return Buffer;
+}
+
+/* Emit one device as a CSV row or an XML <Device> element (txt uses its own path).
+   Column/element order matches Windows 11 pnputil exactly. */
+static VOID
+EmitDeviceRecord(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR InstanceId,
+    _In_ PCWSTR Description,
+    _In_ PCWSTR ClassName,
+    _In_ PCWSTR ClassGuid,
+    _In_ PCWSTR Manufacturer,
+    _In_ PCWSTR Status,
+    _In_ PCWSTR ProblemCode,
+    _In_ PCWSTR DriverName)
+{
+    if (Output->Format == OutputCsv)
+    {
+        OutputCsvField(Output, InstanceId, FALSE);
+        OutputCsvField(Output, Description, FALSE);
+        OutputCsvField(Output, ClassName, FALSE);
+        OutputCsvField(Output, ClassGuid, FALSE);
+        OutputCsvField(Output, Manufacturer, FALSE);
+        OutputCsvField(Output, Status, FALSE);
+        OutputCsvField(Output, ProblemCode, FALSE);
+        OutputCsvField(Output, L"", FALSE);          /* ProblemStatus */
+        OutputCsvField(Output, DriverName, FALSE);
+        OutputCsvField(Output, L"", TRUE);           /* ExtensionDriverNames */
+    }
+    else /* OutputXml */
+    {
+        OutputPutsRaw(Output, L"    <Device InstanceId=\"");
+        OutputXmlText(Output, InstanceId);
+        OutputPutsRaw(Output, L"\">\r\n");
+        if (Description[0])
+        {
+            OutputPutsRaw(Output, L"        <DeviceDescription>");
+            OutputXmlText(Output, Description);
+            OutputPutsRaw(Output, L"</DeviceDescription>\r\n");
+        }
+        if (ClassName[0])
+        {
+            OutputPutsRaw(Output, L"        <ClassName>");
+            OutputXmlText(Output, ClassName);
+            OutputPutsRaw(Output, L"</ClassName>\r\n");
+        }
+        if (ClassGuid[0])
+        {
+            OutputPutsRaw(Output, L"        <ClassGuid>");
+            OutputXmlText(Output, ClassGuid);
+            OutputPutsRaw(Output, L"</ClassGuid>\r\n");
+        }
+        if (Manufacturer[0])
+        {
+            OutputPutsRaw(Output, L"        <ManufacturerName>");
+            OutputXmlText(Output, Manufacturer);
+            OutputPutsRaw(Output, L"</ManufacturerName>\r\n");
+        }
+        OutputPutsRaw(Output, L"        <Status>");
+        OutputXmlText(Output, Status);
+        OutputPutsRaw(Output, L"</Status>\r\n");
+        if (ProblemCode[0])
+        {
+            OutputPutsRaw(Output, L"        <ProblemCode>");
+            OutputXmlText(Output, ProblemCode);
+            OutputPutsRaw(Output, L"</ProblemCode>\r\n");
+        }
+        if (DriverName[0])
+        {
+            OutputPutsRaw(Output, L"        <DriverName>");
+            OutputXmlText(Output, DriverName);
+            OutputPutsRaw(Output, L"</DriverName>\r\n");
+        }
+        OutputPutsRaw(Output, L"    </Device>\r\n");
+    }
+}
+
 static INT
 CommandEnumDevices(
     _In_ INT argc,
     _In_ WCHAR **argv)
 {
     ENUM_FILTER Filter = {0};
+    OUTPUT_CONTEXT Output = { OutputText, INVALID_HANDLE_VALUE };
+    PCWSTR OutputFile = NULL;
+    WCHAR DefaultName[MAX_PATH];
+    BOOL OutputFileGiven = FALSE;
+    HMODULE hInst = GetModuleHandleW(NULL);
+    WCHAR LblInstance[64], LblDesc[64], LblClass[64], LblGuid[64], LblMfg[64];
+    WCHAR LblStatus[64], LblProblem[64], LblDriver[64], LblHwIds[64], LblCompat[64];
     SP_DEVINFO_DATA DeviceInfoData;
     HDEVINFO DeviceInfoSet;
     DWORD Index, Count = 0;
@@ -990,7 +1312,7 @@ CommandEnumDevices(
         {
             Filter.Disconnected = TRUE;
         }
-        else if (IsOption(argv[i], L"ids"))
+        else if (IsOption(argv[i], L"ids") || IsOption(argv[i], L"deviceids"))
         {
             Filter.Ids = TRUE;
         }
@@ -1011,17 +1333,93 @@ CommandEnumDevices(
                 Filter.ProblemCode = wcstoul(argv[++i], NULL, 0);
             }
         }
+        else if (IsOption(argv[i], L"format") && i + 1 < argc)
+        {
+            i++;
+            if (_wcsicmp(argv[i], L"txt") == 0)
+                Output.Format = OutputText;
+            else if (_wcsicmp(argv[i], L"xml") == 0)
+                Output.Format = OutputXml;
+            else if (_wcsicmp(argv[i], L"csv") == 0)
+                Output.Format = OutputCsv;
+            else
+                return ERROR_INVALID_PARAMETER;
+        }
+        else if (IsOption(argv[i], L"output-file"))
+        {
+            OutputFileGiven = TRUE;
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                OutputFile = argv[++i];
+        }
         else
         {
             return ERROR_INVALID_PARAMETER;
         }
     }
 
-    PrintHeader();
+    if (OutputFileGiven)
+    {
+        if (!OutputFile)
+        {
+            BuildDefaultOutputName(Output.Format, DefaultName, _countof(DefaultName));
+            OutputFile = DefaultName;
+        }
+        Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (Output.File == INVALID_HANDLE_VALUE)
+            return (INT)GetLastError();
+    }
+
+    /* The banner goes to stdout for the text format and whenever a file is written;
+       csv and xml to the console carry no banner. */
+    if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
+        PrintHeader();
+
+    if (Output.Format == OutputCsv)
+    {
+        OutputPutsRaw(&Output, L"InstanceId,DeviceDescription,ClassName,ClassGuid,"
+                               L"ManufacturerName,Status,ProblemCode,ProblemStatus,"
+                               L"DriverName,ExtensionDriverNames\r\n");
+    }
+    else if (Output.Format == OutputXml)
+    {
+        WCHAR Version[64], Command[512];
+
+        GetOutputVersion(Version, _countof(Version));
+        lstrcpynW(Command, L"/enum-devices", _countof(Command));
+        for (i = 0; i < argc; i++)
+        {
+            if (lstrlenW(Command) + lstrlenW(argv[i]) + 2 >= (INT)_countof(Command))
+                break;
+            lstrcatW(Command, L" ");
+            lstrcatW(Command, argv[i]);
+        }
+        OutputPutsRaw(&Output, L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+        OutputPutsRaw(&Output, L"<PnpUtil Version=\"");
+        OutputXmlText(&Output, Version);
+        OutputPutsRaw(&Output, L"\" Command=\"");
+        OutputXmlText(&Output, Command);
+        OutputPutsRaw(&Output, L"\">\r\n");
+    }
+
+    LoadStringW(hInst, IDS_INSTANCE_ID, LblInstance, _countof(LblInstance));
+    LoadStringW(hInst, IDS_DEVICE_DESC, LblDesc, _countof(LblDesc));
+    LoadStringW(hInst, IDS_CLASS_NAME, LblClass, _countof(LblClass));
+    LoadStringW(hInst, IDS_CLASS_GUID, LblGuid, _countof(LblGuid));
+    LoadStringW(hInst, IDS_MFG_NAME, LblMfg, _countof(LblMfg));
+    LoadStringW(hInst, IDS_STATUS, LblStatus, _countof(LblStatus));
+    LoadStringW(hInst, IDS_PROBLEM_CODE, LblProblem, _countof(LblProblem));
+    LoadStringW(hInst, IDS_DRIVER_NAME, LblDriver, _countof(LblDriver));
+    LoadStringW(hInst, IDS_HARDWARE_IDS, LblHwIds, _countof(LblHwIds));
+    LoadStringW(hInst, IDS_COMPATIBLE_IDS, LblCompat, _countof(LblCompat));
 
     DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES);
     if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+    {
+        if (Output.File != INVALID_HANDLE_VALUE)
+            CloseHandle(Output.File);
         return (INT)GetLastError();
+    }
 
     DeviceInfoData.cbSize = sizeof(DeviceInfoData);
     for (Index = 0; SetupDiEnumDeviceInfo(DeviceInfoSet, Index, &DeviceInfoData); Index++)
@@ -1056,42 +1454,121 @@ CommandEnumDevices(
         else
             State = L"Stopped";
 
-        ConPrintf(StdOut, L"%-28ls%ls\n", L"Instance ID:", InstanceId);
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_DEVICEDESC, L"Device Description:", NULL);
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASS, L"Class Name:", L"Unknown");
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASSGUID, L"Class GUID:", L"Unknown");
-        PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, L"Manufacturer Name:", L"Unknown");
-        ConPrintf(StdOut, L"%-28ls%ls\n", L"Status:", State);
-
-        if (Present && (Status & DN_HAS_PROBLEM) && Problem != CM_PROB_DISABLED)
+        if (Output.Format == OutputText && Output.File == INVALID_HANDLE_VALUE)
         {
-            PCWSTR Name = L"";
+            ConPrintf(StdOut, L"%-28ls%ls\n", LblInstance, InstanceId);
+            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_DEVICEDESC, LblDesc, NULL);
+            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASS, LblClass, L"Unknown");
+            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASSGUID, LblGuid, L"Unknown");
+            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, LblMfg, L"Unknown");
+            ConPrintf(StdOut, L"%-28ls%ls\n", LblStatus, State);
 
-            for (n = 0; n < _countof(ProblemNames); n++)
+            if (Present && (Status & DN_HAS_PROBLEM) && Problem != CM_PROB_DISABLED)
             {
-                if (ProblemNames[n].Code == Problem)
-                    Name = ProblemNames[n].Name;
+                PCWSTR Name = L"";
+
+                for (n = 0; n < _countof(ProblemNames); n++)
+                {
+                    if (ProblemNames[n].Code == Problem)
+                        Name = ProblemNames[n].Name;
+                }
+                ConPrintf(StdOut, L"%-28ls%lu (0x%02lX) [%ls]\n", LblProblem, Problem, Problem, Name);
             }
-            ConPrintf(StdOut, L"%-28ls%lu (0x%02lX) [%ls]\n", L"Problem Code:", Problem, Problem, Name);
+
+            if (GetDriverKeyString(DeviceInfoSet, &DeviceInfoData, REGSTR_VAL_INFPATH, InfPath, _countof(InfPath)))
+                ConPrintf(StdOut, L"%-28ls%ls\n", LblDriver, InfPath);
+
+            if (Filter.Ids)
+            {
+                PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_HARDWAREID, LblHwIds, NULL);
+                PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_COMPATIBLEIDS, LblCompat, NULL);
+            }
+
+            ConPuts(StdOut, L"\n");
         }
-
-        if (GetDriverKeyString(DeviceInfoSet, &DeviceInfoData, REGSTR_VAL_INFPATH, InfPath, _countof(InfPath)))
-            ConPrintf(StdOut, L"%-28ls%ls\n", L"Driver Name:", InfPath);
-
-        if (Filter.Ids)
+        else if (Output.Format == OutputText)
         {
-            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_HARDWAREID, L"Hardware IDs:", NULL);
-            PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_COMPATIBLEIDS, L"Compatible IDs:", NULL);
-        }
+            WCHAR Buffer[1024], Class[256], Guid[64], Mfg[256], Line[2048];
+            DWORD Type;
 
-        ConPuts(StdOut, L"\n");
+            OutputTxtLine(&Output, LblInstance, InstanceId);
+            if (SetupDiGetDeviceRegistryPropertyW(DeviceInfoSet, &DeviceInfoData, SPDRP_DEVICEDESC, &Type,
+                                                  (PBYTE)Buffer, sizeof(Buffer) - sizeof(WCHAR), NULL) && Type == REG_SZ)
+            {
+                Buffer[_countof(Buffer) - 1] = UNICODE_NULL;
+                OutputTxtLine(&Output, LblDesc, Buffer);
+            }
+            OutputTxtLine(&Output, LblClass, GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASS, Class, _countof(Class), L"Unknown"));
+            OutputTxtLine(&Output, LblGuid, GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASSGUID, Guid, _countof(Guid), L"Unknown"));
+            OutputTxtLine(&Output, LblMfg, GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, Mfg, _countof(Mfg), L"Unknown"));
+            OutputTxtLine(&Output, LblStatus, State);
+
+            if (Present && (Status & DN_HAS_PROBLEM) && Problem != CM_PROB_DISABLED)
+            {
+                PCWSTR Name = L"";
+
+                for (n = 0; n < _countof(ProblemNames); n++)
+                {
+                    if (ProblemNames[n].Code == Problem)
+                        Name = ProblemNames[n].Name;
+                }
+                _snwprintf(Line, _countof(Line) - 1, L"%-28ls%lu (0x%02lX) [%ls]\r\n", LblProblem, Problem, Problem, Name);
+                Line[_countof(Line) - 1] = UNICODE_NULL;
+                OutputPutsRaw(&Output, Line);
+            }
+
+            if (GetDriverKeyString(DeviceInfoSet, &DeviceInfoData, REGSTR_VAL_INFPATH, InfPath, _countof(InfPath)))
+                OutputTxtLine(&Output, LblDriver, InfPath);
+
+            if (Filter.Ids)
+            {
+                OutputTxtMultiSz(&Output, DeviceInfoSet, &DeviceInfoData, SPDRP_HARDWAREID, LblHwIds);
+                OutputTxtMultiSz(&Output, DeviceInfoSet, &DeviceInfoData, SPDRP_COMPATIBLEIDS, LblCompat);
+            }
+
+            OutputPutsRaw(&Output, L"\r\n");
+        }
+        else
+        {
+            WCHAR Desc[1024], Class[256], Guid[64], Mfg[256], ProblemText[16];
+
+            if (!GetDriverKeyString(DeviceInfoSet, &DeviceInfoData, REGSTR_VAL_INFPATH, InfPath, _countof(InfPath)))
+                InfPath[0] = UNICODE_NULL;
+            ProblemText[0] = UNICODE_NULL;
+            if (Present && (Status & DN_HAS_PROBLEM) && Problem != CM_PROB_DISABLED)
+                _snwprintf(ProblemText, _countof(ProblemText), L"%lu", Problem);
+
+            EmitDeviceRecord(&Output,
+                             InstanceId,
+                             GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_DEVICEDESC, Desc, _countof(Desc), NULL),
+                             GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASS, Class, _countof(Class), L"Unknown"),
+                             GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_CLASSGUID, Guid, _countof(Guid), L"Unknown"),
+                             GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, Mfg, _countof(Mfg), L"Unknown"),
+                             State,
+                             ProblemText,
+                             InfPath);
+        }
         Count++;
     }
 
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
 
-    if (Count == 0)
-        ConPuts(StdOut, L"No devices were found on the system.\n");
+    if (Output.Format == OutputXml)
+        OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
+
+    if (Output.Format == OutputText && Output.File == INVALID_HANDLE_VALUE && Count == 0)
+    {
+        ConResPuts(StdOut, IDS_NO_DEVICES);
+        ConPuts(StdOut, L"\n");
+    }
+
+    if (Output.File != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(Output.File);
+        Output.File = INVALID_HANDLE_VALUE;
+        ConResPrintf(StdOut, IDS_OUTPUT_WRITTEN, OutputFile);
+        ConPuts(StdOut, L"\n");
+    }
 
     return ERROR_SUCCESS;
 }
