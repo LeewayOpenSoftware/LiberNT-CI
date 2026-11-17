@@ -2876,20 +2876,20 @@
 @ stdcall PsAcquireProcessExitSynchronization(ptr)
 @ stub -arch=win64 PsAcquireSiloHardReference
 @ stdcall PsAdjustWin32kPriorityFloor(ptr long)
-@ stub -arch=win64 PsAllocSiloContextSlot
+@ stdcall -arch=win64 PsAllocSiloContextSlot(long ptr)
 @ stub -arch=win64 PsAllocateAffinityToken
 @ stub -arch=win64 PsAssignProcessToJobObject
 @ stdcall PsAttachSiloToCurrentThread(ptr)
 @ stub -arch=win64 PsChargeProcessWakeCounter
 @ stub -arch=win64 PsCheckProcessFileSigningLevel
-@ stub -arch=win64 PsCreateSiloContext
+@ stdcall -arch=win64 PsCreateSiloContext(ptr long long ptr ptr)
 @ stub -arch=win64 PsCreateSystemThreadEx
 @ stdcall PsDereferenceKernelStack(ptr)
-@ stub -arch=win64 PsDereferenceSiloContext
+@ stdcall -arch=win64 PsDereferenceSiloContext(ptr)
 @ stdcall PsDetachSiloFromCurrentThread(ptr)
 @ stdcall PsEnterPriorityRegion()
 @ stub -arch=win64 PsFreeAffinityToken
-@ stub -arch=win64 PsFreeSiloContextSlot
+@ stdcall -arch=win64 PsFreeSiloContextSlot(long)
 @ stdcall PsGetCurrentServerSilo()
 @ stub -arch=win64 PsGetCurrentServerSiloName
 @ stub -arch=win64 PsGetCurrentSilo
@@ -2900,7 +2900,7 @@
 @ stub -arch=win64 PsGetJobServerSilo
 @ stub -arch=win64 PsGetJobSilo
 @ stub -arch=win64 PsGetParentSilo
-@ stub -arch=win64 PsGetPermanentSiloContext
+@ stdcall -arch=win64 PsGetPermanentSiloContext(ptr long ptr)
 @ stub -arch=win64 PsGetProcessActiveThreadCount
 @ stdcall PsGetProcessCommonJob(ptr ptr)
 @ stdcall PsGetProcessDxgProcess(ptr)
@@ -2913,16 +2913,16 @@
 @ stdcall -version=0xA00+ PsGetProcessStartKey(ptr)
 @ stdcall PsGetServerSiloServiceSessionId(ptr)
 @ stub -arch=win64 PsGetSiloContainerId
-@ stub -arch=win64 PsGetSiloContext
+@ stdcall -arch=win64 PsGetSiloContext(ptr long ptr)
 @ stub -arch=win64 PsGetSiloIdentifier
-@ stub -arch=win64 PsGetSiloMonitorContextSlot
+@ stdcall -arch=win64 PsGetSiloMonitorContextSlot(ptr)
 @ stub -arch=win64 PsGetThreadCreateTime
 @ stub -arch=win64 PsGetThreadExitStatus
 @ stdcall PsGetThreadProperty(ptr ptr long)
 @ stub -arch=win64 PsGetThreadServerSilo
 @ stdcall PsGetWin32KFilterSet()
-@ stub -arch=win64 PsInsertPermanentSiloContext
-@ stub -arch=win64 PsInsertSiloContext
+@ stdcall -arch=win64 PsInsertPermanentSiloContext(ptr long ptr)
+@ stdcall -arch=win64 PsInsertSiloContext(ptr long ptr)
 @ stub -arch=win64 PsIsComponentEnabled
 @ stdcall PsIsCurrentThreadInServerSilo()
 @ stub -arch=win64 PsIsCurrentThreadPrefetching
@@ -2936,7 +2936,7 @@
 @ stdcall PsIsWin32KFilterEnabled()
 @ stdcall PsIsWin32KFilterEnabledForProcess(ptr)
 @ stdcall PsLeavePriorityRegion()
-@ stub -arch=win64 PsMakeSiloContextPermanent
+@ stdcall -arch=win64 PsMakeSiloContextPermanent(ptr long)
 @ stdcall PsPicoCreateProcess(long ptr ptr)
 @ stdcall PsPicoCreateThread(ptr ptr ptr ptr ptr)
 @ stdcall PsPicoGetProcessContext(ptr)
@@ -2956,11 +2956,11 @@
 @ stub -arch=win64 PsQuerySystemAvailableCpusCount
 @ stub -arch=win64 PsQueryTotalCycleTimeProcess
 @ stdcall PsReferenceKernelStack(ptr)
-@ stub -arch=win64 PsReferenceSiloContext
+@ stdcall -arch=win64 PsReferenceSiloContext(ptr)
 @ stub -arch=win64 PsRegisterAltSystemCallHandler
 @ stub -arch=win64 PsRegisterPicoProvider
 @ stub -arch=win64 PsRegisterProcessAvailableCpusChangeNotification
-@ stub -arch=win64 PsRegisterSiloMonitor
+@ stdcall -arch=win64 PsRegisterSiloMonitor(ptr ptr)
 @ stub -arch=win64 PsRegisterSyscallProvider
 @ stub -arch=win64 PsRegisterSystemAvailableCpusChangeNotification
 @ stdcall PsReleaseProcessExitSynchronization(ptr)
@@ -2979,7 +2979,7 @@
 @ stdcall PsSetProcessesWindowState(long ptr)
 @ stub -arch=win64 PsSetSystemMultipleGroupAffinityThread
 @ stdcall PsSetThreadProperty(ptr ptr ptr)
-@ stub -arch=win64 PsStartSiloMonitor
+@ stdcall -arch=win64 PsStartSiloMonitor(ptr)
 @ stub -arch=win64 PsTerminateServerSilo
 @ stdcall PsTlsAlloc(ptr long ptr)
 @ stdcall PsTlsFree(long)
@@ -2987,7 +2987,7 @@
 @ stdcall PsTlsSetValue(long ptr)
 @ stdcall PsUnEstablishWin32Callouts()
 @ stub -arch=win64 PsUnregisterAvailableCpusChangeNotification
-@ stub -arch=win64 PsUnregisterSiloMonitor
+@ stdcall -arch=win64 PsUnregisterSiloMonitor(ptr)
 @ stub -arch=win64 PsUnregisterSyscallProvider
 @ stdcall PsUpdateComponentPower(ptr long int64)
 @ stub -arch=win64 PsUpdateNetworkCounters

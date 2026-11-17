@@ -52,6 +52,119 @@ NtQueryInformationProcess(
         PVOID ProcessInformation,
     _In_ ULONG ProcessInformationLength,
     _Out_opt_ PULONG ReturnLength);
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsAllocSiloContextSlot(
+  IN ULONG_PTR Reserved,
+  OUT PULONG ReturnedContextSlot);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsCreateSiloContext(
+  IN PESILO Silo,
+  IN ULONG Size,
+  IN POOL_TYPE PoolType,
+  IN PSILO_CONTEXT_CLEANUP_CALLBACK ContextCleanupCallback OPTIONAL,
+  OUT PVOID *ReturnedSiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsDereferenceSiloContext(
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsFreeSiloContextSlot(
+  IN ULONG ContextSlot);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetPermanentSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  OUT PVOID *ReturnedSiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  OUT PVOID *ReturnedSiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+ULONG
+NTAPI
+PsGetSiloMonitorContextSlot(
+  IN PSILO_MONITOR SiloMonitor);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsInsertPermanentSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsInsertSiloContext(
+  IN PESILO Silo,
+  IN ULONG ContextSlot,
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsMakeSiloContextPermanent(
+  IN PESILO Silo,
+  IN ULONG ContextSlot);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsReferenceSiloContext(
+  IN PVOID SiloContext);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsRegisterSiloMonitor(
+  IN PSILO_MONITOR_REGISTRATION Registration,
+  OUT PSILO_MONITOR *ReturnedMonitor);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsStartSiloMonitor(
+  IN PSILO_MONITOR SiloMonitor);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+VOID
+NTAPI
+PsUnregisterSiloMonitor(
+  IN PSILO_MONITOR SiloMonitor);
+
 $endif (_NTDDK_)
 $if (_NTIFS_)
 #if (NTDDI_VERSION >= NTDDI_WIN8)

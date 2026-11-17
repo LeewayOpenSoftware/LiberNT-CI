@@ -445,6 +445,9 @@ BOOLEAN
 NTAPI
 PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 {
+    
+    PsSiloInitialize();
+
     NTSTATUS Status;
     OBJECT_ATTRIBUTES ObjectAttributes;
     HANDLE SysThreadHandle;
