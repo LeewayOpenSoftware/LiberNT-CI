@@ -22,6 +22,8 @@
 #include <newdev.h>
 #include <regstr.h>
 #include <umpnpmgr/drvinst.h>
+#include <initguid.h>
+#include <devpkey.h>
 
 #include <conutils.h>
 
@@ -47,6 +49,12 @@ typedef struct _ENUM_FILTER
     BOOL HasProblemCode;
     ULONG ProblemCode;
     BOOL Ids;
+    BOOL Relations;
+    BOOL Services;
+    BOOL Stack;
+    BOOL Location;
+    BOOL Interfaces;
+    BOOL Resources;
     PCWSTR InstanceId;
     PCWSTR Class;
 } ENUM_FILTER, *PENUM_FILTER;
@@ -831,81 +839,6 @@ GetInfVersionValue(
         Buffer[0] = UNICODE_NULL;
 }
 
-static INT
-CommandEnumDrivers(VOID)
-{
-    WCHAR Pattern[MAX_PATH], Path[MAX_PATH], Store[MAX_PATH], Value[MAX_PATH], ClassName[MAX_CLASS_NAME_LEN];
-    WIN32_FIND_DATAW FindData;
-    HANDLE hFind;
-    UINT Length;
-    DWORD Count = 0;
-
-    PrintHeader();
-
-    Length = GetSystemWindowsDirectoryW(Pattern, _countof(Pattern));
-    if (Length == 0 || Length + 16 >= _countof(Pattern))
-        return ERROR_GEN_FAILURE;
-    wcscat(Pattern, L"\\inf\\");
-    Length = (UINT)wcslen(Pattern);
-    wcscat(Pattern, L"oem*.inf");
-
-    hFind = FindFirstFileW(Pattern, &FindData);
-    if (hFind != INVALID_HANDLE_VALUE)
-    {
-        do
-        {
-            PCWSTR Original = FindData.cFileName;
-            GUID ClassGuid;
-            HINF hInf;
-
-            if (Length + wcslen(FindData.cFileName) >= _countof(Path))
-                continue;
-
-            wcsncpy(Path, Pattern, Length);
-            Path[Length] = UNICODE_NULL;
-            wcscat(Path, FindData.cFileName);
-
-            hInf = SetupOpenInfFileW(Path, NULL, INF_STYLE_WIN4, NULL);
-            if (hInf == INVALID_HANDLE_VALUE)
-                continue;
-
-            if (SetupGetInfDriverStoreLocationW(Path, NULL, NULL, Store, _countof(Store), NULL) &&
-                wcsrchr(Store, L'\\'))
-            {
-                Original = wcsrchr(Store, L'\\') + 1;
-            }
-
-            ConPrintf(StdOut, L"Published Name:     %ls\n", FindData.cFileName);
-            ConPrintf(StdOut, L"Original Name:      %ls\n", Original);
-
-            GetInfVersionValue(hInf, L"Provider", Value, _countof(Value));
-            ConPrintf(StdOut, L"Provider Name:      %ls\n", Value);
-
-            GetInfVersionValue(hInf, L"ClassGUID", Value, _countof(Value));
-            GetInfVersionValue(hInf, L"Class", ClassName, _countof(ClassName));
-            if (!ClassName[0] && CLSIDFromString(Value, &ClassGuid) == S_OK)
-                SetupDiClassNameFromGuidW(&ClassGuid, ClassName, _countof(ClassName), NULL);
-            CharLowerW(Value);
-            ConPrintf(StdOut, L"Class Name:         %ls\n", ClassName);
-            ConPrintf(StdOut, L"Class GUID:         %ls\n", Value);
-
-            GetInfVersionValue(hInf, L"DriverVer", Value, _countof(Value));
-            if (wcschr(Value, L','))
-                *wcschr(Value, L',') = L' ';
-            ConPrintf(StdOut, L"Driver Version:     %ls\n\n", Value);
-
-            SetupCloseInfFile(hInf);
-            Count++;
-        } while (FindNextFileW(hFind, &FindData));
-        FindClose(hFind);
-    }
-
-    if (Count == 0)
-        ConPuts(StdOut, L"No published driver packages were found on the system.\n");
-
-    return ERROR_SUCCESS;
-}
-
 static VOID
 PrintDeviceProperty(
     _In_ HDEVINFO DeviceInfoSet,
@@ -1209,6 +1142,216 @@ GetDevicePropertyString(
     return Buffer;
 }
 
+/* Read a REG_MULTI_SZ device property into Buffer as a double-null-terminated
+   list; on absence or wrong type Buffer is an empty list. */
+static VOID
+ReadSpdrpMultiSz(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ DWORD Property,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DWORD Type;
+
+    if (Cch < 2)
+    {
+        if (Cch)
+            Buffer[0] = UNICODE_NULL;
+        return;
+    }
+    ZeroMemory(Buffer, Cch * sizeof(WCHAR));
+    if (!SetupDiGetDeviceRegistryPropertyW(DeviceInfoSet, DeviceInfoData, Property, &Type,
+                                           (PBYTE)Buffer, Cch * sizeof(WCHAR) - 2 * sizeof(WCHAR), NULL) ||
+        Type != REG_MULTI_SZ)
+    {
+        Buffer[0] = UNICODE_NULL;
+        Buffer[1] = UNICODE_NULL;
+    }
+}
+
+/* Read a DEVPROP_TYPE_STRING_LIST device property into Buffer as a double-null
+   list (same shape as REG_MULTI_SZ); empty list on absence or wrong type. */
+static VOID
+ReadDevpropStringList(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ const DEVPROPKEY *Key,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DEVPROPTYPE PropType = 0;
+
+    if (Cch < 2)
+    {
+        if (Cch)
+            Buffer[0] = UNICODE_NULL;
+        return;
+    }
+    ZeroMemory(Buffer, Cch * sizeof(WCHAR));
+    if (!SetupDiGetDevicePropertyW(DeviceInfoSet, DeviceInfoData, Key, &PropType,
+                                   (PBYTE)Buffer, Cch * sizeof(WCHAR) - 2 * sizeof(WCHAR), NULL, 0) ||
+        PropType != DEVPROP_TYPE_STRING_LIST)
+    {
+        Buffer[0] = UNICODE_NULL;
+        Buffer[1] = UNICODE_NULL;
+    }
+}
+
+/* Reduce one list entry to the text after its last backslash when Leaf is set;
+   DEVPKEY_Device_Stack holds driver object names (\Driver\partmgr) that Windows 11
+   pnputil prints as the bare leaf (partmgr). */
+static PCWSTR
+ListEntryText(
+    _In_ PCWSTR Entry,
+    _In_ BOOL Leaf)
+{
+    PCWSTR Slash;
+
+    if (!Leaf)
+        return Entry;
+    Slash = wcsrchr(Entry, L'\\');
+    return (Slash && Slash[1]) ? Slash + 1 : Entry;
+}
+
+/* Join a double-null list into Dest with ';' separators (the in-cell separator
+   Windows 11 pnputil uses for multi-value csv fields). */
+static VOID
+JoinMultiSz(
+    _In_ PCWSTR MultiSz,
+    _Out_writes_(Cch) PWSTR Dest,
+    _In_ DWORD Cch,
+    _In_ BOOL Leaf)
+{
+    PCWSTR Value;
+    SIZE_T Used = 0;
+
+    if (Cch == 0)
+        return;
+    Dest[0] = UNICODE_NULL;
+    for (Value = MultiSz; *Value; Value += wcslen(Value) + 1)
+    {
+        PCWSTR Emit = ListEntryText(Value, Leaf);
+
+        if (Used && Used + 1 < Cch)
+            Dest[Used++] = L';';
+        while (*Emit && Used + 1 < Cch)
+            Dest[Used++] = *Emit++;
+        Dest[Used] = UNICODE_NULL;
+        if (Used + 1 >= Cch)
+            break;
+    }
+}
+
+/* Parent instance id via the configuration manager; empty when the node has no
+   reachable parent. */
+static VOID
+GetParentInstanceId(
+    _In_ DEVINST DevInst,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DEVINST Parent = 0;
+
+    if (Cch == 0)
+        return;
+    Buffer[0] = UNICODE_NULL;
+    if (CM_Get_Parent(&Parent, DevInst, 0) != CR_SUCCESS)
+        return;
+    if (CM_Get_Device_IDW(Parent, Buffer, Cch, 0) != CR_SUCCESS)
+        Buffer[0] = UNICODE_NULL;
+}
+
+/* Child instance ids (first child then its siblings) as a double-null list, so
+   csv can ';'-join them and xml can emit one <Child> per entry. */
+static VOID
+GetChildrenMultiSz(
+    _In_ DEVINST DevInst,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    DEVINST Child = 0;
+    SIZE_T Used = 0;
+    WCHAR Id[MAX_DEVICE_ID_LEN + 1];
+
+    if (Cch < 2)
+    {
+        if (Cch)
+            Buffer[0] = UNICODE_NULL;
+        return;
+    }
+    Buffer[0] = UNICODE_NULL;
+    Buffer[1] = UNICODE_NULL;
+    if (CM_Get_Child(&Child, DevInst, 0) != CR_SUCCESS)
+        return;
+    do
+    {
+        PCWSTR p;
+        SIZE_T Len;
+
+        if (CM_Get_Device_IDW(Child, Id, _countof(Id), 0) != CR_SUCCESS)
+            continue;
+        Len = wcslen(Id);
+        if (Used + Len + 2 > Cch)
+            break;
+        for (p = Id; *p; p++)
+            Buffer[Used++] = *p;
+        Buffer[Used++] = UNICODE_NULL;
+        Buffer[Used] = UNICODE_NULL;
+    } while (CM_Get_Sibling(&Child, Child, 0) == CR_SUCCESS);
+}
+
+/* Emit a double-null list as a nested XML block: <Outer> with one <Inner> child
+   per entry, 8/12-space indent. Nothing is emitted when the list is empty. */
+static VOID
+EmitXmlList(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR OuterTag,
+    _In_ PCWSTR InnerTag,
+    _In_ PCWSTR MultiSz,
+    _In_ BOOL Leaf)
+{
+    PCWSTR Value;
+
+    if (!*MultiSz)
+        return;
+    OutputPutsRaw(Output, L"        <");
+    OutputPutsRaw(Output, OuterTag);
+    OutputPutsRaw(Output, L">\r\n");
+    for (Value = MultiSz; *Value; Value += wcslen(Value) + 1)
+    {
+        OutputPutsRaw(Output, L"            <");
+        OutputPutsRaw(Output, InnerTag);
+        OutputPutsRaw(Output, L">");
+        OutputXmlText(Output, ListEntryText(Value, Leaf));
+        OutputPutsRaw(Output, L"</");
+        OutputPutsRaw(Output, InnerTag);
+        OutputPutsRaw(Output, L">\r\n");
+    }
+    OutputPutsRaw(Output, L"        </");
+    OutputPutsRaw(Output, OuterTag);
+    OutputPutsRaw(Output, L">\r\n");
+}
+
+/* Emit one XML child element <Tag>text</Tag> at 8-space indent, only when text
+   is non-empty. */
+static VOID
+EmitXmlElement(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Tag,
+    _In_ PCWSTR Text)
+{
+    if (!*Text)
+        return;
+    OutputPutsRaw(Output, L"        <");
+    OutputPutsRaw(Output, Tag);
+    OutputPutsRaw(Output, L">");
+    OutputXmlText(Output, Text);
+    OutputPutsRaw(Output, L"</");
+    OutputPutsRaw(Output, Tag);
+    OutputPutsRaw(Output, L">\r\n");
+}
+
 /* Emit one device as a CSV row or an XML <Device> element (txt uses its own path).
    Column/element order matches Windows 11 pnputil exactly. */
 static VOID
@@ -1221,10 +1364,20 @@ EmitDeviceRecord(
     _In_ PCWSTR Manufacturer,
     _In_ PCWSTR Status,
     _In_ PCWSTR ProblemCode,
-    _In_ PCWSTR DriverName)
+    _In_ PCWSTR DriverName,
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ const ENUM_FILTER *Filter)
 {
+    BOOL AnyView = Filter->Ids || Filter->Relations || Filter->Stack || Filter->Location;
+
     if (Output->Format == OutputCsv)
     {
+        WCHAR List[2048], Cell[2048], Cell2[2048];
+        BOOL LastIds = Filter->Ids && !Filter->Relations && !Filter->Stack && !Filter->Location;
+        BOOL LastRel = Filter->Relations && !Filter->Stack && !Filter->Location;
+        BOOL LastStk = Filter->Stack && !Filter->Location;
+
         OutputCsvField(Output, InstanceId, FALSE);
         OutputCsvField(Output, Description, FALSE);
         OutputCsvField(Output, ClassName, FALSE);
@@ -1234,10 +1387,45 @@ EmitDeviceRecord(
         OutputCsvField(Output, ProblemCode, FALSE);
         OutputCsvField(Output, L"", FALSE);          /* ProblemStatus */
         OutputCsvField(Output, DriverName, FALSE);
-        OutputCsvField(Output, L"", TRUE);           /* ExtensionDriverNames */
+        OutputCsvField(Output, L"", !AnyView);       /* ExtensionDriverNames */
+
+        if (Filter->Ids)
+        {
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_HARDWAREID, List, _countof(List));
+            JoinMultiSz(List, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_COMPATIBLEIDS, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, LastIds);
+        }
+        if (Filter->Relations)
+        {
+            GetParentInstanceId(DeviceInfoData->DevInst, Cell, _countof(Cell));
+            OutputCsvField(Output, Cell, FALSE);
+            GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, LastRel);
+        }
+        if (Filter->Stack)
+        {
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
+            JoinMultiSz(List, Cell, _countof(Cell), TRUE);
+            OutputCsvField(Output, Cell, LastStk);
+        }
+        if (Filter->Location)
+        {
+            OutputCsvField(Output,
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_LOCATION_INFORMATION, Cell, _countof(Cell), NULL),
+                           FALSE);
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, TRUE);
+        }
     }
     else /* OutputXml */
     {
+        WCHAR List[2048], Elem[2048];
+
         OutputPutsRaw(Output, L"    <Device InstanceId=\"");
         OutputXmlText(Output, InstanceId);
         OutputPutsRaw(Output, L"\">\r\n");
@@ -1280,8 +1468,315 @@ EmitDeviceRecord(
             OutputXmlText(Output, DriverName);
             OutputPutsRaw(Output, L"</DriverName>\r\n");
         }
+
+        if (Filter->Ids)
+        {
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_HARDWAREID, List, _countof(List));
+            EmitXmlList(Output, L"HardwareIds", L"HardwareId", List, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_COMPATIBLEIDS, List, _countof(List));
+            EmitXmlList(Output, L"CompatibleIds", L"CompatibleId", List, FALSE);
+        }
+        if (Filter->Relations)
+        {
+            GetParentInstanceId(DeviceInfoData->DevInst, Elem, _countof(Elem));
+            EmitXmlElement(Output, L"Parent", Elem);
+            GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
+            EmitXmlList(Output, L"Children", L"Child", List, FALSE);
+        }
+        if (Filter->Stack)
+        {
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
+            EmitXmlList(Output, L"Stack", L"Service", List, TRUE);
+        }
+        if (Filter->Location)
+        {
+            EmitXmlElement(Output, L"LocationInfo",
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_LOCATION_INFORMATION, Elem, _countof(Elem), NULL));
+            ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
+            EmitXmlList(Output, L"LocationPaths", L"LocationPath", List, FALSE);
+        }
+
         OutputPutsRaw(Output, L"    </Device>\r\n");
     }
+}
+
+/* Windows prints the banner, "Failed to open output file: <system text>" and exits with
+   the Win32 error code. */
+static INT
+ReportOutputOpenFailure(
+    _In_ DWORD Error)
+{
+    WCHAR Text[256] = L"";
+
+    FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, Error, 0,
+                   Text, _countof(Text) - 1, NULL);
+    PrintHeader();
+    ConPrintf(StdOut, L"Failed to open output file: %ls", Text);
+    if (!Text[0])
+        ConPuts(StdOut, L"\n");
+    return (INT)Error;
+}
+
+/* DriverVer comes as written in the INF (m/d/yyyy); print it zero padded as MM/DD/YYYY. */
+static VOID
+PadDriverVersionDate(
+    _Inout_updates_(Cch) PWSTR Version,
+    _In_ DWORD Cch)
+{
+    WCHAR Rest[MAX_PATH];
+    PWSTR Start = Version, End;
+    ULONG Month, Day, Year;
+
+    Month = wcstoul(Start, &End, 10);
+    if (End == Start || *End != L'/')
+        return;
+    Start = End + 1;
+    Day = wcstoul(Start, &End, 10);
+    if (End == Start || *End != L'/')
+        return;
+    Start = End + 1;
+    Year = wcstoul(Start, &End, 10);
+    if (End == Start)
+        return;
+
+    lstrcpynW(Rest, End, _countof(Rest));
+    _snwprintf(Version, Cch, L"%02lu/%02lu/%04lu%ls", Month, Day, Year, Rest);
+    Version[Cch - 1] = UNICODE_NULL;
+}
+
+/* The "nothing found" line Windows writes in every format: it goes to the file too,
+   after the csv header or inside the xml root (xml-escaped), with CRLF in a file. */
+static VOID
+OutputEmptyMessage(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ UINT MessageId)
+{
+    WCHAR Message[256];
+
+    if (!LoadStringW(GetModuleHandleW(NULL), MessageId, Message, _countof(Message)))
+        return;
+
+    if (Output->Format == OutputXml)
+        OutputXmlText(Output, Message);
+    else
+        OutputPutsRaw(Output, Message);
+    OutputPutsRaw(Output, Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
+}
+
+static INT
+CommandEnumDrivers(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    OUTPUT_CONTEXT Output = { OutputText, INVALID_HANDLE_VALUE };
+    WCHAR Pattern[MAX_PATH], Path[MAX_PATH], Store[MAX_PATH], Provider[MAX_PATH], GuidText[64];
+    WCHAR Version[MAX_PATH], ClassName[MAX_CLASS_NAME_LEN], DefaultName[MAX_PATH], Line[MAX_PATH + 32];
+    WCHAR XmlVersion[64], XmlCommand[512];
+    PCWSTR OutputFile = NULL, ClassFilter = NULL;
+    BOOL OutputFileGiven = FALSE;
+    WIN32_FIND_DATAW FindData;
+    HANDLE hFind;
+    UINT Length;
+    DWORD Count = 0;
+    INT i;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (IsOption(argv[i], L"class") && i + 1 < argc)
+        {
+            ClassFilter = argv[++i];
+        }
+        else if (IsOption(argv[i], L"format") && i + 1 < argc)
+        {
+            i++;
+            if (_wcsicmp(argv[i], L"txt") == 0)
+                Output.Format = OutputText;
+            else if (_wcsicmp(argv[i], L"xml") == 0)
+                Output.Format = OutputXml;
+            else if (_wcsicmp(argv[i], L"csv") == 0)
+                Output.Format = OutputCsv;
+            else
+                return ERROR_INVALID_PARAMETER;
+        }
+        else if (IsOption(argv[i], L"output-file"))
+        {
+            OutputFileGiven = TRUE;
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                OutputFile = argv[++i];
+        }
+        else
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+
+    if (OutputFileGiven)
+    {
+        if (!OutputFile)
+        {
+            BuildDefaultOutputName(Output.Format, DefaultName, _countof(DefaultName));
+            OutputFile = DefaultName;
+        }
+        Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (Output.File == INVALID_HANDLE_VALUE)
+            return ReportOutputOpenFailure(GetLastError());
+    }
+
+    if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
+        PrintHeader();
+
+    if (Output.Format == OutputCsv)
+    {
+        OutputPutsRaw(&Output, L"DriverName,OriginalName,ProviderName,ClassName,ClassGuid,ClassVersion,"
+                               L"ExtensionId,DriverVersion,SignerName,CatalogAttributes,WhcpVersion\r\n");
+    }
+    else if (Output.Format == OutputXml)
+    {
+        GetOutputVersion(XmlVersion, _countof(XmlVersion));
+        lstrcpynW(XmlCommand, L"/enum-drivers", _countof(XmlCommand));
+        for (i = 0; i < argc; i++)
+        {
+            if (lstrlenW(XmlCommand) + lstrlenW(argv[i]) + 2 >= (INT)_countof(XmlCommand))
+                break;
+            lstrcatW(XmlCommand, L" ");
+            lstrcatW(XmlCommand, argv[i]);
+        }
+        OutputPutsRaw(&Output, L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+        OutputPutsRaw(&Output, L"<PnpUtil Version=\"");
+        OutputXmlText(&Output, XmlVersion);
+        OutputPutsRaw(&Output, L"\" Command=\"");
+        OutputXmlText(&Output, XmlCommand);
+        OutputPutsRaw(&Output, L"\">\r\n");
+    }
+
+    Length = GetSystemWindowsDirectoryW(Pattern, _countof(Pattern));
+    if (Length == 0 || Length + 16 >= _countof(Pattern))
+    {
+        if (Output.File != INVALID_HANDLE_VALUE)
+            CloseHandle(Output.File);
+        return ERROR_GEN_FAILURE;
+    }
+    wcscat(Pattern, L"\\inf\\");
+    Length = (UINT)wcslen(Pattern);
+    wcscat(Pattern, L"oem*.inf");
+
+    hFind = FindFirstFileW(Pattern, &FindData);
+    if (hFind != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            PCWSTR Original = FindData.cFileName;
+            GUID ClassGuid;
+            HINF hInf;
+
+            if (Length + wcslen(FindData.cFileName) >= _countof(Path))
+                continue;
+
+            wcsncpy(Path, Pattern, Length);
+            Path[Length] = UNICODE_NULL;
+            wcscat(Path, FindData.cFileName);
+
+            hInf = SetupOpenInfFileW(Path, NULL, INF_STYLE_WIN4, NULL);
+            if (hInf == INVALID_HANDLE_VALUE)
+                continue;
+
+            if (SetupGetInfDriverStoreLocationW(Path, NULL, NULL, Store, _countof(Store), NULL) &&
+                wcsrchr(Store, L'\\'))
+            {
+                Original = wcsrchr(Store, L'\\') + 1;
+            }
+
+            GetInfVersionValue(hInf, L"Provider", Provider, _countof(Provider));
+            GetInfVersionValue(hInf, L"ClassGUID", GuidText, _countof(GuidText));
+            GetInfVersionValue(hInf, L"Class", ClassName, _countof(ClassName));
+            if (!ClassName[0] && CLSIDFromString(GuidText, &ClassGuid) == S_OK)
+                SetupDiClassNameFromGuidW(&ClassGuid, ClassName, _countof(ClassName), NULL);
+            CharLowerW(GuidText);
+            GetInfVersionValue(hInf, L"DriverVer", Version, _countof(Version));
+            if (wcschr(Version, L','))
+                *wcschr(Version, L',') = L' ';
+            PadDriverVersionDate(Version, _countof(Version));
+            SetupCloseInfFile(hInf);
+
+            if (ClassFilter && _wcsicmp(ClassFilter, ClassName) != 0 && _wcsicmp(ClassFilter, GuidText) != 0)
+                continue;
+
+            if (Output.Format == OutputCsv)
+            {
+                OutputCsvField(&Output, FindData.cFileName, FALSE);
+                OutputCsvField(&Output, Original, FALSE);
+                OutputCsvField(&Output, Provider, FALSE);
+                OutputCsvField(&Output, ClassName, FALSE);
+                OutputCsvField(&Output, GuidText, FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, Version, FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, L"", TRUE);
+            }
+            else if (Output.Format == OutputXml)
+            {
+                OutputPutsRaw(&Output, L"    <Driver DriverName=\"");
+                OutputXmlText(&Output, FindData.cFileName);
+                OutputPutsRaw(&Output, L"\">\r\n        <OriginalName>");
+                OutputXmlText(&Output, Original);
+                OutputPutsRaw(&Output, L"</OriginalName>\r\n        <ProviderName>");
+                OutputXmlText(&Output, Provider);
+                OutputPutsRaw(&Output, L"</ProviderName>\r\n        <ClassName>");
+                OutputXmlText(&Output, ClassName);
+                OutputPutsRaw(&Output, L"</ClassName>\r\n        <ClassGuid>");
+                OutputXmlText(&Output, GuidText);
+                OutputPutsRaw(&Output, L"</ClassGuid>\r\n        <DriverVersion>");
+                OutputXmlText(&Output, Version);
+                OutputPutsRaw(&Output, L"</DriverVersion>\r\n        <SignerName></SignerName>\r\n"
+                                       L"        <CatalogAttributes></CatalogAttributes>\r\n"
+                                       L"        <WhcpVersion></WhcpVersion>\r\n    </Driver>\r\n");
+            }
+            else
+            {
+                static const PCWSTR Fmt[] = { L"Published Name:     %ls", L"Original Name:      %ls",
+                                              L"Provider Name:      %ls", L"Class Name:         %ls",
+                                              L"Class GUID:         %ls", L"Driver Version:     %ls" };
+                PCWSTR Vals[6];
+                INT k;
+
+                Vals[0] = FindData.cFileName;
+                Vals[1] = Original;
+                Vals[2] = Provider;
+                Vals[3] = ClassName;
+                Vals[4] = GuidText;
+                Vals[5] = Version;
+                for (k = 0; k < 6; k++)
+                {
+                    _snwprintf(Line, _countof(Line) - 1, Fmt[k], Vals[k]);
+                    Line[_countof(Line) - 1] = UNICODE_NULL;
+                    OutputPutsRaw(&Output, Line);
+                    OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
+                }
+                OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
+            }
+            Count++;
+        } while (FindNextFileW(hFind, &FindData));
+        FindClose(hFind);
+    }
+
+    if (Count == 0)
+        OutputEmptyMessage(&Output, IDS_NO_DRIVERS);
+
+    if (Output.Format == OutputXml)
+        OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
+
+    if (Output.File != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(Output.File);
+        Output.File = INVALID_HANDLE_VALUE;
+        ConResPrintf(StdOut, IDS_OUTPUT_WRITTEN, OutputFile);
+        ConPuts(StdOut, L"\n");
+    }
+
+    return ERROR_SUCCESS;
 }
 
 static INT
@@ -1295,8 +1790,8 @@ CommandEnumDevices(
     WCHAR DefaultName[MAX_PATH];
     BOOL OutputFileGiven = FALSE;
     HMODULE hInst = GetModuleHandleW(NULL);
-    WCHAR LblInstance[64], LblDesc[64], LblClass[64], LblGuid[64], LblMfg[64];
-    WCHAR LblStatus[64], LblProblem[64], LblDriver[64], LblHwIds[64], LblCompat[64];
+    WCHAR LblInstance[64] = {0}, LblDesc[64] = {0}, LblClass[64] = {0}, LblGuid[64] = {0}, LblMfg[64] = {0};
+    WCHAR LblStatus[64] = {0}, LblProblem[64] = {0}, LblDriver[64] = {0}, LblHwIds[64] = {0}, LblCompat[64] = {0};
     SP_DEVINFO_DATA DeviceInfoData;
     HDEVINFO DeviceInfoSet;
     DWORD Index, Count = 0;
@@ -1315,6 +1810,30 @@ CommandEnumDevices(
         else if (IsOption(argv[i], L"ids") || IsOption(argv[i], L"deviceids"))
         {
             Filter.Ids = TRUE;
+        }
+        else if (IsOption(argv[i], L"relations"))
+        {
+            Filter.Relations = TRUE;
+        }
+        else if (IsOption(argv[i], L"services"))
+        {
+            Filter.Services = TRUE;
+        }
+        else if (IsOption(argv[i], L"stack"))
+        {
+            Filter.Stack = TRUE;
+        }
+        else if (IsOption(argv[i], L"location"))
+        {
+            Filter.Location = TRUE;
+        }
+        else if (IsOption(argv[i], L"interfaces"))
+        {
+            Filter.Interfaces = TRUE;
+        }
+        else if (IsOption(argv[i], L"resources"))
+        {
+            Filter.Resources = TRUE;
         }
         else if (IsOption(argv[i], L"instanceid") && i + 1 < argc)
         {
@@ -1367,7 +1886,7 @@ CommandEnumDevices(
         Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
                                   CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (Output.File == INVALID_HANDLE_VALUE)
-            return (INT)GetLastError();
+            return ReportOutputOpenFailure(GetLastError());
     }
 
     /* The banner goes to stdout for the text format and whenever a file is written;
@@ -1379,7 +1898,19 @@ CommandEnumDevices(
     {
         OutputPutsRaw(&Output, L"InstanceId,DeviceDescription,ClassName,ClassGuid,"
                                L"ManufacturerName,Status,ProblemCode,ProblemStatus,"
-                               L"DriverName,ExtensionDriverNames\r\n");
+                               L"DriverName,ExtensionDriverNames");
+        if (Filter.Ids)
+            OutputPutsRaw(&Output, L",HardwareIds,CompatibleIds");
+        if (Filter.Relations)
+            OutputPutsRaw(&Output, L",Parent,Children");
+        if (Filter.Stack)
+            OutputPutsRaw(&Output, L",Stack");
+        if (Filter.Location)
+            OutputPutsRaw(&Output, L",LocationInfo,LocationPaths");
+        /* TODO: /services (Service,UpperFilters,LowerFilters -- xml filter element
+           shape not yet captured), /interfaces (Interface,InterfaceStatus) and
+           /resources columns land with their emission in the #2a continuation. */
+        OutputPutsRaw(&Output, L"\r\n");
     }
     else if (Output.Format == OutputXml)
     {
@@ -1546,21 +2077,21 @@ CommandEnumDevices(
                              GetDevicePropertyString(DeviceInfoSet, &DeviceInfoData, SPDRP_MFG, Mfg, _countof(Mfg), L"Unknown"),
                              State,
                              ProblemText,
-                             InfPath);
+                             InfPath,
+                             DeviceInfoSet,
+                             &DeviceInfoData,
+                             &Filter);
         }
         Count++;
     }
 
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
 
+    if (Count == 0)
+        OutputEmptyMessage(&Output, IDS_NO_DEVICES);
+
     if (Output.Format == OutputXml)
         OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
-
-    if (Output.Format == OutputText && Output.File == INVALID_HANDLE_VALUE && Count == 0)
-    {
-        ConResPuts(StdOut, IDS_NO_DEVICES);
-        ConPuts(StdOut, L"\n");
-    }
 
     if (Output.File != INVALID_HANDLE_VALUE)
     {
@@ -1759,7 +2290,7 @@ wmain(
     }
     else if (IsOption(Command, L"enum-drivers") || IsOption(Command, L"e"))
     {
-        Result = CommandEnumDrivers();
+        Result = CommandEnumDrivers(argc, argv);
     }
     else if (IsOption(Command, L"enum-devices"))
     {
