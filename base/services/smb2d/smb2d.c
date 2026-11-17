@@ -62,13 +62,6 @@ static TREE *g_Trees;
 static OPENFILE *g_Files;
 static unsigned long long g_NextHandle = 1;
 
-static BOOL WINAPI CtrlHandler(DWORD type)
-{
-    (void)type;
-    InterlockedExchange(&g_Stop, 1);
-    return TRUE;
-}
-
 static BOOL Ioctl(HANDLE dev, DWORD code, void *in, DWORD inLen, void *out, DWORD outLen, DWORD *ret)
 {
     DWORD n = 0;
@@ -425,23 +418,85 @@ static void Serve(HANDLE dev)
     }
 }
 
-int main(void)
-{
-    HANDLE dev;
-    ULONG version = SMB2RDR_PROTOCOL_VERSION;
+/* ---------------- start-up, console and service modes ---------------- */
 
+#define SERVICE_NAME    L"smb2d"
+#define DRIVER_NAME     L"smb2rdr"
+
+static SERVICE_STATUS_HANDLE g_StatusHandle;
+static SERVICE_STATUS g_ServiceStatus;
+static HANDLE g_Device = INVALID_HANDLE_VALUE;
+
+static void LoadIdentity(void)
+{
     if (GetEnvironmentVariableW(L"SMB2D_USER", g_User, 256) > 0)
     {
         g_HaveUser = 1;
         GetEnvironmentVariableW(L"SMB2D_DOMAIN", g_Domain, 256);
         GetEnvironmentVariableW(L"SMB2D_PASSWORD", g_Password, 256);
     }
-    SetConsoleCtrlHandler(CtrlHandler, TRUE);
-    dev = CreateFileW(SMB2RDR_USER_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE,
-                      NULL, OPEN_EXISTING, 0, NULL);
+}
+
+/* Start the kernel driver service if the device is not there yet */
+static void EnsureDriverStarted(void)
+{
+    SC_HANDLE scm = OpenSCManagerW(NULL, NULL, SC_MANAGER_CONNECT), svc;
+
+    if (!scm)
+        return;
+    svc = OpenServiceW(scm, DRIVER_NAME, SERVICE_START | SERVICE_QUERY_STATUS);
+    if (svc)
+    {
+        if (!StartServiceW(svc, 0, NULL) && GetLastError() != ERROR_SERVICE_ALREADY_RUNNING)
+            fprintf(stderr, "cannot start the %ls driver service: %lu\n", DRIVER_NAME, GetLastError());
+        CloseServiceHandle(svc);
+    }
+    CloseServiceHandle(scm);
+}
+
+static HANDLE OpenDevice(void)
+{
+    return CreateFileW(SMB2RDR_USER_DEVICE_NAME, GENERIC_READ | GENERIC_WRITE,
+                       FILE_SHARE_READ | FILE_SHARE_WRITE, NULL, OPEN_EXISTING, 0, NULL);
+}
+
+/* Wake the serving thread and shut the redirector down. A second handle is needed: the first one is
+ * busy inside the blocking GETREQ and a synchronous handle serializes its requests. */
+static void RequestStop(void)
+{
+    HANDLE ctl;
+    ULONG force = 1;
+
+    InterlockedExchange(&g_Stop, 1);
+    ctl = OpenDevice();
+    if (ctl != INVALID_HANDLE_VALUE)
+    {
+        Ioctl(ctl, IOCTL_SMB2RDR_STOP, &force, sizeof(force), NULL, 0, NULL);
+        CloseHandle(ctl);
+    }
+}
+
+/* Runs until stopped. Returns 0 on a clean run. */
+static int RunDaemon(void)
+{
+    ULONG version = SMB2RDR_PROTOCOL_VERSION;
+    HANDLE dev;
+    int tries;
+
+    LoadIdentity();
+    dev = OpenDevice();
     if (dev == INVALID_HANDLE_VALUE)
     {
-        fprintf(stderr, "cannot open the smb2rdr device (driver not loaded?): %lu\n", GetLastError());
+        EnsureDriverStarted();
+        for (tries = 0; tries < 20 && dev == INVALID_HANDLE_VALUE; tries++)
+        {
+            Sleep(500);
+            dev = OpenDevice();
+        }
+    }
+    if (dev == INVALID_HANDLE_VALUE)
+    {
+        fprintf(stderr, "cannot open the smb2rdr device: %lu\n", GetLastError());
         return 1;
     }
     if (!Ioctl(dev, IOCTL_SMB2RDR_START, &version, sizeof(version), NULL, 0, NULL))
@@ -450,9 +505,81 @@ int main(void)
         CloseHandle(dev);
         return 1;
     }
+    g_Device = dev;
     printf("smb2d: redirector started, serving requests\n");
     Serve(dev);
-    Ioctl(dev, IOCTL_SMB2RDR_STOP, NULL, 0, NULL, 0, NULL);
+    g_Device = INVALID_HANDLE_VALUE;
     CloseHandle(dev);
+    return 0;
+}
+
+static BOOL WINAPI CtrlHandler(DWORD type)
+{
+    (void)type;
+    RequestStop();
+    return TRUE;
+}
+
+static void SetServiceState(DWORD state)
+{
+    g_ServiceStatus.dwCurrentState = state;
+    g_ServiceStatus.dwControlsAccepted = (state == SERVICE_RUNNING) ? SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN : 0;
+    SetServiceStatus(g_StatusHandle, &g_ServiceStatus);
+}
+
+static DWORD WINAPI ServiceHandler(DWORD control, DWORD eventType, LPVOID eventData, LPVOID context)
+{
+    (void)eventType; (void)eventData; (void)context;
+    if (control == SERVICE_CONTROL_STOP || control == SERVICE_CONTROL_SHUTDOWN)
+    {
+        SetServiceState(SERVICE_STOP_PENDING);
+        RequestStop();
+        return NO_ERROR;
+    }
+    if (control == SERVICE_CONTROL_INTERROGATE)
+    {
+        SetServiceStatus(g_StatusHandle, &g_ServiceStatus);
+        return NO_ERROR;
+    }
+    return ERROR_CALL_NOT_IMPLEMENTED;
+}
+
+static void WINAPI ServiceMain(DWORD argc, LPWSTR *argv)
+{
+    int rc;
+
+    (void)argc; (void)argv;
+    g_StatusHandle = RegisterServiceCtrlHandlerExW(SERVICE_NAME, ServiceHandler, NULL);
+    if (!g_StatusHandle)
+        return;
+    g_ServiceStatus.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    SetServiceState(SERVICE_START_PENDING);
+    SetServiceState(SERVICE_RUNNING);
+    rc = RunDaemon();
+    g_ServiceStatus.dwWin32ExitCode = rc ? ERROR_SERVICE_SPECIFIC_ERROR : NO_ERROR;
+    g_ServiceStatus.dwServiceSpecificExitCode = (DWORD)rc;
+    SetServiceState(SERVICE_STOPPED);
+}
+
+/* smb2d.exe -console runs in the foreground; with no argument it is the service process. */
+int main(int argc, char **argv)
+{
+    static SERVICE_TABLE_ENTRYW table[] = {{(LPWSTR)SERVICE_NAME, ServiceMain}, {NULL, NULL}};
+
+    if (argc > 1 && !strcmp(argv[1], "-console"))
+    {
+        SetConsoleCtrlHandler(CtrlHandler, TRUE);
+        return RunDaemon();
+    }
+    if (!StartServiceCtrlDispatcherW(table))
+    {
+        if (GetLastError() == ERROR_FAILED_SERVICE_CONTROLLER_CONNECT)
+        {
+            /* started from a console without arguments */
+            SetConsoleCtrlHandler(CtrlHandler, TRUE);
+            return RunDaemon();
+        }
+        return 1;
+    }
     return 0;
 }

@@ -83,13 +83,18 @@ static NTSTATUS NTAPI Smb2RdrDevFcbXXXControlFile(IN OUT PRX_CONTEXT RxContext)
         }
 
         case IOCTL_SMB2RDR_STOP:
-            if (RxContext->RxDeviceObject->NumberOfActiveFcbs > 0)
+        {
+            /* input: optional ULONG force; without it a redirector with open files refuses to stop */
+            ULONG force = (in && inLen >= sizeof(ULONG)) ? *(PULONG)in : 0;
+
+            if (!force && RxContext->RxDeviceObject->NumberOfActiveFcbs > 0)
                 return STATUS_REDIRECTOR_HAS_OPEN_HANDLES;
             Smb2UpcallShutdown();
             status = RxStopMinirdr(RxContext, &RxContext->PostRequest);
             if (status == STATUS_PENDING && RxContext->PostRequest == TRUE)
                 status = STATUS_MORE_PROCESSING_REQUIRED;
             return status;
+        }
 
         case IOCTL_SMB2RDR_GETSTATE:
             if (!out || outLen < sizeof(ULONG))

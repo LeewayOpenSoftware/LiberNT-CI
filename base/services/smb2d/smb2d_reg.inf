@@ -1,0 +1,9 @@
+; SMB2 client daemon
+[AddReg]
+HKLM,"SYSTEM\CurrentControlSet\Services\smb2d","DisplayName",0x00000000,"SMB2 Client"
+HKLM,"SYSTEM\CurrentControlSet\Services\smb2d","Description",0x00000000,"Connects to SMB2 file shares for the SMB2 redirector"
+HKLM,"SYSTEM\CurrentControlSet\Services\smb2d","ErrorControl",0x00010001,0x00000001
+HKLM,"SYSTEM\CurrentControlSet\Services\smb2d","ImagePath",0x00020000,"%SystemRoot%\system32\smb2d.exe"
+HKLM,"SYSTEM\CurrentControlSet\Services\smb2d","ObjectName",0x00000000,"LocalSystem"
+HKLM,"SYSTEM\CurrentControlSet\Services\smb2d","Start",0x00010001,0x00000002
+HKLM,"SYSTEM\CurrentControlSet\Services\smb2d","Type",0x00010001,0x00000010
