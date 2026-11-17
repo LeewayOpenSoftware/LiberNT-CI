@@ -839,81 +839,6 @@ GetInfVersionValue(
         Buffer[0] = UNICODE_NULL;
 }
 
-static INT
-CommandEnumDrivers(VOID)
-{
-    WCHAR Pattern[MAX_PATH], Path[MAX_PATH], Store[MAX_PATH], Value[MAX_PATH], ClassName[MAX_CLASS_NAME_LEN];
-    WIN32_FIND_DATAW FindData;
-    HANDLE hFind;
-    UINT Length;
-    DWORD Count = 0;
-
-    PrintHeader();
-
-    Length = GetSystemWindowsDirectoryW(Pattern, _countof(Pattern));
-    if (Length == 0 || Length + 16 >= _countof(Pattern))
-        return ERROR_GEN_FAILURE;
-    wcscat(Pattern, L"\\inf\\");
-    Length = (UINT)wcslen(Pattern);
-    wcscat(Pattern, L"oem*.inf");
-
-    hFind = FindFirstFileW(Pattern, &FindData);
-    if (hFind != INVALID_HANDLE_VALUE)
-    {
-        do
-        {
-            PCWSTR Original = FindData.cFileName;
-            GUID ClassGuid;
-            HINF hInf;
-
-            if (Length + wcslen(FindData.cFileName) >= _countof(Path))
-                continue;
-
-            wcsncpy(Path, Pattern, Length);
-            Path[Length] = UNICODE_NULL;
-            wcscat(Path, FindData.cFileName);
-
-            hInf = SetupOpenInfFileW(Path, NULL, INF_STYLE_WIN4, NULL);
-            if (hInf == INVALID_HANDLE_VALUE)
-                continue;
-
-            if (SetupGetInfDriverStoreLocationW(Path, NULL, NULL, Store, _countof(Store), NULL) &&
-                wcsrchr(Store, L'\\'))
-            {
-                Original = wcsrchr(Store, L'\\') + 1;
-            }
-
-            ConPrintf(StdOut, L"Published Name:     %ls\n", FindData.cFileName);
-            ConPrintf(StdOut, L"Original Name:      %ls\n", Original);
-
-            GetInfVersionValue(hInf, L"Provider", Value, _countof(Value));
-            ConPrintf(StdOut, L"Provider Name:      %ls\n", Value);
-
-            GetInfVersionValue(hInf, L"ClassGUID", Value, _countof(Value));
-            GetInfVersionValue(hInf, L"Class", ClassName, _countof(ClassName));
-            if (!ClassName[0] && CLSIDFromString(Value, &ClassGuid) == S_OK)
-                SetupDiClassNameFromGuidW(&ClassGuid, ClassName, _countof(ClassName), NULL);
-            CharLowerW(Value);
-            ConPrintf(StdOut, L"Class Name:         %ls\n", ClassName);
-            ConPrintf(StdOut, L"Class GUID:         %ls\n", Value);
-
-            GetInfVersionValue(hInf, L"DriverVer", Value, _countof(Value));
-            if (wcschr(Value, L','))
-                *wcschr(Value, L',') = L' ';
-            ConPrintf(StdOut, L"Driver Version:     %ls\n\n", Value);
-
-            SetupCloseInfFile(hInf);
-            Count++;
-        } while (FindNextFileW(hFind, &FindData));
-        FindClose(hFind);
-    }
-
-    if (Count == 0)
-        ConPuts(StdOut, L"No published driver packages were found on the system.\n");
-
-    return ERROR_SUCCESS;
-}
-
 static VOID
 PrintDeviceProperty(
     _In_ HDEVINFO DeviceInfoSet,
@@ -1575,6 +1500,238 @@ EmitDeviceRecord(
     }
 }
 
+/* The "nothing found" line Windows writes in every format: it goes to the file too,
+   after the csv header or inside the xml root (xml-escaped), with CRLF in a file. */
+static VOID
+OutputEmptyMessage(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ UINT MessageId)
+{
+    WCHAR Message[256];
+
+    if (!LoadStringW(GetModuleHandleW(NULL), MessageId, Message, _countof(Message)))
+        return;
+
+    if (Output->Format == OutputXml)
+        OutputXmlText(Output, Message);
+    else
+        OutputPutsRaw(Output, Message);
+    OutputPutsRaw(Output, Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
+}
+
+static INT
+CommandEnumDrivers(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    OUTPUT_CONTEXT Output = { OutputText, INVALID_HANDLE_VALUE };
+    WCHAR Pattern[MAX_PATH], Path[MAX_PATH], Store[MAX_PATH], Provider[MAX_PATH], GuidText[64];
+    WCHAR Version[MAX_PATH], ClassName[MAX_CLASS_NAME_LEN], DefaultName[MAX_PATH], Line[MAX_PATH + 32];
+    WCHAR XmlVersion[64], XmlCommand[512];
+    PCWSTR OutputFile = NULL, ClassFilter = NULL;
+    BOOL OutputFileGiven = FALSE;
+    WIN32_FIND_DATAW FindData;
+    HANDLE hFind;
+    UINT Length;
+    DWORD Count = 0;
+    INT i;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (IsOption(argv[i], L"class") && i + 1 < argc)
+        {
+            ClassFilter = argv[++i];
+        }
+        else if (IsOption(argv[i], L"format") && i + 1 < argc)
+        {
+            i++;
+            if (_wcsicmp(argv[i], L"txt") == 0)
+                Output.Format = OutputText;
+            else if (_wcsicmp(argv[i], L"xml") == 0)
+                Output.Format = OutputXml;
+            else if (_wcsicmp(argv[i], L"csv") == 0)
+                Output.Format = OutputCsv;
+            else
+                return ERROR_INVALID_PARAMETER;
+        }
+        else if (IsOption(argv[i], L"output-file"))
+        {
+            OutputFileGiven = TRUE;
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                OutputFile = argv[++i];
+        }
+        else
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+
+    if (OutputFileGiven)
+    {
+        if (!OutputFile)
+        {
+            BuildDefaultOutputName(Output.Format, DefaultName, _countof(DefaultName));
+            OutputFile = DefaultName;
+        }
+        Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (Output.File == INVALID_HANDLE_VALUE)
+            return (INT)GetLastError();
+    }
+
+    if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
+        PrintHeader();
+
+    if (Output.Format == OutputCsv)
+    {
+        OutputPutsRaw(&Output, L"DriverName,OriginalName,ProviderName,ClassName,ClassGuid,ClassVersion,"
+                               L"ExtensionId,DriverVersion,SignerName,CatalogAttributes,WhcpVersion\r\n");
+    }
+    else if (Output.Format == OutputXml)
+    {
+        GetOutputVersion(XmlVersion, _countof(XmlVersion));
+        lstrcpynW(XmlCommand, L"/enum-drivers", _countof(XmlCommand));
+        for (i = 0; i < argc; i++)
+        {
+            if (lstrlenW(XmlCommand) + lstrlenW(argv[i]) + 2 >= (INT)_countof(XmlCommand))
+                break;
+            lstrcatW(XmlCommand, L" ");
+            lstrcatW(XmlCommand, argv[i]);
+        }
+        OutputPutsRaw(&Output, L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+        OutputPutsRaw(&Output, L"<PnpUtil Version=\"");
+        OutputXmlText(&Output, XmlVersion);
+        OutputPutsRaw(&Output, L"\" Command=\"");
+        OutputXmlText(&Output, XmlCommand);
+        OutputPutsRaw(&Output, L"\">\r\n");
+    }
+
+    Length = GetSystemWindowsDirectoryW(Pattern, _countof(Pattern));
+    if (Length == 0 || Length + 16 >= _countof(Pattern))
+    {
+        if (Output.File != INVALID_HANDLE_VALUE)
+            CloseHandle(Output.File);
+        return ERROR_GEN_FAILURE;
+    }
+    wcscat(Pattern, L"\\inf\\");
+    Length = (UINT)wcslen(Pattern);
+    wcscat(Pattern, L"oem*.inf");
+
+    hFind = FindFirstFileW(Pattern, &FindData);
+    if (hFind != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            PCWSTR Original = FindData.cFileName;
+            GUID ClassGuid;
+            HINF hInf;
+
+            if (Length + wcslen(FindData.cFileName) >= _countof(Path))
+                continue;
+
+            wcsncpy(Path, Pattern, Length);
+            Path[Length] = UNICODE_NULL;
+            wcscat(Path, FindData.cFileName);
+
+            hInf = SetupOpenInfFileW(Path, NULL, INF_STYLE_WIN4, NULL);
+            if (hInf == INVALID_HANDLE_VALUE)
+                continue;
+
+            if (SetupGetInfDriverStoreLocationW(Path, NULL, NULL, Store, _countof(Store), NULL) &&
+                wcsrchr(Store, L'\\'))
+            {
+                Original = wcsrchr(Store, L'\\') + 1;
+            }
+
+            GetInfVersionValue(hInf, L"Provider", Provider, _countof(Provider));
+            GetInfVersionValue(hInf, L"ClassGUID", GuidText, _countof(GuidText));
+            GetInfVersionValue(hInf, L"Class", ClassName, _countof(ClassName));
+            if (!ClassName[0] && CLSIDFromString(GuidText, &ClassGuid) == S_OK)
+                SetupDiClassNameFromGuidW(&ClassGuid, ClassName, _countof(ClassName), NULL);
+            CharLowerW(GuidText);
+            GetInfVersionValue(hInf, L"DriverVer", Version, _countof(Version));
+            if (wcschr(Version, L','))
+                *wcschr(Version, L',') = L' ';
+            SetupCloseInfFile(hInf);
+
+            if (ClassFilter && _wcsicmp(ClassFilter, ClassName) != 0 && _wcsicmp(ClassFilter, GuidText) != 0)
+                continue;
+
+            if (Output.Format == OutputCsv)
+            {
+                OutputCsvField(&Output, FindData.cFileName, FALSE);
+                OutputCsvField(&Output, Original, FALSE);
+                OutputCsvField(&Output, Provider, FALSE);
+                OutputCsvField(&Output, ClassName, FALSE);
+                OutputCsvField(&Output, GuidText, FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, Version, FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, L"", FALSE);
+                OutputCsvField(&Output, L"", TRUE);
+            }
+            else if (Output.Format == OutputXml)
+            {
+                OutputPutsRaw(&Output, L"    <Driver DriverName=\"");
+                OutputXmlText(&Output, FindData.cFileName);
+                OutputPutsRaw(&Output, L"\">\r\n        <OriginalName>");
+                OutputXmlText(&Output, Original);
+                OutputPutsRaw(&Output, L"</OriginalName>\r\n        <ProviderName>");
+                OutputXmlText(&Output, Provider);
+                OutputPutsRaw(&Output, L"</ProviderName>\r\n        <ClassName>");
+                OutputXmlText(&Output, ClassName);
+                OutputPutsRaw(&Output, L"</ClassName>\r\n        <ClassGuid>");
+                OutputXmlText(&Output, GuidText);
+                OutputPutsRaw(&Output, L"</ClassGuid>\r\n        <DriverVersion>");
+                OutputXmlText(&Output, Version);
+                OutputPutsRaw(&Output, L"</DriverVersion>\r\n    </Driver>\r\n");
+            }
+            else
+            {
+                static const PCWSTR Fmt[] = { L"Published Name:     %ls", L"Original Name:      %ls",
+                                              L"Provider Name:      %ls", L"Class Name:         %ls",
+                                              L"Class GUID:         %ls", L"Driver Version:     %ls" };
+                PCWSTR Vals[6];
+                INT k;
+
+                Vals[0] = FindData.cFileName;
+                Vals[1] = Original;
+                Vals[2] = Provider;
+                Vals[3] = ClassName;
+                Vals[4] = GuidText;
+                Vals[5] = Version;
+                for (k = 0; k < 6; k++)
+                {
+                    _snwprintf(Line, _countof(Line) - 1, Fmt[k], Vals[k]);
+                    Line[_countof(Line) - 1] = UNICODE_NULL;
+                    OutputPutsRaw(&Output, Line);
+                    OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
+                }
+                OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
+            }
+            Count++;
+        } while (FindNextFileW(hFind, &FindData));
+        FindClose(hFind);
+    }
+
+    if (Count == 0)
+        OutputEmptyMessage(&Output, IDS_NO_DRIVERS);
+
+    if (Output.Format == OutputXml)
+        OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
+
+    if (Output.File != INVALID_HANDLE_VALUE)
+    {
+        CloseHandle(Output.File);
+        Output.File = INVALID_HANDLE_VALUE;
+        ConResPrintf(StdOut, IDS_OUTPUT_WRITTEN, OutputFile);
+        ConPuts(StdOut, L"\n");
+    }
+
+    return ERROR_SUCCESS;
+}
+
 static INT
 CommandEnumDevices(
     _In_ INT argc,
@@ -1883,14 +2040,11 @@ CommandEnumDevices(
 
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
 
+    if (Count == 0)
+        OutputEmptyMessage(&Output, IDS_NO_DEVICES);
+
     if (Output.Format == OutputXml)
         OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
-
-    if (Output.Format == OutputText && Output.File == INVALID_HANDLE_VALUE && Count == 0)
-    {
-        ConResPuts(StdOut, IDS_NO_DEVICES);
-        ConPuts(StdOut, L"\n");
-    }
 
     if (Output.File != INVALID_HANDLE_VALUE)
     {
@@ -2089,7 +2243,7 @@ wmain(
     }
     else if (IsOption(Command, L"enum-drivers") || IsOption(Command, L"e"))
     {
-        Result = CommandEnumDrivers();
+        Result = CommandEnumDrivers(argc, argv);
     }
     else if (IsOption(Command, L"enum-devices"))
     {
