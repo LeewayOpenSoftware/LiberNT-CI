@@ -1904,6 +1904,8 @@ typedef struct _DRV_ITEM
     WCHAR Version[96];
     WCHAR MatchingId[LINE_LEN];
     DWORD Rank;
+    FILETIME Date;
+    DWORDLONG Ver;
     BOOL Best;
     BOOL Installed;
 } DRV_ITEM;
@@ -1933,7 +1935,7 @@ DriverListCollect(
 {
     WCHAR Installed[MAX_PATH];
     SP_DRVINFO_DATA_W Drv;
-    DWORD Index, Capacity = 0, BestIndex = 0, BestRank = MAXDWORD;
+    DWORD Index, Capacity = 0, BestIndex = 0;
     BOOL HaveInstalled;
 
     List->Items = NULL;
@@ -2004,7 +2006,10 @@ DriverListCollect(
         }
         Item->Version[_countof(Item->Version) - 1] = UNICODE_NULL;
 
+        Item->Date = Drv.DriverDate;
+        Item->Ver = Drv.DriverVersion;
         Params.cbSize = sizeof(Params);
+        Item->Rank = MAXDWORD;
         if (SetupDiGetDriverInstallParamsW(Set, Info, &Drv, &Params))
             Item->Rank = Params.Rank;
 
@@ -2020,15 +2025,20 @@ DriverListCollect(
         }
 
         Item->Installed = HaveInstalled && _wcsicmp(Installed, Item->Name) == 0;
-        if (Item->Rank < BestRank)
-        {
-            BestRank = Item->Rank;
-            BestIndex = List->Count;
-        }
         List->Count++;
         HeapFree(GetProcessHeap(), 0, Detail);
     }
 
+    for (Index = 1; Index < List->Count; Index++)
+    {
+        const DRV_ITEM *Item = &List->Items[Index], *Best = &List->Items[BestIndex];
+        LONG Cmp = Item->Rank != Best->Rank ? (Item->Rank < Best->Rank ? 1 : -1) : CompareFileTime(&Item->Date, &Best->Date);
+
+        if (Cmp == 0)
+            Cmp = Item->Ver > Best->Ver ? 1 : (Item->Ver < Best->Ver ? -1 : 0);
+        if (Cmp > 0)
+            BestIndex = Index;
+    }
     if (List->Count)
         List->Items[BestIndex].Best = TRUE;
     SetupDiDestroyDriverInfoList(Set, Info, SPDIT_COMPATDRIVER);
@@ -2144,7 +2154,7 @@ DriversEmitXml(
     OutputPutsRaw(Output, L"        </MatchingDrivers>\r\n");
 }
 
-/* csv: one row per matching driver. Windows pads these rows three fields wider than the header. */
+/* csv: one row per matching driver; Windows writes id, H-1 empty fields, name and rank (two wider than the header). */
 static VOID
 DriversEmitCsv(
     _In_ OUTPUT_CONTEXT *Output,
@@ -2214,6 +2224,8 @@ EmitDeviceRecord(
     DRV_LIST Drivers = { NULL, 0 };
     DWORD ViewColumns = (Filter->Ids ? 2 : 0) + (Filter->Relations ? 2 : 0) + (Filter->Stack ? 1 : 0) +
                         (Filter->Location ? 2 : 0);
+    /* Header fields: the ten base ones, the views, MatchingDriverName,Rank and Key,Type,Value. */
+    DWORD HeaderCols = 10 + ViewColumns + (Filter->Drivers ? 2 : 0) + (Filter->Properties ? 3 : 0);
 
     if (Filter->Drivers)
         DriverListCollect(&Drivers, DeviceInfoSet, DeviceInfoData);
@@ -2273,13 +2285,13 @@ EmitDeviceRecord(
         }
 
         if (Filter->Drivers)
-            DriversEmitCsv(Output, &Drivers, InstanceId, 9 + ViewColumns + 3);
+            DriversEmitCsv(Output, &Drivers, InstanceId, HeaderCols - 1); /* Windows: H + 2 fields */
         if (Filter->Properties)
         {
             PROP_LIST Props;
 
             PropListCollect(&Props, DeviceInfoSet, DeviceInfoData, NULL);
-            PropsEmitCsv(Output, &Props, InstanceId, 9 + ViewColumns);
+            PropsEmitCsv(Output, &Props, InstanceId, HeaderCols - 4); /* Windows: exactly H fields */
             PropListFree(&Props);
         }
     }
