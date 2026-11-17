@@ -57,6 +57,104 @@ typedef enum _EVT_LOGIN_CLASS {
     EvtRpcLogin = 1
 } EVT_LOGIN_CLASS;
 
+typedef enum _EVT_QUERY_FLAGS {
+    EvtQueryChannelPath         = 0x1,
+    EvtQueryFilePath            = 0x2,
+    EvtQueryForwardDirection    = 0x100,
+    EvtQueryReverseDirection    = 0x200,
+    EvtQueryTolerateQueryErrors = 0x1000
+} EVT_QUERY_FLAGS;
+
+typedef enum _EVT_SEEK_FLAGS {
+    EvtSeekRelativeToFirst    = 1,
+    EvtSeekRelativeToLast     = 2,
+    EvtSeekRelativeToCurrent  = 3,
+    EvtSeekRelativeToBookmark = 4,
+    EvtSeekOriginMask         = 7,
+    EvtSeekStrict             = 0x10000
+} EVT_SEEK_FLAGS;
+
+typedef enum _EVT_SUBSCRIBE_FLAGS {
+    EvtSubscribeToFutureEvents      = 1,
+    EvtSubscribeStartAtOldestRecord = 2,
+    EvtSubscribeStartAfterBookmark  = 3,
+    EvtSubscribeOriginMask          = 3,
+    EvtSubscribeTolerateQueryErrors = 0x1000,
+    EvtSubscribeStrict              = 0x10000
+} EVT_SUBSCRIBE_FLAGS;
+
+typedef enum _EVT_SYSTEM_PROPERTY_ID {
+    EvtSystemProviderName = 0,
+    EvtSystemProviderGuid,
+    EvtSystemEventID,
+    EvtSystemQualifiers,
+    EvtSystemLevel,
+    EvtSystemTask,
+    EvtSystemOpcode,
+    EvtSystemKeywords,
+    EvtSystemTimeCreated,
+    EvtSystemEventRecordId,
+    EvtSystemActivityID,
+    EvtSystemRelatedActivityID,
+    EvtSystemProcessID,
+    EvtSystemThreadID,
+    EvtSystemChannel,
+    EvtSystemComputer,
+    EvtSystemUserID,
+    EvtSystemVersion,
+    EvtSystemPropertyIdEND
+} EVT_SYSTEM_PROPERTY_ID;
+
+typedef enum _EVT_RENDER_CONTEXT_FLAGS {
+    EvtRenderContextValues = 0,
+    EvtRenderContextSystem,
+    EvtRenderContextUser
+} EVT_RENDER_CONTEXT_FLAGS;
+
+typedef enum _EVT_RENDER_FLAGS {
+    EvtRenderEventValues = 0,
+    EvtRenderEventXml,
+    EvtRenderBookmark
+} EVT_RENDER_FLAGS;
+
+typedef enum _EVT_OPEN_LOG_FLAGS {
+    EvtOpenChannelPath = 0x1,
+    EvtOpenFilePath    = 0x2
+} EVT_OPEN_LOG_FLAGS;
+
+typedef enum _EVT_LOG_PROPERTY_ID {
+    EvtLogCreationTime = 0,
+    EvtLogLastAccessTime,
+    EvtLogLastWriteTime,
+    EvtLogFileSize,
+    EvtLogAttributes,
+    EvtLogNumberOfLogRecords,
+    EvtLogOldestRecordNumber,
+    EvtLogFull
+} EVT_LOG_PROPERTY_ID;
+
+typedef enum _EVT_EXPORTLOG_FLAGS {
+    EvtExportLogChannelPath         = 0x1,
+    EvtExportLogFilePath            = 0x2,
+    EvtExportLogTolerateQueryErrors = 0x1000,
+    EvtExportLogOverwrite           = 0x2000
+} EVT_EXPORTLOG_FLAGS;
+
+typedef enum _EVT_RPC_LOGIN_FLAGS {
+    EvtRpcLoginAuthDefault = 0,
+    EvtRpcLoginAuthNegotiate,
+    EvtRpcLoginAuthKerberos,
+    EvtRpcLoginAuthNTLM
+} EVT_RPC_LOGIN_FLAGS;
+
+typedef struct _EVT_RPC_LOGIN {
+    LPWSTR Server;
+    LPWSTR User;
+    LPWSTR Domain;
+    LPWSTR Password;
+    DWORD  Flags;
+} EVT_RPC_LOGIN;
+
 typedef enum _EVT_SUBSCRIBE_NOTIFY_ACTION {
     EvtSubscribeActionError = 0,
     EvtSubscribeActionDeliver
@@ -163,6 +261,23 @@ EVT_HANDLE WINAPI EvtSubscribe(EVT_HANDLE Session, HANDLE SignalEvent, LPCWSTR C
 EVT_HANDLE WINAPI EvtOpenChannelConfig(EVT_HANDLE Session, LPCWSTR ChannelPath, DWORD Flags);
 BOOL WINAPI EvtSaveChannelConfig(EVT_HANDLE,DWORD);
 BOOL WINAPI EvtRender(EVT_HANDLE, EVT_HANDLE, DWORD, DWORD, void *, DWORD *, DWORD *);
+
+BOOL WINAPI EvtCancel(EVT_HANDLE);
+BOOL WINAPI EvtClearLog(EVT_HANDLE session, LPCWSTR channel, LPCWSTR target, DWORD flags);
+DWORD WINAPI EvtGetExtendedStatus(DWORD buffer_size, LPWSTR buffer, PDWORD buffer_used);
+BOOL WINAPI EvtGetLogInfo(EVT_HANDLE log, EVT_LOG_PROPERTY_ID id, DWORD buffer_size,
+                          PEVT_VARIANT buffer, PDWORD buffer_used);
+BOOL WINAPI EvtNext(EVT_HANDLE result_set, DWORD size, PEVT_HANDLE events, DWORD timeout,
+                    DWORD flags, PDWORD returned);
+BOOL WINAPI EvtNextChannelPath(EVT_HANDLE channel_enum, DWORD buffer_size, LPWSTR buffer,
+                               PDWORD buffer_used);
+EVT_HANDLE WINAPI EvtOpenChannelEnum(EVT_HANDLE session, DWORD flags);
+EVT_HANDLE WINAPI EvtOpenLog(EVT_HANDLE session, LPCWSTR path, DWORD flags);
+EVT_HANDLE WINAPI EvtOpenSession(EVT_LOGIN_CLASS login_class, PVOID login, DWORD timeout, DWORD flags);
+EVT_HANDLE WINAPI EvtQuery(EVT_HANDLE session, LPCWSTR path, LPCWSTR query, DWORD flags);
+BOOL WINAPI EvtSeek(EVT_HANDLE result_set, LONGLONG position, EVT_HANDLE bookmark, DWORD timeout,
+                    DWORD flags);
+BOOL WINAPI EvtUpdateBookmark(EVT_HANDLE bookmark, EVT_HANDLE event);
 
 #ifdef __cplusplus
 } /* extern "C" */
