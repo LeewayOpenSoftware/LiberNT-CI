@@ -1391,6 +1391,124 @@ EmitXmlElement(
     OutputPutsRaw(Output, L">\r\n");
 }
 
+typedef struct _TREE_IFACE
+{
+    WCHAR InstanceId[MAX_DEVICE_ID_LEN];
+    PWSTR Path;
+    WCHAR Description[256];
+    GUID Class;
+    BOOL Enabled;
+} TREE_IFACE;
+
+typedef struct _TREE_CONTEXT
+{
+    BOOL Connected;
+    BOOL Services;
+    BOOL Interfaces;
+    TREE_IFACE *Ifaces;
+    DWORD IfaceCount;
+    DWORD IfaceCapacity;
+} TREE_CONTEXT;
+
+/* Collect every device interface (all classes) once, so each node can list its own. */
+static VOID
+TreeCollectInterfaces(
+    _Inout_ TREE_CONTEXT *Ctx)
+{
+    HKEY hClasses;
+    WCHAR KeyName[64];
+    DWORD Index;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\DeviceClasses", 0,
+                      KEY_READ, &hClasses) != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    for (Index = 0; ; Index++)
+    {
+        DWORD Length = _countof(KeyName), Item, Size;
+        GUID Guid;
+        HDEVINFO Set;
+
+        if (RegEnumKeyExW(hClasses, Index, KeyName, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        if (CLSIDFromString(KeyName, &Guid) != S_OK)
+            continue;
+        Set = SetupDiGetClassDevsW(&Guid, NULL, NULL, DIGCF_DEVICEINTERFACE);
+        if (Set == INVALID_HANDLE_VALUE)
+            continue;
+
+        for (Item = 0; ; Item++)
+        {
+            SP_DEVICE_INTERFACE_DATA Interface;
+            SP_DEVINFO_DATA DeviceInfo;
+            PSP_DEVICE_INTERFACE_DETAIL_DATA_W Detail;
+            TREE_IFACE *Entry;
+
+            Interface.cbSize = sizeof(Interface);
+            if (!SetupDiEnumDeviceInterfaces(Set, NULL, &Guid, Item, &Interface))
+                break;
+            Size = 0;
+            SetupDiGetDeviceInterfaceDetailW(Set, &Interface, NULL, 0, &Size, NULL);
+            if (Size < sizeof(*Detail))
+                continue;
+            Detail = HeapAlloc(GetProcessHeap(), 0, Size);
+            if (!Detail)
+                break;
+            Detail->cbSize = sizeof(*Detail);
+            DeviceInfo.cbSize = sizeof(DeviceInfo);
+            if (!SetupDiGetDeviceInterfaceDetailW(Set, &Interface, Detail, Size, NULL, &DeviceInfo))
+            {
+                HeapFree(GetProcessHeap(), 0, Detail);
+                continue;
+            }
+
+            if (Ctx->IfaceCount == Ctx->IfaceCapacity)
+            {
+                DWORD Capacity = Ctx->IfaceCapacity ? Ctx->IfaceCapacity * 2 : 256;
+                TREE_IFACE *Grown = Ctx->Ifaces ? HeapReAlloc(GetProcessHeap(), 0, Ctx->Ifaces, Capacity * sizeof(*Grown))
+                                                : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Grown));
+
+                if (!Grown)
+                {
+                    HeapFree(GetProcessHeap(), 0, Detail);
+                    break;
+                }
+                Ctx->Ifaces = Grown;
+                Ctx->IfaceCapacity = Capacity;
+            }
+            Entry = &Ctx->Ifaces[Ctx->IfaceCount];
+            Entry->InstanceId[0] = UNICODE_NULL;
+            SetupDiGetDeviceInstanceIdW(Set, &DeviceInfo, Entry->InstanceId, _countof(Entry->InstanceId), NULL);
+            Entry->Enabled = (Interface.Flags & SPINT_ACTIVE) && !(Interface.Flags & SPINT_REMOVED);
+            Entry->Class = Guid;
+            lstrcpynW(Entry->Description, L"Unknown", _countof(Entry->Description));
+            {
+                WCHAR Friendly[256];
+                DEVPROPTYPE FriendlyType = 0;
+
+                if (SetupDiGetDeviceInterfacePropertyW(Set, &Interface, &DEVPKEY_DeviceInterface_FriendlyName,
+                                                       &FriendlyType, (PBYTE)Friendly, sizeof(Friendly) - sizeof(WCHAR),
+                                                       NULL, 0) &&
+                    FriendlyType == DEVPROP_TYPE_STRING && Friendly[0])
+                {
+                    lstrcpynW(Entry->Description, Friendly, _countof(Entry->Description));
+                }
+            }
+            Entry->Path = HeapAlloc(GetProcessHeap(), 0, (wcslen(Detail->DevicePath) + 1) * sizeof(WCHAR));
+            if (Entry->Path)
+            {
+                wcscpy(Entry->Path, Detail->DevicePath);
+                Ctx->IfaceCount++;
+            }
+            HeapFree(GetProcessHeap(), 0, Detail);
+        }
+        SetupDiDestroyDeviceInfoList(Set);
+    }
+    RegCloseKey(hClasses);
+}
+
 #include "devpkeynames.h"
 
 /* /properties and /drivers views *******************************************/
@@ -2177,7 +2295,285 @@ DriversEmitCsv(
     }
 }
 
-/* The txt tail of a device record: matching drivers, then its properties. */
+/* /services, /interfaces and /resources views ******************************/
+
+/* Every device interface of the system, collected once, for the /interfaces view. */
+static TREE_CONTEXT DevIfaces;
+static BOOL DevIfacesLoaded;
+
+static VOID
+DevIfacesLoad(VOID)
+{
+    if (DevIfacesLoaded)
+        return;
+    DevIfacesLoaded = TRUE;
+    TreeCollectInterfaces(&DevIfaces);
+}
+
+static VOID
+IfacesEmitCsv(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Id,
+    _In_ DWORD Leading)
+{
+    DWORD i, n;
+
+    DevIfacesLoad();
+    for (i = 0; i < DevIfaces.IfaceCount; i++)
+    {
+        const TREE_IFACE *Iface = &DevIfaces.Ifaces[i];
+
+        if (_wcsicmp(Iface->InstanceId, Id) != 0)
+            continue;
+        OutputCsvField(Output, Id, FALSE);
+        for (n = 0; n < Leading; n++)
+            OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, Iface->Path, FALSE);
+        OutputCsvField(Output, Iface->Enabled ? L"Enabled" : L"Disabled", TRUE);
+    }
+}
+
+static VOID
+IfaceClassText(
+    _In_ const TREE_IFACE *Iface,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    StringFromGUID2(&Iface->Class, Buffer, Cch);
+    CharLowerW(Buffer);
+}
+
+static VOID
+IfacesEmitXml(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Id)
+{
+    BOOL Header = FALSE;
+    DWORD i;
+
+    DevIfacesLoad();
+    for (i = 0; i < DevIfaces.IfaceCount; i++)
+    {
+        const TREE_IFACE *Iface = &DevIfaces.Ifaces[i];
+        WCHAR Guid[64];
+
+        if (_wcsicmp(Iface->InstanceId, Id) != 0)
+            continue;
+        if (!Header)
+        {
+            OutputPutsRaw(Output, L"        <Interfaces>\r\n");
+            Header = TRUE;
+        }
+        IfaceClassText(Iface, Guid, _countof(Guid));
+        OutputPutsRaw(Output, L"            <Interface Path=\"");
+        OutputXmlText(Output, Iface->Path);
+        OutputPutsRaw(Output, L"\">\r\n                <Description>");
+        OutputXmlText(Output, Iface->Description);
+        OutputPutsRaw(Output, L"</Description>\r\n                <ClassGuid>");
+        OutputXmlText(Output, Guid);
+        OutputPutsRaw(Output, L"</ClassGuid>\r\n                <Status>");
+        OutputXmlText(Output, Iface->Enabled ? L"Enabled" : L"Disabled");
+        OutputPutsRaw(Output, L"</Status>\r\n            </Interface>\r\n");
+    }
+    if (Header)
+        OutputPutsRaw(Output, L"        </Interfaces>\r\n");
+}
+
+static VOID
+IfacesEmitTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Id)
+{
+    PCWSTR Eol = OutEol(Output);
+    BOOL First = TRUE;
+    DWORD i, k;
+
+    DevIfacesLoad();
+    for (i = 0; i < DevIfaces.IfaceCount; i++)
+    {
+        const TREE_IFACE *Iface = &DevIfaces.Ifaces[i];
+        WCHAR Guid[64], Line[2048];
+        PCWSTR Labels[4] = { L"Interface Path:", L"Interface Description:", L"Interface Class GUID:", L"Interface Status:" };
+        PCWSTR Values[4];
+
+        if (_wcsicmp(Iface->InstanceId, Id) != 0)
+            continue;
+        if (First)
+        {
+            OutputPutsRaw(Output, L"Interfaces:");
+            OutputPutsRaw(Output, Eol);
+        }
+        else
+        {
+            OutputPutsRaw(Output, Eol);
+        }
+        First = FALSE;
+        IfaceClassText(Iface, Guid, _countof(Guid));
+        Values[0] = Iface->Path;
+        Values[1] = Iface->Description;
+        Values[2] = Guid;
+        Values[3] = Iface->Enabled ? L"Enabled" : L"Disabled";
+        for (k = 0; k < 4; k++)
+        {
+            _snwprintf(Line, _countof(Line) - 1, L"    %-24ls%ls%ls", Labels[k], Values[k], Eol);
+            Line[_countof(Line) - 1] = UNICODE_NULL;
+            OutputPutsRaw(Output, Line);
+        }
+    }
+}
+
+/* The allocated resources of a device, one double-NUL list of formatted ranges per type. */
+typedef struct _RES_LIST
+{
+    WCHAR Io[1024];
+    WCHAR Irq[512];
+    WCHAR Mem[1024];
+    WCHAR Dma[256];
+} RES_LIST;
+
+static VOID
+ResAppend(
+    _Inout_updates_(Cch) PWSTR Multi,
+    _In_ DWORD Cch,
+    _In_ PCWSTR Text)
+{
+    PWSTR End = Multi;
+    SIZE_T Length = wcslen(Text);
+
+    while (*End)
+        End += wcslen(End) + 1;
+    if ((SIZE_T)(End - Multi) + Length + 2 > Cch)
+        return;
+    memcpy(End, Text, (Length + 1) * sizeof(WCHAR));
+    End[Length + 1] = UNICODE_NULL;
+}
+
+static VOID
+ResListCollect(
+    _Out_ RES_LIST *List,
+    _In_ DEVINST DevInst)
+{
+    ULONGLONG Data[64];
+    LOG_CONF LogConf;
+    RES_DES Current, Next;
+    RESOURCEID Type;
+
+    ZeroMemory(List, sizeof(*List));
+    if (CM_Get_First_Log_Conf(&LogConf, DevInst, ALLOC_LOG_CONF) != CR_SUCCESS)
+        return;
+
+    Current = (RES_DES)LogConf;
+    while (CM_Get_Next_Res_Des(&Next, Current, ResType_All, &Type, 0) == CR_SUCCESS)
+    {
+        ULONG Size = 0;
+        WCHAR Text[96];
+
+        if (Current != (RES_DES)LogConf)
+            CM_Free_Res_Des_Handle(Current);
+        Current = Next;
+
+        if (CM_Get_Res_Des_Data_Size(&Size, Current, 0) != CR_SUCCESS || Size == 0 || Size > sizeof(Data))
+            continue;
+        if (CM_Get_Res_Des_Data(Current, Data, Size, 0) != CR_SUCCESS)
+            continue;
+
+        Text[0] = UNICODE_NULL;
+        switch (Type)
+        {
+            case ResType_IO:
+                if (Size >= sizeof(IO_DES))
+                {
+                    const IO_DES *Io = (const IO_DES *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"0x%016I64X - 0x%016I64X", Io->IOD_Alloc_Base, Io->IOD_Alloc_End);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Io, _countof(List->Io), Text);
+                }
+                break;
+            case ResType_Mem:
+                if (Size >= sizeof(MEM_DES))
+                {
+                    const MEM_DES *Mem = (const MEM_DES *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"0x%016I64X - 0x%016I64X", Mem->MD_Alloc_Base, Mem->MD_Alloc_End);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Mem, _countof(List->Mem), Text);
+                }
+                break;
+            case ResType_IRQ:
+                if (Size >= sizeof(IRQ_DES_32))
+                {
+                    const IRQ_DES_32 *Irq = (const IRQ_DES_32 *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"0x%08X (%d)", Irq->IRQD_Alloc_Num, (INT)Irq->IRQD_Alloc_Num);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Irq, _countof(List->Irq), Text);
+                }
+                break;
+            case ResType_DMA:
+                if (Size >= sizeof(DMA_DES))
+                {
+                    const DMA_DES *Dma = (const DMA_DES *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"%lu", Dma->DD_Alloc_Chan);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Dma, _countof(List->Dma), Text);
+                }
+                break;
+        }
+    }
+    if (Current != (RES_DES)LogConf)
+        CM_Free_Res_Des_Handle(Current);
+    CM_Free_Log_Conf_Handle(LogConf);
+}
+
+/* Several values under one label: the first on the label line, the rest aligned under it. */
+static VOID
+TxtMultiSz(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Label,
+    _In_ PCWSTR MultiSz)
+{
+    PCWSTR Eol = OutEol(Output), Value;
+    WCHAR Line[2048];
+
+    for (Value = MultiSz; *Value; Value += wcslen(Value) + 1)
+    {
+        _snwprintf(Line, _countof(Line) - 1, L"%-28ls%ls%ls", Label, Value, Eol);
+        Line[_countof(Line) - 1] = UNICODE_NULL;
+        OutputPutsRaw(Output, Line);
+        Label = L"";
+    }
+}
+
+static VOID
+ServicesTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ HDEVINFO Set,
+    _In_ PSP_DEVINFO_DATA Info)
+{
+    WCHAR Service[256], List[2048];
+
+    if (GetDevicePropertyString(Set, Info, SPDRP_SERVICE, Service, _countof(Service), NULL)[0])
+        OutputTxtLine(Output, L"Service:", Service);
+    ReadSpdrpMultiSz(Set, Info, SPDRP_UPPERFILTERS, List, _countof(List));
+    TxtMultiSz(Output, L"Upper Filters:", List);
+    ReadSpdrpMultiSz(Set, Info, SPDRP_LOWERFILTERS, List, _countof(List));
+    TxtMultiSz(Output, L"Lower Filters:", List);
+}
+
+static VOID
+ResourcesTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const RES_LIST *Res)
+{
+    TxtMultiSz(Output, L"IO Resources:", Res->Io);
+    TxtMultiSz(Output, L"IRQ Resources:", Res->Irq);
+    TxtMultiSz(Output, L"Memory Resources:", Res->Mem);
+    TxtMultiSz(Output, L"DMA Resources:", Res->Dma);
+}
+
+/* The txt tail of a device record: services, drivers, interfaces, resources, then properties. */
 static VOID
 EmitDeviceTxtViews(
     _In_ OUTPUT_CONTEXT *Output,
@@ -2185,6 +2581,10 @@ EmitDeviceTxtViews(
     _In_ PSP_DEVINFO_DATA Info,
     _In_ const ENUM_FILTER *Filter)
 {
+    WCHAR Id[MAX_DEVICE_ID_LEN + 1];
+
+    if (Filter->Services)
+        ServicesTxt(Output, Set, Info);
     if (Filter->Drivers)
     {
         DRV_LIST Drivers;
@@ -2192,6 +2592,15 @@ EmitDeviceTxtViews(
         DriverListCollect(&Drivers, Set, Info);
         DriversEmitTxt(Output, &Drivers);
         DriverListFree(&Drivers);
+    }
+    if (Filter->Interfaces && SetupDiGetDeviceInstanceIdW(Set, Info, Id, _countof(Id), NULL))
+        IfacesEmitTxt(Output, Id);
+    if (Filter->Resources)
+    {
+        RES_LIST Res;
+
+        ResListCollect(&Res, Info->DevInst);
+        ResourcesTxt(Output, &Res);
     }
     if (Filter->Properties)
     {
@@ -2220,12 +2629,14 @@ EmitDeviceRecord(
     _In_ PSP_DEVINFO_DATA DeviceInfoData,
     _In_ const ENUM_FILTER *Filter)
 {
-    BOOL AnyView = Filter->Ids || Filter->Relations || Filter->Stack || Filter->Location;
+    BOOL AnyView = Filter->Ids || Filter->Relations || Filter->Services || Filter->Stack || Filter->Location ||
+                   Filter->Resources;
     DRV_LIST Drivers = { NULL, 0 };
-    DWORD ViewColumns = (Filter->Ids ? 2 : 0) + (Filter->Relations ? 2 : 0) + (Filter->Stack ? 1 : 0) +
-                        (Filter->Location ? 2 : 0);
-    /* Header fields: the ten base ones, the views, MatchingDriverName,Rank and Key,Type,Value. */
-    DWORD HeaderCols = 10 + ViewColumns + (Filter->Drivers ? 2 : 0) + (Filter->Properties ? 3 : 0);
+    DWORD ViewColumns = (Filter->Ids ? 2 : 0) + (Filter->Relations ? 2 : 0) + (Filter->Services ? 3 : 0) +
+                        (Filter->Stack ? 1 : 0) + (Filter->Location ? 2 : 0) + (Filter->Resources ? 4 : 0);
+    /* Header fields: the ten base ones, the views, MatchingDriverName,Rank, Interface,InterfaceStatus and Key,Type,Value. */
+    DWORD HeaderCols = 10 + ViewColumns + (Filter->Drivers ? 2 : 0) + (Filter->Interfaces ? 2 : 0) +
+                       (Filter->Properties ? 3 : 0);
 
     if (Filter->Drivers)
         DriverListCollect(&Drivers, DeviceInfoSet, DeviceInfoData);
@@ -2233,9 +2644,9 @@ EmitDeviceRecord(
     if (Output->Format == OutputCsv)
     {
         WCHAR List[2048], Cell[2048], Cell2[2048];
-        BOOL LastIds = Filter->Ids && !Filter->Relations && !Filter->Stack && !Filter->Location;
-        BOOL LastRel = Filter->Relations && !Filter->Stack && !Filter->Location;
-        BOOL LastStk = Filter->Stack && !Filter->Location;
+        /* Inline views left to write; the last field of the last one ends the row. */
+        INT Remaining = (Filter->Ids ? 1 : 0) + (Filter->Relations ? 1 : 0) + (Filter->Services ? 1 : 0) +
+                        (Filter->Stack ? 1 : 0) + (Filter->Location ? 1 : 0) + (Filter->Resources ? 1 : 0);
 
         OutputCsvField(Output, InstanceId, FALSE);
         OutputCsvField(Output, Description, FALSE);
@@ -2258,7 +2669,7 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_COMPATIBLEIDS, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, LastIds);
+            OutputCsvField(Output, Cell2, --Remaining == 0);
         }
         if (Filter->Relations)
         {
@@ -2266,13 +2677,26 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, LastRel);
+            OutputCsvField(Output, Cell2, FALSE);
+            --Remaining;
+        }
+        if (Filter->Services)
+        {
+            OutputCsvField(Output,
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_SERVICE, Cell, _countof(Cell), NULL),
+                           FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_UPPERFILTERS, List, _countof(List));
+            JoinMultiSz(List, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_LOWERFILTERS, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, --Remaining == 0);
         }
         if (Filter->Stack)
         {
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
             JoinMultiSz(List, Cell, _countof(Cell), TRUE);
-            OutputCsvField(Output, Cell, LastStk);
+            OutputCsvField(Output, Cell, --Remaining == 0);
         }
         if (Filter->Location)
         {
@@ -2281,11 +2705,27 @@ EmitDeviceRecord(
                            FALSE);
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, TRUE);
+            OutputCsvField(Output, Cell2, --Remaining == 0);
+        }
+        if (Filter->Resources)
+        {
+            RES_LIST Res;
+
+            ResListCollect(&Res, DeviceInfoData->DevInst);
+            JoinMultiSz(Res.Dma, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            JoinMultiSz(Res.Io, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            JoinMultiSz(Res.Irq, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            JoinMultiSz(Res.Mem, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, --Remaining == 0);
         }
 
         if (Filter->Drivers)
             DriversEmitCsv(Output, &Drivers, InstanceId, HeaderCols - 1); /* Windows: H + 2 fields */
+        if (Filter->Interfaces)
+            IfacesEmitCsv(Output, InstanceId, HeaderCols - 3);
         if (Filter->Properties)
         {
             PROP_LIST Props;
@@ -2356,6 +2796,15 @@ EmitDeviceRecord(
             GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
             EmitXmlList(Output, L"Children", L"Child", List, FALSE);
         }
+        if (Filter->Services)
+        {
+            EmitXmlElement(Output, L"Service",
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_SERVICE, Elem, _countof(Elem), NULL));
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_UPPERFILTERS, List, _countof(List));
+            EmitXmlList(Output, L"UpperFilters", L"Service", List, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_LOWERFILTERS, List, _countof(List));
+            EmitXmlList(Output, L"LowerFilters", L"Service", List, FALSE);
+        }
         if (Filter->Stack)
         {
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
@@ -2368,9 +2817,21 @@ EmitDeviceRecord(
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
             EmitXmlList(Output, L"LocationPaths", L"LocationPath", List, FALSE);
         }
+        if (Filter->Resources)
+        {
+            RES_LIST Res;
+
+            ResListCollect(&Res, DeviceInfoData->DevInst);
+            EmitXmlList(Output, L"IoResources", L"Resource", Res.Io, FALSE);
+            EmitXmlList(Output, L"IrqResources", L"Resource", Res.Irq, FALSE);
+            EmitXmlList(Output, L"MemoryResources", L"Resource", Res.Mem, FALSE);
+            EmitXmlList(Output, L"DmaResources", L"Resource", Res.Dma, FALSE);
+        }
 
         if (Filter->Drivers)
             DriversEmitXml(Output, &Drivers);
+        if (Filter->Interfaces)
+            IfacesEmitXml(Output, InstanceId);
         if (Filter->Properties)
         {
             PROP_LIST Props;
@@ -2797,17 +3258,20 @@ CommandEnumDevices(
             OutputPutsRaw(&Output, L",HardwareIds,CompatibleIds");
         if (Filter.Relations)
             OutputPutsRaw(&Output, L",Parent,Children");
+        if (Filter.Services)
+            OutputPutsRaw(&Output, L",Service,UpperFilters,LowerFilters");
         if (Filter.Stack)
             OutputPutsRaw(&Output, L",Stack");
         if (Filter.Location)
             OutputPutsRaw(&Output, L",LocationInfo,LocationPaths");
+        if (Filter.Resources)
+            OutputPutsRaw(&Output, L",DmaResources,IoResources,IrqResources,MemoryResources");
         if (Filter.Drivers)
             OutputPutsRaw(&Output, L",MatchingDriverName,Rank");
+        if (Filter.Interfaces)
+            OutputPutsRaw(&Output, L",Interface,InterfaceStatus");
         if (Filter.Properties)
             OutputPutsRaw(&Output, L",Key,Type,Value");
-        /* TODO: /services (Service,UpperFilters,LowerFilters -- xml filter element
-           shape not yet captured), /interfaces (Interface,InterfaceStatus) and
-           /resources columns land with their emission in the #2a continuation. */
         OutputPutsRaw(&Output, L"\r\n");
     }
     else if (Output.Format == OutputXml)
@@ -4436,108 +4900,6 @@ CommandEnumInterfaces(
 /* /enum-devicetree *********************************************************/
 
 #define TREE_MAX_DEPTH 96
-
-typedef struct _TREE_IFACE
-{
-    WCHAR InstanceId[MAX_DEVICE_ID_LEN];
-    PWSTR Path;
-    BOOL Enabled;
-} TREE_IFACE;
-
-typedef struct _TREE_CONTEXT
-{
-    BOOL Connected;
-    BOOL Services;
-    BOOL Interfaces;
-    TREE_IFACE *Ifaces;
-    DWORD IfaceCount;
-    DWORD IfaceCapacity;
-} TREE_CONTEXT;
-
-/* Collect every device interface (all classes) once, so each node can list its own. */
-static VOID
-TreeCollectInterfaces(
-    _Inout_ TREE_CONTEXT *Ctx)
-{
-    HKEY hClasses;
-    WCHAR KeyName[64];
-    DWORD Index;
-
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\DeviceClasses", 0,
-                      KEY_READ, &hClasses) != ERROR_SUCCESS)
-    {
-        return;
-    }
-
-    for (Index = 0; ; Index++)
-    {
-        DWORD Length = _countof(KeyName), Item, Size;
-        GUID Guid;
-        HDEVINFO Set;
-
-        if (RegEnumKeyExW(hClasses, Index, KeyName, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
-            break;
-        if (CLSIDFromString(KeyName, &Guid) != S_OK)
-            continue;
-        Set = SetupDiGetClassDevsW(&Guid, NULL, NULL, DIGCF_DEVICEINTERFACE);
-        if (Set == INVALID_HANDLE_VALUE)
-            continue;
-
-        for (Item = 0; ; Item++)
-        {
-            SP_DEVICE_INTERFACE_DATA Interface;
-            SP_DEVINFO_DATA DeviceInfo;
-            PSP_DEVICE_INTERFACE_DETAIL_DATA_W Detail;
-            TREE_IFACE *Entry;
-
-            Interface.cbSize = sizeof(Interface);
-            if (!SetupDiEnumDeviceInterfaces(Set, NULL, &Guid, Item, &Interface))
-                break;
-            Size = 0;
-            SetupDiGetDeviceInterfaceDetailW(Set, &Interface, NULL, 0, &Size, NULL);
-            if (Size < sizeof(*Detail))
-                continue;
-            Detail = HeapAlloc(GetProcessHeap(), 0, Size);
-            if (!Detail)
-                break;
-            Detail->cbSize = sizeof(*Detail);
-            DeviceInfo.cbSize = sizeof(DeviceInfo);
-            if (!SetupDiGetDeviceInterfaceDetailW(Set, &Interface, Detail, Size, NULL, &DeviceInfo))
-            {
-                HeapFree(GetProcessHeap(), 0, Detail);
-                continue;
-            }
-
-            if (Ctx->IfaceCount == Ctx->IfaceCapacity)
-            {
-                DWORD Capacity = Ctx->IfaceCapacity ? Ctx->IfaceCapacity * 2 : 256;
-                TREE_IFACE *Grown = Ctx->Ifaces ? HeapReAlloc(GetProcessHeap(), 0, Ctx->Ifaces, Capacity * sizeof(*Grown))
-                                                : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Grown));
-
-                if (!Grown)
-                {
-                    HeapFree(GetProcessHeap(), 0, Detail);
-                    break;
-                }
-                Ctx->Ifaces = Grown;
-                Ctx->IfaceCapacity = Capacity;
-            }
-            Entry = &Ctx->Ifaces[Ctx->IfaceCount];
-            Entry->InstanceId[0] = UNICODE_NULL;
-            SetupDiGetDeviceInstanceIdW(Set, &DeviceInfo, Entry->InstanceId, _countof(Entry->InstanceId), NULL);
-            Entry->Enabled = (Interface.Flags & SPINT_ACTIVE) && !(Interface.Flags & SPINT_REMOVED);
-            Entry->Path = HeapAlloc(GetProcessHeap(), 0, (wcslen(Detail->DevicePath) + 1) * sizeof(WCHAR));
-            if (Entry->Path)
-            {
-                wcscpy(Entry->Path, Detail->DevicePath);
-                Ctx->IfaceCount++;
-            }
-            HeapFree(GetProcessHeap(), 0, Detail);
-        }
-        SetupDiDestroyDeviceInfoList(Set);
-    }
-    RegCloseKey(hClasses);
-}
 
 /* One property of a devnode as a heap buffer (double NUL terminated), or NULL. */
 static PWSTR
