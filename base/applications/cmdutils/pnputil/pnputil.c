@@ -3147,10 +3147,10 @@ CommandEnumClasses(
 
 typedef struct _INTERFACE_ROW
 {
-    WCHAR Path[MAX_PATH * 2];
+    PWSTR Path;
     WCHAR Description[LINE_LEN];
     WCHAR ClassGuid[64];
-    WCHAR Reference[MAX_PATH];
+    PCWSTR Reference;
     WCHAR InstanceId[MAX_DEVICE_ID_LEN];
     BOOL Enabled;
 } INTERFACE_ROW;
@@ -3248,7 +3248,7 @@ EnumInterfaceClass(
     PSP_DEVICE_INTERFACE_DETAIL_DATA_W Detail;
     HDEVINFO Set;
     DWORD Index, Size, Count = 0, Type;
-    PWSTR Ref, Guid;
+    PWSTR Ref;
 
     Stats->Tried++;
     Set = SetupDiGetClassDevsW(ClassGuid, NULL, NULL, DIGCF_DEVICEINTERFACE);
@@ -3292,19 +3292,42 @@ EnumInterfaceClass(
             continue;
         }
 
-        lstrcpynW(Row->Path, Detail->DevicePath, _countof(Row->Path));
+        Row->Path = HeapAlloc(GetProcessHeap(), 0, (wcslen(Detail->DevicePath) + 1) * sizeof(WCHAR));
+        if (!Row->Path)
+        {
+            HeapFree(GetProcessHeap(), 0, Detail);
+            break;
+        }
+        wcscpy(Row->Path, Detail->DevicePath);
         HeapFree(GetProcessHeap(), 0, Detail);
         StringFromGUID2(ClassGuid, Row->ClassGuid, _countof(Row->ClassGuid));
         CharLowerW(Row->ClassGuid);
 
-        /* The reference string follows the closing brace of the class GUID in the path. */
-        Row->Reference[0] = UNICODE_NULL;
-        Ref = NULL;
-        for (Guid = wcsstr(Row->Path, L"#{"); Guid; Guid = wcsstr(Guid + 2, L"#{"))
-            Ref = Guid;
-        Ref = Ref ? wcschr(Ref, L'}') : NULL;
-        if (Ref && Ref[1] == L'\\')
-            lstrcpynW(Row->Reference, Ref + 2, _countof(Row->Reference));
+        /* Find "#" + this class GUID (case-insensitive); the reference follows the next backslash. */
+        Row->Reference = L"";
+        {
+            WCHAR Needle[80];
+            PWSTR Lower = HeapAlloc(GetProcessHeap(), 0, (wcslen(Row->Path) + 1) * sizeof(WCHAR));
+
+            if (Lower)
+            {
+                PWSTR Found;
+
+                wcscpy(Lower, Row->Path);
+                CharLowerW(Lower);
+                Needle[0] = L'#';
+                lstrcpynW(Needle + 1, Row->ClassGuid, _countof(Needle) - 1);
+                CharLowerW(Needle);
+                Found = wcsstr(Lower, Needle);
+                if (Found)
+                {
+                    Ref = Row->Path + (Found - Lower) + wcslen(Needle);
+                    if (Ref[0] == L'\\')
+                        Row->Reference = Ref + 1;
+                }
+                HeapFree(GetProcessHeap(), 0, Lower);
+            }
+        }
 
         lstrcpynW(Row->Description, L"Unknown", _countof(Row->Description));
         {
@@ -3321,6 +3344,8 @@ EnumInterfaceClass(
         }
 
         EmitInterface(Output, Row);
+        HeapFree(GetProcessHeap(), 0, Row->Path);
+        Row->Path = NULL;
         Count++;
     }
 
