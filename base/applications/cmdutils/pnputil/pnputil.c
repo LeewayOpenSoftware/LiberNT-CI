@@ -2080,7 +2080,8 @@ DriverSignerName(
     Catalog[0] = UNICODE_NULL;
     for (i = 0; i < _countof(Keys) && !Catalog[0]; i++)
         GetInfVersionValue(hInf, Keys[i], Catalog, _countof(Catalog));
-    if (!Catalog[0])
+    /* A catalog is named by a bare file name; anything with a path in it is not looked up. */
+    if (!Catalog[0] || wcslen(Catalog) > 200 || wcspbrk(Catalog, L"\\/:") || wcsstr(Catalog, L".."))
         return;
 
     hCrypt = LoadLibraryW(L"crypt32.dll");
