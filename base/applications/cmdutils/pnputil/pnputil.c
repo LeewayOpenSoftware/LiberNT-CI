@@ -4340,12 +4340,82 @@ CommandDevice(
     return FinishOperation(Error, NeedReboot, Reboot);
 }
 
-static INT
-CommandScanDevices(VOID)
+/* The Win32 error for a failed configuration manager call, for the codes a scan can return. */
+static DWORD
+ScanErrorFromCr(
+    _In_ CONFIGRET Cr)
 {
+    switch (Cr)
+    {
+        case CR_ACCESS_DENIED: return ERROR_ACCESS_DENIED;
+        case CR_NO_SUCH_DEVNODE:
+        case CR_INVALID_DEVNODE: return ERROR_NO_SUCH_DEVINST;
+        case CR_OUT_OF_MEMORY: return ERROR_NOT_ENOUGH_MEMORY;
+        case CR_INVALID_FLAG: return ERROR_INVALID_FLAGS;
+        case CR_INVALID_POINTER: return ERROR_INVALID_USER_BUFFER;
+        default: return ERROR_GEN_FAILURE;
+    }
+}
+
+static INT
+CommandScanDevices(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    PCWSTR InstanceId = NULL;
+    BOOL Async = FALSE;
+    DEVINST Node;
+    CONFIGRET Cr;
+    DWORD Error = ERROR_SUCCESS;
+    INT i;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (IsOption(argv[i], L"async"))
+        {
+            Async = TRUE;
+        }
+        else if (IsOption(argv[i], L"instanceid"))
+        {
+            /* Without a value (end of line or a following switch) the whole tree is scanned. */
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                InstanceId = argv[++i];
+        }
+        else
+        {
+            return RC_USAGE;
+        }
+    }
+
     PrintHeader();
     ConPuts(StdOut, L"Scanning for device hardware changes.\n");
-    ScanDevices();
+
+    Cr = CM_Locate_DevNodeW(&Node, (DEVINSTID_W)InstanceId, CM_LOCATE_DEVNODE_NORMAL);
+    if (Cr == CR_SUCCESS)
+        Cr = CM_Reenumerate_DevNode(Node, Async ? CM_REENUMERATE_NORMAL : CM_REENUMERATE_SYNCHRONOUS);
+    if (Cr != CR_SUCCESS)
+        Error = ScanErrorFromCr(Cr);
+
+    if (Error != ERROR_SUCCESS)
+    {
+        /* Windows names the failure, then gives the reason on its own line. */
+        ConPuts(StdOut, L"Failed to scan devices.\n");
+        if (Error == ERROR_NO_SUCH_DEVINST)
+            ConPuts(StdOut, L"The device instance does not exist in the hardware tree.\n");
+        else
+        {
+            WCHAR Text[512];
+            DWORD Length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, Error, 0,
+                                          Text, _countof(Text), NULL);
+
+            while (Length > 0 && (Text[Length - 1] == L'\r' || Text[Length - 1] == L'\n' || Text[Length - 1] == L' '))
+                Text[--Length] = UNICODE_NULL;
+            ConPrintf(StdOut, L"%ls\n", Length ? Text : L"Unknown error.");
+        }
+        ConPuts(StdOut, L"\n");
+        return (INT)Error;
+    }
+
     ConPuts(StdOut, L"Scan complete.\n\n");
     return ERROR_SUCCESS;
 }
@@ -6420,7 +6490,7 @@ wmain(
     }
     else if (IsOption(Command, L"scan-devices"))
     {
-        Result = CommandScanDevices();
+        Result = CommandScanDevices(argc, argv);
     }
     else if (IsOption(Command, L"rollback-device"))
     {
