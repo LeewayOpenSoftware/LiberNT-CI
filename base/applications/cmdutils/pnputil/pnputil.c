@@ -123,7 +123,7 @@ static const WCHAR UsageText[] =
     L"PNPUTIL [/add-driver <...> | /delete-driver <...> |\n"
     L"         /export-driver <...> | /enum-drivers | /enum-devices [<...>] |\n"
     L"         /enum-classes [<...>] | /enum-interfaces [<...>] |\n"
-    L"         /enum-devicetree [<...>] |\n"
+    L"         /enum-devicetree [<...>] | /enum-containers [<...>] |\n"
     L"         /disable-device <...> | /enable-device <...> |\n"
     L"         /restart-device <...> | /remove-device <...> |\n"
     L"         /rollback-device <...> | /scan-devices | /?]\n"
@@ -161,6 +161,15 @@ static const WCHAR UsageText[] =
     L"      /class <name | GUID> - filter by device class name or GUID.\n"
     L"      /problem [<code>] - filter by devices with problems or specific problem code.\n"
     L"      /ids - display hardware IDs and compatible IDs.\n"
+    L"\n"
+    L"  /enum-containers [/containerid <container ID>] [/connected | /disconnected] [/problem]\n"
+    L"                      [/devices] [/format <txt | xml | csv>] [/output-file [<filename>]]\n"
+    L"\n"
+    L"    Enumerate all device containers on the system.\n"
+    L"      /containerid <container ID> - filter by container ID.\n"
+    L"      /connected | /disconnected - filter by connected or disconnected containers.\n"
+    L"      /problem - filter by containers with devices that have problems.\n"
+    L"      /devices - display the devices of each container.\n"
     L"\n"
     L"  /enum-devicetree [<root instance ID>] [/connected] [/services] [/interfaces]\n"
     L"\n"
@@ -3897,6 +3906,371 @@ CommandEnumDeviceTree(
     return ERROR_SUCCESS;
 }
 
+/* /enum-containers *********************************************************/
+
+typedef struct _CONT_DEVICE
+{
+    WCHAR Id[MAX_DEVICE_ID_LEN];
+    WCHAR Description[LINE_LEN];
+    GUID Container;
+    PCWSTR State;
+    BOOL Present;
+    BOOL Problem;
+} CONT_DEVICE;
+
+typedef struct _CONT_ENTRY
+{
+    GUID Id;
+    BOOL Connected;
+    BOOL HasProblem;
+} CONT_ENTRY;
+
+/* Container metadata (description, categories, manufacturer, model) is not available through
+   our cfgmgr32 (DevObjectTypeDeviceContainer is unsupported); only membership and state are. */
+static VOID
+ContainerEmit(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const CONT_ENTRY *Entry,
+    _In_ const CONT_DEVICE *Devices,
+    _In_ DWORD DeviceCount,
+    _In_ BOOL ShowDevices)
+{
+    WCHAR IdText[64], Line[2048];
+    PCWSTR Status = Entry->Connected ? L"Connected" : L"Disconnected";
+    PCWSTR Eol = Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n";
+    DWORD i;
+    BOOL Opened = FALSE;
+
+    StringFromGUID2(&Entry->Id, IdText, _countof(IdText));
+    CharLowerW(IdText);
+
+    if (Output->Format == OutputCsv)
+    {
+        OutputCsvField(Output, IdText, FALSE);
+        OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, Status, TRUE);
+        if (!ShowDevices)
+            return;
+        for (i = 0; i < DeviceCount; i++)
+        {
+            if (!IsEqualGUID(&Devices[i].Container, &Entry->Id))
+                continue;
+            OutputCsvField(Output, IdText, FALSE);
+            OutputCsvField(Output, L"", FALSE);
+            OutputCsvField(Output, L"", FALSE);
+            OutputCsvField(Output, L"", FALSE);
+            OutputCsvField(Output, L"", FALSE);
+            OutputCsvField(Output, L"", FALSE);
+            OutputCsvField(Output, L"", FALSE);
+            OutputCsvField(Output, Devices[i].Id, FALSE);
+            OutputCsvField(Output, Devices[i].Description, FALSE);
+            OutputCsvField(Output, Devices[i].State, FALSE);
+            OutputCsvField(Output, L"", FALSE);
+            OutputCsvField(Output, L"", TRUE);
+        }
+    }
+    else if (Output->Format == OutputXml)
+    {
+        OutputPutsRaw(Output, L"    <Container ContainerId=\"");
+        OutputXmlText(Output, IdText);
+        OutputPutsRaw(Output, L"\">\r\n        <Status>");
+        OutputXmlText(Output, Status);
+        OutputPutsRaw(Output, L"</Status>\r\n");
+        if (ShowDevices)
+        {
+            for (i = 0; i < DeviceCount; i++)
+            {
+                if (!IsEqualGUID(&Devices[i].Container, &Entry->Id))
+                    continue;
+                if (!Opened)
+                {
+                    OutputPutsRaw(Output, L"        <Devices>\r\n");
+                    Opened = TRUE;
+                }
+                OutputPutsRaw(Output, L"            <Device InstanceId=\"");
+                OutputXmlText(Output, Devices[i].Id);
+                OutputPutsRaw(Output, L"\">\r\n                <DeviceDescription>");
+                OutputXmlText(Output, Devices[i].Description);
+                OutputPutsRaw(Output, L"</DeviceDescription>\r\n                <Status>");
+                OutputXmlText(Output, Devices[i].State);
+                OutputPutsRaw(Output, L"</Status>\r\n            </Device>\r\n");
+            }
+            if (Opened)
+                OutputPutsRaw(Output, L"        </Devices>\r\n");
+        }
+        OutputPutsRaw(Output, L"    </Container>\r\n");
+    }
+    else
+    {
+        _snwprintf(Line, _countof(Line) - 1, L"%-24ls%ls%ls", L"Container ID:", IdText, Eol);
+        Line[_countof(Line) - 1] = UNICODE_NULL;
+        OutputPutsRaw(Output, Line);
+        _snwprintf(Line, _countof(Line) - 1, L"%-24ls%ls%ls", L"Status:", Status, Eol);
+        Line[_countof(Line) - 1] = UNICODE_NULL;
+        OutputPutsRaw(Output, Line);
+        if (ShowDevices)
+        {
+            OutputPutsRaw(Output, L"Devices:");
+            OutputPutsRaw(Output, Eol);
+            for (i = 0; i < DeviceCount; i++)
+            {
+                if (!IsEqualGUID(&Devices[i].Container, &Entry->Id))
+                    continue;
+                _snwprintf(Line, _countof(Line) - 1, L"    %-20ls%ls%ls", L"Instance ID:", Devices[i].Id, Eol);
+                Line[_countof(Line) - 1] = UNICODE_NULL;
+                OutputPutsRaw(Output, Line);
+                _snwprintf(Line, _countof(Line) - 1, L"    %-20ls%ls%ls", L"Device Description:",
+                           Devices[i].Description, Eol);
+                Line[_countof(Line) - 1] = UNICODE_NULL;
+                OutputPutsRaw(Output, Line);
+                _snwprintf(Line, _countof(Line) - 1, L"    %-20ls%ls%ls", L"Status:", Devices[i].State, Eol);
+                Line[_countof(Line) - 1] = UNICODE_NULL;
+                OutputPutsRaw(Output, Line);
+                OutputPutsRaw(Output, Eol);
+            }
+        }
+        else
+        {
+            OutputPutsRaw(Output, Eol);
+        }
+    }
+}
+
+static INT
+CommandEnumContainers(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    OUTPUT_CONTEXT Output = { OutputText, INVALID_HANDLE_VALUE };
+    WCHAR DefaultName[MAX_PATH], XmlVersion[64], XmlCommand[512];
+    PCWSTR OutputFile = NULL, IdFilter = NULL;
+    BOOL OutputFileGiven = FALSE, ShowDevices = FALSE, OnlyProblem = FALSE;
+    INT State = 0;
+    GUID FilterGuid;
+    BOOL FilterIsGuid = FALSE;
+    CONT_DEVICE *Devices = NULL;
+    CONT_ENTRY *Entries = NULL;
+    DWORD DeviceCount = 0, DeviceCapacity = 0, EntryCount = 0, Index, Shown = 0, k;
+    HDEVINFO Set;
+    INT i;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (IsOption(argv[i], L"connected"))
+            State = 1;
+        else if (IsOption(argv[i], L"disconnected"))
+            State = -1;
+        else if (IsOption(argv[i], L"problem"))
+            OnlyProblem = TRUE;
+        else if (IsOption(argv[i], L"devices"))
+            ShowDevices = TRUE;
+        else if (IsOption(argv[i], L"containerid") && i + 1 < argc)
+            IdFilter = argv[++i];
+        else if (IsOption(argv[i], L"format") && i + 1 < argc)
+        {
+            i++;
+            if (_wcsicmp(argv[i], L"txt") == 0)
+                Output.Format = OutputText;
+            else if (_wcsicmp(argv[i], L"xml") == 0)
+                Output.Format = OutputXml;
+            else if (_wcsicmp(argv[i], L"csv") == 0)
+                Output.Format = OutputCsv;
+            else
+                return ERROR_INVALID_PARAMETER;
+        }
+        else if (IsOption(argv[i], L"output-file"))
+        {
+            OutputFileGiven = TRUE;
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                OutputFile = argv[++i];
+        }
+        else
+        {
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+
+    if (OutputFileGiven)
+    {
+        if (!OutputFile)
+        {
+            BuildDefaultOutputName(Output.Format, DefaultName, _countof(DefaultName));
+            OutputFile = DefaultName;
+        }
+        Output.File = CreateFileW(OutputFile, GENERIC_WRITE, FILE_SHARE_READ, NULL,
+                                  CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (Output.File == INVALID_HANDLE_VALUE)
+            return ReportOutputOpenFailure(GetLastError());
+    }
+
+    if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
+        PrintHeader();
+
+    if (Output.Format == OutputCsv)
+    {
+        OutputPutsRaw(&Output, L"ContainerId,Description,Categories,Manufacturer,ModelName,ModelNumber,Status");
+        if (ShowDevices)
+            OutputPutsRaw(&Output, L",Device,DeviceDescription,DeviceStatus,ProblemCode,ProblemStatus");
+        OutputPutsRaw(&Output, L"\r\n");
+    }
+    else if (Output.Format == OutputXml)
+    {
+        GetOutputVersion(XmlVersion, _countof(XmlVersion));
+        lstrcpynW(XmlCommand, L"/enum-containers", _countof(XmlCommand));
+        for (i = 0; i < argc; i++)
+        {
+            if (lstrlenW(XmlCommand) + lstrlenW(argv[i]) + 2 >= (INT)_countof(XmlCommand))
+                break;
+            lstrcatW(XmlCommand, L" ");
+            lstrcatW(XmlCommand, argv[i]);
+        }
+        OutputPutsRaw(&Output, L"<?xml version=\"1.0\" encoding=\"utf-8\"?>\r\n");
+        OutputPutsRaw(&Output, L"<PnpUtil Version=\"");
+        OutputXmlText(&Output, XmlVersion);
+        OutputPutsRaw(&Output, L"\" Command=\"");
+        OutputXmlText(&Output, XmlCommand);
+        OutputPutsRaw(&Output, L"\">\r\n");
+    }
+
+    if (IdFilter && IdFilter[0] == L'{' && CLSIDFromString(IdFilter, &FilterGuid) == S_OK)
+        FilterIsGuid = TRUE;
+
+    /* Every device (present or not) with its container id. */
+    Set = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES);
+    if (Set != INVALID_HANDLE_VALUE)
+    {
+        SP_DEVINFO_DATA Info;
+
+        for (Index = 0; ; Index++)
+        {
+            CONT_DEVICE *Dev;
+            DEVPROPTYPE Type;
+            DEVINST Node;
+            ULONG Status, Problem;
+            WCHAR Buffer[LINE_LEN];
+            GUID Container;
+
+            Info.cbSize = sizeof(Info);
+            if (!SetupDiEnumDeviceInfo(Set, Index, &Info))
+                break;
+            if (!SetupDiGetDevicePropertyW(Set, &Info, &DEVPKEY_Device_ContainerId, &Type, (PBYTE)&Container,
+                                           sizeof(Container), NULL, 0) ||
+                Type != DEVPROP_TYPE_GUID)
+            {
+                continue;
+            }
+            if (DeviceCount == DeviceCapacity)
+            {
+                DWORD Capacity = DeviceCapacity ? DeviceCapacity * 2 : 256;
+                CONT_DEVICE *Grown = Devices ? HeapReAlloc(GetProcessHeap(), 0, Devices, Capacity * sizeof(*Grown))
+                                             : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Grown));
+
+                if (!Grown)
+                    break;
+                Devices = Grown;
+                DeviceCapacity = Capacity;
+            }
+            Dev = &Devices[DeviceCount];
+            Dev->Container = Container;
+            Dev->Id[0] = UNICODE_NULL;
+            SetupDiGetDeviceInstanceIdW(Set, &Info, Dev->Id, _countof(Dev->Id), NULL);
+            Dev->Description[0] = UNICODE_NULL;
+            if (!SetupDiGetDeviceRegistryPropertyW(Set, &Info, SPDRP_FRIENDLYNAME, NULL, (PBYTE)Buffer,
+                                                   sizeof(Buffer) - sizeof(WCHAR), NULL) || !Buffer[0])
+            {
+                if (!SetupDiGetDeviceRegistryPropertyW(Set, &Info, SPDRP_DEVICEDESC, NULL, (PBYTE)Buffer,
+                                                       sizeof(Buffer) - sizeof(WCHAR), NULL))
+                {
+                    Buffer[0] = UNICODE_NULL;
+                }
+            }
+            lstrcpynW(Dev->Description, Buffer[0] ? Buffer : L"Unknown", _countof(Dev->Description));
+
+            Status = Problem = 0;
+            Dev->Present = FALSE;
+            Dev->Problem = FALSE;
+            if (CM_Locate_DevNodeW(&Node, Dev->Id, CM_LOCATE_DEVNODE_PHANTOM) == CR_SUCCESS &&
+                CM_Get_DevNode_Status(&Status, &Problem, Node, 0) == CR_SUCCESS)
+            {
+                Dev->Present = TRUE;
+                Dev->Problem = Problem != 0;
+            }
+            Dev->State = !Dev->Present ? L"Disconnected" : (Status & DN_STARTED) ? L"Started" : L"Stopped";
+            DeviceCount++;
+        }
+        SetupDiDestroyDeviceInfoList(Set);
+    }
+
+    /* Group by container, in order of first appearance. */
+    if (DeviceCount)
+        Entries = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, DeviceCount * sizeof(*Entries));
+    for (Index = 0; Entries && Index < DeviceCount; Index++)
+    {
+        for (k = 0; k < EntryCount; k++)
+        {
+            if (IsEqualGUID(&Entries[k].Id, &Devices[Index].Container))
+                break;
+        }
+        if (k == EntryCount)
+        {
+            Entries[k].Id = Devices[Index].Container;
+            EntryCount++;
+        }
+        if (Devices[Index].Present)
+            Entries[k].Connected = TRUE;
+        if (Devices[Index].Problem)
+            Entries[k].HasProblem = TRUE;
+    }
+
+    {
+        BOOL IdMatched = FALSE;
+
+        for (k = 0; k < EntryCount; k++)
+        {
+            if (IdFilter)
+            {
+                if (!FilterIsGuid || !IsEqualGUID(&Entries[k].Id, &FilterGuid))
+                    continue;
+                IdMatched = TRUE;
+            }
+            if ((State > 0 && !Entries[k].Connected) || (State < 0 && Entries[k].Connected))
+                continue;
+            if (OnlyProblem && !Entries[k].HasProblem)
+                continue;
+            ContainerEmit(&Output, &Entries[k], Devices, DeviceCount, ShowDevices);
+            Shown++;
+        }
+
+        if (Shown == 0 && IdFilter && !IdMatched)
+        {
+            /* Windows prints nothing for an unknown container id and returns the not-found error. */
+        }
+        else if (Shown == 0)
+        {
+            OutputEmptyMessage(&Output, IDS_NO_CONTAINERS);
+        }
+
+        if (Output.Format == OutputXml)
+            OutputPutsRaw(&Output, L"</PnpUtil>\r\n");
+        if (Output.File != INVALID_HANDLE_VALUE)
+        {
+            CloseHandle(Output.File);
+            Output.File = INVALID_HANDLE_VALUE;
+            ConResPrintf(StdOut, IDS_OUTPUT_WRITTEN, OutputFile);
+            ConPuts(StdOut, L"\n");
+        }
+        if (Entries)
+            HeapFree(GetProcessHeap(), 0, Entries);
+        if (Devices)
+            HeapFree(GetProcessHeap(), 0, Devices);
+        return (Shown == 0 && IdFilter && !IdMatched) ? ERROR_FILE_NOT_FOUND : ERROR_SUCCESS;
+    }
+}
+
 int
 wmain(
     int argc,
@@ -3932,6 +4306,10 @@ wmain(
     else if (IsOption(Command, L"f") && argc >= 1 && IsOption(argv[0], L"d"))
     {
         Result = CommandDeleteDriver(argc - 1, argv + 1, TRUE);
+    }
+    else if (IsOption(Command, L"enum-containers"))
+    {
+        Result = CommandEnumContainers(argc, argv);
     }
     else if (IsOption(Command, L"enum-devicetree"))
     {

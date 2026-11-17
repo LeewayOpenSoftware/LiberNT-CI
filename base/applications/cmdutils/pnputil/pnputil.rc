@@ -24,4 +24,5 @@ BEGIN
     IDS_OUTPUT_WRITTEN  "Output written to %ls"
     IDS_NO_DRIVERS      "No published driver packages were found on the system."
     IDS_NO_INTERFACES   "No interfaces were found on the system."
+    IDS_NO_CONTAINERS   "No device containers were found on the system."
 END
