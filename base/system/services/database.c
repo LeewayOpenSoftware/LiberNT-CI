@@ -2393,6 +2393,13 @@ ScmCollectRequiredPrivileges(
             /* only the services that run in this very image count */
             pszImagePath = NULL;
             dwError = ScmReadString(hKey, L"ImagePath", &pszImagePath);
+            if (dwError == ERROR_FILE_NOT_FOUND)
+            {
+                /* a member without an ImagePath cannot be hosted by this image: it does not take part */
+                RegCloseKey(hKey);
+                dwError = ERROR_SUCCESS;
+                continue;
+            }
             if (dwError != ERROR_SUCCESS)
             {
                 RegCloseKey(hKey);
