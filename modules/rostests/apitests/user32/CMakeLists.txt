@@ -138,6 +138,7 @@ list(APPEND SOURCE
     WaitForInputIdle.c
     WindowBand.c
     WindowStationErrors.c
+    WindowStationAttributes.c
     WindowStationSecurity.c
     WindowPosInsertAfter.c
     WndProc.c
