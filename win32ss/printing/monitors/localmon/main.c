@@ -149,8 +149,9 @@ LocalmonShutdown(HANDLE hMonitor)
     // Now close all registry ports, remove them from the list and free their memory.
     if (!IsListEmpty(&pLocalmon->RegistryPorts))
     {
-        for (pEntry = pLocalmon->RegistryPorts.Flink; pEntry != &pLocalmon->RegistryPorts; pEntry = pEntry->Flink)
+        for (pEntry = pLocalmon->RegistryPorts.Flink; pEntry != &pLocalmon->RegistryPorts; pEntry = pNext)
         {
+            pNext = pEntry->Flink;
             pPort = CONTAINING_RECORD(pEntry, LOCALMON_PORT, Entry);
             if ( LocalmonClosePort((HANDLE)pPort) ) continue;
             RemoveEntryList(&pPort->Entry);
