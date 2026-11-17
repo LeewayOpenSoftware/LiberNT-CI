@@ -17,6 +17,7 @@ list(APPEND SOURCE
     LegacyDeviceParent.c
     NewDeviceInstall.c
     SetupCommitFileQueue.c
+    SetupDiClassProperty.c
     SetupDiInstallClassExA.c
     SetupDiOpenDeviceInterface.c
     SetupDiGetActualModelsSection.c
