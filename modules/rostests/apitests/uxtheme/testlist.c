@@ -21,6 +21,7 @@ extern void func_ThemeDpi(void);
 extern void func_ThemeRendering(void);
 extern void func_ThemeShellTransition(void);
 extern void func_ThemeSysSize(void);
+extern void func_UxIni(void);
 
 const struct test winetest_testlist[] =
 {
@@ -43,5 +44,6 @@ const struct test winetest_testlist[] =
     { "ThemeRendering", func_ThemeRendering },
     { "ThemeShellTransition", func_ThemeShellTransition },
     { "ThemeSysSize", func_ThemeSysSize },
+    { "UxIni", func_UxIni },
     { 0, 0 }
 };

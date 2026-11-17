@@ -16,6 +16,8 @@ list(APPEND SOURCE
     ThemeRendering.c
     ThemeShellTransition.c
     ThemeSysSize.c
+    UxIni.c
+    ../../../../dll/win32/uxtheme/uxini.c
     ../include/msgtrace.c
     testlist.c)
 
