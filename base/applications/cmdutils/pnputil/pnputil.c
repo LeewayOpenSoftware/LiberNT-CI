@@ -2648,7 +2648,7 @@ CommandExportDriver(
     if (Error == ERROR_SUCCESS)
     {
         /* One open of the target; everything below is created relative to this handle. */
-        hRoot = CreateFileW(Target, FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | SYNCHRONIZE,
+        hRoot = CreateFileW(Target, FILE_LIST_DIRECTORY | FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_READ_ATTRIBUTES | SYNCHRONIZE,
                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING,
                             FILE_FLAG_BACKUP_SEMANTICS, NULL);
         if (hRoot == INVALID_HANDLE_VALUE)
