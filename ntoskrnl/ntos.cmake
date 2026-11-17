@@ -272,6 +272,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/locale.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/misc.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/nvmemory.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/qsort.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/security.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/system.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/time.c
