@@ -225,6 +225,8 @@ Volume::~Volume()
     {
         delete[] SecurityCacheData[Index];
         SecurityCacheData[Index] = NULL;
+        delete[] RecordCacheData[Index];
+        RecordCacheData[Index] = NULL;
     }
     delete[] IndexWorkBuffer;
     IndexWorkBuffer = NULL;

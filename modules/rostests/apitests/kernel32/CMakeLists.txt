@@ -9,6 +9,7 @@ add_subdirectory(werhandler)
 add_message_headers(ANSI FormatMessage.mc)
 
 list(APPEND SOURCE
+    FileSecurityCache.c
     ActCtxDependencyVersions.c
     AlternateComputerNames.c
     UniversalThunks.c
@@ -241,6 +242,7 @@ list(APPEND SOURCE
 
 list(APPEND PCH_SKIP_SOURCE
     ../advapi32/svchlp.c
+    FileSecurityCache.c
     testlist.c)
 
 add_executable(kernel32_apitest

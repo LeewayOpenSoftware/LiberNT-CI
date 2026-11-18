@@ -3,6 +3,7 @@
 
 extern void func_buttonv6(void);
 extern void func_ButtonShield(void);
+extern void func_EditImeContext(void);
 extern void func_ImageListApi(void);
 extern void func_ListViewGroups(void);
 extern void func_LoadIconWithScaleDown(void);
@@ -21,6 +22,7 @@ const struct test winetest_testlist[] =
 {
     { "buttonv6", func_buttonv6 },
     { "ButtonShield", func_ButtonShield },
+    { "EditImeContext", func_EditImeContext },
     { "ImageListApi", func_ImageListApi },
     { "ListViewGroups", func_ListViewGroups },
     { "LoadIconWithScaleDown", func_LoadIconWithScaleDown },
