@@ -1247,6 +1247,74 @@ LsaApCallPackageUntrusted(IN PLSA_CLIENT_REQUEST ClientRequest,
 }
 
 
+/* Our package id as assigned by the LSA; keys the credentials we attach to logon sessions */
+static ULONG MsvAuthenticationPackageId = 0;
+
+/*
+ * DPAPI protects a user's master keys with a secret derived from the logon
+ * password (public DPAPI design: the SHA-1 of the UTF-16 password for local
+ * accounts). Attach that pre-key to the new logon session under the well-known
+ * "Primary" credential key; lsasrv's DPAPI server reads it back through
+ * LsaGetCredentials. The password itself is never stored, and the digest is
+ * wiped as soon as the LSA has copied it.
+ */
+#define MSV1_0_DPAPI_PRIMARY_KEY "Primary"
+
+static
+VOID
+MsvpStoreDpapiCredential(
+    _In_ PLUID LogonId,
+    _In_ PUNICODE_STRING Password)
+{
+    HCRYPTPROV Provider = 0;
+    HCRYPTHASH Hash = 0;
+    BYTE Digest[20];
+    DWORD DigestLength = sizeof(Digest);
+    LSA_STRING KeyValue;
+    LSA_STRING Credential;
+    NTSTATUS Status;
+
+    if (DispatchTable.AddCredential == NULL || LogonId == NULL ||
+        Password == NULL || Password->Buffer == NULL)
+    {
+        return;
+    }
+
+    if (!CryptAcquireContextW(&Provider, NULL, NULL, PROV_RSA_FULL, CRYPT_VERIFYCONTEXT))
+    {
+        TRACE("CryptAcquireContextW failed (Error %lu)\n", GetLastError());
+        return;
+    }
+
+    if (!CryptCreateHash(Provider, CALG_SHA1, 0, 0, &Hash) ||
+        !CryptHashData(Hash, (const BYTE *)Password->Buffer, Password->Length, 0) ||
+        !CryptGetHashParam(Hash, HP_HASHVAL, Digest, &DigestLength, 0) ||
+        DigestLength != sizeof(Digest))
+    {
+        TRACE("SHA-1 of the logon password failed (Error %lu)\n", GetLastError());
+        goto done;
+    }
+
+    RtlInitString(&KeyValue, MSV1_0_DPAPI_PRIMARY_KEY);
+    Credential.Buffer = (PCHAR)Digest;
+    Credential.Length = sizeof(Digest);
+    Credential.MaximumLength = sizeof(Digest);
+
+    Status = DispatchTable.AddCredential(LogonId,
+                                         MsvAuthenticationPackageId,
+                                         &KeyValue,
+                                         &Credential);
+    if (!NT_SUCCESS(Status))
+        TRACE("AddCredential failed (Status 0x%08lx)\n", Status);
+
+done:
+    if (Hash != 0)
+        CryptDestroyHash(Hash);
+    if (Provider != 0)
+        CryptReleaseContext(Provider, 0);
+    RtlSecureZeroMemory(Digest, sizeof(Digest));
+}
+
 /*
  * @implemented
  */
@@ -1264,6 +1332,8 @@ LsaApInitializePackage(IN ULONG AuthenticationPackageId,
     TRACE("LsaApInitializePackage(%lu %p %p %p %p)\n",
           AuthenticationPackageId, LsaDispatchTable, Database,
           Confidentiality, AuthenticationPackageName);
+
+    MsvAuthenticationPackageId = AuthenticationPackageId;
 
     if (!PackageInitialized)
     {
@@ -1746,6 +1816,10 @@ LsaApLogonUserEx2(IN PLSA_CLIENT_REQUEST ClientRequest,
     }
 
     SessionCreated = !ExistingLogon;
+
+    /* Give DPAPI its per-session pre-key while the password is still in memory */
+    if (SessionCreated && LogonPwdData.PlainPwd != NULL)
+        MsvpStoreDpapiCredential(LogonId, LogonPwdData.PlainPwd);
 
     LogonEntry = ExistingLogon ? NULL : RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(LOGON_LIST_ENTRY));
     if (LogonEntry)

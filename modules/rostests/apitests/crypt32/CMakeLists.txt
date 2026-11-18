@@ -7,6 +7,7 @@ list(APPEND SOURCE
     CertUpdateStore.c
     ChainRevocation.c
     Countersign.c
+    CryptProtectData.c
     CryptProtectMemory.c
     FindOIDInfo.c
     GeneralizedTime.c

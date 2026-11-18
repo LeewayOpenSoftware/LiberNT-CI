@@ -22,7 +22,22 @@ typedef struct _LSAP_LOGON_SESSION
     UNICODE_STRING LogonServer;
     UNICODE_STRING DnsDomainName;
     UNICODE_STRING Upn;
+    LIST_ENTRY CredentialListHead;   /* LSAP_CREDENTIAL entries; guarded by LogonSessionLock */
 } LSAP_LOGON_SESSION, *PLSAP_LOGON_SESSION;
+
+/*
+ * A credential an authentication package attached to a logon session through
+ * LsaAddCredential, keyed by (package id, PrimaryKeyValue). The value is secret
+ * material (e.g. the DPAPI pre-key msv1_0 derives from the logon password) and
+ * is wiped before its storage is released.
+ */
+typedef struct _LSAP_CREDENTIAL
+{
+    LIST_ENTRY Entry;
+    ULONG AuthenticationPackage;
+    STRING PrimaryKeyValue;
+    STRING Credential;
+} LSAP_CREDENTIAL, *PLSAP_CREDENTIAL;
 
 
 typedef struct _LSAP_LOGON_SESSION_DATA32
@@ -76,6 +91,108 @@ LsapInitLogonSessions(VOID)
 {
     InitializeListHead(&SessionListHead);
     SessionCount = 0;
+}
+
+
+/* Credential helpers (caller holds LogonSessionLock) ***********************/
+
+static
+VOID
+LsapFreeCredential(
+    _In_ PLSAP_CREDENTIAL Credential)
+{
+    if (Credential->Credential.Buffer != NULL)
+    {
+        RtlSecureZeroMemory(Credential->Credential.Buffer,
+                            Credential->Credential.MaximumLength);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Credential->Credential.Buffer);
+    }
+
+    if (Credential->PrimaryKeyValue.Buffer != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Credential->PrimaryKeyValue.Buffer);
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Credential);
+}
+
+static
+VOID
+LsapFreeSessionCredentials(
+    _In_ PLSAP_LOGON_SESSION Session)
+{
+    while (!IsListEmpty(&Session->CredentialListHead))
+    {
+        PLIST_ENTRY Entry = RemoveHeadList(&Session->CredentialListHead);
+
+        LsapFreeCredential(CONTAINING_RECORD(Entry, LSAP_CREDENTIAL, Entry));
+    }
+}
+
+/*
+ * Copies an LSA_STRING into process-heap storage (the LSA heap). One extra
+ * zero byte is appended so text keys can also be read as C strings.
+ */
+static
+NTSTATUS
+LsapCopyLsaString(
+    _Out_ PSTRING Destination,
+    _In_opt_ PLSA_STRING Source)
+{
+    Destination->Length = 0;
+    Destination->MaximumLength = 0;
+    Destination->Buffer = NULL;
+
+    if (Source == NULL || Source->Buffer == NULL || Source->Length == 0)
+        return STATUS_SUCCESS;
+
+    if (Source->Length == MAXUSHORT)
+        return STATUS_INVALID_PARAMETER;
+
+    Destination->Buffer = RtlAllocateHeap(RtlGetProcessHeap(),
+                                          HEAP_ZERO_MEMORY,
+                                          (SIZE_T)Source->Length + sizeof(CHAR));
+    if (Destination->Buffer == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlCopyMemory(Destination->Buffer, Source->Buffer, Source->Length);
+    Destination->Length = Source->Length;
+    Destination->MaximumLength = Source->Length + sizeof(CHAR);
+
+    return STATUS_SUCCESS;
+}
+
+static
+PLSAP_CREDENTIAL
+LsapFindCredential(
+    _In_ PLSAP_LOGON_SESSION Session,
+    _In_ ULONG AuthenticationPackage,
+    _In_ PLSA_STRING PrimaryKeyValue)
+{
+    PLIST_ENTRY Entry;
+
+    for (Entry = Session->CredentialListHead.Flink;
+         Entry != &Session->CredentialListHead;
+         Entry = Entry->Flink)
+    {
+        PLSAP_CREDENTIAL Credential = CONTAINING_RECORD(Entry, LSAP_CREDENTIAL, Entry);
+
+        if (Credential->AuthenticationPackage != AuthenticationPackage)
+            continue;
+
+        if (Credential->PrimaryKeyValue.Length != PrimaryKeyValue->Length)
+            continue;
+
+        if (PrimaryKeyValue->Length != 0 &&
+            RtlCompareMemory(Credential->PrimaryKeyValue.Buffer,
+                             PrimaryKeyValue->Buffer,
+                             PrimaryKeyValue->Length) != PrimaryKeyValue->Length)
+        {
+            continue;
+        }
+
+        return Credential;
+    }
+
+    return NULL;
 }
 
 VOID
@@ -242,6 +359,8 @@ LsapCreateLogonSession(IN PLUID LogonId)
         return Status;
     }
 
+    InitializeListHead(&Session->CredentialListHead);
+
     /* Insert the new session into the session list */
     InsertHeadList(&SessionListHead, &Session->Entry);
     SessionCount++;
@@ -278,6 +397,9 @@ LsapDeleteLogonSession(IN PLUID LogonId)
     /* Remove the session entry from the list */
     RemoveEntryList(&Session->Entry);
     SessionCount--;
+
+    /* Wipe and release the credentials the packages attached to this session */
+    LsapFreeSessionCredentials(Session);
 
     /* Free the session data */
     if (Session->Sid != NULL)
@@ -316,8 +438,76 @@ LsapAddCredential(
     _In_ PLSA_STRING PrimaryKeyValue,
     _In_ PLSA_STRING Credential)
 {
+    PLSAP_LOGON_SESSION Session;
+    PLSAP_CREDENTIAL Entry = NULL;
+    STRING NewValue;
+    NTSTATUS Status;
+
+    TRACE("LsapAddCredential(%p %lu %p %p)\n",
+          LogonId, AuthenticationPackage, PrimaryKeyValue, Credential);
+
+    /*
+     * LogonSessionLock is held by the caller: the authentication port
+     * dispatcher (authport.c) acquires it around every package call, and
+     * lsasrv-internal callers take it themselves before calling in here.
+     */
+    if (LogonId == NULL || PrimaryKeyValue == NULL || Credential == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Session = LsapGetLogonSession(LogonId);
+    if (Session == NULL)
+        return STATUS_NO_SUCH_LOGON_SESSION;
+
+    /* Copy the new value first so a failure leaves an existing credential intact */
+    Status = LsapCopyLsaString(&NewValue, Credential);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Entry = LsapFindCredential(Session, AuthenticationPackage, PrimaryKeyValue);
+    if (Entry != NULL)
+    {
+        /* Replace the value of the existing credential */
+        if (Entry->Credential.Buffer != NULL)
+        {
+            RtlSecureZeroMemory(Entry->Credential.Buffer, Entry->Credential.MaximumLength);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Entry->Credential.Buffer);
+        }
+        Entry->Credential = NewValue;
+        return STATUS_SUCCESS;
+    }
+
+    Entry = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(LSAP_CREDENTIAL));
+    if (Entry == NULL)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto fail;
+    }
+
+    Status = LsapCopyLsaString(&Entry->PrimaryKeyValue, PrimaryKeyValue);
+    if (!NT_SUCCESS(Status))
+        goto fail;
+
+    Entry->AuthenticationPackage = AuthenticationPackage;
+    Entry->Credential = NewValue;
+    InsertTailList(&Session->CredentialListHead, &Entry->Entry);
 
     return STATUS_SUCCESS;
+
+fail:
+    if (Entry != NULL)
+    {
+        if (Entry->PrimaryKeyValue.Buffer != NULL)
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Entry->PrimaryKeyValue.Buffer);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Entry);
+    }
+
+    if (NewValue.Buffer != NULL)
+    {
+        RtlSecureZeroMemory(NewValue.Buffer, NewValue.MaximumLength);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, NewValue.Buffer);
+    }
+
+    return Status;
 }
 
 
@@ -332,8 +522,86 @@ LsapGetCredentials(
     _Out_ PULONG PrimaryKeyLength,
     _Out_ PLSA_STRING Credentials)
 {
+    PLSAP_LOGON_SESSION Session;
+    PLSAP_CREDENTIAL Found = NULL;
+    NTSTATUS Status;
 
-    return STATUS_SUCCESS;
+    TRACE("LsapGetCredentials(%p %lu %p %u %p %p %p)\n",
+          LogonId, AuthenticationPackage, QueryContext, RetrieveAllCredentials,
+          PrimaryKeyValue, PrimaryKeyLength, Credentials);
+
+    /* LogonSessionLock is held by the caller (see LsapAddCredential) */
+    if (LogonId == NULL || QueryContext == NULL || PrimaryKeyValue == NULL ||
+        PrimaryKeyLength == NULL || Credentials == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Credentials->Length = 0;
+    Credentials->MaximumLength = 0;
+    Credentials->Buffer = NULL;
+    *PrimaryKeyLength = 0;
+
+    Session = LsapGetLogonSession(LogonId);
+    if (Session == NULL)
+        return STATUS_NO_SUCH_LOGON_SESSION;
+
+    if (RetrieveAllCredentials)
+    {
+        /* *QueryContext enumerates this package's credentials in list order */
+        PLIST_ENTRY Entry;
+        ULONG Index = 0;
+
+        for (Entry = Session->CredentialListHead.Flink;
+             Entry != &Session->CredentialListHead;
+             Entry = Entry->Flink)
+        {
+            PLSAP_CREDENTIAL Credential = CONTAINING_RECORD(Entry, LSAP_CREDENTIAL, Entry);
+
+            if (Credential->AuthenticationPackage != AuthenticationPackage)
+                continue;
+
+            if (Index++ < *QueryContext)
+                continue;
+
+            Found = Credential;
+            break;
+        }
+
+        if (Found == NULL)
+            return STATUS_NO_MORE_ENTRIES;
+
+        /* Hand the key back in the caller's buffer */
+        *PrimaryKeyLength = Found->PrimaryKeyValue.Length;
+        if (PrimaryKeyValue->MaximumLength < Found->PrimaryKeyValue.Length ||
+            (PrimaryKeyValue->Buffer == NULL && Found->PrimaryKeyValue.Length != 0))
+        {
+            return STATUS_BUFFER_TOO_SMALL;
+        }
+
+        if (Found->PrimaryKeyValue.Length != 0)
+        {
+            RtlCopyMemory(PrimaryKeyValue->Buffer,
+                          Found->PrimaryKeyValue.Buffer,
+                          Found->PrimaryKeyValue.Length);
+        }
+        PrimaryKeyValue->Length = Found->PrimaryKeyValue.Length;
+    }
+    else
+    {
+        Found = LsapFindCredential(Session, AuthenticationPackage, PrimaryKeyValue);
+        if (Found == NULL)
+            return STATUS_NOT_FOUND;
+
+        *PrimaryKeyLength = Found->PrimaryKeyValue.Length;
+    }
+
+    /* The caller owns the returned copy (LSA heap == process heap) */
+    Status = LsapCopyLsaString(Credentials, &Found->Credential);
+    if (NT_SUCCESS(Status) && RetrieveAllCredentials)
+        (*QueryContext)++;
+
+    return Status;
 }
 
 
@@ -344,8 +612,81 @@ LsapDeleteCredential(
     _In_ ULONG AuthenticationPackage,
     _In_ PLSA_STRING PrimaryKeyValue)
 {
+    PLSAP_LOGON_SESSION Session;
+    PLSAP_CREDENTIAL Credential;
+
+    TRACE("LsapDeleteCredential(%p %lu %p)\n",
+          LogonId, AuthenticationPackage, PrimaryKeyValue);
+
+    /* LogonSessionLock is held by the caller (see LsapAddCredential) */
+    if (LogonId == NULL || PrimaryKeyValue == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Session = LsapGetLogonSession(LogonId);
+    if (Session == NULL)
+        return STATUS_NO_SUCH_LOGON_SESSION;
+
+    Credential = LsapFindCredential(Session, AuthenticationPackage, PrimaryKeyValue);
+    if (Credential == NULL)
+        return STATUS_NOT_FOUND;
+
+    RemoveEntryList(&Credential->Entry);
+    LsapFreeCredential(Credential);
 
     return STATUS_SUCCESS;
+}
+
+
+NTSTATUS
+NTAPI
+LsapGetDpapiPrekey(
+    _In_ PLUID LogonId,
+    _Out_ PLSA_STRING Prekey)
+{
+    PLSAP_LOGON_SESSION Session;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status = STATUS_NOT_FOUND;
+
+    Prekey->Length = 0;
+    Prekey->MaximumLength = 0;
+    Prekey->Buffer = NULL;
+
+    RtlAcquireSRWLockExclusive(&LogonSessionLock);
+
+    Session = LsapGetLogonSession(LogonId);
+    if (Session != NULL)
+    {
+        for (Entry = Session->CredentialListHead.Flink;
+             Entry != &Session->CredentialListHead;
+             Entry = Entry->Flink)
+        {
+            PLSAP_CREDENTIAL Credential = CONTAINING_RECORD(Entry, LSAP_CREDENTIAL, Entry);
+
+            if (Credential->PrimaryKeyValue.Length == sizeof("Primary") - 1 &&
+                RtlCompareMemory(Credential->PrimaryKeyValue.Buffer, "Primary",
+                                 sizeof("Primary") - 1) == sizeof("Primary") - 1 &&
+                Credential->Credential.Length == DPAPI_PREKEY_SIZE)
+            {
+                Prekey->Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0,
+                                                 Credential->Credential.Length);
+                if (Prekey->Buffer == NULL)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    break;
+                }
+
+                RtlCopyMemory(Prekey->Buffer, Credential->Credential.Buffer,
+                              Credential->Credential.Length);
+                Prekey->Length = Credential->Credential.Length;
+                Prekey->MaximumLength = Credential->Credential.Length;
+                Status = STATUS_SUCCESS;
+                break;
+            }
+        }
+    }
+
+    RtlReleaseSRWLockExclusive(&LogonSessionLock);
+    return Status;
 }
 
 

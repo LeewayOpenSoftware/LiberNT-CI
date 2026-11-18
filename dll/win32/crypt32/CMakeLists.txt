@@ -6,6 +6,13 @@ add_definitions(
     -D_CRYPT32_
 )
 
+include_directories(
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl
+    ${CMAKE_CURRENT_BINARY_DIR})
+
+add_rpc_files(client
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/dpapi.idl)
+
 spec2def(crypt32.dll crypt32.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
@@ -39,13 +46,19 @@ list(APPEND SOURCE
 )
 
 list(APPEND PCH_SKIP_SOURCE
-    ${CMAKE_CURRENT_BINARY_DIR}/crypt32_stubs.c)
+    ${CMAKE_CURRENT_BINARY_DIR}/crypt32_stubs.c
+    ${CMAKE_CURRENT_BINARY_DIR}/dpapi_c.c)
+
+add_custom_target(crypt32_rpc_headers DEPENDS
+    ${CMAKE_CURRENT_BINARY_DIR}/dpapi_c.h)
 
 add_library(crypt32 MODULE
     ${SOURCE}
     ${PCH_SKIP_SOURCE}
     crypt32.rc
     ${CMAKE_CURRENT_BINARY_DIR}/crypt32.def)
+
+add_dependencies(crypt32 crypt32_rpc_headers)
 
 if(MSVC)
     target_compile_options(crypt32 PRIVATE

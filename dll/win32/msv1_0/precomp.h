@@ -9,6 +9,7 @@
 #include <windef.h>
 #include <winbase.h>
 #include <winreg.h>
+#include <wincrypt.h>
 #include <intsafe.h>
 #define NTOS_MODE_USER
 #include <ndk/cmfuncs.h>

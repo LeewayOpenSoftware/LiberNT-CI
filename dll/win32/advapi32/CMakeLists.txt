@@ -13,7 +13,8 @@ add_rpc_files(client
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/lsa.idl
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/seclogon.idl
     ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/svcctl.idl
-    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/winreg.idl)
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/winreg.idl
+    ${REACTOS_SOURCE_DIR}/sdk/include/reactos/idl/dpapi.idl)
 
 list(APPEND SOURCE
     misc/dllmain.c
@@ -53,14 +54,16 @@ list(APPEND PCH_SKIP_SOURCE
     ${CMAKE_CURRENT_BINARY_DIR}/lsa_c.c
     ${CMAKE_CURRENT_BINARY_DIR}/seclogon_c.c
     ${CMAKE_CURRENT_BINARY_DIR}/svcctl_c.c
-    ${CMAKE_CURRENT_BINARY_DIR}/winreg_c.c)
+    ${CMAKE_CURRENT_BINARY_DIR}/winreg_c.c
+    ${CMAKE_CURRENT_BINARY_DIR}/dpapi_c.c)
 
 add_custom_target(advapi32_rpc_headers DEPENDS
     ${CMAKE_CURRENT_BINARY_DIR}/eventlogrpc_c.h
     ${CMAKE_CURRENT_BINARY_DIR}/lsa_c.h
     ${CMAKE_CURRENT_BINARY_DIR}/seclogon_c.h
     ${CMAKE_CURRENT_BINARY_DIR}/svcctl_c.h
-    ${CMAKE_CURRENT_BINARY_DIR}/winreg_c.h)
+    ${CMAKE_CURRENT_BINARY_DIR}/winreg_c.h
+    ${CMAKE_CURRENT_BINARY_DIR}/dpapi_c.h)
 
 add_library(win32_registry_hkcr STATIC
     reg/hkcr.c

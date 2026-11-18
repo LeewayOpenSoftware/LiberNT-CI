@@ -66,6 +66,17 @@ LsarStartRpcServer(VOID)
         return I_RpcMapWin32Status(Status);
     }
 
+    Status = RpcServerRegisterIf(dpapi_v1_0_s_ifspec,
+                                 NULL,
+                                 NULL);
+    if (Status != RPC_S_OK)
+    {
+        WARN("RpcServerRegisterIf(dpapi) failed (Status %lx)\n", Status);
+        return I_RpcMapWin32Status(Status);
+    }
+
+    DpapiServerInitialize();
+
     DsSetupInit();
 
     Status = RpcServerListen(1, 20, TRUE);
