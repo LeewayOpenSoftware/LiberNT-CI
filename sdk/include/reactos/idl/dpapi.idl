@@ -5,7 +5,7 @@
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
  */
 
-import "ms-dtyp.idl";
+#include <ms-dtyp.idl>
 
 [
     uuid(6b2a4f17-0c93-4d6e-9a1b-2f7e8c5d3a40),
