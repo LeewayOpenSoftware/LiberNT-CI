@@ -278,6 +278,9 @@ static NTSTATUS Smb2CreateConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
 
     if (!BooleanFlagOn(RxContext->Flags, RX_CONTEXT_FLAG_WAIT))
     {
+        /* A posted request runs in a system worker, without the caller's access or logon session */
+        if (Smb2RequestorMode(RxContext) != KernelMode)
+            return STATUS_INVALID_PARAMETER;
         *PostToFsp = TRUE;
         return STATUS_PENDING;
     }
@@ -313,6 +316,9 @@ static NTSTATUS Smb2DeleteConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
 
     if (!BooleanFlagOn(RxContext->Flags, RX_CONTEXT_FLAG_WAIT))
     {
+        /* A posted request runs in a system worker, without the caller's access or logon session */
+        if (Smb2RequestorMode(RxContext) != KernelMode)
+            return STATUS_INVALID_PARAMETER;
         *PostToFsp = TRUE;
         return STATUS_PENDING;
     }
