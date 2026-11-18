@@ -8,7 +8,11 @@
  *              client's device callbacks (enable / address / default endpoint /
  *              disable) and synchronous control transfers on the default
  *              endpoint, synthesizing the setup packet each URB function stands
- *              for. Configured endpoints and bulk/interrupt transfers are step 3.
+ *              for. Step 3 adds the configured endpoints: SELECT_CONFIGURATION /
+ *              SELECT_INTERFACE through the client's endpoint-add and
+ *              endpoints-configure callbacks, bulk and interrupt transfers
+ *              forwarded to the client's per-endpoint WDF queues, pipe abort
+ *              and reset.
  * NOTE:        Every device handle is matched against the controller's list
  *              before use; every URB is checked for the length the function
  *              implies before a field is read; control data is bounded by
@@ -21,6 +25,13 @@
 /* --------------------------------------------------------------------------
  * Helpers
  * -------------------------------------------------------------------------- */
+
+static
+VOID
+UcxpDeviceUnconfigure(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle,
+    _In_ BOOLEAN TellDevice);
 
 static
 PUCX_USBDEVICE_CTX
@@ -453,6 +464,9 @@ UcxpDeviceRemove(
     /* Out of the list first: no URB finds it from here on */
     UcxpRemoveDeviceHandle(Controller, Handle);
 
+    /* Its pipes give their transfers back and the endpoints leave the controller */
+    UcxpDeviceUnconfigure(RootHub, Handle, FALSE);
+
     if (Device != NULL && Device->Callbacks.EvtUsbDeviceDisable != NULL)
         Device->Callbacks.EvtUsbDeviceDisable(RootHub->Controller, UsbDevice);
 
@@ -463,7 +477,7 @@ UcxpDeviceRemove(
     ExFreePoolWithTag(Handle, UCX_TAG);
 }
 
-/* USB_DEVICE_INFORMATION_0 for a downstream device (no configured pipes before step 3) */
+/* USB_DEVICE_INFORMATION_0 for a downstream device, with its open pipes */
 NTSTATUS
 UcxpDeviceQueryInformation(
     _In_ PUCX_DEVICE_HANDLE Handle,
@@ -472,7 +486,13 @@ UcxpDeviceQueryInformation(
     _Out_ PULONG Returned)
 {
     PUSB_DEVICE_INFORMATION_0 Info = Buffer;
-    ULONG ActualLength = FIELD_OFFSET(USB_DEVICE_INFORMATION_0, PipeList);
+    ULONG Pipes = 0, i, p, n = 0;
+    ULONG ActualLength;
+
+    for (i = 0; i < Handle->InterfaceCount; i++)
+        if (Handle->Interfaces[i] != NULL)
+            Pipes += Handle->Interfaces[i]->PipeCount;
+    ActualLength = FIELD_OFFSET(USB_DEVICE_INFORMATION_0, PipeList) + Pipes * sizeof(USB_PIPE_INFORMATION_0);
 
     *Returned = 0;
     if (BufferLength < sizeof(USB_LEVEL_INFORMATION))
@@ -497,7 +517,19 @@ UcxpDeviceQueryInformation(
     Info->DeviceSpeed = Handle->DeviceSpeed;
     Info->DeviceType = (Handle->DeviceSpeed == UsbLowSpeed || Handle->DeviceSpeed == UsbFullSpeed) ?
                        Usb11Device : Usb20Device;
-    Info->NumberOfOpenPipes = 0;
+    Info->NumberOfOpenPipes = Pipes;
+    for (i = 0; i < Handle->InterfaceCount; i++)
+    {
+        PUCX_INTERFACE Iface = Handle->Interfaces[i];
+
+        if (Iface == NULL)
+            continue;
+        for (p = 0; p < Iface->PipeCount && n < Pipes; p++, n++)
+        {
+            Info->PipeList[n].EndpointDescriptor = Iface->Pipes[p].Descriptor;
+            Info->PipeList[n].ScheduleOffset = 0;
+        }
+    }
     *Returned = ActualLength;
     return STATUS_SUCCESS;
 }
@@ -703,6 +735,890 @@ UcxpUrbToSetup(
     return TRUE;
 }
 
+/* --------------------------------------------------------------------------
+ * Configured endpoints (M3 step 3): SELECT_CONFIGURATION / SELECT_INTERFACE,
+ * bulk and interrupt transfers forwarded to the client's endpoint queues,
+ * pipe abort and reset.
+ *
+ * A USBD_PIPE_HANDLE or USBD_INTERFACE_HANDLE from a class driver is only
+ * ever compared against the addresses this library handed out for the device
+ * (UcxpFindPipe / UcxpFindInterface); it is never dereferenced before that.
+ * The configuration descriptor is the class driver's copy and is walked within
+ * the bounds it states (wTotalLength) and each descriptor's own bLength.
+ * -------------------------------------------------------------------------- */
+
+static
+PUCX_PIPE_HANDLE
+UcxpFindPipe(
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_opt_ USBD_PIPE_HANDLE PipeHandle)
+{
+    ULONG i, p;
+
+    if (PipeHandle == NULL)
+        return NULL;
+    if (PipeHandle == (USBD_PIPE_HANDLE)&Handle->DefaultPipe)
+        return &Handle->DefaultPipe;
+    for (i = 0; i < Handle->InterfaceCount; i++)
+    {
+        PUCX_INTERFACE Iface = Handle->Interfaces[i];
+
+        if (Iface == NULL)
+            continue;
+        for (p = 0; p < Iface->PipeCount; p++)
+        {
+            if (PipeHandle == (USBD_PIPE_HANDLE)&Iface->Pipes[p])
+                return &Iface->Pipes[p];
+        }
+    }
+    return NULL;
+}
+
+static
+ULONG
+UcxpFindInterfaceIndex(
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_ UCHAR InterfaceNumber)
+{
+    ULONG i;
+
+    for (i = 0; i < Handle->InterfaceCount; i++)
+    {
+        if (Handle->Interfaces[i] != NULL && Handle->Interfaces[i]->InterfaceNumber == InterfaceNumber)
+            return i;
+    }
+    return (ULONG)-1;
+}
+
+/* The descriptor after Current inside the configuration, or NULL at the end / on a malformed length */
+static
+PUSB_COMMON_DESCRIPTOR
+UcxpNextDescriptor(
+    _In_ PUSB_CONFIGURATION_DESCRIPTOR Config,
+    _In_ ULONG TotalLength,
+    _In_opt_ PUSB_COMMON_DESCRIPTOR Current)
+{
+    PUCHAR Base = (PUCHAR)Config;
+    PUCHAR End = Base + TotalLength;
+    PUCHAR Next;
+
+    if (Current == NULL)
+        Next = Base + Config->bLength;
+    else
+        Next = (PUCHAR)Current + Current->bLength;
+
+    if (Next < Base || Next + sizeof(USB_COMMON_DESCRIPTOR) > End)
+        return NULL;
+    if (((PUSB_COMMON_DESCRIPTOR)Next)->bLength < sizeof(USB_COMMON_DESCRIPTOR) ||
+        Next + ((PUSB_COMMON_DESCRIPTOR)Next)->bLength > End)
+        return NULL;
+    return (PUSB_COMMON_DESCRIPTOR)Next;
+}
+
+static
+PUSB_INTERFACE_DESCRIPTOR
+UcxpFindInterfaceDescriptor(
+    _In_ PUSB_CONFIGURATION_DESCRIPTOR Config,
+    _In_ ULONG TotalLength,
+    _In_ UCHAR InterfaceNumber,
+    _In_ UCHAR AlternateSetting)
+{
+    PUSB_COMMON_DESCRIPTOR D = NULL;
+
+    while ((D = UcxpNextDescriptor(Config, TotalLength, D)) != NULL)
+    {
+        if (D->bDescriptorType == USB_INTERFACE_DESCRIPTOR_TYPE && D->bLength >= sizeof(USB_INTERFACE_DESCRIPTOR))
+        {
+            PUSB_INTERFACE_DESCRIPTOR I = (PUSB_INTERFACE_DESCRIPTOR)D;
+
+            if (I->bInterfaceNumber == InterfaceNumber && I->bAlternateSetting == AlternateSetting)
+                return I;
+        }
+    }
+    return NULL;
+}
+
+/*
+ * The next endpoint descriptor of the interface after *Cursor (stops at the
+ * next interface descriptor). A SuperSpeed companion right behind it is
+ * returned too.
+ */
+static
+PUSB_ENDPOINT_DESCRIPTOR
+UcxpNextEndpointDescriptor(
+    _In_ PUSB_CONFIGURATION_DESCRIPTOR Config,
+    _In_ ULONG TotalLength,
+    _Inout_ PUSB_COMMON_DESCRIPTOR *Cursor,
+    _Out_ PUSB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR *Companion)
+{
+    PUSB_COMMON_DESCRIPTOR D = *Cursor;
+
+    *Companion = NULL;
+    while ((D = UcxpNextDescriptor(Config, TotalLength, D)) != NULL)
+    {
+        if (D->bDescriptorType == USB_INTERFACE_DESCRIPTOR_TYPE)
+        {
+            *Cursor = D;
+            return NULL;
+        }
+        if (D->bDescriptorType == USB_ENDPOINT_DESCRIPTOR_TYPE && D->bLength >= sizeof(USB_ENDPOINT_DESCRIPTOR))
+        {
+            PUSB_COMMON_DESCRIPTOR Peek = UcxpNextDescriptor(Config, TotalLength, D);
+
+            if (Peek != NULL && Peek->bDescriptorType == USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR_TYPE &&
+                Peek->bLength >= sizeof(USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR))
+            {
+                *Companion = (PUSB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR)Peek;
+            }
+            *Cursor = D;
+            return (PUSB_ENDPOINT_DESCRIPTOR)D;
+        }
+    }
+    *Cursor = NULL;
+    return NULL;
+}
+
+static
+USBD_PIPE_TYPE
+UcxpPipeTypeFromAttributes(
+    _In_ UCHAR bmAttributes)
+{
+    switch (bmAttributes & USB_ENDPOINT_TYPE_MASK)
+    {
+        case USB_ENDPOINT_TYPE_CONTROL:     return UsbdPipeTypeControl;
+        case USB_ENDPOINT_TYPE_ISOCHRONOUS: return UsbdPipeTypeIsochronous;
+        case USB_ENDPOINT_TYPE_BULK:        return UsbdPipeTypeBulk;
+        default:                            return UsbdPipeTypeInterrupt;
+    }
+}
+
+/* Abort the transfers of every pipe of an interface (client callback), then
+ * refuse new ones */
+static
+VOID
+UcxpInterfaceAbortPipes(
+    _In_ PUCX_INTERFACE Iface)
+{
+    ULONG p;
+
+    for (p = 0; p < Iface->PipeCount; p++)
+    {
+        PUCX_PIPE_HANDLE Pipe = &Iface->Pipes[p];
+        PUCX_ENDPOINT_CTX Ep;
+
+        InterlockedExchange(&Pipe->Closing, 1);
+        if (Pipe->Endpoint == NULL)
+            continue;
+        Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
+        if (Ep->Callbacks.EvtEndpointAbort != NULL)
+            Ep->Callbacks.EvtEndpointAbort(Pipe->Endpoint);
+    }
+}
+
+/* Delete the endpoint objects of an interface and free it (after they were
+ * disabled on the controller) */
+static
+VOID
+UcxpInterfaceDestroy(
+    _Inout_ PUCX_INTERFACE Iface)
+{
+    ULONG p;
+
+    for (p = 0; p < Iface->PipeCount; p++)
+    {
+        UCXENDPOINT Endpoint = Iface->Pipes[p].Endpoint;
+
+        Iface->Pipes[p].Endpoint = NULL;
+        Iface->Pipes[p].Signature = 0;
+        if (Endpoint != NULL)
+            WdfObjectDelete((WDFOBJECT)Endpoint);
+    }
+    Iface->Signature = 0;
+    ExFreePoolWithTag(Iface, UCX_TAG);
+}
+
+/*
+ * Build the interface record for one USBD_INTERFACE_INFORMATION of a select
+ * URB: find its descriptor, create one endpoint object per endpoint through
+ * the client, fill in what the class driver reads back (class codes, handles,
+ * pipe properties). *InfoBytes is the URB memory left for Info on entry.
+ */
+static
+USBD_STATUS
+UcxpInterfaceBuild(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_ PUSB_CONFIGURATION_DESCRIPTOR Config,
+    _In_ ULONG TotalLength,
+    _Inout_ PUSBD_INTERFACE_INFORMATION Info,
+    _In_ ULONG InfoBytes,
+    _Outptr_ PUCX_INTERFACE *Out)
+{
+    PUCX_USBDEVICE_CTX Device = UcxpDeviceCtx(Handle);
+    PUSB_INTERFACE_DESCRIPTOR IfaceDesc;
+    PUSB_COMMON_DESCRIPTOR Cursor;
+    PUCX_INTERFACE Iface;
+    ULONG Needed, p;
+
+    *Out = NULL;
+    if (Device == NULL || Device->Callbacks.EvtUsbDeviceEndpointAdd == NULL)
+        return USBD_STATUS_NOT_SUPPORTED;
+
+    if (InfoBytes < FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes) ||
+        Info->NumberOfPipes > UCX_MAX_PIPES)
+    {
+        return USBD_STATUS_INVALID_PARAMETER;
+    }
+    Needed = FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes) + Info->NumberOfPipes * sizeof(USBD_PIPE_INFORMATION);
+    if (Info->Length < Needed || Info->Length > InfoBytes)
+        return USBD_STATUS_INVALID_PARAMETER;
+
+    IfaceDesc = UcxpFindInterfaceDescriptor(Config, TotalLength, Info->InterfaceNumber, Info->AlternateSetting);
+    if (IfaceDesc == NULL || IfaceDesc->bNumEndpoints != Info->NumberOfPipes)
+    {
+        UcxLog("device: port %u interface %u alt %u: %s (%lu pipes asked)", Handle->PortNumber,
+               Info->InterfaceNumber, Info->AlternateSetting,
+               IfaceDesc == NULL ? "no such descriptor" : "endpoint count differs", Info->NumberOfPipes);
+        return USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR;
+    }
+
+    Iface = ExAllocatePoolZero(NonPagedPoolNx, UCX_INTERFACE_SIZE(Info->NumberOfPipes), UCX_TAG);
+    if (Iface == NULL)
+        return USBD_STATUS_INSUFFICIENT_RESOURCES;
+    Iface->Signature = UCX_INTERFACE_SIGNATURE;
+    Iface->InterfaceNumber = IfaceDesc->bInterfaceNumber;
+    Iface->AlternateSetting = IfaceDesc->bAlternateSetting;
+    Iface->Class = IfaceDesc->bInterfaceClass;
+    Iface->SubClass = IfaceDesc->bInterfaceSubClass;
+    Iface->Protocol = IfaceDesc->bInterfaceProtocol;
+    Iface->PipeCount = (UCHAR)Info->NumberOfPipes;
+
+    Cursor = (PUSB_COMMON_DESCRIPTOR)IfaceDesc;
+    for (p = 0; p < Info->NumberOfPipes; p++)
+    {
+        PUSB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR Companion;
+        PUSB_ENDPOINT_DESCRIPTOR EpDesc = UcxpNextEndpointDescriptor(Config, TotalLength, &Cursor, &Companion);
+        PUCX_PIPE_HANDLE Pipe = &Iface->Pipes[p];
+        PUSBD_PIPE_INFORMATION PipeInfo = &Info->Pipes[p];
+        struct _UCXENDPOINT_INIT *Init;
+        UCX_ENDPOINT_INFO EpInfo;
+        NTSTATUS Status;
+
+        if (EpDesc == NULL || (EpDesc->bEndpointAddress & USB_ENDPOINT_ADDRESS_MASK) == 0 ||
+            (EpDesc->bmAttributes & USB_ENDPOINT_TYPE_MASK) == USB_ENDPOINT_TYPE_CONTROL)
+        {
+            UcxLog("device: port %u interface %u: endpoint %lu missing or unusable", Handle->PortNumber,
+                   Info->InterfaceNumber, p);
+            UcxpInterfaceDestroy(Iface);
+            return USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR;
+        }
+
+        Pipe->Signature = UCX_PIPE_HANDLE_SIGNATURE;
+        RtlCopyMemory(&Pipe->Descriptor, EpDesc, sizeof(USB_ENDPOINT_DESCRIPTOR));
+        Pipe->MaximumTransferSize = (PipeInfo->MaximumTransferSize != 0 &&
+                                     PipeInfo->MaximumTransferSize < UCX_BULK_MAX_TRANSFER) ?
+                                    PipeInfo->MaximumTransferSize : UCX_BULK_MAX_TRANSFER;
+
+        Init = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Init), UCX_TAG);
+        if (Init == NULL)
+        {
+            UcxpInterfaceDestroy(Iface);
+            return USBD_STATUS_INSUFFICIENT_RESOURCES;
+        }
+        Init->Signature = UCX_ENDPOINT_INIT_SIGNATURE;
+        Init->UsbDevice = Handle->UsbDevice;
+        Init->Descriptor = Pipe->Descriptor;
+
+        RtlZeroMemory(&EpInfo, sizeof(EpInfo));
+        EpInfo.Size = sizeof(EpInfo);
+        EpInfo.Descriptor = Pipe->Descriptor;
+        if (Companion != NULL)
+        {
+            RtlCopyMemory(&EpInfo.Companion, Companion, sizeof(EpInfo.Companion));
+            EpInfo.HasCompanion = TRUE;
+        }
+        EpInfo.InterfaceNumber = Iface->InterfaceNumber;
+        EpInfo.AlternateSetting = Iface->AlternateSetting;
+        EpInfo.MaximumTransferSize = Pipe->MaximumTransferSize;
+
+        Status = Device->Callbacks.EvtUsbDeviceEndpointAdd(RootHub->Controller, Handle->UsbDevice, &EpInfo, Init);
+        if (NT_SUCCESS(Status) && Init->Created == NULL)
+            Status = STATUS_UNSUCCESSFUL;
+        if (!NT_SUCCESS(Status))
+        {
+            UcxLog("device: port %u endpoint 0x%02x add refused by the client 0x%08lX", Handle->PortNumber,
+                   EpDesc->bEndpointAddress, (ULONG)Status);
+            if (Init->Created != NULL)
+                WdfObjectDelete((WDFOBJECT)Init->Created);
+            ExFreePoolWithTag(Init, UCX_TAG);
+            UcxpInterfaceDestroy(Iface);
+            return USBD_STATUS_INSUFFICIENT_RESOURCES;
+        }
+        Pipe->Endpoint = Init->Created;
+        ExFreePoolWithTag(Init, UCX_TAG);
+
+        /* What the class driver reads back */
+        PipeInfo->EndpointAddress = EpDesc->bEndpointAddress;
+        PipeInfo->Interval = EpDesc->bInterval;
+        PipeInfo->PipeType = UcxpPipeTypeFromAttributes(EpDesc->bmAttributes);
+        PipeInfo->MaximumPacketSize = (Handle->DeviceSpeed == UsbSuperSpeed) ? EpDesc->wMaxPacketSize
+                                                                             : (EpDesc->wMaxPacketSize & 0x07FF);
+        PipeInfo->PipeHandle = (USBD_PIPE_HANDLE)Pipe;
+        PipeInfo->MaximumTransferSize = Pipe->MaximumTransferSize;
+    }
+
+    Info->Class = Iface->Class;
+    Info->SubClass = Iface->SubClass;
+    Info->Protocol = Iface->Protocol;
+    Info->InterfaceHandle = (USBD_INTERFACE_HANDLE)Iface;
+    *Out = Iface;
+    return USBD_STATUS_SUCCESS;
+}
+
+/* Tell the client which endpoints to enable / disable (one Configure Endpoint) */
+static
+NTSTATUS
+UcxpConfigureEndpoints(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_ UCX_ENDPOINTS_CONFIGURE_TYPE Type,
+    _In_ UCHAR ConfigurationValue,
+    _In_ UCHAR InterfaceNumber,
+    _In_ UCHAR AlternateSetting,
+    _In_reads_opt_(EnableCount) PUCX_INTERFACE *Enable,
+    _In_ ULONG EnableCount,
+    _In_reads_opt_(DisableCount) PUCX_INTERFACE *Disable,
+    _In_ ULONG DisableCount)
+{
+    PUCX_USBDEVICE_CTX Device = UcxpDeviceCtx(Handle);
+    UCX_ENDPOINTS_CONFIGURE Cfg;
+    UCXENDPOINT *Endpoints;
+    ULONG Total = 0, n = 0, i, p;
+    NTSTATUS Status;
+
+    if (Device == NULL || Device->Callbacks.EvtUsbDeviceEndpointsConfigure == NULL)
+        return STATUS_NOT_SUPPORTED;
+
+    for (i = 0; i < EnableCount; i++)
+        Total += Enable[i]->PipeCount;
+    for (i = 0; i < DisableCount; i++)
+        Total += Disable[i]->PipeCount;
+
+    Endpoints = ExAllocatePoolZero(NonPagedPoolNx, (Total ? Total : 1) * sizeof(UCXENDPOINT), UCX_TAG);
+    if (Endpoints == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(&Cfg, sizeof(Cfg));
+    Cfg.Size = sizeof(Cfg);
+    Cfg.Type = Type;
+    Cfg.ConfigurationValue = ConfigurationValue;
+    Cfg.InterfaceNumber = InterfaceNumber;
+    Cfg.AlternateSetting = AlternateSetting;
+    Cfg.EndpointsToEnable = Endpoints;
+    for (i = 0; i < EnableCount; i++)
+        for (p = 0; p < Enable[i]->PipeCount; p++)
+            Endpoints[n++] = Enable[i]->Pipes[p].Endpoint;
+    Cfg.EnableCount = n;
+    Cfg.EndpointsToDisable = Endpoints + n;
+    for (i = 0; i < DisableCount; i++)
+        for (p = 0; p < Disable[i]->PipeCount; p++)
+            Endpoints[n++] = Disable[i]->Pipes[p].Endpoint;
+    Cfg.DisableCount = n - Cfg.EnableCount;
+
+    Status = Device->Callbacks.EvtUsbDeviceEndpointsConfigure(RootHub->Controller, Handle->UsbDevice, &Cfg);
+    UcxLog("device: port %u endpoints configure type %u (+%lu -%lu) -> 0x%08lX", Handle->PortNumber,
+           Type, Cfg.EnableCount, Cfg.DisableCount, (ULONG)Status);
+    ExFreePoolWithTag(Endpoints, UCX_TAG);
+    return Status;
+}
+
+/* SET_CONFIGURATION(value) / SET_INTERFACE(alt, interface) on the default endpoint */
+static
+USBD_STATUS
+UcxpDeviceSetConfigurationOrInterface(
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_ BOOLEAN Interface,
+    _In_ USHORT Value,
+    _In_ USHORT Index)
+{
+    USB_DEFAULT_PIPE_SETUP_PACKET Setup;
+    USBD_STATUS UsbdStatus;
+    ULONG Transferred = 0;
+
+    RtlZeroMemory(&Setup, sizeof(Setup));
+    Setup.bmRequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
+    Setup.bmRequestType.Type = BMREQUEST_STANDARD;
+    Setup.bmRequestType.Recipient = Interface ? BMREQUEST_TO_INTERFACE : BMREQUEST_TO_DEVICE;
+    Setup.bRequest = Interface ? USB_REQUEST_SET_INTERFACE : USB_REQUEST_SET_CONFIGURATION;
+    Setup.wValue.W = Value;
+    Setup.wIndex.W = Index;
+    Setup.wLength = 0;
+    (VOID)UcxpControlTransfer(Handle, &Setup, NULL, NULL, 0, FALSE, &Transferred, &UsbdStatus);
+    return UsbdStatus;
+}
+
+/* Everything of the current configuration goes: transfers, endpoints, records */
+static
+VOID
+UcxpDeviceUnconfigure(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle,
+    _In_ BOOLEAN TellDevice)
+{
+    PUCX_INTERFACE Ifaces[UCX_MAX_INTERFACES];
+    ULONG Count = 0, i;
+
+    for (i = 0; i < Handle->InterfaceCount; i++)
+    {
+        if (Handle->Interfaces[i] != NULL)
+        {
+            UcxpInterfaceAbortPipes(Handle->Interfaces[i]);
+            Ifaces[Count++] = Handle->Interfaces[i];
+        }
+    }
+    if (Count != 0 || Handle->ConfigurationValue != 0)
+        (VOID)UcxpConfigureEndpoints(RootHub, Handle, UcxEndpointsConfigureDisableAll, 0, 0, 0,
+                                     NULL, 0, Ifaces, Count);
+    if (TellDevice && Handle->ConfigurationValue != 0)
+        (VOID)UcxpDeviceSetConfigurationOrInterface(Handle, FALSE, 0, 0);
+
+    for (i = 0; i < Count; i++)
+        UcxpInterfaceDestroy(Ifaces[i]);
+    RtlZeroMemory(Handle->Interfaces, sizeof(Handle->Interfaces));
+    Handle->InterfaceCount = 0;
+    Handle->ConfigurationValue = 0;
+    if (Handle->ConfigDescriptor != NULL)
+    {
+        ExFreePoolWithTag(Handle->ConfigDescriptor, UCX_TAG);
+        Handle->ConfigDescriptor = NULL;
+        Handle->ConfigDescriptorLength = 0;
+    }
+}
+
+static
+USBD_STATUS
+UcxpDeviceSelectConfiguration(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle,
+    _Inout_ PURB Urb)
+{
+    struct _URB_SELECT_CONFIGURATION *Req = &Urb->UrbSelectConfiguration;
+    PUSB_CONFIGURATION_DESCRIPTOR Config = Req->ConfigurationDescriptor;
+    PUSBD_INTERFACE_INFORMATION Info;
+    PUCX_INTERFACE Built[UCX_MAX_INTERFACES];
+    ULONG BuiltCount = 0, Remaining, TotalLength, Pipes = 0, i;
+    USBD_STATUS UsbdStatus;
+    NTSTATUS Status;
+
+    if (Urb->UrbHeader.Length < FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface))
+        return USBD_STATUS_INVALID_PARAMETER;
+
+    /* Whatever was selected before goes first (also for a NULL descriptor: unconfigure) */
+    UcxpDeviceUnconfigure(RootHub, Handle, Config == NULL);
+    Req->ConfigurationHandle = NULL;
+    if (Config == NULL)
+    {
+        UcxLog("device: port %u unconfigured", Handle->PortNumber);
+        return USBD_STATUS_SUCCESS;
+    }
+
+    if (Config->bLength != sizeof(USB_CONFIGURATION_DESCRIPTOR) ||
+        Config->bDescriptorType != USB_CONFIGURATION_DESCRIPTOR_TYPE ||
+        Config->wTotalLength < sizeof(USB_CONFIGURATION_DESCRIPTOR) ||
+        Config->bNumInterfaces == 0 || Config->bNumInterfaces > UCX_MAX_INTERFACES ||
+        Config->bConfigurationValue == 0)
+    {
+        return USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR;
+    }
+    TotalLength = Config->wTotalLength;
+
+    /* Our own copy: SELECT_INTERFACE later needs the alternate settings */
+    Handle->ConfigDescriptor = ExAllocatePoolZero(NonPagedPoolNx, TotalLength, UCX_TAG);
+    if (Handle->ConfigDescriptor == NULL)
+        return USBD_STATUS_INSUFFICIENT_RESOURCES;
+    RtlCopyMemory(Handle->ConfigDescriptor, Config, TotalLength);
+    Handle->ConfigDescriptorLength = TotalLength;
+    Config = Handle->ConfigDescriptor;
+
+    Info = &Req->Interface;
+    Remaining = Urb->UrbHeader.Length - FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface);
+    for (i = 0; i < Config->bNumInterfaces; i++)
+    {
+        if (Remaining < FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes))
+        {
+            UcxLog("device: port %u SELECT_CONFIGURATION names %u interfaces, URB holds %lu",
+                   Handle->PortNumber, Config->bNumInterfaces, i);
+            UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+            goto Fail;
+        }
+        UsbdStatus = UcxpInterfaceBuild(RootHub, Handle, Config, TotalLength, Info, Remaining, &Built[BuiltCount]);
+        if (!USBD_SUCCESS(UsbdStatus))
+            goto Fail;
+        Pipes += Built[BuiltCount]->PipeCount;
+        BuiltCount++;
+        Remaining -= Info->Length;
+        Info = (PUSBD_INTERFACE_INFORMATION)((PUCHAR)Info + Info->Length);
+    }
+
+    Status = UcxpConfigureEndpoints(RootHub, Handle, UcxEndpointsConfigureConfiguration,
+                                    Config->bConfigurationValue, 0, 0, Built, BuiltCount, NULL, 0);
+    if (!NT_SUCCESS(Status))
+    {
+        UsbdStatus = USBD_STATUS_INSUFFICIENT_RESOURCES;
+        goto Fail;
+    }
+    for (i = 0; i < BuiltCount; i++)
+        Handle->Interfaces[i] = Built[i];
+    Handle->InterfaceCount = BuiltCount;
+
+    UsbdStatus = UcxpDeviceSetConfigurationOrInterface(Handle, FALSE, Config->bConfigurationValue, 0);
+    if (!USBD_SUCCESS(UsbdStatus))
+    {
+        UcxLog("device: port %u SET_CONFIGURATION(%u) failed, USBD 0x%08lX", Handle->PortNumber,
+               Config->bConfigurationValue, (ULONG)UsbdStatus);
+        Handle->ConfigurationValue = Config->bConfigurationValue;   /* so the unconfigure drops the contexts */
+        UcxpDeviceUnconfigure(RootHub, Handle, FALSE);
+        return UsbdStatus;
+    }
+
+    Handle->ConfigurationValue = Config->bConfigurationValue;
+    Req->ConfigurationHandle = (USBD_CONFIGURATION_HANDLE)&Handle->ConfigurationCookie;
+    UcxLog("device: port %u configured %u: %lu interface(s), %lu pipe(s)", Handle->PortNumber,
+           Handle->ConfigurationValue, BuiltCount, Pipes);
+    return USBD_STATUS_SUCCESS;
+
+Fail:
+    for (i = 0; i < BuiltCount; i++)
+        UcxpInterfaceDestroy(Built[i]);
+    if (Handle->ConfigDescriptor != NULL)
+    {
+        ExFreePoolWithTag(Handle->ConfigDescriptor, UCX_TAG);
+        Handle->ConfigDescriptor = NULL;
+        Handle->ConfigDescriptorLength = 0;
+    }
+    return UsbdStatus;
+}
+
+static
+USBD_STATUS
+UcxpDeviceSelectInterface(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle,
+    _Inout_ PURB Urb)
+{
+    struct _URB_SELECT_INTERFACE *Req = &Urb->UrbSelectInterface;
+    PUSBD_INTERFACE_INFORMATION Info = &Req->Interface;
+    PUCX_INTERFACE Old, New = NULL;
+    ULONG Index, Remaining;
+    USBD_STATUS UsbdStatus;
+    NTSTATUS Status;
+
+    if (Urb->UrbHeader.Length < FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface) +
+                                FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes))
+    {
+        return USBD_STATUS_INVALID_PARAMETER;
+    }
+    if (Handle->ConfigurationValue == 0 || Handle->ConfigDescriptor == NULL ||
+        Req->ConfigurationHandle != (USBD_CONFIGURATION_HANDLE)&Handle->ConfigurationCookie)
+    {
+        return USBD_STATUS_INVALID_PARAMETER;
+    }
+    Index = UcxpFindInterfaceIndex(Handle, Info->InterfaceNumber);
+    if (Index == (ULONG)-1)
+        return USBD_STATUS_INVALID_PARAMETER;
+    Old = Handle->Interfaces[Index];
+
+    Remaining = Urb->UrbHeader.Length - FIELD_OFFSET(struct _URB_SELECT_INTERFACE, Interface);
+    UsbdStatus = UcxpInterfaceBuild(RootHub, Handle, Handle->ConfigDescriptor, Handle->ConfigDescriptorLength,
+                                    Info, Remaining, &New);
+    if (!USBD_SUCCESS(UsbdStatus))
+        return UsbdStatus;
+
+    /* The old setting's pipes are done; the controller swaps the endpoints in one command */
+    UcxpInterfaceAbortPipes(Old);
+    Status = UcxpConfigureEndpoints(RootHub, Handle, UcxEndpointsConfigureInterface, Handle->ConfigurationValue,
+                                    New->InterfaceNumber, New->AlternateSetting, &New, 1, &Old, 1);
+    if (!NT_SUCCESS(Status))
+    {
+        /* The old endpoints are gone from the controller either way; the
+         * interface keeps no usable pipes until the class driver selects again */
+        UcxpInterfaceDestroy(New);
+        UcxpInterfaceDestroy(Old);
+        Handle->Interfaces[Index] = NULL;
+        return USBD_STATUS_INSUFFICIENT_RESOURCES;
+    }
+    Handle->Interfaces[Index] = New;
+    UcxpInterfaceDestroy(Old);
+
+    UsbdStatus = UcxpDeviceSetConfigurationOrInterface(Handle, TRUE, New->AlternateSetting, New->InterfaceNumber);
+    UcxLog("device: port %u interface %u -> alternate setting %u, %u pipe(s), USBD 0x%08lX", Handle->PortNumber,
+           New->InterfaceNumber, New->AlternateSetting, New->PipeCount, (ULONG)UsbdStatus);
+    return UsbdStatus;
+}
+
+/* Context cleanup on a forwarded request that was never completed through us */
+static
+VOID
+NTAPI
+UcxpRequestCtxCleanup(
+    _In_ WDFOBJECT Object)
+{
+    PUCX_REQUEST_CTX Ctx = UcxGetRequestCtx(Object);
+
+    if (Ctx->OwnedMdl != NULL)
+    {
+        IoFreeMdl(Ctx->OwnedMdl);
+        Ctx->OwnedMdl = NULL;
+    }
+    if (Ctx->Endpoint != NULL)
+    {
+        InterlockedDecrement(&UcxGetEndpointCtx((WDFOBJECT)Ctx->Endpoint)->Transfers);
+        Ctx->Endpoint = NULL;
+    }
+}
+
+/*
+ * BULK_OR_INTERRUPT_TRANSFER: checked here, carried out by the client. The
+ * request leaves this routine either forwarded to the endpoint's queue or
+ * completed with an error.
+ */
+static
+VOID
+UcxpDeviceBulkTransfer(
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_ WDFREQUEST Request,
+    _Inout_ PURB Urb)
+{
+    struct _URB_BULK_OR_INTERRUPT_TRANSFER *Req = &Urb->UrbBulkOrInterruptTransfer;
+    PUCX_PIPE_HANDLE Pipe;
+    PUCX_ENDPOINT_CTX Ep;
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    WDF_REQUEST_FORWARD_OPTIONS Options;
+    PUCX_REQUEST_CTX Ctx = NULL;
+    PMDL OwnedMdl = NULL;
+    UCHAR Type;
+    NTSTATUS Status;
+
+    if (Urb->UrbHeader.Length < sizeof(*Req))
+    {
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
+        return;
+    }
+    Pipe = UcxpFindPipe(Handle, Req->PipeHandle);
+    if (Pipe == NULL || Pipe == &Handle->DefaultPipe || Pipe->Endpoint == NULL)
+    {
+        Req->TransferBufferLength = 0;
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
+        return;
+    }
+    Type = Pipe->Descriptor.bmAttributes & USB_ENDPOINT_TYPE_MASK;
+    if (Type != USB_ENDPOINT_TYPE_BULK && Type != USB_ENDPOINT_TYPE_INTERRUPT)
+    {
+        Req->TransferBufferLength = 0;
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PIPE_HANDLE);
+        return;
+    }
+    if (InterlockedCompareExchange(&Pipe->Closing, 0, 0) != 0)
+    {
+        Req->TransferBufferLength = 0;
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_DEVICE_GONE);
+        return;
+    }
+    Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
+    if (Ep->Queue == NULL)
+    {
+        Req->TransferBufferLength = 0;
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_NOT_SUPPORTED);
+        return;
+    }
+
+    /* The endpoint's direction is the transfer's (usbport does the same) */
+    if (USB_ENDPOINT_DIRECTION_IN(Pipe->Descriptor.bEndpointAddress))
+        Req->TransferFlags |= USBD_TRANSFER_DIRECTION_IN;
+    else
+        Req->TransferFlags &= ~USBD_TRANSFER_DIRECTION_IN;
+
+    if (Req->TransferBufferLength > UCX_BULK_MAX_TRANSFER)
+    {
+        Req->TransferBufferLength = 0;
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
+        return;
+    }
+    if (Req->TransferBufferLength != 0)
+    {
+        if (Req->TransferBufferMDL != NULL)
+        {
+            PMDL Mdl = Req->TransferBufferMDL;
+
+            if (MmGetMdlByteCount(Mdl) < Req->TransferBufferLength ||
+                (Mdl->MdlFlags & (MDL_PAGES_LOCKED | MDL_SOURCE_IS_NONPAGED_POOL)) == 0)
+            {
+                Req->TransferBufferLength = 0;
+                UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
+                return;
+            }
+        }
+        else if (Req->TransferBuffer != NULL)
+        {
+            OwnedMdl = IoAllocateMdl(Req->TransferBuffer, Req->TransferBufferLength, FALSE, FALSE, NULL);
+            if (OwnedMdl == NULL)
+            {
+                Req->TransferBufferLength = 0;
+                UcxpCompleteUrb(Request, Urb, USBD_STATUS_INSUFFICIENT_RESOURCES);
+                return;
+            }
+            MmBuildMdlForNonPagedPool(OwnedMdl);
+            Req->TransferBufferMDL = OwnedMdl;
+        }
+        else
+        {
+            Req->TransferBufferLength = 0;
+            UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
+            return;
+        }
+    }
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, UCX_REQUEST_CTX);
+    Attributes.EvtCleanupCallback = UcxpRequestCtxCleanup;
+    Status = WdfObjectAllocateContext((WDFOBJECT)Request, &Attributes, (PVOID *)&Ctx);
+    if (Status == STATUS_OBJECT_NAME_EXISTS)
+    {
+        Ctx = UcxGetRequestCtx((WDFOBJECT)Request);
+        Status = (Ctx != NULL) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL;
+    }
+    if (!NT_SUCCESS(Status) || Ctx == NULL)
+    {
+        if (OwnedMdl != NULL)
+        {
+            Req->TransferBufferMDL = NULL;
+            IoFreeMdl(OwnedMdl);
+        }
+        Req->TransferBufferLength = 0;
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INSUFFICIENT_RESOURCES);
+        return;
+    }
+    Ctx->Endpoint = Pipe->Endpoint;
+    Ctx->Pipe = Pipe;
+    Ctx->OwnedMdl = OwnedMdl;
+    InterlockedIncrement(&Ep->Transfers);
+
+    /* The queue belongs to the client's FDO, the request to our PDO: KMDF
+     * allows exactly this hop (WdfPdoInitAllowForwardingRequestToParent) */
+    WDF_REQUEST_FORWARD_OPTIONS_INIT(&Options);
+    Status = WdfRequestForwardToParentDeviceIoQueue(Request, Ep->Queue, &Options);
+    if (!NT_SUCCESS(Status))
+    {
+        UcxLog("device: port %u forward to endpoint 0x%02x queue failed 0x%08lX", Handle->PortNumber,
+               Pipe->Descriptor.bEndpointAddress, (ULONG)Status);
+        InterlockedDecrement(&Ep->Transfers);
+        Ctx->Endpoint = NULL;
+        if (OwnedMdl != NULL)
+        {
+            Req->TransferBufferMDL = NULL;
+            IoFreeMdl(OwnedMdl);
+            Ctx->OwnedMdl = NULL;
+        }
+        Req->TransferBufferLength = 0;
+        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INSUFFICIENT_RESOURCES);
+    }
+}
+
+/* ABORT_PIPE, SYNC_RESET_PIPE_AND_CLEAR_STALL, SYNC_RESET_PIPE, SYNC_CLEAR_STALL */
+static
+USBD_STATUS
+UcxpDevicePipeRequest(
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_ PURB Urb)
+{
+    struct _URB_PIPE_REQUEST *Req = &Urb->UrbPipeRequest;
+    USHORT Function = Urb->UrbHeader.Function;
+    PUCX_PIPE_HANDLE Pipe;
+    PUCX_ENDPOINT_CTX Ep;
+    USBD_STATUS UsbdStatus = USBD_STATUS_SUCCESS;
+    NTSTATUS Status;
+
+    if (Urb->UrbHeader.Length < sizeof(*Req))
+        return USBD_STATUS_INVALID_PARAMETER;
+    Pipe = UcxpFindPipe(Handle, Req->PipeHandle);
+    if (Pipe == NULL)
+        return USBD_STATUS_INVALID_PIPE_HANDLE;
+    if (Pipe == &Handle->DefaultPipe || Pipe->Endpoint == NULL)
+        return USBD_STATUS_SUCCESS;        /* control transfers are synchronous: nothing to abort or reset */
+
+    Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
+    if (Function == URB_FUNCTION_ABORT_PIPE)
+    {
+        if (Ep->Callbacks.EvtEndpointAbort != NULL)
+        {
+            Status = Ep->Callbacks.EvtEndpointAbort(Pipe->Endpoint);
+            UcxLog("device: port %u pipe 0x%02x aborted -> 0x%08lX", Handle->PortNumber,
+                   Pipe->Descriptor.bEndpointAddress, (ULONG)Status);
+        }
+        return USBD_STATUS_SUCCESS;
+    }
+
+    if (Function == URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL || Function == URB_FUNCTION_SYNC_RESET_PIPE)
+    {
+        if (Ep->Callbacks.EvtEndpointResetHalted != NULL)
+        {
+            Status = Ep->Callbacks.EvtEndpointResetHalted(Pipe->Endpoint);
+            if (!NT_SUCCESS(Status))
+                UsbdStatus = USBD_STATUS_REQUEST_FAILED;
+        }
+    }
+    if (Function == URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL || Function == URB_FUNCTION_SYNC_CLEAR_STALL)
+    {
+        USB_DEFAULT_PIPE_SETUP_PACKET Setup;
+        USBD_STATUS ClearStatus;
+        ULONG Transferred = 0;
+
+        RtlZeroMemory(&Setup, sizeof(Setup));
+        Setup.bmRequestType.Dir = BMREQUEST_HOST_TO_DEVICE;
+        Setup.bmRequestType.Type = BMREQUEST_STANDARD;
+        Setup.bmRequestType.Recipient = BMREQUEST_TO_ENDPOINT;
+        Setup.bRequest = USB_REQUEST_CLEAR_FEATURE;
+        Setup.wValue.W = USB_FEATURE_ENDPOINT_STALL;
+        Setup.wIndex.W = Pipe->Descriptor.bEndpointAddress;
+        Setup.wLength = 0;
+        (VOID)UcxpControlTransfer(Handle, &Setup, NULL, NULL, 0, FALSE, &Transferred, &ClearStatus);
+        if (!USBD_SUCCESS(ClearStatus))
+            UsbdStatus = ClearStatus;
+    }
+    UcxLog("device: port %u pipe 0x%02x reset (function 0x%04X) -> USBD 0x%08lX", Handle->PortNumber,
+           Pipe->Descriptor.bEndpointAddress, Function, (ULONG)UsbdStatus);
+    return UsbdStatus;
+}
+
+/* FlushTransfers (hub interface): every pipe of the device gives its transfers back */
+VOID
+UcxpDeviceFlushTransfers(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ PUCX_DEVICE_HANDLE Handle)
+{
+    ULONG i;
+
+    UNREFERENCED_PARAMETER(RootHub);
+    for (i = 0; i < Handle->InterfaceCount; i++)
+    {
+        PUCX_INTERFACE Iface = Handle->Interfaces[i];
+        ULONG p;
+
+        if (Iface == NULL)
+            continue;
+        for (p = 0; p < Iface->PipeCount; p++)
+        {
+            PUCX_PIPE_HANDLE Pipe = &Iface->Pipes[p];
+            PUCX_ENDPOINT_CTX Ep;
+
+            if (Pipe->Endpoint == NULL)
+                continue;
+            Ep = UcxGetEndpointCtx((WDFOBJECT)Pipe->Endpoint);
+            if (Ep->Callbacks.EvtEndpointAbort != NULL)
+                (VOID)Ep->Callbacks.EvtEndpointAbort(Pipe->Endpoint);
+        }
+    }
+}
+
 VOID
 UcxpDeviceHandleUrb(
     _In_ PUCX_ROOTHUB_CTX RootHub,
@@ -718,8 +1634,6 @@ UcxpDeviceHandleUrb(
     BOOLEAN DataIn;
     NTSTATUS Status;
 
-    UNREFERENCED_PARAMETER(RootHub);
-
     if (!Handle->Initialized)
     {
         UcxpCompleteUrb(Request, Urb, USBD_STATUS_DEVICE_GONE);
@@ -729,15 +1643,23 @@ UcxpDeviceHandleUrb(
     switch (Urb->UrbHeader.Function)
     {
         case URB_FUNCTION_SELECT_CONFIGURATION:
+            UcxpCompleteUrb(Request, Urb, UcxpDeviceSelectConfiguration(RootHub, Handle, Urb));
+            return;
         case URB_FUNCTION_SELECT_INTERFACE:
+            UcxpCompleteUrb(Request, Urb, UcxpDeviceSelectInterface(RootHub, Handle, Urb));
+            return;
         case URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER:
-        case URB_FUNCTION_ISOCH_TRANSFER:
+            UcxpDeviceBulkTransfer(Handle, Request, Urb);
+            return;
         case URB_FUNCTION_ABORT_PIPE:
         case URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL:
         case URB_FUNCTION_SYNC_RESET_PIPE:
         case URB_FUNCTION_SYNC_CLEAR_STALL:
-            /* Configured endpoints arrive with M3 step 3 */
-            UcxLog("device: port %u URB function 0x%04X waits for step 3", Handle->PortNumber, Urb->UrbHeader.Function);
+            UcxpCompleteUrb(Request, Urb, UcxpDevicePipeRequest(Handle, Urb));
+            return;
+        case URB_FUNCTION_ISOCH_TRANSFER:
+            /* Isochronous pipes are configured but not driven in M3 */
+            UcxLog("device: port %u isochronous transfer not supported", Handle->PortNumber);
             UcxpCompleteUrb(Request, Urb, USBD_STATUS_NOT_SUPPORTED);
             return;
         default:

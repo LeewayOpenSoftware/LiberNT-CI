@@ -1134,8 +1134,15 @@ UcxpHubFlushTransfers(
     _In_ PVOID BusContext,
     _In_ PVOID DeviceHandle)
 {
-    UNREFERENCED_PARAMETER(BusContext);
-    UNREFERENCED_PARAMETER(DeviceHandle);   /* nothing is queued for the root hub but the SCE */
+    PUCX_ROOTHUB_CTX RootHub = UcxpRootHubFromBusContext(BusContext);
+
+    /* Nothing is queued for the root hub itself but the SCE; a downstream
+     * device's pipes give their transfers back */
+    if (RootHub == NULL || DeviceHandle == NULL || DeviceHandle == &RootHub->DeviceHandle)
+        return;
+    if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
+        return;
+    UcxpDeviceFlushTransfers(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle);
 }
 
 static
@@ -1479,11 +1486,20 @@ UcxpRootHubCreatePdo(
     WdfDeviceSetPowerCapabilities(Pdo, &PowerCaps);
 
     /* The hub driver's IOCTLs: parallel, not power managed (the PDO's own
-     * power state has no bearing on the controller) */
-    WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&QueueConfig, WdfIoQueueDispatchParallel);
-    QueueConfig.EvtIoInternalDeviceControl = UcxpRootHubEvtInternalIoctl;
-    QueueConfig.PowerManaged = WdfFalse;
-    Status = WdfIoQueueCreate(Pdo, &QueueConfig, WDF_NO_OBJECT_ATTRIBUTES, WDF_NO_HANDLE);
+     * power state has no bearing on the controller), and at PASSIVE_LEVEL:
+     * class drivers submit URBs from completion routines at DISPATCH_LEVEL,
+     * while the device paths below wait for the controller (control
+     * transfers, endpoint configuration, pipe abort and reset). */
+    {
+        WDF_OBJECT_ATTRIBUTES QueueAttributes;
+
+        WDF_OBJECT_ATTRIBUTES_INIT(&QueueAttributes);
+        QueueAttributes.ExecutionLevel = WdfExecutionLevelPassive;
+        WDF_IO_QUEUE_CONFIG_INIT_DEFAULT_QUEUE(&QueueConfig, WdfIoQueueDispatchParallel);
+        QueueConfig.EvtIoInternalDeviceControl = UcxpRootHubEvtInternalIoctl;
+        QueueConfig.PowerManaged = WdfFalse;
+        Status = WdfIoQueueCreate(Pdo, &QueueConfig, &QueueAttributes, WDF_NO_HANDLE);
+    }
 
     /* Pended status-change transfers */
     if (NT_SUCCESS(Status))

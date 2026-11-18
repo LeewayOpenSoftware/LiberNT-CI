@@ -412,6 +412,53 @@ static VOID NTAPI UcxEndpointNeedToCancelTransfersInternal(_In_ UCXENDPOINT Endp
 static VOID NTAPI UcxIoDeviceControlInternal(VOID)
 { UcxLog("UcxIoDeviceControl"); }
 
+/*
+ * M3 step 3: the client completes a forwarded bulk/interrupt transfer here.
+ * The request carries the context ucxdevice.c put on it when forwarding; the
+ * URB gets its status and length, the MDL this library built is released and
+ * the field restored, and the request is completed. <= DISPATCH_LEVEL.
+ */
+static VOID NTAPI UcxEndpointCompleteTransferInternal(
+    _In_ UCXENDPOINT Endpoint, _In_ WDFREQUEST Request, _In_ USBD_STATUS UsbdStatus, _In_ ULONG Transferred)
+{
+    PUCX_REQUEST_CTX Ctx = (Request != NULL) ? UcxGetRequestCtx((WDFOBJECT)Request) : NULL;
+    PURB Urb;
+
+    if (Ctx == NULL)
+    {
+        UcxLog("UcxEndpointCompleteTransfer: request %p without a transfer context", Request);
+        if (Request != NULL)
+            WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+    if (Ctx->Endpoint != Endpoint)
+        UcxLog("UcxEndpointCompleteTransfer: endpoint %p completes a transfer of %p", Endpoint, Ctx->Endpoint);
+
+    Urb = (PURB)UcxRequestGetUrb(Request);
+    if (Urb != NULL && Urb->UrbHeader.Length >= sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER))
+    {
+        struct _URB_BULK_OR_INTERRUPT_TRANSFER *Req = &Urb->UrbBulkOrInterruptTransfer;
+
+        if (Transferred > Req->TransferBufferLength)
+            Transferred = Req->TransferBufferLength;        /* the client's count, never past the buffer */
+        Req->TransferBufferLength = USBD_SUCCESS(UsbdStatus) ? Transferred : 0;
+        if (Ctx->OwnedMdl != NULL && Req->TransferBufferMDL == Ctx->OwnedMdl)
+            Req->TransferBufferMDL = NULL;
+        Urb->UrbHeader.Status = UsbdStatus;
+    }
+    if (Ctx->OwnedMdl != NULL)
+    {
+        IoFreeMdl(Ctx->OwnedMdl);
+        Ctx->OwnedMdl = NULL;
+    }
+    if (Ctx->Endpoint != NULL)
+    {
+        InterlockedDecrement(&UcxGetEndpointCtx((WDFOBJECT)Ctx->Endpoint)->Transfers);
+        Ctx->Endpoint = NULL;                   /* the context cleanup must not count it again */
+    }
+    WdfRequestComplete(Request, UcxpUsbdToNtStatus(UsbdStatus));
+}
+
 /* --------------------------------------------------------------------------
  * Published DDI table + class-library registration (mirror of ufx01000.c).
  * The table order is the ABI the client stub binds to: append only.
@@ -433,7 +480,8 @@ static PVOID UcxFunctions[UcxFunctionsMax] =
     UcxEndpointSetWdfIoQueueInternal,
     UcxEndpointPurgeCompleteInternal,
     UcxEndpointNeedToCancelTransfersInternal,
-    UcxIoDeviceControlInternal
+    UcxIoDeviceControlInternal,
+    UcxEndpointCompleteTransferInternal
 };
 
 static

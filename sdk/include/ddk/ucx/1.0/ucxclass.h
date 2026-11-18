@@ -48,6 +48,7 @@ typedef enum _UCX_CLASS_FUNCTIONS {
     UcxEndpointPurgeCompleteIndex,
     UcxEndpointNeedToCancelTransfersIndex,
     UcxIoDeviceControlIndex,
+    UcxEndpointCompleteTransferIndex,          /* M3 step 3 */
     UcxFunctionsMax
 } UCX_CLASS_FUNCTIONS;
 
@@ -180,6 +181,52 @@ typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_UPDATE_DEFAULT_ENDPOINT)(
     _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ ULONG MaxPacketSize0);
 typedef VOID (NTAPI *PFN_UCX_USBDEVICE_DISABLE)(_In_ UCXCONTROLLER, _In_ UCXUSBDEVICE);
 
+/*
+ * Configured endpoints (M3 step 3). SELECT_CONFIGURATION / SELECT_INTERFACE
+ * from a class driver become: one EvtUsbDeviceEndpointAdd per endpoint of the
+ * new setting (the client creates the endpoint object with UcxEndpointCreate,
+ * its callbacks and the WDF queue its transfers arrive on), then one
+ * EvtUsbDeviceEndpointsConfigure naming the endpoints to enable and to
+ * disable (xHCI: Configure Endpoint). The library then sends SET_CONFIGURATION
+ * or SET_INTERFACE to the device and deletes the disabled endpoint objects.
+ * Both are synchronous, PASSIVE_LEVEL, one at a time per device.
+ */
+typedef struct _UCX_ENDPOINT_INFO {
+    ULONG Size;
+    USB_ENDPOINT_DESCRIPTOR Descriptor;
+    UCHAR Reserved0;
+    USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR Companion;   /* valid when HasCompanion */
+    BOOLEAN HasCompanion;
+    UCHAR InterfaceNumber;
+    UCHAR AlternateSetting;
+    UCHAR Reserved1;
+    ULONG MaximumTransferSize;      /* the class driver's limit for one transfer on the pipe */
+} UCX_ENDPOINT_INFO, *PUCX_ENDPOINT_INFO;
+
+typedef enum _UCX_ENDPOINTS_CONFIGURE_TYPE {
+    UcxEndpointsConfigureConfiguration = 1,   /* a new configuration (ConfigurationValue) */
+    UcxEndpointsConfigureInterface,           /* an alternate setting of one interface */
+    UcxEndpointsConfigureDisableAll           /* back to unconfigured: every endpoint goes */
+} UCX_ENDPOINTS_CONFIGURE_TYPE;
+
+typedef struct _UCX_ENDPOINTS_CONFIGURE {
+    ULONG Size;
+    UCX_ENDPOINTS_CONFIGURE_TYPE Type;
+    UCHAR ConfigurationValue;
+    UCHAR InterfaceNumber;
+    UCHAR AlternateSetting;
+    UCHAR Reserved;
+    ULONG EnableCount;
+    UCXENDPOINT *EndpointsToEnable;
+    ULONG DisableCount;
+    UCXENDPOINT *EndpointsToDisable;
+} UCX_ENDPOINTS_CONFIGURE, *PUCX_ENDPOINTS_CONFIGURE;
+
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ENDPOINT_ADD)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ PUCX_ENDPOINT_INFO, _Inout_ PUCXENDPOINT_INIT);
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ENDPOINTS_CONFIGURE)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ PUCX_ENDPOINTS_CONFIGURE);
+
 typedef struct _UCX_USBDEVICE_EVENT_CALLBACKS {
     ULONG Size;
     PFN_UCX_USBDEVICE_ENABLE                   EvtUsbDeviceEnable;
@@ -187,6 +234,8 @@ typedef struct _UCX_USBDEVICE_EVENT_CALLBACKS {
     PFN_UCX_USBDEVICE_DEFAULT_ENDPOINT_ADD     EvtUsbDeviceDefaultEndpointAdd;
     PFN_UCX_USBDEVICE_UPDATE_DEFAULT_ENDPOINT  EvtUsbDeviceUpdateDefaultEndpoint;
     PFN_UCX_USBDEVICE_DISABLE                  EvtUsbDeviceDisable;
+    PFN_UCX_USBDEVICE_ENDPOINT_ADD             EvtUsbDeviceEndpointAdd;          /* M3 step 3 */
+    PFN_UCX_USBDEVICE_ENDPOINTS_CONFIGURE      EvtUsbDeviceEndpointsConfigure;   /* M3 step 3 */
 } UCX_USBDEVICE_EVENT_CALLBACKS, *PUCX_USBDEVICE_EVENT_CALLBACKS;
 
 FORCEINLINE VOID UCX_USBDEVICE_EVENT_CALLBACKS_INIT(_Out_ PUCX_USBDEVICE_EVENT_CALLBACKS C)
@@ -239,12 +288,31 @@ typedef VOID (NTAPI *PFN_UCX_ENDPOINT_RESET)(_In_ UCXENDPOINT, _In_ WDFREQUEST);
 /* M3 step 2: one control transfer, synchronous at PASSIVE_LEVEL, serialized by the client */
 typedef NTSTATUS (NTAPI *PFN_UCX_ENDPOINT_CONTROL_TRANSFER)(_In_ UCXENDPOINT, _Inout_ PUCX_TRANSFER);
 
+/*
+ * M3 step 3, configured endpoints. Bulk and interrupt transfers are WDFREQUESTs
+ * (IOCTL_INTERNAL_USB_SUBMIT_URB, URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) the
+ * library forwards to the WDF queue the client registered with
+ * UcxEndpointSetWdfIoQueue after checking the pipe, the direction, the length
+ * and the buffer; TransferBufferMDL is always set when the client sees the URB.
+ * The client completes each one with UcxEndpointCompleteTransfer.
+ *   Abort:        stop the endpoint and complete every transfer it holds as
+ *                 canceled (ABORT_PIPE, unconfigure, device removal).
+ *   ResetHalted:  the host side of a pipe reset after a STALL (xHCI: Reset
+ *                 Endpoint + Set TR Dequeue Pointer); the library sends
+ *                 CLEAR_FEATURE(ENDPOINT_HALT) itself when the URB asks for it.
+ * Both synchronous at PASSIVE_LEVEL.
+ */
+typedef NTSTATUS (NTAPI *PFN_UCX_ENDPOINT_ABORT)(_In_ UCXENDPOINT);
+typedef NTSTATUS (NTAPI *PFN_UCX_ENDPOINT_RESET_HALTED)(_In_ UCXENDPOINT);
+
 typedef struct _UCX_ENDPOINT_EVENT_CALLBACKS {
     ULONG Size;
     PFN_UCX_ENDPOINT_PURGE  EvtEndpointPurge;
     PFN_UCX_ENDPOINT_START  EvtEndpointStart;
     PFN_UCX_ENDPOINT_RESET  EvtEndpointReset;
     PFN_UCX_ENDPOINT_CONTROL_TRANSFER EvtEndpointControlTransfer;   /* M3 step 2 */
+    PFN_UCX_ENDPOINT_ABORT            EvtEndpointAbort;             /* M3 step 3 */
+    PFN_UCX_ENDPOINT_RESET_HALTED     EvtEndpointResetHalted;       /* M3 step 3 */
 } UCX_ENDPOINT_EVENT_CALLBACKS, *PUCX_ENDPOINT_EVENT_CALLBACKS;
 
 FORCEINLINE VOID UCX_ENDPOINT_EVENT_CALLBACKS_INIT(_Out_ PUCX_ENDPOINT_EVENT_CALLBACKS C)
@@ -268,6 +336,17 @@ typedef VOID (NTAPI *PFN_UCXENDPOINTNEEDTOCANCELTRANSFERS)(_In_ UCXENDPOINT);
     ((PFN_UCXENDPOINTPURGECOMPLETE)UcxClassFunctions[UcxEndpointPurgeCompleteIndex])((e))
 #define UcxEndpointNeedToCancelTransfers(e) \
     ((PFN_UCXENDPOINTNEEDTOCANCELTRANSFERS)UcxClassFunctions[UcxEndpointNeedToCancelTransfersIndex])((e))
+
+/* M3 step 3: completes a forwarded bulk/interrupt transfer request: URB status,
+ * TransferBufferLength = Transferred, the library's own MDL released, the
+ * WDFREQUEST completed. Any IRQL <= DISPATCH_LEVEL. */
+typedef VOID (NTAPI *PFN_UCXENDPOINTCOMPLETETRANSFER)(
+    _In_ UCXENDPOINT, _In_ WDFREQUEST, _In_ USBD_STATUS, _In_ ULONG Transferred);
+#define UcxEndpointCompleteTransfer(e,r,s,n) \
+    ((PFN_UCXENDPOINTCOMPLETETRANSFER)UcxClassFunctions[UcxEndpointCompleteTransferIndex])((e),(r),(s),(n))
+
+/* Largest bulk/interrupt transfer the library forwards in M3 (TRB count bound) */
+#define UCX_BULK_MAX_TRANSFER (256 * 1024)
 
 /* ---- URB access helpers (M3) --------------------------------------------- */
 

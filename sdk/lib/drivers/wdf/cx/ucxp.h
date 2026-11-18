@@ -52,7 +52,30 @@ typedef struct _UCX_PIPE_HANDLE {
     UCXENDPOINT Endpoint;                  /* NULL for the root hub's status-change pipe */
     USB_ENDPOINT_DESCRIPTOR Descriptor;
     ULONG MaximumTransferSize;
+    volatile LONG Closing;                 /* being torn down: no new transfers */
 } UCX_PIPE_HANDLE, *PUCX_PIPE_HANDLE;
+
+/*
+ * A selected interface of a configured device (M3 step 3): the pipes of its
+ * current alternate setting. The USBD_INTERFACE_HANDLE the class driver gets
+ * is this record's address; pipe handles are the addresses of its pipes.
+ * Owned by the device handle; replaced whole on SELECT_INTERFACE.
+ */
+#define UCX_INTERFACE_SIGNATURE     'fIcU'
+typedef struct _UCX_INTERFACE {
+    ULONG Signature;
+    UCHAR InterfaceNumber;
+    UCHAR AlternateSetting;
+    UCHAR Class;
+    UCHAR SubClass;
+    UCHAR Protocol;
+    UCHAR PipeCount;
+    USHORT Reserved;
+    UCX_PIPE_HANDLE Pipes[1];              /* PipeCount entries */
+} UCX_INTERFACE, *PUCX_INTERFACE;
+#define UCX_INTERFACE_SIZE(_pipes)     (FIELD_OFFSET(UCX_INTERFACE, Pipes) + ((_pipes) ? (_pipes) : 1) * sizeof(UCX_PIPE_HANDLE))
+#define UCX_MAX_INTERFACES  32
+#define UCX_MAX_PIPES       30             /* 15 IN + 15 OUT endpoints */
 
 typedef struct _UCX_DEVICE_HANDLE {
     ULONG Signature;
@@ -68,7 +91,25 @@ typedef struct _UCX_DEVICE_HANDLE {
     UCHAR ConfigurationValue;              /* 0 = unconfigured */
     UCX_PIPE_HANDLE DefaultPipe;           /* EP0 (unused for the root hub: standard
                                               requests are answered in software) */
+    /* M3 step 3: the selected configuration (downstream devices) */
+    ULONG ConfigurationCookie;             /* its address is the USBD configuration handle */
+    ULONG InterfaceCount;
+    PUCX_INTERFACE Interfaces[UCX_MAX_INTERFACES];
+    PUSB_CONFIGURATION_DESCRIPTOR ConfigDescriptor;   /* our copy of the selected one */
+    ULONG ConfigDescriptorLength;
 } UCX_DEVICE_HANDLE, *PUCX_DEVICE_HANDLE;
+
+/*
+ * Per-request context on a forwarded bulk/interrupt transfer (M3 step 3): the
+ * pipe it was checked against and the MDL this library built when the caller
+ * gave a buffer pointer only (freed at completion, the URB field restored).
+ */
+typedef struct _UCX_REQUEST_CTX {
+    UCXENDPOINT Endpoint;
+    PUCX_PIPE_HANDLE Pipe;
+    PMDL OwnedMdl;
+} UCX_REQUEST_CTX, *PUCX_REQUEST_CTX;
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(UCX_REQUEST_CTX, UcxGetRequestCtx)
 
 /*
  * The opaque init blobs the client fills between the Add callback and the
@@ -169,7 +210,8 @@ typedef struct _UCX_ENDPOINT_CTX {
     UCXUSBDEVICE UsbDevice;
     USB_ENDPOINT_DESCRIPTOR Descriptor;
     UCX_ENDPOINT_EVENT_CALLBACKS Callbacks;
-    WDFQUEUE Queue;                        /* UcxEndpointSetWdfIoQueue (M3 step 3) */
+    WDFQUEUE Queue;                        /* UcxEndpointSetWdfIoQueue: where transfers go (M3 step 3) */
+    volatile LONG Transfers;               /* forwarded, not yet completed */
 } UCX_ENDPOINT_CTX, *PUCX_ENDPOINT_CTX;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(UCX_ENDPOINT_CTX, UcxGetEndpointCtx)
@@ -259,6 +301,11 @@ UcxpDeviceQueryInformation(
     _Out_writes_bytes_to_(BufferLength, *Returned) PVOID Buffer,
     _In_ ULONG BufferLength,
     _Out_ PULONG Returned);
+
+VOID
+UcxpDeviceFlushTransfers(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ PUCX_DEVICE_HANDLE Handle);
 
 VOID
 UcxpDeviceHandleUrb(
