@@ -400,7 +400,8 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
                     IN ULONG CheckFlags)
 {
     ULONG HiveDisposition, LogDisposition;
-    HANDLE FileHandle = NULL, LogHandle = NULL;
+    HANDLE FileHandle = NULL, LogHandle = NULL, Log2Handle = NULL;
+    OBJECT_ATTRIBUTES Log2Attributes;
     NTSTATUS Status;
     ULONG Operation, FileType;
     PCMHIVE NewHive;
@@ -461,6 +462,13 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
         return STATUS_TOO_LATE;
     }
 
+    /* Open the second incremental log; hives without it keep using LOG1 only */
+    if (LogHandle && !CmpShareSystemHives)
+    {
+        InitializeObjectAttributes(&Log2Attributes, NULL, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+        CmpOpenHiveLog2(&Log2Attributes, HiveName, Operation == HINIT_CREATE, &Log2Handle);
+    }
+
     /* Initialize the hive */
     Status = CmpInitializeHive(&NewHive,
                                Operation,
@@ -469,6 +477,7 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
                                NULL,
                                FileHandle,
                                LogHandle,
+                               Log2Handle,
                                NULL,
                                NULL,
                                HiveName,
@@ -478,6 +487,7 @@ CmpInitHiveFromFile(IN PCUNICODE_STRING HiveName,
         /* Fail */
         ZwClose(FileHandle);
         if (LogHandle) ZwClose(LogHandle);
+        if (Log2Handle) ZwClose(Log2Handle);
         return Status;
     }
 
@@ -1066,6 +1076,7 @@ CmpInitializeSystemHive(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
                                NULL,
                                NULL,
                                NULL,
+                               NULL,
                                &HiveName,
                                HiveBase ? CM_CHECK_REGISTRY_PURGE_VOLATILES : CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES);
     if (!NT_SUCCESS(Status))
@@ -1394,7 +1405,8 @@ CmpLoadHiveThread(IN PVOID StartContext)
     USHORT FileStart;
     ULONG PrimaryDisposition, SecondaryDisposition, ClusterSize;
     PCMHIVE CmHive;
-    HANDLE PrimaryHandle = NULL, LogHandle = NULL;
+    HANDLE PrimaryHandle = NULL, LogHandle = NULL, Log2Handle = NULL;
+    OBJECT_ATTRIBUTES Log2Attributes;
     NTSTATUS Status = STATUS_SUCCESS;
     PVOID ErrorParameters;
     PAGED_CODE();
@@ -1503,6 +1515,11 @@ CmpLoadHiveThread(IN PVOID StartContext)
             /* Save the file handles. This should remove our sync hacks */
             CmHive->FileHandles[HFILE_TYPE_LOG] = LogHandle;
             CmHive->FileHandles[HFILE_TYPE_PRIMARY] = PrimaryHandle;
+
+            /* Second incremental log, best effort */
+            InitializeObjectAttributes(&Log2Attributes, NULL, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+            CmpOpenHiveLog2(&Log2Attributes, &FileName, PrimaryDisposition == FILE_CREATED, &Log2Handle);
+            CmHive->FileHandles[HFILE_TYPE_LOG2] = Log2Handle;
 
             /* Allow lazy flushing since the handles are there -- remove sync hacks */
             //ASSERT(CmHive->Hive.HiveFlags & HIVE_NOLAZYFLUSH);
@@ -1940,6 +1957,7 @@ CmInitSystem1(VOID)
                                NULL,
                                NULL,
                                NULL,
+                               NULL,
                                CM_CHECK_REGISTRY_DONT_PURGE_VOLATILES);
     if (!NT_SUCCESS(Status))
     {
@@ -2026,6 +2044,7 @@ CmInitSystem1(VOID)
                                HINIT_CREATE,
                                HIVE_VOLATILE,
                                HFILE_TYPE_PRIMARY,
+                               NULL,
                                NULL,
                                NULL,
                                NULL,

@@ -71,6 +71,27 @@ HvpGetLogEntry(
     return Entry;
 }
 
+static
+ULONG
+HvpScanIncrementalLog(
+    _In_ PVOID Log,
+    _In_ ULONG LogSize,
+    _Out_ PULONG EndSequence)
+{
+    PHV_LOG_ENTRY Entry;
+    ULONG Offset, Sequence = ((PHBASE_BLOCK)Log)->Sequence1, Count = 0;
+
+    for (Offset = HSECTOR_SIZE;
+         (Entry = HvpGetLogEntry(Log, LogSize, Offset, Sequence)) != NULL;
+         Offset += Entry->Size, Sequence++)
+    {
+        Count++;
+    }
+
+    *EndSequence = Sequence - 1;
+    return Count;
+}
+
 BOOLEAN
 CMAPI
 HvpApplyIncrementalLog(
@@ -97,11 +118,17 @@ HvpApplyIncrementalLog(
     PrimaryValid = BaseBlock &&
                    BaseBlock->Signature == HV_HBLOCK_SIGNATURE &&
                    HvpHiveHeaderChecksum(BaseBlock) == BaseBlock->CheckSum;
-    if (PrimaryValid &&
-        (BaseBlock->Sequence1 == BaseBlock->Sequence2 ||
-         LogBaseBlock->Sequence1 < BaseBlock->Sequence2))
+    if (PrimaryValid)
     {
-        return FALSE;
+        /* A log that ends before the primary's committed sequence is stale.
+           One that starts earlier but reaches it (the previous cycle's log
+           of an alternating pair) is a valid, redundant source. */
+        if (BaseBlock->Sequence1 == BaseBlock->Sequence2 ||
+            !HvpScanIncrementalLog(Log, LogSize, &Sequence) ||
+            Sequence < BaseBlock->Sequence2)
+        {
+            return FALSE;
+        }
     }
 
     Length = PrimaryValid ? BaseBlock->Length : LogBaseBlock->Length;
@@ -156,6 +183,57 @@ HvpApplyIncrementalLog(
 
     *RequiredLength = Length;
     return TRUE;
+}
+
+/**
+ * @brief
+ * Orders the usable incremental logs of a hive, newest first.
+ *
+ * @param[in] PrimaryBaseBlock
+ * The primary base block, if it is readable.
+ *
+ * @param[in] Logs
+ * The LOG1 and LOG2 images, NULL when absent.
+ *
+ * @param[in] LogSizes
+ * The sizes of the two images in bytes.
+ *
+ * @param[out] Order
+ * Receives the indexes (0 = LOG1, 1 = LOG2) of the logs that can bring
+ * the primary forward, newest cycle first.
+ *
+ * @return
+ * The number of usable logs. A log whose newest entry is torn is not
+ * usable; the other log still covers the last committed state.
+ */
+ULONG
+CMAPI
+HvpSelectIncrementalLog(
+    _In_opt_ PHBASE_BLOCK PrimaryBaseBlock,
+    _In_ PVOID *Logs,
+    _In_ PULONG LogSizes,
+    _Out_ PULONG Order)
+{
+    ULONG Required, Count = 0, i, Tmp;
+
+    for (i = 0; i < 2; i++)
+    {
+        if (Logs[i] && LogSizes[i] &&
+            HvpApplyIncrementalLog(PrimaryBaseBlock, 0, Logs[i], LogSizes[i], FALSE, NULL, &Required))
+        {
+            Order[Count++] = i;
+        }
+    }
+
+    if (Count == 2 &&
+        ((PHBASE_BLOCK)Logs[Order[1]])->Sequence1 > ((PHBASE_BLOCK)Logs[Order[0]])->Sequence1)
+    {
+        Tmp = Order[0];
+        Order[0] = Order[1];
+        Order[1] = Tmp;
+    }
+
+    return Count;
 }
 
 /**
@@ -244,39 +322,27 @@ HvpQueryFileSize(
     return FileStandard.EndOfFile.LowPart;
 }
 
+static
 NTSTATUS
-CMAPI
-HvpRecoverHiveFromLog(
+HvpRecoverHiveFromLogImage(
     _In_ PHHIVE Hive,
     _In_opt_ PHBASE_BLOCK PrimaryBaseBlock,
+    _In_ PVOID Log,
+    _In_ ULONG LogSize,
     _Out_ PHBASE_BLOCK *HiveData,
     _Out_ PULONG HiveDataSize,
     _Out_ PRTL_BITMAP AppliedBlocks)
 {
     PHBASE_BLOCK Image;
-    PVOID Log;
     PULONG BitmapBuffer;
-    ULONG LogSize, PrimarySize, Required, ImageSize, BitmapSize;
+    ULONG PrimarySize, Required, ImageSize, BitmapSize;
     ULONG FileOffset;
 
     *HiveData = NULL;
     *HiveDataSize = 0;
 
-    LogSize = ROUND_DOWN(HvpQueryFileSize(Hive, HFILE_TYPE_LOG), HSECTOR_SIZE);
-    if (LogSize < HSECTOR_SIZE + sizeof(HV_LOG_ENTRY))
+    if (!HvpApplyIncrementalLog(PrimaryBaseBlock, 0, Log, LogSize, FALSE, NULL, &Required))
         return STATUS_NOT_FOUND;
-
-    Log = Hive->Allocate(LogSize, TRUE, TAG_CM);
-    if (!Log)
-        return STATUS_INSUFFICIENT_RESOURCES;
-
-    FileOffset = 0;
-    if (!Hive->FileRead(Hive, HFILE_TYPE_LOG, &FileOffset, Log, LogSize) ||
-        !HvpApplyIncrementalLog(PrimaryBaseBlock, 0, Log, LogSize, FALSE, NULL, &Required))
-    {
-        Hive->Free(Log, LogSize);
-        return STATUS_NOT_FOUND;
-    }
 
     ImageSize = HBLOCK_SIZE + Required;
     BitmapSize = ROUND_UP(Required / HBLOCK_SIZE, sizeof(ULONG) * 8) / 8;
@@ -288,7 +354,6 @@ HvpRecoverHiveFromLog(
             Hive->Free(Image, ImageSize);
         if (BitmapBuffer)
             Hive->Free(BitmapBuffer, BitmapSize);
-        Hive->Free(Log, LogSize);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     RtlZeroMemory(Image, ImageSize);
@@ -307,12 +372,10 @@ HvpRecoverHiveFromLog(
         DPRINT1("Failed to read the primary hive data for log recovery\n");
         Hive->Free(BitmapBuffer, BitmapSize);
         Hive->Free(Image, ImageSize);
-        Hive->Free(Log, LogSize);
         return STATUS_REGISTRY_IO_FAILED;
     }
 
     HvpApplyIncrementalLog(Image, Required, Log, LogSize, TRUE, AppliedBlocks, &Required);
-    Hive->Free(Log, LogSize);
 
     /* A refused growth write leaves the header claiming bins neither the
        file nor the log holds; the untouched tail of the image stays
@@ -324,6 +387,77 @@ HvpRecoverHiveFromLog(
     *HiveData = Image;
     *HiveDataSize = ImageSize;
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+CMAPI
+HvpRecoverHiveFromLog(
+    _In_ PHHIVE Hive,
+    _In_opt_ PHBASE_BLOCK PrimaryBaseBlock,
+    _Out_ PHBASE_BLOCK *HiveData,
+    _Out_ PULONG HiveDataSize,
+    _Out_ PRTL_BITMAP AppliedBlocks,
+    _Out_ PULONG LogType)
+{
+    static const ULONG Types[2] = { HFILE_TYPE_LOG, HFILE_TYPE_LOG2 };
+    PVOID Logs[2] = { NULL, NULL };
+    ULONG Sizes[2] = { 0, 0 }, Allocated[2] = { 0, 0 }, Order[2];
+    ULONG FileOffset, Count, i;
+    NTSTATUS Status;
+
+    *HiveData = NULL;
+    *HiveDataSize = 0;
+    *LogType = HFILE_TYPE_LOG;
+
+    /* LOG2 is absent on hives written before alternation: that is just a
+       single log to choose from */
+    for (i = 0; i < 2; i++)
+    {
+        Sizes[i] = ROUND_DOWN(HvpQueryFileSize(Hive, Types[i]), HSECTOR_SIZE);
+        if (Sizes[i] < HSECTOR_SIZE + sizeof(HV_LOG_ENTRY))
+        {
+            Sizes[i] = 0;
+            continue;
+        }
+
+        Logs[i] = Hive->Allocate(Sizes[i], TRUE, TAG_CM);
+        if (!Logs[i])
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto Exit;
+        }
+        Allocated[i] = Sizes[i];
+
+        FileOffset = 0;
+        if (!Hive->FileRead(Hive, Types[i], &FileOffset, Logs[i], Sizes[i]))
+            Sizes[i] = 0;
+    }
+
+    Count = HvpSelectIncrementalLog(PrimaryBaseBlock, Logs, Sizes, Order);
+    Status = STATUS_NOT_FOUND;
+    for (i = 0; i < Count; i++)
+    {
+        Status = HvpRecoverHiveFromLogImage(Hive,
+                                            PrimaryBaseBlock,
+                                            Logs[Order[i]],
+                                            Sizes[Order[i]],
+                                            HiveData,
+                                            HiveDataSize,
+                                            AppliedBlocks);
+        if (Status != STATUS_NOT_FOUND)
+        {
+            *LogType = Types[Order[i]];
+            break;
+        }
+    }
+
+Exit:
+    for (i = 0; i < 2; i++)
+    {
+        if (Logs[i])
+            Hive->Free(Logs[i], Allocated[i]);
+    }
+    return Status;
 }
 #endif
 
