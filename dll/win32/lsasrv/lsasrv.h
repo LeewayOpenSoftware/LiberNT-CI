@@ -40,6 +40,7 @@
 
 #include <lsass.h>
 #include <lsa_s.h>
+#include <dpapi_s.h>
 
 #include <wine/debug.h>
 WINE_DEFAULT_DEBUG_CHANNEL(lsasrv);
@@ -482,6 +483,12 @@ LsapGetCredentials(
     _Inout_ PLSA_STRING PrimaryKeyValue,
     _Out_ PULONG PrimaryKeyLength,
     _Out_ PLSA_STRING Credentials);
+
+NTSTATUS
+NTAPI
+LsapGetDpapiPrekey(
+    _In_ PLUID LogonId,
+    _Out_ PLSA_STRING Prekey);
 
 NTSTATUS
 NTAPI

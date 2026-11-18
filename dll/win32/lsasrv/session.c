@@ -638,6 +638,59 @@ LsapDeleteCredential(
 
 
 NTSTATUS
+NTAPI
+LsapGetDpapiPrekey(
+    _In_ PLUID LogonId,
+    _Out_ PLSA_STRING Prekey)
+{
+    PLSAP_LOGON_SESSION Session;
+    PLIST_ENTRY Entry;
+    NTSTATUS Status = STATUS_NOT_FOUND;
+
+    Prekey->Length = 0;
+    Prekey->MaximumLength = 0;
+    Prekey->Buffer = NULL;
+
+    RtlAcquireSRWLockExclusive(&LogonSessionLock);
+
+    Session = LsapGetLogonSession(LogonId);
+    if (Session != NULL)
+    {
+        for (Entry = Session->CredentialListHead.Flink;
+             Entry != &Session->CredentialListHead;
+             Entry = Entry->Flink)
+        {
+            PLSAP_CREDENTIAL Credential = CONTAINING_RECORD(Entry, LSAP_CREDENTIAL, Entry);
+
+            if (Credential->PrimaryKeyValue.Length == sizeof("Primary") - 1 &&
+                RtlCompareMemory(Credential->PrimaryKeyValue.Buffer, "Primary",
+                                 sizeof("Primary") - 1) == sizeof("Primary") - 1 &&
+                Credential->Credential.Length != 0)
+            {
+                Prekey->Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0,
+                                                 Credential->Credential.Length);
+                if (Prekey->Buffer == NULL)
+                {
+                    Status = STATUS_INSUFFICIENT_RESOURCES;
+                    break;
+                }
+
+                RtlCopyMemory(Prekey->Buffer, Credential->Credential.Buffer,
+                              Credential->Credential.Length);
+                Prekey->Length = Credential->Credential.Length;
+                Prekey->MaximumLength = Credential->Credential.Length;
+                Status = STATUS_SUCCESS;
+                break;
+            }
+        }
+    }
+
+    RtlReleaseSRWLockExclusive(&LogonSessionLock);
+    return Status;
+}
+
+
+NTSTATUS
 LsapEnumLogonSessions(IN OUT PLSA_API_MSG RequestMsg)
 {
     OBJECT_ATTRIBUTES ObjectAttributes;
