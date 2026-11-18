@@ -20,6 +20,9 @@
 #define LLMNR_PORT 5355
 #define LLMNR_RESEND 420
 #define LLMNR_ROUNDS 2
+#define MDNS_PORT 5353
+#define MDNS_RESEND 1000
+#define MDNS_ROUNDS 2
 #define DNS_MAX_ADAPTERS 16
 #define DNS_MAX_CANDIDATES 8
 #define DNS_UDP_SIZE 1232
@@ -670,7 +673,8 @@ ResolverParseReply(const UCHAR *Packet, INT Length, WORD Id, PCWSTR Name, WORD T
         if (Offset + DataLength > Length)
             break;
 
-        if (Class == 1 && (RecordType == Type || RecordType == DNS_TYPE_CNAME))
+        /* mDNS sets the cache-flush bit (0x8000) in the class of unique records */
+        if ((Class & 0x7FFF) == 1 && (RecordType == Type || RecordType == DNS_TYPE_CNAME))
         {
             Record = ResolverParseRecord(Packet, Length, Owner, RecordType, Ttl, Offset, DataLength, DnsSectionAnswer);
             if (Record)
@@ -1010,37 +1014,52 @@ ResolverLlmnrLinks(PULONG Links4, PULONG Count4, PULONG Links6, PULONG Count6)
 }
 
 static
+BOOL
+ResolverIsMdnsName(PCWSTR Name)
+{
+    SIZE_T Length = wcslen(Name);
+
+    if (Length && Name[Length - 1] == L'.')
+        Length--;
+    /* "x.local": the local domain itself is not a host name */
+    return Length > 6 && Name[Length - 6] == L'.' && !_wcsnicmp(Name + Length - 5, L"local", 5);
+}
+
+static
 DNS_STATUS
-ResolverLlmnrQuery(PCWSTR Name, WORD Type, PDNS_RECORDW *Result)
+ResolverMulticastQuery(PCWSTR Name, WORD Type, BOOL Mdns, PDNS_RECORDW *Result)
 {
     ULONG Links4[DNS_MAX_ADAPTERS], Links6[DNS_MAX_ADAPTERS], Count4, Count6, i;
     UCHAR Query[512], Packet[DNS_UDP_SIZE + 256];
     SOCKADDR_IN Group4;
     SOCKADDR_IN6 Group6;
     SOCKET Sockets[2];
-    DWORD Start, Hops = 1;
-    INT QueryLength, Round;
+    DWORD Start, Hops = Mdns ? 255 : 1, Resend = Mdns ? MDNS_RESEND : LLMNR_RESEND;
+    INT QueryLength, Round, Rounds = Mdns ? MDNS_ROUNDS : LLMNR_ROUNDS;
     WORD Id;
 
     if (!ResolverLlmnrLinks(Links4, &Count4, Links6, &Count6))
         return ERROR_INVALID_NAME;
 
     Id = (WORD)(GetTickCount() ^ (GetCurrentThreadId() << 7) ^ (ULONG_PTR)Name ^ Type);
+    /* Id 0 marks a multicast response in mDNS; a query we expect a unicast answer to needs another one */
+    if (!Id)
+        Id = 1;
     QueryLength = ResolverBuildQuery(Name, Type, Id, FALSE, Query, sizeof(Query));
     if (QueryLength < 0)
         return ERROR_INVALID_NAME;
 
     RtlZeroMemory(&Group4, sizeof(Group4));
     Group4.sin_family = AF_INET;
-    Group4.sin_port = htons(LLMNR_PORT);
-    Group4.sin_addr.s_addr = htonl(0xE00000FC);
+    Group4.sin_port = htons(Mdns ? MDNS_PORT : LLMNR_PORT);
+    Group4.sin_addr.s_addr = htonl(Mdns ? 0xE00000FB : 0xE00000FC);
     RtlZeroMemory(&Group6, sizeof(Group6));
     Group6.sin6_family = AF_INET6;
-    Group6.sin6_port = htons(LLMNR_PORT);
+    Group6.sin6_port = htons(Mdns ? MDNS_PORT : LLMNR_PORT);
     Group6.sin6_addr.s6_addr[0] = 0xFF;
     Group6.sin6_addr.s6_addr[1] = 0x02;
-    Group6.sin6_addr.s6_addr[13] = 0x01;
-    Group6.sin6_addr.s6_addr[15] = 0x03;
+    Group6.sin6_addr.s6_addr[13] = Mdns ? 0x00 : 0x01;
+    Group6.sin6_addr.s6_addr[15] = Mdns ? 0xFB : 0x03;
 
     Sockets[0] = Count4 ? socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP) : INVALID_SOCKET;
     Sockets[1] = Count6 ? socket(AF_INET6, SOCK_DGRAM, IPPROTO_UDP) : INVALID_SOCKET;
@@ -1050,9 +1069,9 @@ ResolverLlmnrQuery(PCWSTR Name, WORD Type, PDNS_RECORDW *Result)
         setsockopt(Sockets[1], IPPROTO_IPV6, IPV6_MULTICAST_HOPS, (PCHAR)&Hops, sizeof(Hops));
 
     Start = GetTickCount();
-    for (Round = 0; Round < LLMNR_ROUNDS; Round++)
+    for (Round = 0; Round < Rounds; Round++)
     {
-        DWORD Deadline = Start + (Round + 1) * LLMNR_RESEND;
+        DWORD Deadline = Start + (Round + 1) * Resend;
 
         for (i = 0; i < Count4 && Sockets[0] != INVALID_SOCKET; i++)
         {
@@ -1152,7 +1171,18 @@ DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
 
     ResolverStartWinsock();
     if (Options & DNS_QUERY_MULTICAST_ONLY)
-        return wcschr(Name, L'.') ? ERROR_INVALID_NAME : ResolverLlmnrQuery(Name, Type, Result);
+    {
+        if (ResolverIsMdnsName(Name))
+            return ResolverMulticastQuery(Name, Type, TRUE, Result);
+        return wcschr(Name, L'.') ? ERROR_INVALID_NAME : ResolverMulticastQuery(Name, Type, FALSE, Result);
+    }
+
+    /* RFC 6762 section 3: a .local name is asked on the link first; unicast DNS only after that */
+    if (!(Options & DNS_QUERY_NO_MULTICAST) && ResolverIsMdnsName(Name) &&
+        ResolverMulticastQuery(Name, Type, TRUE, Result) == ERROR_SUCCESS)
+        return ERROR_SUCCESS;
+    *Result = NULL;
+
     Config = RtlAllocateHeap(RtlGetProcessHeap(), 0, sizeof(*Config));
     if (!Config)
         return ERROR_OUTOFMEMORY;
@@ -1171,7 +1201,7 @@ DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
 
     if (!wcschr(Name, L'.') && (!Config->CandidateCount || Status != ERROR_SUCCESS))
     {
-        Status = (Options & DNS_QUERY_NO_MULTICAST) ? ERROR_INVALID_NAME : ResolverLlmnrQuery(Name, Type, Result);
+        Status = (Options & DNS_QUERY_NO_MULTICAST) ? ERROR_INVALID_NAME : ResolverMulticastQuery(Name, Type, FALSE, Result);
         if (Status != ERROR_SUCCESS && First == ERROR_SUCCESS)
             First = Status;
     }
