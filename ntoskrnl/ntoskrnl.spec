@@ -2823,7 +2823,7 @@
 @ stdcall -arch=win64 PcwUnregister(ptr)
 @ stub -arch=win64 PfFileInfoNotify
 @ stdcall PoClearPowerRequest(ptr long)
-@ stub -arch=win64 PoCpuIdledSinceLastCallImprecise
+@ stdcall -arch=win64 PoCpuIdledSinceLastCallImprecise(long)
 @ stdcall PoCreatePowerLimitRequest(ptr ptr ptr ptr)
 @ stdcall PoCreatePowerRequest(ptr ptr ptr)
 @ stdcall PoDeletePowerLimitRequest(ptr)
@@ -2851,15 +2851,15 @@
 @ stub -arch=arm64 PoFxRemoveDeviceRelation
 @ stdcall -version=0x602+ PoFxSetComponentWake(ptr long long)
 @ stdcall -version=0xA00+ PoFxSetTargetDripsDevicePowerState(ptr long)
-@ stub -arch=arm64 PoGetProcessorIdleAccounting
-@ stub -arch=arm64 PoInitiateProcessorWake
+@ stdcall -arch=win64 PoGetProcessorIdleAccounting(long ptr long ptr)
+@ stdcall -arch=win64 PoInitiateProcessorWake(long)
 @ stdcall PoLatencySensitivityHint(long)
 @ stub -arch=win64 PoNotifyMediaBuffering
 @ stdcall PoNotifyVSyncChange(long)
 @ stdcall PoQueryPowerLimitAttributes(ptr long ptr ptr)
 @ stdcall PoQueryPowerLimitValue(ptr long ptr)
 @ stdcall PoReenableSleepStates(ptr)
-@ stub -arch=win64 PoRegisterCoalescingCallback
+@ stdcall -arch=win64 PoRegisterCoalescingCallback(ptr long ptr ptr)
 @ stdcall -arch=win64 PoRegisterForEffectivePowerModeNotifications(long ptr ptr ptr)
 @ stdcall PoSetDeviceBusyEx(ptr)
 @ stdcall PoSetFixedWakeSource(long ptr)
@@ -2869,7 +2869,7 @@
 @ stdcall PoSetSystemWakeDevice(ptr)
 @ stdcall PoSetUserPresent(long)
 @ stdcall PoStartDeviceBusy(ptr)
-@ stub -arch=win64 PoUnregisterCoalescingCallback
+@ stdcall -arch=win64 PoUnregisterCoalescingCallback(ptr)
 @ stdcall -arch=win64 PoUnregisterFromEffectivePowerModeNotifications(ptr)
 @ stdcall -arch=win64 PoUserShutdownCancelled()
 @ stdcall -arch=win64 PoUserShutdownInitiated()

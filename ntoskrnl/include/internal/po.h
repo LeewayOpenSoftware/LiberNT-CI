@@ -623,3 +623,5 @@ extern SYSTEM_POWER_CAPABILITIES PopCapabilities;
 #include "po_drips.h"
 
 #include "po_misc.h"
+
+#include "po_proc.h"
