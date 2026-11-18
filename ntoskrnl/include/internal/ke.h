@@ -567,6 +567,22 @@ KiSetAffinityThread(
     IN KAFFINITY Affinity
 );
 
+/* Sets a thread's user affinity to a mask in one processor group */
+VOID
+FASTCALL
+KiSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity);
+
+VOID
+NTAPI
+KeSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ PGROUP_AFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity);
+
 PKTHREAD
 FASTCALL
 KiSelectNextThread(

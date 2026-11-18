@@ -1522,6 +1522,13 @@ KeSetSystemGroupAffinityThread(
 {
     PKTHREAD CurrentThread = KeGetCurrentThread();
 
+    /* The mask must name active processors of an existing group */
+    if ((Affinity->Mask == 0) ||
+        (Affinity->Mask & ~KiQueryActiveGroupAffinity(Affinity->Group)))
+    {
+        KeBugCheck(INVALID_AFFINITY_SET);
+    }
+
     /* The previous system affinity; a zero mask when there was none */
     if (PreviousAffinity != NULL)
     {

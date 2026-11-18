@@ -1686,6 +1686,26 @@ KeSetAffinityThread(IN PKTHREAD Thread,
     return OldAffinity;
 }
 
+VOID
+NTAPI
+KeSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ PGROUP_AFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity)
+{
+    KIRQL OldIrql;
+    ASSERT_THREAD(Thread);
+    ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
+
+    /* Raise IRQL */
+    OldIrql = KeRaiseIrqlToSynchLevel();
+
+    /* Call the internal function (it acquires the thread lock itself) */
+    KiSetGroupAffinityThread(Thread, Affinity->Group, Affinity->Mask, PreviousAffinity);
+
+    KiExitDispatcher(OldIrql);
+}
+
 /*
  * @implemented
  */

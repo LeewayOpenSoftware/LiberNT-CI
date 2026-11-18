@@ -1586,37 +1586,63 @@ KiUpdateEffectiveAffinityThread(
 }
 #endif // CONFIG_SMP
 
-KAFFINITY
+VOID
 FASTCALL
-KiSetAffinityThread(IN PKTHREAD Thread,
-                    IN KAFFINITY Affinity)
+KiSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity)
 {
-    KAFFINITY OldAffinity;
+    KAFFINITY Allowed;
 
     KiAcquireThreadLock(Thread);
 
     /* Get the current affinity */
-    OldAffinity = KiThreadUserAffinityMask(Thread);
+    if (PreviousAffinity != NULL)
+    {
+        RtlZeroMemory(PreviousAffinity, sizeof(*PreviousAffinity));
+        PreviousAffinity->Mask = KiThreadUserAffinityMask(Thread);
+        PreviousAffinity->Group = KiThreadUserAffinityGroup(Thread);
+    }
+
+    /* The process affinity describes group 0; other groups allow their
+     * active processors */
+    if (Group == 0)
+        Allowed = Thread->ApcState.Process->Affinity;
+    else
+        Allowed = KiQueryActiveGroupAffinity(Group);
 
     /* Make sure that the affinity is valid */
-    if (((Affinity & Thread->ApcState.Process->Affinity) != (Affinity)) ||
+    if (((Affinity & Allowed) != (Affinity)) ||
         (!Affinity))
     {
         /* Bugcheck the system */
         KeBugCheck(INVALID_AFFINITY_SET);
     }
 
-    /* Update the new affinity, a group 0 mask */
+    /* Update the new affinity */
     KiThreadUserAffinityMask(Thread) = Affinity;
-    KiSetThreadUserAffinityGroup(Thread, 0);
+    KiSetThreadUserAffinityGroup(Thread, Group);
 
 #ifdef CONFIG_SMP
     /* Check if system affinity is not active */
     if (!Thread->SystemAffinityActive)
     {
         /* Calculate the new ideal processor from the affinity set */
-        Thread->UserIdealProcessor =
-            KiFindIdealProcessor(Affinity, Thread->UserIdealProcessor);
+        if ((Group == 0) && (Thread->UserIdealProcessor < KI_PROCESSORS_PER_GROUP))
+        {
+            Thread->UserIdealProcessor =
+                KiFindIdealProcessor(Affinity, (UCHAR)Thread->UserIdealProcessor);
+        }
+        else
+        {
+            ULONG Bit;
+
+            /* The node and parking information describe group 0 */
+            NT_VERIFY(BitScanForwardAffinity(&Bit, Affinity));
+            Thread->UserIdealProcessor = KiProcessorIndexFromNumber(Group, (UCHAR)Bit);
+        }
 
         /* Update the effective affinity */
         KiUpdateEffectiveAffinityThread(Thread);
@@ -1624,9 +1650,18 @@ KiSetAffinityThread(IN PKTHREAD Thread,
 #endif
 
     KiReleaseThreadLock(Thread);
+}
 
-    /* Return the old affinity */
-    return OldAffinity;
+KAFFINITY
+FASTCALL
+KiSetAffinityThread(IN PKTHREAD Thread,
+                    IN KAFFINITY Affinity)
+{
+    GROUP_AFFINITY OldAffinity;
+
+    /* A group 0 mask; the old mask is returned whatever its group */
+    KiSetGroupAffinityThread(Thread, 0, Affinity, &OldAffinity);
+    return OldAffinity.Mask;
 }
 
 //
