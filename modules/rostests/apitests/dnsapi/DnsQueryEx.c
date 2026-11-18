@@ -44,6 +44,141 @@ ResetCompletion(VOID)
     InterlockedExchange(&g_CallbackCalls, 0);
 }
 
+static volatile LONG g_Stop;
+static SOCKET g_Sock = INVALID_SOCKET;
+
+static DWORD WINAPI
+ServerListResponder(PVOID Param)
+{
+    UCHAR Packet[512];
+    UCHAR Reply[512];
+
+    UNREFERENCED_PARAMETER(Param);
+
+    while (!g_Stop)
+    {
+        fd_set Set;
+        struct timeval Tv = { 0, 100000 };
+        struct sockaddr_in From;
+        int FromLen = sizeof(From), Len, Pos, QType;
+
+        FD_ZERO(&Set);
+        FD_SET(g_Sock, &Set);
+        if (select(0, &Set, NULL, NULL, &Tv) <= 0)
+            continue;
+        Len = recvfrom(g_Sock, (char *)Packet, sizeof(Packet), 0, (struct sockaddr *)&From, &FromLen);
+        if (Len < 17)
+            continue;
+
+        Pos = 12;
+        while (Pos < Len && Packet[Pos] != 0)
+            Pos += Packet[Pos] + 1;
+        Pos++;
+        if (Pos + 4 > Len)
+            continue;
+        QType = (Packet[Pos] << 8) | Packet[Pos + 1];
+        if (QType != DNS_TYPE_A)
+            continue;
+
+        memcpy(Reply, Packet, Pos + 4);
+        Reply[2] = 0x81;
+        Reply[3] = 0x80;
+        Reply[4] = 0; Reply[5] = 1;
+        Reply[6] = 0; Reply[7] = 1;
+        Reply[8] = Reply[9] = Reply[10] = Reply[11] = 0;
+        {
+            int Out = Pos + 4;
+            Reply[Out++] = 0xC0; Reply[Out++] = 0x0C;
+            Reply[Out++] = 0; Reply[Out++] = 1;
+            Reply[Out++] = 0; Reply[Out++] = 1;
+            Reply[Out++] = 0; Reply[Out++] = 0; Reply[Out++] = 1; Reply[Out++] = 0x2C;
+            Reply[Out++] = 0; Reply[Out++] = 4;
+            Reply[Out++] = 192; Reply[Out++] = 0; Reply[Out++] = 2; Reply[Out++] = 55;
+            sendto(g_Sock, (char *)Reply, Out, 0, (struct sockaddr *)&From, FromLen);
+        }
+    }
+    return 0;
+}
+
+static VOID
+ServerListTest(PDNS_QUERY_REQUEST Request)
+{
+    DNS_ADDR_ARRAY Servers;
+    DNS_QUERY_RESULT Results;
+    PDNS_RECORD Records;
+    struct sockaddr_in Local;
+    WSADATA Wsa;
+    HANDLE Thread;
+    DNS_STATUS Status;
+
+    if (WSAStartup(MAKEWORD(2, 2), &Wsa) != 0)
+    {
+        skip("WSAStartup failed\n");
+        return;
+    }
+
+    Local.sin_family = AF_INET;
+    Local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    Local.sin_port = htons(53);
+    g_Sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (g_Sock == INVALID_SOCKET ||
+        bind(g_Sock, (struct sockaddr *)&Local, sizeof(Local)) != 0)
+    {
+        skip("cannot bind 127.0.0.1:53\n");
+        if (g_Sock != INVALID_SOCKET)
+            closesocket(g_Sock);
+        WSACleanup();
+        return;
+    }
+
+    RtlZeroMemory(&Servers, sizeof(Servers));
+    Servers.MaxCount = 1;
+    Servers.AddrCount = 1;
+    Servers.Family = AF_INET;
+    {
+        SOCKADDR_IN *Sa = (SOCKADDR_IN *)Servers.AddrArray[0].MaxSa;
+        Sa->sin_family = AF_INET;
+        Sa->sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        Sa->sin_port = htons(53);
+    }
+
+    InterlockedExchange(&g_Stop, 0);
+    Thread = CreateThread(NULL, 0, ServerListResponder, NULL, 0, NULL);
+    if (Thread == NULL)
+    {
+        skip("cannot start the responder\n");
+        closesocket(g_Sock);
+        WSACleanup();
+        return;
+    }
+
+    Request->QueryName = L"spltest.example";
+    Request->QueryType = DNS_TYPE_A;
+    Request->pDnsServerList = &Servers;
+    ZeroMemory(&Results, sizeof(Results));
+    Status = DnsQueryEx(Request, &Results, NULL);
+    Request->pDnsServerList = NULL;
+    Request->QueryName = L"localhost";
+
+    ok(Status == ERROR_SUCCESS, "server-list query failed: %lu\n", Status);
+    Records = Results.pQueryRecords;
+    ok(Records != NULL && Records->wType == DNS_TYPE_A,
+       "server-list query returned no A record\n");
+    if (Records)
+    {
+        ok(!memcmp(&Records->Data.A.IpAddress, "\xC0\x00\x02\x37", 4),
+           "server-list answer mismatch\n");
+        DnsRecordListFree(Records, DnsFreeRecordList);
+    }
+
+    InterlockedExchange(&g_Stop, 1);
+    WaitForSingleObject(Thread, 5000);
+    CloseHandle(Thread);
+    closesocket(g_Sock);
+    g_Sock = INVALID_SOCKET;
+    WSACleanup();
+}
+
 void func_DnsQueryEx(void)
 {
     DNS_QUERY_REQUEST Request;
@@ -79,14 +214,13 @@ void func_DnsQueryEx(void)
     Status = DnsQueryEx(&Request, &Results, NULL);
     ok(Status == ERROR_INVALID_PARAMETER, "NULL name: %lu\n", Status);
     Request.QueryName = L"localhost";
-    Request.pDnsServerList = (PDNS_ADDR_ARRAY)&Results;
-    Status = DnsQueryEx(&Request, &Results, NULL);
-    ok(Status == ERROR_INVALID_PARAMETER, "Server list: %lu\n", Status);
-    Request.pDnsServerList = NULL;
     Request.InterfaceIndex = 3;
     Status = DnsQueryEx(&Request, &Results, NULL);
-    ok(Status == ERROR_INVALID_PARAMETER, "Interface index: %lu\n", Status);
+    ok(Status == ERROR_INVALID_PARAMETER, "Interface index: %lu
+", Status);
     Request.InterfaceIndex = 0;
+
+    ServerListTest(&Request);
 
     /* A query with a completion routine is pending and delivers asynchronously
      * into the caller's result structure */

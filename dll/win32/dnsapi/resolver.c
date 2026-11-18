@@ -172,15 +172,15 @@ ResolverLoadStaticServers(PRESOLVER_CONFIG Config)
 
 static
 DNS_STATUS
+ResolverBuildCandidates(PRESOLVER_CONFIG Config, PCWSTR Name);
+
+static
+DNS_STATUS
 ResolverLoadConfig(PRESOLVER_CONFIG Config, PCWSTR Name)
 {
     ULONG Size = 16384, i;
     PIP_ADAPTER_ADDRESSES List, Adapter;
     DWORD Error;
-    WCHAR Domain[MAX_DNS_SUFFIX_STRING_LENGTH], SearchList[1024];
-    SIZE_T Length = wcslen(Name);
-    BOOL Absolute = Length && Name[Length - 1] == L'.';
-    BOOL SingleLabel = !wcschr(Name, L'.');
 
     RtlZeroMemory(Config, sizeof(*Config));
 
@@ -282,7 +282,20 @@ ResolverLoadConfig(PRESOLVER_CONFIG Config, PCWSTR Name)
         }
     }
 
-    if (Absolute)
+    return ResolverBuildCandidates(Config, Name);
+}
+
+static
+DNS_STATUS
+ResolverBuildCandidates(PRESOLVER_CONFIG Config, PCWSTR Name)
+{
+    WCHAR Domain[MAX_DNS_SUFFIX_STRING_LENGTH], SearchList[1024];
+    SIZE_T Length = wcslen(Name);
+    BOOL Absolute = Length && Name[Length - 1] == L'.';
+    BOOL SingleLabel = !wcschr(Name, L'.');
+    ULONG i;
+
+if (Absolute)
     {
         WCHAR Trimmed[DNS_MAX_NAME_BUFFER_LENGTH];
 
@@ -331,6 +344,7 @@ ResolverLoadConfig(PRESOLVER_CONFIG Config, PCWSTR Name)
         ResolverAddCandidate(Config, Name, NULL);
     return ERROR_SUCCESS;
 }
+
 
 static
 INT
@@ -1105,12 +1119,34 @@ ResolverLlmnrQuery(PCWSTR Name, WORD Type, PDNS_RECORDW *Result)
     return ERROR_INVALID_NAME;
 }
 
+static
 DNS_STATUS
+ResolverQueryCandidates(PRESOLVER_CONFIG Config, LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
+{
+    DNS_STATUS Status, First = ERROR_SUCCESS;
+    ULONG i;
+
+    for (i = 0; i < Config->CandidateCount; i++)
+    {
+        Status = ResolverQueryName(Config, Config->Candidates[i], Type, Options, Result);
+        DPRINT("DnsIntResolve(%S, %u) -> %lu\n", Config->Candidates[i], Type, Status);
+        if (Status == ERROR_SUCCESS)
+            break;
+        if (First == ERROR_SUCCESS)
+            First = Status;
+        if (Status != DNS_ERROR_RCODE_NAME_ERROR && Status != DNS_INFO_NO_RECORDS)
+            break;
+    }
+
+    return Status == ERROR_SUCCESS ? Status : First;
+}
+
+DNS_STATUS
+NTAPI
 DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
 {
     PRESOLVER_CONFIG Config;
     DNS_STATUS Status, First = ERROR_SUCCESS;
-    ULONG i;
 
     *Result = NULL;
     if (Options & DNS_QUERY_NO_WIRE_QUERY)
@@ -1132,17 +1168,8 @@ DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
     if (Status != ERROR_SUCCESS)
         Config->CandidateCount = 0;
 
-    for (i = 0; i < Config->CandidateCount; i++)
-    {
-        Status = ResolverQueryName(Config, Config->Candidates[i], Type, Options, Result);
-        DPRINT("DnsIntResolve(%S, %u) -> %lu\n", Config->Candidates[i], Type, Status);
-        if (Status == ERROR_SUCCESS)
-            break;
-        if (First == ERROR_SUCCESS)
-            First = Status;
-        if (Status != DNS_ERROR_RCODE_NAME_ERROR && Status != DNS_INFO_NO_RECORDS)
-            break;
-    }
+    Status = ResolverQueryCandidates(Config, Name, Type, Options, Result);
+
 
     if (!wcschr(Name, L'.') && (!Config->CandidateCount || Status != ERROR_SUCCESS))
     {
@@ -1276,5 +1303,56 @@ DnsExtractRecordsFromMessage_UTF8(PDNS_MESSAGE_BUFFER pDnsBuffer,
         if (*ppRecord == NULL)
             Status = ERROR_OUTOFMEMORY;
     }
+    return Status;
+}
+
+DNS_STATUS
+DnsIntResolveWithServers(LPCWSTR Name, WORD Type, DWORD Options, PDNS_ADDR_ARRAY Servers, PDNS_RECORDW *Result)
+{
+    PRESOLVER_CONFIG Config;
+    DNS_STATUS Status;
+    ULONG i, N;
+
+    *Result = NULL;
+    if (Options & DNS_QUERY_NO_WIRE_QUERY)
+        return DNS_ERROR_RCODE_NAME_ERROR;
+    if ((Servers == NULL) || (Servers->AddrCount == 0))
+        return ERROR_INVALID_PARAMETER;
+
+    ResolverStartWinsock();
+    Config = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Config));
+    if (!Config)
+        return ERROR_OUTOFMEMORY;
+
+    N = min(Servers->AddrCount, DNS_MAX_SERVERS);
+    for (i = 0; i < N; i++)
+    {
+        PRESOLVER_SERVER Slot = &Config->Servers[i];
+        const SOCKADDR_INET *Address = (const SOCKADDR_INET *)Servers->AddrArray[i].MaxSa;
+
+        if (Address->si_family != AF_INET && Address->si_family != AF_INET6)
+            continue;
+        RtlCopyMemory(&Slot->Address, Address, sizeof(SOCKADDR_INET));
+        if (Slot->Address.si_family == AF_INET6)
+            Slot->Address.Ipv6.sin6_port = htons(DNS_PORT);
+        else
+            Slot->Address.Ipv4.sin_port = htons(DNS_PORT);
+        Slot->Adapter = 0;
+        Config->ServerCount++;
+    }
+    if (!Config->ServerCount)
+    {
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
+        return ERROR_INVALID_PARAMETER;
+    }
+    Config->Adapters[0].FirstServer = 0;
+    Config->Adapters[0].ServerCount = Config->ServerCount;
+    Config->AdapterCount = 1;
+
+    Status = ResolverBuildCandidates(Config, Name);
+    if (Status == ERROR_SUCCESS)
+        Status = ResolverQueryCandidates(Config, Name, Type, Options, Result);
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
     return Status;
 }

@@ -405,6 +405,7 @@ typedef struct _DNSAPI_ASYNC_QUERY
     PDNS_QUERY_COMPLETION_ROUTINE Callback;
     PDNS_QUERY_RESULT CallerResults;
     PDNS_QUERY_CANCEL Slot;
+    PDNS_ADDR_ARRAY Servers;
 } DNSAPI_ASYNC_QUERY, *PDNSAPI_ASYNC_QUERY;
 
 static SRWLOCK DnsQueryExSlotLock = SRWLOCK_INIT;
@@ -433,7 +434,12 @@ DnsQueryExWorker(PVOID Parameter)
     DNS_STATUS Status;
     BOOL Cancelled;
 
+    if (Op->Servers != NULL)
+        Status = DnsIntResolveWithServers(Op->Name, Op->Type, (DWORD)Op->Options,
+                                          Op->Servers, (PDNS_RECORDW *)&Records);
+    else
     Status = DnsQuery_W(Op->Name,
+
                         Op->Type,
                         (DWORD)Op->Options,
                         NULL,
@@ -472,6 +478,9 @@ DnsQueryExWorker(PVOID Parameter)
     Op->CallerResults->Reserved = NULL;
 
     Op->Callback(Op->QueryContext, Op->CallerResults);
+
+    if (Op->Servers != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Op->Servers);
 
     if (InterlockedDecrement(&Op->Refs) == 0)
     {
@@ -519,7 +528,7 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
         return ERROR_INVALID_PARAMETER;
     if (pQueryRequest->QueryName == NULL)
         return ERROR_INVALID_PARAMETER;
-    if ((pQueryRequest->pDnsServerList != NULL) || (pQueryRequest->InterfaceIndex != 0))
+    if (pQueryRequest->InterfaceIndex != 0)
         return ERROR_INVALID_PARAMETER;
 
     if (pQueryRequest->pQueryCompletionCallback == NULL)
@@ -527,6 +536,13 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
         PDNS_RECORD Records = NULL;
         DNS_STATUS Status;
 
+        if (pQueryRequest->pDnsServerList != NULL)
+            Status = DnsIntResolveWithServers(pQueryRequest->QueryName,
+                                            pQueryRequest->QueryType,
+                                            (DWORD)pQueryRequest->QueryOptions,
+                                            pQueryRequest->pDnsServerList,
+                                            (PDNS_RECORDW *)&Records);
+        else
         Status = DnsQuery_W(pQueryRequest->QueryName,
                             pQueryRequest->QueryType,
                             (DWORD)pQueryRequest->QueryOptions,
@@ -563,6 +579,28 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
     Op->QueryContext = pQueryRequest->pQueryContext;
     Op->Callback = pQueryRequest->pQueryCompletionCallback;
     Op->CallerResults = pQueryResults;
+    if (pQueryRequest->pDnsServerList != NULL && pQueryRequest->pDnsServerList->AddrCount != 0)
+    {
+        ULONG ServerCount = pQueryRequest->pDnsServerList->AddrCount;
+
+        Op->Servers = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
+                                      FIELD_OFFSET(DNS_ADDR_ARRAY, AddrArray) +
+                                      ServerCount * sizeof(DNS_ADDR));
+        if (Op->Servers == NULL)
+        {
+            if (pCancelHandle)
+                RtlZeroMemory(pCancelHandle->Reserved, sizeof(Op));
+            DeleteCriticalSection(&Op->Lock);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Op->Name);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Op);
+            return ERROR_OUTOFMEMORY;
+        }
+        Op->Servers->MaxCount = ServerCount;
+        Op->Servers->AddrCount = ServerCount;
+        RtlCopyMemory(Op->Servers->AddrArray, pQueryRequest->pDnsServerList->AddrArray,
+                      ServerCount * sizeof(DNS_ADDR));
+    }
+
     Op->Slot = pCancelHandle;
     Op->Refs = pCancelHandle ? 2 : 1;
     InitializeCriticalSection(&Op->Lock);
