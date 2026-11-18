@@ -27,6 +27,9 @@ typedef struct _WHEAP_MCA_RECORD
     WHEA_XPF_MCA_SECTION Data;
 } WHEAP_MCA_RECORD, *PWHEAP_MCA_RECORD;
 
+C_ASSERT(sizeof(WHEAP_MCA_RECORD) ==
+         sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR) + sizeof(WHEA_XPF_MCA_SECTION));
+
 static const GUID WheapCmcNotifyType = { 0x2DCE8BB1, 0xBDD7, 0x450E, { 0xB9, 0xAD, 0x9C, 0xF4, 0xEB, 0xD4, 0xF8, 0x90 } };
 static const GUID WheapMceNotifyType = { 0xE8F56FFE, 0x919C, 0x4CC5, { 0xBA, 0x88, 0x65, 0xAB, 0xE1, 0x49, 0x13, 0xBB } };
 static const GUID WheapMcaSectionType = { 0x8A1E1D01, 0x42F9, 0x4557, { 0x9C, 0x33, 0x56, 0x5E, 0x5C, 0xC3, 0xF7, 0xE8 } };
