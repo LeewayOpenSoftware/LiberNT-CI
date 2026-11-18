@@ -723,6 +723,91 @@ TTestLoadAndRead(
     free(fix);
 }
 
+/* Exercises the write-side companions of the big data reader: marking a big
+ * value dirty touches its whole record, freeing it releases the record, and
+ * copying one fails cleanly until a 1.4 writer exists. */
+static
+VOID
+TTestBigValueLifecycle(VOID)
+{
+    T_FIX *fix;
+    CMHIVE cmHive, dstHive;
+    NTSTATUS status;
+    PHHIVE hive;
+    PCM_KEY_VALUE value;
+    extern HCELL_INDEX NTAPI CmpCopyValue(IN PHHIVE SourceHive,
+                                          IN HCELL_INDEX SourceValueCell,
+                                          IN PHHIVE DestinationHive,
+                                          IN HSTORAGE_TYPE StorageType);
+    ULONG i;
+
+    fix = malloc(sizeof(*fix));
+    if (!fix)
+    {
+        fprintf(stderr, "FAIL malloc fixture\n");
+        Failures++;
+        return;
+    }
+
+    TFixBuild(fix, 5);
+    status = TLoadImage(fix->Image, &cmHive);
+    CHECK(status == STATUS_SUCCESS);
+    if (!NT_SUCCESS(status))
+    {
+        free(fix);
+        return;
+    }
+    hive = &cmHive.Hive;
+
+    value = (PCM_KEY_VALUE)HvGetCell(hive, fix->VkBig);
+    CHECK(value != NULL);
+
+    /* Marking a big value dirty covers the record and its segments */
+    RtlClearAllBits(&hive->DirtyVector);
+    CHECK(CmpMarkValueDataDirty(hive, value) == TRUE);
+    CHECK(HvIsCellDirty(hive, fix->BigDb));
+    CHECK(HvIsCellDirty(hive, fix->BigSegList));
+    for (i = 0; i < 3; i++)
+        CHECK(HvIsCellDirty(hive, fix->BigSeg[i]));
+
+    /* The fixture is intact before the free */
+    CHECK(CmCheckRegistry(&cmHive, CM_CHECK_REGISTRY_VALIDATE_HIVE) ==
+          CM_CHECK_REGISTRY_GOOD);
+
+    /* Freeing a big value releases the record, the list, and the segments.
+       A freed cell reads back through its header as a free cell. */
+    CHECK(CmpFreeValueData(hive, value->Data, value->DataLength) == TRUE);
+    CHECK(IsFreeCell((PHCELL)((PUCHAR)HvGetCell(hive, fix->BigDb) - sizeof(HCELL))));
+    CHECK(IsFreeCell((PHCELL)((PUCHAR)HvGetCell(hive, fix->BigSegList) - sizeof(HCELL))));
+    for (i = 0; i < 3; i++)
+        CHECK(IsFreeCell((PHCELL)((PUCHAR)HvGetCell(hive, fix->BigSeg[i]) - sizeof(HCELL))));
+
+    HvReleaseCell(hive, fix->VkBig);
+    HvFree(hive);
+
+    /* A copy onto any hive fails cleanly until a 1.4 writer exists */
+    TFixBuild(fix, 5);
+    status = TLoadImage(fix->Image, &cmHive);
+    CHECK(status == STATUS_SUCCESS);
+    if (NT_SUCCESS(status))
+    {
+        RtlZeroMemory(&dstHive, sizeof(dstHive));
+        status = HvInitialize(&dstHive.Hive, HINIT_CREATE, HIVE_NOLAZYFLUSH,
+                              HFILE_TYPE_PRIMARY, 0, TAlloc, TFree,
+                              TNoWrite, TNoRead, 1, NULL);
+        CHECK(status == STATUS_SUCCESS);
+        if (NT_SUCCESS(status))
+        {
+            CHECK(CmpCopyValue(&cmHive.Hive, fix->VkBig,
+                               &dstHive.Hive, Stable) == HCELL_NIL);
+            HvFree(&dstHive.Hive);
+        }
+        HvFree(&cmHive.Hive);
+    }
+
+    free(fix);
+}
+
 static
 VOID
 TTestHeaderRefusals(VOID)
@@ -1275,6 +1360,7 @@ main(void)
 
     TTestHeaderRefusals();
     TTestLogRecovery();
+    TTestBigValueLifecycle();
     TTestRealHive();
 
     printf("cmlib hive 1.4/1.5/1.6 read: %lu checks, %lu failures\n",
