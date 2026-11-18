@@ -47,6 +47,8 @@ struct _SILO_MONITOR
     LIST_ENTRY Link;
 };
 
+typedef struct _SILO_MONITOR SILO_MONITOR;
+
 /* GLOBALS *******************************************************************/
 
 static FAST_MUTEX PsSiloContextLock;
@@ -85,18 +87,18 @@ PsAllocSiloContextSlot(
     if ((Reserved != 0) || (ReturnedContextSlot == NULL))
         return STATUS_INVALID_PARAMETER;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
     for (i = 0; i < PS_SILO_CONTEXT_SLOTS_MAX; i++)
     {
         if (!PsSiloContextSlotAllocated(i))
         {
             PsSiloContextSlotBitmap[i / 32] |= (1UL << (i % 32));
             *ReturnedContextSlot = i;
-            ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+            ExReleaseFastMutex(&PsSiloContextLock);
             return STATUS_SUCCESS;
         }
     }
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
 
     return STATUS_INSUFFICIENT_RESOURCES;
 }
@@ -113,7 +115,7 @@ PsFreeSiloContextSlot(
     if (ContextSlot >= PS_SILO_CONTEXT_SLOTS_MAX)
         return;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
     PsSiloContextSlotBitmap[ContextSlot / 32] &= ~(1UL << (ContextSlot % 32));
     if (ContextSlot < PsHostSiloContextSlotCount)
     {
@@ -121,7 +123,7 @@ PsFreeSiloContextSlot(
         PsHostSiloContextTable[ContextSlot] = NULL;
         PsHostSiloContextPermanent[ContextSlot / 32] &= ~(1UL << (ContextSlot % 32));
     }
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
 
     if (StaleContext != NULL)
         PsDereferenceSiloContext(StaleContext);
@@ -198,21 +200,21 @@ PsInsertSiloContext(
         !PsSiloContextSlotAllocated(ContextSlot))
         return STATUS_INVALID_PARAMETER;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
 
     if (ContextSlot >= PsHostSiloContextSlotCount)
         PsHostSiloContextSlotCount = ContextSlot + 1;
 
     if (PsHostSiloContextTable[ContextSlot] != NULL)
     {
-        ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+        ExReleaseFastMutex(&PsSiloContextLock);
         return STATUS_NOT_SUPPORTED;
     }
 
     PsHostSiloContextTable[ContextSlot] = SiloContext;
     InterlockedIncrement(&PsSiloContextHeader(SiloContext)->RefCount);
 
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
     return STATUS_SUCCESS;
 }
 
@@ -234,12 +236,12 @@ PsGetSiloContext(
         !PsSiloContextSlotAllocated(ContextSlot))
         return STATUS_INVALID_PARAMETER;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
 
     if ((ContextSlot >= PsHostSiloContextSlotCount) ||
         ((Context = PsHostSiloContextTable[ContextSlot]) == NULL))
     {
-        ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+        ExReleaseFastMutex(&PsSiloContextLock);
         *ReturnedSiloContext = NULL;
         return STATUS_NOT_FOUND;
     }
@@ -247,7 +249,7 @@ PsGetSiloContext(
     InterlockedIncrement(&PsSiloContextHeader(Context)->RefCount);
     *ReturnedSiloContext = Context;
 
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
     return STATUS_SUCCESS;
 }
 
@@ -265,18 +267,18 @@ PsMakeSiloContextPermanent(
         !PsSiloContextSlotAllocated(ContextSlot))
         return STATUS_INVALID_PARAMETER;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
 
     if ((ContextSlot >= PsHostSiloContextSlotCount) ||
         (PsHostSiloContextTable[ContextSlot] == NULL))
     {
-        ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+        ExReleaseFastMutex(&PsSiloContextLock);
         return STATUS_NOT_FOUND;
     }
 
     PsHostSiloContextPermanent[ContextSlot / 32] |= (1UL << (ContextSlot % 32));
 
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
     return STATUS_SUCCESS;
 }
 
@@ -316,26 +318,26 @@ PsGetPermanentSiloContext(
         !PsSiloContextSlotAllocated(ContextSlot))
         return STATUS_INVALID_PARAMETER;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
 
     if ((ContextSlot >= PsHostSiloContextSlotCount) ||
         ((Context = PsHostSiloContextTable[ContextSlot]) == NULL))
     {
-        ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+        ExReleaseFastMutex(&PsSiloContextLock);
         *ReturnedSiloContext = NULL;
         return STATUS_NOT_FOUND;
     }
 
     if (((PsHostSiloContextPermanent[ContextSlot / 32] >> (ContextSlot % 32)) & 1) == 0)
     {
-        ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+        ExReleaseFastMutex(&PsSiloContextLock);
         *ReturnedSiloContext = NULL;
         return STATUS_NOT_SUPPORTED;
     }
 
     *ReturnedSiloContext = Context;
 
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
     return STATUS_SUCCESS;
 }
 
@@ -394,9 +396,9 @@ PsRegisterSiloMonitor(
     Monitor->MonitorHost = Registration->MonitorHost;
     Monitor->ContextSlot = ContextSlot;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
     InsertTailList(&PsSiloMonitorList, &Monitor->Link);
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
 
     *ReturnedMonitor = Monitor;
     return STATUS_SUCCESS;
@@ -415,24 +417,24 @@ PsStartSiloMonitor(
     if (SiloMonitor == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
     if (SiloMonitor->Started)
     {
-        ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+        ExReleaseFastMutex(&PsSiloContextLock);
         return STATUS_SUCCESS;
     }
     SiloMonitor->Started = TRUE;
     NotifyHost = SiloMonitor->MonitorHost && (SiloMonitor->CreateCallback != NULL);
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
 
     if (NotifyHost)
     {
         Status = SiloMonitor->CreateCallback(NULL);
         if (NT_SUCCESS(Status))
         {
-            ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+            ExAcquireFastMutex(&PsSiloContextLock);
             SiloMonitor->HostCreated = TRUE;
-            ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+            ExReleaseFastMutex(&PsSiloContextLock);
         }
     }
 
@@ -451,11 +453,11 @@ PsUnregisterSiloMonitor(
     if (SiloMonitor == NULL)
         return;
 
-    ExEnterCriticalRegionAndAcquireFastMutex(&PsSiloContextLock);
+    ExAcquireFastMutex(&PsSiloContextLock);
     NotifyHost = SiloMonitor->HostCreated;
     SiloMonitor->HostCreated = FALSE;
     RemoveEntryList(&SiloMonitor->Link);
-    ExReleaseFastMutexAndLeaveCriticalRegion(&PsSiloContextLock);
+    ExReleaseFastMutex(&PsSiloContextLock);
 
     if (NotifyHost)
         SiloMonitor->TerminateCallback(NULL);

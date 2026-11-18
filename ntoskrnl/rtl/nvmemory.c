@@ -10,7 +10,7 @@
 #define NDEBUG
 #include <debug.h>
 
-#define RTL_NV_MEMORY_TOKEN_TAG 'TVN'
+#define RTL_NV_MEMORY_TOKEN_TAG 'TNVM'
 
 typedef struct _RTL_NV_MEMORY_TOKEN
 {
