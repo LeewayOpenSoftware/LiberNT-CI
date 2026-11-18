@@ -1032,10 +1032,6 @@ CmpInitializeSystemHive(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Setup the ansi string */
     RtlInitAnsiString(&LoadString, LoaderBlock->LoadOptions);
 
-    /* Compatibility switch: /LEGACYHIVES makes new hives format 1.3 instead of 1.5 */
-    if (LoaderBlock->LoadOptions && CmpHasLoadOption(LoaderBlock->LoadOptions, "LEGACYHIVES"))
-        HvSetHiveFormatVersion(HSYS_MINOR);
-
     /* Allocate the unicode buffer */
     Length = LoadString.Length * sizeof(WCHAR) + sizeof(UNICODE_NULL);
     Buffer = ExAllocatePoolWithTag(PagedPool, Length, TAG_CM);
@@ -1890,6 +1886,12 @@ CmInitSystem1(VOID)
      * (system hives and others) will be loaded in shared mode */
     if (CmpVolatileBoot)
         CmpShareSystemHives = TRUE;
+
+    /* Compatibility switch: /LEGACYHIVES makes every hive created from here on format 1.3
+     * instead of 1.5, including the volatile master and hardware hives */
+    if (KeLoaderBlock && KeLoaderBlock->LoadOptions &&
+        CmpHasLoadOption(KeLoaderBlock->LoadOptions, "LEGACYHIVES"))
+        HvSetHiveFormatVersion(HSYS_MINOR);
 
     /* Initialize the hive list and lock */
     InitializeListHead(&CmpHiveListHead);
