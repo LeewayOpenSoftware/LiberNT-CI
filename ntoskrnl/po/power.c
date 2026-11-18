@@ -91,7 +91,7 @@ PopQuerySystemIdleness(VOID)
     /* Share a sample across callers rather than measuring fractions of a tick. */
     if (Now - PopLastIdleSampleTime >= 100 * 10000)
     {
-        for (i = 0; i < (ULONG)KeNumberProcessors; ++i)
+        for (i = 0; i < KiNumberProcessors; ++i)
         {
             PKPRCB Prcb = KiProcessorBlock[i];
             TotalTicks = ReadULongAcquire(&Prcb->KernelTime) + ReadULongAcquire(&Prcb->UserTime);
@@ -1133,7 +1133,7 @@ PopApplyProcessorPowerSetting(
     else
         InterlockedExchange(&PopProcessorPolicyMaximum, (LONG)SettingValue);
 
-    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    for (Processor = 0; Processor < KiNumberProcessors; Processor++)
     {
         PKPRCB Prcb = KiProcessorBlock[Processor];
 

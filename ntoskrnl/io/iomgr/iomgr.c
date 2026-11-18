@@ -137,19 +137,19 @@ IopInitLookasideLists(VOID)
 
     /* Allocate the global lookaside list buffer */
     CurrentList = ExAllocatePoolWithTag(NonPagedPool,
-                                        4 * KeNumberProcessors *
+                                        4 * KiNumberProcessors *
                                         sizeof(GENERAL_LOOKASIDE),
                                         TAG_IO);
 
     /* Loop all processors */
-    for (i = 0; i < KeNumberProcessors; i++)
+    for (i = 0; i < KiNumberProcessors; i++)
     {
         /* Get the PRCB for this CPU */
         Prcb = KiProcessorBlock[i];
         DPRINT("Setting up lookaside for CPU: %x, PRCB: %p\n", i, Prcb);
 
         /* Write IRP credit limit */
-        Prcb->LookasideIrpFloat = 512 / KeNumberProcessors;
+        Prcb->LookasideIrpFloat = 512 / KiNumberProcessors;
 
         /* Set the I/O Completion List */
         Prcb->PPLookasideList[LookasideCompletionList].L = &IoCompletionPacketLookaside;

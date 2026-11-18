@@ -723,7 +723,7 @@ EtwpStartLogger(
         Logger->BufferSizeKb = ETWP_MAX_BUFFER_SIZE;
     Logger->BufferSize = Logger->BufferSizeKb << 10;
 
-    MinimumBuffers = 2 * (ULONG)KeNumberProcessors;
+    MinimumBuffers = 2 * KiNumberProcessors;
     Logger->MinimumBuffers = max(Info->MinimumBuffers, MinimumBuffers);
     Logger->MaximumBuffers = Info->MaximumBuffers ? Info->MaximumBuffers : MinimumBuffers + ETWP_EXTRA_BUFFERS;
     if (Logger->MaximumBuffers < Logger->MinimumBuffers)
