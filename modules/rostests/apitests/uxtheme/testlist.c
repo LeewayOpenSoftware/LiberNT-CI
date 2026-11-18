@@ -14,6 +14,7 @@ extern void func_NonClientActivate(void);
 extern void func_NonClientBorder(void);
 extern void func_NonClientCaption(void);
 extern void func_NonClientHitTest(void);
+extern void func_PartSize(void);
 extern void func_SetThemeAppProperties(void);
 extern void func_SetWindowTheme(void);
 extern void func_TextScaling(void);
@@ -40,6 +41,7 @@ const struct test winetest_testlist[] =
     { "NonClientBorder", func_NonClientBorder },
     { "NonClientCaption", func_NonClientCaption },
     { "NonClientHitTest", func_NonClientHitTest },
+    { "PartSize", func_PartSize },
     { "SetWindowTheme", func_SetWindowTheme },
     { "TextScaling",    func_TextScaling },
     { "SetThemeAppProperties", func_SetThemeAppProperties },
