@@ -748,6 +748,9 @@ BOOL WINAPI EvtClose(EVT_HANDLE handle)
     case EVT_TYPE_BOOKMARK:
         heap_free(((struct evt_bookmark *)obj)->channel);
         break;
+    case EVT_TYPE_PUBLISHER:
+        evt_free_publisher((struct evt_publisher *)obj);
+        break;
     case EVT_TYPE_SUBSCRIPTION:
         /* Frees the object itself, possibly later from its own thread */
         return evt_close_subscription((struct evt_subscription *)obj);

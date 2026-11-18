@@ -602,3 +602,18 @@ BOOL WINAPI EvtUpdateBookmark(EVT_HANDLE bookmark, EVT_HANDLE event_handle)
     bm->valid = TRUE;
     return TRUE;
 }
+
+const WCHAR *evt_record_source_name(const EVENTLOGRECORD *r)
+{
+    return record_source(r);
+}
+
+const WCHAR *evt_record_string_at(const EVENTLOGRECORD *r, DWORD n)
+{
+    return record_string(r, n);
+}
+
+WCHAR *evt_event_xml(const struct evt_event *event)
+{
+    return event_xml(event);
+}

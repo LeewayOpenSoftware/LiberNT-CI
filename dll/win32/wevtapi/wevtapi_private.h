@@ -32,7 +32,8 @@ enum
     EVT_TYPE_EVENT,
     EVT_TYPE_RENDER_CONTEXT,
     EVT_TYPE_BOOKMARK,
-    EVT_TYPE_SUBSCRIPTION
+    EVT_TYPE_SUBSCRIPTION,
+    EVT_TYPE_PUBLISHER
 };
 
 struct evt_object
@@ -122,6 +123,14 @@ struct evt_bookmark
     BOOL valid;
 };
 
+struct evt_publisher
+{
+    struct evt_object hdr;
+    WCHAR *name;                 /* NULL when opened without an identity */
+    WCHAR *channel;              /* the classic log that registers the source */
+    LCID locale;
+};
+
 struct evt_subscription
 {
     struct evt_object hdr;
@@ -158,6 +167,12 @@ ULONGLONG evt_record_filetime(const EVENTLOGRECORD *record);
 
 /* render.c */
 void evt_free_render_context(struct evt_render_context *context);
+const WCHAR *evt_record_source_name(const EVENTLOGRECORD *r);
+const WCHAR *evt_record_string_at(const EVENTLOGRECORD *r, DWORD n);
+WCHAR *evt_event_xml(const struct evt_event *event);
+
+/* publisher.c */
+void evt_free_publisher(struct evt_publisher *pub);
 
 /* subscribe.c */
 BOOL evt_subscription_next(struct evt_subscription *sub, DWORD size, EVT_HANDLE *events, DWORD *returned);

@@ -4,6 +4,7 @@ spec2def(wevtapi.dll wevtapi.spec ADD_IMPORTLIB)
 
 list(APPEND SOURCE
     main.c
+    publisher.c
     query.c
     render.c
     subscribe.c
