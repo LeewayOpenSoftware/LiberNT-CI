@@ -93,6 +93,17 @@ HalpSendSoftwareInterrupt(
     _In_ KAFFINITY TargetSet,
     _In_ KIRQL Irql);
 
+VOID
+NTAPI
+HalpRequestIpiEx(
+    _In_ PKAFFINITY_EX TargetSet);
+
+VOID
+NTAPI
+HalpSendSoftwareInterruptProcessor(
+    _In_ ULONG ProcessorIndex,
+    _In_ KIRQL Irql);
+
 #endif // _M_AMD64
 
 ULONG

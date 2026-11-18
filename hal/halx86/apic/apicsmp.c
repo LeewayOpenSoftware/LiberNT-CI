@@ -17,6 +17,7 @@
 
 
 extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
+extern HALP_APIC_INFO_TABLE HalpApicInfoTable;
 
 /* INTERNAL FUNCTIONS *********************************************************/
 
@@ -307,6 +308,96 @@ HalpSendSoftwareInterrupt(
 
     /* Request the IPI with the specified vector */
     HalpRequestIpiSpecifyVector(TargetSet, Vector);
+}
+
+/*!
+ *  \brief Requests an interrupt with a specified vector on one processor.
+ *
+ *  \param ProcessorIndex - The processor index (group * 64 + number).
+ *  \param Vector - Specifies the interrupt vector to be delivered.
+ */
+static
+VOID
+HalpRequestIpiProcessor(
+    _In_ ULONG ProcessorIndex,
+    _In_ UCHAR Vector)
+{
+    /* Group 0 keeps the KAFFINITY path and its broadcast shortcuts */
+    if (ProcessorIndex < sizeof(KAFFINITY) * 8)
+    {
+        HalpRequestIpiSpecifyVector(AFFINITY_MASK(ProcessorIndex), Vector);
+        return;
+    }
+
+    /* Only processors this HAL has initialized */
+    if ((ProcessorIndex >= HalpApicInfoTable.ProcessorCount) ||
+        (HalpProcessorIdentity[ProcessorIndex].ProcessorPrcb == NULL))
+    {
+        return;
+    }
+
+    ApicRequestGlobalInterrupt(HalpProcessorIdentity[ProcessorIndex].LapicId,
+                               Vector,
+                               APIC_MT_Fixed,
+                               APIC_TGM_Edge,
+                               APIC_DSH_Destination);
+}
+
+/*!
+ *  \brief Requests an IPI on the processors of a multi-group target set.
+ *
+ *  \param TargetSet - Specifies the processors, in every group.
+ */
+VOID
+NTAPI
+HalpRequestIpiEx(
+    _In_ PKAFFINITY_EX TargetSet)
+{
+    USHORT Groups = min(TargetSet->Count, TargetSet->Size);
+    USHORT Group;
+    KAFFINITY Mask;
+    ULONG Bit;
+
+    if ((Groups != 0) && (TargetSet->Bitmap[0] != 0))
+        HalpRequestIpiSpecifyVector(TargetSet->Bitmap[0], APIC_IPI_VECTOR);
+
+    for (Group = 1; Group < Groups; Group++)
+    {
+        Mask = TargetSet->Bitmap[Group];
+        while (Mask != 0)
+        {
+            NT_VERIFY(BitScanForwardAffinity(&Bit, Mask) != 0);
+            Mask &= ~AFFINITY_MASK(Bit);
+            HalpRequestIpiProcessor(((ULONG)Group * sizeof(KAFFINITY) * 8) + Bit,
+                                    APIC_IPI_VECTOR);
+        }
+    }
+}
+
+/*!
+ *  \brief Requests a software interrupt on one processor.
+ *
+ *  \param ProcessorIndex - The processor index.
+ *  \param Irql - Specifies the IRQL of the software interrupt.
+ */
+VOID
+NTAPI
+HalpSendSoftwareInterruptProcessor(
+    _In_ ULONG ProcessorIndex,
+    _In_ KIRQL Irql)
+{
+    if (Irql == APC_LEVEL)
+    {
+        HalpRequestIpiProcessor(ProcessorIndex, APC_VECTOR);
+    }
+    else if (Irql == DISPATCH_LEVEL)
+    {
+        HalpRequestIpiProcessor(ProcessorIndex, DISPATCH_VECTOR);
+    }
+    else
+    {
+        ASSERT(FALSE);
+    }
 }
 
 /*!

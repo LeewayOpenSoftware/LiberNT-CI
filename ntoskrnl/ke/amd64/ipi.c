@@ -45,6 +45,42 @@ static KI_IPI_MAILBOX KiIpiMailbox[KI_MAXIMUM_PROCESSORS];
 
 /* FUNCTIONS *****************************************************************/
 
+/* HalRequestIpi takes a KAFFINITY_EX; Size 1 describes group 0 only */
+static
+VOID
+KiHalRequestIpiGroup0(
+    _In_ KAFFINITY Targets)
+{
+    KAFFINITY_EX TargetSet;
+
+    TargetSet.Count = 1;
+    TargetSet.Size = 1;
+    TargetSet.Reserved = 0;
+    TargetSet.Bitmap[0] = Targets;
+    HalRequestIpi(0, &TargetSet);
+}
+
+static
+VOID
+KiIpiQueueMailbox(
+    _In_ ULONG Target,
+    _In_ PPROCESSOR_NUMBER Source,
+    _In_ ULONG IpiRequest)
+{
+    PKI_IPI_MAILBOX Mailbox = &KiIpiMailbox[Target];
+
+    ASSERT(KiProcessorBlock[Target] != NULL);
+    if (IpiRequest == KI_IPI_MEMORY)
+    {
+        InterlockedOr64((PLONG64)&Mailbox->MemorySenders[Source->Group],
+                        (LONG64)KiAffinityForProcessorIndex(Source->Number));
+    }
+    else
+    {
+        InterlockedOr64(&Mailbox->Requests, IpiRequest);
+    }
+}
+
 static
 KAFFINITY
 KiIpiQueueRequest(
@@ -63,19 +99,7 @@ KiIpiQueueRequest(
 
     while (BitScanForwardAffinity(&Processor, TargetSet))
     {
-        PKI_IPI_MAILBOX Mailbox = &KiIpiMailbox[Processor];
-
-        ASSERT(KiProcessorBlock[Processor] != NULL);
-        if (IpiRequest == KI_IPI_MEMORY)
-        {
-            InterlockedOr64((PLONG64)&Mailbox->MemorySenders[Source.Group],
-                            (LONG64)KiAffinityForProcessorIndex(Source.Number));
-        }
-        else
-        {
-            InterlockedOr64(&Mailbox->Requests, IpiRequest);
-        }
-
+        KiIpiQueueMailbox(Processor, &Source, IpiRequest);
         TargetSet &= ~AFFINITY_MASK(Processor);
     }
 
@@ -88,17 +112,23 @@ KiIpiSend(
     _In_ KAFFINITY TargetSet,
     _In_ ULONG IpiRequest)
 {
+    ULONG Processor;
+
     /* Check if we can send the IPI directly */
     if (IpiRequest == IPI_APC)
     {
-        HalSendSoftwareInterrupt(TargetSet, APC_LEVEL);
+        while (BitScanForwardAffinity(&Processor, TargetSet))
+        {
+            HalSendSoftwareInterrupt(Processor, APC_LEVEL);
+            TargetSet &= ~AFFINITY_MASK(Processor);
+        }
     }
     else if (IpiRequest == IPI_DPC)
     {
         TargetSet = KiIpiQueueRequest(TargetSet, IPI_DPC);
 
         if (TargetSet != 0)
-            HalRequestIpi(TargetSet);
+            KiHalRequestIpiGroup0(TargetSet);
     }
     else if (IpiRequest == IPI_FREEZE)
     {
@@ -113,7 +143,7 @@ KiIpiSend(
         TargetSet = KiIpiQueueRequest(TargetSet, IPI_FREEZE);
 
         if (TargetSet != 0)
-            HalRequestIpi(TargetSet);
+            KiHalRequestIpiGroup0(TargetSet);
     }
     else
     {
@@ -126,7 +156,39 @@ KiSendMemoryIpi(ULONG64 Targets)
 {
     KAFFINITY Queued = KiIpiQueueRequest((KAFFINITY)Targets, KI_IPI_MEMORY);
     if (Queued != 0)
-        HalRequestIpi(Queued);
+        KiHalRequestIpiGroup0(Queued);
+}
+
+VOID
+FASTCALL
+KiIpiSendProcessor(
+    _In_ ULONG Index,
+    _In_ ULONG IpiRequest)
+{
+    PROCESSOR_NUMBER Source;
+    PROCESSOR_NUMBER Target;
+    KAFFINITY_EX TargetSet;
+    USHORT Group;
+
+    ASSERT(Index < (ULONG)KeNumberProcessors);
+    if (IpiRequest == IPI_APC)
+    {
+        HalSendSoftwareInterrupt(Index, APC_LEVEL);
+        return;
+    }
+
+    ASSERT(IpiRequest == IPI_DPC);
+    KiProcessorNumberFromIndex(KeGetCurrentPrcb()->Number, &Source);
+    KiIpiQueueMailbox(Index, &Source, IpiRequest);
+
+    KiProcessorNumberFromIndex(Index, &Target);
+    TargetSet.Count = Target.Group + 1;
+    TargetSet.Size = Target.Group + 1;
+    TargetSet.Reserved = 0;
+    for (Group = 0; Group <= Target.Group; Group++)
+        TargetSet.StaticBitmap[Group] = 0;
+    TargetSet.StaticBitmap[Target.Group] = KiAffinityForProcessorIndex(Target.Number);
+    HalRequestIpi(0, &TargetSet);
 }
 
 static
@@ -275,7 +337,7 @@ KeIpiGenericCall(
         IpiTargets = KiIpiQueueRequest(Targets, KI_IPI_GENERIC_CALL);
         ASSERT(IpiTargets == Targets);
         if (IpiTargets != 0)
-            HalRequestIpi(IpiTargets);
+            KiHalRequestIpiGroup0(IpiTargets);
 
         while (KiGenericCallPacket.TargetsRemaining != 0)
         {
