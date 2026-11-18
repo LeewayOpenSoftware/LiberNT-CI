@@ -1362,34 +1362,6 @@ RtlWalkFrameChain(
   _In_ ULONG Flags);
 
 $endif (_NTDDK_)
-#define FLUSH_NV_MEMORY_IN_FLAG_NO_DRAIN 0x00000001
-
-_IRQL_requires_max_(APC_LEVEL)
-NTSYSAPI
-NTSTATUS
-NTAPI
-RtlGetNonVolatileToken(
-  _In_ PVOID NvBuffer,
-  _In_ SIZE_T Size,
-  _Out_ PVOID *NvToken);
-
-_IRQL_requires_max_(APC_LEVEL)
-NTSYSAPI
-NTSTATUS
-NTAPI
-RtlFreeNonVolatileToken(
-  _In_ PVOID NvToken);
-
-_IRQL_requires_max_(APC_LEVEL)
-NTSYSAPI
-NTSTATUS
-NTAPI
-RtlFlushNonVolatileMemory(
-  _In_ PVOID NvToken,
-  _In_ PVOID NvBuffer,
-  _In_ SIZE_T Size,
-  _In_ ULONG Flags);
-
 $if (_NTIFS_)
 
 _Must_inspect_result_
@@ -2768,6 +2740,34 @@ RtlUnicodeToUTF8N(
   _Out_ PULONG UTF8StringActualByteCount,
   _In_reads_bytes_(UnicodeStringByteCount) PCWCH UnicodeStringSource,
   _In_ ULONG UnicodeStringByteCount);
+
+#define FLUSH_NV_MEMORY_IN_FLAG_NO_DRAIN 0x00000001
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetNonVolatileToken(
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _Out_ PVOID *NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFreeNonVolatileToken(
+  _In_ PVOID NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlushNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
 
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
