@@ -78,6 +78,7 @@ KMT_TESTFUNC Test_XpdmVersion;
 KMT_TESTFUNC Test_PoIrp;
 KMT_TESTFUNC Test_PoBatteryState;
 KMT_TESTFUNC Test_PoFxState;
+KMT_TESTFUNC Test_PoFxTeamC;
 KMT_TESTFUNC Test_NdisSgDma;
 KMT_TESTFUNC Test_IoDeviceNumaNode;
 KMT_TESTFUNC Test_ExWddmPoFx;
@@ -175,6 +176,7 @@ const KMT_TEST TestList[] =
     { "ExWddmPoFx",                    Test_ExWddmPoFx },
     { "PoBatteryState",                Test_PoBatteryState },
     { "PoFxState",                     Test_PoFxState },
+    { "PoFxTeamC",                    Test_PoFxTeamC },
     { "IoDeviceNumaNode",              Test_IoDeviceNumaNode },
     { "BatteryClassNotify",           Test_BatteryClassNotify },
     { "XpdmVersion",                  Test_XpdmVersion },

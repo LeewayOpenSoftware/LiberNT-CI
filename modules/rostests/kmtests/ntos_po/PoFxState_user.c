@@ -134,3 +134,8 @@ START_TEST(IoDeviceNumaNode)
 {
     TestWithPnpDevice("IoDeviceNumaNode");
 }
+
+START_TEST(PoFxTeamC)
+{
+    TestWithPnpDevice("PoFxTeamC");
+}
