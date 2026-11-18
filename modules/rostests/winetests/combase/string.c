@@ -600,7 +600,7 @@ static void test_marshal(void)
     const ULONG exp_context = sizeof(void *) == 8 ? WDT_INPROC64_CALL : WDT_INPROC_CALL;
     static const WCHAR str_buf[] = L"marshal_test1";
     static const ULONG str_len = ARRAY_SIZE(str_buf) - 1;
-    static const ULONG str_bytes = str_len * sizeof(WCHAR);
+    const ULONG str_bytes = str_len * sizeof(WCHAR);
     HSTRING str, str_empty = NULL, str2 = NULL;
     struct hstring_wire_inproc *inproc;
     struct hstring_wire_local *local;

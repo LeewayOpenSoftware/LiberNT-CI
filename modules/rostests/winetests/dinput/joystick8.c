@@ -1876,10 +1876,10 @@ static void test_simple_joystick( DWORD version )
         .todo_extra = version < 0x700,
     };
 
-    const DIEFFECTINFOW expect_effects[] = {};
+    const DIEFFECTINFOW expect_effects[1] = {{0}}; /* no effect expected */
     struct check_effects_params check_effects_params =
     {
-        .expect_count = ARRAY_SIZE(expect_effects),
+        .expect_count = 0,
         .expect_effects = expect_effects,
     };
     DIPROPGUIDANDPATH prop_guid_path =
@@ -6881,7 +6881,10 @@ START_TEST( joystick8 )
 
     argc = winetest_get_mainargs( &argv );
     if (argc >= 3 && !strcmp( argv[2], "test_rawinput_desktop" ))
-        return test_rawinput_desktop( argv[3], argc > 4 && !strcmp( argv[4], "input" ) );
+    {
+        test_rawinput_desktop( argv[3], argc > 4 && !strcmp( argv[4], "input" ) );
+        return;
+    }
 
     dinput_test_init();
     if (!bus_device_start()) goto done;

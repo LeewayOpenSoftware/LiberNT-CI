@@ -31,7 +31,12 @@
 #include "wingdi.h"
 #include "winuser.h"
 #include "winreg.h"
+#ifdef _MSC_VER
+/* CMake gives win.c the Wine header directory with -iquote, which MSVC has not */
+#include "wine/winternl.h"
+#else
 #include "winternl.h"
+#endif
 
 #include "wine/test.h"
 

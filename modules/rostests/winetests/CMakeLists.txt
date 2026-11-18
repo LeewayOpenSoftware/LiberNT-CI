@@ -5,7 +5,8 @@ if(MSVC)
         /wd4146 # C4146: unary minus operator applied to unsigned type, result still unsigned
         /wd4189 # C4189: 'x': local variable is initialized but not referenced
         /wd4267 # C4267: '=': conversion from 'size_t' to 'int', possible loss of data
-        /wd4305) # C4305: '=': truncation from 'double' to 'FLOAT'
+        /wd4305 # C4305: '=': truncation from 'double' to 'FLOAT'
+        /Zc:preprocessor) # Wine tests put #ifdef lines inside macro arguments, which the traditional preprocessor rejects
     if(ARCH STREQUAL "amd64")
         add_compile_options(
             /wd4312 # C4312: 'type cast': conversion from 'unsigned int' to 'char *' of greater size

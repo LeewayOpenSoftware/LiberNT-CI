@@ -559,7 +559,7 @@ void bus_device_stop(void)
 
 BOOL find_hid_device_path( WCHAR *device_path )
 {
-    char buffer[FIELD_OFFSET( SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath[MAX_PATH] )] = {0};
+    char buffer[FIELD_OFFSET( SP_DEVICE_INTERFACE_DETAIL_DATA_W, DevicePath ) + MAX_PATH * sizeof(((SP_DEVICE_INTERFACE_DETAIL_DATA_W *)0)->DevicePath[0])] = {0};
     SP_DEVICE_INTERFACE_DATA iface = {sizeof(SP_DEVICE_INTERFACE_DATA)};
     SP_DEVICE_INTERFACE_DETAIL_DATA_W *iface_detail = (void *)buffer;
     SP_DEVINFO_DATA device = {sizeof(SP_DEVINFO_DATA)};

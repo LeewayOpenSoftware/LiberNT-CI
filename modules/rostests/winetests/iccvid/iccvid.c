@@ -23,8 +23,8 @@
 
 static void test_formats(void)
 {
-    char in_buffer[offsetof(BITMAPINFO, bmiColors[111])] = {0};
-    char buffer[offsetof(BITMAPINFO, bmiColors[111])];
+    char in_buffer[offsetof( BITMAPINFO, bmiColors ) + 111 * sizeof(((BITMAPINFO *)0)->bmiColors[0])] = {0};
+    char buffer[offsetof( BITMAPINFO, bmiColors ) + 111 * sizeof(((BITMAPINFO *)0)->bmiColors[0])];
     BITMAPINFOHEADER *in = (BITMAPINFOHEADER *)in_buffer;
     BITMAPINFO *out = (BITMAPINFO *)buffer;
     LRESULT ret;
