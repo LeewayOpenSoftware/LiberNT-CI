@@ -189,6 +189,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExLicenseDif.c
     ntos_ex/ExWddm.c
     ntos_fsrtl/FsRtlDissect.c
+    ntos_fsrtl/FsRtlVolumeNotifyKM.c
     ntos_fsrtl/FsRtlExpression.c
     ntos_fsrtl/FsRtlFileLockState.c
     ntos_fsrtl/FsRtlLegal.c
@@ -199,6 +200,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_fsrtl/FsRtlVolumeStartup.c
     ntos_io/IoDevicePropertyData.c
     ntos_io/IoBuildIoctlKM.c
+    ntos_io/IoIrpExtensionKM.c
     ntos_io/IoLargeMemoryResource.c
     ntos_io/IoArbiter.c
     ntos_io/IoCancelKM.c
@@ -392,6 +394,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ps/PsWddm.c
     ntos_ps/PsProcessInfo.c
     ntos_ps/PsQuota.c
+    ntos_ps/PsSilo.c
     ntos_ps/PsGetVersion.c
     ntos_ps/PsSystemThread.c
     ntos_ps/PsPico.c
@@ -415,6 +418,8 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlImageKM.c
     rtl/RtlIsProcessorFeaturePresentKM.c
     rtl/RtlHashTableKM.c
+    rtl/RtlQsortKM.c
+    rtl/RtlCapabilityKM.c
     rtl/RtlTimeKM.c
     rtl/RtlIsValidOemCharacter.c
     rtl/RtlModern.c

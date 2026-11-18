@@ -1174,6 +1174,7 @@
 @ stdcall RtlAbsoluteToSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlAddAccessAllowedAce(ptr long long ptr)
 @ stdcall RtlAddAccessAllowedAceEx(ptr long long long ptr)
+@ stdcall RtlAddAccessDeniedAce(ptr long long ptr)
 @ stdcall RtlAddAce(ptr long long ptr long)
 @ stdcall RtlAddAtomToAtomTable(ptr wstr ptr)
 @ stdcall RtlAddRange(ptr long long long long long long ptr ptr)
@@ -1303,6 +1304,7 @@
 @ stdcall RtlGetSetBootStatusData(ptr long long ptr long long)
 @ stdcall RtlGetVersion(ptr)
 @ stdcall RtlHashUnicodeString(ptr long long ptr)
+@ stdcall RtlIdentifierAuthoritySid(ptr)
 @ stdcall RtlImageDirectoryEntryToData(ptr long long ptr)
 @ stdcall RtlImageNtHeader(ptr)
 @ stdcall RtlInitAnsiString(ptr str)
@@ -2323,7 +2325,7 @@
 @ stub -arch=win64 FsRtlHeatLogIo
 @ stub -arch=win64 FsRtlHeatLogTierMove
 @ stub -arch=win64 FsRtlHeatUninit
-@ stub -arch=win64 FsRtlIncrementCcFastMdlReadWait
+@ stdcall -arch=win64 FsRtlIncrementCcFastMdlReadWait()
 @ stdcall FsRtlInitExtraCreateParameterLookasideList(ptr long ptr long)
 @ stub -arch=win64 FsRtlInitializeBaseMcbEx
 @ stub -arch=win64 FsRtlInitializeEofLock
@@ -2338,9 +2340,9 @@
 @ stdcall FsRtlIsEcpFromUserMode(ptr)
 @ stub -arch=win64 FsRtlIsExtentDangling
 @ stub -arch=win64 FsRtlIsMobileOS
-@ stub -arch=win64 FsRtlIsNameInUnUpcasedExpression
+@ stdcall -arch=win64 FsRtlIsNameInUnUpcasedExpression(ptr ptr long ptr)
 @ stub -arch=win64 FsRtlIsNonEmptyDirectoryReparsePointAllowed
-@ stub -arch=win64 FsRtlIsSystemPagingFile
+@ stdcall -arch=win64 FsRtlIsSystemPagingFile(ptr)
 @ stub -arch=win64 FsRtlIssueDeviceIoControl
 @ stub -arch=win64 FsRtlKernelFsControlFile
 @ stub -arch=win64 FsRtlLogCcFlushError
@@ -2352,7 +2354,7 @@
 @ stub -arch=win64 FsRtlNotifyFilterChangeDirectoryLite
 @ stub -arch=win64 FsRtlNotifyFilterReportChangeLite
 @ stub -arch=win64 FsRtlNotifyFilterReportChangeLiteEx
-@ stub -arch=win64 FsRtlNotifyVolumeEventEx
+@ stdcall -arch=win64 FsRtlNotifyVolumeEventEx(ptr long ptr)
 @ stub -arch=win64 FsRtlOpenFileSystemRegistryKeyFromFsGuid
 @ stub -arch=win64 FsRtlOplockBreakH2
 @ stub -arch=win64 FsRtlOplockBreakToNoneEx
@@ -2438,7 +2440,7 @@
 @ stdcall IoCleanupIrp(ptr)
 @ stdcall IoClearActivityIdThread(ptr)
 @ stub -arch=win64 IoClearAdapterCryptoEngineExtension
-@ stub -arch=win64 IoClearFsTrackOffsetState
+@ stdcall -arch=win64 IoClearFsTrackOffsetState(ptr)
 @ stdcall IoClearIrpExtraCreateParameter(ptr)
 @ stub -arch=win64 IoComputeRedirectionTrustLevel
 @ stub -arch=win64 IoConvertFileHandleToKernelHandle
@@ -2449,7 +2451,7 @@
 @ stub -arch=win64 IoCreateStreamFileObjectEx2
 @ stub -arch=win64 IoCreateSymbolicLink2
 @ stdcall IoCreateSystemThread(ptr ptr long ptr ptr ptr ptr ptr)
-@ stub -arch=win64 IoDecrementKeepAliveCount
+@ stdcall -arch=win64 IoDecrementKeepAliveCount(ptr ptr)
 @ stub -arch=win64 IoDriverProxyCreateHotSwappableWorkerThread
 @ stub -arch=win64 IoDuplicateDependency
 @ stub -arch=win64 IoEnumerateKsrPersistentMemoryEx
@@ -2469,8 +2471,8 @@
 @ stdcall IoGetDriverDirectory(ptr long long ptr)
 @ stub -arch=win64 IoGetDriverProxyEndpointWrapper
 @ stub -arch=win64 IoGetDriverProxyFeatures
-@ stub -arch=win64 IoGetFsTrackOffsetState
-@ stub -arch=win64 IoGetFsZeroingOffset
+@ stdcall -arch=win64 IoGetFsTrackOffsetState(ptr ptr ptr)
+@ stdcall -arch=win64 IoGetFsZeroingOffset(ptr ptr)
 @ stub -arch=win64 IoGetGenericIrpExtension
 @ stdcall -arch=win64 IoGetInitiatorProcess(ptr)
 @ stub -arch=win64 IoGetIoAttributionHandle
@@ -2481,20 +2483,20 @@
 @ stub -arch=win64 IoGetOplockKeyContextEx
 @ stub -arch=win64 IoGetSfioStreamIdentifier
 @ stub -arch=win64 IoGetShadowFileInformation
-@ stub -arch=win64 IoGetSilo
-@ stub -arch=win64 IoGetSiloParameters
+@ stdcall -arch=win64 IoGetSilo(ptr)
+@ stdcall -arch=win64 IoGetSiloParameters(ptr)
 @ stub -arch=win64 IoGetSymlinkSupportInformation
 @ stdcall IoGetTransactionParameterBlock(ptr)
-@ stub -arch=win64 IoIncrementKeepAliveCount
+@ stdcall -arch=win64 IoIncrementKeepAliveCount(ptr ptr)
 @ stub -arch=win64 IoInitializeIrpEx
 @ stub -arch=win64 IoInitializeMiniCompletionPacket
 @ stdcall IoInitializeWorkItem(ptr ptr)
-@ stub -arch=win64 IoIrpHasFsTrackOffsetExtensionType
+@ stdcall -arch=win64 IoIrpHasFsTrackOffsetExtensionType(ptr)
 @ stub -arch=win64 IoIsActivityTracingEnabled
 @ stdcall IoIsFileObjectIgnoringSharing(ptr)
 @ stub -arch=win64 IoIsInitiator32bitProcess
 @ stub -arch=win64 IoIsValidIrpStatus
-@ stub -arch=win64 IoMakeAssociatedIrpEx
+@ stdcall -arch=win64 IoMakeAssociatedIrpEx(ptr ptr long)
 @ stub -arch=win64 IoMapKsrPersistentMemoryEx
 @ stdcall IoOpenDriverRegistryKey(ptr long long long ptr)
 @ stdcall IoPropagateActivityIdToThread(ptr ptr ptr)
@@ -2532,8 +2534,8 @@
 @ stub -arch=win64 IoSetAdapterCryptoEngineExtension
 @ stub -arch=win64 IoSetDependency
 @ stdcall IoSetFileObjectIgnoreSharing(ptr)
-@ stub -arch=win64 IoSetFsTrackOffsetState
-@ stub -arch=win64 IoSetFsZeroingOffset
+@ stdcall -arch=win64 IoSetFsTrackOffsetState(ptr ptr long)
+@ stdcall -arch=win64 IoSetFsZeroingOffset(ptr long)
 @ stub -arch=win64 IoSetFsZeroingOffsetRequired
 @ stub -arch=win64 IoSetGenericIrpExtension
 @ stub -arch=win64 IoSetIoAttributionIrp
@@ -2822,12 +2824,12 @@
 @ stdcall -arch=win64 PcwRegister(ptr ptr)
 @ stdcall -arch=win64 PcwUnregister(ptr)
 @ stub -arch=win64 PfFileInfoNotify
-@ stub -arch=win64 PoClearPowerRequest
+@ stdcall -arch=win64 PoClearPowerRequest(ptr long)
 @ stub -arch=win64 PoCpuIdledSinceLastCallImprecise
 @ stdcall PoCreatePowerLimitRequest(ptr ptr ptr ptr)
-@ stub -arch=win64 PoCreatePowerRequest
+@ stdcall -arch=win64 PoCreatePowerRequest(ptr ptr ptr)
 @ stdcall PoDeletePowerLimitRequest(ptr)
-@ stub -arch=win64 PoDeletePowerRequest
+@ stdcall -arch=win64 PoDeletePowerRequest(ptr)
 @ stub -arch=arm64 PoDirectedDripsClearDeviceFlags
 @ stub -arch=arm64 PoDirectedDripsSetDeviceFlags
 @ stdcall PoDisableSleepStates(long long ptr)
@@ -2865,7 +2867,7 @@
 @ stub -arch=win64 PoSetFixedWakeSource
 @ stub -arch=win64 PoSetPowerButtonHoldState
 @ stdcall PoSetPowerLimitValue(ptr ptr long ptr)
-@ stub -arch=win64 PoSetPowerRequest
+@ stdcall -arch=win64 PoSetPowerRequest(ptr long)
 @ stub -arch=win64 PoSetSystemWakeDevice
 @ stdcall PoSetUserPresent(long)
 @ stub -arch=win64 PoStartDeviceBusy
@@ -2876,31 +2878,31 @@
 @ stdcall PsAcquireProcessExitSynchronization(ptr)
 @ stub -arch=win64 PsAcquireSiloHardReference
 @ stdcall PsAdjustWin32kPriorityFloor(ptr long)
-@ stub -arch=win64 PsAllocSiloContextSlot
+@ stdcall -arch=win64 PsAllocSiloContextSlot(long ptr)
 @ stub -arch=win64 PsAllocateAffinityToken
 @ stub -arch=win64 PsAssignProcessToJobObject
 @ stdcall PsAttachSiloToCurrentThread(ptr)
 @ stub -arch=win64 PsChargeProcessWakeCounter
 @ stub -arch=win64 PsCheckProcessFileSigningLevel
-@ stub -arch=win64 PsCreateSiloContext
+@ stdcall -arch=win64 PsCreateSiloContext(ptr long long ptr ptr)
 @ stub -arch=win64 PsCreateSystemThreadEx
 @ stdcall PsDereferenceKernelStack(ptr)
-@ stub -arch=win64 PsDereferenceSiloContext
+@ stdcall -arch=win64 PsDereferenceSiloContext(ptr)
 @ stdcall PsDetachSiloFromCurrentThread(ptr)
 @ stdcall PsEnterPriorityRegion()
 @ stub -arch=win64 PsFreeAffinityToken
-@ stub -arch=win64 PsFreeSiloContextSlot
+@ stdcall -arch=win64 PsFreeSiloContextSlot(long)
 @ stdcall PsGetCurrentServerSilo()
 @ stub -arch=win64 PsGetCurrentServerSiloName
-@ stub -arch=win64 PsGetCurrentSilo
+@ stdcall -arch=win64 PsGetCurrentSilo()
 @ stub -arch=win64 PsGetEffectiveContainerId
-@ stub -arch=win64 PsGetEffectiveServerSilo
+@ stdcall -arch=win64 PsGetEffectiveServerSilo(ptr)
 @ stdcall PsGetHostSilo()
 @ stdcall PsGetJobProperty(ptr ptr)
 @ stub -arch=win64 PsGetJobServerSilo
 @ stub -arch=win64 PsGetJobSilo
-@ stub -arch=win64 PsGetParentSilo
-@ stub -arch=win64 PsGetPermanentSiloContext
+@ stdcall -arch=win64 PsGetParentSilo(ptr)
+@ stdcall -arch=win64 PsGetPermanentSiloContext(ptr long ptr)
 @ stub -arch=win64 PsGetProcessActiveThreadCount
 @ stdcall PsGetProcessCommonJob(ptr ptr)
 @ stdcall PsGetProcessDxgProcess(ptr)
@@ -2913,16 +2915,16 @@
 @ stdcall -version=0xA00+ PsGetProcessStartKey(ptr)
 @ stdcall PsGetServerSiloServiceSessionId(ptr)
 @ stub -arch=win64 PsGetSiloContainerId
-@ stub -arch=win64 PsGetSiloContext
+@ stdcall -arch=win64 PsGetSiloContext(ptr long ptr)
 @ stub -arch=win64 PsGetSiloIdentifier
-@ stub -arch=win64 PsGetSiloMonitorContextSlot
+@ stdcall -arch=win64 PsGetSiloMonitorContextSlot(ptr)
 @ stub -arch=win64 PsGetThreadCreateTime
 @ stub -arch=win64 PsGetThreadExitStatus
 @ stdcall PsGetThreadProperty(ptr ptr long)
-@ stub -arch=win64 PsGetThreadServerSilo
+@ stdcall -arch=win64 PsGetThreadServerSilo(ptr)
 @ stdcall PsGetWin32KFilterSet()
-@ stub -arch=win64 PsInsertPermanentSiloContext
-@ stub -arch=win64 PsInsertSiloContext
+@ stdcall -arch=win64 PsInsertPermanentSiloContext(ptr long ptr)
+@ stdcall -arch=win64 PsInsertSiloContext(ptr long ptr)
 @ stub -arch=win64 PsIsComponentEnabled
 @ stdcall PsIsCurrentThreadInServerSilo()
 @ stub -arch=win64 PsIsCurrentThreadPrefetching
@@ -2936,7 +2938,7 @@
 @ stdcall PsIsWin32KFilterEnabled()
 @ stdcall PsIsWin32KFilterEnabledForProcess(ptr)
 @ stdcall PsLeavePriorityRegion()
-@ stub -arch=win64 PsMakeSiloContextPermanent
+@ stdcall -arch=win64 PsMakeSiloContextPermanent(ptr long)
 @ stdcall PsPicoCreateProcess(long ptr ptr)
 @ stdcall PsPicoCreateThread(ptr ptr ptr ptr ptr)
 @ stdcall PsPicoGetProcessContext(ptr)
@@ -2956,11 +2958,11 @@
 @ stub -arch=win64 PsQuerySystemAvailableCpusCount
 @ stub -arch=win64 PsQueryTotalCycleTimeProcess
 @ stdcall PsReferenceKernelStack(ptr)
-@ stub -arch=win64 PsReferenceSiloContext
+@ stdcall -arch=win64 PsReferenceSiloContext(ptr)
 @ stub -arch=win64 PsRegisterAltSystemCallHandler
 @ stub -arch=win64 PsRegisterPicoProvider
 @ stub -arch=win64 PsRegisterProcessAvailableCpusChangeNotification
-@ stub -arch=win64 PsRegisterSiloMonitor
+@ stdcall -arch=win64 PsRegisterSiloMonitor(ptr ptr)
 @ stub -arch=win64 PsRegisterSyscallProvider
 @ stub -arch=win64 PsRegisterSystemAvailableCpusChangeNotification
 @ stdcall PsReleaseProcessExitSynchronization(ptr)
@@ -2979,7 +2981,7 @@
 @ stdcall PsSetProcessesWindowState(long ptr)
 @ stub -arch=win64 PsSetSystemMultipleGroupAffinityThread
 @ stdcall PsSetThreadProperty(ptr ptr ptr)
-@ stub -arch=win64 PsStartSiloMonitor
+@ stdcall -arch=win64 PsStartSiloMonitor(ptr)
 @ stub -arch=win64 PsTerminateServerSilo
 @ stdcall PsTlsAlloc(ptr long ptr)
 @ stdcall PsTlsFree(long)
@@ -2987,7 +2989,7 @@
 @ stdcall PsTlsSetValue(long ptr)
 @ stdcall PsUnEstablishWin32Callouts()
 @ stub -arch=win64 PsUnregisterAvailableCpusChangeNotification
-@ stub -arch=win64 PsUnregisterSiloMonitor
+@ stdcall -arch=win64 PsUnregisterSiloMonitor(ptr)
 @ stub -arch=win64 PsUnregisterSyscallProvider
 @ stdcall PsUpdateComponentPower(ptr long int64)
 @ stub -arch=win64 PsUpdateNetworkCounters
@@ -3008,7 +3010,7 @@
 @ stdcall RtlCapabilityCheckForSingleSessionSku(ptr ptr ptr)
 @ stdcall RtlCheckPortableOperatingSystem(ptr)
 @ stub -arch=win64 RtlCheckSystemBootStatusIntegrity
-@ stub -arch=win64 RtlCheckTokenCapability
+@ stdcall -arch=win64 RtlCheckTokenCapability(ptr ptr ptr)
 @ stdcall RtlCheckTokenMembership(ptr ptr ptr)
 @ stub -arch=win64 RtlCheckTokenMembershipEx
 @ stdcall -arch=win64 RtlClearAllBitsEx(ptr) RtlClearAllBits64
@@ -3016,7 +3018,7 @@
 @ stub -arch=win64 RtlClearBitsEx
 @ stdcall RtlCmDecodeMemIoResource(ptr ptr)
 @ stdcall RtlCmEncodeMemIoResource(ptr long int64 int64)
-@ stub -arch=win64 RtlCompareAltitudes
+@ stdcall -arch=win64 RtlCompareAltitudes(ptr ptr)
 @ stub -arch=win64 RtlCompareExchangePointerMapping
 @ stub -arch=win64 RtlCompareExchangePropertyStore
 @ stdcall RtlCompareUnicodeStrings(wstr long wstr long long)
@@ -3030,14 +3032,14 @@
 @ stdcall RtlCrc32(ptr long long)
 @ stdcall RtlCrc64(ptr long int64)
 @ stdcall RtlCreateAtomTableEx(long long ptr)
-@ stub -arch=win64 RtlCreateHashTableEx
-@ stub -arch=win64 RtlDecompressBufferEx
-@ stub -arch=win64 RtlDecompressBufferEx2
+@ stdcall -arch=win64 RtlCreateHashTableEx(ptr long long long)
+@ stdcall -arch=win64 RtlDecompressBufferEx(long ptr long ptr long ptr ptr)
+@ stdcall -arch=win64 RtlDecompressBufferEx2(long ptr long ptr long long ptr ptr)
 @ stub -arch=win64 RtlDecompressFragmentEx
 @ stub -arch=win64 RtlDeleteElementGenericTableAvlEx
-@ stub -arch=win64 RtlDeriveCapabilitySidsFromName
+@ stdcall -arch=win64 RtlDeriveCapabilitySidsFromName(ptr ptr ptr)
 @ stub -arch=win64 RtlDrainNonVolatileFlush
-@ stub -arch=win64 RtlEndStrongEnumerationHashTable
+@ stdcall -arch=win64 RtlEndStrongEnumerationHashTable(ptr ptr)
 @ stub -arch=win64 RtlEqualWnfChangeStamps
 @ stdcall RtlEthernetAddressToStringA(ptr ptr)
 @ stdcall RtlEthernetAddressToStringW(ptr ptr)
@@ -3048,7 +3050,7 @@
 @ stub -arch=win64 RtlExtractBitMapEx
 @ stub -arch=win64 RtlFillMemoryNonTemporal
 @ stub -arch=win64 RtlFillNonVolatileMemory
-@ stub -arch=win64 RtlFindAceByType
+@ stdcall -arch=win64 RtlFindAceByType(ptr long ptr)
 @ stdcall -arch=win64 RtlFindClearBitsAndSetEx(ptr int64 int64) RtlFindClearBitsAndSet64
 @ stub -arch=win64 RtlFindClearBitsEx
 @ stub -arch=win64 RtlFindClosestEncodableLength
@@ -3059,9 +3061,9 @@
 @ stdcall -arch=win64 RtlFindSetBitsEx(ptr int64 int64) RtlFindSetBits64
 @ stdcall RtlFindUnicodeSubstring(ptr ptr long)
 @ stub -arch=win64 RtlFlushFeatureUsage
-@ stub -arch=win64 RtlFlushNonVolatileMemory
+@ stdcall -arch=win64 RtlFlushNonVolatileMemory(ptr ptr long long)
 @ stub -arch=win64 RtlFlushNonVolatileMemoryRanges
-@ stub -arch=win64 RtlFreeNonVolatileToken
+@ stdcall -arch=win64 RtlFreeNonVolatileToken(ptr)
 @ stub -arch=win64 RtlFreeUTF8String
 @ stdcall RtlGenerateClass5Guid(ptr ptr long ptr)
 @ stdcall RtlGetAcesBufferSize(ptr ptr)
@@ -3077,9 +3079,9 @@
 @ stdcall RtlGetIntegerAtom(wstr ptr)
 @ stub -arch=win64 RtlGetLastRange
 @ stdcall -version=0xA00+ RtlGetMultiTimePrecise(ptr long ptr)
-@ stub -arch=win64 RtlGetNonVolatileToken
+@ stdcall -arch=win64 RtlGetNonVolatileToken(ptr long ptr)
 @ stdcall RtlGetNtSystemRoot()
-@ stub -arch=win64 RtlGetPersistedStateLocation
+@ stdcall -arch=win64 RtlGetPersistedStateLocation(wstr wstr wstr long ptr long ptr)
 @ stdcall RtlGetProductInfo(long long long long ptr)
 @ stub -arch=win64 RtlGetSessionProperties
 @ stdcall RtlGetSuiteMask()
@@ -3093,7 +3095,7 @@
 @ stub -arch=win64 RtlIdnToUnicode
 @ stub -arch=win64 RtlIncrementCorrelationVector
 @ stub -arch=win64 RtlInitStringEx
-@ stub -arch=win64 RtlInitStrongEnumerationHashTable
+@ stdcall -arch=win64 RtlInitStrongEnumerationHashTable(ptr ptr)
 @ stdcall RtlInitUTF8String(ptr str)
 @ stub -arch=win64 RtlInitUTF8StringEx
 @ stdcall -arch=win64 RtlInitializeBitMapEx(ptr ptr int64) RtlInitializeBitMap64
@@ -3197,7 +3199,7 @@
 @ stub -arch=win64 RtlSidHashInitialize
 @ stub -arch=win64 RtlSidHashLookup
 @ stdcall RtlStringFromGUIDEx(ptr ptr long)
-@ stub -arch=win64 RtlStronglyEnumerateEntryHashTable
+@ stdcall -arch=win64 RtlStronglyEnumerateEntryHashTable(ptr ptr)
 @ stdcall RtlSuffixUnicodeString(ptr ptr long)
 @ stdcall -arch=win64 RtlTestBitEx(ptr int64) RtlTestBit64
 @ stdcall RtlUTF8StringToUnicodeString(ptr ptr long)
@@ -3211,7 +3213,7 @@
 @ stdcall -arch=win64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stub -arch=win64 RtlWriteNonVolatileMemory
 @ stub -arch=win64 SeAccessCheckEx
-@ stub -arch=win64 SeAccessCheckFromState
+@ stdcall -arch=win64 SeAccessCheckFromState(ptr ptr ptr long long ptr ptr long ptr ptr)
 @ stub -arch=win64 SeAccessCheckFromStateEx
 @ stub -arch=win64 SeAccessCheckWithHint
 @ stub -arch=win64 SeAdjustAccessStateForAccessConstraints
@@ -3470,10 +3472,10 @@
 @ stub -arch=win64 _wcsset_s
 @ stub -arch=win64 _wmakepath_s
 @ cdecl _wsplitpath_s()
-@ stub -arch=win64 bsearch_s
+@ stdcall -arch=win64 bsearch_s(ptr ptr long long ptr ptr ptr)
 @ cdecl memcpy_s()
 @ cdecl memmove_s()
-@ stub -arch=win64 qsort_s
+@ stdcall -arch=win64 qsort_s(ptr long long ptr ptr)
 @ cdecl sprintf_s()
 @ cdecl sscanf_s()
 @ cdecl strcat_s()

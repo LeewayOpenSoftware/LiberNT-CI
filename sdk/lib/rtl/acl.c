@@ -1073,4 +1073,39 @@ RtlValidAcl(IN PACL Acl)
     return TRUE;
 }
 
+
+/*
+ * @implemented
+ */
+PVOID
+NTAPI
+RtlFindAceByType(
+    _In_ PACL Acl,
+    _In_ UCHAR AceType,
+    _Inout_opt_ PULONG Index)
+{
+    PVOID Ace;
+    ULONG AceIndex;
+    ULONG StartIndex;
+
+    if (Acl == NULL)
+        return NULL;
+
+    StartIndex = Index != NULL ? *Index : 0;
+    AceIndex = StartIndex;
+
+    for (;; AceIndex++)
+    {
+        if (!NT_SUCCESS(RtlGetAce(Acl, AceIndex, &Ace)))
+            return NULL;
+
+        if (((PACE_HEADER)Ace)->AceType == AceType)
+        {
+            if (Index != NULL)
+                *Index = AceIndex;
+            return Ace;
+        }
+    }
+}
+
 /* EOF */

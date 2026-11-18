@@ -116,6 +116,46 @@ FsRtlNotifyVolumeEvent(IN PFILE_OBJECT FileObject,
     return Status;
 }
 
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+FsRtlNotifyVolumeEventEx(IN PFILE_OBJECT FileObject,
+                       IN ULONG EventCode,
+                       IN PTARGET_DEVICE_CUSTOM_NOTIFICATION Event)
+{
+    NTSTATUS Status;
+    PDEVICE_OBJECT DeviceObject = NULL;
+
+    if (Event == NULL || FileObject == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Status = IoGetRelatedTargetDevice(FileObject, &DeviceObject);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    if (EventCode == FSRTL_VOLUME_MOUNT)
+    {
+        IoReportTargetDeviceChangeAsynchronous(DeviceObject,
+                                               Event,
+                                               NULL,
+                                               NULL);
+    }
+    else
+    {
+        IoReportTargetDeviceChange(DeviceObject,
+                                   Event);
+    }
+
+    ObDereferenceObject(DeviceObject);
+    return STATUS_SUCCESS;
+}
+
 #if (NTDDI_VERSION >= NTDDI_WIN8)
 VOID
 NTAPI

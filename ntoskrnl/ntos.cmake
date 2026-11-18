@@ -259,6 +259,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/query.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/quota.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/security.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/silo.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/state.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/thread.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/tls.c
@@ -270,6 +271,10 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/libsupp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/locale.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/misc.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/capability.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/state.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/nvmemory.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/qsort.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/security.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/system.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/rtl/time.c

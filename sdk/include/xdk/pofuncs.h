@@ -61,6 +61,7 @@ NTAPI
 PoSetSystemState(
   _In_ EXECUTION_STATE Flags);
 
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI
 VOID

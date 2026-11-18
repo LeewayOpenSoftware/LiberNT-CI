@@ -454,6 +454,8 @@ PspInitPhase0(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     POBJECT_TYPE_INITIALIZER ObjectTypeInitializer = &ObjectTypeInitializerEx.TypeInfo;
     ULONG i;
 
+    PsSiloInitialize();
+
 
     /* Setup some memory options */
     PspDefaultPagefileLimit = -1;
