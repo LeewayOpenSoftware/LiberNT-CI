@@ -194,60 +194,80 @@ UcxpRootHubBuildDescriptors(
  * -------------------------------------------------------------------------- */
 
 /*
- * Completes one pended status-change transfer with the client's bitmap when a
- * port change is pending. Runs at <= DISPATCH_LEVEL from the IOCTL path and
- * from UcxRootHubPortChanged (the client's DPC).
+ * Completes one pended status-change transfer with the client's bitmap. Runs
+ * at <= DISPATCH_LEVEL from the IOCTL path (Poll = TRUE: a transfer was just
+ * submitted, read the live port registers whatever the flag says) and from
+ * UcxRootHubPortChanged (Poll = FALSE: only when a change was flagged).
+ *
+ * The flag is consumed BEFORE the client reads the hardware, so a change that
+ * lands during the read sets it again; after a "no change" answer the request
+ * is requeued and the flag re-tested, so a change flagged while the request
+ * was out of the queue is still delivered. The client's bitmap is built from
+ * the live PORTSC change bits, which the hub driver clears one by one, so a
+ * late poll always sees what is still pending.
  */
 static
 VOID
 UcxpRootHubDeliverChange(
-    _Inout_ PUCX_ROOTHUB_CTX RootHub)
+    _Inout_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ BOOLEAN Poll)
 {
+    WDFQUEUE Queue = RootHub->SceQueue;    /* one read: Destroy clears the field */
     WDFREQUEST Request;
     PURB Urb;
     PVOID Buffer;
     ULONG Length;
-    BOOLEAN Any = FALSE;
+    BOOLEAN Any;
     NTSTATUS Status;
 
-    if (InterlockedCompareExchange(&RootHub->PortChangePending, 0, 0) == 0)
+    if (Queue == NULL)
         return;
 
-    Status = WdfIoQueueRetrieveNextRequest(RootHub->SceQueue, &Request);
-    if (!NT_SUCCESS(Status))
-        return;                            /* nobody is listening yet; the flag stays */
-
-    Urb = (PURB)UcxRequestGetUrb(Request);
-    Length = Urb->UrbBulkOrInterruptTransfer.TransferBufferLength;
-    Buffer = UcxUrbTransferBuffer(Urb->UrbBulkOrInterruptTransfer.TransferBuffer,
-                                  Urb->UrbBulkOrInterruptTransfer.TransferBufferMDL,
-                                  Length);
-    if (Buffer == NULL)
+    for (;;)
     {
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
-        return;
+        if (!Poll && InterlockedCompareExchange(&RootHub->PortChangePending, 0, 0) == 0)
+            return;
+
+        Status = WdfIoQueueRetrieveNextRequest(Queue, &Request);
+        if (!NT_SUCCESS(Status))
+            return;                        /* nobody is listening; the flag stays for the next submit */
+
+        /* Consume the notification first; a change during the read re-arms it */
+        InterlockedExchange(&RootHub->PortChangePending, 0);
+
+        Urb = (PURB)UcxRequestGetUrb(Request);
+        Length = Urb->UrbBulkOrInterruptTransfer.TransferBufferLength;
+        Buffer = UcxUrbTransferBuffer(Urb->UrbBulkOrInterruptTransfer.TransferBuffer,
+                                      Urb->UrbBulkOrInterruptTransfer.TransferBufferMDL,
+                                      Length);
+        if (Buffer == NULL)
+        {
+            UcxpCompleteUrb(Request, Urb, USBD_STATUS_INVALID_PARAMETER);
+            return;
+        }
+
+        RtlZeroMemory(Buffer, Length);
+        Any = FALSE;
+        if (RootHub->Config.EvtRootHubGetPortChangeBitmap != NULL)
+            Any = RootHub->Config.EvtRootHubGetPortChangeBitmap((UCXROOTHUB)WdfObjectContextGetObject(RootHub),
+                                                                (PUCHAR)Buffer, Length);
+        if (Any)
+        {
+            UcxLog("roothub: status change delivered (%lu bytes)", Length);
+            UcxpCompleteUrb(Request, Urb, USBD_STATUS_SUCCESS);
+            return;
+        }
+
+        /* No change bit set: keep waiting, unless a change was flagged while
+         * the request was out of the queue, in which case go round again */
+        Status = WdfRequestForwardToIoQueue(Request, Queue);
+        if (!NT_SUCCESS(Status))
+        {
+            UcxpCompleteUrb(Request, Urb, USBD_STATUS_CANCELED);
+            return;
+        }
+        Poll = FALSE;
     }
-
-    RtlZeroMemory(Buffer, Length);
-    if (RootHub->Config.EvtRootHubGetPortChangeBitmap != NULL)
-        Any = RootHub->Config.EvtRootHubGetPortChangeBitmap((UCXROOTHUB)WdfObjectContextGetObject(RootHub),
-                                                            (PUCHAR)Buffer, Length);
-
-    /* Whatever the client answered, the notification is consumed; a new change
-     * sets the flag again through UcxRootHubPortChanged. */
-    InterlockedExchange(&RootHub->PortChangePending, 0);
-
-    if (Any)
-    {
-        UcxLog("roothub: status change delivered (%lu bytes)", Length);
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_SUCCESS);
-        return;
-    }
-
-    /* No change bit set after all: keep waiting */
-    Status = WdfRequestForwardToIoQueue(Request, RootHub->SceQueue);
-    if (!NT_SUCCESS(Status))
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_CANCELED);
 }
 
 /* Completes every pended status-change transfer as canceled (ABORT_PIPE, unconfigure, teardown) */
@@ -256,12 +276,13 @@ VOID
 UcxpRootHubAbortSce(
     _Inout_ PUCX_ROOTHUB_CTX RootHub)
 {
+    WDFQUEUE Queue = RootHub->SceQueue;
     WDFREQUEST Request;
 
-    if (RootHub->SceQueue == NULL)
+    if (Queue == NULL)
         return;
 
-    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(RootHub->SceQueue, &Request)))
+    while (NT_SUCCESS(WdfIoQueueRetrieveNextRequest(Queue, &Request)))
     {
         PURB Urb = (PURB)UcxRequestGetUrb(Request);
         Urb->UrbBulkOrInterruptTransfer.TransferBufferLength = 0;
@@ -279,7 +300,7 @@ UcxpRootHubPortChanged(
         return;
 
     InterlockedExchange(&RootHub->PortChangePending, 1);
-    UcxpRootHubDeliverChange(RootHub);
+    UcxpRootHubDeliverChange(RootHub, FALSE);
 }
 
 /* --------------------------------------------------------------------------
@@ -331,6 +352,14 @@ UcxpRootHubSelectConfiguration(
         RootHub->DeviceHandle.ConfigurationValue = 0;
         Select->ConfigurationHandle = NULL;
         return USBD_STATUS_SUCCESS;
+    }
+
+    /* The hub driver selects the configuration it read from us: the only one */
+    if (Select->ConfigurationDescriptor->bLength < sizeof(USB_CONFIGURATION_DESCRIPTOR) ||
+        Select->ConfigurationDescriptor->bConfigurationValue !=
+            RootHub->ConfigBlock.Configuration.bConfigurationValue)
+    {
+        return USBD_STATUS_INVALID_CONFIGURATION_DESCRIPTOR;
     }
 
     /* The interface block must fit inside the URB the caller sized */
@@ -421,6 +450,18 @@ UcxpRootHubGetDescriptor(
 }
 
 /*
+ * A forwarded hub-descriptor request is a _URB_CONTROL_DESCRIPTOR_REQUEST; the
+ * buffer check below reads it through the class-request view, which is only
+ * right because the three transfer fields sit at the same offsets.
+ */
+C_ASSERT(FIELD_OFFSET(struct _URB_CONTROL_DESCRIPTOR_REQUEST, TransferBufferLength) ==
+         FIELD_OFFSET(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST, TransferBufferLength));
+C_ASSERT(FIELD_OFFSET(struct _URB_CONTROL_DESCRIPTOR_REQUEST, TransferBuffer) ==
+         FIELD_OFFSET(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST, TransferBuffer));
+C_ASSERT(FIELD_OFFSET(struct _URB_CONTROL_DESCRIPTOR_REQUEST, TransferBufferMDL) ==
+         FIELD_OFFSET(struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST, TransferBufferMDL));
+
+/*
  * Hands a hub-class request to the client after the parts this library owns
  * are checked: a buffer must exist for a non-zero length. The client completes
  * the request.
@@ -461,6 +502,7 @@ UcxpRootHubHandleUrb(
     PVOID DeviceHandle;
     USBD_STATUS UsbdStatus;
     BOOLEAN Forward;
+    WDFQUEUE Queue;
 
     if (Urb == NULL)
     {
@@ -568,8 +610,10 @@ UcxpRootHubHandleUrb(
                 UsbdStatus = USBD_STATUS_INVALID_PIPE_HANDLE;
                 break;
             }
+            /* The bitmap must fit: one bit per port plus the hub bit, i.e. the
+             * endpoint's packet size the hub driver sized its buffer from */
             if (!(Req->TransferFlags & USBD_TRANSFER_DIRECTION_IN) ||
-                Req->TransferBufferLength == 0 ||
+                Req->TransferBufferLength < RootHub->ScePipe.Descriptor.wMaxPacketSize ||
                 Req->TransferBufferLength > UCX_ROOTHUB_MAX_TRANSFER ||
                 UcxUrbTransferBuffer(Req->TransferBuffer, Req->TransferBufferMDL, Req->TransferBufferLength) == NULL)
             {
@@ -579,18 +623,30 @@ UcxpRootHubHandleUrb(
 
             /* Pend it; the manual queue completes it as canceled if the hub
              * driver cancels, and UcxpRootHubDeliverChange completes it with
-             * the bitmap. */
-            Status = WdfRequestForwardToIoQueue(Request, RootHub->SceQueue);
+             * the bitmap. A freshly submitted transfer always polls the live
+             * port registers (no flag needed). */
+            Queue = RootHub->SceQueue;
+            if (Queue == NULL)
+            {
+                UsbdStatus = USBD_STATUS_DEVICE_GONE;
+                break;
+            }
+            Status = WdfRequestForwardToIoQueue(Request, Queue);
             if (!NT_SUCCESS(Status))
             {
                 UsbdStatus = USBD_STATUS_CANCELED;
                 break;
             }
-            UcxpRootHubDeliverChange(RootHub);
+            UcxpRootHubDeliverChange(RootHub, TRUE);
             return;
         }
 
         case URB_FUNCTION_ABORT_PIPE:
+            if (Urb->UrbHeader.Length < sizeof(struct _URB_PIPE_REQUEST))
+            {
+                UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+                break;
+            }
             if (Urb->UrbPipeRequest.PipeHandle != (USBD_PIPE_HANDLE)&RootHub->ScePipe)
             {
                 UsbdStatus = USBD_STATUS_INVALID_PIPE_HANDLE;
@@ -603,6 +659,11 @@ UcxpRootHubHandleUrb(
         case URB_FUNCTION_SYNC_RESET_PIPE_AND_CLEAR_STALL:
         case URB_FUNCTION_SYNC_RESET_PIPE:
         case URB_FUNCTION_SYNC_CLEAR_STALL:
+            if (Urb->UrbHeader.Length < sizeof(struct _URB_PIPE_REQUEST))
+            {
+                UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+                break;
+            }
             /* A software pipe never stalls */
             UsbdStatus = (Urb->UrbPipeRequest.PipeHandle == (USBD_PIPE_HANDLE)&RootHub->ScePipe) ?
                          USBD_STATUS_SUCCESS : USBD_STATUS_INVALID_PIPE_HANDLE;
@@ -1042,6 +1103,7 @@ UcxpHubRootHubInitNotification(
     _In_ PRH_INIT_CALLBACK CallbackRoutine)
 {
     PUCX_ROOTHUB_CTX RootHub = UcxpRootHubFromBusContext(BusContext);
+    WDFWORKITEM WorkItem;
     KIRQL OldIrql;
 
     if (RootHub == NULL)
@@ -1050,12 +1112,13 @@ UcxpHubRootHubInitNotification(
     KeAcquireSpinLock(&RootHub->Lock, &OldIrql);
     RootHub->InitCallback = CallbackRoutine;
     RootHub->InitCallbackContext = CallbackContext;
+    WorkItem = RootHub->InitNotifyWorkItem;   /* one read: Destroy clears the field */
     KeReleaseSpinLock(&RootHub->Lock, OldIrql);
 
     /* NULL unregisters. A registration is answered once, from a work item, so
      * the hub driver is never called back inside its own registration. */
-    if (CallbackRoutine != NULL && RootHub->InitNotifyWorkItem != NULL)
-        WdfWorkItemEnqueue(RootHub->InitNotifyWorkItem);
+    if (CallbackRoutine != NULL && WorkItem != NULL)
+        WdfWorkItemEnqueue(WorkItem);
 
     return STATUS_SUCCESS;
 }
@@ -1463,17 +1526,29 @@ UcxpRootHubDestroyPdo(
 {
     PUCX_ROOTHUB_CTX RootHub = UcxGetRootHubCtx((WDFOBJECT)RootHubHandle);
     PUCX_CONTROLLER_CTX Controller;
+    WDFWORKITEM WorkItem;
     KIRQL OldIrql;
 
     if (RootHub->Pdo == NULL)
         return;
 
-    /* No more init callbacks, no more status changes */
+    /* No more init callbacks: clear the registration, take the work item out
+     * of reach of new registrations, then wait for one already running (this
+     * runs at PASSIVE_LEVEL from the root hub object's cleanup, never from the
+     * work item itself). The client's PortChanged calls stop with its device,
+     * which is this object's ancestor, before this cleanup runs. */
     KeAcquireSpinLock(&RootHub->Lock, &OldIrql);
     RootHub->InitCallback = NULL;
     RootHub->InitCallbackContext = NULL;
+    WorkItem = RootHub->InitNotifyWorkItem;
+    RootHub->InitNotifyWorkItem = NULL;
     KeReleaseSpinLock(&RootHub->Lock, OldIrql);
+    if (WorkItem != NULL)
+        WdfWorkItemFlush(WorkItem);
+
+    /* No more status changes */
     UcxpRootHubAbortSce(RootHub);
+    RootHub->SceQueue = NULL;
 
     Controller = UcxpRootHubController(RootHub);
     UcxpRemoveDeviceHandle(Controller, &RootHub->DeviceHandle);
@@ -1484,6 +1559,4 @@ UcxpRootHubDestroyPdo(
         UcxLog("roothub: PDO %p marked missing 0x%08lX", RootHub->Pdo, (ULONG)Status);
     }
     RootHub->Pdo = NULL;
-    RootHub->SceQueue = NULL;
-    RootHub->InitNotifyWorkItem = NULL;
 }

@@ -3035,9 +3035,11 @@ XhciUcxPortStatusFromPortSc(
     BOOLEAN Usb3 = (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] == 3);
     ULONG LinkState = (PortSc & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
     ULONG Speed = (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
+    BOOLEAN Powered = (!Dev->PortPowerControl || (PortSc & XHCI_PORTSC_PP) != 0);
 
     RtlZeroMemory(Out, sizeof(*Out));
 
+    /* Bits 0-4 have the same meaning in the USB 2.0 and USB 3.x port status words */
     if (PortSc & XHCI_PORTSC_CCS)
         Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_CONNECT;
     if (PortSc & XHCI_PORTSC_PED)
@@ -3046,17 +3048,20 @@ XhciUcxPortStatusFromPortSc(
         Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_OVER_CURRENT;
     if (PortSc & XHCI_PORTSC_PR)
         Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_RESET;
-    if (!Dev->PortPowerControl || (PortSc & XHCI_PORTSC_PP))
-        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_POWER;
 
     if (Usb3)
     {
-        /* Link state bits 5-8; negotiated speed 0 = SuperSpeed */
+        /* USB 3.x layout: link state bits 5-8, power bit 9, negotiated speed
+         * bits 10-12 (0 = SuperSpeed). USB_PORT_STATUS_POWER (0x0100) is the
+         * USB 2.0 position and would land inside the link state here. */
         Out->PortStatus.Usb30PortStatus.PortLinkState = (USHORT)LinkState;
+        Out->PortStatus.Usb30PortStatus.PortPower = Powered ? 1 : 0;
         Out->PortStatus.Usb30PortStatus.NegotiatedDeviceSpeed = 0;
     }
     else
     {
+        if (Powered)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_POWER;
         if (LinkState == PORT_LINK_STATE_U3)
             Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_SUSPEND;
         if (Speed == XHCI_PORTSC_SPEED_LOW)
