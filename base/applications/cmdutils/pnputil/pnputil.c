@@ -21,6 +21,7 @@
 #include <cfg.h>
 #include <newdev.h>
 #include <regstr.h>
+#include <wincrypt.h>
 #include <umpnpmgr/drvinst.h>
 #include <initguid.h>
 #include <devpkey.h>
@@ -28,6 +29,10 @@
 #include <conutils.h>
 
 #include "resource.h"
+
+/* Returned by a command whose arguments are wrong: wmain prints the usage and exits with 1. A real
+   ERROR_INVALID_PARAMETER (87) from the system is a different result and is passed through. */
+#define RC_USAGE ((INT)0x70000001)
 
 #define PROBLEM_NAME(x) { x, L"" #x }
 
@@ -778,19 +783,29 @@ CommandAddDriver(
         else if (!Specification)
             Specification = argv[i];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     if (!Specification)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
     AddDriverPackages(Specification, 0, &Context);
 
     if (Context.Total == 0)
     {
-        Context.Error = ERROR_FILE_NOT_FOUND;
-        ConPuts(StdOut, L"Failed to add driver package: Missing or invalid driver package specified.\n\n");
+        DWORD Attributes = GetFileAttributesW(Specification);
+
+        if (Attributes != INVALID_FILE_ATTRIBUTES && (Attributes & FILE_ATTRIBUTE_DIRECTORY))
+        {
+            /* A folder without a wildcard is an empty set, not a failure. */
+            ConPuts(StdOut, L"\n");
+        }
+        else
+        {
+            Context.Error = ERROR_FILE_NOT_FOUND;
+            ConPuts(StdOut, L"Failed to add driver package: Missing or invalid driver package specified.\n\n");
+        }
     }
 
     ConPrintf(StdOut, L"Total driver packages:  %lu\n", Context.Total);
@@ -823,11 +838,11 @@ CommandDeleteDriver(
         else if (!Name)
             Name = argv[i];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     if (!Name)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
 
@@ -850,8 +865,16 @@ CommandDeleteDriver(
     else
     {
         Error = GetLastError();
-        if (Error == ERROR_FILE_NOT_FOUND)
-            Error = ERROR_NOT_AN_INSTALLED_OEM_INF;
+        if (Error == ERROR_FILE_NOT_FOUND || Error == ERROR_NOT_AN_INSTALLED_OEM_INF)
+        {
+            SIZE_T Length = wcslen(Name);
+
+            /* Windows reports a name without the .inf extension as a missing path. */
+            if (Length < 4 || _wcsicmp(Name + Length - 4, L".inf") != 0)
+                Error = ERROR_PATH_NOT_FOUND;
+            else
+                Error = ERROR_NOT_AN_INSTALLED_OEM_INF;
+        }
 
         if (Error == ERROR_INF_IN_USE_BY_DEVICES)
             ConPuts(StdOut, L"Failed to delete driver package: One or more devices are presently installed using the specified INF.\n");
@@ -1391,6 +1414,124 @@ EmitXmlElement(
     OutputPutsRaw(Output, L">\r\n");
 }
 
+typedef struct _TREE_IFACE
+{
+    WCHAR InstanceId[MAX_DEVICE_ID_LEN];
+    PWSTR Path;
+    WCHAR Description[256];
+    GUID Class;
+    BOOL Enabled;
+} TREE_IFACE;
+
+typedef struct _TREE_CONTEXT
+{
+    BOOL Connected;
+    BOOL Services;
+    BOOL Interfaces;
+    TREE_IFACE *Ifaces;
+    DWORD IfaceCount;
+    DWORD IfaceCapacity;
+} TREE_CONTEXT;
+
+/* Collect every device interface (all classes) once, so each node can list its own. */
+static VOID
+TreeCollectInterfaces(
+    _Inout_ TREE_CONTEXT *Ctx)
+{
+    HKEY hClasses;
+    WCHAR KeyName[64];
+    DWORD Index;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\DeviceClasses", 0,
+                      KEY_READ, &hClasses) != ERROR_SUCCESS)
+    {
+        return;
+    }
+
+    for (Index = 0; ; Index++)
+    {
+        DWORD Length = _countof(KeyName), Item, Size;
+        GUID Guid;
+        HDEVINFO Set;
+
+        if (RegEnumKeyExW(hClasses, Index, KeyName, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
+            break;
+        if (CLSIDFromString(KeyName, &Guid) != S_OK)
+            continue;
+        Set = SetupDiGetClassDevsW(&Guid, NULL, NULL, DIGCF_DEVICEINTERFACE);
+        if (Set == INVALID_HANDLE_VALUE)
+            continue;
+
+        for (Item = 0; ; Item++)
+        {
+            SP_DEVICE_INTERFACE_DATA Interface;
+            SP_DEVINFO_DATA DeviceInfo;
+            PSP_DEVICE_INTERFACE_DETAIL_DATA_W Detail;
+            TREE_IFACE *Entry;
+
+            Interface.cbSize = sizeof(Interface);
+            if (!SetupDiEnumDeviceInterfaces(Set, NULL, &Guid, Item, &Interface))
+                break;
+            Size = 0;
+            SetupDiGetDeviceInterfaceDetailW(Set, &Interface, NULL, 0, &Size, NULL);
+            if (Size < sizeof(*Detail))
+                continue;
+            Detail = HeapAlloc(GetProcessHeap(), 0, Size);
+            if (!Detail)
+                break;
+            Detail->cbSize = sizeof(*Detail);
+            DeviceInfo.cbSize = sizeof(DeviceInfo);
+            if (!SetupDiGetDeviceInterfaceDetailW(Set, &Interface, Detail, Size, NULL, &DeviceInfo))
+            {
+                HeapFree(GetProcessHeap(), 0, Detail);
+                continue;
+            }
+
+            if (Ctx->IfaceCount == Ctx->IfaceCapacity)
+            {
+                DWORD Capacity = Ctx->IfaceCapacity ? Ctx->IfaceCapacity * 2 : 256;
+                TREE_IFACE *Grown = Ctx->Ifaces ? HeapReAlloc(GetProcessHeap(), 0, Ctx->Ifaces, Capacity * sizeof(*Grown))
+                                                : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Grown));
+
+                if (!Grown)
+                {
+                    HeapFree(GetProcessHeap(), 0, Detail);
+                    break;
+                }
+                Ctx->Ifaces = Grown;
+                Ctx->IfaceCapacity = Capacity;
+            }
+            Entry = &Ctx->Ifaces[Ctx->IfaceCount];
+            Entry->InstanceId[0] = UNICODE_NULL;
+            SetupDiGetDeviceInstanceIdW(Set, &DeviceInfo, Entry->InstanceId, _countof(Entry->InstanceId), NULL);
+            Entry->Enabled = (Interface.Flags & SPINT_ACTIVE) && !(Interface.Flags & SPINT_REMOVED);
+            Entry->Class = Guid;
+            lstrcpynW(Entry->Description, L"Unknown", _countof(Entry->Description));
+            {
+                WCHAR Friendly[256];
+                DEVPROPTYPE FriendlyType = 0;
+
+                if (SetupDiGetDeviceInterfacePropertyW(Set, &Interface, &DEVPKEY_DeviceInterface_FriendlyName,
+                                                       &FriendlyType, (PBYTE)Friendly, sizeof(Friendly) - sizeof(WCHAR),
+                                                       NULL, 0) &&
+                    FriendlyType == DEVPROP_TYPE_STRING && Friendly[0])
+                {
+                    lstrcpynW(Entry->Description, Friendly, _countof(Entry->Description));
+                }
+            }
+            Entry->Path = HeapAlloc(GetProcessHeap(), 0, (wcslen(Detail->DevicePath) + 1) * sizeof(WCHAR));
+            if (Entry->Path)
+            {
+                wcscpy(Entry->Path, Detail->DevicePath);
+                Ctx->IfaceCount++;
+            }
+            HeapFree(GetProcessHeap(), 0, Detail);
+        }
+        SetupDiDestroyDeviceInfoList(Set);
+    }
+    RegCloseKey(hClasses);
+}
+
 #include "devpkeynames.h"
 
 /* /properties and /drivers views *******************************************/
@@ -1903,11 +2044,14 @@ typedef struct _DRV_ITEM
     WCHAR ClassGuid[64];
     WCHAR Version[96];
     WCHAR MatchingId[LINE_LEN];
+    WCHAR Signer[128];
     DWORD Rank;
     FILETIME Date;
     DWORDLONG Ver;
     BOOL Best;
     BOOL Installed;
+    BOOL NameMatch;
+    BOOL Exact;
 } DRV_ITEM;
 
 typedef struct _DRV_LIST
@@ -1915,6 +2059,137 @@ typedef struct _DRV_LIST
     DRV_ITEM *Items;
     DWORD Count;
 } DRV_LIST;
+
+/* The catalog file name an INF declares, the architecture decorated key first; empty when there is none. */
+static VOID
+DriverCatalogName(
+    _In_ HINF hInf,
+    _Out_writes_(Cch) PWSTR Catalog,
+    _In_ DWORD Cch)
+{
+#ifdef _WIN64
+    static const PCWSTR Keys[] = { L"CatalogFile.ntamd64", L"CatalogFile.nt", L"CatalogFile" };
+#else
+    static const PCWSTR Keys[] = { L"CatalogFile.ntx86", L"CatalogFile.nt", L"CatalogFile" };
+#endif
+    DWORD i;
+
+    Catalog[0] = UNICODE_NULL;
+    for (i = 0; i < _countof(Keys) && !Catalog[0]; i++)
+        GetInfVersionValue(hInf, Keys[i], Catalog, Cch);
+}
+
+/* The signer of a driver package: the subject of the certificate that signed its catalog. The catalog is
+   found next to the INF, or in the system catalog root for an in-box package. crypt32 is loaded on demand. */
+static VOID
+DriverSignerName(
+    _In_ PCWSTR InfPath,
+    _In_ HINF hInf,
+    _Out_writes_(Cch) PWSTR Signer,
+    _In_ DWORD Cch)
+{
+    typedef BOOL (WINAPI *PQUERY)(DWORD, const void *, DWORD, DWORD, DWORD, DWORD *, DWORD *, DWORD *, HCERTSTORE *, HCRYPTMSG *, const void **);
+    typedef BOOL (WINAPI *PMSGPARAM)(HCRYPTMSG, DWORD, DWORD, void *, DWORD *);
+    typedef PCCERT_CONTEXT (WINAPI *PFIND)(HCERTSTORE, DWORD, DWORD, DWORD, const void *, PCCERT_CONTEXT);
+    typedef DWORD (WINAPI *PNAME)(PCCERT_CONTEXT, DWORD, DWORD, void *, LPWSTR, DWORD);
+    typedef BOOL (WINAPI *PFREECERT)(PCCERT_CONTEXT);
+    typedef BOOL (WINAPI *PCLOSESTORE)(HCERTSTORE, DWORD);
+    typedef BOOL (WINAPI *PCLOSEMSG)(HCRYPTMSG);
+    WCHAR Catalog[MAX_PATH], Path[MAX_PATH], Windir[MAX_PATH];
+    HMODULE hCrypt;
+    PQUERY Query;
+    PMSGPARAM MsgParam;
+    PFIND Find;
+    PNAME Name;
+    PFREECERT FreeCert;
+    PCLOSESTORE CloseStore;
+    PCLOSEMSG CloseMsg;
+    HCERTSTORE Store = NULL;
+    HCRYPTMSG Msg = NULL;
+    CMSG_SIGNER_INFO *Info = NULL;
+    PCCERT_CONTEXT Cert;
+    CERT_INFO Wanted;
+    PWSTR Slash;
+    DWORD Size = 0, Pass;
+
+    Signer[0] = UNICODE_NULL;
+    DriverCatalogName(hInf, Catalog, _countof(Catalog));
+    /* A catalog is named by a bare file name; anything with a path in it is not looked up. */
+    if (!Catalog[0] || wcslen(Catalog) > 200 || wcspbrk(Catalog, L"\\/:") || wcsstr(Catalog, L".."))
+        return;
+
+    hCrypt = LoadLibraryW(L"crypt32.dll");
+    if (!hCrypt)
+        return;
+    Query = (PQUERY)GetProcAddress(hCrypt, "CryptQueryObject");
+    MsgParam = (PMSGPARAM)GetProcAddress(hCrypt, "CryptMsgGetParam");
+    Find = (PFIND)GetProcAddress(hCrypt, "CertFindCertificateInStore");
+    Name = (PNAME)GetProcAddress(hCrypt, "CertGetNameStringW");
+    FreeCert = (PFREECERT)GetProcAddress(hCrypt, "CertFreeCertificateContext");
+    CloseStore = (PCLOSESTORE)GetProcAddress(hCrypt, "CertCloseStore");
+    CloseMsg = (PCLOSEMSG)GetProcAddress(hCrypt, "CryptMsgClose");
+    if (!Query || !MsgParam || !Find || !Name || !FreeCert || !CloseStore || !CloseMsg)
+    {
+        FreeLibrary(hCrypt);
+        return;
+    }
+
+    for (Pass = 0; Pass < 2 && !Store; Pass++)
+    {
+        if (Pass == 0)
+        {
+            lstrcpynW(Path, InfPath, _countof(Path));
+            Slash = wcsrchr(Path, L'\\');
+            if (!Slash || (SIZE_T)(Slash + 1 - Path) + wcslen(Catalog) >= _countof(Path))
+                continue;
+            wcscpy(Slash + 1, Catalog);
+        }
+        else
+        {
+            if (!GetSystemWindowsDirectoryW(Windir, _countof(Windir)) ||
+                wcslen(Windir) + wcslen(Catalog) + 64 >= _countof(Path))
+            {
+                continue;
+            }
+            _snwprintf(Path, _countof(Path) - 1, L"%ls\\System32\\CatRoot\\{F750E6C3-38EE-11D1-85E5-00C04FC295EE}\\%ls",
+                       Windir, Catalog);
+            Path[_countof(Path) - 1] = UNICODE_NULL;
+        }
+        if (GetFileAttributesW(Path) == INVALID_FILE_ATTRIBUTES)
+            continue;
+        if (!Query(CERT_QUERY_OBJECT_FILE, Path,
+                   CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED | CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
+                   CERT_QUERY_FORMAT_FLAG_ALL, 0, NULL, NULL, NULL, &Store, &Msg, NULL))
+        {
+            Store = NULL;
+            Msg = NULL;
+        }
+    }
+
+    if (Store && Msg && MsgParam(Msg, CMSG_SIGNER_INFO_PARAM, 0, NULL, &Size) && Size)
+    {
+        Info = HeapAlloc(GetProcessHeap(), 0, Size);
+        if (Info && MsgParam(Msg, CMSG_SIGNER_INFO_PARAM, 0, Info, &Size))
+        {
+            ZeroMemory(&Wanted, sizeof(Wanted));
+            Wanted.Issuer = Info->Issuer;
+            Wanted.SerialNumber = Info->SerialNumber;
+            Cert = Find(Store, X509_ASN_ENCODING | PKCS_7_ASN_ENCODING, 0, CERT_FIND_SUBJECT_CERT, &Wanted, NULL);
+            if (Cert)
+            {
+                Name(Cert, CERT_NAME_SIMPLE_DISPLAY_TYPE, 0, NULL, Signer, Cch);
+                FreeCert(Cert);
+            }
+        }
+        if (Info)
+            HeapFree(GetProcessHeap(), 0, Info);
+    }
+    if (Msg)
+        CloseMsg(Msg);
+    if (Store)
+        CloseStore(Store, 0);
+    FreeLibrary(hCrypt);
+}
 
 static VOID
 DriverListFree(
@@ -1933,10 +2208,11 @@ DriverListCollect(
     _In_ HDEVINFO Set,
     _In_ PSP_DEVINFO_DATA Info)
 {
-    WCHAR Installed[MAX_PATH];
+    WCHAR Installed[MAX_PATH], InstalledSection[LINE_LEN], InstalledMatch[LINE_LEN];
     SP_DRVINFO_DATA_W Drv;
     DWORD Index, Capacity = 0, BestIndex = 0;
-    BOOL HaveInstalled;
+    BOOL HaveInstalled, HaveSection, HaveMatch;
+    DWORD ExactCount = 0;
 
     List->Items = NULL;
     List->Count = 0;
@@ -1944,6 +2220,8 @@ DriverListCollect(
     if (!SetupDiBuildDriverInfoList(Set, Info, SPDIT_COMPATDRIVER))
         return;
     HaveInstalled = GetDriverKeyString(Set, Info, REGSTR_VAL_INFPATH, Installed, _countof(Installed));
+    HaveSection = GetDriverKeyString(Set, Info, L"InfSection", InstalledSection, _countof(InstalledSection));
+    HaveMatch = GetDriverKeyString(Set, Info, L"MatchingDeviceId", InstalledMatch, _countof(InstalledMatch));
 
     for (Index = 0; ; Index++)
     {
@@ -2021,13 +2299,23 @@ DriverListCollect(
             if (!Item->ClassName[0] && CLSIDFromString(Item->ClassGuid, &Guid) == S_OK)
                 SetupDiClassNameFromGuidW(&Guid, Item->ClassName, _countof(Item->ClassName), NULL);
             CharLowerW(Item->ClassGuid);
+            DriverSignerName(Detail->InfFileName, hInf, Item->Signer, _countof(Item->Signer));
             SetupCloseInfFile(hInf);
         }
 
-        Item->Installed = HaveInstalled && _wcsicmp(Installed, Item->Name) == 0;
+        /* One INF can offer several driver nodes; the installed one also has the INF section and matched id. */
+        Item->NameMatch = HaveInstalled && _wcsicmp(Installed, Item->Name) == 0;
+        Item->Exact = Item->NameMatch && (!HaveSection || _wcsicmp(InstalledSection, Detail->SectionName) == 0) &&
+                      (!HaveMatch || _wcsicmp(InstalledMatch, Detail->HardwareID) == 0);
+        if (Item->Exact)
+            ExactCount++;
         List->Count++;
         HeapFree(GetProcessHeap(), 0, Detail);
     }
+
+    /* Only the exact node is installed; without one (an INF that no longer lists the section) the INF name decides. */
+    for (Index = 0; Index < List->Count; Index++)
+        List->Items[Index].Installed = ExactCount ? List->Items[Index].Exact : List->Items[Index].NameMatch;
 
     for (Index = 1; Index < List->Count; Index++)
     {
@@ -2093,7 +2381,7 @@ DriversEmitTxt(
         Values[2] = Item->ClassName;
         Values[3] = Item->ClassGuid;
         Values[4] = Item->Version;
-        Values[5] = L"";
+        Values[5] = Item->Signer;
         Values[6] = Item->MatchingId;
         Values[7] = Rank;
         Values[8] = Status;
@@ -2105,8 +2393,8 @@ DriversEmitTxt(
         }
         for (k = 0; k < 9; k++)
         {
-            if (k == 5)
-                continue; /* the signer comes from the catalog and is not read yet */
+            if (k == 5 && !Item->Signer[0])
+                continue;
             _snwprintf(Line, _countof(Line) - 1, L"    %-24ls%ls%ls", Labels[k], Values[k], Eol);
             Line[_countof(Line) - 1] = UNICODE_NULL;
             OutputPutsRaw(Output, Line);
@@ -2145,6 +2433,7 @@ DriversEmitXml(
         DRV_XML(L"ClassName", Item->ClassName)
         DRV_XML(L"ClassGuid", Item->ClassGuid)
         DRV_XML(L"DriverVersion", Item->Version)
+        DRV_XML(L"SignerName", Item->Signer)
         DRV_XML(L"MatchingDeviceId", Item->MatchingId)
         DRV_XML(L"Rank", Rank)
         DRV_XML(L"Status", Status)
@@ -2177,7 +2466,285 @@ DriversEmitCsv(
     }
 }
 
-/* The txt tail of a device record: matching drivers, then its properties. */
+/* /services, /interfaces and /resources views ******************************/
+
+/* Every device interface of the system, collected once, for the /interfaces view. */
+static TREE_CONTEXT DevIfaces;
+static BOOL DevIfacesLoaded;
+
+static VOID
+DevIfacesLoad(VOID)
+{
+    if (DevIfacesLoaded)
+        return;
+    DevIfacesLoaded = TRUE;
+    TreeCollectInterfaces(&DevIfaces);
+}
+
+static VOID
+IfacesEmitCsv(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Id,
+    _In_ DWORD Leading)
+{
+    DWORD i, n;
+
+    DevIfacesLoad();
+    for (i = 0; i < DevIfaces.IfaceCount; i++)
+    {
+        const TREE_IFACE *Iface = &DevIfaces.Ifaces[i];
+
+        if (_wcsicmp(Iface->InstanceId, Id) != 0)
+            continue;
+        OutputCsvField(Output, Id, FALSE);
+        for (n = 0; n < Leading; n++)
+            OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, Iface->Path, FALSE);
+        OutputCsvField(Output, Iface->Enabled ? L"Enabled" : L"Disabled", TRUE);
+    }
+}
+
+static VOID
+IfaceClassText(
+    _In_ const TREE_IFACE *Iface,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    StringFromGUID2(&Iface->Class, Buffer, Cch);
+    CharLowerW(Buffer);
+}
+
+static VOID
+IfacesEmitXml(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Id)
+{
+    BOOL Header = FALSE;
+    DWORD i;
+
+    DevIfacesLoad();
+    for (i = 0; i < DevIfaces.IfaceCount; i++)
+    {
+        const TREE_IFACE *Iface = &DevIfaces.Ifaces[i];
+        WCHAR Guid[64];
+
+        if (_wcsicmp(Iface->InstanceId, Id) != 0)
+            continue;
+        if (!Header)
+        {
+            OutputPutsRaw(Output, L"        <Interfaces>\r\n");
+            Header = TRUE;
+        }
+        IfaceClassText(Iface, Guid, _countof(Guid));
+        OutputPutsRaw(Output, L"            <Interface Path=\"");
+        OutputXmlText(Output, Iface->Path);
+        OutputPutsRaw(Output, L"\">\r\n                <Description>");
+        OutputXmlText(Output, Iface->Description);
+        OutputPutsRaw(Output, L"</Description>\r\n                <ClassGuid>");
+        OutputXmlText(Output, Guid);
+        OutputPutsRaw(Output, L"</ClassGuid>\r\n                <Status>");
+        OutputXmlText(Output, Iface->Enabled ? L"Enabled" : L"Disabled");
+        OutputPutsRaw(Output, L"</Status>\r\n            </Interface>\r\n");
+    }
+    if (Header)
+        OutputPutsRaw(Output, L"        </Interfaces>\r\n");
+}
+
+static VOID
+IfacesEmitTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Id)
+{
+    PCWSTR Eol = OutEol(Output);
+    BOOL First = TRUE;
+    DWORD i, k;
+
+    DevIfacesLoad();
+    for (i = 0; i < DevIfaces.IfaceCount; i++)
+    {
+        const TREE_IFACE *Iface = &DevIfaces.Ifaces[i];
+        WCHAR Guid[64], Line[2048];
+        PCWSTR Labels[4] = { L"Interface Path:", L"Interface Description:", L"Interface Class GUID:", L"Interface Status:" };
+        PCWSTR Values[4];
+
+        if (_wcsicmp(Iface->InstanceId, Id) != 0)
+            continue;
+        if (First)
+        {
+            OutputPutsRaw(Output, L"Interfaces:");
+            OutputPutsRaw(Output, Eol);
+        }
+        else
+        {
+            OutputPutsRaw(Output, Eol);
+        }
+        First = FALSE;
+        IfaceClassText(Iface, Guid, _countof(Guid));
+        Values[0] = Iface->Path;
+        Values[1] = Iface->Description;
+        Values[2] = Guid;
+        Values[3] = Iface->Enabled ? L"Enabled" : L"Disabled";
+        for (k = 0; k < 4; k++)
+        {
+            _snwprintf(Line, _countof(Line) - 1, L"    %-24ls%ls%ls", Labels[k], Values[k], Eol);
+            Line[_countof(Line) - 1] = UNICODE_NULL;
+            OutputPutsRaw(Output, Line);
+        }
+    }
+}
+
+/* The allocated resources of a device, one double-NUL list of formatted ranges per type. */
+typedef struct _RES_LIST
+{
+    WCHAR Io[1024];
+    WCHAR Irq[512];
+    WCHAR Mem[1024];
+    WCHAR Dma[256];
+} RES_LIST;
+
+static VOID
+ResAppend(
+    _Inout_updates_(Cch) PWSTR Multi,
+    _In_ DWORD Cch,
+    _In_ PCWSTR Text)
+{
+    PWSTR End = Multi;
+    SIZE_T Length = wcslen(Text);
+
+    while (*End)
+        End += wcslen(End) + 1;
+    if ((SIZE_T)(End - Multi) + Length + 2 > Cch)
+        return;
+    memcpy(End, Text, (Length + 1) * sizeof(WCHAR));
+    End[Length + 1] = UNICODE_NULL;
+}
+
+static VOID
+ResListCollect(
+    _Out_ RES_LIST *List,
+    _In_ DEVINST DevInst)
+{
+    ULONGLONG Data[64];
+    LOG_CONF LogConf;
+    RES_DES Current, Next;
+    RESOURCEID Type;
+
+    ZeroMemory(List, sizeof(*List));
+    if (CM_Get_First_Log_Conf(&LogConf, DevInst, ALLOC_LOG_CONF) != CR_SUCCESS)
+        return;
+
+    Current = (RES_DES)LogConf;
+    while (CM_Get_Next_Res_Des(&Next, Current, ResType_All, &Type, 0) == CR_SUCCESS)
+    {
+        ULONG Size = 0;
+        WCHAR Text[96];
+
+        if (Current != (RES_DES)LogConf)
+            CM_Free_Res_Des_Handle(Current);
+        Current = Next;
+
+        if (CM_Get_Res_Des_Data_Size(&Size, Current, 0) != CR_SUCCESS || Size == 0 || Size > sizeof(Data))
+            continue;
+        if (CM_Get_Res_Des_Data(Current, Data, Size, 0) != CR_SUCCESS)
+            continue;
+
+        Text[0] = UNICODE_NULL;
+        switch (Type)
+        {
+            case ResType_IO:
+                if (Size >= sizeof(IO_DES))
+                {
+                    const IO_DES *Io = (const IO_DES *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"0x%016I64X - 0x%016I64X", Io->IOD_Alloc_Base, Io->IOD_Alloc_End);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Io, _countof(List->Io), Text);
+                }
+                break;
+            case ResType_Mem:
+                if (Size >= sizeof(MEM_DES))
+                {
+                    const MEM_DES *Mem = (const MEM_DES *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"0x%016I64X - 0x%016I64X", Mem->MD_Alloc_Base, Mem->MD_Alloc_End);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Mem, _countof(List->Mem), Text);
+                }
+                break;
+            case ResType_IRQ:
+                if (Size >= sizeof(IRQ_DES_32))
+                {
+                    const IRQ_DES_32 *Irq = (const IRQ_DES_32 *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"0x%08X (%d)", Irq->IRQD_Alloc_Num, (INT)Irq->IRQD_Alloc_Num);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Irq, _countof(List->Irq), Text);
+                }
+                break;
+            case ResType_DMA:
+                if (Size >= sizeof(DMA_DES))
+                {
+                    const DMA_DES *Dma = (const DMA_DES *)Data;
+
+                    _snwprintf(Text, _countof(Text) - 1, L"%lu", Dma->DD_Alloc_Chan);
+                    Text[_countof(Text) - 1] = UNICODE_NULL;
+                    ResAppend(List->Dma, _countof(List->Dma), Text);
+                }
+                break;
+        }
+    }
+    if (Current != (RES_DES)LogConf)
+        CM_Free_Res_Des_Handle(Current);
+    CM_Free_Log_Conf_Handle(LogConf);
+}
+
+/* Several values under one label: the first on the label line, the rest aligned under it. */
+static VOID
+TxtMultiSz(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Label,
+    _In_ PCWSTR MultiSz)
+{
+    PCWSTR Eol = OutEol(Output), Value;
+    WCHAR Line[2048];
+
+    for (Value = MultiSz; *Value; Value += wcslen(Value) + 1)
+    {
+        _snwprintf(Line, _countof(Line) - 1, L"%-28ls%ls%ls", Label, Value, Eol);
+        Line[_countof(Line) - 1] = UNICODE_NULL;
+        OutputPutsRaw(Output, Line);
+        Label = L"";
+    }
+}
+
+static VOID
+ServicesTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ HDEVINFO Set,
+    _In_ PSP_DEVINFO_DATA Info)
+{
+    WCHAR Service[256], List[2048];
+
+    if (GetDevicePropertyString(Set, Info, SPDRP_SERVICE, Service, _countof(Service), NULL)[0])
+        OutputTxtLine(Output, L"Service:", Service);
+    ReadSpdrpMultiSz(Set, Info, SPDRP_UPPERFILTERS, List, _countof(List));
+    TxtMultiSz(Output, L"Upper Filters:", List);
+    ReadSpdrpMultiSz(Set, Info, SPDRP_LOWERFILTERS, List, _countof(List));
+    TxtMultiSz(Output, L"Lower Filters:", List);
+}
+
+static VOID
+ResourcesTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const RES_LIST *Res)
+{
+    TxtMultiSz(Output, L"IO Resources:", Res->Io);
+    TxtMultiSz(Output, L"IRQ Resources:", Res->Irq);
+    TxtMultiSz(Output, L"Memory Resources:", Res->Mem);
+    TxtMultiSz(Output, L"DMA Resources:", Res->Dma);
+}
+
+/* The txt tail of a device record: services, drivers, interfaces, resources, then properties. */
 static VOID
 EmitDeviceTxtViews(
     _In_ OUTPUT_CONTEXT *Output,
@@ -2185,6 +2752,10 @@ EmitDeviceTxtViews(
     _In_ PSP_DEVINFO_DATA Info,
     _In_ const ENUM_FILTER *Filter)
 {
+    WCHAR Id[MAX_DEVICE_ID_LEN + 1];
+
+    if (Filter->Services)
+        ServicesTxt(Output, Set, Info);
     if (Filter->Drivers)
     {
         DRV_LIST Drivers;
@@ -2192,6 +2763,15 @@ EmitDeviceTxtViews(
         DriverListCollect(&Drivers, Set, Info);
         DriversEmitTxt(Output, &Drivers);
         DriverListFree(&Drivers);
+    }
+    if (Filter->Interfaces && SetupDiGetDeviceInstanceIdW(Set, Info, Id, _countof(Id), NULL))
+        IfacesEmitTxt(Output, Id);
+    if (Filter->Resources)
+    {
+        RES_LIST Res;
+
+        ResListCollect(&Res, Info->DevInst);
+        ResourcesTxt(Output, &Res);
     }
     if (Filter->Properties)
     {
@@ -2220,12 +2800,14 @@ EmitDeviceRecord(
     _In_ PSP_DEVINFO_DATA DeviceInfoData,
     _In_ const ENUM_FILTER *Filter)
 {
-    BOOL AnyView = Filter->Ids || Filter->Relations || Filter->Stack || Filter->Location;
+    BOOL AnyView = Filter->Ids || Filter->Relations || Filter->Services || Filter->Stack || Filter->Location ||
+                   Filter->Resources;
     DRV_LIST Drivers = { NULL, 0 };
-    DWORD ViewColumns = (Filter->Ids ? 2 : 0) + (Filter->Relations ? 2 : 0) + (Filter->Stack ? 1 : 0) +
-                        (Filter->Location ? 2 : 0);
-    /* Header fields: the ten base ones, the views, MatchingDriverName,Rank and Key,Type,Value. */
-    DWORD HeaderCols = 10 + ViewColumns + (Filter->Drivers ? 2 : 0) + (Filter->Properties ? 3 : 0);
+    DWORD ViewColumns = (Filter->Ids ? 2 : 0) + (Filter->Relations ? 2 : 0) + (Filter->Services ? 3 : 0) +
+                        (Filter->Stack ? 1 : 0) + (Filter->Location ? 2 : 0) + (Filter->Resources ? 4 : 0);
+    /* Header fields: the ten base ones, the views, MatchingDriverName,Rank, Interface,InterfaceStatus and Key,Type,Value. */
+    DWORD HeaderCols = 10 + ViewColumns + (Filter->Drivers ? 2 : 0) + (Filter->Interfaces ? 2 : 0) +
+                       (Filter->Properties ? 3 : 0);
 
     if (Filter->Drivers)
         DriverListCollect(&Drivers, DeviceInfoSet, DeviceInfoData);
@@ -2233,9 +2815,9 @@ EmitDeviceRecord(
     if (Output->Format == OutputCsv)
     {
         WCHAR List[2048], Cell[2048], Cell2[2048];
-        BOOL LastIds = Filter->Ids && !Filter->Relations && !Filter->Stack && !Filter->Location;
-        BOOL LastRel = Filter->Relations && !Filter->Stack && !Filter->Location;
-        BOOL LastStk = Filter->Stack && !Filter->Location;
+        /* Inline views left to write; the last field of the last one ends the row. */
+        INT Remaining = (Filter->Ids ? 1 : 0) + (Filter->Relations ? 1 : 0) + (Filter->Services ? 1 : 0) +
+                        (Filter->Stack ? 1 : 0) + (Filter->Location ? 1 : 0) + (Filter->Resources ? 1 : 0);
 
         OutputCsvField(Output, InstanceId, FALSE);
         OutputCsvField(Output, Description, FALSE);
@@ -2258,7 +2840,7 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_COMPATIBLEIDS, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, LastIds);
+            OutputCsvField(Output, Cell2, --Remaining == 0);
         }
         if (Filter->Relations)
         {
@@ -2266,13 +2848,25 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, LastRel);
+            OutputCsvField(Output, Cell2, --Remaining == 0);
+        }
+        if (Filter->Services)
+        {
+            OutputCsvField(Output,
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_SERVICE, Cell, _countof(Cell), NULL),
+                           FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_UPPERFILTERS, List, _countof(List));
+            JoinMultiSz(List, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_LOWERFILTERS, List, _countof(List));
+            JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
+            OutputCsvField(Output, Cell2, --Remaining == 0);
         }
         if (Filter->Stack)
         {
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
             JoinMultiSz(List, Cell, _countof(Cell), TRUE);
-            OutputCsvField(Output, Cell, LastStk);
+            OutputCsvField(Output, Cell, --Remaining == 0);
         }
         if (Filter->Location)
         {
@@ -2281,11 +2875,27 @@ EmitDeviceRecord(
                            FALSE);
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, TRUE);
+            OutputCsvField(Output, Cell2, --Remaining == 0);
+        }
+        if (Filter->Resources)
+        {
+            RES_LIST Res;
+
+            ResListCollect(&Res, DeviceInfoData->DevInst);
+            JoinMultiSz(Res.Dma, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            JoinMultiSz(Res.Io, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            JoinMultiSz(Res.Irq, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, FALSE);
+            JoinMultiSz(Res.Mem, Cell, _countof(Cell), FALSE);
+            OutputCsvField(Output, Cell, --Remaining == 0);
         }
 
         if (Filter->Drivers)
             DriversEmitCsv(Output, &Drivers, InstanceId, HeaderCols - 1); /* Windows: H + 2 fields */
+        if (Filter->Interfaces)
+            IfacesEmitCsv(Output, InstanceId, HeaderCols - 3);
         if (Filter->Properties)
         {
             PROP_LIST Props;
@@ -2356,6 +2966,15 @@ EmitDeviceRecord(
             GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
             EmitXmlList(Output, L"Children", L"Child", List, FALSE);
         }
+        if (Filter->Services)
+        {
+            EmitXmlElement(Output, L"Service",
+                           GetDevicePropertyString(DeviceInfoSet, DeviceInfoData, SPDRP_SERVICE, Elem, _countof(Elem), NULL));
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_UPPERFILTERS, List, _countof(List));
+            EmitXmlList(Output, L"UpperFilters", L"Service", List, FALSE);
+            ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_LOWERFILTERS, List, _countof(List));
+            EmitXmlList(Output, L"LowerFilters", L"Service", List, FALSE);
+        }
         if (Filter->Stack)
         {
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
@@ -2368,9 +2987,21 @@ EmitDeviceRecord(
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
             EmitXmlList(Output, L"LocationPaths", L"LocationPath", List, FALSE);
         }
+        if (Filter->Resources)
+        {
+            RES_LIST Res;
+
+            ResListCollect(&Res, DeviceInfoData->DevInst);
+            EmitXmlList(Output, L"IoResources", L"Resource", Res.Io, FALSE);
+            EmitXmlList(Output, L"IrqResources", L"Resource", Res.Irq, FALSE);
+            EmitXmlList(Output, L"MemoryResources", L"Resource", Res.Mem, FALSE);
+            EmitXmlList(Output, L"DmaResources", L"Resource", Res.Dma, FALSE);
+        }
 
         if (Filter->Drivers)
             DriversEmitXml(Output, &Drivers);
+        if (Filter->Interfaces)
+            IfacesEmitXml(Output, InstanceId);
         if (Filter->Properties)
         {
             PROP_LIST Props;
@@ -2449,6 +3080,154 @@ OutputEmptyMessage(
     OutputPutsRaw(Output, Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
 }
 
+/* /enum-drivers /files /ids /devices ***************************************/
+
+/* Append one string to a growing double-NUL list. */
+static BOOL
+MultiSzAppend(
+    _Inout_ PWSTR *List,
+    _Inout_ SIZE_T *Used,
+    _Inout_ SIZE_T *Size,
+    _In_ PCWSTR Text)
+{
+    SIZE_T Length = wcslen(Text) + 1;
+
+    if (*Used + Length + 1 > *Size)
+    {
+        SIZE_T NewSize = (*Used + Length + 1) * 2;
+        PWSTR Grown = *List ? realloc(*List, NewSize * sizeof(WCHAR)) : malloc(NewSize * sizeof(WCHAR));
+
+        if (!Grown)
+            return FALSE;
+        *List = Grown;
+        *Size = NewSize;
+    }
+    wcscpy(*List + *Used, Text);
+    *Used += Length;
+    (*List)[*Used] = UNICODE_NULL;
+    return TRUE;
+}
+
+/* The files of a package folder, relative to it, without the INF and the catalog. */
+static VOID
+PackageFilesScan(
+    _In_ PCWSTR Folder,
+    _In_ PCWSTR Relative,
+    _In_ DWORD Depth,
+    _In_ PCWSTR InfName,
+    _In_ PCWSTR CatalogName,
+    _Inout_ PWSTR *List,
+    _Inout_ SIZE_T *Used,
+    _Inout_ SIZE_T *Size)
+{
+    WCHAR Pattern[MAX_PATH], Name[MAX_PATH];
+    WIN32_FIND_DATAW Find;
+    HANDLE hFind;
+
+    if (wcslen(Folder) + 3 >= _countof(Pattern))
+        return;
+    _snwprintf(Pattern, _countof(Pattern) - 1, L"%ls\\*", Folder);
+    Pattern[_countof(Pattern) - 1] = UNICODE_NULL;
+    hFind = FindFirstFileW(Pattern, &Find);
+    if (hFind == INVALID_HANDLE_VALUE)
+        return;
+    do
+    {
+        if (!wcscmp(Find.cFileName, L".") || !wcscmp(Find.cFileName, L".."))
+            continue;
+        if (wcslen(Relative) + wcslen(Find.cFileName) + 2 >= _countof(Name))
+            continue;
+        if (Relative[0])
+            _snwprintf(Name, _countof(Name) - 1, L"%ls\\%ls", Relative, Find.cFileName);
+        else
+            lstrcpynW(Name, Find.cFileName, _countof(Name));
+        Name[_countof(Name) - 1] = UNICODE_NULL;
+
+        if (Find.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        {
+            WCHAR Sub[MAX_PATH];
+
+            if (Depth < 6 && wcslen(Folder) + wcslen(Find.cFileName) + 2 < _countof(Sub))
+            {
+                _snwprintf(Sub, _countof(Sub) - 1, L"%ls\\%ls", Folder, Find.cFileName);
+                Sub[_countof(Sub) - 1] = UNICODE_NULL;
+                PackageFilesScan(Sub, Name, Depth + 1, InfName, CatalogName, List, Used, Size);
+            }
+            continue;
+        }
+        if (!Relative[0] && (_wcsicmp(Find.cFileName, InfName) == 0 ||
+                             (CatalogName[0] && _wcsicmp(Find.cFileName, CatalogName) == 0)))
+        {
+            continue;
+        }
+        MultiSzAppend(List, Used, Size, Name);
+    } while (FindNextFileW(hFind, &Find));
+    FindClose(hFind);
+}
+
+/* Description and state of a device by instance id, as /enum-devices shows them. */
+static VOID
+DriverDeviceBrief(
+    _In_ PCWSTR InstanceId,
+    _Out_writes_(Cch) PWSTR Description,
+    _In_ DWORD Cch,
+    _Out_ PCWSTR *State)
+{
+    HDEVINFO Set = SetupDiCreateDeviceInfoList(NULL, NULL);
+    SP_DEVINFO_DATA Info;
+
+    Description[0] = UNICODE_NULL;
+    *State = L"Disconnected";
+    if (Set == INVALID_HANDLE_VALUE)
+        return;
+    Info.cbSize = sizeof(Info);
+    if (SetupDiOpenDeviceInfoW(Set, InstanceId, NULL, 0, &Info))
+    {
+        ULONG Status = 0, Problem = 0;
+        DWORD Type;
+        WCHAR Buffer[512];
+
+        ZeroMemory(Buffer, sizeof(Buffer));
+        if (SetupDiGetDeviceRegistryPropertyW(Set, &Info, SPDRP_DEVICEDESC, &Type, (PBYTE)Buffer,
+                                              sizeof(Buffer) - sizeof(WCHAR), NULL) && Type == REG_SZ)
+        {
+            lstrcpynW(Description, Buffer, Cch);
+        }
+        if (CM_Get_DevNode_Status(&Status, &Problem, Info.DevInst, 0) == CR_SUCCESS)
+        {
+            if (Status & DN_HAS_PROBLEM)
+                *State = Problem == CM_PROB_DISABLED ? L"Disabled" : L"Problem";
+            else
+                *State = (Status & DN_STARTED) ? L"Started" : L"Stopped";
+        }
+    }
+    SetupDiDestroyDeviceInfoList(Set);
+}
+
+/* The per-package data the optional switches ask for. */
+typedef struct _DRVPKG_EXTRA
+{
+    WCHAR PackageId[MAX_PATH];
+    WCHAR FamilyId[MAX_PATH];
+    WCHAR Catalog[MAX_PATH];
+    PWSTR Devices;
+    PWSTR Files;
+} DRVPKG_EXTRA;
+
+static VOID
+DrvTxtLine(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ PCWSTR Indent,
+    _In_ PCWSTR Label,
+    _In_ PCWSTR Value)
+{
+    WCHAR Line[MAX_PATH * 2];
+
+    _snwprintf(Line, _countof(Line) - 1, L"%ls%-20ls%ls%ls", Indent, Label, Value, OutEol(Output));
+    Line[_countof(Line) - 1] = UNICODE_NULL;
+    OutputPutsRaw(Output, Line);
+}
+
 static INT
 CommandEnumDrivers(
     _In_ INT argc,
@@ -2459,7 +3238,9 @@ CommandEnumDrivers(
     WCHAR Version[MAX_PATH], ClassName[MAX_CLASS_NAME_LEN], DefaultName[MAX_PATH], Line[MAX_PATH + 32];
     WCHAR XmlVersion[64], XmlCommand[512];
     PCWSTR OutputFile = NULL, ClassFilter = NULL;
-    BOOL OutputFileGiven = FALSE;
+    BOOL OutputFileGiven = FALSE, WantFiles = FALSE, WantIds = FALSE, WantDevices = FALSE;
+    WCHAR Signer[128];
+    DWORD IdxCatalog, IdxFile, IdxDevice;
     WIN32_FIND_DATAW FindData;
     HANDLE hFind;
     UINT Length;
@@ -2468,7 +3249,19 @@ CommandEnumDrivers(
 
     for (i = 0; i < argc; i++)
     {
-        if (IsOption(argv[i], L"class") && i + 1 < argc)
+        if (IsOption(argv[i], L"files"))
+        {
+            WantFiles = TRUE;
+        }
+        else if (IsOption(argv[i], L"ids"))
+        {
+            WantIds = TRUE;
+        }
+        else if (IsOption(argv[i], L"devices"))
+        {
+            WantDevices = TRUE;
+        }
+        else if (IsOption(argv[i], L"class") && i + 1 < argc)
         {
             ClassFilter = argv[++i];
         }
@@ -2482,7 +3275,7 @@ CommandEnumDrivers(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -2492,7 +3285,7 @@ CommandEnumDrivers(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -2512,10 +3305,22 @@ CommandEnumDrivers(
     if (Output.Format == OutputText || Output.File != INVALID_HANDLE_VALUE)
         PrintHeader();
 
+    /* Column positions of the optional csv fields (the eleven base columns come first). */
+    IdxCatalog = 11 + (WantIds ? 2 : 0);
+    IdxFile = IdxCatalog + 1;
+    IdxDevice = IdxCatalog + (WantFiles ? 2 : 0);
+
     if (Output.Format == OutputCsv)
     {
         OutputPutsRaw(&Output, L"DriverName,OriginalName,ProviderName,ClassName,ClassGuid,ClassVersion,"
-                               L"ExtensionId,DriverVersion,SignerName,CatalogAttributes,WhcpVersion\r\n");
+                               L"ExtensionId,DriverVersion,SignerName,CatalogAttributes,WhcpVersion");
+        if (WantIds)
+            OutputPutsRaw(&Output, L",DriverPackageId,FamilyId");
+        if (WantFiles)
+            OutputPutsRaw(&Output, L",CatalogFile,File");
+        if (WantDevices)
+            OutputPutsRaw(&Output, L",Device,DeviceDescription,DeviceStatus,ProblemCode,ProblemStatus");
+        OutputPutsRaw(&Output, L"\r\n");
     }
     else if (Output.Format == OutputXml)
     {
@@ -2553,6 +3358,7 @@ CommandEnumDrivers(
         do
         {
             PCWSTR Original = FindData.cFileName;
+            DRVPKG_EXTRA Extra;
             GUID ClassGuid;
             HINF hInf;
 
@@ -2567,10 +3373,15 @@ CommandEnumDrivers(
             if (hInf == INVALID_HANDLE_VALUE)
                 continue;
 
+            Store[0] = UNICODE_NULL;
             if (SetupGetInfDriverStoreLocationW(Path, NULL, NULL, Store, _countof(Store), NULL) &&
                 wcsrchr(Store, L'\\'))
             {
                 Original = wcsrchr(Store, L'\\') + 1;
+            }
+            else
+            {
+                Store[0] = UNICODE_NULL;
             }
 
             GetInfVersionValue(hInf, L"Provider", Provider, _countof(Provider));
@@ -2583,13 +3394,71 @@ CommandEnumDrivers(
             if (wcschr(Version, L','))
                 *wcschr(Version, L',') = L' ';
             PadDriverVersionDate(Version, _countof(Version));
+            Extra.Catalog[0] = UNICODE_NULL;
+            Signer[0] = UNICODE_NULL;
+            if (Store[0])
+            {
+                DriverSignerName(Store, hInf, Signer, _countof(Signer));
+                DriverCatalogName(hInf, Extra.Catalog, _countof(Extra.Catalog));
+            }
             SetupCloseInfFile(hInf);
 
             if (ClassFilter && _wcsicmp(ClassFilter, ClassName) != 0 && _wcsicmp(ClassFilter, GuidText) != 0)
                 continue;
 
+            Extra.PackageId[0] = Extra.FamilyId[0] = UNICODE_NULL;
+            Extra.Devices = NULL;
+            Extra.Files = NULL;
+            if (WantIds && Store[0])
+            {
+                WCHAR Folder[MAX_PATH];
+                PWSTR Slash;
+                PCWSTR Name = Original;
+                SIZE_T n;
+
+                lstrcpynW(Folder, Store, _countof(Folder));
+                Slash = wcsrchr(Folder, L'\\');
+                if (Slash)
+                {
+                    *Slash = UNICODE_NULL;
+                    Slash = wcsrchr(Folder, L'\\');
+                    lstrcpynW(Extra.PackageId, Slash ? Slash + 1 : Folder, _countof(Extra.PackageId));
+                }
+                /* Provider with spaces as underscores, a dash, then the package's own INF name. */
+                lstrcpynW(Extra.FamilyId, Provider, _countof(Extra.FamilyId));
+                for (n = 0; Extra.FamilyId[n]; n++)
+                {
+                    if (Extra.FamilyId[n] == L' ')
+                        Extra.FamilyId[n] = L'_';
+                }
+                if (wcslen(Extra.FamilyId) + wcslen(Name) + 2 < _countof(Extra.FamilyId))
+                {
+                    wcscat(Extra.FamilyId, L"-");
+                    wcscat(Extra.FamilyId, Name);
+                }
+            }
+            if (WantDevices)
+                Extra.Devices = GetDevicesUsingInf(FindData.cFileName);
+            if (WantFiles && Store[0])
+            {
+                WCHAR Folder[MAX_PATH];
+                PWSTR Slash;
+                SIZE_T Used = 0, Size = 0;
+
+                lstrcpynW(Folder, Store, _countof(Folder));
+                Slash = wcsrchr(Folder, L'\\');
+                if (Slash)
+                {
+                    *Slash = UNICODE_NULL;
+                    PackageFilesScan(Folder, L"", 0, Original, Extra.Catalog, &Extra.Files, &Used, &Size);
+                }
+            }
+
             if (Output.Format == OutputCsv)
             {
+                /* The catalog name rides on the last row before the file rows. */
+                BOOL DevicesFirst = WantDevices && Extra.Devices && *Extra.Devices;
+                BOOL CatalogInBase = WantFiles && !DevicesFirst;
                 OutputCsvField(&Output, FindData.cFileName, FALSE);
                 OutputCsvField(&Output, Original, FALSE);
                 OutputCsvField(&Output, Provider, FALSE);
@@ -2598,9 +3467,53 @@ CommandEnumDrivers(
                 OutputCsvField(&Output, L"", FALSE);
                 OutputCsvField(&Output, L"", FALSE);
                 OutputCsvField(&Output, Version, FALSE);
+                OutputCsvField(&Output, Signer, FALSE);
                 OutputCsvField(&Output, L"", FALSE);
-                OutputCsvField(&Output, L"", FALSE);
-                OutputCsvField(&Output, L"", TRUE);
+                OutputCsvField(&Output, L"Unknown", !WantIds && !CatalogInBase);
+                if (WantIds)
+                {
+                    OutputCsvField(&Output, Extra.PackageId, FALSE);
+                    OutputCsvField(&Output, Extra.FamilyId, !CatalogInBase);
+                }
+                if (CatalogInBase)
+                    OutputCsvField(&Output, Extra.Catalog, TRUE);
+                if (DevicesFirst)
+                {
+                    PCWSTR Device;
+                    DWORD n;
+
+                    for (Device = Extra.Devices; *Device; Device += wcslen(Device) + 1)
+                    {
+                        WCHAR Description[256];
+                        PCWSTR State;
+                        BOOL LastRow = WantFiles && !*(Device + wcslen(Device) + 1);
+
+                        DriverDeviceBrief(Device, Description, _countof(Description), &State);
+                        OutputCsvField(&Output, FindData.cFileName, FALSE);
+                        for (n = 0; n + 1 < IdxDevice; n++)
+                            OutputCsvField(&Output, L"", FALSE);
+                        OutputCsvField(&Output, Device, FALSE);
+                        OutputCsvField(&Output, Description, FALSE);
+                        OutputCsvField(&Output, State, FALSE);
+                        OutputCsvField(&Output, L"", FALSE);
+                        OutputCsvField(&Output, L"", !LastRow);
+                        if (LastRow)
+                            OutputCsvField(&Output, Extra.Catalog, TRUE);
+                    }
+                }
+                if (WantFiles && Extra.Files)
+                {
+                    PCWSTR File;
+                    DWORD n;
+
+                    for (File = Extra.Files; *File; File += wcslen(File) + 1)
+                    {
+                        OutputCsvField(&Output, FindData.cFileName, FALSE);
+                        for (n = 0; n + 1 < IdxFile; n++)
+                            OutputCsvField(&Output, L"", FALSE);
+                        OutputCsvField(&Output, File, TRUE);
+                    }
+                }
             }
             else if (Output.Format == OutputXml)
             {
@@ -2616,9 +3529,55 @@ CommandEnumDrivers(
                 OutputXmlText(&Output, GuidText);
                 OutputPutsRaw(&Output, L"</ClassGuid>\r\n        <DriverVersion>");
                 OutputXmlText(&Output, Version);
-                OutputPutsRaw(&Output, L"</DriverVersion>\r\n        <SignerName></SignerName>\r\n"
+                OutputPutsRaw(&Output, L"</DriverVersion>\r\n        <SignerName>");
+                OutputXmlText(&Output, Signer);
+                OutputPutsRaw(&Output, L"</SignerName>\r\n"
                                        L"        <CatalogAttributes></CatalogAttributes>\r\n"
-                                       L"        <WhcpVersion></WhcpVersion>\r\n    </Driver>\r\n");
+                                       L"        <WhcpVersion>Unknown</WhcpVersion>\r\n");
+                if (WantIds)
+                {
+                    EmitXmlElement(&Output, L"DriverPackageId", Extra.PackageId);
+                    EmitXmlElement(&Output, L"FamilyId", Extra.FamilyId);
+                }
+                if (WantDevices && Extra.Devices && *Extra.Devices)
+                {
+                    PCWSTR Device;
+
+                    OutputPutsRaw(&Output, L"        <Devices>\r\n");
+                    for (Device = Extra.Devices; *Device; Device += wcslen(Device) + 1)
+                    {
+                        WCHAR Description[256];
+                        PCWSTR State;
+
+                        DriverDeviceBrief(Device, Description, _countof(Description), &State);
+                        OutputPutsRaw(&Output, L"            <Device InstanceId=\"");
+                        OutputXmlText(&Output, Device);
+                        OutputPutsRaw(&Output, L"\">\r\n                <DeviceDescription>");
+                        OutputXmlText(&Output, Description);
+                        OutputPutsRaw(&Output, L"</DeviceDescription>\r\n                <Status>");
+                        OutputXmlText(&Output, State);
+                        OutputPutsRaw(&Output, L"</Status>\r\n            </Device>\r\n");
+                    }
+                    OutputPutsRaw(&Output, L"        </Devices>\r\n");
+                }
+                if (WantFiles)
+                {
+                    EmitXmlElement(&Output, L"CatalogFile", Extra.Catalog);
+                    if (Extra.Files && *Extra.Files)
+                    {
+                        PCWSTR File;
+
+                        OutputPutsRaw(&Output, L"        <Files>\r\n");
+                        for (File = Extra.Files; *File; File += wcslen(File) + 1)
+                        {
+                            OutputPutsRaw(&Output, L"            <File Name=\"");
+                            OutputXmlText(&Output, File);
+                            OutputPutsRaw(&Output, L"\"></File>\r\n");
+                        }
+                        OutputPutsRaw(&Output, L"        </Files>\r\n");
+                    }
+                }
+                OutputPutsRaw(&Output, L"    </Driver>\r\n");
             }
             else
             {
@@ -2641,8 +3600,55 @@ CommandEnumDrivers(
                     OutputPutsRaw(&Output, Line);
                     OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
                 }
+                if (Signer[0])
+                    DrvTxtLine(&Output, L"", L"Signer Name:", Signer);
+                DrvTxtLine(&Output, L"", L"WHCP Version:", L"Unknown");
+                if (WantIds)
+                {
+                    DrvTxtLine(&Output, L"", L"Driver Package ID:", Extra.PackageId);
+                    DrvTxtLine(&Output, L"", L"Family ID:", Extra.FamilyId);
+                }
+                if (WantDevices && Extra.Devices && *Extra.Devices)
+                {
+                    PCWSTR Device;
+
+                    OutputPutsRaw(&Output, L"Devices:");
+                    OutputPutsRaw(&Output, OutEol(&Output));
+                    for (Device = Extra.Devices; *Device; Device += wcslen(Device) + 1)
+                    {
+                        WCHAR Description[256];
+                        PCWSTR State;
+
+                        DriverDeviceBrief(Device, Description, _countof(Description), &State);
+                        DrvTxtLine(&Output, L"    ", L"Instance ID:", Device);
+                        DrvTxtLine(&Output, L"    ", L"Device Description:", Description);
+                        DrvTxtLine(&Output, L"    ", L"Status:", State);
+                    }
+                }
+                if (WantFiles)
+                {
+                    PCWSTR File;
+
+                    if (Extra.Catalog[0])
+                        DrvTxtLine(&Output, L"", L"Catalog File:", Extra.Catalog);
+                    if (Extra.Files && *Extra.Files)
+                    {
+                        OutputPutsRaw(&Output, L"Driver Files:");
+                        OutputPutsRaw(&Output, OutEol(&Output));
+                        for (File = Extra.Files; *File; File += wcslen(File) + 1)
+                        {
+                            OutputPutsRaw(&Output, L"    ");
+                            OutputPutsRaw(&Output, File);
+                            OutputPutsRaw(&Output, OutEol(&Output));
+                        }
+                    }
+                }
                 OutputPutsRaw(&Output, Output.File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n");
             }
+            if (Extra.Devices)
+                free(Extra.Devices);
+            if (Extra.Files)
+                free(Extra.Files);
             Count++;
         } while (FindNextFileW(hFind, &FindData));
         FindClose(hFind);
@@ -2729,9 +3735,11 @@ CommandEnumDevices(
         {
             Filter.Resources = TRUE;
         }
-        else if (IsOption(argv[i], L"instanceid") && i + 1 < argc)
+        else if (IsOption(argv[i], L"instanceid"))
         {
-            Filter.InstanceId = argv[++i];
+            /* Without a value (end of line or a following switch) Windows lists every device. */
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                Filter.InstanceId = argv[++i];
         }
         else if (IsOption(argv[i], L"class") && i + 1 < argc)
         {
@@ -2756,7 +3764,7 @@ CommandEnumDevices(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -2766,7 +3774,7 @@ CommandEnumDevices(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -2797,17 +3805,20 @@ CommandEnumDevices(
             OutputPutsRaw(&Output, L",HardwareIds,CompatibleIds");
         if (Filter.Relations)
             OutputPutsRaw(&Output, L",Parent,Children");
+        if (Filter.Services)
+            OutputPutsRaw(&Output, L",Service,UpperFilters,LowerFilters");
         if (Filter.Stack)
             OutputPutsRaw(&Output, L",Stack");
         if (Filter.Location)
             OutputPutsRaw(&Output, L",LocationInfo,LocationPaths");
+        if (Filter.Resources)
+            OutputPutsRaw(&Output, L",DmaResources,IoResources,IrqResources,MemoryResources");
         if (Filter.Drivers)
             OutputPutsRaw(&Output, L",MatchingDriverName,Rank");
+        if (Filter.Interfaces)
+            OutputPutsRaw(&Output, L",Interface,InterfaceStatus");
         if (Filter.Properties)
             OutputPutsRaw(&Output, L",Key,Type,Value");
-        /* TODO: /services (Service,UpperFilters,LowerFilters -- xml filter element
-           shape not yet captured), /interfaces (Interface,InterfaceStatus) and
-           /resources columns land with their emission in the #2a continuation. */
         OutputPutsRaw(&Output, L"\r\n");
     }
     else if (Output.Format == OutputXml)
@@ -3006,57 +4017,26 @@ CommandEnumDevices(
     return ERROR_SUCCESS;
 }
 
-static INT
-CommandDevice(
+/* Run one device operation on an opened device: prints the progress and result lines and returns the
+   Win32 error (0 on success); a pending reboot is reported through NeedReboot. */
+static DWORD
+DeviceOperation(
     _In_ DI_FUNCTION Function,
     _In_ DWORD StateChange,
     _In_ PCWSTR Progress,
     _In_ PCWSTR Success,
     _In_ PCWSTR Failure,
-    _In_ INT argc,
-    _In_ WCHAR **argv)
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ PCWSTR InstanceId,
+    _Inout_ PBOOL NeedReboot)
 {
-    SP_DEVINFO_DATA DeviceInfoData;
     SP_DEVINSTALL_PARAMS_W InstallParams;
-    HDEVINFO DeviceInfoSet;
-    PCWSTR InstanceId = NULL;
-    BOOL Reboot = FALSE;
-    BOOL NeedReboot = FALSE;
+    BOOL Result = TRUE, Reboot = FALSE;
     DWORD Error = ERROR_SUCCESS;
-    BOOL Result;
-    INT i;
-
-    for (i = 0; i < argc; i++)
-    {
-        if (IsOption(argv[i], L"reboot"))
-            Reboot = TRUE;
-        else if (IsOption(argv[i], L"subtree"))
-            continue;
-        else if (!InstanceId)
-            InstanceId = argv[i];
-        else
-            return ERROR_INVALID_PARAMETER;
-    }
-
-    if (!InstanceId)
-        return ERROR_INVALID_PARAMETER;
-
-    PrintHeader();
-
-    DeviceInfoSet = SetupDiCreateDeviceInfoList(NULL, NULL);
-    if (DeviceInfoSet == INVALID_HANDLE_VALUE)
-        return (INT)GetLastError();
-
-    DeviceInfoData.cbSize = sizeof(DeviceInfoData);
-    if (!SetupDiOpenDeviceInfoW(DeviceInfoSet, InstanceId, NULL, 0, &DeviceInfoData))
-    {
-        SetupDiDestroyDeviceInfoList(DeviceInfoSet);
-        return ERROR_SUCCESS;
-    }
 
     ConPrintf(StdOut, L"%ls%ls\n", Progress, InstanceId);
 
-    Result = TRUE;
     if (Function == DIF_PROPERTYCHANGE)
     {
         SP_PROPCHANGE_PARAMS PropChange;
@@ -3067,26 +4047,26 @@ CommandDevice(
         PropChange.Scope = StateChange == DICS_PROPCHANGE ? DICS_FLAG_CONFIGSPECIFIC : DICS_FLAG_GLOBAL;
         PropChange.HwProfile = 0;
         Result = SetupDiSetClassInstallParamsW(DeviceInfoSet,
-                                               &DeviceInfoData,
+                                               DeviceInfoData,
                                                &PropChange.ClassInstallHeader,
                                                sizeof(PropChange));
     }
     if (Result)
-        Result = SetupDiCallClassInstaller(Function, DeviceInfoSet, &DeviceInfoData);
+        Result = SetupDiCallClassInstaller(Function, DeviceInfoSet, DeviceInfoData);
 
     if (Result)
     {
         InstallParams.cbSize = sizeof(InstallParams);
         if (Function != DIF_REMOVE &&
-            SetupDiGetDeviceInstallParamsW(DeviceInfoSet, &DeviceInfoData, &InstallParams))
+            SetupDiGetDeviceInstallParamsW(DeviceInfoSet, DeviceInfoData, &InstallParams))
         {
-            NeedReboot = (InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT)) != 0;
+            Reboot = (InstallParams.Flags & (DI_NEEDRESTART | DI_NEEDREBOOT)) != 0;
         }
-        if (!NeedReboot && Function == DIF_PROPERTYCHANGE && StateChange != DICS_DISABLE)
+        if (!Reboot && Function == DIF_PROPERTYCHANGE && StateChange != DICS_DISABLE)
         {
             ULONG Status = 0, Problem = 0;
 
-            if (CM_Get_DevNode_Status(&Status, &Problem, DeviceInfoData.DevInst, 0) != CR_SUCCESS ||
+            if (CM_Get_DevNode_Status(&Status, &Problem, DeviceInfoData->DevInst, 0) != CR_SUCCESS ||
                 !(Status & DN_STARTED))
             {
                 Result = FALSE;
@@ -3100,22 +4080,342 @@ CommandDevice(
         Error = GetLastError();
         PrintError(Failure, Error);
     }
-    else if (!NeedReboot)
+    else if (!Reboot)
     {
         ConPrintf(StdOut, L"%ls\n", Success);
     }
     ConPuts(StdOut, L"\n");
 
+    if (Reboot)
+        *NeedReboot = TRUE;
+    return Error;
+}
+
+typedef struct _DEVICE_SELECTION
+{
+    PCWSTR InstanceId;
+    PCWSTR DeviceId;
+    PCWSTR Class;
+    PCWSTR Bus;
+} DEVICE_SELECTION;
+
+static BOOL
+IsSwitchArgument(
+    _In_ PCWSTR Argument)
+{
+    return Argument[0] == L'/' || Argument[0] == L'-';
+}
+
+/* A device id given to /deviceid matches when it equals one of the device's hardware or compatible ids. */
+static BOOL
+DeviceHasId(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ PCWSTR Id)
+{
+    static const DWORD Properties[] = { SPDRP_HARDWAREID, SPDRP_COMPATIBLEIDS };
+    WCHAR List[2048];
+    PCWSTR Value;
+    UINT n;
+
+    for (n = 0; n < _countof(Properties); n++)
+    {
+        ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, Properties[n], List, _countof(List));
+        for (Value = List; *Value; Value += wcslen(Value) + 1)
+        {
+            if (_wcsicmp(Value, Id) == 0)
+                return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/* /bus takes a bus enumerator name (the first part of the instance id) or a bus type GUID. */
+static BOOL
+DeviceOnBus(
+    _In_ HDEVINFO DeviceInfoSet,
+    _In_ PSP_DEVINFO_DATA DeviceInfoData,
+    _In_ PCWSTR Instance,
+    _In_ PCWSTR Bus)
+{
+    WCHAR Enumerator[MAX_DEVICE_ID_LEN];
+    GUID Wanted, Actual;
+    PCWSTR Slash = wcschr(Instance, L'\\');
+    SIZE_T Length = Slash ? (SIZE_T)(Slash - Instance) : wcslen(Instance);
+    DEVPROPTYPE Type;
+
+    if (Length < _countof(Enumerator))
+    {
+        memcpy(Enumerator, Instance, Length * sizeof(WCHAR));
+        Enumerator[Length] = UNICODE_NULL;
+        if (_wcsicmp(Enumerator, Bus) == 0)
+            return TRUE;
+    }
+    return Bus[0] == L'{' && CLSIDFromString(Bus, &Wanted) == S_OK &&
+           SetupDiGetDevicePropertyW(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_BusTypeGuid, &Type,
+                                     (PBYTE)&Actual, sizeof(Actual), NULL, 0) &&
+           Type == DEVPROP_TYPE_GUID && IsEqualGUID(&Wanted, &Actual);
+}
+
+/* /remove-device /subtree: the children go first, deepest ones before their parents. */
+static VOID
+RemoveSubtreeChildren(
+    _In_ DEVINST Parent,
+    _In_ DWORD Depth,
+    _In_ PCWSTR Progress,
+    _In_ PCWSTR Success,
+    _In_ PCWSTR Failure,
+    _Inout_ PBOOL NeedReboot,
+    _Inout_ PDWORD FirstError)
+{
+    DEVINST Child, Next;
+    WCHAR (*Ids)[MAX_DEVICE_ID_LEN];
+    DWORD Count = 0, Capacity = 16, i;
+
+    if (Depth > 32 || CM_Get_Child(&Child, Parent, 0) != CR_SUCCESS)
+        return;
+
+    Ids = HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Ids));
+    if (!Ids)
+        return;
+    for (;;)
+    {
+        RemoveSubtreeChildren(Child, Depth + 1, Progress, Success, Failure, NeedReboot, FirstError);
+        if (Count == Capacity)
+        {
+            WCHAR (*Grown)[MAX_DEVICE_ID_LEN] = HeapReAlloc(GetProcessHeap(), 0, Ids, Capacity * 2 * sizeof(*Ids));
+
+            if (!Grown)
+                break;
+            Ids = Grown;
+            Capacity *= 2;
+        }
+        if (CM_Get_Device_IDW(Child, Ids[Count], MAX_DEVICE_ID_LEN, 0) == CR_SUCCESS)
+            Count++;
+        if (CM_Get_Sibling(&Next, Child, 0) != CR_SUCCESS)
+            break;
+        Child = Next;
+    }
+
+    for (i = 0; i < Count; i++)
+    {
+        HDEVINFO Set = SetupDiCreateDeviceInfoList(NULL, NULL);
+        SP_DEVINFO_DATA Info;
+
+        if (Set == INVALID_HANDLE_VALUE)
+            continue;
+        Info.cbSize = sizeof(Info);
+        if (SetupDiOpenDeviceInfoW(Set, Ids[i], NULL, 0, &Info))
+        {
+            DWORD Error = DeviceOperation(DIF_REMOVE, 0, Progress, Success, Failure, Set, &Info, Ids[i], NeedReboot);
+
+            if (Error != ERROR_SUCCESS && *FirstError == ERROR_SUCCESS)
+                *FirstError = Error;
+        }
+        SetupDiDestroyDeviceInfoList(Set);
+    }
+    HeapFree(GetProcessHeap(), 0, Ids);
+}
+
+static INT
+CommandDevice(
+    _In_ DI_FUNCTION Function,
+    _In_ DWORD StateChange,
+    _In_ PCWSTR Progress,
+    _In_ PCWSTR Success,
+    _In_ PCWSTR Failure,
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    DEVICE_SELECTION Selection = { NULL, NULL, NULL, NULL };
+    SP_DEVINFO_DATA DeviceInfoData;
+    HDEVINFO DeviceInfoSet;
+    BOOL Reboot = FALSE, Subtree = FALSE, NeedReboot = FALSE;
+    DWORD Error = ERROR_SUCCESS, Index;
+    INT i;
+
+    /* The instance id, when given, comes first; the filters and flags follow. /force is accepted
+       everywhere, /subtree only by /remove-device. */
+    for (i = 0; i < argc; i++)
+    {
+        if (i == 0 && !IsSwitchArgument(argv[0]))
+        {
+            Selection.InstanceId = argv[0];
+        }
+        else if (IsOption(argv[i], L"reboot"))
+        {
+            Reboot = TRUE;
+        }
+        else if (IsOption(argv[i], L"force"))
+        {
+            continue;
+        }
+        else if (IsOption(argv[i], L"subtree") && Function == DIF_REMOVE)
+        {
+            Subtree = TRUE;
+        }
+        else if (IsOption(argv[i], L"deviceid") || IsOption(argv[i], L"class") || IsOption(argv[i], L"bus"))
+        {
+            PCWSTR Value = NULL;
+
+            if (i + 1 < argc && !IsSwitchArgument(argv[i + 1]))
+                Value = argv[++i];
+            if (IsOption(argv[i - (Value ? 1 : 0)], L"deviceid"))
+                Selection.DeviceId = Value;
+            else if (IsOption(argv[i - (Value ? 1 : 0)], L"class"))
+                Selection.Class = Value;
+            else
+                Selection.Bus = Value;
+        }
+        else
+        {
+            return RC_USAGE;
+        }
+    }
+
+    if ((!Selection.InstanceId && !Selection.DeviceId && !Selection.Class && !Selection.Bus) ||
+        (Selection.InstanceId && Selection.DeviceId))
+    {
+        return RC_USAGE;
+    }
+
+    PrintHeader();
+
+    /* A lone instance id opens that device directly, present or not. */
+    if (Selection.InstanceId && !Selection.Class && !Selection.Bus)
+    {
+        DeviceInfoSet = SetupDiCreateDeviceInfoList(NULL, NULL);
+        if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+            return (INT)GetLastError();
+
+        DeviceInfoData.cbSize = sizeof(DeviceInfoData);
+        if (!SetupDiOpenDeviceInfoW(DeviceInfoSet, Selection.InstanceId, NULL, 0, &DeviceInfoData))
+        {
+            SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+            return ERROR_SUCCESS;
+        }
+        if (Subtree)
+            RemoveSubtreeChildren(DeviceInfoData.DevInst, 0, Progress, Success, Failure, &NeedReboot, &Error);
+        {
+            DWORD Own = DeviceOperation(Function, StateChange, Progress, Success, Failure, DeviceInfoSet,
+                                        &DeviceInfoData, Selection.InstanceId, &NeedReboot);
+
+            if (Error == ERROR_SUCCESS)
+                Error = Own;
+        }
+        SetupDiDestroyDeviceInfoList(DeviceInfoSet);
+        return FinishOperation(Error, NeedReboot, Reboot);
+    }
+
+    /* Filters: every device present that matches all of them. */
+    DeviceInfoSet = SetupDiGetClassDevsW(NULL, NULL, NULL, DIGCF_ALLCLASSES | DIGCF_PRESENT);
+    if (DeviceInfoSet == INVALID_HANDLE_VALUE)
+        return (INT)GetLastError();
+
+    DeviceInfoData.cbSize = sizeof(DeviceInfoData);
+    for (Index = 0; SetupDiEnumDeviceInfo(DeviceInfoSet, Index, &DeviceInfoData); Index++)
+    {
+        WCHAR Id[MAX_DEVICE_ID_LEN + 1];
+        DWORD Own;
+
+        if (!SetupDiGetDeviceInstanceIdW(DeviceInfoSet, &DeviceInfoData, Id, _countof(Id), NULL))
+            continue;
+        if ((Selection.InstanceId && _wcsicmp(Selection.InstanceId, Id) != 0) ||
+            (Selection.DeviceId && !DeviceHasId(DeviceInfoSet, &DeviceInfoData, Selection.DeviceId)) ||
+            (Selection.Class && !MatchesClass(DeviceInfoSet, &DeviceInfoData, Selection.Class)) ||
+            (Selection.Bus && !DeviceOnBus(DeviceInfoSet, &DeviceInfoData, Id, Selection.Bus)))
+        {
+            continue;
+        }
+
+        if (Subtree)
+            RemoveSubtreeChildren(DeviceInfoData.DevInst, 0, Progress, Success, Failure, &NeedReboot, &Error);
+        Own = DeviceOperation(Function, StateChange, Progress, Success, Failure, DeviceInfoSet, &DeviceInfoData,
+                              Id, &NeedReboot);
+        if (Own != ERROR_SUCCESS && Error == ERROR_SUCCESS)
+            Error = Own;
+    }
+
     SetupDiDestroyDeviceInfoList(DeviceInfoSet);
     return FinishOperation(Error, NeedReboot, Reboot);
 }
 
-static INT
-CommandScanDevices(VOID)
+/* The Win32 error for a failed configuration manager call, for the codes a scan can return. */
+static DWORD
+ScanErrorFromCr(
+    _In_ CONFIGRET Cr)
 {
+    switch (Cr)
+    {
+        case CR_ACCESS_DENIED: return ERROR_ACCESS_DENIED;
+        case CR_NO_SUCH_DEVNODE:
+        case CR_INVALID_DEVNODE: return ERROR_NO_SUCH_DEVINST;
+        case CR_OUT_OF_MEMORY: return ERROR_NOT_ENOUGH_MEMORY;
+        case CR_INVALID_FLAG: return ERROR_INVALID_FLAGS;
+        case CR_INVALID_POINTER: return ERROR_INVALID_USER_BUFFER;
+        default: return ERROR_GEN_FAILURE;
+    }
+}
+
+static INT
+CommandScanDevices(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    PCWSTR InstanceId = NULL;
+    BOOL Async = FALSE;
+    DEVINST Node;
+    CONFIGRET Cr;
+    DWORD Error = ERROR_SUCCESS;
+    INT i;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (IsOption(argv[i], L"async"))
+        {
+            Async = TRUE;
+        }
+        else if (IsOption(argv[i], L"instanceid"))
+        {
+            /* Without a value (end of line or a following switch) the whole tree is scanned. */
+            if (i + 1 < argc && argv[i + 1][0] != L'/' && argv[i + 1][0] != L'-')
+                InstanceId = argv[++i];
+        }
+        else
+        {
+            return RC_USAGE;
+        }
+    }
+
     PrintHeader();
     ConPuts(StdOut, L"Scanning for device hardware changes.\n");
-    ScanDevices();
+
+    Cr = CM_Locate_DevNodeW(&Node, (DEVINSTID_W)InstanceId, CM_LOCATE_DEVNODE_NORMAL);
+    if (Cr == CR_SUCCESS)
+        Cr = CM_Reenumerate_DevNode(Node, Async ? CM_REENUMERATE_NORMAL : CM_REENUMERATE_SYNCHRONOUS);
+    if (Cr != CR_SUCCESS)
+        Error = ScanErrorFromCr(Cr);
+
+    if (Error != ERROR_SUCCESS)
+    {
+        /* Windows names the failure, then gives the reason on its own line. */
+        ConPuts(StdOut, L"Failed to scan devices.\n");
+        if (Error == ERROR_NO_SUCH_DEVINST)
+            ConPuts(StdOut, L"The device instance does not exist in the hardware tree.\n");
+        else
+        {
+            WCHAR Text[512];
+            DWORD Length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS, NULL, Error, 0,
+                                          Text, _countof(Text), NULL);
+
+            while (Length > 0 && (Text[Length - 1] == L'\r' || Text[Length - 1] == L'\n' || Text[Length - 1] == L' '))
+                Text[--Length] = UNICODE_NULL;
+            ConPrintf(StdOut, L"%ls\n", Length ? Text : L"Unknown error.");
+        }
+        ConPuts(StdOut, L"\n");
+        return (INT)Error;
+    }
+
     ConPuts(StdOut, L"Scan complete.\n\n");
     return ERROR_SUCCESS;
 }
@@ -3134,11 +4434,11 @@ CommandRollbackDevice(_In_ INT argc, _In_ WCHAR **argv)
         else if (!InstanceId)
             InstanceId = argv[i];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     if (!InstanceId)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
     ConPrintf(StdOut, L"Rolling back device:       %s\n", InstanceId);
@@ -3522,7 +4822,7 @@ CommandExportDriver(
     BOOL All;
 
     if (argc != 2)
-        return ERROR_INVALID_PARAMETER;
+        return RC_USAGE;
 
     PrintHeader();
     All = wcscmp(argv[0], L"*") == 0;
@@ -3817,7 +5117,7 @@ CommandEnumClasses(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -3827,7 +5127,7 @@ CommandEnumClasses(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -4308,7 +5608,7 @@ CommandEnumInterfaces(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -4318,7 +5618,7 @@ CommandEnumInterfaces(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -4436,108 +5736,6 @@ CommandEnumInterfaces(
 /* /enum-devicetree *********************************************************/
 
 #define TREE_MAX_DEPTH 96
-
-typedef struct _TREE_IFACE
-{
-    WCHAR InstanceId[MAX_DEVICE_ID_LEN];
-    PWSTR Path;
-    BOOL Enabled;
-} TREE_IFACE;
-
-typedef struct _TREE_CONTEXT
-{
-    BOOL Connected;
-    BOOL Services;
-    BOOL Interfaces;
-    TREE_IFACE *Ifaces;
-    DWORD IfaceCount;
-    DWORD IfaceCapacity;
-} TREE_CONTEXT;
-
-/* Collect every device interface (all classes) once, so each node can list its own. */
-static VOID
-TreeCollectInterfaces(
-    _Inout_ TREE_CONTEXT *Ctx)
-{
-    HKEY hClasses;
-    WCHAR KeyName[64];
-    DWORD Index;
-
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\DeviceClasses", 0,
-                      KEY_READ, &hClasses) != ERROR_SUCCESS)
-    {
-        return;
-    }
-
-    for (Index = 0; ; Index++)
-    {
-        DWORD Length = _countof(KeyName), Item, Size;
-        GUID Guid;
-        HDEVINFO Set;
-
-        if (RegEnumKeyExW(hClasses, Index, KeyName, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
-            break;
-        if (CLSIDFromString(KeyName, &Guid) != S_OK)
-            continue;
-        Set = SetupDiGetClassDevsW(&Guid, NULL, NULL, DIGCF_DEVICEINTERFACE);
-        if (Set == INVALID_HANDLE_VALUE)
-            continue;
-
-        for (Item = 0; ; Item++)
-        {
-            SP_DEVICE_INTERFACE_DATA Interface;
-            SP_DEVINFO_DATA DeviceInfo;
-            PSP_DEVICE_INTERFACE_DETAIL_DATA_W Detail;
-            TREE_IFACE *Entry;
-
-            Interface.cbSize = sizeof(Interface);
-            if (!SetupDiEnumDeviceInterfaces(Set, NULL, &Guid, Item, &Interface))
-                break;
-            Size = 0;
-            SetupDiGetDeviceInterfaceDetailW(Set, &Interface, NULL, 0, &Size, NULL);
-            if (Size < sizeof(*Detail))
-                continue;
-            Detail = HeapAlloc(GetProcessHeap(), 0, Size);
-            if (!Detail)
-                break;
-            Detail->cbSize = sizeof(*Detail);
-            DeviceInfo.cbSize = sizeof(DeviceInfo);
-            if (!SetupDiGetDeviceInterfaceDetailW(Set, &Interface, Detail, Size, NULL, &DeviceInfo))
-            {
-                HeapFree(GetProcessHeap(), 0, Detail);
-                continue;
-            }
-
-            if (Ctx->IfaceCount == Ctx->IfaceCapacity)
-            {
-                DWORD Capacity = Ctx->IfaceCapacity ? Ctx->IfaceCapacity * 2 : 256;
-                TREE_IFACE *Grown = Ctx->Ifaces ? HeapReAlloc(GetProcessHeap(), 0, Ctx->Ifaces, Capacity * sizeof(*Grown))
-                                                : HeapAlloc(GetProcessHeap(), 0, Capacity * sizeof(*Grown));
-
-                if (!Grown)
-                {
-                    HeapFree(GetProcessHeap(), 0, Detail);
-                    break;
-                }
-                Ctx->Ifaces = Grown;
-                Ctx->IfaceCapacity = Capacity;
-            }
-            Entry = &Ctx->Ifaces[Ctx->IfaceCount];
-            Entry->InstanceId[0] = UNICODE_NULL;
-            SetupDiGetDeviceInstanceIdW(Set, &DeviceInfo, Entry->InstanceId, _countof(Entry->InstanceId), NULL);
-            Entry->Enabled = (Interface.Flags & SPINT_ACTIVE) && !(Interface.Flags & SPINT_REMOVED);
-            Entry->Path = HeapAlloc(GetProcessHeap(), 0, (wcslen(Detail->DevicePath) + 1) * sizeof(WCHAR));
-            if (Entry->Path)
-            {
-                wcscpy(Entry->Path, Detail->DevicePath);
-                Ctx->IfaceCount++;
-            }
-            HeapFree(GetProcessHeap(), 0, Detail);
-        }
-        SetupDiDestroyDeviceInfoList(Set);
-    }
-    RegCloseKey(hClasses);
-}
 
 /* One property of a devnode as a heap buffer (double NUL terminated), or NULL. */
 static PWSTR
@@ -4766,7 +5964,7 @@ CommandEnumDeviceTree(
         else if (!RootId && argv[a][0] != L'/' && argv[a][0] != L'-')
             RootId = argv[a];
         else
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
     }
 
     PrintHeader();
@@ -4964,7 +6162,7 @@ CommandEnumContainers(
             else if (_wcsicmp(argv[i], L"csv") == 0)
                 Output.Format = OutputCsv;
             else
-                return ERROR_INVALID_PARAMETER;
+                return RC_USAGE;
         }
         else if (IsOption(argv[i], L"output-file"))
         {
@@ -4974,7 +6172,7 @@ CommandEnumContainers(
         }
         else
         {
-            return ERROR_INVALID_PARAMETER;
+            return RC_USAGE;
         }
     }
 
@@ -5170,6 +6368,56 @@ CommandEnumContainers(
     }
 }
 
+/* The switch name in lower case without its prefix, "ids" folded into "deviceids"; false for a value. */
+static BOOL
+CanonicalSwitch(
+    _In_ PCWSTR Arg,
+    _Out_writes_(Cch) PWSTR Name,
+    _In_ DWORD Cch)
+{
+    if (Arg[0] != L'/' && Arg[0] != L'-')
+        return FALSE;
+    lstrcpynW(Name, Arg + 1, Cch);
+    CharLowerW(Name);
+    if (!wcscmp(Name, L"ids"))
+        wcscpy(Name, L"deviceids");
+    return TRUE;
+}
+
+/* Windows rejects a switch that appears twice and the pairs that cannot be combined. */
+static BOOL
+HasConflictingSwitches(
+    _In_ INT argc,
+    _In_ WCHAR **argv)
+{
+    static const PCWSTR Exclusive[][2] = { { L"connected", L"disconnected" }, { L"enabled", L"disabled" } };
+    WCHAR A[64], B[64];
+    INT i, j;
+    UINT k;
+
+    for (i = 0; i < argc; i++)
+    {
+        if (!CanonicalSwitch(argv[i], A, _countof(A)))
+            continue;
+        for (j = i + 1; j < argc; j++)
+        {
+            if (!CanonicalSwitch(argv[j], B, _countof(B)))
+                continue;
+            if (!wcscmp(A, B))
+                return TRUE;
+            for (k = 0; k < _countof(Exclusive); k++)
+            {
+                if ((!wcscmp(A, Exclusive[k][0]) && !wcscmp(B, Exclusive[k][1])) ||
+                    (!wcscmp(A, Exclusive[k][1]) && !wcscmp(B, Exclusive[k][0])))
+                {
+                    return TRUE;
+                }
+            }
+        }
+    }
+    return FALSE;
+}
+
 int
 wmain(
     int argc,
@@ -5189,6 +6437,12 @@ wmain(
     Command = argv[1];
     argc -= 2;
     argv += 2;
+
+    if (HasConflictingSwitches(argc, argv))
+    {
+        ConPuts(StdOut, UsageText);
+        return 1;
+    }
 
     if (IsOption(Command, L"add-driver") || IsOption(Command, L"a"))
     {
@@ -5236,7 +6490,7 @@ wmain(
     }
     else if (IsOption(Command, L"scan-devices"))
     {
-        Result = CommandScanDevices();
+        Result = CommandScanDevices(argc, argv);
     }
     else if (IsOption(Command, L"rollback-device"))
     {
@@ -5268,10 +6522,10 @@ wmain(
     }
     else
     {
-        Result = ERROR_INVALID_PARAMETER;
+        Result = RC_USAGE;
     }
 
-    if (Result == ERROR_INVALID_PARAMETER)
+    if (Result == RC_USAGE)
     {
         ConPuts(StdOut, UsageText);
         Result = 1;
