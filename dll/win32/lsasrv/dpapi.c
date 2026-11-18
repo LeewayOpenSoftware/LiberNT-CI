@@ -22,6 +22,197 @@
 #define DPAPI_MAX_DATA_SIZE         (16 * 1024 * 1024)
 #define DPAPI_MAX_ENTROPY_SIZE      (64 * 1024)
 
+#ifndef CRYPTPROTECT_LOCAL_MACHINE
+#define CRYPTPROTECT_LOCAL_MACHINE  0x0004
+#endif
+
+#define DPAPI_MACHINE_KEY_SIZE      64
+
+/* LiberNT-private LSA secret holding the machine-wide DPAPI key. The "L$" prefix marks a local
+ * (non-replicated) secret. No Windows master-key blob-format compatibility yet (gap). */
+#define DPAPI_MACHINE_SECRET_NAME   L"L$LDW_DPAPI_MACHINE"
+
+static RTL_CRITICAL_SECTION DpapiMachineKeyLock;
+static BYTE DpapiMachineKey[DPAPI_MACHINE_KEY_SIZE];
+static BOOLEAN DpapiMachineKeyLoaded = FALSE;
+
+VOID
+DpapiServerInitialize(VOID)
+{
+    RtlInitializeCriticalSection(&DpapiMachineKeyLock);
+}
+
+static NTSTATUS DpapiGetCallerLogonId(_Out_ PLUID LogonId);
+
+static
+NTSTATUS
+DpapiReadMachineSecret(
+    _In_ PLSA_DB_OBJECT PolicyObject,
+    _Out_writes_bytes_(DPAPI_MACHINE_KEY_SIZE) PBYTE Key)
+{
+    PLSA_DB_OBJECT SecretObject = NULL;
+    ULONG Size = DPAPI_MACHINE_KEY_SIZE;
+    NTSTATUS Status;
+
+    Status = LsapOpenDbObject(PolicyObject,
+                              L"Secrets",
+                              DPAPI_MACHINE_SECRET_NAME,
+                              LsaDbSecretObject,
+                              0,
+                              TRUE,
+                              &SecretObject);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = LsapGetObjectAttribute(SecretObject, L"CurrentValue", Key, &Size);
+    if (NT_SUCCESS(Status) && Size != DPAPI_MACHINE_KEY_SIZE)
+        Status = STATUS_UNSUCCESSFUL;
+
+    LsapCloseDbObject(SecretObject);
+    return Status;
+}
+
+static
+NTSTATUS
+DpapiCreateMachineSecret(
+    _In_ PLSA_DB_OBJECT PolicyObject,
+    _In_reads_bytes_(DPAPI_MACHINE_KEY_SIZE) PBYTE Key)
+{
+    PLSA_DB_OBJECT SecretObject = NULL;
+    PSECURITY_DESCRIPTOR SecretSd = NULL;
+    ULONG SecretSdSize = 0;
+    LARGE_INTEGER Time;
+    NTSTATUS Status;
+
+    Status = LsapCreateSecretSd(&SecretSd, &SecretSdSize);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = LsapCreateDbObject(PolicyObject,
+                                L"Secrets",
+                                DPAPI_MACHINE_SECRET_NAME,
+                                LsaDbSecretObject,
+                                0,
+                                TRUE,
+                                &SecretObject);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    NtQuerySystemTime(&Time);
+    LsapSetObjectAttribute(SecretObject, L"CurrentTime", &Time, sizeof(LARGE_INTEGER));
+    LsapSetObjectAttribute(SecretObject, L"OldTime", &Time, sizeof(LARGE_INTEGER));
+    LsapSetObjectAttribute(SecretObject, L"SecDesc", SecretSd, SecretSdSize);
+    Status = LsapSetObjectAttribute(SecretObject, L"CurrentValue", Key, DPAPI_MACHINE_KEY_SIZE);
+
+done:
+    if (SecretObject != NULL)
+        LsapCloseDbObject(SecretObject);
+    if (SecretSd != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, SecretSd);
+    return Status;
+}
+
+static
+NTSTATUS
+DpapiLoadMachineKey(
+    _Out_writes_bytes_(DPAPI_MACHINE_KEY_SIZE) PBYTE Key)
+{
+    PLSA_DB_OBJECT PolicyObject = NULL;
+    NTSTATUS Status;
+
+    RtlEnterCriticalSection(&DpapiMachineKeyLock);
+
+    if (DpapiMachineKeyLoaded)
+    {
+        RtlCopyMemory(Key, DpapiMachineKey, DPAPI_MACHINE_KEY_SIZE);
+        RtlLeaveCriticalSection(&DpapiMachineKeyLock);
+        return STATUS_SUCCESS;
+    }
+
+    Status = LsapOpenDbObject(NULL,
+                              NULL,
+                              L"Policy",
+                              LsaDbPolicyObject,
+                              0,
+                              TRUE,
+                              &PolicyObject);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = DpapiReadMachineSecret(PolicyObject, DpapiMachineKey);
+    if (!NT_SUCCESS(Status))
+    {
+        Status = BCryptGenRandom(NULL, DpapiMachineKey, DPAPI_MACHINE_KEY_SIZE,
+                                 BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+        if (!NT_SUCCESS(Status))
+            goto done;
+
+        Status = DpapiCreateMachineSecret(PolicyObject, DpapiMachineKey);
+        if (!NT_SUCCESS(Status))
+        {
+            RtlSecureZeroMemory(DpapiMachineKey, DPAPI_MACHINE_KEY_SIZE);
+            goto done;
+        }
+    }
+
+    DpapiMachineKeyLoaded = TRUE;
+    RtlCopyMemory(Key, DpapiMachineKey, DPAPI_MACHINE_KEY_SIZE);
+
+done:
+    if (PolicyObject != NULL)
+        LsapCloseDbObject(PolicyObject);
+    RtlLeaveCriticalSection(&DpapiMachineKeyLock);
+    return Status;
+}
+
+/*
+ * Produce the key material PBKDF2 derives from. CRYPTPROTECT_LOCAL_MACHINE uses the machine key so
+ * any user on the machine can unprotect; otherwise the caller's per-logon pre-key is used and the
+ * data is bound to that logon identity. The returned Buffer is always heap-allocated and the caller
+ * frees it (and zeroes it) the same way for both paths.
+ */
+static
+NTSTATUS
+DpapiAcquireKey(
+    _In_ ULONG Flags,
+    _Out_ PLSA_STRING Key)
+{
+    LUID LogonId;
+    NTSTATUS Status;
+
+    Key->Length = 0;
+    Key->MaximumLength = 0;
+    Key->Buffer = NULL;
+
+    if (Flags & CRYPTPROTECT_LOCAL_MACHINE)
+    {
+        BYTE MachineKey[DPAPI_MACHINE_KEY_SIZE];
+
+        Status = DpapiLoadMachineKey(MachineKey);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Key->Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, DPAPI_MACHINE_KEY_SIZE);
+        if (Key->Buffer == NULL)
+        {
+            RtlSecureZeroMemory(MachineKey, sizeof(MachineKey));
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        RtlCopyMemory(Key->Buffer, MachineKey, DPAPI_MACHINE_KEY_SIZE);
+        Key->Length = DPAPI_MACHINE_KEY_SIZE;
+        Key->MaximumLength = DPAPI_MACHINE_KEY_SIZE;
+        RtlSecureZeroMemory(MachineKey, sizeof(MachineKey));
+        return STATUS_SUCCESS;
+    }
+
+    Status = DpapiGetCallerLogonId(&LogonId);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    return LsapGetDpapiPrekey(&LogonId, Key);
+}
+
 static
 NTSTATUS
 DpapiGetCallerLogonId(
@@ -231,7 +422,6 @@ s_DpapiProtect(
     DPAPI_BLOB Entropy,
     DPAPI_BLOB *DataOut)
 {
-    LUID LogonId;
     LSA_STRING Prekey = {0};
     BYTE Derived[DPAPI_DERIVED_SIZE];
     BYTE Salt[DPAPI_SALT_SIZE];
@@ -257,11 +447,7 @@ s_DpapiProtect(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = DpapiGetCallerLogonId(&LogonId);
-    if (!NT_SUCCESS(Status))
-        return Status;
-
-    Status = LsapGetDpapiPrekey(&LogonId, &Prekey);
+    Status = DpapiAcquireKey(Flags, &Prekey);
     if (!NT_SUCCESS(Status))
         return Status;
 
@@ -326,13 +512,13 @@ s_DpapiUnprotect(
     DPAPI_BLOB Entropy,
     DPAPI_BLOB *DataOut)
 {
-    LUID LogonId;
     LSA_STRING Prekey = {0};
     BYTE Derived[DPAPI_DERIVED_SIZE];
     BYTE Mac[DPAPI_MAC_SIZE];
     PBYTE Blob;
     PBYTE Plain = NULL;
     ULONG Magic;
+    ULONG StoredFlags;
     ULONG CipherLength;
     ULONG PlainLength = 0;
     NTSTATUS Status;
@@ -366,11 +552,9 @@ s_DpapiUnprotect(
         return STATUS_INVALID_PARAMETER;
     }
 
-    Status = DpapiGetCallerLogonId(&LogonId);
-    if (!NT_SUCCESS(Status))
-        return Status;
+    RtlCopyMemory(&StoredFlags, Blob + 4, 4);
 
-    Status = LsapGetDpapiPrekey(&LogonId, &Prekey);
+    Status = DpapiAcquireKey(StoredFlags, &Prekey);
     if (!NT_SUCCESS(Status))
         return Status;
 

@@ -75,6 +75,8 @@ LsarStartRpcServer(VOID)
         return I_RpcMapWin32Status(Status);
     }
 
+    DpapiServerInitialize();
+
     DsSetupInit();
 
     Status = RpcServerListen(1, 20, TRUE);

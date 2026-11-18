@@ -486,6 +486,9 @@ LsapGetCredentials(
 
 #define DPAPI_PREKEY_SIZE 20
 
+VOID
+DpapiServerInitialize(VOID);
+
 NTSTATUS
 NTAPI
 LsapGetDpapiPrekey(
