@@ -198,10 +198,9 @@ KiIdleLoop(VOID)
 #ifdef CONFIG_SMP
             KfRaiseIrql(SYNCH_LEVEL);
 
-            if (KiIdleSummary & Prcb->SetMember)
+            if (KiIsProcessorIdle(Prcb->Number))
             {
-                InterlockedBitTestAndResetAffinity(&KiIdleSummary,
-                                                   Prcb->Number);
+                KiClearProcessorIdle(Prcb->Number);
             }
 #endif
             Prcb->CurrentThread = NewThread;
@@ -228,10 +227,9 @@ KiIdleLoop(VOID)
         else
         {
 #ifdef CONFIG_SMP
-            if (!(KiIdleSummary & Prcb->SetMember))
+            if (!KiIsProcessorIdle(Prcb->Number))
             {
-                InterlockedBitTestAndSetAffinity(&KiIdleSummary,
-                                                 Prcb->Number);
+                KiSetProcessorIdle(Prcb->Number);
             }
 #endif
             Prcb->Sleeping = TRUE;

@@ -319,6 +319,58 @@ extern LIST_ENTRY KiStackInSwapListHead;
 extern KEVENT KiSwapEvent;
 extern KAFFINITY KiIdleSummary;
 
+/* Idle processors of groups 1 and up; group 0 is KiIdleSummary */
+extern KAFFINITY KiIdleSummaryGroups[KI_MAXIMUM_GROUPS];
+
+FORCEINLINE
+KAFFINITY volatile *
+KiIdleSummaryOfGroup(
+    _In_ USHORT Group)
+{
+    ASSERT(Group < KI_MAXIMUM_GROUPS);
+    return (Group == 0) ? &KiIdleSummary : &KiIdleSummaryGroups[Group];
+}
+
+/* The idle bit of processor Index, in its group's idle summary */
+FORCEINLINE
+BOOLEAN
+KiIsProcessorIdle(
+    _In_ ULONG Index)
+{
+    return (*KiIdleSummaryOfGroup((USHORT)(Index / KI_PROCESSORS_PER_GROUP)) &
+            KiAffinityForProcessorIndex(Index % KI_PROCESSORS_PER_GROUP)) != 0;
+}
+
+FORCEINLINE
+BOOLEAN
+KiSetProcessorIdle(
+    _In_ ULONG Index)
+{
+    return InterlockedBitTestAndSetAffinity(
+        KiIdleSummaryOfGroup((USHORT)(Index / KI_PROCESSORS_PER_GROUP)),
+        Index % KI_PROCESSORS_PER_GROUP);
+}
+
+FORCEINLINE
+BOOLEAN
+KiClearProcessorIdle(
+    _In_ ULONG Index)
+{
+    return InterlockedBitTestAndResetAffinity(
+        KiIdleSummaryOfGroup((USHORT)(Index / KI_PROCESSORS_PER_GROUP)),
+        Index % KI_PROCESSORS_PER_GROUP);
+}
+
+/* Processor Index is active (in its group's active set) */
+FORCEINLINE
+BOOLEAN
+KiIsProcessorActive(
+    _In_ ULONG Index)
+{
+    return (KiQueryActiveGroupAffinity((USHORT)(Index / KI_PROCESSORS_PER_GROUP)) &
+            KiAffinityForProcessorIndex(Index % KI_PROCESSORS_PER_GROUP)) != 0;
+}
+
 extern PVOID KeUserApcDispatcher;
 extern PVOID KeUserCallbackDispatcher;
 extern PVOID KeUserExceptionDispatcher;

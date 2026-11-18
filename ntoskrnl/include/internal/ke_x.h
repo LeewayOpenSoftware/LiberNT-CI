@@ -46,10 +46,31 @@ KiRequestDispatchInterrupt(
 #ifdef KTHREAD_GROUP_AFFINITY
 #define KiThreadAffinityMask(Thread) ((Thread)->Affinity.Mask)
 #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity.Mask)
+#define KiThreadAffinityGroup(Thread) ((Thread)->Affinity.Group)
 #else
 #define KiThreadAffinityMask(Thread) ((Thread)->Affinity)
 #define KiThreadUserAffinityMask(Thread) ((Thread)->UserAffinity)
+#if defined(_M_AMD64)
+#define KiThreadAffinityGroup(Thread) ((Thread)->AffinityPrimaryGroup)
+#else
+#define KiThreadAffinityGroup(Thread) ((USHORT)0)
 #endif
+#endif
+
+/*
+ * A thread's affinity is a mask within one processor group. Processor Index
+ * is allowed when it is in that group and its bit is in the mask.
+ */
+FORCEINLINE
+BOOLEAN
+KiIsProcessorInThreadAffinity(
+    _In_ PKTHREAD Thread,
+    _In_ ULONG Index)
+{
+    return ((Index / KI_PROCESSORS_PER_GROUP) == KiThreadAffinityGroup(Thread)) &&
+           ((KiThreadAffinityMask(Thread) &
+             KiAffinityForProcessorIndex(Index % KI_PROCESSORS_PER_GROUP)) != 0);
+}
 
 /* Convert legacy quantum units to execution-time deadlines. */
 #ifdef KI_CYCLE_QUANTUM
