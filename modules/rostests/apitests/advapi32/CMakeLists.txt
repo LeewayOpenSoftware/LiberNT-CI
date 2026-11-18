@@ -9,6 +9,7 @@ list(APPEND SOURCE
     CopySid.c
     CreateProcessWithToken.c
     CreateService.c
+    CredManager.c
     CryptCreateHash.c
     DuplicateTokenEx.c
     EnableTraceEx.c

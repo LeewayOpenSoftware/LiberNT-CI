@@ -8,6 +8,7 @@ extern void func_ControlServiceEx(void);
 extern void func_CopySid(void);
 extern void func_CreateProcessWithToken(void);
 extern void func_CreateService(void);
+extern void func_CredManager(void);
 extern void func_CryptCreateHash(void);
 extern void func_DuplicateTokenEx(void);
 extern void func_EnableTraceEx(void);
@@ -75,6 +76,7 @@ const struct test winetest_testlist[] =
     { "CopySid", func_CopySid },
     { "CreateProcessWithToken", func_CreateProcessWithToken },
     { "CreateService", func_CreateService },
+    { "CredManager", func_CredManager },
     { "CryptCreateHash", func_CryptCreateHash },
     { "DuplicateTokenEx", func_DuplicateTokenEx },
     { "EnableTraceEx", func_EnableTraceEx },

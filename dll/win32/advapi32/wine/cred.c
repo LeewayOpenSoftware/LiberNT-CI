@@ -22,6 +22,8 @@
 #include <advapi32.h>
 #include <stdlib.h>
 #include <wincred.h>
+#include <rpc.h>
+#include "dpapi_c.h"
 #include "advapi32_misc.h"
 #define ARRAY_SIZE(x) _countof(x)
 #else
@@ -47,8 +49,132 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(cred);
 
-/* the size of the ARC4 key used to encrypt the password data */
+/* Retained for the internal helper ABI; the credential secret is DPAPI-protected, not ARC4-keyed.
+ * TODO: remove the now-unused key_data plumbing from the Cred* helpers in a follow-up. */
 #define KEY_SIZE 8
+
+/* Bind to the LSA DPAPI server (shares the lsarpc pipe), authenticated and sealed; fail closed so a
+ * credential secret is never sent over an unauthenticated channel. */
+static handle_t cred_dpapi_bind(void)
+{
+    RPC_WSTR string_binding = NULL;
+    handle_t binding = NULL;
+    RPC_SECURITY_QOS qos;
+    RPC_STATUS status;
+
+    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL,
+                                 (RPC_WSTR)L"\\pipe\\lsarpc", NULL, &string_binding) != RPC_S_OK)
+        return NULL;
+    status = RpcBindingFromStringBindingW(string_binding, &binding);
+    RpcStringFreeW(&string_binding);
+    if (status != RPC_S_OK)
+        return NULL;
+
+    qos.Version = RPC_C_SECURITY_QOS_VERSION;
+    qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
+    qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
+    qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
+    if (RpcBindingSetAuthInfoExW(binding, NULL, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+                                 RPC_C_AUTHN_WINNT, NULL, 0, &qos) != RPC_S_OK)
+    {
+        RpcBindingFree(&binding);
+        return NULL;
+    }
+    return binding;
+}
+
+/* Protect/unprotect a credential secret with DPAPI user scope (flags 0). On success *out is a
+ * malloc'd buffer the caller frees with free(); returns a Win32 error otherwise. */
+static DWORD cred_dpapi_protect(const BYTE *plain, DWORD plain_len, BYTE **out, DWORD *out_len)
+{
+    handle_t binding;
+    DPAPI_BLOB in = {0}, entropy = {0}, result = {0};
+    LONG status = 0;
+    DWORD err = ERROR_SUCCESS;
+
+    *out = NULL;
+    *out_len = 0;
+    binding = cred_dpapi_bind();
+    if (binding == NULL)
+        return ERROR_NO_SUCH_LOGON_SESSION;
+
+    in.cbData = plain_len;
+    in.pbData = (byte *)plain;
+    RpcTryExcept
+    {
+        status = s_DpapiProtect(binding, 0, NULL, in, entropy, &result);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        err = RpcExceptionCode();
+    }
+    RpcEndExcept
+
+    if (err == ERROR_SUCCESS)
+    {
+        if (status != 0)
+            err = ERROR_INVALID_DATA;
+        else if (!(*out = malloc(result.cbData ? result.cbData : 1)))
+            err = ERROR_OUTOFMEMORY;
+        else
+        {
+            if (result.cbData)
+                memcpy(*out, result.pbData, result.cbData);
+            *out_len = result.cbData;
+        }
+    }
+    if (result.pbData)
+        MIDL_user_free(result.pbData);
+    RpcBindingFree(&binding);
+    return err;
+}
+
+static DWORD cred_dpapi_unprotect(const BYTE *blob, DWORD blob_len, BYTE **out, DWORD *out_len)
+{
+    handle_t binding;
+    DPAPI_BLOB in = {0}, entropy = {0}, result = {0};
+    LONG status = 0;
+    DWORD err = ERROR_SUCCESS;
+
+    *out = NULL;
+    *out_len = 0;
+    binding = cred_dpapi_bind();
+    if (binding == NULL)
+        return ERROR_NO_SUCH_LOGON_SESSION;
+
+    in.cbData = blob_len;
+    in.pbData = (byte *)blob;
+    RpcTryExcept
+    {
+        status = s_DpapiUnprotect(binding, 0, in, entropy, &result);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        err = RpcExceptionCode();
+    }
+    RpcEndExcept
+
+    if (err == ERROR_SUCCESS)
+    {
+        if (status != 0)
+            err = ERROR_INVALID_DATA;
+        else if (!(*out = malloc(result.cbData ? result.cbData : 1)))
+            err = ERROR_OUTOFMEMORY;
+        else
+        {
+            if (result.cbData)
+                memcpy(*out, result.pbData, result.cbData);
+            *out_len = result.cbData;
+        }
+    }
+    if (result.pbData)
+    {
+        SecureZeroMemory(result.pbData, result.cbData);
+        MIDL_user_free(result.pbData);
+    }
+    RpcBindingFree(&binding);
+    return err;
+}
 
 static DWORD read_credential_blob(HKEY hkey, const BYTE key_data[KEY_SIZE],
                                   LPBYTE credential_blob,
@@ -56,31 +182,45 @@ static DWORD read_credential_blob(HKEY hkey, const BYTE key_data[KEY_SIZE],
 {
     DWORD ret;
     DWORD type;
+    DWORD stored_size = 0;
+    BYTE *stored;
+    BYTE *plain = NULL;
+    DWORD plain_len = 0;
+    DWORD err;
+
+    (void)key_data;
 
     *credential_blob_size = 0;
-    ret = RegQueryValueExW(hkey, L"Password", 0, &type, NULL, credential_blob_size);
+    ret = RegQueryValueExW(hkey, L"Password", 0, &type, NULL, &stored_size);
     if (ret != ERROR_SUCCESS)
         return ret;
     else if (type != REG_BINARY)
         return ERROR_REGISTRY_CORRUPT;
-    if (credential_blob)
+    if (stored_size == 0)
+        return ERROR_SUCCESS;
+
+    stored = malloc(stored_size);
+    if (!stored)
+        return ERROR_OUTOFMEMORY;
+    ret = RegQueryValueExW(hkey, L"Password", 0, &type, stored, &stored_size);
+    if (ret != ERROR_SUCCESS)
     {
-        struct ustring data;
-        struct ustring key;
+        free(stored);
+        return ret;
+    }
 
-        ret = RegQueryValueExW(hkey, L"Password", 0, &type, credential_blob,
-                               credential_blob_size);
-        if (ret != ERROR_SUCCESS)
-            return ret;
-        else if (type != REG_BINARY)
-            return ERROR_REGISTRY_CORRUPT;
+    err = cred_dpapi_unprotect(stored, stored_size, &plain, &plain_len);
+    free(stored);
+    if (err != ERROR_SUCCESS)
+        return err;
 
-        key.Length = key.MaximumLength = KEY_SIZE;
-        key.Buffer = (unsigned char *)key_data;
-
-        data.Length = data.MaximumLength = *credential_blob_size;
-        data.Buffer = credential_blob;
-        SystemFunction032(&data, &key);
+    *credential_blob_size = plain_len;
+    if (credential_blob && plain_len)
+        memcpy(credential_blob, plain, plain_len);
+    if (plain)
+    {
+        SecureZeroMemory(plain, plain_len);
+        free(plain);
     }
     return ERROR_SUCCESS;
 }
@@ -251,24 +391,22 @@ static DWORD write_credential_blob(HKEY hkey, LPCWSTR target_name, DWORD type,
                                    const BYTE key_data[KEY_SIZE],
                                    const BYTE *credential_blob, DWORD credential_blob_size)
 {
-    LPBYTE encrypted_credential_blob;
-    struct ustring data;
-    struct ustring key;
+    BYTE *protected_blob = NULL;
+    DWORD protected_len = 0;
+    DWORD err;
     DWORD ret;
 
-    key.Length = key.MaximumLength = KEY_SIZE;
-    key.Buffer = (unsigned char *)key_data;
+    (void)key_data;
+    (void)target_name;
+    (void)type;
 
-    encrypted_credential_blob = malloc(credential_blob_size);
-    if (!encrypted_credential_blob) return ERROR_OUTOFMEMORY;
+    err = cred_dpapi_protect(credential_blob, credential_blob_size, &protected_blob, &protected_len);
+    if (err != ERROR_SUCCESS)
+        return err;
 
-    memcpy(encrypted_credential_blob, credential_blob, credential_blob_size);
-    data.Length = data.MaximumLength = credential_blob_size;
-    data.Buffer = encrypted_credential_blob;
-    SystemFunction032(&data, &key);
-
-    ret = RegSetValueExW(hkey, L"Password", 0, REG_BINARY, encrypted_credential_blob, credential_blob_size);
-    free(encrypted_credential_blob);
+    ret = RegSetValueExW(hkey, L"Password", 0, REG_BINARY, protected_blob, protected_len);
+    SecureZeroMemory(protected_blob, protected_len);
+    free(protected_blob);
 
     return ret;
 }
@@ -410,50 +548,12 @@ static DWORD open_cred_mgr_key(HKEY *hkey, BOOL open_for_write)
 
 static DWORD get_cred_mgr_encryption_key(HKEY hkeyMgr, BYTE key_data[KEY_SIZE])
 {
-    static const BYTE my_key_data[KEY_SIZE] = { 0 };
-    DWORD type;
-    DWORD count;
-    FILETIME ft;
-    ULONG seed;
-    ULONG value;
-    DWORD ret;
-
-    memcpy(key_data, my_key_data, KEY_SIZE);
-
-    count = KEY_SIZE;
-    ret = RegQueryValueExW(hkeyMgr, L"EncryptionKey", NULL, &type, key_data,
-                           &count);
-    if (ret == ERROR_SUCCESS)
-    {
-        if (type != REG_BINARY)
-            return ERROR_REGISTRY_CORRUPT;
-        else
-            return ERROR_SUCCESS;
-    }
-    if (ret != ERROR_FILE_NOT_FOUND)
-        return ret;
-
-    GetSystemTimeAsFileTime(&ft);
-    seed = ft.dwLowDateTime;
-    value = RtlUniform(&seed);
-    *(DWORD *)key_data = value;
-    seed = ft.dwHighDateTime;
-    value = RtlUniform(&seed);
-    *(DWORD *)(key_data + 4) = value;
-
-    ret = RegSetValueExW(hkeyMgr, L"EncryptionKey", 0, REG_BINARY,
-                         key_data, KEY_SIZE);
-    if (ret == ERROR_ACCESS_DENIED)
-    {
-        ret = open_cred_mgr_key(&hkeyMgr, TRUE);
-        if (ret == ERROR_SUCCESS)
-        {
-            ret = RegSetValueExW(hkeyMgr, L"EncryptionKey", 0, REG_BINARY,
-                                 key_data, KEY_SIZE);
-            RegCloseKey(hkeyMgr);
-        }
-    }
-    return ret;
+    /* The credential secret is now protected with DPAPI user scope in read/write_credential_blob, so
+     * no local encryption key is kept in the registry. key_data is retained (zeroed, unused) only for
+     * the internal helper ABI. TODO: drop the key_data plumbing in a follow-up. */
+    (void)hkeyMgr;
+    memset(key_data, 0, KEY_SIZE);
+    return ERROR_SUCCESS;
 }
 
 static LPWSTR get_key_name_for_target(LPCWSTR target_name, DWORD type)
