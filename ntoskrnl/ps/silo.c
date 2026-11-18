@@ -488,10 +488,10 @@ PsGetCurrentSilo(VOID)
 PESILO
 NTAPI
 PsGetParentSilo(
-    _In_opt_ PEJOB Job)
+    _In_opt_ PESILO Silo)
 {
     PAGED_CODE();
-    UNREFERENCED_PARAMETER(Job);
+    UNREFERENCED_PARAMETER(Silo);
     return NULL;
 }
 
