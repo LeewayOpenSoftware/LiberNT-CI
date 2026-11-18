@@ -445,7 +445,7 @@ typedef struct _IO_WORKITEM
 typedef struct _IO_INTERRUPT
 {
     KINTERRUPT FirstInterrupt;
-    PKINTERRUPT Interrupt[MAXIMUM_PROCESSORS];
+    PKINTERRUPT Interrupt[KI_MAXIMUM_PROCESSORS];
     KSPIN_LOCK SpinLock;
 } IO_INTERRUPT, *PIO_INTERRUPT;
 

@@ -15,6 +15,20 @@
 
 /* GLOBALS *******************************************************************/
 
+#ifdef _M_AMD64
+
+VOID
+NTAPI
+HalRequestIpi(
+    _In_ ULONG Reserved,
+    _In_ PKAFFINITY_EX TargetSet)
+{
+    UNREFERENCED_PARAMETER(Reserved);
+    HalpRequestIpiEx(TargetSet);
+}
+
+#else
+
 VOID
 NTAPI
 HalRequestIpi(
@@ -22,6 +36,8 @@ HalRequestIpi(
 {
     HalpRequestIpi(TargetProcessors);
 }
+
+#endif // _M_AMD64
 
 #ifdef _M_AMD64
 
@@ -39,10 +55,10 @@ HalSendNMI(
 VOID
 NTAPI
 HalSendSoftwareInterrupt(
-    _In_ KAFFINITY TargetSet,
+    _In_ ULONG ProcessorIndex,
     _In_ KIRQL Irql)
 {
-    HalpSendSoftwareInterrupt(TargetSet, Irql);
+    HalpSendSoftwareInterruptProcessor(ProcessorIndex, Irql);
 }
 
 #endif // _M_AMD64

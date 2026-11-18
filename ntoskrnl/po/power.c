@@ -64,8 +64,8 @@ static GENERIC_MAPPING PopPowerRequestMapping =
 static volatile LONG PopProcessorPolicyMinimum = 5;
 static volatile LONG PopProcessorPolicyMaximum = 100;
 static KSPIN_LOCK PopIdlenessLock;
-static ULONG PopLastTotalTicks[MAXIMUM_PROCESSORS];
-static ULONG PopLastIdleTicks[MAXIMUM_PROCESSORS];
+static ULONG PopLastTotalTicks[KI_MAXIMUM_PROCESSORS];
+static ULONG PopLastIdleTicks[KI_MAXIMUM_PROCESSORS];
 static ULONGLONG PopLastIdleSampleTime;
 static ULONG PopLastIdleness;
 volatile LONG PopLatencySensitivityState;
@@ -91,7 +91,7 @@ PopQuerySystemIdleness(VOID)
     /* Share a sample across callers rather than measuring fractions of a tick. */
     if (Now - PopLastIdleSampleTime >= 100 * 10000)
     {
-        for (i = 0; i < (ULONG)KeNumberProcessors; ++i)
+        for (i = 0; i < KiNumberProcessors; ++i)
         {
             PKPRCB Prcb = KiProcessorBlock[i];
             TotalTicks = ReadULongAcquire(&Prcb->KernelTime) + ReadULongAcquire(&Prcb->UserTime);
@@ -1133,7 +1133,7 @@ PopApplyProcessorPowerSetting(
     else
         InterlockedExchange(&PopProcessorPolicyMaximum, (LONG)SettingValue);
 
-    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    for (Processor = 0; Processor < KiNumberProcessors; Processor++)
     {
         PKPRCB Prcb = KiProcessorBlock[Processor];
 
@@ -2060,8 +2060,8 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
         {
             PPROCESSOR_POWER_INFORMATION PowerInformation = (PPROCESSOR_POWER_INFORMATION)OutputBuffer;
             ULONG ProcessorCount, i;
-            ULONG CurrentSpeed[MAXIMUM_PROCESSORS];
-            ULONG MaxSpeed[MAXIMUM_PROCESSORS];
+            ULONG CurrentSpeed[KI_MAXIMUM_PROCESSORS];
+            ULONG MaxSpeed[KI_MAXIMUM_PROCESSORS];
 
             if (InputBuffer != NULL)
                 return STATUS_INVALID_PARAMETER;

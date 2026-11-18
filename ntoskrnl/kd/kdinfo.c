@@ -416,7 +416,7 @@ KdpInfoBuildSystem(VOID)
                   KERNEL_VERSION_STR, NtBuildLab, NtBuildLabEx, LBI_ATTEMPT_ID, LBI_INPUTS_DIGEST_SHORT,
                   KERNEL_VERSION_COMMIT_HASH,
                   SharedUserData->NtMajorVersion, SharedUserData->NtMinorVersion, NtBuildNumber & 0xFFFF,
-                  KeProcessorArchitecture, (ULONG)KeNumberProcessors,
+                  KeProcessorArchitecture, KiNumberProcessors,
                   (ULONG)(((ULONGLONG)MmNumberOfPhysicalPages * PAGE_SIZE) >> 20),
                   (ULONG)(KeQueryInterruptTime() / 10000000));
     if (KeBugCheckActive)

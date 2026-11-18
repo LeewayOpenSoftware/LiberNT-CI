@@ -291,7 +291,7 @@ KiQueryProcessorTopology(
 {
     PKIP_CPU_SAMPLE Samples;
     PKIP_CACHE_KEY Keys;
-    ULONG PackageIds[MAXIMUM_PROCESSORS];
+    ULONG PackageIds[KI_MAXIMUM_PROCESSORS];
     ULONG ProcessorCount = (ULONG)KeNumberProcessors;
     ULONG Records_ = 0, Sets_ = 0;
     ULONG i, c, r, p;
@@ -378,7 +378,7 @@ KiQueryProcessorTopology(
                 }
             }
 
-            if (!Merged && (Sets_ < MaxSets) && (Sets_ < MAXIMUM_PROCESSORS))
+            if (!Merged && (Sets_ < MaxSets) && (Sets_ < KI_MAXIMUM_PROCESSORS))
             {
                 PackageIds[Sets_] = PackageId;
                 Sets[Sets_] = KiProcessorBlock[i]->SetMember;

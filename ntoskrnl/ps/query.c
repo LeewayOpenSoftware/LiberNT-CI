@@ -4214,7 +4214,9 @@ NtSetInformationThread(
             }
             _SEH2_END;
 
-            if (GroupAffinity.Group != 0 || !GroupAffinity.Mask ||
+            /* The mask must name active processors of an existing group */
+            if (!GroupAffinity.Mask ||
+                (GroupAffinity.Mask & ~KiQueryActiveGroupAffinity(GroupAffinity.Group)) ||
                 GroupAffinity.Reserved[0] || GroupAffinity.Reserved[1] || GroupAffinity.Reserved[2])
             {
                 Status = STATUS_INVALID_PARAMETER;
@@ -4236,11 +4238,14 @@ NtSetInformationThread(
                 KeEnterCriticalRegion();
                 ExAcquirePushLockShared(&Process->ProcessLock);
 
-                CombinedAffinity = GroupAffinity.Mask & Process->Pcb.Affinity;
+                /* The process affinity describes group 0 */
+                CombinedAffinity = GroupAffinity.Mask;
+                if (GroupAffinity.Group == 0)
+                    CombinedAffinity &= Process->Pcb.Affinity;
                 if (CombinedAffinity != GroupAffinity.Mask)
                     Status = STATUS_INVALID_PARAMETER;
                 else
-                    KeSetAffinityThread(&Thread->Tcb, CombinedAffinity);
+                    KeSetGroupAffinityThread(&Thread->Tcb, &GroupAffinity, NULL);
 
                 ExReleasePushLockShared(&Process->ProcessLock);
                 KeLeaveCriticalRegion();
@@ -6020,6 +6025,7 @@ NtQueryInformationThread(
         {
             PGROUP_AFFINITY GroupAffinity = (PGROUP_AFFINITY)ThreadInformation;
             KAFFINITY AffinityMask;
+            USHORT AffinityGroup;
 
             /* Set the return length */
             Length = sizeof(GROUP_AFFINITY);
@@ -6043,18 +6049,24 @@ NtQueryInformationThread(
 
             /* ThreadGroupInformation reports the user-requested affinity,
              * ThreadActualGroupAffinity the affinity the scheduler actually
-             * uses. ReactOS supports a single processor group (group 0). */
+             * uses. */
             if (ThreadInformationClass == ThreadGroupInformation)
+            {
                 AffinityMask = KiThreadUserAffinityMask(&Thread->Tcb);
+                AffinityGroup = KiThreadUserAffinityGroup(&Thread->Tcb);
+            }
             else
+            {
                 AffinityMask = KiThreadAffinityMask(&Thread->Tcb);
+                AffinityGroup = KiThreadAffinityGroup(&Thread->Tcb);
+            }
 
             /* Protect writes with SEH */
             _SEH2_TRY
             {
                 RtlZeroMemory(GroupAffinity, sizeof(GROUP_AFFINITY));
                 GroupAffinity->Mask = AffinityMask;
-                GroupAffinity->Group = 0;
+                GroupAffinity->Group = AffinityGroup;
             }
             _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
             {

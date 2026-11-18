@@ -578,7 +578,7 @@ ExpInitializeWorkerThreads(VOID)
     ExpWorkersCanSwap = TRUE;
 
     /* Size the delayed pool to the concurrency limit plus a blocking reserve */
-    DelayedThreads = (ULONG)KeNumberProcessors + EX_DELAYED_WORK_RESERVE;
+    DelayedThreads = KiNumberProcessors + EX_DELAYED_WORK_RESERVE;
     DelayedThreads = min(DelayedThreads, EX_MAX_DELAYED_WORK_THREADS);
     CriticalThreads = EX_CRITICAL_WORK_THREADS;
 

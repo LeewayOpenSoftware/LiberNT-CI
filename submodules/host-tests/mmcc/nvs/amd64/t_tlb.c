@@ -71,6 +71,8 @@ VOID MiAmd64TlbWatchdogBugcheck(ULONG64 Frequency, ULONG64 Now, ULONG64 Baseline
 
 ULONG MiAmd64TlbCpu(VOID) { return CurrentCpu; }
 ULONG64 MiAmd64TlbActiveCpus(VOID) { return ActiveCpus; }
+ULONG MiAmd64TlbGroupCount(VOID) { return 1; }
+ULONG64 MiAmd64TlbActiveGroup(ULONG Group) { return Group == 0 ? ActiveCpus : 0; }
 ULONG64 MiAmd64TlbReadCr3(VOID) { return Cpus[CurrentCpu].Cr3; }
 ULONG64 MiAmd64TlbReadCr4(VOID) { return Cpus[CurrentCpu].Cr4; }
 
@@ -207,6 +209,12 @@ VOID KiSendMemoryIpi(ULONG64 Targets)
         __atomic_fetch_or(&Cpus[Target].Pending, 1ULL << CurrentCpu, __ATOMIC_RELEASE);
         Targets &= Targets - 1;
     }
+}
+
+VOID KiSendMemoryIpiGroup(ULONG Group, ULONG64 Targets)
+{
+    CHECK(Group == 0);
+    KiSendMemoryIpi(Targets);
 }
 
 VOID MiAmd64TlbPoll(VOID)

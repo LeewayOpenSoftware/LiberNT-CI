@@ -309,6 +309,7 @@ KMT_TESTFUNC Test_KeDpcRemove;
 KMT_TESTFUNC Test_KeEvent;
 KMT_TESTFUNC Test_KeExpandKernelStack;
 KMT_TESTFUNC Test_KeFloatPointState;
+KMT_TESTFUNC Test_KeGroups;
 KMT_TESTFUNC Test_KeGuardedMutex;
 KMT_TESTFUNC Test_CmBigValueDelete;
 KMT_TESTFUNC Test_CmBootFlush;
@@ -832,6 +833,7 @@ const KMT_TEST TestList[] =
     { "KeEvent",                            Test_KeEvent },
     { "KeExpandKernelStack",                Test_KeExpandKernelStack },
     { "KeFloatPointState",                  Test_KeFloatPointState },
+    { "KeGroups",                           Test_KeGroups },
     { "KeGuardedMutex",                     Test_KeGuardedMutex },
     { "KeIrql",                             Test_KeIrql },
     { "KeIpiKM",                            Test_KeIpiKM },

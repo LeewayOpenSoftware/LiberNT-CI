@@ -51,7 +51,8 @@ typedef union {
 #define APIC_ICR_POLL_LIMIT 8
 #define EFLAGS_INTERRUPT_MASK 0x200
 #define DPRINT1(...) ((void)0)
-static int HalpApicHvMsrs, Enabled = 1, BeforeReads, AfterReads, BeforeBusy, AfterBusy, Writes, MsrWrites;
+#define ASSERT(x) assert(x)
+static int HalpApicX2Mode, HalpApicHvMsrs, Enabled = 1, BeforeReads, AfterReads, BeforeBusy, AfterBusy, Writes, MsrWrites;
 static void __writemsr(int n, uint64_t v) { (void)n; (void)v; MsrWrites++; }
 static ULONG __readeflags(void) { return Enabled ? EFLAGS_INTERRUPT_MASK : 0; }
 static void _disable(void) { Enabled = 0; }
@@ -71,7 +72,15 @@ static void ApicWrite(int reg, ULONG value) {
     assert((Writes == 0 && reg == APIC_ICR1) || (Writes == 1 && reg == APIC_ICR0));
     Writes++;
 }
-static void Send(UCHAR DestinationProcessor, UCHAR Vector, APIC_MT MessageType,
+static void ApicWriteIcr(ULONG LowPart, ULONG Destination) {
+    if (HalpApicX2Mode) {
+        __writemsr(0, ((uint64_t)Destination << 32) | LowPart);
+        return;
+    }
+    ApicWrite(APIC_ICR1, Destination << 24);
+    ApicWrite(APIC_ICR0, LowPart);
+}
+static void Send(ULONG DestinationProcessor, UCHAR Vector, APIC_MT MessageType,
                     APIC_TGM TriggerMode, APIC_DSH DestinationShortHand, ULONG Level) {
 @APIC@
 }
@@ -88,6 +97,11 @@ int main(void) {
     Writes = 0;
     Send(1, 0x50, APIC_MT_Fixed, 0, 0, 1);
     assert(MsrWrites == 1 && Writes == 0 && !Enabled);
+    HalpApicHvMsrs = 0;
+    HalpApicX2Mode = 1;
+    BeforeReads = AfterReads = 0;
+    Send(1, 0x50, 1, 0, 0, 1);
+    assert(MsrWrites == 2 && Writes == 0 && BeforeReads == 0 && AfterReads == 0);
     return 0;
 }
 '''.replace('@APIC@', body('hal/halx86/apic/apicsmp.c', 'ApicRequestGlobalInterruptLevel'))
@@ -104,6 +118,7 @@ enum { APIC_MT_INIT = 5, APIC_MT_Startup = 6, APIC_TGM_Level = 1,
        APIC_TGM_Edge = 0, APIC_DSH_Destination = 0 };
 #define ASSERT(x) assert(x)
 static unsigned Step;
+static int HalpApicX2Mode;
 static void ApicRequestGlobalInterruptLevel(UCHAR id, UCHAR vector, int type, int trigger, int shorthand, ULONG level) {
     assert(id == 0x37 && vector == 0 && type == APIC_MT_INIT && trigger == APIC_TGM_Level && shorthand == 0);
     assert((Step == 0 && level == 1) || (Step == 2 && level == 0)); Step++;
@@ -135,6 +150,8 @@ typedef struct { unsigned Number; KAFFINITY SetMember; volatile long IpiFrozen; 
 #define TRUE 1
 #define FALSE 0
 #define MAXIMUM_PROCESSORS 64
+#define KI_MAXIMUM_PROCESSORS MAXIMUM_PROCESSORS
+#define KiNumberProcessors KeNumberProcessors
 #define IPI_FROZEN_STATE_RUNNING 0
 #define IPI_FROZEN_STATE_TARGET_FREEZE 1
 #define IPI_FROZEN_STATE_SAVING 2
@@ -167,8 +184,8 @@ static void KiNoteFreezeEpoch(void) { @NOTE@ }
 static ULONG64 KiQueryFreezeEpoch(void) { @EPOCH@ }
 static BOOLEAN KiIsFreezeActive(void) { @ACTIVE@ }
 static BOOLEAN KiFreezeFailureRequiresReturn(PKPRCB Prcb) { (void)Prcb; return FALSE; }
-static BOOLEAN KiIsBugCheckEntryOwner(PKPRCB Prcb) { (void)Prcb; return FALSE; }
-static void KiSetFreezeFailure(void) { assert(!"a freeze failed"); }
+static BOOLEAN __attribute__((unused)) KiIsBugCheckEntryOwner(PKPRCB Prcb) { (void)Prcb; return FALSE; }
+static void __attribute__((unused)) KiSetFreezeFailure(void) { assert(!"a freeze failed"); }
 static BOOLEAN KiFreezeWaitExpired(KI_FREEZE_WAIT *Wait) { (void)Wait; return FALSE; }
 static BOOLEAN KiFreezeWaitFailed(PKPRCB Prcb, KI_FREEZE_WAIT *Wait) { (void)Prcb; (void)Wait; return FALSE; }
 static void KiFreezeIfRequested(void) { assert(0); }
@@ -186,7 +203,30 @@ static void YieldProcessor(void) {
 }
 static BOOLEAN KiAcquireFreezeActiveSet(PKPRCB Prcb) { @ACQUIRE@ }
 static VOID KiReleaseFreezeActiveSet(PKPRCB Prcb, BOOLEAN Acquired) { @RELEASE@ }
-static KAFFINITY KiFreezeTargetSet(PKPRCB CurrentPrcb) { @TARGETS@ }
+typedef struct { KAFFINITY Group[1]; } KI_FREEZE_TARGETS, *PKI_FREEZE_TARGETS;
+#define KI_PROCESSORS_PER_GROUP 64
+#define KiIsProcessorActive(i) ((KeActiveProcessors >> (i)) & 1)
+#define KiFreezeIsTarget(t, p) (((t)->Group[0] & (p)->SetMember) != 0)
+#define USHORT unsigned short
+#define UCHAR unsigned char
+#ifndef IPI_DPC
+#define IPI_DPC 2
+#endif
+typedef struct { USHORT Count; USHORT Size; ULONG Reserved; union { KAFFINITY Bitmap[1]; KAFFINITY StaticBitmap[1]; }; } KAFFINITY_EX;
+typedef struct { USHORT Group; UCHAR Number; UCHAR Reserved; } PROCESSOR_NUMBER, *PPROCESSOR_NUMBER;
+#define KI_MAXIMUM_GROUPS 1
+#define AFFINITY_MASK(b) ((KAFFINITY)1 << (b))
+#define BitScanForwardAffinity(i, m) ((m) ? (*(i) = (ULONG)__builtin_ctzll(m), 1) : 0)
+static int FreezeNmis, FreezeMailboxes, FreezeIpis;
+static void KiProcessorNumberFromIndex(ULONG i, PPROCESSOR_NUMBER n) { n->Group = (USHORT)(i / 64); n->Number = (UCHAR)(i % 64); n->Reserved = 0; }
+static ULONG KiProcessorIndexFromNumber(USHORT g, UCHAR n) { return (ULONG)g * 64 + n; }
+static KAFFINITY KiQueryActiveGroupAffinity(USHORT g) { return g ? 0 : KeActiveProcessors; }
+static void KiIpiQueueMailbox(ULONG t, PPROCESSOR_NUMBER s, ULONG r) { (void)s; assert(r == IPI_FREEZE && KiProcessorBlock[t] != NULL); FreezeMailboxes++; }
+static void HalRequestIpi(ULONG z, KAFFINITY_EX *s) { (void)z; assert(s->Count == 1 && s->StaticBitmap[0] != 0); FreezeIpis++; }
+/* The NMI is what freezes a target in these fixtures: a dropped NMI leaves it running */
+static void HalSendNMI(KAFFINITY m) { FreezeNmis++; KiIpiSend(m, IPI_FREEZE); }
+static void KiIpiSendGroups(const KAFFINITY *Masks, ULONG Groups, ULONG IpiRequest) { @SENDGROUPS@ }
+static BOOLEAN KiFreezeTargetSet(PKPRCB CurrentPrcb, PKI_FREEZE_TARGETS Targets) { @TARGETS@ }
 static void KxFreezeExecution(void) { @FREEZE@ }
 static void KxThawExecution(void) { @THAW@ }
 int main(void) {
@@ -208,6 +248,13 @@ int main(void) {
     return 0;
 }
 '''
+_ipi = (pathlib.Path(args.root) / 'ntoskrnl/ke/amd64/ipi.c').read_text()
+_s = _ipi.index('{', _ipi.index('\nKiIpiSendGroups('))
+_d, _e = 1, _s + 1
+while _d:
+    _d += (_ipi[_e] == '{') - (_ipi[_e] == '}')
+    _e += 1
+freeze = freeze.replace('@SENDGROUPS@', _ipi[_s + 1:_e - 1])
 for marker, name in [('NOTE', 'KiNoteFreezeEpoch'), ('EPOCH', 'KiQueryFreezeEpoch'), ('ACTIVE', 'KiIsFreezeActive'), ('ACQUIRE', 'KiAcquireFreezeActiveSet'), ('RELEASE', 'KiReleaseFreezeActiveSet'), ('TARGETS', 'KiFreezeTargetSet'), ('FREEZE', 'KxFreezeExecution'), ('THAW', 'KxThawExecution')]:
     freeze = freeze.replace('@' + marker + '@', body('ntoskrnl/ke/amd64/freeze.c', name))
 
@@ -225,7 +272,7 @@ typedef struct { unsigned short Limit; PVOID Base; } KDESCRIPTOR;
 typedef struct { KDESCRIPTOR Gdtr, Idtr; ULONG64 Cr0, Cr3, Cr4; unsigned short Tr; } SPECIAL;
 typedef struct { unsigned short SegCs, SegDs, SegEs, SegSs, SegFs, SegGs; ULONG64 Rsp, Rip, Rcx, EFlags; } CONTEXT;
 typedef struct { SPECIAL SpecialRegisters; CONTEXT ContextFrame; } KPROCESSOR_STATE, *PKPROCESSOR_STATE;
-typedef struct { KPROCESSOR_STATE ProcessorState; ULONG64 SetMember; } KPRCB, *PKPRCB;
+typedef struct { KPROCESSOR_STATE ProcessorState; ULONG64 SetMember; PVOID IsrStack; } KPRCB, *PKPRCB;
 typedef struct { KPRCB Prcb; } KIPCR, *PKIPCR;
 typedef struct { char data[16]; } KIDTENTRY64, KGDTENTRY64, KTSS64, ETHREAD;
 typedef KGDTENTRY64 *PKGDTENTRY64; typedef KIDTENTRY64 *PKIDTENTRY64;
@@ -253,7 +300,7 @@ typedef struct { ULONG_PTR Prcb, Thread, KernelStack; } LOADER;
 #define RtlCopyMemory(d,s,n) memcpy(d,s,n)
 #define RtlZeroMemory(d,n) memset(d,0,n)
 #define min(a,b) ((a)<(b)?(a):(b))
-static ULONG KeMaximumProcessors = 2, KeNumprocSpecified, KeBootprocSpecified, KeMaximumIncrement = 156250;
+static ULONG KeMaximumProcessors = 2, KeNumprocSpecified, KeBootprocSpecified;
 static LOADER Loader, *KeLoaderBlock = &Loader;
 static KPRCB *KiProcessorBlock[2];
 static ULONG64 KeActiveProcessors;

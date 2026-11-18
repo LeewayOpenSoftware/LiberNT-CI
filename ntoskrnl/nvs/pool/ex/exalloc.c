@@ -41,7 +41,7 @@ VOID
 ExpPoolExpandTracker(VOID)
 {
     PPOOL_TAG_TRACKER Tracker = &ExpPoolState.Tracker;
-    ULONG Wanted = (ULONG)KeNumberProcessors;
+    ULONG Wanted = KiNumberProcessors;
     PPOOL_TAG_TABLE Table;
 
     if (Wanted > EX_POOL_BOOT_SLOTS)
@@ -82,7 +82,7 @@ ExpPoolAllocate(
     if (Heap == NULL)
         return NULL;
 
-    if (PoolTagTrackerCount(&ExpPoolState.Tracker) < (ULONG)KeNumberProcessors)
+    if (PoolTagTrackerCount(&ExpPoolState.Tracker) < KiNumberProcessors)
         ExpPoolExpandTracker();
 
     for (;;)

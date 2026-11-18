@@ -28,7 +28,7 @@
 #define STARVATION_SCAN_BOOSTS 10
 #define STARVATION_WAIT_TICKS 300
 ULONG KiReadyScanLast;
-static ULONG KiStarvationScanIndex[MAXIMUM_PROCESSORS];
+static ULONG KiStarvationScanIndex[KI_MAXIMUM_PROCESSORS];
 
 /* PRIVATE FUNCTIONS *********************************************************/
 
@@ -161,7 +161,7 @@ KiScanReadyQueues(IN PKDPC Dpc,
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    ProcessorCount = min((ULONG)KeNumberProcessors,
+    ProcessorCount = min(KiNumberProcessors,
                          (ULONG)READY_SCAN_PROCESSORS);
     ASSERT(ProcessorCount != 0);
     CandidateQuota = READY_SCAN_CANDIDATES;
@@ -170,6 +170,14 @@ KiScanReadyQueues(IN PKDPC Dpc,
 
     for (Processor = 0; Processor < ProcessorCount; Processor++)
     {
+        /* Indexes are contiguous today; skip a processor not started */
+        if (KiProcessorBlock[ScanIndex] == NULL)
+        {
+            ScanIndex++;
+            if (ScanIndex == KiNumberProcessors) ScanIndex = 0;
+            continue;
+        }
+
         KiScanReadyQueuesOnPrcb(KiProcessorBlock[ScanIndex],
                                 TickNow,
                                 CandidateQuota,
@@ -190,7 +198,7 @@ KiScanReadyQueues(IN PKDPC Dpc,
                                 &KiStarvationScanIndex[ScanIndex]);
 
         ScanIndex++;
-        if (ScanIndex == KeNumberProcessors) ScanIndex = 0;
+        if (ScanIndex == KiNumberProcessors) ScanIndex = 0;
     }
 
     *ScanLast = ScanIndex;

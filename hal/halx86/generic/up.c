@@ -14,10 +14,18 @@
 
 /* FUNCTIONS *****************************************************************/
 
+#ifdef _M_AMD64
+VOID
+NTAPI
+HalRequestIpi(
+    _In_ ULONG Reserved,
+    _In_ PKAFFINITY_EX TargetSet)
+#else
 VOID
 NTAPI
 HalRequestIpi(
     _In_ KAFFINITY TargetProcessors)
+#endif
 {
     /* This should never be called in UP mode */
     __debugbreak();
@@ -61,7 +69,7 @@ HalSendNMI(
 VOID
 NTAPI
 HalSendSoftwareInterrupt(
-    _In_ KAFFINITY TargetSet,
+    _In_ ULONG ProcessorIndex,
     _In_ KIRQL Irql)
 {
     NOTHING;

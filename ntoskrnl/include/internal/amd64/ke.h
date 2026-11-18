@@ -331,6 +331,8 @@ KeInvalidateTlbEntry(IN PVOID Address)
 VOID MiAmd64FlushTargets(ULONG64 Targets, ULONG64 Address, ULONG64 Pages);
 VOID MiAmd64ProcessTlbRequest(ULONG Source);
 VOID KiSendMemoryIpi(ULONG64 Targets);
+VOID KiSendMemoryIpiGroup(ULONG Group, ULONG64 Targets);
+VOID KiIpiSendGroups(_In_reads_(Groups) const KAFFINITY *Masks, _In_ ULONG Groups, _In_ ULONG IpiRequest);
 ULONG64 KiQueryFreezeEpoch(VOID);
 BOOLEAN KiIsFreezeActive(VOID);
 

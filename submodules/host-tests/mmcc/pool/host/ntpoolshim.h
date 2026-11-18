@@ -55,6 +55,7 @@ typedef struct _EPROCESS { SIZE_T Quota[2]; LONG References; } EPROCESS, *PEPROC
 #define InterlockedExchange(p, v) __atomic_exchange_n(p, v, __ATOMIC_SEQ_CST)
 
 extern ULONG KeNumberProcessors;
+#define KiNumberProcessors KeNumberProcessors
 extern PEPROCESS PsInitialSystemProcess;
 extern int MiSystem;
 

@@ -3294,7 +3294,7 @@ ExpCollectProcessorTopology(
     _Out_ PEXP_PROCESSOR_TOPOLOGY Topology)
 {
     ULONG MaxRecords = WantCaches ? KI_MAX_CACHE_RECORDS : 0;
-    ULONG MaxSets = WantPackages ? MAXIMUM_PROCESSORS : 0;
+    ULONG MaxSets = WantPackages ? KI_MAXIMUM_PROCESSORS : 0;
     PKI_CACHE_RECORD Pool;
 
     Pool = ExAllocatePoolWithTag(PagedPool,

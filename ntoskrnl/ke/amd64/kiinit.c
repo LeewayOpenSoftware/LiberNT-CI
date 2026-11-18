@@ -100,6 +100,8 @@ KiInitializePcr(
     _In_ PKTHREAD IdleThread,
     _In_ PVOID DpcStack)
 {
+    PROCESSOR_NUMBER GroupNumber;
+
     /* Zero out the PCR */
     RtlZeroMemory(Pcr, sizeof(KIPCR));
 
@@ -125,9 +127,14 @@ KiInitializePcr(
     Pcr->Prcb.BuildType |= PRCB_BUILD_DEBUG;
 #endif
 
-    /* Set the Processor Number and current Processor Mask */
+    /* Set the Processor Number, its group identity and its mask within the group */
+    KiProcessorNumberFromIndex(ProcessorNumber, &GroupNumber);
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
-    Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
+    Pcr->Prcb.SetMember = KiAffinityForProcessorIndex(GroupNumber.Number);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    Pcr->Prcb.Group = (UCHAR)GroupNumber.Group;
+    Pcr->Prcb.GroupIndex = GroupNumber.Number;
+#endif
 
     /* Set GDT and IDT base */
     Pcr->GdtBase = GdtBase;
@@ -555,10 +562,14 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
     /* Get Pcr from loader block */
     Pcr = CONTAINING_RECORD(LoaderBlock->Prcb, KIPCR, Prcb);
 
-    /* Publish the PRCB before counting: [0, KeNumberProcessors) must be valid */
+    /* Publish the PRCB before counting: [0, KiNumberProcessors) must be valid */
     KiProcessorBlock[Cpu] = &Pcr->Prcb;
     KeMemoryBarrier();
-    if ((CCHAR)(Cpu + 1) > KeNumberProcessors)
+    if (Cpu + 1 > KiNumberProcessors)
+        KiNumberProcessors = Cpu + 1;
+
+    /* The exported count is the group 0 view */
+    if ((Cpu < KI_PROCESSORS_PER_GROUP) && ((CCHAR)(Cpu + 1) > KeNumberProcessors))
         KeNumberProcessors = (CCHAR)(Cpu + 1);
 
     /* Save the initial thread */
@@ -604,7 +615,7 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Set processor as active */
     if (Cpu == 0)
-        KeActiveProcessors |= 1ULL << Cpu;
+        KiSetProcessorActive(Cpu);
 
     /* Release lock */
     InterlockedAnd64((PLONG64)&KiFreezeExecutionLock, 0);

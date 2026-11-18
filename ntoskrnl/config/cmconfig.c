@@ -306,7 +306,7 @@ CmpInitializeProcessorClockFromFirmware(
         return;
 
     for (ProcessorNumber = 0;
-         ProcessorNumber < (ULONG)KeNumberProcessors;
+         ProcessorNumber < KiNumberProcessors;
          ++ProcessorNumber)
     {
         Prcb = KiProcessorBlock[ProcessorNumber];

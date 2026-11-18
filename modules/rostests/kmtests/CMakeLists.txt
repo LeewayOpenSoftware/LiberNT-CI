@@ -303,6 +303,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ke/KeEvent.c
     ntos_ke/KeExpandKernelStack.c
     ntos_ke/KeFloatPointState.c
+    ntos_ke/KeGroups.c
     ntos_ke/KeGuardedMutex.c
     ntos_ke/KeIpiKM.c
     ntos_ke/KeIrql.c

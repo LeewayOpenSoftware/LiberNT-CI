@@ -206,7 +206,7 @@ KiSystemStartupBootStack(VOID)
 
     /* If there's no thread scheduled, put this CPU in the Idle summary */
     KiAcquirePrcbLock(Prcb);
-    if (!Prcb->NextThread) KiIdleSummary |= (ULONG_PTR)1 << Prcb->Number;
+    if (!Prcb->NextThread) KiSetProcessorIdle(Prcb->Number);
     KiReleasePrcbLock(Prcb);
 
     /* The mailbox only says "exists"; it does not say "can take an IPI" */

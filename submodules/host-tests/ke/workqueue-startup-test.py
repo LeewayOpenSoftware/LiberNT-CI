@@ -69,6 +69,7 @@ typedef struct { int Initialized, Signaled; } EVENT;
 #define RtlZeroMemory(p,n) memset(p,0,n)
 static EX_WORK_QUEUE ExWorkerQueue[MaximumWorkQueue];
 static ULONG ExpStaticWorkerCounts[MaximumWorkQueue], KeNumberProcessors = 1;
+#define KiNumberProcessors KeNumberProcessors
 static ULONG ExpAdditionalDelayedWorkerThreads, ExpAdditionalCriticalWorkerThreads;
 static ULONG ExCriticalWorkerThreads, ExDelayedWorkerThreads;
 static int ExpWorkersCanSwap, ExpWorkerSwapinMutex, ExpEnvironmentLock;

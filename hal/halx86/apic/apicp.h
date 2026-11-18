@@ -79,6 +79,7 @@ extern ULONG HalpIoApicMaxIrq;
 
 extern UCHAR HalpVectorToIndex[256];
 extern BOOLEAN HalpApicHvMsrs;
+extern BOOLEAN HalpApicX2Mode;
 
 VOID HalpRequestSelfInterrupt(_In_ UCHAR Vector);
 BOOLEAN HalpReadHypervisorFrequency(_In_ ULONG Msr, _Out_ PULONG64 Frequency);
@@ -141,6 +142,8 @@ typedef enum _APIC_REGISTER
 } APIC_REGISTER;
 
 #define MSR_APIC_BASE 0x0000001B
+#define MSR_X2APIC_FIRST 0x00000800 /* x2APIC register R is MSR 0x800 + (R >> 4) */
+#define MSR_X2APIC_ICR 0x00000830
 #define HV_X64_MSR_EOI 0x40000070
 #define HV_X64_MSR_ICR 0x40000071
 #define HV_CPUID_INTERFACE_HV1 0x31237648
@@ -351,10 +354,20 @@ typedef union _IOAPIC_REDIRECTION_REGISTER
 } IOAPIC_REDIRECTION_REGISTER;
 #pragma pack(pop)
 
+/*
+ * The local APIC runs in xAPIC mode (MMIO window) unless a processor has an
+ * APIC ID above HALP_XAPIC_MAX_ID, in which case every processor switches to
+ * x2APIC mode and the registers are MSRs. In x2APIC mode ICR is one 64-bit
+ * MSR (use ApicWriteIcr), and DFR, LDR writes and the AMD extended LVTs do
+ * not exist.
+ */
 FORCEINLINE
 ULONG
 ApicRead(APIC_REGISTER Register)
 {
+    if (HalpApicX2Mode)
+        return (ULONG)__readmsr(MSR_X2APIC_FIRST + ((ULONG)Register >> 4));
+
     return READ_REGISTER_ULONG((PULONG)(APIC_BASE + Register));
 }
 
@@ -362,7 +375,53 @@ FORCEINLINE
 VOID
 ApicWrite(APIC_REGISTER Register, ULONG Value)
 {
+    if (HalpApicX2Mode)
+    {
+        __writemsr(MSR_X2APIC_FIRST + ((ULONG)Register >> 4), Value);
+        return;
+    }
+
     WRITE_REGISTER_ULONG((PULONG)(APIC_BASE + Register), Value);
+}
+
+/* The full APIC ID of the current processor */
+FORCEINLINE
+ULONG
+ApicGetLocalId(VOID)
+{
+    if (HalpApicX2Mode)
+        return ApicRead(APIC_ID);
+
+    return ApicRead(APIC_ID) >> 24;
+}
+
+/* The current processor as an I/O APIC or MSI physical destination */
+FORCEINLINE
+UCHAR
+ApicGetLocalIoDestination(VOID)
+{
+    ULONG Id = ApicGetLocalId();
+
+    ASSERT(Id <= 0xFE);
+    return (UCHAR)Id;
+}
+
+/* Sends an interrupt command; LowPart is the low dword of an xAPIC ICR */
+FORCEINLINE
+VOID
+ApicWriteIcr(
+    _In_ ULONG LowPart,
+    _In_ ULONG Destination)
+{
+    if (HalpApicX2Mode)
+    {
+        __writemsr(MSR_X2APIC_ICR, ((ULONG64)Destination << 32) | LowPart);
+        return;
+    }
+
+    ASSERT(Destination <= 0xFF);
+    WRITE_REGISTER_ULONG((PULONG)(APIC_BASE + APIC_ICR1), Destination << 24);
+    WRITE_REGISTER_ULONG((PULONG)(APIC_BASE + APIC_ICR0), LowPart);
 }
 
 VOID

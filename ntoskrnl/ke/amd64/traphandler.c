@@ -95,7 +95,7 @@ KiDpcInterruptHandler(VOID)
             NewThread = Prcb->NextThread;
             Prcb->NextThread = NULL;
 #ifdef CONFIG_SMP
-            InterlockedBitTestAndResetAffinity(&KiIdleSummary, Prcb->Number);
+            KiClearProcessorIdle(Prcb->Number);
 #endif
             Prcb->CurrentThread = NewThread;
 

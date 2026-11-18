@@ -8,10 +8,32 @@
 #define KI_USER_MODE_CALLBACK_ENTRY KiCallUserMode
 #endif
 
+/*
+ * Kernel-internal processor limit. It sizes per-processor arrays and bounds
+ * per-processor loops inside the kernel. The public MAXIMUM_PROCESSORS stays
+ * at the Windows value (64 on amd64) because it is driver ABI (ndis.h sizes
+ * structures with it). This one may later grow on amd64 together with
+ * processor groups.
+ */
+#define KI_MAXIMUM_PROCESSORS MAXIMUM_PROCESSORS
+
 #ifdef __cplusplus
 extern "C"
 {
 #endif
+
+/*
+ * Affinity bit of a processor index within its KAFFINITY. Defined for every
+ * Index: an index that does not fit in a KAFFINITY yields 0 instead of an
+ * undefined shift.
+ */
+FORCEINLINE
+KAFFINITY
+KiAffinityForProcessorIndex(
+    _In_ ULONG Index)
+{
+    return (Index < sizeof(KAFFINITY) * 8) ? ((KAFFINITY)1 << Index) : 0;
+}
 
 /* INTERNAL KERNEL TYPES ****************************************************/
 
@@ -174,6 +196,74 @@ extern PKNODE KeNodeBlock[KI_MAX_NUMA_NODES];
 extern UCHAR KeNumberNodes;
 extern UCHAR KeProcessNodeSeed;
 
+/*
+ * Processor groups. A group holds at most one KAFFINITY of processors. Until
+ * the HAL reports a topology, processor index I is processor number
+ * (I / KI_PROCESSORS_PER_GROUP, I % KI_PROCESSORS_PER_GROUP), the same mapping
+ * the KAFFINITY_EX helpers use. KPRCB.SetMember is the processor's bit within
+ * its own group.
+ */
+#define KI_PROCESSORS_PER_GROUP ((ULONG)(sizeof(KAFFINITY) * 8))
+#define KI_MAXIMUM_GROUPS \
+    ((KI_MAXIMUM_PROCESSORS + KI_PROCESSORS_PER_GROUP - 1) / KI_PROCESSORS_PER_GROUP)
+C_ASSERT(KI_MAXIMUM_GROUPS <= KAFFINITY_EX_STATIC_GROUPS);
+
+/*
+ * Active processors of every group. KeActiveProcessors stays the
+ * authoritative group 0 mask; Count is the number of groups that have had an
+ * active processor.
+ */
+extern KAFFINITY_EX KiActiveProcessorsEx;
+
+/*
+ * Processors started in all groups: processor indexes [0, KiNumberProcessors)
+ * have a PRCB. The exported CCHAR KeNumberProcessors is the group 0 view.
+ */
+#if defined(_M_AMD64)
+extern volatile ULONG KiNumberProcessors;
+#else
+#define KiNumberProcessors ((ULONG)KeNumberProcessors)
+#endif
+
+FORCEINLINE
+VOID
+KiProcessorNumberFromIndex(
+    _In_ ULONG Index,
+    _Out_ PPROCESSOR_NUMBER Number)
+{
+    Number->Group = (USHORT)(Index / KI_PROCESSORS_PER_GROUP);
+    Number->Number = (UCHAR)(Index % KI_PROCESSORS_PER_GROUP);
+    Number->Reserved = 0;
+}
+
+FORCEINLINE
+ULONG
+KiProcessorIndexFromNumber(
+    _In_ USHORT Group,
+    _In_ UCHAR Number)
+{
+    return ((ULONG)Group * KI_PROCESSORS_PER_GROUP) + Number;
+}
+
+FORCEINLINE
+KAFFINITY
+KiQueryActiveGroupAffinity(
+    _In_ USHORT Group)
+{
+    if (Group == 0)
+        return KeActiveProcessors;
+
+    if (Group >= KiActiveProcessorsEx.Count)
+        return 0;
+
+    return KiActiveProcessorsEx.Bitmap[Group];
+}
+
+VOID
+NTAPI
+KiSetProcessorActive(
+    _In_ ULONG Index);
+
 KAFFINITY
 FASTCALL
 KiGetNonParkedProcessorSet(VOID);
@@ -238,6 +328,59 @@ extern LIST_ENTRY KiProcessInSwapListHead, KiProcessOutSwapListHead;
 extern LIST_ENTRY KiStackInSwapListHead;
 extern KEVENT KiSwapEvent;
 extern KAFFINITY KiIdleSummary;
+
+/* Idle processors of groups 1 and up; group 0 is KiIdleSummary, so
+ * index 0 is unused by design */
+extern KAFFINITY KiIdleSummaryGroups[KI_MAXIMUM_GROUPS];
+
+FORCEINLINE
+KAFFINITY volatile *
+KiIdleSummaryOfGroup(
+    _In_ USHORT Group)
+{
+    ASSERT(Group < KI_MAXIMUM_GROUPS);
+    return (Group == 0) ? &KiIdleSummary : &KiIdleSummaryGroups[Group];
+}
+
+/* The idle bit of processor Index, in its group's idle summary */
+FORCEINLINE
+BOOLEAN
+KiIsProcessorIdle(
+    _In_ ULONG Index)
+{
+    return (*KiIdleSummaryOfGroup((USHORT)(Index / KI_PROCESSORS_PER_GROUP)) &
+            KiAffinityForProcessorIndex(Index % KI_PROCESSORS_PER_GROUP)) != 0;
+}
+
+FORCEINLINE
+BOOLEAN
+KiSetProcessorIdle(
+    _In_ ULONG Index)
+{
+    return InterlockedBitTestAndSetAffinity(
+        KiIdleSummaryOfGroup((USHORT)(Index / KI_PROCESSORS_PER_GROUP)),
+        Index % KI_PROCESSORS_PER_GROUP);
+}
+
+FORCEINLINE
+BOOLEAN
+KiClearProcessorIdle(
+    _In_ ULONG Index)
+{
+    return InterlockedBitTestAndResetAffinity(
+        KiIdleSummaryOfGroup((USHORT)(Index / KI_PROCESSORS_PER_GROUP)),
+        Index % KI_PROCESSORS_PER_GROUP);
+}
+
+/* Processor Index is active (in its group's active set) */
+FORCEINLINE
+BOOLEAN
+KiIsProcessorActive(
+    _In_ ULONG Index)
+{
+    return (KiQueryActiveGroupAffinity((USHORT)(Index / KI_PROCESSORS_PER_GROUP)) &
+            KiAffinityForProcessorIndex(Index % KI_PROCESSORS_PER_GROUP)) != 0;
+}
 
 extern PVOID KeUserApcDispatcher;
 extern PVOID KeUserCallbackDispatcher;
@@ -434,6 +577,22 @@ KiSetAffinityThread(
     IN KAFFINITY Affinity
 );
 
+/* Sets a thread's user affinity to a mask in one processor group */
+VOID
+FASTCALL
+KiSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity);
+
+VOID
+NTAPI
+KeSetGroupAffinityThread(
+    _In_ PKTHREAD Thread,
+    _In_ PGROUP_AFFINITY Affinity,
+    _Out_opt_ PGROUP_AFFINITY PreviousAffinity);
+
 PKTHREAD
 FASTCALL
 KiSelectNextThread(
@@ -517,6 +676,40 @@ KiIpiSend(
     KAFFINITY TargetSet,
     ULONG IpiRequest
 );
+
+/* Sends an IPI request (IPI_APC or IPI_DPC) to one processor, given by its index */
+#ifdef _M_AMD64
+VOID
+FASTCALL
+KiIpiSendProcessor(
+    _In_ ULONG Index,
+    _In_ ULONG IpiRequest);
+#else
+FORCEINLINE
+VOID
+KiIpiSendProcessor(
+    _In_ ULONG Index,
+    _In_ ULONG IpiRequest)
+{
+    /* This architecture's HAL IPI interface takes a group 0 KAFFINITY */
+    ASSERT(Index < KI_PROCESSORS_PER_GROUP);
+    KiIpiSend(KiAffinityForProcessorIndex(Index), IpiRequest);
+}
+#endif
+
+/* Gives the current thread a system affinity in one processor group */
+VOID
+FASTCALL
+KiSetSystemGroupAffinityThread(
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity);
+
+/* Targets a DPC at a processor index; ignored while the DPC is queued */
+VOID
+FASTCALL
+KiSetTargetProcessorDpcIndex(
+    _Inout_ PKDPC Dpc,
+    _In_ ULONG Index);
 
 VOID
 NTAPI

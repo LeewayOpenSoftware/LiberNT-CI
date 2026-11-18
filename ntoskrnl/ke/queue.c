@@ -160,7 +160,7 @@ KiRundownQueueWaitersLocked(
  * processor meanwhile uses the entry: one entry for each processor is enough.
  * It does not wait while the entry is set, so the rundown waits only briefly.
  */
-static PKQUEUE volatile KiQueueInUse[MAXIMUM_PROCESSORS];
+static PKQUEUE volatile KiQueueInUse[KI_MAXIMUM_PROCESSORS];
 
 PKQUEUE
 FASTCALL
@@ -210,7 +210,7 @@ KiWaitForQueueUsers(IN PKQUEUE Queue)
 
     KeMemoryBarrier();
 
-    for (i = 0; i < MAXIMUM_PROCESSORS; i++)
+    for (i = 0; i < KI_MAXIMUM_PROCESSORS; i++)
     {
         while (KiQueueInUse[i] == Queue)
             YieldProcessor();

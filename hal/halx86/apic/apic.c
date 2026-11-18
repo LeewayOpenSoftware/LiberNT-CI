@@ -29,6 +29,7 @@ ULONG ApicVersion;
 UCHAR HalpVectorToIndex[256];
 ULONG HalpIoApicMaxIrq = APIC_MAX_IRQ;
 BOOLEAN HalpApicHvMsrs;
+BOOLEAN HalpApicX2Mode;
 
 extern HALP_APIC_INFO_TABLE HalpApicInfoTable;
 
@@ -263,15 +264,17 @@ ApicRequestSelfInterrupt(IN UCHAR Vector, UCHAR TriggerMode)
     Flags = __readeflags();
     _disable();
 
-    /* Wait for the APIC to be idle */
-    do
+    /* Wait for the APIC to be idle; the x2APIC ICR has no delivery status */
+    if (!HalpApicX2Mode)
     {
-        IcrStatus.Long0 = ApicRead(APIC_ICR0);
-    } while (IcrStatus.DeliveryStatus);
+        do
+        {
+            IcrStatus.Long0 = ApicRead(APIC_ICR0);
+        } while (IcrStatus.DeliveryStatus);
+    }
 
     /* Write high dword first, then low dword to send the interrupt */
-    ApicWrite(APIC_ICR1, Icr.Long1);
-    ApicWrite(APIC_ICR0, Icr.Long0);
+    ApicWriteIcr(Icr.Long0, 0);
 
     /* Wait until we see the interrupt request.
      * It will stay in requested state until we re-enable interrupts.
@@ -436,17 +439,22 @@ ApicInitializeLocalApic(ULONG Cpu)
 
     if (Cpu == 0)
     {
-        HalpApicHvMsrs = ApicHvMsrsRecommended();
+        /* x2APIC mode only when a processor cannot be addressed otherwise */
+        HalpApicX2Mode = HalpApicInfoTable.X2ApicRequired;
+        DPRINT1("APIC: %s mode\n", HalpApicX2Mode ? "x2APIC" : "xAPIC");
+
+        /* The synthetic ICR MSR takes the xAPIC ICR layout */
+        HalpApicHvMsrs = !HalpApicX2Mode && ApicHvMsrsRecommended();
         DPRINT1("APIC: Hyper-V synthetic EOI/ICR MSRs %s\n", HalpApicHvMsrs ? "enabled" : "not used");
     }
 
     /* Enable the APIC if it wasn't yet */
     BaseRegister.LongLong = __readmsr(MSR_APIC_BASE);
 
-    /* This HAL drives the LAPIC through the xAPIC MMIO window, which is
-     * disabled while x2APIC EXTD is set; the only legal exit from x2APIC
+    /* In xAPIC mode this HAL drives the LAPIC through the MMIO window, which
+     * is disabled while x2APIC EXTD is set; the only legal exit from x2APIC
      * is through the disabled state. */
-    if (BaseRegister.ExtendedMode)
+    if (BaseRegister.ExtendedMode && !HalpApicX2Mode)
     {
         DPRINT1("APIC: CPU %lu handed over in x2APIC mode, forcing xAPIC\n", Cpu);
         BaseRegister.Enable = 0;
@@ -458,6 +466,13 @@ ApicInitializeLocalApic(ULONG Cpu)
     BaseRegister.BootStrapCPUCore = (Cpu == 0);
     __writemsr(MSR_APIC_BASE, BaseRegister.LongLong);
 
+    /* x2APIC is entered from the enabled xAPIC state, never from disabled */
+    if (HalpApicX2Mode && !BaseRegister.ExtendedMode)
+    {
+        BaseRegister.ExtendedMode = 1;
+        __writemsr(MSR_APIC_BASE, BaseRegister.LongLong);
+    }
+
     /* Set spurious vector and SoftwareEnable to 1 */
     SpIntRegister.Long = ApicRead(APIC_SIVR);
     SpIntRegister.Vector = APIC_SPURIOUS_VECTOR;
@@ -468,11 +483,15 @@ ApicInitializeLocalApic(ULONG Cpu)
     /* Read the version and save it globally */
     if (Cpu == 0) ApicVersion = ApicRead(APIC_VER);
 
-    /* Set the mode to flat (max 8 CPUs supported!) */
-    ApicWrite(APIC_DFR, APIC_DF_Flat);
+    /* x2APIC has no DFR and a read-only LDR; this HAL only uses physical destinations */
+    if (!HalpApicX2Mode)
+    {
+        /* Set the mode to flat (max 8 CPUs supported!) */
+        ApicWrite(APIC_DFR, APIC_DF_Flat);
 
-    /* Set logical apic ID */
-    ApicWrite(APIC_LDR, ApicLogicalId(Cpu) << 24);
+        /* Set logical apic ID */
+        ApicWrite(APIC_LDR, ApicLogicalId(Cpu) << 24);
+    }
 
     /* Set the spurious ISR */
     KeRegisterInterruptHandler(APIC_SPURIOUS_VECTOR, ApicSpuriousService);
@@ -491,10 +510,14 @@ ApicInitializeLocalApic(ULONG Cpu)
     ApicWrite(APIC_TMRLVTR, LvtEntry.Long);
     ApicWrite(APIC_THRMLVTR, LvtEntry.Long);
     ApicWrite(APIC_PCLVTR, LvtEntry.Long);
-    ApicWrite(APIC_EXT0LVTR, LvtEntry.Long);
-    ApicWrite(APIC_EXT1LVTR, LvtEntry.Long);
-    ApicWrite(APIC_EXT2LVTR, LvtEntry.Long);
-    ApicWrite(APIC_EXT3LVTR, LvtEntry.Long);
+    if (!HalpApicX2Mode)
+    {
+        /* AMD extended LVTs; as MSRs they do not exist on every processor */
+        ApicWrite(APIC_EXT0LVTR, LvtEntry.Long);
+        ApicWrite(APIC_EXT1LVTR, LvtEntry.Long);
+        ApicWrite(APIC_EXT2LVTR, LvtEntry.Long);
+        ApicWrite(APIC_EXT3LVTR, LvtEntry.Long);
+    }
 
     /* LINT0 */
     LvtEntry.Vector = APIC_SPURIOUS_VECTOR;
@@ -543,7 +566,7 @@ HalpAllocateSystemInterrupt(
     ReDirReg.TriggerMode = APIC_TGM_Edge;
     ReDirReg.Mask = 1;
     ReDirReg.Reserved = 0;
-    ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+    ReDirReg.Destination = ApicGetLocalIoDestination();
 
     /* Initialize entry */
     ApicWriteIORedirectionEntry(Irq, ReDirReg);
@@ -783,7 +806,7 @@ ApicInitializeIOApic(VOID)
     ReDirReg.TriggerMode = APIC_TGM_Edge;
     ReDirReg.Mask = 1;
     ReDirReg.Reserved = 0;
-    ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+    ReDirReg.Destination = ApicGetLocalIoDestination();
 
     /* Loop all table entries */
     for (Index = 0; Index < HalpIoApicMaxIrq; Index++)
@@ -804,7 +827,7 @@ ApicInitializeIOApic(VOID)
     ReDirReg.DestinationMode = APIC_DM_Physical;
     ReDirReg.TriggerMode = APIC_TGM_Level;
     ReDirReg.Mask = 1;
-    ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+    ReDirReg.Destination = ApicGetLocalIoDestination();
     ApicWriteIORedirectionEntry(APIC_CLOCK_INDEX, ReDirReg);
 }
 
@@ -1194,7 +1217,7 @@ HalEnableSystemInterrupt(
             DPRINT1("HalEnableSystemInterrupt: repairing RTE[%u] vector 0x%lx routing (was MT %u DM %u dest 0x%x)\n", Index, Vector, ReDirReg.MessageType, ReDirReg.DestinationMode, ReDirReg.Destination);
             ReDirReg.MessageType = APIC_MT_Fixed;
             ReDirReg.DestinationMode = APIC_DM_Physical;
-            ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+            ReDirReg.Destination = ApicGetLocalIoDestination();
             ApicWriteIORedirectionEntry(Index, ReDirReg);
         }
         return TRUE;
@@ -1204,7 +1227,7 @@ HalEnableSystemInterrupt(
     ReDirReg.Vector = Vector;
     ReDirReg.MessageType = APIC_MT_Fixed;
     ReDirReg.DestinationMode = APIC_DM_Physical;
-    ReDirReg.Destination = ApicRead(APIC_ID) >> 24;
+    ReDirReg.Destination = ApicGetLocalIoDestination();
     ReDirReg.TriggerMode = (InterruptMode == LevelSensitive) ? APIC_TGM_Level : APIC_TGM_Edge;
     ReDirReg.Mask = FALSE;
 
