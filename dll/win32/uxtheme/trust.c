@@ -333,11 +333,8 @@ TrustClassify(void)
 decide:
     cls = tl4_trust_classify(&f);
     g_privileged = cls != TL4_TRUST_ORDINARY;
-    /* T-PRIV-2 (the pure decision) or T-PRIV-6 (logon or secure desktop, kept here as Jim 2 asked).
-     * A privileged process must take the machine default too: it cannot use a version-4 style (the v4 gate is
-     * off for it), so without this it would read the user version-4 DllName, fail to open it, and drop the whole
-     * session to classic instead of the default v3 visual style. Ordinary processes still read the user theme. */
-    g_machineDefault = g_privileged || tl4_trust_uses_machine_default(&f) || f.is_logon_process ||
+    /* T-PRIV-2 (the pure decision) or T-PRIV-6 (logon or secure desktop, kept here as Jim 2 asked) */
+    g_machineDefault = tl4_trust_uses_machine_default(&f) || f.is_logon_process ||
                        (dchars == 8 && !_wcsnicmp(desk, L"Winlogon", 8)) ||
                        (dchars == 12 && !_wcsnicmp(desk, L"Screen-saver", 12)) ||
                        !(wchars == 7 && !_wcsnicmp(winsta, L"WinSta0", 7));
@@ -1048,7 +1045,18 @@ TrustPeekVersion(const UXT_VIEW *v, WORD *version)
 static BOOL
 TrustV4Enabled(void)
 {
-    return TrustGateDword(UXTHEME_TrustIsPrivileged() ? L"EnableV4Privileged" : L"EnableV4Ordinary");
+    DWORD v;
+
+    if (!UXTHEME_TrustIsPrivileged())
+        return TrustGateDword(L"EnableV4Ordinary");
+
+    /* Owner 2026-11-18: every process uses version 4; a privileged process may use it too, but only from the
+     * trusted system store, which the caller (UXTHEME_TrustOpenThemeFile) already enforces by the store path and
+     * the SY/BA-owned non-user-writable descriptor. So privileged version-4 is allowed here; an explicit
+     * EnableV4Privileged = 0 still forces it off. */
+    if (TrustReadMachineValue(NULL, L"EnableV4Privileged", REG_DWORD, &v, sizeof(v)))
+        return v == 1;
+    return TRUE;
 }
 
 /* the language module beside the style: <store>\<name>\<locale>\<name>.msstyles.mui, opened with the same checks;
