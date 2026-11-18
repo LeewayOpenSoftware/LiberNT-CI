@@ -176,12 +176,15 @@ static CONNECTION *GetConnection(const WCHAR *host, const WCHAR *user, const WCH
     return c;
 }
 
+static void DrainWaits(SMB2_CONN *conn, uint32_t treeId, int anyTree);
+
 static void DropConnectionIfIdle(CONNECTION *c)
 {
     CONNECTION **pp;
 
     if (c->Trees)
         return;
+    DrainWaits(c->Conn, 0, 1);
     Smb2Logoff(c->Conn);
     Smb2Disconnect(c->Conn);
     for (pp = &g_Connections; *pp; pp = &(*pp)->Next)
@@ -275,6 +278,7 @@ static LONG DoTreeDisconnect(const BYTE *payload, DWORD length)
     t = FindTree(req->Handle);
     if (!t)
         return ST_SUCCESS;
+    DrainWaits(t->Connection->Conn, t->TreeId, 0);
     Smb2TreeDisconnect(t->Connection->Conn, t->TreeId);
     for (pp = &g_Trees; *pp; pp = &(*pp)->Next)
     {
@@ -485,6 +489,9 @@ typedef struct _LOCKWAIT
     uint64_t Offset;
     uint64_t Length;
     uint32_t Flags;
+    uint32_t Filter;
+    uint32_t OutLength;
+    int Notify;
     SMB2_OP Op;
 } LOCKWAIT;
 
@@ -496,26 +503,46 @@ static HANDLE g_ReplyDev = INVALID_HANDLE_VALUE;
 
 static HANDLE OpenDevice(void);
 
-static void SendReply(unsigned long long id, LONG status)
+static void SendReply(unsigned long long id, LONG status, const void *data, DWORD dataLength)
 {
-    SMB2RDR_DOWNCALL down;
+    SMB2RDR_DOWNCALL *down;
     DWORD n;
 
-    down.Id = id;
-    down.Status = status;
-    down.Length = 0;
+    down = (SMB2RDR_DOWNCALL *)malloc(sizeof(*down) + dataLength);
+    if (!down)
+        return;
+    down->Id = id;
+    down->Status = status;
+    down->Length = dataLength;
+    if (dataLength)
+        memcpy(down + 1, data, dataLength);
     EnterCriticalSection(&g_ReplyLock);
     if (g_ReplyDev == INVALID_HANDLE_VALUE)
         g_ReplyDev = OpenDevice();
-    if (g_ReplyDev == INVALID_HANDLE_VALUE || !Ioctl(g_ReplyDev, IOCTL_SMB2RDR_PUTREPLY, &down, sizeof(down), NULL, 0, &n))
-        fprintf(stderr, "PUTREPLY (lock) failed: %lu\n", GetLastError());
+    if (g_ReplyDev == INVALID_HANDLE_VALUE ||
+        !Ioctl(g_ReplyDev, IOCTL_SMB2RDR_PUTREPLY, down, (DWORD)sizeof(*down) + dataLength, NULL, 0, &n))
+        fprintf(stderr, "PUTREPLY (wait) failed: %lu\n", GetLastError());
     LeaveCriticalSection(&g_ReplyLock);
+    free(down);
 }
 
 static DWORD WINAPI LockWaitThread(LPVOID param)
 {
     LOCKWAIT *w = (LOCKWAIT *)param, **link;
-    uint32_t st = Smb2LockWait(w->Conn, w->TreeId, &w->FileId, w->Offset, w->Length, w->Flags, &w->Op);
+    uint32_t st, got = 0;
+    uint8_t *data = NULL;
+
+    if (w->Notify)
+    {
+        data = (uint8_t *)malloc(w->OutLength);
+        st = data ? Smb2ChangeNotify(w->Conn, w->TreeId, &w->FileId, w->Filter, (w->Flags & SMB2RDR_NOTIFY_WATCH_TREE) != 0, w->OutLength, data, &got,
+                                     &w->Op)
+                  : SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    }
+    else
+    {
+        st = Smb2LockWait(w->Conn, w->TreeId, &w->FileId, w->Offset, w->Length, w->Flags, &w->Op);
+    }
 
     EnterCriticalSection(&g_WaitLock);
     for (link = &g_Waits; *link && *link != w; link = &(*link)->Next)
@@ -523,29 +550,17 @@ static DWORD WINAPI LockWaitThread(LPVOID param)
     if (*link)
         *link = w->Next;
     LeaveCriticalSection(&g_WaitLock);
-    SendReply(w->Id, (LONG)st);
+    SendReply(w->Id, (LONG)st, data, got);
+    free(data);
     free(w);
     InterlockedDecrement(&g_WaitThreads);
     return 0;
 }
 
-static LONG DoLockWait(const SMB2RDR_LOCK_REQ *req, unsigned long long id, uint32_t flags, OPENFILE *f)
+static LONG StartWait(LOCKWAIT *w)
 {
-    LOCKWAIT *w;
     HANDLE th;
 
-    if (Smb2ValidateLockRange(req->Offset, req->Length, flags) != SMB2_STATUS_SUCCESS)
-        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
-    w = (LOCKWAIT *)calloc(1, sizeof(*w));
-    if (!w)
-        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
-    w->Id = id;
-    w->Conn = f->Tree->Connection->Conn;
-    w->TreeId = f->Tree->TreeId;
-    w->FileId = f->FileId;
-    w->Offset = req->Offset;
-    w->Length = req->Length;
-    w->Flags = flags;
     Smb2OpInit(&w->Op, w->Conn);
     EnterCriticalSection(&g_WaitLock);
     w->Next = g_Waits;
@@ -571,6 +586,51 @@ static LONG DoLockWait(const SMB2RDR_LOCK_REQ *req, unsigned long long id, uint3
     return 0x7FFFFFFF;
 }
 
+static LONG DoLockWait(const SMB2RDR_LOCK_REQ *req, unsigned long long id, uint32_t flags, OPENFILE *f)
+{
+    LOCKWAIT *w;
+
+    if (Smb2ValidateLockRange(req->Offset, req->Length, flags) != SMB2_STATUS_SUCCESS)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    w = (LOCKWAIT *)calloc(1, sizeof(*w));
+    if (!w)
+        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    w->Id = id;
+    w->Conn = f->Tree->Connection->Conn;
+    w->TreeId = f->Tree->TreeId;
+    w->FileId = f->FileId;
+    w->Offset = req->Offset;
+    w->Length = req->Length;
+    w->Flags = flags;
+    return StartWait(w);
+}
+
+static LONG DoNotify(const BYTE *payload, DWORD length, unsigned long long id)
+{
+    const SMB2RDR_NOTIFY_REQ *req = (const SMB2RDR_NOTIFY_REQ *)payload;
+    OPENFILE *f;
+    LOCKWAIT *w;
+
+    if (length != sizeof(*req) || req->OutputLength == 0 || req->OutputLength > SMB2RDR_MAX_IO ||
+        (req->Flags & ~(unsigned long)SMB2RDR_NOTIFY_WATCH_TREE))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    f = FindFile(req->FileHandle);
+    if (!f)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    w = (LOCKWAIT *)calloc(1, sizeof(*w));
+    if (!w)
+        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    w->Id = id;
+    w->Notify = 1;
+    w->Conn = f->Tree->Connection->Conn;
+    w->TreeId = f->Tree->TreeId;
+    w->FileId = f->FileId;
+    w->Filter = req->CompletionFilter;
+    w->OutLength = req->OutputLength;
+    w->Flags = req->Flags;
+    return StartWait(w);
+}
+
 static LONG DoCancel(const BYTE *payload, DWORD length)
 {
     const SMB2RDR_CANCEL_REQ *req = (const SMB2RDR_CANCEL_REQ *)payload;
@@ -585,6 +645,32 @@ static LONG DoCancel(const BYTE *payload, DWORD length)
         Smb2OpCancel(&w->Op);
     LeaveCriticalSection(&g_WaitLock);
     return 0;
+}
+
+static void DrainWaits(SMB2_CONN *conn, uint32_t treeId, int anyTree)
+{
+    LOCKWAIT *w;
+    DWORD i;
+    int pending;
+
+    for (i = 0; i < 600; i++)
+    {
+        pending = 0;
+        EnterCriticalSection(&g_WaitLock);
+        for (w = g_Waits; w; w = w->Next)
+        {
+            if (w->Conn == conn && (anyTree || w->TreeId == treeId))
+            {
+                pending = 1;
+                Smb2OpCancel(&w->Op);
+            }
+        }
+        LeaveCriticalSection(&g_WaitLock);
+        if (!pending)
+            return;
+        Sleep(50);
+    }
+    fprintf(stderr, "smb2d: waits on a closing connection did not drain\n");
 }
 
 static void CancelAllWaits(void)
@@ -702,6 +788,9 @@ static void Serve(HANDLE dev)
                 break;
             case SMB2RDR_UP_LOCK:
                 status = DoLock(reqbuf + sizeof(*up), up->Length, up->Id);
+                break;
+            case SMB2RDR_UP_NOTIFY:
+                status = DoNotify(reqbuf + sizeof(*up), up->Length, up->Id);
                 break;
             case SMB2RDR_UP_CANCEL:
                 status = DoCancel(reqbuf + sizeof(*up), up->Length);

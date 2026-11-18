@@ -56,6 +56,15 @@ typedef struct _SMB2RDR_LOCK
     ULONGLONG Length;
 } SMB2RDR_LOCK, *PSMB2RDR_LOCK;
 
+#define SMB2RDR_NOTIFY_SLOTS    8
+#define SMB2RDR_SLOT_RESERVED   (-1LL)
+
+typedef struct _SMB2RDR_CANCEL_SLOTS
+{
+    volatile LONG Closing;
+    volatile LONGLONG Id[SMB2RDR_NOTIFY_SLOTS];
+} SMB2RDR_CANCEL_SLOTS, *PSMB2RDR_CANCEL_SLOTS;
+
 /* Per-open state: the daemon's file handle */
 typedef struct _SMB2RDR_FOBX_EXT
 {
@@ -64,6 +73,7 @@ typedef struct _SMB2RDR_FOBX_EXT
     ULONGLONG FileHandle;
     BOOLEAN IsDirectory;
     PSMB2RDR_LOCK Locks;
+    SMB2RDR_CANCEL_SLOTS Notify;
 } SMB2RDR_FOBX_EXT, *PSMB2RDR_FOBX_EXT;
 
 #define Smb2GetFobxExt(Fobx) \
@@ -88,7 +98,8 @@ NTSTATUS Smb2UpcallEx(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
                       PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, PACCESS_TOKEN Token);
 
 /* An upcall the daemon may hold until the caller's IRP is cancelled or its thread ends (blocking locks) */
-NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp);
+NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp,
+                               PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, PSMB2RDR_CANCEL_SLOTS Slots);
 
 NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written, ULONG RequestorPid);
 NTSTATUS Smb2HandlePutReply(const VOID *InBuffer, ULONG InLength);

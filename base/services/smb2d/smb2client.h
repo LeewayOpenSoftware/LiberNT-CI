@@ -103,12 +103,26 @@ void Smb2OpCancel(SMB2_OP *Op);
 uint32_t Smb2LockWait(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset, uint64_t Length,
                       uint32_t Flags, SMB2_OP *Op);
 
+/*
+ * CHANGE_NOTIFY on a directory handle: returns when the server reports changes, Op is cancelled
+ * (STATUS_CANCELLED) or the handle is closed (STATUS_NOTIFY_CLEANUP). On success Buffer holds a validated
+ * FILE_NOTIFY_INFORMATION chain (Returned bytes, at most OutputLength); STATUS_NOTIFY_ENUM_DIR returns no data.
+ */
+uint32_t Smb2ChangeNotify(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint32_t Filter,
+                          int WatchTree, uint32_t OutputLength, void *Buffer, uint32_t *Returned, SMB2_OP *Op);
+
 uint16_t Smb2ConnDialect(const SMB2_CONN *Conn);
 int Smb2ConnSigned(const SMB2_CONN *Conn);
+
+/* The highest dialect Smb2Negotiate offers (default 3.1.1); for tests and for servers that mishandle newer ones */
+void Smb2SetMaxDialect(uint16_t Dialect);
 
 /* Signing primitives (smb2sign.c) */
 void Smb2HmacSha256(const uint8_t *Key, size_t KeyLen, const uint8_t *Msg, size_t MsgLen, uint8_t Out[32]);
 void Smb2SignMessage(const uint8_t *Key16, uint8_t *Msg, size_t Len);
 int Smb2VerifyMessage(const uint8_t *Key16, const uint8_t *Msg, size_t Len);
+/* Cmac selects AES-128-CMAC (dialect 3.x) instead of HMAC-SHA256 */
+void Smb2SignMessageEx(const uint8_t *Key16, uint8_t *Msg, size_t Len, int Cmac);
+int Smb2VerifyMessageEx(const uint8_t *Key16, const uint8_t *Msg, size_t Len, int Cmac);
 
 #endif /* _SMB2CLIENT_H */

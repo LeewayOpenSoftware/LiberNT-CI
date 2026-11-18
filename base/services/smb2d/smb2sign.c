@@ -9,6 +9,7 @@
 #include <string.h>
 #include "smb2proto.h"
 #include "smb2client.h"
+#include "smb2crypto.h"
 
 #define ROR(x, n) (((x) >> (n)) | ((x) << (32 - (n))))
 
@@ -155,6 +156,16 @@ void Smb2SignMessage(const uint8_t *key16, uint8_t *msg, size_t len)
     memcpy(msg + SMB2H_SIGNATURE, mac, 16);
 }
 
+static int Mac16Equal(const uint8_t *a, const uint8_t *b)
+{
+    uint8_t diff = 0;
+    int i;
+
+    for (i = 0; i < 16; i++)
+        diff |= (uint8_t)(a[i] ^ b[i]);
+    return diff == 0;
+}
+
 int Smb2VerifyMessage(const uint8_t *key16, const uint8_t *msg, size_t len)
 {
     uint8_t sig[16], mac[32], *tmp;
@@ -168,6 +179,41 @@ int Smb2VerifyMessage(const uint8_t *key16, const uint8_t *msg, size_t len)
     memset(tmp + SMB2H_SIGNATURE, 0, 16);
     Smb2HmacSha256(key16, 16, tmp, len, mac);
     free(tmp);
-    ok = (memcmp(mac, sig, 16) == 0);
+    ok = Mac16Equal(mac, sig);
+    return ok;
+}
+
+/* 3.1.4.1 for dialect 3.x: the signature is AES-128-CMAC(SigningKey, message with Signature zeroed) */
+void Smb2SignMessageEx(const uint8_t *key16, uint8_t *msg, size_t len, int cmac)
+{
+    uint8_t mac[16];
+
+    if (!cmac)
+    {
+        Smb2SignMessage(key16, msg, len);
+        return;
+    }
+    Smb2Put32(msg, SMB2H_FLAGS, Smb2Get32(msg, SMB2H_FLAGS) | SMB2_FLAGS_SIGNED);
+    memset(msg + SMB2H_SIGNATURE, 0, 16);
+    Smb2AesCmac(key16, msg, len, mac);
+    memcpy(msg + SMB2H_SIGNATURE, mac, 16);
+}
+
+int Smb2VerifyMessageEx(const uint8_t *key16, const uint8_t *msg, size_t len, int cmac)
+{
+    uint8_t sig[16], mac[16], *tmp;
+    int ok;
+
+    if (!cmac)
+        return Smb2VerifyMessage(key16, msg, len);
+    tmp = (uint8_t *)malloc(len);
+    if (!tmp)
+        return 0;
+    memcpy(tmp, msg, len);
+    memcpy(sig, msg + SMB2H_SIGNATURE, 16);
+    memset(tmp + SMB2H_SIGNATURE, 0, 16);
+    Smb2AesCmac(key16, tmp, len, mac);
+    free(tmp);
+    ok = Mac16Equal(mac, sig);
     return ok;
 }

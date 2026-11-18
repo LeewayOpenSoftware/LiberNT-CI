@@ -172,7 +172,8 @@ NTSTATUS Smb2UpcallEx(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
  * told to cancel the request (SMB2RDR_UP_CANCEL) and answers the upcall itself, normally STATUS_CANCELLED.
  * If it does not answer within SMB2RDR_UPCALL_TIMEOUT_SEC the request is withdrawn.
  */
-NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp)
+NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp,
+                               PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, PSMB2RDR_CANCEL_SLOTS Slots)
 {
     PSMB2_REQUEST req;
     LARGE_INTEGER slice;
@@ -180,10 +181,13 @@ NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadL
     KIRQL irql;
     BOOLEAN cancelSent = FALSE;
     ULONG waitedAfterCancel = 0;
+    LONG slot = -1;
 
+    if (ReplyLength)
+        *ReplyLength = 0;
     if (!DaemonRunning)
         return STATUS_REDIRECTOR_NOT_STARTED;
-    if (PayloadLength > SMB2RDR_MAX_PAYLOAD)
+    if (PayloadLength > SMB2RDR_MAX_PAYLOAD || ReplyCapacity > SMB2RDR_MAX_PAYLOAD)
         return STATUS_INVALID_PARAMETER;
 
     req = ExAllocatePoolWithTag(NonPagedPool, sizeof(*req), SMB2RDR_TAG_UP);
@@ -193,7 +197,17 @@ NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadL
     req->Id = (ULONGLONG)InterlockedIncrement64(&NextId);
     req->Opcode = Opcode;
     req->PayloadLength = PayloadLength;
+    req->ReplyCapacity = ReplyCapacity;
     KeInitializeEvent(&req->Done, NotificationEvent, FALSE);
+    if (ReplyCapacity)
+    {
+        req->Reply = ExAllocatePoolWithTag(NonPagedPool, ReplyCapacity, SMB2RDR_TAG_UP);
+        if (!req->Reply)
+        {
+            FreeRequest(req);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
     if (PayloadLength)
     {
         req->Payload = ExAllocatePoolWithTag(NonPagedPool, PayloadLength, SMB2RDR_TAG_UP);
@@ -205,10 +219,30 @@ NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadL
         RtlCopyMemory(req->Payload, Payload, PayloadLength);
     }
 
+    if (Slots)
+    {
+        LONG i;
+
+        for (i = 0; i < SMB2RDR_NOTIFY_SLOTS; i++)
+        {
+            if (InterlockedCompareExchange64(&Slots->Id[i], SMB2RDR_SLOT_RESERVED, 0) == 0)
+            {
+                slot = i;
+                break;
+            }
+        }
+        if (slot < 0)
+        {
+            FreeRequest(req);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+    }
     KeAcquireSpinLock(&UpcallLock, &irql);
     InsertTailList(&QueuedList, &req->Link);
     KeReleaseSpinLock(&UpcallLock, irql);
     KeSetEvent(&QueueEvent, IO_NO_INCREMENT, FALSE);
+    if (slot >= 0)
+        InterlockedExchange64(&Slots->Id[slot], (LONGLONG)req->Id);
 
     slice.QuadPart = -(LONGLONG)SMB2RDR_LOCK_POLL_MS * 10000;
     for (;;)
@@ -217,7 +251,8 @@ NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadL
         if (status == STATUS_SUCCESS)
             break;
 
-        if (!cancelSent && (status != STATUS_TIMEOUT || (Irp && Irp->Cancel) || PsIsThreadTerminating(PsGetCurrentThread())))
+        if (!cancelSent && (status != STATUS_TIMEOUT || (Irp && Irp->Cancel) || PsIsThreadTerminating(PsGetCurrentThread()) ||
+                           (Slots && Slots->Closing)))
         {
             SMB2RDR_CANCEL_REQ cancel;
 
@@ -235,6 +270,8 @@ NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadL
             {
                 RemoveEntryList(&req->Link);
                 KeReleaseSpinLock(&UpcallLock, irql);
+                if (slot >= 0)
+                    InterlockedExchange64(&Slots->Id[slot], 0);
                 FreeRequest(req);
                 return cancelSent ? STATUS_CANCELLED : STATUS_REDIRECTOR_NOT_STARTED;
             }
@@ -243,7 +280,16 @@ NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadL
         }
     }
 
+    if (slot >= 0)
+        InterlockedExchange64(&Slots->Id[slot], 0);
     status = req->Status;
+    if (NT_SUCCESS(status) && req->ReplyLength)
+    {
+        if (Reply)
+            RtlCopyMemory(Reply, req->Reply, req->ReplyLength);
+        if (ReplyLength)
+            *ReplyLength = req->ReplyLength;
+    }
     FreeRequest(req);
     return status;
 }

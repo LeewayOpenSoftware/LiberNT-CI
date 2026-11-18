@@ -57,6 +57,9 @@
 /* Dialects */
 #define SMB2_DIALECT_202        0x0202
 #define SMB2_DIALECT_210        0x0210
+#define SMB2_DIALECT_300        0x0300
+#define SMB2_DIALECT_302        0x0302
+#define SMB2_DIALECT_311        0x0311
 
 /* Security modes (negotiate) */
 #define SMB2_NEGOTIATE_SIGNING_ENABLED   0x0001
@@ -98,6 +101,8 @@
 /* NTSTATUS values the client logic cares about */
 #define SMB2_STATUS_SUCCESS                  0x00000000u
 #define SMB2_STATUS_PENDING                  0x00000103u
+#define SMB2_STATUS_NOTIFY_CLEANUP           0x0000010Bu
+#define SMB2_STATUS_NOTIFY_ENUM_DIR          0x0000010Cu
 #define SMB2_STATUS_END_OF_FILE              0xC0000011u
 #define SMB2_STATUS_MORE_PROCESSING          0xC0000016u
 #define SMB2_STATUS_ACCESS_DENIED            0xC0000022u
