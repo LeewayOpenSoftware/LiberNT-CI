@@ -104,8 +104,8 @@ TestLive(void)
     WCHAR Root[MAX_PATH], Sub[MAX_PATH], Old[MAX_PATH], New[MAX_PATH];
     DWORD Length = GetEnvironmentVariableW(L"SMB2_TEST_ROOT", Root, RTL_NUMBER_OF(Root) - 96);
     HANDLE Dir, File;
-    OVERLAPPED Overlapped;
-    BYTE Buffer[4096];
+    OVERLAPPED Overlapped, Overlapped2;
+    BYTE Buffer[4096], Buffer2[4096];
     DWORD Transferred, Start, Error;
     WCHAR Name[64];
 
@@ -188,12 +188,16 @@ TestLive(void)
 
     ok(Watch(Dir, FALSE, Buffer, sizeof(Buffer), &Overlapped) || GetLastError() == ERROR_IO_PENDING,
        "ReadDirectoryChangesW failed, error %lu\n", GetLastError());
+    ok(Watch(Dir, FALSE, Buffer2, sizeof(Buffer2), &Overlapped2) || GetLastError() == ERROR_IO_PENDING,
+       "The second ReadDirectoryChangesW failed, error %lu\n", GetLastError());
     Sleep(300);
     Start = GetTickCount();
     CloseHandle(Dir);
-    ok(WaitForSingleObject(Overlapped.hEvent, 5000) == WAIT_OBJECT_0, "Closing the handle did not end the watch\n");
+    ok(WaitForSingleObject(Overlapped.hEvent, 5000) == WAIT_OBJECT_0, "Closing the handle did not end the first watch\n");
+    ok(WaitForSingleObject(Overlapped2.hEvent, 5000) == WAIT_OBJECT_0, "Closing the handle did not end the second watch\n");
     ok(GetTickCount() - Start < 3000, "Closing the handle took %lu ms\n", GetTickCount() - Start);
     CloseHandle(Overlapped.hEvent);
+    CloseHandle(Overlapped2.hEvent);
 
     ok(RemoveDirectoryW(Sub), "Cannot remove %ls, error %lu\n", Sub, GetLastError());
 }

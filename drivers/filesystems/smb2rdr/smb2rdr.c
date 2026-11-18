@@ -660,7 +660,7 @@ static NTSTATUS NTAPI Smb2Create(IN OUT PRX_CONTEXT RxContext)
     fobx = Smb2GetFobxExt(RxContext->pFobx);
     fobx->FileHandle = reply.FileHandle;
     fobx->Locks = NULL;
-    fobx->NotifyId = 0;
+    RtlZeroMemory(&fobx->Notify, sizeof(fobx->Notify));
     fobx->IsDirectory = (reply.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
     if (fcb->OpenCount == 0)
@@ -1328,7 +1328,9 @@ static NTSTATUS NTAPI Smb2NotifyChange(IN OUT PRX_CONTEXT RxContext)
 
     status = Smb2UpcallCancellable(SMB2RDR_UP_NOTIFY, &req, sizeof(req), RxContext->CurrentIrp,
                                    low->ParamsFor.NotifyChangeDirectory.pNotificationBuffer, length, &got,
-                                   &fobx->NotifyId);
+                                   &fobx->Notify);
+    if (status == 0x0000010B)
+        return STATUS_CANCELLED;
     if (NT_SUCCESS(status))
         RxContext->IoStatusBlock.Information = got;
     return status;
@@ -1337,14 +1339,22 @@ static NTSTATUS NTAPI Smb2NotifyChange(IN OUT PRX_CONTEXT RxContext)
 static NTSTATUS NTAPI Smb2CleanupFobx(IN OUT PRX_CONTEXT RxContext)
 {
     PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
-    LONGLONG id;
+    LONG i;
 
-    if (fobx && (id = fobx->NotifyId) != 0)
+    if (!fobx)
+        return STATUS_SUCCESS;
+    InterlockedExchange(&fobx->Notify.Closing, 1);
+    for (i = 0; i < SMB2RDR_NOTIFY_SLOTS; i++)
     {
-        SMB2RDR_CANCEL_REQ cancel;
+        LONGLONG id = fobx->Notify.Id[i];
 
-        cancel.TargetId = (ULONGLONG)id;
-        Smb2Upcall(SMB2RDR_UP_CANCEL, &cancel, sizeof(cancel), NULL, 0, NULL);
+        if (id > 0)
+        {
+            SMB2RDR_CANCEL_REQ cancel;
+
+            cancel.TargetId = (ULONGLONG)id;
+            Smb2Upcall(SMB2RDR_UP_CANCEL, &cancel, sizeof(cancel), NULL, 0, NULL);
+        }
     }
     return STATUS_SUCCESS;
 }

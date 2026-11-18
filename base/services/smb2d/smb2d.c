@@ -176,12 +176,15 @@ static CONNECTION *GetConnection(const WCHAR *host, const WCHAR *user, const WCH
     return c;
 }
 
+static void DrainWaits(SMB2_CONN *conn, uint32_t treeId, int anyTree);
+
 static void DropConnectionIfIdle(CONNECTION *c)
 {
     CONNECTION **pp;
 
     if (c->Trees)
         return;
+    DrainWaits(c->Conn, 0, 1);
     Smb2Logoff(c->Conn);
     Smb2Disconnect(c->Conn);
     for (pp = &g_Connections; *pp; pp = &(*pp)->Next)
@@ -275,6 +278,7 @@ static LONG DoTreeDisconnect(const BYTE *payload, DWORD length)
     t = FindTree(req->Handle);
     if (!t)
         return ST_SUCCESS;
+    DrainWaits(t->Connection->Conn, t->TreeId, 0);
     Smb2TreeDisconnect(t->Connection->Conn, t->TreeId);
     for (pp = &g_Trees; *pp; pp = &(*pp)->Next)
     {
@@ -531,7 +535,7 @@ static DWORD WINAPI LockWaitThread(LPVOID param)
     if (w->Notify)
     {
         data = (uint8_t *)malloc(w->OutLength);
-        st = data ? Smb2ChangeNotify(w->Conn, w->TreeId, &w->FileId, w->Filter, w->Flags & 1, w->OutLength, data, &got,
+        st = data ? Smb2ChangeNotify(w->Conn, w->TreeId, &w->FileId, w->Filter, (w->Flags & SMB2RDR_NOTIFY_WATCH_TREE) != 0, w->OutLength, data, &got,
                                      &w->Op)
                   : SMB2_STATUS_INSUFFICIENT_RESOURCES;
     }
@@ -641,6 +645,32 @@ static LONG DoCancel(const BYTE *payload, DWORD length)
         Smb2OpCancel(&w->Op);
     LeaveCriticalSection(&g_WaitLock);
     return 0;
+}
+
+static void DrainWaits(SMB2_CONN *conn, uint32_t treeId, int anyTree)
+{
+    LOCKWAIT *w;
+    DWORD i;
+    int pending;
+
+    for (i = 0; i < 600; i++)
+    {
+        pending = 0;
+        EnterCriticalSection(&g_WaitLock);
+        for (w = g_Waits; w; w = w->Next)
+        {
+            if (w->Conn == conn && (anyTree || w->TreeId == treeId))
+            {
+                pending = 1;
+                Smb2OpCancel(&w->Op);
+            }
+        }
+        LeaveCriticalSection(&g_WaitLock);
+        if (!pending)
+            return;
+        Sleep(50);
+    }
+    fprintf(stderr, "smb2d: waits on a closing connection did not drain\n");
 }
 
 static void CancelAllWaits(void)
