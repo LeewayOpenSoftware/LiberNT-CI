@@ -61,5 +61,16 @@ int reg_import(int argc, WCHAR *argvW[]);
 
 /* query.c */
 int reg_query(int argc, WCHAR *argvW[]);
+const WCHAR *reg_type_to_wchar(DWORD type);
+WCHAR *reg_data_to_wchar(DWORD type, const BYTE *src, DWORD size_bytes);
+
+/* hive.c */
+int reg_save(int argc, WCHAR *argvW[]);
+int reg_restore(int argc, WCHAR *argvW[]);
+int reg_load(int argc, WCHAR *argvW[]);
+int reg_unload(int argc, WCHAR *argvW[]);
+
+/* compare.c */
+int reg_compare(int argc, WCHAR *argvW[]);
 
 #endif /* __REG_H__ */
