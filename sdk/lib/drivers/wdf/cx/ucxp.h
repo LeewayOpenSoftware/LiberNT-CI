@@ -100,6 +100,7 @@ typedef struct _UCX_DEVICE_HANDLE {
     ULONG ConfigDescriptorLength;
     KSPIN_LOCK PipeLock;                   /* Interfaces[] and the pipes' Closing flags */
     volatile LONG Busy;                    /* callers inside a hub-interface or URB path */
+    volatile LONG Children;                /* devices behind this hub (each holds the hub) */
     volatile LONG Removing;                /* RemoveUsbDevice ran: the last caller out destroys */
     volatile LONG Destroyed;               /* claimed once by whoever destroys */
     struct _UCX_ROOTHUB_CTX *RootHub;      /* for a destroy from a release */
@@ -259,6 +260,10 @@ UcxpAcquireDeviceHandle(
 
 VOID
 UcxpReleaseDeviceHandle(
+    _In_ PUCX_DEVICE_HANDLE Handle);
+
+VOID
+UcxpDeviceTryDestroy(
     _In_ PUCX_DEVICE_HANDLE Handle);
 
 /* The URB limits the dispatchers enforce (ucxroothub.c) */

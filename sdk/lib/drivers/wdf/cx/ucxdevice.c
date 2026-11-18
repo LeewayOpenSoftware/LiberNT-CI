@@ -325,7 +325,7 @@ UcxpDeviceCreate(
     DeviceCtx->Handle = Handle;
     ExFreePoolWithTag(Init, UCX_TAG);
     if (Parent != NULL)
-        InterlockedIncrement(&Parent->Busy);   /* the hub stays until its children are gone */
+        InterlockedIncrement(&Parent->Children);   /* the hub stays until its children are gone */
     UcxpAddDeviceHandle(Controller, Handle);
     *NewHandle = Handle;
     if (Parent != NULL)
@@ -598,10 +598,19 @@ UcxpDeviceRemove(
 
     /* Callers already inside are short (a hub-interface call or one URB) */
     Slice.QuadPart = -10 * 1000 * 10;                  /* 10 ms */
-    while (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0 && Waited < 100)
+    while (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0 && Waited < 100 &&
+           InterlockedCompareExchange(&Handle->Children, 0, 0) == 0)
     {
         KeDelayExecutionThread(KernelMode, FALSE, &Slice);
         Waited++;
+    }
+    if (InterlockedCompareExchange(&Handle->Children, 0, 0) != 0)
+    {
+        /* A hub removed before its children: the last child's removal destroys it */
+        UcxLog("device: port %u remove: %ld child device(s) still attached, the last one's removal destroys the hub",
+               Handle->PortNumber, InterlockedCompareExchange(&Handle->Children, 0, 0));
+        UcxpDeviceTryDestroy(Handle);
+        return;
     }
     if (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0)
     {
@@ -609,8 +618,7 @@ UcxpDeviceRemove(
                Handle->PortNumber, InterlockedCompareExchange(&Handle->Busy, 0, 0), Waited * 10);
         return;
     }
-    if (InterlockedExchange(&Handle->Destroyed, 1) == 0)
-        UcxpDeviceDestroy(RootHub, Handle);
+    UcxpDeviceTryDestroy(Handle);
 }
 
 /* The teardown proper: pipes, endpoints, slot, objects, memory. Runs once per handle, at PASSIVE_LEVEL. */
@@ -637,7 +645,8 @@ UcxpDeviceDestroy(
         PUCX_DEVICE_HANDLE Parent = Handle->Parent;
 
         Handle->Parent = NULL;
-        UcxpReleaseDeviceHandle(Parent);            /* may take the hub down if it was removed first */
+        InterlockedDecrement(&Parent->Children);
+        UcxpDeviceTryDestroy(Parent);               /* takes the hub down if it was removed first */
     }
     ExFreePoolWithTag(Handle, UCX_TAG);
 }

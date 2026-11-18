@@ -2116,7 +2116,10 @@ XhciUcxForgetAllSlots(
     ULONG Index;
 
     /* The device callbacks read Device->Slot under TransferMutex: no slot
-     * may go away under them (the callers run at PASSIVE_LEVEL, hold nothing) */
+     * may go away under them (the callers run at PASSIVE_LEVEL, hold nothing).
+     * Nothing in the loop may take the mutex: the M2 path deletes the device
+     * object here and its endpoint cleanup purges queues synchronously, which
+     * holds as long as no queued request handler needs the mutex to finish. */
     ExAcquireFastMutex(&Dev->TransferMutex);
     for (Index = 0; Index < XHCI_UCX_MAX_ENUM_SLOTS; Index++)
     {
@@ -3765,7 +3768,7 @@ XhciUcxEvtUsbDeviceEnable(
     ULONGLONG Ep0RingPa;
     ULONG PortId = Info->PortNumber;
     ULONG PortSc = 0, Speed = 0, Code = 0;
-    UCHAR SlotId = 0, TtSlotId = 0, TtThinkTime = 0;
+    UCHAR SlotId = 0, TtSlotId = 0;
     BOOLEAN BehindHub, TtMtt = FALSE;
     NTSTATUS Status;
 
@@ -3833,7 +3836,8 @@ XhciUcxEvtUsbDeviceEnable(
         {
             PXHCI_UCX_USBDEVICE_CLIENT Tt = XhciUcxGetUsbDeviceClient((WDFOBJECT)Info->Path.TtHub);
 
-            if (Tt == NULL || Tt->Dev != Dev || Tt->Slot == NULL || !Tt->Slot->InUse || !Tt->Slot->IsHub)
+            if (Tt == NULL || Tt->Dev != Dev || Tt->Slot == NULL || !Tt->Slot->InUse ||
+                !Tt->Slot->Addressed || !Tt->Slot->IsHub)
             {
                 ExReleaseFastMutex(&Dev->TransferMutex);
                 XHCI_UCX_LOG("root port %lu route 0x%05lX: the TT hub's slot is not ready", PortId, Info->Path.RouteString);
@@ -3841,7 +3845,6 @@ XhciUcxEvtUsbDeviceEnable(
             }
             TtSlotId = Tt->Slot->SlotId;
             TtMtt = Tt->Slot->Mtt;
-            TtThinkTime = Tt->Slot->TtThinkTime;
         }
     }
 
@@ -3863,7 +3866,7 @@ XhciUcxEvtUsbDeviceEnable(
         Slot->TtSlotId = TtSlotId;
         Slot->TtPort = (TtSlotId != 0) ? Info->Path.TtPortNumber : 0;
         Slot->Mtt = (TtSlotId != 0) ? TtMtt : FALSE;
-        Slot->TtThinkTime = (TtSlotId != 0) ? TtThinkTime : 0;
+        /* TtThinkTime stays 0: that field describes a hub's own translator and is set on the hub's slot */
     }
     Slot->Ep0MaxPacket = (Slot->SpeedClass == XHCI_PORTSC_SPEED_SUPER) ? 512 :
                          (Slot->SpeedClass == XHCI_PORTSC_SPEED_HIGH) ? 64 : 8;
@@ -4916,6 +4919,7 @@ XhciUcxEpAbortCommon(
     KIRQL OldIrql;
     NTSTATUS Status = STATUS_SUCCESS;
     BOOLEAN Halted, Live;
+    UCHAR SlotId;
 
     if (Ep->Slot == NULL || Ep->Dci <= 1)
         return STATUS_SUCCESS;
@@ -4925,6 +4929,7 @@ XhciUcxEpAbortCommon(
     KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
     Halted = Ep->Halted;
     Live = Ep->Configured && !Ep->Disabled;
+    SlotId = Live ? Ep->Slot->SlotId : 0;    /* Ep->Slot is only trusted while the endpoint is live */
     if (OnlyIfHalted && !Halted)
     {
         /* A reset of a running pipe has nothing to do on this controller */
@@ -4953,7 +4958,7 @@ XhciUcxEpAbortCommon(
     KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
     ExReleaseFastMutex(&Dev->TransferMutex);
 
-    XHCI_UCX_LOG("slot %u ep 0x%02x: %s -> 0x%08lX", Ep->Slot->SlotId, Ep->Address,
+    XHCI_UCX_LOG("slot %u ep 0x%02x: %s -> 0x%08lX", SlotId, Ep->Address,
                  OnlyIfHalted ? "halted pipe reset" : "aborted", (ULONG)Status);
     XhciUcxEpCompleteList(Ep, &Done);
     return Status;
