@@ -187,7 +187,9 @@ USBSTOR_QueueEndReset(
     KeAcquireSpinLockAtDpcLevel(&FDODeviceExtension->IrpListLock);
     ASSERT(FDODeviceExtension->ActiveSrb == NULL);
     ASSERT(FDODeviceExtension->Flags & USBSTOR_FDO_FLAGS_DEVICE_RESETTING);
-    ASSERT(!(FDODeviceExtension->Flags & USBSTOR_FDO_FLAGS_DEVICE_GONE));
+    ASSERT(!(FDODeviceExtension->Flags & USBSTOR_FDO_FLAGS_DEVICE_GONE) ||
+           Status == STATUS_DEVICE_DOES_NOT_EXIST ||
+           Status == STATUS_DEVICE_NOT_CONNECTED);
     FDODeviceExtension->Flags &= ~USBSTOR_FDO_FLAGS_DEVICE_RESETTING;
     if (NT_SUCCESS(Status))
     {
