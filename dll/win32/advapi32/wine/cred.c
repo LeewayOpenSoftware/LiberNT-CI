@@ -49,6 +49,39 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(cred);
 
+#ifndef STATUS_UNSUCCESSFUL
+#define STATUS_UNSUCCESSFUL       ((LONG)0xC0000001)
+#endif
+#ifndef STATUS_INVALID_PARAMETER
+#define STATUS_INVALID_PARAMETER  ((LONG)0xC000000D)
+#endif
+#ifndef STATUS_ACCESS_DENIED
+#define STATUS_ACCESS_DENIED      ((LONG)0xC0000022)
+#endif
+#ifndef STATUS_NOT_FOUND
+#define STATUS_NOT_FOUND          ((LONG)0xC0000225)
+#endif
+
+ULONG WINAPI RtlNtStatusToDosError(LONG Status);
+
+/* Map a DPAPI server NTSTATUS to a Win32 error, as crypt32 does: a bad/foreign blob is corruption,
+ * a missing logon key means no key for this session, access denial keeps its meaning. */
+static DWORD cred_dpapi_status_to_error(LONG status)
+{
+    switch (status)
+    {
+        case STATUS_INVALID_PARAMETER:
+        case STATUS_UNSUCCESSFUL:
+            return ERROR_INVALID_DATA;
+        case STATUS_NOT_FOUND:
+            return ERROR_NO_SUCH_LOGON_SESSION;
+        case STATUS_ACCESS_DENIED:
+            return ERROR_ACCESS_DENIED;
+        default:
+            return RtlNtStatusToDosError(status);
+    }
+}
+
 /* Bind to the LSA DPAPI server (shares the lsarpc pipe), authenticated and sealed; fail closed so a
  * credential secret is never sent over an unauthenticated channel. */
 static handle_t cred_dpapi_bind(void)
@@ -109,7 +142,7 @@ static DWORD cred_dpapi_protect(const BYTE *plain, DWORD plain_len, BYTE **out, 
     if (err == ERROR_SUCCESS)
     {
         if (status != 0)
-            err = ERROR_INVALID_DATA;
+            err = cred_dpapi_status_to_error(status);
         else if (!(*out = malloc(result.cbData ? result.cbData : 1)))
             err = ERROR_OUTOFMEMORY;
         else
@@ -153,7 +186,7 @@ static DWORD cred_dpapi_unprotect(const BYTE *blob, DWORD blob_len, BYTE **out, 
     if (err == ERROR_SUCCESS)
     {
         if (status != 0)
-            err = ERROR_INVALID_DATA;
+            err = cred_dpapi_status_to_error(status);
         else if (!(*out = malloc(result.cbData ? result.cbData : 1)))
             err = ERROR_OUTOFMEMORY;
         else
@@ -544,9 +577,14 @@ static DWORD host_write_credential( const CREDENTIALW *credential, BOOL preserve
 
 static DWORD open_cred_mgr_key(HKEY *hkey, BOOL open_for_write)
 {
-    return RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\Credential Manager", 0,
-                           NULL, REG_OPTION_NON_VOLATILE,
-                           KEY_READ | (open_for_write ? KEY_WRITE : 0), NULL, hkey, NULL);
+    DWORD ret = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\Wine\\Credential Manager", 0,
+                                NULL, REG_OPTION_NON_VOLATILE,
+                                KEY_READ | (open_for_write ? KEY_WRITE : 0), NULL, hkey, NULL);
+    /* The legacy RC4 encryption key is obsolete now that secrets are DPAPI-protected, and must not
+     * linger in the hive where it could still recover old secrets: remove it when opening for write. */
+    if (ret == ERROR_SUCCESS && open_for_write)
+        RegDeleteValueW(*hkey, L"EncryptionKey");
+    return ret;
 }
 
 static LPWSTR get_key_name_for_target(LPCWSTR target_name, DWORD type)
@@ -1707,6 +1745,12 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
     if (Credential->Type != CRED_TYPE_GENERIC && Credential->Type != CRED_TYPE_DOMAIN_PASSWORD)
     {
         FIXME("unhandled type %ld\n", Credential->Type);
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (Credential->CredentialBlobSize > CRED_MAX_CREDENTIAL_BLOB_SIZE)
+    {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
     }
