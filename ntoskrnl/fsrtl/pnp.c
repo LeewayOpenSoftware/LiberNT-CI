@@ -128,7 +128,7 @@ FsRtlNotifyVolumeEventEx(IN PFILE_OBJECT FileObject,
     NTSTATUS Status;
     PDEVICE_OBJECT DeviceObject = NULL;
 
-    if (Event == NULL)
+    if (Event == NULL || FileObject == NULL)
     {
         return STATUS_INVALID_PARAMETER;
     }
