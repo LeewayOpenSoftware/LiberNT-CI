@@ -137,7 +137,6 @@ HvpMergeUnreconciledVector(
 }
 #endif
 
-static
 BOOLEAN
 CMAPI
 HvpWriteLog(

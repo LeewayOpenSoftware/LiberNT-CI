@@ -583,6 +583,16 @@ VOID CMAPI
 HvFree(
    PHHIVE RegistryHive);
 
+/* Format version written to newly created hives (default HSYS_MINOR).
+ * Loaded hives keep the minor they were written with. */
+ULONG CMAPI
+HvGetHiveFormatVersion(
+   VOID);
+
+VOID CMAPI
+HvSetHiveFormatVersion(
+   IN ULONG Minor);
+
 #define HvGetCell(Hive, Cell)   \
     (Hive)->GetCellRoutine(Hive, Cell)
 
@@ -757,6 +767,12 @@ HvpApplyIncrementalLog(
     _In_ BOOLEAN Apply,
     _Inout_opt_ PRTL_BITMAP AppliedBlocks,
     _Out_ PULONG RequiredLength);
+
+BOOLEAN
+CMAPI
+HvpWriteLog(
+    _In_ PHHIVE RegistryHive,
+    _In_ BOOLEAN Append);
 
 ULONG
 CMAPI
