@@ -98,22 +98,23 @@ HRESULT TrayManager::UpdateSecondaryTrays()
         TrayManager* pThis;
         HMONITOR hPrimary;
         HRESULT hr;
+
+        /* A plain static member keeps the stdcall convention MONITORENUMPROC needs on i386 */
+        static BOOL CALLBACK EnumProc(HMONITOR hMonitor, HDC, LPRECT, LPARAM lParam)
+        {
+            EnumData* pData = reinterpret_cast<EnumData*>(lParam);
+            if (hMonitor == pData->hPrimary)
+                return TRUE;
+
+            HRESULT hr = pData->pThis->CreateSecondaryTray(hMonitor);
+            if (FAILED(hr))
+                pData->hr = hr;
+
+            return TRUE;
+        }
     } data = { this, hPrimary, S_OK };
 
-    auto enumProc = [](HMONITOR hMonitor, HDC, LPRECT, LPARAM lParam) -> BOOL
-    {
-        EnumData* pData = reinterpret_cast<EnumData*>(lParam);
-        if (hMonitor == pData->hPrimary)
-            return TRUE;
-
-        HRESULT hr = pData->pThis->CreateSecondaryTray(hMonitor);
-        if (FAILED(hr))
-            pData->hr = hr;
-
-        return TRUE;
-    };
-
-    EnumDisplayMonitors(NULL, NULL, enumProc, reinterpret_cast<LPARAM>(&data));
+    EnumDisplayMonitors(NULL, NULL, EnumData::EnumProc, reinterpret_cast<LPARAM>(&data));
 
     return data.hr;
 }
