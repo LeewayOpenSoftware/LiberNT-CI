@@ -171,10 +171,10 @@ TestReportRefusals(
 
 START_TEST(WheaErrorSource)
 {
-    TEST_DESCRIPTOR Started, Stopped;
+    TEST_DESCRIPTOR Started, Stopped, Large;
     TEST_PACKET Packet;
     NTSTATUS Status;
-    ULONG FirstId;
+    ULONG FirstId, Accepted;
     KIRQL Irql;
 
     TestAddRefusals();
@@ -229,6 +229,26 @@ START_TEST(WheaErrorSource)
         ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_SUCCESS);
         ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_INSUFFICIENT_RESOURCES);
         WheaRemoveErrorSource(Started.ErrorSourceId);
+    }
+
+    /* A source may ask for 64 records of the largest size; it gets what fits in 1 MB, which is 15 */
+    InitDescriptor(&Large);
+    Large.MaxRawDataLength = 0x10000;
+    Large.NumRecordsToPreallocate = 64;
+    Status = Add(&Large);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        InitPacket(&Packet, Large.ErrorSourceId);
+        for (Accepted = 0; Accepted < 64; Accepted++)
+        {
+            if (WheaReportHwError(&Packet.Header) != STATUS_SUCCESS)
+                break;
+        }
+
+        ok_eq_hex(Accepted, 15);
+        ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_INSUFFICIENT_RESOURCES);
+        WheaRemoveErrorSource(Large.ErrorSourceId);
     }
 
     WheaRemoveErrorSource(Stopped.ErrorSourceId);

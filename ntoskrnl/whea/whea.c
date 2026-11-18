@@ -13,6 +13,7 @@
 #define WHEAP_MAX_DESCRIPTOR_LENGTH 0x2000
 #define WHEAP_MAX_RAW_DATA_LENGTH 0x10000
 #define WHEAP_MAX_RECORDS 64
+#define WHEAP_MAX_RECORD_BYTES 0x100000
 
 typedef struct _WHEAP_DESCRIPTOR_HEADER
 {
@@ -123,6 +124,7 @@ WheaAddErrorSource(
     ULONG RecordCount, Index;
     KIRQL OldIrql;
 
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
     if (!ErrorSource)
         return STATUS_INVALID_PARAMETER;
 
@@ -137,16 +139,18 @@ WheaAddErrorSource(
         return STATUS_INVALID_PARAMETER;
     }
 
-    RecordCount = Header.NumRecordsToPreallocate;
-    if (RecordCount == 0)
-        RecordCount = 1;
-    if (RecordCount > WHEAP_MAX_RECORDS)
-        RecordCount = WHEAP_MAX_RECORDS;
-
     SourceSize = ALIGN_UP_BY(FIELD_OFFSET(WHEAP_ERROR_SOURCE, Descriptor) + Header.Length, MEMORY_ALLOCATION_ALIGNMENT);
     RecordSize = ALIGN_UP_BY(FIELD_OFFSET(WHEAP_RECORD, Packet) + sizeof(WHEA_ERROR_PACKET_V2) + Header.MaxRawDataLength,
                              MEMORY_ALLOCATION_ALIGNMENT);
-    Source = ExAllocatePoolWithTag(NonPagedPool, SourceSize + RecordCount * RecordSize, WHEAP_TAG);
+    RecordCount = Header.NumRecordsToPreallocate;
+    if (RecordCount > WHEAP_MAX_RECORDS)
+        RecordCount = WHEAP_MAX_RECORDS;
+    if (RecordCount > WHEAP_MAX_RECORD_BYTES / RecordSize)
+        RecordCount = (ULONG)(WHEAP_MAX_RECORD_BYTES / RecordSize);
+    if (RecordCount == 0)
+        RecordCount = 1;
+
+    Source = ExAllocatePoolWithTag(NonPagedPoolNx, SourceSize + RecordCount * RecordSize, WHEAP_TAG);
     if (!Source)
         return STATUS_INSUFFICIENT_RESOURCES;
 
@@ -173,11 +177,11 @@ WheaAddErrorSource(
         Source->ErrorSourceId = WheapNextSourceId++;
     } while (Source->ErrorSourceId == 0 || WheapFindSource(Source->ErrorSourceId));
 
+    Header.ErrorSourceId = Source->ErrorSourceId;
+    RtlCopyMemory(Source->Descriptor, &Header, sizeof(Header));
     InsertTailList(&WheapSourceList, &Source->Link);
     WheapReleaseLock(OldIrql);
 
-    Header.ErrorSourceId = Source->ErrorSourceId;
-    RtlCopyMemory(Source->Descriptor, &Header, sizeof(Header));
     ((PWHEAP_DESCRIPTOR_HEADER)ErrorSource)->ErrorSourceId = Header.ErrorSourceId;
     return STATUS_SUCCESS;
 }
@@ -191,6 +195,7 @@ WheaRemoveErrorSource(
     PLIST_ENTRY Entry, Next;
     KIRQL OldIrql;
 
+    ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
     WheapAcquireLock(&OldIrql);
     Source = WheapFindSource(ErrorSourceId);
     if (Source)
