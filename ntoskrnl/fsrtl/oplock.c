@@ -269,7 +269,7 @@ FsRtlOplockKeysEqual(IN PFILE_OBJECT Fo1,
         return FALSE;
     }
 
-    return RtlEqualGuid(&Key1.TargetOplockKey, &Key2.TargetOplockKey);
+    return (RtlCompareMemory(&Key1.TargetOplockKey, &Key2.TargetOplockKey, sizeof(GUID)) == sizeof(GUID));
 }
 
 
