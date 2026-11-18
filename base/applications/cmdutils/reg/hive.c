@@ -73,6 +73,29 @@ static int invalid_syntax(WCHAR *op)
     return 1;
 }
 
+static LONG save_beside(HKEY hkey, const WCHAR *file)
+{
+    WCHAR full[MAX_PATH], temp[MAX_PATH], *name;
+    LONG error;
+
+    if (!GetFullPathNameW(file, ARRAY_SIZE(full), full, &name) || !name)
+        return GetLastError() ? GetLastError() : ERROR_INVALID_NAME;
+
+    *name = 0;
+    if (!GetTempFileNameW(full, L"reg", 0, temp))
+        return GetLastError();
+
+    DeleteFileW(temp);
+    enable_privilege(SE_BACKUP_NAME);
+    error = RegSaveKeyExW(hkey, temp, NULL, REG_LATEST_FORMAT);
+    if (!error && !MoveFileExW(temp, file, MOVEFILE_REPLACE_EXISTING))
+        error = GetLastError();
+    if (error)
+        DeleteFileW(temp);
+
+    return error;
+}
+
 int reg_save(int argc, WCHAR *argvW[])
 {
     BOOL overwrite_file = FALSE;
@@ -103,25 +126,27 @@ int reg_save(int argc, WCHAR *argvW[])
     if (error)
         return output_error(error);
 
-    if (GetFileAttributesW(argvW[3]) != INVALID_FILE_ATTRIBUTES)
+    if (GetFileAttributesW(argvW[3]) == INVALID_FILE_ATTRIBUTES)
     {
-        if (!overwrite_file && !ask_confirm(STRING_OVERWRITE_FILE, argvW[3]))
-        {
-            RegCloseKey(hkey);
-            output_message(STRING_CANCELLED);
-            return 0;
-        }
-
-        if (!DeleteFileW(argvW[3]))
-        {
-            error = GetLastError();
-            RegCloseKey(hkey);
+        enable_privilege(SE_BACKUP_NAME);
+        error = RegSaveKeyExW(hkey, argvW[3], NULL, REG_LATEST_FORMAT);
+        RegCloseKey(hkey);
+        if (error)
             return output_error(error);
-        }
+
+        output_message(STRING_SUCCESS);
+        return 0;
     }
 
-    enable_privilege(SE_BACKUP_NAME);
-    error = RegSaveKeyExW(hkey, argvW[3], NULL, REG_LATEST_FORMAT);
+    if (!overwrite_file && !ask_confirm(STRING_OVERWRITE_FILE, argvW[3]))
+    {
+        RegCloseKey(hkey);
+        output_message(STRING_CANCELLED);
+        return 0;
+    }
+
+    /* The existing file is replaced only once the new hive is complete */
+    error = save_beside(hkey, argvW[3]);
     RegCloseKey(hkey);
     if (error)
         return output_error(error);
