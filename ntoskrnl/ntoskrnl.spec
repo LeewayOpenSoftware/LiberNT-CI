@@ -2832,7 +2832,7 @@
 @ stdcall PoDirectedDripsSetDeviceFlags(ptr long)
 @ stdcall PoDisableSleepStates(long long ptr)
 @ stdcall PoEndDeviceBusy(ptr)
-@ stub -arch=win64 PoEnergyEstimationEnabled
+@ stdcall -arch=win64 PoEnergyEstimationEnabled()
 @ stub -arch=arm64 PoFxAddDeviceRelation
 @ stub -arch=win64 PoFxEnableDStateReporting
 @ stdcall -version=0xA00+ PoFxIssueComponentPerfStateChange(ptr long long ptr ptr)
@@ -2860,7 +2860,7 @@
 @ stdcall PoQueryPowerLimitValue(ptr long ptr)
 @ stdcall PoReenableSleepStates(ptr)
 @ stub -arch=win64 PoRegisterCoalescingCallback
-@ stub -arch=win64 PoRegisterForEffectivePowerModeNotifications
+@ stdcall -arch=win64 PoRegisterForEffectivePowerModeNotifications(long ptr ptr ptr)
 @ stdcall PoSetDeviceBusyEx(ptr)
 @ stdcall PoSetFixedWakeSource(long ptr)
 @ stub -arch=win64 PoSetPowerButtonHoldState
@@ -2870,9 +2870,9 @@
 @ stdcall PoSetUserPresent(long)
 @ stdcall PoStartDeviceBusy(ptr)
 @ stub -arch=win64 PoUnregisterCoalescingCallback
-@ stub -arch=win64 PoUnregisterFromEffectivePowerModeNotifications
-@ stub -arch=win64 PoUserShutdownCancelled
-@ stub -arch=win64 PoUserShutdownInitiated
+@ stdcall -arch=win64 PoUnregisterFromEffectivePowerModeNotifications(ptr)
+@ stdcall -arch=win64 PoUserShutdownCancelled()
+@ stdcall -arch=win64 PoUserShutdownInitiated()
 @ stdcall PsAcquireProcessExitSynchronization(ptr)
 @ stub -arch=win64 PsAcquireSiloHardReference
 @ stdcall PsAdjustWin32kPriorityFloor(ptr long)

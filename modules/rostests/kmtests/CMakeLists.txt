@@ -382,6 +382,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_po/PoPowerSettings.c
     ntos_po/PoProcessorStateHandler.c
     ntos_po/PoKernelPowerRequest.c
+    ntos_po/E_EffectivePowerMode.c
     ntos_po/drips_registry.c
     ntos_po/busy.c
     ntos_po/A_PowerRequest.c
