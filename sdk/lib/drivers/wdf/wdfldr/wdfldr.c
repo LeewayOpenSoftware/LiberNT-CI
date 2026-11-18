@@ -779,6 +779,8 @@ WdfRegisterClassLibrary(
             __DBGPRINT(("ERROR: WdfRegisterClassLibrary: ClassLibraryInitialize failed, status 0x%x\n", status));
             pClassModule->ClassLibraryInfo = NULL;
             ClassClose(pClassModule);
+            /* Not registered: a later client bind must not find this module (same as the ClassOpen failure) */
+            ClassRemoveFromLibraryList(pClassModule);
         }
     }
 
@@ -816,8 +818,15 @@ WdfVersionBindClass(
         return status;
     }
 
-    status = ClassLinkInClient(pClassModule, ClassBindInfo, BindInfo, pClassClientModule);
-    if (!NT_SUCCESS(status))
+    if (pClassModule->ClassLibraryInfo == NULL)
+    {
+        /* Never call through an unregistered class (ReferenceClassVersion refuses
+         * these; this is the last line of defence for a module that lost its
+         * registration in between). */
+        DPRINT_ERROR(("class %S has no class library information\n", ClassBindInfo->ClassName));
+        status = STATUS_NOT_FOUND;
+    }
+    else if (!NT_SUCCESS(status = ClassLinkInClient(pClassModule, ClassBindInfo, BindInfo, pClassClientModule)))
     {
         DPRINT_ERROR(("ClassLinkInClient failed 0x%x\n", status));
     }
