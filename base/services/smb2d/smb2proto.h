@@ -57,6 +57,9 @@
 /* Dialects */
 #define SMB2_DIALECT_202        0x0202
 #define SMB2_DIALECT_210        0x0210
+#define SMB2_DIALECT_300        0x0300
+#define SMB2_DIALECT_302        0x0302
+#define SMB2_DIALECT_311        0x0311
 
 /* Security modes (negotiate) */
 #define SMB2_NEGOTIATE_SIGNING_ENABLED   0x0001

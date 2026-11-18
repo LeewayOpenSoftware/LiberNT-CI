@@ -19,6 +19,7 @@
 
 #include "smb2client.h"
 #include "smb2enc.h"
+#include "smb2crypto.h"
 
 #define SMB2_MAX_MESSAGE    (SMB2_MAX_IO + 4096)
 
@@ -49,6 +50,15 @@ struct _SMB2_CONN
     uint64_t NextMessageId;
     uint8_t SigningKey[16];
     int Signing;                /* sign requests */
+    int Cmac;                   /* dialect 3.x: AES-CMAC instead of HMAC-SHA256 */
+    int PreauthActive;
+    uint8_t Preauth[64];        /* 3.1.1 preauth integrity hash */
+    uint8_t ClientGuid[16];
+    uint8_t ServerGuid[16];
+    uint32_t ServerCaps;
+    uint16_t ServerMode;
+    uint16_t MaxOffered;
+    int Validated;
     uint32_t MaxRead;
     uint32_t MaxTransact;
     uint32_t SessionFlags;
@@ -137,6 +147,26 @@ static uint8_t *RecvFrame(SMB2_CONN *c, size_t *len)
  * Resp is malloc'ed (caller frees); the status is the NTSTATUS in the response header.
  * Interim STATUS_PENDING responses are skipped.
  */
+static void SignMsg(SMB2_CONN *c, uint8_t *msg, size_t len)
+{
+    Smb2SignMessageEx(c->SigningKey, msg, len, c->Cmac);
+}
+
+static int VerifyMsg(SMB2_CONN *c, const uint8_t *msg, size_t len)
+{
+    return Smb2VerifyMessageEx(c->SigningKey, msg, len, c->Cmac);
+}
+
+static void PreauthUpdate(SMB2_CONN *c, const uint8_t *msg, size_t len)
+{
+    SMB2_SHA512 sha;
+
+    Smb2Sha512Init(&sha);
+    Smb2Sha512Update(&sha, c->Preauth, 64);
+    Smb2Sha512Update(&sha, msg, len);
+    Smb2Sha512Final(&sha, c->Preauth);
+}
+
 /* With signing in force every response must carry a valid signature: an unsigned one is a stripped one */
 static int ResponseSignatureOk(SMB2_CONN *c, uint16_t Command, const uint8_t *r, size_t rlen)
 {
@@ -144,7 +174,7 @@ static int ResponseSignatureOk(SMB2_CONN *c, uint16_t Command, const uint8_t *r,
         return 1;
     if (!(Smb2Get32(r, SMB2H_FLAGS) & SMB2_FLAGS_SIGNED))
         return 0;
-    return Smb2VerifyMessage(c->SigningKey, r, rlen);
+    return VerifyMsg(c, r, rlen);
 }
 
 static uint32_t TransactSerial(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, const uint8_t *Body, size_t BodyLen,
@@ -171,7 +201,9 @@ static uint32_t TransactSerial(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, 
     if (BodyLen)
         memcpy(req + SMB2_HEADER_SIZE, Body, BodyLen);
     if (c->Signing && Command != SMB2_NEGOTIATE && c->SessionId != 0)
-        Smb2SignMessage(c->SigningKey, req, total);
+        SignMsg(c, req, total);
+    if (c->PreauthActive && (Command == SMB2_NEGOTIATE || Command == SMB2_SESSION_SETUP))
+        PreauthUpdate(c, req, total);
 
     if (!SendFrame(c, req, total))
     {
@@ -205,6 +237,9 @@ static uint32_t TransactSerial(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, 
         free(r);
         return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
     }
+    if (c->PreauthActive && ((Command == SMB2_NEGOTIATE && status == SMB2_STATUS_SUCCESS) ||
+                             (Command == SMB2_SESSION_SETUP && status == SMB2_STATUS_MORE_PROCESSING)))
+        PreauthUpdate(c, r, rlen);
     *Resp = r;
     *RespLen = rlen;
     return status;
@@ -344,7 +379,7 @@ static uint32_t TransactEx(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, cons
     p->MessageId = mid;
     BuildHeader(c, req, Command, TreeId, mid);
     if (c->Signing && c->SessionId != 0)
-        Smb2SignMessage(c->SigningKey, req, total);
+        SignMsg(c, req, total);
     p->Next = c->Pending;
     c->Pending = p;
     if (Op)
@@ -408,7 +443,7 @@ static void SendCancel(SMB2_CONN *c, uint64_t mid)
             Smb2Put64(msg, SMB2H_ASYNCID, p->AsyncId);
         }
         if (c->Signing && c->SessionId != 0)
-            Smb2SignMessage(c->SigningKey, msg, sizeof(msg));
+            SignMsg(c, msg, sizeof(msg));
         SendFrame(c, msg, sizeof(msg));
     }
     LeaveCriticalSection(&c->Lock);
@@ -504,46 +539,94 @@ void Smb2Disconnect(SMB2_CONN *c)
 }
 
 /* 2.2.3 NEGOTIATE request, 2.2.4 response */
-uint32_t Smb2Negotiate(SMB2_CONN *c)
-{
-    uint8_t body[36 + 4], *r;
-    size_t rlen;
-    uint32_t st;
-    uint16_t dialect;
+static uint16_t g_MaxDialect = SMB2_DIALECT_311;
 
-    memset(body, 0, sizeof(body));
-    Smb2Put16(body, 0, 36);                         /* StructureSize */
-    Smb2Put16(body, 2, 2);                          /* DialectCount */
-    Smb2Put16(body, 4, SMB2_NEGOTIATE_SIGNING_ENABLED);
-    /* Capabilities = 0, ClientGuid: random per connection */
+void Smb2SetMaxDialect(uint16_t Dialect)
+{
+    g_MaxDialect = Dialect;
+}
+
+static void RandomBytes(uint8_t *p, size_t n)
+{
+    typedef BOOLEAN (WINAPI *PRNG)(PVOID, ULONG);
+    PRNG gen = NULL;
+    HMODULE adv = LoadLibraryW(L"advapi32.dll");
+
+    if (adv)
+        gen = (PRNG)(void *)GetProcAddress(adv, "SystemFunction036");
+    if (!gen || !gen(p, (ULONG)n))
     {
-        unsigned i;
+        size_t i;
         LARGE_INTEGER t;
 
         QueryPerformanceCounter(&t);
         srand((unsigned)(t.LowPart ^ GetCurrentProcessId()));
-        for (i = 0; i < 16; i++)
-            body[12 + i] = (uint8_t)rand();
+        for (i = 0; i < n; i++)
+            p[i] = (uint8_t)rand();
     }
-    Smb2Put16(body, 36, SMB2_DIALECT_202);
-    Smb2Put16(body, 38, SMB2_DIALECT_210);
+    if (adv)
+        FreeLibrary(adv);
+}
 
-    st = Transact(c, SMB2_NEGOTIATE, 0, body, sizeof(body), &r, &rlen);
+uint32_t Smb2Negotiate(SMB2_CONN *c)
+{
+    uint8_t body[SMB2ENC_NEGOTIATE_BODY_MAX], salt[32], *r;
+    size_t rlen, bodylen;
+    uint32_t st;
+    uint16_t dialect;
+    SMB2ENC_NEGCTX ctx;
+
+    RandomBytes(c->ClientGuid, 16);
+    RandomBytes(salt, 32);
+    c->MaxOffered = g_MaxDialect;
+    bodylen = Smb2BuildNegotiateRequest(body, sizeof(body), g_MaxDialect, 0, SMB2_NEGOTIATE_SIGNING_ENABLED,
+                                        c->ClientGuid, salt);
+    if (!bodylen)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    memset(c->Preauth, 0, sizeof(c->Preauth));
+    c->PreauthActive = g_MaxDialect >= SMB2_DIALECT_311;
+
+    st = Transact(c, SMB2_NEGOTIATE, 0, body, bodylen, &r, &rlen);
     if (st != SMB2_STATUS_SUCCESS)
+    {
+        c->PreauthActive = 0;
         return st;
+    }
     if (rlen < SMB2_HEADER_SIZE + 64 || Smb2Get16(r, SMB2_HEADER_SIZE) != 65)
     {
+        c->PreauthActive = 0;
         free(r);
         return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
     }
     dialect = Smb2Get16(r, SMB2_HEADER_SIZE + 4);
-    if (dialect != SMB2_DIALECT_202 && dialect != SMB2_DIALECT_210)
+    if ((dialect != SMB2_DIALECT_202 && dialect != SMB2_DIALECT_210 && dialect != SMB2_DIALECT_300 &&
+         dialect != SMB2_DIALECT_302 && dialect != SMB2_DIALECT_311) || dialect > g_MaxDialect)
     {
+        c->PreauthActive = 0;
         free(r);
         return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
     }
+    if (dialect == SMB2_DIALECT_311)
+    {
+        st = Smb2ParseNegotiateContexts(r, rlen, Smb2Get32(r, SMB2_HEADER_SIZE + 60),
+                                        Smb2Get16(r, SMB2_HEADER_SIZE + 6), &ctx);
+        if (st != SMB2_STATUS_SUCCESS || !ctx.HavePreauth || ctx.HashAlgorithm != SMB2ENC_HASH_SHA512 || ctx.HaveCipher ||
+            (ctx.HaveSigning && ctx.SigningAlgorithm != SMB2ENC_SIGN_CMAC))
+        {
+            c->PreauthActive = 0;
+            free(r);
+            return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+        }
+    }
+    else
+    {
+        c->PreauthActive = 0;
+    }
     c->Dialect = dialect;
     c->SecurityMode = Smb2Get16(r, SMB2_HEADER_SIZE + 2);
+    c->ServerMode = c->SecurityMode;
+    memcpy(c->ServerGuid, r + SMB2_HEADER_SIZE + 8, 16);
+    c->ServerCaps = Smb2Get32(r, SMB2_HEADER_SIZE + 24);
     c->MaxTransact = Smb2Get32(r, SMB2_HEADER_SIZE + 28);
     c->MaxRead = Smb2Get32(r, SMB2_HEADER_SIZE + 32);
     free(r);
@@ -707,6 +790,19 @@ uint32_t Smb2SessionSetup(SMB2_CONN *c, const WCHAR *Host, const WCHAR *User, co
             memcpy(c->SigningKey, sk.SessionKey, n);
             FreeContextBuffer(sk.SessionKey);
         }
+        if (c->Dialect >= SMB2_DIALECT_300)
+        {
+            uint8_t key[16];
+
+            memcpy(key, c->SigningKey, 16);
+            if (c->Dialect == SMB2_DIALECT_311)
+                Smb2Kdf128(key, (const uint8_t *)"SMBSigningKey", 14, c->Preauth, 64, c->SigningKey);
+            else
+                Smb2Kdf128(key, (const uint8_t *)"SMB2AESCMAC", 12, (const uint8_t *)"SmbSign", 8, c->SigningKey);
+            c->Cmac = 1;
+            memset(key, 0, sizeof(key));
+        }
+        c->PreauthActive = 0;
         /* Sign when the server demands it; guest and null sessions have no key to sign with. */
         c->Signing = (c->SecurityMode & SMB2_NEGOTIATE_SIGNING_REQUIRED) != 0 &&
                      !(c->SessionFlags & (SMB2_SESSION_FLAG_IS_GUEST | SMB2_SESSION_FLAG_IS_NULL));
@@ -714,7 +810,7 @@ uint32_t Smb2SessionSetup(SMB2_CONN *c, const WCHAR *Host, const WCHAR *User, co
         {
             int signed_ = (Smb2Get32(final, SMB2H_FLAGS) & SMB2_FLAGS_SIGNED) != 0;
 
-            if ((c->Signing && !signed_) || (signed_ && !Smb2VerifyMessage(c->SigningKey, final, finallen)))
+            if ((c->Signing && !signed_) || (signed_ && !VerifyMsg(c, final, finallen)))
                 st = SMB2_STATUS_ACCESS_DENIED;
         }
         if (st != SMB2_STATUS_SUCCESS)
@@ -732,6 +828,58 @@ uint32_t Smb2SessionSetup(SMB2_CONN *c, const WCHAR *Host, const WCHAR *User, co
 }
 
 /* 2.2.9 TREE_CONNECT: path is \\host\share in UTF-16 */
+/* 3.0 and 3.0.2: the NEGOTIATE exchange had no integrity protection, so ask the signed channel what the server saw (3.2.5.5) */
+static uint32_t ValidateNegotiate(SMB2_CONN *c, uint32_t TreeId)
+{
+    static const uint16_t all[4] = {0x0202, 0x0210, 0x0300, 0x0302};
+    uint8_t body[56 + 24 + 8], *r;
+    size_t rlen, n = 0, i, inLen;
+    uint32_t st;
+
+    for (i = 0; i < 4; i++)
+    {
+        if (all[i] <= c->MaxOffered)
+            Smb2Put16(body, 56 + 20 + 4 + 2 * n++, all[i]);
+    }
+    inLen = 24 + 2 * n;
+    memset(body, 0, 56);
+    Smb2Put16(body, 0, 57);
+    Smb2Put32(body, 4, 0x00140204);                 /* FSCTL_VALIDATE_NEGOTIATE_INFO */
+    memset(body + 8, 0xFF, 16);
+    Smb2Put32(body, 24, SMB2_HEADER_SIZE + 56);
+    Smb2Put32(body, 28, (uint32_t)inLen);
+    Smb2Put32(body, 44, 24);                        /* MaxOutputResponse */
+    Smb2Put32(body, 48, 1);                         /* SMB2_0_IOCTL_IS_FSCTL */
+    Smb2Put32(body, 56, 0);                         /* Capabilities */
+    memcpy(body + 60, c->ClientGuid, 16);
+    Smb2Put16(body, 76, SMB2_NEGOTIATE_SIGNING_ENABLED);
+    Smb2Put16(body, 78, (uint16_t)n);
+
+    st = Transact(c, SMB2_IOCTL, TreeId, body, 56 + inLen, &r, &rlen);
+    if (st != SMB2_STATUS_SUCCESS)
+    {
+        free(r);
+        return st;
+    }
+    if (rlen < SMB2_HEADER_SIZE + 48 + 24 || Smb2Get16(r, SMB2_HEADER_SIZE) != 49 ||
+        Smb2Get32(r, SMB2_HEADER_SIZE + 4) != 0x00140204 || Smb2Get32(r, SMB2_HEADER_SIZE + 36) != 24 ||
+        Smb2Get32(r, SMB2_HEADER_SIZE + 32) < SMB2_HEADER_SIZE + 48 ||
+        (size_t)Smb2Get32(r, SMB2_HEADER_SIZE + 32) + 24 > rlen)
+    {
+        free(r);
+        return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+    }
+    {
+        const uint8_t *o = r + Smb2Get32(r, SMB2_HEADER_SIZE + 32);
+
+        if (Smb2Get32(o, 0) != c->ServerCaps || memcmp(o + 4, c->ServerGuid, 16) != 0 ||
+            Smb2Get16(o, 20) != c->ServerMode || Smb2Get16(o, 22) != c->Dialect)
+            st = SMB2_STATUS_ACCESS_DENIED;
+    }
+    free(r);
+    return st;
+}
+
 uint32_t Smb2TreeConnect(SMB2_CONN *c, const WCHAR *Host, const WCHAR *Share, uint32_t *TreeId)
 {
     WCHAR path[600];
@@ -760,6 +908,13 @@ uint32_t Smb2TreeConnect(SMB2_CONN *c, const WCHAR *Host, const WCHAR *Share, ui
     else
         *TreeId = Smb2Get32(r, SMB2H_TREEID);
     free(r);
+    if (st == SMB2_STATUS_SUCCESS && (c->Dialect == SMB2_DIALECT_300 || c->Dialect == SMB2_DIALECT_302) && c->Signing &&
+        !c->Validated)
+    {
+        st = ValidateNegotiate(c, *TreeId);
+        if (st == SMB2_STATUS_SUCCESS)
+            c->Validated = 1;
+    }
     return st;
 }
 

@@ -41,4 +41,37 @@ uint32_t Smb2ValidateNotifyChain(const uint8_t *Buffer, uint32_t Length);
 void Smb2BuildNotifyBody(uint8_t Body[SMB2ENC_NOTIFY_BODY], uint64_t Persistent, uint64_t Volatile, uint32_t Filter,
                          int WatchTree, uint32_t OutputLength);
 
+/*
+ * NEGOTIATE request body (2.2.3) offering every dialect up to MaxDialect from 2.0.2. With 3.1.1 it carries
+ * the negotiate contexts: preauth integrity (SHA-512, Salt) and signing capabilities (AES-CMAC only).
+ * Returns the body length, 0 when Capacity (at least 160) is too small or MaxDialect is not a known dialect.
+ */
+#define SMB2ENC_NEGOTIATE_BODY_MAX  160
+size_t Smb2BuildNegotiateRequest(uint8_t *Out, size_t Capacity, uint16_t MaxDialect, uint32_t Capabilities,
+                                 uint16_t SecurityMode, const uint8_t Guid[16], const uint8_t Salt[32]);
+
+/* The context values a 3.1.1 NEGOTIATE response selected */
+#define SMB2ENC_HASH_SHA512     1
+#define SMB2ENC_SIGN_HMAC       0
+#define SMB2ENC_SIGN_CMAC       1
+#define SMB2ENC_SIGN_GMAC       2
+typedef struct _SMB2ENC_NEGCTX
+{
+    int HavePreauth;
+    uint16_t HashAlgorithm;
+    int HaveCipher;
+    uint16_t Cipher;
+    int HaveSigning;
+    uint16_t SigningAlgorithm;
+} SMB2ENC_NEGCTX;
+
+/*
+ * The negotiate contexts of a whole NEGOTIATE response message (Length bytes, header included): Offset from the
+ * start of the message, 8-aligned and after the fixed part, Count at most 16, every context inside the message,
+ * a type at most once, a preauth context selecting exactly one hash and a signing or cipher context exactly one
+ * algorithm. Returns an SMB2_STATUS value, 0 when valid.
+ */
+uint32_t Smb2ParseNegotiateContexts(const uint8_t *Msg, size_t Length, uint32_t Offset, uint32_t Count,
+                                    SMB2ENC_NEGCTX *Out);
+
 #endif /* _SMB2ENC_H */

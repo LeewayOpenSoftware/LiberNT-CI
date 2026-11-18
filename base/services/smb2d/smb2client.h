@@ -114,9 +114,15 @@ uint32_t Smb2ChangeNotify(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *
 uint16_t Smb2ConnDialect(const SMB2_CONN *Conn);
 int Smb2ConnSigned(const SMB2_CONN *Conn);
 
+/* The highest dialect Smb2Negotiate offers (default 3.1.1); for tests and for servers that mishandle newer ones */
+void Smb2SetMaxDialect(uint16_t Dialect);
+
 /* Signing primitives (smb2sign.c) */
 void Smb2HmacSha256(const uint8_t *Key, size_t KeyLen, const uint8_t *Msg, size_t MsgLen, uint8_t Out[32]);
 void Smb2SignMessage(const uint8_t *Key16, uint8_t *Msg, size_t Len);
 int Smb2VerifyMessage(const uint8_t *Key16, const uint8_t *Msg, size_t Len);
+/* Cmac selects AES-128-CMAC (dialect 3.x) instead of HMAC-SHA256 */
+void Smb2SignMessageEx(const uint8_t *Key16, uint8_t *Msg, size_t Len, int Cmac);
+int Smb2VerifyMessageEx(const uint8_t *Key16, const uint8_t *Msg, size_t Len, int Cmac);
 
 #endif /* _SMB2CLIENT_H */
