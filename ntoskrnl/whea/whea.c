@@ -7,6 +7,7 @@
 
 #include <ntoskrnl.h>
 #include <evntprov.h>
+#include "wheap.h"
 #define NDEBUG
 #include <debug.h>
 
@@ -41,20 +42,6 @@ C_ASSERT(FIELD_OFFSET(WHEA_XPF_MCA_SECTION, GlobalCapability) == 264);
 C_ASSERT(FIELD_OFFSET(WHEA_XPF_MCA_SECTION, ExBankCount) == 292);
 C_ASSERT(sizeof(WHEA_XPF_MCA_SECTION) == 1192);
 C_ASSERT(RTL_FIELD_SIZE(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR, FRUText) == WHEA_GENERIC_ENTRY_TEXT_LEN);
-
-typedef struct _WHEAP_DESCRIPTOR_HEADER
-{
-    ULONG Length;
-    ULONG Version;
-    WHEA_ERROR_SOURCE_TYPE Type;
-    WHEA_ERROR_SOURCE_STATE State;
-    ULONG MaxRawDataLength;
-    ULONG NumRecordsToPreallocate;
-    ULONG MaxSectionsPerRecord;
-    ULONG ErrorSourceId;
-    ULONG PlatformErrorSourceId;
-    ULONG Flags;
-} WHEAP_DESCRIPTOR_HEADER, *PWHEAP_DESCRIPTOR_HEADER;
 
 typedef struct _WHEAP_ERROR_SOURCE *PWHEAP_ERROR_SOURCE;
 
