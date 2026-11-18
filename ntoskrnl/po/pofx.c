@@ -6,6 +6,7 @@
  */
 
 #include <ntoskrnl.h>
+#include "internal/po_fx.h"
 #include <debug.h>
 
 struct _ROS_PO_FX_HANDLE;
@@ -35,6 +36,7 @@ typedef struct _ROS_PO_FX_COMPONENT_STATE
     BOOLEAN IdleConditionPending;
     BOOLEAN IdleStatePending;
     BOOLEAN Active;
+    BOOLEAN WakeArmed;
 } ROS_PO_FX_COMPONENT_STATE, *PROS_PO_FX_COMPONENT_STATE;
 
 typedef struct _ROS_PO_FX_RELATION
@@ -76,6 +78,7 @@ typedef struct _ROS_PO_FX_HANDLE
     BOOLEAN DevicePoweredOn;
     BOOLEAN DevicePowerRequiredPending;
     BOOLEAN DevicePowerNotRequiredPending;
+    DEVICE_POWER_STATE DripsTargetState;
     ROS_PO_FX_COMPONENT_STATE ComponentState[ANYSIZE_ARRAY];
 } ROS_PO_FX_HANDLE, *PROS_PO_FX_HANDLE;
 
@@ -106,6 +109,9 @@ PopFxSelectIdleState(
     {
         PPO_FX_COMPONENT_IDLE_STATE IdleState = &Description->IdleStates[Index - 1];
 
+        /* An armed component never goes deeper than the state it can wake from */
+        if (State->WakeArmed && (Index - 1 > Description->DeepestWakeableIdleState))
+            continue;
         if ((State->Latency != PO_FX_UNKNOWN_TIME) && (IdleState->TransitionLatency > State->Latency))
             continue;
         if ((State->Residency != PO_FX_UNKNOWN_TIME) && (IdleState->ResidencyRequirement > State->Residency))
@@ -1379,4 +1385,214 @@ PoFxPowerOnCrashdumpDevice(
         return STATUS_INVALID_PARAMETER;
 
     return STATUS_UNSUCCESSFUL;
+}
+
+/* PO sprint 2026-11-18, team C: exports documented on Microsoft Learn (wdm.h). */
+
+VOID
+NTAPI
+PoFxSetComponentWake(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Component,
+    _In_ BOOLEAN WakeHint)
+{
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    KIRQL OldIrql;
+
+    if (FxHandle == NULL)
+        return;
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (Component < FxHandle->ComponentCount)
+        FxHandle->ComponentState[Component].WakeArmed = (WakeHint != FALSE);
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    /* An idle component may now have to leave a state it cannot wake from */
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+}
+
+/* TRUE when Change names a set of Perf and a state inside that set. */
+static
+BOOLEAN
+PopFxPerfChangeValid(
+    _In_ PROS_PO_FX_PERF Perf,
+    _In_ PPO_FX_PERF_STATE_CHANGE Change)
+{
+    PPO_FX_COMPONENT_PERF_SET Set;
+
+    if (Change->Set >= Perf->Info->PerfStateSetsCount)
+        return FALSE;
+    Set = &Perf->Info->PerfStateSets[Change->Set];
+    if (Set->Type == PoFxPerfStateTypeDiscrete)
+        return Change->StateIndex < Set->Discrete.Count;
+    return (Change->StateValue >= Set->Range.Minimum) && (Change->StateValue <= Set->Range.Maximum);
+}
+
+VOID
+NTAPI
+PoFxIssueComponentPerfStateChangeMultiple(
+    _In_ POHANDLE Handle,
+    _In_ ULONG Flags,
+    _In_ ULONG Component,
+    _In_ ULONG PerfChangesCount,
+    _In_reads_(PerfChangesCount) PPO_FX_PERF_STATE_CHANGE PerfChanges,
+    _In_opt_ PVOID Context)
+{
+    PROS_PO_FX_HANDLE FxHandle = PopFxReferenceHandle(Handle);
+    PROS_PO_FX_PERF Perf = NULL;
+    BOOLEAN Succeeded;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    if (FxHandle == NULL)
+        return;
+
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if ((Component < FxHandle->ComponentCount) && !FxHandle->Unregistering)
+        Perf = FxHandle->ComponentState[Component].Perf;
+    if ((Perf == NULL) || Perf->ChangePending)
+    {
+        /* One request per component at a time; without registered sets there is no callback to call */
+        ASSERT((Perf == NULL) || !Perf->ChangePending);
+        KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+        ExReleaseRundownProtection(&FxHandle->Rundown);
+        return;
+    }
+
+    /* All or nothing: every change is checked before any set moves */
+    Succeeded = (PerfChangesCount != 0) && (PerfChanges != NULL);
+    for (Index = 0; Succeeded && (Index < PerfChangesCount); Index++)
+        Succeeded = PopFxPerfChangeValid(Perf, &PerfChanges[Index]);
+    if (Succeeded)
+    {
+        for (Index = 0; Index < PerfChangesCount; Index++)
+        {
+            PPO_FX_COMPONENT_PERF_SET Set = &Perf->Info->PerfStateSets[PerfChanges[Index].Set];
+
+            Perf->Current[PerfChanges[Index].Set] = (Set->Type == PoFxPerfStateTypeDiscrete) ?
+                                                    PerfChanges[Index].StateIndex :
+                                                    PerfChanges[Index].StateValue;
+        }
+    }
+
+    Perf->ChangePending = TRUE;
+    Perf->Succeeded = Succeeded;
+    Perf->RequestContext = Context;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+
+    if (Flags & PO_FX_FLAG_ASYNC_ONLY)
+    {
+        ExQueueWorkItem(&Perf->WorkItem, DelayedWorkQueue);
+        return;
+    }
+
+    PopFxCompletePerfChange(FxHandle, Perf);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+}
+
+VOID
+NTAPI
+PoFxNotifySurprisePowerOn(
+    _In_ PDEVICE_OBJECT Pdo)
+{
+    PROS_PO_FX_HANDLE FxHandle = NULL;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    if (Pdo == NULL)
+        return;
+
+    /* Only a device registered with PoFx can be configured */
+    KeAcquireSpinLock(&PopFxHandleListLock, &OldIrql);
+    for (Entry = PopFxHandleList.Flink; Entry != &PopFxHandleList; Entry = Entry->Flink)
+    {
+        PROS_PO_FX_HANDLE Candidate = CONTAINING_RECORD(Entry, ROS_PO_FX_HANDLE, ListEntry);
+
+        if ((Candidate->Pdo == Pdo) && ExAcquireRundownProtection(&Candidate->Rundown))
+        {
+            FxHandle = Candidate;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&PopFxHandleListLock, OldIrql);
+    if (FxHandle == NULL)
+        return;
+
+    /* The device came up in an uninitialized D0 with its components on (F0).
+     * Record that; the dispatcher then idles every component nobody holds
+     * active and, once all are idle, asks the driver to let the device go. */
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    if (!FxHandle->Unregistering && !FxHandle->DevicePowerRequiredPending &&
+        !FxHandle->DevicePowerNotRequiredPending)
+    {
+        ULONGLONG Now = KeQueryInterruptTime();
+
+        FxHandle->DevicePoweredOn = TRUE;
+        for (Index = 0; Index < FxHandle->ComponentCount; Index++)
+        {
+            PROS_PO_FX_COMPONENT_STATE State = &FxHandle->ComponentState[Index];
+
+            if (!State->IdleConditionPending && !State->IdleStatePending && !State->Active)
+            {
+                State->CurrentIdleState = 0;
+                State->IdleSince = Now;
+            }
+        }
+    }
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    PopFxDispatchTransitions(FxHandle);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+}
+
+NTSTATUS
+NTAPI
+PoFxSetTargetDripsDevicePowerState(
+    _In_ POHANDLE Handle,
+    _In_ DEVICE_POWER_STATE TargetState)
+{
+    PROS_PO_FX_HANDLE FxHandle;
+    KIRQL OldIrql;
+
+    PAGED_CODE();
+
+    if ((TargetState < PowerDeviceUnspecified) || (TargetState > PowerDeviceD3))
+        return STATUS_INVALID_PARAMETER;
+    FxHandle = PopFxReferenceHandle(Handle);
+    if (FxHandle == NULL)
+        return STATUS_INVALID_HANDLE;
+
+    /* PowerDeviceUnspecified drops the override. No PEP supplies a DRIPS
+     * constraint yet, so there is no lower bound to check the target against;
+     * the DRIPS code reads the override with PopFxGetDripsTargetState. */
+    KeAcquireSpinLock(&FxHandle->StateLock, &OldIrql);
+    FxHandle->DripsTargetState = TargetState;
+    KeReleaseSpinLock(&FxHandle->StateLock, OldIrql);
+    ExReleaseRundownProtection(&FxHandle->Rundown);
+    return STATUS_SUCCESS;
+}
+
+/* For the DRIPS code: the target a driver set for the device behind Pdo, or
+ * PowerDeviceUnspecified when none was set or the device is not registered. */
+DEVICE_POWER_STATE
+NTAPI
+PopFxGetDripsTargetState(
+    _In_ PDEVICE_OBJECT Pdo)
+{
+    DEVICE_POWER_STATE Target = PowerDeviceUnspecified;
+    PLIST_ENTRY Entry;
+    KIRQL OldIrql;
+
+    KeAcquireSpinLock(&PopFxHandleListLock, &OldIrql);
+    for (Entry = PopFxHandleList.Flink; Entry != &PopFxHandleList; Entry = Entry->Flink)
+    {
+        PROS_PO_FX_HANDLE Candidate = CONTAINING_RECORD(Entry, ROS_PO_FX_HANDLE, ListEntry);
+
+        if (Candidate->Pdo == Pdo)
+        {
+            Target = Candidate->DripsTargetState;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&PopFxHandleListLock, OldIrql);
+    return Target;
 }
