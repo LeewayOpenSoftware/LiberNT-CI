@@ -11,6 +11,7 @@ extern void func_CreateService(void);
 extern void func_CryptCreateHash(void);
 extern void func_DuplicateTokenEx(void);
 extern void func_EnableTraceEx(void);
+extern void func_EventTrace(void);
 extern void func_EnumerateTraceGuidsEx(void);
 extern void func_eventlog_supp(void);
 extern void func_Hash(void);
@@ -78,6 +79,7 @@ const struct test winetest_testlist[] =
     { "CryptCreateHash", func_CryptCreateHash },
     { "DuplicateTokenEx", func_DuplicateTokenEx },
     { "EnableTraceEx", func_EnableTraceEx },
+    { "EventTrace", func_EventTrace },
     { "EnumerateTraceGuidsEx", func_EnumerateTraceGuidsEx },
     { "eventlog_supp", func_eventlog_supp },
     { "Hash", func_Hash },

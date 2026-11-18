@@ -148,6 +148,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_cm/CmKeyKM.c
     ntos_cm/CmSecurity.c
     ntos_cm/CmTransactions.c
+    ntos_etw/EtwProviderKM.c
     ntos_etw/EtwRegisterKM.c
     ntos_etw/EtwSessionKM.c
     ntos_wmi/PcwKM.c
