@@ -64,6 +64,7 @@ typedef struct _SMB2RDR_FOBX_EXT
     ULONGLONG FileHandle;
     BOOLEAN IsDirectory;
     PSMB2RDR_LOCK Locks;
+    volatile LONGLONG NotifyId;
 } SMB2RDR_FOBX_EXT, *PSMB2RDR_FOBX_EXT;
 
 #define Smb2GetFobxExt(Fobx) \
@@ -88,7 +89,8 @@ NTSTATUS Smb2UpcallEx(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
                       PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, PACCESS_TOKEN Token);
 
 /* An upcall the daemon may hold until the caller's IRP is cancelled or its thread ends (blocking locks) */
-NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp);
+NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp,
+                               PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, volatile LONGLONG *PublishedId);
 
 NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written, ULONG RequestorPid);
 NTSTATUS Smb2HandlePutReply(const VOID *InBuffer, ULONG InLength);

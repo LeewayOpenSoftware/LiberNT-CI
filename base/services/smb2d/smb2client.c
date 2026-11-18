@@ -1111,6 +1111,47 @@ uint32_t Smb2LockWait(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId,
     return st;
 }
 
+/* 2.2.35 CHANGE_NOTIFY */
+uint32_t Smb2ChangeNotify(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint32_t Filter,
+                          int WatchTree, uint32_t OutputLength, void *Buffer, uint32_t *Returned, SMB2_OP *Op)
+{
+    uint8_t body[SMB2ENC_NOTIFY_BODY], *r;
+    size_t rlen;
+    uint32_t st, len;
+    uint16_t off;
+
+    *Returned = 0;
+    if (!c->Mux)
+        return SMB2_STATUS_NOT_SUPPORTED;
+    if (OutputLength == 0 || OutputLength > SMB2_MAX_IO)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    Smb2BuildNotifyBody(body, FileId->Persistent, FileId->Volatile, Filter, WatchTree, OutputLength);
+    st = TransactEx(c, SMB2_CHANGE_NOTIFY, TreeId, body, sizeof(body), &r, &rlen, Op);
+    if (st != SMB2_STATUS_SUCCESS)
+    {
+        free(r);
+        return st;
+    }
+    if (rlen < SMB2_HEADER_SIZE + 8 || Smb2Get16(r, SMB2_HEADER_SIZE) != 9)
+    {
+        free(r);
+        return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+    }
+    off = Smb2Get16(r, SMB2_HEADER_SIZE + 2);
+    len = Smb2Get32(r, SMB2_HEADER_SIZE + 4);
+    if (len > OutputLength || (len && (off < SMB2_HEADER_SIZE + 8 || (size_t)off + len > rlen)) ||
+        Smb2ValidateNotifyChain(r + off, len) != SMB2_STATUS_SUCCESS)
+    {
+        free(r);
+        return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+    }
+    if (len)
+        memcpy(Buffer, r + off, len);
+    *Returned = len;
+    free(r);
+    return SMB2_STATUS_SUCCESS;
+}
+
 /* 2.2.39 SET_INFO (file information) */
 uint32_t Smb2SetInfo(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint8_t InfoClass,
                      const void *Buffer, uint32_t BufferLength)

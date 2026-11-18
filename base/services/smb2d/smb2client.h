@@ -103,6 +103,14 @@ void Smb2OpCancel(SMB2_OP *Op);
 uint32_t Smb2LockWait(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset, uint64_t Length,
                       uint32_t Flags, SMB2_OP *Op);
 
+/*
+ * CHANGE_NOTIFY on a directory handle: returns when the server reports changes, Op is cancelled
+ * (STATUS_CANCELLED) or the handle is closed (STATUS_NOTIFY_CLEANUP). On success Buffer holds a validated
+ * FILE_NOTIFY_INFORMATION chain (Returned bytes, at most OutputLength); STATUS_NOTIFY_ENUM_DIR returns no data.
+ */
+uint32_t Smb2ChangeNotify(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint32_t Filter,
+                          int WatchTree, uint32_t OutputLength, void *Buffer, uint32_t *Returned, SMB2_OP *Op);
+
 uint16_t Smb2ConnDialect(const SMB2_CONN *Conn);
 int Smb2ConnSigned(const SMB2_CONN *Conn);
 

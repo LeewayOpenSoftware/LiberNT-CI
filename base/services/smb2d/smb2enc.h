@@ -29,4 +29,16 @@ uint32_t Smb2ValidateLockRange(uint64_t Offset, uint64_t Length, uint32_t Flags)
 void Smb2BuildLockBody(uint8_t Body[SMB2ENC_LOCK_BODY], uint64_t Persistent, uint64_t Volatile, uint64_t Offset,
                        uint64_t Length, uint32_t Flags, int Wait);
 
+/*
+ * FILE_NOTIFY_INFORMATION chain from CHANGE_NOTIFY (2.2.36): every entry (NextEntryOffset, Action 1..5,
+ * FileNameLength, FileName) lies inside Length, names are even-sized and at most SMB2ENC_MAX_NAME_CHARS, the
+ * next entry starts 4-aligned after the end of this one. An empty buffer is valid.
+ */
+uint32_t Smb2ValidateNotifyChain(const uint8_t *Buffer, uint32_t Length);
+
+/* CHANGE_NOTIFY request body (2.2.35): SMB2ENC_NOTIFY_BODY bytes */
+#define SMB2ENC_NOTIFY_BODY 32
+void Smb2BuildNotifyBody(uint8_t Body[SMB2ENC_NOTIFY_BODY], uint64_t Persistent, uint64_t Volatile, uint32_t Filter,
+                         int WatchTree, uint32_t OutputLength);
+
 #endif /* _SMB2ENC_H */

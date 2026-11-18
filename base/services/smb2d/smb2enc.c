@@ -59,3 +59,41 @@ void Smb2BuildLockBody(uint8_t Body[SMB2ENC_LOCK_BODY], uint64_t Persistent, uin
     Smb2Put64(Body, 32, Length);
     Smb2Put32(Body, 40, (Wait || Flags == SMB2_LOCKFLAG_UNLOCK) ? Flags : (Flags | SMB2_LOCKFLAG_FAIL_IMMEDIATELY));
 }
+
+uint32_t Smb2ValidateNotifyChain(const uint8_t *Buffer, uint32_t Length)
+{
+    uint32_t pos = 0, next, action, nameBytes;
+
+    if (Length == 0)
+        return SMB2_STATUS_SUCCESS;
+    if (!Buffer)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    for (;;)
+    {
+        if (Length - pos < 12)
+            return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+        next = Smb2Get32(Buffer, pos);
+        action = Smb2Get32(Buffer, pos + 4);
+        nameBytes = Smb2Get32(Buffer, pos + 8);
+        if (action < 1 || action > 5 || (nameBytes & 1) || nameBytes > 2u * SMB2ENC_MAX_NAME_CHARS ||
+            nameBytes > Length - pos - 12)
+            return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+        if (next == 0)
+            return SMB2_STATUS_SUCCESS;
+        if ((next & 3) || next < 12 + nameBytes || next > Length - pos)
+            return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+        pos += next;
+    }
+}
+
+void Smb2BuildNotifyBody(uint8_t Body[SMB2ENC_NOTIFY_BODY], uint64_t Persistent, uint64_t Volatile, uint32_t Filter,
+                         int WatchTree, uint32_t OutputLength)
+{
+    memset(Body, 0, SMB2ENC_NOTIFY_BODY);
+    Smb2Put16(Body, 0, 32);
+    Smb2Put16(Body, 2, WatchTree ? 1 : 0);
+    Smb2Put32(Body, 4, OutputLength);
+    Smb2Put64(Body, 8, Persistent);
+    Smb2Put64(Body, 16, Volatile);
+    Smb2Put32(Body, 24, Filter);
+}

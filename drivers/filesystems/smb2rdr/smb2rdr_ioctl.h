@@ -16,7 +16,7 @@
 #define SMB2RDR_PROVIDER_NAME       L"SMB2 Network"
 
 /* Bumped when the upcall/downcall layout changes; the daemon sends it with IOCTL_SMB2RDR_START. */
-#define SMB2RDR_PROTOCOL_VERSION    4
+#define SMB2RDR_PROTOCOL_VERSION    5
 
 #define _SMB2RDR_CTL_CODE(code, method) \
     CTL_CODE(FILE_DEVICE_NETWORK_REDIRECTOR, 0x800 | (code), method, FILE_ANY_ACCESS)
@@ -69,6 +69,7 @@ typedef struct _SMB2RDR_CONN_REQ
 #define SMB2RDR_UP_FLUSH            11  /* payload: SMB2RDR_HANDLE_REQ (file handle) */
 #define SMB2RDR_UP_LOCK             12  /* payload: SMB2RDR_LOCK_REQ */
 #define SMB2RDR_UP_CANCEL           13  /* payload: SMB2RDR_CANCEL_REQ; no reply payload */
+#define SMB2RDR_UP_NOTIFY           14  /* payload: SMB2RDR_NOTIFY_REQ; held until a change; reply: FILE_NOTIFY_INFORMATION chain */
 
 /*
  * Handles are opaque 64-bit values owned by the daemon (it maps them to connection, tree and file ids).
@@ -183,6 +184,17 @@ typedef struct _SMB2RDR_LOCK_REQ
     unsigned long Flags;            /* one of SMB2RDR_LOCK_* */
     unsigned long Reserved;
 } SMB2RDR_LOCK_REQ;
+
+#define SMB2RDR_NOTIFY_WATCH_TREE   1
+
+typedef struct _SMB2RDR_NOTIFY_REQ
+{
+    unsigned long long FileHandle;
+    unsigned long CompletionFilter; /* FILE_NOTIFY_CHANGE_* */
+    unsigned long Flags;            /* SMB2RDR_NOTIFY_* */
+    unsigned long OutputLength;     /* at most SMB2RDR_MAX_IO */
+    unsigned long Reserved;
+} SMB2RDR_NOTIFY_REQ;
 
 /* Ends the waiting upcall with this Id (the daemon answers that upcall with STATUS_CANCELLED) */
 typedef struct _SMB2RDR_CANCEL_REQ

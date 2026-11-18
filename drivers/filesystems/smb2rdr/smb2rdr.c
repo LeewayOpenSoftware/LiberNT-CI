@@ -660,6 +660,7 @@ static NTSTATUS NTAPI Smb2Create(IN OUT PRX_CONTEXT RxContext)
     fobx = Smb2GetFobxExt(RxContext->pFobx);
     fobx->FileHandle = reply.FileHandle;
     fobx->Locks = NULL;
+    fobx->NotifyId = 0;
     fobx->IsDirectory = (reply.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
     if (fcb->OpenCount == 0)
@@ -1187,7 +1188,7 @@ static NTSTATUS Smb2LockRange(PRX_CONTEXT RxContext, PSMB2RDR_FOBX_EXT Fobx, PEP
     else
     {
         req.Flags |= SMB2RDR_LOCK_WAIT;
-        status = Smb2UpcallCancellable(SMB2RDR_UP_LOCK, &req, sizeof(req), RxContext->CurrentIrp);
+        status = Smb2UpcallCancellable(SMB2RDR_UP_LOCK, &req, sizeof(req), RxContext->CurrentIrp, NULL, 0, NULL, NULL);
     }
     if (!NT_SUCCESS(status))
     {
@@ -1302,6 +1303,52 @@ static NTSTATUS NTAPI Smb2LockControl(IN OUT PRX_CONTEXT RxContext)
     }
 }
 
+static NTSTATUS NTAPI Smb2NotifyChange(IN OUT PRX_CONTEXT RxContext)
+{
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+    PLOWIO_CONTEXT low = &RxContext->LowIoContext;
+    SMB2RDR_NOTIFY_REQ req;
+    ULONG length, got = 0;
+    NTSTATUS status;
+
+    RxContext->IoStatusBlock.Information = 0;
+    if (!fobx || !fobx->FileHandle || !fobx->IsDirectory)
+        return STATUS_INVALID_PARAMETER;
+    if (!low->ParamsFor.NotifyChangeDirectory.pNotificationBuffer)
+        return STATUS_INVALID_PARAMETER;
+
+    length = low->ParamsFor.NotifyChangeDirectory.NotificationBufferLength;
+    if (length > SMB2RDR_MAX_IO)
+        length = SMB2RDR_MAX_IO;
+    RtlZeroMemory(&req, sizeof(req));
+    req.FileHandle = fobx->FileHandle;
+    req.CompletionFilter = low->ParamsFor.NotifyChangeDirectory.CompletionFilter;
+    req.Flags = low->ParamsFor.NotifyChangeDirectory.WatchTree ? SMB2RDR_NOTIFY_WATCH_TREE : 0;
+    req.OutputLength = length;
+
+    status = Smb2UpcallCancellable(SMB2RDR_UP_NOTIFY, &req, sizeof(req), RxContext->CurrentIrp,
+                                   low->ParamsFor.NotifyChangeDirectory.pNotificationBuffer, length, &got,
+                                   &fobx->NotifyId);
+    if (NT_SUCCESS(status))
+        RxContext->IoStatusBlock.Information = got;
+    return status;
+}
+
+static NTSTATUS NTAPI Smb2CleanupFobx(IN OUT PRX_CONTEXT RxContext)
+{
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+    LONGLONG id;
+
+    if (fobx && (id = fobx->NotifyId) != 0)
+    {
+        SMB2RDR_CANCEL_REQ cancel;
+
+        cancel.TargetId = (ULONGLONG)id;
+        Smb2Upcall(SMB2RDR_UP_CANCEL, &cancel, sizeof(cancel), NULL, 0, NULL);
+    }
+    return STATUS_SUCCESS;
+}
+
 static NTSTATUS NTAPI Smb2IsLockRealizable(IN OUT PMRX_FCB Fcb, IN PLARGE_INTEGER ByteOffset,
                                            IN PLARGE_INTEGER Length, IN ULONG LowIoLockFlags)
 {
@@ -1389,6 +1436,8 @@ static NTSTATUS Smb2InitOps(VOID)
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_EXCLUSIVELOCK] = Smb2LockControl;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_UNLOCK] = Smb2LockControl;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_UNLOCK_MULTIPLE] = Smb2LockControl;
+    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_NOTIFY_CHANGE_DIRECTORY] = Smb2NotifyChange;
+    Smb2RdrOps.MRxCleanupFobx = Smb2CleanupFobx;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_FSCTL] = Smb2NotImplemented;
     Smb2RdrOps.MRxCompleteBufferingStateChangeRequest = Smb2CompleteBufferingStateChange;
     Smb2RdrOps.MRxIsValidDirectory = Smb2IsValidDirectory;
