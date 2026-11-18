@@ -55,7 +55,6 @@ UcxpRootHubController(
     return UcxGetControllerCtx((WDFOBJECT)RootHub->Controller);
 }
 
-static
 NTSTATUS
 UcxpUsbdToNtStatus(
     _In_ USBD_STATUS UsbdStatus)
@@ -70,11 +69,11 @@ UcxpUsbdToNtStatus(
         case USBD_STATUS_DEVICE_GONE:        return STATUS_DEVICE_NOT_CONNECTED;
         case USBD_STATUS_CANCELED:           return STATUS_CANCELLED;
         case USBD_STATUS_BUFFER_TOO_SMALL:   return STATUS_BUFFER_TOO_SMALL;
+        case USBD_STATUS_TIMEOUT:            return STATUS_IO_TIMEOUT;
         default:                             return STATUS_UNSUCCESSFUL;
     }
 }
 
-static
 VOID
 UcxpCompleteUrb(
     _In_ WDFREQUEST Request,
@@ -186,7 +185,7 @@ UcxpRootHubBuildDescriptors(
     RootHub->DeviceHandle.DeviceSpeed = SuperSpeed ? UsbSuperSpeed : UsbHighSpeed;
     RootHub->DeviceHandle.DeviceDescriptor = *Dev;
     RootHub->DeviceHandle.ConfigurationValue = 0;
-    RootHub->DeviceHandle.DefaultPipe = NULL;
+    /* DefaultPipe stays zero: the root hub's standard requests never reach an endpoint */
 }
 
 /* --------------------------------------------------------------------------
@@ -524,8 +523,8 @@ UcxpRootHubHandleUrb(
             UcxpCompleteUrb(Request, Urb, USBD_STATUS_DEVICE_GONE);
             return;
         }
-        /* A downstream device: its transfer path arrives with M3 step 2 */
-        UcxpCompleteUrb(Request, Urb, USBD_STATUS_NOT_SUPPORTED);
+        /* A downstream device: its default endpoint (step 2) */
+        UcxpDeviceHandleUrb(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle, Request, Urb);
         return;
     }
 
@@ -781,15 +780,16 @@ UcxpHubCreateUsbDevice(
         return STATUS_INVALID_PARAMETER;
     *NewDeviceHandle = NULL;
 
-    if (HubDeviceHandle != &RootHub->DeviceHandle &&
-        !UcxpFindDeviceHandle(UcxpRootHubController(RootHub), HubDeviceHandle))
+    if (HubDeviceHandle != &RootHub->DeviceHandle)
     {
-        return STATUS_DEVICE_NOT_CONNECTED;
+        if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), HubDeviceHandle))
+            return STATUS_DEVICE_NOT_CONNECTED;
+        /* Devices behind an external hub: M3 step 3 */
+        UcxLog("roothub: CreateUsbDevice behind a downstream hub refused (step 3)");
+        return STATUS_NOT_IMPLEMENTED;
     }
 
-    /* M3 step 2: UCXUSBDEVICE creation through the client's callbacks */
-    UcxLog("roothub: CreateUsbDevice port %u refused (step 2)", PortNumber);
-    return STATUS_NOT_IMPLEMENTED;
+    return UcxpDeviceCreate(RootHub, PortNumber, PortStatus, (PUCX_DEVICE_HANDLE *)NewDeviceHandle);
 }
 
 static
@@ -807,7 +807,7 @@ UcxpHubInitializeUsbDevice(
         return STATUS_SUCCESS;              /* the root hub needs no address */
     if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
         return STATUS_DEVICE_NOT_CONNECTED;
-    return STATUS_NOT_IMPLEMENTED;
+    return UcxpDeviceInitialize(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle);
 }
 
 static
@@ -830,7 +830,9 @@ UcxpHubGetUsbDescriptors(
     {
         if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
             return STATUS_DEVICE_NOT_CONNECTED;
-        return STATUS_NOT_IMPLEMENTED;
+        return UcxpDeviceGetDescriptors(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle,
+                                        DeviceDescriptorBuffer, DeviceDescriptorBufferLength,
+                                        ConfigDescriptorBuffer, ConfigDescriptorBufferLength);
     }
 
     Length = min(*DeviceDescriptorBufferLength, sizeof(RootHub->DeviceDescriptor));
@@ -864,7 +866,8 @@ UcxpHubRemoveUsbDevice(
         return STATUS_INVALID_PARAMETER;    /* the root hub lives as long as its PDO */
     if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
         return STATUS_DEVICE_NOT_CONNECTED;
-    return STATUS_NOT_IMPLEMENTED;
+    UcxpDeviceRemove(RootHub, (PUCX_DEVICE_HANDLE)DeviceHandle);
+    return STATUS_SUCCESS;
 }
 
 static
@@ -921,7 +924,8 @@ UcxpHubQueryDeviceInformation(
     {
         if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), DeviceHandle))
             return STATUS_DEVICE_NOT_CONNECTED;
-        return STATUS_NOT_IMPLEMENTED;
+        return UcxpDeviceQueryInformation((PUCX_DEVICE_HANDLE)DeviceHandle, DeviceInformationBuffer,
+                                          DeviceInformationBufferLength, LengthOfDataCopied);
     }
 
     Pipes = (RootHub->DeviceHandle.ConfigurationValue != 0) ? 1 : 0;
@@ -1391,9 +1395,21 @@ UcxpRootHubCreatePdo(
     UcxpRootHubBuildDescriptors(RootHub);
     UcxpRootHubInitInterfaces(RootHub);
 
+    /* A client without a PnP stack (the M1 smoke client runs on a control
+     * device) gets the root hub object without a PDO: nothing can bind to it,
+     * UcxRootHubPortChanged is a no-op, and the smoke leg keeps its meaning. */
+    if (WdfDeviceWdmGetPhysicalDevice(Controller->ClientDevice) == NULL)
+    {
+        UcxLog("roothub: client device has no PnP stack, no root hub PDO");
+        return STATUS_SUCCESS;
+    }
+
     Init = WdfPdoInitAllocate(Controller->ClientDevice);
     if (Init == NULL)
-        return STATUS_INSUFFICIENT_RESOURCES;
+    {
+        UcxLog("roothub: WdfPdoInitAllocate failed, no root hub PDO");
+        return STATUS_SUCCESS;
+    }
 
     WdfDeviceInitSetDeviceType(Init, FILE_DEVICE_BUS_EXTENDER);
     WdfDeviceInitSetExclusive(Init, FALSE);

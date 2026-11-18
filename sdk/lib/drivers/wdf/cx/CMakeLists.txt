@@ -63,7 +63,7 @@ add_wdfcx_library(ufx01000 ufx01000.c)
 target_include_directories(ufx01000 PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/ufx/1.1)
 target_link_libraries(ufx01000 aux_klib)
 
-add_wdfcx_library(ucx01000 ucx01000.c ucxroothub.c)
+add_wdfcx_library(ucx01000 ucx01000.c ucxroothub.c ucxdevice.c)
 target_include_directories(ucx01000 PRIVATE ${REACTOS_SOURCE_DIR}/sdk/include/ddk/ucx/1.0)
 
 add_registry_inf(wdfcx_reg.inf)

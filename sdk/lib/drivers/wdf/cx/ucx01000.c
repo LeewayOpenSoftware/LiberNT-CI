@@ -298,8 +298,23 @@ UcxUsbDeviceCreateInternal(
     Ctx = UcxGetUsbDeviceCtx(Object);
     Ctx->Controller = Controller;
 
-    if (UsbDeviceInit != NULL)
-        *UsbDeviceInit = NULL;   /* the init blob is consumed; step 2 carries callbacks in it */
+    /* An init blob this library handed to EvtControllerUsbDeviceAdd carries the
+     * callbacks and the device handle; the client's own creations (M2 demo)
+     * come without one and get no callbacks. */
+    if (UsbDeviceInit != NULL && *UsbDeviceInit != NULL)
+    {
+        struct _UCXUSBDEVICE_INIT *Init = *UsbDeviceInit;
+
+        if (Init->Signature != UCX_USBDEVICE_INIT_SIGNATURE || Init->Controller != Controller || Init->Created != NULL)
+        {
+            WdfObjectDelete(Object);
+            return STATUS_INVALID_PARAMETER;
+        }
+        Ctx->Handle = Init->Handle;
+        Ctx->Callbacks = Init->Callbacks;
+        Init->Created = (UCXUSBDEVICE)Object;
+        *UsbDeviceInit = NULL;               /* consumed; ucxdevice.c frees it */
+    }
 
     *UsbDevice = (UCXUSBDEVICE)Object;
     UcxLog("UcxUsbDeviceCreate: usbdevice %p", Object);
@@ -308,7 +323,15 @@ UcxUsbDeviceCreateInternal(
 
 static VOID NTAPI UcxUsbDeviceInitSetEventCallbacksInternal(
     _In_ PUCXUSBDEVICE_INIT Init, _In_ PUCX_USBDEVICE_EVENT_CALLBACKS Callbacks)
-{ UNREFERENCED_PARAMETER(Init); UNREFERENCED_PARAMETER(Callbacks); UcxLog("UcxUsbDeviceInitSetEventCallbacks"); }
+{
+    if (Init == NULL || Callbacks == NULL || Init->Signature != UCX_USBDEVICE_INIT_SIGNATURE ||
+        Callbacks->Size != sizeof(UCX_USBDEVICE_EVENT_CALLBACKS))
+    {
+        UcxLog("UcxUsbDeviceInitSetEventCallbacks: bad init or callbacks, ignored");
+        return;
+    }
+    Init->Callbacks = *Callbacks;
+}
 
 static VOID NTAPI UcxUsbDeviceRemoteWakeNotificationInternal(_In_ UCXUSBDEVICE UsbDevice, _In_ NTSTATUS Status)
 { UcxLog("UcxUsbDeviceRemoteWakeNotification: %p 0x%08lX", UsbDevice, (ULONG)Status); }
@@ -341,8 +364,20 @@ UcxEndpointCreateInternal(
     Ctx = UcxGetEndpointCtx(Object);
     Ctx->UsbDevice = UsbDevice;
 
-    if (EndpointInit != NULL)
-        *EndpointInit = NULL;
+    if (EndpointInit != NULL && *EndpointInit != NULL)
+    {
+        struct _UCXENDPOINT_INIT *Init = *EndpointInit;
+
+        if (Init->Signature != UCX_ENDPOINT_INIT_SIGNATURE || Init->UsbDevice != UsbDevice || Init->Created != NULL)
+        {
+            WdfObjectDelete(Object);
+            return STATUS_INVALID_PARAMETER;
+        }
+        Ctx->Descriptor = Init->Descriptor;
+        Ctx->Callbacks = Init->Callbacks;
+        Init->Created = (UCXENDPOINT)Object;
+        *EndpointInit = NULL;                /* consumed; ucxdevice.c frees it */
+    }
 
     *Endpoint = (UCXENDPOINT)Object;
     UcxLog("UcxEndpointCreate: endpoint %p", Object);
@@ -351,7 +386,15 @@ UcxEndpointCreateInternal(
 
 static VOID NTAPI UcxEndpointInitSetEventCallbacksInternal(
     _In_ PUCXENDPOINT_INIT Init, _In_ PUCX_ENDPOINT_EVENT_CALLBACKS Callbacks)
-{ UNREFERENCED_PARAMETER(Init); UNREFERENCED_PARAMETER(Callbacks); UcxLog("UcxEndpointInitSetEventCallbacks"); }
+{
+    if (Init == NULL || Callbacks == NULL || Init->Signature != UCX_ENDPOINT_INIT_SIGNATURE ||
+        Callbacks->Size != sizeof(UCX_ENDPOINT_EVENT_CALLBACKS))
+    {
+        UcxLog("UcxEndpointInitSetEventCallbacks: bad init or callbacks, ignored");
+        return;
+    }
+    Init->Callbacks = *Callbacks;
+}
 
 static VOID NTAPI UcxEndpointSetWdfIoQueueInternal(_In_ UCXENDPOINT Endpoint, _In_ WDFQUEUE Queue)
 {

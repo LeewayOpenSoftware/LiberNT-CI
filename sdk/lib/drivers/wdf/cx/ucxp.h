@@ -59,13 +59,39 @@ typedef struct _UCX_DEVICE_HANDLE {
     LIST_ENTRY Link;                       /* UCX_CONTROLLER_CTX.DeviceHandles */
     UCXUSBDEVICE UsbDevice;                /* NULL for the root hub itself */
     BOOLEAN IsRootHub;
+    BOOLEAN Initialized;                   /* addressed, device descriptor read */
+    USHORT PortNumber;                     /* root port (downstream devices) */
     USHORT DeviceAddress;
     USB_DEVICE_SPEED DeviceSpeed;
+    ULONG MaxPacketSize0;
     USB_DEVICE_DESCRIPTOR DeviceDescriptor;
     UCHAR ConfigurationValue;              /* 0 = unconfigured */
-    PUCX_PIPE_HANDLE DefaultPipe;          /* EP0 (NULL for the root hub: standard
+    UCX_PIPE_HANDLE DefaultPipe;           /* EP0 (unused for the root hub: standard
                                               requests are answered in software) */
 } UCX_DEVICE_HANDLE, *PUCX_DEVICE_HANDLE;
+
+/*
+ * The opaque init blobs the client fills between the Add callback and the
+ * Create call. Allocated and freed by this library.
+ */
+#define UCX_USBDEVICE_INIT_SIGNATURE 'iDcU'
+#define UCX_ENDPOINT_INIT_SIGNATURE  'iEcU'
+
+struct _UCXUSBDEVICE_INIT {
+    ULONG Signature;
+    UCXCONTROLLER Controller;
+    PUCX_DEVICE_HANDLE Handle;
+    UCX_USBDEVICE_EVENT_CALLBACKS Callbacks;
+    UCXUSBDEVICE Created;                  /* set by UcxUsbDeviceCreate */
+};
+
+struct _UCXENDPOINT_INIT {
+    ULONG Signature;
+    UCXUSBDEVICE UsbDevice;
+    USB_ENDPOINT_DESCRIPTOR Descriptor;
+    UCX_ENDPOINT_EVENT_CALLBACKS Callbacks;
+    UCXENDPOINT Created;                   /* set by UcxEndpointCreate */
+};
 
 /* ---- object contexts ----------------------------------------------------- */
 
@@ -132,15 +158,18 @@ WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(UCX_PDO_CTX, UcxGetPdoCtx)
 
 typedef struct _UCX_USBDEVICE_CTX {
     UCXCONTROLLER Controller;
+    PUCX_DEVICE_HANDLE Handle;             /* NULL for a device the client created on its own (M2 demo) */
     UCX_USBDEVICE_EVENT_CALLBACKS Callbacks;
+    UCXENDPOINT DefaultEndpoint;
 } UCX_USBDEVICE_CTX, *PUCX_USBDEVICE_CTX;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(UCX_USBDEVICE_CTX, UcxGetUsbDeviceCtx)
 
 typedef struct _UCX_ENDPOINT_CTX {
     UCXUSBDEVICE UsbDevice;
+    USB_ENDPOINT_DESCRIPTOR Descriptor;
     UCX_ENDPOINT_EVENT_CALLBACKS Callbacks;
-    WDFQUEUE Queue;                        /* UcxEndpointSetWdfIoQueue */
+    WDFQUEUE Queue;                        /* UcxEndpointSetWdfIoQueue (M3 step 3) */
 } UCX_ENDPOINT_CTX, *PUCX_ENDPOINT_CTX;
 
 WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(UCX_ENDPOINT_CTX, UcxGetEndpointCtx)
@@ -184,3 +213,56 @@ UcxpRootHubDestroyPdo(
 VOID
 UcxpRootHubPortChanged(
     _In_ UCXROOTHUB RootHub);
+
+/* URB status to NTSTATUS and the common completion (shared with ucxdevice.c) */
+NTSTATUS
+UcxpUsbdToNtStatus(
+    _In_ USBD_STATUS UsbdStatus);
+
+VOID
+UcxpCompleteUrb(
+    _In_ WDFREQUEST Request,
+    _Inout_ PURB Urb,
+    _In_ USBD_STATUS UsbdStatus);
+
+/* ---- ucxdevice.c (downstream devices, M3 step 2) -------------------------- */
+
+NTSTATUS
+UcxpDeviceCreate(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ USHORT PortNumber,
+    _In_ USHORT PortStatus,
+    _Outptr_ PUCX_DEVICE_HANDLE *NewHandle);
+
+NTSTATUS
+UcxpDeviceInitialize(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle);
+
+NTSTATUS
+UcxpDeviceGetDescriptors(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _Out_writes_bytes_to_opt_(*DeviceLength, *DeviceLength) PUCHAR DeviceBuffer,
+    _Inout_ PULONG DeviceLength,
+    _Out_writes_bytes_to_opt_(*ConfigLength, *ConfigLength) PUCHAR ConfigBuffer,
+    _Inout_ PULONG ConfigLength);
+
+VOID
+UcxpDeviceRemove(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle);
+
+NTSTATUS
+UcxpDeviceQueryInformation(
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _Out_writes_bytes_to_(BufferLength, *Returned) PVOID Buffer,
+    _In_ ULONG BufferLength,
+    _Out_ PULONG Returned);
+
+VOID
+UcxpDeviceHandleUrb(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_ PUCX_DEVICE_HANDLE Handle,
+    _In_ WDFREQUEST Request,
+    _Inout_ PURB Urb);
