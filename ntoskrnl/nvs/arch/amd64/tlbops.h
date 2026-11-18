@@ -17,6 +17,9 @@ void __cdecl _invpcid(unsigned int Type, void *Descriptor);
 
 FORCEINLINE ULONG MiAmd64TlbCpu(VOID) { return KeGetCurrentProcessorNumber(); }
 FORCEINLINE ULONG64 MiAmd64TlbActiveCpus(VOID) { return (ULONG64)KeActiveProcessors; }
+#define MI_AMD64_TLB_MAXIMUM_PROCESSORS KI_MAXIMUM_PROCESSORS
+FORCEINLINE ULONG MiAmd64TlbGroupCount(VOID) { return KiActiveProcessorsEx.Count; }
+FORCEINLINE ULONG64 MiAmd64TlbActiveGroup(ULONG Group) { return (ULONG64)KiQueryActiveGroupAffinity((USHORT)Group); }
 FORCEINLINE ULONG64 MiAmd64TlbReadCr3(VOID) { return __readcr3(); }
 FORCEINLINE ULONG64 MiAmd64TlbReadCr4(VOID) { return __readcr4(); }
 FORCEINLINE VOID MiAmd64TlbWriteCr3(ULONG64 Value) { __writecr3(Value); }

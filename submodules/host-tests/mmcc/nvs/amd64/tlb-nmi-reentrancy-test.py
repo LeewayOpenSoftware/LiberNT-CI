@@ -37,6 +37,7 @@ typedef unsigned char BOOLEAN;
 #define TRUE 1
 #define FALSE 0
 #define MAXIMUM_PROCESSORS 2
+#define MI_AMD64_TLB_MAXIMUM_PROCESSORS 2
 #define MI_ASSERT(e) assert(e)
 #define MI_AMD64_TLB_TARGETS_PER_WORD 32
 #define MI_AMD64_TLB_SEQUENCE(Word) ((Word) >> 32)

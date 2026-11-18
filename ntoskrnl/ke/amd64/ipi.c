@@ -159,6 +159,39 @@ KiSendMemoryIpi(ULONG64 Targets)
         KiHalRequestIpiGroup0(Queued);
 }
 
+/* Sends a TLB request to active processors of one group */
+VOID
+KiSendMemoryIpiGroup(ULONG Group, ULONG64 Targets)
+{
+    PROCESSOR_NUMBER Source;
+    KAFFINITY_EX TargetSet;
+    KAFFINITY Queued;
+    ULONG Bit, Index;
+
+    if (Group == 0)
+    {
+        KiSendMemoryIpi(Targets);
+        return;
+    }
+
+    ASSERT(Group < KI_MAXIMUM_GROUPS);
+    KiProcessorNumberFromIndex(KeGetCurrentPrcb()->Number, &Source);
+    Queued = (KAFFINITY)Targets & KiQueryActiveGroupAffinity((USHORT)Group);
+    if (Queued == 0)
+        return;
+
+    for (Targets = Queued; BitScanForwardAffinity(&Bit, (KAFFINITY)Targets); Targets &= ~AFFINITY_MASK(Bit))
+        KiIpiQueueMailbox(KiProcessorIndexFromNumber((USHORT)Group, (UCHAR)Bit), &Source, KI_IPI_MEMORY);
+
+    TargetSet.Count = (USHORT)(Group + 1);
+    TargetSet.Size = (USHORT)(Group + 1);
+    TargetSet.Reserved = 0;
+    for (Index = 0; Index <= Group; Index++)
+        TargetSet.StaticBitmap[Index] = 0;
+    TargetSet.StaticBitmap[Group] = Queued;
+    HalRequestIpi(0, &TargetSet);
+}
+
 VOID
 FASTCALL
 KiIpiSendProcessor(
