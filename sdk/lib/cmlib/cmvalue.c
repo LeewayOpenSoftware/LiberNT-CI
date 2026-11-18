@@ -456,14 +456,25 @@ CmpSetValueDataNew(IN PHHIVE Hive,
         PCM_BIG_DATA BigData;
 
         Needed = (DataSize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+        if (Needed > 0xFFFF)
+            return STATUS_INVALID_PARAMETER;
 
+        /* The list cell keeps its indices across the allocations below;
+           in this cmlib bins never move, so the pointer stays valid */
         ListCell = HvAllocateCell(Hive, Needed * sizeof(HCELL_INDEX),
                                   StorageType, HCELL_NIL);
         if (ListCell == HCELL_NIL) return STATUS_INSUFFICIENT_RESOURCES;
         ListData = (PHCELL_INDEX)HvGetCell(Hive, ListCell);
+        if (!ListData)
+        {
+            HvFreeCell(Hive, ListCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
 
         for (i = 0, Remaining = DataSize; i < Needed; i++, Remaining -= SegSize)
         {
+            PUCHAR Segment;
+
             SegSize = min(Remaining, (ULONG)CM_KEY_VALUE_BIG);
             SegCell = HvAllocateCell(Hive, SegSize, StorageType, ListCell);
             if (SegCell == HCELL_NIL)
@@ -475,8 +486,18 @@ CmpSetValueDataNew(IN PHHIVE Hive,
                 HvFreeCell(Hive, ListCell);
                 return STATUS_INSUFFICIENT_RESOURCES;
             }
-            RtlCopyMemory(HvGetCell(Hive, SegCell),
-                          (PUCHAR)Data + i * CM_KEY_VALUE_BIG, SegSize);
+            Segment = (PUCHAR)HvGetCell(Hive, SegCell);
+            if (!Segment)
+            {
+                HvFreeCell(Hive, SegCell);
+                while (i--)
+                {
+                    HvFreeCell(Hive, ListData[i]);
+                }
+                HvFreeCell(Hive, ListCell);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            RtlCopyMemory(Segment, (PUCHAR)Data + i * CM_KEY_VALUE_BIG, SegSize);
             HvReleaseCell(Hive, SegCell);
             ListData[i] = SegCell;
         }
@@ -492,6 +513,14 @@ CmpSetValueDataNew(IN PHHIVE Hive,
         HvReleaseCell(Hive, ListCell);
 
         BigData = (PCM_BIG_DATA)HvGetCell(Hive, DbCell);
+        if (!BigData)
+        {
+            for (i = 0; i < Needed; i++)
+                HvFreeCell(Hive, ListData[i]);
+            HvFreeCell(Hive, ListCell);
+            HvFreeCell(Hive, DbCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
         BigData->Signature = CM_BIG_DATA_SIGNATURE;
         BigData->Count = (USHORT)Needed;
         BigData->List = ListCell;

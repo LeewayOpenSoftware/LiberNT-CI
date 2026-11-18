@@ -555,12 +555,132 @@ TLoadImageInto(
                         Image, TWAlloc, TWFree, TFileWrite, TFileRead, 1, NULL);
 }
 
+/* Shrinking a big value to a normal size frees its whole record (the
+ * overwrite path in the kernel treats an old big value as no reusable
+ * cell; this row drives the same cmlib calls and checks the record cells). */
+static
+VOID
+TTestBigToMedium(VOID)
+{
+    CMHIVE cmHive;
+    ULONG saved = HvGetHiveFormatVersion();
+    PHHIVE hive;
+    PCM_KEY_NODE root;
+    UNICODE_STRING name;
+    HCELL_INDEX vkCell;
+    PCM_KEY_VALUE value;
+    PCM_BIG_DATA bigData;
+    PHCELL_INDEX segList;
+    HCELL_INDEX seg[3], listCell, dbCell, cell;
+    NTSTATUS status;
+    static UCHAR TMedium2[5000];
+    PVOID buffer;
+    BOOLEAN allocated;
+    HCELL_INDEX release;
+    ULONG length;
+    ULONG i;
+
+    for (i = 0; i < sizeof(TMedium2); i++) TMedium2[i] = (UCHAR)(i * 3 + 1);
+
+    HvSetHiveFormatVersion(HSYS_WHISTLER);
+    TBuild15Hive(&cmHive);
+    if (cmHive.Hive.BaseBlock == NULL)
+    {
+        HvSetHiveFormatVersion(saved);
+        return;
+    }
+    hive = &cmHive.Hive;
+
+    root = (PCM_KEY_NODE)HvGetCell(hive, hive->BaseBlock->RootCell);
+    name.Buffer = (PWCHAR)L"Big";
+    name.Length = 3 * sizeof(WCHAR);
+    name.MaximumLength = name.Length;
+    vkCell = CmpFindValueByName(hive, root, &name);
+    CHECK(vkCell != HCELL_NIL);
+    value = (PCM_KEY_VALUE)HvGetCell(hive, vkCell);
+    CHECK(value != NULL);
+    if (!value)
+    {
+        HvReleaseCell(hive, hive->BaseBlock->RootCell);
+        HvFree(hive);
+        HvSetHiveFormatVersion(saved);
+        return;
+    }
+
+    /* Record indices before the overwrite */
+    dbCell = value->Data;
+    bigData = (PCM_BIG_DATA)HvGetCell(hive, dbCell);
+    listCell = bigData->List;
+    segList = (PHCELL_INDEX)HvGetCell(hive, listCell);
+    for (i = 0; i < 3; i++) seg[i] = segList[i];
+    HvReleaseCell(hive, listCell);
+    HvReleaseCell(hive, dbCell);
+
+    /* Absurd sizes are refused before anything is allocated */
+    {
+        HCELL_INDEX junk;
+        status = CmpSetValueDataNew(hive, TMedium2, 0x7FFFFFF0, Stable,
+                                    HCELL_NIL, &junk);
+        CHECK(status == STATUS_INVALID_PARAMETER);
+    }
+
+    /* The fixed overwrite flow: fresh cell first, then free the record */
+    {
+        HCELL_INDEX newCell;
+        status = CmpSetValueDataNew(hive, TMedium2, sizeof(TMedium2), Stable,
+                                    HCELL_NIL, &newCell);
+        CHECK(NT_SUCCESS(status));
+        if (NT_SUCCESS(status))
+        {
+            HvMarkCellDirty(hive, vkCell, FALSE);
+            CmpFreeValueData(hive, value->Data, value->DataLength);
+            value->Data = newCell;
+            value->DataLength = sizeof(TMedium2);
+        }
+    }
+
+    /* Every record cell is free now */
+    CHECK(IsFreeCell((PHCELL)((PUCHAR)HvGetCell(hive, dbCell) - sizeof(HCELL))));
+    CHECK(IsFreeCell((PHCELL)((PUCHAR)HvGetCell(hive, listCell) - sizeof(HCELL))));
+    for (i = 0; i < 3; i++)
+        CHECK(IsFreeCell((PHCELL)((PUCHAR)HvGetCell(hive, seg[i]) - sizeof(HCELL))));
+
+    /* The new content reads back and the hive is still valid */
+    name.Buffer = (PWCHAR)L"Big";
+    name.Length = 3 * sizeof(WCHAR);
+    name.MaximumLength = name.Length;
+    cell = CmpFindValueByName(hive, root, &name);
+    value = (PCM_KEY_VALUE)HvGetCell(hive, cell);
+    CHECK(value != NULL);
+    if (value &&
+        CmpGetValueData(hive, value, &length, &buffer, &allocated, &release))
+    {
+        CHECK(length == sizeof(TMedium2));
+        if (length == sizeof(TMedium2))
+            CHECK(memcmp(buffer, TMedium2, sizeof(TMedium2)) == 0);
+        if (allocated) hive->Free(buffer, length);
+        else if (release != HCELL_NIL) HvReleaseCell(hive, release);
+    }
+    else
+    {
+        CHECK(FALSE);
+    }
+
+    CHECK(CmCheckRegistry(&cmHive, CM_CHECK_REGISTRY_VALIDATE_HIVE) ==
+          CM_CHECK_REGISTRY_GOOD);
+
+    HvReleaseCell(hive, hive->BaseBlock->RootCell);
+    HvFree(hive);
+    HvSetHiveFormatVersion(saved);
+}
+
 int
 main(void)
 {
     TTestGate();
     TTestRoundTrip();
     TTestTornWrite();
+    TTestBigToMedium();
 
     printf("cmlib hive 1.5 write: %lu checks, %lu failures\n",
            Checks, Failures);
