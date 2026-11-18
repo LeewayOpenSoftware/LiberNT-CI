@@ -19,6 +19,9 @@
 #define DPAPI_DERIVED_SIZE          (DPAPI_AES_KEY_SIZE + DPAPI_HMAC_KEY_SIZE)
 #define DPAPI_HEADER_SIZE           (4 + 4 + DPAPI_SALT_SIZE + DPAPI_IV_SIZE + 4)
 #define DPAPI_MIN_BLOB_SIZE         (DPAPI_HEADER_SIZE + DPAPI_MAC_SIZE)
+#define DPAPI_MAX_DATA_SIZE         (16 * 1024 * 1024)
+#define DPAPI_MAX_ENTROPY_SIZE      (64 * 1024)
+#define DPAPI_PREKEY_SIZE           20
 
 static
 NTSTATUS
@@ -157,6 +160,8 @@ DpapiAesCrypt(
         goto done;
     }
 
+    RtlCopyMemory(IvCopy, Iv, DPAPI_IV_SIZE);
+
     if (Encrypt)
         Status = BCryptEncrypt(KeyHandle, Input, InputLength, NULL, IvCopy, DPAPI_IV_SIZE,
                                Buffer, ResultLength, &ResultLength, BCRYPT_BLOCK_PADDING);
@@ -245,6 +250,14 @@ s_DpapiProtect(
     DataOut->cbData = 0;
     DataOut->pbData = NULL;
 
+    if ((DataIn.cbData != 0 && DataIn.pbData == NULL) ||
+        (Entropy.cbData != 0 && Entropy.pbData == NULL) ||
+        DataIn.cbData > DPAPI_MAX_DATA_SIZE ||
+        Entropy.cbData > DPAPI_MAX_ENTROPY_SIZE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
     Status = DpapiGetCallerLogonId(&LogonId);
     if (!NT_SUCCESS(Status))
         return Status;
@@ -330,6 +343,13 @@ s_DpapiUnprotect(
 
     DataOut->cbData = 0;
     DataOut->pbData = NULL;
+
+    if (DataIn.pbData == NULL ||
+        (Entropy.cbData != 0 && Entropy.pbData == NULL) ||
+        Entropy.cbData > DPAPI_MAX_ENTROPY_SIZE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
 
     Blob = DataIn.pbData;
     if (DataIn.cbData < DPAPI_MIN_BLOB_SIZE)
