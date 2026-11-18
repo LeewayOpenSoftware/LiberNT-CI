@@ -149,6 +149,7 @@ list(APPEND SOURCE
     lstrcpynW.c
     lstrlen.c
     Mailslot.c
+    MappedReadAfterWrite.c
     MuiResources.c
     MultiByteToWideChar.c
     NamedPipeClientComputerName.c

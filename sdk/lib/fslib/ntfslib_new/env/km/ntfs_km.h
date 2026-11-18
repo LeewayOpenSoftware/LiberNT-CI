@@ -58,6 +58,24 @@ NtfsDiskFlushRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
                     _In_ ULONGLONG Offset,
                     _In_ ULONG Length);
 
+/* Bracket a read sent straight to the storage device. At PASSIVE_LEVEL the
+ * range is written back first. Above it (a page-in) nothing is written:
+ * *Overlay is set when the range holds unwritten blocks, and End lays them
+ * over Buffer, the bytes the device returned for [Offset, Offset + Length).
+ * End must be called whenever Begin succeeded. */
+NTSTATUS
+NtfsDiskBeginDirectReadKm(_In_ PDEVICE_OBJECT DeviceObject,
+                          _In_ ULONGLONG Offset,
+                          _In_ ULONG Length,
+                          _Out_ PBOOLEAN Overlay);
+
+VOID
+NtfsDiskEndDirectReadKm(_In_ PDEVICE_OBJECT DeviceObject,
+                        _In_ ULONGLONG Offset,
+                        _In_ ULONG Length,
+                        _Inout_updates_bytes_opt_(Length) PVOID Buffer,
+                        _In_ BOOLEAN Overlay);
+
 /* As NtfsDiskFlushRangeKm, and the bytes are on the medium when it returns:
  * the device's write cache is flushed when the device may hold writes, so a
  * pointer written next cannot overtake the range on power loss. This is the
