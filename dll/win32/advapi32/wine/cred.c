@@ -183,6 +183,7 @@ static DWORD read_credential_blob(HKEY hkey,
     BYTE *plain = NULL;
     DWORD plain_len = 0;
     DWORD err;
+    DWORD capacity = *credential_blob_size;
 
     *credential_blob_size = 0;
     ret = RegQueryValueExW(hkey, L"Password", 0, &type, NULL, &stored_size);
@@ -213,6 +214,13 @@ static DWORD read_credential_blob(HKEY hkey,
         return err;
 
     *credential_blob_size = plain_len;
+    if (credential_blob && plain_len > capacity)
+    {
+        /* The secret grew between the caller's size query and this read: never overrun the buffer. */
+        SecureZeroMemory(plain, plain_len);
+        free(plain);
+        return ERROR_MORE_DATA;
+    }
     if (credential_blob && plain_len)
         memcpy(credential_blob, plain, plain_len);
     if (plain)
