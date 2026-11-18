@@ -3415,6 +3415,7 @@ RQueryServiceConfigW(
             lpStr += dwDependenciesLength;
         else
             lpStr += (wcslen(lpStr) + 1);
+        lpStr = (LPWSTR)ALIGN_UP_POINTER_BY(lpStr, sizeof(PVOID));
 
         /* Append the service start name */
         if (lpServiceStartName != NULL)
