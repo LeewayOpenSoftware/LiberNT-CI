@@ -8,16 +8,17 @@
  *              files and their directories, optionally turns the ordinary-user v4 gate on (--enable-v4), optionally
  *              writes a <name>.theme descriptor for the shell, and optionally makes the style the active system theme
  *              (--set-active) using the style's own default colour and size. Run it elevated, inside the test VM only;
- *              it never overwrites an existing store entry.
+ *              it never overwrites an existing store entry. --set-active must be run by the ordinary user who will see
+ *              the theme (it writes that user's HKCU and applies in that user's session).
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
  * Usage: storeinst <style.msstyles> <name> [--mui <file.msstyles.mui> <locale>] [--enable-v4] [--theme] [--set-active]
- *   <name>        1..63 of [A-Za-z0-9_-], starting with a letter or digit; the store directory and file take this name
+ *   <name>        1..32 of [A-Za-z0-9_-], starting with a letter or digit (matches the gate's UXT_NAME_MAX)
  *   --mui         install a language module as <name>\<locale>\<name>.msstyles.mui (<locale> like en-US)
  *   --enable-v4   set HKLM\SOFTWARE\Leeway\UxTheme\EnableV4Ordinary = 1 (ordinary processes only; privileged keep v3)
  *   --theme       write %SystemRoot%\Resources\Themes\<name>.theme pointing at the installed style (for the shell)
- *   --set-active  make the style the active system theme for the current user (HKCU ThemeManager + a live apply),
- *                 using the colour and size the style declares as its default
+ *   --set-active  make the style the active system theme for the CURRENT (ordinary) user, using the colour and size
+ *                 the style declares as its default; a non-zero exit means the apply did not take
  */
 
 #include <windows.h>
@@ -38,7 +39,7 @@ static const WCHAR STORE_SDDL[] =
 static const WCHAR GATE_KEY[]   = L"SOFTWARE\\Leeway\\UxTheme";
 static const WCHAR THEMEMGR[]   = L"Software\\Microsoft\\Windows\\CurrentVersion\\ThemeManager";
 
-/* GetThemeDefaults is UXTHEME.7 (named); SetSystemVisualStyle is ordinal 65 only, here and on Windows. */
+/* GetThemeDefaults and SetSystemVisualStyle are exported by ordinal only (7 and 65), here and on Windows. */
 typedef HRESULT (WINAPI *PFN_GETTHEMEDEFAULTS)(LPCWSTR, LPWSTR, DWORD, LPWSTR, DWORD);
 typedef HRESULT (WINAPI *PFN_SETSYSTEMVISUALSTYLE)(LPCWSTR, LPCWSTR, LPCWSTR, UINT);
 
@@ -55,7 +56,7 @@ static int fail(const WCHAR *fmt, ...)
 static BOOL valid_name(const WCHAR *s)
 {
     size_t i, n = wcslen(s);
-    if (n < 1 || n > 63) return FALSE;
+    if (n < 1 || n > 32) return FALSE;   /* must match the gate's UXT_NAME_MAX (32) or every load is refused */
     if (!iswalnum(s[0])) return FALSE;
     for (i = 0; i < n; i++)
         if (!iswalnum(s[i]) && s[i] != L'_' && s[i] != L'-') return FALSE;
@@ -64,7 +65,6 @@ static BOOL valid_name(const WCHAR *s)
 
 static BOOL valid_locale(const WCHAR *s)
 {
-    /* like en-US: letters, a hyphen, letters/digits; keep it small and strict */
     size_t i, n = wcslen(s);
     if (n < 2 || n > 16) return FALSE;
     for (i = 0; i < n; i++)
@@ -103,11 +103,12 @@ static BOOL stamp(const WCHAR *path)
     return TRUE;
 }
 
-/* Print the descriptor of every directory from path up to the volume root, then the volume flags: exactly what the
- * gate checks (file, its directory, the store root and every directory above it). */
+/* Print the descriptor of every directory from path up to AND INCLUDING the volume root, then the volume flags:
+ * exactly what the gate checks (file, its directory, the store root and every directory above it, to the volume). */
 static void report_chain(const WCHAR *leaf)
 {
     WCHAR dir[MAX_PATH];
+    BOOL atRoot = FALSE;
     lstrcpynW(dir, leaf, MAX_PATH);
 
     wprintf(L"Descriptors the gate checks (file, its directory, the store root and every directory above it):\n");
@@ -116,6 +117,7 @@ static void report_chain(const WCHAR *leaf)
         LPWSTR sddl = NULL;
         PSECURITY_DESCRIPTOR psd = NULL;
         DWORD need = 0;
+        WCHAR *slash;
 
         GetFileSecurityW(dir, OWNER_SECURITY_INFORMATION | GROUP_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION,
                          NULL, 0, &need);
@@ -133,13 +135,11 @@ static void report_chain(const WCHAR *leaf)
             wprintf(L"  %ls  (no descriptor read, error %lu)\n", dir, GetLastError());
         if (psd) LocalFree(psd);
 
-        /* step up one directory; stop at the volume root (X:\) */
-        {
-            WCHAR *slash = wcsrchr(dir, L'\\');
-            if (!slash) break;
-            if (slash > dir && *(slash - 1) == L':') { slash[1] = 0; break; }  /* X:\ */
-            *slash = 0;
-        }
+        if (atRoot) break;                 /* the volume root was just printed */
+        slash = wcsrchr(dir, L'\\');
+        if (!slash) break;
+        if (slash > dir && *(slash - 1) == L':') { slash[1] = 0; atRoot = TRUE; }  /* X:\ -> print once more */
+        else *slash = 0;
     }
 
     {
@@ -162,11 +162,11 @@ static BOOL ensure_dir(const WCHAR *path)
 int wmain(int argc, WCHAR **argv)
 {
     const WCHAR *styleArg = NULL, *name = NULL, *muiArg = NULL, *locale = NULL;
-    BOOL enableV4 = FALSE, writeTheme = FALSE, setActive = FALSE;
-    int i;
+    BOOL enableV4 = FALSE, writeTheme = FALSE, setActive = FALSE, haveDefaults = FALSE;
+    int i, rc = 0;
     WCHAR win[MAX_PATH], root[MAX_PATH], nameDir[MAX_PATH], styleDst[MAX_PATH];
     WCHAR color[64] = L"", size[64] = L"";
-    HMODULE ux;
+    HMODULE ux = NULL;
 
     for (i = 1; i < argc; i++)
     {
@@ -184,7 +184,7 @@ int wmain(int argc, WCHAR **argv)
         return fail(L"usage: storeinst <style.msstyles> <name> [--mui <file.msstyles.mui> <locale>]"
                     L" [--enable-v4] [--theme] [--set-active]");
     if (!valid_name(name))
-        return fail(L"storeinst: the name must be 1-63 of [A-Za-z0-9_-] starting with a letter or digit");
+        return fail(L"storeinst: the name must be 1-32 of [A-Za-z0-9_-] starting with a letter or digit");
     if (muiArg && !valid_locale(locale))
         return fail(L"storeinst: the locale must look like en-US");
 
@@ -221,83 +221,105 @@ int wmain(int argc, WCHAR **argv)
     {
         HKEY hk;
         DWORD one = 1;
-        LONG rc = RegCreateKeyExW(HKEY_LOCAL_MACHINE, GATE_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hk, NULL);
-        if (rc == ERROR_SUCCESS)
+        LONG r = RegCreateKeyExW(HKEY_LOCAL_MACHINE, GATE_KEY, 0, NULL, 0, KEY_SET_VALUE, NULL, &hk, NULL);
+        if (r == ERROR_SUCCESS)
         {
-            rc = RegSetValueExW(hk, L"EnableV4Ordinary", 0, REG_DWORD, (const BYTE *)&one, sizeof(one));
+            r = RegSetValueExW(hk, L"EnableV4Ordinary", 0, REG_DWORD, (const BYTE *)&one, sizeof(one));
             RegCloseKey(hk);
         }
-        if (rc != ERROR_SUCCESS)
-            return fail(L"storeinst: cannot set HKLM\\%ls EnableV4Ordinary (error %ld)", GATE_KEY, rc);
+        if (r != ERROR_SUCCESS)
+            return fail(L"storeinst: cannot set HKLM\\%ls EnableV4Ordinary (error %ld)", GATE_KEY, r);
         wprintf(L"HKLM\\%ls EnableV4Ordinary = 1 (ordinary processes only; privileged ones keep v3)\n", GATE_KEY);
     }
 
-    /* Resolve the style's own default colour and size for the .theme and for --set-active. */
-    ux = LoadLibraryW(L"uxtheme.dll");
-    if (ux)
+    /* Resolve the style's own default colour and size (GetThemeDefaults is UXTHEME ordinal 7, no name). */
+    if (writeTheme || setActive)
     {
-        PFN_GETTHEMEDEFAULTS gd = (PFN_GETTHEMEDEFAULTS)GetProcAddress(ux, "GetThemeDefaults");
-        if (!gd) gd = (PFN_GETTHEMEDEFAULTS)GetProcAddress(ux, (LPCSTR)(ULONG_PTR)7);  /* UXTHEME.7 */
-        if (gd) gd(styleDst, color, ARRAYSIZE(color), size, ARRAYSIZE(size));
+        ux = LoadLibraryW(L"uxtheme.dll");
+        if (ux)
+        {
+            PFN_GETTHEMEDEFAULTS gd = (PFN_GETTHEMEDEFAULTS)GetProcAddress(ux, (LPCSTR)(ULONG_PTR)7);
+            if (gd && SUCCEEDED(gd(styleDst, color, ARRAYSIZE(color), size, ARRAYSIZE(size))) && color[0] && size[0])
+                haveDefaults = TRUE;
+        }
     }
-    if (!color[0]) lstrcpynW(color, L"NormalColor", ARRAYSIZE(color));
-    if (!size[0])  lstrcpynW(size,  L"NormalSize",  ARRAYSIZE(size));
 
     if (writeTheme)
     {
-        WCHAR themePath[MAX_PATH];
+        /* For the .theme descriptor the generic NormalColor/NormalSize is an acceptable default when the style's
+         * own names could not be read; the loader resolves the real variant from the .msstyles anyway. */
+        const WCHAR *tc = haveDefaults ? color : L"NormalColor";
+        const WCHAR *tsz = haveDefaults ? size : L"NormalSize";
+        WCHAR themePath[MAX_PATH], body[512];
         HANDLE hf;
         StringCchPrintfW(themePath, MAX_PATH, L"%ls\\%ls.theme", root, name);
         hf = CreateFileW(themePath, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (hf != INVALID_HANDLE_VALUE)
         {
-            /* A .theme is an ANSI/Unicode INI; write a small UTF-16LE one with a BOM. */
-            WCHAR body[512];
             DWORD wr;
             WORD bom = 0xFEFF;
-            int len = StringCchPrintfW(body, ARRAYSIZE(body),
+            StringCchPrintfW(body, ARRAYSIZE(body),
                 L"[Theme]\r\nDisplayName=%ls\r\n\r\n[VisualStyles]\r\n"
                 L"Path=%%SystemRoot%%\\Resources\\Themes\\%ls\\%ls.msstyles\r\n"
-                L"ColorStyle=%ls\r\nSize=%ls\r\n", name, name, name, color, size) == S_OK
-                ? (int)wcslen(body) : 0;
+                L"ColorStyle=%ls\r\nSize=%ls\r\n", name, name, name, tc, tsz);
             WriteFile(hf, &bom, sizeof(bom), &wr, NULL);
-            WriteFile(hf, body, len * sizeof(WCHAR), &wr, NULL);
+            WriteFile(hf, body, (DWORD)(wcslen(body) * sizeof(WCHAR)), &wr, NULL);
             CloseHandle(hf);
-            if (!stamp(themePath)) { /* non-fatal */ }
+            stamp(themePath);   /* best effort: a .theme in the store root is not loaded through the gate */
             wprintf(L"Wrote %ls\n", themePath);
         }
         else
+        {
             wprintf(L"storeinst: could not write %ls (error %lu)\n", themePath, GetLastError());
+            rc = 1;
+        }
     }
 
     if (setActive)
     {
-        HKEY hk;
-        if (RegCreateKeyExW(HKEY_CURRENT_USER, THEMEMGR, 0, NULL, 0, KEY_SET_VALUE, NULL, &hk, NULL) == ERROR_SUCCESS)
+        if (!haveDefaults)
         {
-            const WCHAR one[] = L"1";
-            RegSetValueExW(hk, L"DllName",    0, REG_SZ, (const BYTE *)styleDst, (lstrlenW(styleDst) + 1) * sizeof(WCHAR));
-            RegSetValueExW(hk, L"ColorName",  0, REG_SZ, (const BYTE *)color,    (lstrlenW(color)    + 1) * sizeof(WCHAR));
-            RegSetValueExW(hk, L"SizeName",   0, REG_SZ, (const BYTE *)size,     (lstrlenW(size)     + 1) * sizeof(WCHAR));
-            RegSetValueExW(hk, L"ThemeActive",0, REG_SZ, (const BYTE *)one,      sizeof(one));
-            RegCloseKey(hk);
+            /* Do not guess the colour/size: a wrong variant name makes the ordinary-user load fail outright. */
+            fail(L"storeinst: could not read the style default colour/size; run --set-active as the ordinary user "
+                 L"who will see the theme (not elevated), so uxtheme can read the version-4 style");
+            rc = 1;
         }
         else
-            return fail(L"storeinst: cannot write HKCU ThemeManager (error %lu)", GetLastError());
-
-        /* Apply it live (the same call the Personalization page makes). Works for the current user's session; an
-         * ordinary user sees the version-4 look, a privileged one keeps v3 by the gate. */
-        if (ux)
         {
-            PFN_SETSYSTEMVISUALSTYLE ssvs =
-                (PFN_SETSYSTEMVISUALSTYLE)GetProcAddress(ux, (LPCSTR)(ULONG_PTR)65);
-            HRESULT hr = ssvs ? ssvs(styleDst, color, size, 0) : E_NOINTERFACE;
-            wprintf(L"Active theme set: %ls (%ls/%ls), live apply hr=0x%08lx\n",
-                    styleDst, color, size, (unsigned long)hr);
+            HKEY hk;
+            if (RegCreateKeyExW(HKEY_CURRENT_USER, THEMEMGR, 0, NULL, 0, KEY_SET_VALUE, NULL, &hk, NULL) == ERROR_SUCCESS)
+            {
+                const WCHAR one[] = L"1";
+                RegSetValueExW(hk, L"DllName",    0, REG_SZ, (const BYTE *)styleDst, (lstrlenW(styleDst) + 1) * sizeof(WCHAR));
+                RegSetValueExW(hk, L"ColorName",  0, REG_SZ, (const BYTE *)color,    (lstrlenW(color)    + 1) * sizeof(WCHAR));
+                RegSetValueExW(hk, L"SizeName",   0, REG_SZ, (const BYTE *)size,     (lstrlenW(size)     + 1) * sizeof(WCHAR));
+                RegSetValueExW(hk, L"ThemeActive",0, REG_SZ, (const BYTE *)one,      sizeof(one));
+                RegCloseKey(hk);
+            }
+            else
+            {
+                if (ux) FreeLibrary(ux);
+                return fail(L"storeinst: cannot write HKCU ThemeManager (error %lu)", GetLastError());
+            }
+
+            /* Apply it live (the same call the Personalization page makes). */
+            {
+                PFN_SETSYSTEMVISUALSTYLE ssvs =
+                    (PFN_SETSYSTEMVISUALSTYLE)(ux ? GetProcAddress(ux, (LPCSTR)(ULONG_PTR)65) : NULL);
+                HRESULT hr = ssvs ? ssvs(styleDst, color, size, 0) : E_NOINTERFACE;
+                wprintf(L"Active theme set: %ls (%ls/%ls), live apply hr=0x%08lx\n",
+                        styleDst, color, size, (unsigned long)hr);
+                if (FAILED(hr))
+                {
+                    fail(L"storeinst: the live apply failed (0x%08lx); the HKCU selection is written, it loads at the "
+                         L"next logon of this user", (unsigned long)hr);
+                    rc = 1;
+                }
+            }
         }
     }
 
     if (ux) FreeLibrary(ux);
     report_chain(styleDst);
-    return 0;
+    return rc;
 }
