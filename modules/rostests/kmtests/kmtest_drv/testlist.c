@@ -209,9 +209,7 @@ KMT_TESTFUNC Test_IoInterrupt;
 KMT_TESTFUNC Test_IoIommu;
 KMT_TESTFUNC Test_InbvVirtualFrameBuffer;
 KMT_TESTFUNC Test_IoIrp;
-#ifdef _WIN64
 KMT_TESTFUNC Test_IoIrpWorkItemEx;
-#endif
 KMT_TESTFUNC Test_IoWaitCompletionPacket;
 KMT_TESTFUNC Test_ExWorkItem;
 KMT_TESTFUNC Test_ExWddm;
@@ -327,9 +325,7 @@ KMT_TESTFUNC Test_EtwProviderKM;
 KMT_TESTFUNC Test_EtwRegisterKM;
 KMT_TESTFUNC Test_EtwSessionKM;
 KMT_TESTFUNC Test_EtwSessionIrqlKM;
-#ifdef _WIN64
 KMT_TESTFUNC Test_PcwKM;
-#endif
 KMT_TESTFUNC Test_WmiEventKM;
 KMT_TESTFUNC Test_IoBuildIoctlKM;
 KMT_TESTFUNC Test_IoCsqKM;
@@ -440,13 +436,9 @@ KMT_TESTFUNC Test_NpfsReadWrite;
 KMT_TESTFUNC Test_NpfsVolumeInfo;
 KMT_TESTFUNC Test_ObCallbacks;
 KMT_TESTFUNC Test_ObHandle;
-#ifdef _WIN64
 KMT_TESTFUNC Test_ObIsDosDeviceLocallyMapped;
-#endif
 KMT_TESTFUNC Test_ObQuery;
-#ifdef _WIN64
 KMT_TESTFUNC Test_RtlIsProcessorFeaturePresentKM;
-#endif
 KMT_TESTFUNC Test_ObReference;
 KMT_TESTFUNC Test_ObSecurity;
 KMT_TESTFUNC Test_ObSymbolicLink;
@@ -705,9 +697,7 @@ const KMT_TEST TestList[] =
     { "IoIommu",                            Test_IoIommu },
     { "InbvVirtualFrameBuffer",              Test_InbvVirtualFrameBuffer },
     { "IoIrp",                              Test_IoIrp },
-#ifdef _WIN64
     { "IoIrpWorkItemEx",                    Test_IoIrpWorkItemEx },
-#endif
     { "IoWaitCompletionPacket",             Test_IoWaitCompletionPacket },
     { "ExWorkItem",                         Test_ExWorkItem },
     { "ExWddm",                            Test_ExWddm },
@@ -742,9 +732,7 @@ const KMT_TEST TestList[] =
     { "EtwRegisterKM",                      Test_EtwRegisterKM },
     { "EtwSessionKM",                       Test_EtwSessionKM },
     { "EtwSessionIrqlKM",                   Test_EtwSessionIrqlKM },
-#ifdef _WIN64
     { "PcwKM",                              Test_PcwKM },
-#endif
     { "WmiEventKM",                         Test_WmiEventKM },
     { "IoBuildIoctlKM",                     Test_IoBuildIoctlKM },
     { "IoCsqKM",                            Test_IoCsqKM },
@@ -965,13 +953,9 @@ const KMT_TEST TestList[] =
     { "ObCallbacks",                        Test_ObCallbacks },
     { "ObHandle",                           Test_ObHandle },
     { "ObOpenByPointer",                    Test_ObOpenByPointer },
-#ifdef _WIN64
     { "ObIsDosDeviceLocallyMapped",         Test_ObIsDosDeviceLocallyMapped },
-#endif
     { "ObQuery",                            Test_ObQuery },
-#ifdef _WIN64
     { "RtlIsProcessorFeaturePresentKM",     Test_RtlIsProcessorFeaturePresentKM },
-#endif
     { "ObReference",                        Test_ObReference },
     { "ObSdCache",                          Test_ObSdCache },
     { "ObSecurity",                         Test_ObSecurity },

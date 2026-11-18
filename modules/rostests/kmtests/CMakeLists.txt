@@ -156,6 +156,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_etw/EtwProviderKM.c
     ntos_etw/EtwRegisterKM.c
     ntos_etw/EtwSessionKM.c
+    ntos_wmi/PcwKM.c
     ntos_wmi/WmiEventKM.c
     ntos_ex/ExCallback.c
     ntos_ex/ExCallbackExtra.c
@@ -234,6 +235,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoInterrupt.c
     ntos_io/IoIommu.c
     ntos_io/IoIrp.c
+    ntos_io/IoIrpWorkItemEx.c
     ntos_io/IoWaitCompletionPacket.c
     ntos_io/IoSafeBootPolicy.c
     ntos_io/IoStackKM.c
@@ -359,6 +361,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/ZwMapViewOfSection.c
     ntos_ob/ObCallbacks.c
     ntos_ob/ObHandle.c
+    ntos_ob/ObIsDosDeviceLocallyMapped.c
     ntos_ob/ObOpenByPointer.c
     ntos_ob/ObQuery.c
     ntos_ob/ObReference.c
@@ -412,6 +415,7 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlTableElementKM.c
     rtl/RtlGuidKM.c
     rtl/RtlImageKM.c
+    rtl/RtlIsProcessorFeaturePresentKM.c
     rtl/RtlHashTableKM.c
     rtl/RtlQsortKM.c
     rtl/RtlCapabilityKM.c
@@ -479,13 +483,9 @@ endif()
 # These call kernel exports that are only exported on 64-bit targets
 if(NOT ARCH STREQUAL "i386")
     list(APPEND KMTEST_DRV_SOURCE
-        ntos_io/IoIrpWorkItemEx.c
-        ntos_ob/ObIsDosDeviceLocallyMapped.c
         ntos_po/PoKernelPowerRequest.c
         ntos_ps/PsJobCommit.c
         ntos_se/SePrimaryTokenRelease.c
-        ntos_wmi/PcwKM.c
-        rtl/RtlIsProcessorFeaturePresentKM.c
     )
 endif()
 

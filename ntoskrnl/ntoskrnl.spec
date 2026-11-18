@@ -2474,7 +2474,7 @@
 @ stdcall -arch=win64 IoGetFsTrackOffsetState(ptr ptr ptr)
 @ stdcall -arch=win64 IoGetFsZeroingOffset(ptr ptr)
 @ stub -arch=win64 IoGetGenericIrpExtension
-@ stdcall -arch=win64 IoGetInitiatorProcess(ptr)
+@ stdcall IoGetInitiatorProcess(ptr)
 @ stub -arch=win64 IoGetIoAttributionHandle
 @ stdcall IoGetIommuInterface(long ptr)
 @ stdcall IoGetIommuInterfaceEx(long int64 ptr)
@@ -2554,7 +2554,7 @@
 @ stub -arch=win64 IoSteerInterrupt
 @ stub -arch=win64 IoTestDependency
 @ stub -arch=win64 IoTransferActivityId
-@ stdcall -arch=win64 IoTryQueueWorkItem(ptr ptr long ptr)
+@ stdcall IoTryQueueWorkItem(ptr ptr long ptr)
 @ stdcall IoUninitializeWorkItem(ptr)
 @ stdcall IoUnregisterBootDriverCallback(ptr)
 @ stub -arch=win64 IoUnregisterContainerNotification
@@ -2806,7 +2806,7 @@
 @ stdcall -arch=arm64 NtWaitForAlertByThreadId(ptr ptr)
 @ stub -arch=win64 ObDereferenceObjectDeferDeleteWithTag
 @ stdcall ObGetFilterVersion()
-@ stdcall -arch=win64 ObIsDosDeviceLocallyMapped(long ptr)
+@ stdcall ObIsDosDeviceLocallyMapped(long ptr)
 @ stub -arch=win64 ObOpenObjectByNameEx
 @ stub -arch=win64 ObOpenObjectByPointerWithTag
 @ stdcall ObReferenceObjectByHandleWithTag(ptr long ptr long long ptr ptr)
@@ -2818,11 +2818,11 @@
 @ stdcall ObWaitForSingleObject(ptr long long long ptr)
 @ fastcall ObfDereferenceObjectWithTag(ptr long)
 @ fastcall ObfReferenceObjectWithTag(ptr long)
-@ stdcall -arch=win64 PcwAddInstance(ptr ptr long long ptr)
+@ stdcall PcwAddInstance(ptr ptr long long ptr)
 @ stdcall PcwCloseInstance(ptr)
 @ stdcall PcwCreateInstance(ptr ptr ptr long ptr)
-@ stdcall -arch=win64 PcwRegister(ptr ptr)
-@ stdcall -arch=win64 PcwUnregister(ptr)
+@ stdcall PcwRegister(ptr ptr)
+@ stdcall PcwUnregister(ptr)
 @ stub -arch=win64 PfFileInfoNotify
 @ stdcall -arch=win64 PoClearPowerRequest(ptr long)
 @ stub -arch=win64 PoCpuIdledSinceLastCallImprecise
@@ -3124,7 +3124,7 @@
 @ stub -arch=win64 RtlIsPartialPlaceholder
 @ stub -arch=win64 RtlIsPartialPlaceholderFileHandle
 @ stub -arch=win64 RtlIsPartialPlaceholderFileInfo
-@ stdcall -arch=win64 RtlIsProcessorFeaturePresent(long) ExIsProcessorFeaturePresent
+@ stdcall RtlIsProcessorFeaturePresent(long) ExIsProcessorFeaturePresent
 @ stub -arch=win64 RtlIsSandboxedToken
 @ stdcall RtlIsServicePackVersionInstalled(long)
 @ stdcall RtlIsStateSeparationEnabled()
