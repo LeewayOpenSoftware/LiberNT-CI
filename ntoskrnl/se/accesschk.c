@@ -2813,4 +2813,247 @@ NtAccessCheckByTypeResultList(
                           AccessStatus);
 }
 
+
+static
+BOOLEAN
+SepSidInAccessInfoHash(
+    _In_opt_ PSID_AND_ATTRIBUTES_HASH Hash,
+    _In_ PSID Sid)
+{
+    ULONG i;
+
+    if (Hash == NULL)
+        return FALSE;
+
+    for (i = 0; i < Hash->SidCount; i++)
+    {
+        if (RtlEqualSid(Hash->SidAttr[i].Sid, Sid))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static
+BOOLEAN
+SepAccessInfoHasPrivilege(
+    _In_opt_ PTOKEN_PRIVILEGES Privileges,
+    _In_ PLUID PrivilegeLuid)
+{
+    ULONG i;
+
+    if (Privileges == NULL)
+        return FALSE;
+
+    for (i = 0; i < Privileges->PrivilegeCount; i++)
+    {
+        if (Privileges->Privileges[i].Luid.LowPart == PrivilegeLuid->LowPart &&
+            Privileges->Privileges[i].Luid.HighPart == PrivilegeLuid->HighPart &&
+            (Privileges->Privileges[i].Attributes & SE_PRIVILEGE_ENABLED))
+        {
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
+/**
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+SeAccessCheckFromState(
+    _In_ PSECURITY_DESCRIPTOR SecurityDescriptor,
+    _In_ PTOKEN_ACCESS_INFORMATION PrimaryTokenInformation,
+    _In_opt_ PTOKEN_ACCESS_INFORMATION ClientTokenInformation,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ACCESS_MASK PreviouslyGrantedAccess,
+    _Outptr_opt_result_maybenull_ PPRIVILEGE_SET *Privileges,
+    _In_ PGENERIC_MAPPING GenericMapping,
+    _In_ KPROCESSOR_MODE AccessMode,
+    _Out_ PACCESS_MASK GrantedAccess,
+    _Out_ PNTSTATUS AccessStatus)
+{
+    PTOKEN_ACCESS_INFORMATION TokenInfo;
+    PSID_AND_ATTRIBUTES_HASH AllowHash;
+    ACCESS_MASK RemainingAccess;
+    ACCESS_MASK AllowedAccess = 0;
+    ACCESS_MASK PrivilegeGranted = 0;
+    PACL Dacl;
+    BOOLEAN Present;
+    BOOLEAN Defaulted;
+    BOOLEAN DenyFound;
+    BOOLEAN PrivilegeUsed = FALSE;
+    LUID UsedPrivilegeLuid = {0, 0};
+    NTSTATUS Status = STATUS_SUCCESS;
+    ULONG AceIndex;
+    PVOID Ace;
+
+    PAGED_CODE();
+
+    UNREFERENCED_PARAMETER(AccessMode);
+
+    if (SecurityDescriptor == NULL || PrimaryTokenInformation == NULL ||
+        GrantedAccess == NULL || AccessStatus == NULL)
+    {
+        return FALSE;
+    }
+
+    TokenInfo = ClientTokenInformation != NULL ? ClientTokenInformation : PrimaryTokenInformation;
+    AllowHash = TokenInfo->RestrictedSidHash != NULL && TokenInfo->RestrictedSidHash->SidCount != 0 ?
+                TokenInfo->RestrictedSidHash : TokenInfo->SidHash;
+
+    if (Privileges != NULL)
+        *Privileges = NULL;
+
+    if (DesiredAccess == 0)
+    {
+        if (PreviouslyGrantedAccess == 0)
+        {
+            *GrantedAccess = 0;
+            *AccessStatus = STATUS_ACCESS_DENIED;
+            return FALSE;
+        }
+        *GrantedAccess = PreviouslyGrantedAccess;
+        *AccessStatus = STATUS_SUCCESS;
+        return TRUE;
+    }
+
+    RtlMapGenericMask(&DesiredAccess, GenericMapping);
+    if (PreviouslyGrantedAccess != 0)
+        RtlMapGenericMask(&PreviouslyGrantedAccess, GenericMapping);
+
+    RemainingAccess = DesiredAccess;
+
+    if (RemainingAccess & ACCESS_SYSTEM_SECURITY)
+    {
+        if (SepAccessInfoHasPrivilege(TokenInfo->Privileges, &SeExports->SeSecurityPrivilege))
+        {
+            PrivilegeGranted |= ACCESS_SYSTEM_SECURITY;
+            RemainingAccess &= ~ACCESS_SYSTEM_SECURITY;
+            PrivilegeUsed = TRUE;
+            UsedPrivilegeLuid = SeExports->SeSecurityPrivilege;
+        }
+        else
+        {
+            *GrantedAccess = 0;
+            *AccessStatus = STATUS_ACCESS_DENIED;
+            return FALSE;
+        }
+    }
+
+    if (RemainingAccess & WRITE_OWNER)
+    {
+        if (SepAccessInfoHasPrivilege(TokenInfo->Privileges, &SeExports->SeTakeOwnershipPrivilege))
+        {
+            PrivilegeGranted |= WRITE_OWNER;
+            RemainingAccess &= ~WRITE_OWNER;
+            PrivilegeUsed = TRUE;
+            UsedPrivilegeLuid = SeExports->SeTakeOwnershipPrivilege;
+        }
+        else
+        {
+            *GrantedAccess = 0;
+            *AccessStatus = STATUS_ACCESS_DENIED;
+            return FALSE;
+        }
+    }
+
+    Status = RtlGetDaclSecurityDescriptor(SecurityDescriptor, &Present, &Dacl, &Defaulted);
+    if (!NT_SUCCESS(Status))
+    {
+        *AccessStatus = Status;
+        return FALSE;
+    }
+
+    if (!Present || Dacl == NULL)
+    {
+        AllowedAccess = RemainingAccess;
+        if (RemainingAccess & MAXIMUM_ALLOWED)
+            AllowedAccess |= GenericMapping->GenericAll;
+        *GrantedAccess = PreviouslyGrantedAccess | AllowedAccess | PrivilegeGranted;
+        *AccessStatus = STATUS_SUCCESS;
+        goto ReturnPrivileges;
+    }
+
+    DenyFound = FALSE;
+    for (AceIndex = 0; AceIndex < Dacl->AceCount; AceIndex++)
+    {
+        PACE_HEADER AceHeader;
+
+        if (!NT_SUCCESS(RtlGetAce(Dacl, AceIndex, &Ace)))
+            break;
+        AceHeader = (PACE_HEADER)Ace;
+
+        if (AceHeader->AceFlags & INHERIT_ONLY_ACE)
+            continue;
+
+        if (AceHeader->AceType == ACCESS_DENIED_ACE_TYPE)
+        {
+            PSID AceSid = (PSID)&((PACCESS_DENIED_ACE)Ace)->SidStart;
+
+            if ((SepSidInAccessInfoHash(TokenInfo->SidHash, AceSid) ||
+                 SepSidInAccessInfoHash(TokenInfo->RestrictedSidHash, AceSid)) &&
+                (((PACCESS_DENIED_ACE)Ace)->Mask & RemainingAccess) != 0)
+            {
+                DenyFound = TRUE;
+                break;
+            }
+        }
+        else if (AceHeader->AceType == ACCESS_ALLOWED_ACE_TYPE)
+        {
+            PSID AceSid = (PSID)&((PACCESS_ALLOWED_ACE)Ace)->SidStart;
+
+            if (SepSidInAccessInfoHash(AllowHash, AceSid))
+            {
+                AllowedAccess |= ((PACCESS_ALLOWED_ACE)Ace)->Mask;
+                RemainingAccess &= ~((PACCESS_ALLOWED_ACE)Ace)->Mask;
+            }
+        }
+    }
+
+    if (DenyFound)
+    {
+        *GrantedAccess = 0;
+        *AccessStatus = STATUS_ACCESS_DENIED;
+        return FALSE;
+    }
+
+    if (DesiredAccess & MAXIMUM_ALLOWED)
+    {
+        if (RemainingAccess != 0)
+            RemainingAccess = 0;
+        AllowedAccess &= ~MAXIMUM_ALLOWED;
+    }
+
+    if (RemainingAccess != 0)
+    {
+        *GrantedAccess = 0;
+        *AccessStatus = STATUS_ACCESS_DENIED;
+        return FALSE;
+    }
+
+    *GrantedAccess = (DesiredAccess & ~MAXIMUM_ALLOWED) | AllowedAccess |
+                     PreviouslyGrantedAccess | PrivilegeGranted;
+    *AccessStatus = STATUS_SUCCESS;
+
+ReturnPrivileges:
+    if (PrivilegeUsed && Privileges != NULL)
+    {
+        PPRIVILEGE_SET Set;
+
+        Set = ExAllocatePoolWithTag(PagedPool,
+                                    sizeof(PRIVILEGE_SET),
+                                    'SACe');
+        if (Set != NULL)
+        {
+            Set->PrivilegeCount = 1;
+            Set->Control = PRIVILEGE_SET_ALL_NECESSARY;
+            Set->Privilege[0].Luid = UsedPrivilegeLuid;
+            Set->Privilege[0].Attributes = SE_PRIVILEGE_USED_FOR_ACCESS;
+            *Privileges = Set;
+        }
+    }
+    return TRUE;
+}
+
 /* EOF */
