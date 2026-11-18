@@ -1366,9 +1366,8 @@ UcxpInterfaceBuild(
 
         Pipe->Signature = UCX_PIPE_HANDLE_SIGNATURE;
         RtlCopyMemory(&Pipe->Descriptor, EpDesc, sizeof(USB_ENDPOINT_DESCRIPTOR));
-        Pipe->MaximumTransferSize = (PipeInfo->MaximumTransferSize != 0 &&
-                                     PipeInfo->MaximumTransferSize < UCX_BULK_MAX_TRANSFER) ?
-                                    PipeInfo->MaximumTransferSize : UCX_BULK_MAX_TRANSFER;
+        /* The client's MaximumTransferSize is not used since Windows XP; the stack's limit applies */
+        Pipe->MaximumTransferSize = UCX_BULK_MAX_TRANSFER;
 
         Init = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Init), UCX_TAG);
         if (Init == NULL)
