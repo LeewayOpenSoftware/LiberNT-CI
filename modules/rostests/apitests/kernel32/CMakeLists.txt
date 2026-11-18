@@ -71,6 +71,7 @@ list(APPEND SOURCE
     TramoE.c
     TramoE2.c
     VerifyScripts.c
+    VerifyVersionInfo.c
     GetDurationFormat.c
     TimeZoneEx.c
     FindNLSString.c
