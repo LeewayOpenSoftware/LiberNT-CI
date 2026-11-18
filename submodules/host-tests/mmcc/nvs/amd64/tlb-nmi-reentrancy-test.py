@@ -61,7 +61,7 @@ static void Interleave(void) {
     __atomic_store_n(&message->Address, 0x8000, __ATOMIC_RELAXED);
     __atomic_store_n(&message->Pages, 2, __ATOMIC_RELAXED);
     __atomic_store_n(&message->Pending[0], (2ULL << 32) | 1, __ATOMIC_RELEASE);
-    if (Mode != 3) {
+    if (Mode != 3 && Mode != 7 && Mode != 8) {
         MiAmd64ProcessTlbRequest(1);
         assert(Pending() == (2ULL << 32));
     }
@@ -76,7 +76,7 @@ static ULONG64 TestRead64(ULONG64 *p, int order) {
     if (p == &Slot()->Address || p == &Slot()->Pages) return TestReadPayload(p);
     ULONG64 value = __atomic_load_n(p, order);
     if (p == &Slot()->Pending[0] && !InHook && !Injected &&
-        Mode >= 4 && ++PendingReads == Mode - 3) Interleave();
+        Mode >= 4 && Mode != 7 && ++PendingReads == (Mode == 8 ? 3 : Mode - 3)) Interleave();
     return value;
 }
 #define MI_AMD64_READ_ACQUIRE64(p) TestRead64((p), __ATOMIC_ACQUIRE)
@@ -84,7 +84,7 @@ static ULONG64 TestRead64(ULONG64 *p, int order) {
 #define MI_AMD64_WRITE_RELEASE64(p,v) __atomic_store_n((p),(v), __ATOMIC_RELEASE)
 #define MI_AMD64_COMPARE_EXCHANGE64(p,expected,value) __atomic_compare_exchange_n((p), &(expected), (value), FALSE, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)
 static void MiAmd64FlushLocal(ULONG64 address, ULONG64 pages) {
-    if (Mode == 1 && !InHook && !Injected) Interleave();
+    if ((Mode == 1 || Mode == 7) && !InHook && !Injected) Interleave();
     Flushes++;
     if (!((address == 0x1000 && pages == 1) || (address == 0x8000 && pages == 2))) Mixed++;
 }
@@ -98,7 +98,7 @@ int main(int argc, char **argv) {
     message->Pages = 1;
     message->Pending[0] = (1ULL << 32) | 1;
     MiAmd64ProcessTlbRequest(1);
-    if (Mode == 3) {
+    if (Mode == 3 || Mode == 7 || Mode == 8) {
         if (Pending() != ((2ULL << 32) | 1) || Mixed != 0) {
             fprintf(stderr, "premature acknowledgement or mixed flush: pending=%llx mixed=%d\n",
                     (unsigned long long)Pending(), Mixed);
@@ -122,6 +122,6 @@ with tempfile.TemporaryDirectory(prefix='mm-amd64-tlb-nmi-') as tmp:
     subprocess.run([args.cc, '-std=gnu11', '-Wall', '-Wextra', '-Werror',
                     str(path / 'test.c'), '-o', str(path / 'test')], check=True)
     results = [subprocess.run([str(path / 'test'), str(mode)], timeout=5).returncode
-               for mode in (1, 2, 3, 4, 5, 6)]
+               for mode in (1, 2, 3, 4, 5, 6, 7, 8)]
     if any(results):
         raise SystemExit(1)
