@@ -327,29 +327,42 @@ CmpSetValueKeyExisting(IN PHHIVE Hive,
     /* We have a normal key. Was the old cell also normal and had data? */
     if (!(WasSmall) && (Length > 0))
     {
-        /* Get the current data cell and actual data inside it */
-        DataCell = Value->Data;
-        ASSERT(DataCell != HCELL_NIL);
-        CellData = HvGetCell(Hive, DataCell);
-        if (!CellData) return STATUS_INSUFFICIENT_RESOURCES;
-
-        /* Immediately release the cell */
-        HvReleaseCell(Hive, DataCell);
-
-        /* Make sure that the data cell actually has a size */
-        ASSERT(HvGetCellSize(Hive, CellData) > 0);
-
-        /* Check if the previous data cell could fit our new data */
-        if (DataSize <= (ULONG)(HvGetCellSize(Hive, CellData)))
+        /* Check if the old value was big */
+        if (CmpIsKeyValueBig(Hive, Length))
         {
-            /* Re-use it then */
-            NewCell = DataCell;
+            /* A big old value has no reusable cell: allocate a fresh data
+               cell first so a failure leaves the record intact, then free it */
+            NewCell = HvAllocateCell(Hive, DataSize, StorageType, HCELL_NIL);
+            if (NewCell == HCELL_NIL) return STATUS_INSUFFICIENT_RESOURCES;
+
+            CmpFreeValueData(Hive, Value->Data, Length);
         }
         else
         {
-            /* Otherwise, re-allocate the current data cell */
-            NewCell = HvReallocateCell(Hive, DataCell, DataSize);
-            if (NewCell == HCELL_NIL) return STATUS_INSUFFICIENT_RESOURCES;
+            /* Get the current data cell and actual data inside it */
+            DataCell = Value->Data;
+            ASSERT(DataCell != HCELL_NIL);
+            CellData = HvGetCell(Hive, DataCell);
+            if (!CellData) return STATUS_INSUFFICIENT_RESOURCES;
+
+            /* Immediately release the cell */
+            HvReleaseCell(Hive, DataCell);
+
+            /* Make sure that the data cell actually has a size */
+            ASSERT(HvGetCellSize(Hive, CellData) > 0);
+
+            /* Check if the previous data cell could fit our new data */
+            if (DataSize <= (ULONG)(HvGetCellSize(Hive, CellData)))
+            {
+                /* Re-use it then */
+                NewCell = DataCell;
+            }
+            else
+            {
+                /* Otherwise, re-allocate the current data cell */
+                NewCell = HvReallocateCell(Hive, DataCell, DataSize);
+                if (NewCell == HCELL_NIL) return STATUS_INSUFFICIENT_RESOURCES;
+            }
         }
     }
     else
