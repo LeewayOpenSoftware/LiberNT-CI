@@ -52,6 +52,17 @@ extern ULONG HalpPicVectorRedirect[16];
 /* FUNCTIONS ******************************************************************/
 
 static
+BOOLEAN
+HalpIsX2ApicSupported(VOID)
+{
+    INT CpuInfo[4];
+
+    /* CPUID.01h:ECX[21] */
+    __cpuid(CpuInfo, 1);
+    return (CpuInfo[2] & (1 << 21)) != 0;
+}
+
+static
 VOID
 HalpMadtRegisterProcessor(
     _In_ ULONG ProcessorId,
@@ -59,9 +70,12 @@ HalpMadtRegisterProcessor(
 {
     ULONG i;
 
-    if (ApicId >= 0xFF)
+    /* 0xFF is the xAPIC broadcast ID and 0xFFFFFFFF the x2APIC one. An ID above
+     * the xAPIC range is only usable when the local APIC can run in x2APIC mode. */
+    if ((ApicId == 0xFF) || (ApicId == 0xFFFFFFFF) ||
+        ((ApicId > HALP_XAPIC_MAX_ID) && !HalpIsX2ApicSupported()))
     {
-        DPRINT01("  Ignored: APIC ID %lu requires x2APIC mode\n", ApicId);
+        DPRINT01("  Ignored: APIC ID %lu is not usable\n", ApicId);
         HalpAcpiRecordFault(APIC_SIGNATURE, HalpAcpiFaultProcessorIgnored, 0, 0, ProcessorId, ApicId);
         return;
     }
@@ -85,8 +99,11 @@ HalpMadtRegisterProcessor(
     }
 
     HalpProcessorIdentity[HalpApicInfoTable.ProcessorCount].ProcessorId = ProcessorId;
-    HalpProcessorIdentity[HalpApicInfoTable.ProcessorCount].LapicId = (UCHAR)ApicId;
+    HalpProcessorIdentity[HalpApicInfoTable.ProcessorCount].LapicId = ApicId;
     HalpApicInfoTable.ProcessorCount++;
+
+    if (ApicId > HALP_XAPIC_MAX_ID)
+        HalpApicInfoTable.X2ApicRequired = TRUE;
 }
 
 // Note: HalpParseApicTables() is called early, so its DPRINT*() do nothing.
@@ -346,7 +363,7 @@ HalpPrintApicTables(VOID)
     DPRINT1("Physical processor count: %lu\n", HalpApicInfoTable.ProcessorCount);
     for (i = 0; i < HalpApicInfoTable.ProcessorCount; i++)
     {
-        DPRINT1(" Processor %lu: ProcessorId %lu, LapicId %u, ProcessorStarted %u, BSPCheck %u, ProcessorPrcb %p\n",
+        DPRINT1(" Processor %lu: ProcessorId %lu, LapicId %lu, ProcessorStarted %u, BSPCheck %u, ProcessorPrcb %p\n",
                 i,
                 HalpProcessorIdentity[i].ProcessorId,
                 HalpProcessorIdentity[i].LapicId,

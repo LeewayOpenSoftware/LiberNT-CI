@@ -52,14 +52,15 @@ HalpSelectTargetProcessor(
         Mask = HalpDefaultInterruptAffinity ? HalpDefaultInterruptAffinity
                                             : KeQueryActiveProcessors();
 
-    ProcessorNumber = 0;
-    while ((Mask & 1) == 0)
+    /* I/O APIC and MSI destinations are 8 bits wide (no interrupt remapping):
+     * take the first requested processor they can address, else the boot one */
+    for (ProcessorNumber = 0; Mask != 0; Mask >>= 1, ProcessorNumber++)
     {
-        Mask >>= 1;
-        ProcessorNumber++;
+        if ((Mask & 1) && (HalpProcessorIdentity[ProcessorNumber].LapicId <= HALP_XAPIC_MAX_ID))
+            return ProcessorNumber;
     }
 
-    return ProcessorNumber;
+    return 0;
 }
 
 /* FUNCTIONS ******************************************************************/

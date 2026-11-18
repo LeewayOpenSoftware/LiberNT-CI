@@ -61,7 +61,7 @@ extern PPROCESSOR_IDENTITY HalpProcessorIdentity;
 FORCEINLINE
 VOID
 ApicRequestGlobalInterruptLevel(
-    _In_ UCHAR DestinationProcessor,
+    _In_ ULONG DestinationProcessor,
     _In_ UCHAR Vector,
     _In_ APIC_MT MessageType,
     _In_ APIC_TGM TriggerMode,
@@ -82,7 +82,16 @@ ApicRequestGlobalInterruptLevel(
     Icr.TriggerMode = TriggerMode;
     Icr.RemoteReadStatus = 0;
     Icr.DestinationShortHand = DestinationShortHand;
-    Icr.Destination = DestinationProcessor;
+
+    /* x2APIC: one MSR write with a 32-bit destination, no delivery status */
+    if (HalpApicX2Mode)
+    {
+        ApicWriteIcr(Icr.Long0, DestinationProcessor);
+        return;
+    }
+
+    ASSERT(DestinationProcessor <= 0xFF);
+    Icr.Destination = (UCHAR)DestinationProcessor;
 
     if (HalpApicHvMsrs && MessageType == APIC_MT_Fixed)
     {
@@ -100,8 +109,7 @@ ApicRequestGlobalInterruptLevel(
     } while (IcrStatus.DeliveryStatus);
 
     /* Write the low dword last to send the interrupt */
-    ApicWrite(APIC_ICR1, Icr.Long1);
-    ApicWrite(APIC_ICR0, Icr.Long0);
+    ApicWriteIcr(Icr.Long0, DestinationProcessor);
 
     do
     {
@@ -118,7 +126,7 @@ ApicRequestGlobalInterruptLevel(
 FORCEINLINE
 VOID
 ApicRequestGlobalInterrupt(
-    _In_ UCHAR DestinationProcessor,
+    _In_ ULONG DestinationProcessor,
     _In_ UCHAR Vector,
     _In_ APIC_MT MessageType,
     _In_ APIC_TGM TriggerMode,
@@ -140,7 +148,8 @@ ApicStartApplicationProcessor(
     _In_ ULONG NTProcessorNumber,
     _In_ PHYSICAL_ADDRESS StartupLoc)
 {
-    UCHAR LapicId, StartupVector;
+    ULONG LapicId;
+    UCHAR StartupVector;
 
     ASSERT(StartupLoc.HighPart == 0);
     ASSERT((StartupLoc.QuadPart & 0xFFF) == 0);
