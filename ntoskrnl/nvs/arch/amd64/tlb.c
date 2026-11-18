@@ -22,8 +22,13 @@
  * One message per sending processor. Each pending word holds the request
  * sequence in its high half and 32 target processors in its low half; a
  * target acknowledges by clearing its bit while the sequence is unchanged,
- * so a stale acknowledgement cannot complete a newer request.
+ * so a stale acknowledgement cannot complete a newer request. The sequence
+ * is 32 bits: a stale acknowledgement could only match again after 2^32
+ * further requests from the same sender while its handler stays interrupted.
+ * MiAmd64FlushTargets fills the words from a 64-bit group 0 mask, which
+ * limits MAXIMUM_PROCESSORS to 64 here.
  */
+C_ASSERT(MAXIMUM_PROCESSORS <= 64);
 #define MI_AMD64_TLB_TARGETS_PER_WORD 32
 #define MI_AMD64_TLB_TARGET_WORDS \
     ((MAXIMUM_PROCESSORS + MI_AMD64_TLB_TARGETS_PER_WORD - 1) / MI_AMD64_TLB_TARGETS_PER_WORD)
@@ -186,8 +191,9 @@ MiAmd64ProcessTlbRequest(ULONG Source)
     Sequence = MI_AMD64_TLB_SEQUENCE(Word);
     if (Word & Bit)
     {
-        Address = MI_AMD64_READ_NOFENCE64(&Message->Address);
-        Pages = MI_AMD64_READ_NOFENCE64(&Message->Pages);
+        /* Acquire loads keep the payload ahead of the recheck below */
+        Address = MI_AMD64_READ_ACQUIRE64(&Message->Address);
+        Pages = MI_AMD64_READ_ACQUIRE64(&Message->Pages);
         Word = MI_AMD64_READ_ACQUIRE64(Pending);
         if (MiAmd64TlbTargetPending(Word, Sequence, Bit))
         {
