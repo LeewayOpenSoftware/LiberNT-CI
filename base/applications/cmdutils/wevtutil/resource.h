@@ -34,15 +34,4 @@
 #define IDS_EVT_INVALID_QUERY       151
 #define IDS_EVT_CHANNEL_NOT_FOUND   152
 
-#define IDS_LEVEL_LOGALWAYS         160
-#define IDS_LEVEL_CRITICAL          161
-#define IDS_LEVEL_ERROR             162
-#define IDS_LEVEL_WARNING           163
-#define IDS_LEVEL_INFORMATION       164
-#define IDS_LEVEL_VERBOSE           165
-
-#define IDS_KEYWORD_CLASSIC         170
-#define IDS_KEYWORD_AUDIT_SUCCESS   171
-#define IDS_KEYWORD_AUDIT_FAILURE   172
-
 #define IDS_DESC_NOT_FOUND          180

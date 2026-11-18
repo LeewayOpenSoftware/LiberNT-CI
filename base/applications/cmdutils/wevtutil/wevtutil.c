@@ -28,10 +28,6 @@
 #define CLASSIC_SDDL L"O:BAG:SYD:(A;;0xf0007;;;SY)(A;;0x7;;;BA)(A;;0x7;;;SO)(A;;0x3;;;IU)(A;;0x3;;;SU)(A;;0x3;;;S-1-5-3)(A;;0x3;;;S-1-5-33)(A;;0x1;;;S-1-5-32-573)"
 #define SECURITY_SDDL L"O:BAG:SYD:(A;;0xf0005;;;SY)(A;;0x5;;;BA)(A;;0x1;;;S-1-5-32-573)"
 
-#define KEYWORD_CLASSIC         0x0080000000000000ULL
-#define KEYWORD_AUDIT_SUCCESS   0x0020000000000000ULL
-#define KEYWORD_AUDIT_FAILURE   0x0010000000000000ULL
-
 #define MAX_TEXT_FILE           (16 * 1024 * 1024)
 #define MAX_POSITIONAL          2
 
@@ -132,63 +128,6 @@ static VOID Free(PVOID Memory)
 {
     if (Memory)
         HeapFree(GetProcessHeap(), 0, Memory);
-}
-
-typedef struct _STRBUF
-{
-    PWSTR Buffer;
-    SIZE_T Length;
-    SIZE_T Capacity;
-    BOOL Failed;
-} STRBUF;
-
-static VOID SbAppendN(STRBUF *Sb, PCWSTR Text, SIZE_T Count)
-{
-    if (Sb->Failed)
-        return;
-    if (Sb->Length + Count + 1 > Sb->Capacity)
-    {
-        SIZE_T Capacity = max(Sb->Capacity * 2, Sb->Length + Count + 256);
-        PWSTR Grown = Alloc(Capacity * sizeof(WCHAR));
-        if (!Grown)
-        {
-            Sb->Failed = TRUE;
-            return;
-        }
-        if (Sb->Buffer)
-        {
-            memcpy(Grown, Sb->Buffer, Sb->Length * sizeof(WCHAR));
-            Free(Sb->Buffer);
-        }
-        Sb->Buffer = Grown;
-        Sb->Capacity = Capacity;
-    }
-    memcpy(Sb->Buffer + Sb->Length, Text, Count * sizeof(WCHAR));
-    Sb->Length += Count;
-    Sb->Buffer[Sb->Length] = UNICODE_NULL;
-}
-
-static VOID SbAppend(STRBUF *Sb, PCWSTR Text)
-{
-    SbAppendN(Sb, Text, wcslen(Text));
-}
-
-static PWSTR SbFinish(STRBUF *Sb)
-{
-    if (Sb->Failed)
-    {
-        Free(Sb->Buffer);
-        return NULL;
-    }
-    if (!Sb->Buffer)
-        SbAppendN(Sb, L"", 0);
-    return Sb->Buffer;
-}
-
-static VOID LoadResString(UINT Id, PWSTR Buffer, UINT Count)
-{
-    if (!LoadStringW(GetModuleHandleW(NULL), Id, Buffer, Count))
-        Buffer[0] = UNICODE_NULL;
 }
 
 static VOID PrintSystemError(DWORD Error)
@@ -350,6 +289,38 @@ static PVOID RenderAlloc(EVT_HANDLE Context, EVT_HANDLE Fragment, DWORD Flags, P
     if (Count)
         *Count = PropertyCount;
     return Buffer;
+}
+
+/* An unresolved insert still fills the buffer: the message is shown with the insert in place */
+static PWSTR FormatAlloc(EVT_HANDLE Publisher, EVT_HANDLE Event, DWORD Flags, PDWORD Used)
+{
+    DWORD Needed = 0, Error;
+    PWSTR Text;
+
+    if (EvtFormatMessage(Publisher, Event, 0, 0, NULL, Flags, 0, NULL, &Needed) ||
+        GetLastError() != ERROR_INSUFFICIENT_BUFFER || !Needed)
+    {
+        return NULL;
+    }
+    Text = Alloc(Needed * sizeof(WCHAR));
+    if (!Text)
+    {
+        SetLastError(ERROR_OUTOFMEMORY);
+        return NULL;
+    }
+    if (!EvtFormatMessage(Publisher, Event, 0, 0, NULL, Flags, Needed, Text, &Needed))
+    {
+        Error = GetLastError();
+        if (Error != ERROR_EVT_UNRESOLVED_VALUE_INSERT && Error != ERROR_EVT_UNRESOLVED_PARAMETER_INSERT)
+        {
+            Free(Text);
+            SetLastError(Error);
+            return NULL;
+        }
+    }
+    if (Used)
+        *Used = Needed;
+    return Text;
 }
 
 static PEVT_VARIANT GetChannelProperty(EVT_HANDLE Config, EVT_CHANNEL_CONFIG_PROPERTY_ID Id)
@@ -516,202 +487,24 @@ static BOOL WriteTextFile(PCWSTR Path, PCWSTR Text)
     return Ok;
 }
 
-static PWSTR LoadMessageFromSource(PCWSTR Channel, PCWSTR Source, PCWSTR ValueName, DWORD MessageId)
-{
-    WCHAR KeyName[512];
-    PWSTR Files, Path, Next, Result = NULL;
-    DWORD Size = 0;
-
-    if (FAILED(StringCchPrintfW(KeyName, ARRAYSIZE(KeyName), L"%ls\\%ls\\%ls", EVENTLOG_KEY, Channel, Source)))
-        return NULL;
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, KeyName, ValueName, RRF_RT_REG_SZ, NULL, NULL, &Size) != ERROR_SUCCESS)
-        return NULL;
-    Size += 1024 * sizeof(WCHAR);
-    Files = Alloc(Size + sizeof(WCHAR));
-    if (!Files)
-        return NULL;
-    if (RegGetValueW(HKEY_LOCAL_MACHINE, KeyName, ValueName, RRF_RT_REG_SZ, NULL, Files, &Size) != ERROR_SUCCESS)
-    {
-        Free(Files);
-        return NULL;
-    }
-
-    for (Path = Files; Path && *Path; Path = Next)
-    {
-        HMODULE Module;
-
-        Next = wcschr(Path, L';');
-        if (Next)
-            *Next++ = UNICODE_NULL;
-        while (*Path == L' ')
-            Path++;
-        if (!*Path)
-            continue;
-        Module = LoadLibraryExW(Path, NULL, LOAD_LIBRARY_AS_DATAFILE);
-        if (!Module)
-            continue;
-        if (FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS,
-                           Module, MessageId, 0, (PWSTR)&Result, 0, NULL) && Result)
-        {
-            FreeLibrary(Module);
-            break;
-        }
-        Result = NULL;
-        FreeLibrary(Module);
-    }
-    Free(Files);
-    return Result;
-}
-
-static PWSTR ExpandParameters(PCWSTR Text, PCWSTR Channel, PCWSTR Source)
-{
-    STRBUF Sb = { 0 };
-    PCWSTR p = Text;
-
-    while (*p)
-    {
-        if (p[0] == L'%' && p[1] == L'%' && iswdigit(p[2]))
-        {
-            PWSTR End, Parameter;
-            DWORD Id = wcstoul(p + 2, &End, 10);
-
-            Parameter = LoadMessageFromSource(Channel, Source, L"ParameterMessageFile", Id);
-            if (Parameter)
-            {
-                SIZE_T Length = wcslen(Parameter);
-                while (Length && (Parameter[Length - 1] == L'\r' || Parameter[Length - 1] == L'\n'))
-                    Parameter[--Length] = UNICODE_NULL;
-                SbAppend(&Sb, Parameter);
-                LocalFree(Parameter);
-            }
-            else
-            {
-                SbAppendN(&Sb, p, End - p);
-            }
-            p = End;
-            continue;
-        }
-        SbAppendN(&Sb, p, 1);
-        p++;
-    }
-    return SbFinish(&Sb);
-}
-
-static PWSTR ExpandMessage(PCWSTR Template, PCWSTR *Strings, DWORD StringCount, PCWSTR Channel, PCWSTR Source)
-{
-    STRBUF Sb = { 0 };
-    PCWSTR p = Template;
-    PWSTR Expanded, Result;
-    BOOL HasParameters = FALSE;
-
-    while (*p)
-    {
-        if (*p != L'%')
-        {
-            SbAppendN(&Sb, p, 1);
-            p++;
-            continue;
-        }
-        if (iswdigit(p[1]))
-        {
-            PCWSTR q = p + 1;
-            DWORD Number = *q++ - L'0';
-
-            if (iswdigit(*q))
-                Number = Number * 10 + (*q++ - L'0');
-            if (*q == L'!')
-            {
-                PCWSTR Close = wcschr(q + 1, L'!');
-                if (Close)
-                    q = Close + 1;
-            }
-            if (Number >= 1 && Number <= StringCount)
-            {
-                SbAppend(&Sb, Strings[Number - 1]);
-                if (wcsstr(Strings[Number - 1], L"%%"))
-                    HasParameters = TRUE;
-            }
-            else
-            {
-                SbAppendN(&Sb, p, q - p);
-            }
-            p = q;
-            continue;
-        }
-        switch (p[1])
-        {
-            case L'n': SbAppend(&Sb, L"\r\n"); break;
-            case L'r': SbAppend(&Sb, L"\r"); break;
-            case L't': SbAppend(&Sb, L"\t"); break;
-            case L'0': goto done;
-            case L'%':
-                SbAppend(&Sb, L"%");
-                if (iswdigit(p[2]))
-                {
-                    SbAppend(&Sb, L"%");
-                    HasParameters = TRUE;
-                }
-                break;
-            case UNICODE_NULL:
-                SbAppend(&Sb, L"%");
-                p++;
-                continue;
-            default:
-                SbAppendN(&Sb, p, 2);
-                break;
-        }
-        p += 2;
-    }
-
-done:
-    Expanded = SbFinish(&Sb);
-    if (!Expanded || !HasParameters)
-        return Expanded;
-    Result = ExpandParameters(Expanded, Channel, Source);
-    Free(Expanded);
-    return Result;
-}
-
-static PWSTR GetSourceMessage(PCWSTR Channel, PCWSTR Source, PCWSTR ValueName, DWORD MessageId,
-                              PCWSTR *Strings, DWORD StringCount)
-{
-    PWSTR Template, Result;
-    SIZE_T Length;
-
-    Template = LoadMessageFromSource(Channel, Source, ValueName, MessageId);
-    if (!Template)
-        return NULL;
-    Result = ExpandMessage(Template, Strings, StringCount, Channel, Source);
-    LocalFree(Template);
-    if (!Result)
-        return NULL;
-    Length = wcslen(Result);
-    while (Length && (Result[Length - 1] == L'\r' || Result[Length - 1] == L'\n' ||
-                      Result[Length - 1] == L' ' || Result[Length - 1] == L'\t'))
-    {
-        Result[--Length] = UNICODE_NULL;
-    }
-    return Result;
-}
-
 typedef struct _EVENT_INFO
 {
     PEVT_VARIANT System;
     PEVT_VARIANT User;
-    PCWSTR *Strings;
     DWORD StringCount;
+    EVT_HANDLE Publisher;
     PCWSTR Provider;
     PCWSTR Channel;
     PCWSTR Computer;
     DWORD EventId;
-    DWORD FullEventId;
-    BYTE Level;
-    USHORT Task;
-    ULONGLONG Keywords;
     ULONGLONG TimeCreated;
     PSID Sid;
     PWSTR Description;
+    PWSTR LevelName;
     PWSTR TaskName;
+    PWSTR OpcodeName;
+    PWSTR Keywords;
+    DWORD KeywordsUsed;
 } EVENT_INFO;
 
 static PCWSTR VariantString(const EVT_VARIANT *Variant)
@@ -723,14 +516,41 @@ static VOID FreeEventInfo(EVENT_INFO *Info)
 {
     Free(Info->System);
     Free(Info->User);
-    Free(Info->Strings);
     Free(Info->Description);
+    Free(Info->LevelName);
     Free(Info->TaskName);
+    Free(Info->OpcodeName);
+    Free(Info->Keywords);
+}
+
+static EVT_HANDLE CachedPublisher;
+static WCHAR CachedProvider[256];
+
+/* A publisher without an identity still names levels and keywords for an unregistered source */
+static EVT_HANDLE OpenPublisher(PCWSTR Provider)
+{
+    if (CachedPublisher && !_wcsicmp(Provider, CachedProvider))
+        return CachedPublisher;
+    if (CachedPublisher)
+        EvtClose(CachedPublisher);
+    CachedPublisher = EvtOpenPublisherMetadata(Session, Provider, NULL, 0, 0);
+    if (!CachedPublisher)
+        CachedPublisher = EvtOpenPublisherMetadata(Session, NULL, NULL, 0, 0);
+    StringCchCopyW(CachedProvider, ARRAYSIZE(CachedProvider), Provider);
+    return CachedPublisher;
+}
+
+static VOID ClosePublisher(VOID)
+{
+    if (CachedPublisher)
+        EvtClose(CachedPublisher);
+    CachedPublisher = NULL;
+    CachedProvider[0] = UNICODE_NULL;
 }
 
 static BOOL CollectEventInfo(EVT_HANDLE Event, EVT_HANDLE SystemContext, EVT_HANDLE UserContext, EVENT_INFO *Info)
 {
-    DWORD Count = 0, i;
+    DWORD Count = 0;
 
     memset(Info, 0, sizeof(*Info));
     Info->System = RenderAlloc(SystemContext, Event, EvtRenderEventValues, &Count);
@@ -747,62 +567,123 @@ static BOOL CollectEventInfo(EVT_HANDLE Event, EVT_HANDLE SystemContext, EVT_HAN
         FreeEventInfo(Info);
         return FALSE;
     }
-    Info->Strings = Alloc((Info->StringCount + 1) * sizeof(PCWSTR));
-    if (!Info->Strings)
-    {
-        FreeEventInfo(Info);
-        SetLastError(ERROR_OUTOFMEMORY);
-        return FALSE;
-    }
-    for (i = 0; i < Info->StringCount; i++)
-        Info->Strings[i] = VariantString(&Info->User[i]);
 
     Info->Provider = VariantString(&Info->System[EvtSystemProviderName]);
     Info->Channel = VariantString(&Info->System[EvtSystemChannel]);
     Info->Computer = VariantString(&Info->System[EvtSystemComputer]);
     Info->EventId = Info->System[EvtSystemEventID].UInt16Val;
-    Info->FullEventId = ((DWORD)Info->System[EvtSystemQualifiers].UInt16Val << 16) | Info->EventId;
-    Info->Level = Info->System[EvtSystemLevel].ByteVal;
-    Info->Task = Info->System[EvtSystemTask].UInt16Val;
-    Info->Keywords = Info->System[EvtSystemKeywords].UInt64Val;
     Info->TimeCreated = Info->System[EvtSystemTimeCreated].FileTimeVal;
     if (Info->System[EvtSystemUserID].Type == EvtVarTypeSid)
         Info->Sid = Info->System[EvtSystemUserID].SidVal;
 
-    Info->Description = GetSourceMessage(Info->Channel, Info->Provider, L"EventMessageFile", Info->FullEventId,
-                                         Info->Strings, Info->StringCount);
-    if (Info->Task)
-        Info->TaskName = GetSourceMessage(Info->Channel, Info->Provider, L"CategoryMessageFile", Info->Task, NULL, 0);
+    Info->Publisher = OpenPublisher(Info->Provider);
+    Info->Description = FormatAlloc(Info->Publisher, Event, EvtFormatMessageEvent, NULL);
+    Info->LevelName = FormatAlloc(Info->Publisher, Event, EvtFormatMessageLevel, NULL);
+    Info->TaskName = FormatAlloc(Info->Publisher, Event, EvtFormatMessageTask, NULL);
+    Info->OpcodeName = FormatAlloc(Info->Publisher, Event, EvtFormatMessageOpcode, NULL);
+    Info->Keywords = FormatAlloc(Info->Publisher, Event, EvtFormatMessageKeyword, &Info->KeywordsUsed);
     return TRUE;
 }
 
-static VOID GetLevelName(BYTE Level, PWSTR Buffer, UINT Count)
+static VOID PrintDescription(const EVENT_INFO *Info)
 {
-    UINT Id;
+    DWORD i;
 
-    switch (Level)
+    if (Info->Description)
     {
-        case 1:  Id = IDS_LEVEL_CRITICAL; break;
-        case 2:  Id = IDS_LEVEL_ERROR; break;
-        case 3:  Id = IDS_LEVEL_WARNING; break;
-        case 5:  Id = IDS_LEVEL_VERBOSE; break;
-        default: Id = IDS_LEVEL_INFORMATION; break;
+        ConPrintf(StdOut, L"%ls \n", Info->Description);
+        return;
     }
-    LoadResString(Id, Buffer, Count);
+    ConResPrintf(StdOut, IDS_DESC_NOT_FOUND, Info->EventId, Info->Provider);
+    for (i = 0; i < Info->StringCount; i++)
+    {
+        ConPuts(StdOut, VariantString(&Info->User[i]));
+        ConPuts(StdOut, L"\n");
+    }
+    ConPuts(StdOut, L"\n");
 }
 
-typedef struct _KEYWORD_NAME
+static DWORD PrintEventText(EVT_HANDLE Event, EVT_HANDLE SystemContext, EVT_HANDLE UserContext, DWORD Index)
 {
-    ULONGLONG Mask;
-    UINT Id;
-} KEYWORD_NAME;
+    EVENT_INFO Info;
+    WCHAR Date[64], Keyword[512], Name[256], Domain[256];
+    PWSTR SidString = NULL;
+    PCWSTR p;
+    DWORD NameLength = ARRAYSIZE(Name), DomainLength = ARRAYSIZE(Domain);
+    SID_NAME_USE Use;
 
-static const KEYWORD_NAME KeywordNames[] =
+    if (!CollectEventInfo(Event, SystemContext, UserContext, &Info))
+        return FailWith(IDS_ERR_RENDER_EVENT, NULL, GetLastError());
+
+    FormatFileTime(Info.TimeCreated, TRUE, TRUE, Date, ARRAYSIZE(Date));
+    Keyword[0] = UNICODE_NULL;
+    if (Info.Keywords)
+    {
+        for (p = Info.Keywords; p < Info.Keywords + Info.KeywordsUsed && *p; p += wcslen(p) + 1)
+        {
+            StringCchCatW(Keyword, ARRAYSIZE(Keyword), p);
+            StringCchCatW(Keyword, ARRAYSIZE(Keyword), L", ");
+        }
+    }
+    if (Info.Sid)
+        ConvertSidToStringSidW(Info.Sid, &SidString);
+
+    ConPrintf(StdOut, L"Event[%lu]\n", Index);
+    ConPrintf(StdOut, L"  Log Name: %ls\n", Info.Channel);
+    ConPrintf(StdOut, L"  Source: %ls\n", Info.Provider);
+    ConPrintf(StdOut, L"  Date: %ls\n", Date);
+    ConPrintf(StdOut, L"  Event ID: %lu\n", Info.EventId);
+    if (Info.TaskName)
+        ConPrintf(StdOut, L"  Task: %ls \n", Info.TaskName);
+    else
+        ConPuts(StdOut, L"  Task: N/A\n");
+    if (Info.LevelName)
+        ConPrintf(StdOut, L"  Level: %ls \n", Info.LevelName);
+    else
+        ConPuts(StdOut, L"  Level: N/A\n");
+    if (Info.OpcodeName)
+        ConPrintf(StdOut, L"  Opcode: %ls \n", Info.OpcodeName);
+    else
+        ConPuts(StdOut, L"  Opcode: N/A\n");
+    ConPrintf(StdOut, L"  Keyword: %ls\n", Keyword[0] ? Keyword : L"N/A");
+    ConPrintf(StdOut, L"  User: %ls\n", SidString ? SidString : L"N/A");
+    if (Info.Sid && LookupAccountSidW(NULL, Info.Sid, Name, &NameLength, Domain, &DomainLength, &Use))
+        ConPrintf(StdOut, L"  User Name: %ls\\%ls\n", Domain, Name);
+    else
+        ConPuts(StdOut, L"  User Name: N/A\n");
+    ConPrintf(StdOut, L"  Computer: %ls\n", Info.Computer);
+    ConPuts(StdOut, L"  Description: \n");
+    PrintDescription(&Info);
+    ConPuts(StdOut, L"\n");
+
+    if (SidString)
+        LocalFree(SidString);
+    FreeEventInfo(&Info);
+    return ERROR_SUCCESS;
+}
+
+static DWORD PrintEventXml(EVT_HANDLE Event, EVT_HANDLE SystemContext, BOOL Rendered)
 {
-    { KEYWORD_AUDIT_FAILURE, IDS_KEYWORD_AUDIT_FAILURE },
-    { KEYWORD_AUDIT_SUCCESS, IDS_KEYWORD_AUDIT_SUCCESS },
-    { KEYWORD_CLASSIC, IDS_KEYWORD_CLASSIC },
-};
+    PEVT_VARIANT System = NULL;
+    PWSTR Xml = NULL;
+    DWORD Count = 0;
+
+    if (Rendered)
+    {
+        System = RenderAlloc(SystemContext, Event, EvtRenderEventValues, &Count);
+        if (System && Count > EvtSystemProviderName)
+            Xml = FormatAlloc(OpenPublisher(VariantString(&System[EvtSystemProviderName])), Event,
+                              EvtFormatMessageXml, NULL);
+        Free(System);
+    }
+    if (!Xml)
+        Xml = RenderAlloc(NULL, Event, EvtRenderEventXml, NULL);
+    if (!Xml)
+        return FailWith(IDS_ERR_RENDER_EVENT, NULL, GetLastError());
+    ConPuts(StdOut, Xml);
+    Free(Xml);
+    return ERROR_SUCCESS;
+}
 
 static VOID PrintXmlEscaped(PCWSTR Text, BOOL Attribute)
 {
@@ -828,168 +709,6 @@ static VOID PrintXmlEscaped(PCWSTR Text, BOOL Attribute)
     }
     if (p > Start)
         ConWrite(StdOut, Start, (DWORD)(p - Start));
-}
-
-static VOID PrintDescription(const EVENT_INFO *Info, BOOL Xml)
-{
-    DWORD i;
-
-    if (Info->Description)
-    {
-        if (Xml)
-            PrintXmlEscaped(Info->Description, FALSE);
-        else
-            ConPrintf(StdOut, L"%ls \n", Info->Description);
-        return;
-    }
-    ConResPrintf(StdOut, IDS_DESC_NOT_FOUND, Info->EventId, Info->Provider);
-    for (i = 0; i < Info->StringCount; i++)
-    {
-        if (Xml)
-            PrintXmlEscaped(Info->Strings[i], FALSE);
-        else
-            ConPuts(StdOut, Info->Strings[i]);
-        ConPuts(StdOut, L"\n");
-    }
-    if (!Xml)
-        ConPuts(StdOut, L"\n");
-}
-
-static DWORD PrintEventText(EVT_HANDLE Event, EVT_HANDLE SystemContext, EVT_HANDLE UserContext, DWORD Index)
-{
-    EVENT_INFO Info;
-    WCHAR Date[64], Level[64], Keyword[256], Name[256], Domain[256];
-    PWSTR SidString = NULL;
-    DWORD NameLength = ARRAYSIZE(Name), DomainLength = ARRAYSIZE(Domain);
-    SID_NAME_USE Use;
-    SIZE_T i;
-
-    if (!CollectEventInfo(Event, SystemContext, UserContext, &Info))
-        return FailWith(IDS_ERR_RENDER_EVENT, NULL, GetLastError());
-
-    FormatFileTime(Info.TimeCreated, TRUE, TRUE, Date, ARRAYSIZE(Date));
-    GetLevelName(Info.Level, Level, ARRAYSIZE(Level));
-    Keyword[0] = UNICODE_NULL;
-    for (i = 0; i < ARRAYSIZE(KeywordNames); i++)
-    {
-        WCHAR Text[64];
-        if (!(Info.Keywords & KeywordNames[i].Mask))
-            continue;
-        LoadResString(KeywordNames[i].Id, Text, ARRAYSIZE(Text));
-        StringCchCatW(Keyword, ARRAYSIZE(Keyword), Text);
-        StringCchCatW(Keyword, ARRAYSIZE(Keyword), L", ");
-    }
-    if (Info.Sid)
-        ConvertSidToStringSidW(Info.Sid, &SidString);
-
-    ConPrintf(StdOut, L"Event[%lu]\n", Index);
-    ConPrintf(StdOut, L"  Log Name: %ls\n", Info.Channel);
-    ConPrintf(StdOut, L"  Source: %ls\n", Info.Provider);
-    ConPrintf(StdOut, L"  Date: %ls\n", Date);
-    ConPrintf(StdOut, L"  Event ID: %lu\n", Info.EventId);
-    if (Info.TaskName)
-        ConPrintf(StdOut, L"  Task: %ls \n", Info.TaskName);
-    else if (Info.Task)
-        ConPrintf(StdOut, L"  Task: %u\n", Info.Task);
-    else
-        ConPuts(StdOut, L"  Task: N/A\n");
-    ConPrintf(StdOut, L"  Level: %ls \n", Level);
-    ConPuts(StdOut, L"  Opcode: N/A\n");
-    ConPrintf(StdOut, L"  Keyword: %ls\n", Keyword[0] ? Keyword : L"N/A");
-    ConPrintf(StdOut, L"  User: %ls\n", SidString ? SidString : L"N/A");
-    if (Info.Sid && LookupAccountSidW(NULL, Info.Sid, Name, &NameLength, Domain, &DomainLength, &Use))
-        ConPrintf(StdOut, L"  User Name: %ls\\%ls\n", Domain, Name);
-    else
-        ConPuts(StdOut, L"  User Name: N/A\n");
-    ConPrintf(StdOut, L"  Computer: %ls\n", Info.Computer);
-    ConPuts(StdOut, L"  Description: \n");
-    PrintDescription(&Info, FALSE);
-    ConPuts(StdOut, L"\n");
-
-    if (SidString)
-        LocalFree(SidString);
-    FreeEventInfo(&Info);
-    return ERROR_SUCCESS;
-}
-
-static VOID GetCultureName(PWSTR Buffer, UINT Count)
-{
-    WCHAR Language[16], Country[16];
-
-    if (GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SISO639LANGNAME, Language, ARRAYSIZE(Language)) &&
-        GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_SISO3166CTRYNAME, Country, ARRAYSIZE(Country)))
-    {
-        StringCchPrintfW(Buffer, Count, L"%ls-%ls", Language, Country);
-        return;
-    }
-    StringCchCopyW(Buffer, Count, L"en-US");
-}
-
-static DWORD PrintEventXml(EVT_HANDLE Event, EVT_HANDLE SystemContext, EVT_HANDLE UserContext, BOOL Rendered)
-{
-    PWSTR Xml, End = NULL, p;
-    EVENT_INFO Info;
-    WCHAR Culture[64], Level[64];
-    BOOL AnyKeyword = FALSE;
-    SIZE_T i;
-
-    Xml = RenderAlloc(NULL, Event, EvtRenderEventXml, NULL);
-    if (!Xml)
-        return FailWith(IDS_ERR_RENDER_EVENT, NULL, GetLastError());
-    if (!Rendered)
-    {
-        ConPuts(StdOut, Xml);
-        Free(Xml);
-        return ERROR_SUCCESS;
-    }
-
-    for (p = wcsstr(Xml, L"</Event>"); p; p = wcsstr(p + 1, L"</Event>"))
-        End = p;
-    if (!End || !CollectEventInfo(Event, SystemContext, UserContext, &Info))
-    {
-        DWORD Error = End ? GetLastError() : ERROR_INVALID_DATA;
-        Free(Xml);
-        return FailWith(IDS_ERR_RENDER_EVENT, NULL, Error);
-    }
-    *End = UNICODE_NULL;
-    ConPuts(StdOut, Xml);
-
-    GetCultureName(Culture, ARRAYSIZE(Culture));
-    GetLevelName(Info.Level, Level, ARRAYSIZE(Level));
-    ConPrintf(StdOut, L"<RenderingInfo Culture='%ls'><Message>", Culture);
-    PrintDescription(&Info, TRUE);
-    ConPuts(StdOut, L"</Message><Level>");
-    PrintXmlEscaped(Level, FALSE);
-    ConPuts(StdOut, L"</Level>");
-    if (Info.TaskName)
-    {
-        ConPuts(StdOut, L"<Task>");
-        PrintXmlEscaped(Info.TaskName, FALSE);
-        ConPuts(StdOut, L"</Task>");
-    }
-    ConPuts(StdOut, L"<Provider>");
-    PrintXmlEscaped(Info.Provider, FALSE);
-    ConPuts(StdOut, L"</Provider>");
-    for (i = 0; i < ARRAYSIZE(KeywordNames); i++)
-    {
-        WCHAR Text[64];
-        if (!(Info.Keywords & KeywordNames[i].Mask))
-            continue;
-        if (!AnyKeyword)
-            ConPuts(StdOut, L"<Keywords>");
-        AnyKeyword = TRUE;
-        LoadResString(KeywordNames[i].Id, Text, ARRAYSIZE(Text));
-        ConPuts(StdOut, L"<Keyword>");
-        PrintXmlEscaped(Text, FALSE);
-        ConPuts(StdOut, L"</Keyword>");
-    }
-    if (AnyKeyword)
-        ConPuts(StdOut, L"</Keywords>");
-    ConPuts(StdOut, L"</RenderingInfo></Event>");
-
-    FreeEventInfo(&Info);
-    Free(Xml);
-    return ERROR_SUCCESS;
 }
 
 static DWORD CmdEnumLogs(int ArgCount, PWSTR *Args)
@@ -1186,6 +905,7 @@ static DWORD CmdSetLog(int ArgCount, PWSTR *Args)
     {
         return FailWith(IDS_ERR_SAVE_CONFIG, Name, ERROR_CALL_NOT_IMPLEMENTED);
     }
+    memset(&Value, 0, sizeof(Value));
     if (OptionValues[OPT_MAXSIZE] && !ParseUInt64(OptionValues[OPT_MAXSIZE], &Value.UInt64Val))
         return UsageError(IDS_ERR_INVALID_VALUE, OptionTyped[OPT_MAXSIZE]);
     if (!GetBoolOption(OPT_RETENTION, FALSE, &Retention, &Error))
@@ -1198,7 +918,6 @@ static DWORD CmdSetLog(int ArgCount, PWSTR *Args)
     if (OptionValues[OPT_MAXSIZE])
     {
         Value.Type = EvtVarTypeUInt64;
-        Value.Count = 0;
         if (!EvtSetChannelConfigProperty(Config, EvtChannelLoggingConfigMaxSize, 0, &Value))
             Error = GetLastError();
     }
@@ -1385,7 +1104,7 @@ static DWORD CmdQueryEvents(int ArgCount, PWSTR *Args)
         if (Format == FormatText)
             Error = PrintEventText(Event, SystemContext, UserContext, Index);
         else
-            Error = PrintEventXml(Event, SystemContext, UserContext, Format == FormatRenderedXml);
+            Error = PrintEventXml(Event, SystemContext, Format == FormatRenderedXml);
         if (!Error && SaveBookmark)
             EvtUpdateBookmark(SaveBookmark, Event);
         EvtClose(Event);
@@ -1406,6 +1125,7 @@ static DWORD CmdQueryEvents(int ArgCount, PWSTR *Args)
     }
 
 done:
+    ClosePublisher();
     if (UserContext) EvtClose(UserContext);
     if (SystemContext) EvtClose(SystemContext);
     if (SaveBookmark) EvtClose(SaveBookmark);
@@ -1464,7 +1184,7 @@ static DWORD CmdNotAvailable(int ArgCount, PWSTR *Args)
     UNREFERENCED_PARAMETER(ArgCount);
     UNREFERENCED_PARAMETER(Args);
 
-    /* TODO: ep, gp, im, um and al need publisher metadata and manifest support in wevtapi */
+    /* TODO: ep, gp, im, um and al need publisher enumeration and manifest support in wevtapi */
     return FailWith(IDS_ERR_COMMAND_UNAVAILABLE, CurrentCommand->Short, ERROR_CALL_NOT_IMPLEMENTED);
 }
 

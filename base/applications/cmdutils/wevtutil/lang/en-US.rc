@@ -312,17 +312,6 @@ wevtutil.exe cl Application /bu:C:\\admin\\backups\\al0306.evtx\n"
     IDS_EVT_INVALID_QUERY "The specified query is invalid.\n"
     IDS_EVT_CHANNEL_NOT_FOUND "The specified channel could not be found.\n"
 
-    IDS_LEVEL_LOGALWAYS "Log Always"
-    IDS_LEVEL_CRITICAL "Critical"
-    IDS_LEVEL_ERROR "Error"
-    IDS_LEVEL_WARNING "Warning"
-    IDS_LEVEL_INFORMATION "Information"
-    IDS_LEVEL_VERBOSE "Verbose"
-
-    IDS_KEYWORD_CLASSIC "Classic"
-    IDS_KEYWORD_AUDIT_SUCCESS "Audit Success"
-    IDS_KEYWORD_AUDIT_FAILURE "Audit Failure"
-
     IDS_DESC_NOT_FOUND "The description for Event ID %u from source %ls cannot be found. Either the component that raises this event is not installed on your local computer or the installation is corrupted. You can install or repair the component on the local computer.\n\
 \n\
 If the event originated on another computer, the display information had to be saved with the event.\n\
