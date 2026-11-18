@@ -2882,7 +2882,6 @@ BasepCaptureExtendedAttributes(
         else if (Attribute->Attribute == PROC_THREAD_ATTRIBUTE_HANDLE_LIST)
         {
             SIZE_T ListSize;
-            SIZE_T HandleIndex;
 
             if (!InheritHandles)
             {
@@ -2900,18 +2899,32 @@ BasepCaptureExtendedAttributes(
 
             RtlCopyMemory(*HandleList, Attribute->Value, ListSize);
             *HandleCount = ListSize / sizeof(HANDLE);
-            for (HandleIndex = 0; HandleIndex < *HandleCount; HandleIndex++)
-            {
-                DWORD HandleFlags;
+        }
+    }
 
-                if (!GetHandleInformation((*HandleList)[HandleIndex], &HandleFlags) || !(HandleFlags & HANDLE_FLAG_INHERIT))
-                {
-                    RtlFreeHeap(RtlGetProcessHeap(), 0, *HandleList);
-                    *HandleList = NULL;
-                    *HandleCount = 0;
-                    SetLastError(ERROR_INVALID_PARAMETER);
-                    return FALSE;
-                }
+    /* The listed values are handles of the parent: they can be looked up here only when that is this process */
+    if (*HandleList && *ParentProcess == NtCurrentProcess())
+    {
+        SIZE_T HandleIndex;
+
+        /* A list with a NULL entry is for the kernel to judge: Windows starts such a process without inherited handles */
+        for (HandleIndex = 0; HandleIndex < *HandleCount; HandleIndex++)
+        {
+            if (!(*HandleList)[HandleIndex])
+                return TRUE;
+        }
+
+        for (HandleIndex = 0; HandleIndex < *HandleCount; HandleIndex++)
+        {
+            DWORD HandleFlags;
+
+            if (!GetHandleInformation((*HandleList)[HandleIndex], &HandleFlags) || !(HandleFlags & HANDLE_FLAG_INHERIT))
+            {
+                RtlFreeHeap(RtlGetProcessHeap(), 0, *HandleList);
+                *HandleList = NULL;
+                *HandleCount = 0;
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
             }
         }
     }

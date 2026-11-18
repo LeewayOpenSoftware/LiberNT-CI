@@ -8,6 +8,7 @@ list(APPEND SOURCE
     ControlServiceEx.c
     CopySid.c
     CreateProcessWithToken.c
+    CreateProcessWithTokenChild.c
     CreateService.c
     CredManager.c
     CryptCreateHash.c
