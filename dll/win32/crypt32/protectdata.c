@@ -25,8 +25,10 @@
  *
  * The data description round-trips inside the protected payload: it is
  * prepended to the plaintext before protection and split back out on
- * unprotection, so it is covered by the server's integrity check. pPromptStruct
- * is ignored. No Windows master-key blob-format compatibility yet.
+ * unprotection, so it is covered by the server's integrity check. The
+ * Description RPC parameter is therefore always NULL. pPromptStruct is
+ * ignored. Blobs created by the old Wine format are no longer accepted.
+ * No Windows master-key blob-format compatibility yet.
  */
 
 #include <stdarg.h>
@@ -42,7 +44,16 @@
 WINE_DEFAULT_DEBUG_CHANNEL(crypt);
 
 #ifndef STATUS_SUCCESS
-#define STATUS_SUCCESS ((LONG)0x00000000)
+#define STATUS_SUCCESS            ((LONG)0x00000000)
+#endif
+#ifndef STATUS_UNSUCCESSFUL
+#define STATUS_UNSUCCESSFUL       ((LONG)0xC0000001)
+#endif
+#ifndef STATUS_INVALID_PARAMETER
+#define STATUS_INVALID_PARAMETER  ((LONG)0xC000000D)
+#endif
+#ifndef STATUS_ACCESS_DENIED
+#define STATUS_ACCESS_DENIED      ((LONG)0xC0000022)
 #endif
 
 ULONG WINAPI RtlNtStatusToDosError(LONG Status);
@@ -61,6 +72,7 @@ static handle_t dpapi_bind(void)
 {
     RPC_WSTR string_binding = NULL;
     handle_t binding = NULL;
+    RPC_SECURITY_QOS qos;
     RPC_STATUS status;
 
     status = RpcStringBindingComposeW(NULL,
@@ -77,6 +89,16 @@ static handle_t dpapi_bind(void)
     if (status != RPC_S_OK)
         return NULL;
 
+    /* Authenticate and seal the channel. The data (and the description) travel over the pipe, so use
+     * packet privacy; the server only queries the caller's token, so identification-level QOS is
+     * enough. Best effort: if the SSP is unavailable the server-side caller check still applies. */
+    qos.Version = RPC_C_SECURITY_QOS_VERSION;
+    qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
+    qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
+    qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
+    RpcBindingSetAuthInfoExW(binding, NULL, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+                             RPC_C_AUTHN_WINNT, NULL, 0, &qos);
+
     return binding;
 }
 
@@ -86,17 +108,40 @@ static void dpapi_unbind(handle_t binding)
         RpcBindingFree(&binding);
 }
 
-/* Map the server NTSTATUS onto a Win32 error. A failed unprotect is reported as
- * ERROR_INVALID_DATA (bad, tampered or foreign blob, or a key the caller cannot
- * derive), matching what callers expect from a blob they cannot open. */
+/* A failed PROTECT: ACCESS_DENIED stays itself (e.g. the machine path rejecting a non-local caller);
+ * everything else, including the >16 MiB-ish overflow (STATUS_INVALID_PARAMETER), maps naturally. */
 static DWORD dpapi_protect_error(LONG status)
 {
-    if (status == STATUS_SUCCESS)
-        return ERROR_SUCCESS;
+    if (status == STATUS_ACCESS_DENIED)
+        return ERROR_ACCESS_DENIED;
     return RtlNtStatusToDosError(status);
 }
 
-/* Prepend the description to the plaintext: [cbDescr: DWORD][descr WCHARs incl. NUL][data]. */
+/* A failed UNPROTECT: a bad, tampered or foreign blob (parse failure or MAC mismatch) is corruption;
+ * a missing logon key (STATUS_NOT_FOUND) or access denial keep their own meaning so the caller can
+ * tell "cannot open this blob" from "this is not my data". */
+static DWORD dpapi_unprotect_error(LONG status)
+{
+    switch (status)
+    {
+        case STATUS_INVALID_PARAMETER:
+        case STATUS_UNSUCCESSFUL:
+            return ERROR_INVALID_DATA;
+        case STATUS_ACCESS_DENIED:
+            return ERROR_ACCESS_DENIED;
+        default:
+            return RtlNtStatusToDosError(status);
+    }
+}
+
+static BOOL dpapi_blob_arg_ok(const DATA_BLOB *blob)
+{
+    return blob == NULL || blob->cbData == 0 || blob->pbData != NULL;
+}
+
+/* Prepend the description to the plaintext: [cbDescr: DWORD][descr WCHARs incl. NUL][data]. The
+ * wrapper adds this header, so the largest plaintext this accepts is a little under the server's
+ * 16 MiB cap; the server returns STATUS_INVALID_PARAMETER (ERROR_INVALID_PARAMETER) past it. */
 static BOOL dpapi_wrap_plaintext(LPCWSTR szDataDescr, const DATA_BLOB *pDataIn,
                                  BYTE **ppWrapped, DWORD *pcbWrapped)
 {
@@ -158,6 +203,7 @@ static BOOL dpapi_unwrap_plaintext(const BYTE *pWrapped, DWORD cbWrapped,
         *ppszDataDescr = LocalAlloc(LPTR, cbDescr);
         if (*ppszDataDescr == NULL)
         {
+            SecureZeroMemory(pDataOut->pbData, cbData);
             LocalFree(pDataOut->pbData);
             pDataOut->pbData = NULL;
             pDataOut->cbData = 0;
@@ -186,12 +232,14 @@ BOOL WINAPI CryptProtectData(DATA_BLOB* pDataIn,
     BYTE *wrapped = NULL;
     DWORD cbWrapped = 0;
     LONG status = STATUS_SUCCESS;
+    BOOL rpc_failed = FALSE;
     BOOL rc = FALSE;
 
     TRACE("(%p %s %p %p %p %08lx %p)\n", pDataIn, debugstr_w(szDataDescr),
           pOptionalEntropy, pvReserved, pPromptStruct, dwFlags, pDataOut);
 
-    if (!pDataIn || !pDataOut || pvReserved != NULL)
+    if (!pDataIn || !pDataOut || pvReserved != NULL ||
+        !dpapi_blob_arg_ok(pDataIn) || !dpapi_blob_arg_ok(pOptionalEntropy))
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
@@ -211,7 +259,7 @@ BOOL WINAPI CryptProtectData(DATA_BLOB* pDataIn,
     {
         SecureZeroMemory(wrapped, cbWrapped);
         HeapFree(GetProcessHeap(), 0, wrapped);
-        SetLastError(ERROR_INVALID_DATA);
+        SetLastError(RPC_S_SERVER_UNAVAILABLE);
         return FALSE;
     }
 
@@ -229,11 +277,16 @@ BOOL WINAPI CryptProtectData(DATA_BLOB* pDataIn,
     }
     RpcExcept(EXCEPTION_EXECUTE_HANDLER)
     {
+        rpc_failed = TRUE;
         status = RpcExceptionCode();
     }
     RpcEndExcept
 
-    if (status == STATUS_SUCCESS)
+    if (rpc_failed)
+    {
+        SetLastError(status);
+    }
+    else if (status == STATUS_SUCCESS)
     {
         pDataOut->pbData = LocalAlloc(LPTR, data_out.cbData != 0 ? data_out.cbData : 1);
         if (pDataOut->pbData != NULL)
@@ -280,6 +333,7 @@ BOOL WINAPI CryptUnprotectData(DATA_BLOB* pDataIn,
     handle_t binding;
     DPAPI_BLOB data_in = {0}, entropy = {0}, data_out = {0};
     LONG status = STATUS_SUCCESS;
+    BOOL rpc_failed = FALSE;
     BOOL rc = FALSE;
 
     TRACE("(%p %p %p %p %p %08lx %p)\n", pDataIn, ppszDataDescr,
@@ -288,7 +342,8 @@ BOOL WINAPI CryptUnprotectData(DATA_BLOB* pDataIn,
     if (ppszDataDescr != NULL)
         *ppszDataDescr = NULL;
 
-    if (!pDataIn || !pDataOut || pvReserved != NULL)
+    if (!pDataIn || !pDataOut || pvReserved != NULL ||
+        !dpapi_blob_arg_ok(pDataIn) || !dpapi_blob_arg_ok(pOptionalEntropy))
     {
         SetLastError(ERROR_INVALID_PARAMETER);
         return FALSE;
@@ -300,7 +355,7 @@ BOOL WINAPI CryptUnprotectData(DATA_BLOB* pDataIn,
     binding = dpapi_bind();
     if (binding == NULL)
     {
-        SetLastError(ERROR_INVALID_DATA);
+        SetLastError(RPC_S_SERVER_UNAVAILABLE);
         return FALSE;
     }
 
@@ -318,11 +373,16 @@ BOOL WINAPI CryptUnprotectData(DATA_BLOB* pDataIn,
     }
     RpcExcept(EXCEPTION_EXECUTE_HANDLER)
     {
+        rpc_failed = TRUE;
         status = RpcExceptionCode();
     }
     RpcEndExcept
 
-    if (status == STATUS_SUCCESS)
+    if (rpc_failed)
+    {
+        SetLastError(status);
+    }
+    else if (status == STATUS_SUCCESS)
     {
         if (dpapi_unwrap_plaintext(data_out.pbData, data_out.cbData, ppszDataDescr, pDataOut))
             rc = TRUE;
@@ -331,7 +391,7 @@ BOOL WINAPI CryptUnprotectData(DATA_BLOB* pDataIn,
     }
     else
     {
-        SetLastError(ERROR_INVALID_DATA);
+        SetLastError(dpapi_unprotect_error(status));
     }
 
     if (data_out.pbData != NULL)
