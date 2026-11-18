@@ -20,7 +20,14 @@ typedef struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION
 {
     struct _SEP_LOGON_SESSION_TERMINATED_NOTIFICATION *Next;
     PSE_LOGON_SESSION_TERMINATED_ROUTINE CallbackRoutine;
+    PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutineEx;
+    PVOID Context;
 } SEP_LOGON_SESSION_TERMINATED_NOTIFICATION, *PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION;
+
+static
+VOID
+SepNotifyLogonSessionTerminated(
+    _In_ PLUID LogonId);
 
 typedef struct _SEP_LSA_NOTICE
 {
@@ -99,7 +106,7 @@ static
 PSEP_LOGON_SESSION_REFERENCES
 SepRmFindLogonSessionLocked(
     _In_ PLUID LogonLuid);
-static KGUARDED_MUTEX SepRmNotificationLock;
+static EX_PUSH_LOCK SepRmNotificationLock;
 
 static
 PKGUARDED_MUTEX
@@ -229,7 +236,7 @@ SeRmInitPhase0(VOID)
     for (i = 0; i < MAX_LOGON_SESSION_LISTS_IN_ARRAY; i++)
         KeInitializeGuardedMutex(&SepRmDbLock[i]);
     KeInitializeGuardedMutex(&SepRmPairLock);
-    KeInitializeGuardedMutex(&SepRmNotificationLock);
+    ExInitializePushLock(&SepRmNotificationLock);
 
     KeInitializeGuardedMutex(&SepLsaNoticeLock);
     InitializeListHead(&SepLsaNoticeList);
@@ -1267,6 +1274,7 @@ SepRmDereferenceLogonSession(
     PTOKEN FullToken, PairFull, PairLimited;
     LUID LinkedLogonId;
     BOOLEAN HadPair;
+    BOOLEAN NotifyTermination;
     PSEP_LOGON_SESSION_REFERENCES CurrentSession;
 
     DPRINT("SepRmDereferenceLogonSession(%08lx:%08lx)\n",
@@ -1291,12 +1299,14 @@ SepRmDereferenceLogonSession(
             DeviceMap = NULL;
             FullToken = NULL;
             HadPair = FALSE;
+            NotifyTermination = FALSE;
             PairFull = NULL;
             PairLimited = NULL;
             if (RefCount == 0)
             {
                 DeviceMap = CurrentSession->pDeviceMap;
                 CurrentSession->pDeviceMap = NULL;
+                NotifyTermination = (CurrentSession->Flags & SEP_LOGON_SESSION_TERMINATION_NOTIFY) != 0;
                 PairFull = CurrentSession->FullToken;
                 PairLimited = CurrentSession->LimitedToken;
                 HadPair = (PairFull != NULL || PairLimited != NULL);
@@ -1348,7 +1358,9 @@ SepRmDereferenceLogonSession(
                 if (!SepIsWellKnownLogonId(LogonLuid))
                     SepQueueLsaNotice(LogonLuid);
 
-                /* FIXME: Alert filesystems that a logon is about to be deleted */
+                /* Alert the file systems that asked for it with SeMarkLogonSessionForTerminationNotification */
+                if (NotifyTermination)
+                    SepNotifyLogonSessionTerminated(LogonLuid);
             }
 
             return STATUS_SUCCESS;
@@ -1849,17 +1861,21 @@ SeRegisterLogonSessionTerminatedRoutine(
         return STATUS_INSUFFICIENT_RESOURCES;
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmNotificationLock);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
 
     /* Set the callback routine */
     Notification->CallbackRoutine = CallbackRoutine;
+    Notification->CallbackRoutineEx = NULL;
+    Notification->Context = NULL;
 
     /* Insert the new notification item into the list */
     Notification->Next = SepLogonNotifications;
     SepLogonNotifications = Notification;
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmNotificationLock);
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
 
     return STATUS_SUCCESS;
 }
@@ -1892,7 +1908,8 @@ SeUnregisterLogonSessionTerminatedRoutine(
         return STATUS_INVALID_PARAMETER;
 
     /* Acquire the database lock */
-    KeAcquireGuardedMutex(&SepRmNotificationLock);
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
 
     /* Loop all registered notification items */
     for (Current = SepLogonNotifications;
@@ -1926,9 +1943,122 @@ SeUnregisterLogonSessionTerminatedRoutine(
     }
 
     /* Release the database lock */
-    KeReleaseGuardedMutex(&SepRmNotificationLock);
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
 
     return Status;
+}
+
+static
+VOID
+SepNotifyLogonSessionTerminated(
+    _In_ PLUID LogonId)
+{
+    PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION Current;
+    LUID LocalLogonId = *LogonId;
+
+    PAGED_CODE();
+
+    /* Shared: routines run concurrently and must not register or unregister from inside the callback */
+    KeEnterCriticalRegion();
+    ExAcquirePushLockShared(&SepRmNotificationLock);
+    for (Current = SepLogonNotifications; Current != NULL; Current = Current->Next)
+    {
+        if (Current->CallbackRoutineEx != NULL)
+            Current->CallbackRoutineEx(&LocalLogonId, PsGetHostSilo(), Current->Context);
+        else
+            Current->CallbackRoutine(&LocalLogonId);
+    }
+    ExReleasePushLockShared(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
+}
+
+/**
+ * @brief
+ * Registers a callback, with a caller context, that is called once a
+ * logon session marked for termination notification terminates.
+ *
+ * @return
+ * STATUS_SUCCESS, STATUS_INVALID_PARAMETER without a callback routine, or
+ * STATUS_INSUFFICIENT_RESOURCES.
+ */
+NTSTATUS
+NTAPI
+SeRegisterLogonSessionTerminatedRoutineEx(
+    _In_ PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutine,
+    _In_ PVOID Context)
+{
+    PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION Notification;
+    PAGED_CODE();
+
+    if (CallbackRoutine == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    Notification = ExAllocatePoolWithTag(PagedPool,
+                                         sizeof(SEP_LOGON_SESSION_TERMINATED_NOTIFICATION),
+                                         TAG_LOGON_NOTIFICATION);
+    if (Notification == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Notification->CallbackRoutine = NULL;
+    Notification->CallbackRoutineEx = CallbackRoutine;
+    Notification->Context = Context;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
+    Notification->Next = SepLogonNotifications;
+    SepLogonNotifications = Notification;
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
+
+    return STATUS_SUCCESS;
+}
+
+/**
+ * @brief
+ * Un-registers a callback registered by SeRegisterLogonSessionTerminatedRoutineEx
+ * with the same context.
+ *
+ * @return
+ * STATUS_SUCCESS, STATUS_INVALID_PARAMETER without a callback routine, or
+ * STATUS_NOT_FOUND.
+ */
+NTSTATUS
+NTAPI
+SeUnregisterLogonSessionTerminatedRoutineEx(
+    _In_ PSE_LOGON_SESSION_TERMINATED_ROUTINE_EX CallbackRoutine,
+    _In_ PVOID Context)
+{
+    PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION Current, Previous = NULL;
+    PAGED_CODE();
+
+    if (CallbackRoutine == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    KeEnterCriticalRegion();
+    ExAcquirePushLockExclusive(&SepRmNotificationLock);
+    for (Current = SepLogonNotifications; Current != NULL; Current = Current->Next)
+    {
+        if (Current->CallbackRoutineEx == CallbackRoutine && Current->Context == Context)
+            break;
+        Previous = Current;
+    }
+
+    if (Current != NULL)
+    {
+        if (Previous == NULL)
+            SepLogonNotifications = Current->Next;
+        else
+            Previous->Next = Current->Next;
+    }
+    ExReleasePushLockExclusive(&SepRmNotificationLock);
+    KeLeaveCriticalRegion();
+
+    if (Current == NULL)
+        return STATUS_NOT_FOUND;
+
+    ExFreePoolWithTag(Current, TAG_LOGON_NOTIFICATION);
+    return STATUS_SUCCESS;
 }
 
 

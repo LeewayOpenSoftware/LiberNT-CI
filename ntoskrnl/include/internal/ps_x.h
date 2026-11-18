@@ -57,6 +57,34 @@ PspRunCreateThreadNotifyRoutines(IN PETHREAD CurrentThread,
     }
 }
 
+/* Routines of PsCreateThreadNotifyNonSystem: they run on the user thread itself */
+FORCEINLINE
+VOID
+PspRunNonSystemThreadNotifyRoutines(IN PETHREAD CurrentThread,
+                                    IN BOOLEAN Create)
+{
+    ULONG i;
+
+    ASSERT(CurrentThread == PsGetCurrentThread());
+
+    /* An exit is reported only for a thread whose creation was reported */
+    if (Create)
+        CurrentThread->NonSystemThreadNotified = TRUE;
+    else if (!CurrentThread->NonSystemThreadNotified)
+        return;
+
+    if (PspNonSystemThreadNotifyRoutineCount)
+    {
+        for (i = 0; i < PSP_MAX_CREATE_THREAD_NOTIFY; i++)
+        {
+            ExDoCallBack(&PspNonSystemThreadNotifyRoutine[i],
+                         CurrentThread->Cid.UniqueProcess,
+                         CurrentThread->Cid.UniqueThread,
+                         (PVOID)(ULONG_PTR)Create);
+        }
+    }
+}
+
 FORCEINLINE
 VOID
 PspRunCreateProcessNotifyRoutines(IN PEPROCESS CurrentProcess,

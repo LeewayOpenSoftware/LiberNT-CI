@@ -192,6 +192,46 @@ NTAPI
 PsGetThreadServerSilo(
   IN PETHREAD Thread);
 
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetJobSilo(
+  _In_ struct _EJOB *Job,
+  _Out_ PESILO *Silo);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsGetJobServerSilo(
+  _In_opt_ struct _EJOB *Job,
+  _Outptr_ PESILO *ServerSilo);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+GUID*
+NTAPI
+PsGetSiloContainerId(
+  _In_ PESILO Silo);
+
+NTKERNELAPI
+LONGLONG
+NTAPI
+PsGetThreadCreateTime(
+  _In_ PETHREAD Thread);
+
+typedef enum _PSCREATETHREADNOTIFYTYPE {
+  PsCreateThreadNotifyNonSystem = 0,
+  PsCreateThreadNotifySubsystems = 1
+} PSCREATETHREADNOTIFYTYPE;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsSetCreateThreadNotifyRoutineEx(
+  _In_ PSCREATETHREADNOTIFYTYPE NotifyType,
+  _In_ PVOID NotifyInformation);
+
 $endif (_NTDDK_)
 
 $if (_NTIFS_)
