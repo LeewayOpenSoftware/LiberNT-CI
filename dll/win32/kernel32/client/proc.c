@@ -3410,11 +3410,79 @@ BasepIsTokenElevated(
 
 static
 BOOLEAN
+BasepIsInstallerImage(
+    _In_ LPCWSTR lpApplicationName)
+{
+    LPCWSTR FileName;
+    WCHAR LowerName[MAX_PATH];
+    PWCHAR DotPos;
+    SIZE_T i;
+
+    if (!lpApplicationName)
+        return FALSE;
+
+    FileName = wcsrchr(lpApplicationName, L'\\');
+    if (!FileName)
+        FileName = lpApplicationName;
+    else
+        FileName++;
+
+    for (i = 0; i < MAX_PATH - 1 && FileName[i]; i++)
+        LowerName[i] = towlower(FileName[i]);
+    LowerName[i] = UNICODE_NULL;
+
+    DotPos = wcsrchr(LowerName, L'.');
+    if (DotPos)
+        *DotPos = UNICODE_NULL;
+
+    return wcsstr(LowerName, L"setup") != NULL ||
+           wcsstr(LowerName, L"install") != NULL ||
+           wcsstr(LowerName, L"update") != NULL;
+}
+
+static
+BOOLEAN
+BasepIsInstallerDetectionEnabled(void)
+{
+    HKEY PolicyKey;
+    DWORD EnableLUA = 0;
+    DWORD EnableInstaller = 1;
+    DWORD Value, Size, Type;
+    LONG Result;
+
+    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                          0,
+                          KEY_READ,
+                          &PolicyKey);
+    if (Result != ERROR_SUCCESS)
+        return FALSE;
+
+    Size = sizeof(Value);
+    if (RegQueryValueExW(PolicyKey, L"EnableLUA", NULL, &Type, (LPBYTE)&Value, &Size) == ERROR_SUCCESS &&
+        Type == REG_DWORD && Size == sizeof(DWORD))
+        EnableLUA = Value;
+
+    Size = sizeof(Value);
+    Result = RegQueryValueExW(PolicyKey, L"EnableInstallerDetection", NULL, &Type,
+                              (LPBYTE)&Value, &Size);
+    if (Result == ERROR_SUCCESS && Type == REG_DWORD && Size == sizeof(DWORD))
+        EnableInstaller = Value;
+    /* An absent EnableInstallerDetection defaults to 1 on Windows client. */
+
+    RegCloseKey(PolicyKey);
+
+    return EnableLUA == 1 && EnableInstaller == 1;
+}
+
+static
+BOOLEAN
 BasepImageRequiresElevation(
     _In_opt_ HANDLE hUserToken,
     _In_ LPCWSTR lpApplicationName,
     _In_opt_ LPVOID lpEnvironment,
-    _In_ DWORD dwCreationFlags)
+    _In_ DWORD dwCreationFlags,
+    _In_ USHORT ImageMachine)
 {
     ACTIVATION_CONTEXT_RUN_LEVEL_INFORMATION RunLevel;
     ACTCTXW ActCtx;
@@ -3433,27 +3501,42 @@ BasepImageRequiresElevation(
     ActCtx.lpSource = lpApplicationName;
     ActCtx.lpResourceName = MAKEINTRESOURCEW(1);
     ActCtxHandle = CreateActCtxW(&ActCtx);
-    if (ActCtxHandle == INVALID_HANDLE_VALUE)
+    if (ActCtxHandle != INVALID_HANDLE_VALUE)
     {
-        SetLastError(LastError);
-        return FALSE;
+        RtlZeroMemory(&RunLevel, sizeof(RunLevel));
+        Queried = QueryActCtxW(0,
+                               ActCtxHandle,
+                               NULL,
+                               RunlevelInformationInActivationContext,
+                               &RunLevel,
+                               sizeof(RunLevel),
+                               NULL);
+        ReleaseActCtx(ActCtxHandle);
+
+        if (Queried && RunLevel.RunLevel == ACTCTX_RUN_LEVEL_REQUIRE_ADMIN)
+        {
+            SetLastError(LastError);
+            return !BasepEnvironmentHasRunAsInvoker(lpEnvironment, dwCreationFlags);
+        }
+
+        if (Queried && RunLevel.RunLevel != ACTCTX_RUN_LEVEL_UNSPECIFIED)
+        {
+            SetLastError(LastError);
+            return FALSE;
+        }
+
+        /* A manifest without requestedExecutionLevel counts as unmanifested. */
     }
 
-    RtlZeroMemory(&RunLevel, sizeof(RunLevel));
-    Queried = QueryActCtxW(0,
-                           ActCtxHandle,
-                           NULL,
-                           RunlevelInformationInActivationContext,
-                           &RunLevel,
-                           sizeof(RunLevel),
-                           NULL);
-    ReleaseActCtx(ActCtxHandle);
     SetLastError(LastError);
 
-    if (!Queried || RunLevel.RunLevel != ACTCTX_RUN_LEVEL_REQUIRE_ADMIN)
-        return FALSE;
+    /* Windows applies installer detection to 32-bit x86 targets only. */
+    if (BasepIsInstallerImage(lpApplicationName) &&
+        ImageMachine == IMAGE_FILE_MACHINE_I386 &&
+        BasepIsInstallerDetectionEnabled())
+        return TRUE;
 
-    return !BasepEnvironmentHasRunAsInvoker(lpEnvironment, dwCreationFlags);
+    return FALSE;
 }
 
 /*
@@ -4397,7 +4480,7 @@ StartScan:
     }
 
     if (NT_SUCCESS(Status) &&
-        BasepImageRequiresElevation(hUserToken, lpApplicationName, lpEnvironment, dwCreationFlags))
+        BasepImageRequiresElevation(hUserToken, lpApplicationName, lpEnvironment, dwCreationFlags, ImageMachine))
     {
         DPRINT1("Image %S requires elevation\n", lpApplicationName);
         SetLastError(ERROR_ELEVATION_REQUIRED);

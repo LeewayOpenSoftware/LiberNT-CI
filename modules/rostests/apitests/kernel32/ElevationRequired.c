@@ -43,6 +43,46 @@ MakeImage(PCWSTR Path, PCSTR Level)
 }
 
 static BOOL
+MakeUnmanifestedImage(PCWSTR Path)
+{
+    WCHAR Self[MAX_PATH];
+
+    if (!GetModuleFileNameW(NULL, Self, ARRAYSIZE(Self)))
+        return FALSE;
+    return CopyFileW(Self, Path, FALSE);
+}
+
+static BOOL
+MakeNoRunLevelImage(PCWSTR Path)
+{
+    WCHAR Self[MAX_PATH];
+    CHAR Manifest[1024];
+    HANDLE Update;
+
+    if (!GetModuleFileNameW(NULL, Self, ARRAYSIZE(Self)))
+        return FALSE;
+    if (!CopyFileW(Self, Path, FALSE))
+        return FALSE;
+
+    StringCbCopyA(Manifest, sizeof(Manifest),
+                  "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>"
+                  "<assembly xmlns=\"urn:schemas-microsoft-com:asm.v1\" manifestVersion=\"1.0\">"
+                  "<assemblyIdentity name=\"NoRunLevel\" version=\"1.0.0.0\" "
+                  "processorArchitecture=\"*\" type=\"win32\"/></assembly>");
+    Update = BeginUpdateResourceW(Path, TRUE);
+    if (!Update)
+        return FALSE;
+    if (!UpdateResourceW(Update, (LPCWSTR)RT_MANIFEST, MAKEINTRESOURCEW(1),
+                         MAKELANGID(LANG_NEUTRAL, SUBLANG_NEUTRAL),
+                         Manifest, (DWORD)strlen(Manifest)))
+    {
+        EndUpdateResourceW(Update, TRUE);
+        return FALSE;
+    }
+    return EndUpdateResourceW(Update, FALSE);
+}
+
+static BOOL
 IsElevated(HANDLE Token)
 {
     TOKEN_ELEVATION Elevation;
@@ -60,6 +100,32 @@ IsElevated(HANDLE Token)
     if (Process)
         CloseHandle(Process);
     return !Ret || Elevation.TokenIsElevated;
+}
+
+static BOOL
+Is32BitX86Image(PCWSTR Path)
+{
+    HANDLE File;
+    IMAGE_DOS_HEADER DosHeader;
+    IMAGE_FILE_HEADER FileHeader;
+    DWORD Signature, Read;
+    DWORD Machine = 0;
+
+    File = CreateFileW(Path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    if (File == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    if (ReadFile(File, &DosHeader, sizeof(DosHeader), &Read, NULL) &&
+        Read == sizeof(DosHeader) && DosHeader.e_magic == IMAGE_DOS_SIGNATURE &&
+        SetFilePointer(File, DosHeader.e_lfanew, NULL, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+        ReadFile(File, &Signature, sizeof(Signature), &Read, NULL) &&
+        Read == sizeof(Signature) && Signature == IMAGE_NT_SIGNATURE &&
+        ReadFile(File, &FileHeader, sizeof(FileHeader), &Read, NULL) &&
+        Read == sizeof(FileHeader))
+        Machine = FileHeader.Machine;
+
+    CloseHandle(File);
+    return Machine == IMAGE_FILE_MACHINE_I386;
 }
 
 static DWORD
@@ -166,4 +232,97 @@ Cleanup:
     DeleteFileW(Admin);
     DeleteFileW(Invoker);
     DeleteFileW(Highest);
+}
+
+static BOOL
+AreInstallerDetectionPoliciesEnabled(void)
+{
+    HKEY PolicyKey;
+    DWORD EnableLUA = 0;
+    DWORD EnableInstaller = 0;
+    DWORD Size;
+    LONG Result;
+
+    Result = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System",
+                          0,
+                          KEY_READ,
+                          &PolicyKey);
+    if (Result != ERROR_SUCCESS)
+        return FALSE;
+
+    Size = sizeof(EnableLUA);
+    RegQueryValueExW(PolicyKey, L"EnableLUA", NULL, NULL, (LPBYTE)&EnableLUA, &Size);
+
+    Size = sizeof(EnableInstaller);
+    Result = RegQueryValueExW(PolicyKey, L"EnableInstallerDetection", NULL, NULL,
+                              (LPBYTE)&EnableInstaller, &Size);
+    RegCloseKey(PolicyKey);
+
+    return EnableLUA == 1 && Result == ERROR_SUCCESS && EnableInstaller == 1;
+}
+
+START_TEST(InstallerDetection)
+{
+    WCHAR Dir[MAX_PATH], SetupExe[MAX_PATH], SetupInvoker[MAX_PATH], SetupNoLevel[MAX_PATH];
+    WCHAR PlainEnv[] = L"SystemRoot=C:\\Windows\0";
+    HANDLE Restricted;
+    DWORD Error;
+
+    /* kernel32_apitest.exe has no manifest (version.rc and UI language .rc only),
+       so the copied image is truly unmanifested */
+    if (!AreInstallerDetectionPoliciesEnabled())
+    {
+        skip("EnableLUA or EnableInstallerDetection not both set to 1\n");
+        return;
+    }
+
+    GetTempPathW(ARRAYSIZE(Dir), Dir);
+    StringCchPrintfW(SetupExe, ARRAYSIZE(SetupExe), L"%ssetup_d1_test.exe", Dir);
+    StringCchPrintfW(SetupInvoker, ARRAYSIZE(SetupInvoker), L"%ssetup_d1_asInvoker.exe", Dir);
+    StringCchPrintfW(SetupNoLevel, ARRAYSIZE(SetupNoLevel), L"%ssetup_d1_noLevel.exe", Dir);
+
+    if (!MakeUnmanifestedImage(SetupExe) ||
+        !MakeImage(SetupInvoker, "asInvoker") ||
+        !MakeNoRunLevelImage(SetupNoLevel))
+    {
+        skip("Cannot build the test images (error %lu)\n", GetLastError());
+        goto Cleanup;
+    }
+
+    Restricted = MakeNonAdminToken();
+    if (!Restricted || IsElevated(Restricted))
+    {
+        skip("No non-elevated token available\n");
+    }
+    else
+    {
+        Error = Launch(Restricted, SetupExe, PlainEnv);
+        if (Is32BitX86Image(SetupExe))
+            ok(Error == ERROR_ELEVATION_REQUIRED, "unmanifested setup.exe: got %lu (expected %lu)\n",
+               Error, (DWORD)ERROR_ELEVATION_REQUIRED);
+        else
+            ok(Error != ERROR_ELEVATION_REQUIRED,
+               "non-x86-32 target: installer detection does not apply, got %lu\n", Error);
+
+        Error = Launch(Restricted, SetupInvoker, PlainEnv);
+        ok(Error != ERROR_ELEVATION_REQUIRED,
+           "manifested asInvoker setup.exe: got %lu (should not be elevation required)\n", Error);
+
+        Error = Launch(Restricted, SetupNoLevel, PlainEnv);
+        if (Is32BitX86Image(SetupNoLevel))
+            ok(Error == ERROR_ELEVATION_REQUIRED,
+               "manifest without requestedExecutionLevel setup.exe: got %lu (expected %lu)\n",
+               Error, (DWORD)ERROR_ELEVATION_REQUIRED);
+        else
+            ok(Error != ERROR_ELEVATION_REQUIRED,
+               "non-x86-32 target: installer detection does not apply, got %lu\n", Error);
+    }
+    if (Restricted)
+        CloseHandle(Restricted);
+
+Cleanup:
+    DeleteFileW(SetupExe);
+    DeleteFileW(SetupInvoker);
+    DeleteFileW(SetupNoLevel);
 }
