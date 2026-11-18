@@ -1962,6 +1962,16 @@ _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
 NTSTATUS
 NTAPI
+RtlAddAccessDeniedAce(
+  _Inout_ PACL Acl,
+  _In_ ULONG AceRevision,
+  _In_ ACCESS_MASK AccessMask,
+  _In_ PSID Sid);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
 RtlCreateSecurityDescriptorRelative(
   _Out_ PISECURITY_DESCRIPTOR_RELATIVE SecurityDescriptor,
   _In_ ULONG Revision);

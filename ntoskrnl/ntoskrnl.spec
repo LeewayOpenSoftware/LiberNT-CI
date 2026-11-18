@@ -1174,6 +1174,7 @@
 @ stdcall RtlAbsoluteToSelfRelativeSD(ptr ptr ptr)
 @ stdcall RtlAddAccessAllowedAce(ptr long long ptr)
 @ stdcall RtlAddAccessAllowedAceEx(ptr long long long ptr)
+@ stdcall RtlAddAccessDeniedAce(ptr long long ptr)
 @ stdcall RtlAddAce(ptr long long ptr long)
 @ stdcall RtlAddAtomToAtomTable(ptr wstr ptr)
 @ stdcall RtlAddRange(ptr long long long long long long ptr ptr)
