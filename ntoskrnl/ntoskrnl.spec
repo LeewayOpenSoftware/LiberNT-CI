@@ -3332,7 +3332,7 @@
 @ stub -arch=win64 WheaAttemptClearPoison
 @ stub -arch=win64 WheaAttemptPhysicalPageOffline
 @ stub -arch=win64 WheaAttemptRowOffline
-@ stub -arch=win64 WheaConfigureErrorSource
+@ stdcall -arch=win64 WheaConfigureErrorSource(long ptr)
 @ stdcall -arch=win64 WheaCreateHwErrorReportDeviceDriver(long ptr)
 @ stub -arch=win64 WheaDeferredRecoveryService
 @ stub -arch=win64 WheaEnterCriticalState
@@ -3370,7 +3370,7 @@
 @ stub -arch=win64 WheaRequestDeferredRecovery
 @ stub -arch=win64 WheaSignalHandlerOverride
 @ stub -arch=win64 WheaTerminateProcess
-@ stub -arch=win64 WheaUnconfigureErrorSource
+@ stdcall -arch=win64 WheaUnconfigureErrorSource(long)
 @ stub -arch=win64 WheaUnregisterErrorSourceOverride
 @ stdcall -arch=arm64 ZwAlertThreadByThreadId(ptr)
 @ stdcall ZwAssociateWaitCompletionPacket(ptr ptr ptr ptr ptr long ptr ptr)

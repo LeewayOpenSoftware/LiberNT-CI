@@ -613,6 +613,23 @@ TestErrorReportHandle(VOID)
     ok_eq_hex(DriverUninitializeCalls, Calls + 1);
 }
 
+static
+VOID
+TestConfiguration(VOID)
+{
+    WHEA_ERROR_SOURCE_CONFIGURATION Configuration;
+
+    ok_eq_hex(sizeof(Configuration), 7 * sizeof(PVOID));
+    RtlZeroMemory(&Configuration, sizeof(Configuration));
+    ok_eq_hex(WheaConfigureErrorSource(WheaErrSrcTypeMax, &Configuration), STATUS_INVALID_PARAMETER);
+    ok_eq_hex(WheaConfigureErrorSource(WheaErrSrcTypeGeneric, NULL), STATUS_INVALID_PARAMETER);
+    ok_eq_hex(WheaUnconfigureErrorSource(WheaErrSrcTypeMax), STATUS_INVALID_PARAMETER);
+
+    /* LiberNT accepts no configuration yet: the contract of its callbacks is not published */
+    ok_eq_hex(WheaConfigureErrorSource(WheaErrSrcTypeGeneric, &Configuration), STATUS_NOT_SUPPORTED);
+    ok_eq_hex(WheaUnconfigureErrorSource(WheaErrSrcTypeGeneric), STATUS_NOT_SUPPORTED);
+}
+
 START_TEST(WheaErrorSource)
 {
     TEST_DESCRIPTOR Started, Stopped, Large;
@@ -624,6 +641,7 @@ START_TEST(WheaErrorSource)
     TestRecordHeader();
     TestDeviceDriverSource();
     TestErrorReportHandle();
+    TestConfiguration();
     TestAddRefusals();
 
     InitDescriptor(&Started);

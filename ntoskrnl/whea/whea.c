@@ -34,6 +34,7 @@ C_ASSERT(sizeof(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1) == 28 + 2 * si
 C_ASSERT(sizeof(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER) == 68 + 2 * sizeof(PVOID));
 C_ASSERT(FIELD_OFFSET(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER, Initialize) == 28);
 C_ASSERT(sizeof(WHEA_DRIVER_BUFFER_SET) == 8 + 4 * sizeof(PVOID));
+C_ASSERT(sizeof(WHEA_ERROR_SOURCE_CONFIGURATION) == 7 * sizeof(PVOID));
 C_ASSERT(RTL_FIELD_SIZE(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR, FRUText) == WHEA_GENERIC_ENTRY_TEXT_LEN);
 
 typedef struct _WHEAP_DESCRIPTOR_HEADER
@@ -1342,4 +1343,29 @@ WheaHwErrorReportSetSectionNameDeviceDriver(
         RtlCopyMemory(BufferSet->SectionFriendlyName, Name, NameLength);
 
     return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+WheaConfigureErrorSource(
+    _In_ WHEA_ERROR_SOURCE_TYPE SourceType,
+    _In_ PWHEA_ERROR_SOURCE_CONFIGURATION Configuration)
+{
+    if ((ULONG)SourceType >= WheaErrSrcTypeMax || !Configuration)
+        return STATUS_INVALID_PARAMETER;
+
+    /* FIXME: when and how the callbacks of a configuration are called is not documented; no configuration is accepted */
+    return STATUS_NOT_SUPPORTED;
+}
+
+NTSTATUS
+NTAPI
+WheaUnconfigureErrorSource(
+    _In_ WHEA_ERROR_SOURCE_TYPE SourceType)
+{
+    if ((ULONG)SourceType >= WheaErrSrcTypeMax)
+        return STATUS_INVALID_PARAMETER;
+
+    /* FIXME: no configuration can be registered, so there is none to take back */
+    return STATUS_NOT_SUPPORTED;
 }
