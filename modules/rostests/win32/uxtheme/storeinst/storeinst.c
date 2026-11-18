@@ -15,7 +15,7 @@
  * Usage: storeinst <style.msstyles> <name> [--mui <file.msstyles.mui> <locale>] [--enable-v4] [--theme] [--set-active]
  *   <name>        1..32 of [A-Za-z0-9_-], starting with a letter or digit (matches the gate's UXT_NAME_MAX)
  *   --mui         install a language module as <name>\<locale>\<name>.msstyles.mui (<locale> like en-US)
- *   --enable-v4   set HKLM\SOFTWARE\Leeway\UxTheme\EnableV4Ordinary = 1 (ordinary processes only; privileged keep v3)
+ *   --enable-v4   set HKLM\SOFTWARE\Leeway\UxTheme\EnableV4Ordinary = 1 (ordinary processes' user theme; privileged ones use the machine default)
  *   --theme       write %SystemRoot%\Resources\Themes\<name>.theme pointing at the installed style (for the shell)
  *   --set-active  make the style the active system theme for the CURRENT (ordinary) user, using the colour and size
  *                 the style declares as its default; a non-zero exit means the apply did not take
@@ -229,7 +229,7 @@ int wmain(int argc, WCHAR **argv)
         }
         if (r != ERROR_SUCCESS)
             return fail(L"storeinst: cannot set HKLM\\%ls EnableV4Ordinary (error %ld)", GATE_KEY, r);
-        wprintf(L"HKLM\\%ls EnableV4Ordinary = 1 (ordinary processes only; privileged ones keep v3)\n", GATE_KEY);
+        wprintf(L"HKLM\\%ls EnableV4Ordinary = 1 (ordinary processes' user theme; privileged ones use the machine default)\n", GATE_KEY);
     }
 
     /* Resolve the style's own default colour and size (GetThemeDefaults is UXTHEME ordinal 7, no name). */

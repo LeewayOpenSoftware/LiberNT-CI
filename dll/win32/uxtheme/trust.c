@@ -1045,25 +1045,12 @@ TrustPeekVersion(const UXT_VIEW *v, WORD *version)
 }
 
 #ifdef UXTHEME_V4
-/* Whether the HKLM gate key itself carries the protected (SY/BA-owned, no ordinary write) descriptor. Used to tell
- * "value absent under a trusted key" (owner default) from "key tampered / unreadable" (must fail closed). */
-static BOOL
-TrustGateProtected(void)
-{
-    HKEY gate;
-    BOOL ok;
-
-    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ, &gate) != ERROR_SUCCESS)
-        return FALSE;
-    ok = TrustKeyProtected(gate);
-    RegCloseKey(gate);
-    return ok;
-}
-
 static BOOL
 TrustV4Enabled(void)
 {
-    DWORD v;
+    DWORD v, t, n;
+    HKEY gate;
+    BOOL allowed;
 
     /* Never trust the "privileged" safe default while classification is still in flight: a concurrent first caller
      * sees g_classState != 2 and would otherwise be handed version 4 against the ordinary gate. Fail closed until
@@ -1077,14 +1064,21 @@ TrustV4Enabled(void)
 
     /* Owner 2026-11-18: every process uses version 4; a privileged process may use it too, but only from the
      * trusted system store, which the caller (UXTHEME_TrustOpenThemeFile) already enforces by the store path and
-     * the SY/BA-owned non-user-writable descriptor. Fail closed if the gate key itself is not protected, so an
-     * admin EnableV4Privileged = 0 is never silently ignored; a protected key with the value absent is the owner
-     * default (allowed), an explicit 0 forces it off. */
-    if (!TrustGateProtected())
+     * the SY/BA-owned non-user-writable descriptor. Read the gate key once: if it is not protected (tampered or
+     * unreadable) fail closed, so an admin EnableV4Privileged = 0 is never silently ignored; a protected key with
+     * the value absent is the owner default (allowed), an explicit 0 forces it off. */
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, UXT_GATE_KEY, 0, KEY_READ, &gate) != ERROR_SUCCESS)
         return FALSE;
-    if (TrustReadMachineValue(NULL, L"EnableV4Privileged", REG_DWORD, &v, sizeof(v)))
-        return v == 1;
-    return TRUE;
+    allowed = TrustKeyProtected(gate);
+    if (allowed)
+    {
+        n = sizeof(v);
+        if (RegQueryValueExW(gate, L"EnableV4Privileged", NULL, &t, (BYTE *)&v, &n) == ERROR_SUCCESS &&
+            t == REG_DWORD && n == sizeof(v))
+            allowed = (v == 1);
+    }
+    RegCloseKey(gate);
+    return allowed;
 }
 
 /* the language module beside the style: <store>\<name>\<locale>\<name>.msstyles.mui, opened with the same checks;

@@ -194,13 +194,17 @@ DisplayApplet(HWND hwnd, UINT uMsg, LPARAM wParam, LPARAM lParam)
         (wcsncmp(pwszAction, L"ActivateMSTheme", 15) == 0 ||
          wcsncmp(pwszAction, L"OpenTheme", 9) == 0))
     {
+        BOOL openTheme = wcsncmp(pwszAction, L"OpenTheme", 9) == 0;
+
         /* Apply the theme file at once, the way Windows does when a .theme is
          * opened from the shell, instead of only opening the appearance picker
          * on its current (unchanged) selection.  ActivateMSTheme applies
          * silently; OpenTheme applies and then falls through to the appearance
-         * page, which now reflects the newly active theme as the current one. */
-        ActivateThemeFile(pwszFile);
-        if (wcsncmp(pwszAction, L"OpenTheme", 9) != 0)
+         * page, which now reflects the newly active theme as the current one.
+         * OpenTheme with no file just opens the page: do not reset to Classic. */
+        if (pwszFile || !openTheme)
+            ActivateThemeFile(pwszFile);
+        if (!openTheme)
             goto cleanup;
     }
 
