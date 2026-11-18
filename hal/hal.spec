@@ -80,6 +80,7 @@
 @ stdcall -arch=arm64 HalSetPciConfigDataByOffset(long long long ptr long long)
 @ stdcall HalSetDisplayParameters(long long)
 @ stdcall HalSetEnvironmentVariable(str str)
+@ stdcall -arch=i386,x86_64 HalSetClockDeadline(int64)
 @ stdcall HalSetProfileInterval(long)
 @ stdcall HalSetRealTimeClock(ptr)
 @ stdcall HalSetTimeIncrement(long)

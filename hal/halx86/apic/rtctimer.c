@@ -33,6 +33,20 @@ static ULONG HalpNextTimeIncrement;
 
 static LONG HalpClockIpiTickOffset;
 
+/*
+ * The local APIC timer clock counts to one tick at a time. The count it runs
+ * with, how long that count lasts, and how long before it started the previous
+ * tick was, give the time the tick it ends in is due after the one before.
+ * A deadline from the kernel makes that tick come sooner than the base period.
+ * All of it belongs to processor 0, whose timer is the clock.
+ */
+#define HALP_CLOCK_SOONEST          100
+#define HALP_CLOCK_DEADLINE_SLACK   500
+static ULONGLONG HalpClockDeadline;
+static ULONG HalpClockCount;
+static ULONG HalpClockCountTime;
+static ULONG HalpClockCountBase;
+
 BOOLEAN HalpApicTimerClock = FALSE;
 static ULONG64 HalpApicTimerFrequency;
 
@@ -165,14 +179,27 @@ RtcClockRateToPreciseIncrement(UCHAR Rate)
     return 10000000000ULL / Frequency;
 }
 
+/*
+ * Starts the timer over on a count that lasts Time. Base is how long ago the
+ * previous tick was, so the tick this count ends in comes Base + Time after it.
+ */
 static
 VOID
-HalpProgramApicTimerClock(UCHAR ClockRate)
+HalpRestartApicTimerClock(ULONG Base, ULONG Time)
+{
+    ULONG64 Count = HalpApicTimerFrequency * Time / 10000000ULL;
+
+    HalpClockCount = (ULONG)min(max(Count, 1), MAXULONG);
+    HalpClockCountTime = Time;
+    HalpClockCountBase = Base;
+    ApicWrite(APIC_TICR, HalpClockCount);
+}
+
+static
+VOID
+HalpProgramApicTimerClock(ULONG Increment)
 {
     LVT_REGISTER LvtEntry;
-    ULONG64 Count;
-
-    Count = HalpApicTimerFrequency * RtcClockRateToPreciseIncrement(ClockRate) / 10000000000ULL;
 
     LvtEntry.Long = 0;
     LvtEntry.Vector = APIC_CLOCK_VECTOR;
@@ -180,7 +207,7 @@ HalpProgramApicTimerClock(UCHAR ClockRate)
     LvtEntry.Mask = 0;
     ApicWrite(APIC_TDCR, TIMER_DV_DivideBy1);
     ApicWrite(APIC_TMRLVTR, LvtEntry.Long);
-    ApicWrite(APIC_TICR, (ULONG)max(Count, 1));
+    HalpRestartApicTimerClock(0, Increment);
 }
 
 /* The local APIC timer runs at any period, so it is given the exact increment asked for */
@@ -188,21 +215,92 @@ static
 VOID
 HalpSetApicTimerIncrement(ULONG Increment)
 {
-    LVT_REGISTER LvtEntry;
-    ULONG64 Count;
-
     HalpCurrentTimeIncrement = Increment;
     HalpCurrentFractionalIncrement = 0;
+    HalpProgramApicTimerClock(Increment);
+}
 
-    Count = HalpApicTimerFrequency * Increment / 10000000ULL;
+/*
+ * When the tick after the one at Now is due: a base period later, or at the
+ * deadline if that comes first, but never closer to Now than the finest period.
+ */
+static
+ULONG
+HalpNextClockTick(ULONGLONG Now)
+{
+    ULONGLONG Deadline = HalpClockDeadline, Delta;
+    ULONG Target = HalpCurrentTimeIncrement;
 
-    LvtEntry.Long = 0;
-    LvtEntry.Vector = APIC_CLOCK_VECTOR;
-    LvtEntry.TimerMode = 1;
-    LvtEntry.Mask = 0;
-    ApicWrite(APIC_TDCR, TIMER_DV_DivideBy1);
-    ApicWrite(APIC_TMRLVTR, LvtEntry.Long);
-    ApicWrite(APIC_TICR, (ULONG)max(Count, 1));
+    if (Deadline == 0)
+        return Target;
+
+    /* Reached, as far as can be told from here. The kernel keeps time by the
+     * performance counter and may not be there yet: tick again shortly, and
+     * let it withdraw the deadline once what waited on it has gone off. */
+    if (Deadline <= Now)
+        return HalpMinimumTimeIncrement;
+
+    /* Aim a little past it: a tick that comes early finds nothing due */
+    Delta = Deadline - Now;
+    Delta += max(Delta >> 8, HALP_CLOCK_DEADLINE_SLACK);
+    if (Delta < Target)
+        Target = max((ULONG)Delta, HalpMinimumTimeIncrement);
+
+    return Target;
+}
+
+/* How long ago the previous tick was, read off the count the timer is at */
+static
+ULONG
+HalpClockTickElapsed(VOID)
+{
+    ULONG Current = ApicRead(APIC_TCCR);
+    ULONG Elapsed = HalpClockCountBase;
+
+    if (Current < HalpClockCount)
+        Elapsed += (ULONG)((ULONG64)(HalpClockCount - Current) * 10000000ULL / HalpApicTimerFrequency);
+
+    return Elapsed;
+}
+
+/*
+ * Has the timer count to the tick that is due after the one at Now, and leaves
+ * it alone when it already does. A deadline is counted to exactly, and one
+ * already behind makes the tick come at once. With none due, a tick starts a
+ * whole base period from where the timer is, which the timer then keeps to by
+ * itself; between ticks the tick is put back a base period after the previous
+ * one, so that withdrawing a deadline does not make the clock skip a beat.
+ * Between ticks, a tick already pending is left to aim the next one.
+ */
+static
+VOID
+HalpAimClockTick(ULONGLONG Now, BOOLEAN BetweenTicks)
+{
+    ULONG Target = HalpNextClockTick(Now);
+    ULONG Irr = APIC_IRR + 0x10 * (APIC_CLOCK_VECTOR / 32);
+    ULONG Elapsed;
+
+    if (Target < HalpCurrentTimeIncrement)
+    {
+        if (Target == HalpClockCountBase + HalpClockCountTime)
+            return;
+    }
+    else if (HalpClockCountTime == HalpCurrentTimeIncrement ||
+             (BetweenTicks && HalpClockCountBase + HalpClockCountTime == HalpCurrentTimeIncrement))
+    {
+        return;
+    }
+
+    Elapsed = HalpClockTickElapsed();
+    if (BetweenTicks && (ApicRead(Irr) & (1UL << (APIC_CLOCK_VECTOR % 32))))
+        return;
+
+    if (Target >= HalpCurrentTimeIncrement && !BetweenTicks)
+        HalpRestartApicTimerClock(Elapsed, HalpCurrentTimeIncrement);
+    else if (Target > Elapsed)
+        HalpRestartApicTimerClock(Elapsed, Target - Elapsed);
+    else
+        HalpRestartApicTimerClock(Elapsed, HALP_CLOCK_SOONEST);
 }
 
 VOID
@@ -219,7 +317,7 @@ RtcSetClockRate(UCHAR ClockRate)
 
     if (HalpApicTimerClock)
     {
-        HalpProgramApicTimerClock(ClockRate);
+        HalpProgramApicTimerClock(HalpCurrentTimeIncrement);
         return;
     }
 
@@ -372,6 +470,13 @@ HalpClockInterruptHandler(IN PKTRAP_FRAME TrapFrame)
 
     /* Save increment */
     LastIncrement = HalpCurrentTimeIncrement;
+    if (HalpApicTimerClock)
+    {
+        /* The count that ran out says how long this tick took. The timer has
+         * started it over, so nothing of the next tick is spent yet. */
+        LastIncrement = HalpClockCountBase + HalpClockCountTime;
+        HalpClockCountBase = 0;
+    }
 
     /* Check if the running fraction has accounted for 100 ns */
     HalpRunningFraction += HalpCurrentFractionalIncrement;
@@ -386,13 +491,23 @@ HalpClockInterruptHandler(IN PKTRAP_FRAME TrapFrame)
     {
         /* Set new clock rate */
         if (HalpApicTimerClock)
-            HalpSetApicTimerIncrement(HalpNextTimeIncrement);
+        {
+            /* The timer takes it up below, with the tick it is due at */
+            HalpCurrentTimeIncrement = HalpNextTimeIncrement;
+            HalpCurrentFractionalIncrement = 0;
+        }
         else
+        {
             RtcSetClockRate(HalpNextClockRate);
+        }
 
         /* We're done */
         HalpSetClockRate = FALSE;
     }
+
+    /* Count to the base period or to the deadline, whichever is due first */
+    if (HalpApicTimerClock)
+        HalpAimClockTick(KeQueryInterruptTime() + LastIncrement, FALSE);
 
     /* Update AP runtime counters at the same cadence as the boot CPU. */
     HalpClockIpiTickOffset += (LONG)LastIncrement;
@@ -475,4 +590,34 @@ HalSetTimeIncrement(IN ULONG Increment)
 
     /* Return the real increment */
     return RtcClockRateToPreciseIncrement(Rate) / 1000;
+}
+
+/*
+ * Has the clock tick at an interrupt time of the kernel's choosing, so that
+ * what waits on that time need not have the clock run at its finest period.
+ * Zero withdraws the deadline. On processor 0, whose timer is the clock, the
+ * deadline takes effect here. On any other the caller hands it on to processor
+ * 0, and the result only tells whether the clock takes a deadline at all.
+ */
+BOOLEAN
+NTAPI
+HalSetClockDeadline(_In_ ULONGLONG InterruptTime)
+{
+    ULONG_PTR Flags;
+
+    /* The RTC only ticks at its own rates */
+    if (!HalpApicTimerClock)
+        return FALSE;
+
+    if (KeGetCurrentPrcb()->Number != 0)
+        return TRUE;
+
+    Flags = __readeflags();
+    _disable();
+
+    HalpClockDeadline = InterruptTime;
+    HalpAimClockTick(KeQueryInterruptTime(), TRUE);
+
+    __writeeflags(Flags);
+    return TRUE;
 }
