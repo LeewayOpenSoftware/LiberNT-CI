@@ -51,7 +51,8 @@ typedef union {
 #define APIC_ICR_POLL_LIMIT 8
 #define EFLAGS_INTERRUPT_MASK 0x200
 #define DPRINT1(...) ((void)0)
-static int HalpApicHvMsrs, Enabled = 1, BeforeReads, AfterReads, BeforeBusy, AfterBusy, Writes, MsrWrites;
+#define ASSERT(x) assert(x)
+static int HalpApicX2Mode, HalpApicHvMsrs, Enabled = 1, BeforeReads, AfterReads, BeforeBusy, AfterBusy, Writes, MsrWrites;
 static void __writemsr(int n, uint64_t v) { (void)n; (void)v; MsrWrites++; }
 static ULONG __readeflags(void) { return Enabled ? EFLAGS_INTERRUPT_MASK : 0; }
 static void _disable(void) { Enabled = 0; }
@@ -71,7 +72,15 @@ static void ApicWrite(int reg, ULONG value) {
     assert((Writes == 0 && reg == APIC_ICR1) || (Writes == 1 && reg == APIC_ICR0));
     Writes++;
 }
-static void Send(UCHAR DestinationProcessor, UCHAR Vector, APIC_MT MessageType,
+static void ApicWriteIcr(ULONG LowPart, ULONG Destination) {
+    if (HalpApicX2Mode) {
+        __writemsr(0, ((uint64_t)Destination << 32) | LowPart);
+        return;
+    }
+    ApicWrite(APIC_ICR1, Destination << 24);
+    ApicWrite(APIC_ICR0, LowPart);
+}
+static void Send(ULONG DestinationProcessor, UCHAR Vector, APIC_MT MessageType,
                     APIC_TGM TriggerMode, APIC_DSH DestinationShortHand, ULONG Level) {
 @APIC@
 }
@@ -88,6 +97,11 @@ int main(void) {
     Writes = 0;
     Send(1, 0x50, APIC_MT_Fixed, 0, 0, 1);
     assert(MsrWrites == 1 && Writes == 0 && !Enabled);
+    HalpApicHvMsrs = 0;
+    HalpApicX2Mode = 1;
+    BeforeReads = AfterReads = 0;
+    Send(1, 0x50, 1, 0, 0, 1);
+    assert(MsrWrites == 2 && Writes == 0 && BeforeReads == 0 && AfterReads == 0);
     return 0;
 }
 '''.replace('@APIC@', body('hal/halx86/apic/apicsmp.c', 'ApicRequestGlobalInterruptLevel'))
@@ -104,6 +118,7 @@ enum { APIC_MT_INIT = 5, APIC_MT_Startup = 6, APIC_TGM_Level = 1,
        APIC_TGM_Edge = 0, APIC_DSH_Destination = 0 };
 #define ASSERT(x) assert(x)
 static unsigned Step;
+static int HalpApicX2Mode;
 static void ApicRequestGlobalInterruptLevel(UCHAR id, UCHAR vector, int type, int trigger, int shorthand, ULONG level) {
     assert(id == 0x37 && vector == 0 && type == APIC_MT_INIT && trigger == APIC_TGM_Level && shorthand == 0);
     assert((Step == 0 && level == 1) || (Step == 2 && level == 0)); Step++;
@@ -135,6 +150,8 @@ typedef struct { unsigned Number; KAFFINITY SetMember; volatile long IpiFrozen; 
 #define TRUE 1
 #define FALSE 0
 #define MAXIMUM_PROCESSORS 64
+#define KI_MAXIMUM_PROCESSORS MAXIMUM_PROCESSORS
+#define KiNumberProcessors KeNumberProcessors
 #define IPI_FROZEN_STATE_RUNNING 0
 #define IPI_FROZEN_STATE_TARGET_FREEZE 1
 #define IPI_FROZEN_STATE_SAVING 2

@@ -48,6 +48,8 @@ typedef struct { unsigned Number; KAFFINITY SetMember; volatile long IpiFrozen; 
 #define TRUE 1
 #define FALSE 0
 #define MAXIMUM_PROCESSORS 64
+#define KI_MAXIMUM_PROCESSORS MAXIMUM_PROCESSORS
+#define KiNumberProcessors KeNumberProcessors
 #define IPI_FROZEN_STATE_RUNNING 0
 #define IPI_FROZEN_STATE_FROZEN 3
 #define IPI_FROZEN_STATE_OWNER 4
@@ -65,6 +67,7 @@ typedef struct { int Valid; } KI_FREEZE_WAIT;
 static volatile LONG64 KiFreezeEpoch;
 static ULONG KeNumberProcessors = 2;
 static KAFFINITY KeActiveProcessors = 1;
+static void KiSetProcessorActive(ULONG Index) { __atomic_fetch_or(&KeActiveProcessors, (KAFFINITY)1 << Index, __ATOMIC_SEQ_CST); }
 static KSPIN_LOCK KiFreezeExecutionLock __attribute__((unused));
 static _Thread_local unsigned CurrentCpu;
 static int Waiting, Done, GateEnabled, GateReached, GateRelease, FreezeDone, Requests, ReentryEnabled, AutoThaw, GatePhase;
