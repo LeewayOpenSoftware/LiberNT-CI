@@ -297,6 +297,7 @@ ULONG
 KiFindBestStandbySource(
     _In_ ULONG TargetCpu,
     _In_ LONG MinimumPriority,
+    _In_ ULONG GroupBase,
     _In_ ULONG Start,
     _In_ ULONG ProcessorCount,
     _Out_ PLONG StandbyPriority)
@@ -311,7 +312,7 @@ KiFindBestStandbySource(
 
     for (Offset = 0; Offset < ProcessorCount; Offset++)
     {
-        SourceCpu = (Start + Offset) % ProcessorCount;
+        SourceCpu = GroupBase + ((Start + Offset) % ProcessorCount);
         if ((SourceCpu == TargetCpu) ||
             !KiIsProcessorActive(SourceCpu))
         {
@@ -432,9 +433,12 @@ KiAnyReadyThreadQueued(
     _In_ ULONG ExceptCpu)
 {
     PKPRCB Prcb;
-    ULONG Cpu;
+    ULONG Cpu, GroupBase, GroupEnd;
 
-    for (Cpu = 0; Cpu < (ULONG)KeNumberProcessors; Cpu++)
+    /* Only the processors of the group can hand a thread to this one */
+    GroupBase = ExceptCpu & ~(KI_PROCESSORS_PER_GROUP - 1);
+    GroupEnd = min((ULONG)KeNumberProcessors, GroupBase + KI_PROCESSORS_PER_GROUP);
+    for (Cpu = GroupBase; Cpu < GroupEnd; Cpu++)
     {
         Prcb = KiProcessorBlock[Cpu];
         if ((Cpu != ExceptCpu) && (Prcb != NULL) && (Prcb->ReadySummary != 0))
@@ -453,7 +457,7 @@ KiBalanceReadyQueues(
 {
     PKPRCB Source;
     PKTHREAD CurrentThread, DisplacedThread, SourceReplacement, Thread;
-    ULONG IpiCause, LocalPriority, ProcessorCount, Scanned;
+    ULONG GroupBase, IpiCause, LocalPriority, ProcessorCount, Scanned;
     ULONG StandbyCpu, Start, Offset, SourceCpu, TargetCpu, TargetTick;
     LONG MinimumPriority, Priority, StandbyPriority;
     BOOLEAN Preempted, RequestIpi, RequestSourceIpi, StandbySteal, TargetIdle;
@@ -502,7 +506,9 @@ KiBalanceReadyQueues(
     }
     KiReleasePrcbLock(Target);
 
-    ProcessorCount = (ULONG)KeNumberProcessors;
+    /* Threads are stolen only within the target's group */
+    GroupBase = TargetCpu & ~(KI_PROCESSORS_PER_GROUP - 1);
+    ProcessorCount = min((ULONG)KeNumberProcessors - GroupBase, KI_PROCESSORS_PER_GROUP);
     Start = (ULONG)InterlockedIncrement(&KiBalanceState[TargetCpu].SourceCursor) % ProcessorCount;
     Scanned = 0;
     Thread = NULL;
@@ -510,7 +516,7 @@ KiBalanceReadyQueues(
     SourceReplacement = NULL;
     RequestSourceIpi = FALSE;
     StandbySteal = FALSE;
-    StandbyCpu = KiFindBestStandbySource(TargetCpu, MinimumPriority, Start, ProcessorCount, &StandbyPriority);
+    StandbyCpu = KiFindBestStandbySource(TargetCpu, MinimumPriority, GroupBase, Start, ProcessorCount, &StandbyPriority);
 
     for (Priority = HIGH_PRIORITY;
          (Priority >= MinimumPriority) && (Scanned < KI_BALANCE_QUEUE_LIMIT);
@@ -535,7 +541,7 @@ KiBalanceReadyQueues(
 
         for (Offset = 0; Offset < ProcessorCount; Offset++)
         {
-            SourceCpu = (Start + Offset) % ProcessorCount;
+            SourceCpu = GroupBase + ((Start + Offset) % ProcessorCount);
             if (SourceCpu == TargetCpu)
                 continue;
             if (!KiIsProcessorActive(SourceCpu))
