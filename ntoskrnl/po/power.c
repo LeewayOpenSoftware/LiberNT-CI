@@ -53,6 +53,8 @@ typedef struct _POP_POWER_REQUEST_ACTION
 
 static POBJECT_TYPE PopPowerRequestObjectType;
 static volatile LONG PopDisplayRequiredCount;
+/* Number of user and thread power requests holding each type (display is tracked above) */
+static volatile LONG PopRequiredCount[PowerRequestMaximum];
 static GENERIC_MAPPING PopPowerRequestMapping =
 {
     STANDARD_RIGHTS_READ,
@@ -142,6 +144,37 @@ PopTrackDisplayRequired(
         InterlockedDecrement(&PopDisplayRequiredCount);
 }
 
+static
+VOID
+PopTrackRequired(
+    _In_ POWER_REQUEST_TYPE Type,
+    _In_ LONG OldCount,
+    _In_ LONG NewCount)
+{
+    if (Type == PowerRequestDisplayRequired)
+        PopTrackDisplayRequired(OldCount, NewCount);
+    else if (OldCount <= 0 && NewCount > 0)
+        InterlockedIncrement(&PopRequiredCount[Type]);
+    else if (OldCount > 0 && NewCount <= 0)
+        InterlockedDecrement(&PopRequiredCount[Type]);
+}
+
+static
+EXECUTION_STATE
+PopQuerySystemExecutionState(VOID)
+{
+    EXECUTION_STATE State = PopKernelPowerRequestExecutionState();
+
+    if (InterlockedCompareExchange(&PopRequiredCount[PowerRequestSystemRequired], 0, 0) > 0 ||
+        InterlockedCompareExchange(&PopRequiredCount[PowerRequestExecutionRequired], 0, 0) > 0)
+        State |= ES_SYSTEM_REQUIRED;
+    if (InterlockedCompareExchange(&PopRequiredCount[PowerRequestAwayModeRequired], 0, 0) > 0)
+        State |= POP_EXECUTION_AWAYMODE_REQUIRED;
+    if (InterlockedCompareExchange(&PopDisplayRequiredCount, 0, 0) > 0)
+        State |= ES_DISPLAY_REQUIRED;
+    return State;
+}
+
 BOOLEAN
 NTAPI
 PopIsDisplayRequired(VOID)
@@ -156,8 +189,10 @@ PopPowerRequestDelete(
     _In_ PVOID ObjectBody)
 {
     PPOP_POWER_REQUEST PowerRequest = ObjectBody;
+    ULONG Type;
 
-    PopTrackDisplayRequired(PowerRequest->RequestCount[PowerRequestDisplayRequired], 0);
+    for (Type = 0; Type < PowerRequestMaximum; Type++)
+        PopTrackRequired((POWER_REQUEST_TYPE)Type, PowerRequest->RequestCount[Type], 0);
 }
 
 static
@@ -291,11 +326,17 @@ PopWriteThreadPowerState(
     _Inout_ PPOP_POWER_REQUEST PowerObject,
     _In_ EXECUTION_STATE State)
 {
-    InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestSystemRequired], BooleanFlagOn(State, ES_SYSTEM_REQUIRED));
+    PopTrackRequired(PowerRequestSystemRequired,
+                     InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestSystemRequired],
+                                         BooleanFlagOn(State, ES_SYSTEM_REQUIRED)),
+                     BooleanFlagOn(State, ES_SYSTEM_REQUIRED));
     PopTrackDisplayRequired(InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestDisplayRequired],
                                                 BooleanFlagOn(State, ES_DISPLAY_REQUIRED)),
                             BooleanFlagOn(State, ES_DISPLAY_REQUIRED));
-    InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestAwayModeRequired], BooleanFlagOn(State, POP_EXECUTION_AWAYMODE_REQUIRED));
+    PopTrackRequired(PowerRequestAwayModeRequired,
+                     InterlockedExchange((PLONG)&PowerObject->RequestCount[PowerRequestAwayModeRequired],
+                                         BooleanFlagOn(State, POP_EXECUTION_AWAYMODE_REQUIRED)),
+                     BooleanFlagOn(State, POP_EXECUTION_AWAYMODE_REQUIRED));
 }
 
 static
@@ -325,8 +366,8 @@ PopApplyPowerRequestAction(
                 break;
             }
         } while (InterlockedCompareExchange((PLONG)&PowerRequest->RequestCount[Action->RequestType], Count + 1, Count) != Count);
-        if (NT_SUCCESS(Status) && Action->RequestType == PowerRequestDisplayRequired)
-            PopTrackDisplayRequired(Count, Count + 1);
+        if (NT_SUCCESS(Status))
+            PopTrackRequired(Action->RequestType, Count, Count + 1);
     }
     else
     {
@@ -339,8 +380,8 @@ PopApplyPowerRequestAction(
                 break;
             }
         } while (InterlockedCompareExchange((PLONG)&PowerRequest->RequestCount[Action->RequestType], Count - 1, Count) != Count);
-        if (NT_SUCCESS(Status) && Action->RequestType == PowerRequestDisplayRequired)
-            PopTrackDisplayRequired(Count, Count - 1);
+        if (NT_SUCCESS(Status))
+            PopTrackRequired(Action->RequestType, Count, Count - 1);
     }
 
     ObDereferenceObject(PowerRequest);
@@ -1978,11 +2019,7 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
             if (OutputBufferLength < sizeof(EXECUTION_STATE))
                 return STATUS_BUFFER_TOO_SMALL;
 
-            /* Kernel power requests and display-required requests; user
-             * thread requests are not aggregated system-wide yet. */
-            State = PopKernelPowerRequestExecutionState();
-            if (PopIsDisplayRequired())
-                State |= ES_DISPLAY_REQUIRED;
+            State = PopQuerySystemExecutionState();
 
             _SEH2_TRY
             {
