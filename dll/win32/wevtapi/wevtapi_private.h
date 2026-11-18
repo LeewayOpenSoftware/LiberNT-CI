@@ -132,6 +132,7 @@ struct evt_subscription
     HANDLE thread;
     DWORD thread_id;
     HANDLE stop;
+    HANDLE change;                     /* NotifyChangeEventLog event, or NULL when polling */
     volatile LONG closing;
 };
 

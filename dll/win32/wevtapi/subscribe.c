@@ -4,21 +4,25 @@
  * PURPOSE:     Event subscriptions (pull and push models)
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
  *
- * The classic service has no working change notification yet (ElfrChangeNotify
- * is unimplemented), so each subscription has a thread that looks at the log
- * range every EVT_POLL_MS. Push subscriptions read and deliver from that thread;
- * pull subscriptions only signal the caller's event and EvtNext reads.
+ * Each subscription has a thread that wakes when the service reports a change
+ * of the log (NotifyChangeEventLog), with a slow look at the log range as a
+ * safety net. Where the service cannot notify (an older or remote one) the
+ * thread looks every EVT_POLL_MS instead. Push subscriptions read and deliver
+ * from that thread; pull subscriptions only signal the caller's event and
+ * EvtNext reads.
  */
 
 #include "wevtapi_private.h"
 
 WINE_DEFAULT_DEBUG_CHANNEL(wevtapi);
 
-#define EVT_POLL_MS 250
+#define EVT_POLL_MS     250
+#define EVT_FALLBACK_MS 5000
 
 static void free_subscription(struct evt_subscription *sub)
 {
     evt_free_result_set(&sub->reader);
+    if (sub->change) CloseHandle(sub->change);
     if (sub->stop) CloseHandle(sub->stop);
     if (sub->thread) CloseHandle(sub->thread);
     sub->hdr.magic = 0;
@@ -68,6 +72,11 @@ static void deliver_push(struct evt_subscription *sub)
 static DWORD WINAPI subscription_thread(void *arg)
 {
     struct evt_subscription *sub = arg;
+    HANDLE waits[2];
+    DWORD n = 0, ret;
+
+    waits[n++] = sub->stop;
+    if (sub->change) waits[n++] = sub->change;
 
     for (;;)
     {
@@ -80,7 +89,10 @@ static DWORD WINAPI subscription_thread(void *arg)
             else
                 SetEvent(sub->signal);
         }
-        if (sub->closing || WaitForSingleObject(sub->stop, EVT_POLL_MS) != WAIT_TIMEOUT)
+        if (sub->closing)
+            break;
+        ret = WaitForMultipleObjects(n, waits, FALSE, sub->change ? EVT_FALLBACK_MS : EVT_POLL_MS);
+        if (ret != WAIT_TIMEOUT && ret != WAIT_OBJECT_0 + 1)
             break;
     }
     /* EvtClose called from inside a callback left the object to this thread */
@@ -176,6 +188,15 @@ EVT_HANDLE WINAPI EvtSubscribe(EVT_HANDLE session, HANDLE signal, const WCHAR *c
     default:
         sub->reader.started = FALSE;   /* starts at the oldest record */
         break;
+    }
+
+    /* Change notification from the service; without it the thread polls */
+    if ((sub->change = CreateEventW(NULL, FALSE, FALSE, NULL)) &&
+        !NotifyChangeEventLog(sub->reader.classic, sub->change))
+    {
+        TRACE("no change notification (error %lu): polling\n", GetLastError());
+        CloseHandle(sub->change);
+        sub->change = NULL;
     }
 
     if (!(sub->stop = CreateEventW(NULL, TRUE, FALSE, NULL)) ||
