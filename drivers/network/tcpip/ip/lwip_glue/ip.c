@@ -947,31 +947,18 @@ LibIPGetStats(struct lib_ip_stats *Stats)
 {
     RtlZeroMemory(Stats, sizeof(*Stats));
 
-    Stats->InReceives = lwip_stats.ip.recv;
-    Stats->OutRequests = lwip_stats.ip.xmit;
-    Stats->ForwardedDatagrams = lwip_stats.ip.fw;
-    Stats->InDelivers = lwip_stats.ip.recv >= lwip_stats.ip.drop ? lwip_stats.ip.recv - lwip_stats.ip.drop : 0;
-    Stats->InHeaderErrors = lwip_stats.ip.chkerr + lwip_stats.ip.lenerr + lwip_stats.ip.opterr;
-    Stats->InUnknownProtocols = lwip_stats.ip.proterr;
-    Stats->InDiscards = lwip_stats.ip.drop;
-    Stats->OutNoRoutes = lwip_stats.ip.rterr;
-    Stats->OutDiscards = lwip_stats.ip.memerr + lwip_stats.ip.err;
-
-    Stats->ReasmReqds = lwip_stats.ip_frag.recv;
-    Stats->ReasmOks = lwip_stats.ip_frag.recv >= lwip_stats.ip_frag.drop ? lwip_stats.ip_frag.recv - lwip_stats.ip_frag.drop : 0;
-    Stats->ReasmFails = lwip_stats.ip_frag.drop;
-    Stats->FragCreates = lwip_stats.ip_frag.xmit;
-
     Stats->TcpInSegs = lwip_stats.tcp.recv;
     Stats->TcpOutSegs = lwip_stats.tcp.xmit;
     Stats->TcpInErrs = lwip_stats.tcp.chkerr + lwip_stats.tcp.lenerr + lwip_stats.tcp.proterr;
+    Stats->TcpActiveOpens = lwip_stats.mib2.tcpactiveopens;
+    Stats->TcpPassiveOpens = lwip_stats.mib2.tcppassiveopens;
+    Stats->TcpOutRsts = lwip_stats.mib2.tcpoutrsts;
+    Stats->TcpRetransSegs = lwip_stats.mib2.tcpretranssegs;
+    Stats->TcpMaxConn = MEMP_NUM_TCP_PCB;
+    LibTCPGetFailureStats(&Stats->TcpAttemptFails, &Stats->TcpEstabResets);
 
-    Stats->UdpInDatagrams = lwip_stats.udp.recv;
-    Stats->UdpOutDatagrams = lwip_stats.udp.xmit;
-    Stats->UdpNoPorts = lwip_stats.udp.proterr;
-    Stats->UdpInErrors = lwip_stats.udp.chkerr + lwip_stats.udp.lenerr + lwip_stats.udp.memerr;
-    /* IPv4 ICMP is served by the native stack (ip/network/icmp.c ICMPStats),
-     * not lwIP, so it is not copied here. */
+    /* The IPv4 IP, UDP and ICMP counters are native (IPStats, UDPStats, ICMPStats): those
+     * datagrams do not pass lwIP, and its IP counters would count the TCP segments twice. */
 }
 
 NTSTATUS

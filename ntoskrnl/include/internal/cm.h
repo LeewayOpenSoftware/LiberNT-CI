@@ -128,6 +128,11 @@
 // Cache Lookup & KCB Array constructs
 //
 #define CMP_SUBKEY_LEVELS_DEPTH_LIMIT   32
+
+//
+// Deepest key, counting \Registry as the first level
+//
+#define CMP_KEY_DEPTH_MAX               512
 #define CMP_KCBS_IN_ARRAY_LIMIT         (CMP_SUBKEY_LEVELS_DEPTH_LIMIT + 2)
 
 //

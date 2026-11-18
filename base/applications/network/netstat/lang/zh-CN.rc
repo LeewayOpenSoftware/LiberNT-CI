@@ -58,6 +58,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_ICMP4_STAT_HEADER "\nICMPv4 统计信息\n\n"
+    IDS_ICMP6_STAT_HEADER "\nICMPv6 统计信息\n\n"
     IDS_ICMP_THEADER             "                            已接收      已发送\n"
     IDS_ICMP_MSG "  消息                      %-11lu %-10lu\n"
     IDS_ICMP_ERROR "  错误                      %-11lu %-10lu\n"

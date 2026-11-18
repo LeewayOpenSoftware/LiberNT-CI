@@ -7,6 +7,7 @@
 
 #include "settings.h"
 #include <powrprof.h>
+#include <buildno.h>
 #include <algorithm>
 
 #define WINDOWS_NT_KEY L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion"
@@ -816,7 +817,7 @@ BuildAbout(PageBuilder &page)
         system.push_back(std::make_pair(Str(IDS_TARGET), Str(IDS_TARGET_FORMAT)));
         system.push_back(std::make_pair(Str(IDS_VERSION), version));
         system.push_back(std::make_pair(Str(IDS_INSTALLED_ON), InstallDate()));
-        system.push_back(std::make_pair(Str(IDS_OS_BUILD), build));
+        system.push_back(std::make_pair(Str(IDS_OS_BUILD), build + L" LBI " LIBERNT_LBI_BUILD_WSTR));
         system.push_back(std::make_pair(Str(IDS_BUILD_LAB), ReadString(HKEY_LOCAL_MACHINE, WINDOWS_NT_KEY, L"BuildLab")));
     }
     page.Hero(ComputerName(), model.empty() ? ProductName() : model, L"laptop_20_regular").Action = Str(IDS_RENAME_PC);

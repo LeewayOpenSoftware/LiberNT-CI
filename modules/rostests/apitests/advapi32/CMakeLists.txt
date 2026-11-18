@@ -8,6 +8,7 @@ list(APPEND SOURCE
     ControlServiceEx.c
     CopySid.c
     RedistributableFileOwner.c
+    CreateProcessWithLogon.c
     CreateProcessWithToken.c
     CreateProcessWithTokenChild.c
     CreateService.c
@@ -53,6 +54,7 @@ list(APPEND SOURCE
     SaferIdentifyLevel.c
     SaferLevels.c
     SaferRules.c
+    Elevation.c
     SeclogonCaller.c
     ServiceArgs.c
     ServiceConfig2.c
@@ -64,6 +66,7 @@ list(APPEND SOURCE
     TriggerInfo.c
     TokenBnoIsolation.c
     TokenLinkedToken.c
+    TokenLua.c
     TraceEvents.c
     TokenDefaultPrivileges.c
     TokenIntegrity.c

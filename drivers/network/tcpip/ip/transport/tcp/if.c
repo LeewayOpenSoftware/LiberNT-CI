@@ -147,6 +147,7 @@ TCPSendDataCallback(struct netif *netif, struct pbuf *p, const ip4_addr_t *dest)
     }
     if (!NCE)
     {
+        IP_STAT_INC(OutNoRoutes);
         return ERR_RTE;
     }
 

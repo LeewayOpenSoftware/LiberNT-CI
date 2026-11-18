@@ -37,6 +37,13 @@
 
 #include "wine/debug.h"
 
+#ifdef UXTHEME_V4
+#include <pseh/pseh2.h>
+#include <tl4/loader/png.h>
+
+static HBITMAP MSSTYLES_V4_LoadImage(PTHEME_FILE tf, LPCWSTR name);
+#endif
+
 WINE_DEFAULT_DEBUG_CHANNEL(uxtheme);
 
 /***********************************************************************
@@ -97,6 +104,14 @@ static PTHEME_FILE MSSTYLES_ReferenceActiveTheme(void)
  * a match is not found, the function fails.
  */
 HRESULT MSSTYLES_OpenThemeFile(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf)
+{
+    /* every style load goes through the trust gate (trust.c, THEME-TRUST-POLICY T-FAIL-4) */
+    return UXTHEME_TrustOpenThemeFile(lpThemeFile, pszColorName, pszSizeName, tf, FALSE);
+}
+
+/* The version-3 loader. Called only by the trust gate, after the checks on the handle (or under the T-GATE-4 rollback
+ * of an ordinary process). */
+HRESULT MSSTYLES_OpenThemeFileV3(LPCWSTR lpThemeFile, LPCWSTR pszColorName, LPCWSTR pszSizeName, PTHEME_FILE *tf)
 {
     HMODULE hTheme;
     HRSRC hrsc;
@@ -222,6 +237,28 @@ void MSSTYLES_CloseThemeFile(PTHEME_FILE tf)
         refcount = InterlockedDecrement(&tf->refcount);
         if (!refcount)
         {
+            PTHEME_CLASS *link;
+
+            /* Closed handles stay in open_handles for reuse and are matched by the file's address: the next file can
+             * land on that address and revive a handle that names a class of the old file (a v4 class is only its
+             * ordinal in its own model). Drop them with the file. */
+            EnterCriticalSection(&handles_cs);
+            for (link = &open_handles; *link;)
+            {
+                PTHEME_CLASS h = *link;
+
+                if (h->tf == tf && h->refcount == 0)
+                {
+                    *link = h->next;
+                    free(h);
+                }
+                else
+                    link = &h->next;
+            }
+            LeaveCriticalSection(&handles_cs);
+#ifdef UXTHEME_V4
+            if (tf->v4) MSSTYLES_V4_Close(tf);
+#endif
             if(tf->hTheme) FreeLibrary(tf->hTheme);
             if(tf->classes) {
                 while(tf->classes) {
@@ -304,6 +341,9 @@ HRESULT MSSTYLES_SetActiveTheme(PTHEME_FILE tf, BOOL setMetrics)
  */
 PUXINI_FILE MSSTYLES_GetThemeIni(PTHEME_FILE tf)
 {
+#ifdef UXTHEME_V4
+    if (tf->v4) return NULL;                /* a version-4 style has no themes.ini */
+#endif
     return UXINI_LoadINI(tf->hTheme, L"themes_ini");
 }
 
@@ -535,6 +575,9 @@ PTHEME_PARTSTATE MSSTYLES_FindPart(PTHEME_CLASS tc, int iPartId)
 {
     PTHEME_PARTSTATE cur = tc->partstate;
 
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_CLASS(tc)) return MSSTYLES_V4_FindPartState(tc, iPartId, 0);
+#endif
     while (cur)
     {
         if (cur->iPartId == iPartId)
@@ -566,6 +609,9 @@ PTHEME_PARTSTATE MSSTYLES_FindPart(PTHEME_CLASS tc, int iPartId)
 PTHEME_PARTSTATE MSSTYLES_FindPartState(PTHEME_CLASS tc, int iPartId, int iStateId, PTHEME_CLASS *tcNext)
 {
     PTHEME_PARTSTATE cur = tc->partstate;
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_CLASS(tc)) { if (tcNext) *tcNext = NULL; return MSSTYLES_V4_FindPartState(tc, iPartId, iStateId); }
+#endif
     while(cur) {
         if(cur->iPartId == iPartId && cur->iStateId == iStateId) {
             if(tcNext) *tcNext = tc->overrides;
@@ -673,6 +719,9 @@ static inline PTHEME_PROPERTY MSSTYLES_PSFindProperty(PTHEME_PARTSTATE ps, int i
  */
 static inline PTHEME_PROPERTY MSSTYLES_FFindMetric(PTHEME_FILE tf, int iPropertyPrimitive, int iPropertyId)
 {
+#ifdef UXTHEME_V4
+    if (tf->v4) return MSSTYLES_V4_FindMetric(tf, iPropertyPrimitive, iPropertyId);
+#endif
     return MSSTYLES_LFindProperty(tf->metrics, iPropertyPrimitive, iPropertyId);
 }
 
@@ -1289,6 +1338,9 @@ static PTHEME_CLASS open_theme_class(PTHEME_FILE theme, LPCWSTR pszAppName,
         for (handle = open_handles; handle; handle = handle->next)
         {
             if (handle->tf == theme && handle->dpi == dpi && handle->partstate == cls->partstate &&
+#ifdef UXTHEME_V4
+                handle->v4Ordinal == cls->v4Ordinal &&
+#endif
                 !wcscmp(handle->szAppName, cls->szAppName) && !wcscmp(handle->szClassName, cls->szClassName))
                 break;
         }
@@ -1427,6 +1479,9 @@ PTHEME_PROPERTY MSSTYLES_FindProperty(PTHEME_CLASS tc, int iPartId, int iStateId
     PTHEME_PROPERTY tp;
 
     TRACE("(%p, %d, %d, %d)\n", tc, iPartId, iStateId, iPropertyId);
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_CLASS(tc)) return MSSTYLES_V4_FindProperty(tc, iPartId, iStateId, iPropertyPrimitive, iPropertyId);
+#endif
      /* Try and find an exact match on part & state */
     while(next && (ps = MSSTYLES_FindPartState(next, iPartId, iStateId, &next))) {
         if((tp = MSSTYLES_PSFindProperty(ps, iPropertyPrimitive, iPropertyId))) {
@@ -1620,6 +1675,18 @@ HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha
     if (!img)
         RaiseException(STATUS_NO_MEMORY, EXCEPTION_NONCONTINUABLE, 0, NULL);
 #endif
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_CLASS(tc))
+    {
+        /* "#<id>": an IMAGE resource of the style's view; a version-4 file has no module to fall back to */
+        img->image = MSSTYLES_V4_LoadImage(tc->tf, szFile);
+        *hasAlpha = FALSE;
+        if (img->image)
+            prepare_png_alpha(img->image, hasAlpha);
+        has_default = FALSE;
+    }
+    else
+#endif
 #if defined(__REACTOS__) && defined(ENABLE_PNG_SUPPORT)
     if (MSSTYLES_TryLoadPng(tc->hTheme, szFile, L"IMAGE", &img->image))
     {
@@ -1645,6 +1712,57 @@ HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha
     TRACE ("new %p %s: %p\n", img, debugstr_w (img->name), img->image);
     return img->image;
 }
+
+#ifdef UXTHEME_V4
+static HBITMAP MSSTYLES_V4_LoadImage(PTHEME_FILE tf, LPCWSTR name)
+{
+    const BYTE *data;
+    UINT size, id = 0;
+    BYTE *copy;
+    BOOL copied = FALSE;
+    HBITMAP bmp = NULL;
+    tl4_png_info info;
+    LPCWSTR p = name;
+
+    if (*p++ != L'#' || !*p)
+        return NULL;
+    for (; *p; p++)
+    {
+        if (*p < L'0' || *p > L'9' || id > 6553)
+            return NULL;
+        id = id * 10 + (*p - L'0');
+    }
+    if (!MSSTYLES_V4_ImageData(tf, id, &data, &size) || !size || size > TL4_PNG_MAX_RESOURCE)
+        return NULL;
+    copy = HeapAlloc(GetProcessHeap(), 0, size);
+    if (!copy)
+        return NULL;
+    /* the decoder sees exactly the bytes the walker checked (TL4 R-RES-6) */
+    _SEH2_TRY
+    {
+        memcpy(copy, data, size);
+        copied = TRUE;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        copied = FALSE;
+    }
+    _SEH2_END;
+    /* R-RES-4: a style past its pixel budget gets 'not found' for the image, before any decode */
+    if (copied && tl4_png_check(copy, size, &info) == TL4_OK &&
+        tl4_pixel_budget_take(&((PV4_FILE)tf->v4)->budget, info.pixels) == TL4_OK)
+    {
+        if (!MSSTYLES_TryLoadPngFromMemory(copy, size, &bmp))
+            bmp = NULL;
+    }
+    else
+    {
+        WARN("version-4 image %s refused\n", debugstr_w(name));
+    }
+    HeapFree(GetProcessHeap(), 0, copy);
+    return bmp;
+}
+#endif
 
 #ifdef __REACTOS__
 HBITMAP MSSTYLES_LoadBitmap (PTHEME_CLASS tc, LPCWSTR lpFilename, BOOL* hasAlpha, BOOL *hasDefaultTransparentColour)
@@ -1724,6 +1842,9 @@ static BOOL MSSTYLES_GetNextToken(LPCWSTR lpStringStart, LPCWSTR lpStringEnd, LP
  */
 HRESULT MSSTYLES_GetPropertyBool(PTHEME_PROPERTY tp, BOOL *pfVal)
 {
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetBool(tp, pfVal);
+#endif
     *pfVal = FALSE;
     if(*tp->lpValue == 't' || *tp->lpValue == 'T')
         *pfVal = TRUE;
@@ -1741,6 +1862,9 @@ HRESULT MSSTYLES_GetPropertyColor(PTHEME_PROPERTY tp, COLORREF *pColor)
     LPCWSTR lpCur;
     int red, green, blue;
 
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetColor(tp, pColor);
+#endif
     lpCur = tp->lpValue;
     lpEnd = tp->lpValue + tp->dwValueLen;
 
@@ -1800,6 +1924,9 @@ HRESULT MSSTYLES_GetPropertyFont(PTHEME_PROPERTY tp, HDC hdc, LOGFONTW *pFont)
     LPCWSTR lpEnd = tp->lpValue + tp->dwValueLen;
     HRESULT hr; 
 
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetFont(tp, hdc, pFont);
+#endif
     ZeroMemory(pFont, sizeof(LOGFONTW));
     hr = MSSTYLES_GetFont (lpCur, lpEnd, &lpCur, pFont);
     if (SUCCEEDED (hr))
@@ -1815,6 +1942,9 @@ HRESULT MSSTYLES_GetPropertyFont(PTHEME_PROPERTY tp, HDC hdc, LOGFONTW *pFont)
  */
 HRESULT MSSTYLES_GetPropertyInt(PTHEME_PROPERTY tp, int *piVal)
 {
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetInt(tp, piVal);
+#endif
     if(!MSSTYLES_GetNextInteger(tp->lpValue, (tp->lpValue + tp->dwValueLen), NULL, piVal)) {
         TRACE("Could not parse int property\n");
         return E_PROP_ID_UNSUPPORTED;
@@ -1833,6 +1963,9 @@ HRESULT MSSTYLES_GetPropertyIntList(PTHEME_PROPERTY tp, INTLIST *pIntList)
     LPCWSTR lpCur = tp->lpValue;
     LPCWSTR lpEnd = tp->lpValue + tp->dwValueLen;
 
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetIntList(tp, pIntList);
+#endif
     for(i=0; i < MAX_INTLIST_COUNT; i++) {
         if(!MSSTYLES_GetNextInteger(lpCur, lpEnd, &lpCur, &pIntList->iValues[i]))
             break;
@@ -1852,6 +1985,9 @@ HRESULT MSSTYLES_GetPropertyPosition(PTHEME_PROPERTY tp, POINT *pPoint)
     LPCWSTR lpCur = tp->lpValue;
     LPCWSTR lpEnd = tp->lpValue + tp->dwValueLen;
 
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetPosition(tp, pPoint);
+#endif
     if(!MSSTYLES_GetNextInteger(lpCur, lpEnd, &lpCur, &x)) {
         TRACE("Could not parse position property\n");
         return E_PROP_ID_UNSUPPORTED;
@@ -1872,6 +2008,14 @@ HRESULT MSSTYLES_GetPropertyPosition(PTHEME_PROPERTY tp, POINT *pPoint)
  */
 HRESULT MSSTYLES_GetPropertyString(PTHEME_PROPERTY tp, LPWSTR pszBuff, int cchMaxBuffChars)
 {
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp))
+    {
+        if (tp->iPrimitiveType == TMT_FILENAME || tp->iPrimitiveType == TMT_DISKSTREAM)
+            return MSSTYLES_V4_GetImageName(tp, pszBuff, cchMaxBuffChars);
+        return MSSTYLES_V4_GetString(tp, pszBuff, cchMaxBuffChars);
+    }
+#endif
     lstrcpynW(pszBuff, tp->lpValue, min(tp->dwValueLen+1, cchMaxBuffChars));
     return S_OK;
 }
@@ -1886,6 +2030,9 @@ HRESULT MSSTYLES_GetPropertyRect(PTHEME_PROPERTY tp, RECT *pRect)
     LPCWSTR lpCur = tp->lpValue;
     LPCWSTR lpEnd = tp->lpValue + tp->dwValueLen;
 
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetRect(tp, pRect);
+#endif
     MSSTYLES_GetNextLong(lpCur, lpEnd, &lpCur, &pRect->left);
     MSSTYLES_GetNextLong(lpCur, lpEnd, &lpCur, &pRect->top);
     MSSTYLES_GetNextLong(lpCur, lpEnd, &lpCur, &pRect->right);
@@ -1906,6 +2053,9 @@ HRESULT MSSTYLES_GetPropertyMargins(PTHEME_PROPERTY tp, RECT *prc, MARGINS *pMar
     LPCWSTR lpCur = tp->lpValue;
     LPCWSTR lpEnd = tp->lpValue + tp->dwValueLen;
 
+#ifdef UXTHEME_V4
+    if (MSSTYLES_IS_V4_PROP(tp)) return MSSTYLES_V4_GetMargins(tp, pMargins);
+#endif
     MSSTYLES_GetNextInteger(lpCur, lpEnd, &lpCur, &pMargins->cxLeftWidth);
     MSSTYLES_GetNextInteger(lpCur, lpEnd, &lpCur, &pMargins->cxRightWidth);
     MSSTYLES_GetNextInteger(lpCur, lpEnd, &lpCur, &pMargins->cyTopHeight);

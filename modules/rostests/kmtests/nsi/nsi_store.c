@@ -114,10 +114,26 @@ TestRegistration(VOID)
     Status = NsiRegisterProvider(&TestModule, NSISTORE_SCRATCH_TABLE, &Bad, &TestModule, &Provider);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
 
+    /* A table without a key has one row and cannot be enumerated */
     Bad = TestDispatch;
     Bad.RowSizes.Key = 0;
     Status = NsiRegisterProvider(&TestModule, NSISTORE_SCRATCH_TABLE, &Bad, &TestModule, &Provider);
     ok_eq_hex(Status, STATUS_INVALID_PARAMETER);
+
+    Bad.Enumerate = NULL;
+    Status = NsiRegisterProvider(&TestModule, NSISTORE_SCRATCH_TABLE, &Bad, &TestModule, &Provider);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        NSI_ROW_SIZES Sizes;
+
+        RtlZeroMemory(&Sizes, sizeof(Sizes));
+        Status = NsiQueryTableSizesKm(&TestModule, NSISTORE_SCRATCH_TABLE, &Sizes);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        ok_eq_ulong(Sizes.Key, 0UL);
+        NsiDeregisterProvider(Provider);
+        Provider = NULL;
+    }
 
     Status = NsiRegisterProvider(&TestModule, NSISTORE_SCRATCH_TABLE, &TestDispatch, &TestModule, &Provider);
     ok_eq_hex(Status, STATUS_SUCCESS);

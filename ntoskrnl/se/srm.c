@@ -90,6 +90,15 @@ PSEP_LOGON_SESSION_TERMINATED_NOTIFICATION SepLogonNotifications = NULL;
 static PSEP_LOGON_SESSION_REFERENCES _SepLogonSessions[MAX_LOGON_SESSION_LISTS_IN_ARRAY] = {NULL};
 PSEP_LOGON_SESSION_REFERENCES* const SepLogonSessions = _SepLogonSessions;
 static KGUARDED_MUTEX SepRmDbLock[MAX_LOGON_SESSION_LISTS_IN_ARRAY];
+
+/* Serializes every change to the UAC pair slots of the logon sessions. It is
+ * taken before, never inside, a database bucket lock. */
+static KGUARDED_MUTEX SepRmPairLock;
+
+static
+PSEP_LOGON_SESSION_REFERENCES
+SepRmFindLogonSessionLocked(
+    _In_ PLUID LogonLuid);
 static KGUARDED_MUTEX SepRmNotificationLock;
 
 static
@@ -219,6 +228,7 @@ SeRmInitPhase0(VOID)
     /* Initialize the database lock */
     for (i = 0; i < MAX_LOGON_SESSION_LISTS_IN_ARRAY; i++)
         KeInitializeGuardedMutex(&SepRmDbLock[i]);
+    KeInitializeGuardedMutex(&SepRmPairLock);
     KeInitializeGuardedMutex(&SepRmNotificationLock);
 
     KeInitializeGuardedMutex(&SepLsaNoticeLock);
@@ -582,6 +592,10 @@ SepRmCreateLogonSession(
     NewSession->ReferenceCount = 0;
     NewSession->Flags = 0;
     NewSession->pDeviceMap = NULL;
+    NewSession->FullToken = NULL;
+    NewSession->LimitedToken = NULL;
+    RtlZeroMemory(&NewSession->LinkedLogonId, sizeof(LUID));
+    NewSession->FullTokenReferenced = FALSE;
     InitializeListHead(&NewSession->TokenList);
 
     /* Acquire the database lock */
@@ -1250,6 +1264,9 @@ SepRmDereferenceLogonSession(
 {
     ULONG RefCount;
     PDEVICE_MAP DeviceMap;
+    PTOKEN FullToken, PairFull, PairLimited;
+    LUID LinkedLogonId;
+    BOOLEAN HadPair;
     PSEP_LOGON_SESSION_REFERENCES CurrentSession;
 
     DPRINT("SepRmDereferenceLogonSession(%08lx:%08lx)\n",
@@ -1272,10 +1289,22 @@ SepRmDereferenceLogonSession(
 
             /* Once the lock is gone LSA may delete the session, so only a local copy is used after it */
             DeviceMap = NULL;
+            FullToken = NULL;
+            HadPair = FALSE;
+            PairFull = NULL;
+            PairLimited = NULL;
             if (RefCount == 0)
             {
                 DeviceMap = CurrentSession->pDeviceMap;
                 CurrentSession->pDeviceMap = NULL;
+                PairFull = CurrentSession->FullToken;
+                PairLimited = CurrentSession->LimitedToken;
+                HadPair = (PairFull != NULL || PairLimited != NULL);
+                LinkedLogonId = CurrentSession->LinkedLogonId;
+                FullToken = CurrentSession->FullTokenReferenced ? PairFull : NULL;
+                CurrentSession->FullToken = NULL;
+                CurrentSession->LimitedToken = NULL;
+                CurrentSession->FullTokenReferenced = FALSE;
             }
 
             /* Release the database lock */
@@ -1284,6 +1313,31 @@ SepRmDereferenceLogonSession(
             /* We're done with the session */
             if (RefCount == 0)
             {
+                /* The partner session of a two-session pair must not keep pointing at
+                 * tokens that are about to go */
+                if (HadPair && !RtlEqualLuid(&LinkedLogonId, LogonLuid))
+                {
+                    PSEP_LOGON_SESSION_REFERENCES Partner;
+
+                    KeAcquireGuardedMutex(&SepRmPairLock);
+                    KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+                    Partner = SepRmFindLogonSessionLocked(&LinkedLogonId);
+                    if (Partner != NULL &&
+                        ((PairFull != NULL && Partner->FullToken == PairFull) ||
+                         (PairLimited != NULL && Partner->LimitedToken == PairLimited)))
+                    {
+                        Partner->FullToken = NULL;
+                        Partner->LimitedToken = NULL;
+                        Partner->FullTokenReferenced = FALSE;
+                    }
+                    KeReleaseGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+                    KeReleaseGuardedMutex(&SepRmPairLock);
+                }
+
+                /* The last token of the session is gone: release its elevated token */
+                if (FullToken != NULL)
+                    ObDereferenceObject(FullToken);
+
                 /* Get rid of the LUID device map */
                 if (DeviceMap != NULL)
                 {
@@ -1875,6 +1929,346 @@ SeUnregisterLogonSessionTerminatedRoutine(
     KeReleaseGuardedMutex(&SepRmNotificationLock);
 
     return Status;
+}
+
+
+/* Walks the session list of a LUID; the caller holds the database lock for it. */
+static
+PSEP_LOGON_SESSION_REFERENCES
+SepRmFindLogonSessionLocked(
+    _In_ PLUID LogonLuid)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+
+    for (Session = SepLogonSessions[LogonLuid->LowPart % MAX_LOGON_SESSION_LISTS_IN_ARRAY];
+         Session != NULL;
+         Session = Session->Next)
+    {
+        if (RtlEqualLuid(&Session->LogonId, LogonLuid))
+            return Session;
+    }
+
+    return NULL;
+}
+
+/**
+ * @brief
+ * Records the two tokens of a UAC pair on their logon session. The session
+ * keeps the elevated token alive for as long as any other token of the
+ * session exists, so that hold must not count as a session reference.
+ * The caller holds the elevated token's lock exclusively.
+ */
+static
+NTSTATUS
+SepRmLinkLogonSessionTokensLocked(
+    _In_ PTOKEN FullToken,
+    _In_ PTOKEN LimitedToken)
+{
+    PSEP_LOGON_SESSION_REFERENCES LimitedSession, FullSession;
+    BOOLEAN SameSession;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    SameSession = RtlEqualLuid(&FullToken->AuthenticationId, &LimitedToken->AuthenticationId);
+
+    /* The well-known sessions (System, services, anonymous) never carry a pair */
+    if (SepIsWellKnownLogonId(&FullToken->AuthenticationId) ||
+        SepIsWellKnownLogonId(&LimitedToken->AuthenticationId))
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* The limited token's session owns the reference on the elevated token */
+    KeAcquireGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+
+    LimitedSession = SepRmFindLogonSessionLocked(&LimitedToken->AuthenticationId);
+    if (LimitedSession == NULL)
+    {
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_NO_SUCH_LOGON_SESSION;
+    }
+
+    if (LimitedSession->FullToken != NULL || LimitedSession->LimitedToken != NULL)
+    {
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* One session for both: the elevated token stops counting, so something
+     * else must keep the session alive or the pair would end it at once */
+    if (SameSession &&
+        !(FullToken->TokenFlags & TOKEN_SESSION_NOT_REFERENCED) &&
+        LimitedSession->ReferenceCount <= 1)
+    {
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    ObReferenceObject(FullToken);
+    LimitedSession->FullToken = FullToken;
+    LimitedSession->LimitedToken = LimitedToken;
+    LimitedSession->FullTokenReferenced = TRUE;
+    LimitedSession->LinkedLogonId = FullToken->AuthenticationId;
+
+    if (SameSession)
+    {
+        /* One session for both: the session's own hold must not keep it alive */
+        if (!(FullToken->TokenFlags & TOKEN_SESSION_NOT_REFERENCED))
+        {
+            FullToken->TokenFlags |= TOKEN_SESSION_NOT_REFERENCED;
+            LimitedSession->ReferenceCount--;
+        }
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+        return STATUS_SUCCESS;
+    }
+
+    KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+
+    /* Two sessions: the elevated token's session only points at the pair. It stays
+     * alive through the elevated token itself, which the limited session holds. */
+    KeAcquireGuardedMutex(SepRmDbLockFor(&FullToken->AuthenticationId));
+
+    FullSession = SepRmFindLogonSessionLocked(&FullToken->AuthenticationId);
+    if (FullSession != NULL && FullSession->FullToken == NULL && FullSession->LimitedToken == NULL)
+    {
+        FullSession->FullToken = FullToken;
+        FullSession->LimitedToken = LimitedToken;
+        FullSession->FullTokenReferenced = FALSE;
+        FullSession->LinkedLogonId = LimitedToken->AuthenticationId;
+        KeReleaseGuardedMutex(SepRmDbLockFor(&FullToken->AuthenticationId));
+        return STATUS_SUCCESS;
+    }
+
+    Status = (FullSession == NULL) ? STATUS_NO_SUCH_LOGON_SESSION : STATUS_INVALID_PARAMETER;
+    KeReleaseGuardedMutex(SepRmDbLockFor(&FullToken->AuthenticationId));
+
+    /* Undo the limited side */
+    KeAcquireGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+    LimitedSession = SepRmFindLogonSessionLocked(&LimitedToken->AuthenticationId);
+    if (LimitedSession != NULL && LimitedSession->FullToken == FullToken)
+    {
+        LimitedSession->FullToken = NULL;
+        LimitedSession->LimitedToken = NULL;
+        LimitedSession->FullTokenReferenced = FALSE;
+    }
+    KeReleaseGuardedMutex(SepRmDbLockFor(&LimitedToken->AuthenticationId));
+    ObDereferenceObject(FullToken);
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+SepRmLinkLogonSessionTokens(
+    _In_ PTOKEN FullToken,
+    _In_ PTOKEN LimitedToken)
+{
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(&SepRmPairLock);
+    Status = SepRmLinkLogonSessionTokensLocked(FullToken, LimitedToken);
+    KeReleaseGuardedMutex(&SepRmPairLock);
+    return Status;
+}
+
+/**
+ * @brief
+ * Clears the pair slots of one session when they point at the given token.
+ * The caller holds the database lock of that session. Returns the token the
+ * session referenced, so the caller can release it after the lock is gone.
+ */
+static
+PTOKEN
+SepRmClearPairLocked(
+    _In_ PSEP_LOGON_SESSION_REFERENCES Session,
+    _In_opt_ PTOKEN Token)
+{
+    PTOKEN Referenced = NULL;
+
+    if (Token != NULL && Session->FullToken != Token && Session->LimitedToken != Token)
+        return NULL;
+
+    if (Session->FullTokenReferenced)
+        Referenced = Session->FullToken;
+    Session->FullToken = NULL;
+    Session->LimitedToken = NULL;
+    Session->FullTokenReferenced = FALSE;
+    return Referenced;
+}
+
+/**
+ * @brief
+ * Breaks the UAC pair a token belongs to, in both sessions. Used by the
+ * TokenLinkedToken set with a null handle (SeTcbPrivilege callers).
+ */
+/* The references found are handed back, never dropped here: the caller holds the
+ * pair lock and a token's delete procedure takes it again. */
+static
+NTSTATUS
+SepRmUnlinkLogonSessionPairLocked(
+    _In_ PTOKEN Token,
+    _Out_ PTOKEN *Referenced,
+    _Out_ PTOKEN *Other)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    LUID LinkedLogonId;
+    BOOLEAN Linked = FALSE;
+    PAGED_CODE();
+
+    *Referenced = NULL;
+    *Other = NULL;
+
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    if (Session != NULL && (Session->FullToken == Token || Session->LimitedToken == Token))
+    {
+        Linked = TRUE;
+        LinkedLogonId = Session->LinkedLogonId;
+        *Referenced = SepRmClearPairLocked(Session, NULL);
+    }
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    if (!Linked)
+        return STATUS_NO_SUCH_LOGON_SESSION;
+
+    if (!RtlEqualLuid(&LinkedLogonId, &Token->AuthenticationId))
+    {
+        KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+        Session = SepRmFindLogonSessionLocked(&LinkedLogonId);
+        if (Session != NULL)
+            *Other = SepRmClearPairLocked(Session, Token);
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+    }
+
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+SepRmUnlinkLogonSessionPair(
+    _In_ PTOKEN Token)
+{
+    PTOKEN Referenced, Other;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(&SepRmPairLock);
+    Status = SepRmUnlinkLogonSessionPairLocked(Token, &Referenced, &Other);
+    KeReleaseGuardedMutex(&SepRmPairLock);
+
+    /* Dropping a reference may delete the token, whose delete procedure takes the lock */
+    if (Referenced != NULL)
+        ObDereferenceObject(Referenced);
+    if (Other != NULL)
+        ObDereferenceObject(Other);
+    return Status;
+}
+
+/**
+ * @brief
+ * Clears a token from the UAC pair of its logon session when the token goes
+ * away. Runs from the token's delete procedure.
+ */
+VOID
+NTAPI
+SepRmUnlinkLogonSessionToken(
+    _In_ PTOKEN Token)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    PAGED_CODE();
+
+    LUID LinkedLogonId;
+    BOOLEAN Linked = FALSE;
+
+    KeAcquireGuardedMutex(&SepRmPairLock);
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    if (Session != NULL && (Session->LimitedToken == Token || Session->FullToken == Token))
+    {
+        Linked = TRUE;
+        LinkedLogonId = Session->LinkedLogonId;
+        if (Session->LimitedToken == Token)
+            Session->LimitedToken = NULL;
+        if (Session->FullToken == Token)
+        {
+            /* A referenced elevated token cannot be deleted; this is the weak slot */
+            ASSERT(!Session->FullTokenReferenced);
+            Session->FullToken = NULL;
+        }
+    }
+
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    /* The other session of a two-session pair still points at this token */
+    if (Linked && !RtlEqualLuid(&LinkedLogonId, &Token->AuthenticationId))
+    {
+        KeAcquireGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+        Session = SepRmFindLogonSessionLocked(&LinkedLogonId);
+        if (Session != NULL)
+        {
+            if (Session->LimitedToken == Token)
+                Session->LimitedToken = NULL;
+            if (Session->FullToken == Token && !Session->FullTokenReferenced)
+                Session->FullToken = NULL;
+        }
+        KeReleaseGuardedMutex(SepRmDbLockFor(&LinkedLogonId));
+    }
+
+    KeReleaseGuardedMutex(&SepRmPairLock);
+}
+
+BOOLEAN
+NTAPI
+SepRmLogonSessionHasFullToken(
+    _In_ PTOKEN Token)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    BOOLEAN HasFullToken;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    HasFullToken = (Session != NULL && Session->FullToken != NULL);
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    return HasFullToken;
+}
+
+/**
+ * @brief
+ * Returns a referenced pointer to the other token of the caller's UAC pair:
+ * the elevated one for a LUA token, the filtered one otherwise.
+ */
+NTSTATUS
+NTAPI
+SepRmReferenceLinkedToken(
+    _In_ PTOKEN Token,
+    _Out_ PTOKEN *LinkedToken)
+{
+    PSEP_LOGON_SESSION_REFERENCES Session;
+    PTOKEN Linked = NULL;
+    PAGED_CODE();
+
+    KeAcquireGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    Session = SepRmFindLogonSessionLocked(&Token->AuthenticationId);
+    if (Session != NULL)
+        Linked = (Token->TokenFlags & TOKEN_LUA) ? Session->FullToken : Session->LimitedToken;
+
+    /* A token being deleted clears its slot under this lock, so a safe
+     * reference either succeeds or the link is already gone. */
+    if (Linked == Token || (Linked != NULL && !ObReferenceObjectSafe(Linked)))
+        Linked = NULL;
+
+    KeReleaseGuardedMutex(SepRmDbLockFor(&Token->AuthenticationId));
+
+    if (Linked == NULL)
+        return STATUS_NO_SUCH_LOGON_SESSION;
+
+    *LinkedToken = Linked;
+    return STATUS_SUCCESS;
 }
 
 /* EOF */

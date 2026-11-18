@@ -497,6 +497,14 @@ CmpDoCreate(IN PHHIVE Hive,
         goto Exit;
     }
 
+    /* A key may be CMP_KEY_DEPTH_MAX levels deep, \Registry counted. Refuse
+       a deeper one here, before a cell is allocated for it */
+    if (ParentKcb->TotalLevels >= CMP_KEY_DEPTH_MAX)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+        goto Exit;
+    }
+
     /* Get the parent node */
     KeyNode = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
     if (!KeyNode)
@@ -1834,7 +1842,7 @@ CmpLookInCache(
  *
  * @return
  * Returns STATUS_SUCCESS if all the operations have succeeded without
- * problems. STATUS_NAME_TOO_LONG is returned if the key pathname has
+ * problems. STATUS_INVALID_PARAMETER is returned if the key pathname has
  * too many subkey levels (more than 32 levels deep). A failure NTSTATUS
  * code is returned otherwise. Refer to CmpLookInCache documentation
  * for more information about other returned status codes.
@@ -1877,9 +1885,10 @@ CmpBuildHashStackAndLookupCache(
     /* This key path has too many subkeys */
     if (SubkeysInTotal > CMP_SUBKEY_LEVELS_DEPTH_LIMIT)
     {
+        /* Windows refuses the 33rd component of one open or create with this status */
         DPRINT1("The key path has too many subkeys - %lu\n", SubkeysInTotal);
         *LockedKcbs = NULL;
-        return STATUS_NAME_TOO_LONG;
+        return STATUS_INVALID_PARAMETER;
     }
 
     /* Return hive and cell data */

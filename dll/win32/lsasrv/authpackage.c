@@ -1268,6 +1268,53 @@ done:
 }
 
 
+/* Reads a REG_DWORD policy value; a missing or malformed value yields the default. */
+static
+ULONG
+LsapReadPolicyDword(
+    _In_ PCWSTR KeyPath,
+    _In_ PCWSTR ValueName,
+    _In_ ULONG Default)
+{
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    UNICODE_STRING KeyName, Value;
+    UCHAR Buffer[FIELD_OFFSET(KEY_VALUE_PARTIAL_INFORMATION, Data) + sizeof(ULONG)];
+    PKEY_VALUE_PARTIAL_INFORMATION Info = (PKEY_VALUE_PARTIAL_INFORMATION)Buffer;
+    HANDLE KeyHandle;
+    ULONG Length;
+    NTSTATUS Status;
+
+    RtlInitUnicodeString(&KeyName, KeyPath);
+    RtlInitUnicodeString(&Value, ValueName);
+    InitializeObjectAttributes(&ObjectAttributes,
+                               &KeyName,
+                               OBJ_CASE_INSENSITIVE,
+                               NULL,
+                               NULL);
+
+    Status = NtOpenKey(&KeyHandle, KEY_QUERY_VALUE, &ObjectAttributes);
+    if (!NT_SUCCESS(Status))
+        return Default;
+
+    Status = NtQueryValueKey(KeyHandle,
+                             &Value,
+                             KeyValuePartialInformation,
+                             Info,
+                             sizeof(Buffer),
+                             &Length);
+    NtClose(KeyHandle);
+
+    if (!NT_SUCCESS(Status) ||
+        Info->Type != REG_DWORD ||
+        Info->DataLength != sizeof(ULONG))
+    {
+        return Default;
+    }
+
+    return *(PULONG)Info->Data;
+}
+
+
 static
 BOOLEAN
 LsapIntegrityLabelsDisabled(VOID)
@@ -1660,6 +1707,206 @@ LsapSetPrivileges(
 }
 
 
+#define LSAP_UAC_POLICY_KEY L"\\Registry\\Machine\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System"
+
+/* An interactive logon of an Administrators member gets a filtered token when LUA
+ * is on; the built-in Administrator only when the policy asks for it. */
+static
+BOOLEAN
+LsapShouldSplitToken(
+    _In_ SECURITY_LOGON_TYPE LogonType,
+    _In_ PLSA_TOKEN_INFORMATION_V1 TokenInfo1)
+{
+    PSID UserSid = TokenInfo1->User.User.Sid;
+    ULONG Count;
+
+    if (LogonType != Interactive &&
+        LogonType != RemoteInteractive &&
+        LogonType != CachedInteractive &&
+        LogonType != Unlock)
+    {
+        return FALSE;
+    }
+
+    if (LsapReadPolicyDword(LSAP_UAC_POLICY_KEY, L"EnableLUA", 0) == 0)
+        return FALSE;
+
+    if (LsapGetIntegrityRid(TokenInfo1) != SECURITY_MANDATORY_HIGH_RID)
+        return FALSE;
+
+    Count = *RtlSubAuthorityCountSid(UserSid);
+    if (Count > 0 &&
+        *RtlSubAuthoritySid(UserSid, Count - 1) == DOMAIN_USER_RID_ADMIN &&
+        LsapReadPolicyDword(LSAP_UAC_POLICY_KEY, L"FilterAdministratorToken", 0) == 0)
+    {
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/* The filtered token must not inherit a default DACL that rests on Administrators,
+ * which only denies inside it: the user and the system own what it creates, the
+ * logon session may read and execute. */
+static
+NTSTATUS
+LsapSetLimitedDefaultDacl(
+    _In_ HANDLE TokenHandle,
+    _In_ PLSA_TOKEN_INFORMATION_V1 TokenInfo1)
+{
+    PSID UserSid = TokenInfo1->User.User.Sid;
+    PSID LogonSid = NULL;
+    TOKEN_DEFAULT_DACL DefaultDacl;
+    PACL Dacl;
+    ULONG Size, i;
+    NTSTATUS Status;
+
+    if (TokenInfo1->Groups != NULL)
+    {
+        for (i = 0; i < TokenInfo1->Groups->GroupCount; i++)
+        {
+            if ((TokenInfo1->Groups->Groups[i].Attributes & SE_GROUP_LOGON_ID) == SE_GROUP_LOGON_ID)
+            {
+                LogonSid = TokenInfo1->Groups->Groups[i].Sid;
+                break;
+            }
+        }
+    }
+
+    Size = sizeof(ACL) +
+           2 * sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(UserSid) + RtlLengthSid(LsapLocalSystemSid);
+    if (LogonSid != NULL)
+        Size += sizeof(ACCESS_ALLOWED_ACE) + RtlLengthSid(LogonSid);
+
+    Dacl = RtlAllocateHeap(RtlGetProcessHeap(), 0, Size);
+    if (Dacl == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Status = RtlCreateAcl(Dacl, Size, ACL_REVISION);
+    if (NT_SUCCESS(Status))
+        Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_ALL, UserSid);
+    if (NT_SUCCESS(Status))
+        Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_ALL, LsapLocalSystemSid);
+    if (NT_SUCCESS(Status) && LogonSid != NULL)
+        Status = RtlAddAccessAllowedAce(Dacl, ACL_REVISION, GENERIC_READ | GENERIC_EXECUTE, LogonSid);
+    if (NT_SUCCESS(Status))
+    {
+        DefaultDacl.DefaultDacl = Dacl;
+        Status = NtSetInformationToken(TokenHandle, TokenDefaultDacl, &DefaultDacl, sizeof(DefaultDacl));
+    }
+
+    RtlFreeHeap(RtlGetProcessHeap(), 0, Dacl);
+    return Status;
+}
+
+/* Builds the UAC pair of a logon: the filtered token takes the full one's place in
+ * the logon session, the elevated token gets a logon session of its own and is
+ * reachable only through the link. LSA keeps no handle on it afterwards. */
+static
+NTSTATUS
+LsapCreateLinkedTokens(
+    _Inout_ PHANDLE TokenHandle,
+    _Out_ PLUID ElevatedLogonId,
+    _In_ PLSA_TOKEN_INFORMATION_V1 TokenInfo1,
+    _In_ PTOKEN_SOURCE TokenSource)
+{
+    TOKEN_PRIVILEGES NoPrivileges = {0};
+    OBJECT_ATTRIBUTES ObjectAttributes;
+    SECURITY_QUALITY_OF_SERVICE Qos;
+    PSECURITY_DESCRIPTOR TokenSd = NULL;
+    ULONG TokenSdSize;
+    TOKEN_LINKED_TOKEN Linked;
+    HANDLE LimitedToken = NULL;
+    HANDLE ElevatedToken = NULL;
+    NTSTATUS Status;
+
+    RtlZeroMemory(ElevatedLogonId, sizeof(LUID));
+
+    Status = NtFilterToken(*TokenHandle, LUA_TOKEN, NULL, NULL, NULL, &LimitedToken);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("NtFilterToken(LUA_TOKEN) failed (Status 0x%08lx)\n", Status);
+        return Status;
+    }
+
+    Status = LsapSetLimitedDefaultDacl(LimitedToken, TokenInfo1);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("Setting the limited token's default DACL failed (Status 0x%08lx)\n", Status);
+        goto done;
+    }
+
+    /* The elevated token lives in a logon session of its own */
+    Status = NtAllocateLocallyUniqueId(ElevatedLogonId);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = LsapCreateLogonSession(ElevatedLogonId);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("LsapCreateLogonSession(elevated) failed (Status 0x%08lx)\n", Status);
+        RtlZeroMemory(ElevatedLogonId, sizeof(LUID));
+        goto done;
+    }
+
+    if (!NT_SUCCESS(LsapCreateTokenSd(&TokenInfo1->User, &TokenSd, &TokenSdSize)))
+        TokenSd = NULL;
+
+    Qos.Length = sizeof(SECURITY_QUALITY_OF_SERVICE);
+    Qos.ImpersonationLevel = SecurityImpersonation;
+    Qos.ContextTrackingMode = SECURITY_DYNAMIC_TRACKING;
+    Qos.EffectiveOnly = FALSE;
+
+    InitializeObjectAttributes(&ObjectAttributes, NULL, 0, NULL, TokenSd);
+    ObjectAttributes.SecurityQualityOfService = &Qos;
+
+    Status = NtCreateToken(&ElevatedToken,
+                           TOKEN_ALL_ACCESS,
+                           &ObjectAttributes,
+                           TokenPrimary,
+                           ElevatedLogonId,
+                           &TokenInfo1->ExpirationTime,
+                           &TokenInfo1->User,
+                           TokenInfo1->Groups,
+                           TokenInfo1->Privileges ? TokenInfo1->Privileges : &NoPrivileges,
+                           &TokenInfo1->Owner,
+                           &TokenInfo1->PrimaryGroup,
+                           &TokenInfo1->DefaultDacl,
+                           TokenSource);
+    RtlFreeHeap(RtlGetProcessHeap(), 0, TokenSd);
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("NtCreateToken(elevated) failed (Status 0x%08lx)\n", Status);
+        goto done;
+    }
+
+    Linked.LinkedToken = ElevatedToken;
+    Status = NtSetInformationToken(LimitedToken, TokenLinkedToken, &Linked, sizeof(Linked));
+    if (!NT_SUCCESS(Status))
+    {
+        ERR("Linking the UAC pair failed (Status 0x%08lx)\n", Status);
+        goto done;
+    }
+
+    /* From here on the limited token's session keeps the elevated token alive */
+    NtClose(ElevatedToken);
+    NtClose(*TokenHandle);
+    *TokenHandle = LimitedToken;
+    return STATUS_SUCCESS;
+
+done:
+    if (ElevatedToken != NULL)
+        NtClose(ElevatedToken);
+    if (ElevatedLogonId->LowPart != 0 || ElevatedLogonId->HighPart != 0)
+    {
+        LsapDeleteLogonSession(ElevatedLogonId);
+        RtlZeroMemory(ElevatedLogonId, sizeof(LUID));
+    }
+    NtClose(LimitedToken);
+    return Status;
+}
+
+
 NTSTATUS
 LsapLogonUser(PLSA_API_MSG RequestMsg,
               PLSAP_LOGON_CONTEXT LogonContext)
@@ -1680,6 +1927,7 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
     ULONG i;
     ULONG PackageId;
     SECURITY_LOGON_TYPE LogonType;
+    LUID ElevatedLogonId = {0, 0};
     NTSTATUS Status;
 
     PUNICODE_STRING UserName = NULL;
@@ -1965,6 +2213,21 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
         goto done;
     }
 
+    /* An administrator's interactive logon runs filtered; the elevated token stays linked */
+    if (TokenInformationType == LsaTokenInformationV1 &&
+        LsapShouldSplitToken(LogonType, TokenInfo1))
+    {
+        Status = LsapCreateLinkedTokens(&TokenHandle,
+                                        &ElevatedLogonId,
+                                        TokenInfo1,
+                                        &RequestMsg->LogonUser.Request.SourceContext);
+        if (!NT_SUCCESS(Status))
+        {
+            ERR("LsapCreateLinkedTokens failed (Status 0x%08lx)\n", Status);
+            goto done;
+        }
+    }
+
     if (LogonType == Interactive ||
         LogonType == Batch ||
         LogonType == Service ||
@@ -1998,6 +2261,22 @@ LsapLogonUser(PLSA_API_MSG RequestMsg,
         goto done;
     }
 
+    /* The elevated token's session describes the same logon */
+    if (ElevatedLogonId.LowPart != 0 || ElevatedLogonId.HighPart != 0)
+    {
+        Status = LsapSetLogonSessionData(&ElevatedLogonId,
+                                         LogonType,
+                                         UserName,
+                                         LogonDomainName,
+                                         TokenInfo1->User.User.Sid,
+                                         ClientSession.SessionId);
+        if (!NT_SUCCESS(Status))
+        {
+            ERR("LsapSetLogonSessionData(elevated) failed (Status 0x%08lx)\n", Status);
+            goto done;
+        }
+    }
+
     /*
      * Duplicate the token handle into the client process.
      * This must be the last step because we cannot
@@ -2024,6 +2303,8 @@ done:
 
         /* Delete the logon session */
         LsapDeleteLogonSession(&RequestMsg->LogonUser.Reply.LogonId);
+        if (ElevatedLogonId.LowPart != 0 || ElevatedLogonId.HighPart != 0)
+            LsapDeleteLogonSession(&ElevatedLogonId);
 
         /* Release the profile buffer */
         LsapFreeClientBuffer((PLSA_CLIENT_REQUEST)LogonContext,

@@ -454,6 +454,21 @@ WaitForBootDeviceInstallThread(
 }
 
 
+static
+VOID
+PublishThemeTrustFact(VOID)
+{
+    BOOL (WINAPI *Publish)(VOID);
+    HMODULE UxTheme = LoadLibraryW(L"uxtheme.dll");
+
+    if (!UxTheme)
+        return;
+    Publish = (BOOL (WINAPI *)(VOID))GetProcAddress(UxTheme, "ThemeTrustPublishBootFact");
+    if (!Publish || !Publish())
+        WARN("WL: the theme trust fact was not published\n");
+    /* uxtheme stays loaded: the theme load inside LoadLibrary can queue a work item and arm a timer that run its code later */
+}
+
 int
 WINAPI
 WinMain(
@@ -535,6 +550,8 @@ WinMain(
 
     /* Wait for the LSA server */
     WaitForLsass();
+
+    PublishThemeTrustFact();
 
     /* Init Notifications */
     InitNotifications();

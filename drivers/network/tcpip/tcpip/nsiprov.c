@@ -2000,6 +2000,372 @@ TiNsiNotifyStop(VOID)
     KeFlushQueuedDpcs();
 }
 
+/* The statistics tables. The IP tables take the family as their context; the TCP and UDP tables
+ * take it as their key. */
+
+static NTSTATUS NTAPI
+TiNsiCompartmentGetAll(
+    _In_opt_ PVOID Context,
+    _In_ ULONG FirstArg,
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_ip_cmpt_rw)) PVOID Rw,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_ip_cmpt_dynamic)) PVOID Dynamic,
+    _Out_writes_bytes_opt_(0) PVOID Static)
+{
+    struct nsi_ip_cmpt_rw *CmptRw = Rw;
+    struct nsi_ip_cmpt_dynamic *CmptDynamic = Dynamic;
+    IP_STATS_ROW Row;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(FirstArg);
+    UNREFERENCED_PARAMETER(Static);
+
+    if (KeySize != sizeof(UINT))
+        return STATUS_INVALID_PARAMETER;
+    /* There is one compartment */
+    if (*(const UINT *)Key != 1)
+        return STATUS_NOT_FOUND;
+    Status = IfInfoIpStats((ULONG)(ULONG_PTR)Context, &Row);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if ((ULONG)(ULONG_PTR)Context == TI_NSI_FAMILY_IPV4)
+    {
+        /* The forward table also has the routes derived from the addresses: count its rows */
+        NSI_ENUMERATE_REQUEST Request;
+
+        RtlZeroMemory(&Request, sizeof(Request));
+        Status = TiNsiIp4ForwardEnumerate(NULL, &Request);
+        if (NT_SUCCESS(Status) || Status == STATUS_BUFFER_OVERFLOW)
+            Row.NumRoutes = Request.Count;
+    }
+    if (CmptRw != NULL)
+    {
+        RtlZeroMemory(CmptRw, sizeof(*CmptRw));
+        CmptRw->not_forwarding = TRUE;
+        CmptRw->default_ttl = Row.DefaultTtl;
+    }
+    if (CmptDynamic != NULL)
+    {
+        RtlZeroMemory(CmptDynamic, sizeof(*CmptDynamic));
+        CmptDynamic->num_ifs = Row.NumInterfaces;
+        CmptDynamic->num_routes = Row.NumRoutes;
+        CmptDynamic->num_addrs = Row.NumAddresses;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+TiNsiIcmpStatsGetAll(
+    _In_opt_ PVOID Context,
+    _In_ ULONG FirstArg,
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_writes_bytes_opt_(0) PVOID Rw,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_ip_icmpstats_dynamic)) PVOID Dynamic,
+    _Out_writes_bytes_opt_(0) PVOID Static)
+{
+    struct nsi_ip_icmpstats_dynamic *Icmp = Dynamic;
+    PIP_STATS_ROW Row;
+    NTSTATUS Status;
+    ULONG i;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(FirstArg);
+    UNREFERENCED_PARAMETER(Key);
+    UNREFERENCED_PARAMETER(Rw);
+    UNREFERENCED_PARAMETER(Static);
+
+    if (KeySize != 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Icmp == NULL)
+        return STATUS_SUCCESS;
+    Row = ExAllocatePoolWithTag(PagedPool, sizeof(*Row), NSI_PROVIDER_TAG);
+    if (Row == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = IfInfoIpStats((ULONG)(ULONG_PTR)Context, Row);
+    if (NT_SUCCESS(Status))
+    {
+        RtlZeroMemory(Icmp, sizeof(*Icmp));
+        Icmp->in_msgs = Row->IcmpInMsgs;
+        Icmp->in_errors = Row->IcmpInErrors;
+        Icmp->out_msgs = Row->IcmpOutMsgs;
+        Icmp->out_errors = Row->IcmpOutErrors;
+        for (i = 0; i < IFINFO_ICMP_TYPES; i++)
+        {
+            Icmp->in_type_counts[IfInfoIcmpTypes[i]] = Row->IcmpInTypes[i];
+            Icmp->out_type_counts[IfInfoIcmpTypes[i]] = Row->IcmpOutTypes[i];
+        }
+    }
+    ExFreePoolWithTag(Row, NSI_PROVIDER_TAG);
+    return Status;
+}
+
+static NTSTATUS NTAPI
+TiNsiIpStatsGetAll(
+    _In_opt_ PVOID Context,
+    _In_ ULONG FirstArg,
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_writes_bytes_opt_(0) PVOID Rw,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_ip_ipstats_dynamic)) PVOID Dynamic,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_ip_ipstats_static)) PVOID Static)
+{
+    struct nsi_ip_ipstats_dynamic *Ip = Dynamic;
+    struct nsi_ip_ipstats_static *IpStatic = Static;
+    PIP_STATS_ROW Row;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(FirstArg);
+    UNREFERENCED_PARAMETER(Key);
+    UNREFERENCED_PARAMETER(Rw);
+
+    if (KeySize != 0)
+        return STATUS_INVALID_PARAMETER;
+    Row = ExAllocatePoolWithTag(PagedPool, sizeof(*Row), NSI_PROVIDER_TAG);
+    if (Row == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    Status = IfInfoIpStats((ULONG)(ULONG_PTR)Context, Row);
+    if (NT_SUCCESS(Status) && Ip != NULL)
+    {
+        RtlZeroMemory(Ip, sizeof(*Ip));
+        Ip->in_recv = Row->InReceives;
+        Ip->in_octets = Row->InOctets;
+        Ip->fwd_dgrams = Row->ForwDatagrams;
+        Ip->in_delivers = Row->InDelivers;
+        Ip->out_reqs = Row->OutRequests;
+        Ip->out_octets = Row->OutOctets;
+        Ip->in_hdr_errs = Row->InHdrErrors;
+        Ip->in_addr_errs = Row->InAddrErrors;
+        Ip->in_unk_protos = Row->InUnknownProtos;
+        Ip->reasm_reqds = Row->ReasmReqds;
+        Ip->reasm_oks = Row->ReasmOks;
+        Ip->reasm_fails = Row->ReasmFails;
+        Ip->in_discards = Row->InDiscards;
+        Ip->out_no_routes = Row->OutNoRoutes;
+        Ip->out_discards = Row->OutDiscards;
+        Ip->frag_oks = Row->FragOks;
+        Ip->frag_fails = Row->FragFails;
+        Ip->frag_creates = Row->FragCreates;
+    }
+    if (NT_SUCCESS(Status) && IpStatic != NULL)
+    {
+        RtlZeroMemory(IpStatic, sizeof(*IpStatic));
+        IpStatic->reasm_timeout = Row->ReasmTimeout;
+    }
+    ExFreePoolWithTag(Row, NSI_PROVIDER_TAG);
+    return Status;
+}
+
+static NTSTATUS
+TiNsiStatsFamily(
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_ PULONG Family)
+{
+    if (KeySize != sizeof(USHORT))
+        return STATUS_INVALID_PARAMETER;
+    if (*(const USHORT *)Key == AF_INET)
+        *Family = TI_NSI_FAMILY_IPV4;
+    else if (*(const USHORT *)Key == AF_INET6)
+        *Family = TI_NSI_FAMILY_IPV6;
+    else
+        return STATUS_NOT_SUPPORTED;
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+TiNsiTcpStatsGetAll(
+    _In_opt_ PVOID Context,
+    _In_ ULONG FirstArg,
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_writes_bytes_opt_(0) PVOID Rw,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_tcp_stats_dynamic)) PVOID Dynamic,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_tcp_stats_static)) PVOID Static)
+{
+    struct nsi_tcp_stats_dynamic *Tcp = Dynamic;
+    struct nsi_tcp_stats_static *TcpStatic = Static;
+    TCP_STATS_ROW Row;
+    ULONG Family;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(FirstArg);
+    UNREFERENCED_PARAMETER(Rw);
+
+    Status = TiNsiStatsFamily(Key, KeySize, &Family);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = IfInfoTcpStats(Family, &Row);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Tcp != NULL)
+    {
+        RtlZeroMemory(Tcp, sizeof(*Tcp));
+        Tcp->active_opens = Row.ActiveOpens;
+        Tcp->passive_opens = Row.PassiveOpens;
+        Tcp->attempt_fails = Row.AttemptFails;
+        Tcp->est_rsts = Row.EstabResets;
+        Tcp->cur_est = Row.CurrEstab;
+        Tcp->in_segs = Row.InSegs;
+        Tcp->out_segs = Row.OutSegs;
+        Tcp->retrans_segs = Row.RetransSegs;
+        Tcp->out_rsts = Row.OutRsts;
+        Tcp->in_errs = Row.InErrs;
+        Tcp->num_conns = Row.NumConns;
+    }
+    if (TcpStatic != NULL)
+    {
+        RtlZeroMemory(TcpStatic, sizeof(*TcpStatic));
+        TcpStatic->rto_algo = MIB_TCP_RTO_VANJ;
+        TcpStatic->max_conns = Row.MaxConn;
+    }
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS NTAPI
+TiNsiUdpStatsGetAll(
+    _In_opt_ PVOID Context,
+    _In_ ULONG FirstArg,
+    _In_reads_bytes_(KeySize) const VOID *Key,
+    _In_ ULONG KeySize,
+    _Out_writes_bytes_opt_(0) PVOID Rw,
+    _Out_writes_bytes_opt_(sizeof(struct nsi_udp_stats_dynamic)) PVOID Dynamic,
+    _Out_writes_bytes_opt_(0) PVOID Static)
+{
+    struct nsi_udp_stats_dynamic *Udp = Dynamic;
+    UDP_STATS_ROW Row;
+    ULONG Family;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+    UNREFERENCED_PARAMETER(Context);
+    UNREFERENCED_PARAMETER(FirstArg);
+    UNREFERENCED_PARAMETER(Rw);
+    UNREFERENCED_PARAMETER(Static);
+
+    Status = TiNsiStatsFamily(Key, KeySize, &Family);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    Status = IfInfoUdpStats(Family, &Row);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    if (Udp != NULL)
+    {
+        RtlZeroMemory(Udp, sizeof(*Udp));
+        Udp->in_dgrams = Row.InDatagrams;
+        Udp->no_ports = Row.NoPorts;
+        Udp->in_errs = Row.InErrors;
+        Udp->out_dgrams = Row.OutDatagrams;
+        Udp->num_addrs = Row.NumAddrs;
+    }
+    return STATUS_SUCCESS;
+}
+
+#define TI_NSI_STATS_TABLES 8
+
+static const NSI_PROVIDER_DISPATCH TiNsiCompartmentDispatch =
+{
+    sizeof(NSI_PROVIDER_DISPATCH),
+    { sizeof(UINT), sizeof(struct nsi_ip_cmpt_rw), sizeof(struct nsi_ip_cmpt_dynamic), 0 },
+    NULL,
+    TiNsiCompartmentGetAll,
+    NULL
+};
+
+static const NSI_PROVIDER_DISPATCH TiNsiIcmpStatsDispatch =
+{
+    sizeof(NSI_PROVIDER_DISPATCH),
+    { 0, 0, sizeof(struct nsi_ip_icmpstats_dynamic), 0 },
+    NULL,
+    TiNsiIcmpStatsGetAll,
+    NULL
+};
+
+static const NSI_PROVIDER_DISPATCH TiNsiIpStatsDispatch =
+{
+    sizeof(NSI_PROVIDER_DISPATCH),
+    { 0, 0, sizeof(struct nsi_ip_ipstats_dynamic), sizeof(struct nsi_ip_ipstats_static) },
+    NULL,
+    TiNsiIpStatsGetAll,
+    NULL
+};
+
+static const NSI_PROVIDER_DISPATCH TiNsiTcpStatsDispatch =
+{
+    sizeof(NSI_PROVIDER_DISPATCH),
+    { sizeof(USHORT), 0, sizeof(struct nsi_tcp_stats_dynamic), sizeof(struct nsi_tcp_stats_static) },
+    NULL,
+    TiNsiTcpStatsGetAll,
+    NULL
+};
+
+static const NSI_PROVIDER_DISPATCH TiNsiUdpStatsDispatch =
+{
+    sizeof(NSI_PROVIDER_DISPATCH),
+    { sizeof(USHORT), 0, sizeof(struct nsi_udp_stats_dynamic), 0 },
+    NULL,
+    TiNsiUdpStatsGetAll,
+    NULL
+};
+
+static const struct
+{
+    const NPI_MODULEID *Module;
+    ULONG Table;
+    const NSI_PROVIDER_DISPATCH *Dispatch;
+    ULONG Family;
+} TiNsiStatsTables[TI_NSI_STATS_TABLES] =
+{
+    { &NPI_MS_IPV4_MODULEID, NSI_IP_COMPARTMENT_TABLE, &TiNsiCompartmentDispatch, TI_NSI_FAMILY_IPV4 },
+    { &NPI_MS_IPV4_MODULEID, NSI_IP_ICMPSTATS_TABLE, &TiNsiIcmpStatsDispatch, TI_NSI_FAMILY_IPV4 },
+    { &NPI_MS_IPV4_MODULEID, NSI_IP_IPSTATS_TABLE, &TiNsiIpStatsDispatch, TI_NSI_FAMILY_IPV4 },
+    { &NPI_MS_IPV6_MODULEID, NSI_IP_COMPARTMENT_TABLE, &TiNsiCompartmentDispatch, TI_NSI_FAMILY_IPV6 },
+    { &NPI_MS_IPV6_MODULEID, NSI_IP_ICMPSTATS_TABLE, &TiNsiIcmpStatsDispatch, TI_NSI_FAMILY_IPV6 },
+    { &NPI_MS_IPV6_MODULEID, NSI_IP_IPSTATS_TABLE, &TiNsiIpStatsDispatch, TI_NSI_FAMILY_IPV6 },
+    { &NPI_MS_TCP_MODULEID, NSI_TCP_STATS_TABLE, &TiNsiTcpStatsDispatch, 0 },
+    { &NPI_MS_UDP_MODULEID, NSI_UDP_STATS_TABLE, &TiNsiUdpStatsDispatch, 0 },
+};
+static PNSI_PROVIDER TiNsiStatsProviders[TI_NSI_STATS_TABLES];
+
+static VOID
+TiNsiRegisterStats(VOID)
+{
+    ULONG i;
+    NTSTATUS Status;
+
+    for (i = 0; i < TI_NSI_STATS_TABLES; i++)
+    {
+        Status = NsiRegisterProvider(TiNsiStatsTables[i].Module, TiNsiStatsTables[i].Table, TiNsiStatsTables[i].Dispatch,
+                                     (PVOID)(ULONG_PTR)TiNsiStatsTables[i].Family, &TiNsiStatsProviders[i]);
+        if (!NT_SUCCESS(Status))
+        {
+            TiNsiStatsProviders[i] = NULL;
+            DPRINT1("NSI: registering statistics table %lu (entry %lu) failed, status 0x%08lx\n",
+                    TiNsiStatsTables[i].Table, i, Status);
+        }
+    }
+}
+
+static VOID
+TiNsiDeregisterStats(VOID)
+{
+    ULONG i;
+
+    for (i = 0; i < TI_NSI_STATS_TABLES; i++)
+    {
+        if (TiNsiStatsProviders[i] != NULL)
+        {
+            NsiDeregisterProvider(TiNsiStatsProviders[i]);
+            TiNsiStatsProviders[i] = NULL;
+        }
+    }
+}
+
 VOID
 TiNsiRegister(VOID)
 {
@@ -2022,6 +2388,7 @@ TiNsiRegister(VOID)
     TiNsiRegisterIp6();
     TiNsiRegisterIp4();
     TiNsiRegisterEndpoints();
+    TiNsiRegisterStats();
     TiNsiNotifyStart();
 }
 
@@ -2042,6 +2409,7 @@ TiNsiDeregister(VOID)
     PAGED_CODE();
 
     TiNsiNotifyStop();
+    TiNsiDeregisterStats();
     TiNsiDeregisterEndpoints();
     TiNsiDeregisterIp4();
     TiNsiDeregisterIp6();

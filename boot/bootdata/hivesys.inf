@@ -1857,6 +1857,7 @@ HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\KnownDlls","xtajit64",0x0
 
 ; Memory Management
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management",,0x00000012
+HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management","PagingFiles",0x00010000,"?:\pagefile.sys"
 
 ; SubSystems
 HKLM,"SYSTEM\CurrentControlSet\Control\Session Manager\SubSystems","Debug",0x00020002,""

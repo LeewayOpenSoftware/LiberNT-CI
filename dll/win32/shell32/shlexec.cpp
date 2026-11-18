@@ -24,6 +24,30 @@
 #include <winbase_undoc.h>
 #include <undocshell.h>
 
+extern "C" DWORD SHELL_ElevateProcess(HWND hwnd, LPCWSTR ApplicationName, LPCWSTR CommandLine,
+                                      LPCWSTR CurrentDirectory, DWORD CreationFlags,
+                                      const STARTUPINFOW *pStartupInfo, PROCESS_INFORMATION *pProcessInfo);
+
+#ifndef TokenElevationTypeLimited
+#define TokenElevationTypeLimited 3
+#endif
+
+/* A limited administrator token has an elevated one linked to it; the broker can use that. */
+static BOOL SHELL_IsTokenLimited(void)
+{
+    HANDLE hToken;
+    DWORD dwType = 0, cbSize;
+    BOOL bLimited = FALSE;
+
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &hToken))
+    {
+        if (GetTokenInformation(hToken, TokenElevationType, &dwType, sizeof(dwType), &cbSize))
+            bLimited = (dwType == TokenElevationTypeLimited);
+        CloseHandle(hToken);
+    }
+    return bLimited;
+}
+
 WINE_DEFAULT_DEBUG_CHANNEL(exec);
 
 EXTERN_C BOOL PathIsExeW(LPCWSTR lpszPath);
@@ -596,6 +620,27 @@ PromptAndRunProcessAs(
     INT_PTR dlgret;
     hwnd = SHELL_GetUsableDialogOwner(hwnd);
 
+    // A limited administrator asks the elevation broker, which prompts for consent and starts
+    // the program with the linked token. What the broker will not do falls through to the
+    // credentials dialog below (standard users, credential policy modes, LUA off, no broker).
+    if (SHELL_IsTokenLimited())
+    {
+        DWORD dwElevate = SHELL_ElevateProcess(hwnd, NULL, Cmd, Dir, CreationFlags, pSI, pPI);
+        if (dwElevate == ERROR_SUCCESS)
+            return S_OK;
+        if (dwElevate == ERROR_CANCELLED)
+        {
+            SetLastError(ERROR_CANCELLED);
+            pPI->hProcess = NULL;
+            return S_FALSE;
+        }
+        if (dwElevate != ERROR_ELEVATION_REQUIRED && dwElevate != ERROR_SERVICE_NOT_ACTIVE)
+        {
+            SHELL_ErrorBox(hwnd, dwElevate);
+            pPI->hProcess = NULL;
+            return E_FAIL;
+        }
+    }
 again:
     dlgret = DialogBoxParamW(shell32_hInstance, MAKEINTRESOURCEW(IDD_RUN_AS),
                              hwnd, RunAsDlgProc, (LPARAM)&data);
@@ -1058,6 +1103,12 @@ static UINT SHELL_FindExecutable(LPCWSTR lpPath, LPCWSTR lpFile, LPCWSTR lpVerb,
 
         lstrcpyW(lpResult, xlpFile);
         /* The file was found in lpPath or one of the directories in the system-wide search path */
+    }
+    /* Handle cases like CORE-20508 */
+    else if (SearchPathW(lpPath, lpFile, NULL, ARRAY_SIZE(xlpFile), xlpFile, NULL))
+    {
+        TRACE("SearchPathW returned non-zero\n");
+        lpFile = xlpFile;
     }
     else
     {

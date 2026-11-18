@@ -115,6 +115,11 @@ extern void UXTHEME_InitSystem(HINSTANCE hInst);
 extern HRESULT UXTHEME_SetActiveTheme(PTHEME_FILE tf);
 extern void UXTHEME_UninitSystem(void);
 
+/* Process-init attach defer gate (trustdefer.c): park trust events raised during DllMain attach */
+void UXTHEME_TrustBeginAttachDefer(void);
+void UXTHEME_TrustEndAttachDefer(void);
+BOOL UXTHEME_TrustInProcessInitAttach(void);
+
 #ifdef __REACTOS__
 extern HINSTANCE hDllInst;
 extern DWORD gdwErrorInfoTlsIndex;

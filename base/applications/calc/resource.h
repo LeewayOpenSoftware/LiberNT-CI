@@ -4,6 +4,7 @@
 #define IDC_STATIC  -1
 #endif
 
+/* llvm-rc wants dialog coordinates in signed range */
 #define CW_USEDEFAULT16 (-0x8000)
 
 #define IDS_CALC_NAME                   1

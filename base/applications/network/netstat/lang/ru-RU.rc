@@ -61,6 +61,7 @@ END
 STRINGTABLE
 BEGIN
     IDS_ICMP4_STAT_HEADER "\nСтатистика ICMPv4\n\n"
+    IDS_ICMP6_STAT_HEADER "\nСтатистика ICMPv6\n\n"
     IDS_ICMP_THEADER             "                            Получено   Отправлено\n"
     IDS_ICMP_MSG                 "  Сообщений                 %-11lu %-10lu\n"
     IDS_ICMP_ERROR               "  Ошибок                    %-11lu %-10lu\n"

@@ -5,6 +5,7 @@ BEGIN
     IDS_HLP_INTERFACE_SHOW "Displays information.\n"
     IDS_HLP_INTERFACE_SHOW_INTERFACE "Displays interfaces.\n"
     IDS_HLP_INTERFACE_SHOW_INTERFACE_EX "\nUsage:\n"
+    IDS_INTERFACE_HEADER "\nAdmin State    State          Type             Interface Name\n-------------------------------------------------------------------------\n"
 
     IDS_HLP_IP_ADD "Adds a configuration entry to a table.\n"
     IDS_HLP_IP_ADD_ADDRESS     "Adds an IP address to the specified interface.\n"

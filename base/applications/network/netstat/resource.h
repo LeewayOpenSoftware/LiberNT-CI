@@ -7,6 +7,7 @@
 #define IDS_IP4_STAT_HEADER   4
 #define IDS_ICMP4_STAT_HEADER 5
 #define IDS_ICMP_THEADER      6
+#define IDS_ICMP6_STAT_HEADER 108
 #define IDS_TCP4_HEADER       7
 
 #define IDS_ERROR_WSA_START          10

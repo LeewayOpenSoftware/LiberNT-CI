@@ -26,6 +26,29 @@ if(NOT KERNEL_VERSION_BUILD_TYPE STREQUAL "")
     set(DLL_VERSION_STR "${DLL_VERSION_STR}-${KERNEL_VERSION_BUILD_TYPE}")
 endif()
 
+# Leeway cut number, shown in the About boxes as "LBI <number>" (1060, 1060.10, ...).
+# One source of truth: -DLIBERNT_LBI_BUILD=<number> wins; otherwise the one-line file
+# LBI_BUILD at the tree root (each cut branch carries its own); otherwise "dev".
+# The LBI ledger sequence (sdk/cmake/lbi.cmake) stays the per-attempt identity and is
+# not derived from this number; the NT identity (VER_PRODUCTBUILD) is untouched.
+set(LIBERNT_LBI_BUILD "" CACHE STRING "Leeway cut number shown as 'LBI <number>' in About boxes (empty: LBI_BUILD file, else dev)")
+set(LIBERNT_LBI_BUILD_EFFECTIVE "${LIBERNT_LBI_BUILD}")
+if(LIBERNT_LBI_BUILD_EFFECTIVE STREQUAL "" AND EXISTS "${REACTOS_SOURCE_DIR}/LBI_BUILD")
+    file(STRINGS "${REACTOS_SOURCE_DIR}/LBI_BUILD" _lbi_build_lines LIMIT_COUNT 1)
+    if(_lbi_build_lines)
+        list(GET _lbi_build_lines 0 LIBERNT_LBI_BUILD_EFFECTIVE)
+    endif()
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${REACTOS_SOURCE_DIR}/LBI_BUILD")
+endif()
+string(STRIP "${LIBERNT_LBI_BUILD_EFFECTIVE}" LIBERNT_LBI_BUILD_EFFECTIVE)
+if(LIBERNT_LBI_BUILD_EFFECTIVE STREQUAL "")
+    set(LIBERNT_LBI_BUILD_EFFECTIVE "dev")
+endif()
+if(NOT LIBERNT_LBI_BUILD_EFFECTIVE MATCHES "^[A-Za-z0-9][A-Za-z0-9._-]*$")
+    message(FATAL_ERROR "LIBERNT_LBI_BUILD '${LIBERNT_LBI_BUILD_EFFECTIVE}' must be letters, digits, '.', '_' or '-' (e.g. 1060.10)")
+endif()
+message(STATUS "LBI build number: ${LIBERNT_LBI_BUILD_EFFECTIVE}")
+
 if(NOT LIBERNT_BUILD_NUMBER)
     set(LIBERNT_BUILD_NUMBER "$ENV{GITHUB_RUN_NUMBER}")
 endif()

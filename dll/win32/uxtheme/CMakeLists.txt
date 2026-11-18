@@ -21,6 +21,8 @@ list(APPEND SOURCE
     stylemap.c
     system.c
     themehooks.c
+    trust.c
+    trustdefer.c
     uxini.c
     uxthemep.h
     window.c
@@ -33,6 +35,25 @@ if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
         pngsup.cpp)
 endif()
 
+# I1b: version-4 styles through the TL4 core. The code is built wherever the PNG support exists (NT 6.0+ exports);
+# whether a process loads a version-4 style is decided at run time by the trust gate values EnableV4Ordinary /
+# EnableV4Privileged, which are off until they are set.
+if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
+    set(_uxtheme_v4_default ON)
+else()
+    set(_uxtheme_v4_default OFF)
+endif()
+option(UXTHEME_V4 "Build the version-4 visual style path of uxtheme (needs the PNG support of NT 6.0+ exports)" ${_uxtheme_v4_default})
+if(UXTHEME_V4)
+    if(DLL_EXPORT_VERSION LESS 0x600)
+        message(FATAL_ERROR "UXTHEME_V4 needs DLL_EXPORT_VERSION 0x600 or later (PNG images)")
+    endif()
+    add_definitions(-DUXTHEME_V4)
+    list(APPEND SOURCE
+        msstyles_v4.c
+        msstyles_v4.h)
+endif()
+
 file(GLOB uxtheme_rc_deps ${CMAKE_CURRENT_SOURCE_DIR}/lang/*.rc)
 add_rc_deps(uxtheme.rc ${uxtheme_rc_deps})
 
@@ -43,7 +64,7 @@ add_library(uxtheme MODULE
     ${CMAKE_CURRENT_BINARY_DIR}/uxtheme.def)
 
 set_module_type(uxtheme win32dll)
-target_link_libraries(uxtheme wine win32ksys ${PSEH_LIB})
+target_link_libraries(uxtheme wine win32ksys tl4 ${PSEH_LIB})
 add_delay_importlibs(uxtheme msimg32 dwmapi)
 if(DLL_EXPORT_VERSION GREATER_EQUAL 0x600)
     add_importlibs(uxtheme user32_vista user32 advapi32 gdiplus gdi32 shlwapi msvcrt kernel32 ntdll)

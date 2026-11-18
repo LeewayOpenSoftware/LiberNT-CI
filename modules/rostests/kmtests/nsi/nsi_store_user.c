@@ -9,6 +9,7 @@
 #include <winsock2.h>
 #include <ws2ipdef.h>
 #include <iphlpapi.h>
+#include <icmpapi.h>
 #include <netioapi.h>
 #include <netiodef.h>
 #include <wine/nsi.h>
@@ -429,7 +430,22 @@ TestDeviceIpTables(
         ok(LuidKnown(luids, ifcount, luid), "family %u route %lu: luid %I64x unknown\n", Family, i, luid.Value);
         ok(prefix_len <= bits, "family %u route %lu: prefix length %u\n", Family, i, prefix_len);
         ok(stat->if_index != 0, "family %u route %lu: interface index 0\n", Family, i);
-        ok(rw->metric != 0 || rw->loopback, "family %u route %lu: metric 0 on a non-loopback route\n", Family, i);
+        {
+            /* The row carries the metric of the route itself, which may be 0: Windows 11 (build 26100) shows a
+             * default route from DHCP as RouteMetric 0, InterfaceMetric 45. The sum is never 0 off the loopback. */
+            MIB_IPINTERFACE_ROW ifrow;
+            DWORD if_err;
+
+            memset(&ifrow, 0, sizeof(ifrow));
+            ifrow.Family = Family;
+            ifrow.InterfaceLuid = luid;
+            if_err = GetIpInterfaceEntry(&ifrow);
+            ok(if_err == NO_ERROR, "family %u route %lu: no interface row: %lu\n", Family, i, if_err);
+            if (if_err == NO_ERROR)
+                ok(rw->metric + ifrow.Metric != 0 || rw->loopback,
+                   "family %u route %lu: route metric %u and interface metric %lu are both 0 on a non-loopback route\n",
+                   Family, i, rw->metric, ifrow.Metric);
+        }
     }
     if (GetIpForwardTable2(Family, &forward) == NO_ERROR)
     {
@@ -695,6 +711,175 @@ done:
 }
 
 #define NOTIFY_LIMIT_MS 1000
+
+static DWORD
+GetStatsRow(
+    _In_ HANDLE Device,
+    _In_ const NPI_MODULEID *Module,
+    _In_ UINT Table,
+    _In_reads_bytes_opt_(KeySize) const void *Key,
+    _In_ UINT KeySize,
+    _In_ UINT RwSize,
+    _In_ UINT DynamicSize,
+    _Out_writes_bytes_(RwSize + DynamicSize) void *Out)
+{
+    struct
+    {
+        struct nsiproxy_get_all_parameters header;
+        BYTE key_rest[sizeof(UINT)];
+    } in;
+    DWORD returned;
+
+    memset(&in, 0, sizeof(in));
+    in.header.module = *Module;
+    in.header.table = Table;
+    in.header.key_size = KeySize;
+    in.header.rw_size = RwSize;
+    in.header.dynamic_size = DynamicSize;
+    if (KeySize != 0)
+        memcpy(in.header.key, Key, KeySize);
+    return Ioctl(Device, IOCTL_NSIPROXY_WINE_GET_ALL_PARAMETERS, &in, sizeof(in), Out, RwSize + DynamicSize, &returned);
+}
+
+static DWORD
+CountRows(
+    _In_ HANDLE Device,
+    _In_ const NPI_MODULEID *Module,
+    _In_ UINT Table,
+    _In_ UINT KeySize)
+{
+    const UINT sizes[4] = { KeySize, 0, 0, 0 };
+    BYTE *rows = NULL;
+    DWORD count = 0, err;
+
+    err = EnumerateTable(Device, Module, Table, sizes, TABLE_ROWS, &rows, &count);
+    ok(err == ERROR_SUCCESS, "counting table %u: %lu\n", Table, err);
+    HeapFree(GetProcessHeap(), 0, rows);
+    return count;
+}
+
+/* The statistics tables of the stack, read from the device around known traffic */
+static void
+TestDeviceStats(
+    _In_ HANDLE Device)
+{
+    static struct nsi_ip_icmpstats_dynamic icmp_before, icmp_after;
+    struct nsi_ip_ipstats_dynamic ip_before, ip_after;
+    struct nsi_udp_stats_dynamic udp_before, udp_after;
+    struct nsi_tcp_stats_dynamic tcp4, tcp6;
+    struct
+    {
+        struct nsi_ip_cmpt_rw rw;
+        struct nsi_ip_cmpt_dynamic dynamic;
+    } cmpt;
+    USHORT family = AF_INET;
+    UINT compartment = 1;
+    SOCKADDR_IN addr;
+    SOCKET s;
+    WSADATA wsa;
+    char reply[64], data[8] = "nsistat";
+    HANDLE icmp;
+    DWORD err, count;
+    int len, i;
+
+    err = GetStatsRow(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_IPSTATS_TABLE, NULL, 0, 0, sizeof(ip_before), &ip_before);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    if (err != ERROR_SUCCESS)
+    {
+        skip(FALSE, "the statistics tables are not in the store\n");
+        return;
+    }
+    err = GetStatsRow(Device, &NPI_MS_UDP_MODULEID, NSI_UDP_STATS_TABLE, &family, sizeof(family), 0, sizeof(udp_before), &udp_before);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    err = GetStatsRow(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_ICMPSTATS_TABLE, NULL, 0, 0, sizeof(icmp_before), &icmp_before);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+
+    /* Five datagrams to ourselves */
+    ok(WSAStartup(MAKEWORD(2, 2), &wsa) == 0, "WSAStartup failed\n");
+    s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ok(s != INVALID_SOCKET, "socket: %d\n", WSAGetLastError());
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_addr.S_un.S_addr = htonl(INADDR_LOOPBACK);
+    ok(bind(s, (SOCKADDR *)&addr, sizeof(addr)) == 0, "bind: %d\n", WSAGetLastError());
+    len = sizeof(addr);
+    ok(getsockname(s, (SOCKADDR *)&addr, &len) == 0, "getsockname: %d\n", WSAGetLastError());
+    for (i = 0; i < 5; i++)
+    {
+        ok(sendto(s, data, sizeof(data), 0, (SOCKADDR *)&addr, sizeof(addr)) == sizeof(data), "sendto %d: %d\n", i, WSAGetLastError());
+        ok(recv(s, reply, sizeof(reply), 0) == sizeof(data), "recv %d: %d\n", i, WSAGetLastError());
+    }
+    closesocket(s);
+    WSACleanup();
+
+    /* One echo to ourselves */
+    icmp = IcmpCreateFile();
+    ok(icmp != INVALID_HANDLE_VALUE, "IcmpCreateFile: %lu\n", GetLastError());
+    if (icmp != INVALID_HANDLE_VALUE)
+    {
+        ok(IcmpSendEcho(icmp, htonl(INADDR_LOOPBACK), data, sizeof(data), NULL, reply, sizeof(reply), 2000) == 1,
+           "IcmpSendEcho: %lu\n", GetLastError());
+        IcmpCloseHandle(icmp);
+    }
+
+    err = GetStatsRow(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_IPSTATS_TABLE, NULL, 0, 0, sizeof(ip_after), &ip_after);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    err = GetStatsRow(Device, &NPI_MS_UDP_MODULEID, NSI_UDP_STATS_TABLE, &family, sizeof(family), 0, sizeof(udp_after), &udp_after);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    err = GetStatsRow(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_ICMPSTATS_TABLE, NULL, 0, 0, sizeof(icmp_after), &icmp_after);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+
+    ok(udp_after.out_dgrams - udp_before.out_dgrams >= 5, "udp out grew by %I64u\n", udp_after.out_dgrams - udp_before.out_dgrams);
+    ok(udp_after.in_dgrams - udp_before.in_dgrams >= 5, "udp in grew by %I64u\n", udp_after.in_dgrams - udp_before.in_dgrams);
+    /* five datagrams, one echo request and its reply */
+    ok(ip_after.out_reqs - ip_before.out_reqs >= 7, "ipv4 out requests grew by %I64u\n", ip_after.out_reqs - ip_before.out_reqs);
+    ok(ip_after.in_recv - ip_before.in_recv >= 7, "ipv4 in receives grew by %I64u\n", ip_after.in_recv - ip_before.in_recv);
+    ok(ip_after.in_delivers - ip_before.in_delivers >= 7, "ipv4 in delivers grew by %I64u\n", ip_after.in_delivers - ip_before.in_delivers);
+    ok(ip_after.in_recv >= ip_after.in_delivers, "ipv4 delivered %I64u of %I64u\n", ip_after.in_delivers, ip_after.in_recv);
+    ok(icmp_after.out_msgs - icmp_before.out_msgs >= 2, "icmp out grew by %u\n", icmp_after.out_msgs - icmp_before.out_msgs);
+    ok(icmp_after.in_msgs - icmp_before.in_msgs >= 2, "icmp in grew by %u\n", icmp_after.in_msgs - icmp_before.in_msgs);
+    ok(icmp_after.out_type_counts[8] - icmp_before.out_type_counts[8] >= 1, "icmp echo requests out grew by %u\n",
+       icmp_after.out_type_counts[8] - icmp_before.out_type_counts[8]);
+    ok(icmp_after.in_type_counts[0] - icmp_before.in_type_counts[0] >= 1, "icmp echo replies in grew by %u\n",
+       icmp_after.in_type_counts[0] - icmp_before.in_type_counts[0]);
+
+    /* The compartment counts the whole stack: the same rows as the tables */
+    memset(&cmpt, 0, sizeof(cmpt));
+    err = GetStatsRow(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_COMPARTMENT_TABLE, &compartment, sizeof(compartment),
+                      sizeof(cmpt.rw), sizeof(cmpt.dynamic), &cmpt);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    ok(cmpt.rw.default_ttl != 0, "no default TTL\n");
+    count = CountRows(Device, &NPI_MS_NDIS_MODULEID, NSI_NDIS_IFINFO_TABLE, sizeof(NET_LUID));
+    ok(cmpt.dynamic.num_ifs == count, "compartment has %u interfaces, IFINFO has %lu rows\n", cmpt.dynamic.num_ifs, count);
+    count = CountRows(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_UNICAST_TABLE, sizeof(struct nsi_ipv4_unicast_key));
+    ok(cmpt.dynamic.num_addrs == count, "compartment has %u addresses, UNICAST has %lu rows\n", cmpt.dynamic.num_addrs, count);
+    count = CountRows(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_FORWARD_TABLE, sizeof(struct nsi_ipv4_forward_key));
+    ok(cmpt.dynamic.num_routes == count, "compartment has %u routes, FORWARD has %lu rows\n", cmpt.dynamic.num_routes, count);
+    compartment = 2;
+    err = GetStatsRow(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_COMPARTMENT_TABLE, &compartment, sizeof(compartment),
+                      sizeof(cmpt.rw), sizeof(cmpt.dynamic), &cmpt);
+    ok_eq_ulong(err, (DWORD)ERROR_NOT_FOUND);
+
+    /* The TCP statistics count the rows of the connection table */
+    memset(&tcp4, 0, sizeof(tcp4));
+    memset(&tcp6, 0, sizeof(tcp6));
+    err = GetStatsRow(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_STATS_TABLE, &family, sizeof(family), 0, sizeof(tcp4), &tcp4);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    family = AF_INET6;
+    err = GetStatsRow(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_STATS_TABLE, &family, sizeof(family), 0, sizeof(tcp6), &tcp6);
+    ok_eq_ulong(err, (DWORD)ERROR_SUCCESS);
+    count = CountRows(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_ALL_TABLE, sizeof(struct nsi_tcp_conn_key));
+    ok(tcp4.num_conns + tcp6.num_conns == count, "statistics have %u + %u connections, the table has %lu rows\n",
+       tcp4.num_conns, tcp6.num_conns, count);
+    ok(tcp4.cur_est <= tcp4.num_conns, "%u of %u connections established\n", tcp4.cur_est, tcp4.num_conns);
+
+    /* Neither family, and a key for a table that has none */
+    family = 0;
+    err = GetStatsRow(Device, &NPI_MS_TCP_MODULEID, NSI_TCP_STATS_TABLE, &family, sizeof(family), 0, sizeof(tcp4), &tcp4);
+    ok_eq_ulong(err, (DWORD)ERROR_NOT_SUPPORTED);
+    err = GetStatsRow(Device, &NPI_MS_IPV4_MODULEID, NSI_IP_IPSTATS_TABLE, &compartment, sizeof(compartment), 0, sizeof(ip_after), &ip_after);
+    ok_eq_ulong(err, (DWORD)ERROR_INVALID_PARAMETER);
+}
 
 static DWORD ArmNotification(_In_ HANDLE Device, _In_ const NPI_MODULEID *Module, _In_ UINT Table, _Inout_ OVERLAPPED *Overlapped);
 
@@ -1089,6 +1274,7 @@ START_TEST(NsiStore)
         TestDeviceIpTables(device, AF_INET6);
         TestDeviceIpTables(device, AF_INET);
         TestDeviceEndpoints(device);
+        TestDeviceStats(device);
         TestDeviceIpNotifications();
         TestApiBackend(device);
         CloseHandle(device);

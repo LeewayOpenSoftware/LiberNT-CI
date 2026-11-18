@@ -1675,7 +1675,7 @@ DxgkPresentWithOverlays(
 }
 
 NTSTATUS
-__cdecl
+NTAPI
 DxgkPresentCallback(
     _Inout_ D3DKMT_PRESENT *pPresent)
 {

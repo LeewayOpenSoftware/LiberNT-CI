@@ -43,6 +43,19 @@ extern NPAGED_LOOKASIDE_LIST QueueEntryLookasideList;
 /* Required for ERR_T to NTSTATUS translation in receive error handling */
 NTSTATUS TCPTranslateError(const err_t err);
 
+/* lwIP counts a failed attempt and a reset of an established connection when the owner closes a
+ * connection in the ordinary way, and counts neither when the peer refuses or resets one. These
+ * two are counted here instead. They change on the lwIP thread only. */
+static unsigned long LibTCPAttemptFails;
+static unsigned long LibTCPEstabResets;
+
+void
+LibTCPGetFailureStats(unsigned long *AttemptFails, unsigned long *EstabResets)
+{
+    *AttemptFails = LibTCPAttemptFails;
+    *EstabResets = LibTCPEstabResets;
+}
+
 void
 LibTCPDumpPcb(PVOID SocketContext)
 {
@@ -473,10 +486,12 @@ InternalPendingAcceptErrorEventHandler(void *arg, const err_t err)
     PTCP_PENDING_ACCEPT Pending = arg;
     PCONNECTION_ENDPOINT Listener;
 
-    UNREFERENCED_PARAMETER(err);
-
     if (!Pending)
         return;
+
+    /* The connection was established and waited for an accept request */
+    if (err == ERR_RST || err == ERR_ABRT)
+        LibTCPEstabResets++;
 
     Listener = Pending->Listener;
     LockObject(Listener);
@@ -597,7 +612,11 @@ InternalConnectEventHandler(void *arg, PTCP_PCB pcb, const err_t err)
         return ERR_OK;
 
     if (err == ERR_OK)
+    {
+        ((PCONNECTION_ENDPOINT)arg)->StatConnecting = FALSE;
+        ((PCONNECTION_ENDPOINT)arg)->StatEstablished = TRUE;
         LibTCPWfpEstablish(arg, pcb, TRUE);
+    }
 
     TCPConnectEventHandler(arg, err);
 
@@ -615,6 +634,13 @@ InternalErrorEventHandler(void *arg, const err_t err)
 
     /* The PCB is dead now */
     Connection->SocketContext = NULL;
+
+    if (Connection->StatConnecting)
+        LibTCPAttemptFails++;
+    else if (Connection->StatEstablished && (err == ERR_RST || err == ERR_ABRT))
+        LibTCPEstabResets++;
+    Connection->StatConnecting = FALSE;
+    Connection->StatEstablished = FALSE;
 
     /* Give them one shot to receive the remaining data */
     Connection->ReceiveShutdown = TRUE;
@@ -938,6 +964,8 @@ LibTCPConnectCallback(void *arg)
     Error = tcp_connect((PTCP_PCB)msg->Input.Connect.Connection->SocketContext,
                         msg->Input.Connect.IpAddress, lwip_ntohs(msg->Input.Connect.Port),
                         InternalConnectEventHandler);
+    if (Error == ERR_OK)
+        msg->Input.Connect.Connection->StatConnecting = TRUE;
 
     msg->Output.Connect.Error = Error == ERR_OK ? ERR_INPROGRESS : Error;
 
@@ -1072,6 +1100,13 @@ LibTCPAbortCallback(void *arg)
                               NULL,
                               0);
     }
+
+    if (pcb->state == SYN_SENT)
+        LibTCPAttemptFails++;
+    else if (pcb->state == ESTABLISHED || pcb->state == CLOSE_WAIT)
+        LibTCPEstabResets++;
+    Connection->StatConnecting = FALSE;
+    Connection->StatEstablished = FALSE;
 
     Connection->SocketContext = NULL;
     Connection->ReceiveShutdown = TRUE;
@@ -1224,6 +1259,7 @@ LibTCPAccept(PTCP_PCB pcb, struct tcp_pcb *listen_pcb, void *arg)
     tcp_sent(pcb, InternalSendEventHandler);
     tcp_err(pcb, InternalErrorEventHandler);
     tcp_arg(pcb, arg);
+    ((PCONNECTION_ENDPOINT)arg)->StatEstablished = TRUE;
 
     tcp_accepted(listen_pcb);
 }
