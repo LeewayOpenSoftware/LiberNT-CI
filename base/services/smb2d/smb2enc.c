@@ -6,6 +6,7 @@
  */
 
 #include "smb2enc.h"
+#include <string.h>
 #include "smb2proto.h"
 
 /*
@@ -35,4 +36,26 @@ uint32_t Smb2ValidateRenameInfo(const uint8_t *Buffer, uint32_t Length)
         Smb2Get16(Buffer, SMB2ENC_RENAME_HEADER + 2 * (chars - 1)) == 0x5C)
         return SMB2_STATUS_INVALID_PARAMETER;
     return SMB2_STATUS_SUCCESS;
+}
+
+uint32_t Smb2ValidateLockRange(uint64_t Offset, uint64_t Length, uint32_t Flags)
+{
+    if (Flags != SMB2_LOCKFLAG_SHARED && Flags != SMB2_LOCKFLAG_EXCLUSIVE && Flags != SMB2_LOCKFLAG_UNLOCK)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    if (Length > UINT64_MAX - Offset)
+        return SMB2_STATUS_INVALID_PARAMETER;
+    return SMB2_STATUS_SUCCESS;
+}
+
+void Smb2BuildLockBody(uint8_t Body[SMB2ENC_LOCK_BODY], uint64_t Persistent, uint64_t Volatile, uint64_t Offset,
+                       uint64_t Length, uint32_t Flags)
+{
+    memset(Body, 0, SMB2ENC_LOCK_BODY);
+    Smb2Put16(Body, 0, 48);
+    Smb2Put16(Body, 2, 1);
+    Smb2Put64(Body, 8, Persistent);
+    Smb2Put64(Body, 16, Volatile);
+    Smb2Put64(Body, 24, Offset);
+    Smb2Put64(Body, 32, Length);
+    Smb2Put32(Body, 40, Flags | SMB2_LOCKFLAG_FAIL_IMMEDIATELY);
 }

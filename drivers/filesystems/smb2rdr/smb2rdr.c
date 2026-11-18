@@ -659,6 +659,7 @@ static NTSTATUS NTAPI Smb2Create(IN OUT PRX_CONTEXT RxContext)
     }
     fobx = Smb2GetFobxExt(RxContext->pFobx);
     fobx->FileHandle = reply.FileHandle;
+    fobx->Locks = NULL;
     fobx->IsDirectory = (reply.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
     if (fcb->OpenCount == 0)
@@ -1127,8 +1128,168 @@ static NTSTATUS NTAPI Smb2DeallocateForFcb(IN OUT PMRX_FCB Fcb)
 
 static NTSTATUS NTAPI Smb2DeallocateForFobx(IN OUT PMRX_FOBX Fobx)
 {
-    UNREFERENCED_PARAMETER(Fobx);
+    PSMB2RDR_FOBX_EXT ext = Smb2GetFobxExt(Fobx);
+    PSMB2RDR_LOCK lock;
+
+    while (ext && (lock = ext->Locks) != NULL)
+    {
+        ext->Locks = lock->Next;
+        RxFreePool(lock);
+    }
     return STATUS_SUCCESS;
+}
+
+/* Guards every open's lock list; held only to link and unlink, never across an upcall */
+static FAST_MUTEX Smb2LockMutex;
+
+static NTSTATUS Smb2LockUpcall(ULONGLONG FileHandle, ULONGLONG Offset, ULONGLONG Length, ULONG Flags)
+{
+    SMB2RDR_LOCK_REQ req;
+
+    RtlZeroMemory(&req, sizeof(req));
+    req.FileHandle = FileHandle;
+    req.Offset = Offset;
+    req.Length = Length;
+    req.Flags = Flags;
+    return Smb2Upcall(SMB2RDR_UP_LOCK, &req, sizeof(req), NULL, 0, NULL);
+}
+
+static NTSTATUS Smb2LockRange(PSMB2RDR_FOBX_EXT Fobx, PEPROCESS Process, ULONG Key, LONGLONG Offset,
+                              LONGLONG Length, BOOLEAN Exclusive, BOOLEAN FailImmediately)
+{
+    PSMB2RDR_LOCK lock;
+    LARGE_INTEGER delay;
+    ULONG waited = 0;
+    NTSTATUS status;
+
+    if (Offset < 0 || Length < 0)
+        return STATUS_INVALID_PARAMETER;
+    lock = RxAllocatePoolWithTag(PagedPool, sizeof(*lock), SMB2RDR_TAG);
+    if (!lock)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    /* FIXME: a waiting lock gives up after SMB2RDR_LOCK_WAIT_MS, Windows waits until the range is free or the caller cancels */
+    for (;;)
+    {
+        status = Smb2LockUpcall(Fobx->FileHandle, (ULONGLONG)Offset, (ULONGLONG)Length,
+                                Exclusive ? SMB2RDR_LOCK_EXCLUSIVE : SMB2RDR_LOCK_SHARED);
+        if (status != STATUS_LOCK_NOT_GRANTED || FailImmediately || waited >= SMB2RDR_LOCK_WAIT_MS)
+            break;
+        delay.QuadPart = -(LONGLONG)SMB2RDR_LOCK_RETRY_MS * 10000;
+        KeDelayExecutionThread(KernelMode, FALSE, &delay);
+        waited += SMB2RDR_LOCK_RETRY_MS;
+    }
+    if (!NT_SUCCESS(status))
+    {
+        RxFreePool(lock);
+        return status;
+    }
+
+    lock->Process = Process;
+    lock->Key = Key;
+    lock->Offset = (ULONGLONG)Offset;
+    lock->Length = (ULONGLONG)Length;
+    ExAcquireFastMutex(&Smb2LockMutex);
+    lock->Next = Fobx->Locks;
+    Fobx->Locks = lock;
+    ExReleaseFastMutex(&Smb2LockMutex);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS Smb2UnlockRange(PSMB2RDR_FOBX_EXT Fobx, PEPROCESS Process, ULONG Key, LONGLONG Offset,
+                                LONGLONG Length)
+{
+    PSMB2RDR_LOCK lock, *link;
+    NTSTATUS status;
+
+    ExAcquireFastMutex(&Smb2LockMutex);
+    for (link = &Fobx->Locks; (lock = *link) != NULL; link = &lock->Next)
+    {
+        if (lock->Process == Process && lock->Key == Key && lock->Offset == (ULONGLONG)Offset &&
+            lock->Length == (ULONGLONG)Length)
+        {
+            *link = lock->Next;
+            break;
+        }
+    }
+    ExReleaseFastMutex(&Smb2LockMutex);
+    if (!lock)
+        return STATUS_RANGE_NOT_LOCKED;
+
+    status = Smb2LockUpcall(Fobx->FileHandle, lock->Offset, lock->Length, SMB2RDR_LOCK_UNLOCK);
+    if (!NT_SUCCESS(status) && status != STATUS_RANGE_NOT_LOCKED)
+    {
+        ExAcquireFastMutex(&Smb2LockMutex);
+        lock->Next = Fobx->Locks;
+        Fobx->Locks = lock;
+        ExReleaseFastMutex(&Smb2LockMutex);
+        return status;
+    }
+    RxFreePool(lock);
+    return STATUS_SUCCESS;
+}
+
+static NTSTATUS Smb2UnlockMany(PSMB2RDR_FOBX_EXT Fobx, PEPROCESS Process, BOOLEAN ByKey, ULONG Key)
+{
+    PSMB2RDR_LOCK taken = NULL, lock, *link;
+    NTSTATUS status = STATUS_SUCCESS, one;
+
+    ExAcquireFastMutex(&Smb2LockMutex);
+    link = &Fobx->Locks;
+    while ((lock = *link) != NULL)
+    {
+        if (lock->Process == Process && (!ByKey || lock->Key == Key))
+        {
+            *link = lock->Next;
+            lock->Next = taken;
+            taken = lock;
+        }
+        else
+        {
+            link = &lock->Next;
+        }
+    }
+    ExReleaseFastMutex(&Smb2LockMutex);
+
+    while ((lock = taken) != NULL)
+    {
+        taken = lock->Next;
+        one = Smb2LockUpcall(Fobx->FileHandle, lock->Offset, lock->Length, SMB2RDR_LOCK_UNLOCK);
+        if (!NT_SUCCESS(one) && one != STATUS_RANGE_NOT_LOCKED)
+            status = one;
+        RxFreePool(lock);
+    }
+    return status;
+}
+
+static NTSTATUS NTAPI Smb2LockControl(IN OUT PRX_CONTEXT RxContext)
+{
+    PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
+    PLOWIO_CONTEXT low = &RxContext->LowIoContext;
+    PEPROCESS process = RxGetRequestorProcess(RxContext);
+
+    if (!fobx || !fobx->FileHandle)
+        return STATUS_INVALID_PARAMETER;
+
+    switch (low->Operation)
+    {
+        case LOWIO_OP_SHAREDLOCK:
+        case LOWIO_OP_EXCLUSIVELOCK:
+            return Smb2LockRange(fobx, process, low->ParamsFor.Locks.Key, low->ParamsFor.Locks.ByteOffset,
+                                 low->ParamsFor.Locks.Length, low->Operation == LOWIO_OP_EXCLUSIVELOCK,
+                                 (low->ParamsFor.Locks.Flags & SL_FAIL_IMMEDIATELY) != 0);
+
+        case LOWIO_OP_UNLOCK:
+            return Smb2UnlockRange(fobx, process, low->ParamsFor.Locks.Key, low->ParamsFor.Locks.ByteOffset,
+                                   low->ParamsFor.Locks.Length);
+
+        case LOWIO_OP_UNLOCK_MULTIPLE:
+            return Smb2UnlockMany(fobx, process, (low->ParamsFor.Locks.Flags & SL_KEY_SPECIFIED) != 0,
+                                  low->ParamsFor.Locks.Key);
+
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
 }
 
 static NTSTATUS NTAPI Smb2IsLockRealizable(IN OUT PMRX_FCB Fcb, IN PLARGE_INTEGER ByteOffset,
@@ -1171,6 +1332,7 @@ static NTSTATUS NTAPI Smb2ComputeNewBufferingState(IN OUT PMRX_SRV_OPEN SrvOpen,
 static NTSTATUS Smb2InitOps(VOID)
 {
     ZeroAndInitializeNodeType(&Smb2RdrOps, RDBSS_NTC_MINIRDR_DISPATCH, sizeof(MINIRDR_DISPATCH));
+    ExInitializeFastMutex(&Smb2LockMutex);
 
     Smb2RdrOps.MRxFlags = RDBSS_MANAGE_V_NET_ROOT_EXTENSION | RDBSS_MANAGE_FOBX_EXTENSION;
     Smb2RdrOps.MRxSrvCallSize = 0;
@@ -1213,10 +1375,10 @@ static NTSTATUS Smb2InitOps(VOID)
     Smb2RdrOps.MRxComputeNewBufferingState = Smb2ComputeNewBufferingState;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_READ] = Smb2Read;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_WRITE] = Smb2Write;
-    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_SHAREDLOCK] = Smb2NotImplemented;
-    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_EXCLUSIVELOCK] = Smb2NotImplemented;
-    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_UNLOCK] = Smb2NotImplemented;
-    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_UNLOCK_MULTIPLE] = Smb2NotImplemented;
+    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_SHAREDLOCK] = Smb2LockControl;
+    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_EXCLUSIVELOCK] = Smb2LockControl;
+    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_UNLOCK] = Smb2LockControl;
+    Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_UNLOCK_MULTIPLE] = Smb2LockControl;
     Smb2RdrOps.MRxLowIOSubmit[LOWIO_OP_FSCTL] = Smb2NotImplemented;
     Smb2RdrOps.MRxCompleteBufferingStateChangeRequest = Smb2CompleteBufferingStateChange;
     Smb2RdrOps.MRxIsValidDirectory = Smb2IsValidDirectory;

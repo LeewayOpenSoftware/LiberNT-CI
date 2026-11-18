@@ -17,6 +17,8 @@
 #define SMB2RDR_TAG_UP      'puMS'
 #define SMB2RDR_MAX_SERVER_NAME     256     /* characters */
 #define SMB2RDR_UPCALL_TIMEOUT_SEC  30
+#define SMB2RDR_LOCK_RETRY_MS       100
+#define SMB2RDR_LOCK_WAIT_MS        30000
 
 typedef struct _SMB2RDR_SERVER
 {
@@ -45,6 +47,16 @@ typedef struct _SMB2RDR_VNETROOT_EXT
 #define Smb2GetVNetRootExt(VNetRoot) \
     (((VNetRoot) == NULL) ? NULL : (PSMB2RDR_VNETROOT_EXT)((VNetRoot)->Context))
 
+/* A byte range this open holds on the server, kept to answer unlock-all requests */
+typedef struct _SMB2RDR_LOCK
+{
+    struct _SMB2RDR_LOCK *Next;
+    PEPROCESS Process;
+    ULONG Key;
+    ULONGLONG Offset;
+    ULONGLONG Length;
+} SMB2RDR_LOCK, *PSMB2RDR_LOCK;
+
 /* Per-open state: the daemon's file handle */
 typedef struct _SMB2RDR_FOBX_EXT
 {
@@ -52,6 +64,7 @@ typedef struct _SMB2RDR_FOBX_EXT
     NODE_BYTE_SIZE NodeByteSize;
     ULONGLONG FileHandle;
     BOOLEAN IsDirectory;
+    PSMB2RDR_LOCK Locks;
 } SMB2RDR_FOBX_EXT, *PSMB2RDR_FOBX_EXT;
 
 #define Smb2GetFobxExt(Fobx) \

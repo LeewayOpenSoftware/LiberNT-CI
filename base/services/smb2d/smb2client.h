@@ -82,6 +82,10 @@ uint32_t Smb2Flush(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId)
 uint32_t Smb2SetInfo(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint8_t InfoClass,
                      const void *Buffer, uint32_t BufferLength);
 
+/* One byte range; Flags is SMB2_LOCKFLAG_SHARED, _EXCLUSIVE or _UNLOCK. Never waits for the range. */
+uint32_t Smb2Lock(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset, uint64_t Length,
+                  uint32_t Flags);
+
 uint16_t Smb2ConnDialect(const SMB2_CONN *Conn);
 int Smb2ConnSigned(const SMB2_CONN *Conn);
 

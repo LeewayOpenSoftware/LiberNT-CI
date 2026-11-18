@@ -18,6 +18,7 @@
 #include <string.h>
 
 #include "smb2client.h"
+#include "smb2enc.h"
 
 #define SMB2_MAX_MESSAGE    (SMB2_MAX_IO + 4096)
 
@@ -819,6 +820,23 @@ uint32_t Smb2Flush(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId)
     Smb2Put64(body, 8, FileId->Persistent);
     Smb2Put64(body, 16, FileId->Volatile);
     st = Transact(c, SMB2_FLUSH, TreeId, body, sizeof(body), &r, &rlen);
+    free(r);
+    return st;
+}
+
+/* 2.2.26 LOCK */
+uint32_t Smb2Lock(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset, uint64_t Length,
+                  uint32_t Flags)
+{
+    uint8_t body[SMB2ENC_LOCK_BODY], *r;
+    size_t rlen;
+    uint32_t st;
+
+    st = Smb2ValidateLockRange(Offset, Length, Flags);
+    if (st != SMB2_STATUS_SUCCESS)
+        return st;
+    Smb2BuildLockBody(body, FileId->Persistent, FileId->Volatile, Offset, Length, Flags);
+    st = Transact(c, SMB2_LOCK, TreeId, body, sizeof(body), &r, &rlen);
     free(r);
     return st;
 }

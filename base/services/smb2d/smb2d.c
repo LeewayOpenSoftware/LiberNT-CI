@@ -474,6 +474,34 @@ static LONG DoFlush(const BYTE *payload, DWORD length)
     return (LONG)Smb2Flush(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId);
 }
 
+static LONG DoLock(const BYTE *payload, DWORD length)
+{
+    const SMB2RDR_LOCK_REQ *req = (const SMB2RDR_LOCK_REQ *)payload;
+    OPENFILE *f;
+    uint32_t flags;
+
+    if (length != sizeof(*req))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    switch (req->Flags)
+    {
+        case SMB2RDR_LOCK_SHARED:
+            flags = SMB2_LOCKFLAG_SHARED;
+            break;
+        case SMB2RDR_LOCK_EXCLUSIVE:
+            flags = SMB2_LOCKFLAG_EXCLUSIVE;
+            break;
+        case SMB2RDR_LOCK_UNLOCK:
+            flags = SMB2_LOCKFLAG_UNLOCK;
+            break;
+        default:
+            return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    }
+    f = FindFile(req->FileHandle);
+    if (!f)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    return (LONG)Smb2Lock(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId, req->Offset, req->Length, flags);
+}
+
 static void Serve(HANDLE dev)
 {
     static BYTE reqbuf[sizeof(SMB2RDR_UPCALL) + SMB2RDR_MAX_PAYLOAD];
@@ -538,6 +566,9 @@ static void Serve(HANDLE dev)
                 break;
             case SMB2RDR_UP_FLUSH:
                 status = DoFlush(reqbuf + sizeof(*up), up->Length);
+                break;
+            case SMB2RDR_UP_LOCK:
+                status = DoLock(reqbuf + sizeof(*up), up->Length);
                 break;
             case SMB2RDR_UP_QUERYDIR:
                 status = DoQueryDir(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);

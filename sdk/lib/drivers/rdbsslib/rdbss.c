@@ -336,6 +336,11 @@ RxLowIoIoCtlShellCompletion(
     PRX_CONTEXT RxContext);
 
 NTSTATUS
+NTAPI
+RxLowIoLockControlShellCompletion(
+    PRX_CONTEXT RxContext);
+
+NTSTATUS
 RxLowIoReadShell(
     PRX_CONTEXT RxContext);
 
@@ -2893,8 +2898,67 @@ NTAPI
 RxCommonLockControl(
     PRX_CONTEXT Context)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFCB Fcb;
+    PFOBX Fobx;
+    PIO_STACK_LOCATION Stack;
+    PLOWIO_CONTEXT LowIoContext;
+
+    PAGED_CODE();
+
+    Fcb = (PFCB)Context->pFcb;
+    Fobx = (PFOBX)Context->pFobx;
+    Stack = Context->CurrentIrpSp;
+    LowIoContext = &Context->LowIoContext;
+    DPRINT("RxCommonLockControl(%p), FCB: %p, FOBX: %p, Minor: %x\n", Context, Fcb, Fobx, Stack->MinorFunction);
+
+    if (NodeType(Fcb) != RDBSS_NTC_STORAGE_TYPE_FILE || Fobx == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!BooleanFlagOn(Context->Flags, RX_CONTEXT_FLAG_WAIT))
+    {
+        return RxFsdPostRequest(Context);
+    }
+
+    switch (Stack->MinorFunction)
+    {
+        case IRP_MN_LOCK:
+            RxInitializeLowIoContext(LowIoContext,
+                                     BooleanFlagOn(Stack->Flags, SL_EXCLUSIVE_LOCK) ? LOWIO_OP_EXCLUSIVELOCK : LOWIO_OP_SHAREDLOCK);
+            LowIoContext->ParamsFor.Locks.Flags = Stack->Flags & SL_FAIL_IMMEDIATELY;
+            break;
+
+        case IRP_MN_UNLOCK_SINGLE:
+            RxInitializeLowIoContext(LowIoContext, LOWIO_OP_UNLOCK);
+            LowIoContext->ParamsFor.Locks.Flags = 0;
+            break;
+
+        case IRP_MN_UNLOCK_ALL:
+            RxInitializeLowIoContext(LowIoContext, LOWIO_OP_UNLOCK_MULTIPLE);
+            LowIoContext->ParamsFor.Locks.LockList = NULL;
+            LowIoContext->ParamsFor.Locks.Flags = 0;
+            LowIoContext->ParamsFor.Locks.ByteOffset = 0;
+            LowIoContext->ParamsFor.Locks.Key = 0;
+            return RxLowIoLockControlShell(Context);
+
+        case IRP_MN_UNLOCK_ALL_BY_KEY:
+            RxInitializeLowIoContext(LowIoContext, LOWIO_OP_UNLOCK_MULTIPLE);
+            LowIoContext->ParamsFor.Locks.LockList = NULL;
+            LowIoContext->ParamsFor.Locks.Flags = SL_KEY_SPECIFIED;
+            LowIoContext->ParamsFor.Locks.ByteOffset = 0;
+            LowIoContext->ParamsFor.Locks.Key = Stack->Parameters.LockControl.Key;
+            return RxLowIoLockControlShell(Context);
+
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    LowIoContext->ParamsFor.Locks.ByteOffset = Stack->Parameters.LockControl.ByteOffset.QuadPart;
+    LowIoContext->ParamsFor.Locks.Length = Stack->Parameters.LockControl.Length->QuadPart;
+    LowIoContext->ParamsFor.Locks.Key = Stack->Parameters.LockControl.Key;
+
+    return RxLowIoLockControlShell(Context);
 }
 
 NTSTATUS
@@ -7212,8 +7276,22 @@ NTSTATUS
 RxLowIoLockControlShell(
     IN PRX_CONTEXT RxContext)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PAGED_CODE();
+
+    return RxLowIoSubmit(RxContext, RxLowIoLockControlShellCompletion);
+}
+
+NTSTATUS
+NTAPI
+RxLowIoLockControlShellCompletion(
+    PRX_CONTEXT RxContext)
+{
+    PAGED_CODE();
+
+    RxContext->CurrentIrp->IoStatus.Status = RxContext->IoStatusBlock.Status;
+    RxContext->CurrentIrp->IoStatus.Information = 0;
+
+    return RxContext->IoStatusBlock.Status;
 }
 
 /*

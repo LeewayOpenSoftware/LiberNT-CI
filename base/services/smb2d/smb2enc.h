@@ -18,4 +18,15 @@
 #define SMB2ENC_MAX_NAME_CHARS  1024
 uint32_t Smb2ValidateRenameInfo(const uint8_t *Buffer, uint32_t Length);
 
+/*
+ * Byte-range lock request. Flags is one of SMB2_LOCKFLAG_SHARED, _EXCLUSIVE or _UNLOCK (the redirector never
+ * sends FAIL_IMMEDIATELY: the daemon adds it). The range must not wrap past 2^64.
+ */
+uint32_t Smb2ValidateLockRange(uint64_t Offset, uint64_t Length, uint32_t Flags);
+
+/* LOCK request body (2.2.26) with one element: SMB2ENC_LOCK_BODY bytes */
+#define SMB2ENC_LOCK_BODY   48
+void Smb2BuildLockBody(uint8_t Body[SMB2ENC_LOCK_BODY], uint64_t Persistent, uint64_t Volatile, uint64_t Offset,
+                       uint64_t Length, uint32_t Flags);
+
 #endif /* _SMB2ENC_H */

@@ -16,7 +16,7 @@
 #define SMB2RDR_PROVIDER_NAME       L"SMB2 Network"
 
 /* Bumped when the upcall/downcall layout changes; the daemon sends it with IOCTL_SMB2RDR_START. */
-#define SMB2RDR_PROTOCOL_VERSION    2
+#define SMB2RDR_PROTOCOL_VERSION    3
 
 #define _SMB2RDR_CTL_CODE(code, method) \
     CTL_CODE(FILE_DEVICE_NETWORK_REDIRECTOR, 0x800 | (code), method, FILE_ANY_ACCESS)
@@ -67,6 +67,7 @@ typedef struct _SMB2RDR_CONN_REQ
 #define SMB2RDR_UP_WRITE            9   /* payload: SMB2RDR_WRITE_REQ + data; reply: ULONG bytes written */
 #define SMB2RDR_UP_SETINFO          10  /* payload: SMB2RDR_SETINFO_REQ + buffer */
 #define SMB2RDR_UP_FLUSH            11  /* payload: SMB2RDR_HANDLE_REQ (file handle) */
+#define SMB2RDR_UP_LOCK             12  /* payload: SMB2RDR_LOCK_REQ */
 
 /*
  * Handles are opaque 64-bit values owned by the daemon (it maps them to connection, tree and file ids).
@@ -167,6 +168,20 @@ typedef struct _SMB2RDR_SETINFO_REQ
     /* buffer follows */
 } SMB2RDR_SETINFO_REQ;
 
+#define SMB2RDR_LOCK_SHARED     1
+#define SMB2RDR_LOCK_EXCLUSIVE  2
+#define SMB2RDR_LOCK_UNLOCK     4
+
+/* One byte range, never waited for by the daemon: the redirector retries a busy range itself */
+typedef struct _SMB2RDR_LOCK_REQ
+{
+    unsigned long long FileHandle;
+    unsigned long long Offset;
+    unsigned long long Length;
+    unsigned long Flags;            /* one of SMB2RDR_LOCK_* */
+    unsigned long Reserved;
+} SMB2RDR_LOCK_REQ;
+
 /* One request moves at most this many bytes of file or directory data */
 #define SMB2RDR_MAX_IO          (60 * 1024)
 
@@ -198,5 +213,6 @@ typedef SMB2RDR_READ_REQ *PSMB2RDR_READ_REQ;
 typedef SMB2RDR_QUERYDIR_REQ *PSMB2RDR_QUERYDIR_REQ;
 typedef SMB2RDR_WRITE_REQ *PSMB2RDR_WRITE_REQ;
 typedef SMB2RDR_SETINFO_REQ *PSMB2RDR_SETINFO_REQ;
+typedef SMB2RDR_LOCK_REQ *PSMB2RDR_LOCK_REQ;
 
 #endif /* _SMB2RDR_IOCTL_H */
