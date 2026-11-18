@@ -99,7 +99,7 @@ TiNsiFillDynamic(
     Dynamic->oper_status = Up ? NET_IF_OPER_STATUS_UP : NET_IF_OPER_STATUS_DOWN;
     Dynamic->media_conn_state = Up ? MediaConnectStateConnected : MediaConnectStateDisconnected;
     Dynamic->mtu = Row->Mtu;
-    Dynamic->xmit_speed = (ULONG64)Row->Speed * 100;
+    Dynamic->xmit_speed = (ULONG64)Row->Speed;
     if (Dynamic->xmit_speed == 0 && Row->Type == MIB_IF_TYPE_LOOPBACK)
         Dynamic->xmit_speed = TI_NSI_LOOPBACK_SPEED;
     Dynamic->rcv_speed = Dynamic->xmit_speed;
