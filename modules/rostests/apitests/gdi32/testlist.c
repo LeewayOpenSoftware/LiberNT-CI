@@ -26,6 +26,7 @@ extern void func_EngCreateSemaphore(void);
 extern void func_EngReleaseSemaphore(void);
 extern void func_EnumFontFamilies(void);
 extern void func_FontFolder(void);
+extern void func_FontLinkBaseline(void);
 extern void func_ExcludeClipRect(void);
 extern void func_ExtCreatePen(void);
 extern void func_ExtCreateRegion(void);
@@ -72,6 +73,7 @@ extern void func_RealizePalette(void);
 extern void func_ScreenRows(void);
 extern void func_ScriptGetFontTags(void);
 extern void func_ScriptGetLogicalWidths(void);
+extern void func_ScriptShapeCache(void);
 extern void func_SelectObject(void);
 extern void func_SetBoundsRect(void);
 extern void func_SetBrushOrgEx(void);
@@ -114,6 +116,7 @@ const struct test winetest_testlist[] =
     { "EngReleaseSemaphore", func_EngReleaseSemaphore },
     { "EnumFontFamilies", func_EnumFontFamilies },
     { "FontFolder", func_FontFolder },
+    { "FontLinkBaseline", func_FontLinkBaseline },
     { "ExcludeClipRect", func_ExcludeClipRect },
     { "ExtCreatePen", func_ExtCreatePen },
     { "ExtCreateRegion", func_ExtCreateRegion },
@@ -160,6 +163,7 @@ const struct test winetest_testlist[] =
     { "ScreenRows", func_ScreenRows },
     { "ScriptGetFontTags", func_ScriptGetFontTags },
     { "ScriptGetLogicalWidths", func_ScriptGetLogicalWidths },
+    { "ScriptShapeCache", func_ScriptShapeCache },
     { "SelectObject", func_SelectObject },
     { "SetBoundsRect", func_SetBoundsRect },
     { "SetBrushOrgEx", func_SetBrushOrgEx },

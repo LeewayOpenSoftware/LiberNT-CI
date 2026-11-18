@@ -1033,7 +1033,6 @@ INT WINAPI GetDateFormatA( LCID lcid, DWORD dwFlags, const SYSTEMTIME* lpTime,
                                 lpFormat, lpDateStr, cchOut);
 }
 
-#if _WIN32_WINNT >= 0x600
 /******************************************************************************
  * GetDateFormatEx [KERNEL32.@]
  *
@@ -1073,7 +1072,6 @@ INT WINAPI GetDateFormatEx(LPCWSTR localename, DWORD flags,
                                 flags, DATE_DATEVARSONLY, date, format,
                                 outbuf, bufsize);
 }
-#endif /* _WIN32_WINNT >= 0x600 */
 
 /******************************************************************************
  * GetDateFormatW	[KERNEL32.@]
@@ -1141,7 +1139,6 @@ INT WINAPI GetTimeFormatA(LCID lcid, DWORD dwFlags, const SYSTEMTIME* lpTime,
                                 lpFormat, lpTimeStr, cchOut);
 }
 
-#if _WIN32_WINNT >= 0x600
 /******************************************************************************
  * GetTimeFormatEx [KERNEL32.@]
  *
@@ -1173,7 +1170,6 @@ INT WINAPI GetTimeFormatEx(LPCWSTR localename, DWORD flags,
                                 flags, TIME_TIMEVARSONLY, time, format,
                                 outbuf, bufsize);
 }
-#endif /* _WIN32_WINNT >= 0x600 */
 
 /******************************************************************************
  *		GetTimeFormatW	[KERNEL32.@]
@@ -1472,7 +1468,6 @@ INT WINAPI GetNumberFormatW(LCID lcid, DWORD dwFlags,
     return NLS_ReturnFormatted(num, lpNumberStr, cchOut);
 }
 
-#if _WIN32_WINNT >= 0x600
 /**************************************************************************
  *              GetNumberFormatEx	(KERNEL32.@)
  */
@@ -1491,7 +1486,6 @@ INT WINAPI GetNumberFormatEx(LPCWSTR name, DWORD flags,
 
   return GetNumberFormatW(lcid, flags, value, format, number, numout);
 }
-#endif /* _WIN32_WINNT >= 0x600 */
 
 /* Formatting states for Currencies. We use flags to avoid code duplication. */
 #define CF_PARENS       0x1  /* Parentheses      */
@@ -1666,7 +1660,6 @@ INT WINAPI GetCurrencyFormatW(LCID lcid, DWORD dwFlags,
     return NLS_ReturnFormatted(num, lpCurrencyStr, cchOut);
 }
 
-#if _WIN32_WINNT >= 0x600
 /***********************************************************************
  *            GetCurrencyFormatEx (KERNEL32.@)
  */
@@ -1678,7 +1671,6 @@ int WINAPI GetCurrencyFormatEx(LPCWSTR localename, DWORD flags, LPCWSTR value,
 
     return GetCurrencyFormatW( LocaleNameToLCID(localename, 0), flags, value, format, str, len);
 }
-#endif
 
 
 /* FIXME: Everything below here needs to move somewhere else along with the

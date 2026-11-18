@@ -11,6 +11,7 @@ extern void func_CallbackNesting(void);
 extern void func_CharFuncs(void);
 extern void func_CloseWindow(void);
 extern void func_ComboBox(void);
+extern void func_ControlColorOtherThread(void);
 extern void func_CopyImage(void);
 extern void func_CopyImage_Icon(void);
 extern void func_LoadImage_PngIcon(void);
@@ -39,12 +40,15 @@ extern void func_DpiVirtualization(void);
 extern void func_DrawIconEx(void);
 extern void func_DrawText(void);
 extern void func_desktop(void);
+extern void func_EditCompositionForm(void);
 extern void func_EmptyClipboard(void);
 extern void func_ClipboardAccess(void);
 extern void func_ClipboardData(void);
 extern void func_EnableScrollBar(void);
+extern void func_DisplayConfigTarget(void);
 extern void func_EnumDisplaySettings(void);
 extern void func_ForegroundAfterHide(void);
+extern void func_ForegroundHideLaunch(void);
 extern void func_ForegroundRetake(void);
 extern void func_ForegroundRight(void);
 extern void func_ForegroundStartup(void);
@@ -68,6 +72,7 @@ extern void func_GW_ENABLEDPOPUP(void);
 extern void func_HiddenChildWindowPos(void);
 extern void func_ImeWindow(void);
 extern void func_InitializeLpkHooks(void);
+extern void func_InjectTouchInput(void);
 extern void func_InputMessageSource(void);
 extern void func_InvalidHandles(void);
 extern void func_IsTopLevelWindow(void);
@@ -89,6 +94,7 @@ extern void func_ModernUser32(void);
 extern void func_NestedActivation(void);
 extern void func_NestedWindowPos(void);
 extern void func_NcPaintRgn(void);
+extern void func_NestedDialogKeys(void);
 extern void func_NextDlgItem(void);
 extern void func_NonClientPaint(void);
 extern void func_NonClientUpdate(void);
@@ -116,9 +122,11 @@ extern void func_SetCursorPos(void);
 extern void func_SetFocus(void);
 extern void func_SetParent(void);
 extern void func_SetProp(void);
+extern void func_StructPadding(void);
 extern void func_SetScrollInfo(void);
 extern void func_SetScrollRange(void);
 extern void func_SetWindowPlacement(void);
+extern void func_ShellHookShowActive(void);
 extern void func_SetWindowPosZOrder(void);
 extern void func_WindowDisplayAffinity(void);
 extern void func_WindowRegionFrame(void);
@@ -138,6 +146,7 @@ extern void func_VirtualKey(void);
 extern void func_WaitForInputIdle(void);
 extern void func_WindowBand(void);
 extern void func_WindowStationErrors(void);
+extern void func_WindowStationAttributes(void);
 extern void func_WindowStationSecurity(void);
 extern void func_WindowPosInsertAfter(void);
 extern void func_CallWindowProc(void);
@@ -155,6 +164,7 @@ const struct test winetest_testlist[] =
     { "CharFuncs", func_CharFuncs },
     { "CloseWindow", func_CloseWindow },
     { "ComboBox", func_ComboBox },
+    { "ControlColorOtherThread", func_ControlColorOtherThread },
     { "CopyImage", func_CopyImage },
     { "CopyImage_Icon", func_CopyImage_Icon },
     { "LoadImage_PngIcon", func_LoadImage_PngIcon },
@@ -183,12 +193,15 @@ const struct test winetest_testlist[] =
     { "DrawIconEx", func_DrawIconEx },
     { "DrawText", func_DrawText },
     { "desktop", func_desktop },
+    { "EditCompositionForm", func_EditCompositionForm },
     { "EmptyClipboard", func_EmptyClipboard },
     { "ClipboardAccess", func_ClipboardAccess },
     { "ClipboardData", func_ClipboardData },
     { "EnableScrollBar", func_EnableScrollBar },
+    { "DisplayConfigTarget", func_DisplayConfigTarget },
     { "EnumDisplaySettings", func_EnumDisplaySettings },
     { "ForegroundAfterHide", func_ForegroundAfterHide },
+    { "ForegroundHideLaunch", func_ForegroundHideLaunch },
     { "ForegroundRetake", func_ForegroundRetake },
     { "ForegroundRight", func_ForegroundRight },
     { "ForegroundStartup", func_ForegroundStartup },
@@ -212,6 +225,7 @@ const struct test winetest_testlist[] =
     { "HiddenChildWindowPos", func_HiddenChildWindowPos },
     { "ImeWindow", func_ImeWindow },
     { "InitializeLpkHooks", func_InitializeLpkHooks },
+    { "InjectTouchInput", func_InjectTouchInput },
     { "InputMessageSource", func_InputMessageSource },
     { "InvalidHandles", func_InvalidHandles },
     { "IsTopLevelWindow", func_IsTopLevelWindow },
@@ -233,6 +247,7 @@ const struct test winetest_testlist[] =
     { "NestedActivation", func_NestedActivation },
     { "NestedWindowPos", func_NestedWindowPos },
     { "NcPaintRgn", func_NcPaintRgn },
+    { "NestedDialogKeys", func_NestedDialogKeys },
     { "NextDlgItem", func_NextDlgItem },
     { "NonClientPaint", func_NonClientPaint },
     { "NonClientUpdate", func_NonClientUpdate },
@@ -260,9 +275,11 @@ const struct test winetest_testlist[] =
     { "SetFocus", func_SetFocus },
     { "SetParent", func_SetParent },
     { "SetProp", func_SetProp },
+    { "StructPadding", func_StructPadding },
     { "SetScrollInfo", func_SetScrollInfo },
     { "SetScrollRange", func_SetScrollRange },
     { "SetWindowPlacement", func_SetWindowPlacement },
+    { "ShellHookShowActive", func_ShellHookShowActive },
     { "SetWindowPosZOrder", func_SetWindowPosZOrder },
     { "WindowDisplayAffinity", func_WindowDisplayAffinity },
     { "WindowRegionFrame", func_WindowRegionFrame },
@@ -282,6 +299,7 @@ const struct test winetest_testlist[] =
     { "WaitForInputIdle", func_WaitForInputIdle },
     { "WindowBand", func_WindowBand },
     { "WindowStationErrors", func_WindowStationErrors },
+    { "WindowStationAttributes", func_WindowStationAttributes },
     { "WindowStationSecurity", func_WindowStationSecurity },
     { "WindowPosInsertAfter", func_WindowPosInsertAfter },
     { "CallWindowProc", func_CallWindowProc },

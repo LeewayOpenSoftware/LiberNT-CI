@@ -14,6 +14,7 @@ list(APPEND SOURCE
     ClipboardData.c
     FrameMetrics.c
     ComboBox.c
+    ControlColorOtherThread.c
     CopyImage.c
     CopyImage_Icon.c
     CursorPresentation.c
@@ -30,6 +31,7 @@ list(APPEND SOURCE
     DestroyWindow.c
     DialogAccelerator.c
     DialogDpiChangeBehavior.c
+    DisplayConfigTarget.c
     DM_REPOSITION.c
     Dpi.c
     DpiHostingBehavior.c
@@ -39,10 +41,12 @@ list(APPEND SOURCE
     DrawIconEx.c
     DrawText.c
     desktop.c
+    EditCompositionForm.c
     EmptyClipboard.c
     EnableScrollBar.c
     EnumDisplaySettings.c
     ForegroundAfterHide.c
+    ForegroundHideLaunch.c
     ForegroundRetake.c
     ForegroundRight.c
     ForegroundStartup.c
@@ -66,6 +70,7 @@ list(APPEND SOURCE
     HiddenChildWindowPos.c
     ImeWindow.c
     InitializeLpkHooks.c
+    InjectTouchInput.c
     InputMessageSource.c
     LoadImage_PngIcon.c
     InvalidHandles.c
@@ -88,6 +93,7 @@ list(APPEND SOURCE
     NestedActivation.c
     NestedWindowPos.c
     NcPaintRgn.c
+    NestedDialogKeys.c
     NextDlgItem.c
     NonClientPaint.c
     NonClientUpdate.c
@@ -117,7 +123,9 @@ list(APPEND SOURCE
     SetProp.c
     SetScrollInfo.c
     SetScrollRange.c
+    StructPadding.c
     SetWindowPlacement.c
+    ShellHookShowActive.c
     SetWindowPosZOrder.c
     WindowDisplayAffinity.c
     WindowRegionFrame.c
@@ -137,6 +145,7 @@ list(APPEND SOURCE
     WaitForInputIdle.c
     WindowBand.c
     WindowStationErrors.c
+    WindowStationAttributes.c
     WindowStationSecurity.c
     WindowPosInsertAfter.c
     WndProc.c
@@ -154,7 +163,7 @@ add_executable(user32_apitest
 
 target_link_libraries(user32_apitest wine ${PSEH_LIB})
 set_module_type(user32_apitest win32cui)
-add_importlibs(user32_apitest advapi32 imm32 gdi32 gdiplus user32 msvcrt kernel32 ntdll)
+add_importlibs(user32_apitest advapi32 imm32 gdi32 gdiplus user32 comctl32 setupapi msvcrt kernel32 ntdll)
 add_pch(user32_apitest precomp.h "${PCH_SKIP_SOURCE}")
 add_rostests_file(TARGET user32_apitest)
 

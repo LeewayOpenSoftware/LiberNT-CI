@@ -335,6 +335,7 @@ typedef struct _PROCESSINFO
     BOOLEAN MouseInPointerSet;
     PRAWINPUTDEVICE pRawInputDevices;
     UINT cRawInputDevices;
+    PVOID TouchInjection;
 
     /* ReactOS */
     FAST_MUTEX PrivateFontListLock;
