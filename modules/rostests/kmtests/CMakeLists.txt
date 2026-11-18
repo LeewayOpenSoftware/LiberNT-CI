@@ -189,6 +189,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExLicenseDif.c
     ntos_ex/ExWddm.c
     ntos_fsrtl/FsRtlDissect.c
+    ntos_fsrtl/FsRtlVolumeNotifyKM.c
     ntos_fsrtl/FsRtlExpression.c
     ntos_fsrtl/FsRtlFileLockState.c
     ntos_fsrtl/FsRtlLegal.c
