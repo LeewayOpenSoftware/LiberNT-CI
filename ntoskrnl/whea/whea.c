@@ -91,6 +91,7 @@ static KSPIN_LOCK WheapLock;
 static LIST_ENTRY WheapSourceList = { &WheapSourceList, &WheapSourceList };
 static LIST_ENTRY WheapPendingList = { &WheapPendingList, &WheapPendingList };
 static LIST_ENTRY WheapOpenList = { &WheapOpenList, &WheapOpenList };
+static LIST_ENTRY WheapDiscardList = { &WheapDiscardList, &WheapDiscardList };
 static ULONG WheapNextSourceId = 1;
 static KDPC WheapDpc;
 static WORK_QUEUE_ITEM WheapWorkItem;
@@ -184,13 +185,36 @@ WheapOpenReport(
 static
 PWHEAP_RECORD
 WheapRecycleRecord(
-    _In_ PWHEAP_RECORD Record)
+    _In_ PWHEAP_RECORD Record,
+    _In_ KIRQL CallerIrql,
+    _Inout_ PBOOLEAN QueueDpc)
 {
-    if (Record->FromPool)
+    if (!Record->FromPool)
+    {
+        InsertTailList(&Record->Source->FreeRecords, &Record->Link);
+        return NULL;
+    }
+
+    if (CallerIrql <= DISPATCH_LEVEL)
         return Record;
 
-    InsertTailList(&Record->Source->FreeRecords, &Record->Link);
+    InsertTailList(&WheapDiscardList, &Record->Link);
+    if (!WheapWorkQueued)
+    {
+        WheapWorkQueued = TRUE;
+        *QueueDpc = TRUE;
+    }
+
     return NULL;
+}
+
+static
+VOID
+WheapFreeRecords(
+    _Inout_ PLIST_ENTRY Records)
+{
+    while (!IsListEmpty(Records))
+        ExFreePoolWithTag(CONTAINING_RECORD(RemoveHeadList(Records), WHEAP_RECORD, Link), WHEAP_TAG);
 }
 
 static
@@ -375,6 +399,7 @@ WheapWorker(
     WHEAP_RECORD Item;
     GUID CreatorId, PartitionId;
     ULONG ErrorSourceId, ErrorType, Length, Sequence, SectionBytes;
+    LIST_ENTRY Discarded;
     BOOLEAN FromPool;
     KIRQL OldIrql;
 
@@ -383,13 +408,18 @@ WheapWorker(
     if (!WheapLogBuffer)
         WheapLogBuffer = ExAllocatePoolWithTag(NonPagedPoolNx, WHEAP_LOG_BUFFER_LENGTH, WHEAP_TAG);
 
+    InitializeListHead(&Discarded);
     for (;;)
     {
         WheapAcquireLock(&OldIrql);
+        while (!IsListEmpty(&WheapDiscardList))
+            InsertTailList(&Discarded, RemoveHeadList(&WheapDiscardList));
+
         if (IsListEmpty(&WheapPendingList))
         {
             WheapWorkQueued = FALSE;
             WheapReleaseLock(OldIrql);
+            WheapFreeRecords(&Discarded);
             break;
         }
 
@@ -428,6 +458,7 @@ WheapWorker(
 
         if (FromPool)
             ExFreePoolWithTag(Record, WHEAP_TAG);
+        WheapFreeRecords(&Discarded);
 
         /* FIXME: drop this line once ETW events reach the event log; a source in a fault loop must not fill the log */
         if (Sequence <= WHEAP_DEBUG_LINES || (Sequence % WHEAP_DEBUG_LINE_INTERVAL) == 0)
@@ -866,6 +897,22 @@ WheaAddErrorSourceDeviceDriverV1(
 
 static
 BOOLEAN
+WheapIsReportOpen(
+    _In_ ULONG ErrorSourceId)
+{
+    PWHEAP_ERROR_SOURCE Source;
+    BOOLEAN Open;
+    KIRQL OldIrql;
+
+    WheapAcquireLock(&OldIrql);
+    Source = WheapFindSource(ErrorSourceId);
+    Open = Source && Source->DeviceDriver && WheapHasOpenReport(Source);
+    WheapReleaseLock(OldIrql);
+    return Open;
+}
+
+static
+BOOLEAN
 WheapHasPendingReport(
     _In_ ULONG ErrorSourceId)
 {
@@ -900,6 +947,9 @@ WheaRemoveErrorSourceDeviceDriver(
     ULONG Attempt;
 
     ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    if (WheapIsReportOpen(ErrorSourceId))
+        return STATUS_RESOURCE_IN_USE;
+
     Interval.QuadPart = WHEAP_REMOVE_WAIT_INTERVAL;
     for (Attempt = 0; Attempt < WHEAP_REMOVE_WAIT_ATTEMPTS && WheapHasPendingReport(ErrorSourceId); Attempt++)
         KeDelayExecutionThread(KernelMode, FALSE, &Interval);
@@ -1176,6 +1226,7 @@ WheaHwErrorReportAbandonDeviceDriver(
     _In_ WHEA_ERROR_HANDLE ErrorHandle)
 {
     PWHEAP_RECORD Record, Discarded = NULL;
+    BOOLEAN QueueDpc = FALSE;
     KIRQL OldIrql;
 
     WheapAcquireLock(&OldIrql);
@@ -1183,13 +1234,15 @@ WheaHwErrorReportAbandonDeviceDriver(
     if (Record)
     {
         RemoveEntryList(&Record->Link);
-        Discarded = WheapRecycleRecord(Record);
+        Discarded = WheapRecycleRecord(Record, OldIrql, &QueueDpc);
     }
 
     WheapReleaseLock(OldIrql);
 
     if (Discarded)
         ExFreePoolWithTag(Discarded, WHEAP_TAG);
+    if (QueueDpc)
+        KeInsertQueueDpc(&WheapDpc, NULL, NULL);
 
     return Record ? STATUS_SUCCESS : STATUS_INVALID_HANDLE;
 }
@@ -1213,7 +1266,7 @@ WheaHwErrorReportSubmitDeviceDriver(
     else if (Record->SectionCount == 0)
     {
         RemoveEntryList(&Record->Link);
-        Discarded = WheapRecycleRecord(Record);
+        Discarded = WheapRecycleRecord(Record, OldIrql, &QueueDpc);
         Status = STATUS_BUFFER_TOO_SMALL;
     }
     else
