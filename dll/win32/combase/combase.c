@@ -1490,6 +1490,9 @@ HRESULT WINAPI CoQueryAuthenticationServices(DWORD *count, SOLE_AUTHENTICATION_S
 
     TRACE("%p, %p\n", count, services);
 
+    if (!services)
+        return E_INVALIDARG;
+
     EnterCriticalSection(&com_security_cs);
     *count = 0;
     *services = NULL;

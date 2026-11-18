@@ -49,6 +49,16 @@ static BOOL GetProcessUser(WCHAR *Buffer, DWORD Length)
     return Ret;
 }
 
+static void CheckNullServices(const char *Stage)
+{
+    DWORD Count = 0xdeadbeef;
+    HRESULT hr;
+
+    hr = CoQueryAuthenticationServices(&Count, NULL);
+    ok(hr == E_INVALIDARG, "%s: CoQueryAuthenticationServices without a list returned %#lx\n", Stage, hr);
+    ok(Count == 0xdeadbeef, "%s: Count without a list is %lu\n", Stage, Count);
+}
+
 static void CheckNoServices(const char *Stage)
 {
     SOLE_AUTHENTICATION_SERVICE *Services = (SOLE_AUTHENTICATION_SERVICE *)(ULONG_PTR)0xdeadbeef;
@@ -59,6 +69,7 @@ static void CheckNoServices(const char *Stage)
     ok(hr == S_OK, "%s: CoQueryAuthenticationServices returned %#lx\n", Stage, hr);
     ok(Count == 0, "%s: Count is %lu\n", Stage, Count);
     ok(Services == NULL, "%s: Services is %p\n", Stage, Services);
+    CheckNullServices(Stage);
 }
 
 static void CheckOneService(const char *Stage, const WCHAR *Principal)
@@ -70,6 +81,7 @@ static void CheckOneService(const char *Stage, const WCHAR *Principal)
     hr = CoQueryAuthenticationServices(&Count, &Services);
     ok(hr == S_OK, "%s: CoQueryAuthenticationServices returned %#lx\n", Stage, hr);
     ok(Count == 1, "%s: Count is %lu\n", Stage, Count);
+    CheckNullServices(Stage);
     if (hr != S_OK || Count != 1 || !Services)
         return;
     ok(Services[0].dwAuthnSvc == RPC_C_AUTHN_WINNT, "%s: dwAuthnSvc is %lu\n", Stage, Services[0].dwAuthnSvc);
