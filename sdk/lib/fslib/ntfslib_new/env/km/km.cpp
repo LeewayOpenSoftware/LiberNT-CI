@@ -187,7 +187,9 @@ static BOOLEAN NtfsDurableOrderingEnabled(VOID);
 #define NTFS_CACHE_DIRTY_LIMIT 1280
 #define NTFS_CACHE_DIRTY_SLICE 128
 static FAST_MUTEX NtfsCacheMutex;
-/* Serialize disk writebacks without holding the cache mutex at APC_LEVEL. */
+/* Serialize disk writebacks without holding the cache mutex at APC_LEVEL.
+ * A page-in waits on it, so its holder must never wait on a page-in, a file
+ * system resource or a registry lock: synchronous disk I/O only. */
 static KMUTEX NtfsCacheWritebackMutex;
 static volatile LONG NtfsCacheReady = 0;
 static volatile LONG NtfsCacheInitializing = 0;
@@ -1096,6 +1098,8 @@ NtfsDiskPrepareMountKm(
     /* A new volume on this device object: whatever an earlier one learned
      * about the device no longer applies (F1 of the durability review). */
     NtfsDiskForgetDeviceKm(DeviceObject);
+    /* Probe it now, at PASSIVE_LEVEL, not in the first writeback. */
+    (void)NtfsDeviceEntry(DeviceObject);
     return STATUS_SUCCESS;
 }
 
