@@ -17,6 +17,8 @@
 #define WHEAP_MAX_RECORD_BYTES 0x100000
 #define WHEAP_RECORD_REVISION 0x0210
 #define WHEAP_SECTION_REVISION 0x0300
+#define WHEAP_DEBUG_LINES 8
+#define WHEAP_DEBUG_LINE_INTERVAL 256
 #define WHEAP_EVENT_CHANNEL_SYSTEM 8
 #define WHEAP_EVENT_KEYWORDS 0x8000000000000002ULL
 #define WHEAP_LOG_BUFFER_LENGTH \
@@ -60,6 +62,7 @@ typedef struct _WHEAP_ERROR_SOURCE
     ULONG MaxPacketLength;
     ULONG ReportedCount;
     ULONG DroppedCount;
+    ULONG LoggedCount;
     LIST_ENTRY FreeRecords;
     ULONG DescriptorLength;
     UCHAR Descriptor[ANYSIZE_ARRAY];
@@ -240,7 +243,7 @@ WheapWorker(
     PWHEA_ERROR_PACKET_V2 Packet;
     WHEA_ERROR_TYPE ErrorType;
     WHEA_ERROR_SEVERITY Severity;
-    ULONG ErrorSourceId, Length;
+    ULONG ErrorSourceId, Length, Sequence;
     KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(Parameter);
@@ -264,6 +267,7 @@ WheapWorker(
         ErrorType = Packet->ErrorType;
         Severity = Packet->ErrorSeverity;
         Length = Record->PacketLength;
+        Sequence = ++Record->Source->LoggedCount;
         if (WheapLogBuffer)
         {
             RtlCopyMemory(WheapLogBuffer + sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR),
@@ -274,9 +278,13 @@ WheapWorker(
         InsertTailList(&Record->Source->FreeRecords, &Record->Link);
         WheapReleaseLock(OldIrql);
 
-        /* FIXME: drop this line once ETW events reach the event log; until then it is the only trace */
-        DPRINT1("WHEA: hardware error from source %lu: type %d, severity %d, packet of %lu bytes\n",
-                ErrorSourceId, ErrorType, Severity, Length);
+        /* FIXME: drop this line once ETW events reach the event log; a source in a fault loop must not fill the log */
+        if (Sequence <= WHEAP_DEBUG_LINES || (Sequence % WHEAP_DEBUG_LINE_INTERVAL) == 0)
+        {
+            DPRINT1("WHEA: hardware error %lu from source %lu: type %d, severity %d, packet of %lu bytes\n",
+                    Sequence, ErrorSourceId, ErrorType, Severity, Length);
+        }
+
         if (WheapLogBuffer)
             WheapLogPacket(Length);
     }
@@ -349,6 +357,7 @@ WheaAddErrorSource(
     Source->MaxPacketLength = sizeof(WHEA_ERROR_PACKET_V2) + Header.MaxRawDataLength;
     Source->ReportedCount = 0;
     Source->DroppedCount = 0;
+    Source->LoggedCount = 0;
     InitializeListHead(&Source->FreeRecords);
     Source->DescriptorLength = Header.Length;
     RtlCopyMemory(Source->Descriptor, ErrorSource, Header.Length);
