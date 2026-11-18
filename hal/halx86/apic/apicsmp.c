@@ -165,10 +165,14 @@ ApicStartApplicationProcessor(
 
     KeStallExecutionProcessor(10000);
 
-    ApicRequestGlobalInterruptLevel(LapicId, 0,
-        APIC_MT_INIT, APIC_TGM_Level, APIC_DSH_Destination, 0);
+    /* x2APIC processors do not support the INIT level de-assert */
+    if (!HalpApicX2Mode)
+    {
+        ApicRequestGlobalInterruptLevel(LapicId, 0,
+            APIC_MT_INIT, APIC_TGM_Level, APIC_DSH_Destination, 0);
 
-    KeStallExecutionProcessor(200);
+        KeStallExecutionProcessor(200);
+    }
 
     ApicRequestGlobalInterrupt(LapicId, StartupVector,
         APIC_MT_Startup, APIC_TGM_Edge, APIC_DSH_Destination);

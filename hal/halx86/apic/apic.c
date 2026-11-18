@@ -264,11 +264,14 @@ ApicRequestSelfInterrupt(IN UCHAR Vector, UCHAR TriggerMode)
     Flags = __readeflags();
     _disable();
 
-    /* Wait for the APIC to be idle */
-    do
+    /* Wait for the APIC to be idle; the x2APIC ICR has no delivery status */
+    if (!HalpApicX2Mode)
     {
-        IcrStatus.Long0 = ApicRead(APIC_ICR0);
-    } while (IcrStatus.DeliveryStatus);
+        do
+        {
+            IcrStatus.Long0 = ApicRead(APIC_ICR0);
+        } while (IcrStatus.DeliveryStatus);
+    }
 
     /* Write high dword first, then low dword to send the interrupt */
     ApicWriteIcr(Icr.Long0, 0);
