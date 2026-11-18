@@ -168,7 +168,7 @@ TestAccessCheckFromState(VOID)
     WorldSidAttr[0].Sid = WorldSid;
     WorldSidAttr[0].Attributes = SE_GROUP_ENABLED;
     WorldHash.SidCount = 1;
-    WorldHash.SidAttributes = WorldSidAttr;
+    WorldHash.SidAttr = WorldSidAttr;
 
     RtlZeroMemory(&AccessInfo, sizeof(AccessInfo));
     AccessInfo.SidHash = &WorldHash;
@@ -204,6 +204,66 @@ TestAccessCheckFromState(VOID)
     ok_bool_true(Granted, "from-state zero desired");
     ok_eq_hex(AccessStatus, STATUS_SUCCESS);
     ok_eq_hex(GrantedAccess, FILE_READ_DATA);
+    {
+        PACL MaxDacl;
+
+        DaclSize = sizeof(ACL) + sizeof(ACCESS_DENIED_ACE) + sizeof(ACCESS_ALLOWED_ACE) +
+                   2 * SECURITY_MAX_SID_SIZE;
+        MaxDacl = ExAllocatePoolWithTag(PagedPool, DaclSize, TAG_TEST);
+        ok(MaxDacl != NULL, "no pool for max dacl
+");
+        if (MaxDacl != NULL)
+        {
+            Status = RtlCreateAcl(MaxDacl, DaclSize, ACL_REVISION);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            Status = RtlAddAccessDeniedAce(MaxDacl, ACL_REVISION, FILE_GENERIC_WRITE, WorldSid);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            Status = RtlAddAccessAllowedAce(MaxDacl, ACL_REVISION, FILE_ALL_ACCESS, WorldSid);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+            Status = RtlSetDaclSecurityDescriptor(&Sd, TRUE, MaxDacl, FALSE);
+            ok_eq_hex(Status, STATUS_SUCCESS);
+
+            GrantedAccess = 0;
+            AccessStatus = STATUS_PENDING;
+            Granted = SeAccessCheckFromState(&Sd, &AccessInfo, NULL, MAXIMUM_ALLOWED, 0,
+                                             NULL, &Mapping, UserMode, &GrantedAccess, &AccessStatus);
+            ok_bool_true(Granted, "max allowed granted");
+            ok_eq_hex(AccessStatus, STATUS_SUCCESS);
+            ok(GrantedAccess & FILE_GENERIC_READ, "max allowed lost read
+");
+            ok(!(GrantedAccess & FILE_GENERIC_WRITE), "max allowed kept denied write
+");
+
+            ExFreePoolWithTag(MaxDacl, TAG_TEST);
+        }
+    }
+
+    {
+        SID_AND_ATTRIBUTES AdminsSidAttr[1];
+        SID_AND_ATTRIBUTES_HASH AdminsHash;
+        PSID AdminsSid = SeExports->SeAliasAdminsSid;
+
+        AdminsSidAttr[0].Sid = AdminsSid;
+        AdminsSidAttr[0].Attributes = SE_GROUP_ENABLED;
+        AdminsHash.SidCount = 1;
+        AdminsHash.SidAttr = AdminsSidAttr;
+
+        Status = RtlSetDaclSecurityDescriptor(&Sd, TRUE, Dacl, FALSE);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        AccessInfo.SidHash = &AdminsHash;
+        AccessInfo.RestrictedSidHash = &WorldHash;
+
+        GrantedAccess = (ACCESS_MASK)-1;
+        AccessStatus = STATUS_PENDING;
+        Granted = SeAccessCheckFromState(&Sd, &AccessInfo, NULL, FILE_READ_DATA, 0,
+                                         NULL, &Mapping, UserMode, &GrantedAccess, &AccessStatus);
+        ok_bool_false(Granted, "restricted token denied when only restricting sid is allowed");
+        ok_eq_hex(AccessStatus, STATUS_ACCESS_DENIED);
+        ok_eq_hex(GrantedAccess, 0);
+
+        AccessInfo.SidHash = &WorldHash;
+        AccessInfo.RestrictedSidHash = NULL;
+    }
 
     ExFreePoolWithTag(Dacl, TAG_TEST);
 }
