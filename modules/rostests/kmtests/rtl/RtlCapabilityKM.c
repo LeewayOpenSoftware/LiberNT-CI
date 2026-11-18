@@ -9,15 +9,6 @@
 
 #define NDEBUG
 #include <debug.h>
-PVOID NTAPI RtlFindAceByType(PACL Acl, UCHAR AceType, PULONG Index);
-NTSTATUS NTAPI RtlDecompressBufferEx2(USHORT CompressionFormat,
-                                      PUCHAR UncompressedBuffer,
-                                      ULONG UncompressedBufferSize,
-                                      PUCHAR CompressedBuffer,
-                                      ULONG CompressedBufferSize,
-                                      ULONG UncompressedChunkSize,
-                                      PULONG FinalUncompressedSize,
-                                      PVOID WorkSpace);
 
 static
 VOID
