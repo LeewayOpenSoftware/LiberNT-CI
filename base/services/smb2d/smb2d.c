@@ -18,6 +18,7 @@
 #include <wchar.h>
 
 #include "smb2client.h"
+#include "smb2enc.h"
 #include "smb2rdr_ioctl.h"
 
 /* Status values from ntstatus.h without pulling the kernel-flavoured macros */
@@ -435,6 +436,11 @@ static LONG DoSetInfo(const BYTE *payload, DWORD length)
     {
         case SMB2_FILE_BASIC_INFORMATION:
             want = 40;
+            break;
+        case SMB2_FILE_RENAME_INFORMATION:
+            if (Smb2ValidateRenameInfo(payload + sizeof(*req), req->BufferLength) != SMB2_STATUS_SUCCESS)
+                return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+            want = req->BufferLength;
             break;
         case SMB2_FILE_DISPOSITION_INFORMATION:
             want = 1;

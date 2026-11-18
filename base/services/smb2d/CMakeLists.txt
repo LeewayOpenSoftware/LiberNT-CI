@@ -1,6 +1,7 @@
 
 list(APPEND SMB2_ENGINE_SOURCE
     smb2client.c
+    smb2enc.c
     smb2sign.c)
 
 # Console test tool: exercises the protocol engine without the kernel redirector

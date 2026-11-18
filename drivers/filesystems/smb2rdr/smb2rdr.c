@@ -984,6 +984,63 @@ static NTSTATUS Smb2SetInfoUpcall(ULONGLONG FileHandle, ULONG InfoClass, const V
     return status;
 }
 
+static NTSTATUS Smb2SetRename(PRX_CONTEXT RxContext, PSMB2RDR_FOBX_EXT Fobx)
+{
+    PFILE_RENAME_INFORMATION info = (PFILE_RENAME_INFORMATION)RxContext->Info.Buffer;
+    LONG length = RxContext->Info.Length;
+    PFCB fcb = (PFCB)RxContext->pFcb;
+    PMRX_SRV_OPEN srvOpen = RxContext->pFobx ? RxContext->pFobx->pSrvOpen : NULL;
+    UNICODE_STRING prefix, target;
+    PUCHAR req;
+    PWCHAR relative;
+    ULONG nameBytes, sourceBytes, prefixBytes, relativeBytes, total;
+    NTSTATUS status;
+
+    if (length < (LONG)FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName))
+        return STATUS_INFO_LENGTH_MISMATCH;
+    nameBytes = info->FileNameLength;
+    if ((nameBytes & 1) || nameBytes > (ULONG)length - FIELD_OFFSET(FILE_RENAME_INFORMATION, FileName))
+        return STATUS_INVALID_PARAMETER;
+    if (!fcb || !srvOpen || !srvOpen->pAlreadyPrefixedName)
+        return STATUS_INVALID_PARAMETER;
+
+    /* The target is the full path of the target directory entry; drop the part the source shares with it */
+    sourceBytes = fcb->FcbTableEntry.Path.Length;
+    if (sourceBytes < srvOpen->pAlreadyPrefixedName->Length)
+        return STATUS_OBJECT_PATH_SYNTAX_BAD;
+    prefixBytes = sourceBytes - srvOpen->pAlreadyPrefixedName->Length;
+    prefix.Buffer = fcb->FcbTableEntry.Path.Buffer;
+    prefix.Length = prefix.MaximumLength = (USHORT)prefixBytes;
+    target.Buffer = info->FileName;
+    target.Length = target.MaximumLength = (USHORT)nameBytes;
+    if (nameBytes <= prefixBytes || !RtlPrefixUnicodeString(&prefix, &target, TRUE))
+        return STATUS_NOT_SAME_DEVICE;
+
+    relative = info->FileName + prefixBytes / sizeof(WCHAR);
+    relativeBytes = nameBytes - prefixBytes;
+    if (relativeBytes >= sizeof(WCHAR) && relative[0] == L'\\')
+    {
+        relative++;
+        relativeBytes -= sizeof(WCHAR);
+    }
+    if (relativeBytes == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (relativeBytes > SMB2RDR_MAX_NAME_CHARS * sizeof(WCHAR))
+        return STATUS_OBJECT_NAME_INVALID;
+
+    total = SMB2RDR_RENAME_HEADER + relativeBytes;
+    req = RxAllocatePoolWithTag(PagedPool, total, SMB2RDR_TAG);
+    if (!req)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(req, SMB2RDR_RENAME_HEADER);
+    req[0] = info->ReplaceIfExists ? 1 : 0;
+    *(PULONG)(req + 16) = relativeBytes;
+    RtlCopyMemory(req + SMB2RDR_RENAME_HEADER, relative, relativeBytes);
+    status = Smb2SetInfoUpcall(Fobx->FileHandle, FileRenameInformation, req, total);
+    RxFreePool(req);
+    return status;
+}
+
 static NTSTATUS NTAPI Smb2SetFileInfo(IN OUT PRX_CONTEXT RxContext)
 {
     PSMB2RDR_FOBX_EXT fobx = Smb2GetFobxExt(RxContext->pFobx);
@@ -1024,8 +1081,11 @@ static NTSTATUS NTAPI Smb2SetFileInfo(IN OUT PRX_CONTEXT RxContext)
             return Smb2SetInfoUpcall(fobx->FileHandle, FileAllocationInformation, buffer,
                                      sizeof(FILE_ALLOCATION_INFORMATION));
 
+        case FileRenameInformation:
+            return Smb2SetRename(RxContext, fobx);
+
         default:
-            /* rename, link, position ... */
+            /* link, position ... */
             return STATUS_NOT_SUPPORTED;
     }
 }

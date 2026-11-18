@@ -151,7 +151,14 @@ typedef struct _SMB2RDR_WRITE_REQ
     /* data follows */
 } SMB2RDR_WRITE_REQ;
 
-/* Classes the daemon accepts: 4 basic, 13 disposition, 19 allocation, 20 end of file (MS-FSCC layouts) */
+/*
+ * Classes the daemon accepts: 4 basic, 10 rename, 13 disposition, 19 allocation, 20 end of file (MS-FSCC
+ * layouts). Rename uses the SMB2 form of FILE_RENAME_INFORMATION: BYTE ReplaceIfExists, 7 reserved bytes,
+ * 8 bytes RootDirectory (zero), ULONG FileNameLength, WCHAR FileName[]. The name is relative to the share,
+ * without a leading backslash.
+ */
+#define SMB2RDR_RENAME_HEADER   20
+#define SMB2RDR_MAX_NAME_CHARS  1024
 typedef struct _SMB2RDR_SETINFO_REQ
 {
     unsigned long long FileHandle;
