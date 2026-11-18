@@ -5348,7 +5348,7 @@ TestAgxClient(VOID)
     Heap.Next = APPLE_AGX_HEAP_BASE;
     ok_hex(AppleAgxObjectPlace(&Heap, &Request, &Page, &Bytes), STATUS_SUCCESS);
     ok(Page == 0 && Bytes == APPLE_AGX_PB_CHUNK_SIZE && Heap.Next == APPLE_AGX_HEAP_BASE,
-       "A hidden object took %I64x+%Ix, next %I64x\n", Page, Bytes, Heap.Next);
+       "A hidden object took %I64x+%Ix, next %I64x\n", Page, (size_t)Bytes, Heap.Next);
     Request.Client = 0;
     ok_hex(AppleAgxObjectPlace(&Heap, &Request, &Page, &Bytes), STATUS_INVALID_PARAMETER);
 
