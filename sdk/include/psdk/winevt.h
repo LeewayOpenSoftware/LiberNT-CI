@@ -140,6 +140,51 @@ typedef enum _EVT_EXPORTLOG_FLAGS {
     EvtExportLogOverwrite           = 0x2000
 } EVT_EXPORTLOG_FLAGS;
 
+typedef enum _EVT_FORMAT_MESSAGE_FLAGS {
+    EvtFormatMessageEvent    = 1,
+    EvtFormatMessageLevel    = 2,
+    EvtFormatMessageTask     = 3,
+    EvtFormatMessageOpcode   = 4,
+    EvtFormatMessageKeyword  = 5,
+    EvtFormatMessageChannel  = 6,
+    EvtFormatMessageProvider = 7,
+    EvtFormatMessageId       = 8,
+    EvtFormatMessageXml      = 9
+} EVT_FORMAT_MESSAGE_FLAGS;
+
+typedef enum _EVT_PUBLISHER_METADATA_PROPERTY_ID {
+    EvtPublisherMetadataPublisherGuid = 0,
+    EvtPublisherMetadataResourceFilePath,
+    EvtPublisherMetadataParameterFilePath,
+    EvtPublisherMetadataMessageFilePath,
+    EvtPublisherMetadataHelpLink,
+    EvtPublisherMetadataPublisherMessageID,
+    EvtPublisherMetadataChannelReferences,
+    EvtPublisherMetadataChannelReferencePath,
+    EvtPublisherMetadataChannelReferenceIndex,
+    EvtPublisherMetadataChannelReferenceID,
+    EvtPublisherMetadataChannelReferenceFlags,
+    EvtPublisherMetadataChannelReferenceMessageID,
+    EvtPublisherMetadataLevels,
+    EvtPublisherMetadataLevelName,
+    EvtPublisherMetadataLevelValue,
+    EvtPublisherMetadataLevelMessageID,
+    EvtPublisherMetadataTasks,
+    EvtPublisherMetadataTaskName,
+    EvtPublisherMetadataTaskEventGuid,
+    EvtPublisherMetadataTaskValue,
+    EvtPublisherMetadataTaskMessageID,
+    EvtPublisherMetadataOpcodes,
+    EvtPublisherMetadataOpcodeName,
+    EvtPublisherMetadataOpcodeValue,
+    EvtPublisherMetadataOpcodeMessageID,
+    EvtPublisherMetadataKeywords,
+    EvtPublisherMetadataKeywordName,
+    EvtPublisherMetadataKeywordValue,
+    EvtPublisherMetadataKeywordMessageID,
+    EvtPublisherMetadataPropertyIdEND
+} EVT_PUBLISHER_METADATA_PROPERTY_ID;
+
 typedef enum _EVT_RPC_LOGIN_FLAGS {
     EvtRpcLoginAuthDefault = 0,
     EvtRpcLoginAuthNegotiate,
@@ -278,6 +323,12 @@ EVT_HANDLE WINAPI EvtQuery(EVT_HANDLE session, LPCWSTR path, LPCWSTR query, DWOR
 BOOL WINAPI EvtSeek(EVT_HANDLE result_set, LONGLONG position, EVT_HANDLE bookmark, DWORD timeout,
                     DWORD flags);
 BOOL WINAPI EvtUpdateBookmark(EVT_HANDLE bookmark, EVT_HANDLE event);
+EVT_HANDLE WINAPI EvtOpenPublisherMetadata(EVT_HANDLE session, LPCWSTR publisher_id, LPCWSTR logfile_path,
+                                           LCID locale, DWORD flags);
+BOOL WINAPI EvtGetPublisherMetadataProperty(EVT_HANDLE publisher, EVT_PUBLISHER_METADATA_PROPERTY_ID id,
+                                            DWORD flags, DWORD buffer_size, PEVT_VARIANT buffer, PDWORD buffer_used);
+BOOL WINAPI EvtFormatMessage(EVT_HANDLE publisher, EVT_HANDLE event, DWORD message_id, DWORD value_count,
+                             PEVT_VARIANT values, DWORD flags, DWORD buffer_size, LPWSTR buffer, PDWORD buffer_used);
 
 #ifdef __cplusplus
 } /* extern "C" */
