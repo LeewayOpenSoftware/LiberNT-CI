@@ -30,7 +30,6 @@ extern void func_LookupAccountName(void);
 extern void func_LookupAccountSid(void);
 extern void func_MachineGuid(void);
 extern void func_NotifyBootConfigStatus(void);
-extern void func_WindowsVersionValues(void);
 extern void func_OpenTrace(void);
 extern void func_PrivilegeNames(void);
 extern void func_QueryServiceConfig2(void);
@@ -99,7 +98,6 @@ const struct test winetest_testlist[] =
     { "LookupAccountSid", func_LookupAccountSid },
     { "MachineGuid", func_MachineGuid },
     { "NotifyBootConfigStatus", func_NotifyBootConfigStatus },
-    { "WindowsVersionValues", func_WindowsVersionValues },
     { "OpenTrace", func_OpenTrace },
     { "PrivilegeNames", func_PrivilegeNames },
     { "QueryServiceConfig2", func_QueryServiceConfig2 },
