@@ -94,6 +94,7 @@ list(APPEND SOURCE
     NtCreateSection_CachedRead.c
     NtCreateSection_ConcurrentImage.c
     NtCreateThread.c
+    NtCreateUserProcess.c
     NtDeleteKey.c
     NtDuplicateObject.c
     NtDuplicateToken.c
