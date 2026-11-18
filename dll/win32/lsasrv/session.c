@@ -665,7 +665,7 @@ LsapGetDpapiPrekey(
             if (Credential->PrimaryKeyValue.Length == sizeof("Primary") - 1 &&
                 RtlCompareMemory(Credential->PrimaryKeyValue.Buffer, "Primary",
                                  sizeof("Primary") - 1) == sizeof("Primary") - 1 &&
-                Credential->Credential.Length == 20)
+                Credential->Credential.Length == DPAPI_PREKEY_SIZE)
             {
                 Prekey->Buffer = RtlAllocateHeap(RtlGetProcessHeap(), 0,
                                                  Credential->Credential.Length);

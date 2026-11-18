@@ -484,6 +484,8 @@ LsapGetCredentials(
     _Out_ PULONG PrimaryKeyLength,
     _Out_ PLSA_STRING Credentials);
 
+#define DPAPI_PREKEY_SIZE 20
+
 NTSTATUS
 NTAPI
 LsapGetDpapiPrekey(

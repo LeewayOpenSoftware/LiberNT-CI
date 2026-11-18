@@ -21,7 +21,6 @@
 #define DPAPI_MIN_BLOB_SIZE         (DPAPI_HEADER_SIZE + DPAPI_MAC_SIZE)
 #define DPAPI_MAX_DATA_SIZE         (16 * 1024 * 1024)
 #define DPAPI_MAX_ENTROPY_SIZE      (64 * 1024)
-#define DPAPI_PREKEY_SIZE           20
 
 static
 NTSTATUS
@@ -346,7 +345,8 @@ s_DpapiUnprotect(
 
     if (DataIn.pbData == NULL ||
         (Entropy.cbData != 0 && Entropy.pbData == NULL) ||
-        Entropy.cbData > DPAPI_MAX_ENTROPY_SIZE)
+        Entropy.cbData > DPAPI_MAX_ENTROPY_SIZE ||
+        DataIn.cbData > DPAPI_HEADER_SIZE + DPAPI_MAX_DATA_SIZE + DPAPI_IV_SIZE + DPAPI_MAC_SIZE)
     {
         return STATUS_INVALID_PARAMETER;
     }
