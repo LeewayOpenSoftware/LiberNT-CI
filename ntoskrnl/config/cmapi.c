@@ -3157,6 +3157,7 @@ CmpRestoreDeleteSubTree(
 {
     PCM_KEY_NODE Node;
     HCELL_INDEX SubKey;
+    ULONG Count;
     NTSTATUS Status;
 
     for (;;)
@@ -3165,13 +3166,15 @@ CmpRestoreDeleteSubTree(
         if (!Node)
             return STATUS_INSUFFICIENT_RESOURCES;
 
-        if (!(Node->SubKeyCounts[Stable] + Node->SubKeyCounts[Volatile]))
+        Count = Node->SubKeyCounts[Stable] + Node->SubKeyCounts[Volatile];
+        if (!Count)
         {
             HvReleaseCell(Hive, Cell);
             break;
         }
 
-        SubKey = CmpFindSubKeyByNumber(Hive, Node, 0);
+        /* Removing the last entry of an index moves no other entry */
+        SubKey = CmpFindSubKeyByNumber(Hive, Node, Count - 1);
         HvReleaseCell(Hive, Cell);
         if (SubKey == HCELL_NIL)
             return STATUS_REGISTRY_CORRUPT;
@@ -3339,8 +3342,6 @@ CmRestoreKey(
     }
 
     Status = CmpRestoreDeleteSubTree(Hive, Cell);
-    if (!NT_SUCCESS(Status))
-        goto QuitFlusher;
 
     Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
     if (!Node)
@@ -3348,6 +3349,9 @@ CmRestoreKey(
         Status = STATUS_INSUFFICIENT_RESOURCES;
         goto QuitFlusher;
     }
+
+    if (!NT_SUCCESS(Status))
+        goto QuitUpdate;
 
     if (Node->ValueList.Count)
     {
@@ -3424,8 +3428,9 @@ QuitUpdate:
     Kcb->KcbMaxValueDataLen = Node->MaxValueDataLen;
     CmpReportNotify(Kcb, Hive, Cell, REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET);
 
-    if (NT_SUCCESS(Status) && !CmpNoWrite && !(Hive->HiveFlags & HIVE_VOLATILE) &&
-        !HvSyncHive(Hive))
+    /* A failed restore has already changed the key, so its state is written too */
+    if (!CmpNoWrite && !(Hive->HiveFlags & HIVE_VOLATILE) &&
+        !HvSyncHive(Hive) && NT_SUCCESS(Status))
     {
         Status = STATUS_REGISTRY_IO_FAILED;
     }
