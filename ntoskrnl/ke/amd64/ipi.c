@@ -21,7 +21,10 @@ typedef struct DECLSPEC_CACHEALIGN _KI_GENERIC_CALL_PACKET
     ULONG_PTR Argument;
     volatile LONG TargetsRemaining;
     volatile LONG Release;
-    volatile KAFFINITY OutstandingDone;
+    /* Targets that have not finished Function yet: one mask per group, and
+     * their count, which is what the owner waits on */
+    volatile LONG DoneRemaining;
+    volatile KAFFINITY OutstandingDone[KI_MAXIMUM_GROUPS];
 } KI_GENERIC_CALL_PACKET;
 
 static KI_GENERIC_CALL_PACKET KiGenericCallPacket;
@@ -234,10 +237,13 @@ KiIpiParticipateInGenericCall(
     KIRQL OldIrql;
     LONG Remaining;
     BOOLEAN WasOutstanding;
+    PROCESSOR_NUMBER Self;
 
+    KiProcessorNumberFromIndex(Prcb->Number, &Self);
     ASSERT(Function != NULL);
     ASSERT(KiGenericCallOwner >= 0 && KiGenericCallOwner != (LONG)Prcb->Number);
-    ASSERT(KiGenericCallPacket.OutstandingDone & Prcb->SetMember);
+    ASSERT(Self.Group < KI_MAXIMUM_GROUPS);
+    ASSERT(KiGenericCallPacket.OutstandingDone[Self.Group] & Prcb->SetMember);
 
     Remaining = InterlockedDecrement(&KiGenericCallPacket.TargetsRemaining);
     UNREFERENCED_PARAMETER(Remaining);
@@ -252,10 +258,12 @@ KiIpiParticipateInGenericCall(
     Function(Argument);
     KeLowerIrql(OldIrql);
 
-    WasOutstanding = InterlockedBitTestAndResetAffinity(&KiGenericCallPacket.OutstandingDone,
-                                                        Prcb->Number);
+    WasOutstanding = InterlockedBitTestAndResetAffinity(&KiGenericCallPacket.OutstandingDone[Self.Group],
+                                                        Self.Number);
     UNREFERENCED_PARAMETER(WasOutstanding);
     ASSERT(WasOutstanding);
+    Remaining = InterlockedDecrement(&KiGenericCallPacket.DoneRemaining);
+    ASSERT(Remaining >= 0);
 }
 
 VOID
@@ -320,12 +328,15 @@ KeIpiGenericCall(
     _In_ ULONG_PTR Argument)
 {
     PKPRCB Prcb;
-    KAFFINITY Targets, IpiTargets, RemainingSet;
+    KAFFINITY Mask, RemainingSet;
+    KAFFINITY_EX TargetSet;
+    PROCESSOR_NUMBER Self;
     BOOLEAN InterruptsEnabled;
     KIRQL OldIrql, ExecuteIrql;
     ULONG_PTR Status;
     ULONG Processor;
     LONG TargetCount;
+    USHORT Group, Groups;
 
     ASSERT(Function != NULL);
     InterruptsEnabled = (__readeflags() & EFLAGS_INTERRUPT_MASK) != 0;
@@ -345,32 +356,51 @@ KeIpiGenericCall(
     }
 
     ASSERT(KiGenericCallPacket.TargetsRemaining == 0);
-    ASSERT(KiGenericCallPacket.OutstandingDone == 0);
-    Targets = (KAFFINITY)KeActiveProcessors & ~Prcb->SetMember;
+    ASSERT(KiGenericCallPacket.DoneRemaining == 0);
 
-    if (Targets != 0)
+    /* Every active processor of every group but this one */
+    KiProcessorNumberFromIndex(Prcb->Number, &Self);
+    Groups = KiActiveProcessorsEx.Count;
+    if (Groups == 0)
+        Groups = 1;
+    ASSERT(Groups <= KI_MAXIMUM_GROUPS && Self.Group < Groups);
+    TargetSet.Count = Groups;
+    TargetSet.Size = Groups;
+    TargetSet.Reserved = 0;
+    TargetCount = 0;
+    for (Group = 0; Group < Groups; Group++)
     {
-        TargetCount = 0;
-        RemainingSet = Targets;
-        while (BitScanForwardAffinity(&Processor, RemainingSet))
+        Mask = KiQueryActiveGroupAffinity(Group);
+        if (Group == Self.Group)
+            Mask &= ~Prcb->SetMember;
+        ASSERT(KiGenericCallPacket.OutstandingDone[Group] == 0);
+        KiGenericCallPacket.OutstandingDone[Group] = Mask;
+        TargetSet.StaticBitmap[Group] = Mask;
+        for (RemainingSet = Mask; BitScanForwardAffinity(&Processor, RemainingSet);
+             RemainingSet &= ~AFFINITY_MASK(Processor))
         {
             TargetCount++;
-            RemainingSet &= ~AFFINITY_MASK(Processor);
         }
+    }
 
-        ASSERT(TargetCount > 0);
-        ASSERT((Targets & Prcb->SetMember) == 0);
+    if (TargetCount != 0)
+    {
         KiGenericCallPacket.Function = Function;
         KiGenericCallPacket.Argument = Argument;
         KiGenericCallPacket.Release = 0;
-        KiGenericCallPacket.OutstandingDone = Targets;
+        KiGenericCallPacket.DoneRemaining = TargetCount;
         KiGenericCallPacket.TargetsRemaining = TargetCount;
         KeMemoryBarrier();
 
-        IpiTargets = KiIpiQueueRequest(Targets, KI_IPI_GENERIC_CALL);
-        ASSERT(IpiTargets == Targets);
-        if (IpiTargets != 0)
-            KiHalRequestIpiGroup0(IpiTargets);
+        for (Group = 0; Group < Groups; Group++)
+        {
+            for (RemainingSet = TargetSet.StaticBitmap[Group]; BitScanForwardAffinity(&Processor, RemainingSet);
+                 RemainingSet &= ~AFFINITY_MASK(Processor))
+            {
+                KiIpiQueueMailbox(KiProcessorIndexFromNumber(Group, (UCHAR)Processor), &Self, KI_IPI_GENERIC_CALL);
+            }
+        }
+        HalRequestIpi(0, &TargetSet);
 
         while (KiGenericCallPacket.TargetsRemaining != 0)
         {
@@ -381,14 +411,14 @@ KeIpiGenericCall(
         }
     }
 
-    ASSERT(Targets == 0 || KiGenericCallPacket.OutstandingDone == Targets);
+    ASSERT(TargetCount == 0 || KiGenericCallPacket.DoneRemaining == TargetCount);
     KeRaiseIrql(IPI_LEVEL, &ExecuteIrql);
-    if (Targets != 0)
+    if (TargetCount != 0)
         KiGenericCallPacket.Release = 1;
 
     Status = Function(Argument);
 
-    while (KiGenericCallPacket.OutstandingDone != 0)
+    while (KiGenericCallPacket.DoneRemaining != 0)
     {
         if (!InterruptsEnabled)
             KiIpiProcessRequests();
