@@ -157,7 +157,7 @@ LocalmonShutdown(HANDLE hMonitor)
             pNext = pEntry->Flink;
             pPort = CONTAINING_RECORD(pEntry, LOCALMON_PORT, Entry);
             /* FIXME: a port that closed is skipped, so no registry port is removed or freed here */
-            if ( LocalmonClosePort((HANDLE)pPort) ) continue;
+            LocalmonClosePort((HANDLE)pPort);
             RemoveEntryList(&pPort->Entry);
             DllFreeSplMem(pPort);
         }
