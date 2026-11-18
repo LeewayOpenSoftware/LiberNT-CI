@@ -70,7 +70,12 @@ VOID Smb2UpcallSetRunning(BOOLEAN Running);
 NTSTATUS Smb2Upcall(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
                     PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength);
 
-NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written);
+/* As Smb2Upcall, and the daemon receives a handle to Token (an impersonation token of the caller) with
+ * the request. Token may be NULL. */
+NTSTATUS Smb2UpcallEx(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
+                      PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, PACCESS_TOKEN Token);
+
+NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written, ULONG RequestorPid);
 NTSTATUS Smb2HandlePutReply(const VOID *InBuffer, ULONG InLength);
 
 #define Smb2Trace(...) DbgPrint("smb2rdr: " __VA_ARGS__)

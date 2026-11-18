@@ -16,7 +16,7 @@
 #define SMB2RDR_PROVIDER_NAME       L"SMB2 Network"
 
 /* Bumped when the upcall/downcall layout changes; the daemon sends it with IOCTL_SMB2RDR_START. */
-#define SMB2RDR_PROTOCOL_VERSION    1
+#define SMB2RDR_PROTOCOL_VERSION    2
 
 #define _SMB2RDR_CTL_CODE(code, method) \
     CTL_CODE(FILE_DEVICE_NETWORK_REDIRECTOR, 0x800 | (code), method, FILE_ANY_ACCESS)
@@ -88,6 +88,7 @@ typedef struct _SMB2RDR_TREE_CONNECT_REQ
     unsigned long UserLength;       /* bytes */
     unsigned long DomainLength;     /* bytes */
     unsigned long PasswordLength;   /* bytes */
+    unsigned long long CallerLuid;  /* authentication id of the opening caller (implicit identity), else 0 */
 } SMB2RDR_TREE_CONNECT_REQ;
 
 typedef struct _SMB2RDR_TREE_CONNECT_REPLY
@@ -168,6 +169,7 @@ typedef struct _SMB2RDR_UPCALL
     unsigned long Opcode;
     unsigned long Length;
     unsigned long long Id;
+    unsigned long long TokenHandle; /* impersonation token of the caller, valid in the daemon; 0 = none */
 } SMB2RDR_UPCALL;
 
 /* Daemon -> kernel (input of IOCTL_SMB2RDR_PUTREPLY): header followed by Length payload bytes */

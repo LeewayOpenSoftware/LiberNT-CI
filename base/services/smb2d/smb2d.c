@@ -39,6 +39,7 @@ typedef struct _CONNECTION
     WCHAR Host[257];
     WCHAR User[256];
     WCHAR Domain[256];
+    unsigned long long Luid;        /* authentication id of the caller the session belongs to (0 = explicit identity) */
     SMB2_CONN *Conn;
     unsigned Trees;
 } CONNECTION;
@@ -115,16 +116,16 @@ static OPENFILE *FindFile(unsigned long long h)
 }
 
 static CONNECTION *GetConnection(const WCHAR *host, const WCHAR *user, const WCHAR *domain,
-                                 const WCHAR *password, LONG *status)
+                                 const WCHAR *password, unsigned long long luid, HANDLE token, LONG *status)
 {
     CONNECTION *c;
     SMB2_CONN *sc = NULL;
     uint32_t st;
 
-    /* One connection per server and identity */
+    /* One connection per server and identity; a caller's own session is never shared with another caller */
     for (c = g_Connections; c; c = c->Next)
         if (!_wcsicmp(c->Host, host) && !_wcsicmp(c->User, user ? user : L"") &&
-            !_wcsicmp(c->Domain, domain ? domain : L""))
+            !_wcsicmp(c->Domain, domain ? domain : L"") && c->Luid == luid)
             return c;
 
     st = Smb2Connect(host, 445, &sc);
@@ -134,9 +135,21 @@ static CONNECTION *GetConnection(const WCHAR *host, const WCHAR *user, const WCH
     {
         if (user && user[0])
             st = Smb2SessionSetup(sc, host, user, domain, password);
+        else if (g_HaveUser)
+            st = Smb2SessionSetup(sc, host, g_User, g_Domain, g_Password);
+        else if (token)
+        {
+            /* The implicit identity is the caller's: authenticate with their token */
+            if (SetThreadToken(NULL, token))
+            {
+                st = Smb2SessionSetup(sc, host, NULL, NULL, NULL);
+                RevertToSelf();
+            }
+            else
+                st = SMB2_STATUS_ACCESS_DENIED;
+        }
         else
-            st = Smb2SessionSetup(sc, host, g_HaveUser ? g_User : NULL, g_HaveUser ? g_Domain : NULL,
-                                  g_HaveUser ? g_Password : NULL);
+            st = SMB2_STATUS_ACCESS_DENIED;     /* no caller identity: never fall back to the daemon's own */
     }
     if (st != SMB2_STATUS_SUCCESS)
     {
@@ -155,6 +168,7 @@ static CONNECTION *GetConnection(const WCHAR *host, const WCHAR *user, const WCH
     wcsncpy(c->Host, host, 256);
     wcsncpy(c->User, user ? user : L"", 255);
     wcsncpy(c->Domain, domain ? domain : L"", 255);
+    c->Luid = luid;
     c->Conn = sc;
     c->Next = g_Connections;
     g_Connections = c;
@@ -180,7 +194,7 @@ static void DropConnectionIfIdle(CONNECTION *c)
     free(c);
 }
 
-static LONG DoTreeConnect(const BYTE *payload, DWORD length, BYTE *reply, DWORD *replyLen)
+static LONG DoTreeConnect(const BYTE *payload, DWORD length, HANDLE token, BYTE *reply, DWORD *replyLen)
 {
     const SMB2RDR_TREE_CONNECT_REQ *req = (const SMB2RDR_TREE_CONNECT_REQ *)payload;
     WCHAR name[600], user[257], domain[257], password[257], *share;
@@ -217,7 +231,7 @@ static LONG DoTreeConnect(const BYTE *payload, DWORD length, BYTE *reply, DWORD 
     }
     *share++ = 0;
 
-    c = GetConnection(name, user, domain, password, &status);
+    c = GetConnection(name, user, domain, password, user[0] ? 0 : req->CallerLuid, token, &status);
     if (!c)
         goto out;
     st = Smb2TreeConnect(c->Conn, name, share, &tid);
@@ -474,8 +488,15 @@ static void Serve(HANDLE dev)
             Sleep(500);
             continue;
         }
-        if (got < sizeof(*up) || up->Length > got - sizeof(*up))
+        if (got < sizeof(*up))
             continue;
+        if (up->Length > got - sizeof(*up))
+        {
+            if (up->TokenHandle)
+                CloseHandle((HANDLE)(ULONG_PTR)up->TokenHandle);
+            up->TokenHandle = 0;
+            continue;
+        }
 
         switch (up->Opcode)
         {
@@ -488,7 +509,8 @@ static void Serve(HANDLE dev)
                 status = DoConnect(reqbuf + sizeof(*up), up->Length);
                 break;
             case SMB2RDR_UP_TREE_CONNECT:
-                status = DoTreeConnect(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
+                status = DoTreeConnect(reqbuf + sizeof(*up), up->Length, (HANDLE)(ULONG_PTR)up->TokenHandle,
+                                       repbuf + sizeof(*down), &replyLen);
                 break;
             case SMB2RDR_UP_TREE_DISCONNECT:
                 status = DoTreeDisconnect(reqbuf + sizeof(*up), up->Length);
@@ -519,6 +541,11 @@ static void Serve(HANDLE dev)
                 break;
         }
 
+        if (up->TokenHandle)
+        {
+            CloseHandle((HANDLE)(ULONG_PTR)up->TokenHandle);
+            up->TokenHandle = 0;
+        }
         down->Id = up->Id;
         down->Status = status;
         down->Length = replyLen;

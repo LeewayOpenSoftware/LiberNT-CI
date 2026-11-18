@@ -118,7 +118,7 @@ static NTSTATUS NTAPI Smb2RdrDevFcbXXXControlFile(IN OUT PRX_CONTEXT RxContext)
 
             if (!out)
                 return STATUS_INVALID_PARAMETER;
-            status = Smb2HandleGetRequest(out, outLen, &written);
+            status = Smb2HandleGetRequest(out, outLen, &written, IoGetRequestorProcessId(RxContext->CurrentIrp));
             if (NT_SUCCESS(status))
                 RxContext->InformationToReturn = written;
             return status;
@@ -456,6 +456,9 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
     PUCHAR cursor;
     ULONG serverBytes, shareBytes, total = 0, replyLen = 0;
     NTSTATUS status;
+    SECURITY_CLIENT_CONTEXT client;
+    BOOLEAN haveClient = FALSE;
+    LUID callerLuid = {0, 0};
 
     if (netroot->Type != NET_ROOT_DISK && netroot->Type != NET_ROOT_WILD)
     {
@@ -474,6 +477,28 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
     /* Credentials, when the connection was made with them (net use /user:) */
     Smb2ParseCredentials(rxContext->Create.EaBuffer, rxContext->Create.EaLength, &creds);
 
+    /* Without explicit credentials the share is opened as the caller: take their identity so the
+     * daemon can authenticate as them and keeps their session apart from everyone else's. */
+    if (!creds.UserLength)
+    {
+        SECURITY_SUBJECT_CONTEXT subject;
+        SECURITY_QUALITY_OF_SERVICE qos;
+
+        SeCaptureSubjectContext(&subject);
+        qos.Length = sizeof(qos);
+        qos.ImpersonationLevel = SecurityImpersonation;
+        qos.ContextTrackingMode = SECURITY_STATIC_TRACKING;
+        qos.EffectiveOnly = FALSE;
+        status = SeCreateClientSecurityFromSubjectContext(&subject, &qos, TRUE, &client);
+        SeReleaseSubjectContext(&subject);
+        if (!NT_SUCCESS(status))
+            goto done;
+        haveClient = TRUE;
+        status = SeQueryAuthenticationIdToken(client.ClientToken, &callerLuid);
+        if (!NT_SUCCESS(status))
+            goto done;
+    }
+
     total = sizeof(*req) + serverBytes + shareBytes + creds.UserLength + creds.DomainLength + creds.PasswordLength;
     req = RxAllocatePoolWithTag(PagedPool, total, SMB2RDR_TAG);
     if (!req)
@@ -485,6 +510,7 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
     req->UserLength = creds.UserLength;
     req->DomainLength = creds.DomainLength;
     req->PasswordLength = creds.PasswordLength;
+    req->CallerLuid = ((ULONGLONG)(ULONG)callerLuid.HighPart << 32) | callerLuid.LowPart;
     cursor = (PUCHAR)(req + 1);
     RtlCopyMemory(cursor, srvcall->pSrvCallName->Buffer + 1, serverBytes);
     cursor += serverBytes;
@@ -499,7 +525,8 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
     if (creds.PasswordLength)
         RtlCopyMemory(cursor, creds.Password, creds.PasswordLength);
 
-    status = Smb2Upcall(SMB2RDR_UP_TREE_CONNECT, req, total, &reply, sizeof(reply), &replyLen);
+    status = Smb2UpcallEx(SMB2RDR_UP_TREE_CONNECT, req, total, &reply, sizeof(reply), &replyLen,
+                          haveClient ? client.ClientToken : NULL);
     if (NT_SUCCESS(status) && replyLen != sizeof(reply))
         status = STATUS_INVALID_NETWORK_RESPONSE;
     if (NT_SUCCESS(status))
@@ -510,6 +537,10 @@ static NTSTATUS NTAPI Smb2CreateVNetRoot(IN OUT PMRX_CREATENETROOT_CONTEXT Conte
     }
 
 done:
+    if (haveClient)
+    {
+        SeDeleteClientSecurity(&client);
+    }
     if (req)
     {
         RtlSecureZeroMemory(req, total);        /* the payload may carry a password */

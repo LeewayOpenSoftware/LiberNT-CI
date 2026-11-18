@@ -25,6 +25,7 @@ typedef struct _SMB2_REQUEST
     ULONG ReplyCapacity;
     ULONG ReplyLength;
     NTSTATUS Status;
+    PACCESS_TOKEN Token;        /* referenced; the caller identity the daemon may impersonate */
     KEVENT Done;
 } SMB2_REQUEST, *PSMB2_REQUEST;
 
@@ -72,11 +73,19 @@ static VOID FreeRequest(PSMB2_REQUEST Req)
         ExFreePoolWithTag(Req->Payload, SMB2RDR_TAG_UP);
     if (Req->Reply)
         ExFreePoolWithTag(Req->Reply, SMB2RDR_TAG_UP);
+    if (Req->Token)
+        ObDereferenceObject(Req->Token);
     ExFreePoolWithTag(Req, SMB2RDR_TAG_UP);
 }
 
 NTSTATUS Smb2Upcall(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
                     PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength)
+{
+    return Smb2UpcallEx(Opcode, Payload, PayloadLength, Reply, ReplyCapacity, ReplyLength, NULL);
+}
+
+NTSTATUS Smb2UpcallEx(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
+                      PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, PACCESS_TOKEN Token)
 {
     PSMB2_REQUEST req;
     LARGE_INTEGER timeout;
@@ -98,6 +107,11 @@ NTSTATUS Smb2Upcall(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
     req->Opcode = Opcode;
     req->PayloadLength = PayloadLength;
     req->ReplyCapacity = ReplyCapacity;
+    if (Token)
+    {
+        ObReferenceObject(Token);
+        req->Token = Token;
+    }
     KeInitializeEvent(&req->Done, NotificationEvent, FALSE);
     if (PayloadLength)
     {
@@ -156,7 +170,7 @@ NTSTATUS Smb2Upcall(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
  * IOCTL_SMB2RDR_GETREQ: output buffer receives SMB2RDR_UPCALL + payload of the oldest queued request.
  * Blocks until a request is available.
  */
-NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written)
+NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written, ULONG RequestorPid)
 {
     LARGE_INTEGER tick;
     KIRQL irql;
@@ -169,6 +183,7 @@ NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written)
     for (;;)
     {
         PSMB2_REQUEST req = NULL;
+        PACCESS_TOKEN token = NULL;
         NTSTATUS wait;
 
         KeAcquireSpinLock(&UpcallLock, &irql);
@@ -188,6 +203,10 @@ NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written)
                 up->Opcode = req->Opcode;
                 up->Length = req->PayloadLength;
                 up->Id = req->Id;
+                up->TokenHandle = 0;
+                token = req->Token;
+                if (token)
+                    ObReferenceObject(token);   /* the waiter may time out and drop its own */
                 if (req->PayloadLength)
                     RtlCopyMemory(up + 1, req->Payload, req->PayloadLength);
                 *Written = sizeof(*up) + req->PayloadLength;
@@ -196,6 +215,21 @@ NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written)
             if (!IsListEmpty(&QueuedList))
                 KeSetEvent(&QueueEvent, IO_NO_INCREMENT, FALSE);
             KeReleaseSpinLock(&UpcallLock, irql);
+            if (token)
+            {
+                /* Hand the daemon an impersonation token handle. It is only meaningful in the daemon's own
+                 * process, so only when this IOCTL really runs there; without one the daemon fails closed
+                 * rather than connecting as itself. */
+                if ((HANDLE)(ULONG_PTR)RequestorPid == PsGetCurrentProcessId())
+                {
+                    HANDLE handle = NULL;
+
+                    if (NT_SUCCESS(ObOpenObjectByPointer(token, 0, NULL, TOKEN_QUERY | TOKEN_IMPERSONATE | TOKEN_DUPLICATE,
+                                                         *SeTokenObjectType, KernelMode, &handle)))
+                        ((SMB2RDR_UPCALL *)OutBuffer)->TokenHandle = (ULONGLONG)(ULONG_PTR)handle;
+                }
+                ObDereferenceObject(token);
+            }
             return STATUS_SUCCESS;
         }
         KeReleaseSpinLock(&UpcallLock, irql);
