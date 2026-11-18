@@ -34,7 +34,8 @@
 #define HFILE_TYPE_LOG                  1
 #define HFILE_TYPE_EXTERNAL             2
 #define HFILE_TYPE_ALTERNATE            3 // Technically a HFILE_TYPE_PRIMARY but for mirror backup hives. ONLY USED for the SYSTEM hive!
-#define HFILE_TYPE_MAX                  4
+#define HFILE_TYPE_LOG2                 4 // Second incremental log (.LOG2); 1.5 hives alternate LOG1/LOG2
+#define HFILE_TYPE_MAX                  5
 
 //
 // Hive sizes

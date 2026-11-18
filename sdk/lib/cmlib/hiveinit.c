@@ -1140,7 +1140,7 @@ HvLoadHive(
 #if !defined(CMLIB_HOST) && !defined(_BLDR_)
     PHBASE_BLOCK RecoveredData;
     RTL_BITMAP AppliedBlocks;
-    ULONG BlockIndex;
+    ULONG BlockIndex, RecoveredLog;
 #endif
 
     /* Get the hive header */
@@ -1148,7 +1148,7 @@ HvLoadHive(
 #if !defined(CMLIB_HOST) && !defined(_BLDR_)
     if (Result == RecoverHeader || Result == RecoverData)
     {
-        Status = HvpRecoverHiveFromLog(Hive, BaseBlock, &RecoveredData, &FileSize, &AppliedBlocks);
+        Status = HvpRecoverHiveFromLog(Hive, BaseBlock, &RecoveredData, &FileSize, &AppliedBlocks, &RecoveredLog);
         if (Status != STATUS_NOT_FOUND)
         {
             if (BaseBlock)
@@ -1161,6 +1161,8 @@ HvLoadHive(
             Hive->Free(RecoveredData, FileSize);
             if (NT_SUCCESS(Status))
             {
+                /* The next log cycle goes to the other log, so the one just replayed survives it */
+                Hive->CurrentLog = RecoveredLog;
                 for (BlockIndex = 0;
                      BlockIndex < AppliedBlocks.SizeOfBitMap &&
                      BlockIndex < Hive->Storage[Stable].Length / HBLOCK_SIZE;

@@ -768,6 +768,14 @@ HvpApplyIncrementalLog(
     _Inout_opt_ PRTL_BITMAP AppliedBlocks,
     _Out_ PULONG RequiredLength);
 
+ULONG
+CMAPI
+HvpSelectIncrementalLog(
+    _In_opt_ PHBASE_BLOCK PrimaryBaseBlock,
+    _In_ PVOID *Logs,
+    _In_ PULONG LogSizes,
+    _Out_ PULONG Order);
+
 BOOLEAN
 CMAPI
 HvpWriteLog(
@@ -802,7 +810,8 @@ HvpRecoverHiveFromLog(
     _In_opt_ PHBASE_BLOCK PrimaryBaseBlock,
     _Out_ PHBASE_BLOCK *HiveData,
     _Out_ PULONG HiveDataSize,
-    _Out_ PRTL_BITMAP AppliedBlocks);
+    _Out_ PRTL_BITMAP AppliedBlocks,
+    _Out_ PULONG LogType);
 #endif
 
 BOOLEAN CMAPI

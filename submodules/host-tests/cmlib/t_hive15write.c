@@ -35,9 +35,9 @@ static unsigned long Checks, Failures;
 
 #define T_FILE_CAP (4 * 1024 * 1024)
 
-static UCHAR TPrimary[T_FILE_CAP], TLog[T_FILE_CAP];
-static UCHAR TTorn[T_FILE_CAP];
-static ULONG TPrimarySize, TLogSize, TTornSize;
+static UCHAR TPrimary[T_FILE_CAP], TLog[T_FILE_CAP], TLog2[T_FILE_CAP];
+static UCHAR TTorn[T_FILE_CAP], TSnap[T_FILE_CAP];
+static ULONG TPrimarySize, TLogSize, TLog2Size, TTornSize;
 
 static
 PVOID
@@ -49,6 +49,11 @@ TFileBuffer(
     {
         *Size = TPrimarySize;
         return TPrimary;
+    }
+    if (FileType == HFILE_TYPE_LOG2)
+    {
+        *Size = TLog2Size;
+        return TLog2;
     }
     *Size = TLogSize;
     return TLog;
@@ -74,7 +79,9 @@ static BOOLEAN CMAPI TFileWrite(PHHIVE H, ULONG T, PULONG O, PVOID B, SIZE_T L)
     memcpy((PUCHAR)base + *O, B, L);
     if (*O + L > size)
         size = *O + (ULONG)L;
-    if (T == HFILE_TYPE_PRIMARY) TPrimarySize = size; else TLogSize = size;
+    if (T == HFILE_TYPE_PRIMARY) TPrimarySize = size;
+    else if (T == HFILE_TYPE_LOG2) TLog2Size = size;
+    else TLogSize = size;
     *O += (ULONG)L;
     return TRUE;
 }
@@ -736,6 +743,182 @@ TTestBigToMedium(VOID)
     HvSetHiveFormatVersion(saved);
 }
 
+/* ------------------------------------------------------------------ */
+/* LOG1/LOG2 alternation                                               */
+/* ------------------------------------------------------------------ */
+
+static
+VOID
+TDirtyRoot(PHHIVE Hive)
+{
+    CHECK(HvMarkCellDirty(Hive, Hive->BaseBlock->RootCell, FALSE));
+}
+
+static
+VOID
+TNewCycle(CMHIVE *CmHive)
+{
+    TDirtyRoot(&CmHive->Hive);
+    CmHive->Hive.CurrentLogOffset = 0;
+    CHECK(HvpWriteLog(&CmHive->Hive, TRUE) == TRUE);
+}
+
+static
+VOID
+TTestLogAlternation(VOID)
+{
+    CMHIVE cmHive, reHive;
+    ULONG saved = HvGetHiveFormatVersion();
+    PHBASE_BLOCK tornBase;
+    PVOID logs[2];
+    ULONG sizes[2], order[2], count, required, base, sizeBefore;
+    NTSTATUS status;
+
+    /* A 1.3 hive keeps using LOG1 only, even when a second log is open */
+    HvSetHiveFormatVersion(HSYS_MINOR);
+    if (NT_SUCCESS(TCreateHive(&cmHive)))
+    {
+        if (CmCreateRootNode(&cmHive.Hive, L"$$ROOT"))
+        {
+            cmHive.FileHandles[HFILE_TYPE_LOG2] = (HANDLE)(ULONG_PTR)1;
+            TPrimarySize = TLogSize = TLog2Size = 0;
+            CHECK(cmHive.Hive.BaseBlock->Minor == HSYS_MINOR);
+            TNewCycle(&cmHive);
+            TNewCycle(&cmHive);
+            CHECK(TLogSize > 0);
+            CHECK(TLog2Size == 0);
+        }
+        HvFree(&cmHive.Hive);
+    }
+    else
+        Failures++;
+
+    /* 1.5 without a second log handle behaves exactly as before */
+    HvSetHiveFormatVersion(HSYS_WHISTLER);
+    TBuild15Hive(&cmHive);
+    if (cmHive.Hive.BaseBlock == NULL)
+    {
+        HvSetHiveFormatVersion(saved);
+        return;
+    }
+    TPrimarySize = TLogSize = TLog2Size = 0;
+    CHECK(HvSyncHive(&cmHive.Hive) == TRUE);
+    TNewCycle(&cmHive);
+    TNewCycle(&cmHive);
+    CHECK(TLogSize > 0);
+    CHECK(TLog2Size == 0);
+    HvFree(&cmHive.Hive);
+
+    /* 1.5 with LOG2 open: cycles alternate and the idle log is not touched */
+    TBuild15Hive(&cmHive);
+    if (cmHive.Hive.BaseBlock == NULL)
+    {
+        HvSetHiveFormatVersion(saved);
+        return;
+    }
+    cmHive.FileHandles[HFILE_TYPE_LOG2] = (HANDLE)(ULONG_PTR)1;
+    TPrimarySize = TLogSize = TLog2Size = 0;
+    CHECK(HvSyncHive(&cmHive.Hive) == TRUE);
+    CHECK(TLogSize > 0);                   /* first cycle: LOG1 */
+    CHECK(TLog2Size == 0);
+
+    memcpy(TSnap, TLog, TLogSize);
+    sizeBefore = TLogSize;
+    TNewCycle(&cmHive);                    /* cycle A -> LOG2 */
+    CHECK(TLogSize == sizeBefore && memcmp(TSnap, TLog, sizeBefore) == 0);
+    CHECK(TLog2Size >= HSECTOR_SIZE + sizeof(HV_LOG_ENTRY));
+    CHECK(((PHBASE_BLOCK)TLog2)->Signature == HV_HBLOCK_SIGNATURE);
+    CHECK(cmHive.Hive.CurrentLog == HFILE_TYPE_LOG2);
+
+    memcpy(TSnap, TLog2, TLog2Size);
+    sizeBefore = TLog2Size;
+    TNewCycle(&cmHive);                    /* cycle B -> LOG1 */
+    CHECK(TLog2Size == sizeBefore && memcmp(TSnap, TLog2, sizeBefore) == 0);
+    CHECK(cmHive.Hive.CurrentLog == HFILE_TYPE_LOG);
+    CHECK(((PHBASE_BLOCK)TLog)->Sequence1 > ((PHBASE_BLOCK)TLog2)->Sequence1);
+
+    /* Crash state after cycle B: the primary header is dirty */
+    memcpy(TTorn, TPrimary, TPrimarySize);
+    TTornSize = TPrimarySize;
+    tornBase = (PHBASE_BLOCK)TTorn;
+    CHECK(tornBase->Sequence1 != tornBase->Sequence2);
+    base = ((PHBASE_BLOCK)TLog2)->Sequence1;
+
+    /* Both logs usable: newest cycle first (LOG1 here) */
+    logs[0] = TLog; sizes[0] = TLogSize;
+    logs[1] = TLog2; sizes[1] = TLog2Size;
+    count = HvpSelectIncrementalLog(tornBase, logs, sizes, order);
+    CHECK(count == 2 && order[0] == 0 && order[1] == 1);
+
+    /* A continuing entry stays on the log of its cycle */
+    memcpy(TSnap, TLog2, TLog2Size);
+    sizeBefore = cmHive.Hive.CurrentLogOffset;
+    TDirtyRoot(&cmHive.Hive);
+    CHECK(HvpWriteLog(&cmHive.Hive, TRUE) == TRUE);
+    CHECK(cmHive.Hive.CurrentLogOffset > sizeBefore);
+    CHECK(cmHive.Hive.CurrentLog == HFILE_TYPE_LOG);
+    CHECK(memcmp(TSnap, TLog2, TLog2Size) == 0);
+
+    /* Torn newest log: the older, committed log is chosen and brings the
+       primary to its last committed sequence */
+    TLog[HSECTOR_SIZE + sizeof(HV_LOG_ENTRY) + 3] ^= 0x5A;
+    count = HvpSelectIncrementalLog(tornBase, logs, sizes, order);
+    CHECK(count == 1 && order[0] == 1);
+    CHECK(HvpApplyIncrementalLog(tornBase, TTornSize - HBLOCK_SIZE,
+                                 TLog2, TLog2Size, TRUE, NULL,
+                                 &required) == TRUE);
+    CHECK(tornBase->Sequence1 == tornBase->Sequence2);
+    CHECK(tornBase->Sequence1 == base);
+    status = TLoadImageInto(&reHive, TTorn, TTornSize);
+    CHECK(status == STATUS_SUCCESS);
+    if (NT_SUCCESS(status))
+        HvFree(&reHive.Hive);
+    TLog[HSECTOR_SIZE + sizeof(HV_LOG_ENTRY) + 3] ^= 0x5A;
+
+    /* Newest log is LOG2 after one more cycle: selection follows the sequence */
+    TNewCycle(&cmHive);
+    memcpy(TTorn, TPrimary, TPrimarySize);
+    TTornSize = TPrimarySize;
+    tornBase = (PHBASE_BLOCK)TTorn;
+    CHECK(tornBase->Sequence1 != tornBase->Sequence2);
+    logs[0] = TLog; sizes[0] = TLogSize;
+    logs[1] = TLog2; sizes[1] = TLog2Size;
+    count = HvpSelectIncrementalLog(tornBase, logs, sizes, order);
+    CHECK(count >= 1 && order[0] == 1);
+
+    /* A hive that only has LOG1 (written before alternation) is still first class */
+    logs[1] = NULL; sizes[1] = 0;
+    count = HvpSelectIncrementalLog(tornBase, logs, sizes, order);
+    CHECK(count == 0 || order[0] == 0);
+    memcpy(TTorn, TPrimary, TPrimarySize);
+    logs[0] = TLog; sizes[0] = TLogSize;
+    TLog2Size = 0;
+    {
+        PHBASE_BLOCK legacy = (PHBASE_BLOCK)TTorn;
+        PHBASE_BLOCK l1 = (PHBASE_BLOCK)TLog;
+
+        /* the single log covers the dirty primary exactly as before */
+        legacy->Sequence1 = l1->Sequence1;
+        legacy->Sequence2 = l1->Sequence1 - 1;
+        legacy->CheckSum = HvpHiveHeaderChecksum(legacy);
+        count = HvpSelectIncrementalLog(legacy, logs, sizes, order);
+        CHECK(count == 1 && order[0] == 0);
+    }
+
+    /* A clean primary needs no log: nothing is selected */
+    {
+        PHBASE_BLOCK clean = (PHBASE_BLOCK)TTorn;
+
+        clean->Sequence2 = clean->Sequence1;
+        clean->CheckSum = HvpHiveHeaderChecksum(clean);
+        count = HvpSelectIncrementalLog(clean, logs, sizes, order);
+        CHECK(count == 0);
+    }
+
+    HvFree(&cmHive.Hive);
+    HvSetHiveFormatVersion(saved);
+}
+
 int
 main(void)
 {
@@ -744,6 +927,7 @@ main(void)
     TTestTornWrite();
     TTestLegacyStaysLegacy();
     TTestBigToMedium();
+    TTestLogAlternation();
 
     printf("cmlib hive 1.5 write: %lu checks, %lu failures\n",
            Checks, Failures);

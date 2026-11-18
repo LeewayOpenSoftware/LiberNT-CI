@@ -56,6 +56,27 @@ HvpValidateBaseHeader(
     ASSERT(BaseBlock->Major == HSYS_MAJOR);
 }
 
+/* 1.5 hives with a second log file alternate LOG1/LOG2 per log cycle; the log
+ * that was not written last is left untouched. Everything else uses LOG1 only. */
+static
+ULONG
+HvpPickLogFile(
+    _In_ PHHIVE RegistryHive,
+    _In_ BOOLEAN NewCycle)
+{
+    ULONG Current = RegistryHive->CurrentLog;
+
+    if (RegistryHive->BaseBlock->Minor < HSYS_WHISTLER ||
+        !((PCMHIVE)RegistryHive)->FileHandles[HFILE_TYPE_LOG2])
+    {
+        return HFILE_TYPE_LOG;
+    }
+
+    if (NewCycle)
+        return (Current == HFILE_TYPE_LOG) ? HFILE_TYPE_LOG2 : HFILE_TYPE_LOG;
+    return (Current == HFILE_TYPE_LOG2) ? HFILE_TYPE_LOG2 : HFILE_TYPE_LOG;
+}
+
 #if !defined(CMLIB_HOST) && !defined(_BLDR_)
 #define HV_LOG_FILE_SIZE_CAP (4 * 1024 * 1024)
 #define HV_LOG_FILE_GROWTH (1024 * 1024)
@@ -72,25 +93,27 @@ static
 BOOLEAN
 HvpReserveLog(
     _In_ PHHIVE RegistryHive,
+    _In_ ULONG LogType,
     _In_ ULONG End)
 {
     PCMHIVE CmHive = (PCMHIVE)RegistryHive;
-    ULONG Size = CmHive->LogFileSizes[0].LowPart;
+    ULONG Index = (LogType == HFILE_TYPE_LOG2) ? 1 : 0;
+    ULONG Size = CmHive->LogFileSizes[Index].LowPart;
 
     if (End <= Size)
         return TRUE;
     if (!Size)
     {
-        Size = HvpQueryFileSize(RegistryHive, HFILE_TYPE_LOG);
-        CmHive->LogFileSizes[0].QuadPart = Size;
+        Size = HvpQueryFileSize(RegistryHive, LogType);
+        CmHive->LogFileSizes[Index].QuadPart = Size;
         if (End <= Size)
             return TRUE;
     }
 
     End = ROUND_UP(End, HV_LOG_FILE_GROWTH);
-    if (!CmpFileSetSize(RegistryHive, HFILE_TYPE_LOG, End, Size))
+    if (!CmpFileSetSize(RegistryHive, LogType, End, Size))
         return FALSE;
-    CmHive->LogFileSizes[0].QuadPart = End;
+    CmHive->LogFileSizes[Index].QuadPart = End;
     return TRUE;
 }
 
@@ -146,7 +169,7 @@ HvpWriteLog(
     PHBASE_BLOCK BaseBlock = RegistryHive->BaseBlock;
     ULONG BlockCount = RegistryHive->Storage[Stable].Length / HBLOCK_SIZE;
     ULONG BlockIndex, RunEnd, RunCount, DirtyBlocks, Sequence;
-    ULONG HeaderSize, EntrySize, BufferSize, FileOffset, LogOffset;
+    ULONG HeaderSize, EntrySize, BufferSize, FileOffset, LogOffset, LogType;
     PUCHAR Buffer, Data;
     PHBASE_BLOCK LogBaseBlock;
     PHV_LOG_ENTRY Entry;
@@ -172,6 +195,7 @@ HvpWriteLog(
         return TRUE;
 
     NewCycle = !Append || !RegistryHive->CurrentLogOffset;
+    LogType = HvpPickLogFile(RegistryHive, NewCycle);
     HeaderSize = NewCycle ? HSECTOR_SIZE : 0;
     FileOffset = NewCycle ? 0 : RegistryHive->CurrentLogOffset;
     LogOffset = FileOffset;
@@ -229,11 +253,11 @@ HvpWriteLog(
     Success = TRUE;
 #if !defined(CMLIB_HOST) && !defined(_BLDR_)
     if (Append)
-        Success = HvpReserveLog(RegistryHive, FileOffset + BufferSize);
+        Success = HvpReserveLog(RegistryHive, LogType, FileOffset + BufferSize);
 #endif
     if (Success)
     {
-        Success = RegistryHive->FileWrite(RegistryHive, HFILE_TYPE_LOG,
+        Success = RegistryHive->FileWrite(RegistryHive, LogType,
                                           &FileOffset, Buffer, BufferSize);
     }
     RegistryHive->Free(Buffer, BufferSize);
@@ -243,14 +267,17 @@ HvpWriteLog(
         return FALSE;
     }
 
-    if (!CmpFileFlush(RegistryHive, HFILE_TYPE_LOG, NULL, 0))
+    if (!CmpFileFlush(RegistryHive, LogType, NULL, 0))
     {
         DPRINT1("Failed to flush the hive log\n");
         return FALSE;
     }
 
     if (!Append)
+    {
+        RegistryHive->CurrentLog = LogType;
         return TRUE;
+    }
 
     if (NewCycle)
     {
@@ -274,6 +301,7 @@ HvpWriteLog(
     BaseBlock->Sequence1 = Sequence;
     BaseBlock->Sequence2 = Sequence;
     BaseBlock->CheckSum = HvpHiveHeaderChecksum(BaseBlock);
+    RegistryHive->CurrentLog = LogType;
     RegistryHive->CurrentLogOffset = LogOffset + BufferSize;
     RegistryHive->CurrentLogSequence = Sequence;
     return TRUE;
