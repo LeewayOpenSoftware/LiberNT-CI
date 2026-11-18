@@ -455,6 +455,8 @@ KMT_TESTFUNC Test_PoPowerSettings;
 KMT_TESTFUNC Test_PoLockConsoleOnWake;
 KMT_TESTFUNC Test_PoProcessorStateHandler;
 KMT_TESTFUNC Test_PoKernelPowerRequest;
+KMT_TESTFUNC Test_PoDripsRegistry;
+KMT_TESTFUNC Test_PoDeviceBusy;
 KMT_TESTFUNC Test_PoPowerRequestCounting;
 KMT_TESTFUNC Test_PsNotify;
 KMT_TESTFUNC Test_PsQuota;
@@ -965,6 +967,8 @@ const KMT_TEST TestList[] =
     { "PoLockConsoleOnWake",                Test_PoLockConsoleOnWake },
     { "-PoProcessorStateHandler",           Test_PoProcessorStateHandler },
     { "PoKernelPowerRequest",               Test_PoKernelPowerRequest },
+    { "PoDripsRegistry",                  Test_PoDripsRegistry },
+    { "PoDeviceBusy",                     Test_PoDeviceBusy },
     { "PoPowerRequestCounting",           Test_PoPowerRequestCounting },
     { "PsNotify",                           Test_PsNotify },
     { "PsEnergy",                           Test_PsEnergy },

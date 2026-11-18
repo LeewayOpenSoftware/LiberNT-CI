@@ -617,3 +617,7 @@ extern BOOLEAN PopShutdownLog;
 extern SYSTEM_POWER_CAPABILITIES PopCapabilities;
 
 #include "po_powreq.h"
+
+#include "po_fx.h"
+
+#include "po_drips.h"

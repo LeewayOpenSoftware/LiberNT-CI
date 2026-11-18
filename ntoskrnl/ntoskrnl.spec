@@ -2828,16 +2828,16 @@
 @ stdcall PoCreatePowerRequest(ptr ptr ptr)
 @ stdcall PoDeletePowerLimitRequest(ptr)
 @ stdcall PoDeletePowerRequest(ptr)
-@ stub -arch=arm64 PoDirectedDripsClearDeviceFlags
-@ stub -arch=arm64 PoDirectedDripsSetDeviceFlags
+@ stdcall PoDirectedDripsClearDeviceFlags(ptr long)
+@ stdcall PoDirectedDripsSetDeviceFlags(ptr long)
 @ stdcall PoDisableSleepStates(long long ptr)
-@ stub -arch=win64 PoEndDeviceBusy
+@ stdcall PoEndDeviceBusy(ptr)
 @ stub -arch=win64 PoEnergyEstimationEnabled
 @ stub -arch=arm64 PoFxAddDeviceRelation
 @ stub -arch=win64 PoFxEnableDStateReporting
 @ stdcall -version=0xA00+ PoFxIssueComponentPerfStateChange(ptr long long ptr ptr)
-@ stub -arch=win64 PoFxIssueComponentPerfStateChangeMultiple
-@ stub -arch=win64 PoFxNotifySurprisePowerOn
+@ stdcall -version=0xA00+ PoFxIssueComponentPerfStateChangeMultiple(ptr long long long ptr ptr)
+@ stdcall -version=0x602+ PoFxNotifySurprisePowerOn(ptr)
 @ stdcall -version=0x603+ PoFxPowerOnCrashdumpDevice(ptr ptr)
 @ stub -arch=win64 PoFxProcessorNotification
 @ stdcall -version=0xA00+ PoFxQueryCurrentComponentPerfState(ptr long long long ptr)
@@ -2849,8 +2849,8 @@
 @ stdcall -version=0xA00+ PoFxRegisterPluginEx(ptr int64 ptr)
 @ stub -arch=win64 PoFxRegisterPrimaryDevice
 @ stub -arch=arm64 PoFxRemoveDeviceRelation
-@ stub -arch=win64 PoFxSetComponentWake
-@ stub -arch=win64 PoFxSetTargetDripsDevicePowerState
+@ stdcall -version=0x602+ PoFxSetComponentWake(ptr long long)
+@ stdcall -version=0xA00+ PoFxSetTargetDripsDevicePowerState(ptr long)
 @ stub -arch=arm64 PoGetProcessorIdleAccounting
 @ stub -arch=arm64 PoInitiateProcessorWake
 @ stdcall PoLatencySensitivityHint(long)
@@ -2861,14 +2861,14 @@
 @ stdcall PoReenableSleepStates(ptr)
 @ stub -arch=win64 PoRegisterCoalescingCallback
 @ stub -arch=win64 PoRegisterForEffectivePowerModeNotifications
-@ stub -arch=win64 PoSetDeviceBusyEx
-@ stub -arch=win64 PoSetFixedWakeSource
+@ stdcall PoSetDeviceBusyEx(ptr)
+@ stdcall PoSetFixedWakeSource(long ptr)
 @ stub -arch=win64 PoSetPowerButtonHoldState
 @ stdcall PoSetPowerLimitValue(ptr ptr long ptr)
 @ stdcall PoSetPowerRequest(ptr long)
-@ stub -arch=win64 PoSetSystemWakeDevice
+@ stdcall PoSetSystemWakeDevice(ptr)
 @ stdcall PoSetUserPresent(long)
-@ stub -arch=win64 PoStartDeviceBusy
+@ stdcall PoStartDeviceBusy(ptr)
 @ stub -arch=win64 PoUnregisterCoalescingCallback
 @ stub -arch=win64 PoUnregisterFromEffectivePowerModeNotifications
 @ stub -arch=win64 PoUserShutdownCancelled
