@@ -1,39 +1,3 @@
-# LiberNT - LDW (Leeway Development Works)
-
-**Experimental Development · Compatibility Research · Hardware Validation**
-
-LiberNT-LDW is the provisional development repository maintained by **Leeway Open Software**, based on the upstream LiberNT project.
-
-Leeway Development Works serves as an engineering environment for operating system development, Windows compatibility research, hardware validation, subsystem integration and experimental implementations.
-
-The objective is to contribute toward a more complete, reliable and hardware-compatible LiberNT while preserving the original project's identity and acknowledging its upstream development.
-
-### Development Focus
-- Windows NT API and subsystem compatibility.
-- Kernel and user-mode component development.
-- Windows driver infrastructure and compatibility.
-- Hardware testing on physical x86-64 systems.
-- Experimental features and subsystem integration.
-- Automated research, diagnostics and regression testing.
-- System stability, installation, servicing and recovery.
-
-### Project Relationship
-**Upstream:** As of November 17, 2026, this repository is no longer part of the LiberNT fork network and is now listed directly under ReactOS. Development and maintenance continue independently under Leeway Open Software.
-
-**Leeway Development Repository:** https://github.com/LeewayOpenSoftware/LiberNT-LDW
-
-LiberNT-LDW is maintained by Leeway Open Software as a development fork of LiberNT.
-
-It is not presented as a replacement for, or the official development channel of, the upstream project.
-
-### Development Status
-This repository contains experimental and ongoing development work. Features may be incomplete, unstable or subject to change.
-
-LDW is a provisional development designation and does not establish the final branding of any future operating system or distribution.
-
-The topic branches and their status are listed in [FORK.md](FORK.md). Leeway's purpose and development principles are in [PURPOSE.md](PURPOSE.md). The upstream LiberNT README follows.
-
----
 
 > **English** | [中文](translations/zh-CN/README.md) | [Français](translations/fr-FR/README.md) | [Español](translations/es-ES/README.md) | [日本語](translations/ja-JP/README.md) | [العربية](translations/ar-MA/README.md)
 
@@ -415,6 +379,9 @@ Orosi may selectively integrate upstream improvements while maintaining independ
 **Orosi is not the official LiberNT project and does not represent the official development direction of LiberNT or ReactOS.**
 
 ### Upstream Projects
+**Upstream:** As of November 17, 2026, this repository is no longer part of the LiberNT fork network and is now listed directly under ReactOS. Development and maintenance continue independently under Leeway Open Software.
+
+**Leeway Development Repository:** https://github.com/LeewayOpenSoftware/LiberNT-LDW
 
 - [LiberNT](https://github.com/LiberNT/LiberNT)
 - [ReactOS](https://github.com/reactos/reactos)
