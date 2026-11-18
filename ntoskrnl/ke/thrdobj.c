@@ -649,6 +649,9 @@ KeStartThread(IN OUT PKTHREAD Thread)
 #endif
     KiThreadAffinityMask(Thread) = Process->Affinity;
     KiThreadUserAffinityMask(Thread) = Process->Affinity;
+    /* A process affinity describes group 0 */
+    KiSetThreadAffinityGroup(Thread, 0);
+    KiSetThreadUserAffinityGroup(Thread, 0);
 
 #ifdef CONFIG_SMP
     /* Get the KNODE and its PRCB */
@@ -1285,14 +1288,15 @@ KeRevertToUserAffinityThread(VOID)
 
     /* Set the user affinity and processor and disable system affinity */
     /* Do not copy GROUP_AFFINITY's reserved bytes: KTHREAD overlays APC and
-     * scheduler state there. ReactOS currently uses only processor group 0. */
+     * scheduler state there; copy the mask and the group only. */
     KiThreadAffinityMask(CurrentThread) = KiThreadUserAffinityMask(CurrentThread);
+    KiSetThreadAffinityGroup(CurrentThread, KiThreadUserAffinityGroup(CurrentThread));
     CurrentThread->IdealProcessor = CurrentThread->UserIdealProcessor;
     CurrentThread->SystemAffinityActive = FALSE;
 
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
-    if (!(Prcb->SetMember & KiThreadAffinityMask(CurrentThread)))
+    if (!KiIsProcessorInThreadAffinity(CurrentThread, Prcb->Number))
     {
         /* Lock the PRCB */
         KiAcquirePrcbLock(Prcb);
@@ -1363,14 +1367,16 @@ KeSetIdealProcessorThread(IN PKTHREAD Thread,
  * @implemented
  */
 VOID
-NTAPI
-KeSetSystemAffinityThread(IN KAFFINITY Affinity)
+FASTCALL
+KiSetSystemGroupAffinityThread(
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity)
 {
     KIRQL OldIrql;
     PKPRCB Prcb;
     PKTHREAD NextThread, CurrentThread = KeGetCurrentThread();
     ASSERT_IRQL_LESS_OR_EQUAL(DISPATCH_LEVEL);
-    ASSERT((Affinity & KeActiveProcessors) != 0);
+    ASSERT((Affinity & KiQueryActiveGroupAffinity(Group)) != 0);
 
     /* Lock the Dispatcher Database */
     OldIrql = KeRaiseIrqlToSynchLevel();
@@ -1378,17 +1384,29 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
 
     /* Restore the affinity and enable system affinity */
     KiThreadAffinityMask(CurrentThread) = Affinity;
+    KiSetThreadAffinityGroup(CurrentThread, Group);
     CurrentThread->SystemAffinityActive = TRUE;
 
 #ifdef CONFIG_SMP
     /* Calculate the ideal processor from the affinity set */
-    CurrentThread->IdealProcessor =
-        KiFindIdealProcessor(Affinity, CurrentThread->IdealProcessor);
+    if ((Group == 0) && (CurrentThread->IdealProcessor < KI_PROCESSORS_PER_GROUP))
+    {
+        CurrentThread->IdealProcessor =
+            KiFindIdealProcessor(Affinity, (UCHAR)CurrentThread->IdealProcessor);
+    }
+    else
+    {
+        ULONG Bit;
+
+        /* The node and parking information describe group 0 */
+        NT_VERIFY(BitScanForwardAffinity(&Bit, Affinity & KiQueryActiveGroupAffinity(Group)));
+        CurrentThread->IdealProcessor = KiProcessorIndexFromNumber(Group, (UCHAR)Bit);
+    }
 #endif
 
     /* Get the current PRCB and check if it doesn't match this affinity */
     Prcb = KeGetCurrentPrcb();
-    if (!(Prcb->SetMember & KiThreadAffinityMask(CurrentThread)))
+    if (!KiIsProcessorInThreadAffinity(CurrentThread, Prcb->Number))
     {
         /* Lock the PRCB */
         KiAcquirePrcbLock(Prcb);
@@ -1409,6 +1427,16 @@ KeSetSystemAffinityThread(IN KAFFINITY Affinity)
     /* Unlock dispatcher database */
     KiReleaseThreadLock(CurrentThread);
     KiExitDispatcher(OldIrql);
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+KeSetSystemAffinityThread(IN KAFFINITY Affinity)
+{
+    KiSetSystemGroupAffinityThread(0, Affinity);
 }
 
 /*

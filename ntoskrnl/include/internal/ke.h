@@ -319,7 +319,8 @@ extern LIST_ENTRY KiStackInSwapListHead;
 extern KEVENT KiSwapEvent;
 extern KAFFINITY KiIdleSummary;
 
-/* Idle processors of groups 1 and up; group 0 is KiIdleSummary */
+/* Idle processors of groups 1 and up; group 0 is KiIdleSummary, so
+ * index 0 is unused by design */
 extern KAFFINITY KiIdleSummaryGroups[KI_MAXIMUM_GROUPS];
 
 FORCEINLINE
@@ -669,6 +670,13 @@ KiIpiSendProcessor(
     KiIpiSend(KiAffinityForProcessorIndex(Index), IpiRequest);
 }
 #endif
+
+/* Gives the current thread a system affinity in one processor group */
+VOID
+FASTCALL
+KiSetSystemGroupAffinityThread(
+    _In_ USHORT Group,
+    _In_ KAFFINITY Affinity);
 
 /* Targets a DPC at a processor index; ignored while the DPC is queued */
 VOID

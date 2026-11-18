@@ -333,7 +333,9 @@ HalpRequestIpiProcessor(
         return;
     }
 
-    /* Only processors this HAL has initialized */
+    /* Only processors this HAL has initialized. A request for one that is
+     * not up yet is dropped on purpose: the kernel queued it in that
+     * processor's mailbox, which is read on its first IPI. */
     if ((ProcessorIndex >= HalpApicInfoTable.ProcessorCount) ||
         (HalpProcessorIdentity[ProcessorIndex].ProcessorPrcb == NULL))
     {

@@ -57,6 +57,50 @@ KiRequestDispatchInterrupt(
 #endif
 #endif
 
+#if defined(KTHREAD_GROUP_AFFINITY)
+#define KiThreadUserAffinityGroup(Thread) ((Thread)->UserAffinity.Group)
+#elif defined(_M_AMD64)
+#define KiThreadUserAffinityGroup(Thread) ((Thread)->UserAffinityPrimaryGroup)
+#else
+#define KiThreadUserAffinityGroup(Thread) ((USHORT)0)
+#endif
+
+/* Sets the group of the thread's user affinity mask */
+FORCEINLINE
+VOID
+KiSetThreadUserAffinityGroup(
+    _Inout_ PKTHREAD Thread,
+    _In_ USHORT Group)
+{
+#if defined(KTHREAD_GROUP_AFFINITY)
+    Thread->UserAffinity.Group = Group;
+#elif defined(_M_AMD64)
+    Thread->UserAffinityPrimaryGroup = Group;
+#else
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(Group);
+    ASSERT(Group == 0);
+#endif
+}
+
+/* Sets the group of the thread's (current) affinity mask */
+FORCEINLINE
+VOID
+KiSetThreadAffinityGroup(
+    _Inout_ PKTHREAD Thread,
+    _In_ USHORT Group)
+{
+#if defined(KTHREAD_GROUP_AFFINITY)
+    Thread->Affinity.Group = Group;
+#elif defined(_M_AMD64)
+    Thread->AffinityPrimaryGroup = Group;
+#else
+    UNREFERENCED_PARAMETER(Thread);
+    UNREFERENCED_PARAMETER(Group);
+    ASSERT(Group == 0);
+#endif
+}
+
 /*
  * A thread's affinity is a mask within one processor group. Processor Index
  * is allowed when it is in that group and its bit is in the mask.

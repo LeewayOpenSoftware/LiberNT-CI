@@ -1528,6 +1528,7 @@ KiUpdateEffectiveAffinityThread(
     /* GROUP_AFFINITY's reserved bytes overlap other KTHREAD state, including
      * ApcStateIndex. Copy only the mask for our single processor group. */
     KiThreadAffinityMask(Thread) = KiThreadUserAffinityMask(Thread);
+    KiSetThreadAffinityGroup(Thread, KiThreadUserAffinityGroup(Thread));
     Thread->IdealProcessor = Thread->UserIdealProcessor;
 
     /* Check if the affinity doesn't match with the current processor */
@@ -1599,8 +1600,9 @@ KiSetAffinityThread(IN PKTHREAD Thread,
         KeBugCheck(INVALID_AFFINITY_SET);
     }
 
-    /* Update the new affinity */
+    /* Update the new affinity, a group 0 mask */
     KiThreadUserAffinityMask(Thread) = Affinity;
+    KiSetThreadUserAffinityGroup(Thread, 0);
 
 #ifdef CONFIG_SMP
     /* Check if system affinity is not active */

@@ -1520,17 +1520,20 @@ KeSetSystemGroupAffinityThread(
     _In_ PGROUP_AFFINITY Affinity,
     _Out_opt_ PGROUP_AFFINITY PreviousAffinity)
 {
-    KAFFINITY OldAffinity;
+    PKTHREAD CurrentThread = KeGetCurrentThread();
 
-    /* Only group 0 exists; apply the mask via the existing affinity path. */
-    OldAffinity = KeSetSystemAffinityThreadEx(Affinity->Mask);
-
+    /* The previous system affinity; a zero mask when there was none */
     if (PreviousAffinity != NULL)
     {
         RtlZeroMemory(PreviousAffinity, sizeof(*PreviousAffinity));
-        PreviousAffinity->Mask = OldAffinity;
-        PreviousAffinity->Group = 0;
+        if (CurrentThread->SystemAffinityActive)
+        {
+            PreviousAffinity->Mask = KiThreadAffinityMask(CurrentThread);
+            PreviousAffinity->Group = KiThreadAffinityGroup(CurrentThread);
+        }
     }
+
+    KiSetSystemGroupAffinityThread(Affinity->Group, Affinity->Mask);
 }
 
 /*
@@ -1541,7 +1544,10 @@ NTAPI
 KeRevertToUserGroupAffinityThread(
     _In_ PGROUP_AFFINITY PreviousAffinity)
 {
-    KeRevertToUserAffinityThreadEx(PreviousAffinity->Mask);
+    if (PreviousAffinity->Mask != 0)
+        KiSetSystemGroupAffinityThread(PreviousAffinity->Group, PreviousAffinity->Mask);
+    else
+        KeRevertToUserAffinityThread();
 }
 
 /*
