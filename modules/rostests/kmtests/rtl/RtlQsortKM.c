@@ -7,8 +7,16 @@
 
 #include <kmt_test.h>
 
+typedef int (NTAPI *PRTL_QSORT_COMPARE)(PVOID Context, PVOID Element1, PVOID Element2);
+
+VOID NTAPI qsort_s(IN PVOID Base, IN SIZE_T NumberOfElements, IN SIZE_T ElementSize,
+                   IN PRTL_QSORT_COMPARE CompareFunction, IN PVOID Context);
+INT NTAPI bsearch_s(IN PVOID Key, IN PVOID Base, IN SIZE_T NumberOfElements,
+                    IN SIZE_T ElementSize, IN PRTL_QSORT_COMPARE CompareFunction,
+                    IN PVOID Context, OUT PVOID *Result);
+
 static int NTAPI
-CompareLongs(_In_ PVOID Context, _In_ PCVOID Left, _In_ PCVOID Right)
+CompareLongs(_In_ PVOID Context, _In_ PVOID Left, _In_ PVOID Right)
 {
     LONG L = *(const PLONG)Left;
     LONG R = *(const PLONG)Right;
