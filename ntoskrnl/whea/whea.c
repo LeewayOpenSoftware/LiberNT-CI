@@ -85,8 +85,8 @@ static BOOLEAN WheapEtwRegistered;
 
 static const GUID WheapLoggerGuid = { 0xC26C4F3C, 0x3F66, 0x4E99, { 0x8F, 0x8A, 0x39, 0x40, 0x5C, 0xFE, 0xD2, 0x20 } };
 
-static const GUID WheapCreatorGuid = { 0xE1E6D3CF, 0xDA8A, 0x48A3, { 0x9A, 0x7F, 0x3A, 0xD5, 0xFA, 0x13, 0xCC, 0xC0 } };
-static const GUID WheapPacketSectionGuid = { 0x5BD0359E, 0x523C, 0x41FC, { 0xA3, 0x08, 0x9A, 0x51, 0x23, 0xE0, 0xE4, 0x2A } };
+static const GUID WheapRecordCreatorGuid = { 0xCF07C4BD, 0xB789, 0x4E18, { 0xB3, 0xC4, 0x1F, 0x73, 0x2C, 0xB5, 0x71, 0x31 } };
+static const GUID WheapErrorPacketSectionGuid = { 0xE71254E9, 0xC1B9, 0x4940, { 0xAB, 0x76, 0x90, 0x97, 0x03, 0xA4, 0x32, 0x0F } };
 
 static
 VOID
@@ -171,7 +171,7 @@ WheaInitializeRecordHeader(
     Header->Revision.AsUSHORT = WHEAP_RECORD_REVISION;
     Header->SignatureEnd = WHEA_ERROR_RECORD_SIGNATURE_END;
     Header->Length = sizeof(*Header);
-    Header->CreatorId = WheapCreatorGuid;
+    Header->CreatorId = WheapRecordCreatorGuid;
     Header->RecordId = WheapNextRecordId();
 
     KeQuerySystemTime(&SystemTime);
@@ -212,7 +212,7 @@ WheapLogPacket(
     Section->SectionOffset = sizeof(*Header) + sizeof(*Section);
     Section->SectionLength = PacketLength;
     Section->Revision.AsUSHORT = WHEAP_SECTION_REVISION;
-    Section->SectionType = WheapPacketSectionGuid;
+    Section->SectionType = WheapErrorPacketSectionGuid;
     Section->SectionSeverity = Packet->ErrorSeverity;
 
     if (!WheapEtwRegistered)
