@@ -193,6 +193,55 @@ EtwpTraceClassicEvent(
     _In_ PVOID Fields,
     _In_ KPROCESSOR_MODE PreviousMode);
 
+/* etwlog.c: modern events */
+NTSTATUS
+EtwpLogModernEvent(
+    _In_ ULONG LoggerId,
+    _In_ LPCGUID ProviderId,
+    _In_ PCEVENT_DESCRIPTOR Descriptor,
+    _In_opt_ LPCGUID ActivityId,
+    _In_ ULONG UserDataCount,
+    _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData,
+    _In_ KPROCESSOR_MODE DataMode);
+
+BOOLEAN
+EtwpLoggerExists(
+    _In_ ULONG LoggerId);
+
+/* etwprov.c: providers and their enable state */
+NTSTATUS
+EtwpEnableGuid(
+    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
+    _In_ ULONG InBufferLen,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+NTSTATUS
+EtwpQueryEnable(
+    _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
+    _In_ ULONG InBufferLen,
+    _Out_writes_bytes_opt_(OutBufferLen) PVOID OutBuffer,
+    _In_ ULONG OutBufferLen,
+    _Out_opt_ PULONG ReturnSize,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+NTSTATUS
+EtwpTraceUserEvent(
+    _In_opt_ HANDLE RegistrationHandle,
+    _In_ ULONG PacketSize,
+    _In_ PVOID Packet,
+    _In_ KPROCESSOR_MODE PreviousMode);
+
+VOID
+EtwpProvidersLoggerStopped(
+    _In_ ULONG LoggerId);
+
+/* etwreg.c */
+NTSTATUS
+EtwpGuidFromRegistrationHandle(
+    _In_ HANDLE Handle,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _Out_ GUID *Guid);
+
 TRACEHANDLE
 EtwpTraceHandleFromLoggerId(
     _In_ ULONG LoggerId);

@@ -64,6 +64,29 @@ EtwpInitializeRegistrations(VOID)
     return ObCreateObjectType(&Name, &Initializer, NULL, &EtwpRegistrationObjectType);
 }
 
+/* The provider GUID behind a registration handle of the calling process */
+NTSTATUS
+EtwpGuidFromRegistrationHandle(
+    _In_ HANDLE Handle,
+    _In_ KPROCESSOR_MODE PreviousMode,
+    _Out_ GUID *Guid)
+{
+    PETWP_REGISTRATION Registration;
+    NTSTATUS Status;
+
+    Status = ObReferenceObjectByHandle(Handle,
+                                       TRACELOG_LOG_EVENT,
+                                       EtwpRegistrationObjectType,
+                                       PreviousMode,
+                                       (PVOID *)&Registration,
+                                       NULL);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    *Guid = Registration->Guid;
+    ObDereferenceObject(Registration);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS
 EtwpRegisterGuid(
     _In_reads_bytes_opt_(InBufferLen) PVOID InBuffer,
