@@ -386,10 +386,13 @@ typedef struct _SOFTGPU_DEVICE
     SOFTGPU_ENGINE      Engines[SOFTGPU_ENGINE_COUNT];
 
     PEX_TIMER           VsyncTimer;
+    /* Normal-resolution retry for buffers parked on a GPU wait while vsync is off */
+    PEX_TIMER           RekickTimer;
     volatile LONG       VsyncPhaseEnabled;
     volatile LONG       VsyncEnabled;
     BOOLEAN             VsyncTimerInitialized;
     BOOLEAN             VsyncTimerRunning;
+    BOOLEAN             RekickTimerRunning;
     ULONGLONG           VsyncPhaseOrigin;
     BOOLEAN             DisplayPowerOff;
 
@@ -1013,6 +1016,12 @@ SoftGpuDpcRoutine(
 VOID
 NTAPI
 SoftGpuVsyncTimerCallback(
+    _In_     PEX_TIMER Timer,
+    _In_opt_ PVOID     Context);
+
+VOID
+NTAPI
+SoftGpuRekickTimerCallback(
     _In_     PEX_TIMER Timer,
     _In_opt_ PVOID     Context);
 

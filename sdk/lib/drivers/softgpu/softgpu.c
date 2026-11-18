@@ -1462,6 +1462,11 @@ SoftGpuStartDevice(
     Device->VsyncTimer = ExAllocateTimer(SoftGpuVsyncTimerCallback, Device, EX_TIMER_HIGH_RESOLUTION);
     Device->VsyncTimerInitialized = Device->VsyncTimer != NULL;
     Device->VsyncTimerRunning = FALSE;
+    /* Optional: without it the vsync timer keeps doing the retries */
+    Device->RekickTimer = Device->VsyncTimerInitialized
+                              ? ExAllocateTimer(SoftGpuRekickTimerCallback, Device, 0)
+                              : NULL;
+    Device->RekickTimerRunning = FALSE;
     Device->VsyncPhaseOrigin = 0;
     Device->DisplayPowerOff = FALSE;
     InterlockedExchange(&Device->VsyncPhaseEnabled, 0);
@@ -1570,9 +1575,15 @@ SoftGpuDdiStopDevice(
         KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
         Device->VsyncTimerInitialized = FALSE;
         Device->VsyncTimerRunning = FALSE;
+        Device->RekickTimerRunning = FALSE;
         KeReleaseSpinLock(&Device->FenceLock, OldIrql);
         ExDeleteTimer(Device->VsyncTimer, TRUE, TRUE, NULL);
         Device->VsyncTimer = NULL;
+        if (Device->RekickTimer != NULL)
+        {
+            ExDeleteTimer(Device->RekickTimer, TRUE, TRUE, NULL);
+            Device->RekickTimer = NULL;
+        }
     }
     {
         ULONG NodeOrdinal;
