@@ -471,6 +471,7 @@ KMT_TESTFUNC Test_PsSystemThread;
 KMT_TESTFUNC Test_PsPico;
 #ifdef _WIN64
 KMT_TESTFUNC Test_PsJobCommit;
+KMT_TESTFUNC Test_NtosStubExports2;
 #endif
 KMT_TESTFUNC Test_SeAccessCheckKM;
 KMT_TESTFUNC Test_SeInheritance;
@@ -1022,6 +1023,7 @@ const KMT_TEST TestList[] =
     { "PsPico",                             Test_PsPico },
 #ifdef _WIN64
     { "PsJobCommit",                        Test_PsJobCommit },
+    { "NtosStubExports2",                   Test_NtosStubExports2 },
 #endif
     { "RtlBitmapKM",                        Test_RtlBitmapKM },
     { "RtlBitmapEx",                        Test_RtlBitmapEx },
