@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT tests
- * LICENSE:     LGPL-2.1-or-later (https://spdx.org/licenses/LGPL-2.1-or-later)
- * SPDX-License-Identifier: LGPL-2.1-or-later
+ * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
+ * SPDX-License-Identifier: GPL-3.0-or-later
  * PURPOSE:     storeinst: install a visual style into the protected theme store the way the ThemeLoader4 trust gate
  *              expects it, so an ordinary user can load a version-4 style. It copies <style>.msstyles (and its MUI)
  *              into %SystemRoot%\Resources\Themes\<name>\<name>.msstyles, stamps the store security descriptor on the
