@@ -299,6 +299,7 @@ WheapLogPacket(
     Section->SectionOffset = sizeof(*Header) + sizeof(*Section);
     Section->SectionLength = PacketLength;
     Section->Revision.AsUSHORT = WHEAP_SECTION_REVISION;
+    Section->Flags.Primary = 1;
     Section->SectionType = WheapErrorPacketSectionGuid;
     Section->SectionSeverity = Packet->ErrorSeverity;
     WheapWriteRecord(Header, Packet->ErrorSeverity);
@@ -1038,6 +1039,7 @@ WheaReportHwErrorDeviceDriver(
             Section = (PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR)Record->Packet;
             RtlZeroMemory(Section, sizeof(*Section));
             Section->SectionLength = ErrorDataLength;
+            Section->Flags.Primary = 1;
             Section->SectionType = *SectionTypeGuid;
             Section->SectionSeverity = ErrorSeverity;
             if (DeviceFriendlyName)

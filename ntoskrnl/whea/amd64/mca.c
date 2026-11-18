@@ -145,6 +145,7 @@ WheaMcaBuildFatalRecord(
     Record->Section.SectionOffset = FIELD_OFFSET(WHEAP_MCA_RECORD, Data);
     Record->Section.SectionLength = sizeof(Record->Data);
     Record->Section.Revision.AsUSHORT = WHEAP_SECTION_REVISION;
+    Record->Section.Flags.Primary = 1;
     Record->Section.SectionType = WheapMcaSectionType;
     Record->Section.SectionSeverity = WheaErrSevFatal;
 
