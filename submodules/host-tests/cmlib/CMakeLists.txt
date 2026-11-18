@@ -49,6 +49,17 @@ endif()
 add_test(NAME cmlib_mark_dirty COMMAND cmlib_mark_dirty)
 set_tests_properties(cmlib_mark_dirty PROPERTIES TIMEOUT 30)
 
+# Format 1.4/1.5/1.6 read support: synthetic hives (li/lf/lh/ri, big data)
+# plus the new-format (HvLE) transaction log, and real hives via
+# CMLIB_TEST_HIVE.
+add_executable(cmlib_hive15_read t_hive15read.c)
+target_link_libraries(cmlib_hive15_read PRIVATE cmlib_host)
+if(NOT MSVC)
+    target_compile_options(cmlib_hive15_read PRIVATE -fshort-wchar -Wall -Wextra -g)
+endif()
+add_test(NAME cmlib_hive15_read COMMAND cmlib_hive15_read)
+set_tests_properties(cmlib_hive15_read PROPERTIES TIMEOUT 60)
+
 # Self-contained arithmetic guard for the discriminator (no cmlib link).
 add_executable(cmlib_dirty_arith t_dirty_arith.c)
 if(NOT MSVC)

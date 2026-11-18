@@ -285,9 +285,9 @@ CmpSetValueKeyExisting(IN PHHIVE Hive,
     /* See if our new data can fit in a small key */
     IsSmall = (DataSize <= CM_KEY_VALUE_SMALL) ? TRUE: FALSE;
 
-    /* Big keys are unsupported */
-    ASSERT_VALUE_BIG(Hive, Length);
-    ASSERT_VALUE_BIG(Hive, DataSize);
+    /* Big values have no writer yet; overwriting one would free the db record as data and leak the segments */
+    if (CmpIsKeyValueBig(Hive, Length) || CmpIsKeyValueBig(Hive, DataSize))
+        return STATUS_NOT_IMPLEMENTED;
 
     /* Mark the old value dirty */
     if (!CmpMarkValueDataDirty(Hive, Value)) return STATUS_NO_LOG_SPACE;

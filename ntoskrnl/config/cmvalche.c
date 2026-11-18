@@ -693,6 +693,8 @@ CmpQueryKeyValueData(IN PCM_KEY_CONTROL_BLOCK Kcb,
     }
 
     /* Return the search result as well */
+    if (BufferAllocated) CmpFree(Buffer, 0);
+    if (CellToRelease != HCELL_NIL) HvReleaseCell(Kcb->KeyHive, CellToRelease);
     return Result;
 }
 
