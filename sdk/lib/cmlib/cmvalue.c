@@ -389,8 +389,10 @@ CmpSetValueDataNew(IN PHHIVE Hive,
     PAGED_CODE();
     ASSERT(DataSize > CM_KEY_VALUE_SMALL);
 
-    /* Check if this is a big key */
-    ASSERT_VALUE_BIG(Hive, DataSize);
+    /* Refuse big values until a 1.4 writer exists: a plain cell written
+       here would not round-trip through the big data reader */
+    if (CmpIsKeyValueBig(Hive, DataSize))
+        return STATUS_NOT_IMPLEMENTED;
 
     /* Allocate a data cell */
     *DataCell = HvAllocateCell(Hive, DataSize, StorageType, HCELL_NIL);
