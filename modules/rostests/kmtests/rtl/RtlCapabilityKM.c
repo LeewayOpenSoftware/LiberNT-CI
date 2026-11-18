@@ -9,20 +9,6 @@
 
 #define NDEBUG
 #include <debug.h>
-
-NTSTATUS NTAPI RtlDeriveCapabilitySidsFromName(PUNICODE_STRING UnicodeString,
-                                               PSID CapabilityGroupSid,
-                                               PSID CapabilitySid);
-NTSTATUS NTAPI RtlCheckTokenCapability(HANDLE TokenHandle,
-                                       PSID CapabilitySidToCheck,
-                                       PBOOLEAN HasCapability);
-NTSTATUS NTAPI RtlGetPersistedStateLocation(PCWSTR SourceID,
-                                            PCWSTR CustomValue,
-                                            PCWSTR DefaultPath,
-                                            ULONG StateLocationType,
-                                            PWCHAR TargetPath,
-                                            ULONG BufferLengthIn,
-                                            PULONG BufferLengthOut);
 PVOID NTAPI RtlFindAceByType(PACL Acl, UCHAR AceType, PULONG Index);
 NTSTATUS NTAPI RtlDecompressBufferEx2(USHORT CompressionFormat,
                                       PUCHAR UncompressedBuffer,
