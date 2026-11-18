@@ -170,6 +170,14 @@ KiScanReadyQueues(IN PKDPC Dpc,
 
     for (Processor = 0; Processor < ProcessorCount; Processor++)
     {
+        /* Indexes are contiguous today; skip a processor not started */
+        if (KiProcessorBlock[ScanIndex] == NULL)
+        {
+            ScanIndex++;
+            if (ScanIndex == KiNumberProcessors) ScanIndex = 0;
+            continue;
+        }
+
         KiScanReadyQueuesOnPrcb(KiProcessorBlock[ScanIndex],
                                 TickNow,
                                 CandidateQuota,

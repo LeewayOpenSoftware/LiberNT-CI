@@ -32,6 +32,8 @@ C_ASSERT(KI_MAXIMUM_PROCESSORS <= 0x10000 - KI_DPC_TARGET_PROCESSOR_OFFSET);
 /*
  * KDPC.ProcessorHistory is one KAFFINITY: processor index I sets bit
  * I % 64, so a set bit means "may have run on any processor with that bit".
+ * With more than one group KeRemoveQueueDpcEx may then wait for a processor
+ * that never ran the DPC: an extra wait, never a skipped one.
  */
 #define KiDpcHistoryMask(Index) ((KAFFINITY)1 << ((Index) % (sizeof(KAFFINITY) * 8)))
 
