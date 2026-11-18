@@ -195,6 +195,47 @@ KiSendMemoryIpiGroup(ULONG Group, ULONG64 Targets)
     HalRequestIpi(0, &TargetSet);
 }
 
+/*
+ * Sends IPI_DPC or IPI_FREEZE to the active processors named by one mask per
+ * group. The freeze IPI is an NMI, as in KiIpiSend, with the request queued
+ * behind a normal IPI as the fallback for a hypervisor that loses the NMI.
+ * HalSendNMI takes a group 0 mask: groups >= 1 get the fallback only until
+ * the HAL can send an NMI to them (GROUPS-DESIGN step 6 preconditions).
+ */
+VOID
+KiIpiSendGroups(
+    _In_reads_(Groups) const KAFFINITY *Masks,
+    _In_ ULONG Groups,
+    _In_ ULONG IpiRequest)
+{
+    PROCESSOR_NUMBER Source;
+    KAFFINITY_EX TargetSet;
+    KAFFINITY Queued, Remaining;
+    ULONG Group, Bit;
+    BOOLEAN Any = FALSE;
+
+    ASSERT(IpiRequest == IPI_DPC || IpiRequest == IPI_FREEZE);
+    ASSERT(Groups != 0 && Groups <= KI_MAXIMUM_GROUPS);
+    if (IpiRequest == IPI_FREEZE && Masks[0] != 0)
+        HalSendNMI(Masks[0]);
+
+    KiProcessorNumberFromIndex(KeGetCurrentPrcb()->Number, &Source);
+    TargetSet.Count = (USHORT)Groups;
+    TargetSet.Size = (USHORT)Groups;
+    TargetSet.Reserved = 0;
+    for (Group = 0; Group < Groups; Group++)
+    {
+        Queued = Masks[Group] & KiQueryActiveGroupAffinity((USHORT)Group);
+        TargetSet.StaticBitmap[Group] = Queued;
+        for (Remaining = Queued; BitScanForwardAffinity(&Bit, Remaining); Remaining &= ~AFFINITY_MASK(Bit))
+            KiIpiQueueMailbox(KiProcessorIndexFromNumber((USHORT)Group, (UCHAR)Bit), &Source, IpiRequest);
+        Any |= (Queued != 0);
+    }
+
+    if (Any)
+        HalRequestIpi(0, &TargetSet);
+}
+
 VOID
 FASTCALL
 KiIpiSendProcessor(

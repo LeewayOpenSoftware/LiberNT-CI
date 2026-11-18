@@ -203,7 +203,30 @@ static void YieldProcessor(void) {
 }
 static BOOLEAN KiAcquireFreezeActiveSet(PKPRCB Prcb) { @ACQUIRE@ }
 static VOID KiReleaseFreezeActiveSet(PKPRCB Prcb, BOOLEAN Acquired) { @RELEASE@ }
-static KAFFINITY KiFreezeTargetSet(PKPRCB CurrentPrcb) { @TARGETS@ }
+typedef struct { KAFFINITY Group[1]; } KI_FREEZE_TARGETS, *PKI_FREEZE_TARGETS;
+#define KI_PROCESSORS_PER_GROUP 64
+#define KiIsProcessorActive(i) ((KeActiveProcessors >> (i)) & 1)
+#define KiFreezeIsTarget(t, p) (((t)->Group[0] & (p)->SetMember) != 0)
+#define USHORT unsigned short
+#define UCHAR unsigned char
+#ifndef IPI_DPC
+#define IPI_DPC 2
+#endif
+typedef struct { USHORT Count; USHORT Size; ULONG Reserved; union { KAFFINITY Bitmap[1]; KAFFINITY StaticBitmap[1]; }; } KAFFINITY_EX;
+typedef struct { USHORT Group; UCHAR Number; UCHAR Reserved; } PROCESSOR_NUMBER, *PPROCESSOR_NUMBER;
+#define KI_MAXIMUM_GROUPS 1
+#define AFFINITY_MASK(b) ((KAFFINITY)1 << (b))
+#define BitScanForwardAffinity(i, m) ((m) ? (*(i) = (ULONG)__builtin_ctzll(m), 1) : 0)
+static int FreezeNmis, FreezeMailboxes, FreezeIpis;
+static void KiProcessorNumberFromIndex(ULONG i, PPROCESSOR_NUMBER n) { n->Group = (USHORT)(i / 64); n->Number = (UCHAR)(i % 64); n->Reserved = 0; }
+static ULONG KiProcessorIndexFromNumber(USHORT g, UCHAR n) { return (ULONG)g * 64 + n; }
+static KAFFINITY KiQueryActiveGroupAffinity(USHORT g) { return g ? 0 : KeActiveProcessors; }
+static void KiIpiQueueMailbox(ULONG t, PPROCESSOR_NUMBER s, ULONG r) { (void)s; assert(r == IPI_FREEZE && KiProcessorBlock[t] != NULL); FreezeMailboxes++; }
+static void HalRequestIpi(ULONG z, KAFFINITY_EX *s) { (void)z; assert(s->Count == 1 && s->StaticBitmap[0] != 0); FreezeIpis++; }
+/* The NMI is what freezes a target in these fixtures: a dropped NMI leaves it running */
+static void HalSendNMI(KAFFINITY m) { FreezeNmis++; KiIpiSend(m, IPI_FREEZE); }
+static void KiIpiSendGroups(const KAFFINITY *Masks, ULONG Groups, ULONG IpiRequest) { @SENDGROUPS@ }
+static BOOLEAN KiFreezeTargetSet(PKPRCB CurrentPrcb, PKI_FREEZE_TARGETS Targets) { @TARGETS@ }
 static void KxFreezeExecution(void) { @FREEZE@ }
 static void KxThawExecution(void) { @THAW@ }
 int main(void) {
@@ -225,6 +248,13 @@ int main(void) {
     return 0;
 }
 '''
+_ipi = (pathlib.Path(args.root) / 'ntoskrnl/ke/amd64/ipi.c').read_text()
+_s = _ipi.index('{', _ipi.index('\nKiIpiSendGroups('))
+_d, _e = 1, _s + 1
+while _d:
+    _d += (_ipi[_e] == '{') - (_ipi[_e] == '}')
+    _e += 1
+freeze = freeze.replace('@SENDGROUPS@', _ipi[_s + 1:_e - 1])
 for marker, name in [('NOTE', 'KiNoteFreezeEpoch'), ('EPOCH', 'KiQueryFreezeEpoch'), ('ACTIVE', 'KiIsFreezeActive'), ('ACQUIRE', 'KiAcquireFreezeActiveSet'), ('RELEASE', 'KiReleaseFreezeActiveSet'), ('TARGETS', 'KiFreezeTargetSet'), ('FREEZE', 'KxFreezeExecution'), ('THAW', 'KxThawExecution')]:
     freeze = freeze.replace('@' + marker + '@', body('ntoskrnl/ke/amd64/freeze.c', name))
 
