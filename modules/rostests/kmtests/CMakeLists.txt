@@ -195,6 +195,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_fsrtl/FsRtlVolumeStartup.c
     ntos_io/IoDevicePropertyData.c
     ntos_io/IoBuildIoctlKM.c
+    ntos_io/IoIrpExtensionKM.c
     ntos_io/IoLargeMemoryResource.c
     ntos_io/IoArbiter.c
     ntos_io/IoCancelKM.c
