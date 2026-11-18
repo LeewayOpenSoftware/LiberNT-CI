@@ -139,6 +139,87 @@ LxQueryRealtime(
     LxNtTimeToTimespec(Now.QuadPart, Timespec);
 }
 
+#define LX_CPUCLOCK_PROF        0
+#define LX_CPUCLOCK_VIRT        1
+#define LX_CPUCLOCK_SCHED       2
+#define LX_CPUCLOCK_FD          3
+#define LX_CPUCLOCK_WHICH_MASK  3
+#define LX_CPUCLOCK_PERTHREAD   4
+
+LONG
+LxQueryCpuClock(
+    _In_opt_ PLX_PROCESS Viewer,
+    _In_ LONG Clock,
+    _Out_ PLX_TIMESPEC Timespec)
+{
+    ULONG Which = (ULONG)Clock & LX_CPUCLOCK_WHICH_MASK;
+    LONG Id = ~(Clock >> 3);
+    LONG64 User = 0, Kernel = 0, Time;
+
+    ASSERT(Clock < 0);
+    if ((Which == LX_CPUCLOCK_FD) || (Id < 0) || (Viewer == NULL))
+        return -LX_EINVAL;
+
+    if (Clock & LX_CPUCLOCK_PERTHREAD)
+    {
+        PETHREAD EThread = NULL;
+
+        if (Id == 0)
+        {
+            EThread = PsGetCurrentThread();
+            ObReferenceObject(EThread);
+        }
+        else
+        {
+            PLX_PROCESS Owner;
+            PLX_THREAD Thread = LxThreadLookupNr(Viewer, (ULONG)Id, &Owner);
+            BOOLEAN Sibling;
+
+            if (Thread == NULL)
+                return -LX_EINVAL;
+            Sibling = (Owner == Viewer);
+            if (Sibling)
+            {
+                ExAcquireFastMutex(&Owner->Lock);
+                EThread = Thread->EThread;
+                if (EThread != NULL)
+                    ObReferenceObject(EThread);
+                ExReleaseFastMutex(&Owner->Lock);
+            }
+            LxProcessDereference(Owner);
+            if (!Sibling)
+                return -LX_EINVAL;
+        }
+        if (EThread != NULL)
+        {
+            ULONG UserTicks = 0;
+            ULONG KernelTicks = KeQueryRuntimeThread(&EThread->Tcb, &UserTicks);
+
+            User = (LONG64)UserTicks * KeQueryTimeIncrement();
+            Kernel = (LONG64)KernelTicks * KeQueryTimeIncrement();
+            ObDereferenceObject(EThread);
+        }
+    }
+    else
+    {
+        PLX_PROCESS Target = (Id == 0) ? Viewer : LxProcessLookupNr(Viewer, (ULONG)Id);
+        LX_USAGE Usage;
+
+        if (Target == NULL)
+            return -LX_EINVAL;
+        LxProcessUsage(Target, NULL, &Usage);
+        User = Usage.UserTime;
+        Kernel = Usage.KernelTime;
+        if (Id != 0)
+            LxProcessDereference(Target);
+    }
+
+    Time = (Which == LX_CPUCLOCK_VIRT) ? User : (User + Kernel);
+    Timespec->Seconds = Time / 10000000;
+    Timespec->Nanoseconds = (Time % 10000000) * 100;
+    return 0;
+}
+
 LONG
 LxQueryClock(
     _In_ ULONG Clock,
@@ -148,6 +229,7 @@ LxQueryClock(
     {
         case LX_CLOCK_REALTIME:
         case LX_CLOCK_REALTIME_COARSE:
+        case LX_CLOCK_REALTIME_ALARM:
         case LX_CLOCK_TAI:
             LxQueryRealtime(Timespec);
             return 0;
@@ -156,6 +238,7 @@ LxQueryClock(
         case LX_CLOCK_MONOTONIC_RAW:
         case LX_CLOCK_MONOTONIC_COARSE:
         case LX_CLOCK_BOOTTIME:
+        case LX_CLOCK_BOOTTIME_ALARM:
             LxQueryMonotonic(Timespec);
             return 0;
 
@@ -253,6 +336,44 @@ LxClockKnown(
     _In_ ULONG64 Clock)
 {
     return (Clock <= LX_CLOCK_BOOTTIME_ALARM) || (Clock == LX_CLOCK_TAI);
+}
+
+static
+LONG64
+LxSleepInterval(
+    _In_ PLX_CALL Call,
+    _In_ LONG64 Interval100ns,
+    _In_ ULONG64 RemainPointer)
+{
+    PLX_THREAD Thread = Call->Thread;
+    LONG64 Now = (LONG64)KeQueryInterruptTime();
+    LONG64 Deadline = Thread->SleepDeadline;
+    LONG64 Result;
+
+    Thread->SleepDeadline = 0;
+    if (Deadline == 0)
+        Deadline = (Interval100ns > MAXLONG64 - Now) ? MAXLONG64 : (Now + Interval100ns);
+
+    Result = LxSleep(Deadline - Now);
+    if (Result == -LX_EINTR)
+    {
+        LONG64 Left = Deadline - (LONG64)KeQueryInterruptTime();
+
+        if (Left <= 0)
+            return 0;
+        if (RemainPointer != 0)
+        {
+            LX_TIMESPEC Remaining;
+
+            Remaining.Seconds = Left / 10000000;
+            Remaining.Nanoseconds = (Left % 10000000) * 100;
+            LxCopyToUser(RemainPointer, &Remaining, sizeof(Remaining));
+        }
+        /* A sleep no handler interrupts starts again and waits only for what is left of it */
+        Thread->SleepDeadline = Deadline;
+        return -LX_ERESTARTNOHAND;
+    }
+    return Result;
 }
 
 static
@@ -670,11 +791,24 @@ LX_SYSCALL(LxSysClockGettime)
 LX_SYSCALL(LxSysClockGetres)
 {
     LX_TIMESPEC Resolution = { 0, 1 };
+    LONG Clock = (LONG)Call->Args[0];
 
-    if ((Call->Args[0] > LX_CLOCK_BOOTTIME) && (Call->Args[0] != LX_CLOCK_TAI))
+    if (Clock < 0)
+    {
+        LX_TIMESPEC Probe;
+        LONG Error = LxQueryCpuClock(Call->Process, Clock, &Probe);
+
+        if (Error != 0)
+            return Error;
+        if ((Clock & LX_CPUCLOCK_WHICH_MASK) != LX_CPUCLOCK_SCHED)
+            Resolution.Nanoseconds = (LONG64)KeQueryTimeIncrement() * 100;
+    }
+    else if (!LxClockKnown((ULONG64)Clock))
+    {
         return -LX_EINVAL;
-    if ((Call->Args[0] == LX_CLOCK_REALTIME) || (Call->Args[0] == LX_CLOCK_REALTIME_COARSE) ||
-        (Call->Args[0] == LX_CLOCK_TAI))
+    }
+    if ((Clock == LX_CLOCK_REALTIME) || (Clock == LX_CLOCK_REALTIME_COARSE) || (Clock == LX_CLOCK_REALTIME_ALARM) ||
+        (Clock == LX_CLOCK_TAI))
         Resolution.Nanoseconds = 100;
     if (Call->Args[1] == 0)
         return 0;
@@ -726,22 +860,43 @@ LX_SYSCALL(LxSysNanosleep)
     if ((Request.Seconds < 0) || (Request.Nanoseconds < 0) || (Request.Nanoseconds >= 1000000000))
         return -LX_EINVAL;
 
-    Result = LxSleep(LxTimespecTo100ns(&Request));
-    if ((Result != 0) && (Call->Args[1] != 0))
-    {
-        LX_TIMESPEC Remaining = { 0, 0 };
-
-        LxCopyToUser(Call->Args[1], &Remaining, sizeof(Remaining));
-    }
-    return Result;
+    return LxSleepInterval(Call, LxTimespecTo100ns(&Request), Call->Args[1]);
 }
 
 LX_SYSCALL(LxSysClockNanosleep)
 {
     LX_TIMESPEC Request, Now;
-    LONG64 Result = LxCopyFromUser(&Request, Call->Args[2], sizeof(Request));
-    LONG64 Interval;
+    LONG Clock = (LONG)Call->Args[0];
+    LONG64 Result, Interval;
 
+    switch (Clock)
+    {
+        case LX_CLOCK_REALTIME:
+        case LX_CLOCK_MONOTONIC:
+        case LX_CLOCK_BOOTTIME:
+        case LX_CLOCK_TAI:
+        /* FIXME: a sleep against the process CPU-time clock waits in real time */
+        case LX_CLOCK_PROCESS_CPUTIME_ID:
+            break;
+
+        case LX_CLOCK_REALTIME_ALARM:
+        case LX_CLOCK_BOOTTIME_ALARM:
+            if (!LxCapable(Call->Process, LX_CAP_WAKE_ALARM))
+                return -LX_EPERM;
+            break;
+
+        case LX_CLOCK_THREAD_CPUTIME_ID:
+        case LX_CLOCK_MONOTONIC_RAW:
+        case LX_CLOCK_REALTIME_COARSE:
+        case LX_CLOCK_MONOTONIC_COARSE:
+            return -LX_EOPNOTSUPP;
+
+        default:
+            /* TODO: sleeping against the CPU-time clock of another process or thread is refused */
+            return (Clock < 0) ? -LX_EOPNOTSUPP : -LX_EINVAL;
+    }
+
+    Result = LxCopyFromUser(&Request, Call->Args[2], sizeof(Request));
     if (Result != 0)
         return Result;
     if ((Request.Seconds < 0) || (Request.Nanoseconds < 0) || (Request.Nanoseconds >= 1000000000))
@@ -750,14 +905,16 @@ LX_SYSCALL(LxSysClockNanosleep)
     Interval = LxTimespecTo100ns(&Request);
     if (Call->Args[1] & LX_TIMER_ABSTIME)
     {
-        LONG Error = LxQueryClockIn(Call->Process, (ULONG)Call->Args[0], &Now);
+        LONG Error = LxQueryClockIn(Call->Process, (ULONG)Clock, &Now);
 
         if (Error != 0)
             return Error;
         Interval -= Now.Seconds * 10000000 + Now.Nanoseconds / 100;
+        Result = LxSleep(Interval);
+        return (Result == -LX_EINTR) ? -LX_ERESTARTNOHAND : Result;
     }
 
-    return LxSleep(Interval);
+    return LxSleepInterval(Call, Interval, Call->Args[3]);
 }
 
 LX_SYSCALL(LxSysTimes)
@@ -1178,6 +1335,73 @@ LxSchedInherit(
     }
 }
 
+static
+BOOLEAN
+LxSchedCapable(
+    _In_ PLX_CALL Call,
+    _In_ PLX_PROCESS Target)
+{
+    PLX_NS TargetNs = LxUserNsOf(Target);
+    BOOLEAN Capable = LxNsCapable(Call->Process, TargetNs, LX_CAP_SYS_NICE);
+
+    LxNsDereference(TargetNs);
+    return Capable;
+}
+
+static
+BOOLEAN
+LxSchedSameOwner(
+    _In_ PLX_CALL Call,
+    _In_ PLX_THREAD Thread)
+{
+    PLX_CRED Own = Call->Thread->Cred;
+
+    return (Own->Uid[1] == Thread->Cred->Uid[1]) || (Own->Uid[1] == Thread->Cred->Uid[0]);
+}
+
+static
+BOOLEAN
+LxSchedNiceAllowed(
+    _In_ PLX_PROCESS Target,
+    _In_ LONG Nice)
+{
+    return (ULONG64)(20 - Nice) <= Target->Limits[LX_RLIMIT_NICE].Cur;
+}
+
+static
+LONG
+LxSchedPermit(
+    _In_ PLX_CALL Call,
+    _In_ PLX_THREAD Thread,
+    _In_ const LX_SCHED_ATTR *New)
+{
+    PLX_PROCESS Target = Thread->Process;
+    const LX_SCHED_ATTR *Old = &Thread->Sched;
+
+    if (LxSchedCapable(Call, Target))
+        return 0;
+    if (!LxSchedSameOwner(Call, Thread))
+        return -LX_EPERM;
+    if (New->Policy == LX_SCHED_DEADLINE)
+        return -LX_EPERM;
+    if ((New->Policy == LX_SCHED_FIFO) || (New->Policy == LX_SCHED_RR))
+    {
+        ULONG64 Limit = Target->Limits[LX_RLIMIT_RTPRIO].Cur;
+
+        if ((New->Policy != Old->Policy) && (Limit == 0))
+            return -LX_EPERM;
+        if ((New->Priority > Old->Priority) && (New->Priority > Limit))
+            return -LX_EPERM;
+    }
+    if ((Old->Policy == LX_SCHED_IDLE) && (New->Policy != LX_SCHED_IDLE) && !LxSchedNiceAllowed(Target, Old->Nice))
+        return -LX_EPERM;
+    if ((New->Nice < Old->Nice) && !LxSchedNiceAllowed(Target, New->Nice))
+        return -LX_EPERM;
+    if ((Old->Flags & LX_SCHED_FLAG_RESET_ON_FORK) && !(New->Flags & LX_SCHED_FLAG_RESET_ON_FORK))
+        return -LX_EPERM;
+    return 0;
+}
+
 LX_SYSCALL(LxSysSchedSetattr)
 {
     LX_SCHED_ATTR Attr, New;
@@ -1259,8 +1483,10 @@ LX_SYSCALL(LxSysSchedSetattr)
     if (Result == 0)
     {
         New.Flags = (New.Flags & ~(ULONG64)LX_SCHED_FLAG_RESET_ON_FORK) | (Attr.Flags & LX_SCHED_FLAG_RESET_ON_FORK);
-        Thread->Sched = New;
+        Result = LxSchedPermit(Call, Thread, &New);
     }
+    if (Result == 0)
+        Thread->Sched = New;
     LxSchedRelease(Owner);
     return Result;
 }
@@ -1315,8 +1541,10 @@ LX_SYSCALL(LxSysSchedSetscheduler)
             Attr.Flags |= LX_SCHED_FLAG_RESET_ON_FORK;
         else
             Attr.Flags &= ~(ULONG64)LX_SCHED_FLAG_RESET_ON_FORK;
-        Thread->Sched = Attr;
+        Result = LxSchedPermit(Call, Thread, &Attr);
     }
+    if (Result == 0)
+        Thread->Sched = Attr;
     LxSchedRelease(Owner);
     return Result;
 }
@@ -1340,6 +1568,8 @@ LX_SYSCALL(LxSysSchedSetparam)
     Attr = Thread->Sched;
     Attr.Priority = (ULONG)Priority;
     Result = (Priority < 0) ? -LX_EINVAL : LxSchedValidate(&Attr);
+    if (Result == 0)
+        Result = LxSchedPermit(Call, Thread, &Attr);
     if (Result == 0)
         Thread->Sched.Priority = Attr.Priority;
     LxSchedRelease(Owner);
@@ -1390,15 +1620,28 @@ LX_SYSCALL(LxSysSetpriority)
         return -LX_EINVAL;
     if (Which != LX_PRIO_PROCESS)
     {
-        Call->Thread->Sched.Nice = Nice;
-        return 0;
+        /* FIXME: a process group or a user is treated as the calling thread alone */
+        Thread = Call->Thread;
+        Owner = NULL;
     }
-    Result = LxSchedTarget(Call, (LONG)Call->Args[1], &Thread, &Owner);
-    if (Result != 0)
-        return Result;
-    Thread->Sched.Nice = Nice;
+    else
+    {
+        Result = LxSchedTarget(Call, (LONG)Call->Args[1], &Thread, &Owner);
+        if (Result != 0)
+            return Result;
+    }
+    Result = 0;
+    if (!LxSchedCapable(Call, Thread->Process))
+    {
+        if (!LxSchedSameOwner(Call, Thread))
+            Result = -LX_EPERM;
+        else if ((Nice < Thread->Sched.Nice) && !LxSchedNiceAllowed(Thread->Process, Nice))
+            Result = -LX_EACCES;
+    }
+    if (Result == 0)
+        Thread->Sched.Nice = Nice;
     LxSchedRelease(Owner);
-    return 0;
+    return Result;
 }
 
 static
@@ -1409,9 +1652,32 @@ LxSchedPriorityLimit(
 {
     if ((Policy == 1) || (Policy == 2))
         return Maximum ? 99 : 1;
-    if ((Policy == 0) || (Policy == 3) || (Policy == 5) || (Policy == 6))
+    if ((Policy == 0) || (Policy == 3) || (Policy == 5) || (Policy == 6) || (Policy == LX_SCHED_EXT))
         return 0;
     return -LX_EINVAL;
+}
+
+LX_SYSCALL(LxSysSchedRrGetInterval)
+{
+    LX_TIMESPEC Interval = { 0, 0 };
+    PLX_PROCESS Owner;
+    PLX_THREAD Thread;
+    LONG64 Result;
+
+    Result = LxSchedTarget(Call, (LONG)Call->Args[0], &Thread, &Owner);
+    if (Result != 0)
+        return Result;
+    if (Thread->Sched.Policy == LX_SCHED_RR)
+    {
+        Interval.Nanoseconds = 100000000;
+    }
+    else if (Thread->Sched.Policy != LX_SCHED_FIFO)
+    {
+        /* FIXME: a thread of a normal policy reports one clock tick, not the slice the NT scheduler gives it */
+        Interval.Nanoseconds = (LONG64)KeQueryTimeIncrement() * 100;
+    }
+    LxSchedRelease(Owner);
+    return LxCopyToUser(Call->Args[1], &Interval, sizeof(Interval));
 }
 
 LX_SYSCALL(LxSysSchedGetPriorityMax)
@@ -1912,6 +2178,7 @@ LX_SYSCALL(LxSysGetgroups)
 
     ExAcquireFastMutex(&Process->Lock);
     Count = Cred->GroupCount;
+    ASSERT(Count <= RTL_NUMBER_OF(Groups));
     RtlCopyMemory(Groups, Cred->Groups, Count * sizeof(ULONG));
     ExReleaseFastMutex(&Process->Lock);
     for (Index = 0; Index < Count; Index++)
@@ -2056,7 +2323,7 @@ LX_SYSCALL(LxSysSetpgid)
     }
 
     if ((Target->Sid != Process->Sid) || (Target->Sid == Target->Pid))
-        Result = (Target->Sid == Target->Pid) && (Target->Pgid == (ULONG)Pgid) ? 0 : -LX_EPERM;
+        Result = -LX_EPERM;
     else if (((ULONG)Pgid != Target->Pid) && !LxPgrpInSession(Process->Instance, (ULONG)Pgid, Target->Sid))
         Result = -LX_EPERM;
     else
@@ -2252,7 +2519,8 @@ LX_SYSCALL(LxSysRtSigaction)
         Process->SigAction[Signal - 1] = New;
     ExReleaseFastMutex(&Process->Lock);
 
-    if ((Call->Args[1] != 0) && (New.Handler == LX_SIG_IGN))
+    if ((Call->Args[1] != 0) &&
+        ((New.Handler == LX_SIG_IGN) || ((New.Handler == LX_SIG_DFL) && LxSignalIgnoredByDefault(Signal))))
     {
         ULONG64 Bit = 1ULL << (Signal - 1);
         PLIST_ENTRY Entry;
@@ -2393,6 +2661,7 @@ LxCreateThread(
 
     GlobalTid = Thread->Tid;
     Event = LxPtraceCloneChild(Call->Thread, Thread, Request->Flags, Request->ExitSignal);
+    LxThreadPublish(Thread);
     Status = LxCreateClonedThread(NtCurrentProcess(), Context, Thread, &Handle, &ClientId);
     if (!NT_SUCCESS(Status))
     {

@@ -7,6 +7,7 @@ list(APPEND SOURCE
     AddMandatoryAce.c
     ControlServiceEx.c
     CopySid.c
+    RedistributableFileOwner.c
     CreateProcessWithToken.c
     CreateProcessWithTokenChild.c
     CreateService.c

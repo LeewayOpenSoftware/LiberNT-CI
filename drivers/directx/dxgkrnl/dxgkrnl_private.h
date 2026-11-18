@@ -924,6 +924,7 @@ struct _DXGKRNL_ADAPTER
     /* Adapter-wide counters answered by D3DKMTQueryStatistics(ADAPTER). */
     volatile LONG               TdrDetectedCount;
     volatile LONG               VsyncInterruptEnabled;
+    volatile LONG               VsyncEnableDeferred;
     DXGK_VSYNC_POWER_CORE       VsyncPower;
     KMUTEX                      VsyncControlMutex;
     WORK_QUEUE_ITEM             VsyncPowerWorkItem;
@@ -2265,6 +2266,9 @@ typedef struct _DXGKRNL_SYNC_OBJECT
     ULONG                       SemaphoreLimit;
     PVOID volatile              MutexQueuedOwner;
     volatile LONG64             SemaphoreQueuedCount;
+    /* Admitted semaphore waits in admission order; only the oldest may take the count. */
+    KSPIN_LOCK                  SemaphoreWaitLock;
+    LIST_ENTRY                  SemaphoreWaitQueue;
     PKEVENT                     CpuNotificationEvent;
     BOOLEAN                     CpuNotificationEventReferenced;
 #if (REACTOS_WDDM_TARGET_LEVEL >= 3000)
@@ -3160,6 +3164,10 @@ DxgkGpuVaRootPageTableNeedsUpdate(
 
 NTSTATUS
 DxgkGpuVaInitializePageTablePool(
+    _In_ PDXGKRNL_ADAPTER Adapter);
+
+NTSTATUS
+DxgkGpuVaRestorePagingProcess(
     _In_ PDXGKRNL_ADAPTER Adapter);
 
 VOID
@@ -4096,6 +4104,16 @@ DxgkpDisplayPublishInitialMode(
 VOID
 DxgkDisplayNotifyMonitorEvent(
     _In_ PDXGKRNL_ADAPTER Adapter);
+
+BOOLEAN
+DxgkDisplayAttachWin32kSession(
+    _Out_ PRKAPC_STATE ApcState,
+    _Out_ PEPROCESS *AttachedProcess);
+
+VOID
+DxgkDisplayDetachWin32kSession(
+    _In_ PRKAPC_STATE ApcState,
+    _In_opt_ PEPROCESS AttachedProcess);
 
 VOID
 DxgkDisplayPresentBootScreen(

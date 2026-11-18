@@ -7,6 +7,7 @@ extern void func_BuildDriverInfoInstalledFlag(void);
 extern void func_DelRegRootGuard(void);
 extern void func_QueueHandleGuard(void);
 extern void func_DriverStoreVerifyHashOnce(void);
+extern void func_AcpiDeviceCapabilities(void);
 extern void func_ClassInstallParams(void);
 extern void func_devclass(void);
 extern void func_DeviceDescription(void);
@@ -20,6 +21,7 @@ extern void func_InterruptAffinityPolicy(void);
 extern void func_SetupDiGetActualModelsSection(void);
 extern void func_InvalidDeviceInfoSet(void);
 extern void func_LegacyDeviceParent(void);
+extern void func_NetInterfaceNames(void);
 extern void func_NewDeviceInstall(void);
 extern void func_SetupInstallServicesFromInfSectionEx(void);
 extern void func_SetupCommitFileQueue(void);
@@ -29,6 +31,7 @@ extern void func_SetupDiOpenDeviceInterface(void);
 extern void func_SetupInstallFile(void);
 extern void func_SetupInstallRegisterDlls(void);
 extern void func_SysButtonDevices(void);
+extern void func_UsbHubInformation(void);
 extern void func_UsbInterfaceIds(void);
 
 const struct test winetest_testlist[] =
@@ -38,6 +41,7 @@ const struct test winetest_testlist[] =
     { "DelRegRootGuard", func_DelRegRootGuard },
     { "QueueHandleGuard", func_QueueHandleGuard },
     { "DriverStoreVerifyHashOnce", func_DriverStoreVerifyHashOnce },
+    { "AcpiDeviceCapabilities", func_AcpiDeviceCapabilities },
     { "ClassInstallParams", func_ClassInstallParams },
     { "devclass", func_devclass },
     { "DeviceDescription", func_DeviceDescription },
@@ -51,6 +55,7 @@ const struct test winetest_testlist[] =
     { "SetupDiGetActualModelsSection", func_SetupDiGetActualModelsSection },
     { "InvalidDeviceInfoSet", func_InvalidDeviceInfoSet },
     { "LegacyDeviceParent", func_LegacyDeviceParent },
+    { "NetInterfaceNames", func_NetInterfaceNames },
     { "NewDeviceInstall", func_NewDeviceInstall },
     { "SetupInstallServicesFromInfSectionEx", func_SetupInstallServicesFromInfSectionEx},
     { "SetupCommitFileQueue", func_SetupCommitFileQueue },
@@ -60,6 +65,7 @@ const struct test winetest_testlist[] =
     { "SetupInstallFile", func_SetupInstallFile },
     { "SetupInstallRegisterDlls", func_SetupInstallRegisterDlls },
     { "SysButtonDevices", func_SysButtonDevices },
+    { "UsbHubInformation", func_UsbHubInformation },
     { "UsbInterfaceIds", func_UsbInterfaceIds },
     { 0, 0 }
 };

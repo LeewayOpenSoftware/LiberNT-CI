@@ -3651,6 +3651,9 @@ LX_SYSCALL(LxSysMmap)
             Prot |= LX_PROT_EXEC;
         }
         Result = LxMmMap(Call->Process, Call->Args[0], Call->Args[1], Prot, Flags, Zero ? NULL : File, Call->Args[5]);
+        /* TODO: a write through a shared mapping does not mark the file's modification time */
+        if ((File != NULL) && (Result >= 0))
+            LxTmpfsFileAccessed(File);
     }
     if (File != NULL)
         LxFileDereference(File);
@@ -4372,6 +4375,23 @@ LX_SYSCALL(LxSysMunlock)
     return LxMmLockRange(Call->Process, Call->Args[0], Call->Args[1], 0);
 }
 
+static
+ULONG64
+LxMmCommittedBelow(
+    _In_ ULONG64 Start,
+    _In_ ULONG64 End)
+{
+    MEMORY_BASIC_INFORMATION Information;
+    ULONG64 Cursor = End;
+
+    while ((Cursor > Start) && NT_SUCCESS(LxVmQuery(Cursor - LX_PAGE_SIZE, &Information)) &&
+           (Information.State == MEM_COMMIT) && ((ULONG64)(ULONG_PTR)Information.BaseAddress < Cursor))
+    {
+        Cursor = max(Start, (ULONG64)(ULONG_PTR)Information.BaseAddress);
+    }
+    return End - Cursor;
+}
+
 LX_SYSCALL(LxSysMlockall)
 {
     PLX_PROCESS Process = Call->Process->Mm;
@@ -4392,7 +4412,11 @@ LX_SYSCALL(LxSysMlockall)
         {
             PLX_VMA Vma = CONTAINING_RECORD(Entry, LX_VMA, Link);
 
-            Total += Vma->End - Vma->Start;
+            /* The main stack is mapped whole here; Linux counts what it has grown to, which starts at 128 KiB */
+            if (Vma->Flags & LX_VMA_STACK)
+                Total += min(Vma->End - Vma->Start, LxMmCommittedBelow(Vma->Start, Vma->End) + 0x20000);
+            else
+                Total += Vma->End - Vma->Start;
         }
         if (!LxMmLockAllowed(Call->Process, Process, Total - LxMmLockedIn(Process, 0, MAXULONG64)))
         {

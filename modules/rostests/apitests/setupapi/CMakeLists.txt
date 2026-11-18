@@ -5,6 +5,7 @@ list(APPEND SOURCE
     DelRegRootGuard.c
     QueueHandleGuard.c
     DriverStoreVerifyHashOnce.c
+    AcpiDeviceCapabilities.c
     ClassInstallParams.c
     devclass.c
     DeviceDescription.c
@@ -17,6 +18,7 @@ list(APPEND SOURCE
     InterruptAffinityPolicy.c
     InvalidDeviceInfoSet.c
     LegacyDeviceParent.c
+    NetInterfaceNames.c
     NewDeviceInstall.c
     SetupCommitFileQueue.c
     SetupDiClassProperty.c
@@ -27,6 +29,7 @@ list(APPEND SOURCE
     SetupInstallRegisterDlls.c
     SetupInstallServicesFromInfSectionEx.c
     SysButtonDevices.c
+    UsbHubInformation.c
     UsbInterfaceIds.c
     testlist.c)
 

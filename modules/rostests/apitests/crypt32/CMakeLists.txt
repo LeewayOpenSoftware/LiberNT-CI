@@ -5,6 +5,7 @@ list(APPEND SOURCE
     CertEnumSystemStoreLocation.c
     CertOpenSystemStore.c
     CertUpdateStore.c
+    ChainNotBefore.c
     ChainRevocation.c
     Countersign.c
     CryptProtectData.c
@@ -12,6 +13,7 @@ list(APPEND SOURCE
     FindOIDInfo.c
     GeneralizedTime.c
     RevocationTimeout.c
+    RootProgram.c
     testlist.c)
 
 add_executable(crypt32_apitest ${SOURCE})

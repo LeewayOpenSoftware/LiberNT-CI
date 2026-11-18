@@ -36,6 +36,7 @@ list(APPEND SOURCE
     shutdown_linger.c
     sockopt.c
     sendto_neighbor.c
+    udp_connreset.c
     udp_queue.c
     udp_quic.c
     WSAAsync.c

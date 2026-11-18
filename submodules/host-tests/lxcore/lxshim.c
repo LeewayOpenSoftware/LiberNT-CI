@@ -299,6 +299,11 @@ LxTmpfsMapSection(PLX_TMPFS_INODE Inode, BOOLEAN Shared, PHANDLE Section, PULONG
 {
     return STATUS_NOT_SUPPORTED;
 }
+VOID
+LxTmpfsFileAccessed(PLX_FILE File)
+{
+    return;
+}
 
 NTSTATUS
 ZwFreeVirtualMemory(HANDLE Process, PVOID *BaseAddress, PSIZE_T RegionSize, ULONG FreeType)

@@ -31,6 +31,7 @@ KMT_TESTFUNC Test_DxgkDmaRing;
 KMT_TESTFUNC Test_DxgkVidPnTopology;
 KMT_TESTFUNC Test_DxgkVidPnModeSet;
 KMT_TESTFUNC Test_DxgkFlipQueue;
+KMT_TESTFUNC Test_DxgkPointerShape;
 KMT_TESTFUNC Test_DxgkHandleTable;
 KMT_TESTFUNC Test_DxgkAdapterCaps;
 KMT_TESTFUNC Test_DxgkNodeAffinity;
@@ -255,6 +256,7 @@ KMT_TESTFUNC Test_KdPrintStatus;
 KMT_TESTFUNC Test_KdSystemDebugControl;
 KMT_TESTFUNC Test_KdUsbNetRules;
 KMT_TESTFUNC Test_KsecBcrypt;
+KMT_TESTFUNC Test_KsecBcryptKeyPair;
 KMT_TESTFUNC Test_KeWddmExports;
 KMT_TESTFUNC Test_KeApc;
 KMT_TESTFUNC Test_KeApcInject;
@@ -417,6 +419,7 @@ KMT_TESTFUNC Test_MmUserLayout;
 KMT_TESTFUNC Test_MmLoaderBlock;
 KMT_TESTFUNC Test_NdisIfProvider;
 KMT_TESTFUNC Test_NdisRwLock;
+KMT_TESTFUNC Test_NdisWdiStationCaps;
 KMT_TESTFUNC Test_NdisProcessorGroup;
 KMT_TESTFUNC Test_NdisLegacyHelpers;
 KMT_TESTFUNC Test_NdisMiniportCharacteristics;
@@ -554,6 +557,7 @@ const KMT_TEST TestList[] =
     { "DxgkVidPnTopology",                  Test_DxgkVidPnTopology },
     { "DxgkVidPnModeSet",                   Test_DxgkVidPnModeSet },
     { "DxgkFlipQueue",                      Test_DxgkFlipQueue },
+    { "DxgkPointerShape",                   Test_DxgkPointerShape },
     { "DxgkHandleTable",                    Test_DxgkHandleTable },
     { "DxgkAdapterCaps",                    Test_DxgkAdapterCaps },
     { "DxgkNodeAffinity",                   Test_DxgkNodeAffinity },
@@ -762,6 +766,7 @@ const KMT_TEST TestList[] =
     { "KdSystemDebugControl",               Test_KdSystemDebugControl },
     { "KdUsbNetRules",                      Test_KdUsbNetRules },
     { "KsecBcrypt",                         Test_KsecBcrypt },
+    { "KsecBcryptKeyPair",                  Test_KsecBcryptKeyPair },
     { "KeWddmExports",                      Test_KeWddmExports },
     { "KeApc",                              Test_KeApc },
     { "KeApcInject",                        Test_KeApcInject },
@@ -918,6 +923,7 @@ const KMT_TEST TestList[] =
     { "MonitorBrightnessKey",               Test_MonitorBrightnessKey },
     { "NdisIfProvider",                     Test_NdisIfProvider },
     { "NdisRwLock",                         Test_NdisRwLock },
+    { "NdisWdiStationCaps",                 Test_NdisWdiStationCaps },
     { "NdisProcessorGroup",                 Test_NdisProcessorGroup },
     { "NdisLegacyHelpers",                  Test_NdisLegacyHelpers },
     { "NdisMiniportCharacteristics",        Test_NdisMiniportCharacteristics },

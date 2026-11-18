@@ -102,6 +102,7 @@ list(APPEND KMTEST_DRV_SOURCE
     directx/DxgkVidPnTopology.c
     directx/DxgkVidPnModeSet.c
     directx/DxgkFlipQueue.c
+    directx/DxgkPointerShape.c
     directx/DxgkHandleTable.c
     directx/DxgkAdapterCaps.c
     directx/DxgkNodeAffinity.c
@@ -133,6 +134,7 @@ list(APPEND KMTEST_DRV_SOURCE
     hdaudbus/HdAudBusInterface.c
     ndis/NdisIfProvider.c
     ndis/NdisRwLock.c
+    ndis/NdisWdiStationCaps.c
     ndis/NdisProcessorGroup.c
     ndis/NdisLegacyHelpers.c
     ndis/NdisMiniportCharacteristics.c
@@ -275,6 +277,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_kd/KdSystemDebugControl.c
     ntos_kd/KdUsbNetRules.c
     ksecdd/KsecBcrypt.c
+    ksecdd/KsecBcryptKeyPair.c
     ntos_ke/KeDpcWatchdog.c
     ntos_ke/KeWddmExports.c
     ntos_ke/KeAffinityKM.c

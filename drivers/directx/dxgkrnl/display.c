@@ -37,6 +37,7 @@
 #include "present.h"
 #include "presenttrace.h"
 #include "vidpn.h"
+#include "display_core.h"
 #include "pnp.h"
 #include "d3dkmt.h"
 #include <ntddvdeo.h>
@@ -115,6 +116,8 @@ static ULONG g_DisplayDeviceNumber = 0;
 static BOOLEAN g_DisplayInitialModePending;
 static PVOID g_DisplayWin32kPhysDisp;
 static PVIDEO_WIN32K_CALLOUT g_DisplayWin32kCallout;
+static PEPROCESS g_DisplayWin32kProcess;
+static KSPIN_LOCK g_DisplayWin32kProcessLock;
 static volatile LONG g_PresentShadowTraceCount = 0;
 /* K2: per-exit-reason counters for DxgkpPresentSourceRects; logged at INFO level. */
 static volatile LONG g_PresentExitCount[5];
@@ -242,16 +245,77 @@ DxgkpDisplayRefreshWin32k(VOID)
 {
     VIDEO_WIN32K_CALLBACKS_PARAMS Params;
     PVIDEO_WIN32K_CALLOUT Callout;
+    PEPROCESS Process;
+    KAPC_STATE ApcState;
+    BOOLEAN Attach;
+    KIRQL OldIrql;
 
     PAGED_CODE();
 
-    Callout = (PVIDEO_WIN32K_CALLOUT)InterlockedCompareExchangePointer((PVOID *)&g_DisplayWin32kCallout, NULL, NULL);
+    KeAcquireSpinLock(&g_DisplayWin32kProcessLock, &OldIrql);
+    Callout = g_DisplayWin32kCallout;
+    Process = g_DisplayWin32kProcess;
+    if (Callout != NULL && Process != NULL)
+        ObReferenceObject(Process);
+    KeReleaseSpinLock(&g_DisplayWin32kProcessLock, OldIrql);
     if (Callout == NULL)
         return;
+    ASSERT(Process != NULL);
+
     RtlZeroMemory(&Params, sizeof(Params));
     Params.CalloutType = VideoDxgkMonitorEventCallout;
     Params.PhysDisp = g_DisplayWin32kPhysDisp;
+
+    /* The callout is session-space code: it is only mapped in a process of the session that registered it */
+    Attach = (Process != PsGetCurrentProcess());
+    if (Attach)
+        KeStackAttachProcess((PRKPROCESS)Process, &ApcState);
     Callout(&Params);
+    if (Attach)
+        KeUnstackDetachProcess(&ApcState);
+    ObDereferenceObject(Process);
+}
+
+BOOLEAN
+DxgkDisplayAttachWin32kSession(
+    _Out_ PRKAPC_STATE ApcState,
+    _Out_ PEPROCESS *AttachedProcess)
+{
+    PEPROCESS Process;
+    KIRQL OldIrql;
+
+    PAGED_CODE();
+
+    *AttachedProcess = NULL;
+    KeAcquireSpinLock(&g_DisplayWin32kProcessLock, &OldIrql);
+    Process = g_DisplayWin32kProcess;
+    if (Process != NULL)
+        ObReferenceObject(Process);
+    KeReleaseSpinLock(&g_DisplayWin32kProcessLock, OldIrql);
+    if (Process == NULL)
+        return FALSE;
+    if (Process == PsGetCurrentProcess())
+    {
+        ObDereferenceObject(Process);
+        return TRUE;
+    }
+    KeStackAttachProcess((PRKPROCESS)Process, ApcState);
+    *AttachedProcess = Process;
+    return TRUE;
+}
+
+VOID
+DxgkDisplayDetachWin32kSession(
+    _In_ PRKAPC_STATE ApcState,
+    _In_opt_ PEPROCESS AttachedProcess)
+{
+    PAGED_CODE();
+
+    if (AttachedProcess == NULL)
+        return;
+    ASSERT(PsGetCurrentProcess() == AttachedProcess);
+    KeUnstackDetachProcess(ApcState);
+    ObDereferenceObject(AttachedProcess);
 }
 
 VOID
@@ -3679,7 +3743,10 @@ DxgkpPresentSourceRects(
     {
         /* A full miniport without the private extension (or a DOD without
          * PresentDisplayOnly) retains the generic firmware-GOP fallback. */
-        for (i = 0; i < DirtyCount; i++)
+        for (i = 0;
+             DxgkPostDisplayCoreFirmwareScanout(Adapter->MiniportContext->IsDisplayOnlyDriver, SharedSurface.VidPnCommitted) &&
+             i < DirtyCount;
+             i++)
         {
             Status = DxgkpBlitShadowToGop(Adapter,
                                           &SharedSurface,
@@ -3980,6 +4047,10 @@ DxgkpPointerBridgeSupported(
     if (Adapter == NULL || Adapter->MiniportContext == NULL)
         return FALSE;
 
+    /* The pointer DDIs address a source of the committed VidPN; a detached desktop has none, so it keeps the software cursor */
+    if (!*(volatile BOOLEAN *)&Adapter->VidPnCommitted || *(volatile BOOLEAN *)&Adapter->HeadlessDesktop)
+        return FALSE;
+
     if (Adapter->PointerCapsQueried)
         return Adapter->PointerHwSupported;
 
@@ -4105,7 +4176,7 @@ DxgkpPointerBridgeSetShape(
     ShapeArgs.Flags.Color = 1;
     ShapeArgs.Width = Attributes->Width;
     ShapeArgs.Height = Attributes->Height;
-    ShapeArgs.Pitch = Attributes->WidthInBytes;
+    ShapeArgs.Pitch = DxgkDisplayCorePackPointerRows(Attributes->Pixels, Attributes->Width, Attributes->Height, Attributes->WidthInBytes);
     ShapeArgs.VidPnSourceId = 0;
     ShapeArgs.pPixels = Attributes->Pixels;
     /* The display driver already offset Column/Row by the hot spot. */
@@ -4187,8 +4258,19 @@ DxgkpDisplayDispatch(
                 Callbacks->DualviewFlags = 0;
                 if (Irp->RequestorMode == KernelMode && Callbacks->Callout != NULL)
                 {
+                    PEPROCESS Process = IoGetCurrentProcess();
+                    PEPROCESS Previous;
+                    KIRQL OldIrql;
+
+                    ObReferenceObject(Process);
+                    KeAcquireSpinLock(&g_DisplayWin32kProcessLock, &OldIrql);
                     g_DisplayWin32kPhysDisp = Callbacks->PhysDisp;
+                    Previous = g_DisplayWin32kProcess;
+                    g_DisplayWin32kProcess = Process;
                     InterlockedExchangePointer((PVOID *)&g_DisplayWin32kCallout, (PVOID)Callbacks->Callout);
+                    KeReleaseSpinLock(&g_DisplayWin32kProcessLock, OldIrql);
+                    if (Previous != NULL)
+                        ObDereferenceObject(Previous);
                 }
                 BytesReturned = sizeof(VIDEO_WIN32K_CALLBACKS);
                 Status = STATUS_SUCCESS;

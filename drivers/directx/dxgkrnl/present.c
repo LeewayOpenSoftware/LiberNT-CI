@@ -52,6 +52,7 @@
 #include "vidsch.h"
 #include "present.h"
 #include "present_queue_core.h"
+#include "display_core.h"
 #include <reactos/dwmframe.h>
 
 #define DXGK_PRESENT_EXEC_LOG_LIMIT  32
@@ -1620,7 +1621,8 @@ DxgkpProgramSharedPrimaryScanout(
     _In_ D3DDDI_FLIPINTERVAL_TYPE FlipInterval,
     _In_opt_ PDXGKRNL_DEVICE Device,
     _In_ ULONG_PTR Window,
-    _In_ ULONG64 CompositorGeneration)
+    _In_ ULONG64 CompositorGeneration,
+    _In_ BOOLEAN RetiredFlip)
 {
     PDXGKARG_SETVIDPNSOURCEADDRESS SetSourceAddress = NULL;
     LARGE_INTEGER PrimaryAddress;
@@ -1628,6 +1630,7 @@ DxgkpProgramSharedPrimaryScanout(
     NTSTATUS Status;
     BOOLEAN KmdTransaction = FALSE;
     BOOLEAN Program;
+    BOOLEAN ProgramSource;
 
     if (Adapter == NULL ||
         Allocation == NULL ||
@@ -1691,6 +1694,16 @@ DxgkpProgramSharedPrimaryScanout(
     if (Status != STATUS_NOT_SUPPORTED || DXGK_CB_FULL(Adapter, DxgkDdiSetVidPnSourceAddress) == NULL)
         goto Cleanup;
 
+    ProgramSource = !RetiredFlip ||
+                    DxgkPresentCoreRetiredFlipProgramsSource((BOOLEAN)Adapter->FlipCaps.FlipOnVSyncMmIo,
+                                                             (BOOLEAN)Adapter->FlipCaps.FlipImmediateMmIo,
+                                                             Adapter->DriverCapsWddmVersion);
+    if (!ProgramSource)
+    {
+        Status = STATUS_SUCCESS;
+        goto MakeVisible;
+    }
+
     SetSourceAddress = ExAllocatePoolWithTag(NonPagedPool, sizeof(*SetSourceAddress), TAG_DXGK_PRESENT);
     if (SetSourceAddress == NULL)
     {
@@ -1750,6 +1763,7 @@ DxgkpProgramSharedPrimaryScanout(
     DptEnd(&g_DxgPresentTrace, Trace, NT_SUCCESS(Status), 0);
     DxgkReleaseKmdCall(Adapter);
 
+MakeVisible:
     if (NT_SUCCESS(Status) &&
         DXGK_CB(Adapter, DxgkDdiSetVidPnSourceVisibility) != NULL)
     {
@@ -2465,6 +2479,14 @@ DxgkpCaptureDesktop(
         Entry.SourceAllocation = NULL;
         Entry.SourceOpenBindingReference = PrimaryBinding;
         Entry.SourceOpenBindingHandle = PrimaryBindingHandle;
+        if (Status == STATUS_INVALID_PARAMETER)
+        {
+            /* FIXME: some miniports refuse a copy of the compositor's flip buffer into the capture surface; the compositor serves screen reads instead */
+            DXGKRNL_WARN("DxgkpCaptureDesktop: the miniport refused the scanout copy; screen reads go to the compositor\n");
+            Adapter->CddCaptureUnsupported = TRUE;
+            Capture->Flags = DXGK_DESKTOP_CAPTURE_NEEDS_COMPOSITOR;
+            Status = STATUS_SUCCESS;
+        }
     }
     else
     {
@@ -2473,7 +2495,7 @@ DxgkpCaptureDesktop(
         Entry.SourceIsSharedPrimary = TRUE;
         Status = DxgkpCaptureBlit(Adapter, &Entry);
     }
-    if (!NT_SUCCESS(Status))
+    if (!NT_SUCCESS(Status) || (Capture->Flags & DXGK_DESKTOP_CAPTURE_NEEDS_COMPOSITOR))
         goto Cleanup;
     RequiredBytes = (ULONGLONG)(Capture->Height - 1) * Cached->Surface.Pitch +
                     (ULONGLONG)Capture->Width * sizeof(ULONG);
@@ -2854,7 +2876,7 @@ DxgkpRefreshSharedPrimaryScanout(
     }
 
     Status = DxgkpProgramSharedPrimaryScanout(Adapter, Allocation, Entry->SharedSurface.VidPnSourceId, Entry->hSource, Entry->PresentId, Entry->FlipInterval,
-                 Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration);
+                 Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration, FALSE);
 
     return Status;
 }
@@ -3572,7 +3594,7 @@ DxgkpExecuteCpuPresent(
         if (Entry->DestinationIsSharedPrimary)
         {
             Status = DxgkpProgramSharedPrimaryScanout(Adapter, DestinationAllocation, Entry->SharedSurface.VidPnSourceId, Entry->hDestination, Entry->PresentId, Entry->FlipInterval,
-                         Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration);
+                         Entry->CddPresent ? NULL : Entry->Device, Entry->Window, Entry->CompositorGeneration, FALSE);
             if (!NT_SUCCESS(Status))
             {
                 DXGKRNL_WARN("DxgkpExecuteCpuPresent: shared-primary scanout "
@@ -3838,6 +3860,7 @@ DxgkpRenderKmBitBlt(
     Render.DmaBufferSegmentId = PresentArgs->DmaBufferSegmentId;
     Render.DmaBufferPhysicalAddress = PresentArgs->DmaBufferPhysicalAddress;
 
+    /* FIXME: a virtual-addressing context takes GDI commands through DxgkDdiRenderGdi, not DxgkDdiRenderKm */
     Status = DXGK_CB_FULL(Adapter, DxgkDdiRenderKm)(MiniportContext, &Render);
 
     PresentArgs->pDmaBuffer = Render.pDmaBuffer;
@@ -5610,6 +5633,7 @@ DxgkpBuildMmioFlip(
 
     Status = DxgkVidPnAcquireScanoutLease(Adapter, Entry->Device, Entry->VidPnSourceId,
                  Entry->Window, Entry->CompositorGeneration, &ScanoutLease);
+    Status = DxgkFlipCoreScanoutStatus(Status);
     if (!NT_SUCCESS(Status))
         return Status;
     ASSERT(ScanoutLease);
@@ -5748,6 +5772,7 @@ DxgkpExecuteMmioFlip(
     ASSERT(Queue->MmioPendingAllocation == NULL);
     Status = DxgkVidPnAcquireScanoutLease(Adapter, Entry->Device, Entry->VidPnSourceId,
                  Entry->Window, Entry->CompositorGeneration, &ScanoutLease);
+    Status = DxgkFlipCoreScanoutStatus(Status);
     if (!NT_SUCCESS(Status))
         goto Cleanup;
     ASSERT(ScanoutLease);
@@ -6630,6 +6655,8 @@ DxgkpProcessPresentQueueLocked(_In_ PVOID Context)
     NTSTATUS Status;
 
     /* Admission may have closed while this caller waited for the executor. */
+
+    ASSERT(Context != NULL);
     if (InterlockedCompareExchange(&Adapter->SubmitDmaStopping, 0, 0) != 0)
         return STATUS_DELETE_PENDING;
 
@@ -6781,8 +6808,6 @@ DxgkpVsyncQueueIdle(
 {
     BOOLEAN Idle;
     KIRQL OldIrql;
-
-    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
     KeAcquireSpinLock(&Queue->QueueLock, &OldIrql);
     Idle = Queue->Count == 0;
     KeReleaseSpinLock(&Queue->QueueLock, OldIrql);
