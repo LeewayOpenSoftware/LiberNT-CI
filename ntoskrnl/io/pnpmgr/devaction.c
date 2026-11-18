@@ -136,9 +136,12 @@ VOID
 PipUnlinkRemovedChildren(
     _In_ PDEVICE_NODE Node);
 
-/* A child that is already removed stays linked to its parent while someone
- * holds a reference to its device object. Its stack got its last PnP request
- * and may be deleted: the removal of the parent must send it nothing more. */
+static
+PDEVICE_NODE
+PipSkipRemovedChildren(
+    _In_opt_ PDEVICE_NODE Node);
+
+/* A removed child stays linked while referenced; its stack must get no further PnP request */
 static
 BOOLEAN
 PipIsRemovedChild(
@@ -2476,10 +2479,10 @@ IopSendRemoveChildDevices(PDEVICE_NODE ParentDeviceNode)
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-    ChildDeviceNode = ParentDeviceNode->Child;
+    ChildDeviceNode = PipSkipRemovedChildren(ParentDeviceNode->Child);
     while (ChildDeviceNode != NULL)
     {
-        NextDeviceNode = ChildDeviceNode->Sibling;
+        NextDeviceNode = PipSkipRemovedChildren(ChildDeviceNode->Sibling);
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
         /* The PDO may outlive its removed parent while references drain. */
@@ -2592,10 +2595,7 @@ IopQueryRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
     return Status;
 }
 
-/* With IopDeviceTreeLock held: the first child from Node on that is not
- * already removed. A removed child may be unlinked and freed by whoever drops
- * its last reference as soon as the lock is released, so the walk below never
- * keeps one across a release; the others are only removed by this worker. */
+/* Caller holds IopDeviceTreeLock; a removed child may be freed once the lock is dropped */
 static
 PDEVICE_NODE
 PipSkipRemovedChildren(
@@ -2759,8 +2759,7 @@ IopPrepareDeviceForRemoval(IN PDEVICE_OBJECT DeviceObject, BOOLEAN Force)
     if (DeviceRelations)
         IopSendRemoveDeviceRelations(DeviceRelations);
 
-    /* The removal goes ahead: the children that are already removed are not
-     * part of it and must not stay linked to this node */
+    /* Removed children are not part of this removal and must not stay linked to a freed node */
     PipUnlinkRemovedChildren(DeviceNode);
 
     if (Force)
@@ -2781,10 +2780,10 @@ PiSurpriseRemoveChildDevices(PDEVICE_NODE ParentDeviceNode)
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-    ChildDeviceNode = ParentDeviceNode->Child;
+    ChildDeviceNode = PipSkipRemovedChildren(ParentDeviceNode->Child);
     while (ChildDeviceNode != NULL)
     {
-        NextDeviceNode = ChildDeviceNode->Sibling;
+        NextDeviceNode = PipSkipRemovedChildren(ChildDeviceNode->Sibling);
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
         if (PipIsRemovedChild(ChildDeviceNode))
@@ -3015,13 +3014,7 @@ PipSetRemovalVeto(
     return STATUS_PLUGPLAY_QUERY_VETOED;
 }
 
-/* Takes the children that are already removed off a node that is about to be
- * removed. They are not part of the removal, so nothing else unlinks them, and
- * a child must not stay linked to a parent node that is freed. The node of a
- * removed child is freed only after it was unlinked, with the tree resource
- * held exclusive; so with that resource held here every child still on the
- * list exists, also one whose device object is already being deleted. When
- * such a child unlinks itself later, it finds that it has no parent. */
+/* Caller must not hold IopDeviceTreeLock; takes the resource exclusive so no listed child is freed meanwhile */
 static
 VOID
 PipUnlinkRemovedChildren(
@@ -3093,8 +3086,7 @@ PipQueryAndRemoveDevice(
         for (Child = Node->Child; Child; Child = Child->Sibling)
         {
             Status = PipAddRemovalDevice(&Devices, Child->PhysicalDeviceObject);
-            /* A child that is already removed needs no removal and must not
-             * stop the removal of its parent */
+            /* An already removed child must not veto the removal of its parent */
             if (Status == STATUS_NO_SUCH_DEVICE)
                 Status = STATUS_SUCCESS;
             if (!NT_SUCCESS(Status))
