@@ -126,7 +126,7 @@ static void test_format_arguments(EVT_HANDLE publisher, EVT_HANDLE event)
 
 static void test_formats(EVT_HANDLE publisher, EVT_HANDLE event, const WCHAR *provider)
 {
-    WCHAR *text, small[2];
+    WCHAR *text, tiny[2];
     DWORD used, error, level_used;
     BOOL ret;
 
@@ -139,7 +139,7 @@ static void test_formats(EVT_HANDLE publisher, EVT_HANDLE event, const WCHAR *pr
         ok(used == (DWORD)lstrlenW(text) + 2, "used %lu for length %d\n", used, lstrlenW(text));
         ok(text[0] != 0, "empty message\n");
         SetLastError(0xdeadbeef);
-        ret = EvtFormatMessage(publisher, event, 0, 0, NULL, EvtFormatMessageEvent, 1, small, &level_used);
+        ret = EvtFormatMessage(publisher, event, 0, 0, NULL, EvtFormatMessageEvent, 1, tiny, &level_used);
         ok(!ret && GetLastError() == ERROR_INSUFFICIENT_BUFFER, "one char: %d, error %lu\n", ret, GetLastError());
         ok(level_used == used, "one char: used %lu, expected %lu\n", level_used, used);
         HeapFree(GetProcessHeap(), 0, text);
