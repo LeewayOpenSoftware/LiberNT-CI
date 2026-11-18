@@ -228,7 +228,7 @@ void func_DnsQueryEx(void)
     Request.QueryName = L"localhost";
     Request.QueryType = DNS_TYPE_AAAA;
     Request.pQueryCompletionCallback = QueryComplete;
-    Request.QueryContext = QUERY_CONTEXT_TAG;
+    Request.pQueryContext = QUERY_CONTEXT_TAG;
     ZeroMemory(&Cancel, sizeof(Cancel));
     ZeroMemory(&Results, sizeof(Results));
     Status = DnsQueryEx(&Request, &Results, &Cancel);

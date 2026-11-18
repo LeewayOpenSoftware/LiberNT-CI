@@ -418,7 +418,7 @@ DnsQueryExClaimSlot(_In_ PDNS_QUERY_CANCEL Slot,
 
     AcquireSRWLockExclusive(&DnsQueryExSlotLock);
     RtlCopyMemory(&Op, Slot->Reserved, sizeof(Op));
-    if (Op != Expected)
+    if (Op != NULL && Expected != NULL && Op != Expected)
         Op = NULL;
     else
         RtlZeroMemory(Slot->Reserved, sizeof(Op));
