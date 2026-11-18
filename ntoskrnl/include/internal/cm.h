@@ -985,6 +985,7 @@ CmpInitializeHive(
     _In_opt_ PVOID HiveData,
     _In_ HANDLE Primary,
     _In_ HANDLE Log,
+    _In_opt_ HANDLE Log2,
     _In_ HANDLE External,
     _In_ HANDLE Alternate,
     _In_opt_ PCUNICODE_STRING FileName,
@@ -1026,6 +1027,15 @@ CmpOpenHiveFiles(
     IN BOOLEAN MarkAsSystemHive,
     IN BOOLEAN NoBuffering,
     OUT PULONG ClusterSize OPTIONAL
+);
+
+NTSTATUS
+NTAPI
+CmpOpenHiveLog2(
+    IN POBJECT_ATTRIBUTES Base,
+    IN PCUNICODE_STRING BaseName,
+    IN BOOLEAN NewHive,
+    OUT PHANDLE Log2
 );
 
 VOID
