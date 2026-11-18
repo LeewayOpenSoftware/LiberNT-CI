@@ -302,6 +302,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfio.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfirql.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfpool.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/whea/whea.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwlog.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwprov.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwreg.c
@@ -387,6 +388,7 @@ elseif(ARCH STREQUAL "amd64")
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/stubs.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/traphandler.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/usercall.c
+        ${REACTOS_SOURCE_DIR}/ntoskrnl/whea/amd64/mca.c
         ${REACTOS_SOURCE_DIR}/ntoskrnl/ke/amd64/xstate.c)
 elseif(ARCH STREQUAL "arm")
     list(APPEND ASM_SOURCE

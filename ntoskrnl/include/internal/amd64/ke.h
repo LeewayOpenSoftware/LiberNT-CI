@@ -493,6 +493,7 @@ VOID KiPageFault(VOID);
 VOID KiFloatingErrorFault(VOID);
 VOID KiAlignmentFault(VOID);
 VOID KiMcheckAbort(VOID);
+VOID NTAPI WheaMcaInitialize(VOID);
 VOID KiXmmException(VOID);
 VOID KiApcInterrupt(VOID);
 VOID KiRaiseSecurityCheckFailure(VOID);
