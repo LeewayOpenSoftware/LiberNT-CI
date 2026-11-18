@@ -127,7 +127,6 @@ list(APPEND SOURCE
     SetWindowPlacement.c
     ShellHookShowActive.c
     SharedInputLanguage.c
-    SetWindowPosOwnerTree.c
     SetWindowPosZOrder.c
     WindowDisplayAffinity.c
     WindowRegionFrame.c
