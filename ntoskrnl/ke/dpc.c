@@ -43,6 +43,13 @@ ULONG KiAdjustDpcThreshold = 20;
 ULONG KiIdealDpcRate = 20;
 ULONG KeThreadDpcEnable = TRUE;
 FAST_MUTEX KiGenericCallDpcMutex;
+
+/* KeGenericCallDpc rendezvous flags, one per processor index of all groups.
+ * Owned by the holder of KiGenericCallDpcMutex: every target is done with
+ * them before the barrier reaches zero (KeSignalCallDpcSynchronize comes
+ * before KeSignalCallDpcDone), so the next caller may reuse them. Static
+ * rather than on the stack because the array grows with the processor cap. */
+static LONG KiGenericCallDpcFlags[KI_MAXIMUM_PROCESSORS];
 KDPC KiTimerExpireDpc;
 ULONG KiTimeLimitIsrMicroseconds;
 ULONG KiDPCTimeout = 110;
@@ -1368,22 +1375,22 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     KIRQL OldIrql;
     KI_GENERIC_DPC_BARRIER Sync;
     PKPRCB CurrentPrcb;
-    LONG Flags[KI_MAXIMUM_PROCESSORS];
     ULONG Count, Index;
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 
-    Count = KeNumberProcessors;
-    ASSERT(Count != 0 && Count <= RTL_NUMBER_OF(Flags));
+    ExAcquireFastMutex(&KiGenericCallDpcMutex);
+
+    /* Every processor of every group: indexes are contiguous */
+    Count = KiNumberProcessors;
+    ASSERT(Count != 0 && Count <= RTL_NUMBER_OF(KiGenericCallDpcFlags));
     for (Index = 0; Index < Count; Index++)
-        Flags[Index] = 0;
+        KiGenericCallDpcFlags[Index] = 0;
 
     Barrier = Count;
     Sync.Reverse.Barrier = Count;
     Sync.Reverse.TotalProcessors = Count;
     Sync.PassedCount = 0;
-    Sync.Flags = Flags;
-
-    ExAcquireFastMutex(&KiGenericCallDpcMutex);
+    Sync.Flags = KiGenericCallDpcFlags;
 
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
     CurrentPrcb = KeGetCurrentPrcb();
@@ -1444,7 +1451,8 @@ KeSignalCallDpcSynchronize(IN PVOID SystemArgument2)
     if (Total <= 1)
         return TRUE;
 
-    Index = KeGetCurrentProcessorNumber();
+    /* The full index: KeGetCurrentProcessorNumber is a UCHAR, the low byte of it */
+    Index = KeGetCurrentPrcb()->Number;
     ASSERT(Index < Total);
     ASSERT((Sync->Flags[Index] & 0x7fffffffL) == 0);
 
