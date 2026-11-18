@@ -132,6 +132,25 @@ VOID
 PiSurpriseRemoveChildDevices(PDEVICE_NODE ParentDeviceNode);
 
 static
+VOID
+PipUnlinkRemovedChildren(
+    _In_ PDEVICE_NODE Node);
+
+static
+PDEVICE_NODE
+PipSkipRemovedChildren(
+    _In_opt_ PDEVICE_NODE Node);
+
+/* A removed child stays linked while referenced; its stack must get no further PnP request */
+static
+BOOLEAN
+PipIsRemovedChild(
+    _In_ PDEVICE_NODE Node)
+{
+    return Node->State == DeviceNodeRemoved || Node->State == DeviceNodeDeleted;
+}
+
+static
 NTSTATUS
 IopSetServiceEnumData(
     _In_ PDEVICE_NODE DeviceNode,
@@ -2460,15 +2479,16 @@ IopSendRemoveChildDevices(PDEVICE_NODE ParentDeviceNode)
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-    ChildDeviceNode = ParentDeviceNode->Child;
+    ChildDeviceNode = PipSkipRemovedChildren(ParentDeviceNode->Child);
     while (ChildDeviceNode != NULL)
     {
-        NextDeviceNode = ChildDeviceNode->Sibling;
+        NextDeviceNode = PipSkipRemovedChildren(ChildDeviceNode->Sibling);
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
         /* The PDO may outlive its removed parent while references drain. */
         PiUnlinkDevNode(ChildDeviceNode);
-        IopSendRemoveDevice(ChildDeviceNode->PhysicalDeviceObject);
+        if (!PipIsRemovedChild(ChildDeviceNode))
+            IopSendRemoveDevice(ChildDeviceNode->PhysicalDeviceObject);
 
         ChildDeviceNode = NextDeviceNode;
 
@@ -2575,20 +2595,31 @@ IopQueryRemoveDevice(IN PDEVICE_OBJECT DeviceObject)
     return Status;
 }
 
+/* Caller holds IopDeviceTreeLock; a removed child may be freed once the lock is dropped */
+static
+PDEVICE_NODE
+PipSkipRemovedChildren(
+    _In_opt_ PDEVICE_NODE Node)
+{
+    while (Node != NULL && PipIsRemovedChild(Node))
+        Node = Node->Sibling;
+    return Node;
+}
+
 static
 NTSTATUS
 IopQueryRemoveChildDevices(PDEVICE_NODE ParentDeviceNode, BOOLEAN Force)
 {
-    PDEVICE_NODE ChildDeviceNode, NextDeviceNode, FailedRemoveDevice;
+    PDEVICE_NODE ChildDeviceNode, FailedRemoveDevice;
     NTSTATUS Status;
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-    ChildDeviceNode = ParentDeviceNode->Child;
+    ChildDeviceNode = PipSkipRemovedChildren(ParentDeviceNode->Child);
     while (ChildDeviceNode != NULL)
     {
-        NextDeviceNode = ChildDeviceNode->Sibling;
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+
         PiSetDevNodeState(ChildDeviceNode, DeviceNodeAwaitingQueuedRemoval);
 
         Status = IopPrepareDeviceForRemoval(ChildDeviceNode->PhysicalDeviceObject, Force);
@@ -2598,8 +2629,9 @@ IopQueryRemoveChildDevices(PDEVICE_NODE ParentDeviceNode, BOOLEAN Force)
             goto cleanup;
         }
 
+        /* The child is not removed, so it is still there: step on from it */
         KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-        ChildDeviceNode = NextDeviceNode;
+        ChildDeviceNode = PipSkipRemovedChildren(ChildDeviceNode->Sibling);
     }
     KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
@@ -2607,10 +2639,9 @@ IopQueryRemoveChildDevices(PDEVICE_NODE ParentDeviceNode, BOOLEAN Force)
 
 cleanup:
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-    ChildDeviceNode = ParentDeviceNode->Child;
+    ChildDeviceNode = PipSkipRemovedChildren(ParentDeviceNode->Child);
     while (ChildDeviceNode != NULL)
     {
-        NextDeviceNode = ChildDeviceNode->Sibling;
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
         IopCancelPrepareDeviceForRemoval(ChildDeviceNode->PhysicalDeviceObject);
@@ -2620,9 +2651,8 @@ cleanup:
         if (ChildDeviceNode == FailedRemoveDevice)
             return Status;
 
-        ChildDeviceNode = NextDeviceNode;
-
         KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+        ChildDeviceNode = PipSkipRemovedChildren(ChildDeviceNode->Sibling);
     }
     KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
 
@@ -2728,6 +2758,10 @@ IopPrepareDeviceForRemoval(IN PDEVICE_OBJECT DeviceObject, BOOLEAN Force)
 
     if (DeviceRelations)
         IopSendRemoveDeviceRelations(DeviceRelations);
+
+    /* Removed children are not part of this removal and must not stay linked to a freed node */
+    PipUnlinkRemovedChildren(DeviceNode);
+
     if (Force)
         PiSurpriseRemoveChildDevices(DeviceNode);
     else
@@ -2746,11 +2780,18 @@ PiSurpriseRemoveChildDevices(PDEVICE_NODE ParentDeviceNode)
     KIRQL OldIrql;
 
     KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
-    ChildDeviceNode = ParentDeviceNode->Child;
+    ChildDeviceNode = PipSkipRemovedChildren(ParentDeviceNode->Child);
     while (ChildDeviceNode != NULL)
     {
-        NextDeviceNode = ChildDeviceNode->Sibling;
+        NextDeviceNode = PipSkipRemovedChildren(ChildDeviceNode->Sibling);
         KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+
+        if (PipIsRemovedChild(ChildDeviceNode))
+        {
+            ChildDeviceNode = NextDeviceNode;
+            KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+            continue;
+        }
 
         IopSendSurpriseRemoval(ChildDeviceNode->PhysicalDeviceObject);
         IopQueueTargetDeviceEvent(&GUID_DEVICE_SURPRISE_REMOVAL, &ChildDeviceNode->InstancePath);
@@ -2973,6 +3014,46 @@ PipSetRemovalVeto(
     return STATUS_PLUGPLAY_QUERY_VETOED;
 }
 
+/* Caller must not hold IopDeviceTreeLock; takes the resource exclusive so no listed child is freed meanwhile */
+static
+VOID
+PipUnlinkRemovedChildren(
+    _In_ PDEVICE_NODE Node)
+{
+    PDEVICE_NODE Child, Next, Previous = NULL;
+    KIRQL OldIrql;
+
+    KeEnterCriticalRegion();
+    ExAcquireResourceExclusiveLite(&IopDeviceTreeResource, TRUE);
+    KeAcquireSpinLock(&IopDeviceTreeLock, &OldIrql);
+
+    for (Child = Node->Child; Child != NULL; Child = Next)
+    {
+        Next = Child->Sibling;
+
+        if (!PipIsRemovedChild(Child))
+        {
+            Previous = Child;
+            continue;
+        }
+
+        if (Previous != NULL)
+            Previous->Sibling = Next;
+        else
+            Node->Child = Next;
+
+        if (Node->LastChild == Child)
+            Node->LastChild = Previous;
+
+        Child->Parent = NULL;
+        Child->Sibling = NULL;
+    }
+
+    KeReleaseSpinLock(&IopDeviceTreeLock, OldIrql);
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
+}
+
 static
 NTSTATUS
 PipQueryAndRemoveDevice(
@@ -3005,6 +3086,9 @@ PipQueryAndRemoveDevice(
         for (Child = Node->Child; Child; Child = Child->Sibling)
         {
             Status = PipAddRemovalDevice(&Devices, Child->PhysicalDeviceObject);
+            /* An already removed child must not veto the removal of its parent */
+            if (Status == STATUS_NO_SUCH_DEVICE)
+                Status = STATUS_SUCCESS;
             if (!NT_SUCCESS(Status))
                 break;
         }
@@ -3028,7 +3112,11 @@ PipQueryAndRemoveDevice(
         for (i = 0; i < Relations->Count; ++i)
         {
             if (NT_SUCCESS(Status))
+            {
                 Status = PipAddRemovalDevice(&Devices, Relations->Objects[i]);
+                if (Status == STATUS_NO_SUCH_DEVICE)
+                    Status = STATUS_SUCCESS;
+            }
             ObDereferenceObject(Relations->Objects[i]);
         }
         ExFreePool(Relations);
@@ -3089,6 +3177,7 @@ PipQueryAndRemoveDevice(
         PiSetDevNodeState(Node, DeviceNodeAwaitingQueuedRemoval);
         if (Node->Parent && PipRemovalListContains(&Devices, Node->Parent->PhysicalDeviceObject))
             PiUnlinkDevNode(Node);
+        PipUnlinkRemovedChildren(Node);
         IopSendRemoveDevice(Entry->DeviceObject);
     }
     Status = STATUS_SUCCESS;
@@ -3141,10 +3230,16 @@ PiEnumerateDevice(
     }
 
     // mark children nodes as non-present (those not returned in DR request will be removed)
+    // a removed child is unlinked and freed by whoever drops its last reference;
+    // the unlink takes the tree resource exclusive, so the walk holds it shared
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
     for (PDEVICE_NODE child = DeviceNode->Child; child != NULL; child = child->Sibling)
     {
         PiClearDevNodeFlag(child, DNF_ENUMERATED);
     }
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 
     DPRINT("PiEnumerateDevice: enumerating %u children\n", DeviceRelations->Count);
 
@@ -3201,18 +3296,27 @@ PiEnumerateDevice(
     ExFreePool(DeviceRelations);
 
     // time to remove non-reported devices
+    KeEnterCriticalRegion();
+    ExAcquireResourceSharedLite(&IopDeviceTreeResource, TRUE);
     for (PDEVICE_NODE child = DeviceNode->Child; child != NULL; child = child->Sibling)
     {
         if (!(child->Flags & (DNF_ENUMERATED|DNF_DEVICE_GONE)))
         {
-            if (child->State == DeviceNodeRemoved)
-                ObReferenceObject(child->PhysicalDeviceObject);
+            // a removed child whose device object is already being deleted
+            // cannot be referenced again; it goes away by itself
+            if (child->State == DeviceNodeRemoved &&
+                !ObReferenceObjectSafe(child->PhysicalDeviceObject))
+            {
+                continue;
+            }
 
             // this flag indicates that this is a surprise removal
             PiSetDevNodeFlag(child, DNF_DEVICE_GONE);
             PiSetDevNodeState(child, DeviceNodeAwaitingQueuedRemoval);
         }
     }
+    ExReleaseResourceLite(&IopDeviceTreeResource);
+    KeLeaveCriticalRegion();
 
     PiSetDevNodeState(DeviceNode, DeviceNodeStarted);
     return STATUS_SUCCESS;
