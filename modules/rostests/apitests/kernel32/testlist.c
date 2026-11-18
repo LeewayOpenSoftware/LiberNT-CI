@@ -29,6 +29,8 @@ extern void func_ConsoleFontInfo(void);
 extern void func_ConsoleInputSignal(void);
 extern void func_ConsoleRequestStress(void);
 extern void func_ConsoleDbcsCells(void);
+extern void func_ConsoleEchoWide(void);
+extern void func_ConsoleInsertMode(void);
 extern void func_ConsoleProcessInheritance(void);
 extern void func_ConsoleVirtualTerminal(void);
 extern void func_CopyContext(void);
@@ -139,6 +141,7 @@ extern void func_LocaleNameToLCID(void);
 extern void func_lstrcpynW(void);
 extern void func_lstrlen(void);
 extern void func_MailslotRead(void);
+extern void func_MappedReadAfterWrite(void);
 extern void func_MuiResources(void);
 extern void func_MultiByteToWideChar(void);
 extern void func_NamedPipeClientComputerName(void);
@@ -230,8 +233,11 @@ extern void func_WriteFileBadBuffer(void);
 extern void func_WriteFileSeekBack(void);
 extern void func_XState(void);
 
+extern void func_FileSecurityCache(void);
+
 const struct test winetest_testlist[] =
 {
+    { "FileSecurityCache",                  func_FileSecurityCache },
     { "SetFileAllocationInfo", func_SetFileAllocationInfo },
     { "SetStdHandleEx",              func_SetStdHandleEx },
     { "SecureMemoryCache",           func_SecureMemoryCache },
@@ -262,6 +268,8 @@ const struct test winetest_testlist[] =
     { "ConsoleInputSignal",          func_ConsoleInputSignal },
     { "ConsoleRequestStress",        func_ConsoleRequestStress },
     { "ConsoleDbcsCells",            func_ConsoleDbcsCells },
+    { "ConsoleEchoWide",             func_ConsoleEchoWide },
+    { "ConsoleInsertMode",           func_ConsoleInsertMode },
     { "ConsoleProcessInheritance",   func_ConsoleProcessInheritance },
     { "ConsoleVirtualTerminal",      func_ConsoleVirtualTerminal },
     { "CopyContext",                 func_CopyContext },
@@ -370,6 +378,7 @@ const struct test winetest_testlist[] =
     { "lstrcpynW",                   func_lstrcpynW },
     { "lstrlen",                     func_lstrlen },
     { "MailslotRead",                func_MailslotRead },
+    { "MappedReadAfterWrite",        func_MappedReadAfterWrite },
     { "MuiResources",                func_MuiResources },
     { "MultiByteToWideChar",         func_MultiByteToWideChar },
     { "NamedPipeClientComputerName", func_NamedPipeClientComputerName },

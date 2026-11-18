@@ -3100,6 +3100,352 @@ CmpDeepCopyKey(IN PHHIVE SourceHive,
                                   DestKeyCell);
 }
 
+static
+BOOLEAN
+CmpRestoreTargetIsDeletable(
+    _In_ PHHIVE Hive,
+    _In_ HCELL_INDEX Cell,
+    _In_ ULONG Depth)
+{
+    PCM_KEY_NODE Node;
+    HCELL_INDEX SubKey;
+    ULONG Index, Count;
+    BOOLEAN Result = TRUE;
+
+    if (Depth > 512)
+        return FALSE;
+
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+    if (!Node)
+        return FALSE;
+
+    Count = Node->SubKeyCounts[Stable] + Node->SubKeyCounts[Volatile];
+    for (Index = 0; Index < Count && Result; Index++)
+    {
+        SubKey = CmpFindSubKeyByNumber(Hive, Node, Index);
+        if (SubKey == HCELL_NIL)
+        {
+            Result = FALSE;
+            break;
+        }
+
+        {
+            PCM_KEY_NODE SubNode = (PCM_KEY_NODE)HvGetCell(Hive, SubKey);
+            if (!SubNode)
+            {
+                Result = FALSE;
+                break;
+            }
+            /* A hive link below the target belongs to another hive and must survive */
+            Result = !(SubNode->Flags & (KEY_HIVE_EXIT | KEY_NO_DELETE));
+            HvReleaseCell(Hive, SubKey);
+        }
+
+        if (Result)
+            Result = CmpRestoreTargetIsDeletable(Hive, SubKey, Depth + 1);
+    }
+
+    HvReleaseCell(Hive, Cell);
+    return Result;
+}
+
+static
+NTSTATUS
+CmpRestoreDeleteSubTree(
+    _In_ PHHIVE Hive,
+    _In_ HCELL_INDEX Cell)
+{
+    PCM_KEY_NODE Node;
+    HCELL_INDEX SubKey;
+    ULONG Count;
+    NTSTATUS Status;
+
+    for (;;)
+    {
+        Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+        if (!Node)
+            return STATUS_INSUFFICIENT_RESOURCES;
+
+        Count = Node->SubKeyCounts[Stable] + Node->SubKeyCounts[Volatile];
+        if (!Count)
+        {
+            HvReleaseCell(Hive, Cell);
+            break;
+        }
+
+        /* Removing the last entry of an index moves no other entry */
+        SubKey = CmpFindSubKeyByNumber(Hive, Node, Count - 1);
+        HvReleaseCell(Hive, Cell);
+        if (SubKey == HCELL_NIL)
+            return STATUS_REGISTRY_CORRUPT;
+
+        Status = CmpRestoreDeleteSubTree(Hive, SubKey);
+        if (!NT_SUCCESS(Status))
+            return Status;
+
+        Status = CmpFreeKeyByCell(Hive, SubKey, TRUE);
+        if (!NT_SUCCESS(Status))
+            return Status;
+    }
+
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+CmpRestoreReadHiveFile(
+    _In_ HANDLE FileHandle,
+    _Out_ PVOID *HiveData)
+{
+    FILE_STANDARD_INFORMATION StandardInfo;
+    IO_STATUS_BLOCK IoStatusBlock;
+    LARGE_INTEGER Offset;
+    PHBASE_BLOCK BaseBlock;
+    ULONG FileSize;
+    NTSTATUS Status;
+
+    *HiveData = NULL;
+
+    Status = ZwQueryInformationFile(FileHandle, &IoStatusBlock, &StandardInfo,
+                                    sizeof(StandardInfo), FileStandardInformation);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (StandardInfo.EndOfFile.QuadPart < 2 * HBLOCK_SIZE ||
+        StandardInfo.EndOfFile.QuadPart > (LONGLONG)HCELL_TYPE_MASK + HBLOCK_SIZE)
+    {
+        return STATUS_REGISTRY_CORRUPT;
+    }
+
+    FileSize = StandardInfo.EndOfFile.LowPart;
+    BaseBlock = ExAllocatePoolWithTag(PagedPool, FileSize, TAG_CM);
+    if (!BaseBlock)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Offset.QuadPart = 0;
+    Status = ZwReadFile(FileHandle, NULL, NULL, NULL, &IoStatusBlock, BaseBlock,
+                        FileSize, &Offset, NULL);
+    if (Status == STATUS_PENDING)
+    {
+        ZwWaitForSingleObject(FileHandle, FALSE, NULL);
+        Status = IoStatusBlock.Status;
+    }
+    if (NT_SUCCESS(Status) && IoStatusBlock.Information != FileSize)
+        Status = STATUS_REGISTRY_CORRUPT;
+
+    /* HINIT_MEMORY reads Length bytes of bins after the base block */
+    if (NT_SUCCESS(Status) &&
+        (BaseBlock->Length > FileSize - HBLOCK_SIZE || BaseBlock->Length % HBLOCK_SIZE))
+    {
+        Status = STATUS_REGISTRY_CORRUPT;
+    }
+
+    if (!NT_SUCCESS(Status))
+    {
+        ExFreePoolWithTag(BaseBlock, TAG_CM);
+        return Status;
+    }
+
+    *HiveData = BaseBlock;
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+CmRestoreKey(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _In_ HANDLE FileHandle,
+    _In_ ULONG Flags)
+{
+    PCMHIVE SourceHive = NULL;
+    PVOID HiveData = NULL;
+    PHHIVE Hive;
+    HCELL_INDEX Cell, SourceRoot, SubKey, NewSubKey, SecurityAnchor;
+    PCM_KEY_NODE Node = NULL, SourceNode = NULL;
+    HSTORAGE_TYPE StorageType;
+    ULONG Index, OpenSubKeys;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    /* A whole volatile hive and a refresh from the hive file are not supported yet */
+    if (Flags & (REG_WHOLE_HIVE_VOLATILE | REG_REFRESH_HIVE))
+        return STATUS_NOT_IMPLEMENTED;
+
+    Status = CmpRestoreReadHiveFile(FileHandle, &HiveData);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    Status = CmpInitializeHive(&SourceHive,
+                               HINIT_MEMORY,
+                               HIVE_VOLATILE,
+                               HFILE_TYPE_PRIMARY,
+                               HiveData,
+                               NULL,
+                               NULL,
+                               NULL,
+                               NULL,
+                               NULL,
+                               NULL,
+                               CM_CHECK_REGISTRY_PURGE_VOLATILES);
+    ExFreePoolWithTag(HiveData, TAG_CM);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    CmpLockRegistryExclusive();
+
+    Hive = Kcb->KeyHive;
+    Cell = Kcb->KeyCell;
+
+    if (Kcb->Delete)
+    {
+        Status = STATUS_KEY_DELETED;
+        goto Quit;
+    }
+
+    /* Keys directly in the master hive hold the links to the other hives */
+    if (Hive == &CmiVolatileHive->Hive || (Kcb->Flags & KEY_HIVE_EXIT))
+    {
+        Status = STATUS_ACCESS_DENIED;
+        goto Quit;
+    }
+
+    if (!CmpRestoreTargetIsDeletable(Hive, Cell, 0))
+    {
+        Status = STATUS_CANNOT_DELETE;
+        goto Quit;
+    }
+
+    /* Without REG_FORCE_RESTORE an open subkey stops the restore; with it the subkey goes away */
+    OpenSubKeys = CmpEnumerateOpenSubKeys(Kcb, TRUE, (Flags & REG_FORCE_RESTORE) != 0);
+    if (OpenSubKeys)
+    {
+        Status = STATUS_CANNOT_DELETE;
+        goto Quit;
+    }
+
+    CmpLockHiveFlusherExclusive((PCMHIVE)Hive);
+
+    StorageType = HvGetCellType(Cell);
+    SourceRoot = SourceHive->Hive.BaseBlock->RootCell;
+    SourceNode = (PCM_KEY_NODE)HvGetCell(&SourceHive->Hive, SourceRoot);
+    if (!SourceNode)
+    {
+        Status = STATUS_REGISTRY_CORRUPT;
+        goto QuitFlusher;
+    }
+
+    if (!CmpMarkKeyDirty(Hive, Cell, FALSE))
+    {
+        Status = STATUS_NO_LOG_SPACE;
+        goto QuitFlusher;
+    }
+
+    Status = CmpRestoreDeleteSubTree(Hive, Cell);
+
+    Node = (PCM_KEY_NODE)HvGetCell(Hive, Cell);
+    if (!Node)
+    {
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto QuitFlusher;
+    }
+
+    if (!NT_SUCCESS(Status))
+        goto QuitUpdate;
+
+    if (Node->ValueList.Count)
+    {
+        PCELL_DATA ListData = HvGetCell(Hive, Node->ValueList.List);
+
+        if (!ListData)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto QuitFlusher;
+        }
+
+        for (Index = 0; Index < Node->ValueList.Count; Index++)
+            CmpFreeValue(Hive, ListData->u.KeyList[Index]);
+
+        HvReleaseCell(Hive, Node->ValueList.List);
+        HvFreeCell(Hive, Node->ValueList.List);
+    }
+    Node->ValueList.Count = 0;
+    Node->ValueList.List = HCELL_NIL;
+    Node->MaxNameLen = Node->MaxClassLen = 0;
+    Node->MaxValueNameLen = Node->MaxValueDataLen = 0;
+
+    Status = CmpCopyKeyValueList(&SourceHive->Hive,
+                                 &SourceNode->ValueList,
+                                 Hive,
+                                 &Node->ValueList,
+                                 StorageType);
+    if (!NT_SUCCESS(Status))
+        goto QuitUpdate;
+
+    Node->MaxValueNameLen = SourceNode->MaxValueNameLen;
+    Node->MaxValueDataLen = SourceNode->MaxValueDataLen;
+
+    SecurityAnchor = Node->Security;
+    for (Index = 0; Index < SourceNode->SubKeyCounts[Stable]; Index++)
+    {
+        SubKey = CmpFindSubKeyByNumber(&SourceHive->Hive, SourceNode, Index);
+        if (SubKey == HCELL_NIL)
+        {
+            Status = STATUS_REGISTRY_CORRUPT;
+            goto QuitUpdate;
+        }
+
+        Status = CmpDeepCopyKeyInternal(&SourceHive->Hive,
+                                        SubKey,
+                                        Hive,
+                                        Cell,
+                                        StorageType,
+                                        &SecurityAnchor,
+                                        &NewSubKey);
+        if (!NT_SUCCESS(Status))
+            goto QuitUpdate;
+
+        if (!CmpAddSubKey(Hive, Cell, NewSubKey))
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+            goto QuitUpdate;
+        }
+    }
+
+    Node->MaxNameLen = SourceNode->MaxNameLen;
+    Node->MaxClassLen = SourceNode->MaxClassLen;
+
+QuitUpdate:
+    /* Whatever was restored, the KCB has to describe the node as it is now */
+    KeQuerySystemTime(&Node->LastWriteTime);
+    CmpCleanUpKcbValueCache(Kcb);
+    CmpCleanUpSubKeyInfo(Kcb);
+    Kcb->ValueCache.Count = Node->ValueList.Count;
+    Kcb->ValueCache.ValueList = Node->ValueList.List;
+    Kcb->KcbLastWriteTime = Node->LastWriteTime;
+    Kcb->KcbMaxNameLen = (USHORT)Node->MaxNameLen;
+    Kcb->KcbMaxValueNameLen = (USHORT)Node->MaxValueNameLen;
+    Kcb->KcbMaxValueDataLen = Node->MaxValueDataLen;
+    CmpReportNotify(Kcb, Hive, Cell, REG_NOTIFY_CHANGE_NAME | REG_NOTIFY_CHANGE_LAST_SET);
+
+    /* A failed restore has already changed the key, so its state is written too */
+    if (!CmpNoWrite && !(Hive->HiveFlags & HIVE_VOLATILE) &&
+        !HvSyncHive(Hive) && NT_SUCCESS(Status))
+    {
+        Status = STATUS_REGISTRY_IO_FAILED;
+    }
+
+QuitFlusher:
+    if (Node) HvReleaseCell(Hive, Cell);
+    if (SourceNode) HvReleaseCell(&SourceHive->Hive, SourceRoot);
+    CmpUnlockHiveFlusher((PCMHIVE)Hive);
+
+Quit:
+    CmpUnlockRegistry();
+    CmpDestroyHive(SourceHive);
+    return Status;
+}
+
 NTSTATUS
 NTAPI
 CmSaveKey(IN PCM_KEY_CONTROL_BLOCK Kcb,

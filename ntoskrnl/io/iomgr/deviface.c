@@ -2200,31 +2200,13 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
 
-    LinkedValue = (Enable ? 1 : 0);
-
-    RtlInitUnicodeString(&KeyName, L"Linked");
-    Status = ZwSetValueKey(ControlHandle,
-                           &KeyName,
-                           0,
-                           REG_DWORD,
-                           &LinkedValue,
-                           sizeof(ULONG));
-    ZwClose(ControlHandle);
-    if (!NT_SUCCESS(Status))
-    {
-        DPRINT1("Failed to write the Linked value\n");
-        return Status;
-    }
-
+    /* Everything that can fail without a change comes first: the Linked value is written last */
     ASSERT(GuidString.Buffer >= LinkNameNoPrefix.Buffer + 1);
     DeviceInstance.Length = (USHORT)((GuidString.Buffer - LinkNameNoPrefix.Buffer - 1) * sizeof(WCHAR));
     if (DeviceInstance.Length == 0)
     {
         DPRINT1("No device instance in link name '%wZ'\n", SymbolicLinkName);
-        /* a disabled interface leaves the enabled list even on a late failure, so a sibling check
-         * does not read it as a live instance and keep the link alive */
-        if (!Enable)
-            IopUntrackEnabledInterface(SymbolicLinkName);
+        ZwClose(ControlHandle);
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
     DeviceInstance.MaximumLength = DeviceInstance.Length;
@@ -2233,11 +2215,8 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
                                                   TAG_IO);
     if (DeviceInstance.Buffer == NULL)
     {
-        /* a disabled interface leaves the enabled list even on a late failure, so a sibling check
-         * does not read it as a live instance and keep the link alive */
-        if (!Enable)
-            IopUntrackEnabledInterface(SymbolicLinkName);
         /* no memory */
+        ZwClose(ControlHandle);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
 
@@ -2259,6 +2238,7 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
     {
         DPRINT1("IopGetDeviceObjectFromDeviceInstance failed to find device object for %wZ\n", &DeviceInstance);
         ExFreePoolWithTag(DeviceInstance.Buffer, TAG_IO);
+        ZwClose(ControlHandle);
         return STATUS_OBJECT_NAME_NOT_FOUND;
     }
 
@@ -2270,16 +2250,31 @@ IoSetDeviceInterfaceState(IN PUNICODE_STRING SymbolicLinkName,
     LinkObjectName.Buffer = ExAllocatePoolWithTag(PagedPool, LinkObjectName.MaximumLength, TAG_IO);
     if (LinkObjectName.Buffer == NULL)
     {
-        /* a disabled interface leaves the enabled list even on a late failure, so a sibling check
-         * does not read it as a live instance and keep the link alive */
-        if (!Enable)
-            IopUntrackEnabledInterface(SymbolicLinkName);
+        ZwClose(ControlHandle);
         if (PhysicalDeviceObject) ObDereferenceObject(PhysicalDeviceObject);
         return STATUS_INSUFFICIENT_RESOURCES;
     }
     RtlCopyMemory(LinkObjectName.Buffer, SymbolicLinkName->Buffer, LinkObjectName.Length);
     LinkObjectName.Buffer[1] = L'?';
     LinkObjectName.Buffer[LinkObjectName.Length / sizeof(WCHAR)] = UNICODE_NULL;
+
+    LinkedValue = (Enable ? 1 : 0);
+
+    RtlInitUnicodeString(&KeyName, L"Linked");
+    Status = ZwSetValueKey(ControlHandle,
+                           &KeyName,
+                           0,
+                           REG_DWORD,
+                           &LinkedValue,
+                           sizeof(ULONG));
+    ZwClose(ControlHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        DPRINT1("Failed to write the Linked value\n");
+        ExFreePoolWithTag(LinkObjectName.Buffer, TAG_IO);
+        if (PhysicalDeviceObject) ObDereferenceObject(PhysicalDeviceObject);
+        return Status;
+    }
 
     /* The enabled list and the shared link change together: a sibling's enable or disable waits */
     KeEnterCriticalRegion();

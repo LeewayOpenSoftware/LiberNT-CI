@@ -76,9 +76,9 @@ static handle_t dpapi_bind(void)
     RPC_STATUS status;
 
     status = RpcStringBindingComposeW(NULL,
-                                      (RPC_WSTR)L"ncacn_np",
+                                      (RPC_WSTR)L"ncalrpc",
                                       NULL,
-                                      (RPC_WSTR)L"\\pipe\\lsarpc",
+                                      (RPC_WSTR)DPAPI_LOCAL_ENDPOINT,
                                       NULL,
                                       &string_binding);
     if (status != RPC_S_OK)

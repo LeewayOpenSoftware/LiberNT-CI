@@ -45,6 +45,7 @@ typedef union {
 #define FALSE 0
 #define APIC_DM_Physical 0
 #define APIC_MT_Fixed 0
+#define APIC_DSH_Destination 0
 #define HV_X64_MSR_ICR 0
 #define APIC_ICR0 0
 #define APIC_ICR1 1

@@ -19,7 +19,7 @@
 #include <stdio.h>
 #include "reg.h"
 
-static const WCHAR *reg_type_to_wchar(DWORD type)
+const WCHAR *reg_type_to_wchar(DWORD type)
 {
     int i, array_size = ARRAY_SIZE(type_rels);
 
@@ -32,7 +32,7 @@ static const WCHAR *reg_type_to_wchar(DWORD type)
     return NULL;
 }
 
-static WCHAR *reg_data_to_wchar(DWORD type, const BYTE *src, DWORD size_bytes)
+WCHAR *reg_data_to_wchar(DWORD type, const BYTE *src, DWORD size_bytes)
 {
     WCHAR *buffer = NULL;
     int i;

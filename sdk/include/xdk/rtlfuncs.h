@@ -1898,6 +1898,45 @@ RtlGetAce(
   _In_ ULONG AceIndex,
   _Outptr_ PVOID *Ace);
 
+NTSYSAPI
+PVOID
+NTAPI
+RtlFindAceByType(
+  _In_ PACL Acl,
+  _In_ UCHAR AceType,
+  _Inout_opt_ PULONG Index);
+
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlCheckTokenCapability(
+  _In_opt_ HANDLE TokenHandle,
+  _In_ PSID CapabilitySidToCheck,
+  _Out_ PBOOLEAN HasCapability);
+
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDeriveCapabilitySidsFromName(
+  _Inout_ PUNICODE_STRING UnicodeString,
+  _Out_ PSID CapabilityGroupSid,
+  _Out_ PSID CapabilitySid);
+
+_Must_inspect_result_
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetPersistedStateLocation(
+  _In_ PCWSTR SourceID,
+  _In_opt_ PCWSTR CustomValue,
+  _In_opt_ PCWSTR DefaultPath,
+  _In_ STATE_LOCATION_TYPE StateLocationType,
+  _Out_ PWCHAR TargetPath,
+  _In_ ULONG BufferLengthIn,
+  _Out_opt_ PULONG BufferLengthOut);
+
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
 NTSTATUS
@@ -1916,6 +1955,16 @@ RtlAddAccessAllowedAceEx(
   _Inout_ PACL Acl,
   _In_ ULONG AceRevision,
   _In_ ULONG AceFlags,
+  _In_ ACCESS_MASK AccessMask,
+  _In_ PSID Sid);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlAddAccessDeniedAce(
+  _Inout_ PACL Acl,
+  _In_ ULONG AceRevision,
   _In_ ACCESS_MASK AccessMask,
   _In_ PSID Sid);
 
@@ -2279,6 +2328,31 @@ RtlDecompressBuffer(
   _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
   _In_ ULONG CompressedBufferSize,
   _Out_ PULONG FinalUncompressedSize);
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressBufferEx(
+  _In_ USHORT CompressionFormat,
+  _Out_writes_bytes_to_(UncompressedBufferSize, *FinalUncompressedSize) PUCHAR UncompressedBuffer,
+  _In_ ULONG UncompressedBufferSize,
+  _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
+  _In_ ULONG CompressedBufferSize,
+  _Out_ PULONG FinalUncompressedSize,
+  _In_ PVOID WorkSpace);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressBufferEx2(
+  _In_ USHORT CompressionFormat,
+  _Out_ PUCHAR UncompressedBuffer,
+  _In_ ULONG UncompressedBufferSize,
+  _In_ PUCHAR CompressedBuffer,
+  _In_ ULONG CompressedBufferSize,
+  _In_ ULONG UncompressedChunkSize,
+  _Out_ PULONG FinalUncompressedSize,
+  _In_opt_ PVOID WorkSpace);
 
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
@@ -2729,6 +2803,34 @@ RtlUnicodeToUTF8N(
   _In_reads_bytes_(UnicodeStringByteCount) PCWCH UnicodeStringSource,
   _In_ ULONG UnicodeStringByteCount);
 
+#define FLUSH_NV_MEMORY_IN_FLAG_NO_DRAIN 0x00000001
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlGetNonVolatileToken(
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _Out_ PVOID *NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFreeNonVolatileToken(
+  _In_ PVOID NvToken);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlFlushNonVolatileMemory(
+  _In_ PVOID NvToken,
+  _In_ PVOID NvBuffer,
+  _In_ SIZE_T Size,
+  _In_ ULONG Flags);
+
 _IRQL_requires_max_(PASSIVE_LEVEL)
 _Must_inspect_result_
 NTSYSAPI
@@ -2821,6 +2923,38 @@ NTSYSAPI
 VOID
 NTAPI
 RtlEndEnumerationHashTable(
+  _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+  _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
+
+_Must_inspect_result_
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlCreateHashTableEx(
+  _Inout_ PRTL_DYNAMIC_HASH_TABLE *HashTable,
+  _In_ ULONG InitialSize,
+  _In_ ULONG Shift,
+  _Reserved_ ULONG Flags);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlInitStrongEnumerationHashTable(
+  _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+  _Out_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
+
+_Must_inspect_result_
+NTSYSAPI
+PRTL_DYNAMIC_HASH_TABLE_ENTRY
+NTAPI
+RtlStronglyEnumerateEntryHashTable(
+  _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+  _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlEndStrongEnumerationHashTable(
   _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
   _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator);
 

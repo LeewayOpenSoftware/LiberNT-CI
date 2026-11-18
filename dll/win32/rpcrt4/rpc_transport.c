@@ -1169,7 +1169,7 @@ static RPC_STATUS rpcrt4_ncalrpc_inquire_auth_client(
     return RPC_S_OK;
 }
 
-/* Both named-pipe transports know their local client's process through the pipe */
+/* Local RPC knows its client's process through the pipe; Windows does not report it for ncacn_np */
 static RPC_STATUS rpcrt4_conn_np_inquire_client_pid(RpcConnection *conn, ULONG *pid)
 {
     RpcConnection_np *connection = (RpcConnection_np *)conn;
@@ -3430,7 +3430,7 @@ static const struct connection_ops conn_protseq_list[] = {
     rpcrt4_conn_np_impersonate_client,
     rpcrt4_conn_np_revert_to_self,
     RPCRT4_default_inquire_auth_client,
-    rpcrt4_conn_np_inquire_client_pid
+    NULL
   },
   { "ncalrpc",
     { EPM_PROTOCOL_NCALRPC, EPM_PROTOCOL_PIPE },

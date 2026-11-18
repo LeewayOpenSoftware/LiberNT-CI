@@ -2239,6 +2239,99 @@ NTAPI
 IoMakeAssociatedIrp(
   _In_ PIRP Irp,
   _In_ CCHAR StackSize);
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+PIRP
+NTAPI
+IoMakeAssociatedIrpEx(
+  _In_ PIRP Irp,
+  _In_ PDEVICE_OBJECT DeviceObject,
+  _In_ CCHAR StackSize);
+
+typedef struct _IO_IRP_EXT_TRACK_OFFSET_HEADER *PIO_IRP_EXT_TRACK_OFFSET_HEADER;
+
+typedef VOID
+(NTAPI *PIO_IRP_EXT_PROCESS_TRACKED_OFFSET_CALLBACK)(
+  _In_ PIO_IRP_EXT_TRACK_OFFSET_HEADER SourceContext,
+  _Inout_ PIO_IRP_EXT_TRACK_OFFSET_HEADER TargetContext,
+  _In_ LONGLONG RelativeOffset);
+
+typedef struct _IO_IRP_EXT_TRACK_OFFSET_HEADER {
+  USHORT Validation;
+  USHORT Flags;
+  PIO_IRP_EXT_PROCESS_TRACKED_OFFSET_CALLBACK TrackedOffsetCallback;
+} IO_IRP_EXT_TRACK_OFFSET_HEADER;
+
+#define IRP_EXT_TRACK_OFFSET_HEADER_VALIDATION_VALUE ((USHORT)(('T' << 8) | 'O'))
+#define EFS_TRACKED_OFFSET_HEADER_FLAG 0x0001
+#define SPACES_TRACKED_OFFSET_HEADER_FLAG 0x0002
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoGetFsTrackOffsetState(
+  _In_ PIRP Irp,
+  _Out_ PIO_IRP_EXT_TRACK_OFFSET_HEADER *RetFsTrackOffsetBlob,
+  _Out_ LONGLONG *RetTrackedOffset);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoSetFsTrackOffsetState(
+  _Inout_ PIRP Irp,
+  _In_ PIO_IRP_EXT_TRACK_OFFSET_HEADER FsTrackOffsetBlob,
+  _In_ LONGLONG TrackedOffset);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoClearFsTrackOffsetState(
+  _Inout_ PIRP Irp);
+
+NTKERNELAPI
+BOOLEAN
+NTAPI
+IoIrpHasFsTrackOffsetExtensionType(
+  _In_ PIRP Irp);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoGetFsZeroingOffset(
+  _In_ PIRP Irp,
+  _Out_ PULONG ZeroingOffset);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoSetFsZeroingOffset(
+  _Inout_ PIRP Irp,
+  _In_ ULONG ZeroingOffset);
+
+typedef struct _IO_FOEXT_SILO_PARAMETERS {
+  ULONG Length;
+  union {
+    struct {
+      ULONG HasHardReference : 1;
+      ULONG SpareFlags : 31;
+    };
+    ULONG Flags;
+  };
+  PESILO SiloContext;
+} IO_FOEXT_SILO_PARAMETERS, *PIO_FOEXT_SILO_PARAMETERS;
+
+_Ret_maybenull_
+NTKERNELAPI
+PESILO
+NTAPI
+IoGetSilo(
+  _In_ PFILE_OBJECT FileObject);
+
+NTKERNELAPI
+PIO_FOEXT_SILO_PARAMETERS
+NTAPI
+IoGetSiloParameters(
+  _In_ PFILE_OBJECT FileObject);
 
 NTKERNELAPI
 NTSTATUS
@@ -3282,6 +3375,22 @@ PTXN_PARAMETER_BLOCK
 NTAPI
 IoGetTransactionParameterBlock(
   _In_ PFILE_OBJECT FileObject);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoDecrementKeepAliveCount(
+  _Inout_ struct _FILE_OBJECT *FileObject,
+  _Inout_ struct _EPROCESS *Process);
+
+_IRQL_requires_max_(APC_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoIncrementKeepAliveCount(
+  _Inout_ struct _FILE_OBJECT *FileObject,
+  _Inout_ struct _EPROCESS *Process);
 
 NTKERNELAPI
 NTSTATUS

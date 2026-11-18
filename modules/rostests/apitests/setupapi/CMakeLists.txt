@@ -10,6 +10,7 @@ list(APPEND SOURCE
     devclass.c
     DeviceDescription.c
     DriverFeatureScore.c
+    DriverPackageSignerScore.c
     DevicePdoName.c
     DevicePowerOnDisable.c
     DeviceRemoveVeto.c

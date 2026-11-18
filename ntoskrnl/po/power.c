@@ -225,6 +225,7 @@ PopValidatePowerRequestReason(
 {
     ULONG i;
 
+    if (Context == NULL) return STATUS_SUCCESS;
     if (Context->Version != POWER_REQUEST_CONTEXT_VERSION) return STATUS_INVALID_PARAMETER;
     if (Context->Flags == DIAGNOSTIC_REASON_NOT_SPECIFIED) return STATUS_SUCCESS;
 
@@ -1376,9 +1377,6 @@ PoRequestPowerIrp(
     return STATUS_PENDING;
 }
 
-/*
- * @implemented
- */
 POWER_STATE
 NTAPI
 PoSetPowerState(IN PDEVICE_OBJECT DeviceObject,
@@ -1816,6 +1814,7 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
             _SEH2_END;
             break;
         }
+
 
         case PowerRequestCreate:
         {

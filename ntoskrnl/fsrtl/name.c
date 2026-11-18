@@ -544,3 +544,58 @@ FsRtlIsNameInExpression(IN PUNICODE_STRING Expression,
 
     return Result;
 }
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+FsRtlIsNameInUnUpcasedExpression(IN PUNICODE_STRING Expression,
+                                 IN PUNICODE_STRING Name,
+                                 IN BOOLEAN IgnoreCase,
+                                 IN PWCH UpcaseTable OPTIONAL)
+{
+    BOOLEAN Result;
+    NTSTATUS Status;
+    UNICODE_STRING IntExpression;
+    UNICODE_STRING IntName;
+
+    if (!IgnoreCase)
+        return FsRtlIsNameInExpressionPrivate(Expression, Name, FALSE, NULL);
+
+    /* The expression arrives unupcased; bring it (and, without a table, the name) to the case the matcher expects */
+    if (UpcaseTable != NULL)
+    {
+        ULONG i;
+
+        /* Upcase under the caller's table: the matcher's fast path asserts the expression was */
+        IntExpression.Length = Expression->Length;
+        IntExpression.MaximumLength = Expression->Length;
+        IntExpression.Buffer = ExAllocatePoolWithTag(PagedPool, Expression->Length, 'LpFs');
+        if (IntExpression.Buffer == NULL)
+            ExRaiseStatus(STATUS_INSUFFICIENT_RESOURCES);
+
+        for (i = 0; i < Expression->Length / sizeof(WCHAR); i++)
+            IntExpression.Buffer[i] = UpcaseTable[Expression->Buffer[i]];
+
+        Result = FsRtlIsNameInExpressionPrivate(&IntExpression, Name, TRUE, UpcaseTable);
+        ExFreePoolWithTag(IntExpression.Buffer, 'LpFs');
+        return Result;
+    }
+
+    Status = RtlUpcaseUnicodeString(&IntExpression, Expression, TRUE);
+    if (!NT_SUCCESS(Status))
+        ExRaiseStatus(Status);
+
+    Status = RtlUpcaseUnicodeString(&IntName, Name, TRUE);
+    if (!NT_SUCCESS(Status))
+    {
+        RtlFreeUnicodeString(&IntExpression);
+        ExRaiseStatus(Status);
+    }
+
+    Result = FsRtlIsNameInExpressionPrivate(&IntExpression, &IntName, FALSE, NULL);
+
+    RtlFreeUnicodeString(&IntName);
+    RtlFreeUnicodeString(&IntExpression);
+    return Result;
+}

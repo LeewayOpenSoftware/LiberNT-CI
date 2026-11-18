@@ -1147,16 +1147,13 @@ static WCHAR *com_security_copy_name(const WCHAR *name)
     return copy;
 }
 
-static WCHAR *com_security_process_user(void)
+WCHAR *com_security_token_user(HANDLE token)
 {
     WCHAR name[256], domain[256], *ret = NULL;
     DWORD name_len = ARRAY_SIZE(name), domain_len = ARRAY_SIZE(domain), size = 0;
     TOKEN_USER *user = NULL;
     SID_NAME_USE use;
-    HANDLE token;
 
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
-        return NULL;
     GetTokenInformation(token, TokenUser, NULL, 0, &size);
     if (size && (user = malloc(size)) && GetTokenInformation(token, TokenUser, user, size, &size) &&
         LookupAccountSidW(NULL, user->User.Sid, name, &name_len, domain, &domain_len, &use) &&
@@ -1167,6 +1164,17 @@ static WCHAR *com_security_process_user(void)
         memcpy(ret + domain_len + 1, name, (name_len + 1) * sizeof(WCHAR));
     }
     free(user);
+    return ret;
+}
+
+static WCHAR *com_security_process_user(void)
+{
+    WCHAR *ret;
+    HANDLE token;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return NULL;
+    ret = com_security_token_user(token);
     CloseHandle(token);
     return ret;
 }
@@ -1283,6 +1291,16 @@ void com_security_init_default(void)
         com_security_store(-1, NULL, RPC_C_AUTHN_LEVEL_DEFAULT, imp_level, EOAC_NONE);
     }
     LeaveCriticalSection(&com_security_cs);
+}
+
+BOOL com_call_security_enabled(void)
+{
+    static LONG enabled = -1;
+
+    if (enabled < 0)
+        InterlockedCompareExchange(&enabled, com_security_registry_level(HKEY_LOCAL_MACHINE, L"Software\\LiberNT\\COM",
+                L"CallSecurity", 0, 1, 0), -1);
+    return enabled == 1;
 }
 
 void com_security_reset(void)

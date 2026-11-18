@@ -24,9 +24,9 @@ SeclBind(VOID)
     handle_t hBinding = NULL;
 
     if (RpcStringBindingComposeW(NULL,
-                                 (RPC_WSTR)L"ncacn_np",
+                                 (RPC_WSTR)L"ncalrpc",
                                  NULL,
-                                 (RPC_WSTR)L"\\pipe\\seclogon",
+                                 (RPC_WSTR)L"seclogon",
                                  NULL,
                                  &StringBinding) != RPC_S_OK)
     {

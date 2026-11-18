@@ -1814,6 +1814,13 @@ CmSaveKey(
 
 NTSTATUS
 NTAPI
+CmRestoreKey(
+    _In_ PCM_KEY_CONTROL_BLOCK Kcb,
+    _In_ HANDLE FileHandle,
+    _In_ ULONG Flags);
+
+NTSTATUS
+NTAPI
 CmSaveMergedKeys(
     IN PCM_KEY_CONTROL_BLOCK HighKcb,
     IN PCM_KEY_CONTROL_BLOCK LowKcb,

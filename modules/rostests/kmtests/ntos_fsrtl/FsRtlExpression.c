@@ -237,6 +237,40 @@ static VOID FsRtlIsDbcsInExpressionTest()
     }
 }
 
+static VOID FsRtlIsNameInUnUpcasedExpressionTest(VOID)
+{
+    static const struct
+    {
+        PCWSTR Expression;
+        PCWSTR Name;
+        BOOLEAN IgnoreCase;
+        BOOLEAN Expected;
+    } Tests[] =
+    {
+        { L"f*.*t", L"FOO.TXT", TRUE, TRUE },
+        { L"f?o.txt", L"FOO.TXT", TRUE, TRUE },
+        { L"f?o.txt", L"FBO.TXT", TRUE, TRUE },
+        { L"*.txt", L"README.md", TRUE, FALSE },
+        { L"*.txt", L"readme.txt", TRUE, TRUE },
+        { L"f*.*t", L"foo.txt", TRUE, TRUE },
+        { L"exact", L"exact", FALSE, TRUE },
+        { L"exact", L"EXACT", FALSE, FALSE },
+    };
+    UNICODE_STRING Expression, Name;
+    BOOLEAN Result;
+    ULONG i;
+
+    for (i = 0; i < ARRAYSIZE(Tests); i++)
+    {
+        RtlInitUnicodeString(&Expression, Tests[i].Expression);
+        RtlInitUnicodeString(&Name, Tests[i].Name);
+        Result = FsRtlIsNameInUnUpcasedExpression(&Expression, &Name, Tests[i].IgnoreCase, NULL);
+        ok(Result == Tests[i].Expected,
+           "FsRtlIsNameInUnUpcasedExpression(%ws,%ws,%u): expected %u, got %u\n",
+           Tests[i].Expression, Tests[i].Name, Tests[i].IgnoreCase, Tests[i].Expected, Result);
+    }
+}
+
 START_TEST(FsRtlExpression)
 {
     if (skip(GetNTVersion() >= _WIN32_WINNT_VISTA,
@@ -244,5 +278,6 @@ START_TEST(FsRtlExpression)
         return;
 
     FsRtlIsNameInExpressionTest();
+    FsRtlIsNameInUnUpcasedExpressionTest();
     FsRtlIsDbcsInExpressionTest();
 }

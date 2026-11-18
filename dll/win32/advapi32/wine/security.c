@@ -2819,7 +2819,7 @@ CallSecondaryLogon(SECL_REQUEST *request, SECL_RESPONSE *response)
     handle_t binding = NULL;
     RPC_STATUS status;
 
-    status = RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL, (RPC_WSTR)L"\\pipe\\seclogon",
+    status = RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL, (RPC_WSTR)L"seclogon",
                                       NULL, (RPC_WSTR *)&string_binding);
     if (status == RPC_S_OK)
     {

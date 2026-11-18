@@ -55,6 +55,7 @@ struct ifproxy
     IRpcChannelBuffer *chan; /* channel to object (CS parent->cs) */
 #ifdef __REACTOS__
     DWORD imp_level;
+    DWORD capabilities;
 #endif
 };
 
@@ -79,6 +80,7 @@ struct proxy_manager
     void *dest_context_data;  /* reserved context value (LOCK) */
 #ifdef __REACTOS__
     DWORD imp_level;
+    DWORD capabilities;
     IRpcOptions IRpcOptions_iface;
     ICallFactory ICallFactory_iface;
     IForegroundTransfer IForegroundTransfer_iface;
@@ -1591,6 +1593,15 @@ static DWORD *proxy_manager_get_imp_level(struct proxy_manager *This, IUnknown *
     if (!(ifproxy = proxy_manager_find_ifproxy_by_iface(This, proxy))) return NULL;
     return &ifproxy->imp_level;
 }
+
+static DWORD *proxy_manager_get_capabilities(struct proxy_manager *This, IUnknown *proxy)
+{
+    struct ifproxy *ifproxy;
+
+    if (proxy == (IUnknown *)&This->IMultiQI_iface) return &This->capabilities;
+    if (!(ifproxy = proxy_manager_find_ifproxy_by_iface(This, proxy))) return NULL;
+    return &ifproxy->capabilities;
+}
 #endif
 
 static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
@@ -1618,6 +1629,7 @@ static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
         *pAuthnSvc = RPC_C_AUTHN_WINNT;
     if (pAuthzSvc)
         *pAuthzSvc = RPC_C_AUTHZ_NONE;
+    /* FIXME: an out-of-process proxy reports the server's user; the OXID resolution does not give it yet */
     if (ppServerPrincName)
         *ppServerPrincName = NULL;
     if (pAuthnLevel)
@@ -1627,7 +1639,16 @@ static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
     if (pAuthInfo)
         *pAuthInfo = NULL;
     if (pCapabilities)
-        *pCapabilities = EOAC_NONE;
+    {
+        DWORD *capabilities = proxy_manager_get_capabilities(This, pProxy);
+
+        if (!com_call_security_enabled())
+            *pCapabilities = EOAC_NONE;
+        else if (capabilities && *capabilities != EOAC_DEFAULT)
+            *pCapabilities = *capabilities;
+        else
+            *pCapabilities = This->oxid_info.dwPid == GetCurrentProcessId() ? EOAC_NONE : EOAC_MUTUAL_AUTH;
+    }
 
     return S_OK;
 #else
@@ -1678,6 +1699,18 @@ static HRESULT WINAPI ProxyCliSec_SetBlanket(IClientSecurity *iface,
         return E_INVALIDARG;
 
     *imp_level = ImpLevel;
+    *proxy_manager_get_capabilities(This, pProxy) = Capabilities;
+    if (pProxy != (IUnknown *)&This->IMultiQI_iface)
+    {
+        struct ifproxy *ifproxy = proxy_manager_find_ifproxy_by_iface(This, pProxy);
+        HRESULT hr = S_OK;
+
+        EnterCriticalSection(&This->cs);
+        if (ifproxy)
+            hr = rpc_channel_set_imp_level(ifproxy->chan, ImpLevel);
+        LeaveCriticalSection(&This->cs);
+        return hr;
+    }
     return S_OK;
 #else
     FIXME("%p, %ld, %ld, %s, %ld, %ld, %p, %#lx: stub\n", pProxy, AuthnSvc, AuthzSvc,
@@ -2088,6 +2121,7 @@ static HRESULT proxy_manager_construct(
     This->dest_context_data = NULL;
 #ifdef __REACTOS__
     This->imp_level = RPC_C_IMP_LEVEL_DEFAULT;
+    This->capabilities = EOAC_DEFAULT;
 #endif
 
     EnterCriticalSection(&apt->cs);
@@ -2247,6 +2281,7 @@ static HRESULT proxy_manager_create_ifproxy(
     ifproxy->proxy = NULL;
 #ifdef __REACTOS__
     ifproxy->imp_level = RPC_C_IMP_LEVEL_DEFAULT;
+    ifproxy->capabilities = EOAC_DEFAULT;
 #endif
 
     assert(channel);

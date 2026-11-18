@@ -217,6 +217,431 @@ static void ChildImplicit(void)
     CoUninitialize();
 }
 
+typedef struct
+{
+    HRESULT ContextHr;
+    HRESULT BlanketHr;
+    DWORD AuthnSvc, AuthzSvc, AuthnLevel, ImpLevel, Capabilities;
+    OLECHAR *ServerName;
+    WCHAR Privs[300];
+    BOOL HasPrivs;
+    BOOL ImpersonatingBefore;
+    HRESULT ImpersonateHr;
+    BOOL ImpersonatingDuring;
+    BOOL GotToken;
+    SECURITY_IMPERSONATION_LEVEL TokenLevel;
+    BOOL SameUser;
+    HRESULT RevertHr;
+    BOOL TokenAfterRevert;
+    DWORD TokenAfterRevertError;
+    BOOL ImpersonatingAfter;
+    HRESULT SecondRevertHr;
+    HRESULT NullBlanketHr;
+    IServerSecurity *Kept;
+} CALL_RECORD;
+
+static CALL_RECORD Calls[2];
+static LONG CallCount;
+
+static BOOL GetProcessSid(BYTE *Buffer, DWORD Length)
+{
+    HANDLE Token;
+    DWORD Size;
+    BOOL Ret;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &Token))
+        return FALSE;
+    Ret = GetTokenInformation(Token, TokenUser, Buffer, Length, &Size);
+    CloseHandle(Token);
+    return Ret;
+}
+
+static BOOL TokenUserEquals(HANDLE Token, BYTE *ProcessUser)
+{
+    BYTE ThreadUser[256];
+    DWORD Size;
+
+    return GetTokenInformation(Token, TokenUser, ThreadUser, sizeof(ThreadUser), &Size) &&
+           EqualSid(((TOKEN_USER *)ThreadUser)->User.Sid, ((TOKEN_USER *)ProcessUser)->User.Sid);
+}
+
+static void RecordCall(CALL_RECORD *Record)
+{
+    IServerSecurity *Security = NULL;
+    RPC_AUTHZ_HANDLE Privs = NULL;
+    BYTE ProcessUser[256];
+    BOOL HaveProcessUser;
+    HANDLE Token;
+    DWORD Size;
+
+    HaveProcessUser = GetProcessSid(ProcessUser, sizeof(ProcessUser));
+    Record->ContextHr = CoGetCallContext(&IID_IServerSecurity, (void **)&Security);
+    Record->AuthnSvc = Record->AuthzSvc = Record->AuthnLevel = Record->ImpLevel = Record->Capabilities = 0xdead;
+    Record->ServerName = (OLECHAR *)(ULONG_PTR)0xdead;
+    Record->BlanketHr = CoQueryClientBlanket(&Record->AuthnSvc, &Record->AuthzSvc, &Record->ServerName,
+                                             &Record->AuthnLevel, &Record->ImpLevel, &Privs, &Record->Capabilities);
+    Record->HasPrivs = Privs != NULL;
+    if (Privs)
+        lstrcpynW(Record->Privs, Privs, ARRAYSIZE(Record->Privs));
+    if (!Security)
+        return;
+    Record->ImpersonatingBefore = IServerSecurity_IsImpersonating(Security);
+    Record->ImpersonateHr = CoImpersonateClient();
+    Record->ImpersonatingDuring = IServerSecurity_IsImpersonating(Security);
+    Record->GotToken = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &Token);
+    if (Record->GotToken)
+    {
+        GetTokenInformation(Token, TokenImpersonationLevel, &Record->TokenLevel, sizeof(Record->TokenLevel), &Size);
+        Record->SameUser = HaveProcessUser && TokenUserEquals(Token, ProcessUser);
+        CloseHandle(Token);
+    }
+    Record->RevertHr = CoRevertToSelf();
+    Record->TokenAfterRevert = OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &Token);
+    Record->TokenAfterRevertError = GetLastError();
+    if (Record->TokenAfterRevert)
+        CloseHandle(Token);
+    Record->ImpersonatingAfter = IServerSecurity_IsImpersonating(Security);
+    Record->SecondRevertHr = IServerSecurity_RevertToSelf(Security);
+    Record->NullBlanketHr = IServerSecurity_QueryBlanket(Security, NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+    Record->Kept = Security;
+}
+
+static void CheckCall(const char *Stage, CALL_RECORD *Record, SECURITY_IMPERSONATION_LEVEL TokenLevel, BOOL CrossProcess)
+{
+    WCHAR User[300];
+    DWORD Dummy;
+
+    ok(Record->ContextHr == S_OK, "%s: CoGetCallContext returned 0x%lx\n", Stage, Record->ContextHr);
+    ok(Record->BlanketHr == S_OK, "%s: CoQueryClientBlanket returned 0x%lx\n", Stage, Record->BlanketHr);
+    ok(Record->AuthnSvc == RPC_C_AUTHN_WINNT, "%s: authn service %lu\n", Stage, Record->AuthnSvc);
+    ok(Record->AuthzSvc == RPC_C_AUTHZ_NONE, "%s: authz service %lu\n", Stage, Record->AuthzSvc);
+    ok(Record->ServerName == NULL, "%s: server name %p\n", Stage, Record->ServerName);
+    ok(Record->AuthnLevel == RPC_C_AUTHN_LEVEL_PKT_PRIVACY, "%s: authn level %lu\n", Stage, Record->AuthnLevel);
+    ok(Record->ImpLevel == RPC_C_IMP_LEVEL_ANONYMOUS, "%s: imp level %lu\n", Stage, Record->ImpLevel);
+    ok(Record->Capabilities == EOAC_NONE, "%s: capabilities 0x%lx\n", Stage, Record->Capabilities);
+    if (CrossProcess)
+    {
+        ok(Record->HasPrivs && GetProcessUser(User, ARRAYSIZE(User)) && !lstrcmpiW(Record->Privs, User),
+           "%s: client name %s\n", Stage, wine_dbgstr_w(Record->HasPrivs ? Record->Privs : NULL));
+    }
+    else
+    {
+        ok(!Record->HasPrivs, "%s: client name %s\n", Stage, wine_dbgstr_w(Record->Privs));
+    }
+    ok(!Record->ImpersonatingBefore, "%s: impersonating before the call to CoImpersonateClient\n", Stage);
+    ok(Record->ImpersonateHr == S_OK, "%s: CoImpersonateClient returned 0x%lx\n", Stage, Record->ImpersonateHr);
+    ok(Record->ImpersonatingDuring, "%s: not impersonating\n", Stage);
+    ok(Record->GotToken, "%s: no thread token while impersonating\n", Stage);
+    ok(Record->TokenLevel == TokenLevel, "%s: token level %d\n", Stage, Record->TokenLevel);
+    ok(Record->SameUser, "%s: thread token user is not the client user\n", Stage);
+    ok(Record->RevertHr == S_OK, "%s: CoRevertToSelf returned 0x%lx\n", Stage, Record->RevertHr);
+    ok(!Record->TokenAfterRevert && Record->TokenAfterRevertError == ERROR_NO_TOKEN,
+       "%s: thread token after revert %d, error %lu\n", Stage, Record->TokenAfterRevert, Record->TokenAfterRevertError);
+    ok(!Record->ImpersonatingAfter, "%s: still impersonating after revert\n", Stage);
+    ok(Record->SecondRevertHr == S_OK, "%s: second RevertToSelf returned 0x%lx\n", Stage, Record->SecondRevertHr);
+    ok(Record->NullBlanketHr == S_OK, "%s: QueryBlanket without outputs returned 0x%lx\n", Stage, Record->NullBlanketHr);
+    if (Record->Kept)
+    {
+        ok(IServerSecurity_QueryBlanket(Record->Kept, &Dummy, NULL, NULL, NULL, NULL, NULL, NULL) == RPC_E_CALL_COMPLETE,
+           "%s: QueryBlanket after the call did not fail\n", Stage);
+        ok(IServerSecurity_ImpersonateClient(Record->Kept) == RPC_E_CALL_COMPLETE,
+           "%s: ImpersonateClient after the call did not fail\n", Stage);
+        ok(!IServerSecurity_IsImpersonating(Record->Kept), "%s: impersonating after the call\n", Stage);
+        IServerSecurity_Release(Record->Kept);
+        Record->Kept = NULL;
+    }
+}
+
+static void CheckOutsideCall(void)
+{
+    DWORD AuthnSvc;
+    void *Context;
+
+    ok(CoGetCallContext(&IID_IServerSecurity, &Context) == RPC_E_CALL_COMPLETE, "CoGetCallContext did not fail\n");
+    ok(CoQueryClientBlanket(&AuthnSvc, NULL, NULL, NULL, NULL, NULL, NULL) == RPC_E_CALL_COMPLETE,
+       "CoQueryClientBlanket did not fail\n");
+    ok(CoImpersonateClient() == RPC_E_CALL_COMPLETE, "CoImpersonateClient did not fail\n");
+    ok(CoRevertToSelf() == RPC_E_CALL_COMPLETE, "CoRevertToSelf did not fail\n");
+}
+
+static HRESULT WINAPI Factory_QueryInterface(IClassFactory *Iface, REFIID Riid, void **Object)
+{
+    if (IsEqualIID(Riid, &IID_IUnknown) || IsEqualIID(Riid, &IID_IClassFactory))
+    {
+        *Object = Iface;
+        return S_OK;
+    }
+    *Object = NULL;
+    return E_NOINTERFACE;
+}
+
+static ULONG WINAPI Factory_AddRef(IClassFactory *Iface)
+{
+    return 2;
+}
+
+static ULONG WINAPI Factory_Release(IClassFactory *Iface)
+{
+    return 1;
+}
+
+static HRESULT WINAPI Factory_CreateInstance(IClassFactory *Iface, IUnknown *Outer, REFIID Riid, void **Object)
+{
+    LONG Index = CallCount;
+
+    *Object = NULL;
+    if (Index < ARRAYSIZE(Calls))
+    {
+        RecordCall(&Calls[Index]);
+        CallCount = Index + 1;
+    }
+    return E_NOTIMPL;
+}
+
+static HRESULT WINAPI Factory_LockServer(IClassFactory *Iface, BOOL Lock)
+{
+    return S_OK;
+}
+
+static IClassFactoryVtbl FactoryVtbl =
+{
+    Factory_QueryInterface, Factory_AddRef, Factory_Release, Factory_CreateInstance, Factory_LockServer
+};
+static IClassFactory Factory = { &FactoryVtbl };
+
+static void CallTwice(const char *Stage, IClassFactory *Proxy, BOOL CrossProcess)
+{
+    IClientSecurity *ClientSecurity;
+    DWORD AuthnSvc, AuthzSvc, AuthnLevel, ImpLevel, Capabilities;
+    OLECHAR *ServerName;
+    WCHAR User[300];
+    void *AuthInfo;
+    IUnknown *Object;
+    HRESULT hr;
+
+    hr = IClassFactory_QueryInterface(Proxy, &IID_IClientSecurity, (void **)&ClientSecurity);
+    ok(hr == S_OK, "%s: no IClientSecurity, 0x%lx\n", Stage, hr);
+    if (FAILED(hr))
+        return;
+    ServerName = NULL;
+    AuthInfo = (void *)(ULONG_PTR)0xdead;
+    hr = IClientSecurity_QueryBlanket(ClientSecurity, (IUnknown *)Proxy, &AuthnSvc, &AuthzSvc, &ServerName,
+                                      &AuthnLevel, &ImpLevel, &AuthInfo, &Capabilities);
+    ok(hr == S_OK, "%s: QueryBlanket returned 0x%lx\n", Stage, hr);
+    ok(AuthnSvc == RPC_C_AUTHN_WINNT, "%s: authn service %lu\n", Stage, AuthnSvc);
+    ok(AuthzSvc == RPC_C_AUTHZ_NONE, "%s: authz service %lu\n", Stage, AuthzSvc);
+    if (CrossProcess)
+    {
+        ok(ServerName && GetProcessUser(User, ARRAYSIZE(User)) && !lstrcmpiW(ServerName, User),
+           "%s: server principal %s\n", Stage, wine_dbgstr_w(ServerName));
+    }
+    else
+    {
+        ok(ServerName == NULL, "%s: server principal %s\n", Stage, wine_dbgstr_w(ServerName));
+    }
+    CoTaskMemFree(ServerName);
+    ok(AuthnLevel == RPC_C_AUTHN_LEVEL_PKT_PRIVACY, "%s: authn level %lu\n", Stage, AuthnLevel);
+    ok(ImpLevel == RPC_C_IMP_LEVEL_IDENTIFY, "%s: imp level %lu\n", Stage, ImpLevel);
+    ok(AuthInfo == NULL, "%s: auth info %p\n", Stage, AuthInfo);
+    ok(Capabilities == (CrossProcess ? EOAC_MUTUAL_AUTH : EOAC_NONE), "%s: capabilities 0x%lx\n", Stage, Capabilities);
+
+    hr = IClassFactory_CreateInstance(Proxy, NULL, &IID_IUnknown, (void **)&Object);
+    ok(hr == E_NOTIMPL, "%s: first call returned 0x%lx\n", Stage, hr);
+
+    hr = CoSetProxyBlanket((IUnknown *)Proxy, RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL,
+                           RPC_C_AUTHN_LEVEL_PKT_INTEGRITY, RPC_C_IMP_LEVEL_IMPERSONATE, NULL, EOAC_NONE);
+    ok(hr == S_OK, "%s: CoSetProxyBlanket returned 0x%lx\n", Stage, hr);
+    hr = IClientSecurity_QueryBlanket(ClientSecurity, (IUnknown *)Proxy, &AuthnSvc, NULL, NULL, &AuthnLevel,
+                                      &ImpLevel, NULL, &Capabilities);
+    ok(hr == S_OK, "%s: QueryBlanket returned 0x%lx\n", Stage, hr);
+    ok(AuthnLevel == RPC_C_AUTHN_LEVEL_PKT_PRIVACY, "%s: authn level after SetBlanket %lu\n", Stage, AuthnLevel);
+    ok(ImpLevel == RPC_C_IMP_LEVEL_IMPERSONATE, "%s: imp level after SetBlanket %lu\n", Stage, ImpLevel);
+    ok(Capabilities == EOAC_NONE, "%s: capabilities after SetBlanket 0x%lx\n", Stage, Capabilities);
+
+    hr = IClassFactory_CreateInstance(Proxy, NULL, &IID_IUnknown, (void **)&Object);
+    ok(hr == E_NOTIMPL, "%s: second call returned 0x%lx\n", Stage, hr);
+    IClientSecurity_Release(ClientSecurity);
+}
+
+static DWORD WINAPI InprocCaller(void *Param)
+{
+    IClassFactory *Proxy;
+    HRESULT hr;
+
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    hr = CoUnmarshalInterface(Param, &IID_IClassFactory, (void **)&Proxy);
+    ok(hr == S_OK, "inproc: CoUnmarshalInterface returned 0x%lx\n", hr);
+    if (SUCCEEDED(hr))
+    {
+        CallTwice("inproc client", Proxy, FALSE);
+        IClassFactory_Release(Proxy);
+    }
+    CoUninitialize();
+    return 0;
+}
+
+static void ChildInproc(void)
+{
+    LARGE_INTEGER Zero = { { 0 } };
+    IStream *Stream;
+    HANDLE Thread;
+    MSG Msg;
+    HRESULT hr;
+
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    CheckOutsideCall();
+    CreateStreamOnHGlobal(NULL, TRUE, &Stream);
+    hr = CoMarshalInterface(Stream, &IID_IClassFactory, (IUnknown *)&Factory, MSHCTX_INPROC, NULL, MSHLFLAGS_NORMAL);
+    ok(hr == S_OK, "inproc: CoMarshalInterface returned 0x%lx\n", hr);
+    IStream_Seek(Stream, Zero, STREAM_SEEK_SET, NULL);
+    Thread = CreateThread(NULL, 0, InprocCaller, Stream, 0, NULL);
+    while (MsgWaitForMultipleObjects(1, &Thread, FALSE, 20000, QS_ALLINPUT) == WAIT_OBJECT_0 + 1)
+    {
+        while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            DispatchMessageW(&Msg);
+    }
+    CloseHandle(Thread);
+    ok(CallCount == 2, "inproc: %ld calls reached the server\n", CallCount);
+    if (CallCount > 0)
+        CheckCall("inproc default", &Calls[0], SecurityIdentification, FALSE);
+    if (CallCount > 1)
+        CheckCall("inproc impersonate", &Calls[1], SecurityImpersonation, FALSE);
+    CheckOutsideCall();
+    IStream_Release(Stream);
+    CoUninitialize();
+}
+
+static void ChildRpcServer(HANDLE Pipe)
+{
+    IStream *Stream;
+    HGLOBAL Global;
+    DWORD Size, Written, Start = GetTickCount();
+    MSG Msg;
+    HRESULT hr;
+
+    CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
+    CreateStreamOnHGlobal(NULL, TRUE, &Stream);
+    hr = CoMarshalInterface(Stream, &IID_IClassFactory, (IUnknown *)&Factory, MSHCTX_LOCAL, NULL, MSHLFLAGS_NORMAL);
+    ok(hr == S_OK, "rpcserver: CoMarshalInterface returned 0x%lx\n", hr);
+    GetHGlobalFromStream(Stream, &Global);
+    Size = (DWORD)GlobalSize(Global);
+    WriteFile(Pipe, &Size, sizeof(Size), &Written, NULL);
+    WriteFile(Pipe, GlobalLock(Global), Size, &Written, NULL);
+    GlobalUnlock(Global);
+    CloseHandle(Pipe);
+    while (CallCount < 2 && GetTickCount() - Start < 20000)
+    {
+        MsgWaitForMultipleObjects(0, NULL, FALSE, 100, QS_ALLINPUT);
+        while (PeekMessageW(&Msg, NULL, 0, 0, PM_REMOVE))
+            DispatchMessageW(&Msg);
+    }
+    ok(CallCount == 2, "rpcserver: %ld calls reached the server\n", CallCount);
+    if (CallCount > 0)
+        CheckCall("rpcserver default", &Calls[0], SecurityIdentification, TRUE);
+    if (CallCount > 1)
+        CheckCall("rpcserver impersonate", &Calls[1], SecurityImpersonation, TRUE);
+    CoReleaseMarshalData(Stream);
+    IStream_Release(Stream);
+    CoUninitialize();
+}
+
+static void TestCrossProcess(const char *Exe)
+{
+    SECURITY_ATTRIBUTES Attributes = { sizeof(Attributes), NULL, TRUE };
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION Limit = { { { { 0 } } } };
+    STARTUPINFOA StartupInfo = { sizeof(StartupInfo) };
+    PROCESS_INFORMATION ProcessInfo;
+    char CommandLine[MAX_PATH + 64];
+    HANDLE Read, Write, Job;
+    DWORD Size = 0, Got, Total = 0, ExitCode;
+    IClassFactory *Proxy;
+    HGLOBAL Global;
+    IStream *Stream;
+    HRESULT hr;
+
+    if (!CreatePipe(&Read, &Write, &Attributes, 0))
+    {
+        skip("CreatePipe failed with error %lu\n", GetLastError());
+        return;
+    }
+    SetHandleInformation(Read, HANDLE_FLAG_INHERIT, 0);
+    Job = CreateJobObjectW(NULL, NULL);
+    Limit.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_ACTIVE_PROCESS | JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    Limit.BasicLimitInformation.ActiveProcessLimit = 1;
+    SetInformationJobObject(Job, JobObjectExtendedLimitInformation, &Limit, sizeof(Limit));
+    snprintf(CommandLine, sizeof(CommandLine), "\"%s\" security child rpcserver %Iu", Exe, (ULONG_PTR)Write);
+    if (!CreateProcessA(NULL, CommandLine, NULL, NULL, TRUE, CREATE_SUSPENDED, NULL, NULL, &StartupInfo, &ProcessInfo))
+    {
+        skip("CreateProcessA for rpcserver failed with error %lu\n", GetLastError());
+        CloseHandle(Read);
+        CloseHandle(Write);
+        CloseHandle(Job);
+        return;
+    }
+    AssignProcessToJobObject(Job, ProcessInfo.hProcess);
+    ResumeThread(ProcessInfo.hThread);
+    CloseHandle(Write);
+
+    CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    if (ReadFile(Read, &Size, sizeof(Size), &Got, NULL) && Got == sizeof(Size) && Size && Size < 0x10000 &&
+        (Global = GlobalAlloc(GMEM_MOVEABLE, Size)))
+    {
+        BYTE *Data = GlobalLock(Global);
+        while (Total < Size && ReadFile(Read, Data + Total, Size - Total, &Got, NULL) && Got)
+            Total += Got;
+        GlobalUnlock(Global);
+        CreateStreamOnHGlobal(Global, TRUE, &Stream);
+        hr = CoUnmarshalInterface(Stream, &IID_IClassFactory, (void **)&Proxy);
+        ok(hr == S_OK, "rpcserver: CoUnmarshalInterface returned 0x%lx\n", hr);
+        if (SUCCEEDED(hr))
+        {
+            CallTwice("rpcserver client", Proxy, TRUE);
+            IClassFactory_Release(Proxy);
+        }
+        IStream_Release(Stream);
+    }
+    else
+        ok(0, "rpcserver: no marshal data\n");
+    CoUninitialize();
+    CloseHandle(Read);
+
+    ok(WaitForSingleObject(ProcessInfo.hProcess, 30000) == WAIT_OBJECT_0, "Child rpcserver did not end\n");
+    ok(GetExitCodeProcess(ProcessInfo.hProcess, &ExitCode) && ExitCode == 0, "Child rpcserver had %lu failures\n",
+       ExitCode);
+    CloseHandle(ProcessInfo.hThread);
+    CloseHandle(ProcessInfo.hProcess);
+    CloseHandle(Job);
+}
+
+static BOOL EnableCallSecurity(DWORD *Previous, BOOL *HadValue)
+{
+    DWORD One = 1, Size = sizeof(*Previous);
+    HKEY Key;
+    LONG Error;
+
+    Error = RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"Software\\LiberNT\\COM", 0, NULL, 0, KEY_QUERY_VALUE | KEY_SET_VALUE,
+                            NULL, &Key, NULL);
+    if (Error)
+        return FALSE;
+    *HadValue = !RegQueryValueExW(Key, L"CallSecurity", NULL, NULL, (BYTE *)Previous, &Size);
+    Error = RegSetValueExW(Key, L"CallSecurity", 0, REG_DWORD, (BYTE *)&One, sizeof(One));
+    RegCloseKey(Key);
+    return !Error;
+}
+
+static void RestoreCallSecurity(DWORD Previous, BOOL HadValue)
+{
+    HKEY Key;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\LiberNT\\COM", 0, KEY_SET_VALUE, &Key))
+        return;
+    if (HadValue)
+        RegSetValueExW(Key, L"CallSecurity", 0, REG_DWORD, (BYTE *)&Previous, sizeof(Previous));
+    else
+        RegDeleteValueW(Key, L"CallSecurity");
+    RegCloseKey(Key);
+}
+
 static const struct
 {
     const char *Name;
@@ -228,6 +653,7 @@ static const struct
     { "list", ChildList },
     { "invalid", ChildInvalid },
     { "implicit", ChildImplicit },
+    { "inproc", ChildInproc },
 };
 
 START_TEST(security)
@@ -240,7 +666,15 @@ START_TEST(security)
     int Argc;
     UINT i;
 
+    DWORD Previous = 0;
+    BOOL HadValue = FALSE, Enabled;
+
     Argc = winetest_get_mainargs(&Argv);
+    if (Argc >= 5 && !strcmp(Argv[2], "child") && !strcmp(Argv[3], "rpcserver"))
+    {
+        ChildRpcServer((HANDLE)(ULONG_PTR)_strtoui64(Argv[4], NULL, 10));
+        return;
+    }
     if (Argc >= 4 && !strcmp(Argv[2], "child"))
     {
         for (i = 0; i < ARRAYSIZE(Children); i++)
@@ -251,6 +685,7 @@ START_TEST(security)
         return;
     }
 
+    Enabled = EnableCallSecurity(&Previous, &HadValue);
     for (i = 0; i < ARRAYSIZE(Children); i++)
     {
         snprintf(CommandLine, sizeof(CommandLine), "\"%s\" security child %s", Argv[0], Children[i].Name);
@@ -266,4 +701,7 @@ START_TEST(security)
         CloseHandle(ProcessInfo.hThread);
         CloseHandle(ProcessInfo.hProcess);
     }
+    TestCrossProcess(Argv[0]);
+    if (Enabled)
+        RestoreCallSecurity(Previous, HadValue);
 }

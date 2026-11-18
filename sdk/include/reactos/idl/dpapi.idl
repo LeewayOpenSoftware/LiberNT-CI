@@ -7,6 +7,8 @@
 
 #include <ms-dtyp.idl>
 
+cpp_quote("#define DPAPI_LOCAL_ENDPOINT L\"protected_storage\"")
+
 [
     uuid(6b2a4f17-0c93-4d6e-9a1b-2f7e8c5d3a40),
     version(1.0),

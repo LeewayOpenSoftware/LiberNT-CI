@@ -138,6 +138,9 @@ extern DWORD com_default_authn_level;
 extern DWORD com_default_capabilities;
 void com_security_init_default(void);
 void com_security_reset(void);
+WCHAR *com_security_token_user(HANDLE token);
+BOOL com_call_security_enabled(void);
+HRESULT rpc_channel_set_imp_level(IRpcChannelBuffer *chan, DWORD imp_level);
 #endif
 HRESULT rpc_register_interface(REFIID riid);
 void rpc_unregister_interface(REFIID riid, BOOL wait);

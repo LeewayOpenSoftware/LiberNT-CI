@@ -761,9 +761,19 @@ public:
 
     FAST_MUTEX SecurityCacheMutex;
     ULONG SecurityCacheId[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONG SecurityCacheHash[NTFS_SECURITY_CACHE_ENTRIES] = {};
     ULONG SecurityCacheLength[NTFS_SECURITY_CACHE_ENTRIES] = {};
     PUCHAR SecurityCacheData[NTFS_SECURITY_CACHE_ENTRIES] = {};
     ULONG SecurityCacheNext = 0;
+    /* Records that keep their descriptor in an attribute of their own, rather
+     * than behind a SecurityId, reach no cache through $Secure. A directory
+     * answers an access check for every open below it, so re-reading its
+     * descriptor costs one disk read per open. */
+    ULONG RecordCacheNumber[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONG RecordCacheLength[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    PUCHAR RecordCacheData[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONGLONG RecordCacheStamp[NTFS_SECURITY_CACHE_ENTRIES] = {};
+    ULONG RecordCacheNext = 0;
 
     ~Volume();
 
@@ -1078,7 +1088,38 @@ public:
     CacheSecurityDescriptor(
         _In_ ULONG SecurityId,
         _In_reads_bytes_(Length) const UCHAR* Descriptor,
-        _In_ ULONG Length);
+        _In_ ULONG Length,
+        _In_ ULONG Hash);
+
+    BOOLEAN
+    FindCachedSecurityId(
+        _In_reads_bytes_(Length) const UCHAR* Descriptor,
+        _In_ ULONG Length,
+        _In_ ULONG Hash,
+        _Out_ PULONG SecurityId);
+
+    BOOLEAN
+    ReadCachedRecordDescriptor(
+        _In_ ULONG RecordNumber,
+        _In_opt_ PUCHAR Buffer,
+        _Inout_ PULONG BufferLength,
+        _Out_ NTSTATUS* Status);
+
+    void
+    CacheRecordDescriptor(
+        _In_ ULONG RecordNumber,
+        _In_reads_bytes_(Length) const UCHAR* Descriptor,
+        _In_ ULONG Length,
+        _In_ ULONGLONG Stamp);
+
+    void
+    InvalidateRecordDescriptor(
+        _In_ ULONG RecordNumber);
+
+    void
+    ReviseRecordDescriptor(
+        _In_ ULONG RecordNumber,
+        _In_ ULONGLONG Stamp);
 
     NTSTATUS
     AssignSecurityId(
@@ -1139,6 +1180,8 @@ public:
     NTSTATUS RefreshFrom(_In_ const FileRecord& Record);
 
     // ./find.cpp
+    ULONGLONG SecurityAttributeStamp();
+
     PAttribute GetAttribute(_In_     AttributeType Type,
                             _In_opt_ PWSTR Name);
     NTSTATUS GetAttributeData(_In_     AttributeType Type,

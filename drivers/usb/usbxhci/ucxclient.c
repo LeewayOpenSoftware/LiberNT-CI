@@ -1910,7 +1910,8 @@ XhciUcxEp0Control(
 
     KeClearEvent(&Dev->TransferEvent);
     Dev->PendingTransferCode = XHCI_COMPLETION_INVALID;
-    Dev->PendingTransferResidual = Length;
+    /* A full Data Stage (ISP, no IOC) posts no event: only a short or failed one sets the residual */
+    Dev->PendingTransferResidual = 0;
     InterlockedExchange(&Dev->PendingTransferDone, 0);
 
     RtlCopyMemory(SetupWords, Setup, sizeof(SetupWords));

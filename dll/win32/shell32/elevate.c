@@ -53,7 +53,7 @@ SHELL_ElevateProcess(
                         ? pStartupInfo->wShowWindow : SW_SHOWNORMAL;
     Request.hwndOwner = (DWORD_PTR)hwnd;
 
-    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL, (RPC_WSTR)L"\\pipe\\seclogon",
+    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL, (RPC_WSTR)L"seclogon",
                                  NULL, &StringBinding) != RPC_S_OK)
     {
         return ERROR_SERVICE_NOT_ACTIVE;
