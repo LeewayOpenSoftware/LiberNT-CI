@@ -10,6 +10,7 @@
 #define CMP1 KEY_WINE "\\reg_cmp1"
 #define CMP2 KEY_WINE "\\reg_cmp2"
 #define SAVE_KEY KEY_WINE "\\reg_save"
+#define RESTORE_KEY KEY_WINE "\\reg_restore"
 #define HIVE_FILE "reg_test.hiv"
 
 static void test_syntax(void)
@@ -164,6 +165,20 @@ static void test_save_load(void)
 
     run_reg_exe("reg unload HKLM\\reg_test_hive", &r);
     ok(r == REG_EXIT_FAILURE, "unload twice: got exit code %ld, expected 1\n", r);
+
+    delete_tree(HKEY_CURRENT_USER, RESTORE_KEY, 0);
+    add_key(HKEY_CURRENT_USER, RESTORE_KEY, 0, &hkey);
+    add_value(hkey, "stale", REG_SZ, "old", 4);
+    close_key(hkey);
+    sprintf(cmd, "reg restore HKCU\\" RESTORE_KEY " \"%s\"", path);
+    run_reg_exe(cmd, &r);
+    ok(r == REG_EXIT_SUCCESS, "restore: got exit code %ld, expected 0\n", r);
+    run_reg_exe("reg compare HKCU\\" SAVE_KEY " HKCU\\" RESTORE_KEY, &r);
+    ok(r == 0, "compare saved and restored: got exit code %ld, expected 0\n", r);
+    open_key(HKEY_CURRENT_USER, RESTORE_KEY, 0, &hkey);
+    verify_reg_nonexist(hkey, "stale");
+    close_key(hkey);
+    delete_tree(HKEY_CURRENT_USER, RESTORE_KEY, 0);
 
     sprintf(cmd, "reg restore HKCU\\" KEY_WINE "\\reg_nonexist \"%s\"", path);
     run_reg_exe(cmd, &r);
