@@ -43,6 +43,7 @@ DpapiServerInitialize(VOID)
 }
 
 static NTSTATUS DpapiGetCallerLogonId(_Out_ PLUID LogonId);
+static NTSTATUS DpapiAppendCallerSid(_Inout_ PLSA_STRING Key);
 
 static
 NTSTATUS
@@ -393,7 +394,13 @@ DpapiAcquireKey(
     if (!NT_SUCCESS(Status))
         return Status;
 
-    return LsapGetDpapiPrekey(&LogonId, Key);
+    Status = LsapGetDpapiPrekey(&LogonId, Key);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    /* Bind the caller's account identity into the user-scope key so two accounts with the same
+     * password do not derive the same key (and a blob cannot be moved between hives). */
+    return DpapiAppendCallerSid(Key);
 }
 
 static
@@ -421,6 +428,75 @@ DpapiGetCallerLogonId(
     }
 
     RpcRevertToSelf();
+    return Status;
+}
+
+static
+NTSTATUS
+DpapiAppendCallerSid(
+    _Inout_ PLSA_STRING Key)
+{
+    HANDLE Token = NULL;
+    PTOKEN_USER UserInfo = NULL;
+    ULONG Length = 0;
+    ULONG SidLength;
+    PBYTE NewBuffer;
+    NTSTATUS Status;
+
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+    {
+        Status = STATUS_CANNOT_IMPERSONATE;
+    }
+    else
+    {
+        Status = NtOpenThreadToken(NtCurrentThread(), TOKEN_QUERY, TRUE, &Token);
+        if (NT_SUCCESS(Status))
+        {
+            NtQueryInformationToken(Token, TokenUser, NULL, 0, &Length);
+            if (Length == 0)
+                Status = STATUS_UNSUCCESSFUL;
+            else if (!(UserInfo = RtlAllocateHeap(RtlGetProcessHeap(), 0, Length)))
+                Status = STATUS_INSUFFICIENT_RESOURCES;
+            else
+                Status = NtQueryInformationToken(Token, TokenUser, UserInfo, Length, &Length);
+
+            NtClose(Token);
+        }
+        RpcRevertToSelf();
+    }
+
+    if (NT_SUCCESS(Status))
+    {
+        SidLength = RtlLengthSid(UserInfo->User.Sid);
+        NewBuffer = RtlAllocateHeap(RtlGetProcessHeap(), 0, Key->Length + SidLength);
+        if (NewBuffer == NULL)
+        {
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            RtlCopyMemory(NewBuffer, Key->Buffer, Key->Length);
+            RtlCopyMemory(NewBuffer + Key->Length, UserInfo->User.Sid, SidLength);
+            RtlSecureZeroMemory(Key->Buffer, Key->Length);
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Key->Buffer);
+            Key->Buffer = (PCHAR)NewBuffer;
+            Key->Length = Key->MaximumLength = (USHORT)(Key->Length + SidLength);
+        }
+    }
+
+    if (UserInfo != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, UserInfo);
+
+    /* On failure free the pre-key buffer so the caller is not left with a half-formed key to free. */
+    if (!NT_SUCCESS(Status) && Key->Buffer != NULL)
+    {
+        RtlSecureZeroMemory(Key->Buffer, Key->Length);
+        RtlFreeHeap(RtlGetProcessHeap(), 0, Key->Buffer);
+        Key->Buffer = NULL;
+        Key->Length = 0;
+        Key->MaximumLength = 0;
+    }
+
     return Status;
 }
 
