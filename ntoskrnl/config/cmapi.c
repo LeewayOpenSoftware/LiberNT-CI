@@ -273,6 +273,7 @@ CmpSetValueKeyExisting(IN PHHIVE Hive,
     PCELL_DATA CellData;
     ULONG Length;
     BOOLEAN WasSmall, IsSmall;
+    NTSTATUS Status;
 
     /* Registry writes must be blocked */
 
@@ -285,9 +286,23 @@ CmpSetValueKeyExisting(IN PHHIVE Hive,
     /* See if our new data can fit in a small key */
     IsSmall = (DataSize <= CM_KEY_VALUE_SMALL) ? TRUE: FALSE;
 
-    /* Big values have no writer yet; overwriting one would free the db record as data and leak the segments */
-    if (CmpIsKeyValueBig(Hive, Length) || CmpIsKeyValueBig(Hive, DataSize))
-        return STATUS_NOT_IMPLEMENTED;
+    /* A big value builds a big data record; the plain cell reuse paths
+       below cannot represent it */
+    if (CmpIsKeyValueBig(Hive, DataSize))
+    {
+        Status = CmpSetValueDataNew(Hive, Data, DataSize, StorageType,
+                                    HCELL_NIL, &NewCell);
+        if (!NT_SUCCESS(Status)) return Status;
+
+        /* Release the old record; a plain old cell is freed the same way */
+        if (!(WasSmall) && (Length > 0))
+            CmpFreeValueData(Hive, Value->Data, Length);
+
+        Value->Data = NewCell;
+        Value->DataLength = DataSize;
+        Value->Type = Type;
+        return STATUS_SUCCESS;
+    }
 
     /* Mark the old value dirty */
     if (!CmpMarkValueDataDirty(Hive, Value)) return STATUS_NO_LOG_SPACE;
