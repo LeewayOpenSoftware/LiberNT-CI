@@ -9091,10 +9091,11 @@ static void test_GetSecurityInfo(void)
         ok(ace->Mask == PROCESS_ALL_ACCESS, "Current User ACE has unexpected mask %#lx\n", ace->Mask);
     }
     ok(domain_users_ace_id != -1,
+       "Domain Users ACE not found.\n");
 #else
     ok(domain_users_ace_id != -1 || broken(domain_users_ace_id == -1) /* win2k */,
-#endif
        "Domain Users ACE not found.\n");
+#endif
     if (domain_users_ace_id != -1)
     {
         bret = GetAce(pDacl, domain_users_ace_id, (VOID **)&ace);

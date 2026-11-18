@@ -447,10 +447,11 @@ static BOOL query_image_section( int id, const char *dll_name, const IMAGE_NT_HE
     {
 #ifdef __REACTOS__
         ok( image.ComPlusILOnly || broken(GetNTVersion() < _WIN32_WINNT_VISTA),
+            "%u: wrong ComPlusILOnly flags %02x\n", id, image.ImageFlags );
 #else
         ok( image.ComPlusILOnly,
-#endif
             "%u: wrong ComPlusILOnly flags %02x\n", id, image.ImageFlags );
+#endif
         if (nt_header->OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC &&
             !(cor_header->Flags & COMIMAGE_FLAGS_32BITREQUIRED))
 #ifdef __REACTOS__

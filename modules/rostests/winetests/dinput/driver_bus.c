@@ -41,6 +41,10 @@
 #include "initguid.h"
 #include "driver_hid.h"
 
+#ifdef _MSC_VER
+int _fltused; /* MSVC references it when a driver uses floating point */
+#endif
+
 typedef ULONG PNP_DEVICE_STATE;
 #define PNP_DEVICE_REMOVED 8
 

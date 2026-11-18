@@ -923,28 +923,34 @@ static void test_cross_process_notifications( HANDLE process, ULONG_PTR section,
 
     WriteProcessMemory( process, (char *)addr + 0x1ffe, data, sizeof(data), &size );
     entry = pop_from_work_list( &list->work_list );
+#ifdef __REACTOS__
     entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
                                      (char *)addr + 0x1000, 0x2000, 0x60000000 | PAGE_EXECUTE_WRITECOPY,
-#ifdef __REACTOS__
                                      (current_machine != native_machine) ? 0 : 0xcccccccc,
-#else
-                                     (current_machine != IMAGE_FILE_MACHINE_ARM64) ? 0 : 0xcccccccc,
-#endif
                                      0xcccccccc, 0xcccccccc );
+#else
+    entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
+                                     (char *)addr + 0x1000, 0x2000, 0x60000000 | PAGE_EXECUTE_WRITECOPY,
+                                     (current_machine != IMAGE_FILE_MACHINE_ARM64) ? 0 : 0xcccccccc,
+                                     0xcccccccc, 0xcccccccc );
+#endif
     entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualProtect,
                                      (char *)addr + 0x1000, 0x2000,
                                      0x60000000 | PAGE_EXECUTE_WRITECOPY, 0, 0xcccccccc, 0xcccccccc );
     entry = expect_cross_work_entry( list, entry, CrossProcessFlushCache,
                                      (char *)addr + 0x1ffe, sizeof(data),
                                      0xcccccccc, 0xcccccccc, 0xcccccccc, 0xcccccccc );
+#ifdef __REACTOS__
     entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
                                      (char *)addr + 0x1000, 0x2000, 0x60000000 | PAGE_EXECUTE_READ,
-#ifdef __REACTOS__
                                      (current_machine != native_machine) ? 0 : 0xcccccccc,
-#else
-                                     (current_machine != IMAGE_FILE_MACHINE_ARM64) ? 0 : 0xcccccccc,
-#endif
                                      0xcccccccc, 0xcccccccc );
+#else
+    entry = expect_cross_work_entry( list, entry, CrossProcessPreVirtualProtect,
+                                     (char *)addr + 0x1000, 0x2000, 0x60000000 | PAGE_EXECUTE_READ,
+                                     (current_machine != IMAGE_FILE_MACHINE_ARM64) ? 0 : 0xcccccccc,
+                                     0xcccccccc, 0xcccccccc );
+#endif
     entry = expect_cross_work_entry( list, entry, CrossProcessPostVirtualProtect,
                                      (char *)addr + 0x1000, 0x2000,
                                      0x60000000 | PAGE_EXECUTE_READ, 0, 0xcccccccc, 0xcccccccc );

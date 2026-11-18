@@ -7,6 +7,10 @@
 
 #include <kmt_test.h>
 
+#ifdef _MSC_VER
+int _fltused; /* MSVC references it when a driver uses floating point */
+#endif
+
 typedef struct _TEST_RTL_AVL_TREE
 {
     PRTL_BALANCED_NODE Root;

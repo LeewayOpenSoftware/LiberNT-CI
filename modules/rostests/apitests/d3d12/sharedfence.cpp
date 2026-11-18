@@ -238,7 +238,7 @@ static BOOL QueryObjectName(HANDLE handle, WCHAR *name, ULONG count)
 static void TestNamedSharing(ID3D12Device *device)
 {
     ID3D12Fence *fence = NULL, *second = NULL, *opened = NULL;
-    HANDLE handle = NULL, by_name = NULL, collision = (HANDLE)(ULONG_PTR)0xdeadbeef, missing = (HANDLE)0xdeadbeef;
+    HANDLE handle = NULL, by_name = NULL, collision = (HANDLE)(ULONG_PTR)0xdeadbeef, missing = (HANDLE)(ULONG_PTR)0xdeadbeef;
     WCHAR name[64], global_name[80], object_name[260];
     DWORD session = 0;
     HRESULT hr;
