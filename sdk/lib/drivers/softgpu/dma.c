@@ -1270,28 +1270,80 @@ SoftGpuDpcRoutine(
 
 #define SOFTGPU_VSYNC_PERIOD_100NS 166667ULL
 
+static
+BOOLEAN
+SoftGpuEnginesQueuedLocked(
+    _In_ PSOFTGPU_DEVICE Device,
+    _Out_writes_opt_(SOFTGPU_ENGINE_COUNT) PBOOLEAN Kick)
+{
+    BOOLEAN Any = FALSE;
+    BOOLEAN Queued;
+    ULONG NodeOrdinal;
+
+    for (NodeOrdinal = 0; NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
+    {
+        Queued = !Device->Stopped &&
+                 Device->Engines[NodeOrdinal].SubmitRingHead != Device->Engines[NodeOrdinal].SubmitRingTail;
+        if (Kick != NULL)
+            Kick[NodeOrdinal] = Queued;
+        Any |= Queued;
+    }
+    return Any;
+}
+
+static
+VOID
+SoftGpuKickEngines(
+    _In_ PSOFTGPU_DEVICE Device,
+    _In_reads_(SOFTGPU_ENGINE_COUNT) const BOOLEAN *Kick)
+{
+    ULONG NodeOrdinal;
+
+    /* Re-kick every node: a buffer parked on an unsatisfied GPU wait retries
+     * on this cadence, so a fence signaled by another engine or by the CPU
+     * always unblocks it -- and the signaller may be a different node. */
+    for (NodeOrdinal = 0; NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
+    {
+        if (Kick[NodeOrdinal])
+            KeInsertQueueDpc(&Device->Engines[NodeOrdinal].DpcObject, NULL, NULL);
+    }
+}
+
+/*
+ * The 60 Hz high-resolution timer runs only while dxgkrnl wants vsync
+ * notifications: an armed high-resolution timer holds the system clock at its
+ * finest period. Queued work alone is retried by a normal-resolution timer,
+ * unless that timer could not be allocated.
+ */
 VOID
 SoftGpuVsyncTimerUpdateLocked(
     _Inout_ PSOFTGPU_DEVICE Device)
 {
     ULONGLONG Now, Due;
-    ULONG NodeOrdinal;
-    BOOLEAN Needed;
+    BOOLEAN VsyncWanted, Queued, NeedVsyncTimer, NeedRekickTimer;
 
     ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
-    ASSERT(Device->VsyncTimerInitialized || !Device->VsyncTimerRunning);
+    ASSERT(Device->VsyncTimerInitialized || (!Device->VsyncTimerRunning && !Device->RekickTimerRunning));
     if (!Device->VsyncTimerInitialized)
         return;
 
-    Needed = !Device->Stopped && InterlockedCompareExchange(&Device->VsyncEnabled, 0, 0) != 0;
-    for (NodeOrdinal = 0; !Needed && NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
+    VsyncWanted = !Device->Stopped && InterlockedCompareExchange(&Device->VsyncEnabled, 0, 0) != 0;
+    Queued = SoftGpuEnginesQueuedLocked(Device, NULL);
+    NeedVsyncTimer = VsyncWanted || (Queued && Device->RekickTimer == NULL);
+    NeedRekickTimer = Queued && !NeedVsyncTimer;
+
+    if (NeedRekickTimer != Device->RekickTimerRunning)
     {
-        Needed = !Device->Stopped &&
-                 Device->Engines[NodeOrdinal].SubmitRingHead != Device->Engines[NodeOrdinal].SubmitRingTail;
+        if (NeedRekickTimer)
+            ExSetTimer(Device->RekickTimer, -(LONGLONG)SOFTGPU_VSYNC_PERIOD_100NS, SOFTGPU_VSYNC_PERIOD_100NS, NULL);
+        else
+            ExCancelTimer(Device->RekickTimer, NULL);
+        Device->RekickTimerRunning = NeedRekickTimer;
     }
-    if (Needed == Device->VsyncTimerRunning)
+
+    if (NeedVsyncTimer == Device->VsyncTimerRunning)
         return;
-    if (!Needed)
+    if (!NeedVsyncTimer)
     {
         ExCancelTimer(Device->VsyncTimer, NULL);
         Device->VsyncTimerRunning = FALSE;
@@ -1309,6 +1361,29 @@ SoftGpuVsyncTimerUpdateLocked(
 
 VOID
 NTAPI
+SoftGpuRekickTimerCallback(
+    _In_     PEX_TIMER Timer,
+    _In_opt_ PVOID     Context)
+{
+    PSOFTGPU_DEVICE Device = (PSOFTGPU_DEVICE)Context;
+    BOOLEAN Kick[SOFTGPU_ENGINE_COUNT];
+    KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(Timer);
+
+    if (Device == NULL || Device->Magic != SOFTGPU_DEVICE_MAGIC)
+        return;
+
+    KeAcquireSpinLock(&Device->FenceLock, &OldIrql);
+    (VOID)SoftGpuEnginesQueuedLocked(Device, Kick);
+    SoftGpuVsyncTimerUpdateLocked(Device);
+    KeReleaseSpinLock(&Device->FenceLock, OldIrql);
+
+    SoftGpuKickEngines(Device, Kick);
+}
+
+VOID
+NTAPI
 SoftGpuVsyncTimerCallback(
     _In_     PEX_TIMER Timer,
     _In_opt_ PVOID     Context)
@@ -1319,7 +1394,6 @@ SoftGpuVsyncTimerCallback(
     BOOLEAN PhaseActive;
     BOOLEAN Deliver;
     BOOLEAN Kick[SOFTGPU_ENGINE_COUNT];
-    ULONG NodeOrdinal;
 
     UNREFERENCED_PARAMETER(Timer);
 
@@ -1331,22 +1405,11 @@ SoftGpuVsyncTimerCallback(
                   InterlockedCompareExchange(
                       &Device->VsyncPhaseEnabled, 0, 0) != 0;
     Deliver = SoftGpuVsyncCanDeliverNotification(PhaseActive, InterlockedCompareExchange(&Device->VsyncEnabled, 0, 0) != 0, Device->DxgkInterface.DxgkCbNotifyInterrupt != NULL, Device->DxgkInterface.DxgkCbQueueDpc != NULL);
-    for (NodeOrdinal = 0; NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
-    {
-        Kick[NodeOrdinal] = !Device->Stopped &&
-                            Device->Engines[NodeOrdinal].SubmitRingHead != Device->Engines[NodeOrdinal].SubmitRingTail;
-    }
+    (VOID)SoftGpuEnginesQueuedLocked(Device, Kick);
     SoftGpuVsyncTimerUpdateLocked(Device);
     KeReleaseSpinLock(&Device->FenceLock, OldIrql);
 
-    /* Re-kick every node: a buffer parked on an unsatisfied GPU wait retries
-     * on this cadence, so a fence signaled by another engine or by the CPU
-     * always unblocks it -- and the signaller may be a different node. */
-    for (NodeOrdinal = 0; NodeOrdinal < SOFTGPU_ENGINE_COUNT; NodeOrdinal++)
-    {
-        if (Kick[NodeOrdinal])
-            KeInsertQueueDpc(&Device->Engines[NodeOrdinal].DpcObject, NULL, NULL);
-    }
+    SoftGpuKickEngines(Device, Kick);
 
     if (!Deliver)
         return;
