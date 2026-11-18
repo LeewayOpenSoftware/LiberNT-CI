@@ -1118,9 +1118,99 @@ TTestRealHive(VOID)
     CHECK(status == STATUS_SUCCESS);
     if (NT_SUCCESS(status))
     {
-        printf("cmlib_hive15_read: loaded real hive %s (minor %lu, bins %lu)\n",
-               path, (unsigned long)cmHive.Hive.Version,
-               (unsigned long)cmHive.Hive.BaseBlock->Length);
+        PHHIVE hive = &cmHive.Hive;
+        PCM_KEY_NODE root = (PCM_KEY_NODE)HvGetCell(hive, hive->BaseBlock->RootCell);
+        ULONG subkeys = root ? root->SubKeyCounts[Stable] : 0;
+        ULONG valuesRead = 0, subkeysSeen = 0, i, acc = 0;
+
+        /* Read every value on the root: the Windows-written names and data
+           must resolve through the same paths as the synthetic fixtures. */
+        if (root && root->ValueList.Count)
+        {
+            PCELL_DATA list = (PCELL_DATA)HvGetCell(hive, root->ValueList.List);
+            if (list)
+            {
+                for (i = 0; i < root->ValueList.Count && i < 256; i++)
+                {
+                    PCM_KEY_VALUE value = (PCM_KEY_VALUE)HvGetCell(hive,
+                                                  list->u.KeyList[i]);
+                    PVOID buffer;
+                    BOOLEAN allocated;
+                    HCELL_INDEX release;
+                    ULONG length;
+
+                    if (!value) break;
+                    if (CmpGetValueData(hive, value, &length, &buffer,
+                                        &allocated, &release))
+                    {
+                        acc ^= length ^ ((PUCHAR)buffer)[0];
+                        if (length > 1)
+                            acc ^= ((PUCHAR)buffer)[length - 1];
+                        valuesRead++;
+                        if (allocated)
+                            hive->Free(buffer, length);
+                        else if (release != HCELL_NIL)
+                            HvReleaseCell(hive, release);
+                    }
+                }
+                HvReleaseCell(hive, root->ValueList.List);
+            }
+        }
+
+        /* Enumerate subkeys and read each one's values too. */
+        for (i = 0; i < subkeys && i < 64; i++)
+        {
+            HCELL_INDEX child = CmpFindSubKeyByNumber(hive, root, i);
+            PCM_KEY_NODE node;
+
+            if (child == HCELL_NIL) break;
+            node = (PCM_KEY_NODE)HvGetCell(hive, child);
+            if (!node) break;
+            acc ^= node->NameLength;
+            subkeysSeen++;
+            if (node->ValueList.Count)
+            {
+                PCELL_DATA list = (PCELL_DATA)HvGetCell(hive, node->ValueList.List);
+                ULONG j;
+
+                if (list)
+                {
+                    for (j = 0; j < node->ValueList.Count && j < 64; j++)
+                    {
+                        PCM_KEY_VALUE value = (PCM_KEY_VALUE)HvGetCell(hive,
+                                                          list->u.KeyList[j]);
+                        PVOID buffer;
+                        BOOLEAN allocated;
+                        HCELL_INDEX release;
+                        ULONG length;
+
+                        if (!value) break;
+                        if (CmpGetValueData(hive, value, &length, &buffer,
+                                            &allocated, &release))
+                        {
+                            acc ^= length;
+                            valuesRead++;
+                            if (allocated)
+                                hive->Free(buffer, length);
+                            else if (release != HCELL_NIL)
+                                HvReleaseCell(hive, release);
+                        }
+                    }
+                    HvReleaseCell(hive, node->ValueList.List);
+                }
+            }
+            HvReleaseCell(hive, child);
+        }
+
+        if (root)
+            HvReleaseCell(hive, hive->BaseBlock->RootCell);
+
+        printf("cmlib_hive15_read: loaded real hive %s (minor %lu, bins %lu): "
+               "%lu subkeys enumerated, %lu values read, acc %08lx\n",
+               path, (unsigned long)hive->Version,
+               (unsigned long)hive->BaseBlock->Length,
+               (unsigned long)subkeysSeen, (unsigned long)valuesRead,
+               (unsigned long)acc);
         HvFree(&cmHive.Hive);
     }
     else
