@@ -192,6 +192,48 @@ TestBadBlobs(void)
     ok(GetLastError() == ERROR_INVALID_DATA, "expected ERROR_INVALID_DATA, got %lu\n", GetLastError());
 }
 
+/* Windows parity: the scope flag on CryptUnprotectData is informational; all four
+ * protect/unprotect scope combinations succeed (measured on Windows 11). The MAC and the scope tag
+ * in the KDF, not a flag check, are what separate the scopes. */
+static void
+TestScopeParity(void)
+{
+    DATA_BLOB In, Machine = { 0 }, User = { 0 }, Back = { 0 };
+
+    In.cbData = sizeof(Secret);
+    In.pbData = (BYTE *)Secret;
+
+    if (CryptProtectData(&In, NULL, NULL, NULL, NULL, CRYPTPROTECT_LOCAL_MACHINE, &Machine))
+    {
+        ok(CryptUnprotectData(&Machine, NULL, NULL, NULL, NULL, 0, &Back),
+           "machine blob did not open with flags 0, error %lu\n", GetLastError());
+        if (Back.pbData) { LocalFree(Back.pbData); Back.pbData = NULL; }
+        ok(CryptUnprotectData(&Machine, NULL, NULL, NULL, NULL, CRYPTPROTECT_LOCAL_MACHINE, &Back),
+           "machine blob did not open with LOCAL_MACHINE, error %lu\n", GetLastError());
+        if (Back.pbData) { LocalFree(Back.pbData); Back.pbData = NULL; }
+        LocalFree(Machine.pbData);
+    }
+    else
+    {
+        skip("LOCAL_MACHINE protect unavailable, error %lu\n", GetLastError());
+    }
+
+    if (CryptProtectData(&In, NULL, NULL, NULL, NULL, 0, &User))
+    {
+        ok(CryptUnprotectData(&User, NULL, NULL, NULL, NULL, 0, &Back),
+           "user blob did not open with flags 0, error %lu\n", GetLastError());
+        if (Back.pbData) { LocalFree(Back.pbData); Back.pbData = NULL; }
+        ok(CryptUnprotectData(&User, NULL, NULL, NULL, NULL, CRYPTPROTECT_LOCAL_MACHINE, &Back),
+           "user blob did not open with LOCAL_MACHINE, error %lu\n", GetLastError());
+        if (Back.pbData) { LocalFree(Back.pbData); Back.pbData = NULL; }
+        LocalFree(User.pbData);
+    }
+    else
+    {
+        skip("user-scope protect unavailable (no pre-key?), error %lu\n", GetLastError());
+    }
+}
+
 START_TEST(CryptProtectData)
 {
     static const BYTE Entropy[] = { 0xDE, 0xAD, 0xBE, 0xEF, 0x55 };
@@ -214,5 +256,6 @@ START_TEST(CryptProtectData)
     TestEmptyAndLongDescr();
     TestTamper(CRYPTPROTECT_LOCAL_MACHINE);
     TestWrongEntropy();
+    TestScopeParity();
     TestBadBlobs();
 }
