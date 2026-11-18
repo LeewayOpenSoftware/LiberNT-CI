@@ -21,7 +21,6 @@
 #define LLMNR_RESEND 420
 #define LLMNR_ROUNDS 2
 #define DNS_MAX_ADAPTERS 16
-#define DNS_MAX_SERVERS 32
 #define DNS_MAX_CANDIDATES 8
 #define DNS_UDP_SIZE 1232
 #define DNS_TCP_SIZE 65535
@@ -1142,7 +1141,6 @@ ResolverQueryCandidates(PRESOLVER_CONFIG Config, LPCWSTR Name, WORD Type, DWORD 
 }
 
 DNS_STATUS
-NTAPI
 DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result)
 {
     PRESOLVER_CONFIG Config;
@@ -1327,11 +1325,19 @@ DnsIntResolveWithServers(LPCWSTR Name, WORD Type, DWORD Options, PDNS_ADDR_ARRAY
     N = min(Servers->AddrCount, DNS_MAX_SERVERS);
     for (i = 0; i < N; i++)
     {
-        PRESOLVER_SERVER Slot = &Config->Servers[i];
         const SOCKADDR_INET *Address = (const SOCKADDR_INET *)Servers->AddrArray[i].MaxSa;
 
         if (Address->si_family != AF_INET && Address->si_family != AF_INET6)
-            continue;
+        {
+            RtlFreeHeap(RtlGetProcessHeap(), 0, Config);
+            return ERROR_INVALID_PARAMETER;
+        }
+    }
+    for (i = 0; i < N; i++)
+    {
+        PRESOLVER_SERVER Slot = &Config->Servers[Config->ServerCount];
+        const SOCKADDR_INET *Address = (const SOCKADDR_INET *)Servers->AddrArray[i].MaxSa;
+
         RtlCopyMemory(&Slot->Address, Address, sizeof(SOCKADDR_INET));
         if (Slot->Address.si_family == AF_INET6)
             Slot->Address.Ipv6.sin6_port = htons(DNS_PORT);

@@ -530,6 +530,10 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
         return ERROR_INVALID_PARAMETER;
     if (pQueryRequest->InterfaceIndex != 0)
         return ERROR_INVALID_PARAMETER;
+    if ((pQueryRequest->pDnsServerList != NULL) &&
+        ((pQueryRequest->pDnsServerList->AddrCount == 0) ||
+         (pQueryRequest->pDnsServerList->AddrCount > DNS_MAX_SERVERS)))
+        return ERROR_INVALID_PARAMETER;
 
     if (pQueryRequest->pQueryCompletionCallback == NULL)
     {
@@ -579,9 +583,13 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
     Op->QueryContext = pQueryRequest->pQueryContext;
     Op->Callback = pQueryRequest->pQueryCompletionCallback;
     Op->CallerResults = pQueryResults;
-    if (pQueryRequest->pDnsServerList != NULL && pQueryRequest->pDnsServerList->AddrCount != 0)
+    Op->Slot = pCancelHandle;
+    Op->Refs = pCancelHandle ? 2 : 1;
+    InitializeCriticalSection(&Op->Lock);
+
+    if (pQueryRequest->pDnsServerList != NULL)
     {
-        ULONG ServerCount = pQueryRequest->pDnsServerList->AddrCount;
+        ULONG ServerCount = min(pQueryRequest->pDnsServerList->AddrCount, DNS_MAX_SERVERS);
 
         Op->Servers = RtlAllocateHeap(RtlGetProcessHeap(), HEAP_ZERO_MEMORY,
                                       FIELD_OFFSET(DNS_ADDR_ARRAY, AddrArray) +
@@ -600,10 +608,6 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
         RtlCopyMemory(Op->Servers->AddrArray, pQueryRequest->pDnsServerList->AddrArray,
                       ServerCount * sizeof(DNS_ADDR));
     }
-
-    Op->Slot = pCancelHandle;
-    Op->Refs = pCancelHandle ? 2 : 1;
-    InitializeCriticalSection(&Op->Lock);
 
     if (pCancelHandle)
         RtlCopyMemory(pCancelHandle->Reserved, &Op, sizeof(Op));

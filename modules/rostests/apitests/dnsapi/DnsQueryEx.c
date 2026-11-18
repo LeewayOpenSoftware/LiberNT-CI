@@ -216,8 +216,7 @@ void func_DnsQueryEx(void)
     Request.QueryName = L"localhost";
     Request.InterfaceIndex = 3;
     Status = DnsQueryEx(&Request, &Results, NULL);
-    ok(Status == ERROR_INVALID_PARAMETER, "Interface index: %lu
-", Status);
+    ok(Status == ERROR_INVALID_PARAMETER, "Interface index: %lu\n", Status);
     Request.InterfaceIndex = 0;
 
     ServerListTest(&Request);
