@@ -2586,3 +2586,182 @@ IoGetInitiatorProcess(
 
     return NULL;
 }
+
+static
+PIOP_IRP_EXTENSION
+IopGetOrAllocateIrpExtension(
+    _Inout_ PIRP Irp)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if (Extension == NULL)
+    {
+        Extension = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Extension), TAG_IRP_EXTENSION);
+        if (Extension == NULL)
+            return NULL;
+
+        Extension->Allocated = 1;
+        Irp->Tail.Overlay.IrpExtension = Extension;
+    }
+    return Extension;
+}
+
+/*
+ * @implemented
+ */
+PIRP
+NTAPI
+IoMakeAssociatedIrpEx(
+    _In_ PIRP Irp,
+    _In_ PDEVICE_OBJECT DeviceObject,
+    _In_ CCHAR StackSize)
+{
+    UNREFERENCED_PARAMETER(DeviceObject);
+    return IoMakeAssociatedIrp(Irp, StackSize);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoGetFsTrackOffsetState(
+    _In_ PIRP Irp,
+    _Out_ PIO_IRP_EXT_TRACK_OFFSET_HEADER *RetFsTrackOffsetBlob,
+    _Out_ LONGLONG *RetTrackedOffset)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_FS_TRACK_OFFSET))
+        return STATUS_NOT_FOUND;
+
+    *RetFsTrackOffsetBlob = Extension->FsTrackOffsetBlob;
+    *RetTrackedOffset = Extension->FsTrackedOffset;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoSetFsTrackOffsetState(
+    _Inout_ PIRP Irp,
+    _In_ PIO_IRP_EXT_TRACK_OFFSET_HEADER FsTrackOffsetBlob,
+    _In_ LONGLONG TrackedOffset)
+{
+    PIOP_IRP_EXTENSION Extension;
+
+    if (FsTrackOffsetBlob == NULL ||
+        FsTrackOffsetBlob->Validation != IRP_EXT_TRACK_OFFSET_HEADER_VALIDATION_VALUE)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    Extension = IopGetOrAllocateIrpExtension(Irp);
+    if (Extension == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Extension->FsTrackOffsetBlob = FsTrackOffsetBlob;
+    Extension->FsTrackedOffset = TrackedOffset;
+    Extension->TypesAllocated |= IOP_IRP_EXTENSION_FS_TRACK_OFFSET;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoClearFsTrackOffsetState(
+    _Inout_ PIRP Irp)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_FS_TRACK_OFFSET))
+        return STATUS_SUCCESS;
+
+    Extension->TypesAllocated &= ~IOP_IRP_EXTENSION_FS_TRACK_OFFSET;
+    Extension->FsTrackOffsetBlob = NULL;
+    Extension->FsTrackedOffset = 0;
+    if (Extension->TypesAllocated == 0)
+        IopFreeIrpExtension(Irp);
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+IoIrpHasFsTrackOffsetExtensionType(
+    _In_ PIRP Irp)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    return (Extension != NULL) &&
+           ((Extension->TypesAllocated & IOP_IRP_EXTENSION_FS_TRACK_OFFSET) != 0);
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoGetFsZeroingOffset(
+    _In_ PIRP Irp,
+    _Out_ PULONG ZeroingOffset)
+{
+    PIOP_IRP_EXTENSION Extension = Irp->Tail.Overlay.IrpExtension;
+
+    if ((Extension == NULL) || !(Extension->TypesAllocated & IOP_IRP_EXTENSION_ZEROING_OFFSET))
+        return STATUS_NOT_FOUND;
+
+    *ZeroingOffset = Extension->ZeroingOffset;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+IoSetFsZeroingOffset(
+    _Inout_ PIRP Irp,
+    _In_ ULONG ZeroingOffset)
+{
+    PIOP_IRP_EXTENSION Extension = IopGetOrAllocateIrpExtension(Irp);
+
+    if (Extension == NULL)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    Extension->ZeroingOffset = ZeroingOffset;
+    Extension->TypesAllocated |= IOP_IRP_EXTENSION_ZEROING_OFFSET;
+    return STATUS_SUCCESS;
+}
+
+/*
+ * @implemented
+ */
+PESILO
+NTAPI
+IoGetSilo(
+    _In_ PFILE_OBJECT FileObject)
+{
+    /* TODO: return the file object's silo context once a component stores IO_FOEXT_SILO_PARAMETERS on file objects; today none does, so every file answers "not in a container context" with NULL per the documented contract */
+    UNREFERENCED_PARAMETER(FileObject);
+    return NULL;
+}
+
+/*
+ * @implemented
+ */
+PIO_FOEXT_SILO_PARAMETERS
+NTAPI
+IoGetSiloParameters(
+    _In_ PFILE_OBJECT FileObject)
+{
+    /* TODO: return the file object's silo parameters once a component stores IO_FOEXT_SILO_PARAMETERS on file objects; today none does, so every file answers "not in a container context" with NULL per the documented contract */
+    UNREFERENCED_PARAMETER(FileObject);
+    return NULL;
+}

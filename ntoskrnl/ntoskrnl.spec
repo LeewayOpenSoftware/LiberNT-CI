@@ -2438,7 +2438,7 @@
 @ stdcall IoCleanupIrp(ptr)
 @ stdcall IoClearActivityIdThread(ptr)
 @ stub -arch=win64 IoClearAdapterCryptoEngineExtension
-@ stub -arch=win64 IoClearFsTrackOffsetState
+@ stdcall -arch=win64 IoClearFsTrackOffsetState(ptr)
 @ stdcall IoClearIrpExtraCreateParameter(ptr)
 @ stub -arch=win64 IoComputeRedirectionTrustLevel
 @ stub -arch=win64 IoConvertFileHandleToKernelHandle
@@ -2469,8 +2469,8 @@
 @ stdcall IoGetDriverDirectory(ptr long long ptr)
 @ stub -arch=win64 IoGetDriverProxyEndpointWrapper
 @ stub -arch=win64 IoGetDriverProxyFeatures
-@ stub -arch=win64 IoGetFsTrackOffsetState
-@ stub -arch=win64 IoGetFsZeroingOffset
+@ stdcall -arch=win64 IoGetFsTrackOffsetState(ptr ptr ptr)
+@ stdcall -arch=win64 IoGetFsZeroingOffset(ptr ptr)
 @ stub -arch=win64 IoGetGenericIrpExtension
 @ stdcall -arch=win64 IoGetInitiatorProcess(ptr)
 @ stub -arch=win64 IoGetIoAttributionHandle
@@ -2481,20 +2481,20 @@
 @ stub -arch=win64 IoGetOplockKeyContextEx
 @ stub -arch=win64 IoGetSfioStreamIdentifier
 @ stub -arch=win64 IoGetShadowFileInformation
-@ stub -arch=win64 IoGetSilo
-@ stub -arch=win64 IoGetSiloParameters
+@ stdcall -arch=win64 IoGetSilo(ptr)
+@ stdcall -arch=win64 IoGetSiloParameters(ptr)
 @ stub -arch=win64 IoGetSymlinkSupportInformation
 @ stdcall IoGetTransactionParameterBlock(ptr)
 @ stdcall -arch=win64 IoIncrementKeepAliveCount(ptr ptr)
 @ stub -arch=win64 IoInitializeIrpEx
 @ stub -arch=win64 IoInitializeMiniCompletionPacket
 @ stdcall IoInitializeWorkItem(ptr ptr)
-@ stub -arch=win64 IoIrpHasFsTrackOffsetExtensionType
+@ stdcall -arch=win64 IoIrpHasFsTrackOffsetExtensionType(ptr)
 @ stub -arch=win64 IoIsActivityTracingEnabled
 @ stdcall IoIsFileObjectIgnoringSharing(ptr)
 @ stub -arch=win64 IoIsInitiator32bitProcess
 @ stub -arch=win64 IoIsValidIrpStatus
-@ stub -arch=win64 IoMakeAssociatedIrpEx
+@ stdcall -arch=win64 IoMakeAssociatedIrpEx(ptr ptr long)
 @ stub -arch=win64 IoMapKsrPersistentMemoryEx
 @ stdcall IoOpenDriverRegistryKey(ptr long long long ptr)
 @ stdcall IoPropagateActivityIdToThread(ptr ptr ptr)
@@ -2532,8 +2532,8 @@
 @ stub -arch=win64 IoSetAdapterCryptoEngineExtension
 @ stub -arch=win64 IoSetDependency
 @ stdcall IoSetFileObjectIgnoreSharing(ptr)
-@ stub -arch=win64 IoSetFsTrackOffsetState
-@ stub -arch=win64 IoSetFsZeroingOffset
+@ stdcall -arch=win64 IoSetFsTrackOffsetState(ptr ptr long)
+@ stdcall -arch=win64 IoSetFsZeroingOffset(ptr long)
 @ stub -arch=win64 IoSetFsZeroingOffsetRequired
 @ stub -arch=win64 IoSetGenericIrpExtension
 @ stub -arch=win64 IoSetIoAttributionIrp
