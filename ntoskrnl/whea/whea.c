@@ -78,19 +78,15 @@ static BOOLEAN WheapConsumerReady;
 static BOOLEAN WheapWorkQueued;
 static LONG64 WheapLastRecordId;
 
-/* Used by the worker only */
 static PUCHAR WheapLogBuffer;
 static REGHANDLE WheapEtwHandle;
 static BOOLEAN WheapEtwRegistered;
 
-/* Microsoft-Windows-WHEA-Logger */
 static const GUID WheapLoggerGuid = { 0xC26C4F3C, 0x3F66, 0x4E99, { 0x8F, 0x8A, 0x39, 0x40, 0x5C, 0xFE, 0xD2, 0x20 } };
 
-/* Ours: the creator of the records made here, and the type of a section that holds a packet as reported */
 static const GUID WheapCreatorGuid = { 0xE1E6D3CF, 0xDA8A, 0x48A3, { 0x9A, 0x7F, 0x3A, 0xD5, 0xFA, 0x13, 0xCC, 0xC0 } };
 static const GUID WheapPacketSectionGuid = { 0x5BD0359E, 0x523C, 0x41FC, { 0xA3, 0x08, 0x9A, 0x51, 0x23, 0xE0, 0xE4, 0x2A } };
 
-/* Taken at HIGH_LEVEL so that a driver can report from its interrupt routine */
 static
 VOID
 WheapAcquireLock(
@@ -174,7 +170,6 @@ WheaInitializeRecordHeader(
     return STATUS_SUCCESS;
 }
 
-/* The record is the header, one section descriptor and the packet, which is already in the buffer */
 static
 VOID
 WheapLogPacket(
@@ -208,7 +203,6 @@ WheapLogPacket(
     if (!WheapEtwRegistered)
         return;
 
-    /* Event 1 is an error with a record, 2 a corrected error, 3 information; a recoverable error goes with 1 */
     RtlZeroMemory(&Event, sizeof(Event));
     Event.Channel = WHEAP_EVENT_CHANNEL_SYSTEM;
     Event.Keyword = WHEAP_EVENT_KEYWORDS;
@@ -304,7 +298,6 @@ WheapDpcRoutine(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    /* A work item that has run cannot be queued again as it is; nothing queues this one while WheapWorkQueued is set */
     ExInitializeWorkItem(&WheapWorkItem, WheapWorker, NULL);
     ExQueueWorkItem(&WheapWorkItem, DelayedWorkQueue);
 }
