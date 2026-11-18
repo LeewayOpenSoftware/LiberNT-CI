@@ -1943,6 +1943,40 @@ SectionSparseDataFile(void)
     WorldDestroy(&World);
 }
 
+static pthread_mutex_t SectionDoneLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t SectionDoneSignal = PTHREAD_COND_INITIALIZER;
+
+static
+void
+SectionSetDone(volatile LONG *Done)
+{
+    pthread_mutex_lock(&SectionDoneLock);
+    __atomic_store_n(Done, 1, __ATOMIC_RELEASE);
+    pthread_cond_broadcast(&SectionDoneSignal);
+    pthread_mutex_unlock(&SectionDoneLock);
+}
+
+static
+BOOLEAN
+SectionWaitBothDone(volatile LONG *First, volatile LONG *Second, ULONG Seconds)
+{
+    struct timespec Deadline;
+    BOOLEAN Both;
+
+    clock_gettime(CLOCK_REALTIME, &Deadline);
+    Deadline.tv_sec += Seconds;
+
+    pthread_mutex_lock(&SectionDoneLock);
+    while (!(__atomic_load_n(First, __ATOMIC_ACQUIRE) && __atomic_load_n(Second, __ATOMIC_ACQUIRE)))
+    {
+        if (pthread_cond_timedwait(&SectionDoneSignal, &SectionDoneLock, &Deadline) != 0)
+            break;
+    }
+    Both = __atomic_load_n(First, __ATOMIC_ACQUIRE) && __atomic_load_n(Second, __ATOMIC_ACQUIRE);
+    pthread_mutex_unlock(&SectionDoneLock);
+    return Both;
+}
+
 typedef struct _SECTION_PURGE_IN_FLIGHT
 {
     PMI_SEGMENT Segment;
@@ -1957,7 +1991,7 @@ SectionPurgeInFlightWorker(void *Context)
     MiHostCpu = 0;
     MachineCpu = 0;
     MiSegmentPurge(State->Segment, 0, PAGE_SIZE, TRUE);
-    __atomic_store_n(&State->Done, 1, __ATOMIC_RELEASE);
+    SectionSetDone(&State->Done);
     return NULL;
 }
 
@@ -2027,7 +2061,7 @@ SectionProtoWriteWorker(void *Context)
     MiHostCpu = 0;
     MachineCpu = 0;
     State->Status = MiWritePrototypePage(State->System, State->Frame);
-    __atomic_store_n(&State->Done, 1, __ATOMIC_RELEASE);
+    SectionSetDone(&State->Done);
     return NULL;
 }
 
@@ -2073,8 +2107,7 @@ SectionPurgeFlushWriterNoCycle(void)
         Write.Status = STATUS_SUCCESS;
         Write.Done = 0;
         MI_ASSERT(pthread_create(&Writer, NULL, SectionProtoWriteWorker, &Write) == 0);
-        for (Spin = 0; Spin < 200 && !__atomic_load_n(&Purge.Done, __ATOMIC_ACQUIRE); Spin++)
-            nanosleep(&Pause, NULL);
+        CHECK(SectionWaitBothDone(&Write.Done, &Purge.Done, 60));
         CHECK(__atomic_load_n(&Write.Done, __ATOMIC_ACQUIRE));
         CHECK(__atomic_load_n(&Purge.Done, __ATOMIC_ACQUIRE));
 
