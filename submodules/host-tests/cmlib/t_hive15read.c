@@ -568,7 +568,7 @@ TCheckFixtureContents(
     {
         PCM_KEY_VALUE value;
         PVOID buffer;
-        BOOLEAN allocated;
+        BOOLEAN allocated, ok;
         HCELL_INDEX release;
         ULONG length;
 
@@ -583,11 +583,15 @@ TCheckFixtureContents(
             CHECK(value != NULL);
             if (value)
             {
-                CHECK(CmpGetValueData(Hive, value, &length, &buffer,
-                                      &allocated, &release) == TRUE);
+                ok = CmpGetValueData(Hive, value, &length, &buffer,
+                                     &allocated, &release);
+                CHECK(ok == TRUE);
                 CHECK(!allocated);
-                CHECK(length == sizeof(ULONG));
-                CHECK(*(PULONG)buffer == 0x12345678);
+                if (ok)
+                {
+                    CHECK(length == sizeof(ULONG));
+                    CHECK(*(PULONG)buffer == 0x12345678);
+                }
                 if (release != HCELL_NIL)
                     HvReleaseCell(Hive, release);
             }
@@ -604,11 +608,15 @@ TCheckFixtureContents(
             CHECK(value != NULL);
             if (value)
             {
-                CHECK(CmpGetValueData(Hive, value, &length, &buffer,
-                                      &allocated, &release) == TRUE);
+                ok = CmpGetValueData(Hive, value, &length, &buffer,
+                                     &allocated, &release);
+                CHECK(ok == TRUE);
                 CHECK(!allocated);
-                CHECK(length == T_MEDIUM_LEN);
-                CHECK(memcmp(buffer, Fix->MediumPattern, T_MEDIUM_LEN) == 0);
+                if (ok)
+                {
+                    CHECK(length == T_MEDIUM_LEN);
+                    CHECK(memcmp(buffer, Fix->MediumPattern, T_MEDIUM_LEN) == 0);
+                }
                 if (release != HCELL_NIL)
                     HvReleaseCell(Hive, release);
             }
@@ -627,10 +635,15 @@ TCheckFixtureContents(
                 CHECK(value != NULL);
                 if (value)
                 {
-                    CHECK(CmpGetValueData(Hive, value, &length, &buffer,
-                                          &allocated, &release) == TRUE);
-                    CHECK(length == T_BIG_LEN);
-                    CHECK(memcmp(buffer, Fix->BigPattern, T_BIG_LEN) == 0);
+                    ok = CmpGetValueData(Hive, value, &length, &buffer,
+                                         &allocated, &release);
+                    CHECK(ok == TRUE);
+                    if (ok)
+                    {
+                        CHECK(length == T_BIG_LEN);
+                        if (length == T_BIG_LEN)
+                            CHECK(memcmp(buffer, Fix->BigPattern, T_BIG_LEN) == 0);
+                    }
                     if (allocated)
                         Hive->Free(buffer, length);
                     else if (release != HCELL_NIL)
@@ -651,11 +664,16 @@ TCheckFixtureContents(
                 CHECK(value != NULL);
                 if (value)
                 {
-                    CHECK(CmpGetValueData(Hive, value, &length, &buffer,
-                                          &allocated, &release) == TRUE);
+                    ok = CmpGetValueData(Hive, value, &length, &buffer,
+                                         &allocated, &release);
+                    CHECK(ok == TRUE);
                     CHECK(!allocated);
-                    CHECK(length == T_LARGE_LEN);
-                    CHECK(memcmp(buffer, Fix->LargePattern, T_LARGE_LEN) == 0);
+                    if (ok)
+                    {
+                        CHECK(length == T_LARGE_LEN);
+                        if (length == T_LARGE_LEN)
+                            CHECK(memcmp(buffer, Fix->LargePattern, T_LARGE_LEN) == 0);
+                    }
                     if (release != HCELL_NIL)
                         HvReleaseCell(Hive, release);
                 }
@@ -688,7 +706,17 @@ TTestLoadAndRead(
     CHECK(status == STATUS_SUCCESS);
     if (NT_SUCCESS(status))
     {
+        CM_CHECK_REGISTRY_STATUS checkStatus;
+
         TCheckFixtureContents(fix, &cmHive.Hive);
+
+        /* The load-time validator must accept the fixture wholesale */
+        checkStatus = CmCheckRegistry(&cmHive, CM_CHECK_REGISTRY_VALIDATE_HIVE);
+        if (checkStatus != CM_CHECK_REGISTRY_GOOD)
+            fprintf(stderr, "FAIL CmCheckRegistry minor %lu status %lu\n",
+                    (unsigned long)Minor, (unsigned long)checkStatus);
+        CHECK(checkStatus == CM_CHECK_REGISTRY_GOOD);
+
         HvFree(&cmHive.Hive);
     }
 
