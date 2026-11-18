@@ -2907,6 +2907,13 @@ BasepCaptureExtendedAttributes(
     {
         SIZE_T HandleIndex;
 
+        /* A list with a NULL entry is for the kernel to judge: Windows starts such a process without inherited handles */
+        for (HandleIndex = 0; HandleIndex < *HandleCount; HandleIndex++)
+        {
+            if (!(*HandleList)[HandleIndex])
+                return TRUE;
+        }
+
         for (HandleIndex = 0; HandleIndex < *HandleCount; HandleIndex++)
         {
             DWORD HandleFlags;
