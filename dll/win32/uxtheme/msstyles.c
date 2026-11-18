@@ -545,9 +545,11 @@ static PTHEME_CLASS MSSTYLES_AddClass(PTHEME_FILE tf, LPCWSTR pszAppName, LPCWST
     if (!cur)
         RaiseException(STATUS_NO_MEMORY, EXCEPTION_NONCONTINUABLE, 0, NULL);
 #endif
+    memset(cur, 0, sizeof(*cur));
     cur->signature = THEME_CLASS_SIGNATURE;
     cur->refcount = 0;
     cur->hTheme = tf->hTheme;
+    cur->tf = tf;
     lstrcpyW(cur->szAppName, pszAppName);
     lstrcpyW(cur->szClassName, pszClassName);
     cur->next = tf->classes;
