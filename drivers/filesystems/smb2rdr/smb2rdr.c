@@ -42,6 +42,34 @@ static NTSTATUS NTAPI Smb2RdrStop(IN OUT PRX_CONTEXT RxContext, IN OUT PRDBSS_DE
     return STATUS_SUCCESS;
 }
 
+/*
+ * The daemon channel (START, STOP, GETREQ, PUTREPLY) carries credentials and file data in the clear, so
+ * only the daemon may use it: the process that sent the request must run as SYSTEM or as an
+ * administrator. The test uses the requestor process' primary token, not the thread that happens to run
+ * the IOCTL (RDBSS may post it to a worker). Drive-letter control (ADDCONN, DELCONN) stays open to
+ * every user: the network provider sends it from the user's own process.
+ */
+static BOOLEAN Smb2CallerIsPrivileged(PIRP Irp)
+{
+    PEPROCESS process;
+    PACCESS_TOKEN token;
+    LUID luid;
+    BOOLEAN allowed = FALSE;
+
+    if (!Irp || Irp->RequestorMode == KernelMode)
+        return TRUE;
+    process = IoGetRequestorProcess(Irp);
+    if (!process)
+        return FALSE;
+    token = PsReferencePrimaryToken(process);
+    if (NT_SUCCESS(SeQueryAuthenticationIdToken(token, &luid)) && luid.HighPart == 0 && luid.LowPart == 0x3E7)
+        allowed = TRUE;                 /* the SYSTEM logon session */
+    else if (SeTokenIsAdmin(token))
+        allowed = TRUE;
+    PsDereferencePrimaryToken(token);
+    return allowed;
+}
+
 /* Control IOCTLs from the daemon (reached through RDBSS device control dispatch) */
 static NTSTATUS NTAPI Smb2RdrDevFcbXXXControlFile(IN OUT PRX_CONTEXT RxContext)
 {
@@ -56,6 +84,10 @@ static NTSTATUS NTAPI Smb2RdrDevFcbXXXControlFile(IN OUT PRX_CONTEXT RxContext)
     if (RxContext->MajorFunction != IRP_MJ_DEVICE_CONTROL &&
         RxContext->MajorFunction != IRP_MJ_INTERNAL_DEVICE_CONTROL)
         return STATUS_INVALID_DEVICE_REQUEST;
+
+    if ((code == IOCTL_SMB2RDR_START || code == IOCTL_SMB2RDR_STOP || code == IOCTL_SMB2RDR_GETREQ ||
+         code == IOCTL_SMB2RDR_PUTREPLY) && !Smb2CallerIsPrivileged(RxContext->CurrentIrp))
+        return STATUS_ACCESS_DENIED;
 
     switch (code)
     {
