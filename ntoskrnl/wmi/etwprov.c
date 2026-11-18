@@ -613,6 +613,7 @@ EtwpTraceUserEvent(
     Status = EtwpDeliver(Provider, &Header.Descriptor,
                          (Header.Flags & ETW_USER_EVENT_ACTIVITY_ID) ? &Header.ActivityId : NULL,
                          Total ? 1 : 0, &Captured, KernelMode,
+                         sizeof(PVOID) != sizeof(ULONG) &&
                          PreviousMode != KernelMode && PsGetCurrentProcessWow64Process() != NULL);
     if (Copy)
         ExFreePoolWithTag(Copy, ETWP_PROV_TAG);
