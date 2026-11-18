@@ -29,6 +29,12 @@ public:
     T *operator->() const { return m_p; }
     T &operator*() const { return *m_p; }
     T *get() const { return m_p; }
+    T *release()
+    {
+        T *p = m_p;
+        m_p = 0;
+        return p;
+    }
     void reset(T *p = 0)
     {
         if (p != m_p)
