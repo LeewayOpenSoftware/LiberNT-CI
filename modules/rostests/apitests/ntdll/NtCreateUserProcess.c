@@ -141,7 +141,7 @@ TestList_(
 
 START_TEST(NtCreateUserProcess)
 {
-    HANDLE Event, Mine = NULL, Plain = NULL, Helper, Process, List[2];
+    HANDLE Event, Mine = NULL, Plain = NULL, Helper, Process, List[3];
     HANDLE InParent = NULL, Unlisted = NULL, NotInherited = NULL;
     NTSTATUS Status;
 
@@ -169,6 +169,14 @@ START_TEST(NtCreateUserProcess)
     List[0] = Mine;
     List[1] = Mine;
     TestList(NULL, List, 2, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+
+    List[0] = Mine;
+    List[1] = NULL;
+    TestList(NULL, List, 2, STATUS_SUCCESS, Event, NULL, Mine);
+    List[0] = NULL;
+    TestList(NULL, List, 2, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+    List[1] = Plain;
+    TestList(NULL, List, 2, STATUS_SUCCESS, Event, NULL, Mine);
 
     List[0] = Mine;
     Status = CreateSuspendedProcess(NULL, List, 1, 0, &Process);
@@ -212,13 +220,38 @@ START_TEST(NtCreateUserProcess)
         TestList(Helper, List, 2, STATUS_SUCCESS, Event, InParent, NotInherited);
         TestList(Helper, List, 2, STATUS_SUCCESS, Event, Unlisted, NULL);
 
-        /* A NULL entry: the process starts and inherits nothing */
+        List[2] = NotInherited;
+        TestList(Helper, List, 3, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+
+        /* One NULL entry: the process starts and inherits nothing */
         List[1] = NULL;
         TestList(Helper, List, 2, STATUS_SUCCESS, Event, NULL, InParent);
         TestList(Helper, List, 2, STATUS_SUCCESS, Event, NULL, Unlisted);
         List[0] = NULL;
+        TestList(Helper, List, 1, STATUS_SUCCESS, Event, NULL, InParent);
         List[1] = InParent;
         TestList(Helper, List, 2, STATUS_SUCCESS, Event, NULL, InParent);
+        List[1] = NotInherited;
+        TestList(Helper, List, 2, STATUS_SUCCESS, Event, NULL, InParent);
+        List[1] = InParent;
+        List[2] = Unlisted;
+        TestList(Helper, List, 3, STATUS_SUCCESS, Event, NULL, InParent);
+        TestList(Helper, List, 3, STATUS_SUCCESS, Event, NULL, Unlisted);
+
+        /* The entries next to it still have to be distinct handles of the parent */
+        List[1] = NULL;
+        TestList(Helper, List, 2, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+        List[1] = (HANDLE)(ULONG_PTR)0x7FFF0;
+        TestList(Helper, List, 2, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+        List[1] = (HANDLE)((ULONG_PTR)InParent | 1);
+        TestList(Helper, List, 2, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+        List[1] = NtCurrentProcess();
+        TestList(Helper, List, 2, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+        List[1] = InParent;
+        List[2] = InParent;
+        TestList(Helper, List, 3, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
+        List[2] = NULL;
+        TestList(Helper, List, 3, STATUS_INVALID_PARAMETER, Event, NULL, NULL);
     }
 
     NtTerminateProcess(Helper, STATUS_SUCCESS);

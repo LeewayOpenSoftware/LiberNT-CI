@@ -2303,6 +2303,29 @@ ObpFilterInheritedHandleCallback(
     return TRUE;
 }
 
+static
+BOOLEAN
+NTAPI
+ObpCountListedHandleCallback(
+    IN PHANDLE_TABLE_ENTRY HandleEntry,
+    IN HANDLE Handle,
+    IN PVOID Context)
+{
+    POBP_INHERIT_HANDLE_CONTEXT FilterContext = Context;
+    SIZE_T Index;
+
+    for (Index = 0; Index < FilterContext->HandleCount; Index++)
+    {
+        if (FilterContext->HandleList[Index] == Handle)
+        {
+            FilterContext->KeptCount++;
+            break;
+        }
+    }
+
+    return FALSE;
+}
+
 /*++
 * @name ObClearProcessHandleTable
 *
@@ -2390,7 +2413,7 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
     PHANDLE_TABLE ParentTable, ObjectTable;
     OBP_INHERIT_HANDLE_CONTEXT FilterContext;
     NTSTATUS Status = STATUS_SUCCESS;
-    SIZE_T Index;
+    SIZE_T Index, NullCount = 0;
 
     /* Check for a parent */
     if (Parent)
@@ -2414,14 +2437,21 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
             FilterContext.HandleCount = HandleCount;
             FilterContext.KeptCount = 0;
 
-            /* A list with a NULL entry inherits nothing: measured on Windows 11 */
             for (Index = 0; Index < HandleCount; Index++)
             {
                 if (!HandleList[Index])
-                {
-                    FilterContext.HandleCount = 0;
-                    break;
-                }
+                    NullCount++;
+            }
+
+            /* One NULL entry: nothing is inherited, the other entries still have to be handles of the parent */
+            if (NullCount)
+            {
+                ExEnumHandleTable(ParentTable, ObpCountListedHandleCallback, &FilterContext, NULL);
+                if (NullCount != 1 || FilterContext.KeptCount != HandleCount - 1)
+                    Status = STATUS_INVALID_PARAMETER;
+
+                FilterContext.HandleCount = 0;
+                FilterContext.KeptCount = 0;
             }
 
             ObjectTable->StrictFIFO = TRUE;
