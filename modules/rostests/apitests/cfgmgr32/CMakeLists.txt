@@ -1,4 +1,5 @@
 add_executable(cfgmgr32_apitest
+    DevGetObjectsContainer.c
     ReenumerateDevNode.c
     testlist.c)
 
