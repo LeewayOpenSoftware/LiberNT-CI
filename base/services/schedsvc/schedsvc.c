@@ -275,9 +275,17 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
     hr = write_xml_utf8(full_name, disposition, xml);
     if (hr == S_OK)
     {
+        /*
+         * Without its record the task must not stay: a replaced file could
+         * otherwise run as a previous registrant whose record survived. A
+         * failed registration, update included, therefore leaves no task.
+         */
         hr = engine_task_registered(relative_path, registrant);
-        if (FAILED(hr) && !existed)
+        if (FAILED(hr))
+        {
             DeleteFileW(full_name);
+            if (existed) engine_task_deleted(relative_path);
+        }
     }
     engine_unlock();
     LocalFree(registrant);
@@ -1086,7 +1094,11 @@ HRESULT __cdecl SchRpcEnableTask(const WCHAR *path, DWORD enabled)
     wcscat(new_xml, after);
     wcscat(new_xml, suffix);
 
+    /* the engine never reads a half-written file */
+    engine_lock();
     hr = write_xml_utf8(full_name, CREATE_ALWAYS, new_xml);
+    engine_unlock();
+    if (hr == S_OK) engine_notify_changed();
 
     free(new_xml);
     free(xml);

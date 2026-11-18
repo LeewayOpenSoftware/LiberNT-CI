@@ -2790,7 +2790,11 @@ HRESULT engine_task_registered(const WCHAR *path, const WCHAR *registrant)
     LONG err;
 
     if (!registrant) return E_INVALIDARG;
-    if (!(key = open_state_key(path, TRUE))) return E_ACCESSDENIED;
+    if (!(key = open_state_key(path, TRUE)))
+    {
+        state_delete(path);   /* no stale account left behind */
+        return E_ACCESSDENIED;
+    }
     err = RegSetValueExW(key, L"Registrant", 0, REG_SZ, (const BYTE *)registrant,
                          (wcslen(registrant) + 1) * sizeof(WCHAR));
     RegCloseKey(key);
