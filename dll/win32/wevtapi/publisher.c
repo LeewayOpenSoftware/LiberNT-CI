@@ -103,10 +103,23 @@ static BOOL source_key_name(const WCHAR *channel, const WCHAR *source, WCHAR *ke
     return TRUE;
 }
 
+static BOOL source_exists(const WCHAR *channel, const WCHAR *source)
+{
+    WCHAR keyname[512];
+    HKEY key;
+
+    if (!source_key_name(channel, source, keyname, ARRAY_SIZE(keyname)))
+        return FALSE;
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyname, 0, KEY_READ, &key))
+        return FALSE;
+    RegCloseKey(key);
+    return TRUE;
+}
+
 static WCHAR *find_source_channel(const WCHAR *source)
 {
-    HKEY key, sub;
-    WCHAR log[256], keyname[512], *channel = NULL;
+    HKEY key;
+    WCHAR log[256], *channel = NULL;
     DWORD i, len;
 
     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, eventlog_keyW, 0, KEY_READ, &key))
@@ -116,12 +129,8 @@ static WCHAR *find_source_channel(const WCHAR *source)
         len = ARRAY_SIZE(log);
         if (RegEnumKeyExW(key, i, log, &len, NULL, NULL, NULL, NULL))
             break;
-        if (!source_key_name(log, source, keyname, ARRAY_SIZE(keyname)))
-            continue;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, keyname, 0, KEY_READ, &sub))
-            continue;
-        RegCloseKey(sub);
-        channel = evt_strdupW(log);
+        if (source_exists(log, source))
+            channel = evt_strdupW(log);
     }
     RegCloseKey(key);
     return channel;
@@ -145,63 +154,120 @@ static WCHAR *read_string_value(const WCHAR *keyname, const WCHAR *value)
     return data;
 }
 
-static WCHAR *read_source_value(const struct evt_publisher *pub, const WCHAR *value)
+static WCHAR *read_source_value(const WCHAR *channel, const WCHAR *source, const WCHAR *value)
 {
     WCHAR keyname[512];
 
-    if (!source_key_name(pub->channel, pub->name, keyname, ARRAY_SIZE(keyname)))
+    if (!source_key_name(channel, source, keyname, ARRAY_SIZE(keyname)))
         return NULL;
     return read_string_value(keyname, value);
 }
 
-static WCHAR *load_template(WCHAR *files, DWORD id, LANGID lang)
+/* The message DLLs named by a ';' list, loaded as data for the duration of one call */
+struct message_files
 {
-    WCHAR *path, *next, *text = NULL;
-    HMODULE module;
+    HMODULE *modules;
+    DWORD count;
+};
 
-    for (path = files; path && *path && !text; path = next)
+static void load_message_files(WCHAR *files, struct message_files *mf)
+{
+    WCHAR *path, *next;
+    HMODULE *grown;
+
+    mf->modules = NULL;
+    mf->count = 0;
+    for (path = files; path && *path; path = next)
     {
         next = wcschr(path, ';');
         if (next) *next++ = 0;
         while (*path == ' ') path++;
         if (!*path) continue;
-        if (!(module = LoadLibraryExW(path, NULL, LOAD_LIBRARY_AS_DATAFILE)))
-            continue;
+        if (!(grown = heap_realloc(mf->modules, (mf->count + 1) * sizeof(HMODULE))))
+            break;
+        mf->modules = grown;
+        if ((mf->modules[mf->count] = LoadLibraryExW(path, NULL, LOAD_LIBRARY_AS_DATAFILE)))
+            mf->count++;
+    }
+}
+
+static void free_message_files(struct message_files *mf)
+{
+    DWORD i;
+    for (i = 0; i < mf->count; i++) FreeLibrary(mf->modules[i]);
+    heap_free(mf->modules);
+    mf->modules = NULL;
+    mf->count = 0;
+}
+
+/* The template of a message from the first file that has it; LocalFree'd by the caller */
+static WCHAR *load_template(const struct message_files *mf, DWORD id, LANGID lang)
+{
+    WCHAR *text = NULL;
+    DWORD i;
+
+    for (i = 0; i < mf->count && !text; i++)
+    {
         if (!FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS,
-                            module, id, lang, (WCHAR *)&text, 0, NULL) && lang)
+                            mf->modules[i], id, lang, (WCHAR *)&text, 0, NULL) && lang)
         {
             text = NULL;
             FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_HMODULE | FORMAT_MESSAGE_IGNORE_INSERTS,
-                           module, id, 0, (WCHAR *)&text, 0, NULL);
+                           mf->modules[i], id, 0, (WCHAR *)&text, 0, NULL);
         }
-        FreeLibrary(module);
     }
     return text;
 }
 
-static WCHAR *load_source_message(const struct evt_publisher *pub, const WCHAR *value, DWORD id, LANGID lang,
-                                  DWORD *status)
+static WCHAR *load_source_message(const WCHAR *channel, const WCHAR *source, const WCHAR *value, DWORD id,
+                                  LANGID lang, DWORD *status)
 {
+    struct message_files mf;
     WCHAR *files, *text;
 
-    if (!(files = read_source_value(pub, value)))
+    if (!(files = read_source_value(channel, source, value)))
     {
         *status = ERROR_EVT_MESSAGE_NOT_FOUND;
         return NULL;
     }
-    text = load_template(files, id, lang);
+    load_message_files(files, &mf);
     heap_free(files);
+    text = load_template(&mf, id, lang);
+    free_message_files(&mf);
     if (!text)
         *status = ERROR_EVT_MESSAGE_LOCALE_NOT_FOUND;
     return text;
 }
 
-static WCHAR *expand_parameters(const WCHAR *text, const struct evt_publisher *pub, LANGID lang, DWORD *status)
+struct expand_context
+{
+    const WCHAR *channel;
+    const WCHAR *source;
+    LANGID lang;
+    struct message_files parameters;
+    BOOL parameters_loaded;
+};
+
+static void expand_context_init(struct expand_context *ctx, const WCHAR *channel, const WCHAR *source, LANGID lang)
+{
+    memset(ctx, 0, sizeof(*ctx));
+    ctx->channel = channel;
+    ctx->source = source;
+    ctx->lang = lang;
+}
+
+static void expand_context_free(struct expand_context *ctx)
+{
+    free_message_files(&ctx->parameters);
+}
+
+/* %%N parameter inserts, resolved through the source's ParameterMessageFile; the files are loaded once per call */
+static WCHAR *expand_parameters(const WCHAR *text, struct expand_context *ctx, DWORD *status)
 {
     struct msgbuf mb = { 0 };
     const WCHAR *p = text;
     WCHAR *end, *param;
-    DWORD id, ignored;
+    DWORD id;
 
     while (*p)
     {
@@ -212,7 +278,14 @@ static WCHAR *expand_parameters(const WCHAR *text, const struct evt_publisher *p
             continue;
         }
         id = wcstoul(p + 2, &end, 10);
-        if ((param = load_source_message(pub, L"ParameterMessageFile", id, lang, &ignored)))
+        if (!ctx->parameters_loaded)
+        {
+            WCHAR *files = read_source_value(ctx->channel, ctx->source, L"ParameterMessageFile");
+            if (files) load_message_files(files, &ctx->parameters);
+            heap_free(files);
+            ctx->parameters_loaded = TRUE;
+        }
+        if ((param = load_template(&ctx->parameters, id, ctx->lang)))
         {
             trim_line_ends(param);
             mb_append(&mb, param);
@@ -230,8 +303,8 @@ static WCHAR *expand_parameters(const WCHAR *text, const struct evt_publisher *p
 
 /* Expands %N, %n, %r, %t, %0 and %% ourselves: FormatMessage with an argument
  * array reads past it when the template names more inserts than there are. */
-static WCHAR *expand_template(const WCHAR *tmpl, const WCHAR **args, DWORD count, const struct evt_publisher *pub,
-                              LANGID lang, DWORD *status)
+static WCHAR *expand_template(const WCHAR *tmpl, const WCHAR **args, DWORD count, struct expand_context *ctx,
+                              DWORD *status)
 {
     struct msgbuf mb = { 0 };
     const WCHAR *p = tmpl, *q;
@@ -248,6 +321,8 @@ static WCHAR *expand_template(const WCHAR *tmpl, const WCHAR **args, DWORD count
             p++;
             continue;
         }
+        if (p[1] == '0')
+            break;
         if (iswdigit(p[1]))
         {
             q = p + 1;
@@ -276,7 +351,6 @@ static WCHAR *expand_template(const WCHAR *tmpl, const WCHAR **args, DWORD count
         case 'n': mb_append(&mb, L"\r\n"); break;
         case 'r': mb_append(&mb, L"\r"); break;
         case 't': mb_append(&mb, L"\t"); break;
-        case '0': goto done;
         case '%':
             mb_append(&mb, L"%");
             if (iswdigit(p[2]))
@@ -295,12 +369,11 @@ static WCHAR *expand_template(const WCHAR *tmpl, const WCHAR **args, DWORD count
         }
         p += 2;
     }
-done:
     if (!(expanded = mb_finish(&mb)))
         return NULL;
     if (!params)
         return expanded;
-    result = expand_parameters(expanded, pub, lang, status);
+    result = expand_parameters(expanded, ctx, status);
     heap_free(expanded);
     return result;
 }
@@ -418,16 +491,29 @@ static LANGID publisher_langid(const struct evt_publisher *pub)
     return pub->locale ? LANGIDFROMLCID(pub->locale) : 0;
 }
 
+/* The event's own log wins when the source is registered there too */
+static const WCHAR *publisher_channel(const struct evt_publisher *pub, const struct evt_event *event)
+{
+    if (event && pub->name && event->channel && lstrcmpiW(event->channel, pub->channel) &&
+        source_exists(event->channel, pub->name))
+        return event->channel;
+    return pub->channel;
+}
+
 static WCHAR *format_message_id(const struct evt_publisher *pub, const struct evt_event *event, DWORD id,
                                 const EVT_VARIANT *values, DWORD count, DWORD *status)
 {
+    struct expand_context ctx;
+    const WCHAR *channel = publisher_channel(pub, event);
     WCHAR *tmpl, **args, *text;
     DWORD n;
 
-    if (!(tmpl = load_source_message(pub, L"EventMessageFile", id, publisher_langid(pub), status)))
+    if (!(tmpl = load_source_message(channel, pub->name, L"EventMessageFile", id, publisher_langid(pub), status)))
         return NULL;
     args = collect_args(event, values, count, &n);
-    text = expand_template(tmpl, (const WCHAR **)args, n, pub, publisher_langid(pub), status);
+    expand_context_init(&ctx, channel, pub->name, publisher_langid(pub));
+    text = expand_template(tmpl, (const WCHAR **)args, n, &ctx, status);
+    expand_context_free(&ctx);
     free_args(args, n);
     LocalFree(tmpl);
     if (!text)
@@ -465,19 +551,16 @@ static WCHAR *format_level(const struct evt_event *event, DWORD *status)
     return evt_strdupW(name);
 }
 
-static WCHAR *format_task(const struct evt_publisher *pub, const struct evt_event *event, DWORD *status)
+/* A template without inserts (category or channel name), expanded and trimmed */
+static WCHAR *plain_message(WCHAR *tmpl, const WCHAR *channel, const WCHAR *source, LANGID lang, DWORD *status)
 {
-    WCHAR *tmpl, *text;
+    struct expand_context ctx;
+    WCHAR *text;
     DWORD ignored;
 
-    if (!event->record->EventCategory ||
-        !(tmpl = load_source_message(pub, L"CategoryMessageFile", event->record->EventCategory,
-                                     publisher_langid(pub), &ignored)))
-    {
-        *status = ERROR_EVT_MESSAGE_ID_NOT_FOUND;
-        return NULL;
-    }
-    text = expand_template(tmpl, NULL, 0, pub, publisher_langid(pub), &ignored);
+    expand_context_init(&ctx, channel, source, lang);
+    text = expand_template(tmpl, NULL, 0, &ctx, &ignored);
+    expand_context_free(&ctx);
     LocalFree(tmpl);
     if (!text)
     {
@@ -486,6 +569,22 @@ static WCHAR *format_task(const struct evt_publisher *pub, const struct evt_even
     }
     trim_line_ends(text);
     return text;
+}
+
+static WCHAR *format_task(const struct evt_publisher *pub, const struct evt_event *event, DWORD *status)
+{
+    const WCHAR *channel = publisher_channel(pub, event);
+    WCHAR *tmpl;
+    DWORD ignored;
+
+    if (!event->record->EventCategory ||
+        !(tmpl = load_source_message(channel, pub->name, L"CategoryMessageFile", event->record->EventCategory,
+                                     publisher_langid(pub), &ignored)))
+    {
+        *status = ERROR_EVT_MESSAGE_ID_NOT_FOUND;
+        return NULL;
+    }
+    return plain_message(tmpl, channel, pub->name, publisher_langid(pub), status);
 }
 
 static WCHAR *format_keywords(const struct evt_event *event, SIZE_T *len, DWORD *status)
@@ -520,8 +619,9 @@ static WCHAR *format_keywords(const struct evt_event *event, SIZE_T *len, DWORD 
 
 static WCHAR *format_channel(const struct evt_publisher *pub, const struct evt_event *event, DWORD *status)
 {
-    WCHAR keyname[512], *files, *tmpl, *text;
-    DWORD id, size = sizeof(id), ignored;
+    struct message_files mf;
+    WCHAR keyname[512], *files, *tmpl;
+    DWORD id, size = sizeof(id);
 
     if (lstrlenW(event->channel) + ARRAY_SIZE(eventlog_keyW) + 1 > ARRAY_SIZE(keyname))
     {
@@ -537,22 +637,16 @@ static WCHAR *format_channel(const struct evt_publisher *pub, const struct evt_e
         *status = ERROR_EVT_MESSAGE_ID_NOT_FOUND;
         return NULL;
     }
-    tmpl = load_template(files, id, publisher_langid(pub));
+    load_message_files(files, &mf);
     heap_free(files);
+    tmpl = load_template(&mf, id, publisher_langid(pub));
+    free_message_files(&mf);
     if (!tmpl)
     {
         *status = ERROR_EVT_MESSAGE_ID_NOT_FOUND;
         return NULL;
     }
-    text = expand_template(tmpl, NULL, 0, pub, publisher_langid(pub), &ignored);
-    LocalFree(tmpl);
-    if (!text)
-    {
-        *status = ERROR_OUTOFMEMORY;
-        return NULL;
-    }
-    trim_line_ends(text);
-    return text;
+    return plain_message(tmpl, publisher_channel(pub, event), pub->name, publisher_langid(pub), status);
 }
 
 static WCHAR *format_provider(const struct evt_publisher *pub, const struct evt_event *event, DWORD *status)
@@ -784,7 +878,7 @@ BOOL WINAPI EvtGetPublisherMetadataProperty(EVT_HANDLE handle, EVT_PUBLISHER_MET
         SetLastError(ERROR_NOT_SUPPORTED);
         return FALSE;
     }
-    text = pub->name ? read_source_value(pub, value) : NULL;
+    text = pub->name ? read_source_value(pub->channel, pub->name, value) : NULL;
     ret = put_variant_string(buffer, size, used, text);
     heap_free(text);
     return ret;
