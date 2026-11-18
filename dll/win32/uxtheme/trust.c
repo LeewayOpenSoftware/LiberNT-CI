@@ -333,8 +333,11 @@ TrustClassify(void)
 decide:
     cls = tl4_trust_classify(&f);
     g_privileged = cls != TL4_TRUST_ORDINARY;
-    /* T-PRIV-2 (the pure decision) or T-PRIV-6 (logon or secure desktop, kept here as Jim 2 asked) */
-    g_machineDefault = tl4_trust_uses_machine_default(&f) || f.is_logon_process ||
+    /* T-PRIV-2 (the pure decision) or T-PRIV-6 (logon or secure desktop, kept here as Jim 2 asked).
+     * A privileged process must take the machine default too: it cannot use a version-4 style (the v4 gate is
+     * off for it), so without this it would read the user version-4 DllName, fail to open it, and drop the whole
+     * session to classic instead of the default v3 visual style. Ordinary processes still read the user theme. */
+    g_machineDefault = g_privileged || tl4_trust_uses_machine_default(&f) || f.is_logon_process ||
                        (dchars == 8 && !_wcsnicmp(desk, L"Winlogon", 8)) ||
                        (dchars == 12 && !_wcsnicmp(desk, L"Screen-saver", 12)) ||
                        !(wchars == 7 && !_wcsnicmp(winsta, L"WinSta0", 7));
