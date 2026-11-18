@@ -14,7 +14,6 @@ static
 VOID
 TestDeriveCapabilitySids(VOID)
 {
-    SID_IDENTIFIER_AUTHORITY AppPackageAuthority = SECURITY_APP_PACKAGE_AUTHORITY;
     UCHAR GroupSidBuffer[SECURITY_MAX_SID_SIZE];
     UCHAR CapSidBuffer[SECURITY_MAX_SID_SIZE];
     UCHAR GroupSidBuffer2[SECURITY_MAX_SID_SIZE];
