@@ -75,6 +75,16 @@ FsRtlIsPagingFile(IN PFILE_OBJECT FileObject)
 {
     return MmIsFileObjectAPagingFile(FileObject);
 }
+/*
+ * @implemented
+ */
+LOGICAL
+NTAPI
+FsRtlIsSystemPagingFile(IN PFILE_OBJECT FileObject)
+{
+    /* LiberNT tracks a single system paging file, so a paging file is always the system paging file */
+    return MmIsFileObjectAPagingFile(FileObject);
+}
 
 /*
  * @implemented

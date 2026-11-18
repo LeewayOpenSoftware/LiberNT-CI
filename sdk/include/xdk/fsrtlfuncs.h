@@ -849,6 +849,24 @@ FsRtlIsNameInExpression(
   _In_ BOOLEAN IgnoreCase,
   _In_opt_ PWCHAR UpcaseTable);
 
+_Must_inspect_result_
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+BOOLEAN
+NTAPI
+FsRtlIsNameInUnUpcasedExpression(
+  _In_ PUNICODE_STRING Expression,
+  _In_ PUNICODE_STRING Name,
+  _In_ BOOLEAN IgnoreCase,
+  _In_opt_ PWCH UpcaseTable);
+
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+LOGICAL
+NTAPI
+FsRtlIsSystemPagingFile(
+  _In_ PFILE_OBJECT FileObject);
+
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTKERNELAPI
 VOID

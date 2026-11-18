@@ -2338,9 +2338,9 @@
 @ stdcall FsRtlIsEcpFromUserMode(ptr)
 @ stub -arch=win64 FsRtlIsExtentDangling
 @ stub -arch=win64 FsRtlIsMobileOS
-@ stub -arch=win64 FsRtlIsNameInUnUpcasedExpression
+@ stdcall -arch=win64 FsRtlIsNameInUnUpcasedExpression(ptr ptr long ptr)
 @ stub -arch=win64 FsRtlIsNonEmptyDirectoryReparsePointAllowed
-@ stub -arch=win64 FsRtlIsSystemPagingFile
+@ stdcall -arch=win64 FsRtlIsSystemPagingFile(ptr)
 @ stub -arch=win64 FsRtlIssueDeviceIoControl
 @ stub -arch=win64 FsRtlKernelFsControlFile
 @ stub -arch=win64 FsRtlLogCcFlushError
