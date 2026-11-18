@@ -28,6 +28,13 @@ NTAPI
 WheaReportHwError(
   _In_ PWHEA_ERROR_PACKET ErrorPacket);
 
+_IRQL_requires_max_(DISPATCH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaInitializeRecordHeader(
+  _Out_ PWHEA_ERROR_RECORD_HEADER Header);
+
 #endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
 
 $endif (_NTDDK_)

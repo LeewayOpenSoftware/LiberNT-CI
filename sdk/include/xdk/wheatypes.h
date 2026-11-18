@@ -157,6 +157,91 @@ typedef enum _WHEA_ERROR_SOURCE_STATE {
 
 #pragma pack(push, 1)
 
+typedef union _WHEA_ERROR_RECORD_HEADER_VALIDBITS {
+    struct {
+        ULONG PlatformId : 1;
+        ULONG Timestamp : 1;
+        ULONG PartitionId : 1;
+        ULONG Reserved : 29;
+    } DUMMYSTRUCTNAME;
+    ULONG AsULONG;
+} WHEA_ERROR_RECORD_HEADER_VALIDBITS, *PWHEA_ERROR_RECORD_HEADER_VALIDBITS;
+
+typedef union _WHEA_ERROR_RECORD_HEADER_FLAGS {
+    struct {
+        ULONG Recovered : 1;
+        ULONG PreviousError : 1;
+        ULONG Simulated : 1;
+        ULONG DeviceDriver : 1;
+        ULONG CriticalEvent : 1;
+        ULONG PersistPfn : 1;
+        ULONG SectionsTruncated : 1;
+        ULONG RecoveryInProgress : 1;
+        ULONG Throttle : 1;
+        ULONG Reserved : 23;
+    } DUMMYSTRUCTNAME;
+    ULONG AsULONG;
+} WHEA_ERROR_RECORD_HEADER_FLAGS, *PWHEA_ERROR_RECORD_HEADER_FLAGS;
+
+typedef union _WHEA_TIMESTAMP {
+    struct {
+        ULONGLONG Seconds : 8;
+        ULONGLONG Minutes : 8;
+        ULONGLONG Hours : 8;
+        ULONGLONG Precise : 1;
+        ULONGLONG Reserved : 7;
+        ULONGLONG Day : 8;
+        ULONGLONG Month : 8;
+        ULONGLONG Year : 8;
+        ULONGLONG Century : 8;
+    } DUMMYSTRUCTNAME;
+    LARGE_INTEGER AsLARGE_INTEGER;
+} WHEA_TIMESTAMP, *PWHEA_TIMESTAMP;
+
+typedef union _WHEA_PERSISTENCE_INFO {
+    struct {
+        ULONGLONG Signature : 16;
+        ULONGLONG Length : 24;
+        ULONGLONG Identifier : 16;
+        ULONGLONG Attributes : 2;
+        ULONGLONG DoNotLog : 1;
+        ULONGLONG Reserved : 5;
+    } DUMMYSTRUCTNAME;
+    ULONGLONG AsULONGLONG;
+} WHEA_PERSISTENCE_INFO, *PWHEA_PERSISTENCE_INFO;
+
+#define WHEA_ERROR_RECORD_SIGNATURE     'REPC'
+#define WHEA_ERROR_RECORD_SIGNATURE_END 0xFFFFFFFF
+
+typedef struct _WHEA_ERROR_RECORD_HEADER {
+    ULONG Signature;
+    WHEA_REVISION Revision;
+    ULONG SignatureEnd;
+    USHORT SectionCount;
+    WHEA_ERROR_SEVERITY Severity;
+    WHEA_ERROR_RECORD_HEADER_VALIDBITS ValidBits;
+    ULONG Length;
+    WHEA_TIMESTAMP Timestamp;
+    GUID PlatformId;
+    GUID PartitionId;
+    GUID CreatorId;
+    GUID NotifyType;
+    ULONGLONG RecordId;
+    WHEA_ERROR_RECORD_HEADER_FLAGS Flags;
+    WHEA_PERSISTENCE_INFO PersistenceInfo;
+    union {
+        struct {
+            ULONG OsBuildNumber;
+            UCHAR Reserved2[8];
+        } DUMMYSTRUCTNAME;
+        UCHAR Reserved[12];
+    } DUMMYUNIONNAME;
+} WHEA_ERROR_RECORD_HEADER, *PWHEA_ERROR_RECORD_HEADER;
+
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+
 typedef union _WHEA_ERROR_PACKET_FLAGS {
     struct {
         ULONG PreviousError : 1;

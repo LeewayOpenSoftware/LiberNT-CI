@@ -6,6 +6,7 @@
  */
 
 #include <ntoskrnl.h>
+#include <evntprov.h>
 #define NDEBUG
 #include <debug.h>
 
@@ -14,6 +15,16 @@
 #define WHEAP_MAX_RAW_DATA_LENGTH 0x10000
 #define WHEAP_MAX_RECORDS 64
 #define WHEAP_MAX_RECORD_BYTES 0x100000
+#define WHEAP_RECORD_REVISION 0x0210
+#define WHEAP_SECTION_REVISION 0x0300
+#define WHEAP_EVENT_CHANNEL_SYSTEM 8
+#define WHEAP_EVENT_KEYWORDS 0x8000000000000002ULL
+#define WHEAP_LOG_BUFFER_LENGTH \
+    (sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR) + \
+     sizeof(WHEA_ERROR_PACKET_V2) + WHEAP_MAX_RAW_DATA_LENGTH)
+
+C_ASSERT(sizeof(WHEA_ERROR_RECORD_HEADER) == 128);
+C_ASSERT(sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR) == 72);
 
 typedef struct _WHEAP_DESCRIPTOR_HEADER
 {
@@ -62,6 +73,19 @@ static KDPC WheapDpc;
 static WORK_QUEUE_ITEM WheapWorkItem;
 static BOOLEAN WheapConsumerReady;
 static BOOLEAN WheapWorkQueued;
+static LONG64 WheapLastRecordId;
+
+/* Used by the worker only */
+static PUCHAR WheapLogBuffer;
+static REGHANDLE WheapEtwHandle;
+static BOOLEAN WheapEtwRegistered;
+
+/* Microsoft-Windows-WHEA-Logger */
+static const GUID WheapLoggerGuid = { 0xC26C4F3C, 0x3F66, 0x4E99, { 0x8F, 0x8A, 0x39, 0x40, 0x5C, 0xFE, 0xD2, 0x20 } };
+
+/* Ours: the creator of the records made here, and the type of a section that holds a packet as reported */
+static const GUID WheapCreatorGuid = { 0xE1E6D3CF, 0xDA8A, 0x48A3, { 0x9A, 0x7F, 0x3A, 0xD5, 0xFA, 0x13, 0xCC, 0xC0 } };
+static const GUID WheapPacketSectionGuid = { 0x5BD0359E, 0x523C, 0x41FC, { 0xA3, 0x08, 0x9A, 0x51, 0x23, 0xE0, 0xE4, 0x2A } };
 
 /* Taken at HIGH_LEVEL so that a driver can report from its interrupt routine */
 static
@@ -115,6 +139,97 @@ WheapIsRangeInPacket(
            DataLength <= PacketLength - Offset;
 }
 
+NTSTATUS
+NTAPI
+WheaInitializeRecordHeader(
+    _Out_ PWHEA_ERROR_RECORD_HEADER Header)
+{
+    LARGE_INTEGER SystemTime;
+    TIME_FIELDS Time;
+
+    if (!Header)
+        return STATUS_INVALID_PARAMETER;
+
+    RtlZeroMemory(Header, sizeof(*Header));
+    Header->Signature = WHEA_ERROR_RECORD_SIGNATURE;
+    Header->Revision.AsUSHORT = WHEAP_RECORD_REVISION;
+    Header->SignatureEnd = WHEA_ERROR_RECORD_SIGNATURE_END;
+    Header->Length = sizeof(*Header);
+    Header->CreatorId = WheapCreatorGuid;
+    Header->RecordId = (ULONGLONG)InterlockedIncrement64(&WheapLastRecordId);
+
+    KeQuerySystemTime(&SystemTime);
+    RtlTimeToTimeFields(&SystemTime, &Time);
+    Header->Timestamp.Seconds = Time.Second;
+    Header->Timestamp.Minutes = Time.Minute;
+    Header->Timestamp.Hours = Time.Hour;
+    Header->Timestamp.Day = Time.Day;
+    Header->Timestamp.Month = Time.Month;
+    Header->Timestamp.Year = Time.Year % 100;
+    Header->Timestamp.Century = Time.Year / 100;
+    Header->ValidBits.Timestamp = 1;
+    return STATUS_SUCCESS;
+}
+
+/* The record is the header, one section descriptor and the packet, which is already in the buffer */
+static
+VOID
+WheapLogPacket(
+    _In_ ULONG PacketLength)
+{
+    PWHEA_ERROR_RECORD_HEADER Header = (PWHEA_ERROR_RECORD_HEADER)WheapLogBuffer;
+    PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR Section = (PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR)(Header + 1);
+    PWHEA_ERROR_PACKET_V2 Packet = (PWHEA_ERROR_PACKET_V2)(Section + 1);
+    EVENT_DATA_DESCRIPTOR Data[2];
+    EVENT_DESCRIPTOR Event;
+    ULONG Length;
+
+    WheaInitializeRecordHeader(Header);
+    Header->SectionCount = 1;
+    Header->Severity = Packet->ErrorSeverity;
+    Header->NotifyType = Packet->NotifyType;
+    Header->Flags.PreviousError = Packet->Flags.PreviousError;
+    Header->Flags.Simulated = Packet->Flags.Simulated;
+    Length = sizeof(*Header) + sizeof(*Section) + PacketLength;
+    Header->Length = Length;
+
+    RtlZeroMemory(Section, sizeof(*Section));
+    Section->SectionOffset = sizeof(*Header) + sizeof(*Section);
+    Section->SectionLength = PacketLength;
+    Section->Revision.AsUSHORT = WHEAP_SECTION_REVISION;
+    Section->SectionType = WheapPacketSectionGuid;
+    Section->SectionSeverity = Packet->ErrorSeverity;
+
+    if (!WheapEtwRegistered)
+        WheapEtwRegistered = NT_SUCCESS(EtwRegister(&WheapLoggerGuid, NULL, NULL, &WheapEtwHandle));
+    if (!WheapEtwRegistered)
+        return;
+
+    /* Event 1 is an error with a record, 2 a corrected error, 3 information; a recoverable error goes with 1 */
+    RtlZeroMemory(&Event, sizeof(Event));
+    Event.Channel = WHEAP_EVENT_CHANNEL_SYSTEM;
+    Event.Keyword = WHEAP_EVENT_KEYWORDS;
+    if (Packet->ErrorSeverity == WheaErrSevCorrected)
+    {
+        Event.Id = 2;
+        Event.Level = 3;
+    }
+    else if (Packet->ErrorSeverity == WheaErrSevInformational)
+    {
+        Event.Id = 3;
+        Event.Level = 4;
+    }
+    else
+    {
+        Event.Id = 1;
+        Event.Level = 2;
+    }
+
+    EventDataDescCreate(&Data[0], &Length, sizeof(Length));
+    EventDataDescCreate(&Data[1], Header, Length);
+    EtwWrite(WheapEtwHandle, &Event, NULL, RTL_NUMBER_OF(Data), Data);
+}
+
 static
 VOID
 NTAPI
@@ -129,6 +244,9 @@ WheapWorker(
     KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(Parameter);
+
+    if (!WheapLogBuffer)
+        WheapLogBuffer = ExAllocatePoolWithTag(NonPagedPoolNx, WHEAP_LOG_BUFFER_LENGTH, WHEAP_TAG);
 
     for (;;)
     {
@@ -146,12 +264,21 @@ WheapWorker(
         ErrorType = Packet->ErrorType;
         Severity = Packet->ErrorSeverity;
         Length = Record->PacketLength;
+        if (WheapLogBuffer)
+        {
+            RtlCopyMemory(WheapLogBuffer + sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR),
+                          Packet,
+                          Length);
+        }
+
         InsertTailList(&Record->Source->FreeRecords, &Record->Link);
         WheapReleaseLock(OldIrql);
 
-        /* TODO: build the error record and write it through ETW (Microsoft-Windows-WHEA-Logger) */
+        /* FIXME: drop this line once ETW events reach the event log; until then it is the only trace */
         DPRINT1("WHEA: hardware error from source %lu: type %d, severity %d, packet of %lu bytes\n",
                 ErrorSourceId, ErrorType, Severity, Length);
+        if (WheapLogBuffer)
+            WheapLogPacket(Length);
     }
 }
 

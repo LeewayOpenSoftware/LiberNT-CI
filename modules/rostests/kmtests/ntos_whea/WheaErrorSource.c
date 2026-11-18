@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT kernel-mode tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Hardware error sources: add, remove, reports queued in the records of their source and drained
+ * PURPOSE:     Hardware error sources, reports queued and drained, and the header of an error record
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -169,6 +169,39 @@ TestReportRefusals(
     }
 }
 
+static
+VOID
+TestRecordHeader(VOID)
+{
+    static const GUID NoGuid = { 0 };
+    WHEA_ERROR_RECORD_HEADER First, Second;
+
+    ok_eq_hex(WheaInitializeRecordHeader(NULL), STATUS_INVALID_PARAMETER);
+
+    RtlFillMemory(&First, sizeof(First), 0xA5);
+    ok_eq_hex(WheaInitializeRecordHeader(&First), STATUS_SUCCESS);
+    ok_eq_hex(sizeof(First), 128);
+    ok(RtlEqualMemory(&First.Signature, "CPER", 4), "The record does not start with CPER\n");
+    ok_eq_hex(First.Revision.AsUSHORT, 0x0210);
+    ok_eq_hex(First.SignatureEnd, 0xFFFFFFFF);
+    ok_eq_hex(First.SectionCount, 0);
+    ok_eq_hex(First.Length, sizeof(First));
+    ok_eq_hex(First.ValidBits.AsULONG, 2);
+    ok(First.Timestamp.Century >= 20 && First.Timestamp.Year < 100 &&
+       First.Timestamp.Month >= 1 && First.Timestamp.Month <= 12 &&
+       First.Timestamp.Day >= 1 && First.Timestamp.Day <= 31 &&
+       First.Timestamp.Hours < 24 && First.Timestamp.Minutes < 60 && First.Timestamp.Seconds < 60,
+       "Timestamp 0x%I64x is not a date and time in plain binary\n", First.Timestamp.AsLARGE_INTEGER.QuadPart);
+    ok_eq_hex(First.Flags.AsULONG, 0);
+    ok(First.PersistenceInfo.AsULONGLONG == 0, "Persistence information is set\n");
+    ok(!RtlEqualMemory(&First.CreatorId, &NoGuid, sizeof(GUID)), "No creator\n");
+    ok(RtlEqualMemory(&First.PlatformId, &NoGuid, sizeof(GUID)), "A platform id without its valid bit\n");
+
+    ok_eq_hex(WheaInitializeRecordHeader(&Second), STATUS_SUCCESS);
+    ok(Second.RecordId > First.RecordId, "Record ids 0x%I64x then 0x%I64x\n", First.RecordId, Second.RecordId);
+    ok(RtlEqualMemory(&First.CreatorId, &Second.CreatorId, sizeof(GUID)), "The creator changed\n");
+}
+
 /* Reports until the worker has given a record back to the source, for at most five seconds */
 static
 NTSTATUS
@@ -223,6 +256,7 @@ START_TEST(WheaErrorSource)
     ULONG FirstId;
     KIRQL Irql;
 
+    TestRecordHeader();
     TestAddRefusals();
 
     InitDescriptor(&Started);
