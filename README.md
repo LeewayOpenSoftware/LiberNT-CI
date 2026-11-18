@@ -18,7 +18,7 @@ The objective is to contribute toward a more complete, reliable and hardware-com
 - System stability, installation, servicing and recovery.
 
 ### Project Relationship
-**Upstream:** https://github.com/LiberNT/LiberNT
+**Upstream:** As of November 17, 2026, this repository is no longer part of the LiberNT fork network and is now listed directly under ReactOS. Development and maintenance continue independently under Leeway Open Software.
 
 **Leeway Development Repository:** https://github.com/LeewayOpenSoftware/LiberNT-LDW
 
