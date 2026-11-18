@@ -95,7 +95,7 @@ static
 NTSTATUS
 AttachSingleKey(
     _In_ PFILE_OBJECT FileObject,
-    _In_ PCGUID Key)
+    _In_ const GUID *Key)
 {
     PECP_LIST EcpList = NULL;
     PVOID EcpContext;
@@ -135,8 +135,8 @@ static
 NTSTATUS
 AttachDualKey(
     _In_ PFILE_OBJECT FileObject,
-    _In_opt_ PCGUID ParentKey,
-    _In_opt_ PCGUID TargetKey)
+    _In_opt_ const GUID *ParentKey,
+    _In_opt_ const GUID *TargetKey)
 {
     PECP_LIST EcpList = NULL;
     PVOID EcpContext;
