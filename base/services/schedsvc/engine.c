@@ -935,6 +935,7 @@ static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **o
     const WCHAR *stack[MAX_TASK_DEPTH];
     WCHAR *names[MAX_TASK_DEPTH] = { NULL };
     WCHAR *text = NULL;
+    size_t text_len = 0;
     IXmlReader *reader = NULL;
     IStream *stream = NULL;
     struct task_def *def;
@@ -1034,7 +1035,7 @@ static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **o
             if (task_depth > 0 && depth > task_depth)
             {
                 /* an element's text may come in several nodes: it is all of them */
-                size_t have = text ? wcslen(text) : 0, add;
+                size_t have = text ? text_len : 0, add;
                 WCHAR *grown;
 
                 if (FAILED(hr = IXmlReader_GetValue(reader, &value, NULL))) goto out;
@@ -1051,6 +1052,7 @@ static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **o
                 }
                 text = grown;
                 memcpy(text + have, value, (add + 1) * sizeof(WCHAR));
+                text_len = have + add;
             }
             break;
 
@@ -1118,19 +1120,28 @@ static HRESULT parse_task_wstr(const WCHAR *xml, struct task_def **def)
 #define FILE_WRITE_RIGHTS (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | \
                            WRITE_DAC | WRITE_OWNER | DELETE | GENERIC_WRITE | GENERIC_ALL)
 
-static BOOL is_broad_group(PSID sid)
+static const WCHAR trusted_installer[] = L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+
+/* LocalSystem, Administrators or TrustedInstaller */
+static BOOL is_trusted_principal(PSID sid)
 {
-    return IsWellKnownSid(sid, WinWorldSid) || IsWellKnownSid(sid, WinAuthenticatedUserSid) ||
-           IsWellKnownSid(sid, WinBuiltinUsersSid) || IsWellKnownSid(sid, WinInteractiveSid) ||
-           IsWellKnownSid(sid, WinAnonymousSid) || IsWellKnownSid(sid, WinNetworkSid) ||
-           IsWellKnownSid(sid, WinBuiltinGuestsSid);
+    PSID ti;
+    BOOL ret;
+
+    if (IsWellKnownSid(sid, WinLocalSystemSid) || IsWellKnownSid(sid, WinBuiltinAdministratorsSid))
+        return TRUE;
+    if (!ConvertStringSidToSidW(trusted_installer, &ti))
+        return FALSE;
+    ret = EqualSid(sid, ti);
+    LocalFree(ti);
+    return ret;
 }
 
 /*
  * Decided on the open handle the file is then read from, never by path:
  * - the owner is LocalSystem, Administrators or TrustedInstaller (the service
  *   writes every registered task itself);
- * - the DACL grants no write to a broad group, and is not NULL;
+ * - the DACL is not NULL and grants write only to those three;
  * - the file is not a reparse point and has a single link.
  * On a volume without ACLs (FAT) there is no file security at all: the owner
  * and DACL tests are skipped, and the whole authorization model there is
@@ -1138,10 +1149,9 @@ static BOOL is_broad_group(PSID sid)
  */
 static BOOL is_trusted_task_handle(HANDLE hfile, const WCHAR *file)
 {
-    static const WCHAR trusted_installer[] = L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
     BY_HANDLE_FILE_INFORMATION info;
     SECURITY_DESCRIPTOR *sd = NULL;
-    PSID owner = NULL, ti;
+    PSID owner = NULL;
     PACL dacl = NULL;
     DWORD size = 0, i;
     BOOL defaulted, present, ok = FALSE;
@@ -1163,14 +1173,7 @@ static BOOL is_trusted_task_handle(HANDLE hfile, const WCHAR *file)
         goto done;
 
     why = "of its owner";
-    if (IsWellKnownSid(owner, WinLocalSystemSid) || IsWellKnownSid(owner, WinBuiltinAdministratorsSid))
-        ok = TRUE;
-    else if (ConvertStringSidToSidW(trusted_installer, &ti))
-    {
-        ok = EqualSid(owner, ti);
-        LocalFree(ti);
-    }
-    if (!ok) goto done;
+    if (!(ok = is_trusted_principal(owner))) goto done;
 
     why = "of its DACL";
     if (!present || !dacl)
@@ -1182,9 +1185,20 @@ static BOOL is_trusted_task_handle(HANDLE hfile, const WCHAR *file)
     {
         ACE_HEADER *ace;
         if (!GetAce(dacl, i, (void **)&ace)) { ok = FALSE; break; }
-        if (ace->AceType != ACCESS_ALLOWED_ACE_TYPE || (ace->AceFlags & INHERIT_ONLY_ACE)) continue;
-        if ((((ACCESS_ALLOWED_ACE *)ace)->Mask & FILE_WRITE_RIGHTS) &&
-            is_broad_group((PSID)&((ACCESS_ALLOWED_ACE *)ace)->SidStart))
+        if (ace->AceFlags & INHERIT_ONLY_ACE) continue;
+        /* deny, audit and alarm entries grant nothing */
+        if (ace->AceType == ACCESS_DENIED_ACE_TYPE || ace->AceType == ACCESS_DENIED_OBJECT_ACE_TYPE ||
+            ace->AceType == ACCESS_DENIED_CALLBACK_ACE_TYPE || ace->AceType == ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE ||
+            ace->AceType == SYSTEM_AUDIT_ACE_TYPE || ace->AceType == SYSTEM_ALARM_ACE_TYPE ||
+            ace->AceType == SYSTEM_AUDIT_OBJECT_ACE_TYPE || ace->AceType == SYSTEM_ALARM_OBJECT_ACE_TYPE ||
+            ace->AceType == SYSTEM_AUDIT_CALLBACK_ACE_TYPE || ace->AceType == SYSTEM_ALARM_CALLBACK_ACE_TYPE ||
+            ace->AceType == SYSTEM_AUDIT_CALLBACK_OBJECT_ACE_TYPE || ace->AceType == SYSTEM_ALARM_CALLBACK_OBJECT_ACE_TYPE)
+            continue;
+        /* every entry that grants write must be for SYSTEM, Administrators or TrustedInstaller;
+         * any allow type other than the plain one that grants write is refused outright */
+        if (!(((ACCESS_ALLOWED_ACE *)ace)->Mask & FILE_WRITE_RIGHTS)) continue;
+        if (ace->AceType != ACCESS_ALLOWED_ACE_TYPE ||
+            !is_trusted_principal((PSID)&((ACCESS_ALLOWED_ACE *)ace)->SidStart))
         {
             ok = FALSE;
             break;
@@ -2214,8 +2228,9 @@ static void scan_folder(const WCHAR *dir, const WCHAR *rel, int depth, ULONGLONG
 
             if (FAILED(load_task_file(child, &def)))
             {
-                WARN("skipping unreadable task %s\n", debugstr_w(child));
-                if (task) task->seen = TRUE;
+                /* fail closed: a file that changed into one we refuse drops the
+                 * loaded definition too, it is not kept from before */
+                WARN("skipping unreadable or untrusted task %s\n", debugstr_w(child));
                 free(child);
                 free(child_rel);
                 continue;

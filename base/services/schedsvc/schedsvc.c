@@ -135,7 +135,7 @@ static HRESULT write_xml_utf8(const WCHAR *name, DWORD disposition, const WCHAR 
     /*
      * Task files belong to the service: SYSTEM and Administrators only, not
      * inherited, whatever the folder grants. The engine refuses a task file
-     * that a broad group could write. (A volume without ACLs refuses the call.)
+     * that anyone else could write. (A volume without ACLs refuses the call.)
      */
     {
         PSECURITY_DESCRIPTOR sd;
