@@ -22,6 +22,7 @@
 #include <hubbusif.h>
 #include <usbbusif.h>
 #include <ucxclass.h>
+#include "ucxurbcheck.h"
 
 #define UCX_TAG 'xCcU'
 
@@ -99,6 +100,9 @@ typedef struct _UCX_DEVICE_HANDLE {
     ULONG ConfigDescriptorLength;
     KSPIN_LOCK PipeLock;                   /* Interfaces[] and the pipes' Closing flags */
     volatile LONG Busy;                    /* callers inside a hub-interface or URB path */
+    volatile LONG Removing;                /* RemoveUsbDevice ran: the last caller out destroys */
+    volatile LONG Destroyed;               /* claimed once by whoever destroys */
+    struct _UCX_ROOTHUB_CTX *RootHub;      /* for a destroy from a release */
     BOOLEAN InitializeFailed;              /* a failed Initialize is final for this handle */
 } UCX_DEVICE_HANDLE, *PUCX_DEVICE_HANDLE;
 
@@ -249,6 +253,9 @@ VOID
 UcxpReleaseDeviceHandle(
     _In_ PUCX_DEVICE_HANDLE Handle);
 
+/* The URB limits the dispatchers enforce (ucxroothub.c) */
+extern const UCX_URB_LIMITS UcxpUrbLimits;
+
 BOOLEAN
 UcxpFindDeviceHandle(
     _In_ PUCX_CONTROLLER_CTX Controller,
@@ -304,6 +311,11 @@ UcxpDeviceGetDescriptors(
 
 VOID
 UcxpDeviceRemove(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle);
+
+VOID
+UcxpDeviceDestroy(
     _In_ PUCX_ROOTHUB_CTX RootHub,
     _Inout_ PUCX_DEVICE_HANDLE Handle);
 

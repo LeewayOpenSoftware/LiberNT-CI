@@ -3867,23 +3867,32 @@ XhciUcxEvtUsbDeviceDefaultEndpointAdd(
     UNREFERENCED_PARAMETER(Controller);
     UNREFERENCED_PARAMETER(MaxPacketSize0);
 
-    if (Device->Slot == NULL)
-        return STATUS_INVALID_DEVICE_STATE;
-
     UCX_ENDPOINT_EVENT_CALLBACKS_INIT(&Callbacks);
     Callbacks.EvtEndpointControlTransfer = XhciUcxEvtEndpointControlTransfer;
     UcxEndpointInitSetEventCallbacks(EndpointInit, &Callbacks);
 
+    /* The slot is this device's only under the mutex (Disable clears it under it) */
+    ExAcquireFastMutex(&Device->Dev->TransferMutex);
+    if (Device->Slot == NULL || !Device->Slot->InUse)
+    {
+        ExReleaseFastMutex(&Device->Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_ENDPOINT_CLIENT);
     Status = UcxEndpointCreate(UsbDevice, &EndpointInit, &Attributes, &Endpoint);
     if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Device->Dev->TransferMutex);
         return Status;
+    }
 
     Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
     Ep->Dev = Device->Dev;
     Ep->UsbDevice = UsbDevice;
     Ep->Dci = 1;
     Device->Slot->Ep0 = Endpoint;
+    ExReleaseFastMutex(&Device->Dev->TransferMutex);
     return STATUS_SUCCESS;
 }
 
@@ -4758,7 +4767,11 @@ XhciUcxEpAbortCommon(
         Ep->Halted = FALSE;
     }
     Ep->Aborting = FALSE;
-    XhciUcxEpKickLocked(Ep, &Done);          /* whatever arrived meanwhile and was not collected */
+    /* Whatever arrived meanwhile and was not collected starts now; after a
+     * failed quiesce the controller may still run the old TDs, so nothing is
+     * started: the parked transfers wait for a completion or the next abort */
+    if (NT_SUCCESS(Status))
+        XhciUcxEpKickLocked(Ep, &Done);
     KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
     ExReleaseFastMutex(&Dev->TransferMutex);
 

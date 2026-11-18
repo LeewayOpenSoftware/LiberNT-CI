@@ -55,6 +55,16 @@ UcxpRootHubController(
     return UcxGetControllerCtx((WDFOBJECT)RootHub->Controller);
 }
 
+/* What the dispatchers carry (ucxdevice.c bounds the same way; this is the front door) */
+const UCX_URB_LIMITS UcxpUrbLimits =
+{
+    UCX_CONTROL_MAX_TRANSFER,              /* one control data stage */
+    UCX_BULK_MAX_TRANSFER,                 /* one bulk/interrupt transfer */
+    1024,                                  /* isochronous packets per URB (refused later anyway) */
+    UCX_MAX_INTERFACES,
+    UCX_MAX_PIPES
+};
+
 NTSTATUS
 UcxpUsbdToNtStatus(
     _In_ USBD_STATUS UsbdStatus)
@@ -511,6 +521,18 @@ UcxpRootHubHandleUrb(
     if (Urb->UrbHeader.Length < sizeof(struct _URB_HEADER))
     {
         WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    /* The shape check (SEC-2): no dispatcher reads a field the function
+     * implies before this said the URB holds it and the values are carried */
+    UsbdStatus = UcxUrbCheck(Urb, &UcxpUrbLimits);
+    if (!USBD_SUCCESS(UsbdStatus))
+    {
+        UcxLog("roothub: URB %s (0x%04X, %u bytes) refused at the boundary, USBD 0x%08lX",
+               UcxUrbFunctionName(Urb->UrbHeader.Function), Urb->UrbHeader.Function,
+               Urb->UrbHeader.Length, (ULONG)UsbdStatus);
+        UcxpCompleteUrb(Request, Urb, UsbdStatus);
         return;
     }
 

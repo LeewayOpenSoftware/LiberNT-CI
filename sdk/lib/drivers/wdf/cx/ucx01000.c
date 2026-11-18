@@ -141,7 +141,14 @@ VOID
 UcxpReleaseDeviceHandle(
     _In_ PUCX_DEVICE_HANDLE Handle)
 {
-    InterlockedDecrement(&Handle->Busy);
+    /* The last caller out of a removed handle takes it down (Remove left it
+     * alone because callers were still inside) */
+    if (InterlockedDecrement(&Handle->Busy) == 0 &&
+        InterlockedCompareExchange(&Handle->Removing, 0, 0) != 0 &&
+        InterlockedExchange(&Handle->Destroyed, 1) == 0)
+    {
+        UcxpDeviceDestroy(Handle->RootHub, Handle);
+    }
 }
 
 BOOLEAN

@@ -216,6 +216,7 @@ UcxpDeviceCreate(
     if (Handle == NULL)
         return STATUS_INSUFFICIENT_RESOURCES;
     KeInitializeSpinLock(&Handle->PipeLock);
+    Handle->RootHub = RootHub;
     Init = ExAllocatePoolZero(NonPagedPoolNx, sizeof(*Init), UCX_TAG);
     if (Init == NULL)
     {
@@ -508,32 +509,51 @@ UcxpDeviceGetDescriptors(
     return STATUS_SUCCESS;
 }
 
+/*
+ * RemoveUsbDevice: unlist the handle so no new caller finds it, then take it
+ * down when no caller is inside; if one still is after a short wait, the last
+ * one out does it (UcxpReleaseDeviceHandle). Remove claims the handle once.
+ */
 VOID
 UcxpDeviceRemove(
     _In_ PUCX_ROOTHUB_CTX RootHub,
     _Inout_ PUCX_DEVICE_HANDLE Handle)
 {
     PUCX_CONTROLLER_CTX Controller = UcxGetControllerCtx((WDFOBJECT)RootHub->Controller);
+    LARGE_INTEGER Slice;
+    ULONG Waited = 0;
+
+    if (InterlockedExchange(&Handle->Removing, 1) != 0)
+        return;                                        /* a second Remove for the same handle */
+
+    /* Out of the list first: no URB finds it from here on */
+    UcxpRemoveDeviceHandle(Controller, Handle);
+
+    /* Callers already inside are short (a hub-interface call or one URB) */
+    Slice.QuadPart = -10 * 1000 * 10;                  /* 10 ms */
+    while (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0 && Waited < 100)
+    {
+        KeDelayExecutionThread(KernelMode, FALSE, &Slice);
+        Waited++;
+    }
+    if (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0)
+    {
+        UcxLog("device: port %u remove: %ld caller(s) still inside after %lu ms, the last one out destroys",
+               Handle->PortNumber, InterlockedCompareExchange(&Handle->Busy, 0, 0), Waited * 10);
+        return;
+    }
+    if (InterlockedExchange(&Handle->Destroyed, 1) == 0)
+        UcxpDeviceDestroy(RootHub, Handle);
+}
+
+/* The teardown proper: pipes, endpoints, slot, objects, memory. Runs once per handle, at PASSIVE_LEVEL. */
+VOID
+UcxpDeviceDestroy(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle)
+{
     PUCX_USBDEVICE_CTX Device = UcxpDeviceCtx(Handle);
     UCXUSBDEVICE UsbDevice = Handle->UsbDevice;
-
-    /* Out of the list first: no URB finds it from here on; then wait for the
-     * callers that already hold it (hub-interface and URB paths are short) */
-    UcxpRemoveDeviceHandle(Controller, Handle);
-    {
-        LARGE_INTEGER Slice;
-        ULONG Waited = 0;
-
-        Slice.QuadPart = -10 * 1000 * 10;              /* 10 ms */
-        while (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0 && Waited < 500)
-        {
-            KeDelayExecutionThread(KernelMode, FALSE, &Slice);
-            Waited++;
-        }
-        if (Waited != 0)
-            UcxLog("device: port %u remove waited %lu x 10 ms for %ld caller(s)", Handle->PortNumber, Waited,
-                   InterlockedCompareExchange(&Handle->Busy, 0, 0));
-    }
 
     /* Its pipes give their transfers back and the endpoints leave the controller */
     UcxpDeviceUnconfigure(RootHub, Handle, FALSE);
