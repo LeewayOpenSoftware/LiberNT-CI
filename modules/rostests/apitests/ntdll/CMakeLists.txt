@@ -135,6 +135,7 @@ list(APPEND SOURCE
     NtQuerySystemInformation.c
     NtQueryValueKey.c
     NtQueryVolumeInformationFile.c
+    VolumeDeviceOpen.c
     NtRaiseException.c
     NtReadFile.c
     NtSaveKey.c

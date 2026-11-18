@@ -2762,6 +2762,12 @@ static BOOL SHELL_execute(LPSHELLEXECUTEINFOW sei, SHELL_ExecuteW32 execfunc)
             }
         }
 
+        for (LPWSTR pch = wszApplicationName; *pch; ++pch)
+        {
+            if (*pch == L'/')
+                *pch = L'\\';
+        }
+
         len = lstrlenW(wszApplicationName) + 3;
         if (sei_tmp.lpParameters[0])
             len += 1 + lstrlenW(wszParameters);

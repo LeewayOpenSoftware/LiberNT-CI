@@ -45,9 +45,11 @@ list(APPEND SOURCE
     DefaultActCtx.c
     ElevationRequired.c
     DeleteFileCase.c
+    DeleteFileOpenHandle.c
     DeviceIoControl.c
     EmulatedProcess.c
     dosdev.c
+    DateTimeFormatFlags.c
     EnumDateTimeFormats.c
     EnumSystemCodePages.c
     FindActCtxSectionStringW.c

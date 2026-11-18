@@ -166,11 +166,13 @@ KMT_TESTFUNC Test_FsRtlRemoveDotsFromPath;
 KMT_TESTFUNC Test_FsRtlTunnel;
 KMT_TESTFUNC Test_FsRtlVolumeStartup;
 #if defined(_M_IX86) || defined(_M_AMD64)
+KMT_TESTFUNC Test_AcpiPciLinkRouting;
 KMT_TESTFUNC Test_HalBusData;
 KMT_TESTFUNC Test_HalMessageState;
 KMT_TESTFUNC Test_HalPortIo;
 #endif
 KMT_TESTFUNC Test_HalDmaAlignment;
+KMT_TESTFUNC Test_HdAudBusInterface;
 KMT_TESTFUNC Test_HalRealTimeClock;
 KMT_TESTFUNC Test_HalSystemInfo;
 KMT_TESTFUNC Test_IoContainerId;
@@ -489,6 +491,7 @@ KMT_TESTFUNC Test_IoPciD3Cold;
 KMT_TESTFUNC Test_IoPciDeviceReset;
 KMT_TESTFUNC Test_IoPciExpressInterfaces;
 KMT_TESTFUNC Test_IoPciEnumeration;
+KMT_TESTFUNC Test_IoPciBridgeWindow;
 KMT_TESTFUNC Test_IoPciRom;
 KMT_TESTFUNC Test_IoStackLimits;
 KMT_TESTFUNC Test_IoVpb;
@@ -638,11 +641,13 @@ const KMT_TEST TestList[] =
     { "FsRtlTunnel",                        Test_FsRtlTunnel },
     { "FsRtlVolumeStartup",                 Test_FsRtlVolumeStartup },
 #if defined(_M_IX86) || defined(_M_AMD64)
+    { "AcpiPciLinkRouting",                 Test_AcpiPciLinkRouting },
     { "HalBusData",                         Test_HalBusData },
     { "-HalMessageState",                   Test_HalMessageState },
     { "HalPortIo",                          Test_HalPortIo },
 #endif
     { "HalDmaAlignment",                    Test_HalDmaAlignment },
+    { "HdAudBusInterface",                  Test_HdAudBusInterface },
     { "HalRealTimeClock",                   Test_HalRealTimeClock },
     { "HalSystemInfo",                      Test_HalSystemInfo },
     { "IoContainerId",                      Test_IoContainerId },
@@ -725,6 +730,7 @@ const KMT_TEST TestList[] =
     { "IoPciDeviceReset",                   Test_IoPciDeviceReset },
     { "IoPciExpressInterfaces",             Test_IoPciExpressInterfaces },
     { "IoPciEnumeration",                   Test_IoPciEnumeration },
+    { "IoPciBridgeWindow",                  Test_IoPciBridgeWindow },
     { "IoPciRom",                           Test_IoPciRom },
     { "IoPciMessageEnable",                 Test_IoPciMessageEnable },
     { "IoPagingIrpRetire",                  Test_IoPagingIrpRetire },

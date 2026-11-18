@@ -2679,7 +2679,7 @@ BOOL WINAPI SetupCopyOEMInfA(
     PWSTR DestinationInfFileNameW = NULL;
     PWSTR DestinationInfFileNameComponentW = NULL;
     BOOL ret = FALSE;
-    DWORD size;
+    DWORD size = 0;
 
     TRACE("%s %s 0x%lx 0x%lx %p 0%lu %p %p\n",
         SourceInfFileName, OEMSourceMediaLocation, OEMSourceMediaType,
@@ -2717,7 +2717,7 @@ BOOL WINAPI SetupCopyOEMInfA(
         {
             DWORD LastError = GetLastError();
 
-            if (RequiredSize) *RequiredSize = size;
+            if (RequiredSize && size) *RequiredSize = size;
             if (LastError == ERROR_FILE_EXISTS && DestinationInfFileNameSize != 0 &&
                 !WideCharToMultiByte(CP_ACP, 0, DestinationInfFileNameW, -1,
                                      DestinationInfFileName, DestinationInfFileNameSize, NULL, NULL))

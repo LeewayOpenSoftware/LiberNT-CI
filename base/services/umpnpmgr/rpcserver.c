@@ -2272,6 +2272,7 @@ PNP_GetDeviceRegProp(
             lpValueName = L"Service";
             break;
 
+        /* TODO: derive CM_DRP_CLASS from ClassGUID and the class key; instance keys hold no Class value */
         case CM_DRP_CLASS:
             lpValueName = L"Class";
             break;

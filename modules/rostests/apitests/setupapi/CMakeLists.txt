@@ -12,6 +12,7 @@ list(APPEND SOURCE
     DevicePdoName.c
     DevicePowerOnDisable.c
     DeviceRemoveVeto.c
+    HostBridgeStart.c
     InboxClasses.c
     InterruptAffinityPolicy.c
     InvalidDeviceInfoSet.c

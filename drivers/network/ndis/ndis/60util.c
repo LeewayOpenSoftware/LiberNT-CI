@@ -77,6 +77,8 @@ Ndis6TimerDpcWrapper(
 {
     PNDIS6_TIMER_OBJECT TimerObject = (PNDIS6_TIMER_OBJECT)DeferredContext;
 
+
+    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
     if (TimerObject == NULL || TimerObject->Magic != NDIS6_TIMER_MAGIC ||
         TimerObject->Function == NULL)
     {
@@ -161,6 +163,7 @@ NdisFreeTimerObject(
     /* Cancel any pending fire and flush queued DPCs. */
     KeCancelTimer(&t->Timer);
     KeRemoveQueueDpc(&t->Dpc);
+    KeFlushQueuedDpcs();
     InterlockedExchange((volatile LONG *)&t->Magic, 0);
 
     if (KeGetCurrentIrql() < DISPATCH_LEVEL)
@@ -278,6 +281,8 @@ Ndis6FindPortLocked(
 {
     PLIST_ENTRY Link;
 
+
+    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
     for (Link = Ext->PortList.Flink;
          Link != &Ext->PortList;
          Link = Link->Flink)
@@ -1065,8 +1070,6 @@ NdisReleaseRWLock(
 
     if (Lock == NULL || Lock->Magic != NDIS6_RWLOCK_MAGIC || LockState == NULL)
         return;
-
-    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
     Cpu = KeGetCurrentProcessorNumberEx(NULL);
     OldIrql = LockState->OldIrql;
 
@@ -1160,6 +1163,8 @@ Ndis6PollDpcRoutine(
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
+
+    ASSERT(KeGetCurrentIrql() == DISPATCH_LEVEL);
     if (Poll == NULL || Poll->Magic != NDIS6_POLL_MAGIC || Poll->Unregistered)
         return;
 
@@ -1231,8 +1236,9 @@ NdisDeregisterPoll(
         return;
 
     Poll->Unregistered = TRUE;
-    /* Flush any pending DPC. */
+    /* Dequeuing does not wait for a DPC already running on another processor */
     KeRemoveQueueDpc(&Poll->Dpc);
+    KeFlushQueuedDpcs();
 
     Poll->Magic = 0;
     ExFreePoolWithTag(Poll, NDIS6_POLL_TAG);
