@@ -1757,20 +1757,23 @@ HRESULT WINAPI CLSIDFromString(LPCOLESTR str, LPCLSID clsid)
         return E_INVALIDARG;
 
 #ifdef __REACTOS__
-    CLSID saved_id = *clsid;
     BOOL found;
-#endif
 
-    if (guid_from_string(str, clsid))
+    if (guid_from_string(str, &tmp_id))
+    {
+        *clsid = tmp_id;
         return S_OK;
+    }
 
-#ifdef __REACTOS__
     hr = clsid_from_progid_reg(str, &tmp_id, &found);
     if (SUCCEEDED(hr))
         *clsid = tmp_id;
-    else if (found)
-        *clsid = saved_id;
+    else if (!found)
+        guid_from_string(str, clsid);
 #else
+    if (guid_from_string(str, clsid))
+        return S_OK;
+
     /* It appears a ProgID is also valid */
     hr = clsid_from_string_reg(str, &tmp_id);
     if (SUCCEEDED(hr))
