@@ -494,6 +494,7 @@ VOID KiFloatingErrorFault(VOID);
 VOID KiAlignmentFault(VOID);
 VOID KiMcheckAbort(VOID);
 VOID NTAPI WheaMcaInitialize(VOID);
+ULONG NTAPI WheaMcaBuildFatalRecord(PVOID Buffer, ULONG BufferLength, ULONG64 InstructionPointer, PULONG ReportedBank, PULONG64 ReportedStatus);
 VOID KiXmmException(VOID);
 VOID KiApcInterrupt(VOID);
 VOID KiRaiseSecurityCheckFailure(VOID);

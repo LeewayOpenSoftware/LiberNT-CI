@@ -20,7 +20,19 @@ typedef struct _WHEAP_MCA_PACKET
     WHEA_XPF_MCA_SECTION Data;
 } WHEAP_MCA_PACKET, *PWHEAP_MCA_PACKET;
 
+typedef struct _WHEAP_MCA_RECORD
+{
+    WHEA_ERROR_RECORD_HEADER Header;
+    WHEA_ERROR_RECORD_SECTION_DESCRIPTOR Section;
+    WHEA_XPF_MCA_SECTION Data;
+} WHEAP_MCA_RECORD, *PWHEAP_MCA_RECORD;
+
+C_ASSERT(sizeof(WHEAP_MCA_RECORD) ==
+         sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR) + sizeof(WHEA_XPF_MCA_SECTION));
+
 static const GUID WheapCmcNotifyType = { 0x2DCE8BB1, 0xBDD7, 0x450E, { 0xB9, 0xAD, 0x9C, 0xF4, 0xEB, 0xD4, 0xF8, 0x90 } };
+static const GUID WheapMceNotifyType = { 0xE8F56FFE, 0x919C, 0x4CC5, { 0xBA, 0x88, 0x65, 0xAB, 0xE1, 0x49, 0x13, 0xBB } };
+static const GUID WheapMcaSectionType = { 0x8A1E1D01, 0x42F9, 0x4557, { 0x9C, 0x33, 0x56, 0x5E, 0x5C, 0xC3, 0xF7, 0xE8 } };
 
 static KTIMER WheapMcaTimer;
 static KDPC WheapMcaTimerDpc;
@@ -84,6 +96,79 @@ WheapMcaScanProcessor(VOID)
         if (NT_SUCCESS(WheaReportHwError(&Packet.Header)))
             __writemsr(MSR_MC0_STATUS + 4 * Bank, 0);
     }
+}
+
+ULONG
+NTAPI
+WheaMcaBuildFatalRecord(
+    _Out_writes_bytes_(BufferLength) PVOID Buffer,
+    _In_ ULONG BufferLength,
+    _In_ ULONG64 InstructionPointer,
+    _Out_ PULONG ReportedBank,
+    _Out_ PULONG64 ReportedStatus)
+{
+    PWHEAP_MCA_RECORD Record = Buffer;
+    PKPRCB Prcb = KeGetCurrentPrcb();
+    LARGE_INTEGER SystemTime;
+    MCI_STATUS Status, Chosen;
+    MCG_CAP Capability;
+    ULONG Bank, ChosenBank = 0;
+
+    if (!Buffer || BufferLength < sizeof(*Record))
+        return 0;
+
+    Chosen.QuadPart = 0;
+    Capability.QuadPart = __readmsr(MSR_MCG_CAP);
+    for (Bank = 0; Bank < Capability.CountField; Bank++)
+    {
+        Status.QuadPart = __readmsr(MSR_MC0_STATUS + 4 * Bank);
+        if (!Status.CommonBits.Valid)
+            continue;
+
+        if (!Chosen.CommonBits.Valid || (Status.CommonBits.UncorrectedError && !Chosen.CommonBits.UncorrectedError))
+        {
+            Chosen = Status;
+            ChosenBank = Bank;
+        }
+    }
+
+    if (!Chosen.CommonBits.Valid)
+        return 0;
+
+    RtlZeroMemory(Record, sizeof(*Record));
+    WheaInitializeRecordHeader(&Record->Header);
+    Record->Header.SectionCount = 1;
+    Record->Header.Severity = WheaErrSevFatal;
+    Record->Header.Length = sizeof(*Record);
+    Record->Header.NotifyType = WheapMceNotifyType;
+
+    Record->Section.SectionOffset = FIELD_OFFSET(WHEAP_MCA_RECORD, Data);
+    Record->Section.SectionLength = sizeof(Record->Data);
+    Record->Section.Revision.AsUSHORT = WHEAP_SECTION_REVISION;
+    Record->Section.Flags.Primary = 1;
+    Record->Section.SectionType = WheapMcaSectionType;
+    Record->Section.SectionSeverity = WheaErrSevFatal;
+
+    KeQuerySystemTime(&SystemTime);
+    Record->Data.VersionNumber = WHEA_XPF_MCA_SECTION_VERSION;
+    Record->Data.CpuVendor = Prcb->CpuVendor == CPU_INTEL ? WheaCpuVendorIntel :
+                             Prcb->CpuVendor == CPU_AMD ? WheaCpuVendorAmd : WheaCpuVendorOther;
+    Record->Data.Timestamp = SystemTime;
+    Record->Data.ProcessorNumber = Prcb->Number;
+    Record->Data.GlobalStatus.QuadPart = __readmsr(MSR_MCG_STATUS);
+    Record->Data.InstructionPointer = InstructionPointer;
+    Record->Data.BankNumber = ChosenBank;
+    Record->Data.Status = Chosen;
+    if (Chosen.CommonBits.AddressValid)
+        Record->Data.Address = __readmsr(MSR_MC0_ADDR + 4 * ChosenBank);
+    if (Chosen.CommonBits.MiscValid)
+        Record->Data.Misc = __readmsr(MSR_MC0_MISC + 4 * ChosenBank);
+    Record->Data.ApicId = Prcb->InitialApicId;
+    Record->Data.GlobalCapability = Capability;
+
+    *ReportedBank = ChosenBank;
+    *ReportedStatus = Chosen.QuadPart;
+    return sizeof(*Record);
 }
 
 static

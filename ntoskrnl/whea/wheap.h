@@ -7,6 +7,9 @@
 
 #pragma once
 
+#define WHEAP_RECORD_REVISION 0x0210
+#define WHEAP_SECTION_REVISION 0x0300
+
 typedef struct _WHEAP_DESCRIPTOR_HEADER
 {
     ULONG Length;

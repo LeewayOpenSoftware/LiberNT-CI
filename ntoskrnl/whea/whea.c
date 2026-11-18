@@ -16,8 +16,6 @@
 #define WHEAP_MAX_RAW_DATA_LENGTH 0x10000
 #define WHEAP_MAX_RECORDS 64
 #define WHEAP_MAX_RECORD_BYTES 0x100000
-#define WHEAP_RECORD_REVISION 0x0210
-#define WHEAP_SECTION_REVISION 0x0300
 #define WHEAP_DEBUG_LINES 8
 #define WHEAP_DEBUG_LINE_INTERVAL 256
 #define WHEAP_REMOVE_WAIT_ATTEMPTS 100
@@ -41,6 +39,7 @@ C_ASSERT(sizeof(XPF_RECOVERY_INFO) == 20);
 C_ASSERT(FIELD_OFFSET(WHEA_XPF_MCA_SECTION, GlobalCapability) == 264);
 C_ASSERT(FIELD_OFFSET(WHEA_XPF_MCA_SECTION, ExBankCount) == 292);
 C_ASSERT(sizeof(WHEA_XPF_MCA_SECTION) == 1192);
+C_ASSERT(sizeof(WHEA_ERROR_RECORD) == 200);
 C_ASSERT(RTL_FIELD_SIZE(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR, FRUText) == WHEA_GENERIC_ENTRY_TEXT_LEN);
 
 typedef struct _WHEAP_ERROR_SOURCE *PWHEAP_ERROR_SOURCE;
@@ -300,6 +299,7 @@ WheapLogPacket(
     Section->SectionOffset = sizeof(*Header) + sizeof(*Section);
     Section->SectionLength = PacketLength;
     Section->Revision.AsUSHORT = WHEAP_SECTION_REVISION;
+    Section->Flags.Primary = 1;
     Section->SectionType = WheapErrorPacketSectionGuid;
     Section->SectionSeverity = Packet->ErrorSeverity;
     WheapWriteRecord(Header, Packet->ErrorSeverity);
@@ -1039,6 +1039,7 @@ WheaReportHwErrorDeviceDriver(
             Section = (PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR)Record->Packet;
             RtlZeroMemory(Section, sizeof(*Section));
             Section->SectionLength = ErrorDataLength;
+            Section->Flags.Primary = 1;
             Section->SectionType = *SectionTypeGuid;
             Section->SectionSeverity = ErrorSeverity;
             if (DeviceFriendlyName)
