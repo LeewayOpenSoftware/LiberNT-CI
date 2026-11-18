@@ -272,7 +272,7 @@ typedef struct { unsigned short Limit; PVOID Base; } KDESCRIPTOR;
 typedef struct { KDESCRIPTOR Gdtr, Idtr; ULONG64 Cr0, Cr3, Cr4; unsigned short Tr; } SPECIAL;
 typedef struct { unsigned short SegCs, SegDs, SegEs, SegSs, SegFs, SegGs; ULONG64 Rsp, Rip, Rcx, EFlags; } CONTEXT;
 typedef struct { SPECIAL SpecialRegisters; CONTEXT ContextFrame; } KPROCESSOR_STATE, *PKPROCESSOR_STATE;
-typedef struct { KPROCESSOR_STATE ProcessorState; ULONG64 SetMember; } KPRCB, *PKPRCB;
+typedef struct { KPROCESSOR_STATE ProcessorState; ULONG64 SetMember; PVOID IsrStack; } KPRCB, *PKPRCB;
 typedef struct { KPRCB Prcb; } KIPCR, *PKIPCR;
 typedef struct { char data[16]; } KIDTENTRY64, KGDTENTRY64, KTSS64, ETHREAD;
 typedef KGDTENTRY64 *PKGDTENTRY64; typedef KIDTENTRY64 *PKIDTENTRY64;
@@ -300,7 +300,7 @@ typedef struct { ULONG_PTR Prcb, Thread, KernelStack; } LOADER;
 #define RtlCopyMemory(d,s,n) memcpy(d,s,n)
 #define RtlZeroMemory(d,n) memset(d,0,n)
 #define min(a,b) ((a)<(b)?(a):(b))
-static ULONG KeMaximumProcessors = 2, KeNumprocSpecified, KeBootprocSpecified, KeMaximumIncrement = 156250;
+static ULONG KeMaximumProcessors = 2, KeNumprocSpecified, KeBootprocSpecified;
 static LOADER Loader, *KeLoaderBlock = &Loader;
 static KPRCB *KiProcessorBlock[2];
 static ULONG64 KeActiveProcessors;
