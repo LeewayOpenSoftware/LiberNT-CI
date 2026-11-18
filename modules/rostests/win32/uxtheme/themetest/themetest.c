@@ -125,6 +125,7 @@ static const struct row ROWS[] = {
 static const wchar_t *g_class;
 static int g_part = -1, g_scale = 1, g_wait = 500, g_wave;
 static const wchar_t *g_out, *g_csv;
+static int g_props;   /* --props: add the public style properties behind the size columns */
 static int g_painted;
 static int g_hr_count[2];           /* DrawThemeBackground succeeded / failed cells */
 
@@ -218,6 +219,18 @@ static void csv_sizes(FILE *f, HTHEME h, HDC hdc, const struct row *r, int state
         HRESULT hr = h ? GetThemePartSize(h, hdc, r->part, state, &rc, ts[k], &sz) : E_HANDLE;
         if (SUCCEEDED(hr)) fwprintf(f, L",%ld,%ld", sz.cx, sz.cy); else fwprintf(f, L",err%08lx,", (unsigned long)hr);
     }
+    if (g_props && h)
+    {
+        int v = 0; MARGINS m; POINT pt; HRESULT hr;
+        hr = GetThemeEnumValue(h, r->part, state, TMT_BGTYPE, &v); fwprintf(f, SUCCEEDED(hr) ? L",%d" : L",", v);
+        hr = GetThemeEnumValue(h, r->part, state, TMT_SIZINGTYPE, &v); fwprintf(f, SUCCEEDED(hr) ? L",%d" : L",", v);
+        hr = GetThemeInt(h, r->part, state, TMT_IMAGECOUNT, &v); fwprintf(f, SUCCEEDED(hr) ? L",%d" : L",", v);
+        hr = GetThemeEnumValue(h, r->part, state, TMT_IMAGELAYOUT, &v); fwprintf(f, SUCCEEDED(hr) ? L",%d" : L",", v);
+        hr = GetThemeMargins(h, hdc, r->part, state, TMT_SIZINGMARGINS, NULL, &m);
+        if (SUCCEEDED(hr)) fwprintf(f, L",%d,%d,%d,%d", m.cxLeftWidth, m.cxRightWidth, m.cyTopHeight, m.cyBottomHeight); else fwprintf(f, L",,,,");
+        hr = GetThemePosition(h, r->part, state, TMT_MINSIZE, &pt);
+        if (SUCCEEDED(hr)) fwprintf(f, L",%ld,%ld", pt.x, pt.y); else fwprintf(f, L",,");
+    }
     fwprintf(f, L"\n");
     fflush(f);
 }
@@ -232,7 +245,7 @@ static void paint(HWND hwnd, HDC hdc)
     GetClientRect(hwnd, &client);
     FillRect(hdc, &client, (HBRUSH)(COLOR_BTNFACE + 1));
     SetBkMode(hdc, TRANSPARENT);
-    if (g_csv && !g_painted) { csv = _wfopen(g_csv, L"w"); if (csv) fwprintf(csv, L"class,part,state,min_w,min_h,true_w,true_h,draw_w,draw_h\n"); }
+    if (g_csv && !g_painted) { csv = _wfopen(g_csv, L"w"); if (csv) fwprintf(csv, L"class,part,state,min_w,min_h,true_w,true_h,draw_w,draw_h%ls\n", g_props ? L",bgtype,sizingtype,imagecount,imagelayout,sm_l,sm_r,sm_t,sm_b,minsize_x,minsize_y" : L""); }
     g_hr_count[0] = g_hr_count[1] = 0;
 
     for (i = 0; i < NROWS; i++)
@@ -526,6 +539,7 @@ int wmain(int argc, wchar_t **argv)
         else if (!wcscmp(argv[i], L"--csv") && i + 1 < argc) g_csv = argv[++i];
         else if (!wcscmp(argv[i], L"--wait") && i + 1 < argc) g_wait = _wtoi(argv[++i]);
         else if (!wcscmp(argv[i], L"--scale") && i + 1 < argc) { g_scale = _wtoi(argv[++i]); if (g_scale < 1) g_scale = 1; if (g_scale > 4) g_scale = 4; }
+        else if (!wcscmp(argv[i], L"--props")) g_props = 1;
         else if (!wcscmp(argv[i], L"--list")) list = 1;
         else if (!wcscmp(argv[i], L"--style") && i + 1 < argc) style = argv[++i];
         else if (!wcscmp(argv[i], L"--all-styles") && i + 1 < argc) g_batch_dir = argv[++i];
