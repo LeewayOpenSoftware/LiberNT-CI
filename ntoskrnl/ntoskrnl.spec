@@ -3211,7 +3211,7 @@
 @ stdcall -arch=win64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stub -arch=win64 RtlWriteNonVolatileMemory
 @ stub -arch=win64 SeAccessCheckEx
-@ stub -arch=win64 SeAccessCheckFromState
+@ stdcall -arch=win64 SeAccessCheckFromState(ptr ptr ptr long long ptr ptr long ptr ptr)
 @ stub -arch=win64 SeAccessCheckFromStateEx
 @ stub -arch=win64 SeAccessCheckWithHint
 @ stub -arch=win64 SeAdjustAccessStateForAccessConstraints
