@@ -275,6 +275,7 @@ KMT_TESTFUNC Test_KeTrapDebugRegisters;
 KMT_TESTFUNC Test_KeTrapFilterX87;
 KMT_TESTFUNC Test_KeStandbySteal;
 KMT_TESTFUNC Test_WheaErrorSource;
+KMT_TESTFUNC Test_WheaEtwLog;
 #endif
 KMT_TESTFUNC Test_KeDeferredReady;
 KMT_TESTFUNC Test_KeIdleSteal;
@@ -789,6 +790,7 @@ const KMT_TEST TestList[] =
     { "KeTrapFilterX87",                    Test_KeTrapFilterX87 },
     { "KeStandbySteal",                     Test_KeStandbySteal },
     { "WheaErrorSource",                    Test_WheaErrorSource },
+    { "WheaEtwLog",                         Test_WheaEtwLog },
 #endif
     { "KeDeferredReady",                    Test_KeDeferredReady },
     { "KeIdleSteal",                        Test_KeIdleSteal },
