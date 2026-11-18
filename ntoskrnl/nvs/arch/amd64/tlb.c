@@ -18,15 +18,27 @@
 
 #define MI_AMD64_TLB_WATCHDOG_SECONDS 10
 
+/*
+ * One message per sending processor. Each pending word holds the request
+ * sequence in its high half and 32 target processors in its low half; a
+ * target acknowledges by clearing its bit while the sequence is unchanged,
+ * so a stale acknowledgement cannot complete a newer request.
+ */
+#define MI_AMD64_TLB_TARGETS_PER_WORD 32
+#define MI_AMD64_TLB_TARGET_WORDS \
+    ((MAXIMUM_PROCESSORS + MI_AMD64_TLB_TARGETS_PER_WORD - 1) / MI_AMD64_TLB_TARGETS_PER_WORD)
+#define MI_AMD64_TLB_TARGET_BITS(Word) ((Word) & 0xFFFFFFFFULL)
+#define MI_AMD64_TLB_SEQUENCE(Word) ((Word) >> 32)
+
 typedef struct MI_CACHE_ALIGNED _MI_AMD64_TLB_MESSAGE
 {
     ULONG64 Address;
     ULONG64 Pages;
-    ULONG64 Published;
-    ULONG64 Completed;
+    ULONG64 Sequence;
+    ULONG64 Pending[MI_AMD64_TLB_TARGET_WORDS];
 } MI_AMD64_TLB_MESSAGE;
 
-static MI_AMD64_TLB_MESSAGE MiAmd64TlbMessages[MAXIMUM_PROCESSORS][MAXIMUM_PROCESSORS];
+static MI_AMD64_TLB_MESSAGE MiAmd64TlbMessages[MAXIMUM_PROCESSORS];
 static ULONG MiAmd64TlbFeatures[MAXIMUM_PROCESSORS];
 volatile LONG KiTbFlushTimeStamp;
 typedef struct _MI_AMD64_TLB_WATCHDOG
@@ -150,38 +162,71 @@ MiAmd64FlushLocal(ULONG64 Address, ULONG64 Pages)
     MiAmd64TlbRestoreInterrupts(Enabled);
 }
 
+static
+BOOLEAN
+MiAmd64TlbTargetPending(ULONG64 Word, ULONG64 Sequence, ULONG64 Bit)
+{
+    return MI_AMD64_TLB_SEQUENCE(Word) == Sequence && (Word & Bit) != 0;
+}
+
 VOID
 MiAmd64ProcessTlbRequest(ULONG Source)
 {
     BOOLEAN Enabled = MiAmd64TlbDisableInterrupts();
     ULONG Cpu = MiAmd64TlbCpu();
     MI_AMD64_TLB_MESSAGE *Message;
-    ULONG64 Published, Completed, Address, Pages;
+    ULONG64 *Pending;
+    ULONG64 Word, Sequence, Bit, Address, Pages;
 
     MI_ASSERT(Cpu < MAXIMUM_PROCESSORS && Source < MAXIMUM_PROCESSORS);
-    Message = &MiAmd64TlbMessages[Cpu][Source];
-    Completed = MI_AMD64_READ_ACQUIRE64(&Message->Completed);
-    Published = MI_AMD64_READ_ACQUIRE64(&Message->Published);
-    if (Published != Completed)
+    Message = &MiAmd64TlbMessages[Source];
+    Pending = &Message->Pending[Cpu / MI_AMD64_TLB_TARGETS_PER_WORD];
+    Bit = 1ULL << (Cpu % MI_AMD64_TLB_TARGETS_PER_WORD);
+    Word = MI_AMD64_READ_ACQUIRE64(Pending);
+    Sequence = MI_AMD64_TLB_SEQUENCE(Word);
+    if (Word & Bit)
     {
         Address = MI_AMD64_READ_NOFENCE64(&Message->Address);
         Pages = MI_AMD64_READ_NOFENCE64(&Message->Pages);
-        if (MI_AMD64_READ_ACQUIRE64(&Message->Completed) == Completed &&
-            MI_AMD64_READ_ACQUIRE64(&Message->Published) == Published)
+        Word = MI_AMD64_READ_ACQUIRE64(Pending);
+        if (MiAmd64TlbTargetPending(Word, Sequence, Bit))
         {
             MiAmd64FlushLocal(Address, Pages);
-            (VOID)MI_AMD64_COMPARE_EXCHANGE64(&Message->Completed, Completed, Published);
+            for (;;)
+            {
+                ULONG64 Expected = MI_AMD64_READ_ACQUIRE64(Pending);
+                if (!MiAmd64TlbTargetPending(Expected, Sequence, Bit) ||
+                    MI_AMD64_COMPARE_EXCHANGE64(Pending, Expected, Expected & ~Bit))
+                    break;
+            }
         }
     }
     MiAmd64TlbRestoreInterrupts(Enabled);
+}
+
+static
+ULONG
+MiAmd64TlbPendingTargets(MI_AMD64_TLB_MESSAGE *Message)
+{
+    ULONG Count = 0, Index;
+    ULONG64 Bits;
+
+    for (Index = 0; Index < MI_AMD64_TLB_TARGET_WORDS; Index++)
+    {
+        Bits = MI_AMD64_TLB_TARGET_BITS(MI_AMD64_READ_ACQUIRE64(&Message->Pending[Index]));
+        for (; Bits != 0; Bits &= Bits - 1)
+            Count++;
+    }
+    return Count;
 }
 
 VOID
 MiAmd64FlushTargets(ULONG64 Targets, ULONG64 Address, ULONG64 Pages)
 {
     KIRQL Previous = MiAmd64TlbRaiseIrql();
-    ULONG Cpu = MiAmd64TlbCpu(), Target;
-    ULONG64 Remaining, Remote, Frequency = 0, Now = 0;
+    ULONG Cpu = MiAmd64TlbCpu(), Index, Remaining;
+    ULONG64 Remote, Sequence, Frequency = 0, Now = 0;
+    MI_AMD64_TLB_MESSAGE *Message;
     MI_AMD64_TLB_WATCHDOG Watchdog = {0};
 
     MI_ASSERT(Cpu < MAXIMUM_PROCESSORS);
@@ -196,49 +241,33 @@ MiAmd64FlushTargets(ULONG64 Targets, ULONG64 Address, ULONG64 Pages)
                             !MiAmd64CanonicalAddress(Address + ((Pages - 1) << PAGE_SHIFT)))))
         Pages = 0;
     Remote = Targets & ~(1ULL << Cpu);
-    for (Remaining = Remote; Remaining != 0; Remaining &= Remaining - 1)
+    Message = &MiAmd64TlbMessages[Cpu];
+    MI_ASSERT(MiAmd64TlbPendingTargets(Message) == 0);
+    if (Remote != 0)
     {
-        MI_AMD64_TLB_MESSAGE *Message;
-        ULONG64 Published;
-
-        Target = MI_AMD64_CTZ64(Remaining);
-        MI_ASSERT(Target < MAXIMUM_PROCESSORS);
-        Message = &MiAmd64TlbMessages[Target][Cpu];
-        Published = MI_AMD64_READ_NOFENCE64(&Message->Published);
-        MI_ASSERT(Published == MI_AMD64_READ_ACQUIRE64(&Message->Completed));
+        Sequence = (MI_AMD64_READ_NOFENCE64(&Message->Sequence) + 1) & 0xFFFFFFFFULL;
+        MI_AMD64_WRITE_RELEASE64(&Message->Sequence, Sequence);
         MI_AMD64_WRITE_RELEASE64(&Message->Address, Address);
         MI_AMD64_WRITE_RELEASE64(&Message->Pages, Pages);
-        MI_AMD64_WRITE_RELEASE64(&Message->Published, Published + 1);
-    }
-    if (Remote != 0)
+        for (Index = 0; Index < MI_AMD64_TLB_TARGET_WORDS; Index++)
+        {
+            ULONG64 Bits = (Remote >> (Index * MI_AMD64_TLB_TARGETS_PER_WORD)) & 0xFFFFFFFFULL;
+            if (Bits != 0)
+                MI_AMD64_WRITE_RELEASE64(&Message->Pending[Index], (Sequence << 32) | Bits);
+        }
         KiSendMemoryIpi(Remote);
+    }
     if (Targets & (1ULL << Cpu))
         MiAmd64FlushLocal(Address, Pages);
-    Remaining = Remote;
+    Remaining = (Remote != 0) ? MiAmd64TlbPendingTargets(Message) : 0;
     while (Remaining != 0)
     {
-        for (Remote = Remaining; Remote != 0; Remote &= Remote - 1)
-        {
-            MI_AMD64_TLB_MESSAGE *Message;
-            Target = MI_AMD64_CTZ64(Remote);
-            Message = &MiAmd64TlbMessages[Target][Cpu];
-            if (MI_AMD64_READ_ACQUIRE64(&Message->Completed) ==
-                MI_AMD64_READ_NOFENCE64(&Message->Published))
-                Remaining &= ~(1ULL << Target);
-        }
+        Remaining = MiAmd64TlbPendingTargets(Message);
         if (Remaining != 0)
         {
             if (MiAmd64TlbWatchdogExpired(&Watchdog, Remaining, &Frequency, &Now))
             {
-                for (Remote = Remaining; Remote != 0; Remote &= Remote - 1)
-                {
-                    MI_AMD64_TLB_MESSAGE *Message;
-                    Target = MI_AMD64_CTZ64(Remote);
-                    Message = &MiAmd64TlbMessages[Target][Cpu];
-                    if (MI_AMD64_READ_ACQUIRE64(&Message->Completed) ==
-                        MI_AMD64_READ_NOFENCE64(&Message->Published))
-                        Remaining &= ~(1ULL << Target);
-                }
+                Remaining = MiAmd64TlbPendingTargets(Message);
                 if (Remaining == Watchdog.Remaining &&
                     MiAmd64TlbWatchdogEnabled() &&
                     !MiAmd64TlbWatchdogFreezeActive() &&
