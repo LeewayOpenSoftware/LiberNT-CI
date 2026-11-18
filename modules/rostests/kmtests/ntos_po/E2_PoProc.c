@@ -34,12 +34,16 @@ typedef struct _TEST_IDLE_ACCOUNTING
     TEST_IDLE_STATE_ACCOUNTING State[3];
 } TEST_IDLE_ACCOUNTING;
 
+/* Internal: no matching public prototype in WDK 26100; define to test an export. */
+#ifdef KMT_PO_INTERNAL_EXPORTS
 NTSYSAPI NTSTATUS NTAPI PoGetProcessorIdleAccounting(_In_ ULONG ProcessorIndex, _Out_ PVOID Buffer, _In_ ULONG BufferLength, _Out_opt_ PULONG ReturnLength);
 NTSYSAPI NTSTATUS NTAPI PoInitiateProcessorWake(_In_ ULONG ProcessorIndex);
 NTSYSAPI BOOLEAN NTAPI PoCpuIdledSinceLastCallImprecise(_In_ ULONG ProcessorIndex);
+#endif
 NTSYSAPI NTSTATUS NTAPI PoRegisterCoalescingCallback(_In_ PTEST_COALESCING_CALLBACK Callback, _In_ BOOLEAN ImmediateCallback, _Outptr_ PVOID *RegistrationHandle, _In_opt_ PVOID Context);
 NTSYSAPI VOID NTAPI PoUnregisterCoalescingCallback(_In_ PVOID RegistrationHandle);
 
+#ifdef KMT_PO_INTERNAL_EXPORTS
 static
 VOID
 TestIdleAccounting(VOID)
@@ -105,6 +109,8 @@ TestProcessorWake(VOID)
     ok_bool_true(PoCpuIdledSinceLastCallImprecise(0), "CPU 0 idled during a 200 ms sleep");
 }
 
+#endif
+
 typedef struct _TEST_CONTEXT
 {
     LONG Calls;
@@ -161,7 +167,11 @@ TestCoalescingCallbacks(VOID)
 
 START_TEST(E2_PoProc)
 {
+#ifdef KMT_PO_INTERNAL_EXPORTS
     TestIdleAccounting();
     TestProcessorWake();
+#else
+    skip(FALSE, "Processor idle routines are internal\n");
+#endif
     TestCoalescingCallbacks();
 }

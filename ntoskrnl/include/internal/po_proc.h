@@ -79,7 +79,7 @@ typedef struct _PO_PROCESSOR_IDLE_ACCOUNTING
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS
 NTAPI
-PoGetProcessorIdleAccounting(
+PopGetProcessorIdleAccounting(
     _In_ ULONG ProcessorIndex,
     _Out_writes_bytes_to_(BufferLength, *ReturnLength) PVOID Buffer,
     _In_ ULONG BufferLength,
@@ -88,11 +88,11 @@ PoGetProcessorIdleAccounting(
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS
 NTAPI
-PoInitiateProcessorWake(
+PopInitiateProcessorWake(
     _In_ ULONG ProcessorIndex);
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 BOOLEAN
 NTAPI
-PoCpuIdledSinceLastCallImprecise(
+PopCpuIdledSinceLastCallImprecise(
     _In_ ULONG ProcessorIndex);

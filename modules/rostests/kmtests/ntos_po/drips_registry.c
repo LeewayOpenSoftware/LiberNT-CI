@@ -11,6 +11,8 @@
 #define TEST_DRIPS_ALL           0x00000007
 #define TEST_FIXED_SOURCES       3
 
+/* Internal: no matching public prototype in WDK 26100; define to test an export. */
+#ifdef KMT_PO_INTERNAL_EXPORTS
 NTKERNELAPI NTSTATUS NTAPI PoDirectedDripsSetDeviceFlags(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONG Flags);
 NTKERNELAPI NTSTATUS NTAPI PoDirectedDripsClearDeviceFlags(_In_ PDEVICE_OBJECT DeviceObject, _In_ ULONG Flags);
 NTKERNELAPI NTSTATUS NTAPI PoSetFixedWakeSource(_In_ ULONG Source, _In_opt_ PDEVICE_OBJECT DeviceObject);
@@ -62,3 +64,12 @@ START_TEST(PoDripsRegistry)
 
     IoDeleteDevice(Device);
 }
+
+#else
+
+START_TEST(PoDripsRegistry)
+{
+    skip(FALSE, "Directed-DRIPS routines are internal\n");
+}
+
+#endif

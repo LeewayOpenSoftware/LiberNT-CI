@@ -111,7 +111,7 @@ PopDripsUpdateFlags(
 
 NTSTATUS
 NTAPI
-PoDirectedDripsSetDeviceFlags(
+PopDirectedDripsSetDeviceFlags(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG Flags)
 {
@@ -120,7 +120,7 @@ PoDirectedDripsSetDeviceFlags(
 
 NTSTATUS
 NTAPI
-PoDirectedDripsClearDeviceFlags(
+PopDirectedDripsClearDeviceFlags(
     _In_ PDEVICE_OBJECT DeviceObject,
     _In_ ULONG Flags)
 {
@@ -129,7 +129,7 @@ PoDirectedDripsClearDeviceFlags(
 
 NTSTATUS
 NTAPI
-PoSetFixedWakeSource(
+PopSetFixedWakeSource(
     _In_ ULONG Source,
     _In_opt_ PDEVICE_OBJECT DeviceObject)
 {
@@ -160,7 +160,7 @@ PoSetFixedWakeSource(
 
 NTSTATUS
 NTAPI
-PoSetSystemWakeDevice(
+PopSetSystemWakeDevice(
     _In_opt_ PDEVICE_OBJECT DeviceObject)
 {
     PDEVICE_OBJECT Old;

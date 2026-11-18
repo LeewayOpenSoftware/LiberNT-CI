@@ -34,7 +34,7 @@ PopGetPrcbFromIndex(
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS
 NTAPI
-PoGetProcessorIdleAccounting(
+PopGetProcessorIdleAccounting(
     _In_ ULONG ProcessorIndex,
     _Out_writes_bytes_to_(BufferLength, *ReturnLength) PVOID Buffer,
     _In_ ULONG BufferLength,
@@ -91,13 +91,13 @@ PoGetProcessorIdleAccounting(
     return STATUS_SUCCESS;
 }
 
-/* Last idle-thread tick count seen by PoCpuIdledSinceLastCallImprecise, per processor */
+/* Last idle-thread tick count seen by PopCpuIdledSinceLastCallImprecise, per processor */
 static volatile LONG PopIdleTickSnapshot[MAXIMUM_PROCESSORS];
 
 _IRQL_requires_max_(DISPATCH_LEVEL)
 BOOLEAN
 NTAPI
-PoCpuIdledSinceLastCallImprecise(
+PopCpuIdledSinceLastCallImprecise(
     _In_ ULONG ProcessorIndex)
 {
     PKTHREAD IdleThread;
@@ -176,7 +176,7 @@ PopInitializeWakeDpcs(VOID)
 _IRQL_requires_max_(DISPATCH_LEVEL)
 NTSTATUS
 NTAPI
-PoInitiateProcessorWake(
+PopInitiateProcessorWake(
     _In_ ULONG ProcessorIndex)
 {
     PKPRCB Prcb;
