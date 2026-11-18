@@ -11,6 +11,14 @@
 
 #define TAG_TEST 'cAmK'
 
+#ifndef ACCESS_ALLOWED_CALLBACK_ACE
+typedef struct _ACCESS_ALLOWED_CALLBACK_ACE {
+  ACE_HEADER Header;
+  ACCESS_MASK Mask;
+  DWORD SidStart;
+} ACCESS_ALLOWED_CALLBACK_ACE, *PACCESS_ALLOWED_CALLBACK_ACE;
+#endif
+
 static
 VOID
 TestAccessCheck(VOID)
@@ -178,7 +186,7 @@ TestAccessCheckFromState(VOID)
     AccessInfo.AuthenticationId.HighPart = 0;
     AccessInfo.TokenType = TokenPrimary;
     AccessInfo.ImpersonationLevel = SecurityIdentification;
-    AccessInfo.MandatoryPolicy = TOKEN_MANDATORY_POLICY_OFF;
+    AccessInfo.MandatoryPolicy.Policy = TOKEN_MANDATORY_POLICY_OFF;
 
     GrantedAccess = 0;
     AccessStatus = STATUS_PENDING;
