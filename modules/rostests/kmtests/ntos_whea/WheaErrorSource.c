@@ -442,6 +442,165 @@ TestDeviceDriverSource(VOID)
     ok_eq_hex(DriverUninitializeCalls, 2);
 }
 
+/* A report opened at DISPATCH_LEVEL needs a preallocated one; this waits until the worker has given it back */
+static
+WHEA_ERROR_HANDLE
+CreateWhenDrained(
+    _In_ ULONG ErrorSourceId)
+{
+    WHEA_ERROR_HANDLE Handle = WHEA_ERROR_HANDLE_INVALID;
+    LARGE_INTEGER Interval;
+    ULONG Attempt;
+    KIRQL Irql;
+
+    Interval.QuadPart = -10 * 10000;
+    for (Attempt = 0; Attempt < 500; Attempt++)
+    {
+        KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+        Handle = WheaCreateHwErrorReportDeviceDriver(ErrorSourceId, NULL);
+        KeLowerIrql(Irql);
+        if (Handle != WHEA_ERROR_HANDLE_INVALID)
+            break;
+
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    }
+
+    return Handle;
+}
+
+static
+VOID
+TestErrorReportHandle(VOID)
+{
+    static UCHAR SectionName[] = "test device";
+    WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER Configuration;
+    WHEA_DRIVER_BUFFER_SET First, Second, Third;
+    WHEA_ERROR_HANDLE Handle, Other;
+    TEST_DESCRIPTOR Platform;
+    NTSTATUS Status;
+    ULONG Id, Calls;
+    KIRQL Irql;
+
+    ok_eq_hex(sizeof(WHEA_DRIVER_BUFFER_SET), 8 + 4 * sizeof(PVOID));
+
+    ok_eq_hex(WheaAddHwErrorReportSectionDeviceDriver(WHEA_ERROR_HANDLE_INVALID, 8, &First), STATUS_INVALID_HANDLE);
+    ok_eq_hex(WheaHwErrorReportSubmitDeviceDriver(WHEA_ERROR_HANDLE_INVALID), STATUS_INVALID_HANDLE);
+    ok_eq_hex(WheaHwErrorReportAbandonDeviceDriver(WHEA_ERROR_HANDLE_INVALID), STATUS_INVALID_HANDLE);
+    ok_eq_hex(WheaHwErrorReportSetSeverityDeviceDriver(WHEA_ERROR_HANDLE_INVALID, WheaErrSevCorrected), STATUS_INVALID_HANDLE);
+    ok(WheaCreateHwErrorReportDeviceDriver(WHEA_INVALID_ERR_SRC_ID, NULL) == WHEA_ERROR_HANDLE_INVALID, "A report for no source\n");
+
+    RtlZeroMemory(&Configuration, sizeof(Configuration));
+    Configuration.Version = WHEA_DEVICE_DRIVER_CONFIG_V2;
+    Configuration.Initialize = DriverInitialize;
+    Configuration.Uninitialize = DriverUninitialize;
+    Configuration.MaxSectionDataLength = 48;
+    Configuration.MaxSectionsPerReport = 2;
+    DriverInitializeStatus = STATUS_SUCCESS;
+    Calls = DriverUninitializeCalls;
+    Status = WheaAddErrorSourceDeviceDriver(NULL, &Configuration, 1);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Id = DriverErrorSourceId;
+
+    InitDescriptor(&Platform);
+    Status = Add(&Platform);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok(WheaCreateHwErrorReportDeviceDriver(Platform.ErrorSourceId, NULL) == WHEA_ERROR_HANDLE_INVALID,
+           "A report for a platform source\n");
+        WheaRemoveErrorSource(Platform.ErrorSourceId);
+    }
+
+    Handle = WheaCreateHwErrorReportDeviceDriver(Id, NULL);
+    ok(Handle != WHEA_ERROR_HANDLE_INVALID, "No report\n");
+    if (Handle == WHEA_ERROR_HANDLE_INVALID)
+    {
+        WheaRemoveErrorSourceDeviceDriver(Id);
+        return;
+    }
+
+    ok_eq_hex(WheaAddHwErrorReportSectionDeviceDriver(Handle, 8, NULL), STATUS_INVALID_PARAMETER);
+    ok_eq_hex(WheaAddHwErrorReportSectionDeviceDriver(Handle, 49, &First), STATUS_INSUFFICIENT_RESOURCES);
+    RtlZeroMemory(&First, sizeof(First));
+    ok_eq_hex(WheaAddHwErrorReportSectionDeviceDriver(Handle, 48, &First), STATUS_SUCCESS);
+    ok_eq_hex(First.Version, WHEA_DEVICE_DRIVER_BUFFER_SET_V1);
+    ok_eq_hex(First.DataSize, 48);
+    ok(First.Data && First.SectionTypeGuid && First.SectionFriendlyName, "A buffer of the first section is missing\n");
+    if (First.Data && First.SectionTypeGuid && First.SectionFriendlyName)
+    {
+        ok(First.Data[0] == 0 && First.Data[47] == 0, "The data buffer does not start out clear\n");
+        RtlFillMemory(First.Data, 48, 0x5A);
+        *First.SectionTypeGuid = DriverSectionType;
+        ok_eq_hex(WheaHwErrorReportSetSectionNameDeviceDriver(&First, WHEA_GENERIC_ENTRY_TEXT_LEN + 1, SectionName),
+                  STATUS_INVALID_PARAMETER);
+        ok_eq_hex(WheaHwErrorReportSetSectionNameDeviceDriver(NULL, 4, SectionName), STATUS_INVALID_PARAMETER);
+        ok_eq_hex(WheaHwErrorReportSetSectionNameDeviceDriver(&First, sizeof(SectionName) - 1, SectionName), STATUS_SUCCESS);
+        ok(RtlEqualMemory(First.SectionFriendlyName, SectionName, sizeof(SectionName)), "The name is not in the section\n");
+    }
+
+    RtlZeroMemory(&Second, sizeof(Second));
+    ok_eq_hex(WheaAddHwErrorReportSectionDeviceDriver(Handle, 0, &Second), STATUS_SUCCESS);
+    ok_eq_hex(Second.DataSize, 0);
+    ok(Second.SectionTypeGuid && Second.SectionTypeGuid != First.SectionTypeGuid, "Two sections share one header\n");
+    if (Second.SectionTypeGuid)
+        *Second.SectionTypeGuid = DriverSectionType;
+    ok_eq_hex(WheaAddHwErrorReportSectionDeviceDriver(Handle, 0, &Third), STATUS_INSUFFICIENT_RESOURCES);
+
+    ok_eq_hex(WheaHwErrorReportSetSeverityDeviceDriver(Handle, (WHEA_ERROR_SEVERITY)(WheaErrSevInformational + 1)),
+              STATUS_INVALID_PARAMETER);
+    ok_eq_hex(WheaHwErrorReportSetSeverityDeviceDriver(Handle, WheaErrSevCorrected), STATUS_SUCCESS);
+
+    /* The source stays while a report is open */
+    ok_eq_hex(WheaRemoveErrorSourceDeviceDriver(Id), STATUS_RESOURCE_IN_USE);
+    ok_eq_hex(WheaErrorSourceGetState(Id), WheaErrSrcStateStarted);
+    ok_eq_hex(DriverUninitializeCalls, Calls);
+
+    /* Submitting uses the handle up, also when the report is refused for having no section */
+    ok_eq_hex(WheaHwErrorReportSubmitDeviceDriver(Handle), STATUS_SUCCESS);
+    ok_eq_hex(WheaHwErrorReportSubmitDeviceDriver(Handle), STATUS_INVALID_HANDLE);
+
+    Handle = WheaCreateHwErrorReportDeviceDriver(Id, NULL);
+    ok(Handle != WHEA_ERROR_HANDLE_INVALID, "No second report\n");
+    ok_eq_hex(WheaHwErrorReportSubmitDeviceDriver(Handle), STATUS_BUFFER_TOO_SMALL);
+    ok_eq_hex(WheaHwErrorReportAbandonDeviceDriver(Handle), STATUS_INVALID_HANDLE);
+
+    Handle = WheaCreateHwErrorReportDeviceDriver(Id, NULL);
+    ok(Handle != WHEA_ERROR_HANDLE_INVALID, "No third report\n");
+    ok_eq_hex(WheaHwErrorReportAbandonDeviceDriver(Handle), STATUS_SUCCESS);
+    ok_eq_hex(WheaHwErrorReportAbandonDeviceDriver(Handle), STATUS_INVALID_HANDLE);
+    ok_eq_hex(WheaAddHwErrorReportSectionDeviceDriver(Handle, 8, &First), STATUS_INVALID_HANDLE);
+
+    /* One preallocated report: exactly one handle at DISPATCH_LEVEL */
+    Handle = CreateWhenDrained(Id);
+    ok(Handle != WHEA_ERROR_HANDLE_INVALID, "The preallocated report did not come back\n");
+    Status = STATUS_UNSUCCESSFUL;
+    RtlZeroMemory(&First, sizeof(First));
+    KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+    Other = WheaCreateHwErrorReportDeviceDriver(Id, NULL);
+    if (Handle != WHEA_ERROR_HANDLE_INVALID)
+        Status = WheaAddHwErrorReportSectionDeviceDriver(Handle, 16, &First);
+    KeLowerIrql(Irql);
+    ok(Other == WHEA_ERROR_HANDLE_INVALID, "Two reports at DISPATCH_LEVEL from one preallocated\n");
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (Other != WHEA_ERROR_HANDLE_INVALID)
+        WheaHwErrorReportAbandonDeviceDriver(Other);
+    if (NT_SUCCESS(Status) && First.SectionTypeGuid)
+    {
+        *First.SectionTypeGuid = DriverSectionType;
+        ok_eq_hex(WheaHwErrorReportSubmitDeviceDriver(Handle), STATUS_SUCCESS);
+    }
+    else if (Handle != WHEA_ERROR_HANDLE_INVALID)
+    {
+        WheaHwErrorReportAbandonDeviceDriver(Handle);
+    }
+
+    ok_eq_hex(WheaRemoveErrorSourceDeviceDriver(Id), STATUS_SUCCESS);
+    ok_eq_hex(DriverUninitializeCalls, Calls + 1);
+}
+
 START_TEST(WheaErrorSource)
 {
     TEST_DESCRIPTOR Started, Stopped, Large;
@@ -452,6 +611,7 @@ START_TEST(WheaErrorSource)
 
     TestRecordHeader();
     TestDeviceDriverSource();
+    TestErrorReportHandle();
     TestAddRefusals();
 
     InitDescriptor(&Started);

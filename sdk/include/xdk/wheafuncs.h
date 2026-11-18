@@ -82,6 +82,55 @@ NTAPI
 WheaErrorSourceGetState(
   _In_ ULONG ErrorSourceId);
 
+/* Above PASSIVE_LEVEL the source needs a preallocated report */
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+WHEA_ERROR_HANDLE
+NTAPI
+WheaCreateHwErrorReportDeviceDriver(
+  _In_ ULONG ErrorSourceId,
+  _In_opt_ PDEVICE_OBJECT DeviceObject);
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaAddHwErrorReportSectionDeviceDriver(
+  _In_ WHEA_ERROR_HANDLE ErrorHandle,
+  _In_ ULONG SectionDataLength,
+  _Out_ PWHEA_DRIVER_BUFFER_SET BufferSet);
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaHwErrorReportAbandonDeviceDriver(
+  _In_ WHEA_ERROR_HANDLE ErrorHandle);
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaHwErrorReportSubmitDeviceDriver(
+  _In_ WHEA_ERROR_HANDLE ErrorHandle);
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaHwErrorReportSetSeverityDeviceDriver(
+  _In_ WHEA_ERROR_HANDLE ErrorHandle,
+  _In_ WHEA_ERROR_SEVERITY ErrorSeverity);
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaHwErrorReportSetSectionNameDeviceDriver(
+  _In_ PWHEA_DRIVER_BUFFER_SET BufferSet,
+  _In_range_(0, WHEA_GENERIC_ENTRY_TEXT_LEN) ULONG NameLength,
+  _In_reads_bytes_(NameLength) PUCHAR Name);
+
 #endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
 
 $endif (_NTDDK_)
