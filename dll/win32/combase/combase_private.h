@@ -134,6 +134,10 @@ HRESULT rpc_create_clientchannel(const OXID *oxid, const IPID *ipid, const OXID_
 HRESULT rpc_create_serverchannel(DWORD dest_context, void *dest_context_data, IRpcChannelBuffer **chan);
 #ifdef __REACTOS__
 extern DWORD com_default_imp_level;
+extern DWORD com_default_authn_level;
+extern DWORD com_default_capabilities;
+void com_security_init_default(void);
+void com_security_reset(void);
 #endif
 HRESULT rpc_register_interface(REFIID riid);
 void rpc_unregister_interface(REFIID riid, BOOL wait);

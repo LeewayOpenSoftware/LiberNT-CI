@@ -2376,6 +2376,9 @@ HRESULT rpc_resolve_oxid(OXID oxid, OXID_INFO *oxid_info)
  * IRemUnknown object */
 void rpc_start_remoting(struct apartment *apt)
 {
+#ifdef __REACTOS__
+    com_security_init_default();
+#endif
     if (!InterlockedExchange(&apt->remoting_started, TRUE))
     {
         WCHAR endpoint[200];

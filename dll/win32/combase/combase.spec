@@ -135,7 +135,7 @@
 @ stdcall CoMarshalInterface(ptr ptr ptr long ptr long)
 @ stub CoPopServiceDomain
 @ stub CoPushServiceDomain
-@ stub CoQueryAuthenticationServices
+@ stdcall CoQueryAuthenticationServices(ptr ptr)
 @ stdcall CoQueryClientBlanket(ptr ptr ptr ptr ptr ptr ptr)
 @ stdcall CoQueryProxyBlanket(ptr ptr ptr ptr ptr ptr ptr ptr)
 @ stub CoReactivateObject

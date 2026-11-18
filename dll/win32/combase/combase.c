@@ -1117,9 +1117,186 @@ HRESULT WINAPI CoCreateGuid(GUID *guid)
 }
 
 #ifdef __REACTOS__
-DWORD com_default_imp_level = RPC_C_IMP_LEVEL_IDENTIFY;
-static LONG com_security_initialized;
+#define COM_SECURITY_CAPABILITIES (EOAC_MUTUAL_AUTH | EOAC_SECURE_REFS | EOAC_ACCESS_CONTROL | EOAC_APPID | \
+        EOAC_DYNAMIC | EOAC_STATIC_CLOAKING | EOAC_DYNAMIC_CLOAKING | EOAC_ANY_AUTHORITY | EOAC_MAKE_FULLSIC | \
+        EOAC_REQUIRE_FULLSIC | EOAC_AUTO_IMPERSONATE | EOAC_DEFAULT | EOAC_DISABLE_AAA | EOAC_NO_CUSTOM_MARSHAL)
 
+DWORD com_default_imp_level = RPC_C_IMP_LEVEL_IDENTIFY;
+static BOOL com_security_initialized;
+DWORD com_default_authn_level = RPC_C_AUTHN_LEVEL_CONNECT;
+DWORD com_default_capabilities = EOAC_NONE;
+static SOLE_AUTHENTICATION_SERVICE *com_auth_services;
+static DWORD com_auth_service_count;
+
+static CRITICAL_SECTION com_security_cs;
+static CRITICAL_SECTION_DEBUG com_security_cs_debug =
+{
+    0, 0, &com_security_cs,
+    { &com_security_cs_debug.ProcessLocksList, &com_security_cs_debug.ProcessLocksList },
+      0, 0, { (DWORD_PTR)(__FILE__ ": com_security_cs") }
+};
+static CRITICAL_SECTION com_security_cs = { &com_security_cs_debug, -1, 0, 0, 0, 0 };
+
+static WCHAR *com_security_copy_name(const WCHAR *name)
+{
+    SIZE_T size = ((name ? lstrlenW(name) : 0) + 1) * sizeof(WCHAR);
+    WCHAR *copy = CoTaskMemAlloc(size);
+
+    if (copy)
+        memcpy(copy, name ? name : L"", size);
+    return copy;
+}
+
+static WCHAR *com_security_process_user(void)
+{
+    WCHAR name[256], domain[256], *ret = NULL;
+    DWORD name_len = ARRAY_SIZE(name), domain_len = ARRAY_SIZE(domain), size = 0;
+    TOKEN_USER *user = NULL;
+    SID_NAME_USE use;
+    HANDLE token;
+
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token))
+        return NULL;
+    GetTokenInformation(token, TokenUser, NULL, 0, &size);
+    if (size && (user = malloc(size)) && GetTokenInformation(token, TokenUser, user, size, &size) &&
+        LookupAccountSidW(NULL, user->User.Sid, name, &name_len, domain, &domain_len, &use) &&
+        (ret = CoTaskMemAlloc((domain_len + name_len + 2) * sizeof(WCHAR))))
+    {
+        memcpy(ret, domain, domain_len * sizeof(WCHAR));
+        ret[domain_len] = '\\';
+        memcpy(ret + domain_len + 1, name, (name_len + 1) * sizeof(WCHAR));
+    }
+    free(user);
+    CloseHandle(token);
+    return ret;
+}
+
+static void com_security_free_services(SOLE_AUTHENTICATION_SERVICE *services, DWORD count)
+{
+    DWORD i;
+
+    if (!services)
+        return;
+    for (i = 0; i < count; i++)
+        CoTaskMemFree(services[i].pPrincipalName);
+    CoTaskMemFree(services);
+}
+
+static SOLE_AUTHENTICATION_SERVICE *com_security_copy_services(const SOLE_AUTHENTICATION_SERVICE *services,
+        DWORD count)
+{
+    SOLE_AUTHENTICATION_SERVICE *copy;
+    DWORD i;
+
+    if (!(copy = CoTaskMemAlloc(count * sizeof(*copy))))
+        return NULL;
+    for (i = 0; i < count; i++)
+    {
+        copy[i] = services[i];
+        if (!(copy[i].pPrincipalName = com_security_copy_name(services[i].pPrincipalName)))
+        {
+            com_security_free_services(copy, i);
+            return NULL;
+        }
+    }
+    return copy;
+}
+
+static DWORD com_security_registry_level(HKEY root, const WCHAR *path, const WCHAR *value, DWORD min, DWORD max,
+        DWORD fallback)
+{
+    DWORD data, size = sizeof(data);
+
+    if (!RegGetValueW(root, path, value, RRF_RT_REG_DWORD, NULL, &data, &size) && data >= min && data <= max)
+        return data;
+    return fallback;
+}
+
+static DWORD com_security_default_authn_level(void)
+{
+    WCHAR module[MAX_PATH], path[MAX_PATH + 8], appid[CHARS_IN_GUID];
+    DWORD level, size = sizeof(appid);
+    const WCHAR *exe;
+    HKEY key;
+    LSTATUS status;
+
+    level = com_security_registry_level(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Ole", L"LegacyAuthenticationLevel",
+            RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_LEVEL_PKT_PRIVACY, RPC_C_AUTHN_LEVEL_CONNECT);
+    if (!GetModuleFileNameW(NULL, module, ARRAY_SIZE(module)))
+        return level;
+    exe = wcsrchr(module, '\\') ? wcsrchr(module, '\\') + 1 : module;
+    lstrcpyW(path, L"AppID\\");
+    lstrcatW(path, exe);
+    if (open_classes_key(HKEY_CLASSES_ROOT, path, KEY_READ, &key))
+        return level;
+    status = RegGetValueW(key, NULL, L"AppID", RRF_RT_REG_SZ, NULL, appid, &size);
+    RegCloseKey(key);
+    if (status)
+        return level;
+    lstrcpyW(path, L"AppID\\");
+    lstrcatW(path, appid);
+    if (open_classes_key(HKEY_CLASSES_ROOT, path, KEY_READ, &key))
+        return level;
+    level = com_security_registry_level(key, NULL, L"AuthenticationLevel",
+            RPC_C_AUTHN_LEVEL_NONE, RPC_C_AUTHN_LEVEL_PKT_PRIVACY, level);
+    RegCloseKey(key);
+    return level;
+}
+
+static HRESULT com_security_store(LONG count, const SOLE_AUTHENTICATION_SERVICE *services, DWORD authn_level,
+        DWORD imp_level, DWORD capabilities)
+{
+    SOLE_AUTHENTICATION_SERVICE process_service = { RPC_C_AUTHN_WINNT, RPC_C_AUTHZ_NONE, NULL, S_OK };
+    SOLE_AUTHENTICATION_SERVICE *copy;
+
+    if (count == -1)
+    {
+        process_service.pPrincipalName = com_security_process_user();
+        copy = com_security_copy_services(&process_service, 1);
+        CoTaskMemFree(process_service.pPrincipalName);
+        count = 1;
+    }
+    else
+        copy = com_security_copy_services(services, count);
+    if (!copy)
+        return E_OUTOFMEMORY;
+
+    com_auth_services = copy;
+    com_auth_service_count = count;
+    com_default_authn_level = authn_level == RPC_C_AUTHN_LEVEL_DEFAULT ? com_security_default_authn_level() : authn_level;
+    com_default_imp_level = imp_level;
+    com_default_capabilities = capabilities;
+    com_security_initialized = TRUE;
+    return S_OK;
+}
+
+void com_security_init_default(void)
+{
+    DWORD imp_level;
+
+    EnterCriticalSection(&com_security_cs);
+    if (!com_security_initialized)
+    {
+        imp_level = com_security_registry_level(HKEY_LOCAL_MACHINE, L"Software\\Microsoft\\Ole",
+                L"LegacyImpersonationLevel", RPC_C_IMP_LEVEL_ANONYMOUS, RPC_C_IMP_LEVEL_DELEGATE,
+                RPC_C_IMP_LEVEL_IDENTIFY);
+        com_security_store(-1, NULL, RPC_C_AUTHN_LEVEL_DEFAULT, imp_level, EOAC_NONE);
+    }
+    LeaveCriticalSection(&com_security_cs);
+}
+
+void com_security_reset(void)
+{
+    EnterCriticalSection(&com_security_cs);
+    com_security_free_services(com_auth_services, com_auth_service_count);
+    com_auth_services = NULL;
+    com_auth_service_count = 0;
+    com_default_authn_level = RPC_C_AUTHN_LEVEL_CONNECT;
+    com_default_imp_level = RPC_C_IMP_LEVEL_IDENTIFY;
+    com_default_capabilities = EOAC_NONE;
+    com_security_initialized = FALSE;
+    LeaveCriticalSection(&com_security_cs);
+}
 #endif
 /******************************************************************************
  *            CoQueryProxyBlanket        (combase.@)
@@ -1265,16 +1442,30 @@ HRESULT WINAPI CoInitializeSecurity(PSECURITY_DESCRIPTOR sd, LONG cAuthSvc,
     TRACE("%p, %ld, %p, %p, %ld, %ld, %p, %ld, %p\n", sd, cAuthSvc, asAuthSvc, reserved1, authn_level,
           imp_level, reserved2, capabilities, reserved3);
 
-    if (InterlockedCompareExchange(&com_security_initialized, TRUE, FALSE))
-        return RPC_E_TOO_LATE;
+    struct apartment *apt;
+    HRESULT hr;
 
-    if (sd || authn_level > RPC_C_AUTHN_LEVEL_NONE || capabilities != EOAC_NONE)
+    if (reserved1 || !cAuthSvc || cAuthSvc < -1 || (cAuthSvc > 0 && !asAuthSvc) ||
+        authn_level > RPC_C_AUTHN_LEVEL_PKT_PRIVACY ||
+        imp_level < RPC_C_IMP_LEVEL_ANONYMOUS || imp_level > RPC_C_IMP_LEVEL_DELEGATE ||
+        (capabilities & ~COM_SECURITY_CAPABILITIES))
+        return E_INVALIDARG;
+
+    if (!(apt = apartment_get_current_or_mta()))
+        return CO_E_NOTINITIALIZED;
+    apartment_release(apt);
+
+    EnterCriticalSection(&com_security_cs);
+    if (com_security_initialized)
+        hr = RPC_E_TOO_LATE;
+    else
+        hr = com_security_store(cAuthSvc, asAuthSvc, authn_level, imp_level, capabilities);
+    LeaveCriticalSection(&com_security_cs);
+
+    if (hr == S_OK && (sd || authn_level > RPC_C_AUTHN_LEVEL_NONE || capabilities != EOAC_NONE))
         FIXME("security descriptor %p, authentication level %ld and capabilities %#lx are not enforced\n",
               sd, authn_level, capabilities);
-
-    if (imp_level >= RPC_C_IMP_LEVEL_ANONYMOUS && imp_level <= RPC_C_IMP_LEVEL_DELEGATE)
-        com_default_imp_level = imp_level;
-    return S_OK;
+    return hr;
 #else
     static LONG warned;
 
@@ -1288,6 +1479,34 @@ HRESULT WINAPI CoInitializeSecurity(PSECURITY_DESCRIPTOR sd, LONG cAuthSvc,
     return S_OK;
 #endif
 }
+
+#ifdef __REACTOS__
+/***********************************************************************
+ *           CoQueryAuthenticationServices    (combase.@)
+ */
+HRESULT WINAPI CoQueryAuthenticationServices(DWORD *count, SOLE_AUTHENTICATION_SERVICE **services)
+{
+    HRESULT hr = S_OK;
+
+    TRACE("%p, %p\n", count, services);
+
+    if (!services)
+        return E_INVALIDARG;
+
+    EnterCriticalSection(&com_security_cs);
+    *count = 0;
+    *services = NULL;
+    if (com_auth_service_count)
+    {
+        if ((*services = com_security_copy_services(com_auth_services, com_auth_service_count)))
+            *count = com_auth_service_count;
+        else
+            hr = E_OUTOFMEMORY;
+    }
+    LeaveCriticalSection(&com_security_cs);
+    return hr;
+}
+#endif
 
 /***********************************************************************
  *           CoGetObjectContext    (combase.@)
@@ -3433,6 +3652,9 @@ void WINAPI DECLSPEC_HOTPATCH CoUninitialize(void)
 
         com_revoke_all_ps_clsids();
         DestroyRunningObjectTable();
+#ifdef __REACTOS__
+        com_security_reset();
+#endif
     }
     else if (lockcount < 1)
     {

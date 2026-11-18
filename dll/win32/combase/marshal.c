@@ -503,6 +503,9 @@ HRESULT WINAPI CoMarshalInterface(IStream *stream, REFIID riid, IUnknown *unk,
     if (!unk || !stream)
         return E_INVALIDARG;
 
+#ifdef __REACTOS__
+    com_security_init_default();
+#endif
     hr = IUnknown_QueryInterface(unk, &IID_IMarshal, (void **)&marshal);
     if (hr != S_OK)
         hr = CoGetStandardMarshal(riid, unk, dest_context, pvDestContext, mshlFlags, &marshal);
@@ -931,6 +934,7 @@ HRESULT WINAPI CoUnmarshalInterface(IStream *stream, REFIID riid, void **ppv)
     if (!(apt = apartment_get_current_or_mta()))
         return CO_E_NOTINITIALIZED;
     apartment_release(apt);
+    com_security_init_default();
 #endif
 
 #ifdef __REACTOS__
