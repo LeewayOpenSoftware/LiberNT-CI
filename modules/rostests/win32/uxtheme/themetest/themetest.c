@@ -7,7 +7,7 @@
  *              a Style menu and a batch mode switch between the visual styles installed in the store (owner demo 2026-11-16)
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Usage: themetest [--class NAME] [--part N] [--wave N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]
+ * Usage: themetest [--class NAME] [--part N] [--wave N] [--out FILE.bmp] [--csv FILE.csv] [--props] [--wait MS] [--scale N]
  *                  [--list] [--style FILE.msstyles] [--all-styles DIR]
  *   --class  only the rows of that theme class (Button, Edit, Combobox, Scrollbar, Progress, Tab, Header, Window,
  *            Toolbar, Rebar, Status, Menu, Spin, Trackbar, Tooltip, ListView, TreeView)
@@ -545,7 +545,7 @@ int wmain(int argc, wchar_t **argv)
         else if (!wcscmp(argv[i], L"--all-styles") && i + 1 < argc) g_batch_dir = argv[++i];
         else
         {
-            wprintf(L"usage: themetest [--class NAME] [--part N] [--wave N] [--out FILE.bmp] [--csv FILE.csv] [--wait MS] [--scale N]\n"
+            wprintf(L"usage: themetest [--class NAME] [--part N] [--wave N] [--out FILE.bmp] [--csv FILE.csv] [--props] [--wait MS] [--scale N]\n"
                     L"                 [--list] [--style FILE.msstyles] [--all-styles DIR]\n");
             return 2;
         }
