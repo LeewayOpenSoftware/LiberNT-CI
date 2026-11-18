@@ -38,7 +38,9 @@ void engine_notify_logon(void);
 void engine_notify_changed(void);
 BOOL engine_valid_path(const WCHAR *path);
 HRESULT engine_check_register(const WCHAR *path, const WCHAR *xml, DWORD flags, WCHAR **registrant);
-void engine_task_registered(const WCHAR *path, WCHAR *registrant);
+void engine_lock(void);
+void engine_unlock(void);
+HRESULT engine_task_registered(const WCHAR *path, const WCHAR *registrant);
 HRESULT engine_check_task_access(const WCHAR *path);
 void engine_task_deleted(const WCHAR *path);
 HRESULT engine_run(const WCHAR *path, DWORD n_args, const WCHAR **args, DWORD flags, DWORD session_id,

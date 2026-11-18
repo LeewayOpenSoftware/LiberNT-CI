@@ -846,7 +846,11 @@ static void parse_text(struct task_def *def, const WCHAR *rel, const WCHAR *valu
     }
 }
 
-static void finish_def(struct task_def *def)
+/* Schema ranges: DaysInterval 1..365, WeeksInterval 1..52 (they also bound the day search) */
+#define MAX_DAYS_INTERVAL  365
+#define MAX_WEEKS_INTERVAL 52
+
+static HRESULT finish_def(struct task_def *def)
 {
     DWORD i;
 
@@ -858,6 +862,11 @@ static void finish_def(struct task_def *def)
         {
             if (t->cal == CAL_DAILY && !t->days_interval) t->days_interval = 1;
             if (t->cal == CAL_WEEKLY && !t->weeks_interval) t->weeks_interval = 1;
+            if (t->days_interval > MAX_DAYS_INTERVAL || t->weeks_interval > MAX_WEEKS_INTERVAL)
+            {
+                WARN("interval out of range (days %lu, weeks %lu)\n", t->days_interval, t->weeks_interval);
+                return SCHED_E_INVALIDVALUE;
+            }
             if (t->cal == CAL_MONTHLY && !t->months) t->months = 0xfff;
             if (t->cal == CAL_NONE || t->cal == CAL_MONTHLY_DOW) t->enabled = FALSE;
         }
@@ -871,6 +880,7 @@ static void finish_def(struct task_def *def)
         if (t->type == TRIG_SESSION || t->type == TRIG_UNKNOWN)
             t->enabled = FALSE;
     }
+    return S_OK;
 }
 
 /* Parses a task XML document (any encoding xmllite detects). */
@@ -1019,7 +1029,11 @@ out:
         free_def(def);
         return SCHED_E_MALFORMEDXML;
     }
-    finish_def(def);
+    if (FAILED(hr = finish_def(def)))
+    {
+        free_def(def);
+        return hr;
+    }
     *out = def;
     return S_OK;
 }
@@ -1369,8 +1383,9 @@ static BOOL token_has_group(HANDLE token, PSID group)
 
 /*
  * The SID a task runs as, for authorization: the principal UserId, else the
- * registering caller, else LocalSystem (a file an administrator copied into
- * the Tasks folder). A GroupId principal returns NULL with *is_group set.
+ * registering caller. A task with neither (a file copied into the Tasks
+ * folder, or one whose state was lost) has no account and does not run.
+ * A GroupId principal returns NULL with *is_group set.
  */
 static PSID task_owner_sid(const WCHAR *path, const struct task_def *def, BOOL *is_group)
 {
@@ -1389,12 +1404,6 @@ static PSID task_owner_sid(const WCHAR *path, const struct task_def *def, BOOL *
     {
         sid = sid_from_account(registrant);
         free(registrant);
-        if (sid) return sid;
-    }
-    {
-        BYTE buf[SECURITY_MAX_SID_SIZE];
-        DWORD size = sizeof(buf);
-        if (CreateWellKnownSid(WinLocalSystemSid, NULL, buf, &size)) sid = copy_sid(buf);
     }
     return sid;
 }
@@ -1559,19 +1568,20 @@ static void CALLBACK process_exit_callback(void *context, BOOLEAN timeout)
     SetEvent(wake_event);
 }
 
-static WCHAR *substitute_args(const WCHAR *src, DWORD n_args, WCHAR **args)
+/* CreateProcess limit for a whole command line, terminator included */
+#define MAX_CMDLINE 32768
+
+/*
+ * Replaces every $(ArgN) of src with the N-th run argument. The first pass
+ * measures the exact result (each occurrence counts, an argument may appear
+ * any number of times); nothing longer than MAX_CMDLINE is produced.
+ */
+static size_t substitute_pass(const WCHAR *src, DWORD n_args, WCHAR **args, WCHAR *out)
 {
-    size_t len, extra = 0, i;
     const WCHAR *p;
-    WCHAR *out, *o;
+    size_t len = 0, alen;
 
-    if (!src) return NULL;
-    for (i = 0; i < n_args; i++) extra += wcslen(args[i]);
-    len = wcslen(src) + extra + 1;
-    /* each "$(ArgN)" is at least 7 characters, so 'len' is an upper bound */
-    if (!(out = malloc(len * sizeof(WCHAR)))) return NULL;
-
-    for (p = src, o = out; *p; )
+    for (p = src; *p; )
     {
         if (p[0] == '$' && p[1] == '(' && !wcsncmp(p + 2, L"Arg", 3) && p[5] >= '0' && p[5] <= '9')
         {
@@ -1583,31 +1593,71 @@ static WCHAR *substitute_args(const WCHAR *src, DWORD n_args, WCHAR **args)
             {
                 if (n < n_args)
                 {
-                    wcscpy(o, args[n]);
-                    o += wcslen(args[n]);
+                    alen = wcslen(args[n]);
+                    if (alen >= MAX_CMDLINE || len + alen >= MAX_CMDLINE) return MAX_CMDLINE;
+                    if (out) memcpy(out + len, args[n], alen * sizeof(WCHAR));
+                    len += alen;
                 }
                 p = q + 1;
                 continue;
             }
         }
-        *o++ = *p++;
+        if (len + 1 >= MAX_CMDLINE) return MAX_CMDLINE;
+        if (out) out[len] = *p;
+        len++;
+        p++;
     }
-    *o = 0;
+    if (out) out[len] = 0;
+    return len;
+}
+
+static WCHAR *substitute_args(const WCHAR *src, DWORD n_args, WCHAR **args, HRESULT *hr)
+{
+    size_t len;
+    WCHAR *out;
+
+    len = substitute_pass(src, n_args, args, NULL);
+    if (len >= MAX_CMDLINE)
+    {
+        *hr = HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+        return NULL;
+    }
+    if (!(out = malloc((len + 1) * sizeof(WCHAR))))
+    {
+        *hr = E_OUTOFMEMORY;
+        return NULL;
+    }
+    substitute_pass(src, n_args, args, out);
     return out;
 }
 
-static WCHAR *expand_for_user(HANDLE token, const WCHAR *src)
+/* Expands environment variables for the run token; fails rather than truncate */
+static WCHAR *expand_for_user(HANDLE token, const WCHAR *src, HRESULT *hr)
 {
     WCHAR *out;
-    DWORD size = 32768;
+    DWORD n;
 
-    if (!src) return NULL;
-    if (!(out = malloc(size * sizeof(WCHAR)))) return NULL;
-    if (!ExpandEnvironmentStringsForUserW(token, src, out, size))
+    if (wcslen(src) >= MAX_CMDLINE)
     {
-        if (!ExpandEnvironmentStringsW(src, out, size)) wcscpy(out, src);
+        *hr = HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+        return NULL;
     }
-    return out;
+    if (!(out = malloc(MAX_CMDLINE * sizeof(WCHAR))))
+    {
+        *hr = E_OUTOFMEMORY;
+        return NULL;
+    }
+    if (ExpandEnvironmentStringsForUserW(token, src, out, MAX_CMDLINE))
+    {
+        out[MAX_CMDLINE - 1] = 0;
+        return out;
+    }
+    n = ExpandEnvironmentStringsW(src, out, MAX_CMDLINE);
+    if (n && n <= MAX_CMDLINE)
+        return out;
+    free(out);
+    *hr = HRESULT_FROM_WIN32(n ? ERROR_FILENAME_EXCED_RANGE : GetLastError());
+    return NULL;
 }
 
 static HRESULT launch_action(struct instance *inst)
@@ -1624,25 +1674,31 @@ static HRESULT launch_action(struct instance *inst)
 
     if (!a->command || !*a->command) return SCHED_E_INVALID_TASK;
 
-    if ((sub = substitute_args(a->command, inst->n_args, inst->args)))
-    {
-        cmd = expand_for_user(inst->token, sub);
-        free(sub);
-    }
-    if (a->arguments && (sub = substitute_args(a->arguments, inst->n_args, inst->args)))
-    {
-        args = expand_for_user(inst->token, sub);
-        free(sub);
-    }
-    if (a->directory && *a->directory) dir = expand_for_user(inst->token, a->directory);
-    if (!cmd)
-    {
-        hr = E_OUTOFMEMORY;
+    if (!(sub = substitute_args(a->command, inst->n_args, inst->args, &hr)))
         goto out;
+    cmd = expand_for_user(inst->token, sub, &hr);
+    free(sub);
+    if (!cmd)
+        goto out;
+    if (a->arguments)
+    {
+        if (!(sub = substitute_args(a->arguments, inst->n_args, inst->args, &hr)))
+            goto out;
+        args = expand_for_user(inst->token, sub, &hr);
+        free(sub);
+        if (!args)
+            goto out;
     }
+    if (a->directory && *a->directory && !(dir = expand_for_user(inst->token, a->directory, &hr)))
+        goto out;
 
     quote = (cmd[0] != '"' && wcschr(cmd, ' '));
     len = wcslen(cmd) + (args ? wcslen(args) : 0) + 4;
+    if (len > MAX_CMDLINE)
+    {
+        hr = HRESULT_FROM_WIN32(ERROR_FILENAME_EXCED_RANGE);
+        goto out;
+    }
     if (!(cmdline = malloc(len * sizeof(WCHAR))))
     {
         hr = E_OUTOFMEMORY;
@@ -2539,11 +2595,21 @@ HRESULT engine_check_register(const WCHAR *path, const WCHAR *xml, DWORD flags, 
     if (!engine_valid_path(path)) return E_INVALIDARG;
     if (FAILED(hr = get_caller(&c))) return hr;
 
-    if (!ConvertSidToStringSidW(c.sid, registrant)) *registrant = NULL;
+    if (!ConvertSidToStringSidW(c.sid, registrant))
+    {
+        *registrant = NULL;
+        hr = E_OUTOFMEMORY;
+        goto out;
+    }
 
+    if (xml && parse_task_wstr(xml, &def) == SCHED_E_INVALIDVALUE)
+    {
+        hr = SCHED_E_INVALIDVALUE;
+        goto out;
+    }
     if (!c.admin)
     {
-        if (!xml || FAILED(parse_task_wstr(xml, &def)))
+        if (!xml || (!def && FAILED(parse_task_wstr(xml, &def))))
         {
             hr = E_ACCESSDENIED;
             goto out;
@@ -2580,18 +2646,37 @@ out:
     return hr;
 }
 
-void engine_task_registered(const WCHAR *path, WCHAR *registrant)
+/*
+ * Registration holds the engine lock around the file write and this record, so
+ * the engine never sees a new task file without the account it runs as.
+ */
+void engine_lock(void)
+{
+    EnterCriticalSection(&engine_cs);
+}
+
+void engine_unlock(void)
+{
+    LeaveCriticalSection(&engine_cs);
+}
+
+HRESULT engine_task_registered(const WCHAR *path, const WCHAR *registrant)
 {
     HKEY key;
+    LONG err;
 
-    if (registrant && (key = open_state_key(path, TRUE)))
+    if (!registrant) return E_INVALIDARG;
+    if (!(key = open_state_key(path, TRUE))) return E_ACCESSDENIED;
+    err = RegSetValueExW(key, L"Registrant", 0, REG_SZ, (const BYTE *)registrant,
+                         (wcslen(registrant) + 1) * sizeof(WCHAR));
+    RegCloseKey(key);
+    if (err)
     {
-        RegSetValueExW(key, L"Registrant", 0, REG_SZ, (const BYTE *)registrant,
-                       (wcslen(registrant) + 1) * sizeof(WCHAR));
-        RegCloseKey(key);
+        state_delete(path);   /* no stale account left behind */
+        return HRESULT_FROM_WIN32(err);
     }
-    LocalFree(registrant);
     engine_notify_changed();
+    return S_OK;
 }
 
 /* Delete, enable/disable, run and stop need the administrator or the task owner. */

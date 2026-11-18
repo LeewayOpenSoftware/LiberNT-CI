@@ -178,6 +178,7 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
 {
     WCHAR *full_name, *relative_path, *registrant;
     DWORD disposition;
+    BOOL existed;
     HRESULT hr;
 
     TRACE("%s,%s,%#lx,%s,%lu,%lu,%p,%p,%p\n", debugstr_w(path), debugstr_w(xml), flags,
@@ -252,15 +253,22 @@ HRESULT __cdecl SchRpcRegisterTask(const WCHAR *path, const WCHAR *xml, DWORD fl
         break;
     }
 
+    engine_lock();
+    existed = GetFileAttributesW(full_name) != INVALID_FILE_ATTRIBUTES;
     hr = write_xml_utf8(full_name, disposition, xml);
     if (hr == S_OK)
     {
+        hr = engine_task_registered(relative_path, registrant);
+        if (FAILED(hr) && !existed)
+            DeleteFileW(full_name);
+    }
+    engine_unlock();
+    LocalFree(registrant);
+    if (hr == S_OK)
+    {
         *actual_path = wcsdup(relative_path);
-        engine_task_registered(relative_path, registrant);
         schedsvc_auto_start();
     }
-    else
-        LocalFree(registrant);
 
     free(full_name);
     return hr;
