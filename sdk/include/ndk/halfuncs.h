@@ -539,6 +539,15 @@ HalSetTimeIncrement(
     _In_ ULONG Increment
 );
 
+#if defined(_M_IX86) || defined(_M_AMD64)
+NTHALAPI
+BOOLEAN
+NTAPI
+HalSetClockDeadline(
+    _In_ ULONGLONG InterruptTime
+);
+#endif
+
 
 //
 // BIOS call API
