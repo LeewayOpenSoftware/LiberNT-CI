@@ -29,6 +29,8 @@
 #define IDS_ERR_NEXT_EVENT          136
 #define IDS_ERR_RENDER_EVENT        137
 #define IDS_ERR_UNKNOWN             138
+#define IDS_ERR_OPTION_NOT_BOOL     139
+#define IDS_ERR_OPTION_NO_VALUE     140
 
 #define IDS_EVT_INVALID_CHANNEL_PATH 150
 #define IDS_EVT_INVALID_QUERY       151

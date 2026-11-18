@@ -307,6 +307,8 @@ wevtutil.exe cl Application /bu:C:\\admin\\backups\\al0306.evtx\n"
     IDS_ERR_NEXT_EVENT "Failed to read the next event.\n"
     IDS_ERR_RENDER_EVENT "Failed to render event.\n"
     IDS_ERR_UNKNOWN "Error %lu.\n"
+    IDS_ERR_OPTION_NOT_BOOL "Invalid option %ls. The option is not a boolean value.\n"
+    IDS_ERR_OPTION_NO_VALUE "Invalid option %ls. The option value was not specified.\n"
 
     IDS_EVT_INVALID_CHANNEL_PATH "The specified channel path is invalid.\n"
     IDS_EVT_INVALID_QUERY "The specified query is invalid.\n"

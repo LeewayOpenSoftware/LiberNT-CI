@@ -67,37 +67,38 @@ typedef struct _OPTION_NAME
 {
     PCWSTR Short;
     PCWSTR Long;
+    BOOL Boolean;
 } OPTION_NAME;
 
 static const OPTION_NAME OptionNames[OPT_MAX] =
 {
-    { L"r", L"remote" },
-    { L"u", L"username" },
-    { L"p", L"password" },
-    { L"a", L"authentication" },
-    { L"uni", L"unicode" },
-    { L"f", L"format" },
-    { L"c", L"count" },
-    { L"rd", L"reversedirection" },
-    { L"q", L"query" },
-    { L"lf", L"logfile" },
-    { L"sq", L"structuredquery" },
-    { L"bm", L"bookmark" },
-    { L"sbm", L"savebookmark" },
-    { L"l", L"locale" },
-    { L"e", L"element" },
-    { L"ow", L"overwrite" },
-    { L"bu", L"backup" },
-    { L"e", L"enabled" },
-    { L"i", L"isolation" },
-    { L"lfn", L"logfilename" },
-    { L"rt", L"retention" },
-    { L"ab", L"autobackup" },
-    { L"ms", L"maxsize" },
-    { L"l", L"level" },
-    { L"k", L"keywords" },
-    { L"ca", L"channelaccess" },
-    { L"c", L"config" },
+    { L"r", L"remote", FALSE },
+    { L"u", L"username", FALSE },
+    { L"p", L"password", FALSE },
+    { L"a", L"authentication", FALSE },
+    { L"uni", L"unicode", TRUE },
+    { L"f", L"format", FALSE },
+    { L"c", L"count", FALSE },
+    { L"rd", L"reversedirection", TRUE },
+    { L"q", L"query", FALSE },
+    { L"lf", L"logfile", TRUE },
+    { L"sq", L"structuredquery", TRUE },
+    { L"bm", L"bookmark", FALSE },
+    { L"sbm", L"savebookmark", FALSE },
+    { L"l", L"locale", FALSE },
+    { L"e", L"element", FALSE },
+    { L"ow", L"overwrite", TRUE },
+    { L"bu", L"backup", FALSE },
+    { L"e", L"enabled", TRUE },
+    { L"i", L"isolation", FALSE },
+    { L"lfn", L"logfilename", FALSE },
+    { L"rt", L"retention", TRUE },
+    { L"ab", L"autobackup", TRUE },
+    { L"ms", L"maxsize", FALSE },
+    { L"l", L"level", FALSE },
+    { L"k", L"keywords", FALSE },
+    { L"ca", L"channelaccess", FALSE },
+    { L"c", L"config", FALSE },
 };
 
 static PCWSTR OptionValues[OPT_MAX];
@@ -205,7 +206,7 @@ static BOOL GetBoolOption(OPTION_ID Id, BOOL Default, PBOOL Result, PDWORD Error
         return TRUE;
     if (ParseBool(OptionValues[Id], Result))
         return TRUE;
-    *Error = UsageError(IDS_ERR_INVALID_VALUE, OptionTyped[Id]);
+    *Error = UsageError(IDS_ERR_OPTION_NOT_BOOL, OptionTyped[Id]);
     return FALSE;
 }
 
@@ -1058,10 +1059,19 @@ static DWORD CmdQueryEvents(int ArgCount, PWSTR *Args)
             goto done;
         }
         Bookmark = EvtCreateBookmark(BookmarkText);
-        if (!Bookmark || !EvtSeek(Result, 1, Bookmark, 0, EvtSeekRelativeToBookmark))
+        if (!Bookmark)
         {
             Error = FailWith(IDS_ERR_OPEN_QUERY, NULL, GetLastError());
             goto done;
+        }
+        if (!EvtSeek(Result, 1, Bookmark, 0, EvtSeekRelativeToBookmark))
+        {
+            if (GetLastError() != ERROR_NOT_FOUND)
+            {
+                Error = FailWith(IDS_ERR_OPEN_QUERY, NULL, GetLastError());
+                goto done;
+            }
+            Count = 0;
         }
     }
     if (OptionValues[OPT_SAVEBOOKMARK])
@@ -1114,12 +1124,14 @@ static DWORD CmdQueryEvents(int ArgCount, PWSTR *Args)
     }
 
     if (OptionValues[OPT_ELEMENT] && Format != FormatText)
-        ConPrintf(StdOut, L"\n</%ls>\n", OptionValues[OPT_ELEMENT]);
+        ConPrintf(StdOut, L"</%ls>\n", OptionValues[OPT_ELEMENT]);
 
     if (!Error && SaveBookmark)
     {
-        PWSTR Xml = RenderAlloc(NULL, SaveBookmark, EvtRenderBookmark, NULL);
-        if (!Xml || !WriteTextFile(OptionValues[OPT_SAVEBOOKMARK], Xml))
+        PWSTR Xml = Index ? RenderAlloc(NULL, SaveBookmark, EvtRenderBookmark, NULL) : NULL;
+        PCWSTR Text = Xml ? Xml : BookmarkText;
+
+        if (Text && !WriteTextFile(OptionValues[OPT_SAVEBOOKMARK], Text))
             Error = FailWith(IDS_ERR_WRITE_FILE, OptionValues[OPT_SAVEBOOKMARK], GetLastError());
         Free(Xml);
     }
@@ -1139,7 +1151,6 @@ done:
 static DWORD CmdExportLog(int ArgCount, PWSTR *Args)
 {
     PCWSTR Path = Args[0], Target = Args[1];
-    PWSTR QueryText = NULL;
     BOOL LogFile, Structured, Overwrite;
     DWORD Flags, Error = ERROR_SUCCESS;
 
@@ -1153,18 +1164,13 @@ static DWORD CmdExportLog(int ArgCount, PWSTR *Args)
     }
     if (Structured && OptionValues[OPT_QUERY])
         return UsageError(IDS_ERR_INVALID_OPTION, OptionTyped[OPT_QUERY]);
-    if (Structured)
-    {
-        /* TODO: a structured query names its channel inside the file; the export API wants a path */
-        QueryText = ReadTextFile(Path);
-        if (!QueryText)
-            return FailWith(IDS_ERR_READ_FILE, Path, GetLastError());
-    }
+    /* TODO: filtered export (/q, /sq) needs an event file writer; the API exports whole logs only */
+    if (Structured || OptionValues[OPT_QUERY])
+        return FailWith(IDS_ERR_EXPORT_LOG, Path, ERROR_NOT_SUPPORTED);
 
     Flags = (LogFile ? EvtExportLogFilePath : EvtExportLogChannelPath) | (Overwrite ? EvtExportLogOverwrite : 0);
-    if (!EvtExportLog(Session, Structured ? NULL : Path, QueryText ? QueryText : OptionValues[OPT_QUERY], Target, Flags))
+    if (!EvtExportLog(Session, Path, NULL, Target, Flags))
         Error = FailWith(IDS_ERR_EXPORT_LOG, Path, GetLastError());
-    Free(QueryText);
     return Error;
 }
 
@@ -1357,7 +1363,9 @@ int wmain(int argc, WCHAR *argv[])
             return UsageError(IDS_ERR_INVALID_OPTION, Typed);
         }
         StringCchCopyNW(OptionTyped[Id], ARRAYSIZE(OptionTyped[Id]), Argument, Length);
-        OptionValues[Id] = Colon ? Colon + 1 : L"";
+        if (!Colon && !OptionNames[Id].Boolean)
+            return UsageError(IDS_ERR_OPTION_NO_VALUE, OptionTyped[Id]);
+        OptionValues[Id] = Colon ? Colon + 1 : L"true";
     }
     if (PositionalCount < Command->MinArgs)
         return UsageError(IDS_ERR_MISSING_ARGS, NULL);
