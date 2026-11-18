@@ -67,7 +67,7 @@ CallBroker(
         Request.dwDesktopInherited = FALSE;
     }
 
-    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL, (RPC_WSTR)L"\\pipe\\seclogon", NULL,
+    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL, (RPC_WSTR)L"seclogon", NULL,
                                  &StringBinding) != RPC_S_OK)
         return ERROR_SERVICE_NOT_ACTIVE;
     if (RpcBindingFromStringBindingW(StringBinding, &hBinding) != RPC_S_OK)
@@ -148,7 +148,7 @@ RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
         if (dwError == ERROR_SERVICE_NOT_ACTIVE)
         {
             /* Not reachable: a service that is gone, or a pipe we may not open */
-            hProcess = CreateFileW(L"\\\\.\\pipe\\seclogon", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+            hProcess = CreateFileW(L"\\\\.\\pipe\\lrpc\\seclogon", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
             if (hProcess == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
                 return ELEV_CHILD_PIPE_DENIED;
             if (hProcess != INVALID_HANDLE_VALUE)
@@ -171,7 +171,7 @@ RunChild(PCSTR Mode, HANDLE Inherited, PCWSTR Extra)
         if (dwError == ERROR_SERVICE_NOT_ACTIVE)
         {
             /* The pipe itself may already refuse the impersonating thread */
-            hProcess = CreateFileW(L"\\\\.\\pipe\\seclogon", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+            hProcess = CreateFileW(L"\\\\.\\pipe\\lrpc\\seclogon", GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
             if (hProcess == INVALID_HANDLE_VALUE && GetLastError() == ERROR_ACCESS_DENIED)
                 dwError = ELEV_CHILD_PIPE_DENIED;
             else if (hProcess != INVALID_HANDLE_VALUE)

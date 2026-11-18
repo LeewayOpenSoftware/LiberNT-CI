@@ -35,7 +35,7 @@ BindSeclogon(VOID)
     RPC_WSTR StringBinding = NULL;
     handle_t hBinding = NULL;
 
-    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL, (RPC_WSTR)L"\\pipe\\seclogon", NULL,
+    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL, (RPC_WSTR)L"seclogon", NULL,
                                  &StringBinding) != RPC_S_OK)
     {
         return NULL;
