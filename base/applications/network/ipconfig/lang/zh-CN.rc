@@ -89,6 +89,7 @@ BEGIN
     IDS_DNSTYPEAAAA          "\tAAAA Record . . . . . : %ls\n"
     IDS_DNSTYPEATMA          "\tATMA Record . . . . . : \n"
     IDS_DNSTYPESRV           "\tSRV Record. . . . . . : %ls\n\t                        %hu\n\t                        %hu\n\t                        %hu\n"
+    IDS_DNSTYPETXT           "\tTXT Record . . . . . : ""%ls""\n"
 END
 
 STRINGTABLE

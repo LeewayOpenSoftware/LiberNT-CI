@@ -89,6 +89,7 @@ BEGIN
     IDS_DNSTYPEAAAA          "\tÎnregistrarea AAAA. . . : %ls\n"
     IDS_DNSTYPEATMA          "\tÎnregistrarea ATMA. . . : \n"
     IDS_DNSTYPESRV           "\tÎnregistrarea SRV . . . : %ls\n\t                        %hu\n\t                        %hu\n\t                        %hu\n"
+    IDS_DNSTYPETXT           "\tTXT Record . . . . . : ""%ls""\n"
 END
 
 STRINGTABLE

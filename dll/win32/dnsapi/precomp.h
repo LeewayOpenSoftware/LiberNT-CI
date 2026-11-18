@@ -140,7 +140,10 @@ static inline LPSTR dns_strdup_ua( const char *src )
 
 DNS_STATUS DnsIntTranslateAdnsToDNS_STATUS(int Status);
 void DnsIntFreeRecordList(PDNS_RECORD ToFree);
+#define DNS_MAX_SERVERS 32
+
 DNS_STATUS DnsIntResolve(LPCWSTR Name, WORD Type, DWORD Options, PDNS_RECORDW *Result);
+DNS_STATUS DnsIntResolveWithServers(LPCWSTR Name, WORD Type, DWORD Options, PDNS_ADDR_ARRAY Servers, PDNS_RECORDW *Result);
 WCHAR *xstrsave(const WCHAR *str);
 
 #endif /* _DNSAPI_H */

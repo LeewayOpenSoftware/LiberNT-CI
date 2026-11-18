@@ -1390,6 +1390,7 @@ DisplayDnsRecord(
     IN_ADDR Addr4;
     IN6_ADDR Addr6;
     DNS_STATUS Status;
+    DWORD StringIndex;
 
     ConResPrintf(StdOut, IDS_DNSNAME, pszName);
     ConResPrintf(StdOut, IDS_DNSLINE);
@@ -1498,6 +1499,11 @@ DisplayDnsRecord(
                              pThisRecord->Data.SRV.wPriority,
                              pThisRecord->Data.SRV.wWeight,
                              pThisRecord->Data.SRV.wPort);
+                break;
+
+            case DNS_TYPE_TEXT:
+                for (StringIndex = 0; StringIndex < pThisRecord->Data.TXT.dwStringCount; StringIndex++)
+                    ConResPrintf(StdOut, IDS_DNSTYPETXT, pThisRecord->Data.TXT.pStringArray[StringIndex]);
                 break;
         }
         ConPuts(StdOut, L"\n\n");

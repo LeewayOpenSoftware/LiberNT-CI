@@ -673,8 +673,41 @@ typedef struct _DnsRRSet {
     _prrset->pLastRR->pNext = NULL;  \
 }
 
+#define DNS_QUERY_RESULTS_VERSION1 0x1
+
 #ifndef __WIDL__
 // HACK
+
+typedef struct _DNS_QUERY_RESULT {
+  ULONG Version;
+  DNS_STATUS QueryStatus;
+  ULONG64 QueryOptions;
+  PDNS_RECORD pQueryRecords;
+  PVOID Reserved;
+} DNS_QUERY_RESULT, *PDNS_QUERY_RESULT;
+
+typedef VOID
+(CALLBACK DNS_QUERY_COMPLETION_ROUTINE)(
+  _In_ PVOID pQueryContext,
+  _In_ PDNS_QUERY_RESULT pQueryResults);
+typedef DNS_QUERY_COMPLETION_ROUTINE *PDNS_QUERY_COMPLETION_ROUTINE;
+
+#define DNS_QUERY_REQUEST_VERSION1 0x1
+
+typedef struct _DNS_QUERY_REQUEST {
+  ULONG Version;
+  PCWSTR QueryName;
+  WORD QueryType;
+  ULONG64 QueryOptions;
+  PDNS_ADDR_ARRAY pDnsServerList;
+  ULONG InterfaceIndex;
+  PDNS_QUERY_COMPLETION_ROUTINE pQueryCompletionCallback;
+  PVOID pQueryContext;
+} DNS_QUERY_REQUEST, *PDNS_QUERY_REQUEST;
+
+typedef struct _DNS_QUERY_CANCEL {
+  CHAR Reserved[32];
+} DNS_QUERY_CANCEL, *PDNS_QUERY_CANCEL;
 
 DNS_STATUS
 WINAPI
@@ -689,6 +722,11 @@ DnsAcquireContextHandle_W(
   _In_ DWORD CredentialFlags,
   _In_opt_ PVOID Credentials,
   _Outptr_ PHANDLE pContext);
+
+VOID
+WINAPI
+DnsCancelQuery(
+  _In_ PDNS_QUERY_CANCEL pCancelHandle);
 
 DNS_STATUS
 WINAPI
@@ -775,6 +813,13 @@ DnsQuery_UTF8(
   _Inout_opt_ PVOID pExtra,
   _Outptr_result_maybenull_ PDNS_RECORD *ppQueryResults,
   _Outptr_opt_result_maybenull_ PVOID *pReserved);
+
+DNS_STATUS
+WINAPI
+DnsQueryEx(
+  _In_ PDNS_QUERY_REQUEST pQueryRequest,
+  _Inout_ PDNS_QUERY_RESULT pQueryResults,
+  _Inout_opt_ PDNS_QUERY_CANCEL pCancelHandle);
 
 DNS_STATUS
 WINAPI

@@ -55,6 +55,8 @@
 #define IDS_SLIP  152
 #define IDS_WIFI  153
 
+#define IDS_DNSTYPETXT           154
+
 #define IDS_DNSNAME              160
 #define IDS_DNSLINE              161
 #define IDS_DNSRECORDNAME        162
