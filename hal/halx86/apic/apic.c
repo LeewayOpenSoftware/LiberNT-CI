@@ -1376,11 +1376,26 @@ HalEndSystemInterrupt(
     IN KIRQL OldIrql,
     IN PKTRAP_FRAME TrapFrame)
 {
+#ifdef _M_AMD64
+    /*
+     * The IRQL is kept in CR8 here, and a local APIC that is emulated outside
+     * the processor only reads CR8 when the guest leaves it. The EOI makes it
+     * leave; lowering the IRQL does not. So lower the IRQL first: the priority
+     * the APIC goes by after the EOI is then the one being returned to. In the
+     * other order it stays the handler's, and whatever became pending below it
+     * is held back until something else makes the guest leave, which on an idle
+     * processor is the next clock tick, whose own EOI holds it back again.
+     * Interrupts are off from here to the return, so nothing else changes.
+     */
+    ApicLowerIrql(OldIrql);
+    ApicSendEOI();
+#else
     /* Send an EOI */
     ApicSendEOI();
 
     /* Restore the old IRQL */
     ApicLowerIrql(OldIrql);
+#endif
 }
 
 
