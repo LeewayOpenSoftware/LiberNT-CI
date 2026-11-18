@@ -87,279 +87,402 @@ The topic branches and their status are listed in [FORK.md](FORK.md). Leeway's p
 
 ---
 
-LiberNT is a free NT operating system. The name says it: *liber* is Latin for **free**. It targets **Windows® 11 compatibility**, with room for freestyle and experimental features.
+# Orosi
 
-LiberNT brings extensive work on kernel-space components and drivers, aimed at stability and modern hardware, and it focuses on 64-bit platforms: **amd64, arm64 and riscv64**.
+### An independent NT operating system by Leeway Open Software
 
-Our goal is a system that stays maintainable in the long run: **stable, reliable and efficient**, running on embedded devices too, and able to support every feature a modern operating system should have.
+**Windows Compatibility · Independent Engineering · Hardware Longevity**
 
-> [!NOTE]
-> New to NT? **NT** is the architecture behind every modern version of Windows: its kernel, driver model and system services. LiberNT is a free operating system built on that architecture, and Windows 11 is the reference it measures itself against.
+**Orosi** is an independent operating system project developed and maintained by **Leeway Open Software**, built upon the open-source foundations of **LiberNT** and its underlying ReactOS heritage.
 
----
+Our goal is to develop a modern, reliable and maintainable implementation of the Windows NT architecture, with **Windows 11 as our principal compatibility reference**.
 
-## Table of Contents
+Orosi is intended to become a practical operating system: capable of running real applications, supporting real hardware and extending the useful lifetime of existing computers, while remaining open to modern computing environments.
 
-- [What LiberNT Includes](#what-libernt-includes)
-- [Supported Platforms](#supported-platforms)
-- [Getting Started](#getting-started)
-  - [Step 1: Download a Build](#step-1-download-a-build)
-  - [Step 2: Boot It](#step-2-boot-it)
-  - [Step 3: Install LiberNT](#step-3-install-libernt)
-- [Building LiberNT Yourself](#building-libernt-yourself)
-- [Build Hosts](#build-hosts)
-- [Project Structure](#project-structure)
-- [Contributing](#contributing)
-- [Use of AI](#use-of-ai)
-- [License](#license)
-- [About](#about)
+The project follows its own engineering direction, integration policies and development priorities.
+
+> [!IMPORTANT]
+> **Orosi is under active experimental development.** Current builds are intended for research, testing and validation. Do not use them for critical workloads or store irreplaceable data without independent backups.
 
 ---
 
-## What LiberNT Includes
+## What Is Orosi?
 
-LiberNT brings modern hardware and platforms to the NT architecture.
+Orosi is an independently developed, NT-compatible operating system based on LiberNT.
 
-| Feature | What it means for you |
-| --- | --- |
-| **64-bit first** | The kernel, HAL and FreeLoader run on amd64, arm64 and riscv64. |
-| **UEFI boot** | Boots on UEFI firmware, with a GOP framebuffer and early display support. The preinstalled disk boots with UEFI or BIOS. |
-| **Modern buses and storage** | PCIe, PCI, Plug and Play, USB with xHCI, SD/eMMC, and storage and bus drivers. |
-| **Board support** | Real boards, including the Raspberry Pi and its RP1 I/O controller. |
-| **The Windows 11 driver model** | Windows 11 (NT10) compatibility and driver-model work, checked against Windows 11 itself. |
-| **Graphics and x86 apps on Arm** | The graphics driver model with Mesa, and WoW64 with FEX, are build options you can switch on. |
-| **LiberNT Setup** | Lists drives the way Windows Setup does, creates, deletes, formats, shrinks and extends partitions, and installs LiberNT on NTFS with the EFI system partition it needs. |
-| **Your own build** | `menuconfig` lets you choose the target, compiler and build type, and switch features on or off. |
+The NT architecture provides the foundation for modern Windows operating systems, including their kernel, system services, driver infrastructure, security model and application interfaces.
 
-> [!TIP]
-> Each build on the [Releases](https://github.com/LiberNT/LiberNT/releases) page lists what changed since the previous one.
+Orosi works toward compatibility with this architecture through open-source development, independent implementations and practical testing.
+
+Our objective is not simply to reproduce the appearance of Windows, but to implement the underlying functionality necessary for a usable, reliable and compatible operating system.
+
+**Orosi is not Microsoft Windows, nor is it a distribution of Microsoft Windows.**
+
+Compatibility with Windows 11 is a development objective, not a claim of complete compatibility.
+
+## Our Vision
+
+We believe useful computing hardware should not become obsolete solely because its original operating system is no longer supported.
+
+Many existing computers can continue performing meaningful work after maintenance, storage upgrades, memory expansion or other reasonable improvements.
+
+Orosi aims to support this possibility without limiting itself to older hardware.
+
+Our development priorities include:
+
+- **Windows compatibility:** NT APIs, Win32 applications, system services and compatible drivers.
+- **Hardware longevity:** Extending the practical lifetime of capable Intel and AMD systems.
+- **Modern infrastructure:** Networking, storage, graphics, security and system management.
+- **Reliability:** Filesystem integrity, recovery, predictable behavior and long-term maintainability.
+- **Independent engineering:** Research and implementation under Leeway Open Software's own technical direction.
+- **Practical usability:** Moving beyond demonstrations toward real computing environments.
+
+Our long-term interests include desktop computing, refurbished systems, professional environments and potential server-oriented configurations.
+
+These directions do not imply that corresponding product editions are currently available.
 
 ---
 
-## Supported Platforms
+## Development Philosophy
 
-| Architecture | Prebuilt images | Build from source | Notes |
-| --- | :---: | :---: | --- |
-| **amd64** | ✓ | ✓ | Clang (default) or GCC |
-| **arm64** | ✓ | ✓ | Includes Raspberry Pi support |
-| **riscv64** | ✓ | ✓ | A separate image is built for JH7110 boards |
-| **i386** | | ✓ | 32-bit x86 |
+Orosi follows a practical, evidence-driven approach to operating system engineering.
 
-Release builds also include PowerPC images.
+**Real hardware matters.** Virtual machines provide controlled testing environments, but physical hardware validation remains essential.
+
+**Working implementations matter.** Successful compilation and passing tests are important, but they must be supported by observable functional behavior.
+
+**Compatibility matters.** Publicly documented interfaces and independently observed Windows behavior provide references for implementation and validation.
+
+**Stability matters.** A system that boots successfully is not necessarily ready to protect user data.
+
+**Engineering independence matters.** Orosi may integrate, modify, replace or independently develop components according to its technical objectives and applicable licenses.
+
+We value measurable progress, reproducible testing and functional results over unsupported claims of completeness.
+
+## Architecture and Supported Platforms
+
+Orosi currently prioritizes **AMD64 (x86-64)**, targeting compatible Intel and AMD processors.
+
+This focus allows us to concentrate engineering resources on a defined hardware ecosystem and pursue compatibility and reliability without unnecessarily expanding the supported architecture matrix.
+
+Additional x86 configurations, including selected 32-bit systems, may be evaluated separately.
+
+Orosi does not automatically adopt every architecture or hardware objective supported by LiberNT upstream.
+
+### Platform Direction
+
+| Platform | Direction |
+|---|---|
+| AMD64 / x86-64 | Primary development target |
+| Intel and AMD processors | Primary hardware ecosystem |
+| Legacy x86 / i386 | Potential secondary target, subject to validation |
+| ARM64, RISC-V, PowerPC | Not current Orosi development priorities |
+
+This table describes project priorities, not a certification of hardware support or a list of available release images.
+
+---
+
+## What Orosi Is Developing
+
+Orosi inherits substantial NT infrastructure from LiberNT and ReactOS while introducing its own research, subsystem changes and independent implementations.
+
+| Area | Development focus |
+|---|---|
+| **NT kernel and executive** | Compatibility, reliability and subsystem integration |
+| **Win32 and NT APIs** | Modern application compatibility and behavioral correctness |
+| **Hardware and drivers** | Plug and Play, driver infrastructure and real-device testing |
+| **Networking** | TCP/IP modernization, NSI, WSK, NDIS and network filtering |
+| **Storage** | NTFS integrity, volume management and recovery |
+| **Graphics** | Window management, desktop composition and visual styles |
+| **Security** | Access control, integrity levels, elevation and isolation |
+| **System administration** | Services, management tools and diagnostics |
+| **Installation and servicing** | Setup, updates, maintenance and recovery |
+| **Desktop experience** | Explorer, shell integration and user-interface consistency |
+
+The project also investigates modern Windows driver interfaces, system compatibility contracts and supporting infrastructure.
+
+**These are engineering areas, not a declaration that every listed feature is complete, enabled or production-ready.**
+
+## Boot, Installation and Hardware
+
+Orosi retains portions of the inherited LiberNT/ReactOS boot, installation and hardware infrastructure.
+
+Development and testing encompass areas such as:
+
+- BIOS and UEFI boot paths.
+- PCI and PCI Express hardware.
+- Plug and Play device enumeration.
+- USB and storage controllers.
+- NTFS installation and volume handling.
+- Windows-compatible driver infrastructure.
+- Physical hardware and virtual-machine validation.
+
+Actual device compatibility depends on the current build, available drivers and subsystem maturity.
+
+### Installation Safety
+
+> [!CAUTION]
+> Experimental operating system builds can overwrite partitions, damage filesystems or behave unpredictably. Use disposable virtual machines or dedicated test hardware, verify the installation target and maintain independent backups.
+
+See [INSTALL.md](INSTALL.md) for installation documentation.
 
 ---
 
 ## Getting Started
 
-### Step 1: Download a Build
+Orosi is currently a development-oriented project. Availability of public installation images and their supported configurations may change.
 
-Every build on the [Releases](https://github.com/LiberNT/LiberNT/releases) page comes as one ZIP file per image and architecture:
+### 1. Obtain a Build
 
-| File | What it is |
-| --- | --- |
-| `bootcd-iso-…-<arch>-…zip` | `bootcd.iso`, a CD image that runs LiberNT or starts LiberNT Setup |
-| `LiberNT-img-…-<arch>-…zip` | `LiberNT.img`, a disk with LiberNT already installed |
-| `LiberNT-vhd-…-<arch>-…zip` | `LiberNT.vhd`, the same preinstalled disk for VHD-based virtual machines |
-| `LiberNT-vhdx-…-<arch>-…zip` | `LiberNT.vhdx`, the same preinstalled disk for Hyper-V Generation 2 |
+Consult the repository's releases, build artifacts or development documentation for available Orosi images.
 
-> [!NOTE]
-> These are Clang Debug builds, made by GitHub Actions from the `main-nt10` branch.
+Do not assume that images published by LiberNT upstream contain Orosi's modifications.
 
-### Step 2: Boot It
+### 2. Boot the System
 
-The quickest way to try LiberNT is the preinstalled disk:
+Depending on the available image format and build configuration, testing may be performed using:
 
-1. Unzip `LiberNT.img` (or `LiberNT.vhd`)
-2. Start it in a virtual machine such as **QEMU**, or use the VHD in **VirtualBox** or a **Hyper-V** Generation 1 virtual machine. Hyper-V Generation 2 takes only `LiberNT.vhdx`, with Secure Boot turned off
-3. Or write `LiberNT.img` to a USB drive or an SD card and boot the machine from it. It boots with UEFI or BIOS
+- QEMU or another compatible virtual machine.
+- Dedicated physical x86-64 hardware.
+- A supported preinstalled disk image or installation medium.
 
-> [!CAUTION]
-> Writing `LiberNT.img` to a USB drive or an SD card erases everything on it. Double-check the target device first.
+Some inherited build targets support raw disk images, VHD/VHDX images and bootable ISO media.
 
-### Step 3: Install LiberNT
+Their availability and behavior must be verified for the selected Orosi revision.
 
-Boot `bootcd.iso` in a virtual machine or on a PC, and follow the instructions of **LiberNT Setup**.
+### 3. Install and Test
 
-The preinstalled disk also carries LiberNT Setup. Run `C:\<architecture>\libernt.exe`, for example `C:\arm64\libernt.exe`, to install LiberNT on another disk from the running system.
+Follow the installation instructions associated with the selected build.
 
-> [!CAUTION]
-> Setup can delete and format partitions. Back up anything important on the target disk before you install.
+Installation procedures and compatibility may differ from those of upstream LiberNT.
 
-See [INSTALL.md](INSTALL.md) for the full installation guide.
+**Do not install experimental builds over an existing operating system or valuable data.**
 
 ---
 
-## Building LiberNT Yourself
+## Building Orosi
 
-LiberNT builds with RosBE, a cross-build toolchain. The steps below work on Linux and macOS, and on Windows through WSL2.
+Orosi retains substantial portions of the LiberNT/ReactOS build infrastructure, including CMake-based configuration, cross-compilation tooling and Ninja build targets.
 
-### 1. Install the toolchain
+The exact toolchain, configuration options and output targets depend on the current development revision.
 
-You need Git, CMake, Ninja and a C/C++ compiler for your own machine. RosBE adds the compilers that build LiberNT.
+### Build Requirements
+
+The inherited build environment uses tools including:
+
+- Git
+- CMake
+- Ninja
+- C/C++ compilation toolchains
+- Flex and Bison
+- RosBE and associated cross-compilation tools
+
+Supported build hosts and compiler configurations should be verified against the current repository.
+
+### Obtaining the Source
+
+The current development repository is:
+
+[Leeway Open Software — LiberNT-LDW](https://github.com/LeewayOpenSoftware/LiberNT-LDW)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/LiberNT/libernt-build-toolchain/main/rosbe-unix-bootstrap.sh | sh
+git clone https://github.com/LeewayOpenSoftware/LiberNT-LDW.git
+cd LiberNT-LDW
 ```
 
-> [!TIP]
-> On Windows, we suggest WSL2. Install it with `wsl --install`, open the Linux terminal it adds, and follow the Linux steps there. Keep the source inside the Linux file system rather than under `/mnt/c`, where builds run slower.
+Select the appropriate development branch before configuring or building.
 
-### 2. Get the source
+### Configuring a Build
 
-```sh
-git clone https://github.com/LiberNT/LiberNT.git
-cd LiberNT
-```
-
-> [!NOTE]
-> The first configure run also fetches the submodule and external sources the build needs.
-
-### 3. Configure
+The inherited build infrastructure provides configuration scripts such as:
 
 ```sh
 ./configure.sh
 ```
 
-With no options, this sets up an AMD64 Debug build with Clang in the folder `output-Clang-amd64-debug`. The folder name always follows the pattern `output-<compiler>-<architecture>-<debug|release>`.
-
-| Option | What it does |
-| --- | --- |
-| `-a`, `--arch <arch>` | Chooses the target architecture: `amd64` (default), `i386`, `arm64` or `riscv64`. |
-| `--clang` | Builds with Clang/LLVM from RosBE. This is the default. |
-| `--gcc` | Builds with GCC from RosBE instead of Clang. The macOS RosBE does not include GCC. |
-| `-r`, `--release` | Makes an optimized Release build. Without it you get a Debug build, which is easier to debug. |
-| `menuconfig` | Opens a menu to choose optional components first. Your choices are kept in the output folder. |
-| `makefiles` | Uses `make` instead of Ninja. |
-| `--no-feeds-update` | Skips fetching the external sources listed in `feeds.conf`, for example when offline. |
-| `-D<name>=<value>` | Passes a setting straight to CMake. |
-
-For example:
-
-```sh
-./configure.sh -a arm64              # ARM64 Debug build with Clang
-./configure.sh -a i386 --gcc         # 32-bit x86 build with GCC
-./configure.sh -a amd64 --release    # optimized AMD64 build
-```
-
-For a more personalized build, add `menuconfig`:
-
-```sh
-./configure.sh menuconfig
-```
-
-It opens a menu, much like the Linux kernel's, where you choose the target, compiler and build type, and switch features on or off: code generation and tuning, graphics driver model and Mesa, WoW64 and FEX, kernel debugging, test runs and more. Press `?` on any option for help, `S` to save and `Q` to quit. Your choices are saved in the output folder and used every time you configure it again.
-
-### 4. Build
-
-Go to the output folder and run Ninja with the target you want:
-
-```sh
-cd output-Clang-amd64-debug
-ninja liberntimg
-```
-
-| Command | Creates | Use it to |
-| --- | --- | --- |
-| `ninja bootcd` | `bootcd.iso` | Install LiberNT from a CD image, in a virtual machine or on a PC. |
-| `ninja liberntimg` | `LiberNT.img` | Boot a disk with LiberNT already installed. Start it in a virtual machine such as QEMU, or write it to a USB drive or SD card. It boots with UEFI or BIOS. |
-| `ninja liberntvhd` | `LiberNT.vhd`, `LiberNT.vhdx` | Use the same preinstalled disk in virtual machines: the VHD in VirtualBox and Hyper-V Generation 1, the VHDX in Hyper-V Generation 2, which does not take VHD disks. |
-
-Each target builds everything it needs first, and the files are written to the output folder.
-
----
-
-## Build Hosts
-
-| Host | Compilers | Notes |
-| --- | --- | --- |
-| **Linux** x86_64 / aarch64 | Clang and GCC | The full RosBE toolchain |
-| **macOS** Intel / Apple Silicon | Clang | RosBE has no GCC build for macOS |
-| **Windows** | Clang and GCC | Through WSL2, following the Linux steps |
-
-On every host, install Git, CMake, Ninja, Flex and Bison from your package manager. RosBE provides only the cross compilers. Prebuilt toolchains live in [LiberNT/libernt-build-toolchain](https://github.com/LiberNT/libernt-build-toolchain).
-
----
-
-## Project Structure
+The upstream AMD64 Debug configuration uses Clang and generates an output directory following the pattern:
 
 ```text
-LiberNT/
-├── base/            # Applications, services, setup and the shell
-├── boot/            # FreeLoader, boot data and boot images
-├── bootloader/      # Boot manager, Windows loader, UEFI and Open Firmware support
-├── dll/             # User-mode DLLs, including ntdll and the Win32 libraries
-├── drivers/         # Kernel-mode drivers: buses, storage, file systems, network, input and more
-├── hal/             # Hardware abstraction layers for x86, Arm, Arm64, PowerPC and RISC-V
-├── media/           # Fonts, themes, INF files, sounds and branding
-├── modules/         # Optional applications, tests and wallpapers
-├── ntoskrnl/        # The NT kernel and executive
-├── sdk/             # Headers, libraries and build tools
-├── submodules/      # Recipes and patches for external components
-├── subsystems/      # CSRSS and the Windows subsystem
-├── win32ss/         # win32k, USER, GDI and display drivers
-├── configure.sh     # Sets up a build on Linux, macOS and WSL2
-└── configure.cmd    # Sets up a build on Windows
+output-Clang-amd64-debug
 ```
+
+Other configuration options may include:
+
+| Option | Purpose |
+|---|---|
+| `-a amd64` | Select AMD64 |
+| `--clang` | Select Clang |
+| `--gcc` | Select GCC where supported |
+| `--release` | Request an optimized build |
+| `menuconfig` | Open the configuration interface |
+| `--no-feeds-update` | Skip updating external sources |
+
+These are inherited build-interface examples. Their continued support and behavior must be checked against the current Orosi revision.
+
+### Building Images
+
+The inherited build system includes targets such as:
+
+```sh
+ninja bootcd
+ninja liberntimg
+ninja liberntvhd
+```
+
+These names may remain unchanged internally for compatibility with the existing build infrastructure.
+
+**Internal build target names do not determine Orosi's product identity.**
+
+Output filenames, supported image formats and distribution naming may evolve as Orosi's build infrastructure develops.
+
+---
+
+## Source Tree
+
+Orosi inherits the general source-tree organization of LiberNT and ReactOS.
+
+```text
+base/          Applications, services, setup and shell
+boot/          Boot components and boot data
+bootloader/    Boot management and loading infrastructure
+dll/           User-mode libraries and NT/Win32 interfaces
+drivers/       Kernel-mode drivers and device infrastructure
+hal/           Hardware abstraction
+media/         Fonts, themes, sounds and visual assets
+modules/       Optional components, applications and tests
+ntoskrnl/      NT kernel and executive
+sdk/           Headers, libraries and build tools
+submodules/    External component integration
+subsystems/    Windows subsystem infrastructure
+win32ss/       USER, GDI, win32k and graphics components
+```
+
+The actual repository may contain additional Orosi-specific directories, integrations and development tools.
+
+Source-tree names inherited from upstream are not necessarily user-facing product names.
+
+---
+
+## Development and Research
+
+Orosi is developed through independent engineering, source-level implementation, automated testing, physical hardware laboratories and AI-assisted workflows.
+
+Leeway Open Software uses engineering agents and AI tools to assist with research, implementation, debugging, documentation and validation.
+
+AI is part of our development process, but it does not replace technical responsibility.
+
+An implementation is not considered correct merely because it compiles or because an AI system reports success.
+
+We evaluate changes through appropriate testing, integration checks, runtime behavior and, where relevant, comparisons with publicly observable Windows behavior.
+
+### Independent Implementation Policy
+
+**Leeway Open Software does not use proprietary Microsoft Windows source code to develop Orosi.**
+
+We do not possess or seek access to Microsoft's confidential Windows source code, and we do not accept contributions based on leaked, confidential or otherwise unauthorized Microsoft source materials.
+
+Our compatibility work uses legitimate technical references, including:
+
+- Publicly available Microsoft documentation.
+- Public SDK and WDK interfaces and headers, under their applicable terms.
+- Publicly documented NT and Win32 behavior.
+- Independently conducted behavioral tests.
+- Appropriately licensed open-source implementations.
+- Original engineering work, including AI-assisted implementations.
+
+When recreating equivalent Windows functionality, our objective is to develop independent implementations rather than reproduce Microsoft's proprietary source code.
+
+AI-assisted code remains subject to provenance review, technical validation and applicable licensing requirements.
+
+We do not accept the use of AI to conceal copied proprietary code or misrepresent its origin.
+
+**Functional compatibility through independent engineering is our objective.**
+
+---
+
+## Relationship with LiberNT and ReactOS
+
+**Orosi is based on LiberNT, which itself builds upon the ReactOS codebase and development heritage.**
+
+We recognize and appreciate the work of the ReactOS community, the LiberNT contributors and the developers of inherited third-party components.
+
+Their work provides a substantial foundation upon which Orosi continues its development.
+
+Leeway Open Software maintains its own development direction, integration priorities, implementations and experimental infrastructure.
+
+Orosi may selectively integrate upstream improvements while maintaining independent changes and research.
+
+**Orosi is not the official LiberNT project and does not represent the official development direction of LiberNT or ReactOS.**
+
+### Upstream Projects
+
+- [LiberNT](https://github.com/LiberNT/LiberNT)
+- [ReactOS](https://github.com/reactos/reactos)
+
+### Leeway Development Works
+
+Orosi's development originates in **LiberNT-LDW (Leeway Development Works)**, the Leeway Open Software development repository based on LiberNT.
+
+LDW provides a research and integration environment for compatibility improvements, subsystem development, hardware validation and experimental implementations.
+
+The development history also includes research associated with **Aureline and Asterion**, Leeway's earlier Wine- and ReactOS-related projects.
+
+Repository history, inherited code attribution and applicable licenses are preserved independently of product branding.
+
+See [FORK.md](FORK.md) and [PURPOSE.md](PURPOSE.md) for additional development context.
 
 ---
 
 ## Contributing
 
-Report bugs and suggest features in [Issues](https://github.com/LiberNT/LiberNT/issues), and find guides and notes in the [Wiki](https://github.com/LiberNT/LiberNT/wiki).
+Orosi's development is currently directed and maintained by Leeway Open Software.
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) and [PULL_REQUEST_MANAGEMENT.md](PULL_REQUEST_MANAGEMENT.md). If you're planning a larger change, ask in [Issues](https://github.com/LiberNT/LiberNT/issues) or on [Discord](https://discord.gg/BpcKg7FZ2) first.
+Public availability of the source code does not automatically imply that every development branch accepts unsolicited pull requests, feature proposals or external modifications.
 
-> [!WARNING]
-> **Legal notice:** If you have seen proprietary Microsoft Windows source code (including but not limited to the leaked Windows NT 3.5, NT 4, 2000 source code and the Windows Research Kernel), your contribution won't be accepted because of potential copyright violation.
+Contribution procedures, when available, are documented in [CONTRIBUTING.md](CONTRIBUTING.md).
 
----
+Any submitted contribution must respect applicable licensing, copyright and source-provenance requirements.
 
-## Use of AI
-
-We want to make it clear: AI is part of how LiberNT is built. It helps us review and write code, and everything it writes is then reviewed by a human. Before anything reaches the main branch, a person runs and validates the end-to-end tests. We care about this project too much to let a regression slip through.
-
-It also helps us read documentation, extract definitions and fix bugs. For any given bug, it compares what the official Microsoft Learn documentation says with what our function actually does, so we can see exactly where our behavior differs.
-
-Like any other tool, AI is there to help us achieve our goals. It follows the same rules we hold ourselves to, set out in [AGENTS.md](AGENTS.md):
-
-- We build from the Windows SDK and WDK headers, Windows 11 public symbols, Microsoft documentation and black-box runs on Windows 11.
-- We stay clean-room: we never transcribe disassembled or decompiled Windows code, and we never copy GPL code from Linux.
-- A fix is only a fix once we have seen it work in a real boot or test run. Once tests pass, a future CI will keep them passing and preserve our overall progress.
-- We compare our test results check by check with the same tests run on Windows 11.
-
-> [!TIP]
-> If you use AI in your own contributions, you are welcome here too. Just tell us in the pull request which parts it helped with and how you tested them. That honesty is all we ask.
+Contributions based on unauthorized proprietary Microsoft Windows source code are not accepted.
 
 ---
 
-## License
+## Licensing and Attribution
 
-LiberNT is licensed under the [GNU GPL 3.0](COPYING). Code inherited from other projects keeps the licence stated in its file headers, most of it GPL 2.0 or later. The GPL 2.0, LGPL 2.1 and BSD texts those files refer to are in [COPYING2](COPYING2), [COPYING.LIB](COPYING.LIB) and [COPYING.ARM](COPYING.ARM).
+Orosi includes source code inherited from LiberNT, ReactOS and other open-source projects.
 
-The changes made in LiberNT are Copyright © 2026 the LiberNT contributors. Inherited and third-party code keeps the copyright notices of its authors. See [CREDITS.md](CREDITS.md).
+Inherited components retain their applicable copyright notices, licenses and attribution requirements.
 
-The GPL covers the code, not the brand. LiberNT™ and the LiberNT logo are the project's marks, and the artwork in `media/graphics/branding` is copyright its author, all rights reserved. [TRADEMARK.md](TRADEMARK.md) says what you may do with them without asking: refer to the project, redistribute an official build unchanged, link to us. A modified build needs its own name.
+Leeway Open Software also develops original implementations, documentation, branding, artwork and other project materials.
 
-LiberNT is an independent project. It is not affiliated with, endorsed by or sponsored by Microsoft. Windows® is a registered trademark of Microsoft Corporation.
+The applicable rights and permissions depend on the relevant component and its licensing terms.
 
----
+Original Orosi branding and separately licensed assets are distinct from the inherited software codebase.
 
-## About
+**No branding statement overrides the permissions or obligations established by an applicable open-source license.**
 
-LiberNT is built by the **LiberNT contributors**. It was started by [Ahmed Arif](https://github.com/ahmedarif193) and is maintained by [Ahmed Arif](https://github.com/ahmedarif193), [Ostap Brehin](https://github.com/osbre) and [Vivyy](https://github.com/enginelesscc).
+Refer to the repository's license files, source headers and attribution documentation for the authoritative terms.
 
-- [Visit the LiberNT organization](https://github.com/LiberNT)
-- [Website](https://libernt.com)
-- [Download the latest build](https://github.com/LiberNT/LiberNT/releases)
-- [Wiki](https://github.com/LiberNT/LiberNT/wiki)
-- Chat on [Discord](https://discord.gg/BpcKg7FZ2) or [Matrix](https://matrix.to/#/#libernt:matrix.org)
+See [CREDITS.md](CREDITS.md) for project acknowledgements and inherited development credits.
 
 ---
 
-## Leeway Development Works (LiberNT-LDW)
+## Project Identity
 
-This repository is **LiberNT-LDW**, the Leeway Open Software development fork of LiberNT (see the introduction at the top of this file). We track upstream `main-nt10` closely (it moves many times a day) and test our fixes and improvements on topic branches. Part of this work comes from our research in a parallel project, Aureline - Asterion (our Wine and ReactOS forks). The changes are public so that anyone who finds them useful can look at them.
+**Orosi** is developed by **Leeway Open Software**.
 
-The topic branches and their status are listed in [FORK.md](FORK.md). Our purpose and development principles are in [PURPOSE.md](PURPOSE.md).
+*Independent Computing Research and Development.*
 
-Este repositorio es **LiberNT-LDW**, el fork de desarrollo de Leeway Open Software de LiberNT: seguimos de cerca el `main-nt10` upstream y probamos nuestras correcciones y mejoras en ramas por tema, en parte fruto de nuestro proyecto paralelo Aureline - Asterion. Los cambios son públicos por si a alguien le resultan útiles. Nuestro propósito y principios de desarrollo están en [PURPOSE.md](PURPOSE.md).
+Orosi has its own project identity, engineering direction and development objectives.
+
+Its relationship with LiberNT and ReactOS is acknowledged without implying organizational affiliation or endorsement.
+
+Orosi is not affiliated with, sponsored by or endorsed by Microsoft Corporation.
+
+Windows is a trademark of Microsoft Corporation. Other names and trademarks belong to their respective owners.
+
+---
+
+**Leeway Open Software — Orosi**
+
+*Independent engineering. Practical compatibility. Computing without unnecessary obsolescence.*
