@@ -374,6 +374,7 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_po/PoSleepInformation.c
     ntos_po/PoBatteryState.c
     ntos_po/PoFxState.c
+    ntos_po/c_pofx.c
     ntos_po/PoFxState_pnp.c
     ntos_po/PoPowerButton.c
     ntos_po/PoSettingSession.c
