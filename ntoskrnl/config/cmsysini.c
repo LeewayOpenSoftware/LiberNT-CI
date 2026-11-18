@@ -991,6 +991,27 @@ CmpLinkHiveToMaster(IN PUNICODE_STRING LinkName,
     return STATUS_SUCCESS;
 }
 
+/* TRUE if the loader options contain the switch Name ("/NAME" or "NAME"), any case. */
+CODE_SEG("INIT")
+static
+BOOLEAN
+CmpHasLoadOption(
+    _In_ PCSTR Options,
+    _In_ PCSTR Name)
+{
+    SIZE_T Length = strlen(Name);
+    PCSTR Cur;
+
+    for (Cur = Options; *Cur; Cur++)
+    {
+        if ((Cur == Options || Cur[-1] == '/' || Cur[-1] == ' ') &&
+            _strnicmp(Cur, Name, Length) == 0 &&
+            (Cur[Length] == '\0' || Cur[Length] == '/' || Cur[Length] == ' '))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 CODE_SEG("INIT")
 BOOLEAN
 NTAPI
@@ -1010,6 +1031,10 @@ CmpInitializeSystemHive(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Setup the ansi string */
     RtlInitAnsiString(&LoadString, LoaderBlock->LoadOptions);
+
+    /* Compatibility switch: /LEGACYHIVES makes new hives format 1.3 instead of 1.5 */
+    if (LoaderBlock->LoadOptions && CmpHasLoadOption(LoaderBlock->LoadOptions, "LEGACYHIVES"))
+        HvSetHiveFormatVersion(HSYS_MINOR);
 
     /* Allocate the unicode buffer */
     Length = LoadString.Length * sizeof(WCHAR) + sizeof(UNICODE_NULL);
