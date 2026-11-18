@@ -1,43 +1,192 @@
 /*
  * PROJECT:     LiberNT Kernel-Mode Driver Framework
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     USB host Controller eXtension (UCX) class library -- M1 skeleton.
+ * PURPOSE:     USB host Controller eXtension (UCX) class library.
  *              Loads as a KMDF class library, registers the L"Ucx" class, and
- *              publishes the UCX DDI table so a client (usbxhci) can bind and
- *              create a UcxController. Object lifecycle and event wiring only;
- *              xHCI transfer/URB handling arrives in M2.
+ *              publishes the UCX DDI table a client (usbxhci) binds to. Owns the
+ *              controller, root hub, USB device and endpoint objects and, from
+ *              M3, the root hub PDO the hub driver binds to (ucxroothub.c).
  * NOTE:        UCX DDI surface is a clean-room reconstruction from the public
  *              WDK headers (ucxclass.h et al). No Microsoft source was used.
  * COPYRIGHT:   Copyright 2026 LeewayOpenSoftware
  */
 
-#include <ntddk.h>
-#include <ntstrsafe.h>
-#include "wdf.h"
-#include <fxldr.h>
-#include "wdfcx.h"
-#include "classlibrary.h"
-#include <ucxclass.h>
-
-#define UCX_TAG 'xCcU'
-
-/*
- * UCX trace is debugger/COM-only (DbgPrintEx IHVDRIVER/INFO) AND compiled out of
- * free builds. Standing rule: UCX trace must never route to a user-readable sink
- * and must not persist on retail. It logs opaque WDFOBJECT pointers only under
- * DBG; this becomes load-bearing at M2 when device-influenced values are traced.
- */
-#if DBG
-#define UcxLog(_fmt, ...) \
-    DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL, "ucx01000: " _fmt "\n", ##__VA_ARGS__)
-#else
-#define UcxLog(_fmt, ...) ((void)0)
-#endif
+#include "ucxp.h"
+#include "classlibrary.h"       /* WdfCxBindClient / WdfCxUnbindClient: this file only */
 
 /* --------------------------------------------------------------------------
- * DDI implementations (M1: object lifecycle + logging; no hardware I/O yet).
- * Each returns a live WDFOBJECT cast to the opaque UCX handle so the client's
- * create calls succeed and the enumeration path can be exercised in M2.
+ * Object creation: our context first, the client's context (if any) on top
+ * -------------------------------------------------------------------------- */
+
+NTSTATUS
+UcxpCreateObject(
+    _In_ WDFOBJECT Parent,
+    _In_opt_ PWDF_OBJECT_ATTRIBUTES ClientAttributes,
+    _In_ PCWDF_OBJECT_CONTEXT_TYPE_INFO ContextType,
+    _In_opt_ PFN_WDF_OBJECT_CONTEXT_CLEANUP EvtCleanup,
+    _Out_ WDFOBJECT *Object)
+{
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    WDFOBJECT Created;
+    NTSTATUS Status;
+
+    *Object = NULL;
+
+    WDF_OBJECT_ATTRIBUTES_INIT(&Attributes);
+    Attributes.ParentObject = Parent;
+    Attributes.ContextTypeInfo = ContextType;
+    Attributes.EvtCleanupCallback = EvtCleanup;
+    if (ClientAttributes != NULL)
+    {
+        /* Lifetime decisions stay with the client; the context is ours */
+        Attributes.ExecutionLevel = ClientAttributes->ExecutionLevel;
+        Attributes.SynchronizationScope = ClientAttributes->SynchronizationScope;
+    }
+
+    Status = WdfObjectCreate(&Attributes, &Created);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
+    if (ClientAttributes != NULL && ClientAttributes->ContextTypeInfo != NULL)
+    {
+        PVOID ClientContext;
+        WDF_OBJECT_ATTRIBUTES ClientCopy = *ClientAttributes;
+
+        ClientCopy.ParentObject = NULL;
+        Status = WdfObjectAllocateContext(Created, &ClientCopy, &ClientContext);
+        if (!NT_SUCCESS(Status))
+        {
+            WdfObjectDelete(Created);
+            return Status;
+        }
+    }
+
+    *Object = Created;
+    return STATUS_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Device handle registry (per controller)
+ * -------------------------------------------------------------------------- */
+
+VOID
+UcxpAddDeviceHandle(
+    _In_ PUCX_CONTROLLER_CTX Controller,
+    _Inout_ PUCX_DEVICE_HANDLE Handle)
+{
+    KIRQL OldIrql;
+
+    Handle->Signature = UCX_DEVICE_HANDLE_SIGNATURE;
+    KeAcquireSpinLock(&Controller->DeviceHandleLock, &OldIrql);
+    InsertTailList(&Controller->DeviceHandles, &Handle->Link);
+    Controller->DeviceHandleCount++;
+    KeReleaseSpinLock(&Controller->DeviceHandleLock, OldIrql);
+}
+
+VOID
+UcxpRemoveDeviceHandle(
+    _In_ PUCX_CONTROLLER_CTX Controller,
+    _Inout_ PUCX_DEVICE_HANDLE Handle)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+
+    KeAcquireSpinLock(&Controller->DeviceHandleLock, &OldIrql);
+    for (Entry = Controller->DeviceHandles.Flink; Entry != &Controller->DeviceHandles; Entry = Entry->Flink)
+    {
+        if (Entry == &Handle->Link)
+        {
+            RemoveEntryList(Entry);
+            Controller->DeviceHandleCount--;
+            Handle->Signature = 0;
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Controller->DeviceHandleLock, OldIrql);
+}
+
+/*
+ * Find + hold: the handle stays allocated while it has holds
+ * (UcxpDeviceRemove waits for it after unlisting). Every hub-interface and
+ * URB path that reads through a downstream handle brackets its use with
+ * these two.
+ */
+BOOLEAN
+UcxpAcquireDeviceHandle(
+    _In_ PUCX_CONTROLLER_CTX Controller,
+    _In_opt_ PVOID Handle)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    BOOLEAN Found = FALSE;
+
+    if (Handle == NULL)
+        return FALSE;
+    KeAcquireSpinLock(&Controller->DeviceHandleLock, &OldIrql);
+    for (Entry = Controller->DeviceHandles.Flink; Entry != &Controller->DeviceHandles; Entry = Entry->Flink)
+    {
+        if (CONTAINING_RECORD(Entry, UCX_DEVICE_HANDLE, Link) == (PUCX_DEVICE_HANDLE)Handle)
+        {
+            Found = (((PUCX_DEVICE_HANDLE)Handle)->Signature == UCX_DEVICE_HANDLE_SIGNATURE);
+            if (Found)
+                InterlockedIncrement(&((PUCX_DEVICE_HANDLE)Handle)->Holds);
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Controller->DeviceHandleLock, OldIrql);
+    return Found;
+}
+
+VOID
+UcxpReleaseDeviceHandle(
+    _In_ PUCX_DEVICE_HANDLE Handle)
+{
+    UcxpDeviceDropHold(Handle);
+}
+
+/*
+ * The decrement is the decision: only the thread whose decrement leaves the
+ * word at "removed, no holds" destroys, and a thread whose decrement did not
+ * reads nothing of the handle afterwards (it may already be gone).
+ */
+VOID
+UcxpDeviceDropHold(
+    _In_ PUCX_DEVICE_HANDLE Handle)
+{
+    PUCX_ROOTHUB_CTX RootHub = Handle->RootHub;   /* read while our hold still protects the handle */
+
+    if (InterlockedDecrement(&Handle->Holds) == UCX_HANDLE_REMOVING)
+        UcxpDeviceDestroy(RootHub, Handle);
+}
+
+BOOLEAN
+UcxpFindDeviceHandle(
+    _In_ PUCX_CONTROLLER_CTX Controller,
+    _In_opt_ PVOID Handle)
+{
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    BOOLEAN Found = FALSE;
+
+    if (Handle == NULL)
+        return FALSE;
+
+    /* Compare addresses only: nothing is read through Handle until it was found */
+    KeAcquireSpinLock(&Controller->DeviceHandleLock, &OldIrql);
+    for (Entry = Controller->DeviceHandles.Flink; Entry != &Controller->DeviceHandles; Entry = Entry->Flink)
+    {
+        if (CONTAINING_RECORD(Entry, UCX_DEVICE_HANDLE, Link) == (PUCX_DEVICE_HANDLE)Handle)
+        {
+            Found = (((PUCX_DEVICE_HANDLE)Handle)->Signature == UCX_DEVICE_HANDLE_SIGNATURE);
+            break;
+        }
+    }
+    KeReleaseSpinLock(&Controller->DeviceHandleLock, OldIrql);
+    return Found;
+}
+
+/* --------------------------------------------------------------------------
+ * Controller
  * -------------------------------------------------------------------------- */
 
 static
@@ -49,33 +198,33 @@ UcxControllerCreateInternal(
     _In_opt_ PWDF_OBJECT_ATTRIBUTES Attributes,
     _Out_ UCXCONTROLLER *Controller)
 {
-    WDF_OBJECT_ATTRIBUTES attribs;
-    WDFOBJECT object;
-    NTSTATUS status;
+    PUCX_CONTROLLER_CTX Ctx;
+    WDFOBJECT Object;
+    NTSTATUS Status;
 
     *Controller = NULL;
-    if (Config == NULL || Config->Size != sizeof(UCX_CONTROLLER_CONFIG))
+    if (Device == NULL || Config == NULL || Config->Size != sizeof(UCX_CONTROLLER_CONFIG))
         return STATUS_INVALID_PARAMETER;
 
-    if (Attributes != NULL)
+    Status = UcxpCreateObject((WDFOBJECT)Device, Attributes,
+                              WDF_GET_CONTEXT_TYPE_INFO(UCX_CONTROLLER_CTX), NULL, &Object);
+    if (!NT_SUCCESS(Status))
     {
-        attribs = *Attributes;
-    }
-    else
-    {
-        WDF_OBJECT_ATTRIBUTES_INIT(&attribs);
-    }
-    attribs.ParentObject = Device;
-
-    status = WdfObjectCreate(&attribs, &object);
-    if (!NT_SUCCESS(status))
-    {
-        UcxLog("UcxControllerCreate: WdfObjectCreate failed 0x%08lX", (ULONG)status);
-        return status;
+        UcxLog("UcxControllerCreate: object creation failed 0x%08lX", (ULONG)Status);
+        return Status;
     }
 
-    *Controller = (UCXCONTROLLER)object;
-    UcxLog("UcxControllerCreate: controller %p, %u root hub(s)", object, Config->NumberOfRootHubs);
+    Ctx = UcxGetControllerCtx(Object);
+    Ctx->ClientDevice = Device;
+    Ctx->Config = *Config;
+    Ctx->RootHub = NULL;
+    KeInitializeSpinLock(&Ctx->DeviceHandleLock);
+    InitializeListHead(&Ctx->DeviceHandles);
+    Ctx->DeviceHandleCount = 0;
+
+    *Controller = (UCXCONTROLLER)Object;
+    UcxLog("UcxControllerCreate: controller %p, %u root hub(s), PCI %04X:%04X rev %04X",
+           Object, Config->NumberOfRootHubs, Config->VendorId, Config->DeviceId, Config->RevisionId);
     return STATUS_SUCCESS;
 }
 
@@ -88,6 +237,31 @@ static VOID NTAPI UcxControllerNeedsResetInternal(_In_ UCXCONTROLLER Controller)
 static VOID NTAPI UcxControllerResetCompleteInternal(_In_ UCXCONTROLLER Controller, _In_ BOOLEAN Succeeded)
 { UcxLog("UcxControllerResetComplete: %p succeeded=%u", Controller, Succeeded); }
 
+/* --------------------------------------------------------------------------
+ * Root hub
+ * -------------------------------------------------------------------------- */
+
+static
+VOID
+NTAPI
+UcxRootHubEvtCleanup(
+    _In_ WDFOBJECT Object)
+{
+    PUCX_ROOTHUB_CTX Ctx = UcxGetRootHubCtx(Object);
+    PUCX_CONTROLLER_CTX Controller;
+
+    /* The client deleted the controller (or its device is going away): the
+     * hub driver's PDO leaves with it */
+    UcxpRootHubDestroyPdo((UCXROOTHUB)Object);
+
+    if (Ctx->Controller != NULL)
+    {
+        Controller = UcxGetControllerCtx((WDFOBJECT)Ctx->Controller);
+        if (Controller->RootHub == (UCXROOTHUB)Object)
+            Controller->RootHub = NULL;
+    }
+}
+
 static
 NTSTATUS
 NTAPI
@@ -97,35 +271,58 @@ UcxRootHubCreateInternal(
     _In_opt_ PWDF_OBJECT_ATTRIBUTES Attributes,
     _Out_ UCXROOTHUB *RootHub)
 {
-    WDF_OBJECT_ATTRIBUTES attribs;
-    WDFOBJECT object;
-    NTSTATUS status;
+    PUCX_CONTROLLER_CTX ControllerCtx;
+    PUCX_ROOTHUB_CTX Ctx;
+    WDFOBJECT Object;
+    NTSTATUS Status;
 
     *RootHub = NULL;
     if (Controller == NULL || Config == NULL || Config->Size != sizeof(UCX_ROOTHUB_CONFIG))
         return STATUS_INVALID_PARAMETER;
 
-    if (Attributes != NULL)
-        attribs = *Attributes;
-    else
-        WDF_OBJECT_ATTRIBUTES_INIT(&attribs);
-    attribs.ParentObject = (WDFOBJECT)Controller;
+    ControllerCtx = UcxGetControllerCtx((WDFOBJECT)Controller);
+    if (ControllerCtx->RootHub != NULL)
+        return STATUS_INVALID_DEVICE_STATE;  /* one root hub per controller */
 
-    status = WdfObjectCreate(&attribs, &object);
-    if (!NT_SUCCESS(status))
+    Status = UcxpCreateObject((WDFOBJECT)Controller, Attributes,
+                              WDF_GET_CONTEXT_TYPE_INFO(UCX_ROOTHUB_CTX), UcxRootHubEvtCleanup, &Object);
+    if (!NT_SUCCESS(Status))
     {
-        UcxLog("UcxRootHubCreate: WdfObjectCreate failed 0x%08lX", (ULONG)status);
-        return status;
+        UcxLog("UcxRootHubCreate: object creation failed 0x%08lX", (ULONG)Status);
+        return Status;
     }
 
-    *RootHub = (UCXROOTHUB)object;
+    Ctx = UcxGetRootHubCtx(Object);
+    Ctx->Controller = Controller;
+    Ctx->Config = *Config;
+
+    /* The hub driver's device: a child of the client's FDO */
+    Status = UcxpRootHubCreatePdo((UCXROOTHUB)Object);
+    if (!NT_SUCCESS(Status))
+    {
+        UcxLog("UcxRootHubCreate: root hub PDO failed 0x%08lX", (ULONG)Status);
+        Ctx->Controller = NULL;              /* nothing to unhook in cleanup */
+        WdfObjectDelete(Object);
+        return Status;
+    }
+
+    ControllerCtx->RootHub = (UCXROOTHUB)Object;
+    *RootHub = (UCXROOTHUB)Object;
     UcxLog("UcxRootHubCreate: roothub %p (%u USB2 + %u USB3 ports)",
-           object, Config->NumberOf20Ports, Config->NumberOf30Ports);
+           Object, Config->NumberOf20Ports, Config->NumberOf30Ports);
     return STATUS_SUCCESS;
 }
 
 static VOID NTAPI UcxRootHubPortChangedInternal(_In_ UCXROOTHUB RootHub)
-{ UcxLog("UcxRootHubPortChanged: %p", RootHub); }
+{
+    if (RootHub == NULL)
+        return;
+    UcxpRootHubPortChanged(RootHub);
+}
+
+/* --------------------------------------------------------------------------
+ * USB device and endpoint objects (M3 step 2 wires their callbacks)
+ * -------------------------------------------------------------------------- */
 
 static
 NTSTATUS
@@ -136,38 +333,59 @@ UcxUsbDeviceCreateInternal(
     _In_opt_ PWDF_OBJECT_ATTRIBUTES Attributes,
     _Out_ UCXUSBDEVICE *UsbDevice)
 {
-    WDF_OBJECT_ATTRIBUTES attribs;
-    WDFOBJECT object;
-    NTSTATUS status;
+    PUCX_USBDEVICE_CTX Ctx;
+    WDFOBJECT Object;
+    NTSTATUS Status;
 
     *UsbDevice = NULL;
     if (Controller == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (Attributes != NULL)
-        attribs = *Attributes;
-    else
-        WDF_OBJECT_ATTRIBUTES_INIT(&attribs);
-    attribs.ParentObject = (WDFOBJECT)Controller;
-
-    status = WdfObjectCreate(&attribs, &object);
-    if (!NT_SUCCESS(status))
+    Status = UcxpCreateObject((WDFOBJECT)Controller, Attributes,
+                              WDF_GET_CONTEXT_TYPE_INFO(UCX_USBDEVICE_CTX), NULL, &Object);
+    if (!NT_SUCCESS(Status))
     {
-        UcxLog("UcxUsbDeviceCreate: WdfObjectCreate failed 0x%08lX", (ULONG)status);
-        return status;
+        UcxLog("UcxUsbDeviceCreate: object creation failed 0x%08lX", (ULONG)Status);
+        return Status;
     }
 
-    if (UsbDeviceInit != NULL)
-        *UsbDeviceInit = NULL;   /* M1: init blob consumed, nothing to retain yet */
+    Ctx = UcxGetUsbDeviceCtx(Object);
+    Ctx->Controller = Controller;
 
-    *UsbDevice = (UCXUSBDEVICE)object;
-    UcxLog("UcxUsbDeviceCreate: usbdevice %p", object);
+    /* An init blob this library handed to EvtControllerUsbDeviceAdd carries the
+     * callbacks and the device handle; the client's own creations (M2 demo)
+     * come without one and get no callbacks. */
+    if (UsbDeviceInit != NULL && *UsbDeviceInit != NULL)
+    {
+        struct _UCXUSBDEVICE_INIT *Init = *UsbDeviceInit;
+
+        if (Init->Signature != UCX_USBDEVICE_INIT_SIGNATURE || Init->Controller != Controller || Init->Created != NULL)
+        {
+            WdfObjectDelete(Object);
+            return STATUS_INVALID_PARAMETER;
+        }
+        Ctx->Handle = Init->Handle;
+        Ctx->Callbacks = Init->Callbacks;
+        Init->Created = (UCXUSBDEVICE)Object;
+        *UsbDeviceInit = NULL;               /* consumed; ucxdevice.c frees it */
+    }
+
+    *UsbDevice = (UCXUSBDEVICE)Object;
+    UcxLog("UcxUsbDeviceCreate: usbdevice %p", Object);
     return STATUS_SUCCESS;
 }
 
 static VOID NTAPI UcxUsbDeviceInitSetEventCallbacksInternal(
     _In_ PUCXUSBDEVICE_INIT Init, _In_ PUCX_USBDEVICE_EVENT_CALLBACKS Callbacks)
-{ UNREFERENCED_PARAMETER(Init); UNREFERENCED_PARAMETER(Callbacks); UcxLog("UcxUsbDeviceInitSetEventCallbacks"); }
+{
+    if (Init == NULL || Callbacks == NULL || Init->Signature != UCX_USBDEVICE_INIT_SIGNATURE ||
+        Callbacks->Size != sizeof(UCX_USBDEVICE_EVENT_CALLBACKS))
+    {
+        UcxLog("UcxUsbDeviceInitSetEventCallbacks: bad init or callbacks, ignored");
+        return;
+    }
+    Init->Callbacks = *Callbacks;
+}
 
 static VOID NTAPI UcxUsbDeviceRemoteWakeNotificationInternal(_In_ UCXUSBDEVICE UsbDevice, _In_ NTSTATUS Status)
 { UcxLog("UcxUsbDeviceRemoteWakeNotification: %p 0x%08lX", UsbDevice, (ULONG)Status); }
@@ -181,41 +399,63 @@ UcxEndpointCreateInternal(
     _In_opt_ PWDF_OBJECT_ATTRIBUTES Attributes,
     _Out_ UCXENDPOINT *Endpoint)
 {
-    WDF_OBJECT_ATTRIBUTES attribs;
-    WDFOBJECT object;
-    NTSTATUS status;
+    PUCX_ENDPOINT_CTX Ctx;
+    WDFOBJECT Object;
+    NTSTATUS Status;
 
     *Endpoint = NULL;
     if (UsbDevice == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if (Attributes != NULL)
-        attribs = *Attributes;
-    else
-        WDF_OBJECT_ATTRIBUTES_INIT(&attribs);
-    attribs.ParentObject = (WDFOBJECT)UsbDevice;
-
-    status = WdfObjectCreate(&attribs, &object);
-    if (!NT_SUCCESS(status))
+    Status = UcxpCreateObject((WDFOBJECT)UsbDevice, Attributes,
+                              WDF_GET_CONTEXT_TYPE_INFO(UCX_ENDPOINT_CTX), NULL, &Object);
+    if (!NT_SUCCESS(Status))
     {
-        UcxLog("UcxEndpointCreate: WdfObjectCreate failed 0x%08lX", (ULONG)status);
-        return status;
+        UcxLog("UcxEndpointCreate: object creation failed 0x%08lX", (ULONG)Status);
+        return Status;
     }
 
-    if (EndpointInit != NULL)
-        *EndpointInit = NULL;
+    Ctx = UcxGetEndpointCtx(Object);
+    Ctx->UsbDevice = UsbDevice;
 
-    *Endpoint = (UCXENDPOINT)object;
-    UcxLog("UcxEndpointCreate: endpoint %p", object);
+    if (EndpointInit != NULL && *EndpointInit != NULL)
+    {
+        struct _UCXENDPOINT_INIT *Init = *EndpointInit;
+
+        if (Init->Signature != UCX_ENDPOINT_INIT_SIGNATURE || Init->UsbDevice != UsbDevice || Init->Created != NULL)
+        {
+            WdfObjectDelete(Object);
+            return STATUS_INVALID_PARAMETER;
+        }
+        Ctx->Descriptor = Init->Descriptor;
+        Ctx->Callbacks = Init->Callbacks;
+        Init->Created = (UCXENDPOINT)Object;
+        *EndpointInit = NULL;                /* consumed; ucxdevice.c frees it */
+    }
+
+    *Endpoint = (UCXENDPOINT)Object;
+    UcxLog("UcxEndpointCreate: endpoint %p", Object);
     return STATUS_SUCCESS;
 }
 
 static VOID NTAPI UcxEndpointInitSetEventCallbacksInternal(
     _In_ PUCXENDPOINT_INIT Init, _In_ PUCX_ENDPOINT_EVENT_CALLBACKS Callbacks)
-{ UNREFERENCED_PARAMETER(Init); UNREFERENCED_PARAMETER(Callbacks); UcxLog("UcxEndpointInitSetEventCallbacks"); }
+{
+    if (Init == NULL || Callbacks == NULL || Init->Signature != UCX_ENDPOINT_INIT_SIGNATURE ||
+        Callbacks->Size != sizeof(UCX_ENDPOINT_EVENT_CALLBACKS))
+    {
+        UcxLog("UcxEndpointInitSetEventCallbacks: bad init or callbacks, ignored");
+        return;
+    }
+    Init->Callbacks = *Callbacks;
+}
 
 static VOID NTAPI UcxEndpointSetWdfIoQueueInternal(_In_ UCXENDPOINT Endpoint, _In_ WDFQUEUE Queue)
-{ UcxLog("UcxEndpointSetWdfIoQueue: ep %p queue %p", Endpoint, Queue); }
+{
+    if (Endpoint != NULL)
+        UcxGetEndpointCtx((WDFOBJECT)Endpoint)->Queue = Queue;
+    UcxLog("UcxEndpointSetWdfIoQueue: ep %p queue %p", Endpoint, Queue);
+}
 
 static VOID NTAPI UcxEndpointPurgeCompleteInternal(_In_ UCXENDPOINT Endpoint)
 { UcxLog("UcxEndpointPurgeComplete: %p", Endpoint); }
@@ -226,8 +466,70 @@ static VOID NTAPI UcxEndpointNeedToCancelTransfersInternal(_In_ UCXENDPOINT Endp
 static VOID NTAPI UcxIoDeviceControlInternal(VOID)
 { UcxLog("UcxIoDeviceControl"); }
 
+/*
+ * M3 step 3: the client completes a forwarded bulk/interrupt transfer here.
+ * The request carries the context ucxdevice.c put on it when forwarding; the
+ * URB gets its status and length, the MDL this library built is released and
+ * the field restored, and the request is completed. <= DISPATCH_LEVEL.
+ */
+static VOID NTAPI UcxEndpointCompleteTransferInternal(
+    _In_ UCXENDPOINT Endpoint, _In_ WDFREQUEST Request, _In_ USBD_STATUS UsbdStatus, _In_ ULONG Transferred)
+{
+    PUCX_REQUEST_CTX Ctx = (Request != NULL) ? UcxGetRequestCtx((WDFOBJECT)Request) : NULL;
+    PURB Urb;
+
+    if (Ctx == NULL)
+    {
+        UcxLog("UcxEndpointCompleteTransfer: request %p without a transfer context", Request);
+        if (Request != NULL)
+            WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+    if (Ctx->Endpoint != Endpoint)
+        UcxLog("UcxEndpointCompleteTransfer: endpoint %p completes a transfer of %p", Endpoint, Ctx->Endpoint);
+
+    Urb = (PURB)UcxRequestGetUrb(Request);
+    if (Urb != NULL && Urb->UrbHeader.Length >= sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER))
+    {
+        struct _URB_BULK_OR_INTERRUPT_TRANSFER *Req = &Urb->UrbBulkOrInterruptTransfer;
+
+        if (Transferred > Req->TransferBufferLength)
+            Transferred = Req->TransferBufferLength;        /* the client's count, never past the buffer */
+        Req->TransferBufferLength = USBD_SUCCESS(UsbdStatus) ? Transferred : 0;
+        Urb->UrbHeader.Status = UsbdStatus;
+    }
+    if (Ctx->OwnedMdl != NULL)
+    {
+        IoFreeMdl(Ctx->OwnedMdl);
+        Ctx->OwnedMdl = NULL;
+    }
+    if (Ctx->Endpoint != NULL)
+    {
+        InterlockedDecrement(&UcxGetEndpointCtx((WDFOBJECT)Ctx->Endpoint)->Transfers);
+        Ctx->Endpoint = NULL;                   /* the context cleanup must not count it again */
+    }
+    WdfRequestComplete(Request, UcxpUsbdToNtStatus(UsbdStatus));
+}
+
+/* M3 step 3: the MDL a forwarded transfer's data lives in */
+static PMDL NTAPI UcxRequestGetTransferMdlInternal(_In_ WDFREQUEST Request)
+{
+    PUCX_REQUEST_CTX Ctx = (Request != NULL) ? UcxGetRequestCtx((WDFOBJECT)Request) : NULL;
+    PURB Urb;
+
+    if (Request == NULL)
+        return NULL;
+    if (Ctx != NULL && Ctx->OwnedMdl != NULL)
+        return Ctx->OwnedMdl;
+    Urb = (PURB)UcxRequestGetUrb(Request);
+    if (Urb == NULL || Urb->UrbHeader.Length < sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER))
+        return NULL;
+    return Urb->UrbBulkOrInterruptTransfer.TransferBufferMDL;
+}
+
 /* --------------------------------------------------------------------------
  * Published DDI table + class-library registration (mirror of ufx01000.c).
+ * The table order is the ABI the client stub binds to: append only.
  * -------------------------------------------------------------------------- */
 
 static PVOID UcxFunctions[UcxFunctionsMax] =
@@ -246,7 +548,9 @@ static PVOID UcxFunctions[UcxFunctionsMax] =
     UcxEndpointSetWdfIoQueueInternal,
     UcxEndpointPurgeCompleteInternal,
     UcxEndpointNeedToCancelTransfersInternal,
-    UcxIoDeviceControlInternal
+    UcxIoDeviceControlInternal,
+    UcxEndpointCompleteTransferInternal,
+    UcxRequestGetTransferMdlInternal
 };
 
 static

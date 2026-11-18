@@ -147,6 +147,8 @@ FxDriverEntry(
     _In_ PUNICODE_STRING RegistryPath);
 
 /* One enumerated root-port device (step 3) */
+struct _XHCI_UCX_ENDPOINT_CLIENT;
+
 typedef struct _XHCI_UCX_SLOT
 {
     BOOLEAN InUse;
@@ -156,6 +158,15 @@ typedef struct _XHCI_UCX_SLOT
     UCHAR Speed;                  /* PORTSC speed id, as programmed into the slot context */
     UCHAR SpeedClass;             /* speed id used for packet-size rules: SUPER for any USB3 port (SSP, PSI ids) */
     UCHAR UsbAddress;             /* from the output slot context after Address Device */
+    /* M3 step 4b: behind a hub, and hubs */
+    ULONG RouteString;            /* xHCI route string; 0 on a root port */
+    UCHAR RootPort;               /* the root port the chain hangs from (PortId on a root port) */
+    UCHAR TtSlotId;               /* TT hub slot and port for a low/full-speed device behind a high-speed hub */
+    UCHAR TtPort;
+    BOOLEAN Mtt;                  /* the TT hub is multi-TT */
+    BOOLEAN IsHub;                /* the slot context says hub */
+    UCHAR HubPorts;
+    UCHAR TtThinkTime;
     ULONG Ep0MaxPacket;
     ULONG Ep0Enqueue;
     ULONG Ep0Cycle;
@@ -188,6 +199,8 @@ typedef struct _XHCI_UCX_SLOT
     ULONG BotTag;
     UCXENDPOINT BulkIn;
     UCXENDPOINT BulkOut;
+    /* M3 step 3: the hub-driven device's configured endpoints by DCI (EndpointLock) */
+    struct _XHCI_UCX_ENDPOINT_CLIENT *Endpoints[32];
 } XHCI_UCX_SLOT, *PXHCI_UCX_SLOT;
 
 /* Port enumeration state (indexed by root port) */
@@ -288,6 +301,11 @@ typedef struct _XHCI_UCX_DEVICE
     BOOLEAN ControllerRunning;
     BOOLEAN InterruptsArmed;
     BOOLEAN FatalError;
+    BOOLEAN SelfEnumerate;                     /* UseUcx=2: the M2 client-driven enumeration owns the
+                                                  ports; FALSE: the hub driver does, through ucx01000 */
+    FAST_MUTEX TransferMutex;                  /* hub-driven: one command/EP0 transfer sequence at a time
+                                                  (the pending-completion fields are controller-wide) */
+    KSPIN_LOCK EndpointLock;                   /* configured endpoints: rings, in-flight lists, slot table */
     volatile LONG PendingUsbSts;               /* USBSTS bits latched by the ISR for the DPC */
 } XHCI_UCX_DEVICE, *PXHCI_UCX_DEVICE;
 
@@ -300,8 +318,160 @@ XhciUcxFindSlotById(
     _In_ PXHCI_UCX_DEVICE Dev,
     _In_ ULONG SlotId);
 
+/* M3 step 3 (defined with the configured-endpoint code) */
+struct _XHCI_UCX_ENDPOINT_CLIENT;
+static
+BOOLEAN
+XhciUcxEpHandleTransferEvent(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _In_ PXHCI_UCX_SLOT Slot,
+    _In_ ULONG EndpointId,
+    _In_ ULONGLONG TrbPointer,
+    _In_ ULONG CompletionCode,
+    _In_ ULONG Residual,
+    _Inout_ PLIST_ENTRY Completed);
+static
+VOID
+XhciUcxEpCompleteList(
+    _In_opt_ struct _XHCI_UCX_ENDPOINT_CLIENT *Ep,
+    _Inout_ PLIST_ENTRY List);
+static
+VOID
+XhciUcxSlotDropEndpoints(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _Inout_ PXHCI_UCX_SLOT Slot,
+    _In_ USBD_STATUS UsbdStatus);
+static EVT_WDF_IO_QUEUE_IO_CANCELED_ON_QUEUE XhciUcxEvtWaitingCanceled;
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceEndpointAdd(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ PUCX_ENDPOINT_INFO Info,
+    _Inout_ PUCXENDPOINT_INIT EndpointInit);
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceEndpointsConfigure(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ PUCX_ENDPOINTS_CONFIGURE Cfg);
+
 /* -1 = not read yet, 0 = legacy usbport, 1 = UCX client path */
 static LONG g_XhciUcxSwitch = -1;
+static LONG g_XhciUcxSelfEnumerate = 0;
+
+/*
+ * Client context on the UCX root hub object: the root hub callbacks get the
+ * UCXROOTHUB handle and find their device through it.
+ */
+typedef struct _XHCI_UCX_ROOTHUB_CLIENT {
+    PXHCI_UCX_DEVICE Dev;
+} XHCI_UCX_ROOTHUB_CLIENT, *PXHCI_UCX_ROOTHUB_CLIENT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_ROOTHUB_CLIENT, XhciUcxGetRootHubClient)
+
+/* Client contexts on the controller, device and endpoint objects (M3 step 2) */
+typedef struct _XHCI_UCX_CONTROLLER_CLIENT {
+    PXHCI_UCX_DEVICE Dev;
+} XHCI_UCX_CONTROLLER_CLIENT, *PXHCI_UCX_CONTROLLER_CLIENT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_CONTROLLER_CLIENT, XhciUcxGetControllerClient)
+
+typedef struct _XHCI_UCX_USBDEVICE_CLIENT {
+    PXHCI_UCX_DEVICE Dev;
+    PXHCI_UCX_SLOT Slot;          /* NULL until EvtUsbDeviceEnable */
+    USHORT PortNumber;
+} XHCI_UCX_USBDEVICE_CLIENT, *PXHCI_UCX_USBDEVICE_CLIENT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_USBDEVICE_CLIENT, XhciUcxGetUsbDeviceClient)
+
+typedef struct _XHCI_UCX_ENDPOINT_CLIENT {
+    PXHCI_UCX_DEVICE Dev;
+    UCXUSBDEVICE UsbDevice;
+    UCHAR Dci;                    /* 1 = default control endpoint */
+    /* M3 step 3: a configured bulk/interrupt/isoch endpoint (everything below is unused for EP0) */
+    UCHAR Address;                /* bEndpointAddress */
+    UCHAR Type;                   /* USB_ENDPOINT_TYPE_* */
+    BOOLEAN DataIn;
+    USHORT MaxPacket;
+    UCHAR MaxBurst;
+    UCHAR Interval;               /* xHCI endpoint context Interval field */
+    UCHAR Mult;
+    BOOLEAN Configured;           /* in the controller's device context (EndpointLock) */
+    BOOLEAN Disabled;             /* never again: being torn down */
+    BOOLEAN Halted;               /* the controller halted it; waits for a pipe reset */
+    BOOLEAN Aborting;             /* an abort/reset is stopping it: new transfers wait */
+    ULONG MaxEsit;
+    ULONG MaximumTransferSize;
+    UCXENDPOINT Self;
+    PXHCI_UCX_SLOT Slot;
+    WDFCOMMONBUFFER RingBuffer;   /* one page: the transfer ring */
+    PXHCI_TRB Ring;
+    ULONGLONG RingPa;
+    ULONG Enqueue;                /* producer index, 0..254 */
+    ULONG Dequeue;                /* index after the oldest TD still on the ring */
+    ULONG Cycle;
+    LIST_ENTRY InFlight;          /* XHCI_UCX_TD_CTX in ring order (EndpointLock) */
+    WDFQUEUE Queue;               /* parallel: the class library forwards transfers here */
+    WDFQUEUE Waiting;             /* manual: transfers the ring has no room for yet */
+} XHCI_UCX_ENDPOINT_CLIENT, *PXHCI_UCX_ENDPOINT_CLIENT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_ENDPOINT_CLIENT, XhciUcxGetEndpointClient)
+
+/* Context on each endpoint queue: the endpoint it serves */
+typedef struct _XHCI_UCX_QUEUE_CLIENT {
+    PXHCI_UCX_ENDPOINT_CLIENT Ep;
+} XHCI_UCX_QUEUE_CLIENT, *PXHCI_UCX_QUEUE_CLIENT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_QUEUE_CLIENT, XhciUcxGetQueueClient)
+
+/* Context on each forwarded transfer request: its TD on the ring */
+typedef struct _XHCI_UCX_TD_CTX {
+    LIST_ENTRY Link;
+    WDFREQUEST Request;
+    PXHCI_UCX_ENDPOINT_CLIENT Ep;
+    ULONG FirstIndex;
+    ULONG LastIndex;
+    ULONG TrbCount;
+    ULONG Length;
+    ULONG Transferred;
+    USBD_STATUS UsbdStatus;
+    BOOLEAN ShortSeen;
+    BOOLEAN DataIn;
+} XHCI_UCX_TD_CTX, *PXHCI_UCX_TD_CTX;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_TD_CTX, XhciUcxGetTdCtx)
+
+/* Hub class feature selectors (USB 2.0 11.24.2, USB 3.2 10.16.2) */
+#define XHCI_UCX_FEATURE_C_HUB_LOCAL_POWER      0
+#define XHCI_UCX_FEATURE_C_HUB_OVER_CURRENT     1
+#define XHCI_UCX_FEATURE_PORT_CONNECTION        0
+#define XHCI_UCX_FEATURE_PORT_ENABLE            1
+#define XHCI_UCX_FEATURE_PORT_SUSPEND           2
+#define XHCI_UCX_FEATURE_PORT_OVER_CURRENT      3
+#define XHCI_UCX_FEATURE_PORT_RESET             4
+#define XHCI_UCX_FEATURE_PORT_LINK_STATE        5
+#define XHCI_UCX_FEATURE_PORT_POWER             8
+#define XHCI_UCX_FEATURE_C_PORT_CONNECTION      16
+#define XHCI_UCX_FEATURE_C_PORT_ENABLE          17
+#define XHCI_UCX_FEATURE_C_PORT_SUSPEND         18
+#define XHCI_UCX_FEATURE_C_PORT_OVER_CURRENT    19
+#define XHCI_UCX_FEATURE_C_PORT_RESET           20
+#define XHCI_UCX_FEATURE_PORT_U1_TIMEOUT        23
+#define XHCI_UCX_FEATURE_PORT_U2_TIMEOUT        24
+#define XHCI_UCX_FEATURE_C_PORT_LINK_STATE      25
+#define XHCI_UCX_FEATURE_C_PORT_CONFIG_ERROR    26
+#define XHCI_UCX_FEATURE_PORT_REMOTE_WAKE_MASK  27
+#define XHCI_UCX_FEATURE_BH_PORT_RESET          28
+#define XHCI_UCX_FEATURE_C_BH_PORT_RESET        29
+#define XHCI_UCX_FEATURE_FORCE_LINKPM_ACCEPT    30
+
+/* Hub descriptor wHubCharacteristics */
+#define XHCI_UCX_HUB_CHAR_POWER_INDIVIDUAL      0x0001
+#define XHCI_UCX_HUB_CHAR_NO_POWER_SWITCHING    0x0002
+#define XHCI_UCX_HUB_CHAR_OVERCURRENT_PER_PORT  0x0008
 /* Non-zero while FxDriverEntry is on the stack (it re-enters DriverEntry). */
 static LONG g_XhciUcxInsideWdfBind = 0;
 
@@ -386,9 +556,15 @@ XHCI_UcxSwitchEnabled(
     }
     ExFreePoolWithTag(ParametersPath.Buffer, XHCI_TAG);
 
-    g_XhciUcxSwitch = (UseUcx == 1) ? 1 : 0;
+    /* 1 = UCX path, hub-driven: ucx01000 owns the root hub PDO and usbhub binds to it (M3).
+     * 2 = UCX path, client-driven enumeration and BOT probe (the M2 demo legs).
+     * Anything else = legacy usbport. */
+    g_XhciUcxSwitch = (UseUcx == 1 || UseUcx == 2) ? 1 : 0;
+    g_XhciUcxSelfEnumerate = (UseUcx == 2) ? 1 : 0;
     if (g_XhciUcxSwitch)
-        XHCI_UCX_LOG("UseUcx=1: selecting the UCX client path (legacy usbport is the fallback)");
+        XHCI_UCX_LOG("UseUcx=%lu: selecting the UCX client path, %s (legacy usbport is the fallback)",
+                     UseUcx, g_XhciUcxSelfEnumerate ? "client-driven enumeration (M2 demo)"
+                                                    : "hub-driven through the ucx01000 root hub PDO");
 
     return (g_XhciUcxSwitch != 0);
 }
@@ -1101,7 +1277,11 @@ XhciUcxHandlePortChange(
                  Changes,
                  (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] == 3) ? 3 : 2);
 
-    if (Changes != 0)
+    /* Hub-driven (UseUcx=1): the change bits are the hub driver's to read
+     * (GET_PORT_STATUS) and to clear (CLEAR_FEATURE C_PORT_*); acknowledging
+     * them here would hide the change from it. Client-driven (UseUcx=2): we
+     * are the hub and acknowledge now. */
+    if (Changes != 0 && Dev->SelfEnumerate)
     {
         /* Acknowledge (W1C) the change bits while preserving every plain RW bit
          * (PP, PIC, WCE/WDE/WOE): a bare write of the change mask writes PP=0
@@ -1133,9 +1313,10 @@ XhciUcxDrainEventRing(
     ULONG Processed = 0;
     ULONGLONG Dequeue;
     KIRQL OldIrql;
+    LIST_ENTRY Completed;                      /* configured-endpoint TDs finished by this drain */
 
+    InitializeListHead(&Completed);
     KeAcquireSpinLock(&Dev->EventRingLock, &OldIrql);
-
     if (!Dev->ControllerRunning || Dev->FatalError || Dev->HcVa == NULL)
     {
         KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
@@ -1224,13 +1405,21 @@ XhciUcxDrainEventRing(
                                  SlotId, EndpointId);
                     break;
                 }
-                if (XhciUcxFindSlotById(Dev, SlotId) == NULL)
                 {
-                    XHCI_UCX_LOG("ignoring transfer event for unknown slot %lu endpoint %lu code=%lu",
-                                 SlotId, EndpointId, CompletionCode);
-                    break;
+                    PXHCI_UCX_SLOT EventSlot = XhciUcxFindSlotById(Dev, SlotId);
+
+                    if (EventSlot == NULL)
+                    {
+                        XHCI_UCX_LOG("ignoring transfer event for unknown slot %lu endpoint %lu code=%lu",
+                                     SlotId, EndpointId, CompletionCode);
+                        break;
+                    }
+                    /* A configured endpoint of a hub-driven device (M3 step 3) */
+                    if (XhciUcxEpHandleTransferEvent(Dev, EventSlot, EndpointId, TrbPointer, CompletionCode,
+                                                     Residual, &Completed))
+                        break;
                 }
-                /*
+/*
                  * Steps 3/4: the only TDs are the ones the enumeration work item
                  * issued, one at a time, on EP0 or on the slot's two bulk endpoints.
                  * The event must name the pending slot, the pending DCI and one of
@@ -1293,10 +1482,9 @@ XhciUcxDrainEventRing(
     XHCI_UCX_WRITE_REG(&Interrupter->ErdpHigh, (ULONG)(Dequeue >> 32));
 
     KeReleaseSpinLock(&Dev->EventRingLock, OldIrql);
-
     if (Processed != 0)
         XHCI_UCX_TRACE("drained %lu event(s)", Processed);
-
+    XhciUcxEpCompleteList(NULL, &Completed);
     return PortChanged;
 }
 
@@ -1688,7 +1876,8 @@ XhciUcxEp0NextTrb(
 
 /*
  * One control transfer on EP0 (Setup / optional Data / Status TD), data in
- * the slot's descriptor buffer. Returns the bytes actually transferred.
+ * one of the slot's buffers: the 512-byte descriptor area or the data page
+ * (BufferOffset selects it and bounds Length). Returns the bytes transferred.
  */
 static
 NTSTATUS
@@ -1696,6 +1885,7 @@ XhciUcxEp0Control(
     _Inout_ PXHCI_UCX_DEVICE Dev,
     _Inout_ PXHCI_UCX_SLOT Slot,
     _In_ const USB_DEFAULT_PIPE_SETUP_PACKET *Setup,
+    _In_ SIZE_T BufferOffset,
     _In_ ULONG Length,
     _In_ BOOLEAN DataIn,
     _Out_ PULONG Transferred)
@@ -1713,7 +1903,7 @@ XhciUcxEp0Control(
 
     *Transferred = 0;
 
-    if (Length > XHCI_UCX_DESC_BUFFER_SIZE)
+    if (BufferOffset == Slot->DataOffset ? (Length > PAGE_SIZE) : (Length > XHCI_UCX_DESC_BUFFER_SIZE))
         return STATUS_INVALID_PARAMETER;
     if (!Dev->ControllerRunning || Dev->FatalError)
         return STATUS_DEVICE_NOT_READY;
@@ -1738,7 +1928,7 @@ XhciUcxEp0Control(
     /* Data Stage (single TRB, TD size 0; ISP so a short IN reports its residual) */
     if (Length != 0)
     {
-        ULONGLONG BufferPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->DescriptorOffset).QuadPart;
+        ULONGLONG BufferPa = (ULONGLONG)XhciUcxHcPhysical(Dev, BufferOffset).QuadPart;
 
         StageTrb = XhciUcxEp0NextTrb(Dev, Slot, &DataPa, &Cycle);
         StageTrb->Parameter1 = (ULONG)(BufferPa & 0xFFFFFFFF);
@@ -1897,8 +2087,23 @@ XhciUcxReleaseSlot(
     }
 
     if (Slot->UsbDevice != NULL)
-        WdfObjectDelete((WDFOBJECT)Slot->UsbDevice);   /* its EP0 child goes with it */
+    {
+        if (Dev->SelfEnumerate)
+        {
+            /* M2 demo: the client created the object; its EP0 child goes with it */
+            WdfObjectDelete((WDFOBJECT)Slot->UsbDevice);
+        }
+        else
+        {
+            /* Hub-driven: the class library owns the object and deletes it with
+             * the device handle; the slot only stops being that device's */
+            PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)Slot->UsbDevice);
 
+            XhciUcxSlotDropEndpoints(Dev, Slot, USBD_STATUS_DEVICE_GONE);
+            if (Device != NULL && Device->Slot == Slot)
+                Device->Slot = NULL;
+        }
+    }
     RtlZeroMemory(Slot, sizeof(*Slot));
 }
 
@@ -1910,12 +2115,19 @@ XhciUcxForgetAllSlots(
 {
     ULONG Index;
 
+    /* The device callbacks read Device->Slot under TransferMutex: no slot
+     * may go away under them (the callers run at PASSIVE_LEVEL, hold nothing).
+     * Nothing in the loop may take the mutex: the M2 path deletes the device
+     * object here and its endpoint cleanup purges queues synchronously, which
+     * holds as long as no queued request handler needs the mutex to finish. */
+    ExAcquireFastMutex(&Dev->TransferMutex);
     for (Index = 0; Index < XHCI_UCX_MAX_ENUM_SLOTS; Index++)
     {
         if (Dev->Slots[Index].InUse)
             XhciUcxReleaseSlot(Dev, &Dev->Slots[Index], IssueDisable);
     }
     RtlZeroMemory(Dev->PortEnumState, sizeof(Dev->PortEnumState));
+    ExReleaseFastMutex(&Dev->TransferMutex);
 }
 
 /* SEC-1 subset: is bMaxPacketSize0 legal for the negotiated speed? Returns the byte size or 0. */
@@ -1958,10 +2170,19 @@ XhciUcxBuildEp0InputContext(
     Icc->AddContextFlags = AddFlags;
     Icc->DropContextFlags = 0;
 
-    XhciSlotContextSetRoute(SlotCtx, 0);              /* directly on a root port */
+    XhciSlotContextSetRoute(SlotCtx, Slot->RouteString);          /* 0 on a root port */
     XhciSlotContextSetSpeed(SlotCtx, Slot->Speed);
     XhciSlotContextSetLastCtx(SlotCtx, 1);            /* EP0 only */
-    XhciSlotContextSetRootPort(SlotCtx, Slot->PortId);
+    XhciSlotContextSetRootPort(SlotCtx, Slot->RootPort ? Slot->RootPort : Slot->PortId);
+    /* A low/full-speed device behind a high-speed hub: that hub's TT (xHCI 6.2.2) */
+    SlotCtx->TtInfo = (ULONG)Slot->TtSlotId | ((ULONG)Slot->TtPort << XHCI_SLOT_TT_PORT_SHIFT) |
+                      (((ULONG)Slot->TtThinkTime & 0x3) << XHCI_SLOT_TT_THINK_TIME_SHIFT);
+    XhciSlotContextSetMtt(SlotCtx, Slot->Mtt);
+    if (Slot->IsHub)
+    {
+        XhciSlotContextSetHub(SlotCtx, TRUE);
+        XhciSlotContextSetMaxPorts(SlotCtx, Slot->HubPorts);
+    }
 
     XhciEndpointContextInit(Ep0Ctx,
                             XHCI_ENDPOINT_TYPE_CONTROL,
@@ -2133,7 +2354,7 @@ XhciUcxRecoverHaltedEndpoint(
     Setup.wValue.W = USB_FEATURE_ENDPOINT_STALL;
     Setup.wIndex.W = Address;
     Setup.wLength = 0;
-    Status = XhciUcxEp0Control(Dev, Slot, &Setup, 0, FALSE, &Transferred);
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, Slot->DescriptorOffset, 0, FALSE, &Transferred);
     XHCI_UCX_LOG("STEP4 slot %u: CLEAR_FEATURE(ENDPOINT_HALT) rc=0x%08lX", Slot->SlotId, (ULONG)Status);
     return Status;
 }
@@ -2474,7 +2695,7 @@ XhciUcxProbeStorage(
     Setup.wIndex.W = 0;
     Setup.wLength = sizeof(USB_CONFIGURATION_DESCRIPTOR);
 
-    Status = XhciUcxEp0Control(Dev, Slot, &Setup, sizeof(USB_CONFIGURATION_DESCRIPTOR), TRUE, &Transferred);
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, Slot->DescriptorOffset, sizeof(USB_CONFIGURATION_DESCRIPTOR), TRUE, &Transferred);
     if (!NT_SUCCESS(Status) || Transferred < sizeof(USB_CONFIGURATION_DESCRIPTOR) ||
         Buffer[0] != sizeof(USB_CONFIGURATION_DESCRIPTOR) || Buffer[1] != USB_CONFIGURATION_DESCRIPTOR_TYPE)
     {
@@ -2493,7 +2714,7 @@ XhciUcxProbeStorage(
 
     RtlZeroMemory(Buffer, XHCI_UCX_DESC_BUFFER_SIZE);
     Setup.wLength = (USHORT)TotalLength;
-    Status = XhciUcxEp0Control(Dev, Slot, &Setup, TotalLength, TRUE, &Transferred);
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, Slot->DescriptorOffset, TotalLength, TRUE, &Transferred);
     if (!NT_SUCCESS(Status) || Transferred < sizeof(USB_CONFIGURATION_DESCRIPTOR) ||
         Buffer[0] != sizeof(USB_CONFIGURATION_DESCRIPTOR) || Buffer[1] != USB_CONFIGURATION_DESCRIPTOR_TYPE)
     {
@@ -2547,7 +2768,7 @@ XhciUcxProbeStorage(
     Setup.wValue.W = Slot->ConfigurationValue;
     Setup.wIndex.W = 0;
     Setup.wLength = 0;
-    Status = XhciUcxEp0Control(Dev, Slot, &Setup, 0, FALSE, &Transferred);
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, Slot->DescriptorOffset, 0, FALSE, &Transferred);
     XHCI_UCX_LOG("STEP4 slot %u: SET_CONFIGURATION(%u) rc=0x%08lX", Slot->SlotId, Slot->ConfigurationValue, (ULONG)Status);
     if (!NT_SUCCESS(Status))
         return;
@@ -2749,7 +2970,7 @@ XhciUcxEnumeratePort(
     Setup.wIndex.W = 0;
     Setup.wLength = 8;
 
-    Status = XhciUcxEp0Control(Dev, Slot, &Setup, 8, TRUE, &Transferred);
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, Slot->DescriptorOffset, 8, TRUE, &Transferred);
     DevDesc = (const USB_DEVICE_DESCRIPTOR *)Buffer;
     if (!NT_SUCCESS(Status) || Transferred < 8)
     {
@@ -2800,7 +3021,7 @@ XhciUcxEnumeratePort(
     /* Full 18-byte device descriptor */
     RtlZeroMemory(Buffer, XHCI_UCX_DESC_BUFFER_SIZE);
     Setup.wLength = sizeof(USB_DEVICE_DESCRIPTOR);
-    Status = XhciUcxEp0Control(Dev, Slot, &Setup, sizeof(USB_DEVICE_DESCRIPTOR), TRUE, &Transferred);
+    Status = XhciUcxEp0Control(Dev, Slot, &Setup, Slot->DescriptorOffset, sizeof(USB_DEVICE_DESCRIPTOR), TRUE, &Transferred);
     if (!NT_SUCCESS(Status) || Transferred != sizeof(USB_DEVICE_DESCRIPTOR) ||
         DevDesc->bLength != sizeof(USB_DEVICE_DESCRIPTOR) || DevDesc->bDescriptorType != USB_DEVICE_DESCRIPTOR_TYPE)
     {
@@ -2939,6 +3160,251 @@ XhciUcxEvtControllerQueryUsbCapability(
     return STATUS_NOT_SUPPORTED;
 }
 
+/* --------------------------------------------------------------------------
+ * Root hub as the hub driver sees it (M3): hub class requests on PORTSC.
+ * ucx01000 owns the PDO, the standard requests and the status-change pipe; it
+ * hands us the hub descriptor, hub/port status and port feature requests with
+ * the URB header, device handle and buffer already checked.
+ * -------------------------------------------------------------------------- */
+
+/*
+ * One PORTSC read-modify-write that never acknowledges a change bit by
+ * accident: all RW1C/RW1S bits are masked out first, then only what the caller
+ * names is written. PED is RW1C-to-disable, so it is reachable through SetBits.
+ */
+static
+VOID
+XhciUcxPortScModify(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG PortId,
+    _In_ ULONG SetBits,
+    _In_ ULONG ClearBits,
+    _In_ BOOLEAN SetLinkState,
+    _In_ ULONG LinkState)
+{
+    volatile ULONG *PortSc = &Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl;
+    ULONG Value = XHCI_UCX_READ_REG(PortSc);
+
+    Value &= ~(XHCI_PORTSC_CHANGE_MASK | XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_WPR | XHCI_PORTSC_LWS);
+    Value &= ~ClearBits;
+    if (SetLinkState)
+        Value = (Value & ~XHCI_PORTSC_PLS_MASK) | XHCI_PORTSC_PLS(LinkState) | XHCI_PORTSC_LWS;
+    XHCI_UCX_WRITE_REG(PortSc, Value | SetBits);
+}
+
+/* USB hub port status and change words from a PORTSC value (USB 2.0 11.24.2.7, USB 3.2 10.16.2.6) */
+static
+VOID
+XhciUcxPortStatusFromPortSc(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG PortId,
+    _In_ ULONG PortSc,
+    _Out_ PUSB_PORT_STATUS_AND_CHANGE Out)
+{
+    BOOLEAN Usb3 = (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] == 3);
+    ULONG LinkState = (PortSc & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
+    ULONG Speed = (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
+    BOOLEAN Powered = (!Dev->PortPowerControl || (PortSc & XHCI_PORTSC_PP) != 0);
+
+    RtlZeroMemory(Out, sizeof(*Out));
+
+    /* Bits 0-4 have the same meaning in the USB 2.0 and USB 3.x port status words */
+    if (PortSc & XHCI_PORTSC_CCS)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_CONNECT;
+    if (PortSc & XHCI_PORTSC_PED)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_ENABLE;
+    if (PortSc & XHCI_PORTSC_OCA)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_OVER_CURRENT;
+    if (PortSc & XHCI_PORTSC_PR)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_RESET;
+
+    if (Usb3)
+    {
+        /* USB 3.x layout: link state bits 5-8, power bit 9, negotiated speed
+         * bits 10-12 (0 = SuperSpeed). USB_PORT_STATUS_POWER (0x0100) is the
+         * USB 2.0 position and would land inside the link state here. */
+        Out->PortStatus.Usb30PortStatus.PortLinkState = (USHORT)LinkState;
+        Out->PortStatus.Usb30PortStatus.PortPower = Powered ? 1 : 0;
+        Out->PortStatus.Usb30PortStatus.NegotiatedDeviceSpeed = 0;
+    }
+    else
+    {
+        if (Powered)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_POWER;
+        if (LinkState == PORT_LINK_STATE_U3)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_SUSPEND;
+        if (Speed == XHCI_PORTSC_SPEED_LOW)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_LOW_SPEED;
+        else if (Speed == XHCI_PORTSC_SPEED_HIGH)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_HIGH_SPEED;
+    }
+
+    if (PortSc & XHCI_PORTSC_CSC)
+        Out->PortChange.Usb20PortChange.ConnectStatusChange = 1;
+    if ((PortSc & XHCI_PORTSC_PEC) && !Usb3)
+        Out->PortChange.Usb20PortChange.PortEnableDisableChange = 1;
+    if (PortSc & XHCI_PORTSC_OCC)
+        Out->PortChange.Usb20PortChange.OverCurrentIndicatorChange = 1;
+    if (PortSc & XHCI_PORTSC_PRC)
+        Out->PortChange.Usb20PortChange.ResetChange = 1;
+    if (PortSc & XHCI_PORTSC_PLC)
+    {
+        if (Usb3)
+            Out->PortChange.Usb30PortChange.PortLinkStateChange = 1;
+        else
+            Out->PortChange.Usb20PortChange.SuspendChange = 1;
+    }
+    if (Usb3)
+    {
+        if (PortSc & XHCI_PORTSC_WRC)
+            Out->PortChange.Usb30PortChange.BHResetChange = 1;
+        if (PortSc & XHCI_PORTSC_CEC)
+            Out->PortChange.Usb30PortChange.PortConfigErrorChange = 1;
+    }
+}
+
+/* Builds the hub descriptor the hub driver asked for into Buffer; returns the bytes written */
+static
+ULONG
+XhciUcxBuildHubDescriptor(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ UCHAR DescriptorType,
+    _Out_writes_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG Length)
+{
+    USHORT Characteristics = XHCI_UCX_HUB_CHAR_OVERCURRENT_PER_PORT |
+                             (Dev->PortPowerControl ? XHCI_UCX_HUB_CHAR_POWER_INDIVIDUAL
+                                                    : XHCI_UCX_HUB_CHAR_NO_POWER_SWITCHING);
+    ULONG Ports = Dev->NumberOfPorts;
+    ULONG Copy;
+
+    if (DescriptorType == USB_30_HUB_DESCRIPTOR_TYPE)
+    {
+        /* 12 bytes: the two DeviceRemovable bytes say every port is removable */
+        UCHAR Descriptor[12];
+
+        RtlZeroMemory(Descriptor, sizeof(Descriptor));
+        Descriptor[0] = sizeof(Descriptor);
+        Descriptor[1] = USB_30_HUB_DESCRIPTOR_TYPE;
+        Descriptor[2] = (UCHAR)Ports;
+        Descriptor[3] = (UCHAR)(Characteristics & 0xFF);
+        Descriptor[4] = (UCHAR)(Characteristics >> 8);
+        Descriptor[5] = 2;      /* bPowerOnToPowerGood: 4 ms */
+        Descriptor[6] = 0;      /* bHubControlCurrent */
+        Descriptor[7] = 0;      /* bHubHdrDecLat */
+        Descriptor[8] = 0;      /* wHubDelay */
+        Descriptor[9] = 0;
+        Copy = min(Length, (ULONG)sizeof(Descriptor));
+        RtlCopyMemory(Buffer, Descriptor, Copy);
+        return Copy;
+    }
+    else
+    {
+        /* USB 2.0 hub descriptor: 7 bytes + DeviceRemovable + PortPwrCtrlMask */
+        UCHAR Descriptor[7 + 2 * ((XHCI_MAX_PORTS + 1 + 7) / 8)];
+        ULONG MaskBytes = (Ports + 1 + 7) / 8;
+        ULONG Total = 7 + 2 * MaskBytes;
+        ULONG i;
+
+        RtlZeroMemory(Descriptor, sizeof(Descriptor));
+        Descriptor[0] = (UCHAR)Total;
+        Descriptor[1] = USB_20_HUB_DESCRIPTOR_TYPE;
+        Descriptor[2] = (UCHAR)Ports;
+        Descriptor[3] = (UCHAR)(Characteristics & 0xFF);
+        Descriptor[4] = (UCHAR)(Characteristics >> 8);
+        Descriptor[5] = 2;
+        Descriptor[6] = 0;
+        for (i = 0; i < MaskBytes; i++)
+            Descriptor[7 + MaskBytes + i] = 0xFF;   /* PortPwrCtrlMask, all ones as required */
+        Copy = min(Length, Total);
+        RtlCopyMemory(Buffer, Descriptor, Copy);
+        return Copy;
+    }
+}
+
+/* SET_FEATURE / CLEAR_FEATURE on a port; FALSE = STALL (unknown or unsupported selector) */
+static
+BOOLEAN
+XhciUcxPortFeature(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG PortId,
+    _In_ USHORT Feature,
+    _In_ UCHAR Selector,
+    _In_ BOOLEAN Set)
+{
+    if (Set)
+    {
+        switch (Feature)
+        {
+            case XHCI_UCX_FEATURE_PORT_RESET:
+                XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PR, 0, FALSE, 0);
+                return TRUE;
+            case XHCI_UCX_FEATURE_BH_PORT_RESET:
+                XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_WPR, 0, FALSE, 0);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_POWER:
+                if (Dev->PortPowerControl)
+                    XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PP, 0, FALSE, 0);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_SUSPEND:
+                XhciUcxPortScModify(Dev, PortId, 0, 0, TRUE, PORT_LINK_STATE_U3);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_LINK_STATE:
+                if (Selector > PORT_LINK_STATE_U3 && Selector != PORT_LINK_STATE_DISABLED &&
+                    Selector != PORT_LINK_STATE_RX_DETECT && Selector != PORT_LINK_STATE_COMPLIANCE_MODE)
+                    return FALSE;
+                XhciUcxPortScModify(Dev, PortId, 0, 0, TRUE, Selector);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_ENABLE:          /* xHCI ports enable themselves */
+            case XHCI_UCX_FEATURE_PORT_U1_TIMEOUT:
+            case XHCI_UCX_FEATURE_PORT_U2_TIMEOUT:
+            case XHCI_UCX_FEATURE_PORT_REMOTE_WAKE_MASK:
+            case XHCI_UCX_FEATURE_FORCE_LINKPM_ACCEPT:
+                return TRUE;                            /* accepted, no effect yet (M4) */
+            default:
+                return FALSE;
+        }
+    }
+
+    switch (Feature)
+    {
+        case XHCI_UCX_FEATURE_PORT_ENABLE:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PED, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_PORT_SUSPEND:
+            XhciUcxPortScModify(Dev, PortId, 0, 0, TRUE, PORT_LINK_STATE_U0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_PORT_POWER:
+            if (Dev->PortPowerControl)
+                XhciUcxPortScModify(Dev, PortId, 0, XHCI_PORTSC_PP, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_CONNECTION:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_CSC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_ENABLE:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PEC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_SUSPEND:
+        case XHCI_UCX_FEATURE_C_PORT_LINK_STATE:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PLC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_OVER_CURRENT:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_OCC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_RESET:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PRC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_BH_PORT_RESET:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_WRC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_CONFIG_ERROR:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_CEC, 0, FALSE, 0);
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
 static
 VOID
 NTAPI
@@ -2946,9 +3412,153 @@ XhciUcxEvtRootHubControlUrb(
     _In_ UCXROOTHUB RootHub,
     _In_ WDFREQUEST Request)
 {
-    UNREFERENCED_PARAMETER(RootHub);
-    /* Root-hub class requests (port status / features) arrive with step 3 */
-    WdfRequestComplete(Request, STATUS_NOT_IMPLEMENTED);
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetRootHubClient((WDFOBJECT)RootHub)->Dev;
+    PURB Urb = (PURB)UcxRequestGetUrb(Request);
+    struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST *Class = &Urb->UrbControlVendorClassRequest;
+    USBD_STATUS UsbdStatus = USBD_STATUS_STALL_PID;
+    PUCHAR Buffer;
+    ULONG Length;
+    UCHAR Request_, DescriptorType;
+    USHORT Value, Index;
+    BOOLEAN Done = FALSE;
+
+    if (Dev == NULL || !Dev->HardwarePrepared || Dev->OperationalRegisters == NULL)
+    {
+        Urb->UrbHeader.Status = USBD_STATUS_DEVICE_GONE;
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
+        return;
+    }
+
+    /* A hub descriptor can arrive as a standard GET_DESCRIPTOR or as a class request */
+    if (Urb->UrbHeader.Function == URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE)
+    {
+        struct _URB_CONTROL_DESCRIPTOR_REQUEST *Desc = &Urb->UrbControlDescriptorRequest;
+
+        Length = Desc->TransferBufferLength;
+        Buffer = (PUCHAR)UcxUrbTransferBuffer(Desc->TransferBuffer, Desc->TransferBufferMDL, Length);
+        if (Buffer == NULL && Length != 0)
+        {
+            UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            Desc->TransferBufferLength = XhciUcxBuildHubDescriptor(Dev, Desc->DescriptorType, Buffer, Length);
+            UsbdStatus = USBD_STATUS_SUCCESS;
+        }
+        Urb->UrbHeader.Status = UsbdStatus;
+        WdfRequestComplete(Request, USBD_SUCCESS(UsbdStatus) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    Request_ = Class->Request;
+    Value = Class->Value;
+    Index = Class->Index;
+    Length = Class->TransferBufferLength;
+    Buffer = (PUCHAR)UcxUrbTransferBuffer(Class->TransferBuffer, Class->TransferBufferMDL, Length);
+    if (Buffer == NULL && Length != 0)
+    {
+        Urb->UrbHeader.Status = USBD_STATUS_INVALID_PARAMETER;
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    if (Urb->UrbHeader.Function == URB_FUNCTION_CLASS_DEVICE)
+    {
+        switch (Request_)
+        {
+            case USB_REQUEST_GET_DESCRIPTOR:
+                DescriptorType = (UCHAR)(Value >> 8);
+                if (DescriptorType != USB_20_HUB_DESCRIPTOR_TYPE && DescriptorType != USB_30_HUB_DESCRIPTOR_TYPE)
+                    break;
+                Class->TransferBufferLength = XhciUcxBuildHubDescriptor(Dev, DescriptorType, Buffer, Length);
+                UsbdStatus = USBD_STATUS_SUCCESS;
+                Done = TRUE;
+                break;
+
+            case USB_REQUEST_GET_STATUS:
+                /* wHubStatus | wHubChange: local power good, no over-current, no change */
+                if (Buffer != NULL)
+                    RtlZeroMemory(Buffer, min(Length, 4UL));
+                Class->TransferBufferLength = min(Length, 4UL);
+                UsbdStatus = USBD_STATUS_SUCCESS;
+                Done = TRUE;
+                break;
+
+            case USB_REQUEST_CLEAR_FEATURE:
+                if (Value == XHCI_UCX_FEATURE_C_HUB_LOCAL_POWER || Value == XHCI_UCX_FEATURE_C_HUB_OVER_CURRENT)
+                {
+                    UsbdStatus = USBD_STATUS_SUCCESS;
+                    Done = TRUE;
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+    else if (Urb->UrbHeader.Function == URB_FUNCTION_CLASS_OTHER)
+    {
+        ULONG PortId = Index & 0xFF;
+        UCHAR Selector = (UCHAR)(Index >> 8);
+
+        if (PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS)
+        {
+            XHCI_UCX_LOG("root hub: port %lu out of range for class request %u", PortId, Request_);
+        }
+        else
+        {
+            switch (Request_)
+            {
+                case USB_REQUEST_GET_STATUS:
+                {
+                    USB_PORT_STATUS_AND_CHANGE PortStatus;
+                    ULONG PortSc = XHCI_UCX_READ_REG(
+                        &Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl);
+
+                    XhciUcxPortStatusFromPortSc(Dev, PortId, PortSc, &PortStatus);
+                    if (Buffer != NULL)
+                        RtlCopyMemory(Buffer, &PortStatus, min(Length, (ULONG)sizeof(PortStatus)));
+                    Class->TransferBufferLength = min(Length, (ULONG)sizeof(PortStatus));
+                    XHCI_UCX_TRACE("root hub: port %lu status %04X change %04X (PORTSC %08lx)",
+                                   PortId, PortStatus.PortStatus.AsUshort16,
+                                   PortStatus.PortChange.AsUshort16, PortSc);
+                    UsbdStatus = USBD_STATUS_SUCCESS;
+                    Done = TRUE;
+                    break;
+                }
+
+                case USB_REQUEST_SET_FEATURE:
+                case USB_REQUEST_CLEAR_FEATURE:
+                    if (XhciUcxPortFeature(Dev, PortId, Value, Selector, (Request_ == USB_REQUEST_SET_FEATURE)))
+                    {
+                        XHCI_UCX_TRACE("root hub: port %lu %s feature %u (selector %u)",
+                                       PortId, (Request_ == USB_REQUEST_SET_FEATURE) ? "set" : "clear",
+                                       Value, Selector);
+                        UsbdStatus = USBD_STATUS_SUCCESS;
+                        Done = TRUE;
+                    }
+                    else
+                    {
+                        XHCI_UCX_LOG("root hub: port %lu %s feature %u not supported",
+                                     PortId, (Request_ == USB_REQUEST_SET_FEATURE) ? "set" : "clear", Value);
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+        }
+    }
+
+    if (!Done)
+    {
+        /* Anything the hub does not implement is a STALL, as a real hub answers */
+        UsbdStatus = USBD_STATUS_STALL_PID;
+        Class->TransferBufferLength = 0;
+    }
+
+    Urb->UrbHeader.Status = UsbdStatus;
+    WdfRequestComplete(Request, USBD_SUCCESS(UsbdStatus) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL);
 }
 
 static
@@ -2959,7 +3569,1793 @@ XhciUcxEvtRootHubGetInfo(
     _In_ WDFREQUEST Request)
 {
     UNREFERENCED_PARAMETER(RootHub);
-    WdfRequestComplete(Request, STATUS_NOT_IMPLEMENTED);
+    /* The port counts travel in UCX_ROOTHUB_CONFIG; nothing else is asked yet */
+    WdfRequestComplete(Request, STATUS_NOT_SUPPORTED);
+}
+
+/*
+ * Status-change bitmap for the hub driver's interrupt pipe: bit N for port N
+ * whose PORTSC still carries a change bit (the hub clears them one by one
+ * through CLEAR_FEATURE). Bit 0 (the hub itself) never changes. At most
+ * Length bytes are written. Runs at <= DISPATCH_LEVEL.
+ */
+static
+BOOLEAN
+NTAPI
+XhciUcxEvtRootHubGetPortChangeBitmap(
+    _In_ UCXROOTHUB RootHub,
+    _Out_writes_bytes_(Length) PUCHAR Bitmap,
+    _In_ ULONG Length)
+{
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetRootHubClient((WDFOBJECT)RootHub)->Dev;
+    BOOLEAN Any = FALSE;
+    ULONG PortId;
+
+    if (Dev == NULL || !Dev->HardwarePrepared || Dev->OperationalRegisters == NULL || Length == 0)
+        return FALSE;
+
+    RtlZeroMemory(Bitmap, Length);
+    for (PortId = 1; PortId <= Dev->NumberOfPorts && PortId <= XHCI_MAX_PORTS; PortId++)
+    {
+        ULONG PortSc = XHCI_UCX_READ_REG(&Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl);
+
+        if ((PortSc & XHCI_PORTSC_CHANGE_MASK) == 0)
+            continue;
+        if ((PortId / 8) >= Length)
+            break;
+        Bitmap[PortId / 8] |= (UCHAR)(1u << (PortId % 8));
+        Any = TRUE;
+    }
+
+    if (Any)
+        XHCI_UCX_LOG("root hub: status change bitmap delivered to the hub driver");
+    return Any;
+}
+
+/* --------------------------------------------------------------------------
+ * Hub-driven devices (M3 step 2): the class library asks for a device on a
+ * root port, we take a slot, address it, give it a default endpoint and run
+ * its control transfers. All callbacks are synchronous at PASSIVE_LEVEL and
+ * serialized through TransferMutex, because the command and EP0 completion
+ * bookkeeping (the PendingCommand and PendingTransfer fields) is controller-wide.
+ * -------------------------------------------------------------------------- */
+
+static
+USB_DEVICE_SPEED
+XhciUcxUsbSpeedFromPortSc(
+    _In_ ULONG SpeedId)
+{
+    switch (SpeedId)
+    {
+        case XHCI_PORTSC_SPEED_LOW:  return UsbLowSpeed;
+        case XHCI_PORTSC_SPEED_FULL: return UsbFullSpeed;
+        case XHCI_PORTSC_SPEED_HIGH: return UsbHighSpeed;
+        default:                     return UsbSuperSpeed;   /* SS and every PSI id above it */
+    }
+}
+
+static
+USBD_STATUS
+XhciUcxUsbdStatusFromCompletion(
+    _In_ ULONG CompletionCode,
+    _In_ NTSTATUS Status)
+{
+    if (Status == STATUS_IO_TIMEOUT)
+        return USBD_STATUS_TIMEOUT;
+    switch (CompletionCode)
+    {
+        case XHCI_COMPLETION_SUCCESS:
+        case XHCI_COMPLETION_SHORT_PACKET:        return USBD_STATUS_SUCCESS;
+        case XHCI_COMPLETION_STALL_ERROR:         return USBD_STATUS_STALL_PID;
+        case XHCI_COMPLETION_BABBLE_ERROR:        return USBD_STATUS_BABBLE_DETECTED;
+        case XHCI_COMPLETION_DATA_BUFFER_ERROR:   return USBD_STATUS_DATA_OVERRUN;
+        case XHCI_COMPLETION_USB_TRANSACTION_ERROR: return USBD_STATUS_XACT_ERROR;
+        default:                                  return USBD_STATUS_DEV_NOT_RESPONDING;
+    }
+}
+
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtEndpointControlTransfer(
+    _In_ UCXENDPOINT Endpoint,
+    _Inout_ PUCX_TRANSFER Transfer)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
+    PXHCI_UCX_DEVICE Dev = Ep->Dev;
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)Ep->UsbDevice);
+    PXHCI_UCX_SLOT Slot;
+    PVOID Caller;
+    PUCHAR Bounce;
+    ULONG Transferred = 0;
+    UCHAR SlotId;
+    NTSTATUS Status;
+
+    Transfer->Transferred = 0;
+    Transfer->UsbdStatus = USBD_STATUS_DEV_NOT_RESPONDING;
+
+    if (Transfer->Size < sizeof(UCX_TRANSFER) || Transfer->Type != UcxTransferControl || Ep->Dci != 1)
+    {
+        Transfer->UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (Transfer->Length > PAGE_SIZE)
+    {
+        Transfer->UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+    }
+    Caller = UcxUrbTransferBuffer(Transfer->Buffer, Transfer->Mdl, Transfer->Length);
+    if (Transfer->Length != 0 && Caller == NULL)
+    {
+        Transfer->UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    /* The slot belongs to this device only while the mutex says so: Disable
+     * takes the same mutex and clears Device->Slot under it */
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed || Slot->UsbDevice != Ep->UsbDevice)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        Transfer->UsbdStatus = USBD_STATUS_DEVICE_GONE;
+        return STATUS_DEVICE_NOT_CONNECTED;
+    }
+    SlotId = Slot->SlotId;
+
+    /* The data page of the slot is the bounce buffer; the caller's memory is
+     * never handed to the controller */
+    Bounce = Dev->HcVa + Slot->DataOffset;
+    if (Transfer->Length != 0)
+    {
+        if (Transfer->DataIn)
+            RtlZeroMemory(Bounce, Transfer->Length);
+        else
+            RtlCopyMemory(Bounce, Caller, Transfer->Length);
+    }
+
+    Status = XhciUcxEp0Control(Dev, Slot, &Transfer->SetupPacket, Slot->DataOffset,
+                               Transfer->Length, Transfer->DataIn, &Transferred);
+    Transfer->UsbdStatus = XhciUcxUsbdStatusFromCompletion(Dev->PendingTransferCode, Status);
+
+    /* A STALL halts the default endpoint (xHCI 4.10.2.1): Reset Endpoint and
+     * point the dequeue at the producer, so the next request is not stuck
+     * behind this one. The device recovers EP0 by itself (no CLEAR_FEATURE). */
+    if (!NT_SUCCESS(Status) && Dev->PendingTransferCode == XHCI_COMPLETION_STALL_ERROR &&
+        Dev->ControllerRunning && !Dev->FatalError)
+    {
+        ULONG Fields = XHCI_COMMAND_SLOT_FIELD(Slot->SlotId) | XHCI_UCX_COMMAND_EP_FIELD(1);
+        ULONGLONG Dequeue = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->Ep0RingOffset).QuadPart +
+                            (ULONGLONG)Slot->Ep0Enqueue * sizeof(XHCI_TRB);
+        ULONG Code = 0;
+        NTSTATUS ResetStatus;
+
+        ResetStatus = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_RESET_EP, 0, Fields, &Code, NULL);
+        if (NT_SUCCESS(ResetStatus) || Code == XHCI_COMPLETION_CONTEXT_STATE_ERROR)
+            ResetStatus = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_SET_DEQ, Dequeue | (Slot->Ep0Cycle & XHCI_TRB_CYCLE),
+                                             Fields, &Code, NULL);
+        XHCI_UCX_LOG("slot %u: EP0 stalled (bRequest %u); endpoint reset -> 0x%08lX code %lu",
+                     Slot->SlotId, Transfer->SetupPacket.bRequest, (ULONG)ResetStatus, Code);
+    }
+
+    if (NT_SUCCESS(Status) && Transfer->DataIn && Transferred != 0)
+    {
+        Transferred = min(Transferred, Transfer->Length);
+        RtlCopyMemory(Caller, Bounce, Transferred);
+    }
+    ExReleaseFastMutex(&Dev->TransferMutex);
+
+    Transfer->Transferred = NT_SUCCESS(Status) ? Transferred : 0;
+    XHCI_UCX_TRACE("slot %u EP0 %s bRequest %u wLength %u -> 0x%08lX / USBD 0x%08lX, %lu bytes",
+                   SlotId, Transfer->DataIn ? "IN" : "OUT", Transfer->SetupPacket.bRequest,
+                   Transfer->SetupPacket.wLength, (ULONG)Status, (ULONG)Transfer->UsbdStatus, Transfer->Transferred);
+    return Status;
+}
+
+/* Enable Slot, contexts, EP0 ring, DCBAA entry: the device's slot, not yet addressed */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceEnable(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _Inout_ PUCX_USBDEVICE_ENABLE_INFO Info)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PULONGLONG Dcbaa = (PULONGLONG)(Dev->HcVa + Dev->DcbaaOffset);
+    PXHCI_UCX_SLOT Slot;
+    ULONGLONG Ep0RingPa;
+    ULONG PortId = Info->PortNumber;
+    ULONG PortSc = 0, Speed = 0, Code = 0;
+    UCHAR SlotId = 0, TtSlotId = 0;
+    BOOLEAN BehindHub, TtMtt = FALSE;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    if (Info->Size < sizeof(*Info))
+        return STATUS_INVALID_PARAMETER;
+    BehindHub = (Info->Path.Size >= sizeof(Info->Path)) && Info->Path.BehindHub;
+    if (BehindHub)
+    {
+        /* The hub driver reset the hub's port itself; the hub's port status
+         * said the speed, the library computed the route */
+        PortId = Info->Path.RootPortNumber;
+        if (PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS ||
+            Info->Path.ParentHub == NULL || Info->Path.RouteString > XHCI_SLOT_ROUTE_MASK)
+            return STATUS_INVALID_PARAMETER;
+        switch (Info->Speed)
+        {
+            case UsbLowSpeed:   Speed = XHCI_PORTSC_SPEED_LOW;   break;
+            case UsbFullSpeed:  Speed = XHCI_PORTSC_SPEED_FULL;  break;
+            case UsbHighSpeed:  Speed = XHCI_PORTSC_SPEED_HIGH;  break;
+            case UsbSuperSpeed: Speed = XHCI_PORTSC_SPEED_SUPER; break;
+            default:            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    else
+    {
+        if (PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS)
+            return STATUS_INVALID_PARAMETER;
+    }
+    if (!Dev->ControllerRunning || Dev->FatalError)
+        return STATUS_DEVICE_NOT_READY;
+
+    if (!BehindHub)
+    {
+        /* The hub driver reset the port through our root hub; the device must be there and enabled */
+        PortSc = XHCI_UCX_READ_REG(&Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl);
+        if ((PortSc & XHCI_PORTSC_CCS) == 0 || (PortSc & XHCI_PORTSC_PED) == 0)
+        {
+            XHCI_UCX_LOG("port %lu: enable asked but PORTSC=%08lx is not connected+enabled", PortId, PortSc);
+            return STATUS_DEVICE_NOT_CONNECTED;
+        }
+        Speed = (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
+    }
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    if (Device->Slot != NULL)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (BehindHub)
+    {
+        /* The hub's slot must be ours, addressed and marked as a hub; a TT hub likewise */
+        PXHCI_UCX_USBDEVICE_CLIENT Hub = XhciUcxGetUsbDeviceClient((WDFOBJECT)Info->Path.ParentHub);
+
+        if (Hub == NULL || Hub->Dev != Dev || Hub->Slot == NULL || !Hub->Slot->InUse ||
+            !Hub->Slot->Addressed || !Hub->Slot->IsHub)
+        {
+            ExReleaseFastMutex(&Dev->TransferMutex);
+            XHCI_UCX_LOG("root port %lu route 0x%05lX: the parent hub's slot is not ready", PortId, Info->Path.RouteString);
+            return STATUS_DEVICE_NOT_READY;
+        }
+        if (Info->Path.TtHub != NULL)
+        {
+            PXHCI_UCX_USBDEVICE_CLIENT Tt = XhciUcxGetUsbDeviceClient((WDFOBJECT)Info->Path.TtHub);
+
+            if (Tt == NULL || Tt->Dev != Dev || Tt->Slot == NULL || !Tt->Slot->InUse ||
+                !Tt->Slot->Addressed || !Tt->Slot->IsHub)
+            {
+                ExReleaseFastMutex(&Dev->TransferMutex);
+                XHCI_UCX_LOG("root port %lu route 0x%05lX: the TT hub's slot is not ready", PortId, Info->Path.RouteString);
+                return STATUS_DEVICE_NOT_READY;
+            }
+            TtSlotId = Tt->Slot->SlotId;
+            TtMtt = Tt->Slot->Mtt;
+        }
+    }
+
+    Slot = XhciUcxAllocateSlot(Dev);
+    if (Slot == NULL)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        XHCI_UCX_LOG("port %lu: no free slot", PortId);
+        return STATUS_INSUFFICIENT_RESOURCES;
+    }
+    Slot->PortId = (UCHAR)PortId;
+    Slot->Speed = (UCHAR)Speed;
+    Slot->SpeedClass = BehindHub ? (UCHAR)Speed :
+                       (Dev->PortProtocol[PortId] == 3) ? XHCI_PORTSC_SPEED_SUPER : (UCHAR)Speed;
+    Slot->RootPort = (UCHAR)PortId;
+    if (BehindHub)
+    {
+        Slot->RouteString = Info->Path.RouteString;
+        Slot->TtSlotId = TtSlotId;
+        Slot->TtPort = (TtSlotId != 0) ? Info->Path.TtPortNumber : 0;
+        Slot->Mtt = (TtSlotId != 0) ? TtMtt : FALSE;
+        /* TtThinkTime stays 0: that field describes a hub's own translator and is set on the hub's slot */
+    }
+    Slot->Ep0MaxPacket = (Slot->SpeedClass == XHCI_PORTSC_SPEED_SUPER) ? 512 :
+                         (Slot->SpeedClass == XHCI_PORTSC_SPEED_HIGH) ? 64 : 8;
+
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_ENABLE_SLOT, 0, 0, &Code, &SlotId);
+    if (!NT_SUCCESS(Status) || SlotId == 0 || SlotId > Dev->MaxSlots || XhciUcxFindSlotById(Dev, SlotId) != NULL)
+    {
+        if (NT_SUCCESS(Status) && SlotId != 0 && SlotId <= Dev->MaxSlots && XhciUcxFindSlotById(Dev, SlotId) != NULL)
+        {
+            /* The controller handed out an id we already own: give the new one back, keep the owner */
+            ULONG DisableCode = 0;
+            XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_DISABLE_SLOT, 0, XHCI_COMMAND_SLOT_FIELD(SlotId), &DisableCode, NULL);
+            XHCI_UCX_LOG("port %lu: Enable Slot returned the owned id %u, refused", PortId, SlotId);
+            Status = STATUS_DEVICE_PROTOCOL_ERROR;
+        }
+        Slot->SlotId = 0;
+        XhciUcxReleaseSlot(Dev, Slot, FALSE);
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        XHCI_UCX_LOG("port %lu: Enable Slot failed 0x%08lX code %lu", PortId, (ULONG)Status, Code);
+        return NT_SUCCESS(Status) ? STATUS_DEVICE_PROTOCOL_ERROR : Status;
+    }
+    Slot->SlotId = SlotId;
+
+    RtlZeroMemory(Dev->HcVa + Slot->DeviceContextOffset, PAGE_SIZE);
+    XhciUcxInitEp0Ring(Dev, Slot);
+    Ep0RingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->Ep0RingOffset).QuadPart;
+    XhciUcxBuildEp0InputContext(Dev, Slot, XHCI_UCX_INPUT_CTX_ADD_SLOT | XHCI_UCX_INPUT_CTX_ADD_EP0,
+                                Ep0RingPa | XHCI_TRB_CYCLE);
+    Dcbaa[SlotId] = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->DeviceContextOffset).QuadPart;
+    KeMemoryBarrier();
+
+    Slot->UsbDevice = UsbDevice;
+    Device->Slot = Slot;
+    Device->PortNumber = (USHORT)PortId;
+    ExReleaseFastMutex(&Dev->TransferMutex);
+
+    Info->Speed = XhciUcxUsbSpeedFromPortSc(Speed);
+    Info->MaxPacketSize0 = Slot->Ep0MaxPacket;
+    if (BehindHub)
+        XHCI_UCX_LOG("root port %lu route 0x%05lX: slot %u enabled behind a hub, speed id %lu, EP0 %lu, TT slot %u port %u%s",
+                     PortId, Slot->RouteString, SlotId, Speed, Slot->Ep0MaxPacket, Slot->TtSlotId, Slot->TtPort,
+                     Slot->Mtt ? " (multi-TT)" : "");
+    else
+        XHCI_UCX_LOG("port %lu: slot %u enabled for the hub driver, speed id %lu (class %u), EP0 %lu",
+                     PortId, SlotId, Speed, Slot->SpeedClass, Slot->Ep0MaxPacket);
+    return STATUS_SUCCESS;
+}
+
+/* Address Device (BSR = 0); the controller picks the USB address */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceAddress(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _Out_ PUSHORT DeviceAddress)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PXHCI_UCX_SLOT Slot;
+    ULONG Code = 0;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    *DeviceAddress = 0;
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_ADDRESS_DEV,
+                                (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->InputContextOffset).QuadPart,
+                                XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), &Code, NULL);
+    if (NT_SUCCESS(Status))
+    {
+        Slot->Addressed = TRUE;
+        Slot->UsbAddress = (UCHAR)XHCI_UCX_SLOT_STATE_ADDRESS(XhciUcxOutputSlotContext(Dev, Slot)->DevState);
+        *DeviceAddress = Slot->UsbAddress;
+    }
+    ExReleaseFastMutex(&Dev->TransferMutex);
+
+    XHCI_UCX_LOG("slot %u: Address Device -> 0x%08lX code %lu, USB address %u",
+                 Slot->SlotId, (ULONG)Status, Code, Slot->UsbAddress);
+    return Status;
+}
+
+/* The default control endpoint object; its transfers run through XhciUcxEvtEndpointControlTransfer */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceDefaultEndpointAdd(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ ULONG MaxPacketSize0,
+    _Inout_ PUCXENDPOINT_INIT EndpointInit)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    UCX_ENDPOINT_EVENT_CALLBACKS Callbacks;
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    PXHCI_UCX_ENDPOINT_CLIENT Ep;
+    UCXENDPOINT Endpoint = NULL;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+    UNREFERENCED_PARAMETER(MaxPacketSize0);
+
+    UCX_ENDPOINT_EVENT_CALLBACKS_INIT(&Callbacks);
+    Callbacks.EvtEndpointControlTransfer = XhciUcxEvtEndpointControlTransfer;
+    UcxEndpointInitSetEventCallbacks(EndpointInit, &Callbacks);
+
+    /* The slot is this device's only under the mutex (Disable clears it under it) */
+    ExAcquireFastMutex(&Device->Dev->TransferMutex);
+    if (Device->Slot == NULL || !Device->Slot->InUse)
+    {
+        ExReleaseFastMutex(&Device->Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_ENDPOINT_CLIENT);
+    Status = UcxEndpointCreate(UsbDevice, &EndpointInit, &Attributes, &Endpoint);
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Device->Dev->TransferMutex);
+        return Status;
+    }
+
+    Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
+    Ep->Dev = Device->Dev;
+    Ep->UsbDevice = UsbDevice;
+    Ep->Dci = 1;
+    Device->Slot->Ep0 = Endpoint;
+    ExReleaseFastMutex(&Device->Dev->TransferMutex);
+    return STATUS_SUCCESS;
+}
+
+/* The device descriptor named another EP0 size: Evaluate Context */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceUpdateDefaultEndpoint(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ ULONG MaxPacketSize0)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PXHCI_UCX_SLOT Slot;
+    ULONGLONG Ep0RingPa, Dequeue;
+    ULONG Code = 0;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    if (MaxPacketSize0 != 8 && MaxPacketSize0 != 16 && MaxPacketSize0 != 32 &&
+        MaxPacketSize0 != 64 && MaxPacketSize0 != 512)
+        return STATUS_INVALID_PARAMETER;
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (MaxPacketSize0 == Slot->Ep0MaxPacket)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_SUCCESS;
+    }
+    Ep0RingPa = (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->Ep0RingOffset).QuadPart;
+    Dequeue = Ep0RingPa + (ULONGLONG)Slot->Ep0Enqueue * sizeof(XHCI_TRB);
+    Slot->Ep0MaxPacket = MaxPacketSize0;
+    XhciUcxBuildEp0InputContext(Dev, Slot, XHCI_UCX_INPUT_CTX_ADD_EP0, Dequeue | (Slot->Ep0Cycle & XHCI_TRB_CYCLE));
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_EVAL_CTX,
+                                (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->InputContextOffset).QuadPart,
+                                XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), &Code, NULL);
+    ExReleaseFastMutex(&Dev->TransferMutex);
+
+    XHCI_UCX_LOG("slot %u: EP0 max packet -> %lu, Evaluate Context 0x%08lX code %lu",
+                 Slot->SlotId, MaxPacketSize0, (ULONG)Status, Code);
+    return Status;
+}
+
+/* The device is gone or failed: Disable Slot and give the slot back */
+static
+VOID
+NTAPI
+XhciUcxEvtUsbDeviceDisable(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PXHCI_UCX_SLOT Slot;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return;
+    }
+    XHCI_UCX_LOG("slot %u (port %u): disabled for the hub driver", Slot->SlotId, Slot->PortId);
+    XhciUcxSlotDropEndpoints(Dev, Slot, USBD_STATUS_DEVICE_GONE);
+    Slot->UsbDevice = NULL;
+    Slot->Ep0 = NULL;
+    XhciUcxReleaseSlot(Dev, Slot, TRUE);
+    Device->Slot = NULL;
+    ExReleaseFastMutex(&Dev->TransferMutex);
+}
+
+/* A configured device is a hub: Hub, Number of Ports, TTT, MTT in its slot context (xHCI 4.5.2, 6.2.2) */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceHubInfo(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ PUCX_USBDEVICE_HUB_INFO Info)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PXHCI_UCX_SLOT Slot;
+    PXHCI_INPUT_CONTROL_CONTEXT Icc;
+    PXHCI_SLOT_CONTEXT InSlot, OutSlot;
+    ULONG Code = 0;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    if (Info->Size < sizeof(*Info) || Info->NumberOfPorts == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (!Dev->ControllerRunning || Dev->FatalError)
+        return STATUS_DEVICE_NOT_READY;
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Slot->IsHub = TRUE;
+    Slot->HubPorts = Info->NumberOfPorts;
+    Slot->TtThinkTime = (UCHAR)(Info->TtThinkTime & 0x3);
+    Slot->Mtt = Info->MultiTt;
+
+    /* The controller's slot context, with the hub fields, through one Configure Endpoint that changes no endpoint */
+    Icc = XhciUcxInputControlContext(Dev, Slot);
+    InSlot = XhciUcxInputSlotContext(Dev, Slot);
+    OutSlot = XhciUcxOutputSlotContext(Dev, Slot);
+    RtlZeroMemory(Dev->HcVa + Slot->InputContextOffset, PAGE_SIZE);
+    RtlCopyMemory(InSlot, OutSlot, Dev->ContextSize);
+    XhciSlotContextSetHub(InSlot, TRUE);
+    XhciSlotContextSetMaxPorts(InSlot, Slot->HubPorts);
+    XhciSlotContextSetMtt(InSlot, Slot->Mtt);
+    InSlot->TtInfo = (InSlot->TtInfo & ~XHCI_SLOT_TT_THINK_TIME_MASK) |
+                     ((ULONG)Slot->TtThinkTime << XHCI_SLOT_TT_THINK_TIME_SHIFT);
+    Icc->AddContextFlags = XHCI_UCX_INPUT_CTX_ADD_SLOT;
+    Icc->DropContextFlags = 0;
+    KeMemoryBarrier();
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_CONFIG_EP,
+                                (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->InputContextOffset).QuadPart,
+                                XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), &Code, NULL);
+    XHCI_UCX_LOG("slot %u: hub with %u port(s), TTT %u, %s -> Configure Endpoint rc=0x%08lX code=%lu",
+                 Slot->SlotId, Slot->HubPorts, Slot->TtThinkTime, Slot->Mtt ? "multi-TT" : "single TT",
+                 (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status))
+        Slot->IsHub = FALSE;
+    ExReleaseFastMutex(&Dev->TransferMutex);
+    return Status;
+}
+
+/* The class library asks for a device on a root port or behind a hub: our callbacks, our context, the object */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtControllerUsbDeviceAdd(
+    _In_ UCXCONTROLLER Controller,
+    _In_ PUCX_USBDEVICE_INFO Info,
+    _Inout_ PUCXUSBDEVICE_INIT UsbDeviceInit)
+{
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetControllerClient((WDFOBJECT)Controller)->Dev;
+    UCX_USBDEVICE_EVENT_CALLBACKS Callbacks;
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    PXHCI_UCX_USBDEVICE_CLIENT Device;
+    UCXUSBDEVICE UsbDevice = NULL;
+    NTSTATUS Status;
+
+    if (Info->Size < sizeof(*Info) || Info->PortNumber == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Info->Path.Size >= sizeof(Info->Path) && Info->Path.BehindHub)
+    {
+        if (Info->Path.RootPortNumber == 0 || Info->Path.RootPortNumber > Dev->NumberOfPorts ||
+            Info->Path.ParentHub == NULL || Info->Path.RouteString > XHCI_SLOT_ROUTE_MASK || Info->Path.Depth > 5)
+            return STATUS_INVALID_PARAMETER;
+    }
+    else if (Info->PortNumber > Dev->NumberOfPorts)
+        return STATUS_INVALID_PARAMETER;
+    if (Dev->SelfEnumerate)
+        return STATUS_NOT_SUPPORTED;           /* UseUcx=2: the client owns the ports */
+
+    UCX_USBDEVICE_EVENT_CALLBACKS_INIT(&Callbacks);
+    Callbacks.EvtUsbDeviceEnable = XhciUcxEvtUsbDeviceEnable;
+    Callbacks.EvtUsbDeviceAddress = XhciUcxEvtUsbDeviceAddress;
+    Callbacks.EvtUsbDeviceDefaultEndpointAdd = XhciUcxEvtUsbDeviceDefaultEndpointAdd;
+    Callbacks.EvtUsbDeviceUpdateDefaultEndpoint = XhciUcxEvtUsbDeviceUpdateDefaultEndpoint;
+    Callbacks.EvtUsbDeviceDisable = XhciUcxEvtUsbDeviceDisable;
+    Callbacks.EvtUsbDeviceEndpointAdd = XhciUcxEvtUsbDeviceEndpointAdd;
+    Callbacks.EvtUsbDeviceEndpointsConfigure = XhciUcxEvtUsbDeviceEndpointsConfigure;
+    Callbacks.EvtUsbDeviceHubInfo = XhciUcxEvtUsbDeviceHubInfo;
+    UcxUsbDeviceInitSetEventCallbacks(UsbDeviceInit, &Callbacks);
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_USBDEVICE_CLIENT);
+    Status = UcxUsbDeviceCreate(Controller, &UsbDeviceInit, &Attributes, &UsbDevice);
+    if (!NT_SUCCESS(Status))
+    {
+        XHCI_UCX_LOG("port %u: UcxUsbDeviceCreate failed 0x%08lX", Info->PortNumber, (ULONG)Status);
+        return Status;
+    }
+
+    Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    Device->Dev = Dev;
+    Device->Slot = NULL;
+    Device->PortNumber = Info->PortNumber;
+    XHCI_UCX_LOG("%s %u: device object %p for the hub driver (port status %04X)",
+                 (Info->Path.Size >= sizeof(Info->Path) && Info->Path.BehindHub) ? "hub port" : "port",
+                 Info->PortNumber, UsbDevice, Info->PortStatus);
+    return STATUS_SUCCESS;
+}
+
+/* --------------------------------------------------------------------------
+ * Configured endpoints (M3 step 3). Each bulk/interrupt endpoint of a device
+ * on a root port gets its own transfer ring (one page of TRBs in its own
+ * common buffer), a parallel WDF queue on this FDO that ucx01000 forwards the
+ * class driver's transfer requests to, and a manual queue for the ones the
+ * ring has no room for yet. A transfer is one TD: one Normal TRB per
+ * physically contiguous run of the caller's MDL (never across a 64 KB
+ * boundary), chained, IOC on the last, ISP on IN. Completions are matched in
+ * the event-ring drain by slot, DCI and TRB pointer against the endpoint's
+ * in-flight list and completed after the locks are dropped. The caller's
+ * memory is handed to the controller as the MDL describes it; nothing the
+ * controller writes to the event ring is trusted beyond range checks.
+ * -------------------------------------------------------------------------- */
+
+#define XHCI_UCX_EP_RING_TRBS     (PAGE_SIZE / sizeof(XHCI_TRB))     /* 256: 255 usable + link */
+#define XHCI_UCX_EP_RING_USABLE   (XHCI_UCX_EP_RING_TRBS - 1)
+#define XHCI_UCX_EP_MAX_TD_TRBS   128                                /* a TD never takes more than half the ring */
+#define XHCI_UCX_TRB_MAX_RUN      (64 * 1024)
+
+/* Walks the physical runs of an MDL: one run per contiguous stretch within a 64 KB window */
+typedef struct _XHCI_UCX_MDL_RUNS {
+    PPFN_NUMBER Pfn;
+    ULONG PageCount;
+    ULONG PageIndex;
+    ULONG PageOffset;
+    ULONG Remaining;
+} XHCI_UCX_MDL_RUNS, *PXHCI_UCX_MDL_RUNS;
+
+static
+VOID
+XhciUcxMdlRunsInit(
+    _Out_ PXHCI_UCX_MDL_RUNS It,
+    _In_ PMDL Mdl,
+    _In_ ULONG Length)
+{
+    It->Pfn = MmGetMdlPfnArray(Mdl);
+    It->PageOffset = MmGetMdlByteOffset(Mdl);
+    It->PageCount = ADDRESS_AND_SIZE_TO_SPAN_PAGES(MmGetMdlVirtualAddress(Mdl), Length);
+    It->PageIndex = 0;
+    It->Remaining = Length;
+}
+
+static
+BOOLEAN
+XhciUcxMdlRunsNext(
+    _Inout_ PXHCI_UCX_MDL_RUNS It,
+    _Out_ PULONGLONG RunPa,
+    _Out_ PULONG RunLength)
+{
+    ULONGLONG Pa;
+    ULONG Len;
+
+    *RunPa = 0;
+    *RunLength = 0;
+    if (It->Remaining == 0 || It->PageIndex >= It->PageCount)
+        return FALSE;
+
+    Pa = ((ULONGLONG)It->Pfn[It->PageIndex] << PAGE_SHIFT) + It->PageOffset;
+    Len = min(It->Remaining, PAGE_SIZE - It->PageOffset);
+    It->PageIndex++;
+    It->PageOffset = 0;
+    It->Remaining -= Len;
+
+    /* Merge the following pages while they are contiguous and the run stays inside one 64 KB window */
+    while (It->Remaining != 0 && It->PageIndex < It->PageCount)
+    {
+        ULONGLONG NextPa = (ULONGLONG)It->Pfn[It->PageIndex] << PAGE_SHIFT;
+        ULONG NextLen = min(It->Remaining, (ULONG)PAGE_SIZE);
+
+        if (NextPa != Pa + Len)
+            break;
+        if (((Pa + Len + NextLen - 1) & ~(ULONGLONG)(XHCI_UCX_TRB_MAX_RUN - 1)) != (Pa & ~(ULONGLONG)(XHCI_UCX_TRB_MAX_RUN - 1)))
+            break;
+        Len += NextLen;
+        It->PageIndex++;
+        It->Remaining -= NextLen;
+    }
+    *RunPa = Pa;
+    *RunLength = Len;
+    return TRUE;
+}
+
+/* Number of TRBs a transfer needs, or 0 when it cannot be carried */
+static
+ULONG
+XhciUcxMdlTrbCount(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_opt_ PMDL Mdl,
+    _In_ ULONG Length)
+{
+    XHCI_UCX_MDL_RUNS It;
+    ULONGLONG Pa;
+    ULONG Len, Count = 0;
+
+    if (Length == 0)
+        return 1;                                   /* a zero-length packet is one TRB */
+    if (Mdl == NULL)
+        return 0;
+    XhciUcxMdlRunsInit(&It, Mdl, Length);
+    while (XhciUcxMdlRunsNext(&It, &Pa, &Len))
+    {
+        if (!Dev->Supports64Bit && (Pa + Len) > 0x100000000ULL)
+            return 0;                               /* a 32-bit controller cannot reach this page */
+        if (++Count > XHCI_UCX_EP_MAX_TD_TRBS)
+            return 0;
+    }
+    return (It.Remaining == 0) ? Count : 0;
+}
+
+/* xHCI endpoint context Interval field (6.2.3.6) from the descriptor's bInterval */
+static
+UCHAR
+XhciUcxEndpointIntervalField(
+    _In_ UCHAR SpeedClass,
+    _In_ UCHAR Type,
+    _In_ UCHAR bInterval)
+{
+    ULONG Field;
+
+    if (Type == USB_ENDPOINT_TYPE_BULK || Type == USB_ENDPOINT_TYPE_CONTROL)
+        return 0;
+    if (SpeedClass == XHCI_PORTSC_SPEED_HIGH || SpeedClass == XHCI_PORTSC_SPEED_SUPER)
+    {
+        /* 2^(bInterval-1) microframes: the field is bInterval - 1, 0..15 */
+        if (bInterval == 0)
+            return 0;
+        return (UCHAR)min(bInterval - 1, 15);
+    }
+    if (Type == USB_ENDPOINT_TYPE_ISOCHRONOUS)
+        return (UCHAR)min((bInterval ? bInterval - 1 : 0) + 3, 18);   /* full speed isoch: 2^(n-1) frames */
+    /* Full/low-speed interrupt: bInterval frames, rounded down to a power of two, in 125 us units */
+    Field = 3;
+    while (bInterval >= 2 && Field < 10)
+    {
+        bInterval >>= 1;
+        Field++;
+    }
+    return (UCHAR)Field;
+}
+
+static
+UCHAR
+XhciUcxEndpointTypeField(
+    _In_ UCHAR Type,
+    _In_ BOOLEAN In)
+{
+    switch (Type)
+    {
+        case USB_ENDPOINT_TYPE_ISOCHRONOUS: return In ? XHCI_ENDPOINT_TYPE_ISOCH_IN : XHCI_ENDPOINT_TYPE_ISOCH_OUT;
+        case USB_ENDPOINT_TYPE_BULK:        return In ? XHCI_ENDPOINT_TYPE_BULK_IN : XHCI_ENDPOINT_TYPE_BULK_OUT;
+        case USB_ENDPOINT_TYPE_INTERRUPT:   return In ? XHCI_ENDPOINT_TYPE_INTERRUPT_IN : XHCI_ENDPOINT_TYPE_INTERRUPT_OUT;
+        default:                            return XHCI_ENDPOINT_TYPE_CONTROL;
+    }
+}
+
+static
+VOID
+XhciUcxEpResetRing(
+    _Inout_ PXHCI_UCX_ENDPOINT_CLIENT Ep)
+{
+    PXHCI_TRB Link = &Ep->Ring[XHCI_UCX_EP_RING_TRBS - 1];
+
+    RtlZeroMemory(Ep->Ring, PAGE_SIZE);
+    Link->Parameter1 = (ULONG)(Ep->RingPa & 0xFFFFFFFF);
+    Link->Parameter2 = (ULONG)(Ep->RingPa >> 32);
+    Link->Status = 0;
+    Link->Control = (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_TOGGLE_CYCLE | XHCI_TRB_CYCLE;
+    KeMemoryBarrier();
+    Ep->Enqueue = 0;
+    Ep->Dequeue = 0;
+    Ep->Cycle = 1;
+}
+
+/* Usable TRBs between the producer and the oldest TD still on the ring */
+static
+ULONG
+XhciUcxEpFreeTrbs(
+    _In_ PXHCI_UCX_ENDPOINT_CLIENT Ep)
+{
+    ULONG Used = (Ep->Enqueue + XHCI_UCX_EP_RING_USABLE - Ep->Dequeue) % XHCI_UCX_EP_RING_USABLE;
+
+    return XHCI_UCX_EP_RING_USABLE - 1 - Used;
+}
+
+static
+ULONG
+XhciUcxEpIndexAdd(
+    _In_ ULONG Index,
+    _In_ ULONG Count)
+{
+    return (Index + Count) % XHCI_UCX_EP_RING_USABLE;
+}
+
+/* Bytes of the TD that precede ring index Index (its TRBs from First up to Index, exclusive) */
+static
+ULONG
+XhciUcxEpTdOffsetAt(
+    _In_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
+    _In_ PXHCI_UCX_TD_CTX Td,
+    _In_ ULONG Index)
+{
+    ULONG i = Td->FirstIndex, Offset = 0, n;
+
+    for (n = 0; n < Td->TrbCount && i != Index; n++)
+    {
+        Offset += Ep->Ring[i].Status & XHCI_TRB_LEN_MASK;
+        i = XhciUcxEpIndexAdd(i, 1);
+    }
+    return Offset;
+}
+
+static
+BOOLEAN
+XhciUcxEpTdContains(
+    _In_ PXHCI_UCX_TD_CTX Td,
+    _In_ ULONG Index)
+{
+    ULONG i = Td->FirstIndex, n;
+
+    for (n = 0; n < Td->TrbCount; n++)
+    {
+        if (i == Index)
+            return TRUE;
+        i = XhciUcxEpIndexAdd(i, 1);
+    }
+    return FALSE;
+}
+
+/*
+ * Write the TD of a transfer onto the ring and ring the doorbell. Caller holds
+ * EndpointLock and checked the room. The first TRB is published last (its
+ * cycle bit), so the controller never sees a partial TD.
+ */
+static
+VOID
+XhciUcxEpWriteTd(
+    _Inout_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
+    _Inout_ PXHCI_UCX_TD_CTX Td,
+    _In_opt_ PMDL Mdl)
+{
+    PXHCI_UCX_DEVICE Dev = Ep->Dev;
+    XHCI_UCX_MDL_RUNS It;
+    PXHCI_TRB First = NULL;
+    ULONG FirstControl = 0;
+    ULONGLONG Pa = 0;
+    ULONG Len = 0, Done = 0, n = 0;
+    BOOLEAN More;
+
+    Td->FirstIndex = Ep->Enqueue;
+    if (Td->Length != 0)
+        XhciUcxMdlRunsInit(&It, Mdl, Td->Length);
+
+    More = (Td->Length != 0) ? XhciUcxMdlRunsNext(&It, &Pa, &Len) : TRUE;
+    while (More)
+    {
+        PXHCI_TRB Trb = &Ep->Ring[Ep->Enqueue];
+        ULONG Cycle = Ep->Cycle & XHCI_TRB_CYCLE;
+        ULONG Control, TdSize, Left;
+        BOOLEAN Last;
+        ULONGLONG NextPa = 0;
+        ULONG NextLen = 0;
+
+        if (Td->Length != 0)
+        {
+            More = XhciUcxMdlRunsNext(&It, &NextPa, &NextLen);
+            Last = !More;
+        }
+        else
+        {
+            Last = TRUE;
+            More = FALSE;
+        }
+        Done += Len;
+        Left = Td->Length - Done;
+        TdSize = Last ? 0 : min((Left + Ep->MaxPacket - 1) / Ep->MaxPacket, (ULONG)XHCI_TRB_TD_SIZE_MAX);
+
+        Trb->Parameter1 = (ULONG)(Pa & 0xFFFFFFFF);
+        Trb->Parameter2 = (ULONG)(Pa >> 32);
+        Trb->Status = (Len & XHCI_TRB_LEN_MASK) | (TdSize << XHCI_TRB_TD_SIZE_SHIFT);
+        Control = (XHCI_TRB_TYPE_NORMAL << XHCI_TRB_TYPE_SHIFT) |
+                  (Last ? XHCI_TRB_IOC : XHCI_TRB_CHAIN_BIT) |
+                  (Td->DataIn ? XHCI_TRB_ISP : 0);
+        if (First == NULL)
+        {
+            First = Trb;
+            FirstControl = Control | Cycle;
+            Trb->Control = Control | (Cycle ^ XHCI_TRB_CYCLE);   /* not yet */
+        }
+        else
+        {
+            Trb->Control = Control | Cycle;
+        }
+        Td->LastIndex = Ep->Enqueue;
+        n++;
+
+        /* Advance; crossing the link: the link carries this pass's cycle and the chain bit of a TD that spans it */
+        Ep->Enqueue++;
+        if (Ep->Enqueue >= XHCI_UCX_EP_RING_USABLE)
+        {
+            PXHCI_TRB Link = &Ep->Ring[XHCI_UCX_EP_RING_TRBS - 1];
+
+            Link->Control = (XHCI_TRB_TYPE_LINK << XHCI_TRB_TYPE_SHIFT) | XHCI_TRB_TOGGLE_CYCLE |
+                            (Last ? 0 : XHCI_TRB_CHAIN_BIT) | (Ep->Cycle & XHCI_TRB_CYCLE);
+            Ep->Enqueue = 0;
+            Ep->Cycle ^= 1;
+        }
+        Pa = NextPa;
+        Len = NextLen;
+    }
+    Td->TrbCount = n;
+    Td->Transferred = 0;
+    Td->ShortSeen = FALSE;
+    Td->Ep = Ep;
+    InsertTailList(&Ep->InFlight, &Td->Link);
+    KeMemoryBarrier();
+    First->Control = FirstControl;
+    KeMemoryBarrier();
+    XHCI_UCX_WRITE_REG(&Dev->DoorbellArray->Doorbell[Ep->Slot->SlotId], Ep->Dci);
+    XHCI_UCX_TRACE("slot %u ep 0x%02x: TD %lu bytes in %lu TRB(s) at %lu..%lu",
+                   Ep->Slot->SlotId, Ep->Address, Td->Length, n, Td->FirstIndex, Td->LastIndex);
+}
+
+static
+VOID
+XhciUcxEpCompleteRequest(
+    _In_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
+    _In_ PXHCI_UCX_TD_CTX Td,
+    _In_ USBD_STATUS UsbdStatus)
+{
+    WDFREQUEST Request = Td->Request;
+    UCXENDPOINT Endpoint = Ep->Self;
+
+    if (Request == NULL)
+        Request = (WDFREQUEST)WdfObjectContextGetObject(Td);
+    Td->Request = NULL;
+    UcxEndpointCompleteTransfer(Endpoint, Request, UsbdStatus, Td->Transferred);
+    WdfObjectDereferenceWithTag((WDFOBJECT)Endpoint, (PVOID)'dTcU');   /* the reference the transfer held */
+}
+
+/* Starts transfers from the waiting queue while the ring has room; EndpointLock held on entry and exit */
+static
+VOID
+XhciUcxEpKickLocked(
+    _Inout_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
+    _Inout_ PLIST_ENTRY Failed)
+{
+    while (Ep->Configured && !Ep->Disabled && !Ep->Halted && !Ep->Aborting && Ep->Waiting != NULL)
+    {
+        WDFREQUEST Request;
+        PXHCI_UCX_TD_CTX Td;
+        PMDL Mdl;
+        ULONG Count;
+
+        /* Peek: the next waiting request's TD size decides whether it can start */
+        if (!NT_SUCCESS(WdfIoQueueFindRequest(Ep->Waiting, NULL, NULL, NULL, &Request)))
+            break;
+        Td = XhciUcxGetTdCtx((WDFOBJECT)Request);
+        Mdl = (PMDL)UcxRequestGetTransferMdl(Request);
+        Count = XhciUcxMdlTrbCount(Ep->Dev, Mdl, Td->Length);
+        if (Count != 0 && Count > XhciUcxEpFreeTrbs(Ep))
+        {
+            WdfObjectDereference((WDFOBJECT)Request);   /* FindRequest's reference */
+            break;
+        }
+        if (!NT_SUCCESS(WdfIoQueueRetrieveFoundRequest(Ep->Waiting, Request, &Request)))
+        {
+            WdfObjectDereference((WDFOBJECT)Request);
+            break;
+        }
+        WdfObjectDereference((WDFOBJECT)Request);       /* FindRequest's reference; we own the request now */
+        if (Count == 0)
+        {
+            Td->UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+            InsertTailList(Failed, &Td->Link);
+            continue;
+        }
+        XhciUcxEpWriteTd(Ep, Td, Mdl);
+    }
+}
+
+/* Takes every in-flight and waiting transfer off the endpoint (EndpointLock held) */
+static
+VOID
+XhciUcxEpCollectAllLocked(
+    _Inout_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
+    _In_ USBD_STATUS UsbdStatus,
+    _Inout_ PLIST_ENTRY List)
+{
+    WDFREQUEST Request;
+
+    while (!IsListEmpty(&Ep->InFlight))
+    {
+        PXHCI_UCX_TD_CTX Td = CONTAINING_RECORD(RemoveHeadList(&Ep->InFlight), XHCI_UCX_TD_CTX, Link);
+
+        Td->UsbdStatus = UsbdStatus;
+        Td->Transferred = 0;
+        InsertTailList(List, &Td->Link);
+    }
+    Ep->Dequeue = Ep->Enqueue;
+    while (Ep->Waiting != NULL && NT_SUCCESS(WdfIoQueueRetrieveNextRequest(Ep->Waiting, &Request)))
+    {
+        PXHCI_UCX_TD_CTX Td = XhciUcxGetTdCtx((WDFOBJECT)Request);
+
+        Td->UsbdStatus = UsbdStatus;
+        Td->Transferred = 0;
+        InsertTailList(List, &Td->Link);
+    }
+}
+
+static
+VOID
+XhciUcxEpCompleteList(
+    _In_opt_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
+    _Inout_ PLIST_ENTRY List)
+{
+    while (!IsListEmpty(List))
+    {
+        PXHCI_UCX_TD_CTX Td = CONTAINING_RECORD(RemoveHeadList(List), XHCI_UCX_TD_CTX, Link);
+
+        XhciUcxEpCompleteRequest(Ep != NULL ? Ep : Td->Ep, Td, Td->UsbdStatus);
+    }
+}
+
+/*
+ * A transfer event for a configured endpoint (EventRingLock held, DISPATCH).
+ * Finds the TD by TRB pointer, accounts the bytes, moves finished TDs to
+ * Completed for the caller to complete after it drops its lock.
+ */
+static
+BOOLEAN
+XhciUcxEpHandleTransferEvent(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _In_ PXHCI_UCX_SLOT Slot,
+    _In_ ULONG EndpointId,
+    _In_ ULONGLONG TrbPointer,
+    _In_ ULONG CompletionCode,
+    _In_ ULONG Residual,
+    _Inout_ PLIST_ENTRY Completed)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep;
+    KIRQL OldIrql;
+    PLIST_ENTRY Entry;
+    PXHCI_UCX_TD_CTX Td = NULL;
+    ULONG Index;
+    BOOLEAN Finished = FALSE, Halted = FALSE;
+
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    Ep = (EndpointId < 32) ? Slot->Endpoints[EndpointId] : NULL;
+    if (Ep == NULL || Ep->Ring == NULL)
+    {
+        KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+        return FALSE;                        /* not a configured endpoint of ours: the EP0 path decides */
+    }
+    if (TrbPointer < Ep->RingPa || TrbPointer >= Ep->RingPa + PAGE_SIZE || (TrbPointer & (sizeof(XHCI_TRB) - 1)) != 0)
+    {
+        KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+        XHCI_UCX_LOG("slot %u ep 0x%02x: transfer event points outside the ring, ignored", Slot->SlotId, Ep->Address);
+        return TRUE;
+    }
+    Index = (ULONG)((TrbPointer - Ep->RingPa) / sizeof(XHCI_TRB));
+
+    for (Entry = Ep->InFlight.Flink; Entry != &Ep->InFlight; Entry = Entry->Flink)
+    {
+        PXHCI_UCX_TD_CTX Candidate = CONTAINING_RECORD(Entry, XHCI_UCX_TD_CTX, Link);
+
+        if (XhciUcxEpTdContains(Candidate, Index))
+        {
+            Td = Candidate;
+            break;
+        }
+    }
+    if (Td == NULL)
+    {
+        KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+        XHCI_UCX_TRACE("slot %u ep 0x%02x: event for TRB %lu matches no TD (code %lu)", Slot->SlotId, Ep->Address, Index, CompletionCode);
+        return TRUE;
+    }
+
+    switch (CompletionCode)
+    {
+        case XHCI_COMPLETION_SUCCESS:
+            if (Index == Td->LastIndex)
+            {
+                if (!Td->ShortSeen)
+                    Td->Transferred = Td->Length - min(Residual, Td->Length);
+                Td->UsbdStatus = USBD_STATUS_SUCCESS;
+                Finished = TRUE;
+            }
+            break;
+        case XHCI_COMPLETION_SHORT_PACKET:
+        {
+            ULONG TrbLen = Ep->Ring[Index].Status & XHCI_TRB_LEN_MASK;
+
+            if (!Td->ShortSeen)
+            {
+                Td->Transferred = XhciUcxEpTdOffsetAt(Ep, Td, Index) + TrbLen - min(Residual, TrbLen);
+                Td->Transferred = min(Td->Transferred, Td->Length);
+                Td->ShortSeen = TRUE;
+            }
+            if (Index == Td->LastIndex)
+            {
+                Td->UsbdStatus = USBD_STATUS_SUCCESS;
+                Finished = TRUE;
+            }
+            break;
+        }
+        case XHCI_COMPLETION_STOPPED:
+        case XHCI_COMPLETION_STOPPED_LENGTH_INVALID:
+        case XHCI_COMPLETION_STOPPED_SHORT_PACKET:
+            /* Stop Endpoint during an abort: the abort path completes the TD */
+            break;
+        default:
+        {
+            ULONG TrbLen = Ep->Ring[Index].Status & XHCI_TRB_LEN_MASK;
+
+            /* The bytes that did move before the error (a short packet seen earlier already counted them) */
+            if (!Td->ShortSeen)
+                Td->Transferred = min(XhciUcxEpTdOffsetAt(Ep, Td, Index) + TrbLen - min(Residual, TrbLen), Td->Length);
+            Td->UsbdStatus = XhciUcxUsbdStatusFromCompletion(CompletionCode, STATUS_UNSUCCESSFUL);
+            Finished = TRUE;
+            Halted = TRUE;                   /* the controller halted the endpoint (4.10.2) */
+            XHCI_UCX_LOG("slot %u ep 0x%02x: transfer failed, completion code %lu (%lu of %lu bytes)",
+                         Ep->Slot->SlotId, Ep->Address, CompletionCode, Td->Transferred, Td->Length);
+            break;
+        }
+    }
+
+    if (Finished)
+    {
+        RemoveEntryList(&Td->Link);
+        InsertTailList(Completed, &Td->Link);
+        if (Ep->InFlight.Flink == &Ep->InFlight)
+            Ep->Dequeue = Ep->Enqueue;
+        else
+            Ep->Dequeue = XhciUcxEpIndexAdd(Td->LastIndex, 1);
+        if (Halted)
+        {
+            /* Everything behind the failed TD is stuck until the pipe is reset */
+            Ep->Halted = TRUE;
+            XhciUcxEpCollectAllLocked(Ep, USBD_STATUS_ENDPOINT_HALTED, Completed);
+        }
+        else
+        {
+            XhciUcxEpKickLocked(Ep, Completed);
+        }
+    }
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+    return TRUE;
+}
+
+/* Transfer requests the class library forwards to this endpoint's queue */
+static
+VOID
+NTAPI
+XhciUcxEvtEndpointIoctl(
+    _In_ WDFQUEUE Queue,
+    _In_ WDFREQUEST Request,
+    _In_ size_t OutputBufferLength,
+    _In_ size_t InputBufferLength,
+    _In_ ULONG IoControlCode)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetQueueClient((WDFOBJECT)Queue)->Ep;
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    PXHCI_UCX_TD_CTX Td = NULL;
+    PURB Urb;
+    PMDL Mdl;
+    ULONG Count;
+    KIRQL OldIrql;
+    LIST_ENTRY Failed;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(OutputBufferLength);
+    UNREFERENCED_PARAMETER(InputBufferLength);
+
+    Urb = (PURB)UcxRequestGetUrb(Request);
+    if (IoControlCode != IOCTL_INTERNAL_USB_SUBMIT_URB || Urb == NULL ||
+        Urb->UrbHeader.Length < sizeof(struct _URB_BULK_OR_INTERRUPT_TRANSFER) ||
+        Urb->UrbHeader.Function != URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER)
+    {
+        UcxEndpointCompleteTransfer(Ep->Self, Request, USBD_STATUS_INVALID_URB_FUNCTION, 0);
+        return;
+    }
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_TD_CTX);
+    Status = WdfObjectAllocateContext((WDFOBJECT)Request, &Attributes, (PVOID *)&Td);
+    if (Status == STATUS_OBJECT_NAME_EXISTS)
+        Td = XhciUcxGetTdCtx((WDFOBJECT)Request);
+    if (Td == NULL)
+    {
+        UcxEndpointCompleteTransfer(Ep->Self, Request, USBD_STATUS_INSUFFICIENT_RESOURCES, 0);
+        return;
+    }
+    RtlZeroMemory(Td, sizeof(*Td));
+    Td->Request = Request;
+    Td->Ep = Ep;
+    Td->Length = Urb->UrbBulkOrInterruptTransfer.TransferBufferLength;
+    Td->DataIn = (Urb->UrbBulkOrInterruptTransfer.TransferFlags & USBD_TRANSFER_DIRECTION_IN) != 0;
+    Mdl = (PMDL)UcxRequestGetTransferMdl(Request);
+
+    Count = XhciUcxMdlTrbCount(Ep->Dev, Mdl, Td->Length);
+    if (Count == 0 || Td->Length > Ep->MaximumTransferSize)
+    {
+        UcxEndpointCompleteTransfer(Ep->Self, Request, USBD_STATUS_INVALID_PARAMETER, 0);
+        return;
+    }
+
+    /* The endpoint object outlives every transfer it holds */
+    WdfObjectReferenceWithTag((WDFOBJECT)Ep->Self, (PVOID)'dTcU');
+    InitializeListHead(&Failed);
+
+    KeAcquireSpinLock(&Ep->Dev->EndpointLock, &OldIrql);
+    if (!Ep->Configured || Ep->Disabled)
+    {
+        KeReleaseSpinLock(&Ep->Dev->EndpointLock, OldIrql);
+        XhciUcxEpCompleteRequest(Ep, Td, USBD_STATUS_DEVICE_GONE);
+        return;
+    }
+    if (Ep->Halted)
+    {
+        KeReleaseSpinLock(&Ep->Dev->EndpointLock, OldIrql);
+        XhciUcxEpCompleteRequest(Ep, Td, USBD_STATUS_ENDPOINT_HALTED);
+        return;
+    }
+    if (Ep->Waiting == NULL)
+    {
+        KeReleaseSpinLock(&Ep->Dev->EndpointLock, OldIrql);
+        XhciUcxEpCompleteRequest(Ep, Td, USBD_STATUS_DEVICE_GONE);
+        return;
+    }
+    if (!Ep->Aborting && (WdfIoQueueGetState(Ep->Waiting, NULL, NULL) & WdfIoQueueNoRequests))
+    {
+        if (Count <= XhciUcxEpFreeTrbs(Ep))
+        {
+            XhciUcxEpWriteTd(Ep, Td, Mdl);
+            KeReleaseSpinLock(&Ep->Dev->EndpointLock, OldIrql);
+            return;
+        }
+    }
+    /* No room, others wait already, or an abort is stopping the endpoint: keep the order */
+    Status = WdfRequestForwardToIoQueue(Request, Ep->Waiting);
+    if (!NT_SUCCESS(Status))
+    {
+        KeReleaseSpinLock(&Ep->Dev->EndpointLock, OldIrql);
+        XhciUcxEpCompleteRequest(Ep, Td, USBD_STATUS_INSUFFICIENT_RESOURCES);
+        return;
+    }
+    XhciUcxEpKickLocked(Ep, &Failed);
+    KeReleaseSpinLock(&Ep->Dev->EndpointLock, OldIrql);
+    XhciUcxEpCompleteList(Ep, &Failed);
+}
+
+/*
+ * Take the endpoint off the controller's hands: Stop Endpoint (Reset Endpoint
+ * for a halted one), then Set TR Dequeue Pointer at the producer. Returns
+ * STATUS_SUCCESS only when the controller confirmed that it no longer
+ * executes this ring (a stopped or failed controller executes nothing); only
+ * then may the TDs on it be completed. TransferMutex held.
+ */
+static
+NTSTATUS
+XhciUcxEpQuiesce(
+    _Inout_ PXHCI_UCX_ENDPOINT_CLIENT Ep,
+    _In_ BOOLEAN Halted)
+{
+    PXHCI_UCX_DEVICE Dev = Ep->Dev;
+    ULONG Fields = XHCI_COMMAND_SLOT_FIELD(Ep->Slot->SlotId) | XHCI_UCX_COMMAND_EP_FIELD(Ep->Dci);
+    ULONGLONG Dequeue;
+    ULONG Code = 0;
+    NTSTATUS Status;
+
+    if (!Dev->ControllerRunning || Dev->FatalError)
+        return STATUS_SUCCESS;
+
+    Status = XhciUcxSendCommand(Dev, Halted ? XHCI_TRB_TYPE_RESET_EP : XHCI_TRB_TYPE_STOP_EP, 0, Fields, &Code, NULL);
+    XHCI_UCX_TRACE("slot %u ep 0x%02x: %s Endpoint rc=0x%08lX code=%lu", Ep->Slot->SlotId, Ep->Address,
+                   Halted ? "Reset" : "Stop", (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status))
+    {
+        /* Context State Error: already Stopped, Halted or Disabled, so nothing
+         * runs; a halted endpoint still needs the reset before the dequeue move */
+        if (Code != XHCI_COMPLETION_CONTEXT_STATE_ERROR)
+            return Status;
+        if (!Halted)
+        {
+            Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_RESET_EP, 0, Fields, &Code, NULL);
+            if (!NT_SUCCESS(Status) && Code != XHCI_COMPLETION_CONTEXT_STATE_ERROR)
+                return Status;
+        }
+    }
+
+    Dequeue = Ep->RingPa + (ULONGLONG)Ep->Enqueue * sizeof(XHCI_TRB);
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_SET_DEQ, Dequeue | (Ep->Cycle & XHCI_TRB_CYCLE), Fields, &Code, NULL);
+    XHCI_UCX_TRACE("slot %u ep 0x%02x: Set TR Dequeue Pointer rc=0x%08lX code=%lu", Ep->Slot->SlotId, Ep->Address, (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status) && Code == XHCI_COMPLETION_CONTEXT_STATE_ERROR)
+        return STATUS_SUCCESS;                /* not configured on the controller: nothing runs */
+    return Status;
+}
+
+/*
+ * EvtEndpointAbort / EvtEndpointResetHalted. New transfers are parked while the
+ * endpoint is being stopped (Aborting); the transfers it holds are completed
+ * only after the controller confirmed the stop, otherwise the error goes back
+ * to the class driver and nothing is touched.
+ */
+static
+NTSTATUS
+XhciUcxEpAbortCommon(
+    _In_ UCXENDPOINT Endpoint,
+    _In_ BOOLEAN OnlyIfHalted)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
+    PXHCI_UCX_DEVICE Dev = Ep->Dev;
+    LIST_ENTRY Done;
+    KIRQL OldIrql;
+    NTSTATUS Status = STATUS_SUCCESS;
+    BOOLEAN Halted, Live;
+    UCHAR SlotId;
+
+    if (Ep->Slot == NULL || Ep->Dci <= 1)
+        return STATUS_SUCCESS;
+    InitializeListHead(&Done);
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    Halted = Ep->Halted;
+    Live = Ep->Configured && !Ep->Disabled;
+    SlotId = Live ? Ep->Slot->SlotId : 0;    /* Ep->Slot is only trusted while the endpoint is live */
+    if (OnlyIfHalted && !Halted)
+    {
+        /* A reset of a running pipe has nothing to do on this controller */
+        KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_SUCCESS;
+    }
+    Ep->Aborting = TRUE;
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+
+    if (Live)
+        Status = XhciUcxEpQuiesce(Ep, Halted);
+
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    if (NT_SUCCESS(Status))
+    {
+        XhciUcxEpCollectAllLocked(Ep, USBD_STATUS_CANCELED, &Done);
+        Ep->Halted = FALSE;
+    }
+    Ep->Aborting = FALSE;
+    /* Whatever arrived meanwhile and was not collected starts now; after a
+     * failed quiesce the controller may still run the old TDs, so nothing is
+     * started: the parked transfers wait for a completion or the next abort */
+    if (NT_SUCCESS(Status))
+        XhciUcxEpKickLocked(Ep, &Done);
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+    ExReleaseFastMutex(&Dev->TransferMutex);
+
+    XHCI_UCX_LOG("slot %u ep 0x%02x: %s -> 0x%08lX", SlotId, Ep->Address,
+                 OnlyIfHalted ? "halted pipe reset" : "aborted", (ULONG)Status);
+    XhciUcxEpCompleteList(Ep, &Done);
+    return Status;
+}
+
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtEndpointAbort(
+    _In_ UCXENDPOINT Endpoint)
+{
+    return XhciUcxEpAbortCommon(Endpoint, FALSE);
+}
+
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtEndpointResetHalted(
+    _In_ UCXENDPOINT Endpoint)
+{
+    return XhciUcxEpAbortCommon(Endpoint, TRUE);
+}
+
+/* A transfer the class driver cancels while it waits for ring room */
+static
+VOID
+NTAPI
+XhciUcxEvtWaitingCanceled(
+    _In_ WDFQUEUE Queue,
+    _In_ WDFREQUEST Request)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetQueueClient((WDFOBJECT)Queue)->Ep;
+    PXHCI_UCX_TD_CTX Td = XhciUcxGetTdCtx((WDFOBJECT)Request);
+
+    if (Td != NULL)
+    {
+        Td->Transferred = 0;
+        Td->Request = NULL;
+    }
+    XhciUcxEpCompleteRequest(Ep, Td, USBD_STATUS_CANCELED);
+}
+
+/* Object cleanup: the endpoint object goes (after it was disabled on the controller) */
+static
+VOID
+NTAPI
+XhciUcxEndpointEvtCleanup(
+    _In_ WDFOBJECT Object)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient(Object);
+    PXHCI_UCX_DEVICE Dev = Ep->Dev;
+    WDFQUEUE Queue, Waiting;
+    WDFCOMMONBUFFER RingBuffer;
+    LIST_ENTRY Gone;
+    KIRQL OldIrql;
+
+    if (Dev == NULL || Ep->Dci == 1)
+        return;                                 /* the default endpoint owns nothing here */
+    InitializeListHead(&Gone);
+
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    Ep->Disabled = TRUE;
+    Ep->Configured = FALSE;
+    XhciUcxEpCollectAllLocked(Ep, USBD_STATUS_DEVICE_GONE, &Gone);
+    if (Ep->Slot != NULL && Ep->Slot->Endpoints[Ep->Dci] == Ep)
+        Ep->Slot->Endpoints[Ep->Dci] = NULL;
+    Queue = Ep->Queue;
+    Waiting = Ep->Waiting;
+    RingBuffer = Ep->RingBuffer;
+    Ep->Queue = NULL;
+    Ep->Waiting = NULL;
+    Ep->RingBuffer = NULL;
+    Ep->Ring = NULL;
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+
+    XhciUcxEpCompleteList(Ep, &Gone);
+    if (Queue != NULL)
+    {
+        WdfIoQueuePurgeSynchronously(Queue);
+        WdfObjectDelete((WDFOBJECT)Queue);
+    }
+    if (Waiting != NULL)
+    {
+        WdfIoQueuePurgeSynchronously(Waiting);
+        WdfObjectDelete((WDFOBJECT)Waiting);
+    }
+    if (RingBuffer != NULL)
+        WdfObjectDelete((WDFOBJECT)RingBuffer);
+    XHCI_UCX_TRACE("ep 0x%02x object %p released", Ep->Address, Object);
+}
+
+/* EvtUsbDeviceEndpointAdd: ring, queues, the endpoint object with our context */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceEndpointAdd(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ PUCX_ENDPOINT_INFO Info,
+    _Inout_ PUCXENDPOINT_INIT EndpointInit)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PXHCI_UCX_SLOT Slot;
+    const USB_ENDPOINT_DESCRIPTOR *Desc = &Info->Descriptor;
+    UCX_ENDPOINT_EVENT_CALLBACKS Callbacks;
+    WDF_OBJECT_ATTRIBUTES Attributes;
+    WDF_IO_QUEUE_CONFIG QueueConfig;
+    WDFCOMMONBUFFER RingBuffer = NULL;
+    WDFQUEUE Queue = NULL, Waiting = NULL;
+    UCXENDPOINT Endpoint = NULL;
+    PXHCI_UCX_ENDPOINT_CLIENT Ep;
+    UCHAR Number, Type;
+    BOOLEAN In;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    if (Info->Size < sizeof(*Info))
+        return STATUS_INVALID_PARAMETER;
+    Number = Desc->bEndpointAddress & USB_ENDPOINT_ADDRESS_MASK;
+    Type = Desc->bmAttributes & USB_ENDPOINT_TYPE_MASK;
+    In = USB_ENDPOINT_DIRECTION_IN(Desc->bEndpointAddress) != 0;
+    if (Number == 0 || Type == USB_ENDPOINT_TYPE_CONTROL || (Desc->wMaxPacketSize & 0x07FF) == 0)
+        return STATUS_INVALID_PARAMETER;
+
+    /* The slot is this device's only under the mutex. An endpoint object for a
+     * DCI that is configured today is allowed: the library builds the new
+     * alternate setting before it swaps the endpoints in one Configure. */
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    /* The ring: one page of its own, physically contiguous by construction */
+    Status = WdfCommonBufferCreate(Dev->DmaEnabler, PAGE_SIZE, WDF_NO_OBJECT_ATTRIBUTES, &RingBuffer);
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return Status;
+    }
+
+    /* The queues: transfers arrive on Queue, wait on Waiting */
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_QUEUE_CLIENT);
+    WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchParallel);
+    QueueConfig.EvtIoInternalDeviceControl = XhciUcxEvtEndpointIoctl;
+    QueueConfig.PowerManaged = WdfFalse;
+    Status = WdfIoQueueCreate(Dev->Device, &QueueConfig, &Attributes, &Queue);
+    if (NT_SUCCESS(Status))
+    {
+        WDF_IO_QUEUE_CONFIG_INIT(&QueueConfig, WdfIoQueueDispatchManual);
+        QueueConfig.PowerManaged = WdfFalse;
+        QueueConfig.EvtIoCanceledOnQueue = XhciUcxEvtWaitingCanceled;   /* a parked transfer the class driver cancels */
+        Status = WdfIoQueueCreate(Dev->Device, &QueueConfig, &Attributes, &Waiting);
+    }
+    if (!NT_SUCCESS(Status))
+        goto Fail;
+
+    UCX_ENDPOINT_EVENT_CALLBACKS_INIT(&Callbacks);
+    Callbacks.EvtEndpointAbort = XhciUcxEvtEndpointAbort;
+    Callbacks.EvtEndpointResetHalted = XhciUcxEvtEndpointResetHalted;
+    UcxEndpointInitSetEventCallbacks(EndpointInit, &Callbacks);
+
+    WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_ENDPOINT_CLIENT);
+    Attributes.EvtCleanupCallback = XhciUcxEndpointEvtCleanup;
+    Status = UcxEndpointCreate(UsbDevice, &EndpointInit, &Attributes, &Endpoint);
+    if (!NT_SUCCESS(Status))
+        goto Fail;
+
+    Ep = XhciUcxGetEndpointClient((WDFOBJECT)Endpoint);
+    Ep->Dev = Dev;
+    Ep->UsbDevice = UsbDevice;
+    Ep->Self = Endpoint;
+    Ep->Slot = Slot;
+    Ep->Dci = (UCHAR)(2 * Number + (In ? 1 : 0));
+    Ep->Address = Desc->bEndpointAddress;
+    Ep->Type = Type;
+    Ep->DataIn = In;
+    Ep->MaxPacket = (USHORT)(Desc->wMaxPacketSize & 0x07FF);
+    Ep->Interval = XhciUcxEndpointIntervalField(Slot->SpeedClass, Type, Desc->bInterval);
+    if (Slot->SpeedClass == XHCI_PORTSC_SPEED_SUPER)
+    {
+        Ep->MaxBurst = Info->HasCompanion ? Info->Companion.bMaxBurst : 0;
+        Ep->Mult = (Info->HasCompanion && Type == USB_ENDPOINT_TYPE_ISOCHRONOUS) ? Info->Companion.bmAttributes.Isochronous.Mult : 0;
+        Ep->MaxEsit = Info->HasCompanion ? Info->Companion.wBytesPerInterval : (ULONG)Ep->MaxPacket * (Ep->MaxBurst + 1);
+    }
+    else
+    {
+        /* High-speed high-bandwidth interrupt/isoch: extra transactions per microframe in bits 11..12 */
+        Ep->MaxBurst = (Slot->SpeedClass == XHCI_PORTSC_SPEED_HIGH && Type != USB_ENDPOINT_TYPE_BULK) ?
+                       (UCHAR)((Desc->wMaxPacketSize >> 11) & 0x3) : 0;
+        Ep->Mult = 0;
+        Ep->MaxEsit = (ULONG)Ep->MaxPacket * (Ep->MaxBurst + 1);
+    }
+    if (Type == USB_ENDPOINT_TYPE_BULK)
+        Ep->MaxEsit = 0;                              /* Max ESIT Payload is a periodic-endpoint field */
+    Ep->MaximumTransferSize = Info->MaximumTransferSize ? Info->MaximumTransferSize : UCX_BULK_MAX_TRANSFER;
+    Ep->RingBuffer = RingBuffer;
+    Ep->Ring = WdfCommonBufferGetAlignedVirtualAddress(RingBuffer);
+    Ep->RingPa = (ULONGLONG)WdfCommonBufferGetAlignedLogicalAddress(RingBuffer).QuadPart;
+    Ep->Queue = Queue;
+    Ep->Waiting = Waiting;
+    InitializeListHead(&Ep->InFlight);
+    XhciUcxGetQueueClient((WDFOBJECT)Queue)->Ep = Ep;
+    XhciUcxGetQueueClient((WDFOBJECT)Waiting)->Ep = Ep;
+    XhciUcxEpResetRing(Ep);
+    UcxEndpointSetWdfIoQueue(Endpoint, Queue);
+
+    XHCI_UCX_LOG("slot %u: endpoint 0x%02x added (type %u, DCI %u, MPS %u, burst %u, interval field %u, max transfer %lu)",
+                 Slot->SlotId, Ep->Address, Type, Ep->Dci, Ep->MaxPacket, Ep->MaxBurst, Ep->Interval, Ep->MaximumTransferSize);
+    ExReleaseFastMutex(&Dev->TransferMutex);
+    return STATUS_SUCCESS;
+
+Fail:
+    ExReleaseFastMutex(&Dev->TransferMutex);
+    if (Waiting != NULL)
+        WdfObjectDelete((WDFOBJECT)Waiting);
+    if (Queue != NULL)
+        WdfObjectDelete((WDFOBJECT)Queue);
+    if (RingBuffer != NULL)
+        WdfObjectDelete((WDFOBJECT)RingBuffer);
+    XHCI_UCX_LOG("slot %u: endpoint 0x%02x add failed 0x%08lX", Slot->SlotId, Desc->bEndpointAddress, (ULONG)Status);
+    return Status;
+}
+
+/* EvtUsbDeviceEndpointsConfigure: one Configure Endpoint command for the whole change */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceEndpointsConfigure(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ PUCX_ENDPOINTS_CONFIGURE Cfg)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PXHCI_UCX_SLOT Slot;
+    PXHCI_INPUT_CONTROL_CONTEXT Icc;
+    PXHCI_SLOT_CONTEXT InSlot, OutSlot;
+    ULONG LastCtx = 1, Code = 0, Control, i, Dci;
+    KIRQL OldIrql;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    if (Cfg->Size < sizeof(*Cfg))
+        return STATUS_INVALID_PARAMETER;
+    if (!Dev->ControllerRunning || Dev->FatalError)
+        return STATUS_DEVICE_NOT_READY;
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+
+    Icc = XhciUcxInputControlContext(Dev, Slot);
+    InSlot = XhciUcxInputSlotContext(Dev, Slot);
+    OutSlot = XhciUcxOutputSlotContext(Dev, Slot);
+    RtlZeroMemory(Dev->HcVa + Slot->InputContextOffset, PAGE_SIZE);
+    Control = XHCI_COMMAND_SLOT_FIELD(Slot->SlotId);
+
+    if (Cfg->Type == UcxEndpointsConfigureDisableAll)
+    {
+        Control |= XHCI_TRB_DC;                          /* Deconfigure: every endpoint but EP0 */
+    }
+    else
+    {
+        /* Mirror the controller's slot context, then say which endpoints change */
+        RtlCopyMemory(InSlot, OutSlot, Dev->ContextSize);
+        Icc->AddContextFlags = XHCI_UCX_INPUT_CTX_ADD_SLOT;
+        for (i = 0; i < Cfg->DisableCount; i++)
+        {
+            PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Cfg->EndpointsToDisable[i]);
+
+            if (Ep->Dci > 1)
+                Icc->DropContextFlags |= XHCI_UCX_INPUT_CTX_ADD(Ep->Dci);
+        }
+        for (i = 0; i < Cfg->EnableCount; i++)
+        {
+            PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Cfg->EndpointsToEnable[i]);
+            ULONG AvgTrb;
+
+            if (Ep->Dci <= 1 || Ep->Ring == NULL)
+            {
+                ExReleaseFastMutex(&Dev->TransferMutex);
+                return STATUS_INVALID_PARAMETER;
+            }
+            KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+            XhciUcxEpResetRing(Ep);
+            KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+            AvgTrb = (Ep->Type == USB_ENDPOINT_TYPE_BULK) ? 3072 : (Ep->Type == USB_ENDPOINT_TYPE_INTERRUPT) ? Ep->MaxPacket : Ep->MaxEsit;
+            XhciEndpointContextInit(XhciUcxInputEndpointContext(Dev, Slot, Ep->Dci),
+                                    XhciUcxEndpointTypeField(Ep->Type, Ep->DataIn),
+                                    Ep->MaxPacket, Ep->MaxBurst, Ep->Interval, Ep->Mult, Ep->MaxEsit, AvgTrb,
+                                    Ep->RingPa | XHCI_TRB_CYCLE);
+            Icc->AddContextFlags |= XHCI_UCX_INPUT_CTX_ADD(Ep->Dci);
+            Icc->DropContextFlags &= ~XHCI_UCX_INPUT_CTX_ADD(Ep->Dci);
+        }
+        /* Context Entries: the highest DCI in use after the change */
+        for (Dci = 2; Dci < 32; Dci++)
+        {
+            BOOLEAN Present = (Slot->Endpoints[Dci] != NULL && (Icc->DropContextFlags & XHCI_UCX_INPUT_CTX_ADD(Dci)) == 0) ||
+                              (Icc->AddContextFlags & XHCI_UCX_INPUT_CTX_ADD(Dci)) != 0;
+
+            if (Present)
+                LastCtx = Dci;
+        }
+        XhciSlotContextSetLastCtx(InSlot, LastCtx);
+    }
+    KeMemoryBarrier();
+
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_CONFIG_EP,
+                                (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->InputContextOffset).QuadPart,
+                                Control, &Code, NULL);
+    XHCI_UCX_LOG("slot %u: Configure Endpoint (type %u, +%lu -%lu, context entries %lu) rc=0x%08lX code=%lu",
+                 Slot->SlotId, Cfg->Type, Cfg->EnableCount, Cfg->DisableCount, LastCtx, (ULONG)Status, Code);
+
+    /* A failed command leaves the device context as it was: our tables stay as they were too */
+    if (!NT_SUCCESS(Status))
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return Status;
+    }
+
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    if (Cfg->Type == UcxEndpointsConfigureDisableAll)
+    {
+        for (Dci = 2; Dci < 32; Dci++)
+        {
+            if (Slot->Endpoints[Dci] != NULL)
+            {
+                Slot->Endpoints[Dci]->Configured = FALSE;
+                Slot->Endpoints[Dci] = NULL;
+            }
+        }
+    }
+    else
+    {
+        for (i = 0; i < Cfg->DisableCount; i++)
+        {
+            PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Cfg->EndpointsToDisable[i]);
+
+            Ep->Configured = FALSE;
+            if (Ep->Dci > 1 && Slot->Endpoints[Ep->Dci] == Ep)
+                Slot->Endpoints[Ep->Dci] = NULL;
+        }
+        for (i = 0; i < Cfg->EnableCount; i++)
+        {
+            PXHCI_UCX_ENDPOINT_CLIENT Ep = XhciUcxGetEndpointClient((WDFOBJECT)Cfg->EndpointsToEnable[i]);
+
+            Ep->Configured = TRUE;
+            Ep->Halted = FALSE;
+            Slot->Endpoints[Ep->Dci] = Ep;
+        }
+    }
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+    ExReleaseFastMutex(&Dev->TransferMutex);
+    return Status;
+}
+
+/* Every configured endpoint of a slot gives its transfers back (device disable); EndpointLock taken inside */
+static
+VOID
+XhciUcxSlotDropEndpoints(
+    _Inout_ PXHCI_UCX_DEVICE Dev,
+    _Inout_ PXHCI_UCX_SLOT Slot,
+    _In_ USBD_STATUS UsbdStatus)
+{
+    PXHCI_UCX_ENDPOINT_CLIENT Eps[32];
+    LIST_ENTRY Gone[32];
+    KIRQL OldIrql;
+    ULONG Dci;
+
+    KeAcquireSpinLock(&Dev->EndpointLock, &OldIrql);
+    for (Dci = 0; Dci < 32; Dci++)
+    {
+        Eps[Dci] = Slot->Endpoints[Dci];
+        InitializeListHead(&Gone[Dci]);
+        if (Eps[Dci] == NULL)
+            continue;
+        Eps[Dci]->Configured = FALSE;
+        Eps[Dci]->Disabled = TRUE;
+        XhciUcxEpCollectAllLocked(Eps[Dci], UsbdStatus, &Gone[Dci]);
+        Slot->Endpoints[Dci] = NULL;
+    }
+    KeReleaseSpinLock(&Dev->EndpointLock, OldIrql);
+    for (Dci = 0; Dci < 32; Dci++)
+    {
+        if (Eps[Dci] != NULL)
+            XhciUcxEpCompleteList(Eps[Dci], &Gone[Dci]);
+    }
 }
 
 /* --------------------------------------------------------------------------
@@ -3056,8 +5452,10 @@ XhciUcxEvtInterruptDpc(
                 XHCI_UCX_LOG("root hub port change -> UcxRootHubPortChanged");
                 UcxRootHubPortChanged(Dev->RootHub);
             }
-            /* Step 3: reconcile ports with device slots at PASSIVE_LEVEL */
-            XhciUcxRequestPortRescan(Dev);
+            /* M2 demo only: reconcile ports with device slots at PASSIVE_LEVEL.
+             * Hub-driven, the hub driver reacts to the status change instead. */
+            if (Dev->SelfEnumerate)
+                XhciUcxRequestPortRescan(Dev);
         }
     }
 }
@@ -3284,13 +5682,36 @@ XhciUcxCreateUcxObjects(
     ControllerConfig.EvtControllerReset = XhciUcxEvtControllerReset;
     ControllerConfig.EvtControllerQueryUsbCapability = XhciUcxEvtControllerQueryUsbCapability;
 
-    Status = UcxControllerCreate(Dev->Device, &ControllerConfig, WDF_NO_OBJECT_ATTRIBUTES, &Dev->Controller);
+    /* The PCI identity names the root hub (USB\ROOT_HUB30&VID_&PID_&REV_) and
+     * fills its device descriptor; absent (ACPI-enumerated controller) the
+     * root hub still enumerates under the bare id. */
+    {
+        USHORT Ids[2] = { 0, 0 };
+        UCHAR Revision = 0;
+
+        if (XhciUcxPciRead(Dev, 0x00, Ids, sizeof(Ids)))
+        {
+            ControllerConfig.VendorId = Ids[0];
+            ControllerConfig.DeviceId = Ids[1];
+        }
+        if (XhciUcxPciRead(Dev, 0x08, &Revision, sizeof(Revision)))
+            ControllerConfig.RevisionId = Revision;
+    }
+    ControllerConfig.EvtControllerUsbDeviceAdd = XhciUcxEvtControllerUsbDeviceAdd;
+
+    {
+        WDF_OBJECT_ATTRIBUTES ControllerAttributes;
+
+        WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&ControllerAttributes, XHCI_UCX_CONTROLLER_CLIENT);
+        Status = UcxControllerCreate(Dev->Device, &ControllerConfig, &ControllerAttributes, &Dev->Controller);
+    }
     XHCI_UCX_LOG("UcxControllerCreate rc=0x%08lX", (ULONG)Status);
     if (!NT_SUCCESS(Status))
     {
         Dev->Controller = NULL;
         return Status;
     }
+    XhciUcxGetControllerClient((WDFOBJECT)Dev->Controller)->Dev = Dev;
     XHCI_UCX_TRACE("controller object %p", Dev->Controller);
 
     UCX_ROOTHUB_CONFIG_INIT(&RootHubConfig);
@@ -3298,8 +5719,17 @@ XhciUcxCreateUcxObjects(
     RootHubConfig.NumberOf30Ports = Dev->NumberOf30Ports;
     RootHubConfig.EvtRootHubControlUrb = XhciUcxEvtRootHubControlUrb;
     RootHubConfig.EvtRootHubGetInfo = XhciUcxEvtRootHubGetInfo;
+    RootHubConfig.EvtRootHubGetPortChangeBitmap = XhciUcxEvtRootHubGetPortChangeBitmap;
 
-    Status = UcxRootHubCreate(Dev->Controller, &RootHubConfig, WDF_NO_OBJECT_ATTRIBUTES, &Dev->RootHub);
+    {
+        WDF_OBJECT_ATTRIBUTES RootHubAttributes;
+
+        /* Our context on the UCX object: the callbacks' way back to Dev */
+        WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&RootHubAttributes, XHCI_UCX_ROOTHUB_CLIENT);
+        Status = UcxRootHubCreate(Dev->Controller, &RootHubConfig, &RootHubAttributes, &Dev->RootHub);
+    }
+    if (NT_SUCCESS(Status))
+        XhciUcxGetRootHubClient((WDFOBJECT)Dev->RootHub)->Dev = Dev;
     XHCI_UCX_LOG("UcxRootHubCreate rc=0x%08lX ports USB2=%u USB3=%u",
                  (ULONG)Status, Dev->NumberOf20Ports, Dev->NumberOf30Ports);
     if (!NT_SUCCESS(Status))
@@ -3467,7 +5897,8 @@ XhciUcxEvtDeviceD0EntryPostInterruptsEnabled(
             XHCI_UCX_LOG("initial root hub port change -> UcxRootHubPortChanged");
             UcxRootHubPortChanged(Dev->RootHub);
         }
-        XhciUcxRequestPortRescan(Dev);
+        if (Dev->SelfEnumerate)
+            XhciUcxRequestPortRescan(Dev);
     }
 
     XHCI_UCX_LOG("STEP2 DONE: interrupter 0 armed (IMAN=%08lx), event ring live",
@@ -3584,7 +6015,10 @@ XhciUcxEvtDeviceAdd(
     Dev = XhciUcxGetDevice(Device);
     RtlZeroMemory(Dev, sizeof(*Dev));
     Dev->Device = Device;
+    Dev->SelfEnumerate = (g_XhciUcxSelfEnumerate != 0);
+    ExInitializeFastMutex(&Dev->TransferMutex);
     KeInitializeSpinLock(&Dev->EventRingLock);
+    KeInitializeSpinLock(&Dev->EndpointLock);
     KeInitializeEvent(&Dev->CommandEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Dev->TransferEvent, NotificationEvent, FALSE);
 

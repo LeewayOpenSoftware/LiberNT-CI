@@ -19,6 +19,11 @@ DECLARE_HANDLE(UCXROOTHUB);
 DECLARE_HANDLE(UCXUSBDEVICE);
 DECLARE_HANDLE(UCXENDPOINT);
 
+/* USB types used by the DDI (speed, setup packet, USBD status); the headers guard themselves */
+#include <usb100.h>
+#include <usb200.h>
+#include <usb.h>
+
 typedef struct _UCXUSBDEVICE_INIT *PUCXUSBDEVICE_INIT;
 typedef struct _UCXENDPOINT_INIT  *PUCXENDPOINT_INIT;
 
@@ -43,6 +48,8 @@ typedef enum _UCX_CLASS_FUNCTIONS {
     UcxEndpointPurgeCompleteIndex,
     UcxEndpointNeedToCancelTransfersIndex,
     UcxIoDeviceControlIndex,
+    UcxEndpointCompleteTransferIndex,          /* M3 step 3 */
+    UcxRequestGetTransferMdlIndex,             /* M3 step 3 */
     UcxFunctionsMax
 } UCX_CLASS_FUNCTIONS;
 
@@ -56,11 +63,55 @@ typedef NTSTATUS (NTAPI *PFN_UCX_CONTROLLER_QUERY_USB_CAPABILITY)(
     _In_ UCXCONTROLLER Controller, _In_ PGUID CapabilityType,
     _In_ ULONG OutputBufferLength, _Out_opt_ PVOID OutputBuffer, _Out_ PULONG ResultLength);
 
+/*
+ * EvtControllerUsbDeviceAdd (M3): the hub driver asked for a new device on a
+ * root port. The client sets its device callbacks on UsbDeviceInit
+ * (UcxUsbDeviceInitSetEventCallbacks) and calls UcxUsbDeviceCreate with it;
+ * returning without creating the object fails the hub driver's request.
+ */
+/*
+ * Where a device sits (M3 step 4b). On a root port everything but
+ * RootPortNumber is zero. Behind external hubs the class library computes the
+ * xHCI route string from the chain of hub handles, names the parent hub and,
+ * for a low/full-speed device, the high-speed hub whose transaction
+ * translator serves it; the speed then comes from the hub's port status.
+ */
+typedef struct _UCX_USBDEVICE_PATH {
+    ULONG Size;
+    UCXUSBDEVICE ParentHub;         /* NULL on a root port */
+    UCXUSBDEVICE TtHub;             /* the TT hub of a low/full-speed device behind a high-speed hub, else NULL */
+    ULONG RouteString;              /* xHCI route string, 20 bits */
+    UCHAR Depth;                    /* 0 on a root port .. 5 */
+    UCHAR RootPortNumber;           /* root port the chain hangs from */
+    UCHAR HubPortNumber;            /* port on ParentHub (0 on a root port) */
+    UCHAR TtPortNumber;             /* port on TtHub (0 without a TT) */
+    USB_DEVICE_SPEED Speed;         /* valid when BehindHub */
+    BOOLEAN BehindHub;
+    UCHAR Reserved[3];
+} UCX_USBDEVICE_PATH, *PUCX_USBDEVICE_PATH;
+
+typedef struct _UCX_USBDEVICE_INFO {
+    ULONG Size;
+    USHORT PortNumber;          /* the port on its hub (root port on a root port), 1-based */
+    USHORT PortStatus;          /* the hub driver's view of the port (USB_PORT_STATUS) */
+    UCX_USBDEVICE_PATH Path;    /* M3 step 4b */
+} UCX_USBDEVICE_INFO, *PUCX_USBDEVICE_INFO;
+
+typedef NTSTATUS (NTAPI *PFN_UCX_CONTROLLER_USBDEVICE_ADD)(
+    _In_ UCXCONTROLLER Controller, _In_ PUCX_USBDEVICE_INFO UsbDeviceInfo, _Inout_ PUCXUSBDEVICE_INIT UsbDeviceInit);
+
 typedef struct _UCX_CONTROLLER_CONFIG {
     ULONG Size;
     USHORT NumberOfRootHubs;
     PFN_UCX_CONTROLLER_RESET                 EvtControllerReset;
     PFN_UCX_CONTROLLER_QUERY_USB_CAPABILITY  EvtControllerQueryUsbCapability;
+    /* Optional (M3): the controller's PCI identity, carried into the root hub's
+     * hardware id and device descriptor. All zero when the client has no bus
+     * interface; the root hub still enumerates. */
+    USHORT VendorId;
+    USHORT DeviceId;
+    USHORT RevisionId;
+    PFN_UCX_CONTROLLER_USBDEVICE_ADD         EvtControllerUsbDeviceAdd;     /* M3 step 2 */
 } UCX_CONTROLLER_CONFIG, *PUCX_CONTROLLER_CONFIG;
 
 FORCEINLINE VOID UCX_CONTROLLER_CONFIG_INIT(_Out_ PUCX_CONTROLLER_CONFIG C)
@@ -83,8 +134,23 @@ typedef VOID (NTAPI *PFN_UCXCONTROLLERRESETCOMPLETE)(_In_ UCXCONTROLLER, _In_ BO
 
 /* ---- Root hub ------------------------------------------------------------ */
 
+/*
+ * EvtRootHubControlUrb: a hub-class or hub-descriptor request for the root hub
+ * (URB_FUNCTION_CLASS_DEVICE / CLASS_OTHER / CLASS_INTERFACE, or GET_DESCRIPTOR
+ * of type 0x29/0x2A). The client answers it from the port registers and completes
+ * the request; UcxRequestGetUrb() gives the URB. The class library has already
+ * validated the URB header, the device handle and the buffer against its length.
+ *
+ * EvtRootHubGetPortChangeBitmap: called at <= DISPATCH_LEVEL when the class
+ * library is about to complete a status-change (interrupt IN) transfer. The
+ * client sets bit N of Bitmap for every port N (1-based) whose change bits are
+ * set and returns TRUE when any bit was set; Length is the buffer size in bytes
+ * and the client never writes past it.
+ */
 typedef VOID (NTAPI *PFN_UCX_ROOTHUB_CONTROL_URB)(_In_ UCXROOTHUB, _In_ WDFREQUEST);
 typedef VOID (NTAPI *PFN_UCX_ROOTHUB_GET_INFO)(_In_ UCXROOTHUB, _In_ WDFREQUEST);
+typedef BOOLEAN (NTAPI *PFN_UCX_ROOTHUB_GET_PORT_CHANGE_BITMAP)(
+    _In_ UCXROOTHUB RootHub, _Out_writes_bytes_(Length) PUCHAR Bitmap, _In_ ULONG Length);
 
 typedef struct _UCX_ROOTHUB_CONFIG {
     ULONG Size;
@@ -92,6 +158,7 @@ typedef struct _UCX_ROOTHUB_CONFIG {
     USHORT NumberOf30Ports;
     PFN_UCX_ROOTHUB_CONTROL_URB  EvtRootHubControlUrb;
     PFN_UCX_ROOTHUB_GET_INFO     EvtRootHubGetInfo;
+    PFN_UCX_ROOTHUB_GET_PORT_CHANGE_BITMAP EvtRootHubGetPortChangeBitmap;   /* M3 */
 } UCX_ROOTHUB_CONFIG, *PUCX_ROOTHUB_CONFIG;
 
 FORCEINLINE VOID UCX_ROOTHUB_CONFIG_INIT(_Out_ PUCX_ROOTHUB_CONFIG C)
@@ -108,14 +175,139 @@ typedef VOID (NTAPI *PFN_UCXROOTHUBPORTCHANGED)(_In_ UCXROOTHUB);
 
 /* ---- USB device ---------------------------------------------------------- */
 
-typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ENABLE)(_In_ UCXCONTROLLER, _In_ UCXUSBDEVICE);
-typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ADDRESS)(_In_ UCXCONTROLLER, _In_ UCXUSBDEVICE);
+/*
+ * Device callbacks (M3 step 2). All synchronous, PASSIVE_LEVEL, called by the
+ * class library on behalf of the hub driver, one at a time per device:
+ *   Enable:  the port was reset by the hub; take a slot for it. The client
+ *            reports the port's negotiated speed and the default EP0 packet size.
+ *   Address: assign the USB address (xHCI: Address Device); report it.
+ *   DefaultEndpointAdd: create the default control endpoint object
+ *            (UcxEndpointCreate on the init handed in) and its transfer callback.
+ *   UpdateDefaultEndpoint: the device descriptor named a different EP0 size.
+ *   Disable: the device is gone or failed; release the slot.
+ */
+typedef struct _UCX_USBDEVICE_ENABLE_INFO {
+    ULONG Size;
+    USHORT PortNumber;              /* in: the port on its hub */
+    USHORT Reserved;
+    USB_DEVICE_SPEED Speed;         /* out (in when Path.BehindHub: the hub's port status said it) */
+    ULONG MaxPacketSize0;           /* out: 8 / 64 / 512 */
+    UCX_USBDEVICE_PATH Path;        /* in (M3 step 4b) */
+} UCX_USBDEVICE_ENABLE_INFO, *PUCX_USBDEVICE_ENABLE_INFO;
+
+/*
+ * A configured device that is a hub (M3 step 4b): the controller's slot must
+ * say so (xHCI Hub, Number of Ports, TT Think Time, Multi-TT) before devices
+ * behind it can be addressed. Sent after the hub's SELECT_CONFIGURATION, and
+ * again when the hub driver reports the transaction-translator count.
+ */
+typedef struct _UCX_USBDEVICE_HUB_INFO {
+    ULONG Size;
+    UCHAR NumberOfPorts;
+    UCHAR TtThinkTime;              /* wHubCharacteristics bits 5..6 (USB 2 hubs) */
+    BOOLEAN MultiTt;
+    UCHAR Reserved;
+} UCX_USBDEVICE_HUB_INFO, *PUCX_USBDEVICE_HUB_INFO;
+
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_HUB_INFO)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ PUCX_USBDEVICE_HUB_INFO);
+
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ENABLE)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _Inout_ PUCX_USBDEVICE_ENABLE_INFO);
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ADDRESS)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _Out_ PUSHORT DeviceAddress);
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_DEFAULT_ENDPOINT_ADD)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ ULONG MaxPacketSize0, _Inout_ PUCXENDPOINT_INIT);
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_UPDATE_DEFAULT_ENDPOINT)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ ULONG MaxPacketSize0);
+typedef VOID (NTAPI *PFN_UCX_USBDEVICE_DISABLE)(_In_ UCXCONTROLLER, _In_ UCXUSBDEVICE);
+
+/*
+ * Configured endpoints (M3 step 3). SELECT_CONFIGURATION / SELECT_INTERFACE
+ * from a class driver become: one EvtUsbDeviceEndpointAdd per endpoint of the
+ * new setting (the client creates the endpoint object with UcxEndpointCreate,
+ * its callbacks and the WDF queue its transfers arrive on), then one
+ * EvtUsbDeviceEndpointsConfigure naming the endpoints to enable and to
+ * disable (xHCI: Configure Endpoint). The library then sends SET_CONFIGURATION
+ * or SET_INTERFACE to the device and deletes the disabled endpoint objects.
+ * Both are synchronous, PASSIVE_LEVEL, one at a time per device.
+ */
+typedef struct _UCX_ENDPOINT_INFO {
+    ULONG Size;
+    USB_ENDPOINT_DESCRIPTOR Descriptor;
+    UCHAR Reserved0;
+    USB_SUPERSPEED_ENDPOINT_COMPANION_DESCRIPTOR Companion;   /* valid when HasCompanion */
+    BOOLEAN HasCompanion;
+    UCHAR InterfaceNumber;
+    UCHAR AlternateSetting;
+    UCHAR Reserved1;
+    ULONG MaximumTransferSize;      /* the class driver's limit for one transfer on the pipe */
+} UCX_ENDPOINT_INFO, *PUCX_ENDPOINT_INFO;
+
+typedef enum _UCX_ENDPOINTS_CONFIGURE_TYPE {
+    UcxEndpointsConfigureConfiguration = 1,   /* a new configuration (ConfigurationValue) */
+    UcxEndpointsConfigureInterface,           /* an alternate setting of one interface */
+    UcxEndpointsConfigureDisableAll           /* back to unconfigured: every endpoint goes */
+} UCX_ENDPOINTS_CONFIGURE_TYPE;
+
+typedef struct _UCX_ENDPOINTS_CONFIGURE {
+    ULONG Size;
+    UCX_ENDPOINTS_CONFIGURE_TYPE Type;
+    UCHAR ConfigurationValue;
+    UCHAR InterfaceNumber;
+    UCHAR AlternateSetting;
+    UCHAR Reserved;
+    ULONG EnableCount;
+    UCXENDPOINT *EndpointsToEnable;
+    ULONG DisableCount;
+    UCXENDPOINT *EndpointsToDisable;
+} UCX_ENDPOINTS_CONFIGURE, *PUCX_ENDPOINTS_CONFIGURE;
+
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ENDPOINT_ADD)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ PUCX_ENDPOINT_INFO, _Inout_ PUCXENDPOINT_INIT);
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ENDPOINTS_CONFIGURE)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ PUCX_ENDPOINTS_CONFIGURE);
 
 typedef struct _UCX_USBDEVICE_EVENT_CALLBACKS {
     ULONG Size;
-    PFN_UCX_USBDEVICE_ENABLE   EvtUsbDeviceEnable;
-    PFN_UCX_USBDEVICE_ADDRESS  EvtUsbDeviceAddress;
+    PFN_UCX_USBDEVICE_ENABLE                   EvtUsbDeviceEnable;
+    PFN_UCX_USBDEVICE_ADDRESS                  EvtUsbDeviceAddress;
+    PFN_UCX_USBDEVICE_DEFAULT_ENDPOINT_ADD     EvtUsbDeviceDefaultEndpointAdd;
+    PFN_UCX_USBDEVICE_UPDATE_DEFAULT_ENDPOINT  EvtUsbDeviceUpdateDefaultEndpoint;
+    PFN_UCX_USBDEVICE_DISABLE                  EvtUsbDeviceDisable;
+    PFN_UCX_USBDEVICE_ENDPOINT_ADD             EvtUsbDeviceEndpointAdd;          /* M3 step 3 */
+    PFN_UCX_USBDEVICE_ENDPOINTS_CONFIGURE      EvtUsbDeviceEndpointsConfigure;   /* M3 step 3 */
+    PFN_UCX_USBDEVICE_HUB_INFO                 EvtUsbDeviceHubInfo;              /* M3 step 4b */
 } UCX_USBDEVICE_EVENT_CALLBACKS, *PUCX_USBDEVICE_EVENT_CALLBACKS;
+
+FORCEINLINE VOID UCX_USBDEVICE_EVENT_CALLBACKS_INIT(_Out_ PUCX_USBDEVICE_EVENT_CALLBACKS C)
+{ RtlZeroMemory(C, sizeof(*C)); C->Size = sizeof(*C); }
+
+/*
+ * A transfer the class library hands to an endpoint (M3 step 2: control
+ * transfers, synchronously). Buffer or Mdl names the caller's memory; the
+ * client reads or writes at most Length bytes of it and reports Transferred
+ * and the USBD status (STALL, device not responding, ...) besides the NTSTATUS.
+ */
+typedef enum _UCX_TRANSFER_TYPE {
+    UcxTransferControl = 0,
+    UcxTransferBulk,
+    UcxTransferInterrupt
+} UCX_TRANSFER_TYPE;
+
+typedef struct _UCX_TRANSFER {
+    ULONG Size;
+    UCX_TRANSFER_TYPE Type;
+    USB_DEFAULT_PIPE_SETUP_PACKET SetupPacket;   /* control only */
+    BOOLEAN DataIn;
+    ULONG Length;
+    PVOID Buffer;
+    PMDL Mdl;
+    ULONG Transferred;              /* out */
+    USBD_STATUS UsbdStatus;         /* out */
+} UCX_TRANSFER, *PUCX_TRANSFER;
+
+#define UCX_CONTROL_MAX_TRANSFER 4096   /* one page per control transfer in M3 */
 
 typedef NTSTATUS (NTAPI *PFN_UCXUSBDEVICECREATE)(
     _In_ UCXCONTROLLER, _Inout_ PUCXUSBDEVICE_INIT *, _In_opt_ PWDF_OBJECT_ATTRIBUTES, _Out_ UCXUSBDEVICE *);
@@ -135,13 +327,38 @@ typedef VOID (NTAPI *PFN_UCXUSBDEVICEREMOTEWAKENOTIFICATION)(_In_ UCXUSBDEVICE, 
 typedef VOID (NTAPI *PFN_UCX_ENDPOINT_PURGE)(_In_ UCXENDPOINT);
 typedef VOID (NTAPI *PFN_UCX_ENDPOINT_START)(_In_ UCXENDPOINT);
 typedef VOID (NTAPI *PFN_UCX_ENDPOINT_RESET)(_In_ UCXENDPOINT, _In_ WDFREQUEST);
+/* M3 step 2: one control transfer, synchronous at PASSIVE_LEVEL, serialized by the client */
+typedef NTSTATUS (NTAPI *PFN_UCX_ENDPOINT_CONTROL_TRANSFER)(_In_ UCXENDPOINT, _Inout_ PUCX_TRANSFER);
+
+/*
+ * M3 step 3, configured endpoints. Bulk and interrupt transfers are WDFREQUESTs
+ * (IOCTL_INTERNAL_USB_SUBMIT_URB, URB_FUNCTION_BULK_OR_INTERRUPT_TRANSFER) the
+ * library forwards to the WDF queue the client registered with
+ * UcxEndpointSetWdfIoQueue after checking the pipe, the direction, the length
+ * and the buffer; TransferBufferMDL is always set when the client sees the URB.
+ * The client completes each one with UcxEndpointCompleteTransfer.
+ *   Abort:        stop the endpoint and complete every transfer it holds as
+ *                 canceled (ABORT_PIPE, unconfigure, device removal).
+ *   ResetHalted:  the host side of a pipe reset after a STALL (xHCI: Reset
+ *                 Endpoint + Set TR Dequeue Pointer); the library sends
+ *                 CLEAR_FEATURE(ENDPOINT_HALT) itself when the URB asks for it.
+ * Both synchronous at PASSIVE_LEVEL.
+ */
+typedef NTSTATUS (NTAPI *PFN_UCX_ENDPOINT_ABORT)(_In_ UCXENDPOINT);
+typedef NTSTATUS (NTAPI *PFN_UCX_ENDPOINT_RESET_HALTED)(_In_ UCXENDPOINT);
 
 typedef struct _UCX_ENDPOINT_EVENT_CALLBACKS {
     ULONG Size;
     PFN_UCX_ENDPOINT_PURGE  EvtEndpointPurge;
     PFN_UCX_ENDPOINT_START  EvtEndpointStart;
     PFN_UCX_ENDPOINT_RESET  EvtEndpointReset;
+    PFN_UCX_ENDPOINT_CONTROL_TRANSFER EvtEndpointControlTransfer;   /* M3 step 2 */
+    PFN_UCX_ENDPOINT_ABORT            EvtEndpointAbort;             /* M3 step 3 */
+    PFN_UCX_ENDPOINT_RESET_HALTED     EvtEndpointResetHalted;       /* M3 step 3 */
 } UCX_ENDPOINT_EVENT_CALLBACKS, *PUCX_ENDPOINT_EVENT_CALLBACKS;
+
+FORCEINLINE VOID UCX_ENDPOINT_EVENT_CALLBACKS_INIT(_Out_ PUCX_ENDPOINT_EVENT_CALLBACKS C)
+{ RtlZeroMemory(C, sizeof(*C)); C->Size = sizeof(*C); }
 
 typedef NTSTATUS (NTAPI *PFN_UCXENDPOINTCREATE)(
     _In_ UCXUSBDEVICE, _Inout_ PUCXENDPOINT_INIT *, _In_opt_ PWDF_OBJECT_ATTRIBUTES, _Out_ UCXENDPOINT *);
@@ -161,3 +378,50 @@ typedef VOID (NTAPI *PFN_UCXENDPOINTNEEDTOCANCELTRANSFERS)(_In_ UCXENDPOINT);
     ((PFN_UCXENDPOINTPURGECOMPLETE)UcxClassFunctions[UcxEndpointPurgeCompleteIndex])((e))
 #define UcxEndpointNeedToCancelTransfers(e) \
     ((PFN_UCXENDPOINTNEEDTOCANCELTRANSFERS)UcxClassFunctions[UcxEndpointNeedToCancelTransfersIndex])((e))
+
+/* M3 step 3: completes a forwarded bulk/interrupt transfer request: URB status,
+ * TransferBufferLength = Transferred, the library's own MDL released, the
+ * WDFREQUEST completed. Any IRQL <= DISPATCH_LEVEL. */
+typedef VOID (NTAPI *PFN_UCXENDPOINTCOMPLETETRANSFER)(
+    _In_ UCXENDPOINT, _In_ WDFREQUEST, _In_ USBD_STATUS, _In_ ULONG Transferred);
+#define UcxEndpointCompleteTransfer(e,r,s,n) \
+    ((PFN_UCXENDPOINTCOMPLETETRANSFER)UcxClassFunctions[UcxEndpointCompleteTransferIndex])((e),(r),(s),(n))
+
+/* The MDL of a forwarded transfer: the caller's, or the one the library built
+ * for a plain buffer pointer (the URB itself is never edited). NULL for a
+ * zero-length transfer. */
+typedef PMDL (NTAPI *PFN_UCXREQUESTGETTRANSFERMDL)(_In_ WDFREQUEST);
+#define UcxRequestGetTransferMdl(r) \
+    ((PFN_UCXREQUESTGETTRANSFERMDL)UcxClassFunctions[UcxRequestGetTransferMdlIndex])((r))
+
+/* Largest bulk/interrupt transfer the library forwards in M3 (TRB count bound) */
+#define UCX_BULK_MAX_TRANSFER (256 * 1024)
+
+/* ---- URB access helpers (M3) --------------------------------------------- */
+
+/*
+ * The URB of an IOCTL_INTERNAL_USB_SUBMIT_URB request handed to a client
+ * callback. The class library has checked it is non-NULL and at least a header
+ * long before the callback runs.
+ */
+FORCEINLINE PVOID UcxRequestGetUrb(_In_ WDFREQUEST Request)
+{
+    PIRP Irp = WdfRequestWdmGetIrp(Request);
+    return IoGetCurrentIrpStackLocation(Irp)->Parameters.Others.Argument1;
+}
+
+/*
+ * The system address of a transfer buffer given as a pointer or as an MDL.
+ * Returns NULL for a zero length or an MDL that cannot be mapped; a caller
+ * must never read or write more than Length bytes.
+ */
+FORCEINLINE PVOID UcxUrbTransferBuffer(_In_opt_ PVOID Buffer, _In_opt_ PMDL Mdl, _In_ ULONG Length)
+{
+    if (Length == 0)
+        return NULL;
+    if (Buffer != NULL)
+        return Buffer;
+    if (Mdl != NULL)
+        return MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+    return NULL;
+}
