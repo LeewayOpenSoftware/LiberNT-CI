@@ -10,7 +10,7 @@
 #define NDEBUG
 #include <debug.h>
 
-typedef int (NTAPI *PRTL_CONTEXT_COMPARE)(PVOID Context, PCVOID Element1, PCVOID Element2);
+typedef int (NTAPI *PRTL_CONTEXT_COMPARE)(PVOID Context, PVOID Element1, PVOID Element2);
 
 #define RTL_EINVAL 22
 
@@ -112,15 +112,15 @@ qsort_s(IN PVOID Base,
 
 INT
 NTAPI
-bsearch_s(IN PCVOID Key,
-          IN PCVOID Base,
+bsearch_s(IN PVOID Key,
+          IN PVOID Base,
           IN SIZE_T NumberOfElements,
           IN SIZE_T ElementSize,
           IN PRTL_CONTEXT_COMPARE CompareFunction,
           IN PVOID Context,
           OUT PVOID *Result)
 {
-    PCUCHAR Low, High;
+    PUCHAR Low, High;
 
     if (Result != NULL)
         *Result = NULL;
@@ -128,16 +128,16 @@ bsearch_s(IN PCVOID Key,
         (ElementSize == 0) || ((Base == NULL) && (NumberOfElements != 0)))
         return RTL_EINVAL;
 
-    Low = Base;
-    High = (PCUCHAR)Base + NumberOfElements * ElementSize;
+    Low = (PUCHAR)Base;
+    High = (PUCHAR)Base + NumberOfElements * ElementSize;
     while (Low < High)
     {
-        PCUCHAR Middle = Low + ((((High - Low) / ElementSize) / 2)) * ElementSize;
+        PUCHAR Middle = Low + ((((High - Low) / ElementSize) / 2)) * ElementSize;
         int Compare = CompareFunction(Context, Key, Middle);
 
         if (Compare == 0)
         {
-            *Result = (PVOID)Middle;
+            *Result = Middle;
             return 0;
         }
         if (Compare < 0)
