@@ -409,6 +409,7 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlIsProcessorFeaturePresentKM.c
     rtl/RtlHashTableKM.c
     rtl/RtlQsortKM.c
+    rtl/RtlCapabilityKM.c
     rtl/RtlTimeKM.c
     rtl/RtlIsValidOemCharacter.c
     rtl/RtlModern.c

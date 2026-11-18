@@ -185,9 +185,74 @@ TestHashTableExpand(VOID)
     ExFreePoolWithTag(Entries, 'tHmK');
 }
 
+static
+VOID
+TestHashTableExStrong(VOID)
+{
+    PRTL_DYNAMIC_HASH_TABLE HashTable = NULL;
+    KMT_HASH_ENTRY Entries[16];
+    RTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator;
+    PRTL_DYNAMIC_HASH_TABLE_ENTRY Found;
+    BOOLEAN Ok;
+    ULONG i, Seen;
+
+    Ok = RtlCreateHashTableEx(&HashTable, 256, 0, 0);
+    ok_bool_true(Ok, "RtlCreateHashTableEx");
+    if (!Ok || HashTable == NULL) return;
+    ok_eq_ulong(HashTable->TableSize, 256UL);
+    ok(HashTable->Flags & RTL_HASH_ALLOCATED_HEADER, "header not marked allocated
+");
+
+    for (i = 0; i < 16; i++)
+    {
+        Entries[i].Value = i;
+        Ok = RtlInsertEntryHashTable(HashTable, &Entries[i].HashEntry, (ULONG_PTR)(i * 5 + 1), NULL);
+        ok_bool_true(Ok, "insert");
+    }
+
+    Ok = RtlInitStrongEnumerationHashTable(HashTable, &Enumerator);
+    ok_bool_true(Ok, "init strong enumeration");
+    Seen = 0;
+    while ((Found = RtlStronglyEnumerateEntryHashTable(HashTable, &Enumerator)) != NULL)
+    {
+        Seen++;
+        if (Seen > 16) break;
+    }
+    ok_eq_ulong(Seen, 16UL);
+    ok_eq_ulong(HashTable->NumEnumerators, 0UL);
+    RtlEndStrongEnumerationHashTable(HashTable, &Enumerator);
+
+    HashTable = NULL;
+    Ok = RtlCreateHashTableEx(&HashTable, 0, 0, 0);
+    ok_bool_false(Ok, "zero initial size");
+    Ok = RtlCreateHashTableEx(&HashTable, 96, 0, 0);
+    ok_bool_false(Ok, "below range initial size");
+    Ok = RtlCreateHashTableEx(&HashTable, 192, 0, 0);
+    ok_bool_false(Ok, "non power of two initial size");
+    Ok = RtlCreateHashTableEx(&HashTable, 8388608, 0, 0);
+    ok_bool_false(Ok, "oversized initial size");
+    Ok = RtlCreateHashTableEx(&HashTable, 256, 1, 0);
+    ok_bool_false(Ok, "nonzero shift");
+    Ok = RtlCreateHashTableEx(&HashTable, 256, 0, 1);
+    ok_bool_false(Ok, "nonzero flags");
+    ok_eq_pointer(HashTable, NULL);
+    if (HashTable != NULL)
+    {
+        RtlDeleteHashTable(HashTable);
+        return;
+    }
+
+    HashTable = NULL;
+    Ok = RtlCreateHashTableEx(&HashTable, 4194304, 0, 0);
+    ok_bool_true(Ok, "largest power of two");
+    if (Ok && HashTable != NULL)
+        RtlDeleteHashTable(HashTable);
+}
+
 START_TEST(RtlHashTableKM)
 {
     TestHashTableBasic();
     TestHashTableEnum();
     TestHashTableExpand();
+    TestHashTableExStrong();
 }
