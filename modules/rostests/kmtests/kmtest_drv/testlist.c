@@ -316,6 +316,7 @@ KMT_TESTFUNC Test_CmBootFlush;
 KMT_TESTFUNC Test_CmCallbacks;
 KMT_TESTFUNC Test_CmTransactions;
 KMT_TESTFUNC Test_CmKeyKM;
+KMT_TESTFUNC Test_CmRestoreKey;
 KMT_TESTFUNC Test_EtwProviderKM;
 KMT_TESTFUNC Test_EtwRegisterKM;
 KMT_TESTFUNC Test_EtwSessionKM;
@@ -713,6 +714,7 @@ const KMT_TEST TestList[] =
     { "CmCallbacks",                        Test_CmCallbacks },
     { "CmTransactions",                     Test_CmTransactions },
     { "CmKeyKM",                            Test_CmKeyKM },
+    { "CmRestoreKey",                       Test_CmRestoreKey },
     { "EtwProviderKM",                      Test_EtwProviderKM },
     { "EtwRegisterKM",                      Test_EtwRegisterKM },
     { "EtwSessionKM",                       Test_EtwSessionKM },
