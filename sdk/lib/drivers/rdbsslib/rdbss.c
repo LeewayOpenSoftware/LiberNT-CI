@@ -336,6 +336,11 @@ RxLowIoIoCtlShellCompletion(
     PRX_CONTEXT RxContext);
 
 NTSTATUS
+NTAPI
+RxLowIoLockControlShellCompletion(
+    PRX_CONTEXT RxContext);
+
+NTSTATUS
 RxLowIoReadShell(
     PRX_CONTEXT RxContext);
 
@@ -2893,8 +2898,67 @@ NTAPI
 RxCommonLockControl(
     PRX_CONTEXT Context)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFCB Fcb;
+    PFOBX Fobx;
+    PIO_STACK_LOCATION Stack;
+    PLOWIO_CONTEXT LowIoContext;
+
+    PAGED_CODE();
+
+    Fcb = (PFCB)Context->pFcb;
+    Fobx = (PFOBX)Context->pFobx;
+    Stack = Context->CurrentIrpSp;
+    LowIoContext = &Context->LowIoContext;
+    DPRINT("RxCommonLockControl(%p), FCB: %p, FOBX: %p, Minor: %x\n", Context, Fcb, Fobx, Stack->MinorFunction);
+
+    if (NodeType(Fcb) != RDBSS_NTC_STORAGE_TYPE_FILE || Fobx == NULL)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (!BooleanFlagOn(Context->Flags, RX_CONTEXT_FLAG_WAIT))
+    {
+        return RxFsdPostRequest(Context);
+    }
+
+    switch (Stack->MinorFunction)
+    {
+        case IRP_MN_LOCK:
+            RxInitializeLowIoContext(LowIoContext,
+                                     BooleanFlagOn(Stack->Flags, SL_EXCLUSIVE_LOCK) ? LOWIO_OP_EXCLUSIVELOCK : LOWIO_OP_SHAREDLOCK);
+            LowIoContext->ParamsFor.Locks.Flags = Stack->Flags & SL_FAIL_IMMEDIATELY;
+            break;
+
+        case IRP_MN_UNLOCK_SINGLE:
+            RxInitializeLowIoContext(LowIoContext, LOWIO_OP_UNLOCK);
+            LowIoContext->ParamsFor.Locks.Flags = 0;
+            break;
+
+        case IRP_MN_UNLOCK_ALL:
+            RxInitializeLowIoContext(LowIoContext, LOWIO_OP_UNLOCK_MULTIPLE);
+            LowIoContext->ParamsFor.Locks.LockList = NULL;
+            LowIoContext->ParamsFor.Locks.Flags = 0;
+            LowIoContext->ParamsFor.Locks.ByteOffset = 0;
+            LowIoContext->ParamsFor.Locks.Key = 0;
+            return RxLowIoLockControlShell(Context);
+
+        case IRP_MN_UNLOCK_ALL_BY_KEY:
+            RxInitializeLowIoContext(LowIoContext, LOWIO_OP_UNLOCK_MULTIPLE);
+            LowIoContext->ParamsFor.Locks.LockList = NULL;
+            LowIoContext->ParamsFor.Locks.Flags = SL_KEY_SPECIFIED;
+            LowIoContext->ParamsFor.Locks.ByteOffset = 0;
+            LowIoContext->ParamsFor.Locks.Key = Stack->Parameters.LockControl.Key;
+            return RxLowIoLockControlShell(Context);
+
+        default:
+            return STATUS_INVALID_DEVICE_REQUEST;
+    }
+
+    LowIoContext->ParamsFor.Locks.ByteOffset = Stack->Parameters.LockControl.ByteOffset.QuadPart;
+    LowIoContext->ParamsFor.Locks.Length = Stack->Parameters.LockControl.Length->QuadPart;
+    LowIoContext->ParamsFor.Locks.Key = Stack->Parameters.LockControl.Key;
+
+    return RxLowIoLockControlShell(Context);
 }
 
 NTSTATUS
@@ -7212,8 +7276,22 @@ NTSTATUS
 RxLowIoLockControlShell(
     IN PRX_CONTEXT RxContext)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PAGED_CODE();
+
+    return RxLowIoSubmit(RxContext, RxLowIoLockControlShellCompletion);
+}
+
+NTSTATUS
+NTAPI
+RxLowIoLockControlShellCompletion(
+    PRX_CONTEXT RxContext)
+{
+    PAGED_CODE();
+
+    RxContext->CurrentIrp->IoStatus.Status = RxContext->IoStatusBlock.Status;
+    RxContext->CurrentIrp->IoStatus.Information = 0;
+
+    return RxContext->IoStatusBlock.Status;
 }
 
 /*
@@ -8864,8 +8942,53 @@ NTSTATUS
 RxSetAllocationInfo(
     PRX_CONTEXT RxContext)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFCB Fcb;
+    PFILE_ALLOCATION_INFORMATION AllocInfo;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Fcb = (PFCB)RxContext->pFcb;
+    AllocInfo = RxContext->CurrentIrp->AssociatedIrp.SystemBuffer;
+    if (AllocInfo == NULL || RxContext->CurrentIrpSp->Parameters.SetFile.Length < sizeof(FILE_ALLOCATION_INFORMATION))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if (AllocInfo->AllocationSize.QuadPart < 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (NodeType(Fcb) == RDBSS_NTC_STORAGE_TYPE_DIRECTORY)
+    {
+        return STATUS_FILE_IS_A_DIRECTORY;
+    }
+
+    /* Shrinking the allocation below the file size truncates the file: a mapped file cannot be truncated */
+    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.FileSize.QuadPart &&
+        !MmCanFileBeTruncated(&Fcb->NonPaged->SectionObjectPointers, &AllocInfo->AllocationSize))
+    {
+        return STATUS_USER_MAPPED_FILE;
+    }
+
+    /* The mini-rdr does the real work */
+    Status = RxpSetInfoMiniRdr(RxContext, FileAllocationInformation);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    /* Keep the FCB in line with what the server now has (the caller holds the FCB exclusive) */
+    Fcb->Header.AllocationSize = AllocInfo->AllocationSize;
+    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.FileSize.QuadPart)
+    {
+        Fcb->Header.FileSize = AllocInfo->AllocationSize;
+    }
+    if (AllocInfo->AllocationSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
+    {
+        Fcb->Header.ValidDataLength = AllocInfo->AllocationSize;
+    }
+
+    return STATUS_SUCCESS;
 }
 
 /*
@@ -9018,8 +9141,71 @@ NTSTATUS
 RxSetEndOfFileInfo(
     PRX_CONTEXT RxContext)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PFCB Fcb;
+    PFILE_OBJECT FileObject;
+    PFILE_END_OF_FILE_INFORMATION EofInfo;
+    LARGE_INTEGER NewSize;
+    NTSTATUS Status;
+
+    PAGED_CODE();
+
+    Fcb = (PFCB)RxContext->pFcb;
+    FileObject = RxContext->CurrentIrpSp->FileObject;
+    EofInfo = RxContext->CurrentIrp->AssociatedIrp.SystemBuffer;
+    if (EofInfo == NULL || RxContext->CurrentIrpSp->Parameters.SetFile.Length < sizeof(FILE_END_OF_FILE_INFORMATION))
+    {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    NewSize = EofInfo->EndOfFile;
+    if (NewSize.QuadPart < 0)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if (NodeType(Fcb) == RDBSS_NTC_STORAGE_TYPE_DIRECTORY)
+    {
+        return STATUS_FILE_IS_A_DIRECTORY;
+    }
+
+    /* A mapped file cannot be truncated */
+    if (NewSize.QuadPart < Fcb->Header.FileSize.QuadPart &&
+        !MmCanFileBeTruncated(&Fcb->NonPaged->SectionObjectPointers, &NewSize))
+    {
+        return STATUS_USER_MAPPED_FILE;
+    }
+
+    /* The mini-rdr does the real work */
+    Status = RxpSetInfoMiniRdr(RxContext, FileEndOfFileInformation);
+    if (!NT_SUCCESS(Status))
+    {
+        return Status;
+    }
+
+    /* Keep the FCB in line with what the server now has (the caller holds the FCB exclusive) */
+    if (NewSize.QuadPart < Fcb->Header.FileSize.QuadPart &&
+        Fcb->NonPaged->SectionObjectPointers.DataSectionObject != NULL)
+    {
+        CcPurgeCacheSection(&Fcb->NonPaged->SectionObjectPointers, &NewSize, 0, FALSE);
+    }
+    Fcb->Header.FileSize = NewSize;
+    if (NewSize.QuadPart < Fcb->Header.ValidDataLength.QuadPart)
+    {
+        Fcb->Header.ValidDataLength = NewSize;
+    }
+    if (NewSize.QuadPart > Fcb->Header.AllocationSize.QuadPart)
+    {
+        Fcb->Header.AllocationSize = NewSize;
+    }
+    if (FileObject != NULL && FileObject->PrivateCacheMap != NULL)
+    {
+        CC_FILE_SIZES Sizes;
+
+        Sizes.AllocationSize = Fcb->Header.AllocationSize;
+        Sizes.FileSize = Fcb->Header.FileSize;
+        Sizes.ValidDataLength = Fcb->Header.ValidDataLength;
+        CcSetFileSizes(FileObject, &Sizes);
+    }
+
+    return STATUS_SUCCESS;
 }
 
 NTSTATUS
