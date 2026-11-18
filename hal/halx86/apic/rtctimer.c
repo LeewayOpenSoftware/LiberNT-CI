@@ -42,10 +42,12 @@ static LONG HalpClockIpiTickOffset;
  */
 #define HALP_CLOCK_SOONEST          100
 #define HALP_CLOCK_DEADLINE_SLACK   500
+#define HALP_CLOCK_RECHECK          5000
 static ULONGLONG HalpClockDeadline;
 static ULONG HalpClockCount;
 static ULONG HalpClockCountTime;
 static ULONG HalpClockCountBase;
+static ULONG HalpClockPendingIncrement;
 
 BOOLEAN HalpApicTimerClock = FALSE;
 static ULONG64 HalpApicTimerFrequency;
@@ -285,7 +287,7 @@ HalpAimClockTick(ULONGLONG Now, BOOLEAN BetweenTicks)
 {
     ULONG Target = HalpNextClockTick(Now);
     ULONG Irr = APIC_IRR + 0x10 * (APIC_CLOCK_VECTOR / 32);
-    ULONG Elapsed;
+    ULONG Elapsed, Previous;
 
     if (Target < HalpCurrentTimeIncrement)
     {
@@ -302,12 +304,26 @@ HalpAimClockTick(ULONGLONG Now, BOOLEAN BetweenTicks)
     if (BetweenTicks && (ApicRead(Irr) & (1UL << (APIC_CLOCK_VECTOR % 32))))
         return;
 
+    Previous = HalpClockCountBase + HalpClockCountTime;
+
     if (Target >= HalpCurrentTimeIncrement && !BetweenTicks)
         HalpRestartApicTimerClock(Elapsed, HalpCurrentTimeIncrement);
     else if (Target > Elapsed)
         HalpRestartApicTimerClock(Elapsed, Target - Elapsed);
     else
         HalpRestartApicTimerClock(Elapsed, HALP_CLOCK_SOONEST);
+
+    /*
+     * The count can run out between the look at the pending tick above and the
+     * write that replaced it. The tick then pending ended the count before
+     * this one, and has to report that count and not one that has only begun.
+     * A count too short to tell apart from one that ran out by itself is left.
+     */
+    if (BetweenTicks && HalpClockCountTime >= HALP_CLOCK_RECHECK &&
+        (ApicRead(Irr) & (1UL << (APIC_CLOCK_VECTOR % 32))))
+    {
+        HalpClockPendingIncrement = Previous;
+    }
 }
 
 VOID
@@ -482,6 +498,12 @@ HalpClockInterruptHandler(IN PKTRAP_FRAME TrapFrame)
         /* The count that ran out says how long this tick took. The timer has
          * started it over, so nothing of the next tick is spent yet. */
         LastIncrement = HalpClockCountBase + HalpClockCountTime;
+        if (HalpClockPendingIncrement != 0)
+        {
+            /* This tick ended a count that was replaced just as it ran out */
+            LastIncrement = HalpClockPendingIncrement;
+            HalpClockPendingIncrement = 0;
+        }
         HalpClockCountBase = 0;
     }
 
