@@ -10,9 +10,6 @@
 #define NDEBUG
 #include <debug.h>
 
-extern ULONG CcFastMdlReadWait;
-VOID NTAPI FsRtlIncrementCcFastMdlReadWait(VOID);
-
 START_TEST(FsRtlVolumeNotifyKM)
 {
     ULONG Before, After;
