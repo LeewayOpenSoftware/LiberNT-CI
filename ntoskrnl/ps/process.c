@@ -126,9 +126,9 @@ PsGetNextProcessThread(IN PEPROCESS Process,
     return FoundThread;
 }
 
+static
 PEPROCESS
-NTAPI
-PsGetNextProcess(IN PEPROCESS OldProcess)
+PsGetNextProcessEx(IN PEPROCESS OldProcess, IN BOOLEAN Reverse)
 {
     PLIST_ENTRY Entry;
     PEPROCESS FoundProcess = NULL;
@@ -143,12 +143,12 @@ PsGetNextProcess(IN PEPROCESS OldProcess)
     if (OldProcess)
     {
         /* Start where we left off */
-        Entry = OldProcess->ActiveProcessLinks.Flink;
+        Entry = Reverse ? OldProcess->ActiveProcessLinks.Blink : OldProcess->ActiveProcessLinks.Flink;
     }
     else
     {
         /* Start at the beginning */
-        Entry = PsActiveProcessHead.Flink;
+        Entry = Reverse ? PsActiveProcessHead.Blink : PsActiveProcessHead.Flink;
     }
 
     /* Loop the process list */
@@ -162,7 +162,7 @@ PsGetNextProcess(IN PEPROCESS OldProcess)
 
         /* Nothing found, keep trying */
         FoundProcess = NULL;
-        Entry = Entry->Flink;
+        Entry = Reverse ? Entry->Blink : Entry->Flink;
     }
 
     /* Release the lock */
@@ -172,6 +172,13 @@ PsGetNextProcess(IN PEPROCESS OldProcess)
     /* Dereference the Process we had referenced earlier */
     if (OldProcess) ObDereferenceObject(OldProcess);
     return FoundProcess;
+}
+
+PEPROCESS
+NTAPI
+PsGetNextProcess(IN PEPROCESS OldProcess)
+{
+    return PsGetNextProcessEx(OldProcess, FALSE);
 }
 
 KPRIORITY
@@ -4109,6 +4116,89 @@ NTAPI
 PsUnEstablishWin32Callouts(VOID)
 {
     KeBugCheckEx(0x1FC, 0, 0, 0, 0);
+}
+
+/*
+ * Open the first accessible process after (or before) ProcessHandle in the
+ * active process list; the iterator consumes its previous-process reference.
+ */
+NTSTATUS
+NTAPI
+NtGetNextProcess(
+    _In_opt_ HANDLE ProcessHandle,
+    _In_ ACCESS_MASK DesiredAccess,
+    _In_ ULONG HandleAttributes,
+    _In_ ULONG Flags,
+    _Out_ PHANDLE NewProcessHandle)
+{
+    KPROCESSOR_MODE PreviousMode = ExGetPreviousMode();
+    PEPROCESS Process = NULL;
+    HANDLE Handle = NULL;
+    ACCESS_STATE AccessState;
+    AUX_ACCESS_DATA AuxData;
+    BOOLEAN Reverse;
+    NTSTATUS Status;
+    PAGED_CODE();
+
+    _SEH2_TRY
+    {
+        if (PreviousMode != KernelMode) ProbeForWriteHandle(NewProcessHandle);
+        *NewProcessHandle = NULL;
+    }
+    _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+    {
+        _SEH2_YIELD(return _SEH2_GetExceptionCode());
+    }
+    _SEH2_END;
+
+    if (Flags & ~PROCESS_GET_NEXT_FLAGS_PREVIOUS_PROCESS) return STATUS_INVALID_PARAMETER;
+    Reverse = BooleanFlagOn(Flags, PROCESS_GET_NEXT_FLAGS_PREVIOUS_PROCESS);
+
+    if (ProcessHandle)
+    {
+        Status = ObReferenceObjectByHandle(ProcessHandle, PROCESS_QUERY_INFORMATION, PsProcessType, PreviousMode, (PVOID *)&Process, NULL);
+        if (!NT_SUCCESS(Status)) return Status;
+    }
+
+    HandleAttributes = ObpValidateAttributes(HandleAttributes, PreviousMode);
+    Status = STATUS_NO_MORE_ENTRIES;
+    while ((Process = PsGetNextProcessEx(Process, Reverse)) != NULL)
+    {
+        Status = SeCreateAccessState(&AccessState, &AuxData, DesiredAccess, &PsProcessType->TypeInfo.GenericMapping);
+        if (!NT_SUCCESS(Status)) break;
+
+        if (SeSinglePrivilegeCheck(SeDebugPrivilege, PreviousMode))
+        {
+            if (AccessState.RemainingDesiredAccess & MAXIMUM_ALLOWED)
+                AccessState.PreviouslyGrantedAccess |= PROCESS_ALL_ACCESS;
+            else
+                AccessState.PreviouslyGrantedAccess |= AccessState.RemainingDesiredAccess;
+            AccessState.RemainingDesiredAccess = 0;
+        }
+
+        Status = ObOpenObjectByPointer(Process, HandleAttributes, &AccessState, 0, PsProcessType, PreviousMode, &Handle);
+        SeDeleteAccessState(&AccessState);
+        if (Status != STATUS_ACCESS_DENIED) break;
+        Status = STATUS_NO_MORE_ENTRIES;
+    }
+
+    if (Process) ObDereferenceObject(Process);
+
+    if (NT_SUCCESS(Status))
+    {
+        _SEH2_TRY
+        {
+            *NewProcessHandle = Handle;
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            Status = _SEH2_GetExceptionCode();
+            ObCloseHandle(Handle, PreviousMode);
+        }
+        _SEH2_END;
+    }
+
+    return Status;
 }
 
 /* EOF */

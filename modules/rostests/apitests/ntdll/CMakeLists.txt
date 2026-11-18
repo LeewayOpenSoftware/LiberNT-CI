@@ -100,6 +100,7 @@ list(APPEND SOURCE
     NtDuplicateToken.c
     NtFilterToken.c
     NtFreeVirtualMemory.c
+    NtGetNextProcess.c
     NtGetCurrentProcessorNumberEx.c
     NtImpersonateAnonymousToken.c
     NtLoadUnloadKey.c

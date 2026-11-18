@@ -436,6 +436,7 @@
     SVC_(AlpcImpersonateClientContainerOfPort, 3)
 #endif
 #if (NTDDI_VERSION >= NTDDI_VISTA)
+    SVC_(GetNextProcess, 5)
     SVC_(GetNextThread, 6)
 #endif
     SVC_(CreateWaitCompletionPacket, 3)
