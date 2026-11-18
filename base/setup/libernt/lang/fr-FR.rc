@@ -434,121 +434,13 @@ BEGIN
     IDS_UPGRADE_DONETITLE "LiberNT est mis à niveau"
 END
 
-IDD_UPDATECHECKPAGE DIALOGEX 0, 0, 290, 160
-STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD
-FONT 8, "MS Shell Dlg"
-BEGIN
-    LTEXT "", IDC_UPDATE_CHECKTEXT, 0, 40, 290, 40, SS_NOPREFIX
-    CONTROL "", IDC_UPDATE_CHECKPROGRESS, "msctls_progress32", PBS_MARQUEE | WS_CHILD | WS_BORDER, 0, 84, 290, 10
-END
 
-IDD_UPDATEPAGE DIALOGEX 0, 0, 290, 160
-STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD
-FONT 8, "MS Shell Dlg"
-BEGIN
-    LTEXT "Nouveautés :", IDC_STATIC, 0, 0, 290, 9
-    EDITTEXT IDC_UPDATE_NOTES, 0, 11, 290, 110, ES_MULTILINE | ES_READONLY | WS_VSCROLL | NOT WS_TABSTOP
-    LTEXT "", IDC_UPDATE_SIZE, 0, 129, 190, 9, SS_NOPREFIX
-    PUSHBUTTON "&Rappeler plus tard", IDC_UPDATE_LATER, 200, 126, 90, 14
-END
 
-IDD_UPDATEREADYPAGE DIALOGEX 0, 0, 290, 160
-STYLE DS_SHELLFONT | DS_CONTROL | WS_CHILD
-FONT 8, "MS Shell Dlg"
+
+STRINGTABLE
 BEGIN
-    LTEXT "", IDC_UPDATE_READYTEXT, 0, 0, 290, 110, SS_NOPREFIX
 END
 
 STRINGTABLE
 BEGIN
-    IDS_UPDATE_CHECKTITLE "LiberNT Update"
-    IDS_UPDATE_CHECKSUBTITLE "LiberNT recherche une version plus récente."
-    IDS_UPDATE_CHECKING "Recherche de mises à jour..."
-    IDS_UPDATE_UPTODATE "LiberNT est à jour (build %lu)."
-    IDS_UPDATE_CHECKFAILED "LiberNT n'a pas pu rechercher de mises à jour (erreur 0x%08lx). Vérifiez la connexion réseau et réessayez plus tard."
-    IDS_UPDATE_TITLE "Une mise à jour de LiberNT est disponible"
-    IDS_UPDATE_SUBTITLE "%s (mise à jour %lu)"
-    IDS_UPDATE_SIZE "Taille du téléchargement : %s"
-    IDS_UPDATE_DOWNLOADBTN "&Télécharger"
-    IDS_UPDATE_LATERBTN "Plus &tard"
-    IDS_UPDATE_DOWNLOADTITLE "Préparation de la mise à jour"
-    IDS_UPDATE_DOWNLOADSUBTITLE "Vous pouvez continuer à utiliser votre ordinateur pendant que LiberNT télécharge et prépare la mise à jour."
-    IDS_UPDATE_DOWNLOADING "Téléchargement de %s"
-    IDS_UPDATE_DOWNLOADED "%s sur %s"
-    IDS_UPDATE_VERIFYING "Vérification du téléchargement de %s"
-    IDS_UPDATE_EXTRACTING "Décompression de %s"
-    IDS_UPDATE_PREPARING "Préparation du redémarrage vers l'installation de %s"
-    IDS_UPDATE_STAGEFAILED "La mise à jour n'a pas pu être préparée (erreur 0x%08lx)."
-    IDS_UPDATE_READYTITLE "Redémarrez pour installer la mise à jour"
-    IDS_UPDATE_READYSUBTITLE "LiberNT installe la mise à jour pendant le redémarrage."
-    IDS_UPDATE_READYTEXT "%s est prête. Au redémarrage de votre ordinateur, LiberNT l'installe avant de démarrer, conserve vos fichiers, applications et paramètres, puis redémarre une nouvelle fois pour terminer. Cela prend quelques minutes.\n\nEnregistrez votre travail avant de redémarrer."
-    IDS_UPDATE_NOTIFYTITLE "Mise à jour de LiberNT disponible"
-    IDS_UPDATE_NOTIFYTEXT "%s est disponible. Sélectionnez cette notification pour voir les nouveautés et la télécharger."
-    IDS_UPDATE_NOTIFYSTAGED "%s est prête à être installée. Redémarrez votre ordinateur pour l'installer."
-    IDS_UPDATE_COMPLETETITLE "Finalisation de la mise à jour de LiberNT"
-    IDS_UPDATE_COMPLETESUBTITLE "Vos fichiers, applications et paramètres sont conservés. Votre ordinateur redémarre une fois l'opération terminée."
-    IDS_UPDATE_COMPLETE_REGISTRY "Mise à jour des paramètres système"
-    IDS_UPDATE_COMPLETE_COMPONENTS "Configuration des composants système"
-    IDS_UPDATE_COMPLETE_CLEANUP "Nettoyage"
-    IDS_UPDATE_COMPLETE_FAILED "%s n'a pas pu être installée. LiberNT conserve la version que vous aviez."
-    IDS_UPDATE_COMPLETE_RETRYBOOT "LiberNT n'a pas pu terminer l'installation de %s. Il réessaiera au prochain redémarrage de votre ordinateur."
-    IDS_UPDATE_COMPLETE_RETRYLOGON "LiberNT n'a pas pu terminer la configuration de %s. Il réessaiera à la prochaine connexion d'un administrateur."
-    IDS_UPDATE_COMPLETE_NOSPACE "%s n'a pas pu être installée, car le lecteur système n'a pas assez d'espace libre. LiberNT conserve la version que vous aviez et proposera de nouveau la mise à jour."
-    IDS_UPDATE_COMPLETE_DAMAGED "%s n'a pas pu être installée, car la copie téléchargée est endommagée. LiberNT conserve la version que vous aviez et téléchargera de nouveau la mise à jour."
-END
-
-STRINGTABLE
-BEGIN
-    IDS_HOST_STARTTITLE "Installer ou mettre à niveau LiberNT"
-    IDS_HOST_STARTSUBTITLE "LiberNT est déjà installé sur cet ordinateur."
-    IDS_HOST_INSTALLNEW "&Installer une nouvelle copie de LiberNT à côté de %s"
-    IDS_HOST_UPGRADENOTE "La mise à niveau remplace les fichiers système de LiberNT par cette version et conserve vos fichiers, les applications que vous avez installées, les comptes d'utilisateurs et les paramètres. L'ordinateur redémarre et LiberNT installe la mise à niveau pendant son démarrage.\n\nCette version : %s"
-    IDS_HOST_INSTALLNOTE "%s cède une partie de son espace à une nouvelle partition, puis l'ordinateur redémarre sur l'installation de LiberNT, qui installe LiberNT dans cette partition.\n\nCette version : %s"
-    IDS_HOST_SHRINKNOTE "Faites glisser le curseur pour partager l'espace. %s conserve ses programmes et ses fichiers. Windows réduit sa partition lorsque vous lancez l'installation."
-    IDS_HOST_NOSPACE "%s n'a pas assez d'espace libre pour faire de la place à LiberNT, qui nécessite au moins %I64u Go. Libérez de l'espace dans %s, puis relancez l'installation."
-    IDS_HOST_NORESIZE "Windows ne peut pas déterminer de combien la partition %s peut être réduite (erreur 0x%08lx) : l'installation ne peut donc pas faire de la place à LiberNT."
-    IDS_HOST_READYSUBTITLE "Vérifiez vos choix. L'installation commence à modifier votre disque lorsque vous cliquez sur Installer."
-    IDS_HOST_READY_SHRINK "%s (%s) passe de %s à %s."
-    IDS_HOST_READY_CREATE "Une nouvelle partition de %s est créée pour LiberNT après celle-ci."
-    IDS_HOST_READY_PREPARED "LiberNT est installé dans la partition de %s que l'installation a préparée précédemment."
-    IDS_HOST_READY_RESTART "L'installation copie l'image de LiberNT (%s) dans cette partition, puis redémarre l'ordinateur sur l'installation de LiberNT, qui installe LiberNT dans cette partition. D'ici là, rien d'autre n'est modifié."
-    IDS_HOST_READY_UPGRADE "L'installation copie l'image de LiberNT (%s) dans la partition de LiberNT et redémarre l'ordinateur. LiberNT installe la mise à niveau pendant son démarrage et la termine à la connexion d'un administrateur."
-    IDS_HOST_PROCESSTITLE "Préparation de l'installation de LiberNT"
-    IDS_HOST_PROCESSSUBTITLE "L'installation prépare le disque et le menu de démarrage. L'ordinateur redémarre une fois l'opération terminée."
-    IDS_HOST_STEP_SHRINK "Réduction de %s..."
-    IDS_HOST_STEP_CREATE "Création de la partition de LiberNT..."
-    IDS_HOST_STEP_FORMAT "Formatage de la partition de LiberNT..."
-    IDS_HOST_STEP_COPY "Copie de l'image de LiberNT..."
-    IDS_HOST_STEP_CHECK "Vérification de l'image copiée..."
-    IDS_HOST_STEP_BOOT "Ajout de l'installation de LiberNT au menu de démarrage..."
-    IDS_HOST_STEP_STAGE "Préparation de la mise à niveau..."
-    IDS_HOST_PROGRESS "%I64u Mo sur %I64u Mo"
-    IDS_HOST_DONETITLE "L'installation de LiberNT est prête"
-    IDS_HOST_DONE "L'installation est préparée. L'ordinateur redémarre sur l'installation de LiberNT dans quelques secondes. Enregistrez d'abord votre travail dans les autres applications, ou sélectionnez Différer : l'installation de LiberNT démarrera alors au prochain redémarrage de l'ordinateur."
-    IDS_HOST_UPGRADEDONETITLE "La mise à niveau est prête"
-    IDS_HOST_UPGRADEDONE "La mise à niveau est préparée. L'ordinateur redémarre dans quelques secondes et LiberNT installe la mise à niveau pendant son démarrage. Enregistrez d'abord votre travail dans les autres applications, ou sélectionnez Différer : la mise à niveau démarrera alors au prochain redémarrage de l'ordinateur."
-    IDS_HOST_FAILEDTITLE "L'installation n'a pas pu préparer LiberNT"
-    IDS_HOST_FAILED "L'installation s'est arrêtée à cette étape : %s\n\nErreur %lu (0x%08lx)."
-    IDS_HOST_CANNOTTITLE "LiberNT ne peut pas être installé depuis Windows"
-    IDS_HOST_NOTMEDIA "Lancez l'installation depuis l'image de LiberNT : ouvrez le fichier .iso de LiberNT dans l'Explorateur de fichiers, puis exécutez setup.exe depuis le lecteur qui s'ouvre."
-    IDS_HOST_WRONGARCH "Cette image de LiberNT est conçue pour une autre architecture de processeur que celle de cet ordinateur. Téléchargez l'image de LiberNT conçue pour cet ordinateur."
-    IDS_HOST_NOUEFI "Windows a démarré cet ordinateur en mode BIOS hérité. L'installation ne peut installer LiberNT depuis Windows que sur les ordinateurs qui démarrent en mode UEFI. Démarrez plutôt l'ordinateur à partir de l'image de LiberNT."
-    IDS_HOST_NOGPT "Windows se trouve sur un disque qui n'utilise pas le style de partition GPT. L'installation ne peut installer LiberNT depuis Windows que sur des disques GPT. Démarrez plutôt l'ordinateur à partir de l'image de LiberNT."
-    IDS_HOST_NOESP "L'installation ne trouve pas la partition système EFI qui démarre Windows (erreur %lu)."
-    IDS_HOST_ESPFULL "La partition système EFI a besoin de %s d'espace libre pour les fichiers de démarrage de l'installation de LiberNT."
-    IDS_HOST_SECUREBOOT_TITLE "Désactivez d'abord le démarrage sécurisé"
-    IDS_HOST_SECUREBOOT "Le démarrage sécurisé est activé. Le chargeur de démarrage de LiberNT n'est pas signé pour le démarrage sécurisé : cet ordinateur refuserait de le lancer. Désactivez le démarrage sécurisé dans les paramètres du microprogramme, démarrez Windows, puis relancez l'installation."
-    IDS_HOST_FIRMWAREBTN "Redémarrer vers les paramètres du microprogramme"
-    IDS_HOST_PENDING_TITLE "L'installation de LiberNT est prête à continuer"
-    IDS_HOST_PENDING "L'installation a déjà préparé une partition de %s pour LiberNT sur cet ordinateur. Continuez pour copier de nouveau l'image et redémarrer sur l'installation de LiberNT, ou annulez la préparation pour rendre l'espace à %s."
-    IDS_HOST_CONTINUEBTN "Continuer l'installation"
-    IDS_HOST_UNDOBTN "Annuler la préparation"
-    IDS_HOST_UNDONE "La préparation a été annulée et %s a récupéré son espace."
-    IDS_HOST_UNDOFAILED "La préparation n'a pas pu être entièrement annulée (erreur %lu, 0x%08lx). Utilisez Gestion des disques pour supprimer la partition de LiberNT et étendre %s."
-    IDS_HOST_INUSE "Une mise à niveau de LiberNT sur %s n'est pas terminée. Démarrez LiberNT pour la terminer ou l'annuler, puis relancez l'installation."
-    IDS_HOST_NOSTORE "L'installation ne trouve pas la configuration de démarrage de LiberNT sur %s : elle ne peut donc pas le mettre à niveau depuis Windows. Démarrez LiberNT et mettez-le à niveau avec LiberNT Update, ou démarrez l'ordinateur à partir de l'image de LiberNT."
-    IDS_HOST_NOTADMIN "L'installation a besoin des droits d'administrateur. Relancez-la et acceptez la demande d'élévation de privilèges."
-    IDS_HOST_LOWSPACE "La partition de LiberNT sur %s a besoin de %s d'espace libre pour l'image de mise à niveau."
-    IDS_HOST_VOLUMEERRORS "%s contient des erreurs de système de fichiers : Windows ne peut donc pas le réduire. Exécutez ""chkdsk %s /f"" en tant qu'administrateur, redémarrez l'ordinateur pour que Windows répare le lecteur, puis relancez l'installation."
-    IDS_HOST_CHECKINGSIZE "Windows calcule l'espace que %s peut céder à LiberNT..."
 END
