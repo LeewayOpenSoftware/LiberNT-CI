@@ -91,13 +91,18 @@ static handle_t dpapi_bind(void)
 
     /* Authenticate and seal the channel. The data (and the description) travel over the pipe, so use
      * packet privacy; the server only queries the caller's token, so identification-level QOS is
-     * enough. Best effort: if the SSP is unavailable the server-side caller check still applies. */
+     * enough. Fail closed: if this does not take, do not send plaintext over an unauthenticated pipe. */
     qos.Version = RPC_C_SECURITY_QOS_VERSION;
     qos.Capabilities = RPC_C_QOS_CAPABILITIES_DEFAULT;
     qos.IdentityTracking = RPC_C_QOS_IDENTITY_STATIC;
     qos.ImpersonationType = RPC_C_IMP_LEVEL_IDENTIFY;
-    RpcBindingSetAuthInfoExW(binding, NULL, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
-                             RPC_C_AUTHN_WINNT, NULL, 0, &qos);
+    status = RpcBindingSetAuthInfoExW(binding, NULL, RPC_C_AUTHN_LEVEL_PKT_PRIVACY,
+                                      RPC_C_AUTHN_WINNT, NULL, 0, &qos);
+    if (status != RPC_S_OK)
+    {
+        RpcBindingFree(&binding);
+        return NULL;
+    }
 
     return binding;
 }
