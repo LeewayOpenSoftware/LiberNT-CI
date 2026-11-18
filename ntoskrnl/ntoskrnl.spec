@@ -2323,7 +2323,7 @@
 @ stub -arch=win64 FsRtlHeatLogIo
 @ stub -arch=win64 FsRtlHeatLogTierMove
 @ stub -arch=win64 FsRtlHeatUninit
-@ stub -arch=win64 FsRtlIncrementCcFastMdlReadWait
+@ stdcall -arch=win64 FsRtlIncrementCcFastMdlReadWait()
 @ stdcall FsRtlInitExtraCreateParameterLookasideList(ptr long ptr long)
 @ stub -arch=win64 FsRtlInitializeBaseMcbEx
 @ stub -arch=win64 FsRtlInitializeEofLock
@@ -2352,7 +2352,7 @@
 @ stub -arch=win64 FsRtlNotifyFilterChangeDirectoryLite
 @ stub -arch=win64 FsRtlNotifyFilterReportChangeLite
 @ stub -arch=win64 FsRtlNotifyFilterReportChangeLiteEx
-@ stub -arch=win64 FsRtlNotifyVolumeEventEx
+@ stdcall -arch=win64 FsRtlNotifyVolumeEventEx(ptr long ptr)
 @ stub -arch=win64 FsRtlOpenFileSystemRegistryKeyFromFsGuid
 @ stub -arch=win64 FsRtlOplockBreakH2
 @ stub -arch=win64 FsRtlOplockBreakToNoneEx

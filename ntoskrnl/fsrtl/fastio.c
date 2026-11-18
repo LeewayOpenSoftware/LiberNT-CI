@@ -51,6 +51,16 @@ FsRtlIncrementCcFastReadWait(VOID)
  */
 VOID
 NTAPI
+FsRtlIncrementCcFastMdlReadWait(VOID)
+{
+    CcFastMdlReadWait++;
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
 FsRtlIncrementCcFastReadNoWait(VOID)
 {
     CcFastReadNoWait++;
