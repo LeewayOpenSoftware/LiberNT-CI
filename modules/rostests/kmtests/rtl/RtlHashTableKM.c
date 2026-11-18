@@ -185,6 +185,7 @@ TestHashTableExpand(VOID)
     ExFreePoolWithTag(Entries, 'tHmK');
 }
 
+#ifdef _WIN64 /* RtlCreateHashTableEx and the strong enumeration: exported on 64-bit targets only */
 static
 VOID
 TestHashTableExStrong(VOID)
@@ -250,11 +251,14 @@ TestHashTableExStrong(VOID)
     if (Ok && HashTable != NULL)
         RtlDeleteHashTable(HashTable);
 }
+#endif
 
 START_TEST(RtlHashTableKM)
 {
     TestHashTableBasic();
     TestHashTableEnum();
     TestHashTableExpand();
+#ifdef _WIN64
     TestHashTableExStrong();
+#endif
 }

@@ -237,6 +237,7 @@ static VOID FsRtlIsDbcsInExpressionTest()
     }
 }
 
+#ifdef _WIN64 /* FsRtlIsNameInUnUpcasedExpression is exported on 64-bit targets only */
 static VOID FsRtlIsNameInUnUpcasedExpressionTest(VOID)
 {
     static const struct
@@ -270,6 +271,7 @@ static VOID FsRtlIsNameInUnUpcasedExpressionTest(VOID)
            Tests[i].Expression, Tests[i].Name, Tests[i].IgnoreCase, Tests[i].Expected, Result);
     }
 }
+#endif
 
 START_TEST(FsRtlExpression)
 {
@@ -278,6 +280,8 @@ START_TEST(FsRtlExpression)
         return;
 
     FsRtlIsNameInExpressionTest();
+#ifdef _WIN64
     FsRtlIsNameInUnUpcasedExpressionTest();
+#endif
     FsRtlIsDbcsInExpressionTest();
 }

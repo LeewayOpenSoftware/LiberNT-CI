@@ -132,6 +132,7 @@ TestTokenQueries(VOID)
     SeReleaseSubjectContext(&SubjectContext);
 }
 
+#ifdef _WIN64 /* SeAccessCheckFromState: exported on 64-bit targets only */
 static
 VOID
 TestAccessCheckFromState(VOID)
@@ -307,11 +308,14 @@ TestAccessCheckFromState(VOID)
 
     ExFreePoolWithTag(Dacl, TAG_TEST);
 }
+#endif
 
 START_TEST(SeAccessCheckKM)
 {
     TestAccessCheck();
     TestPrivilegeCheck();
     TestTokenQueries();
+#ifdef _WIN64
     TestAccessCheckFromState();
+#endif
 }

@@ -190,19 +190,16 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ex/ExLicenseDif.c
     ntos_ex/ExWddm.c
     ntos_fsrtl/FsRtlDissect.c
-    ntos_fsrtl/FsRtlVolumeNotifyKM.c
     ntos_fsrtl/FsRtlExpression.c
     ntos_fsrtl/FsRtlFileLockState.c
     ntos_fsrtl/FsRtlLegal.c
     ntos_fsrtl/FsRtlMcb.c
     ntos_fsrtl/FsRtlPerFileObjectContext.c
-    ntos_fsrtl/OplockKeyKM.c
     ntos_fsrtl/FsRtlQueryFileLock.c
     ntos_fsrtl/FsRtlTunnel.c
     ntos_fsrtl/FsRtlVolumeStartup.c
     ntos_io/IoDevicePropertyData.c
     ntos_io/IoBuildIoctlKM.c
-    ntos_io/IoIrpExtensionKM.c
     ntos_io/IoLargeMemoryResource.c
     ntos_io/IoArbiter.c
     ntos_io/IoCancelKM.c
@@ -395,7 +392,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ps/PsWddm.c
     ntos_ps/PsProcessInfo.c
     ntos_ps/PsQuota.c
-    ntos_ps/PsSilo.c
     ntos_ps/PsGetVersion.c
     ntos_ps/PsSystemThread.c
     ntos_ps/PsPico.c
@@ -417,8 +413,6 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlImageKM.c
     rtl/RtlIsProcessorFeaturePresentKM.c
     rtl/RtlHashTableKM.c
-    rtl/RtlQsortKM.c
-    rtl/RtlCapabilityKM.c
     rtl/RtlTimeKM.c
     rtl/RtlIsValidOemCharacter.c
     rtl/RtlModern.c
@@ -483,9 +477,15 @@ endif()
 # These call kernel exports that are only exported on 64-bit targets
 if(NOT ARCH STREQUAL "i386")
     list(APPEND KMTEST_DRV_SOURCE
+        ntos_fsrtl/FsRtlVolumeNotifyKM.c
+        ntos_fsrtl/OplockKeyKM.c
+        ntos_io/IoIrpExtensionKM.c
         ntos_po/PoKernelPowerRequest.c
         ntos_ps/PsJobCommit.c
+        ntos_ps/PsSilo.c
         ntos_se/SePrimaryTokenRelease.c
+        rtl/RtlCapabilityKM.c
+        rtl/RtlQsortKM.c
     )
 endif()
 
