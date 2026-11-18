@@ -35,8 +35,7 @@ USHORT
 NTAPI
 KeQueryActiveGroupCount(VOID)
 {
-    /* ReactOS models a single processor group. */
-    return 1;
+    return KiActiveProcessorsEx.Count;
 }
 
 /*
@@ -46,7 +45,10 @@ USHORT
 NTAPI
 KeQueryMaximumGroupCount(VOID)
 {
-    return 1;
+    ULONG Maximum = KeQueryMaximumProcessorCountEx(ALL_PROCESSOR_GROUPS);
+    ULONG Groups = (Maximum + KI_PROCESSORS_PER_GROUP - 1) / KI_PROCESSORS_PER_GROUP;
+
+    return (USHORT)max(Groups, KiActiveProcessorsEx.Count);
 }
 
 /*
@@ -57,15 +59,20 @@ NTAPI
 KeGetProcessorIndexFromNumber(
     _In_ PPROCESSOR_NUMBER ProcessorNumber)
 {
+    ULONG Index;
+
     if ((ProcessorNumber->Reserved != 0) ||
-        (ProcessorNumber->Group != 0) ||
-        (ProcessorNumber->Number >= (UCHAR)(sizeof(KAFFINITY) * 8)) ||
-        (ProcessorNumber->Number >= (UCHAR)KeNumberProcessors))
+        (ProcessorNumber->Group >= KI_MAXIMUM_GROUPS) ||
+        (ProcessorNumber->Number >= KI_PROCESSORS_PER_GROUP))
     {
         return INVALID_PROCESSOR_INDEX;
     }
 
-    return ProcessorNumber->Number;
+    Index = KiProcessorIndexFromNumber(ProcessorNumber->Group, ProcessorNumber->Number);
+    if (Index >= (ULONG)KeNumberProcessors)
+        return INVALID_PROCESSOR_INDEX;
+
+    return Index;
 }
 
 /*
@@ -80,9 +87,7 @@ KeGetProcessorNumberFromIndex(
     if (ProcessorIndex >= (ULONG)KeNumberProcessors)
         return STATUS_INVALID_PARAMETER;
 
-    ProcessorNumber->Group = 0;
-    ProcessorNumber->Number = (UCHAR)ProcessorIndex;
-    ProcessorNumber->Reserved = 0;
+    KiProcessorNumberFromIndex(ProcessorIndex, ProcessorNumber);
     return STATUS_SUCCESS;
 }
 
@@ -1218,10 +1223,7 @@ NTAPI
 KeQueryGroupAffinity(
     _In_ USHORT GroupNumber)
 {
-    if (GroupNumber != 0)
-        return 0;
-
-    return KeActiveProcessors;
+    return KiQueryActiveGroupAffinity(GroupNumber);
 }
 
 /*
@@ -1232,10 +1234,15 @@ NTAPI
 KeQueryActiveProcessorAffinity(
     _Out_ PKAFFINITY_EX Affinity)
 {
-    KeInitializeAffinityEx(Affinity);
-    Affinity->Bitmap[0] = KeActiveProcessors;
+    USHORT Groups = min(KiActiveProcessorsEx.Count, (USHORT)KAFFINITY_EX_INITIALIZED_GROUPS);
+    USHORT Group;
 
-    return KeQueryActiveProcessorCount(NULL);
+    KeInitializeAffinityEx(Affinity);
+    for (Group = 0; Group < Groups; Group++)
+        Affinity->Bitmap[Group] = KiQueryActiveGroupAffinity(Group);
+    Affinity->Count = Groups;
+
+    return KeQueryActiveProcessorCountEx(ALL_PROCESSOR_GROUPS);
 }
 
 /*
@@ -1247,19 +1254,25 @@ KeQueryActiveProcessorAffinity2(
     _Out_ PGROUP_AFFINITY GroupAffinities,
     _Inout_ PUSHORT Count)
 {
+    USHORT Groups = KiActiveProcessorsEx.Count;
+    USHORT Group;
+
     if (Count == NULL)
         return STATUS_INVALID_PARAMETER;
 
-    if ((GroupAffinities == NULL) || (*Count < 1))
+    if ((GroupAffinities == NULL) || (*Count < Groups))
     {
-        *Count = 1;
+        *Count = Groups;
         return STATUS_BUFFER_TOO_SMALL;
     }
 
-    RtlZeroMemory(&GroupAffinities[0], sizeof(GROUP_AFFINITY));
-    GroupAffinities[0].Mask = KeActiveProcessors;
-    GroupAffinities[0].Group = 0;
-    *Count = 1;
+    for (Group = 0; Group < Groups; Group++)
+    {
+        RtlZeroMemory(&GroupAffinities[Group], sizeof(GROUP_AFFINITY));
+        GroupAffinities[Group].Mask = KiQueryActiveGroupAffinity(Group);
+        GroupAffinities[Group].Group = Group;
+    }
+    *Count = Groups;
 
     return STATUS_SUCCESS;
 }
@@ -1352,7 +1365,7 @@ KeQueryNodeMaximumProcessorCount(
     if (NodeNumber != 0)
         return 0;
 
-    return (USHORT)KeQueryMaximumProcessorCount();
+    return (USHORT)KeQueryMaximumProcessorCountEx(ALL_PROCESSOR_GROUPS);
 }
 
 /*

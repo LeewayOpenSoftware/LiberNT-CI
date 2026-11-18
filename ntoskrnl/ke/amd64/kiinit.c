@@ -100,6 +100,8 @@ KiInitializePcr(
     _In_ PKTHREAD IdleThread,
     _In_ PVOID DpcStack)
 {
+    PROCESSOR_NUMBER GroupNumber;
+
     /* Zero out the PCR */
     RtlZeroMemory(Pcr, sizeof(KIPCR));
 
@@ -125,12 +127,13 @@ KiInitializePcr(
     Pcr->Prcb.BuildType |= PRCB_BUILD_DEBUG;
 #endif
 
-    /* Set the Processor Number and current Processor Mask */
+    /* Set the Processor Number, its group identity and its mask within the group */
+    KiProcessorNumberFromIndex(ProcessorNumber, &GroupNumber);
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
-    Pcr->Prcb.SetMember = KiAffinityForProcessorIndex(ProcessorNumber);
+    Pcr->Prcb.SetMember = KiAffinityForProcessorIndex(GroupNumber.Number);
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
-    /* Every processor is in group 0 until processor groups are supported */
-    Pcr->Prcb.Group = 0;
+    Pcr->Prcb.Group = (UCHAR)GroupNumber.Group;
+    Pcr->Prcb.GroupIndex = GroupNumber.Number;
 #endif
 
     /* Set GDT and IDT base */
@@ -608,7 +611,7 @@ KiSystemStartup(IN PLOADER_PARAMETER_BLOCK LoaderBlock)
 
     /* Set processor as active */
     if (Cpu == 0)
-        KeActiveProcessors |= 1ULL << Cpu;
+        KiSetProcessorActive(Cpu);
 
     /* Release lock */
     InterlockedAnd64((PLONG64)&KiFreezeExecutionLock, 0);

@@ -363,7 +363,7 @@ KiPublishActiveProcessor(
                                               NULL,
                                               NULL) == NULL)
         {
-            KeActiveProcessors |= Prcb->SetMember;
+            KiSetProcessorActive(Prcb->Number);
             KiReleaseFreezeActiveSet(Prcb, Acquired);
             break;
         }

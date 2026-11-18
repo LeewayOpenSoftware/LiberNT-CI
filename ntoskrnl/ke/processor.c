@@ -14,6 +14,7 @@
 /* GLOBALS *******************************************************************/
 
 KAFFINITY KeActiveProcessors = 0;
+KAFFINITY_EX KiActiveProcessorsEx = { 1, KAFFINITY_EX_STATIC_GROUPS, 0, { { 0 } } };
 
 KAFFINITY
 FASTCALL
@@ -277,6 +278,30 @@ ULONG KeBootprocSpecified = 0;
 
 /* FUNCTIONS *****************************************************************/
 
+/*
+ * Adds processor Index to the active set of its group. Callers serialize
+ * processor activation (boot processor init and the freeze active set).
+ */
+VOID
+NTAPI
+KiSetProcessorActive(
+    _In_ ULONG Index)
+{
+    PROCESSOR_NUMBER Number;
+    KAFFINITY Mask;
+
+    ASSERT(Index < KI_MAXIMUM_PROCESSORS);
+    KiProcessorNumberFromIndex(Index, &Number);
+    Mask = KiAffinityForProcessorIndex(Number.Number);
+
+    if (Number.Group == 0)
+        KeActiveProcessors |= Mask;
+
+    if (Number.Group >= KiActiveProcessorsEx.Count)
+        KiActiveProcessorsEx.Count = Number.Group + 1;
+    KiActiveProcessorsEx.Bitmap[Number.Group] |= Mask;
+}
+
 KAFFINITY
 NTAPI
 KeQueryActiveProcessors(VOID)
@@ -288,20 +313,24 @@ ULONG
 NTAPI
 KeQueryActiveProcessorCountEx(IN USHORT GroupNumber)
 {
-    if (GroupNumber != 0 && GroupNumber != ALL_PROCESSOR_GROUPS)
+    if ((GroupNumber == ALL_PROCESSOR_GROUPS) ||
+        ((GroupNumber == 0) && (KiActiveProcessorsEx.Count <= 1)))
+    {
+        return (ULONG)KeNumberProcessors;
+    }
+
+    if (GroupNumber >= KI_MAXIMUM_GROUPS)
         return 0;
-    return (ULONG)KeNumberProcessors;
+
+    return RtlNumberOfSetBitsUlongPtr(KiQueryActiveGroupAffinity(GroupNumber));
 }
 
+/* Legacy count: the processors of group 0 */
 ULONG
 NTAPI
 KeQueryMaximumProcessorCount(VOID)
 {
-#ifdef CONFIG_SMP
-    return KeMaximumProcessors;
-#else
-    return (ULONG)KeNumberProcessors;
-#endif
+    return KeQueryMaximumProcessorCountEx(0);
 }
 
 ULONG
@@ -309,11 +338,23 @@ NTAPI
 KeQueryMaximumProcessorCountEx(
     _In_ USHORT GroupNumber)
 {
-    /* Only a single processor group (group 0) is supported. */
-    if ((GroupNumber != ALL_PROCESSOR_GROUPS) && (GroupNumber != 0))
+    ULONG Total;
+    ULONG First;
+
+#ifdef CONFIG_SMP
+    Total = KeMaximumProcessors;
+#else
+    Total = (ULONG)KeNumberProcessors;
+#endif
+
+    if (GroupNumber == ALL_PROCESSOR_GROUPS)
+        return Total;
+
+    First = (ULONG)GroupNumber * KI_PROCESSORS_PER_GROUP;
+    if (First >= Total)
         return 0;
 
-    return KeQueryMaximumProcessorCount();
+    return min(Total - First, KI_PROCESSORS_PER_GROUP);
 }
 
 ULONG
@@ -321,18 +362,12 @@ NTAPI
 KeGetCurrentProcessorNumberEx(
     _Out_opt_ PPROCESSOR_NUMBER ProcNumber)
 {
-    /* Only a single processor group (group 0) is supported, so the processor
-     * number within the group is simply the current processor number. */
-    ULONG Number = KeGetCurrentProcessorNumber();
+    ULONG Index = KeGetCurrentProcessorNumber();
 
     if (ProcNumber != NULL)
-    {
-        ProcNumber->Group = 0;
-        ProcNumber->Number = (UCHAR)Number;
-        ProcNumber->Reserved = 0;
-    }
+        KiProcessorNumberFromIndex(Index, ProcNumber);
 
-    return Number;
+    return Index;
 }
 
 /**

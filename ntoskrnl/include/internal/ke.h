@@ -196,6 +196,64 @@ extern PKNODE KeNodeBlock[KI_MAX_NUMA_NODES];
 extern UCHAR KeNumberNodes;
 extern UCHAR KeProcessNodeSeed;
 
+/*
+ * Processor groups. A group holds at most one KAFFINITY of processors. Until
+ * the HAL reports a topology, processor index I is processor number
+ * (I / KI_PROCESSORS_PER_GROUP, I % KI_PROCESSORS_PER_GROUP), the same mapping
+ * the KAFFINITY_EX helpers use. KPRCB.SetMember is the processor's bit within
+ * its own group.
+ */
+#define KI_PROCESSORS_PER_GROUP ((ULONG)(sizeof(KAFFINITY) * 8))
+#define KI_MAXIMUM_GROUPS \
+    ((KI_MAXIMUM_PROCESSORS + KI_PROCESSORS_PER_GROUP - 1) / KI_PROCESSORS_PER_GROUP)
+C_ASSERT(KI_MAXIMUM_GROUPS <= KAFFINITY_EX_STATIC_GROUPS);
+
+/*
+ * Active processors of every group. KeActiveProcessors stays the
+ * authoritative group 0 mask; Count is the number of groups that have had an
+ * active processor.
+ */
+extern KAFFINITY_EX KiActiveProcessorsEx;
+
+FORCEINLINE
+VOID
+KiProcessorNumberFromIndex(
+    _In_ ULONG Index,
+    _Out_ PPROCESSOR_NUMBER Number)
+{
+    Number->Group = (USHORT)(Index / KI_PROCESSORS_PER_GROUP);
+    Number->Number = (UCHAR)(Index % KI_PROCESSORS_PER_GROUP);
+    Number->Reserved = 0;
+}
+
+FORCEINLINE
+ULONG
+KiProcessorIndexFromNumber(
+    _In_ USHORT Group,
+    _In_ UCHAR Number)
+{
+    return ((ULONG)Group * KI_PROCESSORS_PER_GROUP) + Number;
+}
+
+FORCEINLINE
+KAFFINITY
+KiQueryActiveGroupAffinity(
+    _In_ USHORT Group)
+{
+    if (Group == 0)
+        return KeActiveProcessors;
+
+    if (Group >= KiActiveProcessorsEx.Count)
+        return 0;
+
+    return KiActiveProcessorsEx.Bitmap[Group];
+}
+
+VOID
+NTAPI
+KiSetProcessorActive(
+    _In_ ULONG Index);
+
 KAFFINITY
 FASTCALL
 KiGetNonParkedProcessorSet(VOID);

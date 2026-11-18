@@ -685,7 +685,8 @@ typedef struct _KPRCB
 #if (NTDDI_VERSION >= NTDDI_LONGHORN)
     UCHAR NestingLevel;
     UCHAR Group;
-    UCHAR PrcbPad00[6];
+    UCHAR GroupIndex;
+    UCHAR PrcbPad00[5];
 #else
     UINT64 UserRsp;
 #endif

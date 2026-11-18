@@ -98,7 +98,8 @@ ExpInitializeHandleTables(VOID)
 #ifdef _M_ARM64
     ExpFreeListCount = HalQueryMaximumProcessorCount();
 #else
-    ExpFreeListCount = KeQueryMaximumProcessorCount();
+    /* One free list per processor index, across every group */
+    ExpFreeListCount = KeQueryMaximumProcessorCountEx(ALL_PROCESSOR_GROUPS);
 #endif
     ASSERT(ExpFreeListCount != 0);
 }
