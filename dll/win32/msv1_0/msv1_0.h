@@ -139,6 +139,7 @@ typedef union _SAMPR_USER_INFO_BUFFER
     USER_EXPIRES_INFORMATION Expires;
     SAMPR_USER_INTERNAL1_INFORMATION Internal1;
 #endif
+    USER_CONTROL_INFORMATION Control;
     SAMPR_USER_INTERNAL2_INFORMATION Internal2;
 #if 0
     SAMPR_USER_PARAMETERS_INFORMATION Parameters;
@@ -215,6 +216,30 @@ SamrOpenUser(IN SAMPR_HANDLE DomainHandle,
              IN ACCESS_MASK DesiredAccess,
              IN ULONG UserId,
              OUT SAMPR_HANDLE *UserHandle);
+
+typedef struct _SAMPR_SID_INFORMATION
+{
+    PRPC_SID SidPointer;
+} SAMPR_SID_INFORMATION, *PSAMPR_SID_INFORMATION;
+
+typedef struct _SAMPR_PSID_ARRAY_OUT
+{
+    unsigned long Count;
+    PSAMPR_SID_INFORMATION Sids;
+} SAMPR_PSID_ARRAY_OUT, *PSAMPR_PSID_ARRAY_OUT;
+
+NTSTATUS
+NTAPI
+SamrOpenAlias(IN SAMPR_HANDLE DomainHandle,
+              IN ACCESS_MASK DesiredAccess,
+              IN ULONG AliasId,
+              OUT SAMPR_HANDLE *AliasHandle);
+
+NTSTATUS
+NTAPI
+SamrGetMembersInAlias(IN SAMPR_HANDLE AliasHandle,
+                      OUT PSAMPR_PSID_ARRAY_OUT Members);
+
 
 NTSTATUS
 NTAPI

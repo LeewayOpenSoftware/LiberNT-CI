@@ -26,6 +26,7 @@
 #include <ndk/cmfuncs.h>
 #include <ndk/exfuncs.h>
 #include <ntsecapi.h>
+#include <ntsam.h>
 #include <strsafe.h>
 #define WIDL_using_Windows_System_Profile
 #include <windows.system.profile.h>
@@ -1168,35 +1169,167 @@ done:
     CloseServiceHandle(hManager);
 }
 
+/* The preinstall (mini setup) session is marked by SetupAccountRid in the
+ * SYSTEM\Setup key, written by preinstall.inf; the live CD does not set
+ * it. Accounts are identified by RID, never by a hardcoded name. */
 static
 BOOL
-GetPreinstallUserName(
-    _Out_writes_(cchUserName) PWSTR UserName,
-    _In_ DWORD cchUserName)
+IsPreinstallSetup(VOID)
 {
     HKEY hKey;
-    DWORD cbData = (cchUserName - 1) * sizeof(WCHAR);
-    DWORD dwType;
+    DWORD Rid = 0, cbData = sizeof(Rid), dwType;
     LONG Error;
 
-    ZeroMemory(UserName, cchUserName * sizeof(WCHAR));
     Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
-                          L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                          L"SYSTEM\\Setup",
                           0,
                           KEY_QUERY_VALUE,
                           &hKey);
     if (Error != ERROR_SUCCESS)
         return FALSE;
 
-    Error = RegQueryValueExW(hKey, L"DefaultUserName", NULL, &dwType, (PBYTE)UserName, &cbData);
+    Error = RegQueryValueExW(hKey, L"SetupAccountRid", NULL, &dwType, (PBYTE)&Rid, &cbData);
     RegCloseKey(hKey);
-    if (Error != ERROR_SUCCESS || dwType != REG_SZ)
+
+    return Error == ERROR_SUCCESS && dwType == REG_DWORD && Rid == DOMAIN_USER_RID_ADMIN;
+}
+
+/* Enable the account-domain RID 500 for the setup session and point the
+ * autologon at it. The name is resolved from the SID, so a localized SAM
+ * works; the account is addressed by RID, so no name lookup can touch the
+ * wrong user. F1 already refuses to reuse RID 500 as a target account. */
+static
+NTSTATUS
+PrepareSetupAccount(VOID)
+{
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    SAM_HANDLE ServerHandle = NULL;
+    SAM_HANDLE DomainHandle = NULL;
+    SAM_HANDLE UserHandle = NULL;
+    PUSER_CONTROL_INFORMATION ControlInfo = NULL;
+    PSID SetupSid = NULL;
+    USER_SET_PASSWORD_INFORMATION PasswordInfo;
+    WCHAR Name[UNLEN + 1];
+    WCHAR Domain[128];
+    DWORD cchName, cchDomain;
+    ULONG DomainSubAuthorityCount, SidLength;
+    SID_NAME_USE Use;
+    HKEY hKey = NULL;
+    NTSTATUS Status = STATUS_UNSUCCESSFUL;
+    LONG Error;
+
+    memset(&ObjectAttributes, 0, sizeof(ObjectAttributes));
+    Status = LsaOpenPolicy(NULL, &ObjectAttributes,
+                           POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = LsaQueryInformationPolicy(PolicyHandle,
+                                       PolicyAccountDomainInformation,
+                                       (PVOID *)&AccountDomain);
+    LsaClose(PolicyHandle);
+    PolicyHandle = NULL;
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    DomainSubAuthorityCount = *RtlSubAuthorityCountSid(AccountDomain->DomainSid);
+    SidLength = RtlLengthRequiredSid(DomainSubAuthorityCount + 1);
+    SetupSid = RtlAllocateHeap(RtlGetProcessHeap(), 0, SidLength);
+    if (SetupSid == NULL)
     {
-        UserName[0] = UNICODE_NULL;
-        return FALSE;
+        Status = STATUS_INSUFFICIENT_RESOURCES;
+        goto done;
+    }
+    RtlCopySid(SidLength, SetupSid, AccountDomain->DomainSid);
+    *RtlSubAuthorityCountSid(SetupSid) = DomainSubAuthorityCount + 1;
+    *RtlSubAuthoritySid(SetupSid, DomainSubAuthorityCount) = DOMAIN_USER_RID_ADMIN;
+
+    cchName = ARRAYSIZE(Name);
+    cchDomain = ARRAYSIZE(Domain);
+    if (!LookupAccountSidW(NULL, SetupSid, Name, &cchName, Domain, &cchDomain, &Use))
+    {
+        Status = NTSTATUS_FROM_WIN32(GetLastError());
+        goto done;
     }
 
-    return UserName[0] != UNICODE_NULL;
+    Error = RegOpenKeyExW(HKEY_LOCAL_MACHINE,
+                          L"SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Winlogon",
+                          0,
+                          KEY_SET_VALUE,
+                          &hKey);
+    if (Error == ERROR_SUCCESS)
+    {
+        Error = RegSetValueExW(hKey,
+                               L"DefaultUserName",
+                               0,
+                               REG_SZ,
+                               (PBYTE)Name,
+                               (DWORD)((wcslen(Name) + 1) * sizeof(WCHAR)));
+        RegCloseKey(hKey);
+    }
+    if (Error != ERROR_SUCCESS)
+    {
+        Status = NTSTATUS_FROM_WIN32(Error);
+        goto done;
+    }
+
+    Status = SamConnect(NULL, &ServerHandle,
+                          SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN,
+                          NULL);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = SamOpenDomain(ServerHandle,
+                           DOMAIN_LOOKUP,
+                           AccountDomain->DomainSid,
+                           &DomainHandle);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = SamOpenUser(DomainHandle,
+                         USER_ALL_ACCESS,
+                         DOMAIN_USER_RID_ADMIN,
+                         &UserHandle);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    RtlInitUnicodeString(&PasswordInfo.Password, L"");
+    PasswordInfo.PasswordExpired = FALSE;
+    Status = SamSetInformationUser(UserHandle,
+                                   UserSetPasswordInformation,
+                                   &PasswordInfo);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    Status = SamQueryInformationUser(UserHandle,
+                                     UserControlInformation,
+                                     (PVOID *)&ControlInfo);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    ControlInfo->UserAccountControl &= ~USER_ACCOUNT_DISABLED;
+    Status = SamSetInformationUser(UserHandle,
+                                   UserControlInformation,
+                                   ControlInfo);
+
+done:
+    if (ControlInfo != NULL)
+        SamFreeMemory(ControlInfo);
+    if (UserHandle != NULL)
+        SamCloseHandle(UserHandle);
+    if (DomainHandle != NULL)
+        SamCloseHandle(DomainHandle);
+    if (ServerHandle != NULL)
+        SamCloseHandle(ServerHandle);
+    if (SetupSid != NULL)
+        RtlFreeHeap(RtlGetProcessHeap(), 0, SetupSid);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    return Status;
 }
 
 VOID
@@ -1430,7 +1563,6 @@ InstallLiveCD(VOID)
     LPVOID lpEnvironment;
     HANDLE hToken = NULL;
     BOOL bRes;
-    WCHAR UserName[UNLEN + 1];
     WCHAR ComputerName[MAX_COMPUTERNAME_LENGTH + 1];
     DWORD cchComputerName = ARRAYSIZE(ComputerName);
     ITEMSDATA ItemsData = { NULL };
@@ -1444,7 +1576,7 @@ InstallLiveCD(VOID)
         goto error;
     CreateMachineGuid();
 
-    bPreinstall = GetPreinstallUserName(UserName, ARRAYSIZE(UserName));
+    bPreinstall = IsPreinstallSetup();
     CreateSystemIdSeed(bPreinstall);
     if (bPreinstall)
     {
@@ -1504,8 +1636,10 @@ InstallLiveCD(VOID)
 
     if (bPreinstall)
     {
-        Status = CreateTargetAccount(UserName, L"");
-        if (!NT_SUCCESS(Status) && Status != STATUS_USER_EXISTS)
+        /* F2: the setup session runs as RID 500 itself, enabled by RID;
+         * it is retired after the OOBE by F3. */
+        Status = PrepareSetupAccount();
+        if (!NT_SUCCESS(Status))
             goto error;
         ScheduleFirstBootSetup();
         if (EndSystemSetup() != ERROR_SUCCESS)

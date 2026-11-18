@@ -347,6 +347,125 @@ MsvpCheckWorkstations(
 }
 
 
+/* R1 recovery: in safe mode the disabled built-in Administrator (RID 500)
+ * may log on only when the SAM has no other enabled account-domain
+ * member of the Administrators alias. Fails closed on any error. */
+static
+BOOLEAN
+MsvpSafeModeRid500Recovery(
+    _In_ SAMPR_HANDLE ServerHandle,
+    _In_ SAMPR_HANDLE DomainHandle,
+    _In_ PSID AccountDomainSid)
+{
+    NTSTATUS Status;
+    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+    SAMPR_HANDLE BuiltinHandle = NULL;
+    SAMPR_HANDLE AliasHandle = NULL;
+    SAMPR_HANDLE MemberHandle = NULL;
+    PSAMPR_USER_INFO_BUFFER MemberInfo = NULL;
+    PSID BuiltinSid = NULL;
+    SAMPR_PSID_ARRAY_OUT Members;
+    ULONG i;
+    UCHAR DomainSubAuthorityCount;
+    BOOLEAN Allowed = FALSE;
+
+    Members.Count = 0;
+    Members.Sids = NULL;
+
+    if (!SharedUserData->SafeBootMode)
+        return FALSE;
+
+    Status = RtlAllocateAndInitializeSid(&NtAuthority, 1,
+                                         SECURITY_BUILTIN_DOMAIN_RID,
+                                         0, 0, 0, 0, 0, 0, 0,
+                                         &BuiltinSid);
+    if (!NT_SUCCESS(Status))
+        return FALSE;
+
+    Status = SamrOpenDomain(ServerHandle, DOMAIN_LOOKUP,
+                            (PRPC_SID)BuiltinSid, &BuiltinHandle);
+    if (NT_SUCCESS(Status))
+        Status = SamrOpenAlias(BuiltinHandle, ALIAS_READ,
+                               DOMAIN_ALIAS_RID_ADMINS, &AliasHandle);
+    if (NT_SUCCESS(Status))
+        Status = SamrGetMembersInAlias(AliasHandle, &Members);
+    if (!NT_SUCCESS(Status))
+        goto done;
+
+    DomainSubAuthorityCount = *RtlSubAuthorityCountSid(AccountDomainSid);
+    for (i = 0; i < Members.Count; i++)
+    {
+        PSID MemberSid = (PSID)Members.Sids[i].SidPointer;
+        BYTE ExpectedSidBuffer[SECURITY_MAX_SID_SIZE];
+        PSID ExpectedSid = (PSID)ExpectedSidBuffer;
+        ULONG Rid;
+
+        /* Match only members that are exactly this domain SID with one
+         * more sub-authority; the count check alone is not enough. */
+        if (*RtlSubAuthorityCountSid(MemberSid) != DomainSubAuthorityCount + 1)
+            continue;
+        RtlCopyMemory(ExpectedSid, AccountDomainSid,
+                      RtlLengthSid(AccountDomainSid));
+        *RtlSubAuthorityCountSid(ExpectedSid) = DomainSubAuthorityCount + 1;
+        *RtlSubAuthoritySid(ExpectedSid, DomainSubAuthorityCount) =
+            *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (!RtlEqualSid(MemberSid, ExpectedSid))
+            continue;
+
+        Rid = *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (Rid == DOMAIN_USER_RID_ADMIN)
+            continue;
+
+        /* Another account-domain member of Administrators: skip it when
+         * it no longer opens; count it only when it stays enabled. */
+        Status = SamrOpenUser(DomainHandle,
+                              USER_READ_GENERAL | USER_READ_ACCOUNT |
+                              USER_READ_PREFERENCES,
+                              Rid, &MemberHandle);
+        if (!NT_SUCCESS(Status))
+            continue;
+        Status = SamrQueryInformationUser(MemberHandle,
+                                          UserControlInformation,
+                                          &MemberInfo);
+        if (NT_SUCCESS(Status))
+        {
+            if (!(MemberInfo->Control.UserAccountControl & USER_ACCOUNT_DISABLED))
+                goto done;
+            SamIFree_SAMPR_USER_INFO_BUFFER(MemberInfo, UserControlInformation);
+            MemberInfo = NULL;
+        }
+        SamrCloseHandle(&MemberHandle);
+        MemberHandle = NULL;
+    }
+
+    Allowed = TRUE;
+
+done:
+    if (MemberInfo != NULL)
+        SamIFree_SAMPR_USER_INFO_BUFFER(MemberInfo, UserControlInformation);
+    if (MemberHandle != NULL)
+        SamrCloseHandle(&MemberHandle);
+    if (Members.Sids != NULL)
+    {
+        ULONG j;
+
+        for (j = 0; j < Members.Count; j++)
+        {
+            if (Members.Sids[j].SidPointer != NULL)
+                SamIFreeVoid(Members.Sids[j].SidPointer);
+        }
+        SamIFreeVoid(Members.Sids);
+    }
+    if (AliasHandle != NULL)
+        SamrCloseHandle(&AliasHandle);
+    if (BuiltinHandle != NULL)
+        SamrCloseHandle(&BuiltinHandle);
+    if (BuiltinSid != NULL)
+        RtlFreeSid(BuiltinSid);
+    return Allowed;
+}
+
+
 static
 NTSTATUS
 SamValidateNormalUser(
@@ -470,10 +589,24 @@ SamValidateNormalUser(
 
     if (UserInfo->All.UserAccountControl & USER_ACCOUNT_DISABLED)
     {
-        ERR("Account disabled!\n");
-        *SubStatus = STATUS_ACCOUNT_DISABLED;
-        Status = STATUS_ACCOUNT_RESTRICTION;
-        goto done;
+        /* R1: safe mode admits the disabled built-in Administrator
+         * only when no other enabled administrator exists, and never
+         * for a network or trusted-channel logon. */
+        if (RelativeIds.Element[0] == DOMAIN_USER_RID_ADMIN &&
+            !PwdData->IsNetwork &&
+            !PwdData->TrustedClient &&
+            MsvpSafeModeRid500Recovery(ServerHandle, DomainHandle,
+                                       (PSID)AccountDomainSid))
+        {
+            TRACE("Safe-mode recovery logon for RID 500\n");
+        }
+        else
+        {
+            ERR("Account disabled!\n");
+            *SubStatus = STATUS_ACCOUNT_DISABLED;
+            Status = STATUS_ACCOUNT_RESTRICTION;
+            goto done;
+        }
     }
 
     if (BlankRefused)

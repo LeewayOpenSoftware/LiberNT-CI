@@ -558,8 +558,12 @@ CreateTargetAccount(
         if (NT_SUCCESS(Status))
         {
             RelativeId = RelativeIds[0];
-            Status = (Use[0] == SidTypeUser) ? SamOpenUser(DomainHandle, USER_ALL_ACCESS, RelativeId, &UserHandle)
-                                             : STATUS_USER_EXISTS;
+            /* The built-in Administrator is never reused as the target
+             * account; ask the user for another name. */
+            if (Use[0] == SidTypeUser && RelativeId != DOMAIN_USER_RID_ADMIN)
+                Status = SamOpenUser(DomainHandle, USER_ALL_ACCESS, RelativeId, &UserHandle);
+            else
+                Status = STATUS_USER_EXISTS;
             SamFreeMemory(RelativeIds);
             SamFreeMemory(Use);
         }
@@ -673,6 +677,379 @@ WriteTargetLogon(
 
     return ERROR_SUCCESS;
 }
+
+/* F4 post-check: a fresh target install must leave at least one enabled
+ * account-domain administrator that is not the built-in Administrator.
+ * When one exists, RID 500 - which a fresh install carries enabled with
+ * a blank password and which the target path otherwise never retires -
+ * is disabled; when none exists, re-enable RID 500 and report instead
+ * of leaving an unrecoverable machine. Everything is identified by SID
+ * or RID. */
+static DWORD
+EnsureTargetAdministrator(VOID)
+{
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    SAM_HANDLE ServerHandle = NULL;
+    SAM_HANDLE AccountDomainHandle = NULL;
+    SAM_HANDLE BuiltinHandle = NULL;
+    SAM_HANDLE AliasHandle = NULL;
+    SAM_HANDLE UserHandle = NULL;
+    PUSER_CONTROL_INFORMATION ControlInfo = NULL;
+    PSID BuiltinSid = NULL, MemberSid;
+    ULONG MemberCount = 0;
+    PSID *MemberSids = NULL;
+    ULONG i, Rid;
+    UCHAR DomainSubAuthorityCount;
+    NTSTATUS Status;
+    DWORD Result = ERROR_SUCCESS;
+    BOOLEAN FoundAdmin = FALSE;
+    BOOLEAN ReEnabled = FALSE;
+    SID_IDENTIFIER_AUTHORITY NtAuthority = SECURITY_NT_AUTHORITY;
+
+    memset(&ObjectAttributes, 0, sizeof(ObjectAttributes));
+    Status = LsaOpenPolicy(NULL, &ObjectAttributes,
+                           POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (NT_SUCCESS(Status))
+        Status = LsaQueryInformationPolicy(PolicyHandle,
+                                           PolicyAccountDomainInformation,
+                                           (PVOID *)&AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    if (!NT_SUCCESS(Status) || AccountDomain == NULL)
+    {
+        Result = ERROR_INVALID_DATA;
+        goto ReEnable;
+    }
+
+    Status = SamConnect(NULL, &ServerHandle,
+                          SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN,
+                          NULL);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamOpenDomain(ServerHandle, DOMAIN_LOOKUP,
+                           AccountDomain->DomainSid, &AccountDomainHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = RtlAllocateAndInitializeSid(&NtAuthority, 1,
+                                         SECURITY_BUILTIN_DOMAIN_RID,
+                                         0, 0, 0, 0, 0, 0, 0,
+                                         &BuiltinSid);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamOpenDomain(ServerHandle, DOMAIN_LOOKUP, BuiltinSid,
+                           &BuiltinHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamOpenAlias(BuiltinHandle, ALIAS_READ, DOMAIN_ALIAS_RID_ADMINS,
+                          &AliasHandle);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    Status = SamGetMembersInAlias(AliasHandle, &MemberSids, &MemberCount);
+    if (!NT_SUCCESS(Status))
+    {
+        Result = RtlNtStatusToDosError(Status);
+        goto ReEnable;
+    }
+
+    DomainSubAuthorityCount = *RtlSubAuthorityCountSid(AccountDomain->DomainSid);
+    for (i = 0; i < MemberCount; i++)
+    {
+        BYTE ExpectedSidBuffer[SECURITY_MAX_SID_SIZE];
+        PSID ExpectedSid = (PSID)ExpectedSidBuffer;
+
+        MemberSid = MemberSids[i];
+
+        /* Match only members that are exactly this domain SID with one
+         * more sub-authority; the count check alone is not enough. */
+        if (*RtlSubAuthorityCountSid(MemberSid) != DomainSubAuthorityCount + 1)
+            continue;
+        RtlCopyMemory(ExpectedSid, AccountDomain->DomainSid,
+                      RtlLengthSid(AccountDomain->DomainSid));
+        *RtlSubAuthorityCountSid(ExpectedSid) = DomainSubAuthorityCount + 1;
+        *RtlSubAuthoritySid(ExpectedSid, DomainSubAuthorityCount) =
+            *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (!RtlEqualSid(MemberSid, ExpectedSid))
+            continue;
+
+        Rid = *RtlSubAuthoritySid(MemberSid, DomainSubAuthorityCount);
+        if (Rid == DOMAIN_USER_RID_ADMIN)
+            continue;
+
+        Status = SamOpenUser(AccountDomainHandle,
+                             USER_READ_ACCOUNT | USER_READ_GENERAL,
+                             Rid, &UserHandle);
+        if (!NT_SUCCESS(Status))
+            continue;
+        Status = SamQueryInformationUser(UserHandle,
+                                         UserControlInformation,
+                                         (PVOID *)&ControlInfo);
+        if (NT_SUCCESS(Status))
+        {
+            if (!(ControlInfo->UserAccountControl & USER_ACCOUNT_DISABLED))
+            {
+                FoundAdmin = TRUE;
+                SamFreeMemory(ControlInfo);
+                ControlInfo = NULL;
+                SamCloseHandle(UserHandle);
+                UserHandle = NULL;
+                break;
+            }
+            SamFreeMemory(ControlInfo);
+            ControlInfo = NULL;
+        }
+        SamCloseHandle(UserHandle);
+        UserHandle = NULL;
+    }
+
+    if (FoundAdmin)
+    {
+        /* The replacement administrator is verified in place, so retire
+         * the built-in Administrator exactly here and only here. */
+        Status = SamOpenUser(AccountDomainHandle,
+                             USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                             DOMAIN_USER_RID_ADMIN, &UserHandle);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SamQueryInformationUser(UserHandle,
+                                             UserControlInformation,
+                                             (PVOID *)&ControlInfo);
+            if (NT_SUCCESS(Status))
+            {
+                ControlInfo->UserAccountControl |= USER_ACCOUNT_DISABLED;
+                Status = SamSetInformationUser(UserHandle, UserControlInformation,
+                                               ControlInfo);
+                SamFreeMemory(ControlInfo);
+                ControlInfo = NULL;
+            }
+            SamCloseHandle(UserHandle);
+            UserHandle = NULL;
+        }
+        if (!NT_SUCCESS(Status))
+            DPRINT1("EnsureTargetAdministrator: retiring RID 500 failed (Status 0x%08lx); it stays enabled\n", Status);
+        goto done;
+    }
+
+ReEnable:
+    /* No enabled non-500 administrator: re-enable RID 500 and report. */
+    DPRINT1("EnsureTargetAdministrator: no enabled administrator besides RID 500 (result %lu); re-enabling the built-in Administrator\n", Result);
+    if (ServerHandle != NULL && AccountDomainHandle != NULL)
+    {
+        Status = SamOpenUser(AccountDomainHandle,
+                             USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                             DOMAIN_USER_RID_ADMIN, &UserHandle);
+        if (NT_SUCCESS(Status))
+        {
+            Status = SamQueryInformationUser(UserHandle,
+                                             UserControlInformation,
+                                             (PVOID *)&ControlInfo);
+            if (NT_SUCCESS(Status))
+            {
+                ControlInfo->UserAccountControl &= ~USER_ACCOUNT_DISABLED;
+                Status = SamSetInformationUser(UserHandle, UserControlInformation,
+                                               ControlInfo);
+                if (NT_SUCCESS(Status))
+                    ReEnabled = TRUE;
+                SamFreeMemory(ControlInfo);
+                ControlInfo = NULL;
+            }
+            SamCloseHandle(UserHandle);
+            UserHandle = NULL;
+        }
+    }
+
+    /* Once the account really is enabled again, leave the reason under
+     * SYSTEM\Setup for the first-boot path to surface to the user. */
+    if (ReEnabled)
+    {
+        HKEY hKey;
+
+        if (RegCreateKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\Setup", 0, NULL,
+                            REG_OPTION_NON_VOLATILE, KEY_SET_VALUE,
+                            NULL, &hKey, NULL) == ERROR_SUCCESS)
+        {
+            RegSetValueExW(hKey, L"BuiltinAdministratorEnabled", 0, REG_DWORD,
+                           (const BYTE *)&Result, sizeof(Result));
+            RegCloseKey(hKey);
+        }
+    }
+
+done:
+    if (MemberSids != NULL)
+        SamFreeMemory(MemberSids);
+    if (ControlInfo != NULL)
+        SamFreeMemory(ControlInfo);
+    if (UserHandle != NULL)
+        SamCloseHandle(UserHandle);
+    if (AliasHandle != NULL)
+        SamCloseHandle(AliasHandle);
+    if (BuiltinHandle != NULL)
+        SamCloseHandle(BuiltinHandle);
+    if (AccountDomainHandle != NULL)
+        SamCloseHandle(AccountDomainHandle);
+    if (ServerHandle != NULL)
+        SamCloseHandle(ServerHandle);
+    if (BuiltinSid != NULL)
+        RtlFreeSid(BuiltinSid);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    return ERROR_SUCCESS;
+}
+#ifdef LIBERNT_ACCEPTANCE_HOOKS
+#define SETUP_PROVOKE_FILE L"LiberNT.SetupProvokePause"
+
+/* Test-only provocation gate: the acceptance harness may leave SETUP_PROVOKE_FILE
+ * at the root of the target volume, holding the name of the account-domain account
+ * to disable before the F4 post-check; the installer applies it and deletes the file. */
+static VOID
+ApplySetupProvocation(
+    _In_ PCWSTR SystemDrive)
+{
+    WCHAR FileName[MAX_PATH + 40];
+    WCHAR AccountName[UNLEN + 1];
+    WCHAR Line[160];
+    BYTE Buffer[UNLEN + 2];
+    HANDLE hFile;
+    DWORD cbRead = 0, i;
+    LSA_OBJECT_ATTRIBUTES ObjectAttributes;
+    LSA_HANDLE PolicyHandle = NULL;
+    PPOLICY_ACCOUNT_DOMAIN_INFO AccountDomain = NULL;
+    SAM_HANDLE ServerHandle = NULL;
+    SAM_HANDLE DomainHandle = NULL;
+    SAM_HANDLE UserHandle = NULL;
+    PULONG RelativeIds = NULL;
+    PSID_NAME_USE Use = NULL;
+    PUSER_CONTROL_INFORMATION ControlInfo = NULL;
+    UNICODE_STRING Name;
+    NTSTATUS Status;
+
+    if (FAILED(StringCchPrintfW(FileName, ARRAYSIZE(FileName),
+                                L"%s\\" SETUP_PROVOKE_FILE, SystemDrive)))
+        return;
+
+    hFile = CreateFileW(FileName, GENERIC_READ,
+                        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE)
+        return;
+
+    if (ReadFile(hFile, Buffer, UNLEN + 1, &cbRead, NULL))
+    {
+        while (cbRead > 0 && (Buffer[cbRead - 1] == '\n' || Buffer[cbRead - 1] == '\r'))
+            cbRead--;
+    }
+    CloseHandle(hFile);
+
+    if (cbRead == 0)
+    {
+        DeleteFileW(FileName);
+        return;
+    }
+
+    for (i = 0; i < cbRead && i < UNLEN; i++)
+        AccountName[i] = (WCHAR)Buffer[i];
+    AccountName[i] = UNICODE_NULL;
+
+    StringCchPrintfW(Line, ARRAYSIZE(Line), L"#8P provocation: disabling '%s'", AccountName);
+    ReportTargetProgress(Line);
+
+    ZeroMemory(&ObjectAttributes, sizeof(ObjectAttributes));
+    Status = LsaOpenPolicy(NULL, &ObjectAttributes,
+                           POLICY_VIEW_LOCAL_INFORMATION, &PolicyHandle);
+    if (NT_SUCCESS(Status))
+        Status = LsaQueryInformationPolicy(PolicyHandle,
+                                           PolicyAccountDomainInformation,
+                                           (PVOID *)&AccountDomain);
+    if (NT_SUCCESS(Status) && AccountDomain == NULL)
+        Status = STATUS_UNSUCCESSFUL;
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamConnect(NULL, &ServerHandle,
+                        SAM_SERVER_CONNECT | SAM_SERVER_LOOKUP_DOMAIN, NULL);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamOpenDomain(ServerHandle, DOMAIN_LOOKUP,
+                           AccountDomain->DomainSid, &DomainHandle);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    RtlInitUnicodeString(&Name, AccountName);
+    Status = SamLookupNamesInDomain(DomainHandle, 1, &Name, &RelativeIds, &Use);
+    if (!NT_SUCCESS(Status) || Use[0] != SidTypeUser)
+        goto Failed;
+
+    Status = SamOpenUser(DomainHandle,
+                         USER_READ_ACCOUNT | USER_WRITE_ACCOUNT,
+                         RelativeIds[0], &UserHandle);
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    Status = SamQueryInformationUser(UserHandle,
+                                     UserControlInformation,
+                                     (PVOID *)&ControlInfo);
+    if (NT_SUCCESS(Status))
+    {
+        ControlInfo->UserAccountControl |= USER_ACCOUNT_DISABLED;
+        Status = SamSetInformationUser(UserHandle, UserControlInformation, ControlInfo);
+    }
+    if (!NT_SUCCESS(Status))
+        goto Failed;
+
+    StringCchPrintfW(Line, ARRAYSIZE(Line),
+                     L"#8P provocation: '%s' (rid %lu) disabled", AccountName,
+                     RelativeIds[0]);
+    ReportTargetProgress(Line);
+    goto Cleanup;
+
+Failed:
+    StringCchPrintfW(Line, ARRAYSIZE(Line),
+                     L"#8P provocation: disabling '%s' failed (Status 0x%08lx)",
+                     AccountName, Status);
+    ReportTargetProgress(Line);
+
+Cleanup:
+    if (ControlInfo != NULL)
+        SamFreeMemory(ControlInfo);
+    if (Use != NULL)
+        SamFreeMemory(Use);
+    if (RelativeIds != NULL)
+        SamFreeMemory(RelativeIds);
+    if (UserHandle != NULL)
+        SamCloseHandle(UserHandle);
+    if (DomainHandle != NULL)
+        SamCloseHandle(DomainHandle);
+    if (ServerHandle != NULL)
+        SamCloseHandle(ServerHandle);
+    if (AccountDomain != NULL)
+        LsaFreeMemory(AccountDomain);
+    if (PolicyHandle != NULL)
+        LsaClose(PolicyHandle);
+    DeleteFileW(FileName);
+}
+#endif
 
 static DWORD
 ScheduleFirstBootComponents(
@@ -1249,6 +1626,10 @@ ConfigureTargetSystem(
         SecureZeroMemory(Settings->Password, sizeof(Settings->Password));
         if (Error != ERROR_SUCCESS)
             return Error;
+#ifdef LIBERNT_ACCEPTANCE_HOOKS
+        ApplySetupProvocation(Settings->SystemDrive);
+#endif
+        EnsureTargetAdministrator();
     }
 
     ReportTargetPhase(9);
