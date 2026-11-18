@@ -44,23 +44,98 @@ EtwpFindProvider(
     return NULL;
 }
 
+/* The registration handle and GUID of a provider, or FALSE for an unknown REGHANDLE */
+static
+BOOLEAN
+EtwpLookupProvider(
+    _In_ REGHANDLE RegHandle,
+    _Out_opt_ HANDLE *RegistrationHandle,
+    _Out_opt_ GUID *ProviderId)
+{
+    PETW_USER_PROVIDER Provider;
+
+    RtlAcquireSRWLockShared(&EtwpProviderLock);
+    Provider = EtwpFindProvider(RegHandle);
+    if (Provider)
+    {
+        if (RegistrationHandle) *RegistrationHandle = Provider->RegistrationHandle;
+        if (ProviderId) *ProviderId = Provider->ProviderId;
+    }
+    RtlReleaseSRWLockShared(&EtwpProviderLock);
+    return Provider != NULL;
+}
+
+/* Would an event of this level and keyword reach a session? (asks the kernel) */
+static
+BOOLEAN
+EtwpQueryEnabled(
+    _In_ REGHANDLE RegHandle,
+    _In_ UCHAR Level,
+    _In_ ULONGLONG Keyword)
+{
+    ETW_QUERY_ENABLE Query;
+    ULONG Enabled = 0, ReturnSize;
+
+    RtlZeroMemory(&Query, sizeof(Query));
+    if (!EtwpLookupProvider(RegHandle, NULL, &Query.ProviderId)) return FALSE;
+    Query.Level = Level;
+    Query.Keyword = Keyword;
+    if (!NT_SUCCESS(NtTraceControl(EtwQueryEnableCode, &Query, sizeof(Query), &Enabled, sizeof(Enabled), &ReturnSize)))
+        return FALSE;
+    return Enabled != 0;
+}
+
+/*
+ * Hands the event to the kernel, which delivers it to every session the
+ * provider is enabled for (and drops it when there is none). The data stays
+ * in place: the kernel copies it from the descriptors.
+ */
 static
 ULONG
-EtwpValidateWrite(
+EtwpWriteEvent(
     _In_ REGHANDLE RegHandle,
     _In_opt_ PCEVENT_DESCRIPTOR EventDescriptor,
+    _In_opt_ LPCGUID ActivityId,
+    _In_opt_ LPCGUID RelatedActivityId,
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData)
 {
-    PETW_USER_PROVIDER Provider;
-    RtlAcquireSRWLockShared(&EtwpProviderLock);
-    Provider = EtwpFindProvider(RegHandle);
-    RtlReleaseSRWLockShared(&EtwpProviderLock);
-    if (!Provider) return ERROR_INVALID_HANDLE;
-    if (!EventDescriptor) return ERROR_INVALID_PARAMETER;
-    UNREFERENCED_PARAMETER(UserDataCount);
-    UNREFERENCED_PARAMETER(UserData);
-    return ERROR_SUCCESS;
+    struct
+    {
+        ETW_USER_EVENT_PACKET Header;
+        EVENT_DATA_DESCRIPTOR More[ETW_MAX_EVENT_DATA_DESCRIPTORS - 1];
+    } Packet;
+    HANDLE RegistrationHandle;
+    static const GUID NullGuid;
+    NTSTATUS Status;
+
+    if (!EtwpLookupProvider(RegHandle, &RegistrationHandle, NULL)) return ERROR_INVALID_HANDLE;
+    if (!EventDescriptor || UserDataCount > ETW_MAX_EVENT_DATA_DESCRIPTORS || (UserDataCount && !UserData))
+        return ERROR_INVALID_PARAMETER;
+
+    RtlZeroMemory(&Packet.Header, FIELD_OFFSET(ETW_USER_EVENT_PACKET, UserData));
+    Packet.Header.Descriptor = *EventDescriptor;
+    /* Without an explicit one, the thread's activity id goes with the event */
+    if (!ActivityId && RtlCompareMemory(&NtCurrentTeb()->ActivityId, &NullGuid, sizeof(GUID)) != sizeof(GUID))
+        ActivityId = &NtCurrentTeb()->ActivityId;
+    if (ActivityId)
+    {
+        Packet.Header.ActivityId = *ActivityId;
+        Packet.Header.Flags |= ETW_USER_EVENT_ACTIVITY_ID;
+    }
+    if (RelatedActivityId)
+    {
+        Packet.Header.RelatedActivityId = *RelatedActivityId;
+        Packet.Header.Flags |= ETW_USER_EVENT_RELATED_ACTIVITY_ID;
+    }
+    Packet.Header.UserDataCount = UserDataCount;
+    if (UserDataCount)
+        RtlCopyMemory(Packet.Header.UserData, UserData, UserDataCount * sizeof(EVENT_DATA_DESCRIPTOR));
+
+    Status = NtTraceEvent(RegistrationHandle, ETW_NT_FLAGS_TRACE_EVENT,
+                          FIELD_OFFSET(ETW_USER_EVENT_PACKET, UserData) + UserDataCount * sizeof(EVENT_DATA_DESCRIPTOR),
+                          (PEVENT_TRACE_HEADER)&Packet);
+    return NT_SUCCESS(Status) ? ERROR_SUCCESS : RtlNtStatusToDosError(Status);
 }
 
 static
@@ -136,9 +211,8 @@ EtwEventEnabled(
     _In_ REGHANDLE RegHandle,
     _In_ PCEVENT_DESCRIPTOR EventDescriptor)
 {
-    UNREFERENCED_PARAMETER(RegHandle);
-    UNREFERENCED_PARAMETER(EventDescriptor);
-    return FALSE;
+    if (!EventDescriptor) return FALSE;
+    return EtwpQueryEnabled(RegHandle, EventDescriptor->Level, EventDescriptor->Keyword);
 }
 
 BOOLEAN
@@ -148,10 +222,7 @@ EtwEventProviderEnabled(
     _In_ UCHAR Level,
     _In_ ULONGLONG Keyword)
 {
-    UNREFERENCED_PARAMETER(RegHandle);
-    UNREFERENCED_PARAMETER(Level);
-    UNREFERENCED_PARAMETER(Keyword);
-    return FALSE;
+    return EtwpQueryEnabled(RegHandle, Level, Keyword);
 }
 
 ULONG
@@ -292,7 +363,7 @@ EtwEventWrite(
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData)
 {
-    return EtwpValidateWrite(RegHandle, EventDescriptor, UserDataCount, UserData);
+    return EtwpWriteEvent(RegHandle, EventDescriptor, NULL, NULL, UserDataCount, UserData);
 }
 
 ULONG
@@ -309,9 +380,7 @@ EtwEventWriteEx(
 {
     UNREFERENCED_PARAMETER(Filter);
     UNREFERENCED_PARAMETER(Flags);
-    UNREFERENCED_PARAMETER(ActivityId);
-    UNREFERENCED_PARAMETER(RelatedActivityId);
-    return EtwpValidateWrite(RegHandle, EventDescriptor, UserDataCount, UserData);
+    return EtwpWriteEvent(RegHandle, EventDescriptor, ActivityId, RelatedActivityId, UserDataCount, UserData);
 }
 
 ULONG
@@ -322,16 +391,23 @@ EtwEventWriteString(
     _In_ ULONGLONG Keyword,
     _In_ PCWSTR String)
 {
-    PETW_USER_PROVIDER Provider;
+    EVENT_DESCRIPTOR Descriptor;
+    EVENT_DATA_DESCRIPTOR Data;
+    SIZE_T Length;
 
-    UNREFERENCED_PARAMETER(Level);
-    UNREFERENCED_PARAMETER(Keyword);
-    RtlAcquireSRWLockShared(&EtwpProviderLock);
-    Provider = EtwpFindProvider(RegHandle);
-    RtlReleaseSRWLockShared(&EtwpProviderLock);
-    if (!Provider) return ERROR_INVALID_HANDLE;
+    if (!EtwpLookupProvider(RegHandle, NULL, NULL)) return ERROR_INVALID_HANDLE;
     if (!String) return ERROR_INVALID_PARAMETER;
-    return ERROR_SUCCESS;
+    Length = (wcslen(String) + 1) * sizeof(WCHAR);
+    if (Length > MAXUSHORT) return ERROR_ARITHMETIC_OVERFLOW;
+
+    /* a string event carries only level and keyword in its descriptor */
+    RtlZeroMemory(&Descriptor, sizeof(Descriptor));
+    Descriptor.Level = Level;
+    Descriptor.Keyword = Keyword;
+    Data.Ptr = (ULONGLONG)(ULONG_PTR)String;
+    Data.Size = (ULONG)Length;
+    Data.Reserved = 0;
+    return EtwpWriteEvent(RegHandle, &Descriptor, NULL, NULL, 1, &Data);
 }
 
 ULONG
@@ -344,9 +420,7 @@ EtwEventWriteTransfer(
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData)
 {
-    UNREFERENCED_PARAMETER(ActivityId);
-    UNREFERENCED_PARAMETER(RelatedActivityId);
-    return EtwpValidateWrite(RegHandle, EventDescriptor, UserDataCount, UserData);
+    return EtwpWriteEvent(RegHandle, EventDescriptor, ActivityId, RelatedActivityId, UserDataCount, UserData);
 }
 
 BOOLEAN

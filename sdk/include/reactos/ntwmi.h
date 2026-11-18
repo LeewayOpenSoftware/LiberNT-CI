@@ -9,6 +9,7 @@
 
 #include <wmistr.h>
 #include <evntrace.h>
+#include <evntprov.h>
 
 #ifdef __cplusplus
 extern "C" {
