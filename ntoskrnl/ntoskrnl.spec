@@ -2148,13 +2148,13 @@
 @ stdcall EtwProviderEnabled(int64 long int64)
 @ stdcall EtwRegisterClassicProvider(ptr long ptr ptr ptr)
 @ stub -arch=win64 EtwSendTraceBuffer
-@ stdcall -arch=win64 EtwSetInformation(int64 long ptr long)
+@ stdcall EtwSetInformation(int64 long ptr long)
 @ stdcall EtwTelemetryCoverageReport(ptr)
 @ stub -arch=win64 EtwWriteEndScenario
-@ stdcall -arch=win64 EtwWriteEx(int64 ptr int64 long ptr ptr long ptr)
+@ stdcall EtwWriteEx(int64 ptr int64 long ptr ptr long ptr)
 @ stub -arch=win64 EtwWriteStartScenario
-@ stdcall -arch=win64 EtwWriteString(int64 long int64 ptr ptr)
-@ stdcall -arch=win64 EtwWriteTransfer(int64 ptr ptr ptr long ptr)
+@ stdcall EtwWriteString(int64 long int64 ptr ptr)
+@ stdcall EtwWriteTransfer(int64 ptr ptr ptr long ptr)
 @ stdcall EtwpDisableStackWalkApc()
 @ stdcall EtwpReenableStackWalkApc(long)
 @ stub -arch=win64 ExAccessByte
