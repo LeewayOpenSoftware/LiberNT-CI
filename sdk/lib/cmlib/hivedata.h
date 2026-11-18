@@ -76,6 +76,13 @@
 #define HSYS_MINOR_SUPPORTED            HSYS_WHISTLER
 
 //
+// Format written to newly created hives; configure with -DLIBERNT_LEGACY_HIVE_FORMAT=ON for 1.3
+//
+#ifndef HSYS_MINOR_NEW_DEFAULT
+#define HSYS_MINOR_NEW_DEFAULT          HSYS_WHISTLER
+#endif
+
+//
 // Hive formats
 //
 #define HBASE_FORMAT_MEMORY             1

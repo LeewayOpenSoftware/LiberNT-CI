@@ -583,7 +583,7 @@ VOID CMAPI
 HvFree(
    PHHIVE RegistryHive);
 
-/* Format version written to newly created hives (default HSYS_MINOR).
+/* Format version written to newly created hives (default HSYS_MINOR_NEW_DEFAULT).
  * Loaded hives keep the minor they were written with. */
 ULONG CMAPI
 HvGetHiveFormatVersion(
