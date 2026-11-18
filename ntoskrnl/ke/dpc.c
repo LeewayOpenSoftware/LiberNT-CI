@@ -27,6 +27,13 @@
 #define KI_MAXIMUM_DPCS_PER_BATCH 32
 
 #define KI_DPC_TARGET_PROCESSOR_OFFSET 0x800
+C_ASSERT(KI_MAXIMUM_PROCESSORS <= 0x10000 - KI_DPC_TARGET_PROCESSOR_OFFSET);
+
+/*
+ * KDPC.ProcessorHistory is one KAFFINITY: processor index I sets bit
+ * I % 64, so a set bit means "may have run on any processor with that bit".
+ */
+#define KiDpcHistoryMask(Index) ((KAFFINITY)1 << ((Index) % (sizeof(KAFFINITY) * 8)))
 
 ULONG KiMaximumDpcQueueDepth = 4;
 ULONG KiMinimumDpcRate = 3;
@@ -45,7 +52,7 @@ static PVOID volatile KiActiveDpc[KI_MAXIMUM_PROCESSORS];
 
 static __inline VOID KiBeginDpcExecution(_In_ PKPRCB Prcb, _In_ PKDPC Dpc)
 {
-    InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)AFFINITY_MASK(Prcb->Number));
+    InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)KiDpcHistoryMask(Prcb->Number));
     InterlockedExchangePointer(&KiActiveDpc[Prcb->Number], Dpc);
     KiPrcbDpcTimeCount(Prcb) = 0;
 }
@@ -189,7 +196,7 @@ KiExecuteDpc(
 
             ASSERT(DpcData->DpcQueueDepth != 0 && Dpc->DpcData == DpcData);
             KiSetDpcThreadActive(Prcb);
-            InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)AFFINITY_MASK(Prcb->Number));
+            InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)KiDpcHistoryMask(Prcb->Number));
             InterlockedExchangePointer(&KiActiveThreadedDpc[Prcb->Number], Dpc);
             Dpc->DpcData = NULL;
             DeferredRoutine = Dpc->DeferredRoutine;
@@ -240,7 +247,7 @@ KiStartDpcThreads(VOID)
 
         KeInitializeEvent(&Prcb->DpcEvent, SynchronizationEvent, FALSE);
         KeInitializeDpc(&KiDpcThreadWakeDpc[Processor], KiDpcThreadWakeRoutine, Prcb);
-        KeSetTargetProcessorDpc(&KiDpcThreadWakeDpc[Processor], (CCHAR)Processor);
+        KiSetTargetProcessorDpcIndex(&KiDpcThreadWakeDpc[Processor], Processor);
         KeSetImportanceDpc(&KiDpcThreadWakeDpc[Processor], HighImportance);
 
         Status = PsCreateSystemThread(&ThreadHandle, THREAD_ALL_ACCESS, NULL, NULL, NULL, KiExecuteDpc, Prcb);
@@ -986,7 +993,7 @@ KeInsertQueueDpc(IN PKDPC Dpc,
     if (!InterlockedCompareExchangePointer(&Dpc->DpcData, DpcData, NULL))
     {
         /* Now we can play with the DPC safely */
-        InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)AFFINITY_MASK(Cpu));
+        InterlockedOrAffinity((volatile LONG_PTR *)&Dpc->ProcessorHistory, (LONG_PTR)KiDpcHistoryMask(Cpu));
         Dpc->SystemArgument1 = SystemArgument1;
         Dpc->SystemArgument2 = SystemArgument2;
         DpcData->DpcQueueDepth++;
@@ -1099,7 +1106,7 @@ KeInsertQueueDpc(IN PKDPC Dpc,
             /* It was, request and IPI */
             if (SmpDbgEnabled)
                 SmpDbgQueuedDpcIpi(Cpu);
-            KiIpiSend(AFFINITY_MASK(Cpu), IPI_DPC);
+            KiIpiSendProcessor(Cpu, IPI_DPC);
         }
         else
         {
@@ -1207,7 +1214,7 @@ KeRemoveQueueDpcEx(
     CurrentProcessor = KeGetCurrentProcessorNumber();
     for (Processor = 0; Processor < KeNumberProcessors; Processor++)
     {
-        if (!(ProcessorHistory & AFFINITY_MASK(Processor)) || (Processor == CurrentProcessor))
+        if (!(ProcessorHistory & KiDpcHistoryMask(Processor)) || (Processor == CurrentProcessor))
             continue;
 
         while ((InterlockedCompareExchangePointer(&KiActiveDpc[Processor], NULL, NULL) == Dpc) ||
@@ -1269,7 +1276,7 @@ KeFlushQueuedDpcs(VOID)
                 KeInitializeThreadedDpc(&Dpc, KiFlushDpcQueueRoutine, &Event);
             else
                 KeInitializeDpc(&Dpc, KiFlushDpcQueueRoutine, &Event);
-            KeSetTargetProcessorDpc(&Dpc, (CCHAR)ProcessorIndex);
+            KiSetTargetProcessorDpcIndex(&Dpc, ProcessorIndex);
             Inserted = KeInsertQueueDpc(&Dpc, NULL, NULL);
             ASSERT(Inserted);
             UNREFERENCED_PARAMETER(Inserted);
@@ -1281,7 +1288,7 @@ KeFlushQueuedDpcs(VOID)
                 if (TargetPrcb == KeGetCurrentPrcb())
                     HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
                 else
-                    KiIpiSend(TargetPrcb->SetMember, IPI_DPC);
+                    KiIpiSendProcessor(TargetPrcb->Number, IPI_DPC);
                 KeLowerIrql(OldIrql);
             }
 
@@ -1318,15 +1325,26 @@ KeSetImportanceDpc (IN PKDPC Dpc,
  * @implemented
  */
 VOID
+FASTCALL
+KiSetTargetProcessorDpcIndex(
+    _Inout_ PKDPC Dpc,
+    _In_ ULONG Index)
+{
+    ASSERT_DPC(Dpc);
+    if ((Index >= (ULONG)KeNumberProcessors) || (Dpc->DpcData != NULL))
+        return;
+    Dpc->Number = (USHORT)(Index + KI_DPC_TARGET_PROCESSOR_OFFSET);
+}
+
+VOID
 NTAPI
 KeSetTargetProcessorDpc(IN PKDPC Dpc,
                         IN CCHAR Number)
 {
     /* Set a target CPU */
-    ASSERT_DPC(Dpc);
-    if ((Number < 0) || ((UCHAR)Number >= (UCHAR)KeNumberProcessors) || (Dpc->DpcData != NULL))
+    if (Number < 0)
         return;
-    Dpc->Number = Number + KI_DPC_TARGET_PROCESSOR_OFFSET;
+    KiSetTargetProcessorDpcIndex(Dpc, (UCHAR)Number);
 }
 
 typedef struct _KI_GENERIC_DPC_BARRIER
@@ -1349,7 +1367,6 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     KI_GENERIC_DPC_BARRIER Sync;
     PKPRCB CurrentPrcb;
     LONG Flags[KI_MAXIMUM_PROCESSORS];
-    CCHAR Number;
     ULONG Count, Index;
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
 
@@ -1370,14 +1387,14 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     CurrentPrcb = KeGetCurrentPrcb();
     ASSERT(CurrentPrcb->Number < Count);
 
-    for (Number = 0; Number < (CCHAR)Count; Number++)
+    for (Index = 0; Index < Count; Index++)
     {
-        PKPRCB Prcb = KiProcessorBlock[(UCHAR)Number];
+        PKPRCB Prcb = KiProcessorBlock[Index];
 
         if (Prcb == CurrentPrcb) continue;
 
         KeInitializeDpc(&Prcb->CallDpc, Routine, Context);
-        KeSetTargetProcessorDpc(&Prcb->CallDpc, Number);
+        KiSetTargetProcessorDpcIndex(&Prcb->CallDpc, Index);
         KeSetImportanceDpc(&Prcb->CallDpc, HighImportance);
         KeInsertQueueDpc(&Prcb->CallDpc, (PVOID)&Barrier, (PVOID)&Sync);
     }

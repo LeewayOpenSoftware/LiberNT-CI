@@ -27,6 +27,22 @@ typedef struct DECLSPEC_CACHEALIGN _KI_GENERIC_CALL_PACKET
 static KI_GENERIC_CALL_PACKET KiGenericCallPacket;
 static volatile LONG KiGenericCallOwner = -1;
 
+/*
+ * Per-target IPI mailbox, indexed by processor index. Requests holds the
+ * requests that do not depend on the sender (IPI_DPC, IPI_FREEZE,
+ * KI_IPI_GENERIC_CALL). MemorySenders holds, per group, the senders whose
+ * TLB request (KI_IPI_MEMORY) the target has not processed yet. This is
+ * linear in the processor count, where the per-sender 64-slot
+ * KPRCB.RequestMailbox it replaces is quadratic.
+ */
+typedef struct DECLSPEC_CACHEALIGN _KI_IPI_MAILBOX
+{
+    volatile LONG64 Requests;
+    volatile KAFFINITY MemorySenders[KI_MAXIMUM_GROUPS];
+} KI_IPI_MAILBOX, *PKI_IPI_MAILBOX;
+
+static KI_IPI_MAILBOX KiIpiMailbox[KI_MAXIMUM_PROCESSORS];
+
 /* FUNCTIONS *****************************************************************/
 
 static
@@ -37,24 +53,28 @@ KiIpiQueueRequest(
 {
     KAFFINITY QueuedTargets;
     PKPRCB SourcePrcb = KeGetCurrentPrcb();
+    PROCESSOR_NUMBER Source;
     ULONG Processor;
 
     ASSERT(SourcePrcb->Number < KI_MAXIMUM_PROCESSORS);
+    KiProcessorNumberFromIndex(SourcePrcb->Number, &Source);
     TargetSet &= (KAFFINITY)KeActiveProcessors;
     QueuedTargets = TargetSet;
 
     while (BitScanForwardAffinity(&Processor, TargetSet))
     {
-        PKPRCB TargetPrcb = KiProcessorBlock[Processor];
+        PKI_IPI_MAILBOX Mailbox = &KiIpiMailbox[Processor];
 
-        ASSERT(TargetPrcb != NULL);
-        InterlockedOr64(
-            (PLONG64)&TargetPrcb->RequestMailbox[SourcePrcb->Number].RequestSummary,
-            IpiRequest);
-
-        InterlockedBitTestAndSetAffinity(
-            (volatile KAFFINITY *)&TargetPrcb->SenderSummary,
-            SourcePrcb->Number);
+        ASSERT(KiProcessorBlock[Processor] != NULL);
+        if (IpiRequest == KI_IPI_MEMORY)
+        {
+            InterlockedOr64((PLONG64)&Mailbox->MemorySenders[Source.Group],
+                            (LONG64)KiAffinityForProcessorIndex(Source.Number));
+        }
+        else
+        {
+            InterlockedOr64(&Mailbox->Requests, IpiRequest);
+        }
 
         TargetSet &= ~AFFINITY_MASK(Processor);
     }
@@ -148,53 +168,49 @@ NTAPI
 KiIpiProcessRequests(VOID)
 {
     PKPRCB Prcb = KeGetCurrentPrcb();
-    KAFFINITY Sources;
-    BOOLEAN DpcRequest = FALSE;
-    ULONG Source;
+    PKI_IPI_MAILBOX Mailbox;
+    ULONG64 Requests;
+    KAFFINITY Senders;
+    USHORT Groups;
+    USHORT Group;
+    ULONG Bit;
 
     ASSERT(Prcb->Number < KI_MAXIMUM_PROCESSORS);
-    Sources = (KAFFINITY)InterlockedExchange64(
-        (PLONG64)&Prcb->SenderSummary,
-        0);
+    Mailbox = &KiIpiMailbox[Prcb->Number];
 
-    while (BitScanForwardAffinity(&Source, Sources))
+    /* TLB requests first, from every sender that queued one */
+    Groups = KiActiveProcessorsEx.Count;
+    for (Group = 0; Group < Groups; Group++)
     {
-        ULONG64 Requests;
-
-        Requests = (ULONG64)InterlockedExchange64(
-            (PLONG64)&Prcb->RequestMailbox[Source].RequestSummary,
-            0);
-
-        if (Requests & KI_IPI_MEMORY)
+        Senders = (KAFFINITY)InterlockedExchange64((PLONG64)&Mailbox->MemorySenders[Group], 0);
+        while (BitScanForwardAffinity(&Bit, Senders))
         {
             if (SmpDbgEnabled)
                 SmpDbgTbFlushIpi(Prcb->Number);
-            MiAmd64ProcessTlbRequest(Source);
+            MiAmd64ProcessTlbRequest(KiProcessorIndexFromNumber(Group, (UCHAR)Bit));
+            Senders &= ~AFFINITY_MASK(Bit);
         }
-
-        if (Requests & KI_IPI_GENERIC_CALL)
-        {
-            if (SmpDbgEnabled)
-                SmpDbgGenericCallIpi(Prcb->Number);
-            KiIpiParticipateInGenericCall(Prcb);
-        }
-
-        if (Requests & IPI_DPC)
-        {
-            if (SmpDbgEnabled)
-                SmpDbgRemoteDpc(Prcb->Number, Source);
-            DpcRequest = TRUE;
-        }
-
-        ASSERT((Requests & ~(KI_IPI_MEMORY |
-                             KI_IPI_GENERIC_CALL |
-                             IPI_DPC |
-                             IPI_FREEZE)) == 0);
-        Sources &= ~AFFINITY_MASK(Source);
     }
 
-    if (DpcRequest)
+    Requests = (ULONG64)InterlockedExchange64(&Mailbox->Requests, 0);
+
+    if (Requests & KI_IPI_GENERIC_CALL)
+    {
+        if (SmpDbgEnabled)
+            SmpDbgGenericCallIpi(Prcb->Number);
+        KiIpiParticipateInGenericCall(Prcb);
+    }
+
+    ASSERT((Requests & ~(KI_IPI_GENERIC_CALL |
+                         IPI_DPC |
+                         IPI_FREEZE)) == 0);
+
+    if (Requests & IPI_DPC)
+    {
+        if (SmpDbgEnabled)
+            SmpDbgRemoteDpc(Prcb->Number, SMPDBG_SOURCE_UNKNOWN);
         KiRequestDispatchInterrupt(Prcb);
+    }
 
     /* Complete a freeze whose NMI has not arrived. This also covers the
      * spin loops that poll here with interrupts disabled (TLB shootdown,

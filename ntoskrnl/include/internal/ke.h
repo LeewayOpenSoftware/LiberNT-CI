@@ -598,6 +598,25 @@ KiIpiSend(
     ULONG IpiRequest
 );
 
+/* Sends an IPI request to one processor, given by its index */
+FORCEINLINE
+VOID
+KiIpiSendProcessor(
+    _In_ ULONG Index,
+    _In_ ULONG IpiRequest)
+{
+    /* The HAL IPI interface takes a group 0 KAFFINITY */
+    ASSERT(Index < KI_PROCESSORS_PER_GROUP);
+    KiIpiSend(KiAffinityForProcessorIndex(Index), IpiRequest);
+}
+
+/* Targets a DPC at a processor index; ignored while the DPC is queued */
+VOID
+FASTCALL
+KiSetTargetProcessorDpcIndex(
+    _Inout_ PKDPC Dpc,
+    _In_ ULONG Index);
+
 VOID
 NTAPI
 KiIpiSendPacket(

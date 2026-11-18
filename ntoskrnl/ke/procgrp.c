@@ -1627,13 +1627,12 @@ KeSetTargetProcessorDpcEx(
     _Inout_ PKDPC Dpc,
     _In_ PPROCESSOR_NUMBER ProcNumber)
 {
-    if ((ProcNumber->Group != 0) ||
-        (ProcNumber->Number >= (UCHAR)KeNumberProcessors))
-    {
-        return STATUS_INVALID_PARAMETER;
-    }
+    ULONG Index = KeGetProcessorIndexFromNumber(ProcNumber);
 
-    KeSetTargetProcessorDpc(Dpc, (CCHAR)ProcNumber->Number);
+    if (Index == INVALID_PROCESSOR_INDEX)
+        return STATUS_INVALID_PARAMETER;
+
+    KiSetTargetProcessorDpcIndex(Dpc, Index);
     return STATUS_SUCCESS;
 }
 
