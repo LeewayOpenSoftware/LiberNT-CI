@@ -11,6 +11,10 @@
  * Event XML schema (http://schemas.microsoft.com/win/2004/08/events/event) the
  * way classic events appear on Windows. Queries accept the XPath 1.0 subset the
  * event log documents for structured queries (see query.c).
+ *
+ * Handles are pointers to tagged objects, as in Wine: a handle that was never
+ * returned, or one used after EvtClose, is undefined behaviour, as is closing
+ * a handle while another thread still uses it.
  */
 
 #include "wevtapi_private.h"

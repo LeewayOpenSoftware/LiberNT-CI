@@ -40,10 +40,16 @@ struct evt_filter
     struct evt_filter *left, *right;
 };
 
+/* Parsing, matching and freeing recurse over the tree: bound its depth and size */
+#define EVT_MAX_QUERY_DEPTH  32
+#define EVT_MAX_FILTER_NODES 512
+
 struct parser
 {
     const WCHAR *p;
     BOOL error;
+    int depth;
+    int nodes;
 };
 
 void evt_free_filter(struct evt_filter *f)
@@ -57,7 +63,14 @@ void evt_free_filter(struct evt_filter *f)
 
 static struct evt_filter *new_filter(struct parser *ps, enum filter_kind kind)
 {
-    struct evt_filter *f = heap_alloc_zero(sizeof(*f));
+    struct evt_filter *f;
+
+    if (++ps->nodes > EVT_MAX_FILTER_NODES)
+    {
+        ps->error = TRUE;
+        return NULL;
+    }
+    f = heap_alloc_zero(sizeof(*f));
     if (!f) ps->error = TRUE;
     else f->kind = kind;
     return f;
@@ -264,7 +277,17 @@ static struct evt_filter *parse_binary(struct parser *ps, BOOL is_or)
 
 static struct evt_filter *parse_expr(struct parser *ps)
 {
-    return parse_binary(ps, TRUE);
+    struct evt_filter *f;
+
+    if (++ps->depth > EVT_MAX_QUERY_DEPTH)
+    {
+        ps->error = TRUE;
+        ps->depth--;
+        return NULL;
+    }
+    f = parse_binary(ps, TRUE);
+    ps->depth--;
+    return f;
 }
 
 static BOOL parse_xpath(const WCHAR *query, struct evt_filter **out)
@@ -274,6 +297,8 @@ static BOOL parse_xpath(const WCHAR *query, struct evt_filter **out)
 
     ps.p = query;
     ps.error = FALSE;
+    ps.depth = 0;
+    ps.nodes = 0;
 
     if (match_tok(&ps, L"*")) { }
     else if (match_tok(&ps, L"Event"))
@@ -543,6 +568,13 @@ BOOL evt_record_valid(const EVENTLOGRECORD *r, DWORD avail)
         r->UserSidLength > r->Length - r->UserSidOffset ||
         r->DataOffset > r->Length || r->DataLength > r->Length - r->DataOffset)
         return FALSE;
+    /* Each insertion string takes at least its terminator */
+    if (r->NumStrings && (r->StringOffset < sizeof(*r) || (r->StringOffset & 1) ||
+                          r->NumStrings > (r->Length - r->StringOffset) / sizeof(WCHAR)))
+        return FALSE;
+    /* A SID is at least 8 bytes and DWORD aligned */
+    if (r->UserSidLength && (r->UserSidLength < 8 || r->UserSidOffset < sizeof(*r) || (r->UserSidOffset & 3)))
+        return FALSE;
     /* SourceName and ComputerName: two terminated strings right after the header */
     {
         const WCHAR *p = (const WCHAR *)(r + 1);
@@ -764,7 +796,10 @@ BOOL WINAPI EvtNext(EVT_HANDLE handle, DWORD size, EVT_HANDLE *events, DWORD tim
         }
         if (!(events[n] = evt_create_event(r, set->channel)))
         {
+            /* Not consumed: the next call reads this record again */
             err = GetLastError();
+            set->next = r->RecordNumber;
+            set->buffer_len = set->buffer_pos = 0;
             break;
         }
         n++;
@@ -793,6 +828,12 @@ BOOL WINAPI EvtSeek(EVT_HANDLE handle, LONGLONG position, EVT_HANDLE bookmark, D
         (!(bm = evt_get_object(bookmark, EVT_TYPE_BOOKMARK)) || !bm->valid))
     {
         SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    /* Classic record numbers are 32-bit: anything farther cannot exist (and keeps the sums below exact) */
+    if (position > ((LONGLONG)1 << 40) || position < -((LONGLONG)1 << 40) || (bm && bm->record_id > 0xFFFFFFFF))
+    {
+        SetLastError(ERROR_NOT_FOUND);
         return FALSE;
     }
 

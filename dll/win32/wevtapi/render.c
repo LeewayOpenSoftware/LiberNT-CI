@@ -14,6 +14,7 @@ WINE_DEFAULT_DEBUG_CHANNEL(wevtapi);
 #define SEL_NULL     (-1)
 #define SEL_BINARY   (EvtSystemPropertyIdEND + 1)
 #define SEL_DATA     1000     /* SEL_DATA + n: the n-th insertion string, 0-based */
+#define EVT_MAX_RENDER_VALUES 0x10000   /* keeps every size computation far from wrapping */
 
 /* --------------------------------------------------------------------------
  * Record accessors (records are validated by evt_record_valid on read)
@@ -297,7 +298,8 @@ EVT_HANDLE WINAPI EvtCreateRenderContext(DWORD count, const WCHAR **paths, DWORD
 
     TRACE("(%lu %p %#lx)\n", count, paths, flags);
 
-    if (flags > EvtRenderContextUser || (flags == EvtRenderContextValues && (!count || !paths)) ||
+    if (flags > EvtRenderContextUser || count > EVT_MAX_RENDER_VALUES ||
+        (flags == EvtRenderContextValues && (!count || !paths)) ||
         (flags != EvtRenderContextValues && (count || paths)))
     {
         SetLastError(ERROR_INVALID_PARAMETER);
@@ -429,8 +431,13 @@ static BOOL render_values(const struct evt_render_context *context, const struct
         for (i = 0; i < n; i++) sels[i] = i;
         break;
     case EvtRenderContextUser:
-        n = event->record->NumStrings;
-        if (n > EvtSystemPropertyIdEND && !(sels = heap_alloc(n * sizeof(int))))
+        n = event->record->NumStrings;   /* bounded by the record size (evt_record_valid) */
+        if (n > EVT_MAX_RENDER_VALUES)
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            return FALSE;
+        }
+        if (n > EvtSystemPropertyIdEND && !(sels = heap_alloc((SIZE_T)n * sizeof(int))))
         {
             SetLastError(ERROR_OUTOFMEMORY);
             return FALSE;
@@ -438,8 +445,8 @@ static BOOL render_values(const struct evt_render_context *context, const struct
         for (i = 0; i < n; i++) sels[i] = SEL_DATA + i;
         break;
     default:
-        n = context->count;
-        if (n > EvtSystemPropertyIdEND && !(sels = heap_alloc(n * sizeof(int))))
+        n = context->count;   /* bounded by EvtCreateRenderContext */
+        if (n > EvtSystemPropertyIdEND && !(sels = heap_alloc((SIZE_T)n * sizeof(int))))
         {
             SetLastError(ERROR_OUTOFMEMORY);
             return FALSE;
@@ -448,13 +455,17 @@ static BOOL render_values(const struct evt_render_context *context, const struct
         break;
     }
 
+    /* n is bounded below, so the array size cannot wrap; every later sum is checked */
     total = ALIGN8((SIZE_T)n * sizeof(EVT_VARIANT));
     for (i = 0; i < n; i++)
-        total += render_value(event, sels[i], NULL, NULL);
-    if (total > MAXDWORD)
     {
-        SetLastError(ERROR_INVALID_DATA);
-        goto done;
+        SIZE_T extra_len = render_value(event, sels[i], NULL, NULL);
+        if (extra_len > MAXDWORD - total)
+        {
+            SetLastError(ERROR_INVALID_DATA);
+            goto done;
+        }
+        total += extra_len;
     }
     *used = (DWORD)total;
     *count = n;
