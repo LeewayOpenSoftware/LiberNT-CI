@@ -1,0 +1,331 @@
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+
+STRINGTABLE
+BEGIN
+    IDS_HELP_MAIN "Windows Events Command Line Utility.\n\
+\n\
+Enables you to retrieve information about event logs and publishers, install\n\
+and uninstall event manifests, run queries, and export, archive, and clear logs.\n\
+\n\
+Usage:\n\
+\n\
+You can use either the short (for example, ep /uni) or long (for example,\n\
+enum-publishers /unicode) version of the command and option names. Commands,\n\
+options and option values are not case-sensitive.\n\
+\n\
+Variables are noted in all upper-case.\n\
+\n\
+wevtutil COMMAND [ARGUMENT [ARGUMENT] ...] [/OPTION:VALUE [/OPTION:VALUE] ...]\n\
+\n\
+Commands:\n\
+\n\
+el | enum-logs          List log names.\n\
+gl | get-log            Get log configuration information.\n\
+sl | set-log            Modify configuration of a log.\n\
+ep | enum-publishers    List event publishers.\n\
+gp | get-publisher      Get publisher configuration information.\n\
+im | install-manifest   Install event publishers and logs from manifest.\n\
+um | uninstall-manifest Uninstall event publishers and logs from manifest.\n\
+qe | query-events       Query events from a log or log file.\n\
+gli | get-log-info      Get log status information.\n\
+epl | export-log        Export a log.\n\
+al | archive-log        Archive an exported log.\n\
+cl | clear-log          Clear a log.\n\
+\n\
+Common options:\n\
+\n\
+/{r | remote}:VALUE\n\
+If specified, run the command on a remote computer. VALUE is the remote computer\n\
+name. Options /im and /um do not support remote operations.\n\
+\n\
+/{u | username}:VALUE\n\
+Specify a different user to log on to the remote computer. VALUE is a user name\n\
+in the form domain\\user or user. Only applicable when option /r is specified.\n\
+\n\
+/{p | password}:VALUE\n\
+Password for the specified user. If not specified, or if VALUE is ""*"", the\n\
+user will be prompted to enter a password. Only applicable when the /u option\n\
+is specified.\n\
+\n\
+/{a | authentication}:[Default|Negotiate|Kerberos|NTLM]\n\
+Authentication type for connecting to the remote computer. The default is\n\
+Negotiate.\n\
+\n\
+/{uni | unicode}:[true|false]\n\
+Display output in Unicode. If true, then output is in Unicode.\n\
+\n\
+To learn more about a specific command, type the following:\n\
+\n\
+wevtutil COMMAND /?\n"
+
+    IDS_HELP_EL "List the names of all logs.\n\
+\n\
+Usage:\n\
+\n\
+wevtutil { el | enum-logs }\n\
+\n\
+Example:\n\
+\n\
+The following example lists the names of all logs.\n\
+\n\
+wevtutil el\n"
+
+    IDS_HELP_GL "Display configuration information for the event log, including whether the\n\
+log is enabled, the current maximum size limit of the log, and the path to the\n\
+file where the log is stored.\n\
+\n\
+Usage:\n\
+\n\
+wevtutil { gl | get-log } <LOGNAME> [/OPTION:VALUE [/OPTION:VALUE] ...]\n\
+\n\
+<LOGNAME>\n\
+String that uniquely identifies a log. To display a list of all log names,\n\
+run wevtutil el.\n\
+\n\
+Options:\n\
+\n\
+You can use either the short (for example, /f) or long (for example, /format)\n\
+version of the option names. Options and their values are not case-sensitive.\n\
+\n\
+/{f | format}:[XML|Text]\n\
+Specifies the format of the log file. The default is Text. If XML is specified,\n\
+the output is stored in XML format. If Text is specified, the output is stored\n\
+without XML tags.\n\
+\n\
+Example:\n\
+\n\
+The following example displays configuration information about the local\n\
+System log in XML format.\n\
+\n\
+wevtutil gl System /f:xml\n"
+
+    IDS_HELP_SL "Modify the configuration of a log.\n\
+\n\
+Usage:\n\
+\n\
+wevtutil { sl | set-log } <LOGNAME> [/OPTION:VALUE [/OPTION:VALUE] ...]\n\
+\n\
+<LOGNAME>\n\
+String that uniquely identifies a log. To display a list of all log names,\n\
+run wevtutil el.\n\
+\n\
+Options:\n\
+\n\
+You can use either the short (for example, /ms) or long (for example,\n\
+/maxsize) version of the option names. Options and their values are not\n\
+case-sensitive.\n\
+\n\
+/{rt | retention}:[true|false]\n\
+Log retention mode. If true, events are kept when the log is full and new\n\
+events are discarded. If false, the oldest events are overwritten as needed.\n\
+\n\
+/{ms | maxsize}:<n>\n\
+Maximum size of the log in bytes. The minimum value is 1048576 (1024 KB).\n\
+\n\
+The options /e, /i, /lfn, /ab, /l, /k, /ca and /c are not available on this\n\
+system.\n\
+\n\
+Example:\n\
+\n\
+The following example sets the maximum size of the Application log to 32 MB.\n\
+\n\
+wevtutil sl Application /ms:33554432\n"
+
+    IDS_HELP_QE "Read events from an event log, from a log file, or using a structured query.\n\
+\n\
+Usage:\n\
+\n\
+wevtutil { qe | query-events } <PATH> [/OPTION:VALUE [/OPTION:VALUE] ...]\n\
+\n\
+<PATH>\n\
+By default, you must supply a log name for the <PATH> parameter. However, if\n\
+you use the /lf option, you must supply the path to a log file for the <PATH>\n\
+parameter. If you use the /sq parameter, you must supply the path to a file\n\
+containing a structured query.\n\
+\n\
+Options:\n\
+\n\
+You can use either the short (for example, /f) or long (for example, /format)\n\
+version of the option names. Options and their values are not case-sensitive.\n\
+\n\
+/{lf | logfile}:[true|false]\n\
+If true, <PATH> is the full path to a log file.\n\
+\n\
+/{sq | structuredquery}:[true|false]\n\
+If true, <PATH> is the full path to a file that contains a structured query.\n\
+\n\
+/{q | query}:VALUE\n\
+VALUE is an XPath query to filter the events that are read. If not specified,\n\
+all events will be returned. This option is not available when /sq is true.\n\
+\n\
+/{bm | bookmark}:VALUE\n\
+VALUE is the full path to a file that contains a bookmark from a previous\n\
+query.\n\
+\n\
+/{sbm | savebookmark}:VALUE\n\
+VALUE is the full path to a file in which to save a bookmark of this query.\n\
+The file extension should be .xml.\n\
+\n\
+/{rd | reversedirection}:[true|false]\n\
+Event read direction. If true, the most recent events are returned first.\n\
+\n\
+/{f | format}:[XML|Text|RenderedXml]\n\
+The default value is XML. If Text is specified, prints events in an easy to\n\
+read text format, rather than in XML format. If RenderedXml, prints events in\n\
+XML format with rendering information. Note that printing events in Text or\n\
+RenderedXml formats is slower than printing in XML format.\n\
+\n\
+/{l | locale}:VALUE\n\
+VALUE is a locale string to print event text in a specific locale. Only\n\
+available when printing events in text format using the /f option.\n\
+\n\
+/{c | count}:<n>\n\
+Maximum number of events to read.\n\
+\n\
+/{e | element}:VALUE\n\
+When outputting event XML, include a root element to produce well-formed XML.\n\
+VALUE is the string you want within the root element. For example, specifying\n\
+/e:root would result in XML with the root element pair <root></root>.\n\
+\n\
+Example:\n\
+\n\
+The following example displays the three most recent events from the\n\
+Application log in textual format.\n\
+\n\
+wevtutil qe Application /c:3 /rd:true /f:text\n"
+
+    IDS_HELP_GLI "Get status information about an event log or log file.\n\
+\n\
+Usage:\n\
+\n\
+wevtutil { gli | get-loginfo } <LOGNAME>\n\
+\n\
+<LOGNAME>\n\
+Name of the log or path to a log file. If the option /lf is true, this is the\n\
+path to a log file and it is required. If /lf is false, it is the name of the\n\
+log. To display a list of all log names, run wevtutil el.\n\
+\n\
+Options:\n\
+\n\
+You can use either the short (for example, /lf) or long (for example,\n\
+/logfile) version of the option names. Options and their values are not\n\
+case-sensitive.\n\
+\n\
+/{lf | logfile}:[true|false]\n\
+If true, <LOGNAME> is the path to a log file.\n\
+\n\
+Example:\n\
+\n\
+wevtutil gli Application\n"
+
+    IDS_HELP_EPL "Export events from an event log, from a log file, or using a structured\n\
+query to a file.\n\
+\n\
+Usage:\n\
+\n\
+wevtutil { epl | export-log } <PATH> <TARGETFILE>\n\
+  [/OPTION:VALUE [/OPTION:VALUE] ...]\n\
+\n\
+<PATH>\n\
+By default, you must supply a log name for PATH. However, if you use the /lf\n\
+option, you must supply the path to a log file for PATH. If you use the /sq\n\
+parameter, you must supply the path to a file containing a structured query.\n\
+\n\
+<TARGETFILE>\n\
+Path to the file where the exported events are to be stored.\n\
+\n\
+Options:\n\
+\n\
+You can use either the short (for example, /l) or long (for example, /locale)\n\
+version of the option names. Options and their values are not case-sensitive.\n\
+\n\
+/{lf | logfile}:[true|false]\n\
+If true, <PATH> is the path to a log file.\n\
+\n\
+/{sq | structuredquery}:[true|false]\n\
+If true, <PATH> is the path to a file that contains a structured query.\n\
+\n\
+/{q | query}:VALUE\n\
+VALUE is an XPath query to filter the events that are exported. If not\n\
+specified, all events will be returned. This option is not available when /sq\n\
+is true.\n\
+\n\
+/{ow | overwrite}:[true|false]\n\
+If true, and the target file specified in <TARGETFILE> already exists, it will\n\
+be overwritten without confirmation.\n\
+\n\
+Example:\n\
+\n\
+The following example exports events from the System log to\n\
+C:\\backup\\system0506.evtx.\n\
+\n\
+wevtutil epl System C:\\backup\\system0506.evtx\n"
+
+    IDS_HELP_CL "Clear events from an event log and, optionally, back up cleared events.\n\
+\n\
+Usage:\n\
+\n\
+wevtutil { cl | clear-log } <LOGNAME> [/OPTION:VALUE]\n\
+\n\
+<LOGNAME>\n\
+Name of the log to clear. To retrieve a list of log names, type wevtutil el.\n\
+\n\
+Options:\n\
+\n\
+You can use either the short (for example, /bu) or long (for example, /backup)\n\
+version of the option names. Options and their values are not case-sensitive.\n\
+\n\
+/{bu | backup}:VALUE\n\
+Backup file for cleared events. If specified, the cleared events will be saved\n\
+to the backup file. Include the .evtx extension in the name of the backup file.\n\
+\n\
+Example:\n\
+\n\
+The following example clears all of the events from the Application log after\n\
+saving them to C:\\admin\\backups\\al0306.evtx.\n\
+\n\
+wevtutil.exe cl Application /bu:C:\\admin\\backups\\al0306.evtx\n"
+
+    IDS_HELP_NOT_SUPPORTED "This command is not available on this system.\n"
+
+    IDS_ERR_NO_COMMAND "Command was not specified.\n"
+    IDS_ERR_BAD_COMMAND "Command %ls is not supported.\n"
+    IDS_ERR_INVALID_OPTION "Invalid option %ls. Option is not supported.\n"
+    IDS_ERR_INVALID_VALUE "Invalid value for option %ls.\n"
+    IDS_ERR_MISSING_ARGS "Required arguments were not specified.\n"
+    IDS_ERR_EXTRA_ARG "Argument %ls is not expected.\n"
+    IDS_ERR_READ_CONFIG "Failed to read configuration for log %ls.\n"
+    IDS_ERR_SAVE_CONFIG "Failed to save configuration or activate log %ls.\n"
+    IDS_ERR_OPEN_QUERY "Failed to open event query.\n"
+    IDS_ERR_READ_LOG_INFO "Failed to read log information for %ls.\n"
+    IDS_ERR_EXPORT_LOG "Failed to export log %ls.\n"
+    IDS_ERR_CLEAR_LOG "Failed to clear log %ls.\n"
+    IDS_ERR_OPEN_SESSION "Failed to connect to remote computer %ls.\n"
+    IDS_ERR_READ_FILE "Failed to read file %ls.\n"
+    IDS_ERR_WRITE_FILE "Failed to write file %ls.\n"
+    IDS_ERR_COMMAND_UNAVAILABLE "Command %ls is not available on this system.\n"
+    IDS_ERR_NEXT_EVENT "Failed to read the next event.\n"
+    IDS_ERR_RENDER_EVENT "Failed to render event.\n"
+    IDS_ERR_UNKNOWN "Error %lu.\n"
+
+    IDS_EVT_INVALID_CHANNEL_PATH "The specified channel path is invalid.\n"
+    IDS_EVT_INVALID_QUERY "The specified query is invalid.\n"
+    IDS_EVT_CHANNEL_NOT_FOUND "The specified channel could not be found.\n"
+
+    IDS_LEVEL_LOGALWAYS "Log Always"
+    IDS_LEVEL_CRITICAL "Critical"
+    IDS_LEVEL_ERROR "Error"
+    IDS_LEVEL_WARNING "Warning"
+    IDS_LEVEL_INFORMATION "Information"
+    IDS_LEVEL_VERBOSE "Verbose"
+
+    IDS_KEYWORD_CLASSIC "Classic"
+    IDS_KEYWORD_AUDIT_SUCCESS "Audit Success"
+    IDS_KEYWORD_AUDIT_FAILURE "Audit Failure"
+
+    IDS_DESC_NOT_FOUND "The description for Event ID %u from source %ls cannot be found. Either the component that raises this event is not installed on your local computer or the installation is corrupted. You can install or repair the component on the local computer.\n\
+\n\
+If the event originated on another computer, the display information had to be saved with the event.\n\
+\n\
+The following information was included with the event:\n"
+END
