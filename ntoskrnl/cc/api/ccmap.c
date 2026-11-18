@@ -355,6 +355,47 @@ CcGetFileObjectFromSectionPtrs(
 
 PFILE_OBJECT
 NTAPI
+CcGetFileObjectFromSectionPtrsRef(
+    _In_ PSECTION_OBJECT_POINTERS SectionObjectPointer)
+{
+    PCC_NT_MAP NtMap = CcNtReferenceMap(SectionObjectPointer);
+    PFILE_OBJECT FileObject = NULL;
+
+    /* The reference is taken while the map still holds the file object */
+    if (NtMap != NULL)
+    {
+        FileObject = NtMap->FileObject;
+        if (FileObject != NULL)
+            ObReferenceObject(FileObject);
+        CcNtDereferenceMap(NtMap);
+    }
+
+    return FileObject;
+}
+
+NTSTATUS
+NTAPI
+FsRtlQueryCachedVdl(
+    _In_ PFILE_OBJECT FileObject,
+    _Out_ PLONGLONG Vdl)
+{
+    PCC_NT_MAP NtMap;
+
+    if (FileObject == NULL || Vdl == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    /* A file without a cache map has no cached valid data length */
+    NtMap = CcNtReferenceFileMap(FileObject);
+    if (NtMap == NULL)
+        return STATUS_INVALID_PARAMETER;
+
+    *Vdl = (LONGLONG)CC_ATOMIC_READ64(&NtMap->Map.ValidDataLength);
+    CcNtDereferenceMap(NtMap);
+    return STATUS_SUCCESS;
+}
+
+PFILE_OBJECT
+NTAPI
 CcGetFileObjectFromBcb(
     _In_ PVOID Bcb)
 {
@@ -503,6 +544,37 @@ CcIsThereDirtyData(
     }
 
     return Dirty;
+}
+
+BOOLEAN
+CcIsThereDirtyDataEx(
+    _In_ PVPB Vpb,
+    _In_opt_ PULONG NumberOfDirtyPages)
+{
+    KIRQL OldIrql;
+    ULONG64 DirtyPages = 0;
+    PLIST_ENTRY Entry;
+    ULONG Index;
+
+    /* Unlike CcIsThereDirtyData, temporary files count too */
+    for (Index = 0; Index < CC_NT_MAP_BUCKETS; Index++)
+    {
+        PCC_NT_MAP_BUCKET Bucket = &CcNtMapBuckets[Index];
+
+        KeAcquireSpinLock(&Bucket->Lock, &OldIrql);
+        for (Entry = Bucket->List.Flink; Entry != &Bucket->List; Entry = Entry->Flink)
+        {
+            PCC_NT_MAP NtMap = CONTAINING_RECORD(Entry, CC_NT_MAP, Link);
+
+            if (NtMap->FileObject->Vpb == Vpb)
+                DirtyPages += CC_ATOMIC_READ64(&NtMap->Map.DirtyPages);
+        }
+        KeReleaseSpinLock(&Bucket->Lock, OldIrql);
+    }
+
+    if (NumberOfDirtyPages != NULL)
+        *NumberOfDirtyPages = (ULONG)min(DirtyPages, (ULONG64)MAXULONG);
+    return DirtyPages != 0;
 }
 
 VOID

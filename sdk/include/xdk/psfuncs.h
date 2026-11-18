@@ -323,6 +323,24 @@ NTAPI
 PsSetLoadImageNotifyRoutine(
   _In_ PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine);
 
+#define PS_IMAGE_NOTIFY_CONFLICTING_ARCHITECTURE 0x1
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsSetLoadImageNotifyRoutineEx(
+  _In_ PLOAD_IMAGE_NOTIFY_ROUTINE NotifyRoutine,
+  _In_ ULONG_PTR Flags);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+PsRemoveSiloContext(
+  _In_ PESILO Silo,
+  _In_ ULONG ContextSlot,
+  _Out_opt_ PVOID *RemovedSiloContext);
+
 NTKERNELAPI
 HANDLE
 NTAPI

@@ -2529,6 +2529,26 @@ IoCreateStreamFileObjectLite(
   _In_opt_ PFILE_OBJECT FileObject,
   _In_opt_ PDEVICE_OBJECT DeviceObject);
 
+#define IO_CREATE_STREAM_FILE_RAISE_ON_ERROR 0x0001
+#define IO_CREATE_STREAM_FILE_LITE           0x0002
+
+typedef struct _IO_CREATE_STREAM_FILE_OPTIONS {
+  USHORT Size;
+  USHORT Flags;
+  PDEVICE_OBJECT TargetDeviceObject;
+} IO_CREATE_STREAM_FILE_OPTIONS, *PIO_CREATE_STREAM_FILE_OPTIONS;
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+IoCreateStreamFileObjectEx2(
+  _In_ PIO_CREATE_STREAM_FILE_OPTIONS CreateOptions,
+  _In_opt_ PFILE_OBJECT FileObject,
+  _In_opt_ PDEVICE_OBJECT DeviceObject,
+  _Out_ PFILE_OBJECT *StreamFileObject,
+  _Out_opt_ PHANDLE FileHandle);
+
 NTKERNELAPI
 BOOLEAN
 NTAPI

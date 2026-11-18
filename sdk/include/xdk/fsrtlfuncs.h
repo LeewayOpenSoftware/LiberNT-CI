@@ -1237,6 +1237,25 @@ VOID
 NTAPI
 FsRtlIncrementCcFastMdlReadWait(VOID);
 
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlKernelFsControlFile(
+  _In_ PFILE_OBJECT FileObject,
+  _In_ ULONG FsControlCode,
+  _In_ PVOID InputBuffer,
+  _In_ ULONG InputBufferLength,
+  _Out_ PVOID OutputBuffer,
+  _In_ ULONG OutputBufferLength,
+  _Out_ PULONG RetOutputBufferSize);
+
+NTKERNELAPI
+NTSTATUS
+NTAPI
+FsRtlQueryCachedVdl(
+  _In_ PFILE_OBJECT FileObject,
+  _Out_ PLONGLONG Vdl);
+
 _Must_inspect_result_
 _IRQL_requires_max_(PASSIVE_LEVEL)
 NTKERNELAPI

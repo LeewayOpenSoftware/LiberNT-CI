@@ -94,7 +94,7 @@ static PUCHAR lznt1_decompress_chunk(UCHAR *dst, ULONG dst_size, UCHAR *src, ULO
 /* decompress data encoded with LZNT1 */
 static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG src_size,
                                  ULONG offset, ULONG *final_size, UCHAR *workspace,
-                                 BOOLEAN fragment)
+                                 BOOLEAN fragment, ULONG chunk_unit)
 {
     UCHAR *src_cur = src, *src_end = src + src_size;
     UCHAR *dst_cur = dst, *dst_end = dst + dst_size;
@@ -105,8 +105,8 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
     if (src_cur + sizeof(WORD) > src_end)
         return STATUS_BAD_COMPRESSION_BUFFER;
 
-    /* skip over chunks which have a big distance (>= 0x1000) to the destination offset */
-    while (offset >= 0x1000 && src_cur + sizeof(WORD) <= src_end)
+    /* skip over chunks which have a big distance (>= chunk_unit) to the destination offset */
+    while (offset >= chunk_unit && src_cur + sizeof(WORD) <= src_end)
     {
         /* read chunk header and extract size */
         chunk_header = *(WORD *)src_cur;
@@ -119,7 +119,7 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
             return STATUS_BAD_COMPRESSION_BUFFER;
 
         src_cur += chunk_size;
-        offset  -= 0x1000;
+        offset  -= chunk_unit;
     }
 
     /* this chunk is can be included partially */
@@ -145,7 +145,7 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
         {
             /* compressed chunk */
             if (!workspace) return STATUS_ACCESS_VIOLATION;
-            ptr = lznt1_decompress_chunk(workspace, 0x1000, src_cur, chunk_size);
+            ptr = lznt1_decompress_chunk(workspace, chunk_unit, src_cur, chunk_size);
             if (!ptr) return STATUS_BAD_COMPRESSION_BUFFER;
             if (ptr - workspace > offset)
             {
@@ -155,7 +155,7 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
             }
             else if ((ULONG)(ptr - workspace) < offset)
             {
-                block_size = min(0x1000 - offset, dst_end - dst_cur);
+                block_size = min(chunk_unit - offset, dst_end - dst_cur);
                 memset(dst_cur, 0, block_size);
                 dst_cur += block_size;
             }
@@ -193,7 +193,7 @@ static NTSTATUS lznt1_decompress(UCHAR *dst, ULONG dst_size, UCHAR *src, ULONG s
         block_size = ((dst_cur - dst) + offset) & 0xFFF;
         if (block_size)
         {
-            block_size = 0x1000 - block_size;
+            block_size = chunk_unit - block_size;
             if (dst_cur + block_size >= dst_end)
                 goto out;
             memset(dst_cur, 0, block_size);
@@ -441,7 +441,7 @@ RtlDecompressFragment(IN USHORT format,
     {
         case COMPRESSION_FORMAT_LZNT1:
             return lznt1_decompress(uncompressed, uncompressed_size, compressed,
-                                    compressed_size, offset, final_size, workspace, TRUE);
+                                    compressed_size, offset, final_size, workspace, TRUE, 0x1000);
 
         case COMPRESSION_FORMAT_NONE:
         case COMPRESSION_FORMAT_DEFAULT:
@@ -449,6 +449,44 @@ RtlDecompressFragment(IN USHORT format,
 
         default:
             DPRINT1("format %d not implemented\n", format);
+            return STATUS_UNSUPPORTED_COMPRESSION;
+    }
+}
+
+/*
+ * @implemented
+ */
+NTSTATUS
+NTAPI
+RtlDecompressFragmentEx(
+    _In_ USHORT CompressionFormat,
+    _Out_ PUCHAR UncompressedFragment,
+    _In_ ULONG UncompressedFragmentSize,
+    _In_ PUCHAR CompressedBuffer,
+    _In_ ULONG CompressedBufferSize,
+    _In_ ULONG FragmentOffset,
+    _In_ ULONG UncompressedChunkSize,
+    _Out_ PULONG FinalUncompressedSize,
+    _In_ PVOID WorkSpace)
+{
+    if (UncompressedChunkSize != 512 && UncompressedChunkSize != 1024 &&
+        UncompressedChunkSize != 2048 && UncompressedChunkSize != 4096)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    switch (CompressionFormat & ~COMPRESSION_ENGINE_MAXIMUM)
+    {
+        case COMPRESSION_FORMAT_LZNT1:
+            return lznt1_decompress(UncompressedFragment, UncompressedFragmentSize, CompressedBuffer,
+                                    CompressedBufferSize, FragmentOffset, FinalUncompressedSize,
+                                    WorkSpace, TRUE, UncompressedChunkSize);
+
+        case COMPRESSION_FORMAT_NONE:
+        case COMPRESSION_FORMAT_DEFAULT:
+            return STATUS_INVALID_PARAMETER;
+
+        default:
             return STATUS_UNSUPPORTED_COMPRESSION;
     }
 }
@@ -468,7 +506,7 @@ RtlDecompressBuffer(IN USHORT CompressionFormat,
     {
         case COMPRESSION_FORMAT_LZNT1:
             return lznt1_decompress(UncompressedBuffer, UncompressedBufferSize, CompressedBuffer,
-                                    CompressedBufferSize, 0, FinalUncompressedSize, NULL, FALSE);
+                                    CompressedBufferSize, 0, FinalUncompressedSize, NULL, FALSE, 0x1000);
 
         case COMPRESSION_FORMAT_NONE:
         case COMPRESSION_FORMAT_DEFAULT:
@@ -495,7 +533,7 @@ RtlDecompressBufferEx(IN USHORT CompressionFormat,
     {
         case COMPRESSION_FORMAT_LZNT1:
             return lznt1_decompress(UncompressedBuffer, UncompressedBufferSize, CompressedBuffer,
-                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE);
+                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE, 0x1000);
 
         case COMPRESSION_FORMAT_NONE:
         case COMPRESSION_FORMAT_DEFAULT:
@@ -528,7 +566,7 @@ RtlDecompressBufferEx2(IN USHORT CompressionFormat,
                 return STATUS_INVALID_PARAMETER;
             }
             return lznt1_decompress(UncompressedBuffer, UncompressedBufferSize, CompressedBuffer,
-                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE);
+                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE, 0x1000);
 
         case COMPRESSION_FORMAT_NONE:
         case COMPRESSION_FORMAT_DEFAULT:

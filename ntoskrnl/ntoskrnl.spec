@@ -2090,12 +2090,12 @@
 @ stub -arch=win64 CcErrorCallbackRoutine
 @ stub -arch=win64 CcFlushCacheToLsn
 @ stub -arch=win64 CcGetCachedDirtyPageCountForFile
-@ stub -arch=win64 CcGetFileObjectFromSectionPtrsRef
+@ stdcall -arch=win64 CcGetFileObjectFromSectionPtrsRef(ptr)
 @ stub -arch=win64 CcGetNumberOfMappedPages
 @ stub -arch=win64 CcInitializeCacheMapEx
 @ stub -arch=win64 CcInitializeCacheMapEx2
 @ stub -arch=win64 CcIsCacheManagerCallbackNeeded
-@ stub -arch=win64 CcIsThereDirtyDataEx
+@ stdcall -arch=win64 CcIsThereDirtyDataEx(ptr ptr)
 @ stub -arch=win64 CcIsThereDirtyLoggedPages
 @ stub -arch=win64 CcRegisterExternalCache
 @ stub -arch=win64 CcScheduleReadAheadEx
@@ -2344,7 +2344,7 @@
 @ stub -arch=win64 FsRtlIsNonEmptyDirectoryReparsePointAllowed
 @ stdcall -arch=win64 FsRtlIsSystemPagingFile(ptr)
 @ stub -arch=win64 FsRtlIssueDeviceIoControl
-@ stub -arch=win64 FsRtlKernelFsControlFile
+@ stdcall -arch=win64 FsRtlKernelFsControlFile(ptr long ptr long ptr long ptr)
 @ stub -arch=win64 FsRtlLogCcFlushError
 @ stdcall FsRtlLookupPerFileContext(ptr ptr ptr)
 @ stub -arch=win64 FsRtlMdlReadEx
@@ -2363,7 +2363,7 @@
 @ stdcall -arch=win64 FsRtlOplockKeysEqual(ptr ptr)
 @ stub -arch=win64 FsRtlPrepareMdlWriteEx
 @ stdcall FsRtlPrepareToReuseEcp(ptr)
-@ stub -arch=win64 FsRtlQueryCachedVdl
+@ stdcall -arch=win64 FsRtlQueryCachedVdl(ptr ptr)
 @ stub -arch=win64 FsRtlQueryInformationFile
 @ stub -arch=win64 FsRtlQueryKernelEaFile
 @ stub -arch=win64 FsRtlQueryMaximumVirtualDiskNestingLevel
@@ -2448,7 +2448,7 @@
 @ stub -arch=win64 IoCreateArcName
 @ stub -arch=win64 IoCreateDriverProxyExtension
 @ stdcall IoCreateFileEx(ptr long ptr ptr ptr long long long long ptr long long ptr long ptr)
-@ stub -arch=win64 IoCreateStreamFileObjectEx2
+@ stdcall -arch=win64 IoCreateStreamFileObjectEx2(ptr ptr ptr ptr ptr)
 @ stub -arch=win64 IoCreateSymbolicLink2
 @ stdcall IoCreateSystemThread(ptr ptr long ptr ptr ptr ptr ptr)
 @ stdcall -arch=win64 IoDecrementKeepAliveCount(ptr ptr)
@@ -2738,7 +2738,7 @@
 @ stub -arch=win64 MmIsFileSectionActive
 @ stub -arch=arm64 MmLockPreChargedPagedPool
 @ stdcall -arch=win64 MmMapIoSpaceEx(long long long long)
-@ stub -arch=win64 MmMapMdl
+@ stdcall -arch=win64 MmMapMdl(ptr long ptr ptr)
 @ stub -arch=win64 MmMapMemoryDumpMdlEx
 @ stdcall MmMapViewInSessionSpaceEx(ptr ptr ptr ptr ptr) MmpMapViewInSessionSpaceEx
 @ stub -arch=win64 MmMdlPageContentsState
@@ -2968,14 +2968,14 @@
 @ stdcall PsReleaseProcessExitSynchronization(ptr)
 @ stub -arch=win64 PsReleaseProcessWakeCounter
 @ stub -arch=win64 PsReleaseSiloHardReference
-@ stub -arch=win64 PsRemoveSiloContext
+@ stdcall -arch=win64 PsRemoveSiloContext(ptr long ptr)
 @ stub -arch=win64 PsReplaceSiloContext
 @ stub -arch=win64 PsRevertToUserMultipleGroupAffinityThread
 @ stdcall -version=0xA00+ PsSetCreateProcessNotifyRoutineEx2(long ptr long)
 @ stdcall -arch=win64 PsSetCreateThreadNotifyRoutineEx(long ptr)
 @ stub -arch=win64 PsSetCurrentThreadPrefetching
 @ stdcall PsSetJobProperty(ptr ptr ptr)
-@ stub -arch=win64 PsSetLoadImageNotifyRoutineEx
+@ stdcall -arch=win64 PsSetLoadImageNotifyRoutineEx(ptr ptr)
 @ stdcall PsSetProcessDxgProcess(ptr ptr)
 @ stdcall PsSetProcessFaultInformation(ptr ptr)
 @ stdcall PsSetProcessesWindowState(long ptr)
@@ -3035,7 +3035,7 @@
 @ stdcall -arch=win64 RtlCreateHashTableEx(ptr long long long)
 @ stdcall -arch=win64 RtlDecompressBufferEx(long ptr long ptr long ptr ptr)
 @ stdcall -arch=win64 RtlDecompressBufferEx2(long ptr long ptr long long ptr ptr)
-@ stub -arch=win64 RtlDecompressFragmentEx
+@ stdcall -arch=win64 RtlDecompressFragmentEx(long ptr long ptr long long long ptr ptr)
 @ stub -arch=win64 RtlDeleteElementGenericTableAvlEx
 @ stdcall -arch=win64 RtlDeriveCapabilitySidsFromName(ptr ptr ptr)
 @ stub -arch=win64 RtlDrainNonVolatileFlush
@@ -3045,10 +3045,10 @@
 @ stdcall RtlEthernetAddressToStringW(ptr ptr)
 @ stdcall RtlEthernetStringToAddressA(str ptr ptr)
 @ stdcall RtlEthernetStringToAddressW(wstr ptr ptr)
-@ stub -arch=win64 RtlExtendCorrelationVector
+@ stdcall -arch=win64 RtlExtendCorrelationVector(ptr)
 @ stdcall -arch=win64 RtlExtractBitMap(ptr ptr long long)
 @ stub -arch=win64 RtlExtractBitMapEx
-@ stub -arch=win64 RtlFillMemoryNonTemporal
+@ stdcall -arch=win64 RtlFillMemoryNonTemporal(ptr long long)
 @ stub -arch=win64 RtlFillNonVolatileMemory
 @ stdcall -arch=win64 RtlFindAceByType(ptr long ptr)
 @ stdcall -arch=win64 RtlFindClearBitsAndSetEx(ptr int64 int64) RtlFindClearBitsAndSet64
@@ -3093,13 +3093,13 @@
 @ stub -arch=win64 RtlIdnToAscii
 @ stub -arch=win64 RtlIdnToNameprepUnicode
 @ stub -arch=win64 RtlIdnToUnicode
-@ stub -arch=win64 RtlIncrementCorrelationVector
+@ stdcall -arch=win64 RtlIncrementCorrelationVector(ptr)
 @ stub -arch=win64 RtlInitStringEx
 @ stdcall -arch=win64 RtlInitStrongEnumerationHashTable(ptr ptr)
 @ stdcall RtlInitUTF8String(ptr str)
 @ stub -arch=win64 RtlInitUTF8StringEx
 @ stdcall -arch=win64 RtlInitializeBitMapEx(ptr ptr int64) RtlInitializeBitMap64
-@ stub -arch=win64 RtlInitializeCorrelationVector
+@ stdcall -arch=win64 RtlInitializeCorrelationVector(ptr long ptr)
 @ stub -arch=win64 RtlInitializeExtendedContext
 @ varargs RtlInitializeSidEx(ptr ptr long)
 @ stub -arch=win64 RtlInterlockedClearBitRun
@@ -3113,7 +3113,7 @@
 @ stdcall RtlIoDecodeMemIoResource(ptr ptr ptr ptr)
 @ stdcall RtlIoEncodeMemIoResource(ptr long int64 int64 int64 int64)
 @ stdcall RtlIsApiSetImplemented(str)
-@ stub -arch=win64 RtlIsCloudFilesPlaceholder
+@ stdcall -arch=win64 RtlIsCloudFilesPlaceholder(long long)
 @ stub -arch=win64 RtlIsElevatedRid
 @ stub -arch=win64 RtlIsFunctionalityAvailable
 @ stdcall RtlIsMultiSessionSku()
@@ -3209,7 +3209,7 @@
 @ stdcall RtlUnregisterFeatureConfigurationChangeNotification(ptr)
 @ stdcall RtlUnregisterFeatureUsageProvider(ptr)
 @ stub -arch=arm64 RtlUnsignedMultiplyHigh
-@ stub -arch=win64 RtlValidateCorrelationVector
+@ stdcall -arch=win64 RtlValidateCorrelationVector(ptr)
 @ stdcall -arch=win64 RtlVirtualUnwind2(long int64 int64 ptr ptr ptr ptr ptr ptr ptr ptr ptr long)
 @ stub -arch=win64 RtlWriteNonVolatileMemory
 @ stub -arch=win64 SeAccessCheckEx

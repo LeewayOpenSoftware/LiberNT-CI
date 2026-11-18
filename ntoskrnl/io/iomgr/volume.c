@@ -1145,6 +1145,7 @@ IoRegisterFsRegistrationChange(IN PDRIVER_OBJECT DriverObject,
         {
             /* Release the lock */
             ExReleaseResourceLite(&IopDatabaseResource);
+            KeLeaveCriticalRegion();
 
             return STATUS_DEVICE_ALREADY_ATTACHED;
         }
@@ -1158,6 +1159,7 @@ IoRegisterFsRegistrationChange(IN PDRIVER_OBJECT DriverObject,
     {
         /* Release the lock */
         ExReleaseResourceLite(&IopDatabaseResource);
+        KeLeaveCriticalRegion();
 
         return STATUS_INSUFFICIENT_RESOURCES;
     }

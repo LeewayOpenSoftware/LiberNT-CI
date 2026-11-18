@@ -2394,6 +2394,75 @@ RtlDecompressFragment(
   _Out_ PULONG FinalUncompressedSize,
   _In_ PVOID WorkSpace);
 
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlDecompressFragmentEx(
+  _In_ USHORT CompressionFormat,
+  _Out_writes_bytes_to_(UncompressedFragmentSize, *FinalUncompressedSize) PUCHAR UncompressedFragment,
+  _In_ ULONG UncompressedFragmentSize,
+  _In_reads_bytes_(CompressedBufferSize) PUCHAR CompressedBuffer,
+  _In_ ULONG CompressedBufferSize,
+  _In_range_(<, CompressedBufferSize) ULONG FragmentOffset,
+  _In_ ULONG UncompressedChunkSize,
+  _Out_ PULONG FinalUncompressedSize,
+  _In_ PVOID WorkSpace);
+
+#define RTL_CORRELATION_VECTOR_STRING_LENGTH 129
+#define RTL_CORRELATION_VECTOR_VERSION_1 ((CHAR)1)
+#define RTL_CORRELATION_VECTOR_VERSION_2 ((CHAR)2)
+#define RTL_CORRELATION_VECTOR_VERSION_CURRENT RTL_CORRELATION_VECTOR_VERSION_2
+#define RTL_CORRELATION_VECTOR_V1_PREFIX_LENGTH (16)
+#define RTL_CORRELATION_VECTOR_V1_LENGTH (64)
+#define RTL_CORRELATION_VECTOR_V2_PREFIX_LENGTH (22)
+#define RTL_CORRELATION_VECTOR_V2_LENGTH (128)
+
+typedef struct CORRELATION_VECTOR {
+  CHAR Version;
+  CHAR Vector[RTL_CORRELATION_VECTOR_STRING_LENGTH];
+} CORRELATION_VECTOR, *PCORRELATION_VECTOR;
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlInitializeCorrelationVector(
+  _Out_ PCORRELATION_VECTOR CorrelationVector,
+  _In_ int Version,
+  _In_ const GUID *Guid);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlIncrementCorrelationVector(
+  _Inout_ PCORRELATION_VECTOR CorrelationVector);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlExtendCorrelationVector(
+  _Inout_ PCORRELATION_VECTOR CorrelationVector);
+
+NTSYSAPI
+NTSTATUS
+NTAPI
+RtlValidateCorrelationVector(
+  _In_ PCORRELATION_VECTOR Vector);
+
+NTSYSAPI
+VOID
+NTAPI
+RtlFillMemoryNonTemporal(
+  _Out_writes_bytes_all_(Length) VOID UNALIGNED *Destination,
+  _In_ SIZE_T Length,
+  _In_ const UCHAR Value);
+
+NTSYSAPI
+BOOLEAN
+NTAPI
+RtlIsCloudFilesPlaceholder(
+  _In_ ULONG FileAttributes,
+  _In_ ULONG ReparseTag);
+
 _IRQL_requires_max_(APC_LEVEL)
 NTSYSAPI
 NTSTATUS
