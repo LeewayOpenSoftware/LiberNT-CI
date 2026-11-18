@@ -55,6 +55,8 @@ typedef struct _ENUM_FILTER
     BOOL Location;
     BOOL Interfaces;
     BOOL Resources;
+    BOOL Drivers;
+    BOOL Properties;
     PCWSTR InstanceId;
     PCWSTR Class;
 } ENUM_FILTER, *PENUM_FILTER;
@@ -1389,6 +1391,818 @@ EmitXmlElement(
     OutputPutsRaw(Output, L">\r\n");
 }
 
+#include "devpkeynames.h"
+
+/* /properties and /drivers views *******************************************/
+
+typedef struct _PROP_ITEM
+{
+    DEVPROPKEY Key;
+    DEVPROPTYPE Type;
+    PBYTE Data;
+    ULONG Size;
+} PROP_ITEM;
+
+typedef struct _PROP_LIST
+{
+    PROP_ITEM *Items;
+    DWORD Count;
+} PROP_LIST;
+
+static PCWSTR
+OutEol(
+    _In_ const OUTPUT_CONTEXT *Output)
+{
+    return Output->File != INVALID_HANDLE_VALUE ? L"\r\n" : L"\n";
+}
+
+static VOID
+PropListFree(
+    _Inout_ PROP_LIST *List)
+{
+    DWORD i;
+
+    for (i = 0; i < List->Count; i++)
+        HeapFree(GetProcessHeap(), 0, List->Items[i].Data);
+    if (List->Items)
+        HeapFree(GetProcessHeap(), 0, List->Items);
+    List->Items = NULL;
+    List->Count = 0;
+}
+
+/* Every system-store property of a device, or of one of its interfaces when Interface is given. */
+static VOID
+PropListCollect(
+    _Out_ PROP_LIST *List,
+    _In_ HDEVINFO Set,
+    _In_opt_ PSP_DEVINFO_DATA Info,
+    _In_opt_ PSP_DEVICE_INTERFACE_DATA Interface)
+{
+    DEVPROPKEY *Keys;
+    DWORD KeyCount = 0, i;
+    BOOL Ok;
+
+    List->Items = NULL;
+    List->Count = 0;
+
+    if (Interface)
+        SetupDiGetDeviceInterfacePropertyKeys(Set, Interface, NULL, 0, &KeyCount, 0);
+    else
+        SetupDiGetDevicePropertyKeys(Set, Info, NULL, 0, &KeyCount, 0);
+    if (KeyCount == 0)
+        return;
+
+    Keys = HeapAlloc(GetProcessHeap(), 0, KeyCount * sizeof(*Keys));
+    if (!Keys)
+        return;
+    if (Interface)
+        Ok = SetupDiGetDeviceInterfacePropertyKeys(Set, Interface, Keys, KeyCount, &KeyCount, 0);
+    else
+        Ok = SetupDiGetDevicePropertyKeys(Set, Info, Keys, KeyCount, &KeyCount, 0);
+    if (!Ok)
+    {
+        HeapFree(GetProcessHeap(), 0, Keys);
+        return;
+    }
+
+    List->Items = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, KeyCount * sizeof(*List->Items));
+    if (!List->Items)
+    {
+        HeapFree(GetProcessHeap(), 0, Keys);
+        return;
+    }
+
+    for (i = 0; i < KeyCount; i++)
+    {
+        DEVPROPTYPE Type = 0;
+        ULONG Size = 0;
+        PBYTE Data;
+
+        if (Interface)
+            SetupDiGetDeviceInterfacePropertyW(Set, Interface, &Keys[i], &Type, NULL, 0, &Size, 0);
+        else
+            SetupDiGetDevicePropertyW(Set, Info, &Keys[i], &Type, NULL, 0, &Size, 0);
+        if (Size == 0 || GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+            continue;
+
+        /* Two spare WCHARs keep every string property terminated. */
+        Data = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + 2 * sizeof(WCHAR));
+        if (!Data)
+            break;
+        if (Interface)
+            Ok = SetupDiGetDeviceInterfacePropertyW(Set, Interface, &Keys[i], &Type, Data, Size, &Size, 0);
+        else
+            Ok = SetupDiGetDevicePropertyW(Set, Info, &Keys[i], &Type, Data, Size, &Size, 0);
+        if (!Ok)
+        {
+            HeapFree(GetProcessHeap(), 0, Data);
+            continue;
+        }
+        List->Items[List->Count].Key = Keys[i];
+        List->Items[List->Count].Type = Type;
+        List->Items[List->Count].Data = Data;
+        List->Items[List->Count].Size = Size;
+        List->Count++;
+    }
+    HeapFree(GetProcessHeap(), 0, Keys);
+}
+
+/* Canonical DEVPKEY_* name, or {fmtid}[pid] for a key without one. */
+static VOID
+PropKeyName(
+    _In_ const DEVPROPKEY *Key,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    WCHAR Guid[64];
+    DWORD i;
+
+    for (i = 0; i < _countof(DevPropKeyNames); i++)
+    {
+        if (DevPropKeyNames[i].Key.pid == Key->pid && IsEqualGUID(&DevPropKeyNames[i].Key.fmtid, &Key->fmtid))
+        {
+            lstrcpynW(Buffer, DevPropKeyNames[i].Name, Cch);
+            return;
+        }
+    }
+    StringFromGUID2(&Key->fmtid, Guid, _countof(Guid));
+    CharLowerW(Guid);
+    _snwprintf(Buffer, Cch - 1, L"%ls[%lu]", Guid, Key->pid);
+    Buffer[Cch - 1] = UNICODE_NULL;
+}
+
+static PCWSTR
+PropTypeName(
+    _In_ DEVPROPTYPE Type)
+{
+    switch (Type)
+    {
+        case DEVPROP_TYPE_STRING_LIST: return L"StringList";
+        case DEVPROP_TYPE_BINARY: return L"Binary";
+    }
+    switch (Type & DEVPROP_MASK_TYPE)
+    {
+        case DEVPROP_TYPE_SBYTE: return L"SBYTE";
+        case DEVPROP_TYPE_BYTE: return L"BYTE";
+        case DEVPROP_TYPE_INT16: return L"INT16";
+        case DEVPROP_TYPE_UINT16: return L"UINT16";
+        case DEVPROP_TYPE_INT32: return L"INT32";
+        case DEVPROP_TYPE_UINT32: return L"UINT32";
+        case DEVPROP_TYPE_INT64: return L"INT64";
+        case DEVPROP_TYPE_UINT64: return L"UINT64";
+        case DEVPROP_TYPE_FLOAT: return L"FLOAT";
+        case DEVPROP_TYPE_DOUBLE: return L"DOUBLE";
+        case DEVPROP_TYPE_DECIMAL: return L"DECIMAL";
+        case DEVPROP_TYPE_GUID: return L"GUID";
+        case DEVPROP_TYPE_CURRENCY: return L"CURRENCY";
+        case DEVPROP_TYPE_DATE: return L"DATE";
+        case DEVPROP_TYPE_FILETIME: return L"FILETIME";
+        case DEVPROP_TYPE_BOOLEAN: return L"Boolean";
+        case DEVPROP_TYPE_STRING: return L"String";
+        case DEVPROP_TYPE_SECURITY_DESCRIPTOR: return L"SecurityDescriptor";
+        case DEVPROP_TYPE_SECURITY_DESCRIPTOR_STRING: return L"SecurityDescriptorString";
+        case DEVPROP_TYPE_DEVPROPKEY: return L"DEVPROPKEY";
+        case DEVPROP_TYPE_DEVPROPTYPE: return L"DEVPROPTYPE";
+        case DEVPROP_TYPE_ERROR: return L"ERROR";
+        case DEVPROP_TYPE_NTSTATUS: return L"NTSTATUS";
+        case DEVPROP_TYPE_STRING_INDIRECT: return L"STRING_INDIRECT";
+    }
+    return L"Unknown";
+}
+
+/* FILETIME as the host prints it: UTC, the user's date order, zero padded, 24 hour clock. */
+static VOID
+PropFileTimeText(
+    _In_ const FILETIME *Time,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    SYSTEMTIME St;
+    DWORD Order = 0;
+
+    if (!FileTimeToSystemTime(Time, &St))
+    {
+        Buffer[0] = UNICODE_NULL;
+        return;
+    }
+    GetLocaleInfoW(LOCALE_USER_DEFAULT, LOCALE_IDATE | LOCALE_RETURN_NUMBER, (PWSTR)&Order, sizeof(Order) / sizeof(WCHAR));
+    if (Order == 0)
+        _snwprintf(Buffer, Cch - 1, L"%02u/%02u/%04u %02u:%02u:%02u", St.wMonth, St.wDay, St.wYear, St.wHour, St.wMinute, St.wSecond);
+    else if (Order == 1)
+        _snwprintf(Buffer, Cch - 1, L"%02u/%02u/%04u %02u:%02u:%02u", St.wDay, St.wMonth, St.wYear, St.wHour, St.wMinute, St.wSecond);
+    else
+        _snwprintf(Buffer, Cch - 1, L"%04u/%02u/%02u %02u:%02u:%02u", St.wYear, St.wMonth, St.wDay, St.wHour, St.wMinute, St.wSecond);
+    Buffer[Cch - 1] = UNICODE_NULL;
+}
+
+/* The descriptor's DACL as SDDL; empty when it cannot be converted. */
+static VOID
+PropSecurityText(
+    _In_ const PROP_ITEM *Item,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    typedef BOOL (WINAPI *PCONVERT)(PSECURITY_DESCRIPTOR, DWORD, SECURITY_INFORMATION, LPWSTR *, PULONG);
+    HMODULE hAdvapi = GetModuleHandleW(L"advapi32.dll");
+    PCONVERT Convert = hAdvapi ? (PCONVERT)GetProcAddress(hAdvapi, "ConvertSecurityDescriptorToStringSecurityDescriptorW") : NULL;
+    LPWSTR Text = NULL;
+
+    Buffer[0] = UNICODE_NULL;
+    if (Convert && IsValidSecurityDescriptor((PSECURITY_DESCRIPTOR)Item->Data) &&
+        Convert((PSECURITY_DESCRIPTOR)Item->Data, 1 /* SDDL_REVISION_1 */, DACL_SECURITY_INFORMATION, &Text, NULL))
+    {
+        lstrcpynW(Buffer, Text, Cch);
+        LocalFree(Text);
+    }
+}
+
+/* One value as text. Txt adds the other radix in parentheses; csv and xml do not. A
+   string list is joined with ';' (the callers that split it do so themselves). */
+static PWSTR
+PropValueText(
+    _In_ const PROP_ITEM *Item,
+    _In_ BOOL Txt)
+{
+    WCHAR Small[512];
+    PWSTR Result;
+    DWORD Cch, i;
+    ULONG Size = Item->Size;
+    const BYTE *Data = Item->Data;
+
+    Small[0] = UNICODE_NULL;
+    if (Item->Type == DEVPROP_TYPE_STRING_LIST)
+    {
+        PWSTR Text = (PWSTR)Item->Data, Out;
+        PCWSTR Value;
+
+        Result = HeapAlloc(GetProcessHeap(), 0, Size + 2 * sizeof(WCHAR));
+        if (!Result)
+            return NULL;
+        Out = Result;
+        for (Value = Text; *Value; Value += wcslen(Value) + 1)
+        {
+            if (Out != Result)
+                *Out++ = L';';
+            wcscpy(Out, Value);
+            Out += wcslen(Out);
+        }
+        *Out = UNICODE_NULL;
+        return Result;
+    }
+    if (Item->Type == DEVPROP_TYPE_BINARY || (Item->Type & DEVPROP_MASK_TYPEMOD))
+    {
+        Result = HeapAlloc(GetProcessHeap(), 0, (Size * 3 + 1) * sizeof(WCHAR));
+        if (!Result)
+            return NULL;
+        for (i = 0; i < Size; i++)
+            _snwprintf(Result + i * 3, 4, i + 1 < Size ? L"%02X " : L"%02X", Data[i]);
+        Result[Size ? Size * 3 - 1 : 0] = UNICODE_NULL;
+        return Result;
+    }
+
+    switch (Item->Type & DEVPROP_MASK_TYPE)
+    {
+        case DEVPROP_TYPE_STRING:
+        case DEVPROP_TYPE_STRING_INDIRECT:
+        case DEVPROP_TYPE_SECURITY_DESCRIPTOR_STRING:
+            Cch = (DWORD)wcslen((PCWSTR)Data) + 1;
+            Result = HeapAlloc(GetProcessHeap(), 0, Cch * sizeof(WCHAR));
+            if (Result)
+                wcscpy(Result, (PCWSTR)Data);
+            return Result;
+        case DEVPROP_TYPE_SECURITY_DESCRIPTOR:
+        {
+            WCHAR *Text = HeapAlloc(GetProcessHeap(), 0, 8192 * sizeof(WCHAR));
+
+            if (!Text)
+                return NULL;
+            PropSecurityText(Item, Text, 8192);
+            return Text;
+        }
+        case DEVPROP_TYPE_GUID:
+            if (Size >= sizeof(GUID))
+            {
+                StringFromGUID2((const GUID *)Data, Small, _countof(Small));
+                CharLowerW(Small);
+            }
+            break;
+        case DEVPROP_TYPE_BOOLEAN:
+            lstrcpynW(Small, Size >= 1 && Data[0] ? L"TRUE" : L"FALSE", _countof(Small));
+            break;
+        case DEVPROP_TYPE_BYTE:
+            if (Size >= 1)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"0x%02X (%u)" : L"0x%02X", Data[0], Data[0]);
+            break;
+        case DEVPROP_TYPE_UINT16:
+            if (Size >= 2)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"0x%04X (%u)" : L"0x%04X", *(const UINT16 *)Data, *(const UINT16 *)Data);
+            break;
+        case DEVPROP_TYPE_UINT32:
+            if (Size >= 4)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"0x%08X (%u)" : L"0x%08X", *(const UINT32 *)Data, *(const UINT32 *)Data);
+            break;
+        case DEVPROP_TYPE_UINT64:
+            if (Size >= 8)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"0x%016I64X (%I64u)" : L"0x%016I64X", *(const UINT64 *)Data, *(const UINT64 *)Data);
+            break;
+        case DEVPROP_TYPE_SBYTE:
+            if (Size >= 1)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"%d (0x%02X)" : L"%d", *(const signed char *)Data, Data[0]);
+            break;
+        case DEVPROP_TYPE_INT16:
+            if (Size >= 2)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"%d (0x%04X)" : L"%d", *(const INT16 *)Data, *(const UINT16 *)Data);
+            break;
+        case DEVPROP_TYPE_INT32:
+            if (Size >= 4)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"%d (0x%08X)" : L"%d", *(const INT32 *)Data, *(const UINT32 *)Data);
+            break;
+        case DEVPROP_TYPE_INT64:
+            if (Size >= 8)
+                _snwprintf(Small, _countof(Small) - 1, Txt ? L"%I64d (0x%016I64X)" : L"%I64d", *(const INT64 *)Data, *(const UINT64 *)Data);
+            break;
+        case DEVPROP_TYPE_ERROR:
+        case DEVPROP_TYPE_NTSTATUS:
+            if (Size >= 4)
+                _snwprintf(Small, _countof(Small) - 1, L"0x%08X", *(const UINT32 *)Data);
+            break;
+        case DEVPROP_TYPE_FLOAT:
+            if (Size >= sizeof(float))
+                _snwprintf(Small, _countof(Small) - 1, L"%g", (double)*(const float *)Data);
+            break;
+        case DEVPROP_TYPE_DOUBLE:
+            if (Size >= sizeof(double))
+                _snwprintf(Small, _countof(Small) - 1, L"%g", *(const double *)Data);
+            break;
+        case DEVPROP_TYPE_FILETIME:
+            if (Size >= sizeof(FILETIME))
+                PropFileTimeText((const FILETIME *)Data, Small, _countof(Small));
+            break;
+        default:
+            for (i = 0; i < Size && i * 3 + 3 < _countof(Small); i++)
+                _snwprintf(Small + i * 3, 4, L"%02X ", Data[i]);
+            if (i)
+                Small[i * 3 - 1] = UNICODE_NULL;
+            break;
+    }
+    Small[_countof(Small) - 1] = UNICODE_NULL;
+    Result = HeapAlloc(GetProcessHeap(), 0, (wcslen(Small) + 1) * sizeof(WCHAR));
+    if (Result)
+        wcscpy(Result, Small);
+    return Result;
+}
+
+/* csv: one row per property, the owner's id first, then Leading empty fields, then Key,Type,Value. */
+static VOID
+PropsEmitCsv(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const PROP_LIST *List,
+    _In_ PCWSTR Id,
+    _In_ DWORD Leading)
+{
+    DWORD i, n;
+
+    for (i = 0; i < List->Count; i++)
+    {
+        WCHAR Name[128];
+        PWSTR Value = PropValueText(&List->Items[i], FALSE);
+
+        PropKeyName(&List->Items[i].Key, Name, _countof(Name));
+        OutputCsvField(Output, Id, FALSE);
+        for (n = 0; n < Leading; n++)
+            OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, Name, FALSE);
+        OutputCsvField(Output, PropTypeName(List->Items[i].Type), FALSE);
+        OutputCsvField(Output, Value ? Value : L"", TRUE);
+        if (Value)
+            HeapFree(GetProcessHeap(), 0, Value);
+    }
+}
+
+static VOID
+PropsEmitXml(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const PROP_LIST *List)
+{
+    DWORD i;
+
+    if (List->Count == 0)
+        return;
+    OutputPutsRaw(Output, L"        <Properties>\r\n");
+    for (i = 0; i < List->Count; i++)
+    {
+        const PROP_ITEM *Item = &List->Items[i];
+        WCHAR Name[128];
+
+        PropKeyName(&Item->Key, Name, _countof(Name));
+        OutputPutsRaw(Output, L"            <Property Key=\"");
+        OutputXmlText(Output, Name);
+        OutputPutsRaw(Output, L"\" Type=\"");
+        OutputXmlText(Output, PropTypeName(Item->Type));
+        OutputPutsRaw(Output, L"\">\r\n");
+        if (Item->Type == DEVPROP_TYPE_STRING_LIST)
+        {
+            PCWSTR Value;
+
+            for (Value = (PCWSTR)Item->Data; *Value; Value += wcslen(Value) + 1)
+            {
+                OutputPutsRaw(Output, L"                <Value>");
+                OutputXmlText(Output, Value);
+                OutputPutsRaw(Output, L"</Value>\r\n");
+            }
+        }
+        else
+        {
+            PWSTR Value = PropValueText(Item, FALSE);
+
+            OutputPutsRaw(Output, L"                <Value>");
+            if (Value)
+            {
+                OutputXmlText(Output, Value);
+                HeapFree(GetProcessHeap(), 0, Value);
+            }
+            OutputPutsRaw(Output, L"</Value>\r\n");
+        }
+        OutputPutsRaw(Output, L"            </Property>\r\n");
+    }
+    OutputPutsRaw(Output, L"        </Properties>\r\n");
+}
+
+static VOID
+PropsEmitTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const PROP_LIST *List,
+    _In_ PCWSTR Header)
+{
+    PCWSTR Eol = OutEol(Output);
+    DWORD i;
+
+    if (List->Count == 0)
+        return;
+    OutputPutsRaw(Output, Header);
+    OutputPutsRaw(Output, Eol);
+    for (i = 0; i < List->Count; i++)
+    {
+        const PROP_ITEM *Item = &List->Items[i];
+        WCHAR Name[128], Line[1024];
+
+        PropKeyName(&Item->Key, Name, _countof(Name));
+        _snwprintf(Line, _countof(Line) - 1, L"    %ls [%ls]:", Name, PropTypeName(Item->Type));
+        Line[_countof(Line) - 1] = UNICODE_NULL;
+        OutputPutsRaw(Output, Line);
+        OutputPutsRaw(Output, Eol);
+
+        if (Item->Type == DEVPROP_TYPE_STRING_LIST)
+        {
+            PCWSTR Value;
+
+            for (Value = (PCWSTR)Item->Data; *Value; Value += wcslen(Value) + 1)
+            {
+                OutputPutsRaw(Output, L"        ");
+                OutputPutsRaw(Output, Value);
+                OutputPutsRaw(Output, Eol);
+            }
+        }
+        else if (Item->Type == DEVPROP_TYPE_BINARY)
+        {
+            ULONG b;
+
+            for (b = 0; b < Item->Size; b++)
+            {
+                WCHAR Byte[8];
+
+                if (b % 16 == 0)
+                    OutputPutsRaw(Output, L"        ");
+                _snwprintf(Byte, _countof(Byte) - 1, b + 1 < Item->Size ? L"%02X " : L"%02X", Item->Data[b]);
+                Byte[_countof(Byte) - 1] = UNICODE_NULL;
+                OutputPutsRaw(Output, Byte);
+                if (b % 16 == 15 || b + 1 == Item->Size)
+                    OutputPutsRaw(Output, Eol);
+            }
+        }
+        else
+        {
+            PWSTR Value = PropValueText(Item, TRUE);
+
+            OutputPutsRaw(Output, L"        ");
+            if (Value)
+            {
+                OutputPutsRaw(Output, Value);
+                HeapFree(GetProcessHeap(), 0, Value);
+            }
+            OutputPutsRaw(Output, Eol);
+        }
+    }
+}
+
+typedef struct _DRV_ITEM
+{
+    WCHAR Name[MAX_PATH];
+    WCHAR Provider[LINE_LEN];
+    WCHAR ClassName[MAX_CLASS_NAME_LEN];
+    WCHAR ClassGuid[64];
+    WCHAR Version[96];
+    WCHAR MatchingId[LINE_LEN];
+    DWORD Rank;
+    FILETIME Date;
+    DWORDLONG Ver;
+    BOOL Best;
+    BOOL Installed;
+} DRV_ITEM;
+
+typedef struct _DRV_LIST
+{
+    DRV_ITEM *Items;
+    DWORD Count;
+} DRV_LIST;
+
+static VOID
+DriverListFree(
+    _Inout_ DRV_LIST *List)
+{
+    if (List->Items)
+        HeapFree(GetProcessHeap(), 0, List->Items);
+    List->Items = NULL;
+    List->Count = 0;
+}
+
+/* The compatible drivers of a device with their rank, best ranked and installed flags. */
+static VOID
+DriverListCollect(
+    _Out_ DRV_LIST *List,
+    _In_ HDEVINFO Set,
+    _In_ PSP_DEVINFO_DATA Info)
+{
+    WCHAR Installed[MAX_PATH];
+    SP_DRVINFO_DATA_W Drv;
+    DWORD Index, Capacity = 0, BestIndex = 0;
+    BOOL HaveInstalled;
+
+    List->Items = NULL;
+    List->Count = 0;
+
+    if (!SetupDiBuildDriverInfoList(Set, Info, SPDIT_COMPATDRIVER))
+        return;
+    HaveInstalled = GetDriverKeyString(Set, Info, REGSTR_VAL_INFPATH, Installed, _countof(Installed));
+
+    for (Index = 0; ; Index++)
+    {
+        PSP_DRVINFO_DETAIL_DATA_W Detail;
+        SP_DRVINSTALL_PARAMS Params;
+        DRV_ITEM *Item;
+        DWORD Size = 0;
+        PCWSTR Base;
+        HINF hInf;
+        GUID Guid;
+
+        Drv.cbSize = sizeof(Drv);
+        if (!SetupDiEnumDriverInfoW(Set, Info, SPDIT_COMPATDRIVER, Index, &Drv))
+            break;
+
+        SetupDiGetDriverInfoDetailW(Set, Info, &Drv, NULL, 0, &Size);
+        if (Size < sizeof(*Detail))
+            continue;
+        Detail = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, Size + sizeof(WCHAR));
+        if (!Detail)
+            break;
+        Detail->cbSize = sizeof(*Detail);
+        if (!SetupDiGetDriverInfoDetailW(Set, Info, &Drv, Detail, Size, NULL))
+        {
+            HeapFree(GetProcessHeap(), 0, Detail);
+            continue;
+        }
+
+        if (List->Count == Capacity)
+        {
+            DWORD NewCapacity = Capacity ? Capacity * 2 : 8;
+            DRV_ITEM *Grown = List->Items ? HeapReAlloc(GetProcessHeap(), 0, List->Items, NewCapacity * sizeof(*Grown))
+                                          : HeapAlloc(GetProcessHeap(), 0, NewCapacity * sizeof(*Grown));
+
+            if (!Grown)
+            {
+                HeapFree(GetProcessHeap(), 0, Detail);
+                break;
+            }
+            List->Items = Grown;
+            Capacity = NewCapacity;
+        }
+        Item = &List->Items[List->Count];
+        ZeroMemory(Item, sizeof(*Item));
+
+        Base = wcsrchr(Detail->InfFileName, L'\\');
+        lstrcpynW(Item->Name, Base ? Base + 1 : Detail->InfFileName, _countof(Item->Name));
+        lstrcpynW(Item->Provider, Drv.ProviderName, _countof(Item->Provider));
+        lstrcpynW(Item->MatchingId, Detail->HardwareID, _countof(Item->MatchingId));
+        {
+            SYSTEMTIME St;
+
+            if (FileTimeToSystemTime(&Drv.DriverDate, &St))
+            {
+                _snwprintf(Item->Version, _countof(Item->Version) - 1, L"%02u/%02u/%04u %u.%u.%u.%u",
+                           St.wMonth, St.wDay, St.wYear,
+                           (UINT)((Drv.DriverVersion >> 48) & 0xFFFF), (UINT)((Drv.DriverVersion >> 32) & 0xFFFF),
+                           (UINT)((Drv.DriverVersion >> 16) & 0xFFFF), (UINT)(Drv.DriverVersion & 0xFFFF));
+            }
+        }
+        Item->Version[_countof(Item->Version) - 1] = UNICODE_NULL;
+
+        Item->Date = Drv.DriverDate;
+        Item->Ver = Drv.DriverVersion;
+        Params.cbSize = sizeof(Params);
+        Item->Rank = MAXDWORD;
+        if (SetupDiGetDriverInstallParamsW(Set, Info, &Drv, &Params))
+            Item->Rank = Params.Rank;
+
+        hInf = SetupOpenInfFileW(Detail->InfFileName, NULL, INF_STYLE_WIN4, NULL);
+        if (hInf != INVALID_HANDLE_VALUE)
+        {
+            GetInfVersionValue(hInf, L"Class", Item->ClassName, _countof(Item->ClassName));
+            GetInfVersionValue(hInf, L"ClassGUID", Item->ClassGuid, _countof(Item->ClassGuid));
+            if (!Item->ClassName[0] && CLSIDFromString(Item->ClassGuid, &Guid) == S_OK)
+                SetupDiClassNameFromGuidW(&Guid, Item->ClassName, _countof(Item->ClassName), NULL);
+            CharLowerW(Item->ClassGuid);
+            SetupCloseInfFile(hInf);
+        }
+
+        Item->Installed = HaveInstalled && _wcsicmp(Installed, Item->Name) == 0;
+        List->Count++;
+        HeapFree(GetProcessHeap(), 0, Detail);
+    }
+
+    for (Index = 1; Index < List->Count; Index++)
+    {
+        const DRV_ITEM *Item = &List->Items[Index], *Best = &List->Items[BestIndex];
+        LONG Cmp = Item->Rank != Best->Rank ? (Item->Rank < Best->Rank ? 1 : -1) : CompareFileTime(&Item->Date, &Best->Date);
+
+        if (Cmp == 0)
+            Cmp = Item->Ver > Best->Ver ? 1 : (Item->Ver < Best->Ver ? -1 : 0);
+        if (Cmp > 0)
+            BestIndex = Index;
+    }
+    if (List->Count)
+        List->Items[BestIndex].Best = TRUE;
+    SetupDiDestroyDriverInfoList(Set, Info, SPDIT_COMPATDRIVER);
+}
+
+static VOID
+DriverStatusText(
+    _In_ const DRV_ITEM *Item,
+    _In_ BOOL Txt,
+    _Out_writes_(Cch) PWSTR Buffer,
+    _In_ DWORD Cch)
+{
+    PCWSTR Sep = Txt ? L" / " : L"/";
+
+    Buffer[0] = UNICODE_NULL;
+    if (Item->Best)
+        lstrcpynW(Buffer, Txt ? L"Best Ranked" : L"BestRanked", Cch);
+    if (Item->Installed)
+    {
+        if (Buffer[0])
+            lstrcatW(Buffer, Sep);
+        lstrcatW(Buffer, L"Installed");
+    }
+    if (!Buffer[0])
+        lstrcpynW(Buffer, L"Outranked", Cch);
+}
+
+static VOID
+DriversEmitTxt(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const DRV_LIST *List)
+{
+    PCWSTR Eol = OutEol(Output);
+    DWORD i, k;
+
+    if (List->Count == 0)
+        return;
+    OutputPutsRaw(Output, L"Matching Drivers:");
+    OutputPutsRaw(Output, Eol);
+    for (i = 0; i < List->Count; i++)
+    {
+        const DRV_ITEM *Item = &List->Items[i];
+        WCHAR Rank[16], Status[64], Line[2048];
+        PCWSTR Labels[9] = { L"Driver Name:", L"Provider Name:", L"Class Name:", L"Class GUID:", L"Driver Version:",
+                             L"Signer Name:", L"Matching Device ID:", L"Driver Rank:", L"Driver Status:" };
+        PCWSTR Values[9];
+
+        _snwprintf(Rank, _countof(Rank), L"%08X", Item->Rank);
+        DriverStatusText(Item, TRUE, Status, _countof(Status));
+        Values[0] = Item->Name;
+        Values[1] = Item->Provider;
+        Values[2] = Item->ClassName;
+        Values[3] = Item->ClassGuid;
+        Values[4] = Item->Version;
+        Values[5] = L"";
+        Values[6] = Item->MatchingId;
+        Values[7] = Rank;
+        Values[8] = Status;
+
+        if (i)
+        {
+            OutputPutsRaw(Output, L"                            ");
+            OutputPutsRaw(Output, Eol);
+        }
+        for (k = 0; k < 9; k++)
+        {
+            if (k == 5)
+                continue; /* the signer comes from the catalog and is not read yet */
+            _snwprintf(Line, _countof(Line) - 1, L"    %-24ls%ls%ls", Labels[k], Values[k], Eol);
+            Line[_countof(Line) - 1] = UNICODE_NULL;
+            OutputPutsRaw(Output, Line);
+        }
+    }
+}
+
+static VOID
+DriversEmitXml(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const DRV_LIST *List)
+{
+    DWORD i;
+
+    if (List->Count == 0)
+        return;
+    OutputPutsRaw(Output, L"        <MatchingDrivers>\r\n");
+    for (i = 0; i < List->Count; i++)
+    {
+        const DRV_ITEM *Item = &List->Items[i];
+        WCHAR Rank[16], Status[64];
+
+        _snwprintf(Rank, _countof(Rank), L"%08X", Item->Rank);
+        DriverStatusText(Item, FALSE, Status, _countof(Status));
+        OutputPutsRaw(Output, L"            <DriverName DriverName=\"");
+        OutputXmlText(Output, Item->Name);
+        OutputPutsRaw(Output, L"\">\r\n");
+#define DRV_XML(Tag, Text)                                  \
+        if ((Text)[0])                                      \
+        {                                                   \
+            OutputPutsRaw(Output, L"                <" Tag L">"); \
+            OutputXmlText(Output, Text);                    \
+            OutputPutsRaw(Output, L"</" Tag L">\r\n");      \
+        }
+        DRV_XML(L"ProviderName", Item->Provider)
+        DRV_XML(L"ClassName", Item->ClassName)
+        DRV_XML(L"ClassGuid", Item->ClassGuid)
+        DRV_XML(L"DriverVersion", Item->Version)
+        DRV_XML(L"MatchingDeviceId", Item->MatchingId)
+        DRV_XML(L"Rank", Rank)
+        DRV_XML(L"Status", Status)
+#undef DRV_XML
+        OutputPutsRaw(Output, L"            </DriverName>\r\n");
+    }
+    OutputPutsRaw(Output, L"        </MatchingDrivers>\r\n");
+}
+
+/* csv: one row per matching driver; Windows writes id, H-1 empty fields, name and rank (two wider than the header). */
+static VOID
+DriversEmitCsv(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ const DRV_LIST *List,
+    _In_ PCWSTR Id,
+    _In_ DWORD Leading)
+{
+    DWORD i, n;
+
+    for (i = 0; i < List->Count; i++)
+    {
+        WCHAR Rank[16];
+
+        _snwprintf(Rank, _countof(Rank), L"%08X", List->Items[i].Rank);
+        OutputCsvField(Output, Id, FALSE);
+        for (n = 0; n < Leading; n++)
+            OutputCsvField(Output, L"", FALSE);
+        OutputCsvField(Output, List->Items[i].Name, FALSE);
+        OutputCsvField(Output, Rank, TRUE);
+    }
+}
+
+/* The txt tail of a device record: matching drivers, then its properties. */
+static VOID
+EmitDeviceTxtViews(
+    _In_ OUTPUT_CONTEXT *Output,
+    _In_ HDEVINFO Set,
+    _In_ PSP_DEVINFO_DATA Info,
+    _In_ const ENUM_FILTER *Filter)
+{
+    if (Filter->Drivers)
+    {
+        DRV_LIST Drivers;
+
+        DriverListCollect(&Drivers, Set, Info);
+        DriversEmitTxt(Output, &Drivers);
+        DriverListFree(&Drivers);
+    }
+    if (Filter->Properties)
+    {
+        PROP_LIST Props;
+
+        PropListCollect(&Props, Set, Info, NULL);
+        PropsEmitTxt(Output, &Props, L"Properties:");
+        PropListFree(&Props);
+    }
+}
+
 /* Emit one device as a CSV row or an XML <Device> element (txt uses its own path).
    Column/element order matches Windows 11 pnputil exactly. */
 static VOID
@@ -1407,6 +2221,14 @@ EmitDeviceRecord(
     _In_ const ENUM_FILTER *Filter)
 {
     BOOL AnyView = Filter->Ids || Filter->Relations || Filter->Stack || Filter->Location;
+    DRV_LIST Drivers = { NULL, 0 };
+    DWORD ViewColumns = (Filter->Ids ? 2 : 0) + (Filter->Relations ? 2 : 0) + (Filter->Stack ? 1 : 0) +
+                        (Filter->Location ? 2 : 0);
+    /* Header fields: the ten base ones, the views, MatchingDriverName,Rank and Key,Type,Value. */
+    DWORD HeaderCols = 10 + ViewColumns + (Filter->Drivers ? 2 : 0) + (Filter->Properties ? 3 : 0);
+
+    if (Filter->Drivers)
+        DriverListCollect(&Drivers, DeviceInfoSet, DeviceInfoData);
 
     if (Output->Format == OutputCsv)
     {
@@ -1424,7 +2246,10 @@ EmitDeviceRecord(
         OutputCsvField(Output, ProblemCode, FALSE);
         OutputCsvField(Output, L"", FALSE);          /* ProblemStatus */
         OutputCsvField(Output, DriverName, FALSE);
-        OutputCsvField(Output, L"", !AnyView);       /* ExtensionDriverNames */
+        /* A device without a matching driver gets one extra empty field after the ten base ones. */
+        OutputCsvField(Output, L"", !AnyView && !(Filter->Drivers && Drivers.Count == 0));  /* ExtensionDriverNames */
+        if (!AnyView && Filter->Drivers && Drivers.Count == 0)
+            OutputCsvField(Output, L"", TRUE);
 
         if (Filter->Ids)
         {
@@ -1457,6 +2282,17 @@ EmitDeviceRecord(
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
             OutputCsvField(Output, Cell2, TRUE);
+        }
+
+        if (Filter->Drivers)
+            DriversEmitCsv(Output, &Drivers, InstanceId, HeaderCols - 1); /* Windows: H + 2 fields */
+        if (Filter->Properties)
+        {
+            PROP_LIST Props;
+
+            PropListCollect(&Props, DeviceInfoSet, DeviceInfoData, NULL);
+            PropsEmitCsv(Output, &Props, InstanceId, HeaderCols - 4); /* Windows: exactly H fields */
+            PropListFree(&Props);
         }
     }
     else /* OutputXml */
@@ -1533,8 +2369,21 @@ EmitDeviceRecord(
             EmitXmlList(Output, L"LocationPaths", L"LocationPath", List, FALSE);
         }
 
+        if (Filter->Drivers)
+            DriversEmitXml(Output, &Drivers);
+        if (Filter->Properties)
+        {
+            PROP_LIST Props;
+
+            PropListCollect(&Props, DeviceInfoSet, DeviceInfoData, NULL);
+            PropsEmitXml(Output, &Props);
+            PropListFree(&Props);
+        }
+
         OutputPutsRaw(Output, L"    </Device>\r\n");
     }
+
+    DriverListFree(&Drivers);
 }
 
 /* Windows prints the banner, "Failed to open output file: <system text>" and exits with
@@ -1868,6 +2717,14 @@ CommandEnumDevices(
         {
             Filter.Interfaces = TRUE;
         }
+        else if (IsOption(argv[i], L"drivers"))
+        {
+            Filter.Drivers = TRUE;
+        }
+        else if (IsOption(argv[i], L"properties"))
+        {
+            Filter.Properties = TRUE;
+        }
         else if (IsOption(argv[i], L"resources"))
         {
             Filter.Resources = TRUE;
@@ -1944,6 +2801,10 @@ CommandEnumDevices(
             OutputPutsRaw(&Output, L",Stack");
         if (Filter.Location)
             OutputPutsRaw(&Output, L",LocationInfo,LocationPaths");
+        if (Filter.Drivers)
+            OutputPutsRaw(&Output, L",MatchingDriverName,Rank");
+        if (Filter.Properties)
+            OutputPutsRaw(&Output, L",Key,Type,Value");
         /* TODO: /services (Service,UpperFilters,LowerFilters -- xml filter element
            shape not yet captured), /interfaces (Interface,InterfaceStatus) and
            /resources columns land with their emission in the #2a continuation. */
@@ -2052,6 +2913,8 @@ CommandEnumDevices(
                 PrintDeviceProperty(DeviceInfoSet, &DeviceInfoData, SPDRP_COMPATIBLEIDS, LblCompat, NULL);
             }
 
+            EmitDeviceTxtViews(&Output, DeviceInfoSet, &DeviceInfoData, &Filter);
+
             ConPuts(StdOut, L"\n");
         }
         else if (Output.Format == OutputText)
@@ -2093,6 +2956,8 @@ CommandEnumDevices(
                 OutputTxtMultiSz(&Output, DeviceInfoSet, &DeviceInfoData, SPDRP_HARDWAREID, LblHwIds);
                 OutputTxtMultiSz(&Output, DeviceInfoSet, &DeviceInfoData, SPDRP_COMPATIBLEIDS, LblCompat);
             }
+
+            EmitDeviceTxtViews(&Output, DeviceInfoSet, &DeviceInfoData, &Filter);
 
             OutputPutsRaw(&Output, L"\r\n");
         }
@@ -3175,7 +4040,8 @@ typedef struct _INTERFACE_ROW
 static VOID
 EmitInterface(
     _In_ OUTPUT_CONTEXT *Output,
-    _In_ const INTERFACE_ROW *Row)
+    _In_ const INTERFACE_ROW *Row,
+    _In_ const PROP_LIST *Props)
 {
     PCWSTR Status = Row->Enabled ? L"Enabled" : L"Disabled";
 
@@ -3187,6 +4053,8 @@ EmitInterface(
         OutputCsvField(Output, Row->Reference, FALSE);
         OutputCsvField(Output, Row->InstanceId, FALSE);
         OutputCsvField(Output, Status, TRUE);
+        if (Props)
+            PropsEmitCsv(Output, Props, Row->Path, 5);
     }
     else if (Output->Format == OutputXml)
     {
@@ -3207,7 +4075,10 @@ EmitInterface(
         OutputXmlText(Output, Row->InstanceId);
         OutputPutsRaw(Output, L"</DeviceInstanceId>\r\n        <Status>");
         OutputXmlText(Output, Status);
-        OutputPutsRaw(Output, L"</Status>\r\n    </Interface>\r\n");
+        OutputPutsRaw(Output, L"</Status>\r\n");
+        if (Props)
+            PropsEmitXml(Output, Props);
+        OutputPutsRaw(Output, L"    </Interface>\r\n");
     }
     else
     {
@@ -3238,6 +4109,8 @@ EmitInterface(
             Line[_countof(Line) - 1] = UNICODE_NULL;
             OutputPutsRaw(Output, Line);
         }
+        if (Props)
+            PropsEmitTxt(Output, Props, L"Interface Properties:");
         OutputPutsRaw(Output, Eol);
     }
 }
@@ -3257,6 +4130,7 @@ EnumInterfaceClass(
     _In_ const GUID *ClassGuid,
     _In_ INT State,
     _In_opt_ PCWSTR InstanceFilter,
+    _In_ BOOL WantProperties,
     _Inout_ INTERFACE_ROW *Row,
     _Inout_ INTERFACE_STATS *Stats)
 {
@@ -3364,7 +4238,18 @@ EnumInterfaceClass(
             }
         }
 
-        EmitInterface(Output, Row);
+        if (WantProperties)
+        {
+            PROP_LIST Props;
+
+            PropListCollect(&Props, Set, NULL, &Interface);
+            EmitInterface(Output, Row, &Props);
+            PropListFree(&Props);
+        }
+        else
+        {
+            EmitInterface(Output, Row, NULL);
+        }
         HeapFree(GetProcessHeap(), 0, Row->Path);
         Row->Path = NULL;
         Count++;
@@ -3455,7 +4340,10 @@ CommandEnumInterfaces(
 
     if (Output.Format == OutputCsv)
     {
-        OutputPutsRaw(&Output, L"Path,Description,ClassGuid,ReferenceString,InstanceId,InterfaceStatus\r\n");
+        OutputPutsRaw(&Output, L"Path,Description,ClassGuid,ReferenceString,InstanceId,InterfaceStatus");
+        if (WantProperties)
+            OutputPutsRaw(&Output, L",Key,Type,Value");
+        OutputPutsRaw(&Output, L"\r\n");
     }
     else if (Output.Format == OutputXml)
     {
@@ -3479,17 +4367,12 @@ CommandEnumInterfaces(
     Row = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*Row));
     if (!Row)
         Error = ERROR_NOT_ENOUGH_MEMORY;
-    else if (WantProperties)
-    {
-        /* TODO: /properties needs the shared property emitter (Jim2 #2b); interim error. */
-        Error = ERROR_NOT_SUPPORTED;
-    }
     else if (ClassFilter)
     {
         if (ClassFilter[0] != L'{' || CLSIDFromString(ClassFilter, &FilterGuid) != S_OK)
             Error = ERROR_INVALID_PARAMETER;
         else
-            Count = EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row, &Stats);
+            Count = EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, WantProperties, Row, &Stats);
     }
     else if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control\\DeviceClasses", 0,
                            KEY_READ, &hClasses) == ERROR_SUCCESS)
@@ -3503,7 +4386,7 @@ CommandEnumInterfaces(
             if (RegEnumKeyExW(hClasses, Index, KeyName, &Length, NULL, NULL, NULL, NULL) != ERROR_SUCCESS)
                 break;
             if (CLSIDFromString(KeyName, &FilterGuid) == S_OK)
-                Count += EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, Row, &Stats);
+                Count += EnumInterfaceClass(&Output, &FilterGuid, State, InstanceFilter, WantProperties, Row, &Stats);
         }
         RegCloseKey(hClasses);
     }
