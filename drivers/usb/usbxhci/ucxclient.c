@@ -1910,7 +1910,11 @@ XhciUcxEp0Control(
 
     KeClearEvent(&Dev->TransferEvent);
     Dev->PendingTransferCode = XHCI_COMPLETION_INVALID;
-    Dev->PendingTransferResidual = Length;
+    /* The Data Stage TRB has ISP but no IOC: the controller reports it only
+     * when the packet is short (or the stage fails), with the residual. A full
+     * data stage produces no event of its own, so the residual starts at 0 and
+     * only that event may change it; the Status Stage event never does. */
+    Dev->PendingTransferResidual = 0;
     InterlockedExchange(&Dev->PendingTransferDone, 0);
 
     RtlCopyMemory(SetupWords, Setup, sizeof(SetupWords));
