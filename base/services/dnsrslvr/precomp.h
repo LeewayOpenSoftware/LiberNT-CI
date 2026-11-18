@@ -107,6 +107,8 @@ HostsWatchStop(VOID);
 
 VOID LlmnrStart(VOID);
 VOID LlmnrStop(VOID);
+VOID MdnsStart(VOID);
+VOID MdnsStop(VOID);
 
 /* wskname.c */
 VOID WskNameStart(VOID);

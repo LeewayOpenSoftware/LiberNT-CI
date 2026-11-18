@@ -56,6 +56,7 @@ ServiceControlHandler(
             UpdateServiceStatus(ServiceStatusHandle, SERVICE_STOP_PENDING, 1);
             RpcMgmtStopServerListening(NULL);
             LlmnrStop();
+            MdnsStop();
             HostsWatchStop();
             WskNameStop();
             DnsIntCacheFree();
@@ -113,6 +114,7 @@ ServiceMain(
     ReloadHostsFile();
 
     LlmnrStart();
+    MdnsStart();
 
     WskNameStart();
 
