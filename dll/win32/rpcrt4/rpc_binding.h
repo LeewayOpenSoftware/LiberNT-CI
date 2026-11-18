@@ -87,6 +87,7 @@ typedef struct _RpcConnection
   /* client-only */
   struct list conn_pool_entry;
   ULONG assoc_group_id; /* association group returned during binding */
+  LUID token_id; /* token the connection was opened under; the transport may carry it as the caller identity */
   RPC_ASYNC_STATE *async_state;
   struct _RpcAssoc *assoc; /* association this connection is part of */
 
