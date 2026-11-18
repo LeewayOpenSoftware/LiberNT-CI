@@ -1983,6 +1983,34 @@ NtPowerInformation(IN POWER_INFORMATION_LEVEL PowerInformationLevel,
             break;
         }
 
+        case SystemExecutionState:
+        {
+            EXECUTION_STATE State;
+
+            if (InputBuffer != NULL || OutputBuffer == NULL)
+                return STATUS_INVALID_PARAMETER;
+            if (OutputBufferLength < sizeof(EXECUTION_STATE))
+                return STATUS_BUFFER_TOO_SMALL;
+
+            /* Kernel power requests and display-required requests; user
+             * thread requests are not aggregated system-wide yet. */
+            State = PopKernelPowerRequestExecutionState();
+            if (PopIsDisplayRequired())
+                State |= ES_DISPLAY_REQUIRED;
+
+            _SEH2_TRY
+            {
+                *(PEXECUTION_STATE)OutputBuffer = State;
+                Status = STATUS_SUCCESS;
+            }
+            _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+            {
+                Status = _SEH2_GetExceptionCode();
+            }
+            _SEH2_END;
+            break;
+        }
+
         case SystemPowerStateLogging:
         {
             if (InputBuffer != NULL || OutputBuffer == NULL || OutputBufferLength == 0)

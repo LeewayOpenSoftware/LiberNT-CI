@@ -245,6 +245,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/standby.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/thermal.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/po/ttm.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/po/powreq.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/apiset.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/apphelp.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/ps/debug.c
