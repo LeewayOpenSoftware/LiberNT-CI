@@ -9,6 +9,7 @@
 
 #include <wmistr.h>
 #include <evntrace.h>
+#include <evntprov.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -63,9 +64,51 @@ typedef enum _ETWTRACECONTROLCODE
     EtwUpdateLoggerCode = 4,
     EtwFlushLoggerCode = 5,
     EtwRegisterGuidsCode = 15,
+    /* LiberNT-internal (ntdll <-> kernel only): provider enable state */
+    EtwEnableGuidCode = 17,
+    EtwQueryEnableCode = 18,
     EtwEnumTraceGuidListCode = 21,
     EtwGetTraceGuidInfoCode = 22
 } ETWTRACECONTROLCODE;
+
+/* EtwEnableGuidCode input: enable, disable or capture-state a provider for one session */
+typedef struct _ETW_ENABLE_PARAMETERS
+{
+    GUID ProviderId;
+    ULONG LoggerId;
+    UCHAR ControlCode;          /* EVENT_CONTROL_CODE_* */
+    UCHAR Level;
+    USHORT Reserved;
+    ULONGLONG MatchAnyKeyword;
+    ULONGLONG MatchAllKeyword;
+} ETW_ENABLE_PARAMETERS, *PETW_ENABLE_PARAMETERS;
+
+/* EtwQueryEnableCode input; the output is one ULONG, non-zero when an event of this level
+ * and keyword would reach at least one session (Level 0 / Keyword 0: any). The provider
+ * is named by the caller's own registration handle. */
+typedef struct _ETW_QUERY_ENABLE
+{
+    ULONG64 RegistrationHandle;
+    UCHAR Level;
+    UCHAR Reserved[7];
+    ULONGLONG Keyword;
+} ETW_QUERY_ENABLE, *PETW_QUERY_ENABLE;
+
+/* NtTraceEvent(RegistrationHandle, ETW_NT_FLAGS_TRACE_EVENT, size, packet): a modern
+ * event from user mode; the data stays in the caller's memory until the kernel copies it */
+typedef struct _ETW_USER_EVENT_PACKET
+{
+    EVENT_DESCRIPTOR Descriptor;
+    GUID ActivityId;
+    GUID RelatedActivityId;
+    ULONG Flags;                /* ETW_USER_EVENT_* */
+    ULONG UserDataCount;
+    EVENT_DATA_DESCRIPTOR UserData[ANYSIZE_ARRAY];
+} ETW_USER_EVENT_PACKET, *PETW_USER_EVENT_PACKET;
+
+#define ETW_USER_EVENT_ACTIVITY_ID          0x00000001
+#define ETW_USER_EVENT_RELATED_ACTIVITY_ID  0x00000002
+#define ETW_MAX_EVENT_DATA_DESCRIPTORS      128
 
 #define ETW_REGISTRATION_FLAG_LEGACY        0x00000001
 

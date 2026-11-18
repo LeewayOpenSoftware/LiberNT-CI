@@ -303,6 +303,7 @@ list(APPEND SOURCE
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfirql.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/vf/vfpool.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwlog.c
+    ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwprov.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/etwreg.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/guidobj.c
     ${REACTOS_SOURCE_DIR}/ntoskrnl/wmi/pcw.c

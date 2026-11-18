@@ -12,6 +12,7 @@ list(APPEND SOURCE
     CryptCreateHash.c
     DuplicateTokenEx.c
     EnableTraceEx.c
+    EventTrace.c
     EnumerateTraceGuidsEx.c
     eventlog.c
     Hash.c

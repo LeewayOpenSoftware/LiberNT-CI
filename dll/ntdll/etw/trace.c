@@ -818,10 +818,22 @@ ULONG WINAPI EtwControlTraceA( TRACEHANDLE hSession, LPCSTR SessionName, PEVENT_
  */
 ULONG WINAPI EtwEnableTrace( ULONG enable, ULONG flag, ULONG level, LPCGUID guid, TRACEHANDLE hSession )
 {
-    FIXME("(%d, 0x%x, %d, %p, %I64x): stub\n", enable, flag, level,
-            guid, hSession);
+    ETW_ENABLE_PARAMETERS Params;
+    ULONG ReturnSize;
+    NTSTATUS Status;
 
-    return ERROR_SUCCESS;
+    DPRINT("(%d, 0x%x, %d, %p, %I64x)\n", enable, flag, level, guid, hSession);
+
+    /* the classic flags are the keywords of the modern enable */
+    if (!guid || !hSession || (hSession >> 16) || level > 0xFF) return ERROR_INVALID_PARAMETER;
+    RtlZeroMemory(&Params, sizeof(Params));
+    Params.ProviderId = *guid;
+    Params.LoggerId = (ULONG)hSession;
+    Params.ControlCode = enable ? EVENT_CONTROL_CODE_ENABLE_PROVIDER : EVENT_CONTROL_CODE_DISABLE_PROVIDER;
+    Params.Level = (UCHAR)level;
+    Params.MatchAnyKeyword = flag;
+    Status = NtTraceControl(EtwEnableGuidCode, &Params, sizeof(Params), NULL, 0, &ReturnSize);
+    return RtlNtStatusToDosError(Status);
 }
 
 /******************************************************************************

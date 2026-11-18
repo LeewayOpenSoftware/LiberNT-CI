@@ -11,6 +11,7 @@
 #include <evntrace.h>
 #include <evntcons.h>
 #include <ntwmi.h>
+#include <ndk/exfuncs.h>
 
 WINE_DEFAULT_DEBUG_CHANNEL(advapi);
 
@@ -676,7 +677,24 @@ EnableTraceEx2(IN TRACEHANDLE TraceHandle,
         return ERROR_INVALID_PARAMETER;
     }
 
-    return ERROR_SUCCESS;
+    /* A session handle is its logger id; the enable is synchronous, so Timeout does not matter */
+    {
+        ETW_ENABLE_PARAMETERS Params;
+        ULONG ReturnSize;
+        NTSTATUS Status;
+
+        if (TraceHandle >> 16)
+            return ERROR_INVALID_HANDLE;
+        RtlZeroMemory(&Params, sizeof(Params));
+        Params.ProviderId = *ProviderId;
+        Params.LoggerId = (ULONG)TraceHandle;
+        Params.ControlCode = (UCHAR)ControlCode;
+        Params.Level = Level;
+        Params.MatchAnyKeyword = MatchAnyKeyword;
+        Params.MatchAllKeyword = MatchAllKeyword;
+        Status = NtTraceControl(EtwEnableGuidCode, &Params, sizeof(Params), NULL, 0, &ReturnSize);
+        return RtlNtStatusToDosError(Status);
+    }
 }
 
 ULONG
