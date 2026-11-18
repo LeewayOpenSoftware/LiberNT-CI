@@ -470,21 +470,30 @@ done:
 
 static BOOL WriteTextFile(PCWSTR Path, PCWSTR Text)
 {
-    static const BYTE Bom[2] = { 0xFF, 0xFE };
     HANDLE File;
-    DWORD Written, Length = (DWORD)(wcslen(Text) * sizeof(WCHAR));
+    PSTR Ansi;
+    DWORD Written, Error, Length;
     BOOL Ok;
+
+    Length = WideCharToMultiByte(CP_ACP, 0, Text, -1, NULL, 0, NULL, NULL);
+    if (!Length || !(Ansi = Alloc(Length)))
+        return FALSE;
+    WideCharToMultiByte(CP_ACP, 0, Text, -1, Ansi, Length, NULL, NULL);
+    Length--;
 
     File = CreateFileW(Path, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
     if (File == INVALID_HANDLE_VALUE)
-        return FALSE;
-    Ok = WriteFile(File, Bom, sizeof(Bom), &Written, NULL) && Written == sizeof(Bom) &&
-         WriteFile(File, Text, Length, &Written, NULL) && Written == Length;
     {
-        DWORD Error = GetLastError();
-        CloseHandle(File);
+        Error = GetLastError();
+        Free(Ansi);
         SetLastError(Error);
+        return FALSE;
     }
+    Ok = WriteFile(File, Ansi, Length, &Written, NULL) && Written == Length;
+    Error = GetLastError();
+    CloseHandle(File);
+    Free(Ansi);
+    SetLastError(Error);
     return Ok;
 }
 
@@ -1128,10 +1137,12 @@ static DWORD CmdQueryEvents(int ArgCount, PWSTR *Args)
 
     if (!Error && SaveBookmark)
     {
-        PWSTR Xml = Index ? RenderAlloc(NULL, SaveBookmark, EvtRenderBookmark, NULL) : NULL;
-        PCWSTR Text = Xml ? Xml : BookmarkText;
+        PWSTR Xml = NULL;
+        PCWSTR Text = BookmarkText;
 
-        if (Text && !WriteTextFile(OptionValues[OPT_SAVEBOOKMARK], Text))
+        if (Index || !Text)
+            Text = Xml = RenderAlloc(NULL, SaveBookmark, EvtRenderBookmark, NULL);
+        if (!Text || !WriteTextFile(OptionValues[OPT_SAVEBOOKMARK], Text))
             Error = FailWith(IDS_ERR_WRITE_FILE, OptionValues[OPT_SAVEBOOKMARK], GetLastError());
         Free(Xml);
     }
