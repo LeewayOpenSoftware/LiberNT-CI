@@ -2976,6 +2976,9 @@ ScmStartService(PSERVICE Service,
     /* Acquire the service control critical section, to synchronize starts */
     EnterCriticalSection(&ControlServiceCriticalSection);
 
+    /* A start after boot (manual, trigger, recovery) replaces a pending delayed start */
+    Service->bDelayedStartPending = FALSE;
+
     /* Really start the service */
     dwError = ScmLoadService(Service, argc, argv);
 
@@ -3061,7 +3064,8 @@ ScmAutoStartServices(VOID)
         CurrentService->bDelayedStartPending = FALSE;
         if (!CurrentService->ServiceVisited &&
             CurrentService->dwStartType == SERVICE_AUTO_START &&
-            CurrentService->bDelayedAutoStart)
+            CurrentService->bDelayedAutoStart &&
+            CurrentService->lpGroup == NULL)
         {
             CurrentService->bDelayedStartPending = TRUE;
             CurrentService->ServiceVisited = TRUE;
@@ -3200,7 +3204,7 @@ ScmGetPreshutdownTimeout(
 
 /*
  * Upper bound of the whole preshutdown phase. The services process is stopped by winsrv after
- * WaitToKillServiceTimeout (default 20 s, like winsrv), so waiting longer for a PreshutdownTimeout of 180 s
+ * WaitToKillServiceTimeout (default 20 s, like winsrv), so waiting longer for a long PreshutdownTimeout
  * would only get the SCM killed in the middle of the wait. All timeouts are therefore capped to this budget.
  * FOLLOW-UP (not implemented): Windows lets winlogon start the preshutdown phase early, before the
  * user-session logoff, which is what makes the full PreshutdownTimeout usable there.
@@ -3399,7 +3403,6 @@ ScmDelayedAutoStartThread(
                 ppServices = ppNew;
                 Max = NewMax;
             }
-            CurrentService->bDelayedStartPending = FALSE;
             ScmReferenceService(CurrentService);
             ppServices[Count++] = CurrentService;
         }
@@ -3410,11 +3413,16 @@ ScmDelayedAutoStartThread(
 
     for (i = 0; i < Count; i++)
     {
-        if (!ScmShutdown && ppServices[i]->Status.dwCurrentState == SERVICE_STOPPED)
+        /* The pending flag is owned by the start critical section: a start since boot clears it */
+        EnterCriticalSection(&ControlServiceCriticalSection);
+        if (!ScmShutdown &&
+            ppServices[i]->bDelayedStartPending &&
+            ppServices[i]->Status.dwCurrentState == SERVICE_STOPPED)
         {
             DPRINT("Delayed auto-start: %S\n", ppServices[i]->lpServiceName);
             ScmStartService(ppServices[i], 0, NULL);
         }
+        LeaveCriticalSection(&ControlServiceCriticalSection);
         ScmDereferenceService(ppServices[i]);
     }
 
