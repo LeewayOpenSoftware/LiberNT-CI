@@ -1303,6 +1303,7 @@
 @ stdcall RtlGetSetBootStatusData(ptr long long ptr long long)
 @ stdcall RtlGetVersion(ptr)
 @ stdcall RtlHashUnicodeString(ptr long long ptr)
+@ stdcall RtlIdentifierAuthoritySid(ptr)
 @ stdcall RtlImageDirectoryEntryToData(ptr long long ptr)
 @ stdcall RtlImageNtHeader(ptr)
 @ stdcall RtlInitAnsiString(ptr str)
