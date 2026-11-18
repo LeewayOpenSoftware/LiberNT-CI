@@ -7,6 +7,7 @@
 
 #include <apitest.h>
 #include <wincred.h>
+#include <winreg.h>
 
 static const BYTE Secret[] = { 's','3','c','r','e','t', 0, 0xff, 0x10, 0x00 };
 #define TEST_PREFIX  L"LiberNT.apitest/"

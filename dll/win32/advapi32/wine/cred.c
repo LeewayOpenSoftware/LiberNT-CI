@@ -62,8 +62,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(cred);
 #define STATUS_NOT_FOUND          ((LONG)0xC0000225)
 #endif
 
-ULONG WINAPI RtlNtStatusToDosError(LONG Status);
-
 /* Map a DPAPI server NTSTATUS to a Win32 error, as crypt32 does: a bad/foreign blob is corruption,
  * a missing logon key means no key for this session, access denial keeps its meaning. */
 static DWORD cred_dpapi_status_to_error(LONG status)
