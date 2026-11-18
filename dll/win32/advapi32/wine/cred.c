@@ -80,7 +80,7 @@ static DWORD cred_dpapi_status_to_error(LONG status)
     }
 }
 
-/* Bind to the LSA DPAPI server (shares the lsarpc pipe), authenticated and sealed; fail closed so a
+/* Bind to the LSA DPAPI server over local RPC, authenticated and sealed; fail closed so a
  * credential secret is never sent over an unauthenticated channel. */
 static handle_t cred_dpapi_bind(void)
 {
@@ -89,8 +89,8 @@ static handle_t cred_dpapi_bind(void)
     RPC_SECURITY_QOS qos;
     RPC_STATUS status;
 
-    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncacn_np", NULL,
-                                 (RPC_WSTR)L"\\pipe\\lsarpc", NULL, &string_binding) != RPC_S_OK)
+    if (RpcStringBindingComposeW(NULL, (RPC_WSTR)L"ncalrpc", NULL,
+                                 (RPC_WSTR)DPAPI_LOCAL_ENDPOINT, NULL, &string_binding) != RPC_S_OK)
         return NULL;
     status = RpcBindingFromStringBindingW(string_binding, &binding);
     RpcStringFreeW(&string_binding);

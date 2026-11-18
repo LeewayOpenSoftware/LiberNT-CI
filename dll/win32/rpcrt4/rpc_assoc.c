@@ -361,12 +361,34 @@ static RPC_STATUS RpcAssoc_BindConnection(const RpcAssoc *assoc, RpcConnection *
     return status;
 }
 
+static void get_caller_token_id(LUID *token_id)
+{
+    TOKEN_STATISTICS stats;
+    HANDLE token;
+    DWORD size;
+
+    token_id->LowPart = 0;
+    token_id->HighPart = 0;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token) &&
+        (GetLastError() != ERROR_NO_TOKEN || !OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)))
+        return;
+    if (GetTokenInformation(token, TokenStatistics, &stats, sizeof(stats), &size))
+        *token_id = stats.TokenId;
+    CloseHandle(token);
+}
+
 static RpcConnection *RpcAssoc_GetIdleConnection(RpcAssoc *assoc,
                                                  const RPC_SYNTAX_IDENTIFIER *InterfaceId,
                                                  const RPC_SYNTAX_IDENTIFIER *TransferSyntax, const RpcAuthInfo *AuthInfo,
                                                  const RpcQualityOfService *QOS)
 {
     RpcConnection *Connection;
+    LUID token_id;
+
+    /* A connection is reused only under the token it was opened with, or a caller would get another caller's identity */
+    get_caller_token_id(&token_id);
+    if (!token_id.LowPart && !token_id.HighPart)
+        return NULL;
     EnterCriticalSection(&assoc->cs);
     /* try to find a compatible connection from the connection pool */
     LIST_FOR_EACH_ENTRY(Connection, &assoc->free_connection_pool, RpcConnection, conn_pool_entry)
@@ -374,7 +396,9 @@ static RpcConnection *RpcAssoc_GetIdleConnection(RpcAssoc *assoc,
         if (!memcmp(&Connection->ActiveInterface, InterfaceId,
                     sizeof(RPC_SYNTAX_IDENTIFIER)) &&
             RpcAuthInfo_IsEqual(Connection->AuthInfo, AuthInfo) &&
-            RpcQualityOfService_IsEqual(Connection->QOS, QOS))
+            RpcQualityOfService_IsEqual(Connection->QOS, QOS) &&
+            Connection->token_id.LowPart == token_id.LowPart &&
+            Connection->token_id.HighPart == token_id.HighPart)
         {
             list_remove(&Connection->conn_pool_entry);
             LeaveCriticalSection(&assoc->cs);
@@ -418,6 +442,7 @@ RPC_STATUS RpcAssoc_GetClientConnection(RpcAssoc *assoc,
         goto done;
 
     NewConnection->assoc = assoc;
+    get_caller_token_id(&NewConnection->token_id);
     status = RPCRT4_OpenClientConnection(NewConnection);
     if (status != RPC_S_OK)
     {
