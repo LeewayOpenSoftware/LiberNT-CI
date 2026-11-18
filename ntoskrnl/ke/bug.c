@@ -1133,7 +1133,7 @@ KiLogProcessorBackTraces(
     CurrentPrcb = KeGetCurrentPrcb();
     KiLogBugCheckString("\r\nSMP processor backtraces:\r\n");
 
-    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    for (Processor = 0; Processor < KiNumberProcessors; Processor++)
     {
         TargetPrcb = KiProcessorBlock[Processor];
         if (TargetPrcb == NULL)

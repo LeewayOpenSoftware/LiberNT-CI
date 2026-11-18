@@ -161,7 +161,7 @@ KiScanReadyQueues(IN PKDPC Dpc,
     UNREFERENCED_PARAMETER(SystemArgument1);
     UNREFERENCED_PARAMETER(SystemArgument2);
 
-    ProcessorCount = min((ULONG)KeNumberProcessors,
+    ProcessorCount = min(KiNumberProcessors,
                          (ULONG)READY_SCAN_PROCESSORS);
     ASSERT(ProcessorCount != 0);
     CandidateQuota = READY_SCAN_CANDIDATES;
@@ -190,7 +190,7 @@ KiScanReadyQueues(IN PKDPC Dpc,
                                 &KiStarvationScanIndex[ScanIndex]);
 
         ScanIndex++;
-        if (ScanIndex == KeNumberProcessors) ScanIndex = 0;
+        if (ScanIndex == KiNumberProcessors) ScanIndex = 0;
     }
 
     *ScanLast = ScanIndex;

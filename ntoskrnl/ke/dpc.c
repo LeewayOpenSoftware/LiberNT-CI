@@ -228,7 +228,7 @@ KiStartDpcThreads(VOID)
     NTSTATUS Status;
     ULONG Processor;
 
-    for (Processor = 0; Processor < (ULONG)KeNumberProcessors; Processor++)
+    for (Processor = 0; Processor < KiNumberProcessors; Processor++)
     {
         Prcb = KiProcessorBlock[Processor];
         if (!Prcb)
@@ -547,7 +547,7 @@ KiTimerExpiration(IN PKDPC Dpc,
     } while (Index != Limit);
 
     /* Verify the timer table, on debug builds */
-    if (KeNumberProcessors == 1) KiCheckTimerTable(InterruptTime);
+    if (KiNumberProcessors == 1) KiCheckTimerTable(InterruptTime);
 
     /* Check if we still have DPC entries */
     if (DpcCalls)
@@ -1211,8 +1211,8 @@ KeRemoveQueueDpcEx(
         return Removed;
 
     ProcessorHistory = (ULONG_PTR)InterlockedCompareExchangePointer((PVOID volatile *)&Dpc->ProcessorHistory, NULL, NULL);
-    CurrentProcessor = KeGetCurrentProcessorNumber();
-    for (Processor = 0; Processor < KeNumberProcessors; Processor++)
+    CurrentProcessor = KeGetCurrentPrcb()->Number;
+    for (Processor = 0; Processor < KiNumberProcessors; Processor++)
     {
         if (!(ProcessorHistory & KiDpcHistoryMask(Processor)) || (Processor == CurrentProcessor))
             continue;
@@ -1263,7 +1263,7 @@ KeFlushQueuedDpcs(VOID)
     PAGED_CODE();
     KeInitializeEvent(&Event, SynchronizationEvent, FALSE);
 
-    for (ProcessorIndex = 0; ProcessorIndex < KeNumberProcessors; ProcessorIndex++)
+    for (ProcessorIndex = 0; ProcessorIndex < KiNumberProcessors; ProcessorIndex++)
     {
         TargetPrcb = KiProcessorBlock[ProcessorIndex];
         for (DpcType = DPC_NORMAL; DpcType <= DPC_THREADED; DpcType++)
@@ -1331,7 +1331,7 @@ KiSetTargetProcessorDpcIndex(
     _In_ ULONG Index)
 {
     ASSERT_DPC(Dpc);
-    if ((Index >= (ULONG)KeNumberProcessors) || (Dpc->DpcData != NULL))
+    if ((Index >= KiNumberProcessors) || (Dpc->DpcData != NULL))
         return;
     Dpc->Number = (USHORT)(Index + KI_DPC_TARGET_PROCESSOR_OFFSET);
 }

@@ -437,7 +437,7 @@ KiAnyReadyThreadQueued(
 
     /* Only the processors of the group can hand a thread to this one */
     GroupBase = ExceptCpu & ~(KI_PROCESSORS_PER_GROUP - 1);
-    GroupEnd = min((ULONG)KeNumberProcessors, GroupBase + KI_PROCESSORS_PER_GROUP);
+    GroupEnd = min(KiNumberProcessors, GroupBase + KI_PROCESSORS_PER_GROUP);
     for (Cpu = GroupBase; Cpu < GroupEnd; Cpu++)
     {
         Prcb = KiProcessorBlock[Cpu];
@@ -466,7 +466,7 @@ KiBalanceReadyQueues(
     ASSERT((Reason >= KiBalanceIdle) && (Reason <= KiBalanceQuantum));
 
     TargetCpu = Target->Number;
-    if ((TargetCpu >= (ULONG)KeNumberProcessors) ||
+    if ((TargetCpu >= KiNumberProcessors) ||
         !KiIsProcessorActive(TargetCpu) ||
         KiIsProcessorParked(Target))
     {
@@ -508,7 +508,7 @@ KiBalanceReadyQueues(
 
     /* Threads are stolen only within the target's group */
     GroupBase = TargetCpu & ~(KI_PROCESSORS_PER_GROUP - 1);
-    ProcessorCount = min((ULONG)KeNumberProcessors - GroupBase, KI_PROCESSORS_PER_GROUP);
+    ProcessorCount = min(KiNumberProcessors - GroupBase, KI_PROCESSORS_PER_GROUP);
     Start = (ULONG)InterlockedIncrement(&KiBalanceState[TargetCpu].SourceCursor) % ProcessorCount;
     Scanned = 0;
     Thread = NULL;
@@ -712,7 +712,7 @@ KiSelectNextProcessor(
 
 #ifdef KI_CORE_PARKING
         if ((Group == 0) &&
-            Thread->IdealProcessor < (ULONG)KeNumberProcessors &&
+            Thread->IdealProcessor < KiNumberProcessors &&
             KiProcessorBlock[Thread->IdealProcessor] != NULL)
         {
             PKSCHEDULER_SUBNODE SubNode =
@@ -757,7 +757,7 @@ KiSelectNextProcessor(
     BestLoad = MAXULONG;
 
     /* Bits of this group that can hold a processor */
-    ProcessorCount = min((ULONG)KeNumberProcessors - GroupBase, KI_PROCESSORS_PER_GROUP);
+    ProcessorCount = min(KiNumberProcessors - GroupBase, KI_PROCESSORS_PER_GROUP);
     if ((IdealBit != MAXULONG) && (PreferredSet & AFFINITY_MASK(IdealBit)))
     {
         StartProcessor = IdealBit;
@@ -789,7 +789,7 @@ KiSelectNextProcessor(
         }
     }
 
-    ASSERT(BestProcessor < (ULONG)KeNumberProcessors);
+    ASSERT(BestProcessor < KiNumberProcessors);
     if (SmpDbgEnabled)
         SmpDbgBalanceEvent(BestProcessor, Thread->NextProcessor, KiBalanceWakePlacement);
     return BestProcessor;

@@ -466,7 +466,7 @@ SmpDbgReporterThread(
         LastTime = Now;
 
         for (Cpu = 0;
-             (Cpu < (ULONG)KeNumberProcessors) &&
+             (Cpu < KiNumberProcessors) &&
              (Cpu < RTL_NUMBER_OF(SmpDbgCpu));
              Cpu++)
         {
@@ -634,7 +634,7 @@ SmpDbgSumContextSwitches(VOID)
     ULONG64 Sum = 0;
     ULONG Cpu;
 
-    for (Cpu = 0; (Cpu < (ULONG)KeNumberProcessors) && (Cpu < KI_MAXIMUM_PROCESSORS); Cpu++)
+    for (Cpu = 0; (Cpu < KiNumberProcessors) && (Cpu < KI_MAXIMUM_PROCESSORS); Cpu++)
     {
         PKPRCB Prcb = KiProcessorBlock[Cpu];
 
