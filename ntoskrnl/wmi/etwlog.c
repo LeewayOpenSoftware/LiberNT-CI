@@ -1282,7 +1282,8 @@ EtwpLogModernEvent(
     _In_opt_ LPCGUID ActivityId,
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData,
-    _In_ KPROCESSOR_MODE DataMode)
+    _In_ KPROCESSOR_MODE DataMode,
+    _In_ BOOLEAN NarrowCaller)
 {
     PETWP_EVENT_HEADER Record;
     PWMI_BUFFER_HEADER Buffer;
@@ -1315,8 +1316,9 @@ EtwpLogModernEvent(
         return STATUS_BUFFER_OVERFLOW;
     }
 
-    Narrow = (sizeof(PVOID) == sizeof(ULONG)) ||
-             (DataMode != KernelMode && PsGetCurrentProcessWow64Process() != NULL);
+    /* the header type follows the writer's pointer size: a 32-bit process under WOW64
+     * writes 32-bit events even though its data reaches here already captured */
+    Narrow = (sizeof(PVOID) == sizeof(ULONG)) || NarrowCaller;
 
     KeAcquireGuardedMutex(&Logger->BufferLock);
 

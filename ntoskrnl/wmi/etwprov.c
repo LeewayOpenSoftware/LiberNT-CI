@@ -257,7 +257,8 @@ EtwpDeliver(
     _In_opt_ LPCGUID ActivityId,
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData,
-    _In_ KPROCESSOR_MODE DataMode)
+    _In_ KPROCESSOR_MODE DataMode,
+    _In_ BOOLEAN NarrowCaller)
 {
     ULONG Targets[ETWP_MAX_SESSIONS];
     ULONG Count = 0, i;
@@ -282,7 +283,7 @@ EtwpDeliver(
     for (i = 0; i < Count; i++)
     {
         One = EtwpLogModernEvent(Targets[i], &Provider->Guid, Descriptor, ActivityId,
-                                 UserDataCount, UserData, DataMode);
+                                 UserDataCount, UserData, DataMode, NarrowCaller);
         /* a user buffer that faults is the caller's error; a full session is not */
         if (One == STATUS_ACCESS_VIOLATION || One == STATUS_DATATYPE_MISALIGNMENT ||
             One == STATUS_BUFFER_OVERFLOW)
@@ -611,7 +612,8 @@ EtwpTraceUserEvent(
 
     Status = EtwpDeliver(Provider, &Header.Descriptor,
                          (Header.Flags & ETW_USER_EVENT_ACTIVITY_ID) ? &Header.ActivityId : NULL,
-                         Total ? 1 : 0, &Captured, KernelMode);
+                         Total ? 1 : 0, &Captured, KernelMode,
+                         PreviousMode != KernelMode && PsGetCurrentProcessWow64Process() != NULL);
     if (Copy)
         ExFreePoolWithTag(Copy, ETWP_PROV_TAG);
     return Status;
@@ -887,7 +889,7 @@ EtwWriteTransfer(
     if (!(Provider = EtwpProviderFromHandle(RegHandle)))
         return STATUS_INVALID_HANDLE;
 
-    return EtwpDeliver(Provider, EventDescriptor, ActivityId, UserDataCount, UserData, KernelMode);
+    return EtwpDeliver(Provider, EventDescriptor, ActivityId, UserDataCount, UserData, KernelMode, FALSE);
 }
 
 _IRQL_requires_max_(HIGH_LEVEL)
@@ -953,7 +955,7 @@ EtwWriteString(
     Data.Size = (ULONG)Length;
     Data.Reserved = 0;
 
-    return EtwpDeliver(Provider, &Descriptor, ActivityId, 1, &Data, KernelMode);
+    return EtwpDeliver(Provider, &Descriptor, ActivityId, 1, &Data, KernelMode, FALSE);
 }
 
 _IRQL_requires_max_(PASSIVE_LEVEL)

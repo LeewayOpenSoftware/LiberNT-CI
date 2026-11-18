@@ -202,7 +202,8 @@ EtwpLogModernEvent(
     _In_opt_ LPCGUID ActivityId,
     _In_ ULONG UserDataCount,
     _In_reads_opt_(UserDataCount) PEVENT_DATA_DESCRIPTOR UserData,
-    _In_ KPROCESSOR_MODE DataMode);
+    _In_ KPROCESSOR_MODE DataMode,
+    _In_ BOOLEAN NarrowCaller);
 
 BOOLEAN
 EtwpLoggerExists(
