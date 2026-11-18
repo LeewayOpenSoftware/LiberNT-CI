@@ -201,6 +201,9 @@ HalpRestartApicTimerClock(ULONG Base, ULONG Time)
     HalpClockCount = (ULONG)min(max(Count, 1), MAXULONG);
     HalpClockCountTime = Time;
     HalpClockCountBase = Base;
+
+    /* What the timer is given is on record before it runs with it */
+    _WriteBarrier();
     ApicWrite(APIC_TICR, HalpClockCount);
 }
 
@@ -240,6 +243,9 @@ HalpNextClockTick(ULONGLONG Now)
     ULONGLONG Deadline = HalpClockDeadline, Delta;
     ULONG Target = HalpCurrentTimeIncrement;
 
+    /* The deadline is read as it stands, without a lock: it is only ever
+     * written on processor 0 with interrupts off, and only read there, by
+     * that writer and by the clock handler it keeps out. */
     if (Deadline == 0)
         return Target;
 
