@@ -274,7 +274,7 @@ static const IRepetitionPatternVtbl RepetitionPattern_vtbl = {
     RepetitionPattern_put_StopAtDurationEnd
 };
 
-static HRESULT RepetitionPattern_create(IRepetitionPattern **out)
+HRESULT RepetitionPattern_create(IRepetitionPattern **out)
 {
     RepetitionPattern *pattern;
 
@@ -1640,9 +1640,11 @@ static HRESULT WINAPI TriggerCollection_Create(ITriggerCollection *iface, TASK_T
     case TASK_TRIGGER_TIME:
     case TASK_TRIGGER_WEEKLY:
     case TASK_TRIGGER_MONTHLY:
-    case TASK_TRIGGER_MONTHLYDOW:
     case TASK_TRIGGER_IDLE:
     case TASK_TRIGGER_BOOT:
+        hr = GenericTrigger_create(type, &created);
+        break;
+    case TASK_TRIGGER_MONTHLYDOW:
     case TASK_TRIGGER_SESSION_STATE_CHANGE:
         FIXME("Unimplemented type %d\n", type);
         return E_NOTIMPL;
@@ -4556,13 +4558,36 @@ static inline HRESULT write_element_end(IStream *stream, const WCHAR *name)
     return write_stringW(stream, L">\n");
 }
 
+/* Character data: '&', '<' and '>' must be escaped (an EventTrigger Subscription is itself XML). */
+static HRESULT write_escaped(IStream *stream, const WCHAR *value)
+{
+    const WCHAR *p, *start = value;
+    HRESULT hr = S_OK;
+
+    for (p = value; *p && SUCCEEDED(hr); p++)
+    {
+        const WCHAR *entity = NULL;
+
+        if (*p == '&') entity = L"&amp;";
+        else if (*p == '<') entity = L"&lt;";
+        else if (*p == '>') entity = L"&gt;";
+        if (!entity) continue;
+
+        if (p > start) hr = IStream_Write(stream, start, (p - start) * sizeof(WCHAR), NULL);
+        if (SUCCEEDED(hr)) hr = write_stringW(stream, entity);
+        start = p + 1;
+    }
+    if (SUCCEEDED(hr) && p > start) hr = IStream_Write(stream, start, (p - start) * sizeof(WCHAR), NULL);
+    return hr;
+}
+
 static inline HRESULT write_text_value(IStream *stream, const WCHAR *name, const WCHAR *value)
 {
     write_indent(stream);
     write_stringW(stream, L"<");
     write_stringW(stream, name);
     write_stringW(stream, L">");
-    write_stringW(stream, value);
+    write_escaped(stream, value);
     write_stringW(stream, L"</");
     write_stringW(stream, name);
     return write_stringW(stream, L">\n");
@@ -5159,6 +5184,11 @@ static HRESULT write_trigger(IStream *stream, ITrigger *trigger)
     IRepetitionPattern *repetition;
     ILogonTrigger *logon = NULL;
     IDailyTrigger *daily = NULL;
+    ITimeTrigger *time = NULL;
+    IWeeklyTrigger *weekly = NULL;
+    IMonthlyTrigger *monthly = NULL;
+    IBootTrigger *boot = NULL;
+    IEventTrigger *event = NULL;
     TASK_TRIGGER_TYPE2 type;
     const WCHAR *element;
     VARIANT_BOOL bval;
@@ -5182,6 +5212,29 @@ static HRESULT write_trigger(IStream *stream, ITrigger *trigger)
     case TASK_TRIGGER_REGISTRATION:
         element = L"RegistrationTrigger";
         if (FAILED(ITrigger_QueryInterface(trigger, &IID_IRegistrationTrigger, (void **)&registration))) registration = NULL;
+        break;
+    case TASK_TRIGGER_TIME:
+        element = L"TimeTrigger";
+        if (FAILED(ITrigger_QueryInterface(trigger, &IID_ITimeTrigger, (void **)&time))) time = NULL;
+        break;
+    case TASK_TRIGGER_WEEKLY:
+        element = L"CalendarTrigger";
+        if (FAILED(ITrigger_QueryInterface(trigger, &IID_IWeeklyTrigger, (void **)&weekly))) weekly = NULL;
+        break;
+    case TASK_TRIGGER_MONTHLY:
+        element = L"CalendarTrigger";
+        if (FAILED(ITrigger_QueryInterface(trigger, &IID_IMonthlyTrigger, (void **)&monthly))) monthly = NULL;
+        break;
+    case TASK_TRIGGER_BOOT:
+        element = L"BootTrigger";
+        if (FAILED(ITrigger_QueryInterface(trigger, &IID_IBootTrigger, (void **)&boot))) boot = NULL;
+        break;
+    case TASK_TRIGGER_IDLE:
+        element = L"IdleTrigger";
+        break;
+    case TASK_TRIGGER_EVENT:
+        element = L"EventTrigger";
+        if (FAILED(ITrigger_QueryInterface(trigger, &IID_IEventTrigger, (void **)&event))) event = NULL;
         break;
     default:
         FIXME("unhandled trigger type %d\n", type);
@@ -5251,6 +5304,87 @@ static HRESULT write_trigger(IStream *stream, ITrigger *trigger)
     {
         WRITE_OPTIONAL_TEXT(L"Delay", IRegistrationTrigger_get_Delay(registration, &str));
         IRegistrationTrigger_Release(registration);
+    }
+    if (time)
+    {
+        WRITE_OPTIONAL_TEXT(L"RandomDelay", ITimeTrigger_get_RandomDelay(time, &str));
+        ITimeTrigger_Release(time);
+    }
+    if (boot)
+    {
+        WRITE_OPTIONAL_TEXT(L"Delay", IBootTrigger_get_Delay(boot, &str));
+        IBootTrigger_Release(boot);
+    }
+    if (event)
+    {
+        WRITE_OPTIONAL_TEXT(L"Subscription", IEventTrigger_get_Subscription(event, &str));
+        WRITE_OPTIONAL_TEXT(L"Delay", IEventTrigger_get_Delay(event, &str));
+        IEventTrigger_Release(event);
+    }
+    if (weekly)
+    {
+        static const WCHAR *days[] = { L"Sunday", L"Monday", L"Tuesday", L"Wednesday",
+                                       L"Thursday", L"Friday", L"Saturday" };
+        short mask = 0, weeks = 1;
+        int i;
+
+        WRITE_OPTIONAL_TEXT(L"RandomDelay", IWeeklyTrigger_get_RandomDelay(weekly, &str));
+        IWeeklyTrigger_get_DaysOfWeek(weekly, &mask);
+        IWeeklyTrigger_get_WeeksInterval(weekly, &weeks);
+        if (SUCCEEDED(hr)) hr = write_element(stream, L"ScheduleByWeek");
+        push_indent();
+        if (SUCCEEDED(hr) && mask)
+        {
+            hr = write_element(stream, L"DaysOfWeek");
+            push_indent();
+            for (i = 0; i < 7 && SUCCEEDED(hr); i++)
+                if (mask & (1 << i)) hr = write_empty_element(stream, days[i]);
+            pop_indent();
+            if (SUCCEEDED(hr)) hr = write_element_end(stream, L"DaysOfWeek");
+        }
+        if (SUCCEEDED(hr)) hr = write_int_value(stream, L"WeeksInterval", weeks);
+        pop_indent();
+        if (SUCCEEDED(hr)) hr = write_element_end(stream, L"ScheduleByWeek");
+        IWeeklyTrigger_Release(weekly);
+    }
+    if (monthly)
+    {
+        static const WCHAR *months[] = { L"January", L"February", L"March", L"April", L"May", L"June",
+                                         L"July", L"August", L"September", L"October", L"November",
+                                         L"December" };
+        VARIANT_BOOL last = VARIANT_FALSE;
+        short month_mask = 0;
+        LONG day_mask = 0;
+        int i;
+
+        WRITE_OPTIONAL_TEXT(L"RandomDelay", IMonthlyTrigger_get_RandomDelay(monthly, &str));
+        IMonthlyTrigger_get_DaysOfMonth(monthly, &day_mask);
+        IMonthlyTrigger_get_MonthsOfYear(monthly, &month_mask);
+        IMonthlyTrigger_get_RunOnLastDayOfMonth(monthly, &last);
+        if (SUCCEEDED(hr)) hr = write_element(stream, L"ScheduleByMonth");
+        push_indent();
+        if (SUCCEEDED(hr) && (day_mask || last))
+        {
+            hr = write_element(stream, L"DaysOfMonth");
+            push_indent();
+            for (i = 0; i < 31 && SUCCEEDED(hr); i++)
+                if (day_mask & (1 << i)) hr = write_int_value(stream, L"Day", i + 1);
+            if (SUCCEEDED(hr) && last) hr = write_text_value(stream, L"Day", L"Last");
+            pop_indent();
+            if (SUCCEEDED(hr)) hr = write_element_end(stream, L"DaysOfMonth");
+        }
+        if (SUCCEEDED(hr) && month_mask)
+        {
+            hr = write_element(stream, L"Months");
+            push_indent();
+            for (i = 0; i < 12 && SUCCEEDED(hr); i++)
+                if (month_mask & (1 << i)) hr = write_empty_element(stream, months[i]);
+            pop_indent();
+            if (SUCCEEDED(hr)) hr = write_element_end(stream, L"Months");
+        }
+        pop_indent();
+        if (SUCCEEDED(hr)) hr = write_element_end(stream, L"ScheduleByMonth");
+        IMonthlyTrigger_Release(monthly);
     }
 
     pop_indent();
@@ -5623,6 +5757,92 @@ static HRESULT read_repetition(IXmlReader *reader, ITrigger *trigger)
     return hr;
 }
 
+/*
+ * A CalendarTrigger is created as daily; ScheduleByWeek or ScheduleByMonth
+ * replaces it with a weekly or monthly trigger carrying the common
+ * properties read so far (they precede ScheduleBy* in the schema).
+ */
+static HRESULT promote_calendar_trigger(ITriggerCollection *triggers, ITrigger **trigger, IDailyTrigger *daily,
+                                        TASK_TRIGGER_TYPE2 type)
+{
+    IRepetitionPattern *repetition;
+    VARIANT_BOOL enabled = VARIANT_TRUE;
+    ITrigger *created;
+    IWeeklyTrigger *weekly;
+    IMonthlyTrigger *monthly;
+    VARIANT index;
+    BSTR str;
+    LONG count;
+    HRESULT hr;
+
+    hr = ITriggerCollection_Create(triggers, type, &created);
+    if (hr != S_OK) return hr;
+
+    str = NULL;
+    if (ITrigger_get_Id(*trigger, &str) == S_OK && str) ITrigger_put_Id(created, str);
+    SysFreeString(str);
+    str = NULL;
+    if (ITrigger_get_StartBoundary(*trigger, &str) == S_OK && str) ITrigger_put_StartBoundary(created, str);
+    SysFreeString(str);
+    str = NULL;
+    if (ITrigger_get_EndBoundary(*trigger, &str) == S_OK && str) ITrigger_put_EndBoundary(created, str);
+    SysFreeString(str);
+    str = NULL;
+    if (ITrigger_get_ExecutionTimeLimit(*trigger, &str) == S_OK && str) ITrigger_put_ExecutionTimeLimit(created, str);
+    SysFreeString(str);
+    if (ITrigger_get_Enabled(*trigger, &enabled) == S_OK) ITrigger_put_Enabled(created, enabled);
+    if (ITrigger_get_Repetition(*trigger, &repetition) == S_OK)
+    {
+        ITrigger_put_Repetition(created, repetition);
+        IRepetitionPattern_Release(repetition);
+    }
+
+    str = NULL;
+    if (daily && IDailyTrigger_get_RandomDelay(daily, &str) == S_OK && str)
+    {
+        if (type == TASK_TRIGGER_WEEKLY &&
+            SUCCEEDED(ITrigger_QueryInterface(created, &IID_IWeeklyTrigger, (void **)&weekly)))
+        {
+            IWeeklyTrigger_put_RandomDelay(weekly, str);
+            IWeeklyTrigger_Release(weekly);
+        }
+        if (type == TASK_TRIGGER_MONTHLY &&
+            SUCCEEDED(ITrigger_QueryInterface(created, &IID_IMonthlyTrigger, (void **)&monthly)))
+        {
+            IMonthlyTrigger_put_RandomDelay(monthly, str);
+            IMonthlyTrigger_Release(monthly);
+        }
+    }
+    SysFreeString(str);
+
+    /* the daily trigger is the one before the new last item */
+    if (ITriggerCollection_get_Count(triggers, &count) == S_OK && count >= 2)
+    {
+        V_VT(&index) = VT_I4;
+        V_I4(&index) = count - 1;
+        ITriggerCollection_Remove(triggers, index);
+    }
+
+    ITrigger_Release(*trigger);
+    *trigger = created;
+    return S_OK;
+}
+
+static const WCHAR *const week_day_names[] = { L"Sunday", L"Monday", L"Tuesday", L"Wednesday",
+                                               L"Thursday", L"Friday", L"Saturday" };
+static const WCHAR *const month_names[] = { L"January", L"February", L"March", L"April", L"May", L"June",
+                                            L"July", L"August", L"September", L"October", L"November",
+                                            L"December" };
+
+static int name_index(const WCHAR *name, const WCHAR *const *names, int count)
+{
+    int i;
+
+    for (i = 0; i < count; i++)
+        if (!lstrcmpW(name, names[i])) return i;
+    return -1;
+}
+
 static HRESULT read_trigger(IXmlReader *reader, ITriggerCollection *triggers,
                             TASK_TRIGGER_TYPE2 trigger_type, const WCHAR *element)
 {
@@ -5630,6 +5850,12 @@ static HRESULT read_trigger(IXmlReader *reader, ITriggerCollection *triggers,
     IRegistrationTrigger *registration = NULL;
     ILogonTrigger *logon = NULL;
     IDailyTrigger *daily = NULL;
+    ITimeTrigger *time = NULL;
+    IWeeklyTrigger *weekly = NULL;
+    IMonthlyTrigger *monthly = NULL;
+    IBootTrigger *boot = NULL;
+    IEventTrigger *event = NULL;
+    int day;
     VARIANT_BOOL bool_val;
     const WCHAR *name;
     ITrigger *trigger;
@@ -5660,6 +5886,12 @@ static HRESULT read_trigger(IXmlReader *reader, ITriggerCollection *triggers,
         FAILED(ITrigger_QueryInterface(trigger, &IID_IDailyTrigger, (void **)&daily))) daily = NULL;
     if (trigger_type == TASK_TRIGGER_REGISTRATION &&
         FAILED(ITrigger_QueryInterface(trigger, &IID_IRegistrationTrigger, (void **)&registration))) registration = NULL;
+    if (trigger_type == TASK_TRIGGER_TIME &&
+        FAILED(ITrigger_QueryInterface(trigger, &IID_ITimeTrigger, (void **)&time))) time = NULL;
+    if (trigger_type == TASK_TRIGGER_BOOT &&
+        FAILED(ITrigger_QueryInterface(trigger, &IID_IBootTrigger, (void **)&boot))) boot = NULL;
+    if (trigger_type == TASK_TRIGGER_EVENT &&
+        FAILED(ITrigger_QueryInterface(trigger, &IID_IEventTrigger, (void **)&event))) event = NULL;
 
     hr = SCHED_E_MALFORMEDXML;
     while (IXmlReader_Read(reader, &type) == S_OK)
@@ -5721,6 +5953,92 @@ static HRESULT read_trigger(IXmlReader *reader, ITriggerCollection *triggers,
             }
             else if (!lstrcmpW(name, L"ScheduleByDay") && daily)
                 hr = S_OK;
+            else if (!lstrcmpW(name, L"RandomDelay") && time)
+            {
+                if ((hr = read_text_value(reader, &value)) == S_OK)
+                    hr = ITimeTrigger_put_RandomDelay(time, value);
+            }
+            else if (!lstrcmpW(name, L"Delay") && boot)
+            {
+                if ((hr = read_text_value(reader, &value)) == S_OK)
+                    hr = IBootTrigger_put_Delay(boot, value);
+            }
+            else if (!lstrcmpW(name, L"Delay") && event)
+            {
+                if ((hr = read_text_value(reader, &value)) == S_OK)
+                    hr = IEventTrigger_put_Delay(event, value);
+            }
+            else if (!lstrcmpW(name, L"Subscription") && event)
+            {
+                if ((hr = read_text_value(reader, &value)) == S_OK)
+                    hr = IEventTrigger_put_Subscription(event, value);
+            }
+            else if (!lstrcmpW(name, L"ScheduleByWeek") && daily)
+            {
+                hr = promote_calendar_trigger(triggers, &trigger, daily, TASK_TRIGGER_WEEKLY);
+                if (hr == S_OK)
+                {
+                    IDailyTrigger_Release(daily);
+                    daily = NULL;
+                    if (FAILED(ITrigger_QueryInterface(trigger, &IID_IWeeklyTrigger, (void **)&weekly))) weekly = NULL;
+                }
+            }
+            else if (!lstrcmpW(name, L"ScheduleByMonth") && daily)
+            {
+                hr = promote_calendar_trigger(triggers, &trigger, daily, TASK_TRIGGER_MONTHLY);
+                if (hr == S_OK)
+                {
+                    IDailyTrigger_Release(daily);
+                    daily = NULL;
+                    if (FAILED(ITrigger_QueryInterface(trigger, &IID_IMonthlyTrigger, (void **)&monthly))) monthly = NULL;
+                }
+            }
+            else if (weekly && !lstrcmpW(name, L"WeeksInterval"))
+            {
+                if ((hr = read_int_value(reader, &int_val)) == S_OK)
+                    hr = IWeeklyTrigger_put_WeeksInterval(weekly, (short)int_val);
+            }
+            else if (weekly && !lstrcmpW(name, L"DaysOfWeek"))
+                hr = S_OK;
+            else if (weekly && (day = name_index(name, week_day_names, 7)) >= 0)
+            {
+                short mask = 0;
+
+                IWeeklyTrigger_get_DaysOfWeek(weekly, &mask);
+                hr = IWeeklyTrigger_put_DaysOfWeek(weekly, mask | (1 << day));
+                if (hr == S_OK && !IXmlReader_IsEmptyElement(reader)) hr = skip_element(reader);
+            }
+            else if (monthly && (!lstrcmpW(name, L"DaysOfMonth") || !lstrcmpW(name, L"Months")))
+                hr = S_OK;
+            else if (monthly && !lstrcmpW(name, L"Day"))
+            {
+                if ((hr = read_text_value(reader, &value)) == S_OK)
+                {
+                    if (!lstrcmpW(value, L"Last"))
+                        hr = IMonthlyTrigger_put_RunOnLastDayOfMonth(monthly, VARIANT_TRUE);
+                    else
+                    {
+                        LONG mask = 0;
+
+                        day = wcstol(value, NULL, 10);
+                        if (day < 1 || day > 31)
+                            hr = SCHED_E_INVALIDVALUE;
+                        else
+                        {
+                            IMonthlyTrigger_get_DaysOfMonth(monthly, &mask);
+                            hr = IMonthlyTrigger_put_DaysOfMonth(monthly, mask | (1 << (day - 1)));
+                        }
+                    }
+                }
+            }
+            else if (monthly && (day = name_index(name, month_names, 12)) >= 0)
+            {
+                short mask = 0;
+
+                IMonthlyTrigger_get_MonthsOfYear(monthly, &mask);
+                hr = IMonthlyTrigger_put_MonthsOfYear(monthly, mask | (1 << day));
+                if (hr == S_OK && !IXmlReader_IsEmptyElement(reader)) hr = skip_element(reader);
+            }
             else if (!lstrcmpW(name, L"DaysInterval") && daily)
             {
                 if ((hr = read_int_value(reader, &int_val)) == S_OK)
@@ -5741,6 +6059,11 @@ static HRESULT read_trigger(IXmlReader *reader, ITriggerCollection *triggers,
     if (logon) ILogonTrigger_Release(logon);
     if (daily) IDailyTrigger_Release(daily);
     if (registration) IRegistrationTrigger_Release(registration);
+    if (time) ITimeTrigger_Release(time);
+    if (weekly) IWeeklyTrigger_Release(weekly);
+    if (monthly) IMonthlyTrigger_Release(monthly);
+    if (boot) IBootTrigger_Release(boot);
+    if (event) IEventTrigger_Release(event);
     ITrigger_Release(trigger);
 
     if (hr == S_OK && unsupported)
@@ -5877,6 +6200,14 @@ static HRESULT read_triggers(IXmlReader *reader, ITaskDefinition *taskdef)
                 hr = read_trigger(reader, triggers, TASK_TRIGGER_DAILY, L"CalendarTrigger");
             else if (!lstrcmpW(name, L"RegistrationTrigger"))
                 hr = read_trigger(reader, triggers, TASK_TRIGGER_REGISTRATION, L"RegistrationTrigger");
+            else if (!lstrcmpW(name, L"TimeTrigger"))
+                hr = read_trigger(reader, triggers, TASK_TRIGGER_TIME, L"TimeTrigger");
+            else if (!lstrcmpW(name, L"BootTrigger"))
+                hr = read_trigger(reader, triggers, TASK_TRIGGER_BOOT, L"BootTrigger");
+            else if (!lstrcmpW(name, L"IdleTrigger"))
+                hr = read_trigger(reader, triggers, TASK_TRIGGER_IDLE, L"IdleTrigger");
+            else if (!lstrcmpW(name, L"EventTrigger"))
+                hr = read_trigger(reader, triggers, TASK_TRIGGER_EVENT, L"EventTrigger");
             else
             {
                 FIXME("unhandled Triggers element %s\n", debugstr_w(name));
@@ -7023,8 +7354,16 @@ static HRESULT WINAPI TaskService_GetFolder(ITaskService *iface, BSTR path, ITas
 
 static HRESULT WINAPI TaskService_GetRunningTasks(ITaskService *iface, LONG flags, IRunningTaskCollection **tasks)
 {
-    FIXME("%p,%lx,%p: stub\n", iface, flags, tasks);
-    return E_NOTIMPL;
+    TaskService *task_svc = impl_from_ITaskService(iface);
+
+    TRACE("%p,%lx,%p\n", iface, flags, tasks);
+
+    if (!tasks) return E_POINTER;
+
+    if (!task_svc->connected)
+        return HRESULT_FROM_WIN32(ERROR_ONLY_IF_CONNECTED);
+
+    return RunningTaskCollection_create(NULL, flags, tasks);
 }
 
 static HRESULT WINAPI TaskService_NewTask(ITaskService *iface, DWORD flags, ITaskDefinition **definition)

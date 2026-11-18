@@ -8,7 +8,9 @@ list(APPEND SOURCE
     folder.c
     folder_collection.c
     regtask.c
+    running.c
     task.c
+    triggers.c
     taskschd.c)
 
 add_library(taskschd MODULE
