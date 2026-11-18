@@ -49,10 +49,6 @@
 
 WINE_DEFAULT_DEBUG_CHANNEL(cred);
 
-/* Retained for the internal helper ABI; the credential secret is DPAPI-protected, not ARC4-keyed.
- * TODO: remove the now-unused key_data plumbing from the Cred* helpers in a follow-up. */
-#define KEY_SIZE 8
-
 /* Bind to the LSA DPAPI server (shares the lsarpc pipe), authenticated and sealed; fail closed so a
  * credential secret is never sent over an unauthenticated channel. */
 static handle_t cred_dpapi_bind(void)
@@ -176,7 +172,7 @@ static DWORD cred_dpapi_unprotect(const BYTE *blob, DWORD blob_len, BYTE **out, 
     return err;
 }
 
-static DWORD read_credential_blob(HKEY hkey, const BYTE key_data[KEY_SIZE],
+static DWORD read_credential_blob(HKEY hkey,
                                   LPBYTE credential_blob,
                                   DWORD *credential_blob_size)
 {
@@ -187,8 +183,6 @@ static DWORD read_credential_blob(HKEY hkey, const BYTE key_data[KEY_SIZE],
     BYTE *plain = NULL;
     DWORD plain_len = 0;
     DWORD err;
-
-    (void)key_data;
 
     *credential_blob_size = 0;
     ret = RegQueryValueExW(hkey, L"Password", 0, &type, NULL, &stored_size);
@@ -211,6 +205,10 @@ static DWORD read_credential_blob(HKEY hkey, const BYTE key_data[KEY_SIZE],
 
     err = cred_dpapi_unprotect(stored, stored_size, &plain, &plain_len);
     free(stored);
+    if (err == ERROR_INVALID_DATA)
+        return ERROR_NOT_FOUND;    /* secret written by the old RC4 scheme (or foreign/corrupt): it
+                                      cannot be recovered, so report the credential as absent rather
+                                      than a misleading corruption error. */
     if (err != ERROR_SUCCESS)
         return err;
 
@@ -226,7 +224,6 @@ static DWORD read_credential_blob(HKEY hkey, const BYTE key_data[KEY_SIZE],
 }
 
 static DWORD registry_read_credential(HKEY hkey, PCREDENTIALW credential,
-                                      const BYTE key_data[KEY_SIZE],
                                       char *buffer, DWORD *len)
 {
     DWORD type;
@@ -323,14 +320,14 @@ static DWORD registry_read_credential(HKEY hkey, PCREDENTIALW credential,
             buffer += count;
     }
 
-    ret = read_credential_blob(hkey, key_data, NULL, &count);
+    ret = read_credential_blob(hkey, NULL, &count);
     if (ret != ERROR_FILE_NOT_FOUND && ret != ERROR_SUCCESS)
         return ret;
     *len += count;
     if (credential)
     {
         credential->CredentialBlob = (LPBYTE)buffer;
-        ret = read_credential_blob(hkey, key_data, credential->CredentialBlob, &count);
+        ret = read_credential_blob(hkey, credential->CredentialBlob, &count);
         if (ret == ERROR_FILE_NOT_FOUND)
             credential->CredentialBlob = NULL;
         else if (ret != ERROR_SUCCESS)
@@ -388,7 +385,6 @@ static DWORD registry_read_credential(HKEY hkey, PCREDENTIALW credential,
 }
 
 static DWORD write_credential_blob(HKEY hkey, LPCWSTR target_name, DWORD type,
-                                   const BYTE key_data[KEY_SIZE],
                                    const BYTE *credential_blob, DWORD credential_blob_size)
 {
     BYTE *protected_blob = NULL;
@@ -396,7 +392,6 @@ static DWORD write_credential_blob(HKEY hkey, LPCWSTR target_name, DWORD type,
     DWORD err;
     DWORD ret;
 
-    (void)key_data;
     (void)target_name;
     (void)type;
 
@@ -412,7 +407,7 @@ static DWORD write_credential_blob(HKEY hkey, LPCWSTR target_name, DWORD type,
 }
 
 static DWORD registry_write_credential(HKEY hkey, const CREDENTIALW *credential,
-                                       const BYTE key_data[KEY_SIZE], BOOL preserve_blob)
+                                       BOOL preserve_blob)
 {
     DWORD ret;
     FILETIME LastWritten;
@@ -456,7 +451,7 @@ static DWORD registry_write_credential(HKEY hkey, const CREDENTIALW *credential,
     if (!preserve_blob)
     {
         ret = write_credential_blob(hkey, credential->TargetName, credential->Type,
-                                    key_data, credential->CredentialBlob,
+                                    credential->CredentialBlob,
                                     credential->CredentialBlobSize);
     }
     return ret;
@@ -546,16 +541,6 @@ static DWORD open_cred_mgr_key(HKEY *hkey, BOOL open_for_write)
                            KEY_READ | (open_for_write ? KEY_WRITE : 0), NULL, hkey, NULL);
 }
 
-static DWORD get_cred_mgr_encryption_key(HKEY hkeyMgr, BYTE key_data[KEY_SIZE])
-{
-    /* The credential secret is now protected with DPAPI user scope in read/write_credential_blob, so
-     * no local encryption key is kept in the registry. key_data is retained (zeroed, unused) only for
-     * the internal helper ABI. TODO: drop the key_data plumbing in a follow-up. */
-    (void)hkeyMgr;
-    memset(key_data, 0, KEY_SIZE);
-    return ERROR_SUCCESS;
-}
-
 static LPWSTR get_key_name_for_target(LPCWSTR target_name, DWORD type)
 {
     INT len;
@@ -626,7 +611,7 @@ static BOOL registry_credential_matches_filter(HKEY hkeyCred, LPCWSTR filter)
 
 static DWORD registry_enumerate_credentials(HKEY hkeyMgr, LPCWSTR filter,
                                             LPWSTR target_name,
-                                            DWORD target_name_len, const BYTE key_data[KEY_SIZE],
+                                            DWORD target_name_len,
                                             PCREDENTIALW *credentials, char **buffer,
                                             DWORD *len, DWORD *count)
 {
@@ -660,9 +645,11 @@ static DWORD registry_enumerate_credentials(HKEY hkeyMgr, LPCWSTR filter,
         else
             *len += sizeof(CREDENTIALW);
         ret = registry_read_credential(hkeyCred, buffer ? credentials[*count] : NULL,
-                                       key_data, buffer ? *buffer + sizeof(CREDENTIALW) : NULL,
+                                       buffer ? *buffer + sizeof(CREDENTIALW) : NULL,
                                        len);
         RegCloseKey(hkeyCred);
+        if (ret == ERROR_NOT_FOUND)
+            continue;    /* an old/unreadable secret: drop it from the enumeration, do not abort */
         if (ret != ERROR_SUCCESS) break;
         if (buffer) *buffer += *len;
         (*count)++;
@@ -697,7 +684,6 @@ static INT convert_PCREDENTIALW_to_PCREDENTIALA(const CREDENTIALW *CredentialW, 
 
         return needed;
     }
-
 
     buffer = (char *)CredentialA + sizeof(CREDENTIALA);
     len -= sizeof(CREDENTIALA);
@@ -1169,7 +1155,6 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
     DWORD target_name_len;
     DWORD len;
     char *buffer;
-    BYTE key_data[KEY_SIZE];
 
     TRACE("(%s, 0x%lx, %p, %p)\n", debugstr_w(Filter), Flags, Count, Credentials);
 
@@ -1184,14 +1169,6 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
     {
         WARN("couldn't open/create manager key, error %ld\n", ret);
         SetLastError(ERROR_NO_SUCH_LOGON_SESSION);
-        return FALSE;
-    }
-
-    ret = get_cred_mgr_encryption_key(hkeyMgr, key_data);
-    if (ret != ERROR_SUCCESS)
-    {
-        RegCloseKey(hkeyMgr);
-        SetLastError(ret);
         return FALSE;
     }
 
@@ -1214,7 +1191,7 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
     *Count = 0;
     len = 0;
     ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len,
-                                         key_data, NULL, NULL, &len, Count);
+                                         NULL, NULL, &len, Count);
     if (ret == ERROR_SUCCESS)
     {
         ret = host_enumerate_credentials(Filter, NULL, NULL, &len, Count);
@@ -1239,7 +1216,7 @@ BOOL WINAPI CredEnumerateW(LPCWSTR Filter, DWORD Flags, DWORD *Count, PCREDENTIA
         {
             buffer += *Count * sizeof(PCREDENTIALW);
             *Count = 0;
-            ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len, key_data,
+            ret = registry_enumerate_credentials(hkeyMgr, Filter, target_name, target_name_len,
                                                  *Credentials, &buffer, &len, Count);
             if (ret == ERROR_SUCCESS)
             {
@@ -1415,7 +1392,6 @@ BOOL WINAPI CredReadW(LPCWSTR TargetName, DWORD Type, DWORD Flags, PCREDENTIALW 
     DWORD ret;
     LPWSTR key_name;
     DWORD len;
-    BYTE key_data[KEY_SIZE];
 
     TRACE("(%s, %ld, 0x%lx, %p)\n", debugstr_w(TargetName), Type, Flags, Credential);
 
@@ -1458,14 +1434,6 @@ BOOL WINAPI CredReadW(LPCWSTR TargetName, DWORD Type, DWORD Flags, PCREDENTIALW 
         return FALSE;
     }
 
-    ret = get_cred_mgr_encryption_key(hkeyMgr, key_data);
-    if (ret != ERROR_SUCCESS)
-    {
-        RegCloseKey(hkeyMgr);
-        SetLastError(ret);
-        return FALSE;
-    }
-
     key_name = get_key_name_for_target(TargetName, Type);
     ret = RegOpenKeyExW(hkeyMgr, key_name, 0, KEY_QUERY_VALUE, &hkeyCred);
     free(key_name);
@@ -1477,14 +1445,14 @@ BOOL WINAPI CredReadW(LPCWSTR TargetName, DWORD Type, DWORD Flags, PCREDENTIALW 
     }
 
     len = sizeof(**Credential);
-    ret = registry_read_credential(hkeyCred, NULL, key_data, NULL, &len);
+    ret = registry_read_credential(hkeyCred, NULL, NULL, &len);
     if (ret == ERROR_SUCCESS)
     {
         *Credential = malloc(len);
         if (*Credential)
         {
             len = sizeof(**Credential);
-            ret = registry_read_credential(hkeyCred, *Credential, key_data,
+            ret = registry_read_credential(hkeyCred, *Credential,
                                            (char *)(*Credential + 1), &len);
         }
         else
@@ -1712,7 +1680,6 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
     HKEY hkeyCred;
     DWORD ret;
     LPWSTR key_name;
-    BYTE key_data[KEY_SIZE];
 
     TRACE("(%p, 0x%lx)\n", Credential, Flags);
 
@@ -1777,14 +1744,6 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
         return FALSE;
     }
 
-    ret = get_cred_mgr_encryption_key(hkeyMgr, key_data);
-    if (ret != ERROR_SUCCESS)
-    {
-        RegCloseKey(hkeyMgr);
-        SetLastError(ret);
-        return FALSE;
-    }
-
     key_name = get_key_name_for_target(Credential->TargetName, Credential->Type);
     ret = RegCreateKeyExW(hkeyMgr, key_name, 0, NULL,
                           Credential->Persist == CRED_PERSIST_SESSION ? REG_OPTION_VOLATILE : REG_OPTION_NON_VOLATILE,
@@ -1798,7 +1757,7 @@ BOOL WINAPI CredWriteW(PCREDENTIALW Credential, DWORD Flags)
         return FALSE;
     }
 
-    ret = registry_write_credential(hkeyCred, Credential, key_data,
+    ret = registry_write_credential(hkeyCred, Credential,
                                     Flags & CRED_PRESERVE_CREDENTIAL_BLOB);
 
     RegCloseKey(hkeyCred);
