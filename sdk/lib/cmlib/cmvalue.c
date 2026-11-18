@@ -446,10 +446,89 @@ CmpSetValueDataNew(IN PHHIVE Hive,
     PAGED_CODE();
     ASSERT(DataSize > CM_KEY_VALUE_SMALL);
 
-    /* Refuse big values until a 1.4 writer exists: a plain cell written
-       here would not round-trip through the big data reader */
+    /* A big value is stored as a big data record: segment cells of at most
+       CM_KEY_VALUE_BIG bytes, a segment list cell, then the record itself */
     if (CmpIsKeyValueBig(Hive, DataSize))
-        return STATUS_NOT_IMPLEMENTED;
+    {
+        ULONG Needed, i, Remaining, SegSize;
+        HCELL_INDEX SegCell, ListCell, DbCell;
+        PHCELL_INDEX ListData;
+        PCM_BIG_DATA BigData;
+
+        Needed = (DataSize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+        if (Needed > 0xFFFF)
+            return STATUS_INVALID_PARAMETER;
+
+        /* The list cell keeps its indices across the allocations below;
+           in this cmlib bins never move, so the pointer stays valid */
+        ListCell = HvAllocateCell(Hive, Needed * sizeof(HCELL_INDEX),
+                                  StorageType, HCELL_NIL);
+        if (ListCell == HCELL_NIL) return STATUS_INSUFFICIENT_RESOURCES;
+        ListData = (PHCELL_INDEX)HvGetCell(Hive, ListCell);
+        if (!ListData)
+        {
+            HvFreeCell(Hive, ListCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+
+        for (i = 0, Remaining = DataSize; i < Needed; i++, Remaining -= SegSize)
+        {
+            PUCHAR Segment;
+
+            SegSize = min(Remaining, (ULONG)CM_KEY_VALUE_BIG);
+            SegCell = HvAllocateCell(Hive, SegSize, StorageType, ListCell);
+            if (SegCell == HCELL_NIL)
+            {
+                while (i--)
+                {
+                    HvFreeCell(Hive, ListData[i]);
+                }
+                HvFreeCell(Hive, ListCell);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            Segment = (PUCHAR)HvGetCell(Hive, SegCell);
+            if (!Segment)
+            {
+                HvFreeCell(Hive, SegCell);
+                while (i--)
+                {
+                    HvFreeCell(Hive, ListData[i]);
+                }
+                HvFreeCell(Hive, ListCell);
+                return STATUS_INSUFFICIENT_RESOURCES;
+            }
+            RtlCopyMemory(Segment, (PUCHAR)Data + i * CM_KEY_VALUE_BIG, SegSize);
+            HvReleaseCell(Hive, SegCell);
+            ListData[i] = SegCell;
+        }
+
+        DbCell = HvAllocateCell(Hive, sizeof(CM_BIG_DATA), StorageType, ListCell);
+        if (DbCell == HCELL_NIL)
+        {
+            for (i = 0; i < Needed; i++)
+                HvFreeCell(Hive, ListData[i]);
+            HvFreeCell(Hive, ListCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        HvReleaseCell(Hive, ListCell);
+
+        BigData = (PCM_BIG_DATA)HvGetCell(Hive, DbCell);
+        if (!BigData)
+        {
+            for (i = 0; i < Needed; i++)
+                HvFreeCell(Hive, ListData[i]);
+            HvFreeCell(Hive, ListCell);
+            HvFreeCell(Hive, DbCell);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        BigData->Signature = CM_BIG_DATA_SIGNATURE;
+        BigData->Count = (USHORT)Needed;
+        BigData->List = ListCell;
+        HvReleaseCell(Hive, DbCell);
+
+        *DataCell = DbCell;
+        return STATUS_SUCCESS;
+    }
 
     /* Allocate a data cell */
     *DataCell = HvAllocateCell(Hive, DataSize, StorageType, HCELL_NIL);

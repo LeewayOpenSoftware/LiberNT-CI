@@ -11,6 +11,23 @@
 
 ULONG CmlibTraceLevel = 0;
 
+/* Format version for newly created hives. The default stays at 1.3 until
+ * a lab boots a 1.5 system image; the setter is the single flip point. */
+static ULONG HvpHiveFormatMinor = HSYS_MINOR;
+
+ULONG CMAPI
+HvGetHiveFormatVersion(VOID)
+{
+    return HvpHiveFormatMinor;
+}
+
+VOID CMAPI
+HvSetHiveFormatVersion(IN ULONG Minor)
+{
+    if (Minor >= HSYS_MINOR && Minor <= HSYS_WHISTLER + 1)
+        HvpHiveFormatMinor = Minor;
+}
+
 // FIXME: This function must be replaced by CmpCreateRootNode from ntoskrnl/config/cmsysini.c
 // (and CmpCreateRootNode be moved there).
 BOOLEAN CMAPI

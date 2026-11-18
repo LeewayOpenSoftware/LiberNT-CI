@@ -60,6 +60,16 @@ endif()
 add_test(NAME cmlib_hive15_read COMMAND cmlib_hive15_read)
 set_tests_properties(cmlib_hive15_read PROPERTIES TIMEOUT 60)
 
+# Format 1.5 write support: version gate, lh leaves, big data records,
+# round trip through the writer, and torn-write recovery via the log.
+add_executable(cmlib_hive15_write t_hive15write.c)
+target_link_libraries(cmlib_hive15_write PRIVATE cmlib_host)
+if(NOT MSVC)
+    target_compile_options(cmlib_hive15_write PRIVATE -fshort-wchar -Wall -Wextra -g)
+endif()
+add_test(NAME cmlib_hive15_write COMMAND cmlib_hive15_write)
+set_tests_properties(cmlib_hive15_write PROPERTIES TIMEOUT 60)
+
 # Self-contained arithmetic guard for the discriminator (no cmlib link).
 add_executable(cmlib_dirty_arith t_dirty_arith.c)
 if(NOT MSVC)

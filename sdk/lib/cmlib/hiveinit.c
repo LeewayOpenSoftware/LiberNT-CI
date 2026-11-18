@@ -275,7 +275,7 @@ HvpCreateHive(
 
     BaseBlock->Signature = HV_HBLOCK_SIGNATURE;
     BaseBlock->Major = HSYS_MAJOR;
-    BaseBlock->Minor = HSYS_MINOR;
+    BaseBlock->Minor = HvGetHiveFormatVersion();
     BaseBlock->Type = HFILE_TYPE_PRIMARY;
     BaseBlock->Format = HBASE_FORMAT_MEMORY;
     BaseBlock->Cluster = 1;
@@ -296,7 +296,7 @@ HvpCreateHive(
 
     /* Setup hive data */
     RegistryHive->BaseBlock = BaseBlock;
-    RegistryHive->Version = BaseBlock->Minor; // == HSYS_MINOR
+    RegistryHive->Version = BaseBlock->Minor;
 
 
 
