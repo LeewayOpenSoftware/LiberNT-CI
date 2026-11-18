@@ -2163,6 +2163,10 @@ static HRESULT com_get_class_object(REFCLSID rclsid, DWORD clscontext,
         hr = rpc_get_local_class_object(rclsid, riid, obj);
         if (SUCCEEDED(hr))
             return hr;
+#ifdef __REACTOS__
+        if (hr == REGDB_E_KEYMISSING)
+            hr = REGDB_E_CLASSNOTREG;
+#endif
     }
 
     /* Finally try remote: this requires networked DCOM (a lot of work) */
