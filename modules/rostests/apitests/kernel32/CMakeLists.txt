@@ -122,6 +122,7 @@ list(APPEND SOURCE
     LockFileEx.c
     OpenFileByIdRename.c
     PagingFileOpen.c
+    ProcessImageNameCase.c
     ProcessMitigationPolicy.c
     QuantumRoundRobin.c
     RegisterWaitPeriodic.c

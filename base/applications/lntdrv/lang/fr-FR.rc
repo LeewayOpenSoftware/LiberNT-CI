@@ -2,7 +2,7 @@ LANGUAGE LANG_FRENCH, SUBLANG_NEUTRAL
 
 IDD_FRAME DIALOGEX 0, 0, 420, 240
 STYLE DS_SHELLFONT | DS_MODALFRAME | WS_MINIMIZEBOX | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
-CAPTION "Installateur de pilotes LiberNT"
+CAPTION "Installateur de pilotes"
 FONT 8, "MS Shell Dlg"
 BEGIN
     LTEXT "", IDC_FRAME_TITLE, 120, 10, 290, 14, SS_NOPREFIX
@@ -69,7 +69,7 @@ END
 
 STRINGTABLE
 BEGIN
-    IDS_CAPTION "Installateur de pilotes LiberNT"
+    IDS_CAPTION "Installateur de pilotes"
     IDS_BACK "&Précédent"
     IDS_NEXT "&Suivant"
     IDS_CANCEL "Annuler"
@@ -77,14 +77,14 @@ BEGIN
     IDS_FINISH "&Terminer"
     IDS_DEVICES_TITLE "Pilotes de ce PC"
     IDS_DEVICES_SUBTITLE "Périphériques sans pilote ou avec un pilote tiers pour lesquels le catalogue Microsoft Update a un pilote plus récent. Cochez ceux à installer."
-    IDS_ABOUT_MENU "À &propos de l'Installateur de pilotes LiberNT..."
-    IDS_ABOUT_TEXT "Installateur de pilotes LiberNT\nCopyright (C) 2026 Ahmed ARIF\nDistribué sous la licence publique générale GNU, version 3 ou ultérieure.\n\nLes pilotes sont téléchargés depuis le catalogue Microsoft Update, un service de Microsoft Corporation.\nCatalogue Microsoft Update : Copyright (c) Microsoft Corporation. Tous droits réservés.\nChaque paquet de pilote appartient à son éditeur et reste soumis aux conditions de licence de celui-ci."
+    IDS_ABOUT_MENU "À &propos de l'Installateur de pilotes..."
+    IDS_ABOUT_TEXT "Installateur de pilotes\nCopyright (C) 2026 Ahmed ARIF\nDistribué sous la licence publique générale GNU, version 3 ou ultérieure.\n\nLes pilotes sont téléchargés depuis le catalogue Microsoft Update, un service de Microsoft Corporation.\nCatalogue Microsoft Update : Copyright (c) Microsoft Corporation. Tous droits réservés.\nChaque paquet de pilote appartient à son éditeur et reste soumis aux conditions de licence de celui-ci."
     IDS_INSTALL_TITLE "Installation des pilotes"
     IDS_INSTALL_SUBTITLE "Patientez pendant l'installation des pilotes."
     IDS_DONE_TITLE "Terminé"
     IDS_DONE_SUBTITLE "Le résultat pour chaque périphérique."
     IDS_HISTORY_TITLE "Pilotes installés depuis le catalogue"
-    IDS_HISTORY_SUBTITLE "Toutes les modifications faites par l'Installateur de pilotes LiberNT sur ce PC, des plus récentes aux plus anciennes."
+    IDS_HISTORY_SUBTITLE "Toutes les modifications faites par l'Installateur de pilotes sur ce PC, des plus récentes aux plus anciennes."
     IDS_COL_DEVICE "Périphérique"
     IDS_COL_VERSION "Version"
     IDS_COL_DRIVER "Pilote"
@@ -113,20 +113,20 @@ BEGIN
     IDS_ACTION_ROLLBACK "Restauration"
     IDS_ACTION_REMOVE "Suppression"
     IDS_ROLLBACK_CONFIRM "Remettre le pilote que %1 utilisait avant (version %2) ?"
-    IDS_REMOVE_CONFIRM "Supprimer le pilote du catalogue de %1 ? LiberNT installe ensuite le meilleur pilote qu'il possède encore pour ce périphérique."
+    IDS_REMOVE_CONFIRM "Supprimer le pilote du catalogue de %1 ? Orosi installe ensuite le meilleur pilote qu'il possède encore pour ce périphérique."
     IDS_ACTION_DONE "Terminé."
     IDS_ACTION_DONE_REBOOT "Terminé. Redémarrez le PC pour finir."
     IDS_ACTION_FAILED "La modification a échoué : %1"
     IDS_HISTORY_WORKING "En cours..."
     IDS_ADMIN_REQUIRED "Installer et supprimer des pilotes demande les droits d'administrateur."
-    IDS_ADMIN_RESTART "Relancer l'Installateur de pilotes LiberNT en tant qu'administrateur ?"
+    IDS_ADMIN_RESTART "Relancer l'Installateur de pilotes en tant qu'administrateur ?"
     IDS_WORKER_FAILED "Impossible de démarrer le thread de travail : %1"
     IDS_ERROR_CHECKSUM "Le téléchargement ne correspond pas à la somme de contrôle publiée par le catalogue."
     IDS_ERROR_SERVER "Le catalogue Microsoft Update a renvoyé une réponse inattendue."
     IDS_ERROR_CANCELLED "Annulé."
     IDS_ERROR_NOT_BETTER "Le pilote déjà installé convient mieux à ce périphérique."
     IDS_ERROR_NO_COMPAT "Le paquet n'a pas de pilote pour ce périphérique sur ce PC."
-    IDS_ERROR_FORMAT "La page du catalogue Microsoft Update a changé et ne peut pas être lue. L'Installateur de pilotes LiberNT doit être mis à jour."
+    IDS_ERROR_FORMAT "La page du catalogue Microsoft Update a changé et ne peut pas être lue. L'Installateur de pilotes doit être mis à jour."
     IDS_ERROR_PROGRAM "Le paquet du catalogue est un programme, pas un paquet de pilote. Lancez-le vous-même si vous lui faites confiance."
     IDS_ERROR_ALREADY "Ce pilote est déjà installé."
     IDS_ERROR_NOT_NEWER "Le pilote installé est plus récent que celui-ci."
@@ -184,7 +184,7 @@ BEGIN
     IDS_RESULT_UNSIGNED "signature non vérifiée"
     IDS_SCAN_THROTTLED "La recherche reprend à %1. Le catalogue Microsoft Update limite les recherches de ce PC."
     IDS_CATALOG_LINK "<a>Mentions légales</a>"
-    IDS_CATALOG_NOTICE "Les pilotes sont téléchargés depuis le catalogue Microsoft Update, un service de Microsoft Corporation.\nCatalogue Microsoft Update : Copyright (c) Microsoft Corporation. Tous droits réservés.\nMicrosoft et Windows sont des marques du groupe de sociétés Microsoft. LiberNT n'est pas affilié à Microsoft Corporation.\n\nChaque pilote appartient à son éditeur et est couvert par les conditions de licence de celui-ci."
+    IDS_CATALOG_NOTICE "Les pilotes sont téléchargés depuis le catalogue Microsoft Update, un service de Microsoft Corporation.\nCatalogue Microsoft Update : Copyright (c) Microsoft Corporation. Tous droits réservés.\nMicrosoft et Windows sont des marques du groupe de sociétés Microsoft. Orosi n'est pas affilié à Microsoft Corporation.\n\nChaque pilote appartient à son éditeur et est couvert par les conditions de licence de celui-ci."
     IDS_PROGRESS_DOWNLOADING "Téléchargement"
     IDS_SPEED_KB "%1 Ko/s"
     IDS_SPEED_MB "%1 Mo/s"

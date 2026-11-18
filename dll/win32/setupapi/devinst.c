@@ -4609,6 +4609,103 @@ BOOL WINAPI SetupDiSetDevicePropertyW(HDEVINFO devinfo, PSP_DEVINFO_DATA device_
     SetLastError(error);
     return !error;
 }
+
+/* The install-class or interface-class flag selects which class registry key the
+   property lives under; the property itself is stored exactly as a device property. */
+static DWORD class_prop_open_flags(DWORD flags, DWORD *open_flags)
+{
+    switch (flags)
+    {
+        case DICLASSPROP_INSTALLER: *open_flags = DIOCR_INSTALLER; return ERROR_SUCCESS;
+        case DICLASSPROP_INTERFACE: *open_flags = DIOCR_INTERFACE; return ERROR_SUCCESS;
+        default: return ERROR_INVALID_FLAGS;
+    }
+}
+
+BOOL WINAPI SetupDiGetClassPropertyExW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                       DEVPROPTYPE *prop_type, BYTE *prop_buffer, DWORD prop_buffer_size,
+                                       DWORD *required_size, DWORD flags, const WCHAR *machine, void *reserved)
+{
+    DWORD open_flags, error;
+    HKEY class_key;
+
+    if (!class_guid || reserved)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if ((error = class_prop_open_flags(flags, &open_flags)))
+    {
+        SetLastError(error);
+        return FALSE;
+    }
+
+    class_key = SetupDiOpenClassRegKeyExW(class_guid, KEY_QUERY_VALUE, open_flags, machine, NULL);
+    if (class_key == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    error = get_device_reg_property(class_key, prop_key, prop_type, prop_buffer, prop_buffer_size,
+                                    required_size, 0);
+    RegCloseKey(class_key);
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiGetClassPropertyW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                     DEVPROPTYPE *prop_type, BYTE *prop_buffer, DWORD prop_buffer_size,
+                                     DWORD *required_size, DWORD flags)
+{
+    return SetupDiGetClassPropertyExW(class_guid, prop_key, prop_type, prop_buffer, prop_buffer_size,
+                                      required_size, flags, NULL, NULL);
+}
+
+BOOL WINAPI SetupDiSetClassPropertyExW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                       DEVPROPTYPE prop_type, const BYTE *prop_buffer, DWORD prop_buffer_size,
+                                       DWORD flags, const WCHAR *machine, void *reserved)
+{
+    DWORD open_flags, error;
+    HKEY class_key;
+
+    if (!class_guid || reserved)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+    if (!prop_key || !is_valid_property_type(prop_type) ||
+        (prop_buffer && !prop_buffer_size && prop_type != DEVPROP_TYPE_EMPTY && prop_type != DEVPROP_TYPE_NULL) ||
+        (prop_buffer && prop_buffer_size && (prop_type == DEVPROP_TYPE_EMPTY || prop_type == DEVPROP_TYPE_NULL)))
+    {
+        SetLastError(ERROR_INVALID_DATA);
+        return FALSE;
+    }
+    if (prop_buffer_size && !prop_buffer)
+    {
+        SetLastError(ERROR_INVALID_USER_BUFFER);
+        return FALSE;
+    }
+    if ((error = class_prop_open_flags(flags, &open_flags)))
+    {
+        SetLastError(error);
+        return FALSE;
+    }
+
+    class_key = SetupDiOpenClassRegKeyExW(class_guid, KEY_READ | KEY_WRITE, open_flags, machine, NULL);
+    if (class_key == INVALID_HANDLE_VALUE)
+        return FALSE;
+
+    error = set_device_reg_property(class_key, prop_key, prop_type, prop_buffer, prop_buffer_size);
+    RegCloseKey(class_key);
+    SetLastError(error);
+    return !error;
+}
+
+BOOL WINAPI SetupDiSetClassPropertyW(const GUID *class_guid, const DEVPROPKEY *prop_key,
+                                     DEVPROPTYPE prop_type, const BYTE *prop_buffer, DWORD prop_buffer_size,
+                                     DWORD flags)
+{
+    return SetupDiSetClassPropertyExW(class_guid, prop_key, prop_type, prop_buffer, prop_buffer_size,
+                                      flags, NULL, NULL);
+}
 #endif
 
 /***********************************************************************
@@ -7459,7 +7556,8 @@ SetupDiInstallDevice(
                   debugstr_w(SelectedDriver->InfFileDetails->FileName), SigState);
 
             if (SetupapiGetVerifyPolicy() == 2 &&
-                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID))
+                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID ||
+                 SigState == PACKAGE_SIG_UNTRUSTED))
             {
                 SetLastError(ERROR_INVALID_IMAGE_HASH);
                 goto cleanup;

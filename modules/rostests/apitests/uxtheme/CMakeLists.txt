@@ -16,11 +16,13 @@ list(APPEND SOURCE
     ThemeRendering.c
     ThemeShellTransition.c
     ThemeSysSize.c
+    UxIni.c
+    ../../../../dll/win32/uxtheme/uxini.c
     ../include/msgtrace.c
     testlist.c)
 
 add_executable(uxtheme_apitest ${SOURCE})
 target_link_libraries(uxtheme_apitest wine ${PSEH_LIB})
 set_module_type(uxtheme_apitest win32cui)
-add_importlibs(uxtheme_apitest uxtheme comctl32 user32 gdi32 msvcrt kernel32)
+add_importlibs(uxtheme_apitest uxtheme comctl32 user32 gdi32 msvcrt kernel32 ntdll)
 add_rostests_file(TARGET uxtheme_apitest)

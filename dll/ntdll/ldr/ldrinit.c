@@ -582,7 +582,9 @@ VOID
 NTAPI
 LdrpEnsureLoaderLockIsHeld(VOID)
 {
-    // Ignored atm
+    /* Process init walks imports before taking the lock; after it, every loader path must own it */
+    if (LdrpLoaderLockInit && !LdrpInLdrInit && !RtlIsCriticalSectionLockedByThread(&LdrpLoaderLock))
+        DPRINT1("LDR: loader lock not held by thread %p\n", NtCurrentTeb()->ClientId.UniqueThread);
 }
 
 PVOID
@@ -3528,8 +3530,10 @@ LdrpInitializeProcess(IN PCONTEXT Context,
      * incompatible images.
      */
 
-    /* Now call the Init Routines */
+    /* Now call the Init Routines, under the loader lock like Windows and like LdrLoadDll */
+    RtlEnterCriticalSection(&LdrpLoaderLock);
     Status = LdrpRunInitializeRoutines(Context);
+    RtlLeaveCriticalSection(&LdrpLoaderLock);
     if (!NT_SUCCESS(Status))
     {
         DPRINT1("LDR: LdrpProcessInitialization failed running initialization routines; status %x\n",

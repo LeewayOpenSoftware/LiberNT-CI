@@ -1,6 +1,28 @@
 #include <windef.h>
+#include <winuser.h>
+
+#include "resource.h"
 
 #define REACTOS_STR_FILE_DESCRIPTION    "LiberNT PnP Utility"
 #define REACTOS_STR_INTERNAL_NAME       "pnputil"
 #define REACTOS_STR_ORIGINAL_FILENAME   "pnputil.exe"
 #include <reactos/version.rc>
+
+STRINGTABLE
+BEGIN
+    IDS_INSTANCE_ID     "Instance ID:"
+    IDS_DEVICE_DESC     "Device Description:"
+    IDS_CLASS_NAME      "Class Name:"
+    IDS_CLASS_GUID      "Class GUID:"
+    IDS_MFG_NAME        "Manufacturer Name:"
+    IDS_STATUS          "Status:"
+    IDS_PROBLEM_CODE    "Problem Code:"
+    IDS_DRIVER_NAME     "Driver Name:"
+    IDS_HARDWARE_IDS    "Hardware IDs:"
+    IDS_COMPATIBLE_IDS  "Compatible IDs:"
+    IDS_NO_DEVICES      "No devices were found on the system."
+    IDS_OUTPUT_WRITTEN  "Output written to %ls"
+    IDS_NO_DRIVERS      "No published driver packages were found on the system."
+    IDS_NO_INTERFACES   "No interfaces were found on the system."
+    IDS_NO_CONTAINERS   "No device containers were found on the system."
+END

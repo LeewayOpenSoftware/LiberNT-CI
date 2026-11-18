@@ -532,52 +532,99 @@ static const struct
     { szOID_NIST_sha512, L"SHA512" },
 };
 
-static BOOL
-VerifyFileHashWithAlgorithm(
+static PBYTE
+ComputeFileHashForAlgorithm(
     IN HANDLE hFile,
-    IN CRYPTCATMEMBER *Member)
+    IN PCWSTR Algorithm,
+    OUT PDWORD HashSize)
 {
     HCATADMIN Admin = NULL;
-    DWORD HashSize = 0;
+    DWORD Size = 0;
     PBYTE Hash = NULL;
-    PCWSTR Algorithm = NULL;
-    UINT i;
-    BOOL Found = FALSE;
 
-    if (!Member->pIndirectData)
-        return FALSE;
+    *HashSize = 0;
+    if (!CryptCATAdminAcquireContext2(&Admin, NULL, Algorithm, NULL, 0))
+        return NULL;
+
+    if (CryptCATAdminCalcHashFromFileHandle2(Admin, hFile, &Size, NULL, 0) && Size)
+    {
+        Hash = MyMalloc(Size);
+        if (Hash)
+        {
+            /* The raw (non-PE) hash path reads from the current offset; rewind before each use. */
+            SetFilePointer(hFile, 0, NULL, FILE_BEGIN);
+            if (CryptCATAdminCalcHashFromFileHandle2(Admin, hFile, &Size, Hash, 0))
+            {
+                *HashSize = Size;
+            }
+            else
+            {
+                MyFree(Hash);
+                Hash = NULL;
+            }
+        }
+    }
+
+    CryptCATAdminReleaseContext(Admin, 0);
+    return Hash;
+}
+
+static BOOL
+FileMatchesAnyCatalogMember(
+    IN HANDLE hFile,
+    IN HANDLE Catalog)
+{
+    PBYTE FileHash[ARRAY_SIZE(CatalogHashAlgorithms)];
+    DWORD FileHashSize[ARRAY_SIZE(CatalogHashAlgorithms)];
+    BOOL Tried[ARRAY_SIZE(CatalogHashAlgorithms)];
+    CRYPTCATMEMBER *Member;
+    BOOL Found = FALSE;
+    UINT i;
 
     for (i = 0; i < ARRAY_SIZE(CatalogHashAlgorithms); i++)
     {
-        if (Member->pIndirectData->DigestAlgorithm.pszObjId &&
-            strcmp(Member->pIndirectData->DigestAlgorithm.pszObjId,
-                   CatalogHashAlgorithms[i].Oid) == 0)
-        {
-            Algorithm = CatalogHashAlgorithms[i].Algorithm;
-            break;
-        }
+        FileHash[i] = NULL;
+        FileHashSize[i] = 0;
+        Tried[i] = FALSE;
     }
-    if (!Algorithm)
-        return FALSE;
 
-    if (!CryptCATAdminAcquireContext2(&Admin, NULL, Algorithm, NULL, 0))
-        return FALSE;
-
-    if (CryptCATAdminCalcHashFromFileHandle2(Admin, hFile, &HashSize, NULL, 0) && HashSize)
+    /* A member whose algorithm we cannot compute never matches, so the file fails closed. */
+    Member = NULL;
+    while (!Found && (Member = CryptCATEnumerateMember(Catalog, Member)))
     {
-        Hash = MyMalloc(HashSize);
-        if (Hash &&
-            CryptCATAdminCalcHashFromFileHandle2(Admin, hFile, &HashSize, Hash, 0) &&
-            Member->pIndirectData->Digest.cbData == HashSize &&
-            RtlEqualMemory(Member->pIndirectData->Digest.pbData, Hash, HashSize))
+        if (!Member->pIndirectData || !Member->pIndirectData->DigestAlgorithm.pszObjId)
+            continue;
+
+        for (i = 0; i < ARRAY_SIZE(CatalogHashAlgorithms); i++)
+        {
+            if (strcmp(Member->pIndirectData->DigestAlgorithm.pszObjId,
+                       CatalogHashAlgorithms[i].Oid) == 0)
+                break;
+        }
+        if (i == ARRAY_SIZE(CatalogHashAlgorithms))
+            continue;
+
+        if (!Tried[i])
+        {
+            FileHash[i] = ComputeFileHashForAlgorithm(hFile, CatalogHashAlgorithms[i].Algorithm,
+                                                      &FileHashSize[i]);
+            Tried[i] = TRUE;
+        }
+
+        if (FileHash[i] &&
+            Member->pIndirectData->Digest.cbData == FileHashSize[i] &&
+            RtlEqualMemory(Member->pIndirectData->Digest.pbData, FileHash[i], FileHashSize[i]))
         {
             Found = TRUE;
         }
     }
 
-    if (Hash)
-        MyFree(Hash);
-    CryptCATAdminReleaseContext(Admin, 0);
+    for (i = 0; i < ARRAY_SIZE(CatalogHashAlgorithms); i++)
+    {
+        if (FileHash[i])
+            MyFree(FileHash[i]);
+    }
+
     return Found;
 }
 
@@ -589,8 +636,7 @@ VerifyPackageMember(
 {
     WCHAR FullPath[MAX_PATH];
     HANDLE hFile;
-    CRYPTCATMEMBER *Member;
-    BOOL Found = FALSE;
+    BOOL Found;
 
     /* Cabinet members are verified with the cabinet as a whole; the per-file
      * catalog check applies to plain files only. */
@@ -610,16 +656,7 @@ VerifyPackageMember(
         return;
     }
 
-    Member = NULL;
-    while ((Member = CryptCATEnumerateMember(Package->Catalog, Member)))
-    {
-        if (VerifyFileHashWithAlgorithm(hFile, Member))
-        {
-            Found = TRUE;
-            break;
-        }
-    }
-
+    Found = FileMatchesAnyCatalogMember(hFile, Package->Catalog);
     CloseHandle(hFile);
 
     if (!Found)
@@ -841,7 +878,8 @@ SETUPAPI_StageDriverPackage(
             TRACE("staged package %s signature state %lu\n", debugstr_w(Target), SigState);
 
             if (SetupapiGetVerifyPolicy() == 2 &&
-                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID))
+                (SigState == PACKAGE_SIG_HASH_MISMATCH || SigState == PACKAGE_SIG_CATALOG_INVALID ||
+                 SigState == PACKAGE_SIG_UNTRUSTED))
             {
                 SetLastError(ERROR_INVALID_IMAGE_HASH);
                 return FALSE;
@@ -855,7 +893,7 @@ SETUPAPI_StageDriverPackage(
 /* Política de verificación de firma de paquetes (M6).
  * HKLM\SYSTEM\CurrentControlSet\Control\DrvInst\VerifyPackageSignature:
  * 0 = off, 1 = audit (default, verifica y registra pero no bloquea),
- * 2 = enforce (rechaza paquetes con hash que no coincide o catálogo inválido).
+ * 2 = enforce (rechaza paquetes con hash que no coincide, catálogo inválido o sin editor de confianza).
  * Los paquetes sin catálogo siguen permitidos en ambos modos. */
 DWORD
 SetupapiGetVerifyPolicy(VOID)
@@ -891,6 +929,52 @@ OpenInfCatalog(
     OUT PWSTR CatalogPath,
     IN DWORD CatalogPathCch,
     OUT PDWORD Error);
+
+/* A hash match only proves a file is listed in the catalog; it does not prove the
+ * catalog is signed by a trusted publisher. Verify that trust chain here. */
+static LONG
+VerifyCatalogWithAction(
+    IN PCWSTR CatalogPath,
+    IN GUID *Action)
+{
+    WINTRUST_FILE_INFO FileInfo;
+    WINTRUST_DATA WintrustData;
+    LONG Status;
+
+    ZeroMemory(&FileInfo, sizeof(FileInfo));
+    FileInfo.cbStruct = sizeof(FileInfo);
+    FileInfo.pcwszFilePath = CatalogPath;
+
+    ZeroMemory(&WintrustData, sizeof(WintrustData));
+    WintrustData.cbStruct = sizeof(WintrustData);
+    WintrustData.dwUIChoice = WTD_UI_NONE;
+    WintrustData.fdwRevocationChecks = WTD_REVOKE_NONE;
+    WintrustData.dwUnionChoice = WTD_CHOICE_FILE;
+    WintrustData.pFile = &FileInfo;
+    WintrustData.dwStateAction = WTD_STATEACTION_VERIFY;
+
+    Status = WinVerifyTrust(INVALID_HANDLE_VALUE, Action, &WintrustData);
+
+    WintrustData.dwStateAction = WTD_STATEACTION_CLOSE;
+    WinVerifyTrust(INVALID_HANDLE_VALUE, Action, &WintrustData);
+
+    return Status;
+}
+
+static BOOL
+IsCatalogTrusted(
+    IN PCWSTR CatalogPath)
+{
+    GUID DriverAction = DRIVER_ACTION_VERIFY;
+    GUID GenericAction = WINTRUST_ACTION_GENERIC_VERIFY_V2;
+
+    /* The driver action also demands the WHQL code-signing usage; a catalog validly signed to
+     * a trusted root without it still passes Authenticode, as Windows and difxapi do. Generic
+     * verify checks the whole chain, signature and usage, so a bad catalog fails under both. */
+    if (VerifyCatalogWithAction(CatalogPath, &DriverAction) == ERROR_SUCCESS)
+        return TRUE;
+    return VerifyCatalogWithAction(CatalogPath, &GenericAction) == ERROR_SUCCESS;
+}
 
 DWORD
 WINAPI
@@ -952,6 +1036,10 @@ LnSetupVerifyDriverPackage(
     StageCopyFiles(hInf, &Package);
     FreeNameList(&Package.Sections);
     FreeNameList(&Package.Files);
+
+    /* Hashes match: the catalog must also be from a trusted publisher, as Windows requires. */
+    if (Package.SigState == PACKAGE_SIG_SIGNED_VALID && !IsCatalogTrusted(CatalogPath))
+        Package.SigState = PACKAGE_SIG_UNTRUSTED;
 
     *SigState = Package.SigState;
     if (MismatchFile && MismatchFileCch && Package.MismatchFile[0])
@@ -1068,7 +1156,6 @@ SetupVerifyInfFileW(
     _Inout_ PSP_INF_SIGNER_INFO_INF_W InfSignerInfo)
 {
     WCHAR Source[MAX_PATH], SourceRoot[MAX_PATH], CatalogPath[MAX_PATH];
-    CRYPTCATMEMBER *Member;
     SYSTEM_INFO SystemInfo;
     HCATINFO Catalog;
     HANDLE hFile;
@@ -1143,15 +1230,7 @@ SetupVerifyInfFileW(
         return FALSE;
     }
 
-    Member = NULL;
-    while ((Member = CryptCATEnumerateMember(Catalog, Member)))
-    {
-        if (VerifyFileHashWithAlgorithm(hFile, Member))
-        {
-            Found = TRUE;
-            break;
-        }
-    }
+    Found = FileMatchesAnyCatalogMember(hFile, Catalog);
     CloseHandle(hFile);
     CryptCATClose(Catalog);
 
