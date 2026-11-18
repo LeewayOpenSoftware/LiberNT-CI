@@ -90,6 +90,47 @@ HalpCalibrateApicTimer(VOID)
     DPRINT1("Local APIC timer clock: %I64u Hz\n", HalpApicTimerFrequency);
 }
 
+/*
+ * A clock tick reads and writes the local APIC several times: its own EOI, the
+ * self interrupt that requests the DPC (status poll, command and IRR poll),
+ * the EOI of that interrupt and, at the base rate, the clock IPI. Where each
+ * access leaves the guest to be emulated in user mode, a tick costs about a
+ * millisecond, and a clock asked to tick every millisecond then leaves the
+ * processor nothing else. The finest period reported is therefore tied to
+ * what one access costs here. A tick makes fewer than ten of them, so at 200
+ * accesses to the period it stays under a twentieth of it.
+ */
+#define HALP_CLOCK_PERIOD_PER_APIC_ACCESS   200
+#define HALP_APIC_ACCESS_ROUNDS             8
+#define HALP_APIC_ACCESS_SAMPLES            8
+
+static
+ULONG
+HalpFinestApicTimerIncrement(VOID)
+{
+    ULONG64 Start, Ticks, Fastest = MAXULONG64, Increment;
+    ULONG Round, Sample;
+
+    /* A round the host preempted says nothing about the cost: keep the fastest */
+    for (Round = 0; Round < HALP_APIC_ACCESS_ROUNDS; Round++)
+    {
+        Start = __rdtsc();
+        for (Sample = 0; Sample < HALP_APIC_ACCESS_SAMPLES; Sample++)
+            (VOID)ApicRead(APIC_VER);
+        Ticks = __rdtsc() - Start;
+        if (Ticks < Fastest)
+            Fastest = Ticks;
+    }
+
+    /* The time of one round in 100 ns units, then the period it allows */
+    Increment = Fastest * 10000000ULL / HalpCpuClockFrequency.QuadPart;
+    Increment = Increment * HALP_CLOCK_PERIOD_PER_APIC_ACCESS / HALP_APIC_ACCESS_SAMPLES;
+
+    /* A millisecond is the finest period offered, the base rate the coarsest */
+    Increment = max(Increment, 10000);
+    return (ULONG)min(Increment, HalpMaximumTimeIncrement);
+}
+
 /*!
     \brief Converts the CMOS RTC rate into the time increment in 0.1ns intervals.
 
@@ -221,13 +262,15 @@ HalpInitializeClock(VOID)
 
         RtcSetClockRate(HalpCurrentClockRate);
 
-        /* The finest period is a millisecond, which the timer gives exactly */
-        HalpMinimumTimeIncrement = 10000;
+        /* The timer gives any period exactly; the finest one is a millisecond
+         * unless the local APIC is too slow to reach for a tick that short */
         HalpMaximumTimeIncrement = RtcClockRateToPreciseIncrement(RtcMaximumClockRate) / 1000;
+        HalpMinimumTimeIncrement = HalpFinestApicTimerIncrement();
         KeSetTimeIncrement(HalpMaximumTimeIncrement, HalpMinimumTimeIncrement);
 
         __writeeflags(EFlags);
-        DPRINT1("Clock initialized (local APIC timer)\n");
+        DPRINT1("Clock initialized (local APIC timer), finest period %lu00 ns\n",
+                HalpMinimumTimeIncrement);
         return;
     }
 
