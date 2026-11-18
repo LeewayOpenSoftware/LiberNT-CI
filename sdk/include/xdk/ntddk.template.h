@@ -143,6 +143,7 @@ $include (mmfuncs.h)
 $include (psfuncs.h)
 $include (rtlfuncs.h)
 $include (sefuncs.h)
+$include (wheafuncs.h)
 $include (zwfuncs.h)
 
 

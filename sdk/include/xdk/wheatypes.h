@@ -146,6 +146,15 @@ typedef enum _WHEA_ERROR_SOURCE_TYPE {
     WheaErrSrcTypeMax
 } WHEA_ERROR_SOURCE_TYPE, *PWHEA_ERROR_SOURCE_TYPE;
 
+typedef enum _WHEA_ERROR_SOURCE_STATE {
+    WheaErrSrcStateStopped = 0,
+    WheaErrSrcStateStarted,
+    WheaErrSrcStateRemoved,
+    WheaErrSrcStateRemovePending
+} WHEA_ERROR_SOURCE_STATE, *PWHEA_ERROR_SOURCE_STATE;
+
+#define WHEA_ERROR_SOURCE_DESCRIPTOR_VERSION_10 10
+
 #pragma pack(push, 1)
 
 typedef union _WHEA_ERROR_PACKET_FLAGS {
