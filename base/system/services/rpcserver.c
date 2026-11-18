@@ -5252,13 +5252,24 @@ Done:
 }
 
 
-/* TODO: SERVICE_CONFIG_DELAYED_AUTO_START_INFO, SERVICE_SID_INFO, REQUIRED_PRIVILEGES_INFO and PRESHUTDOWN_INFO */
+/* TODO: SERVICE_SID_INFO. REQUIRED_PRIVILEGES_INFO exists for the W entry points only (the client converts). */
+static BOOL ScmIsSupportedConfigLevel(DWORD dwInfoLevel);
+
+static BOOL
+ScmIsSupportedConfigLevelW(DWORD dwInfoLevel)
+{
+    return dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO ||
+           ScmIsSupportedConfigLevel(dwInfoLevel);
+}
+
 static BOOL
 ScmIsSupportedConfigLevel(DWORD dwInfoLevel)
 {
     return dwInfoLevel == SERVICE_CONFIG_DESCRIPTION ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS ||
+           dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO ||
            dwInfoLevel == SERVICE_CONFIG_FAILURE_ACTIONS_FLAG ||
+           dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO ||
            dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO;
 }
 
@@ -5291,6 +5302,132 @@ ScmQueryFailureActionsFlag(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, L
 }
 
 
+static DWORD
+ScmSetDelayedAutoStart(HKEY hServiceKey, const SERVICE_DELAYED_AUTO_START_INFO *lpInfo)
+{
+    DWORD dwValue;
+
+    if (lpInfo == NULL)
+        return ERROR_INVALID_PARAMETER;
+    dwValue = lpInfo->fDelayedAutostart ? 1 : 0;
+    return RegSetValueExW(hServiceKey, L"DelayedAutostart", 0, REG_DWORD,
+                          (LPBYTE)&dwValue, sizeof(dwValue));
+}
+
+static DWORD
+ScmQueryDelayedAutoStart(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_DELAYED_AUTO_START_INFO lpInfo = (LPSERVICE_DELAYED_AUTO_START_INFO)lpBuffer;
+
+    *pcbBytesNeeded = sizeof(SERVICE_DELAYED_AUTO_START_INFO);
+    if (cbBufSize < sizeof(SERVICE_DELAYED_AUTO_START_INFO))
+        return ERROR_INSUFFICIENT_BUFFER;
+    lpInfo->fDelayedAutostart = ScmReadDelayedAutoStart(hServiceKey) ? TRUE : FALSE;
+    return ERROR_SUCCESS;
+}
+
+static DWORD
+ScmSetPreshutdownTimeout(HKEY hServiceKey, const SERVICE_PRESHUTDOWN_INFO *lpInfo)
+{
+    if (lpInfo == NULL)
+        return ERROR_INVALID_PARAMETER;
+    return RegSetValueExW(hServiceKey, L"PreshutdownTimeout", 0, REG_DWORD,
+                          (LPBYTE)&lpInfo->dwPreshutdownTimeout, sizeof(DWORD));
+}
+
+static DWORD
+ScmQueryPreshutdownTimeout(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_PRESHUTDOWN_INFO lpInfo = (LPSERVICE_PRESHUTDOWN_INFO)lpBuffer;
+    DWORD dwValue = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT, dwSize = sizeof(dwValue), dwType = REG_NONE;
+
+    *pcbBytesNeeded = sizeof(SERVICE_PRESHUTDOWN_INFO);
+    if (cbBufSize < sizeof(SERVICE_PRESHUTDOWN_INFO))
+        return ERROR_INSUFFICIENT_BUFFER;
+    if (RegQueryValueExW(hServiceKey, L"PreshutdownTimeout", NULL, &dwType,
+                         (LPBYTE)&dwValue, &dwSize) != ERROR_SUCCESS || dwType != REG_DWORD)
+        dwValue = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT;
+    lpInfo->dwPreshutdownTimeout = dwValue;
+    return ERROR_SUCCESS;
+}
+
+
+/* A valid privilege name list: MULTI_SZ, double-NUL terminated, every name a known privilege */
+static DWORD
+ScmValidatePrivilegeList(const WCHAR *pmsz, DWORD cb)
+{
+    DWORD cch = cb / sizeof(WCHAR), pos = 0;
+    LUID luid;
+
+    if ((cb % sizeof(WCHAR)) != 0 || cch < 2 || pmsz[cch - 1] != L'\0' || pmsz[cch - 2] != L'\0')
+        return ERROR_INVALID_PARAMETER;
+
+    while (pos < cch && pmsz[pos] != L'\0')
+    {
+        if (!LookupPrivilegeValueW(NULL, &pmsz[pos], &luid))
+            return ERROR_INVALID_PARAMETER;
+        pos += (DWORD)wcslen(&pmsz[pos]) + 1;
+    }
+    return ERROR_SUCCESS;
+}
+
+static DWORD
+ScmSetRequiredPrivileges(HKEY hServiceKey, const SERVICE_RPC_REQUIRED_PRIVILEGES_INFO *lpInfo)
+{
+    DWORD dwError;
+
+    if (lpInfo == NULL || lpInfo->cbRequiredPrivileges == 0 || lpInfo->pRequiredPrivileges == NULL)
+    {
+        /* clear: the service keeps every privilege of its account */
+        dwError = RegDeleteValueW(hServiceKey, L"RequiredPrivileges");
+        return (dwError == ERROR_FILE_NOT_FOUND) ? ERROR_SUCCESS : dwError;
+    }
+
+    dwError = ScmValidatePrivilegeList((const WCHAR *)lpInfo->pRequiredPrivileges, lpInfo->cbRequiredPrivileges);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+
+    return RegSetValueExW(hServiceKey, L"RequiredPrivileges", 0, REG_MULTI_SZ,
+                          lpInfo->pRequiredPrivileges, lpInfo->cbRequiredPrivileges);
+}
+
+/* Buffer layout: SERVICE_REQUIRED_PRIVILEGES_INFOW, then the MULTI_SZ; the pointer travels as an offset from the start of the buffer */
+static DWORD
+ScmQueryRequiredPrivileges(HKEY hServiceKey, LPBYTE lpBuffer, DWORD cbBufSize, LPBOUNDED_DWORD_8K pcbBytesNeeded)
+{
+    LPSERVICE_REQUIRED_PRIVILEGES_INFOW lpInfo = (LPSERVICE_REQUIRED_PRIVILEGES_INFOW)lpBuffer;
+    LPWSTR pmsz = NULL;
+    DWORD cb = 0, dwError;
+
+    dwError = ScmReadRequiredPrivileges(hServiceKey, &pmsz, &cb);
+    if (dwError != ERROR_SUCCESS)
+    {
+        pmsz = NULL;
+        cb = 0;
+    }
+
+    *pcbBytesNeeded = sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW) + cb;
+    if (cbBufSize < *pcbBytesNeeded)
+    {
+        if (pmsz != NULL)
+            HeapFree(GetProcessHeap(), 0, pmsz);
+        return ERROR_INSUFFICIENT_BUFFER;
+    }
+
+    if (pmsz == NULL)
+    {
+        lpInfo->pmszRequiredPrivileges = NULL;
+    }
+    else
+    {
+        RtlCopyMemory(lpBuffer + sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW), pmsz, cb);
+        lpInfo->pmszRequiredPrivileges = (LPWSTR)(ULONG_PTR)sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW);
+        HeapFree(GetProcessHeap(), 0, pmsz);
+    }
+    return ERROR_SUCCESS;
+}
+
+
 /* Function 36 */
 DWORD
 WINAPI
@@ -5315,6 +5452,10 @@ RChangeServiceConfig2A(
         InfoW.psfaf = Info.psfaf;
     else if (Info.dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
         InfoW.psti = Info.psti;
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+        InfoW.psda = Info.psda;
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+        InfoW.psps = Info.psps;
 
     if (InfoW.dwInfoLevel == SERVICE_CONFIG_DESCRIPTION)
     {
@@ -5667,7 +5808,7 @@ RChangeServiceConfig2W(
     if (ScmShutdown)
         return ERROR_SHUTDOWN_IN_PROGRESS;
 
-    if (!ScmIsSupportedConfigLevel(Info.dwInfoLevel))
+    if (!ScmIsSupportedConfigLevelW(Info.dwInfoLevel))
     {
         return ERROR_INVALID_LEVEL;
     }
@@ -5774,6 +5915,20 @@ RChangeServiceConfig2W(
         dwError = ScmSetServiceTriggers(hServiceKey, Info.psti);
         if (dwError == ERROR_SUCCESS)
             ScmTriggersChanged();
+    }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmSetDelayedAutoStart(hServiceKey, Info.psda);
+        if (dwError == ERROR_SUCCESS)
+            lpService->bDelayedAutoStart = Info.psda->fDelayedAutostart ? TRUE : FALSE;
+    }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmSetPreshutdownTimeout(hServiceKey, Info.psps);
+    }
+    else if (Info.dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+    {
+        dwError = ScmSetRequiredPrivileges(hServiceKey, Info.psrp);
     }
 
 done:
@@ -5996,6 +6151,14 @@ RQueryServiceConfig2A(
     {
         dwError = ScmQueryServiceTriggers(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
     }
+    else if (dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmQueryDelayedAutoStart(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmQueryPreshutdownTimeout(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
 
 done:
     /* Unlock the service database */
@@ -6046,7 +6209,7 @@ RQueryServiceConfig2W(
     if (ScmShutdown)
         return ERROR_SHUTDOWN_IN_PROGRESS;
 
-    if (!ScmIsSupportedConfigLevel(dwInfoLevel))
+    if (!ScmIsSupportedConfigLevelW(dwInfoLevel))
     {
         return ERROR_INVALID_LEVEL;
     }
@@ -6202,6 +6365,18 @@ RQueryServiceConfig2W(
     else if (dwInfoLevel == SERVICE_CONFIG_TRIGGER_INFO)
     {
         dwError = ScmQueryServiceTriggers(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
+    {
+        dwError = ScmQueryDelayedAutoStart(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
+    {
+        dwError = ScmQueryPreshutdownTimeout(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
+    }
+    else if (dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+    {
+        dwError = ScmQueryRequiredPrivileges(hServiceKey, lpBuffer, cbBufSize, pcbBytesNeeded);
     }
 
 done:

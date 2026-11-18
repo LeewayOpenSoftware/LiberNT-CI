@@ -238,6 +238,212 @@ ScmEncryptPassword(
 }
 
 
+/*
+ * SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO is marshalled here: the RPC interface carries the MULTI_SZ as a
+ * counted byte block, and the server only implements the W entry points (the A flavours convert on this side).
+ */
+#define SCM_MAX_PRIVILEGE_BYTES (4 * 1024)
+
+static BOOL
+ScmChangeRequiredPrivileges(SC_HANDLE hService, LPVOID lpInfo, BOOL bAnsi)
+{
+    SC_RPC_CONFIG_INFOW InfoW;
+    SERVICE_RPC_REQUIRED_PRIVILEGES_INFO Rpc;
+    BYTE Dummy[2 * sizeof(WCHAR)] = { 0 };
+    LPWSTR pmszW = NULL, pmszAlloc = NULL, p;
+    LPSTR pa;
+    DWORD cch = 0, dwError;
+
+    if (bAnsi)
+    {
+        pa = ((LPSERVICE_REQUIRED_PRIVILEGES_INFOA)lpInfo)->pmszRequiredPrivileges;
+        if (pa != NULL)
+        {
+            DWORD cchA = 0;
+
+            while (pa[cchA] != '\0')
+                cchA += (DWORD)strlen(&pa[cchA]) + 1;
+            cchA++;
+            if (cchA * sizeof(WCHAR) > SCM_MAX_PRIVILEGE_BYTES)
+            {
+                SetLastError(ERROR_INVALID_PARAMETER);
+                return FALSE;
+            }
+            pmszAlloc = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cchA * sizeof(WCHAR));
+            if (pmszAlloc == NULL)
+            {
+                SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+                return FALSE;
+            }
+            MultiByteToWideChar(CP_ACP, 0, pa, cchA, pmszAlloc, cchA);
+            pmszW = pmszAlloc;
+        }
+    }
+    else
+    {
+        pmszW = ((LPSERVICE_REQUIRED_PRIVILEGES_INFOW)lpInfo)->pmszRequiredPrivileges;
+    }
+
+    Rpc.cbRequiredPrivileges = 0;
+    Rpc.pRequiredPrivileges = Dummy;
+    if (pmszW != NULL)
+    {
+        p = pmszW;
+        while (*p != L'\0')
+            p += wcslen(p) + 1;
+        cch = (DWORD)(p - pmszW) + 1;
+        if (cch * sizeof(WCHAR) > SCM_MAX_PRIVILEGE_BYTES)
+        {
+            if (pmszAlloc) HeapFree(GetProcessHeap(), 0, pmszAlloc);
+            SetLastError(ERROR_INVALID_PARAMETER);
+            return FALSE;
+        }
+        /* an empty list (a lone terminator) clears the value, like a NULL pointer */
+        if (cch > 1)
+        {
+            Rpc.cbRequiredPrivileges = cch * sizeof(WCHAR);
+            Rpc.pRequiredPrivileges = (PBYTE)pmszW;
+        }
+    }
+
+    InfoW.dwInfoLevel = SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO;
+    InfoW.psrp = &Rpc;
+
+    RpcTryExcept
+    {
+        dwError = RChangeServiceConfig2W((SC_RPC_HANDLE)hService, InfoW);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwError = ScmRpcStatusToWinError(RpcExceptionCode());
+    }
+    RpcEndExcept;
+
+    if (pmszAlloc)
+        HeapFree(GetProcessHeap(), 0, pmszAlloc);
+
+    if (dwError != ERROR_SUCCESS)
+    {
+        SetLastError(dwError);
+        return FALSE;
+    }
+    return TRUE;
+}
+
+static BOOL
+ScmQueryRequiredPrivileges(SC_HANDLE hService, LPBYTE lpBuffer, DWORD cbBufSize, LPDWORD pcbBytesNeeded, BOOL bAnsi)
+{
+    BYTE Dummy[sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW)];
+    LPBYTE pRpcBuf, pTemp = NULL;
+    DWORD dwRpcSize, dwNeeded = 0, dwError;
+
+    if (pcbBytesNeeded == NULL)
+    {
+        SetLastError(ERROR_INVALID_PARAMETER);
+        return FALSE;
+    }
+
+    if (bAnsi)
+    {
+        pTemp = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 8192);
+        if (pTemp == NULL)
+        {
+            SetLastError(ERROR_NOT_ENOUGH_MEMORY);
+            return FALSE;
+        }
+        pRpcBuf = pTemp;
+        dwRpcSize = 8192;
+    }
+    else if (lpBuffer == NULL || cbBufSize < sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOW))
+    {
+        pRpcBuf = Dummy;
+        dwRpcSize = sizeof(Dummy);
+    }
+    else
+    {
+        pRpcBuf = lpBuffer;
+        dwRpcSize = cbBufSize;
+    }
+
+    RpcTryExcept
+    {
+        dwError = RQueryServiceConfig2W((SC_RPC_HANDLE)hService,
+                                        SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO,
+                                        pRpcBuf,
+                                        dwRpcSize,
+                                        &dwNeeded);
+    }
+    RpcExcept(EXCEPTION_EXECUTE_HANDLER)
+    {
+        dwError = ScmRpcStatusToWinError(RpcExceptionCode());
+    }
+    RpcEndExcept;
+
+    if (dwError != ERROR_SUCCESS)
+    {
+        if (dwError == ERROR_INSUFFICIENT_BUFFER)
+            *pcbBytesNeeded = bAnsi ? dwNeeded / sizeof(WCHAR) + sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOA) : dwNeeded;
+        if (pTemp) HeapFree(GetProcessHeap(), 0, pTemp);
+        SetLastError(dwError);
+        return FALSE;
+    }
+
+    if (!bAnsi)
+    {
+        LPSERVICE_REQUIRED_PRIVILEGES_INFOW pInfo = (LPSERVICE_REQUIRED_PRIVILEGES_INFOW)pRpcBuf;
+
+        *pcbBytesNeeded = dwNeeded;
+        if (pRpcBuf == Dummy)
+        {
+            /* the caller's buffer was too small: report the size, never success into the scratch buffer */
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
+        if (pInfo->pmszRequiredPrivileges != NULL)
+            pInfo->pmszRequiredPrivileges = (LPWSTR)((ULONG_PTR)pInfo + (ULONG_PTR)pInfo->pmszRequiredPrivileges);
+        return TRUE;
+    }
+    else
+    {
+        LPSERVICE_REQUIRED_PRIVILEGES_INFOW pInfoW = (LPSERVICE_REQUIRED_PRIVILEGES_INFOW)pTemp;
+        LPSERVICE_REQUIRED_PRIVILEGES_INFOA pInfoA = (LPSERVICE_REQUIRED_PRIVILEGES_INFOA)lpBuffer;
+        LPWSTR pmszW = NULL, p;
+        int cchW = 0, cbA = 0;
+
+        if (pInfoW->pmszRequiredPrivileges != NULL)
+        {
+            pmszW = (LPWSTR)((ULONG_PTR)pInfoW + (ULONG_PTR)pInfoW->pmszRequiredPrivileges);
+            p = pmszW;
+            while (*p != L'\0')
+                p += wcslen(p) + 1;
+            cchW = (int)(p - pmszW) + 1;
+            cbA = WideCharToMultiByte(CP_ACP, 0, pmszW, cchW, NULL, 0, NULL, NULL);
+        }
+
+        *pcbBytesNeeded = sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOA) + cbA;
+        if (lpBuffer == NULL || cbBufSize < *pcbBytesNeeded)
+        {
+            HeapFree(GetProcessHeap(), 0, pTemp);
+            SetLastError(ERROR_INSUFFICIENT_BUFFER);
+            return FALSE;
+        }
+
+        if (pmszW != NULL)
+        {
+            LPSTR pA = (LPSTR)(lpBuffer + sizeof(SERVICE_REQUIRED_PRIVILEGES_INFOA));
+            WideCharToMultiByte(CP_ACP, 0, pmszW, cchW, pA, cbA, NULL, NULL);
+            pInfoA->pmszRequiredPrivileges = pA;
+        }
+        else
+        {
+            pInfoA->pmszRequiredPrivileges = NULL;
+        }
+        HeapFree(GetProcessHeap(), 0, pTemp);
+        return TRUE;
+    }
+}
+
+
 /**********************************************************************
  *  ChangeServiceConfig2A
  *
@@ -256,6 +462,9 @@ ChangeServiceConfig2A(SC_HANDLE hService,
 
     if (lpInfo == NULL) return TRUE;
 
+    if (dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+        return ScmChangeRequiredPrivileges(hService, lpInfo, TRUE);
+
     /* Fill relevant field of the Info structure */
     Info.dwInfoLevel = dwInfoLevel;
     switch (dwInfoLevel)
@@ -270,6 +479,14 @@ ChangeServiceConfig2A(SC_HANDLE hService,
 
         case SERVICE_CONFIG_FAILURE_ACTIONS_FLAG:
             Info.psfaf = lpInfo;
+            break;
+
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            Info.psda = lpInfo;
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            Info.psps = lpInfo;
             break;
 
         case SERVICE_CONFIG_TRIGGER_INFO:
@@ -322,6 +539,9 @@ ChangeServiceConfig2W(SC_HANDLE hService,
 
     if (lpInfo == NULL) return TRUE;
 
+    if (dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+        return ScmChangeRequiredPrivileges(hService, lpInfo, FALSE);
+
     /* Fill relevant field of the Info structure */
     Info.dwInfoLevel = dwInfoLevel;
     switch (dwInfoLevel)
@@ -336,6 +556,14 @@ ChangeServiceConfig2W(SC_HANDLE hService,
 
         case SERVICE_CONFIG_FAILURE_ACTIONS_FLAG:
             Info.psfaf = lpInfo;
+            break;
+
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            Info.psda = lpInfo;
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            Info.psps = lpInfo;
             break;
 
         case SERVICE_CONFIG_TRIGGER_INFO:
@@ -2563,6 +2791,8 @@ QueryServiceConfig2A(SC_HANDLE hService,
     SERVICE_DESCRIPTIONA ServiceDescription;
     SERVICE_FAILURE_ACTIONSA ServiceFailureActions;
     SERVICE_FAILURE_ACTIONS_FLAG FailureActionsFlag;
+    SERVICE_DELAYED_AUTO_START_INFO DelayedAutoStartInfo;
+    SERVICE_PRESHUTDOWN_INFO PreshutdownInfo;
     SERVICE_TRIGGER_INFO TriggerInfo;
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
@@ -2571,6 +2801,9 @@ QueryServiceConfig2A(SC_HANDLE hService,
 
     TRACE("QueryServiceConfig2A(%p %lu %p %lu %p)\n",
           hService, dwInfoLevel, lpBuffer, cbBufSize, pcbBytesNeeded);
+
+    if (dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+        return ScmQueryRequiredPrivileges(hService, lpBuffer, cbBufSize, pcbBytesNeeded, TRUE);
 
     lpTempBuffer = lpBuffer;
     dwBufferSize = cbBufSize;
@@ -2600,6 +2833,24 @@ QueryServiceConfig2A(SC_HANDLE hService,
             {
                 lpTempBuffer = (LPBYTE)&FailureActionsFlag;
                 dwBufferSize = sizeof(SERVICE_FAILURE_ACTIONS_FLAG);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_DELAYED_AUTO_START_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&DelayedAutoStartInfo;
+                dwBufferSize = sizeof(SERVICE_DELAYED_AUTO_START_INFO);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_PRESHUTDOWN_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&PreshutdownInfo;
+                dwBufferSize = sizeof(SERVICE_PRESHUTDOWN_INFO);
                 bUseTempBuffer = TRUE;
             }
             break;
@@ -2704,6 +2955,8 @@ QueryServiceConfig2W(SC_HANDLE hService,
     SERVICE_DESCRIPTIONW ServiceDescription;
     SERVICE_FAILURE_ACTIONSW ServiceFailureActions;
     SERVICE_FAILURE_ACTIONS_FLAG FailureActionsFlag;
+    SERVICE_DELAYED_AUTO_START_INFO DelayedAutoStartInfo;
+    SERVICE_PRESHUTDOWN_INFO PreshutdownInfo;
     SERVICE_TRIGGER_INFO TriggerInfo;
     LPBYTE lpTempBuffer;
     BOOL bUseTempBuffer = FALSE;
@@ -2712,6 +2965,9 @@ QueryServiceConfig2W(SC_HANDLE hService,
 
     TRACE("QueryServiceConfig2W(%p %lu %p %lu %p)\n",
           hService, dwInfoLevel, lpBuffer, cbBufSize, pcbBytesNeeded);
+
+    if (dwInfoLevel == SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO)
+        return ScmQueryRequiredPrivileges(hService, lpBuffer, cbBufSize, pcbBytesNeeded, FALSE);
 
     lpTempBuffer = lpBuffer;
     dwBufferSize = cbBufSize;
@@ -2741,6 +2997,24 @@ QueryServiceConfig2W(SC_HANDLE hService,
             {
                 lpTempBuffer = (LPBYTE)&FailureActionsFlag;
                 dwBufferSize = sizeof(SERVICE_FAILURE_ACTIONS_FLAG);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_DELAYED_AUTO_START_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_DELAYED_AUTO_START_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&DelayedAutoStartInfo;
+                dwBufferSize = sizeof(SERVICE_DELAYED_AUTO_START_INFO);
+                bUseTempBuffer = TRUE;
+            }
+            break;
+
+        case SERVICE_CONFIG_PRESHUTDOWN_INFO:
+            if ((lpBuffer == NULL) || (cbBufSize < sizeof(SERVICE_PRESHUTDOWN_INFO)))
+            {
+                lpTempBuffer = (LPBYTE)&PreshutdownInfo;
+                dwBufferSize = sizeof(SERVICE_PRESHUTDOWN_INFO);
                 bUseTempBuffer = TRUE;
             }
             break;

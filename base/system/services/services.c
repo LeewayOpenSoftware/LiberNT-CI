@@ -233,6 +233,7 @@ ShutdownHandlerRoutine(DWORD dwCtrlType)
         DPRINT("Shutdown event received\n");
         ScmShutdown = TRUE;
 
+        ScmPreshutdownServices();
         ScmAutoShutdownServices();
         ScmShutdownServiceDatabase();
 
@@ -370,6 +371,8 @@ wWinMain(HINSTANCE hInstance,
 
     /* Signal auto-start complete event */
     SetEvent(hScmAutoStartCompleteEvent);
+
+    ScmStartDelayedAutoStartServices(hScmShutdownEvent);
 
     ScmStartTriggers();
 

@@ -157,9 +157,12 @@ typedef struct _SERVICE_FAILURE_ACTIONSW {
 
 cpp_quote("#endif")
 
+cpp_quote("#ifndef _SERVICE_DELAYED_AUTO_START_INFO_DEFINED_")
+cpp_quote("#define _SERVICE_DELAYED_AUTO_START_INFO_DEFINED_")
 typedef struct _SERVICE_DELAYED_AUTO_START_INFO {
-    BOOL fDelayedAutoStart;
+    BOOL fDelayedAutostart;
 } SERVICE_DELAYED_AUTO_START_INFO, *LPSERVICE_DELAYED_AUTO_START_INFO;
+cpp_quote("#endif")
 
 cpp_quote("#ifndef _SERVICE_FAILURE_ACTIONS_FLAG_DEFINED_")
 cpp_quote("#define _SERVICE_FAILURE_ACTIONS_FLAG_DEFINED_")

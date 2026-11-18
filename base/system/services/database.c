@@ -765,6 +765,25 @@ ScmCreateOrReferenceServiceImage(PSERVICE pService)
             goto done;
         }
 
+        /* Fail closed: a service with RequiredPrivileges never starts with the unfiltered token */
+        dwError = ScmApplyRequiredPrivileges(pService, pServiceImage);
+        if (dwError != ERROR_SUCCESS)
+        {
+            DPRINT1("ScmApplyRequiredPrivileges() failed (Error %lu)\n", dwError);
+            if (pServiceImage->hProfile != NULL)
+            {
+                ScmEnableBackupRestorePrivileges(pServiceImage->hToken, TRUE);
+                UnloadUserProfile(pServiceImage->hToken, pServiceImage->hProfile);
+                ScmEnableBackupRestorePrivileges(pServiceImage->hToken, FALSE);
+            }
+            if (pServiceImage->hToken != NULL)
+                CloseHandle(pServiceImage->hToken);
+            if (pServiceImage->hProcessToken != NULL)
+                CloseHandle(pServiceImage->hProcessToken);
+            HeapFree(GetProcessHeap(), 0, pServiceImage);
+            goto done;
+        }
+
         bSecurityService = ScmIsSecurityService(pServiceImage);
 
         /* Create the control pipe */
@@ -785,6 +804,8 @@ ScmCreateOrReferenceServiceImage(PSERVICE pService)
             /* Close the logon token */
             if (pServiceImage->hToken != NULL)
                 CloseHandle(pServiceImage->hToken);
+            if (pServiceImage->hProcessToken != NULL)
+                CloseHandle(pServiceImage->hProcessToken);
 
             /* Release the service image */
             HeapFree(GetProcessHeap(), 0, pServiceImage);
@@ -865,6 +886,8 @@ ScmRemoveServiceImage(PSERVICE_IMAGE pServiceImage)
     /* Close the logon token */
     if (pServiceImage->hToken != NULL)
         CloseHandle(pServiceImage->hToken);
+    if (pServiceImage->hProcessToken != NULL)
+        CloseHandle(pServiceImage->hProcessToken);
 
     /* Release the service image */
     HeapFree(GetProcessHeap(), 0, pServiceImage);
@@ -1509,6 +1532,7 @@ CreateServiceListEntry(LPCWSTR lpServiceName,
 
     lpService->dwErrorControl = dwErrorControl;
     lpService->dwTag = dwTagId;
+    lpService->bDelayedAutoStart = ScmReadDelayedAutoStart(hServiceKey);
 
     if (lpGroup != NULL)
     {
@@ -2301,6 +2325,245 @@ ScmWaitForServiceConnect(PSERVICE Service)
 }
 
 
+
+static
+BOOL
+ScmMultiSzContains(
+    _In_ LPCWSTR pmsz,
+    _In_ LPCWSTR pszName)
+{
+    while (*pmsz != L'\0')
+    {
+        if (_wcsicmp(pmsz, pszName) == 0)
+            return TRUE;
+        pmsz += wcslen(pmsz) + 1;
+    }
+    return FALSE;
+}
+
+/*
+ * Collect the RequiredPrivileges of every service of the image into one MULTI_SZ.
+ * *pbDefined is FALSE when ANY service of the image does not define the value: Windows keeps every
+ * privilege of the token then (a share-process image hosts all its services with one token).
+ * Any other failure is an error and the caller must refuse the start (fail closed).
+ * The service list is walked under the shared database lock (records are inserted/removed under it).
+ */
+static
+DWORD
+ScmCollectRequiredPrivileges(
+    _In_ PSERVICE pService,
+    _In_ PSERVICE_IMAGE pImage,
+    _Out_ LPWSTR *ppmszUnion,
+    _Out_ PBOOL pbDefined)
+{
+    PLIST_ENTRY ServiceEntry;
+    PSERVICE pMember;
+    LPWSTR pmszAll = NULL, pmszOne, pszImagePath, pNew, p;
+    DWORD cchContent = 0, cbOne, cchStr, dwError = ERROR_SUCCESS;
+    HKEY hKey;
+    BOOL bShare = (pService->Status.dwServiceType & SERVICE_WIN32_SHARE_PROCESS) != 0;
+
+    *ppmszUnion = NULL;
+    *pbDefined = FALSE;
+
+    pmszAll = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 2 * sizeof(WCHAR));
+    if (pmszAll == NULL)
+        return ERROR_NOT_ENOUGH_MEMORY;
+
+    ScmLockDatabaseShared();
+
+    ServiceEntry = ServiceListHead.Flink;
+    while (ServiceEntry != &ServiceListHead)
+    {
+        pMember = CONTAINING_RECORD(ServiceEntry, SERVICE, ServiceListEntry);
+        ServiceEntry = ServiceEntry->Flink;
+
+        if (pMember != pService)
+        {
+            if (!bShare || !(pMember->Status.dwServiceType & SERVICE_WIN32_SHARE_PROCESS))
+                continue;
+        }
+
+        dwError = ScmOpenServiceKey(pMember->lpServiceName, KEY_READ, &hKey);
+        if (dwError != ERROR_SUCCESS)
+            goto fail;
+
+        if (pMember != pService)
+        {
+            /* only the services that run in this very image count */
+            pszImagePath = NULL;
+            dwError = ScmReadString(hKey, L"ImagePath", &pszImagePath);
+            if (dwError == ERROR_FILE_NOT_FOUND)
+            {
+                /* a member without an ImagePath cannot be hosted by this image: it does not take part */
+                RegCloseKey(hKey);
+                dwError = ERROR_SUCCESS;
+                continue;
+            }
+            if (dwError != ERROR_SUCCESS)
+            {
+                RegCloseKey(hKey);
+                goto fail;
+            }
+            if (_wcsicmp(pszImagePath, pImage->pszImagePath) != 0)
+            {
+                HeapFree(GetProcessHeap(), 0, pszImagePath);
+                RegCloseKey(hKey);
+                continue;
+            }
+            HeapFree(GetProcessHeap(), 0, pszImagePath);
+        }
+
+        pmszOne = NULL;
+        dwError = ScmReadRequiredPrivileges(hKey, &pmszOne, &cbOne);
+        RegCloseKey(hKey);
+        if (dwError == ERROR_FILE_NOT_FOUND)
+        {
+            /* a member without the value: the whole image keeps its token */
+            dwError = ERROR_SUCCESS;
+            goto out;
+        }
+        if (dwError != ERROR_SUCCESS)
+            goto fail;
+
+        /* append every non-empty string of this list; the final terminator is added at the end */
+        pNew = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (cchContent + cbOne / sizeof(WCHAR) + 2) * sizeof(WCHAR));
+        if (pNew == NULL)
+        {
+            HeapFree(GetProcessHeap(), 0, pmszOne);
+            dwError = ERROR_NOT_ENOUGH_MEMORY;
+            goto fail;
+        }
+        RtlCopyMemory(pNew, pmszAll, cchContent * sizeof(WCHAR));
+        for (p = pmszOne; *p != L'\0'; p += cchStr)
+        {
+            cchStr = (DWORD)wcslen(p) + 1;
+            RtlCopyMemory(pNew + cchContent, p, cchStr * sizeof(WCHAR));
+            cchContent += cchStr;
+        }
+        HeapFree(GetProcessHeap(), 0, pmszAll);
+        HeapFree(GetProcessHeap(), 0, pmszOne);
+        pmszAll = pNew;
+    }
+
+    /* every member defines the value (possibly empty = no privileges besides SeChangeNotify) */
+    *pbDefined = TRUE;
+    *ppmszUnion = pmszAll;
+    ScmUnlockDatabase();
+    return ERROR_SUCCESS;
+
+fail:
+out:
+    ScmUnlockDatabase();
+    HeapFree(GetProcessHeap(), 0, pmszAll);
+    return dwError;
+}
+
+/*
+ * SERVICE_CONFIG_REQUIRED_PRIVILEGES_INFO: build the token the service process runs with.
+ * The base token is the logon token of the account (user, LocalService, NetworkService) or, for
+ * LocalSystem, a primary duplicate of the SCM token. Every privilege that is not required is deleted;
+ * SeChangeNotifyPrivilege is always kept (Windows keeps it for every service). The original image
+ * token stays untouched because the user profile load/unload needs its backup/restore privileges.
+ * Nothing changes (and no token is created) when the service does not define RequiredPrivileges.
+ * On any error the caller must NOT start the service.
+ */
+DWORD
+ScmApplyRequiredPrivileges(
+    _In_ PSERVICE pService,
+    _Inout_ PSERVICE_IMAGE pImage)
+{
+    LPWSTR pmszUnion = NULL;
+    DWORD cb = 0, i, nDelete = 0, cchName;
+    BOOL bDefined = FALSE;
+    HANDLE hSelf = NULL, hBase = NULL, hNew = NULL;
+    BOOL bOwnBase = FALSE;
+    PTOKEN_PRIVILEGES pTokPriv = NULL;
+    PLUID_AND_ATTRIBUTES pDelete = NULL;
+    WCHAR szName[128];
+    DWORD dwError = ERROR_SUCCESS;
+
+    dwError = ScmCollectRequiredPrivileges(pService, pImage, &pmszUnion, &bDefined);
+    if (dwError != ERROR_SUCCESS)
+        return dwError;
+    if (!bDefined)
+        return ERROR_SUCCESS;
+
+    if (pImage->hToken != NULL)
+    {
+        hBase = pImage->hToken;
+    }
+    else
+    {
+        /* LocalSystem: duplicate the SCM token as a primary token */
+        if (!OpenProcessToken(GetCurrentProcess(), TOKEN_DUPLICATE | TOKEN_QUERY, &hSelf) ||
+            !DuplicateTokenEx(hSelf, MAXIMUM_ALLOWED, NULL, SecurityImpersonation, TokenPrimary, &hBase))
+        {
+            dwError = GetLastError();
+            goto done;
+        }
+        bOwnBase = TRUE;
+    }
+
+    GetTokenInformation(hBase, TokenPrivileges, NULL, 0, &cb);
+    pTokPriv = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, cb);
+    if (pTokPriv == NULL)
+    {
+        dwError = ERROR_NOT_ENOUGH_MEMORY;
+        goto done;
+    }
+    if (!GetTokenInformation(hBase, TokenPrivileges, pTokPriv, cb, &cb))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+
+    pDelete = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, (pTokPriv->PrivilegeCount + 1) * sizeof(LUID_AND_ATTRIBUTES));
+    if (pDelete == NULL)
+    {
+        dwError = ERROR_NOT_ENOUGH_MEMORY;
+        goto done;
+    }
+
+    for (i = 0; i < pTokPriv->PrivilegeCount; i++)
+    {
+        cchName = ARRAYSIZE(szName);
+        if (!LookupPrivilegeNameW(NULL, &pTokPriv->Privileges[i].Luid, szName, &cchName))
+        {
+            /* an unnamed privilege cannot be required: remove it */
+            pDelete[nDelete++] = pTokPriv->Privileges[i];
+            continue;
+        }
+        if (_wcsicmp(szName, L"SeChangeNotifyPrivilege") == 0 || ScmMultiSzContains(pmszUnion, szName))
+            continue;
+        pDelete[nDelete++] = pTokPriv->Privileges[i];
+    }
+
+    if (nDelete == 0)
+        goto done;
+
+    if (!CreateRestrictedToken(hBase, 0, 0, NULL, nDelete, pDelete, 0, NULL, &hNew))
+    {
+        dwError = GetLastError();
+        goto done;
+    }
+
+    pImage->hProcessToken = hNew;
+
+done:
+    if (pDelete != NULL)
+        HeapFree(GetProcessHeap(), 0, pDelete);
+    if (pTokPriv != NULL)
+        HeapFree(GetProcessHeap(), 0, pTokPriv);
+    if (bOwnBase && hBase != NULL)
+        CloseHandle(hBase);
+    if (hSelf != NULL)
+        CloseHandle(hSelf);
+    if (pmszUnion != NULL)
+        HeapFree(GetProcessHeap(), 0, pmszUnion);
+    return dwError;
+}
+
 static DWORD
 ScmStartUserModeService(PSERVICE Service,
                         DWORD argc,
@@ -2323,11 +2586,12 @@ ScmStartUserModeService(PSERVICE Service,
     StartupInfo.cb = sizeof(StartupInfo);
     ZeroMemory(&ProcessInformation, sizeof(ProcessInformation));
 
-    if (Service->lpImage->hToken)
+    if (Service->lpImage->hToken || Service->lpImage->hProcessToken)
     {
-        /* User token: Run the service under the user account */
+        /* User token (or the privilege-filtered token): Run the service under it */
+        HANDLE hRunToken = Service->lpImage->hProcessToken ? Service->lpImage->hProcessToken : Service->lpImage->hToken;
 
-        if (!CreateEnvironmentBlock(&lpEnvironment, Service->lpImage->hToken, FALSE))
+        if (!CreateEnvironmentBlock(&lpEnvironment, hRunToken, FALSE))
         {
             /* We failed, run the service with the current environment */
             DPRINT1("CreateEnvironmentBlock() failed with error %d; service '%S' will run with current environment\n",
@@ -2336,11 +2600,11 @@ ScmStartUserModeService(PSERVICE Service,
         }
 
         /* Impersonate the new user */
-        Result = ImpersonateLoggedOnUser(Service->lpImage->hToken);
+        Result = ImpersonateLoggedOnUser(hRunToken);
         if (Result)
         {
             /* Launch the process in the user's logon session */
-            Result = CreateProcessAsUserW(Service->lpImage->hToken,
+            Result = CreateProcessAsUserW(hRunToken,
                                           NULL,
                                           Service->lpImage->pszImagePath,
                                           NULL,
@@ -2790,6 +3054,19 @@ ScmAutoStartServices(VOID)
              !ScmIsSafeBootServiceAllowed(CurrentService, hSafeBootKey)) ||
             ScmIsDeferredDuringSetup(CurrentService);
 
+        /*
+         * A delayed service that the checks above allow is not started now: remember it,
+         * so that the delayed pass starts only those (Safe Mode / setup rules already applied).
+         */
+        CurrentService->bDelayedStartPending = FALSE;
+        if (!CurrentService->ServiceVisited &&
+            CurrentService->dwStartType == SERVICE_AUTO_START &&
+            CurrentService->bDelayedAutoStart)
+        {
+            CurrentService->bDelayedStartPending = TRUE;
+            CurrentService->ServiceVisited = TRUE;
+        }
+
         ServiceEntry = ServiceEntry->Flink;
     }
 
@@ -2891,6 +3168,278 @@ ScmAutoStartServices(VOID)
 
     /* Release the critical section */
     LeaveCriticalSection(&ControlServiceCriticalSection);
+}
+
+
+#define SCM_DELAYED_AUTOSTART_DELAY     120000
+#define SCM_PRESHUTDOWN_POLL_MS         100
+
+static
+DWORD
+ScmGetPreshutdownTimeout(
+    _In_ PSERVICE lpService)
+{
+    HKEY hServiceKey = NULL;
+    DWORD dwTimeout = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT;
+    DWORD dwSize = sizeof(dwTimeout);
+    DWORD dwType = REG_NONE;
+
+    if (ScmOpenServiceKey(lpService->lpServiceName, KEY_READ, &hServiceKey) == ERROR_SUCCESS)
+    {
+        if (RegQueryValueExW(hServiceKey, L"PreshutdownTimeout", NULL, &dwType,
+                             (LPBYTE)&dwTimeout, &dwSize) != ERROR_SUCCESS ||
+            dwType != REG_DWORD)
+        {
+            dwTimeout = SCM_DEFAULT_PRESHUTDOWN_TIMEOUT;
+        }
+        RegCloseKey(hServiceKey);
+    }
+
+    return dwTimeout;
+}
+
+/*
+ * Upper bound of the whole preshutdown phase. The services process is stopped by winsrv after
+ * WaitToKillServiceTimeout (default 20 s, like winsrv), so waiting longer for a PreshutdownTimeout of 180 s
+ * would only get the SCM killed in the middle of the wait. All timeouts are therefore capped to this budget.
+ * FOLLOW-UP (not implemented): Windows lets winlogon start the preshutdown phase early, before the
+ * user-session logoff, which is what makes the full PreshutdownTimeout usable there.
+ */
+#define SCM_DEFAULT_SHUTDOWN_BUDGET 20000
+
+static
+DWORD
+ScmGetShutdownBudget(VOID)
+{
+    HKEY hKey;
+    DWORD dwBudget = SCM_DEFAULT_SHUTDOWN_BUDGET;
+    WCHAR szValue[16];
+    DWORD dwSize, dwType;
+
+    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"SYSTEM\\CurrentControlSet\\Control", 0, KEY_READ, &hKey) == ERROR_SUCCESS)
+    {
+        dwSize = sizeof(szValue) - sizeof(WCHAR);
+        ZeroMemory(szValue, sizeof(szValue));
+        if (RegQueryValueExW(hKey, L"WaitToKillServiceTimeout", NULL, &dwType,
+                             (LPBYTE)szValue, &dwSize) == ERROR_SUCCESS)
+        {
+            if (dwType == REG_SZ)
+                dwBudget = wcstoul(szValue, NULL, 10);
+            else if (dwType == REG_DWORD && dwSize == sizeof(DWORD))
+                dwBudget = *(LPDWORD)szValue;
+            if (dwBudget == 0)
+                dwBudget = SCM_DEFAULT_SHUTDOWN_BUDGET;
+        }
+        RegCloseKey(hKey);
+    }
+
+    return dwBudget;
+}
+
+/* Wait until the service reports SERVICE_STOPPED, or the deadline (GetTickCount64 value) passes */
+static
+VOID
+ScmWaitForPreshutdown(
+    _In_ PSERVICE lpService,
+    _In_ ULONGLONG ullDeadline)
+{
+    while (lpService->Status.dwCurrentState != SERVICE_STOPPED)
+    {
+        if (GetTickCount64() >= ullDeadline)
+        {
+            DPRINT1("Service '%S' did not finish its preshutdown in time\n", lpService->lpServiceName);
+            break;
+        }
+        Sleep(SCM_PRESHUTDOWN_POLL_MS);
+    }
+}
+
+VOID
+ScmPreshutdownServices(VOID)
+{
+    PLIST_ENTRY ServiceEntry;
+    PSERVICE CurrentService;
+    HANDLE hControlPipe;
+    DWORD dwResumeCount;
+    PSERVICE *ppServices = NULL;
+    ULONGLONG *pDeadlines = NULL;
+    ULONG Count = 0, Max = 0, i;
+    ULONGLONG ullBudgetEnd;
+
+    DPRINT("ScmPreshutdownServices() called\n");
+
+    ullBudgetEnd = GetTickCount64() + ScmGetShutdownBudget();
+
+    ScmLockDatabaseExclusive();
+
+    ServiceEntry = ServiceListHead.Flink;
+    while (ServiceEntry != &ServiceListHead)
+    {
+        CurrentService = CONTAINING_RECORD(ServiceEntry, SERVICE, ServiceListEntry);
+
+        if ((CurrentService->Status.dwControlsAccepted & SERVICE_ACCEPT_PRESHUTDOWN) &&
+            (CurrentService->Status.dwCurrentState == SERVICE_RUNNING ||
+             CurrentService->Status.dwCurrentState == SERVICE_START_PENDING))
+        {
+            /* Grow the arrays: the services to wait for, and the time at which each one is given up */
+            if (Count == Max)
+            {
+                PSERVICE *ppNew;
+                ULONGLONG *pNewDeadlines;
+                ULONG NewMax = (Max == 0) ? 16 : Max * 2;
+
+                ppNew = HeapAlloc(GetProcessHeap(), 0, NewMax * sizeof(PSERVICE));
+                pNewDeadlines = HeapAlloc(GetProcessHeap(), 0, NewMax * sizeof(ULONGLONG));
+                if (ppNew == NULL || pNewDeadlines == NULL)
+                {
+                    if (ppNew != NULL)
+                        HeapFree(GetProcessHeap(), 0, ppNew);
+                    if (pNewDeadlines != NULL)
+                        HeapFree(GetProcessHeap(), 0, pNewDeadlines);
+                    break;
+                }
+                if (ppServices != NULL)
+                {
+                    RtlCopyMemory(ppNew, ppServices, Count * sizeof(PSERVICE));
+                    RtlCopyMemory(pNewDeadlines, pDeadlines, Count * sizeof(ULONGLONG));
+                    HeapFree(GetProcessHeap(), 0, ppServices);
+                    HeapFree(GetProcessHeap(), 0, pDeadlines);
+                }
+                ppServices = ppNew;
+                pDeadlines = pNewDeadlines;
+                Max = NewMax;
+            }
+
+            DPRINT("Preshutdown service: %S\n", CurrentService->lpServiceName);
+            hControlPipe = CurrentService->lpImage->hControlPipe;
+            dwResumeCount = CurrentService->dwResumeCount;
+            pDeadlines[Count] = GetTickCount64() + ScmGetPreshutdownTimeout(CurrentService);
+            if (pDeadlines[Count] > ullBudgetEnd)
+                pDeadlines[Count] = ullBudgetEnd;
+            ScmReferenceService(CurrentService);
+            ScmUnlockDatabase();
+            if (ScmControlService(hControlPipe,
+                                  CurrentService->lpServiceName,
+                                  SERVICE_CONTROL_PRESHUTDOWN,
+                                  dwResumeCount) == ERROR_SUCCESS)
+            {
+                ppServices[Count++] = CurrentService;
+            }
+            else
+            {
+                ScmDereferenceService(CurrentService);
+            }
+            ScmLockDatabaseExclusive();
+            ServiceEntry = ServiceEntry->Flink;
+            continue;
+        }
+
+        ServiceEntry = ServiceEntry->Flink;
+    }
+
+    ScmUnlockDatabase();
+
+    /* All notifications are out: the services work in parallel, wait for each one (bounded by its own timeout) */
+    for (i = 0; i < Count; i++)
+    {
+        ScmWaitForPreshutdown(ppServices[i], pDeadlines[i]);
+        ScmDereferenceService(ppServices[i]);
+    }
+
+    if (ppServices != NULL)
+    {
+        HeapFree(GetProcessHeap(), 0, ppServices);
+        HeapFree(GetProcessHeap(), 0, pDeadlines);
+    }
+
+    DPRINT("ScmPreshutdownServices() done\n");
+}
+
+static
+DWORD
+WINAPI
+ScmDelayedAutoStartThread(
+    _In_ LPVOID lpParameter)
+{
+    HANDLE hShutdownEvent = (HANDLE)lpParameter;
+    PLIST_ENTRY ServiceEntry;
+    PSERVICE CurrentService;
+    PSERVICE *ppServices = NULL;
+    ULONG Count = 0, Max = 0, i;
+
+    /* Do not slow the boot down: wait, but give up if the system shuts down meanwhile */
+    if (WaitForSingleObject(hShutdownEvent, SCM_DELAYED_AUTOSTART_DELAY) != WAIT_TIMEOUT)
+        return 0;
+
+    ScmLockDatabaseShared();
+
+    ServiceEntry = ServiceListHead.Flink;
+    while (ServiceEntry != &ServiceListHead)
+    {
+        CurrentService = CONTAINING_RECORD(ServiceEntry, SERVICE, ServiceListEntry);
+        if (CurrentService->dwStartType == SERVICE_AUTO_START &&
+            CurrentService->bDelayedAutoStart &&
+            CurrentService->bDelayedStartPending &&
+            !CurrentService->bDeleted &&
+            CurrentService->Status.dwCurrentState == SERVICE_STOPPED)
+        {
+            if (Count == Max)
+            {
+                PSERVICE *ppNew;
+                ULONG NewMax = (Max == 0) ? 16 : Max * 2;
+
+                ppNew = HeapAlloc(GetProcessHeap(), 0, NewMax * sizeof(PSERVICE));
+                if (ppNew == NULL)
+                    break;
+                if (ppServices != NULL)
+                {
+                    RtlCopyMemory(ppNew, ppServices, Count * sizeof(PSERVICE));
+                    HeapFree(GetProcessHeap(), 0, ppServices);
+                }
+                ppServices = ppNew;
+                Max = NewMax;
+            }
+            CurrentService->bDelayedStartPending = FALSE;
+            ScmReferenceService(CurrentService);
+            ppServices[Count++] = CurrentService;
+        }
+        ServiceEntry = ServiceEntry->Flink;
+    }
+
+    ScmUnlockDatabase();
+
+    for (i = 0; i < Count; i++)
+    {
+        if (!ScmShutdown && ppServices[i]->Status.dwCurrentState == SERVICE_STOPPED)
+        {
+            DPRINT("Delayed auto-start: %S\n", ppServices[i]->lpServiceName);
+            ScmStartService(ppServices[i], 0, NULL);
+        }
+        ScmDereferenceService(ppServices[i]);
+    }
+
+    if (ppServices != NULL)
+        HeapFree(GetProcessHeap(), 0, ppServices);
+
+    return 0;
+}
+
+VOID
+ScmStartDelayedAutoStartServices(
+    _In_ HANDLE hShutdownEvent)
+{
+    HANDLE hThread;
+
+    hThread = CreateThread(NULL, 0, ScmDelayedAutoStartThread, hShutdownEvent, 0, NULL);
+    if (hThread != NULL)
+    {
+        SetThreadPriority(hThread, THREAD_PRIORITY_BELOW_NORMAL);
+        CloseHandle(hThread);
+    }
+    else
+    {
+        DPRINT1("Failed to create the delayed auto-start thread (Error %lu)\n", GetLastError());
+    }
 }
 
 
