@@ -5926,9 +5926,17 @@ RChangeServiceConfig2W(
     }
     else if (Info.dwInfoLevel == SERVICE_CONFIG_DELAYED_AUTO_START_INFO)
     {
-        dwError = ScmSetDelayedAutoStart(hServiceKey, Info.psda);
-        if (dwError == ERROR_SUCCESS)
-            lpService->bDelayedAutoStart = Info.psda->fDelayedAutostart ? TRUE : FALSE;
+        /* A delayed auto-start service cannot be a member of a load ordering group */
+        if (Info.psda->fDelayedAutostart && lpService->lpGroup != NULL)
+        {
+            dwError = ERROR_INVALID_PARAMETER;
+        }
+        else
+        {
+            dwError = ScmSetDelayedAutoStart(hServiceKey, Info.psda);
+            if (dwError == ERROR_SUCCESS)
+                lpService->bDelayedAutoStart = Info.psda->fDelayedAutostart ? TRUE : FALSE;
+        }
     }
     else if (Info.dwInfoLevel == SERVICE_CONFIG_PRESHUTDOWN_INFO)
     {

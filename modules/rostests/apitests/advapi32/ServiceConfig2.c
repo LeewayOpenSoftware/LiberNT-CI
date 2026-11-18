@@ -89,7 +89,7 @@ TestPreshutdown(SC_HANDLE hSvc)
     DWORD needed;
     BOOL ret;
 
-    /* Default timeout is 180 s, like Windows */
+    /* Default timeout is 10 s, like Windows 10 1703 and later */
     needed = 0;
     ret = QueryServiceConfig2W(hSvc, SERVICE_CONFIG_PRESHUTDOWN_INFO, buf, sizeof(buf), &needed);
     ok(ret, "QueryServiceConfig2W(preshutdown) failed, error %lu\n", GetLastError());

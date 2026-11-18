@@ -3417,6 +3417,7 @@ ScmDelayedAutoStartThread(
         EnterCriticalSection(&ControlServiceCriticalSection);
         if (!ScmShutdown &&
             ppServices[i]->bDelayedStartPending &&
+            !ppServices[i]->bDeleted &&
             ppServices[i]->Status.dwCurrentState == SERVICE_STOPPED)
         {
             DPRINT("Delayed auto-start: %S\n", ppServices[i]->lpServiceName);
