@@ -170,7 +170,8 @@ static VOID TestCDevice(PDEVICE_OBJECT Pdo)
     Info.PerfStateSets[0].Type = PoFxPerfStateTypeDiscrete;
     Info.PerfStateSets[0].Discrete.Count = RTL_NUMBER_OF(Discrete);
     Info.PerfStateSets[0].Discrete.States = Discrete;
-    Status = PoFxRegisterComponentPerfStates(Context.Handle, 0, 0, TestCPerf, &Info, NULL);
+    /* No PEP is loaded, so the driver must say a PEP is optional */
+    Status = PoFxRegisterComponentPerfStates(Context.Handle, 0, PO_FX_FLAG_PERF_PEP_OPTIONAL, TestCPerf, &Info, NULL);
     ok_eq_hex(Status, STATUS_SUCCESS);
     if (NT_SUCCESS(Status))
     {
