@@ -407,6 +407,21 @@ typedef struct _DNSAPI_ASYNC_QUERY
     PDNS_QUERY_CANCEL Slot;
 } DNSAPI_ASYNC_QUERY, *PDNSAPI_ASYNC_QUERY;
 
+static SRWLOCK DnsQueryExSlotLock = SRWLOCK_INIT;
+
+static PDNSAPI_ASYNC_QUERY
+DnsQueryExClaimSlot(_In_ PDNS_QUERY_CANCEL Slot)
+{
+    PDNSAPI_ASYNC_QUERY Op;
+
+    AcquireSRWLockExclusive(&DnsQueryExSlotLock);
+    RtlCopyMemory(&Op, Slot->Reserved, sizeof(Op));
+    if (Op != NULL)
+        RtlZeroMemory(Slot->Reserved, sizeof(Op));
+    ReleaseSRWLockExclusive(&DnsQueryExSlotLock);
+    return Op;
+}
+
 static DWORD WINAPI
 DnsQueryExWorker(PVOID Parameter)
 {
@@ -438,6 +453,15 @@ DnsQueryExWorker(PVOID Parameter)
         Status = ERROR_CANCELLED;
     }
 
+    /* Claim the caller's cancel slot before touching the caller's result
+     * structure or invoking the completion routine; nothing of the caller's
+     * is touched after the completion routine returns. */
+    if (Op->Slot != NULL)
+    {
+        if (DnsQueryExClaimSlot(Op->Slot) == Op)
+            InterlockedDecrement(&Op->Refs);
+    }
+
     Op->CallerResults->Version = DNS_QUERY_RESULTS_VERSION1;
     Op->CallerResults->QueryStatus = Status;
     Op->CallerResults->QueryOptions = Op->Options;
@@ -445,9 +469,6 @@ DnsQueryExWorker(PVOID Parameter)
     Op->CallerResults->Reserved = NULL;
 
     Op->Callback(Op->QueryContext, Op->CallerResults);
-
-    if (Op->Slot != NULL)
-        InterlockedCompareExchangePointer((PVOID *)Op->Slot, NULL, Op);
 
     if (InterlockedDecrement(&Op->Refs) == 0)
     {
@@ -465,7 +486,7 @@ DnsCancelQuery(PDNS_QUERY_CANCEL pCancelHandle)
     if (pCancelHandle == NULL)
         return;
 
-    Op = InterlockedExchangePointer((PVOID *)pCancelHandle->Reserved, NULL);
+    Op = DnsQueryExClaimSlot(pCancelHandle);
     if (Op == NULL)
         return;
 
@@ -544,13 +565,13 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
     InitializeCriticalSection(&Op->Lock);
 
     if (pCancelHandle)
-        *(PDNSAPI_ASYNC_QUERY *)pCancelHandle->Reserved = Op;
+        RtlCopyMemory(pCancelHandle->Reserved, &Op, sizeof(Op));
 
     Thread = CreateThread(NULL, 0, DnsQueryExWorker, Op, 0, NULL);
     if (Thread == NULL)
     {
         if (pCancelHandle)
-            *(PDNSAPI_ASYNC_QUERY *)pCancelHandle->Reserved = NULL;
+            RtlZeroMemory(pCancelHandle->Reserved, sizeof(Op));
         DeleteCriticalSection(&Op->Lock);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Op->Name);
         RtlFreeHeap(RtlGetProcessHeap(), 0, Op);
