@@ -2669,22 +2669,6 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         }
     }
 
-    /* Reserved access bits refuse the duplicate before any type or privilege check */
-    if (!(Options & DUPLICATE_SAME_ACCESS) && (DesiredAccess & OBP_RESERVED_ACCESS_BITS) != 0)
-    {
-        /* Close the source when the caller asked for it, as the other failures do */
-        if (Options & DUPLICATE_CLOSE_SOURCE)
-        {
-            KeStackAttachProcess(&SourceProcess->Pcb, &ApcState);
-            NtClose(SourceHandle);
-            KeUnstackDetachProcess(&ApcState);
-        }
-
-        ObDereferenceProcessHandleTable(SourceProcess);
-        ObDereferenceObject(SourceObject);
-        return STATUS_ACCESS_DENIED;
-    }
-
     /* Check if there's no target process */
     if (!TargetProcess)
     {
@@ -2708,6 +2692,22 @@ ObDuplicateObject(IN PEPROCESS SourceProcess,
         ObDereferenceProcessHandleTable(SourceProcess);
         ObDereferenceObject(SourceObject);
         return Status;
+    }
+
+    /* Reserved access bits refuse the duplicate before any type or privilege check */
+    if (!(Options & DUPLICATE_SAME_ACCESS) && (DesiredAccess & OBP_RESERVED_ACCESS_BITS) != 0)
+    {
+        /* Close the source when the caller asked for it, as the other failures do */
+        if (Options & DUPLICATE_CLOSE_SOURCE)
+        {
+            KeStackAttachProcess(&SourceProcess->Pcb, &ApcState);
+            NtClose(SourceHandle);
+            KeUnstackDetachProcess(&ApcState);
+        }
+
+        ObDereferenceProcessHandleTable(SourceProcess);
+        ObDereferenceObject(SourceObject);
+        return STATUS_ACCESS_DENIED;
     }
 
     /* Create a kernel handle if asked, but only in the system process */
