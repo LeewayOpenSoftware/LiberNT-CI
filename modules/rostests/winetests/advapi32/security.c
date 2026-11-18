@@ -9114,10 +9114,11 @@ static void test_GetSecurityInfo(void)
     }
 #ifdef __REACTOS__
     ok(admins_ace_id != -1,
+       "Builtin Admins ACE not found.\n");
 #else
     ok(admins_ace_id != -1 || broken(admins_ace_id == -1) /* xp */,
-#endif
        "Builtin Admins ACE not found.\n");
+#endif
     if (admins_ace_id != -1)
     {
         bret = GetAce(pDacl, admins_ace_id, (VOID **)&ace);
@@ -9130,10 +9131,11 @@ static void test_GetSecurityInfo(void)
 #else
 #ifdef __REACTOS__
         ok(ace->Mask == PROCESS_ALL_ACCESS,
+           "Builtin Admins ACE has unexpected mask (0x%lx != 0x%x)\n", ace->Mask, PROCESS_ALL_ACCESS);
 #else
         ok(ace->Mask == PROCESS_ALL_ACCESS || broken(ace->Mask == 0x1f0fff) /* win2k */,
-#endif
            "Builtin Admins ACE has unexpected mask (0x%lx != 0x%x)\n", ace->Mask, PROCESS_ALL_ACCESS);
+#endif
 #endif
     }
     LocalFree(pSD);

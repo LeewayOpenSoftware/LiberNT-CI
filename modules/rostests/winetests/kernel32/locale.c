@@ -4519,14 +4519,16 @@ static void test_ConvertDefaultLocale(void)
       broken( lcid == 0x0404 ),  /* vista */
       "Expected lcid = %08x got %08lx\n", MAKELANGID( LANG_CHINESE, SUBLANG_CHINESE_HONGKONG ), lcid );
   lcid = ConvertDefaultLocale( LANG_SERBIAN_NEUTRAL );
-  ok( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ) ||
 #ifdef __REACTOS__
+  ok( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ) ||
       broken( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_LATIN ) ) || /* Vista */
       broken( lcid == LANG_SERBIAN_NEUTRAL ),  /* WS03 */
-#else
-      broken( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_LATIN ) ),  /* <= vista */
-#endif
       "Expected lcid = %08x got %08lx\n", MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ), lcid );
+#else
+  ok( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ) ||
+      broken( lcid == MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_LATIN ) ),  /* <= vista */
+      "Expected lcid = %08x got %08lx\n", MAKELANGID( LANG_SERBIAN, SUBLANG_SERBIAN_SERBIA_LATIN ), lcid );
+#endif
 
   /* Invariant language is not treated specially */
   TEST_LCID(LANG_INVARIANT, SUBLANG_DEFAULT, SORT_DEFAULT);

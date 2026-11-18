@@ -25,9 +25,9 @@ FUNC X87InvalidOperation
     fninit
     fldcw word ptr [rcx]
     fld qword ptr [rdx]
-X87InvalidOperationFault:
+GLOBAL_LABEL X87InvalidOperationFault
     fsqrt
-X87InvalidOperationWait:
+GLOBAL_LABEL X87InvalidOperationWait
     fwait
     fnstsw word ptr [r8 + 8]
     fninit
@@ -49,9 +49,9 @@ FUNC X87StackFault
     fld1
     fld1
     fld1
-X87StackFaultFault:
+GLOBAL_LABEL X87StackFaultFault
     fld1
-X87StackFaultWait:
+GLOBAL_LABEL X87StackFaultWait
     fwait
     fnstsw word ptr [r8 + 8]
     fninit
@@ -65,9 +65,9 @@ FUNC X87Denormal
     .ENDPROLOG
     fninit
     fldcw word ptr [rcx]
-X87DenormalFault:
+GLOBAL_LABEL X87DenormalFault
     fld qword ptr [rdx]
-X87DenormalWait:
+GLOBAL_LABEL X87DenormalWait
     fwait
     fnstsw word ptr [r8 + 8]
     fninit
@@ -82,9 +82,9 @@ FUNC X87ZeroDivide
     fninit
     fldcw word ptr [rcx]
     fld1
-X87ZeroDivideFault:
+GLOBAL_LABEL X87ZeroDivideFault
     fdiv qword ptr [rdx]
-X87ZeroDivideWait:
+GLOBAL_LABEL X87ZeroDivideWait
     fwait
     fnstsw word ptr [r8 + 8]
     fninit
@@ -100,9 +100,9 @@ FUNC X87Overflow
     fldcw word ptr [rcx]
     fld qword ptr [rdx]
     fmul st(0), st(0)
-X87OverflowFault:
+GLOBAL_LABEL X87OverflowFault
     fstp qword ptr [r8]
-X87OverflowWait:
+GLOBAL_LABEL X87OverflowWait
     fwait
     fnstsw word ptr [r8 + 8]
     fninit
@@ -118,9 +118,9 @@ FUNC X87Underflow
     fldcw word ptr [rcx]
     fld qword ptr [rdx]
     fmul st(0), st(0)
-X87UnderflowFault:
+GLOBAL_LABEL X87UnderflowFault
     fstp qword ptr [r8]
-X87UnderflowWait:
+GLOBAL_LABEL X87UnderflowWait
     fwait
     fnstsw word ptr [r8 + 8]
     fninit
@@ -135,9 +135,9 @@ FUNC X87Precision
     fninit
     fldcw word ptr [rcx]
     fld1
-X87PrecisionFault:
+GLOBAL_LABEL X87PrecisionFault
     fdiv qword ptr [rdx]
-X87PrecisionWait:
+GLOBAL_LABEL X87PrecisionWait
     fwait
     fnstsw word ptr [r8 + 8]
     fninit
