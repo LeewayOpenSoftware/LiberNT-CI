@@ -288,6 +288,8 @@ typedef struct _XHCI_UCX_DEVICE
     BOOLEAN ControllerRunning;
     BOOLEAN InterruptsArmed;
     BOOLEAN FatalError;
+    BOOLEAN SelfEnumerate;                     /* UseUcx=2: the M2 client-driven enumeration owns the
+                                                  ports; FALSE: the hub driver does, through ucx01000 */
     volatile LONG PendingUsbSts;               /* USBSTS bits latched by the ISR for the DPC */
 } XHCI_UCX_DEVICE, *PXHCI_UCX_DEVICE;
 
@@ -302,6 +304,46 @@ XhciUcxFindSlotById(
 
 /* -1 = not read yet, 0 = legacy usbport, 1 = UCX client path */
 static LONG g_XhciUcxSwitch = -1;
+static LONG g_XhciUcxSelfEnumerate = 0;
+
+/*
+ * Client context on the UCX root hub object: the root hub callbacks get the
+ * UCXROOTHUB handle and find their device through it.
+ */
+typedef struct _XHCI_UCX_ROOTHUB_CLIENT {
+    PXHCI_UCX_DEVICE Dev;
+} XHCI_UCX_ROOTHUB_CLIENT, *PXHCI_UCX_ROOTHUB_CLIENT;
+
+WDF_DECLARE_CONTEXT_TYPE_WITH_NAME(XHCI_UCX_ROOTHUB_CLIENT, XhciUcxGetRootHubClient)
+
+/* Hub class feature selectors (USB 2.0 11.24.2, USB 3.2 10.16.2) */
+#define XHCI_UCX_FEATURE_C_HUB_LOCAL_POWER      0
+#define XHCI_UCX_FEATURE_C_HUB_OVER_CURRENT     1
+#define XHCI_UCX_FEATURE_PORT_CONNECTION        0
+#define XHCI_UCX_FEATURE_PORT_ENABLE            1
+#define XHCI_UCX_FEATURE_PORT_SUSPEND           2
+#define XHCI_UCX_FEATURE_PORT_OVER_CURRENT      3
+#define XHCI_UCX_FEATURE_PORT_RESET             4
+#define XHCI_UCX_FEATURE_PORT_LINK_STATE        5
+#define XHCI_UCX_FEATURE_PORT_POWER             8
+#define XHCI_UCX_FEATURE_C_PORT_CONNECTION      16
+#define XHCI_UCX_FEATURE_C_PORT_ENABLE          17
+#define XHCI_UCX_FEATURE_C_PORT_SUSPEND         18
+#define XHCI_UCX_FEATURE_C_PORT_OVER_CURRENT    19
+#define XHCI_UCX_FEATURE_C_PORT_RESET           20
+#define XHCI_UCX_FEATURE_PORT_U1_TIMEOUT        23
+#define XHCI_UCX_FEATURE_PORT_U2_TIMEOUT        24
+#define XHCI_UCX_FEATURE_C_PORT_LINK_STATE      25
+#define XHCI_UCX_FEATURE_C_PORT_CONFIG_ERROR    26
+#define XHCI_UCX_FEATURE_PORT_REMOTE_WAKE_MASK  27
+#define XHCI_UCX_FEATURE_BH_PORT_RESET          28
+#define XHCI_UCX_FEATURE_C_BH_PORT_RESET        29
+#define XHCI_UCX_FEATURE_FORCE_LINKPM_ACCEPT    30
+
+/* Hub descriptor wHubCharacteristics */
+#define XHCI_UCX_HUB_CHAR_POWER_INDIVIDUAL      0x0001
+#define XHCI_UCX_HUB_CHAR_NO_POWER_SWITCHING    0x0002
+#define XHCI_UCX_HUB_CHAR_OVERCURRENT_PER_PORT  0x0008
 /* Non-zero while FxDriverEntry is on the stack (it re-enters DriverEntry). */
 static LONG g_XhciUcxInsideWdfBind = 0;
 
@@ -386,9 +428,15 @@ XHCI_UcxSwitchEnabled(
     }
     ExFreePoolWithTag(ParametersPath.Buffer, XHCI_TAG);
 
-    g_XhciUcxSwitch = (UseUcx == 1) ? 1 : 0;
+    /* 1 = UCX path, hub-driven: ucx01000 owns the root hub PDO and usbhub binds to it (M3).
+     * 2 = UCX path, client-driven enumeration and BOT probe (the M2 demo legs).
+     * Anything else = legacy usbport. */
+    g_XhciUcxSwitch = (UseUcx == 1 || UseUcx == 2) ? 1 : 0;
+    g_XhciUcxSelfEnumerate = (UseUcx == 2) ? 1 : 0;
     if (g_XhciUcxSwitch)
-        XHCI_UCX_LOG("UseUcx=1: selecting the UCX client path (legacy usbport is the fallback)");
+        XHCI_UCX_LOG("UseUcx=%lu: selecting the UCX client path, %s (legacy usbport is the fallback)",
+                     UseUcx, g_XhciUcxSelfEnumerate ? "client-driven enumeration (M2 demo)"
+                                                    : "hub-driven through the ucx01000 root hub PDO");
 
     return (g_XhciUcxSwitch != 0);
 }
@@ -1101,7 +1149,11 @@ XhciUcxHandlePortChange(
                  Changes,
                  (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] == 3) ? 3 : 2);
 
-    if (Changes != 0)
+    /* Hub-driven (UseUcx=1): the change bits are the hub driver's to read
+     * (GET_PORT_STATUS) and to clear (CLEAR_FEATURE C_PORT_*); acknowledging
+     * them here would hide the change from it. Client-driven (UseUcx=2): we
+     * are the hub and acknowledge now. */
+    if (Changes != 0 && Dev->SelfEnumerate)
     {
         /* Acknowledge (W1C) the change bits while preserving every plain RW bit
          * (PP, PIC, WCE/WDE/WOE): a bare write of the change mask writes PP=0
@@ -2939,6 +2991,246 @@ XhciUcxEvtControllerQueryUsbCapability(
     return STATUS_NOT_SUPPORTED;
 }
 
+/* --------------------------------------------------------------------------
+ * Root hub as the hub driver sees it (M3): hub class requests on PORTSC.
+ * ucx01000 owns the PDO, the standard requests and the status-change pipe; it
+ * hands us the hub descriptor, hub/port status and port feature requests with
+ * the URB header, device handle and buffer already checked.
+ * -------------------------------------------------------------------------- */
+
+/*
+ * One PORTSC read-modify-write that never acknowledges a change bit by
+ * accident: all RW1C/RW1S bits are masked out first, then only what the caller
+ * names is written. PED is RW1C-to-disable, so it is reachable through SetBits.
+ */
+static
+VOID
+XhciUcxPortScModify(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG PortId,
+    _In_ ULONG SetBits,
+    _In_ ULONG ClearBits,
+    _In_ BOOLEAN SetLinkState,
+    _In_ ULONG LinkState)
+{
+    volatile ULONG *PortSc = &Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl;
+    ULONG Value = XHCI_UCX_READ_REG(PortSc);
+
+    Value &= ~(XHCI_PORTSC_CHANGE_MASK | XHCI_PORTSC_PED | XHCI_PORTSC_PR | XHCI_PORTSC_WPR | XHCI_PORTSC_LWS);
+    Value &= ~ClearBits;
+    if (SetLinkState)
+        Value = (Value & ~XHCI_PORTSC_PLS_MASK) | XHCI_PORTSC_PLS(LinkState) | XHCI_PORTSC_LWS;
+    XHCI_UCX_WRITE_REG(PortSc, Value | SetBits);
+}
+
+/* USB hub port status and change words from a PORTSC value (USB 2.0 11.24.2.7, USB 3.2 10.16.2.6) */
+static
+VOID
+XhciUcxPortStatusFromPortSc(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG PortId,
+    _In_ ULONG PortSc,
+    _Out_ PUSB_PORT_STATUS_AND_CHANGE Out)
+{
+    BOOLEAN Usb3 = (PortId <= XHCI_MAX_PORTS && Dev->PortProtocol[PortId] == 3);
+    ULONG LinkState = (PortSc & XHCI_PORTSC_PLS_MASK) >> XHCI_PORTSC_PLS_SHIFT;
+    ULONG Speed = (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
+
+    RtlZeroMemory(Out, sizeof(*Out));
+
+    if (PortSc & XHCI_PORTSC_CCS)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_CONNECT;
+    if (PortSc & XHCI_PORTSC_PED)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_ENABLE;
+    if (PortSc & XHCI_PORTSC_OCA)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_OVER_CURRENT;
+    if (PortSc & XHCI_PORTSC_PR)
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_RESET;
+    if (!Dev->PortPowerControl || (PortSc & XHCI_PORTSC_PP))
+        Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_POWER;
+
+    if (Usb3)
+    {
+        /* Link state bits 5-8; negotiated speed 0 = SuperSpeed */
+        Out->PortStatus.Usb30PortStatus.PortLinkState = (USHORT)LinkState;
+        Out->PortStatus.Usb30PortStatus.NegotiatedDeviceSpeed = 0;
+    }
+    else
+    {
+        if (LinkState == PORT_LINK_STATE_U3)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_SUSPEND;
+        if (Speed == XHCI_PORTSC_SPEED_LOW)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_LOW_SPEED;
+        else if (Speed == XHCI_PORTSC_SPEED_HIGH)
+            Out->PortStatus.AsUshort16 |= USB_PORT_STATUS_HIGH_SPEED;
+    }
+
+    if (PortSc & XHCI_PORTSC_CSC)
+        Out->PortChange.Usb20PortChange.ConnectStatusChange = 1;
+    if ((PortSc & XHCI_PORTSC_PEC) && !Usb3)
+        Out->PortChange.Usb20PortChange.PortEnableDisableChange = 1;
+    if (PortSc & XHCI_PORTSC_OCC)
+        Out->PortChange.Usb20PortChange.OverCurrentIndicatorChange = 1;
+    if (PortSc & XHCI_PORTSC_PRC)
+        Out->PortChange.Usb20PortChange.ResetChange = 1;
+    if (PortSc & XHCI_PORTSC_PLC)
+    {
+        if (Usb3)
+            Out->PortChange.Usb30PortChange.PortLinkStateChange = 1;
+        else
+            Out->PortChange.Usb20PortChange.SuspendChange = 1;
+    }
+    if (Usb3)
+    {
+        if (PortSc & XHCI_PORTSC_WRC)
+            Out->PortChange.Usb30PortChange.BHResetChange = 1;
+        if (PortSc & XHCI_PORTSC_CEC)
+            Out->PortChange.Usb30PortChange.PortConfigErrorChange = 1;
+    }
+}
+
+/* Builds the hub descriptor the hub driver asked for into Buffer; returns the bytes written */
+static
+ULONG
+XhciUcxBuildHubDescriptor(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ UCHAR DescriptorType,
+    _Out_writes_bytes_(Length) PUCHAR Buffer,
+    _In_ ULONG Length)
+{
+    USHORT Characteristics = XHCI_UCX_HUB_CHAR_OVERCURRENT_PER_PORT |
+                             (Dev->PortPowerControl ? XHCI_UCX_HUB_CHAR_POWER_INDIVIDUAL
+                                                    : XHCI_UCX_HUB_CHAR_NO_POWER_SWITCHING);
+    ULONG Ports = Dev->NumberOfPorts;
+    ULONG Copy;
+
+    if (DescriptorType == USB_30_HUB_DESCRIPTOR_TYPE)
+    {
+        /* 12 bytes: the two DeviceRemovable bytes say every port is removable */
+        UCHAR Descriptor[12];
+
+        RtlZeroMemory(Descriptor, sizeof(Descriptor));
+        Descriptor[0] = sizeof(Descriptor);
+        Descriptor[1] = USB_30_HUB_DESCRIPTOR_TYPE;
+        Descriptor[2] = (UCHAR)Ports;
+        Descriptor[3] = (UCHAR)(Characteristics & 0xFF);
+        Descriptor[4] = (UCHAR)(Characteristics >> 8);
+        Descriptor[5] = 2;      /* bPowerOnToPowerGood: 4 ms */
+        Descriptor[6] = 0;      /* bHubControlCurrent */
+        Descriptor[7] = 0;      /* bHubHdrDecLat */
+        Descriptor[8] = 0;      /* wHubDelay */
+        Descriptor[9] = 0;
+        Copy = min(Length, (ULONG)sizeof(Descriptor));
+        RtlCopyMemory(Buffer, Descriptor, Copy);
+        return Copy;
+    }
+    else
+    {
+        /* USB 2.0 hub descriptor: 7 bytes + DeviceRemovable + PortPwrCtrlMask */
+        UCHAR Descriptor[7 + 2 * ((XHCI_MAX_PORTS + 1 + 7) / 8)];
+        ULONG MaskBytes = (Ports + 1 + 7) / 8;
+        ULONG Total = 7 + 2 * MaskBytes;
+        ULONG i;
+
+        RtlZeroMemory(Descriptor, sizeof(Descriptor));
+        Descriptor[0] = (UCHAR)Total;
+        Descriptor[1] = USB_20_HUB_DESCRIPTOR_TYPE;
+        Descriptor[2] = (UCHAR)Ports;
+        Descriptor[3] = (UCHAR)(Characteristics & 0xFF);
+        Descriptor[4] = (UCHAR)(Characteristics >> 8);
+        Descriptor[5] = 2;
+        Descriptor[6] = 0;
+        for (i = 0; i < MaskBytes; i++)
+            Descriptor[7 + MaskBytes + i] = 0xFF;   /* PortPwrCtrlMask, all ones as required */
+        Copy = min(Length, Total);
+        RtlCopyMemory(Buffer, Descriptor, Copy);
+        return Copy;
+    }
+}
+
+/* SET_FEATURE / CLEAR_FEATURE on a port; FALSE = STALL (unknown or unsupported selector) */
+static
+BOOLEAN
+XhciUcxPortFeature(
+    _In_ PXHCI_UCX_DEVICE Dev,
+    _In_ ULONG PortId,
+    _In_ USHORT Feature,
+    _In_ UCHAR Selector,
+    _In_ BOOLEAN Set)
+{
+    if (Set)
+    {
+        switch (Feature)
+        {
+            case XHCI_UCX_FEATURE_PORT_RESET:
+                XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PR, 0, FALSE, 0);
+                return TRUE;
+            case XHCI_UCX_FEATURE_BH_PORT_RESET:
+                XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_WPR, 0, FALSE, 0);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_POWER:
+                if (Dev->PortPowerControl)
+                    XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PP, 0, FALSE, 0);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_SUSPEND:
+                XhciUcxPortScModify(Dev, PortId, 0, 0, TRUE, PORT_LINK_STATE_U3);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_LINK_STATE:
+                if (Selector > PORT_LINK_STATE_U3 && Selector != PORT_LINK_STATE_DISABLED &&
+                    Selector != PORT_LINK_STATE_RX_DETECT && Selector != PORT_LINK_STATE_COMPLIANCE_MODE)
+                    return FALSE;
+                XhciUcxPortScModify(Dev, PortId, 0, 0, TRUE, Selector);
+                return TRUE;
+            case XHCI_UCX_FEATURE_PORT_ENABLE:          /* xHCI ports enable themselves */
+            case XHCI_UCX_FEATURE_PORT_U1_TIMEOUT:
+            case XHCI_UCX_FEATURE_PORT_U2_TIMEOUT:
+            case XHCI_UCX_FEATURE_PORT_REMOTE_WAKE_MASK:
+            case XHCI_UCX_FEATURE_FORCE_LINKPM_ACCEPT:
+                return TRUE;                            /* accepted, no effect yet (M4) */
+            default:
+                return FALSE;
+        }
+    }
+
+    switch (Feature)
+    {
+        case XHCI_UCX_FEATURE_PORT_ENABLE:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PED, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_PORT_SUSPEND:
+            XhciUcxPortScModify(Dev, PortId, 0, 0, TRUE, PORT_LINK_STATE_U0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_PORT_POWER:
+            if (Dev->PortPowerControl)
+                XhciUcxPortScModify(Dev, PortId, 0, XHCI_PORTSC_PP, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_CONNECTION:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_CSC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_ENABLE:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PEC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_SUSPEND:
+        case XHCI_UCX_FEATURE_C_PORT_LINK_STATE:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PLC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_OVER_CURRENT:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_OCC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_RESET:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_PRC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_BH_PORT_RESET:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_WRC, 0, FALSE, 0);
+            return TRUE;
+        case XHCI_UCX_FEATURE_C_PORT_CONFIG_ERROR:
+            XhciUcxPortScModify(Dev, PortId, XHCI_PORTSC_CEC, 0, FALSE, 0);
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+
 static
 VOID
 NTAPI
@@ -2946,9 +3238,153 @@ XhciUcxEvtRootHubControlUrb(
     _In_ UCXROOTHUB RootHub,
     _In_ WDFREQUEST Request)
 {
-    UNREFERENCED_PARAMETER(RootHub);
-    /* Root-hub class requests (port status / features) arrive with step 3 */
-    WdfRequestComplete(Request, STATUS_NOT_IMPLEMENTED);
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetRootHubClient((WDFOBJECT)RootHub)->Dev;
+    PURB Urb = (PURB)UcxRequestGetUrb(Request);
+    struct _URB_CONTROL_VENDOR_OR_CLASS_REQUEST *Class = &Urb->UrbControlVendorClassRequest;
+    USBD_STATUS UsbdStatus = USBD_STATUS_STALL_PID;
+    PUCHAR Buffer;
+    ULONG Length;
+    UCHAR Request_, DescriptorType;
+    USHORT Value, Index;
+    BOOLEAN Done = FALSE;
+
+    if (Dev == NULL || !Dev->HardwarePrepared || Dev->OperationalRegisters == NULL)
+    {
+        Urb->UrbHeader.Status = USBD_STATUS_DEVICE_GONE;
+        WdfRequestComplete(Request, STATUS_DEVICE_NOT_CONNECTED);
+        return;
+    }
+
+    /* A hub descriptor can arrive as a standard GET_DESCRIPTOR or as a class request */
+    if (Urb->UrbHeader.Function == URB_FUNCTION_GET_DESCRIPTOR_FROM_DEVICE)
+    {
+        struct _URB_CONTROL_DESCRIPTOR_REQUEST *Desc = &Urb->UrbControlDescriptorRequest;
+
+        Length = Desc->TransferBufferLength;
+        Buffer = (PUCHAR)UcxUrbTransferBuffer(Desc->TransferBuffer, Desc->TransferBufferMDL, Length);
+        if (Buffer == NULL && Length != 0)
+        {
+            UsbdStatus = USBD_STATUS_INVALID_PARAMETER;
+        }
+        else
+        {
+            Desc->TransferBufferLength = XhciUcxBuildHubDescriptor(Dev, Desc->DescriptorType, Buffer, Length);
+            UsbdStatus = USBD_STATUS_SUCCESS;
+        }
+        Urb->UrbHeader.Status = UsbdStatus;
+        WdfRequestComplete(Request, USBD_SUCCESS(UsbdStatus) ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    Request_ = Class->Request;
+    Value = Class->Value;
+    Index = Class->Index;
+    Length = Class->TransferBufferLength;
+    Buffer = (PUCHAR)UcxUrbTransferBuffer(Class->TransferBuffer, Class->TransferBufferMDL, Length);
+    if (Buffer == NULL && Length != 0)
+    {
+        Urb->UrbHeader.Status = USBD_STATUS_INVALID_PARAMETER;
+        WdfRequestComplete(Request, STATUS_INVALID_PARAMETER);
+        return;
+    }
+
+    if (Urb->UrbHeader.Function == URB_FUNCTION_CLASS_DEVICE)
+    {
+        switch (Request_)
+        {
+            case USB_REQUEST_GET_DESCRIPTOR:
+                DescriptorType = (UCHAR)(Value >> 8);
+                if (DescriptorType != USB_20_HUB_DESCRIPTOR_TYPE && DescriptorType != USB_30_HUB_DESCRIPTOR_TYPE)
+                    break;
+                Class->TransferBufferLength = XhciUcxBuildHubDescriptor(Dev, DescriptorType, Buffer, Length);
+                UsbdStatus = USBD_STATUS_SUCCESS;
+                Done = TRUE;
+                break;
+
+            case USB_REQUEST_GET_STATUS:
+                /* wHubStatus | wHubChange: local power good, no over-current, no change */
+                if (Buffer != NULL)
+                    RtlZeroMemory(Buffer, min(Length, 4UL));
+                Class->TransferBufferLength = min(Length, 4UL);
+                UsbdStatus = USBD_STATUS_SUCCESS;
+                Done = TRUE;
+                break;
+
+            case USB_REQUEST_CLEAR_FEATURE:
+                if (Value == XHCI_UCX_FEATURE_C_HUB_LOCAL_POWER || Value == XHCI_UCX_FEATURE_C_HUB_OVER_CURRENT)
+                {
+                    UsbdStatus = USBD_STATUS_SUCCESS;
+                    Done = TRUE;
+                }
+                break;
+
+            default:
+                break;
+        }
+    }
+    else if (Urb->UrbHeader.Function == URB_FUNCTION_CLASS_OTHER)
+    {
+        ULONG PortId = Index & 0xFF;
+        UCHAR Selector = (UCHAR)(Index >> 8);
+
+        if (PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS)
+        {
+            XHCI_UCX_LOG("root hub: port %lu out of range for class request %u", PortId, Request_);
+        }
+        else
+        {
+            switch (Request_)
+            {
+                case USB_REQUEST_GET_STATUS:
+                {
+                    USB_PORT_STATUS_AND_CHANGE PortStatus;
+                    ULONG PortSc = XHCI_UCX_READ_REG(
+                        &Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl);
+
+                    XhciUcxPortStatusFromPortSc(Dev, PortId, PortSc, &PortStatus);
+                    if (Buffer != NULL)
+                        RtlCopyMemory(Buffer, &PortStatus, min(Length, (ULONG)sizeof(PortStatus)));
+                    Class->TransferBufferLength = min(Length, (ULONG)sizeof(PortStatus));
+                    XHCI_UCX_TRACE("root hub: port %lu status %04X change %04X (PORTSC %08lx)",
+                                   PortId, PortStatus.PortStatus.AsUshort16,
+                                   PortStatus.PortChange.AsUshort16, PortSc);
+                    UsbdStatus = USBD_STATUS_SUCCESS;
+                    Done = TRUE;
+                    break;
+                }
+
+                case USB_REQUEST_SET_FEATURE:
+                case USB_REQUEST_CLEAR_FEATURE:
+                    if (XhciUcxPortFeature(Dev, PortId, Value, Selector, (Request_ == USB_REQUEST_SET_FEATURE)))
+                    {
+                        XHCI_UCX_TRACE("root hub: port %lu %s feature %u (selector %u)",
+                                       PortId, (Request_ == USB_REQUEST_SET_FEATURE) ? "set" : "clear",
+                                       Value, Selector);
+                        UsbdStatus = USBD_STATUS_SUCCESS;
+                        Done = TRUE;
+                    }
+                    else
+                    {
+                        XHCI_UCX_LOG("root hub: port %lu %s feature %u not supported",
+                                     PortId, (Request_ == USB_REQUEST_SET_FEATURE) ? "set" : "clear", Value);
+                    }
+                    break;
+
+                default:
+                    break;
+            }
+        }
+    }
+
+    if (!Done)
+    {
+        /* Anything the hub does not implement is a STALL, as a real hub answers */
+        UsbdStatus = USBD_STATUS_STALL_PID;
+        Class->TransferBufferLength = 0;
+    }
+
+    Urb->UrbHeader.Status = UsbdStatus;
+    WdfRequestComplete(Request, USBD_SUCCESS(UsbdStatus) ? STATUS_SUCCESS : STATUS_UNSUCCESSFUL);
 }
 
 static
@@ -2959,7 +3395,47 @@ XhciUcxEvtRootHubGetInfo(
     _In_ WDFREQUEST Request)
 {
     UNREFERENCED_PARAMETER(RootHub);
-    WdfRequestComplete(Request, STATUS_NOT_IMPLEMENTED);
+    /* The port counts travel in UCX_ROOTHUB_CONFIG; nothing else is asked yet */
+    WdfRequestComplete(Request, STATUS_NOT_SUPPORTED);
+}
+
+/*
+ * Status-change bitmap for the hub driver's interrupt pipe: bit N for port N
+ * whose PORTSC still carries a change bit (the hub clears them one by one
+ * through CLEAR_FEATURE). Bit 0 (the hub itself) never changes. At most
+ * Length bytes are written. Runs at <= DISPATCH_LEVEL.
+ */
+static
+BOOLEAN
+NTAPI
+XhciUcxEvtRootHubGetPortChangeBitmap(
+    _In_ UCXROOTHUB RootHub,
+    _Out_writes_bytes_(Length) PUCHAR Bitmap,
+    _In_ ULONG Length)
+{
+    PXHCI_UCX_DEVICE Dev = XhciUcxGetRootHubClient((WDFOBJECT)RootHub)->Dev;
+    BOOLEAN Any = FALSE;
+    ULONG PortId;
+
+    if (Dev == NULL || !Dev->HardwarePrepared || Dev->OperationalRegisters == NULL || Length == 0)
+        return FALSE;
+
+    RtlZeroMemory(Bitmap, Length);
+    for (PortId = 1; PortId <= Dev->NumberOfPorts && PortId <= XHCI_MAX_PORTS; PortId++)
+    {
+        ULONG PortSc = XHCI_UCX_READ_REG(&Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl);
+
+        if ((PortSc & XHCI_PORTSC_CHANGE_MASK) == 0)
+            continue;
+        if ((PortId / 8) >= Length)
+            break;
+        Bitmap[PortId / 8] |= (UCHAR)(1u << (PortId % 8));
+        Any = TRUE;
+    }
+
+    if (Any)
+        XHCI_UCX_LOG("root hub: status change bitmap delivered to the hub driver");
+    return Any;
 }
 
 /* --------------------------------------------------------------------------
@@ -3056,8 +3532,10 @@ XhciUcxEvtInterruptDpc(
                 XHCI_UCX_LOG("root hub port change -> UcxRootHubPortChanged");
                 UcxRootHubPortChanged(Dev->RootHub);
             }
-            /* Step 3: reconcile ports with device slots at PASSIVE_LEVEL */
-            XhciUcxRequestPortRescan(Dev);
+            /* M2 demo only: reconcile ports with device slots at PASSIVE_LEVEL.
+             * Hub-driven, the hub driver reacts to the status change instead. */
+            if (Dev->SelfEnumerate)
+                XhciUcxRequestPortRescan(Dev);
         }
     }
 }
@@ -3284,6 +3762,22 @@ XhciUcxCreateUcxObjects(
     ControllerConfig.EvtControllerReset = XhciUcxEvtControllerReset;
     ControllerConfig.EvtControllerQueryUsbCapability = XhciUcxEvtControllerQueryUsbCapability;
 
+    /* The PCI identity names the root hub (USB\ROOT_HUB30&VID_&PID_&REV_) and
+     * fills its device descriptor; absent (ACPI-enumerated controller) the
+     * root hub still enumerates under the bare id. */
+    {
+        USHORT Ids[2] = { 0, 0 };
+        UCHAR Revision = 0;
+
+        if (XhciUcxPciRead(Dev, 0x00, Ids, sizeof(Ids)))
+        {
+            ControllerConfig.VendorId = Ids[0];
+            ControllerConfig.DeviceId = Ids[1];
+        }
+        if (XhciUcxPciRead(Dev, 0x08, &Revision, sizeof(Revision)))
+            ControllerConfig.RevisionId = Revision;
+    }
+
     Status = UcxControllerCreate(Dev->Device, &ControllerConfig, WDF_NO_OBJECT_ATTRIBUTES, &Dev->Controller);
     XHCI_UCX_LOG("UcxControllerCreate rc=0x%08lX", (ULONG)Status);
     if (!NT_SUCCESS(Status))
@@ -3298,8 +3792,17 @@ XhciUcxCreateUcxObjects(
     RootHubConfig.NumberOf30Ports = Dev->NumberOf30Ports;
     RootHubConfig.EvtRootHubControlUrb = XhciUcxEvtRootHubControlUrb;
     RootHubConfig.EvtRootHubGetInfo = XhciUcxEvtRootHubGetInfo;
+    RootHubConfig.EvtRootHubGetPortChangeBitmap = XhciUcxEvtRootHubGetPortChangeBitmap;
 
-    Status = UcxRootHubCreate(Dev->Controller, &RootHubConfig, WDF_NO_OBJECT_ATTRIBUTES, &Dev->RootHub);
+    {
+        WDF_OBJECT_ATTRIBUTES RootHubAttributes;
+
+        /* Our context on the UCX object: the callbacks' way back to Dev */
+        WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&RootHubAttributes, XHCI_UCX_ROOTHUB_CLIENT);
+        Status = UcxRootHubCreate(Dev->Controller, &RootHubConfig, &RootHubAttributes, &Dev->RootHub);
+    }
+    if (NT_SUCCESS(Status))
+        XhciUcxGetRootHubClient((WDFOBJECT)Dev->RootHub)->Dev = Dev;
     XHCI_UCX_LOG("UcxRootHubCreate rc=0x%08lX ports USB2=%u USB3=%u",
                  (ULONG)Status, Dev->NumberOf20Ports, Dev->NumberOf30Ports);
     if (!NT_SUCCESS(Status))
@@ -3467,7 +3970,8 @@ XhciUcxEvtDeviceD0EntryPostInterruptsEnabled(
             XHCI_UCX_LOG("initial root hub port change -> UcxRootHubPortChanged");
             UcxRootHubPortChanged(Dev->RootHub);
         }
-        XhciUcxRequestPortRescan(Dev);
+        if (Dev->SelfEnumerate)
+            XhciUcxRequestPortRescan(Dev);
     }
 
     XHCI_UCX_LOG("STEP2 DONE: interrupter 0 armed (IMAN=%08lx), event ring live",
@@ -3584,6 +4088,7 @@ XhciUcxEvtDeviceAdd(
     Dev = XhciUcxGetDevice(Device);
     RtlZeroMemory(Dev, sizeof(*Dev));
     Dev->Device = Device;
+    Dev->SelfEnumerate = (g_XhciUcxSelfEnumerate != 0);
     KeInitializeSpinLock(&Dev->EventRingLock);
     KeInitializeEvent(&Dev->CommandEvent, NotificationEvent, FALSE);
     KeInitializeEvent(&Dev->TransferEvent, NotificationEvent, FALSE);

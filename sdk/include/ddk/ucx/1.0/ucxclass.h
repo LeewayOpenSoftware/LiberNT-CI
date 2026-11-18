@@ -61,6 +61,12 @@ typedef struct _UCX_CONTROLLER_CONFIG {
     USHORT NumberOfRootHubs;
     PFN_UCX_CONTROLLER_RESET                 EvtControllerReset;
     PFN_UCX_CONTROLLER_QUERY_USB_CAPABILITY  EvtControllerQueryUsbCapability;
+    /* Optional (M3): the controller's PCI identity, carried into the root hub's
+     * hardware id and device descriptor. All zero when the client has no bus
+     * interface; the root hub still enumerates. */
+    USHORT VendorId;
+    USHORT DeviceId;
+    USHORT RevisionId;
 } UCX_CONTROLLER_CONFIG, *PUCX_CONTROLLER_CONFIG;
 
 FORCEINLINE VOID UCX_CONTROLLER_CONFIG_INIT(_Out_ PUCX_CONTROLLER_CONFIG C)
@@ -83,8 +89,23 @@ typedef VOID (NTAPI *PFN_UCXCONTROLLERRESETCOMPLETE)(_In_ UCXCONTROLLER, _In_ BO
 
 /* ---- Root hub ------------------------------------------------------------ */
 
+/*
+ * EvtRootHubControlUrb: a hub-class or hub-descriptor request for the root hub
+ * (URB_FUNCTION_CLASS_DEVICE / CLASS_OTHER / CLASS_INTERFACE, or GET_DESCRIPTOR
+ * of type 0x29/0x2A). The client answers it from the port registers and completes
+ * the request; UcxRequestGetUrb() gives the URB. The class library has already
+ * validated the URB header, the device handle and the buffer against its length.
+ *
+ * EvtRootHubGetPortChangeBitmap: called at <= DISPATCH_LEVEL when the class
+ * library is about to complete a status-change (interrupt IN) transfer. The
+ * client sets bit N of Bitmap for every port N (1-based) whose change bits are
+ * set and returns TRUE when any bit was set; Length is the buffer size in bytes
+ * and the client never writes past it.
+ */
 typedef VOID (NTAPI *PFN_UCX_ROOTHUB_CONTROL_URB)(_In_ UCXROOTHUB, _In_ WDFREQUEST);
 typedef VOID (NTAPI *PFN_UCX_ROOTHUB_GET_INFO)(_In_ UCXROOTHUB, _In_ WDFREQUEST);
+typedef BOOLEAN (NTAPI *PFN_UCX_ROOTHUB_GET_PORT_CHANGE_BITMAP)(
+    _In_ UCXROOTHUB RootHub, _Out_writes_bytes_(Length) PUCHAR Bitmap, _In_ ULONG Length);
 
 typedef struct _UCX_ROOTHUB_CONFIG {
     ULONG Size;
@@ -92,6 +113,7 @@ typedef struct _UCX_ROOTHUB_CONFIG {
     USHORT NumberOf30Ports;
     PFN_UCX_ROOTHUB_CONTROL_URB  EvtRootHubControlUrb;
     PFN_UCX_ROOTHUB_GET_INFO     EvtRootHubGetInfo;
+    PFN_UCX_ROOTHUB_GET_PORT_CHANGE_BITMAP EvtRootHubGetPortChangeBitmap;   /* M3 */
 } UCX_ROOTHUB_CONFIG, *PUCX_ROOTHUB_CONFIG;
 
 FORCEINLINE VOID UCX_ROOTHUB_CONFIG_INIT(_Out_ PUCX_ROOTHUB_CONFIG C)
@@ -161,3 +183,32 @@ typedef VOID (NTAPI *PFN_UCXENDPOINTNEEDTOCANCELTRANSFERS)(_In_ UCXENDPOINT);
     ((PFN_UCXENDPOINTPURGECOMPLETE)UcxClassFunctions[UcxEndpointPurgeCompleteIndex])((e))
 #define UcxEndpointNeedToCancelTransfers(e) \
     ((PFN_UCXENDPOINTNEEDTOCANCELTRANSFERS)UcxClassFunctions[UcxEndpointNeedToCancelTransfersIndex])((e))
+
+/* ---- URB access helpers (M3) --------------------------------------------- */
+
+/*
+ * The URB of an IOCTL_INTERNAL_USB_SUBMIT_URB request handed to a client
+ * callback. The class library has checked it is non-NULL and at least a header
+ * long before the callback runs.
+ */
+FORCEINLINE PVOID UcxRequestGetUrb(_In_ WDFREQUEST Request)
+{
+    PIRP Irp = WdfRequestWdmGetIrp(Request);
+    return IoGetCurrentIrpStackLocation(Irp)->Parameters.Others.Argument1;
+}
+
+/*
+ * The system address of a transfer buffer given as a pointer or as an MDL.
+ * Returns NULL for a zero length or an MDL that cannot be mapped; a caller
+ * must never read or write more than Length bytes.
+ */
+FORCEINLINE PVOID UcxUrbTransferBuffer(_In_opt_ PVOID Buffer, _In_opt_ PMDL Mdl, _In_ ULONG Length)
+{
+    if (Length == 0)
+        return NULL;
+    if (Buffer != NULL)
+        return Buffer;
+    if (Mdl != NULL)
+        return MmGetSystemAddressForMdlSafe(Mdl, NormalPagePriority);
+    return NULL;
+}
