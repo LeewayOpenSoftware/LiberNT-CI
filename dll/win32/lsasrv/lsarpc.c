@@ -65,7 +65,6 @@ LsarStartRpcServer(VOID)
     if (Status != RPC_S_OK)
     {
         WARN("RpcServerUseProtseqEpW(ncalrpc) failed (Status %lx)\n", Status);
-        return I_RpcMapWin32Status(Status);
     }
 
     Status = RpcServerRegisterIf(lsarpc_v0_0_s_ifspec,
