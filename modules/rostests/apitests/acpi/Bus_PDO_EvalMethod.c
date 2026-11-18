@@ -1554,6 +1554,11 @@ DrvTestUnknownMethod(VOID)
     ok_eq_hex(Status, STATUS_OBJECT_NAME_NOT_FOUND);
 }
 
+/* START_TEST expands "read" inside a section pragma */
+#ifdef read
+#undef read
+#endif
+
 START_TEST(Bus_PDO_EvalMethod)
 {
     DrvTestComplexBuffer();

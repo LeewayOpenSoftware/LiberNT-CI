@@ -121,7 +121,7 @@ START_TEST(ModernShell)
         }
         IKnownFolderManager_Release(manager);
     }
-    unknown = (void *)0xdeadbeef;
+    unknown = (void *)(ULONG_PTR)0xdeadbeef;
     hr = CoCreateInstance(&CLSID_KnownFolderManager, NULL, CLSCTX_INPROC_SERVER,
                           &IID_IClassFactory, &unknown);
     ok(hr == E_NOINTERFACE && !unknown, "unsupported constructor IID: %#lx, %p\n", hr, unknown);
@@ -130,11 +130,11 @@ START_TEST(ModernShell)
     ok(hr == S_OK, "association registration activation: %#lx\n", hr);
     if (registration)
     {
-        path = (void *)0xdeadbeef;
+        path = (void *)(ULONG_PTR)0xdeadbeef;
         hr = IApplicationAssociationRegistration_QueryCurrentDefault(registration,
                 L"", AT_FILEEXTENSION, AL_EFFECTIVE, &path);
         ok(hr == E_INVALIDARG && !path, "empty extension: %#lx, %p\n", hr, path);
-        path = (void *)0xdeadbeef;
+        path = (void *)(ULONG_PTR)0xdeadbeef;
         hr = IApplicationAssociationRegistration_QueryCurrentDefault(registration,
                 L".ReactOS.Nonexistent.Association.9D351", AT_FILEEXTENSION, AL_EFFECTIVE, &path);
         ok(hr == HRESULT_FROM_WIN32(ERROR_NO_ASSOCIATION) && !path,

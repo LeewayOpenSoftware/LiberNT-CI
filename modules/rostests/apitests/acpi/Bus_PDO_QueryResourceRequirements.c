@@ -204,6 +204,11 @@ AcpiGetPossibleResources (
     ok((Desc)->u.Memory.MaximumAddress.QuadPart == ExpectedMax, "Desc->u.Memory.MaximumAddress = 0x%I64x\n", (Desc)->u.Memory.MaximumAddress.QuadPart);   \
     } while (0)
 
+/* START_TEST expands "read" inside a section pragma */
+#ifdef read
+#undef read
+#endif
+
 START_TEST(Bus_PDO_QueryResourceRequirements)
 {
     NTSTATUS Status;

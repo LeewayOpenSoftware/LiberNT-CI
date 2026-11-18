@@ -150,7 +150,8 @@ Test_NoManifestVersion(void)
 {
     OSVERSIONINFOEXW Version = { sizeof(Version) };
     RTL_OSVERSIONINFOEXW Real = { sizeof(Real) };
-    ACTIVATION_CONTEXT_COMPATIBILITY_INFORMATION Probe[8] = {{0}};
+    ULONG64 ProbeBuffer[32] = {0};
+    ACTIVATION_CONTEXT_COMPATIBILITY_INFORMATION *Probe = (void *)ProbeBuffer;
     SIZE_T Needed = 0;
 
     if (RtlGetVersion((PRTL_OSVERSIONINFOW)&Real) != 0)
@@ -167,7 +168,7 @@ Test_NoManifestVersion(void)
 
     /* Only judge a program that really declares no supported OS */
     if (QueryActCtxW(QUERY_ACTCTX_FLAG_USE_ACTIVE_ACTCTX, NULL, NULL, CompatibilityInformationInActivationContext,
-                     Probe, sizeof(Probe), &Needed) && Probe[0].ElementCount != 0)
+                     Probe, 8 * sizeof(*Probe), &Needed) && Probe[0].ElementCount != 0)
     {
         skip("The test program declares supported systems\n");
         return;

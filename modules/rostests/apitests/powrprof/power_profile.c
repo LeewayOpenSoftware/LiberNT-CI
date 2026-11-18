@@ -171,7 +171,7 @@ static BOOL activate_and_query(const char *name, const GUID *scheme, const SCHEM
 
 static void test_argument_contract(void)
 {
-    GUID *active = (GUID *)0xdeadbeef;
+    GUID *active = (GUID *)(ULONG_PTR)0xdeadbeef;
     DWORD value = 0xdeadbeef;
     DWORD ret;
 

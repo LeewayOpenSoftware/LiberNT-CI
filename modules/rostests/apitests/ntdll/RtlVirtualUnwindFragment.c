@@ -172,6 +172,7 @@ START_TEST(RtlVirtualUnwindFragment)
     CheckCaller(Code + FRAGMENT_RECURSION, Stack, 4, INITIAL_RSI, "image recursive tail call");
     TestDynamicTable(Code, Stack);
 #else
+    UNREFERENCED_PARAMETER(Stack);
     skip("the image function table of this test needs the GNU assembler syntax\n");
 #endif
 }

@@ -260,7 +260,7 @@ static IDispatcherQueue *
 GetCurrentQueue(void)
 {
     IDispatcherQueueStatics *Statics;
-    IDispatcherQueue *Queue = (void *)0xdeadbeef;
+    IDispatcherQueue *Queue = (void *)(ULONG_PTR)0xdeadbeef;
     HRESULT hr;
 
     hr = GetFactory(RuntimeClass_Windows_System_DispatcherQueue, &IID_IDispatcherQueueStatics, (void **)&Statics);
@@ -281,7 +281,7 @@ CreateController(DWORD Size, DWORD ThreadType, DWORD ApartmentType, IDispatcherQ
     Options.dwSize = Size;
     Options.threadType = ThreadType;
     Options.apartmentType = ApartmentType;
-    *Controller = (void *)0xdeadbeef;
+    *Controller = (void *)(ULONG_PTR)0xdeadbeef;
     return pCreateDispatcherQueueController(Options, Controller);
 }
 
@@ -313,7 +313,7 @@ TestOptions(void)
         hr = CreateController(Tests[i].Size, Tests[i].ThreadType, Tests[i].ApartmentType, &Controller);
         ok(hr == Tests[i].Expected, "%u: size %lu type %lu apartment %lu returned %#lx\n", i, Tests[i].Size,
            Tests[i].ThreadType, Tests[i].ApartmentType, hr);
-        ok(Controller == (void *)0xdeadbeef || Controller == NULL, "%u: controller %p\n", i, Controller);
+        ok(Controller == (void *)(ULONG_PTR)0xdeadbeef || Controller == NULL, "%u: controller %p\n", i, Controller);
     }
 }
 
@@ -366,7 +366,7 @@ Shutdown(IDispatcherQueueController *Controller, IDispatcherQueue *Queue, BOOL P
 {
     struct handler Starting, Finished, Action, After;
     EventRegistrationToken StartingToken, CompletedToken;
-    IAsyncAction *Operation = NULL, *Second = (void *)0xdeadbeef;
+    IAsyncAction *Operation = NULL, *Second = (void *)(ULONG_PTR)0xdeadbeef;
     IAsyncInfo *Info;
     AsyncStatus Status;
     boolean Queued = 2;
@@ -435,7 +435,7 @@ Shutdown(IDispatcherQueueController *Controller, IDispatcherQueue *Queue, BOOL P
 
     hr = IDispatcherQueueController_ShutdownQueueAsync(Controller, &Second);
     ok(hr == E_UNEXPECTED, "Second ShutdownQueueAsync returned %#lx\n", hr);
-    ok(Second == (void *)0xdeadbeef || Second == NULL, "Second shutdown action %p\n", Second);
+    ok(Second == (void *)(ULONG_PTR)0xdeadbeef || Second == NULL, "Second shutdown action %p\n", Second);
     if (SUCCEEDED(hr) && Second)
         IAsyncAction_Release(Second);
     IAsyncAction_Release(Operation);
@@ -472,7 +472,7 @@ CurrentThread(void *Param)
 
     hr = CreateController(sizeof(DispatcherQueueOptions), DQTYPE_THREAD_CURRENT, DQTAT_COM_NONE, &Second);
     ok(hr == RPC_E_WRONG_THREAD, "Second current thread controller returned %#lx\n", hr);
-    ok(Second == (void *)0xdeadbeef || Second == NULL, "Second controller %p\n", Second);
+    ok(Second == (void *)(ULONG_PTR)0xdeadbeef || Second == NULL, "Second controller %p\n", Second);
     if (SUCCEEDED(hr) && Second)
         IDispatcherQueueController_Release(Second);
 

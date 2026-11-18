@@ -115,7 +115,7 @@ static void Probe(ID3D11Device *Device, DIMENSION Dimension, UINT Index)
     IDXGIKeyedMutex *Mutex = NULL;
     IDXGIResource *Dxgi = NULL;
     IDXGIResource1 *Dxgi1 = NULL;
-    HANDLE Shared = (HANDLE)0xdeadbeef, NtShared = NULL;
+    HANDLE Shared = (HANDLE)(ULONG_PTR)0xdeadbeef, NtShared = NULL;
     HRESULT Hr;
 
     Hr = CreateResource(Device, Dimension, Case, &Resource);
@@ -151,7 +151,7 @@ static void Probe(ID3D11Device *Device, DIMENSION Dimension, UINT Index)
         ok(Hr == (NtHandle ? S_OK : E_INVALIDARG), "dim %u case %u: CreateSharedHandle %#lx\n", Dimension, Index, Hr);
         Dxgi1->Release();
     }
-    if (!NtHandle && Shared && Shared != (HANDLE)0xdeadbeef)
+    if (!NtHandle && Shared && Shared != (HANDLE)(ULONG_PTR)0xdeadbeef)
     {
         void *Opened = NULL;
         D3D11_RESOURCE_DIMENSION Type = D3D11_RESOURCE_DIMENSION_UNKNOWN;
