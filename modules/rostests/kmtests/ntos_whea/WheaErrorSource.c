@@ -84,6 +84,9 @@ TestAddRefusals(VOID)
     ok_eq_hex(WheaErrSrcStateStarted, 2);
     ok_eq_hex(WheaErrSrcStateRemoved, 3);
     ok_eq_hex(WheaErrSrcStateRemovePending, 4);
+    ok_eq_hex(WheaErrTypePmem, 7);
+    ok_eq_hex(sizeof(WHEA_XPF_MCA_SECTION), 1192);
+    ok_eq_hex(FIELD_OFFSET(WHEA_XPF_MCA_SECTION, GlobalCapability), 264);
 
     InitDescriptor(&Descriptor);
     Descriptor.Length = FIELD_OFFSET(TEST_DESCRIPTOR, Info) - 1;

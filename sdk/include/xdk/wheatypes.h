@@ -125,7 +125,8 @@ typedef enum _WHEA_ERROR_TYPE {
     WheaErrTypeNMI,
     WheaErrTypePCIXBus,
     WheaErrTypePCIXDevice,
-    WheaErrTypeGeneric
+    WheaErrTypeGeneric,
+    WheaErrTypePmem
 } WHEA_ERROR_TYPE, *PWHEA_ERROR_TYPE;
 
 #pragma pack(pop)
@@ -360,6 +361,176 @@ typedef WHEA_ERROR_PACKET_V2 WHEA_ERROR_PACKET;
 typedef WHEA_ERROR_PACKET_V2 *PWHEA_ERROR_PACKET;
 
 #endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
+
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+
+typedef union _MCG_CAP {
+    struct {
+        ULONG64 CountField : 8;
+        ULONG64 ControlMsrPresent : 1;
+        ULONG64 ExtendedMsrsPresent : 1;
+        ULONG64 SignalingExtensionPresent : 1;
+        ULONG64 ThresholdErrorStatusPresent : 1;
+        ULONG64 Reserved : 4;
+        ULONG64 ExtendedRegisterCount : 8;
+        ULONG64 SoftwareErrorRecoverySupported : 1;
+        ULONG64 EnhancedMachineCheckCapability : 1;
+        ULONG64 ExtendedErrorLogging : 1;
+        ULONG64 LocalMachineCheckException : 1;
+    } DUMMYSTRUCTNAME;
+    ULONG64 QuadPart;
+} MCG_CAP, *PMCG_CAP;
+
+typedef union _MCG_STATUS {
+    struct {
+        ULONG RestartIpValid : 1;
+        ULONG ErrorIpValid : 1;
+        ULONG MachineCheckInProgress : 1;
+        ULONG LocalMceValid : 1;
+        ULONG Reserved1 : 28;
+        ULONG Reserved2;
+    } DUMMYSTRUCTNAME;
+    ULONGLONG QuadPart;
+} MCG_STATUS, *PMCG_STATUS;
+
+typedef struct _MCI_STATUS_BITS_COMMON {
+    ULONG64 McaErrorCode : 16;
+    ULONG64 ModelErrorCode : 16;
+    ULONG64 Reserved : 25;
+    ULONG64 ContextCorrupt : 1;
+    ULONG64 AddressValid : 1;
+    ULONG64 MiscValid : 1;
+    ULONG64 ErrorEnabled : 1;
+    ULONG64 UncorrectedError : 1;
+    ULONG64 StatusOverFlow : 1;
+    ULONG64 Valid : 1;
+} MCI_STATUS_BITS_COMMON, *PMCI_STATUS_BITS_COMMON;
+
+typedef struct _MCI_STATUS_AMD_BITS {
+    ULONG64 McaErrorCode : 16;
+    ULONG64 ModelErrorCode : 16;
+    ULONG64 ImplementationSpecific2 : 11;
+    ULONG64 Poison : 1;
+    ULONG64 Deferred : 1;
+    ULONG64 ImplementationSpecific1 : 12;
+    ULONG64 ContextCorrupt : 1;
+    ULONG64 AddressValid : 1;
+    ULONG64 MiscValid : 1;
+    ULONG64 ErrorEnabled : 1;
+    ULONG64 UncorrectedError : 1;
+    ULONG64 StatusOverFlow : 1;
+    ULONG64 Valid : 1;
+} MCI_STATUS_AMD_BITS, *PMCI_STATUS_AMD_BITS;
+
+typedef struct _MCI_STATUS_INTEL_BITS {
+    ULONG64 McaErrorCode : 16;
+    ULONG64 ModelErrorCode : 16;
+    ULONG64 OtherInfo : 5;
+    ULONG64 FirmwareUpdateError : 1;
+    ULONG64 CorrectedErrorCount : 15;
+    ULONG64 ThresholdErrorStatus : 2;
+    ULONG64 ActionRequired : 1;
+    ULONG64 Signalling : 1;
+    ULONG64 ContextCorrupt : 1;
+    ULONG64 AddressValid : 1;
+    ULONG64 MiscValid : 1;
+    ULONG64 ErrorEnabled : 1;
+    ULONG64 UncorrectedError : 1;
+    ULONG64 StatusOverFlow : 1;
+    ULONG64 Valid : 1;
+} MCI_STATUS_INTEL_BITS, *PMCI_STATUS_INTEL_BITS;
+
+typedef union _MCI_STATUS {
+    MCI_STATUS_BITS_COMMON CommonBits;
+    MCI_STATUS_AMD_BITS AmdBits;
+    MCI_STATUS_INTEL_BITS IntelBits;
+    ULONG64 QuadPart;
+} MCI_STATUS, *PMCI_STATUS;
+
+typedef enum _WHEA_CPU_VENDOR {
+    WheaCpuVendorOther = 0,
+    WheaCpuVendorIntel,
+    WheaCpuVendorAmd
+} WHEA_CPU_VENDOR, *PWHEA_CPU_VENDOR;
+
+#define WHEA_XPF_MCA_EXTREG_MAX_COUNT 24
+#define WHEA_XPF_MCA_SECTION_VERSION_2 2
+#define WHEA_XPF_MCA_SECTION_VERSION_3 3
+#define WHEA_XPF_MCA_SECTION_VERSION_4 4
+#define WHEA_XPF_MCA_SECTION_VERSION WHEA_XPF_MCA_SECTION_VERSION_4
+#define WHEA_AMD_EXT_REG_NUM 10
+#define WHEA_XPF_MCA_EXBANK_COUNT 32
+
+typedef struct _WHEA_AMD_EXTENDED_REGISTERS {
+    ULONGLONG IPID;
+    ULONGLONG SYND;
+    ULONGLONG CONFIG;
+    ULONGLONG DESTAT;
+    ULONGLONG DEADDR;
+    ULONGLONG MISC1;
+    ULONGLONG MISC2;
+    ULONGLONG MISC3;
+    ULONGLONG MISC4;
+    ULONGLONG RasCap;
+    ULONGLONG Reserved[WHEA_XPF_MCA_EXTREG_MAX_COUNT - WHEA_AMD_EXT_REG_NUM];
+} WHEA_AMD_EXTENDED_REGISTERS, *PWHEA_AMD_EXTENDED_REGISTERS;
+
+typedef struct _XPF_RECOVERY_INFO {
+    struct {
+        UINT32 NotSupported : 1;
+        UINT32 Overflow : 1;
+        UINT32 ContextCorrupt : 1;
+        UINT32 RestartIpErrorIpNotValid : 1;
+        UINT32 NoRecoveryContext : 1;
+        UINT32 MiscOrAddrNotValid : 1;
+        UINT32 InvalidAddressMode : 1;
+        UINT32 HighIrql : 1;
+        UINT32 InterruptsDisabled : 1;
+        UINT32 SwapBusy : 1;
+        UINT32 StackOverflow : 1;
+        UINT32 Reserved : 21;
+    } FailureReason;
+    struct {
+        UINT32 RecoveryAttempted : 1;
+        UINT32 HvHandled : 1;
+        UINT32 Reserved : 30;
+    } Action;
+    BOOLEAN ActionRequired;
+    BOOLEAN RecoverySucceeded;
+    BOOLEAN RecoveryKernel;
+    UINT8 Reserved;
+    UINT16 Reserved2;
+    UINT16 Reserved3;
+    UINT32 Reserved4;
+} XPF_RECOVERY_INFO, *PXPF_RECOVERY_INFO;
+
+typedef struct _WHEA_XPF_MCA_SECTION {
+    ULONG VersionNumber;
+    WHEA_CPU_VENDOR CpuVendor;
+    LARGE_INTEGER Timestamp;
+    ULONG ProcessorNumber;
+    MCG_STATUS GlobalStatus;
+    ULONGLONG InstructionPointer;
+    ULONG BankNumber;
+    MCI_STATUS Status;
+    ULONGLONG Address;
+    ULONGLONG Misc;
+    ULONG ExtendedRegisterCount;
+    ULONG ApicId;
+    _ANONYMOUS_UNION union {
+        ULONGLONG ExtendedRegisters[WHEA_XPF_MCA_EXTREG_MAX_COUNT];
+        WHEA_AMD_EXTENDED_REGISTERS AMDExtendedRegisters;
+    } DUMMYUNIONNAME;
+    MCG_CAP GlobalCapability;
+    XPF_RECOVERY_INFO RecoveryInfo;
+    ULONG ExBankCount;
+    ULONG BankNumberEx[WHEA_XPF_MCA_EXBANK_COUNT];
+    MCI_STATUS StatusEx[WHEA_XPF_MCA_EXBANK_COUNT];
+    ULONGLONG AddressEx[WHEA_XPF_MCA_EXBANK_COUNT];
+    ULONGLONG MiscEx[WHEA_XPF_MCA_EXBANK_COUNT];
+} WHEA_XPF_MCA_SECTION, *PWHEA_XPF_MCA_SECTION;
 
 #pragma pack(pop)
 
