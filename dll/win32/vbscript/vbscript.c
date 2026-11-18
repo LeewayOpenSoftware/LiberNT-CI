@@ -1569,7 +1569,7 @@ IUnknown *create_ax_site(script_ctx_t *ctx)
 
     hres = IActiveScriptSite_QueryInterface(ctx->site, &IID_IServiceProvider, (void**)&sp);
     if(FAILED(hres)) {
-        ERR("Could not get IServiceProvider iface: %08lx\n", hres);
+        WARN("Could not get IServiceProvider iface: %08lx\n", hres);
         return NULL;
     }
 
