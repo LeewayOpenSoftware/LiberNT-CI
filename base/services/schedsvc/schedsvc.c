@@ -28,6 +28,7 @@
 #include "xmllite.h"
 #include "schrpc.h"
 #include "taskschd.h"
+#include "sddl.h"
 #include "wine/debug.h"
 
 #include "schedsvc_private.h"
@@ -122,13 +123,29 @@ static HRESULT write_xml_utf8(const WCHAR *name, DWORD disposition, const WCHAR 
     char *xml;
     HRESULT hr = S_OK;
 
-    hfile = CreateFileW(name, GENERIC_WRITE, 0, NULL, disposition, 0, 0);
+    hfile = CreateFileW(name, GENERIC_WRITE | WRITE_DAC, 0, NULL, disposition, 0, 0);
     if (hfile == INVALID_HANDLE_VALUE)
     {
         if (GetLastError() == ERROR_FILE_EXISTS)
             return HRESULT_FROM_WIN32(ERROR_ALREADY_EXISTS);
 
         return HRESULT_FROM_WIN32(GetLastError());
+    }
+
+    /*
+     * Task files belong to the service: SYSTEM and Administrators only, not
+     * inherited, whatever the folder grants. The engine refuses a task file
+     * that a broad group could write. (A volume without ACLs refuses the call.)
+     */
+    {
+        PSECURITY_DESCRIPTOR sd;
+
+        if (ConvertStringSecurityDescriptorToSecurityDescriptorW(L"D:P(A;;FA;;;SY)(A;;FA;;;BA)", SDDL_REVISION_1,
+                                                                 &sd, NULL))
+        {
+            SetKernelObjectSecurity(hfile, DACL_SECURITY_INFORMATION, sd);
+            LocalFree(sd);
+        }
     }
 
     size = WideCharToMultiByte(CP_UTF8, 0, xmlW, -1, NULL, 0, NULL, NULL);

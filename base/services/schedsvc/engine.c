@@ -384,10 +384,13 @@ static BOOL parse_boundary(const WCHAR *s, ULONGLONG *lt)
     return TRUE;
 }
 
+/* Longer than any schedule can mean: 1000 years */
+#define MAX_DURATION ((ULONGLONG)1000 * 365 * TICKS_PER_DAY)
+
 /* xs:duration "PnYnMnDTnHnMnS" (also nW); years count 365 days, months 30. */
 static BOOL parse_duration(const WCHAR *s, ULONGLONG *out)
 {
-    ULONGLONG total = 0, num;
+    ULONGLONG total = 0, num, unit;
     BOOL time_part = FALSE, any = FALSE;
 
     while (*s == ' ' || *s == '\t' || *s == '\r' || *s == '\n') s++;
@@ -416,14 +419,17 @@ static BOOL parse_duration(const WCHAR *s, ULONGLONG *out)
         }
         switch (*s++)
         {
-        case 'Y': total += num * 365 * TICKS_PER_DAY; break;
-        case 'M': total += time_part ? num * TICKS_PER_MIN : num * 30 * TICKS_PER_DAY; break;
-        case 'W': total += num * 7 * TICKS_PER_DAY; break;
-        case 'D': total += num * TICKS_PER_DAY; break;
-        case 'H': total += num * TICKS_PER_HOUR; break;
-        case 'S': total += num * TICKS_PER_SEC; break;
+        case 'Y': unit = 365 * TICKS_PER_DAY; break;
+        case 'M': unit = time_part ? TICKS_PER_MIN : 30 * TICKS_PER_DAY; break;
+        case 'W': unit = 7 * TICKS_PER_DAY; break;
+        case 'D': unit = TICKS_PER_DAY; break;
+        case 'H': unit = TICKS_PER_HOUR; break;
+        case 'S': unit = TICKS_PER_SEC; break;
         default: return FALSE;
         }
+        /* saturate at MAX_DURATION: no component or sum can wrap 64 bits */
+        if (num > (MAX_DURATION - total) / unit) total = MAX_DURATION;
+        else total += num * unit;
         any = TRUE;
     }
 
@@ -883,12 +889,52 @@ static HRESULT finish_def(struct task_def *def)
     return S_OK;
 }
 
+/* "A/B/C" from stack[from..to-1]; FALSE when it does not fit (the document is refused) */
+static BOOL build_rel(WCHAR *rel, size_t cch, const WCHAR **stack, int from, int to)
+{
+    size_t len = 0, n;
+    int i;
+
+    rel[0] = 0;
+    for (i = from; i < to; i++)
+    {
+        n = wcslen(stack[i]);
+        if (len + n + 2 > cch) return FALSE;
+        if (i > from) rel[len++] = '/';
+        memcpy(rel + len, stack[i], n * sizeof(WCHAR));
+        len += n;
+        rel[len] = 0;
+    }
+    return TRUE;
+}
+
+/* Hands the collected text of the current element to parse_text */
+static HRESULT flush_text(struct task_def *def, WCHAR **text, const WCHAR **stack, int task_depth, int depth,
+                          BOOL in_principal, BOOL skip_principal)
+{
+    WCHAR rel[512];
+    HRESULT hr = S_OK;
+
+    if (!*text) return S_OK;
+    if (task_depth > 0 && depth > task_depth)
+    {
+        if (build_rel(rel, ARRAYSIZE(rel), stack, task_depth, depth))
+            parse_text(def, rel, *text, in_principal, skip_principal);
+        else
+            hr = SCHED_E_MALFORMEDXML;
+    }
+    free(*text);
+    *text = NULL;
+    return hr;
+}
+
 /* Parses a task XML document (any encoding xmllite detects). */
 static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **out)
 {
     WCHAR rel[512];
     const WCHAR *stack[MAX_TASK_DEPTH];
     WCHAR *names[MAX_TASK_DEPTH] = { NULL };
+    WCHAR *text = NULL;
     IXmlReader *reader = NULL;
     IStream *stream = NULL;
     struct task_def *def;
@@ -957,6 +1003,9 @@ static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **o
                 hr = E_OUTOFMEMORY;
                 goto out;
             }
+            /* text of the parent before this child belongs to the parent */
+            if (FAILED(hr = flush_text(def, &text, stack, task_depth, depth, in_principal, skip_principal)))
+                goto out;
             stack[depth] = names[depth];
             depth++;
 
@@ -964,12 +1013,10 @@ static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **o
                 task_depth = 1;
             else if (task_depth > 0 && depth > task_depth)
             {
-                rel[0] = 0;
-                for (i = task_depth; i < depth; i++)
+                if (!build_rel(rel, ARRAYSIZE(rel), stack, task_depth, depth))
                 {
-                    if (wcslen(rel) + wcslen(stack[i]) + 2 >= ARRAYSIZE(rel)) break;
-                    if (i > task_depth) wcscat(rel, L"/");
-                    wcscat(rel, stack[i]);
+                    hr = SCHED_E_MALFORMEDXML;
+                    goto out;
                 }
                 parse_element_start(def, rel, &in_principal, &skip_principal);
             }
@@ -986,19 +1033,30 @@ static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **o
         case XmlNodeType_CDATA:
             if (task_depth > 0 && depth > task_depth)
             {
+                /* an element's text may come in several nodes: it is all of them */
+                size_t have = text ? wcslen(text) : 0, add;
+                WCHAR *grown;
+
                 if (FAILED(hr = IXmlReader_GetValue(reader, &value, NULL))) goto out;
-                rel[0] = 0;
-                for (i = task_depth; i < depth; i++)
+                add = wcslen(value);
+                if (have + add >= MAX_TASK_FILE)
                 {
-                    if (wcslen(rel) + wcslen(stack[i]) + 2 >= ARRAYSIZE(rel)) break;
-                    if (i > task_depth) wcscat(rel, L"/");
-                    wcscat(rel, stack[i]);
+                    hr = SCHED_E_MALFORMEDXML;
+                    goto out;
                 }
-                parse_text(def, rel, value, in_principal, skip_principal);
+                if (!(grown = realloc(text, (have + add + 1) * sizeof(WCHAR))))
+                {
+                    hr = E_OUTOFMEMORY;
+                    goto out;
+                }
+                text = grown;
+                memcpy(text + have, value, (add + 1) * sizeof(WCHAR));
             }
             break;
 
         case XmlNodeType_EndElement:
+            if (FAILED(hr = flush_text(def, &text, stack, task_depth, depth, in_principal, skip_principal)))
+                goto out;
             if (depth > 0)
             {
                 depth--;
@@ -1020,6 +1078,7 @@ static HRESULT parse_task_xml(const void *data, SIZE_T size, struct task_def **o
     if (SUCCEEDED(hr) && task_depth < 0) hr = SCHED_E_MALFORMEDXML;
 
 out:
+    free(text);
     for (i = 0; i < MAX_TASK_DEPTH; i++) free(names[i]);
     if (reader) IXmlReader_Release(reader);
     if (stream) IStream_Release(stream);
@@ -1055,37 +1114,86 @@ static HRESULT parse_task_wstr(const WCHAR *xml, struct task_def **def)
     return hr;
 }
 
+/* Write access in a file ACE, generic rights included */
+#define FILE_WRITE_RIGHTS (FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_WRITE_EA | FILE_WRITE_ATTRIBUTES | \
+                           WRITE_DAC | WRITE_OWNER | DELETE | GENERIC_WRITE | GENERIC_ALL)
+
+static BOOL is_broad_group(PSID sid)
+{
+    return IsWellKnownSid(sid, WinWorldSid) || IsWellKnownSid(sid, WinAuthenticatedUserSid) ||
+           IsWellKnownSid(sid, WinBuiltinUsersSid) || IsWellKnownSid(sid, WinInteractiveSid) ||
+           IsWellKnownSid(sid, WinAnonymousSid) || IsWellKnownSid(sid, WinNetworkSid) ||
+           IsWellKnownSid(sid, WinBuiltinGuestsSid);
+}
+
 /*
- * Only files owned by LocalSystem, Administrators or TrustedInstaller are
- * loaded: the service writes every registered task itself, so a file some
- * other account dropped into the folder is not a registered task.
+ * Decided on the open handle the file is then read from, never by path:
+ * - the owner is LocalSystem, Administrators or TrustedInstaller (the service
+ *   writes every registered task itself);
+ * - the DACL grants no write to a broad group, and is not NULL;
+ * - the file is not a reparse point and has a single link.
+ * On a volume without ACLs (FAT) there is no file security at all: the owner
+ * and DACL tests are skipped, and the whole authorization model there is
+ * advisory, as anyone who can write system32 can write anything.
  */
-static BOOL is_trusted_task_file(const WCHAR *file)
+static BOOL is_trusted_task_handle(HANDLE hfile, const WCHAR *file)
 {
     static const WCHAR trusted_installer[] = L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
-    SECURITY_DESCRIPTOR *sd;
+    BY_HANDLE_FILE_INFORMATION info;
+    SECURITY_DESCRIPTOR *sd = NULL;
     PSID owner = NULL, ti;
-    DWORD size = 0;
-    BOOL defaulted, ok = FALSE;
+    PACL dacl = NULL;
+    DWORD size = 0, i;
+    BOOL defaulted, present, ok = FALSE;
+    const char *why = "cannot read its security";
 
-    /* FAT has no owners; whoever can write system32 there can write anything */
+    if (!GetFileInformationByHandle(hfile, &info) || info.nNumberOfLinks != 1 ||
+        (info.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+    {
+        why = "it is a link";
+        goto done;
+    }
     if (!tasks_dir_has_acls) return TRUE;
 
-    GetFileSecurityW(file, OWNER_SECURITY_INFORMATION, NULL, 0, &size);
-    if (!size || !(sd = malloc(size))) return FALSE;
-    if (GetFileSecurityW(file, OWNER_SECURITY_INFORMATION, sd, size, &size) &&
-        GetSecurityDescriptorOwner(sd, &owner, &defaulted) && owner)
+    GetKernelObjectSecurity(hfile, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, NULL, 0, &size);
+    if (!size || !(sd = malloc(size))) goto done;
+    if (!GetKernelObjectSecurity(hfile, OWNER_SECURITY_INFORMATION | DACL_SECURITY_INFORMATION, sd, size, &size) ||
+        !GetSecurityDescriptorOwner(sd, &owner, &defaulted) || !owner ||
+        !GetSecurityDescriptorDacl(sd, &present, &dacl, &defaulted))
+        goto done;
+
+    why = "of its owner";
+    if (IsWellKnownSid(owner, WinLocalSystemSid) || IsWellKnownSid(owner, WinBuiltinAdministratorsSid))
+        ok = TRUE;
+    else if (ConvertStringSidToSidW(trusted_installer, &ti))
     {
-        if (IsWellKnownSid(owner, WinLocalSystemSid) || IsWellKnownSid(owner, WinBuiltinAdministratorsSid))
-            ok = TRUE;
-        else if (ConvertStringSidToSidW(trusted_installer, &ti))
+        ok = EqualSid(owner, ti);
+        LocalFree(ti);
+    }
+    if (!ok) goto done;
+
+    why = "of its DACL";
+    if (!present || !dacl)
+    {
+        ok = FALSE;
+        goto done;
+    }
+    for (i = 0; i < dacl->AceCount; i++)
+    {
+        ACE_HEADER *ace;
+        if (!GetAce(dacl, i, (void **)&ace)) { ok = FALSE; break; }
+        if (ace->AceType != ACCESS_ALLOWED_ACE_TYPE || (ace->AceFlags & INHERIT_ONLY_ACE)) continue;
+        if ((((ACCESS_ALLOWED_ACE *)ace)->Mask & FILE_WRITE_RIGHTS) &&
+            is_broad_group((PSID)&((ACCESS_ALLOWED_ACE *)ace)->SidStart))
         {
-            ok = EqualSid(owner, ti);
-            LocalFree(ti);
+            ok = FALSE;
+            break;
         }
     }
+
+done:
     free(sd);
-    if (!ok) WARN("ignoring %s: not owned by SYSTEM, Administrators or TrustedInstaller\n", debugstr_w(file));
+    if (!ok) WARN("ignoring %s: not a trusted task file (because %s)\n", debugstr_w(file), why);
     return ok;
 }
 
@@ -1097,9 +1205,15 @@ static HRESULT load_task_file(const WCHAR *file, struct task_def **def)
     HRESULT hr;
 
     *def = NULL;
-    hfile = CreateFileW(file, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                        NULL, OPEN_EXISTING, 0, NULL);
+    /* Not following links; the checks are on this handle, which is then read */
+    hfile = CreateFileW(file, GENERIC_READ | READ_CONTROL, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                        NULL, OPEN_EXISTING, FILE_FLAG_OPEN_REPARSE_POINT, NULL);
     if (hfile == INVALID_HANDLE_VALUE) return HRESULT_FROM_WIN32(GetLastError());
+    if (!is_trusted_task_handle(hfile, file))
+    {
+        CloseHandle(hfile);
+        return E_ACCESSDENIED;
+    }
 
     size = GetFileSize(hfile, NULL);
     if (size == INVALID_FILE_SIZE || size > MAX_TASK_FILE)
@@ -1716,8 +1830,18 @@ static HRESULT launch_action(struct instance *inst)
 
     if (!dir)
     {
-        GetSystemDirectoryW(sysdir, ARRAYSIZE(sysdir));
-        dir = wcsdup(sysdir);
+        UINT n = GetSystemDirectoryW(sysdir, ARRAYSIZE(sysdir));
+
+        if (!n || n >= ARRAYSIZE(sysdir))
+        {
+            hr = E_UNEXPECTED;
+            goto out;
+        }
+        if (!(dir = wcsdup(sysdir)))
+        {
+            hr = E_OUTOFMEMORY;
+            goto out;
+        }
     }
 
     if (!CreateEnvironmentBlock(&env, inst->token, FALSE)) env = NULL;
@@ -1808,12 +1932,12 @@ static HRESULT start_instance(struct task *task, DWORD n_args, const WCHAR **arg
         return SCHED_E_INVALID_TASK;
     }
 
-    if (!(inst = calloc(1, sizeof(*inst))))
+    if (!(inst = calloc(1, sizeof(*inst))) || !(inst->path = wcsdup(task->path)))
     {
+        free(inst);
         if (token) CloseHandle(token);
         return E_OUTOFMEMORY;
     }
-    inst->path = wcsdup(task->path);
     inst->def = task->def;
     def_addref(inst->def);
     inst->start = now;
@@ -2088,7 +2212,7 @@ static void scan_folder(const WCHAR *dir, const WCHAR *rel, int depth, ULONGLONG
         {
             struct task_def *def;
 
-            if (!is_trusted_task_file(child) || FAILED(load_task_file(child, &def)))
+            if (FAILED(load_task_file(child, &def)))
             {
                 WARN("skipping unreadable task %s\n", debugstr_w(child));
                 if (task) task->seen = TRUE;
@@ -2725,7 +2849,17 @@ HRESULT engine_run(const WCHAR *path, DWORD n_args, const WCHAR **args, DWORD fl
 
     if (flags & RUN_FLAG_AS_SELF)
     {
+        SECURITY_IMPERSONATION_LEVEL level = SecurityAnonymous;
+        DWORD len;
+
         if (FAILED(hr = get_caller(&c))) return hr;
+        /* Only a token the caller allowed us to impersonate with may run as it */
+        if (!GetTokenInformation(c.token, TokenImpersonationLevel, &level, sizeof(level), &len) ||
+            level < SecurityImpersonation)
+        {
+            free_caller(&c);
+            return E_ACCESSDENIED;
+        }
         token = duplicate_primary(c.token);
         free_caller(&c);
         if (!token) return HRESULT_FROM_WIN32(GetLastError());
@@ -2816,16 +2950,29 @@ HRESULT engine_stop_instance(const GUID *guid)
     return hr;
 }
 
+/* Running instances are listed only to an administrator or the task's own account */
+static BOOL caller_may_see(const struct caller *c, const struct instance *inst)
+{
+    return c->admin || check_owner(c, inst->path, inst->def) == S_OK;
+}
+
 HRESULT engine_enum_instances(const WCHAR *path, DWORD *n_guids, GUID **guids)
 {
     struct instance *inst;
+    struct caller c;
     WCHAR *norm = NULL;
     DWORD n = 0;
+    HRESULT hr;
 
     *n_guids = 0;
     *guids = NULL;
     if (!engine_valid_path(path)) return E_INVALIDARG;
-    if (path && *path && !(norm = normalize_path(path))) return E_OUTOFMEMORY;
+    if (FAILED(hr = get_caller(&c))) return hr;
+    if (path && *path && !(norm = normalize_path(path)))
+    {
+        free_caller(&c);
+        return E_OUTOFMEMORY;
+    }
     /* "\" means every task */
     if (norm && !wcscmp(norm, L"\\"))
     {
@@ -2835,14 +2982,16 @@ HRESULT engine_enum_instances(const WCHAR *path, DWORD *n_guids, GUID **guids)
 
     EnterCriticalSection(&engine_cs);
     LIST_FOR_EACH_ENTRY(inst, &instances, struct instance, entry)
-        if (!norm || !wcsicmp(inst->path, norm)) n++;
+        if ((!norm || !wcsicmp(inst->path, norm)) && caller_may_see(&c, inst)) n++;
     if (n && (*guids = MIDL_user_allocate(n * sizeof(GUID))))
     {
         LIST_FOR_EACH_ENTRY(inst, &instances, struct instance, entry)
-            if (!norm || !wcsicmp(inst->path, norm)) (*guids)[(*n_guids)++] = inst->guid;
+            if ((!norm || !wcsicmp(inst->path, norm)) && caller_may_see(&c, inst) && *n_guids < n)
+                (*guids)[(*n_guids)++] = inst->guid;
     }
     LeaveCriticalSection(&engine_cs);
     free(norm);
+    free_caller(&c);
 
     if (n && !*guids) return E_OUTOFMEMORY;
     return S_OK;
@@ -2851,11 +3000,13 @@ HRESULT engine_enum_instances(const WCHAR *path, DWORD *n_guids, GUID **guids)
 HRESULT engine_instance_info(const GUID *guid, WCHAR **path, DWORD *state, WCHAR **action, DWORD *pid)
 {
     struct instance *inst;
+    struct caller c;
     HRESULT hr = SCHED_E_TASK_NOT_RUNNING;
 
     *path = *action = NULL;
     *state = TASK_STATE_UNKNOWN;
     *pid = 0;
+    if (FAILED(get_caller(&c))) return E_ACCESSDENIED;
 
     EnterCriticalSection(&engine_cs);
     LIST_FOR_EACH_ENTRY(inst, &instances, struct instance, entry)
@@ -2863,6 +3014,7 @@ HRESULT engine_instance_info(const GUID *guid, WCHAR **path, DWORD *state, WCHAR
         const WCHAR *cmd;
 
         if (!IsEqualGUID(&inst->guid, guid)) continue;
+        if (!caller_may_see(&c, inst)) break;   /* as if it were not running */
         cmd = inst->def->actions[inst->action].command;
         *path = MIDL_user_allocate((wcslen(inst->path) + 1) * sizeof(WCHAR));
         if (*path) wcscpy(*path, inst->path);
@@ -2874,6 +3026,7 @@ HRESULT engine_instance_info(const GUID *guid, WCHAR **path, DWORD *state, WCHAR
         break;
     }
     LeaveCriticalSection(&engine_cs);
+    free_caller(&c);
     return hr;
 }
 
