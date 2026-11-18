@@ -1819,7 +1819,7 @@ TraceTranslationState(
           (ULONG)PAGE_SIZE,
           (LONG)PAGE_SHIFT,
           sizeof(PVOID),
-          KeGetCurrentProcessorNumber());
+          KeGetCurrentProcessorIndex());
 
     dump_trace("[arm64][MmSelfMap] ttbr0=0x%I64x base=0x%I64x asid=0x%I64x ttbr1=0x%I64x base=0x%I64x asid=0x%I64x\n",
           Ttbr0,

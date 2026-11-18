@@ -155,7 +155,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_etw/EtwProviderKM.c
     ntos_etw/EtwRegisterKM.c
     ntos_etw/EtwSessionKM.c
-    ntos_wmi/PcwKM.c
     ntos_wmi/WmiEventKM.c
     ntos_ex/ExCallback.c
     ntos_ex/ExCallbackExtra.c
@@ -231,7 +230,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_io/IoInterrupt.c
     ntos_io/IoIommu.c
     ntos_io/IoIrp.c
-    ntos_io/IoIrpWorkItemEx.c
     ntos_io/IoWaitCompletionPacket.c
     ntos_io/IoSafeBootPolicy.c
     ntos_io/IoStackKM.c
@@ -357,7 +355,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_mm/ZwMapViewOfSection.c
     ntos_ob/ObCallbacks.c
     ntos_ob/ObHandle.c
-    ntos_ob/ObIsDosDeviceLocallyMapped.c
     ntos_ob/ObOpenByPointer.c
     ntos_ob/ObQuery.c
     ntos_ob/ObReference.c
@@ -380,7 +377,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_po/PoPowerLimit.c
     ntos_po/PoPowerSettings.c
     ntos_po/PoProcessorStateHandler.c
-    ntos_po/PoKernelPowerRequest.c
     ntos_po/PoLockConsoleOnWake.c
     ntos_ps/PsNotify.c
     ntos_ps/PsNotifyKM.c
@@ -395,7 +391,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_ps/PsGetVersion.c
     ntos_ps/PsSystemThread.c
     ntos_ps/PsPico.c
-    ntos_ps/PsJobCommit.c
     ntos_se/SeAccessCheck.c
     ntos_se/SeHelpers.c
     ntos_se/SeInheritance.c
@@ -404,7 +399,6 @@ list(APPEND KMTEST_DRV_SOURCE
     ntos_se/SeQueryInfoToken.c
     ntos_se/SeTokenFiltering.c
     ntos_se/SeAccessState.c
-    ntos_se/SePrimaryTokenRelease.c
     ntos_tm/TmTransactions.c
     rtl/RtlBitmapKM.c
     rtl/RtlBitmapEx.c
@@ -413,7 +407,6 @@ list(APPEND KMTEST_DRV_SOURCE
     rtl/RtlTableElementKM.c
     rtl/RtlGuidKM.c
     rtl/RtlImageKM.c
-    rtl/RtlIsProcessorFeaturePresentKM.c
     rtl/RtlHashTableKM.c
     rtl/RtlTimeKM.c
     rtl/RtlIsValidOemCharacter.c
@@ -474,6 +467,19 @@ endif()
 
 if(ENABLE_KERNEL_UBSAN)
     list(APPEND KMTEST_DRV_SOURCE kubsan/KubsanHandlers.c)
+endif()
+
+# These call kernel exports that are only exported on 64-bit targets
+if(NOT ARCH STREQUAL "i386")
+    list(APPEND KMTEST_DRV_SOURCE
+        ntos_io/IoIrpWorkItemEx.c
+        ntos_ob/ObIsDosDeviceLocallyMapped.c
+        ntos_po/PoKernelPowerRequest.c
+        ntos_ps/PsJobCommit.c
+        ntos_se/SePrimaryTokenRelease.c
+        ntos_wmi/PcwKM.c
+        rtl/RtlIsProcessorFeaturePresentKM.c
+    )
 endif()
 
 if(ARCH STREQUAL "amd64")

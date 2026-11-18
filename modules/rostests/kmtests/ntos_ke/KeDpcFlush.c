@@ -97,7 +97,7 @@ FlushThread(PVOID Parameter)
     KeFlushQueuedDpcs();
     Context->FinishedAtReturn = Context->Finished;
     Context->DrainedAtReturn = Context->Drained;
-    Context->ReturnCpu = KeGetCurrentProcessorNumber();
+    Context->ReturnCpu = KeGetCurrentProcessorIndex();
     Context->ReturnIrql = KeGetCurrentIrql();
     Context->ReturnSystemAffinity = KeGetCurrentThread()->SystemAffinityActive;
     InterlockedExchange(&Context->FlushReturned, 1);
@@ -203,7 +203,7 @@ StressDpc(PKDPC Dpc, PVOID Parameter, PVOID Argument1, PVOID Argument2)
 
     UNREFERENCED_PARAMETER(Dpc);
     UNREFERENCED_PARAMETER(Argument2);
-    if (KeGetCurrentProcessorNumber() != (ULONG)(ULONG_PTR)Argument1)
+    if (KeGetCurrentProcessorIndex() != (ULONG)(ULONG_PTR)Argument1)
         InterlockedIncrement(&Context->BadCpu);
     if (KeGetCurrentIrql() != DISPATCH_LEVEL && KeGetCurrentIrql() != PASSIVE_LEVEL)
         InterlockedIncrement(&Context->BadIrql);
@@ -248,7 +248,7 @@ StressThread(PVOID Parameter)
         if (SystemAffinity) KeSetSystemAffinityThread((KAFFINITY)1 << Context->Cpu);
         KeFlushQueuedDpcs();
         if (Context->Calls != (LONG)Count || KeGetCurrentIrql() != PASSIVE_LEVEL ||
-            KeGetCurrentProcessorNumber() != Context->Cpu ||
+            KeGetCurrentProcessorIndex() != Context->Cpu ||
             KeGetCurrentThread()->SystemAffinityActive != SystemAffinity)
         {
             Context->Errors++;
