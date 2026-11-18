@@ -35,6 +35,53 @@ NTAPI
 WheaInitializeRecordHeader(
   _Out_ PWHEA_ERROR_RECORD_HEADER Header);
 
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaAddErrorSourceDeviceDriver(
+  _Inout_opt_ PVOID Context,
+  _In_ PWHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER Configuration,
+  _In_ ULONG NumberPreallocatedErrorReports);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaAddErrorSourceDeviceDriverV1(
+  _Inout_opt_ PVOID Context,
+  _In_ PWHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER Configuration,
+  _In_ ULONG NumBuffersToPreallocate,
+  _In_ ULONG MaxDataLength);
+
+_IRQL_requires_max_(PASSIVE_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaRemoveErrorSourceDeviceDriver(
+  _In_ ULONG ErrorSourceId);
+
+/* Above PASSIVE_LEVEL the source needs a preallocated report, and the data and the name must not be pageable */
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+NTSTATUS
+NTAPI
+WheaReportHwErrorDeviceDriver(
+  _In_ ULONG ErrorSourceId,
+  _In_opt_ PDEVICE_OBJECT DeviceObject,
+  _In_reads_bytes_(ErrorDataLength) PUCHAR ErrorData,
+  _In_ ULONG ErrorDataLength,
+  _In_ LPGUID SectionTypeGuid,
+  _In_ WHEA_ERROR_SEVERITY ErrorSeverity,
+  _In_opt_ LPSTR DeviceFriendlyName);
+
+_IRQL_requires_max_(HIGH_LEVEL)
+NTKERNELAPI
+WHEA_ERROR_SOURCE_STATE
+NTAPI
+WheaErrorSourceGetState(
+  _In_ ULONG ErrorSourceId);
+
 #endif /* (NTDDI_VERSION >= NTDDI_WIN7) */
 
 $endif (_NTDDK_)

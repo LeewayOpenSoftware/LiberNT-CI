@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT kernel-mode tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Hardware error sources, reports queued and drained, and the header of an error record
+ * PURPOSE:     Hardware error sources of the platform and of device drivers, their reports and error records
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -248,6 +248,191 @@ ReportUntilRefused(
     return Accepted;
 }
 
+static ULONG DriverInitializeCalls, DriverUninitializeCalls, DriverErrorSourceId;
+static PVOID DriverContextSeen;
+static NTSTATUS DriverInitializeStatus;
+static const GUID DriverSectionType = { 0x0F2A6C7E, 0x51D3, 0x4F8B, { 0x9C, 0x11, 0x27, 0x3D, 0x5A, 0x40, 0xE6, 0xB2 } };
+
+static
+NTSTATUS
+NTAPI
+DriverInitialize(
+    _Inout_opt_ PVOID Context,
+    _In_ ULONG ErrorSourceId)
+{
+    DriverInitializeCalls++;
+    DriverContextSeen = Context;
+    DriverErrorSourceId = ErrorSourceId;
+    return DriverInitializeStatus;
+}
+
+static
+VOID
+NTAPI
+DriverUninitialize(
+    _Inout_opt_ PVOID Context)
+{
+    DriverUninitializeCalls++;
+    DriverContextSeen = Context;
+}
+
+static
+NTSTATUS
+DriverReport(
+    _In_ ULONG ErrorSourceId,
+    _In_ ULONG Length,
+    _In_ WHEA_ERROR_SEVERITY Severity)
+{
+    static UCHAR Data[48];
+
+    return WheaReportHwErrorDeviceDriver(ErrorSourceId, NULL, Data, Length, (LPGUID)&DriverSectionType, Severity, "test device");
+}
+
+/* A report at DISPATCH_LEVEL needs a preallocated record; this waits until the worker has given one back */
+static
+NTSTATUS
+DriverReportWhenDrained(
+    _In_ ULONG ErrorSourceId)
+{
+    LARGE_INTEGER Interval;
+    NTSTATUS Status;
+    ULONG Attempt;
+    KIRQL Irql;
+
+    Interval.QuadPart = -10 * 10000;
+    for (Attempt = 0; Attempt < 500; Attempt++)
+    {
+        KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+        Status = DriverReport(ErrorSourceId, 48, WheaErrSevCorrected);
+        KeLowerIrql(Irql);
+        if (Status != STATUS_INSUFFICIENT_RESOURCES)
+            break;
+
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    }
+
+    return Status;
+}
+
+static
+VOID
+TestDeviceDriverSource(VOID)
+{
+    WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER Configuration;
+    TEST_DESCRIPTOR Platform;
+    TEST_PACKET Packet;
+    NTSTATUS Status, Last;
+    ULONG Id, Accepted;
+    KIRQL Irql;
+
+    ok_eq_hex(sizeof(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1), 28 + 2 * sizeof(PVOID));
+    ok_eq_hex(sizeof(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER), 68 + 2 * sizeof(PVOID));
+
+    RtlZeroMemory(&Configuration, sizeof(Configuration));
+    Configuration.Version = WHEA_DEVICE_DRIVER_CONFIG_V2;
+    Configuration.Initialize = DriverInitialize;
+    Configuration.Uninitialize = DriverUninitialize;
+    Configuration.MaxSectionDataLength = 48;
+    Configuration.MaxSectionsPerReport = 1;
+    DriverInitializeStatus = STATUS_SUCCESS;
+
+    ok_eq_hex(WheaAddErrorSourceDeviceDriver(NULL, NULL, 0), STATUS_INVALID_PARAMETER);
+    Configuration.Initialize = NULL;
+    ok_eq_hex(WheaAddErrorSourceDeviceDriver(NULL, &Configuration, 0), STATUS_INVALID_PARAMETER);
+    Configuration.Initialize = DriverInitialize;
+    Configuration.Uninitialize = NULL;
+    ok_eq_hex(WheaAddErrorSourceDeviceDriver(NULL, &Configuration, 0), STATUS_INVALID_PARAMETER);
+    Configuration.Uninitialize = DriverUninitialize;
+    Configuration.Version = WHEA_DEVICE_DRIVER_CONFIG_V1;
+    ok_eq_hex(WheaAddErrorSourceDeviceDriver(NULL, &Configuration, 0), STATUS_INVALID_PARAMETER_2);
+    Configuration.Version = WHEA_DEVICE_DRIVER_CONFIG_V2 + 1;
+    ok_eq_hex(WheaAddErrorSourceDeviceDriver(NULL, &Configuration, 0), STATUS_INVALID_PARAMETER_2);
+    Configuration.Version = WHEA_DEVICE_DRIVER_CONFIG_V2;
+    ok_eq_hex(WheaAddErrorSourceDeviceDriverV1(NULL, &Configuration, 0, 48), STATUS_INVALID_PARAMETER_2);
+    ok_eq_hex(DriverInitializeCalls, 0);
+
+    /* A failing initialize callback: its status comes back and the source is gone */
+    DriverInitializeStatus = STATUS_DEVICE_NOT_READY;
+    ok_eq_hex(WheaAddErrorSourceDeviceDriver(&Configuration, &Configuration, 0), STATUS_DEVICE_NOT_READY);
+    ok_eq_hex(DriverInitializeCalls, 1);
+    ok(DriverErrorSourceId != WHEA_INVALID_ERR_SRC_ID, "The callback got no id\n");
+    ok_eq_hex(WheaErrorSourceGetState(DriverErrorSourceId), WheaErrSrcStateRemoved);
+    ok_eq_hex(DriverUninitializeCalls, 0);
+
+    /* Nothing preallocated: reports work at PASSIVE_LEVEL only */
+    DriverInitializeStatus = STATUS_SUCCESS;
+    DriverContextSeen = NULL;
+    Status = WheaAddErrorSourceDeviceDriver(&Configuration, &Configuration, 0);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Id = DriverErrorSourceId;
+    ok_eq_hex(DriverInitializeCalls, 2);
+    ok(DriverContextSeen == &Configuration, "The callback got another context\n");
+    ok_eq_hex(WheaErrorSourceGetState(Id), WheaErrSrcStateStarted);
+
+    ok_eq_hex(WheaReportHwErrorDeviceDriver(Id, NULL, (PUCHAR)&Packet, 48, NULL, WheaErrSevCorrected, NULL), STATUS_INVALID_PARAMETER);
+    ok_eq_hex(DriverReport(Id, 48, (WHEA_ERROR_SEVERITY)(WheaErrSevInformational + 1)), STATUS_INVALID_PARAMETER);
+    ok_eq_hex(DriverReport(WHEA_INVALID_ERR_SRC_ID, 48, WheaErrSevCorrected), STATUS_NOT_FOUND);
+    ok_eq_hex(DriverReport(Id, 49, WheaErrSevCorrected), STATUS_INVALID_BUFFER_SIZE);
+    ok_eq_hex(DriverReport(Id, 48, WheaErrSevCorrected), STATUS_SUCCESS);
+    ok_eq_hex(DriverReport(Id, 0, WheaErrSevFatal), STATUS_SUCCESS);
+    ok_eq_hex(DriverReport(Id, 48, WheaErrSevInformational), STATUS_SUCCESS);
+    KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+    Status = DriverReport(Id, 48, WheaErrSevCorrected);
+    KeLowerIrql(Irql);
+    ok_eq_hex(Status, STATUS_INSUFFICIENT_RESOURCES);
+
+    /* The two families do not take each other's sources */
+    InitPacket(&Packet, Id);
+    ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_INVALID_PARAMETER);
+    WheaRemoveErrorSource(Id);
+    ok_eq_hex(WheaErrorSourceGetState(Id), WheaErrSrcStateStarted);
+    InitDescriptor(&Platform);
+    Status = Add(&Platform);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (NT_SUCCESS(Status))
+    {
+        ok_eq_hex(DriverReport(Platform.ErrorSourceId, 48, WheaErrSevCorrected), STATUS_INVALID_PARAMETER);
+        ok_eq_hex(WheaRemoveErrorSourceDeviceDriver(Platform.ErrorSourceId), STATUS_NOT_FOUND);
+        ok_eq_hex(WheaErrorSourceGetState(Platform.ErrorSourceId), WheaErrSrcStateStarted);
+        WheaRemoveErrorSource(Platform.ErrorSourceId);
+    }
+
+    DriverContextSeen = NULL;
+    ok_eq_hex(WheaRemoveErrorSourceDeviceDriver(Id), STATUS_SUCCESS);
+    ok_eq_hex(DriverUninitializeCalls, 1);
+    ok(DriverContextSeen == &Configuration, "The uninitialize callback got another context\n");
+    ok_eq_hex(WheaErrorSourceGetState(Id), WheaErrSrcStateRemoved);
+    ok_eq_hex(WheaRemoveErrorSourceDeviceDriver(Id), STATUS_NOT_FOUND);
+    ok_eq_hex(DriverReport(Id, 48, WheaErrSevCorrected), STATUS_NOT_FOUND);
+
+    /* Version 1 of the configuration, two preallocated reports: exact at DISPATCH_LEVEL */
+    Configuration.Version = WHEA_DEVICE_DRIVER_CONFIG_V1;
+    Status = WheaAddErrorSourceDeviceDriverV1(NULL, &Configuration, 2, 48);
+    ok_eq_hex(Status, STATUS_SUCCESS);
+    if (!NT_SUCCESS(Status))
+        return;
+
+    Id = DriverErrorSourceId;
+    Last = STATUS_SUCCESS;
+    KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+    for (Accepted = 0; Accepted < 8; Accepted++)
+    {
+        Last = DriverReport(Id, 48, WheaErrSevCorrected);
+        if (Last != STATUS_SUCCESS)
+            break;
+    }
+
+    KeLowerIrql(Irql);
+    ok_eq_hex(Accepted, 2);
+    ok_eq_hex(Last, STATUS_INSUFFICIENT_RESOURCES);
+    ok_eq_hex(DriverReportWhenDrained(Id), STATUS_SUCCESS);
+    ok_eq_hex(WheaRemoveErrorSourceDeviceDriver(Id), STATUS_SUCCESS);
+    ok_eq_hex(DriverUninitializeCalls, 2);
+}
+
 START_TEST(WheaErrorSource)
 {
     TEST_DESCRIPTOR Started, Stopped, Large;
@@ -257,6 +442,7 @@ START_TEST(WheaErrorSource)
     KIRQL Irql;
 
     TestRecordHeader();
+    TestDeviceDriverSource();
     TestAddRefusals();
 
     InitDescriptor(&Started);

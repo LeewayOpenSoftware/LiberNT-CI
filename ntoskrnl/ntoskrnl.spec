@@ -3326,8 +3326,8 @@
 @ stub -arch=arm64 VslQuerySecureDevice
 @ stub -arch=win64 VslRetrieveMailbox
 @ stdcall -arch=win64 WheaAddErrorSource(ptr ptr)
-@ stub -arch=win64 WheaAddErrorSourceDeviceDriver
-@ stub -arch=win64 WheaAddErrorSourceDeviceDriverV1
+@ stdcall -arch=win64 WheaAddErrorSourceDeviceDriver(ptr ptr long)
+@ stdcall -arch=win64 WheaAddErrorSourceDeviceDriverV1(ptr ptr long long)
 @ stub -arch=win64 WheaAddHwErrorReportSectionDeviceDriver
 @ stub -arch=win64 WheaAttemptClearPoison
 @ stub -arch=win64 WheaAttemptPhysicalPageOffline
@@ -3336,7 +3336,7 @@
 @ stub -arch=win64 WheaCreateHwErrorReportDeviceDriver
 @ stub -arch=win64 WheaDeferredRecoveryService
 @ stub -arch=win64 WheaEnterCriticalState
-@ stub -arch=win64 WheaErrorSourceGetState
+@ stdcall -arch=win64 WheaErrorSourceGetState(long)
 @ stub -arch=win64 WheaExitCriticalState
 @ stub -arch=win64 WheaGetCurrentProcessName
 @ stub -arch=win64 WheaGetErrorSource
@@ -3362,10 +3362,10 @@
 @ stub -arch=win64 WheaRecoveryBugCheck
 @ stub -arch=win64 WheaRegisterErrorSourceOverride
 @ stdcall -arch=win64 WheaRemoveErrorSource(long)
-@ stub -arch=win64 WheaRemoveErrorSourceDeviceDriver
+@ stdcall -arch=win64 WheaRemoveErrorSourceDeviceDriver(long)
 @ stub -arch=win64 WheaReportFatalHwErrorDeviceDriverEx
 @ stdcall -arch=win64 WheaReportHwError(ptr)
-@ stub -arch=win64 WheaReportHwErrorDeviceDriver
+@ stdcall -arch=win64 WheaReportHwErrorDeviceDriver(long ptr ptr long ptr long ptr)
 @ stub -arch=win64 WheaReportHwErrorDeviceDriverEx
 @ stub -arch=win64 WheaRequestDeferredRecovery
 @ stub -arch=win64 WheaSignalHandlerOverride

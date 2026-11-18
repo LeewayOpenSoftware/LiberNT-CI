@@ -27,6 +27,9 @@
 
 C_ASSERT(sizeof(WHEA_ERROR_RECORD_HEADER) == 128);
 C_ASSERT(sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR) == 72);
+C_ASSERT(sizeof(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1) == 28 + 2 * sizeof(PVOID));
+C_ASSERT(sizeof(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER) == 68 + 2 * sizeof(PVOID));
+C_ASSERT(FIELD_OFFSET(WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER, Initialize) == 28);
 
 typedef struct _WHEAP_DESCRIPTOR_HEADER
 {
@@ -50,6 +53,11 @@ typedef struct _WHEAP_RECORD
     PWHEAP_ERROR_SOURCE Source;
     LARGE_INTEGER SystemTime;
     ULONG PacketLength;
+    BOOLEAN DeviceDriver;
+    BOOLEAN FromPool;
+    WHEA_ERROR_SEVERITY Severity;
+    GUID SectionType;
+    CHAR FruText[20];
     UCHAR Packet[ANYSIZE_ARRAY];
 } WHEAP_RECORD, *PWHEAP_RECORD;
 
@@ -63,6 +71,10 @@ typedef struct _WHEAP_ERROR_SOURCE
     ULONG ReportedCount;
     ULONG DroppedCount;
     ULONG LoggedCount;
+    BOOLEAN DeviceDriver;
+    WHEA_ERROR_SOURCE_UNINITIALIZE_DEVICE_DRIVER Uninitialize;
+    GUID CreatorId;
+    GUID PartitionId;
     LIST_ENTRY FreeRecords;
     ULONG DescriptorLength;
     UCHAR Descriptor[ANYSIZE_ARRAY];
@@ -189,15 +201,18 @@ WheaInitializeRecordHeader(
 
 static
 VOID
+WheapWriteRecord(
+    _In_ PWHEA_ERROR_RECORD_HEADER Header,
+    _In_ WHEA_ERROR_SEVERITY Severity);
+
+static
+VOID
 WheapLogPacket(
     _In_ ULONG PacketLength)
 {
     PWHEA_ERROR_RECORD_HEADER Header = (PWHEA_ERROR_RECORD_HEADER)WheapLogBuffer;
     PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR Section = (PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR)(Header + 1);
     PWHEA_ERROR_PACKET_V2 Packet = (PWHEA_ERROR_PACKET_V2)(Section + 1);
-    EVENT_DATA_DESCRIPTOR Data[2];
-    EVENT_DESCRIPTOR Event;
-    ULONG Length;
 
     WheaInitializeRecordHeader(Header);
     Header->SectionCount = 1;
@@ -205,8 +220,7 @@ WheapLogPacket(
     Header->NotifyType = Packet->NotifyType;
     Header->Flags.PreviousError = Packet->Flags.PreviousError;
     Header->Flags.Simulated = Packet->Flags.Simulated;
-    Length = sizeof(*Header) + sizeof(*Section) + PacketLength;
-    Header->Length = Length;
+    Header->Length = sizeof(*Header) + sizeof(*Section) + PacketLength;
 
     RtlZeroMemory(Section, sizeof(*Section));
     Section->SectionOffset = sizeof(*Header) + sizeof(*Section);
@@ -214,6 +228,57 @@ WheapLogPacket(
     Section->Revision.AsUSHORT = WHEAP_SECTION_REVISION;
     Section->SectionType = WheapErrorPacketSectionGuid;
     Section->SectionSeverity = Packet->ErrorSeverity;
+    WheapWriteRecord(Header, Packet->ErrorSeverity);
+}
+
+static
+VOID
+WheapLogDeviceDriverData(
+    _In_ const WHEAP_RECORD *Item,
+    _In_ const GUID *CreatorId,
+    _In_ const GUID *PartitionId)
+{
+    static const GUID NoGuid = { 0 };
+    PWHEA_ERROR_RECORD_HEADER Header = (PWHEA_ERROR_RECORD_HEADER)WheapLogBuffer;
+    PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR Section = (PWHEA_ERROR_RECORD_SECTION_DESCRIPTOR)(Header + 1);
+
+    WheaInitializeRecordHeader(Header);
+    Header->SectionCount = 1;
+    Header->Severity = Item->Severity;
+    Header->Flags.DeviceDriver = 1;
+    Header->Length = sizeof(*Header) + sizeof(*Section) + Item->PacketLength;
+    if (!RtlEqualMemory(CreatorId, &NoGuid, sizeof(GUID)))
+        Header->CreatorId = *CreatorId;
+    if (!RtlEqualMemory(PartitionId, &NoGuid, sizeof(GUID)))
+    {
+        Header->PartitionId = *PartitionId;
+        Header->ValidBits.PartitionId = 1;
+    }
+
+    RtlZeroMemory(Section, sizeof(*Section));
+    Section->SectionOffset = sizeof(*Header) + sizeof(*Section);
+    Section->SectionLength = Item->PacketLength;
+    Section->Revision.AsUSHORT = WHEAP_SECTION_REVISION;
+    Section->SectionType = Item->SectionType;
+    Section->SectionSeverity = Item->Severity;
+    if (Item->FruText[0])
+    {
+        RtlCopyMemory(Section->FRUText, Item->FruText, sizeof(Section->FRUText));
+        Section->ValidBits.FRUText = 1;
+    }
+
+    WheapWriteRecord(Header, Item->Severity);
+}
+
+static
+VOID
+WheapWriteRecord(
+    _In_ PWHEA_ERROR_RECORD_HEADER Header,
+    _In_ WHEA_ERROR_SEVERITY Severity)
+{
+    EVENT_DATA_DESCRIPTOR Data[2];
+    EVENT_DESCRIPTOR Event;
+    ULONG Length = Header->Length;
 
     if (!WheapEtwRegistered)
         WheapEtwRegistered = NT_SUCCESS(EtwRegister(&WheapLoggerGuid, NULL, NULL, &WheapEtwHandle));
@@ -223,12 +288,12 @@ WheapLogPacket(
     RtlZeroMemory(&Event, sizeof(Event));
     Event.Channel = WHEAP_EVENT_CHANNEL_SYSTEM;
     Event.Keyword = WHEAP_EVENT_KEYWORDS;
-    if (Packet->ErrorSeverity == WheaErrSevCorrected)
+    if (Severity == WheaErrSevCorrected)
     {
         Event.Id = 2;
         Event.Level = 3;
     }
-    else if (Packet->ErrorSeverity == WheaErrSevInformational)
+    else if (Severity == WheaErrSevInformational)
     {
         Event.Id = 3;
         Event.Level = 4;
@@ -252,9 +317,10 @@ WheapWorker(
 {
     PWHEAP_RECORD Record;
     PWHEA_ERROR_PACKET_V2 Packet;
-    WHEA_ERROR_TYPE ErrorType;
-    WHEA_ERROR_SEVERITY Severity;
-    ULONG ErrorSourceId, Length, Sequence;
+    WHEAP_RECORD Item;
+    GUID CreatorId, PartitionId;
+    ULONG ErrorSourceId, ErrorType, Length, Sequence;
+    BOOLEAN FromPool;
     KIRQL OldIrql;
 
     UNREFERENCED_PARAMETER(Parameter);
@@ -274,11 +340,20 @@ WheapWorker(
 
         Record = CONTAINING_RECORD(RemoveHeadList(&WheapPendingList), WHEAP_RECORD, Link);
         Packet = (PWHEA_ERROR_PACKET_V2)Record->Packet;
-        ErrorSourceId = Packet->ErrorSourceId;
-        ErrorType = Packet->ErrorType;
-        Severity = Packet->ErrorSeverity;
+        RtlCopyMemory(&Item, Record, FIELD_OFFSET(WHEAP_RECORD, Packet));
+        ErrorSourceId = Record->Source->ErrorSourceId;
+        CreatorId = Record->Source->CreatorId;
+        PartitionId = Record->Source->PartitionId;
+        ErrorType = 0;
+        if (!Item.DeviceDriver)
+        {
+            ErrorType = Packet->ErrorType;
+            Item.Severity = Packet->ErrorSeverity;
+        }
+
         Length = Record->PacketLength;
         Sequence = ++Record->Source->LoggedCount;
+        FromPool = Record->FromPool;
         if (WheapLogBuffer)
         {
             RtlCopyMemory(WheapLogBuffer + sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR),
@@ -286,17 +361,23 @@ WheapWorker(
                           Length);
         }
 
-        InsertTailList(&Record->Source->FreeRecords, &Record->Link);
+        if (!FromPool)
+            InsertTailList(&Record->Source->FreeRecords, &Record->Link);
         WheapReleaseLock(OldIrql);
+
+        if (FromPool)
+            ExFreePoolWithTag(Record, WHEAP_TAG);
 
         /* FIXME: drop this line once ETW events reach the event log; a source in a fault loop must not fill the log */
         if (Sequence <= WHEAP_DEBUG_LINES || (Sequence % WHEAP_DEBUG_LINE_INTERVAL) == 0)
         {
-            DPRINT1("WHEA: hardware error %lu from source %lu: type %d, severity %d, packet of %lu bytes\n",
-                    Sequence, ErrorSourceId, ErrorType, Severity, Length);
+            DPRINT1("WHEA: hardware error %lu from source %lu: type %lu, severity %d, %lu bytes\n",
+                    Sequence, ErrorSourceId, ErrorType, Item.Severity, Length);
         }
 
-        if (WheapLogBuffer)
+        if (WheapLogBuffer && Item.DeviceDriver)
+            WheapLogDeviceDriverData(&Item, &CreatorId, &PartitionId);
+        else if (WheapLogBuffer)
             WheapLogPacket(Length);
     }
 }
@@ -317,6 +398,72 @@ WheapDpcRoutine(
 
     ExInitializeWorkItem(&WheapWorkItem, WheapWorker, NULL);
     ExQueueWorkItem(&WheapWorkItem, DelayedWorkQueue);
+}
+
+static
+VOID
+WheapPrepareConsumer(VOID)
+{
+    if (!WheapConsumerReady)
+    {
+        KeInitializeDpc(&WheapDpc, WheapDpcRoutine, NULL);
+        WheapConsumerReady = TRUE;
+    }
+}
+
+static
+ULONG
+WheapAssignSourceId(
+    _Inout_ PWHEAP_ERROR_SOURCE Source)
+{
+    do
+    {
+        Source->ErrorSourceId = WheapNextSourceId++;
+    } while (Source->ErrorSourceId == WHEA_INVALID_ERR_SRC_ID || WheapFindSource(Source->ErrorSourceId));
+
+    return Source->ErrorSourceId;
+}
+
+static
+PWHEAP_ERROR_SOURCE
+WheapDetachSource(
+    _In_ ULONG ErrorSourceId,
+    _In_ BOOLEAN DeviceDriver)
+{
+    PWHEAP_ERROR_SOURCE Source;
+    PWHEAP_RECORD Record;
+    PLIST_ENTRY Entry, Next;
+    LIST_ENTRY PoolRecords;
+    KIRQL OldIrql;
+
+    InitializeListHead(&PoolRecords);
+    WheapAcquireLock(&OldIrql);
+    Source = WheapFindSource(ErrorSourceId);
+    if (Source && Source->DeviceDriver != DeviceDriver)
+        Source = NULL;
+
+    if (Source)
+    {
+        RemoveEntryList(&Source->Link);
+        for (Entry = WheapPendingList.Flink; Entry != &WheapPendingList; Entry = Next)
+        {
+            Next = Entry->Flink;
+            Record = CONTAINING_RECORD(Entry, WHEAP_RECORD, Link);
+            if (Record->Source == Source)
+            {
+                RemoveEntryList(Entry);
+                if (Record->FromPool)
+                    InsertTailList(&PoolRecords, Entry);
+            }
+        }
+    }
+
+    WheapReleaseLock(OldIrql);
+
+    while (!IsListEmpty(&PoolRecords))
+        ExFreePoolWithTag(CONTAINING_RECORD(RemoveHeadList(&PoolRecords), WHEAP_RECORD, Link), WHEAP_TAG);
+
+    return Source;
 }
 
 NTSTATUS
@@ -368,6 +515,10 @@ WheaAddErrorSource(
     Source->ReportedCount = 0;
     Source->DroppedCount = 0;
     Source->LoggedCount = 0;
+    Source->DeviceDriver = FALSE;
+    Source->Uninitialize = NULL;
+    RtlZeroMemory(&Source->CreatorId, sizeof(GUID));
+    RtlZeroMemory(&Source->PartitionId, sizeof(GUID));
     InitializeListHead(&Source->FreeRecords);
     Source->DescriptorLength = Header.Length;
     RtlCopyMemory(Source->Descriptor, ErrorSource, Header.Length);
@@ -376,23 +527,15 @@ WheaAddErrorSource(
     for (Index = 0; Index < RecordCount; Index++)
     {
         Record->Source = Source;
+        Record->DeviceDriver = FALSE;
+        Record->FromPool = FALSE;
         InsertTailList(&Source->FreeRecords, &Record->Link);
         Record = (PWHEAP_RECORD)((PUCHAR)Record + RecordSize);
     }
 
     WheapAcquireLock(&OldIrql);
-    if (!WheapConsumerReady)
-    {
-        KeInitializeDpc(&WheapDpc, WheapDpcRoutine, NULL);
-        WheapConsumerReady = TRUE;
-    }
-
-    do
-    {
-        Source->ErrorSourceId = WheapNextSourceId++;
-    } while (Source->ErrorSourceId == 0 || WheapFindSource(Source->ErrorSourceId));
-
-    Header.ErrorSourceId = Source->ErrorSourceId;
+    WheapPrepareConsumer();
+    Header.ErrorSourceId = WheapAssignSourceId(Source);
     RtlCopyMemory(Source->Descriptor, &Header, sizeof(Header));
     InsertTailList(&WheapSourceList, &Source->Link);
     WheapReleaseLock(OldIrql);
@@ -407,25 +550,9 @@ WheaRemoveErrorSource(
     _In_ ULONG ErrorSourceId)
 {
     PWHEAP_ERROR_SOURCE Source;
-    PLIST_ENTRY Entry, Next;
-    KIRQL OldIrql;
 
     ASSERT(KeGetCurrentIrql() <= DISPATCH_LEVEL);
-    WheapAcquireLock(&OldIrql);
-    Source = WheapFindSource(ErrorSourceId);
-    if (Source)
-    {
-        RemoveEntryList(&Source->Link);
-        for (Entry = WheapPendingList.Flink; Entry != &WheapPendingList; Entry = Next)
-        {
-            Next = Entry->Flink;
-            if (CONTAINING_RECORD(Entry, WHEAP_RECORD, Link)->Source == Source)
-                RemoveEntryList(Entry);
-        }
-    }
-
-    WheapReleaseLock(OldIrql);
-
+    Source = WheapDetachSource(ErrorSourceId, FALSE);
     if (Source)
         ExFreePoolWithTag(Source, WHEAP_TAG);
 }
@@ -460,6 +587,10 @@ WheaReportHwError(
     if (!Source)
     {
         Status = STATUS_NOT_FOUND;
+    }
+    else if (Source->DeviceDriver)
+    {
+        Status = STATUS_INVALID_PARAMETER;
     }
     else if (Source->State != WheaErrSrcStateStarted)
     {
@@ -498,4 +629,264 @@ WheaReportHwError(
         KeInsertQueueDpc(&WheapDpc, NULL, NULL);
 
     return Status;
+}
+
+static
+NTSTATUS
+WheapAddDeviceDriverSource(
+    _In_opt_ PVOID Context,
+    _In_ PWHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1 Configuration,
+    _In_ ULONG ReportCount,
+    _In_ ULONG MaxDataLength,
+    _In_opt_ const GUID *CreatorId,
+    _In_opt_ const GUID *PartitionId)
+{
+    WHEA_ERROR_SOURCE_INITIALIZE_DEVICE_DRIVER Initialize = Configuration->Initialize;
+    PWHEAP_ERROR_SOURCE Source;
+    PWHEAP_RECORD Record;
+    SIZE_T SourceSize, RecordSize;
+    ULONG ErrorSourceId, Index;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+
+    if (!Initialize || !Configuration->Uninitialize || MaxDataLength > WHEAP_MAX_RAW_DATA_LENGTH)
+        return STATUS_INVALID_PARAMETER;
+
+    SourceSize = ALIGN_UP_BY(FIELD_OFFSET(WHEAP_ERROR_SOURCE, Descriptor), MEMORY_ALLOCATION_ALIGNMENT);
+    RecordSize = ALIGN_UP_BY(FIELD_OFFSET(WHEAP_RECORD, Packet) + MaxDataLength, MEMORY_ALLOCATION_ALIGNMENT);
+    if (ReportCount > WHEAP_MAX_RECORDS)
+        ReportCount = WHEAP_MAX_RECORDS;
+    if (ReportCount > WHEAP_MAX_RECORD_BYTES / RecordSize)
+        ReportCount = (ULONG)(WHEAP_MAX_RECORD_BYTES / RecordSize);
+
+    Source = ExAllocatePoolWithTag(NonPagedPoolNx, SourceSize + ReportCount * RecordSize, WHEAP_TAG);
+    if (!Source)
+        return STATUS_INSUFFICIENT_RESOURCES;
+
+    RtlZeroMemory(Source, SourceSize);
+    Source->State = WheaErrSrcStateStarted;
+    Source->Context = Context;
+    Source->MaxPacketLength = MaxDataLength;
+    Source->DeviceDriver = TRUE;
+    Source->Uninitialize = Configuration->Uninitialize;
+    if (CreatorId)
+        Source->CreatorId = *CreatorId;
+    if (PartitionId)
+        Source->PartitionId = *PartitionId;
+    InitializeListHead(&Source->FreeRecords);
+
+    Record = (PWHEAP_RECORD)((PUCHAR)Source + SourceSize);
+    for (Index = 0; Index < ReportCount; Index++)
+    {
+        Record->Source = Source;
+        Record->DeviceDriver = TRUE;
+        Record->FromPool = FALSE;
+        InsertTailList(&Source->FreeRecords, &Record->Link);
+        Record = (PWHEAP_RECORD)((PUCHAR)Record + RecordSize);
+    }
+
+    WheapAcquireLock(&OldIrql);
+    WheapPrepareConsumer();
+    ErrorSourceId = WheapAssignSourceId(Source);
+    InsertTailList(&WheapSourceList, &Source->Link);
+    WheapReleaseLock(OldIrql);
+
+    Status = Initialize(Context, ErrorSourceId);
+    if (!NT_SUCCESS(Status))
+    {
+        Source = WheapDetachSource(ErrorSourceId, TRUE);
+        if (Source)
+            ExFreePoolWithTag(Source, WHEAP_TAG);
+    }
+
+    return Status;
+}
+
+NTSTATUS
+NTAPI
+WheaAddErrorSourceDeviceDriver(
+    _Inout_opt_ PVOID Context,
+    _In_ PWHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER Configuration,
+    _In_ ULONG NumberPreallocatedErrorReports)
+{
+    WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER Captured;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    if (!Configuration)
+        return STATUS_INVALID_PARAMETER;
+
+    Captured = *Configuration;
+    if (Captured.Version != WHEA_DEVICE_DRIVER_CONFIG_V2)
+        return STATUS_INVALID_PARAMETER_2;
+
+    return WheapAddDeviceDriverSource(Context,
+                                      (PWHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1)&Captured,
+                                      NumberPreallocatedErrorReports,
+                                      Captured.MaxSectionDataLength,
+                                      &Captured.CreatorId,
+                                      &Captured.PartitionId);
+}
+
+NTSTATUS
+NTAPI
+WheaAddErrorSourceDeviceDriverV1(
+    _Inout_opt_ PVOID Context,
+    _In_ PWHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER Configuration,
+    _In_ ULONG NumBuffersToPreallocate,
+    _In_ ULONG MaxDataLength)
+{
+    WHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1 Captured;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    if (!Configuration)
+        return STATUS_INVALID_PARAMETER;
+
+    Captured = *(PWHEA_ERROR_SOURCE_CONFIGURATION_DEVICE_DRIVER_V1)Configuration;
+    if (Captured.Version != WHEA_DEVICE_DRIVER_CONFIG_V1)
+        return STATUS_INVALID_PARAMETER_2;
+
+    return WheapAddDeviceDriverSource(Context, &Captured, NumBuffersToPreallocate, MaxDataLength, NULL, NULL);
+}
+
+NTSTATUS
+NTAPI
+WheaRemoveErrorSourceDeviceDriver(
+    _In_ ULONG ErrorSourceId)
+{
+    PWHEAP_ERROR_SOURCE Source;
+
+    ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    Source = WheapDetachSource(ErrorSourceId, TRUE);
+    if (!Source)
+        return STATUS_NOT_FOUND;
+
+    Source->Uninitialize(Source->Context);
+    ExFreePoolWithTag(Source, WHEAP_TAG);
+    return STATUS_SUCCESS;
+}
+
+NTSTATUS
+NTAPI
+WheaReportHwErrorDeviceDriver(
+    _In_ ULONG ErrorSourceId,
+    _In_opt_ PDEVICE_OBJECT DeviceObject,
+    _In_reads_bytes_(ErrorDataLength) PUCHAR ErrorData,
+    _In_ ULONG ErrorDataLength,
+    _In_ LPGUID SectionTypeGuid,
+    _In_ WHEA_ERROR_SEVERITY ErrorSeverity,
+    _In_opt_ LPSTR DeviceFriendlyName)
+{
+    PWHEAP_ERROR_SOURCE Source;
+    PWHEAP_RECORD Record = NULL, Spare = NULL;
+    BOOLEAN QueueDpc = FALSE;
+    NTSTATUS Status;
+    KIRQL OldIrql;
+    ULONG Index;
+
+    UNREFERENCED_PARAMETER(DeviceObject);
+
+    if (!SectionTypeGuid ||
+        (!ErrorData && ErrorDataLength != 0) ||
+        ErrorDataLength > WHEAP_MAX_RAW_DATA_LENGTH ||
+        (ULONG)ErrorSeverity > WheaErrSevInformational)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+    {
+        Spare = ExAllocatePoolWithTag(NonPagedPoolNx, FIELD_OFFSET(WHEAP_RECORD, Packet) + ErrorDataLength, WHEAP_TAG);
+    }
+
+    WheapAcquireLock(&OldIrql);
+    Source = WheapFindSource(ErrorSourceId);
+    if (!Source)
+    {
+        Status = STATUS_NOT_FOUND;
+    }
+    else if (!Source->DeviceDriver)
+    {
+        Status = STATUS_INVALID_PARAMETER;
+    }
+    else if (Source->State != WheaErrSrcStateStarted)
+    {
+        Status = STATUS_INVALID_DEVICE_STATE;
+    }
+    else if (ErrorDataLength > Source->MaxPacketLength)
+    {
+        Status = STATUS_INVALID_BUFFER_SIZE;
+    }
+    else
+    {
+        if (!IsListEmpty(&Source->FreeRecords))
+        {
+            Record = CONTAINING_RECORD(RemoveHeadList(&Source->FreeRecords), WHEAP_RECORD, Link);
+        }
+        else if (Spare)
+        {
+            Record = Spare;
+            Spare = NULL;
+            Record->Source = Source;
+            Record->FromPool = TRUE;
+        }
+
+        if (!Record)
+        {
+            Source->DroppedCount++;
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+        }
+        else
+        {
+            Record->DeviceDriver = TRUE;
+            Record->Severity = ErrorSeverity;
+            Record->SectionType = *SectionTypeGuid;
+            RtlZeroMemory(Record->FruText, sizeof(Record->FruText));
+            if (DeviceFriendlyName)
+            {
+                for (Index = 0; Index < sizeof(Record->FruText) - 1 && DeviceFriendlyName[Index]; Index++)
+                    Record->FruText[Index] = DeviceFriendlyName[Index];
+            }
+
+            if (ErrorDataLength)
+                RtlCopyMemory(Record->Packet, ErrorData, ErrorDataLength);
+            Record->PacketLength = ErrorDataLength;
+            KeQuerySystemTime(&Record->SystemTime);
+            InsertTailList(&WheapPendingList, &Record->Link);
+            Source->ReportedCount++;
+            if (!WheapWorkQueued)
+            {
+                WheapWorkQueued = TRUE;
+                QueueDpc = TRUE;
+            }
+
+            Status = STATUS_SUCCESS;
+        }
+    }
+
+    WheapReleaseLock(OldIrql);
+
+    if (Spare)
+        ExFreePoolWithTag(Spare, WHEAP_TAG);
+    if (QueueDpc)
+        KeInsertQueueDpc(&WheapDpc, NULL, NULL);
+
+    return Status;
+}
+
+WHEA_ERROR_SOURCE_STATE
+NTAPI
+WheaErrorSourceGetState(
+    _In_ ULONG ErrorSourceId)
+{
+    PWHEAP_ERROR_SOURCE Source;
+    WHEA_ERROR_SOURCE_STATE State = WheaErrSrcStateRemoved;
+    KIRQL OldIrql;
+
+    WheapAcquireLock(&OldIrql);
+    Source = WheapFindSource(ErrorSourceId);
+    if (Source)
+        State = Source->State;
+
+    WheapReleaseLock(OldIrql);
+    return State;
 }
