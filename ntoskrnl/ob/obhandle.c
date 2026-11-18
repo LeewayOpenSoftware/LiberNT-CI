@@ -2267,6 +2267,7 @@ typedef struct _OBP_INHERIT_HANDLE_CONTEXT
     PHANDLE_TABLE HandleTable;
     const HANDLE *HandleList;
     SIZE_T HandleCount;
+    SIZE_T KeptCount;
 } OBP_INHERIT_HANDLE_CONTEXT, *POBP_INHERIT_HANDLE_CONTEXT;
 
 static
@@ -2287,6 +2288,7 @@ ObpFilterInheritedHandleCallback(
     {
         if (FilterContext->HandleList[Index] == Handle)
         {
+            FilterContext->KeptCount++;
             ExUnlockHandleTableEntry(FilterContext->HandleTable, HandleEntry);
             return FALSE;
         }
@@ -2387,6 +2389,8 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
 {
     PHANDLE_TABLE ParentTable, ObjectTable;
     OBP_INHERIT_HANDLE_CONTEXT FilterContext;
+    NTSTATUS Status = STATUS_SUCCESS;
+    SIZE_T Index;
 
     /* Check for a parent */
     if (Parent)
@@ -2408,6 +2412,18 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
             FilterContext.HandleTable = ObjectTable;
             FilterContext.HandleList = HandleList;
             FilterContext.HandleCount = HandleCount;
+            FilterContext.KeptCount = 0;
+
+            /* A list with a NULL entry inherits nothing: measured on Windows 11 */
+            for (Index = 0; Index < HandleCount; Index++)
+            {
+                if (!HandleList[Index])
+                {
+                    FilterContext.HandleCount = 0;
+                    break;
+                }
+            }
+
             ObjectTable->StrictFIFO = TRUE;
             KeEnterCriticalRegion();
             ExSweepHandleTable(ObjectTable,
@@ -2415,6 +2431,9 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
                                &FilterContext);
             KeLeaveCriticalRegion();
             ObjectTable->StrictFIFO = StrictFifo;
+
+            if (FilterContext.KeptCount != FilterContext.HandleCount)
+                Status = STATUS_INVALID_PARAMETER;
         }
         if (ObjectTable)
             ExEnumHandleTable(ObjectTable,
@@ -2446,7 +2465,7 @@ ObInitProcess(IN PEPROCESS Parent OPTIONAL,
         if (ParentTable) ObDereferenceProcessHandleTable(Parent);
 
         /* We are done */
-        return STATUS_SUCCESS;
+        return Status;
     }
     else
     {
