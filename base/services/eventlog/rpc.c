@@ -280,6 +280,10 @@ ElfDeleteEventLogHandle(PIELF_HANDLE LogHandle)
     RemoveEntryList(&pLogHandle->LogHandleListEntry);
     LeaveCriticalSection(&LogHandleListCs);
 
+    /* Off the list: no writer can signal it any more */
+    if (pLogHandle->ChangeEvent)
+        CloseHandle(pLogHandle->ChangeEvent);
+
     LogfClose(pLogHandle->LogFile, FALSE);
 
     HeapFree(GetProcessHeap(), 0, pLogHandle);
@@ -434,6 +438,36 @@ ElfrOldestRecord(
 }
 
 
+/* Signals every handle on this log that asked for change notification. */
+VOID
+ElfNotifyLogChange(PLOGFILE LogFile)
+{
+    PLIST_ENTRY Entry;
+    PLOGHANDLE pLogHandle;
+
+    EnterCriticalSection(&LogHandleListCs);
+    for (Entry = LogHandleListHead.Flink; Entry != &LogHandleListHead; Entry = Entry->Flink)
+    {
+        pLogHandle = CONTAINING_RECORD(Entry, LOGHANDLE, LogHandleListEntry);
+        if (pLogHandle->LogFile == LogFile && pLogHandle->ChangeEvent)
+            SetEvent(pLogHandle->ChangeEvent);
+    }
+    LeaveCriticalSection(&LogHandleListCs);
+}
+
+/* TRUE when the handle refers to an event object */
+static BOOLEAN
+ElfIsEventHandle(HANDLE Handle)
+{
+    ULONG Buffer[(sizeof(OBJECT_TYPE_INFORMATION) + 64 * sizeof(WCHAR)) / sizeof(ULONG) + 1];
+    POBJECT_TYPE_INFORMATION TypeInfo = (POBJECT_TYPE_INFORMATION)Buffer;
+    UNICODE_STRING EventType = RTL_CONSTANT_STRING(L"Event");
+    NTSTATUS Status;
+
+    Status = NtQueryObject(Handle, ObjectTypeInformation, TypeInfo, sizeof(Buffer), NULL);
+    return NT_SUCCESS(Status) && RtlEqualUnicodeString(&TypeInfo->TypeName, &EventType, FALSE);
+}
+
 /* Function 6 */
 NTSTATUS
 WINAPI
@@ -442,8 +476,50 @@ ElfrChangeNotify(
     RPC_CLIENT_ID ClientId,
     ULONG Event)
 {
-    UNIMPLEMENTED;
-    return STATUS_NOT_IMPLEMENTED;
+    PLOGHANDLE pLogHandle;
+    HANDLE hProcess, hEvent = NULL, hOld;
+    BOOL Opened;
+
+    pLogHandle = ElfGetLogHandleEntryByHandle(LogHandle);
+    if (!pLogHandle)
+        return STATUS_INVALID_HANDLE;
+
+    /* A backup file never changes */
+    if (pLogHandle->Flags & LOG_HANDLE_BACKUP_FILE)
+        return STATUS_INVALID_HANDLE;
+
+    /*
+     * The event handle is a value in the caller's process. The process is
+     * opened while impersonating the caller, so a caller can only name a
+     * process (and a handle in it) that it could duplicate from itself.
+     */
+    if (RpcImpersonateClient(NULL) != RPC_S_OK)
+        return STATUS_ACCESS_DENIED;
+    hProcess = OpenProcess(PROCESS_DUP_HANDLE, FALSE, ClientId.UniqueProcess);
+    RpcRevertToSelf();
+    if (!hProcess)
+        return STATUS_ACCESS_DENIED;
+
+    Opened = DuplicateHandle(hProcess, ULongToHandle(Event), GetCurrentProcess(), &hEvent,
+                             EVENT_MODIFY_STATE, FALSE, 0);
+    CloseHandle(hProcess);
+    if (!Opened)
+        return STATUS_INVALID_HANDLE;
+    if (!ElfIsEventHandle(hEvent))
+    {
+        CloseHandle(hEvent);
+        return STATUS_INVALID_HANDLE;
+    }
+
+    /* One event per handle: a new call replaces the previous one */
+    EnterCriticalSection(&LogHandleListCs);
+    hOld = pLogHandle->ChangeEvent;
+    pLogHandle->ChangeEvent = hEvent;
+    LeaveCriticalSection(&LogHandleListCs);
+    if (hOld)
+        CloseHandle(hOld);
+
+    return STATUS_SUCCESS;
 }
 
 
