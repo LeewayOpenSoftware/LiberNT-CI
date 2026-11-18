@@ -484,6 +484,7 @@ if(ARCH STREQUAL "amd64")
         ntos_ke/amd64/KeTrapFilterX87.c
         ntos_ke/amd64/KeXState.c
         ntos_whea/WheaErrorSource.c
+        ntos_whea/WheaEtwLog.c
     )
 endif()
 
