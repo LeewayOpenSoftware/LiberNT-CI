@@ -473,11 +473,19 @@ DWORD
 StartRpcServer(VOID)
 {
     NTSTATUS Status;
+    RPC_STATUS RpcStatus;
 
     Status = lpServiceGlobals->StartRpcServer(L"seclogon", ISeclogon_v1_0_s_ifspec);
     TRACE("StartRpcServer returned 0x%08lx\n", Status);
+    if (!NT_SUCCESS(Status))
+        return RtlNtStatusToDosError(Status);
 
-    return RtlNtStatusToDosError(Status);
+    /* Callers bind over local RPC, which gives the server their process id */
+    RpcStatus = RpcServerUseProtseqEpW((RPC_WSTR)L"ncalrpc", RPC_C_PROTSEQ_MAX_REQS_DEFAULT, (RPC_WSTR)L"seclogon", NULL);
+    if (RpcStatus != RPC_S_OK && RpcStatus != RPC_S_DUPLICATE_ENDPOINT)
+        return RpcStatus;
+
+    return ERROR_SUCCESS;
 }
 
 
