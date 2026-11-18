@@ -162,6 +162,9 @@ KMT_TESTFUNC Test_FsRtlFileLockState;
 KMT_TESTFUNC Test_FsRtlLegal;
 KMT_TESTFUNC Test_FsRtlMcb;
 KMT_TESTFUNC Test_FsRtlPerFileObjectContext;
+KMT_TESTFUNC Test_OplockKeyCheckOnlyAttach;
+KMT_TESTFUNC Test_OplockKeyDual;
+KMT_TESTFUNC Test_OplockKeysEqualNoKeys;
 KMT_TESTFUNC Test_FsRtlQueryFileLock;
 KMT_TESTFUNC Test_FsRtlRemoveDotsFromPath;
 KMT_TESTFUNC Test_FsRtlTunnel;
@@ -641,6 +644,9 @@ const KMT_TEST TestList[] =
     { "FsRtlLegal",                         Test_FsRtlLegal },
     { "FsRtlMcb",                           Test_FsRtlMcb },
     { "FsRtlPerFileObjectContext",          Test_FsRtlPerFileObjectContext },
+    { "OplockKeyCheckOnlyAttach",           Test_OplockKeyCheckOnlyAttach },
+    { "OplockKeyDual",                      Test_OplockKeyDual },
+    { "OplockKeysEqualNoKeys",              Test_OplockKeysEqualNoKeys },
     { "FsRtlQueryFileLock",                 Test_FsRtlQueryFileLock },
     { "FsRtlRemoveDotsFromPath",            Test_FsRtlRemoveDotsFromPath },
     { "FsRtlTunnel",                        Test_FsRtlTunnel },

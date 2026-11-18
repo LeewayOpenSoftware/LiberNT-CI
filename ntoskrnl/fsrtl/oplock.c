@@ -62,6 +62,217 @@ typedef struct _WAIT_CONTEXT
     ULONG_PTR SavedInformation;
 } WAIT_CONTEXT, *PWAIT_CONTEXT;
 
+typedef struct _FSRTLP_OPLOCK_KEY_ENTRY
+{
+    LIST_ENTRY KeyListEntry;
+    PFILE_OBJECT FileObject;
+    GUID TargetOplockKey;
+    BOOLEAN TargetKeyValid;
+    GUID ParentOplockKey;
+    BOOLEAN ParentKeyValid;
+} FSRTLP_OPLOCK_KEY_ENTRY, *PFSRTLP_OPLOCK_KEY_ENTRY;
+
+static KSPIN_LOCK FsRtlpOplockKeyInitLock;
+static BOOLEAN FsRtlpOplockKeysReady = FALSE;
+static FAST_MUTEX FsRtlpOplockKeyLock;
+static LIST_ENTRY FsRtlpOplockKeyListHead;
+
+static
+VOID
+FsRtlpEnsureOplockKeyTable(VOID)
+{
+    KIRQL OldIrql;
+
+    if (FsRtlpOplockKeysReady)
+    {
+        return;
+    }
+
+    KeAcquireSpinLock(&FsRtlpOplockKeyInitLock, &OldIrql);
+    if (!FsRtlpOplockKeysReady)
+    {
+        ExInitializeFastMutex(&FsRtlpOplockKeyLock);
+        InitializeListHead(&FsRtlpOplockKeyListHead);
+        FsRtlpOplockKeysReady = TRUE;
+    }
+    KeReleaseSpinLock(&FsRtlpOplockKeyInitLock, OldIrql);
+}
+
+static
+PFSRTLP_OPLOCK_KEY_ENTRY
+FsRtlpFindOplockKeyEntry(IN PFILE_OBJECT FileObject)
+{
+    PLIST_ENTRY NextEntry;
+    PFSRTLP_OPLOCK_KEY_ENTRY KeyEntry;
+
+    for (NextEntry = FsRtlpOplockKeyListHead.Flink;
+         NextEntry != &FsRtlpOplockKeyListHead;
+         NextEntry = NextEntry->Flink)
+    {
+        KeyEntry = CONTAINING_RECORD(NextEntry, FSRTLP_OPLOCK_KEY_ENTRY, KeyListEntry);
+        if (KeyEntry->FileObject == FileObject)
+        {
+            return KeyEntry;
+        }
+    }
+
+    return NULL;
+}
+
+static
+VOID
+FsRtlpStoreOplockKey(IN PFILE_OBJECT FileObject,
+                     IN PGUID TargetOplockKey OPTIONAL,
+                     IN PGUID ParentOplockKey OPTIONAL)
+{
+    PFSRTLP_OPLOCK_KEY_ENTRY KeyEntry;
+
+    FsRtlpEnsureOplockKeyTable();
+
+    ExAcquireFastMutex(&FsRtlpOplockKeyLock);
+    KeyEntry = FsRtlpFindOplockKeyEntry(FileObject);
+    if (KeyEntry == NULL)
+    {
+        KeyEntry = ExAllocatePoolWithTag(PagedPool, sizeof(FSRTLP_OPLOCK_KEY_ENTRY), TAG_OPLOCK);
+        if (KeyEntry == NULL)
+        {
+            ExReleaseFastMutex(&FsRtlpOplockKeyLock);
+            return;
+        }
+
+        RtlZeroMemory(KeyEntry, sizeof(FSRTLP_OPLOCK_KEY_ENTRY));
+        KeyEntry->FileObject = FileObject;
+        InsertTailList(&FsRtlpOplockKeyListHead, &KeyEntry->KeyListEntry);
+    }
+
+    if (TargetOplockKey != NULL)
+    {
+        KeyEntry->TargetOplockKey = *TargetOplockKey;
+        KeyEntry->TargetKeyValid = TRUE;
+    }
+
+    if (ParentOplockKey != NULL)
+    {
+        KeyEntry->ParentOplockKey = *ParentOplockKey;
+        KeyEntry->ParentKeyValid = TRUE;
+    }
+    ExReleaseFastMutex(&FsRtlpOplockKeyLock);
+}
+
+static
+BOOLEAN
+FsRtlpQueryOplockKey(IN PFILE_OBJECT FileObject,
+                     OUT PFSRTLP_OPLOCK_KEY_ENTRY KeyCopy)
+{
+    PFSRTLP_OPLOCK_KEY_ENTRY KeyEntry;
+    BOOLEAN Found = FALSE;
+
+    FsRtlpEnsureOplockKeyTable();
+
+    ExAcquireFastMutex(&FsRtlpOplockKeyLock);
+    KeyEntry = FsRtlpFindOplockKeyEntry(FileObject);
+    if (KeyEntry != NULL)
+    {
+        *KeyCopy = *KeyEntry;
+        Found = TRUE;
+    }
+    ExReleaseFastMutex(&FsRtlpOplockKeyLock);
+
+    return Found;
+}
+
+static
+VOID
+FsRtlpRemoveOplockKey(IN PFILE_OBJECT FileObject)
+{
+    PFSRTLP_OPLOCK_KEY_ENTRY KeyEntry;
+
+    if (!FsRtlpOplockKeysReady)
+    {
+        return;
+    }
+
+    ExAcquireFastMutex(&FsRtlpOplockKeyLock);
+    KeyEntry = FsRtlpFindOplockKeyEntry(FileObject);
+    if (KeyEntry != NULL)
+    {
+        RemoveEntryList(&KeyEntry->KeyListEntry);
+        ExFreePoolWithTag(KeyEntry, TAG_OPLOCK);
+    }
+    ExReleaseFastMutex(&FsRtlpOplockKeyLock);
+}
+
+static
+VOID
+FsRtlpAttachOplockKeyFromIrp(IN PIRP Irp,
+                             IN PIO_STACK_LOCATION Stack)
+{
+    PECP_LIST EcpList = NULL;
+    PVOID EcpContext;
+    NTSTATUS Status;
+
+    if (Stack->FileObject == NULL)
+    {
+        return;
+    }
+
+    Status = FsRtlGetEcpListFromIrp(Irp, &EcpList);
+    if (!NT_SUCCESS(Status) || EcpList == NULL)
+    {
+        return;
+    }
+
+    Status = FsRtlFindExtraCreateParameter(EcpList, &GUID_ECP_OPLOCK_KEY, &EcpContext, NULL);
+    if (NT_SUCCESS(Status))
+    {
+        FsRtlpStoreOplockKey(Stack->FileObject, &((POPLOCK_KEY_ECP_CONTEXT)EcpContext)->OplockKey, NULL);
+        return;
+    }
+
+    Status = FsRtlFindExtraCreateParameter(EcpList, &GUID_ECP_DUAL_OPLOCK_KEY, &EcpContext, NULL);
+    if (NT_SUCCESS(Status))
+    {
+        PDUAL_OPLOCK_KEY_ECP_CONTEXT DualContext = EcpContext;
+
+        FsRtlpStoreOplockKey(Stack->FileObject,
+                             DualContext->TargetOplockKeySet ? &DualContext->TargetOplockKey : NULL,
+                             DualContext->ParentOplockKeySet ? &DualContext->ParentOplockKey : NULL);
+    }
+}
+
+BOOLEAN
+NTAPI
+FsRtlOplockKeysEqual(IN PFILE_OBJECT Fo1,
+                     IN PFILE_OBJECT Fo2)
+{
+    FSRTLP_OPLOCK_KEY_ENTRY Key1, Key2;
+
+    PAGED_CODE();
+
+    if (Fo1 == Fo2)
+    {
+        return TRUE;
+    }
+
+    if (Fo1 == NULL || Fo2 == NULL)
+    {
+        return FALSE;
+    }
+
+    if (!FsRtlpQueryOplockKey(Fo1, &Key1) || !FsRtlpQueryOplockKey(Fo2, &Key2))
+    {
+        return FALSE;
+    }
+
+    if (!Key1.TargetKeyValid || !Key2.TargetKeyValid)
+    {
+        return FALSE;
+    }
+
+    return RtlEqualGuid(&Key1.TargetOplockKey, &Key2.TargetOplockKey);
+}
+
+
 VOID
 NTAPI
 FsRtlNotifyCompletion(IN PVOID Context,
@@ -1354,8 +1565,20 @@ FsRtlCheckOplockEx(IN POPLOCK Oplock,
         DPRINT1("FsRtlCheckOplockEx: ignoring unknown flags %lx\n", Flags & ~FSRTLP_KNOWN_OPLOCK_FLAGS);
     }
 
-    /* No key to compare and no atomic oplock to back out: never a break */
-    if (BooleanFlagOn(Flags, (OPLOCK_FLAG_OPLOCK_KEY_CHECK_ONLY | OPLOCK_FLAG_BACK_OUT_ATOMIC_OPLOCK)))
+    Stack = IoGetCurrentIrpStackLocation(Irp);
+
+    if (BooleanFlagOn(Flags, OPLOCK_FLAG_OPLOCK_KEY_CHECK_ONLY))
+    {
+        FsRtlpAttachOplockKeyFromIrp(Irp, Stack);
+        return STATUS_SUCCESS;
+    }
+
+    if (Stack->MajorFunction == IRP_MJ_CLEANUP)
+    {
+        FsRtlpRemoveOplockKey(Stack->FileObject);
+    }
+
+    if (BooleanFlagOn(Flags, OPLOCK_FLAG_BACK_OUT_ATOMIC_OPLOCK))
     {
         return STATUS_SUCCESS;
     }
@@ -1379,8 +1602,6 @@ FsRtlCheckOplockEx(IN POPLOCK Oplock,
     {
         return STATUS_SUCCESS;
     }
-
-    Stack = IoGetCurrentIrpStackLocation(Irp);
 
     /* Parent directory oplock: break it, but never block the child's operation */
     if (BooleanFlagOn(Flags, OPLOCK_FLAG_PARENT_OBJECT))

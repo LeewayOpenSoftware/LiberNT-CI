@@ -2358,7 +2358,7 @@
 @ stub -arch=win64 FsRtlOplockBreakToNoneEx
 @ stub -arch=win64 FsRtlOplockFsctrlEx
 @ stub -arch=win64 FsRtlOplockGetAnyBreakOwnerProcess
-@ stub -arch=win64 FsRtlOplockKeysEqual
+@ stdcall -arch=win64 FsRtlOplockKeysEqual(ptr ptr)
 @ stub -arch=win64 FsRtlPrepareMdlWriteEx
 @ stdcall FsRtlPrepareToReuseEcp(ptr)
 @ stub -arch=win64 FsRtlQueryCachedVdl
