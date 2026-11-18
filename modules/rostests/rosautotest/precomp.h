@@ -18,6 +18,33 @@
 
 using namespace std;
 
+#ifdef _MSC_VER
+/* The STLport of the MSVC build has no std::unique_ptr */
+template<class T>
+class unique_ptr
+{
+public:
+    explicit unique_ptr(T *p = 0) : m_p(p) {}
+    ~unique_ptr() { delete m_p; }
+    T *operator->() const { return m_p; }
+    T &operator*() const { return *m_p; }
+    T *get() const { return m_p; }
+    void reset(T *p = 0)
+    {
+        if (p != m_p)
+        {
+            delete m_p;
+            m_p = p;
+        }
+    }
+
+private:
+    unique_ptr(const unique_ptr &);
+    unique_ptr &operator=(const unique_ptr &);
+    T *m_p;
+};
+#endif
+
 #define WIN32_NO_STATUS
 #define _INC_WINDOWS
 #define COM_NO_WINDOWS_H

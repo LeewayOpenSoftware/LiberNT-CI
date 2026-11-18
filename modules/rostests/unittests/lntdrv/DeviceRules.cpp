@@ -9,7 +9,28 @@
 
 #include "devices.hpp"
 
+#ifdef _MSC_VER
+/* The STLport of the MSVC build has no <initializer_list>; the compiler only needs this type to exist */
+namespace std
+{
+template<class T>
+class initializer_list
+{
+public:
+    initializer_list() : m_first(0), m_last(0) {}
+    initializer_list(const T *first, const T *last) : m_first(first), m_last(last) {}
+    const T *begin() const { return m_first; }
+    const T *end() const { return m_last; }
+    size_t size() const { return (size_t)(m_last - m_first); }
+
+private:
+    const T *m_first;
+    const T *m_last;
+};
+}
+#else
 #include <initializer_list>
+#endif
 
 using namespace lntdrv;
 
