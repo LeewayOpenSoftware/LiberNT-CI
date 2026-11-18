@@ -410,13 +410,16 @@ typedef struct _DNSAPI_ASYNC_QUERY
 static SRWLOCK DnsQueryExSlotLock = SRWLOCK_INIT;
 
 static PDNSAPI_ASYNC_QUERY
-DnsQueryExClaimSlot(_In_ PDNS_QUERY_CANCEL Slot)
+DnsQueryExClaimSlot(_In_ PDNS_QUERY_CANCEL Slot,
+                    _In_ PDNSAPI_ASYNC_QUERY Expected)
 {
     PDNSAPI_ASYNC_QUERY Op;
 
     AcquireSRWLockExclusive(&DnsQueryExSlotLock);
     RtlCopyMemory(&Op, Slot->Reserved, sizeof(Op));
-    if (Op != NULL)
+    if (Op != Expected)
+        Op = NULL;
+    else
         RtlZeroMemory(Slot->Reserved, sizeof(Op));
     ReleaseSRWLockExclusive(&DnsQueryExSlotLock);
     return Op;
@@ -458,7 +461,7 @@ DnsQueryExWorker(PVOID Parameter)
      * is touched after the completion routine returns. */
     if (Op->Slot != NULL)
     {
-        if (DnsQueryExClaimSlot(Op->Slot) == Op)
+        if (DnsQueryExClaimSlot(Op->Slot, Op) == Op)
             InterlockedDecrement(&Op->Refs);
     }
 
@@ -486,7 +489,7 @@ DnsCancelQuery(PDNS_QUERY_CANCEL pCancelHandle)
     if (pCancelHandle == NULL)
         return;
 
-    Op = DnsQueryExClaimSlot(pCancelHandle);
+    Op = DnsQueryExClaimSlot(pCancelHandle, NULL);
     if (Op == NULL)
         return;
 
@@ -516,7 +519,7 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
         return ERROR_INVALID_PARAMETER;
     if (pQueryRequest->QueryName == NULL)
         return ERROR_INVALID_PARAMETER;
-    if (pQueryRequest->pDnsExtraQueryInfo != NULL)
+    if ((pQueryRequest->pDnsServerList != NULL) || (pQueryRequest->InterfaceIndex != 0))
         return ERROR_INVALID_PARAMETER;
 
     if (pQueryRequest->pQueryCompletionCallback == NULL)
@@ -557,7 +560,7 @@ DnsQueryEx(PDNS_QUERY_REQUEST pQueryRequest,
     }
     Op->Type = pQueryRequest->QueryType;
     Op->Options = pQueryRequest->QueryOptions;
-    Op->QueryContext = pQueryRequest->QueryContext;
+    Op->QueryContext = pQueryRequest->pQueryContext;
     Op->Callback = pQueryRequest->pQueryCompletionCallback;
     Op->CallerResults = pQueryResults;
     Op->Slot = pCancelHandle;

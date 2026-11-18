@@ -692,8 +692,6 @@ typedef VOID
   _In_ PDNS_QUERY_RESULT pQueryResults);
 typedef DNS_QUERY_COMPLETION_ROUTINE *PDNS_QUERY_COMPLETION_ROUTINE;
 
-typedef struct _DNS_EXTRA_QUERY_INFO DNS_EXTRA_QUERY_INFO, *PDNS_EXTRA_QUERY_INFO;
-
 #define DNS_QUERY_REQUEST_VERSION1 0x1
 
 typedef struct _DNS_QUERY_REQUEST {
@@ -701,9 +699,10 @@ typedef struct _DNS_QUERY_REQUEST {
   PCWSTR QueryName;
   WORD QueryType;
   ULONG64 QueryOptions;
-  PDNS_EXTRA_QUERY_INFO pDnsExtraQueryInfo;
-  PVOID QueryContext;
+  PDNS_ADDR_ARRAY pDnsServerList;
+  ULONG InterfaceIndex;
   PDNS_QUERY_COMPLETION_ROUTINE pQueryCompletionCallback;
+  PVOID pQueryContext;
 } DNS_QUERY_REQUEST, *PDNS_QUERY_REQUEST;
 
 typedef struct _DNS_QUERY_CANCEL {

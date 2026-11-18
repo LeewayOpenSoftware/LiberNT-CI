@@ -79,10 +79,14 @@ void func_DnsQueryEx(void)
     Status = DnsQueryEx(&Request, &Results, NULL);
     ok(Status == ERROR_INVALID_PARAMETER, "NULL name: %lu\n", Status);
     Request.QueryName = L"localhost";
-    Request.pDnsExtraQueryInfo = &Results;
+    Request.pDnsServerList = (PDNS_ADDR_ARRAY)&Results;
     Status = DnsQueryEx(&Request, &Results, NULL);
-    ok(Status == ERROR_INVALID_PARAMETER, "Reserved info: %lu\n", Status);
-    Request.pDnsExtraQueryInfo = NULL;
+    ok(Status == ERROR_INVALID_PARAMETER, "Server list: %lu\n", Status);
+    Request.pDnsServerList = NULL;
+    Request.InterfaceIndex = 3;
+    Status = DnsQueryEx(&Request, &Results, NULL);
+    ok(Status == ERROR_INVALID_PARAMETER, "Interface index: %lu\n", Status);
+    Request.InterfaceIndex = 0;
 
     /* A query with a completion routine is pending and delivers asynchronously
      * into the caller's result structure */
