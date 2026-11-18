@@ -74,10 +74,12 @@ EtwpQueryEnabled(
     _In_ ULONGLONG Keyword)
 {
     ETW_QUERY_ENABLE Query;
+    HANDLE RegistrationHandle;
     ULONG Enabled = 0, ReturnSize;
 
     RtlZeroMemory(&Query, sizeof(Query));
-    if (!EtwpLookupProvider(RegHandle, NULL, &Query.ProviderId)) return FALSE;
+    if (!EtwpLookupProvider(RegHandle, &RegistrationHandle, NULL)) return FALSE;
+    Query.RegistrationHandle = (ULONG64)(ULONG_PTR)RegistrationHandle;
     Query.Level = Level;
     Query.Keyword = Keyword;
     if (!NT_SUCCESS(NtTraceControl(EtwQueryEnableCode, &Query, sizeof(Query), &Enabled, sizeof(Enabled), &ReturnSize)))

@@ -358,6 +358,18 @@ EtwpEnableGuid(
         Provider->Sessions[i].Level = Params.Level;
         Provider->Sessions[i].MatchAny = Params.MatchAnyKeyword;
         Provider->Sessions[i].MatchAll = Params.MatchAllKeyword;
+        /*
+         * A stop that unlinked the session before this point sweeps the providers
+         * only later or already did: test again while the entry is visible, so
+         * a dead (and reusable) logger id is never left enabled. A stop after
+         * this test finds the entry in its sweep.
+         */
+        if (!EtwpLoggerExists(Params.LoggerId))
+        {
+            Provider->Sessions[i] = Provider->Sessions[--Provider->SessionCount];
+            Status = STATUS_WMI_INSTANCE_NOT_FOUND;
+            goto out;
+        }
         CallbackCode = EVENT_CONTROL_CODE_ENABLE_PROVIDER;
         break;
 
@@ -447,7 +459,9 @@ EtwpQueryEnable(
 {
     ETW_QUERY_ENABLE Query;
     PETWP_PROVIDER Provider;
+    GUID Guid;
     ULONG Enabled = 0, i;
+    NTSTATUS Status;
 
     PAGED_CODE();
 
@@ -470,9 +484,14 @@ EtwpQueryEnable(
     }
     _SEH2_END;
 
+    /* Only for the caller's own registration: no one learns another provider's state */
+    Status = EtwpGuidFromRegistrationHandle((HANDLE)(ULONG_PTR)Query.RegistrationHandle, PreviousMode, &Guid);
+    if (!NT_SUCCESS(Status))
+        return Status;
+
     KeEnterCriticalRegion();
     ExAcquirePushLockShared(&EtwpProviderLock);
-    Provider = EtwpFindProviderLocked(&Query.ProviderId);
+    Provider = EtwpFindProviderLocked(&Guid);
     if (Provider)
     {
         for (i = 0; i < Provider->SessionCount && !Enabled; i++)
@@ -504,8 +523,11 @@ EtwpTraceUserEvent(
     _In_ KPROCESSOR_MODE PreviousMode)
 {
     EVENT_DATA_DESCRIPTOR Data[ETW_MAX_EVENT_DATA_DESCRIPTORS];
+    EVENT_DATA_DESCRIPTOR Captured;
     ETW_USER_EVENT_PACKET Header;
     PETWP_PROVIDER Provider;
+    PUCHAR Copy = NULL;
+    ULONG Total = 0, i;
     GUID Guid;
     NTSTATUS Status;
 
@@ -545,10 +567,54 @@ EtwpTraceUserEvent(
     KeLeaveCriticalRegion();
     if (!Provider)
         return STATUS_SUCCESS;   /* no session ever enabled it */
+    if (!EtwpProviderMayWant(Provider, Header.Descriptor.Level, Header.Descriptor.Keyword))
+        return STATUS_SUCCESS;
 
-    return EtwpDeliver(Provider, &Header.Descriptor,
-                       (Header.Flags & ETW_USER_EVENT_ACTIVITY_ID) ? &Header.ActivityId : NULL,
-                       Header.UserDataCount, Data, PreviousMode);
+    /*
+     * The data is copied from user memory into one kernel buffer now, before any
+     * session lock: a slow page-in must not hold up the other writers of a session.
+     */
+    for (i = 0; i < Header.UserDataCount; i++)
+    {
+        if (Data[i].Size > MAXUSHORT || Total + Data[i].Size > MAXUSHORT)
+            return STATUS_BUFFER_OVERFLOW;
+        Total += Data[i].Size;
+    }
+    if (Total)
+    {
+        Copy = ExAllocatePoolWithTag(PagedPool, Total, ETWP_PROV_TAG);
+        if (!Copy)
+            return STATUS_INSUFFICIENT_RESOURCES;
+        _SEH2_TRY
+        {
+            ULONG Offset = 0;
+            for (i = 0; i < Header.UserDataCount; i++)
+            {
+                if (!Data[i].Size)
+                    continue;
+                if (PreviousMode != KernelMode)
+                    ProbeForRead((PVOID)(ULONG_PTR)Data[i].Ptr, Data[i].Size, sizeof(UCHAR));
+                RtlCopyMemory(Copy + Offset, (PVOID)(ULONG_PTR)Data[i].Ptr, Data[i].Size);
+                Offset += Data[i].Size;
+            }
+        }
+        _SEH2_EXCEPT(EXCEPTION_EXECUTE_HANDLER)
+        {
+            ExFreePoolWithTag(Copy, ETWP_PROV_TAG);
+            _SEH2_YIELD(return _SEH2_GetExceptionCode());
+        }
+        _SEH2_END;
+    }
+    Captured.Ptr = (ULONGLONG)(ULONG_PTR)Copy;
+    Captured.Size = Total;
+    Captured.Reserved = 0;
+
+    Status = EtwpDeliver(Provider, &Header.Descriptor,
+                         (Header.Flags & ETW_USER_EVENT_ACTIVITY_ID) ? &Header.ActivityId : NULL,
+                         Total ? 1 : 0, &Captured, KernelMode);
+    if (Copy)
+        ExFreePoolWithTag(Copy, ETWP_PROV_TAG);
+    return Status;
 }
 
 /* --------------------------------------------------------------------------
@@ -572,9 +638,17 @@ EtwpProviderFromHandle(
     Block = ReadPointerNoFence((PVOID volatile *)&EtwpBlocks[Index / ETWP_SLOTS_PER_BLOCK]);
     if (!Block)
         return NULL;
+    KeMemoryBarrier();
+    /* The generation is read before and after the slot, with barriers: on weakly
+     * ordered processors a reused slot's provider must not pair with the old
+     * generation */
+    if (ReadULongNoFence(&Block->Generation[Index % ETWP_SLOTS_PER_BLOCK]) != Generation)
+        return NULL;
+    KeMemoryBarrier();
     if (!ReadPointerNoFence((PVOID volatile *)&Block->Entry[Index % ETWP_SLOTS_PER_BLOCK]))
         return NULL;
     Provider = ReadPointerNoFence((PVOID volatile *)&Block->Provider[Index % ETWP_SLOTS_PER_BLOCK]);
+    KeMemoryBarrier();
     if (ReadULongNoFence(&Block->Generation[Index % ETWP_SLOTS_PER_BLOCK]) != Generation)
         return NULL;
     return Provider;
@@ -666,6 +740,8 @@ EtwRegister(
     RemoveEntryList(&Registration->ProviderLink);
     ExReleasePushLockExclusive(&EtwpProviderLock);
     KeLeaveCriticalRegion();
+    /* an enable may have collected it meanwhile and be inside its callback */
+    ExWaitForRundownProtectionRelease(&Registration->Rundown);
     ExFreePoolWithTag(Registration, ETWP_PROV_TAG);
     return STATUS_INSUFFICIENT_RESOURCES;
 

@@ -84,10 +84,11 @@ typedef struct _ETW_ENABLE_PARAMETERS
 } ETW_ENABLE_PARAMETERS, *PETW_ENABLE_PARAMETERS;
 
 /* EtwQueryEnableCode input; the output is one ULONG, non-zero when an event of this level
- * and keyword would reach at least one session (Level 0 / Keyword 0: any) */
+ * and keyword would reach at least one session (Level 0 / Keyword 0: any). The provider
+ * is named by the caller's own registration handle. */
 typedef struct _ETW_QUERY_ENABLE
 {
-    GUID ProviderId;
+    ULONG64 RegistrationHandle;
     UCHAR Level;
     UCHAR Reserved[7];
     ULONGLONG Keyword;
