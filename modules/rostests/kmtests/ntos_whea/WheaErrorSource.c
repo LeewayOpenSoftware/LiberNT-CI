@@ -86,6 +86,8 @@ TestAddRefusals(VOID)
     ok_eq_hex(WheaErrSrcStateRemovePending, 4);
     ok_eq_hex(WheaErrTypePmem, 7);
     ok_eq_hex(sizeof(WHEA_XPF_MCA_SECTION), 1192);
+    ok_eq_hex(sizeof(WHEA_ERROR_RECORD), 200);
+    ok_eq_hex(WHEA_UNCORRECTABLE_ERROR, 0x124);
     ok_eq_hex(FIELD_OFFSET(WHEA_XPF_MCA_SECTION, GlobalCapability), 264);
 
     InitDescriptor(&Descriptor);

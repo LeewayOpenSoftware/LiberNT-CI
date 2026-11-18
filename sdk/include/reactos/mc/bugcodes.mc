@@ -1809,6 +1809,14 @@ Language=English
 A driver has caused a violation.
 .
 
+MessageId=0x124
+Severity=Success
+Facility=System
+SymbolicName=WHEA_UNCORRECTABLE_ERROR
+Language=English
+A fatal hardware error has occurred.
+.
+
 MessageId=0x141
 Severity=Success
 Facility=System
