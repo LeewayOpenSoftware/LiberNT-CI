@@ -52,7 +52,7 @@ static void check_contains(const WCHAR *xml, const WCHAR *part, int line)
 static void test_channels(void)
 {
     EVT_HANDLE chenum;
-    WCHAR name[256], small[1];
+    WCHAR name[256], tiny[1];
     DWORD used;
     BOOL ret, application = FALSE, system = FALSE;
     int n = 0;
@@ -67,7 +67,7 @@ static void test_channels(void)
 
     /* A short buffer reports the size and keeps the entry */
     used = 0;
-    ret = EvtNextChannelPath(chenum, _countof(small), small, &used);
+    ret = EvtNextChannelPath(chenum, _countof(tiny), tiny, &used);
     ok(!ret && GetLastError() == ERROR_INSUFFICIENT_BUFFER, "short buffer: %d, error %lu\n", ret, GetLastError());
     ok(used > 1, "used %lu\n", used);
 
@@ -244,8 +244,8 @@ static void test_query_existing(void)
             context = EvtCreateRenderContext(0, NULL, EvtRenderContextSystem);
             values = HeapAlloc(GetProcessHeap(), 0, 4096);
             ret = EvtRender(context, event2, EvtRenderEventValues, 4096, values, &used, &count);
-            ok(ret && values[EvtSystemEventRecordId].UInt64Val == recid, "seek landed on %s, expected %s\n",
-               wine_dbgstr_longlong(values[EvtSystemEventRecordId].UInt64Val), wine_dbgstr_longlong(recid));
+            ok(ret && values[EvtSystemEventRecordId].UInt64Val == recid, "seek landed on %I64u, expected %I64u\n",
+               values[EvtSystemEventRecordId].UInt64Val, recid);
             HeapFree(GetProcessHeap(), 0, values);
             EvtClose(context);
             EvtClose(event2);
