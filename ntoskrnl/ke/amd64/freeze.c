@@ -498,8 +498,29 @@ KxFreezeExecution(
 
         while (TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_FROZEN)
         {
+            BOOLEAN StopOwnerPending = FALSE;
+
             if (KiFreezeFailureRequiresReturn(CurrentPrcb))
                 return;
+
+            /* The processor that owns the stop never freezes: leave the
+             * machine to it now rather than after the watchdog, whichever
+             * pending target it is */
+            for (ULONG j = i; j < KeNumberProcessors && j < KI_MAXIMUM_PROCESSORS && !StopOwnerPending; j++)
+            {
+                PKPRCB PendingPrcb = KiProcessorBlock[j];
+
+                StopOwnerPending = PendingPrcb != NULL && (Targets & PendingPrcb->SetMember) != 0 &&
+                                   KiIsBugCheckEntryOwner(PendingPrcb);
+            }
+
+            if (StopOwnerPending)
+            {
+                KiSetFreezeFailure();
+                if (KiFreezeFailureRequiresReturn(CurrentPrcb))
+                    return;
+            }
+
             if (KiFreezeWaitExpired(&Wait) &&
                 TargetPrcb->IpiFrozen != IPI_FROZEN_STATE_FROZEN &&
                 KiFreezeWaitFailed(CurrentPrcb, &Wait))
