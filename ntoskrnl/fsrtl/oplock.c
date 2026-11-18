@@ -272,7 +272,6 @@ FsRtlOplockKeysEqual(IN PFILE_OBJECT Fo1,
     return (RtlCompareMemory(&Key1.TargetOplockKey, &Key2.TargetOplockKey, sizeof(GUID)) == sizeof(GUID));
 }
 
-
 VOID
 NTAPI
 FsRtlNotifyCompletion(IN PVOID Context,
