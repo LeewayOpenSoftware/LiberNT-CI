@@ -168,6 +168,7 @@ UcxpReadDeviceDescriptor(
 NTSTATUS
 UcxpDeviceCreate(
     _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_opt_ PUCX_DEVICE_HANDLE Parent,
     _In_ USHORT PortNumber,
     _In_ USHORT PortStatus,
     _Outptr_ PUCX_DEVICE_HANDLE *NewHandle)
@@ -176,15 +177,70 @@ UcxpDeviceCreate(
     PUCX_DEVICE_HANDLE Handle;
     struct _UCXUSBDEVICE_INIT *Init;
     UCX_USBDEVICE_INFO Info;
+    UCX_USBDEVICE_PATH Path;
     PUCX_USBDEVICE_CTX DeviceCtx;
     NTSTATUS Status;
 
     *NewHandle = NULL;
-
-    if (PortNumber == 0 || PortNumber > RootHub->NumberOfPorts)
-        return STATUS_INVALID_PARAMETER;
     if (Controller->Config.EvtControllerUsbDeviceAdd == NULL)
         return STATUS_NOT_IMPLEMENTED;
+
+    RtlZeroMemory(&Path, sizeof(Path));
+    Path.Size = sizeof(Path);
+    if (Parent == NULL)
+    {
+        if (PortNumber == 0 || PortNumber > RootHub->NumberOfPorts)
+            return STATUS_INVALID_PARAMETER;
+        Path.RootPortNumber = (UCHAR)PortNumber;
+    }
+    else
+    {
+        /* Behind a hub: the hub must be a configured hub we know, the port one
+         * the xHCI route string can name (a nibble, 1..15), the depth at most
+         * 5 tiers; the speed is what the hub's port status says, SuperSpeed on
+         * a SuperSpeed hub */
+        PUCX_DEVICE_HANDLE Hub;
+        USHORT TtPort;
+
+        if (!Parent->Initialized || !Parent->IsHub || !Parent->HubInfoSent)
+            return STATUS_INVALID_DEVICE_STATE;
+        if (PortNumber == 0 || PortNumber > 15 || (Parent->HubPorts != 0 && PortNumber > Parent->HubPorts))
+            return STATUS_INVALID_PARAMETER;
+        if (Parent->Path.Depth >= 5)
+            return STATUS_NOT_SUPPORTED;
+        Path.BehindHub = TRUE;
+        Path.ParentHub = Parent->UsbDevice;
+        Path.Depth = Parent->Path.Depth + 1;
+        Path.RootPortNumber = Parent->Path.RootPortNumber;
+        Path.HubPortNumber = (UCHAR)PortNumber;
+        Path.RouteString = Parent->Path.RouteString | ((ULONG)PortNumber << (4 * Parent->Path.Depth));
+        if (Parent->DeviceSpeed == UsbSuperSpeed)
+            Path.Speed = UsbSuperSpeed;
+        else if (PortStatus & USB_PORT_STATUS_LOW_SPEED)
+            Path.Speed = UsbLowSpeed;
+        else if (PortStatus & USB_PORT_STATUS_HIGH_SPEED)
+            Path.Speed = UsbHighSpeed;
+        else
+            Path.Speed = UsbFullSpeed;
+        /* A low/full-speed device is served by the transaction translator of
+         * the nearest high-speed hub above it: that hub and the port of the
+         * chain element below it */
+        if (Path.Speed == UsbLowSpeed || Path.Speed == UsbFullSpeed)
+        {
+            Hub = Parent;
+            TtPort = PortNumber;
+            while (Hub != NULL && Hub->DeviceSpeed != UsbHighSpeed)
+            {
+                TtPort = Hub->Path.HubPortNumber;
+                Hub = Hub->Parent;
+            }
+            if (Hub != NULL)
+            {
+                Path.TtHub = Hub->UsbDevice;
+                Path.TtPortNumber = (UCHAR)TtPort;
+            }
+        }
+    }
 
     /* One device per root port: a second create for the same port would mean a
      * second slot and address for the same device */
@@ -198,7 +254,7 @@ UcxpDeviceCreate(
         {
             PUCX_DEVICE_HANDLE Other = CONTAINING_RECORD(Entry, UCX_DEVICE_HANDLE, Link);
 
-            if (!Other->IsRootHub && Other->PortNumber == PortNumber)
+            if (!Other->IsRootHub && Other->Parent == Parent && Other->PortNumber == PortNumber)
             {
                 Taken = TRUE;
                 break;
@@ -226,7 +282,9 @@ UcxpDeviceCreate(
 
     Handle->IsRootHub = FALSE;
     Handle->PortNumber = PortNumber;
-    Handle->DeviceSpeed = UsbFullSpeed;    /* the client reports the real one at Enable */
+    Handle->Parent = Parent;
+    Handle->Path = Path;
+    Handle->DeviceSpeed = Path.BehindHub ? Path.Speed : UsbFullSpeed;   /* on a root port the client reports it at Enable */
     Handle->MaxPacketSize0 = 8;
     Handle->DefaultPipe.Signature = UCX_PIPE_HANDLE_SIGNATURE;
     Handle->DefaultPipe.Descriptor.bLength = sizeof(USB_ENDPOINT_DESCRIPTOR);
@@ -245,6 +303,7 @@ UcxpDeviceCreate(
     Info.Size = sizeof(Info);
     Info.PortNumber = PortNumber;
     Info.PortStatus = PortStatus;
+    Info.Path = Path;
 
     /* The client sets its callbacks on Init and creates the object with it;
      * UcxUsbDeviceCreate consumes and frees Init and records Created here. */
@@ -265,10 +324,15 @@ UcxpDeviceCreate(
     DeviceCtx = UcxGetUsbDeviceCtx((WDFOBJECT)Handle->UsbDevice);
     DeviceCtx->Handle = Handle;
     ExFreePoolWithTag(Init, UCX_TAG);
-
+    if (Parent != NULL)
+        InterlockedIncrement(&Parent->Busy);   /* the hub stays until its children are gone */
     UcxpAddDeviceHandle(Controller, Handle);
     *NewHandle = Handle;
-    UcxLog("device: port %u -> handle %p, usbdevice %p", PortNumber, Handle, Handle->UsbDevice);
+    if (Parent != NULL)
+        UcxLog("device: hub port %u (depth %u, route 0x%05lX, root port %u, speed %u) -> handle %p, usbdevice %p",
+               PortNumber, Path.Depth, Path.RouteString, Path.RootPortNumber, Path.Speed, Handle, Handle->UsbDevice);
+    else
+        UcxLog("device: port %u -> handle %p, usbdevice %p", PortNumber, Handle, Handle->UsbDevice);
     return STATUS_SUCCESS;
 }
 
@@ -305,6 +369,8 @@ UcxpDeviceInitialize(
     RtlZeroMemory(&Enable, sizeof(Enable));
     Enable.Size = sizeof(Enable);
     Enable.PortNumber = Handle->PortNumber;
+    Enable.Path = Handle->Path;
+    Enable.Speed = Handle->Path.BehindHub ? Handle->Path.Speed : UsbFullSpeed;
     Status = Device->Callbacks.EvtUsbDeviceEnable(RootHub->Controller, Handle->UsbDevice, &Enable);
     if (!NT_SUCCESS(Status))
     {
@@ -402,6 +468,7 @@ UcxpDeviceInitialize(
         goto Fail;
     }
 
+    Handle->IsHub = (Handle->DeviceDescriptor.bDeviceClass == USB_DEVICE_CLASS_HUB);
     Handle->Initialized = TRUE;
     UcxLog("device: port %u addressed %u, speed %u, EP0 %lu, %04X:%04X class %02X/%02X/%02X, %u configuration(s)",
            Handle->PortNumber, Handle->DeviceAddress, Handle->DeviceSpeed, Handle->MaxPacketSize0,
@@ -565,7 +632,95 @@ UcxpDeviceDestroy(
     Handle->UsbDevice = NULL;
     if (UsbDevice != NULL)
         WdfObjectDelete((WDFOBJECT)UsbDevice);      /* its endpoints go with it */
+    if (Handle->Parent != NULL)
+    {
+        PUCX_DEVICE_HANDLE Parent = Handle->Parent;
+
+        Handle->Parent = NULL;
+        UcxpReleaseDeviceHandle(Parent);            /* may take the hub down if it was removed first */
+    }
     ExFreePoolWithTag(Handle, UCX_TAG);
+}
+
+/* --------------------------------------------------------------------------
+ * Hubs (M3 step 4b): the controller's slot must know a hub is a hub
+ * -------------------------------------------------------------------------- */
+
+/* The hub descriptor (class request); ports and TT think time */
+static
+NTSTATUS
+UcxpDeviceReadHubDescriptor(
+    _Inout_ PUCX_DEVICE_HANDLE Handle)
+{
+    USB_DEFAULT_PIPE_SETUP_PACKET Setup;
+    USBD_STATUS UsbdStatus;
+    UCHAR Buffer[sizeof(USB_30_HUB_DESCRIPTOR)];
+    ULONG Transferred = 0;
+    UCHAR Type = (Handle->DeviceSpeed == UsbSuperSpeed) ? USB_30_HUB_DESCRIPTOR_TYPE : USB_20_HUB_DESCRIPTOR_TYPE;
+    NTSTATUS Status;
+
+    RtlZeroMemory(&Setup, sizeof(Setup));
+    Setup.bmRequestType.Dir = BMREQUEST_DEVICE_TO_HOST;
+    Setup.bmRequestType.Type = BMREQUEST_CLASS;
+    Setup.bmRequestType.Recipient = BMREQUEST_TO_DEVICE;
+    Setup.bRequest = USB_REQUEST_GET_DESCRIPTOR;
+    Setup.wValue.HiByte = Type;
+    Setup.wLength = sizeof(Buffer);
+    RtlZeroMemory(Buffer, sizeof(Buffer));
+    Status = UcxpControlTransfer(Handle, &Setup, Buffer, NULL, sizeof(Buffer), TRUE, &Transferred, &UsbdStatus);
+    if (!NT_SUCCESS(Status))
+        return Status;
+    /* Both layouts start with bLength, bDescriptorType, bNumberOfPorts, wHubCharacteristics */
+    if (Transferred < 5 || Buffer[0] < 5 || Buffer[1] != Type || Buffer[2] == 0)
+    {
+        UcxLog("device: port %u hub descriptor unusable (%lu bytes, length %u type %02X ports %u)",
+               Handle->PortNumber, Transferred, Buffer[0], Buffer[1], Buffer[2]);
+        return STATUS_DEVICE_DATA_ERROR;
+    }
+    Handle->HubPorts = Buffer[2];
+    Handle->TtThinkTime = (Type == USB_20_HUB_DESCRIPTOR_TYPE) ? (UCHAR)((Buffer[3] >> 5) & 0x3) : 0;
+    return STATUS_SUCCESS;
+}
+
+static
+NTSTATUS
+UcxpDeviceSendHubInfo(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle)
+{
+    PUCX_USBDEVICE_CTX Device = UcxpDeviceCtx(Handle);
+    UCX_USBDEVICE_HUB_INFO Info;
+    NTSTATUS Status;
+
+    if (Device == NULL || Device->Callbacks.EvtUsbDeviceHubInfo == NULL)
+        return STATUS_NOT_SUPPORTED;
+    RtlZeroMemory(&Info, sizeof(Info));
+    Info.Size = sizeof(Info);
+    Info.NumberOfPorts = Handle->HubPorts;
+    Info.TtThinkTime = Handle->TtThinkTime;
+    Info.MultiTt = Handle->MultiTt;
+    Status = Device->Callbacks.EvtUsbDeviceHubInfo(RootHub->Controller, Handle->UsbDevice, &Info);
+    UcxLog("device: port %u is a hub: %u port(s), TT think time %u, %s -> 0x%08lX", Handle->PortNumber,
+           Info.NumberOfPorts, Info.TtThinkTime, Info.MultiTt ? "multi-TT" : "single TT", (ULONG)Status);
+    if (NT_SUCCESS(Status))
+        Handle->HubInfoSent = TRUE;
+    return Status;
+}
+
+/* Initialize20Hub from the hub driver: the transaction-translator count */
+NTSTATUS
+UcxpDeviceSetHubTt(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle,
+    _In_ ULONG TtCount)
+{
+    if (!Handle->Initialized || !Handle->IsHub)
+        return STATUS_INVALID_PARAMETER;
+    Handle->MultiTt = (TtCount > 1);
+    /* Before the hub is configured the information goes with the configuration */
+    if (!Handle->HubInfoSent)
+        return STATUS_SUCCESS;
+    return UcxpDeviceSendHubInfo(RootHub, Handle);
 }
 
 /* USB_DEVICE_INFORMATION_0 for a downstream device, with its open pipes */
@@ -607,7 +762,7 @@ UcxpDeviceQueryInformation(
     Info->DeviceDescriptor = Handle->DeviceDescriptor;
     Info->CurrentConfigurationValue = Handle->ConfigurationValue;
     Info->DeviceAddress = Handle->DeviceAddress;
-    Info->HubAddress = 0;
+    Info->HubAddress = (Handle->Parent != NULL) ? Handle->Parent->DeviceAddress : 0;
     Info->DeviceSpeed = Handle->DeviceSpeed;
     Info->DeviceType = (Handle->DeviceSpeed == UsbLowSpeed || Handle->DeviceSpeed == UsbFullSpeed) ?
                        Usb11Device : Usb20Device;
@@ -1357,6 +1512,7 @@ UcxpDeviceUnconfigure(
     RtlZeroMemory(Handle->Interfaces, sizeof(Handle->Interfaces));
     Handle->InterfaceCount = 0;
     Handle->ConfigurationValue = 0;
+    Handle->HubInfoSent = FALSE;           /* the Deconfigure drops it with the endpoints */
     Config = Handle->ConfigDescriptor;
     Handle->ConfigDescriptor = NULL;
     Handle->ConfigDescriptorLength = 0;
@@ -1481,6 +1637,20 @@ UcxpDeviceSelectConfiguration(
     Handle->InterfaceCount = BuiltCount;
     Handle->ConfigurationValue = Config->bConfigurationValue;
     KeReleaseSpinLock(&Handle->PipeLock, OldIrql);
+
+    /* A hub: the controller's slot must say so before devices behind it can be addressed */
+    if (Handle->IsHub)
+    {
+        Status = UcxpDeviceReadHubDescriptor(Handle);
+        if (NT_SUCCESS(Status))
+            Status = UcxpDeviceSendHubInfo(RootHub, Handle);
+        if (!NT_SUCCESS(Status))
+        {
+            UcxLog("device: port %u hub information failed 0x%08lX", Handle->PortNumber, (ULONG)Status);
+            UcxpDeviceUnconfigure(RootHub, Handle, FALSE);
+            return USBD_STATUS_REQUEST_FAILED;
+        }
+    }
 
     UsbdStatus = UcxpDeviceSetConfigurationOrInterface(Handle, FALSE, Config->bConfigurationValue, 0);
     if (!USBD_SUCCESS(UsbdStatus))

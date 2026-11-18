@@ -65,27 +65,22 @@ UcxUrbCheck(
         {
             const struct _URB_SELECT_CONFIGURATION *Req = &Urb->UrbSelectConfiguration;
             const USBD_INTERFACE_INFORMATION *Info;
-            ULONG Remaining, Count = 0, Consumed;
+            ULONG Remaining, Consumed;
 
             if (Length < FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface))
                 return USBD_STATUS_INVALID_PARAMETER;
             if (Req->ConfigurationDescriptor == NULL)
                 return USBD_STATUS_SUCCESS;                /* unconfigure: no interfaces */
-            /* The interface entries fill the rest of the URB, each inside it */
+            /* The first interface entry must be whole and inside the URB; the
+             * dispatcher walks the following ones, bNumInterfaces of them, each
+             * checked against the bytes left, and ignores any slack after them
+             * (callers size the URB with GET_SELECT_CONFIGURATION_REQUEST_SIZE,
+             * which may leave padding) */
             Info = &Req->Interface;
             Remaining = Length - FIELD_OFFSET(struct _URB_SELECT_CONFIGURATION, Interface);
-            while (Remaining >= FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes))
-            {
-                USBD_STATUS UsbdStatus = UcxpUrbCheckInterfaceInformation(Info, Remaining, Limits, &Consumed);
-
-                if (!USBD_SUCCESS(UsbdStatus))
-                    return UsbdStatus;
-                if (++Count > Limits->MaxInterfaces)
-                    return USBD_STATUS_INVALID_PARAMETER;
-                Remaining -= Consumed;
-                Info = (const USBD_INTERFACE_INFORMATION *)((const UCHAR *)Info + Consumed);
-            }
-            return (Count != 0) ? USBD_STATUS_SUCCESS : USBD_STATUS_INVALID_PARAMETER;
+            if (Remaining < FIELD_OFFSET(USBD_INTERFACE_INFORMATION, Pipes))
+                return USBD_STATUS_INVALID_PARAMETER;
+            return UcxpUrbCheckInterfaceInformation(Info, Remaining, Limits, &Consumed);
         }
 
         case URB_FUNCTION_SELECT_INTERFACE:

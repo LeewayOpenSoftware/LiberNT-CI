@@ -529,9 +529,17 @@ UcxpRootHubHandleUrb(
     UsbdStatus = UcxUrbCheck(Urb, &UcxpUrbLimits);
     if (!USBD_SUCCESS(UsbdStatus))
     {
-        UcxLog("roothub: URB %s (0x%04X, %u bytes) refused at the boundary, USBD 0x%08lX",
-               UcxUrbFunctionName(Urb->UrbHeader.Function), Urb->UrbHeader.Function,
-               Urb->UrbHeader.Length, (ULONG)UsbdStatus);
+        static volatile LONG Refused = 0;
+        LONG Count = InterlockedIncrement(&Refused);
+
+        /* The first refusals in full, then one line in 256: a misbehaving
+         * class driver must not turn the log into its own */
+        if (Count <= 16 || (Count & 0xFF) == 0)
+        {
+            UcxLog("roothub: URB %s (0x%04X, %u bytes) refused at the boundary, USBD 0x%08lX (refusal %ld)",
+                   UcxUrbFunctionName(Urb->UrbHeader.Function), Urb->UrbHeader.Function,
+                   Urb->UrbHeader.Length, (ULONG)UsbdStatus, Count);
+        }
         UcxpCompleteUrb(Request, Urb, UsbdStatus);
         return;
     }
@@ -806,14 +814,18 @@ UcxpHubCreateUsbDevice(
 
     if (HubDeviceHandle != &RootHub->DeviceHandle)
     {
-        if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), HubDeviceHandle))
+        NTSTATUS Status;
+
+        /* A device behind an external hub: the hub's handle is the parent */
+        if (!UcxpAcquireDeviceHandle(UcxpRootHubController(RootHub), HubDeviceHandle))
             return STATUS_DEVICE_NOT_CONNECTED;
-        /* Devices behind an external hub: M3 step 3 */
-        UcxLog("roothub: CreateUsbDevice behind a downstream hub refused (step 3)");
-        return STATUS_NOT_IMPLEMENTED;
+        Status = UcxpDeviceCreate(RootHub, (PUCX_DEVICE_HANDLE)HubDeviceHandle, PortNumber, PortStatus,
+                                  (PUCX_DEVICE_HANDLE *)NewDeviceHandle);
+        UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)HubDeviceHandle);
+        return Status;
     }
 
-    return UcxpDeviceCreate(RootHub, PortNumber, PortStatus, (PUCX_DEVICE_HANDLE *)NewDeviceHandle);
+    return UcxpDeviceCreate(RootHub, NULL, PortNumber, PortStatus, (PUCX_DEVICE_HANDLE *)NewDeviceHandle);
 }
 
 static
@@ -1123,16 +1135,17 @@ UcxpHubInitialize20Hub(
     _In_ ULONG TtCount)
 {
     PUCX_ROOTHUB_CTX RootHub = UcxpRootHubFromBusContext(BusContext);
-
-    UNREFERENCED_PARAMETER(TtCount);
+    NTSTATUS Status;
 
     if (RootHub == NULL)
         return STATUS_INVALID_PARAMETER;
     if (HubDeviceHandle == &RootHub->DeviceHandle)
         return STATUS_SUCCESS;              /* the root hub has no transaction translator */
-    if (!UcxpFindDeviceHandle(UcxpRootHubController(RootHub), HubDeviceHandle))
+    if (!UcxpAcquireDeviceHandle(UcxpRootHubController(RootHub), HubDeviceHandle))
         return STATUS_DEVICE_NOT_CONNECTED;
-    return STATUS_NOT_IMPLEMENTED;
+    Status = UcxpDeviceSetHubTt(RootHub, (PUCX_DEVICE_HANDLE)HubDeviceHandle, TtCount);
+    UcxpReleaseDeviceHandle((PUCX_DEVICE_HANDLE)HubDeviceHandle);
+    return Status;
 }
 
 static

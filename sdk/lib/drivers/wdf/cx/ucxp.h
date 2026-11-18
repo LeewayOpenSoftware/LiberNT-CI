@@ -104,6 +104,14 @@ typedef struct _UCX_DEVICE_HANDLE {
     volatile LONG Destroyed;               /* claimed once by whoever destroys */
     struct _UCX_ROOTHUB_CTX *RootHub;      /* for a destroy from a release */
     BOOLEAN InitializeFailed;              /* a failed Initialize is final for this handle */
+    /* M3 step 4b: where it sits, and what it is when it is a hub */
+    struct _UCX_DEVICE_HANDLE *Parent;     /* the hub it hangs from (holds a Busy count on it); NULL on a root port */
+    UCX_USBDEVICE_PATH Path;
+    BOOLEAN IsHub;                         /* bDeviceClass == hub */
+    BOOLEAN HubInfoSent;                   /* the client's slot says "hub" */
+    BOOLEAN MultiTt;                       /* Initialize20Hub said more than one TT */
+    UCHAR HubPorts;                        /* from the hub descriptor */
+    UCHAR TtThinkTime;
 } UCX_DEVICE_HANDLE, *PUCX_DEVICE_HANDLE;
 
 /*
@@ -291,6 +299,7 @@ UcxpCompleteUrb(
 NTSTATUS
 UcxpDeviceCreate(
     _In_ PUCX_ROOTHUB_CTX RootHub,
+    _In_opt_ PUCX_DEVICE_HANDLE Parent,
     _In_ USHORT PortNumber,
     _In_ USHORT PortStatus,
     _Outptr_ PUCX_DEVICE_HANDLE *NewHandle);
@@ -318,6 +327,12 @@ VOID
 UcxpDeviceDestroy(
     _In_ PUCX_ROOTHUB_CTX RootHub,
     _Inout_ PUCX_DEVICE_HANDLE Handle);
+
+NTSTATUS
+UcxpDeviceSetHubTt(
+    _In_ PUCX_ROOTHUB_CTX RootHub,
+    _Inout_ PUCX_DEVICE_HANDLE Handle,
+    _In_ ULONG TtCount);
 
 NTSTATUS
 UcxpDeviceQueryInformation(

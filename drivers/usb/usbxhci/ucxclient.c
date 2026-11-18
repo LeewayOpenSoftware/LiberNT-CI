@@ -158,6 +158,15 @@ typedef struct _XHCI_UCX_SLOT
     UCHAR Speed;                  /* PORTSC speed id, as programmed into the slot context */
     UCHAR SpeedClass;             /* speed id used for packet-size rules: SUPER for any USB3 port (SSP, PSI ids) */
     UCHAR UsbAddress;             /* from the output slot context after Address Device */
+    /* M3 step 4b: behind a hub, and hubs */
+    ULONG RouteString;            /* xHCI route string; 0 on a root port */
+    UCHAR RootPort;               /* the root port the chain hangs from (PortId on a root port) */
+    UCHAR TtSlotId;               /* TT hub slot and port for a low/full-speed device behind a high-speed hub */
+    UCHAR TtPort;
+    BOOLEAN Mtt;                  /* the TT hub is multi-TT */
+    BOOLEAN IsHub;                /* the slot context says hub */
+    UCHAR HubPorts;
+    UCHAR TtThinkTime;
     ULONG Ep0MaxPacket;
     ULONG Ep0Enqueue;
     ULONG Ep0Cycle;
@@ -2139,10 +2148,19 @@ XhciUcxBuildEp0InputContext(
     Icc->AddContextFlags = AddFlags;
     Icc->DropContextFlags = 0;
 
-    XhciSlotContextSetRoute(SlotCtx, 0);              /* directly on a root port */
+    XhciSlotContextSetRoute(SlotCtx, Slot->RouteString);          /* 0 on a root port */
     XhciSlotContextSetSpeed(SlotCtx, Slot->Speed);
     XhciSlotContextSetLastCtx(SlotCtx, 1);            /* EP0 only */
-    XhciSlotContextSetRootPort(SlotCtx, Slot->PortId);
+    XhciSlotContextSetRootPort(SlotCtx, Slot->RootPort ? Slot->RootPort : Slot->PortId);
+    /* A low/full-speed device behind a high-speed hub: that hub's TT (xHCI 6.2.2) */
+    SlotCtx->TtInfo = (ULONG)Slot->TtSlotId | ((ULONG)Slot->TtPort << XHCI_SLOT_TT_PORT_SHIFT) |
+                      (((ULONG)Slot->TtThinkTime & 0x3) << XHCI_SLOT_TT_THINK_TIME_SHIFT);
+    XhciSlotContextSetMtt(SlotCtx, Slot->Mtt);
+    if (Slot->IsHub)
+    {
+        XhciSlotContextSetHub(SlotCtx, TRUE);
+        XhciSlotContextSetMaxPorts(SlotCtx, Slot->HubPorts);
+    }
 
     XhciEndpointContextInit(Ep0Ctx,
                             XHCI_ENDPOINT_TYPE_CONTROL,
@@ -3727,31 +3745,85 @@ XhciUcxEvtUsbDeviceEnable(
     PXHCI_UCX_SLOT Slot;
     ULONGLONG Ep0RingPa;
     ULONG PortId = Info->PortNumber;
-    ULONG PortSc, Speed, Code = 0;
-    UCHAR SlotId = 0;
+    ULONG PortSc = 0, Speed = 0, Code = 0;
+    UCHAR SlotId = 0, TtSlotId = 0, TtThinkTime = 0;
+    BOOLEAN BehindHub, TtMtt = FALSE;
     NTSTATUS Status;
 
     UNREFERENCED_PARAMETER(Controller);
 
-    if (Info->Size < sizeof(*Info) || PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS)
+    if (Info->Size < sizeof(*Info))
         return STATUS_INVALID_PARAMETER;
+    BehindHub = (Info->Path.Size >= sizeof(Info->Path)) && Info->Path.BehindHub;
+    if (BehindHub)
+    {
+        /* The hub driver reset the hub's port itself; the hub's port status
+         * said the speed, the library computed the route */
+        PortId = Info->Path.RootPortNumber;
+        if (PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS ||
+            Info->Path.ParentHub == NULL || Info->Path.RouteString > XHCI_SLOT_ROUTE_MASK)
+            return STATUS_INVALID_PARAMETER;
+        switch (Info->Speed)
+        {
+            case UsbLowSpeed:   Speed = XHCI_PORTSC_SPEED_LOW;   break;
+            case UsbFullSpeed:  Speed = XHCI_PORTSC_SPEED_FULL;  break;
+            case UsbHighSpeed:  Speed = XHCI_PORTSC_SPEED_HIGH;  break;
+            case UsbSuperSpeed: Speed = XHCI_PORTSC_SPEED_SUPER; break;
+            default:            return STATUS_INVALID_PARAMETER;
+        }
+    }
+    else
+    {
+        if (PortId == 0 || PortId > Dev->NumberOfPorts || PortId > XHCI_MAX_PORTS)
+            return STATUS_INVALID_PARAMETER;
+    }
     if (!Dev->ControllerRunning || Dev->FatalError)
         return STATUS_DEVICE_NOT_READY;
 
-    /* The hub driver reset the port through our root hub; the device must be there and enabled */
-    PortSc = XHCI_UCX_READ_REG(&Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl);
-    if ((PortSc & XHCI_PORTSC_CCS) == 0 || (PortSc & XHCI_PORTSC_PED) == 0)
+    if (!BehindHub)
     {
-        XHCI_UCX_LOG("port %lu: enable asked but PORTSC=%08lx is not connected+enabled", PortId, PortSc);
-        return STATUS_DEVICE_NOT_CONNECTED;
+        /* The hub driver reset the port through our root hub; the device must be there and enabled */
+        PortSc = XHCI_UCX_READ_REG(&Dev->OperationalRegisters->PortRegister[PortId - 1].PortStatusAndControl);
+        if ((PortSc & XHCI_PORTSC_CCS) == 0 || (PortSc & XHCI_PORTSC_PED) == 0)
+        {
+            XHCI_UCX_LOG("port %lu: enable asked but PORTSC=%08lx is not connected+enabled", PortId, PortSc);
+            return STATUS_DEVICE_NOT_CONNECTED;
+        }
+        Speed = (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
     }
-    Speed = (PortSc & XHCI_PORTSC_SPEED_MASK) >> XHCI_PORTSC_SPEED_SHIFT;
 
     ExAcquireFastMutex(&Dev->TransferMutex);
     if (Device->Slot != NULL)
     {
         ExReleaseFastMutex(&Dev->TransferMutex);
         return STATUS_INVALID_DEVICE_STATE;
+    }
+    if (BehindHub)
+    {
+        /* The hub's slot must be ours, addressed and marked as a hub; a TT hub likewise */
+        PXHCI_UCX_USBDEVICE_CLIENT Hub = XhciUcxGetUsbDeviceClient((WDFOBJECT)Info->Path.ParentHub);
+
+        if (Hub == NULL || Hub->Dev != Dev || Hub->Slot == NULL || !Hub->Slot->InUse ||
+            !Hub->Slot->Addressed || !Hub->Slot->IsHub)
+        {
+            ExReleaseFastMutex(&Dev->TransferMutex);
+            XHCI_UCX_LOG("root port %lu route 0x%05lX: the parent hub's slot is not ready", PortId, Info->Path.RouteString);
+            return STATUS_DEVICE_NOT_READY;
+        }
+        if (Info->Path.TtHub != NULL)
+        {
+            PXHCI_UCX_USBDEVICE_CLIENT Tt = XhciUcxGetUsbDeviceClient((WDFOBJECT)Info->Path.TtHub);
+
+            if (Tt == NULL || Tt->Dev != Dev || Tt->Slot == NULL || !Tt->Slot->InUse || !Tt->Slot->IsHub)
+            {
+                ExReleaseFastMutex(&Dev->TransferMutex);
+                XHCI_UCX_LOG("root port %lu route 0x%05lX: the TT hub's slot is not ready", PortId, Info->Path.RouteString);
+                return STATUS_DEVICE_NOT_READY;
+            }
+            TtSlotId = Tt->Slot->SlotId;
+            TtMtt = Tt->Slot->Mtt;
+            TtThinkTime = Tt->Slot->TtThinkTime;
+        }
     }
 
     Slot = XhciUcxAllocateSlot(Dev);
@@ -3763,7 +3835,17 @@ XhciUcxEvtUsbDeviceEnable(
     }
     Slot->PortId = (UCHAR)PortId;
     Slot->Speed = (UCHAR)Speed;
-    Slot->SpeedClass = (Dev->PortProtocol[PortId] == 3) ? XHCI_PORTSC_SPEED_SUPER : (UCHAR)Speed;
+    Slot->SpeedClass = BehindHub ? (UCHAR)Speed :
+                       (Dev->PortProtocol[PortId] == 3) ? XHCI_PORTSC_SPEED_SUPER : (UCHAR)Speed;
+    Slot->RootPort = (UCHAR)PortId;
+    if (BehindHub)
+    {
+        Slot->RouteString = Info->Path.RouteString;
+        Slot->TtSlotId = TtSlotId;
+        Slot->TtPort = (TtSlotId != 0) ? Info->Path.TtPortNumber : 0;
+        Slot->Mtt = (TtSlotId != 0) ? TtMtt : FALSE;
+        Slot->TtThinkTime = (TtSlotId != 0) ? TtThinkTime : 0;
+    }
     Slot->Ep0MaxPacket = (Slot->SpeedClass == XHCI_PORTSC_SPEED_SUPER) ? 512 :
                          (Slot->SpeedClass == XHCI_PORTSC_SPEED_HIGH) ? 64 : 8;
 
@@ -3801,8 +3883,13 @@ XhciUcxEvtUsbDeviceEnable(
 
     Info->Speed = XhciUcxUsbSpeedFromPortSc(Speed);
     Info->MaxPacketSize0 = Slot->Ep0MaxPacket;
-    XHCI_UCX_LOG("port %lu: slot %u enabled for the hub driver, speed id %lu (class %u), EP0 %lu",
-                 PortId, SlotId, Speed, Slot->SpeedClass, Slot->Ep0MaxPacket);
+    if (BehindHub)
+        XHCI_UCX_LOG("root port %lu route 0x%05lX: slot %u enabled behind a hub, speed id %lu, EP0 %lu, TT slot %u port %u%s",
+                     PortId, Slot->RouteString, SlotId, Speed, Slot->Ep0MaxPacket, Slot->TtSlotId, Slot->TtPort,
+                     Slot->Mtt ? " (multi-TT)" : "");
+    else
+        XHCI_UCX_LOG("port %lu: slot %u enabled for the hub driver, speed id %lu (class %u), EP0 %lu",
+                     PortId, SlotId, Speed, Slot->SpeedClass, Slot->Ep0MaxPacket);
     return STATUS_SUCCESS;
 }
 
@@ -3974,7 +4061,69 @@ XhciUcxEvtUsbDeviceDisable(
     ExReleaseFastMutex(&Dev->TransferMutex);
 }
 
-/* The class library asks for a device on a root port: our callbacks, our context, the object */
+/* A configured device is a hub: Hub, Number of Ports, TTT, MTT in its slot context (xHCI 4.5.2, 6.2.2) */
+static
+NTSTATUS
+NTAPI
+XhciUcxEvtUsbDeviceHubInfo(
+    _In_ UCXCONTROLLER Controller,
+    _In_ UCXUSBDEVICE UsbDevice,
+    _In_ PUCX_USBDEVICE_HUB_INFO Info)
+{
+    PXHCI_UCX_USBDEVICE_CLIENT Device = XhciUcxGetUsbDeviceClient((WDFOBJECT)UsbDevice);
+    PXHCI_UCX_DEVICE Dev = Device->Dev;
+    PXHCI_UCX_SLOT Slot;
+    PXHCI_INPUT_CONTROL_CONTEXT Icc;
+    PXHCI_SLOT_CONTEXT InSlot, OutSlot;
+    ULONG Code = 0;
+    NTSTATUS Status;
+
+    UNREFERENCED_PARAMETER(Controller);
+
+    if (Info->Size < sizeof(*Info) || Info->NumberOfPorts == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (!Dev->ControllerRunning || Dev->FatalError)
+        return STATUS_DEVICE_NOT_READY;
+
+    ExAcquireFastMutex(&Dev->TransferMutex);
+    Slot = Device->Slot;
+    if (Slot == NULL || !Slot->InUse || !Slot->Addressed)
+    {
+        ExReleaseFastMutex(&Dev->TransferMutex);
+        return STATUS_INVALID_DEVICE_STATE;
+    }
+    Slot->IsHub = TRUE;
+    Slot->HubPorts = Info->NumberOfPorts;
+    Slot->TtThinkTime = (UCHAR)(Info->TtThinkTime & 0x3);
+    Slot->Mtt = Info->MultiTt;
+
+    /* The controller's slot context, with the hub fields, through one Configure Endpoint that changes no endpoint */
+    Icc = XhciUcxInputControlContext(Dev, Slot);
+    InSlot = XhciUcxInputSlotContext(Dev, Slot);
+    OutSlot = XhciUcxOutputSlotContext(Dev, Slot);
+    RtlZeroMemory(Dev->HcVa + Slot->InputContextOffset, PAGE_SIZE);
+    RtlCopyMemory(InSlot, OutSlot, Dev->ContextSize);
+    XhciSlotContextSetHub(InSlot, TRUE);
+    XhciSlotContextSetMaxPorts(InSlot, Slot->HubPorts);
+    XhciSlotContextSetMtt(InSlot, Slot->Mtt);
+    InSlot->TtInfo = (InSlot->TtInfo & ~XHCI_SLOT_TT_THINK_TIME_MASK) |
+                     ((ULONG)Slot->TtThinkTime << XHCI_SLOT_TT_THINK_TIME_SHIFT);
+    Icc->AddContextFlags = XHCI_UCX_INPUT_CTX_ADD_SLOT;
+    Icc->DropContextFlags = 0;
+    KeMemoryBarrier();
+    Status = XhciUcxSendCommand(Dev, XHCI_TRB_TYPE_CONFIG_EP,
+                                (ULONGLONG)XhciUcxHcPhysical(Dev, Slot->InputContextOffset).QuadPart,
+                                XHCI_COMMAND_SLOT_FIELD(Slot->SlotId), &Code, NULL);
+    XHCI_UCX_LOG("slot %u: hub with %u port(s), TTT %u, %s -> Configure Endpoint rc=0x%08lX code=%lu",
+                 Slot->SlotId, Slot->HubPorts, Slot->TtThinkTime, Slot->Mtt ? "multi-TT" : "single TT",
+                 (ULONG)Status, Code);
+    if (!NT_SUCCESS(Status))
+        Slot->IsHub = FALSE;
+    ExReleaseFastMutex(&Dev->TransferMutex);
+    return Status;
+}
+
+/* The class library asks for a device on a root port or behind a hub: our callbacks, our context, the object */
 static
 NTSTATUS
 NTAPI
@@ -3990,7 +4139,15 @@ XhciUcxEvtControllerUsbDeviceAdd(
     UCXUSBDEVICE UsbDevice = NULL;
     NTSTATUS Status;
 
-    if (Info->Size < sizeof(*Info) || Info->PortNumber == 0 || Info->PortNumber > Dev->NumberOfPorts)
+    if (Info->Size < sizeof(*Info) || Info->PortNumber == 0)
+        return STATUS_INVALID_PARAMETER;
+    if (Info->Path.Size >= sizeof(Info->Path) && Info->Path.BehindHub)
+    {
+        if (Info->Path.RootPortNumber == 0 || Info->Path.RootPortNumber > Dev->NumberOfPorts ||
+            Info->Path.ParentHub == NULL || Info->Path.RouteString > XHCI_SLOT_ROUTE_MASK || Info->Path.Depth > 5)
+            return STATUS_INVALID_PARAMETER;
+    }
+    else if (Info->PortNumber > Dev->NumberOfPorts)
         return STATUS_INVALID_PARAMETER;
     if (Dev->SelfEnumerate)
         return STATUS_NOT_SUPPORTED;           /* UseUcx=2: the client owns the ports */
@@ -4003,6 +4160,7 @@ XhciUcxEvtControllerUsbDeviceAdd(
     Callbacks.EvtUsbDeviceDisable = XhciUcxEvtUsbDeviceDisable;
     Callbacks.EvtUsbDeviceEndpointAdd = XhciUcxEvtUsbDeviceEndpointAdd;
     Callbacks.EvtUsbDeviceEndpointsConfigure = XhciUcxEvtUsbDeviceEndpointsConfigure;
+    Callbacks.EvtUsbDeviceHubInfo = XhciUcxEvtUsbDeviceHubInfo;
     UcxUsbDeviceInitSetEventCallbacks(UsbDeviceInit, &Callbacks);
 
     WDF_OBJECT_ATTRIBUTES_INIT_CONTEXT_TYPE(&Attributes, XHCI_UCX_USBDEVICE_CLIENT);
@@ -4017,7 +4175,8 @@ XhciUcxEvtControllerUsbDeviceAdd(
     Device->Dev = Dev;
     Device->Slot = NULL;
     Device->PortNumber = Info->PortNumber;
-    XHCI_UCX_LOG("port %u: device object %p for the hub driver (port status %04X)",
+    XHCI_UCX_LOG("%s %u: device object %p for the hub driver (port status %04X)",
+                 (Info->Path.Size >= sizeof(Info->Path) && Info->Path.BehindHub) ? "hub port" : "port",
                  Info->PortNumber, UsbDevice, Info->PortStatus);
     return STATUS_SUCCESS;
 }

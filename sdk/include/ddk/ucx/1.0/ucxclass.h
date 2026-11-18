@@ -69,10 +69,32 @@ typedef NTSTATUS (NTAPI *PFN_UCX_CONTROLLER_QUERY_USB_CAPABILITY)(
  * (UcxUsbDeviceInitSetEventCallbacks) and calls UcxUsbDeviceCreate with it;
  * returning without creating the object fails the hub driver's request.
  */
+/*
+ * Where a device sits (M3 step 4b). On a root port everything but
+ * RootPortNumber is zero. Behind external hubs the class library computes the
+ * xHCI route string from the chain of hub handles, names the parent hub and,
+ * for a low/full-speed device, the high-speed hub whose transaction
+ * translator serves it; the speed then comes from the hub's port status.
+ */
+typedef struct _UCX_USBDEVICE_PATH {
+    ULONG Size;
+    UCXUSBDEVICE ParentHub;         /* NULL on a root port */
+    UCXUSBDEVICE TtHub;             /* the TT hub of a low/full-speed device behind a high-speed hub, else NULL */
+    ULONG RouteString;              /* xHCI route string, 20 bits */
+    UCHAR Depth;                    /* 0 on a root port .. 5 */
+    UCHAR RootPortNumber;           /* root port the chain hangs from */
+    UCHAR HubPortNumber;            /* port on ParentHub (0 on a root port) */
+    UCHAR TtPortNumber;             /* port on TtHub (0 without a TT) */
+    USB_DEVICE_SPEED Speed;         /* valid when BehindHub */
+    BOOLEAN BehindHub;
+    UCHAR Reserved[3];
+} UCX_USBDEVICE_PATH, *PUCX_USBDEVICE_PATH;
+
 typedef struct _UCX_USBDEVICE_INFO {
     ULONG Size;
-    USHORT PortNumber;          /* root port, 1-based */
+    USHORT PortNumber;          /* the port on its hub (root port on a root port), 1-based */
     USHORT PortStatus;          /* the hub driver's view of the port (USB_PORT_STATUS) */
+    UCX_USBDEVICE_PATH Path;    /* M3 step 4b */
 } UCX_USBDEVICE_INFO, *PUCX_USBDEVICE_INFO;
 
 typedef NTSTATUS (NTAPI *PFN_UCX_CONTROLLER_USBDEVICE_ADD)(
@@ -166,11 +188,29 @@ typedef VOID (NTAPI *PFN_UCXROOTHUBPORTCHANGED)(_In_ UCXROOTHUB);
  */
 typedef struct _UCX_USBDEVICE_ENABLE_INFO {
     ULONG Size;
-    USHORT PortNumber;              /* in */
+    USHORT PortNumber;              /* in: the port on its hub */
     USHORT Reserved;
-    USB_DEVICE_SPEED Speed;         /* out */
+    USB_DEVICE_SPEED Speed;         /* out (in when Path.BehindHub: the hub's port status said it) */
     ULONG MaxPacketSize0;           /* out: 8 / 64 / 512 */
+    UCX_USBDEVICE_PATH Path;        /* in (M3 step 4b) */
 } UCX_USBDEVICE_ENABLE_INFO, *PUCX_USBDEVICE_ENABLE_INFO;
+
+/*
+ * A configured device that is a hub (M3 step 4b): the controller's slot must
+ * say so (xHCI Hub, Number of Ports, TT Think Time, Multi-TT) before devices
+ * behind it can be addressed. Sent after the hub's SELECT_CONFIGURATION, and
+ * again when the hub driver reports the transaction-translator count.
+ */
+typedef struct _UCX_USBDEVICE_HUB_INFO {
+    ULONG Size;
+    UCHAR NumberOfPorts;
+    UCHAR TtThinkTime;              /* wHubCharacteristics bits 5..6 (USB 2 hubs) */
+    BOOLEAN MultiTt;
+    UCHAR Reserved;
+} UCX_USBDEVICE_HUB_INFO, *PUCX_USBDEVICE_HUB_INFO;
+
+typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_HUB_INFO)(
+    _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _In_ PUCX_USBDEVICE_HUB_INFO);
 
 typedef NTSTATUS (NTAPI *PFN_UCX_USBDEVICE_ENABLE)(
     _In_ UCXCONTROLLER, _In_ UCXUSBDEVICE, _Inout_ PUCX_USBDEVICE_ENABLE_INFO);
@@ -237,6 +277,7 @@ typedef struct _UCX_USBDEVICE_EVENT_CALLBACKS {
     PFN_UCX_USBDEVICE_DISABLE                  EvtUsbDeviceDisable;
     PFN_UCX_USBDEVICE_ENDPOINT_ADD             EvtUsbDeviceEndpointAdd;          /* M3 step 3 */
     PFN_UCX_USBDEVICE_ENDPOINTS_CONFIGURE      EvtUsbDeviceEndpointsConfigure;   /* M3 step 3 */
+    PFN_UCX_USBDEVICE_HUB_INFO                 EvtUsbDeviceHubInfo;              /* M3 step 4b */
 } UCX_USBDEVICE_EVENT_CALLBACKS, *PUCX_USBDEVICE_EVENT_CALLBACKS;
 
 FORCEINLINE VOID UCX_USBDEVICE_EVENT_CALLBACKS_INIT(_Out_ PUCX_USBDEVICE_EVENT_CALLBACKS C)
