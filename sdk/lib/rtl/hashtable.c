@@ -517,7 +517,7 @@ RtlCreateHashTableEx(
     if (HashTable == NULL || Flags != 0 || Shift != 0)
         return FALSE;
     if (InitialSize == 0 || (InitialSize & (InitialSize - 1)) != 0 ||
-        InitialSize < RTLP_HASH_BASE_SIZE || InitialSize > 8388480)
+        InitialSize < RTLP_HASH_BASE_SIZE || InitialSize > RTLP_HASH_MAX_BLOCKS * RTLP_HASH_BASE_SIZE)
     {
         return FALSE;
     }
@@ -545,17 +545,30 @@ RtlCreateHashTableEx(
     RtlZeroMemory(Directory, sizeof(*Directory));
     InitializeListHead(&Directory->Enumerators);
 
-    Block = RtlpAllocateMemory(InitialSize * sizeof(LIST_ENTRY), RTLP_HASH_TAG);
-    if (Block == NULL)
     {
-        RtlpFreeMemory(Directory, RTLP_HASH_TAG);
-        if (Table->Flags & RTL_HASH_ALLOCATED_HEADER)
-            RtlpFreeMemory(Table, RTLP_HASH_TAG);
-        return FALSE;
+        ULONG BlockCount = InitialSize / RTLP_HASH_BASE_SIZE;
+        ULONG BlockIndex;
+
+        for (BlockIndex = 0; BlockIndex < BlockCount; BlockIndex++)
+        {
+            Block = RtlpAllocateMemory(RTLP_HASH_BASE_SIZE * sizeof(LIST_ENTRY), RTLP_HASH_TAG);
+            if (Block == NULL)
+            {
+                while (BlockIndex != 0)
+                {
+                    BlockIndex--;
+                    RtlpFreeMemory(Directory->Blocks[BlockIndex], RTLP_HASH_TAG);
+                }
+                RtlpFreeMemory(Directory, RTLP_HASH_TAG);
+                if (Table->Flags & RTL_HASH_ALLOCATED_HEADER)
+                    RtlpFreeMemory(Table, RTLP_HASH_TAG);
+                return FALSE;
+            }
+            for (i = 0; i < RTLP_HASH_BASE_SIZE; i++)
+                InitializeListHead(&Block[i]);
+            Directory->Blocks[BlockIndex] = Block;
+        }
     }
-    for (i = 0; i < InitialSize; i++)
-        InitializeListHead(&Block[i]);
-    Directory->Blocks[0] = Block;
 
     Table->Shift = 0;
     Table->TableSize = InitialSize;

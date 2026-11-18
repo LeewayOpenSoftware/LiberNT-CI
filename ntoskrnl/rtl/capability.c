@@ -352,7 +352,7 @@ RtlCheckTokenCapability(
         goto Quit;
     }
 
-    Status = ZwQueryInformationToken(Handle, TokenGroups, NULL, 0, &GroupsLength);
+    Status = ZwQueryInformationToken(Handle, TokenCapabilities, NULL, 0, &GroupsLength);
     if (Status != STATUS_BUFFER_TOO_SMALL)
     {
         Status = STATUS_UNSUCCESSFUL;
@@ -366,12 +366,13 @@ RtlCheckTokenCapability(
         goto Quit;
     }
 
-    Status = ZwQueryInformationToken(Handle, TokenGroups, Groups, GroupsLength, &ReturnLength);
+    Status = ZwQueryInformationToken(Handle, TokenCapabilities, Groups, GroupsLength, &ReturnLength);
     if (NT_SUCCESS(Status))
     {
         for (i = 0; i < Groups->GroupCount; i++)
         {
-            if (RtlEqualSid(Groups->Groups[i].Sid, CapabilitySidToCheck))
+            if ((Groups->Groups[i].Attributes & SE_GROUP_ENABLED) &&
+                RtlEqualSid(Groups->Groups[i].Sid, CapabilitySidToCheck))
             {
                 Found = TRUE;
                 break;
