@@ -1250,20 +1250,6 @@ PoCallDriver(
 /*
  * @unimplemented
  */
-PULONG
-NTAPI
-PoRegisterDeviceForIdleDetection(IN PDEVICE_OBJECT DeviceObject,
-                                 IN ULONG ConservationIdleTime,
-                                 IN ULONG PerformanceIdleTime,
-                                 IN DEVICE_POWER_STATE State)
-{
-    UNIMPLEMENTED;
-    return NULL;
-}
-
-/*
- * @unimplemented
- */
 PVOID
 NTAPI
 PoRegisterSystemState(IN PVOID StateHandle,
