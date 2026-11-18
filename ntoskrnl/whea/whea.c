@@ -77,6 +77,7 @@ static WORK_QUEUE_ITEM WheapWorkItem;
 static BOOLEAN WheapConsumerReady;
 static BOOLEAN WheapWorkQueued;
 static LONG64 WheapLastRecordId;
+static LONG64 WheapRecordIdBase;
 
 static PUCHAR WheapLogBuffer;
 static REGHANDLE WheapEtwHandle;
@@ -138,6 +139,22 @@ WheapIsRangeInPacket(
            DataLength <= PacketLength - Offset;
 }
 
+static
+ULONGLONG
+WheapNextRecordId(VOID)
+{
+    LONG64 Base = InterlockedCompareExchange64(&WheapRecordIdBase, 0, 0);
+    ULONG BootSeconds;
+
+    if (Base == 0 && RtlTimeToSecondsSince1980(&KeBootTime, &BootSeconds))
+    {
+        InterlockedCompareExchange64(&WheapRecordIdBase, (LONG64)BootSeconds << 32, 0);
+        Base = InterlockedCompareExchange64(&WheapRecordIdBase, 0, 0);
+    }
+
+    return (ULONGLONG)Base + (ULONGLONG)InterlockedIncrement64(&WheapLastRecordId);
+}
+
 NTSTATUS
 NTAPI
 WheaInitializeRecordHeader(
@@ -155,7 +172,7 @@ WheaInitializeRecordHeader(
     Header->SignatureEnd = WHEA_ERROR_RECORD_SIGNATURE_END;
     Header->Length = sizeof(*Header);
     Header->CreatorId = WheapCreatorGuid;
-    Header->RecordId = (ULONGLONG)InterlockedIncrement64(&WheapLastRecordId);
+    Header->RecordId = WheapNextRecordId();
 
     KeQuerySystemTime(&SystemTime);
     RtlTimeToTimeFields(&SystemTime, &Time);
