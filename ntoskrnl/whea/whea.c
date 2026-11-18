@@ -19,6 +19,8 @@
 #define WHEAP_SECTION_REVISION 0x0300
 #define WHEAP_DEBUG_LINES 8
 #define WHEAP_DEBUG_LINE_INTERVAL 256
+#define WHEAP_REMOVE_WAIT_ATTEMPTS 100
+#define WHEAP_REMOVE_WAIT_INTERVAL (-10 * 10000)
 #define WHEAP_EVENT_CHANNEL_SYSTEM 8
 #define WHEAP_EVENT_KEYWORDS 0x8000000000000002ULL
 #define WHEAP_LOG_BUFFER_LENGTH \
@@ -748,14 +750,45 @@ WheaAddErrorSourceDeviceDriverV1(
     return WheapAddDeviceDriverSource(Context, &Captured, NumBuffersToPreallocate, MaxDataLength, NULL, NULL);
 }
 
+static
+BOOLEAN
+WheapHasPendingReport(
+    _In_ ULONG ErrorSourceId)
+{
+    PWHEAP_RECORD Record;
+    PLIST_ENTRY Entry;
+    BOOLEAN Pending = FALSE;
+    KIRQL OldIrql;
+
+    WheapAcquireLock(&OldIrql);
+    for (Entry = WheapPendingList.Flink; Entry != &WheapPendingList; Entry = Entry->Flink)
+    {
+        Record = CONTAINING_RECORD(Entry, WHEAP_RECORD, Link);
+        if (Record->DeviceDriver && Record->Source->ErrorSourceId == ErrorSourceId)
+        {
+            Pending = TRUE;
+            break;
+        }
+    }
+
+    WheapReleaseLock(OldIrql);
+    return Pending;
+}
+
 NTSTATUS
 NTAPI
 WheaRemoveErrorSourceDeviceDriver(
     _In_ ULONG ErrorSourceId)
 {
     PWHEAP_ERROR_SOURCE Source;
+    LARGE_INTEGER Interval;
+    ULONG Attempt;
 
     ASSERT(KeGetCurrentIrql() == PASSIVE_LEVEL);
+    Interval.QuadPart = WHEAP_REMOVE_WAIT_INTERVAL;
+    for (Attempt = 0; Attempt < WHEAP_REMOVE_WAIT_ATTEMPTS && WheapHasPendingReport(ErrorSourceId); Attempt++)
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+
     Source = WheapDetachSource(ErrorSourceId, TRUE);
     if (!Source)
         return STATUS_NOT_FOUND;
