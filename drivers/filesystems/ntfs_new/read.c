@@ -430,14 +430,27 @@ NtfsFinishDirectRead(
     _In_ ULONG Length)
 {
     NTSTATUS Status;
+    BOOLEAN Overlay;
+    PUCHAR Buffer = NULL;
+    ULONG Valid;
 
-    /* Small file writes may still be in the library's block cache. Paging
-     * and unbuffered reads bypass it, so commit only the overlapping blocks
-     * before sending this IRP directly to the storage device. */
-    Status = NtfsDiskFlushRangeKm(VolCB->StorageDevice, DiskOffset, Length);
+    /* Small file writes may still be in the library's block cache, which
+     * this IRP bypasses. A page-in cannot write them back at APC_LEVEL, so
+     * it gets them laid over the bytes the device returned instead. */
+    Status = NtfsDiskBeginDirectReadKm(VolCB->StorageDevice, DiskOffset, Length, &Overlay);
     if (!NT_SUCCESS(Status))
         return Status;
-    return NtfsSubmitDirectRead(VolCB, Irp, DiskOffset, Length);
+    Status = NtfsSubmitDirectRead(VolCB, Irp, DiskOffset, Length);
+    Valid = (ULONG)min(Irp->IoStatus.Information, (ULONG_PTR)Length);
+    if (Overlay && NT_SUCCESS(Status) && Valid)
+    {
+        Buffer = (PUCHAR)GetBuffer(Irp);
+        if (!Buffer)
+            Status = STATUS_INSUFFICIENT_RESOURCES;
+    }
+    NtfsDiskEndDirectReadKm(VolCB->StorageDevice, DiskOffset, Valid,
+                            NT_SUCCESS(Status) ? Buffer : NULL, Overlay);
+    return Status;
 }
 
 #define NTFS_POSTED_READ ((PVOID)(ULONG_PTR)0x4E524450)

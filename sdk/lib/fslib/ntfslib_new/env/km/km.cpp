@@ -802,6 +802,128 @@ NtfsCacheFlushRange(_In_ PDEVICE_OBJECT Owner,
     return Status;
 }
 
+/*
+ * A page-in runs at APC_LEVEL and must not write back: the writeback path
+ * probes the device and reads settings at PASSIVE_LEVEL, and a page-in that
+ * waits on writes can stall the writer that is waiting on it. Such a read
+ * holds writebacks off instead, so no dirty block in the range can reach the
+ * disk mid-read, and then lays the held bytes over what the disk returned.
+ */
+static
+BOOLEAN
+NtfsCacheRangeHasDirty(_In_ PDEVICE_OBJECT Owner,
+                       _In_ ULONGLONG Offset,
+                       _In_ ULONG Length)
+{
+    ULONGLONG Block = Offset >> NTFS_CACHE_BLOCK_SHIFT;
+    ULONGLONG LastBlock = (Offset + Length - 1) >> NTFS_CACHE_BLOCK_SHIFT;
+    BOOLEAN Dirty = FALSE;
+    ULONG Index;
+
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    if (LastBlock - Block >= NTFS_CACHE_SLOTS)
+    {
+        for (Index = 0; Index < NTFS_CACHE_SLOTS && !Dirty; Index++)
+        {
+            NTFS_CACHE_SLOT* Slot = &NtfsCacheSlots[Index];
+            Dirty = Slot->Dirty && Slot->Owner == Owner &&
+                    Slot->Tag != NTFS_CACHE_EMPTY &&
+                    Slot->Tag >= Block && Slot->Tag <= LastBlock;
+        }
+    }
+    else
+    {
+        for (; Block <= LastBlock && !Dirty; Block++)
+        {
+            NTFS_CACHE_SLOT* Slot = NtfsCacheProbe(Owner, Block);
+            Dirty = (Slot != NULL && Slot->Dirty);
+        }
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+    return Dirty;
+}
+
+/* Copies every dirty block's bytes in [Offset, Offset + Length) into Buffer.
+ * Caller holds NtfsCacheWritebackMutex, so none of them became clean. */
+static
+VOID
+NtfsCacheOverlayDirty(_In_ PDEVICE_OBJECT Owner,
+                      _In_ ULONGLONG Offset,
+                      _In_ ULONG Length,
+                      _Inout_updates_bytes_(Length) PUCHAR Buffer)
+{
+    ULONGLONG End = Offset + Length;
+    ULONG Index;
+
+    ExAcquireFastMutex(&NtfsCacheMutex);
+    for (Index = 0; Index < NTFS_CACHE_SLOTS; Index++)
+    {
+        NTFS_CACHE_SLOT* Slot = &NtfsCacheSlots[Index];
+        ULONGLONG BlockStart;
+        ULONGLONG First;
+        ULONGLONG Last;
+
+        if (!Slot->Dirty || Slot->Owner != Owner ||
+            Slot->Tag == NTFS_CACHE_EMPTY || !Slot->Data)
+        {
+            continue;
+        }
+        BlockStart = Slot->Tag << NTFS_CACHE_BLOCK_SHIFT;
+        First = max(BlockStart, Offset);
+        Last = min(BlockStart + NTFS_CACHE_BLOCK_SIZE, End);
+        if (First >= Last)
+            continue;
+        RtlCopyMemory(Buffer + (First - Offset),
+                      Slot->Data + (First - BlockStart),
+                      (SIZE_T)(Last - First));
+    }
+    ExReleaseFastMutex(&NtfsCacheMutex);
+}
+
+/* Starts a read that may bypass the cache. At PASSIVE_LEVEL the range is
+ * written back as before; above it, *Overlay says writebacks are held and
+ * the caller must finish with NtfsCacheEndCoherentRead. */
+static
+NTSTATUS
+NtfsCacheBeginCoherentRead(_In_ PDEVICE_OBJECT Owner,
+                           _In_ ULONGLONG Offset,
+                           _In_ ULONG Length,
+                           _Out_ PBOOLEAN Overlay)
+{
+    *Overlay = FALSE;
+    if (!NtfsCacheReady || !Length || NtfsCacheDirtyCount == 0)
+        return STATUS_SUCCESS;
+    if (KeGetCurrentIrql() == PASSIVE_LEVEL)
+        return NtfsCacheFlushRange(Owner, Offset, Length);
+    if (!NtfsCacheRangeHasDirty(Owner, Offset, Length))
+        return STATUS_SUCCESS;
+
+    /* Checked again under the mutex: a writeback may have finished first. */
+    KeWaitForSingleObject(&NtfsCacheWritebackMutex, Executive, KernelMode, FALSE, NULL);
+    if (!NtfsCacheRangeHasDirty(Owner, Offset, Length))
+    {
+        KeReleaseMutex(&NtfsCacheWritebackMutex, FALSE);
+        return STATUS_SUCCESS;
+    }
+    *Overlay = TRUE;
+    return STATUS_SUCCESS;
+}
+
+static
+VOID
+NtfsCacheEndCoherentRead(_In_ PDEVICE_OBJECT Owner,
+                         _In_ ULONGLONG Offset,
+                         _In_ ULONG Length,
+                         _Inout_updates_bytes_opt_(Length) PUCHAR Buffer,
+                         _In_ BOOLEAN Overlay)
+{
+    if (!Overlay)
+        return;
+    if (Buffer && Length)
+        NtfsCacheOverlayDirty(Owner, Offset, Length, Buffer);
+    KeReleaseMutex(&NtfsCacheWritebackMutex, FALSE);
+}
+
 /* TRUE when the whole block was served from memory. */
 static
 BOOLEAN
@@ -1669,8 +1791,10 @@ NtfsReadVolumeContext(_In_opt_ void* Context,
         /* Anything left over falls through to a plain read below. */
     }
 
-    /* This read goes to the disk, so anything held back for it must be there. */
-    NTSTATUS FlushStatus = NtfsCacheFlushRange(DeviceObject, Offset, Length);
+    /* This read goes to the disk, so anything held back for it must be there,
+     * or, for a page-in, be laid over what it returns. */
+    BOOLEAN Overlay;
+    NTSTATUS FlushStatus = NtfsCacheBeginCoherentRead(DeviceObject, Offset, Length, &Overlay);
     if (!NT_SUCCESS(FlushStatus))
         return FlushStatus;
 
@@ -1697,7 +1821,10 @@ NtfsReadVolumeContext(_In_opt_ void* Context,
         // Create the read buffer
         ReadBuffer = new(NonPagedPool) UCHAR[Chunk];
         if (!ReadBuffer)
+        {
+            NtfsCacheEndCoherentRead(DeviceObject, Offset, Length, NULL, Overlay);
             return STATUS_INSUFFICIENT_RESOURCES;
+        }
 
         Status = STATUS_SUCCESS;
         while (NT_SUCCESS(Status) && Done < SectorAlignedLength)
@@ -1726,6 +1853,8 @@ NtfsReadVolumeContext(_In_opt_ void* Context,
         delete[] ReadBuffer;
     }
 
+    NtfsCacheEndCoherentRead(DeviceObject, Offset, Length,
+                             NT_SUCCESS(Status) ? Buffer : NULL, Overlay);
     return Status;
 }
 
@@ -2376,6 +2505,30 @@ NtfsDiskFlushRangeKm(_In_ PDEVICE_OBJECT DeviceObject,
     if (!DeviceObject || Offset > ~(ULONGLONG)0 - Length)
         return STATUS_INVALID_PARAMETER;
     return NtfsCacheFlushRange(DeviceObject, Offset, Length);
+}
+
+extern "C"
+NTSTATUS
+NtfsDiskBeginDirectReadKm(_In_ PDEVICE_OBJECT DeviceObject,
+                          _In_ ULONGLONG Offset,
+                          _In_ ULONG Length,
+                          _Out_ PBOOLEAN Overlay)
+{
+    *Overlay = FALSE;
+    if (!DeviceObject || Offset > ~(ULONGLONG)0 - Length)
+        return STATUS_INVALID_PARAMETER;
+    return NtfsCacheBeginCoherentRead(DeviceObject, Offset, Length, Overlay);
+}
+
+extern "C"
+VOID
+NtfsDiskEndDirectReadKm(_In_ PDEVICE_OBJECT DeviceObject,
+                        _In_ ULONGLONG Offset,
+                        _In_ ULONG Length,
+                        _Inout_updates_bytes_opt_(Length) PVOID Buffer,
+                        _In_ BOOLEAN Overlay)
+{
+    NtfsCacheEndCoherentRead(DeviceObject, Offset, Length, (PUCHAR)Buffer, Overlay);
 }
 
 extern "C"
