@@ -1642,7 +1642,9 @@ static HRESULT WINAPI ProxyCliSec_QueryBlanket(IClientSecurity *iface,
     {
         DWORD *capabilities = proxy_manager_get_capabilities(This, pProxy);
 
-        if (capabilities && *capabilities != EOAC_DEFAULT)
+        if (!com_call_security_enabled())
+            *pCapabilities = EOAC_NONE;
+        else if (capabilities && *capabilities != EOAC_DEFAULT)
             *pCapabilities = *capabilities;
         else
             *pCapabilities = This->oxid_info.dwPid == GetCurrentProcessId() ? EOAC_NONE : EOAC_MUTUAL_AUTH;

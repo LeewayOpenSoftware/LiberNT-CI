@@ -103,6 +103,7 @@ typedef struct
     IID                    iid; /* IID of the proxy this belongs to */
 #ifdef __REACTOS__
     DWORD                  imp_level;
+    CRITICAL_SECTION       blanket_cs; /* orders blanket changes against binding use */
 #endif
 } ClientRpcChannelBuffer;
 
@@ -1179,6 +1180,9 @@ static ULONG WINAPI ClientRpcChannelBuffer_Release(LPRPCCHANNELBUFFER iface)
 
     if (This->event) CloseHandle(This->event);
     RpcBindingFree(&This->bind);
+#ifdef __REACTOS__
+    DeleteCriticalSection(&This->blanket_cs);
+#endif
     free(This);
     return 0;
 }
@@ -1409,6 +1413,14 @@ static HRESULT WINAPI ClientRpcChannelBuffer_GetBuffer(LPRPCCHANNELBUFFER iface,
         else
             status = ERROR_OUTOFMEMORY;
     }
+#ifdef __REACTOS__
+    else if (com_call_security_enabled())
+    {
+        EnterCriticalSection(&This->blanket_cs);
+        status = I_RpcGetBuffer(msg);
+        LeaveCriticalSection(&This->blanket_cs);
+    }
+#endif
     else
         status = I_RpcGetBuffer(msg);
 
@@ -1837,7 +1849,9 @@ HRESULT rpc_channel_set_imp_level(IRpcChannelBuffer *chan, DWORD imp_level)
     This->imp_level = imp_level;
     if (!com_call_security_enabled())
         return S_OK;
+    EnterCriticalSection(&This->blanket_cs);
     status = client_channel_apply_blanket(This);
+    LeaveCriticalSection(&This->blanket_cs);
     return status == RPC_S_OK ? S_OK : HRESULT_FROM_WIN32(status);
 }
 #endif
@@ -1906,6 +1920,7 @@ HRESULT rpc_create_clientchannel(const OXID *oxid, const IPID *ipid,
     This->iid = *iid;
 #ifdef __REACTOS__
     This->imp_level = RPC_C_IMP_LEVEL_DEFAULT;
+    InitializeCriticalSection(&This->blanket_cs);
     if (com_call_security_enabled())
         client_channel_apply_blanket(This);
 #endif
@@ -2089,6 +2104,7 @@ struct server_security
     DWORD imp_level;
     BOOL in_call;
     BOOL impersonating;
+    HANDLE saved_token; /* thread token present before the call, restored on revert */
     WCHAR *client_name;
 };
 
@@ -2128,34 +2144,36 @@ static ULONG WINAPI server_security_Release(IServerSecurity *iface)
     return refs;
 }
 
+static void server_security_revert(struct server_security *security)
+{
+    if (security->binding)
+        RpcRevertToSelfEx(security->binding);
+    else
+        RevertToSelf();
+    if (security->saved_token)
+        SetThreadToken(NULL, security->saved_token);
+    security->impersonating = FALSE;
+}
+
 static WCHAR *server_security_client_name(struct server_security *security)
 {
-    HANDLE token = NULL, current = NULL;
+    HANDLE token = NULL;
+    BOOL was_impersonating = security->impersonating;
     WCHAR *name = NULL;
 
     if (!security->binding)
         return NULL;
-    if (security->impersonating)
-    {
-        if (!OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &current))
-            return NULL;
-        RevertToSelf();
-    }
     if (RpcImpersonateClient(security->binding) == RPC_S_OK)
     {
         if (!OpenThreadToken(GetCurrentThread(), TOKEN_QUERY, TRUE, &token))
             token = NULL;
-        RpcRevertToSelfEx(security->binding);
+        if (!was_impersonating)
+            server_security_revert(security);
     }
     if (token)
     {
         name = com_security_token_user(token);
         CloseHandle(token);
-    }
-    if (current)
-    {
-        SetThreadToken(NULL, current);
-        CloseHandle(current);
     }
     return name;
 }
@@ -2195,7 +2213,8 @@ static HRESULT WINAPI server_security_ImpersonateClient(IServerSecurity *iface)
 {
     static const SECURITY_IMPERSONATION_LEVEL levels[] =
     {
-        SecurityIdentification, SecurityAnonymous, SecurityIdentification, SecurityImpersonation, SecurityDelegation
+        /* ImpersonateSelf(SecurityAnonymous) fails, so ANONYMOUS maps to Identification */
+        SecurityIdentification, SecurityIdentification, SecurityIdentification, SecurityImpersonation, SecurityDelegation
     };
     struct server_security *security = impl_from_IServerSecurity(iface);
     RPC_STATUS status;
@@ -2225,13 +2244,7 @@ static HRESULT WINAPI server_security_RevertToSelf(IServerSecurity *iface)
     if (!security->in_call)
         return RPC_E_CALL_COMPLETE;
     if (security->impersonating)
-    {
-        if (security->binding)
-            RpcRevertToSelfEx(security->binding);
-        else
-            RevertToSelf();
-        security->impersonating = FALSE;
-    }
+        server_security_revert(security);
     return S_OK;
 }
 
@@ -2267,6 +2280,8 @@ static struct server_security *server_security_begin(RPC_BINDING_HANDLE binding,
     security->binding = binding;
     security->imp_level = imp_level;
     security->in_call = TRUE;
+    if (!OpenThreadToken(GetCurrentThread(), TOKEN_IMPERSONATE, TRUE, &security->saved_token))
+        security->saved_token = NULL;
     *old_context = tlsdata->call_state;
     tlsdata->call_state = (IUnknown *)&security->IServerSecurity_iface;
     return security;
@@ -2281,6 +2296,11 @@ static void server_security_end(struct server_security *security, IUnknown *old_
     server_security_RevertToSelf(&security->IServerSecurity_iface);
     security->in_call = FALSE;
     security->binding = NULL;
+    if (security->saved_token)
+    {
+        CloseHandle(security->saved_token);
+        security->saved_token = NULL;
+    }
     if (SUCCEEDED(com_get_tlsdata(&tlsdata)))
         tlsdata->call_state = old_context;
     IServerSecurity_Release(&security->IServerSecurity_iface);
