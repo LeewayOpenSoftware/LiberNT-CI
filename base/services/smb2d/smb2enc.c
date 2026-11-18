@@ -48,7 +48,7 @@ uint32_t Smb2ValidateLockRange(uint64_t Offset, uint64_t Length, uint32_t Flags)
 }
 
 void Smb2BuildLockBody(uint8_t Body[SMB2ENC_LOCK_BODY], uint64_t Persistent, uint64_t Volatile, uint64_t Offset,
-                       uint64_t Length, uint32_t Flags)
+                       uint64_t Length, uint32_t Flags, int Wait)
 {
     memset(Body, 0, SMB2ENC_LOCK_BODY);
     Smb2Put16(Body, 0, 48);
@@ -57,5 +57,5 @@ void Smb2BuildLockBody(uint8_t Body[SMB2ENC_LOCK_BODY], uint64_t Persistent, uin
     Smb2Put64(Body, 16, Volatile);
     Smb2Put64(Body, 24, Offset);
     Smb2Put64(Body, 32, Length);
-    Smb2Put32(Body, 40, Flags | SMB2_LOCKFLAG_FAIL_IMMEDIATELY);
+    Smb2Put32(Body, 40, (Wait || Flags == SMB2_LOCKFLAG_UNLOCK) ? Flags : (Flags | SMB2_LOCKFLAG_FAIL_IMMEDIATELY));
 }

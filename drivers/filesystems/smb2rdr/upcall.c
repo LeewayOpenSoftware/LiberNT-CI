@@ -167,6 +167,88 @@ NTSTATUS Smb2UpcallEx(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
 }
 
 /*
+ * An upcall the daemon may hold for as long as the caller waits (a blocking byte-range lock). The wait is
+ * alertable and ends early when the IRP is cancelled or the thread is terminating: the daemon is then
+ * told to cancel the request (SMB2RDR_UP_CANCEL) and answers the upcall itself, normally STATUS_CANCELLED.
+ * If it does not answer within SMB2RDR_UPCALL_TIMEOUT_SEC the request is withdrawn.
+ */
+NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp)
+{
+    PSMB2_REQUEST req;
+    LARGE_INTEGER slice;
+    NTSTATUS status;
+    KIRQL irql;
+    BOOLEAN cancelSent = FALSE;
+    ULONG waitedAfterCancel = 0;
+
+    if (!DaemonRunning)
+        return STATUS_REDIRECTOR_NOT_STARTED;
+    if (PayloadLength > SMB2RDR_MAX_PAYLOAD)
+        return STATUS_INVALID_PARAMETER;
+
+    req = ExAllocatePoolWithTag(NonPagedPool, sizeof(*req), SMB2RDR_TAG_UP);
+    if (!req)
+        return STATUS_INSUFFICIENT_RESOURCES;
+    RtlZeroMemory(req, sizeof(*req));
+    req->Id = (ULONGLONG)InterlockedIncrement64(&NextId);
+    req->Opcode = Opcode;
+    req->PayloadLength = PayloadLength;
+    KeInitializeEvent(&req->Done, NotificationEvent, FALSE);
+    if (PayloadLength)
+    {
+        req->Payload = ExAllocatePoolWithTag(NonPagedPool, PayloadLength, SMB2RDR_TAG_UP);
+        if (!req->Payload)
+        {
+            FreeRequest(req);
+            return STATUS_INSUFFICIENT_RESOURCES;
+        }
+        RtlCopyMemory(req->Payload, Payload, PayloadLength);
+    }
+
+    KeAcquireSpinLock(&UpcallLock, &irql);
+    InsertTailList(&QueuedList, &req->Link);
+    KeReleaseSpinLock(&UpcallLock, irql);
+    KeSetEvent(&QueueEvent, IO_NO_INCREMENT, FALSE);
+
+    slice.QuadPart = -(LONGLONG)SMB2RDR_LOCK_POLL_MS * 10000;
+    for (;;)
+    {
+        status = KeWaitForSingleObject(&req->Done, Executive, UserMode, TRUE, &slice);
+        if (status == STATUS_SUCCESS)
+            break;
+
+        if (!cancelSent && (status != STATUS_TIMEOUT || (Irp && Irp->Cancel) || PsIsThreadTerminating(PsGetCurrentThread())))
+        {
+            SMB2RDR_CANCEL_REQ cancel;
+
+            cancel.TargetId = req->Id;
+            cancelSent = TRUE;
+            Smb2Upcall(SMB2RDR_UP_CANCEL, &cancel, sizeof(cancel), NULL, 0, NULL);
+            continue;
+        }
+        if (cancelSent)
+            waitedAfterCancel += SMB2RDR_LOCK_POLL_MS;
+        if (!DaemonRunning || waitedAfterCancel >= SMB2RDR_UPCALL_TIMEOUT_SEC * 1000)
+        {
+            KeAcquireSpinLock(&UpcallLock, &irql);
+            if (!KeReadStateEvent(&req->Done))
+            {
+                RemoveEntryList(&req->Link);
+                KeReleaseSpinLock(&UpcallLock, irql);
+                FreeRequest(req);
+                return cancelSent ? STATUS_CANCELLED : STATUS_REDIRECTOR_NOT_STARTED;
+            }
+            KeReleaseSpinLock(&UpcallLock, irql);
+            break;
+        }
+    }
+
+    status = req->Status;
+    FreeRequest(req);
+    return status;
+}
+
+/*
  * IOCTL_SMB2RDR_GETREQ: output buffer receives SMB2RDR_UPCALL + payload of the oldest queued request.
  * Blocks until a request is available.
  */

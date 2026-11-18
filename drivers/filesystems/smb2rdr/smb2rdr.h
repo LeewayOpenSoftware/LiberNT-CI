@@ -17,8 +17,7 @@
 #define SMB2RDR_TAG_UP      'puMS'
 #define SMB2RDR_MAX_SERVER_NAME     256     /* characters */
 #define SMB2RDR_UPCALL_TIMEOUT_SEC  30
-#define SMB2RDR_LOCK_RETRY_MS       100
-#define SMB2RDR_LOCK_WAIT_MS        30000
+#define SMB2RDR_LOCK_POLL_MS        100
 
 typedef struct _SMB2RDR_SERVER
 {
@@ -87,6 +86,9 @@ NTSTATUS Smb2Upcall(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
  * the request. Token may be NULL. */
 NTSTATUS Smb2UpcallEx(ULONG Opcode, const VOID *Payload, ULONG PayloadLength,
                       PVOID Reply, ULONG ReplyCapacity, PULONG ReplyLength, PACCESS_TOKEN Token);
+
+/* An upcall the daemon may hold until the caller's IRP is cancelled or its thread ends (blocking locks) */
+NTSTATUS Smb2UpcallCancellable(ULONG Opcode, const VOID *Payload, ULONG PayloadLength, PIRP Irp);
 
 NTSTATUS Smb2HandleGetRequest(PVOID OutBuffer, ULONG OutLength, PULONG Written, ULONG RequestorPid);
 NTSTATUS Smb2HandlePutReply(const VOID *InBuffer, ULONG InLength);

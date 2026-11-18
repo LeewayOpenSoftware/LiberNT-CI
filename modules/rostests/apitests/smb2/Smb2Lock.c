@@ -32,7 +32,7 @@ TestEncoding(void)
 
     memset(Body, 0xCC, sizeof(Body));
     Smb2BuildLockBody(Body, 0x1122334455667788ULL, 0x99AABBCCDDEEFF00ULL, 0x0102030405060708ULL, 0x1011121314151617ULL,
-                      SMB2_LOCKFLAG_EXCLUSIVE);
+                      SMB2_LOCKFLAG_EXCLUSIVE, 0);
     memset(Expected, 0, sizeof(Expected));
     Expected[0] = 48;
     Expected[2] = 1;
@@ -47,10 +47,15 @@ TestEncoding(void)
     Expected[40] = 0x12;
     ok(memcmp(Body, Expected, sizeof(Body)) == 0, "The lock request body does not match the wire layout\n");
 
-    Smb2BuildLockBody(Body, 1, 2, 3, 4, SMB2_LOCKFLAG_UNLOCK);
-    ok(Body[40] == 0x14 && Body[41] == 0 && Body[42] == 0 && Body[43] == 0, "Unlock flags are %02x%02x%02x%02x\n",
-       Body[43], Body[42], Body[41], Body[40]);
+    Smb2BuildLockBody(Body, 1, 2, 3, 4, SMB2_LOCKFLAG_UNLOCK, 0);
+    ok(Body[40] == 0x04 && Body[41] == 0 && Body[42] == 0 && Body[43] == 0,
+       "An unlock must carry the unlock flag alone, flags are %02x%02x%02x%02x\n", Body[43], Body[42], Body[41], Body[40]);
     ok(Body[44] == 0 && Body[45] == 0 && Body[46] == 0 && Body[47] == 0, "The reserved field is not zero\n");
+
+    Smb2BuildLockBody(Body, 1, 2, 3, 4, SMB2_LOCKFLAG_SHARED, 0);
+    ok(Body[40] == 0x11 && Body[41] == 0, "A lock that must not wait carries fail-immediately, flags are %02x%02x\n", Body[41], Body[40]);
+    Smb2BuildLockBody(Body, 1, 2, 3, 4, SMB2_LOCKFLAG_EXCLUSIVE, 1);
+    ok(Body[40] == 0x02 && Body[41] == 0, "A waiting lock carries no fail-immediately, flags are %02x%02x\n", Body[41], Body[40]);
 }
 
 typedef struct
@@ -114,6 +119,44 @@ CanRead(
 
 #define LOCK_X  (LOCKFILE_EXCLUSIVE_LOCK | LOCKFILE_FAIL_IMMEDIATELY)
 #define LOCK_S  LOCKFILE_FAIL_IMMEDIATELY
+
+/* HolderHandle holds 0..100 exclusively; a third handle waits for it asynchronously and is cancelled */
+static void
+TestCancel(
+    _In_ const WCHAR *Path,
+    _In_ HANDLE Holder)
+{
+    HANDLE Waiter;
+    OVERLAPPED Overlapped;
+    DWORD Transferred, Error, Start;
+
+    UNREFERENCED_PARAMETER(Holder);
+    Waiter = CreateFileW(Path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OVERLAPPED, NULL);
+    ok(Waiter != INVALID_HANDLE_VALUE, "Cannot open the overlapped handle, error %lu\n", GetLastError());
+    if (Waiter == INVALID_HANDLE_VALUE)
+        return;
+
+    memset(&Overlapped, 0, sizeof(Overlapped));
+    Overlapped.hEvent = CreateEventW(NULL, TRUE, FALSE, NULL);
+    SetLastError(0xdeadbeef);
+    ok(!LockFileEx(Waiter, LOCKFILE_EXCLUSIVE_LOCK, 0, 100, 0, &Overlapped), "An asynchronous lock over a held range completed at once\n");
+    ok(GetLastError() == ERROR_IO_PENDING, "Wrong error %lu for a pending lock\n", GetLastError());
+    Sleep(500);
+    ok(WaitForSingleObject(Overlapped.hEvent, 0) == WAIT_TIMEOUT, "The pending lock completed while the range was held\n");
+
+    Start = GetTickCount();
+    ok(CancelIoEx(Waiter, &Overlapped), "CancelIoEx failed, error %lu\n", GetLastError());
+    ok(WaitForSingleObject(Overlapped.hEvent, 5000) == WAIT_OBJECT_0, "The cancelled lock did not complete\n");
+    SetLastError(0xdeadbeef);
+    ok(!GetOverlappedResult(Waiter, &Overlapped, &Transferred, FALSE), "The cancelled lock succeeded\n");
+    Error = GetLastError();
+    ok(Error == ERROR_OPERATION_ABORTED, "Wrong error %lu for a cancelled lock\n", Error);
+    ok(GetTickCount() - Start < 3000, "The cancel took %lu ms\n", GetTickCount() - Start);
+
+    CloseHandle(Overlapped.hEvent);
+    CloseHandle(Waiter);
+}
 
 static void
 TestLive(void)
@@ -195,6 +238,8 @@ TestLive(void)
            ThreadStatus);
         CloseHandle(Thread);
     }
+
+    TestCancel(Path, B);
 
     CloseHandle(B);
     ok(Lock(A, 0, 100, LOCK_X), "Closing the holder did not free the range, error %lu\n", GetLastError());

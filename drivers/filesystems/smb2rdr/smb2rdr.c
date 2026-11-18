@@ -1166,8 +1166,7 @@ static NTSTATUS Smb2LockRange(PRX_CONTEXT RxContext, PSMB2RDR_FOBX_EXT Fobx, PEP
                               LONGLONG Length, BOOLEAN Exclusive, BOOLEAN FailImmediately)
 {
     PSMB2RDR_LOCK lock;
-    LARGE_INTEGER delay;
-    ULONG waited = 0;
+    SMB2RDR_LOCK_REQ req;
     NTSTATUS status;
 
     if (Offset < 0 || Length < 0)
@@ -1176,25 +1175,19 @@ static NTSTATUS Smb2LockRange(PRX_CONTEXT RxContext, PSMB2RDR_FOBX_EXT Fobx, PEP
     if (!lock)
         return STATUS_INSUFFICIENT_RESOURCES;
 
-    /* FIXME: a waiting lock gives up after SMB2RDR_LOCK_WAIT_MS and polls every SMB2RDR_LOCK_RETRY_MS: no server-side pending lock yet */
-    for (;;)
+    RtlZeroMemory(&req, sizeof(req));
+    req.FileHandle = Fobx->FileHandle;
+    req.Offset = (ULONGLONG)Offset;
+    req.Length = (ULONGLONG)Length;
+    req.Flags = Exclusive ? SMB2RDR_LOCK_EXCLUSIVE : SMB2RDR_LOCK_SHARED;
+    if (FailImmediately)
     {
-        status = Smb2LockUpcall(Fobx->FileHandle, (ULONGLONG)Offset, (ULONGLONG)Length,
-                                Exclusive ? SMB2RDR_LOCK_EXCLUSIVE : SMB2RDR_LOCK_SHARED);
-        if (status != STATUS_LOCK_NOT_GRANTED || FailImmediately || waited >= SMB2RDR_LOCK_WAIT_MS)
-            break;
-        delay.QuadPart = -(LONGLONG)SMB2RDR_LOCK_RETRY_MS * 10000;
-        if (RxContext->CurrentIrp->Cancel || PsIsThreadTerminating(PsGetCurrentThread()))
-        {
-            status = STATUS_CANCELLED;
-            break;
-        }
-        if (KeDelayExecutionThread(UserMode, TRUE, &delay) != STATUS_SUCCESS)
-        {
-            status = STATUS_CANCELLED;
-            break;
-        }
-        waited += SMB2RDR_LOCK_RETRY_MS;
+        status = Smb2Upcall(SMB2RDR_UP_LOCK, &req, sizeof(req), NULL, 0, NULL);
+    }
+    else
+    {
+        req.Flags |= SMB2RDR_LOCK_WAIT;
+        status = Smb2UpcallCancellable(SMB2RDR_UP_LOCK, &req, sizeof(req), RxContext->CurrentIrp);
     }
     if (!NT_SUCCESS(status))
     {

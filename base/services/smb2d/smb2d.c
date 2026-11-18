@@ -474,15 +474,144 @@ static LONG DoFlush(const BYTE *payload, DWORD length)
     return (LONG)Smb2Flush(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId);
 }
 
-static LONG DoLock(const BYTE *payload, DWORD length)
+/* A lock the server holds until the range is free: its own thread answers the upcall when the server does */
+typedef struct _LOCKWAIT
+{
+    struct _LOCKWAIT *Next;
+    unsigned long long Id;
+    SMB2_CONN *Conn;
+    uint32_t TreeId;
+    SMB2_FILE_ID FileId;
+    uint64_t Offset;
+    uint64_t Length;
+    uint32_t Flags;
+    SMB2_OP Op;
+} LOCKWAIT;
+
+static CRITICAL_SECTION g_WaitLock;
+static LOCKWAIT *g_Waits;
+static volatile LONG g_WaitThreads;
+static CRITICAL_SECTION g_ReplyLock;
+static HANDLE g_ReplyDev = INVALID_HANDLE_VALUE;
+
+static HANDLE OpenDevice(void);
+
+static void SendReply(unsigned long long id, LONG status)
+{
+    SMB2RDR_DOWNCALL down;
+    DWORD n;
+
+    down.Id = id;
+    down.Status = status;
+    down.Length = 0;
+    EnterCriticalSection(&g_ReplyLock);
+    if (g_ReplyDev == INVALID_HANDLE_VALUE)
+        g_ReplyDev = OpenDevice();
+    if (g_ReplyDev == INVALID_HANDLE_VALUE || !Ioctl(g_ReplyDev, IOCTL_SMB2RDR_PUTREPLY, &down, sizeof(down), NULL, 0, &n))
+        fprintf(stderr, "PUTREPLY (lock) failed: %lu\n", GetLastError());
+    LeaveCriticalSection(&g_ReplyLock);
+}
+
+static DWORD WINAPI LockWaitThread(LPVOID param)
+{
+    LOCKWAIT *w = (LOCKWAIT *)param, **link;
+    uint32_t st = Smb2LockWait(w->Conn, w->TreeId, &w->FileId, w->Offset, w->Length, w->Flags, &w->Op);
+
+    EnterCriticalSection(&g_WaitLock);
+    for (link = &g_Waits; *link && *link != w; link = &(*link)->Next)
+        ;
+    if (*link)
+        *link = w->Next;
+    LeaveCriticalSection(&g_WaitLock);
+    SendReply(w->Id, (LONG)st);
+    free(w);
+    InterlockedDecrement(&g_WaitThreads);
+    return 0;
+}
+
+static LONG DoLockWait(const SMB2RDR_LOCK_REQ *req, unsigned long long id, uint32_t flags, OPENFILE *f)
+{
+    LOCKWAIT *w;
+    HANDLE th;
+
+    if (Smb2ValidateLockRange(req->Offset, req->Length, flags) != SMB2_STATUS_SUCCESS)
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    w = (LOCKWAIT *)calloc(1, sizeof(*w));
+    if (!w)
+        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    w->Id = id;
+    w->Conn = f->Tree->Connection->Conn;
+    w->TreeId = f->Tree->TreeId;
+    w->FileId = f->FileId;
+    w->Offset = req->Offset;
+    w->Length = req->Length;
+    w->Flags = flags;
+    Smb2OpInit(&w->Op, w->Conn);
+    EnterCriticalSection(&g_WaitLock);
+    w->Next = g_Waits;
+    g_Waits = w;
+    InterlockedIncrement(&g_WaitThreads);
+    LeaveCriticalSection(&g_WaitLock);
+    th = CreateThread(NULL, 0, LockWaitThread, w, 0, NULL);
+    if (!th)
+    {
+        LOCKWAIT **link;
+
+        EnterCriticalSection(&g_WaitLock);
+        for (link = &g_Waits; *link && *link != w; link = &(*link)->Next)
+            ;
+        if (*link)
+            *link = w->Next;
+        LeaveCriticalSection(&g_WaitLock);
+        InterlockedDecrement(&g_WaitThreads);
+        free(w);
+        return (LONG)SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    }
+    CloseHandle(th);
+    return 0x7FFFFFFF;
+}
+
+static LONG DoCancel(const BYTE *payload, DWORD length)
+{
+    const SMB2RDR_CANCEL_REQ *req = (const SMB2RDR_CANCEL_REQ *)payload;
+    LOCKWAIT *w;
+
+    if (length != sizeof(*req))
+        return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    EnterCriticalSection(&g_WaitLock);
+    for (w = g_Waits; w && w->Id != req->TargetId; w = w->Next)
+        ;
+    if (w)
+        Smb2OpCancel(&w->Op);
+    LeaveCriticalSection(&g_WaitLock);
+    return 0;
+}
+
+static void CancelAllWaits(void)
+{
+    LOCKWAIT *w;
+    DWORD i;
+
+    EnterCriticalSection(&g_WaitLock);
+    for (w = g_Waits; w; w = w->Next)
+        Smb2OpCancel(&w->Op);
+    LeaveCriticalSection(&g_WaitLock);
+    for (i = 0; i < 100 && g_WaitThreads; i++)
+        Sleep(50);
+}
+
+/* Returns DEFERRED (0x7FFFFFFF) when a thread will answer the upcall itself */
+static LONG DoLock(const BYTE *payload, DWORD length, unsigned long long id)
 {
     const SMB2RDR_LOCK_REQ *req = (const SMB2RDR_LOCK_REQ *)payload;
     OPENFILE *f;
     uint32_t flags;
+    int wait;
 
     if (length != sizeof(*req))
         return (LONG)SMB2_STATUS_INVALID_PARAMETER;
-    switch (req->Flags)
+    wait = (req->Flags & SMB2RDR_LOCK_WAIT) != 0;
+    switch (req->Flags & ~SMB2RDR_LOCK_WAIT)
     {
         case SMB2RDR_LOCK_SHARED:
             flags = SMB2_LOCKFLAG_SHARED;
@@ -491,6 +620,8 @@ static LONG DoLock(const BYTE *payload, DWORD length)
             flags = SMB2_LOCKFLAG_EXCLUSIVE;
             break;
         case SMB2RDR_LOCK_UNLOCK:
+            if (wait)
+                return (LONG)SMB2_STATUS_INVALID_PARAMETER;
             flags = SMB2_LOCKFLAG_UNLOCK;
             break;
         default:
@@ -499,6 +630,8 @@ static LONG DoLock(const BYTE *payload, DWORD length)
     f = FindFile(req->FileHandle);
     if (!f)
         return (LONG)SMB2_STATUS_INVALID_PARAMETER;
+    if (wait)
+        return DoLockWait(req, id, flags, f);
     return (LONG)Smb2Lock(f->Tree->Connection->Conn, f->Tree->TreeId, &f->FileId, req->Offset, req->Length, flags);
 }
 
@@ -568,7 +701,10 @@ static void Serve(HANDLE dev)
                 status = DoFlush(reqbuf + sizeof(*up), up->Length);
                 break;
             case SMB2RDR_UP_LOCK:
-                status = DoLock(reqbuf + sizeof(*up), up->Length);
+                status = DoLock(reqbuf + sizeof(*up), up->Length, up->Id);
+                break;
+            case SMB2RDR_UP_CANCEL:
+                status = DoCancel(reqbuf + sizeof(*up), up->Length);
                 break;
             case SMB2RDR_UP_QUERYDIR:
                 status = DoQueryDir(reqbuf + sizeof(*up), up->Length, repbuf + sizeof(*down), &replyLen);
@@ -583,6 +719,8 @@ static void Serve(HANDLE dev)
             CloseHandle((HANDLE)(ULONG_PTR)up->TokenHandle);
             up->TokenHandle = 0;
         }
+        if (status == 0x7FFFFFFF)
+            continue;                   /* a lock wait: its thread answers */
         down->Id = up->Id;
         down->Status = status;
         down->Length = replyLen;
@@ -656,6 +794,8 @@ static int RunDaemon(void)
     int tries;
 
     LoadIdentity();
+    InitializeCriticalSection(&g_WaitLock);
+    InitializeCriticalSection(&g_ReplyLock);
     dev = OpenDevice();
     if (dev == INVALID_HANDLE_VALUE)
     {
@@ -679,7 +819,10 @@ static int RunDaemon(void)
     }
     printf("smb2d: redirector started, serving requests\n");
     Serve(dev);
+    CancelAllWaits();
     CloseHandle(dev);
+    if (g_ReplyDev != INVALID_HANDLE_VALUE)
+        CloseHandle(g_ReplyDev);
     return 0;
 }
 

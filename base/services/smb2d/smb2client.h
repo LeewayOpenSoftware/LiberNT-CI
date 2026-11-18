@@ -86,6 +86,23 @@ uint32_t Smb2SetInfo(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileI
 uint32_t Smb2Lock(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset, uint64_t Length,
                   uint32_t Flags);
 
+/*
+ * A lock request the server may hold until the range is free. Smb2OpInit before, Smb2OpCancel from any thread
+ * (it sends SMB2 CANCEL; the wait then ends with STATUS_CANCELLED). Needs the multiplexed session (after
+ * Smb2SessionSetup), else STATUS_NOT_SUPPORTED.
+ */
+typedef struct _SMB2_OP
+{
+    SMB2_CONN *Conn;
+    volatile LONG Cancelled;
+    volatile LONG64 MessageId;
+} SMB2_OP;
+
+void Smb2OpInit(SMB2_OP *Op, SMB2_CONN *Conn);
+void Smb2OpCancel(SMB2_OP *Op);
+uint32_t Smb2LockWait(SMB2_CONN *Conn, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset, uint64_t Length,
+                      uint32_t Flags, SMB2_OP *Op);
+
 uint16_t Smb2ConnDialect(const SMB2_CONN *Conn);
 int Smb2ConnSigned(const SMB2_CONN *Conn);
 

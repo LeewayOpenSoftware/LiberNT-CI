@@ -22,9 +22,27 @@
 
 #define SMB2_MAX_MESSAGE    (SMB2_MAX_IO + 4096)
 
+typedef struct _SMB2_PENDING
+{
+    struct _SMB2_PENDING *Next;
+    uint64_t MessageId;
+    uint32_t TreeId;
+    HANDLE Event;
+    uint8_t *Resp;
+    size_t RespLen;
+    int Done;
+    int Async;
+    uint64_t AsyncId;
+} SMB2_PENDING;
+
 struct _SMB2_CONN
 {
     SOCKET Sock;
+    CRITICAL_SECTION Lock;          /* send order, message ids and the pending list */
+    SMB2_PENDING *Pending;
+    HANDLE Reader;
+    volatile LONG Mux;              /* responses are matched by a reader thread (after session setup) */
+    volatile LONG Dead;
     uint16_t Dialect;
     uint32_t SecurityMode;
     uint64_t SessionId;
@@ -119,8 +137,8 @@ static uint8_t *RecvFrame(SMB2_CONN *c, size_t *len)
  * Resp is malloc'ed (caller frees); the status is the NTSTATUS in the response header.
  * Interim STATUS_PENDING responses are skipped.
  */
-static uint32_t Transact(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, const uint8_t *Body, size_t BodyLen,
-                         uint8_t **Resp, size_t *RespLen)
+static uint32_t TransactSerial(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, const uint8_t *Body, size_t BodyLen,
+                               uint8_t **Resp, size_t *RespLen)
 {
     uint8_t *req;
     size_t total = SMB2_HEADER_SIZE + BodyLen, rlen;
@@ -183,6 +201,228 @@ static uint32_t Transact(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, const 
     return status;
 }
 
+static uint32_t FinishResponse(SMB2_CONN *c, uint16_t Command, uint8_t *r, size_t rlen, uint8_t **Resp,
+                               size_t *RespLen)
+{
+    uint32_t status = Smb2Get32(r, SMB2H_STATUS);
+
+    if (c->Signing && (Smb2Get32(r, SMB2H_FLAGS) & SMB2_FLAGS_SIGNED) && Command != SMB2_SESSION_SETUP &&
+        !Smb2VerifyMessage(c->SigningKey, r, rlen))
+    {
+        free(r);
+        return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
+    }
+    *Resp = r;
+    *RespLen = rlen;
+    return status;
+}
+
+static void BuildHeader(SMB2_CONN *c, uint8_t *req, uint16_t Command, uint32_t TreeId, uint64_t mid)
+{
+    req[0] = 0xFE; req[1] = 'S'; req[2] = 'M'; req[3] = 'B';
+    Smb2Put16(req, SMB2H_STRUCTSIZE, SMB2_HEADER_SIZE);
+    Smb2Put16(req, SMB2H_CREDITCHARGE, c->Dialect >= SMB2_DIALECT_210 ? 1 : 0);
+    Smb2Put16(req, SMB2H_COMMAND, Command);
+    Smb2Put16(req, SMB2H_CREDITS, 16);
+    Smb2Put64(req, SMB2H_MESSAGEID, mid);
+    Smb2Put32(req, SMB2H_TREEID, TreeId);
+    Smb2Put64(req, SMB2H_SESSIONID, c->SessionId);
+}
+
+/* Demultiplexes the responses of a session: one reader, any number of requests in flight (2.2.1.2 AsyncId) */
+static DWORD WINAPI ReaderProc(LPVOID Param)
+{
+    SMB2_CONN *c = (SMB2_CONN *)Param;
+    SMB2_PENDING *p;
+    uint8_t *r;
+    size_t rlen;
+
+    for (;;)
+    {
+        uint64_t mid;
+        uint32_t status, flags;
+
+        r = RecvFrame(c, &rlen);
+        if (!r)
+            break;
+        mid = Smb2Get64(r, SMB2H_MESSAGEID);
+        status = Smb2Get32(r, SMB2H_STATUS);
+        flags = Smb2Get32(r, SMB2H_FLAGS);
+        if (Smb2Get32(r, 0) != 0x424D53FEu || !(flags & SMB2_FLAGS_SERVER_TO_REDIR))
+        {
+            free(r);
+            continue;
+        }
+        EnterCriticalSection(&c->Lock);
+        for (p = c->Pending; p && p->MessageId != mid; p = p->Next)
+            ;
+        if (!p || p->Done)
+        {
+            free(r);
+        }
+        else if (status == SMB2_STATUS_PENDING)
+        {
+            if (flags & SMB2_FLAGS_ASYNC_COMMAND)
+            {
+                p->AsyncId = Smb2Get64(r, SMB2H_ASYNCID);
+                p->Async = 1;
+            }
+            free(r);
+        }
+        else
+        {
+            p->Resp = r;
+            p->RespLen = rlen;
+            p->Done = 1;
+            SetEvent(p->Event);
+        }
+        LeaveCriticalSection(&c->Lock);
+    }
+    EnterCriticalSection(&c->Lock);
+    InterlockedExchange(&c->Dead, 1);
+    for (p = c->Pending; p; p = p->Next)
+    {
+        if (!p->Done)
+        {
+            p->Done = 1;
+            SetEvent(p->Event);
+        }
+    }
+    LeaveCriticalSection(&c->Lock);
+    return 0;
+}
+
+static uint32_t TransactEx(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, const uint8_t *Body, size_t BodyLen,
+                           uint8_t **Resp, size_t *RespLen, SMB2_OP *Op)
+{
+    SMB2_PENDING *p, **link;
+    uint8_t *req, *r;
+    size_t total = SMB2_HEADER_SIZE + BodyLen, rlen;
+    uint64_t mid;
+    int sent;
+
+    if (!c->Mux)
+        return TransactSerial(c, Command, TreeId, Body, BodyLen, Resp, RespLen);
+    *Resp = NULL;
+    req = (uint8_t *)calloc(1, total);
+    p = (SMB2_PENDING *)calloc(1, sizeof(*p));
+    if (!req || !p)
+    {
+        free(req);
+        free(p);
+        return SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    }
+    p->Event = CreateEventW(NULL, TRUE, FALSE, NULL);
+    if (!p->Event)
+    {
+        free(req);
+        free(p);
+        return SMB2_STATUS_INSUFFICIENT_RESOURCES;
+    }
+    p->TreeId = TreeId;
+    if (BodyLen)
+        memcpy(req + SMB2_HEADER_SIZE, Body, BodyLen);
+
+    EnterCriticalSection(&c->Lock);
+    if (c->Dead)
+    {
+        LeaveCriticalSection(&c->Lock);
+        free(req);
+        CloseHandle(p->Event);
+        free(p);
+        return SMB2_STATUS_CONNECTION_DISCONNECTED;
+    }
+    mid = c->NextMessageId++;
+    p->MessageId = mid;
+    BuildHeader(c, req, Command, TreeId, mid);
+    if (c->Signing && c->SessionId != 0)
+        Smb2SignMessage(c->SigningKey, req, total);
+    p->Next = c->Pending;
+    c->Pending = p;
+    if (Op)
+        InterlockedExchange64((volatile LONG64 *)&Op->MessageId, (LONG64)mid);
+    sent = SendFrame(c, req, total);
+    LeaveCriticalSection(&c->Lock);
+    free(req);
+
+    if (!sent)
+    {
+        InterlockedExchange(&c->Dead, 1);
+        shutdown(c->Sock, SD_BOTH);
+    }
+    else if (Op && Op->Cancelled)
+    {
+        Smb2OpCancel(Op);
+    }
+    WaitForSingleObject(p->Event, INFINITE);
+
+    EnterCriticalSection(&c->Lock);
+    for (link = &c->Pending; *link && *link != p; link = &(*link)->Next)
+        ;
+    if (*link)
+        *link = p->Next;
+    LeaveCriticalSection(&c->Lock);
+    CloseHandle(p->Event);
+    r = p->Resp;
+    rlen = p->RespLen;
+    free(p);
+    if (!r)
+        return SMB2_STATUS_CONNECTION_DISCONNECTED;
+    return FinishResponse(c, Command, r, rlen, Resp, RespLen);
+}
+
+static uint32_t Transact(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, const uint8_t *Body, size_t BodyLen,
+                         uint8_t **Resp, size_t *RespLen)
+{
+    return TransactEx(c, Command, TreeId, Body, BodyLen, Resp, RespLen, NULL);
+}
+
+/* 2.2.30 CANCEL: no response; by AsyncId once the server answered "pending", else by MessageId */
+static void SendCancel(SMB2_CONN *c, uint64_t mid)
+{
+    uint8_t msg[SMB2_HEADER_SIZE + 4];
+    SMB2_PENDING *p;
+
+    EnterCriticalSection(&c->Lock);
+    for (p = c->Pending; p && p->MessageId != mid; p = p->Next)
+        ;
+    if (p && !p->Done)
+    {
+        memset(msg, 0, sizeof(msg));
+        BuildHeader(c, msg, SMB2_CANCEL, p->TreeId, mid);
+        Smb2Put16(msg, SMB2H_CREDITCHARGE, 0);
+        Smb2Put16(msg, SMB2H_CREDITS, 1);
+        Smb2Put16(msg, SMB2_HEADER_SIZE, 4);
+        if (p->Async)
+        {
+            Smb2Put32(msg, SMB2H_FLAGS, SMB2_FLAGS_ASYNC_COMMAND);
+            Smb2Put32(msg, SMB2H_TREEID, 0);
+            Smb2Put64(msg, SMB2H_ASYNCID, p->AsyncId);
+        }
+        if (c->Signing && c->SessionId != 0)
+            Smb2SignMessage(c->SigningKey, msg, sizeof(msg));
+        SendFrame(c, msg, sizeof(msg));
+    }
+    LeaveCriticalSection(&c->Lock);
+}
+
+void Smb2OpInit(SMB2_OP *Op, SMB2_CONN *Conn)
+{
+    Op->Conn = Conn;
+    Op->Cancelled = 0;
+    Op->MessageId = 0;
+}
+
+void Smb2OpCancel(SMB2_OP *Op)
+{
+    LONG64 mid;
+
+    InterlockedExchange(&Op->Cancelled, 1);
+    mid = InterlockedCompareExchange64((volatile LONG64 *)&Op->MessageId, 0, 0);
+    if (mid && Op->Conn)
+        SendCancel(Op->Conn, (uint64_t)mid);
+}
+
 /* ---------------- connection ---------------- */
 
 static int g_WsaUp;
@@ -229,6 +469,7 @@ uint32_t Smb2Connect(const WCHAR *Host, unsigned short Port, SMB2_CONN **Conn)
         return SMB2_STATUS_INSUFFICIENT_RESOURCES;
     }
     c->Sock = s;
+    InitializeCriticalSection(&c->Lock);
     *Conn = c;
     return SMB2_STATUS_SUCCESS;
 }
@@ -237,12 +478,19 @@ void Smb2Disconnect(SMB2_CONN *c)
 {
     if (!c)
         return;
+    if (c->Reader)
+    {
+        shutdown(c->Sock, SD_BOTH);
+        WaitForSingleObject(c->Reader, 5000);
+        CloseHandle(c->Reader);
+    }
     if (c->HaveCtx)
         DeleteSecurityContext(&c->Ctx);
     if (c->HaveCred)
         FreeCredentialsHandle(&c->Cred);
     if (c->Sock != INVALID_SOCKET)
         closesocket(c->Sock);
+    DeleteCriticalSection(&c->Lock);
     memset(c->SigningKey, 0, sizeof(c->SigningKey));
     free(c);
 }
@@ -446,6 +694,9 @@ uint32_t Smb2SessionSetup(SMB2_CONN *c, const WCHAR *Host, const WCHAR *User, co
         /* Sign when the server demands it; guest and null sessions have no key to sign with. */
         c->Signing = (c->SecurityMode & SMB2_NEGOTIATE_SIGNING_REQUIRED) != 0 &&
                      !(c->SessionFlags & (SMB2_SESSION_FLAG_IS_GUEST | SMB2_SESSION_FLAG_IS_NULL));
+        c->Reader = CreateThread(NULL, 0, ReaderProc, c, 0, NULL);
+        if (c->Reader)
+            InterlockedExchange(&c->Mux, 1);
     }
     return st;
 }
@@ -835,8 +1086,27 @@ uint32_t Smb2Lock(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uin
     st = Smb2ValidateLockRange(Offset, Length, Flags);
     if (st != SMB2_STATUS_SUCCESS)
         return st;
-    Smb2BuildLockBody(body, FileId->Persistent, FileId->Volatile, Offset, Length, Flags);
+    Smb2BuildLockBody(body, FileId->Persistent, FileId->Volatile, Offset, Length, Flags, 0);
     st = Transact(c, SMB2_LOCK, TreeId, body, sizeof(body), &r, &rlen);
+    free(r);
+    return st;
+}
+
+/* As Smb2Lock, but the server may hold the request: returns when the range is granted, refused, or Op was cancelled */
+uint32_t Smb2LockWait(SMB2_CONN *c, uint32_t TreeId, const SMB2_FILE_ID *FileId, uint64_t Offset, uint64_t Length,
+                      uint32_t Flags, SMB2_OP *Op)
+{
+    uint8_t body[SMB2ENC_LOCK_BODY], *r;
+    size_t rlen;
+    uint32_t st;
+
+    if (!c->Mux)
+        return SMB2_STATUS_NOT_SUPPORTED;
+    st = Smb2ValidateLockRange(Offset, Length, Flags);
+    if (st != SMB2_STATUS_SUCCESS)
+        return st;
+    Smb2BuildLockBody(body, FileId->Persistent, FileId->Volatile, Offset, Length, Flags, 1);
+    st = TransactEx(c, SMB2_LOCK, TreeId, body, sizeof(body), &r, &rlen, Op);
     free(r);
     return st;
 }
