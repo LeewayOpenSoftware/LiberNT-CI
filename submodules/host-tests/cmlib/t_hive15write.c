@@ -567,6 +567,56 @@ TLoadImageInto(
                         Image, TWAlloc, TWFree, TFileWrite, TFileRead, 1, NULL);
 }
 
+/* A 1.3 hive written before the default changed keeps its minor and its fast leaves
+ * when it is loaded and edited under the 1.5 default: nothing converts it on write. */
+static
+VOID
+TTestLegacyStaysLegacy(VOID)
+{
+    CMHIVE cmHive, reHive;
+    ULONG saved = HvGetHiveFormatVersion();
+    NTSTATUS status;
+
+    HvSetHiveFormatVersion(HSYS_MINOR);
+    if (!NT_SUCCESS(TCreateHive(&cmHive)))
+    {
+        Failures++;
+        HvSetHiveFormatVersion(saved);
+        return;
+    }
+    if (CmCreateRootNode(&cmHive.Hive, L"$$ROOT"))
+        CHECK(TAddChild(&cmHive.Hive, cmHive.Hive.BaseBlock->RootCell,
+                        TChildren[0].Name, TChildren[0].Chars) != HCELL_NIL);
+    TPrimarySize = 0;
+    CHECK(HvSyncHive(&cmHive.Hive) == TRUE);
+    CHECK(((PHBASE_BLOCK)TPrimary)->Minor == HSYS_MINOR);
+    HvFree(&cmHive.Hive);
+
+    HvSetHiveFormatVersion(HSYS_WHISTLER);
+    status = TLoadImageInto(&reHive, TPrimary, TPrimarySize);
+    CHECK(status == STATUS_SUCCESS);
+    if (NT_SUCCESS(status))
+    {
+        PHHIVE hive = &reHive.Hive;
+        PCM_KEY_NODE root = (PCM_KEY_NODE)HvGetCell(hive, hive->BaseBlock->RootCell);
+
+        CHECK(hive->Version == HSYS_MINOR);
+        CHECK(root != NULL);
+        if (root)
+        {
+            CHECK(TAddChild(hive, hive->BaseBlock->RootCell,
+                            TChildren[1].Name, TChildren[1].Chars) != HCELL_NIL);
+            CHECK(TRootLeafSignature(hive, root) == CM_KEY_FAST_LEAF);
+            HvReleaseCell(hive, hive->BaseBlock->RootCell);
+        }
+        TPrimarySize = 0;
+        CHECK(HvSyncHive(hive) == TRUE);
+        CHECK(((PHBASE_BLOCK)TPrimary)->Minor == HSYS_MINOR);
+        HvFree(hive);
+    }
+    HvSetHiveFormatVersion(saved);
+}
+
 /* Shrinking a big value to a normal size frees its whole record (the
  * overwrite path in the kernel treats an old big value as no reusable
  * cell; this row drives the same cmlib calls and checks the record cells). */
@@ -692,6 +742,7 @@ main(void)
     TTestGate();
     TTestRoundTrip();
     TTestTornWrite();
+    TTestLegacyStaysLegacy();
     TTestBigToMedium();
 
     printf("cmlib hive 1.5 write: %lu checks, %lu failures\n",
