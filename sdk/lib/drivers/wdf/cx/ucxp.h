@@ -46,6 +46,8 @@
  * lock (UcxpFindDeviceHandle); the signature is a second, cheap check.
  */
 #define UCX_DEVICE_HANDLE_SIGNATURE 'vDcU'
+#define UCX_HANDLE_REMOVING         0x40000000L
+#define UCX_HANDLE_HOLD_MASK        0x3FFFFFFFL
 #define UCX_PIPE_HANDLE_SIGNATURE   'pPcU'
 
 typedef struct _UCX_PIPE_HANDLE {
@@ -99,10 +101,13 @@ typedef struct _UCX_DEVICE_HANDLE {
     PUSB_CONFIGURATION_DESCRIPTOR ConfigDescriptor;   /* our copy of the selected one */
     ULONG ConfigDescriptorLength;
     KSPIN_LOCK PipeLock;                   /* Interfaces[] and the pipes' Closing flags */
-    volatile LONG Busy;                    /* callers inside a hub-interface or URB path */
-    volatile LONG Children;                /* devices behind this hub (each holds the hub) */
-    volatile LONG Removing;                /* RemoveUsbDevice ran: the last caller out destroys */
-    volatile LONG Destroyed;               /* claimed once by whoever destroys */
+    /* Lifetime: one word. The low bits count the holds (callers inside a
+     * hub-interface or URB path, and devices behind this hub); the top bit says
+     * RemoveUsbDevice ran. The atomic operation that leaves the word at exactly
+     * UCX_HANDLE_REMOVING (removed, no holds) is the one that destroys; nobody
+     * touches the handle after a decrement that did not. */
+    volatile LONG Holds;
+    volatile LONG Children;                /* for logs only: how many of the holds are children */
     struct _UCX_ROOTHUB_CTX *RootHub;      /* for a destroy from a release */
     BOOLEAN InitializeFailed;              /* a failed Initialize is final for this handle */
     /* M3 step 4b: where it sits, and what it is when it is a hub */
@@ -262,8 +267,9 @@ VOID
 UcxpReleaseDeviceHandle(
     _In_ PUCX_DEVICE_HANDLE Handle);
 
+/* Drops one hold; destroys when that made a removed handle hold-free */
 VOID
-UcxpDeviceTryDestroy(
+UcxpDeviceDropHold(
     _In_ PUCX_DEVICE_HANDLE Handle);
 
 /* The URB limits the dispatchers enforce (ucxroothub.c) */

@@ -106,7 +106,7 @@ UcxpRemoveDeviceHandle(
 }
 
 /*
- * Find + hold: the handle stays allocated while Busy is non-zero
+ * Find + hold: the handle stays allocated while it has holds
  * (UcxpDeviceRemove waits for it after unlisting). Every hub-interface and
  * URB path that reads through a downstream handle brackets its use with
  * these two.
@@ -129,7 +129,7 @@ UcxpAcquireDeviceHandle(
         {
             Found = (((PUCX_DEVICE_HANDLE)Handle)->Signature == UCX_DEVICE_HANDLE_SIGNATURE);
             if (Found)
-                InterlockedIncrement(&((PUCX_DEVICE_HANDLE)Handle)->Busy);
+                InterlockedIncrement(&((PUCX_DEVICE_HANDLE)Handle)->Holds);
             break;
         }
     }
@@ -141,24 +141,22 @@ VOID
 UcxpReleaseDeviceHandle(
     _In_ PUCX_DEVICE_HANDLE Handle)
 {
-    /* The last caller out of a removed handle takes it down, once no child
-     * holds it either (Remove left it alone because of one or the other) */
-    InterlockedDecrement(&Handle->Busy);
-    UcxpDeviceTryDestroy(Handle);
+    UcxpDeviceDropHold(Handle);
 }
 
-/* Takes a removed handle down exactly once, when neither a caller nor a child holds it */
+/*
+ * The decrement is the decision: only the thread whose decrement leaves the
+ * word at "removed, no holds" destroys, and a thread whose decrement did not
+ * reads nothing of the handle afterwards (it may already be gone).
+ */
 VOID
-UcxpDeviceTryDestroy(
+UcxpDeviceDropHold(
     _In_ PUCX_DEVICE_HANDLE Handle)
 {
-    if (InterlockedCompareExchange(&Handle->Removing, 0, 0) == 0)
-        return;
-    if (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0 ||
-        InterlockedCompareExchange(&Handle->Children, 0, 0) != 0)
-        return;
-    if (InterlockedExchange(&Handle->Destroyed, 1) == 0)
-        UcxpDeviceDestroy(Handle->RootHub, Handle);
+    PUCX_ROOTHUB_CTX RootHub = Handle->RootHub;   /* read while our hold still protects the handle */
+
+    if (InterlockedDecrement(&Handle->Holds) == UCX_HANDLE_REMOVING)
+        UcxpDeviceDestroy(RootHub, Handle);
 }
 
 BOOLEAN

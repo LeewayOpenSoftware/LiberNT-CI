@@ -325,7 +325,11 @@ UcxpDeviceCreate(
     DeviceCtx->Handle = Handle;
     ExFreePoolWithTag(Init, UCX_TAG);
     if (Parent != NULL)
-        InterlockedIncrement(&Parent->Children);   /* the hub stays until its children are gone */
+    {
+        /* The hub stays until its children are gone: a child is a hold on it */
+        InterlockedIncrement(&Parent->Children);
+        InterlockedIncrement(&Parent->Holds);
+    }
     UcxpAddDeviceHandle(Controller, Handle);
     *NewHandle = Handle;
     if (Parent != NULL)
@@ -577,9 +581,11 @@ UcxpDeviceGetDescriptors(
 }
 
 /*
- * RemoveUsbDevice: unlist the handle so no new caller finds it, then take it
- * down when no caller is inside; if one still is after a short wait, the last
- * one out does it (UcxpReleaseDeviceHandle). Remove claims the handle once.
+ * RemoveUsbDevice: unlist the handle so no new caller finds it, wait briefly
+ * for callers inside it, then set the removed bit. If that finds no hold, this
+ * thread destroys; otherwise the hold whose drop leaves the word at "removed,
+ * no holds" does (UcxpDeviceDropHold). The bit is set exactly once; nothing
+ * reads the handle after the atomic operation that did not win.
  */
 VOID
 UcxpDeviceRemove(
@@ -589,36 +595,45 @@ UcxpDeviceRemove(
     PUCX_CONTROLLER_CTX Controller = UcxGetControllerCtx((WDFOBJECT)RootHub->Controller);
     LARGE_INTEGER Slice;
     ULONG Waited = 0;
+    USHORT PortNumber = Handle->PortNumber;
+    LONG Holds, Children, Old;
 
-    if (InterlockedExchange(&Handle->Removing, 1) != 0)
+    if (InterlockedCompareExchange(&Handle->Holds, 0, 0) & UCX_HANDLE_REMOVING)
         return;                                        /* a second Remove for the same handle */
 
-    /* Out of the list first: no URB finds it from here on */
+    /* Out of the list first: no URB finds it from here on (the caller's own
+     * hold was released before this call) */
     UcxpRemoveDeviceHandle(Controller, Handle);
 
-    /* Callers already inside are short (a hub-interface call or one URB) */
+    /* Callers inside are short (a hub-interface call or one URB): give them a
+     * moment; children are not waited for */
     Slice.QuadPart = -10 * 1000 * 10;                  /* 10 ms */
-    while (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0 && Waited < 100 &&
-           InterlockedCompareExchange(&Handle->Children, 0, 0) == 0)
+    for (;;)
     {
+        Holds = InterlockedCompareExchange(&Handle->Holds, 0, 0) & UCX_HANDLE_HOLD_MASK;
+        Children = InterlockedCompareExchange(&Handle->Children, 0, 0);
+        if (Holds <= Children || Waited >= 100)
+            break;
         KeDelayExecutionThread(KernelMode, FALSE, &Slice);
         Waited++;
     }
-    if (InterlockedCompareExchange(&Handle->Children, 0, 0) != 0)
+
+    /* The decision: set the bit; if no hold was there, it is ours to destroy */
+    Old = InterlockedOr(&Handle->Holds, UCX_HANDLE_REMOVING);
+    if (Old & UCX_HANDLE_REMOVING)
+        return;                                        /* raced another Remove: it owns the rest */
+    if ((Old & UCX_HANDLE_HOLD_MASK) == 0)
     {
-        /* A hub removed before its children: the last child's removal destroys it */
+        UcxpDeviceDestroy(RootHub, Handle);
+        return;
+    }
+    /* Holds remain: whoever drops the last one destroys. Handle is not read again here. */
+    if (Children != 0)
         UcxLog("device: port %u remove: %ld child device(s) still attached, the last one's removal destroys the hub",
-               Handle->PortNumber, InterlockedCompareExchange(&Handle->Children, 0, 0));
-        UcxpDeviceTryDestroy(Handle);
-        return;
-    }
-    if (InterlockedCompareExchange(&Handle->Busy, 0, 0) != 0)
-    {
+               PortNumber, Children);
+    else
         UcxLog("device: port %u remove: %ld caller(s) still inside after %lu ms, the last one out destroys",
-               Handle->PortNumber, InterlockedCompareExchange(&Handle->Busy, 0, 0), Waited * 10);
-        return;
-    }
-    UcxpDeviceTryDestroy(Handle);
+               PortNumber, Old & UCX_HANDLE_HOLD_MASK, Waited * 10);
 }
 
 /* The teardown proper: pipes, endpoints, slot, objects, memory. Runs once per handle, at PASSIVE_LEVEL. */
@@ -646,7 +661,7 @@ UcxpDeviceDestroy(
 
         Handle->Parent = NULL;
         InterlockedDecrement(&Parent->Children);
-        UcxpDeviceTryDestroy(Parent);               /* takes the hub down if it was removed first */
+        UcxpDeviceDropHold(Parent);                 /* takes the hub down if it was removed first and this was the last hold */
     }
     ExFreePoolWithTag(Handle, UCX_TAG);
 }
