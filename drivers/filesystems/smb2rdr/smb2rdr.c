@@ -237,13 +237,28 @@ static VOID Smb2ParseCredentials(PVOID EaBuffer, ULONG EaLength, SMB2_CREDS *Cre
     }
 }
 
-/* Open (or, with FILE_CREATE_TREE_CONNECTION, create) the connection name as a kernel handle */
-static NTSTATUS Smb2GetConnectionHandle(PUNICODE_STRING ConnectionName, PVOID EaBuffer, ULONG EaLength, PHANDLE Handle)
+/* The requestor of the IOCTL; without an IRP, treat the caller as user mode */
+static KPROCESSOR_MODE Smb2RequestorMode(PRX_CONTEXT RxContext)
 {
+    return RxContext->CurrentIrp ? RxContext->CurrentIrp->RequestorMode : UserMode;
+}
+
+/* Open (or, with FILE_CREATE_TREE_CONNECTION, create) a connection name of this redirector as a kernel handle */
+static NTSTATUS Smb2GetConnectionHandle(PUNICODE_STRING ConnectionName, PVOID EaBuffer, ULONG EaLength,
+                                        KPROCESSOR_MODE RequestorMode, PHANDLE Handle)
+{
+    static const UNICODE_STRING Prefix = RTL_CONSTANT_STRING(SMB2RDR_DEVICE_NAME L"\\");
     IO_STATUS_BLOCK iosb;
     OBJECT_ATTRIBUTES attrs;
+    ULONG flags = OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE;
 
-    InitializeObjectAttributes(&attrs, ConnectionName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, NULL);
+    if (ConnectionName->Length <= Prefix.Length ||
+        !RtlPrefixUnicodeString((PUNICODE_STRING)&Prefix, ConnectionName, TRUE))
+        return STATUS_BAD_NETWORK_NAME;
+    if (RequestorMode != KernelMode)
+        flags |= OBJ_FORCE_ACCESS_CHECK;
+
+    InitializeObjectAttributes(&attrs, ConnectionName, flags, NULL, NULL);
     return ZwCreateFile(Handle, SYNCHRONIZE, &attrs, &iosb, NULL, FILE_ATTRIBUTE_NORMAL,
                         FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, FILE_OPEN_IF,
                         FILE_CREATE_TREE_CONNECTION | FILE_SYNCHRONOUS_IO_NONALERT, EaBuffer, EaLength);
@@ -269,7 +284,7 @@ static NTSTATUS Smb2CreateConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
     if (!buffer || length < sizeof(*req))
         return STATUS_BAD_NETWORK_NAME;
     if (req->NameLength < 2 * sizeof(WCHAR) || (req->NameLength & 1) ||
-        length != sizeof(*req) + (ULONG)req->NameLength + req->EaPadding + req->EaLength)
+        (ULONGLONG)length != (ULONGLONG)sizeof(*req) + req->NameLength + req->EaPadding + req->EaLength)
         return STATUS_BAD_NETWORK_NAME;
     name.Buffer = (PWCH)(buffer + sizeof(*req));
     if (name.Buffer[req->NameLength / sizeof(WCHAR) - 1] != L'\0')
@@ -279,7 +294,7 @@ static NTSTATUS Smb2CreateConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
     if (req->EaLength)
         ea = buffer + sizeof(*req) + req->NameLength + req->EaPadding;
 
-    status = Smb2GetConnectionHandle(&name, ea, req->EaLength, &handle);
+    status = Smb2GetConnectionHandle(&name, ea, req->EaLength, Smb2RequestorMode(RxContext), &handle);
     if (NT_SUCCESS(status) && handle)
         ZwClose(handle);
     return status;
@@ -308,7 +323,7 @@ static NTSTATUS Smb2DeleteConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
     name.Length = (USHORT)(length - sizeof(WCHAR));
     name.MaximumLength = (USHORT)length;
 
-    status = Smb2GetConnectionHandle(&name, NULL, 0, &handle);
+    status = Smb2GetConnectionHandle(&name, NULL, 0, Smb2RequestorMode(RxContext), &handle);
     if (!NT_SUCCESS(status))
         return status;
     status = ObReferenceObjectByHandle(handle, 0, NULL, KernelMode, (PVOID *)&fileObject, NULL);
@@ -317,7 +332,8 @@ static NTSTATUS Smb2DeleteConnection(PRX_CONTEXT RxContext, PBOOLEAN PostToFsp)
         PV_NET_ROOT vnetroot = (PV_NET_ROOT)fileObject->FsContext2;
 
         /* The V_NET_ROOT of a connection open lives in FsContext2 */
-        if (vnetroot && NodeType(vnetroot) == RDBSS_NTC_V_NETROOT)
+        if (fileObject->DeviceObject == (PDEVICE_OBJECT)Smb2RdrDevice &&
+            vnetroot && NodeType(vnetroot) == RDBSS_NTC_V_NETROOT)
             status = RxFinalizeConnection(vnetroot->NetRoot, vnetroot, TRUE);
         else
             status = STATUS_BAD_NETWORK_NAME;
