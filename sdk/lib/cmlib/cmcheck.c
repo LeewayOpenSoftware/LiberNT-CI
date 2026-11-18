@@ -319,15 +319,21 @@ CmpValidateBigDataValue(
         Segment = (PCELL_DATA)HvGetCell(Hive, SegmentList->u.KeyList[i]);
         if (!Segment) goto ReleaseList;
         if (!IsUsedCell((PHCELL)((PUCHAR)Segment - sizeof(HCELL))))
+        {
+            HvReleaseCell(Hive, SegmentList->u.KeyList[i]);
             goto ReleaseList;
+        }
 
         /* The segments the value actually reads must hold their bytes */
         if (i < Needed &&
             HvGetCellSize(Hive, Segment) <
             (LONG)min((ULONG)CM_KEY_VALUE_BIG, DataSize - i * CM_KEY_VALUE_BIG))
         {
+            HvReleaseCell(Hive, SegmentList->u.KeyList[i]);
             goto ReleaseList;
         }
+
+        HvReleaseCell(Hive, SegmentList->u.KeyList[i]);
     }
 
     Valid = TRUE;
