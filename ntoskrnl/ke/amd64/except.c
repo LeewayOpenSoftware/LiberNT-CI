@@ -840,6 +840,9 @@ KiGeneralProtectionFaultHandler(
     return STATUS_ACCESS_VIOLATION;
 }
 
+static UCHAR KiMcheckRecord[sizeof(WHEA_ERROR_RECORD_HEADER) + sizeof(WHEA_ERROR_RECORD_SECTION_DESCRIPTOR) + sizeof(WHEA_XPF_MCA_SECTION)];
+static LONG KiMcheckRecordClaimed;
+
 DECLSPEC_NORETURN
 VOID
 NTAPI
@@ -872,6 +875,17 @@ KiMcheckAbortHandler(
             ReportedBank = Bank;
             ReportedStatus = Status;
         }
+    }
+
+    if (Found && InterlockedExchange(&KiMcheckRecordClaimed, 1) == 0 &&
+        WheaMcaBuildFatalRecord(KiMcheckRecord, sizeof(KiMcheckRecord), TrapFrame->Rip, &ReportedBank, &ReportedStatus) != 0)
+    {
+        KeBugCheckWithTf(WHEA_UNCORRECTABLE_ERROR,
+                         WheaErrSrcTypeMCE,
+                         (ULONG_PTR)KiMcheckRecord,
+                         (ULONG_PTR)(ReportedStatus >> 32),
+                         (ULONG_PTR)(ReportedStatus & 0xFFFFFFFF),
+                         TrapFrame);
     }
 
     KeBugCheckWithTf(MACHINE_CHECK_EXCEPTION,
