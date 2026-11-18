@@ -1,4 +1,9 @@
 
+option(LIBERNT_LEGACY_HIVE_FORMAT "Create new registry hives as format 1.3 instead of 1.5" OFF)
+if(LIBERNT_LEGACY_HIVE_FORMAT)
+    add_definitions(-DHSYS_MINOR_NEW_DEFAULT=3)
+endif()
+
 add_definitions(
     -D_NTSYSTEM_
     -DNASSERT

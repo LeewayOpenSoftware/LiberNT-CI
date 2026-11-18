@@ -991,6 +991,27 @@ CmpLinkHiveToMaster(IN PUNICODE_STRING LinkName,
     return STATUS_SUCCESS;
 }
 
+/* TRUE if the loader options contain the switch Name ("/NAME" or "NAME"), any case. */
+CODE_SEG("INIT")
+static
+BOOLEAN
+CmpHasLoadOption(
+    _In_ PCSTR Options,
+    _In_ PCSTR Name)
+{
+    SIZE_T Length = strlen(Name);
+    PCSTR Cur;
+
+    for (Cur = Options; *Cur; Cur++)
+    {
+        if ((Cur == Options || Cur[-1] == '/' || Cur[-1] == ' ') &&
+            _strnicmp(Cur, Name, Length) == 0 &&
+            (Cur[Length] == '\0' || Cur[Length] == '/' || Cur[Length] == ' '))
+            return TRUE;
+    }
+    return FALSE;
+}
+
 CODE_SEG("INIT")
 BOOLEAN
 NTAPI
@@ -1865,6 +1886,12 @@ CmInitSystem1(VOID)
      * (system hives and others) will be loaded in shared mode */
     if (CmpVolatileBoot)
         CmpShareSystemHives = TRUE;
+
+    /* Compatibility switch: /LEGACYHIVES makes every hive created from here on format 1.3
+     * instead of 1.5, including the volatile master and hardware hives */
+    if (KeLoaderBlock && KeLoaderBlock->LoadOptions &&
+        CmpHasLoadOption(KeLoaderBlock->LoadOptions, "LEGACYHIVES"))
+        HvSetHiveFormatVersion(HSYS_MINOR);
 
     /* Initialize the hive list and lock */
     InitializeListHead(&CmpHiveListHead);

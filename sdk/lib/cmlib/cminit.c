@@ -11,9 +11,9 @@
 
 ULONG CmlibTraceLevel = 0;
 
-/* Format version for newly created hives. The default stays at 1.3 until
- * a lab boots a 1.5 system image; the setter is the single flip point. */
-static ULONG HvpHiveFormatMinor = HSYS_MINOR;
+/* Format version for newly created hives: 1.5 unless built with LIBERNT_LEGACY_HIVE_FORMAT;
+ * HvSetHiveFormatVersion(HSYS_MINOR) selects 1.3 at run time. */
+static ULONG HvpHiveFormatMinor = HSYS_MINOR_NEW_DEFAULT;
 
 ULONG CMAPI
 HvGetHiveFormatVersion(VOID)

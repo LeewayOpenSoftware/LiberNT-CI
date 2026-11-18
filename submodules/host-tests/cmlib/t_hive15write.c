@@ -6,9 +6,10 @@
  *              the incremental (HvLE) log the hive writer produces.
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  *
- * Plan: hive/shared/libernt/design-cmlib-hive15-write.md. The default for
- * newly created hives stays 1.3 (HvGetHiveFormatVersion); the tests flip
- * the gate through HvSetHiveFormatVersion and back.
+ * Plan: hive/shared/libernt/design-cmlib-hive15-write.md and
+ * cmlib/HIVE15-DEFAULT-PLAN.md. Newly created hives default to
+ * HSYS_MINOR_NEW_DEFAULT (1.5; 1.3 with LIBERNT_LEGACY_HIVE_FORMAT); the tests
+ * flip the format through HvSetHiveFormatVersion and back.
  */
 
 #include <stdio.h>
@@ -292,15 +293,26 @@ TTestGate(VOID)
     ULONG saved = HvGetHiveFormatVersion();
     PCM_KEY_NODE root;
 
-    CHECK(saved == HSYS_MINOR);
+    CHECK(saved == HSYS_MINOR_NEW_DEFAULT);
 
     HvSetHiveFormatVersion(99);
-    CHECK(HvGetHiveFormatVersion() == HSYS_MINOR);
+    CHECK(HvGetHiveFormatVersion() == saved);
     HvSetHiveFormatVersion(2);
-    CHECK(HvGetHiveFormatVersion() == HSYS_MINOR);
+    CHECK(HvGetHiveFormatVersion() == saved);
 
-    /* Default hive: 1.3, fast leaf */
-    if (!NT_SUCCESS(TCreateHive(&cmHive))) { Failures++; return; }
+    /* The default: a new hive carries HSYS_MINOR_NEW_DEFAULT */
+    if (NT_SUCCESS(TCreateHive(&cmHive)))
+    {
+        CHECK(cmHive.Hive.BaseBlock->Minor == HSYS_MINOR_NEW_DEFAULT);
+        CHECK(cmHive.Hive.Version == HSYS_MINOR_NEW_DEFAULT);
+        HvFree(&cmHive.Hive);
+    }
+    else
+        Failures++;
+
+    /* Compatibility switch: 1.3, fast leaf */
+    HvSetHiveFormatVersion(HSYS_MINOR);
+    if (!NT_SUCCESS(TCreateHive(&cmHive))) { Failures++; HvSetHiveFormatVersion(saved); return; }
     CHECK(cmHive.Hive.BaseBlock->Minor == HSYS_MINOR);
     CHECK(cmHive.Hive.Version == HSYS_MINOR);
     if (CmCreateRootNode(&cmHive.Hive, L"$$ROOT"))
@@ -555,6 +567,56 @@ TLoadImageInto(
                         Image, TWAlloc, TWFree, TFileWrite, TFileRead, 1, NULL);
 }
 
+/* A 1.3 hive written before the default changed keeps its minor and its fast leaves
+ * when it is loaded and edited under the 1.5 default: nothing converts it on write. */
+static
+VOID
+TTestLegacyStaysLegacy(VOID)
+{
+    CMHIVE cmHive, reHive;
+    ULONG saved = HvGetHiveFormatVersion();
+    NTSTATUS status;
+
+    HvSetHiveFormatVersion(HSYS_MINOR);
+    if (!NT_SUCCESS(TCreateHive(&cmHive)))
+    {
+        Failures++;
+        HvSetHiveFormatVersion(saved);
+        return;
+    }
+    if (CmCreateRootNode(&cmHive.Hive, L"$$ROOT"))
+        CHECK(TAddChild(&cmHive.Hive, cmHive.Hive.BaseBlock->RootCell,
+                        TChildren[0].Name, TChildren[0].Chars) != HCELL_NIL);
+    TPrimarySize = 0;
+    CHECK(HvSyncHive(&cmHive.Hive) == TRUE);
+    CHECK(((PHBASE_BLOCK)TPrimary)->Minor == HSYS_MINOR);
+    HvFree(&cmHive.Hive);
+
+    HvSetHiveFormatVersion(HSYS_WHISTLER);
+    status = TLoadImageInto(&reHive, TPrimary, TPrimarySize);
+    CHECK(status == STATUS_SUCCESS);
+    if (NT_SUCCESS(status))
+    {
+        PHHIVE hive = &reHive.Hive;
+        PCM_KEY_NODE root = (PCM_KEY_NODE)HvGetCell(hive, hive->BaseBlock->RootCell);
+
+        CHECK(hive->Version == HSYS_MINOR);
+        CHECK(root != NULL);
+        if (root)
+        {
+            CHECK(TAddChild(hive, hive->BaseBlock->RootCell,
+                            TChildren[1].Name, TChildren[1].Chars) != HCELL_NIL);
+            CHECK(TRootLeafSignature(hive, root) == CM_KEY_FAST_LEAF);
+            HvReleaseCell(hive, hive->BaseBlock->RootCell);
+        }
+        TPrimarySize = 0;
+        CHECK(HvSyncHive(hive) == TRUE);
+        CHECK(((PHBASE_BLOCK)TPrimary)->Minor == HSYS_MINOR);
+        HvFree(hive);
+    }
+    HvSetHiveFormatVersion(saved);
+}
+
 /* Shrinking a big value to a normal size frees its whole record (the
  * overwrite path in the kernel treats an old big value as no reusable
  * cell; this row drives the same cmlib calls and checks the record cells). */
@@ -680,6 +742,7 @@ main(void)
     TTestGate();
     TTestRoundTrip();
     TTestTornWrite();
+    TTestLegacyStaysLegacy();
     TTestBigToMedium();
 
     printf("cmlib hive 1.5 write: %lu checks, %lu failures\n",

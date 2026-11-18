@@ -35,6 +35,11 @@ if(NOT MSVC)
     target_compile_options(cmlib_host PRIVATE -fshort-wchar -Wno-multichar)
 endif()
 
+option(LIBERNT_LEGACY_HIVE_FORMAT "Create new hives as format 1.3 (the build compatibility switch)" OFF)
+if(LIBERNT_LEGACY_HIVE_FORMAT)
+    target_compile_definitions(cmlib_host PUBLIC HSYS_MINOR_NEW_DEFAULT=3)
+endif()
+
 option(CMLIB_SANITIZE "Build the cmlib host tests under ASan/UBSan" OFF)
 if(CMLIB_SANITIZE AND NOT MSVC)
     target_compile_options(cmlib_host PRIVATE -fsanitize=address,undefined -fno-omit-frame-pointer -g)

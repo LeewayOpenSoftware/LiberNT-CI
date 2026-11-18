@@ -155,6 +155,7 @@ function(setup_host_tools)
                 -DCMAKE_BUILD_TYPE=${HOST_BUILD_TYPE}
                 -DUSE_DUMMY_PSEH:BOOL=${USE_DUMMY_PSEH}
                 -DREACTOS_TARGET_NT:STRING=0x502
+                -DLIBERNT_LEGACY_HIVE_FORMAT:BOOL=${LIBERNT_LEGACY_HIVE_FORMAT}
                 ${CMAKE_HOST_TOOLS_EXTRA_ARGS}
             BUILD_ALWAYS TRUE
             INSTALL_COMMAND ${CMAKE_COMMAND} -E true
