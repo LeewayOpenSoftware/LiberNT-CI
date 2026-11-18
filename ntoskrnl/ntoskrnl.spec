@@ -3008,7 +3008,7 @@
 @ stdcall RtlCapabilityCheckForSingleSessionSku(ptr ptr ptr)
 @ stdcall RtlCheckPortableOperatingSystem(ptr)
 @ stub -arch=win64 RtlCheckSystemBootStatusIntegrity
-@ stub -arch=win64 RtlCheckTokenCapability
+@ stdcall -arch=win64 RtlCheckTokenCapability(ptr ptr ptr)
 @ stdcall RtlCheckTokenMembership(ptr ptr ptr)
 @ stub -arch=win64 RtlCheckTokenMembershipEx
 @ stdcall -arch=win64 RtlClearAllBitsEx(ptr) RtlClearAllBits64
@@ -3016,7 +3016,7 @@
 @ stub -arch=win64 RtlClearBitsEx
 @ stdcall RtlCmDecodeMemIoResource(ptr ptr)
 @ stdcall RtlCmEncodeMemIoResource(ptr long int64 int64)
-@ stub -arch=win64 RtlCompareAltitudes
+@ stdcall -arch=win64 RtlCompareAltitudes(ptr ptr)
 @ stub -arch=win64 RtlCompareExchangePointerMapping
 @ stub -arch=win64 RtlCompareExchangePropertyStore
 @ stdcall RtlCompareUnicodeStrings(wstr long wstr long long)
@@ -3030,14 +3030,14 @@
 @ stdcall RtlCrc32(ptr long long)
 @ stdcall RtlCrc64(ptr long int64)
 @ stdcall RtlCreateAtomTableEx(long long ptr)
-@ stub -arch=win64 RtlCreateHashTableEx
+@ stdcall -arch=win64 RtlCreateHashTableEx(ptr long long long)
 @ stdcall -arch=win64 RtlDecompressBufferEx(long ptr long ptr long ptr ptr)
-@ stub -arch=win64 RtlDecompressBufferEx2
+@ stdcall -arch=win64 RtlDecompressBufferEx2(long ptr long ptr long long ptr ptr)
 @ stub -arch=win64 RtlDecompressFragmentEx
 @ stub -arch=win64 RtlDeleteElementGenericTableAvlEx
-@ stub -arch=win64 RtlDeriveCapabilitySidsFromName
+@ stdcall -arch=win64 RtlDeriveCapabilitySidsFromName(ptr ptr ptr)
 @ stub -arch=win64 RtlDrainNonVolatileFlush
-@ stub -arch=win64 RtlEndStrongEnumerationHashTable
+@ stdcall -arch=win64 RtlEndStrongEnumerationHashTable(ptr ptr)
 @ stub -arch=win64 RtlEqualWnfChangeStamps
 @ stdcall RtlEthernetAddressToStringA(ptr ptr)
 @ stdcall RtlEthernetAddressToStringW(ptr ptr)
@@ -3048,7 +3048,7 @@
 @ stub -arch=win64 RtlExtractBitMapEx
 @ stub -arch=win64 RtlFillMemoryNonTemporal
 @ stub -arch=win64 RtlFillNonVolatileMemory
-@ stub -arch=win64 RtlFindAceByType
+@ stdcall -arch=win64 RtlFindAceByType(ptr long ptr)
 @ stdcall -arch=win64 RtlFindClearBitsAndSetEx(ptr int64 int64) RtlFindClearBitsAndSet64
 @ stub -arch=win64 RtlFindClearBitsEx
 @ stub -arch=win64 RtlFindClosestEncodableLength
@@ -3079,7 +3079,7 @@
 @ stdcall -version=0xA00+ RtlGetMultiTimePrecise(ptr long ptr)
 @ stdcall -arch=win64 RtlGetNonVolatileToken(ptr long ptr)
 @ stdcall RtlGetNtSystemRoot()
-@ stub -arch=win64 RtlGetPersistedStateLocation
+@ stdcall -arch=win64 RtlGetPersistedStateLocation(wstr wstr wstr long ptr long ptr)
 @ stdcall RtlGetProductInfo(long long long long ptr)
 @ stub -arch=win64 RtlGetSessionProperties
 @ stdcall RtlGetSuiteMask()
@@ -3093,7 +3093,7 @@
 @ stub -arch=win64 RtlIdnToUnicode
 @ stub -arch=win64 RtlIncrementCorrelationVector
 @ stub -arch=win64 RtlInitStringEx
-@ stub -arch=win64 RtlInitStrongEnumerationHashTable
+@ stdcall -arch=win64 RtlInitStrongEnumerationHashTable(ptr ptr)
 @ stdcall RtlInitUTF8String(ptr str)
 @ stub -arch=win64 RtlInitUTF8StringEx
 @ stdcall -arch=win64 RtlInitializeBitMapEx(ptr ptr int64) RtlInitializeBitMap64
@@ -3197,7 +3197,7 @@
 @ stub -arch=win64 RtlSidHashInitialize
 @ stub -arch=win64 RtlSidHashLookup
 @ stdcall RtlStringFromGUIDEx(ptr ptr long)
-@ stub -arch=win64 RtlStronglyEnumerateEntryHashTable
+@ stdcall -arch=win64 RtlStronglyEnumerateEntryHashTable(ptr ptr)
 @ stdcall RtlSuffixUnicodeString(ptr ptr long)
 @ stdcall -arch=win64 RtlTestBitEx(ptr int64) RtlTestBit64
 @ stdcall RtlUTF8StringToUnicodeString(ptr ptr long)

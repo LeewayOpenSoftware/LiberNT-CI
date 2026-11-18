@@ -507,6 +507,39 @@ RtlDecompressBufferEx(IN USHORT CompressionFormat,
 }
 
 /*
+ * @implemented
+ */
+NTSTATUS NTAPI
+RtlDecompressBufferEx2(IN USHORT CompressionFormat,
+                       OUT PUCHAR UncompressedBuffer,
+                       IN ULONG UncompressedBufferSize,
+                       IN PUCHAR CompressedBuffer,
+                       IN ULONG CompressedBufferSize,
+                       IN ULONG UncompressedChunkSize,
+                       OUT PULONG FinalUncompressedSize,
+                       IN PVOID WorkSpace)
+{
+    switch (CompressionFormat & ~COMPRESSION_ENGINE_MAXIMUM)
+    {
+        case COMPRESSION_FORMAT_LZNT1:
+            if (UncompressedChunkSize != 512 && UncompressedChunkSize != 1024 &&
+                UncompressedChunkSize != 2048 && UncompressedChunkSize != 4096)
+            {
+                return STATUS_INVALID_PARAMETER;
+            }
+            return lznt1_decompress(UncompressedBuffer, UncompressedBufferSize, CompressedBuffer,
+                                    CompressedBufferSize, 0, FinalUncompressedSize, WorkSpace, FALSE);
+
+        case COMPRESSION_FORMAT_NONE:
+        case COMPRESSION_FORMAT_DEFAULT:
+            return STATUS_INVALID_PARAMETER;
+
+        default:
+            return STATUS_UNSUPPORTED_COMPRESSION;
+    }
+}
+
+/*
  * @unimplemented
  */
 NTSTATUS NTAPI

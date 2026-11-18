@@ -503,6 +503,149 @@ RtlEndWeakEnumerationHashTable(
  */
 BOOLEAN
 NTAPI
+RtlCreateHashTableEx(
+    _Inout_ PRTL_DYNAMIC_HASH_TABLE *HashTable,
+    _In_ ULONG InitialSize,
+    _In_ ULONG Shift,
+    _In_ ULONG Flags)
+{
+    PRTL_DYNAMIC_HASH_TABLE Table;
+    PRTLP_HASH_DIRECTORY Directory;
+    PLIST_ENTRY Block;
+    ULONG i;
+
+    if (HashTable == NULL || Flags != 0 || Shift != 0)
+        return FALSE;
+    if (InitialSize == 0 || (InitialSize & (InitialSize - 1)) != 0 ||
+        InitialSize < RTLP_HASH_BASE_SIZE || InitialSize > 8388480)
+    {
+        return FALSE;
+    }
+
+    if (*HashTable != NULL)
+    {
+        Table = *HashTable;
+        Table->Flags = 0;
+    }
+    else
+    {
+        Table = RtlpAllocateMemory(sizeof(*Table), RTLP_HASH_TAG);
+        if (Table == NULL)
+            return FALSE;
+        Table->Flags = RTL_HASH_ALLOCATED_HEADER;
+    }
+
+    Directory = RtlpAllocateMemory(sizeof(*Directory), RTLP_HASH_TAG);
+    if (Directory == NULL)
+    {
+        if (Table->Flags & RTL_HASH_ALLOCATED_HEADER)
+            RtlpFreeMemory(Table, RTLP_HASH_TAG);
+        return FALSE;
+    }
+    RtlZeroMemory(Directory, sizeof(*Directory));
+    InitializeListHead(&Directory->Enumerators);
+
+    Block = RtlpAllocateMemory(InitialSize * sizeof(LIST_ENTRY), RTLP_HASH_TAG);
+    if (Block == NULL)
+    {
+        RtlpFreeMemory(Directory, RTLP_HASH_TAG);
+        if (Table->Flags & RTL_HASH_ALLOCATED_HEADER)
+            RtlpFreeMemory(Table, RTLP_HASH_TAG);
+        return FALSE;
+    }
+    for (i = 0; i < InitialSize; i++)
+        InitializeListHead(&Block[i]);
+    Directory->Blocks[0] = Block;
+
+    Table->Shift = 0;
+    Table->TableSize = InitialSize;
+    Table->Pivot = 0;
+    Table->DivisorMask = InitialSize - 1;
+    Table->NumEntries = 0;
+    Table->NonEmptyBuckets = 0;
+    Table->NumEnumerators = 0;
+    Table->Directory = Directory;
+
+    *HashTable = Table;
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
+RtlInitStrongEnumerationHashTable(
+    _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+    _Out_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator)
+{
+    Enumerator->BucketIndex = 0;
+    Enumerator->ChainHead = RtlpHashTableBucket(HashTable, 0);
+    Enumerator->HashEntry.Signature = 0;
+    Enumerator->HashEntry.Linkage.Flink = Enumerator->ChainHead->Flink;
+    return TRUE;
+}
+
+/*
+ * @implemented
+ */
+PRTL_DYNAMIC_HASH_TABLE_ENTRY
+NTAPI
+RtlStronglyEnumerateEntryHashTable(
+    _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+    _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator)
+{
+    ULONG Index = Enumerator->BucketIndex;
+    PLIST_ENTRY Link = Enumerator->HashEntry.Linkage.Flink;
+
+    for (;;)
+    {
+        PLIST_ENTRY ChainHead = RtlpHashTableBucket(HashTable, Index);
+
+        while (Link != ChainHead)
+        {
+            if (!RtlpHashTableEntryIsMarker(HashTable, Link))
+            {
+                PRTL_DYNAMIC_HASH_TABLE_ENTRY Entry = CONTAINING_RECORD(Link, RTL_DYNAMIC_HASH_TABLE_ENTRY, Linkage);
+
+                Enumerator->BucketIndex = Index;
+                Enumerator->ChainHead = ChainHead;
+                Enumerator->HashEntry.Linkage.Flink = Link->Flink;
+                return Entry;
+            }
+            Link = Link->Flink;
+        }
+
+        Index++;
+        if (Index >= HashTable->TableSize)
+        {
+            Enumerator->BucketIndex = HashTable->TableSize - 1;
+            Enumerator->ChainHead = ChainHead;
+            return NULL;
+        }
+        Link = RtlpHashTableBucket(HashTable, Index)->Flink;
+    }
+}
+
+/*
+ * @implemented
+ */
+VOID
+NTAPI
+RtlEndStrongEnumerationHashTable(
+    _In_ PRTL_DYNAMIC_HASH_TABLE HashTable,
+    _Inout_ PRTL_DYNAMIC_HASH_TABLE_ENUMERATOR Enumerator)
+{
+    UNREFERENCED_PARAMETER(HashTable);
+    Enumerator->ChainHead = NULL;
+    Enumerator->HashEntry.Linkage.Flink = NULL;
+}
+
+/*
+ * @implemented
+ */
+BOOLEAN
+NTAPI
 RtlExpandHashTable(
     _In_ PRTL_DYNAMIC_HASH_TABLE HashTable)
 {
