@@ -73,7 +73,7 @@ START_TEST(KePcr)
     else
         trace("KdVersionBlock = %p\n", Pcr->KdVersionBlock);
 
-    ProcNum = KeGetCurrentProcessorNumber();
+    ProcNum = KeGetCurrentProcessorIndex();
     trace("KePcr: ProcNum from helper = %lu\n", ProcNum);
 
     /* On UP guests, reading the embedded PRCB's Number is sufficient. */
@@ -81,7 +81,7 @@ START_TEST(KePcr)
     {
         KAFFINITY OneCpu = (KAFFINITY)1 << ProcNum;
         KeSetSystemAffinityThread(OneCpu);
-        ProcNum = KeGetCurrentProcessorNumber();
+        ProcNum = KeGetCurrentProcessorIndex();
         ok_eq_ulong(ProcNum, (ULONG)CurrentPrcb->Number);
         KeRevertToUserAffinityThread();
     }

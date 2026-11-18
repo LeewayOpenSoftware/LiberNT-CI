@@ -134,9 +134,9 @@ TestClocks(VOID)
 
     /* The cycle counter clock reads the processor's own counter */
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
-    CyclesBefore = ReadTimeStampCounter();
+    CyclesBefore = __rdtsc();
     Value = WmiGetClock(EVENT_TRACE_CLOCK_CPUCYCLE, NULL);
-    CyclesAfter = ReadTimeStampCounter();
+    CyclesAfter = __rdtsc();
     KeLowerIrql(OldIrql);
     ok((ULONG64)Value >= CyclesBefore && (ULONG64)Value <= CyclesAfter,
        "cycle clock %I64u outside [%I64u, %I64u]\n", Value, CyclesBefore, CyclesAfter);

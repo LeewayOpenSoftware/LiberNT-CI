@@ -29,15 +29,15 @@ START_TEST(ButtonShield)
     ok(SendMessageW(hwnd, BCM_GETIDEALSIZE, 0, (LPARAM)&plain), "BCM_GETIDEALSIZE failed\n");
 
     ret = SendMessageW(hwnd, BCM_SETSHIELD, 0, TRUE);
-    ok(ret == 1, "BCM_SETSHIELD(TRUE) returned %Id\n", ret);
+    ok(ret == 1, "BCM_SETSHIELD(TRUE) returned %Id\n", (ptrdiff_t)ret);
     ok(SendMessageW(hwnd, BCM_GETIDEALSIZE, 0, (LPARAM)&shielded), "BCM_GETIDEALSIZE failed\n");
     ok(shielded.cx > plain.cx, "shield did not widen the button: %ld -> %ld\n", plain.cx, shielded.cx);
 
     ret = SendMessageW(hwnd, BCM_SETSHIELD, 0, TRUE);
-    ok(ret == 1, "second BCM_SETSHIELD(TRUE) returned %Id\n", ret);
+    ok(ret == 1, "second BCM_SETSHIELD(TRUE) returned %Id\n", (ptrdiff_t)ret);
 
     ret = SendMessageW(hwnd, BCM_SETSHIELD, 0, FALSE);
-    ok(ret == 1, "BCM_SETSHIELD(FALSE) returned %Id\n", ret);
+    ok(ret == 1, "BCM_SETSHIELD(FALSE) returned %Id\n", (ptrdiff_t)ret);
     ok(SendMessageW(hwnd, BCM_GETIDEALSIZE, 0, (LPARAM)&shielded), "BCM_GETIDEALSIZE failed\n");
     ok(shielded.cx == plain.cx, "width after clearing the shield: %ld, expected %ld\n", shielded.cx, plain.cx);
 
@@ -67,7 +67,7 @@ START_TEST(ButtonShield)
 
         /* With a caller list and then the shield, GETIMAGELIST still returns the caller list. */
         ret = SendMessageW(hwnd2, BCM_SETSHIELD, 0, TRUE);
-        ok(ret == 1, "BCM_SETSHIELD(TRUE) with a list returned %Id\n", ret);
+        ok(ret == 1, "BCM_SETSHIELD(TRUE) with a list returned %Id\n", (ptrdiff_t)ret);
         memset(&q, 0, sizeof(q));
         ok(SendMessageW(hwnd2, BCM_GETIMAGELIST, 0, (LPARAM)&q), "BCM_GETIMAGELIST failed\n");
         ok(q.himl == himl, "GETIMAGELIST returned %p, expected the caller list %p (shield leaked)\n",
@@ -75,7 +75,7 @@ START_TEST(ButtonShield)
 
         /* Clearing the shield restores the caller list. */
         ret = SendMessageW(hwnd2, BCM_SETSHIELD, 0, FALSE);
-        ok(ret == 1, "BCM_SETSHIELD(FALSE) with a list returned %Id\n", ret);
+        ok(ret == 1, "BCM_SETSHIELD(FALSE) with a list returned %Id\n", (ptrdiff_t)ret);
         memset(&q, 0, sizeof(q));
         ok(SendMessageW(hwnd2, BCM_GETIMAGELIST, 0, (LPARAM)&q), "BCM_GETIMAGELIST failed\n");
         ok(q.himl == himl, "caller list not restored after clearing the shield: %p\n", q.himl);
@@ -83,7 +83,7 @@ START_TEST(ButtonShield)
         /* A shield on a listless button must not surface as a caller list. */
         ok(SendMessageW(hwnd2, BCM_SETIMAGELIST, 0, (LPARAM)&empty), "BCM_SETIMAGELIST(clear) failed\n");
         ret = SendMessageW(hwnd2, BCM_SETSHIELD, 0, TRUE);
-        ok(ret == 1, "BCM_SETSHIELD(TRUE) no list returned %Id\n", ret);
+        ok(ret == 1, "BCM_SETSHIELD(TRUE) no list returned %Id\n", (ptrdiff_t)ret);
         memset(&q, 0, sizeof(q));
         SendMessageW(hwnd2, BCM_GETIMAGELIST, 0, (LPARAM)&q);
         ok(q.himl == NULL, "shield surfaced via GETIMAGELIST on a listless button: %p\n", q.himl);

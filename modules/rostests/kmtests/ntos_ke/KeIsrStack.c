@@ -41,7 +41,7 @@ IsrIpiWorker(
     _In_ ULONG_PTR Argument)
 {
     PISR_RECORD Record = (PISR_RECORD)Argument;
-    ULONG Cpu = KeGetCurrentProcessorNumber();
+    ULONG Cpu = KeGetCurrentProcessorIndex();
     volatile UCHAR Here = 0;
 
     if (Cpu < ISR_TEST_CPUS)
@@ -112,7 +112,7 @@ START_TEST(KeIsrStack)
 
     RtlZeroMemory(&Record, sizeof(Record));
     KeSetSystemAffinityThread(1);
-    Self = KeGetCurrentProcessorNumber();
+    Self = KeGetCurrentProcessorIndex();
     IoGetStackLimits(&Low, &High);
     KeIpiGenericCall(IsrIpiWorker, (ULONG_PTR)&Record);
     KeRevertToUserAffinityThread();

@@ -156,7 +156,7 @@ TestCurrentProcessor(
 
     KeRaiseIrql(DISPATCH_LEVEL, &OldIrql);
     IndexEx = KeGetCurrentProcessorNumberEx(&Number);
-    Current = KeGetCurrentProcessorNumber();
+    Current = KeGetCurrentProcessorIndex();
     FromNumber = KeGetProcessorIndexFromNumber(&Number);
     KeLowerIrql(OldIrql);
 

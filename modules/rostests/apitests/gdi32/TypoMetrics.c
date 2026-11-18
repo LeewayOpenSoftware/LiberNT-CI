@@ -147,7 +147,7 @@ START_TEST(TypoMetrics)
 
         Count = 0;
         FontHandle = AddFontMemResourceEx(Font, Size, NULL, &Count);
-        ok(FontHandle != NULL && Count == 1, "case %Iu: AddFontMemResourceEx failed, count %lu\n", i, Count);
+        ok(FontHandle != NULL && Count == 1, "case %Iu: AddFontMemResourceEx failed, count %lu\n", (size_t)i, Count);
         if (!FontHandle)
             continue;
 
@@ -156,17 +156,17 @@ START_TEST(TypoMetrics)
         StringCchCopyW(LogFont.lfFaceName, ARRAYSIZE(LogFont.lfFaceName), L"EnglishDisplayName");
         hFont = CreateFontIndirectW(&LogFont);
         OldFont = SelectObject(hDC, hFont);
-        ok(GetTextMetricsW(hDC, &Metrics), "case %Iu: GetTextMetricsW failed\n", i);
-        ok(Metrics.tmAscent == Case->Ascent, "case %Iu: tmAscent %ld, expected %ld\n", i, Metrics.tmAscent, Case->Ascent);
-        ok(Metrics.tmDescent == Case->Descent, "case %Iu: tmDescent %ld, expected %ld\n", i, Metrics.tmDescent, Case->Descent);
-        ok(Metrics.tmHeight == Case->TotalHeight, "case %Iu: tmHeight %ld, expected %ld\n", i, Metrics.tmHeight, Case->TotalHeight);
+        ok(GetTextMetricsW(hDC, &Metrics), "case %Iu: GetTextMetricsW failed\n", (size_t)i);
+        ok(Metrics.tmAscent == Case->Ascent, "case %Iu: tmAscent %ld, expected %ld\n", (size_t)i, Metrics.tmAscent, Case->Ascent);
+        ok(Metrics.tmDescent == Case->Descent, "case %Iu: tmDescent %ld, expected %ld\n", (size_t)i, Metrics.tmDescent, Case->Descent);
+        ok(Metrics.tmHeight == Case->TotalHeight, "case %Iu: tmHeight %ld, expected %ld\n", (size_t)i, Metrics.tmHeight, Case->TotalHeight);
         ok(Metrics.tmInternalLeading == Case->InternalLeading, "case %Iu: tmInternalLeading %ld, expected %ld\n",
-           i, Metrics.tmInternalLeading, Case->InternalLeading);
+           (size_t)i, Metrics.tmInternalLeading, Case->InternalLeading);
         ok(Metrics.tmExternalLeading == Case->ExternalLeading, "case %Iu: tmExternalLeading %ld, expected %ld\n",
-           i, Metrics.tmExternalLeading, Case->ExternalLeading);
+           (size_t)i, Metrics.tmExternalLeading, Case->ExternalLeading);
         SelectObject(hDC, OldFont);
         DeleteObject(hFont);
-        ok(RemoveFontMemResourceEx(FontHandle), "case %Iu: RemoveFontMemResourceEx failed\n", i);
+        ok(RemoveFontMemResourceEx(FontHandle), "case %Iu: RemoveFontMemResourceEx failed\n", (size_t)i);
     }
     DeleteDC(hDC);
     HeapFree(GetProcessHeap(), 0, Font);

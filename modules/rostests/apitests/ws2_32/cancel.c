@@ -91,8 +91,8 @@ static void test_close_cancels(void)
     wait = WaitForSingleObject(overlapped.hEvent, 3000);
     ok(wait == WAIT_OBJECT_0, "pending receive did not complete within 3 s after closesocket\n");
     ok(overlapped.Internal != (ULONG_PTR)STATUS_PENDING, "overlapped still pending after closesocket\n");
-    trace("completion status after closesocket: 0x%Ix\n", overlapped.Internal);
-    ok(overlapped.Internal == (ULONG_PTR)STATUS_CANCELLED, "completion status 0x%Ix, expected STATUS_CANCELLED\n", overlapped.Internal);
+    trace("completion status after closesocket: 0x%Ix\n", (size_t)overlapped.Internal);
+    ok(overlapped.Internal == (ULONG_PTR)STATUS_CANCELLED, "completion status 0x%Ix, expected STATUS_CANCELLED\n", (size_t)overlapped.Internal);
     WSACloseEvent(overlapped.hEvent);
     closesocket(server);
 }
