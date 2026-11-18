@@ -80,6 +80,11 @@ TestAddRefusals(VOID)
 
     ok_eq_hex(WheaAddErrorSource(NULL, NULL), STATUS_INVALID_PARAMETER);
 
+    ok_eq_hex(WheaErrSrcStateStopped, 1);
+    ok_eq_hex(WheaErrSrcStateStarted, 2);
+    ok_eq_hex(WheaErrSrcStateRemoved, 3);
+    ok_eq_hex(WheaErrSrcStateRemovePending, 4);
+
     InitDescriptor(&Descriptor);
     Descriptor.Length = FIELD_OFFSET(TEST_DESCRIPTOR, Info) - 1;
     ok_eq_hex(Add(&Descriptor), STATUS_INVALID_PARAMETER);
@@ -99,6 +104,10 @@ TestAddRefusals(VOID)
 
     InitDescriptor(&Descriptor);
     Descriptor.State = WheaErrSrcStateRemoved;
+    ok_eq_hex(Add(&Descriptor), STATUS_INVALID_PARAMETER);
+
+    InitDescriptor(&Descriptor);
+    Descriptor.State = (WHEA_ERROR_SOURCE_STATE)0;
     ok_eq_hex(Add(&Descriptor), STATUS_INVALID_PARAMETER);
 
     InitDescriptor(&Descriptor);

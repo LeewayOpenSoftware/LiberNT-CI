@@ -147,10 +147,10 @@ typedef enum _WHEA_ERROR_SOURCE_TYPE {
 } WHEA_ERROR_SOURCE_TYPE, *PWHEA_ERROR_SOURCE_TYPE;
 
 typedef enum _WHEA_ERROR_SOURCE_STATE {
-    WheaErrSrcStateStopped = 0,
-    WheaErrSrcStateStarted,
-    WheaErrSrcStateRemoved,
-    WheaErrSrcStateRemovePending
+    WheaErrSrcStateStopped = 1,
+    WheaErrSrcStateStarted = 2,
+    WheaErrSrcStateRemoved = 3,
+    WheaErrSrcStateRemovePending = 4
 } WHEA_ERROR_SOURCE_STATE, *PWHEA_ERROR_SOURCE_STATE;
 
 #define WHEA_ERROR_SOURCE_DESCRIPTOR_VERSION_10 10
