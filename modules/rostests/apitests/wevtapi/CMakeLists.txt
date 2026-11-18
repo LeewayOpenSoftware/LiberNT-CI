@@ -1,5 +1,6 @@
 
 list(APPEND SOURCE
+    EvtFormatMessage.c
     EvtQuery.c
     testlist.c)
 
