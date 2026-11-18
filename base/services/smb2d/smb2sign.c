@@ -156,6 +156,16 @@ void Smb2SignMessage(const uint8_t *key16, uint8_t *msg, size_t len)
     memcpy(msg + SMB2H_SIGNATURE, mac, 16);
 }
 
+static int Mac16Equal(const uint8_t *a, const uint8_t *b)
+{
+    uint8_t diff = 0;
+    int i;
+
+    for (i = 0; i < 16; i++)
+        diff |= (uint8_t)(a[i] ^ b[i]);
+    return diff == 0;
+}
+
 int Smb2VerifyMessage(const uint8_t *key16, const uint8_t *msg, size_t len)
 {
     uint8_t sig[16], mac[32], *tmp;
@@ -169,7 +179,7 @@ int Smb2VerifyMessage(const uint8_t *key16, const uint8_t *msg, size_t len)
     memset(tmp + SMB2H_SIGNATURE, 0, 16);
     Smb2HmacSha256(key16, 16, tmp, len, mac);
     free(tmp);
-    ok = (memcmp(mac, sig, 16) == 0);
+    ok = Mac16Equal(mac, sig);
     return ok;
 }
 
@@ -204,6 +214,6 @@ int Smb2VerifyMessageEx(const uint8_t *key16, const uint8_t *msg, size_t len, in
     memset(tmp + SMB2H_SIGNATURE, 0, 16);
     Smb2AesCmac(key16, tmp, len, mac);
     free(tmp);
-    ok = (memcmp(mac, sig, 16) == 0);
+    ok = Mac16Equal(mac, sig);
     return ok;
 }
