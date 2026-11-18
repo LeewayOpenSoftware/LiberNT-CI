@@ -158,12 +158,20 @@ CmpGetValueData(IN PHHIVE Hive,
         PCM_BIG_DATA BigData;
         PVOID SegmentList;
         PUCHAR Output;
-        ULONG Remaining, Copy, i;
+        ULONG Needed, Remaining, Copy, i;
         LONG CellSize;
+
+        Needed = (*Length + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
 
         BigData = (PCM_BIG_DATA)HvGetCell(Hive, Value->Data);
         if (!BigData) return FALSE;
-        if (BigData->Signature != CM_BIG_DATA_SIGNATURE)
+        if (HvGetCellSize(Hive, BigData) < (LONG)sizeof(CM_BIG_DATA) ||
+            BigData->Signature != CM_BIG_DATA_SIGNATURE)
+        {
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+        if (BigData->Count < Needed || BigData->List == HCELL_NIL)
         {
             HvReleaseCell(Hive, Value->Data);
             return FALSE;
@@ -172,6 +180,12 @@ CmpGetValueData(IN PHHIVE Hive,
         SegmentList = HvGetCell(Hive, BigData->List);
         if (!SegmentList)
         {
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+        if (HvGetCellSize(Hive, SegmentList) < (LONG)(Needed * sizeof(HCELL_INDEX)))
+        {
+            HvReleaseCell(Hive, BigData->List);
             HvReleaseCell(Hive, Value->Data);
             return FALSE;
         }
@@ -186,12 +200,17 @@ CmpGetValueData(IN PHHIVE Hive,
 
         Output = (PUCHAR)*Buffer;
         Remaining = *Length;
-        for (i = 0; (i < BigData->Count) && Remaining; i++)
+        for (i = 0; i < Needed; i++)
         {
+            HCELL_INDEX SegmentIndex;
             PUCHAR Segment;
 
-            Segment = (PUCHAR)HvGetCell(Hive, ((PHCELL_INDEX)SegmentList)[i]);
+            SegmentIndex = ((PHCELL_INDEX)SegmentList)[i];
+            if (!HvIsCellAllocated(Hive, SegmentIndex)) break;
+
+            Segment = (PUCHAR)HvGetCell(Hive, SegmentIndex);
             if (!Segment) break;
+            if (!IsUsedCell((PHCELL)Segment - 1)) break;
 
             /* All segments but the last hold exactly CM_KEY_VALUE_BIG
                bytes, regardless of the cell padding */
@@ -200,13 +219,13 @@ CmpGetValueData(IN PHHIVE Hive,
             CellSize = HvGetCellSize(Hive, Segment);
             if (CellSize < (LONG)Copy)
             {
-                HvReleaseCell(Hive, ((PHCELL_INDEX)SegmentList)[i]);
+                HvReleaseCell(Hive, SegmentIndex);
                 break;
             }
             RtlCopyMemory(Output, Segment, Copy);
             Output += Copy;
             Remaining -= Copy;
-            HvReleaseCell(Hive, ((PHCELL_INDEX)SegmentList)[i]);
+            HvReleaseCell(Hive, SegmentIndex);
         }
 
         HvReleaseCell(Hive, BigData->List);
