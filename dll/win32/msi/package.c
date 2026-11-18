@@ -349,6 +349,7 @@ static void MSI_FreePackage( MSIOBJECTHDR *arg)
         msi_dialog_destroy( package->dialog );
 
 #ifdef __REACTOS__
+    msi_basic_ui_end( package );
     if (package->property_table_held)
     {
         MSIQUERY *view;
@@ -1824,8 +1825,16 @@ MSIHANDLE WINAPI MsiGetActiveDatabase( MSIHANDLE hInstall )
 
 static INT internal_ui_handler(MSIPACKAGE *package, INSTALLMESSAGE eMessageType, MSIRECORD *record, LPCWSTR message)
 {
+#ifdef __REACTOS__
+    INT rc;
+#endif
+
     if (!package || (package->ui_level & INSTALLUILEVEL_MASK) == INSTALLUILEVEL_NONE)
         return 0;
+#ifdef __REACTOS__
+    if ((rc = msi_basic_ui_message( package, eMessageType, record )))
+        return rc;
+#endif
 
     /* todo: check if message needs additional styles (topmost/foreground/modality?) */
 
@@ -1837,17 +1846,29 @@ static INT internal_ui_handler(MSIPACKAGE *package, INSTALLMESSAGE eMessageType,
         if (package->ui_level & INSTALLUILEVEL_PROGRESSONLY) return 0;
         if (!(eMessageType & MB_ICONMASK))
             eMessageType |= MB_ICONEXCLAMATION;
+#ifdef __REACTOS__
+        return msi_basic_ui_message_box(package, message, eMessageType & 0x00ffffff);
+#else
         return MessageBoxW(gUIhwnd, message, L"Windows Installer", eMessageType & 0x00ffffff);
+#endif
     case INSTALLMESSAGE_WARNING:
         if (package->ui_level & INSTALLUILEVEL_PROGRESSONLY) return 0;
         if (!(eMessageType & MB_ICONMASK))
             eMessageType |= MB_ICONASTERISK;
+#ifdef __REACTOS__
+        return msi_basic_ui_message_box(package, message, eMessageType & 0x00ffffff);
+#else
         return MessageBoxW(gUIhwnd, message, L"Windows Installer", eMessageType & 0x00ffffff);
+#endif
     case INSTALLMESSAGE_USER:
         if (package->ui_level & INSTALLUILEVEL_PROGRESSONLY) return 0;
         if (!(eMessageType & MB_ICONMASK))
             eMessageType |= MB_USERICON;
+#ifdef __REACTOS__
+        return msi_basic_ui_message_box(package, message, eMessageType & 0x00ffffff);
+#else
         return MessageBoxW(gUIhwnd, message, L"Windows Installer", eMessageType & 0x00ffffff);
+#endif
     case INSTALLMESSAGE_INFO:
     case INSTALLMESSAGE_INITIALIZE:
     case INSTALLMESSAGE_TERMINATE:

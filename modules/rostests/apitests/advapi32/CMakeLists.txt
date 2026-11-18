@@ -34,6 +34,7 @@ list(APPEND SOURCE
     LookupAccountName.c
     LookupAccountSid.c
     MachineGuid.c
+    NotifyBootConfigStatus.c
     OpenTrace.c
     PrivilegeNames.c
     QueryServiceConfig.c

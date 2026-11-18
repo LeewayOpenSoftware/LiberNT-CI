@@ -3221,7 +3221,12 @@ static UINT ACTION_InstallValidate(MSIPACKAGE *package)
     LIST_FOR_EACH_ENTRY( file, &package->files, MSIFILE, entry )
         total += file->FileSize;
 
+#ifdef __REACTOS__
+    /* FIXME: Windows sends a second reset with the total of the script when it starts running it */
+    msi_ui_progress( package, 0, total, 0, 1 );
+#else
     msi_ui_progress( package, 0, total, 0, 0 );
+#endif
 
     LIST_FOR_EACH_ENTRY( feature, &package->features, MSIFEATURE, entry )
     {
@@ -8281,6 +8286,9 @@ UINT MSI_InstallPackage( MSIPACKAGE *package, LPCWSTR szPackagePath,
         msi_set_property( package->db, L"RollbackDisabled", L"1", -1 );
     }
 
+#ifdef __REACTOS__
+    msi_basic_ui_start( package );
+#endif
     rc = ACTION_PerformAction(package, action);
 #ifdef __REACTOS__
     if (rc == ERROR_FUNCTION_NOT_CALLED)
@@ -8337,7 +8345,9 @@ UINT MSI_InstallPackage( MSIPACKAGE *package, LPCWSTR szPackagePath,
 #endif
 
 #ifdef __REACTOS__
-    return restart_after_install( package, rc );
+    rc = restart_after_install( package, rc );
+    msi_basic_ui_end( package );
+    return rc;
 #else
     if (rc == ERROR_SUCCESS && package->need_reboot_at_end)
         return ERROR_SUCCESS_REBOOT_REQUIRED;

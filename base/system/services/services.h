@@ -184,10 +184,10 @@ ScmDecryptPassword(
     _Out_ PWSTR *pDecryptedPassword);
 
 
-/* controlset.c */
+/* bootconfig.c */
 
-DWORD
-ScmCreateLastKnownGoodControlSet(VOID);
+VOID
+ScmReadBootConfigPolicy(VOID);
 
 DWORD
 ScmAcceptBoot(VOID);
