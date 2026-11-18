@@ -2096,6 +2096,8 @@ HKLM,"SYSTEM\CurrentControlSet\Services\usbxhci\Interrupt Management\MessageSign
 HKLM,"SYSTEM\CurrentControlSet\Services\usbxhci\Interrupt Management\MessageSignaledInterruptProperties","MSISupported",0x00010001,1
 HKLM,"SYSTEM\CurrentControlSet\Services\usbxhci","Start",0x00010001,0x00000000
 HKLM,"SYSTEM\CurrentControlSet\Services\usbxhci","Type",0x00010001,0x00000001
+; UCX client path switch (M2): 1 = KMDF/UCX usbxhci (lab legs only), 0/absent = legacy usbport (default)
+HKLM,"SYSTEM\CurrentControlSet\Services\usbxhci\Parameters","UseUcx",0x00010001,0x00000000
 
 HKLM,"SYSTEM\CurrentControlSet\Services\usbehci","BootFlags",0x00010001,0x00000004
 HKLM,"SYSTEM\CurrentControlSet\Services\usbehci","ErrorControl",0x00010001,0x00000001

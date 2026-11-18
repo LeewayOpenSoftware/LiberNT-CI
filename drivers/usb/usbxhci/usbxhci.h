@@ -406,3 +406,14 @@ NTAPI
 DriverEntry(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath);
+
+/* ucxclient.c -- M2 UCX client path, selected by Services\usbxhci\Parameters\UseUcx=1 */
+BOOLEAN
+XHCI_UcxSwitchEnabled(
+    _In_ PUNICODE_STRING RegistryPath);
+
+NTSTATUS
+XHCI_UcxDriverEntry(
+    _In_ PDRIVER_OBJECT DriverObject,
+    _In_ PUNICODE_STRING RegistryPath,
+    _Out_ PBOOLEAN WdfReentry);

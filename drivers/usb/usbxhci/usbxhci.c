@@ -1046,11 +1046,29 @@ DriverEntry(
     _In_ PDRIVER_OBJECT DriverObject,
     _In_ PUNICODE_STRING RegistryPath)
 {
-    UNREFERENCED_PARAMETER(RegistryPath);
     NTSTATUS Status;
 
     if (USBPORT_GetHciMn() != USBPORT_HCI_MN)
         return STATUS_INSUFFICIENT_RESOURCES;
+
+    /*
+     * M2: Services\usbxhci\Parameters\UseUcx=1 selects the KMDF/UCX client
+     * path (ucxclient.c). The WDF client stub re-enters DriverEntry once WDF
+     * and the Ucx class are bound; that inner call returns straight away. If
+     * the UCX path cannot start, fall through to the legacy usbport miniport
+     * registration below so the switch can never cost the system its xHCI
+     * driver. UseUcx absent or 0 (the default) never reaches WDF at all.
+     */
+    if (XHCI_UcxSwitchEnabled(RegistryPath))
+    {
+        BOOLEAN WdfReentry = FALSE;
+
+        Status = XHCI_UcxDriverEntry(DriverObject, RegistryPath, &WdfReentry);
+        if (WdfReentry || NT_SUCCESS(Status))
+            return Status;
+
+        DPRINT1("usbxhci: UCX client path failed %lx, falling back to legacy usbport\n", Status);
+    }
 
     RtlZeroMemory(&XhciRegPacket, sizeof(XhciRegPacket));
 
