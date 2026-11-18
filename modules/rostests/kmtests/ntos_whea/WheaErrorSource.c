@@ -98,9 +98,21 @@ TestAddRefusals(VOID)
     Descriptor.Version = WHEA_ERROR_SOURCE_DESCRIPTOR_VERSION_10 - 1;
     ok_eq_hex(Add(&Descriptor), STATUS_INVALID_PARAMETER);
 
+    ok_eq_hex(WheaErrSrcTypeIPFCPE, 0x0b);
+    ok_eq_hex(WheaErrSrcTypeGenericV2, 0x0c);
+    ok_eq_hex(WheaErrSrcTypeDeviceDriver, 0x10);
+    ok_eq_hex(WheaErrSrcTypeSei, 0x12);
+    ok_eq_hex(WheaErrSrcTypeMax, 0x13);
+
     InitDescriptor(&Descriptor);
     Descriptor.Type = WheaErrSrcTypeMax;
     ok_eq_hex(Add(&Descriptor), STATUS_INVALID_PARAMETER);
+
+    InitDescriptor(&Descriptor);
+    Descriptor.Type = WheaErrSrcTypeSei;
+    ok_eq_hex(Add(&Descriptor), STATUS_SUCCESS);
+    ok(Descriptor.ErrorSourceId != UNTOUCHED_ID, "A source of the last type got no id\n");
+    WheaRemoveErrorSource(Descriptor.ErrorSourceId);
 
     InitDescriptor(&Descriptor);
     Descriptor.State = WheaErrSrcStateRemoved;

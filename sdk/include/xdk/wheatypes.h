@@ -143,6 +143,13 @@ typedef enum _WHEA_ERROR_SOURCE_TYPE {
     WheaErrSrcTypeIPFMCA,
     WheaErrSrcTypeIPFCMC,
     WheaErrSrcTypeIPFCPE,
+    WheaErrSrcTypeGenericV2,
+    WheaErrSrcTypeSCIGenericV2,
+    WheaErrSrcTypeBMC,
+    WheaErrSrcTypePMEM,
+    WheaErrSrcTypeDeviceDriver,
+    WheaErrSrcTypeSea,
+    WheaErrSrcTypeSei,
     WheaErrSrcTypeMax
 } WHEA_ERROR_SOURCE_TYPE, *PWHEA_ERROR_SOURCE_TYPE;
 
