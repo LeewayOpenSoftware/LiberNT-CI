@@ -137,6 +137,16 @@ static uint8_t *RecvFrame(SMB2_CONN *c, size_t *len)
  * Resp is malloc'ed (caller frees); the status is the NTSTATUS in the response header.
  * Interim STATUS_PENDING responses are skipped.
  */
+/* With signing in force every response must carry a valid signature: an unsigned one is a stripped one */
+static int ResponseSignatureOk(SMB2_CONN *c, uint16_t Command, const uint8_t *r, size_t rlen)
+{
+    if (!c->Signing || Command == SMB2_SESSION_SETUP || Command == SMB2_NEGOTIATE)
+        return 1;
+    if (!(Smb2Get32(r, SMB2H_FLAGS) & SMB2_FLAGS_SIGNED))
+        return 0;
+    return Smb2VerifyMessage(c->SigningKey, r, rlen);
+}
+
 static uint32_t TransactSerial(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, const uint8_t *Body, size_t BodyLen,
                                uint8_t **Resp, size_t *RespLen)
 {
@@ -190,8 +200,7 @@ static uint32_t TransactSerial(SMB2_CONN *c, uint16_t Command, uint32_t TreeId, 
         break;
     }
 
-    if (c->Signing && (Smb2Get32(r, SMB2H_FLAGS) & SMB2_FLAGS_SIGNED) && Command != SMB2_SESSION_SETUP &&
-        !Smb2VerifyMessage(c->SigningKey, r, rlen))
+    if (!ResponseSignatureOk(c, Command, r, rlen))
     {
         free(r);
         return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
@@ -206,8 +215,7 @@ static uint32_t FinishResponse(SMB2_CONN *c, uint16_t Command, uint8_t *r, size_
 {
     uint32_t status = Smb2Get32(r, SMB2H_STATUS);
 
-    if (c->Signing && (Smb2Get32(r, SMB2H_FLAGS) & SMB2_FLAGS_SIGNED) && Command != SMB2_SESSION_SETUP &&
-        !Smb2VerifyMessage(c->SigningKey, r, rlen))
+    if (!ResponseSignatureOk(c, Command, r, rlen))
     {
         free(r);
         return SMB2_STATUS_INVALID_NETWORK_RESPONSE;
@@ -595,8 +603,8 @@ uint32_t Smb2SessionSetup(SMB2_CONN *c, const WCHAR *Host, const WCHAR *User, co
     WCHAR target[300];
     const uint8_t *intok = NULL;
     size_t inlen = 0;
-    uint8_t *resp, *prev = NULL, *tok;
-    size_t resplen, toklen;
+    uint8_t *resp, *prev = NULL, *tok, *final = NULL;
+    size_t resplen, toklen, finallen = 0;
     uint32_t st = SMB2_STATUS_LOGON_FAILURE;
     int first = 1;
 
@@ -671,7 +679,15 @@ uint32_t Smb2SessionSetup(SMB2_CONN *c, const WCHAR *Host, const WCHAR *User, co
             inlen = toklen;
             continue;
         }
-        free(resp);
+        if (st == SMB2_STATUS_SUCCESS && ss == SEC_E_OK)
+        {
+            final = resp;
+            finallen = resplen;
+        }
+        else
+        {
+            free(resp);
+        }
         if (st == SMB2_STATUS_SUCCESS && ss != SEC_E_OK)
             st = SMB2_STATUS_LOGON_FAILURE;
         break;
@@ -694,10 +710,24 @@ uint32_t Smb2SessionSetup(SMB2_CONN *c, const WCHAR *Host, const WCHAR *User, co
         /* Sign when the server demands it; guest and null sessions have no key to sign with. */
         c->Signing = (c->SecurityMode & SMB2_NEGOTIATE_SIGNING_REQUIRED) != 0 &&
                      !(c->SessionFlags & (SMB2_SESSION_FLAG_IS_GUEST | SMB2_SESSION_FLAG_IS_NULL));
+        if (final && !(c->SessionFlags & (SMB2_SESSION_FLAG_IS_GUEST | SMB2_SESSION_FLAG_IS_NULL)))
+        {
+            int signed_ = (Smb2Get32(final, SMB2H_FLAGS) & SMB2_FLAGS_SIGNED) != 0;
+
+            if ((c->Signing && !signed_) || (signed_ && !Smb2VerifyMessage(c->SigningKey, final, finallen)))
+                st = SMB2_STATUS_ACCESS_DENIED;
+        }
+        if (st != SMB2_STATUS_SUCCESS)
+        {
+            c->Signing = 0;
+            free(final);
+            return st;
+        }
         c->Reader = CreateThread(NULL, 0, ReaderProc, c, 0, NULL);
         if (c->Reader)
             InterlockedExchange(&c->Mux, 1);
     }
+    free(final);
     return st;
 }
 
