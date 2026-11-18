@@ -275,7 +275,70 @@ CmpValidateClass(
  * data cell inside the value is not allocated.
  * CM_CHECK_REGISTRY_BAD_KEY_VALUE_SIGNATURE is returned if the
  * value's signature is not valid.
+ * CM_CHECK_REGISTRY_CORRUPT_BIG_DATA is returned if a big value's
+ * big data record is corrupt.
  */
+static
+BOOLEAN
+CmpValidateBigDataValue(
+    _In_ PHHIVE Hive,
+    _In_ HCELL_INDEX DataCell,
+    _In_ ULONG DataSize)
+{
+    ULONG Needed, i;
+    LONG BigDataSize, ListSize;
+    PCELL_DATA BigData;
+    PCELL_DATA SegmentList;
+    BOOLEAN Valid = FALSE;
+
+    Needed = (DataSize + CM_KEY_VALUE_BIG - 1) / CM_KEY_VALUE_BIG;
+
+    BigData = (PCELL_DATA)HvGetCell(Hive, DataCell);
+    if (!BigData) return FALSE;
+
+    BigDataSize = HvGetCellSize(Hive, BigData);
+    if (BigDataSize < (LONG)sizeof(CM_BIG_DATA)) goto ReleaseBigData;
+    if (BigData->u.ValueData.Signature != CM_BIG_DATA_SIGNATURE) goto ReleaseBigData;
+    if (BigData->u.ValueData.Count < Needed) goto ReleaseBigData;
+    if (BigData->u.ValueData.List == HCELL_NIL) goto ReleaseBigData;
+
+    SegmentList = (PCELL_DATA)HvGetCell(Hive, BigData->u.ValueData.List);
+    if (!SegmentList) goto ReleaseBigData;
+
+    ListSize = HvGetCellSize(Hive, SegmentList);
+    if (ListSize < (LONG)(BigData->u.ValueData.Count * sizeof(HCELL_INDEX)))
+        goto ReleaseList;
+
+    for (i = 0; i < BigData->u.ValueData.Count; i++)
+    {
+        PCELL_DATA Segment;
+
+        if (!HvIsCellAllocated(Hive, SegmentList->u.KeyList[i]))
+            goto ReleaseList;
+
+        Segment = (PCELL_DATA)HvGetCell(Hive, SegmentList->u.KeyList[i]);
+        if (!Segment) goto ReleaseList;
+        if (!IsUsedCell((PHCELL)((PUCHAR)Segment - sizeof(HCELL))))
+            goto ReleaseList;
+
+        /* The segments the value actually reads must hold their bytes */
+        if (i < Needed &&
+            HvGetCellSize(Hive, Segment) <
+            (LONG)min((ULONG)CM_KEY_VALUE_BIG, DataSize - i * CM_KEY_VALUE_BIG))
+        {
+            goto ReleaseList;
+        }
+    }
+
+    Valid = TRUE;
+
+ReleaseList:
+    HvReleaseCell(Hive, BigData->u.ValueData.List);
+ReleaseBigData:
+    HvReleaseCell(Hive, DataCell);
+    return Valid;
+}
+
 static
 CM_CHECK_REGISTRY_STATUS
 CmpValidateValueListByCount(
@@ -442,8 +505,26 @@ CmpValidateValueListByCount(
                 }
             }
 
-            /* FIXME: Big values not supported yet */
-            ASSERT_VALUE_BIG(Hive, DataSize);
+            /* A big value must reference a sane big data record */
+            if (CmpIsKeyValueBig(Hive, DataSize) &&
+                !CmpValidateBigDataValue(Hive, DataCell, DataSize))
+            {
+                if (!CmpRepairValueListCount(Hive,
+                                             CurrentCell,
+                                             ListCountIndex,
+                                             ValueListData,
+                                             FixHive))
+                {
+                    DPRINT1("The big data record of the value is corrupt\n");
+                    return CM_CHECK_REGISTRY_CORRUPT_BIG_DATA;
+                }
+
+                /* Decrease the list count and go to the next value */
+                ListCount--;
+                (*ValuesRemoved)++;
+                DPRINT1("Damaged value removed, continuing with the next value...\n");
+                continue;
+            }
         }
 
         /* Is the signature valid? */
