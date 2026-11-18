@@ -2808,6 +2808,9 @@ EmitDeviceRecord(
     /* Header fields: the ten base ones, the views, MatchingDriverName,Rank, Interface,InterfaceStatus and Key,Type,Value. */
     DWORD HeaderCols = 10 + ViewColumns + (Filter->Drivers ? 2 : 0) + (Filter->Interfaces ? 2 : 0) +
                        (Filter->Properties ? 3 : 0);
+    /* Trailing driver, interface and property columns the device row has to fill with empty cells. */
+    DWORD TrailCols = (Filter->Drivers ? 2 : 0) + (Filter->Interfaces ? 2 : 0) + (Filter->Properties ? 3 : 0);
+    BOOL PadRow = TrailCols && AnyView;
 
     if (Filter->Drivers)
         DriverListCollect(&Drivers, DeviceInfoSet, DeviceInfoData);
@@ -2829,8 +2832,8 @@ EmitDeviceRecord(
         OutputCsvField(Output, L"", FALSE);          /* ProblemStatus */
         OutputCsvField(Output, DriverName, FALSE);
         /* A device without a matching driver gets one extra empty field after the ten base ones. */
-        OutputCsvField(Output, L"", !AnyView && !(Filter->Drivers && Drivers.Count == 0));  /* ExtensionDriverNames */
-        if (!AnyView && Filter->Drivers && Drivers.Count == 0)
+        OutputCsvField(Output, L"", !AnyView && !PadRow && !(Filter->Drivers && Drivers.Count == 0));  /* ExtensionDriverNames */
+        if (!AnyView && !PadRow && Filter->Drivers && Drivers.Count == 0)
             OutputCsvField(Output, L"", TRUE);
 
         if (Filter->Ids)
@@ -2840,7 +2843,7 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_COMPATIBLEIDS, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, --Remaining == 0);
+            OutputCsvField(Output, Cell2, --Remaining == 0 && !PadRow);
         }
         if (Filter->Relations)
         {
@@ -2848,7 +2851,7 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             GetChildrenMultiSz(DeviceInfoData->DevInst, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, --Remaining == 0);
+            OutputCsvField(Output, Cell2, --Remaining == 0 && !PadRow);
         }
         if (Filter->Services)
         {
@@ -2860,13 +2863,13 @@ EmitDeviceRecord(
             OutputCsvField(Output, Cell, FALSE);
             ReadSpdrpMultiSz(DeviceInfoSet, DeviceInfoData, SPDRP_LOWERFILTERS, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, --Remaining == 0);
+            OutputCsvField(Output, Cell2, --Remaining == 0 && !PadRow);
         }
         if (Filter->Stack)
         {
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_Stack, List, _countof(List));
             JoinMultiSz(List, Cell, _countof(Cell), TRUE);
-            OutputCsvField(Output, Cell, --Remaining == 0);
+            OutputCsvField(Output, Cell, --Remaining == 0 && !PadRow);
         }
         if (Filter->Location)
         {
@@ -2875,7 +2878,7 @@ EmitDeviceRecord(
                            FALSE);
             ReadDevpropStringList(DeviceInfoSet, DeviceInfoData, &DEVPKEY_Device_LocationPaths, List, _countof(List));
             JoinMultiSz(List, Cell2, _countof(Cell2), FALSE);
-            OutputCsvField(Output, Cell2, --Remaining == 0);
+            OutputCsvField(Output, Cell2, --Remaining == 0 && !PadRow);
         }
         if (Filter->Resources)
         {
@@ -2889,7 +2892,16 @@ EmitDeviceRecord(
             JoinMultiSz(Res.Irq, Cell, _countof(Cell), FALSE);
             OutputCsvField(Output, Cell, FALSE);
             JoinMultiSz(Res.Mem, Cell, _countof(Cell), FALSE);
-            OutputCsvField(Output, Cell, --Remaining == 0);
+            OutputCsvField(Output, Cell, --Remaining == 0 && !PadRow);
+        }
+
+        /* Every header column is present in the device row, so the row is as wide as the header. */
+        if (PadRow)
+        {
+            DWORD n;
+
+            for (n = 0; n < TrailCols; n++)
+                OutputCsvField(Output, L"", n + 1 == TrailCols);
         }
 
         if (Filter->Drivers)
