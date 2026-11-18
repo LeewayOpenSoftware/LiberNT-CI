@@ -1,7 +1,7 @@
 /*
  * PROJECT:     LiberNT kernel-mode tests
  * LICENSE:     GPL-3.0-or-later (https://spdx.org/licenses/GPL-3.0-or-later)
- * PURPOSE:     Hardware error sources: add, remove, and reports queued in the records of their source
+ * PURPOSE:     Hardware error sources: add, remove, reports queued in the records of their source and drained
  * COPYRIGHT:   Copyright 2026 Leeway Open Software
  */
 
@@ -169,12 +169,58 @@ TestReportRefusals(
     }
 }
 
+/* Reports until the worker has given a record back to the source, for at most five seconds */
+static
+NTSTATUS
+ReportWhenDrained(
+    _In_ PTEST_PACKET Packet)
+{
+    LARGE_INTEGER Interval;
+    NTSTATUS Status;
+    ULONG Attempt;
+
+    Interval.QuadPart = -10 * 10000;
+    for (Attempt = 0; Attempt < 500; Attempt++)
+    {
+        Status = WheaReportHwError(&Packet->Header);
+        if (Status != STATUS_INSUFFICIENT_RESOURCES)
+            break;
+
+        KeDelayExecutionThread(KernelMode, FALSE, &Interval);
+    }
+
+    return Status;
+}
+
+/* At DISPATCH_LEVEL the worker cannot be started from this processor, so the records of a source run out */
+static
+ULONG
+ReportUntilRefused(
+    _In_ PTEST_PACKET Packet,
+    _In_ ULONG Limit,
+    _Out_ PNTSTATUS LastStatus)
+{
+    ULONG Accepted;
+    KIRQL Irql;
+
+    KeRaiseIrql(DISPATCH_LEVEL, &Irql);
+    for (Accepted = 0; Accepted < Limit; Accepted++)
+    {
+        *LastStatus = WheaReportHwError(&Packet->Header);
+        if (*LastStatus != STATUS_SUCCESS)
+            break;
+    }
+
+    KeLowerIrql(Irql);
+    return Accepted;
+}
+
 START_TEST(WheaErrorSource)
 {
     TEST_DESCRIPTOR Started, Stopped, Large;
     TEST_PACKET Packet;
-    NTSTATUS Status;
-    ULONG FirstId, Accepted;
+    NTSTATUS Status, Last;
+    ULONG FirstId;
     KIRQL Irql;
 
     TestAddRefusals();
@@ -203,19 +249,25 @@ START_TEST(WheaErrorSource)
 
     TestReportRefusals(FirstId, Stopped.ErrorSourceId);
 
-    /* Two records were asked for: the third report finds none free, since nothing consumes the queue yet */
+    /* Two records were asked for */
     InitPacket(&Packet, FirstId);
-    ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_SUCCESS);
+    Last = STATUS_SUCCESS;
+    ok_eq_hex(ReportUntilRefused(&Packet, 8, &Last), 2);
+    ok_eq_hex(Last, STATUS_INSUFFICIENT_RESOURCES);
+
+    /* Below DISPATCH_LEVEL the worker takes the queued records and gives them back */
+    ok_eq_hex(ReportWhenDrained(&Packet), STATUS_SUCCESS);
+    ok_eq_hex(ReportWhenDrained(&Packet), STATUS_SUCCESS);
+    ok_eq_hex(ReportWhenDrained(&Packet), STATUS_SUCCESS);
+
+    /* A source removed while its records are queued takes them out of the queue */
     KeRaiseIrql(DISPATCH_LEVEL, &Irql);
     Status = WheaReportHwError(&Packet.Header);
-    KeLowerIrql(Irql);
-    ok_eq_hex(Status, STATUS_SUCCESS);
-    ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_INSUFFICIENT_RESOURCES);
-    ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_INSUFFICIENT_RESOURCES);
-
-    /* Removing a source with queued records leaves the queue usable for the others */
     WheaRemoveErrorSource(FirstId);
-    ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_NOT_FOUND);
+    Last = WheaReportHwError(&Packet.Header);
+    KeLowerIrql(Irql);
+    ok(Status == STATUS_SUCCESS || Status == STATUS_INSUFFICIENT_RESOURCES, "Status 0x%lx\n", Status);
+    ok_eq_hex(Last, STATUS_NOT_FOUND);
     WheaRemoveErrorSource(FirstId);
 
     InitDescriptor(&Started);
@@ -225,9 +277,9 @@ START_TEST(WheaErrorSource)
     {
         ok(Started.ErrorSourceId != FirstId, "The id 0x%lx was handed out again at once\n", FirstId);
         InitPacket(&Packet, Started.ErrorSourceId);
-        ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_SUCCESS);
-        ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_SUCCESS);
-        ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_INSUFFICIENT_RESOURCES);
+        ok_eq_hex(ReportUntilRefused(&Packet, 8, &Last), 2);
+        ok_eq_hex(Last, STATUS_INSUFFICIENT_RESOURCES);
+        ok_eq_hex(ReportWhenDrained(&Packet), STATUS_SUCCESS);
         WheaRemoveErrorSource(Started.ErrorSourceId);
     }
 
@@ -240,14 +292,9 @@ START_TEST(WheaErrorSource)
     if (NT_SUCCESS(Status))
     {
         InitPacket(&Packet, Large.ErrorSourceId);
-        for (Accepted = 0; Accepted < 64; Accepted++)
-        {
-            if (WheaReportHwError(&Packet.Header) != STATUS_SUCCESS)
-                break;
-        }
-
-        ok_eq_hex(Accepted, 15);
-        ok_eq_hex(WheaReportHwError(&Packet.Header), STATUS_INSUFFICIENT_RESOURCES);
+        ok_eq_hex(ReportUntilRefused(&Packet, 64, &Last), 15);
+        ok_eq_hex(Last, STATUS_INSUFFICIENT_RESOURCES);
+        ok_eq_hex(ReportWhenDrained(&Packet), STATUS_SUCCESS);
         WheaRemoveErrorSource(Large.ErrorSourceId);
     }
 

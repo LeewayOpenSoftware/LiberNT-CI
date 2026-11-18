@@ -58,6 +58,10 @@ static KSPIN_LOCK WheapLock;
 static LIST_ENTRY WheapSourceList = { &WheapSourceList, &WheapSourceList };
 static LIST_ENTRY WheapPendingList = { &WheapPendingList, &WheapPendingList };
 static ULONG WheapNextSourceId = 1;
+static KDPC WheapDpc;
+static WORK_QUEUE_ITEM WheapWorkItem;
+static BOOLEAN WheapConsumerReady;
+static BOOLEAN WheapWorkQueued;
 
 /* Taken at HIGH_LEVEL so that a driver can report from its interrupt routine */
 static
@@ -109,6 +113,65 @@ WheapIsRangeInPacket(
     return Offset >= sizeof(WHEA_ERROR_PACKET_V2) &&
            Offset <= PacketLength &&
            DataLength <= PacketLength - Offset;
+}
+
+static
+VOID
+NTAPI
+WheapWorker(
+    _In_ PVOID Parameter)
+{
+    PWHEAP_RECORD Record;
+    PWHEA_ERROR_PACKET_V2 Packet;
+    WHEA_ERROR_TYPE ErrorType;
+    WHEA_ERROR_SEVERITY Severity;
+    ULONG ErrorSourceId, Length;
+    KIRQL OldIrql;
+
+    UNREFERENCED_PARAMETER(Parameter);
+
+    for (;;)
+    {
+        WheapAcquireLock(&OldIrql);
+        if (IsListEmpty(&WheapPendingList))
+        {
+            WheapWorkQueued = FALSE;
+            WheapReleaseLock(OldIrql);
+            break;
+        }
+
+        Record = CONTAINING_RECORD(RemoveHeadList(&WheapPendingList), WHEAP_RECORD, Link);
+        Packet = (PWHEA_ERROR_PACKET_V2)Record->Packet;
+        ErrorSourceId = Packet->ErrorSourceId;
+        ErrorType = Packet->ErrorType;
+        Severity = Packet->ErrorSeverity;
+        Length = Record->PacketLength;
+        InsertTailList(&Record->Source->FreeRecords, &Record->Link);
+        WheapReleaseLock(OldIrql);
+
+        /* TODO: build the error record and write it through ETW (Microsoft-Windows-WHEA-Logger) */
+        DPRINT1("WHEA: hardware error from source %lu: type %d, severity %d, packet of %lu bytes\n",
+                ErrorSourceId, ErrorType, Severity, Length);
+    }
+}
+
+static
+VOID
+NTAPI
+WheapDpcRoutine(
+    _In_ PKDPC Dpc,
+    _In_opt_ PVOID DeferredContext,
+    _In_opt_ PVOID SystemArgument1,
+    _In_opt_ PVOID SystemArgument2)
+{
+    UNREFERENCED_PARAMETER(Dpc);
+    UNREFERENCED_PARAMETER(DeferredContext);
+    UNREFERENCED_PARAMETER(SystemArgument1);
+    UNREFERENCED_PARAMETER(SystemArgument2);
+
+    /* A work item that has run cannot be queued again as it is; nothing queues this one while WheapWorkQueued is set */
+    ExInitializeWorkItem(&WheapWorkItem, WheapWorker, NULL);
+    ExQueueWorkItem(&WheapWorkItem, DelayedWorkQueue);
 }
 
 NTSTATUS
@@ -172,6 +235,12 @@ WheaAddErrorSource(
     }
 
     WheapAcquireLock(&OldIrql);
+    if (!WheapConsumerReady)
+    {
+        KeInitializeDpc(&WheapDpc, WheapDpcRoutine, NULL);
+        WheapConsumerReady = TRUE;
+    }
+
     do
     {
         Source->ErrorSourceId = WheapNextSourceId++;
@@ -223,6 +292,7 @@ WheaReportHwError(
     WHEA_ERROR_PACKET_V2 Header;
     PWHEAP_ERROR_SOURCE Source;
     PWHEAP_RECORD Record;
+    BOOLEAN QueueDpc = FALSE;
     NTSTATUS Status;
     KIRQL OldIrql;
 
@@ -267,9 +337,19 @@ WheaReportHwError(
         KeQuerySystemTime(&Record->SystemTime);
         InsertTailList(&WheapPendingList, &Record->Link);
         Source->ReportedCount++;
+        if (!WheapWorkQueued)
+        {
+            WheapWorkQueued = TRUE;
+            QueueDpc = TRUE;
+        }
+
         Status = STATUS_SUCCESS;
     }
 
     WheapReleaseLock(OldIrql);
+
+    if (QueueDpc)
+        KeInsertQueueDpc(&WheapDpc, NULL, NULL);
+
     return Status;
 }
