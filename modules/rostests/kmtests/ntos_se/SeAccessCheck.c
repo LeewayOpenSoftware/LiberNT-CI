@@ -147,8 +147,7 @@ TestAccessCheckFromState(VOID)
     DaclSize = sizeof(ACL) + sizeof(ACCESS_ALLOWED_ACE) + sizeof(ACCESS_DENIED_ACE) +
                2 * SECURITY_MAX_SID_SIZE;
     Dacl = ExAllocatePoolWithTag(PagedPool, DaclSize, TAG_TEST);
-    ok(Dacl != NULL, "no pool for dacl
-");
+    ok(Dacl != NULL, "no pool for dacl\n");
     if (Dacl == NULL) return;
 
     Status = RtlCreateAcl(Dacl, DaclSize, ACL_REVISION);
@@ -210,8 +209,7 @@ TestAccessCheckFromState(VOID)
         DaclSize = sizeof(ACL) + sizeof(ACCESS_DENIED_ACE) + sizeof(ACCESS_ALLOWED_ACE) +
                    2 * SECURITY_MAX_SID_SIZE;
         MaxDacl = ExAllocatePoolWithTag(PagedPool, DaclSize, TAG_TEST);
-        ok(MaxDacl != NULL, "no pool for max dacl
-");
+        ok(MaxDacl != NULL, "no pool for max dacl\n");
         if (MaxDacl != NULL)
         {
             Status = RtlCreateAcl(MaxDacl, DaclSize, ACL_REVISION);
@@ -229,10 +227,8 @@ TestAccessCheckFromState(VOID)
                                              NULL, &Mapping, UserMode, &GrantedAccess, &AccessStatus);
             ok_bool_true(Granted, "max allowed granted");
             ok_eq_hex(AccessStatus, STATUS_SUCCESS);
-            ok(GrantedAccess & FILE_GENERIC_READ, "max allowed lost read
-");
-            ok(!(GrantedAccess & FILE_GENERIC_WRITE), "max allowed kept denied write
-");
+            ok(GrantedAccess & FILE_GENERIC_READ, "max allowed lost read\n");
+            ok(!(GrantedAccess & FILE_GENERIC_WRITE), "max allowed kept denied write\n");
 
             ExFreePoolWithTag(MaxDacl, TAG_TEST);
         }
@@ -263,6 +259,42 @@ TestAccessCheckFromState(VOID)
 
         AccessInfo.SidHash = &WorldHash;
         AccessInfo.RestrictedSidHash = NULL;
+    }
+
+    {
+        UCHAR CallbackBuffer[FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_ACE, SidStart) + SECURITY_MAX_SID_SIZE];
+        PACCESS_ALLOWED_CALLBACK_ACE CallbackAce = (PACCESS_ALLOWED_CALLBACK_ACE)CallbackBuffer;
+        ULONG WorldSidLength = RtlLengthSid(WorldSid);
+
+        CallbackAce->Header.AceType = ACCESS_ALLOWED_CALLBACK_ACE_TYPE;
+        CallbackAce->Header.AceFlags = 0;
+        CallbackAce->Header.AceSize = (USHORT)(FIELD_OFFSET(ACCESS_ALLOWED_CALLBACK_ACE, SidStart) + WorldSidLength);
+        CallbackAce->Mask = FILE_ALL_ACCESS;
+        RtlCopySid(WorldSidLength, (PSID)&CallbackAce->SidStart, WorldSid);
+
+        Status = RtlCreateAcl(Dacl, DaclSize, ACL_REVISION);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = RtlAddAce(Dacl, ACL_REVISION, MAXULONG, CallbackAce, CallbackAce->Header.AceSize);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = RtlAddAccessDeniedAce(Dacl, ACL_REVISION, FILE_GENERIC_WRITE, WorldSid);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+        Status = RtlSetDaclSecurityDescriptor(&Sd, TRUE, Dacl, FALSE);
+        ok_eq_hex(Status, STATUS_SUCCESS);
+
+        /* A callback allow ACE is not evaluated here and must grant nothing */
+        GrantedAccess = (ACCESS_MASK)-1;
+        AccessStatus = STATUS_PENDING;
+        Granted = SeAccessCheckFromState(&Sd, &AccessInfo, NULL, FILE_READ_DATA, 0,
+                                         NULL, &Mapping, UserMode, &GrantedAccess, &AccessStatus);
+        ok_bool_false(Granted, "callback allow grants nothing");
+        ok_eq_hex(AccessStatus, STATUS_ACCESS_DENIED);
+        ok_eq_hex(GrantedAccess, 0);
+
+        /* The callback deny ACE stays enforced */
+        Granted = SeAccessCheckFromState(&Sd, &AccessInfo, NULL, FILE_WRITE_DATA, 0,
+                                         NULL, &Mapping, UserMode, &GrantedAccess, &AccessStatus);
+        ok_bool_false(Granted, "callback deny enforced");
+        ok_eq_hex(AccessStatus, STATUS_ACCESS_DENIED);
     }
 
     ExFreePoolWithTag(Dacl, TAG_TEST);

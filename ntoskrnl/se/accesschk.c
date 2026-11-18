@@ -2856,6 +2856,21 @@ SepAccessInfoHasPrivilege(
     return FALSE;
 }
 
+static
+PSID
+SepAccessInfoObjectAceSid(
+    _In_ PVOID Ace)
+{
+    PACCESS_ALLOWED_OBJECT_ACE ObjectAce = (PACCESS_ALLOWED_OBJECT_ACE)Ace;
+    PUCHAR Sid = (PUCHAR)&ObjectAce->SidStart;
+
+    if (!(ObjectAce->Flags & ACE_INHERITED_OBJECT_TYPE_PRESENT))
+        Sid -= sizeof(GUID);
+    if (!(ObjectAce->Flags & ACE_OBJECT_TYPE_PRESENT))
+        Sid -= sizeof(GUID);
+    return (PSID)Sid;
+}
+
 /**
  * @implemented
  */
@@ -2902,22 +2917,22 @@ SepAccessInfoWalkDacl(
             case ACCESS_DENIED_OBJECT_ACE_TYPE:
             case ACCESS_DENIED_CALLBACK_OBJECT_ACE_TYPE:
                 Mask = ((PACCESS_DENIED_OBJECT_ACE)Ace)->Mask;
-                AceSid = (PSID)&((PACCESS_DENIED_OBJECT_ACE)Ace)->SidStart;
+                AceSid = SepAccessInfoObjectAceSid(Ace);
                 IsDeny = TRUE;
                 break;
             case ACCESS_ALLOWED_ACE_TYPE:
-            case ACCESS_ALLOWED_CALLBACK_ACE_TYPE:
                 Mask = ((PACCESS_ALLOWED_ACE)Ace)->Mask;
                 AceSid = (PSID)&((PACCESS_ALLOWED_ACE)Ace)->SidStart;
                 IsDeny = FALSE;
                 break;
             case ACCESS_ALLOWED_OBJECT_ACE_TYPE:
-            case ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE:
                 Mask = ((PACCESS_ALLOWED_OBJECT_ACE)Ace)->Mask;
-                AceSid = (PSID)&((PACCESS_ALLOWED_OBJECT_ACE)Ace)->SidStart;
+                AceSid = SepAccessInfoObjectAceSid(Ace);
                 IsDeny = FALSE;
                 break;
             default:
+                /* Callback and unknown allow types are not evaluated and grant
+                   nothing (fail closed); callback deny types stay enforced above */
                 continue;
         }
 

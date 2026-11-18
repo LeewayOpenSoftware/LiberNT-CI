@@ -200,8 +200,7 @@ TestHashTableExStrong(VOID)
     ok_bool_true(Ok, "RtlCreateHashTableEx");
     if (!Ok || HashTable == NULL) return;
     ok_eq_ulong(HashTable->TableSize, 256UL);
-    ok(HashTable->Flags & RTL_HASH_ALLOCATED_HEADER, "header not marked allocated
-");
+    ok(HashTable->Flags & RTL_HASH_ALLOCATED_HEADER, "header not marked allocated\n");
 
     for (i = 0; i < 16; i++)
     {
