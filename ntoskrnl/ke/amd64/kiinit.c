@@ -127,7 +127,11 @@ KiInitializePcr(
 
     /* Set the Processor Number and current Processor Mask */
     Pcr->Prcb.Number = (UCHAR)ProcessorNumber;
-    Pcr->Prcb.SetMember = 1ULL << ProcessorNumber;
+    Pcr->Prcb.SetMember = KiAffinityForProcessorIndex(ProcessorNumber);
+#if (NTDDI_VERSION >= NTDDI_LONGHORN)
+    /* Every processor is in group 0 until processor groups are supported */
+    Pcr->Prcb.Group = 0;
+#endif
 
     /* Set GDT and IDT base */
     Pcr->GdtBase = GdtBase;

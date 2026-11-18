@@ -34,7 +34,7 @@ typedef struct DECLSPEC_CACHEALIGN _KI_BALANCE_STATE
     volatile LONG IdleTick;
 } KI_BALANCE_STATE;
 
-static KI_BALANCE_STATE KiBalanceState[MAXIMUM_PROCESSORS];
+static KI_BALANCE_STATE KiBalanceState[KI_MAXIMUM_PROCESSORS];
 #endif
 
 /* FUNCTIONS *****************************************************************/

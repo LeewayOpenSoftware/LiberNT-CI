@@ -383,7 +383,7 @@ KiFreezeTargetSet(
     ULONG Index;
     PKPRCB TargetPrcb;
 
-    for (Index = 0; Index < KeNumberProcessors && Index < MAXIMUM_PROCESSORS; Index++)
+    for (Index = 0; Index < KeNumberProcessors && Index < KI_MAXIMUM_PROCESSORS; Index++)
     {
         TargetPrcb = KiProcessorBlock[Index];
         if (TargetPrcb == NULL || TargetPrcb == CurrentPrcb)
@@ -464,7 +464,7 @@ KxFreezeExecution(
     KiReleaseFreezeActiveSet(CurrentPrcb, Acquired && !ReacquireActiveSet);
 
     /* Mark exactly the snapshot */
-    for (ULONG i = 0; i < KeNumberProcessors && i < MAXIMUM_PROCESSORS; i++)
+    for (ULONG i = 0; i < KeNumberProcessors && i < KI_MAXIMUM_PROCESSORS; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
         if (KiFreezeFailureRequiresReturn(CurrentPrcb))
@@ -489,7 +489,7 @@ KxFreezeExecution(
     if (Targets != 0)
         KiIpiSend(Targets, IPI_FREEZE);
 
-    for (ULONG i = 0; i < KeNumberProcessors && i < MAXIMUM_PROCESSORS; i++)
+    for (ULONG i = 0; i < KeNumberProcessors && i < KI_MAXIMUM_PROCESSORS; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
 
@@ -526,7 +526,7 @@ KxThawExecution(
     ASSERT(CurrentPrcb->IpiFrozen & IPI_FROZEN_FLAG_ACTIVE);
 
     /* Thaw the marked set, not whatever KeNumberProcessors says now */
-    for (ULONG i = 0; i < KeNumberProcessors && i < MAXIMUM_PROCESSORS; i++)
+    for (ULONG i = 0; i < KeNumberProcessors && i < KI_MAXIMUM_PROCESSORS; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
         if (KiFreezeFailureRequiresReturn(CurrentPrcb))
@@ -544,7 +544,7 @@ KxThawExecution(
         TargetPrcb->IpiFrozen = IPI_FROZEN_STATE_THAW;
     }
 
-    for (ULONG i = 0; i < KeNumberProcessors && i < MAXIMUM_PROCESSORS; i++)
+    for (ULONG i = 0; i < KeNumberProcessors && i < KI_MAXIMUM_PROCESSORS; i++)
     {
         PKPRCB TargetPrcb = KiProcessorBlock[i];
 

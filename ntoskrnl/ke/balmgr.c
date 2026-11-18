@@ -28,7 +28,7 @@
 #define STARVATION_SCAN_BOOSTS 10
 #define STARVATION_WAIT_TICKS 300
 ULONG KiReadyScanLast;
-static ULONG KiStarvationScanIndex[MAXIMUM_PROCESSORS];
+static ULONG KiStarvationScanIndex[KI_MAXIMUM_PROCESSORS];
 
 /* PRIVATE FUNCTIONS *********************************************************/
 

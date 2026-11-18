@@ -8,10 +8,32 @@
 #define KI_USER_MODE_CALLBACK_ENTRY KiCallUserMode
 #endif
 
+/*
+ * Kernel-internal processor limit. It sizes per-processor arrays and bounds
+ * per-processor loops inside the kernel. The public MAXIMUM_PROCESSORS stays
+ * at the Windows value (64 on amd64) because it is driver ABI (ndis.h sizes
+ * structures with it). This one may later grow on amd64 together with
+ * processor groups.
+ */
+#define KI_MAXIMUM_PROCESSORS MAXIMUM_PROCESSORS
+
 #ifdef __cplusplus
 extern "C"
 {
 #endif
+
+/*
+ * Affinity bit of a processor index within its KAFFINITY. Defined for every
+ * Index: an index that does not fit in a KAFFINITY yields 0 instead of an
+ * undefined shift.
+ */
+FORCEINLINE
+KAFFINITY
+KiAffinityForProcessorIndex(
+    _In_ ULONG Index)
+{
+    return (Index < sizeof(KAFFINITY) * 8) ? ((KAFFINITY)1 << Index) : 0;
+}
 
 /* INTERNAL KERNEL TYPES ****************************************************/
 

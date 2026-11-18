@@ -111,8 +111,8 @@ typedef struct _SMPDBG_DISPATCH_SNAPSHOT
     ULONG DpcInterruptRequested;
 } SMPDBG_DISPATCH_SNAPSHOT, *PSMPDBG_DISPATCH_SNAPSHOT;
 
-static SMPDBG_CPU SmpDbgCpu[MAXIMUM_PROCESSORS];
-static SMPDBG_SAMPLE SmpDbgPrevious[MAXIMUM_PROCESSORS];
+static SMPDBG_CPU SmpDbgCpu[KI_MAXIMUM_PROCESSORS];
+static SMPDBG_SAMPLE SmpDbgPrevious[KI_MAXIMUM_PROCESSORS];
 static volatile LONG SmpDbgReporterStarted;
 
 static
@@ -634,7 +634,7 @@ SmpDbgSumContextSwitches(VOID)
     ULONG64 Sum = 0;
     ULONG Cpu;
 
-    for (Cpu = 0; (Cpu < (ULONG)KeNumberProcessors) && (Cpu < MAXIMUM_PROCESSORS); Cpu++)
+    for (Cpu = 0; (Cpu < (ULONG)KeNumberProcessors) && (Cpu < KI_MAXIMUM_PROCESSORS); Cpu++)
     {
         PKPRCB Prcb = KiProcessorBlock[Cpu];
 

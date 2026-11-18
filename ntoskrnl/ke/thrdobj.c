@@ -1325,7 +1325,7 @@ KeSetIdealProcessorThread(IN PKTHREAD Thread,
 {
     CCHAR OldIdealProcessor;
     KIRQL OldIrql;
-    ASSERT(Processor <= MAXIMUM_PROCESSORS);
+    ASSERT(Processor <= KI_MAXIMUM_PROCESSORS);
 
     /* Lock the Dispatcher Database */
     OldIrql = KeRaiseIrqlToSynchLevel();

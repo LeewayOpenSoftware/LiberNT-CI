@@ -106,7 +106,7 @@ static struct
     ULONG64 Aperf;
     ULONG64 Mperf;
     ULONG Mhz;
-} KiAmd64ClockSample[MAXIMUM_PROCESSORS];
+} KiAmd64ClockSample[KI_MAXIMUM_PROCESSORS];
 
 static LONG KiAmd64AperfMperfState;
 
@@ -118,7 +118,7 @@ KiAmd64QueryEffectiveMHz(_In_ ULONG ProcessorNumber)
     ULONG64 Aperf, Mperf, DeltaAperf, DeltaMperf;
     ULONG BaseMhz, Mhz;
 
-    if (ProcessorNumber >= MAXIMUM_PROCESSORS)
+    if (ProcessorNumber >= KI_MAXIMUM_PROCESSORS)
     {
         return 0;
     }

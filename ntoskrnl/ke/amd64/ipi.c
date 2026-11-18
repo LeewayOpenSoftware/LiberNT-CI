@@ -39,7 +39,7 @@ KiIpiQueueRequest(
     PKPRCB SourcePrcb = KeGetCurrentPrcb();
     ULONG Processor;
 
-    ASSERT(SourcePrcb->Number < MAXIMUM_PROCESSORS);
+    ASSERT(SourcePrcb->Number < KI_MAXIMUM_PROCESSORS);
     TargetSet &= (KAFFINITY)KeActiveProcessors;
     QueuedTargets = TargetSet;
 
@@ -152,7 +152,7 @@ KiIpiProcessRequests(VOID)
     BOOLEAN DpcRequest = FALSE;
     ULONG Source;
 
-    ASSERT(Prcb->Number < MAXIMUM_PROCESSORS);
+    ASSERT(Prcb->Number < KI_MAXIMUM_PROCESSORS);
     Sources = (KAFFINITY)InterlockedExchange64(
         (PLONG64)&Prcb->SenderSummary,
         0);

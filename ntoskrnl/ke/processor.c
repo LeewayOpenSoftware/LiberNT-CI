@@ -263,7 +263,7 @@ CCHAR KeNumberProcessors = 0;
 
 /* Theoretical maximum number of processors that can be handled.
  * Set once at run-time. Returned by KeQueryMaximumProcessorCount(). */
-ULONG KeMaximumProcessors = MAXIMUM_PROCESSORS;
+ULONG KeMaximumProcessors = KI_MAXIMUM_PROCESSORS;
 
 /* Maximum number of logical processors that can be started
  * (including dynamically) at run-time. If 0: do not perform checks. */

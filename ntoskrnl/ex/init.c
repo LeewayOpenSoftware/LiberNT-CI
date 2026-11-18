@@ -1747,7 +1747,7 @@ Phase1InitializationDiscard(IN PVOID Context)
         /* Check for MAXPROC (NT6+ and ReactOS): forces the kernel to report
          * as existing the maximum number of processors that can be handled */
         if (strstr(CommandLine, "MAXPROC"))
-            KeMaximumProcessors = MAXIMUM_PROCESSORS;
+            KeMaximumProcessors = KI_MAXIMUM_PROCESSORS;
 
         /* Check for SMPDIAG: enable SMP diagnostics. */
         if (strstr(CommandLine, "SMPDIAG"))

@@ -41,7 +41,7 @@ ULONG KiDPCTimeout = 110;
 /* PRIVATE FUNCTIONS *********************************************************/
 
 
-static PVOID volatile KiActiveDpc[MAXIMUM_PROCESSORS];
+static PVOID volatile KiActiveDpc[KI_MAXIMUM_PROCESSORS];
 
 static __inline VOID KiBeginDpcExecution(_In_ PKPRCB Prcb, _In_ PKDPC Dpc)
 {
@@ -55,9 +55,9 @@ static __inline VOID KiEndDpcExecution(_In_ PKPRCB Prcb, _In_ PKDPC Dpc)
     InterlockedCompareExchangePointer(&KiActiveDpc[Prcb->Number], NULL, Dpc);
 }
 
-static PVOID volatile KiActiveThreadedDpc[MAXIMUM_PROCESSORS];
-static PKTHREAD KiDpcThread[MAXIMUM_PROCESSORS];
-static KDPC KiDpcThreadWakeDpc[MAXIMUM_PROCESSORS];
+static PVOID volatile KiActiveThreadedDpc[KI_MAXIMUM_PROCESSORS];
+static PKTHREAD KiDpcThread[KI_MAXIMUM_PROCESSORS];
+static KDPC KiDpcThreadWakeDpc[KI_MAXIMUM_PROCESSORS];
 
 static VOID NTAPI
 KiDpcThreadWakeRoutine(
@@ -1348,7 +1348,7 @@ KeGenericCallDpc(IN PKDEFERRED_ROUTINE Routine,
     KIRQL OldIrql;
     KI_GENERIC_DPC_BARRIER Sync;
     PKPRCB CurrentPrcb;
-    LONG Flags[MAXIMUM_PROCESSORS];
+    LONG Flags[KI_MAXIMUM_PROCESSORS];
     CCHAR Number;
     ULONG Count, Index;
     ASSERT(KeGetCurrentIrql() < DISPATCH_LEVEL);
@@ -1421,7 +1421,7 @@ KeSignalCallDpcSynchronize(IN PVOID SystemArgument2)
     BOOLEAN First;
 
     Total = Sync->Reverse.TotalProcessors;
-    ASSERT(Total != 0 && Total <= MAXIMUM_PROCESSORS && Sync->Flags != NULL);
+    ASSERT(Total != 0 && Total <= KI_MAXIMUM_PROCESSORS && Sync->Flags != NULL);
     if (Total <= 1)
         return TRUE;
 
