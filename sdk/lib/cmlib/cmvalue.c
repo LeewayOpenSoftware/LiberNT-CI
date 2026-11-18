@@ -151,10 +151,79 @@ CmpGetValueData(IN PHHIVE Hive,
         return TRUE;
     }
 
-    /* Unsupported at the moment */
-    ASSERT_VALUE_BIG(Hive, *Length);
+    /* A big value (hive format 1.4 and later) stores its data in segments
+       referenced by a big data record */
+    if (CmpIsKeyValueBig(Hive, *Length))
+    {
+        PCM_BIG_DATA BigData;
+        PVOID SegmentList;
+        PUCHAR Output;
+        ULONG Remaining, Copy, i;
+        LONG CellSize;
 
-    /* Get the data from the cell */
+        BigData = (PCM_BIG_DATA)HvGetCell(Hive, Value->Data);
+        if (!BigData) return FALSE;
+        if (BigData->Signature != CM_BIG_DATA_SIGNATURE)
+        {
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+
+        SegmentList = HvGetCell(Hive, BigData->List);
+        if (!SegmentList)
+        {
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+
+        *Buffer = Hive->Allocate(*Length, TRUE, TAG_CM);
+        if (!*Buffer)
+        {
+            HvReleaseCell(Hive, BigData->List);
+            HvReleaseCell(Hive, Value->Data);
+            return FALSE;
+        }
+
+        Output = (PUCHAR)*Buffer;
+        Remaining = *Length;
+        for (i = 0; (i < BigData->Count) && Remaining; i++)
+        {
+            PUCHAR Segment;
+
+            Segment = (PUCHAR)HvGetCell(Hive, ((PHCELL_INDEX)SegmentList)[i]);
+            if (!Segment) break;
+
+            /* All segments but the last hold exactly CM_KEY_VALUE_BIG
+               bytes, regardless of the cell padding */
+            Copy = min((ULONG)CM_KEY_VALUE_BIG, Remaining);
+
+            CellSize = HvGetCellSize(Hive, Segment);
+            if (CellSize < (LONG)Copy)
+            {
+                HvReleaseCell(Hive, ((PHCELL_INDEX)SegmentList)[i]);
+                break;
+            }
+            RtlCopyMemory(Output, Segment, Copy);
+            Output += Copy;
+            Remaining -= Copy;
+            HvReleaseCell(Hive, ((PHCELL_INDEX)SegmentList)[i]);
+        }
+
+        HvReleaseCell(Hive, BigData->List);
+        HvReleaseCell(Hive, Value->Data);
+
+        if (Remaining)
+        {
+            Hive->Free(*Buffer, *Length);
+            *Buffer = NULL;
+            return FALSE;
+        }
+
+        *BufferAllocated = TRUE;
+        return TRUE;
+    }
+
+    /* Normal value, stored in a single cell */
     *Buffer = HvGetCell(Hive, Value->Data);
     if (!(*Buffer)) return FALSE;
 
