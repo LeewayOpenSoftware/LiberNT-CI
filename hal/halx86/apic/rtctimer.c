@@ -112,32 +112,39 @@ HalpCalibrateApicTimer(VOID)
  * millisecond, and a clock asked to tick every millisecond then leaves the
  * processor nothing else. The finest period reported is therefore tied to
  * what one access costs here. A tick makes fewer than ten of them, so at 200
- * accesses to the period it stays under a twentieth of it.
+ * accesses to the period it stays under a twentieth of it. This is a bound
+ * taken once at startup, not a promise: on such a machine the cost of an
+ * access moves with what the emulator is doing, and was seen to differ by a
+ * factor of four from one start to the next.
  */
 #define HALP_CLOCK_PERIOD_PER_APIC_ACCESS   200
-#define HALP_APIC_ACCESS_ROUNDS             8
-#define HALP_APIC_ACCESS_SAMPLES            8
+#define HALP_APIC_ACCESS_ROUNDS             15
+#define HALP_APIC_ACCESS_SAMPLES            4
 
 static
 ULONG
 HalpFinestApicTimerIncrement(VOID)
 {
-    ULONG64 Start, Ticks, Fastest = MAXULONG64, Increment;
-    ULONG Round, Sample;
+    ULONG64 Rounds[HALP_APIC_ACCESS_ROUNDS], Start, Ticks, Increment;
+    ULONG Round, Sample, Slot;
 
-    /* A round the host preempted says nothing about the cost: keep the fastest */
+    /* Time the rounds and keep them in order */
     for (Round = 0; Round < HALP_APIC_ACCESS_ROUNDS; Round++)
     {
         Start = __rdtsc();
         for (Sample = 0; Sample < HALP_APIC_ACCESS_SAMPLES; Sample++)
             (VOID)ApicRead(APIC_VER);
         Ticks = __rdtsc() - Start;
-        if (Ticks < Fastest)
-            Fastest = Ticks;
+
+        for (Slot = Round; Slot > 0 && Rounds[Slot - 1] > Ticks; Slot--)
+            Rounds[Slot] = Rounds[Slot - 1];
+        Rounds[Slot] = Ticks;
     }
 
-    /* The time of one round in 100 ns units, then the period it allows */
-    Increment = Fastest * 10000000ULL / HalpCpuClockFrequency.QuadPart;
+    /* Go by the middle one: a round the host preempted says nothing about the
+     * cost, and neither does the one round that happened to go through fast.
+     * Its time in 100 ns units, then the period it allows. */
+    Increment = Rounds[HALP_APIC_ACCESS_ROUNDS / 2] * 10000000ULL / HalpCpuClockFrequency.QuadPart;
     Increment = Increment * HALP_CLOCK_PERIOD_PER_APIC_ACCESS / HALP_APIC_ACCESS_SAMPLES;
 
     /* A millisecond is the finest period offered, the base rate the coarsest */
